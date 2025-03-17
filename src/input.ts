@@ -119,4 +119,9 @@ export class Input {
 		const demuxer = await this._getDemuxer();
 		return demuxer.getMimeType();
 	}
+
+	/** Returns the size of the input file, in bytes. */
+	async getSize() {
+		return await this._source._getSize();
+	}
 }
