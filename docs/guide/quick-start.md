@@ -312,6 +312,7 @@ const output = new Output({
 const uploadComplete = fetch('https://example.com/upload', {
 	method: 'POST',
 	body: readable,
+	duplex: 'half',
 	headers: {
 		'Content-Type': output.format.mimeType,
 	},
