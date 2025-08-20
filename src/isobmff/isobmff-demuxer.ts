@@ -2382,6 +2382,10 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 					if (prevFragment.nextFragment) {
 						// Skip ahead quickly without needing to read the file again
 						metadataReader.pos = prevFragment.nextFragment.moofOffset + prevFragment.nextFragment.moofSize;
+						if (prevFragment.nextFragment === prevFragment) {
+							// prevent infinite while loop
+							break;
+						}
 						prevFragment = prevFragment.nextFragment;
 						continue;
 					}
