@@ -10,11 +10,12 @@ import { AudioCodec } from '../codec';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
+import { MediaMetadata } from '../metadata';
 import { PacketRetrievalOptions } from '../media-sink';
 import { assert, AsyncMutex, binarySearchExact, binarySearchLessOrEqual, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { FrameHeader, getXingOffset, INFO, XING } from '../../shared/mp3-misc';
-import { Mp3Reader } from './mp3-reader';
+import { ID3_V1_TAG_SIZE, ID3_V2_HEADER_SIZE, Mp3Reader } from './mp3-reader';
 
 type Sample = {
 	timestamp: number;
@@ -29,6 +30,7 @@ export class Mp3Demuxer extends Demuxer {
 	metadataPromise: Promise<void> | null = null;
 	firstFrameHeader: FrameHeader | null = null;
 	loadedSamples: Sample[] = []; // All samples from the start of the file to lastLoadedPos
+	metadata: MediaMetadata | null = null;
 
 	tracks: InputAudioTrack[] = [];
 
@@ -64,6 +66,8 @@ export class Mp3Demuxer extends Demuxer {
 	async loadNextChunk() {
 		assert(this.lastLoadedPos < this.fileSize);
 
+		this.reader.pos = this.lastLoadedPos;
+
 		const chunkSize = 0.5 * 1024 * 1024; // 0.5 MiB
 		const endPos = Math.min(this.lastLoadedPos + chunkSize, this.fileSize);
 		await this.reader.reader.loadRange(this.lastLoadedPos, endPos);
@@ -72,10 +76,14 @@ export class Mp3Demuxer extends Demuxer {
 		assert(this.lastLoadedPos <= this.fileSize);
 
 		if (this.reader.pos === 0) {
-			// First time, let's see if there's an ID3 tag
-			const id3Tag = this.reader.readId3();
-			if (id3Tag) {
-				this.reader.pos += id3Tag.size;
+			while (true) { // There may be multiple
+				await this.reader.reader.loadRange(this.reader.pos, this.reader.pos + ID3_V2_HEADER_SIZE);
+				const id3V2Header = this.reader.readId3V2Header();
+				if (!id3V2Header) {
+					break;
+				}
+
+				this.reader.pos += id3V2Header.size; // Skip it for now
 			}
 		}
 
@@ -144,6 +152,50 @@ export class Mp3Demuxer extends Demuxer {
 		assert(track);
 
 		return track.computeDuration();
+	}
+
+	async getMetadata() {
+		const release = await this.readingMutex.acquire();
+
+		try {
+			await this.readMetadata();
+
+			if (this.metadata) {
+				return this.metadata;
+			}
+
+			this.metadata = {};
+			this.reader.pos = 0;
+			let id3V2HeaderFound = false;
+
+			while (true) {
+				await this.reader.reader.loadRange(this.reader.pos, this.reader.pos + ID3_V2_HEADER_SIZE);
+				const id3V2Header = this.reader.readId3V2Header();
+				if (!id3V2Header) {
+					break;
+				}
+
+				id3V2HeaderFound = true;
+
+				await this.reader.reader.loadRange(this.reader.pos, this.reader.pos + id3V2Header.size);
+				this.reader.parseId3V2Tag(id3V2Header, this.metadata);
+			}
+
+			if (!id3V2HeaderFound) {
+				// Try reading an ID3v1 tag at the end of the file
+				this.reader.pos = Math.max(0, this.fileSize - ID3_V1_TAG_SIZE);
+				await this.reader.reader.loadRange(this.reader.pos, this.reader.pos + ID3_V1_TAG_SIZE);
+
+				const tag = this.reader.readAscii(3);
+				if (tag === 'TAG') {
+					this.reader.parseId3V1Tag(this.metadata);
+				}
+			}
+
+			return this.metadata;
+		} finally {
+			release();
+		}
 	}
 }
 

@@ -7,6 +7,7 @@
  */
 
 import { assert, toDataView } from '../misc';
+import { mediaMetadataIsEmpty, MediaMetadata } from '../metadata';
 import { Muxer } from '../muxer';
 import { Output, OutputAudioTrack } from '../output';
 import { Mp3OutputFormat } from '../output-format';
@@ -22,6 +23,7 @@ export class Mp3Muxer extends Muxer {
 	private xingFrameData: XingFrameData | null = null;
 	private frameCount = 0;
 	private framePositions: number[] = [];
+	private xingFramePos: number | null = null;
 
 	constructor(output: Output, format: Mp3OutputFormat) {
 		super(output);
@@ -32,7 +34,9 @@ export class Mp3Muxer extends Muxer {
 	}
 
 	async start() {
-		// Nothing needed here
+		if (!mediaMetadataIsEmpty(this.output._metadata)) {
+			this.writeId3v2Tag(this.output._metadata);
+		}
 	}
 
 	async getMimeType() {
@@ -92,6 +96,7 @@ export class Mp3Muxer extends Muxer {
 
 				// Write a Xing frame because this muxer doesn't make any bitrate constraints, meaning we don't know if
 				// this will be a constant or variable bitrate file. Therefore, always write the Xing frame.
+				this.xingFramePos = this.writer.getPos();
 				this.mp3Writer.writeXingFrame(this.xingFrameData);
 
 				this.frameCount++;
@@ -116,8 +121,61 @@ export class Mp3Muxer extends Muxer {
 		throw new Error('MP3 does not support subtitles.');
 	}
 
+	writeId3v2Tag(metadata: MediaMetadata) {
+		this.mp3Writer.writeAscii('ID3');
+		this.mp3Writer.writeU8(0x04); // Version 2.4
+		this.mp3Writer.writeU8(0x00); // Revision 0
+		this.mp3Writer.writeU8(0x00); // Flags
+		this.mp3Writer.writeSynchsafeU32(0); // Size placeholder
+
+		const startPos = this.writer.getPos();
+
+		if (metadata.title) {
+			this.mp3Writer.writeId3V2TextFrame('TIT2', metadata.title);
+		}
+		if (metadata.artist) {
+			this.mp3Writer.writeId3V2TextFrame('TPE1', metadata.artist);
+		}
+		if (metadata.album) {
+			this.mp3Writer.writeId3V2TextFrame('TALB', metadata.album);
+		}
+		if (metadata.albumArtist) {
+			this.mp3Writer.writeId3V2TextFrame('TPE2', metadata.albumArtist);
+		}
+		if (metadata.trackNumber) {
+			this.mp3Writer.writeId3V2TextFrame('TRCK', metadata.trackNumber.toString());
+		}
+		if (metadata.discNumber) {
+			this.mp3Writer.writeId3V2TextFrame('TPOS', metadata.discNumber.toString());
+		}
+		if (metadata.genre) {
+			this.mp3Writer.writeId3V2TextFrame('TCON', metadata.genre);
+		}
+		if (metadata.releasedAt) {
+			this.mp3Writer.writeId3V2TextFrame('TDRC', metadata.releasedAt.toISOString().split('.')[0]!);
+		}
+		if (metadata.comment) {
+			this.mp3Writer.writeId3V2CommentFrame(metadata.comment);
+		}
+		if (metadata.images) {
+			const pictureTypeMap = { coverFront: 0x03, coverBack: 0x04, unknown: 0x00 };
+			for (const image of metadata.images) {
+				const pictureType = pictureTypeMap[image.kind];
+				const description = image.description || '';
+				this.mp3Writer.writeId3V2ApicFrame(image.mimeType, pictureType, description, image.data);
+			}
+		}
+
+		const endPos = this.writer.getPos();
+		const framesSize = endPos - startPos;
+
+		this.writer.seek(6);
+		this.mp3Writer.writeSynchsafeU32(framesSize);
+		this.writer.seek(endPos);
+	}
+
 	async finalize() {
-		if (!this.xingFrameData) {
+		if (!this.xingFrameData || this.xingFramePos === null) {
 			return;
 		}
 
@@ -125,7 +183,7 @@ export class Mp3Muxer extends Muxer {
 
 		const endPos = this.writer.getPos();
 
-		this.writer.seek(0);
+		this.writer.seek(this.xingFramePos);
 
 		const toc = new Uint8Array(100);
 		for (let i = 0; i < 100; i++) {

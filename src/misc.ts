@@ -176,6 +176,17 @@ export const toDataView = (source: AllowSharedBufferSource) => {
 export const textDecoder = new TextDecoder();
 export const textEncoder = new TextEncoder();
 
+export const isIso88591Compatible = (text: string) => {
+	for (let i = 0; i < text.length; i++) {
+		const code = text.charCodeAt(i);
+		if (code > 255) {
+			return false;
+		}
+	}
+
+	return true;
+};
+
 const invertObject = <K extends PropertyKey, V extends PropertyKey>(object: Record<K, V>) => {
 	return Object.fromEntries(Object.entries(object).map(([key, value]) => [value, key])) as Record<V, K>;
 };
@@ -633,3 +644,8 @@ export const isSafari = () => {
  * @public
  */
 export type MaybePromise<T> = T | Promise<T>;
+
+/** Acts like `??` except the condition is -1 and not null/undefined. */
+export const coalesceIndex = (a: number, b: number) => {
+	return a !== -1 ? a : b;
+};

@@ -16,11 +16,18 @@
 			source
 		});
 
+		//const blob = new Blob([(await input.getMetadata()).images[0].data], { type: (await input.getMetadata()).images[0].mimeType });
+		//console.log(URL.createObjectURL(blob))
+
+		console.log(await input.getMetadata());
+
+		/*
 		const videoTrack = await input.getPrimaryVideoTrack();
 		console.log(await videoTrack.getFirstTimestamp(), await videoTrack.computeDuration());
 
 		console.log(videoTrack.name);
 		console.log(videoTrack.internalCodecId);
+		*/
 
 		/*
 		const sink = new Mediabunny.EncodedPacketSink(videoTrack);

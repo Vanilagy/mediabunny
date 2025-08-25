@@ -7,6 +7,7 @@
  */
 
 import { AsyncMutex, isIso639Dash2LanguageCode, Rotation } from './misc';
+import { MediaMetadata, validateMediaMetadata } from './metadata';
 import { Muxer } from './muxer';
 import { OutputFormat } from './output-format';
 import { AudioSource, MediaSource, SubtitleSource, VideoSource } from './media-source';
@@ -137,6 +138,8 @@ export class Output<
 	_finalizePromise: Promise<void> | null = null;
 	/** @internal */
 	_mutex = new AsyncMutex();
+	/** @internal */
+	_metadata: MediaMetadata = {};
 
 	constructor(options: OutputOptions<F, T>) {
 		if (!options || typeof options !== 'object') {
@@ -203,6 +206,16 @@ export class Output<
 		validateBaseTrackMetadata(metadata);
 
 		this._addTrack('subtitle', source, metadata);
+	}
+
+	setMetadata(metadata: MediaMetadata) {
+		validateMediaMetadata(metadata);
+
+		if (this.state !== 'pending') {
+			throw new Error('Cannot set metadata after output has been started or canceled.');
+		}
+
+		this._metadata = metadata;
 	}
 
 	/** @internal */

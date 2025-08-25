@@ -14,7 +14,7 @@ import { EBMLId, EBMLReader, MIN_HEADER_SIZE } from './matroska/ebml';
 import { MatroskaDemuxer } from './matroska/matroska-demuxer';
 import { Mp3Demuxer } from './mp3/mp3-demuxer';
 import { FRAME_HEADER_SIZE } from '../shared/mp3-misc';
-import { Mp3Reader } from './mp3/mp3-reader';
+import { ID3_V2_HEADER_SIZE, Mp3Reader } from './mp3/mp3-reader';
 import { OggDemuxer } from './ogg/ogg-demuxer';
 import { OggReader } from './ogg/ogg-reader';
 import { RiffReader } from './wave/riff-reader';
@@ -241,10 +241,18 @@ export class Mp3InputFormat extends InputFormat {
 		const mp3Reader = new Mp3Reader(input._mainReader);
 		mp3Reader.fileSize = sourceSize;
 
-		const id3Tag = mp3Reader.readId3();
+		let id3V2HeaderFound = false;
 
-		if (id3Tag) {
-			mp3Reader.pos += id3Tag.size;
+		while (true) {
+			await mp3Reader.reader.loadRange(mp3Reader.pos, mp3Reader.pos + ID3_V2_HEADER_SIZE);
+
+			const id3V2Header = mp3Reader.readId3V2Header();
+			if (!id3V2Header) {
+				break;
+			}
+
+			id3V2HeaderFound = true;
+			mp3Reader.pos += id3V2Header.size;
 		}
 
 		const framesStartPos = mp3Reader.pos;
@@ -255,8 +263,8 @@ export class Mp3InputFormat extends InputFormat {
 			return false;
 		}
 
-		if (id3Tag) {
-			// If there was an ID3 tag at the start, we can be pretty sure this is MP3 by now
+		if (id3V2HeaderFound) {
+			// If there was an ID3v2 tag at the start, we can be pretty sure this is MP3 by now
 			return true;
 		}
 

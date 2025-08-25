@@ -6,9 +6,11 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { isIso88591Compatible, textEncoder } from '../misc';
 import { Writer } from '../writer';
 import {
 	computeMp3FrameSize,
+	encodeSynchsafe,
 	getXingOffset,
 	MPEG_V1_BITRATES,
 	MPEG_V2_BITRATES,
@@ -37,9 +39,114 @@ export class Mp3Writer {
 
 	constructor(private writer: Writer) {}
 
+	writeU8(value: number) {
+		this.helper[0] = value;
+		this.writer.write(this.helper.subarray(0, 1));
+	}
+
+	writeU16(value: number) {
+		this.helperView.setUint16(0, value, false);
+		this.writer.write(this.helper.subarray(0, 2));
+	}
+
 	writeU32(value: number) {
 		this.helperView.setUint32(0, value, false);
 		this.writer.write(this.helper.subarray(0, 4));
+	}
+
+	writeAscii(text: string) {
+		for (let i = 0; i < text.length; i++) {
+			this.helper[i] = text.charCodeAt(i);
+		}
+		this.writer.write(this.helper.subarray(0, text.length));
+	}
+
+	writeSynchsafeU32(value: number) {
+		this.writeU32(encodeSynchsafe(value));
+	}
+
+	writeIsoString(text: string) {
+		const bytes = new Uint8Array(text.length + 1);
+		for (let i = 0; i < text.length; i++) {
+			bytes[i] = text.charCodeAt(i);
+		}
+		bytes[text.length] = 0x00;
+		this.writer.write(bytes);
+	}
+
+	writeUtf8String(text: string) {
+		const utf8Data = textEncoder.encode(text);
+		this.writer.write(utf8Data);
+		this.writeU8(0x00);
+	}
+
+	writeId3V2TextFrame(frameId: string, text: string) {
+		const useIso88591 = isIso88591Compatible(text);
+		const textDataLength = useIso88591 ? text.length : textEncoder.encode(text).byteLength;
+		const frameSize = 1 + textDataLength + 1;
+
+		this.writeAscii(frameId);
+		this.writeSynchsafeU32(frameSize);
+		this.writeU16(0x0000);
+
+		this.writeU8(useIso88591 ? 0x00 : 0x03);
+		if (useIso88591) {
+			this.writeIsoString(text);
+		} else {
+			this.writeUtf8String(text);
+		}
+	}
+
+	writeId3V2CommentFrame(comment: string) {
+		const useIso88591 = isIso88591Compatible(comment);
+		const textDataLength = useIso88591 ? comment.length : textEncoder.encode(comment).byteLength;
+		const frameSize = 1 + 3 + 1 + textDataLength + 1;
+		const shortDescription = '';
+
+		this.writeAscii('COMM');
+		this.writeSynchsafeU32(frameSize);
+		this.writeU16(0x0000);
+
+		this.writeU8(useIso88591 ? 0x00 : 0x03);
+		this.writeU8(0x75); // 'u'
+		this.writeU8(0x6E); // 'n'
+		this.writeU8(0x64); // 'd'
+
+		if (useIso88591) {
+			this.writeIsoString(shortDescription);
+			this.writeIsoString(comment);
+		} else {
+			this.writeUtf8String(shortDescription);
+			this.writeUtf8String(comment);
+		}
+	}
+
+	writeId3V2ApicFrame(mimeType: string, pictureType: number, description: string, imageData: Uint8Array) {
+		const useIso88591 = isIso88591Compatible(mimeType) && isIso88591Compatible(description);
+		const descriptionDataLength = useIso88591 ? description.length : textEncoder.encode(description).byteLength;
+		const frameSize = 1 + mimeType.length + 1 + 1 + descriptionDataLength + 1 + imageData.byteLength;
+
+		this.writeAscii('APIC');
+		this.writeSynchsafeU32(frameSize);
+		this.writeU16(0x0000);
+
+		this.writeU8(useIso88591 ? 0x00 : 0x03);
+
+		if (useIso88591) {
+			this.writeIsoString(mimeType);
+		} else {
+			this.writeUtf8String(mimeType);
+		}
+
+		this.writeU8(pictureType);
+
+		if (useIso88591) {
+			this.writeIsoString(description);
+		} else {
+			this.writeUtf8String(description);
+		}
+
+		this.writer.write(imageData);
 	}
 
 	writeXingFrame(data: XingFrameData) {
