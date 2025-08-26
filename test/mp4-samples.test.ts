@@ -21,7 +21,7 @@ const source = new StreamSource({
 	},
 });
 
-test('mp4 samples', async () => {
+test('Should be able to get packets from a .MP4 file', async () => {
 	const input = new Input({
 		formats: ALL_FORMATS,
 		source,
