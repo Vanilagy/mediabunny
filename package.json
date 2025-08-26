@@ -27,6 +27,7 @@
     "build": "./build.sh",
     "watch": "tsx scripts/bundle.ts --watch",
     "lint": "eslint .",
+    "test": "vitest --run",
     "check": "tsc -p src --noEmit && tsc -p packages/mp3-encoder/src --noEmit && tsc -p scripts --noEmit && tsc -p tsconfig.vite.json --noEmit && rm tsconfig.vite.tsbuildinfo",
     "check-docblocks": "tsx scripts/check-docblocks.ts dist/mediabunny.d.ts",
     "docs:dev": "vitepress dev docs",

@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-argument */
 import { expect, test } from 'vitest';
 import { Input } from '../src/input.js';
 import { ALL_FORMATS, MP4 } from '../src/input-format.js';
@@ -47,6 +46,6 @@ test('mp4 samples', async () => {
 
 	expect(samples).toBe(125);
 	expect(timestamps.slice(0, 10)).toEqual([
-		0, 0.16, 0.08, 0.04, 0.12, 0.32, 0.24, 0.2, 0.28, 0.48
+		0, 0.16, 0.08, 0.04, 0.12, 0.32, 0.24, 0.2, 0.28, 0.48,
 	]);
 });
