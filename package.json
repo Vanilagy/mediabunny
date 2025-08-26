@@ -80,7 +80,8 @@
     "vite": "^6.3.5",
     "vitepress": "^1.6.3",
     "vitepress-plugin-llms": "^1.5.1",
-    "vitepress-plugin-mermaid": "^2.0.17"
+    "vitepress-plugin-mermaid": "^2.0.17",
+    "vitest": "3.2.4"
   },
   "keywords": [
     "media",

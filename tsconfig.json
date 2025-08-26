@@ -8,9 +8,9 @@
 		"noPropertyAccessFromIndexSignature": true,
 		"skipLibCheck": true,
 		"allowJs": true,
-		"noEmit": true
+		"noEmit": true,
+		"moduleResolution": "nodenext",
+		"module": "NodeNext"
 	},
-	"references": [
-		{ "path": "./tsconfig.vite.json" }
-	]
+	"references": [{ "path": "./tsconfig.vite.json" }]
 }
