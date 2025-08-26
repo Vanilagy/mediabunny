@@ -9,8 +9,6 @@
 		"skipLibCheck": true,
 		"allowJs": true,
 		"noEmit": true,
-		"moduleResolution": "nodenext",
-		"module": "NodeNext"
 	},
 	"references": [{ "path": "./tsconfig.vite.json" }]
 }

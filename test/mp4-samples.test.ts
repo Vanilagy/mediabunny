@@ -1,9 +1,6 @@
 import { expect, test } from 'vitest';
-import { Input } from '../src/input.js';
-import { ALL_FORMATS, MP4 } from '../src/input-format.js';
-import { StreamSource } from '../src/source.js';
+import { ALL_FORMATS, MP4, StreamSource, EncodedPacketSink, Input } from '../src/index.js';
 import { open } from 'node:fs/promises';
-import { EncodedPacketSink } from '../src/media-sink.js';
 
 const __dirname = new URL('.', import.meta.url).pathname;
 
