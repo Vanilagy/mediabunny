@@ -31,7 +31,10 @@ test('Should be able to get packets from a .MP4 file', async () => {
 	expect(await input.getMimeType()).toBe('video/mp4; codecs="avc1.640028, mp4a.40.2"');
 	expect(await input.computeDuration()).toBe(5.056);
 
-	const sink = new EncodedPacketSink(await input.getPrimaryVideoTrack());
+	const track = await input.getPrimaryVideoTrack();
+	if (!track) throw new Error('No video track found');
+
+	const sink = new EncodedPacketSink(track);
 
 	let samples = 0;
 	const timestamps: number[] = [];
