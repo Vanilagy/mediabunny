@@ -50,6 +50,7 @@ export type Sample = {
 type Chunk = {
 	/** The lowest presentation timestamp in this chunk */
 	startTimestamp: number;
+	startDecodeTimestamp: number;
 	samples: Sample[];
 	offset: number | null;
 	// In the case of a fragmented file, this indicates the position of the moof box pointing to the data in this chunk
@@ -889,6 +890,7 @@ export class IsobmffMuxer extends Muxer {
 
 			trackData.currentChunk = {
 				startTimestamp: sample.timestamp,
+				startDecodeTimestamp: sample.decodeTimestamp,
 				samples: [],
 				offset: null,
 				moofOffset: null,

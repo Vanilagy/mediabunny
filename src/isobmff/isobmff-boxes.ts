@@ -1208,7 +1208,7 @@ export const tfdt = (trackData: IsobmffTrackData) => {
 	assert(trackData.currentChunk);
 
 	return fullBox('tfdt', 1, 0, [
-		u64(intoTimescale(trackData.currentChunk.startTimestamp, trackData.timescale)), // Base Media Decode Time
+		u64(intoTimescale(trackData.currentChunk.startDecodeTimestamp, trackData.timescale)), // Base Media Decode Time
 	]);
 };
 
