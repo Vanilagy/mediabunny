@@ -27,7 +27,9 @@
     "build": "./build.sh",
     "watch": "tsx scripts/bundle.ts --watch",
     "lint": "eslint .",
-    "test": "vitest --run",
+    "testnode": "cd test && vitest node --run",
+    "testweb": "cd test && vitest browser --run --browser",
+    "test": "npm run testnode & npm run testweb",
     "check": "tsc -p src --noEmit && tsc -p packages/mp3-encoder/src --noEmit && tsc -p scripts --noEmit && tsc -p tsconfig.vite.json --noEmit && rm tsconfig.vite.tsbuildinfo",
     "check-docblocks": "tsx scripts/check-docblocks.ts dist/mediabunny.d.ts",
     "docs:dev": "vitepress dev docs",
@@ -82,7 +84,9 @@
     "vitepress": "^1.6.3",
     "vitepress-plugin-llms": "^1.5.1",
     "vitepress-plugin-mermaid": "^2.0.17",
-    "vitest": "3.2.4"
+    "vitest": "3.2.4",
+    "@vitest/browser": "3.2.4",
+    "webdriverio": "9.19.2"
   },
   "keywords": [
     "media",

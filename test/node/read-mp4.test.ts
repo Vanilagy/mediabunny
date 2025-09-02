@@ -1,11 +1,13 @@
 import { expect, test } from 'vitest';
-import { ALL_FORMATS, MP4, EncodedPacketSink, Input, FilePathSource } from '../src/index.js';
+import path from 'node:path';
+import { ALL_FORMATS, MP4, EncodedPacketSink, Input, FilePathSource } from '../../src/index.js';
 
 const __dirname = new URL('.', import.meta.url).pathname;
 
 test('Should be able to get packets from a .MP4 file', async () => {
+	const filePath = path.join(__dirname, '..', 'files/video.mp4');
 	const input = new Input({
-		source: new FilePathSource(`${__dirname}/files/video.mp4`),
+		source: new FilePathSource(filePath),
 		formats: ALL_FORMATS,
 	});
 
