@@ -297,7 +297,7 @@ export class UrlSource extends Source {
 
 		if (response.status === 206) {
 			fileSize = this._getPartialLengthFromRangeResponse(response);
-			worker = this._orchestrator.createWorker(0, URL_SOURCE_MIN_LOAD_AMOUNT);
+			worker = this._orchestrator.createWorker(0, Math.min(fileSize, URL_SOURCE_MIN_LOAD_AMOUNT));
 		} else {
 			// Server probably returned a 200.
 
