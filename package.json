@@ -29,7 +29,7 @@
     "lint": "eslint .",
     "test-node": "cd test && vitest node --run",
     "test-web": "cd test && vitest browser --run --browser",
-    "test": "npm run testnode && npm run testweb",
+    "test": "npm run test-node && npm run test-web",
     "check": "tsc -p src --noEmit && tsc -p packages/mp3-encoder/src --noEmit && tsc -p scripts --noEmit && tsc -p tsconfig.vite.json --noEmit && rm tsconfig.vite.tsbuildinfo",
     "check-docblocks": "tsx scripts/check-docblocks.ts dist/mediabunny.d.ts",
     "docs:dev": "vitepress dev docs",
