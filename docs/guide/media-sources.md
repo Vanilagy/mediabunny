@@ -74,7 +74,8 @@ type VideoEncodingConfig = {
 - `hardwareAcceleration`: A hint that configures the hardware acceleration method of this codec. This is best left on `'no-preference'`.
 - `scalabilityMode`: An encoding scalability mode identifier as defined by [WebRTC-SVC](https://w3c.github.io/webrtc-svc/#scalabilitymodes*).
 - `contentHint`: An encoding video content hint as defined by [mst-content-hint](https://w3c.github.io/mst-content-hint/#video-content-hints).
-- `sizeChangeBehavior`: Video frames may change size overtime. This field controls the behavior in case this happens. Defaults to `'deny'`. 
+- `sizeChangeBehavior`: Video frames may change size overtime. This field controls the behavior in case this happens. Defaults to `'deny'`.
+- `alpha`: Alpha option defined by [alpha-option](https://w3c.github.io/webcodecs/#alpha-option). Defaults to `'discard'`.
 - `onEncodedPacket`: Called for each successfully encoded packet. Useful for determining encoding progress.
 - `onEncoderConfig`: Called when the internal encoder config, as used by the WebCodecs API, is created. You can use this to introspect the full codec string.
 

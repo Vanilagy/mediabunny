@@ -91,6 +91,7 @@ constructor(
     duration: number, // in seconds
     sequenceNumber?: number,
     byteLength?: number,
+    additions?: Uint8Array, // Additional data, currently only for Matroska format
 );
 ```
 

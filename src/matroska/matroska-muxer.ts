@@ -87,6 +87,7 @@ type MatroskaTrackData = {
 		width: number;
 		height: number;
 		decoderConfig: VideoDecoderConfig;
+		alphaMode?: boolean;
 	};
 } | {
 	track: OutputAudioTrack;
@@ -339,6 +340,7 @@ export class MatroskaMuxer extends Muxer {
 
 		const colorSpace = trackData.info.decoderConfig.colorSpace;
 		const videoElement: EBMLElement = { id: EBMLId.Video, data: [
+			(trackData.info.alphaMode ? { id: EBMLId.AlphaMode, data: 1 } : null),
 			{ id: EBMLId.PixelWidth, data: trackData.info.width },
 			{ id: EBMLId.PixelHeight, data: trackData.info.height },
 			(colorSpaceIsComplete(colorSpace)
@@ -788,8 +790,19 @@ export class MatroskaMuxer extends Muxer {
 				duration = roundToMultiple(duration, 1 / track.metadata.frameRate);
 			}
 
-			const videoChunk = this.createInternalChunk(packet.data, timestamp, duration, packet.type);
+			const videoChunk = this.createInternalChunk(
+				packet.data,
+				timestamp,
+				duration,
+				packet.type,
+				packet.additions,
+			);
 			if (track.source._codec === 'vp9') this.fixVP9ColorSpace(trackData, videoChunk);
+			if (videoChunk.additions) {
+				trackData.info.alphaMode ??= true; // All samples should contain it consistently
+			} else {
+				trackData.info.alphaMode = false;
+			}
 
 			trackData.chunkQueue.push(videoChunk);
 			await this.interleaveChunks();

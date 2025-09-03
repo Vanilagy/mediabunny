@@ -97,6 +97,7 @@ export enum EBMLId {
 	SeekPreRoll = 0x56bb,
 	DefaultDuration = 0x23e383,
 	Video = 0xe0,
+	AlphaMode = 0x53c0,
 	PixelWidth = 0xb0,
 	PixelHeight = 0xba,
 	Audio = 0xe1,

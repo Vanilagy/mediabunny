@@ -54,6 +54,8 @@ export class EncodedPacket {
 		 */
 		public readonly sequenceNumber = -1,
 		byteLength?: number,
+		/** Additional data for the packet, currently used only for Matroska custom encoding/decoding behaviors */
+		public readonly additions?: Uint8Array,
 	) {
 		if (data === PLACEHOLDER_DATA && byteLength === undefined) {
 			throw new Error(
@@ -180,6 +182,7 @@ export class EncodedPacket {
 			options?.duration ?? this.duration,
 			this.sequenceNumber,
 			this.byteLength,
+			this.additions,
 		);
 	}
 }

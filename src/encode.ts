@@ -130,6 +130,11 @@ export type VideoEncodingAdditionalOptions = {
 	 * [mst-content-hint](https://w3c.github.io/mst-content-hint/#video-content-hints).
 	 */
 	contentHint?: string;
+	/**
+	 * Alpha option defined by
+	 * [alpha-option](https://w3c.github.io/webcodecs/#alpha-option).
+	 */
+	alpha?: VideoEncoderConfig['alpha'];
 };
 
 export const validateVideoEncodingAdditionalOptions = (codec: VideoCodec, options: VideoEncodingAdditionalOptions) => {
@@ -194,6 +199,7 @@ export const buildVideoEncoderConfig = (options: {
 		hardwareAcceleration: options.hardwareAcceleration,
 		scalabilityMode: options.scalabilityMode,
 		contentHint: options.contentHint,
+		alpha: options.alpha,
 		...getVideoEncoderConfigExtension(options.codec),
 	};
 };

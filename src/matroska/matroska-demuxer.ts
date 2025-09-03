@@ -138,6 +138,7 @@ type ClusterBlock = {
 	referencedTimestamps: number[];
 	data: Uint8Array;
 	lacing: BlockLacing;
+	additions?: Uint8Array;
 };
 
 type CuePoint = {
@@ -171,6 +172,7 @@ type InternalTrack = {
 			codec: VideoCodec | null;
 			codecDescription: Uint8Array | null;
 			colorSpace: VideoColorSpaceInit | null;
+			alphaMode?: boolean;
 		}
 		| {
 			type: 'audio';
@@ -797,6 +799,7 @@ export class MatroskaDemuxer extends Demuxer {
 					isKeyFrame: originalBlock.isKeyFrame,
 					referencedTimestamps: originalBlock.referencedTimestamps,
 					data: frameData,
+					additions: originalBlock.additions,
 					lacing: BlockLacing.None,
 				});
 			}
@@ -1143,6 +1146,12 @@ export class MatroskaDemuxer extends Demuxer {
 				this.readContiguousElements(slice.slice(dataStartPos, size));
 			}; break;
 
+			case EBMLId.AlphaMode: {
+				if (this.currentTrack?.info?.type !== 'video') break;
+
+				this.currentTrack.info.alphaMode = !!readUnsignedInt(slice, size);
+			}; break;
+
 			case EBMLId.PixelWidth: {
 				if (this.currentTrack?.info?.type !== 'video') break;
 
@@ -1338,6 +1347,27 @@ export class MatroskaDemuxer extends Demuxer {
 					lacing,
 				};
 				trackData.blocks.push(this.currentBlock);
+			}; break;
+
+			case EBMLId.BlockAdditions: {
+				this.readContiguousElements(slice.slice(dataStartPos, size));
+			} break;
+
+			case EBMLId.BlockMore: {
+				this.readContiguousElements(slice.slice(dataStartPos, size));
+			}; break;
+
+			case EBMLId.BlockAddID: {
+				const id = readUnsignedInt(slice, size);
+
+				// Only handle 1 now, for video alpha and subtitle cue configs
+				if (id !== 1) break;
+			}; break;
+
+			case EBMLId.BlockAdditional: {
+				if (!this.currentBlock || this.currentBlock.additions) break;
+
+				this.currentBlock.additions = readBytes(slice, size - (slice.filePos - dataStartPos));
 			}; break;
 
 			case EBMLId.BlockDuration: {
@@ -1807,6 +1837,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 			duration,
 			cluster.dataStartPos + blockIndex,
 			block.data.byteLength,
+			block.additions,
 		);
 
 		this.packetToClusterLocation.set(packet, { cluster, blockIndex });
