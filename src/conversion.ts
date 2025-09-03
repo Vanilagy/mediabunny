@@ -129,6 +129,8 @@ export type ConversionVideoOptions = {
 	bitrate?: number | Quality;
 	/** When `true`, video will always be re-encoded instead of directly copying over the encoded samples. */
 	forceTranscode?: boolean;
+	/** When `true`, every frame will be re-rendered before being encoded. */
+	forceRerender?: boolean;
 };
 
 /**
@@ -160,6 +162,9 @@ const validateVideoOptions = (videoOptions: ConversionVideoOptions | undefined) 
 	}
 	if (videoOptions?.forceTranscode !== undefined && typeof videoOptions.forceTranscode !== 'boolean') {
 		throw new TypeError('options.video.forceTranscode, when provided, must be a boolean.');
+	}
+	if (videoOptions?.forceRerender !== undefined && typeof videoOptions.forceRerender !== 'boolean') {
+		throw new TypeError('options.video.forceRerender, when provided, must be a boolean.');
 	}
 	if (videoOptions?.codec !== undefined && !VIDEO_CODECS.includes(videoOptions.codec)) {
 		throw new TypeError(
@@ -582,7 +587,8 @@ export class Conversion {
 			|| this._startTimestamp > 0
 			|| firstTimestamp < 0
 			|| !!trackOptions.frameRate;
-		const needsRerender = width !== originalWidth
+		const needsRerender = !!trackOptions.forceRerender
+			|| width !== originalWidth
 			|| height !== originalHeight
 			|| (totalRotation !== 0 && !outputSupportsRotation);
 

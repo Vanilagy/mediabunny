@@ -113,6 +113,7 @@ type ConversionVideoOptions = {
 	codec?: VideoCodec;
 	bitrate?: number | Quality;
 	forceTranscode?: boolean;
+	forceRerender?: boolean;
 };
 ```
 
