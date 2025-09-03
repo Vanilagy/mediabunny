@@ -47,7 +47,7 @@ export class Mp3Demuxer extends Demuxer {
 	async readMetadata() {
 		return this.metadataPromise ??= (async () => {
 			// Keep loading until we find the first frame header
-			while (!this.firstFrameHeader && this.lastLoadedPos < this.reader.fileSize) {
+			while (!this.firstFrameHeader && !this.lastSampleLoaded) {
 				await this.advanceReader();
 			}
 
@@ -211,7 +211,10 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 		} else {
 			let slice = this.demuxer.reader.requestSlice(rawSample.dataStart, rawSample.dataSize);
 			if (slice instanceof Promise) slice = await slice;
-			assert(slice);
+
+			if (!slice) {
+				return null; // Data didn't fit into the rest of the file
+			}
 
 			data = readBytes(slice, rawSample.dataSize);
 		}

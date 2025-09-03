@@ -272,7 +272,7 @@ export class IsobmffDemuxer extends Demuxer {
 	readMetadata() {
 		return this.metadataPromise ??= (async () => {
 			let currentPos = 0;
-			while (currentPos < this.reader.fileSize) {
+			while (true) {
 				let slice = this.reader.requestSliceRange(currentPos, MIN_BOX_HEADER_SIZE, MAX_BOX_HEADER_SIZE);
 				if (slice instanceof Promise) slice = await slice;
 				if (!slice) break;
@@ -310,7 +310,7 @@ export class IsobmffDemuxer extends Demuxer {
 				currentPos = startPos + boxInfo.totalSize;
 			}
 
-			if (this.isFragmented) {
+			if (this.isFragmented && this.reader.fileSize !== null) {
 				// The last 4 bytes may contain the size of the mfra box at the end of the file
 				let lastWordSlice = this.reader.requestSlice(this.reader.fileSize - 4, 4);
 				if (lastWordSlice instanceof Promise) lastWordSlice = await lastWordSlice;
@@ -2449,7 +2449,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 				}
 			}
 
-			while (currentPos < demuxer.reader.fileSize) {
+			while (true) {
 				if (prevFragment) {
 					const trackData = prevFragment.trackData.get(this.internalTrack.id);
 					if (trackData && trackData.startTimestamp > latestTimestamp) {

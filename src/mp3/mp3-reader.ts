@@ -22,20 +22,20 @@ export const readId3 = (slice: FileSlice) => {
 	return { size };
 };
 
-export const readNextFrameHeader = async (reader: Reader, startPos: number, until: number): Promise<{
+export const readNextFrameHeader = async (reader: Reader, startPos: number, until: number | null): Promise<{
 	header: FrameHeader;
 	startPos: number;
 } | null> => {
 	let currentPos = startPos;
 
-	while (currentPos < until) {
+	while (until === null || currentPos < until) {
 		let slice = reader.requestSlice(currentPos, FRAME_HEADER_SIZE);
 		if (slice instanceof Promise) slice = await slice;
 		if (!slice) break;
 
 		const word = readU32Be(slice);
 
-		const result = readFrameHeader(word, reader.fileSize - currentPos);
+		const result = readFrameHeader(word, reader.fileSize !== null ? reader.fileSize - currentPos : null);
 		if (result.header) {
 			return { header: result.header, startPos: currentPos };
 		}

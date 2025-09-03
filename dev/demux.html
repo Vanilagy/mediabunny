@@ -8,8 +8,137 @@
 	document.body.append(fileInput);
 
 	fileInput.addEventListener('change', async () => {
+		/*
+		const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+		const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+		const combinedStream = new MediaStream([
+			...screenStream.getTracks(),
+			...micStream.getTracks()
+		]);
+
+		const recorder = new MediaRecorder(combinedStream);
+
+		const { writable, readable } = new TransformStream({
+			async transform(chunk, controller) {
+				const arrayBuffer = await chunk.arrayBuffer();
+				controller.enqueue(new Uint8Array(arrayBuffer));
+			}
+		});
+		const writer = writable.getWriter();
+
+		const input = new Mediabunny.Input({
+			source: new Mediabunny.ReadableStreamSource(readable),
+			formats: Mediabunny.ALL_FORMATS,
+		});
+		(async () => {
+			const videoTrack = await input.getPrimaryVideoTrack();
+			const sink = new Mediabunny.EncodedPacketSink(videoTrack);
+
+			for await (const packet of sink.packets()) {
+				console.log(packet);
+			}
+		})();
+
+		recorder.onerror = console.error;
+		recorder.onstart = () => console.log("yes")
+		recorder.ondataavailable = async e => {
+			writer.write(e.data);
+		};
+		recorder.onstop = (e) => {
+			writer.close();
+		};
+
+		recorder.start(1000);
+		
+
+		window.addEventListener('click', () => {
+			recorder.stop()
+		}, { once: true })
+		*/
+		/*
+
+		const transformStream = new TransformStream();
+
 		const file = fileInput.files[0];
-		const source = new Mediabunny.BlobSource(file);
+		const source = new Mediabunny.ReadableStreamSource(transformStream.readable);
+
+		file.stream().pipeThrough(transformStream);
+
+		const input = new Mediabunny.Input({
+			formats: Mediabunny.ALL_FORMATS,
+			source//: new Mediabunny.BlobSource(file),
+		});
+
+
+		const audioTrack = await input.getPrimaryAudioTrack();
+		console.log(audioTrack);
+
+		const sink = new Mediabunny.EncodedPacketSink(audioTrack);
+
+		
+		//console.log(await sink.getPacket(100))
+
+		console.log(await input.computeDuration())
+		*/
+
+		/*
+		const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+		const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+		const combinedStream = new MediaStream([
+			...screenStream.getTracks(),
+			...micStream.getTracks()
+		]);
+
+		const recorder = new MediaRecorder(combinedStream);
+
+		const { writable, readable } = new TransformStream({
+			async transform(chunk, controller) {
+				const arrayBuffer = await chunk.arrayBuffer();
+				controller.enqueue(new Uint8Array(arrayBuffer));
+			}
+		});
+		const writer = writable.getWriter();
+
+		const input = new Mediabunny.Input({
+			source: new Mediabunny.ReadableStreamSource(readable),
+			formats: Mediabunny.ALL_FORMATS,
+		});
+		(async () => {
+			const videoTrack = await input.getPrimaryVideoTrack();
+			const sink = new Mediabunny.EncodedPacketSink(videoTrack);
+
+			for await (const packet of sink.packets()) {
+				console.log(packet);
+			}
+		})();
+
+		recorder.onerror = console.error;
+		recorder.onstart = () => console.log("yes")
+		recorder.ondataavailable = async e => {
+			writer.write(e.data);
+		};
+		recorder.onstop = (e) => {
+			writer.close();
+		};
+
+		recorder.start(1000);
+
+		window.addEventListener('click', () => {
+			recorder.stop()
+		}, { once: true })
+
+		//setTimeout(() => recorder.stop(), 5000)
+		*/
+
+		/*
+		const transformStream = new TransformStream();
+
+		const file = fileInput.files[0];
+		const source = new Mediabunny.ReadableStreamSource(transformStream.readable);
+
+		file.stream().pipeTo(transformStream.writable);
 
 		const input = new Mediabunny.Input({
 			formats: Mediabunny.ALL_FORMATS,
@@ -17,14 +146,20 @@
 		});
 
 		const audioTrack = await input.getPrimaryAudioTrack();
+		console.log(audioTrack);
 
-		for (let i = 0; i < 10; i++) {
-			console.time()
-			const stats = await audioTrack.computePacketStats();
-			console.log(stats)
-			console.timeEnd()
+		//return;
+
+		const sink = new Mediabunny.EncodedPacketSink(audioTrack);
+
+		for await (const packet of sink.packets()) {
+			console.log(packet);
 		}
-		//console.log(stats);
+
+		console.log("done");
+		*/
+
+		//console.log(await sink.getPacket(1))
 
 		/*
 		const videoTrack = await input.getPrimaryVideoTrack();

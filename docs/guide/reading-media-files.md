@@ -552,3 +552,81 @@ type MaybePromise<T> = T | Promise<T>;
 	- `'none'` (default): No prefetching; only the data needed in the moment is requested.
 	- `'fileSystem'`: File system-optimized prefetching: a small amount of data is prefetched bidirectionally, aligned with page boundaries.
 	- `'network'`: Network-optimized prefetching, or more generally, prefetching optimized for any high-latency environment: tries to minimize the amount of read calls and aggressively prefetches data when sequential access patterns are detected.
+
+### `ReadableStreamSource`
+
+This is a source backed by a `ReadableStream` of `Uint8Array`, representing an append-only byte stream of unknown length. This is the source to use for incrementally streaming in input files that are still being constructed and whose size we don't yet know. You could also use it to stream in existing files, but other sources (such as [`BlobSource`](#blobsource) or [`FilePathSource`](#filepathsource)) are recommended instead because they offer random access.
+
+```ts
+import { ReadableStreamSource } from 'mediabunny';
+
+const { writable, readable } = new TransformStream<Uint8Array, Uint8Array>();
+const source = new ReadableStreamSource(readable);
+
+// Append chunks of data
+const writer = writable.getWriter();
+writer.write(chunk1);
+writer.write(chunk2);
+writer.close();
+```
+
+This source is *unsized*, meaning calls to `.getSize()` will throw and readers are more limited due to the lack of random file access. You should only use this source with sequential access patterns, such as reading all packets from start to end or doing conversions. This source does not work well with random access patterns unless you increase its max cache size.
+
+```ts
+type ReadableStreamSourceOptions = {
+	// The maximum number of bytes the cache is allowed to hold
+	// in memory. Defaults to 16 MiB.
+	maxCacheSize?: number;
+};
+```
+
+#### Use with [`MediaRecorder`](https://developer.mozilla.org/en-US/docs/Web/API/MediaRecorder)
+
+You can combine `MediaRecorder` with `ReadableStreamSource` to stream recorded data into Mediabunny while the recording is taking place. Here's an example where we pipe `MediaRecorder`'s output into Mediabunny's Conversion API to create a WAVE file:
+```ts
+import {
+	Input, 
+	Output, 
+	Conversion, 
+	ReadableStreamSource, 
+	ALL_FORMATS, 
+	WavOutputFormat, 
+	BufferTarget,
+} from 'mediabunny';
+
+// Set up a TransformStream to convert MediaRecorder's Blobs into Uint8Arrays
+const { writable, readable } = new TransformStream<Blob, Uint8Array>({
+	async transform(chunk, controller) {
+		const arrayBuffer = await chunk.arrayBuffer();
+		controller.enqueue(new Uint8Array(arrayBuffer));
+	},
+});
+
+const input = new Input({
+	source: new ReadableStreamSource(readable),
+	formats: ALL_FORMATS,
+});
+const output = new Output({
+	format: new WavOutputFormat(),
+	target: new BufferTarget(),
+});
+
+const conversionPromise = Conversion.init({ input, output })
+	.then(conversion => conversion.execute());
+
+const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+const recorder = new MediaRecorder(micStream);
+const writer = writable.getWriter();
+
+recorder.ondataavailable = e => writer.write(e.data);
+recorder.onstop = async () => {
+	await writer.close();
+	await conversionPromise;
+
+	// Get the final .wav file
+	const wavFile = output.target.buffer!; // => ArrayBuffer
+};
+
+recorder.start(1000);
+setTimeout(() => recorder.stop(), 10_000); // Stop recording after 10s
+```

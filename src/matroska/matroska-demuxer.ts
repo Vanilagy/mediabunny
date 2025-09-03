@@ -85,7 +85,7 @@ type Segment = {
 	cuePoints: CuePoint[];
 
 	dataStartPos: number;
-	elementEndPos: number;
+	elementEndPos: number | null;
 	clusterSeekStartPos: number;
 
 	clusters: Cluster[];
@@ -234,9 +234,10 @@ export class MatroskaDemuxer extends Demuxer {
 
 	readMetadata() {
 		return this.readMetadataPromise ??= (async () => {
-			// Loop over all top-level elements in the file
 			let currentPos = 0;
-			while (currentPos < this.reader.fileSize) {
+
+			// Loop over all top-level elements in the file
+			while (true) {
 				let slice = this.reader.requestSliceRange(currentPos, MIN_HEADER_SIZE, MAX_HEADER_SIZE);
 				if (slice instanceof Promise) slice = await slice;
 				if (!slice) break;
@@ -266,7 +267,15 @@ export class MatroskaDemuxer extends Demuxer {
 						// and only segment
 						break;
 					}
+
+					if (this.reader.fileSize === null) {
+						break; // Stop at the first segment
+					}
 				} else if (id === EBMLId.Cluster) {
+					if (this.reader.fileSize === null) {
+						break; // Shouldn't be reached anyway, since we stop at the first segment
+					}
+
 					// Clusters are not a top-level element in Matroska, but some files contain a Segment whose size
 					// doesn't contain any of the clusters that follow it. In the case, we apply the following logic: if
 					// we find a top-level cluster, attribute it to the previous segment.
@@ -280,7 +289,7 @@ export class MatroskaDemuxer extends Demuxer {
 							LEVEL_0_AND_1_EBML_IDS,
 							this.reader.fileSize,
 						);
-						size = (nextElementPos ?? this.reader.fileSize) - dataStartPos;
+						size = nextElementPos.pos - dataStartPos;
 					}
 
 					const lastSegment = last(this.segments);
@@ -312,7 +321,7 @@ export class MatroskaDemuxer extends Demuxer {
 
 			dataStartPos: segmentDataStart,
 			elementEndPos: dataSize === null
-				? await this.input.source.getSize() // Assume it goes until the end of the file
+				? null // Assume it goes until the end of the file
 				: segmentDataStart + dataSize,
 			clusterSeekStartPos: segmentDataStart,
 
@@ -321,10 +330,9 @@ export class MatroskaDemuxer extends Demuxer {
 		};
 		this.segments.push(this.currentSegment);
 
-		let currentPos = 0;
-		let clusterEncountered = false;
+		let currentPos = segmentDataStart;
 
-		while (currentPos < this.currentSegment.elementEndPos) {
+		while (this.currentSegment.elementEndPos === null || currentPos < this.currentSegment.elementEndPos) {
 			let slice = this.reader.requestSliceRange(currentPos, MIN_HEADER_SIZE, MAX_HEADER_SIZE);
 			if (slice instanceof Promise) slice = await slice;
 			if (!slice) break;
@@ -332,14 +340,14 @@ export class MatroskaDemuxer extends Demuxer {
 			const elementStartPos = currentPos;
 			const header = readElementHeader(slice);
 
-			if (!header || !LEVEL_1_EBML_IDS.includes(header.id)) {
+			if (!header || (!LEVEL_1_EBML_IDS.includes(header.id) && header.id !== EBMLId.Void)) {
 				// Potential junk. Let's try to resync
 
 				const nextPos = await resync(
 					this.reader,
 					elementStartPos,
 					LEVEL_1_EBML_IDS,
-					Math.min(this.currentSegment.elementEndPos, elementStartPos + MAX_RESYNC_LENGTH),
+					Math.min(this.currentSegment.elementEndPos ?? Infinity, elementStartPos + MAX_RESYNC_LENGTH),
 				);
 
 				if (nextPos) {
@@ -367,93 +375,54 @@ export class MatroskaDemuxer extends Demuxer {
 					this.readContiguousElements(slice);
 				}
 			} else if (id === EBMLId.Cluster) {
-				if (!clusterEncountered) {
-					clusterEncountered = true;
-					this.currentSegment.clusterSeekStartPos = elementStartPos;
-				}
-			}
-
-			if (size !== null) {
-				currentPos = dataStartPos + size;
-			}
-
-			if (this.currentSegment.infoSeen && this.currentSegment.tracksSeen && this.currentSegment.cuesSeen) {
-				// No need to search anymore, we have everything
-				break;
-			}
-
-			if (this.currentSegment.seekHeadSeen) {
-				let hasInfo = this.currentSegment.infoSeen;
-				let hasTracks = this.currentSegment.tracksSeen;
-				let hasCues = this.currentSegment.cuesSeen;
-
-				for (const entry of this.currentSegment.seekEntries) {
-					if (entry.id === EBMLId.Info) {
-						hasInfo = true;
-					} else if (entry.id === EBMLId.Tracks) {
-						hasTracks = true;
-					} else if (entry.id === EBMLId.Cues) {
-						hasCues = true;
-					}
-				}
-
-				if (hasInfo && hasTracks && hasCues) {
-					// No need to search sequentially anymore, we can use the seek head
-					break;
-				}
+				this.currentSegment.clusterSeekStartPos = elementStartPos;
+				break; // Stop at the first cluster
 			}
 
 			if (size === null) {
 				break;
-			}
-		}
-
-		if (!clusterEncountered) {
-			const seekEntry = this.currentSegment.seekEntries.find(entry => entry.id === EBMLId.Cluster);
-
-			if (seekEntry) {
-				// The seek head points us to the first cluster, nice
-				this.currentSegment.clusterSeekStartPos = segmentDataStart + seekEntry.segmentPosition;
 			} else {
-				this.currentSegment.clusterSeekStartPos = currentPos;
+				currentPos = dataStartPos + size;
 			}
 		}
 
-		// Sort the seek entries by file position so reading them exhibits a sequential pattern
-		this.currentSegment.seekEntries.sort((a, b) => a.segmentPosition - b.segmentPosition);
+		if (this.reader.fileSize !== null) {
+			// Sort the seek entries by file position so reading them exhibits a sequential pattern
+			this.currentSegment.seekEntries.sort((a, b) => a.segmentPosition - b.segmentPosition);
 
-		// Use the seek head to read missing metadata elements
-		for (const seekEntry of this.currentSegment.seekEntries) {
-			const target = METADATA_ELEMENTS.find(x => x.id === seekEntry.id);
-			if (!target) {
-				continue;
+			// Use the seek head to read missing metadata elements
+			for (const seekEntry of this.currentSegment.seekEntries) {
+				const target = METADATA_ELEMENTS.find(x => x.id === seekEntry.id);
+				if (!target) {
+					continue;
+				}
+
+				if (this.currentSegment[target.flag]) continue;
+
+				let slice = this.reader.requestSliceRange(
+					segmentDataStart + seekEntry.segmentPosition,
+					MIN_HEADER_SIZE,
+					MAX_HEADER_SIZE,
+				);
+				if (slice instanceof Promise) slice = await slice;
+				if (!slice) continue;
+
+				const header = readElementHeader(slice);
+				if (!header) continue;
+
+				const { id, size } = header;
+				if (id !== target.id) continue;
+
+				assertDefinedSize(size);
+
+				this.currentSegment[target.flag] = true;
+
+				let dataSlice = this.reader.requestSlice(slice.filePos, size);
+				if (dataSlice instanceof Promise) dataSlice = await dataSlice;
+				if (!dataSlice) continue;
+
+				this.readContiguousElements(dataSlice);
 			}
-
-			if (this.currentSegment[target.flag]) continue;
-
-			let slice = this.reader.requestSliceRange(
-				segmentDataStart + seekEntry.segmentPosition,
-				MIN_HEADER_SIZE,
-				MAX_HEADER_SIZE,
-			);
-			if (slice instanceof Promise) slice = await slice;
-			if (!slice) continue;
-
-			const header = readElementHeader(slice);
-			if (!header) continue;
-
-			const { id, size } = header;
-			if (id !== target.id) continue;
-
-			assertDefinedSize(size);
-
-			this.currentSegment[target.flag] = true;
-
-			let dataSlice = this.reader.requestSlice(slice.filePos, size);
-			if (dataSlice instanceof Promise) dataSlice = await dataSlice;
-			if (!dataSlice) continue;
-
-			this.readContiguousElements(dataSlice);
 		}
 
 		if (this.currentSegment.timestampScale === -1) {
@@ -542,7 +511,7 @@ export class MatroskaDemuxer extends Demuxer {
 				segment.elementEndPos,
 			);
 
-			size = (nextElementPos ?? segment.elementEndPos) - dataStartPos;
+			size = nextElementPos.pos - dataStartPos;
 		}
 
 		assert(id === EBMLId.Cluster);
@@ -1669,7 +1638,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 				}
 			}
 
-			while (currentPos <= segment.elementEndPos - MIN_HEADER_SIZE) {
+			while (segment.elementEndPos === null || currentPos <= segment.elementEndPos - MIN_HEADER_SIZE) {
 				if (prevCluster) {
 					const trackData = prevCluster.trackData.get(this.internalTrack.id);
 					if (trackData && trackData.startTimestamp > latestTimestamp) {
@@ -1693,14 +1662,17 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 				const elementStartPos = currentPos;
 				const elementHeader = readElementHeader(slice);
 
-				if (!elementHeader || !LEVEL_1_EBML_IDS.includes(elementHeader.id)) {
-					// There's an element here that shouldn't be here (or Void). Might be garbage. In this case, let's
+				if (
+					!elementHeader
+					|| (!LEVEL_1_EBML_IDS.includes(elementHeader.id) && elementHeader.id !== EBMLId.Void)
+				) {
+					// There's an element here that shouldn't be here. Might be garbage. In this case, let's
 					// try and resync to the next valid element.
 					const nextPos = await resync(
 						demuxer.reader,
 						elementStartPos,
 						LEVEL_1_EBML_IDS,
-						Math.min(segment.elementEndPos, elementStartPos + MAX_RESYNC_LENGTH),
+						Math.min(segment.elementEndPos ?? Infinity, elementStartPos + MAX_RESYNC_LENGTH),
 					);
 
 					if (nextPos) {
@@ -1764,11 +1736,11 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 							segment.elementEndPos,
 						);
 
-						size = (nextElementPos ?? segment.elementEndPos) - dataStartPos;
+						size = nextElementPos.pos - dataStartPos;
 					}
 
 					const endPos = dataStartPos + size;
-					if (endPos > segment.elementEndPos - MIN_HEADER_SIZE) {
+					if (segment.elementEndPos !== null && endPos > segment.elementEndPos - MIN_HEADER_SIZE) {
 						// No more elements fit in this segment
 						break;
 					} else {

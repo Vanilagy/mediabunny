@@ -6,16 +6,16 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { clamp, MaybePromise, toDataView } from './misc';
+import { assert, clamp, MaybePromise, toDataView } from './misc';
 import { Source } from './source';
 
 export class Reader {
-	fileSize!: number;
+	fileSize!: number | null;
 
 	constructor(public source: Source) {}
 
 	requestSlice(start: number, length: number): MaybePromise<FileSlice | null> {
-		if (start + length > this.fileSize) {
+		if (this.fileSize !== null && start + length > this.fileSize) {
 			return null;
 		}
 
@@ -40,10 +40,42 @@ export class Reader {
 	}
 
 	requestSliceRange(start: number, minLength: number, maxLength: number): MaybePromise<FileSlice | null> {
-		return this.requestSlice(
-			start,
-			clamp(this.fileSize - start, minLength, maxLength),
-		);
+		if (this.fileSize !== null) {
+			return this.requestSlice(
+				start,
+				clamp(this.fileSize - start, minLength, maxLength),
+			);
+		} else {
+			const promisedAttempt = this.requestSlice(start, maxLength);
+
+			const handleAttempt = (attempt: FileSlice | null) => {
+				if (attempt) {
+					return attempt;
+				}
+
+				const handleFileSize = (fileSize: number | null) => {
+					assert(fileSize !== null); // The slice couldn't fit, meaning we must know the file size now
+
+					return this.requestSlice(
+						start,
+						clamp(fileSize - start, minLength, maxLength),
+					);
+				};
+
+				const promisedFileSize = this.source._retrieveSize();
+				if (promisedFileSize instanceof Promise) {
+					return promisedFileSize.then(handleFileSize);
+				} else {
+					return handleFileSize(promisedFileSize);
+				}
+			};
+
+			if (promisedAttempt instanceof Promise) {
+				return promisedAttempt.then(handleAttempt);
+			} else {
+				return handleAttempt(promisedAttempt);
+			}
+		}
 	}
 }
 

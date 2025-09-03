@@ -18,13 +18,15 @@
 		const file = fileInput.files[0];
 
 		const source = new Mediabunny.BlobSource(file);
-		const target = new Mediabunny.BufferTarget() ?? new Mediabunny.StreamTarget(new WritableStream({
+		const target = new Mediabunny.NullTarget() ?? new Mediabunny.BufferTarget() ?? new Mediabunny.StreamTarget(new WritableStream({
 			write: console.log
 		}), {
 			chunked: true,
 			chunkSize: 2**20
 		});
-		const outputFormat = new Mediabunny.Mp4OutputFormat({});
+		const outputFormat = new Mediabunny.Mp4OutputFormat({
+			onMoov: console.log
+		});
 
 		const button = document.createElement('button');
 		button.textContent = 'Cancel';
@@ -74,7 +76,7 @@
 			},
 			*/
 			video: () => ({
-				codec: 'avc',
+				//codec: 'avc',
 				//fit: 'contain',
 				//frameRate: 27.123,
 				//width: 320,

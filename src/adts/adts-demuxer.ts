@@ -81,7 +81,7 @@ export class AdtsDemuxer extends Demuxer {
 			return;
 		}
 
-		if (header.startPos + header.frameLength > this.reader.fileSize) {
+		if (this.reader.fileSize !== null && header.startPos + header.frameLength > this.reader.fileSize) {
 			// Frame doesn't fit in the rest of the file
 			this.lastSampleLoaded = true;
 			return;
@@ -227,7 +227,10 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 		} else {
 			let slice = this.demuxer.reader.requestSlice(rawSample.dataStart, rawSample.dataSize);
 			if (slice instanceof Promise) slice = await slice;
-			assert(slice);
+
+			if (!slice) {
+				return null; // Data didn't fit into the rest of the file
+			}
 
 			data = readBytes(slice, rawSample.dataSize);
 		}

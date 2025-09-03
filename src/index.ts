@@ -89,7 +89,7 @@ export {
 	getFirstEncodableAudioCodec,
 	getFirstEncodableSubtitleCodec,
 } from './encode';
-export { Target, BufferTarget, StreamTarget, StreamTargetChunk, StreamTargetOptions } from './target';
+export { Target, BufferTarget, StreamTarget, StreamTargetChunk, StreamTargetOptions, NullTarget } from './target';
 export { Rotation, AnyIterable, SetRequired, MaybePromise } from './misc';
 export {
 	Source,
@@ -102,6 +102,8 @@ export {
 	FilePathSourceOptions,
 	StreamSource,
 	StreamSourceOptions,
+	ReadableStreamSource,
+	ReadableStreamSourceOptions,
 } from './source';
 export {
 	InputFormat,

@@ -58,7 +58,7 @@ export class Input<S extends Source = Source> {
 	/** @internal */
 	_getDemuxer() {
 		return this._demuxerPromise ??= (async () => {
-			this._reader.fileSize = await this._source.getSize();
+			this._reader.fileSize = await this._source.getSizeOrNull();
 
 			for (const format of this._formats) {
 				const canRead = await format._canReadInput(this);

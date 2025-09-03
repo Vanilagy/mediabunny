@@ -31,22 +31,39 @@ export type ReadResult = {
  */
 export abstract class Source {
 	/** @internal */
-	abstract _retrieveSize(): MaybePromise<number>;
+	abstract _retrieveSize(): MaybePromise<number | null>;
 	/** @internal */
-	abstract _read(start: number, end: number): MaybePromise<ReadResult>;
+	abstract _read(start: number, end: number): MaybePromise<ReadResult | null>;
 
 	/** @internal */
-	private _sizePromise: Promise<number> | null = null;
+	private _sizePromise: Promise<number | null> | null = null;
 
 	/**
 	 * Resolves with the total size of the file in bytes. This function is memoized, meaning only the first call
 	 * will retrieve the size.
+	 *
+	 * Returns null if the source is unsized.
 	 */
-	async getSize() {
+	async getSizeOrNull() {
 		return this._sizePromise ??= Promise.resolve(this._retrieveSize());
 	}
 
-	/** Called each time data is retrieved from the source. Will be called with the retrieved range. */
+	/**
+	 * Resolves with the total size of the file in bytes. This function is memoized, meaning only the first call
+	 * will retrieve the size.
+	 *
+	 * Throws an error if the source is unsized.
+	 */
+	async getSize() {
+		const result = await this.getSizeOrNull();
+		if (result === null) {
+			throw new Error('Cannot determine the size of an unsized source.');
+		}
+
+		return result;
+	}
+
+	/** Called each time data is retrieved from the source. Will be called with the retrieved range (end exclusive). */
 	onread: ((start: number, end: number) => unknown) | null = null;
 }
 
@@ -178,6 +195,8 @@ export class BlobSource extends Source {
 			this.onread?.(worker.currentPos, worker.currentPos + value.length);
 			this._orchestrator.supplyWorkerData(worker, value);
 		}
+
+		worker.running = false;
 	}
 }
 
@@ -409,6 +428,7 @@ export class UrlSource extends Source {
 						);
 					}
 
+					worker.running = false;
 					return;
 				}
 
@@ -418,10 +438,13 @@ export class UrlSource extends Source {
 				if (worker.currentPos >= worker.targetPos || worker.aborted) {
 					abortController.abort();
 
+					worker.running = false;
 					return;
 				}
 			}
 		}
+
+		worker.running = false;
 
 		// The previous UrlSource had logic for circumventing https://issues.chromium.org/issues/436025873; I haven't
 		// been able to observe this bug with the new UrlSource (maybe because we're using response streaming), so the
@@ -681,6 +704,264 @@ export class StreamSource extends Source {
 				throw new TypeError('options.read must return or resolve to a Uint8Array or a ReadableStream.');
 			}
 		}
+
+		worker.running = false;
+	}
+}
+
+type ReadableStreamSourcePendingSlice = {
+	start: number;
+	end: number;
+	bytes: Uint8Array;
+	resolve: (bytes: ReadResult | null) => void;
+	reject: (error: unknown) => void;
+};
+
+/**
+ * Options for ReadableStreamSource.
+ * @public
+ */
+export type ReadableStreamSourceOptions = {
+	/** The maximum number of bytes the cache is allowed to hold in memory. Defaults to 16 MiB. */
+	maxCacheSize?: number;
+};
+
+/**
+ * A source backed by a `ReadableStream` of `Uint8Array`, representing an append-only byte stream of unknown
+ * length. This is the source to use for incrementally streaming in input files that are still being constructed and
+ * whose size we don't yet know, like for example the output chunks of
+ * [MediaRecorder](https://developer.mozilla.org/en-US/docs/Web/API/MediaRecorder).
+ *
+ * This source is *unsized*, meaning calls to `.getSize()` will throw and readers are more limited due to the
+ * lack of random file access. You should only use this source with sequential access patterns, such as reading all
+ * packets from start to end. This source does not work well with random access patterns unless you increase its
+ * max cache size.
+ *
+ * @public
+ */
+export class ReadableStreamSource extends Source {
+	/** @internal */
+	_stream: ReadableStream<Uint8Array>;
+	/** @internal */
+	_reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+	/** @internal */
+	_cache: CacheEntry[] = [];
+	/** @internal */
+	_maxCacheSize: number;
+	/** @internal */
+	_pendingSlices: ReadableStreamSourcePendingSlice[] = [];
+	/** @internal */
+	_currentIndex = 0;
+	/** @internal */
+	_targetIndex = 0;
+	/** @internal */
+	_maxRequestedIndex = 0;
+	/** @internal */
+	_endIndex: number | null = null;
+	/** @internal */
+	_pulling = false;
+
+	constructor(stream: ReadableStream<Uint8Array>, options: ReadableStreamSourceOptions = {}) {
+		if (!(stream instanceof ReadableStream)) {
+			throw new TypeError('stream must be a ReadableStream.');
+		}
+		if (!options || typeof options !== 'object') {
+			throw new TypeError('options must be an object.');
+		}
+		if (
+			options.maxCacheSize !== undefined
+			&& (!Number.isInteger(options.maxCacheSize) || options.maxCacheSize < 0)
+		) {
+			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative integer.');
+		}
+
+		super();
+
+		this._stream = stream;
+		this._maxCacheSize = options.maxCacheSize ?? (16 * 2 ** 20 /* 16 MiB */);
+	}
+
+	/** @internal */
+	_retrieveSize() {
+		return this._endIndex; // Starts out as null, meaning this source is unsized
+	}
+
+	/** @internal */
+	_read(start: number, end: number): MaybePromise<ReadResult | null> {
+		if (this._endIndex !== null && end > this._endIndex) {
+			return null;
+		}
+
+		this._maxRequestedIndex = Math.max(this._maxRequestedIndex, end);
+
+		const cacheStartIndex = binarySearchLessOrEqual(this._cache, start, x => x.start);
+		const cacheStartEntry = cacheStartIndex !== -1 ? this._cache[cacheStartIndex]! : null;
+
+		if (cacheStartEntry && cacheStartEntry.start <= start && end <= cacheStartEntry.end) {
+			// The request can be satisfied with a single cache entry
+			return {
+				bytes: cacheStartEntry.bytes,
+				view: cacheStartEntry.view,
+				offset: cacheStartEntry.start,
+			};
+		}
+
+		let lastEnd = start;
+		const bytes = new Uint8Array(end - start);
+
+		if (cacheStartIndex !== -1) {
+			// Walk over the cache to see if we can satisfy the request using multiple cache entries
+			for (let i = cacheStartIndex; i < this._cache.length; i++) {
+				const cacheEntry = this._cache[i]!;
+				if (cacheEntry.start >= end) {
+					break;
+				}
+
+				const cappedStart = Math.max(start, cacheEntry.start);
+				if (cappedStart > lastEnd) {
+					// We're too far behind
+					this._throwDueToCacheMiss();
+				}
+
+				const cappedEnd = Math.min(end, cacheEntry.end);
+
+				if (cappedStart < cappedEnd) {
+					bytes.set(
+						cacheEntry.bytes.subarray(cappedStart - cacheEntry.start, cappedEnd - cacheEntry.start),
+						cappedStart - start,
+					);
+
+					lastEnd = cappedEnd;
+				}
+			}
+		}
+
+		if (lastEnd === end) {
+			return {
+				bytes,
+				view: toDataView(bytes),
+				offset: start,
+			};
+		}
+
+		// We need to pull more data
+
+		if (this._currentIndex > lastEnd) {
+			// We're too far behind
+			this._throwDueToCacheMiss();
+		}
+
+		const { promise, resolve, reject } = promiseWithResolvers<ReadResult | null>();
+
+		this._pendingSlices.push({
+			start,
+			end,
+			bytes,
+			resolve,
+			reject,
+		});
+
+		this._targetIndex = Math.max(this._targetIndex, end);
+
+		// Start pulling from the stream if we're not already doing it
+		if (!this._pulling) {
+			this._pulling = true;
+			void this._pull()
+				.catch((error) => {
+					this._pulling = false;
+
+					if (this._pendingSlices.length > 0) {
+						this._pendingSlices.forEach(x => x.reject(error)); // Make sure to propagate any errors
+						this._pendingSlices.length = 0;
+					} else {
+						throw error; // So it doesn't get swallowed
+					}
+				});
+		}
+
+		return promise;
+	}
+
+	/** @internal */
+	_throwDueToCacheMiss() {
+		throw new Error(
+			'Read is before the cached region. With ReadableStreamSource, you must access the data more'
+			+ ' sequentially or increase the size of its cache.',
+		);
+	}
+
+	/** @internal */
+	async _pull() {
+		this._reader ??= this._stream.getReader();
+
+		// This is the loop that keeps pulling data from the stream until a target index is reached, filling requests
+		// in the process
+		while (this._currentIndex < this._targetIndex) {
+			const { done, value } = await this._reader.read();
+			if (done) {
+				for (const pendingSlice of this._pendingSlices) {
+					pendingSlice.resolve(null);
+				}
+				this._pendingSlices.length = 0;
+				this._endIndex = this._currentIndex; // We know how long the file is now!
+
+				break;
+			}
+
+			const startIndex = this._currentIndex;
+			const endIndex = this._currentIndex + value.byteLength;
+
+			// Fill the pending slices with the data
+			for (let i = 0; i < this._pendingSlices.length; i++) {
+				const pendingSlice = this._pendingSlices[i]!;
+
+				const cappedStart = Math.max(startIndex, pendingSlice.start);
+				const cappedEnd = Math.min(endIndex, pendingSlice.end);
+
+				if (cappedStart < cappedEnd) {
+					pendingSlice.bytes.set(
+						value.subarray(cappedStart - startIndex, cappedEnd - startIndex),
+						cappedStart - pendingSlice.start,
+					);
+					if (cappedEnd === pendingSlice.end) {
+						// Pending slice fully filled
+						pendingSlice.resolve({
+							bytes: pendingSlice.bytes,
+							view: toDataView(pendingSlice.bytes),
+							offset: pendingSlice.start,
+						});
+						this._pendingSlices.splice(i, 1);
+						i--;
+					}
+				}
+			}
+
+			this._cache.push({
+				start: startIndex,
+				end: endIndex,
+				bytes: value,
+				view: toDataView(value),
+				age: 0, // Unused
+			});
+
+			// Do cache eviction, based on the distance from the last-requested index. It's important that we do it like
+			// this and not based on where the reader is at, because if the reader is fast, we'll unnecessarily evict
+			// data that we still might need.
+			while (this._cache.length > 0) {
+				const firstEntry = this._cache[0]!;
+				const distance = this._maxRequestedIndex - firstEntry.end;
+
+				if (distance <= this._maxCacheSize) {
+					break;
+				}
+
+				this._cache.shift();
+			}
+
+			this._currentIndex += value.byteLength;
+		}
+
+		this._pulling = false;
 	}
 }
 
@@ -933,6 +1214,7 @@ class ReadOrchestrator {
 				// another one so close to it
 				const gapTolerance = 2 ** 17;
 
+				// This check also implies worker.currentPos <= outerHole.start, a critical condition
 				if (closedIntervalsOverlap(
 					outerHole.start - gapTolerance, outerHole.start,
 					worker.currentPos, worker.targetPos,
@@ -1024,15 +1306,14 @@ class ReadOrchestrator {
 
 		void this.options.runWorker(worker)
 			.catch((error) => {
+				worker.running = false;
+
 				if (worker.pendingSlices.length > 0) {
 					worker.pendingSlices.forEach(x => x.reject(error)); // Make sure to propagate any errors
 					worker.pendingSlices.length = 0;
 				} else {
 					throw error; // So it doesn't get swallowed
 				}
-			})
-			.finally(() => {
-				worker.running = false;
 			});
 	}
 
@@ -1182,32 +1463,25 @@ class ReadOrchestrator {
 
 		// LRU eviction of cache entries
 		while (this.currentCacheSize > this.options.maxCacheSize) {
-			if (this.cache.length > 1) {
-				let oldestIndex = 0;
-				let oldestEntry = this.cache[0]!;
+			let oldestIndex = 0;
+			let oldestEntry = this.cache[0]!;
 
-				for (let i = 1; i < this.cache.length; i++) {
-					const entry = this.cache[i]!;
+			for (let i = 1; i < this.cache.length; i++) {
+				const entry = this.cache[i]!;
 
-					if (entry.age < oldestEntry.age) {
-						oldestIndex = i;
-						oldestEntry = entry;
-					}
+				if (entry.age < oldestEntry.age) {
+					oldestIndex = i;
+					oldestEntry = entry;
 				}
-
-				this.cache.splice(oldestIndex, 1);
-				this.currentCacheSize -= oldestEntry.bytes.length;
-			} else {
-				// The single entry that's left is too big for the cache, let's trim it
-				const entry = this.cache[0]!;
-				assert(entry.bytes.length > this.options.maxCacheSize);
-
-				entry.bytes = entry.bytes.slice(0, this.options.maxCacheSize);
-				entry.view = toDataView(entry.bytes);
-				entry.end = entry.start + entry.bytes.length;
-
-				this.currentCacheSize = entry.bytes.length;
 			}
+
+			if (this.currentCacheSize - oldestEntry.bytes.length <= this.options.maxCacheSize) {
+				// Don't evict if it would shrink the cache below the max size
+				break;
+			}
+
+			this.cache.splice(oldestIndex, 1);
+			this.currentCacheSize -= oldestEntry.bytes.length;
 		}
 	}
 }

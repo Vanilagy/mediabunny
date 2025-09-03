@@ -77,9 +77,18 @@ This callback is called each time the progress of the conversion advances.
 A progress of `1` doesn't indicate the conversion has finished; the conversion is only finished once the promise returned by `.execute()` resolves.
 :::
 
-::: info
-Tracking conversion progress may slightly affect performance, as it requires knowledge of the input file's total duration - but this is usually negligible.
+::: warning
+Tracking conversion progress can slightly affect performance as it requires knowledge of the input file's total duration. This is usually negligible but should be avoided when using append-only input sources such as [`ReadableStreamSource`](./reading-media-files#readablestreamsource).
 :::
+
+If you want to monitor the output size of the conversion (in bytes), simply use the `onwrite` callback on your `Target`:
+```ts
+let currentFileSize = 0;
+
+output.target.onwrite = (start, end) => {
+	currentFileSize = Math.max(currentFileSize, end);
+};
+```
 
 ### Canceling a conversion
 

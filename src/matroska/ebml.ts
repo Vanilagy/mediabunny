@@ -68,6 +68,7 @@ export enum EBMLId {
 	DocType = 0x4282,
 	DocTypeVersion = 0x4287,
 	DocTypeReadVersion = 0x4285,
+	Void = 0xec,
 	Segment = 0x18538067,
 	SeekHead = 0x114d9b74,
 	Seek = 0x4dbb,
@@ -554,11 +555,16 @@ export const readFloat = (slice: FileSlice, width: number) => {
 };
 
 /** Returns the byte offset in the file of the next element with a matching ID. */
-export const searchForNextElementId = async (reader: Reader, startPos: number, ids: EBMLId[], until: number) => {
+export const searchForNextElementId = async (
+	reader: Reader,
+	startPos: number,
+	ids: EBMLId[],
+	until: number | null,
+): Promise<{ pos: number; found: boolean }> => {
 	const idsSet = new Set(ids);
 	let currentPos = startPos;
 
-	while (currentPos < until) {
+	while (until === null || currentPos < until) {
 		let slice = reader.requestSliceRange(currentPos, MIN_HEADER_SIZE, MAX_HEADER_SIZE);
 		if (slice instanceof Promise) slice = await slice;
 		if (!slice) break;
@@ -569,7 +575,7 @@ export const searchForNextElementId = async (reader: Reader, startPos: number, i
 		}
 
 		if (idsSet.has(elementHeader.id)) {
-			return currentPos;
+			return { pos: currentPos, found: true };
 		}
 
 		assertDefinedSize(elementHeader.size);
@@ -577,7 +583,7 @@ export const searchForNextElementId = async (reader: Reader, startPos: number, i
 		currentPos = slice.filePos + elementHeader.size;
 	}
 
-	return null;
+	return { pos: (until !== null && until > currentPos) ? until : currentPos, found: false };
 };
 
 /** Searches for the next occurrence of an element ID using a naive byte-wise search. */

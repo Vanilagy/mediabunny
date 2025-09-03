@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { BufferTargetWriter, StreamTargetWriter, Writer } from './writer';
+import { BufferTargetWriter, NullTargetWriter, StreamTargetWriter, Writer } from './writer';
 import { Output } from './output';
 
 /**
@@ -19,6 +19,14 @@ export abstract class Target {
 
 	/** @internal */
 	abstract _createWriter(): Writer;
+
+	/**
+	 * Called each time data is written to the target. Will be called with the byte range into which data was written.
+	 *
+	 * Use this callback to track the size of the output file as it grows. But be warned, this function is chatty and
+	 * gets called *extremely* often.
+	 */
+	onwrite: ((start: number, end: number) => unknown) | null = null;
 }
 
 /**
@@ -102,5 +110,17 @@ export class StreamTarget extends Target {
 	/** @internal */
 	_createWriter() {
 		return new StreamTargetWriter(this);
+	}
+}
+
+/**
+ * This target just discards all incoming data. It is useful for when you need an `Output` but extract data from it
+ * differently, for example through format-specific callbacks (`onMoof`, `onMdat`, ...) or encoder events.
+ * @public
+ */
+export class NullTarget extends Target {
+	/** @internal */
+	_createWriter() {
+		return new NullTargetWriter(this);
 	}
 }

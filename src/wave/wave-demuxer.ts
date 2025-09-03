@@ -38,6 +38,7 @@ export class WaveDemuxer extends Demuxer {
 	} | null = null;
 
 	tracks: InputAudioTrack[] = [];
+	lastKnownPacketIndex = 0;
 
 	constructor(input: Input) {
 		super(input);
@@ -58,7 +59,9 @@ export class WaveDemuxer extends Demuxer {
 
 			const outerChunkSize = readU32(slice, littleEndian);
 
-			let totalFileSize = isRf64 ? this.reader.fileSize : Math.min(outerChunkSize + 8, this.reader.fileSize);
+			let totalFileSize = isRf64
+				? this.reader.fileSize
+				: Math.min(outerChunkSize + 8, this.reader.fileSize ?? Infinity);
 			const format = readAscii(slice, 4);
 
 			if (format !== 'WAVE') {
@@ -69,7 +72,7 @@ export class WaveDemuxer extends Demuxer {
 			let dataChunkSize: number | null = null;
 			let currentPos = slice.filePos;
 
-			while (currentPos < totalFileSize) {
+			while (totalFileSize === null || currentPos < totalFileSize) {
 				let slice = this.reader.requestSlice(currentPos, 8);
 				if (slice instanceof Promise) slice = await slice;
 				if (!slice) break;
@@ -88,14 +91,14 @@ export class WaveDemuxer extends Demuxer {
 					dataChunkSize ??= chunkSize;
 
 					this.dataStart = slice.filePos;
-					this.dataSize = Math.min(dataChunkSize, totalFileSize - this.dataStart);
+					this.dataSize = Math.min(dataChunkSize, (totalFileSize ?? Infinity) - this.dataStart);
 				} else if (chunkId === 'ds64') {
 					// File and data chunk sizes are defined in here instead
 
 					const riffChunkSize = readU64(slice, littleEndian);
 					dataChunkSize = readU64(slice, littleEndian);
 
-					totalFileSize = Math.min(riffChunkSize + 8, this.reader.fileSize);
+					totalFileSize = Math.min(riffChunkSize + 8, this.reader.fileSize ?? Infinity);
 				}
 
 				currentPos = startPos + chunkSize + (chunkSize & 1); // Handle padding
@@ -200,10 +203,11 @@ export class WaveDemuxer extends Demuxer {
 
 	async computeDuration() {
 		await this.readMetadata();
-		assert(this.audioInfo);
 
-		const numberOfBlocks = this.dataSize / this.audioInfo.blockSizeInBytes;
-		return numberOfBlocks / this.audioInfo.sampleRate;
+		const track = this.tracks[0];
+		assert(track);
+
+		return track.computeDuration();
 	}
 
 	async getTracks() {
@@ -244,8 +248,9 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		};
 	}
 
-	computeDuration() {
-		return this.demuxer.computeDuration();
+	async computeDuration() {
+		const lastPacket = await this.getPacket(Infinity, { metadataOnly: true });
+		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
 	}
 
 	getNumberOfChannels() {
@@ -290,6 +295,19 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 			this.demuxer.dataSize - startOffset,
 		);
 
+		if (this.demuxer.reader.fileSize === null) {
+			// If the file size is unknown, we weren't able to cap the dataSize in the init logic and we instead have to
+			// rely on the headers telling us how large the file is. But, these might be wrong, so let's check if the
+			// requested slice actually exists.
+
+			let slice = this.demuxer.reader.requestSlice(this.demuxer.dataStart + startOffset, sizeInBytes);
+			if (slice instanceof Promise) slice = await slice;
+
+			if (!slice) {
+				return null;
+			}
+		}
+
 		let data: Uint8Array;
 		if (options.metadataOnly) {
 			data = PLACEHOLDER_DATA;
@@ -303,6 +321,11 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 
 		const timestamp = packetIndex * PACKET_SIZE_IN_FRAMES / this.demuxer.audioInfo.sampleRate;
 		const duration = sizeInBytes / this.demuxer.audioInfo.blockSizeInBytes / this.demuxer.audioInfo.sampleRate;
+
+		this.demuxer.lastKnownPacketIndex = Math.max(
+			packetIndex,
+			timestamp,
+		);
 
 		return new EncodedPacket(
 			data,
@@ -318,11 +341,38 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		return this.getPacketAtIndex(0, options);
 	}
 
-	getPacket(timestamp: number, options: PacketRetrievalOptions) {
+	async getPacket(timestamp: number, options: PacketRetrievalOptions) {
 		assert(this.demuxer.audioInfo);
-		const packetIndex = Math.floor(timestamp * this.demuxer.audioInfo.sampleRate / PACKET_SIZE_IN_FRAMES);
 
-		return this.getPacketAtIndex(packetIndex, options);
+		const packetIndex = Math.floor(Math.min(
+			timestamp * this.demuxer.audioInfo.sampleRate / PACKET_SIZE_IN_FRAMES,
+			(this.demuxer.dataSize - 1) / (PACKET_SIZE_IN_FRAMES * this.demuxer.audioInfo.blockSizeInBytes),
+		));
+
+		const packet = await this.getPacketAtIndex(packetIndex, options);
+		if (packet) {
+			return packet;
+		}
+
+		if (packetIndex === 0) {
+			return null; // Empty data chunk
+		}
+
+		assert(this.demuxer.reader.fileSize === null);
+
+		// The file is shorter than we thought, meaning the packet we were looking for doesn't exist. So, let's find
+		// the last packet by doing a sequential scan, instead.
+		let currentPacket = await this.getPacketAtIndex(this.demuxer.lastKnownPacketIndex, options);
+		while (currentPacket) {
+			const nextPacket = await this.getNextPacket(currentPacket, options);
+			if (!nextPacket) {
+				break;
+			}
+
+			currentPacket = nextPacket;
+		}
+
+		return currentPacket;
 	}
 
 	getNextPacket(packet: EncodedPacket, options: PacketRetrievalOptions) {

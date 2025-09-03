@@ -12,7 +12,16 @@ import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
-import { assert, findLast, roundToPrecision, toDataView, UNDETERMINED_LANGUAGE } from '../misc';
+import {
+	assert,
+	AsyncMutex,
+	binarySearchLessOrEqual,
+	findLast,
+	last,
+	roundToPrecision,
+	toDataView,
+	UNDETERMINED_LANGUAGE,
+} from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readBytes, Reader } from '../reader';
 import { buildOggMimeType, computeOggPageCrc, extractSampleMetadata, OggCodecInfo } from './ogg-misc';
@@ -58,7 +67,8 @@ export class OggDemuxer extends Demuxer {
 	async readMetadata() {
 		return this.metadataPromise ??= (async () => {
 			let currentPos = 0;
-			while (currentPos <= this.reader.fileSize - MIN_PAGE_HEADER_SIZE) {
+
+			while (true) {
 				let slice = this.reader.requestSliceRange(currentPos, MIN_PAGE_HEADER_SIZE, MAX_PAGE_HEADER_SIZE);
 				if (slice instanceof Promise) slice = await slice;
 				if (!slice) break;
@@ -284,10 +294,6 @@ export class OggDemuxer extends Demuxer {
 			// The packet extends to the next page; let's find it
 			let currentPos = currentPage.headerStartPos + currentPage.totalSize;
 			while (true) {
-				if (currentPos > this.reader.fileSize - MIN_PAGE_HEADER_SIZE) {
-					return null;
-				}
-
 				let headerSlice = this.reader.requestSliceRange(currentPos, MIN_PAGE_HEADER_SIZE, MAX_PAGE_HEADER_SIZE);
 				if (headerSlice instanceof Promise) headerSlice = await headerSlice;
 				if (!headerSlice) {
@@ -343,10 +349,6 @@ export class OggDemuxer extends Demuxer {
 		// Otherwise, search for the next page belonging to the same bitstream
 		let currentPos = lastPacket.endPage.headerStartPos + lastPacket.endPage.totalSize;
 		while (true) {
-			if (currentPos >= this.reader.fileSize - MIN_PAGE_HEADER_SIZE) {
-				return null;
-			}
-
 			let slice = this.reader.requestSliceRange(currentPos, MIN_PAGE_HEADER_SIZE, MAX_PAGE_HEADER_SIZE);
 			if (slice instanceof Promise) slice = await slice;
 			if (!slice) {
@@ -392,12 +394,15 @@ type EncodedPacketMetadata = {
 	packet: Packet;
 	timestampInSamples: number;
 	durationInSamples: number;
+	vorbisLastBlockSize: number | null;
 	vorbisBlockSize: number | null;
 };
 
 class OggAudioTrackBacking implements InputAudioTrackBacking {
 	internalSampleRate: number;
 	encodedPacketToMetadata = new WeakMap<EncodedPacket, EncodedPacketMetadata>();
+	sequentialScanCache: EncodedPacketMetadata[] = [];
+	sequentialScanMutex = new AsyncMutex();
 
 	constructor(public bitstream: LogicalBitstream, public demuxer: OggDemuxer) {
 		// Opus always uses a fixed sample rate for its internal calculations, even if the actual rate is different
@@ -498,6 +503,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 			packet,
 			timestampInSamples: additional.timestampInSamples,
 			durationInSamples,
+			vorbisLastBlockSize: additional.vorbisLastBlocksize,
 			vorbisBlockSize,
 		});
 		return encodedPacket;
@@ -557,6 +563,11 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 	}
 
 	async getPacket(timestamp: number, options: PacketRetrievalOptions) {
+		if (this.demuxer.reader.fileSize === null) {
+			// No file size known, can't do binary search, but fall back to sequential algo instead
+			return this.getPacketSequential(timestamp, options);
+		}
+
 		const timestampInSamples = roundToPrecision(timestamp * this.internalSampleRate, 14);
 		if (timestampInSamples === 0) {
 			// Fast path for timestamp 0 - avoids binary search when playing back from the start
@@ -883,6 +894,68 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		}
 
 		return lastEncodedPacket;
+	}
+
+	// A slower but simpler and sequential algorithm for finding a packet in a file
+	async getPacketSequential(timestamp: number, options: PacketRetrievalOptions) {
+		const release = await this.sequentialScanMutex.acquire(); // Requires exclusivity because we write to a cache
+
+		try {
+			const timestampInSamples = roundToPrecision(timestamp * this.internalSampleRate, 14);
+			timestamp = timestampInSamples / this.internalSampleRate;
+
+			const index = binarySearchLessOrEqual(
+				this.sequentialScanCache,
+				timestampInSamples,
+				x => x.timestampInSamples,
+			);
+
+			let currentPacket: EncodedPacket | null;
+			if (index !== -1) {
+				// We don't need to start from the beginning, we can start at a previous scan point
+				const cacheEntry = this.sequentialScanCache[index]!;
+				currentPacket = this.createEncodedPacketFromOggPacket(
+					cacheEntry.packet,
+					{
+						timestampInSamples: cacheEntry.timestampInSamples,
+						vorbisLastBlocksize: cacheEntry.vorbisLastBlockSize,
+					},
+					options,
+				);
+			} else {
+				currentPacket = await this.getFirstPacket(options);
+			}
+
+			let i = 0;
+
+			while (currentPacket && currentPacket.timestamp < timestamp) {
+				const nextPacket = await this.getNextPacket(currentPacket, options);
+				if (!nextPacket || nextPacket.timestamp > timestamp) {
+					break;
+				}
+
+				currentPacket = nextPacket;
+				i++;
+
+				if (i === 100) {
+					// Add "checkpoints" every once in a while to speed up subsequent random accesses
+					i = 0;
+					const metadata = this.encodedPacketToMetadata.get(currentPacket);
+					assert(metadata);
+
+					if (this.sequentialScanCache.length > 0) {
+						// If we reach this case, we must be at the end of the cache
+						assert(last(this.sequentialScanCache)!.timestampInSamples <= metadata.timestampInSamples);
+					}
+
+					this.sequentialScanCache.push(metadata);
+				}
+			}
+
+			return currentPacket;
+		} finally {
+			release();
+		}
 	}
 
 	getKeyPacket(timestamp: number, options: PacketRetrievalOptions) {

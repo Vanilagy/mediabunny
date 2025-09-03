@@ -197,7 +197,18 @@ output.state; // => 'pending' | 'started' | 'canceled' | 'finalizing' | 'finaliz
 
 ## Output targets
 
-The _output target_ determines where the data created by the `Output` will be written. This library offers two targets:
+The _output target_ determines where the data created by the `Output` will be written. This library offers a couple of targets.
+
+---
+
+All targets have an optional `onwrite` callback you can set to monitor which byte regions are being written to:
+```ts
+target.onwrite = (start, end) => {
+	// ...
+};
+```
+
+You can use this to track the size of the output file as it grows. But be warned, this function is chatty and gets called *extremely* frequently.
 
 ### `BufferTarget`
 
@@ -295,6 +306,45 @@ const output = new Output({
 // ...
 
 await output.finalize(); // Will automatically close the writable stream
+```
+
+### `NullTarget`
+
+This target simply discards all data that is passed into it. It is useful for when you need an `Output` but extract data from it differently, for example through output format-specific callbacks or encoder events.
+
+As an example, here we create a fragmented MP4 file and directly handle the individual fragments:
+```ts
+import { Output, NullTarget, Mp4OutputFormat } from 'mediabunny';
+
+let ftyp: Uint8Array;
+let lastMoof: Uint8Array;
+
+const output = new Output({
+	target: new NullTarget(),
+	format: new Mp4OutputFormat({
+		fastStart: 'fragmented',
+		onFtyp: (data) => {
+			ftyp = data;
+		},
+		onMoov: (data) => {
+			const header = new Uint8Array(ftyp.length + data.length);
+			header.set(ftyp, 0);
+			header.set(data, ftyp.length);
+
+			// Do something with the header...
+		},
+		onMoof: (data) => {
+			lastMoof = data;
+		},
+		onMdat: (data) => {
+			const segment = new Uint8Array(lastMoof.length + data.length);
+			segment.set(lastMoof, 0);
+			segment.set(data, lastMoof.length);
+
+			// Do something with the segment...
+		},
+	}),
+});
 ```
 
 ## Packet buffering
