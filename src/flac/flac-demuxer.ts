@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2025-present, Jonny Burger and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -11,7 +11,6 @@ import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
 import { assert, Bitstream, UNDETERMINED_LANGUAGE } from '../misc';
-import { readNextFrameHeader } from '../mp3/mp3-reader';
 import { EncodedPacket } from '../packet';
 import { readBytes, Reader, readU24Be, readU8 } from '../reader';
 import { readNextFlacFrame } from './flac-reader';

@@ -1,5 +1,13 @@
+/*!
+ * Copyright (c) 2025-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
 import { Bitstream } from '../misc';
-import { FileSlice, readBytes, Reader, readU16Be, readU8 } from '../reader';
+import { FileSlice, readBytes, readU16Be, readU8 } from '../reader';
 
 type BlockSizeOrUncommon = number | 'uncommon-u16' | 'uncommon-u8';
 type SampleRateOrUncommon = number | 'uncommon-u8' | 'uncommon-u16' | 'uncommon-u16-10';
