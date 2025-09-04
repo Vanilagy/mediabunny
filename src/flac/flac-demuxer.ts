@@ -11,8 +11,10 @@ import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
 import { assert, Bitstream, UNDETERMINED_LANGUAGE } from '../misc';
+import { readNextFrameHeader } from '../mp3/mp3-reader';
 import { EncodedPacket } from '../packet';
 import { readBytes, Reader, readU24Be, readU8 } from '../reader';
+import { readNextFlacFrame } from './flac-reader';
 
 type FlacAudioInfo = {
 	numberOfChannels: number;
@@ -24,6 +26,13 @@ type FlacAudioInfo = {
 	minimumFrameSize: number;
 	maximumFrameSize: number;
 	description: Uint8Array;
+};
+
+type Sample = {
+	timestamp: number;
+	duration: number;
+	dataStart: number;
+	dataSize: number;
 };
 
 class FlacAudioTrackBacking implements InputAudioTrackBacking {
@@ -85,11 +94,11 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 	}
 
 	getPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
-		throw new Error('getPacket() not implemented');
+		throw new Error('TODO: getPacket() not implemented');
 	}
 
 	getNextPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
-		throw new Error('getNextPacket() not implemented');
+		throw new Error('TODO: getNextPacket() not implemented');
 	}
 
 	getKeyPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
@@ -100,18 +109,31 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		return this.getNextPacket(packet, options);
 	}
 
+	async getPacketAtIndex(sampleIndex: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
+		if (this.demuxer.loadedSamples[sampleIndex]) {
+			throw new Error('TODO: Return successful packet');
+		}
+
+		await this.demuxer.advanceReader();
+		return this.getPacketAtIndex(sampleIndex, options);
+	}
+
 	getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
-		throw new Error('getFirstPacket() not implemented');
+		return this.getPacketAtIndex(0, options);
 	}
 }
 
 export class FlacDemuxer extends Demuxer {
 	reader: Reader;
 
+	loadedSamples: Sample[] = []; // All samples from the start of the file to lastLoadedPos
+
 	metadataPromise: Promise<void> | null = null;
 	tracks: InputAudioTrack[] = [];
 
 	audioInfo: FlacAudioInfo | null = null;
+	firstFlacFrameStart: number | null = null;
+	blockingBit: number | undefined = undefined;
 
 	constructor(input: Input) {
 		super(input);
@@ -123,6 +145,34 @@ export class FlacDemuxer extends Demuxer {
 		const tracks = await this.getTracks();
 		const trackDurations = await Promise.all(tracks.map(x => x.computeDuration()));
 		return Math.max(0, ...trackDurations);
+	}
+
+	async advanceReader() {
+		await this.readMetadata();
+		assert(this.firstFlacFrameStart !== null);
+		assert(this.audioInfo);
+		// TODO: Don't start from firstFlacFrameStart, iterate
+		const result = await readNextFlacFrame(
+			this.reader,
+			this.firstFlacFrameStart,
+			this.firstFlacFrameStart + this.audioInfo.maximumFrameSize,
+			this.loadedSamples.length === 0,
+			this.blockingBit,
+			(blockingBit: number) => {
+				this.blockingBit = blockingBit;
+			},
+			this.audioInfo.sampleRate,
+		);
+
+		if (this.audioInfo.minimumBlockSize !== this.audioInfo.maximumBlockSize) {
+			throw new Error('Cannot determine timestamp');
+		}
+
+		const timestamp = (result.num * this.audioInfo.maximumBlockSize) / this.audioInfo.sampleRate;
+
+		console.log(result, timestamp);
+
+		throw new Error('Rest not implemented, continue here 😎');
 	}
 
 	async readMetadata() {
@@ -193,6 +243,7 @@ export class FlacDemuxer extends Demuxer {
 					currentPos += size;
 				}
 				if (isLastMetadata) {
+					this.firstFlacFrameStart = currentPos;
 					break;
 				}
 			}

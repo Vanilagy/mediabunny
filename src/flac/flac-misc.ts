@@ -1,0 +1,208 @@
+import { Bitstream } from '../misc';
+import { FileSlice, readBytes, Reader, readU16Be, readU8 } from '../reader';
+
+type BlockSizeOrUncommon = number | 'uncommon-u16' | 'uncommon-u8';
+type SampleRateOrUncommon = number | 'uncommon-u8' | 'uncommon-u16' | 'uncommon-u16-10';
+// https://www.rfc-editor.org/rfc/rfc9639.html#name-block-size-bits
+export const getBlockSizeOrUncommon = (
+	bits: number,
+): BlockSizeOrUncommon => {
+	if (bits === 0b0000) {
+		throw new Error('Reserved block size');
+	}
+
+	if (bits === 0b0001) {
+		return 192;
+	}
+
+	if (bits >= 0b0010 && bits <= 0b0101) {
+		return 144 * 2 ** bits;
+	}
+
+	if (bits === 0b0110) {
+		return 'uncommon-u8';
+	}
+
+	if (bits === 0b0111) {
+		return 'uncommon-u16';
+	}
+
+	if (bits >= 0b1000 && bits <= 0b1111) {
+		return 2 ** bits;
+	}
+
+	throw new Error('Invalid block size');
+};
+
+// https://www.rfc-editor.org/rfc/rfc9639.html#name-sample-rate-bits
+export const getSampleRateOrUncommon = (
+	sampleRateBits: number,
+	streamInfoSampleRate: number,
+): SampleRateOrUncommon => {
+	if (sampleRateBits === 0b0000) {
+		return streamInfoSampleRate;
+	}
+
+	if (sampleRateBits === 0b0001) {
+		return 88200;
+	}
+
+	if (sampleRateBits === 0b0010) {
+		return 176400;
+	}
+
+	if (sampleRateBits === 0b0011) {
+		return 192000;
+	}
+
+	if (sampleRateBits === 0b0100) {
+		return 8000;
+	}
+
+	if (sampleRateBits === 0b0101) {
+		return 16000;
+	}
+
+	if (sampleRateBits === 0b0110) {
+		return 22050;
+	}
+
+	if (sampleRateBits === 0b0111) {
+		return 24000;
+	}
+
+	if (sampleRateBits === 0b1000) {
+		return 32000;
+	}
+
+	if (sampleRateBits === 0b1001) {
+		return 44100;
+	}
+
+	if (sampleRateBits === 0b1010) {
+		return 48000;
+	}
+
+	if (sampleRateBits === 0b1011) {
+		return 96000;
+	}
+
+	if (sampleRateBits === 0b1100) {
+		return 'uncommon-u8';
+	}
+
+	if (sampleRateBits === 0b1101) {
+		return 'uncommon-u16';
+	}
+
+	if (sampleRateBits === 0b1110) {
+		return 'uncommon-u16-10';
+	}
+
+	throw new Error(`Invalid sample rate mode: ${sampleRateBits.toString(2)}`);
+};
+
+// https://www.rfc-editor.org/rfc/rfc9639.html#name-coded-number
+// TODO: Only supports encoded numbers, but if blocking byte is different, it may be unencoded as well
+export const getFlacCodedNumber = (fileSlice: FileSlice) => {
+	let ones = 0;
+	let bits = 0;
+
+	const bitstream1 = new Bitstream(readBytes(fileSlice, 1));
+	// eslint-disable-next-line no-constant-binary-expression
+	while ((++bits || true) && bitstream1.readBits(1) === 1) {
+		ones++;
+	}
+
+	if (ones === 0) {
+		return bitstream1.readBits(7);
+	}
+
+	const bitArray: number[] = [];
+	const extraBytes = ones - 1;
+	const bitstream2 = new Bitstream(readBytes(fileSlice, extraBytes + 1));
+
+	const firstByteBits = 8 - ones - 1;
+	for (let i = 0; i < firstByteBits; i++) {
+		bitArray.unshift(bitstream2.readBits(1));
+	}
+
+	for (let i = 0; i < extraBytes; i++) {
+		for (let j = 0; j < 8; j++) {
+			const val = bitstream2.readBits(1);
+			if (j < 2) {
+				continue;
+			}
+
+			bitArray.unshift(val);
+		}
+	}
+
+	const encoded = bitArray.reduce((acc, bit, index) => {
+		return acc | (bit << index);
+	}, 0);
+
+	return encoded;
+};
+
+export const getBlockSize = (slice: FileSlice, blockSizeBits: BlockSizeOrUncommon) => {
+	if (blockSizeBits === 'uncommon-u16') {
+		return readU16Be(slice) + 1;
+	}
+
+	if (blockSizeBits === 'uncommon-u8') {
+		return readU8(slice) + 1;
+	}
+
+	if (typeof blockSizeBits === 'number') {
+		return blockSizeBits;
+	}
+
+	// eslint-disable-next-line @typescript-eslint/restrict-template-expressions
+	throw new Error(`Invalid blockSizeBits: ${blockSizeBits satisfies never}`);
+};
+
+export const getSampleRate = (slice: FileSlice, sampleRateOrUncommon: SampleRateOrUncommon) => {
+	if (sampleRateOrUncommon === 'uncommon-u16') {
+		return readU16Be(slice);
+	}
+
+	if (sampleRateOrUncommon === 'uncommon-u16-10') {
+		return readU16Be(slice) * 10;
+	}
+
+	if (sampleRateOrUncommon === 'uncommon-u8') {
+		return readU8(slice);
+	}
+
+	if (typeof sampleRateOrUncommon === 'number') {
+		return sampleRateOrUncommon;
+	}
+
+	// eslint-disable-next-line @typescript-eslint/restrict-template-expressions
+	throw new Error(`Invalid sampleRateOrUncommon: ${sampleRateOrUncommon satisfies never}`);
+};
+
+// https://www.rfc-editor.org/rfc/rfc9639.html#section-9.1.1
+export const calculateCRC8 = (data: Uint8Array) => {
+	const polynomial = 0x07; // x^8 + x^2 + x^1 + x^0
+	let crc = 0x00; // Initialize CRC to 0
+
+	for (const byte of data) {
+		crc ^= byte; // XOR byte into least significant byte of crc
+
+		for (let i = 0; i < 8; i++) {
+			// For each bit in the byte
+			if ((crc & 0x80) !== 0) {
+				// If the leftmost bit (MSB) is set
+				crc = (crc << 1) ^ polynomial; // Shift left and XOR with polynomial
+			} else {
+				crc <<= 1; // Just shift left
+			}
+
+			crc &= 0xff; // Ensure CRC remains 8-bit
+		}
+	}
+
+	return crc;
+};
