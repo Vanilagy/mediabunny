@@ -61,7 +61,7 @@ Mediabunny ships with built-in decoders and encoders for all audio PCM codecs, m
 
 Not all codecs can be used with all containers. The following table specifies the supported codec-container combinations:
 
-|                |   .mp4   | .mov  | .mkv  | .webm[^1] | .ogg  | .mp3  | .wav  | .aac  |
+|                |   .mp4   | .mov  | .mkv  | .webm[^1][^2] | .ogg  | .mp3  | .wav  | .aac  |
 |:--------------:|:--------:|:-----:|:-----:|:---------:|:-----:|:-----:|:-----:|:-----:|
 | `'avc'`        |    ✓     |   ✓   |   ✓   |           |       |       |       |       |
 | `'hevc'`       |    ✓     |   ✓   |   ✓   |           |       |       |       |       |
@@ -87,11 +87,12 @@ Not all codecs can be used with all containers. The following table specifies th
 | `'pcm-f64be'`  |    ✓     |   ✓   |       |           |       |       |       |       |
 | `'ulaw'`       |          |   ✓   |       |           |       |       |   ✓   |       |
 | `'alaw'`       |          |   ✓   |       |           |       |       |   ✓   |       |
-| `'webvtt'`[^2] |   (✓)    |       |  (✓)  |    (✓)    |       |       |       |       |
+| `'webvtt'`[^3] |   (✓)    |       |  (✓)  |    (✓)    |       |       |       |       |
 
 
 [^1]: WebM only supports a small subset of the codecs supported by Matroska. However, this library can technically read all codecs from a WebM that are supported by Matroska.
-[^2]: WebVTT can only be written, not read.
+[^2]: WebM alpha channel support [can be enabled (experimentally)](#webm-with-alpha-channel-experimental)
+[^3]: WebVTT can only be written, not read.
 
 ## Querying codec encodability
 
@@ -321,3 +322,43 @@ All instance methods of the class can return promises. In this case, the library
 ::: warning
 The samples passed to `onSample` **must** be sorted by increasing timestamp. This especially means if the decoder is decoding a video stream that makes use of [B-frames](./media-sources.md#b-frames), the decoder **must** internally hold on to these frames so it can emit them sorted by presentation timestamp. This strict sorting requirement is reset each time `flush` is called.
 :::
+
+## WebM with alpha channel **(Experimental)**
+
+While WebM video format and its video codecs support [alpha channel](https://wiki.webmproject.org/alpha-channel), there is [no native WebCodecs support](https://github.com/w3c/webcodecs/issues/200) as of writing.
+A set of custom coders is provided to support it by separately handle the alpha channel of the input.
+
+::: warning
+It is experimental and still requires more work on the main library and CustomCoder APIs.
+Issues examples:
+- No proper way for user to confirm if a file is indeed a WebM with alpha and thus if opt-in support is needed.
+- CustomCoder supports detection is not specific enough with current abstraction.
+:::
+
+### Encoding WebM with alpha channel
+
+Support can be added with `registerWebMSeparateAlphaEncoder`.
+Then, opt in with `videoEncodingConfig.alpha = 'keep'` on AV1/VP9/VP8 codecs.
+
+::: info
+While AV1 with alpha muxing works, browsers wouldn't decode natively in browser.
+:::
+::: warning
+The alpha channel support is part of WebM file format and useful to encode in the **WebM/MKV muxer only**.
+While it should not cause problem to opt-in for 'keep' in other formats, the alpha would still be discarded in other formats.
+:::
+
+### Decoding WebM with alpha channel
+
+Support can be added with `registerWebMSeparateAlphaDecoder`.
+After registeration, Matroska demuxer would then detect if actual usage is needed for convenience. Make sure this is registered before creating `Input` of `WebM`!
+It would only output a frame with alpha if a particular packet to contains the additional data. Packets from the internal WebM/MKV demuxer would include it.
+```ts
+const packet = new EncodedPacket(
+	...,
+	// Uint8Array, the alpha encoded data
+	// Will be included automatically if using file-based `Source` + `VideoSampleSink`
+	// Can also be added when manually creating EncodedPacket
+	additions,
+)
+```

@@ -71,6 +71,7 @@ import {
 } from './ebml';
 import { buildMatroskaMimeType } from './matroska-misc';
 import { FileSlice, readBytes, Reader, readI16Be, readU8 } from '../reader';
+import { isWebMSeparateAlphaDecoderRegistered } from '../webm-alpha';
 
 type Segment = {
 	seekHeadSeen: boolean;
@@ -2153,19 +2154,21 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 
 		return this.decoderConfigPromise ??= (async (): Promise<VideoDecoderConfig> => {
 			let firstPacket: EncodedPacket | null = null;
+			const customAlphaDecoderRegistered = isWebMSeparateAlphaDecoderRegistered();
 			const needsPacketForAdditionalInfo
 				= this.internalTrack.info.codec === 'vp9'
 					|| this.internalTrack.info.codec === 'av1'
 					// Packets are in Annex B format:
 					|| (this.internalTrack.info.codec === 'avc' && !this.internalTrack.info.codecDescription)
 					// Packets are in Annex B format:
-					|| (this.internalTrack.info.codec === 'hevc' && !this.internalTrack.info.codecDescription);
+					|| (this.internalTrack.info.codec === 'hevc' && !this.internalTrack.info.codecDescription)
+					|| customAlphaDecoderRegistered;
 
 			if (needsPacketForAdditionalInfo) {
 				firstPacket = await this.getFirstPacket({});
 			}
 
-			return {
+			const config: VideoDecoderConfig = {
 				codec: extractVideoCodecString({
 					width: this.internalTrack.info.width,
 					height: this.internalTrack.info.height,
@@ -2190,6 +2193,22 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 				description: this.internalTrack.info.codecDescription ?? undefined,
 				colorSpace: this.internalTrack.info.colorSpace ?? undefined,
 			};
+			const configWithPreferSoftware: VideoDecoderConfig = {
+				...config,
+				hardwareAcceleration: 'prefer-software',
+			};
+
+			// HACK: auto opt-in for custom alpha decoding if the custom one is registered
+			if (
+				customAlphaDecoderRegistered
+				&& this.internalTrack.info.alphaMode
+				&& firstPacket?.additions
+				&& (await VideoDecoder.isConfigSupported(configWithPreferSoftware)).supported
+			) {
+				return configWithPreferSoftware;
+			}
+
+			return config;
 		})();
 	}
 }
