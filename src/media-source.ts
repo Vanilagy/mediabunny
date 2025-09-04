@@ -233,7 +233,8 @@ class VideoEncoderWrapper {
 							+ ` encoding options.`,
 						);
 					} else {
-						let canvasIsNew = false;
+						const alpha = videoSample.format === null // Weird: HEVC with alpha, Chromium v139
+							|| videoSample.format?.includes('A');
 
 						if (!this.resizeCanvas) {
 							if (typeof document !== 'undefined') {
@@ -244,17 +245,13 @@ class VideoEncoderWrapper {
 							} else {
 								this.resizeCanvas = new OffscreenCanvas(this.codedWidth, this.codedHeight);
 							}
-
-							canvasIsNew = true;
 						}
 
-						const context = this.resizeCanvas.getContext('2d', { alpha: false }) as
+						const context = this.resizeCanvas.getContext('2d', { alpha }) as
 							CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 						assert(context);
 
-						if (!canvasIsNew) {
-							context.clearRect(0, 0, this.codedWidth, this.codedHeight);
-						}
+						context.globalCompositeOperation = 'copy';
 
 						videoSample.drawWithFit(context, { fit: sizeChangeBehavior });
 
@@ -396,12 +393,25 @@ class VideoEncoderWrapper {
 
 				const support = await VideoEncoder.isConfigSupported(encoderConfig);
 				if (!support.supported) {
-					throw new Error(
-						`This specific encoder configuration (${encoderConfig.codec}, ${encoderConfig.bitrate} bps,`
-						+ ` ${encoderConfig.width}x${encoderConfig.height}, hardware acceleration:`
-						+ ` ${encoderConfig.hardwareAcceleration ?? 'no-preference'}) is not supported by this browser.`
-						+ ` Consider using another codec or changing your video parameters.`,
-					);
+					let message
+						= `This specific encoder configuration (${encoderConfig.codec}, ${encoderConfig.bitrate} bps,`
+							+ ` ${encoderConfig.width}x${encoderConfig.height},`
+							+ ` alpha: ${encoderConfig.alpha ?? 'discard'},`
+							+ ` hardware acceleration: ${encoderConfig.hardwareAcceleration ?? 'no-preference'})`
+							+ ` is not supported by this browser.`
+							+ ` Consider using another codec or changing your video parameters.`;
+
+					if (
+						this.encodingConfig.alpha === 'keep'
+						&& ['vp9', 'av1', 'vp8'].includes(this.encodingConfig.codec)
+						&& ['video/webm', 'x-matroska'].includes(
+							this.source._connectedTrack?.output.format.mimeType || '',
+						)
+						&& (await VideoEncoder.isConfigSupported({ ...encoderConfig, alpha: 'discard' })).supported
+					) {
+						message += ` If alpha is needed, try again after registerWebMSeparateAlphaEncoder.`;
+					}
+					throw new Error(message);
 				}
 
 				this.encoder = new VideoEncoder({

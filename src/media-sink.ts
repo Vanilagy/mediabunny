@@ -1129,7 +1129,8 @@ export class CanvasSink {
 	/** @internal */
 	_videoSampleToWrappedCanvas(sample: VideoSample): WrappedCanvas {
 		let canvas = this._canvasPool[this._nextCanvasIndex];
-		let canvasIsNew = false;
+		const alpha = sample.format === null // Weird: HEVC with alpha, Chromium v139
+			|| sample.format?.includes('A');
 
 		if (!canvas) {
 			if (typeof document !== 'undefined') {
@@ -1144,8 +1145,6 @@ export class CanvasSink {
 			if (this._canvasPool.length > 0) {
 				this._canvasPool[this._nextCanvasIndex] = canvas;
 			}
-
-			canvasIsNew = true;
 		}
 
 		if (this._canvasPool.length > 0) {
@@ -1153,14 +1152,11 @@ export class CanvasSink {
 		}
 
 		const context
-			= canvas.getContext('2d', { alpha: false }) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+			= canvas.getContext('2d', { alpha }) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 		assert(context);
 
 		context.resetTransform();
-
-		if (!canvasIsNew) {
-			context.clearRect(0, 0, this._width, this._height);
-		}
+		context.globalCompositeOperation = 'copy';
 
 		sample.drawWithFit(context, {
 			fit: this._fit,

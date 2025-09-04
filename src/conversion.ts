@@ -141,6 +141,8 @@ export type ConversionVideoOptions = {
 	bitrate?: number | Quality;
 	/** When `true`, video will always be re-encoded instead of directly copying over the encoded samples. */
 	forceTranscode?: boolean;
+	/** Alpha channel setting */
+	alpha?: VideoEncodingConfig['alpha'];
 };
 
 /**
@@ -218,6 +220,12 @@ const validateVideoOptions = (videoOptions: ConversionVideoOptions | undefined) 
 		&& (!Number.isFinite(videoOptions.frameRate) || videoOptions.frameRate <= 0)
 	) {
 		throw new TypeError('options.video.frameRate, when provided, must be a finite positive number.');
+	}
+	if (
+		videoOptions?.alpha !== undefined
+		&& !['keep', 'discard'].includes(videoOptions.alpha)
+	) {
+		throw new TypeError('options.video.alpha must be one of "keep" or "discard".');
 	}
 };
 
@@ -698,6 +706,7 @@ export class Conversion {
 				bitrate,
 				sizeChangeBehavior: trackOptions.fit ?? 'passThrough',
 				onEncodedPacket: sample => this._reportProgress(track.id, sample.timestamp + sample.duration),
+				alpha: trackOptions.alpha,
 			};
 
 			const source = new VideoSampleSource(encodingConfig);
