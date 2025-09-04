@@ -22,8 +22,8 @@ class WebMSeparateAlphaDecoder extends CustomVideoDecoder {
 	private mainCoder!: VideoDecoder;
 	private alphaCoder!: VideoDecoder;
 
-	private mainCoderError: DOMException | null = null;
-	private alphaCoderError: DOMException | null = null;
+	private mainCoderError: Error | null = null;
+	private alphaCoderError: Error | null = null;
 
 	// Main output needs to wait for alpha output to be ready, or null due to unexpected issue
 	private alphaOutputResolverMap = new Map<
@@ -32,6 +32,19 @@ class WebMSeparateAlphaDecoder extends CustomVideoDecoder {
 	>();
 
 	private closed = false;
+
+	private setAlphaCoderError(error: Error) {
+		if (this.alphaCoderError) {
+			return;
+		}
+
+		for (const resolver of this.alphaOutputResolverMap.values()) {
+			resolver.resolve(null);
+		}
+
+		this.alphaOutputResolverMap.clear();
+		this.alphaCoderError = error;
+	}
 
 	static override supports(codec: VideoCodec, config: VideoDecoderConfig) {
 		// Hardware accelerated have impractically worse performance in current implementation of _combineAlpha
@@ -47,10 +60,18 @@ class WebMSeparateAlphaDecoder extends CustomVideoDecoder {
 			output: (output) => {
 				const resolver = this._getAlphaOutputResolver(output.timestamp);
 				(async () => {
-					const alpha = await resolver.promise.catch(() => {});
-					const frame = await this._combineAlpha(output, alpha);
+					let alpha;
+					let frame;
 
-					this.onSample(new VideoSample(frame));
+					try {
+						alpha = await resolver.promise.catch(() => {});
+						frame = await this._combineAlpha(output, alpha);
+
+						this.onSample(new VideoSample(frame));
+					} finally {
+						if (frame !== output) output.close();
+						alpha?.close();
+					}
 				})().catch(() => {});
 			},
 
@@ -68,9 +89,7 @@ class WebMSeparateAlphaDecoder extends CustomVideoDecoder {
 
 				this._getAlphaOutputResolver(output.timestamp).resolve(output);
 			},
-			error: (error) => {
-				this.alphaCoderError = error;
-			},
+			error: error => this.setAlphaCoderError(error),
 		});
 		this.alphaCoder.configure(this.config);
 	}
@@ -114,6 +133,7 @@ class WebMSeparateAlphaDecoder extends CustomVideoDecoder {
 		if (this.mainCoder.state !== 'closed') this.mainCoder.close();
 		if (this.alphaCoder.state !== 'closed') this.alphaCoder.close();
 		this.closed = true;
+		this.alphaOutputResolverMap.clear();
 	}
 
 	/** @internal */
@@ -139,29 +159,41 @@ class WebMSeparateAlphaDecoder extends CustomVideoDecoder {
 		}
 
 		const format = main.format || '';
-		const formatPrefix = format.slice(0, 4); // e.g. I420
-		const formatAffix = format.slice(4, format.length); // e.g. P12
+		const isYUV = format.startsWith('I');
+		const resultFormat = isYUV
+			? `${format.slice(0, 4)}A${format.slice(4, format.length)}` as VideoPixelFormat // e.g. I420AP12
+			: format.endsWith('X')
+				? `${format.slice(0, 3)}A` as VideoPixelFormat
+				: format;
 
-		if (
-			formatPrefix.at(0) !== 'I' // Only support planar YUV, expected when using prefer-software
-			|| formatAffix.at(0) === 'A' // Already include alpha, ignore
-		) {
+		// Already has A, or NV12 (mainly from hardware accelerated cases)
+		if (!format || resultFormat === format) {
+			this.setAlphaCoderError(new Error(`Unsupported format: ${format}`));
+
 			return main;
 		};
 
 		try {
-			const uint8 = new Uint8Array(main.allocationSize() + alpha.allocationSize());
-			const mainData = uint8.subarray(0, main.allocationSize());
-			const alphaData = uint8.subarray(main.allocationSize(), uint8.byteLength);
+			const mainSize = main.allocationSize();
+			const alphaSize = alpha.allocationSize();
+			const buffer = new ArrayBuffer(mainSize + alphaSize);
 
-			// Y, U, V + A (alpha's Y as A)
-			// Extra U, V data from alpha main are dummy and discarded
 			await Promise.all([
-				main.copyTo(mainData),
-				alpha.copyTo(alphaData),
+				main.copyTo(new Uint8Array(buffer, 0, mainSize)),
+				alpha.copyTo(new Uint8Array(buffer, mainSize, alphaSize)),
 			]);
 
-			return new VideoFrame(uint8, {
+			// e.g. Chrome: I420, Firefox: BGRX.
+			// I420A is already set correctly, but for RGB formats, need to copy alpha channel to X channel
+			if (!isYUV) {
+				const view = new DataView(buffer);
+
+				for (let i = 0; i < alphaSize; i += 4) {
+					view.setUint8(i + 3, view.getUint8(mainSize + i));
+				}
+			}
+
+			return new VideoFrame(buffer, {
 				codedWidth: main.displayWidth, // As a result of copyTo
 				codedHeight: main.displayHeight,
 				displayWidth: main.displayWidth,
@@ -169,12 +201,14 @@ class WebMSeparateAlphaDecoder extends CustomVideoDecoder {
 				colorSpace: main.colorSpace,
 				timestamp: main.timestamp,
 				duration: main.duration ?? undefined,
-				format: `${formatPrefix}A${formatAffix}` as VideoPixelFormat,
-				transfer: [uint8.buffer],
+				format: resultFormat,
+				transfer: [buffer],
 			} as VideoFrameBufferInit);
-		} finally {
-			main.close();
-			alpha?.close();
+		} catch (error) {
+			/** @ts-expect-error ECMAScript target */
+			this.setAlphaCoderError(new Error('Combine alpha failed', { cause: error }));
+
+			return main;
 		}
 	}
 }
@@ -205,8 +239,8 @@ class WebMSeparateAlphaEncoder extends CustomVideoEncoder {
 	private mainCoder!: VideoEncoder;
 	private alphaCoder!: VideoEncoder;
 
-	private mainCoderError: DOMException | null = null;
-	private alphaCoderError: DOMException | null = null;
+	private mainCoderError: Error | null = null;
+	private alphaCoderError: Error | null = null;
 
 	// Main output needs to wait for alpha output to be ready, or null due to unexpected issue
 	private alphaOutputResolverMap = new Map<
@@ -217,6 +251,19 @@ class WebMSeparateAlphaEncoder extends CustomVideoEncoder {
 	private canvas?: OffscreenCanvas;
 
 	private closed = false;
+
+	private setAlphaCoderError(error: Error) {
+		if (this.alphaCoderError) {
+			return;
+		}
+
+		for (const resolver of this.alphaOutputResolverMap.values()) {
+			resolver.resolve(null);
+		}
+
+		this.alphaOutputResolverMap.clear();
+		this.alphaCoderError = error;
+	}
 
 	static override supports(codec: VideoCodec, config: VideoEncoderConfig) {
 		return config.alpha === 'keep'
@@ -267,16 +314,14 @@ class WebMSeparateAlphaEncoder extends CustomVideoEncoder {
 
 				this._getAlphaOutputResolver(chunk.timestamp).resolve(chunk);
 			},
-			error: (error) => {
-				this.alphaCoderError = error;
-			},
+			error: error => this.setAlphaCoderError(error),
 		});
 		this.alphaCoder.configure(config);
 	}
 
 	override async encode(videoSample: VideoSample, options: VideoEncoderEncodeOptions) {
 		if (this.mainCoderError) {
-			/** @ts-expect-error ES target version issue? */
+			/** @ts-expect-error ECMAScript target */
 			throw new Error('Cannot encode on a closed VideoEncoder', { cause: this.mainCoderError });
 		}
 
@@ -315,6 +360,7 @@ class WebMSeparateAlphaEncoder extends CustomVideoEncoder {
 		if (this.alphaCoder.state !== 'closed') this.alphaCoder.close();
 		this.closed = true;
 		delete this.canvas;
+		this.alphaOutputResolverMap.clear();
 	}
 
 	/** @internal */
