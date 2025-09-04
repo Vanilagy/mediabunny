@@ -93,11 +93,11 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 	}
 
 	getKeyPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
-		throw new Error('getKeyPacket() not implemented');
+		return this.getPacket(timestamp, options);
 	}
 
 	getNextKeyPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
-		throw new Error('getNextKeyPacket() not implemented');
+		return this.getNextPacket(packet, options);
 	}
 
 	getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
@@ -129,58 +129,73 @@ export class FlacDemuxer extends Demuxer {
 		let currentPos = 4;
 
 		return this.metadataPromise ??= (async () => {
+			while (this.reader.fileSize === null || currentPos < this.reader.fileSize) {
 			// Parse streaminfo block
 			// https://www.rfc-editor.org/rfc/rfc9639.html#section-8.2
-			let sizeSlice = this.reader.requestSlice(currentPos, currentPos + 4);
-			if (sizeSlice instanceof Promise) sizeSlice = await sizeSlice;
-			if (!sizeSlice) return;
-			readU8(sizeSlice); // first bit: isLastMetadata, remaining 7 bits: metaBlockType
-			const size = readU24Be(sizeSlice);
-			currentPos += 4;
+				let sizeSlice = this.reader.requestSlice(currentPos, currentPos + 4);
+				if (sizeSlice instanceof Promise) sizeSlice = await sizeSlice;
+				if (!sizeSlice) return;
 
-			let streamInfoBlock = this.reader.requestSlice(currentPos, currentPos + size);
-			if (streamInfoBlock instanceof Promise) streamInfoBlock = await streamInfoBlock;
-			if (!streamInfoBlock) return;
-			currentPos += size;
+				const byte = readU8(sizeSlice); // first bit: isLastMetadata, remaining 7 bits: metaBlockType
+				const size = readU24Be(sizeSlice);
+				currentPos += 4;
+				const isLastMetadata = (byte & 0x80) !== 0;
+				const metaBlockType = byte & 0x7f;
 
-			const streamInfoDescription = readBytes(streamInfoBlock, 34);
-			const bitstream = new Bitstream(streamInfoDescription);
+				// 0 -> streaminfo
+				// 4 -> descriptive metadata (for future implementation)
+				if (metaBlockType === 0) {
+					let streamInfoBlock = this.reader.requestSlice(currentPos, currentPos + size);
+					if (streamInfoBlock instanceof Promise) streamInfoBlock = await streamInfoBlock;
+					if (!streamInfoBlock) return;
+					currentPos += size;
 
-			const minimumBlockSize = bitstream.readBits(16);
-			const maximumBlockSize = bitstream.readBits(16);
-			const minimumFrameSize = bitstream.readBits(24);
-			const maximumFrameSize = bitstream.readBits(24);
+					const streamInfoDescription = readBytes(streamInfoBlock, 34);
+					const bitstream = new Bitstream(streamInfoDescription);
 
-			const sampleRate = bitstream.readBits(20);
-			const channels = bitstream.readBits(3) + 1;
-			const bitsPerSample = bitstream.readBits(5);
-			const totalSamples = bitstream.readBits(36);
+					const minimumBlockSize = bitstream.readBits(16);
+					const maximumBlockSize = bitstream.readBits(16);
+					const minimumFrameSize = bitstream.readBits(24);
+					const maximumFrameSize = bitstream.readBits(24);
 
-			// https://www.w3.org/TR/webcodecs-flac-codec-registration/#audiodecoderconfig-description
-			// description is required, and has to be the following:
-			// - The bytes 0x66 0x4C 0x61 0x43 ("fLaC" in ASCII)
-			// - A metadata block (called the STREAMINFO block) as described in section 7 of [FLAC]
-			// - Optionaly (sic) other metadata blocks, that are not used by the specification
-			const description = new Uint8Array([
-				0x66, 0x4c, 0x61, 0x43,
-				...streamInfoDescription,
-			]);
+					const sampleRate = bitstream.readBits(20);
+					const channels = bitstream.readBits(3) + 1;
+					const bitsPerSample = bitstream.readBits(5);
+					const totalSamples = bitstream.readBits(36);
 
-			bitstream.skipBits(16 * 8); // md5 hash
+					// https://www.w3.org/TR/webcodecs-flac-codec-registration/#audiodecoderconfig-description
+					// description is required, and has to be the following:
+					// - The bytes 0x66 0x4C 0x61 0x43 ("fLaC" in ASCII)
+					// - A metadata block (called the STREAMINFO block) as described in section 7 of [FLAC]
+					// - Optionaly (sic) other metadata blocks, that are not used by the specification
+					const description = new Uint8Array([
+						0x66, 0x4c, 0x61, 0x43,
+						...streamInfoDescription,
+					]);
 
-			this.audioInfo = {
-				numberOfChannels: channels,
-				sampleRate,
-				totalSamples,
-				bitsPerSample,
-				minimumBlockSize,
-				maximumBlockSize,
-				minimumFrameSize,
-				maximumFrameSize,
-				description,
-			};
+					bitstream.skipBits(16 * 8); // md5 hash
 
-			this.tracks.push(new InputAudioTrack(new FlacAudioTrackBacking(this)));
+					this.audioInfo = {
+						numberOfChannels: channels,
+						sampleRate,
+						totalSamples,
+						bitsPerSample,
+						minimumBlockSize,
+						maximumBlockSize,
+						minimumFrameSize,
+						maximumFrameSize,
+						description,
+					};
+
+					this.tracks.push(new InputAudioTrack(new FlacAudioTrackBacking(this)));
+				} else {
+					// Skip the metadata block
+					currentPos += size;
+				}
+				if (isLastMetadata) {
+					break;
+				}
+			}
 		})();
 	}
 
