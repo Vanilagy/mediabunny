@@ -97,6 +97,22 @@ export type ConversionVideoOptions = {
 	/** If `true`, all video tracks will be discarded and will not be present in the output. */
 	discard?: boolean;
 	/**
+	 * Specifies a rectangular region of the input video to crop to, in the coordinate
+	 * system of the original, unrotated frame. Parts of the crop rectangle that extend
+	 * beyond the frame will be filled with black. Cropping is performed before rotation
+	 * and resizing.
+	 */
+	crop?: {
+		/** The distance in pixels from the left edge of the source frame to the left edge of the crop rectangle. */
+		left: number;
+		/** The distance in pixels from the top edge of the source frame to the top edge of the crop rectangle. */
+		top: number;
+		/** The width in pixels of the crop rectangle. */
+		width: number;
+		/** The height in pixels of the crop rectangle. */
+		height: number;
+	};
+	/**
 	 * The desired width of the output video in pixels, defaulting to the video's natural display width. If height
 	 * is not set, it will be deduced automatically based on aspect ratio.
 	 */
@@ -162,6 +178,24 @@ const validateVideoOptions = (videoOptions: ConversionVideoOptions | undefined) 
 	}
 	if (videoOptions?.forceTranscode !== undefined && typeof videoOptions.forceTranscode !== 'boolean') {
 		throw new TypeError('options.video.forceTranscode, when provided, must be a boolean.');
+	}
+	if (videoOptions?.crop !== undefined) {
+		if (typeof videoOptions.crop !== 'object') {
+			throw new TypeError('options.video.crop, when provided, must be an object.');
+		}
+		const { left, top, width, height } = videoOptions.crop;
+		if (!Number.isInteger(left)) {
+			throw new TypeError('options.video.crop.left must be an integer.');
+		}
+		if (!Number.isInteger(top)) {
+			throw new TypeError('options.video.crop.top must be an integer.');
+		}
+		if (!Number.isInteger(width) || width <= 0) {
+			throw new TypeError('options.video.crop.width must be a positive integer.');
+		}
+		if (!Number.isInteger(height) || height <= 0) {
+			throw new TypeError('options.video.crop.height must be a positive integer.');
+		}
 	}
 	if (videoOptions?.codec !== undefined && !VIDEO_CODECS.includes(videoOptions.codec)) {
 		throw new TypeError(
@@ -557,9 +591,13 @@ export class Conversion {
 		const totalRotation = normalizeRotation(track.rotation + (trackOptions.rotate ?? 0));
 		const outputSupportsRotation = this.output.format.supportsVideoRotationMetadata;
 
+		const crop = trackOptions.crop;
+		const [croppedWidth, croppedHeight] = crop
+			? [crop.width, crop.height]
+			: [track.codedWidth, track.codedHeight];
 		const [originalWidth, originalHeight] = totalRotation % 180 === 0
-			? [track.codedWidth, track.codedHeight]
-			: [track.codedHeight, track.codedWidth];
+			? [croppedWidth, croppedHeight]
+			: [croppedHeight, croppedWidth];
 
 		let width = originalWidth;
 		let height = originalHeight;
@@ -586,7 +624,8 @@ export class Conversion {
 			|| !!trackOptions.frameRate;
 		let needsRerender = width !== originalWidth
 			|| height !== originalHeight
-			|| (totalRotation !== 0 && !outputSupportsRotation);
+			|| (totalRotation !== 0 && !outputSupportsRotation)
+			|| !!crop;
 
 		let videoCodecs = this.output.format.getSupportedVideoCodecs();
 		if (
@@ -710,6 +749,7 @@ export class Conversion {
 						height,
 						fit: trackOptions.fit ?? 'fill',
 						rotation: totalRotation, // Bake the rotation into the output
+						crop: trackOptions.crop,
 						poolSize: 1,
 					});
 					const iterator = sink.canvases(this._startTimestamp, this._endTimestamp);

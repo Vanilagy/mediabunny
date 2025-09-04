@@ -314,7 +314,7 @@ for await (const sample of keyFrameSamples) {
 
 ### `CanvasSink`
 
-While `VideoSampleSink` extracts raw decoded video samples, you can use `CanvasSink` to extract these samples as canvases instead. In doing so, certain operations such as scaling and rotating can also be handled by the sink. The downside is the additional VRAM requirements for the canvases' framebuffers.
+While `VideoSampleSink` extracts raw decoded video samples, you can use `CanvasSink` to extract these samples as canvases instead. In doing so, certain operations such as cropping, scaling, and rotating can also be handled by the sink. The downside is the additional VRAM requirements for the canvases' framebuffers.
 
 ::: info
 This sink yields `HTMLCanvasElement` whenever possible, and falls back to `OffscreenCanvas` otherwise (in Worker contexts, for example).
@@ -330,26 +330,29 @@ const sink = new CanvasSink(videoTrack, options);
 Here, `options` has the following type:
 ```ts
 type CanvasSinkOptions = {
-	width?: number;
-	height?: number;
-	fit?: 'fill' | 'contain' | 'cover';
-	rotation?: 0 | 90 | 180 | 270;
-	poolSize?: number;
+        crop?: { left: number; top: number; width: number; height: number };
+        width?: number;
+        height?: number;
+        fit?: 'fill' | 'contain' | 'cover';
+        rotation?: 0 | 90 | 180 | 270;
+        poolSize?: number;
 };
 ```
+- `crop`\
+        Crops the source frame to the specified rectangle before any rotation or resizing is applied. Portions outside the original frame are filled with black.
 - `width`\
-	The width of the output canvas in pixels. When omitted but `height` is set, the width will be calculated automatically to maintain the original aspect ratio. Otherwise, the width will be set to the original width of the video.
+        The width of the output canvas in pixels. When omitted but `height` is set, the width will be calculated automatically to maintain the original aspect ratio. Otherwise, the width will be set to the original width of the video.
 - `height`\
-	The height of the output canvas in pixels. When omitted but `width` is set, the height will be calculated automatically to maintain the original aspect ratio. Otherwise, the height will be set to the original height of the video.
+        The height of the output canvas in pixels. When omitted but `width` is set, the height will be calculated automatically to maintain the original aspect ratio. Otherwise, the height will be set to the original height of the video.
 - `fit`\
-	*Required* when both `width` and `height` are set, this option sets the fitting algorithm to use.
+        *Required* when both `width` and `height` are set, this option sets the fitting algorithm to use.
 	- `'fill'` will stretch the image to fill the entire box, potentially altering aspect ratio.
 	- `'contain'` will contain the entire image within the box while preserving aspect ratio. This may lead to letterboxing.
 	- `'cover'` will scale the image until the entire box is filled, while preserving aspect ratio.
 - `rotation`\
-	The clockwise rotation by which to rotate the raw video frame. Defaults to the rotation set in the file metadata. Rotation is applied before resizing.
+        The clockwise rotation by which to rotate the raw video frame. Defaults to the rotation set in the file metadata. Rotation is applied after cropping and before resizing.
 - `poolSize`\
-	See [Canvas pool](#canvas-pool).
+        See [Canvas pool](#canvas-pool).
 
 Some examples:
 ```ts
