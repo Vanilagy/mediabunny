@@ -14,7 +14,7 @@ import {
 	registerDecoder,
 	registerEncoder,
 } from './custom-coder';
-import { promiseWithResolvers, assert } from './misc';
+import { isSafari, promiseWithResolvers } from './misc';
 import { EncodedPacket } from './packet';
 import { VideoSample } from './sample';
 
@@ -52,7 +52,8 @@ class WebMSeparateAlphaDecoder extends CustomVideoDecoder {
 		return ['vp9', 'av1', 'vp8'].includes(codec)
 			&& config.hardwareAcceleration === 'prefer-software'
 			&& typeof VideoDecoder !== 'undefined'
-			&& typeof VideoFrame !== 'undefined';
+			&& typeof VideoFrame !== 'undefined'
+			&& !isSafari(); // Safari v18.6: broken when creating I420A, I420 works with the same data buffer
 	}
 
 	override init() {
@@ -176,24 +177,23 @@ class WebMSeparateAlphaDecoder extends CustomVideoDecoder {
 		try {
 			const mainSize = main.allocationSize();
 			const alphaSize = alpha.allocationSize();
-			const buffer = new ArrayBuffer(mainSize + alphaSize);
+			const data = new Uint8Array(mainSize + alphaSize);
+			const alphaArray = data.subarray(mainSize, data.byteLength);
 
 			await Promise.all([
-				main.copyTo(new Uint8Array(buffer, 0, mainSize)),
-				alpha.copyTo(new Uint8Array(buffer, mainSize, alphaSize)),
+				main.copyTo(data.subarray(0, mainSize)),
+				alpha.copyTo(alphaArray),
 			]);
 
 			// e.g. Chrome: I420, Firefox: BGRX.
-			// I420A is already set correctly, but for RGB formats, need to copy alpha channel to X channel
+			// But for RGB formats, need to copy alpha channel to X channel. In JS...
 			if (!isYUV) {
-				const view = new DataView(buffer);
-
 				for (let i = 0; i < alphaSize; i += 4) {
-					view.setUint8(i + 3, view.getUint8(mainSize + i));
+					data[i + 3] = data[mainSize + i]!;
 				}
 			}
 
-			return new VideoFrame(buffer, {
+			return new VideoFrame(data, {
 				codedWidth: main.displayWidth, // As a result of copyTo
 				codedHeight: main.displayHeight,
 				displayWidth: main.displayWidth,
@@ -202,7 +202,7 @@ class WebMSeparateAlphaDecoder extends CustomVideoDecoder {
 				timestamp: main.timestamp,
 				duration: main.duration ?? undefined,
 				format: resultFormat,
-				transfer: [buffer],
+				transfer: [data.buffer],
 			} as VideoFrameBufferInit);
 		} catch (error) {
 			/** @ts-expect-error ECMAScript target */
@@ -248,8 +248,6 @@ class WebMSeparateAlphaEncoder extends CustomVideoEncoder {
 		ReturnType<typeof promiseWithResolvers<EncodedVideoChunk | null>>
 	>();
 
-	private canvas?: OffscreenCanvas;
-
 	private closed = false;
 
 	private setAlphaCoderError(error: Error) {
@@ -270,7 +268,7 @@ class WebMSeparateAlphaEncoder extends CustomVideoEncoder {
 			&& ['vp9', 'av1', 'vp8'].includes(codec)
 			&& typeof VideoEncoder !== 'undefined'
 			&& typeof VideoFrame !== 'undefined'
-			&& typeof OffscreenCanvas !== 'undefined';
+			&& !isSafari(); // Need handling like VideoEncoderWrapper
 	}
 
 	override init() {
@@ -305,7 +303,6 @@ class WebMSeparateAlphaEncoder extends CustomVideoEncoder {
 
 		// Better add when there is really data and properly check configure in supports first
 		// Need refactoring of current API
-		// FIXME: problem with limited range, 0 alpha become 16...
 		this.alphaCoder = new VideoEncoder({
 			output: (chunk) => {
 				if (this.mainCoderError || this.alphaCoderError || this.closed) {
@@ -359,7 +356,6 @@ class WebMSeparateAlphaEncoder extends CustomVideoEncoder {
 		if (this.mainCoder.state !== 'closed') this.mainCoder.close();
 		if (this.alphaCoder.state !== 'closed') this.alphaCoder.close();
 		this.closed = true;
-		delete this.canvas;
 		this.alphaOutputResolverMap.clear();
 	}
 
@@ -381,29 +377,45 @@ class WebMSeparateAlphaEncoder extends CustomVideoEncoder {
 	/** @internal */
 	async _extractAlpha(videoSample: VideoSample) {
 		const format = videoSample.format || '';
-		const alpha = format.includes('A')
-			|| videoSample.format === null; // Edge case: somehow null for HEVC with alpha at Chrome 139
 
-		if (!alpha || videoSample._closed || this.alphaCoderError) {
+		if (
+			!format.includes('A') // Chrome v139: HEVC with alpha might give null, but cannot copyTo anyway
+			|| videoSample._closed
+			|| this.alphaCoderError
+			|| format.length > 5 // Not handling cases like I444AP12, not possible in browser now, will become null
+		) {
 			return null;
 		};
 
-		this.canvas ??= new OffscreenCanvas(videoSample.codedWidth, videoSample.codedHeight);
+		// RGB formats (like canvas) will get converted to 16-255 in browsers, and give broken result
+		const isYUV = format.startsWith('I') || format.startsWith('N');
+		const finalFormat = isYUV ? format : 'I420';
+		const size = videoSample.allocationSize();
+		const data = new Uint8Array(size);
+		const pixels = videoSample.codedWidth * videoSample.codedHeight;
 
-		const ctx = this.canvas.getContext('2d');
+		await videoSample.copyTo(data);
 
-		assert(ctx);
-		ctx.globalCompositeOperation = 'copy';
-		ctx.drawImage(videoSample.toCanvasImageSource(), 0, 0);
-		ctx.globalCompositeOperation = 'source-in';
-		ctx.fillStyle = 'white';
-		ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+		if (isYUV) {
+			data.set(data.subarray(size - pixels, size));
+		} else {
+			for (let i = 0; i < pixels; i++) {
+				data[i] = data[i * 4 + 3]!;
+			}
+		}
 
-		return new VideoFrame(this.canvas, {
+		// eslint-disable-next-line @stylistic/max-len
+		// More expensive to encode otherwise, according to https://source.chromium.org/chromium/chromium/src/+/main:media/video/alpha_video_encoder_wrapper.cc;l=117
+		data.fill(255, pixels, data.byteLength);
+
+		return new VideoFrame(data, {
 			timestamp: videoSample.microsecondTimestamp,
 			duration: videoSample.microsecondDuration,
-			alpha: 'discard',
-		});
+			format: finalFormat,
+			codedWidth: videoSample.codedWidth,
+			codedHeight: videoSample.codedHeight,
+			transfer: [data.buffer],
+		} as VideoFrameBufferInit);
 	}
 }
 

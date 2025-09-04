@@ -332,7 +332,9 @@ A set of custom coders is provided to support it by separately handle the alpha 
 It is experimental and still requires more work on the main library and CustomCoder APIs.
 Issues examples:
 - No proper way for user to confirm if a file is indeed a WebM with alpha and thus if opt-in support is needed.
-- CustomCoder supports detection is not specific enough with current abstraction.
+- Limitations with current abstraction.
+- Poor performance on Firefox.
+- Does not support Safari.
 :::
 
 ### Encoding WebM with alpha channel
