@@ -24,4 +24,5 @@ test('Should be able to get metadata from a .FLAC file', async () => {
 	});
 	expect(await track?.getCodecParameterString()).toEqual('flac');
 	expect(track?.timeResolution).toEqual(44100);
+	expect(await input?.getMimeType()).toEqual('audio/flac');
 });

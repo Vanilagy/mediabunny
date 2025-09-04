@@ -190,6 +190,6 @@ export class FlacDemuxer extends Demuxer {
 	}
 
 	override getMimeType(): Promise<string> {
-		throw new Error('getMimeType() not implemented');
+		return Promise.resolve('audio/flac');
 	}
 }
