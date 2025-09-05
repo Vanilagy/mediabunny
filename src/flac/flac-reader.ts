@@ -18,15 +18,23 @@ import {
 	getSampleRateOrUncommon,
 } from './flac-misc';
 
-export const readNextFlacFrame = async (
-	reader: Reader,
-	startPos: number,
-	until: number,
-	firstPacket: boolean,
-	blockingBit: number | undefined,
-	setBlockingBit: (blockingBit: number) => void,
-	streamInfoSampleRate: number,
-) => {
+export const readNextFlacFrame = async ({
+	reader,
+	startPos,
+	until,
+	firstPacket,
+	blockingBit,
+	setBlockingBit,
+	streamInfoSampleRate,
+}: {
+	reader: Reader;
+	startPos: number;
+	until: number;
+	firstPacket: boolean;
+	blockingBit: number | undefined;
+	setBlockingBit: (blockingBit: number) => void;
+	streamInfoSampleRate: number;
+}) => {
 	let slice = reader.requestSlice(startPos, until);
 	if (slice instanceof Promise) slice = await slice;
 
@@ -72,13 +80,16 @@ export const readNextFlacFrame = async (
 	}
 
 	const blockSizeOrUncommon = getBlockSizeOrUncommon(bitStream.readBits(4));
-	const sampleRateOrUncommon = getSampleRateOrUncommon(bitStream.readBits(4), streamInfoSampleRate);
+	const sampleRateOrUncommon = getSampleRateOrUncommon(
+		bitStream.readBits(4),
+		streamInfoSampleRate,
+	);
 	bitStream.skipBits(4); // channel count
 	bitStream.skipBits(3); // bit depth
 	const reservedZero = bitStream.readBits(1); // reserved zero
 	assert(reservedZero === 0);
 
-	const flacCodedNumber = getFlacCodedNumber(slice);
+	const num = getFlacCodedNumber(slice);
 	const blockSize = getBlockSize(slice, blockSizeOrUncommon);
 	const sampleRate = getSampleRate(slice, sampleRateOrUncommon);
 	const size = slice.filePos - startOffset;
@@ -92,5 +103,5 @@ export const readNextFlacFrame = async (
 		throw new Error('Invalid CRC');
 	}
 
-	return { num: flacCodedNumber, blockSize, sampleRate };
+	return { num, blockSize, sampleRate, size };
 };

@@ -11,7 +11,7 @@ import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
 import { assert, Bitstream, UNDETERMINED_LANGUAGE } from '../misc';
-import { EncodedPacket } from '../packet';
+import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readBytes, Reader, readU24Be, readU8 } from '../reader';
 import { readNextFlacFrame } from './flac-reader';
 
@@ -56,7 +56,9 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 
 	computeDuration() {
 		assert(this.demuxer.audioInfo);
-		return Promise.resolve(this.demuxer.audioInfo.totalSamples / this.demuxer.audioInfo.sampleRate);
+		return Promise.resolve(
+			this.demuxer.audioInfo.totalSamples / this.demuxer.audioInfo.sampleRate,
+		);
 	}
 
 	getSampleRate() {
@@ -92,32 +94,71 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		});
 	}
 
-	getPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
+	getPacket(
+		timestamp: number,
+		options: PacketRetrievalOptions,
+	): Promise<EncodedPacket | null> {
 		throw new Error('TODO: getPacket() not implemented');
 	}
 
-	getNextPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
+	getNextPacket(
+		packet: EncodedPacket,
+		options: PacketRetrievalOptions,
+	): Promise<EncodedPacket | null> {
 		throw new Error('TODO: getNextPacket() not implemented');
 	}
 
-	getKeyPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
+	getKeyPacket(
+		timestamp: number,
+		options: PacketRetrievalOptions,
+	): Promise<EncodedPacket | null> {
 		return this.getPacket(timestamp, options);
 	}
 
-	getNextKeyPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
+	getNextKeyPacket(
+		packet: EncodedPacket,
+		options: PacketRetrievalOptions,
+	): Promise<EncodedPacket | null> {
 		return this.getNextPacket(packet, options);
 	}
 
-	async getPacketAtIndex(sampleIndex: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
-		if (this.demuxer.loadedSamples[sampleIndex]) {
-			throw new Error('TODO: Return successful packet');
+	async getPacketAtIndex(
+		sampleIndex: number,
+		options: PacketRetrievalOptions,
+	): Promise<EncodedPacket | null> {
+		const rawSample = this.demuxer.loadedSamples[sampleIndex];
+		if (rawSample) {
+			let data: Uint8Array;
+			if (options.metadataOnly) {
+				data = PLACEHOLDER_DATA;
+			} else {
+				let slice = this.demuxer.reader.requestSlice(rawSample.dataStart, rawSample.dataSize);
+				if (slice instanceof Promise) slice = await slice;
+
+				if (!slice) {
+					return null; // Data didn't fit into the rest of the file
+				}
+
+				data = readBytes(slice, rawSample.dataSize);
+			}
+
+			return new EncodedPacket(
+				data,
+				'key',
+				rawSample.timestamp,
+				rawSample.duration,
+				sampleIndex,
+				rawSample.dataSize,
+			);
 		}
 
 		await this.demuxer.advanceReader();
 		return this.getPacketAtIndex(sampleIndex, options);
 	}
 
-	getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
+	getFirstPacket(
+		options: PacketRetrievalOptions,
+	): Promise<EncodedPacket | null> {
 		return this.getPacketAtIndex(0, options);
 	}
 }
@@ -142,7 +183,9 @@ export class FlacDemuxer extends Demuxer {
 
 	override async computeDuration(): Promise<number> {
 		const tracks = await this.getTracks();
-		const trackDurations = await Promise.all(tracks.map(x => x.computeDuration()));
+		const trackDurations = await Promise.all(
+			tracks.map(x => x.computeDuration()),
+		);
 		return Math.max(0, ...trackDurations);
 	}
 
@@ -151,36 +194,46 @@ export class FlacDemuxer extends Demuxer {
 		assert(this.firstFlacFrameStart !== null);
 		assert(this.audioInfo);
 		// TODO: Don't start from firstFlacFrameStart, iterate
-		const result = await readNextFlacFrame(
-			this.reader,
-			this.firstFlacFrameStart,
-			this.firstFlacFrameStart + this.audioInfo.maximumFrameSize,
-			this.loadedSamples.length === 0,
-			this.blockingBit,
-			(blockingBit: number) => {
+		const startPos = this.firstFlacFrameStart;
+		const result = await readNextFlacFrame({
+			reader: this.reader,
+			startPos,
+			until: startPos + this.audioInfo.maximumFrameSize,
+			firstPacket: this.loadedSamples.length === 0,
+			blockingBit: this.blockingBit,
+			setBlockingBit: (blockingBit: number) => {
 				this.blockingBit = blockingBit;
 			},
-			this.audioInfo.sampleRate,
-		);
+			streamInfoSampleRate: this.audioInfo.sampleRate,
+		});
 
 		if (this.audioInfo.minimumBlockSize !== this.audioInfo.maximumBlockSize) {
 			throw new Error('Cannot determine timestamp');
 		}
 
-		const timestamp = (result.num * this.audioInfo.maximumBlockSize) / this.audioInfo.sampleRate;
+		const timestamp
+			= (result.num * this.audioInfo.maximumBlockSize)
+				/ this.audioInfo.sampleRate;
 
-		console.log(result, timestamp);
-
-		throw new Error('Rest not implemented, continue here 😎');
+		const sample: Sample = {
+			timestamp,
+			duration: this.audioInfo.maximumBlockSize / this.audioInfo.sampleRate,
+			dataStart: startPos,
+			dataSize: result.size,
+		};
+		this.loadedSamples.push(sample);
 	}
 
 	async readMetadata() {
 		let currentPos = 4;
 
-		return this.metadataPromise ??= (async () => {
-			while (this.reader.fileSize === null || currentPos < this.reader.fileSize) {
-			// Parse streaminfo block
-			// https://www.rfc-editor.org/rfc/rfc9639.html#section-8.2
+		return (this.metadataPromise ??= (async () => {
+			while (
+				this.reader.fileSize === null
+				|| currentPos < this.reader.fileSize
+			) {
+				// Parse streaminfo block
+				// https://www.rfc-editor.org/rfc/rfc9639.html#section-8.2
 				let sizeSlice = this.reader.requestSlice(currentPos, currentPos + 4);
 				if (sizeSlice instanceof Promise) sizeSlice = await sizeSlice;
 				if (!sizeSlice) return;
@@ -194,8 +247,13 @@ export class FlacDemuxer extends Demuxer {
 				// 0 -> streaminfo
 				// 4 -> descriptive metadata (for future implementation)
 				if (metaBlockType === 0) {
-					let streamInfoBlock = this.reader.requestSlice(currentPos, currentPos + size);
-					if (streamInfoBlock instanceof Promise) streamInfoBlock = await streamInfoBlock;
+					let streamInfoBlock = this.reader.requestSlice(
+						currentPos,
+						currentPos + size,
+					);
+					if (streamInfoBlock instanceof Promise) {
+						streamInfoBlock = await streamInfoBlock;
+					}
 					if (!streamInfoBlock) return;
 					currentPos += size;
 
@@ -218,7 +276,10 @@ export class FlacDemuxer extends Demuxer {
 					// - A metadata block (called the STREAMINFO block) as described in section 7 of [FLAC]
 					// - Optionaly (sic) other metadata blocks, that are not used by the specification
 					const description = new Uint8Array([
-						0x66, 0x4c, 0x61, 0x43,
+						0x66,
+						0x4c,
+						0x61,
+						0x43,
 						...streamInfoDescription,
 					]);
 
@@ -236,7 +297,9 @@ export class FlacDemuxer extends Demuxer {
 						description,
 					};
 
-					this.tracks.push(new InputAudioTrack(new FlacAudioTrackBacking(this)));
+					this.tracks.push(
+						new InputAudioTrack(new FlacAudioTrackBacking(this)),
+					);
 				} else {
 					// Skip the metadata block
 					currentPos += size;
@@ -246,7 +309,7 @@ export class FlacDemuxer extends Demuxer {
 					break;
 				}
 			}
-		})();
+		})());
 	}
 
 	async getTracks() {
