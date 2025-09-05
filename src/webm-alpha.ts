@@ -151,7 +151,7 @@ class WebMSeparateAlphaDecoder extends CustomVideoDecoder {
 	// Should check if input actually has alpha instead of by 'prefer-software', but no access to _backing here
 	static override supports(codec: VideoCodec, config: VideoDecoderConfig) {
 		// Hardware accelerated have impractically worse performance in `copyTo` based implementation of _combineAlpha
-		return ['vp9', 'av1', 'vp8'].includes(codec)
+		return ['vp9', 'vp8'].includes(codec)
 			&& config.hardwareAcceleration === 'prefer-software'
 			&& typeof VideoDecoder !== 'undefined'
 			&& typeof VideoFrame !== 'undefined';
@@ -302,7 +302,7 @@ class WebMSeparateAlphaEncoder extends CustomVideoEncoder {
 	// Should check if output format supports also, but no access in CustomVideoEncoder
 	static override supports(codec: VideoCodec, config: VideoEncoderConfig) {
 		return config.alpha === 'keep'
-			&& ['vp9', 'av1', 'vp8'].includes(codec) // AV1 supports b-frame, but seems no browser implements that now
+			&& ['vp9', 'vp8'].includes(codec)
 			&& typeof VideoEncoder !== 'undefined'
 			&& typeof VideoFrame !== 'undefined';
 	}
