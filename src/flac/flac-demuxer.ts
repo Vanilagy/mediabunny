@@ -10,7 +10,7 @@ import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
-import { assert, Bitstream, UNDETERMINED_LANGUAGE } from '../misc';
+import { assert, AsyncMutex, binarySearchExact, Bitstream, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readBytes, Reader, readU24Be, readU8 } from '../reader';
 import { readNextFlacFrame } from './flac-reader';
@@ -101,11 +101,33 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		throw new Error('TODO: getPacket() not implemented');
 	}
 
-	getNextPacket(
+	async getNextPacket(
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
 	): Promise<EncodedPacket | null> {
-		throw new Error('TODO: getNextPacket() not implemented');
+		const release = await this.demuxer.readingMutex.acquire();
+		try {
+			const sampleIndex = binarySearchExact(
+				this.demuxer.loadedSamples,
+				packet.timestamp,
+				x => x.timestamp,
+			);
+			if (sampleIndex === -1) {
+				throw new Error('Packet was not created from this track.');
+			}
+
+			const nextIndex = sampleIndex + 1;
+			// Ensure the next sample exists
+			while (
+				nextIndex >= this.demuxer.loadedSamples.length
+				&& !this.demuxer.lastSampleLoaded
+			) {
+				await this.demuxer.advanceReader();
+			}
+			return this.getPacketAtIndex(nextIndex, options);
+		} finally {
+			release();
+		}
 	}
 
 	getKeyPacket(
@@ -172,8 +194,11 @@ export class FlacDemuxer extends Demuxer {
 	tracks: InputAudioTrack[] = [];
 
 	audioInfo: FlacAudioInfo | null = null;
-	firstFlacFrameStart: number | null = null;
+	lastLoadedPos: number | null = null;
 	blockingBit: number | undefined = undefined;
+
+	readingMutex = new AsyncMutex();
+	lastSampleLoaded = false;
 
 	constructor(input: Input) {
 		super(input);
@@ -191,10 +216,10 @@ export class FlacDemuxer extends Demuxer {
 
 	async advanceReader() {
 		await this.readMetadata();
-		assert(this.firstFlacFrameStart !== null);
+		assert(this.lastLoadedPos !== null);
 		assert(this.audioInfo);
-		// TODO: Don't start from firstFlacFrameStart, iterate
-		const startPos = this.firstFlacFrameStart;
+		const startPos = this.lastLoadedPos;
+		console.log('startPos', startPos);
 		const result = await readNextFlacFrame({
 			reader: this.reader,
 			startPos,
@@ -206,6 +231,11 @@ export class FlacDemuxer extends Demuxer {
 			},
 			streamInfoSampleRate: this.audioInfo.sampleRate,
 		});
+
+		if (!result) {
+			this.lastSampleLoaded = true;
+			return;
+		}
 
 		if (this.audioInfo.minimumBlockSize !== this.audioInfo.maximumBlockSize) {
 			throw new Error('Cannot determine timestamp');
@@ -221,7 +251,12 @@ export class FlacDemuxer extends Demuxer {
 			dataStart: startPos,
 			dataSize: result.size,
 		};
+
+		// TODO: size is wrong
+		this.lastLoadedPos = this.lastLoadedPos + result.size;
 		this.loadedSamples.push(sample);
+
+		throw new Error('TODO: Keep iterating until you find syncword');
 	}
 
 	async readMetadata() {
@@ -305,7 +340,7 @@ export class FlacDemuxer extends Demuxer {
 					currentPos += size;
 				}
 				if (isLastMetadata) {
-					this.firstFlacFrameStart = currentPos;
+					this.lastLoadedPos = currentPos;
 					break;
 				}
 			}

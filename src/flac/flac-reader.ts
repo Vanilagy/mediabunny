@@ -39,7 +39,7 @@ export const readNextFlacFrame = async ({
 	if (slice instanceof Promise) slice = await slice;
 
 	if (!slice) {
-		throw new Error('Data didn\'t fit into the rest of the file');
+		return null;
 	}
 
 	const startOffset = slice.filePos;
@@ -103,5 +103,5 @@ export const readNextFlacFrame = async ({
 		throw new Error('Invalid CRC');
 	}
 
-	return { num, blockSize, sampleRate, size };
+	return { num, blockSize, sampleRate, size: blockSize };
 };
