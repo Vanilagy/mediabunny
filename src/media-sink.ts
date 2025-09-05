@@ -1129,6 +1129,7 @@ export class CanvasSink {
 	/** @internal */
 	_videoSampleToWrappedCanvas(sample: VideoSample): WrappedCanvas {
 		let canvas = this._canvasPool[this._nextCanvasIndex];
+		let canvasIsNew = false;
 		const alpha = sample.format === null // Weird: HEVC with alpha, Chromium v139
 			|| sample.format?.includes('A');
 
@@ -1140,6 +1141,8 @@ export class CanvasSink {
 				canvas.height = this._height;
 			} else {
 				canvas = new OffscreenCanvas(this._width, this._height);
+
+				canvasIsNew = true;
 			}
 
 			if (this._canvasPool.length > 0) {
@@ -1156,7 +1159,10 @@ export class CanvasSink {
 		assert(context);
 
 		context.resetTransform();
-		context.globalCompositeOperation = 'copy';
+
+		if (!canvasIsNew || alpha) {
+			context.clearRect(0, 0, this._width, this._height);
+		}
 
 		sample.drawWithFit(context, {
 			fit: this._fit,

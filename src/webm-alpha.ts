@@ -14,7 +14,7 @@ import {
 	registerDecoder,
 	registerEncoder,
 } from './custom-coder';
-import { isSafari, promiseWithResolvers } from './misc';
+import { promiseWithResolvers } from './misc';
 import { EncodedPacket } from './packet';
 import { VideoSample } from './sample';
 
@@ -140,7 +140,6 @@ const combineAlpha = async (main: VideoFrame, alpha?: VideoFrame | null | void) 
 		displayHeight: main.displayHeight,
 		colorSpace: main.colorSpace,
 		timestamp: main.timestamp,
-		duration: main.duration ?? undefined,
 		format: resultFormat,
 		transfer: [data.buffer],
 	} as VideoFrameBufferInit);
@@ -155,8 +154,7 @@ class WebMSeparateAlphaDecoder extends CustomVideoDecoder {
 		return ['vp9', 'av1', 'vp8'].includes(codec)
 			&& config.hardwareAcceleration === 'prefer-software'
 			&& typeof VideoDecoder !== 'undefined'
-			&& typeof VideoFrame !== 'undefined'
-			&& !isSafari(); // Safari v18.6: broken when creating I420A, I420 works with the same data buffer
+			&& typeof VideoFrame !== 'undefined';
 	}
 
 	override init() {
@@ -174,6 +172,7 @@ class WebMSeparateAlphaDecoder extends CustomVideoDecoder {
 							this.coder.setAlphaCoderError(new Error('Failed to combine alpha'));
 							return output;
 						});
+						this.coder.alphaOutputResolverMap.delete(output.timestamp);
 						this.onSample(new VideoSample(frame));
 					} finally {
 						if (frame !== output) output.close();
@@ -209,7 +208,6 @@ class WebMSeparateAlphaDecoder extends CustomVideoDecoder {
 					packet.additions,
 					packet.type,
 					packet.timestamp,
-					packet.duration,
 					packet.sequenceNumber,
 				).toEncodedVideoChunk(),
 			);
@@ -254,38 +252,48 @@ const extractAlpha = async (videoSample: VideoSample) => {
 		|| videoSample._closed
 		|| format.length > 5 // Not handling cases like I444AP12, not possible in browser now, will become null
 	) {
-		return null;
+		return {};
 	};
 
 	// RGB formats (like canvas) will get converted to 16-255 in browsers, and give broken result
 	const isYUV = format.startsWith('I') || format.startsWith('N');
-	const finalFormat = isYUV ? format.slice(0, 4) : 'I420';
 	const size = videoSample.allocationSize();
 	const data = new Uint8Array(size);
+	const alphaData = new Uint8Array(size);
 	const pixels = videoSample.codedWidth * videoSample.codedHeight;
 
 	await videoSample.copyTo(data);
 
 	if (isYUV) {
-		data.set(data.subarray(size - pixels, size));
+		alphaData.set(data.subarray(size - pixels, size));
 	} else {
 		for (let i = 0; i < pixels; i++) {
-			data[i] = data[i * 4 + 3]!;
+			alphaData[i] = data[i * 4 + 3]!;
 		}
 	}
 
 	// eslint-disable-next-line @stylistic/max-len
 	// More expensive to encode otherwise, according to https://source.chromium.org/chromium/chromium/src/+/main:media/video/alpha_video_encoder_wrapper.cc;l=117
-	data.fill(255, pixels, data.byteLength);
+	alphaData.fill(255, pixels, alphaData.byteLength);
 
-	return new VideoFrame(data, {
-		timestamp: videoSample.microsecondTimestamp,
-		duration: videoSample.microsecondDuration,
-		format: finalFormat,
-		codedWidth: videoSample.codedWidth,
-		codedHeight: videoSample.codedHeight,
-		transfer: [data.buffer],
-	} as VideoFrameBufferInit);
+	return {
+		alphaFrame: new VideoFrame(alphaData, {
+			format: 'I420',
+			timestamp: videoSample.microsecondTimestamp,
+			codedWidth: videoSample.codedWidth,
+			codedHeight: videoSample.codedHeight,
+			transfer: [alphaData.buffer],
+		} as VideoFrameBufferInit),
+		mainFrame: new VideoFrame(data, {
+			// Safari workaround: giving original I420A = broken color, fine to use generally
+			format: format.slice(0, 4),
+			timestamp: videoSample.microsecondTimestamp,
+			colorSpace: videoSample.colorSpace,
+			codedWidth: videoSample.codedWidth,
+			codedHeight: videoSample.codedHeight,
+			transfer: [data.buffer],
+		} as VideoFrameBufferInit),
+	};
 };
 
 class WebMSeparateAlphaEncoder extends CustomVideoEncoder {
@@ -294,10 +302,9 @@ class WebMSeparateAlphaEncoder extends CustomVideoEncoder {
 	// Should check if output format supports also, but no access in CustomVideoEncoder
 	static override supports(codec: VideoCodec, config: VideoEncoderConfig) {
 		return config.alpha === 'keep'
-			&& ['vp9', 'av1', 'vp8'].includes(codec)
+			&& ['vp9', 'av1', 'vp8'].includes(codec) // AV1 supports b-frame, but seems no browser implements that now
 			&& typeof VideoEncoder !== 'undefined'
-			&& typeof VideoFrame !== 'undefined'
-			&& !isSafari(); // Need handling like VideoEncoderWrapper
+			&& typeof VideoFrame !== 'undefined';
 	}
 
 	override init() {
@@ -321,6 +328,7 @@ class WebMSeparateAlphaEncoder extends CustomVideoEncoder {
 						packet.additions = alphaPacket.data ?? undefined;
 					}
 					this.onPacket(packet, metadata);
+					this.coder.alphaOutputResolverMap.delete(chunk.timestamp);
 				})().catch(() => {});
 			},
 			error: (error) => {
@@ -351,21 +359,21 @@ class WebMSeparateAlphaEncoder extends CustomVideoEncoder {
 		}
 
 		const resolver = this.coder.getAlphaOutputResolver(videoSample.microsecondTimestamp);
-		const alpha = await extractAlpha(videoSample).catch(() => {
+		let { alphaFrame, mainFrame } = await extractAlpha(videoSample).catch(() => {
 			this.coder.setAlphaCoderError(new Error('Failed to extractAlpha'));
-		});
+		}) || {};
 
-		if (alpha) {
-			this.coder.alphaCoder.encode(alpha, options);
-			alpha.close();
+		if (alphaFrame) {
+			this.coder.alphaCoder.encode(alphaFrame, options);
+			alphaFrame.close();
+			alphaFrame = undefined;
 		} else {
 			resolver.resolve(null);
 		}
 
-		const frame = videoSample.toVideoFrame();
-
-		this.coder.mainCoder.encode(frame, options);
-		frame.close();
+		mainFrame ??= videoSample.toVideoFrame();
+		this.coder.mainCoder.encode(mainFrame, options);
+		mainFrame.close();
 	}
 
 	override close = () => this.coder.close();

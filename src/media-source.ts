@@ -233,6 +233,7 @@ class VideoEncoderWrapper {
 							+ ` encoding options.`,
 						);
 					} else {
+						let canvasIsNew = false;
 						const alpha = videoSample.format === null // Weird: HEVC with alpha, Chromium v139
 							|| videoSample.format?.includes('A');
 
@@ -245,13 +246,17 @@ class VideoEncoderWrapper {
 							} else {
 								this.resizeCanvas = new OffscreenCanvas(this.codedWidth, this.codedHeight);
 							}
+
+							canvasIsNew = true;
 						}
 
 						const context = this.resizeCanvas.getContext('2d', { alpha }) as
 							CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 						assert(context);
 
-						context.globalCompositeOperation = 'copy';
+						if (!canvasIsNew) {
+							context.clearRect(0, 0, this.codedWidth, this.codedHeight);
+						}
 
 						videoSample.drawWithFit(context, { fit: sizeChangeBehavior });
 
