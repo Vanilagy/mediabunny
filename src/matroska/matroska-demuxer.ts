@@ -2203,6 +2203,7 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 				customAlphaDecoderRegistered
 				&& this.internalTrack.info.alphaMode
 				&& firstPacket?.additions
+				&& typeof VideoEncoder !== 'undefined'
 				&& (await VideoDecoder.isConfigSupported(configWithPreferSoftware)).supported
 			) {
 				return configWithPreferSoftware;

@@ -46,9 +46,9 @@ class WebMSeparateAlphaDecoder extends CustomVideoDecoder {
 		this.alphaCoderError = error;
 	}
 
+	// Should check if input actually has alpha instead of by 'prefer-software', but no access to _backing here
 	static override supports(codec: VideoCodec, config: VideoDecoderConfig) {
-		// Hardware accelerated have impractically worse performance in current implementation of _combineAlpha
-		// Does not support 'prefer-hardware' now
+		// Hardware accelerated have impractically worse performance in `copyTo` based implementation of _combineAlpha
 		return ['vp9', 'av1', 'vp8'].includes(codec)
 			&& config.hardwareAcceleration === 'prefer-software'
 			&& typeof VideoDecoder !== 'undefined'
@@ -185,8 +185,12 @@ class WebMSeparateAlphaDecoder extends CustomVideoDecoder {
 				alpha.copyTo(alphaArray),
 			]);
 
+			// YUV planar format are ready as-is.
+			// But for RGB formats, need to copy 1 channel to X channel.
+			// For alpha channel, UV are dummy
+			// Optimization: most implementation should give the same RGB values by filling UV with max value
+			// Otherwise need luminanceToAlpha, ref: https://www.w3.org/TR/SVG11/filters.html#feColorMatrixElement
 			// e.g. Chrome: I420, Firefox: BGRX.
-			// But for RGB formats, need to copy alpha channel to X channel. In JS...
 			if (!isYUV) {
 				for (let i = 0; i < alphaSize; i += 4) {
 					data[i + 3] = data[mainSize + i]!;
@@ -263,6 +267,7 @@ class WebMSeparateAlphaEncoder extends CustomVideoEncoder {
 		this.alphaCoderError = error;
 	}
 
+	// Should check if output format supports also, but no access in CustomVideoEncoder
 	static override supports(codec: VideoCodec, config: VideoEncoderConfig) {
 		return config.alpha === 'keep'
 			&& ['vp9', 'av1', 'vp8'].includes(codec)
@@ -389,7 +394,7 @@ class WebMSeparateAlphaEncoder extends CustomVideoEncoder {
 
 		// RGB formats (like canvas) will get converted to 16-255 in browsers, and give broken result
 		const isYUV = format.startsWith('I') || format.startsWith('N');
-		const finalFormat = isYUV ? format : 'I420';
+		const finalFormat = isYUV ? format.slice(0, 4) : 'I420';
 		const size = videoSample.allocationSize();
 		const data = new Uint8Array(size);
 		const pixels = videoSample.codedWidth * videoSample.codedHeight;
