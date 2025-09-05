@@ -334,7 +334,6 @@ Issues examples:
 - No proper way for user to confirm if a file is indeed a WebM with alpha and thus if opt-in support is needed.
 - Limitations with current abstraction.
 - Poor performance on Firefox.
-- Does not support Safari.
 :::
 
 ### Encoding WebM with alpha channel
@@ -343,11 +342,12 @@ Support can be added with `registerWebMSeparateAlphaEncoder`.
 Then, opt in with `videoEncodingConfig.alpha = 'keep'` on AV1/VP9/VP8 codecs.
 
 ::: info
-While AV1 with alpha muxing works, browsers wouldn't decode natively in browser.
+While AV1 with alpha muxing works, browsers wouldn't decode alpha natively in browser.
+Also, Safari does not support WebM alpha native.
 :::
 ::: warning
-The alpha channel support is part of WebM file format and useful to encode in the **WebM/MKV muxer only**.
-While it should not cause problem to opt-in for 'keep' in other formats, the alpha would still be discarded in other formats.
+The alpha channel support is part of WebM file format and useful to do alpha encoding process in the **WebM/MKV format only**.
+While it should not cause problem to opt-in for 'keep' in other formats, the alpha would be wasteful in other formats.
 :::
 
 ### Decoding WebM with alpha channel
