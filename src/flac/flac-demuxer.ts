@@ -117,6 +117,10 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 			}
 
 			const nextIndex = sampleIndex + 1;
+			if (this.demuxer.lastSampleLoaded && nextIndex >= this.demuxer.loadedSamples.length) {
+				return null;
+			}
+
 			// Ensure the next sample exists
 			while (
 				nextIndex >= this.demuxer.loadedSamples.length
@@ -219,7 +223,6 @@ export class FlacDemuxer extends Demuxer {
 		assert(this.lastLoadedPos !== null);
 		assert(this.audioInfo);
 		const startPos = this.lastLoadedPos;
-		console.log('startPos', startPos);
 		const result = await readNextFlacFrame({
 			reader: this.reader,
 			startPos,
@@ -233,8 +236,7 @@ export class FlacDemuxer extends Demuxer {
 		});
 
 		if (!result) {
-			this.lastSampleLoaded = true;
-			return;
+			throw new Error('Failed to read next FLAC frame');
 		}
 
 		if (this.audioInfo.minimumBlockSize !== this.audioInfo.maximumBlockSize) {
@@ -252,11 +254,13 @@ export class FlacDemuxer extends Demuxer {
 			dataSize: result.size,
 		};
 
-		// TODO: size is wrong
 		this.lastLoadedPos = this.lastLoadedPos + result.size;
 		this.loadedSamples.push(sample);
 
-		throw new Error('TODO: Keep iterating until you find syncword');
+		if (result?.isLastFrame) {
+			this.lastSampleLoaded = true;
+			return;
+		}
 	}
 
 	async readMetadata() {

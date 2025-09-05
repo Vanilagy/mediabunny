@@ -29,7 +29,12 @@ test('Should be able to get metadata and packets from a .FLAC file', async () =>
 	expect(await input.getMimeType()).toEqual('audio/flac');
 
 	const sink = new EncodedPacketSink(track);
+	let samples = 0;
+	let lastSampleTimestamp = 0;
 	for await (const sample of sink.packets()) {
-		console.log(sample.timestamp, sample.duration);
+		samples++;
+		lastSampleTimestamp = sample.timestamp;
 	}
+	expect(samples).toBe(213);
+	expect(lastSampleTimestamp).toBe(19.690521541950112);
 });

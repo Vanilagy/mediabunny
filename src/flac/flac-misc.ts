@@ -112,7 +112,7 @@ export const getSampleRateOrUncommon = (
 
 // https://www.rfc-editor.org/rfc/rfc9639.html#name-coded-number
 // TODO: Only supports encoded numbers, but if blocking byte is different, it may be unencoded as well
-export const getFlacCodedNumber = (fileSlice: FileSlice) => {
+export const getFlacCodedNumber = (fileSlice: FileSlice): number => {
 	let ones = 0;
 	let bits = 0;
 
@@ -128,11 +128,11 @@ export const getFlacCodedNumber = (fileSlice: FileSlice) => {
 
 	const bitArray: number[] = [];
 	const extraBytes = ones - 1;
-	const bitstream2 = new Bitstream(readBytes(fileSlice, extraBytes + 1));
+	const bitstream2 = new Bitstream(readBytes(fileSlice, extraBytes));
 
 	const firstByteBits = 8 - ones - 1;
 	for (let i = 0; i < firstByteBits; i++) {
-		bitArray.unshift(bitstream2.readBits(1));
+		bitArray.unshift(bitstream1.readBits(1));
 	}
 
 	for (let i = 0; i < extraBytes; i++) {
