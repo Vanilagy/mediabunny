@@ -135,16 +135,7 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 	): Promise<EncodedPacket | null> {
 		const release = await this.demuxer.readingMutex.acquire();
 		try {
-			const sampleIndex = binarySearchExact(
-				this.demuxer.loadedSamples,
-				packet.timestamp,
-				x => x.blockOffset / this.demuxer.audioInfo!.sampleRate,
-			);
-			if (sampleIndex === -1) {
-				throw new Error('Packet was not created from this track.');
-			}
-
-			const nextIndex = sampleIndex + 1;
+			const nextIndex = packet.sequenceNumber + 1;
 			if (
 				this.demuxer.lastSampleLoaded
 				&& nextIndex >= this.demuxer.loadedSamples.length
