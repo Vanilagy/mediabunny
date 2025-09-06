@@ -237,14 +237,10 @@ export class FlacDemuxer extends Demuxer {
 		slice,
 		blockingBit,
 		firstPacket,
-		setBlockingBit,
-		streamInfoSampleRate,
 	}: {
 		slice: FileSlice;
 		blockingBit: number | undefined;
 		firstPacket: boolean;
-		setBlockingBit: (blockingBit: number) => void;
-		streamInfoSampleRate: number;
 	}) => {
 		const startOffset = slice.filePos;
 
@@ -263,7 +259,7 @@ export class FlacDemuxer extends Demuxer {
 		if (blockingBit === undefined) {
 			assert(firstPacket);
 			const newBlockingBit = bitStream.readBits(1);
-			setBlockingBit(newBlockingBit);
+			this.blockingBit = newBlockingBit;
 		} else if (blockingBit === 1) {
 			assert(!firstPacket);
 			const newBlockingBit = bitStream.readBits(1);
@@ -277,9 +273,10 @@ export class FlacDemuxer extends Demuxer {
 		}
 
 		const blockSizeOrUncommon = getBlockSizeOrUncommon(bitStream.readBits(4));
+		assert(this.audioInfo);
 		const sampleRateOrUncommon = getSampleRateOrUncommon(
 			bitStream.readBits(4),
-			streamInfoSampleRate,
+			this.audioInfo.sampleRate,
 		);
 		bitStream.skipBits(4); // channel count
 		bitStream.skipBits(3); // bit depth
@@ -311,16 +308,12 @@ export class FlacDemuxer extends Demuxer {
 		until,
 		firstPacket,
 		blockingBit,
-		setBlockingBit,
-		streamInfoSampleRate,
 	}: {
 		reader: Reader;
 		startPos: number;
 		until: number;
 		firstPacket: boolean;
 		blockingBit: number | undefined;
-		setBlockingBit: (blockingBit: number) => void;
-		streamInfoSampleRate: number;
 	}): Promise<NextFlacFrameResult | null> => {
 	// Also need to validate the next header, which in the worst case may be up to 16 bytes
 		const desiredEnd = until + 16 - startPos;
@@ -334,8 +327,6 @@ export class FlacDemuxer extends Demuxer {
 			slice,
 			blockingBit,
 			firstPacket,
-			setBlockingBit,
-			streamInfoSampleRate,
 		});
 
 		if (!a) {
@@ -370,8 +361,6 @@ export class FlacDemuxer extends Demuxer {
 					slice,
 					blockingBit,
 					firstPacket,
-					setBlockingBit,
-					streamInfoSampleRate,
 				});
 
 				if (!nextIsLegit) {
@@ -401,10 +390,6 @@ export class FlacDemuxer extends Demuxer {
 			until: startPos + this.audioInfo.maximumFrameSize,
 			firstPacket: this.loadedSamples.length === 0,
 			blockingBit: this.blockingBit,
-			setBlockingBit: (blockingBit: number) => {
-				this.blockingBit = blockingBit;
-			},
-			streamInfoSampleRate: this.audioInfo.sampleRate,
 		});
 
 		if (!result) {
