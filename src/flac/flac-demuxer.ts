@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Jonny Burger and contributors
+ * Copyright (c) 2025-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -13,6 +13,7 @@ import { PacketRetrievalOptions } from '../media-sink';
 import { assert, AsyncMutex, binarySearchExact, Bitstream, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readBytes, Reader, readU24Be, readU8 } from '../reader';
+import { MetadataTags } from '../tags';
 import { readNextFlacFrame } from './flac-reader';
 
 type FlacAudioInfo = {
@@ -216,6 +217,10 @@ export class FlacDemuxer extends Demuxer {
 			tracks.map(x => x.computeDuration()),
 		);
 		return Math.max(0, ...trackDurations);
+	}
+
+	override getMetadataTags(): Promise<MetadataTags> {
+		throw new Error('TODO: Add metadata tags support');
 	}
 
 	async advanceReader() {

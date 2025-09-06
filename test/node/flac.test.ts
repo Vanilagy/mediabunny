@@ -15,6 +15,9 @@ test('Should be able to get metadata and packets from a .FLAC file', async () =>
 		formats: ALL_FORMATS,
 	});
 
+	const descriptiveMetadata = await input.getMetadataTags();
+	console.log(descriptiveMetadata);
+
 	const track = await input.getPrimaryAudioTrack();
 	assert(track);
 	expect(await track.computeDuration()).toEqual(19.714285714285715);
