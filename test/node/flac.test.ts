@@ -1,7 +1,10 @@
 import { expect, test } from 'vitest';
 import path from 'node:path';
-import { ALL_FORMATS, Input, FilePathSource, EncodedPacketSink } from '../../src/index.js';
 import { assert } from '../../src/misc.js';
+import { Input } from '../../src/input.js';
+import { FilePathSource } from '../../src/source.js';
+import { ALL_FORMATS } from '../../src/input-format.js';
+import { EncodedPacketSink } from '../../src/media-sink.js';
 
 const __dirname = new URL('.', import.meta.url).pathname;
 
