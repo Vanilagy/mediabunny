@@ -174,40 +174,39 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		sampleIndex: number,
 		options: PacketRetrievalOptions,
 	): Promise<EncodedPacket | null> {
-		const rawSample = this.demuxer.loadedSamples[sampleIndex];
-		if (rawSample) {
-			let data: Uint8Array;
-			if (options.metadataOnly) {
-				data = PLACEHOLDER_DATA;
-			} else {
-				let slice = this.demuxer.reader.requestSlice(
-					rawSample.byteOffset,
-					rawSample.blockSize,
-				);
-				if (slice instanceof Promise) slice = await slice;
-
-				if (!slice) {
-					return null; // Data didn't fit into the rest of the file
-				}
-
-				data = readBytes(slice, rawSample.blockSize);
-			}
-
-			assert(this.demuxer.audioInfo);
-			const timestamp = rawSample.blockOffset / this.demuxer.audioInfo.sampleRate;
-			const duration = rawSample.blockSize / this.demuxer.audioInfo.sampleRate;
-			return new EncodedPacket(
-				data,
-				'key',
-				timestamp,
-				duration,
-				sampleIndex,
-				rawSample.blockSize,
-			);
+		let rawSample = this.demuxer.loadedSamples[sampleIndex];
+		while (!rawSample) {
+			await this.demuxer.advanceReader();
+			rawSample = this.demuxer.loadedSamples[sampleIndex];
 		}
 
-		await this.demuxer.advanceReader();
-		return this.getPacketAtIndex(sampleIndex, options);
+		let data: Uint8Array;
+		if (options.metadataOnly) {
+			data = PLACEHOLDER_DATA;
+		} else {
+			const slice = await this.demuxer.reader.requestSlice(
+				rawSample.byteOffset,
+				rawSample.blockSize,
+			);
+
+			if (!slice) {
+				return null; // Data didn't fit into the rest of the file
+			}
+
+			data = readBytes(slice, rawSample.blockSize);
+		}
+
+		assert(this.demuxer.audioInfo);
+		const timestamp = rawSample.blockOffset / this.demuxer.audioInfo.sampleRate;
+		const duration = rawSample.blockSize / this.demuxer.audioInfo.sampleRate;
+		return new EncodedPacket(
+			data,
+			'key',
+			timestamp,
+			duration,
+			sampleIndex,
+			rawSample.blockSize,
+		);
 	}
 
 	getFirstPacket(
@@ -322,12 +321,10 @@ export class FlacDemuxer extends Demuxer {
 	};
 
 	readNextFlacFrame = async ({
-		reader,
 		startPos,
 		firstPacket,
 		blockingBit,
 	}: {
-		reader: Reader;
 		startPos: number;
 		firstPacket: boolean;
 		blockingBit: number | undefined;
@@ -337,7 +334,7 @@ export class FlacDemuxer extends Demuxer {
 		// to throw out an accidential sync word
 		// which in the worst case may be up to 16 bytes
 		const desiredEnd = this.audioInfo.maximumFrameSize + 16;
-		const slice = await reader.requestSliceRange(startPos, 1, desiredEnd);
+		const slice = await this.reader.requestSliceRange(startPos, 1, desiredEnd);
 
 		if (!slice) {
 			return null;
@@ -414,7 +411,6 @@ export class FlacDemuxer extends Demuxer {
 		assert(this.audioInfo);
 		const startPos = this.lastLoadedPos;
 		const result = await this.readNextFlacFrame({
-			reader: this.reader,
 			startPos,
 			firstPacket: this.loadedSamples.length === 0,
 			blockingBit: this.blockingBit,
