@@ -8,21 +8,11 @@ import { EncodedPacketSink } from '../../src/media-sink.js';
 
 const __dirname = new URL('.', import.meta.url).pathname;
 
-test('Should be able to get metadata and packets from a .FLAC file', async () => {
+test('Should be able to loop over all samples', async () => {
 	const filePath = path.join(__dirname, '..', 'public/sample.flac');
 	const input = new Input({
 		source: new FilePathSource(filePath),
 		formats: ALL_FORMATS,
-	});
-
-	const descriptiveMetadata = await input.getMetadataTags();
-	expect(descriptiveMetadata).toEqual({
-		title: 'The Happy Meeting',
-		date: new Date('2020'),
-		album: 'Samples files',
-		artist: 'Samples Files',
-		trackNumber: 4,
-		genre: 'Ambient',
 	});
 
 	const track = await input.getPrimaryAudioTrack();
@@ -56,4 +46,74 @@ test('Should be able to get metadata and packets from a .FLAC file', async () =>
 	}
 	expect(samples).toBe(213);
 	expect(lastSampleTimestamp).toBe(19.690521541950112);
+});
+
+test('should be able to do random access', async () => {
+	const filePath = path.join(__dirname, '..', 'public/sample.flac');
+	const input = new Input({
+		source: new FilePathSource(filePath),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+	const packetSink = new EncodedPacketSink(track);
+
+	const packet = await packetSink.getPacket(10);
+	assert(packet);
+	expect(packet.timestamp).toBe(9.93814058956916);
+	expect(packet.data.byteLength).toBe(8345);
+	expect(packet.sequenceNumber).toBe(107);
+	expect(packet.duration).toBe(0.09287981859410431);
+
+	const nextPacket = await packetSink.getNextPacket(packet);
+	assert(nextPacket);
+	expect(nextPacket.timestamp).toBe(10.031020408163265);
+	expect(nextPacket.data.byteLength).toBe(8988);
+	expect(nextPacket.sequenceNumber).toBe(108);
+	expect(nextPacket.duration).toBe(0.09287981859410431);
+
+	const priorPacket = await packetSink.getPacket(3);
+	assert(priorPacket);
+	expect(priorPacket.timestamp).toBe(2.972154195011338);
+	expect(priorPacket.data.byteLength).toBe(6877);
+	expect(priorPacket.sequenceNumber).toBe(32);
+	expect(priorPacket.duration).toBe(0.09287981859410431);
+});
+
+test('should be able to get metadata-only packets', async () => {
+	const filePath = path.join(__dirname, '..', 'public/sample.flac');
+	const input = new Input({
+		source: new FilePathSource(filePath),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+	const packetSink = new EncodedPacketSink(track);
+
+	const packet = await packetSink.getPacket(10, { metadataOnly: true });
+	assert(packet);
+	expect(packet.timestamp).toBe(9.93814058956916);
+	expect(packet.data.byteLength).toBe(0);
+	expect(packet.sequenceNumber).toBe(107);
+	expect(packet.duration).toBe(0.09287981859410431);
+});
+
+test('should be able to get metadata', async () => {
+	const filePath = path.join(__dirname, '..', 'public/sample.flac');
+	const input = new Input({
+		source: new FilePathSource(filePath),
+		formats: ALL_FORMATS,
+	});
+
+	const descriptiveMetadata = await input.getMetadataTags();
+	expect(descriptiveMetadata).toEqual({
+		title: 'The Happy Meeting',
+		date: new Date('2020'),
+		album: 'Samples files',
+		artist: 'Samples Files',
+		trackNumber: 4,
+		genre: 'Ambient',
+	});
 });
