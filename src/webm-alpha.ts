@@ -14,7 +14,7 @@ import {
 	registerDecoder,
 	registerEncoder,
 } from './custom-coder';
-import { promiseWithResolvers } from './misc';
+import { promiseWithResolvers, assert } from './misc';
 import { EncodedPacket } from './packet';
 import { VideoSample } from './sample';
 
@@ -64,6 +64,7 @@ class Coder<T extends CoderType> {
 		}
 
 		await Promise.allSettled(promises);
+		assert(this.alphaOutputResolverMap.size === 0);
 	}
 
 	close() {
@@ -100,8 +101,8 @@ const combineAlpha = async (main: VideoFrame, alpha?: VideoFrame | null | void) 
 
 	const format = main.format || '';
 	const isYUV = format.startsWith('I');
-	const resultFormat = isYUV
-		? `${format.slice(0, 4)}A${format.slice(4, format.length)}` as VideoPixelFormat // e.g. I420AP12
+	const resultFormat = isYUV // For VP8/VP9, only alpha supported format is yuva420p, so only I420
+		? `${format.slice(0, 4)}A${format.slice(4, format.length)}` as VideoPixelFormat
 		: format.endsWith('X')
 			? `${format.slice(0, 3)}A` as VideoPixelFormat
 			: format;
@@ -248,14 +249,18 @@ const extractAlpha = async (videoSample: VideoSample) => {
 	const format = videoSample.format || '';
 
 	if (
-		!format.includes('A') // Chrome v139: HEVC with alpha might give null, but cannot copyTo anyway
+		// Chrome v139: HEVC with alpha might give null, if so, cannot copyTo without explicit format change to RGB
+		// But it is not supported in VideoSample.copyTo now, only in VideoFrame.copyTo
+		!format
+		|| !format.includes('A')
 		|| videoSample._closed
 		|| format.length > 5 // Not handling cases like I444AP12, not possible in browser now, will become null
 	) {
 		return {};
 	};
 
-	// RGB formats (like canvas) will get converted to 16-255 in browsers, and give broken result
+	// RGB formats (like canvas) will get converted to 16-255 in browsers for VP8/VP9 encoding
+	// Need to create I420 for alpha frame even for RGB format
 	const isYUV = format.startsWith('I') || format.startsWith('N');
 	const size = videoSample.allocationSize();
 	const data = new Uint8Array(size);
@@ -285,7 +290,8 @@ const extractAlpha = async (videoSample: VideoSample) => {
 			transfer: [alphaData.buffer],
 		} as VideoFrameBufferInit),
 		mainFrame: new VideoFrame(data, {
-			// Safari workaround: giving original I420A = broken color, fine to use generally
+			// Safari workaround: giving original I420A = broken color, fine to recreate I420 generally
+			// OK to have BGRX here but I420 above, these 2 frames are pass to 2 separate encoder
 			format: format.slice(0, 4),
 			timestamp: videoSample.microsecondTimestamp,
 			colorSpace: videoSample.colorSpace,

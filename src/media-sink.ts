@@ -1141,13 +1141,13 @@ export class CanvasSink {
 				canvas.height = this._height;
 			} else {
 				canvas = new OffscreenCanvas(this._width, this._height);
-
-				canvasIsNew = true;
 			}
 
 			if (this._canvasPool.length > 0) {
 				this._canvasPool[this._nextCanvasIndex] = canvas;
 			}
+
+			canvasIsNew = true;
 		}
 
 		if (this._canvasPool.length > 0) {
