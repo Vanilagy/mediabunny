@@ -10,11 +10,31 @@ import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
-import { assert, AsyncMutex, binarySearchExact, Bitstream, UNDETERMINED_LANGUAGE } from '../misc';
+import {
+	assert,
+	AsyncMutex,
+	binarySearchExact,
+	Bitstream,
+	UNDETERMINED_LANGUAGE,
+} from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
-import { FileSlice, readBytes, Reader, readU24Be, readU32Le, readU8 } from '../reader';
+import {
+	FileSlice,
+	readBytes,
+	Reader,
+	readU24Be,
+	readU32Le,
+	readU8,
+} from '../reader';
 import { MetadataTags } from '../tags';
-import { calculateCRC8, getBlockSize, getBlockSizeOrUncommon, getFlacCodedNumber, getSampleRate, getSampleRateOrUncommon } from './flac-misc';
+import {
+	calculateCRC8,
+	getBlockSize,
+	getBlockSizeOrUncommon,
+	getFlacCodedNumber,
+	getSampleRate,
+	getSampleRateOrUncommon,
+} from './flac-misc';
 
 type FlacAudioInfo = {
 	numberOfChannels: number;
@@ -126,7 +146,10 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 			}
 
 			const nextIndex = sampleIndex + 1;
-			if (this.demuxer.lastSampleLoaded && nextIndex >= this.demuxer.loadedSamples.length) {
+			if (
+				this.demuxer.lastSampleLoaded
+				&& nextIndex >= this.demuxer.loadedSamples.length
+			) {
 				return null;
 			}
 
@@ -167,7 +190,10 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 			if (options.metadataOnly) {
 				data = PLACEHOLDER_DATA;
 			} else {
-				let slice = this.demuxer.reader.requestSlice(rawSample.dataStart, rawSample.dataSize);
+				let slice = this.demuxer.reader.requestSlice(
+					rawSample.dataStart,
+					rawSample.dataSize,
+				);
 				if (slice instanceof Promise) slice = await slice;
 
 				if (!slice) {
@@ -294,8 +320,8 @@ export class FlacDemuxer extends Demuxer {
 		const crcCalculated = calculateCRC8(readBytes(slice, size));
 
 		if (crc !== crcCalculated) {
-		// Maybe this wasn't a FLAC frame at all, the syncword was just coincidentally
-		// in the bitstream
+			// Maybe this wasn't a FLAC frame at all, the syncword was just coincidentally
+			// in the bitstream
 			return null;
 		}
 
@@ -439,7 +465,10 @@ export class FlacDemuxer extends Demuxer {
 			) {
 				// Parse streaminfo block
 				// https://www.rfc-editor.org/rfc/rfc9639.html#section-8.2
-				const sizeSlice = await this.reader.requestSlice(currentPos, currentPos + 4);
+				const sizeSlice = await this.reader.requestSlice(
+					currentPos,
+					currentPos + 4,
+				);
 				if (!sizeSlice) return;
 
 				const byte = readU8(sizeSlice); // first bit: isLastMetadata, remaining 7 bits: metaBlockType
@@ -504,7 +533,10 @@ export class FlacDemuxer extends Demuxer {
 				} else if (metaBlockType === 4) {
 					// Parse vorbis comment block
 					// https://www.rfc-editor.org/rfc/rfc9639.html#name-vorbis-comment
-					const vorbisCommentBlock = await this.reader.requestSlice(currentPos, currentPos + size);
+					const vorbisCommentBlock = await this.reader.requestSlice(
+						currentPos,
+						currentPos + size,
+					);
 					currentPos += size;
 					if (!vorbisCommentBlock) return;
 					const vendorLength = readU32Le(vorbisCommentBlock);
