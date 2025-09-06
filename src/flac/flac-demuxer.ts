@@ -13,7 +13,6 @@ import { PacketRetrievalOptions } from '../media-sink';
 import {
 	assert,
 	AsyncMutex,
-	binarySearchExact,
 	Bitstream,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
@@ -52,6 +51,7 @@ type Sample = {
 	blockOffset: number;
 	blockSize: number;
 	byteOffset: number;
+	byteSize: number;
 };
 
 type NextFlacFrameResult = {
@@ -122,11 +122,32 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		});
 	}
 
-	getPacket(
+	async getPacket(
 		timestamp: number,
 		options: PacketRetrievalOptions,
 	): Promise<EncodedPacket | null> {
-		throw new Error('TODO: getPacket() not implemented');
+		assert(this.demuxer.audioInfo);
+		if (timestamp < 0) {
+			throw new Error('Timestamp cannot be negative');
+		}
+
+		let index = 0;
+
+		for (const sample of this.demuxer.loadedSamples) {
+			const sampleTimestamp = sample.blockOffset / this.demuxer.audioInfo.sampleRate;
+			const sampleDuration = sample.blockSize / this.demuxer.audioInfo.sampleRate;
+			if (sampleTimestamp <= timestamp && sampleTimestamp + sampleDuration > timestamp) {
+				return this.getPacketAtIndex(index, options);
+			}
+			index++;
+		}
+
+		if (this.demuxer.lastSampleLoaded) {
+			return this.getPacketAtIndex(this.demuxer.loadedSamples.length - 1, options);
+		}
+
+		await this.demuxer.advanceReader();
+		return this.getPacket(timestamp, options);
 	}
 
 	async getNextPacket(
@@ -186,14 +207,14 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		} else {
 			const slice = await this.demuxer.reader.requestSlice(
 				rawSample.byteOffset,
-				rawSample.blockSize,
+				rawSample.byteSize,
 			);
 
 			if (!slice) {
 				return null; // Data didn't fit into the rest of the file
 			}
 
-			data = readBytes(slice, rawSample.blockSize);
+			data = readBytes(slice, rawSample.byteSize);
 		}
 
 		assert(this.demuxer.audioInfo);
@@ -205,7 +226,7 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 			timestamp,
 			duration,
 			sampleIndex,
-			rawSample.blockSize,
+			rawSample.byteSize,
 		);
 	}
 
@@ -253,12 +274,10 @@ export class FlacDemuxer extends Demuxer {
 
 	readFlacFrameHeader = ({
 		slice,
-		blockingBit,
-		firstPacket,
+		isFirstPacket,
 	}: {
 		slice: FileSlice;
-		blockingBit: number | undefined;
-		firstPacket: boolean;
+		isFirstPacket: boolean;
 	}) => {
 		const startOffset = slice.filePos;
 
@@ -274,16 +293,16 @@ export class FlacDemuxer extends Demuxer {
 			throw new Error('Invalid sync code');
 		}
 
-		if (blockingBit === undefined) {
-			assert(firstPacket);
+		if (this.blockingBit === undefined) {
+			assert(isFirstPacket);
 			const newBlockingBit = bitStream.readBits(1);
 			this.blockingBit = newBlockingBit;
-		} else if (blockingBit === 1) {
-			assert(!firstPacket);
+		} else if (this.blockingBit === 1) {
+			assert(!isFirstPacket);
 			const newBlockingBit = bitStream.readBits(1);
 			assert(newBlockingBit === 1);
-		} else if (blockingBit === 0) {
-			assert(!firstPacket);
+		} else if (this.blockingBit === 0) {
+			assert(!isFirstPacket);
 			const newBlockingBit = bitStream.readBits(1);
 			assert(newBlockingBit === 0);
 		} else {
@@ -322,12 +341,10 @@ export class FlacDemuxer extends Demuxer {
 
 	readNextFlacFrame = async ({
 		startPos,
-		firstPacket,
-		blockingBit,
+		isFirstPacket,
 	}: {
 		startPos: number;
-		firstPacket: boolean;
-		blockingBit: number | undefined;
+		isFirstPacket: boolean;
 	}): Promise<NextFlacFrameResult | null> => {
 		assert(this.audioInfo);
 		// Also want to validate the next header is valid
@@ -340,13 +357,12 @@ export class FlacDemuxer extends Demuxer {
 			return null;
 		}
 
-		const a = this.readFlacFrameHeader({
+		const frameHeader = this.readFlacFrameHeader({
 			slice,
-			blockingBit,
-			firstPacket,
+			isFirstPacket: isFirstPacket,
 		});
 
-		if (!a) {
+		if (!frameHeader) {
 			return null;
 		}
 
@@ -362,9 +378,9 @@ export class FlacDemuxer extends Demuxer {
 			// Reached end of the file, packet is over
 			if (slice.filePos >= slice.end) {
 				return {
-					num: a.num,
-					blockSize: a.blockSize,
-					sampleRate: a.sampleRate,
+					num: frameHeader.num,
+					blockSize: frameHeader.blockSize,
+					sampleRate: frameHeader.sampleRate,
 					size: slice.end - startPos,
 					isLastFrame: true,
 				};
@@ -374,7 +390,7 @@ export class FlacDemuxer extends Demuxer {
 			if (nextBits === 0xff) {
 				const nextBits = readU8(slice);
 
-				const expected = blockingBit === 1 ? 0b1111_1001 : 0b1111_1000;
+				const expected = this.blockingBit === 1 ? 0b1111_1001 : 0b1111_1000;
 				if (nextBits !== expected) {
 					slice.bufferPos -= 1;
 					continue;
@@ -385,8 +401,7 @@ export class FlacDemuxer extends Demuxer {
 
 				const nextIsLegit = this.readFlacFrameHeader({
 					slice,
-					blockingBit,
-					firstPacket,
+					isFirstPacket: false,
 				});
 
 				if (!nextIsLegit) {
@@ -395,9 +410,9 @@ export class FlacDemuxer extends Demuxer {
 				}
 
 				return {
-					num: a.num,
-					blockSize: a.blockSize,
-					sampleRate: a.sampleRate,
+					num: frameHeader.num,
+					blockSize: frameHeader.blockSize,
+					sampleRate: frameHeader.sampleRate,
 					size: lengthIfNextFlacFrameHeaderIsLegit,
 					isLastFrame: false,
 				};
@@ -410,13 +425,12 @@ export class FlacDemuxer extends Demuxer {
 		assert(this.lastLoadedPos !== null);
 		assert(this.audioInfo);
 		const startPos = this.lastLoadedPos;
-		const result = await this.readNextFlacFrame({
+		const frame = await this.readNextFlacFrame({
 			startPos,
-			firstPacket: this.loadedSamples.length === 0,
-			blockingBit: this.blockingBit,
+			isFirstPacket: this.loadedSamples.length === 0,
 		});
 
-		if (!result) {
+		if (!frame) {
 			throw new Error('Failed to read next FLAC frame');
 		}
 
@@ -429,14 +443,15 @@ export class FlacDemuxer extends Demuxer {
 
 		const sample: Sample = {
 			blockOffset,
-			blockSize: result.blockSize,
+			blockSize: frame.blockSize,
 			byteOffset: startPos,
+			byteSize: frame.size,
 		};
 
-		this.lastLoadedPos = this.lastLoadedPos + result.size;
+		this.lastLoadedPos = this.lastLoadedPos + frame.size;
 		this.loadedSamples.push(sample);
 
-		if (result?.isLastFrame) {
+		if (frame.isLastFrame) {
 			this.lastSampleLoaded = true;
 			return;
 		}

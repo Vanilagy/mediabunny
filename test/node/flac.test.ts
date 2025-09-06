@@ -48,6 +48,7 @@ test('Should be able to get metadata and packets from a .FLAC file', async () =>
 		samples++;
 		lastSampleTimestamp = sample.timestamp;
 		if (sample.sequenceNumber === 212) {
+			// Last frame is a bit shorter
 			expect(sample.duration).toEqual(0.023764172335600908);
 		} else {
 			expect(sample.duration).toEqual(0.09287981859410431);
