@@ -13,7 +13,10 @@ import {
 	TRANSFER_CHARACTERISTICS_MAP,
 	UNDETERMINED_LANGUAGE,
 	assert,
+	assertNever,
 	colorSpaceIsComplete,
+	imageMimeTypeToExtension,
+	keyValueIterator,
 	normalizeRotation,
 	promiseWithResolvers,
 	roundToMultiple,
@@ -62,7 +65,7 @@ import { parseOpusIdentificationHeader } from '../codec-data';
 
 const MIN_CLUSTER_TIMESTAMP_MS = -(2 ** 15);
 const MAX_CLUSTER_TIMESTAMP_MS = 2 ** 15 - 1;
-const APP_NAME = 'https://github.com/Vanilagy/mediabunny';
+const APP_NAME = 'Mediabunny';
 const SEGMENT_SIZE_BYTES = 6;
 const CLUSTER_SIZE_BYTES = 5;
 
@@ -72,22 +75,6 @@ type InternalMediaChunk = {
 	timestamp: number;
 	duration: number;
 	additions: Uint8Array | null;
-};
-
-type SeekHead = {
-	id: number;
-	data: {
-		id: number;
-		data: ({
-			id: number;
-			data: Uint8Array;
-			size?: undefined;
-		} | {
-			id: number;
-			size: number;
-			data: number;
-		})[];
-	}[];
 };
 
 type MatroskaTrackData = {
@@ -137,8 +124,10 @@ export class MatroskaMuxer extends Muxer {
 
 	private segment: EBMLElement | null = null;
 	private segmentInfo: EBMLElement | null = null;
-	private seekHead: SeekHead | null = null;
+	private seekHead: EBMLElement | null = null;
 	private tracksElement: EBMLElement | null = null;
+	private tagsElement: EBMLElement | null = null;
+	private attachmentsElement: EBMLElement | null = null;
 	private segmentDuration: EBMLElement | null = null;
 	private cues: EBMLElement | null = null;
 
@@ -168,10 +157,6 @@ export class MatroskaMuxer extends Muxer {
 		const release = await this.mutex.acquire();
 
 		this.writeEBMLHeader();
-
-		if (!this.format._options.appendOnly) {
-			this.createSeekHead();
-		}
 
 		this.createSegmentInfo();
 		this.createCues();
@@ -207,24 +192,72 @@ export class MatroskaMuxer extends Muxer {
 	 * Creates a SeekHead element which is positioned near the start of the file and allows the media player to seek to
 	 * relevant sections more easily. Since we don't know the positions of those sections yet, we'll set them later.
 	 */
-	private createSeekHead() {
+	private maybeCreateSeekHead(writeOffsets: boolean) {
+		if (this.format._options.appendOnly) {
+			return;
+		}
+
 		const kaxCues = new Uint8Array([0x1c, 0x53, 0xbb, 0x6b]);
 		const kaxInfo = new Uint8Array([0x15, 0x49, 0xa9, 0x66]);
 		const kaxTracks = new Uint8Array([0x16, 0x54, 0xae, 0x6b]);
+		const kaxAttachments = new Uint8Array([0x19, 0x41, 0xa4, 0x69]);
+		const kaxTags = new Uint8Array([0x12, 0x54, 0xc3, 0x67]);
 
 		const seekHead = { id: EBMLId.SeekHead, data: [
 			{ id: EBMLId.Seek, data: [
 				{ id: EBMLId.SeekID, data: kaxCues },
-				{ id: EBMLId.SeekPosition, size: 5, data: 0 },
+				{
+					id: EBMLId.SeekPosition,
+					size: 5,
+					data: writeOffsets
+						? this.ebmlWriter.offsets.get(this.cues!)! - this.segmentDataOffset
+						: 0,
+				},
 			] },
 			{ id: EBMLId.Seek, data: [
 				{ id: EBMLId.SeekID, data: kaxInfo },
-				{ id: EBMLId.SeekPosition, size: 5, data: 0 },
+				{
+					id: EBMLId.SeekPosition,
+					size: 5,
+					data: writeOffsets
+						? this.ebmlWriter.offsets.get(this.segmentInfo!)! - this.segmentDataOffset
+						: 0,
+				},
 			] },
 			{ id: EBMLId.Seek, data: [
 				{ id: EBMLId.SeekID, data: kaxTracks },
-				{ id: EBMLId.SeekPosition, size: 5, data: 0 },
+				{
+					id: EBMLId.SeekPosition,
+					size: 5,
+					data: writeOffsets
+						? this.ebmlWriter.offsets.get(this.tracksElement!)! - this.segmentDataOffset
+						: 0,
+				},
 			] },
+			this.attachmentsElement
+				? { id: EBMLId.Seek, data: [
+						{ id: EBMLId.SeekID, data: kaxAttachments },
+						{
+							id: EBMLId.SeekPosition,
+							size: 5,
+							data: writeOffsets
+								? this.ebmlWriter.offsets.get(this.attachmentsElement)! - this.segmentDataOffset
+								: 0,
+						},
+					] }
+				: null,
+			this.tagsElement
+				? { id: EBMLId.Seek, data: [
+						{ id: EBMLId.SeekID, data: kaxTags },
+						{
+							id: EBMLId.SeekPosition,
+							size: 5,
+							data: writeOffsets
+								? this.ebmlWriter.offsets.get(this.tagsElement)! - this.segmentDataOffset
+								: 0,
+						},
+					] }
+				: null,
 		] };
 		this.seekHead = seekHead;
 	}
@@ -379,14 +412,187 @@ export class MatroskaMuxer extends Muxer {
 		];
 	}
 
+	private maybeCreateTags() {
+		const simpleTags: EBMLElement[] = [];
+
+		const addSimpleTag = (key: string, value: string | Uint8Array) => {
+			simpleTags.push({ id: EBMLId.SimpleTag, data: [
+				{ id: EBMLId.TagName, data: new EBMLUnicodeString(key) },
+				typeof value === 'string'
+					? { id: EBMLId.TagString, data: new EBMLUnicodeString(value) }
+					: { id: EBMLId.TagBinary, data: value },
+			] });
+		};
+
+		const metadataTags = this.output._metadataTags;
+		const writtenTags = new Set<string>();
+
+		for (const { key, value } of keyValueIterator(metadataTags)) {
+			switch (key) {
+				case 'title': {
+					addSimpleTag('TITLE', value);
+					writtenTags.add('TITLE');
+				}; break;
+
+				case 'description': {
+					addSimpleTag('DESCRIPTION', value);
+					writtenTags.add('DESCRIPTION');
+				}; break;
+
+				case 'artist': {
+					addSimpleTag('ARTIST', value);
+					writtenTags.add('ARTIST');
+				}; break;
+
+				case 'album': {
+					addSimpleTag('ALBUM', value);
+					writtenTags.add('ALBUM');
+				}; break;
+
+				case 'albumArtist': {
+					addSimpleTag('ALBUM_ARTIST', value);
+					writtenTags.add('ALBUM_ARTIST');
+				}; break;
+
+				case 'genre': {
+					addSimpleTag('GENRE', value);
+					writtenTags.add('GENRE');
+				}; break;
+
+				case 'comment': {
+					addSimpleTag('COMMENT', value);
+					writtenTags.add('COMMENT');
+				}; break;
+
+				case 'lyrics': {
+					addSimpleTag('LYRICS', value);
+					writtenTags.add('LYRICS');
+				}; break;
+
+				case 'date': {
+					addSimpleTag('DATE', value.toISOString().slice(0, 10));
+					writtenTags.add('DATE');
+				}; break;
+
+				case 'trackNumber': {
+					const string = metadataTags.tracksTotal !== undefined
+						? `${value}/${metadataTags.tracksTotal}`
+						: value.toString();
+
+					addSimpleTag('PART_NUMBER', string);
+					writtenTags.add('PART_NUMBER');
+				}; break;
+
+				case 'discNumber': {
+					const string = metadataTags.discsTotal !== undefined
+						? `${value}/${metadataTags.discsTotal}`
+						: value.toString();
+
+					addSimpleTag('DISC', string);
+					writtenTags.add('DISC');
+				}; break;
+
+				case 'tracksTotal':
+				case 'discsTotal': {
+					// Handled with trackNumber and discNumber respectively
+				}; break;
+
+				case 'images':
+				case 'raw': {
+					// Handled elsewhere
+				}; break;
+
+				default: assertNever(key);
+			}
+		}
+
+		if (metadataTags.raw) {
+			for (const key in metadataTags.raw) {
+				const value = metadataTags.raw[key]!;
+				if (value == null || writtenTags.has(key)) {
+					continue;
+				}
+
+				if (typeof value === 'string' || value instanceof Uint8Array) {
+					addSimpleTag(key, value);
+				}
+			}
+		}
+
+		if (simpleTags.length === 0) {
+			return;
+		}
+
+		this.tagsElement = {
+			id: EBMLId.Tags,
+			data: [{ id: EBMLId.Tag, data: [
+				{ id: EBMLId.Targets, data: [
+					{ id: EBMLId.TargetTypeValue, data: 50 },
+					{ id: EBMLId.TargetType, data: 'MOVIE' },
+				] },
+				...simpleTags,
+			] }],
+		};
+	}
+
+	private maybeCreateAttachments() {
+		const metadataTags = this.output._metadataTags;
+		if (!metadataTags.images || metadataTags.images.length === 0) {
+			return;
+		}
+
+		const existingFileUids = new Set<number>();
+
+		this.attachmentsElement = { id: EBMLId.Attachments, data: metadataTags.images.map((image): EBMLElement => {
+			let imageName = image.name;
+			if (imageName === undefined) {
+				const baseName = image.kind === 'coverFront' ? 'cover' : image.kind === 'coverBack' ? 'back' : 'image';
+				imageName = baseName + (imageMimeTypeToExtension(image.mimeType) ?? '');
+			}
+
+			let fileUid: number;
+			while (true) {
+				fileUid = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
+
+				if (fileUid !== 0 && !existingFileUids.has(fileUid)) {
+					break;
+				}
+			}
+
+			existingFileUids.add(fileUid);
+
+			return {
+				id: EBMLId.AttachedFile,
+				data: [
+					image.description !== undefined
+						? { id: EBMLId.FileDescription, data: new EBMLUnicodeString(image.description) }
+						: null,
+					{ id: EBMLId.FileName, data: new EBMLUnicodeString(imageName) },
+					{ id: EBMLId.FileMediaType, data: image.mimeType },
+					{ id: EBMLId.FileData, data: image.data },
+					{ id: EBMLId.FileUID, data: fileUid },
+				],
+			};
+		}) };
+	}
+
 	private createSegment() {
+		this.createTracks();
+		this.maybeCreateTags();
+		this.maybeCreateAttachments();
+		this.maybeCreateSeekHead(false);
+
 		const segment: EBML = {
 			id: EBMLId.Segment,
 			size: this.format._options.appendOnly ? -1 : SEGMENT_SIZE_BYTES,
 			data: [
-				!this.format._options.appendOnly ? this.seekHead as EBML : null,
+				this.seekHead, // null if append-only
 				this.segmentInfo,
 				this.tracksElement,
+				// Matroska spec says put this at the end of the file, but I think placing it before the first cluster
+				// makes more sense, and FFmpeg agrees (argumentum ad ffmpegum fallacy)
+				this.attachmentsElement,
+				this.tagsElement,
 			],
 		};
 		this.segment = segment;
@@ -754,7 +960,6 @@ export class MatroskaMuxer extends Muxer {
 	private writeBlock(trackData: MatroskaTrackData, chunk: InternalMediaChunk) {
 		// Due to the interlacing algorithm, this code will be run once we've seen one chunk from every media track.
 		if (!this.segment) {
-			this.createTracks();
 			this.createSegment();
 		}
 
@@ -956,7 +1161,6 @@ export class MatroskaMuxer extends Muxer {
 		this.allTracksKnown.resolve();
 
 		if (!this.segment) {
-			this.createTracks();
 			this.createSegment();
 		}
 
@@ -984,14 +1188,9 @@ export class MatroskaMuxer extends Muxer {
 			this.ebmlWriter.writeEBML(this.segmentDuration);
 
 			// Fill in SeekHead position data and write it again
-			this.seekHead!.data[0]!.data[1]!.data
-				= this.ebmlWriter.offsets.get(this.cues)! - this.segmentDataOffset;
-			this.seekHead!.data[1]!.data[1]!.data
-				= this.ebmlWriter.offsets.get(this.segmentInfo!)! - this.segmentDataOffset;
-			this.seekHead!.data[2]!.data[1]!.data
-				= this.ebmlWriter.offsets.get(this.tracksElement!)! - this.segmentDataOffset;
-
-			this.writer.seek(this.ebmlWriter.offsets.get(this.seekHead!)!);
+			assert(this.seekHead);
+			this.writer.seek(this.ebmlWriter.offsets.get(this.seekHead)!);
+			this.maybeCreateSeekHead(true);
 			this.ebmlWriter.writeEBML(this.seekHead);
 
 			this.writer.seek(endPos);

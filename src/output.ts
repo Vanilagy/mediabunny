@@ -7,6 +7,7 @@
  */
 
 import { AsyncMutex, isIso639Dash2LanguageCode, Rotation } from './misc';
+import { MetadataTags, validateMetadataTags } from './tags';
 import { Muxer } from './muxer';
 import { OutputFormat } from './output-format';
 import { AudioSource, MediaSource, SubtitleSource, VideoSource } from './media-source';
@@ -145,6 +146,8 @@ export class Output<
 	_finalizePromise: Promise<void> | null = null;
 	/** @internal */
 	_mutex = new AsyncMutex();
+	/** @internal */
+	_metadataTags: MetadataTags = {};
 
 	/**
 	 * Creates a new instance of {@link Output} which can then be used to create a new media file according to the
@@ -215,6 +218,22 @@ export class Output<
 		validateBaseTrackMetadata(metadata);
 
 		this._addTrack('subtitle', source, metadata);
+	}
+
+	/**
+	 * Sets descriptive metadata tags about the media file, such as title, author, date, or cover art. When called
+	 * multiple times, only the metadata from the last call will be used.
+	 *
+	 * Must be called before output is started.
+	 */
+	setMetadataTags(tags: MetadataTags) {
+		validateMetadataTags(tags);
+
+		if (this.state !== 'pending') {
+			throw new Error('Cannot set metadata tags after output has been started or canceled.');
+		}
+
+		this._metadataTags = tags;
 	}
 
 	/** @internal */

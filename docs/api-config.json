@@ -13,6 +13,7 @@
     "Media sinks": "Methods for extracting media data from input files.",
     "Media sources": "Methods for adding media data to output files.",
     "Conversion": "A simple API for converting and transforming media files.",
+	"Metadata tags": "Descriptive metadata tags attached to media files.",
     "Codecs": "Codecs understood by Mediabunny.",
     "Encoding": "Encoder configuration and encodability checks.",
     "Custom coders": "API for adding custom encoders and decoders.",

@@ -283,6 +283,44 @@ In this case, the output will be 15 seconds long.
 
 If only `start` is set, the clip will run until the end of the input file. If only `end` is set, the clip will start at the beginning of the input file.
 
+## Metadata tags
+
+By default, any [descriptive metadata tags](../api/MetadataTags.md) of the input will be copied to the output. If you want to further control the metadata tags written to the output, you can use the `tags` options:
+
+```ts
+// Set your own metadata:
+const conversion = await Conversion.init({
+	// ...
+	tags: () => ({
+		title: 're:Turning',
+		artist: 'Alexander Panos',
+	}),
+	// ...
+});
+
+// Or, augment the input's metadata:
+const conversion = await Conversion.init({
+	// ...
+	tags: inputTags => ({
+		...inputTags, // Keep the existing metadata
+		images: [{ // And add cover art
+			data: new Uint8Array(...),
+			mimeType: 'image/jpeg',
+			kind: 'coverFront',
+		}],
+		comment: undefined, // And remove any comments
+	}),
+	// ...
+});
+
+// Or, remove all metadata
+const conversion = await Conversion.init({
+	// ...
+	tags: () => ({}),
+	// ...
+});
+```
+
 ## Discarded tracks
 
 If an input track is excluded from the output file, it is considered *discarded*. The list of discarded tracks can be accessed after initializing a `Conversion`:

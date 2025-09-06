@@ -158,3 +158,32 @@ export const readFrameHeader = (word: number, remainingBytes: number | null): {
 		bytesAdvanced: 1,
 	};
 };
+
+export const encodeSynchsafe = (unsynchsafed: number) => {
+	let mask = 0x7f;
+	let synchsafed = 0;
+	let unsynchsafedRest = unsynchsafed;
+
+	while ((mask ^ 0x7fffffff) !== 0) {
+		synchsafed = unsynchsafedRest & ~mask;
+		synchsafed <<= 1;
+		synchsafed |= unsynchsafedRest & mask;
+		mask = ((mask + 1) << 8) - 1;
+		unsynchsafedRest = synchsafed;
+	}
+
+	return synchsafed;
+};
+
+export const decodeSynchsafe = (synchsafed: number) => {
+	let mask = 0x7f000000;
+	let unsynchsafed = 0;
+
+	while (mask !== 0) {
+		unsynchsafed >>= 1;
+		unsynchsafed |= synchsafed & mask;
+		mask >>= 8;
+	}
+
+	return unsynchsafed;
+};

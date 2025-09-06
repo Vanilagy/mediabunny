@@ -177,6 +177,17 @@ export const toDataView = (source: AllowSharedBufferSource) => {
 export const textDecoder = new TextDecoder();
 export const textEncoder = new TextEncoder();
 
+export const isIso88591Compatible = (text: string) => {
+	for (let i = 0; i < text.length; i++) {
+		const code = text.charCodeAt(i);
+		if (code > 255) {
+			return false;
+		}
+	}
+
+	return true;
+};
+
 const invertObject = <K extends PropertyKey, V extends PropertyKey>(object: Record<K, V>) => {
 	return Object.fromEntries(Object.entries(object).map(([key, value]) => [value, key])) as Record<V, K>;
 };
@@ -638,6 +649,77 @@ export const isSafari = () => {
  */
 export type MaybePromise<T> = T | Promise<T>;
 
+/** Acts like `??` except the condition is -1 and not null/undefined. */
+export const coalesceIndex = (a: number, b: number) => {
+	return a !== -1 ? a : b;
+};
+
 export const closedIntervalsOverlap = (startA: number, endA: number, startB: number, endB: number) => {
 	return startA <= endB && startB <= endA;
+};
+
+type KeyValuePair<T extends Record<string, unknown>> = {
+	[K in keyof T]-?: {
+		key: K;
+		value: T[K] extends infer R | undefined ? R : T[K];
+	}
+}[keyof T];
+
+export const keyValueIterator = function* <T extends Record<string, unknown>>(object: T) {
+	for (const key in object) {
+		const value = object[key];
+		if (value === undefined) {
+			continue;
+		}
+
+		yield { key, value } as KeyValuePair<T>;
+	}
+};
+
+export const imageMimeTypeToExtension = (mimeType: string) => {
+	switch (mimeType.toLowerCase()) {
+		case 'image/jpeg':
+		case 'image/jpg':
+			return '.jpg';
+		case 'image/png':
+			return '.png';
+		case 'image/gif':
+			return '.gif';
+		case 'image/webp':
+			return '.webp';
+		case 'image/bmp':
+			return '.bmp';
+		case 'image/svg+xml':
+			return '.svg';
+		case 'image/tiff':
+			return '.tiff';
+		case 'image/avif':
+			return '.avif';
+		case 'image/x-icon':
+		case 'image/vnd.microsoft.icon':
+			return '.ico';
+		default:
+			return null;
+	}
+};
+
+export const base64ToBytes = (base64: string) => {
+	const decoded = atob(base64);
+	const bytes = new Uint8Array(decoded.length);
+
+	for (let i = 0; i < decoded.length; i++) {
+		bytes[i] = decoded.charCodeAt(i);
+	}
+
+	return bytes;
+};
+
+export const bytesToBase64 = (bytes: Uint8Array) => {
+	let string = '';
+
+	for (let i = 0; i < bytes.length; i++) {
+		string += String.fromCharCode(bytes[i]!);
+	}
+
+	return btoa(string);
 };

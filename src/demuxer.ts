@@ -8,6 +8,7 @@
 
 import { Input } from './input';
 import { InputTrack } from './input-track';
+import { MetadataTags } from './tags';
 
 export abstract class Demuxer {
 	input: Input;
@@ -19,4 +20,5 @@ export abstract class Demuxer {
 	abstract computeDuration(): Promise<number>;
 	abstract getTracks(): Promise<InputTrack[]>;
 	abstract getMimeType(): Promise<string>;
+	abstract getMetadataTags(): Promise<MetadataTags>;
 }

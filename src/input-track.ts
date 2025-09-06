@@ -258,7 +258,8 @@ export class InputVideoTrack extends InputTrack {
 
 	/**
 	 * Returns the [decoder configuration](https://www.w3.org/TR/webcodecs/#video-decoder-config) for decoding the
-	 * track's packets using a VideoDecoder. Returns null if the track's codec is unknown.
+	 * track's packets using a [`VideoDecoder`](https://developer.mozilla.org/en-US/docs/Web/API/VideoDecoder). Returns
+	 * null if the track's codec is unknown.
 	 */
 	getDecoderConfig() {
 		return this._backing.getDecoderConfig();
@@ -354,7 +355,8 @@ export class InputAudioTrack extends InputTrack {
 
 	/**
 	 * Returns the [decoder configuration](https://www.w3.org/TR/webcodecs/#audio-decoder-config) for decoding the
-	 * track's packets using an AudioDecoder. Returns null if the track's codec is unknown.
+	 * track's packets using an [`AudioDecoder`](https://developer.mozilla.org/en-US/docs/Web/API/AudioDecoder). Returns
+	 * null if the track's codec is unknown.
 	 */
 	getDecoderConfig() {
 		return this._backing.getDecoderConfig();

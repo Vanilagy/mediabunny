@@ -57,6 +57,7 @@ import {
 	TransformationMatrix,
 	TRANSFER_CHARACTERISTICS_MAP_INVERSE,
 	UNDETERMINED_LANGUAGE,
+	toDataView,
 } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { buildIsobmffMimeType } from './isobmff-misc';
@@ -64,9 +65,11 @@ import {
 	MAX_BOX_HEADER_SIZE,
 	MIN_BOX_HEADER_SIZE,
 	readBoxHeader,
+	readDataBox,
 	readFixed_16_16,
 	readFixed_2_30,
 	readIsomVariableInteger,
+	readMetadataStringShort,
 } from './isobmff-reader';
 import {
 	FileSlice,
@@ -83,6 +86,20 @@ import {
 	readU8,
 	readAscii,
 } from '../reader';
+import { MetadataTags, RichImageData } from '../tags';
+
+// https://exiftool.org/TagNames/QuickTime.html
+const UDTA_STRING_KEYS = new Set([
+	'@day', '@mak', '@mod', '@swr', '@xyz', 'CAME', 'CNCV', 'CNFV', 'CNMN', 'FIRM', 'FOV\0', 'GoPr', 'LENS', 'PXMN',
+	'SIGM', 'SNum', 'TAGS', 'albm', 'albr', 'angl', 'auth', 'ccid', 'cdis', 'clfn', 'clid', 'clsf', 'cmid', 'cmnm',
+	'coll', 'cprt', 'cver', 'cvru', 'date', 'dscp', 'fsid', 'gnre', 'hinv', 'icnu', 'info', 'infu', 'kgtt', 'loci',
+	'lrcu', 'mcvr', 'name', 'perf', 'pmcc', 'reel', 'rtng', 'scen', 'shot', 'slno', 'thmb', 'titl', 'tnam', 'urat',
+	'uuid', 'vndr', 'yrrc', '©ART', '©TIM', '©TSC', '©TSZ', '©alb', '©arg', '©ark', '©cmt', '©cok', '©com', '©cpy',
+	'©day', '©dir', '©ed1', '©ed2', '©ed3', '©ed4', '©ed5', '©ed6', '©ed7', '©ed8', '©ed9', '©enc', '©fmt', '©fpt',
+	'©frl', '©fyw', '©gen', '©gpt', '©grl', '©grp', '©gyw', '©inf', '©isr', '©lab', '©lal', '©lyr', '©mak', '©mal',
+	'©mdl', '©mod', '©nam', '©pdk', '©phg', '©prd', '©prf', '©prk', '©prl', '©req', '©snk', '©snm', '©src', '©swf',
+	'©swk', '©swr', '©too', '©trk', '©wrt', '©xsp', '©xyz', '©ysp', '©zsp',
+]);
 
 type InternalTrack = {
 	id: number;
@@ -232,6 +249,8 @@ export class IsobmffDemuxer extends Demuxer {
 	movieTimescale = -1;
 	movieDurationInTimescale = -1;
 	isQuickTime = false;
+	metadataTags: MetadataTags = {};
+	currentMetadataKeys: Map<number, string> | null = null;
 
 	isFragmented = false;
 	fragmentTrackDefaults: FragmentTrackDefaults[] = [];
@@ -267,6 +286,11 @@ export class IsobmffDemuxer extends Demuxer {
 			hasAudio: this.tracks.some(x => x.info?.type === 'audio'),
 			codecStrings: codecStrings.filter(Boolean) as string[],
 		});
+	}
+
+	async getMetadataTags() {
+		await this.readMetadata();
+		return this.metadataTags;
 	}
 
 	readMetadata() {
@@ -605,6 +629,22 @@ export class IsobmffDemuxer extends Demuxer {
 		}
 	}
 
+	// eslint-disable-next-line @stylistic/generator-star-spacing
+	*iterateContiguousBoxes(slice: FileSlice) {
+		const startIndex = slice.filePos;
+
+		while (slice.filePos - startIndex <= slice.length - MIN_BOX_HEADER_SIZE) {
+			const startPos = slice.filePos;
+			const boxInfo = readBoxHeader(slice);
+			if (!boxInfo) {
+				break;
+			}
+
+			yield { boxInfo, slice };
+			slice.filePos = startPos + boxInfo.totalSize;
+		}
+	}
+
 	traverseBox(slice: FileSlice): boolean {
 		const startPos = slice.filePos;
 		const boxInfo = readBoxHeader(slice);
@@ -620,8 +660,7 @@ export class IsobmffDemuxer extends Demuxer {
 			case 'minf':
 			case 'dinf':
 			case 'mfra':
-			case 'edts':
-			case 'udta': {
+			case 'edts': {
 				this.readContiguousBoxes(slice.slice(contentStartPos, boxInfo.contentSize));
 			}; break;
 
@@ -683,7 +722,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'tkhd': {
 				const track = this.currentTrack;
-				assert(track);
+				if (!track) {
+					break;
+				}
 
 				const version = readU8(slice);
 				const flags = readU24Be(slice);
@@ -729,7 +770,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'elst': {
 				const track = this.currentTrack;
-				assert(track);
+				if (!track) {
+					break;
+				}
 
 				const version = readU8(slice);
 				slice.skip(3); // Flags
@@ -777,7 +820,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'mdhd': {
 				const track = this.currentTrack;
-				assert(track);
+				if (!track) {
+					break;
+				}
 
 				const version = readU8(slice);
 				slice.skip(3); // Flags
@@ -811,7 +856,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'hdlr': {
 				const track = this.currentTrack;
-				assert(track);
+				if (!track) {
+					break;
+				}
 
 				slice.skip(8); // Version + flags + pre-defined
 				const handlerType = readAscii(slice, 4);
@@ -843,7 +890,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'stbl': {
 				const track = this.currentTrack;
-				assert(track);
+				if (!track) {
+					break;
+				}
 
 				track.sampleTableByteOffset = startPos;
 
@@ -852,7 +901,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'stsd': {
 				const track = this.currentTrack;
-				assert(track);
+				if (!track) {
+					break;
+				}
 
 				if (track.info === null || track.sampleTable) {
 					break;
@@ -1048,21 +1099,30 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'avcC': {
 				const track = this.currentTrack;
-				assert(track && track.info);
+				if (!track) {
+					break;
+				}
+				assert(track.info);
 
 				track.info.codecDescription = readBytes(slice, boxInfo.contentSize);
 			}; break;
 
 			case 'hvcC': {
 				const track = this.currentTrack;
-				assert(track && track.info);
+				if (!track) {
+					break;
+				}
+				assert(track.info);
 
 				track.info.codecDescription = readBytes(slice, boxInfo.contentSize);
 			}; break;
 
 			case 'vpcC': {
 				const track = this.currentTrack;
-				assert(track && track.info?.type === 'video');
+				if (!track) {
+					break;
+				}
+				assert(track.info?.type === 'video');
 
 				slice.skip(4); // Version + flags
 
@@ -1090,7 +1150,10 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'av1C': {
 				const track = this.currentTrack;
-				assert(track && track.info?.type === 'video');
+				if (!track) {
+					break;
+				}
+				assert(track.info?.type === 'video');
 
 				slice.skip(1); // Marker + version
 
@@ -1124,7 +1187,10 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'colr': {
 				const track = this.currentTrack;
-				assert(track && track.info?.type === 'video');
+				if (!track) {
+					break;
+				}
+				assert(track.info?.type === 'video');
 
 				const colourType = readAscii(slice, 4);
 				if (colourType !== 'nclx') {
@@ -1150,7 +1216,10 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'esds': {
 				const track = this.currentTrack;
-				assert(track && track.info?.type === 'audio');
+				if (!track) {
+					break;
+				}
+				assert(track.info?.type === 'audio');
 
 				slice.skip(4); // Version + flags
 
@@ -1224,7 +1293,10 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'enda': {
 				const track = this.currentTrack;
-				assert(track && track.info?.type === 'audio');
+				if (!track) {
+					break;
+				}
+				assert(track.info?.type === 'audio');
 
 				const littleEndian = readU16Be(slice) & 0xff; // 0xff is from FFmpeg
 
@@ -1245,7 +1317,10 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'pcmC': {
 				const track = this.currentTrack;
-				assert(track && track.info?.type === 'audio');
+				if (!track) {
+					break;
+				}
+				assert(track.info?.type === 'audio');
 
 				slice.skip(1 + 3); // Version + flags
 
@@ -1310,7 +1385,10 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'dOps': { // Used for Opus audio
 				const track = this.currentTrack;
-				assert(track && track.info?.type === 'audio');
+				if (!track) {
+					break;
+				}
+				assert(track.info?.type === 'audio');
 
 				slice.skip(1); // Version
 
@@ -1348,7 +1426,10 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'dfLa': { // Used for FLAC audio
 				const track = this.currentTrack;
-				assert(track && track.info?.type === 'audio');
+				if (!track) {
+					break;
+				}
+				assert(track.info?.type === 'audio');
 
 				slice.skip(4); // Version + flags
 
@@ -1402,7 +1483,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'stts': {
 				const track = this.currentTrack;
-				assert(track);
+				if (!track) {
+					break;
+				}
 
 				if (!track.sampleTable) {
 					break;
@@ -1433,7 +1516,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'ctts': {
 				const track = this.currentTrack;
-				assert(track);
+				if (!track) {
+					break;
+				}
 
 				if (!track.sampleTable) {
 					break;
@@ -1460,7 +1545,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'stsz': {
 				const track = this.currentTrack;
-				assert(track);
+				if (!track) {
+					break;
+				}
 
 				if (!track.sampleTable) {
 					break;
@@ -1483,7 +1570,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'stz2': {
 				const track = this.currentTrack;
-				assert(track);
+				if (!track) {
+					break;
+				}
 
 				if (!track.sampleTable) {
 					break;
@@ -1506,7 +1595,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'stss': {
 				const track = this.currentTrack;
-				assert(track);
+				if (!track) {
+					break;
+				}
 
 				if (!track.sampleTable) {
 					break;
@@ -1531,7 +1622,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'stsc': {
 				const track = this.currentTrack;
-				assert(track);
+				if (!track) {
+					break;
+				}
 
 				if (!track.sampleTable) {
 					break;
@@ -1569,7 +1662,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'stco': {
 				const track = this.currentTrack;
-				assert(track);
+				if (!track) {
+					break;
+				}
 
 				if (!track.sampleTable) {
 					break;
@@ -1587,7 +1682,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'co64': {
 				const track = this.currentTrack;
-				assert(track);
+				if (!track) {
+					break;
+				}
 
 				if (!track.sampleTable) {
 					break;
@@ -1950,14 +2047,294 @@ export class IsobmffDemuxer extends Demuxer {
 				this.currentFragment.implicitBaseDataOffset = currentOffset;
 			}; break;
 
-			// These appear in udta:
-			case '©nam':
-			case 'name': {
-				if (!this.currentTrack) {
+				// Metadata section
+				// https://exiftool.org/TagNames/QuickTime.html
+				// https://mp4workshop.com/about
+
+			case 'udta': { // Contains either movie metadata or track metadata
+				const iterator = this.iterateContiguousBoxes(slice.slice(contentStartPos, boxInfo.contentSize));
+
+				for (const { boxInfo, slice } of iterator) {
+					if (boxInfo.name !== 'meta' && !this.currentTrack) {
+						const startPos = slice.filePos;
+						this.metadataTags.raw ??= {};
+
+						if (UDTA_STRING_KEYS.has(boxInfo.name)) {
+							this.metadataTags.raw[boxInfo.name] ??= readMetadataStringShort(slice);
+						} else {
+							this.metadataTags.raw[boxInfo.name] ??= readBytes(slice, boxInfo.contentSize);
+						}
+
+						slice.filePos = startPos;
+					}
+
+					switch (boxInfo.name) {
+						case 'meta': {
+							slice.skip(-boxInfo.headerSize);
+							this.traverseBox(slice);
+						}; break;
+
+						case '©nam':
+						case 'name': {
+							if (this.currentTrack) {
+								this.currentTrack.name = textDecoder.decode(readBytes(slice, boxInfo.contentSize));
+							} else {
+								this.metadataTags.title ??= readMetadataStringShort(slice);
+							}
+						}; break;
+
+						case '©des': {
+							if (!this.currentTrack) {
+								this.metadataTags.description ??= readMetadataStringShort(slice);
+							}
+						}; break;
+
+						case '©ART': {
+							if (!this.currentTrack) {
+								this.metadataTags.artist ??= readMetadataStringShort(slice);
+							}
+						}; break;
+
+						case '©alb': {
+							if (!this.currentTrack) {
+								this.metadataTags.album ??= readMetadataStringShort(slice);
+							}
+						}; break;
+
+						case 'albr': {
+							if (!this.currentTrack) {
+								this.metadataTags.albumArtist ??= readMetadataStringShort(slice);
+							}
+						}; break;
+
+						case '©gen': {
+							if (!this.currentTrack) {
+								this.metadataTags.genre ??= readMetadataStringShort(slice);
+							}
+						}; break;
+
+						case '©day': {
+							if (!this.currentTrack) {
+								const date = new Date(readMetadataStringShort(slice));
+								if (!Number.isNaN(date.getTime())) {
+									this.metadataTags.date ??= date;
+								}
+							}
+						}; break;
+
+						case '©cmt': {
+							if (!this.currentTrack) {
+								this.metadataTags.comment ??= readMetadataStringShort(slice);
+							}
+						}; break;
+
+						case '©lyr': {
+							if (!this.currentTrack) {
+								this.metadataTags.lyrics ??= readMetadataStringShort(slice);
+							}
+						}; break;
+					}
+				}
+			}; break;
+
+			case 'meta': {
+				if (this.currentTrack) {
+					break; // Only care about movie-level metadata for now
+				}
+
+				// The 'meta' box comes in two flavors, one with flags/version and one without. To know which is which,
+				// let's read the next 4 bytes, which are either the version or the size of the first subbox.
+				const word = readU32Be(slice);
+				const isQuickTime = word !== 0;
+
+				this.currentMetadataKeys = new Map();
+
+				if (isQuickTime) {
+					this.readContiguousBoxes(slice.slice(contentStartPos, boxInfo.contentSize));
+				} else {
+					this.readContiguousBoxes(slice.slice(contentStartPos + 4, boxInfo.contentSize - 4));
+				}
+
+				this.currentMetadataKeys = null;
+			}; break;
+
+			case 'keys': {
+				if (!this.currentMetadataKeys) {
 					break;
 				}
 
-				this.currentTrack.name = textDecoder.decode(readBytes(slice, boxInfo.contentSize));
+				slice.skip(4); // Version + flags
+
+				const entryCount = readU32Be(slice);
+
+				for (let i = 0; i < entryCount; i++) {
+					const keySize = readU32Be(slice);
+					slice.skip(4); // Key namespace
+					const keyName = textDecoder.decode(readBytes(slice, keySize - 8));
+
+					this.currentMetadataKeys.set(i + 1, keyName);
+				}
+			}; break;
+
+			case 'ilst': {
+				if (!this.currentMetadataKeys) {
+					break;
+				}
+
+				const iterator = this.iterateContiguousBoxes(slice.slice(contentStartPos, boxInfo.contentSize));
+
+				for (const { boxInfo, slice } of iterator) {
+					let metadataKey = boxInfo.name;
+
+					// Interpret the box name as a u32be
+					const nameAsNumber = (metadataKey.charCodeAt(0) << 24)
+						+ (metadataKey.charCodeAt(1) << 16)
+						+ (metadataKey.charCodeAt(2) << 8)
+						+ metadataKey.charCodeAt(3);
+
+					if (this.currentMetadataKeys.has(nameAsNumber)) {
+						// An entry exists for this number
+						metadataKey = this.currentMetadataKeys.get(nameAsNumber)!;
+					}
+
+					const data = readDataBox(slice);
+
+					this.metadataTags.raw ??= {};
+					this.metadataTags.raw[metadataKey] ??= data;
+
+					switch (metadataKey) {
+						case '©nam':
+						case 'titl':
+						case 'com.apple.quicktime.title':
+						case 'title': {
+							if (typeof data === 'string') {
+								this.metadataTags.title ??= data;
+							}
+						}; break;
+
+						case '©des':
+						case 'desc':
+						case 'dscp':
+						case 'com.apple.quicktime.description':
+						case 'description': {
+							if (typeof data === 'string') {
+								this.metadataTags.description ??= data;
+							}
+						}; break;
+
+						case '©ART':
+						case 'com.apple.quicktime.artist':
+						case 'artist': {
+							if (typeof data === 'string') {
+								this.metadataTags.artist ??= data;
+							}
+						}; break;
+
+						case '©alb':
+						case 'albm':
+						case 'com.apple.quicktime.album':
+						case 'album': {
+							if (typeof data === 'string') {
+								this.metadataTags.album ??= data;
+							}
+						}; break;
+
+						case 'aART':
+						case 'album_artist': {
+							if (typeof data === 'string') {
+								this.metadataTags.albumArtist ??= data;
+							}
+						}; break;
+
+						case '©cmt':
+						case 'com.apple.quicktime.comment':
+						case 'comment': {
+							if (typeof data === 'string') {
+								this.metadataTags.comment ??= data;
+							}
+						}; break;
+
+						case '©gen':
+						case 'gnre':
+						case 'com.apple.quicktime.genre':
+						case 'genre': {
+							if (typeof data === 'string') {
+								this.metadataTags.genre ??= data;
+							}
+						}; break;
+
+						case '©lyr':
+						case 'lyrics': {
+							if (typeof data === 'string') {
+								this.metadataTags.lyrics ??= data;
+							}
+						}; break;
+
+						case '©day':
+						case 'rldt':
+						case 'com.apple.quicktime.creationdate':
+						case 'date': {
+							if (typeof data === 'string') {
+								const date = new Date(data);
+								if (!Number.isNaN(date.getTime())) {
+									this.metadataTags.date ??= date;
+								}
+							}
+						}; break;
+
+						case 'covr':
+						case 'com.apple.quicktime.artwork': {
+							if (data instanceof RichImageData) {
+								this.metadataTags.images ??= [];
+								this.metadataTags.images.push({
+									data: data.data,
+									kind: 'coverFront',
+									mimeType: data.mimeType,
+								});
+							} else if (data instanceof Uint8Array) {
+								this.metadataTags.images ??= [];
+								this.metadataTags.images.push({
+									data,
+									kind: 'coverFront',
+									mimeType: 'image/*',
+								});
+							}
+						}; break;
+
+						case 'trkn': {
+							if (data instanceof Uint8Array) {
+								const view = toDataView(data);
+
+								const trackNumber = view.getUint16(2, false);
+								const tracksTotal = view.getUint16(4, false);
+
+								if (trackNumber > 0) {
+									this.metadataTags.trackNumber ??= trackNumber;
+								}
+								if (tracksTotal > 0) {
+									this.metadataTags.tracksTotal ??= tracksTotal;
+								}
+							}
+						}; break;
+
+						case 'disc':
+						case 'disk': {
+							if (data instanceof Uint8Array) {
+								const view = toDataView(data);
+
+								const discNumber = view.getUint16(2, false);
+								const discNumberMax = view.getUint16(4, false);
+
+								if (discNumber > 0) {
+									this.metadataTags.discNumber ??= discNumber;
+								}
+								if (discNumberMax > 0) {
+									this.metadataTags.discsTotal ??= discNumberMax;
+								}
+							}
+						}; break;
+					}
+				}
 			}; break;
 		}
 

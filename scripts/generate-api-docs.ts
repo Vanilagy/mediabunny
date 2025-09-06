@@ -1,6 +1,6 @@
-// This script has been 100% vibe-coded with Claude, meaning I literally haven't looked at any of the code. It's
-// probably a mess, but it solves a one-off problem where only the output matters, and the output is indeed good, which
-// is the point of a custom script for this: full, precise control.
+// This script has been 100% vibe-coded with Claude (and Gemini!), meaning I literally haven't looked at any of the
+// code. It's probably a mess, but it solves a one-off problem where only the output matters, and the output is indeed
+// good, which is the point of a custom script for this: full, precise control.
 
 /* eslint-disable @typescript-eslint/restrict-template-expressions */
 /* eslint-disable @typescript-eslint/no-unused-vars */
@@ -386,7 +386,34 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string) => {
 		}
 	});
 
-	// Phase 2: Generate documentation for each symbol
+	// Data structures for "Used by" feature
+	const usedByReferences = new Map<string, Set<{ user: string; context: string; type: 'constructor' | 'method' | 'property' | 'extends' | 'type_param' | 'type_alias' | 'variable' | 'function' }>>();
+	const generatedDocs = new Map<string, string>();
+
+	const addUsage = (
+		used: string,
+		user: string,
+		context: string,
+		type: 'constructor' | 'method' | 'property' | 'extends' | 'type_param' | 'type_alias' | 'variable' | 'function',
+	) => {
+		// No self-references
+		if (used === user) return;
+
+		if (!usedByReferences.has(used)) {
+			usedByReferences.set(used, new Set());
+		}
+		const usageSet = usedByReferences.get(used)!;
+
+		// Check for duplicates before adding
+		for (const item of usageSet) {
+			if (item.user === user && item.context === context && item.type === type) {
+				return;
+			}
+		}
+		usageSet.add({ user, context, type });
+	};
+
+	// Phase 2: Generate documentation for each symbol (and collect usage data)
 	allSymbols.forEach((exportSymbol) => {
 		const declaration = exportSymbol.valueDeclaration || exportSymbol.declarations?.[0];
 		if (!declaration) return;
@@ -492,9 +519,10 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string) => {
 					const allReferences = filterToExportedTypes([...new Set(allTypeStrings.flatMap(findAllTypeReferences))], variableName);
 					markdown += formatReferences(allReferences);
 
-					const outputPath = path.join(outputDir, `${variableName}.md`);
-					fs.writeFileSync(outputPath, markdown);
-					console.log(`Generated: ${outputPath}`);
+					// In tandem: update usage map
+					allReferences.forEach(ref => addUsage(ref, variableName, variableName, 'function'));
+
+					generatedDocs.set(variableName, markdown);
 				}
 			} else {
 				// Handle regular variables
@@ -507,9 +535,10 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string) => {
 				const references = filterToExportedTypes(findAllTypeReferences(variableValue), variableName);
 				markdown += formatReferences(references);
 
-				const outputPath = path.join(outputDir, `${variableName}.md`);
-				fs.writeFileSync(outputPath, markdown);
-				console.log(`Generated: ${outputPath}`);
+				// In tandem: update usage map
+				references.forEach(ref => addUsage(ref, variableName, variableName, 'variable'));
+
+				generatedDocs.set(variableName, markdown);
 			}
 
 			return;
@@ -643,6 +672,9 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string) => {
 				if (typeParamReferencesText) {
 					typeParameters += typeParamReferencesText;
 				}
+
+				// In tandem: update usage map
+				typeParamReferences.forEach(ref => addUsage(ref, className, className, 'type_param'));
 			}
 
 			// Check for extends clause (only for classes/interfaces)
@@ -653,6 +685,11 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string) => {
 				if (extendsClauseNode && extendsClauseNode.types[0]) {
 					const superClassName = extendsClauseNode.types[0].expression.getText();
 					extendsClause = `\n\n**Extends:** [\`${superClassName}\`](./${superClassName}.md)\n`;
+
+					// In tandem: update usage map
+					if (exportedTypes.has(superClassName)) {
+						addUsage(superClassName, className, className, 'extends');
+					}
 				}
 			}
 
@@ -835,6 +872,9 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string) => {
 										const references = filterToExportedTypes(findAllTypeReferences(paramType), className);
 										const referencesText = formatReferences(references);
 
+										// In tandem: update usage map
+										references.forEach(ref => addUsage(ref, className, paramName, 'property'));
+
 										const propertyContent = `### \`${paramName}\`\n\n\`\`\`ts\n${propertyDef}\n\`\`\`${desc ? `\n\n${desc}` : ''}${referencesText}`;
 										properties.push(propertyContent);
 									});
@@ -905,6 +945,9 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string) => {
 							const overloadReferences = filterToExportedTypes([...new Set(ctorTypeStrings.flatMap(findAllTypeReferences))], className);
 							constructorBlock += formatReferences(overloadReferences, linkedTypes);
 
+							// In tandem: update usage map
+							overloadReferences.forEach(ref => addUsage(ref, className, className, 'constructor'));
+
 							constructorBlocks.push(constructorBlock);
 						});
 
@@ -950,6 +993,9 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string) => {
 					const references = filterToExportedTypes(findAllTypeReferences(type), className);
 					const referencesText = formatReferences(references, linkedTypes);
 
+					// In tandem: update usage map
+					references.forEach(ref => addUsage(ref, className, name, 'property'));
+
 					// Check if this is an event handler (starts with "on" and can be a function)
 					const isEventHandler = name.startsWith('on') && (
 						type.includes('=>')
@@ -993,6 +1039,9 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string) => {
 					const references = filterToExportedTypes(findAllTypeReferences(type), className);
 					const referencesText = formatReferences(references, linkedTypes);
 
+					// In tandem: update usage map
+					references.forEach(ref => addUsage(ref, className, name, 'property'));
+
 					const inheritedBadge = '';
 					properties.push(`### \`${name}\`${inheritedBadge}\n\n\`\`\`ts\n${accessorDef}\n\`\`\`${desc ? `\n\n${desc}` : ''}${referencesText}`);
 				} else if (ts.isSetAccessorDeclaration(member) && member.name) {
@@ -1012,6 +1061,9 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string) => {
 					// Find referenced types
 					const references = filterToExportedTypes(findAllTypeReferences(paramType), className);
 					const referencesText = formatReferences(references, linkedTypes);
+
+					// In tandem: update usage map
+					references.forEach(ref => addUsage(ref, className, name, 'property'));
 
 					const inheritedBadge = '';
 					properties.push(`### \`${name}\`${inheritedBadge}\n\n\`\`\`ts\n${accessorDef}\n\`\`\`${desc ? `\n\n${desc}` : ''}${referencesText}`);
@@ -1106,6 +1158,9 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string) => {
 					const allReferences = filterToExportedTypes([...new Set(allTypeStrings.flatMap(findAllTypeReferences))], className);
 					methodContent += formatReferences(allReferences, linkedTypes);
 
+					// In tandem: update usage map
+					allReferences.forEach(ref => addUsage(ref, className, name, 'method'));
+
 					if (isStatic) {
 						staticMethods.push(methodContent);
 					} else {
@@ -1173,6 +1228,9 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string) => {
 						// Find referenced types
 						const references = filterToExportedTypes(findAllTypeReferences(cleanedType), className);
 						const referencesText = formatReferences(references);
+
+						// In tandem: update usage map
+						references.forEach(ref => addUsage(ref, className, propName, 'property'));
 
 						// Check if this is an event handler (starts with "on" and can be a function)
 						const isEventHandler = propName.startsWith('on') && (
@@ -1252,19 +1310,39 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string) => {
 
 			// Add subclasses section for classes that have subclasses
 			if (ts.isClassDeclaration(declaration) && classHierarchy.has(className)) {
-				const subclasses = classHierarchy.get(className)!;
-				// Sort by definition order instead of alphabetically
-				subclasses.sort((a, b) => {
-					const orderA = symbolOrderMap.get(a);
-					const orderB = symbolOrderMap.get(b);
-					if (orderA === undefined) throw new Error(`Symbol '${a}' not found in entry files export order`);
-					if (orderB === undefined) throw new Error(`Symbol '${b}' not found in entry files export order`);
-					return orderA - orderB;
-				});
-				markdown += `\n## Subclasses\n\n`;
-				subclasses.forEach((sub) => {
-					markdown += `- [\`${sub}\`](./${sub}.md)\n`;
-				});
+				// Recursively build hierarchical list
+				const buildHierarchicalList = (parentClass: string, depth = 0, visited = new Set<string>()): string => {
+					if (visited.has(parentClass)) return ''; // Prevent infinite loops
+					visited.add(parentClass);
+
+					const directChildren = classHierarchy.get(parentClass) || [];
+					if (directChildren.length === 0) return '';
+
+					// Sort children by definition order
+					const sortedChildren = [...directChildren].sort((a, b) => {
+						const orderA = symbolOrderMap.get(a);
+						const orderB = symbolOrderMap.get(b);
+						if (orderA === undefined) throw new Error(`Symbol '${a}' not found in entry files export order`);
+						if (orderB === undefined) throw new Error(`Symbol '${b}' not found in entry files export order`);
+						return orderA - orderB;
+					});
+
+					let result = '';
+					const indent = '  '.repeat(depth);
+
+					for (const child of sortedChildren) {
+						result += `${indent}- [\`${child}\`](./${child}.md)\n`;
+						// Recursively add children of this child
+						result += buildHierarchicalList(child, depth + 1, visited);
+					}
+
+					return result;
+				};
+
+				const hierarchicalList = buildHierarchicalList(className);
+				if (hierarchicalList) {
+					markdown += `\n## Subclasses\n\n${hierarchicalList}`;
+				}
 			}
 
 			// Add instances section for classes that have instances
@@ -1282,6 +1360,11 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string) => {
 				instances.forEach((instance) => {
 					markdown += `- [\`${instance}\`](./${instance}.md)\n`;
 				});
+			}
+
+			// Add placeholder for "Used by" section for classes and interfaces
+			if (ts.isClassDeclaration(declaration) || ts.isInterfaceDeclaration(declaration)) {
+				markdown += '\n<!-- USED_BY_SECTION -->\n';
 			}
 
 			// Add type definition for type aliases
@@ -1346,7 +1429,13 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string) => {
 				const typeReferences = filterToExportedTypes([...new Set(allTypeRefs)], className);
 				const typeReferencesText = formatReferences(typeReferences);
 
+				// In tandem: update usage map
+				typeReferences.forEach(ref => addUsage(ref, className, className, 'type_alias'));
+
 				markdown += `\n\`\`\`ts\n${typeDefinition}\n\`\`\`${typeReferencesText}`;
+
+				// Add placeholder for "Used by" section for type aliases
+				markdown += '\n<!-- USED_BY_SECTION -->\n';
 			}
 
 			if (typeParameters) {
@@ -1372,10 +1461,87 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string) => {
 			if (methods.length > 0) {
 				markdown += `\n## Methods\n\n${methods.join('\n\n')}\n`;
 			}
-			const outputPath = path.join(outputDir, `${className}.md`);
-			fs.writeFileSync(outputPath, markdown);
-			console.log(`Generated: ${outputPath}`);
+
+			generatedDocs.set(className, markdown);
 		}
+	});
+
+	// Phase 3: Assemble final docs with "Used by" sections and write files
+	generatedDocs.forEach((markdown, symbolName) => {
+		const usages = usedByReferences.get(symbolName);
+		let usedByMarkdown = '';
+
+		if (usages && usages.size > 0) {
+			const symbolSubclasses = classHierarchy.get(symbolName) || [];
+
+			const usedByLines = [...usages]
+				.filter((usage) => {
+					// Filter out subclasses from "Used by" since they already appear in "Subclasses" section
+					if (usage.type === 'extends' && symbolSubclasses.includes(usage.user)) {
+						return false;
+					}
+
+					// Filter out top-level type references when there are more specific contexts available
+					// This prevents redundancy where both "TypeName" and "TypeName.property" appear
+					if (usage.type === 'type_alias' || usage.type === 'type_param') {
+						// Check if there are more specific usages from the same user (property, method, constructor, etc.)
+						const hasMoreSpecificUsage = [...usages].some(otherUsage =>
+							otherUsage.user === usage.user
+							&& otherUsage.type !== 'type_alias'
+							&& otherUsage.type !== 'type_param'
+							&& otherUsage.type !== 'extends',
+						);
+						if (hasMoreSpecificUsage) {
+							return false;
+						}
+					}
+
+					return true;
+				})
+				.map((usage) => {
+					let displayText = '';
+					let link = '';
+
+					switch (usage.type) {
+						case 'constructor':
+							displayText = `new ${usage.user}()`;
+							link = `./${usage.user}.md#constructor`;
+							break;
+						case 'method':
+							displayText = `${usage.user}.${usage.context}()`;
+							link = `./${usage.user}.md#${usage.context.toLowerCase()}`;
+							break;
+						case 'property':
+						case 'variable':
+							displayText = `${usage.user}.${usage.context}`;
+							link = `./${usage.user}.md#${usage.context.toLowerCase()}`;
+							break;
+						case 'function':
+							displayText = `${usage.user}()`;
+							link = `./${usage.user}.md`;
+							break;
+						case 'extends':
+						case 'type_param':
+						case 'type_alias':
+							displayText = usage.user;
+							link = `./${usage.user}.md`;
+							break;
+					}
+					return { text: `[\`${displayText}\`](${link})`, sortKey: displayText.toLowerCase() };
+				});
+
+			if (usedByLines.length > 0) {
+				// Sort alphabetically by display text
+				usedByLines.sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+				const listItems = usedByLines.map(item => `- ${item.text}`).join('\n');
+				usedByMarkdown = `\n## Used by\n\n${listItems}\n`;
+			}
+		}
+
+		const finalMarkdown = markdown.replace('<!-- USED_BY_SECTION -->', usedByMarkdown);
+		const outputPath = path.join(outputDir, `${symbolName}.md`);
+		fs.writeFileSync(outputPath, finalMarkdown);
+		console.log(`Generated: ${outputPath}`);
 	});
 
 	// Generate index.md with all exported symbols grouped by group

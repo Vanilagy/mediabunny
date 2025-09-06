@@ -36,6 +36,8 @@ export abstract class Source {
 	abstract _retrieveSize(): MaybePromise<number | null>;
 	/** @internal */
 	abstract _read(start: number, end: number): MaybePromise<ReadResult | null>;
+	/** @internal */
+	abstract get _supportsRandomAccess(): boolean;
 
 	/** @internal */
 	private _sizePromise: Promise<number | null> | null = null;
@@ -112,6 +114,11 @@ export class BufferSource extends Source {
 			view: this._view,
 			offset: 0,
 		};
+	}
+
+	/** @internal */
+	get _supportsRandomAccess() {
+		return true;
 	}
 }
 
@@ -209,6 +216,11 @@ export class BlobSource extends Source {
 		}
 
 		worker.running = false;
+	}
+
+	/** @internal */
+	get _supportsRandomAccess() {
+		return true;
 	}
 }
 
@@ -488,6 +500,11 @@ export class UrlSource extends Source {
 			}
 		}
 	}
+
+	/** @internal */
+	get _supportsRandomAccess() {
+		return true;
+	}
 }
 
 /**
@@ -558,6 +575,11 @@ export class FilePathSource extends Source {
 	/** @internal */
 	_retrieveSize(): MaybePromise<number> {
 		return this._streamSource._retrieveSize();
+	}
+
+	/** @internal */
+	get _supportsRandomAccess() {
+		return true;
 	}
 }
 
@@ -727,6 +749,11 @@ export class StreamSource extends Source {
 		}
 
 		worker.running = false;
+	}
+
+	/** @internal */
+	get _supportsRandomAccess() {
+		return true;
 	}
 }
 
@@ -986,6 +1013,11 @@ export class ReadableStreamSource extends Source {
 		}
 
 		this._pulling = false;
+	}
+
+	/** @internal */
+	get _supportsRandomAccess() {
+		return false;
 	}
 }
 

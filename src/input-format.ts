@@ -22,7 +22,7 @@ import {
 import { MatroskaDemuxer } from './matroska/matroska-demuxer';
 import { Mp3Demuxer } from './mp3/mp3-demuxer';
 import { FRAME_HEADER_SIZE } from '../shared/mp3-misc';
-import { readId3, readNextFrameHeader } from './mp3/mp3-reader';
+import { ID3_V2_HEADER_SIZE, readId3V2Header, readNextFrameHeader } from './mp3/mp3-reader';
 import { OggDemuxer } from './ogg/ogg-demuxer';
 import { WaveDemuxer } from './wave/wave-demuxer';
 import { MAX_FRAME_HEADER_SIZE, MIN_FRAME_HEADER_SIZE, readFrameHeader } from './adts/adts-reader';
@@ -263,11 +263,20 @@ export class Mp3InputFormat extends InputFormat {
 		if (!slice) return false;
 
 		let currentPos = 0;
+		let id3V2HeaderFound = false;
 
-		const id3Tag = readId3(slice);
+		while (true) {
+			let slice = input._reader.requestSlice(currentPos, ID3_V2_HEADER_SIZE);
+			if (slice instanceof Promise) slice = await slice;
+			if (!slice) break;
 
-		if (id3Tag) {
-			currentPos = slice.filePos + id3Tag.size;
+			const id3V2Header = readId3V2Header(slice);
+			if (!id3V2Header) {
+				break;
+			}
+
+			id3V2HeaderFound = true;
+			currentPos = slice.filePos + id3V2Header.size;
 		}
 
 		const firstResult = await readNextFrameHeader(input._reader, currentPos, currentPos + 4096);
@@ -275,8 +284,8 @@ export class Mp3InputFormat extends InputFormat {
 			return false;
 		}
 
-		if (id3Tag) {
-			// If there was an ID3 tag at the start, we can be pretty sure this is MP3 by now
+		if (id3V2HeaderFound) {
+			// If there was an ID3v2 tag at the start, we can be pretty sure this is MP3 by now
 			return true;
 		}
 

@@ -106,6 +106,25 @@ output.addAudioTrack(audioSource);
 Adding tracks to an `Output` will throw if the track is not compatible with the output format. Be sure to respect the [properties](./output-formats#format-properties) of the output format when adding tracks.
 :::
 
+## Setting metadata tags
+
+Mediabunny lets you write additional descriptive metadata tags to an output file, such as title, artist, or cover art:
+
+```ts
+output.setMetadataTags({
+	title: 'Big Buck Bunny',
+	artist: 'Blender Foundation',
+	date: new Date('2008-05-20'),
+	images: [{
+		data: new Uint8Array([...]),
+		mimeType: 'image/jpeg',
+		kind: 'coverFront',
+	}],
+});
+```
+
+For more info on which tags you can write, see [`MetadataTags`](../api/MetadataTags).
+
 ## Starting an output
 
 After all tracks have been added to the `Output`, you need to *start* it. Starting an output spins up the writing process, allowing you to now start sending media data to the output file. It also prevents you from adding any new tracks to it.

@@ -6,7 +6,9 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { FileSlice, readAscii, readI32Be, readU32Be, readU64Be, readU8 } from '../reader';
+import { RichImageData } from '../tags';
+import { textDecoder } from '../misc';
+import { FileSlice, readAscii, readBytes, readI32Be, readU16Be, readU32Be, readU64Be, readU8 } from '../reader';
 
 export const MIN_BOX_HEADER_SIZE = 8;
 export const MAX_BOX_HEADER_SIZE = 16;
@@ -52,4 +54,31 @@ export const readIsomVariableInteger = (slice: FileSlice) => {
 	}
 
 	return result;
+};
+
+export const readMetadataStringShort = (slice: FileSlice) => {
+	const stringLength = readU16Be(slice);
+	slice.skip(2); // Language
+	return textDecoder.decode(readBytes(slice, stringLength));
+};
+
+export const readDataBox = (slice: FileSlice) => {
+	const header = readBoxHeader(slice);
+	if (!header || header.name !== 'data') {
+		return null;
+	}
+
+	const typeIndicator = readU32Be(slice);
+	slice.skip(4); // Locale indicator
+	const data = readBytes(slice, header.contentSize - 8);
+
+	switch (typeIndicator) {
+		case 1: return textDecoder.decode(data); // UTF-8
+		case 2: return new TextDecoder('utf-16be').decode(data); // UTF-16-BE
+		case 13: return new RichImageData(data, 'image/jpeg');
+		case 14: return new RichImageData(data, 'image/png');
+		case 27: return new RichImageData(data, 'image/bmp');
+
+		default: return data;
+	}
 };

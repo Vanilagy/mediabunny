@@ -152,10 +152,10 @@ export class IsobmffMuxer extends Muxer {
 
 	private mdat: Box | null = null;
 
-	private trackDatas: IsobmffTrackData[] = [];
+	trackDatas: IsobmffTrackData[] = [];
 	private allTracksKnown = promiseWithResolvers();
 
-	private creationTime = Math.floor(Date.now() / 1000) + TIMESTAMP_OFFSET;
+	creationTime = Math.floor(Date.now() / 1000) + TIMESTAMP_OFFSET;
 	private finalizedChunks: Chunk[] = [];
 
 	private nextFragmentNumber = 1;
@@ -988,7 +988,7 @@ export class IsobmffMuxer extends Muxer {
 			}
 
 			// Write the moov box now that we have all decoder configs
-			const movieBox = moov(this.trackDatas, this.creationTime, true);
+			const movieBox = moov(this, true);
 			this.boxWriter.writeBox(movieBox);
 
 			if (this.format._options.onMoov) {
@@ -1140,7 +1140,7 @@ export class IsobmffMuxer extends Muxer {
 			// size of the moov box and can compute the proper chunk positions.
 
 			for (let i = 0; i < 2; i++) {
-				const movieBox = moov(this.trackDatas, this.creationTime);
+				const movieBox = moov(this);
 				const movieBoxSize = this.boxWriter.measureBox(movieBox);
 				mdatSize = this.boxWriter.measureBox(this.mdat);
 				let currentChunkPos = this.writer.getPos() + movieBoxSize + mdatSize;
@@ -1162,7 +1162,7 @@ export class IsobmffMuxer extends Muxer {
 				this.writer.startTrackingWrites();
 			}
 
-			const movieBox = moov(this.trackDatas, this.creationTime);
+			const movieBox = moov(this);
 			this.boxWriter.writeBox(movieBox);
 
 			if (this.format._options.onMoov) {
@@ -1218,7 +1218,7 @@ export class IsobmffMuxer extends Muxer {
 				this.writer.startTrackingWrites();
 			}
 
-			const movieBox = moov(this.trackDatas, this.creationTime);
+			const movieBox = moov(this);
 			this.boxWriter.writeBox(movieBox);
 
 			if (this.format._options.onMoov) {

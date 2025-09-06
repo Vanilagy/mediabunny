@@ -76,6 +76,12 @@ await input.getPrimaryVideoTrack(); // => InputVideoTrack | null
 await input.getPrimaryAudioTrack(); // => InputAudioTrack | null
 ```
 
+Mediabunny also lets you read descriptive metadata tags from media files, such as title, artist, or cover art:
+```ts
+await input.getMetadataTags(); // => MetadataTags
+```
+For more info, see [`MetadataTags`](../api/MetadataTags).
+
 ::: info
 Subtitle tracks are currently not supported for reading.
 :::

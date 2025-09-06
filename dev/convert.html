@@ -24,22 +24,53 @@
 			chunked: true,
 			chunkSize: 2**20
 		});
-		const outputFormat = new Mediabunny.Mp4OutputFormat({});
+		const outputFormat = new Mediabunny.WavOutputFormat({});
 
 		const button = document.createElement('button');
 		button.textContent = 'Cancel';
 		button.onclick = () => conversion.cancel();
 		document.body.append(button);
 
+		const yo = document.createElement('canvas');
+		yo.width = 512;
+		yo.height = 512;
+		const context = yo.getContext('2d', { alpha: false });
+		context.fillStyle = 'red';
+		context.fillRect(100, 100, 300, 300);
+		const blob = await new Promise(resolve => yo.toBlob(resolve, 'image/jpeg', 0.92));
+		const blobData = new Uint8Array(await blob.arrayBuffer());
+
+		const mh = new Blob([blobData], { type: 'image/jpeg' });
+		console.log(URL.createObjectURL(mh))
+
+		const output = new Mediabunny.Output({
+			format: outputFormat,
+			target
+		});
+		output.setMetadata({
+			title: 'Bigggy',
+			artist: 'Buck Bunny',
+			images: [{
+				data: blobData,
+				kind: 'coverFront',
+				mimeType: 'image/jpeg'
+			}],
+			trackNumber: 4,
+			tracksTotal: 10,
+			discNumber: 5,
+			discNumberMax: 8,
+			lyrics: "There's no way\nThat it's not going there",
+			raw: {
+				'ENCODER': 'Mediabunny epic own encoder'
+			}
+		});
+
 		const conversion = await Mediabunny.Conversion.init({
 			input: new Mediabunny.Input({
 				formats: Mediabunny.ALL_FORMATS,	
 				source
 			}),
-			output: new Mediabunny.Output({
-				format: outputFormat,
-				target
-			}),
+			output,
 			audio: {
 				//discard: true,
 				//codec: 'opus',
@@ -74,8 +105,8 @@
 			},
 			*/
 			video: () => ({
-				forceTranscode: true,
-				codec: 'avc',
+				discard: true,
+				//codec: 'avc',
 				//fit: 'contain',
 				//frameRate: 27.123,
 				//width: 320,
@@ -98,7 +129,7 @@
 			}),
 			trim: {
 				start: 0,
-				end: 5
+				end: 10
 			},
 		});
 		console.log(conversion);

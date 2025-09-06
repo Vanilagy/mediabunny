@@ -11,6 +11,7 @@ import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
+import { MetadataTags } from '../tags';
 import { assert, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readAscii, readBytes, Reader, readU16, readU32, readU64 } from '../reader';
@@ -39,6 +40,7 @@ export class WaveDemuxer extends Demuxer {
 
 	tracks: InputAudioTrack[] = [];
 	lastKnownPacketIndex = 0;
+	metadataTags: MetadataTags = {};
 
 	constructor(input: Input) {
 		super(input);
@@ -92,6 +94,10 @@ export class WaveDemuxer extends Demuxer {
 
 					this.dataStart = slice.filePos;
 					this.dataSize = Math.min(dataChunkSize, (totalFileSize ?? Infinity) - this.dataStart);
+
+					if (this.reader.fileSize === null) {
+						break; // Stop once we hit the data chunk
+					}
 				} else if (chunkId === 'ds64') {
 					// File and data chunk sizes are defined in here instead
 
@@ -99,6 +105,8 @@ export class WaveDemuxer extends Demuxer {
 					dataChunkSize = readU64(slice, littleEndian);
 
 					totalFileSize = Math.min(riffChunkSize + 8, this.reader.fileSize ?? Infinity);
+				} else if (chunkId === 'LIST') {
+					await this.parseListChunk(startPos, chunkSize, littleEndian);
 				}
 
 				currentPos = startPos + chunkSize + (chunkSize & 1); // Handle padding
@@ -167,6 +175,102 @@ export class WaveDemuxer extends Demuxer {
 		};
 	}
 
+	private async parseListChunk(startPos: number, size: number, littleEndian: boolean) {
+		let slice = this.reader.requestSlice(startPos, size);
+		if (slice instanceof Promise) slice = await slice;
+		if (!slice) return; // File too short
+
+		const infoType = readAscii(slice, 4);
+		if (infoType !== 'INFO' && infoType !== 'INF0') { // exiftool.org claims INF0 can happen
+			return; // Not an INFO chunk
+		}
+
+		let currentPos = slice.filePos;
+		while (currentPos <= startPos + size - 8) {
+			slice.filePos = currentPos;
+
+			const chunkName = readAscii(slice, 4);
+			const chunkSize = readU32(slice, littleEndian);
+			const bytes = readBytes(slice, chunkSize);
+
+			let stringLength = 0;
+			for (let i = 0; i < bytes.length; i++) {
+				if (bytes[i] === 0) {
+					break;
+				}
+
+				stringLength++;
+			}
+
+			const value = String.fromCharCode(...bytes.subarray(0, stringLength));
+
+			this.metadataTags.raw ??= {};
+			this.metadataTags.raw[chunkName] = value;
+
+			switch (chunkName) {
+				case 'INAM':
+				case 'TITL': {
+					this.metadataTags.title ??= value;
+				}; break;
+
+				case 'TIT3': {
+					this.metadataTags.description ??= value;
+				}; break;
+
+				case 'IART': {
+					this.metadataTags.artist ??= value;
+				}; break;
+
+				case 'IPRD': {
+					this.metadataTags.album ??= value;
+				}; break;
+
+				case 'IPRT':
+				case 'ITRK':
+				case 'TRCK': {
+					const parts = value.split('/');
+					const trackNum = Number.parseInt(parts[0]!, 10);
+					const tracksTotal = parts[1] && Number.parseInt(parts[1], 10);
+
+					if (Number.isInteger(trackNum) && trackNum > 0) {
+						this.metadataTags.trackNumber ??= trackNum;
+					}
+					if (tracksTotal && Number.isInteger(tracksTotal) && tracksTotal > 0) {
+						this.metadataTags.tracksTotal ??= tracksTotal;
+					}
+				}; break;
+
+				case 'ICRD':
+				case 'IDIT': {
+					const date = new Date(value);
+					if (!Number.isNaN(date.getTime())) {
+						this.metadataTags.date ??= date;
+					}
+				}; break;
+
+				case 'YEAR': {
+					const year = Number.parseInt(value, 10);
+					if (Number.isInteger(year) && year > 0) {
+						this.metadataTags.date ??= new Date(year, 0, 1);
+					}
+				}; break;
+
+				case 'IGNR':
+				case 'GENR': {
+					this.metadataTags.genre ??= value;
+				}; break;
+
+				case 'ICMT':
+				case 'CMNT':
+				case 'COMM': {
+					this.metadataTags.comment ??= value;
+				}; break;
+			}
+
+			currentPos += 8 + chunkSize + (chunkSize & 1); // Handle padding
+		}
+	}
+
 	getCodec(): AudioCodec | null {
 		assert(this.audioInfo);
 
@@ -213,6 +317,11 @@ export class WaveDemuxer extends Demuxer {
 	async getTracks() {
 		await this.readMetadata();
 		return this.tracks;
+	}
+
+	async getMetadataTags() {
+		await this.readMetadata();
+		return this.metadataTags;
 	}
 }
 

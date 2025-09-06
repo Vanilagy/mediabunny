@@ -80,6 +80,37 @@ const extractMetadata = (resource: File | string) => {
 				: {}
 			),
 		}))),
+		'Metadata tags': input.getMetadataTags().then((tags) => {
+			const result = {
+				'Title': tags.title,
+				'Description': tags.description,
+				'Artist': tags.artist,
+				'Album': tags.album,
+				'Album artist': tags.albumArtist,
+				'Track number': tags.trackNumber,
+				'Tracks total': tags.tracksTotal,
+				'Disc number': tags.discNumber,
+				'Discs total': tags.discsTotal,
+				'Genre': tags.genre,
+				'Date': tags.date?.toISOString().slice(0, 10),
+				'Lyrics': tags.lyrics,
+				'Comment': tags.comment,
+				'Images': tags.images?.map((image) => {
+					const blob = new Blob([image.data], { type: image.mimeType });
+					const element = new Image();
+					element.src = URL.createObjectURL(blob);
+
+					return element;
+				}),
+				'Raw tag count': tags.raw && Object.keys(tags.raw).length,
+			};
+
+			if (Object.values(result).some(x => x !== undefined)) {
+				return result;
+			} else {
+				return undefined;
+			}
+		}),
 	};
 
 	fileNameElement.textContent = resource instanceof File ? resource.name : resource;
@@ -93,7 +124,9 @@ const extractMetadata = (resource: File | string) => {
 
 // Creates an HTML element to display any given value
 const renderValue = (value: unknown) => {
-	if (Array.isArray(value)) {
+	if (value instanceof HTMLElement) {
+		return value;
+	} else if (Array.isArray(value)) {
 		const arrayAsObject: Record<string, unknown> = Object.fromEntries(
 			value.map((item, index) => [(index + 1).toString(), item]),
 		);
@@ -116,6 +149,7 @@ const renderObject = (object: Record<string, unknown>) => {
 	for (const key of keys) {
 		const value = object[key];
 		const listItem = document.createElement('li');
+		listItem.style.wordBreak = 'break-word';
 		const keySpan = document.createElement('b');
 		keySpan.textContent = `${key}: `;
 
@@ -132,6 +166,10 @@ const renderObject = (object: Record<string, unknown>) => {
 				// Replace the loading text with the resolved value
 				listItem.removeChild(loadingSpan);
 				listItem.appendChild(renderValue(resolvedValue));
+
+				if (resolvedValue === undefined) {
+					listElement.removeChild(listItem);
+				}
 			}).catch((error) => {
 				console.error(error);
 
@@ -146,7 +184,9 @@ const renderObject = (object: Record<string, unknown>) => {
 			listItem.appendChild(renderValue(value));
 		}
 
-		listElement.appendChild(listItem);
+		if (value !== undefined) {
+			listElement.appendChild(listItem);
+		}
 	}
 
 	return listElement;

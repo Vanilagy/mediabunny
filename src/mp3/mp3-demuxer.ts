@@ -10,12 +10,20 @@ import { AudioCodec } from '../codec';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
+import { MetadataTags } from '../tags';
 import { PacketRetrievalOptions } from '../media-sink';
 import { assert, AsyncMutex, binarySearchExact, binarySearchLessOrEqual, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { FrameHeader, getXingOffset, INFO, XING } from '../../shared/mp3-misc';
-import { readId3, readNextFrameHeader } from './mp3-reader';
-import { readBytes, Reader, readU32Be } from '../reader';
+import {
+	ID3_V1_TAG_SIZE,
+	ID3_V2_HEADER_SIZE,
+	parseId3V1Tag,
+	parseId3V2Tag,
+	readId3V2Header,
+	readNextFrameHeader,
+} from './mp3-reader';
+import { readAscii, readBytes, Reader, readU32Be } from '../reader';
 
 type Sample = {
 	timestamp: number;
@@ -30,6 +38,7 @@ export class Mp3Demuxer extends Demuxer {
 	metadataPromise: Promise<void> | null = null;
 	firstFrameHeader: FrameHeader | null = null;
 	loadedSamples: Sample[] = []; // All samples from the start of the file to lastLoadedPos
+	metadataTags: MetadataTags | null = null;
 
 	tracks: InputAudioTrack[] = [];
 
@@ -51,8 +60,9 @@ export class Mp3Demuxer extends Demuxer {
 				await this.advanceReader();
 			}
 
-			// There has to be a frame if this demuxer got selected
-			assert(this.firstFrameHeader);
+			if (!this.firstFrameHeader) {
+				throw new Error('No valid MP3 frame found.');
+			}
 
 			this.tracks = [new InputAudioTrack(new Mp3AudioTrackBacking(this))];
 		})();
@@ -60,18 +70,22 @@ export class Mp3Demuxer extends Demuxer {
 
 	async advanceReader() {
 		if (this.lastLoadedPos === 0) {
-			let slice = this.reader.requestSlice(0, 10);
-			if (slice instanceof Promise) slice = await slice;
+			// Let's skip all ID3v2 tags at the start of the file
+			while (true) {
+				let slice = this.reader.requestSlice(this.lastLoadedPos, ID3_V2_HEADER_SIZE);
+				if (slice instanceof Promise) slice = await slice;
 
-			if (!slice) {
-				this.lastSampleLoaded = true;
-				return;
-			}
+				if (!slice) {
+					this.lastSampleLoaded = true;
+					return;
+				}
 
-			// First time, let's see if there's an ID3 tag
-			const id3Tag = readId3(slice);
-			if (id3Tag) {
-				this.lastLoadedPos += 10 + id3Tag.size;
+				const id3V2Header = readId3V2Header(slice);
+				if (!id3V2Header) {
+					break;
+				}
+
+				this.lastLoadedPos = slice.filePos + id3V2Header.size;
 			}
 		}
 
@@ -133,6 +147,59 @@ export class Mp3Demuxer extends Demuxer {
 		assert(track);
 
 		return track.computeDuration();
+	}
+
+	async getMetadataTags() {
+		const release = await this.readingMutex.acquire();
+
+		try {
+			await this.readMetadata();
+
+			if (this.metadataTags) {
+				return this.metadataTags;
+			}
+
+			this.metadataTags = {};
+			let currentPos = 0;
+			let id3V2HeaderFound = false;
+
+			while (true) {
+				let headerSlice = this.reader.requestSlice(currentPos, ID3_V2_HEADER_SIZE);
+				if (headerSlice instanceof Promise) headerSlice = await headerSlice;
+				if (!headerSlice) break;
+
+				const id3V2Header = readId3V2Header(headerSlice);
+				if (!id3V2Header) {
+					break;
+				}
+
+				id3V2HeaderFound = true;
+
+				let contentSlice = this.reader.requestSlice(headerSlice.filePos, id3V2Header.size);
+				if (contentSlice instanceof Promise) contentSlice = await contentSlice;
+				if (!contentSlice) break;
+
+				parseId3V2Tag(contentSlice, id3V2Header, this.metadataTags);
+
+				currentPos = headerSlice.filePos + id3V2Header.size;
+			}
+
+			if (!id3V2HeaderFound && this.reader.fileSize !== null && this.reader.fileSize >= ID3_V1_TAG_SIZE) {
+				// Try reading an ID3v1 tag at the end of the file
+				let slice = this.reader.requestSlice(this.reader.fileSize - ID3_V1_TAG_SIZE, ID3_V1_TAG_SIZE);
+				if (slice instanceof Promise) slice = await slice;
+				assert(slice);
+
+				const tag = readAscii(slice, 3);
+				if (tag === 'TAG') {
+					parseId3V1Tag(slice, this.metadataTags);
+				}
+			}
+
+			return this.metadataTags;
+		} finally {
+			release();
+		}
 	}
 }
 

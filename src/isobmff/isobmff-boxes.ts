@@ -18,6 +18,8 @@ import {
 	MATRIX_COEFFICIENTS_MAP,
 	colorSpaceIsComplete,
 	UNDETERMINED_LANGUAGE,
+	assertNever,
+	keyValueIterator,
 } from '../misc';
 import {
 	AudioCodec,
@@ -35,12 +37,14 @@ import {
 	GLOBAL_TIMESCALE,
 	intoTimescale,
 	IsobmffAudioTrackData,
+	IsobmffMuxer,
 	IsobmffSubtitleTrackData,
 	IsobmffTrackData,
 	IsobmffVideoTrackData,
 	Sample,
 } from './isobmff-muxer';
 import { parseOpusIdentificationHeader } from '../codec-data';
+import { MetadataTags, RichImageData } from '../tags';
 
 export class IsobmffBoxWriter {
 	private helper = new Uint8Array(8);
@@ -331,13 +335,13 @@ export const mdat = (reserveLargeSize: boolean): Box => ({ type: 'mdat', largeSi
  * an application to interpret the sample data that is stored elsewhere.
  */
 export const moov = (
-	trackDatas: IsobmffTrackData[],
-	creationTime: number,
+	muxer: IsobmffMuxer,
 	fragmented = false,
 ) => box('moov', undefined, [
-	mvhd(creationTime, trackDatas),
-	...trackDatas.map(x => trak(x, creationTime)),
-	fragmented ? mvex(trackDatas) : null,
+	mvhd(muxer.creationTime, muxer.trackDatas),
+	...muxer.trackDatas.map(x => trak(x, muxer.creationTime)),
+	fragmented ? mvex(muxer.trackDatas) : null,
+	udta(muxer),
 ]);
 
 /** Movie Header Box: Used to specify the characteristics of the entire movie, such as timescale and duration. */
@@ -387,64 +391,13 @@ export const trak = (trackData: IsobmffTrackData, creationTime: number) => {
 		mdia(trackData, creationTime),
 		trackMetadata.name !== undefined
 			? box('udta', undefined, [
-					box('©nam', [
+					box('name', [ // VLC (and Mediabunny) also recognize ©nam
 						...textEncoder.encode(trackMetadata.name),
 					]),
 				])
 			: null,
 	]);
 };
-
-/*
-const meta = (trackData: IsobmffTrackData) => {
-	const trackMetadata = getTrackMetadata(trackData);
-
-	if (trackData.muxer.isQuickTime) {
-		const keyMap: Record<keyof IsobmffMetadata, string> = {
-			name: 'com.apple.quicktime.title',
-		};
-
-		return box('meta', undefined, [
-			hdlr(false, 'mdta', ''),
-			fullBox('keys', 0, 0, [
-				u32(Object.keys(trackMetadata).length),
-			], Object.keys(trackMetadata).map(key =>
-				box('mdta', [
-					ascii(keyMap[key as keyof IsobmffMetadata]), // Key name
-				]),
-			)),
-			box('ilst', undefined, Object.values(trackMetadata)
-				.map((value, i) => box(u32(i + 1).map(x => String.fromCharCode(x)).join(''), undefined, [
-					data(value),
-				]))),
-		]);
-	} else {
-		const keyMap: Record<keyof IsobmffMetadata, string> = {
-			name: '©nam',
-		};
-
-		return fullBox('meta', 0, 0, undefined, [
-			hdlr(false, 'mdir', ''),
-			box('ilst', undefined, Object.entries(trackMetadata)
-				.map(([key, value]) => box(keyMap[key as keyof IsobmffMetadata], undefined, [
-					data(value),
-				]))),
-		]);
-	}
-};
-
-const data = (value: unknown) => {
-	if (typeof value === 'string') {
-		return box('data', [
-			u32(1), // Type indicator (UTF-8)
-			u32(0), // Locale indicator
-			...textEncoder.encode(value),
-		]);
-	}
-
-	throw new Error('Unhandled data type.');
-};
-*/
 
 /** Track Header Box: Specifies the characteristics of a single track within a movie. */
 export const tkhd = (
@@ -506,18 +459,12 @@ export const mdhd = (
 	const needsU64 = !isU32(creationTime) || !isU32(localDuration);
 	const u32OrU64 = needsU64 ? u64 : u32;
 
-	let language = 0;
-	for (const character of (trackData.track.metadata.languageCode ?? UNDETERMINED_LANGUAGE)) {
-		language <<= 5;
-		language += character.charCodeAt(0) - 0x60;
-	}
-
 	return fullBox('mdhd', +needsU64, 0, [
 		u32OrU64(creationTime), // Creation time
 		u32OrU64(creationTime), // Modification time
 		u32(trackData.timescale), // Timescale
 		u32OrU64(localDuration), // Duration
-		u16(language), // Language
+		u16(getLanguageCodeInt(trackData.track.metadata.languageCode ?? UNDETERMINED_LANGUAGE)), // Language
 		u16(0), // Quality
 	]);
 };
@@ -535,10 +482,15 @@ const TRACK_TYPE_TO_HANDLER_NAME: Record<IsobmffTrackData['type'], string> = {
 };
 
 /** Handler Reference Box. */
-export const hdlr = (hasComponentType: boolean, handlerType: string, name: string) => fullBox('hdlr', 0, 0, [
+export const hdlr = (
+	hasComponentType: boolean,
+	handlerType: string,
+	name: string,
+	manufacturer = '\0\0\0\0',
+) => fullBox('hdlr', 0, 0, [
 	hasComponentType ? ascii('mhlr') : u32(0), // Component type
 	ascii(handlerType), // Component subtype
-	u32(0), // Component manufacturer
+	ascii(manufacturer), // Component manufacturer
 	u32(0), // Component flags
 	u32(0), // Component flags mask
 	ascii(name, true), // Component name
@@ -1318,6 +1270,266 @@ export const vttc = (
 /** VTT Additional Text Box */
 export const vtta = (notes: string) => box('vtta', [...textEncoder.encode(notes)]);
 
+/** User Data Box */
+const udta = (muxer: IsobmffMuxer) => {
+	const boxes: Box[] = [];
+
+	// Depending on the format, metadata tags are written differently
+	if (muxer.isQuickTime) {
+		addQuickTimeMetadataTagBoxes(boxes, muxer.output._metadataTags);
+	} else {
+		const metaBox = meta(muxer.output._metadataTags);
+		if (metaBox) {
+			boxes.push(metaBox);
+		}
+	}
+
+	if (boxes.length === 0) {
+		return null;
+	}
+
+	return box('udta', undefined, boxes);
+};
+
+const addQuickTimeMetadataTagBoxes = (boxes: Box[], tags: MetadataTags) => {
+	// https://exiftool.org/TagNames/QuickTime.html (QuickTime UserData Tags)
+	// For QuickTime files, metadata tags are dumped into the udta box
+
+	for (const { key, value } of keyValueIterator(tags)) {
+		switch (key) {
+			case 'title': {
+				boxes.push(metadataTagStringBoxShort('©nam', value));
+			}; break;
+
+			case 'description': {
+				boxes.push(metadataTagStringBoxShort('©des', value));
+			}; break;
+
+			case 'artist': {
+				boxes.push(metadataTagStringBoxShort('©ART', value));
+			}; break;
+
+			case 'album': {
+				boxes.push(metadataTagStringBoxShort('©alb', value));
+			}; break;
+
+			case 'albumArtist': {
+				boxes.push(metadataTagStringBoxShort('albr', value));
+			}; break;
+
+			case 'genre': {
+				boxes.push(metadataTagStringBoxShort('©gen', value));
+			}; break;
+
+			case 'date': {
+				boxes.push(metadataTagStringBoxShort('©day', value.toISOString().slice(0, 10)));
+			}; break;
+
+			case 'comment': {
+				boxes.push(metadataTagStringBoxShort('©cmt', value));
+			}; break;
+
+			case 'lyrics': {
+				boxes.push(metadataTagStringBoxShort('©lyr', value));
+			}; break;
+
+			case 'raw': {
+				// Handled later
+			}; break;
+
+			case 'discNumber':
+			case 'discsTotal':
+			case 'trackNumber':
+			case 'tracksTotal':
+			case 'images': {
+				// Not written for QuickTime (common Apple L)
+			}; break;
+
+			default: assertNever(key);
+		}
+	}
+
+	if (tags.raw) {
+		for (const key in tags.raw) {
+			const value = tags.raw[key];
+			if (value == null || key.length !== 4 || boxes.some(x => x.type === key)) {
+				continue;
+			}
+
+			if (typeof value === 'string') {
+				boxes.push(metadataTagStringBoxShort(key, value));
+			} else if (value instanceof Uint8Array) {
+				boxes.push(box(key, Array.from(value)));
+			}
+		}
+	}
+};
+
+const metadataTagStringBoxShort = (name: string, value: string) => {
+	const encoded = textEncoder.encode(value);
+
+	return box(name, [
+		u16(encoded.length),
+		u16(getLanguageCodeInt('und')),
+		Array.from(encoded),
+	]);
+};
+
+const DATA_BOX_MIME_TYPE_MAP: Record<string, number> = {
+	'image/jpeg': 13,
+	'image/png': 14,
+	'image/bmp': 27,
+};
+
+/** Metadata Box */
+const meta = (tags: MetadataTags) => {
+	const boxes: Box[] = [];
+
+	// https://exiftool.org/TagNames/QuickTime.html (QuickTime ItemList Tags)
+	// This is the metadata format used for MP4 files
+
+	for (const { key, value } of keyValueIterator(tags)) {
+		switch (key) {
+			case 'title': {
+				boxes.push(metadataTagStringBoxLong('©nam', value));
+			}; break;
+
+			case 'description': {
+				boxes.push(metadataTagStringBoxLong('©des', value));
+			}; break;
+
+			case 'artist': {
+				boxes.push(metadataTagStringBoxLong('©ART', value));
+			}; break;
+
+			case 'album': {
+				boxes.push(metadataTagStringBoxLong('©alb', value));
+			}; break;
+
+			case 'albumArtist': {
+				boxes.push(metadataTagStringBoxLong('aART', value));
+			}; break;
+
+			case 'comment': {
+				boxes.push(metadataTagStringBoxLong('©cmt', value));
+			}; break;
+
+			case 'genre': {
+				boxes.push(metadataTagStringBoxLong('©gen', value));
+			}; break;
+
+			case 'lyrics': {
+				boxes.push(metadataTagStringBoxLong('©lyr', value));
+			}; break;
+
+			case 'date': {
+				boxes.push(metadataTagStringBoxLong('©day', value.toISOString().slice(0, 10)));
+			}; break;
+
+			case 'images': {
+				for (const image of value) {
+					if (image.kind !== 'coverFront') {
+						continue;
+					}
+
+					boxes.push(box('covr', undefined, [
+						box('data', [
+							u32(DATA_BOX_MIME_TYPE_MAP[image.mimeType] ?? 0), // Type indicator
+							u32(0), // Locale indicator
+							Array.from(image.data), // Kinda slow, hopefully temp
+						]),
+					]));
+				}
+			}; break;
+
+			case 'trackNumber': {
+				boxes.push(box('trkn', undefined, [
+					box('data', [
+						u32(0), // 8 bytes empty
+						u32(0),
+						u16(0), // Empty
+						u16(value),
+						u16(tags.tracksTotal ?? 0),
+						u16(0), // Empty
+					]),
+				]));
+			}; break;
+
+			case 'discNumber': {
+				boxes.push(box('disc', undefined, [
+					box('data', [
+						u32(0), // 8 bytes empty
+						u32(0),
+						u16(0), // Empty
+						u16(value),
+						u16(tags.discsTotal ?? 0),
+						u16(0), // Empty
+					]),
+				]));
+			}; break;
+
+			case 'tracksTotal':
+			case 'discsTotal':{
+				// These are included with 'trackNumber' and 'discNumber' respectively
+			}; break;
+
+			case 'raw': {
+				// Handled later
+			}; break;
+
+			default: assertNever(key);
+		}
+	}
+
+	if (tags.raw) {
+		for (const key in tags.raw) {
+			const value = tags.raw[key];
+			if (value == null || key.length !== 4 || boxes.some(x => x.type === key)) {
+				continue;
+			}
+
+			if (typeof value === 'string') {
+				boxes.push(metadataTagStringBoxLong(key, value));
+			} else if (value instanceof Uint8Array) {
+				boxes.push(box(key, undefined, [
+					box('data', [
+						u32(0), // Type indicator
+						u32(0), // Locale indicator
+						Array.from(value),
+					]),
+				]));
+			} else if (value instanceof RichImageData) {
+				boxes.push(box(key, undefined, [
+					box('data', [
+						u32(DATA_BOX_MIME_TYPE_MAP[value.mimeType] ?? 0), // Type indicator
+						u32(0), // Locale indicator
+						Array.from(value.data), // Kinda slow, hopefully temp
+					]),
+				]));
+			}
+		}
+	}
+
+	if (boxes.length === 0) {
+		return null;
+	}
+
+	return fullBox('meta', 0, 0, undefined, [
+		hdlr(false, 'mdir', '', 'appl'),
+		box('ilst', undefined, boxes),
+	]);
+};
+
+const metadataTagStringBoxLong = (name: string, value: string) => {
+	return box(name, undefined, [
+		box('data', [
+			u32(1), // Type indicator (UTF-8)
+			u32(0), // Locale indicator
+			...textEncoder.encode(value),
+		]),
+	]);
+};
+
 const VIDEO_CODEC_TO_BOX_NAME: Record<VideoCodec, string> = {
 	avc: 'avc1',
 	hevc: 'hvc1',
@@ -1425,4 +1637,16 @@ const SUBTITLE_CODEC_TO_CONFIGURATION_BOX: Record<
 	(trackData: IsobmffSubtitleTrackData) => Box | null
 > = {
 	webvtt: vttC,
+};
+
+const getLanguageCodeInt = (code: string) => {
+	assert(code.length === 3); ;
+
+	let language = 0;
+	for (let i = 0; i < 3; i++) {
+		language <<= 5;
+		language += code.charCodeAt(i) - 0x60;
+	}
+
+	return language;
 };
