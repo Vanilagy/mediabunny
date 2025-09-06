@@ -16,7 +16,14 @@ test('Should be able to get metadata and packets from a .FLAC file', async () =>
 	});
 
 	const descriptiveMetadata = await input.getMetadataTags();
-	console.log(descriptiveMetadata);
+	expect(descriptiveMetadata).toEqual({
+		title: 'The Happy Meeting',
+		date: new Date('2020'),
+		album: 'Samples files',
+		artist: 'Samples Files',
+		trackNumber: 4,
+		genre: 'Ambient',
+	});
 
 	const track = await input.getPrimaryAudioTrack();
 	assert(track);

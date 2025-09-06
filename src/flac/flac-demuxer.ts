@@ -12,7 +12,7 @@ import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
 import { assert, AsyncMutex, binarySearchExact, Bitstream, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
-import { readBytes, Reader, readU24Be, readU8 } from '../reader';
+import { readBytes, Reader, readU24Be, readU32Be, readU32Le, readU8 } from '../reader';
 import { MetadataTags } from '../tags';
 import { readNextFlacFrame } from './flac-reader';
 
@@ -197,6 +197,7 @@ export class FlacDemuxer extends Demuxer {
 
 	metadataPromise: Promise<void> | null = null;
 	tracks: InputAudioTrack[] = [];
+	metadataTags: MetadataTags = {};
 
 	audioInfo: FlacAudioInfo | null = null;
 	lastLoadedPos: number | null = null;
@@ -219,8 +220,9 @@ export class FlacDemuxer extends Demuxer {
 		return Math.max(0, ...trackDurations);
 	}
 
-	override getMetadataTags(): Promise<MetadataTags> {
-		throw new Error('TODO: Add metadata tags support');
+	override async getMetadataTags(): Promise<MetadataTags> {
+		await this.readMetadata();
+		return this.metadataTags;
 	}
 
 	async advanceReader() {
@@ -278,8 +280,7 @@ export class FlacDemuxer extends Demuxer {
 			) {
 				// Parse streaminfo block
 				// https://www.rfc-editor.org/rfc/rfc9639.html#section-8.2
-				let sizeSlice = this.reader.requestSlice(currentPos, currentPos + 4);
-				if (sizeSlice instanceof Promise) sizeSlice = await sizeSlice;
+				const sizeSlice = await this.reader.requestSlice(currentPos, currentPos + 4);
 				if (!sizeSlice) return;
 
 				const byte = readU8(sizeSlice); // first bit: isLastMetadata, remaining 7 bits: metaBlockType
@@ -291,13 +292,10 @@ export class FlacDemuxer extends Demuxer {
 				// 0 -> streaminfo
 				// 4 -> descriptive metadata (for future implementation)
 				if (metaBlockType === 0) {
-					let streamInfoBlock = this.reader.requestSlice(
+					const streamInfoBlock = await this.reader.requestSlice(
 						currentPos,
 						currentPos + size,
 					);
-					if (streamInfoBlock instanceof Promise) {
-						streamInfoBlock = await streamInfoBlock;
-					}
 					if (!streamInfoBlock) return;
 					currentPos += size;
 
@@ -344,6 +342,48 @@ export class FlacDemuxer extends Demuxer {
 					this.tracks.push(
 						new InputAudioTrack(new FlacAudioTrackBacking(this)),
 					);
+				} else if (metaBlockType === 4) {
+					// Parse vorbis comment block
+					// https://www.rfc-editor.org/rfc/rfc9639.html#name-vorbis-comment
+					const vorbisCommentBlock = await this.reader.requestSlice(currentPos, currentPos + size);
+					currentPos += size;
+					if (!vorbisCommentBlock) return;
+					const vendorLength = readU32Le(vorbisCommentBlock);
+					readBytes(vorbisCommentBlock, vendorLength);
+					// ^ vendor string, like "reference libFLAC 1.3.2 20190804";
+					// we don't use it
+					const listLength = readU32Le(vorbisCommentBlock);
+					for (let i = 0; i < listLength; i++) {
+						const stringLength = readU32Le(vorbisCommentBlock);
+						const bytes = readBytes(vorbisCommentBlock, stringLength);
+						const string = new TextDecoder().decode(bytes).trim();
+						const split = string.split('=');
+						const key = split[0]?.toLowerCase();
+						const value = split[1] as string;
+						if (key === 'title') {
+							this.metadataTags.title = value;
+						} else if (key === 'artist') {
+							this.metadataTags.artist = value;
+						} else if (key === 'album') {
+							this.metadataTags.album = value;
+						} else if (key === 'date') {
+							this.metadataTags.date = new Date(value);
+						} else if (key === 'comment') {
+							this.metadataTags.comment = value;
+						} else if (key === 'lyrics') {
+							this.metadataTags.lyrics = value;
+						} else if (key === 'genre') {
+							this.metadataTags.genre = value;
+						} else if (key === 'tracknumber') {
+							this.metadataTags.trackNumber = Number.parseInt(value, 10);
+						} else if (key === 'tracktotal') {
+							this.metadataTags.tracksTotal = Number.parseInt(value, 10);
+						} else if (key === 'discnumber') {
+							this.metadataTags.discNumber = Number.parseInt(value, 10);
+						} else if (key === 'disctotal') {
+							this.metadataTags.discsTotal = Number.parseInt(value, 10);
+						}
+					}
 				} else {
 					// Skip the metadata block
 					currentPos += size;
