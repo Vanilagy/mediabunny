@@ -71,6 +71,7 @@ import {
 } from './ebml';
 import { buildMatroskaMimeType } from './matroska-misc';
 import { FileSlice, readBytes, Reader, readI16Be, readU8 } from '../reader';
+import { isWebMSeparateAlphaDecoderRegistered } from '../webm-alpha';
 
 type Segment = {
 	seekHeadSeen: boolean;
@@ -138,6 +139,7 @@ type ClusterBlock = {
 	referencedTimestamps: number[];
 	data: Uint8Array;
 	lacing: BlockLacing;
+	additions?: Uint8Array;
 };
 
 type CuePoint = {
@@ -171,6 +173,7 @@ type InternalTrack = {
 			codec: VideoCodec | null;
 			codecDescription: Uint8Array | null;
 			colorSpace: VideoColorSpaceInit | null;
+			alphaMode?: boolean;
 		}
 		| {
 			type: 'audio';
@@ -797,6 +800,7 @@ export class MatroskaDemuxer extends Demuxer {
 					isKeyFrame: originalBlock.isKeyFrame,
 					referencedTimestamps: originalBlock.referencedTimestamps,
 					data: frameData,
+					additions: originalBlock.additions,
 					lacing: BlockLacing.None,
 				});
 			}
@@ -1143,6 +1147,12 @@ export class MatroskaDemuxer extends Demuxer {
 				this.readContiguousElements(slice.slice(dataStartPos, size));
 			}; break;
 
+			case EBMLId.AlphaMode: {
+				if (this.currentTrack?.info?.type !== 'video') break;
+
+				this.currentTrack.info.alphaMode = !!readUnsignedInt(slice, size);
+			}; break;
+
 			case EBMLId.PixelWidth: {
 				if (this.currentTrack?.info?.type !== 'video') break;
 
@@ -1338,6 +1348,27 @@ export class MatroskaDemuxer extends Demuxer {
 					lacing,
 				};
 				trackData.blocks.push(this.currentBlock);
+			}; break;
+
+			case EBMLId.BlockAdditions: {
+				this.readContiguousElements(slice.slice(dataStartPos, size));
+			} break;
+
+			case EBMLId.BlockMore: {
+				this.readContiguousElements(slice.slice(dataStartPos, size));
+			}; break;
+
+			case EBMLId.BlockAddID: {
+				const id = readUnsignedInt(slice, size);
+
+				// Only handle 1 now, for video alpha and subtitle cue configs
+				if (id !== 1) break;
+			}; break;
+
+			case EBMLId.BlockAdditional: {
+				if (!this.currentBlock || this.currentBlock.additions) break;
+
+				this.currentBlock.additions = readBytes(slice, size - (slice.filePos - dataStartPos));
 			}; break;
 
 			case EBMLId.BlockDuration: {
@@ -1807,6 +1838,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 			duration,
 			cluster.dataStartPos + blockIndex,
 			block.data.byteLength,
+			block.additions,
 		);
 
 		this.packetToClusterLocation.set(packet, { cluster, blockIndex });
@@ -2122,19 +2154,21 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 
 		return this.decoderConfigPromise ??= (async (): Promise<VideoDecoderConfig> => {
 			let firstPacket: EncodedPacket | null = null;
+			const customAlphaDecoderRegistered = isWebMSeparateAlphaDecoderRegistered();
 			const needsPacketForAdditionalInfo
 				= this.internalTrack.info.codec === 'vp9'
 					|| this.internalTrack.info.codec === 'av1'
 					// Packets are in Annex B format:
 					|| (this.internalTrack.info.codec === 'avc' && !this.internalTrack.info.codecDescription)
 					// Packets are in Annex B format:
-					|| (this.internalTrack.info.codec === 'hevc' && !this.internalTrack.info.codecDescription);
+					|| (this.internalTrack.info.codec === 'hevc' && !this.internalTrack.info.codecDescription)
+					|| customAlphaDecoderRegistered;
 
 			if (needsPacketForAdditionalInfo) {
 				firstPacket = await this.getFirstPacket({});
 			}
 
-			return {
+			const config: VideoDecoderConfig = {
 				codec: extractVideoCodecString({
 					width: this.internalTrack.info.width,
 					height: this.internalTrack.info.height,
@@ -2159,6 +2193,23 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 				description: this.internalTrack.info.codecDescription ?? undefined,
 				colorSpace: this.internalTrack.info.colorSpace ?? undefined,
 			};
+			const configWithPreferSoftware: VideoDecoderConfig = {
+				...config,
+				hardwareAcceleration: 'prefer-software',
+			};
+
+			// HACK: auto opt-in for custom alpha decoding if the custom one is registered
+			if (
+				customAlphaDecoderRegistered
+				&& this.internalTrack.info.alphaMode
+				&& firstPacket?.additions
+				&& typeof VideoEncoder !== 'undefined'
+				&& (await VideoDecoder.isConfigSupported(configWithPreferSoftware)).supported
+			) {
+				return configWithPreferSoftware;
+			}
+
+			return config;
 		})();
 	}
 }

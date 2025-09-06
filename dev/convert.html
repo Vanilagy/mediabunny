@@ -5,6 +5,8 @@
 
 <script type="module">
 	MediabunnyMp3Encoder.registerMp3Encoder();
+	Mediabunny.registerWebMSeparateAlphaDecoder();
+	Mediabunny.registerWebMSeparateAlphaEncoder();
 
 	const fileInput = document.createElement('input');
 	fileInput.type = 'file';
@@ -97,7 +99,8 @@
 			*/
 			/*
 			video: {
-				codec: 'avc',
+				codec: 'vp9',
+				alpha: 'keep',
 			},
 			audio: {
 				codec: 'mp3',

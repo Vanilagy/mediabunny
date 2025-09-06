@@ -193,5 +193,9 @@ export {
 	AttachedImage,
 	RichImageData,
 } from './tags';
+export {
+	registerWebMSeparateAlphaDecoder,
+	registerWebMSeparateAlphaEncoder,
+} from './webm-alpha';
 
 // 🐡🦔
