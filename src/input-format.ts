@@ -395,7 +395,14 @@ export class OggInputFormat extends InputFormat {
 		return 'application/ogg';
 	}
 }
-
+/**
+ * FLAC file format.
+ *
+ * Do not instantiate this class; use the {@link FLAC} singleton instead.
+ *
+ * @group Input formats
+ * @public
+ */
 export class FlacInputFormat extends InputFormat {
 	/** @internal */
 	async _canReadInput(input: Input) {
