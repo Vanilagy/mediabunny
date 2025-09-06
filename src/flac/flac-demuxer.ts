@@ -434,10 +434,6 @@ export class FlacDemuxer extends Demuxer {
 			throw new Error('Failed to read next FLAC frame');
 		}
 
-		if (this.audioInfo.minimumBlockSize !== this.audioInfo.maximumBlockSize) {
-			throw new Error('Cannot determine timestamp');
-		}
-
 		const lastSample = this.loadedSamples[this.loadedSamples.length - 1];
 		const blockOffset = lastSample ? (lastSample.blockOffset + lastSample.blockSize) : 0;
 
