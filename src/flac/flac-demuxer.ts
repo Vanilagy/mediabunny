@@ -49,10 +49,9 @@ type FlacAudioInfo = {
 };
 
 type Sample = {
-	timestamp: number;
-	duration: number;
-	dataStart: number;
-	dataSize: number;
+	blockOffset: number;
+	blockSize: number;
+	byteOffset: number;
 };
 
 type NextFlacFrameResult = {
@@ -139,7 +138,7 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 			const sampleIndex = binarySearchExact(
 				this.demuxer.loadedSamples,
 				packet.timestamp,
-				x => x.timestamp,
+				x => x.blockOffset / this.demuxer.audioInfo!.sampleRate,
 			);
 			if (sampleIndex === -1) {
 				throw new Error('Packet was not created from this track.');
@@ -191,8 +190,8 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 				data = PLACEHOLDER_DATA;
 			} else {
 				let slice = this.demuxer.reader.requestSlice(
-					rawSample.dataStart,
-					rawSample.dataSize,
+					rawSample.byteOffset,
+					rawSample.blockSize,
 				);
 				if (slice instanceof Promise) slice = await slice;
 
@@ -200,16 +199,19 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 					return null; // Data didn't fit into the rest of the file
 				}
 
-				data = readBytes(slice, rawSample.dataSize);
+				data = readBytes(slice, rawSample.blockSize);
 			}
 
+			assert(this.demuxer.audioInfo);
+			const timestamp = rawSample.blockOffset / this.demuxer.audioInfo.sampleRate;
+			const duration = rawSample.blockSize / this.demuxer.audioInfo.sampleRate;
 			return new EncodedPacket(
 				data,
 				'key',
-				rawSample.timestamp,
-				rawSample.duration,
+				timestamp,
+				duration,
 				sampleIndex,
-				rawSample.dataSize,
+				rawSample.blockSize,
 			);
 		}
 
@@ -435,15 +437,13 @@ export class FlacDemuxer extends Demuxer {
 			throw new Error('Cannot determine timestamp');
 		}
 
-		const timestamp
-			= (result.num * this.audioInfo.maximumBlockSize)
-				/ this.audioInfo.sampleRate;
+		const lastSample = this.loadedSamples[this.loadedSamples.length - 1];
+		const blockOffset = lastSample ? (lastSample.blockOffset + lastSample.blockSize) : 0;
 
 		const sample: Sample = {
-			timestamp,
-			duration: this.audioInfo.maximumBlockSize / this.audioInfo.sampleRate,
-			dataStart: startPos,
-			dataSize: result.size,
+			blockOffset,
+			blockSize: result.blockSize,
+			byteOffset: startPos,
 		};
 
 		this.lastLoadedPos = this.lastLoadedPos + result.size;

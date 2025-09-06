@@ -47,6 +47,11 @@ test('Should be able to get metadata and packets from a .FLAC file', async () =>
 	for await (const sample of sink.packets()) {
 		samples++;
 		lastSampleTimestamp = sample.timestamp;
+		if (sample.sequenceNumber === 212) {
+			expect(sample.duration).toEqual(0.023764172335600908);
+		} else {
+			expect(sample.duration).toEqual(0.09287981859410431);
+		}
 	}
 	expect(samples).toBe(213);
 	expect(lastSampleTimestamp).toBe(19.690521541950112);
