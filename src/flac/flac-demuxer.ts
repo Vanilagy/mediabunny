@@ -305,18 +305,19 @@ export class FlacDemuxer extends Demuxer {
 	readNextFlacFrame = async ({
 		reader,
 		startPos,
-		until,
 		firstPacket,
 		blockingBit,
 	}: {
 		reader: Reader;
 		startPos: number;
-		until: number;
 		firstPacket: boolean;
 		blockingBit: number | undefined;
 	}): Promise<NextFlacFrameResult | null> => {
-	// Also need to validate the next header, which in the worst case may be up to 16 bytes
-		const desiredEnd = until + 16 - startPos;
+		assert(this.audioInfo);
+		// Also want to validate the next header is valid
+		// to throw out an accidential sync word
+		// which in the worst case may be up to 16 bytes
+		const desiredEnd = this.audioInfo.maximumFrameSize + 16;
 		const slice = await reader.requestSliceRange(startPos, 1, desiredEnd);
 
 		if (!slice) {
@@ -333,7 +334,16 @@ export class FlacDemuxer extends Demuxer {
 			return null;
 		}
 
+		// We don't know exactly how long the packet is, we only know the `miniumFrameSize` and `maximumFrameSize`
+		// The packet is over if the next 2 bytes are the sync word followed by a valid header
+		// or the end of the file is reached
+
+		// The next sync word is expected at earliest when `minimumFrameSize` is reached,
+		// we can skip over anything before that
+		slice.filePos = startPos + this.audioInfo.minimumFrameSize;
+
 		while (true) {
+			// Reached end of the file, packet is over
 			if (slice.filePos >= slice.end) {
 				return {
 					num: a.num,
@@ -387,7 +397,6 @@ export class FlacDemuxer extends Demuxer {
 		const result = await this.readNextFlacFrame({
 			reader: this.reader,
 			startPos,
-			until: startPos + this.audioInfo.maximumFrameSize,
 			firstPacket: this.loadedSamples.length === 0,
 			blockingBit: this.blockingBit,
 		});
