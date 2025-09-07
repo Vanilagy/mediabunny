@@ -6,13 +6,13 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { assert, Bitstream, keyValueIterator, toDataView, toUint8Array } from '../misc';
+import { assert, Bitstream, toDataView, toUint8Array } from '../misc';
 import { Muxer } from '../muxer';
 import { Output, OutputAudioTrack } from '../output';
 import { FlacOutputFormat } from '../output-format';
 import { EncodedPacket } from '../packet';
 import { FileSlice, readBytes } from '../reader';
-import { metadataTagsAreEmpty } from '../tags';
+import { MetadataTags, metadataTagsAreEmpty } from '../tags';
 import { Writer } from '../writer';
 import {
 	getBlockSize,
@@ -107,7 +107,20 @@ export class FlacMuxer extends Muxer {
 
 		let entries = 0;
 
-		for (const { key, value } of keyValueIterator(this.output._metadataTags)) {
+		const keys = new Set<string>();
+		for (const key of Object.keys(this.output._metadataTags)) {
+			if (key === 'raw') {
+				continue;
+			}
+
+			keys.add(key);
+		}
+		for (const key of Object.keys(this.output._metadataTags.raw ?? {})) {
+			keys.add(key);
+		}
+
+		for (const key of keys) {
+			const value = this.output._metadataTags[key as keyof MetadataTags];
 			if (key === 'raw') {
 				continue;
 			}

@@ -10,18 +10,14 @@ import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
-import {
-	assert,
-	AsyncMutex,
-	Bitstream,
-	UNDETERMINED_LANGUAGE,
-} from '../misc';
+import { assert, AsyncMutex, Bitstream, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import {
 	FileSlice,
 	readBytes,
 	Reader,
 	readU24Be,
+	readU32Be,
 	readU32Le,
 	readU8,
 } from '../reader';
@@ -134,16 +130,24 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		let index = 0;
 
 		for (const sample of this.demuxer.loadedSamples) {
-			const sampleTimestamp = sample.blockOffset / this.demuxer.audioInfo.sampleRate;
-			const sampleDuration = sample.blockSize / this.demuxer.audioInfo.sampleRate;
-			if (sampleTimestamp <= timestamp && sampleTimestamp + sampleDuration > timestamp) {
+			const sampleTimestamp
+				= sample.blockOffset / this.demuxer.audioInfo.sampleRate;
+			const sampleDuration
+				= sample.blockSize / this.demuxer.audioInfo.sampleRate;
+			if (
+				sampleTimestamp <= timestamp
+				&& sampleTimestamp + sampleDuration > timestamp
+			) {
 				return this.getPacketAtIndex(index, options);
 			}
 			index++;
 		}
 
 		if (this.demuxer.lastSampleLoaded) {
-			return this.getPacketAtIndex(this.demuxer.loadedSamples.length - 1, options);
+			return this.getPacketAtIndex(
+				this.demuxer.loadedSamples.length - 1,
+				options,
+			);
 		}
 
 		await this.demuxer.advanceReader();
@@ -433,7 +437,9 @@ export class FlacDemuxer extends Demuxer {
 		}
 
 		const lastSample = this.loadedSamples[this.loadedSamples.length - 1];
-		const blockOffset = lastSample ? (lastSample.blockOffset + lastSample.blockSize) : 0;
+		const blockOffset = lastSample
+			? lastSample.blockOffset + lastSample.blockSize
+			: 0;
 
 		const sample: Sample = {
 			blockOffset,
@@ -475,6 +481,7 @@ export class FlacDemuxer extends Demuxer {
 
 				// 0 -> streaminfo
 				// 4 -> descriptive metadata (for future implementation)
+				// 6 -> picture
 				if (metaBlockType === 0) {
 					const streamInfoBlock = await this.reader.requestSlice(
 						currentPos,
@@ -565,6 +572,39 @@ export class FlacDemuxer extends Demuxer {
 							this.metadataTags.discsTotal = Number.parseInt(value, 10);
 						}
 					}
+				} else if (metaBlockType === 6) {
+					// Parse picture block
+					// https://www.rfc-editor.org/rfc/rfc9639.html#name-picture
+					const pictureBlock = await this.reader.requestSlice(
+						currentPos,
+						currentPos + size,
+					);
+
+					currentPos += size;
+					assert(pictureBlock);
+					const pictureType = readU32Be(pictureBlock);
+					const mediaTypeLength = readU32Be(pictureBlock);
+					const mediaType = new TextDecoder().decode(
+						readBytes(pictureBlock, mediaTypeLength),
+					);
+					const descriptionLength = readU32Be(pictureBlock);
+					const description = new TextDecoder().decode(
+						readBytes(pictureBlock, descriptionLength),
+					);
+					readU32Be(pictureBlock); // width
+					readU32Be(pictureBlock); // height
+					readU32Be(pictureBlock); // color depth
+					readU32Be(pictureBlock); // number of indexed colors
+					const dataLength = readU32Be(pictureBlock);
+					const data = readBytes(pictureBlock, dataLength);
+					this.metadataTags.images ??= [];
+					this.metadataTags.images.push({
+						data,
+						mimeType: mediaType,
+						// https://www.rfc-editor.org/rfc/rfc9639.html#table13
+						kind: pictureType === 3 ? 'coverFront' : pictureType === 4 ? 'coverBack' : 'unknown',
+						description,
+					});
 				} else {
 					// Skip the metadata block
 					currentPos += size;

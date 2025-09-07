@@ -110,7 +110,7 @@ test('should be able to get metadata', async () => {
 		formats: ALL_FORMATS,
 	});
 
-	const descriptiveMetadata = await input.getMetadataTags();
+	const { images, ...descriptiveMetadata } = await input.getMetadataTags();
 	expect(descriptiveMetadata).toEqual({
 		title: 'The Happy Meeting',
 		date: new Date('2020'),
@@ -122,6 +122,10 @@ test('should be able to get metadata', async () => {
 			date: '2020',
 		},
 	});
+	expect(images).toHaveLength(1);
+	expect(images![0]!.mimeType).toEqual('image/png');
+	expect(images![0]!.kind).toEqual('coverFront');
+	expect(images![0]!.description).toEqual('Album cover');
 });
 
 test('should be able to re-mux a .flac', async () => {
@@ -157,7 +161,11 @@ test('should be able to re-mux a .flac', async () => {
 	expect(inputTrack.timeResolution).toBe(outputTrack.timeResolution);
 
 	const outputMetadataTags = await outputAsInput.getMetadataTags();
-	const inputMetadataTags = await input.getMetadataTags();
+
+	// Images are not muxed currently, because width and height are required, but
+	// Mediabunny metadata does not have them.
+	const { images, ...inputMetadataTags } = await input.getMetadataTags();
+	expect(images).toHaveLength(1);
 	expect(Object.keys(outputMetadataTags)).toEqual([
 		'title',
 		'date',
