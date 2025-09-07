@@ -819,8 +819,7 @@ export class AdtsOutputFormat extends OutputFormat {
 	}
 }
 
-export type FlacOutputFormatOptions = {
-};
+export type FlacOutputFormatOptions = {};
 
 export class FlacOutputFormat extends OutputFormat {
 	/** @internal */
