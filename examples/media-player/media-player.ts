@@ -694,3 +694,12 @@ document.addEventListener('drop', (event) => {
 		void initMediaPlayer(file);
 	}
 });
+
+document.addEventListener("DOMContentLoaded", () => {
+	const urlParams = new URLSearchParams(window.location.search);
+	const url = urlParams.get("video_url");
+
+	if (url) {
+		void initMediaPlayer(url);
+	}
+});
