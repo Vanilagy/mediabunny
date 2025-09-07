@@ -141,6 +141,7 @@ const combineAlpha = async (main: VideoFrame, alpha?: VideoFrame | null | void) 
 		displayHeight: main.displayHeight,
 		colorSpace: main.colorSpace,
 		timestamp: main.timestamp,
+		duration: main.duration,
 		format: resultFormat,
 		transfer: [data.buffer],
 	} as VideoFrameBufferInit);
