@@ -2,9 +2,13 @@ import { expect, test } from 'vitest';
 import path from 'node:path';
 import { assert } from '../../src/misc.js';
 import { Input } from '../../src/input.js';
-import { FilePathSource } from '../../src/source.js';
-import { ALL_FORMATS } from '../../src/input-format.js';
+import { BufferSource, FilePathSource } from '../../src/source.js';
+import { ALL_FORMATS, FLAC } from '../../src/input-format.js';
 import { EncodedPacketSink } from '../../src/media-sink.js';
+import { Output } from '../../src/output.js';
+import { BufferTarget } from '../../src/target.js';
+import { FlacOutputFormat } from '../../src/output-format.js';
+import { Conversion } from '../../src/conversion.js';
 
 const __dirname = new URL('.', import.meta.url).pathname;
 
@@ -23,7 +27,6 @@ test('Should be able to loop over all samples', async () => {
 		numberOfChannels: 2,
 		sampleRate: 44100,
 		description: new Uint8Array([
-			0x66, 0x4c, 0x61, 0x43,
 			16, 0, 16, 0, 0, 6, 45, 0, 37, 173, 10, 196, 66, 240, 0, 13, 68, 24, 85,
 			22, 231, 0, 113, 139, 185, 1, 33, 54, 155, 80, 241, 191, 203, 112]),
 	});
@@ -115,5 +118,64 @@ test('should be able to get metadata', async () => {
 		artist: 'Samples Files',
 		trackNumber: 4,
 		genre: 'Ambient',
+		raw: {
+			date: '2020',
+		},
 	});
+});
+
+test('should be able to re-mux a .flac', async () => {
+	const filePath = path.join(__dirname, '..', 'public/sample.flac');
+	const input = new Input({
+		source: new FilePathSource(filePath),
+		formats: ALL_FORMATS,
+	});
+
+	const output = new Output({
+		format: new FlacOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({ input, output });
+	await conversion.execute();
+
+	const buffer = output.target.buffer;
+	assert(buffer);
+
+	const outputAsInput = new Input({
+		source: new BufferSource(buffer),
+		formats: [FLAC],
+	});
+
+	const outputTrack = await outputAsInput.getPrimaryAudioTrack();
+	assert(outputTrack);
+
+	const inputTrack = await input.getPrimaryAudioTrack();
+	assert(inputTrack);
+	expect(inputTrack.sampleRate).toBe(outputTrack.sampleRate);
+	expect(inputTrack.numberOfChannels).toBe(outputTrack.numberOfChannels);
+	expect(inputTrack.timeResolution).toBe(outputTrack.timeResolution);
+
+	const outputMetadataTags = await outputAsInput.getMetadataTags();
+	const inputMetadataTags = await input.getMetadataTags();
+	expect(Object.keys(outputMetadataTags)).toEqual([
+		'title',
+		'date',
+		'raw',
+		'album',
+		'artist',
+		'trackNumber',
+		'genre',
+	]);
+	expect(outputMetadataTags).toEqual(inputMetadataTags);
+
+	const packetSink = new EncodedPacketSink(outputTrack);
+	let packets = 0;
+	let timestamp = 0;
+	for await (const packet of packetSink.packets()) {
+		packets++;
+		timestamp = packet.timestamp;
+	}
+	expect(packets).toBe(213);
+	expect(timestamp).toBe(19.690521541950112);
 });

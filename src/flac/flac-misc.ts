@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { Bitstream } from '../misc';
+import { Bitstream, toDataView } from '../misc';
 import { FileSlice, readBytes, readU16Be, readU8 } from '../reader';
 
 type BlockSizeOrUncommon = number | 'uncommon-u16' | 'uncommon-u8';
@@ -212,4 +212,11 @@ export const calculateCRC8 = (data: Uint8Array) => {
 	}
 
 	return crc;
+};
+
+export const toU32Le = (value: number) => {
+	const buffer = new Uint8Array(4);
+	const dataView = toDataView(buffer);
+	dataView.setUint32(0, value, true);
+	return buffer;
 };

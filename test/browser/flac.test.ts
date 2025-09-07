@@ -45,10 +45,13 @@ test('should be able to convert a .flac to .wav', async () => {
 		formats: [WAVE],
 	});
 
-	const track = await outputAsInput.getPrimaryAudioTrack();
-	assert(track);
+	const inputTrack = await input.getPrimaryAudioTrack();
+	assert(inputTrack);
 
-	const duration = await track.computeDuration();
+	const outputTrack = await outputAsInput.getPrimaryAudioTrack();
+	assert(outputTrack);
+
+	const duration = await outputTrack.computeDuration();
 	expect(duration).toBe(19.71428571428571);
 	const tags = await outputAsInput.getMetadataTags();
 	expect(tags.raw).toEqual({
@@ -59,4 +62,7 @@ test('should be able to convert a .flac to .wav', async () => {
 		IPRD: 'Samples files',
 		ITRK: '4',
 	});
+	expect(inputTrack.sampleRate).toBe(outputTrack.sampleRate);
+	expect(inputTrack.numberOfChannels).toBe(outputTrack.numberOfChannels);
+	expect(inputTrack.timeResolution).toBe(outputTrack.timeResolution);
 });
