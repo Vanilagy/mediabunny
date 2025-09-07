@@ -26,7 +26,7 @@ import {
 	calculateCRC8,
 	getBlockSize,
 	getBlockSizeOrUncommon,
-	getFlacCodedNumber,
+	getCodedNumber,
 	getSampleRate,
 	getSampleRateOrUncommon,
 } from './flac-misc';
@@ -321,7 +321,7 @@ export class FlacDemuxer extends Demuxer {
 		const reservedZero = bitStream.readBits(1); // reserved zero
 		assert(reservedZero === 0);
 
-		const num = getFlacCodedNumber(slice);
+		const num = getCodedNumber(slice);
 		const blockSize = getBlockSize(slice, blockSizeOrUncommon);
 		const sampleRate = getSampleRate(slice, sampleRateOrUncommon);
 		const size = slice.filePos - startOffset;

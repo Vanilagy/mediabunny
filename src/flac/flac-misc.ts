@@ -11,6 +11,7 @@ import { FileSlice, readBytes, readU16Be, readU8 } from '../reader';
 
 type BlockSizeOrUncommon = number | 'uncommon-u16' | 'uncommon-u8';
 type SampleRateOrUncommon = number | 'uncommon-u8' | 'uncommon-u16' | 'uncommon-u16-10';
+
 // https://www.rfc-editor.org/rfc/rfc9639.html#name-block-size-bits
 export const getBlockSizeOrUncommon = (
 	bits: number,
@@ -111,7 +112,7 @@ export const getSampleRateOrUncommon = (
 };
 
 // https://www.rfc-editor.org/rfc/rfc9639.html#name-coded-number
-export const getFlacCodedNumber = (fileSlice: FileSlice): number => {
+export const getCodedNumber = (fileSlice: FileSlice): number => {
 	let ones = 0;
 	let bits = 0;
 
