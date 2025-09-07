@@ -243,7 +243,7 @@ export class FlacDemuxer extends Demuxer {
 	loadedSamples: Sample[] = []; // All samples from the start of the file to lastLoadedPos
 
 	metadataPromise: Promise<void> | null = null;
-	tracks: InputAudioTrack[] = [];
+	track: InputAudioTrack | null = null;
 	metadataTags: MetadataTags = {};
 
 	audioInfo: FlacAudioInfo | null = null;
@@ -260,11 +260,9 @@ export class FlacDemuxer extends Demuxer {
 	}
 
 	override async computeDuration(): Promise<number> {
-		const tracks = await this.getTracks();
-		const trackDurations = await Promise.all(
-			tracks.map(x => x.computeDuration()),
-		);
-		return Math.max(0, ...trackDurations);
+		await this.readMetadata();
+		assert(this.track);
+		return this.track.computeDuration();
 	}
 
 	override async getMetadataTags(): Promise<MetadataTags> {
@@ -525,9 +523,7 @@ export class FlacDemuxer extends Demuxer {
 						description,
 					};
 
-					this.tracks.push(
-						new InputAudioTrack(new FlacAudioTrackBacking(this)),
-					);
+					this.track = new InputAudioTrack(new FlacAudioTrackBacking(this));
 				} else if (metaBlockType === 4) {
 					// Parse vorbis comment block
 					// https://www.rfc-editor.org/rfc/rfc9639.html#name-vorbis-comment
@@ -587,7 +583,8 @@ export class FlacDemuxer extends Demuxer {
 
 	async getTracks() {
 		await this.readMetadata();
-		return this.tracks;
+		assert(this.track);
+		return [this.track];
 	}
 
 	override getMimeType(): Promise<string> {

@@ -111,7 +111,6 @@ export const getSampleRateOrUncommon = (
 };
 
 // https://www.rfc-editor.org/rfc/rfc9639.html#name-coded-number
-// TODO: Only supports encoded numbers, but if blocking byte is different, it may be unencoded as well
 export const getFlacCodedNumber = (fileSlice: FileSlice): number => {
 	let ones = 0;
 	let bits = 0;
