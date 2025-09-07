@@ -490,8 +490,8 @@ export class FlacDemuxer extends Demuxer {
 					if (!streamInfoBlock) return;
 					currentPos += size;
 
-					const streamInfoDescription = readBytes(streamInfoBlock, 34);
-					const bitstream = new Bitstream(streamInfoDescription);
+					const description = new Uint8Array(readBytes(streamInfoBlock, 34));
+					const bitstream = new Bitstream(description);
 
 					const minimumBlockSize = bitstream.readBits(16);
 					const maximumBlockSize = bitstream.readBits(16);
@@ -521,7 +521,7 @@ export class FlacDemuxer extends Demuxer {
 						maximumBlockSize,
 						minimumFrameSize,
 						maximumFrameSize,
-						description: streamInfoDescription,
+						description,
 					};
 
 					this.track = new InputAudioTrack(new FlacAudioTrackBacking(this));
