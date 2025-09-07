@@ -35,7 +35,6 @@ type FlacAudioInfo = {
 	numberOfChannels: number;
 	sampleRate: number;
 	totalSamples: number;
-	bitsPerSample: number;
 	minimumBlockSize: number;
 	maximumBlockSize: number;
 	minimumFrameSize: number;
@@ -462,20 +461,18 @@ export class FlacDemuxer extends Demuxer {
 
 		return (this.metadataPromise ??= (async () => {
 			while (
-				this.reader.fileSize === null
-				|| currentPos < this.reader.fileSize
+				this.reader.fileSize === null || currentPos < this.reader.fileSize
 			) {
-				// Parse streaminfo block
-				// https://www.rfc-editor.org/rfc/rfc9639.html#section-8.2
 				const sizeSlice = await this.reader.requestSlice(
 					currentPos,
 					currentPos + 4,
 				);
-				if (!sizeSlice) return;
+				currentPos += 4;
+
+				assert(sizeSlice);
 
 				const byte = readU8(sizeSlice); // first bit: isLastMetadata, remaining 7 bits: metaBlockType
 				const size = readU24Be(sizeSlice);
-				currentPos += 4;
 				const isLastMetadata = (byte & 0x80) !== 0;
 				const metaBlockType = byte & 0x7f;
 
@@ -483,11 +480,13 @@ export class FlacDemuxer extends Demuxer {
 				// 4 -> descriptive metadata (for future implementation)
 				// 6 -> picture
 				if (metaBlockType === 0) {
+					// Parse streaminfo block
+					// https://www.rfc-editor.org/rfc/rfc9639.html#section-8.2
 					const streamInfoBlock = await this.reader.requestSlice(
 						currentPos,
 						currentPos + size,
 					);
-					if (!streamInfoBlock) return;
+					assert(streamInfoBlock);
 					currentPos += size;
 
 					const description = new Uint8Array(readBytes(streamInfoBlock, 34));
@@ -499,8 +498,8 @@ export class FlacDemuxer extends Demuxer {
 					const maximumFrameSize = bitstream.readBits(24);
 
 					const sampleRate = bitstream.readBits(20);
-					const channels = bitstream.readBits(3) + 1;
-					const bitsPerSample = bitstream.readBits(5) + 1;
+					const numberOfChannels = bitstream.readBits(3) + 1;
+					bitstream.readBits(5); // bitsPerSample - 1
 					const totalSamples = bitstream.readBits(36);
 
 					// https://www.w3.org/TR/webcodecs-flac-codec-registration/#audiodecoderconfig-description
@@ -513,10 +512,9 @@ export class FlacDemuxer extends Demuxer {
 					bitstream.skipBits(16 * 8); // md5 hash
 
 					this.audioInfo = {
-						numberOfChannels: channels,
+						numberOfChannels,
 						sampleRate,
 						totalSamples,
-						bitsPerSample,
 						minimumBlockSize,
 						maximumBlockSize,
 						minimumFrameSize,
@@ -533,7 +531,7 @@ export class FlacDemuxer extends Demuxer {
 						currentPos + size,
 					);
 					currentPos += size;
-					if (!vorbisCommentBlock) return;
+					assert(vorbisCommentBlock);
 					const vendorLength = readU32Le(vorbisCommentBlock);
 					readBytes(vorbisCommentBlock, vendorLength);
 					// ^ vendor string, like "reference libFLAC 1.3.2 20190804";
@@ -570,6 +568,9 @@ export class FlacDemuxer extends Demuxer {
 							this.metadataTags.discNumber = Number.parseInt(value, 10);
 						} else if (key === 'disctotal') {
 							this.metadataTags.discsTotal = Number.parseInt(value, 10);
+						} else if (key) {
+							this.metadataTags.raw ??= {};
+							this.metadataTags.raw[key] ??= value;
 						}
 					}
 				} else if (metaBlockType === 6) {

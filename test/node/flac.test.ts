@@ -120,6 +120,7 @@ test('should be able to get metadata', async () => {
 		genre: 'Ambient',
 		raw: {
 			date: '2020',
+			encoder: 'Lavf58.76.100',
 		},
 	});
 	expect(images).toHaveLength(1);
