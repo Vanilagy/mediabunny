@@ -92,7 +92,6 @@ export class FlacMuxer extends Muxer {
 	}
 
 	async writeVorbisCommentBlock() {
-		// TODO: Mutex
 		this.writer.seek(STREAMINFO_SIZE + FLAC_HEADER.byteLength);
 		if (metadataTagsAreEmpty(this.output._metadataTags)) {
 			this.metadataWritten = true;
