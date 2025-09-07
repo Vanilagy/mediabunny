@@ -243,7 +243,9 @@ class WebMSeparateAlphaDecoder extends CustomVideoDecoder {
 export const registerWebMSeparateAlphaDecoder = () => registerDecoder(WebMSeparateAlphaDecoder);
 
 /** @internal */
-export const isWebMSeparateAlphaDecoderRegistered = () => customVideoDecoders.includes(WebMSeparateAlphaDecoder);
+export const isWebMSeparateAlphaDecoderRegistered = () => customVideoDecoders.some(
+	decoder => decoder.name === 'WebMSeparateAlphaDecoder', // By name for tree shaking.
+);
 
 const extractAlpha = async (videoSample: VideoSample) => {
 	const format = videoSample.format || '';

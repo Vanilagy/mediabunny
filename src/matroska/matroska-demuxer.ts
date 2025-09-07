@@ -2154,7 +2154,8 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 
 		return this.decoderConfigPromise ??= (async (): Promise<VideoDecoderConfig> => {
 			let firstPacket: EncodedPacket | null = null;
-			const customAlphaDecoderRegistered = isWebMSeparateAlphaDecoderRegistered();
+			const needsAlphaSupportChecking = this.internalTrack.info.alphaMode
+				&& isWebMSeparateAlphaDecoderRegistered();
 			const needsPacketForAdditionalInfo
 				= this.internalTrack.info.codec === 'vp9'
 					|| this.internalTrack.info.codec === 'av1'
@@ -2162,7 +2163,7 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 					|| (this.internalTrack.info.codec === 'avc' && !this.internalTrack.info.codecDescription)
 					// Packets are in Annex B format:
 					|| (this.internalTrack.info.codec === 'hevc' && !this.internalTrack.info.codecDescription)
-					|| customAlphaDecoderRegistered;
+					|| needsAlphaSupportChecking;
 
 			if (needsPacketForAdditionalInfo) {
 				firstPacket = await this.getFirstPacket({});
@@ -2193,20 +2194,24 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 				description: this.internalTrack.info.codecDescription ?? undefined,
 				colorSpace: this.internalTrack.info.colorSpace ?? undefined,
 			};
-			const configWithPreferSoftware: VideoDecoderConfig = {
-				...config,
-				hardwareAcceleration: 'prefer-software',
-			};
 
 			// HACK: auto opt-in for custom alpha decoding if the custom one is registered
+			// Should probably do in CustomVideoDecoder.supports, but no access to packet there now
 			if (
-				customAlphaDecoderRegistered
-				&& this.internalTrack.info.alphaMode
-				&& firstPacket?.additions
-				&& typeof VideoEncoder !== 'undefined'
-				&& (await VideoDecoder.isConfigSupported(configWithPreferSoftware)).supported
+				needsAlphaSupportChecking
+				&& firstPacket?.additions // Possible to have alphaMode tagged but no data for alpha
 			) {
-				return configWithPreferSoftware;
+				const configWithPreferSoftware: VideoDecoderConfig = {
+					...config,
+					hardwareAcceleration: 'prefer-software',
+				};
+
+				if (
+					typeof VideoEncoder !== 'undefined'
+					&& (await VideoDecoder.isConfigSupported(configWithPreferSoftware)).supported
+				) {
+					return configWithPreferSoftware;
+				}
 			}
 
 			return config;
