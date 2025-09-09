@@ -96,6 +96,13 @@ const generateThumbnails = async (resource: File | string) => {
 				timestampElement.className
                     = 'absolute bottom-0 right-0 bg-black/30 text-white px-1 py-0.5 text-[11px] rounded-tl-lg';
 				container.append(timestampElement);
+			} else {
+				// Add something to indicate that the thumbnail is missing
+				const p = document.createElement('p');
+				p.textContent = '?';
+				p.className = 'absolute inset-0 flex items-center justify-center text-3xl opacity-50';
+
+				container.append(p);
 			}
 
 			i++;

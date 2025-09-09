@@ -7,6 +7,7 @@
  */
 
 import { parsePcmCodec, PCM_AUDIO_CODECS, PcmAudioCodec, VideoCodec, AudioCodec } from './codec';
+import { extractHevcNalUnits, extractNalUnitTypeForHevc, HevcNalUnitType } from './codec-data';
 import { CustomVideoDecoder, customVideoDecoders, CustomAudioDecoder, customAudioDecoders } from './custom-coder';
 import { InputAudioTrack, InputTrack, InputVideoTrack } from './input-track';
 import {
@@ -624,8 +625,8 @@ export abstract class BaseMediaSampleSink<
 					const nextPacket = await packetSink.getNextPacket(currentPacket);
 					assert(nextPacket);
 
-					currentPacket = nextPacket;
 					decoder.decode(nextPacket);
+					currentPacket = nextPacket;
 				}
 
 				maxSequenceNumber = -1;
@@ -757,12 +758,14 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 
 	inputTimestamps: number[] = []; // Timestamps input into the decoder, sorted.
 	sampleQueue: VideoSample[] = []; // Safari-specific thing, check usage.
+	currentPacketIndex = 0;
+	raslSkipped = false; // For HEVC stuff
 
 	constructor(
 		onSample: (sample: VideoSample) => unknown,
 		onError: (error: DOMException) => unknown,
-		codec: VideoCodec,
-		decoderConfig: VideoDecoderConfig,
+		public codec: VideoCodec,
+		public decoderConfig: VideoDecoderConfig,
 		public rotation: Rotation,
 		public timeResolution: number,
 	) {
@@ -848,6 +851,26 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	}
 
 	decode(packet: EncodedPacket) {
+		if (this.codec === 'hevc' && this.currentPacketIndex > 0 && !this.raslSkipped) {
+			// If we're using HEVC, we need to make sure to skip any RASL slices that follow a non-IDR key frame such as
+			// CRA_NUT. This is because RASL slices cannot be decoded without data before the CRA_NUT. Browsers behave
+			// differently here: Chromium drops the packets, Safari throws a decoder error. Either way, it's not good
+			// and causes bugs upstream. So, let's take the dropping into our own hands.
+			const nalUnits = extractHevcNalUnits(packet.data, this.decoderConfig);
+			const hasRaslPicture = nalUnits.some((x) => {
+				const type = extractNalUnitTypeForHevc(x);
+				return type === HevcNalUnitType.RASL_N || type === HevcNalUnitType.RASL_R;
+			});
+
+			if (hasRaslPicture) {
+				return; // Drop
+			}
+
+			this.raslSkipped = true;
+		}
+
+		this.currentPacketIndex++;
+
 		if (this.customDecoder) {
 			this.customDecoderQueueSize++;
 			void this.customDecoderCallSerializer
@@ -879,6 +902,9 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 
 			this.sampleQueue.length = 0;
 		}
+
+		this.currentPacketIndex = 0;
+		this.raslSkipped = false;
 	}
 
 	close() {

@@ -26,8 +26,27 @@ import { EncodedPacket, PacketType } from './packet';
 // Rec. ITU-T H.265
 // https://stackoverflow.com/questions/24884827
 
+export enum AvcNalUnitType {
+	IDR = 5,
+	SPS = 7,
+	PPS = 8,
+	SPS_EXT = 13,
+}
+
+export enum HevcNalUnitType {
+	RASL_N = 8,
+	RASL_R = 9,
+	BLA_W_LP = 16,
+	RSV_IRAP_VCL23 = 23,
+	VPS_NUT = 32,
+	SPS_NUT = 33,
+	PPS_NUT = 34,
+	PREFIX_SEI_NUT = 39,
+	SUFFIX_SEI_NUT = 40,
+}
+
 /** Finds all NAL units in an AVC packet in Annex B format. */
-const findNalUnitsInAnnexB = (packetData: Uint8Array) => {
+export const findNalUnitsInAnnexB = (packetData: Uint8Array) => {
 	const nalUnits: Uint8Array[] = [];
 	let i = 0;
 
@@ -184,6 +203,21 @@ export type AvcDecoderConfigurationRecord = {
 	sequenceParameterSetExt: Uint8Array[] | null;
 };
 
+export const extractAvcNalUnits = (packetData: Uint8Array, decoderConfig: VideoDecoderConfig) => {
+	if (decoderConfig.description) {
+		// Stream is length-prefixed. Let's extract the size of the length prefix from the decoder config
+
+		const bytes = toUint8Array(decoderConfig.description);
+		const lengthSizeMinusOne = bytes[4]! & 0b11;
+		const lengthSize = (lengthSizeMinusOne + 1) as 1 | 2 | 3 | 4;
+
+		return findNalUnitsInLengthPrefixed(packetData, lengthSize);
+	} else {
+		// Stream is in Annex B format
+		return findNalUnitsInAnnexB(packetData);
+	}
+};
+
 const extractNalUnitTypeForAvc = (data: Uint8Array) => {
 	return data[0]! & 0x1F;
 };
@@ -193,9 +227,9 @@ export const extractAvcDecoderConfigurationRecord = (packetData: Uint8Array) => 
 	try {
 		const nalUnits = findNalUnitsInAnnexB(packetData);
 
-		const spsUnits = nalUnits.filter(unit => extractNalUnitTypeForAvc(unit) === 7);
-		const ppsUnits = nalUnits.filter(unit => extractNalUnitTypeForAvc(unit) === 8);
-		const spsExtUnits = nalUnits.filter(unit => extractNalUnitTypeForAvc(unit) === 13);
+		const spsUnits = nalUnits.filter(unit => extractNalUnitTypeForAvc(unit) === AvcNalUnitType.SPS);
+		const ppsUnits = nalUnits.filter(unit => extractNalUnitTypeForAvc(unit) === AvcNalUnitType.PPS);
+		const spsExtUnits = nalUnits.filter(unit => extractNalUnitTypeForAvc(unit) === AvcNalUnitType.SPS_EXT);
 
 		if (spsUnits.length === 0) {
 			return null;
@@ -337,12 +371,6 @@ export const serializeAvcDecoderConfigurationRecord = (record: AvcDecoderConfigu
 	return new Uint8Array(bytes);
 };
 
-const NALU_TYPE_VPS = 32;
-const NALU_TYPE_SPS = 33;
-const NALU_TYPE_PPS = 34;
-const NALU_TYPE_SEI_PREFIX = 39;
-const NALU_TYPE_SEI_SUFFIX = 40;
-
 // Data specified in ISO 14496-15
 export type HevcDecoderConfigurationRecord = {
 	configurationVersion: number;
@@ -369,7 +397,22 @@ export type HevcDecoderConfigurationRecord = {
 	}[];
 };
 
-const extractNalUnitTypeForHevc = (data: Uint8Array) => {
+export const extractHevcNalUnits = (packetData: Uint8Array, decoderConfig: VideoDecoderConfig) => {
+	if (decoderConfig.description) {
+		// Stream is length-prefixed. Let's extract the size of the length prefix from the decoder config
+
+		const bytes = toUint8Array(decoderConfig.description);
+		const lengthSizeMinusOne = bytes[21]! & 0b11;
+		const lengthSize = (lengthSizeMinusOne + 1) as 1 | 2 | 3 | 4;
+
+		return findNalUnitsInLengthPrefixed(packetData, lengthSize);
+	} else {
+		// Stream is in Annex B format
+		return findNalUnitsInAnnexB(packetData);
+	}
+};
+
+export const extractNalUnitTypeForHevc = (data: Uint8Array) => {
 	return (data[0]! >> 1) & 0x3F;
 };
 
@@ -380,12 +423,12 @@ export const extractHevcDecoderConfigurationRecord = (
 	try {
 		const nalUnits = findNalUnitsInAnnexB(packetData);
 
-		const vpsUnits = nalUnits.filter(unit => extractNalUnitTypeForHevc(unit) === NALU_TYPE_VPS);
-		const spsUnits = nalUnits.filter(unit => extractNalUnitTypeForHevc(unit) === NALU_TYPE_SPS);
-		const ppsUnits = nalUnits.filter(unit => extractNalUnitTypeForHevc(unit) === NALU_TYPE_PPS);
+		const vpsUnits = nalUnits.filter(unit => extractNalUnitTypeForHevc(unit) === HevcNalUnitType.VPS_NUT);
+		const spsUnits = nalUnits.filter(unit => extractNalUnitTypeForHevc(unit) === HevcNalUnitType.SPS_NUT);
+		const ppsUnits = nalUnits.filter(unit => extractNalUnitTypeForHevc(unit) === HevcNalUnitType.PPS_NUT);
 		const seiUnits = nalUnits.filter(
-			unit => extractNalUnitTypeForHevc(unit) === NALU_TYPE_SEI_PREFIX
-				|| extractNalUnitTypeForHevc(unit) === NALU_TYPE_SEI_SUFFIX,
+			unit => extractNalUnitTypeForHevc(unit) === HevcNalUnitType.PREFIX_SEI_NUT
+				|| extractNalUnitTypeForHevc(unit) === HevcNalUnitType.SUFFIX_SEI_NUT,
 		);
 
 		if (spsUnits.length === 0 || ppsUnits.length === 0) return null;
@@ -521,7 +564,7 @@ export const extractHevcDecoderConfigurationRecord = (
 				? [
 						{
 							arrayCompleteness: 1,
-							nalUnitType: NALU_TYPE_VPS,
+							nalUnitType: HevcNalUnitType.VPS_NUT,
 							nalUnits: vpsUnits,
 						},
 					]
@@ -530,7 +573,7 @@ export const extractHevcDecoderConfigurationRecord = (
 				? [
 						{
 							arrayCompleteness: 1,
-							nalUnitType: NALU_TYPE_SPS,
+							nalUnitType: HevcNalUnitType.SPS_NUT,
 							nalUnits: spsUnits,
 						},
 					]
@@ -539,7 +582,7 @@ export const extractHevcDecoderConfigurationRecord = (
 				? [
 						{
 							arrayCompleteness: 1,
-							nalUnitType: NALU_TYPE_PPS,
+							nalUnitType: HevcNalUnitType.PPS_NUT,
 							nalUnits: ppsUnits,
 						},
 					]
@@ -1440,22 +1483,9 @@ export const determineVideoPacketType = async (
 			const decoderConfig = await videoTrack.getDecoderConfig();
 			assert(decoderConfig);
 
-			let nalUnits: Uint8Array[];
+			const nalUnits = extractAvcNalUnits(packet.data, decoderConfig);
+			const isKeyframe = nalUnits.some(x => extractNalUnitTypeForAvc(x) === AvcNalUnitType.IDR);
 
-			if (decoderConfig.description) {
-				// Stream is length-prefixed. Let's extract the size of the length prefix from the decoder config
-
-				const bytes = toUint8Array(decoderConfig.description);
-				const lengthSizeMinusOne = bytes[4]! & 0b11;
-				const lengthSize = (lengthSizeMinusOne + 1) as 1 | 2 | 3 | 4;
-
-				nalUnits = findNalUnitsInLengthPrefixed(packet.data, lengthSize);
-			} else {
-				// Stream is in Annex B format
-				nalUnits = findNalUnitsInAnnexB(packet.data);
-			}
-
-			const isKeyframe = nalUnits.some(x => extractNalUnitTypeForAvc(x) === 5);
 			return isKeyframe ? 'key' : 'delta';
 		};
 
@@ -1463,25 +1493,12 @@ export const determineVideoPacketType = async (
 			const decoderConfig = await videoTrack.getDecoderConfig();
 			assert(decoderConfig);
 
-			let nalUnits: Uint8Array[];
-
-			if (decoderConfig.description) {
-				// Stream is length-prefixed. Let's extract the size of the length prefix from the decoder config
-
-				const bytes = toUint8Array(decoderConfig.description);
-				const lengthSizeMinusOne = bytes[21]! & 0b11;
-				const lengthSize = (lengthSizeMinusOne + 1) as 1 | 2 | 3 | 4;
-
-				nalUnits = findNalUnitsInLengthPrefixed(packet.data, lengthSize);
-			} else {
-				// Stream is in Annex B format
-				nalUnits = findNalUnitsInAnnexB(packet.data);
-			}
-
+			const nalUnits = extractHevcNalUnits(packet.data, decoderConfig);
 			const isKeyframe = nalUnits.some((x) => {
 				const type = extractNalUnitTypeForHevc(x);
-				return 16 <= type && type <= 23;
+				return HevcNalUnitType.BLA_W_LP <= type && type <= HevcNalUnitType.RSV_IRAP_VCL23;
 			});
+
 			return isKeyframe ? 'key' : 'delta';
 		};
 
