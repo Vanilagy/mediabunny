@@ -224,6 +224,8 @@ class WebMSeparateAlphaDecoder extends CustomVideoDecoder {
 	override flush = () => this.coder.flush();
 }
 
+let _isWebMSeparateAlphaDecoderRegistered = false;
+
 /**
  * Registers the experimental custom decoder for handling supported packets with alpha channel in `VideoCodec` for WebM
  * By internally creating 2 `VideoDecoder` to handle main color data and additional data (alpha) separately and combine.
@@ -241,12 +243,19 @@ class WebMSeparateAlphaDecoder extends CustomVideoDecoder {
  *
  * @alpha
  */
-export const registerWebMSeparateAlphaDecoder = () => registerDecoder(WebMSeparateAlphaDecoder);
+export const registerWebMSeparateAlphaDecoder = () => {
+	if (!_isWebMSeparateAlphaDecoderRegistered) {
+		_isWebMSeparateAlphaDecoderRegistered = true;
+		registerDecoder(WebMSeparateAlphaDecoder);
+	}
+};
 
-/** @internal */
-export const isWebMSeparateAlphaDecoderRegistered = () => customVideoDecoders.some(
-	decoder => decoder.name === 'WebMSeparateAlphaDecoder', // By name for tree shaking.
-);
+/**
+ * By a flag for tree shaking
+ *
+ * @internal
+ */
+export const isWebMSeparateAlphaDecoderRegistered = () => _isWebMSeparateAlphaDecoderRegistered;
 
 const extractAlpha = async (videoSample: VideoSample) => {
 	const format = videoSample.format || '';

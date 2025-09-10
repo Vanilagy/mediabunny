@@ -408,7 +408,7 @@ class VideoEncoderWrapper {
 
 					if (
 						this.encodingConfig.alpha === 'keep'
-						&& ['vp9', 'av1', 'vp8'].includes(this.encodingConfig.codec)
+						&& ['vp9', 'vp8'].includes(this.encodingConfig.codec)
 						&& ['video/webm', 'x-matroska'].includes(
 							this.source._connectedTrack?.output.format.mimeType || '',
 						)
