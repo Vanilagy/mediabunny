@@ -2155,6 +2155,7 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 		return this.decoderConfigPromise ??= (async (): Promise<VideoDecoderConfig> => {
 			let firstPacket: EncodedPacket | null = null;
 			const needsAlphaSupportChecking = this.internalTrack.info.alphaMode
+				&& ['vp9', 'av1', 'vp8'].includes(this.internalTrack.info.codec || '')
 				&& isWebMSeparateAlphaDecoderRegistered();
 			const needsPacketForAdditionalInfo
 				= this.internalTrack.info.codec === 'vp9'

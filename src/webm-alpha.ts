@@ -9,7 +9,6 @@
 import { VideoCodec } from './codec';
 import {
 	CustomVideoDecoder,
-	customVideoDecoders,
 	CustomVideoEncoder,
 	registerDecoder,
 	registerEncoder,
