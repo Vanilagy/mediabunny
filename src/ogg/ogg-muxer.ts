@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { OPUS_INTERNAL_SAMPLE_RATE, validateAudioChunkMetadata } from '../codec';
+import { OPUS_SAMPLE_RATE, validateAudioChunkMetadata } from '../codec';
 import { parseModesFromVorbisSetupPacket, parseOpusIdentificationHeader } from '../codec-data';
 import {
 	assert,
@@ -119,7 +119,7 @@ export class OggMuxer extends Muxer {
 			track,
 			serialNumber,
 			internalSampleRate: track.source._codec === 'opus'
-				? OPUS_INTERNAL_SAMPLE_RATE
+				? OPUS_SAMPLE_RATE
 				: meta.decoderConfig.sampleRate,
 			codecInfo: {
 				codec: track.source._codec,

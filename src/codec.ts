@@ -621,7 +621,7 @@ export const parseAacAudioSpecificConfig = (bytes: Uint8Array | null): AacAudioS
 	};
 };
 
-export const OPUS_INTERNAL_SAMPLE_RATE = 48000;
+export const OPUS_SAMPLE_RATE = 48_000;
 
 const PCM_CODEC_REGEX = /^pcm-([usf])(\d+)+(be)?$/;
 

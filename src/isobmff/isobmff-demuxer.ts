@@ -12,6 +12,7 @@ import {
 	extractAudioCodecString,
 	extractVideoCodecString,
 	MediaCodec,
+	OPUS_SAMPLE_RATE,
 	parseAacAudioSpecificConfig,
 	parsePcmCodec,
 	PCM_AUDIO_CODECS,
@@ -1049,6 +1050,10 @@ export class IsobmffDemuxer extends Demuxer {
 							}
 						}
 
+						if (track.info.codec === 'opus') {
+							sampleRate = OPUS_SAMPLE_RATE; // Always the same
+						}
+
 						track.info.numberOfChannels = channelCount;
 						track.info.sampleRate = sampleRate;
 
@@ -1421,7 +1426,7 @@ export class IsobmffDemuxer extends Demuxer {
 
 				track.info.codecDescription = description;
 				track.info.numberOfChannels = outputChannelCount;
-				track.info.sampleRate = inputSampleRate;
+				// Don't copy the input sample rate, irrelevant, and output sample rate is fixed
 			}; break;
 
 			case 'dfLa': { // Used for FLAC audio

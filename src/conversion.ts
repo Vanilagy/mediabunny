@@ -1125,8 +1125,6 @@ export class Conversion {
 			await this._started;
 
 			const resampler = new AudioResampler({
-				sourceNumberOfChannels: track.numberOfChannels,
-				sourceSampleRate: track.sampleRate,
 				targetNumberOfChannels,
 				targetSampleRate,
 				startTime: this._startTimestamp,
@@ -1246,9 +1244,9 @@ class TrackSynchronizer {
  * OfflineAudioContext.
  */
 export class AudioResampler {
-	sourceSampleRate: number;
+	sourceSampleRate: number | null = null;
 	targetSampleRate: number;
-	sourceNumberOfChannels: number;
+	sourceNumberOfChannels: number | null = null;
 	targetNumberOfChannels: number;
 	startTime: number;
 	endTime: number;
@@ -1262,20 +1260,16 @@ export class AudioResampler {
 	/** The highest index written to in the current buffer */
 	maxWrittenFrame: number;
 	channelMixer!: (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => number;
-	tempSourceBuffer: Float32Array;
+	tempSourceBuffer!: Float32Array;
 
 	constructor(options: {
-		sourceSampleRate: number;
 		targetSampleRate: number;
-		sourceNumberOfChannels: number;
 		targetNumberOfChannels: number;
 		startTime: number;
 		endTime: number;
 		onSample: (sample: AudioSample) => Promise<void>;
 	}) {
-		this.sourceSampleRate = options.sourceSampleRate;
 		this.targetSampleRate = options.targetSampleRate;
-		this.sourceNumberOfChannels = options.sourceNumberOfChannels;
 		this.targetNumberOfChannels = options.targetNumberOfChannels;
 		this.startTime = options.startTime;
 		this.endTime = options.endTime;
@@ -1287,17 +1281,14 @@ export class AudioResampler {
 		this.outputBuffer = new Float32Array(this.bufferSizeInSamples);
 		this.bufferStartFrame = 0;
 		this.maxWrittenFrame = -1;
-
-		this.setupChannelMixer();
-
-		// Pre-allocate temporary buffer for source data
-		this.tempSourceBuffer = new Float32Array(this.sourceSampleRate * this.sourceNumberOfChannels);
 	}
 
 	/**
 	 * Sets up the channel mixer to handle up/downmixing in the case where input and output channel counts don't match.
 	 */
-	setupChannelMixer(): void {
+	doChannelMixerSetup(): void {
+		assert(this.sourceNumberOfChannels !== null);
+
 		const sourceNum = this.sourceNumberOfChannels;
 		const targetNum = this.targetNumberOfChannels;
 
@@ -1415,8 +1406,17 @@ export class AudioResampler {
 	}
 
 	async add(audioSample: AudioSample) {
-		if (!audioSample || audioSample._closed) {
-			return;
+		if (this.sourceSampleRate === null) {
+			// This is the first sample, so let's init the missing data. Initting the sample rate from the decoded
+			// sample is more reliable than using the file's metadata, because decoders are free to emit any sample rate
+			// they see fit.
+			this.sourceSampleRate = audioSample.sampleRate;
+			this.sourceNumberOfChannels = audioSample.numberOfChannels;
+
+			// Pre-allocate temporary buffer for source data
+			this.tempSourceBuffer = new Float32Array(this.sourceSampleRate * this.sourceNumberOfChannels);
+
+			this.doChannelMixerSetup();
 		}
 
 		const requiredSamples = audioSample.numberOfFrames * audioSample.numberOfChannels;
