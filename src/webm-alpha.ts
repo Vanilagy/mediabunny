@@ -81,7 +81,7 @@ class Coder<T extends CoderType> {
 
 		const resolver = this.alphaOutputResolverMap.get(microsecondTimestamp)!;
 
-		if (this.alphaCoderError || closed) {
+		if (this.alphaCoderError || this.closed) {
 			resolver.resolve(null);
 		}
 
