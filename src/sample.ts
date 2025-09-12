@@ -731,6 +731,7 @@ const isVideoFrame = (x: unknown): x is VideoFrame => {
 
 /**
  * Specifies the rectangular cropping region.
+ * @group Miscellaneous
  * @public
  */
 export type CropRectangle = {

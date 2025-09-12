@@ -29,6 +29,9 @@ api-extractor run -c packages/mp3-encoder/api-extractor.json
 tsx scripts/check-docblocks.ts dist/mediabunny.d.ts
 tsx scripts/check-docblocks.ts packages/mp3-encoder/dist/mediabunny-mp3-encoder.d.ts
 
+# Checks that API docs are generatable
+npm run docs:generate -- --dry
+
 # Appends stuff to the declaration files to register the global variables these libraries expose
 echo 'export as namespace Mediabunny;' >> dist/mediabunny.d.ts
 echo 'export as namespace MediabunnyMp3Encoder;' >> packages/mp3-encoder/dist/mediabunny-mp3-encoder.d.ts
