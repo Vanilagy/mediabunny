@@ -1177,6 +1177,8 @@ export class CanvasSink {
 	_videoSampleToWrappedCanvas(sample: VideoSample): WrappedCanvas {
 		let canvas = this._canvasPool[this._nextCanvasIndex];
 		let canvasIsNew = false;
+		const alpha = sample.format === null // Weird: HEVC with alpha, Chromium v139
+			|| sample.format?.includes('A');
 
 		if (!canvas) {
 			if (typeof document !== 'undefined') {
@@ -1200,12 +1202,12 @@ export class CanvasSink {
 		}
 
 		const context
-			= canvas.getContext('2d', { alpha: false }) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+			= canvas.getContext('2d', { alpha }) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 		assert(context);
 
 		context.resetTransform();
 
-		if (!canvasIsNew) {
+		if (!canvasIsNew || alpha) {
 			context.clearRect(0, 0, this._width, this._height);
 		}
 
