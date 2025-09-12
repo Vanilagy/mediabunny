@@ -340,9 +340,9 @@ export class MatroskaMuxer extends Muxer {
 
 		const colorSpace = trackData.info.decoderConfig.colorSpace;
 		const videoElement: EBMLElement = { id: EBMLId.Video, data: [
-			(trackData.info.alphaMode ? { id: EBMLId.AlphaMode, data: 1 } : null),
 			{ id: EBMLId.PixelWidth, data: trackData.info.width },
 			{ id: EBMLId.PixelHeight, data: trackData.info.height },
+			(trackData.info.alphaMode ? { id: EBMLId.AlphaMode, data: 1 } : null),
 			(colorSpaceIsComplete(colorSpace)
 				? {
 						id: EBMLId.Colour,
@@ -1058,8 +1058,8 @@ export class MatroskaMuxer extends Muxer {
 				chunk.additions
 					? { id: EBMLId.BlockAdditions, data: [
 							{ id: EBMLId.BlockMore, data: [
-								{ id: EBMLId.BlockAdditional, data: chunk.additions },
 								{ id: EBMLId.BlockAddID, data: 1 },
+								{ id: EBMLId.BlockAdditional, data: chunk.additions },
 							] },
 						] }
 					: null,
