@@ -69,6 +69,7 @@ export type MetadataTags = {
 	 * - Ogg: The key-value string pairs from the Vorbis-style comment header (see RFC 7845, Section 5.2).
 	 * Additionally, the `'vendor'` key refers to the vendor string within this header.
 	 * - WAVE: The individual metadata chunks within the RIFF INFO chunk. Values are always ISO 8859-1 strings.
+	 * - FLAC: The key-value string pairs from the streaminfo metadata block (see RFC 9639, Section D.2.3).
 	 */
 	raw?: Record<string, string | Uint8Array | RichImageData | null>;
 };
