@@ -350,6 +350,7 @@ drawWithFit(
 	options: {
 		fit: 'fill' | 'contain' | 'cover';
 		rotation?: Rotation; // Overrides the sample's rotation
+		crop?: CropRectangle;
 	},
 ): void;
 ```

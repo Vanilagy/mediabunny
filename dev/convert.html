@@ -24,7 +24,7 @@
 			chunked: true,
 			chunkSize: 2**20
 		});
-		const outputFormat = new Mediabunny.WavOutputFormat({});
+		const outputFormat = new Mediabunny.Mp4OutputFormat({});
 
 		const button = document.createElement('button');
 		button.textContent = 'Cancel';
@@ -72,7 +72,7 @@
 			}),
 			output,
 			audio: {
-				codec: 'pcm-s16',
+				//codec: 'pcm-s16',
 				//sampleRate: 16000,
 				//numberOfChannels: 1,
 				//discard: true,
@@ -109,6 +109,16 @@
 			*/
 			video: () => ({
 				//discard: true,
+				crop: {
+					left: 0,
+					top: 0,
+					width: 500,
+					height: 500,
+				},
+				rotate: 90,
+				width: 200,
+				height: 500,
+				fit: 'contain',
 				//forceTranscode: true,
 				//codec: 'avc',
 				//fit: 'contain',
@@ -132,8 +142,8 @@
 				//height: 100,
 			}),
 			trim: {
-				start: 0,
-				end: 10
+				start: 10,
+				end: 20
 			},
 		});
 		console.log(conversion);

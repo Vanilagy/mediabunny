@@ -29,7 +29,7 @@ import {
 } from './misc';
 import { EncodedPacket } from './packet';
 import { fromAlaw, fromUlaw } from './pcm';
-import { AudioSample, VideoSample } from './sample';
+import { AudioSample, clampCropRectangle, CropRectangle, validateCropRectangle, VideoSample } from './sample';
 
 /**
  * Additional options for controlling packet retrieval.
@@ -1053,6 +1053,11 @@ export type CanvasSinkOptions = {
 	 */
 	rotation?: Rotation;
 	/**
+	 * Specifies the rectangular region of the input video to crop to. The crop region will automatically be clamped to
+	 * the dimensions of the input video track. Cropping is performed after rotation but before resizing.
+	 */
+	crop?: CropRectangle;
+	/**
 	 * When set, specifies the number of canvases in the pool. These canvases will be reused in a ring buffer /
 	 * round-robin type fashion. This keeps the amount of allocated VRAM constant and relieves the browser from
 	 * constantly allocating/deallocating canvases. A pool size of 0 or `undefined` disables the pool and means a new
@@ -1082,6 +1087,8 @@ export class CanvasSink {
 	_fit: 'fill' | 'contain' | 'cover';
 	/** @internal */
 	_rotation: Rotation;
+	/** @internal */
+	_crop?: { left: number; top: number; width: number; height: number };
 	/** @internal */
 	_videoSampleSink: VideoSampleSink;
 	/** @internal */
@@ -1118,6 +1125,9 @@ export class CanvasSink {
 		if (options.rotation !== undefined && ![0, 90, 180, 270].includes(options.rotation)) {
 			throw new TypeError('options.rotation, when provided, must be 0, 90, 180 or 270.');
 		}
+		if (options.crop !== undefined) {
+			validateCropRectangle(options.crop, 'options.');
+		}
 		if (
 			options.poolSize !== undefined
 			&& (typeof options.poolSize !== 'number' || !Number.isInteger(options.poolSize) || options.poolSize < 0)
@@ -1126,9 +1136,19 @@ export class CanvasSink {
 		}
 
 		const rotation = options.rotation ?? videoTrack.rotation;
-		let [width, height] = rotation % 180 === 0
+
+		const [rotatedWidth, rotatedHeight] = rotation % 180 === 0
 			? [videoTrack.codedWidth, videoTrack.codedHeight]
 			: [videoTrack.codedHeight, videoTrack.codedWidth];
+
+		const crop = options.crop;
+		if (crop) {
+			clampCropRectangle(crop, rotatedWidth, rotatedHeight);
+		}
+
+		let [width, height] = crop
+			? [crop.width, crop.height]
+			: [rotatedWidth, rotatedHeight];
 		const originalAspectRatio = width / height;
 
 		// If width and height aren't defined together, deduce the missing value using the aspect ratio
@@ -1147,6 +1167,7 @@ export class CanvasSink {
 		this._width = width;
 		this._height = height;
 		this._rotation = rotation;
+		this._crop = crop;
 		this._fit = options.fit ?? 'fill';
 		this._videoSampleSink = new VideoSampleSink(videoTrack);
 		this._canvasPool = Array.from({ length: options.poolSize ?? 0 }, () => null);
@@ -1191,6 +1212,7 @@ export class CanvasSink {
 		sample.drawWithFit(context, {
 			fit: this._fit,
 			rotation: this._rotation,
+			crop: this._crop,
 		});
 
 		const result = {

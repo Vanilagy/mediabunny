@@ -47,7 +47,7 @@ import {
 } from './misc';
 import { Output, TrackType } from './output';
 import { Mp4OutputFormat } from './output-format';
-import { AudioSample, VideoSample } from './sample';
+import { AudioSample, clampCropRectangle, validateCropRectangle, VideoSample } from './sample';
 import { MetadataTags, validateMetadataTags } from './tags';
 import { NullTarget } from './target';
 
@@ -126,10 +126,24 @@ export type ConversionVideoOptions = {
 	 */
 	fit?: 'fill' | 'contain' | 'cover';
 	/**
-	 * The angle in degrees to rotate the input video by, clockwise. Rotation is applied before resizing. This
-	 * rotation is _in addition to_ the natural rotation of the input video as specified in input file's metadata.
+	 * The angle in degrees to rotate the input video by, clockwise. Rotation is applied before cropping and resizing.
+	 * This rotation is _in addition to_ the natural rotation of the input video as specified in input file's metadata.
 	 */
 	rotate?: Rotation;
+	/**
+	 * Specifies the rectangular region of the input video to crop to. The crop region will automatically be clamped to
+	 * the dimensions of the input video track. Cropping is performed after rotation but before resizing.
+	 */
+	crop?: {
+		/** The distance in pixels from the left edge of the source frame to the left edge of the crop rectangle. */
+		left: number;
+		/** The distance in pixels from the top edge of the source frame to the top edge of the crop rectangle. */
+		top: number;
+		/** The width in pixels of the crop rectangle. */
+		width: number;
+		/** The height in pixels of the crop rectangle. */
+		height: number;
+	};
 	/**
 	 * The desired frame rate of the output video, in hertz. If not specified, the original input frame rate will
 	 * be used (which may be variable).
@@ -212,6 +226,9 @@ const validateVideoOptions = (videoOptions: ConversionVideoOptions | undefined) 
 	}
 	if (videoOptions?.rotate !== undefined && ![0, 90, 180, 270].includes(videoOptions.rotate)) {
 		throw new TypeError('options.video.rotate, when provided, must be 0, 90, 180 or 270.');
+	}
+	if (videoOptions?.crop !== undefined) {
+		validateCropRectangle(videoOptions.crop, 'options.video.');
 	}
 	if (
 		videoOptions?.frameRate !== undefined
@@ -601,9 +618,18 @@ export class Conversion {
 		const totalRotation = normalizeRotation(track.rotation + (trackOptions.rotate ?? 0));
 		const outputSupportsRotation = this.output.format.supportsVideoRotationMetadata;
 
-		const [originalWidth, originalHeight] = totalRotation % 180 === 0
+		const [rotatedWidth, rotatedHeight] = totalRotation % 180 === 0
 			? [track.codedWidth, track.codedHeight]
 			: [track.codedHeight, track.codedWidth];
+
+		const crop = trackOptions.crop;
+		if (crop) {
+			clampCropRectangle(crop, rotatedWidth, rotatedHeight);
+		}
+
+		const [originalWidth, originalHeight] = crop
+			? [crop.width, crop.height]
+			: [rotatedWidth, rotatedHeight];
 
 		let width = originalWidth;
 		let height = originalHeight;
@@ -630,7 +656,8 @@ export class Conversion {
 			|| !!trackOptions.frameRate;
 		let needsRerender = width !== originalWidth
 			|| height !== originalHeight
-			|| (totalRotation !== 0 && !outputSupportsRotation);
+			|| (totalRotation !== 0 && !outputSupportsRotation)
+			|| !!crop;
 
 		let videoCodecs = this.output.format.getSupportedVideoCodecs();
 		if (
@@ -754,6 +781,7 @@ export class Conversion {
 						height,
 						fit: trackOptions.fit ?? 'fill',
 						rotation: totalRotation, // Bake the rotation into the output
+						crop: trackOptions.crop,
 						poolSize: 1,
 					});
 					const iterator = sink.canvases(this._startTimestamp, this._endTimestamp);
