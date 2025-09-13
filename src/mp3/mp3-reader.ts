@@ -586,7 +586,7 @@ export class Id3V2Reader {
 
 	readId3V2Text(encoding: Id3V2TextEncoding, until: number): string {
 		const startPos = this.pos;
-		const data = this.readBytes(until);
+		const data = this.readBytes(until - this.pos);
 
 		switch (encoding) {
 			case Id3V2TextEncoding.ISO_8859_1: {
