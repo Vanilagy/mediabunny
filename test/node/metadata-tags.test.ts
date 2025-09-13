@@ -481,3 +481,43 @@ test('Conversion metadata tags, modified', async () => {
 	expect(readTags.artist).toBe(songMetadata.artist);
 	expect(Object.keys(readTags.raw!).length).toBe(2);
 });
+
+test('Read ID3v2 tags from WAV file', async () => {
+	const filePath = path.join(import.meta.dirname, '../public/glitch-hop-is-dead.wav');
+
+	const input = new Input({
+		source: new FilePathSource(filePath),
+		formats: ALL_FORMATS,
+	});
+
+	const tags = await input.getMetadataTags();
+
+	// Specific expectations for the test WAV file
+	expect(tags.title).toBe('Glitch Hop Is Dead');
+	expect(tags.artist).toBe('GRiZ');
+	expect(tags.trackNumber).toBe(19);
+
+	if (!tags.images) {
+		throw new Error('No images found in the file');
+	}
+
+	const frontCover = tags.images[0];
+
+	if (!frontCover) {
+		throw new Error('No front cover found in the file');
+	}
+
+	expect(frontCover.kind).toBe('coverFront');
+	expect(frontCover.mimeType).toBe('image/jpg');
+	expect(frontCover.data).toBeInstanceOf(Uint8Array);
+	expect(frontCover.data.length).toBeGreaterThan(0);
+
+	if (!tags.raw) {
+		throw new Error('No raw tags found in the file');
+	}
+
+	expect(tags.raw['TIT2']).toBeDefined(); // Title
+	expect(tags.raw['TPE1']).toBeDefined(); // Artist
+	expect(tags.raw['TRCK']).toBeDefined(); // Track number
+	expect(tags.raw['APIC']).toBeDefined(); // Cover art
+});

@@ -15,6 +15,7 @@ import { MetadataTags } from '../tags';
 import { assert, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readAscii, readBytes, Reader, readU16, readU32, readU64 } from '../reader';
+import { parseId3V2Tag, readId3V2Header } from '../mp3/mp3-reader.js';
 
 export enum WaveFormat {
 	PCM = 0x0001,
@@ -107,6 +108,8 @@ export class WaveDemuxer extends Demuxer {
 					totalFileSize = Math.min(riffChunkSize + 8, this.reader.fileSize ?? Infinity);
 				} else if (chunkId === 'LIST') {
 					await this.parseListChunk(startPos, chunkSize, littleEndian);
+				} else if (chunkId === 'ID3 ' || chunkId === 'id3 ') {
+					await this.parseId3Chunk(startPos, chunkSize);
 				}
 
 				currentPos = startPos + chunkSize + (chunkSize & 1); // Handle padding
@@ -185,13 +188,25 @@ export class WaveDemuxer extends Demuxer {
 			return; // Not an INFO chunk
 		}
 
-		let currentPos = slice.filePos;
-		while (currentPos <= startPos + size - 8) {
-			slice.filePos = currentPos;
+		// Track position relative to the start of the INFO data (after the 4-byte type)
+		let relativePos = 4; // Start after the INFO type
+		const infoDataSize = size - 4; // Subtract the 4 bytes for INFO type
 
-			const chunkName = readAscii(slice, 4);
-			const chunkSize = readU32(slice, littleEndian);
-			const bytes = readBytes(slice, chunkSize);
+		while (relativePos <= infoDataSize - 8) {
+			// Request a new slice for each chunk to avoid position management issues
+			let chunkSlice = this.reader.requestSlice(startPos + relativePos, Math.min(8, infoDataSize - relativePos));
+			if (chunkSlice instanceof Promise) chunkSlice = await chunkSlice;
+			if (!chunkSlice) break;
+
+			const chunkName = readAscii(chunkSlice, 4);
+			const chunkSize = readU32(chunkSlice, littleEndian);
+
+			// Request slice for the chunk data
+			let dataSlice = this.reader.requestSlice(startPos + relativePos + 8, chunkSize);
+			if (dataSlice instanceof Promise) dataSlice = await dataSlice;
+			if (!dataSlice) break;
+
+			const bytes = readBytes(dataSlice, chunkSize);
 
 			let stringLength = 0;
 			for (let i = 0; i < bytes.length; i++) {
@@ -267,7 +282,27 @@ export class WaveDemuxer extends Demuxer {
 				}; break;
 			}
 
-			currentPos += 8 + chunkSize + (chunkSize & 1); // Handle padding
+			relativePos += 8 + chunkSize + (chunkSize & 1); // Handle padding
+		}
+	}
+
+	private async parseId3Chunk(startPos: number, size: number) {
+		// Parse ID3 tag embedded in WAV file
+		let slice = this.reader.requestSlice(startPos, size);
+		if (slice instanceof Promise) slice = await slice;
+		if (!slice) return; // File too short
+
+		// Check if it's an ID3v2 tag
+		const id3V2Header = readId3V2Header(slice);
+		if (id3V2Header) {
+			// Create a new slice specifically for the ID3 tag content (after header)
+			// The header is 10 bytes, so the content starts at startPos + 10
+			let contentSlice = this.reader.requestSlice(startPos + 10, id3V2Header.size);
+			if (contentSlice instanceof Promise) contentSlice = await contentSlice;
+			if (!contentSlice) return;
+
+			// Parse ID3v2 tag using the same logic as MP3
+			parseId3V2Tag(contentSlice, id3V2Header, this.metadataTags);
 		}
 	}
 
