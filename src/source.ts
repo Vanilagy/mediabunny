@@ -548,6 +548,11 @@ export class FilePathSource extends Source {
 		// Let's back this source with a StreamSource, makes the implementation very simple
 		this._streamSource = new StreamSource({
 			getSize: async () => {
+				if (process.env.IS_ELECTRON) {
+					console.error('fixme: file size query is not implemented for Electron.')
+					return 0;
+				}
+
 				const FS_MODULE_NAME = 'node:fs/promises';
 				const fs = await import(/* @vite-ignore */ FS_MODULE_NAME) as typeof import('node:fs/promises');
 				fileHandle = await fs.open(filePath, 'r');
