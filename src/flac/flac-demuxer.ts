@@ -204,12 +204,12 @@ export class FlacDemuxer extends Demuxer {
 				};
 			}
 
-			const nextBits = readU8(slice);
-			if (nextBits === 0xff) {
-				const nextBits = readU8(slice);
+			const nextByte = readU8(slice);
+			if (nextByte === 0xff) {
+				const byteAfterNextByte = readU8(slice);
 
 				const expected = this.blockingBit === 1 ? 0b1111_1001 : 0b1111_1000;
-				if (nextBits !== expected) {
+				if (byteAfterNextByte !== expected) {
 					slice.bufferPos -= 1;
 					continue;
 				}
