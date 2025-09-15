@@ -537,4 +537,4 @@ export const FLAC = new FlacInputFormat();
  * @group Input formats
  * @public
  */
-export const ALL_FORMATS: InputFormat[] = [MP4, QTFF, MATROSKA, WEBM, WAVE, OGG, MP3, ADTS, FLAC];
+export const ALL_FORMATS: InputFormat[] = [MP4, QTFF, MATROSKA, WEBM, WAVE, OGG, FLAC, MP3, ADTS];
