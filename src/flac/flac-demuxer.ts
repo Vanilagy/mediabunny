@@ -90,13 +90,13 @@ export class FlacDemuxer extends Demuxer {
 		return this.metadataTags;
 	}
 
-	readFlacFrameHeader = ({
+	readFlacFrameHeader({
 		slice,
 		isFirstPacket,
 	}: {
 		slice: FileSlice;
 		isFirstPacket: boolean;
-	}) => {
+	}) {
 		const startOffset = slice.filePos;
 
 		// https://www.rfc-editor.org/rfc/rfc9639.html#section-9.1
@@ -155,15 +155,15 @@ export class FlacDemuxer extends Demuxer {
 		}
 
 		return { num, blockSize, sampleRate, size: blockSize };
-	};
+	}
 
-	readNextFlacFrame = async ({
+	async readNextFlacFrame({
 		startPos,
 		isFirstPacket,
 	}: {
 		startPos: number;
 		isFirstPacket: boolean;
-	}): Promise<NextFlacFrameResult | null> => {
+	}): Promise<NextFlacFrameResult | null> {
 		assert(this.audioInfo);
 		// Also want to validate the next header is valid
 		// to throw out an accidential sync word
