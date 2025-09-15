@@ -465,9 +465,13 @@ export class FlacDemuxer extends Demuxer {
 			) {
 				const sizeSlice = await this.reader.requestSlice(
 					currentPos,
-					currentPos + 4,
+					4,
 				);
 				currentPos += 4;
+
+				if (sizeSlice === null) {
+					throw new Error(`Metadata block at position ${currentPos} is too small! Corrupted file.`);
+				}
 
 				assert(sizeSlice);
 
@@ -484,9 +488,13 @@ export class FlacDemuxer extends Demuxer {
 					// https://www.rfc-editor.org/rfc/rfc9639.html#section-8.2
 					const streamInfoBlock = await this.reader.requestSlice(
 						currentPos,
-						currentPos + size,
+						size,
 					);
 					assert(streamInfoBlock);
+					if (streamInfoBlock === null) {
+						throw new Error(`StreamInfo block at position ${currentPos} is too small! Corrupted file.`);
+					}
+
 					currentPos += size;
 
 					const description = new Uint8Array(readBytes(streamInfoBlock, 34));
@@ -528,7 +536,7 @@ export class FlacDemuxer extends Demuxer {
 					// https://www.rfc-editor.org/rfc/rfc9639.html#name-vorbis-comment
 					const vorbisCommentBlock = await this.reader.requestSlice(
 						currentPos,
-						currentPos + size,
+						size,
 					);
 					currentPos += size;
 					assert(vorbisCommentBlock);
@@ -578,7 +586,7 @@ export class FlacDemuxer extends Demuxer {
 					// https://www.rfc-editor.org/rfc/rfc9639.html#name-picture
 					const pictureBlock = await this.reader.requestSlice(
 						currentPos,
-						currentPos + size,
+						size,
 					);
 
 					currentPos += size;
