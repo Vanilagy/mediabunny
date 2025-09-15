@@ -10,7 +10,7 @@ import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
-import { assert, AsyncMutex, Bitstream, UNDETERMINED_LANGUAGE } from '../misc';
+import { assert, AsyncMutex, Bitstream, textDecoder, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import {
 	FileSlice,
@@ -457,9 +457,9 @@ export class FlacDemuxer extends Demuxer {
 	}
 
 	async readMetadata() {
-		let currentPos = 4;
+		let currentPos = 4; // Skip 'fLaC'
 
-		return (this.metadataPromise ??= (async () => {
+		return this.metadataPromise ??= (async () => {
 			while (
 				this.reader.fileSize === null || currentPos < this.reader.fileSize
 			) {
@@ -585,17 +585,14 @@ export class FlacDemuxer extends Demuxer {
 					assert(pictureBlock);
 					const pictureType = readU32Be(pictureBlock);
 					const mediaTypeLength = readU32Be(pictureBlock);
-					const mediaType = new TextDecoder().decode(
+					const mediaType = textDecoder.decode(
 						readBytes(pictureBlock, mediaTypeLength),
 					);
 					const descriptionLength = readU32Be(pictureBlock);
-					const description = new TextDecoder().decode(
+					const description = textDecoder.decode(
 						readBytes(pictureBlock, descriptionLength),
 					);
-					readU32Be(pictureBlock); // width
-					readU32Be(pictureBlock); // height
-					readU32Be(pictureBlock); // color depth
-					readU32Be(pictureBlock); // number of indexed colors
+					pictureBlock.skip(4); // Skip width, height, color depth, number of indexed colors
 					const dataLength = readU32Be(pictureBlock);
 					const data = readBytes(pictureBlock, dataLength);
 					this.metadataTags.images ??= [];
@@ -615,7 +612,7 @@ export class FlacDemuxer extends Demuxer {
 					break;
 				}
 			}
-		})());
+		})();
 	}
 
 	async getTracks() {
@@ -624,7 +621,7 @@ export class FlacDemuxer extends Demuxer {
 		return [this.track];
 	}
 
-	override getMimeType(): Promise<string> {
-		return Promise.resolve('audio/flac');
+	async getMimeType() {
+		return 'audio/flac';
 	}
 }
