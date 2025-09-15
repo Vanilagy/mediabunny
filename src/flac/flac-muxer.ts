@@ -15,7 +15,7 @@ import { FileSlice, readBytes } from '../reader';
 import { MetadataTags, metadataTagsAreEmpty } from '../tags';
 import { Writer } from '../writer';
 import {
-	getBlockSize,
+	readBlockSize,
 	getBlockSizeOrUncommon,
 	getCodedNumber,
 	toU32Le,
@@ -214,7 +214,7 @@ export class FlacMuxer extends Muxer {
 			const bitstream = new Bitstream(bytes);
 			const blockSizeOrUncommon = getBlockSizeOrUncommon(bitstream.readBits(4));
 			getCodedNumber(slice); // num
-			const blockSize = getBlockSize(slice, blockSizeOrUncommon);
+			const blockSize = readBlockSize(slice, blockSizeOrUncommon);
 
 			this.blockSizes.push(blockSize);
 			this.frameSizes.push(packet.data.length);

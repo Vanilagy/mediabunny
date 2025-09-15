@@ -153,7 +153,7 @@ export const getCodedNumber = (fileSlice: FileSlice): number => {
 	return encoded;
 };
 
-export const getBlockSize = (slice: FileSlice, blockSizeBits: BlockSizeOrUncommon) => {
+export const readBlockSize = (slice: FileSlice, blockSizeBits: BlockSizeOrUncommon) => {
 	if (blockSizeBits === 'uncommon-u16') {
 		return readU16Be(slice) + 1;
 	}

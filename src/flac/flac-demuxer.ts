@@ -24,7 +24,7 @@ import {
 import { MetadataTags } from '../tags';
 import {
 	calculateCRC8,
-	getBlockSize,
+	readBlockSize,
 	getBlockSizeOrUncommon,
 	getCodedNumber,
 	getSampleRate,
@@ -139,7 +139,7 @@ export class FlacDemuxer extends Demuxer {
 		assert(reservedZero === 0);
 
 		const num = getCodedNumber(slice);
-		const blockSize = getBlockSize(slice, blockSizeOrUncommon);
+		const blockSize = readBlockSize(slice, blockSizeOrUncommon);
 		const sampleRate = getSampleRate(slice, sampleRateOrUncommon);
 		const size = slice.filePos - startOffset;
 		const crc = readU8(slice);
