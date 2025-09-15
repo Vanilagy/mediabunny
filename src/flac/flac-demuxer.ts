@@ -57,189 +57,6 @@ type NextFlacFrameResult = {
 	isLastFrame: boolean;
 };
 
-class FlacAudioTrackBacking implements InputAudioTrackBacking {
-	constructor(public demuxer: FlacDemuxer) {}
-
-	getId() {
-		return 1;
-	}
-
-	getCodec() {
-		return 'flac' as const;
-	}
-
-	getInternalCodecId(): string | number | Uint8Array | null {
-		return null;
-	}
-
-	getNumberOfChannels() {
-		assert(this.demuxer.audioInfo);
-		return this.demuxer.audioInfo.numberOfChannels;
-	}
-
-	computeDuration() {
-		assert(this.demuxer.audioInfo);
-		return Promise.resolve(
-			this.demuxer.audioInfo.totalSamples / this.demuxer.audioInfo.sampleRate,
-		);
-	}
-
-	getSampleRate() {
-		assert(this.demuxer.audioInfo);
-		return this.demuxer.audioInfo.sampleRate;
-	}
-
-	getName(): string | null {
-		return null;
-	}
-
-	getLanguageCode() {
-		return UNDETERMINED_LANGUAGE;
-	}
-
-	getTimeResolution() {
-		assert(this.demuxer.audioInfo);
-		return this.demuxer.audioInfo.sampleRate;
-	}
-
-	async getFirstTimestamp() {
-		return 0;
-	}
-
-	getDecoderConfig(): Promise<AudioDecoderConfig | null> {
-		assert(this.demuxer.audioInfo);
-
-		return Promise.resolve({
-			codec: 'flac' as const,
-			numberOfChannels: this.demuxer.audioInfo.numberOfChannels,
-			sampleRate: this.demuxer.audioInfo.sampleRate,
-			description: this.demuxer.audioInfo.description,
-		});
-	}
-
-	async getPacket(
-		timestamp: number,
-		options: PacketRetrievalOptions,
-	): Promise<EncodedPacket | null> {
-		assert(this.demuxer.audioInfo);
-		if (timestamp < 0) {
-			throw new Error('Timestamp cannot be negative');
-		}
-
-		let index = 0;
-
-		for (const sample of this.demuxer.loadedSamples) {
-			const sampleTimestamp
-				= sample.blockOffset / this.demuxer.audioInfo.sampleRate;
-			const sampleDuration
-				= sample.blockSize / this.demuxer.audioInfo.sampleRate;
-			if (
-				sampleTimestamp <= timestamp
-				&& sampleTimestamp + sampleDuration > timestamp
-			) {
-				return this.getPacketAtIndex(index, options);
-			}
-			index++;
-		}
-
-		if (this.demuxer.lastSampleLoaded) {
-			return this.getPacketAtIndex(
-				this.demuxer.loadedSamples.length - 1,
-				options,
-			);
-		}
-
-		await this.demuxer.advanceReader();
-		return this.getPacket(timestamp, options);
-	}
-
-	async getNextPacket(
-		packet: EncodedPacket,
-		options: PacketRetrievalOptions,
-	): Promise<EncodedPacket | null> {
-		const release = await this.demuxer.readingMutex.acquire();
-		try {
-			const nextIndex = packet.sequenceNumber + 1;
-			if (
-				this.demuxer.lastSampleLoaded
-				&& nextIndex >= this.demuxer.loadedSamples.length
-			) {
-				return null;
-			}
-
-			// Ensure the next sample exists
-			while (
-				nextIndex >= this.demuxer.loadedSamples.length
-				&& !this.demuxer.lastSampleLoaded
-			) {
-				await this.demuxer.advanceReader();
-			}
-			return this.getPacketAtIndex(nextIndex, options);
-		} finally {
-			release();
-		}
-	}
-
-	getKeyPacket(
-		timestamp: number,
-		options: PacketRetrievalOptions,
-	): Promise<EncodedPacket | null> {
-		return this.getPacket(timestamp, options);
-	}
-
-	getNextKeyPacket(
-		packet: EncodedPacket,
-		options: PacketRetrievalOptions,
-	): Promise<EncodedPacket | null> {
-		return this.getNextPacket(packet, options);
-	}
-
-	async getPacketAtIndex(
-		sampleIndex: number,
-		options: PacketRetrievalOptions,
-	): Promise<EncodedPacket | null> {
-		let rawSample = this.demuxer.loadedSamples[sampleIndex];
-		while (!rawSample) {
-			await this.demuxer.advanceReader();
-			rawSample = this.demuxer.loadedSamples[sampleIndex];
-		}
-
-		let data: Uint8Array;
-		if (options.metadataOnly) {
-			data = PLACEHOLDER_DATA;
-		} else {
-			const slice = await this.demuxer.reader.requestSlice(
-				rawSample.byteOffset,
-				rawSample.byteSize,
-			);
-
-			if (!slice) {
-				return null; // Data didn't fit into the rest of the file
-			}
-
-			data = readBytes(slice, rawSample.byteSize);
-		}
-
-		assert(this.demuxer.audioInfo);
-		const timestamp = rawSample.blockOffset / this.demuxer.audioInfo.sampleRate;
-		const duration = rawSample.blockSize / this.demuxer.audioInfo.sampleRate;
-		return new EncodedPacket(
-			data,
-			'key',
-			timestamp,
-			duration,
-			sampleIndex,
-			rawSample.byteSize,
-		);
-	}
-
-	getFirstPacket(
-		options: PacketRetrievalOptions,
-	): Promise<EncodedPacket | null> {
-		return this.getPacketAtIndex(0, options);
-	}
-}
-
 export class FlacDemuxer extends Demuxer {
 	reader: Reader;
 
@@ -638,5 +455,188 @@ export class FlacDemuxer extends Demuxer {
 
 	async getMimeType() {
 		return 'audio/flac';
+	}
+}
+
+class FlacAudioTrackBacking implements InputAudioTrackBacking {
+	constructor(public demuxer: FlacDemuxer) {}
+
+	getId() {
+		return 1;
+	}
+
+	getCodec() {
+		return 'flac' as const;
+	}
+
+	getInternalCodecId(): string | number | Uint8Array | null {
+		return null;
+	}
+
+	getNumberOfChannels() {
+		assert(this.demuxer.audioInfo);
+		return this.demuxer.audioInfo.numberOfChannels;
+	}
+
+	computeDuration() {
+		assert(this.demuxer.audioInfo);
+		return Promise.resolve(
+			this.demuxer.audioInfo.totalSamples / this.demuxer.audioInfo.sampleRate,
+		);
+	}
+
+	getSampleRate() {
+		assert(this.demuxer.audioInfo);
+		return this.demuxer.audioInfo.sampleRate;
+	}
+
+	getName(): string | null {
+		return null;
+	}
+
+	getLanguageCode() {
+		return UNDETERMINED_LANGUAGE;
+	}
+
+	getTimeResolution() {
+		assert(this.demuxer.audioInfo);
+		return this.demuxer.audioInfo.sampleRate;
+	}
+
+	async getFirstTimestamp() {
+		return 0;
+	}
+
+	getDecoderConfig(): Promise<AudioDecoderConfig | null> {
+		assert(this.demuxer.audioInfo);
+
+		return Promise.resolve({
+			codec: 'flac' as const,
+			numberOfChannels: this.demuxer.audioInfo.numberOfChannels,
+			sampleRate: this.demuxer.audioInfo.sampleRate,
+			description: this.demuxer.audioInfo.description,
+		});
+	}
+
+	async getPacket(
+		timestamp: number,
+		options: PacketRetrievalOptions,
+	): Promise<EncodedPacket | null> {
+		assert(this.demuxer.audioInfo);
+		if (timestamp < 0) {
+			throw new Error('Timestamp cannot be negative');
+		}
+
+		let index = 0;
+
+		for (const sample of this.demuxer.loadedSamples) {
+			const sampleTimestamp
+				= sample.blockOffset / this.demuxer.audioInfo.sampleRate;
+			const sampleDuration
+				= sample.blockSize / this.demuxer.audioInfo.sampleRate;
+			if (
+				sampleTimestamp <= timestamp
+				&& sampleTimestamp + sampleDuration > timestamp
+			) {
+				return this.getPacketAtIndex(index, options);
+			}
+			index++;
+		}
+
+		if (this.demuxer.lastSampleLoaded) {
+			return this.getPacketAtIndex(
+				this.demuxer.loadedSamples.length - 1,
+				options,
+			);
+		}
+
+		await this.demuxer.advanceReader();
+		return this.getPacket(timestamp, options);
+	}
+
+	async getNextPacket(
+		packet: EncodedPacket,
+		options: PacketRetrievalOptions,
+	): Promise<EncodedPacket | null> {
+		const release = await this.demuxer.readingMutex.acquire();
+		try {
+			const nextIndex = packet.sequenceNumber + 1;
+			if (
+				this.demuxer.lastSampleLoaded
+				&& nextIndex >= this.demuxer.loadedSamples.length
+			) {
+				return null;
+			}
+
+			// Ensure the next sample exists
+			while (
+				nextIndex >= this.demuxer.loadedSamples.length
+				&& !this.demuxer.lastSampleLoaded
+			) {
+				await this.demuxer.advanceReader();
+			}
+			return this.getPacketAtIndex(nextIndex, options);
+		} finally {
+			release();
+		}
+	}
+
+	getKeyPacket(
+		timestamp: number,
+		options: PacketRetrievalOptions,
+	): Promise<EncodedPacket | null> {
+		return this.getPacket(timestamp, options);
+	}
+
+	getNextKeyPacket(
+		packet: EncodedPacket,
+		options: PacketRetrievalOptions,
+	): Promise<EncodedPacket | null> {
+		return this.getNextPacket(packet, options);
+	}
+
+	async getPacketAtIndex(
+		sampleIndex: number,
+		options: PacketRetrievalOptions,
+	): Promise<EncodedPacket | null> {
+		let rawSample = this.demuxer.loadedSamples[sampleIndex];
+		while (!rawSample) {
+			await this.demuxer.advanceReader();
+			rawSample = this.demuxer.loadedSamples[sampleIndex];
+		}
+
+		let data: Uint8Array;
+		if (options.metadataOnly) {
+			data = PLACEHOLDER_DATA;
+		} else {
+			const slice = await this.demuxer.reader.requestSlice(
+				rawSample.byteOffset,
+				rawSample.byteSize,
+			);
+
+			if (!slice) {
+				return null; // Data didn't fit into the rest of the file
+			}
+
+			data = readBytes(slice, rawSample.byteSize);
+		}
+
+		assert(this.demuxer.audioInfo);
+		const timestamp = rawSample.blockOffset / this.demuxer.audioInfo.sampleRate;
+		const duration = rawSample.blockSize / this.demuxer.audioInfo.sampleRate;
+		return new EncodedPacket(
+			data,
+			'key',
+			timestamp,
+			duration,
+			sampleIndex,
+			rawSample.byteSize,
+		);
+	}
+
+	getFirstPacket(
+		options: PacketRetrievalOptions,
+	): Promise<EncodedPacket | null> {
+		return this.getPacketAtIndex(0, options);
 	}
 }
