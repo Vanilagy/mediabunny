@@ -497,8 +497,8 @@ export class FlacDemuxer extends Demuxer {
 
 					currentPos += size;
 
-					const description = new Uint8Array(readBytes(streamInfoBlock, 34));
-					const bitstream = new Bitstream(description);
+					const streamInfoBytes = new Uint8Array(readBytes(streamInfoBlock, 34));
+					const bitstream = new Bitstream(streamInfoBytes);
 
 					const minimumBlockSize = bitstream.readBits(16);
 					const maximumBlockSize = bitstream.readBits(16);
@@ -512,12 +512,19 @@ export class FlacDemuxer extends Demuxer {
 
 					// https://www.w3.org/TR/webcodecs-flac-codec-registration/#audiodecoderconfig-description
 					// description is required, and has to be the following:
-					// - The bytes 0x66 0x4C 0x61 0x43 ("fLaC" in ASCII)
-					// ^ Despite this being in the spec, Chrome does not want to have the first 4 bytes be "fLaC"
-					// - A metadata block (called the STREAMINFO block) as described in section 7 of [FLAC]
-					// - Optionaly (sic) other metadata blocks, that are not used by the specification
+					// 1. The bytes 0x66 0x4C 0x61 0x43 ("fLaC" in ASCII)
+					// 2. A metadata block (called the STREAMINFO block) as described in section 7 of [FLAC]
+					// 3. Optionaly (sic) other metadata blocks, that are not used by the specification
 
 					bitstream.skipBits(16 * 8); // md5 hash
+
+					const description = new Uint8Array(42);
+					// 1. "fLaC"
+					description.set(new Uint8Array([0x66, 0x4c, 0x61, 0x43]), 0);
+					// 2. STREAMINFO block
+					description.set(new Uint8Array([128, 0, 0, 34]), 4);
+					// 3. Other metadata blocks
+					description.set(streamInfoBytes, 8);
 
 					this.audioInfo = {
 						numberOfChannels,

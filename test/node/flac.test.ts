@@ -27,8 +27,10 @@ test('Should be able to loop over all samples', async () => {
 		numberOfChannels: 2,
 		sampleRate: 44100,
 		description: new Uint8Array([
+			102, 76, 97, 67, 128, 0, 0, 34,
 			16, 0, 16, 0, 0, 6, 45, 0, 37, 173, 10, 196, 66, 240, 0, 13, 68, 24, 85,
-			22, 231, 0, 113, 139, 185, 1, 33, 54, 155, 80, 241, 191, 203, 112]),
+			22, 231, 0, 113, 139, 185, 1, 33, 54, 155, 80, 241, 191, 203, 112,
+		]),
 	});
 	expect(await track.getCodecParameterString()).toEqual('flac');
 	expect(track.timeResolution).toEqual(44100);
