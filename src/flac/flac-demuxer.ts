@@ -144,8 +144,8 @@ export class FlacDemuxer extends Demuxer {
 		const size = slice.filePos - startOffset;
 		const crc = readU8(slice);
 
-		slice.bufferPos -= size;
-		slice.bufferPos -= 1;
+		slice.skip(-size);
+		slice.skip(-1);
 		const crcCalculated = calculateCRC8(readBytes(slice, size));
 
 		if (crc !== crcCalculated) {
@@ -210,11 +210,11 @@ export class FlacDemuxer extends Demuxer {
 
 				const expected = this.blockingBit === 1 ? 0b1111_1001 : 0b1111_1000;
 				if (byteAfterNextByte !== expected) {
-					slice.bufferPos -= 1;
+					slice.skip(-1);
 					continue;
 				}
 
-				slice.bufferPos -= 2;
+				slice.skip(-2);
 				const lengthIfNextFlacFrameHeaderIsLegit = slice.filePos - startPos;
 
 				const nextIsLegit = this.readFlacFrameHeader({
@@ -223,7 +223,7 @@ export class FlacDemuxer extends Demuxer {
 				});
 
 				if (!nextIsLegit) {
-					slice.bufferPos -= 1;
+					slice.skip(-1);
 					continue;
 				}
 
