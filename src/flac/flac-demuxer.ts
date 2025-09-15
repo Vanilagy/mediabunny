@@ -104,38 +104,38 @@ export class FlacDemuxer extends Demuxer {
 		// sync code 0b111111111111100. Following the sync code is the blocking strategy
 		// bit, which MUST NOT change during the audio stream.
 		const bytes = readBytes(slice, 4);
-		const bitStream = new Bitstream(bytes);
+		const bitstream = new Bitstream(bytes);
 
-		const bits = bitStream.readBits(15);
+		const bits = bitstream.readBits(15);
 		if (bits !== 0b111111111111100) {
 			throw new Error('Invalid sync code');
 		}
 
 		if (this.blockingBit === undefined) {
 			assert(isFirstPacket);
-			const newBlockingBit = bitStream.readBits(1);
+			const newBlockingBit = bitstream.readBits(1);
 			this.blockingBit = newBlockingBit;
 		} else if (this.blockingBit === 1) {
 			assert(!isFirstPacket);
-			const newBlockingBit = bitStream.readBits(1);
+			const newBlockingBit = bitstream.readBits(1);
 			assert(newBlockingBit === 1);
 		} else if (this.blockingBit === 0) {
 			assert(!isFirstPacket);
-			const newBlockingBit = bitStream.readBits(1);
+			const newBlockingBit = bitstream.readBits(1);
 			assert(newBlockingBit === 0);
 		} else {
 			throw new Error('Invalid blocking bit');
 		}
 
-		const blockSizeOrUncommon = getBlockSizeOrUncommon(bitStream.readBits(4));
+		const blockSizeOrUncommon = getBlockSizeOrUncommon(bitstream.readBits(4));
 		assert(this.audioInfo);
 		const sampleRateOrUncommon = getSampleRateOrUncommon(
-			bitStream.readBits(4),
+			bitstream.readBits(4),
 			this.audioInfo.sampleRate,
 		);
-		bitStream.skipBits(4); // channel count
-		bitStream.skipBits(3); // bit depth
-		const reservedZero = bitStream.readBits(1); // reserved zero
+		bitstream.skipBits(4); // channel count
+		bitstream.skipBits(3); // bit depth
+		const reservedZero = bitstream.readBits(1); // reserved zero
 		assert(reservedZero === 0);
 
 		const num = getCodedNumber(slice);
