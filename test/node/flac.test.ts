@@ -44,6 +44,7 @@ test('Should be able to loop over all samples', async () => {
 		lastSampleTimestamp = sample.timestamp;
 		if (sample.sequenceNumber === 212) {
 			// Last frame is a bit shorter
+			// due it having a custom block size and the duration not being a multiple of the frame size
 			expect(sample.duration).toEqual(0.023764172335600908);
 		} else {
 			expect(sample.duration).toEqual(0.09287981859410431);
