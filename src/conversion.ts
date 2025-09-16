@@ -89,13 +89,13 @@ export type ConversionOptions = {
 	};
 
 	/**
-	 * A callback that returns or resolves to the descriptive metadata tags that should be written to the output file.
-	 * As input, this function will be passed the tags of the input file, allowing you to modify, augment or extend
-	 * them.
+	 * An object or a callback that returns or resolves to an object containing the descriptive metadata tags that
+	 * should be written to the output file. If a function is passed, it will be passed the tags of the input file as
+	 * its first argument, allowing you to modify, augment or extend them.
 	 *
 	 * If no function is set, the input's metadata tags will be copied to the output.
 	 */
-	tags?: (inputTags: MetadataTags) => MaybePromise<MetadataTags>;
+	tags?: MetadataTags | ((inputTags: MetadataTags) => MaybePromise<MetadataTags>);
 };
 
 /**
@@ -395,8 +395,12 @@ export class Conversion {
 		if (!(options.output instanceof Output)) {
 			throw new TypeError('options.output must be an Output.');
 		}
-		if (options.output._tracks.length > 0 || options.output.state !== 'pending') {
-			throw new TypeError('options.output must be fresh: no tracks added and not started.');
+		if (
+			options.output._tracks.length > 0
+			|| Object.keys(options.output._metadataTags).length > 0
+			|| options.output.state !== 'pending'
+		) {
+			throw new TypeError('options.output must be fresh: no tracks or metadata tags added and not started.');
 		}
 
 		if (typeof options.video !== 'function') {
@@ -426,8 +430,15 @@ export class Conversion {
 			&& options.trim.start >= options.trim.end) {
 			throw new TypeError('options.trim.start must be less than options.trim.end.');
 		}
-		if (options.tags !== undefined && typeof options.tags !== 'function') {
-			throw new TypeError('options.tags, when provided, must be a function.');
+		if (
+			options.tags !== undefined
+			&& (typeof options.tags !== 'object' || !options.tags)
+			&& typeof options.tags !== 'function'
+		) {
+			throw new TypeError('options.tags, when provided, must be an object or a function.');
+		}
+		if (typeof options.tags === 'object') {
+			validateMetadataTags(options.tags);
 		}
 
 		this._options = options;
@@ -519,7 +530,9 @@ export class Conversion {
 		let outputTags: MetadataTags;
 
 		if (this._options.tags) {
-			const result = await this._options.tags(inputTags);
+			const result = typeof this._options.tags === 'function'
+				? await this._options.tags(inputTags)
+				: this._options.tags;
 			validateMetadataTags(result);
 
 			outputTags = result;

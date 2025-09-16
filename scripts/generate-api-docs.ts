@@ -1622,16 +1622,16 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 
 const main = () => {
 	const args = process.argv.slice(2);
-	
+
 	// Check for --dry flag
 	const dryIndex = args.indexOf('--dry');
 	const dry = dryIndex !== -1;
-	
+
 	// Remove --dry flag from args
 	if (dry) {
 		args.splice(dryIndex, 1);
 	}
-	
+
 	if (args.length < 2) {
 		console.error('Usage: npm run generate-docs [--dry] <entry-file1> [entry-file2 ...] <api-config-file>');
 		console.error('  --dry: Check if docs are generatable without writing files');

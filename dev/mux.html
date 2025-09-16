@@ -116,9 +116,10 @@
 	*/
 
 	let videoSource = new Mediabunny.CanvasSource(canvas, {
-		codec: 'avc',
+		codec: 'vp9',
 		//fullCodecString: 'avc1.42001f',
-		bitrate: 1e6
+		bitrate: 1e6,
+		onEncoderConfig: console.log,
 	});
 	let audioSource = new Mediabunny.AudioBufferSource({
 		codec: 'opus',
@@ -207,5 +208,5 @@ Testing... <00:17.350>One... <00:18.125>Two...
 	await output.finalize();
 
 	console.log(target);
-	download(new Blob([target.buffer]), 'test' + format.fileExtension);
+	//download(new Blob([target.buffer]), 'test' + format.fileExtension);
 </script>

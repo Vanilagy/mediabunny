@@ -2306,6 +2306,21 @@ export class IsobmffDemuxer extends Demuxer {
 							}
 						}; break;
 
+						case 'track': {
+							if (typeof data === 'string') {
+								const parts = data.split('/');
+								const trackNum = Number.parseInt(parts[0]!, 10);
+								const tracksTotal = parts[1] && Number.parseInt(parts[1], 10);
+
+								if (Number.isInteger(trackNum) && trackNum > 0) {
+									this.metadataTags.trackNumber ??= trackNum;
+								}
+								if (tracksTotal && Number.isInteger(tracksTotal) && tracksTotal > 0) {
+									this.metadataTags.tracksTotal ??= tracksTotal;
+								}
+							}
+						}; break;
+
 						case 'trkn': {
 							if (data instanceof Uint8Array) {
 								const view = toDataView(data);

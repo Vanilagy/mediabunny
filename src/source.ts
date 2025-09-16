@@ -18,6 +18,9 @@ import {
 	toDataView,
 	toUint8Array,
 } from './misc';
+import * as nodeAlias from './node';
+
+const node = nodeAlias; // Aliasing it prevents some bundler warnings
 
 export type ReadResult = {
 	bytes: Uint8Array;
@@ -548,9 +551,7 @@ export class FilePathSource extends Source {
 		// Let's back this source with a StreamSource, makes the implementation very simple
 		this._streamSource = new StreamSource({
 			getSize: async () => {
-				const FS_MODULE_NAME = 'node:fs/promises';
-				const fs = await import(/* @vite-ignore */ FS_MODULE_NAME) as typeof import('node:fs/promises');
-				fileHandle = await fs.open(filePath, 'r');
+				fileHandle = await node.fs.open(filePath, 'r');
 
 				const stats = await fileHandle.stat();
 				return stats.size;
@@ -558,8 +559,9 @@ export class FilePathSource extends Source {
 			read: async (start, end) => {
 				assert(fileHandle);
 
-				const buffer = Buffer.alloc(end - start);
+				const buffer = new Uint8Array(end - start);
 				await fileHandle.read(buffer, 0, end - start, start);
+
 				return buffer;
 			},
 			maxCacheSize: options.maxCacheSize,

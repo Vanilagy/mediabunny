@@ -11,6 +11,7 @@ It has the following features:
 - Trimming
 - Video resizing & fitting
 - Video rotation
+- Video cropping
 - Video frame rate adjustment
 - Audio resampling
 - Audio up/downmixing
@@ -48,7 +49,7 @@ await conversion.execute();
 That's it! A `Conversion` simply takes an instance of `Input` and `Output`, then reads the data from the input and writes it to the output. If you're unfamiliar with [`Input`](./reading-media-files) and [`Output`](./writing-media-files), check out their respective guides.
 
 ::: info
-The `Output` passed to the `Conversion` must be *fresh*; that is, it must have no added tracks and be in the `'pending'` state (not started yet).
+The `Output` passed to the `Conversion` must be *fresh*; that is, it must have no added tracks or metadata tags and be in the `'pending'` state (not started yet).
 :::
 
 Unconfigured, the conversion process handles all the details automatically, such as:
@@ -298,17 +299,17 @@ By default, any [descriptive metadata tags](../api/MetadataTags.md) of the input
 // Set your own metadata:
 const conversion = await Conversion.init({
 	// ...
-	tags: () => ({
+	tags: {
 		title: 're:Turning',
 		artist: 'Alexander Panos',
-	}),
+	},
 	// ...
 });
 
 // Or, augment the input's metadata:
 const conversion = await Conversion.init({
 	// ...
-	tags: inputTags => ({
+	tags: (inputTags) => ({
 		...inputTags, // Keep the existing metadata
 		images: [{ // And add cover art
 			data: new Uint8Array(...),
@@ -323,7 +324,7 @@ const conversion = await Conversion.init({
 // Or, remove all metadata
 const conversion = await Conversion.init({
 	// ...
-	tags: () => ({}),
+	tags: {},
 	// ...
 });
 ```
