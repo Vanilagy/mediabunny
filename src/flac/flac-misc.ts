@@ -113,8 +113,7 @@ export const readBlockSize = (slice: FileSlice, blockSizeBits: BlockSizeOrUncomm
 		return blockSizeBits;
 	}
 
-	// eslint-disable-next-line @typescript-eslint/restrict-template-expressions
-	throw new Error(`Invalid blockSizeBits: ${blockSizeBits satisfies never}`);
+	throw new Error(`Invalid blockSizeBits: ${String(blockSizeBits satisfies never)}`);
 };
 
 export const getSampleRate = (slice: FileSlice, sampleRateOrUncommon: SampleRateOrUncommon) => {
