@@ -208,12 +208,8 @@ export class FlacMuxer extends Muxer {
 				this.writeVorbisCommentAndPictureBlock();
 			}
 
-			const slice = new FileSlice(
+			const slice = FileSlice.tempFromBytes(
 				packet.data,
-				toDataView(packet.data),
-				0,
-				0,
-				packet.data.byteLength,
 			);
 			readBytes(slice, 2);
 			const bytes = readBytes(slice, 2);
