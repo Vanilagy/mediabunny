@@ -40,65 +40,37 @@ export const getSampleRateOrUncommon = (
 ): SampleRateOrUncommon => {
 	if (sampleRateBits === 0b0000) {
 		return streamInfoSampleRate;
-	}
-
-	if (sampleRateBits === 0b0001) {
+	} else if (sampleRateBits === 0b0001) {
 		return 88200;
-	}
-
-	if (sampleRateBits === 0b0010) {
+	} else	if (sampleRateBits === 0b0010) {
 		return 176400;
-	}
-
-	if (sampleRateBits === 0b0011) {
+	} else	if (sampleRateBits === 0b0011) {
 		return 192000;
-	}
-
-	if (sampleRateBits === 0b0100) {
+	} else if (sampleRateBits === 0b0100) {
 		return 8000;
-	}
-
-	if (sampleRateBits === 0b0101) {
+	} else if (sampleRateBits === 0b0101) {
 		return 16000;
-	}
-
-	if (sampleRateBits === 0b0110) {
+	} else if (sampleRateBits === 0b0110) {
 		return 22050;
-	}
-
-	if (sampleRateBits === 0b0111) {
+	} else if (sampleRateBits === 0b0111) {
 		return 24000;
-	}
-
-	if (sampleRateBits === 0b1000) {
+	} else if (sampleRateBits === 0b1000) {
 		return 32000;
-	}
-
-	if (sampleRateBits === 0b1001) {
+	} else if (sampleRateBits === 0b1001) {
 		return 44100;
-	}
-
-	if (sampleRateBits === 0b1010) {
+	} else if (sampleRateBits === 0b1010) {
 		return 48000;
-	}
-
-	if (sampleRateBits === 0b1011) {
+	} else if (sampleRateBits === 0b1011) {
 		return 96000;
-	}
-
-	if (sampleRateBits === 0b1100) {
+	} else if (sampleRateBits === 0b1100) {
 		return 'uncommon-u8';
-	}
-
-	if (sampleRateBits === 0b1101) {
+	} else if (sampleRateBits === 0b1101) {
 		return 'uncommon-u16';
-	}
-
-	if (sampleRateBits === 0b1110) {
+	} else	if (sampleRateBits === 0b1110) {
 		return 'uncommon-u16-10';
+	} else {
+		throw new Error(`Invalid sample rate mode: ${sampleRateBits.toString(2)}`);
 	}
-
-	throw new Error(`Invalid sample rate mode: ${sampleRateBits.toString(2)}`);
 };
 
 // https://www.rfc-editor.org/rfc/rfc9639.html#name-coded-number
