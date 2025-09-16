@@ -226,6 +226,7 @@ export class FlacMuxer extends Muxer {
 			this.frameSizes.push(packet.data.length);
 
 			this.writer.write(packet.data);
+			await this.writer.flush();
 		} finally {
 			release();
 		}
