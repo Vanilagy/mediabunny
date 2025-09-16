@@ -46,7 +46,25 @@ await conversion.execute();
 // output.target.buffer contains the final file
 ```
 
-That's it! A `Conversion` simply takes an instance of `Input` and `Output`, then reads the data from the input and writes it to the output. If you're unfamiliar with [`Input`](./reading-media-files) and [`Output`](./writing-media-files), check out their respective guides.
+Additionally, it is possible to pass multiple `Input`'s in `input` field as array:
+```
+// ...
+
+const inputA = new Input({ ... });
+const inputB = new Input({ ... });
+const output = new Output({
+	format: new WebMOutputFormat(),
+	target: new BufferTarget(),
+});
+// This may be useful in case when audio and video streams are stored in separated files
+
+const conversion = await Conversion.init({ input: [ inputA, inputB ], output: output });
+await conversion.execute();
+```
+
+When multiple inputs are used they duration must be equal. Also, if inputs contain metadata, only the metadata from the first provided input will be used in the output.
+
+That's it! A `Conversion` simply takes an instance(s) of `Input` and `Output`, then reads the data from the input and writes it to the output. If you're unfamiliar with [`Input`](./reading-media-files) and [`Output`](./writing-media-files), check out their respective guides.
 
 ::: info
 The `Output` passed to the `Conversion` must be *fresh*; that is, it must have no added tracks or metadata tags and be in the `'pending'` state (not started yet).

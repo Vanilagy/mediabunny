@@ -316,7 +316,7 @@ export type DiscardedTrack = {
  */
 export class Conversion {
 	/** The input file. */
-	readonly input: Input;
+	readonly inputs: Input[];
 	/** The output file. */
 	readonly output: Output;
 
@@ -389,8 +389,12 @@ export class Conversion {
 		if (!options || typeof options !== 'object') {
 			throw new TypeError('options must be an object.');
 		}
-		if (!(options.input instanceof Input)) {
-			throw new TypeError('options.input must be an Input.');
+		if (!(options.input instanceof Input) &&
+			!(Array.isArray(options.input) &&
+				(options.input.length > 0) &&
+				options.input.every((input) => { return (input instanceof Input); })))
+		{
+			throw new TypeError('options.input must be an Input or non-empty Input[].');
 		}
 		if (!(options.output instanceof Output)) {
 			throw new TypeError('options.output must be an Output.');
@@ -442,7 +446,7 @@ export class Conversion {
 		}
 
 		this._options = options;
-		this.input = options.input;
+		this.inputs = (options.input instanceof Input) ? [ options.input ] : options.input;
 		this.output = options.output;
 
 		this._startTimestamp = options.trim?.start ?? 0;
@@ -455,7 +459,19 @@ export class Conversion {
 
 	/** @internal */
 	async _init() {
-		const inputTracks = await this.input.getTracks();
+		if (this.inputs.length > 1) {
+			let durationMatch = true;
+			const baseDuration = Math.ceil(await this.inputs[0].computeDuration());
+			for (const input of this.inputs) {
+				const inputDuration = Math.ceil(await input.computeDuration());
+				durationMatch &= (inputDuration == baseDuration);
+			}
+			if (!durationMatch) {
+				throw new Error('inputs duration does not match.');
+			}
+		}
+
+		const inputTracks = await this._collectInputTracks();
 		const outputTrackCounts = this.output.format.getSupportedTrackCounts();
 
 		let nVideo = 1;
@@ -526,7 +542,7 @@ export class Conversion {
 
 		// Now, let's deal with metadata tags
 
-		const inputTags = await this.input.getMetadataTags();
+		const inputTags = await this.inputs[0].getMetadataTags();
 		let outputTags: MetadataTags;
 
 		if (this._options.tags) {
@@ -541,7 +557,8 @@ export class Conversion {
 		}
 
 		// Somewhat dirty but pragmatic
-		const inputAndOutputFormatMatch = (await this.input.getFormat()).mimeType === this.output.format.mimeType;
+		const inputAndOutputFormatMatch = (this.inputs.length == 1) &&
+			((await this.inputs[0].getFormat()).mimeType === this.output.format.mimeType);
 		const rawTagsAreUnchanged = inputTags.raw === outputTags.raw;
 
 		if (inputTags.raw && rawTagsAreUnchanged && !inputAndOutputFormatMatch) {
@@ -551,6 +568,17 @@ export class Conversion {
 		}
 
 		this.output.setMetadataTags(outputTags);
+	}
+	
+	/** @internal */
+	async _collectInputTracks() {
+		let tracks: InputTrack[] = [];
+		for (const input of this.inputs) {
+			for (const track of await input.getTracks()) {
+				tracks.push(track);
+			}
+		}
+		return tracks;
 	}
 
 	/** Executes the conversion process. Resolves once conversion is complete. */
@@ -564,7 +592,7 @@ export class Conversion {
 		if (this.onProgress) {
 			this._computeProgress = true;
 			this._totalDuration = Math.min(
-				(await this.input.computeDuration()) - this._startTimestamp,
+				(await this.inputs[0].computeDuration()) - this._startTimestamp,
 				this._endTimestamp - this._startTimestamp,
 			);
 
