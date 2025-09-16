@@ -154,7 +154,7 @@ export class FlacDemuxer extends Demuxer {
 			return null;
 		}
 
-		return { num, blockSize, sampleRate, size: blockSize };
+		return { num, blockSize, sampleRate };
 	}
 
 	async readNextFlacFrame({
