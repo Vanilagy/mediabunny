@@ -625,10 +625,9 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		sampleIndex: number,
 		options: PacketRetrievalOptions,
 	): Promise<EncodedPacket | null> {
-		let rawSample = this.demuxer.loadedSamples[sampleIndex];
-		while (!rawSample) {
-			await this.demuxer.advanceReader();
-			rawSample = this.demuxer.loadedSamples[sampleIndex];
+		const rawSample = this.demuxer.loadedSamples[sampleIndex];
+		if (!rawSample) {
+			return null;
 		}
 
 		let data: Uint8Array;
@@ -660,9 +659,17 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		);
 	}
 
-	getFirstPacket(
+	async getFirstPacket(
 		options: PacketRetrievalOptions,
 	): Promise<EncodedPacket | null> {
+		// Ensure the next sample exists
+		while (
+			this.demuxer.loadedSamples.length === 0
+			&& !this.demuxer.lastSampleLoaded
+		) {
+			await this.demuxer.advanceReader();
+		}
+
 		return this.getPacketAtIndex(0, options);
 	}
 }
