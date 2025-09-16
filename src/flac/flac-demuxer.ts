@@ -34,7 +34,7 @@ import {
 	readBlockSize,
 	getBlockSizeOrUncommon,
 	readCodedNumber,
-	getSampleRate,
+	readSampleRate,
 	getSampleRateOrUncommon,
 } from './flac-misc';
 
@@ -408,7 +408,7 @@ export class FlacDemuxer extends Demuxer {
 
 		const num = readCodedNumber(slice);
 		const blockSize = readBlockSize(slice, blockSizeOrUncommon);
-		const sampleRate = getSampleRate(slice, sampleRateOrUncommon);
+		const sampleRate = readSampleRate(slice, sampleRateOrUncommon);
 		const size = slice.filePos - startOffset;
 		const crc = readU8(slice);
 

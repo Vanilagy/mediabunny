@@ -114,7 +114,7 @@ export const readBlockSize = (slice: FileSlice, blockSizeBits: BlockSizeOrUncomm
 	throw new Error(`Invalid blockSizeBits: ${String(blockSizeBits satisfies never)}`);
 };
 
-export const getSampleRate = (slice: FileSlice, sampleRateOrUncommon: SampleRateOrUncommon) => {
+export const readSampleRate = (slice: FileSlice, sampleRateOrUncommon: SampleRateOrUncommon) => {
 	if (sampleRateOrUncommon === 'uncommon-u16') {
 		return readU16Be(slice);
 	}
