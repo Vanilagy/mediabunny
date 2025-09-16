@@ -819,7 +819,15 @@ export class AdtsOutputFormat extends OutputFormat {
 	}
 }
 
-export type FlacOutputFormatOptions = {};
+export type FlacOutputFormatOptions = {
+	/**
+	 * Will be called for each FLAC frame that is written.
+	 *
+	 * @param data - The raw bytes.
+	 * @param position - The byte offset of the data in the file.
+	 */
+	onFrame?: (data: Uint8Array, position: number) => unknown;
+};
 
 export class FlacOutputFormat extends OutputFormat {
 	/** @internal */

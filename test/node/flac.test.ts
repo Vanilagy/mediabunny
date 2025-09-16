@@ -155,13 +155,21 @@ test('can re-mux a .flac', async () => {
 		formats: ALL_FORMATS,
 	});
 
+	let framesWritten = 0;
+
 	const output = new Output({
-		format: new FlacOutputFormat(),
+		format: new FlacOutputFormat({
+			onFrame() {
+				framesWritten++;
+			},
+		}),
 		target: new BufferTarget(),
 	});
 
 	const conversion = await Conversion.init({ input, output });
 	await conversion.execute();
+
+	expect(framesWritten).toBe(213);
 
 	const buffer = output.target.buffer;
 	assert(buffer);
