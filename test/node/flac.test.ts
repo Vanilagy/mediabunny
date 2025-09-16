@@ -196,14 +196,21 @@ test('can re-mux a .flac', async () => {
 	]);
 
 	const { images: inputImages, ...otherInputMetadataTags } = inputMetadataTags;
-	const { images: outputImages, ...otherOutputMetadataTags } = outputMetadataTags;
 
-	expect(otherOutputMetadataTags).toEqual({
+	expect(outputMetadataTags).toEqual({
 		...otherInputMetadataTags,
 		raw: {
 			...otherInputMetadataTags.raw,
 			vendor: 'Mediabunny',
 		},
+		images: inputImages?.map((image) => {
+			return {
+				...image,
+				// Might be a buffer as of september 16th
+				// once this is fixed, test may be simplified
+				data: new Uint8Array(image.data),
+			};
+		}),
 	});
 
 	const inputPacketSink = new EncodedPacketSink(inputTrack);
