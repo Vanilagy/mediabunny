@@ -7,6 +7,7 @@
  */
 
 import { parsePcmCodec, PCM_AUDIO_CODECS, PcmAudioCodec, VideoCodec, AudioCodec } from './codec';
+import { extractHevcNalUnits, extractNalUnitTypeForHevc, HevcNalUnitType } from './codec-data';
 import { CustomVideoDecoder, customVideoDecoders, CustomAudioDecoder, customAudioDecoders } from './custom-coder';
 import { InputAudioTrack, InputTrack, InputVideoTrack } from './input-track';
 import {
@@ -28,7 +29,7 @@ import {
 } from './misc';
 import { EncodedPacket } from './packet';
 import { fromAlaw, fromUlaw } from './pcm';
-import { AudioSample, VideoSample } from './sample';
+import { AudioSample, clampCropRectangle, CropRectangle, validateCropRectangle, VideoSample } from './sample';
 
 /**
  * Additional options for controlling packet retrieval.
@@ -624,8 +625,8 @@ export abstract class BaseMediaSampleSink<
 					const nextPacket = await packetSink.getNextPacket(currentPacket);
 					assert(nextPacket);
 
-					currentPacket = nextPacket;
 					decoder.decode(nextPacket);
+					currentPacket = nextPacket;
 				}
 
 				maxSequenceNumber = -1;
@@ -757,12 +758,14 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 
 	inputTimestamps: number[] = []; // Timestamps input into the decoder, sorted.
 	sampleQueue: VideoSample[] = []; // Safari-specific thing, check usage.
+	currentPacketIndex = 0;
+	raslSkipped = false; // For HEVC stuff
 
 	constructor(
 		onSample: (sample: VideoSample) => unknown,
 		onError: (error: DOMException) => unknown,
-		codec: VideoCodec,
-		decoderConfig: VideoDecoderConfig,
+		public codec: VideoCodec,
+		public decoderConfig: VideoDecoderConfig,
 		public rotation: Rotation,
 		public timeResolution: number,
 	) {
@@ -848,6 +851,26 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	}
 
 	decode(packet: EncodedPacket) {
+		if (this.codec === 'hevc' && this.currentPacketIndex > 0 && !this.raslSkipped) {
+			// If we're using HEVC, we need to make sure to skip any RASL slices that follow a non-IDR key frame such as
+			// CRA_NUT. This is because RASL slices cannot be decoded without data before the CRA_NUT. Browsers behave
+			// differently here: Chromium drops the packets, Safari throws a decoder error. Either way, it's not good
+			// and causes bugs upstream. So, let's take the dropping into our own hands.
+			const nalUnits = extractHevcNalUnits(packet.data, this.decoderConfig);
+			const hasRaslPicture = nalUnits.some((x) => {
+				const type = extractNalUnitTypeForHevc(x);
+				return type === HevcNalUnitType.RASL_N || type === HevcNalUnitType.RASL_R;
+			});
+
+			if (hasRaslPicture) {
+				return; // Drop
+			}
+
+			this.raslSkipped = true;
+		}
+
+		this.currentPacketIndex++;
+
 		if (this.customDecoder) {
 			this.customDecoderQueueSize++;
 			void this.customDecoderCallSerializer
@@ -879,6 +902,9 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 
 			this.sampleQueue.length = 0;
 		}
+
+		this.currentPacketIndex = 0;
+		this.raslSkipped = false;
 	}
 
 	close() {
@@ -1027,6 +1053,11 @@ export type CanvasSinkOptions = {
 	 */
 	rotation?: Rotation;
 	/**
+	 * Specifies the rectangular region of the input video to crop to. The crop region will automatically be clamped to
+	 * the dimensions of the input video track. Cropping is performed after rotation but before resizing.
+	 */
+	crop?: CropRectangle;
+	/**
 	 * When set, specifies the number of canvases in the pool. These canvases will be reused in a ring buffer /
 	 * round-robin type fashion. This keeps the amount of allocated VRAM constant and relieves the browser from
 	 * constantly allocating/deallocating canvases. A pool size of 0 or `undefined` disables the pool and means a new
@@ -1056,6 +1087,8 @@ export class CanvasSink {
 	_fit: 'fill' | 'contain' | 'cover';
 	/** @internal */
 	_rotation: Rotation;
+	/** @internal */
+	_crop?: { left: number; top: number; width: number; height: number };
 	/** @internal */
 	_videoSampleSink: VideoSampleSink;
 	/** @internal */
@@ -1092,6 +1125,9 @@ export class CanvasSink {
 		if (options.rotation !== undefined && ![0, 90, 180, 270].includes(options.rotation)) {
 			throw new TypeError('options.rotation, when provided, must be 0, 90, 180 or 270.');
 		}
+		if (options.crop !== undefined) {
+			validateCropRectangle(options.crop, 'options.');
+		}
 		if (
 			options.poolSize !== undefined
 			&& (typeof options.poolSize !== 'number' || !Number.isInteger(options.poolSize) || options.poolSize < 0)
@@ -1100,9 +1136,19 @@ export class CanvasSink {
 		}
 
 		const rotation = options.rotation ?? videoTrack.rotation;
-		let [width, height] = rotation % 180 === 0
+
+		const [rotatedWidth, rotatedHeight] = rotation % 180 === 0
 			? [videoTrack.codedWidth, videoTrack.codedHeight]
 			: [videoTrack.codedHeight, videoTrack.codedWidth];
+
+		const crop = options.crop;
+		if (crop) {
+			clampCropRectangle(crop, rotatedWidth, rotatedHeight);
+		}
+
+		let [width, height] = crop
+			? [crop.width, crop.height]
+			: [rotatedWidth, rotatedHeight];
 		const originalAspectRatio = width / height;
 
 		// If width and height aren't defined together, deduce the missing value using the aspect ratio
@@ -1121,6 +1167,7 @@ export class CanvasSink {
 		this._width = width;
 		this._height = height;
 		this._rotation = rotation;
+		this._crop = crop;
 		this._fit = options.fit ?? 'fill';
 		this._videoSampleSink = new VideoSampleSink(videoTrack);
 		this._canvasPool = Array.from({ length: options.poolSize ?? 0 }, () => null);
@@ -1165,6 +1212,7 @@ export class CanvasSink {
 		sample.drawWithFit(context, {
 			fit: this._fit,
 			rotation: this._rotation,
+			crop: this._crop,
 		});
 
 		const result = {

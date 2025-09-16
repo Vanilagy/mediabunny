@@ -47,7 +47,7 @@ import {
 } from './misc';
 import { Output, TrackType } from './output';
 import { Mp4OutputFormat } from './output-format';
-import { AudioSample, VideoSample } from './sample';
+import { AudioSample, clampCropRectangle, validateCropRectangle, VideoSample } from './sample';
 import { MetadataTags, validateMetadataTags } from './tags';
 import { NullTarget } from './target';
 
@@ -126,10 +126,24 @@ export type ConversionVideoOptions = {
 	 */
 	fit?: 'fill' | 'contain' | 'cover';
 	/**
-	 * The angle in degrees to rotate the input video by, clockwise. Rotation is applied before resizing. This
-	 * rotation is _in addition to_ the natural rotation of the input video as specified in input file's metadata.
+	 * The angle in degrees to rotate the input video by, clockwise. Rotation is applied before cropping and resizing.
+	 * This rotation is _in addition to_ the natural rotation of the input video as specified in input file's metadata.
 	 */
 	rotate?: Rotation;
+	/**
+	 * Specifies the rectangular region of the input video to crop to. The crop region will automatically be clamped to
+	 * the dimensions of the input video track. Cropping is performed after rotation but before resizing.
+	 */
+	crop?: {
+		/** The distance in pixels from the left edge of the source frame to the left edge of the crop rectangle. */
+		left: number;
+		/** The distance in pixels from the top edge of the source frame to the top edge of the crop rectangle. */
+		top: number;
+		/** The width in pixels of the crop rectangle. */
+		width: number;
+		/** The height in pixels of the crop rectangle. */
+		height: number;
+	};
 	/**
 	 * The desired frame rate of the output video, in hertz. If not specified, the original input frame rate will
 	 * be used (which may be variable).
@@ -212,6 +226,9 @@ const validateVideoOptions = (videoOptions: ConversionVideoOptions | undefined) 
 	}
 	if (videoOptions?.rotate !== undefined && ![0, 90, 180, 270].includes(videoOptions.rotate)) {
 		throw new TypeError('options.video.rotate, when provided, must be 0, 90, 180 or 270.');
+	}
+	if (videoOptions?.crop !== undefined) {
+		validateCropRectangle(videoOptions.crop, 'options.video.');
 	}
 	if (
 		videoOptions?.frameRate !== undefined
@@ -534,9 +551,14 @@ export class Conversion {
 		if (this.onProgress) {
 			this._computeProgress = true;
 			this._totalDuration = Math.min(
-				await this.input.computeDuration() - this._startTimestamp,
+				(await this.input.computeDuration()) - this._startTimestamp,
 				this._endTimestamp - this._startTimestamp,
 			);
+
+			for (const track of this.utilizedTracks) {
+				this._maxTimestamps.set(track.id, 0);
+			}
+
 			this.onProgress?.(0);
 		}
 
@@ -596,9 +618,18 @@ export class Conversion {
 		const totalRotation = normalizeRotation(track.rotation + (trackOptions.rotate ?? 0));
 		const outputSupportsRotation = this.output.format.supportsVideoRotationMetadata;
 
-		const [originalWidth, originalHeight] = totalRotation % 180 === 0
+		const [rotatedWidth, rotatedHeight] = totalRotation % 180 === 0
 			? [track.codedWidth, track.codedHeight]
 			: [track.codedHeight, track.codedWidth];
+
+		const crop = trackOptions.crop;
+		if (crop) {
+			clampCropRectangle(crop, rotatedWidth, rotatedHeight);
+		}
+
+		const [originalWidth, originalHeight] = crop
+			? [crop.width, crop.height]
+			: [rotatedWidth, rotatedHeight];
 
 		let width = originalWidth;
 		let height = originalHeight;
@@ -625,7 +656,8 @@ export class Conversion {
 			|| !!trackOptions.frameRate;
 		let needsRerender = width !== originalWidth
 			|| height !== originalHeight
-			|| (totalRotation !== 0 && !outputSupportsRotation);
+			|| (totalRotation !== 0 && !outputSupportsRotation)
+			|| !!crop;
 
 		let videoCodecs = this.output.format.getSupportedVideoCodecs();
 		if (
@@ -723,7 +755,7 @@ export class Conversion {
 				await tempOutput.start();
 
 				const sink = new VideoSampleSink(track);
-				const firstSample = await sink.getSample(this._startTimestamp);
+				const firstSample = await sink.getSample(firstTimestamp); // Let's just use the first sample
 
 				if (firstSample) {
 					try {
@@ -749,6 +781,7 @@ export class Conversion {
 						height,
 						fit: trackOptions.fit ?? 'fill',
 						rotation: totalRotation, // Bake the rotation into the output
+						crop: trackOptions.crop,
 						poolSize: 1,
 					});
 					const iterator = sink.canvases(this._startTimestamp, this._endTimestamp);
@@ -1120,8 +1153,6 @@ export class Conversion {
 			await this._started;
 
 			const resampler = new AudioResampler({
-				sourceNumberOfChannels: track.numberOfChannels,
-				sourceSampleRate: track.sampleRate,
 				targetNumberOfChannels,
 				targetSampleRate,
 				startTime: this._startTimestamp,
@@ -1160,7 +1191,10 @@ export class Conversion {
 		}
 		assert(this._totalDuration !== null);
 
-		this._maxTimestamps.set(trackId, Math.max(endTimestamp, this._maxTimestamps.get(trackId) ?? -Infinity));
+		this._maxTimestamps.set(
+			trackId,
+			Math.max(endTimestamp, this._maxTimestamps.get(trackId)!),
+		);
 
 		const minTimestamp = Math.min(...this._maxTimestamps.values());
 		const newProgress = clamp(minTimestamp / this._totalDuration, 0, 1);
@@ -1238,9 +1272,9 @@ class TrackSynchronizer {
  * OfflineAudioContext.
  */
 export class AudioResampler {
-	sourceSampleRate: number;
+	sourceSampleRate: number | null = null;
 	targetSampleRate: number;
-	sourceNumberOfChannels: number;
+	sourceNumberOfChannels: number | null = null;
 	targetNumberOfChannels: number;
 	startTime: number;
 	endTime: number;
@@ -1254,20 +1288,16 @@ export class AudioResampler {
 	/** The highest index written to in the current buffer */
 	maxWrittenFrame: number;
 	channelMixer!: (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => number;
-	tempSourceBuffer: Float32Array;
+	tempSourceBuffer!: Float32Array;
 
 	constructor(options: {
-		sourceSampleRate: number;
 		targetSampleRate: number;
-		sourceNumberOfChannels: number;
 		targetNumberOfChannels: number;
 		startTime: number;
 		endTime: number;
 		onSample: (sample: AudioSample) => Promise<void>;
 	}) {
-		this.sourceSampleRate = options.sourceSampleRate;
 		this.targetSampleRate = options.targetSampleRate;
-		this.sourceNumberOfChannels = options.sourceNumberOfChannels;
 		this.targetNumberOfChannels = options.targetNumberOfChannels;
 		this.startTime = options.startTime;
 		this.endTime = options.endTime;
@@ -1279,17 +1309,14 @@ export class AudioResampler {
 		this.outputBuffer = new Float32Array(this.bufferSizeInSamples);
 		this.bufferStartFrame = 0;
 		this.maxWrittenFrame = -1;
-
-		this.setupChannelMixer();
-
-		// Pre-allocate temporary buffer for source data
-		this.tempSourceBuffer = new Float32Array(this.sourceSampleRate * this.sourceNumberOfChannels);
 	}
 
 	/**
 	 * Sets up the channel mixer to handle up/downmixing in the case where input and output channel counts don't match.
 	 */
-	setupChannelMixer(): void {
+	doChannelMixerSetup(): void {
+		assert(this.sourceNumberOfChannels !== null);
+
 		const sourceNum = this.sourceNumberOfChannels;
 		const targetNum = this.targetNumberOfChannels;
 
@@ -1407,8 +1434,17 @@ export class AudioResampler {
 	}
 
 	async add(audioSample: AudioSample) {
-		if (!audioSample || audioSample._closed) {
-			return;
+		if (this.sourceSampleRate === null) {
+			// This is the first sample, so let's init the missing data. Initting the sample rate from the decoded
+			// sample is more reliable than using the file's metadata, because decoders are free to emit any sample rate
+			// they see fit.
+			this.sourceSampleRate = audioSample.sampleRate;
+			this.sourceNumberOfChannels = audioSample.numberOfChannels;
+
+			// Pre-allocate temporary buffer for source data
+			this.tempSourceBuffer = new Float32Array(this.sourceSampleRate * this.sourceNumberOfChannels);
+
+			this.doChannelMixerSetup();
 		}
 
 		const requiredSamples = audioSample.numberOfFrames * audioSample.numberOfChannels;

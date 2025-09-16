@@ -162,6 +162,7 @@ export {
 	AudioSampleCopyToOptions,
 	VideoSample,
 	VideoSampleInit,
+	CropRectangle,
 } from './sample';
 export {
 	AudioBufferSink,

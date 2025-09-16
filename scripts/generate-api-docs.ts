@@ -16,7 +16,7 @@ import * as ts from 'typescript';
 import * as fs from 'fs';
 import * as path from 'path';
 
-const generateDocs = (entryFiles: string[], apiConfigFile: string) => {
+const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) => {
 	const program = ts.createProgram(entryFiles, {
 		target: ts.ScriptTarget.ES2020,
 		module: ts.ModuleKind.ESNext,
@@ -55,11 +55,13 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string) => {
 	delete groupConfig['heading'];
 	delete groupConfig['intro'];
 
-	// Clear and recreate output directory
-	if (fs.existsSync(outputDir)) {
-		fs.rmSync(outputDir, { recursive: true });
+	// Clear and recreate output directory (skip if dry run)
+	if (!dry) {
+		if (fs.existsSync(outputDir)) {
+			fs.rmSync(outputDir, { recursive: true });
+		}
+		fs.mkdirSync(outputDir, { recursive: true });
 	}
-	fs.mkdirSync(outputDir, { recursive: true });
 
 	// Collect all exported types for cross-referencing
 	const exportedTypes = new Set<string>();
@@ -1539,9 +1541,11 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string) => {
 		}
 
 		const finalMarkdown = markdown.replace('<!-- USED_BY_SECTION -->', usedByMarkdown);
-		const outputPath = path.join(outputDir, `${symbolName}.md`);
-		fs.writeFileSync(outputPath, finalMarkdown);
-		console.log(`Generated: ${outputPath}`);
+		if (!dry) {
+			const outputPath = path.join(outputDir, `${symbolName}.md`);
+			fs.writeFileSync(outputPath, finalMarkdown);
+			console.log(`Generated: ${outputPath}`);
+		}
 	});
 
 	// Generate index.md with all exported symbols grouped by group
@@ -1587,9 +1591,11 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string) => {
 		indexMarkdown += '\n';
 	});
 
-	const indexPath = path.join(outputDir, 'index.md');
-	fs.writeFileSync(indexPath, indexMarkdown);
-	console.log(`Generated: ${indexPath}`);
+	if (!dry) {
+		const indexPath = path.join(outputDir, 'index.md');
+		fs.writeFileSync(indexPath, indexMarkdown);
+		console.log(`Generated: ${indexPath}`);
+	}
 
 	// Generate index.json with sidebar config structure
 	const sidebarConfig = sortedGroups.map((group) => {
@@ -1607,15 +1613,28 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string) => {
 		};
 	});
 
-	const jsonPath = path.join(outputDir, 'index.json');
-	fs.writeFileSync(jsonPath, JSON.stringify(sidebarConfig, null, 2));
-	console.log(`Generated: ${jsonPath}`);
+	if (!dry) {
+		const jsonPath = path.join(outputDir, 'index.json');
+		fs.writeFileSync(jsonPath, JSON.stringify(sidebarConfig, null, 2));
+		console.log(`Generated: ${jsonPath}`);
+	}
 };
 
 const main = () => {
 	const args = process.argv.slice(2);
+
+	// Check for --dry flag
+	const dryIndex = args.indexOf('--dry');
+	const dry = dryIndex !== -1;
+
+	// Remove --dry flag from args
+	if (dry) {
+		args.splice(dryIndex, 1);
+	}
+
 	if (args.length < 2) {
-		console.error('Usage: npm run generate-docs <entry-file1> [entry-file2 ...] <api-config-file>');
+		console.error('Usage: npm run generate-docs [--dry] <entry-file1> [entry-file2 ...] <api-config-file>');
+		console.error('  --dry: Check if docs are generatable without writing files');
 		console.error('  entry-files: One or more TypeScript entry files');
 		console.error('  api-config-file: JSON config file defining groups');
 		process.exit(1);
@@ -1625,7 +1644,7 @@ const main = () => {
 	const apiConfigFile = args[args.length - 1]!;
 	const entryFiles = args.slice(0, -1);
 
-	generateDocs(entryFiles, apiConfigFile);
+	generateDocs(entryFiles, apiConfigFile, dry);
 };
 
 main();

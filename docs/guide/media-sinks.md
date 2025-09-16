@@ -314,7 +314,7 @@ for await (const sample of keyFrameSamples) {
 
 ### `CanvasSink`
 
-While `VideoSampleSink` extracts raw decoded video samples, you can use `CanvasSink` to extract these samples as canvases instead. In doing so, certain operations such as scaling and rotating can also be handled by the sink. The downside is the additional VRAM requirements for the canvases' framebuffers.
+While `VideoSampleSink` extracts raw decoded video samples, you can use `CanvasSink` to extract these samples as canvases instead. In doing so, certain operations such as scaling, rotating, and cropping can also be handled by the sink. The downside is the additional VRAM requirements for the canvases' framebuffers.
 
 ::: info
 This sink yields `HTMLCanvasElement` whenever possible, and falls back to `OffscreenCanvas` otherwise (in Worker contexts, for example).
@@ -334,6 +334,7 @@ type CanvasSinkOptions = {
 	height?: number;
 	fit?: 'fill' | 'contain' | 'cover';
 	rotation?: 0 | 90 | 180 | 270;
+	crop?: { left: number; top: number; width: number; height: number };
 	poolSize?: number;
 };
 ```
@@ -347,7 +348,9 @@ type CanvasSinkOptions = {
 	- `'contain'` will contain the entire image within the box while preserving aspect ratio. This may lead to letterboxing.
 	- `'cover'` will scale the image until the entire box is filled, while preserving aspect ratio.
 - `rotation`\
-	The clockwise rotation by which to rotate the raw video frame. Defaults to the rotation set in the file metadata. Rotation is applied before resizing.
+	The clockwise rotation by which to rotate the raw video frame. Defaults to the rotation set in the file metadata. Rotation is applied before cropping and resizing.
+- `crop`\
+	Specifies the rectangular region of the input video to crop to. The crop region will automatically be clamped to the dimensions of the input video track. Cropping is performed after rotation but before resizing.
 - `poolSize`\
 	See [Canvas pool](#canvas-pool).
 

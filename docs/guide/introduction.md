@@ -17,7 +17,7 @@ Here's a long list of stuff this library does:
 - Lazy, optimized, on-demand file reading
 - Input and output streaming, arbitrary file size support
 - File location independence (memory, disk, network, ...)
-- Utilities for compression, resizing, rotation, resampling, trimming
+- Utilities for compression, resizing, rotation, cropping, resampling, trimming
 - Transmuxing and transcoding
 - Microsecond-accurate reading and writing precision
 - Efficient seeking through time

@@ -18,6 +18,7 @@ import {
 	extractAudioCodecString,
 	extractVideoCodecString,
 	MediaCodec,
+	OPUS_SAMPLE_RATE,
 	VideoCodec,
 } from '../codec';
 import { Demuxer } from '../demuxer';
@@ -988,6 +989,7 @@ export class MatroskaDemuxer extends Demuxer {
 						} else if (codecIdWithoutSuffix === CODEC_STRING_MAP.opus) {
 							this.currentTrack.info.codec = 'opus';
 							this.currentTrack.info.codecDescription = this.currentTrack.codecPrivate;
+							this.currentTrack.info.sampleRate = OPUS_SAMPLE_RATE; // Always the same
 						} else if (codecIdWithoutSuffix === CODEC_STRING_MAP.vorbis) {
 							this.currentTrack.info.codec = 'vorbis';
 							this.currentTrack.info.codecDescription = this.currentTrack.codecPrivate;

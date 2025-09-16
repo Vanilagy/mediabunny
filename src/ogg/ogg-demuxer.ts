@@ -6,8 +6,8 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { OPUS_INTERNAL_SAMPLE_RATE } from '../codec';
 import { parseModesFromVorbisSetupPacket, parseOpusIdentificationHeader, readVorbisComments } from '../codec-data';
+import { OPUS_SAMPLE_RATE } from '../codec';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
@@ -247,7 +247,7 @@ export class OggDemuxer extends Demuxer {
 
 		const header = parseOpusIdentificationHeader(firstPacket.data);
 		bitstream.numberOfChannels = header.outputChannelCount;
-		bitstream.sampleRate = header.inputSampleRate;
+		bitstream.sampleRate = OPUS_SAMPLE_RATE; // Always the same
 
 		bitstream.codecInfo.opusInfo = {
 			preSkip: header.preSkip,
@@ -416,7 +416,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 	constructor(public bitstream: LogicalBitstream, public demuxer: OggDemuxer) {
 		// Opus always uses a fixed sample rate for its internal calculations, even if the actual rate is different
 		this.internalSampleRate = bitstream.codecInfo.codec === 'opus'
-			? OPUS_INTERNAL_SAMPLE_RATE
+			? OPUS_SAMPLE_RATE
 			: bitstream.sampleRate;
 	}
 

@@ -50,7 +50,7 @@ Core features include:
 - **Wide format support**: Read and write MP4, MOV, WebM, MKV, WAVE, MP3, Ogg, ADTS, FLAC
 - **Built-in encoding & decoding**: Supports 25+ video, audio, and subtitle codecs, hardware-accelerated using the WebCodecs API
 - **High precision**: Fine-grained, microsecond-accurate reading and writing operations
-- **Conversion API**: Easy-to-use API with features such as transmuxing, transcoding, resizing, rotation, resampling, trimming, and more
+- **Conversion API**: Easy-to-use API with features such as transmuxing, transcoding, resizing, rotation, cropping, resampling, trimming, and more
 - **Streaming I/O**: Handle reading & writing files of any size with memory-efficient streaming
 - **Tree-shakable**: Only bundle what you use (as small as 5 kB gzipped)
 - **Zero dependencies**: Implemented in highly performant TypeScript

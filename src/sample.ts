@@ -507,28 +507,7 @@ export class VideoSample {
 			throw new Error('VideoSample is closed.');
 		}
 
-		// The provided sx,sy,sWidth,sHeight refer to the final rotated image, but that's not actually how the image is
-		// stored. Therefore, we must map these back onto the original, pre-rotation image.
-		if (this.rotation === 90) {
-			[sx, sy, sWidth, sHeight] = [
-				sy,
-				this.codedHeight - sx - sWidth,
-				sHeight,
-				sWidth,
-			];
-		} else if (this.rotation === 180) {
-			[sx, sy] = [
-				this.codedWidth - sx - sWidth,
-				this.codedHeight - sy - sHeight,
-			];
-		} else if (this.rotation === 270) {
-			[sx, sy, sWidth, sHeight] = [
-				this.codedWidth - sy - sHeight,
-				sx,
-				sHeight,
-				sWidth,
-			];
-		}
+		({ sx, sy, sWidth, sHeight } = this._rotateSourceRegion(sx, sy, sWidth, sHeight, this.rotation));
 
 		const source = this.toCanvasImageSource();
 
@@ -576,10 +555,45 @@ export class VideoSample {
 		fit: 'fill' | 'contain' | 'cover';
 		/** A way to override rotation. Defaults to the rotation of the sample. */
 		rotation?: Rotation;
+		/**
+		 * Specifies the rectangular region of the video sample to crop to. The crop region will automatically be
+		 * clamped to the dimensions of the video sample. Cropping is performed after rotation but before resizing.
+		 */
+		crop?: CropRectangle;
 	}) {
+		if (!(
+			(typeof CanvasRenderingContext2D !== 'undefined' && context instanceof CanvasRenderingContext2D)
+			|| (
+				typeof OffscreenCanvasRenderingContext2D !== 'undefined'
+				&& context instanceof OffscreenCanvasRenderingContext2D
+			)
+		)) {
+			throw new TypeError('context must be a CanvasRenderingContext2D or OffscreenCanvasRenderingContext2D.');
+		}
+		if (!options || typeof options !== 'object') {
+			throw new TypeError('options must be an object.');
+		}
+		if (!['fill', 'contain', 'cover'].includes(options.fit)) {
+			throw new TypeError('options.fit must be \'fill\', \'contain\', or \'cover\'.');
+		}
+		if (options.rotation !== undefined && ![0, 90, 180, 270].includes(options.rotation)) {
+			throw new TypeError('options.rotation, when provided, must be 0, 90, 180, or 270.');
+		}
+		if (options.crop !== undefined) {
+			validateCropRectangle(options.crop, 'options.');
+		}
+
 		const canvasWidth = context.canvas.width;
 		const canvasHeight = context.canvas.height;
 		const rotation = options.rotation ?? this.rotation;
+
+		const [rotatedWidth, rotatedHeight] = rotation % 180 === 0
+			? [this.codedWidth, this.codedHeight]
+			: [this.codedHeight, this.codedWidth];
+
+		if (options.crop) {
+			clampCropRectangle(options.crop, rotatedWidth, rotatedHeight);
+		}
 
 		// These variables specify where the final sample will be drawn on the canvas
 		let dx: number;
@@ -587,15 +601,23 @@ export class VideoSample {
 		let newWidth: number;
 		let newHeight: number;
 
+		const { sx, sy, sWidth, sHeight } = this._rotateSourceRegion(
+			options.crop?.left ?? 0,
+			options.crop?.top ?? 0,
+			options.crop?.width ?? this.codedWidth,
+			options.crop?.height ?? this.codedHeight,
+			rotation,
+		);
+
 		if (options.fit === 'fill') {
 			dx = 0;
 			dy = 0;
 			newWidth = canvasWidth;
 			newHeight = canvasHeight;
 		} else {
-			const [sampleWidth, sampleHeight] = rotation % 180 === 0
-				? [this.codedWidth, this.codedHeight]
-				: [this.codedHeight, this.codedWidth];
+			const [sampleWidth, sampleHeight] = options.crop
+				? [options.crop.width, options.crop.height]
+				: [rotatedWidth, rotatedHeight];
 
 			const scale = options.fit === 'contain'
 				? Math.min(canvasWidth / sampleWidth, canvasHeight / sampleHeight)
@@ -616,7 +638,35 @@ export class VideoSample {
 
 		// Important that we don't use .draw() here since that would take rotation into account, but we wanna handle it
 		// ourselves here
-		context.drawImage(this.toCanvasImageSource(), dx, dy, newWidth, newHeight);
+		context.drawImage(this.toCanvasImageSource(), sx, sy, sWidth, sHeight, dx, dy, newWidth, newHeight);
+	}
+
+	/** @internal */
+	_rotateSourceRegion(sx: number, sy: number, sWidth: number, sHeight: number, rotation: number) {
+		// The provided sx,sy,sWidth,sHeight refer to the final rotated image, but that's not actually how the image is
+		// stored. Therefore, we must map these back onto the original, pre-rotation image.
+		if (rotation === 90) {
+			[sx, sy, sWidth, sHeight] = [
+				sy,
+				this.codedHeight - sx - sWidth,
+				sHeight,
+				sWidth,
+			];
+		} else if (rotation === 180) {
+			[sx, sy] = [
+				this.codedWidth - sx - sWidth,
+				this.codedHeight - sy - sHeight,
+			];
+		} else if (rotation === 270) {
+			[sx, sy, sWidth, sHeight] = [
+				this.codedWidth - sy - sHeight,
+				sx,
+				sHeight,
+				sWidth,
+			];
+		}
+
+		return { sx, sy, sWidth, sHeight };
 	}
 
 	/**
@@ -677,6 +727,50 @@ export class VideoSample {
 
 const isVideoFrame = (x: unknown): x is VideoFrame => {
 	return typeof VideoFrame !== 'undefined' && x instanceof VideoFrame;
+};
+
+/**
+ * Specifies the rectangular cropping region.
+ * @group Miscellaneous
+ * @public
+ */
+export type CropRectangle = {
+	/** The distance in pixels from the left edge of the source frame to the left edge of the crop rectangle. */
+	left: number;
+	/** The distance in pixels from the top edge of the source frame to the top edge of the crop rectangle. */
+	top: number;
+	/** The width in pixels of the crop rectangle. */
+	width: number;
+	/** The height in pixels of the crop rectangle. */
+	height: number;
+};
+
+export const clampCropRectangle = (crop: CropRectangle, outerWidth: number, outerHeight: number) => {
+	crop.left = Math.min(crop.left, outerWidth);
+	crop.top = Math.min(crop.top, outerHeight);
+	crop.width = Math.min(crop.width, outerWidth - crop.left);
+	crop.height = Math.min(crop.height, outerHeight - crop.top);
+
+	assert(crop.width >= 0);
+	assert(crop.height >= 0);
+};
+
+export const validateCropRectangle = (crop: CropRectangle, prefix: string) => {
+	if (!crop || typeof crop !== 'object') {
+		throw new TypeError(prefix + 'crop, when provided, must be an object.');
+	}
+	if (!Number.isInteger(crop.left) || crop.left < 0) {
+		throw new TypeError(prefix + 'crop.left must be a non-negative integer.');
+	}
+	if (!Number.isInteger(crop.top) || crop.top < 0) {
+		throw new TypeError(prefix + 'crop.top must be a non-negative integer.');
+	}
+	if (!Number.isInteger(crop.width) || crop.width < 0) {
+		throw new TypeError(prefix + 'crop.width must be a non-negative integer.');
+	}
+	if (!Number.isInteger(crop.height) || crop.height < 0) {
+		throw new TypeError(prefix + 'crop.height must be a non-negative integer.');
+	}
 };
 
 const AUDIO_SAMPLE_FORMATS = new Set(
