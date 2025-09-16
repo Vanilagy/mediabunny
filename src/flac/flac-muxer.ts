@@ -256,9 +256,9 @@ export class FlacMuxer extends Muxer {
 			minimumBlockSize = Math.min(minimumBlockSize, this.blockSizes[i]!);
 		}
 
-		assert(this.sampleRate);
-		assert(this.channels);
-		assert(this.bitsPerSample);
+		assert(this.sampleRate !== null);
+		assert(this.channels !== null);
+		assert(this.bitsPerSample !== null);
 
 		this.writeHeader(
 			minimumBlockSize,
