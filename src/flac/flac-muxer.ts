@@ -92,10 +92,15 @@ export class FlacMuxer extends Muxer {
 		contentBitstream.writeBits(20, sampleRate);
 		contentBitstream.writeBits(3, channels - 1);
 		contentBitstream.writeBits(5, bitsPerSample - 1);
+
 		// Bitstream operations are only safe until 32bit, breaks when using 36 bits
 		// Splitting up into writing 4 0 bits and then 32 bits is safe
 		// This is safe for audio up to (2 ** 32 / 44100 / 3600) -> 27 hours
 		// Not implementing support for more than 32 bits now
+		if (totalSamples >= 2 ** 32) {
+			throw new Error('This muxer only supports writing up to 2 ** 32 samples');
+		}
+
 		contentBitstream.writeBits(4, 0);
 		contentBitstream.writeBits(32, totalSamples);
 		this.writer.write(contentBitstream.bytes);
