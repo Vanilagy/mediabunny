@@ -292,13 +292,22 @@ export class FlacDemuxer extends Demuxer {
 		// Ideally we also want to validate the next header is valid
 		// to throw out an accidential sync word
 
+		// The shortest valid FLAC header I can think of, based off the code
+		// of readFlacFrameHeader:
+		// 4 bytes used for bitstream from syncword to bit depth
+		// 1 byte coded number
+		// (uncommon values, no bytes read)
+		// 1 byte crc
+		// --> 6 bytes
+		const minimumHeaderLength = 6;
 		// If we read everything in readFlacFrameHeader, we read 16 bytes
 		const maximumHeaderSize = 16;
+		const maximumSliceLength = this.audioInfo.maximumFrameSize + maximumHeaderSize;
 
 		const slice = await this.reader.requestSliceRange(
 			startPos,
 			this.audioInfo.minimumFrameSize,
-			this.audioInfo.maximumFrameSize + maximumHeaderSize,
+			maximumSliceLength,
 		);
 
 		if (!slice) {
@@ -324,7 +333,7 @@ export class FlacDemuxer extends Demuxer {
 
 		while (true) {
 			// Reached end of the file, packet is over
-			if (slice.filePos > slice.end - n) {
+			if (slice.filePos > slice.end - minimumHeaderLength) {
 				return {
 					num: frameHeader.num,
 					blockSize: frameHeader.blockSize,
