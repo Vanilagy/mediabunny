@@ -21,7 +21,7 @@ test('Should be able to loop over all samples', async () => {
 
 	const track = await input.getPrimaryAudioTrack();
 	assert(track);
-	expect(await track.computeDuration()).toEqual(19.714285714285715);
+	expect(await track.computeDuration()).toEqual(19.71428571428571);
 	expect(await track.getDecoderConfig()).toEqual({
 		codec: 'flac',
 		numberOfChannels: 2,

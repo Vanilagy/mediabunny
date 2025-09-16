@@ -495,10 +495,8 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 	}
 
 	async computeDuration() {
-		assert(this.demuxer.audioInfo);
-		return (
-			this.demuxer.audioInfo.totalSamples / this.demuxer.audioInfo.sampleRate
-		);
+		const lastPacket = await this.getPacket(Infinity, { metadataOnly: true });
+		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
 	}
 
 	getSampleRate() {
