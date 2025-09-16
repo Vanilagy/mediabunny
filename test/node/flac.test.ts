@@ -181,8 +181,6 @@ test('should be able to re-mux a .flac', async () => {
 
 	const outputMetadataTags = await outputAsInput.getMetadataTags();
 
-	// Images are not muxed currently, because width and height are required, but
-	// Mediabunny metadata does not have them.
 	const inputMetadataTags = await input.getMetadataTags();
 	expect(inputMetadataTags.images).toHaveLength(1);
 	expect(Object.keys(outputMetadataTags)).toEqual([
