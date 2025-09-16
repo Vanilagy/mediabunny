@@ -30,7 +30,7 @@ import {
 } from '../reader';
 import { MetadataTags } from '../tags';
 import {
-	calculateCRC8,
+	calculateCRC8 as calculateCrc8,
 	readBlockSize,
 	getBlockSizeOrUncommon,
 	readCodedNumber,
@@ -414,7 +414,7 @@ export class FlacDemuxer extends Demuxer {
 
 		slice.skip(-size);
 		slice.skip(-1);
-		const crcCalculated = calculateCRC8(readBytes(slice, size));
+		const crcCalculated = calculateCrc8(readBytes(slice, size));
 
 		if (crc !== crcCalculated) {
 			// Maybe this wasn't a FLAC frame at all, the syncword was just coincidentally
