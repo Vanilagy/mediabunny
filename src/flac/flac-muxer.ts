@@ -17,7 +17,7 @@ import { Writer } from '../writer';
 import {
 	readBlockSize,
 	getBlockSizeOrUncommon,
-	getCodedNumber,
+	readCodedNumber,
 	toU32Le,
 } from './flac-misc';
 
@@ -213,7 +213,7 @@ export class FlacMuxer extends Muxer {
 			const bytes = readBytes(slice, 2);
 			const bitstream = new Bitstream(bytes);
 			const blockSizeOrUncommon = getBlockSizeOrUncommon(bitstream.readBits(4));
-			getCodedNumber(slice); // num
+			readCodedNumber(slice); // num
 			const blockSize = readBlockSize(slice, blockSizeOrUncommon);
 
 			this.blockSizes.push(blockSize);

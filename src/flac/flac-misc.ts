@@ -59,7 +59,7 @@ export const getSampleRateOrUncommon = (
 };
 
 // https://www.rfc-editor.org/rfc/rfc9639.html#name-coded-number
-export const getCodedNumber = (fileSlice: FileSlice): number => {
+export const readCodedNumber = (fileSlice: FileSlice): number => {
 	let ones = 0;
 	let bits = 0;
 
