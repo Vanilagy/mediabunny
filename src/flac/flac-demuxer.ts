@@ -324,7 +324,7 @@ export class FlacDemuxer extends Demuxer {
 
 		while (true) {
 			// Reached end of the file, packet is over
-			if (slice.filePos >= slice.end) {
+			if (slice.filePos > slice.end - n) {
 				return {
 					num: frameHeader.num,
 					blockSize: frameHeader.blockSize,
