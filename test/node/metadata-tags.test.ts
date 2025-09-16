@@ -1,6 +1,7 @@
 import { expect, test } from 'vitest';
 import { Output } from '../../src/output.js';
 import {
+	FlacOutputFormat,
 	MkvOutputFormat,
 	MovOutputFormat,
 	Mp3OutputFormat,
@@ -305,6 +306,56 @@ test('Read and write metadata, Ogg', async () => {
 	});
 
 	const dummyTrack = createDummyAudioTrack('opus', output);
+
+	await output.start();
+	await dummyTrack.addPacket();
+	await output.finalize();
+
+	const input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const readTags = await input.getMetadataTags();
+
+	expect(readTags.title).toBe(songMetadata.title);
+	expect(readTags.description).toBe(songMetadata.description);
+	expect(readTags.artist).toBe(songMetadata.artist);
+	expect(readTags.album).toBe(songMetadata.album);
+	expect(readTags.albumArtist).toBe(songMetadata.albumArtist);
+	expect(readTags.comment).toBe(songMetadata.comment);
+	expect(readTags.lyrics).toBe(songMetadata.lyrics);
+	expect(readTags.trackNumber).toBe(songMetadata.trackNumber);
+	expect(readTags.tracksTotal).toBe(songMetadata.tracksTotal);
+	expect(readTags.discNumber).toBe(songMetadata.discNumber);
+	expect(readTags.discsTotal).toBe(songMetadata.discsTotal);
+	expect(readTags.date).toEqual(readTags.date);
+	expect(readTags.images).toHaveLength(1);
+	expect(readTags.images![0]!.data).toEqual(coverArt);
+	expect(readTags.images![0]!.mimeType).toEqual('image/jpeg');
+	expect(readTags.images![0]!.kind).toEqual('coverFront');
+	expect(readTags.images![0]!.description).toEqual(songMetadata.images![0]!.description);
+	expect(readTags.images![0]!.name).toBeUndefined(); // Can't be contained in Vorbis-style metadata
+
+	expect(readTags.raw!['vendor']).toBe('Mediabunny');
+	expect(readTags.raw!['COMPOSER']).toBe('Hans Zimmer');
+});
+
+test('Read and write metadata, FLAC', async () => {
+	const output = new Output({
+		format: new FlacOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	output.setMetadataTags({
+		...songMetadata,
+		raw: {
+			vendor: 'Mediabunny',
+			COMPOSER: 'Hans Zimmer',
+		},
+	});
+
+	const dummyTrack = createDummyAudioTrack('flac', output);
 
 	await output.start();
 	await dummyTrack.addPacket();
