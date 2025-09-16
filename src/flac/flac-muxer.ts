@@ -210,15 +210,15 @@ export class FlacMuxer extends Muxer {
 			assert(meta.decoderConfig);
 			assert(meta.decoderConfig.description);
 
-			if (!this.sampleRate) {
+			if (this.sampleRate === null) {
 				this.sampleRate = meta.decoderConfig.sampleRate;
 			}
 
-			if (!this.channels) {
+			if (this.channels === null) {
 				this.channels = meta.decoderConfig.numberOfChannels;
 			}
 
-			if (!this.bitsPerSample) {
+			if (this.bitsPerSample === null) {
 				const descriptionBitstream = new Bitstream(
 					toUint8Array(meta.decoderConfig.description),
 				);
