@@ -252,7 +252,13 @@ export class FlacMuxer extends Muxer {
 			this.blockSizes.push(blockSize);
 			this.frameSizes.push(packet.data.length);
 
+			const startPos = this.writer.getPos();
 			this.writer.write(packet.data);
+
+			if (this.format._options.onFrame) {
+				this.format._options.onFrame(packet.data, startPos);
+			}
+
 			await this.writer.flush();
 		} finally {
 			release();
