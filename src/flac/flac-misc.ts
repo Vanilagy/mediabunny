@@ -10,12 +10,14 @@ import { Bitstream } from '../misc';
 import { FileSlice, readBytes, readU16Be, readU8 } from '../reader';
 
 type BlockSizeOrUncommon = number | 'uncommon-u16' | 'uncommon-u8';
-type SampleRateOrUncommon = number | 'uncommon-u8' | 'uncommon-u16' | 'uncommon-u16-10';
+type SampleRateOrUncommon =
+	| number
+	| 'uncommon-u8'
+	| 'uncommon-u16'
+	| 'uncommon-u16-10';
 
 // https://www.rfc-editor.org/rfc/rfc9639.html#name-block-size-bits
-export const getBlockSizeOrUncommon = (
-	bits: number,
-): BlockSizeOrUncommon => {
+export const getBlockSizeOrUncommon = (bits: number): BlockSizeOrUncommon => {
 	if (bits === 0b0000) {
 		throw new Error('Reserved block size');
 	} else if (bits === 0b0001) {
@@ -54,7 +56,9 @@ export const getSampleRateOrUncommon = (
 		case 0b1100: return 'uncommon-u8';
 		case 0b1101: return 'uncommon-u16';
 		case 0b1110: return 'uncommon-u16-10';
-		default: throw new Error(`Invalid sample rate mode: ${sampleRateBits.toString(2)}`);
+		default: throw new Error(
+			`Invalid sample rate mode: ${sampleRateBits.toString(2)}`,
+		);
 	}
 };
 
@@ -98,7 +102,10 @@ export const readCodedNumber = (fileSlice: FileSlice): number => {
 	return encoded;
 };
 
-export const readBlockSize = (slice: FileSlice, blockSizeBits: BlockSizeOrUncommon) => {
+export const readBlockSize = (
+	slice: FileSlice,
+	blockSizeBits: BlockSizeOrUncommon,
+) => {
 	if (blockSizeBits === 'uncommon-u16') {
 		return readU16Be(slice) + 1;
 	}
@@ -111,10 +118,15 @@ export const readBlockSize = (slice: FileSlice, blockSizeBits: BlockSizeOrUncomm
 		return blockSizeBits;
 	}
 
-	throw new Error(`Invalid blockSizeBits: ${String(blockSizeBits satisfies never)}`);
+	throw new Error(
+		`Invalid blockSizeBits: ${String(blockSizeBits satisfies never)}`,
+	);
 };
 
-export const readSampleRate = (slice: FileSlice, sampleRateOrUncommon: SampleRateOrUncommon) => {
+export const readSampleRate = (
+	slice: FileSlice,
+	sampleRateOrUncommon: SampleRateOrUncommon,
+) => {
 	if (sampleRateOrUncommon === 'uncommon-u16') {
 		return readU16Be(slice);
 	}
@@ -131,7 +143,9 @@ export const readSampleRate = (slice: FileSlice, sampleRateOrUncommon: SampleRat
 		return sampleRateOrUncommon;
 	}
 
-	throw new Error(`Invalid sampleRateOrUncommon: ${String(sampleRateOrUncommon satisfies never)}`);
+	throw new Error(
+		`Invalid sampleRateOrUncommon: ${String(sampleRateOrUncommon satisfies never)}`,
+	);
 };
 
 // https://www.rfc-editor.org/rfc/rfc9639.html#section-9.1.1

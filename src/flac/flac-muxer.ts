@@ -109,9 +109,7 @@ export class FlacMuxer extends Muxer {
 		// to it here. We are allowed to set 0:
 		// "A value of 0 signifies that the value is not known."
 		// https://www.rfc-editor.org/rfc/rfc9639.html#name-streaminfo
-		this.writer.write(
-			new Uint8Array(16),
-		);
+		this.writer.write(new Uint8Array(16));
 	}
 
 	writePictureBlock(picture: AttachedImage) {
@@ -218,7 +216,11 @@ export class FlacMuxer extends Muxer {
 		assert(meta.decoderConfig.description);
 
 		try {
-			this.validateAndNormalizeTimestamp(track, packet.timestamp, packet.type === 'key');
+			this.validateAndNormalizeTimestamp(
+				track,
+				packet.timestamp,
+				packet.type === 'key',
+			);
 
 			if (this.sampleRate === null) {
 				this.sampleRate = meta.decoderConfig.sampleRate;
