@@ -113,7 +113,21 @@ test('can get metadata', async () => {
 		formats: ALL_FORMATS,
 	});
 
-	const descriptiveMetadata = await input.getMetadataTags();
+	const { images: inputImages, ...descriptiveMetadata } = await input.getMetadataTags();
+	expect(inputImages).toEqual([
+		{
+			data: Buffer.from(new Uint8Array([
+				0, 0, 0, 32, 0, 0, 0, 0, 0, 0, 18, 244, 137, 80, 78, 71, 13, 10, 26,
+				10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 120, 0, 0, 0, 63, 8, 6, 0,
+				0, 0, 43, 57, 12, 6, 0, 0, 0, 9, 112, 72, 89, 115, 0, 0, 1, 20, 0, 0,
+				1, 20, 0, 140,
+			])),
+			description: 'Album cover',
+			kind: 'coverFront',
+			mimeType: 'image/png',
+		},
+	],
+	);
 	expect(descriptiveMetadata).toEqual({
 		title: 'The Happy Meeting',
 		date: new Date('2020'),
@@ -121,19 +135,6 @@ test('can get metadata', async () => {
 		artist: 'Samples Files',
 		trackNumber: 4,
 		genre: 'Ambient',
-		images: [
-			{
-				data: new Uint8Array([
-					0, 0, 0, 32, 0, 0, 0, 0, 0, 0, 18, 244, 137, 80, 78, 71, 13, 10, 26,
-					10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 120, 0, 0, 0, 63, 8, 6, 0,
-					0, 0, 43, 57, 12, 6, 0, 0, 0, 9, 112, 72, 89, 115, 0, 0, 1, 20, 0, 0,
-					1, 20, 0, 140,
-				]),
-				description: 'Album cover',
-				kind: 'coverFront',
-				mimeType: 'image/png',
-			},
-		],
 		raw: {
 			ALBUM: 'Samples files',
 			ARTIST: 'Samples Files',
@@ -194,10 +195,13 @@ test('can re-mux a .flac', async () => {
 		'genre',
 	]);
 
-	expect(outputMetadataTags).toEqual({
-		...inputMetadataTags,
+	const { images: inputImages, ...otherInputMetadataTags } = inputMetadataTags;
+	const { images: outputImages, ...otherOutputMetadataTags } = outputMetadataTags;
+
+	expect(otherOutputMetadataTags).toEqual({
+		...otherInputMetadataTags,
 		raw: {
-			...inputMetadataTags.raw,
+			...otherInputMetadataTags.raw,
 			vendor: 'Mediabunny',
 		},
 	});

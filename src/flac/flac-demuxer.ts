@@ -232,8 +232,7 @@ export class FlacDemuxer extends Demuxer {
 						const data = readBytes(pictureBlock, dataLength);
 						this.metadataTags.images ??= [];
 						this.metadataTags.images.push({
-							// Sometimes readBytes returns a Uint8Array, sometimes a Buffer
-							data: new Uint8Array(data),
+							data,
 							mimeType: mediaType,
 							// https://www.rfc-editor.org/rfc/rfc9639.html#table13
 							kind:
