@@ -15,7 +15,7 @@ import { MetadataTags } from '../tags';
 import { assert, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readAscii, readBytes, Reader, readU16, readU32, readU64 } from '../reader';
-import { parseId3V2Tag, readId3V2Header } from '../mp3/mp3-reader.js';
+import { parseId3V2Tag, readId3V2Header } from '../mp3/mp3-reader';
 
 export enum WaveFormat {
 	PCM = 0x0001,
