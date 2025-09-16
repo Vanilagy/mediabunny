@@ -7,7 +7,13 @@
  */
 
 import { createVorbisComments, FlacBlockType } from '../codec-data';
-import { assert, Bitstream, textEncoder, toDataView, toUint8Array } from '../misc';
+import {
+	assert,
+	Bitstream,
+	textEncoder,
+	toDataView,
+	toUint8Array,
+} from '../misc';
 import { Muxer } from '../muxer';
 import { Output, OutputAudioTrack } from '../output';
 import { FlacOutputFormat } from '../output-format';
@@ -49,16 +55,25 @@ export class FlacMuxer extends Muxer {
 		this.writer.write(FLAC_HEADER);
 	}
 
-	writeHeader(
-		minimumBlockSize: number,
-		maximumBlockSize: number,
-		minimumFrameSize: number,
-		maximumFrameSize: number,
-		sampleRate: number,
-		channels: number,
-		bitsPerSample: number,
-		totalSamples: number,
-	) {
+	writeHeader({
+		bitsPerSample,
+		minimumBlockSize,
+		maximumBlockSize,
+		minimumFrameSize,
+		maximumFrameSize,
+		sampleRate,
+		channels,
+		totalSamples,
+	}: {
+		minimumBlockSize: number;
+		maximumBlockSize: number;
+		minimumFrameSize: number;
+		maximumFrameSize: number;
+		sampleRate: number;
+		channels: number;
+		bitsPerSample: number;
+		totalSamples: number;
+	}) {
 		this.writer.seek(FLAC_HEADER.byteLength);
 		const hasMetadata = !metadataTagsAreEmpty(this.output._metadataTags);
 		const headerBitstream = new Bitstream(new Uint8Array(4));
@@ -66,6 +81,7 @@ export class FlacMuxer extends Muxer {
 		headerBitstream.writeBits(7, FlacBlockType.STREAMINFO); // metaBlockType = streaminfo
 		headerBitstream.writeBits(24, STREAMINFO_BLOCK_SIZE); // size
 		this.writer.write(headerBitstream.bytes);
+
 		const contentBitstream = new Bitstream(new Uint8Array(18));
 
 		contentBitstream.writeBits(16, minimumBlockSize);
@@ -105,18 +121,20 @@ export class FlacMuxer extends Muxer {
 		// 4 bytes: picture data length
 		// z bytes: picture data
 		// Total: 20 + x + y + z
-		const headerSize = 20
-			+ picture.mimeType.length
-			+ (picture.description?.length ?? 0)
-			+ picture.data.length;
+		const headerSize
+			= 20
+				+ picture.mimeType.length
+				+ (picture.description?.length ?? 0)
+				+ picture.data.length;
 
-		const header = new Uint8Array(
-			headerSize,
-		);
+		const header = new Uint8Array(headerSize);
 
 		let offset = 0;
 		const dataView = toDataView(header);
-		dataView.setUint32(offset, picture.kind === 'coverFront' ? 3 : picture.kind === 'coverBack' ? 4 : 0);
+		dataView.setUint32(
+			offset,
+			picture.kind === 'coverFront' ? 3 : picture.kind === 'coverBack' ? 4 : 0,
+		);
 		offset += 4;
 		dataView.setUint32(offset, picture.mimeType.length);
 		offset += 4;
@@ -155,7 +173,11 @@ export class FlacMuxer extends Muxer {
 			this.writePictureBlock(picture);
 		}
 
-		const vorbisComment = createVorbisComments(new Uint8Array(0), this.output._metadataTags, false);
+		const vorbisComment = createVorbisComments(
+			new Uint8Array(0),
+			this.output._metadataTags,
+			false,
+		);
 
 		const headerBitstream = new Bitstream(new Uint8Array(4));
 		headerBitstream.writeBits(1, 1); // Last metadata block -> true
@@ -208,9 +230,7 @@ export class FlacMuxer extends Muxer {
 				this.writeVorbisCommentAndPictureBlock();
 			}
 
-			const slice = FileSlice.tempFromBytes(
-				packet.data,
-			);
+			const slice = FileSlice.tempFromBytes(packet.data);
 			readBytes(slice, 2);
 			const bytes = readBytes(slice, 2);
 			const bitstream = new Bitstream(bytes);
@@ -260,16 +280,16 @@ export class FlacMuxer extends Muxer {
 		assert(this.channels !== null);
 		assert(this.bitsPerSample !== null);
 
-		this.writeHeader(
+		this.writeHeader({
 			minimumBlockSize,
 			maximumBlockSize,
 			minimumFrameSize,
 			maximumFrameSize,
-			this.sampleRate,
-			this.channels,
-			this.bitsPerSample,
+			sampleRate: this.sampleRate,
+			channels: this.channels,
+			bitsPerSample: this.bitsPerSample,
 			totalSamples,
-		);
+		});
 
 		release();
 	}
