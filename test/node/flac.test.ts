@@ -101,7 +101,7 @@ test('should be able to get metadata-only packets', async () => {
 	const packet = await packetSink.getPacket(10, { metadataOnly: true });
 	assert(packet);
 	expect(packet.timestamp).toBe(9.93814058956916);
-	expect(packet.data.byteLength).toBe(0);
+	expect(packet.isMetadataOnly).toBe(true);
 	expect(packet.sequenceNumber).toBe(107);
 	expect(packet.duration).toBe(0.09287981859410431);
 });
