@@ -61,11 +61,9 @@ export const getSampleRateOrUncommon = (
 // https://www.rfc-editor.org/rfc/rfc9639.html#name-coded-number
 export const readCodedNumber = (fileSlice: FileSlice): number => {
 	let ones = 0;
-	let bits = 0;
 
 	const bitstream1 = new Bitstream(readBytes(fileSlice, 1));
-	// eslint-disable-next-line no-constant-binary-expression
-	while ((++bits || true) && bitstream1.readBits(1) === 1) {
+	while (bitstream1.readBits(1) === 1) {
 		ones++;
 	}
 
