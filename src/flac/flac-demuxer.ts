@@ -6,6 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { FlacBlockType } from '../codec-data';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
@@ -297,148 +298,152 @@ export class FlacDemuxer extends Demuxer {
 				const isLastMetadata = (byte & 0x80) !== 0;
 				const metaBlockType = byte & 0x7f;
 
-				// 0 -> streaminfo
-				// 4 -> descriptive metadata (for future implementation)
-				// 6 -> picture
-				if (metaBlockType === 0) {
+				switch (metaBlockType) {
+					case FlacBlockType.STREAMINFO: {
 					// Parse streaminfo block
 					// https://www.rfc-editor.org/rfc/rfc9639.html#section-8.2
-					const streamInfoBlock = await this.reader.requestSlice(
-						currentPos,
-						size,
-					);
-					assert(streamInfoBlock);
-					if (streamInfoBlock === null) {
-						throw new Error(`StreamInfo block at position ${currentPos} is too small! Corrupted file.`);
-					}
-
-					currentPos += size;
-
-					const streamInfoBytes = new Uint8Array(readBytes(streamInfoBlock, 34));
-					const bitstream = new Bitstream(streamInfoBytes);
-
-					const minimumBlockSize = bitstream.readBits(16);
-					const maximumBlockSize = bitstream.readBits(16);
-					const minimumFrameSize = bitstream.readBits(24);
-					const maximumFrameSize = bitstream.readBits(24);
-
-					const sampleRate = bitstream.readBits(20);
-					const numberOfChannels = bitstream.readBits(3) + 1;
-					bitstream.readBits(5); // bitsPerSample - 1
-					const totalSamples = bitstream.readBits(36);
-
-					// https://www.w3.org/TR/webcodecs-flac-codec-registration/#audiodecoderconfig-description
-					// description is required, and has to be the following:
-					// 1. The bytes 0x66 0x4C 0x61 0x43 ("fLaC" in ASCII)
-					// 2. A metadata block (called the STREAMINFO block) as described in section 7 of [FLAC]
-					// 3. Optionaly (sic) other metadata blocks, that are not used by the specification
-
-					bitstream.skipBits(16 * 8); // md5 hash
-
-					const description = new Uint8Array(42);
-					// 1. "fLaC"
-					description.set(new Uint8Array([0x66, 0x4c, 0x61, 0x43]), 0);
-					// 2. STREAMINFO block
-					description.set(new Uint8Array([128, 0, 0, 34]), 4);
-					// 3. Other metadata blocks
-					description.set(streamInfoBytes, 8);
-
-					this.audioInfo = {
-						numberOfChannels,
-						sampleRate,
-						totalSamples,
-						minimumBlockSize,
-						maximumBlockSize,
-						minimumFrameSize,
-						maximumFrameSize,
-						description,
-					};
-
-					this.track = new InputAudioTrack(new FlacAudioTrackBacking(this));
-				} else if (metaBlockType === 4) {
-					// Parse vorbis comment block
-					// https://www.rfc-editor.org/rfc/rfc9639.html#name-vorbis-comment
-					const vorbisCommentBlock = await this.reader.requestSlice(
-						currentPos,
-						size,
-					);
-					currentPos += size;
-					assert(vorbisCommentBlock);
-					const vendorLength = readU32Le(vorbisCommentBlock);
-					readBytes(vorbisCommentBlock, vendorLength);
-					// ^ vendor string, like "reference libFLAC 1.3.2 20190804";
-					// we don't use it
-					const listLength = readU32Le(vorbisCommentBlock);
-					for (let i = 0; i < listLength; i++) {
-						const stringLength = readU32Le(vorbisCommentBlock);
-						const bytes = readBytes(vorbisCommentBlock, stringLength);
-						const string = new TextDecoder().decode(bytes).trim();
-						const split = string.split('=');
-						const key = split[0]?.toLowerCase();
-						const value = split[1] as string;
-						if (key === 'title') {
-							this.metadataTags.title = value;
-						} else if (key === 'artist') {
-							this.metadataTags.artist = value;
-						} else if (key === 'album') {
-							this.metadataTags.album = value;
-						} else if (key === 'date') {
-							this.metadataTags.date = new Date(value);
-							this.metadataTags.raw ??= {};
-							this.metadataTags.raw['date'] = value;
-						} else if (key === 'comment') {
-							this.metadataTags.comment = value;
-						} else if (key === 'lyrics') {
-							this.metadataTags.lyrics = value;
-						} else if (key === 'genre') {
-							this.metadataTags.genre = value;
-						} else if (key === 'tracknumber') {
-							this.metadataTags.trackNumber = Number.parseInt(value, 10);
-						} else if (key === 'tracktotal') {
-							this.metadataTags.tracksTotal = Number.parseInt(value, 10);
-						} else if (key === 'discnumber') {
-							this.metadataTags.discNumber = Number.parseInt(value, 10);
-						} else if (key === 'disctotal') {
-							this.metadataTags.discsTotal = Number.parseInt(value, 10);
-						} else if (key) {
-							this.metadataTags.raw ??= {};
-							this.metadataTags.raw[key] ??= value;
+						const streamInfoBlock = await this.reader.requestSlice(
+							currentPos,
+							size,
+						);
+						assert(streamInfoBlock);
+						if (streamInfoBlock === null) {
+							throw new Error(`StreamInfo block at position ${currentPos} is too small! Corrupted file.`);
 						}
-					}
-				} else if (metaBlockType === 6) {
-					// Parse picture block
-					// https://www.rfc-editor.org/rfc/rfc9639.html#name-picture
-					const pictureBlock = await this.reader.requestSlice(
-						currentPos,
-						size,
-					);
 
-					currentPos += size;
-					assert(pictureBlock);
-					const pictureType = readU32Be(pictureBlock);
-					const mediaTypeLength = readU32Be(pictureBlock);
-					const mediaType = textDecoder.decode(
-						readBytes(pictureBlock, mediaTypeLength),
-					);
-					const descriptionLength = readU32Be(pictureBlock);
-					const description = textDecoder.decode(
-						readBytes(pictureBlock, descriptionLength),
-					);
-					pictureBlock.skip(4); // Skip width, height, color depth, number of indexed colors
-					const dataLength = readU32Be(pictureBlock);
-					const data = readBytes(pictureBlock, dataLength);
-					this.metadataTags.images ??= [];
-					this.metadataTags.images.push({
-						data,
-						mimeType: mediaType,
-						// https://www.rfc-editor.org/rfc/rfc9639.html#table13
-						kind: pictureType === 3 ? 'coverFront' : pictureType === 4 ? 'coverBack' : 'unknown',
-						description,
-					});
-				} else {
-					// Skip the metadata block
-					currentPos += size;
+						const streamInfoBytes = new Uint8Array(readBytes(streamInfoBlock, 34));
+						const bitstream = new Bitstream(streamInfoBytes);
+
+						const minimumBlockSize = bitstream.readBits(16);
+						const maximumBlockSize = bitstream.readBits(16);
+						const minimumFrameSize = bitstream.readBits(24);
+						const maximumFrameSize = bitstream.readBits(24);
+
+						const sampleRate = bitstream.readBits(20);
+						const numberOfChannels = bitstream.readBits(3) + 1;
+						bitstream.readBits(5); // bitsPerSample - 1
+						const totalSamples = bitstream.readBits(36);
+
+						// https://www.w3.org/TR/webcodecs-flac-codec-registration/#audiodecoderconfig-description
+						// description is required, and has to be the following:
+						// 1. The bytes 0x66 0x4C 0x61 0x43 ("fLaC" in ASCII)
+						// 2. A metadata block (called the STREAMINFO block) as described in section 7 of [FLAC]
+						// 3. Optionaly (sic) other metadata blocks, that are not used by the specification
+
+						bitstream.skipBits(16 * 8); // md5 hash
+
+						const description = new Uint8Array(42);
+						// 1. "fLaC"
+						description.set(new Uint8Array([0x66, 0x4c, 0x61, 0x43]), 0);
+						// 2. STREAMINFO block
+						description.set(new Uint8Array([128, 0, 0, 34]), 4);
+						// 3. Other metadata blocks
+						description.set(streamInfoBytes, 8);
+
+						this.audioInfo = {
+							numberOfChannels,
+							sampleRate,
+							totalSamples,
+							minimumBlockSize,
+							maximumBlockSize,
+							minimumFrameSize,
+							maximumFrameSize,
+							description,
+						};
+
+						this.track = new InputAudioTrack(new FlacAudioTrackBacking(this));
+						break;
+					}
+					case FlacBlockType.VORBIS_COMMENT:
+					{
+						// Parse vorbis comment block
+						// https://www.rfc-editor.org/rfc/rfc9639.html#name-vorbis-comment
+						const vorbisCommentBlock = await this.reader.requestSlice(
+							currentPos,
+							size,
+						);
+						assert(vorbisCommentBlock);
+						const vendorLength = readU32Le(vorbisCommentBlock);
+						readBytes(vorbisCommentBlock, vendorLength);
+						// ^ vendor string, like "reference libFLAC 1.3.2 20190804";
+						// we don't use it
+						const listLength = readU32Le(vorbisCommentBlock);
+						for (let i = 0; i < listLength; i++) {
+							const stringLength = readU32Le(vorbisCommentBlock);
+							const bytes = readBytes(vorbisCommentBlock, stringLength);
+							const string = new TextDecoder().decode(bytes).trim();
+							const split = string.split('=');
+							const key = split[0]?.toLowerCase();
+							const value = split[1] as string;
+							if (key === 'title') {
+								this.metadataTags.title = value;
+							} else if (key === 'artist') {
+								this.metadataTags.artist = value;
+							} else if (key === 'album') {
+								this.metadataTags.album = value;
+							} else if (key === 'date') {
+								this.metadataTags.date = new Date(value);
+								this.metadataTags.raw ??= {};
+								this.metadataTags.raw['date'] = value;
+							} else if (key === 'comment') {
+								this.metadataTags.comment = value;
+							} else if (key === 'lyrics') {
+								this.metadataTags.lyrics = value;
+							} else if (key === 'genre') {
+								this.metadataTags.genre = value;
+							} else if (key === 'tracknumber') {
+								this.metadataTags.trackNumber = Number.parseInt(value, 10);
+							} else if (key === 'tracktotal') {
+								this.metadataTags.tracksTotal = Number.parseInt(value, 10);
+							} else if (key === 'discnumber') {
+								this.metadataTags.discNumber = Number.parseInt(value, 10);
+							} else if (key === 'disctotal') {
+								this.metadataTags.discsTotal = Number.parseInt(value, 10);
+							} else if (key) {
+								this.metadataTags.raw ??= {};
+								this.metadataTags.raw[key] ??= value;
+							}
+						}
+
+						break;
+					}
+					case FlacBlockType.PICTURE:
+					{
+						// Parse picture block
+						// https://www.rfc-editor.org/rfc/rfc9639.html#name-picture
+						const pictureBlock = await this.reader.requestSlice(
+							currentPos,
+							size,
+						);
+
+						assert(pictureBlock);
+						const pictureType = readU32Be(pictureBlock);
+						const mediaTypeLength = readU32Be(pictureBlock);
+						const mediaType = textDecoder.decode(
+							readBytes(pictureBlock, mediaTypeLength),
+						);
+						const descriptionLength = readU32Be(pictureBlock);
+						const description = textDecoder.decode(
+							readBytes(pictureBlock, descriptionLength),
+						);
+						pictureBlock.skip(4); // Skip width, height, color depth, number of indexed colors
+						const dataLength = readU32Be(pictureBlock);
+						const data = readBytes(pictureBlock, dataLength);
+						this.metadataTags.images ??= [];
+						this.metadataTags.images.push({
+							data,
+							mimeType: mediaType,
+							// https://www.rfc-editor.org/rfc/rfc9639.html#table13
+							kind: pictureType === 3 ? 'coverFront' : pictureType === 4 ? 'coverBack' : 'unknown',
+							description,
+						});
+						break;
+					}
+					default:
+						break;
 				}
+				currentPos += size;
+
 				if (isLastMetadata) {
 					this.lastLoadedPos = currentPos;
 					break;

@@ -1554,3 +1554,9 @@ export const determineVideoPacketType = async (
 		};
 	}
 };
+
+export enum FlacBlockType {
+	STREAMINFO = 0,
+	VORBIS_COMMENT = 4,
+	PICTURE = 6,
+}

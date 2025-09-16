@@ -23,6 +23,7 @@ import {
 	AvcDecoderConfigurationRecord,
 	extractAv1CodecInfoFromPacket,
 	extractVp9CodecInfoFromPacket,
+	FlacBlockType,
 	HevcDecoderConfigurationRecord,
 	Vp9CodecInfo,
 } from '../codec-data';
@@ -1446,7 +1447,7 @@ export class IsobmffDemuxer extends Demuxer {
 					const type = flagAndType & BLOCK_TYPE_MASK;
 
 					// It's a STREAMINFO block; let's extract the actual sample rate and channel count
-					if (type === 0) {
+					if (type === FlacBlockType.STREAMINFO) {
 						slice.skip(10);
 
 						// Extract sample rate and channel count
