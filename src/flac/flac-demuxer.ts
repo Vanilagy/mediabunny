@@ -91,187 +91,14 @@ export class FlacDemuxer extends Demuxer {
 		return this.metadataTags;
 	}
 
-	readFlacFrameHeader({
-		slice,
-		isFirstPacket,
-	}: {
-		slice: FileSlice;
-		isFirstPacket: boolean;
-	}) {
-		const startOffset = slice.filePos;
-
-		// https://www.rfc-editor.org/rfc/rfc9639.html#section-9.1
-		// Each frame MUST start on a byte boundary and start with the 15-bit frame
-		// sync code 0b111111111111100. Following the sync code is the blocking strategy
-		// bit, which MUST NOT change during the audio stream.
-		const bytes = readBytes(slice, 4);
-		const bitstream = new Bitstream(bytes);
-
-		const bits = bitstream.readBits(15);
-		if (bits !== 0b111111111111100) {
-			throw new Error('Invalid sync code');
-		}
-
-		if (this.blockingBit === undefined) {
-			assert(isFirstPacket);
-			const newBlockingBit = bitstream.readBits(1);
-			this.blockingBit = newBlockingBit;
-		} else if (this.blockingBit === 1) {
-			assert(!isFirstPacket);
-			const newBlockingBit = bitstream.readBits(1);
-			assert(newBlockingBit === 1);
-		} else if (this.blockingBit === 0) {
-			assert(!isFirstPacket);
-			const newBlockingBit = bitstream.readBits(1);
-			assert(newBlockingBit === 0);
-		} else {
-			throw new Error('Invalid blocking bit');
-		}
-
-		const blockSizeOrUncommon = getBlockSizeOrUncommon(bitstream.readBits(4));
-		assert(this.audioInfo);
-		const sampleRateOrUncommon = getSampleRateOrUncommon(
-			bitstream.readBits(4),
-			this.audioInfo.sampleRate,
-		);
-		bitstream.skipBits(4); // channel count
-		bitstream.skipBits(3); // bit depth
-		const reservedZero = bitstream.readBits(1); // reserved zero
-		assert(reservedZero === 0);
-
-		const num = readCodedNumber(slice);
-		const blockSize = readBlockSize(slice, blockSizeOrUncommon);
-		const sampleRate = getSampleRate(slice, sampleRateOrUncommon);
-		const size = slice.filePos - startOffset;
-		const crc = readU8(slice);
-
-		slice.skip(-size);
-		slice.skip(-1);
-		const crcCalculated = calculateCRC8(readBytes(slice, size));
-
-		if (crc !== crcCalculated) {
-			// Maybe this wasn't a FLAC frame at all, the syncword was just coincidentally
-			// in the bitstream
-			return null;
-		}
-
-		return { num, blockSize, sampleRate };
+	async getTracks() {
+		await this.readMetadata();
+		assert(this.track);
+		return [this.track];
 	}
 
-	async readNextFlacFrame({
-		startPos,
-		isFirstPacket,
-	}: {
-		startPos: number;
-		isFirstPacket: boolean;
-	}): Promise<NextFlacFrameResult | null> {
-		assert(this.audioInfo);
-		// Also want to validate the next header is valid
-		// to throw out an accidential sync word
-		// which in the worst case may be up to 16 bytes
-		const desiredEnd = this.audioInfo.maximumFrameSize + 16;
-		const slice = await this.reader.requestSliceRange(startPos, 1, desiredEnd);
-
-		if (!slice) {
-			return null;
-		}
-
-		const frameHeader = this.readFlacFrameHeader({
-			slice,
-			isFirstPacket: isFirstPacket,
-		});
-
-		if (!frameHeader) {
-			return null;
-		}
-
-		// We don't know exactly how long the packet is, we only know the `miniumFrameSize` and `maximumFrameSize`
-		// The packet is over if the next 2 bytes are the sync word followed by a valid header
-		// or the end of the file is reached
-
-		// The next sync word is expected at earliest when `minimumFrameSize` is reached,
-		// we can skip over anything before that
-		slice.filePos = startPos + this.audioInfo.minimumFrameSize;
-
-		while (true) {
-			// Reached end of the file, packet is over
-			if (slice.filePos >= slice.end) {
-				return {
-					num: frameHeader.num,
-					blockSize: frameHeader.blockSize,
-					sampleRate: frameHeader.sampleRate,
-					size: slice.end - startPos,
-					isLastFrame: true,
-				};
-			}
-
-			const nextByte = readU8(slice);
-			if (nextByte === 0xff) {
-				const byteAfterNextByte = readU8(slice);
-
-				const expected = this.blockingBit === 1 ? 0b1111_1001 : 0b1111_1000;
-				if (byteAfterNextByte !== expected) {
-					slice.skip(-1);
-					continue;
-				}
-
-				slice.skip(-2);
-				const lengthIfNextFlacFrameHeaderIsLegit = slice.filePos - startPos;
-
-				const nextIsLegit = this.readFlacFrameHeader({
-					slice,
-					isFirstPacket: false,
-				});
-
-				if (!nextIsLegit) {
-					slice.skip(-1);
-					continue;
-				}
-
-				return {
-					num: frameHeader.num,
-					blockSize: frameHeader.blockSize,
-					sampleRate: frameHeader.sampleRate,
-					size: lengthIfNextFlacFrameHeaderIsLegit,
-					isLastFrame: false,
-				};
-			}
-		}
-	};
-
-	async advanceReader() {
-		await this.readMetadata();
-		assert(this.lastLoadedPos !== null);
-		assert(this.audioInfo);
-		const startPos = this.lastLoadedPos;
-		const frame = await this.readNextFlacFrame({
-			startPos,
-			isFirstPacket: this.loadedSamples.length === 0,
-		});
-
-		if (!frame) {
-			throw new Error('Failed to read next FLAC frame');
-		}
-
-		const lastSample = this.loadedSamples[this.loadedSamples.length - 1];
-		const blockOffset = lastSample
-			? lastSample.blockOffset + lastSample.blockSize
-			: 0;
-
-		const sample: Sample = {
-			blockOffset,
-			blockSize: frame.blockSize,
-			byteOffset: startPos,
-			byteSize: frame.size,
-		};
-
-		this.lastLoadedPos = this.lastLoadedPos + frame.size;
-		this.loadedSamples.push(sample);
-
-		if (frame.isLastFrame) {
-			this.lastSampleLoaded = true;
-			return;
-		}
+	async getMimeType() {
+		return 'audio/flac';
 	}
 
 	async readMetadata() {
@@ -452,14 +279,187 @@ export class FlacDemuxer extends Demuxer {
 		})();
 	}
 
-	async getTracks() {
-		await this.readMetadata();
-		assert(this.track);
-		return [this.track];
+	async readNextFlacFrame({
+		startPos,
+		isFirstPacket,
+	}: {
+		startPos: number;
+		isFirstPacket: boolean;
+	}): Promise<NextFlacFrameResult | null> {
+		assert(this.audioInfo);
+		// Also want to validate the next header is valid
+		// to throw out an accidential sync word
+		// which in the worst case may be up to 16 bytes
+		const desiredEnd = this.audioInfo.maximumFrameSize + 16;
+		const slice = await this.reader.requestSliceRange(startPos, 1, desiredEnd);
+
+		if (!slice) {
+			return null;
+		}
+
+		const frameHeader = this.readFlacFrameHeader({
+			slice,
+			isFirstPacket: isFirstPacket,
+		});
+
+		if (!frameHeader) {
+			return null;
+		}
+
+		// We don't know exactly how long the packet is, we only know the `miniumFrameSize` and `maximumFrameSize`
+		// The packet is over if the next 2 bytes are the sync word followed by a valid header
+		// or the end of the file is reached
+
+		// The next sync word is expected at earliest when `minimumFrameSize` is reached,
+		// we can skip over anything before that
+		slice.filePos = startPos + this.audioInfo.minimumFrameSize;
+
+		while (true) {
+			// Reached end of the file, packet is over
+			if (slice.filePos >= slice.end) {
+				return {
+					num: frameHeader.num,
+					blockSize: frameHeader.blockSize,
+					sampleRate: frameHeader.sampleRate,
+					size: slice.end - startPos,
+					isLastFrame: true,
+				};
+			}
+
+			const nextByte = readU8(slice);
+			if (nextByte === 0xff) {
+				const byteAfterNextByte = readU8(slice);
+
+				const expected = this.blockingBit === 1 ? 0b1111_1001 : 0b1111_1000;
+				if (byteAfterNextByte !== expected) {
+					slice.skip(-1);
+					continue;
+				}
+
+				slice.skip(-2);
+				const lengthIfNextFlacFrameHeaderIsLegit = slice.filePos - startPos;
+
+				const nextIsLegit = this.readFlacFrameHeader({
+					slice,
+					isFirstPacket: false,
+				});
+
+				if (!nextIsLegit) {
+					slice.skip(-1);
+					continue;
+				}
+
+				return {
+					num: frameHeader.num,
+					blockSize: frameHeader.blockSize,
+					sampleRate: frameHeader.sampleRate,
+					size: lengthIfNextFlacFrameHeaderIsLegit,
+					isLastFrame: false,
+				};
+			}
+		}
+	};
+
+	readFlacFrameHeader({
+		slice,
+		isFirstPacket,
+	}: {
+		slice: FileSlice;
+		isFirstPacket: boolean;
+	}) {
+		const startOffset = slice.filePos;
+
+		// https://www.rfc-editor.org/rfc/rfc9639.html#section-9.1
+		// Each frame MUST start on a byte boundary and start with the 15-bit frame
+		// sync code 0b111111111111100. Following the sync code is the blocking strategy
+		// bit, which MUST NOT change during the audio stream.
+		const bytes = readBytes(slice, 4);
+		const bitstream = new Bitstream(bytes);
+
+		const bits = bitstream.readBits(15);
+		if (bits !== 0b111111111111100) {
+			throw new Error('Invalid sync code');
+		}
+
+		if (this.blockingBit === undefined) {
+			assert(isFirstPacket);
+			const newBlockingBit = bitstream.readBits(1);
+			this.blockingBit = newBlockingBit;
+		} else if (this.blockingBit === 1) {
+			assert(!isFirstPacket);
+			const newBlockingBit = bitstream.readBits(1);
+			assert(newBlockingBit === 1);
+		} else if (this.blockingBit === 0) {
+			assert(!isFirstPacket);
+			const newBlockingBit = bitstream.readBits(1);
+			assert(newBlockingBit === 0);
+		} else {
+			throw new Error('Invalid blocking bit');
+		}
+
+		const blockSizeOrUncommon = getBlockSizeOrUncommon(bitstream.readBits(4));
+		assert(this.audioInfo);
+		const sampleRateOrUncommon = getSampleRateOrUncommon(
+			bitstream.readBits(4),
+			this.audioInfo.sampleRate,
+		);
+		bitstream.skipBits(4); // channel count
+		bitstream.skipBits(3); // bit depth
+		const reservedZero = bitstream.readBits(1); // reserved zero
+		assert(reservedZero === 0);
+
+		const num = readCodedNumber(slice);
+		const blockSize = readBlockSize(slice, blockSizeOrUncommon);
+		const sampleRate = getSampleRate(slice, sampleRateOrUncommon);
+		const size = slice.filePos - startOffset;
+		const crc = readU8(slice);
+
+		slice.skip(-size);
+		slice.skip(-1);
+		const crcCalculated = calculateCRC8(readBytes(slice, size));
+
+		if (crc !== crcCalculated) {
+			// Maybe this wasn't a FLAC frame at all, the syncword was just coincidentally
+			// in the bitstream
+			return null;
+		}
+
+		return { num, blockSize, sampleRate };
 	}
 
-	async getMimeType() {
-		return 'audio/flac';
+	async advanceReader() {
+		await this.readMetadata();
+		assert(this.lastLoadedPos !== null);
+		assert(this.audioInfo);
+		const startPos = this.lastLoadedPos;
+		const frame = await this.readNextFlacFrame({
+			startPos,
+			isFirstPacket: this.loadedSamples.length === 0,
+		});
+
+		if (!frame) {
+			throw new Error('Failed to read next FLAC frame');
+		}
+
+		const lastSample = this.loadedSamples[this.loadedSamples.length - 1];
+		const blockOffset = lastSample
+			? lastSample.blockOffset + lastSample.blockSize
+			: 0;
+
+		const sample: Sample = {
+			blockOffset,
+			blockSize: frame.blockSize,
+			byteOffset: startPos,
+			byteSize: frame.size,
+		};
+
+		this.lastLoadedPos = this.lastLoadedPos + frame.size;
+		this.loadedSamples.push(sample);
+
+		if (frame.isLastFrame) {
+			this.lastSampleLoaded = true;
+			return;
+		}
 	}
 }
 
