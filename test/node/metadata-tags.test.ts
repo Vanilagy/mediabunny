@@ -35,10 +35,18 @@ const createDummyAudioTrack = (codec: AudioCodec, output: Output) => {
 			data[2] = 224;
 			data[3] = 100;
 
-			// Opus description
-			const description = new Uint8Array([
-				79, 112, 117, 115, 72, 101, 97, 100, 1, 2, 56, 1, 68, 172, 0, 0, 0, 0, 0,
-			]);
+			const description = codec === 'flac'
+				? new Uint8Array([
+					102, 76, 97, 67, 128, 0, 0, 34, 16, 0,
+					16, 0, 0, 6, 45, 0, 37, 173, 10, 196,
+					66, 240, 0, 13, 68, 24, 85, 22, 231, 0,
+					113, 139, 185, 1, 33, 54, 155, 80, 241, 191,
+					203, 112,
+				])
+				// Opus description
+				: new Uint8Array([
+					79, 112, 117, 115, 72, 101, 97, 100, 1, 2, 56, 1, 68, 172, 0, 0, 0, 0, 0,
+				]);
 
 			await source.add(
 				new EncodedPacket(data, 'key', 0, 1),

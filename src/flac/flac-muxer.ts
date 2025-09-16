@@ -6,6 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { validateAudioChunkMetadata } from '../codec';
 import { createVorbisComments, FlacBlockType } from '../codec-data';
 import {
 	assert,
@@ -210,10 +211,14 @@ export class FlacMuxer extends Muxer {
 	): Promise<void> {
 		const release = await this.mutex.acquire();
 
+		validateAudioChunkMetadata(meta);
+
+		assert(meta);
+		assert(meta.decoderConfig);
+		assert(meta.decoderConfig.description);
+
 		try {
-			assert(meta);
-			assert(meta.decoderConfig);
-			assert(meta.decoderConfig.description);
+			this.validateAndNormalizeTimestamp(track, packet.timestamp, packet.type === 'key');
 
 			if (this.sampleRate === null) {
 				this.sampleRate = meta.decoderConfig.sampleRate;
