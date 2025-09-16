@@ -7,7 +7,7 @@
  */
 
 import { OPUS_INTERNAL_SAMPLE_RATE } from '../codec';
-import { parseModesFromVorbisSetupPacket, parseOpusIdentificationHeader } from '../codec-data';
+import { parseModesFromVorbisSetupPacket, parseOpusIdentificationHeader, readVorbisComments } from '../codec-data';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
@@ -16,12 +16,10 @@ import { MetadataTags } from '../tags';
 import {
 	assert,
 	AsyncMutex,
-	base64ToBytes,
 	binarySearchLessOrEqual,
 	findLast,
 	last,
 	roundToPrecision,
-	textDecoder,
 	toDataView,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
@@ -223,7 +221,7 @@ export class OggDemuxer extends Demuxer {
 			modeBlockflags: parseModesFromVorbisSetupPacket(thirdPacket.data).modeBlockflags,
 		};
 
-		this.readVorbisComments(secondPacket.data.subarray(7)); // Skip header type and 'vorbis'
+		readVorbisComments(secondPacket.data.subarray(7), this.metadataTags); // Skip header type and 'vorbis'
 	}
 
 	async readOpusMetadata(firstPacket: Packet, bitstream: LogicalBitstream) {
@@ -255,163 +253,7 @@ export class OggDemuxer extends Demuxer {
 			preSkip: header.preSkip,
 		};
 
-		this.readVorbisComments(secondPacket.data.subarray(8)); // Skip 'OpusTags'
-	}
-
-	readVorbisComments(bytes: Uint8Array) {
-		// https://datatracker.ietf.org/doc/html/rfc7845#section-5.2
-
-		const commentView = toDataView(bytes);
-		let commentPos = 0;
-
-		const vendorStringLength = commentView.getUint32(commentPos, true);
-		commentPos += 4;
-
-		const vendorString = textDecoder.decode(
-			bytes.subarray(commentPos, commentPos + vendorStringLength),
-		);
-		commentPos += vendorStringLength;
-
-		if (vendorStringLength > 0) {
-			// Expose the vendor string in the raw metadata
-			this.metadataTags.raw ??= {};
-			this.metadataTags.raw['vendor'] ??= vendorString;
-		}
-
-		const listLength = commentView.getUint32(commentPos, true);
-		commentPos += 4;
-
-		// Loop over all metadata tags
-		for (let i = 0; i < listLength; i++) {
-			const stringLength = commentView.getUint32(commentPos, true);
-			commentPos += 4;
-
-			const string = textDecoder.decode(
-				bytes.subarray(commentPos, commentPos + stringLength),
-			);
-			commentPos += stringLength;
-
-			const separatorIndex = string.indexOf('=');
-			if (separatorIndex === -1) {
-				continue;
-			}
-
-			const key = string.slice(0, separatorIndex).toUpperCase();
-			const value = string.slice(separatorIndex + 1);
-
-			this.metadataTags.raw ??= {};
-			this.metadataTags.raw[key] ??= value;
-
-			switch (key) {
-				case 'TITLE': {
-					this.metadataTags.title ??= value;
-				}; break;
-
-				case 'DESCRIPTION': {
-					this.metadataTags.description ??= value;
-				}; break;
-
-				case 'ARTIST': {
-					this.metadataTags.artist ??= value;
-				}; break;
-
-				case 'ALBUM': {
-					this.metadataTags.album ??= value;
-				}; break;
-
-				case 'ALBUMARTIST': {
-					this.metadataTags.albumArtist ??= value;
-				}; break;
-
-				case 'COMMENT': {
-					this.metadataTags.comment ??= value;
-				}; break;
-
-				case 'LYRICS': {
-					this.metadataTags.lyrics ??= value;
-				}; break;
-
-				case 'TRACKNUMBER': {
-					const parts = value.split('/');
-					const trackNum = Number.parseInt(parts[0]!, 10);
-					const tracksTotal = parts[1] && Number.parseInt(parts[1], 10);
-
-					if (Number.isInteger(trackNum) && trackNum > 0) {
-						this.metadataTags.trackNumber ??= trackNum;
-					}
-					if (tracksTotal && Number.isInteger(tracksTotal) && tracksTotal > 0) {
-						this.metadataTags.tracksTotal ??= tracksTotal;
-					}
-				}; break;
-
-				case 'TRACKTOTAL': {
-					const tracksTotal = Number.parseInt(value, 10);
-					if (Number.isInteger(tracksTotal) && tracksTotal > 0) {
-						this.metadataTags.tracksTotal ??= tracksTotal;
-					}
-				}; break;
-
-				case 'DISCNUMBER': {
-					const parts = value.split('/');
-					const discNum = Number.parseInt(parts[0]!, 10);
-					const discsTotal = parts[1] && Number.parseInt(parts[1], 10);
-
-					if (Number.isInteger(discNum) && discNum > 0) {
-						this.metadataTags.discNumber ??= discNum;
-					}
-					if (discsTotal && Number.isInteger(discsTotal) && discsTotal > 0) {
-						this.metadataTags.discsTotal ??= discsTotal;
-					}
-				}; break;
-
-				case 'DISCTOTAL': {
-					const discsTotal = Number.parseInt(value, 10);
-					if (Number.isInteger(discsTotal) && discsTotal > 0) {
-						this.metadataTags.discsTotal ??= discsTotal;
-					}
-				}; break;
-
-				case 'DATE': {
-					const date = new Date(value);
-					if (!Number.isNaN(date.getTime())) {
-						this.metadataTags.date ??= date;
-					}
-				}; break;
-
-				case 'GENRE': {
-					this.metadataTags.genre ??= value;
-				}; break;
-
-				case 'METADATA_BLOCK_PICTURE': {
-					// https://datatracker.ietf.org/doc/rfc9639/ Section 8.8
-					const decoded = base64ToBytes(value);
-
-					const view = toDataView(decoded);
-					const pictureType = view.getUint32(0, false);
-					const mediaTypeLength = view.getUint32(4, false);
-					const mediaType = String.fromCharCode(...decoded.subarray(8, 8 + mediaTypeLength)); // ASCII
-					const descriptionLength = view.getUint32(8 + mediaTypeLength, false);
-					const description = textDecoder.decode(decoded.subarray(
-						12 + mediaTypeLength,
-						12 + mediaTypeLength + descriptionLength,
-					));
-					const dataLength = view.getUint32(mediaTypeLength + descriptionLength + 28);
-					const data = decoded.subarray(
-						mediaTypeLength + descriptionLength + 32,
-						mediaTypeLength + descriptionLength + 32 + dataLength,
-					);
-
-					this.metadataTags.images ??= [];
-					this.metadataTags.images.push({
-						data,
-						mimeType: mediaType,
-						kind: pictureType === 3 ? 'coverFront' : pictureType === 4 ? 'coverBack' : 'unknown',
-						name: undefined,
-						description: description || undefined,
-					});
-				}; break;
-			}
-		}
+		readVorbisComments(secondPacket.data.subarray(8), this.metadataTags); // Skip 'OpusTags'
 	}
 
 	async readPacket(startPage: Page, startSegmentIndex: number): Promise<Packet | null> {

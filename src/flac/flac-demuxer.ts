@@ -6,12 +6,19 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { FlacBlockType } from '../codec-data';
+import { FlacBlockType, readVorbisComments } from '../codec-data';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
-import { assert, AsyncMutex, binarySearchLessOrEqual, Bitstream, textDecoder, UNDETERMINED_LANGUAGE } from '../misc';
+import {
+	assert,
+	AsyncMutex,
+	binarySearchLessOrEqual,
+	Bitstream,
+	textDecoder,
+	UNDETERMINED_LANGUAGE,
+} from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import {
 	FileSlice,
@@ -19,7 +26,6 @@ import {
 	Reader,
 	readU24Be,
 	readU32Be,
-	readU32Le,
 	readU8,
 } from '../reader';
 import { MetadataTags } from '../tags';
@@ -104,18 +110,18 @@ export class FlacDemuxer extends Demuxer {
 	async readMetadata() {
 		let currentPos = 4; // Skip 'fLaC'
 
-		return this.metadataPromise ??= (async () => {
+		return (this.metadataPromise ??= (async () => {
 			while (
-				this.reader.fileSize === null || currentPos < this.reader.fileSize
+				this.reader.fileSize === null
+				|| currentPos < this.reader.fileSize
 			) {
-				const sizeSlice = await this.reader.requestSlice(
-					currentPos,
-					4,
-				);
+				const sizeSlice = await this.reader.requestSlice(currentPos, 4);
 				currentPos += 4;
 
 				if (sizeSlice === null) {
-					throw new Error(`Metadata block at position ${currentPos} is too small! Corrupted file.`);
+					throw new Error(
+						`Metadata block at position ${currentPos} is too small! Corrupted file.`,
+					);
 				}
 
 				assert(sizeSlice);
@@ -127,18 +133,22 @@ export class FlacDemuxer extends Demuxer {
 
 				switch (metaBlockType) {
 					case FlacBlockType.STREAMINFO: {
-					// Parse streaminfo block
-					// https://www.rfc-editor.org/rfc/rfc9639.html#section-8.2
+						// Parse streaminfo block
+						// https://www.rfc-editor.org/rfc/rfc9639.html#section-8.2
 						const streamInfoBlock = await this.reader.requestSlice(
 							currentPos,
 							size,
 						);
 						assert(streamInfoBlock);
 						if (streamInfoBlock === null) {
-							throw new Error(`StreamInfo block at position ${currentPos} is too small! Corrupted file.`);
+							throw new Error(
+								`StreamInfo block at position ${currentPos} is too small! Corrupted file.`,
+							);
 						}
 
-						const streamInfoBytes = new Uint8Array(readBytes(streamInfoBlock, 34));
+						const streamInfoBytes = new Uint8Array(
+							readBytes(streamInfoBlock, 34),
+						);
 						const bitstream = new Bitstream(streamInfoBytes);
 
 						const minimumBlockSize = bitstream.readBits(16);
@@ -181,8 +191,7 @@ export class FlacDemuxer extends Demuxer {
 						this.track = new InputAudioTrack(new FlacAudioTrackBacking(this));
 						break;
 					}
-					case FlacBlockType.VORBIS_COMMENT:
-					{
+					case FlacBlockType.VORBIS_COMMENT: {
 						// Parse vorbis comment block
 						// https://www.rfc-editor.org/rfc/rfc9639.html#name-vorbis-comment
 						const vorbisCommentBlock = await this.reader.requestSlice(
@@ -190,52 +199,17 @@ export class FlacDemuxer extends Demuxer {
 							size,
 						);
 						assert(vorbisCommentBlock);
-						const vendorLength = readU32Le(vorbisCommentBlock);
-						readBytes(vorbisCommentBlock, vendorLength);
-						// ^ vendor string, like "reference libFLAC 1.3.2 20190804";
-						// we don't use it
-						const listLength = readU32Le(vorbisCommentBlock);
-						for (let i = 0; i < listLength; i++) {
-							const stringLength = readU32Le(vorbisCommentBlock);
-							const bytes = readBytes(vorbisCommentBlock, stringLength);
-							const string = new TextDecoder().decode(bytes).trim();
-							const split = string.split('=');
-							const key = split[0]?.toLowerCase();
-							const value = split[1] as string;
-							if (key === 'title') {
-								this.metadataTags.title = value;
-							} else if (key === 'artist') {
-								this.metadataTags.artist = value;
-							} else if (key === 'album') {
-								this.metadataTags.album = value;
-							} else if (key === 'date') {
-								this.metadataTags.date = new Date(value);
-								this.metadataTags.raw ??= {};
-								this.metadataTags.raw['date'] = value;
-							} else if (key === 'comment') {
-								this.metadataTags.comment = value;
-							} else if (key === 'lyrics') {
-								this.metadataTags.lyrics = value;
-							} else if (key === 'genre') {
-								this.metadataTags.genre = value;
-							} else if (key === 'tracknumber') {
-								this.metadataTags.trackNumber = Number.parseInt(value, 10);
-							} else if (key === 'tracktotal') {
-								this.metadataTags.tracksTotal = Number.parseInt(value, 10);
-							} else if (key === 'discnumber') {
-								this.metadataTags.discNumber = Number.parseInt(value, 10);
-							} else if (key === 'disctotal') {
-								this.metadataTags.discsTotal = Number.parseInt(value, 10);
-							} else if (key) {
-								this.metadataTags.raw ??= {};
-								this.metadataTags.raw[key] ??= value;
-							}
-						}
+						readVorbisComments(
+							vorbisCommentBlock.bytes.subarray(
+								vorbisCommentBlock.start,
+								vorbisCommentBlock.end,
+							),
+							this.metadataTags,
+						);
 
 						break;
 					}
-					case FlacBlockType.PICTURE:
-					{
+					case FlacBlockType.PICTURE: {
 						// Parse picture block
 						// https://www.rfc-editor.org/rfc/rfc9639.html#name-picture
 						const pictureBlock = await this.reader.requestSlice(
@@ -261,7 +235,12 @@ export class FlacDemuxer extends Demuxer {
 							data,
 							mimeType: mediaType,
 							// https://www.rfc-editor.org/rfc/rfc9639.html#table13
-							kind: pictureType === 3 ? 'coverFront' : pictureType === 4 ? 'coverBack' : 'unknown',
+							kind:
+								pictureType === 3
+									? 'coverFront'
+									: pictureType === 4
+										? 'coverBack'
+										: 'unknown',
 							description,
 						});
 						break;
@@ -276,7 +255,7 @@ export class FlacDemuxer extends Demuxer {
 					break;
 				}
 			}
-		})();
+		})());
 	}
 
 	async readNextFlacFrame({
@@ -302,7 +281,8 @@ export class FlacDemuxer extends Demuxer {
 		const minimumHeaderLength = 6;
 		// If we read everything in readFlacFrameHeader, we read 16 bytes
 		const maximumHeaderSize = 16;
-		const maximumSliceLength = this.audioInfo.maximumFrameSize + maximumHeaderSize;
+		const maximumSliceLength
+			= this.audioInfo.maximumFrameSize + maximumHeaderSize;
 
 		const slice = await this.reader.requestSliceRange(
 			startPos,
@@ -375,7 +355,7 @@ export class FlacDemuxer extends Demuxer {
 				};
 			}
 		}
-	};
+	}
 
 	readFlacFrameHeader({
 		slice,
@@ -565,8 +545,10 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 				}
 
 				const packet = this.demuxer.loadedSamples[packetIndex]!;
-				const sampleTimestamp = packet.blockOffset / this.demuxer.audioInfo.sampleRate;
-				const sampleDuration = packet.blockSize / this.demuxer.audioInfo.sampleRate;
+				const sampleTimestamp
+					= packet.blockOffset / this.demuxer.audioInfo.sampleRate;
+				const sampleDuration
+					= packet.blockSize / this.demuxer.audioInfo.sampleRate;
 
 				if (sampleTimestamp + sampleDuration <= timestamp) {
 					if (this.demuxer.lastSampleLoaded) {

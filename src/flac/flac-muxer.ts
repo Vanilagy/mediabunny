@@ -116,6 +116,10 @@ export class FlacMuxer extends Muxer {
 			keys.add(key);
 		}
 		for (const key of Object.keys(this.output._metadataTags.raw ?? {})) {
+			if (key === 'vendor') {
+				continue;
+			}
+
 			keys.add(key);
 		}
 
@@ -125,13 +129,22 @@ export class FlacMuxer extends Muxer {
 				continue;
 			}
 
-			const preferRaw = this.output._metadataTags.raw?.[key] ?? value;
-			const stringifiedValue = preferRaw instanceof Date ? preferRaw.toISOString().slice(0, 10) : preferRaw;
-			if (typeof stringifiedValue !== 'string' && typeof stringifiedValue !== 'number') {
+			const preferRaw
+				= this.output._metadataTags.raw?.[key]
+					?? this.output._metadataTags.raw?.[key.toUpperCase()]
+					?? value;
+			const stringifiedValue
+				= preferRaw instanceof Date
+					? preferRaw.toISOString().slice(0, 10)
+					: preferRaw;
+			if (
+				typeof stringifiedValue !== 'string'
+				&& typeof stringifiedValue !== 'number'
+			) {
 				continue;
 			}
 
-			const text = `${key.toUpperCase()}=${stringifiedValue}`;
+			const text = `${key}=${stringifiedValue}`;
 			const encoded = new TextEncoder().encode(text);
 			metadataTags.push(toU32Le(encoded.length));
 			metadataTags.push(encoded);
@@ -192,7 +205,9 @@ export class FlacMuxer extends Muxer {
 			}
 
 			if (!this.bitsPerSample) {
-				const descriptionBitstream = new Bitstream(toUint8Array(meta.decoderConfig.description));
+				const descriptionBitstream = new Bitstream(
+					toUint8Array(meta.decoderConfig.description),
+				);
 				descriptionBitstream.skipBits(103);
 				const bitsPerSample = descriptionBitstream.readBits(5) + 1;
 				this.bitsPerSample = bitsPerSample;

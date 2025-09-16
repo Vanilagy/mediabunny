@@ -122,8 +122,14 @@ test('should be able to get metadata', async () => {
 		trackNumber: 4,
 		genre: 'Ambient',
 		raw: {
-			date: '2020',
-			encoder: 'Lavf58.76.100',
+			ALBUM: 'Samples files',
+			ARTIST: 'Samples Files',
+			DATE: '2020',
+			ENCODER: 'Lavf58.76.100',
+			GENRE: 'Ambient',
+			TITLE: 'The Happy Meeting',
+			TRACKNUMBER: '4',
+			vendor: 'Lavf58.76.100',
 		},
 	});
 	expect(images).toHaveLength(1);
@@ -171,15 +177,19 @@ test('should be able to re-mux a .flac', async () => {
 	const { images, ...inputMetadataTags } = await input.getMetadataTags();
 	expect(images).toHaveLength(1);
 	expect(Object.keys(outputMetadataTags)).toEqual([
+		'raw',
 		'title',
 		'date',
-		'raw',
 		'album',
 		'artist',
 		'trackNumber',
 		'genre',
 	]);
-	expect(outputMetadataTags).toEqual(inputMetadataTags);
+
+	expect(outputMetadataTags).toEqual({ ...inputMetadataTags, raw: {
+		...inputMetadataTags.raw,
+		vendor: 'Mediabunny',
+	} });
 
 	const packetSink = new EncodedPacketSink(outputTrack);
 	let packets = 0;
