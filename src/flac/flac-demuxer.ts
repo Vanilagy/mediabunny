@@ -287,11 +287,19 @@ export class FlacDemuxer extends Demuxer {
 		isFirstPacket: boolean;
 	}): Promise<NextFlacFrameResult | null> {
 		assert(this.audioInfo);
-		// Also want to validate the next header is valid
+		// we expect that there are at least `minimumFrameSize` bytes left in the file
+
+		// Ideally we also want to validate the next header is valid
 		// to throw out an accidential sync word
-		// which in the worst case may be up to 16 bytes
-		const desiredEnd = this.audioInfo.maximumFrameSize + 16;
-		const slice = await this.reader.requestSliceRange(startPos, 1, desiredEnd);
+
+		// If we read everything in readFlacFrameHeader, we read 16 bytes
+		const maximumHeaderSize = 16;
+
+		const slice = await this.reader.requestSliceRange(
+			startPos,
+			this.audioInfo.minimumFrameSize,
+			this.audioInfo.maximumFrameSize + maximumHeaderSize,
+		);
 
 		if (!slice) {
 			return null;
