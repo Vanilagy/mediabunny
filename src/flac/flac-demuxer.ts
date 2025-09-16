@@ -438,7 +438,10 @@ export class FlacDemuxer extends Demuxer {
 		});
 
 		if (!frame) {
-			throw new Error('Failed to read next FLAC frame');
+			// Unexpected case, failed to read next FLAC frame
+			// handling gracefully
+			this.lastSampleLoaded = true;
+			return;
 		}
 
 		const lastSample = this.loadedSamples[this.loadedSamples.length - 1];
