@@ -11,7 +11,7 @@ import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
-import { assert, AsyncMutex, Bitstream, textDecoder, UNDETERMINED_LANGUAGE } from '../misc';
+import { assert, AsyncMutex, binarySearchLessOrEqual, Bitstream, textDecoder, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import {
 	FileSlice,
@@ -543,31 +543,34 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 			throw new Error('Timestamp cannot be negative');
 		}
 
-		let index = 0;
+		const packetIndex = binarySearchLessOrEqual(
+			this.demuxer.loadedSamples,
+			timestamp,
+			x => x.blockOffset / this.demuxer.audioInfo!.sampleRate,
+		);
 
-		for (const sample of this.demuxer.loadedSamples) {
-			const sampleTimestamp
-				= sample.blockOffset / this.demuxer.audioInfo.sampleRate;
-			const sampleDuration
-				= sample.blockSize / this.demuxer.audioInfo.sampleRate;
-			if (
-				sampleTimestamp <= timestamp
-				&& sampleTimestamp + sampleDuration > timestamp
-			) {
-				return this.getPacketAtIndex(index, options);
+		if (packetIndex === -1) {
+			await this.demuxer.advanceReader();
+			return this.getPacket(timestamp, options);
+		}
+
+		const packet = this.demuxer.loadedSamples[packetIndex]!;
+		const sampleTimestamp = packet.blockOffset / this.demuxer.audioInfo.sampleRate;
+		const sampleDuration = packet.blockSize / this.demuxer.audioInfo.sampleRate;
+
+		if (sampleTimestamp + sampleDuration <= timestamp) {
+			if (this.demuxer.lastSampleLoaded) {
+				return this.getPacketAtIndex(
+					this.demuxer.loadedSamples.length - 1,
+					options,
+				);
 			}
-			index++;
+
+			await this.demuxer.advanceReader();
+			return this.getPacket(timestamp, options);
 		}
 
-		if (this.demuxer.lastSampleLoaded) {
-			return this.getPacketAtIndex(
-				this.demuxer.loadedSamples.length - 1,
-				options,
-			);
-		}
-
-		await this.demuxer.advanceReader();
-		return this.getPacket(timestamp, options);
+		return this.getPacketAtIndex(packetIndex, options);
 	}
 
 	async getNextPacket(
