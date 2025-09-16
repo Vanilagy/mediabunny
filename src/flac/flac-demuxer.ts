@@ -494,10 +494,10 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		return this.demuxer.audioInfo.numberOfChannels;
 	}
 
-	computeDuration() {
+	async computeDuration() {
 		assert(this.demuxer.audioInfo);
-		return Promise.resolve(
-			this.demuxer.audioInfo.totalSamples / this.demuxer.audioInfo.sampleRate,
+		return (
+			this.demuxer.audioInfo.totalSamples / this.demuxer.audioInfo.sampleRate
 		);
 	}
 
@@ -523,15 +523,15 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		return 0;
 	}
 
-	getDecoderConfig(): Promise<AudioDecoderConfig | null> {
+	async getDecoderConfig(): Promise<AudioDecoderConfig | null> {
 		assert(this.demuxer.audioInfo);
 
-		return Promise.resolve({
+		return {
 			codec: 'flac' as const,
 			numberOfChannels: this.demuxer.audioInfo.numberOfChannels,
 			sampleRate: this.demuxer.audioInfo.sampleRate,
 			description: this.demuxer.audioInfo.description,
-		});
+		};
 	}
 
 	async getPacket(
