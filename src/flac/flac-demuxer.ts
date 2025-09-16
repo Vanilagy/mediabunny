@@ -543,34 +543,35 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 			throw new Error('Timestamp cannot be negative');
 		}
 
-		const packetIndex = binarySearchLessOrEqual(
-			this.demuxer.loadedSamples,
-			timestamp,
-			x => x.blockOffset / this.demuxer.audioInfo!.sampleRate,
-		);
-
-		if (packetIndex === -1) {
-			await this.demuxer.advanceReader();
-			return this.getPacket(timestamp, options);
-		}
-
-		const packet = this.demuxer.loadedSamples[packetIndex]!;
-		const sampleTimestamp = packet.blockOffset / this.demuxer.audioInfo.sampleRate;
-		const sampleDuration = packet.blockSize / this.demuxer.audioInfo.sampleRate;
-
-		if (sampleTimestamp + sampleDuration <= timestamp) {
-			if (this.demuxer.lastSampleLoaded) {
-				return this.getPacketAtIndex(
-					this.demuxer.loadedSamples.length - 1,
-					options,
-				);
+		while (true) {
+			const packetIndex = binarySearchLessOrEqual(
+				this.demuxer.loadedSamples,
+				timestamp,
+				x => x.blockOffset / this.demuxer.audioInfo!.sampleRate,
+			);
+			if (packetIndex === -1) {
+				await this.demuxer.advanceReader();
+				continue;
 			}
 
-			await this.demuxer.advanceReader();
-			return this.getPacket(timestamp, options);
-		}
+			const packet = this.demuxer.loadedSamples[packetIndex]!;
+			const sampleTimestamp = packet.blockOffset / this.demuxer.audioInfo.sampleRate;
+			const sampleDuration = packet.blockSize / this.demuxer.audioInfo.sampleRate;
 
-		return this.getPacketAtIndex(packetIndex, options);
+			if (sampleTimestamp + sampleDuration <= timestamp) {
+				if (this.demuxer.lastSampleLoaded) {
+					return this.getPacketAtIndex(
+						this.demuxer.loadedSamples.length - 1,
+						options,
+					);
+				}
+
+				await this.demuxer.advanceReader();
+				continue;
+			}
+
+			return this.getPacketAtIndex(packetIndex, options);
+		}
 	}
 
 	async getNextPacket(
