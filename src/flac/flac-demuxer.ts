@@ -69,7 +69,7 @@ export class FlacDemuxer extends Demuxer {
 
 	audioInfo: FlacAudioInfo | null = null;
 	lastLoadedPos: number | null = null;
-	blockingBit: number | undefined = undefined;
+	blockingBit: number | null = null;
 
 	readingMutex = new AsyncMutex();
 	lastSampleLoaded = false;
@@ -389,7 +389,7 @@ export class FlacDemuxer extends Demuxer {
 			throw new Error('Invalid sync code');
 		}
 
-		if (this.blockingBit === undefined) {
+		if (this.blockingBit === null) {
 			assert(isFirstPacket);
 			const newBlockingBit = bitstream.readBits(1);
 			this.blockingBit = newBlockingBit;
