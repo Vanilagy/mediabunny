@@ -299,7 +299,7 @@ test('Read and write metadata, Ogg', async () => {
 	output.setMetadataTags({
 		...songMetadata,
 		raw: {
-			vendor: 'mediabunny corp',
+			vendor: 'Mediabunny',
 			COMPOSER: 'Hans Zimmer',
 		},
 	});
@@ -336,7 +336,7 @@ test('Read and write metadata, Ogg', async () => {
 	expect(readTags.images![0]!.description).toEqual(songMetadata.images![0]!.description);
 	expect(readTags.images![0]!.name).toBeUndefined(); // Can't be contained in Vorbis-style metadata
 
-	expect(readTags.raw!['vendor']).toBe('mediabunny corp');
+	expect(readTags.raw!['vendor']).toBe('Mediabunny');
 	expect(readTags.raw!['COMPOSER']).toBe('Hans Zimmer');
 });
 

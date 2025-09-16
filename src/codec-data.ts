@@ -13,10 +13,13 @@ import {
 	assertNever,
 	base64ToBytes,
 	Bitstream,
+	bytesToBase64,
+	keyValueIterator,
 	last,
 	readExpGolomb,
 	readSignedExpGolomb,
 	textDecoder,
+	textEncoder,
 	toDataView,
 	toUint8Array,
 } from './misc';
@@ -1718,4 +1721,181 @@ export const readVorbisComments = (bytes: Uint8Array, metadataTags: MetadataTags
 			}; break;
 		}
 	}
+};
+
+export const createVorbisComments = (headerBytes: Uint8Array, tags: MetadataTags, writeImages: boolean) => {
+	// https://datatracker.ietf.org/doc/html/rfc7845#section-5.2
+
+	const commentHeaderParts: Uint8Array[] = [
+		headerBytes,
+	];
+
+	const vendorString = 'Mediabunny';
+	const encodedVendorString = textEncoder.encode(vendorString);
+
+	let currentBuffer = new Uint8Array(4 + encodedVendorString.length);
+	let currentView = new DataView(currentBuffer.buffer);
+	currentView.setUint32(0, encodedVendorString.length, true);
+	currentBuffer.set(encodedVendorString, 4);
+
+	commentHeaderParts.push(currentBuffer);
+
+	const writtenTags = new Set<string>();
+	const addCommentTag = (key: string, value: string) => {
+		const joined = `${key}=${value}`;
+		const encoded = textEncoder.encode(joined);
+
+		currentBuffer = new Uint8Array(4 + encoded.length);
+		currentView = new DataView(currentBuffer.buffer);
+
+		currentView.setUint32(0, encoded.length, true);
+		currentBuffer.set(encoded, 4);
+
+		commentHeaderParts.push(currentBuffer);
+		writtenTags.add(key);
+	};
+
+	for (const { key, value } of keyValueIterator(tags)) {
+		switch (key) {
+			case 'title': {
+				addCommentTag('TITLE', value);
+			}; break;
+
+			case 'description': {
+				addCommentTag('DESCRIPTION', value);
+			}; break;
+
+			case 'artist': {
+				addCommentTag('ARTIST', value);
+			}; break;
+
+			case 'album': {
+				addCommentTag('ALBUM', value);
+			}; break;
+
+			case 'albumArtist': {
+				addCommentTag('ALBUMARTIST', value);
+			}; break;
+
+			case 'genre': {
+				addCommentTag('GENRE', value);
+			}; break;
+
+			case 'date': {
+				const rawVersion = tags.raw?.['DATE'] ?? tags.raw?.['date'];
+				if (rawVersion && typeof rawVersion === 'string') {
+					addCommentTag('DATE', rawVersion);
+				} else {
+					addCommentTag('DATE', value.toISOString().slice(0, 10));
+				}
+			}; break;
+
+			case 'comment': {
+				addCommentTag('COMMENT', value);
+			}; break;
+
+			case 'lyrics': {
+				addCommentTag('LYRICS', value);
+			}; break;
+
+			case 'trackNumber': {
+				addCommentTag('TRACKNUMBER', value.toString());
+			}; break;
+
+			case 'tracksTotal': {
+				addCommentTag('TRACKTOTAL', value.toString());
+			}; break;
+
+			case 'discNumber': {
+				addCommentTag('DISCNUMBER', value.toString());
+			}; break;
+
+			case 'discsTotal': {
+				addCommentTag('DISCTOTAL', value.toString());
+			}; break;
+
+			case 'images': {
+				// For example, in .flac, we put the pictures in a different section,
+				// not in the Vorbis comment header.
+				if (!writeImages) {
+					break;
+				}
+				for (const image of value) {
+					// https://datatracker.ietf.org/doc/rfc9639/ Section 8.8
+					const pictureType = image.kind === 'coverFront' ? 3 : image.kind === 'coverBack' ? 4 : 0;
+					const encodedMediaType = new Uint8Array(image.mimeType.length);
+
+					for (let i = 0; i < image.mimeType.length; i++) {
+						encodedMediaType[i] = image.mimeType.charCodeAt(i);
+					}
+
+					const encodedDescription = textEncoder.encode(image.description ?? '');
+
+					const buffer = new Uint8Array(
+						4 // Picture type
+						+ 4 // MIME type length
+						+ encodedMediaType.length // MIME type
+						+ 4 // Description length
+						+ encodedDescription.length // Description
+						+ 16 // Width, height, color depth, number of colors
+						+ 4 // Picture data length
+						+ image.data.length, // Picture data
+					);
+					const view = toDataView(buffer);
+
+					view.setUint32(0, pictureType, false);
+					view.setUint32(4, encodedMediaType.length, false);
+					buffer.set(encodedMediaType, 8);
+					view.setUint32(8 + encodedMediaType.length, encodedDescription.length, false);
+					buffer.set(encodedDescription, 12 + encodedMediaType.length);
+					// Skip a bunch of fields (width, height, color depth, number of colors)
+					view.setUint32(
+						28 + encodedMediaType.length + encodedDescription.length, image.data.length, false,
+					);
+					buffer.set(
+						image.data,
+						32 + encodedMediaType.length + encodedDescription.length,
+					);
+
+					const encoded = bytesToBase64(buffer);
+					addCommentTag('METADATA_BLOCK_PICTURE', encoded);
+				}
+			}; break;
+
+			case 'raw': {
+				// Handled later
+			}; break;
+
+			default: assertNever(key);
+		}
+	}
+
+	if (tags.raw) {
+		for (const key in tags.raw) {
+			const value = tags.raw[key] ?? tags.raw[key.toLowerCase()];
+			if (key === 'vendor' || value == null || writtenTags.has(key)) {
+				continue;
+			}
+
+			if (typeof value === 'string') {
+				addCommentTag(key, value);
+			}
+		}
+	}
+
+	const listLengthBuffer = new Uint8Array(4);
+	toDataView(listLengthBuffer).setUint32(0, writtenTags.size, true);
+	commentHeaderParts.splice(2, 0, listLengthBuffer); // Insert after the header and vendor section
+
+	// Merge all comment header parts into a single buffer
+	const commentHeaderLength = commentHeaderParts.reduce((a, b) => a + b.length, 0);
+	const commentHeader = new Uint8Array(commentHeaderLength);
+
+	let pos = 0;
+	for (const part of commentHeaderParts) {
+		commentHeader.set(part, pos);
+		pos += part.length;
+	}
+
+	return commentHeader;
 };

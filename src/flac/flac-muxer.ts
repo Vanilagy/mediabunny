@@ -6,19 +6,19 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { assert, Bitstream, toDataView, toUint8Array } from '../misc';
+import { createVorbisComments, FlacBlockType } from '../codec-data';
+import { assert, Bitstream, textEncoder, toDataView, toUint8Array } from '../misc';
 import { Muxer } from '../muxer';
 import { Output, OutputAudioTrack } from '../output';
 import { FlacOutputFormat } from '../output-format';
 import { EncodedPacket } from '../packet';
 import { FileSlice, readBytes } from '../reader';
-import { MetadataTags, metadataTagsAreEmpty } from '../tags';
+import { AttachedImage, metadataTagsAreEmpty } from '../tags';
 import { Writer } from '../writer';
 import {
 	readBlockSize,
 	getBlockSizeOrUncommon,
 	readCodedNumber,
-	toU32Le,
 } from './flac-misc';
 
 const FLAC_HEADER = new Uint8Array([0x66, 0x4c, 0x61, 0x43]);
@@ -49,7 +49,7 @@ export class FlacMuxer extends Muxer {
 		this.writer.write(FLAC_HEADER);
 	}
 
-	async writeHeader(
+	writeHeader(
 		minimumBlockSize: number,
 		maximumBlockSize: number,
 		minimumFrameSize: number,
@@ -63,7 +63,7 @@ export class FlacMuxer extends Muxer {
 		const hasMetadata = !metadataTagsAreEmpty(this.output._metadataTags);
 		const headerBitstream = new Bitstream(new Uint8Array(4));
 		headerBitstream.writeBits(1, Number(!hasMetadata)); // isLastMetadata
-		headerBitstream.writeBits(7, 0); // metaBlockType = streaminfo
+		headerBitstream.writeBits(7, FlacBlockType.STREAMINFO); // metaBlockType = streaminfo
 		headerBitstream.writeBits(24, STREAMINFO_BLOCK_SIZE); // size
 		this.writer.write(headerBitstream.bytes);
 		const contentBitstream = new Bitstream(new Uint8Array(18));
@@ -91,87 +91,78 @@ export class FlacMuxer extends Muxer {
 		);
 	}
 
-	async writeVorbisCommentBlock() {
+	writePictureBlock(picture: AttachedImage) {
+		// Header size:
+		// 4 bytes: picture type
+		// 4 bytes: media type length
+		// x bytes: media type
+		// 4 bytes: description length
+		// y bytes: description
+		// 1 bytes: width
+		// 1 bytes: height
+		// 1 bytes: color depth
+		// 1 bytes: number of indexed colors
+		// 4 bytes: picture data length
+		// z bytes: picture data
+		// Total: 20 + x + y + z
+		const headerSize = 20
+			+ picture.mimeType.length
+			+ (picture.description?.length ?? 0)
+			+ picture.data.length;
+
+		const header = new Uint8Array(
+			headerSize,
+		);
+
+		let offset = 0;
+		const dataView = toDataView(header);
+		dataView.setUint32(offset, picture.kind === 'coverFront' ? 3 : picture.kind === 'coverBack' ? 4 : 0);
+		offset += 4;
+		dataView.setUint32(offset, picture.mimeType.length);
+		offset += 4;
+		header.set(textEncoder.encode(picture.mimeType), 8);
+		offset += picture.mimeType.length;
+		dataView.setUint32(offset, picture.description?.length ?? 0);
+		offset += 4;
+		header.set(textEncoder.encode(picture.description ?? ''), offset);
+		offset += picture.description?.length ?? 0;
+		// setting width, height, color depth, number of indexed colors to 0
+		dataView.setUint32(offset, 0);
+		offset += 4;
+		dataView.setUint32(offset, picture.data.length);
+		offset += 4;
+		header.set(picture.data, offset);
+		offset += picture.data.length;
+		assert(offset === headerSize);
+
+		const headerBitstream = new Bitstream(new Uint8Array(4));
+		headerBitstream.writeBits(1, 0); // Last metadata block -> false, will be continued by vorbis comment
+		headerBitstream.writeBits(7, FlacBlockType.PICTURE); // Type -> Picture
+		headerBitstream.writeBits(24, headerSize);
+		this.writer.write(headerBitstream.bytes);
+		this.writer.write(header);
+	}
+
+	writeVorbisCommentAndPictureBlock() {
 		this.writer.seek(STREAMINFO_SIZE + FLAC_HEADER.byteLength);
 		if (metadataTagsAreEmpty(this.output._metadataTags)) {
 			this.metadataWritten = true;
 			return;
 		}
 
-		const vendorString = 'Mediabunny';
-		const vendorStringLength = vendorString.length;
-		const vendorStringLengthBuffer = toU32Le(vendorStringLength);
-		const vendorStringBuffer = new TextEncoder().encode(vendorString);
-
-		const metadataTags: Uint8Array[] = [];
-
-		let entries = 0;
-
-		const keys = new Set<string>();
-		for (const key of Object.keys(this.output._metadataTags)) {
-			if (key === 'raw') {
-				continue;
-			}
-
-			keys.add(key);
-		}
-		for (const key of Object.keys(this.output._metadataTags.raw ?? {})) {
-			if (key === 'vendor') {
-				continue;
-			}
-
-			keys.add(key);
+		const pictures = this.output._metadataTags.images ?? [];
+		for (const picture of pictures) {
+			this.writePictureBlock(picture);
 		}
 
-		for (const key of keys) {
-			const value = this.output._metadataTags[key as keyof MetadataTags];
-			if (key === 'raw') {
-				continue;
-			}
+		const vorbisComment = createVorbisComments(new Uint8Array(0), this.output._metadataTags, false);
 
-			const preferRaw
-				= this.output._metadataTags.raw?.[key]
-					?? this.output._metadataTags.raw?.[key.toUpperCase()]
-					?? value;
-			const stringifiedValue
-				= preferRaw instanceof Date
-					? preferRaw.toISOString().slice(0, 10)
-					: preferRaw;
-			if (
-				typeof stringifiedValue !== 'string'
-				&& typeof stringifiedValue !== 'number'
-			) {
-				continue;
-			}
-
-			const text = `${key}=${stringifiedValue}`;
-			const encoded = new TextEncoder().encode(text);
-			metadataTags.push(toU32Le(encoded.length));
-			metadataTags.push(encoded);
-			entries++;
-		}
-
-		const listLengthBuffer = toU32Le(entries);
-
-		const content: Uint8Array[] = [
-			vendorStringLengthBuffer,
-			vendorStringBuffer,
-			listLengthBuffer,
-			...metadataTags,
-		];
-
-		let length = 0;
-		for (const item of content) {
-			length += item.length;
-		}
 		const headerBitstream = new Bitstream(new Uint8Array(4));
 		headerBitstream.writeBits(1, 1); // Last metadata block -> true
-		headerBitstream.writeBits(7, 4); // Type -> Vorbis comment
-		headerBitstream.writeBits(24, length);
+		headerBitstream.writeBits(7, FlacBlockType.VORBIS_COMMENT); // Type -> Vorbis comment
+		headerBitstream.writeBits(24, vorbisComment.length);
 		this.writer.write(headerBitstream.bytes);
-		for (const item of content) {
-			this.writer.write(item);
-		}
+		this.writer.write(vorbisComment);
 
 		this.metadataWritten = true;
 	}
@@ -214,7 +205,7 @@ export class FlacMuxer extends Muxer {
 			}
 
 			if (!this.metadataWritten) {
-				await this.writeVorbisCommentBlock();
+				this.writeVorbisCommentAndPictureBlock();
 			}
 
 			const slice = new FileSlice(
@@ -272,7 +263,7 @@ export class FlacMuxer extends Muxer {
 		assert(this.channels);
 		assert(this.bitsPerSample);
 
-		await this.writeHeader(
+		this.writeHeader(
 			minimumBlockSize,
 			maximumBlockSize,
 			minimumFrameSize,

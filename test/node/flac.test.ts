@@ -27,9 +27,9 @@ test('Should be able to loop over all samples', async () => {
 		numberOfChannels: 2,
 		sampleRate: 44100,
 		description: new Uint8Array([
-			102, 76, 97, 67, 128, 0, 0, 34,
-			16, 0, 16, 0, 0, 6, 45, 0, 37, 173, 10, 196, 66, 240, 0, 13, 68, 24, 85,
-			22, 231, 0, 113, 139, 185, 1, 33, 54, 155, 80, 241, 191, 203, 112,
+			102, 76, 97, 67, 128, 0, 0, 34, 16, 0, 16, 0, 0, 6, 45, 0, 37, 173, 10,
+			196, 66, 240, 0, 13, 68, 24, 85, 22, 231, 0, 113, 139, 185, 1, 33, 54,
+			155, 80, 241, 191, 203, 112,
 		]),
 	});
 	expect(await track.getCodecParameterString()).toEqual('flac');
@@ -113,7 +113,7 @@ test('should be able to get metadata', async () => {
 		formats: ALL_FORMATS,
 	});
 
-	const { images, ...descriptiveMetadata } = await input.getMetadataTags();
+	const descriptiveMetadata = await input.getMetadataTags();
 	expect(descriptiveMetadata).toEqual({
 		title: 'The Happy Meeting',
 		date: new Date('2020'),
@@ -121,6 +121,19 @@ test('should be able to get metadata', async () => {
 		artist: 'Samples Files',
 		trackNumber: 4,
 		genre: 'Ambient',
+		images: [
+			{
+				data: new Uint8Array([
+					0, 0, 0, 32, 0, 0, 0, 0, 0, 0, 18, 244, 137, 80, 78, 71, 13, 10, 26,
+					10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 120, 0, 0, 0, 63, 8, 6, 0,
+					0, 0, 43, 57, 12, 6, 0, 0, 0, 9, 112, 72, 89, 115, 0, 0, 1, 20, 0, 0,
+					1, 20, 0, 140,
+				]),
+				description: 'Album cover',
+				kind: 'coverFront',
+				mimeType: 'image/png',
+			},
+		],
 		raw: {
 			ALBUM: 'Samples files',
 			ARTIST: 'Samples Files',
@@ -132,10 +145,6 @@ test('should be able to get metadata', async () => {
 			vendor: 'Lavf58.76.100',
 		},
 	});
-	expect(images).toHaveLength(1);
-	expect(images![0]!.mimeType).toEqual('image/png');
-	expect(images![0]!.kind).toEqual('coverFront');
-	expect(images![0]!.description).toEqual('Album cover');
 });
 
 test('should be able to re-mux a .flac', async () => {
@@ -174,9 +183,10 @@ test('should be able to re-mux a .flac', async () => {
 
 	// Images are not muxed currently, because width and height are required, but
 	// Mediabunny metadata does not have them.
-	const { images, ...inputMetadataTags } = await input.getMetadataTags();
-	expect(images).toHaveLength(1);
+	const inputMetadataTags = await input.getMetadataTags();
+	expect(inputMetadataTags.images).toHaveLength(1);
 	expect(Object.keys(outputMetadataTags)).toEqual([
+		'images',
 		'raw',
 		'title',
 		'date',
@@ -186,10 +196,13 @@ test('should be able to re-mux a .flac', async () => {
 		'genre',
 	]);
 
-	expect(outputMetadataTags).toEqual({ ...inputMetadataTags, raw: {
-		...inputMetadataTags.raw,
-		vendor: 'Mediabunny',
-	} });
+	expect(outputMetadataTags).toEqual({
+		...inputMetadataTags,
+		raw: {
+			...inputMetadataTags.raw,
+			vendor: 'Mediabunny',
+		},
+	});
 
 	const packetSink = new EncodedPacketSink(outputTrack);
 	let packets = 0;
