@@ -74,7 +74,8 @@ export class FlacMuxer extends Muxer {
 		bitsPerSample: number;
 		totalSamples: number;
 	}) {
-		this.writer.seek(FLAC_HEADER.byteLength);
+		assert(this.writer.getPos() === 4);
+
 		const hasMetadata = !metadataTagsAreEmpty(this.output._metadataTags);
 		const headerBitstream = new Bitstream(new Uint8Array(4));
 		headerBitstream.writeBits(1, Number(!hasMetadata)); // isLastMetadata
@@ -280,6 +281,7 @@ export class FlacMuxer extends Muxer {
 		assert(this.channels !== null);
 		assert(this.bitsPerSample !== null);
 
+		this.writer.seek(4);
 		this.writeHeader({
 			minimumBlockSize,
 			maximumBlockSize,
