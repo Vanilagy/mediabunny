@@ -38,38 +38,23 @@ export const getSampleRateOrUncommon = (
 	sampleRateBits: number,
 	streamInfoSampleRate: number,
 ): SampleRateOrUncommon => {
-	if (sampleRateBits === 0b0000) {
-		return streamInfoSampleRate;
-	} else if (sampleRateBits === 0b0001) {
-		return 88200;
-	} else	if (sampleRateBits === 0b0010) {
-		return 176400;
-	} else	if (sampleRateBits === 0b0011) {
-		return 192000;
-	} else if (sampleRateBits === 0b0100) {
-		return 8000;
-	} else if (sampleRateBits === 0b0101) {
-		return 16000;
-	} else if (sampleRateBits === 0b0110) {
-		return 22050;
-	} else if (sampleRateBits === 0b0111) {
-		return 24000;
-	} else if (sampleRateBits === 0b1000) {
-		return 32000;
-	} else if (sampleRateBits === 0b1001) {
-		return 44100;
-	} else if (sampleRateBits === 0b1010) {
-		return 48000;
-	} else if (sampleRateBits === 0b1011) {
-		return 96000;
-	} else if (sampleRateBits === 0b1100) {
-		return 'uncommon-u8';
-	} else if (sampleRateBits === 0b1101) {
-		return 'uncommon-u16';
-	} else	if (sampleRateBits === 0b1110) {
-		return 'uncommon-u16-10';
-	} else {
-		throw new Error(`Invalid sample rate mode: ${sampleRateBits.toString(2)}`);
+	switch (sampleRateBits) {
+		case 0b0000: return streamInfoSampleRate;
+		case 0b0001: return 88200;
+		case 0b0010: return 176400;
+		case 0b0011: return 192000;
+		case 0b0100: return 8000;
+		case 0b0101: return 16000;
+		case 0b0110: return 22050;
+		case 0b0111: return 24000;
+		case 0b1000: return 32000;
+		case 0b1001: return 44100;
+		case 0b1010: return 48000;
+		case 0b1011: return 96000;
+		case 0b1100: return 'uncommon-u8';
+		case 0b1101: return 'uncommon-u16';
+		case 0b1110: return 'uncommon-u16-10';
+		default: throw new Error(`Invalid sample rate mode: ${sampleRateBits.toString(2)}`);
 	}
 };
 
