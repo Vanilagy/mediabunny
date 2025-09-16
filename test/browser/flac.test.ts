@@ -9,7 +9,7 @@ import { WavOutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
 import { Conversion } from '../../src/conversion.js';
 
-test('should be able to decode samples from a FLAC file', async () => {
+test('can decode samples from a FLAC file', async () => {
 	const input = new Input({
 		source: new UrlSource('/sample.flac'),
 		formats: [FLAC],
@@ -24,7 +24,7 @@ test('should be able to decode samples from a FLAC file', async () => {
 	expect(sample.timestamp).toBe(0.9287981859410431);
 });
 
-test('should be able to convert a .flac to .wav', async () => {
+test('can convert a .flac to .wav', async () => {
 	const input = new Input({
 		source: new UrlSource('/sample.flac'),
 		formats: [FLAC],

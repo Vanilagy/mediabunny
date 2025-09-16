@@ -12,7 +12,7 @@ import { Conversion } from '../../src/conversion.js';
 
 const __dirname = new URL('.', import.meta.url).pathname;
 
-test('Should be able to loop over all samples', async () => {
+test('can loop over all samples', async () => {
 	const filePath = path.join(__dirname, '..', 'public/sample.flac');
 	const input = new Input({
 		source: new FilePathSource(filePath),
@@ -54,7 +54,7 @@ test('Should be able to loop over all samples', async () => {
 	expect(lastSampleTimestamp).toBe(19.690521541950112);
 });
 
-test('should be able to do random access', async () => {
+test('can do random access', async () => {
 	const filePath = path.join(__dirname, '..', 'public/sample.flac');
 	const input = new Input({
 		source: new FilePathSource(filePath),
@@ -87,7 +87,7 @@ test('should be able to do random access', async () => {
 	expect(priorPacket.duration).toBe(0.09287981859410431);
 });
 
-test('should be able to get metadata-only packets', async () => {
+test('can get metadata-only packets', async () => {
 	const filePath = path.join(__dirname, '..', 'public/sample.flac');
 	const input = new Input({
 		source: new FilePathSource(filePath),
@@ -106,7 +106,7 @@ test('should be able to get metadata-only packets', async () => {
 	expect(packet.duration).toBe(0.09287981859410431);
 });
 
-test('should be able to get metadata', async () => {
+test('can get metadata', async () => {
 	const filePath = path.join(__dirname, '..', 'public/sample.flac');
 	const input = new Input({
 		source: new FilePathSource(filePath),
@@ -147,7 +147,7 @@ test('should be able to get metadata', async () => {
 	});
 });
 
-test('should be able to re-mux a .flac', async () => {
+test('can re-mux a .flac', async () => {
 	const filePath = path.join(__dirname, '..', 'public/sample.flac');
 	const input = new Input({
 		source: new FilePathSource(filePath),
