@@ -131,8 +131,7 @@ export const getSampleRate = (slice: FileSlice, sampleRateOrUncommon: SampleRate
 		return sampleRateOrUncommon;
 	}
 
-	// eslint-disable-next-line @typescript-eslint/restrict-template-expressions
-	throw new Error(`Invalid sampleRateOrUncommon: ${sampleRateOrUncommon satisfies never}`);
+	throw new Error(`Invalid sampleRateOrUncommon: ${String(sampleRateOrUncommon satisfies never)}`);
 };
 
 // https://www.rfc-editor.org/rfc/rfc9639.html#section-9.1.1
