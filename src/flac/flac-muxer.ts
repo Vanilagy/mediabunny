@@ -103,7 +103,7 @@ export class FlacMuxer extends Muxer {
 		// "A value of 0 signifies that the value is not known."
 		// https://www.rfc-editor.org/rfc/rfc9639.html#name-streaminfo
 		this.writer.write(
-			new Uint8Array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+			new Uint8Array(16),
 		);
 	}
 
