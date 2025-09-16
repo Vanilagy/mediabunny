@@ -202,13 +202,29 @@ test('can re-mux a .flac', async () => {
 		},
 	});
 
-	const packetSink = new EncodedPacketSink(outputTrack);
+	const inputPacketSink = new EncodedPacketSink(inputTrack);
+	const outputPacketSink = new EncodedPacketSink(outputTrack);
 	let packets = 0;
 	let timestamp = 0;
-	for await (const packet of packetSink.packets()) {
+	for await (const packet of outputPacketSink.packets()) {
 		packets++;
 		timestamp = packet.timestamp;
 	}
+
 	expect(packets).toBe(213);
 	expect(timestamp).toBe(19.690521541950112);
+
+	// Test that packets are byte-identical
+	// This test can be simplified once packets are always Uint8Array
+	const inputPacket = await inputPacketSink.getPacket(10);
+	const outputPacket = await outputPacketSink.getPacket(10);
+
+	assert(inputPacket);
+	assert(outputPacket);
+
+	const { data: inputPacketData, ...otherInputPacket } = inputPacket;
+	const { data: outputPacketData, ...otherOutputPacket } = outputPacket;
+
+	expect(otherInputPacket).toEqual(otherOutputPacket);
+	expect(new Uint8Array(inputPacketData)).toEqual(new Uint8Array(outputPacketData));
 });
