@@ -593,7 +593,7 @@ class VideoEncoderWrapper {
 						assert(context);
 
 						if (!canvasIsNew || alpha) {
-							if (isFirefox() && !alpha) {
+							if (isFirefox() && !videoSample.alpha) {
 								context.fillStyle = 'black';
 								context.fillRect(0, 0, this.codedWidth, this.codedHeight);
 							} else {
