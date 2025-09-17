@@ -829,6 +829,11 @@ export class AdtsOutputFormat extends OutputFormat {
 	}
 }
 
+/**
+ * FLAC-specific output options.
+ * @group Output formats
+ * @public
+ */
 export type FlacOutputFormatOptions = {
 	/**
 	 * Will be called for each FLAC frame that is written.
@@ -839,6 +844,11 @@ export type FlacOutputFormatOptions = {
 	onFrame?: (data: Uint8Array, position: number) => unknown;
 };
 
+/**
+ * FLAC file format.
+ * @group Output formats
+ * @public
+ */
 export class FlacOutputFormat extends OutputFormat {
 	/** @internal */
 	_options: FlacOutputFormatOptions;

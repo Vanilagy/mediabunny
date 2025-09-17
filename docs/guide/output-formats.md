@@ -268,3 +268,24 @@ type AdtsOutputFormatOptions = {
 ```
 - `onFrame`\
 	Will be called for each ADTS frame that is written.
+
+## FLAC
+
+This output format creates FLAC (.flac) files.
+```ts
+import { Output, FlacOutputFormat } from 'mediabunny';	
+
+const output = new Output({
+	format: new FlacOutputFormat(options),
+	// ...
+});
+```
+
+The following options are available:
+```ts
+type FlacOutputFormatOptions = {
+	onFrame?: (data: Uint8Array, position: number) => unknown;
+};
+```
+- `onFrame`\
+	Will be called for each FLAC frame that is written.
