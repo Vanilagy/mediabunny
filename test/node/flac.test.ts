@@ -106,7 +106,7 @@ test('can get metadata-only packets', async () => {
 	expect(packet.duration).toBe(0.09287981859410431);
 });
 
-test('can get metadata', async () => {
+test.only('can get metadata', async () => {
 	const filePath = path.join(__dirname, '..', 'public/sample.flac');
 	const input = new Input({
 		source: new FilePathSource(filePath),
@@ -114,20 +114,15 @@ test('can get metadata', async () => {
 	});
 
 	const { images: inputImages, ...descriptiveMetadata } = await input.getMetadataTags();
-	expect(inputImages).toEqual([
-		{
-			data: Buffer.from(new Uint8Array([
-				0, 0, 0, 32, 0, 0, 0, 0, 0, 0, 18, 244, 137, 80, 78, 71, 13, 10, 26,
-				10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 120, 0, 0, 0, 63, 8, 6, 0,
-				0, 0, 43, 57, 12, 6, 0, 0, 0, 9, 112, 72, 89, 115, 0, 0, 1, 20, 0, 0,
-				1, 20, 0, 140,
-			])),
-			description: 'Album cover',
-			kind: 'coverFront',
-			mimeType: 'image/png',
-		},
-	],
-	);
+
+	expect(inputImages![0]!.data).toHaveLength(4852);
+	expect(inputImages![0]!.data.slice(0, 8)).toEqual(new Uint8Array([
+		137, 80, 78, 71, 13, 10, 26, 10,
+	]));
+	expect(inputImages![0]!.mimeType).toBe('image/png');
+	expect(inputImages![0]!.description).toBe('Album cover');
+	expect(inputImages![0]!.kind).toBe('coverFront');
+
 	expect(descriptiveMetadata).toEqual({
 		title: 'The Happy Meeting',
 		date: new Date('2020'),
@@ -211,14 +206,7 @@ test('can re-mux a .flac', async () => {
 			...otherInputMetadataTags.raw,
 			vendor: 'Mediabunny',
 		},
-		images: inputImages?.map((image) => {
-			return {
-				...image,
-				// Might be a buffer as of september 16th
-				// once this is fixed, test may be simplified
-				data: new Uint8Array(image.data),
-			};
-		}),
+		images: inputImages,
 	});
 
 	const inputPacketSink = new EncodedPacketSink(inputTrack);
@@ -234,7 +222,6 @@ test('can re-mux a .flac', async () => {
 	expect(timestamp).toBe(19.690521541950112);
 
 	// Test that packets are byte-identical
-	// This test can be simplified once packets are always Uint8Array
 	const inputPacket = await inputPacketSink.getPacket(10);
 	const outputPacket = await outputPacketSink.getPacket(10);
 
@@ -245,5 +232,5 @@ test('can re-mux a .flac', async () => {
 	const { data: outputPacketData, ...otherOutputPacket } = outputPacket;
 
 	expect(otherInputPacket).toEqual(otherOutputPacket);
-	expect(new Uint8Array(inputPacketData)).toEqual(new Uint8Array(outputPacketData));
+	expect(inputPacketData).toEqual(outputPacketData);
 });

@@ -24,7 +24,7 @@
 			chunked: true,
 			chunkSize: 2**20
 		});
-		const outputFormat = new Mediabunny.Mp4OutputFormat({});
+		const outputFormat = new Mediabunny.FlacOutputFormat({});
 
 		const button = document.createElement('button');
 		button.textContent = 'Cancel';
@@ -142,8 +142,8 @@
 				}
 			},
 			trim: {
-				start: 10,
-				end: 20
+				//start: 10,
+				//end: 20
 			},
 		});
 		console.log(conversion);

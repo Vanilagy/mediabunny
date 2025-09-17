@@ -149,7 +149,7 @@ export const readSampleRate = (
 };
 
 // https://www.rfc-editor.org/rfc/rfc9639.html#section-9.1.1
-export const calculateCRC8 = (data: Uint8Array) => {
+export const calculateCrc8 = (data: Uint8Array) => {
 	const polynomial = 0x07; // x^8 + x^2 + x^1 + x^0
 	let crc = 0x00; // Initialize CRC to 0
 

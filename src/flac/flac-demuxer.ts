@@ -30,7 +30,7 @@ import {
 } from '../reader';
 import { MetadataTags } from '../tags';
 import {
-	calculateCRC8 as calculateCrc8,
+	calculateCrc8,
 	readBlockSize,
 	getBlockSizeOrUncommon,
 	readCodedNumber,
@@ -146,9 +146,7 @@ export class FlacDemuxer extends Demuxer {
 							);
 						}
 
-						const streamInfoBytes = new Uint8Array(
-							readBytes(streamInfoBlock, 34),
-						);
+						const streamInfoBytes = readBytes(streamInfoBlock, 34);
 						const bitstream = new Bitstream(streamInfoBytes);
 
 						const minimumBlockSize = bitstream.readBits(16);
@@ -199,6 +197,7 @@ export class FlacDemuxer extends Demuxer {
 							size,
 						);
 						assert(vorbisCommentBlock);
+
 						readVorbisComments(
 							vorbisCommentBlock.bytes.subarray(
 								vorbisCommentBlock.start,
@@ -227,9 +226,10 @@ export class FlacDemuxer extends Demuxer {
 						const description = textDecoder.decode(
 							readBytes(pictureBlock, descriptionLength),
 						);
-						pictureBlock.skip(4); // Skip width, height, color depth, number of indexed colors
+						pictureBlock.skip(4 + 4 + 4 + 4); // Skip width, height, color depth, number of indexed colors
 						const dataLength = readU32Be(pictureBlock);
 						const data = readBytes(pictureBlock, dataLength);
+
 						this.metadataTags.images ??= [];
 						this.metadataTags.images.push({
 							data,
@@ -303,7 +303,7 @@ export class FlacDemuxer extends Demuxer {
 			return null;
 		}
 
-		// We don't know exactly how long the packet is, we only know the `miniumFrameSize` and `maximumFrameSize`
+		// We don't know exactly how long the packet is, we only know the `minimumFrameSize` and `maximumFrameSize`
 		// The packet is over if the next 2 bytes are the sync word followed by a valid header
 		// or the end of the file is reached
 

@@ -127,7 +127,7 @@ export class FlacMuxer extends Muxer {
 		// z bytes: picture data
 		// Total: 20 + x + y + z
 		const headerSize
-			= 20
+			= 32
 				+ picture.mimeType.length
 				+ (picture.description?.length ?? 0)
 				+ picture.data.length;
@@ -149,9 +149,7 @@ export class FlacMuxer extends Muxer {
 		offset += 4;
 		header.set(textEncoder.encode(picture.description ?? ''), offset);
 		offset += picture.description?.length ?? 0;
-		// setting width, height, color depth, number of indexed colors to 0
-		dataView.setUint32(offset, 0);
-		offset += 4;
+		offset += 4 + 4 + 4 + 4; // setting width, height, color depth, number of indexed colors to 0
 		dataView.setUint32(offset, picture.data.length);
 		offset += 4;
 		header.set(picture.data, offset);

@@ -21,6 +21,8 @@ export {
 	OutputFormat,
 	AdtsOutputFormat,
 	AdtsOutputFormatOptions,
+	FlacOutputFormat,
+	FlacOutputFormatOptions,
 	IsobmffOutputFormat,
 	IsobmffOutputFormatOptions,
 	MkvOutputFormat,
