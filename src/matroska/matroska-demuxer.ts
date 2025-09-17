@@ -139,6 +139,7 @@ type ClusterBlock = {
 	referencedTimestamps: number[];
 	data: Uint8Array;
 	lacing: BlockLacing;
+	additions?: Uint8Array;
 };
 
 type CuePoint = {
@@ -168,6 +169,7 @@ type InternalTrack = {
 			type: 'video';
 			width: number;
 			height: number;
+			alphaMode: 1 | 0; // Should report alpha at `InputTrack`? Dep: also parse info for HEVC with alpha properly.
 			rotation: Rotation;
 			codec: VideoCodec | null;
 			codecDescription: Uint8Array | null;
@@ -799,6 +801,7 @@ export class MatroskaDemuxer extends Demuxer {
 					referencedTimestamps: originalBlock.referencedTimestamps,
 					data: frameData,
 					lacing: BlockLacing.None,
+					additions: originalBlock.additions,
 				});
 			}
 
@@ -1049,6 +1052,7 @@ export class MatroskaDemuxer extends Demuxer {
 						type: 'video',
 						width: -1,
 						height: -1,
+						alphaMode: 0,
 						rotation: 0,
 						codec: null,
 						codecDescription: null,
@@ -1155,6 +1159,12 @@ export class MatroskaDemuxer extends Demuxer {
 				if (this.currentTrack?.info?.type !== 'video') break;
 
 				this.currentTrack.info.height = readUnsignedInt(slice, size);
+			}; break;
+
+			case EBMLId.AlphaMode: {
+				if (this.currentTrack?.info?.type !== 'video') break;
+
+				this.currentTrack.info.alphaMode = readUnsignedInt(slice, size) ? 1 : 0;
 			}; break;
 
 			case EBMLId.Colour: {
@@ -1340,6 +1350,32 @@ export class MatroskaDemuxer extends Demuxer {
 					lacing,
 				};
 				trackData.blocks.push(this.currentBlock);
+			}; break;
+
+			case EBMLId.BlockAdditions: {
+				this.readContiguousElements(slice.slice(dataStartPos, size));
+			}; break;
+
+			case EBMLId.BlockMore: {
+				this.readContiguousElements(slice.slice(dataStartPos, size));
+			}; break;
+
+			case EBMLId.BlockAdditional: {
+				if (!this.currentBlock || this.currentBlock.additions) break;
+
+				this.currentBlock.additions = readBytes(slice, size);
+			}; break;
+
+			// Full MKV support would require handling BlockAdditionMapping. Now, we only handle the
+			// [opaque additional data]https://www.matroska.org/technical/codec_specs.html#opaque-data for AlphaMode: 1.
+			// The order BlockAdditional and BlockAddId is not guaranteed. Matroska spec put ID after Additional.
+			// Chromium's MSE requires ID to come first for alpha channel to work. FFmpeg would also mux ID first.
+			case EBMLId.BlockAddID: {
+				if (readSignedInt(slice, size) === 1) {
+					this.readContiguousElements(slice.slice(dataStartPos, size));
+				} else if (this.currentBlock?.additions) {
+					this.currentBlock.additions = undefined;
+				}
 			}; break;
 
 			case EBMLId.BlockDuration: {
@@ -1811,6 +1847,13 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 			block.data.byteLength,
 		);
 
+		if (
+			!options.metadataOnly && this.internalTrack.info?.type === 'video'
+			&& this.internalTrack.info.alphaMode
+			&& block.additions
+		) {
+			packet.alphaSideData = block.additions;
+		}
 		this.packetToClusterLocation.set(packet, { cluster, blockIndex });
 
 		return packet;

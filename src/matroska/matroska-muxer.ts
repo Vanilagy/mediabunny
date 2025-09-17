@@ -58,7 +58,7 @@ import {
 	validateSubtitleMetadata,
 	validateVideoChunkMetadata,
 } from '../codec';
-import { Muxer } from '../muxer';
+import { EncodedVideoChunkMetadataWithAlphaSideData, Muxer } from '../muxer';
 import { Writer } from '../writer';
 import { EncodedPacket } from '../packet';
 import { parseOpusIdentificationHeader } from '../codec-data';
@@ -86,6 +86,7 @@ type MatroskaTrackData = {
 	info: {
 		width: number;
 		height: number;
+		alphaMode?: 0 | 1;
 		decoderConfig: VideoDecoderConfig;
 	};
 } | {
@@ -341,6 +342,7 @@ export class MatroskaMuxer extends Muxer {
 		const videoElement: EBMLElement = { id: EBMLId.Video, data: [
 			{ id: EBMLId.PixelWidth, data: trackData.info.width },
 			{ id: EBMLId.PixelHeight, data: trackData.info.height },
+			(trackData.info.alphaMode ? { id: EBMLId.AlphaMode, data: 1 } : null),
 			(colorSpaceIsComplete(colorSpace)
 				? {
 						id: EBMLId.Colour,
@@ -671,6 +673,7 @@ export class MatroskaMuxer extends Muxer {
 			info: {
 				width: meta.decoderConfig.codedWidth,
 				height: meta.decoderConfig.codedHeight,
+				alphaMode: undefined,
 				decoderConfig: meta.decoderConfig,
 			},
 			chunkQueue: [],
@@ -772,7 +775,11 @@ export class MatroskaMuxer extends Muxer {
 		return newTrackData;
 	}
 
-	async addEncodedVideoPacket(track: OutputVideoTrack, packet: EncodedPacket, meta?: EncodedVideoChunkMetadata) {
+	async addEncodedVideoPacket(
+		track: OutputVideoTrack,
+		packet: EncodedPacket,
+		meta?: EncodedVideoChunkMetadataWithAlphaSideData,
+	) {
 		const release = await this.mutex.acquire();
 
 		try {
@@ -788,7 +795,26 @@ export class MatroskaMuxer extends Muxer {
 				duration = roundToMultiple(duration, 1 / track.metadata.frameRate);
 			}
 
-			const videoChunk = this.createInternalChunk(packet.data, timestamp, duration, packet.type);
+			// No browsers actually support `meta.alphaSideData` as of writing. Can keep an eye on:
+			// https://issues.chromium.org/issues/40759017
+			// https://bugzilla.mozilla.org/show_bug.cgi?id=1909379
+			if (!packet.alphaSideData && meta?.alphaSideData) {
+				packet.alphaSideData = meta.alphaSideData instanceof ArrayBuffer
+					? new Uint8Array(meta.alphaSideData)
+					: new Uint8Array(meta.alphaSideData.buffer);
+			}
+
+			if (trackData.info.alphaMode === undefined) {
+				trackData.info.alphaMode = packet.alphaSideData ? 1 : 0;
+			}
+
+			const videoChunk = this.createInternalChunk(
+				packet.data,
+				timestamp,
+				duration,
+				packet.type,
+				packet.alphaSideData,
+			);
 			if (track.source._codec === 'vp9') this.fixVP9ColorSpace(trackData, videoChunk);
 
 			trackData.chunkQueue.push(videoChunk);
@@ -1045,8 +1071,8 @@ export class MatroskaMuxer extends Muxer {
 				chunk.additions
 					? { id: EBMLId.BlockAdditions, data: [
 							{ id: EBMLId.BlockMore, data: [
-								{ id: EBMLId.BlockAdditional, data: chunk.additions },
 								{ id: EBMLId.BlockAddID, data: 1 },
+								{ id: EBMLId.BlockAdditional, data: chunk.additions },
 							] },
 						] }
 					: null,
