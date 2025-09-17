@@ -750,8 +750,284 @@ const computeMaxQueueSize = (decodedSampleQueueSize: number) => {
 	return decodedSampleQueueSize === 0 ? 40 : 8;
 };
 
+const combineAlphaByCopyTo = async (main: VideoFrame, alpha: VideoFrame) => {
+	const format = main.format || '';
+
+	if (
+		alpha.displayHeight === 0
+		|| main.displayHeight === 0
+		|| format.includes('A') // Unexpected: main already contain alpha, e.g. HEVC with alpha
+	) return;
+
+	// YUV semi-planar: like 'NV12' will convert to 'BGRA'.
+	// Otherwise, would have to manually de-interleave bits of UV to 'I420' since no API support for creating 'NV12A'
+	const isYuvPlanar = format.startsWith('I');
+	const xIndex = format.indexOf('X');
+	const [formatMain, bitDepth] = format.split('P');
+	const resultFormat = isYuvPlanar
+		? `${formatMain}A${bitDepth ? `P${bitDepth}` : ''}` as VideoPixelFormat
+		: xIndex !== -1
+			? format.replace('X', 'A') as VideoPixelFormat
+			: 'BGRA';
+	const isResultRgba = resultFormat.length === 4;
+	const copyToOptions = isResultRgba ? { format: resultFormat } : undefined;
+
+	try {
+		const mainSize = main.allocationSize(copyToOptions);
+		const alphaSize = alpha.allocationSize(copyToOptions);
+		const data = new ArrayBuffer(mainSize + alphaSize);
+		const mainData = new Uint8Array(data, 0, mainSize);
+		const alphaData = new Uint8Array(data, mainSize, alphaSize);
+
+		await Promise.all([
+			main.copyTo(mainData, copyToOptions),
+			alpha.copyTo(alphaData, copyToOptions),
+		]);
+
+		// Unlike other browsers, Firefox gives BGRA instead of I420 right after decoding
+		if (isResultRgba) {
+			const aIndex = xIndex === -1 ? 3 : xIndex;
+
+			for (let i = 0; i < mainData.length; i += 4) {
+				mainData[i + aIndex] = alphaData[i]!;
+			}
+		}
+
+		const frame = new VideoFrame(data, {
+			codedHeight: main.displayHeight, // As a result of copyTo
+			codedWidth: main.displayWidth,
+			colorSpace: main.colorSpace,
+			displayHeight: main.displayHeight,
+			displayWidth: main.displayWidth,
+			duration: main.duration ?? undefined,
+			format: resultFormat,
+			timestamp: main.timestamp,
+			visibleRect: main.visibleRect,
+			transfer: [data], // Not declared in @types/dom-webcodecs yet
+		} as VideoFrameBufferInit);
+
+		main.close();
+		alpha.close();
+
+		return frame;
+	} catch {
+		alpha.close();
+	}
+};
+
+function createVideoDecoderWithOutputIterator() {
+	let { promise, resolve, reject } = promiseWithResolvers<void>();
+	let closed = false;
+	const outputQueue: VideoFrame[] = [];
+	const init: VideoDecoderInit = {
+		output: (frame) => {
+			if (closed) return frame.close();
+			outputQueue.push(frame);
+			if (outputQueue.length === 1) {
+				resolve();
+				({ promise, resolve, reject } = promiseWithResolvers());
+			}
+		},
+		error: reject,
+	};
+	const coder = new VideoDecoder(init);
+	const iterator = (async function* () {
+		try {
+			while (coder.state !== 'closed' || outputQueue.length > 0) {
+				if (outputQueue.length === 0) await promise;
+				while (outputQueue.length > 0) {
+					yield outputQueue.shift()!;
+				}
+			}
+		} finally {
+			closed = true;
+			outputQueue.forEach(frame => frame.close());
+			outputQueue.length = 0;
+			if (coder.state !== 'closed') coder.close();
+			resolve();
+		}
+	})();
+
+	return Object.assign(coder, {
+		outputQueue,
+		iterator,
+		closeIterator: () => {
+			closed = true;
+			resolve();
+		},
+	});
+};
+
+interface IVideoDecoder extends Omit<VideoDecoder,
+	'ondequeue' | 'addEventListener' | 'removeEventListener' | 'dispatchEvent'
+> {
+	// Added param to provide `alphaSideData` like `EncodedVideoChunkMetadata.alphaSideData`
+	decode: (chunk: EncodedVideoChunk, meta?: { alphaSideData: Uint8Array }) => void;
+};
+
+export class AlphaVideoDecoderWrapper implements IVideoDecoder {
+	main = createVideoDecoderWithOutputIterator();
+	alpha = createVideoDecoderWithOutputIterator();
+	_started = false;
+	_firstAlphaTimestamp?: number;
+	_outputSentPromiseWithResolvers = promiseWithResolvers<void>();
+
+	constructor(private init: VideoDecoderInit) {
+		this._outputSentPromiseWithResolvers.resolve(); // First, no previous output to wait for
+	}
+
+	get decodeQueueSize() {
+		return Math.max(
+			this.main.decodeQueueSize + this.main.outputQueue.length,
+			this.alpha.decodeQueueSize + this.alpha.outputQueue.length,
+		);
+	};
+
+	get state() {
+		assert(this.main.state === this.alpha.state);
+
+		return this.main.state;
+	}
+
+	close() {
+		if (this.main.state !== 'closed') this.main.close();
+		if (this.alpha.state !== 'closed') this.alpha.close();
+		this.main.closeIterator();
+		this.alpha.closeIterator();
+	}
+
+	configure(config: VideoDecoderConfig) {
+		// Currently we combine alpha with `copyTo` in JS, which will be slightly slower with hardware readback.
+		const configWithPreferSoftware: VideoDecoderConfig = {
+			...config,
+			hardwareAcceleration: 'prefer-software',
+		};
+
+		this.main.configure(configWithPreferSoftware);
+		this.alpha.configure(configWithPreferSoftware);
+	}
+
+	decode(
+		chunk: EncodedVideoChunk,
+		meta?: { alphaSideData: Uint8Array },
+	) {
+		if (meta?.alphaSideData && this.alpha.state === 'configured') {
+			if (typeof this._firstAlphaTimestamp === 'undefined') {
+				assert(chunk.type === 'key');
+				this._firstAlphaTimestamp = chunk.timestamp;
+			}
+			this.alpha.decode(new EncodedVideoChunk({
+				data: meta.alphaSideData,
+				duration: chunk.duration ?? undefined,
+				timestamp: chunk.timestamp,
+				type: chunk.type,
+			}));
+		}
+		this.main.decode(chunk);
+		this.maybeStartIterators().catch(this.init.error);
+	}
+
+	async flush() {
+		await Promise.all([
+			this.main.flush(),
+			this.alpha.flush(),
+		]);
+
+		// The iterators will synchronously queue all combine/add after all outputs are emitted from `VideoDecoder`.
+		// So, this is indeed the last promise to wait for, as long as the while loop below only `await iterator.next`.
+		// The `iterator.next` will yield synchronously when outputQueue is populated.
+		const promise = this._outputSentPromiseWithResolvers.promise;
+
+		await promise;
+		assert(this._outputSentPromiseWithResolvers.promise === promise);
+	}
+
+	reset() {
+		this.main.reset();
+		this.alpha.reset();
+	}
+
+	async maybeStartIterators() {
+		if (this._started) return;
+		this._started = true;
+
+		const onAlphaError = (reason: unknown) => {
+			console.warn('Error has occurred on alpha channel decoding, fallback to opaque', reason);
+			this.alpha.closeIterator();
+			this.alpha.iterator.return().catch(() => {});
+
+			return undefined;
+		};
+		let [mainResult, alphaResult] = await Promise.all([
+			this.main.iterator.next(),
+			typeof this._firstAlphaTimestamp === 'number'
+				? this.alpha.iterator.next()
+				: undefined,
+		]);
+
+		// This aims to follow behavior of chromium `<video>`.
+		// With 1 exception that, when alpha decoding failed, instead of stopping, we will just stop the alpha decoding.
+		while (!mainResult.done) {
+			// Packet with alpha could come at the middle. Chromium only check WebM file AlphaMode to opt-in.
+			if (!alphaResult && typeof this._firstAlphaTimestamp === 'number') {
+				alphaResult = await this.alpha.iterator.next().catch(onAlphaError);
+			}
+
+			if (alphaResult && !alphaResult.done) {
+				// Possible to have some gaps that there are no alpha result.
+				// It is fine as long as the decoding sequence is complete (otherwise `VideoDecoder` error).
+				// Meaning this could flicker between with alpha and no alpha, depending on the packet.
+				assert(mainResult.value.timestamp <= alphaResult.value.timestamp); // Impossible: more alpha than main.
+				if (mainResult.value.timestamp === alphaResult.value.timestamp) {
+					(async () => {
+						const outputSentPromiseCaptured = this._outputSentPromiseWithResolvers.promise;
+						const mainResultCaptured = mainResult;
+						const alphaResultCaptured = alphaResult;
+
+						this._outputSentPromiseWithResolvers = promiseWithResolvers();
+
+						const resolveCaptured = this._outputSentPromiseWithResolvers.resolve;
+						const combined = await combineAlphaByCopyTo(
+							mainResultCaptured.value,
+							alphaResultCaptured.value,
+						) || mainResultCaptured.value; // Fallback to main
+						await outputSentPromiseCaptured;
+						this.init.output(combined);
+						resolveCaptured();
+						if (combined !== mainResultCaptured.value) mainResultCaptured.value.close();
+						alphaResultCaptured.value.close();
+					})().catch(async (reason) => {
+						this._outputSentPromiseWithResolvers.reject(reason);
+						this.init.error(reason as DOMException); // If the iterators fail, should be from `VideoDecoder`
+						await Promise.all([
+							this.main.iterator.return(),
+							this.alpha.iterator.return(),
+						]);
+					});
+					([mainResult, alphaResult] = await Promise.all([
+						this.main.iterator.next(),
+						this.alpha.iterator.next().catch(onAlphaError),
+					]));
+					continue;
+				}
+			}
+
+			// No alpha for this frame
+			const mainResultCaptured = mainResult;
+
+			// Might potentially need to wait for combineAlpha of previous frame
+			this._outputSentPromiseWithResolvers.promise
+				.then(() => this.init.output(mainResultCaptured.value))
+				.catch(() => {});
+			mainResult = await this.main.iterator.next();
+		}
+
+		assert (!alphaResult || alphaResult.done);
+	}
+}
+
 class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
-	decoder: VideoDecoder | null = null;
+	decoder: IVideoDecoder | null = null;
 
 	customDecoder: CustomVideoDecoder | null = null;
 	customDecoderCallSerializer = new CallSerializer();
@@ -771,15 +1047,19 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 		public timeResolution: number,
 	) {
 		super(onSample, onError);
+	}
 
-		const MatchingCustomDecoder = customVideoDecoders.find(x => x.supports(codec, decoderConfig));
+	ensureDecoder(packet?: EncodedPacket) {
+		if (this.customDecoder || this.decoder) return;
+
+		const MatchingCustomDecoder = customVideoDecoders.find(x => x.supports(this.codec, this.decoderConfig));
 		if (MatchingCustomDecoder) {
 			// @ts-expect-error "Can't create instance of abstract class 🤓"
 			this.customDecoder = new MatchingCustomDecoder() as CustomVideoDecoder;
 			// @ts-expect-error It's technically readonly
-			this.customDecoder.codec = codec;
+			this.customDecoder.codec = this.codec;
 			// @ts-expect-error It's technically readonly
-			this.customDecoder.config = decoderConfig;
+			this.customDecoder.config = this.decoderConfig;
 			// @ts-expect-error It's technically readonly
 			this.customDecoder.onSample = (sample) => {
 				if (!(sample instanceof VideoSample)) {
@@ -825,11 +1105,17 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 				}
 			};
 
-			this.decoder = new VideoDecoder({
+			// If explicitly requesting 'prefer-hardware', we do not handle the alpha now. It is a lot more expensive.
+			// In mediabunny, we will check first packet only. But `alphaSideData` could be only in later packets.
+			const DecoderClass = packet?.alphaSideData && this.decoderConfig.hardwareAcceleration !== 'prefer-hardware'
+				? AlphaVideoDecoderWrapper
+				: VideoDecoder;
+
+			this.decoder = new DecoderClass({
 				output: frame => sampleHandler(new VideoSample(frame)),
-				error: onError,
+				error: this.onError,
 			});
-			this.decoder.configure(decoderConfig);
+			this.decoder.configure(this.decoderConfig);
 		}
 	}
 
@@ -845,13 +1131,15 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	getDecodeQueueSize() {
 		if (this.customDecoder) {
 			return this.customDecoderQueueSize;
-		} else {
-			assert(this.decoder);
+		} else if (this.decoder) {
 			return this.decoder.decodeQueueSize;
 		}
+
+		return 0;
 	}
 
 	decode(packet: EncodedPacket) {
+		if (this.currentPacketIndex === 0) this.ensureDecoder(packet);
 		if (this.codec === 'hevc' && this.currentPacketIndex > 0 && !this.raslSkipped) {
 			// If we're using HEVC, we need to make sure to skip any RASL slices that follow a non-IDR key frame such as
 			// CRA_NUT. This is because RASL slices cannot be decoded without data before the CRA_NUT. Browsers behave
@@ -884,15 +1172,17 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 				insertSorted(this.inputTimestamps, packet.timestamp, x => x);
 			}
 
-			this.decoder.decode(packet.toEncodedVideoChunk());
+			this.decoder.decode(
+				packet.toEncodedVideoChunk(),
+				packet.alphaSideData ? { alphaSideData: packet.alphaSideData } : undefined,
+			);
 		}
 	}
 
 	async flush() {
 		if (this.customDecoder) {
 			await this.customDecoderCallSerializer.call(() => this.customDecoder!.flush());
-		} else {
-			assert(this.decoder);
+		} else if (this.decoder) {
 			await this.decoder.flush();
 		}
 
@@ -911,8 +1201,7 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	close() {
 		if (this.customDecoder) {
 			void this.customDecoderCallSerializer.call(() => this.customDecoder!.close());
-		} else {
-			assert(this.decoder);
+		} else if (this.decoder) {
 			this.decoder.close();
 		}
 
@@ -1200,15 +1489,16 @@ export class CanvasSink {
 			this._nextCanvasIndex = (this._nextCanvasIndex + 1) % this._canvasPool.length;
 		}
 
-		const context = canvas.getContext('2d', {
-			alpha: isFirefox(), // Firefox has VideoFrame glitches with opaque canvases
-		}) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+		// Firefox has VideoFrame glitches with opaque canvases
+		const alpha = isFirefox() || sample.alpha;
+		const context
+			= canvas.getContext('2d', { alpha }) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 		assert(context);
 
 		context.resetTransform();
 
-		if (!canvasIsNew) {
-			if (isFirefox()) {
+		if (!canvasIsNew || alpha) {
+			if (isFirefox() && !sample.alpha) {
 				context.fillStyle = 'black';
 				context.fillRect(0, 0, this._width, this._height);
 			} else {
