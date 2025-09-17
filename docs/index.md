@@ -98,6 +98,7 @@ const sponsors = {
 	],
 	bronze: [
 		{ image: '/sponsors/rve.svg', name: 'React Video Editor', url: 'https://www.reactvideoeditor.com/' },
+		{ image: '/sponsors/mux.jpg', name: 'Mux', url: 'https://www.mux.com/' },
 	],
 	individual: [
 		{ image: 'https://avatars.githubusercontent.com/u/84167135', name: 'Memenome', url: 'https://github.com/memenome' },
