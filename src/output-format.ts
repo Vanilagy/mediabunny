@@ -116,6 +116,11 @@ export type IsobmffOutputFormatOptions = {
 	 * finalized. This produces a high-quality and compact output at the cost of a more expensive finalization step and
 	 * higher memory requirements. Data will be written monotonically (in order) when this option is set.
 	 *
+	 * Use `'reserve'` to reserve space at the start of the file into which the metadata will be written later.	This
+	 * produces a file with Fast Start but requires knowledge about the expected length of the file beforehand. When
+	 * using this option, you must set the {@link BaseTrackMetadata.maximumPacketCount} field in the track metadata
+	 * for all tracks.
+	 *
 	 * Use `'fragmented'` to place metadata at the start of the file by creating a fragmented file (fMP4). In a
 	 * fragmented file, chunks of media and their metadata are written to the file in "fragments", eliminating the need
 	 * to put all metadata in one place. Fragmented files are useful for streaming contexts, as each fragment can be
@@ -127,7 +132,7 @@ export type IsobmffOutputFormatOptions = {
 	 * When this field is not defined, either `false` or `'in-memory'` will be used, automatically determined based on
 	 * the type of output target used.
 	 */
-	fastStart?: false | 'in-memory' | 'fragmented';
+	fastStart?: false | 'in-memory' | 'reserve' | 'fragmented';
 
 	/**
 	 * When using `fastStart: 'fragmented'`, this field controls the minimum duration of each fragment, in seconds.
@@ -185,8 +190,13 @@ export abstract class IsobmffOutputFormat extends OutputFormat {
 		if (!options || typeof options !== 'object') {
 			throw new TypeError('options must be an object.');
 		}
-		if (options.fastStart !== undefined && ![false, 'in-memory', 'fragmented'].includes(options.fastStart)) {
-			throw new TypeError('options.fastStart, when provided, must be false, "in-memory", or "fragmented".');
+		if (
+			options.fastStart !== undefined
+			&& ![false, 'in-memory', 'reserve', 'fragmented'].includes(options.fastStart)
+		) {
+			throw new TypeError(
+				'options.fastStart, when provided, must be false, \'in-memory\', \'reserve\', or \'fragmented\'.',
+			);
 		}
 		if (
 			options.minimumFragmentDuration !== undefined

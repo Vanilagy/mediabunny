@@ -15,6 +15,7 @@ import {
 	toDataView,
 	toUint8Array,
 	SetRequired,
+	isFirefox,
 } from './misc';
 
 /**
@@ -201,7 +202,8 @@ export class VideoSample {
 				return new VideoSample(
 					new VideoFrame(data, {
 						timestamp: Math.trunc(init.timestamp! * SECOND_TO_MICROSECOND_FACTOR),
-						duration: Math.trunc((init.duration ?? 0) * SECOND_TO_MICROSECOND_FACTOR),
+						// Drag 0 to undefined
+						duration: Math.trunc((init.duration ?? 0) * SECOND_TO_MICROSECOND_FACTOR) || undefined,
 					}),
 					init,
 				);
@@ -227,7 +229,10 @@ export class VideoSample {
 			}
 
 			const canvas = new OffscreenCanvas(width, height);
-			const context = canvas.getContext('2d', { alpha: false, willReadFrequently: true });
+			const context = canvas.getContext('2d', {
+				alpha: isFirefox(), // Firefox has VideoFrame glitches with opaque canvases
+				willReadFrequently: true,
+			});
 			assert(context);
 
 			// Draw it to a canvas
@@ -342,7 +347,7 @@ export class VideoSample {
 			dest.set(this._data);
 		} else {
 			const canvas = this._data;
-			const context = canvas.getContext('2d', { alpha: false });
+			const context = canvas.getContext('2d');
 			assert(context);
 
 			const imageData = context.getImageData(0, 0, this.codedWidth, this.codedHeight);
@@ -373,13 +378,13 @@ export class VideoSample {
 				codedWidth: this.codedWidth,
 				codedHeight: this.codedHeight,
 				timestamp: this.microsecondTimestamp,
-				duration: this.microsecondDuration,
+				duration: this.microsecondDuration || undefined,
 				colorSpace: this.colorSpace,
 			});
 		} else {
 			return new VideoFrame(this._data, {
 				timestamp: this.microsecondTimestamp,
-				duration: this.microsecondDuration,
+				duration: this.microsecondDuration || undefined,
 			});
 		}
 	}

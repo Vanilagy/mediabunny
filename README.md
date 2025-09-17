@@ -39,6 +39,10 @@ Mediabunny is a JavaScript library for reading, writing, and converting media fi
   <a href="https://www.reactvideoeditor.com/" target="_blank">
     <img src="./docs/public/sponsors/rve.svg" width="40" height="40" alt="React Video Editor">
   </a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.mux.com/" target="_blank">
+    <img src="./docs/public/sponsors/mux.jpg" width="40" height="40" alt="Mux">
+  </a>
 </div>
 
 [Sponsor Mediabunny's development](https://github.com/sponsors/Vanilagy)

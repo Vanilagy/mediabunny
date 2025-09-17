@@ -169,29 +169,72 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 
 	// Helper to process {@link} tags in JSDoc comments
 	const processLinkTags = (text: string, currentTypeName?: string): string => {
-		// Replace {@link TypeName} with [TypeName](./TypeName.md) if TypeName is exported
-		// or just TypeName if not exported
-		// If TypeName is the current type, just use code formatting without link
-		return text.replace(/\{@link\s+([^}]+)\}/g, (_, typeName) => {
-			const cleanTypeName = typeName.trim();
-			if (cleanTypeName === currentTypeName) {
-				return `\`${cleanTypeName}\``;
+		// Updated regex to handle member links and optional link text, e.g., {@link Type.member | text}
+		return text.replace(/\{@link\s+([^}|]+)(?:\s*\|\s*([^}]+))?\}/g, (_, target, linkText) => {
+			const cleanTarget = target.trim();
+
+			// Split into type and member parts
+			const parts = cleanTarget.split('.');
+			const typeName = parts[0];
+			const memberName = parts.length > 1 ? parts[1] : undefined;
+
+			let displayText: string;
+			if (linkText) {
+				// If custom link text is provided, always use it.
+				displayText = linkText.trim();
+			} else if (memberName) {
+				// If it's a member link, default the text to just the member name.
+				displayText = `\`${memberName}\``;
+			} else {
+				// Otherwise, it's a type link, so use the full type name.
+				displayText = `\`${cleanTarget}\``;
 			}
-			if (exportedTypes.has(cleanTypeName)) {
-				return `[\`${cleanTypeName}\`](./${cleanTypeName}.md)`;
+
+			// Check if the base type is a known exported type
+			if (exportedTypes.has(typeName)) {
+				let linkUrl = '';
+
+				if (memberName) {
+					// It's a link to a member (property or method)
+					const anchor = memberName.toLowerCase();
+
+					if (typeName === currentTypeName) {
+						// Link to an anchor on the same page
+						linkUrl = `#${anchor}`;
+					} else {
+						// Link to another page's anchor
+						linkUrl = `./${typeName}.md#${anchor}`;
+					}
+				} else {
+					// It's a link to a type
+					if (typeName === currentTypeName) {
+						// Don't link to the current page, just format it
+						return `\`${cleanTarget}\``;
+					}
+					linkUrl = `./${typeName}.md`;
+				}
+				return `[${displayText}](${linkUrl})`;
 			}
-			return `\`${cleanTypeName}\``;
+
+			// Fallback for unknown types: just format as code
+			return `\`${cleanTarget}\``;
 		});
 	};
 
 	// Helper to extract linked types from {@link} tags in text
 	const extractLinkedTypes = (text: string): string[] => {
 		if (!text) return [];
-		const linkMatches = text.match(/\{@link\s+([^}]+)\}/g) || [];
-		return linkMatches.map((match) => {
-			const typeName = match.replace(/\{@link\s+([^}]+)\}/, '$1').trim();
-			return typeName;
-		});
+		const linkedTypes: string[] = [];
+		// Use a regex to find all link targets
+		const regex = /\{@link\s+([^}|]+)/g;
+		let match;
+		while ((match = regex.exec(text)) !== null) {
+			const target = match[1]!.trim();
+			// Return only the base type name (the part before the first dot)
+			const typeName = target.split('.')[0];
+			linkedTypes.push(typeName!);
+		}
+		return linkedTypes;
 	};
 
 	// Helper to format references with proper "and" and period
@@ -1206,9 +1249,9 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 						let desc = '';
 						const propDeclaration = prop.valueDeclaration || prop.declarations?.[0];
 						if (propDeclaration) {
-							const jsDoc = ts.getJSDocCommentsAndTags(propDeclaration)[0];
-							if (jsDoc && ts.isJSDoc(jsDoc) && typeof jsDoc.comment === 'string') {
-								desc = processLinkTags(jsDoc.comment.trim(), className);
+							const rawDesc = getFullJSDocDescription(propDeclaration);
+							if (rawDesc) {
+								desc = processLinkTags(rawDesc, className);
 							}
 						}
 
@@ -1618,6 +1661,45 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 		fs.writeFileSync(jsonPath, JSON.stringify(sidebarConfig, null, 2));
 		console.log(`Generated: ${jsonPath}`);
 	}
+};
+
+// Helper to get the full description text from a JSDoc comment, handling inline tags.
+const getFullJSDocDescription = (node: ts.Node): string => {
+	const jsDoc = ts.getJSDocCommentsAndTags(node)[0];
+	if (!jsDoc || !ts.isJSDoc(jsDoc)) return '';
+
+	// If it's a simple string, just return it.
+	if (typeof jsDoc.comment === 'string') {
+		return jsDoc.comment.trim();
+	}
+
+	// If it's a structured comment (with inline tags), get the raw text.
+	const sourceFile = node.getSourceFile();
+	const sourceText = sourceFile.getFullText();
+	const start = jsDoc.getStart();
+	const end = jsDoc.getEnd();
+	const rawJsDoc = sourceText.substring(start, end);
+
+	// Extract the content between /** and */
+	const match = rawJsDoc.match(/\/\*\*(.*?)\*\//s);
+	if (match && match[1]) {
+		const content = match[1]
+			.split('\n')
+			.map(line => line.replace(/^\s*\*\s?/, '')) // Remove leading * and spaces
+			.join('\n')
+			.trim();
+
+		// Filter out @-tags (like @param, @returns) to keep only the main description
+		const lines = content.split('\n');
+		const descLines = [];
+		for (const line of lines) {
+			if (line.trim().startsWith('@')) break; // Stop at the first @-tag
+			descLines.push(line);
+		}
+		return descLines.join('\n').trim();
+	}
+
+	return '';
 };
 
 const main = () => {

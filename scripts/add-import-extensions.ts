@@ -24,7 +24,7 @@ const walkDir = (dir: string) => {
 const fixFile = (filePath: string) => {
 	const content = fs.readFileSync(filePath, 'utf8');
 	const fixed = content.replace(
-		/(\s+from\s+['"])([^'"]*)(['"])/g,
+		/(\s+from\s+['"])(\.[^'"]*)(['"])/g, // This only matches relative imports
 		'$1$2.js$3',
 	);
 

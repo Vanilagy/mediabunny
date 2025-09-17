@@ -642,6 +642,15 @@ export const isSafari = () => {
 	return result;
 };
 
+let isFirefoxCache: boolean | null = null;
+export const isFirefox = () => {
+	if (isFirefoxCache !== null) {
+		return isFirefoxCache;
+	}
+
+	return isFirefoxCache = typeof navigator !== 'undefined' && navigator.userAgent?.includes('Firefox');
+};
+
 /**
  * T or a promise that resolves to T.
  * @group Miscellaneous

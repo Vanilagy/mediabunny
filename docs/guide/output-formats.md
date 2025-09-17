@@ -62,7 +62,7 @@ const output = new Output({
 The following options are available:
 ```ts
 type IsobmffOutputFormatOptions = {
-	fastStart?: false | 'in-memory' | 'fragmented';
+	fastStart?: false | 'in-memory' | 'reserve' | 'fragmented';
 	minimumFragmentDuration?: number;
 
 	onFtyp?: (data: Uint8Array, position: number) => unknown;
@@ -80,6 +80,8 @@ type IsobmffOutputFormatOptions = {
 		::: info
 		This option ensures [append-only writing](#append-only-writing), although all the writing happens in bulk, at the end.
 		:::
+	- `'reserve'`\
+		Produces a file with Fast Start by reserving space at the start of the file into which the metadata will be written later. This requires knowledge about the expected length of the file beforehand. When using this option, you must set the [`maximumPacketCount`](../api/BaseTrackMetadata#maximumpacketcount) field in the track metadata for all tracks.
 	- `'fragmented'`\
 		Produces a _fragmented MP4 (fMP4)_ file, evenly placing sample metadata throughout the file by grouping it into "fragments" (short sections of media), while placing general metadata at the beginning of the file. Fragmented files are ideal in streaming contexts, as each fragment can be played individually without requiring knowledge of the other fragments. Furthermore, they remain lightweight to create no matter how large the file becomes, as they don't require media to be kept in memory for very long. However, fragmented files are not as widely and wholly supported as regular MP4 files, and some players don't provide seeking functionality for them.
 		::: info

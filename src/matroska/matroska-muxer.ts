@@ -854,10 +854,8 @@ export class MatroskaMuxer extends Muxer {
 	}
 
 	private async interleaveChunks(isFinalCall = false) {
-		if (!isFinalCall) {
-			if (!this.allTracksAreKnown()) {
-				return; // We can't interleave yet as we don't yet know how many tracks we'll truly have
-			}
+		if (!isFinalCall && !this.allTracksAreKnown()) {
+			return; // We can't interleave yet as we don't yet know how many tracks we'll truly have
 		}
 
 		outer:

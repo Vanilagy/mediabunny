@@ -98,6 +98,7 @@ const sponsors = {
 	],
 	bronze: [
 		{ image: '/sponsors/rve.svg', name: 'React Video Editor', url: 'https://www.reactvideoeditor.com/' },
+		{ image: '/sponsors/mux.jpg', name: 'Mux', url: 'https://www.mux.com/' },
 	],
 	individual: [
 		{ image: 'https://avatars.githubusercontent.com/u/84167135', name: 'Memenome', url: 'https://github.com/memenome' },
@@ -106,6 +107,7 @@ const sponsors = {
 		{ image: 'https://avatars.githubusercontent.com/u/504909', name: 'Hirbod', url: 'https://github.com/hirbod' },
 		{ image: 'https://avatars.githubusercontent.com/u/30229596', name: 'Pablo Bonilla', url: 'https://github.com/devPablo' },
 		{ image: 'https://avatars.githubusercontent.com/u/38181164', name: 'wcw', url: 'https://github.com/asd55667' },
+		{ image: 'https://avatars.githubusercontent.com/u/1836701', name: 'Bean Deng', url: 'https://github.com/HADB' },
 		{ image: 'https://avatars.githubusercontent.com/u/63088713', name: 'taf2000', url: 'https://github.com/taf2000' },
 		{ image: 'https://avatars.githubusercontent.com/u/58149663', name: 'H7GhosT', url: 'https://github.com/H7GhosT' },
 		{ image: 'https://avatars.githubusercontent.com/u/91711202', name: 'ihasq', url: 'https://github.com/ihasq' },

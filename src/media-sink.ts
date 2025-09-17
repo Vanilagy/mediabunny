@@ -18,6 +18,7 @@ import {
 	getInt24,
 	getUint24,
 	insertSorted,
+	isFirefox,
 	isSafari,
 	last,
 	mapAsyncGenerator,
@@ -1199,14 +1200,20 @@ export class CanvasSink {
 			this._nextCanvasIndex = (this._nextCanvasIndex + 1) % this._canvasPool.length;
 		}
 
-		const context
-			= canvas.getContext('2d', { alpha: false }) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+		const context = canvas.getContext('2d', {
+			alpha: isFirefox(), // Firefox has VideoFrame glitches with opaque canvases
+		}) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 		assert(context);
 
 		context.resetTransform();
 
 		if (!canvasIsNew) {
-			context.clearRect(0, 0, this._width, this._height);
+			if (isFirefox()) {
+				context.fillStyle = 'black';
+				context.fillRect(0, 0, this._width, this._height);
+			} else {
+				context.clearRect(0, 0, this._width, this._height);
+			}
 		}
 
 		sample.drawWithFit(context, {

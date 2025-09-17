@@ -47,23 +47,6 @@
 			format: outputFormat,
 			target
 		});
-		output.setMetadataTags({
-			title: 'Bigggy',
-			artist: 'Buck Bunny',
-			images: [{
-				data: blobData,
-				kind: 'coverFront',
-				mimeType: 'image/jpeg'
-			}],
-			trackNumber: 4,
-			tracksTotal: 10,
-			discNumber: 5,
-			discNumberMax: 8,
-			lyrics: "There's no way\nThat it's not going there",
-			raw: {
-				'ENCODER': 'Mediabunny epic own encoder'
-			}
-		});
 
 		const conversion = await Mediabunny.Conversion.init({
 			input: new Mediabunny.Input({
@@ -109,16 +92,16 @@
 			*/
 			video: () => ({
 				//discard: true,
-				crop: {
-					left: 0,
-					top: 0,
-					width: 500,
-					height: 500,
-				},
-				rotate: 90,
-				width: 200,
-				height: 500,
-				fit: 'contain',
+				//crop: {
+				//	left: 0,
+				//	top: 0,
+				//	width: 500,
+				//	height: 500,
+				//},
+				//rotate: 90,
+				//width: 200,
+				//height: 500,
+				//fit: 'contain',
 				//forceTranscode: true,
 				//codec: 'avc',
 				//fit: 'contain',
@@ -141,6 +124,23 @@
 				//width: 200,
 				//height: 100,
 			}),
+			tags: {
+				title: 'Bigggy',
+				artist: 'Buck Bunny',
+				images: [{
+					data: blobData,
+					kind: 'coverFront',
+					mimeType: 'image/jpeg'
+				}],
+				trackNumber: 4,
+				tracksTotal: 10,
+				discNumber: 5,
+				discsTotal: 8,
+				lyrics: "There's no way\nThat it's not going there",
+				raw: {
+					'AIGC': 'Mediabunny epic own encoder'
+				}
+			},
 			trim: {
 				start: 10,
 				end: 20
