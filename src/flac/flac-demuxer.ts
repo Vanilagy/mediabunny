@@ -364,6 +364,11 @@ export class FlacDemuxer extends Demuxer {
 		slice: FileSlice;
 		isFirstPacket: boolean;
 	}) {
+		// In this function, generally it is not safe to throw errors.
+		// We might end up here because we stumbled upon a syncword,
+		// but the data might not actually be a FLAC frame, it might be random bitstream
+		// data, in that case we should return null and continue.
+
 		const startOffset = slice.filePos;
 
 		// https://www.rfc-editor.org/rfc/rfc9639.html#section-9.1
@@ -375,7 +380,8 @@ export class FlacDemuxer extends Demuxer {
 
 		const bits = bitstream.readBits(15);
 		if (bits !== 0b111111111111100) {
-			throw new Error('Invalid sync code');
+			// This cannot be a valid FLAC frame, must start with the syncword
+			return null;
 		}
 
 		if (this.blockingBit === null) {
@@ -385,29 +391,56 @@ export class FlacDemuxer extends Demuxer {
 		} else if (this.blockingBit === 1) {
 			assert(!isFirstPacket);
 			const newBlockingBit = bitstream.readBits(1);
-			assert(newBlockingBit === 1);
+			if (newBlockingBit !== 1) {
+				// This cannot be a valid FLAC frame, expected 1 but got 0
+				return null;
+			}
 		} else if (this.blockingBit === 0) {
 			assert(!isFirstPacket);
 			const newBlockingBit = bitstream.readBits(1);
-			assert(newBlockingBit === 0);
+			if (newBlockingBit !== 0) {
+				// This cannot be a valid FLAC frame, expected 0 but got 1
+				return null;
+			}
 		} else {
 			throw new Error('Invalid blocking bit');
 		}
 
 		const blockSizeOrUncommon = getBlockSizeOrUncommon(bitstream.readBits(4));
+		if (!blockSizeOrUncommon) {
+			// This cannot be a valid FLAC frame, the syncword was just coincidental
+			return null;
+		}
 		assert(this.audioInfo);
 		const sampleRateOrUncommon = getSampleRateOrUncommon(
 			bitstream.readBits(4),
 			this.audioInfo.sampleRate,
 		);
-		bitstream.skipBits(4); // channel count
-		bitstream.skipBits(3); // bit depth
+		if (!sampleRateOrUncommon) {
+			// This cannot be a valid FLAC frame, the syncword was just coincidental
+			return null;
+		}
+
+		bitstream.readBits(4); // channel count
+		bitstream.readBits(3); // bit depth
 		const reservedZero = bitstream.readBits(1); // reserved zero
-		assert(reservedZero === 0);
+
+		if (reservedZero !== 0) {
+			// This cannot be a valid FLAC frame, the syncword was just coincidental
+			return null;
+		}
 
 		const num = readCodedNumber(slice);
 		const blockSize = readBlockSize(slice, blockSizeOrUncommon);
+		if (blockSize === null) {
+			// This cannot be a valid FLAC frame, the syncword was just coincidental
+			return null;
+		}
 		const sampleRate = readSampleRate(slice, sampleRateOrUncommon);
+		if (sampleRate === null) {
+			// This cannot be a valid FLAC frame, the syncword was just coincidental
+			return null;
+		}
 		const size = slice.filePos - startOffset;
 		const crc = readU8(slice);
 

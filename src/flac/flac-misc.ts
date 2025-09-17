@@ -17,9 +17,9 @@ type SampleRateOrUncommon =
 	| 'uncommon-u16-10';
 
 // https://www.rfc-editor.org/rfc/rfc9639.html#name-block-size-bits
-export const getBlockSizeOrUncommon = (bits: number): BlockSizeOrUncommon => {
+export const getBlockSizeOrUncommon = (bits: number): BlockSizeOrUncommon | null => {
 	if (bits === 0b0000) {
-		throw new Error('Reserved block size');
+		return null;
 	} else if (bits === 0b0001) {
 		return 192;
 	} else if (bits >= 0b0010 && bits <= 0b0101) {
@@ -31,7 +31,7 @@ export const getBlockSizeOrUncommon = (bits: number): BlockSizeOrUncommon => {
 	} else if (bits >= 0b1000 && bits <= 0b1111) {
 		return 2 ** bits;
 	} else {
-		throw new Error('Invalid block size');
+		return null;
 	}
 };
 
@@ -39,7 +39,7 @@ export const getBlockSizeOrUncommon = (bits: number): BlockSizeOrUncommon => {
 export const getSampleRateOrUncommon = (
 	sampleRateBits: number,
 	streamInfoSampleRate: number,
-): SampleRateOrUncommon => {
+): SampleRateOrUncommon | null => {
 	switch (sampleRateBits) {
 		case 0b0000: return streamInfoSampleRate;
 		case 0b0001: return 88200;
@@ -56,9 +56,7 @@ export const getSampleRateOrUncommon = (
 		case 0b1100: return 'uncommon-u8';
 		case 0b1101: return 'uncommon-u16';
 		case 0b1110: return 'uncommon-u16-10';
-		default: throw new Error(
-			`Invalid sample rate mode: ${sampleRateBits.toString(2)}`,
-		);
+		default: return null;
 	}
 };
 
@@ -118,9 +116,7 @@ export const readBlockSize = (
 		return blockSizeBits;
 	}
 
-	throw new Error(
-		`Invalid blockSizeBits: ${String(blockSizeBits satisfies never)}`,
-	);
+	return null;
 };
 
 export const readSampleRate = (
@@ -143,9 +139,7 @@ export const readSampleRate = (
 		return sampleRateOrUncommon;
 	}
 
-	throw new Error(
-		`Invalid sampleRateOrUncommon: ${String(sampleRateOrUncommon satisfies never)}`,
-	);
+	return null;
 };
 
 // https://www.rfc-editor.org/rfc/rfc9639.html#section-9.1.1
