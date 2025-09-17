@@ -106,7 +106,7 @@ test('can get metadata-only packets', async () => {
 	expect(packet.duration).toBe(0.09287981859410431);
 });
 
-test.only('can get metadata', async () => {
+test('can get metadata', async () => {
 	const filePath = path.join(__dirname, '..', 'public/sample.flac');
 	const input = new Input({
 		source: new FilePathSource(filePath),
