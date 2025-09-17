@@ -65,9 +65,9 @@ Not all codecs can be used with all containers. The following table specifies th
 |:--------------:|:--------:|:-----:|:-----:|:---------:|:-----:|:-----:|:-----:|:-----:|
 | `'avc'`        |    ✓     |   ✓   |   ✓   |           |       |       |       |       |
 | `'hevc'`       |    ✓     |   ✓   |   ✓   |           |       |       |       |       |
-| `'vp8'`        |    ✓     |   ✓   |   ✓   |     ✓     |       |       |       |       |
-| `'vp9'`        |    ✓     |   ✓   |   ✓   |     ✓     |       |       |       |       |
-| `'av1'`        |    ✓     |   ✓   |   ✓   |     ✓     |       |       |       |       |
+| `'vp8'`^[3]    |    ✓     |   ✓   |   ✓   |     ✓     |       |       |       |       |
+| `'vp9'`^[3]    |    ✓     |   ✓   |   ✓   |     ✓     |       |       |       |       |
+| `'av1'`^[3]    |    ✓     |   ✓   |   ✓   |     ✓     |       |       |       |       |
 | `'aac'`        |    ✓     |   ✓   |   ✓   |           |       |       |       |   ✓   |
 | `'opus'`       |    ✓     |   ✓   |   ✓   |     ✓     |   ✓   |       |       |       |
 | `'mp3'`        |    ✓     |   ✓   |   ✓   |           |       |   ✓   |       |       |
@@ -92,6 +92,7 @@ Not all codecs can be used with all containers. The following table specifies th
 
 [^1]: WebM only supports a small subset of the codecs supported by Matroska. However, this library can technically read all codecs from a WebM that are supported by Matroska.
 [^2]: WebVTT can only be written, not read.
+[^3]: VP8/VP9/AV1 With alpha channel encode/decode for Matroska/WebM, are supported. However, decoding is without hardware acceleration currently, which seems to be the norm for every implementation.
 
 ## Querying codec encodability
 
