@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import path from 'node:path';
-import { assert } from '../../src/misc.js';
+import { assert, toUint8Array } from '../../src/misc.js';
 import { Input } from '../../src/input.js';
 import { BufferSource, FilePathSource } from '../../src/source.js';
 import { ALL_FORMATS, FLAC } from '../../src/input-format.js';
@@ -233,4 +233,24 @@ test('can re-mux a .flac', async () => {
 
 	expect(otherInputPacket).toEqual(otherOutputPacket);
 	expect(inputPacketData).toEqual(outputPacketData);
+
+	const inputDecoderConfig = await inputTrack.getDecoderConfig();
+	const outputDecoderConfig = await outputTrack.getDecoderConfig();
+	assert(inputDecoderConfig);
+	assert(outputDecoderConfig);
+
+	const { description: inputDescription, ...otherInputDecoderConfig } = inputDecoderConfig;
+	const { description: outputDescription, ...otherOutputDecoderConfig } = outputDecoderConfig;
+
+	assert(inputDescription);
+	assert(outputDescription);
+
+	const inputArray = toUint8Array(inputDescription);
+	const outputArray = toUint8Array(outputDescription);
+
+	const inputWithoutCrc = inputArray.slice(0, -16);
+	const outputWithoutCrc = outputArray.slice(0, -16);
+	expect(inputWithoutCrc).toEqual(outputWithoutCrc);
+
+	expect(otherInputDecoderConfig).toEqual(otherOutputDecoderConfig);
 });

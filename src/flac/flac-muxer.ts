@@ -232,7 +232,9 @@ export class FlacMuxer extends Muxer {
 				const descriptionBitstream = new Bitstream(
 					toUint8Array(meta.decoderConfig.description),
 				);
-				descriptionBitstream.skipBits(103);
+				// skip 'fLaC' + block size + frame size + sample rate + number of channels
+				// See demuxer for the exact structure
+				descriptionBitstream.skipBits(103 + 64);
 				const bitsPerSample = descriptionBitstream.readBits(5) + 1;
 				this.bitsPerSample = bitsPerSample;
 			}
