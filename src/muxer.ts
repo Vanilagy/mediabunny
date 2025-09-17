@@ -11,6 +11,11 @@ import { Output, OutputAudioTrack, OutputSubtitleTrack, OutputTrack, OutputVideo
 import { EncodedPacket } from './packet';
 import { SubtitleCue, SubtitleMetadata } from './subtitles';
 
+// Temporary usage: not declared in @types/dom-webcodecs yet
+export type EncodedVideoChunkMetadataWithAlphaSideData = EncodedVideoChunkMetadata & {
+	alphaSideData?: BufferSource;
+};
+
 export abstract class Muxer {
 	output: Output;
 	mutex = new AsyncMutex();
@@ -31,7 +36,7 @@ export abstract class Muxer {
 	abstract addEncodedVideoPacket(
 		track: OutputVideoTrack,
 		packet: EncodedPacket,
-		meta?: EncodedVideoChunkMetadata
+		meta?: EncodedVideoChunkMetadataWithAlphaSideData
 	): Promise<void>;
 	abstract addEncodedAudioPacket(
 		track: OutputAudioTrack,

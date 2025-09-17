@@ -24,6 +24,7 @@ import {
 	CallSerializer,
 	clamp,
 	isFirefox,
+	isChromium,
 	promiseWithResolvers,
 	setInt24,
 	setUint24,
@@ -199,10 +200,337 @@ export class EncodedVideoPacketSource extends VideoSource {
 	}
 }
 
+const createSharedArrayBuffer = (size: number) => {
+	const pageSize = 65536;
+	const sizeInPages = Math.floor((size + pageSize - 1) / pageSize);
+
+	// `shared: true` to created SharedArrayBuffer, when without `crossOriginIsolated`.
+	// Chromium could use async read back with SAB, meaning not blocking the current thread and potential concurrency.
+	// On chromium + `conversion`, ~10% faster overall for rerendered `canvas`.
+	// Non blocking read back similar to:
+	// eslint-disable-next-line @stylistic/max-len
+	// https://developer.mozilla.org/en-US/docs/Web/API/WebGL_API/WebGL_best_practices#use_non-blocking_async_data_readback
+	// https://developer.mozilla.org/en-US/docs/Web/API/GPUBuffer/mapAsync
+	return new WebAssembly.Memory({
+		initial: sizeInPages,
+		maximum: sizeInPages,
+		shared: true,
+	}).buffer;
+};
+
+const splitAlphaByCopyTo = async (frame: VideoFrame) => {
+	// HEVC with alpha: `format: null`. To get it to work, would need to draw to canvas and read back.
+	// Will handle fallback to rerender in `conversion`.
+	// Let's implement a hardware accelerated flow or wait for browsers to fix it.
+	const format = frame.format || '';
+	const alphaIndex = format.indexOf('A');
+	let main = frame;
+	let alpha: VideoFrame | undefined;
+
+	if (alphaIndex === -1) {
+		return { main, alpha };
+	}
+
+	const isYuvPlanar = format.startsWith('I'); // Most likely software decoded frame in CPU memory
+	const isYuv = isYuvPlanar || format.startsWith('NV');
+	const size = frame.allocationSize();
+	const buffer = !isYuvPlanar && isChromium() ? createSharedArrayBuffer(size) : new ArrayBuffer(size);
+	const data = new Uint8Array(buffer);
+	const transfer = 'growable' in buffer ? undefined : [buffer]; // 'growable' is a SAB only member
+
+	await frame.copyTo(data);
+
+	if (isYuv) {
+		const formatMain = format.slice(0, 4);
+		const [, bitDepth] = format.split('P');
+		const alphaStart = size - frame.displayHeight * frame.displayWidth * (Number(bitDepth) || 8) / 8;
+		const alphaPlaneSubArray = data.subarray(alphaStart, size);
+		const alphaData = new Uint8Array(size);
+		const originalMain = main;
+
+		// Set the Y plane from A plane of source
+		// Fill UX with max value will supposedly be less expensive to encode
+		alphaData.set(alphaPlaneSubArray);
+		alphaData.fill(255, alphaStart, alphaData.byteLength);
+		alpha = new VideoFrame(alphaData, {
+			codedHeight: originalMain.displayHeight, // As a result of copyTo
+			codedWidth: originalMain.displayWidth,
+			colorSpace: originalMain.colorSpace,
+			displayHeight: originalMain.displayHeight,
+			displayWidth: originalMain.displayWidth,
+			format: formatMain,
+			timestamp: originalMain.timestamp,
+			visibleRect: originalMain.visibleRect,
+			transfer: [alphaData.buffer], // Not declared in @types/dom-webcodecs yet
+		} as VideoFrameBufferInit);
+
+		// Safari: duration is omitted to ensure no timestamp off-by-one issues.
+		// Also, Safari's VideoEncoder cannot handle cases like I420A properly.
+		// But it is fine to always recreate one as I420 after copyTo.
+		main = new VideoFrame(data, {
+			codedHeight: originalMain.displayHeight,
+			codedWidth: originalMain.displayWidth,
+			colorSpace: originalMain.colorSpace,
+			displayHeight: originalMain.displayHeight,
+			displayWidth: originalMain.displayWidth,
+			format: formatMain,
+			timestamp: originalMain.timestamp,
+			visibleRect: originalMain.visibleRect,
+			transfer,
+		} as VideoFrameBufferInit);
+		originalMain.close();
+	} else if (format.length === 4) {
+		// MUST de-interleave RGBA to create I420 for alpha encoding.
+		// If ones tries to create a luminance only image (RGB are the same value),
+		// the result Y plane encoded will still have a limited 16-255 range,
+		// probably due to browser internal RGB -> YUV conversion.
+		// The standard is that UV plane will be discarded, video players will use Y plane only as alpha.
+		// It would be usable if alpha cannot be fully transparent and the range scale is off.
+		// Thus, `copyTo` is to the only way for encoding to work, even if it is expensively reading back GPU frames.
+		for (let i = 0; i < data.length; i += 4) {
+			data[i / 4] = data[i + alphaIndex]!;
+		}
+		data.fill(255, data.byteLength / 4, data.byteLength);
+		alpha = new VideoFrame(data, {
+			codedHeight: frame.displayHeight,
+			codedWidth: frame.displayWidth,
+			displayHeight: frame.displayHeight,
+			displayWidth: frame.displayWidth,
+			format: 'I420',
+			timestamp: frame.timestamp,
+			visibleRect: frame.visibleRect,
+			transfer,
+		} as VideoFrameBufferInit);
+	}
+
+	return { main, alpha };
+};
+
+function createVideoEncoderWithOutputIterator() {
+	let { promise, resolve, reject } = promiseWithResolvers<void>();
+	const outputQueue: Parameters<EncodedVideoChunkOutputCallback>[] = [];
+	const init: VideoEncoderInit = {
+		output: (...args) => {
+			// @ts-expect-error TS limitation with Parameters<T> with overload
+			outputQueue.push(args);
+			if (outputQueue.length === 1) resolve();
+			({ promise, resolve, reject } = promiseWithResolvers());
+		},
+		error: reject,
+	};
+	const coder = new VideoEncoder(init);
+	const iterator = (async function* () {
+		try {
+			while (coder.state !== 'closed' || outputQueue.length > 0) {
+				if (outputQueue.length === 0) await promise;
+				while (outputQueue.length > 0) {
+					yield outputQueue.shift()!;
+				}
+			}
+		} finally {
+			outputQueue.length = 0;
+			if (coder.state !== 'closed') coder.close();
+			resolve();
+		}
+	})();
+
+	return Object.assign(coder, {
+		iterator,
+		closeIterator: () => resolve(),
+	});
+};
+
+interface IVideoEncoder extends Omit<VideoEncoder,
+	'ondequeue' | 'removeEventListener' | 'dispatchEvent'
+> {};
+
+export class AlphaVideoEncoderWrapper implements IVideoEncoder {
+	main = createVideoEncoderWithOutputIterator();
+	alpha = createVideoEncoderWithOutputIterator();
+	_started = false;
+	_firstAlphaTimestamp?: number;
+	_pendingEncode = 0;
+	_encodePromiseWithResolvers = promiseWithResolvers<void>();
+
+	static warnForNullFormat = true;
+
+	constructor(private init: VideoEncoderInit) {
+		this._encodePromiseWithResolvers.resolve(); // First encode, no previous encode to wait for
+	}
+
+	get encodeQueueSize() {
+		return Math.max(
+			this.main.encodeQueueSize + this._pendingEncode,
+			this.alpha.encodeQueueSize + this._pendingEncode,
+		);
+	};
+
+	get state() {
+		// Alpha can be 'closed', which fallback to opaque.
+		assert(this.main.state === this.alpha.state || this.alpha.state === 'closed');
+
+		return this.main.state;
+	}
+
+	close() {
+		if (this.main.state !== 'closed') this.main.close();
+		if (this.alpha.state !== 'closed') this.alpha.close();
+		this.main.closeIterator();
+		this.alpha.closeIterator();
+	}
+
+	configure(config: VideoEncoderConfig) {
+		this.main.configure(config);
+		this.alpha.configure(config);
+	}
+
+	encode(frame: VideoFrame, options: VideoEncoderEncodeOptions) {
+		const frameClone = frame.clone(); // Due to async, the original input might be closed
+
+		this._pendingEncode++;
+		(async () => {
+			const capturedPromise = this._encodePromiseWithResolvers.promise;
+			const currentEncodePromiseWithResolvers = promiseWithResolvers<void>();
+
+			this._encodePromiseWithResolvers = currentEncodePromiseWithResolvers;
+			if (
+				typeof this._firstAlphaTimestamp === 'undefined'
+				&& frame.displayHeight !== 0
+				&& frame.format?.includes('A')
+				&& this.alpha.state === 'configured'
+			) {
+				if (options.keyFrame) {
+					this._firstAlphaTimestamp = frameClone.timestamp;
+				} else {
+					console.warn('Cannot start encoding alpha channel at a non-key frame.');
+				}
+			}
+
+			const { main, alpha } = await splitAlphaByCopyTo(frameClone);
+
+			// Might be tempted to `main.encode` first before split alpha, but Safari gives broken result on I420A
+			// Necessary to `copyTo` and recreate `VideoFrame` for Safari.
+			await capturedPromise; // Ensure `encode` order
+			if (alpha && this.alpha.state === 'configured') {
+				this.alpha.encode(alpha, options);
+				alpha.close();
+			}
+			this.main.encode(main, options);
+			main.close();
+			this._pendingEncode--;
+			currentEncodePromiseWithResolvers.resolve();
+			this.maybeStartIterators().catch(this.init.error);
+		})().catch(this.init.error);
+	}
+
+	async flush() {
+		// This promise is synchronously set when encode is called, it should be latest.
+		// `flush` will invoke the `output` callback chain and
+		await this._encodePromiseWithResolvers.promise;
+		assert(this._pendingEncode === 0);
+		await Promise.all([
+			this.main.flush(),
+			this.alpha.state !== 'closed' && this.alpha.flush(),
+		]);
+	}
+
+	reset() {
+		this.main.reset();
+		this.alpha.reset();
+	}
+
+	addEventListener(...args: Parameters<VideoEncoder['addEventListener']>) {
+		if (args[0] === 'dequeue') {
+			const encoderWithLargerQueue = this.main.encodeQueueSize >= this.alpha.encodeQueueSize
+				? this.main
+				: this.alpha;
+
+			assert(encoderWithLargerQueue.encodeQueueSize > 0 || this._pendingEncode > 0);
+			encoderWithLargerQueue.addEventListener(...args);
+		} else {
+			throw new Error('addEventListener is only implemented for \'dequeue\'');
+		}
+	}
+
+	async maybeStartIterators() {
+		if (this._started) return;
+		this._started = true;
+
+		const onAlphaError = (reason: unknown) => {
+			console.warn('Error has occurred on alpha channel decoding, fallback to opaque', reason);
+			this.alpha.closeIterator();
+			this.alpha.iterator.return().catch(() => {});
+
+			return undefined;
+		};
+		let alphaDecodingSequenceIsBroken = false;
+		let [mainResult, alphaResult] = await Promise.all([
+			this.main.iterator.next(),
+			typeof this._firstAlphaTimestamp === 'number'
+				? this.alpha.iterator.next()
+				: undefined,
+		]);
+
+		while (!mainResult.done) {
+			if (!alphaResult && typeof this._firstAlphaTimestamp === 'number') {
+				alphaResult = await this.alpha.iterator.next().catch(onAlphaError);
+			}
+
+			if (alphaResult && !alphaResult.done) {
+				// Frame dropped on main, seek to next alpha that we can potentially add.
+				while (
+					!alphaResult.done
+					&& mainResult.value[0].timestamp > alphaResult.value[0].timestamp
+				) {
+					alphaResult = await this.alpha.iterator.next();
+					alphaDecodingSequenceIsBroken = true;
+				}
+
+				if (!alphaResult.done) {
+					if (
+						alphaDecodingSequenceIsBroken
+						&& mainResult.value[0].type === alphaResult.value[0].type
+						&& mainResult.value[0].type === 'key'
+					) {
+						// A new keyframe to resync main and alpha decoding
+						alphaDecodingSequenceIsBroken = false;
+					}
+
+					// If any alpha chunk is dropped, the decoder will fail at the next alpha chunk after the gap.
+					// Make sure to stop including alpha chunk until a new keyframe is received to resync decoding.
+					// If there is b-frame, there should be no frame drops. Should always hit this branch.
+					if (
+						!alphaDecodingSequenceIsBroken
+						&& mainResult.value[0].timestamp === alphaResult.value[0].timestamp
+					) {
+						const alphaSideData = new ArrayBuffer(alphaResult.value[0].byteLength);
+						alphaResult.value[0].copyTo(alphaSideData);
+						this.init.output(mainResult.value[0], {
+							...mainResult.value[1],
+							alphaSideData,
+						} as EncodedVideoChunkMetadata);
+						([mainResult, alphaResult] = await Promise.all([
+							this.main.iterator.next(),
+							this.alpha.iterator.next().catch(onAlphaError),
+						]));
+						continue;
+					}
+				}
+			}
+
+			this.init.output(...mainResult.value);
+			mainResult = await this.main.iterator.next();
+		}
+
+		// If main has frames dropped, alpha might not be fully consumed.
+		await this.alpha.iterator.return();
+	}
+}
+
 class VideoEncoderWrapper {
 	private ensureEncoderPromise: Promise<void> | null = null;
 	private encoderInitialized = false;
-	private encoder: VideoEncoder | null = null;
+	private encoder: IVideoEncoder | null = null;
 	private muxer: Muxer | null = null;
 	private lastMultipleOfKeyFrameInterval = -1;
 	private codedWidth: number | null = null;
@@ -257,13 +585,15 @@ class VideoEncoderWrapper {
 							canvasIsNew = true;
 						}
 
+						// Firefox has VideoFrame glitches with opaque canvases
+						const alpha = isFirefox() || videoSample.alpha;
 						const context = this.resizeCanvas.getContext('2d', {
-							alpha: isFirefox(), // Firefox has VideoFrame glitches with opaque canvases
+							alpha,
 						}) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 						assert(context);
 
-						if (!canvasIsNew) {
-							if (isFirefox()) {
+						if (canvasIsNew || alpha) {
+							if (isFirefox() && !alpha) {
 								context.fillStyle = 'black';
 								context.fillRect(0, 0, this.codedWidth, this.codedHeight);
 							} else {
@@ -409,17 +739,49 @@ class VideoEncoderWrapper {
 					throw new Error('VideoEncoder is not supported by this browser.');
 				}
 
-				const support = await VideoEncoder.isConfigSupported(encoderConfig);
+				const keepAlpha = this.encodingConfig.alpha === 'keep';
+				const splitAlphaConfig: VideoEncoderConfig = { ...encoderConfig, alpha: 'discard' };
+
+				let [
+					splitAlphaSupport, // eslint-disable-line prefer-const
+					support,
+				] = await Promise.all([
+					keepAlpha && VideoEncoder.isConfigSupported(splitAlphaConfig),
+					VideoEncoder.isConfigSupported(encoderConfig),
+				]);
+				let splitAlpha = false;
+				let config = encoderConfig;
+
+				// Matroska and WebM supported codecs will requires split alpha.
+				// Not ideal: this might override native support, if browsers has implemented it.
+				// But currently, Firefox does not report alpha support correctly. So, override for now.
+				if (
+					keepAlpha
+					&& splitAlphaSupport
+					&& splitAlphaSupport.supported
+					&& ['vp9', 'av1', 'vp8'].includes(this.encodingConfig.codec)
+					&& ['.webm', '.mkv'].includes(
+						this.source._connectedTrack?.output.format.fileExtension || '',
+					)
+				) {
+					support = splitAlphaSupport;
+					splitAlpha = true;
+					config = splitAlphaConfig;
+				}
+
 				if (!support.supported) {
 					throw new Error(
 						`This specific encoder configuration (${encoderConfig.codec}, ${encoderConfig.bitrate} bps,`
 						+ ` ${encoderConfig.width}x${encoderConfig.height}, hardware acceleration:`
-						+ ` ${encoderConfig.hardwareAcceleration ?? 'no-preference'}) is not supported by this browser.`
+						+ ` ${encoderConfig.hardwareAcceleration ?? 'no-preference'}`
+						+ ` alpha: ${encoderConfig.alpha ?? 'discard'}) is not supported by this browser.`
 						+ ` Consider using another codec or changing your video parameters.`,
 					);
 				}
 
-				this.encoder = new VideoEncoder({
+				const EncoderClass = splitAlpha ? AlphaVideoEncoderWrapper : VideoEncoder;
+
+				this.encoder = new EncoderClass({
 					output: (chunk, meta) => {
 						const packet = EncodedPacket.fromEncodedChunk(chunk);
 
@@ -431,7 +793,7 @@ class VideoEncoderWrapper {
 						this.encoderError ??= error;
 					},
 				});
-				this.encoder.configure(encoderConfig);
+				this.encoder.configure(config);
 			}
 
 			assert(this.source._connectedTrack);

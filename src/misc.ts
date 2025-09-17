@@ -651,6 +651,21 @@ export const isFirefox = () => {
 	return isFirefoxCache = typeof navigator !== 'undefined' && navigator.userAgent?.includes('Firefox');
 };
 
+let isChromiumCache: boolean | null = null;
+export const isChromium = () => {
+	if (isChromiumCache !== null) {
+		return isChromiumCache;
+	}
+
+	const result = !!(
+		typeof navigator !== 'undefined'
+		&& navigator.userAgent?.match(/Chrome\//i)
+	);
+
+	isChromiumCache = result;
+	return result;
+};
+
 /**
  * T or a promise that resolves to T.
  * @group Miscellaneous
