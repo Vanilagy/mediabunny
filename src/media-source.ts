@@ -592,7 +592,7 @@ class VideoEncoderWrapper {
 						}) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 						assert(context);
 
-						if (canvasIsNew || alpha) {
+						if (!canvasIsNew || alpha) {
 							if (isFirefox() && !alpha) {
 								context.fillStyle = 'black';
 								context.fillRect(0, 0, this.codedWidth, this.codedHeight);

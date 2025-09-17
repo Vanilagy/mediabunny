@@ -593,7 +593,7 @@ describe('Synthetic alpha decoding iterators tests', () => {
 		])).every(({ done }) => done));
 	});
 
-	test('Should output no alpha if no alpha decoder failed.', async (t) => {
+	test('Should output no alpha if alpha decoder failed.', async (t) => {
 		const testCount = 10;
 		const errorAt = 4;
 
