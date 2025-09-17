@@ -232,8 +232,10 @@ export class VideoSample {
 				throw new TypeError('Could not determine dimensions.');
 			}
 
-			// No ways to know whether any of these has alpha without reading pixels. Let's default to false.
-			// Should be an edge case, since `VideoFrame` must be available with WebCodecs support.
+			// No ways to know whether most of these actually has alpha without reading pixels. Let's default to false.
+			// For canvas, it is possible to `getContext` and `getContextAttributes`.
+			// But it is not ideal to try `getContext` until finding the original context type.
+			// This should be an edge case since `VideoFrame` must be available with WebCodecs support.
 			const canvas = new OffscreenCanvas(width, height);
 			const context = canvas.getContext('2d', {
 				alpha: isFirefox(), // Firefox has VideoFrame glitches with opaque canvases

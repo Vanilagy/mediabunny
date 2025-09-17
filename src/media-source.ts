@@ -280,13 +280,13 @@ const splitAlphaByCopyTo = async (frame: VideoFrame) => {
 		} as VideoFrameBufferInit);
 		originalMain.close();
 	} else if (format.length === 4) {
-		// MUST de-interleave RGBA to create I420 for alpha encoding.
-		// If ones tries to create a luminance only image (RGB are the same value),
-		// the result Y plane encoded will still have a limited 16-255 range,
-		// probably due to browser internal RGB -> YUV conversion.
+		// MUST manually create a `'I420'` frame for alpha encoding.
+		// It is easy to extract alpha channel as luminance (grayscale) image with things like canvas2d,
+		// But, passing such a frame directly to encoders, result in a limited 16-255 range result.
+		// This is probably due to browser internal RGB -> YUV conversion. e.g. Chromium/Firefox.
 		// The standard is that UV plane will be discarded, video players will use Y plane only as alpha.
-		// It would be usable if alpha cannot be fully transparent and the range scale is off.
-		// Thus, `copyTo` is to the only way for encoding to work, even if it is expensively reading back GPU frames.
+		// It would be unusable if alpha cannot be fully transparent and the range scale is off.
+		// Thus, with current JS APIs, reading back (by copyTo here) is the only way for alpha encoding to work.
 		for (let i = 0; i < data.length; i += 4) {
 			data[i / 4] = data[i + alphaIndex]!;
 		}
