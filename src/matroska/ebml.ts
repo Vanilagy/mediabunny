@@ -150,6 +150,14 @@ export enum EBMLId {
 	TagLanguage = 0x447a,
 	TagString = 0x4487,
 	TagBinary = 0x4485,
+	ContentEncodings = 0x6d80,
+	ContentEncoding = 0x6240,
+	ContentEncodingOrder = 0x5031,
+	ContentEncodingScope = 0x5032,
+	ContentCompression = 0x5034,
+	ContentCompAlgo = 0x4254,
+	ContentCompSettings = 0x4255,
+	ContentEncryption = 0x5035,
 }
 
 export const LEVEL_0_EBML_IDS: EBMLId[] = [
