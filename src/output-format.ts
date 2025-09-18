@@ -18,6 +18,7 @@ import {
 	VIDEO_CODECS,
 	VideoCodec,
 } from './codec';
+import { FlacMuxer } from './flac/flac-muxer';
 import { IsobmffMuxer } from './isobmff/isobmff-muxer';
 import { MatroskaMuxer } from './matroska/matroska-muxer';
 import { MediaSource } from './media-source';
@@ -841,6 +842,77 @@ export class AdtsOutputFormat extends OutputFormat {
 
 	getSupportedCodecs(): MediaCodec[] {
 		return ['aac'];
+	}
+
+	get supportsVideoRotationMetadata() {
+		return false;
+	}
+}
+
+/**
+ * FLAC-specific output options.
+ * @group Output formats
+ * @public
+ */
+export type FlacOutputFormatOptions = {
+	/**
+	 * Will be called for each FLAC frame that is written.
+	 *
+	 * @param data - The raw bytes.
+	 * @param position - The byte offset of the data in the file.
+	 */
+	onFrame?: (data: Uint8Array, position: number) => unknown;
+};
+
+/**
+ * FLAC file format.
+ * @group Output formats
+ * @public
+ */
+export class FlacOutputFormat extends OutputFormat {
+	/** @internal */
+	_options: FlacOutputFormatOptions;
+
+	/** Creates a new {@link FlacOutputFormat} configured with the specified `options`. */
+	constructor(options: FlacOutputFormatOptions = {}) {
+		if (!options || typeof options !== 'object') {
+			throw new TypeError('options must be an object.');
+		}
+
+		super();
+
+		this._options = options;
+	}
+
+	/** @internal */
+	_createMuxer(output: Output) {
+		return new FlacMuxer(output, this);
+	}
+
+	/** @internal */
+	get _name() {
+		return 'FLAC';
+	}
+
+	getSupportedTrackCounts(): TrackCountLimits {
+		return {
+			video: { min: 0, max: 0 },
+			audio: { min: 1, max: 1 },
+			subtitle: { min: 0, max: 0 },
+			total: { min: 1, max: 1 },
+		};
+	}
+
+	get fileExtension() {
+		return '.flac';
+	}
+
+	get mimeType() {
+		return 'audio/flac';
+	}
+
+	getSupportedCodecs(): MediaCodec[] {
+		return ['flac'];
 	}
 
 	get supportsVideoRotationMetadata() {

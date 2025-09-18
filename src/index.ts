@@ -21,6 +21,8 @@ export {
 	OutputFormat,
 	AdtsOutputFormat,
 	AdtsOutputFormatOptions,
+	FlacOutputFormat,
+	FlacOutputFormatOptions,
 	IsobmffOutputFormat,
 	IsobmffOutputFormatOptions,
 	MkvOutputFormat,
@@ -130,6 +132,7 @@ export {
 	QuickTimeInputFormat,
 	WaveInputFormat,
 	WebMInputFormat,
+	FlacInputFormat,
 	ALL_FORMATS,
 	ADTS,
 	MATROSKA,
@@ -139,6 +142,7 @@ export {
 	QTFF,
 	WAVE,
 	WEBM,
+	FLAC,
 } from './input-format';
 export {
 	Input,
