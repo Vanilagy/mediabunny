@@ -121,6 +121,16 @@ export type VideoEncodingAdditionalOptions = {
 	 */
 	hardwareAcceleration?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
 	/**
+	 * An encoding alpha option as defined by [alpha-option](https://www.w3.org/TR/webcodecs/#alpha-option).
+	 * Defaults to 'discard'.
+	 * Some codecs like 'hevc' might support alpha inside the same `EncodedVideoChunk.data` natively.
+	 * Special case: If 'keep', for 'vp8', 'vp9', 'av1' codecs, a custom split alpha side data support is provided.
+	 * If the supplied frame contains alpha channel, the result alpha side data would be available at the
+	 * [`EncodeVideoChunkMetadata.alphaSideData`](https://www.w3.org/TR/webcodecs/#encoded-video-chunk-metadata).
+	 * Note that: currently, only WebM/MKV output support including the alpha side data in result file.
+	 */
+	alpha?: VideoEncoderConfig['alpha'];
+	/**
 	 * An encoding scalability mode identifier as defined by
 	 * [WebRTC-SVC](https://w3c.github.io/webrtc-svc/#scalabilitymodes*).
 	 */
@@ -159,6 +169,12 @@ export const validateVideoEncodingAdditionalOptions = (codec: VideoCodec, option
 			+ ' \'prefer-software\'.',
 		);
 	}
+	if (
+		options.alpha !== undefined
+		&& !['keep', 'discard'].includes(options.alpha)
+	) {
+		throw new TypeError('alpha, when provided, must be \'keep\' or \'discard\'');
+	}
 	if (options.scalabilityMode !== undefined && typeof options.scalabilityMode !== 'string') {
 		throw new TypeError('scalabilityMode, when provided, must be a string.');
 	}
@@ -192,6 +208,7 @@ export const buildVideoEncoderConfig = (options: {
 		framerate: options.framerate, // this.source._connectedTrack?.metadata.frameRate,
 		latencyMode: options.latencyMode,
 		hardwareAcceleration: options.hardwareAcceleration,
+		alpha: options.alpha,
 		scalabilityMode: options.scalabilityMode,
 		contentHint: options.contentHint,
 		...getVideoEncoderConfigExtension(options.codec),

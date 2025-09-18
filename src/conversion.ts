@@ -155,6 +155,8 @@ export type ConversionVideoOptions = {
 	bitrate?: number | Quality;
 	/** When `true`, video will always be re-encoded instead of directly copying over the encoded samples. */
 	forceTranscode?: boolean;
+	/** When `'keep'`, will reserve the alpha channel when re-encoded to the new output */
+	alpha?: VideoEncodingConfig['alpha'];
 };
 
 /**
@@ -235,6 +237,12 @@ const validateVideoOptions = (videoOptions: ConversionVideoOptions | undefined) 
 		&& (!Number.isFinite(videoOptions.frameRate) || videoOptions.frameRate <= 0)
 	) {
 		throw new TypeError('options.video.frameRate, when provided, must be a finite positive number.');
+	}
+	if (
+		videoOptions?.alpha !== undefined
+		&& !['keep', 'discard'].includes(videoOptions.alpha)
+	) {
+		throw new TypeError('options.video.alpha, when provided, must be one of "keep" or "discard".');
 	}
 };
 
@@ -741,6 +749,7 @@ export class Conversion {
 			const encodingConfig: VideoEncodingConfig = {
 				codec: encodableCodec,
 				bitrate,
+				alpha: trackOptions.alpha,
 				sizeChangeBehavior: trackOptions.fit ?? 'passThrough',
 				onEncodedPacket: sample => this._reportProgress(track.id, sample.timestamp + sample.duration),
 			};
@@ -757,12 +766,16 @@ export class Conversion {
 				// Creating a new temporary Output is sort of hacky, but due to a lack of an isolated encoder API right
 				// now, this is the simplest way. Will refactor in the future!
 
+				const isSplitAlphaSupportedCodecs = ['vp9', 'av1', 'vp8'].includes(trackOptions.codec || '');
 				const tempOutput = new Output({
 					format: new Mp4OutputFormat(), // Supports all video codecs
 					target: new NullTarget(),
 				});
 
-				const tempSource = new VideoSampleSource(encodingConfig);
+				const tempSource = new VideoSampleSource({
+					...encodingConfig,
+					...(isSplitAlphaSupportedCodecs && { alpha: 'discard' }),
+				});
 				tempOutput.addVideoTrack(tempSource);
 
 				await tempOutput.start();
@@ -772,11 +785,19 @@ export class Conversion {
 
 				if (firstSample) {
 					try {
+						if (
+							firstSample.format === null
+							&& encodingConfig.alpha === 'keep'
+							&& isSplitAlphaSupportedCodecs
+						) {
+							throw new Error(`Encoding to ${trackOptions.codec} requires rerendering for this input.`);
+						}
 						await tempSource.add(firstSample);
 						firstSample.close();
 						await tempOutput.finalize();
 					} catch (error) {
 						console.info('Error when probing encoder support. Falling back to rerender path.', error);
+						firstSample.close();
 						needsRerender = true;
 						void tempOutput.cancel();
 					}

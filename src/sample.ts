@@ -75,6 +75,8 @@ export class VideoSample {
 	readonly duration!: number;
 	/** The color space of the frame. */
 	readonly colorSpace!: VideoColorSpace;
+	/** If the format has alpha channel. `format: null` will default to `true`, e.g. HEVC with alpha on chromium */
+	readonly alpha!: boolean;
 
 	/** The width of the frame in pixels after rotation. */
 	get displayWidth() {
@@ -154,6 +156,7 @@ export class VideoSample {
 			this.timestamp = init.timestamp!;
 			this.duration = init.duration ?? 0;
 			this.colorSpace = new VideoColorSpace(init.colorSpace);
+			this.alpha = this.format === null || this.format.includes('A');
 		} else if (typeof VideoFrame !== 'undefined' && data instanceof VideoFrame) {
 			if (init?.rotation !== undefined && ![0, 90, 180, 270].includes(init.rotation)) {
 				throw new TypeError('init.rotation, when provided, must be 0, 90, 180, or 270.');
@@ -177,6 +180,7 @@ export class VideoSample {
 			this.timestamp = init?.timestamp ?? data.timestamp / 1e6;
 			this.duration = init?.duration ?? (data.duration ?? 0) / 1e6;
 			this.colorSpace = data.colorSpace;
+			this.alpha = this.format === null || this.format.includes('A');
 		} else if (
 			(typeof HTMLImageElement !== 'undefined' && data instanceof HTMLImageElement)
 			|| (typeof SVGImageElement !== 'undefined' && data instanceof SVGImageElement)
@@ -228,6 +232,10 @@ export class VideoSample {
 				throw new TypeError('Could not determine dimensions.');
 			}
 
+			// No ways to know whether most of these actually has alpha without reading pixels. Let's default to false.
+			// For canvas, it is possible to `getContext` and `getContextAttributes`.
+			// But it is not ideal to try `getContext` until finding the original context type.
+			// This should be an edge case since `VideoFrame` must be available with WebCodecs support.
 			const canvas = new OffscreenCanvas(width, height);
 			const context = canvas.getContext('2d', {
 				alpha: isFirefox(), // Firefox has VideoFrame glitches with opaque canvases
@@ -251,6 +259,7 @@ export class VideoSample {
 				transfer: 'iec61966-2-1',
 				fullRange: true,
 			});
+			this.alpha = false;
 		} else {
 			throw new TypeError('Invalid data type: Must be a BufferSource or CanvasImageSource.');
 		}

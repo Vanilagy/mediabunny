@@ -32,6 +32,15 @@ export class EncodedPacket {
 	 * `data` field contains no bytes.
 	 */
 	readonly byteLength: number;
+	/**
+	 * Video specific: the extra alpha channel data of this packet. This might come from EncodedVideoChunkMetadata.
+	 * [`alphaSideData`](http://w3.org/TR/webcodecs/#dom-encodedvideochunkmetadata-alphasidedata)
+	 * It is technically fine to include for any codec type, but it is only specified for codecs + formats like
+	 * [WebM alpha channel](https://wiki.webmproject.org/alpha-channel) (supported by Mediabunny),
+	 * [AVIF alpha image item](https://aomediacodec.github.io/av1-avif/#auxiliary-images),
+	 * [MP4-AT](https://developer.android.com/media/platform/mp4-at-file-format) (not standardized yet) etc
+	 */
+	alphaSideData?: Uint8Array;
 
 	/** Creates a new {@link EncodedPacket} from raw bytes and timing information. */
 	constructor(
