@@ -138,7 +138,7 @@ export const intoTimescale = (timeInSeconds: number, timescale: number, round = 
 };
 
 export class IsobmffMuxer extends Muxer {
-	private format: IsobmffOutputFormat;
+	format: IsobmffOutputFormat;
 	private writer: Writer;
 	private boxWriter: IsobmffBoxWriter;
 	private fastStart: NonNullable<IsobmffOutputFormatOptions['fastStart']>;
@@ -184,11 +184,6 @@ export class IsobmffMuxer extends Muxer {
 		}
 
 		this.minimumFragmentDuration = format._options.minimumFragmentDuration ?? 1;
-	}
-
-	/** Get the metadata format option */
-	getMetadataFormat(): 'mdir' | 'mdta' {
-		return (this.format._options.metadataFormat as 'mdir' | 'mdta') ?? 'mdir';
 	}
 
 	async start() {

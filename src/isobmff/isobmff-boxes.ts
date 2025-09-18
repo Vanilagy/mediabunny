@@ -1274,14 +1274,18 @@ export const vtta = (notes: string) => box('vtta', [...textEncoder.encode(notes)
 const udta = (muxer: IsobmffMuxer) => {
 	const boxes: Box[] = [];
 
+	const metadataFormat = muxer.format._options.metadataFormat ?? 'auto';
+	const metadataTags = muxer.output._metadataTags;
+
 	// Depending on the format, metadata tags are written differently
-	if (muxer.isQuickTime) {
+	if (metadataFormat === 'mdir' || (metadataFormat === 'auto' && !muxer.isQuickTime)) {
+		const metaBox = metaMdir(metadataTags);
+		if (metaBox) boxes.push(metaBox);
+	} else if (metadataFormat === 'mdta') {
+		const metaBox = metaMdta(metadataTags);
+		if (metaBox) boxes.push(metaBox);
+	} else if (metadataFormat === 'udta' || (metadataFormat === 'auto' && muxer.isQuickTime)) {
 		addQuickTimeMetadataTagBoxes(boxes, muxer.output._metadataTags);
-	} else {
-		const metaBox = meta(muxer.output._metadataTags, muxer);
-		if (metaBox) {
-			boxes.push(metaBox);
-		}
 	}
 
 	if (boxes.length === 0) {
@@ -1382,10 +1386,13 @@ const DATA_BOX_MIME_TYPE_MAP: Record<string, number> = {
 };
 
 /**
- * Common function to generate standard metadata boxes for ISOBMFF
+ * Generates key-value metadata for inclusion in the "meta" box.
  */
-const generateStandardMetadataBoxes = (tags: MetadataTags): Box[] => {
-	const boxes: Box[] = [];
+const generateMetadataPairs = (tags: MetadataTags, isMdta: boolean) => {
+	const pairs: {
+		key: string;
+		value: Box;
+	}[] = [];
 
 	// https://exiftool.org/TagNames/QuickTime.html (QuickTime ItemList Tags)
 	// This is the metadata format used for MP4 files
@@ -1393,39 +1400,42 @@ const generateStandardMetadataBoxes = (tags: MetadataTags): Box[] => {
 	for (const { key, value } of keyValueIterator(tags)) {
 		switch (key) {
 			case 'title': {
-				boxes.push(metadataTagStringBoxLong('©nam', value));
+				pairs.push({ key: isMdta ? 'title' : '©nam', value: dataStringBoxLong(value) });
 			}; break;
 
 			case 'description': {
-				boxes.push(metadataTagStringBoxLong('©des', value));
+				pairs.push({ key: isMdta ? 'description' : '©des', value: dataStringBoxLong(value) });
 			}; break;
 
 			case 'artist': {
-				boxes.push(metadataTagStringBoxLong('©ART', value));
+				pairs.push({ key: isMdta ? 'artist' : '©ART', value: dataStringBoxLong(value) });
 			}; break;
 
 			case 'album': {
-				boxes.push(metadataTagStringBoxLong('©alb', value));
+				pairs.push({ key: isMdta ? 'album' : '©alb', value: dataStringBoxLong(value) });
 			}; break;
 
 			case 'albumArtist': {
-				boxes.push(metadataTagStringBoxLong('aART', value));
+				pairs.push({ key: isMdta ? 'album_artist' : 'aART', value: dataStringBoxLong(value) });
 			}; break;
 
 			case 'comment': {
-				boxes.push(metadataTagStringBoxLong('©cmt', value));
+				pairs.push({ key: isMdta ? 'comment' : '©cmt', value: dataStringBoxLong(value) });
 			}; break;
 
 			case 'genre': {
-				boxes.push(metadataTagStringBoxLong('©gen', value));
+				pairs.push({ key: isMdta ? 'genre' : '©gen', value: dataStringBoxLong(value) });
 			}; break;
 
 			case 'lyrics': {
-				boxes.push(metadataTagStringBoxLong('©lyr', value));
+				pairs.push({ key: isMdta ? 'lyrics' : '©lyr', value: dataStringBoxLong(value) });
 			}; break;
 
 			case 'date': {
-				boxes.push(metadataTagStringBoxLong('©day', value.toISOString().slice(0, 10)));
+				pairs.push({
+					key: isMdta ? 'date' : '©day',
+					value: dataStringBoxLong(value.toISOString().slice(0, 10)),
+				});
 			}; break;
 
 			case 'images': {
@@ -1434,40 +1444,45 @@ const generateStandardMetadataBoxes = (tags: MetadataTags): Box[] => {
 						continue;
 					}
 
-					boxes.push(box('covr', undefined, [
-						box('data', [
-							u32(DATA_BOX_MIME_TYPE_MAP[image.mimeType] ?? 0), // Type indicator
-							u32(0), // Locale indicator
-							Array.from(image.data), // Kinda slow, hopefully temp
-						]),
-					]));
+					pairs.push({ key: 'covr', value: box('data', [
+						u32(DATA_BOX_MIME_TYPE_MAP[image.mimeType] ?? 0), // Type indicator
+						u32(0), // Locale indicator
+						Array.from(image.data), // Kinda slow, hopefully temp
+					]) });
 				}
 			}; break;
 
 			case 'trackNumber': {
-				boxes.push(box('trkn', undefined, [
-					box('data', [
+				if (isMdta) {
+					const string = tags.tracksTotal !== undefined
+						? `${value}/${tags.tracksTotal}`
+						: value.toString();
+
+					pairs.push({ key: 'track', value: dataStringBoxLong(string) });
+				} else {
+					pairs.push({ key: 'trkn', value: box('data', [
 						u32(0), // 8 bytes empty
 						u32(0),
 						u16(0), // Empty
 						u16(value),
 						u16(tags.tracksTotal ?? 0),
 						u16(0), // Empty
-					]),
-				]));
+					]) });
+				}
 			}; break;
 
 			case 'discNumber': {
-				boxes.push(box('disc', undefined, [
-					box('data', [
+				if (!isMdta) {
+					// Only written for mdir
+					pairs.push({ key: 'disc', value: box('data', [
 						u32(0), // 8 bytes empty
 						u32(0),
 						u16(0), // Empty
 						u16(value),
 						u16(tags.discsTotal ?? 0),
 						u16(0), // Empty
-					]),
-				]));
+					]) });
+				}
 			}; break;
 
 			case 'tracksTotal':
@@ -1483,154 +1498,77 @@ const generateStandardMetadataBoxes = (tags: MetadataTags): Box[] => {
 		}
 	}
 
-	return boxes;
-};
-
-/** Metadata Box (mdta format with keys box) */
-const metaMdta = (tags: MetadataTags) => {
-	const boxes = generateStandardMetadataBoxes(tags);
-	const customKeys: string[] = []; // Collect custom key names
-
-	// Handle raw tags (mdta format - numeric indices with keys box)
 	if (tags.raw) {
 		for (const key in tags.raw) {
 			const value = tags.raw[key];
-			if (value == null || key.length !== 4 || boxes.some(x => x.type === key)) {
+			if (value == null || (!isMdta && key.length !== 4) || pairs.some(x => x.key === key)) {
 				continue;
 			}
 
-			// Collect custom key names
-			customKeys.push(key);
-			const keyIndex = customKeys.length; // 1-based index
-
-			// Generate numeric index as box name (4-byte big-endian)
-			const indexBytes = u32(keyIndex);
-			const boxName = String.fromCharCode(...indexBytes);
-
 			if (typeof value === 'string') {
-				boxes.push(box(boxName, undefined, [
-					box('data', [
-						u32(1), // UTF-8 text type
-						u32(0), // Locale indicator
-						...textEncoder.encode(value),
-					]),
-				]));
+				pairs.push({ key, value: dataStringBoxLong(value) });
 			} else if (value instanceof Uint8Array) {
-				boxes.push(box(boxName, undefined, [
-					box('data', [
-						u32(0), // Type indicator
-						u32(0), // Locale indicator
-						Array.from(value),
-					]),
-				]));
+				pairs.push({ key, value: box('data', [
+					u32(0), // Type indicator
+					u32(0), // Locale indicator
+					Array.from(value),
+				]) });
 			} else if (value instanceof RichImageData) {
-				boxes.push(box(boxName, undefined, [
-					box('data', [
-						u32(DATA_BOX_MIME_TYPE_MAP[value.mimeType] ?? 0), // Type indicator
-						u32(0), // Locale indicator
-						Array.from(value.data), // Kinda slow, hopefully temp
-					]),
-				]));
+				pairs.push({ key, value: box('data', [
+					u32(DATA_BOX_MIME_TYPE_MAP[value.mimeType] ?? 0), // Type indicator
+					u32(0), // Locale indicator
+					Array.from(value.data), // Kinda slow, hopefully temp
+				]) });
 			}
 		}
 	}
 
-	if (boxes.length === 0) {
-		return null;
-	}
-
-	const metaChildren: Box[] = [hdlr(false, 'mdta', '', 'appl')];
-
-	// Generate keys box (if there are custom keys)
-	if (customKeys.length > 0) {
-		const keysData: number[] = [
-			...u32(0), // Version + flags
-			...u32(customKeys.length), // Entry count
-		];
-
-		// Add entry for each key
-		for (const key of customKeys) {
-			const keyBytes = textEncoder.encode(key);
-			const keySize = keyBytes.length + 8; // 4 bytes size + 4 bytes namespace + key
-			keysData.push(
-				...u32(keySize), // Key size
-				...u32(0x6d647461), // 'mdta' namespace
-				...Array.from(keyBytes), // Key name
-			);
-		}
-
-		metaChildren.push(box('keys', keysData));
-	}
-
-	// Add ilst box
-	metaChildren.push(box('ilst', undefined, boxes));
-
-	return box('meta', undefined, metaChildren);
+	return pairs;
 };
 
 /** Metadata Box (mdir format) */
 const metaMdir = (tags: MetadataTags) => {
-	const boxes = generateStandardMetadataBoxes(tags);
+	const pairs = generateMetadataPairs(tags, false);
 
-	if (tags.raw) {
-		for (const key in tags.raw) {
-			const value = tags.raw[key];
-			if (value == null || key.length !== 4 || boxes.some(x => x.type === key)) {
-				continue;
-			}
-
-			if (typeof value === 'string') {
-				boxes.push(metadataTagStringBoxLong(key, value));
-			} else if (value instanceof Uint8Array) {
-				boxes.push(box(key, undefined, [
-					box('data', [
-						u32(0), // Type indicator
-						u32(0), // Locale indicator
-						Array.from(value),
-					]),
-				]));
-			} else if (value instanceof RichImageData) {
-				boxes.push(box(key, undefined, [
-					box('data', [
-						u32(DATA_BOX_MIME_TYPE_MAP[value.mimeType] ?? 0), // Type indicator
-						u32(0), // Locale indicator
-						Array.from(value.data), // Kinda slow, hopefully temp
-					]),
-				]));
-			}
-		}
-	}
-
-	if (boxes.length === 0) {
+	if (pairs.length === 0) {
 		return null;
 	}
 
-	const metaChildren: Box[] = [
+	// fullBox format
+	return fullBox('meta', 0, 0, undefined, [
 		hdlr(false, 'mdir', '', 'appl'), // mdir handler
-		box('ilst', undefined, boxes), // Item list without keys box
-	];
-
-	return fullBox('meta', 0, 0, undefined, metaChildren); // fullBox format
+		box('ilst', undefined, pairs.map(pair => box(pair.key, undefined, [pair.value]))), // Item list without keys box
+	]);
 };
 
-/** Metadata Box (selects format based on muxer options) */
-const meta = (tags: MetadataTags, muxer: IsobmffMuxer) => {
-	const metadataFormat = muxer.getMetadataFormat();
+/** Metadata Box (mdta format with keys box) */
+const metaMdta = (tags: MetadataTags) => {
+	const pairs = generateMetadataPairs(tags, true);
 
-	if (metadataFormat === 'mdta') {
-		return metaMdta(tags);
-	} else {
-		return metaMdir(tags);
+	if (pairs.length === 0) {
+		return null;
 	}
+
+	// box without version and flags
+	return box('meta', undefined, [
+		hdlr(false, 'mdta', ''), // mdta handler
+		fullBox('keys', 0, 0, [
+			u32(pairs.length),
+		], pairs.map(pair => box('mdta', [ // Hacky since these aren't boxes technically, but if not box why box-shaped?
+			...textEncoder.encode(pair.key),
+		]))),
+		box('ilst', undefined, pairs.map((pair, i) => {
+			const boxName = String.fromCharCode(...u32(i + 1));
+			return box(boxName, undefined, [pair.value]);
+		})),
+	]);
 };
 
-const metadataTagStringBoxLong = (name: string, value: string) => {
-	return box(name, undefined, [
-		box('data', [
-			u32(1), // Type indicator (UTF-8)
-			u32(0), // Locale indicator
-			...textEncoder.encode(value),
-		]),
+const dataStringBoxLong = (value: string) => {
+	return box('data', [
+		u32(1), // Type indicator (UTF-8)
+		u32(0), // Locale indicator
+		...textEncoder.encode(value),
 	]);
 };
 
