@@ -46,7 +46,7 @@ import {
 	Rotation,
 } from './misc';
 import { Output, TrackType } from './output';
-import { Mp4OutputFormat, IsobmffOutputFormat } from './output-format';
+import { Mp4OutputFormat } from './output-format';
 import { AudioSample, clampCropRectangle, validateCropRectangle, VideoSample } from './sample';
 import { MetadataTags, validateMetadataTags } from './tags';
 import { NullTarget } from './target';
@@ -89,20 +89,13 @@ export type ConversionOptions = {
 	};
 
 	/**
-	 * An object or a callback that returns or resolves to an object containing the descriptive metadata tags that
-	 * should be written to the output file. If a function is passed, it will be passed the tags of the input file as
-	 * its first argument, allowing you to modify, augment or extend them.
+	 * A callback that returns or resolves to the descriptive metadata tags that should be written to the output file.
+	 * As input, this function will be passed the tags of the input file, allowing you to modify, augment or extend
+	 * them.
 	 *
 	 * If no function is set, the input's metadata tags will be copied to the output.
 	 */
-	tags?: MetadataTags | ((inputTags: MetadataTags) => MaybePromise<MetadataTags>);
-
-	/**
-	 * The metadata format to use for ISOBMFF-based output formats (MP4, MOV).
-	 * - `'mdir'`: Use the mdir handler format (default for compatibility)
-	 * - `'mdta'`: Use the mdta handler format with keys box support
-	 */
-	metadataFormat?: 'mdir' | 'mdta';
+	tags?: (inputTags: MetadataTags) => MaybePromise<MetadataTags>;
 };
 
 /**
@@ -402,12 +395,8 @@ export class Conversion {
 		if (!(options.output instanceof Output)) {
 			throw new TypeError('options.output must be an Output.');
 		}
-		if (
-			options.output._tracks.length > 0
-			|| Object.keys(options.output._metadataTags).length > 0
-			|| options.output.state !== 'pending'
-		) {
-			throw new TypeError('options.output must be fresh: no tracks or metadata tags added and not started.');
+		if (options.output._tracks.length > 0 || options.output.state !== 'pending') {
+			throw new TypeError('options.output must be fresh: no tracks added and not started.');
 		}
 
 		if (typeof options.video !== 'function') {
@@ -437,15 +426,8 @@ export class Conversion {
 			&& options.trim.start >= options.trim.end) {
 			throw new TypeError('options.trim.start must be less than options.trim.end.');
 		}
-		if (
-			options.tags !== undefined
-			&& (typeof options.tags !== 'object' || !options.tags)
-			&& typeof options.tags !== 'function'
-		) {
-			throw new TypeError('options.tags, when provided, must be an object or a function.');
-		}
-		if (typeof options.tags === 'object') {
-			validateMetadataTags(options.tags);
+		if (options.tags !== undefined && typeof options.tags !== 'function') {
+			throw new TypeError('options.tags, when provided, must be a function.');
 		}
 
 		this._options = options;
@@ -533,18 +515,11 @@ export class Conversion {
 
 		// Now, let's deal with metadata tags
 
-		// Set metadata format for ISOBMFF-based output formats if specified
-		if (this._options.metadataFormat && this.output.format instanceof IsobmffOutputFormat) {
-			this.output.format._options.metadataFormat = this._options.metadataFormat;
-		}
-
 		const inputTags = await this.input.getMetadataTags();
 		let outputTags: MetadataTags;
 
 		if (this._options.tags) {
-			const result = typeof this._options.tags === 'function'
-				? await this._options.tags(inputTags)
-				: this._options.tags;
+			const result = await this._options.tags(inputTags);
 			validateMetadataTags(result);
 
 			outputTags = result;

@@ -330,17 +330,17 @@ export const ftyp = (details: {
 /** Movie Sample Data Box. Contains the actual frames/samples of the media. */
 export const mdat = (reserveLargeSize: boolean): Box => ({ type: 'mdat', largeSize: reserveLargeSize });
 
-/** Free Space Box: A box that designates unused space in the movie data file. */
-export const free = (size: number): Box => ({ type: 'free', size });
-
 /**
  * Movie Box: Used to specify the information that defines a movie - that is, the information that allows
  * an application to interpret the sample data that is stored elsewhere.
  */
-export const moov = (muxer: IsobmffMuxer) => box('moov', undefined, [
+export const moov = (
+	muxer: IsobmffMuxer,
+	fragmented = false,
+) => box('moov', undefined, [
 	mvhd(muxer.creationTime, muxer.trackDatas),
 	...muxer.trackDatas.map(x => trak(x, muxer.creationTime)),
-	muxer.isFragmented ? mvex(muxer.trackDatas) : null,
+	fragmented ? mvex(muxer.trackDatas) : null,
 	udta(muxer),
 ]);
 
@@ -1388,7 +1388,7 @@ const generateStandardMetadataBoxes = (tags: MetadataTags): Box[] => {
 	const boxes: Box[] = [];
 
 	// https://exiftool.org/TagNames/QuickTime.html (QuickTime ItemList Tags)
-	// Standard metadata fields processing
+	// This is the metadata format used for MP4 files
 
 	for (const { key, value } of keyValueIterator(tags)) {
 		switch (key) {
@@ -1568,11 +1568,10 @@ const metaMdta = (tags: MetadataTags) => {
 	return box('meta', undefined, metaChildren);
 };
 
-/** Metadata Box (legacy mdir format) */
+/** Metadata Box (mdir format) */
 const metaMdir = (tags: MetadataTags) => {
 	const boxes = generateStandardMetadataBoxes(tags);
 
-	// Handle raw tags (legacy format - direct 4-char keys)
 	if (tags.raw) {
 		for (const key in tags.raw) {
 			const value = tags.raw[key];
@@ -1607,11 +1606,11 @@ const metaMdir = (tags: MetadataTags) => {
 	}
 
 	const metaChildren: Box[] = [
-		hdlr(false, 'mdir', '', 'appl'), // Legacy mdir handler
+		hdlr(false, 'mdir', '', 'appl'), // mdir handler
 		box('ilst', undefined, boxes), // Item list without keys box
 	];
 
-	return fullBox('meta', 0, 0, undefined, metaChildren); // Legacy fullBox format
+	return fullBox('meta', 0, 0, undefined, metaChildren); // fullBox format
 };
 
 /** Metadata Box (selects format based on muxer options) */
