@@ -197,7 +197,7 @@ export class Output<
 		this._muxer = options.format._createMuxer(this);
 	}
 
-	/** Adds a video track to the output with the given source. Must be called before output is started. */
+	/** Adds a video track to the output with the given source. Can only be called before the output is started. */
 	addVideoTrack(source: VideoSource, metadata: VideoTrackMetadata = {}) {
 		if (!(source instanceof VideoSource)) {
 			throw new TypeError('source must be a VideoSource.');
@@ -221,7 +221,7 @@ export class Output<
 		this._addTrack('video', source, metadata);
 	}
 
-	/** Adds an audio track to the output with the given source. Must be called before output is started. */
+	/** Adds an audio track to the output with the given source. Can only be called before the output is started. */
 	addAudioTrack(source: AudioSource, metadata: AudioTrackMetadata = {}) {
 		if (!(source instanceof AudioSource)) {
 			throw new TypeError('source must be an AudioSource.');
@@ -231,7 +231,7 @@ export class Output<
 		this._addTrack('audio', source, metadata);
 	}
 
-	/** Adds a subtitle track to the output with the given source. Must be called before output is started. */
+	/** Adds a subtitle track to the output with the given source. Can only be called before the output is started. */
 	addSubtitleTrack(source: SubtitleSource, metadata: SubtitleTrackMetadata = {}) {
 		if (!(source instanceof SubtitleSource)) {
 			throw new TypeError('source must be a SubtitleSource.');
@@ -245,7 +245,7 @@ export class Output<
 	 * Sets descriptive metadata tags about the media file, such as title, author, date, or cover art. When called
 	 * multiple times, only the metadata from the last call will be used.
 	 *
-	 * Must be called before output is started.
+	 * Can only be called before the output is started.
 	 */
 	setMetadataTags(tags: MetadataTags) {
 		validateMetadataTags(tags);

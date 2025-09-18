@@ -54,7 +54,8 @@
 				source
 			}),
 			output,
-			audio: {
+			audio: (_, n) => ({
+				discard: n > 1,
 				//codec: 'pcm-s16',
 				//sampleRate: 16000,
 				//numberOfChannels: 1,
@@ -65,7 +66,7 @@
 				//sampleRate: 4000
 				//discard: true
 				//forceTranscode: true,
-			},
+			}),
 			/*
 			video: {
 				discard: true,
@@ -91,6 +92,7 @@
 			},
 			*/
 			video: () => ({
+				discard: true,
 				//discard: true,
 				//crop: {
 				//	left: 0,
@@ -124,7 +126,7 @@
 				//width: 200,
 				//height: 100,
 			}),
-			tags: {
+			tags: {} ?? {
 				title: 'Bigggy',
 				artist: 'Buck Bunny',
 				images: [{

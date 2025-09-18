@@ -15,6 +15,7 @@ import {
 	Bitstream,
 	bytesToBase64,
 	keyValueIterator,
+	getUint24,
 	last,
 	readExpGolomb,
 	readSignedExpGolomb,
@@ -122,7 +123,7 @@ const findNalUnitsInLengthPrefixed = (packetData: Uint8Array, lengthSize: 1 | 2 
 		} else if (lengthSize === 2) {
 			nalUnitLength = dataView.getUint16(offset, false);
 		} else if (lengthSize === 3) {
-			nalUnitLength = (dataView.getUint16(offset, false) << 8) + dataView.getUint8(offset + 2);
+			nalUnitLength = getUint24(dataView, offset, false);
 		} else if (lengthSize === 4) {
 			nalUnitLength = dataView.getUint32(offset, false);
 		} else {
