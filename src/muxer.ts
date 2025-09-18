@@ -80,9 +80,9 @@ export abstract class Muxer {
 
 		if (timestampInSeconds < timestampInfo.maxTimestampBeforeLastKeyFrame) {
 			throw new Error(
-				`Timestamps cannot be smaller than the highest timestamp of the previous run (a run begins with a`
-				+ ` key frame and ends right before the next key frame). Got ${timestampInSeconds}s, but highest`
-				+ ` timestamp is ${timestampInfo.maxTimestampBeforeLastKeyFrame}s.`,
+				`Timestamps cannot be smaller than the highest timestamp of the previous GOP (a GOP begins with a key`
+				+ ` frame and ends right before the next key frame). Got ${timestampInSeconds}s, but highest timestamp`
+				+ ` is ${timestampInfo.maxTimestampBeforeLastKeyFrame}s.`,
 			);
 		}
 

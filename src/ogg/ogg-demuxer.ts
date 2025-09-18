@@ -192,7 +192,7 @@ export class OggDemuxer extends Demuxer {
 			1 + lacingValues.length
 			+ firstPacket.data.length + secondPacket.data.length + thirdPacket.data.length,
 		);
-		description[0] = lacingValues.length;
+		description[0] = 2; // Num entries in the segment table
 		description.set(
 			lacingValues, 1,
 		);

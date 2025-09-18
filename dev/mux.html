@@ -46,6 +46,7 @@
 	format = new Mediabunny.WavOutputFormat();
 	format = new Mediabunny.MkvOutputFormat();
 	format = new Mediabunny.MovOutputFormat();
+	format = new Mediabunny.Mp4OutputFormat({ fastStart: 'reserve' });
 	let target = new Mediabunny.BufferTarget();
 
 	/*
@@ -127,8 +128,8 @@
 	});
 	let subtitleSource = new Mediabunny.TextSubtitleSource('webvtt');
 
-	output.addVideoTrack(videoSource, { languageCode: 'eng', name: 'Mononoké' });
-	output.addAudioTrack(audioSource, { name: 'Yooo' });
+	output.addVideoTrack(videoSource, { languageCode: 'eng', name: 'Mononoké', maximumPacketCount: 100 });
+	output.addAudioTrack(audioSource, { name: 'Yooo', maximumPacketCount: 1000 });
 	//output.addSubtitleTrack(subtitleSource);
 
 	output.start();
