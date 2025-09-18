@@ -432,15 +432,13 @@ export class FlacDemuxer extends Demuxer {
 
 		const num = readCodedNumber(slice);
 		const blockSize = readBlockSize(slice, blockSizeOrUncommon);
-		if (blockSize === null) {
-			// This cannot be a valid FLAC frame, the syncword was just coincidental
-			return null;
-		}
+
 		const sampleRate = readSampleRate(slice, sampleRateOrUncommon);
 		if (sampleRate === null) {
 			// This cannot be a valid FLAC frame, the syncword was just coincidental
 			return null;
 		}
+
 		const size = slice.filePos - startOffset;
 		const crc = readU8(slice);
 

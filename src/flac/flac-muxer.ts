@@ -248,6 +248,10 @@ export class FlacMuxer extends Muxer {
 			const bytes = readBytes(slice, 2);
 			const bitstream = new Bitstream(bytes);
 			const blockSizeOrUncommon = getBlockSizeOrUncommon(bitstream.readBits(4));
+			if (blockSizeOrUncommon === null) {
+				throw new Error('Invalid FLAC frame: Invalid block size.');
+			}
+
 			readCodedNumber(slice); // num
 			const blockSize = readBlockSize(slice, blockSizeOrUncommon);
 

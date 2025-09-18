@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { Bitstream } from '../misc';
+import { assert, assertNever, Bitstream } from '../misc';
 import { FileSlice, readBytes, readU16Be, readU8 } from '../reader';
 
 type BlockSizeOrUncommon = number | 'uncommon-u16' | 'uncommon-u8';
@@ -106,17 +106,14 @@ export const readBlockSize = (
 ) => {
 	if (blockSizeBits === 'uncommon-u16') {
 		return readU16Be(slice) + 1;
-	}
-
-	if (blockSizeBits === 'uncommon-u8') {
+	} else if (blockSizeBits === 'uncommon-u8') {
 		return readU8(slice) + 1;
-	}
-
-	if (typeof blockSizeBits === 'number') {
+	} else if (typeof blockSizeBits === 'number') {
 		return blockSizeBits;
+	} else {
+		assertNever(blockSizeBits);
+		assert(false);
 	}
-
-	return null;
 };
 
 export const readSampleRate = (
