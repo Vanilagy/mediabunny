@@ -138,7 +138,7 @@ export const intoTimescale = (timeInSeconds: number, timescale: number, round = 
 };
 
 export class IsobmffMuxer extends Muxer {
-	private format: IsobmffOutputFormat;
+	format: IsobmffOutputFormat;
 	private writer: Writer;
 	private boxWriter: IsobmffBoxWriter;
 	private fastStart: NonNullable<IsobmffOutputFormatOptions['fastStart']>;

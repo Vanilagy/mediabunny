@@ -28,6 +28,7 @@ import { WaveDemuxer } from './wave/wave-demuxer';
 import { MAX_FRAME_HEADER_SIZE, MIN_FRAME_HEADER_SIZE, readFrameHeader } from './adts/adts-reader';
 import { AdtsDemuxer } from './adts/adts-demuxer';
 import { readAscii } from './reader';
+import { FlacDemuxer } from './flac/flac-demuxer';
 
 /**
  * Base class representing an input media file format.
@@ -394,6 +395,37 @@ export class OggInputFormat extends InputFormat {
 		return 'application/ogg';
 	}
 }
+/**
+ * FLAC file format.
+ *
+ * Do not instantiate this class; use the {@link FLAC} singleton instead.
+ *
+ * @group Input formats
+ * @public
+ */
+export class FlacInputFormat extends InputFormat {
+	/** @internal */
+	async _canReadInput(input: Input) {
+		let slice = input._reader.requestSlice(0, 4);
+		if (slice instanceof Promise) slice = await slice;
+		if (!slice) return false;
+
+		return readAscii(slice, 4) === 'fLaC';
+	}
+
+	get name() {
+		return 'FLAC';
+	}
+
+	get mimeType() {
+		return 'audio/flac';
+	}
+
+	/** @internal */
+	_createDemuxer(input: Input): Demuxer {
+		return new FlacDemuxer(input);
+	}
+}
 
 /**
  * ADTS file format.
@@ -493,9 +525,16 @@ export const OGG = new OggInputFormat();
 export const ADTS = new AdtsInputFormat();
 
 /**
+ * FLAC input format singleton.
+ * @group Input formats
+ * @public
+ */
+export const FLAC = new FlacInputFormat();
+
+/**
  * List of all input format singletons. If you don't need to support all input formats, you should specify the
  * formats individually for better tree shaking.
  * @group Input formats
  * @public
  */
-export const ALL_FORMATS: InputFormat[] = [MP4, QTFF, MATROSKA, WEBM, WAVE, OGG, MP3, ADTS];
+export const ALL_FORMATS: InputFormat[] = [MP4, QTFF, MATROSKA, WEBM, WAVE, OGG, FLAC, MP3, ADTS];

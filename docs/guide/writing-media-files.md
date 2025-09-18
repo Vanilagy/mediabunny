@@ -123,6 +123,8 @@ output.setMetadataTags({
 });
 ```
 
+If you add metadata tags, you must call this method *before* starting the `Output`.
+
 For more info on which tags you can write, see [`MetadataTags`](../api/MetadataTags).
 
 ## Starting an output

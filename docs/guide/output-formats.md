@@ -64,6 +64,7 @@ The following options are available:
 type IsobmffOutputFormatOptions = {
 	fastStart?: false | 'in-memory' | 'reserve' | 'fragmented';
 	minimumFragmentDuration?: number;
+	metadataFormat?: 'mdir' | 'mdta' | 'udta' | 'auto';
 
 	onFtyp?: (data: Uint8Array, position: number) => unknown;
 	onMoov?: (data: Uint8Array, position: number) => unknown;
@@ -94,6 +95,12 @@ type IsobmffOutputFormatOptions = {
 		The default option; it behaves like `'in-memory'` when using [`BufferTarget`](./writing-media-files#buffertarget) and like `false` otherwise.
 - `minimumFragmentDuration`\
 	Only relevant when `fastStart` is `'fragmented'`. Sets the minimum duration in seconds a fragment must have to be finalized and written to the file. Defaults to 1 second.
+- `metadataFormat`\
+	The metadata format to use for writing metadata tags.
+	- `'auto'` (default): Behaves like `'mdir'` for MP4 and like `'udta'` for QuickTime, matching FFmpeg's default behavior.
+	- `'mdir'`: Write tags into `moov/udta/meta` using the 'mdir' handler format.
+	- `'mdta'`: Write tags into `moov/udta/meta` using the 'mdta' handler format, equivalent to FFmpeg's `use_metadata_tags` flag. This allows for custom keys of arbitrary length.
+	- `'udta'`: Write tags directly into `moov/udta`.
 - `onFtyp`\
 	Will be called once the ftyp (File Type) box of the output file has been written.
 - `onMoov`\
@@ -268,3 +275,24 @@ type AdtsOutputFormatOptions = {
 ```
 - `onFrame`\
 	Will be called for each ADTS frame that is written.
+
+## FLAC
+
+This output format creates FLAC (.flac) files.
+```ts
+import { Output, FlacOutputFormat } from 'mediabunny';	
+
+const output = new Output({
+	format: new FlacOutputFormat(options),
+	// ...
+});
+```
+
+The following options are available:
+```ts
+type FlacOutputFormatOptions = {
+	onFrame?: (data: Uint8Array, position: number) => unknown;
+};
+```
+- `onFrame`\
+	Will be called for each FLAC frame that is written.

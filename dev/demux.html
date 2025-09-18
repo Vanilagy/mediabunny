@@ -14,6 +14,10 @@
 			source: new Mediabunny.BlobSource(file),
 		});
 
+		console.log(await input.getMetadataTags());
+
+		/*
+
 		const videoTrack = await input.getPrimaryVideoTrack();
 		const sink = new Mediabunny.VideoSampleSink(videoTrack);
 		const sink2 = new Mediabunny.EncodedPacketSink(videoTrack);
@@ -37,6 +41,7 @@
 				break;
 			}
 		}
+		*/
 
 		/*
 		const sink = new Mediabunny.EncodedPacketSink(videoTrack);

@@ -24,6 +24,7 @@ import {
 	AvcDecoderConfigurationRecord,
 	extractAv1CodecInfoFromPacket,
 	extractVp9CodecInfoFromPacket,
+	FlacBlockType,
 	HevcDecoderConfigurationRecord,
 	Vp9CodecInfo,
 } from '../codec-data';
@@ -1451,7 +1452,7 @@ export class IsobmffDemuxer extends Demuxer {
 					const type = flagAndType & BLOCK_TYPE_MASK;
 
 					// It's a STREAMINFO block; let's extract the actual sample rate and channel count
-					if (type === 0) {
+					if (type === FlacBlockType.STREAMINFO) {
 						slice.skip(10);
 
 						// Extract sample rate and channel count
@@ -2322,7 +2323,7 @@ export class IsobmffDemuxer extends Demuxer {
 						}; break;
 
 						case 'trkn': {
-							if (data instanceof Uint8Array) {
+							if (data instanceof Uint8Array && data.length >= 6) {
 								const view = toDataView(data);
 
 								const trackNumber = view.getUint16(2, false);
@@ -2339,7 +2340,7 @@ export class IsobmffDemuxer extends Demuxer {
 
 						case 'disc':
 						case 'disk': {
-							if (data instanceof Uint8Array) {
+							if (data instanceof Uint8Array && data.length >= 6) {
 								const view = toDataView(data);
 
 								const discNumber = view.getUint16(2, false);

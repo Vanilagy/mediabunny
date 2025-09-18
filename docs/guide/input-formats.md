@@ -30,6 +30,8 @@ import {
 	MP3, // MP3 input format singleton
 	WAVE, // WAVE input format singleton
 	OGG, // Ogg input format singleton
+	ADTS, // ADTS input format singleton
+	FLAC, // FLAC input format singleton
 } from 'mediabunny';
 ```
 
@@ -76,6 +78,8 @@ In addition to singletons, input format classes are structured hierarchically:
 	- `Mp3InputFormat`
 	- `WaveInputFormat`
 	- `OggInputFormat`
+	- `AdtsInputFormat`
+	- `FlacInputFormat`
 
 This means you can also perform input format checks using `instanceof` instead of `===` comparisons. For example:
 ```ts

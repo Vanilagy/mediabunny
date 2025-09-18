@@ -18,6 +18,7 @@ import {
 	VIDEO_CODECS,
 	VideoCodec,
 } from './codec';
+import { FlacMuxer } from './flac/flac-muxer';
 import { IsobmffMuxer } from './isobmff/isobmff-muxer';
 import { MatroskaMuxer } from './matroska/matroska-muxer';
 import { MediaSource } from './media-source';
@@ -140,6 +141,18 @@ export type IsobmffOutputFormatOptions = {
 	minimumFragmentDuration?: number;
 
 	/**
+	 * The metadata format to use for writing metadata tags.
+	 *
+	 * - `'auto'` (default): Behaves like `'mdir'` for MP4 and like `'udta'` for QuickTime, matching FFmpeg's default
+	 * behavior.
+	 * - `'mdir'`: Write tags into `moov/udta/meta` using the 'mdir' handler format.
+	 * - `'mdta'`: Write tags into `moov/udta/meta` using the 'mdta' handler format, equivalent to FFmpeg's
+	 * `use_metadata_tags` flag. This allows for custom keys of arbitrary length.
+	 * - `'udta'`: Write tags directly into `moov/udta`.
+	 */
+	metadataFormat?: 'auto' | 'mdir' | 'mdta' | 'udta';
+
+	/**
 	 * Will be called once the ftyp (File Type) box of the output file has been written.
 	 *
 	 * @param data - The raw bytes.
@@ -214,6 +227,14 @@ export abstract class IsobmffOutputFormat extends OutputFormat {
 		}
 		if (options.onMoof !== undefined && typeof options.onMoof !== 'function') {
 			throw new TypeError('options.onMoof, when provided, must be a function.');
+		}
+		if (
+			options.metadataFormat !== undefined
+			&& !['mdir', 'mdta', 'udta', 'auto'].includes(options.metadataFormat)
+		) {
+			throw new TypeError(
+				'options.metadataFormat, when provided, must be either \'auto\', \'mdir\', \'mdta\', or \'udta\'.',
+			);
 		}
 
 		super();
@@ -821,6 +842,77 @@ export class AdtsOutputFormat extends OutputFormat {
 
 	getSupportedCodecs(): MediaCodec[] {
 		return ['aac'];
+	}
+
+	get supportsVideoRotationMetadata() {
+		return false;
+	}
+}
+
+/**
+ * FLAC-specific output options.
+ * @group Output formats
+ * @public
+ */
+export type FlacOutputFormatOptions = {
+	/**
+	 * Will be called for each FLAC frame that is written.
+	 *
+	 * @param data - The raw bytes.
+	 * @param position - The byte offset of the data in the file.
+	 */
+	onFrame?: (data: Uint8Array, position: number) => unknown;
+};
+
+/**
+ * FLAC file format.
+ * @group Output formats
+ * @public
+ */
+export class FlacOutputFormat extends OutputFormat {
+	/** @internal */
+	_options: FlacOutputFormatOptions;
+
+	/** Creates a new {@link FlacOutputFormat} configured with the specified `options`. */
+	constructor(options: FlacOutputFormatOptions = {}) {
+		if (!options || typeof options !== 'object') {
+			throw new TypeError('options must be an object.');
+		}
+
+		super();
+
+		this._options = options;
+	}
+
+	/** @internal */
+	_createMuxer(output: Output) {
+		return new FlacMuxer(output, this);
+	}
+
+	/** @internal */
+	get _name() {
+		return 'FLAC';
+	}
+
+	getSupportedTrackCounts(): TrackCountLimits {
+		return {
+			video: { min: 0, max: 0 },
+			audio: { min: 1, max: 1 },
+			subtitle: { min: 0, max: 0 },
+			total: { min: 1, max: 1 },
+		};
+	}
+
+	get fileExtension() {
+		return '.flac';
+	}
+
+	get mimeType() {
+		return 'audio/flac';
+	}
+
+	getSupportedCodecs(): MediaCodec[] {
+		return ['flac'];
 	}
 
 	get supportsVideoRotationMetadata() {

@@ -24,7 +24,9 @@
 			chunked: true,
 			chunkSize: 2**20
 		});
-		const outputFormat = new Mediabunny.Mp4OutputFormat({});
+		const outputFormat = new Mediabunny.Mp4OutputFormat({
+			metadataFormat: 'mdta',
+		});
 
 		const button = document.createElement('button');
 		button.textContent = 'Cancel';
@@ -92,7 +94,7 @@
 			},
 			*/
 			video: () => ({
-				discard: true,
+				//discard: true,
 				//discard: true,
 				//crop: {
 				//	left: 0,
@@ -126,7 +128,7 @@
 				//width: 200,
 				//height: 100,
 			}),
-			tags: {} ?? {
+			tags: {
 				title: 'Bigggy',
 				artist: 'Buck Bunny',
 				images: [{

@@ -987,6 +987,7 @@ export class MatroskaDemuxer extends Demuxer {
 
 				if (this.currentTrack.decodingInstructions.some((instruction) => {
 					return instruction.data?.type !== 'decompress'
+						|| instruction.scope !== ContentEncodingScope.Block
 						|| instruction.data.algorithm !== ContentCompAlgo.HeaderStripping;
 				})) {
 					console.warn(`Track #${this.currentTrack.id} has an unsupported content encoding; dropping.`);
