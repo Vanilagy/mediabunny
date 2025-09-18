@@ -340,11 +340,12 @@ function createVideoEncoderWithOutputIterator() {
 	});
 };
 
-interface IVideoEncoder extends Omit<VideoEncoder,
-	'ondequeue' | 'removeEventListener' | 'dispatchEvent'
-> {};
+export class AlphaVideoEncoderWrapper extends EventTarget implements VideoEncoder {
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	_ondequeue: ((this: VideoEncoder, ev: Event) => any) | null = null;
+	encodeQueueSize = 0;
+	_output: VideoEncoderInit['output'];
 
-export class AlphaVideoEncoderWrapper implements IVideoEncoder {
 	main = createVideoEncoderWithOutputIterator();
 	alpha = createVideoEncoderWithOutputIterator();
 	_started = false;
@@ -352,18 +353,15 @@ export class AlphaVideoEncoderWrapper implements IVideoEncoder {
 	_pendingEncode = 0;
 	_encodePromiseWithResolvers = promiseWithResolvers<void>();
 
-	static warnForNullFormat = true;
-
 	constructor(private init: VideoEncoderInit) {
+		super();
 		this._encodePromiseWithResolvers.resolve(); // First encode, no previous encode to wait for
+		this._output = (...args) => {
+			this.init.output(...args);
+			this.encodeQueueSize--;
+			this.dispatchEvent(new Event('dequeue'));
+		};
 	}
-
-	get encodeQueueSize() {
-		return Math.max(
-			this.main.encodeQueueSize + this._pendingEncode,
-			this.alpha.encodeQueueSize + this._pendingEncode,
-		);
-	};
 
 	get state() {
 		// Alpha can be 'closed', which fallback to opaque.
@@ -387,7 +385,7 @@ export class AlphaVideoEncoderWrapper implements IVideoEncoder {
 	encode(frame: VideoFrame, options: VideoEncoderEncodeOptions) {
 		const frameClone = frame.clone(); // Due to async, the original input might be closed
 
-		this._pendingEncode++;
+		this.encodeQueueSize++;
 		(async () => {
 			const capturedPromise = this._encodePromiseWithResolvers.promise;
 			const currentEncodePromiseWithResolvers = promiseWithResolvers<void>();
@@ -417,7 +415,6 @@ export class AlphaVideoEncoderWrapper implements IVideoEncoder {
 			}
 			this.main.encode(main, options);
 			main.close();
-			this._pendingEncode--;
 			currentEncodePromiseWithResolvers.resolve();
 			this.maybeStartIterators().catch(this.init.error);
 		})().catch(this.init.error);
@@ -439,16 +436,17 @@ export class AlphaVideoEncoderWrapper implements IVideoEncoder {
 		this.alpha.reset();
 	}
 
-	addEventListener(...args: Parameters<VideoEncoder['addEventListener']>) {
-		if (args[0] === 'dequeue') {
-			const encoderWithLargerQueue = this.main.encodeQueueSize >= this.alpha.encodeQueueSize
-				? this.main
-				: this.alpha;
+	set ondequeue(listener: typeof this._ondequeue) {
+		if (typeof this._ondequeue !== 'function') {
+			if (this._ondequeue) this.removeEventListener('dequeue', this._ondequeue);
+			this._ondequeue = null;
 
-			assert(encoderWithLargerQueue.encodeQueueSize > 0 || this._pendingEncode > 0);
-			encoderWithLargerQueue.addEventListener(...args);
-		} else {
-			throw new Error('addEventListener is only implemented for \'dequeue\'');
+			return;
+		}
+
+		if (typeof this._ondequeue === 'function') {
+			this.addEventListener('dequeue', this._ondequeue);
+			this._ondequeue = listener;
 		}
 	}
 
@@ -505,7 +503,7 @@ export class AlphaVideoEncoderWrapper implements IVideoEncoder {
 					) {
 						const alphaSideData = new ArrayBuffer(alphaResult.value[0].byteLength);
 						alphaResult.value[0].copyTo(alphaSideData);
-						this.init.output(mainResult.value[0], {
+						this._output(mainResult.value[0], {
 							...mainResult.value[1],
 							alphaSideData,
 						} as EncodedVideoChunkMetadata);
@@ -518,7 +516,7 @@ export class AlphaVideoEncoderWrapper implements IVideoEncoder {
 				}
 			}
 
-			this.init.output(...mainResult.value);
+			this._output(...mainResult.value);
 			mainResult = await this.main.iterator.next();
 		}
 
@@ -530,7 +528,7 @@ export class AlphaVideoEncoderWrapper implements IVideoEncoder {
 class VideoEncoderWrapper {
 	private ensureEncoderPromise: Promise<void> | null = null;
 	private encoderInitialized = false;
-	private encoder: IVideoEncoder | null = null;
+	private encoder: VideoEncoder | null = null;
 	private muxer: Muxer | null = null;
 	private lastMultipleOfKeyFrameInterval = -1;
 	private codedWidth: number | null = null;

@@ -858,14 +858,17 @@ function createVideoDecoderWithOutputIterator() {
 	});
 };
 
-interface IVideoDecoder extends Omit<VideoDecoder,
-	'ondequeue' | 'addEventListener' | 'removeEventListener' | 'dispatchEvent'
-> {
+interface IVideoDecoder extends VideoDecoder {
 	// Added param to provide `alphaSideData` like `EncodedVideoChunkMetadata.alphaSideData`
 	decode: (chunk: EncodedVideoChunk, meta?: { alphaSideData: Uint8Array }) => void;
 };
 
-export class AlphaVideoDecoderWrapper implements IVideoDecoder {
+export class AlphaVideoDecoderWrapper extends EventTarget implements IVideoDecoder {
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	_ondequeue: ((this: VideoDecoder, ev: Event) => any) | null = null;
+	decodeQueueSize = 0;
+	_output: VideoDecoderInit['output'];
+
 	main = createVideoDecoderWithOutputIterator();
 	alpha = createVideoDecoderWithOutputIterator();
 	_started = false;
@@ -873,15 +876,14 @@ export class AlphaVideoDecoderWrapper implements IVideoDecoder {
 	_outputSentPromiseWithResolvers = promiseWithResolvers<void>();
 
 	constructor(private init: VideoDecoderInit) {
+		super();
 		this._outputSentPromiseWithResolvers.resolve(); // First, no previous output to wait for
+		this._output = (...args) => {
+			this.init.output(...args);
+			this.decodeQueueSize--;
+			this.dispatchEvent(new Event('dequeue'));
+		};
 	}
-
-	get decodeQueueSize() {
-		return Math.max(
-			this.main.decodeQueueSize + this.main.outputQueue.length,
-			this.alpha.decodeQueueSize + this.alpha.outputQueue.length,
-		);
-	};
 
 	get state() {
 		assert(this.main.state === this.alpha.state);
@@ -911,6 +913,7 @@ export class AlphaVideoDecoderWrapper implements IVideoDecoder {
 		chunk: EncodedVideoChunk,
 		meta?: { alphaSideData: Uint8Array },
 	) {
+		this.decodeQueueSize++;
 		if (meta?.alphaSideData && this.alpha.state === 'configured') {
 			if (typeof this._firstAlphaTimestamp === 'undefined') {
 				assert(chunk.type === 'key');
@@ -945,6 +948,20 @@ export class AlphaVideoDecoderWrapper implements IVideoDecoder {
 	reset() {
 		this.main.reset();
 		this.alpha.reset();
+	}
+
+	set ondequeue(listener: typeof this._ondequeue) {
+		if (typeof this._ondequeue !== 'function') {
+			if (this._ondequeue) this.removeEventListener('dequeue', this._ondequeue);
+			this._ondequeue = null;
+
+			return;
+		}
+
+		if (typeof this._ondequeue === 'function') {
+			this.addEventListener('dequeue', this._ondequeue);
+			this._ondequeue = listener;
+		}
 	}
 
 	async maybeStartIterators() {
@@ -992,7 +1009,7 @@ export class AlphaVideoDecoderWrapper implements IVideoDecoder {
 							alphaResultCaptured.value,
 						) || mainResultCaptured.value; // Fallback to main
 						await outputSentPromiseCaptured;
-						this.init.output(combined);
+						this._output(combined);
 						resolveCaptured();
 						if (combined !== mainResultCaptured.value) mainResultCaptured.value.close();
 						alphaResultCaptured.value.close();
@@ -1017,7 +1034,7 @@ export class AlphaVideoDecoderWrapper implements IVideoDecoder {
 
 			// Might potentially need to wait for combineAlpha of previous frame
 			this._outputSentPromiseWithResolvers.promise
-				.then(() => this.init.output(mainResultCaptured.value))
+				.then(() => this._output(mainResultCaptured.value))
 				.catch(() => {});
 			mainResult = await this.main.iterator.next();
 		}
