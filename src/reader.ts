@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { assert, clamp, MaybePromise, toDataView } from './misc';
+import { assert, clamp, getUint24, MaybePromise, toDataView } from './misc';
 import { Source } from './source';
 
 export class Reader {
@@ -157,9 +157,10 @@ export const readU16Be = (slice: FileSlice) => {
 };
 
 export const readU24Be = (slice: FileSlice) => {
-	const high = readU16Be(slice);
-	const low = readU8(slice);
-	return high * 0x100 + low;
+	const value = getUint24(slice.view, slice.bufferPos, false);
+	slice.bufferPos += 3;
+
+	return value;
 };
 
 export const readI16Be = (slice: FileSlice) => {
