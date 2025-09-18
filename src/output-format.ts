@@ -140,6 +140,13 @@ export type IsobmffOutputFormatOptions = {
 	minimumFragmentDuration?: number;
 
 	/**
+	 * The metadata format to use for writing metadata in ISOBMFF-based files.
+	 * - `'mdir'`: Use the mdir handler format (default for compatibility)
+	 * - `'mdta'`: Use the mdta handler format with keys box support
+	 */
+	metadataFormat?: 'mdir' | 'mdta';
+
+	/**
 	 * Will be called once the ftyp (File Type) box of the output file has been written.
 	 *
 	 * @param data - The raw bytes.
@@ -214,6 +221,9 @@ export abstract class IsobmffOutputFormat extends OutputFormat {
 		}
 		if (options.onMoof !== undefined && typeof options.onMoof !== 'function') {
 			throw new TypeError('options.onMoof, when provided, must be a function.');
+		}
+		if (options.metadataFormat !== undefined && !['mdir', 'mdta'].includes(options.metadataFormat)) {
+			throw new TypeError('options.metadataFormat, when provided, must be either "mdir" or "mdta".');
 		}
 
 		super();
