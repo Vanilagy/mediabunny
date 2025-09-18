@@ -142,7 +142,7 @@ type ClusterBlock = {
 	data: Uint8Array;
 	lacing: BlockLacing;
 	decoded: boolean;
-	additions?: Uint8Array;
+	additions: Uint8Array | null;
 };
 
 type CuePoint = {
@@ -844,8 +844,8 @@ export class MatroskaDemuxer extends Demuxer {
 					referencedTimestamps: originalBlock.referencedTimestamps,
 					data: frameData,
 					lacing: BlockLacing.None,
-					additions: originalBlock.additions,
 					decoded: true,
+					additions: originalBlock.additions,
 				});
 			}
 
@@ -1373,6 +1373,7 @@ export class MatroskaDemuxer extends Demuxer {
 					data: blockData,
 					lacing,
 					decoded: !hasDecodingInstructions,
+					additions: null,
 				});
 			}; break;
 
@@ -1415,6 +1416,7 @@ export class MatroskaDemuxer extends Demuxer {
 					data: blockData,
 					lacing,
 					decoded: !hasDecodingInstructions,
+					additions: null,
 				};
 				trackData.blocks.push(this.currentBlock);
 			}; break;
@@ -1440,8 +1442,6 @@ export class MatroskaDemuxer extends Demuxer {
 			case EBMLId.BlockAddID: {
 				if (readSignedInt(slice, size) === 1) {
 					this.readContiguousElements(slice.slice(dataStartPos, size));
-				} else if (this.currentBlock?.additions) {
-					this.currentBlock.additions = undefined;
 				}
 			}; break;
 
