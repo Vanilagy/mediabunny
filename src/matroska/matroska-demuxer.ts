@@ -142,7 +142,7 @@ type ClusterBlock = {
 	data: Uint8Array;
 	lacing: BlockLacing;
 	decoded: boolean;
-  additions?: Uint8Array;
+	additions?: Uint8Array;
 };
 
 type CuePoint = {
@@ -844,7 +844,6 @@ export class MatroskaDemuxer extends Demuxer {
 					referencedTimestamps: originalBlock.referencedTimestamps,
 					data: frameData,
 					lacing: BlockLacing.None,
-          decoded: true,
 					additions: originalBlock.additions,
 					decoded: true,
 				});
