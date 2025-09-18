@@ -541,6 +541,95 @@ export const mergeObjectsDeeply = <T extends object, S extends object>(a: T, b: 
 	return result;
 };
 
+/**
+ * Returns an AbortSignal that aborts when any of the provided signals abort. If no signals are provided,
+ * returns undefined. If a signal is already aborted, the returned signal will be aborted immediately.
+ */
+export const anyAbortSignal = (signals: Array<AbortSignal | null | undefined>): AbortSignal => {
+	const validSignals = signals.filter((v): v is AbortSignal => v !== null && v !== undefined);
+
+	if ("any" in (AbortSignal as any)) {
+		return AbortSignal.any(validSignals);
+	}
+
+	if (validSignals.length === 0) return new AbortSignal()
+
+	// If there's exactly one, return it directly
+	if (validSignals.length === 1) return validSignals[0]!;
+
+	const controller = new AbortController();
+
+	const abortWithReason = (reason: unknown) => {
+		if (!controller.signal.aborted) {
+			const abortFn: unknown = (controller as unknown as { abort: (r?: unknown) => void }).abort;
+			if (typeof abortFn === 'function' && abortFn.length >= 1) {
+				(abortFn as (r?: unknown) => void).call(controller, reason);
+			} else {
+				controller.abort();
+			}
+		}
+	};
+
+	// If any is already aborted, abort immediately with its reason
+	for (const signal of validSignals) {
+		if (signal.aborted) {
+			const abortedReason = (signal as unknown as { reason?: unknown }).reason;
+			abortWithReason(abortedReason);
+			break;
+		}
+	}
+
+	if (!controller.signal.aborted) {
+		for (const signal of validSignals) {
+			signal.addEventListener('abort', () => {
+				const abortedReason = (signal as unknown as { reason?: unknown }).reason;
+				abortWithReason(abortedReason);
+			}, { once: true });
+		}
+	}
+
+	return controller.signal;
+};
+
+/**
+ * Merges RequestInit objects properly, handling AbortSignal combination and Headers objects.
+ * @internal
+ */
+export const mergeRequestInit = (base: RequestInit | undefined, override: Pick<RequestInit, 'headers' | 'signal'>): RequestInit => {
+	const result: RequestInit = { ...base, ...override };
+
+	// Special handling for headers - support both plain objects and Headers instances
+	if (base?.headers || override.headers) {
+		const mergedHeaders = new Headers();
+
+		// Add base headers
+		if (base?.headers) {
+			const baseHeaders = base.headers instanceof Headers ? base.headers : new Headers(base.headers);
+			baseHeaders.forEach((value, key) => {
+				mergedHeaders.set(key, value);
+			});
+		}
+
+		// Add override headers (these take precedence)
+		if (override.headers) {
+			const overrideHeaders = override.headers instanceof Headers ? override.headers : new Headers(override.headers);
+			overrideHeaders.forEach((value, key) => {
+				mergedHeaders.set(key, value);
+			});
+		}
+
+		result.headers = mergedHeaders;
+	}
+
+	// Special handling for AbortSignal - combine them using anyAbortSignal
+	if (base?.signal || override.signal) {
+		const signals = [base?.signal, override.signal].filter((s): s is AbortSignal => s != null);
+		result.signal = anyAbortSignal(signals);
+	}
+
+	return result;
+};
+
 export const retriedFetch = async (
 	url: string | URL,
 	requestInit: RequestInit,
@@ -549,9 +638,22 @@ export const retriedFetch = async (
 	let attempts = 0;
 
 	while (true) {
+		// Check if already aborted before attempting
+		if (requestInit.signal?.aborted) {
+			throw requestInit.signal.reason || new DOMException('The operation was aborted.', 'AbortError');
+		}
+
 		try {
 			return await fetch(url, requestInit);
 		} catch (error) {
+			// Don't retry on abort errors
+			if (error instanceof DOMException && error.name === 'AbortError') {
+				throw error;
+			}
+			if (error instanceof Error && error.name === 'AbortError') {
+				throw error;
+			}
+
 			attempts++;
 			const retryDelayInSeconds = getRetryDelay(attempts);
 
@@ -566,7 +668,24 @@ export const retriedFetch = async (
 			}
 
 			if (retryDelayInSeconds > 0) {
-				await new Promise(resolve => setTimeout(resolve, 1000 * retryDelayInSeconds));
+				// Wait with abort support
+				await new Promise<void>((resolve, reject) => {
+					const timeout = setTimeout(resolve, 1000 * retryDelayInSeconds);
+
+					// Listen for abort during delay
+					if (requestInit.signal) {
+						const abortHandler = () => {
+							clearTimeout(timeout);
+							reject(requestInit.signal!.reason || new DOMException('The operation was aborted.', 'AbortError'));
+						};
+
+						if (requestInit.signal.aborted) {
+							abortHandler();
+						} else {
+							requestInit.signal.addEventListener('abort', abortHandler, { once: true });
+						}
+					}
+				});
 			}
 		}
 	}

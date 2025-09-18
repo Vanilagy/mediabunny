@@ -12,11 +12,12 @@ import {
 	binarySearchLessOrEqual,
 	closedIntervalsOverlap,
 	MaybePromise,
-	mergeObjectsDeeply,
+	mergeRequestInit,
 	promiseWithResolvers,
 	retriedFetch,
 	toDataView,
 	toUint8Array,
+	anyAbortSignal,
 } from './misc';
 import * as nodeAlias from './node';
 
@@ -259,7 +260,7 @@ export type UrlSourceOptions = {
  * @group Input sources
  * @public
  */
-export class UrlSource extends Source {
+export class UrlSource extends Source implements Disposable {
 	/** @internal */
 	_url: URL;
 	/** @internal */
@@ -268,6 +269,10 @@ export class UrlSource extends Source {
 	_options: UrlSourceOptions;
 	/** @internal */
 	_orchestrator: ReadOrchestrator;
+	/** @internal */
+	_globalAbortController = new AbortController();
+	/** @internal */
+	_disposed = false;
 	/** @internal */
 	_existingResponses = new WeakMap<ReadWorker, {
 		response: Response;
@@ -318,6 +323,10 @@ export class UrlSource extends Source {
 
 	/** @internal */
 	async _retrieveSize(): Promise<number> {
+		if (this._disposed) {
+			throw new Error('UrlSource has been disposed.');
+		}
+
 		// Retrieving the resource size for UrlSource is optimized: Almost always (= always), the first bytes we have to
 		// read are the start of the file. This means it's smart to combine size fetching with fetching the start of the
 		// file. We additionally use this step to probe if the server supports range requests, killing three birds with
@@ -326,13 +335,13 @@ export class UrlSource extends Source {
 		const abortController = new AbortController();
 		const response = await retriedFetch(
 			this._url,
-			mergeObjectsDeeply(this._options.requestInit ?? {}, {
+			mergeRequestInit(this._options.requestInit, {
 				headers: {
 					// We could also send a non-range request to request the same bytes (all of them), but doing it like
 					// this is an easy way to check if the server supports range requests in the first place
 					Range: 'bytes=0-',
 				},
-				signal: abortController.signal,
+				signal: anyAbortSignal([this._globalAbortController.signal, abortController.signal]),
 			}),
 			this._getRetryDelay,
 		);
@@ -376,13 +385,16 @@ export class UrlSource extends Source {
 
 	/** @internal */
 	_read(start: number, end: number): MaybePromise<ReadResult> {
+		if (this._disposed) {
+			throw new Error('UrlSource has been disposed.');
+		}
 		return this._orchestrator.read(start, end);
 	}
 
 	/** @internal */
 	private async _runWorker(worker: ReadWorker) {
 		// The outer loop is for resuming a request if it dies mid-response
-		while (!worker.aborted) {
+		while (!worker.aborted && !this._disposed) {
 			const existing = this._existingResponses.get(worker);
 			this._existingResponses.delete(worker);
 
@@ -393,11 +405,11 @@ export class UrlSource extends Source {
 				abortController = new AbortController();
 				response = await retriedFetch(
 					this._url,
-					mergeObjectsDeeply(this._options.requestInit ?? {}, {
+					mergeRequestInit(this._options.requestInit, {
 						headers: {
 							Range: `bytes=${worker.currentPos}-`,
 						},
-						signal: abortController.signal,
+						signal: anyAbortSignal([this._globalAbortController.signal, abortController.signal]),
 					}),
 					this._getRetryDelay,
 				);
@@ -507,6 +519,39 @@ export class UrlSource extends Source {
 	/** @internal */
 	get _supportsRandomAccess() {
 		return true;
+	}
+
+	/**
+	 * Disposes of the UrlSource, aborting all pending requests and cleaning up resources.
+	 * @public
+	 */
+	dispose(): void {
+		if (this._disposed) return;
+		this._disposed = true;
+
+		// Abort all pending requests
+		this._globalAbortController.abort();
+
+		// Mark all workers as aborted and abort their controllers
+		for (const worker of this._orchestrator.workers) {
+			worker.aborted = true;
+			// Abort any existing response for this worker
+			const existing = this._existingResponses.get(worker);
+			if (existing) {
+				existing.abortController.abort();
+			}
+		}
+
+		// Clear caches - create new WeakMap to ensure all references are dropped
+		this._existingResponses = new WeakMap();
+	}
+
+	/**
+	 * Symbol.dispose for using declaration support.
+	 * @public
+	 */
+	[Symbol.dispose](): void {
+		this.dispose();
 	}
 }
 
