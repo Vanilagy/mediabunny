@@ -232,7 +232,7 @@ export abstract class IsobmffOutputFormat extends OutputFormat {
 			&& !['mdir', 'mdta', 'udta', 'auto'].includes(options.metadataFormat)
 		) {
 			throw new TypeError(
-				'options.metadataFormat, when provided, must be either \'mdir\', \'mdta\', \'udta\', or \'auto\'.',
+				'options.metadataFormat, when provided, must be either \'auto\', \'mdir\', \'mdta\', or \'udta\'.',
 			);
 		}
 
