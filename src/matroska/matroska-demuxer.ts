@@ -116,7 +116,7 @@ type Cluster = {
 };
 
 type ClusterTrackData = {
-	track: InternalTrack | null;
+	track: InternalTrack;
 	startTimestamp: number;
 	endTimestamp: number;
 	firstKeyFrameTimestamp: number | null;
@@ -141,6 +141,7 @@ type ClusterBlock = {
 	referencedTimestamps: number[];
 	data: Uint8Array;
 	lacing: BlockLacing;
+	decoded: boolean;
 };
 
 type CuePoint = {
@@ -667,7 +668,7 @@ export class MatroskaDemuxer extends Demuxer {
 					const nextEntry = trackData.presentationTimestamps[i + 1]!;
 					currentBlock.duration = nextEntry.timestamp - currentBlock.timestamp;
 				} else if (currentBlock.duration === 0) {
-					if (track?.defaultDuration != null) {
+					if (track.defaultDuration != null) {
 						if (currentBlock.lacing === BlockLacing.None) {
 							currentBlock.duration = track.defaultDuration;
 						} else {
@@ -695,13 +696,11 @@ export class MatroskaDemuxer extends Demuxer {
 			trackData.startTimestamp = firstBlock.timestamp;
 			trackData.endTimestamp = lastBlock.timestamp + lastBlock.duration;
 
-			if (track) {
-				insertSorted(track.clusters, cluster, x => x.elementStartPos);
+			insertSorted(track.clusters, cluster, x => x.elementStartPos);
 
-				const hasKeyFrame = trackData.firstKeyFrameTimestamp !== null;
-				if (hasKeyFrame) {
-					insertSorted(track.clustersWithKeyFrame, cluster, x => x.elementStartPos);
-				}
+			const hasKeyFrame = trackData.firstKeyFrameTimestamp !== null;
+			if (hasKeyFrame) {
+				insertSorted(track.clustersWithKeyFrame, cluster, x => x.elementStartPos);
 			}
 		}
 
@@ -714,8 +713,13 @@ export class MatroskaDemuxer extends Demuxer {
 	getTrackDataInCluster(cluster: Cluster, trackNumber: number) {
 		let trackData = cluster.trackData.get(trackNumber);
 		if (!trackData) {
+			const track = cluster.segment.tracks.find(x => x.id === trackNumber);
+			if (!track) {
+				return null;
+			}
+
 			trackData = {
-				track: cluster.segment.tracks.find(x => x.id === trackNumber) ?? null,
+				track,
 				startTimestamp: 0,
 				endTimestamp: 0,
 				firstKeyFrameTimestamp: null,
@@ -728,13 +732,19 @@ export class MatroskaDemuxer extends Demuxer {
 		return trackData;
 	}
 
-	expandLacedBlocks(blocks: ClusterBlock[], track: InternalTrack | null) {
+	expandLacedBlocks(blocks: ClusterBlock[], track: InternalTrack) {
 		// https://www.matroska.org/technical/notes.html#block-lacing
 
 		for (let blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
 			const originalBlock = blocks[blockIndex]!;
 			if (originalBlock.lacing === BlockLacing.None) {
 				continue;
+			}
+
+			// Decode the block data if it hasn't been decoded yet (needed for lacing expansion)
+			if (!originalBlock.decoded) {
+				originalBlock.data = this.decodeBlockData(track, originalBlock.data);
+				originalBlock.decoded = true;
 			}
 
 			const slice = FileSlice.tempFromBytes(originalBlock.data);
@@ -819,7 +829,7 @@ export class MatroskaDemuxer extends Demuxer {
 				const frameSize = frameSizes[i]!;
 				const frameData = readBytes(slice, frameSize);
 
-				const blockDuration = originalBlock.duration || (frameCount * (track?.defaultDuration ?? 0));
+				const blockDuration = originalBlock.duration || (frameCount * (track.defaultDuration ?? 0));
 
 				// Distribute timestamps evenly across the block duration
 				const frameTimestamp = originalBlock.timestamp + (blockDuration * i / frameCount);
@@ -832,6 +842,7 @@ export class MatroskaDemuxer extends Demuxer {
 					referencedTimestamps: originalBlock.referencedTimestamps,
 					data: frameData,
 					lacing: BlockLacing.None,
+					decoded: true,
 				});
 			}
 
@@ -1331,18 +1342,17 @@ export class MatroskaDemuxer extends Demuxer {
 				const trackNumber = readVarInt(slice);
 				if (trackNumber === null) break;
 
+				const trackData = this.getTrackDataInCluster(this.currentCluster, trackNumber);
+				if (!trackData) break; // Not a track we care about
+
 				const relativeTimestamp = readI16Be(slice);
 
 				const flags = readU8(slice);
 				const isKeyFrame = !!(flags & 0x80);
 				const lacing = (flags >> 1) & 0x3 as BlockLacing; // If the block is laced, we'll expand it later
 
-				const trackData = this.getTrackDataInCluster(this.currentCluster, trackNumber);
-				let blockData = readBytes(slice, size - (slice.filePos - dataStartPos));
-
-				if (trackData.track) {
-					blockData = this.decodeBlockData(trackData.track, blockData);
-				}
+				const blockData = readBytes(slice, size - (slice.filePos - dataStartPos));
+				const hasDecodingInstructions = trackData.track.decodingInstructions.length > 0;
 
 				trackData.blocks.push({
 					timestamp: relativeTimestamp, // We'll add the cluster's timestamp to this later
@@ -1351,6 +1361,7 @@ export class MatroskaDemuxer extends Demuxer {
 					referencedTimestamps: [],
 					data: blockData,
 					lacing,
+					decoded: !hasDecodingInstructions,
 				});
 			}; break;
 
@@ -1374,17 +1385,16 @@ export class MatroskaDemuxer extends Demuxer {
 				const trackNumber = readVarInt(slice);
 				if (trackNumber === null) break;
 
+				const trackData = this.getTrackDataInCluster(this.currentCluster, trackNumber);
+				if (!trackData) break;
+
 				const relativeTimestamp = readI16Be(slice);
 
 				const flags = readU8(slice);
 				const lacing = (flags >> 1) & 0x3 as BlockLacing; // If the block is laced, we'll expand it later
 
-				const trackData = this.getTrackDataInCluster(this.currentCluster, trackNumber);
-				let blockData = readBytes(slice, size - (slice.filePos - dataStartPos));
-
-				if (trackData.track) {
-					blockData = this.decodeBlockData(trackData.track, blockData);
-				}
+				const blockData = readBytes(slice, size - (slice.filePos - dataStartPos));
+				const hasDecodingInstructions = trackData.track.decodingInstructions.length > 0;
 
 				this.currentBlock = {
 					timestamp: relativeTimestamp, // We'll add the cluster's timestamp to this later
@@ -1393,6 +1403,7 @@ export class MatroskaDemuxer extends Demuxer {
 					referencedTimestamps: [],
 					data: blockData,
 					lacing,
+					decoded: !hasDecodingInstructions,
 				};
 				trackData.blocks.push(this.currentBlock);
 			}; break;
@@ -1600,24 +1611,26 @@ export class MatroskaDemuxer extends Demuxer {
 	}
 
 	decodeBlockData(track: InternalTrack, rawData: Uint8Array) {
+		assert(track.decodingInstructions.length > 0); // This method shouldn't be called otherwise
+
 		let currentData = rawData;
 
-		// In the vast number of cases there are exactly zero decoding instructions
-		for (let i = 0; i < track.decodingInstructions.length; i++) {
-			const instruction = track.decodingInstructions[i]!;
+		for (const instruction of track.decodingInstructions) {
 			assert(instruction.data);
 
 			switch (instruction.data.type) {
 				case 'decompress': {
 					switch (instruction.data.algorithm) {
 						case ContentCompAlgo.HeaderStripping: {
-							const prefix = instruction.data.settings ?? new Uint8Array(0);
-							const newData = new Uint8Array(prefix.length + currentData.length);
+							if (instruction.data.settings && instruction.data.settings.length > 0) {
+								const prefix = instruction.data.settings;
+								const newData = new Uint8Array(prefix.length + currentData.length);
 
-							newData.set(prefix, 0);
-							newData.set(currentData, prefix.length);
+								newData.set(prefix, 0);
+								newData.set(currentData, prefix.length);
 
-							currentData = newData;
+								currentData = newData;
+							}
 						}; break;
 
 						default: {
@@ -1958,6 +1971,12 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		const trackData = cluster.trackData.get(this.internalTrack.id)!;
 		const block = trackData.blocks[blockIndex];
 		assert(block);
+
+		// Perform lazy decoding if needed
+		if (!block.decoded) {
+			block.data = this.internalTrack.demuxer.decodeBlockData(this.internalTrack, block.data);
+			block.decoded = true;
+		}
 
 		const data = options.metadataOnly ? PLACEHOLDER_DATA : block.data;
 		const timestamp = block.timestamp / this.internalTrack.segment.timestampFactor;
