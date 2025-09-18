@@ -186,6 +186,11 @@ export class IsobmffMuxer extends Muxer {
 		this.minimumFragmentDuration = format._options.minimumFragmentDuration ?? 1;
 	}
 
+	/** Get the metadata format option */
+	getMetadataFormat(): 'mdir' | 'mdta' {
+		return (this.format._options.metadataFormat as 'mdir' | 'mdta') ?? 'mdir';
+	}
+
 	async start() {
 		const release = await this.mutex.acquire();
 

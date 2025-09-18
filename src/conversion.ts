@@ -46,7 +46,7 @@ import {
 	Rotation,
 } from './misc';
 import { Output, TrackType } from './output';
-import { Mp4OutputFormat } from './output-format';
+import { Mp4OutputFormat, IsobmffOutputFormat } from './output-format';
 import { AudioSample, clampCropRectangle, validateCropRectangle, VideoSample } from './sample';
 import { MetadataTags, validateMetadataTags } from './tags';
 import { NullTarget } from './target';
@@ -96,6 +96,13 @@ export type ConversionOptions = {
 	 * If no function is set, the input's metadata tags will be copied to the output.
 	 */
 	tags?: MetadataTags | ((inputTags: MetadataTags) => MaybePromise<MetadataTags>);
+
+	/**
+	 * The metadata format to use for ISOBMFF-based output formats (MP4, MOV).
+	 * - `'mdir'`: Use the mdir handler format (default for compatibility)
+	 * - `'mdta'`: Use the mdta handler format with keys box support
+	 */
+	metadataFormat?: 'mdir' | 'mdta';
 };
 
 /**
@@ -525,6 +532,11 @@ export class Conversion {
 		}
 
 		// Now, let's deal with metadata tags
+
+		// Set metadata format for ISOBMFF-based output formats if specified
+		if (this._options.metadataFormat && this.output.format instanceof IsobmffOutputFormat) {
+			this.output.format._options.metadataFormat = this._options.metadataFormat;
+		}
 
 		const inputTags = await this.input.getMetadataTags();
 		let outputTags: MetadataTags;

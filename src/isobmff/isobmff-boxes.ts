@@ -1278,7 +1278,7 @@ const udta = (muxer: IsobmffMuxer) => {
 	if (muxer.isQuickTime) {
 		addQuickTimeMetadataTagBoxes(boxes, muxer.output._metadataTags);
 	} else {
-		const metaBox = meta(muxer.output._metadataTags);
+		const metaBox = meta(muxer.output._metadataTags, muxer);
 		if (metaBox) {
 			boxes.push(metaBox);
 		}
@@ -1381,12 +1381,14 @@ const DATA_BOX_MIME_TYPE_MAP: Record<string, number> = {
 	'image/bmp': 27,
 };
 
-/** Metadata Box */
-const meta = (tags: MetadataTags) => {
+/**
+ * Common function to generate standard metadata boxes for ISOBMFF
+ */
+const generateStandardMetadataBoxes = (tags: MetadataTags): Box[] => {
 	const boxes: Box[] = [];
 
 	// https://exiftool.org/TagNames/QuickTime.html (QuickTime ItemList Tags)
-	// This is the metadata format used for MP4 files
+	// Standard metadata fields processing
 
 	for (const { key, value } of keyValueIterator(tags)) {
 		switch (key) {
@@ -1481,6 +1483,96 @@ const meta = (tags: MetadataTags) => {
 		}
 	}
 
+	return boxes;
+};
+
+/** Metadata Box (mdta format with keys box) */
+const metaMdta = (tags: MetadataTags) => {
+	const boxes = generateStandardMetadataBoxes(tags);
+	const customKeys: string[] = []; // Collect custom key names
+
+	// Handle raw tags (mdta format - numeric indices with keys box)
+	if (tags.raw) {
+		for (const key in tags.raw) {
+			const value = tags.raw[key];
+			if (value == null || key.length !== 4 || boxes.some(x => x.type === key)) {
+				continue;
+			}
+
+			// Collect custom key names
+			customKeys.push(key);
+			const keyIndex = customKeys.length; // 1-based index
+
+			// Generate numeric index as box name (4-byte big-endian)
+			const indexBytes = u32(keyIndex);
+			const boxName = String.fromCharCode(...indexBytes);
+
+			if (typeof value === 'string') {
+				boxes.push(box(boxName, undefined, [
+					box('data', [
+						u32(1), // UTF-8 text type
+						u32(0), // Locale indicator
+						...textEncoder.encode(value),
+					]),
+				]));
+			} else if (value instanceof Uint8Array) {
+				boxes.push(box(boxName, undefined, [
+					box('data', [
+						u32(0), // Type indicator
+						u32(0), // Locale indicator
+						Array.from(value),
+					]),
+				]));
+			} else if (value instanceof RichImageData) {
+				boxes.push(box(boxName, undefined, [
+					box('data', [
+						u32(DATA_BOX_MIME_TYPE_MAP[value.mimeType] ?? 0), // Type indicator
+						u32(0), // Locale indicator
+						Array.from(value.data), // Kinda slow, hopefully temp
+					]),
+				]));
+			}
+		}
+	}
+
+	if (boxes.length === 0) {
+		return null;
+	}
+
+	const metaChildren: Box[] = [hdlr(false, 'mdta', '', 'appl')];
+
+	// Generate keys box (if there are custom keys)
+	if (customKeys.length > 0) {
+		const keysData: number[] = [
+			...u32(0), // Version + flags
+			...u32(customKeys.length), // Entry count
+		];
+
+		// Add entry for each key
+		for (const key of customKeys) {
+			const keyBytes = textEncoder.encode(key);
+			const keySize = keyBytes.length + 8; // 4 bytes size + 4 bytes namespace + key
+			keysData.push(
+				...u32(keySize), // Key size
+				...u32(0x6d647461), // 'mdta' namespace
+				...Array.from(keyBytes), // Key name
+			);
+		}
+
+		metaChildren.push(box('keys', keysData));
+	}
+
+	// Add ilst box
+	metaChildren.push(box('ilst', undefined, boxes));
+
+	return box('meta', undefined, metaChildren);
+};
+
+/** Metadata Box (legacy mdir format) */
+const metaMdir = (tags: MetadataTags) => {
+	const boxes = generateStandardMetadataBoxes(tags);
+
+	// Handle raw tags (legacy format - direct 4-char keys)
 	if (tags.raw) {
 		for (const key in tags.raw) {
 			const value = tags.raw[key];
@@ -1514,10 +1606,23 @@ const meta = (tags: MetadataTags) => {
 		return null;
 	}
 
-	return fullBox('meta', 0, 0, undefined, [
-		hdlr(false, 'mdir', '', 'appl'),
-		box('ilst', undefined, boxes),
-	]);
+	const metaChildren: Box[] = [
+		hdlr(false, 'mdir', '', 'appl'), // Legacy mdir handler
+		box('ilst', undefined, boxes), // Item list without keys box
+	];
+
+	return fullBox('meta', 0, 0, undefined, metaChildren); // Legacy fullBox format
+};
+
+/** Metadata Box (selects format based on muxer options) */
+const meta = (tags: MetadataTags, muxer: IsobmffMuxer) => {
+	const metadataFormat = muxer.getMetadataFormat();
+
+	if (metadataFormat === 'mdta') {
+		return metaMdta(tags);
+	} else {
+		return metaMdir(tags);
+	}
 };
 
 const metadataTagStringBoxLong = (name: string, value: string) => {
