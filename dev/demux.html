@@ -14,7 +14,18 @@
 			source: new Mediabunny.BlobSource(file),
 		});
 
-		console.log(await input.getMetadataTags());
+		console.log(await input.computeDuration());
+		return;
+
+		const audioTrack = await input.getPrimaryAudioTrack();
+		const sink = new Mediabunny.EncodedPacketSink(audioTrack);
+
+		for await (const packet of sink.packets()) {
+			console.log(packet)
+		}
+
+		console.log("Done")
+
 
 		/*
 

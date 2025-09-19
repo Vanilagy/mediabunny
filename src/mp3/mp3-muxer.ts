@@ -84,6 +84,7 @@ export class Mp3Muxer extends Muxer {
 					mpegVersionId: header.mpegVersionId,
 					layer: header.layer,
 					frequencyIndex: header.frequencyIndex,
+					sampleRate: header.sampleRate,
 					channel: header.channel,
 					modeExtension: header.modeExtension,
 					copyright: header.copyright,

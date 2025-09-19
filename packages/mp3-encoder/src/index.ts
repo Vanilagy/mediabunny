@@ -28,7 +28,9 @@ class Mp3Encoder extends CustomAudioEncoder {
 	static override supports(codec: AudioCodec, config: AudioDecoderConfig): boolean {
 		return codec === 'mp3'
 			&& (config.numberOfChannels === 1 || config.numberOfChannels === 2)
-			&& Object.values(SAMPLING_RATES).some(x => x.includes(config.sampleRate));
+			&& Object.values(SAMPLING_RATES).some(x =>
+				x === config.sampleRate || (x / 2) === config.sampleRate || (x / 4) === config.sampleRate,
+			);
 	}
 
 	async init() {

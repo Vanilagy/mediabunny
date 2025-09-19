@@ -12,9 +12,7 @@ import {
 	computeMp3FrameSize,
 	encodeSynchsafe,
 	getXingOffset,
-	MPEG_V1_BITRATES,
-	MPEG_V2_BITRATES,
-	SAMPLING_RATES,
+	KILOBIT_RATES,
 	XING,
 } from '../../shared/mp3-misc';
 import { Id3V2TextEncoding } from './mp3-reader';
@@ -23,6 +21,7 @@ export type XingFrameData = {
 	mpegVersionId: number;
 	layer: number;
 	frequencyIndex: number;
+	sampleRate: number;
 	channel: number;
 	modeExtension: number;
 	copyright: number;
@@ -60,6 +59,78 @@ export class Mp3Writer {
 			this.helper[i] = text.charCodeAt(i);
 		}
 		this.writer.write(this.helper.subarray(0, text.length));
+	}
+
+	writeXingFrame(data: XingFrameData) {
+		const startPos = this.writer.getPos();
+
+		const firstByte = 0xff;
+		const secondByte = 0xe0 | (data.mpegVersionId << 3) | (data.layer << 1);
+
+		const lowSamplingFrequency = data.mpegVersionId & 1;
+
+		const padding = 0;
+		const neededBytes = 155;
+
+		let bitrateIndex = -1;
+		const bitrateOffset = lowSamplingFrequency * 16 * 4 + data.layer * 16;
+
+		// Let's find the lowest bitrate for which the frame size is sufficiently large to fit all the data
+		for (let i = 0; i < 16; i++) {
+			const kbr = KILOBIT_RATES[bitrateOffset + i]!;
+			const size = computeMp3FrameSize(lowSamplingFrequency, data.layer, 1000 * kbr, data.sampleRate, padding);
+
+			if (size >= neededBytes) {
+				bitrateIndex = i;
+				break;
+			}
+		}
+
+		if (bitrateIndex === -1) {
+			throw new Error('No suitable bitrate found.');
+		}
+
+		const thirdByte = (bitrateIndex << 4) | (data.frequencyIndex << 2) | padding << 1;
+		const fourthByte = (data.channel << 6)
+			| (data.modeExtension << 4)
+			| (data.copyright << 3)
+			| (data.original << 2)
+			| data.emphasis;
+
+		this.helper[0] = firstByte;
+		this.helper[1] = secondByte;
+		this.helper[2] = thirdByte;
+		this.helper[3] = fourthByte;
+
+		this.writer.write(this.helper.subarray(0, 4));
+
+		const xingOffset = getXingOffset(data.mpegVersionId, data.channel);
+
+		this.writer.seek(startPos + xingOffset);
+		this.writeU32(XING);
+
+		let flags = 0;
+		if (data.frameCount !== null) {
+			flags |= 1;
+		}
+		if (data.fileSize !== null) {
+			flags |= 2;
+		}
+		if (data.toc !== null) {
+			flags |= 4;
+		}
+
+		this.writeU32(flags);
+
+		this.writeU32(data.frameCount ?? 0);
+		this.writeU32(data.fileSize ?? 0);
+		this.writer.write(data.toc ?? new Uint8Array(100));
+
+		const kilobitRate = KILOBIT_RATES[bitrateOffset + bitrateIndex]!;
+		const frameSize = computeMp3FrameSize(
+			lowSamplingFrequency, data.layer, 1000 * kilobitRate, data.sampleRate, padding,
+		);
+		this.writer.seek(startPos + frameSize);
 	}
 
 	writeSynchsafeU32(value: number) {
@@ -169,73 +240,5 @@ export class Mp3Writer {
 		}
 
 		this.writer.write(imageData);
-	}
-
-	writeXingFrame(data: XingFrameData) {
-		const startPos = this.writer.getPos();
-
-		const firstByte = 0xff;
-		const secondByte = 0xe0 | (data.mpegVersionId << 3) | (data.layer << 1);
-
-		const bitrateGroup = data.mpegVersionId === 3 ? MPEG_V1_BITRATES : MPEG_V2_BITRATES;
-		const bitrates = bitrateGroup?.[data.layer];
-		if (!bitrates) {
-			throw new Error('Invalid MPEG version and layer combination.');
-		}
-
-		const sampleRate = SAMPLING_RATES[data.mpegVersionId]?.[data.frequencyIndex];
-		if (!sampleRate || sampleRate === -1) {
-			throw new Error('Invalid MPEG version and frequency index combination.');
-		}
-
-		const padding = 0;
-		const neededBytes = 155;
-
-		// Let's find the lowest bitrate for which the frame size is sufficiently large to fit all the data
-		const bitrateIndex = bitrates.findIndex((kbr) => {
-			return computeMp3FrameSize(data.layer, 1000 * kbr, sampleRate, padding) >= neededBytes;
-		});
-		if (bitrateIndex === -1) {
-			throw new Error('No suitable bitrate found.');
-		}
-
-		const thirdByte = (bitrateIndex << 4) | (data.frequencyIndex << 2) | padding << 1;
-		const fourthByte = (data.channel << 6)
-			| (data.modeExtension << 4)
-			| (data.copyright << 3)
-			| (data.original << 2)
-			| data.emphasis;
-
-		this.helper[0] = firstByte;
-		this.helper[1] = secondByte;
-		this.helper[2] = thirdByte;
-		this.helper[3] = fourthByte;
-
-		this.writer.write(this.helper.subarray(0, 4));
-
-		const xingOffset = getXingOffset(data.mpegVersionId, data.channel);
-
-		this.writer.seek(startPos + xingOffset);
-		this.writeU32(XING);
-
-		let flags = 0;
-		if (data.frameCount !== null) {
-			flags |= 1;
-		}
-		if (data.fileSize !== null) {
-			flags |= 2;
-		}
-		if (data.toc !== null) {
-			flags |= 4;
-		}
-
-		this.writeU32(flags);
-
-		this.writeU32(data.frameCount ?? 0);
-		this.writeU32(data.fileSize ?? 0);
-		this.writer.write(data.toc ?? new Uint8Array(100));
-
-		const frameSize = computeMp3FrameSize(data.layer, 1000 * bitrates[bitrateIndex]!, sampleRate, padding);
-		this.writer.seek(startPos + frameSize);
 	}
 }
