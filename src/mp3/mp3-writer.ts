@@ -67,7 +67,12 @@ export class Mp3Writer {
 		const firstByte = 0xff;
 		const secondByte = 0xe0 | (data.mpegVersionId << 3) | (data.layer << 1);
 
-		const lowSamplingFrequency = data.mpegVersionId & 1;
+		let lowSamplingFrequency: number;
+		if (data.mpegVersionId & 2) {
+			lowSamplingFrequency = (data.mpegVersionId & 1) ? 0 : 1;
+		} else {
+			lowSamplingFrequency = 1;
+		}
 
 		const padding = 0;
 		const neededBytes = 155;
