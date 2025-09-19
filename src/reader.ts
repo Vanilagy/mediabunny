@@ -80,13 +80,19 @@ export class Reader {
 }
 
 export class FileSlice {
+	/** The current position in the backing buffer. Do not modify directly, prefer `.skip()` instead. */
 	bufferPos: number;
 
 	constructor(
+		/** The underlying bytes backing this slice. Avoid using this directly and prefer reader functions instead. */
 		public readonly bytes: Uint8Array,
+		/** A view into the bytes backing this slice. Avoid using this directly and prefer reader functions instead. */
 		public readonly view: DataView,
+		/** The offset in "file bytes" at which `bytes` begins in the file. */
 		private readonly offset: number,
+		/** The offset in "file bytes" where this slice begins. */
 		public readonly start: number,
+		/** The offset in "file bytes" where this slice ends (exclusive). */
 		public readonly end: number,
 	) {
 		this.bufferPos = start - offset;
@@ -118,6 +124,7 @@ export class FileSlice {
 		this.bufferPos += byteCount;
 	}
 
+	/** Creates a new subslice of this slice whose byte range must be contained within this slice. */
 	slice(filePos: number, length = this.end - filePos) {
 		if (filePos < this.start || filePos + length > this.end) {
 			throw new RangeError('Slicing outside of original slice.');

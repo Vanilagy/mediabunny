@@ -115,7 +115,8 @@ export class FlacDemuxer extends Demuxer {
 				this.reader.fileSize === null
 				|| currentPos < this.reader.fileSize
 			) {
-				const sizeSlice = await this.reader.requestSlice(currentPos, 4);
+				let sizeSlice = this.reader.requestSlice(currentPos, 4);
+				if (sizeSlice instanceof Promise) sizeSlice = await sizeSlice;
 				currentPos += 4;
 
 				if (sizeSlice === null) {
@@ -135,10 +136,12 @@ export class FlacDemuxer extends Demuxer {
 					case FlacBlockType.STREAMINFO: {
 						// Parse streaminfo block
 						// https://www.rfc-editor.org/rfc/rfc9639.html#section-8.2
-						const streamInfoBlock = await this.reader.requestSlice(
+						let streamInfoBlock = this.reader.requestSlice(
 							currentPos,
 							size,
 						);
+						if (streamInfoBlock instanceof Promise) streamInfoBlock = await streamInfoBlock;
+
 						assert(streamInfoBlock);
 						if (streamInfoBlock === null) {
 							throw new Error(
@@ -192,17 +195,16 @@ export class FlacDemuxer extends Demuxer {
 					case FlacBlockType.VORBIS_COMMENT: {
 						// Parse vorbis comment block
 						// https://www.rfc-editor.org/rfc/rfc9639.html#name-vorbis-comment
-						const vorbisCommentBlock = await this.reader.requestSlice(
+						let vorbisCommentBlock = this.reader.requestSlice(
 							currentPos,
 							size,
 						);
+						if (vorbisCommentBlock instanceof Promise) vorbisCommentBlock = await vorbisCommentBlock;
+
 						assert(vorbisCommentBlock);
 
 						readVorbisComments(
-							vorbisCommentBlock.bytes.subarray(
-								vorbisCommentBlock.start,
-								vorbisCommentBlock.end,
-							),
+							readBytes(vorbisCommentBlock, size),
 							this.metadataTags,
 						);
 
@@ -211,10 +213,11 @@ export class FlacDemuxer extends Demuxer {
 					case FlacBlockType.PICTURE: {
 						// Parse picture block
 						// https://www.rfc-editor.org/rfc/rfc9639.html#name-picture
-						const pictureBlock = await this.reader.requestSlice(
+						let pictureBlock = this.reader.requestSlice(
 							currentPos,
 							size,
 						);
+						if (pictureBlock instanceof Promise) pictureBlock = await pictureBlock;
 
 						assert(pictureBlock);
 						const pictureType = readU32Be(pictureBlock);
@@ -654,10 +657,11 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		if (options.metadataOnly) {
 			data = PLACEHOLDER_DATA;
 		} else {
-			const slice = await this.demuxer.reader.requestSlice(
+			let slice = this.demuxer.reader.requestSlice(
 				rawSample.byteOffset,
 				rawSample.byteSize,
 			);
+			if (slice instanceof Promise) slice = await slice;
 
 			if (!slice) {
 				return null; // Data didn't fit into the rest of the file
