@@ -374,8 +374,10 @@ export class Conversion {
 		}
 		if (!(options.input instanceof Input) &&
 			!(Array.isArray(options.input) &&
-				(options.input.length > 0) &&
-				options.input.every((input) => { return (input instanceof Input); })))
+				((options.input as Array<Input>).length > 0) &&
+				(options.input as Array<Input>).every((input) => {
+					return (input instanceof Input);
+				})))
 		{
 			throw new TypeError('options.input must be an Input or non-empty Input[].');
 		}
@@ -433,10 +435,10 @@ export class Conversion {
 	async _init() {
 		if (this.inputs.length > 1) {
 			let durationMatch = true;
-			const baseDuration = Math.ceil(await this.inputs[0].computeDuration());
+			const baseDuration = Math.ceil(await this.inputs[0]!.computeDuration());
 			for (const input of this.inputs) {
 				const inputDuration = Math.ceil(await input.computeDuration());
-				durationMatch &= (inputDuration == baseDuration);
+				durationMatch &&= (inputDuration == baseDuration);
 			}
 			if (!durationMatch) {
 				throw new Error('inputs duration does not match.');
@@ -514,7 +516,7 @@ export class Conversion {
 
 		// Now, let's deal with metadata tags
 
-		const inputTags = await this.inputs[0].getMetadataTags();
+		const inputTags = await this.inputs[0]!.getMetadataTags();
 		let outputTags: MetadataTags;
 
 		if (this._options.tags) {
@@ -528,7 +530,7 @@ export class Conversion {
 
 		// Somewhat dirty but pragmatic
 		const inputAndOutputFormatMatch = (this.inputs.length == 1) &&
-			((await this.inputs[0].getFormat()).mimeType === this.output.format.mimeType);
+			((await this.inputs[0]!.getFormat()).mimeType === this.output.format.mimeType);
 		const rawTagsAreUnchanged = inputTags.raw === outputTags.raw;
 
 		if (inputTags.raw && rawTagsAreUnchanged && !inputAndOutputFormatMatch) {
@@ -562,7 +564,7 @@ export class Conversion {
 		if (this.onProgress) {
 			this._computeProgress = true;
 			this._totalDuration = Math.min(
-				(await this.inputs[0].computeDuration()) - this._startTimestamp,
+				(await this.inputs[0]!.computeDuration()) - this._startTimestamp,
 				this._endTimestamp - this._startTimestamp,
 			);
 
