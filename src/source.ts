@@ -12,7 +12,7 @@ import {
 	binarySearchLessOrEqual,
 	closedIntervalsOverlap,
 	MaybePromise,
-	mergeObjectsDeeply,
+	mergeRequestInit,
 	promiseWithResolvers,
 	retriedFetch,
 	toDataView,
@@ -326,7 +326,7 @@ export class UrlSource extends Source {
 		const abortController = new AbortController();
 		const response = await retriedFetch(
 			this._url,
-			mergeObjectsDeeply(this._options.requestInit ?? {}, {
+			mergeRequestInit(this._options.requestInit ?? {}, {
 				headers: {
 					// We could also send a non-range request to request the same bytes (all of them), but doing it like
 					// this is an easy way to check if the server supports range requests in the first place
@@ -393,7 +393,7 @@ export class UrlSource extends Source {
 				abortController = new AbortController();
 				response = await retriedFetch(
 					this._url,
-					mergeObjectsDeeply(this._options.requestInit ?? {}, {
+					mergeRequestInit(this._options.requestInit ?? {}, {
 						headers: {
 							Range: `bytes=${worker.currentPos}-`,
 						},

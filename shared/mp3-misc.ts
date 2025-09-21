@@ -52,11 +52,11 @@ export const computeMp3FrameSize = (
 	if (layer === 0) {
 		return 0; // Not expected that this is hit
 	} else if (layer === 1) {
-		return Math.round(144 * bitrate / (sampleRate << lowSamplingFrequency)) + padding;
+		return Math.floor(144 * bitrate / (sampleRate << lowSamplingFrequency)) + padding;
 	} else if (layer === 2) {
-		return Math.round(144 * bitrate / sampleRate) + padding;
+		return Math.floor(144 * bitrate / sampleRate) + padding;
 	} else { // layer === 3
-		return (Math.round(12 * bitrate / sampleRate) + padding) * 4;
+		return (Math.floor(12 * bitrate / sampleRate) + padding) * 4;
 	}
 };
 

@@ -31,7 +31,7 @@ import {
 	InputVideoTrack,
 	InputVideoTrackBacking,
 } from '../input-track';
-import { MetadataTags } from '../tags';
+import { AttachedFile, MetadataTags } from '../tags';
 import { PacketRetrievalOptions } from '../media-sink';
 import {
 	assert,
@@ -69,6 +69,7 @@ import {
 	readVarInt,
 	resync,
 	searchForNextElementId,
+	readUnsignedBigInt,
 } from './ebml';
 import { buildMatroskaMimeType } from './matroska-misc';
 import { FileSlice, readBytes, Reader, readI16Be, readU8 } from '../reader';
@@ -240,6 +241,7 @@ export class MatroskaDemuxer extends Demuxer {
 	currentTagTargetIsMovie: boolean = true;
 	currentSimpleTagName: string | null = null;
 	currentAttachedFile: {
+		fileUid: bigint | null;
 		fileName: string | null;
 		fileMediaType: string | null;
 		fileData: Uint8Array | null;
@@ -1478,6 +1480,7 @@ export class MatroskaDemuxer extends Demuxer {
 				if (!this.currentSegment) break;
 
 				this.currentAttachedFile = {
+					fileUid: null,
 					fileName: null,
 					fileMediaType: null,
 					fileData: null,
@@ -1485,6 +1488,19 @@ export class MatroskaDemuxer extends Demuxer {
 				};
 
 				this.readContiguousElements(slice.slice(dataStartPos, size));
+
+				const tags = this.currentSegment.metadataTags;
+
+				if (this.currentAttachedFile.fileUid && this.currentAttachedFile.fileData) {
+					// All attached files get surfaced in the `raw` metadata tags
+					tags.raw ??= {};
+					tags.raw[this.currentAttachedFile.fileUid.toString()] = new AttachedFile(
+						this.currentAttachedFile.fileData,
+						this.currentAttachedFile.fileMediaType ?? undefined,
+						this.currentAttachedFile.fileName ?? undefined,
+						this.currentAttachedFile.fileDescription ?? undefined,
+					);
+				}
 
 				// Only process image attachments
 				if (this.currentAttachedFile.fileMediaType?.startsWith('image/') && this.currentAttachedFile.fileData) {
@@ -1500,8 +1516,8 @@ export class MatroskaDemuxer extends Demuxer {
 						}
 					}
 
-					this.currentSegment.metadataTags.images ??= [];
-					this.currentSegment.metadataTags.images.push({
+					tags.images ??= [];
+					tags.images.push({
 						data: this.currentAttachedFile.fileData,
 						mimeType: this.currentAttachedFile.fileMediaType,
 						kind,
@@ -1511,6 +1527,12 @@ export class MatroskaDemuxer extends Demuxer {
 				}
 
 				this.currentAttachedFile = null;
+			}; break;
+
+			case EBMLId.FileUID: {
+				if (!this.currentAttachedFile) break;
+
+				this.currentAttachedFile.fileUid = readUnsignedBigInt(slice, size);
 			}; break;
 
 			case EBMLId.FileName: {

@@ -289,7 +289,7 @@ export class Mp3InputFormat extends InputFormat {
 			return true;
 		}
 
-		currentPos = firstResult.startPos += firstResult.header.totalSize;
+		currentPos = firstResult.startPos + firstResult.header.totalSize;
 
 		// Fine, we found one frame header, but we're still not entirely sure this is MP3. Let's check if we can find
 		// another header right after it:

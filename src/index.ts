@@ -197,6 +197,7 @@ export {
 	MetadataTags,
 	AttachedImage,
 	RichImageData,
+	AttachedFile,
 } from './tags';
 
 // 🐡🦔

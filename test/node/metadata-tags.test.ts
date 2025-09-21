@@ -15,7 +15,7 @@ import { EncodedPacket } from '../../src/packet.js';
 import { Input } from '../../src/input.js';
 import { BufferSource, FilePathSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
-import { MetadataTags } from '../../src/tags.js';
+import { AttachedFile, MetadataTags } from '../../src/tags.js';
 import path from 'node:path';
 import { AudioCodec, buildAudioCodecString } from '../../src/codec.js';
 import { Conversion } from '../../src/conversion.js';
@@ -207,7 +207,21 @@ test('Read and write metadata, Matroska', async () => {
 	output.setMetadataTags({
 		...songMetadata,
 		raw: {
-			CUSTOM: 'Levels',
+			'CUSTOM': 'Levels',
+			// This number cannot be represented by f64, so this tests correct BigInt usage
+			'9007199254740993': new AttachedFile(
+				new Uint8Array(20),
+				'font/ttf',
+				'Heya',
+				'A font file',
+			),
+			// And this one we don't expect to get attached again, since it mirrors the image we're also attaching
+			'987654': new AttachedFile(
+				songMetadata.images![0]!.data,
+				songMetadata.images![0]!.mimeType,
+				songMetadata.images![0]!.name,
+				songMetadata.images![0]!.description,
+			),
 		},
 	});
 
@@ -246,6 +260,19 @@ test('Read and write metadata, Matroska', async () => {
 	expect(readTags.raw!['TITLE']).toBe(songMetadata.title);
 	expect(readTags.raw!['PART_NUMBER']).toBe('13/14');
 	expect(readTags.raw!['CUSTOM']).toBe('Levels');
+
+	const files = Object.entries(readTags.raw!).filter(x => x[1] instanceof AttachedFile);
+	expect(files).toHaveLength(2);
+
+	const imageFile = files.find(x => (x[1] as AttachedFile).mimeType === 'image/jpeg');
+	expect((imageFile![1] as AttachedFile).data).toEqual(songMetadata.images![0]!.data);
+
+	const secondFile = files.find(x => (x[1] as AttachedFile).mimeType === 'font/ttf');
+	expect(secondFile![0]).toBe('9007199254740993');
+	expect((secondFile![1] as AttachedFile).data).toHaveLength(20);
+	expect((secondFile![1] as AttachedFile).mimeType).toBe('font/ttf');
+	expect((secondFile![1] as AttachedFile).name).toBe('Heya');
+	expect((secondFile![1] as AttachedFile).description).toBe('A font file');
 });
 
 test('Read and write metadata, MP3', async () => {
