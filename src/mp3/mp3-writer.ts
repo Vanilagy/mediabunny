@@ -15,7 +15,7 @@ import {
 	KILOBIT_RATES,
 	XING,
 } from '../../shared/mp3-misc';
-import { Id3V2TextEncoding } from './mp3-reader';
+import { Id3V2TextEncoding } from '../id3';
 
 export type XingFrameData = {
 	mpegVersionId: number;

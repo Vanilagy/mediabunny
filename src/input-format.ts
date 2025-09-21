@@ -22,7 +22,8 @@ import {
 import { MatroskaDemuxer } from './matroska/matroska-demuxer';
 import { Mp3Demuxer } from './mp3/mp3-demuxer';
 import { FRAME_HEADER_SIZE } from '../shared/mp3-misc';
-import { ID3_V2_HEADER_SIZE, readId3V2Header, readNextFrameHeader } from './mp3/mp3-reader';
+import { ID3_V2_HEADER_SIZE, readId3V2Header } from './id3';
+import { readNextFrameHeader } from './mp3/mp3-reader';
 import { OggDemuxer } from './ogg/ogg-demuxer';
 import { WaveDemuxer } from './wave/wave-demuxer';
 import { MAX_FRAME_HEADER_SIZE, MIN_FRAME_HEADER_SIZE, readFrameHeader } from './adts/adts-reader';

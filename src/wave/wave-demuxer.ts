@@ -15,7 +15,7 @@ import { MetadataTags } from '../tags';
 import { assert, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readAscii, readBytes, Reader, readU16, readU32, readU64 } from '../reader';
-import { parseId3V2Tag, readId3V2Header } from '../mp3/mp3-reader';
+import { parseId3V2Tag, readId3V2Header } from '../id3';
 
 export enum WaveFormat {
 	PCM = 0x0001,
@@ -188,25 +188,13 @@ export class WaveDemuxer extends Demuxer {
 			return; // Not an INFO chunk
 		}
 
-		// Track position relative to the start of the INFO data (after the 4-byte type)
-		let relativePos = 4; // Start after the INFO type
-		const infoDataSize = size - 4; // Subtract the 4 bytes for INFO type
+		let currentPos = slice.filePos;
+		while (currentPos <= startPos + size - 8) {
+			slice.filePos = currentPos;
 
-		while (relativePos <= infoDataSize - 8) {
-			// Request a new slice for each chunk to avoid position management issues
-			let chunkSlice = this.reader.requestSlice(startPos + relativePos, Math.min(8, infoDataSize - relativePos));
-			if (chunkSlice instanceof Promise) chunkSlice = await chunkSlice;
-			if (!chunkSlice) break;
-
-			const chunkName = readAscii(chunkSlice, 4);
-			const chunkSize = readU32(chunkSlice, littleEndian);
-
-			// Request slice for the chunk data
-			let dataSlice = this.reader.requestSlice(startPos + relativePos + 8, chunkSize);
-			if (dataSlice instanceof Promise) dataSlice = await dataSlice;
-			if (!dataSlice) break;
-
-			const bytes = readBytes(dataSlice, chunkSize);
+			const chunkName = readAscii(slice, 4);
+			const chunkSize = readU32(slice, littleEndian);
+			const bytes = readBytes(slice, chunkSize);
 
 			let stringLength = 0;
 			for (let i = 0; i < bytes.length; i++) {
@@ -282,7 +270,7 @@ export class WaveDemuxer extends Demuxer {
 				}; break;
 			}
 
-			relativePos += 8 + chunkSize + (chunkSize & 1); // Handle padding
+			currentPos += 8 + chunkSize + (chunkSize & 1); // Handle padding
 		}
 	}
 

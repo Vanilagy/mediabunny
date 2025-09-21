@@ -21,8 +21,8 @@ import {
 	parseId3V1Tag,
 	parseId3V2Tag,
 	readId3V2Header,
-	readNextFrameHeader,
-} from './mp3-reader';
+} from '../id3';
+import { readNextFrameHeader } from './mp3-reader';
 import { readAscii, readBytes, Reader, readU32Be } from '../reader';
 
 type Sample = {

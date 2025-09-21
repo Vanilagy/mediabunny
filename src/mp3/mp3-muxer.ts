@@ -15,7 +15,7 @@ import { EncodedPacket } from '../packet';
 import { Writer } from '../writer';
 import { getXingOffset, INFO, readFrameHeader, XING } from '../../shared/mp3-misc';
 import { Mp3Writer, XingFrameData } from './mp3-writer';
-import { Id3V2TextEncoding } from './mp3-reader';
+import { Id3V2TextEncoding } from '../id3';
 
 export class Mp3Muxer extends Muxer {
 	private format: Mp3OutputFormat;
