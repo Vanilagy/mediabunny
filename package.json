@@ -1,7 +1,7 @@
 {
   "name": "mediabunny",
   "author": "Vanilagy",
-  "version": "1.18.0",
+  "version": "1.18.1",
   "description": "Pure TypeScript media toolkit for reading, writing, and converting media files, directly in the browser.",
   "type": "module",
   "workspaces": [
@@ -24,7 +24,8 @@
   ],
   "browser": {
     "./dist/modules/src/node.js": false,
-    "./src/node.ts": false
+    "./src/node.ts": false,
+    "node:fs/promises": false
   },
   "sideEffects": false,
   "scripts": {
