@@ -330,17 +330,17 @@ export const ftyp = (details: {
 /** Movie Sample Data Box. Contains the actual frames/samples of the media. */
 export const mdat = (reserveLargeSize: boolean): Box => ({ type: 'mdat', largeSize: reserveLargeSize });
 
+/** Free Space Box: A box that designates unused space in the movie data file. */
+export const free = (size: number): Box => ({ type: 'free', size });
+
 /**
  * Movie Box: Used to specify the information that defines a movie - that is, the information that allows
  * an application to interpret the sample data that is stored elsewhere.
  */
-export const moov = (
-	muxer: IsobmffMuxer,
-	fragmented = false,
-) => box('moov', undefined, [
+export const moov = (muxer: IsobmffMuxer) => box('moov', undefined, [
 	mvhd(muxer.creationTime, muxer.trackDatas),
 	...muxer.trackDatas.map(x => trak(x, muxer.creationTime)),
-	fragmented ? mvex(muxer.trackDatas) : null,
+	muxer.isFragmented ? mvex(muxer.trackDatas) : null,
 	udta(muxer),
 ]);
 
@@ -1274,14 +1274,18 @@ export const vtta = (notes: string) => box('vtta', [...textEncoder.encode(notes)
 const udta = (muxer: IsobmffMuxer) => {
 	const boxes: Box[] = [];
 
+	const metadataFormat = muxer.format._options.metadataFormat ?? 'auto';
+	const metadataTags = muxer.output._metadataTags;
+
 	// Depending on the format, metadata tags are written differently
-	if (muxer.isQuickTime) {
+	if (metadataFormat === 'mdir' || (metadataFormat === 'auto' && !muxer.isQuickTime)) {
+		const metaBox = metaMdir(metadataTags);
+		if (metaBox) boxes.push(metaBox);
+	} else if (metadataFormat === 'mdta') {
+		const metaBox = metaMdta(metadataTags);
+		if (metaBox) boxes.push(metaBox);
+	} else if (metadataFormat === 'udta' || (metadataFormat === 'auto' && muxer.isQuickTime)) {
 		addQuickTimeMetadataTagBoxes(boxes, muxer.output._metadataTags);
-	} else {
-		const metaBox = meta(muxer.output._metadataTags);
-		if (metaBox) {
-			boxes.push(metaBox);
-		}
 	}
 
 	if (boxes.length === 0) {
@@ -1381,9 +1385,14 @@ const DATA_BOX_MIME_TYPE_MAP: Record<string, number> = {
 	'image/bmp': 27,
 };
 
-/** Metadata Box */
-const meta = (tags: MetadataTags) => {
-	const boxes: Box[] = [];
+/**
+ * Generates key-value metadata for inclusion in the "meta" box.
+ */
+const generateMetadataPairs = (tags: MetadataTags, isMdta: boolean) => {
+	const pairs: {
+		key: string;
+		value: Box;
+	}[] = [];
 
 	// https://exiftool.org/TagNames/QuickTime.html (QuickTime ItemList Tags)
 	// This is the metadata format used for MP4 files
@@ -1391,39 +1400,42 @@ const meta = (tags: MetadataTags) => {
 	for (const { key, value } of keyValueIterator(tags)) {
 		switch (key) {
 			case 'title': {
-				boxes.push(metadataTagStringBoxLong('©nam', value));
+				pairs.push({ key: isMdta ? 'title' : '©nam', value: dataStringBoxLong(value) });
 			}; break;
 
 			case 'description': {
-				boxes.push(metadataTagStringBoxLong('©des', value));
+				pairs.push({ key: isMdta ? 'description' : '©des', value: dataStringBoxLong(value) });
 			}; break;
 
 			case 'artist': {
-				boxes.push(metadataTagStringBoxLong('©ART', value));
+				pairs.push({ key: isMdta ? 'artist' : '©ART', value: dataStringBoxLong(value) });
 			}; break;
 
 			case 'album': {
-				boxes.push(metadataTagStringBoxLong('©alb', value));
+				pairs.push({ key: isMdta ? 'album' : '©alb', value: dataStringBoxLong(value) });
 			}; break;
 
 			case 'albumArtist': {
-				boxes.push(metadataTagStringBoxLong('aART', value));
+				pairs.push({ key: isMdta ? 'album_artist' : 'aART', value: dataStringBoxLong(value) });
 			}; break;
 
 			case 'comment': {
-				boxes.push(metadataTagStringBoxLong('©cmt', value));
+				pairs.push({ key: isMdta ? 'comment' : '©cmt', value: dataStringBoxLong(value) });
 			}; break;
 
 			case 'genre': {
-				boxes.push(metadataTagStringBoxLong('©gen', value));
+				pairs.push({ key: isMdta ? 'genre' : '©gen', value: dataStringBoxLong(value) });
 			}; break;
 
 			case 'lyrics': {
-				boxes.push(metadataTagStringBoxLong('©lyr', value));
+				pairs.push({ key: isMdta ? 'lyrics' : '©lyr', value: dataStringBoxLong(value) });
 			}; break;
 
 			case 'date': {
-				boxes.push(metadataTagStringBoxLong('©day', value.toISOString().slice(0, 10)));
+				pairs.push({
+					key: isMdta ? 'date' : '©day',
+					value: dataStringBoxLong(value.toISOString().slice(0, 10)),
+				});
 			}; break;
 
 			case 'images': {
@@ -1432,40 +1444,45 @@ const meta = (tags: MetadataTags) => {
 						continue;
 					}
 
-					boxes.push(box('covr', undefined, [
-						box('data', [
-							u32(DATA_BOX_MIME_TYPE_MAP[image.mimeType] ?? 0), // Type indicator
-							u32(0), // Locale indicator
-							Array.from(image.data), // Kinda slow, hopefully temp
-						]),
-					]));
+					pairs.push({ key: 'covr', value: box('data', [
+						u32(DATA_BOX_MIME_TYPE_MAP[image.mimeType] ?? 0), // Type indicator
+						u32(0), // Locale indicator
+						Array.from(image.data), // Kinda slow, hopefully temp
+					]) });
 				}
 			}; break;
 
 			case 'trackNumber': {
-				boxes.push(box('trkn', undefined, [
-					box('data', [
+				if (isMdta) {
+					const string = tags.tracksTotal !== undefined
+						? `${value}/${tags.tracksTotal}`
+						: value.toString();
+
+					pairs.push({ key: 'track', value: dataStringBoxLong(string) });
+				} else {
+					pairs.push({ key: 'trkn', value: box('data', [
 						u32(0), // 8 bytes empty
 						u32(0),
 						u16(0), // Empty
 						u16(value),
 						u16(tags.tracksTotal ?? 0),
 						u16(0), // Empty
-					]),
-				]));
+					]) });
+				}
 			}; break;
 
 			case 'discNumber': {
-				boxes.push(box('disc', undefined, [
-					box('data', [
+				if (!isMdta) {
+					// Only written for mdir
+					pairs.push({ key: 'disc', value: box('data', [
 						u32(0), // 8 bytes empty
 						u32(0),
 						u16(0), // Empty
 						u16(value),
 						u16(tags.discsTotal ?? 0),
 						u16(0), // Empty
-					]),
-				]));
+					]) });
+				}
 			}; break;
 
 			case 'tracksTotal':
@@ -1484,49 +1501,74 @@ const meta = (tags: MetadataTags) => {
 	if (tags.raw) {
 		for (const key in tags.raw) {
 			const value = tags.raw[key];
-			if (value == null || key.length !== 4 || boxes.some(x => x.type === key)) {
+			if (value == null || (!isMdta && key.length !== 4) || pairs.some(x => x.key === key)) {
 				continue;
 			}
 
 			if (typeof value === 'string') {
-				boxes.push(metadataTagStringBoxLong(key, value));
+				pairs.push({ key, value: dataStringBoxLong(value) });
 			} else if (value instanceof Uint8Array) {
-				boxes.push(box(key, undefined, [
-					box('data', [
-						u32(0), // Type indicator
-						u32(0), // Locale indicator
-						Array.from(value),
-					]),
-				]));
+				pairs.push({ key, value: box('data', [
+					u32(0), // Type indicator
+					u32(0), // Locale indicator
+					Array.from(value),
+				]) });
 			} else if (value instanceof RichImageData) {
-				boxes.push(box(key, undefined, [
-					box('data', [
-						u32(DATA_BOX_MIME_TYPE_MAP[value.mimeType] ?? 0), // Type indicator
-						u32(0), // Locale indicator
-						Array.from(value.data), // Kinda slow, hopefully temp
-					]),
-				]));
+				pairs.push({ key, value: box('data', [
+					u32(DATA_BOX_MIME_TYPE_MAP[value.mimeType] ?? 0), // Type indicator
+					u32(0), // Locale indicator
+					Array.from(value.data), // Kinda slow, hopefully temp
+				]) });
 			}
 		}
 	}
 
-	if (boxes.length === 0) {
+	return pairs;
+};
+
+/** Metadata Box (mdir format) */
+const metaMdir = (tags: MetadataTags) => {
+	const pairs = generateMetadataPairs(tags, false);
+
+	if (pairs.length === 0) {
 		return null;
 	}
 
+	// fullBox format
 	return fullBox('meta', 0, 0, undefined, [
-		hdlr(false, 'mdir', '', 'appl'),
-		box('ilst', undefined, boxes),
+		hdlr(false, 'mdir', '', 'appl'), // mdir handler
+		box('ilst', undefined, pairs.map(pair => box(pair.key, undefined, [pair.value]))), // Item list without keys box
 	]);
 };
 
-const metadataTagStringBoxLong = (name: string, value: string) => {
-	return box(name, undefined, [
-		box('data', [
-			u32(1), // Type indicator (UTF-8)
-			u32(0), // Locale indicator
-			...textEncoder.encode(value),
-		]),
+/** Metadata Box (mdta format with keys box) */
+const metaMdta = (tags: MetadataTags) => {
+	const pairs = generateMetadataPairs(tags, true);
+
+	if (pairs.length === 0) {
+		return null;
+	}
+
+	// box without version and flags
+	return box('meta', undefined, [
+		hdlr(false, 'mdta', ''), // mdta handler
+		fullBox('keys', 0, 0, [
+			u32(pairs.length),
+		], pairs.map(pair => box('mdta', [ // Hacky since these aren't boxes technically, but if not box why box-shaped?
+			...textEncoder.encode(pair.key),
+		]))),
+		box('ilst', undefined, pairs.map((pair, i) => {
+			const boxName = String.fromCharCode(...u32(i + 1));
+			return box(boxName, undefined, [pair.value]);
+		})),
+	]);
+};
+
+const dataStringBoxLong = (value: string) => {
+	return box('data', [
+		u32(1), // Type indicator (UTF-8)
+		u32(0), // Locale indicator
+		...textEncoder.encode(value),
 	]);
 };
 

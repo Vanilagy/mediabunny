@@ -24,7 +24,7 @@
 			chunked: true,
 			chunkSize: 2**20
 		});
-		const outputFormat = new Mediabunny.Mp4OutputFormat({});
+		const outputFormat = new Mediabunny.Mp3OutputFormat({});
 
 		const button = document.createElement('button');
 		button.textContent = 'Cancel';
@@ -47,23 +47,6 @@
 			format: outputFormat,
 			target
 		});
-		output.setMetadataTags({
-			title: 'Bigggy',
-			artist: 'Buck Bunny',
-			images: [{
-				data: blobData,
-				kind: 'coverFront',
-				mimeType: 'image/jpeg'
-			}],
-			trackNumber: 4,
-			tracksTotal: 10,
-			discNumber: 5,
-			discNumberMax: 8,
-			lyrics: "There's no way\nThat it's not going there",
-			raw: {
-				'ENCODER': 'Mediabunny epic own encoder'
-			}
-		});
 
 		const conversion = await Mediabunny.Conversion.init({
 			input: new Mediabunny.Input({
@@ -71,7 +54,8 @@
 				source
 			}),
 			output,
-			audio: {
+			audio: (_, n) => ({
+				discard: n > 1,
 				//codec: 'pcm-s16',
 				//sampleRate: 16000,
 				//numberOfChannels: 1,
@@ -82,7 +66,7 @@
 				//sampleRate: 4000
 				//discard: true
 				//forceTranscode: true,
-			},
+			}),
 			/*
 			video: {
 				discard: true,
@@ -109,16 +93,17 @@
 			*/
 			video: () => ({
 				//discard: true,
-				crop: {
-					left: 0,
-					top: 0,
-					width: 500,
-					height: 500,
-				},
-				rotate: 90,
-				width: 200,
-				height: 500,
-				fit: 'contain',
+				//discard: true,
+				//crop: {
+				//	left: 0,
+				//	top: 0,
+				//	width: 500,
+				//	height: 500,
+				//},
+				//rotate: 90,
+				//width: 200,
+				//height: 500,
+				//fit: 'contain',
 				//forceTranscode: true,
 				//codec: 'avc',
 				//fit: 'contain',
@@ -141,9 +126,26 @@
 				//width: 200,
 				//height: 100,
 			}),
+			tags: {
+				title: 'Bigggy',
+				artist: 'Buck Bunny',
+				images: [{
+					data: blobData,
+					kind: 'coverFront',
+					mimeType: 'image/jpeg'
+				}],
+				trackNumber: 4,
+				tracksTotal: 10,
+				discNumber: 5,
+				discsTotal: 8,
+				lyrics: "There's no way\nThat it's not going there",
+				raw: {
+					'AIGC': 'Mediabunny epic own encoder'
+				}
+			},
 			trim: {
-				start: 10,
-				end: 20
+				//start: 10,
+				//end: 20
 			},
 		});
 		console.log(conversion);

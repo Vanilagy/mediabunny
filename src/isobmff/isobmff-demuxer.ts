@@ -24,6 +24,7 @@ import {
 	AvcDecoderConfigurationRecord,
 	extractAv1CodecInfoFromPacket,
 	extractVp9CodecInfoFromPacket,
+	FlacBlockType,
 	HevcDecoderConfigurationRecord,
 	Vp9CodecInfo,
 } from '../codec-data';
@@ -709,11 +710,11 @@ export class IsobmffDemuxer extends Demuxer {
 				if (track.id !== -1 && track.timescale !== -1 && track.info !== null) {
 					if (track.info.type === 'video' && track.info.width !== -1) {
 						const videoTrack = track as InternalVideoTrack;
-						track.inputTrack = new InputVideoTrack(new IsobmffVideoTrackBacking(videoTrack));
+						track.inputTrack = new InputVideoTrack(this.input, new IsobmffVideoTrackBacking(videoTrack));
 						this.tracks.push(track);
 					} else if (track.info.type === 'audio' && track.info.numberOfChannels !== -1) {
 						const audioTrack = track as InternalAudioTrack;
-						track.inputTrack = new InputAudioTrack(new IsobmffAudioTrackBacking(audioTrack));
+						track.inputTrack = new InputAudioTrack(this.input, new IsobmffAudioTrackBacking(audioTrack));
 						this.tracks.push(track);
 					}
 				}
@@ -1451,7 +1452,7 @@ export class IsobmffDemuxer extends Demuxer {
 					const type = flagAndType & BLOCK_TYPE_MASK;
 
 					// It's a STREAMINFO block; let's extract the actual sample rate and channel count
-					if (type === 0) {
+					if (type === FlacBlockType.STREAMINFO) {
 						slice.skip(10);
 
 						// Extract sample rate and channel count
@@ -2306,8 +2307,23 @@ export class IsobmffDemuxer extends Demuxer {
 							}
 						}; break;
 
+						case 'track': {
+							if (typeof data === 'string') {
+								const parts = data.split('/');
+								const trackNum = Number.parseInt(parts[0]!, 10);
+								const tracksTotal = parts[1] && Number.parseInt(parts[1], 10);
+
+								if (Number.isInteger(trackNum) && trackNum > 0) {
+									this.metadataTags.trackNumber ??= trackNum;
+								}
+								if (tracksTotal && Number.isInteger(tracksTotal) && tracksTotal > 0) {
+									this.metadataTags.tracksTotal ??= tracksTotal;
+								}
+							}
+						}; break;
+
 						case 'trkn': {
-							if (data instanceof Uint8Array) {
+							if (data instanceof Uint8Array && data.length >= 6) {
 								const view = toDataView(data);
 
 								const trackNumber = view.getUint16(2, false);
@@ -2324,7 +2340,7 @@ export class IsobmffDemuxer extends Demuxer {
 
 						case 'disc':
 						case 'disk': {
-							if (data instanceof Uint8Array) {
+							if (data instanceof Uint8Array && data.length >= 6) {
 								const view = toDataView(data);
 
 								const discNumber = view.getUint16(2, false);

@@ -11,14 +11,21 @@ import { InputVideoTrack } from './input-track';
 import {
 	assert,
 	assertNever,
+	base64ToBytes,
 	Bitstream,
+	bytesToBase64,
+	keyValueIterator,
+	getUint24,
 	last,
 	readExpGolomb,
 	readSignedExpGolomb,
+	textDecoder,
+	textEncoder,
 	toDataView,
 	toUint8Array,
 } from './misc';
 import { EncodedPacket, PacketType } from './packet';
+import { MetadataTags } from './tags';
 
 // References for AVC/HEVC code:
 // ISO 14496-15
@@ -116,7 +123,7 @@ const findNalUnitsInLengthPrefixed = (packetData: Uint8Array, lengthSize: 1 | 2 
 		} else if (lengthSize === 2) {
 			nalUnitLength = dataView.getUint16(offset, false);
 		} else if (lengthSize === 3) {
-			nalUnitLength = (dataView.getUint16(offset, false) << 8) + dataView.getUint8(offset + 2);
+			nalUnitLength = getUint24(dataView, offset, false);
 		} else if (lengthSize === 4) {
 			nalUnitLength = dataView.getUint32(offset, false);
 		} else {
@@ -1570,4 +1577,343 @@ export const determineVideoPacketType = async (
 			assert(false);
 		};
 	}
+};
+
+export enum FlacBlockType {
+	STREAMINFO = 0,
+	VORBIS_COMMENT = 4,
+	PICTURE = 6,
+}
+
+export const readVorbisComments = (bytes: Uint8Array, metadataTags: MetadataTags) => {
+	// https://datatracker.ietf.org/doc/html/rfc7845#section-5.2
+
+	const commentView = toDataView(bytes);
+	let commentPos = 0;
+
+	const vendorStringLength = commentView.getUint32(commentPos, true);
+	commentPos += 4;
+
+	const vendorString = textDecoder.decode(
+		bytes.subarray(commentPos, commentPos + vendorStringLength),
+	);
+	commentPos += vendorStringLength;
+
+	if (vendorStringLength > 0) {
+		// Expose the vendor string in the raw metadata
+		metadataTags.raw ??= {};
+		metadataTags.raw['vendor'] ??= vendorString;
+	}
+
+	const listLength = commentView.getUint32(commentPos, true);
+	commentPos += 4;
+
+	// Loop over all metadata tags
+	for (let i = 0; i < listLength; i++) {
+		const stringLength = commentView.getUint32(commentPos, true);
+		commentPos += 4;
+
+		const string = textDecoder.decode(
+			bytes.subarray(commentPos, commentPos + stringLength),
+		);
+		commentPos += stringLength;
+
+		const separatorIndex = string.indexOf('=');
+		if (separatorIndex === -1) {
+			continue;
+		}
+
+		const key = string.slice(0, separatorIndex).toUpperCase();
+		const value = string.slice(separatorIndex + 1);
+
+		metadataTags.raw ??= {};
+		metadataTags.raw[key] ??= value;
+
+		switch (key) {
+			case 'TITLE': {
+				metadataTags.title ??= value;
+			}; break;
+
+			case 'DESCRIPTION': {
+				metadataTags.description ??= value;
+			}; break;
+
+			case 'ARTIST': {
+				metadataTags.artist ??= value;
+			}; break;
+
+			case 'ALBUM': {
+				metadataTags.album ??= value;
+			}; break;
+
+			case 'ALBUMARTIST': {
+				metadataTags.albumArtist ??= value;
+			}; break;
+
+			case 'COMMENT': {
+				metadataTags.comment ??= value;
+			}; break;
+
+			case 'LYRICS': {
+				metadataTags.lyrics ??= value;
+			}; break;
+
+			case 'TRACKNUMBER': {
+				const parts = value.split('/');
+				const trackNum = Number.parseInt(parts[0]!, 10);
+				const tracksTotal = parts[1] && Number.parseInt(parts[1], 10);
+
+				if (Number.isInteger(trackNum) && trackNum > 0) {
+					metadataTags.trackNumber ??= trackNum;
+				}
+				if (tracksTotal && Number.isInteger(tracksTotal) && tracksTotal > 0) {
+					metadataTags.tracksTotal ??= tracksTotal;
+				}
+			}; break;
+
+			case 'TRACKTOTAL': {
+				const tracksTotal = Number.parseInt(value, 10);
+				if (Number.isInteger(tracksTotal) && tracksTotal > 0) {
+					metadataTags.tracksTotal ??= tracksTotal;
+				}
+			}; break;
+
+			case 'DISCNUMBER': {
+				const parts = value.split('/');
+				const discNum = Number.parseInt(parts[0]!, 10);
+				const discsTotal = parts[1] && Number.parseInt(parts[1], 10);
+
+				if (Number.isInteger(discNum) && discNum > 0) {
+					metadataTags.discNumber ??= discNum;
+				}
+				if (discsTotal && Number.isInteger(discsTotal) && discsTotal > 0) {
+					metadataTags.discsTotal ??= discsTotal;
+				}
+			}; break;
+
+			case 'DISCTOTAL': {
+				const discsTotal = Number.parseInt(value, 10);
+				if (Number.isInteger(discsTotal) && discsTotal > 0) {
+					metadataTags.discsTotal ??= discsTotal;
+				}
+			}; break;
+
+			case 'DATE': {
+				const date = new Date(value);
+				if (!Number.isNaN(date.getTime())) {
+					metadataTags.date ??= date;
+				}
+			}; break;
+
+			case 'GENRE': {
+				metadataTags.genre ??= value;
+			}; break;
+
+			case 'METADATA_BLOCK_PICTURE': {
+				// https://datatracker.ietf.org/doc/rfc9639/ Section 8.8
+				const decoded = base64ToBytes(value);
+
+				const view = toDataView(decoded);
+				const pictureType = view.getUint32(0, false);
+				const mediaTypeLength = view.getUint32(4, false);
+				const mediaType = String.fromCharCode(...decoded.subarray(8, 8 + mediaTypeLength)); // ASCII
+				const descriptionLength = view.getUint32(8 + mediaTypeLength, false);
+				const description = textDecoder.decode(decoded.subarray(
+					12 + mediaTypeLength,
+					12 + mediaTypeLength + descriptionLength,
+				));
+				const dataLength = view.getUint32(mediaTypeLength + descriptionLength + 28);
+				const data = decoded.subarray(
+					mediaTypeLength + descriptionLength + 32,
+					mediaTypeLength + descriptionLength + 32 + dataLength,
+				);
+
+				metadataTags.images ??= [];
+				metadataTags.images.push({
+					data,
+					mimeType: mediaType,
+					kind: pictureType === 3 ? 'coverFront' : pictureType === 4 ? 'coverBack' : 'unknown',
+					name: undefined,
+					description: description || undefined,
+				});
+			}; break;
+		}
+	}
+};
+
+export const createVorbisComments = (headerBytes: Uint8Array, tags: MetadataTags, writeImages: boolean) => {
+	// https://datatracker.ietf.org/doc/html/rfc7845#section-5.2
+
+	const commentHeaderParts: Uint8Array[] = [
+		headerBytes,
+	];
+
+	const vendorString = 'Mediabunny';
+	const encodedVendorString = textEncoder.encode(vendorString);
+
+	let currentBuffer = new Uint8Array(4 + encodedVendorString.length);
+	let currentView = new DataView(currentBuffer.buffer);
+	currentView.setUint32(0, encodedVendorString.length, true);
+	currentBuffer.set(encodedVendorString, 4);
+
+	commentHeaderParts.push(currentBuffer);
+
+	const writtenTags = new Set<string>();
+	const addCommentTag = (key: string, value: string) => {
+		const joined = `${key}=${value}`;
+		const encoded = textEncoder.encode(joined);
+
+		currentBuffer = new Uint8Array(4 + encoded.length);
+		currentView = new DataView(currentBuffer.buffer);
+
+		currentView.setUint32(0, encoded.length, true);
+		currentBuffer.set(encoded, 4);
+
+		commentHeaderParts.push(currentBuffer);
+		writtenTags.add(key);
+	};
+
+	for (const { key, value } of keyValueIterator(tags)) {
+		switch (key) {
+			case 'title': {
+				addCommentTag('TITLE', value);
+			}; break;
+
+			case 'description': {
+				addCommentTag('DESCRIPTION', value);
+			}; break;
+
+			case 'artist': {
+				addCommentTag('ARTIST', value);
+			}; break;
+
+			case 'album': {
+				addCommentTag('ALBUM', value);
+			}; break;
+
+			case 'albumArtist': {
+				addCommentTag('ALBUMARTIST', value);
+			}; break;
+
+			case 'genre': {
+				addCommentTag('GENRE', value);
+			}; break;
+
+			case 'date': {
+				const rawVersion = tags.raw?.['DATE'] ?? tags.raw?.['date'];
+				if (rawVersion && typeof rawVersion === 'string') {
+					addCommentTag('DATE', rawVersion);
+				} else {
+					addCommentTag('DATE', value.toISOString().slice(0, 10));
+				}
+			}; break;
+
+			case 'comment': {
+				addCommentTag('COMMENT', value);
+			}; break;
+
+			case 'lyrics': {
+				addCommentTag('LYRICS', value);
+			}; break;
+
+			case 'trackNumber': {
+				addCommentTag('TRACKNUMBER', value.toString());
+			}; break;
+
+			case 'tracksTotal': {
+				addCommentTag('TRACKTOTAL', value.toString());
+			}; break;
+
+			case 'discNumber': {
+				addCommentTag('DISCNUMBER', value.toString());
+			}; break;
+
+			case 'discsTotal': {
+				addCommentTag('DISCTOTAL', value.toString());
+			}; break;
+
+			case 'images': {
+				// For example, in .flac, we put the pictures in a different section,
+				// not in the Vorbis comment header.
+				if (!writeImages) {
+					break;
+				}
+				for (const image of value) {
+					// https://datatracker.ietf.org/doc/rfc9639/ Section 8.8
+					const pictureType = image.kind === 'coverFront' ? 3 : image.kind === 'coverBack' ? 4 : 0;
+					const encodedMediaType = new Uint8Array(image.mimeType.length);
+
+					for (let i = 0; i < image.mimeType.length; i++) {
+						encodedMediaType[i] = image.mimeType.charCodeAt(i);
+					}
+
+					const encodedDescription = textEncoder.encode(image.description ?? '');
+
+					const buffer = new Uint8Array(
+						4 // Picture type
+						+ 4 // MIME type length
+						+ encodedMediaType.length // MIME type
+						+ 4 // Description length
+						+ encodedDescription.length // Description
+						+ 16 // Width, height, color depth, number of colors
+						+ 4 // Picture data length
+						+ image.data.length, // Picture data
+					);
+					const view = toDataView(buffer);
+
+					view.setUint32(0, pictureType, false);
+					view.setUint32(4, encodedMediaType.length, false);
+					buffer.set(encodedMediaType, 8);
+					view.setUint32(8 + encodedMediaType.length, encodedDescription.length, false);
+					buffer.set(encodedDescription, 12 + encodedMediaType.length);
+					// Skip a bunch of fields (width, height, color depth, number of colors)
+					view.setUint32(
+						28 + encodedMediaType.length + encodedDescription.length, image.data.length, false,
+					);
+					buffer.set(
+						image.data,
+						32 + encodedMediaType.length + encodedDescription.length,
+					);
+
+					const encoded = bytesToBase64(buffer);
+					addCommentTag('METADATA_BLOCK_PICTURE', encoded);
+				}
+			}; break;
+
+			case 'raw': {
+				// Handled later
+			}; break;
+
+			default: assertNever(key);
+		}
+	}
+
+	if (tags.raw) {
+		for (const key in tags.raw) {
+			const value = tags.raw[key] ?? tags.raw[key.toLowerCase()];
+			if (key === 'vendor' || value == null || writtenTags.has(key)) {
+				continue;
+			}
+
+			if (typeof value === 'string') {
+				addCommentTag(key, value);
+			}
+		}
+	}
+
+	const listLengthBuffer = new Uint8Array(4);
+	toDataView(listLengthBuffer).setUint32(0, writtenTags.size, true);
+	commentHeaderParts.splice(2, 0, listLengthBuffer); // Insert after the header and vendor section
+
+	// Merge all comment header parts into a single buffer
+	const commentHeaderLength = commentHeaderParts.reduce((a, b) => a + b.length, 0);
+	const commentHeader = new Uint8Array(commentHeaderLength);
+
+	let pos = 0;
+	for (const part of commentHeaderParts) {
+		commentHeader.set(part, pos);
+		pos += part.length;
+	}
+
+	return commentHeader;
 };

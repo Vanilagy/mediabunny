@@ -394,6 +394,29 @@ await decoder.flush();
 
 As you can see, media sinks are incredibly versatile and allow for efficient, sparse reading of media data within the input file.
 
+## Disposing inputs
+
+When you're not using them anymore, `Input` instances will automatically get cleaned up by garbage collection. However, sometimes you may want to prematurely dispose of an `Input` and all its connected resources, or cancel any ongoing operation. You can do it like so:
+
+```ts
+input.dispose();
+```
+
+When an `Input` is disposed, ongoing read operations will be canceled, all future read operations will fail, any open decoders will be closed, and all ongoing media sink operations will be canceled. Disallowed and canceled operations will throw an `InputDisposedError`.
+
+You are expected not to use an `Input` after disposing it. While some operations may still work, it is not specified and may change in any future update.
+
+`Input` also implements `Disposable`, meaning you can use it with JavaScript Explicit Resource Management features such as the [`using` keyword](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/using):
+```ts
+{
+	using input = new Input(...);
+
+	// `input` will automatically be disposed
+}
+```
+
+Using `using` is recommended over `const` if you only need the `Input` momentarily within a single scope.
+
 ## Input sources
 
 The _input source_ determines where the `Input` reads data from.
@@ -511,6 +534,10 @@ type FilePathSourceOptions = {
 };
 ```
 
+::: warning
+When using this source, make sure to manually [dispose of the Input](#disposing-inputs) when you are done with it to properly close the internal file handle held by this source.
+:::
+
 ### `StreamSource`
 
 This is a general-purpose input source you can use to read data from anywhere.
@@ -540,6 +567,7 @@ The options of `StreamSource` have the following type:
 type StreamSourceOptions = {
 	getSize: () => MaybePromise<number>;
 	read: (start: number, end: number) => MaybePromise<Uint8Array | ReadableStream<Uint8Array>>;
+	dispose?: () => unknown;
 	maxCacheSize?: number;
 	prefetchProfile?: 'none' | 'fileSystem' | 'network';
 };
@@ -551,6 +579,8 @@ type MaybePromise<T> = T | Promise<T>;
 	Called when the size of the entire file is requested. Must return or resolve to the size in bytes. This function is guaranteed to be called before `read`.
 - `read`\
 	Called when data is requested. Must return or resolve to the bytes from the specified byte range, or a stream that yields these bytes.
+- `dispose`\
+	Called when the `Input` driven by this source is disposed.
 - `maxCacheSize`\
 	The maximum number of bytes the cache is allowed to hold in memory. Defaults to 8 MiB.
 - `prefetchProfile`\

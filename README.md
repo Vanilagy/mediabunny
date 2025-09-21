@@ -39,6 +39,10 @@ Mediabunny is a JavaScript library for reading, writing, and converting media fi
   <a href="https://www.reactvideoeditor.com/" target="_blank">
     <img src="./docs/public/sponsors/rve.svg" width="40" height="40" alt="React Video Editor">
   </a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.mux.com/" target="_blank">
+    <img src="./docs/public/sponsors/mux.jpg" width="40" height="40" alt="Mux">
+  </a>
 </div>
 
 [Sponsor Mediabunny's development](https://github.com/sponsors/Vanilagy)
@@ -47,7 +51,7 @@ Mediabunny is a JavaScript library for reading, writing, and converting media fi
 
 Core features include:
 
-- **Wide format support**: Read and write MP4, MOV, WebM, MKV, WAVE, MP3, Ogg, ADTS
+- **Wide format support**: Read and write MP4, MOV, WebM, MKV, WAVE, MP3, Ogg, ADTS, FLAC
 - **Built-in encoding & decoding**: Supports 25+ video, audio, and subtitle codecs, hardware-accelerated using the WebCodecs API
 - **High precision**: Fine-grained, microsecond-accurate reading and writing operations
 - **Conversion API**: Easy-to-use API with features such as transmuxing, transcoding, resizing, rotation, cropping, resampling, trimming, and more

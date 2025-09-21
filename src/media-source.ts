@@ -18,7 +18,16 @@ import {
 	VideoCodec,
 } from './codec';
 import { OutputAudioTrack, OutputSubtitleTrack, OutputTrack, OutputVideoTrack } from './output';
-import { assert, assertNever, CallSerializer, clamp, promiseWithResolvers, setInt24, setUint24 } from './misc';
+import {
+	assert,
+	assertNever,
+	CallSerializer,
+	clamp,
+	isFirefox,
+	promiseWithResolvers,
+	setInt24,
+	setUint24,
+} from './misc';
 import { Muxer } from './muxer';
 import { SubtitleParser } from './subtitles';
 import { toAlaw, toUlaw } from './pcm';
@@ -248,12 +257,18 @@ class VideoEncoderWrapper {
 							canvasIsNew = true;
 						}
 
-						const context = this.resizeCanvas.getContext('2d', { alpha: false }) as
-							CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+						const context = this.resizeCanvas.getContext('2d', {
+							alpha: isFirefox(), // Firefox has VideoFrame glitches with opaque canvases
+						}) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 						assert(context);
 
 						if (!canvasIsNew) {
-							context.clearRect(0, 0, this.codedWidth, this.codedHeight);
+							if (isFirefox()) {
+								context.fillStyle = 'black';
+								context.fillRect(0, 0, this.codedWidth, this.codedHeight);
+							} else {
+								context.clearRect(0, 0, this.codedWidth, this.codedHeight);
+							}
 						}
 
 						videoSample.drawWithFit(context, { fit: sizeChangeBehavior });

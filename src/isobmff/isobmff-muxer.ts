@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { Box, ftyp, IsobmffBoxWriter, mdat, mfra, moof, moov, vtta, vttc, vtte } from './isobmff-boxes';
+import { Box, free, ftyp, IsobmffBoxWriter, mdat, mfra, moof, moov, vtta, vttc, vtte } from './isobmff-boxes';
 import { Muxer } from '../muxer';
 import { Output, OutputAudioTrack, OutputSubtitleTrack, OutputTrack, OutputVideoTrack } from '../output';
 import { BufferTargetWriter, Writer } from '../writer';
@@ -138,11 +138,11 @@ export const intoTimescale = (timeInSeconds: number, timescale: number, round = 
 };
 
 export class IsobmffMuxer extends Muxer {
-	private format: IsobmffOutputFormat;
+	format: IsobmffOutputFormat;
 	private writer: Writer;
 	private boxWriter: IsobmffBoxWriter;
 	private fastStart: NonNullable<IsobmffOutputFormatOptions['fastStart']>;
-	private isFragmented: boolean;
+	isFragmented: boolean;
 
 	isQuickTime: boolean;
 
@@ -151,6 +151,7 @@ export class IsobmffMuxer extends Muxer {
 	private auxBoxWriter = new IsobmffBoxWriter(this.auxWriter);
 
 	private mdat: Box | null = null;
+	private ftypSize: number | null = null;
 
 	trackDatas: IsobmffTrackData[] = [];
 	private allTracksKnown = promiseWithResolvers();
@@ -208,8 +209,22 @@ export class IsobmffMuxer extends Muxer {
 			}
 		}
 
+		this.ftypSize = this.writer.getPos();
+
 		if (this.fastStart === 'in-memory') {
-			this.mdat = mdat(false);
+			// We're write at finalization
+		} else if (this.fastStart === 'reserve') {
+			// Validate that all tracks have set maximumPacketCount
+			for (const track of this.output._tracks) {
+				if (track.metadata.maximumPacketCount === undefined) {
+					throw new Error(
+						'All tracks must specify maximumPacketCount in their metadata when using'
+						+ ' fastStart: \'reserve\'.',
+					);
+				}
+			}
+
+			// We'll start writing once we know all tracks
 		} else if (this.isFragmented) {
 			// We write the moov box once we write out the first fragment to make sure we get the decoder configs
 		} else {
@@ -830,6 +845,8 @@ export class IsobmffMuxer extends Muxer {
 		if (this.isFragmented) {
 			trackData.sampleQueue.push(sample);
 			await this.interleaveSamples();
+		} else if (this.fastStart === 'reserve') {
+			await this.registerSampleFastStartReserve(trackData, sample);
 		} else {
 			await this.addSampleToTrack(trackData, sample);
 		}
@@ -838,6 +855,18 @@ export class IsobmffMuxer extends Muxer {
 	private async addSampleToTrack(trackData: IsobmffTrackData, sample: Sample) {
 		if (!this.isFragmented) {
 			trackData.samples.push(sample);
+
+			if (this.fastStart === 'reserve') {
+				const maximumPacketCount = trackData.track.metadata.maximumPacketCount;
+				assert(maximumPacketCount !== undefined);
+
+				if (trackData.samples.length > maximumPacketCount) {
+					throw new Error(
+						`Track #${trackData.track.id} has already reached the maximum packet count`
+						+ ` (${maximumPacketCount}). Either add less packets or increase the maximum packet count.`,
+					);
+				}
+			}
 		}
 
 		let beginNewChunk = false;
@@ -946,10 +975,8 @@ export class IsobmffMuxer extends Muxer {
 	private async interleaveSamples(isFinalCall = false) {
 		assert(this.isFragmented);
 
-		if (!isFinalCall) {
-			if (!this.allTracksAreKnown()) {
-				return; // We can't interleave yet as we don't yet know how many tracks we'll truly have
-			}
+		if (!isFinalCall && !this.allTracksAreKnown()) {
+			return; // We can't interleave yet as we don't yet know how many tracks we'll truly have
 		}
 
 		outer:
@@ -988,7 +1015,7 @@ export class IsobmffMuxer extends Muxer {
 			}
 
 			// Write the moov box now that we have all decoder configs
-			const movieBox = moov(this, true);
+			const movieBox = moov(this);
 			this.boxWriter.writeBox(movieBox);
 
 			if (this.format._options.onMoov) {
@@ -1077,6 +1104,72 @@ export class IsobmffMuxer extends Muxer {
 		}
 	}
 
+	private async registerSampleFastStartReserve(trackData: IsobmffTrackData, sample: Sample) {
+		if (this.allTracksAreKnown()) {
+			if (!this.mdat) {
+				// We finally know all tracks, let's reserve space for the moov box
+				const moovBox = moov(this);
+				const moovSize = this.boxWriter.measureBox(moovBox);
+
+				const reservedSize = moovSize
+					+ this.computeSampleTableSizeUpperBound()
+					+ 4096; // Just a little extra headroom
+
+				assert(this.ftypSize !== null);
+				this.writer.seek(this.ftypSize + reservedSize);
+
+				if (this.format._options.onMdat) {
+					this.writer.startTrackingWrites();
+				}
+
+				this.mdat = mdat(true);
+				this.boxWriter.writeBox(this.mdat);
+
+				// Now write everything that was queued
+				for (const trackData of this.trackDatas) {
+					for (const sample of trackData.sampleQueue) {
+						await this.addSampleToTrack(trackData, sample);
+					}
+					trackData.sampleQueue.length = 0;
+				}
+			}
+
+			await this.addSampleToTrack(trackData, sample);
+		} else {
+			// Queue it for when we know all tracks
+			trackData.sampleQueue.push(sample);
+		}
+	}
+
+	private computeSampleTableSizeUpperBound() {
+		assert(this.fastStart === 'reserve');
+
+		let upperBound = 0;
+
+		for (const trackData of this.trackDatas) {
+			const n = trackData.track.metadata.maximumPacketCount;
+			assert(n !== undefined); // We validated this earlier
+
+			// Given the max allowed packet count, compute the space they'll take up in the Sample Table Box, assuming
+			// the worst case for each individual box:
+
+			// stts box - since it is compactly coded, the maximum length of this table will be 2/3n
+			upperBound += (4 + 4) * Math.ceil(2 / 3 * n);
+			// stss box - 1 entry per sample
+			upperBound += 4 * n;
+			// ctts box - since it is compactly coded, the maximum length of this table will be 2/3n
+			upperBound += (4 + 4) * Math.ceil(2 / 3 * n);
+			// stsc box - since it is compactly coded, the maximum length of this table will be 2/3n
+			upperBound += (4 + 4 + 4) * Math.ceil(2 / 3 * n);
+			// stsz box - 1 entry per sample
+			upperBound += 4 * n;
+			// co64 box - we assume 1 sample per chunk and 64-bit chunk offsets (co64 instead of stco)
+			upperBound += 8 * n;
+		}
+
+		return upperBound;
+	}
+
 	// eslint-disable-next-line @typescript-eslint/no-misused-promises
 	override async onTrackClose(track: OutputTrack) {
 		const release = await this.mutex.acquire();
@@ -1128,7 +1221,7 @@ export class IsobmffMuxer extends Muxer {
 		}
 
 		if (this.fastStart === 'in-memory') {
-			assert(this.mdat);
+			this.mdat = mdat(false);
 			let mdatSize: number;
 
 			// We know how many chunks there are, but computing the chunk positions requires an iterative approach:
@@ -1214,12 +1307,28 @@ export class IsobmffMuxer extends Muxer {
 				this.format._options.onMdat(data, start);
 			}
 
-			if (this.format._options.onMoov) {
-				this.writer.startTrackingWrites();
-			}
-
 			const movieBox = moov(this);
-			this.boxWriter.writeBox(movieBox);
+
+			if (this.fastStart === 'reserve') {
+				assert(this.ftypSize !== null);
+				this.writer.seek(this.ftypSize);
+
+				if (this.format._options.onMoov) {
+					this.writer.startTrackingWrites();
+				}
+
+				this.boxWriter.writeBox(movieBox);
+
+				// Fill the remaining space with a free box. If there are less than 8 bytes left, sucks I guess
+				const remainingSpace = this.boxWriter.offsets.get(this.mdat)! - this.writer.getPos();
+				this.boxWriter.writeBox(free(remainingSpace));
+			} else {
+				if (this.format._options.onMoov) {
+					this.writer.startTrackingWrites();
+				}
+
+				this.boxWriter.writeBox(movieBox);
+			}
 
 			if (this.format._options.onMoov) {
 				const { data, start } = this.writer.stopTrackingWrites();

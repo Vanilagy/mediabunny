@@ -126,7 +126,7 @@ export class WaveDemuxer extends Demuxer {
 			const blockSize = this.audioInfo.blockSizeInBytes;
 			this.dataSize = Math.floor(this.dataSize / blockSize) * blockSize;
 
-			this.tracks.push(new InputAudioTrack(new WaveAudioTrackBacking(this)));
+			this.tracks.push(new InputAudioTrack(this.input, new WaveAudioTrackBacking(this)));
 		})();
 	}
 

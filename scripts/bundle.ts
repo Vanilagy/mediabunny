@@ -16,6 +16,9 @@ const createVariants = async (
 		entryPoints: [entryPoint],
 		bundle: true,
 		logLevel: 'info',
+		logOverride: {
+			'import-is-undefined': 'silent', // Warning caused by the disabled "node.ts" import
+		},
 		banner: {
 			js: `/*!
  * Copyright (c) 2025-present, Vanilagy and contributors

@@ -64,7 +64,7 @@ export class Mp3Demuxer extends Demuxer {
 				throw new Error('No valid MP3 frame found.');
 			}
 
-			this.tracks = [new InputAudioTrack(new Mp3AudioTrackBacking(this))];
+			this.tracks = [new InputAudioTrack(this.input, new Mp3AudioTrackBacking(this))];
 		})();
 	}
 
@@ -117,9 +117,16 @@ export class Mp3Demuxer extends Demuxer {
 			this.firstFrameHeader = header;
 		}
 
-		const sampleDuration = header.audioSamplesInFrame / header.sampleRate;
+		if (header.sampleRate !== this.firstFrameHeader.sampleRate) {
+			console.warn(
+				`MP3 changed sample rate mid-file: ${this.firstFrameHeader.sampleRate} Hz to ${header.sampleRate} Hz.`
+				+ ` Might be a bug, so please report this file.`,
+			);
+		}
+
+		const sampleDuration = header.audioSamplesInFrame / this.firstFrameHeader.sampleRate;
 		const sample: Sample = {
-			timestamp: this.nextTimestampInSamples / header.sampleRate,
+			timestamp: this.nextTimestampInSamples / this.firstFrameHeader.sampleRate,
 			duration: sampleDuration,
 			dataStart: result.startPos,
 			dataSize: header.totalSize,

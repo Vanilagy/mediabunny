@@ -9,6 +9,7 @@
 import { parsePcmCodec, PCM_AUDIO_CODECS, PcmAudioCodec, VideoCodec, AudioCodec } from './codec';
 import { extractHevcNalUnits, extractNalUnitTypeForHevc, HevcNalUnitType } from './codec-data';
 import { CustomVideoDecoder, customVideoDecoders, CustomAudioDecoder, customAudioDecoders } from './custom-coder';
+import { InputDisposedError } from './input';
 import { InputAudioTrack, InputTrack, InputVideoTrack } from './input-track';
 import {
 	AnyIterable,
@@ -18,6 +19,7 @@ import {
 	getInt24,
 	getUint24,
 	insertSorted,
+	isFirefox,
 	isSafari,
 	last,
 	mapAsyncGenerator,
@@ -122,6 +124,10 @@ export class EncodedPacketSink {
 	getFirstPacket(options: PacketRetrievalOptions = {}) {
 		validatePacketRetrievalOptions(options);
 
+		if (this._track.input._disposed) {
+			throw new InputDisposedError();
+		}
+
 		return maybeFixPacketType(this._track, this._track._backing.getFirstPacket(options), options);
 	}
 
@@ -137,6 +143,10 @@ export class EncodedPacketSink {
 		validateTimestamp(timestamp);
 		validatePacketRetrievalOptions(options);
 
+		if (this._track.input._disposed) {
+			throw new InputDisposedError();
+		}
+
 		return maybeFixPacketType(this._track, this._track._backing.getPacket(timestamp, options), options);
 	}
 
@@ -149,6 +159,10 @@ export class EncodedPacketSink {
 			throw new TypeError('packet must be an EncodedPacket.');
 		}
 		validatePacketRetrievalOptions(options);
+
+		if (this._track.input._disposed) {
+			throw new InputDisposedError();
+		}
 
 		return maybeFixPacketType(this._track, this._track._backing.getNextPacket(packet, options), options);
 	}
@@ -167,6 +181,10 @@ export class EncodedPacketSink {
 	async getKeyPacket(timestamp: number, options: PacketRetrievalOptions = {}): Promise<EncodedPacket | null> {
 		validateTimestamp(timestamp);
 		validatePacketRetrievalOptions(options);
+
+		if (this._track.input._disposed) {
+			throw new InputDisposedError();
+		}
 
 		if (!options.verifyKeyPackets) {
 			return this._track._backing.getKeyPacket(timestamp, options);
@@ -197,6 +215,10 @@ export class EncodedPacketSink {
 			throw new TypeError('packet must be an EncodedPacket.');
 		}
 		validatePacketRetrievalOptions(options);
+
+		if (this._track.input._disposed) {
+			throw new InputDisposedError();
+		}
 
 		if (!options.verifyKeyPackets) {
 			return this._track._backing.getNextKeyPacket(packet, options);
@@ -239,6 +261,10 @@ export class EncodedPacketSink {
 		}
 		validatePacketRetrievalOptions(options);
 
+		if (this._track.input._disposed) {
+			throw new InputDisposedError();
+		}
+
 		const packetQueue: EncodedPacket[] = [];
 
 		let { promise: queueNotEmpty, resolve: onQueueNotEmpty } = promiseWithResolvers();
@@ -259,7 +285,7 @@ export class EncodedPacketSink {
 		(async () => {
 			let packet = startPacket ?? await this.getFirstPacket(options);
 
-			while (packet && !terminated) {
+			while (packet && !terminated && !this._track.input._disposed) {
 				if (endPacket && packet.sequenceNumber >= endPacket?.sequenceNumber) {
 					break;
 				}
@@ -287,10 +313,14 @@ export class EncodedPacketSink {
 			}
 		});
 
+		const track = this._track;
+
 		return {
 			async next() {
 				while (true) {
-					if (terminated) {
+					if (track.input._disposed) {
+						throw new InputDisposedError();
+					} else if (terminated) {
 						return { value: undefined, done: true };
 					} else if (outOfBandError) {
 						throw outOfBandError;
@@ -352,6 +382,9 @@ abstract class DecoderWrapper<
 export abstract class BaseMediaSampleSink<
 	MediaSample extends VideoSample | AudioSample,
 > {
+	/** @internal */
+	abstract _track: InputTrack;
+
 	/** @internal */
 	abstract _createDecoder(
 		onSample: (sample: MediaSample) => unknown,
@@ -458,7 +491,7 @@ export abstract class BaseMediaSampleSink<
 			const packets = packetSink.packets(keyPacket, endPacket);
 			await packets.next(); // Skip the start packet as we already have it
 
-			while (currentPacket && !ended) {
+			while (currentPacket && !ended && !this._track.input._disposed) {
 				const maxQueueSize = computeMaxQueueSize(sampleQueue.length);
 				if (sampleQueue.length + decoder.getDecodeQueueSize() > maxQueueSize) {
 					({ promise: queueDequeue, resolve: onQueueDequeue } = promiseWithResolvers());
@@ -478,7 +511,9 @@ export abstract class BaseMediaSampleSink<
 
 			await packets.return();
 
-			if (!terminated) await decoder.flush();
+			if (!terminated && !this._track.input._disposed) {
+				await decoder.flush();
+			}
 			decoder.close();
 
 			if (!firstSampleQueued && lastSample) {
@@ -494,12 +529,24 @@ export abstract class BaseMediaSampleSink<
 			}
 		});
 
+		const track = this._track;
+		const closeSamples = () => {
+			lastSample?.close();
+			for (const sample of sampleQueue) {
+				sample.close();
+			}
+		};
+
 		return {
 			async next() {
 				while (true) {
-					if (terminated) {
+					if (track.input._disposed) {
+						closeSamples();
+						throw new InputDisposedError();
+					} else if (terminated) {
 						return { value: undefined, done: true };
 					} else if (outOfBandError) {
+						closeSamples();
 						throw outOfBandError;
 					} else if (sampleQueue.length > 0) {
 						const value = sampleQueue.shift()!;
@@ -517,12 +564,7 @@ export abstract class BaseMediaSampleSink<
 				ended = true;
 				onQueueDequeue();
 				onQueueNotEmpty();
-
-				lastSample?.close();
-
-				for (const sample of sampleQueue) {
-					sample.close();
-				}
+				closeSamples();
 
 				return { value: undefined, done: true };
 			},
@@ -646,7 +688,7 @@ export abstract class BaseMediaSampleSink<
 			for await (const timestamp of timestampIterator) {
 				validateTimestamp(timestamp);
 
-				if (terminated) {
+				if (terminated || this._track.input._disposed) {
 					break;
 				}
 
@@ -683,7 +725,7 @@ export abstract class BaseMediaSampleSink<
 				lastKeyPacket = keyPacket;
 			}
 
-			if (!terminated) {
+			if (!terminated && !this._track.input._disposed) {
 				if (maxSequenceNumber !== -1) {
 					// We still need to decode packets
 					await decodePackets();
@@ -702,12 +744,23 @@ export abstract class BaseMediaSampleSink<
 			}
 		});
 
+		const track = this._track;
+		const closeSamples = () => {
+			for (const sample of sampleQueue) {
+				sample?.close();
+			}
+		};
+
 		return {
 			async next() {
 				while (true) {
-					if (terminated) {
+					if (track.input._disposed) {
+						closeSamples();
+						throw new InputDisposedError();
+					} else if (terminated) {
 						return { value: undefined, done: true };
 					} else if (outOfBandError) {
+						closeSamples();
 						throw outOfBandError;
 					} else if (sampleQueue.length > 0) {
 						const value = sampleQueue.shift();
@@ -725,10 +778,7 @@ export abstract class BaseMediaSampleSink<
 				terminated = true;
 				onQueueDequeue();
 				onQueueNotEmpty();
-
-				for (const sample of sampleQueue) {
-					sample?.close();
-				}
+				closeSamples();
 
 				return { value: undefined, done: true };
 			},
@@ -929,7 +979,7 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
  */
 export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 	/** @internal */
-	_videoTrack: InputVideoTrack;
+	_track: InputVideoTrack;
 
 	/** Creates a new {@link VideoSampleSink} for the given {@link InputVideoTrack}. */
 	constructor(videoTrack: InputVideoTrack) {
@@ -939,7 +989,7 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 
 		super();
 
-		this._videoTrack = videoTrack;
+		this._track = videoTrack;
 	}
 
 	/** @internal */
@@ -947,17 +997,17 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 		onSample: (sample: VideoSample) => unknown,
 		onError: (error: DOMException) => unknown,
 	) {
-		if (!(await this._videoTrack.canDecode())) {
+		if (!(await this._track.canDecode())) {
 			throw new Error(
 				'This video track cannot be decoded by this browser. Make sure to check decodability before using'
 				+ ' a track.',
 			);
 		}
 
-		const codec = this._videoTrack.codec;
-		const rotation = this._videoTrack.rotation;
-		const decoderConfig = await this._videoTrack.getDecoderConfig();
-		const timeResolution = this._videoTrack.timeResolution;
+		const codec = this._track.codec;
+		const rotation = this._track.rotation;
+		const decoderConfig = await this._track.getDecoderConfig();
+		const timeResolution = this._track.timeResolution;
 		assert(codec && decoderConfig);
 
 		return new VideoDecoderWrapper(onSample, onError, codec, decoderConfig, rotation, timeResolution);
@@ -965,7 +1015,7 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 
 	/** @internal */
 	_createPacketSink() {
-		return new EncodedPacketSink(this._videoTrack);
+		return new EncodedPacketSink(this._track);
 	}
 
 	/**
@@ -1199,14 +1249,20 @@ export class CanvasSink {
 			this._nextCanvasIndex = (this._nextCanvasIndex + 1) % this._canvasPool.length;
 		}
 
-		const context
-			= canvas.getContext('2d', { alpha: false }) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+		const context = canvas.getContext('2d', {
+			alpha: isFirefox(), // Firefox has VideoFrame glitches with opaque canvases
+		}) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 		assert(context);
 
 		context.resetTransform();
 
 		if (!canvasIsNew) {
-			context.clearRect(0, 0, this._width, this._height);
+			if (isFirefox()) {
+				context.fillStyle = 'black';
+				context.fillRect(0, 0, this._width, this._height);
+			} else {
+				context.clearRect(0, 0, this._width, this._height);
+			}
 		}
 
 		sample.drawWithFit(context, {
@@ -1573,7 +1629,7 @@ class PcmAudioDecoderWrapper extends DecoderWrapper<AudioSample> {
  */
 export class AudioSampleSink extends BaseMediaSampleSink<AudioSample> {
 	/** @internal */
-	_audioTrack: InputAudioTrack;
+	_track: InputAudioTrack;
 
 	/** Creates a new {@link AudioSampleSink} for the given {@link InputAudioTrack}. */
 	constructor(audioTrack: InputAudioTrack) {
@@ -1583,7 +1639,7 @@ export class AudioSampleSink extends BaseMediaSampleSink<AudioSample> {
 
 		super();
 
-		this._audioTrack = audioTrack;
+		this._track = audioTrack;
 	}
 
 	/** @internal */
@@ -1591,15 +1647,15 @@ export class AudioSampleSink extends BaseMediaSampleSink<AudioSample> {
 		onSample: (sample: AudioSample) => unknown,
 		onError: (error: DOMException) => unknown,
 	) {
-		if (!(await this._audioTrack.canDecode())) {
+		if (!(await this._track.canDecode())) {
 			throw new Error(
 				'This audio track cannot be decoded by this browser. Make sure to check decodability before using'
 				+ ' a track.',
 			);
 		}
 
-		const codec = this._audioTrack.codec;
-		const decoderConfig = await this._audioTrack.getDecoderConfig();
+		const codec = this._track.codec;
+		const decoderConfig = await this._track.getDecoderConfig();
 		assert(codec && decoderConfig);
 
 		if ((PCM_AUDIO_CODECS as readonly string[]).includes(decoderConfig.codec)) {
@@ -1611,7 +1667,7 @@ export class AudioSampleSink extends BaseMediaSampleSink<AudioSample> {
 
 	/** @internal */
 	_createPacketSink() {
-		return new EncodedPacketSink(this._audioTrack);
+		return new EncodedPacketSink(this._track);
 	}
 
 	/**

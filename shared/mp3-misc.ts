@@ -7,32 +7,20 @@
  */
 
 export const FRAME_HEADER_SIZE = 4;
+export const SAMPLING_RATES = [44100, 48000, 32000];
+export const KILOBIT_RATES = [
+	// lowSamplingFrequency === 0
+	-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, // layer = 0
+	-1, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, -1, // layer 1
+	-1, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, -1, // layer = 2
+	-1, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, -1, // layer = 3
 
-// These are in kbps:
-export const MPEG_V1_BITRATES: Record<number, number[]> = {
-	// Layer 3
-	1: [-1, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, -1],
-	// Layer 2
-	2: [-1, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, -1],
-	// Layer 1
-	3: [-1, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, -1],
-};
-export const MPEG_V2_BITRATES: Record<number, number[]> = {
-	// Layer 3
-	1: [-1, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256, -1],
-	// Layer 2
-	2: [-1, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, -1],
-	// Layer 1
-	3: [-1, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, -1],
-};
-export const SAMPLING_RATES: Record<number, number[]> = {
-	// MPEG Version 2.5
-	0: [11025, 12000, 8000, -1],
-	// MPEG Version 2 (ISO/IEC 13818-3)
-	2: [22050, 24000, 16000, -1],
-	// MPEG Version 1 (ISO/IEC 11172-3)
-	3: [44100, 48000, 32000, -1],
-};
+	// lowSamplingFrequency === 1
+	-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, // layer = 0
+	-1, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, -1, // layer = 1
+	-1, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, -1, // layer = 2
+	-1, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256, -1, // layer = 3
+];
 
 /** 'Xing' */
 export const XING = 0x58696e67;
@@ -54,12 +42,21 @@ export type FrameHeader = {
 	audioSamplesInFrame: number;
 };
 
-export const computeMp3FrameSize = (layer: number, bitrate: number, sampleRate: number, padding: number) => {
-	if (layer === 3) {
-		// Layer 1
-		return Math.floor((12 * bitrate / sampleRate + padding) * 4);
-	} else {
-		return Math.floor((144 * bitrate / sampleRate) + padding);
+export const computeMp3FrameSize = (
+	lowSamplingFrequency: number,
+	layer: number,
+	bitrate: number,
+	sampleRate: number,
+	padding: number,
+) => {
+	if (layer === 0) {
+		return 0; // Not expected that this is hit
+	} else if (layer === 1) {
+		return Math.floor(144 * bitrate / (sampleRate << lowSamplingFrequency)) + padding;
+	} else if (layer === 2) {
+		return Math.floor(144 * bitrate / sampleRate) + padding;
+	} else { // layer === 3
+		return (Math.floor(12 * bitrate / sampleRate) + padding) * 4;
 	}
 };
 
@@ -93,11 +90,21 @@ export const readFrameHeader = (word: number, remainingBytes: number | null): {
 		return { header: null, bytesAdvanced: 1 };
 	}
 
+	let lowSamplingFrequency = 0;
+	let mpeg25 = 0;
+
+	if (secondByte & (1 << 4)) {
+		lowSamplingFrequency = (secondByte & (1 << 3)) ? 0 : 1;
+	} else {
+		lowSamplingFrequency = 1;
+		mpeg25 = 1;
+	}
+
 	const mpegVersionId = (secondByte >> 3) & 0x3;
 	const layer = (secondByte >> 1) & 0x3;
 
 	const bitrateIndex = (thirdByte >> 4) & 0xf;
-	const frequencyIndex = (thirdByte >> 2) & 0x3;
+	const frequencyIndex = ((thirdByte >> 2) & 0x3) % 3;
 	const padding = (thirdByte >> 1) & 0x1;
 
 	const channel = (fourthByte >> 6) & 0x3;
@@ -106,21 +113,14 @@ export const readFrameHeader = (word: number, remainingBytes: number | null): {
 	const original = (fourthByte >> 2) & 0x1;
 	const emphasis = fourthByte & 0x3;
 
-	const kilobitRate = mpegVersionId === 3
-		? MPEG_V1_BITRATES[layer]?.[bitrateIndex]
-		: MPEG_V2_BITRATES[layer]?.[bitrateIndex];
-	if (!kilobitRate || kilobitRate === -1) {
+	const kilobitRate = KILOBIT_RATES[lowSamplingFrequency * 16 * 4 + layer * 16 + bitrateIndex]!;
+	if (kilobitRate === -1) {
 		return { header: null, bytesAdvanced: 1 };
 	}
 
 	const bitrate = kilobitRate * 1000;
-
-	const sampleRate = SAMPLING_RATES[mpegVersionId]?.[frequencyIndex];
-	if (!sampleRate || sampleRate === -1) {
-		return { header: null, bytesAdvanced: 1 };
-	}
-
-	const frameLength = computeMp3FrameSize(layer, bitrate, sampleRate, padding);
+	const sampleRate = SAMPLING_RATES[frequencyIndex]! >> (lowSamplingFrequency + mpeg25);
+	const frameLength = computeMp3FrameSize(lowSamplingFrequency, layer, bitrate, sampleRate, padding);
 
 	if (remainingBytes !== null && remainingBytes < frameLength) {
 		// The frame doesn't fit into the rest of the file

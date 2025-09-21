@@ -62,8 +62,9 @@ const output = new Output({
 The following options are available:
 ```ts
 type IsobmffOutputFormatOptions = {
-	fastStart?: false | 'in-memory' | 'fragmented';
+	fastStart?: false | 'in-memory' | 'reserve' | 'fragmented';
 	minimumFragmentDuration?: number;
+	metadataFormat?: 'mdir' | 'mdta' | 'udta' | 'auto';
 
 	onFtyp?: (data: Uint8Array, position: number) => unknown;
 	onMoov?: (data: Uint8Array, position: number) => unknown;
@@ -80,6 +81,8 @@ type IsobmffOutputFormatOptions = {
 		::: info
 		This option ensures [append-only writing](#append-only-writing), although all the writing happens in bulk, at the end.
 		:::
+	- `'reserve'`\
+		Produces a file with Fast Start by reserving space at the start of the file into which the metadata will be written later. This requires knowledge about the expected length of the file beforehand. When using this option, you must set the [`maximumPacketCount`](../api/BaseTrackMetadata#maximumpacketcount) field in the track metadata for all tracks.
 	- `'fragmented'`\
 		Produces a _fragmented MP4 (fMP4)_ file, evenly placing sample metadata throughout the file by grouping it into "fragments" (short sections of media), while placing general metadata at the beginning of the file. Fragmented files are ideal in streaming contexts, as each fragment can be played individually without requiring knowledge of the other fragments. Furthermore, they remain lightweight to create no matter how large the file becomes, as they don't require media to be kept in memory for very long. However, fragmented files are not as widely and wholly supported as regular MP4 files, and some players don't provide seeking functionality for them.
 		::: info
@@ -92,6 +95,12 @@ type IsobmffOutputFormatOptions = {
 		The default option; it behaves like `'in-memory'` when using [`BufferTarget`](./writing-media-files#buffertarget) and like `false` otherwise.
 - `minimumFragmentDuration`\
 	Only relevant when `fastStart` is `'fragmented'`. Sets the minimum duration in seconds a fragment must have to be finalized and written to the file. Defaults to 1 second.
+- `metadataFormat`\
+	The metadata format to use for writing metadata tags.
+	- `'auto'` (default): Behaves like `'mdir'` for MP4 and like `'udta'` for QuickTime, matching FFmpeg's default behavior.
+	- `'mdir'`: Write tags into `moov/udta/meta` using the 'mdir' handler format.
+	- `'mdta'`: Write tags into `moov/udta/meta` using the 'mdta' handler format, equivalent to FFmpeg's `use_metadata_tags` flag. This allows for custom keys of arbitrary length.
+	- `'udta'`: Write tags directly into `moov/udta`.
 - `onFtyp`\
 	Will be called once the ftyp (File Type) box of the output file has been written.
 - `onMoov`\
@@ -266,3 +275,24 @@ type AdtsOutputFormatOptions = {
 ```
 - `onFrame`\
 	Will be called for each ADTS frame that is written.
+
+## FLAC
+
+This output format creates FLAC (.flac) files.
+```ts
+import { Output, FlacOutputFormat } from 'mediabunny';	
+
+const output = new Output({
+	format: new FlacOutputFormat(options),
+	// ...
+});
+```
+
+The following options are available:
+```ts
+type FlacOutputFormatOptions = {
+	onFrame?: (data: Uint8Array, position: number) => unknown;
+};
+```
+- `onFrame`\
+	Will be called for each FLAC frame that is written.

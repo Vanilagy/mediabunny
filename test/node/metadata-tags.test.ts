@@ -1,6 +1,7 @@
 import { expect, test } from 'vitest';
 import { Output } from '../../src/output.js';
 import {
+	FlacOutputFormat,
 	MkvOutputFormat,
 	MovOutputFormat,
 	Mp3OutputFormat,
@@ -14,7 +15,7 @@ import { EncodedPacket } from '../../src/packet.js';
 import { Input } from '../../src/input.js';
 import { BufferSource, FilePathSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
-import { MetadataTags } from '../../src/tags.js';
+import { AttachedFile, MetadataTags } from '../../src/tags.js';
 import path from 'node:path';
 import { AudioCodec, buildAudioCodecString } from '../../src/codec.js';
 import { Conversion } from '../../src/conversion.js';
@@ -34,10 +35,18 @@ const createDummyAudioTrack = (codec: AudioCodec, output: Output) => {
 			data[2] = 224;
 			data[3] = 100;
 
-			// Opus description
-			const description = new Uint8Array([
-				79, 112, 117, 115, 72, 101, 97, 100, 1, 2, 56, 1, 68, 172, 0, 0, 0, 0, 0,
-			]);
+			const description = codec === 'flac'
+				? new Uint8Array([
+					102, 76, 97, 67, 128, 0, 0, 34, 16, 0,
+					16, 0, 0, 6, 45, 0, 37, 173, 10, 196,
+					66, 240, 0, 13, 68, 24, 85, 22, 231, 0,
+					113, 139, 185, 1, 33, 54, 155, 80, 241, 191,
+					203, 112,
+				])
+				// Opus description
+				: new Uint8Array([
+					79, 112, 117, 115, 72, 101, 97, 100, 1, 2, 56, 1, 68, 172, 0, 0, 0, 0, 0,
+				]);
 
 			await source.add(
 				new EncodedPacket(data, 'key', 0, 1),
@@ -98,7 +107,7 @@ test('Read and write metadata, MP4', async () => {
 	await dummyTrack.addPacket();
 	await output.finalize();
 
-	const input = new Input({
+	using input = new Input({
 		source: new BufferSource(output.target.buffer!),
 		formats: ALL_FORMATS,
 	});
@@ -147,7 +156,7 @@ test('Read and write metadata, QuickTime', async () => {
 	await dummyTrack.addPacket();
 	await output.finalize();
 
-	const input = new Input({
+	using input = new Input({
 		source: new BufferSource(output.target.buffer!),
 		formats: ALL_FORMATS,
 	});
@@ -178,7 +187,7 @@ test('Read and write metadata, QuickTime', async () => {
 });
 
 test('Read MOV metadata tags, ilst with keys', async () => {
-	const input = new Input({
+	using input = new Input({
 		source: new FilePathSource(path.join(__dirname, '../public/trunc-buck-bunny.mov')),
 		formats: ALL_FORMATS,
 	});
@@ -198,7 +207,21 @@ test('Read and write metadata, Matroska', async () => {
 	output.setMetadataTags({
 		...songMetadata,
 		raw: {
-			CUSTOM: 'Levels',
+			'CUSTOM': 'Levels',
+			// This number cannot be represented by f64, so this tests correct BigInt usage
+			'9007199254740993': new AttachedFile(
+				new Uint8Array(20),
+				'font/ttf',
+				'Heya',
+				'A font file',
+			),
+			// And this one we don't expect to get attached again, since it mirrors the image we're also attaching
+			'987654': new AttachedFile(
+				songMetadata.images![0]!.data,
+				songMetadata.images![0]!.mimeType,
+				songMetadata.images![0]!.name,
+				songMetadata.images![0]!.description,
+			),
 		},
 	});
 
@@ -208,7 +231,7 @@ test('Read and write metadata, Matroska', async () => {
 	await dummyTrack.addPacket();
 	await output.finalize();
 
-	const input = new Input({
+	using input = new Input({
 		source: new BufferSource(output.target.buffer!),
 		formats: ALL_FORMATS,
 	});
@@ -237,6 +260,19 @@ test('Read and write metadata, Matroska', async () => {
 	expect(readTags.raw!['TITLE']).toBe(songMetadata.title);
 	expect(readTags.raw!['PART_NUMBER']).toBe('13/14');
 	expect(readTags.raw!['CUSTOM']).toBe('Levels');
+
+	const files = Object.entries(readTags.raw!).filter(x => x[1] instanceof AttachedFile);
+	expect(files).toHaveLength(2);
+
+	const imageFile = files.find(x => (x[1] as AttachedFile).mimeType === 'image/jpeg');
+	expect((imageFile![1] as AttachedFile).data).toEqual(songMetadata.images![0]!.data);
+
+	const secondFile = files.find(x => (x[1] as AttachedFile).mimeType === 'font/ttf');
+	expect(secondFile![0]).toBe('9007199254740993');
+	expect((secondFile![1] as AttachedFile).data).toHaveLength(20);
+	expect((secondFile![1] as AttachedFile).mimeType).toBe('font/ttf');
+	expect((secondFile![1] as AttachedFile).name).toBe('Heya');
+	expect((secondFile![1] as AttachedFile).description).toBe('A font file');
 });
 
 test('Read and write metadata, MP3', async () => {
@@ -258,7 +294,7 @@ test('Read and write metadata, MP3', async () => {
 	await dummyTrack.addPacket();
 	await output.finalize();
 
-	const input = new Input({
+	using input = new Input({
 		source: new BufferSource(output.target.buffer!),
 		formats: ALL_FORMATS,
 	});
@@ -299,7 +335,7 @@ test('Read and write metadata, Ogg', async () => {
 	output.setMetadataTags({
 		...songMetadata,
 		raw: {
-			vendor: 'mediabunny corp',
+			vendor: 'Mediabunny',
 			COMPOSER: 'Hans Zimmer',
 		},
 	});
@@ -310,7 +346,7 @@ test('Read and write metadata, Ogg', async () => {
 	await dummyTrack.addPacket();
 	await output.finalize();
 
-	const input = new Input({
+	using input = new Input({
 		source: new BufferSource(output.target.buffer!),
 		formats: ALL_FORMATS,
 	});
@@ -336,7 +372,57 @@ test('Read and write metadata, Ogg', async () => {
 	expect(readTags.images![0]!.description).toEqual(songMetadata.images![0]!.description);
 	expect(readTags.images![0]!.name).toBeUndefined(); // Can't be contained in Vorbis-style metadata
 
-	expect(readTags.raw!['vendor']).toBe('mediabunny corp');
+	expect(readTags.raw!['vendor']).toBe('Mediabunny');
+	expect(readTags.raw!['COMPOSER']).toBe('Hans Zimmer');
+});
+
+test('Read and write metadata, FLAC', async () => {
+	const output = new Output({
+		format: new FlacOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	output.setMetadataTags({
+		...songMetadata,
+		raw: {
+			vendor: 'Mediabunny',
+			COMPOSER: 'Hans Zimmer',
+		},
+	});
+
+	const dummyTrack = createDummyAudioTrack('flac', output);
+
+	await output.start();
+	await dummyTrack.addPacket();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const readTags = await input.getMetadataTags();
+
+	expect(readTags.title).toBe(songMetadata.title);
+	expect(readTags.description).toBe(songMetadata.description);
+	expect(readTags.artist).toBe(songMetadata.artist);
+	expect(readTags.album).toBe(songMetadata.album);
+	expect(readTags.albumArtist).toBe(songMetadata.albumArtist);
+	expect(readTags.comment).toBe(songMetadata.comment);
+	expect(readTags.lyrics).toBe(songMetadata.lyrics);
+	expect(readTags.trackNumber).toBe(songMetadata.trackNumber);
+	expect(readTags.tracksTotal).toBe(songMetadata.tracksTotal);
+	expect(readTags.discNumber).toBe(songMetadata.discNumber);
+	expect(readTags.discsTotal).toBe(songMetadata.discsTotal);
+	expect(readTags.date).toEqual(readTags.date);
+	expect(readTags.images).toHaveLength(1);
+	expect(readTags.images![0]!.data).toEqual(coverArt);
+	expect(readTags.images![0]!.mimeType).toEqual('image/jpeg');
+	expect(readTags.images![0]!.kind).toEqual('coverFront');
+	expect(readTags.images![0]!.description).toEqual(songMetadata.images![0]!.description);
+	expect(readTags.images![0]!.name).toBeUndefined(); // Can't be contained in Vorbis-style metadata
+
+	expect(readTags.raw!['vendor']).toBe('Mediabunny');
 	expect(readTags.raw!['COMPOSER']).toBe('Hans Zimmer');
 });
 
@@ -359,7 +445,7 @@ test('Read and write metadata, WAVE', async () => {
 	await dummyTrack.addPacket();
 	await output.finalize();
 
-	const input = new Input({
+	using input = new Input({
 		source: new BufferSource(output.target.buffer!),
 		formats: ALL_FORMATS,
 	});
@@ -398,7 +484,7 @@ test('Conversion metadata tags, default case', async () => {
 	await dummyTrack.addPacket();
 	await output.finalize();
 
-	const input = new Input({
+	using input = new Input({
 		source: new BufferSource(output.target.buffer!),
 		formats: ALL_FORMATS,
 	});
@@ -448,7 +534,7 @@ test('Conversion metadata tags, modified', async () => {
 	await dummyTrack.addPacket();
 	await output.finalize();
 
-	const input = new Input({
+	using input = new Input({
 		source: new BufferSource(output.target.buffer!),
 		formats: ALL_FORMATS,
 	});

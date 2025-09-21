@@ -16,6 +16,7 @@ export interface EBMLElement {
 	size?: number;
 	data:
 		| number
+		| bigint
 		| string
 		| Uint8Array
 		| EBMLFloat32
@@ -150,6 +151,14 @@ export enum EBMLId {
 	TagLanguage = 0x447a,
 	TagString = 0x4487,
 	TagBinary = 0x4485,
+	ContentEncodings = 0x6d80,
+	ContentEncoding = 0x6240,
+	ContentEncodingOrder = 0x5031,
+	ContentEncodingScope = 0x5032,
+	ContentCompression = 0x5034,
+	ContentCompAlgo = 0x4254,
+	ContentCompSettings = 0x4255,
+	ContentEncryption = 0x5035,
 }
 
 export const LEVEL_0_EBML_IDS: EBMLId[] = [
@@ -187,6 +196,26 @@ export const measureUnsignedInt = (value: number) => {
 		return 5;
 	} else {
 		return 6;
+	}
+};
+
+export const measureUnsignedBigInt = (value: bigint) => {
+	if (value < (1n << 8n)) {
+		return 1;
+	} else if (value < (1n << 16n)) {
+		return 2;
+	} else if (value < (1n << 24n)) {
+		return 3;
+	} else if (value < (1n << 32n)) {
+		return 4;
+	} else if (value < (1n << 40n)) {
+		return 5;
+	} else if (value < (1n << 48n)) {
+		return 6;
+	} else if (value < (1n << 56n)) {
+		return 7;
+	} else {
+		return 8;
 	}
 };
 
@@ -268,21 +297,31 @@ export class EBMLWriter {
 			// eslint-disable-next-line no-fallthrough
 			case 5:
 				this.helperView.setUint8(pos++, (value / 2 ** 32) | 0);
-				// eslint-disable-next-line no-fallthrough
+			// eslint-disable-next-line no-fallthrough
 			case 4:
 				this.helperView.setUint8(pos++, value >> 24);
-				// eslint-disable-next-line no-fallthrough
+			// eslint-disable-next-line no-fallthrough
 			case 3:
 				this.helperView.setUint8(pos++, value >> 16);
-				// eslint-disable-next-line no-fallthrough
+			// eslint-disable-next-line no-fallthrough
 			case 2:
 				this.helperView.setUint8(pos++, value >> 8);
-				// eslint-disable-next-line no-fallthrough
+			// eslint-disable-next-line no-fallthrough
 			case 1:
 				this.helperView.setUint8(pos++, value);
 				break;
 			default:
 				throw new Error('Bad unsigned int size ' + width);
+		}
+
+		this.writer.write(this.helper.subarray(0, pos));
+	}
+
+	writeUnsignedBigInt(value: bigint, width = measureUnsignedBigInt(value)) {
+		let pos = 0;
+
+		for (let i = width - 1; i >= 0; i--) {
+			this.helperView.setUint8(pos++, Number((value >> BigInt(i * 8)) & 0xffn));
 		}
 
 		this.writer.write(this.helper.subarray(0, pos));
@@ -390,6 +429,10 @@ export class EBMLWriter {
 				const size = data.size ?? measureUnsignedInt(data.data);
 				this.writeVarInt(size);
 				this.writeUnsignedInt(data.data, size);
+			} else if (typeof data.data === 'bigint') {
+				const size = data.size ?? measureUnsignedBigInt(data.data);
+				this.writeVarInt(size);
+				this.writeUnsignedBigInt(data.data, size);
 			} else if (typeof data.data === 'string') {
 				this.writeVarInt(data.data.length);
 				this.writeAsciiString(data.data);
@@ -478,6 +521,21 @@ export const readUnsignedInt = (slice: FileSlice, width: number) => {
 	for (let i = 0; i < width; i++) {
 		value *= 1 << 8;
 		value += readU8(slice);
+	}
+
+	return value;
+};
+
+export const readUnsignedBigInt = (slice: FileSlice, width: number) => {
+	if (width < 1) {
+		throw new Error('Bad unsigned int size ' + width);
+	}
+
+	let value = 0n;
+
+	for (let i = 0; i < width; i++) {
+		value <<= 8n;
+		value += BigInt(readU8(slice));
 	}
 
 	return value;

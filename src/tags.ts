@@ -7,9 +7,9 @@
  */
 
 /**
- * Represents descriptive (non-technical) metadata about a media file, such as title, author, date, or cover art.
- * Common tags are normalized by Mediabunny into a uniform format, while the `raw` field can be used to directly read or
- * write the underlying metadata tags (which differ by format).
+ * Represents descriptive (non-technical) metadata about a media file, such as title, author, date, cover art, or other
+ * attached files. Common tags are normalized by Mediabunny into a uniform format, while the `raw` field can be used to
+ * directly read or write the underlying metadata tags (which differ by format).
  *
  * - For MP4/QuickTime files, the metadata refers to the data in `'moov'`-level `'udta'` and `'meta'` atoms.
  * - For Matroska files, the metadata refers to the Tags and Attachments elements whose target is 50 (MOVIE).
@@ -18,6 +18,7 @@
  * in Vorbis-style comment headers.
  * - For WAVE files, the metadata refers to the chunks within the RIFF INFO chunk.
  * - For ADTS files, there is no metadata.
+ * - For FLAC files, the metadata lives in Vorbis style in the Vorbis comment block.
  *
  * @group Metadata tags
  * @public
@@ -65,12 +66,16 @@ export type MetadataTags = {
 	 * Additionally, any atoms within the `'udta'` atom are dumped into here, however with unknown internal format
 	 * (`Uint8Array`).
 	 * - Matroska: `SimpleTag` elements whose target is 50 (MOVIE), either containing string or `Uint8Array` values.
+	 * Additionally, all attached files (such as font files) are included here, where the key corresponds to the FileUID
+	 * and the value is an {@link AttachedFile}.
 	 * - MP3: The ID3v2 tags, or a single `'TAG'` key with the contents of the ID3v1 tag.
 	 * - Ogg: The key-value string pairs from the Vorbis-style comment header (see RFC 7845, Section 5.2).
 	 * Additionally, the `'vendor'` key refers to the vendor string within this header.
 	 * - WAVE: The individual metadata chunks within the RIFF INFO chunk. Values are always ISO 8859-1 strings.
-	 */
-	raw?: Record<string, string | Uint8Array | RichImageData | null>;
+	 * - FLAC: The key-value string pairs from the vorbis metadata block (see RFC 9639, Section D.2.3).
+	 * Additionally, the `'vendor'` key refers to the vendor string within this header.
+	*/
+	raw?: Record<string, string | Uint8Array | RichImageData | AttachedFile | null>;
 };
 
 /**
@@ -88,7 +93,7 @@ export type AttachedImage = {
 	kind: 'coverFront' | 'coverBack' | 'unknown';
 	/** The name of the image file. */
 	name?: string;
-	/** A short description of the image. */
+	/** A description of the image. */
 	description?: string;
 };
 
@@ -105,8 +110,48 @@ export class RichImageData {
 		public data: Uint8Array,
 		/** An RFC 6838 MIME type (e.g. image/jpeg, image/png, etc.) */
 		public mimeType: string,
-	) {}
+	) {
+		if (!(data instanceof Uint8Array)) {
+			throw new TypeError('data must be a Uint8Array.');
+		}
+		if (typeof mimeType !== 'string') {
+			throw new TypeError('mimeType must be a string.');
+		}
+	}
 }
+
+/**
+ * A file attached to a media file.
+ *
+ * @group Metadata tags
+ * @public
+ */
+export class AttachedFile {
+	/** Creates a new {@link AttachedFile}. */
+	constructor(
+		/** The raw file data. */
+		public data: Uint8Array,
+		/** An RFC 6838 MIME type (e.g. image/jpeg, image/png, font/ttf, etc.) */
+		public mimeType?: string,
+		/** The name of the file. */
+		public name?: string,
+		/** A description of the file. */
+		public description?: string,
+	) {
+		if (!(data instanceof Uint8Array)) {
+			throw new TypeError('data must be a Uint8Array.');
+		}
+		if (mimeType !== undefined && typeof mimeType !== 'string') {
+			throw new TypeError('mimeType, when provided, must be a string.');
+		}
+		if (name !== undefined && typeof name !== 'string') {
+			throw new TypeError('name, when provided, must be a string.');
+		}
+		if (description !== undefined && typeof description !== 'string') {
+			throw new TypeError('description, when provided, must be a string.');
+		}
+	}
+};
 
 export const validateMetadataTags = (tags: MetadataTags) => {
 	if (!tags || typeof tags !== 'object') {
@@ -187,9 +232,10 @@ export const validateMetadataTags = (tags: MetadataTags) => {
 				&& typeof value !== 'string'
 				&& !(value instanceof Uint8Array)
 				&& !(value instanceof RichImageData)
+				&& !(value instanceof AttachedFile)
 			) {
 				throw new TypeError(
-					'Each value in tags.raw must be a string, Uint8Array, RichImageData, or null.',
+					'Each value in tags.raw must be a string, Uint8Array, RichImageData, AttachedFile, or null.',
 				);
 			}
 		}

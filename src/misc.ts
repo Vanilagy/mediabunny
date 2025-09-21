@@ -519,26 +519,59 @@ export const SECOND_TO_MICROSECOND_FACTOR = 1e6 * (1 + Number.EPSILON);
  */
 export type SetRequired<T, K extends keyof T> = T & Required<Pick<T, K>>;
 
-export const mergeObjectsDeeply = <T extends object, S extends object>(a: T, b: S): T & S => {
-	const result = { ...a } as T & S;
+/**
+ * Merges two RequestInit objects with special handling for headers.
+ * Headers are merged case-insensitively, but original casing is preserved.
+ * init2 headers take precedence and will override case-insensitive matches from init1.
+ */
+export const mergeRequestInit = (init1: RequestInit, init2: RequestInit): RequestInit => {
+	const merged: RequestInit = { ...init1, ...init2 };
 
-	for (const key in b) {
-		if (
-			typeof a[key as unknown as keyof T] === 'object'
-			&& a[key as unknown as keyof T] !== null
-			&& typeof b[key] === 'object'
-			&& b[key] !== null
-		) {
-			result[key] = mergeObjectsDeeply(
-				a[key as unknown as keyof T] as object,
-				b[key],
-			) as (T & S)[Extract<keyof S, string>];
-		} else {
-			result[key] = b[key] as (T & S)[Extract<keyof S, string>];
-		}
+	// Special handling for headers
+	if (init1.headers || init2.headers) {
+		const headers1 = init1.headers ? normalizeHeaders(init1.headers) : {};
+		const headers2 = init2.headers ? normalizeHeaders(init2.headers) : {};
+
+		const mergedHeaders = { ...headers1 };
+
+		// For each header in headers2, check if a case-insensitive match exists in mergedHeaders
+		Object.entries(headers2).forEach(([key2, value2]) => {
+			const existingKey = Object.keys(mergedHeaders).find(
+				key1 => key1.toLowerCase() === key2.toLowerCase(),
+			);
+
+			if (existingKey) {
+				delete mergedHeaders[existingKey];
+			}
+
+			mergedHeaders[key2] = value2;
+		});
+
+		merged.headers = mergedHeaders;
 	}
 
-	return result;
+	return merged;
+};
+
+/** Normalizes HeadersInit to a Record<string, string> format. */
+const normalizeHeaders = (headers: HeadersInit): Record<string, string> => {
+	if (headers instanceof Headers) {
+		const result: Record<string, string> = {};
+		headers.forEach((value, key) => {
+			result[key] = value;
+		});
+		return result;
+	}
+
+	if (Array.isArray(headers)) {
+		const result: Record<string, string> = {};
+		headers.forEach(([key, value]) => {
+			result[key] = value;
+		});
+		return result;
+	}
+
+	return headers;
 };
 
 export const retriedFetch = async (
@@ -642,6 +675,15 @@ export const isSafari = () => {
 	return result;
 };
 
+let isFirefoxCache: boolean | null = null;
+export const isFirefox = () => {
+	if (isFirefoxCache !== null) {
+		return isFirefoxCache;
+	}
+
+	return isFirefoxCache = typeof navigator !== 'undefined' && navigator.userAgent?.includes('Firefox');
+};
+
 /**
  * T or a promise that resolves to T.
  * @group Miscellaneous
@@ -722,4 +764,18 @@ export const bytesToBase64 = (bytes: Uint8Array) => {
 	}
 
 	return btoa(string);
+};
+
+export const uint8ArraysAreEqual = (a: Uint8Array, b: Uint8Array) => {
+	if (a.length !== b.length) {
+		return false;
+	}
+
+	for (let i = 0; i < a.length; i++) {
+		if (a[i] !== b[i]) {
+			return false;
+		}
+	}
+
+	return true;
 };

@@ -63,7 +63,7 @@ export class AdtsDemuxer extends Demuxer {
 			assert(this.firstFrameHeader);
 
 			// Create the single audio track
-			this.tracks = [new InputAudioTrack(new AdtsAudioTrackBacking(this))];
+			this.tracks = [new InputAudioTrack(this.input, new AdtsAudioTrackBacking(this))];
 		})();
 	}
 

@@ -7,15 +7,11 @@
  */
 
 import { OPUS_SAMPLE_RATE, validateAudioChunkMetadata } from '../codec';
-import { parseModesFromVorbisSetupPacket, parseOpusIdentificationHeader } from '../codec-data';
+import { createVorbisComments, parseModesFromVorbisSetupPacket, parseOpusIdentificationHeader } from '../codec-data';
 import {
 	assert,
-	assertNever,
-	bytesToBase64,
-	keyValueIterator,
 	promiseWithResolvers,
 	setInt64,
-	textEncoder,
 	toDataView,
 	toUint8Array,
 } from '../misc';
@@ -199,7 +195,7 @@ export class OggMuxer extends Muxer {
 			commentHeaderHeader[5] = 0x69; // 'i'
 			commentHeaderHeader[6] = 0x73; // 's'
 
-			const commentHeader = this.createVorbisComments(commentHeaderHeader);
+			const commentHeader = createVorbisComments(commentHeaderHeader, this.output._metadataTags, true);
 
 			trackData.packetQueue.push({
 				data: identificationHeader,
@@ -239,7 +235,7 @@ export class OggMuxer extends Muxer {
 			const commentHeaderHeaderView = toDataView(commentHeaderHeader);
 			commentHeaderHeaderView.setUint32(0, 0x4f707573, false); // 'Opus'
 			commentHeaderHeaderView.setUint32(4, 0x54616773, false); // 'Tags'
-			const commentHeader = this.createVorbisComments(commentHeaderHeader);
+			const commentHeader = createVorbisComments(commentHeaderHeader, this.output._metadataTags, true);
 
 			trackData.packetQueue.push({
 				data: identificationHeader,
@@ -257,177 +253,6 @@ export class OggMuxer extends Muxer {
 				preSkip: parseOpusIdentificationHeader(identificationHeader).preSkip,
 			};
 		}
-	}
-
-	createVorbisComments(headerBytes: Uint8Array) {
-		// https://datatracker.ietf.org/doc/html/rfc7845#section-5.2
-
-		const tags = this.output._metadataTags;
-		const commentHeaderParts = [
-			headerBytes,
-		];
-
-		let vendorString = '';
-		if (typeof tags.raw?.['vendor'] === 'string') {
-			vendorString = tags.raw?.['vendor'];
-		}
-		const encodedVendorString = textEncoder.encode(vendorString);
-
-		let currentBuffer = new Uint8Array(4 + encodedVendorString.length);
-		let currentView = new DataView(currentBuffer.buffer);
-		currentView.setUint32(0, encodedVendorString.length, true);
-		currentBuffer.set(encodedVendorString, 4);
-
-		commentHeaderParts.push(currentBuffer);
-
-		const writtenTags = new Set<string>();
-		const addCommentTag = (key: string, value: string) => {
-			const joined = `${key}=${value}`;
-			const encoded = textEncoder.encode(joined);
-
-			currentBuffer = new Uint8Array(4 + encoded.length);
-			currentView = new DataView(currentBuffer.buffer);
-
-			currentView.setUint32(0, encoded.length, true);
-			currentBuffer.set(encoded, 4);
-
-			commentHeaderParts.push(currentBuffer);
-			writtenTags.add(key);
-		};
-
-		for (const { key, value } of keyValueIterator(tags)) {
-			switch (key) {
-				case 'title': {
-					addCommentTag('TITLE', value);
-				}; break;
-
-				case 'description': {
-					addCommentTag('DESCRIPTION', value);
-				}; break;
-
-				case 'artist': {
-					addCommentTag('ARTIST', value);
-				}; break;
-
-				case 'album': {
-					addCommentTag('ALBUM', value);
-				}; break;
-
-				case 'albumArtist': {
-					addCommentTag('ALBUMARTIST', value);
-				}; break;
-
-				case 'genre': {
-					addCommentTag('GENRE', value);
-				}; break;
-
-				case 'date': {
-					addCommentTag('DATE', value.toISOString().slice(0, 10));
-				}; break;
-
-				case 'comment': {
-					addCommentTag('COMMENT', value);
-				}; break;
-
-				case 'lyrics': {
-					addCommentTag('LYRICS', value);
-				}; break;
-
-				case 'trackNumber': {
-					addCommentTag('TRACKNUMBER', value.toString());
-				}; break;
-
-				case 'tracksTotal': {
-					addCommentTag('TRACKTOTAL', value.toString());
-				}; break;
-
-				case 'discNumber': {
-					addCommentTag('DISCNUMBER', value.toString());
-				}; break;
-
-				case 'discsTotal': {
-					addCommentTag('DISCTOTAL', value.toString());
-				}; break;
-
-				case 'images': {
-					for (const image of value) {
-						// https://datatracker.ietf.org/doc/rfc9639/ Section 8.8
-						const pictureType = image.kind === 'coverFront' ? 3 : image.kind === 'coverBack' ? 4 : 0;
-						const encodedMediaType = new Uint8Array(image.mimeType.length);
-
-						for (let i = 0; i < image.mimeType.length; i++) {
-							encodedMediaType[i] = image.mimeType.charCodeAt(i);
-						}
-
-						const encodedDescription = textEncoder.encode(image.description ?? '');
-
-						const buffer = new Uint8Array(
-							4 // Picture type
-							+ 4 // MIME type length
-							+ encodedMediaType.length // MIME type
-							+ 4 // Description length
-							+ encodedDescription.length // Description
-							+ 16 // Width, height, color depth, number of colors
-							+ 4 // Picture data length
-							+ image.data.length, // Picture data
-						);
-						const view = toDataView(buffer);
-
-						view.setUint32(0, pictureType, false);
-						view.setUint32(4, encodedMediaType.length, false);
-						buffer.set(encodedMediaType, 8);
-						view.setUint32(8 + encodedMediaType.length, encodedDescription.length, false);
-						buffer.set(encodedDescription, 12 + encodedMediaType.length);
-						// Skip a bunch of fields (width, height, color depth, number of colors)
-						view.setUint32(
-							28 + encodedMediaType.length + encodedDescription.length, image.data.length, false,
-						);
-						buffer.set(
-							image.data,
-							32 + encodedMediaType.length + encodedDescription.length,
-						);
-
-						const encoded = bytesToBase64(buffer);
-						addCommentTag('METADATA_BLOCK_PICTURE', encoded);
-					}
-				}; break;
-
-				case 'raw': {
-					// Handled later
-				}; break;
-
-				default: assertNever(key);
-			}
-		}
-
-		if (tags.raw) {
-			for (const key in tags.raw) {
-				const value = tags.raw[key];
-				if (key === 'vendor' || value == null || writtenTags.has(key)) {
-					continue;
-				}
-
-				if (typeof value === 'string') {
-					addCommentTag(key, value);
-				}
-			}
-		}
-
-		const listLengthBuffer = new Uint8Array(4);
-		toDataView(listLengthBuffer).setUint32(0, writtenTags.size, true);
-		commentHeaderParts.splice(2, 0, listLengthBuffer); // Insert after the header and vendor section
-
-		// Merge all comment header parts into a single buffer
-		const commentHeaderLength = commentHeaderParts.reduce((a, b) => a + b.length, 0);
-		const commentHeader = new Uint8Array(commentHeaderLength);
-
-		let pos = 0;
-		for (const part of commentHeaderParts) {
-			commentHeader.set(part, pos);
-			pos += part.length;
-		}
-
-		return commentHeader;
 	}
 
 	async addEncodedAudioPacket(track: OutputAudioTrack, packet: EncodedPacket, meta?: EncodedAudioChunkMetadata) {

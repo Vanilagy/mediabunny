@@ -33,6 +33,14 @@ if (audioTrack) {
 	audioTrack.numberOfChannels;
 	audioTrack.sampleRate; // in Hz
 }
+
+// Extract metadata tags
+const tags = await input.getMetadataTags();
+tags.title; // Title
+tags.date; // Release date
+tags.images[0]; // Cover art
+tags.raw['TBPM']; // Custom tags
+// ...
 ```
 
 ::: info
@@ -241,6 +249,12 @@ const audioSource = new AudioBufferSource({
 	bitrate: QUALITY_HIGH,
 });
 output.addAudioTrack(audioSource);
+
+// Set some metadata tags
+output.setMetadataTags({
+	title: 'My Movie',
+	artist: 'Me',
+});
 
 await output.start();
 
@@ -512,6 +526,7 @@ const conversion = await Conversion.init({
 		start: 0,
 		end: 60,
 	},
+	tags: {}, // Remove any metadata tags
 });
 
 await conversion.execute();
