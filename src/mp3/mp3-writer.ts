@@ -6,16 +6,13 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { textEncoder } from '../misc';
 import { Writer } from '../writer';
 import {
 	computeMp3FrameSize,
-	encodeSynchsafe,
 	getXingOffset,
 	KILOBIT_RATES,
 	XING,
 } from '../../shared/mp3-misc';
-import { Id3V2Writer } from '../id3';
 
 export type XingFrameData = {
 	mpegVersionId: number;
