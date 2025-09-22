@@ -299,11 +299,8 @@ export class WaveDemuxer extends Demuxer {
 		// Check if it's an ID3v2 tag
 		const id3V2Header = readId3V2Header(slice);
 		if (id3V2Header) {
-			// Create a new slice specifically for the ID3 tag content (after header)
-			// The header is 10 bytes, so the content starts at startPos + 10
-			let contentSlice = this.reader.requestSlice(startPos + 10, id3V2Header.size);
-			if (contentSlice instanceof Promise) contentSlice = await contentSlice;
-			if (!contentSlice) return;
+			// Extract the content portion (skip the 10-byte header)
+			const contentSlice = slice.slice(startPos + 10, id3V2Header.size);
 
 			// Parse ID3v2 tag using the same logic as MP3
 			parseId3V2Tag(contentSlice, id3V2Header, this.metadataTags);
