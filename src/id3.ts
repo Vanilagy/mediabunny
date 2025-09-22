@@ -8,11 +8,17 @@
 
 import { decodeSynchsafe, encodeSynchsafe } from '../shared/mp3-misc';
 import { MetadataTags } from './tags';
-import { coalesceIndex, textDecoder, textEncoder, isIso88591Compatible, assertNever, keyValueIterator } from './misc';
+import {
+	coalesceIndex,
+	textDecoder,
+	textEncoder,
+	isIso88591Compatible,
+	assertNever,
+	keyValueIterator,
+	toDataView,
+} from './misc';
 import { FileSlice, readAscii, readBytes, readU32Be, readU8 } from './reader';
-
-// Re-export for external use
-export { encodeSynchsafe, isIso88591Compatible };
+import { Writer } from './writer';
 
 export type Id3V2Header = {
 	majorVersion: number;
@@ -636,163 +642,16 @@ export class Id3V2Reader {
 	}
 }
 
-/**
- * Writer class for creating ID3v2 tags.
- * @group ID3
- * @public
- */
 export class Id3V2Writer {
-	private writer: import('./writer').Writer;
-	private textEncoder = new TextEncoder();
-	private helper = new Uint8Array(256);
+	writer: Writer;
+	helper = new Uint8Array(8);
+	helperView = toDataView(this.helper);
 
-	constructor(writer: import('./writer').Writer) {
+	constructor(writer: Writer) {
 		this.writer = writer;
 	}
 
-	writeU8(value: number) {
-		this.helper[0] = value;
-		this.writer.write(this.helper.subarray(0, 1));
-	}
-
-	writeU16(value: number) {
-		this.helper[0] = (value >>> 8) & 0xff;
-		this.helper[1] = value & 0xff;
-		this.writer.write(this.helper.subarray(0, 2));
-	}
-
-	writeU32(value: number) {
-		this.helper[0] = (value >>> 24) & 0xff;
-		this.helper[1] = (value >>> 16) & 0xff;
-		this.helper[2] = (value >>> 8) & 0xff;
-		this.helper[3] = value & 0xff;
-		this.writer.write(this.helper.subarray(0, 4));
-	}
-
-	writeAscii(text: string) {
-		for (let i = 0; i < text.length; i++) {
-			this.helper[i] = text.charCodeAt(i);
-		}
-		this.writer.write(this.helper.subarray(0, text.length));
-	}
-
-	writeSynchsafeU32(value: number) {
-		this.writeU32(encodeSynchsafe(value));
-	}
-
-	writeIsoString(text: string) {
-		const bytes = new Uint8Array(text.length + 1);
-		for (let i = 0; i < text.length; i++) {
-			bytes[i] = text.charCodeAt(i);
-		}
-		bytes[text.length] = 0x00;
-		this.writer.write(bytes);
-	}
-
-	writeUtf8String(text: string) {
-		const utf8Data = this.textEncoder.encode(text);
-		this.writer.write(utf8Data);
-		this.writeU8(0x00);
-	}
-
-	writeId3V2TextFrame(frameId: string, text: string) {
-		const useIso88591 = isIso88591Compatible(text);
-		const textDataLength = useIso88591 ? text.length : this.textEncoder.encode(text).byteLength;
-		const frameSize = 1 + textDataLength + 1;
-
-		this.writeAscii(frameId);
-		this.writeSynchsafeU32(frameSize);
-		this.writeU16(0x0000);
-
-		this.writeU8(useIso88591 ? Id3V2TextEncoding.ISO_8859_1 : Id3V2TextEncoding.UTF_8);
-		if (useIso88591) {
-			this.writeIsoString(text);
-		} else {
-			this.writeUtf8String(text);
-		}
-	}
-
-	writeId3V2LyricsFrame(lyrics: string) {
-		const useIso88591 = isIso88591Compatible(lyrics);
-		const shortDescription = '';
-		const frameSize = 1 + 3 + shortDescription.length + 1 + lyrics.length + 1;
-
-		this.writeAscii('USLT');
-		this.writeSynchsafeU32(frameSize);
-		this.writeU16(0x0000);
-
-		this.writeU8(useIso88591 ? Id3V2TextEncoding.ISO_8859_1 : Id3V2TextEncoding.UTF_8);
-		this.writeAscii('und');
-
-		if (useIso88591) {
-			this.writeIsoString(shortDescription);
-			this.writeIsoString(lyrics);
-		} else {
-			this.writeUtf8String(shortDescription);
-			this.writeUtf8String(lyrics);
-		}
-	}
-
-	writeId3V2CommentFrame(comment: string) {
-		const useIso88591 = isIso88591Compatible(comment);
-		const textDataLength = useIso88591 ? comment.length : this.textEncoder.encode(comment).byteLength;
-		const shortDescription = '';
-		const frameSize = 1 + 3 + shortDescription.length + 1 + textDataLength + 1;
-
-		this.writeAscii('COMM');
-		this.writeSynchsafeU32(frameSize);
-		this.writeU16(0x0000);
-
-		this.writeU8(useIso88591 ? Id3V2TextEncoding.ISO_8859_1 : Id3V2TextEncoding.UTF_8);
-		this.writeU8(0x75); // 'u'
-		this.writeU8(0x6E); // 'n'
-		this.writeU8(0x64); // 'd'
-
-		if (useIso88591) {
-			this.writeIsoString(shortDescription);
-			this.writeIsoString(comment);
-		} else {
-			this.writeUtf8String(shortDescription);
-			this.writeUtf8String(comment);
-		}
-	}
-
-	writeId3V2ApicFrame(mimeType: string, pictureType: number, description: string, imageData: Uint8Array) {
-		const useIso88591 = isIso88591Compatible(mimeType) && isIso88591Compatible(description);
-		const descriptionDataLength = useIso88591
-			? description.length
-			: this.textEncoder.encode(description).byteLength;
-		const frameSize = 1 + mimeType.length + 1 + 1 + descriptionDataLength + 1 + imageData.byteLength;
-
-		this.writeAscii('APIC');
-		this.writeSynchsafeU32(frameSize);
-		this.writeU16(0x0000);
-
-		this.writeU8(useIso88591 ? Id3V2TextEncoding.ISO_8859_1 : Id3V2TextEncoding.UTF_8);
-
-		if (useIso88591) {
-			this.writeIsoString(mimeType);
-		} else {
-			this.writeUtf8String(mimeType);
-		}
-
-		this.writeU8(pictureType);
-
-		if (useIso88591) {
-			this.writeIsoString(description);
-		} else {
-			this.writeUtf8String(description);
-		}
-
-		this.writer.write(imageData);
-	}
-
-	/**
-	 * Writes a complete ID3v2.4 tag with header and all metadata frames.
-	 * @param metadata - The metadata to write
-	 * @returns The total size of the written ID3v2 tag (including header)
-	 */
-	writeCompleteId3V2Tag(metadata: MetadataTags): number {
+	writeId3V2Tag(metadata: MetadataTags): number {
 		const tagStartPos = this.writer.getPos();
 
 		// Write ID3v2.4 header
@@ -929,5 +788,138 @@ export class Id3V2Writer {
 		this.writer.seek(framesEndPos);
 
 		return framesSize + 10; // +10 for the header size
+	}
+
+	writeU8(value: number) {
+		this.helper[0] = value;
+		this.writer.write(this.helper.subarray(0, 1));
+	}
+
+	writeU16(value: number) {
+		this.helperView.setUint16(0, value, false);
+		this.writer.write(this.helper.subarray(0, 2));
+	}
+
+	writeU32(value: number) {
+		this.helperView.setUint32(0, value, false);
+		this.writer.write(this.helper.subarray(0, 4));
+	}
+
+	writeAscii(text: string) {
+		for (let i = 0; i < text.length; i++) {
+			this.helper[i] = text.charCodeAt(i);
+		}
+		this.writer.write(this.helper.subarray(0, text.length));
+	}
+
+	writeSynchsafeU32(value: number) {
+		this.writeU32(encodeSynchsafe(value));
+	}
+
+	writeIsoString(text: string) {
+		const bytes = new Uint8Array(text.length + 1);
+		for (let i = 0; i < text.length; i++) {
+			bytes[i] = text.charCodeAt(i);
+		}
+		bytes[text.length] = 0x00;
+		this.writer.write(bytes);
+	}
+
+	writeUtf8String(text: string) {
+		const utf8Data = textEncoder.encode(text);
+		this.writer.write(utf8Data);
+		this.writeU8(0x00);
+	}
+
+	writeId3V2TextFrame(frameId: string, text: string) {
+		const useIso88591 = isIso88591Compatible(text);
+		const textDataLength = useIso88591 ? text.length : textEncoder.encode(text).byteLength;
+		const frameSize = 1 + textDataLength + 1;
+
+		this.writeAscii(frameId);
+		this.writeSynchsafeU32(frameSize);
+		this.writeU16(0x0000);
+
+		this.writeU8(useIso88591 ? Id3V2TextEncoding.ISO_8859_1 : Id3V2TextEncoding.UTF_8);
+		if (useIso88591) {
+			this.writeIsoString(text);
+		} else {
+			this.writeUtf8String(text);
+		}
+	}
+
+	writeId3V2LyricsFrame(lyrics: string) {
+		const useIso88591 = isIso88591Compatible(lyrics);
+		const shortDescription = '';
+		const frameSize = 1 + 3 + shortDescription.length + 1 + lyrics.length + 1;
+
+		this.writeAscii('USLT');
+		this.writeSynchsafeU32(frameSize);
+		this.writeU16(0x0000);
+
+		this.writeU8(useIso88591 ? Id3V2TextEncoding.ISO_8859_1 : Id3V2TextEncoding.UTF_8);
+		this.writeAscii('und');
+
+		if (useIso88591) {
+			this.writeIsoString(shortDescription);
+			this.writeIsoString(lyrics);
+		} else {
+			this.writeUtf8String(shortDescription);
+			this.writeUtf8String(lyrics);
+		}
+	}
+
+	writeId3V2CommentFrame(comment: string) {
+		const useIso88591 = isIso88591Compatible(comment);
+		const textDataLength = useIso88591 ? comment.length : textEncoder.encode(comment).byteLength;
+		const shortDescription = '';
+		const frameSize = 1 + 3 + shortDescription.length + 1 + textDataLength + 1;
+
+		this.writeAscii('COMM');
+		this.writeSynchsafeU32(frameSize);
+		this.writeU16(0x0000);
+
+		this.writeU8(useIso88591 ? Id3V2TextEncoding.ISO_8859_1 : Id3V2TextEncoding.UTF_8);
+		this.writeU8(0x75); // 'u'
+		this.writeU8(0x6E); // 'n'
+		this.writeU8(0x64); // 'd'
+
+		if (useIso88591) {
+			this.writeIsoString(shortDescription);
+			this.writeIsoString(comment);
+		} else {
+			this.writeUtf8String(shortDescription);
+			this.writeUtf8String(comment);
+		}
+	}
+
+	writeId3V2ApicFrame(mimeType: string, pictureType: number, description: string, imageData: Uint8Array) {
+		const useIso88591 = isIso88591Compatible(mimeType) && isIso88591Compatible(description);
+		const descriptionDataLength = useIso88591
+			? description.length
+			: textEncoder.encode(description).byteLength;
+		const frameSize = 1 + mimeType.length + 1 + 1 + descriptionDataLength + 1 + imageData.byteLength;
+
+		this.writeAscii('APIC');
+		this.writeSynchsafeU32(frameSize);
+		this.writeU16(0x0000);
+
+		this.writeU8(useIso88591 ? Id3V2TextEncoding.ISO_8859_1 : Id3V2TextEncoding.UTF_8);
+
+		if (useIso88591) {
+			this.writeIsoString(mimeType);
+		} else {
+			this.writeUtf8String(mimeType);
+		}
+
+		this.writeU8(pictureType);
+
+		if (useIso88591) {
+			this.writeIsoString(description);
+		} else {
+			this.writeUtf8String(description);
+		}
+
+		this.writer.write(imageData);
 	}
 }

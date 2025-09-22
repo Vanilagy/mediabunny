@@ -7,7 +7,7 @@
  */
 
 import { assert, toDataView } from '../misc';
-import { metadataTagsAreEmpty, MetadataTags } from '../tags';
+import { metadataTagsAreEmpty } from '../tags';
 import { Muxer } from '../muxer';
 import { Output, OutputAudioTrack } from '../output';
 import { Mp3OutputFormat } from '../output-format';
@@ -36,7 +36,8 @@ export class Mp3Muxer extends Muxer {
 
 	async start() {
 		if (!metadataTagsAreEmpty(this.output._metadataTags)) {
-			this.writeId3v2Tag(this.output._metadataTags);
+			const id3Writer = new Id3V2Writer(this.writer);
+			id3Writer.writeId3V2Tag(this.output._metadataTags);
 		}
 	}
 
@@ -121,11 +122,6 @@ export class Mp3Muxer extends Muxer {
 
 	async addSubtitleCue() {
 		throw new Error('MP3 does not support subtitles.');
-	}
-
-	writeId3v2Tag(tags: MetadataTags) {
-		const id3Writer = new Id3V2Writer(this.writer);
-		id3Writer.writeCompleteId3V2Tag(tags);
 	}
 
 	async finalize() {

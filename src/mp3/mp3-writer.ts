@@ -39,26 +39,9 @@ export class Mp3Writer {
 
 	constructor(private writer: Writer) {}
 
-	writeU8(value: number) {
-		this.helper[0] = value;
-		this.writer.write(this.helper.subarray(0, 1));
-	}
-
-	writeU16(value: number) {
-		this.helperView.setUint16(0, value, false);
-		this.writer.write(this.helper.subarray(0, 2));
-	}
-
 	writeU32(value: number) {
 		this.helperView.setUint32(0, value, false);
 		this.writer.write(this.helper.subarray(0, 4));
-	}
-
-	writeAscii(text: string) {
-		for (let i = 0; i < text.length; i++) {
-			this.helper[i] = text.charCodeAt(i);
-		}
-		this.writer.write(this.helper.subarray(0, text.length));
 	}
 
 	writeXingFrame(data: XingFrameData) {
@@ -136,44 +119,5 @@ export class Mp3Writer {
 			lowSamplingFrequency, data.layer, 1000 * kilobitRate, data.sampleRate, padding,
 		);
 		this.writer.seek(startPos + frameSize);
-	}
-
-	writeSynchsafeU32(value: number) {
-		this.writeU32(encodeSynchsafe(value));
-	}
-
-	writeIsoString(text: string) {
-		const bytes = new Uint8Array(text.length + 1);
-		for (let i = 0; i < text.length; i++) {
-			bytes[i] = text.charCodeAt(i);
-		}
-		bytes[text.length] = 0x00;
-		this.writer.write(bytes);
-	}
-
-	writeUtf8String(text: string) {
-		const utf8Data = textEncoder.encode(text);
-		this.writer.write(utf8Data);
-		this.writeU8(0x00);
-	}
-
-	writeId3V2TextFrame(frameId: string, text: string) {
-		const id3Writer = new Id3V2Writer(this.writer);
-		id3Writer.writeId3V2TextFrame(frameId, text);
-	}
-
-	writeId3V2LyricsFrame(lyrics: string) {
-		const id3Writer = new Id3V2Writer(this.writer);
-		id3Writer.writeId3V2LyricsFrame(lyrics);
-	}
-
-	writeId3V2CommentFrame(comment: string) {
-		const id3Writer = new Id3V2Writer(this.writer);
-		id3Writer.writeId3V2CommentFrame(comment);
-	}
-
-	writeId3V2ApicFrame(mimeType: string, pictureType: number, description: string, imageData: Uint8Array) {
-		const id3Writer = new Id3V2Writer(this.writer);
-		id3Writer.writeId3V2ApicFrame(mimeType, pictureType, description, imageData);
 	}
 }

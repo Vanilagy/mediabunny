@@ -160,13 +160,16 @@ export class WaveMuxer extends Muxer {
 		this.riffWriter.writeU16(blockSize);
 		this.riffWriter.writeU16(8 * pcmInfo.sampleSize);
 
+		// Metadata tags
 		if (!metadataTagsAreEmpty(this.output._metadataTags)) {
-			// Metadata exists, let's write an INFO chunk
-			this.writeInfoChunk(this.output._metadataTags);
+			const metadataFormat = this.format._options.metadataFormat ?? 'info';
 
-			// Also write ID3 chunk if requested
-			if (this.format._options.writeId3Tag) {
+			if (metadataFormat === 'info') {
+				this.writeInfoChunk(this.output._metadataTags);
+			} else if (metadataFormat === 'id3') {
 				this.writeId3Chunk(this.output._metadataTags);
+			} else {
+				assertNever(metadataFormat);
 			}
 		}
 
@@ -314,7 +317,7 @@ export class WaveMuxer extends Muxer {
 		this.riffWriter.writeU32(0); // Size placeholder
 
 		const id3Writer = new Id3V2Writer(this.writer);
-		const id3TagSize = id3Writer.writeCompleteId3V2Tag(metadata);
+		const id3TagSize = id3Writer.writeId3V2Tag(metadata);
 
 		const endPos = this.writer.getPos();
 

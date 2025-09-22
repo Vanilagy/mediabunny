@@ -612,10 +612,10 @@ test('Read ID3v2 tags from WAV file', async () => {
 	expect(tags.raw['APIC']).toBeInstanceOf(Uint8Array);
 });
 
-test('Write WAV with both RIFF INFO and ID3 tags', async () => {
+test('Write WAV with ID3 tags', async () => {
 	const output = new Output({
 		target: new BufferTarget(),
-		format: new WavOutputFormat({ writeId3Tag: true }),
+		format: new WavOutputFormat({ metadataFormat: 'id3' }),
 	});
 
 	output.setMetadataTags(songMetadata);
@@ -645,16 +645,10 @@ test('Write WAV with both RIFF INFO and ID3 tags', async () => {
 
 	expect(readTags.date).toBeDefined();
 
-	// explicitly verify that BOTH RIFF INFO and ID3 tags are written
 	expect(readTags.raw).toBeDefined();
 	if (readTags.raw) {
-		// Verify RIFF INFO tags are present
-		expect(readTags.raw['INAM']).toBe(songMetadata.title);
-		expect(readTags.raw['IART']).toBe(songMetadata.artist);
-		expect(readTags.raw['IPRD']).toBe(songMetadata.album);
-		expect(readTags.raw['ICMT']).toBe(songMetadata.comment);
-		expect(readTags.raw['IGNR']).toBe(songMetadata.genre);
-		expect(readTags.raw['ITRK']).toBe(`${songMetadata.trackNumber}/${songMetadata.tracksTotal}`);
+		// Verify RIFF INFO tags are not present
+		expect(readTags.raw['INAM']).toBeUndefined();
 
 		// Verify ID3 tags are also present
 		expect(readTags.raw['TIT2']).toBe(songMetadata.title);
