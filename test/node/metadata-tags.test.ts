@@ -578,10 +578,14 @@ test('Read ID3v2 tags from WAV file', async () => {
 
 	const tags = await input.getMetadataTags();
 
+	const expectedTitle = 'Glitch Hop Is Dead';
+	const expectedArtist = 'GRiZ';
+	const expectedTrackNumber = 19;
+
 	// Specific expectations for the test WAV file
-	expect(tags.title).toBe('Glitch Hop Is Dead');
-	expect(tags.artist).toBe('GRiZ');
-	expect(tags.trackNumber).toBe(19);
+	expect(tags.title).toBe(expectedTitle);
+	expect(tags.artist).toBe(expectedArtist);
+	expect(tags.trackNumber).toBe(expectedTrackNumber);
 
 	if (!tags.images) {
 		throw new Error('No images found in the file');
@@ -602,10 +606,10 @@ test('Read ID3v2 tags from WAV file', async () => {
 		throw new Error('No raw tags found in the file');
 	}
 
-	expect(tags.raw['TIT2']).toBeDefined(); // Title
-	expect(tags.raw['TPE1']).toBeDefined(); // Artist
-	expect(tags.raw['TRCK']).toBeDefined(); // Track number
-	expect(tags.raw['APIC']).toBeDefined(); // Cover art
+	expect(tags.raw['TIT2']).toBe(expectedTitle); // Title
+	expect(tags.raw['TPE1']).toBe(expectedArtist); // Artist
+	expect(tags.raw['TRCK']).toBe(String(expectedTrackNumber)); // Track number
+	expect(tags.raw['APIC']).toBeInstanceOf(Uint8Array);
 });
 
 test('Write WAV with both RIFF INFO and ID3 tags', async () => {
