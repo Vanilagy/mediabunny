@@ -274,6 +274,22 @@ export class WaveDemuxer extends Demuxer {
 		}
 	}
 
+	/**
+	 * Parses ID3 tags embedded in WAV files as RIFF chunks.
+	 *
+	 * **Note**: ID3 tags in WAV files are NOT part of the official RIFF/WAV specification.
+	 * This is a non-standard extension that some applications use to embed ID3v2 metadata
+	 * alongside or instead of the standard RIFF INFO chunks. While not officially supported
+	 * by the WAV format specification, this implementation provides compatibility with
+	 * applications that write ID3 metadata to WAV files.
+	 *
+	 * The standard and recommended way to store metadata in WAV files is through RIFF INFO
+	 * LIST chunks, which are handled by {@link parseListChunk}.
+	 *
+	 * @param startPos - The starting position of the ID3 chunk data
+	 * @param size - The size of the ID3 chunk in bytes
+	 * @private
+	 */
 	private async parseId3Chunk(startPos: number, size: number) {
 		// Parse ID3 tag embedded in WAV file
 		let slice = this.reader.requestSlice(startPos, size);

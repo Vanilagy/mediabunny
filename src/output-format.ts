@@ -627,8 +627,22 @@ export type WavOutputFormatOptions = {
 
 	/**
 	 * When enabled, metadata will be written as an ID3v2 tag in addition to the standard RIFF INFO chunk.
-	 * This provides better metadata compatibility with some applications while maintaining broad support.
-	 * Defaults to `false`.
+	 *
+	 * **Important**: ID3 tags in WAV files are NOT part of the official RIFF/WAV specification.
+	 * This is a non-standard extension that some applications use to store metadata. While this
+	 * option provides better compatibility with applications that expect ID3 metadata, it creates
+	 * files that technically deviate from the WAV standard.
+	 *
+	 * The standard and recommended approach for WAV metadata is through RIFF INFO LIST chunks,
+	 * which are always written regardless of this setting. This option adds ID3v2.4 tags as
+	 * additional RIFF chunks for enhanced compatibility.
+	 *
+	 * Use cases for enabling this option:
+	 * - Compatibility with audio software that prefers or requires ID3 metadata
+	 * - Applications that need the richer metadata capabilities of ID3v2 (e.g., embedded images)
+	 * - Workflows where files may be processed by MP3-focused tools
+	 *
+	 * @default false
 	 */
 	writeId3Tag?: boolean;
 
