@@ -710,11 +710,11 @@ export class IsobmffDemuxer extends Demuxer {
 				if (track.id !== -1 && track.timescale !== -1 && track.info !== null) {
 					if (track.info.type === 'video' && track.info.width !== -1) {
 						const videoTrack = track as InternalVideoTrack;
-						track.inputTrack = new InputVideoTrack(new IsobmffVideoTrackBacking(videoTrack));
+						track.inputTrack = new InputVideoTrack(this.input, new IsobmffVideoTrackBacking(videoTrack));
 						this.tracks.push(track);
 					} else if (track.info.type === 'audio' && track.info.numberOfChannels !== -1) {
 						const audioTrack = track as InternalAudioTrack;
-						track.inputTrack = new InputAudioTrack(new IsobmffAudioTrackBacking(audioTrack));
+						track.inputTrack = new InputAudioTrack(this.input, new IsobmffAudioTrackBacking(audioTrack));
 						this.tracks.push(track);
 					}
 				}

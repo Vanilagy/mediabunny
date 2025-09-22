@@ -189,7 +189,7 @@ export class FlacDemuxer extends Demuxer {
 							description,
 						};
 
-						this.track = new InputAudioTrack(new FlacAudioTrackBacking(this));
+						this.track = new InputAudioTrack(this.input, new FlacAudioTrackBacking(this));
 						break;
 					}
 					case FlacBlockType.VORBIS_COMMENT: {

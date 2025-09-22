@@ -9,6 +9,7 @@
 import { AudioCodec, MediaCodec, VideoCodec } from './codec';
 import { determineVideoPacketType } from './codec-data';
 import { customAudioDecoders, customVideoDecoders } from './custom-coder';
+import { Input } from './input';
 import { EncodedPacketSink, PacketRetrievalOptions } from './media-sink';
 import { assert, Rotation } from './misc';
 import { TrackType } from './output';
@@ -51,11 +52,14 @@ export interface InputTrackBacking {
  * @public
  */
 export abstract class InputTrack {
+	/** The input file this track belongs to. */
+	readonly input: Input;
 	/** @internal */
 	_backing: InputTrackBacking;
 
 	/** @internal */
-	constructor(backing: InputTrackBacking) {
+	constructor(input: Input, backing: InputTrackBacking) {
+		this.input = input;
 		this._backing = backing;
 	}
 
@@ -201,8 +205,8 @@ export class InputVideoTrack extends InputTrack {
 	override _backing: InputVideoTrackBacking;
 
 	/** @internal */
-	constructor(backing: InputVideoTrackBacking) {
-		super(backing);
+	constructor(input: Input, backing: InputVideoTrackBacking) {
+		super(input, backing);
 
 		this._backing = backing;
 	}
@@ -329,8 +333,8 @@ export class InputAudioTrack extends InputTrack {
 	override _backing: InputAudioTrackBacking;
 
 	/** @internal */
-	constructor(backing: InputAudioTrackBacking) {
-		super(backing);
+	constructor(input: Input, backing: InputAudioTrackBacking) {
+		super(input, backing);
 
 		this._backing = backing;
 	}

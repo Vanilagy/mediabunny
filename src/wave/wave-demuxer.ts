@@ -15,6 +15,7 @@ import { MetadataTags } from '../tags';
 import { assert, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readAscii, readBytes, Reader, readU16, readU32, readU64 } from '../reader';
+import { parseId3V2Tag, readId3V2Header } from '../id3';
 
 export enum WaveFormat {
 	PCM = 0x0001,
@@ -107,6 +108,8 @@ export class WaveDemuxer extends Demuxer {
 					totalFileSize = Math.min(riffChunkSize + 8, this.reader.fileSize ?? Infinity);
 				} else if (chunkId === 'LIST') {
 					await this.parseListChunk(startPos, chunkSize, littleEndian);
+				} else if (chunkId === 'ID3 ' || chunkId === 'id3 ') {
+					await this.parseId3Chunk(startPos, chunkSize);
 				}
 
 				currentPos = startPos + chunkSize + (chunkSize & 1); // Handle padding
@@ -123,7 +126,7 @@ export class WaveDemuxer extends Demuxer {
 			const blockSize = this.audioInfo.blockSizeInBytes;
 			this.dataSize = Math.floor(this.dataSize / blockSize) * blockSize;
 
-			this.tracks.push(new InputAudioTrack(new WaveAudioTrackBacking(this)));
+			this.tracks.push(new InputAudioTrack(this.input, new WaveAudioTrackBacking(this)));
 		})();
 	}
 
@@ -268,6 +271,21 @@ export class WaveDemuxer extends Demuxer {
 			}
 
 			currentPos += 8 + chunkSize + (chunkSize & 1); // Handle padding
+		}
+	}
+
+	private async parseId3Chunk(startPos: number, size: number) {
+		// Parse ID3 tag embedded in WAV file (non-default, but used a lot in practice anyway)
+		let slice = this.reader.requestSlice(startPos, size);
+		if (slice instanceof Promise) slice = await slice;
+		if (!slice) return; // File too short
+
+		const id3V2Header = readId3V2Header(slice);
+		if (id3V2Header) {
+			// Extract the content portion (skip the 10-byte header)
+			const contentSlice = slice.slice(startPos + 10, id3V2Header.size);
+
+			parseId3V2Tag(contentSlice, id3V2Header, this.metadataTags);
 		}
 	}
 

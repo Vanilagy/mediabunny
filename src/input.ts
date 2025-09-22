@@ -24,12 +24,16 @@ export type InputOptions<S extends Source = Source> = {
 	source: S;
 };
 
+// https://www.typescriptlang.org/docs/handbook/release-notes/typescript-5-2.html
+// @ts-expect-error Readonly
+Symbol.dispose ??= Symbol('Symbol.dispose');
+
 /**
  * Represents an input media file. This is the root object from which all media read operations start.
  * @group Input files & tracks
  * @public
  */
-export class Input<S extends Source = Source> {
+export class Input<S extends Source = Source> implements Disposable {
 	/** @internal */
 	_source: S;
 	/** @internal */
@@ -40,6 +44,13 @@ export class Input<S extends Source = Source> {
 	_format: InputFormat | null = null;
 	/** @internal */
 	_reader: Reader;
+	/** @internal */
+	_disposed = false;
+
+	/** True if the input has been disposed. */
+	get disposed() {
+		return this._disposed;
+	}
 
 	/**
 	 * Creates a new input file from the specified options. No reading operations will be performed until methods are
@@ -54,6 +65,9 @@ export class Input<S extends Source = Source> {
 		}
 		if (!(options.source instanceof Source)) {
 			throw new TypeError('options.source must be a Source.');
+		}
+		if (options.source._disposed) {
+			throw new Error('options.source must not be disposed.');
 		}
 
 		this._formats = options.formats;
@@ -142,9 +156,52 @@ export class Input<S extends Source = Source> {
 		return demuxer.getMimeType();
 	}
 
-	/** Returns descriptive metadata tags about the media file, such as title, author, date, or cover art. */
+	/**
+	 * Returns descriptive metadata tags about the media file, such as title, author, date, cover art, or other
+	 * attached files.
+	 */
 	async getMetadataTags() {
 		const demuxer = await this._getDemuxer();
 		return demuxer.getMetadataTags();
+	}
+
+	/**
+	 * Disposes this input and frees connected resources. When an input is disposed, ongoing read operations will be
+	 * canceled, all future read operations will fail, any open decoders will be closed, and all ongoing media sink
+	 * operations will be canceled. Disallowed and canceled operations will throw an {@link InputDisposedError}.
+	 *
+	 * You are expected not to use an input after disposing it. While some operations may still work, it is not
+	 * specified and may change in any future update.
+	 */
+	dispose() {
+		if (this._disposed) {
+			return;
+		}
+
+		this._disposed = true;
+
+		this._source._disposed = true;
+		this._source._dispose();
+	}
+
+	/**
+	 * Calls `.dispose()` on the input, implementing the `Disposable` interface for use with
+	 * JavaScript Explicit Resource Management features.
+	 */
+	[Symbol.dispose]() {
+		this.dispose();
+	}
+}
+
+/**
+ * Thrown when an operation was prevented because the corresponding {@link Input} has been disposed.
+ * @group Input files & tracks
+ * @public
+ */
+export class InputDisposedError extends Error {
+	/** Creates a new {@link InputDisposedError}. */
+	constructor(message = 'Input has been disposed.') {
+		super(message);
+		this.name = 'InputDisposedError';
 	}
 }

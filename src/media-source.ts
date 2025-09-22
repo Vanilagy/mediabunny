@@ -292,7 +292,7 @@ class VideoEncoderWrapper {
 
 			if (!this.encoderInitialized) {
 				if (!this.ensureEncoderPromise) {
-					void this.ensureEncoder(videoSample);
+					this.ensureEncoder(videoSample);
 				}
 
 				// No, this "if" statement is not useless. Sometimes, the above call to `ensureEncoder` might have
@@ -363,13 +363,13 @@ class VideoEncoderWrapper {
 		}
 	}
 
-	private async ensureEncoder(videoSample: VideoSample) {
+	private ensureEncoder(videoSample: VideoSample) {
 		if (this.encoder) {
 			return;
 		}
 
 		const encoderError = new Error();
-		return this.ensureEncoderPromise = (async () => {
+		this.ensureEncoderPromise = (async () => {
 			const encoderConfig = buildVideoEncoderConfig({
 				width: videoSample.codedWidth,
 				height: videoSample.codedHeight,
@@ -407,6 +407,19 @@ class VideoEncoderWrapper {
 			} else {
 				if (typeof VideoEncoder === 'undefined') {
 					throw new Error('VideoEncoder is not supported by this browser.');
+				}
+
+				const hasOddDimension = encoderConfig.width % 2 === 1 || encoderConfig.height % 2 === 1;
+				if (
+					hasOddDimension
+					&& (this.encodingConfig.codec === 'avc' || this.encodingConfig.codec === 'hevc')
+				) {
+					// Throw a special error for this case as it gets hit often
+					throw new Error(
+						`The dimensions ${encoderConfig.width}x${encoderConfig.height} are not supported for codec`
+						+ ` '${this.encodingConfig.codec}'; both width and height must be even numbers. Make sure to`
+						+ ` round your dimensions to the nearest even number.`,
+					);
 				}
 
 				const support = await VideoEncoder.isConfigSupported(encoderConfig);
@@ -873,7 +886,7 @@ class AudioEncoderWrapper {
 
 			if (!this.encoderInitialized) {
 				if (!this.ensureEncoderPromise) {
-					void this.ensureEncoder(audioSample);
+					this.ensureEncoder(audioSample);
 				}
 
 				// No, this "if" statement is not useless. Sometimes, the above call to `ensureEncoder` might have
@@ -1010,7 +1023,7 @@ class AudioEncoderWrapper {
 		}
 
 		const encoderError = new Error();
-		return this.ensureEncoderPromise = (async () => {
+		this.ensureEncoderPromise = (async () => {
 			const { numberOfChannels, sampleRate } = audioSample;
 
 			const encoderConfig = buildAudioEncoderConfig({

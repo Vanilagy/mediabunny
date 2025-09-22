@@ -94,6 +94,7 @@ const videoTrack = await input.getPrimaryVideoTrack();
 const audioTrack = await input.getPrimaryAudioTrack();
 const { displayWidth, displayHeight, rotation } = videoTrack;
 const { sampleRate, numberOfChannels } = audioTrack;
+const { title, artist, album } = await input.getMetadataTags();
 ```
 
 ### Create new media files

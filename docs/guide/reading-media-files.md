@@ -394,6 +394,29 @@ await decoder.flush();
 
 As you can see, media sinks are incredibly versatile and allow for efficient, sparse reading of media data within the input file.
 
+## Disposing inputs
+
+When you're not using them anymore, `Input` instances will automatically get cleaned up by garbage collection. However, sometimes you may want to prematurely dispose of an `Input` and all its connected resources, or cancel any ongoing operation. You can do it like so:
+
+```ts
+input.dispose();
+```
+
+When an `Input` is disposed, ongoing read operations will be canceled, all future read operations will fail, any open decoders will be closed, and all ongoing media sink operations will be canceled. Disallowed and canceled operations will throw an `InputDisposedError`.
+
+You are expected not to use an `Input` after disposing it. While some operations may still work, it is not specified and may change in any future update.
+
+`Input` also implements `Disposable`, meaning you can use it with JavaScript Explicit Resource Management features such as the [`using` keyword](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/using):
+```ts
+{
+	using input = new Input(...);
+
+	// `input` will automatically be disposed
+}
+```
+
+Using `using` is recommended over `const` if you only need the `Input` momentarily within a single scope.
+
 ## Input sources
 
 The _input source_ determines where the `Input` reads data from.
@@ -469,6 +492,9 @@ type UrlSourceOptions = {
 	// The maximum number of bytes the cache is allowed to hold
 	// in memory. Defaults to 8 MiB.
 	maxCacheSize?: number;
+
+	// Used to provide a custom fetch function
+	fetchFn?: typeof fetch;
 };
 ```
 
@@ -493,6 +519,25 @@ const source = new UrlSource('https://example.com/bigbuckbunny.mp4', {
 
 Not setting `getRetryDelay` will default to an infinite, capped exponential backoff pattern.
 
+---
+
+Use `fetchFn` to provide a custom fetch function, usually for polyfill reasons. For example, React Native's `fetch` does not support streamable response bodies, a feature that `UrlSource` requires. In this case, you could use [Expo's `fetch` function](https://docs.expo.dev/versions/latest/sdk/expo/#expofetch-api) instead:
+```ts
+import { UrlSource } from 'mediabunny';
+import { fetch } from 'expo/fetch';
+
+const source = new UrlSource('https://example.com/bigbuckbunny.mp4', {
+	fetchFn: (input, init) => {
+		if (typeof input !== 'string') {
+			// Expo requires string URLs
+			throw new Error('Expected a string URL.');
+		}
+
+		return fetch(input, init);
+	},
+});
+```
+
 ### `FilePathSource`
 
 This input source can be used to load data directly from a file, given a file path. It requires a server-side environment such as Node, Bun, or Deno.
@@ -510,6 +555,10 @@ type FilePathSourceOptions = {
 	maxCacheSize?: number;
 };
 ```
+
+::: warning
+When using this source, make sure to manually [dispose of the Input](#disposing-inputs) when you are done with it to properly close the internal file handle held by this source.
+:::
 
 ### `StreamSource`
 
@@ -540,6 +589,7 @@ The options of `StreamSource` have the following type:
 type StreamSourceOptions = {
 	getSize: () => MaybePromise<number>;
 	read: (start: number, end: number) => MaybePromise<Uint8Array | ReadableStream<Uint8Array>>;
+	dispose?: () => unknown;
 	maxCacheSize?: number;
 	prefetchProfile?: 'none' | 'fileSystem' | 'network';
 };
@@ -551,6 +601,8 @@ type MaybePromise<T> = T | Promise<T>;
 	Called when the size of the entire file is requested. Must return or resolve to the size in bytes. This function is guaranteed to be called before `read`.
 - `read`\
 	Called when data is requested. Must return or resolve to the bytes from the specified byte range, or a stream that yields these bytes.
+- `dispose`\
+	Called when the `Input` driven by this source is disposed.
 - `maxCacheSize`\
 	The maximum number of bytes the cache is allowed to hold in memory. Defaults to 8 MiB.
 - `prefetchProfile`\

@@ -10,7 +10,7 @@ import { BufferTarget } from '../../src/target.js';
 import { Conversion } from '../../src/conversion.js';
 
 test('can decode samples from a FLAC file', async () => {
-	const input = new Input({
+	using input = new Input({
 		source: new UrlSource('/sample.flac'),
 		formats: [FLAC],
 	});
@@ -25,7 +25,7 @@ test('can decode samples from a FLAC file', async () => {
 });
 
 test('can convert a .flac to .wav', async () => {
-	const input = new Input({
+	using input = new Input({
 		source: new UrlSource('/sample.flac'),
 		formats: [FLAC],
 	});

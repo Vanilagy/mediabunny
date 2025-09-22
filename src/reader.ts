@@ -6,6 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { InputDisposedError } from './input';
 import { assert, clamp, getUint24, MaybePromise, toDataView } from './misc';
 import { Source } from './source';
 
@@ -15,6 +16,10 @@ export class Reader {
 	constructor(public source: Source) {}
 
 	requestSlice(start: number, length: number): MaybePromise<FileSlice | null> {
+		if (this.source._disposed) {
+			throw new InputDisposedError();
+		}
+
 		if (this.fileSize !== null && start + length > this.fileSize) {
 			return null;
 		}
@@ -40,6 +45,10 @@ export class Reader {
 	}
 
 	requestSliceRange(start: number, minLength: number, maxLength: number): MaybePromise<FileSlice | null> {
+		if (this.source._disposed) {
+			throw new InputDisposedError();
+		}
+
 		if (this.fileSize !== null) {
 			return this.requestSlice(
 				start,

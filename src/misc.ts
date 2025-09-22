@@ -575,18 +575,19 @@ const normalizeHeaders = (headers: HeadersInit): Record<string, string> => {
 };
 
 export const retriedFetch = async (
-	url: string | URL,
+	fetchFn: typeof fetch,
+	url: string | URL | Request,
 	requestInit: RequestInit,
-	getRetryDelay: (previousAttempts: number) => number | null,
+	getRetryDelay: (previousAttempts: number, error: unknown) => number | null,
 ) => {
 	let attempts = 0;
 
 	while (true) {
 		try {
-			return await fetch(url, requestInit);
+			return await fetchFn(url, requestInit);
 		} catch (error) {
 			attempts++;
-			const retryDelayInSeconds = getRetryDelay(attempts);
+			const retryDelayInSeconds = getRetryDelay(attempts, error);
 
 			if (retryDelayInSeconds === null) {
 				throw error;

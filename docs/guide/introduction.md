@@ -18,6 +18,7 @@ Here's a long list of stuff this library does:
 - Input and output streaming, arbitrary file size support
 - File location independence (memory, disk, network, ...)
 - Utilities for compression, resizing, rotation, cropping, resampling, trimming
+- Metadata tag reading & writing (title, artist, cover art, custom tags, attached files, etc.)
 - Transmuxing and transcoding
 - Microsecond-accurate reading and writing precision
 - Efficient seeking through time

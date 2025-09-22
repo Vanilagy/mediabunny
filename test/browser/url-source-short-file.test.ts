@@ -5,7 +5,7 @@ import { Input } from '../../src/input.js';
 
 test('Should be able to load a very small video file via URL (<512 kB)', async () => {
 	const source = new UrlSource('/frames.webm');
-	const input = new Input({
+	using input = new Input({
 		source,
 		formats: ALL_FORMATS,
 	});

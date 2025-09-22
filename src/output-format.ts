@@ -626,8 +626,18 @@ export type WavOutputFormatOptions = {
 	large?: boolean;
 
 	/**
-	 * Will be called once the file header is written. The header consists of the RIFF header, the format chunk, and the
-	 * start of the data chunk (with a placeholder size of 0).
+	 * The metadata format to use for writing metadata tags.
+	 *
+	 * - `'info'` (default): Writes metadata into a RIFF INFO LIST chunk, the default way to contain metadata tags
+	 * within WAVE. Only allows for a limited subset of tags to be written.
+	 * - `'id3'`: Writes metadata into an ID3 chunk. Non-default, but used by many taggers in practice. Allows for a
+	 * much larger and richer set of tags to be written.
+	 */
+	metadataFormat?: 'info' | 'id3';
+
+	/**
+	 * Will be called once the file header is written. The header consists of the RIFF header, the format chunk,
+	 * metadata chunks, and the start of the data chunk (with a placeholder size of 0).
 	 */
 	onHeader?: (data: Uint8Array, position: number) => unknown;
 };
@@ -648,6 +658,9 @@ export class WavOutputFormat extends OutputFormat {
 		}
 		if (options.large !== undefined && typeof options.large !== 'boolean') {
 			throw new TypeError('options.large, when provided, must be a boolean.');
+		}
+		if (options.metadataFormat !== undefined && !['info', 'id3'].includes(options.metadataFormat)) {
+			throw new TypeError('options.metadataFormat, when provided, must be either \'info\' or \'id3\'.');
 		}
 		if (options.onHeader !== undefined && typeof options.onHeader !== 'function') {
 			throw new TypeError('options.onHeader, when provided, must be a function.');

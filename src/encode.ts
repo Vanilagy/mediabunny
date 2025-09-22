@@ -490,6 +490,15 @@ export const canEncodeVideo = async (
 		return false;
 	}
 
+	const hasOddDimension = width % 2 === 1 || height % 2 === 1;
+	if (
+		hasOddDimension
+		&& (codec === 'avc' || codec === 'hevc')
+	) {
+		// Disallow odd dimensions for certain codecs
+		return false;
+	}
+
 	encoderConfig ??= buildVideoEncoderConfig({
 		codec,
 		width,

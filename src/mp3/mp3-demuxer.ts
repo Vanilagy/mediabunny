@@ -21,8 +21,8 @@ import {
 	parseId3V1Tag,
 	parseId3V2Tag,
 	readId3V2Header,
-	readNextFrameHeader,
-} from './mp3-reader';
+} from '../id3';
+import { readNextFrameHeader } from './mp3-reader';
 import { readAscii, readBytes, Reader, readU32Be } from '../reader';
 
 type Sample = {
@@ -64,7 +64,7 @@ export class Mp3Demuxer extends Demuxer {
 				throw new Error('No valid MP3 frame found.');
 			}
 
-			this.tracks = [new InputAudioTrack(new Mp3AudioTrackBacking(this))];
+			this.tracks = [new InputAudioTrack(this.input, new Mp3AudioTrackBacking(this))];
 		})();
 	}
 

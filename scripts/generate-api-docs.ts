@@ -157,14 +157,166 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 
 	// Helper to find all potential type references in a type string
 	const findAllTypeReferences = (typeString: string): string[] => {
-		// Match PascalCase identifiers that could be type names
-		const matches = typeString.match(/\b[A-Z][a-zA-Z0-9_]*\b/g) || [];
+		const matches: string[] = [];
+		let i = 0;
+
+		while (i < typeString.length) {
+			const char = typeString[i]!;
+
+			// Skip string literals (both single and double quotes)
+			if (char === '"' || char === '\'') {
+				const quote = char;
+				i++; // Skip opening quote
+
+				// Find closing quote, handling escaped quotes
+				while (i < typeString.length) {
+					if (typeString[i] === '\\') {
+						i += 2; // Skip escaped character
+					} else if (typeString[i] === quote) {
+						i++; // Skip closing quote
+						break;
+					} else {
+						i++;
+					}
+				}
+				continue;
+			}
+
+			// Skip template literals
+			if (char === '`') {
+				i++; // Skip opening backtick
+				while (i < typeString.length && typeString[i] !== '`') {
+					if (typeString[i] === '\\') {
+						i += 2; // Skip escaped character
+					} else {
+						i++;
+					}
+				}
+				if (i < typeString.length) i++; // Skip closing backtick
+				continue;
+			}
+
+			// Check for PascalCase identifier at current position
+			if (/[A-Z]/.test(char)) {
+				let match = '';
+				let j = i;
+
+				// Collect the full identifier
+				while (j < typeString.length && /[a-zA-Z0-9_]/.test(typeString[j]!)) {
+					match += typeString[j];
+					j++;
+				}
+
+				// Ensure it's a word boundary (not part of a larger word)
+				const prevChar = i > 0 ? typeString[i - 1]! : ' ';
+				const nextChar = j < typeString.length ? typeString[j]! : ' ';
+
+				if (!/[a-zA-Z0-9_]/.test(prevChar) && !/[a-zA-Z0-9_]/.test(nextChar)) {
+					matches.push(match);
+				}
+
+				i = j;
+			} else {
+				i++;
+			}
+		}
+
 		return [...new Set(matches)]; // Remove duplicates
 	};
 
 	// Helper to filter references to only exported types (excluding current type)
 	const filterToExportedTypes = (references: string[], currentTypeName?: string): string[] => {
 		return references.filter(ref => exportedTypes.has(ref) && ref !== currentTypeName);
+	};
+
+	// Helper to split union types while respecting bracket depth and string literals
+	const splitUnionType = (typeString: string): string[] => {
+		const parts: string[] = [];
+		let current = '';
+		let depth = 0;
+		let i = 0;
+
+		while (i < typeString.length) {
+			const char = typeString[i];
+
+			// Skip string literals (both single and double quotes)
+			if (char === '"' || char === '\'') {
+				const quote = char;
+				current += char;
+				i++; // Skip opening quote
+
+				// Find closing quote, handling escaped quotes
+				while (i < typeString.length) {
+					current += typeString[i];
+					if (typeString[i] === '\\') {
+						i++; // Skip escaped character
+						if (i < typeString.length) {
+							current += typeString[i];
+							i++;
+						}
+					} else if (typeString[i] === quote) {
+						i++; // Skip closing quote
+						break;
+					} else {
+						i++;
+					}
+				}
+				continue;
+			}
+
+			// Skip template literals
+			if (char === '`') {
+				current += char;
+				i++; // Skip opening backtick
+				while (i < typeString.length && typeString[i] !== '`') {
+					current += typeString[i];
+					if (typeString[i] === '\\') {
+						i++; // Skip escaped character
+						if (i < typeString.length) {
+							current += typeString[i];
+						}
+					}
+					i++;
+				}
+				if (i < typeString.length) {
+					current += typeString[i]; // Add closing backtick
+					i++;
+				}
+				continue;
+			}
+
+			// Track bracket depth
+			if (char === '(' || char === '{' || char === '[' || char === '<') {
+				depth++;
+				current += char;
+			} else if (char === ')' || char === '}' || char === ']' || char === '>') {
+				depth--;
+				current += char;
+			} else if (char === '|' && depth === 0) {
+				// Found a top-level union separator
+				// Check if it's part of ' | ' pattern
+				if (i > 0 && typeString[i - 1] === ' ' && i < typeString.length - 1 && typeString[i + 1] === ' ') {
+					// This is a union separator
+					parts.push(current.trim());
+					current = '';
+					i += 2; // Skip ' | '
+					continue;
+				} else {
+					// Just a pipe character, not a union separator
+					current += char;
+				}
+			} else {
+				current += char;
+			}
+			i++;
+		}
+
+		// Add the final part
+		if (current.trim()) {
+			parts.push(current.trim());
+		}
+
+		return parts.length > 1 ? parts : [typeString];
 	};
 
 	// Helper to process {@link} tags in JSDoc comments
@@ -319,8 +471,10 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 		// Format long union types with line breaks if they exceed 80 characters
 		// Only apply to top-level unions, not unions nested within intersections, object types, or generic types
 		if (cleanedType.includes(' | ') && cleanedType.length > 80 && !cleanedType.includes('&') && !cleanedType.includes('{') && !cleanedType.includes('<')) {
-			const unionMembers = cleanedType.split(' | ');
-			cleanedType = '\n\t| ' + unionMembers.join('\n\t| ');
+			const unionMembers = splitUnionType(cleanedType);
+			if (unionMembers.length > 1) {
+				cleanedType = '\n\t| ' + unionMembers.join('\n\t| ');
+			}
 		}
 
 		return cleanedType;
@@ -614,6 +768,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 			const staticMethods: string[] = [];
 			let constructor: string | null = null;
 			let extendsClause = '';
+			let implementsClause = '';
 			let typeParameters: string | null = null;
 
 			// Get class description from JSDoc (or from superclass if none)
@@ -729,11 +884,32 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 				);
 				if (extendsClauseNode && extendsClauseNode.types[0]) {
 					const superClassName = extendsClauseNode.types[0].expression.getText();
-					extendsClause = `\n\n**Extends:** [\`${superClassName}\`](./${superClassName}.md)\n`;
-
-					// In tandem: update usage map
 					if (exportedTypes.has(superClassName)) {
+						extendsClause = `\n\n**Extends:** [\`${superClassName}\`](./${superClassName}.md)\n`;
+						// In tandem: update usage map
 						addUsage(superClassName, className, className, 'extends');
+					} else {
+						extendsClause = `\n\n**Extends:** \`${superClassName}\`\n`;
+					}
+				}
+
+				// Check for implements clause (only for classes)
+				if (ts.isClassDeclaration(declaration)) {
+					const implementsClauseNode = declaration.heritageClauses.find(
+						clause => clause.token === ts.SyntaxKind.ImplementsKeyword,
+					);
+					if (implementsClauseNode && implementsClauseNode.types.length > 0) {
+						const implementedInterfaces = implementsClauseNode.types.map((type) => {
+							const interfaceName = type.expression.getText();
+							if (exportedTypes.has(interfaceName)) {
+								// In tandem: update usage map
+								addUsage(interfaceName, className, className, 'extends');
+								return `[\`${interfaceName}\`](./${interfaceName}.md)`;
+							} else {
+								return `\`${interfaceName}\``;
+							}
+						});
+						implementsClause = `\n\n**Implements:** ${implementedInterfaces.join(', ')}\n`;
 					}
 				}
 			}
@@ -1351,7 +1527,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 				markdown += `<VPBadge type="info" text="Interface" />\n\n`;
 			}
 
-			markdown += `# ${className}\n\n${description ? `${description}\n` : ''}${extendsClause}`;
+			markdown += `# ${className}\n\n${description ? `${description}\n` : ''}${extendsClause}${implementsClause}`;
 
 			// Add subclasses section for classes that have subclasses
 			if (ts.isClassDeclaration(declaration) && classHierarchy.has(className)) {
@@ -1445,8 +1621,10 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 					// Convert string literals from double quotes to single quotes
 					typeText = typeText.replace(/"([^"]*)"/g, '\'$1\'');
 					if (typeText.includes(' | ')) {
-						const unionMembers = typeText.split(' | ');
-						typeText = '\n\t| ' + unionMembers.join('\n\t| ');
+						const unionMembers = splitUnionType(typeText);
+						if (unionMembers.length > 1) {
+							typeText = '\n\t| ' + unionMembers.join('\n\t| ');
+						}
 					}
 				} else {
 					// For complex types, use the original text

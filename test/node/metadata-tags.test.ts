@@ -107,7 +107,7 @@ test('Read and write metadata, MP4', async () => {
 	await dummyTrack.addPacket();
 	await output.finalize();
 
-	const input = new Input({
+	using input = new Input({
 		source: new BufferSource(output.target.buffer!),
 		formats: ALL_FORMATS,
 	});
@@ -156,7 +156,7 @@ test('Read and write metadata, QuickTime', async () => {
 	await dummyTrack.addPacket();
 	await output.finalize();
 
-	const input = new Input({
+	using input = new Input({
 		source: new BufferSource(output.target.buffer!),
 		formats: ALL_FORMATS,
 	});
@@ -187,7 +187,7 @@ test('Read and write metadata, QuickTime', async () => {
 });
 
 test('Read MOV metadata tags, ilst with keys', async () => {
-	const input = new Input({
+	using input = new Input({
 		source: new FilePathSource(path.join(__dirname, '../public/trunc-buck-bunny.mov')),
 		formats: ALL_FORMATS,
 	});
@@ -231,7 +231,7 @@ test('Read and write metadata, Matroska', async () => {
 	await dummyTrack.addPacket();
 	await output.finalize();
 
-	const input = new Input({
+	using input = new Input({
 		source: new BufferSource(output.target.buffer!),
 		formats: ALL_FORMATS,
 	});
@@ -294,7 +294,7 @@ test('Read and write metadata, MP3', async () => {
 	await dummyTrack.addPacket();
 	await output.finalize();
 
-	const input = new Input({
+	using input = new Input({
 		source: new BufferSource(output.target.buffer!),
 		formats: ALL_FORMATS,
 	});
@@ -346,7 +346,7 @@ test('Read and write metadata, Ogg', async () => {
 	await dummyTrack.addPacket();
 	await output.finalize();
 
-	const input = new Input({
+	using input = new Input({
 		source: new BufferSource(output.target.buffer!),
 		formats: ALL_FORMATS,
 	});
@@ -396,7 +396,7 @@ test('Read and write metadata, FLAC', async () => {
 	await dummyTrack.addPacket();
 	await output.finalize();
 
-	const input = new Input({
+	using input = new Input({
 		source: new BufferSource(output.target.buffer!),
 		formats: ALL_FORMATS,
 	});
@@ -445,7 +445,7 @@ test('Read and write metadata, WAVE', async () => {
 	await dummyTrack.addPacket();
 	await output.finalize();
 
-	const input = new Input({
+	using input = new Input({
 		source: new BufferSource(output.target.buffer!),
 		formats: ALL_FORMATS,
 	});
@@ -484,7 +484,7 @@ test('Conversion metadata tags, default case', async () => {
 	await dummyTrack.addPacket();
 	await output.finalize();
 
-	const input = new Input({
+	using input = new Input({
 		source: new BufferSource(output.target.buffer!),
 		formats: ALL_FORMATS,
 	});
@@ -534,7 +534,7 @@ test('Conversion metadata tags, modified', async () => {
 	await dummyTrack.addPacket();
 	await output.finalize();
 
-	const input = new Input({
+	using input = new Input({
 		source: new BufferSource(output.target.buffer!),
 		formats: ALL_FORMATS,
 	});
@@ -566,4 +566,100 @@ test('Conversion metadata tags, modified', async () => {
 	expect(readTags.title).toBe('Blossom');
 	expect(readTags.artist).toBe(songMetadata.artist);
 	expect(Object.keys(readTags.raw!).length).toBe(2);
+});
+
+test('Read ID3v2 tags from WAV file', async () => {
+	const filePath = path.join(import.meta.dirname, '../public/glitch-hop-is-dead.wav');
+
+	using input = new Input({
+		source: new FilePathSource(filePath),
+		formats: ALL_FORMATS,
+	});
+
+	const tags = await input.getMetadataTags();
+
+	const expectedTitle = 'Glitch Hop Is Dead';
+	const expectedArtist = 'GRiZ';
+	const expectedTrackNumber = 19;
+
+	// Specific expectations for the test WAV file
+	expect(tags.title).toBe(expectedTitle);
+	expect(tags.artist).toBe(expectedArtist);
+	expect(tags.trackNumber).toBe(expectedTrackNumber);
+
+	if (!tags.images) {
+		throw new Error('No images found in the file');
+	}
+
+	const frontCover = tags.images[0];
+
+	if (!frontCover) {
+		throw new Error('No front cover found in the file');
+	}
+
+	expect(frontCover.kind).toBe('coverFront');
+	expect(frontCover.mimeType).toBe('image/jpg');
+	expect(frontCover.data).toBeInstanceOf(Uint8Array);
+	expect(frontCover.data.length).toBeGreaterThan(0);
+
+	if (!tags.raw) {
+		throw new Error('No raw tags found in the file');
+	}
+
+	expect(tags.raw['TIT2']).toBe(expectedTitle); // Title
+	expect(tags.raw['TPE1']).toBe(expectedArtist); // Artist
+	expect(tags.raw['TRCK']).toBe(String(expectedTrackNumber)); // Track number
+	expect(tags.raw['APIC']).toBeInstanceOf(Uint8Array);
+});
+
+test('Write WAV with ID3 tags', async () => {
+	const output = new Output({
+		target: new BufferTarget(),
+		format: new WavOutputFormat({ metadataFormat: 'id3' }),
+	});
+
+	output.setMetadataTags(songMetadata);
+
+	const dummyTrack = createDummyAudioTrack('pcm-f32', output);
+
+	await output.start();
+	await dummyTrack.addPacket();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const readTags = await input.getMetadataTags();
+
+	expect(readTags.title).toBe(songMetadata.title);
+	expect(readTags.artist).toBe(songMetadata.artist);
+	expect(readTags.album).toBe(songMetadata.album);
+	expect(readTags.albumArtist).toBe(songMetadata.albumArtist);
+	expect(readTags.trackNumber).toBe(songMetadata.trackNumber);
+	expect(readTags.discNumber).toBe(songMetadata.discNumber);
+	expect(readTags.genre).toBe(songMetadata.genre);
+	expect(readTags.comment).toBe(songMetadata.comment);
+	expect(readTags.lyrics).toBe(songMetadata.lyrics);
+
+	expect(readTags.date).toBeDefined();
+
+	expect(readTags.raw).toBeDefined();
+	if (readTags.raw) {
+		// Verify RIFF INFO tags are not present
+		expect(readTags.raw['INAM']).toBeUndefined();
+
+		// Verify ID3 tags are also present
+		expect(readTags.raw['TIT2']).toBe(songMetadata.title);
+		expect(readTags.raw['TPE1']).toBe(songMetadata.artist);
+		expect(readTags.raw['TALB']).toBe(songMetadata.album);
+		expect(readTags.raw['TPE2']).toBe(songMetadata.albumArtist);
+		expect(readTags.raw['TCON']).toBe(songMetadata.genre);
+		expect(readTags.raw['COMM']).toBeDefined();
+		expect(readTags.raw['USLT']).toBeDefined();
+		expect(readTags.raw['TRCK']).toBe(`${songMetadata.trackNumber}/${songMetadata.tracksTotal}`);
+		expect(readTags.raw['TPOS']).toBe(`${songMetadata.discNumber}/${songMetadata.discsTotal}`);
+		expect(readTags.raw['TDRC']).toBeDefined();
+	}
 });

@@ -1027,7 +1027,7 @@ export class MatroskaDemuxer extends Demuxer {
 						}
 
 						const videoTrack = this.currentTrack as InternalVideoTrack;
-						const inputTrack = new InputVideoTrack(new MatroskaVideoTrackBacking(videoTrack));
+						const inputTrack = new InputVideoTrack(this.input, new MatroskaVideoTrackBacking(videoTrack));
 						this.currentTrack.inputTrack = inputTrack;
 						this.currentSegment.tracks.push(this.currentTrack);
 					} else if (
@@ -1082,7 +1082,7 @@ export class MatroskaDemuxer extends Demuxer {
 						}
 
 						const audioTrack = this.currentTrack as InternalAudioTrack;
-						const inputTrack = new InputAudioTrack(new MatroskaAudioTrackBacking(audioTrack));
+						const inputTrack = new InputAudioTrack(this.input, new MatroskaAudioTrackBacking(audioTrack));
 						this.currentTrack.inputTrack = inputTrack;
 						this.currentSegment.tracks.push(this.currentTrack);
 					}

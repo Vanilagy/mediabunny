@@ -147,6 +147,7 @@ export {
 export {
 	Input,
 	InputOptions,
+	InputDisposedError,
 } from './input';
 export {
 	InputTrack,

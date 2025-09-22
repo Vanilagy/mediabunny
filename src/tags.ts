@@ -7,9 +7,9 @@
  */
 
 /**
- * Represents descriptive (non-technical) metadata about a media file, such as title, author, date, or cover art.
- * Common tags are normalized by Mediabunny into a uniform format, while the `raw` field can be used to directly read or
- * write the underlying metadata tags (which differ by format).
+ * Represents descriptive (non-technical) metadata about a media file, such as title, author, date, cover art, or other
+ * attached files. Common tags are normalized by Mediabunny into a uniform format, while the `raw` field can be used to
+ * directly read or write the underlying metadata tags (which differ by format).
  *
  * - For MP4/QuickTime files, the metadata refers to the data in `'moov'`-level `'udta'` and `'meta'` atoms.
  * - For Matroska files, the metadata refers to the Tags and Attachments elements whose target is 50 (MOVIE).

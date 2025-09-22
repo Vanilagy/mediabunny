@@ -138,7 +138,7 @@ export class OggDemuxer extends Demuxer {
 				}
 
 				if (bitstream.codecInfo.codec !== null) {
-					this.tracks.push(new InputAudioTrack(new OggAudioTrackBacking(bitstream, this)));
+					this.tracks.push(new InputAudioTrack(this.input, new OggAudioTrackBacking(bitstream, this)));
 				}
 			}
 		})();

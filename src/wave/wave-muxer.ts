@@ -16,6 +16,7 @@ import { EncodedPacket } from '../packet';
 import { WavOutputFormat } from '../output-format';
 import { assert, assertNever, isIso88591Compatible, keyValueIterator } from '../misc';
 import { MetadataTags, metadataTagsAreEmpty } from '../tags';
+import { Id3V2Writer } from '../id3';
 
 export class WaveMuxer extends Muxer {
 	private format: WavOutputFormat;
@@ -159,9 +160,17 @@ export class WaveMuxer extends Muxer {
 		this.riffWriter.writeU16(blockSize);
 		this.riffWriter.writeU16(8 * pcmInfo.sampleSize);
 
+		// Metadata tags
 		if (!metadataTagsAreEmpty(this.output._metadataTags)) {
-			// Metadata exists, let's write an INFO chunk
-			this.writeInfoChunk(this.output._metadataTags);
+			const metadataFormat = this.format._options.metadataFormat ?? 'info';
+
+			if (metadataFormat === 'info') {
+				this.writeInfoChunk(this.output._metadataTags);
+			} else if (metadataFormat === 'id3') {
+				this.writeId3Chunk(this.output._metadataTags);
+			} else {
+				assertNever(metadataFormat);
+			}
 		}
 
 		// data chunk
@@ -296,6 +305,29 @@ export class WaveMuxer extends Muxer {
 
 		// Add padding byte if chunk size is odd
 		if (chunkSize & 1) {
+			this.writer.write(new Uint8Array(1));
+		}
+	}
+
+	private writeId3Chunk(metadata: MetadataTags) {
+		const startPos = this.writer.getPos();
+
+		// Write RIFF chunk header
+		this.riffWriter.writeAscii('ID3 ');
+		this.riffWriter.writeU32(0); // Size placeholder
+
+		const id3Writer = new Id3V2Writer(this.writer);
+		const id3TagSize = id3Writer.writeId3V2Tag(metadata);
+
+		const endPos = this.writer.getPos();
+
+		// Update RIFF chunk size
+		this.writer.seek(startPos + 4);
+		this.riffWriter.writeU32(id3TagSize);
+		this.writer.seek(endPos);
+
+		// Add padding byte if chunk size is odd
+		if (id3TagSize & 1) {
 			this.writer.write(new Uint8Array(1));
 		}
 	}

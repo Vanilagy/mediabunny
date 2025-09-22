@@ -14,7 +14,16 @@
 			source: new Mediabunny.BlobSource(file),
 		});
 
-		console.log(await input.getMetadataTags());
+		window.doDispose = () => input.dispose();
+
+		const videoTrack = await input.getPrimaryVideoTrack();
+		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
+
+		for await (const sample of sink.packets()) {
+			console.log(sample.timestamp)
+			//sample.close();
+			await new Promise(resolve => setTimeout(resolve, 0))
+		}
 
 		/*
 		console.log(await input.computeDuration());

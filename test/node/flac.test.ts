@@ -14,7 +14,7 @@ const __dirname = new URL('.', import.meta.url).pathname;
 
 test('can loop over all samples', async () => {
 	const filePath = path.join(__dirname, '..', 'public/sample.flac');
-	const input = new Input({
+	using input = new Input({
 		source: new FilePathSource(filePath),
 		formats: ALL_FORMATS,
 	});
@@ -56,7 +56,7 @@ test('can loop over all samples', async () => {
 
 test('can do random access', async () => {
 	const filePath = path.join(__dirname, '..', 'public/sample.flac');
-	const input = new Input({
+	using input = new Input({
 		source: new FilePathSource(filePath),
 		formats: ALL_FORMATS,
 	});
@@ -89,7 +89,7 @@ test('can do random access', async () => {
 
 test('can get metadata-only packets', async () => {
 	const filePath = path.join(__dirname, '..', 'public/sample.flac');
-	const input = new Input({
+	using input = new Input({
 		source: new FilePathSource(filePath),
 		formats: ALL_FORMATS,
 	});
@@ -108,7 +108,7 @@ test('can get metadata-only packets', async () => {
 
 test('can get metadata', async () => {
 	const filePath = path.join(__dirname, '..', 'public/sample.flac');
-	const input = new Input({
+	using input = new Input({
 		source: new FilePathSource(filePath),
 		formats: ALL_FORMATS,
 	});
@@ -145,7 +145,7 @@ test('can get metadata', async () => {
 
 test('can re-mux a .flac', async () => {
 	const filePath = path.join(__dirname, '..', 'public/sample.flac');
-	const input = new Input({
+	using input = new Input({
 		source: new FilePathSource(filePath),
 		formats: ALL_FORMATS,
 	});
