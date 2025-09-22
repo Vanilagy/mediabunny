@@ -571,7 +571,7 @@ test('Conversion metadata tags, modified', async () => {
 test('Read ID3v2 tags from WAV file', async () => {
 	const filePath = path.join(import.meta.dirname, '../public/glitch-hop-is-dead.wav');
 
-	const input = new Input({
+	using input = new Input({
 		source: new FilePathSource(filePath),
 		formats: ALL_FORMATS,
 	});
