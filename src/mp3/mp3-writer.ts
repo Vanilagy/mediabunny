@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { isIso88591Compatible, textEncoder } from '../misc';
+import { textEncoder } from '../misc';
 import { Writer } from '../writer';
 import {
 	computeMp3FrameSize,
@@ -15,7 +15,7 @@ import {
 	KILOBIT_RATES,
 	XING,
 } from '../../shared/mp3-misc';
-import { Id3V2TextEncoding } from '../id3';
+import { Id3V2Writer } from '../id3';
 
 export type XingFrameData = {
 	mpegVersionId: number;
@@ -158,92 +158,22 @@ export class Mp3Writer {
 	}
 
 	writeId3V2TextFrame(frameId: string, text: string) {
-		const useIso88591 = isIso88591Compatible(text);
-		const textDataLength = useIso88591 ? text.length : textEncoder.encode(text).byteLength;
-		const frameSize = 1 + textDataLength + 1;
-
-		this.writeAscii(frameId);
-		this.writeSynchsafeU32(frameSize);
-		this.writeU16(0x0000);
-
-		this.writeU8(useIso88591 ? Id3V2TextEncoding.ISO_8859_1 : Id3V2TextEncoding.UTF_8);
-		if (useIso88591) {
-			this.writeIsoString(text);
-		} else {
-			this.writeUtf8String(text);
-		}
+		const id3Writer = new Id3V2Writer(this.writer);
+		id3Writer.writeId3V2TextFrame(frameId, text);
 	}
 
 	writeId3V2LyricsFrame(lyrics: string) {
-		const useIso88591 = isIso88591Compatible(lyrics);
-		const shortDescription = '';
-		const frameSize = 1 + 3 + shortDescription.length + 1 + lyrics.length + 1;
-
-		this.writeAscii('USLT');
-		this.writeSynchsafeU32(frameSize);
-		this.writeU16(0x0000);
-
-		this.writeU8(useIso88591 ? Id3V2TextEncoding.ISO_8859_1 : Id3V2TextEncoding.UTF_8);
-		this.writeAscii('und');
-
-		if (useIso88591) {
-			this.writeIsoString(shortDescription);
-			this.writeIsoString(lyrics);
-		} else {
-			this.writeUtf8String(shortDescription);
-			this.writeUtf8String(lyrics);
-		}
+		const id3Writer = new Id3V2Writer(this.writer);
+		id3Writer.writeId3V2LyricsFrame(lyrics);
 	}
 
 	writeId3V2CommentFrame(comment: string) {
-		const useIso88591 = isIso88591Compatible(comment);
-		const textDataLength = useIso88591 ? comment.length : textEncoder.encode(comment).byteLength;
-		const shortDescription = '';
-		const frameSize = 1 + 3 + shortDescription.length + 1 + textDataLength + 1;
-
-		this.writeAscii('COMM');
-		this.writeSynchsafeU32(frameSize);
-		this.writeU16(0x0000);
-
-		this.writeU8(useIso88591 ? Id3V2TextEncoding.ISO_8859_1 : Id3V2TextEncoding.UTF_8);
-		this.writeU8(0x75); // 'u'
-		this.writeU8(0x6E); // 'n'
-		this.writeU8(0x64); // 'd'
-
-		if (useIso88591) {
-			this.writeIsoString(shortDescription);
-			this.writeIsoString(comment);
-		} else {
-			this.writeUtf8String(shortDescription);
-			this.writeUtf8String(comment);
-		}
+		const id3Writer = new Id3V2Writer(this.writer);
+		id3Writer.writeId3V2CommentFrame(comment);
 	}
 
 	writeId3V2ApicFrame(mimeType: string, pictureType: number, description: string, imageData: Uint8Array) {
-		const useIso88591 = isIso88591Compatible(mimeType) && isIso88591Compatible(description);
-		const descriptionDataLength = useIso88591 ? description.length : textEncoder.encode(description).byteLength;
-		const frameSize = 1 + mimeType.length + 1 + 1 + descriptionDataLength + 1 + imageData.byteLength;
-
-		this.writeAscii('APIC');
-		this.writeSynchsafeU32(frameSize);
-		this.writeU16(0x0000);
-
-		this.writeU8(useIso88591 ? Id3V2TextEncoding.ISO_8859_1 : Id3V2TextEncoding.UTF_8);
-
-		if (useIso88591) {
-			this.writeIsoString(mimeType);
-		} else {
-			this.writeUtf8String(mimeType);
-		}
-
-		this.writeU8(pictureType);
-
-		if (useIso88591) {
-			this.writeIsoString(description);
-		} else {
-			this.writeUtf8String(description);
-		}
-
-		this.writer.write(imageData);
+		const id3Writer = new Id3V2Writer(this.writer);
+		id3Writer.writeId3V2ApicFrame(mimeType, pictureType, description, imageData);
 	}
 }

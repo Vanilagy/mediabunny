@@ -607,3 +607,61 @@ test('Read ID3v2 tags from WAV file', async () => {
 	expect(tags.raw['TRCK']).toBeDefined(); // Track number
 	expect(tags.raw['APIC']).toBeDefined(); // Cover art
 });
+
+test('Write WAV with both RIFF INFO and ID3 tags', async () => {
+	const output = new Output({
+		target: new BufferTarget(),
+		format: new WavOutputFormat({ writeId3Tag: true }),
+	});
+
+	output.setMetadataTags(songMetadata);
+
+	const dummyTrack = createDummyAudioTrack('pcm-f32', output);
+
+	await output.start();
+	await dummyTrack.addPacket();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const readTags = await input.getMetadataTags();
+
+	expect(readTags.title).toBe(songMetadata.title);
+	expect(readTags.artist).toBe(songMetadata.artist);
+	expect(readTags.album).toBe(songMetadata.album);
+	expect(readTags.albumArtist).toBe(songMetadata.albumArtist);
+	expect(readTags.trackNumber).toBe(songMetadata.trackNumber);
+	expect(readTags.discNumber).toBe(songMetadata.discNumber);
+	expect(readTags.genre).toBe(songMetadata.genre);
+	expect(readTags.comment).toBe(songMetadata.comment);
+	expect(readTags.lyrics).toBe(songMetadata.lyrics);
+
+	expect(readTags.date).toBeDefined();
+
+	// explicitly verify that BOTH RIFF INFO and ID3 tags are written
+	expect(readTags.raw).toBeDefined();
+	if (readTags.raw) {
+		// Verify RIFF INFO tags are present
+		expect(readTags.raw['INAM']).toBe(songMetadata.title);
+		expect(readTags.raw['IART']).toBe(songMetadata.artist);
+		expect(readTags.raw['IPRD']).toBe(songMetadata.album);
+		expect(readTags.raw['ICMT']).toBe(songMetadata.comment);
+		expect(readTags.raw['IGNR']).toBe(songMetadata.genre);
+		expect(readTags.raw['ITRK']).toBe(`${songMetadata.trackNumber}/${songMetadata.tracksTotal}`);
+
+		// Verify ID3 tags are also present
+		expect(readTags.raw['TIT2']).toBe(songMetadata.title);
+		expect(readTags.raw['TPE1']).toBe(songMetadata.artist);
+		expect(readTags.raw['TALB']).toBe(songMetadata.album);
+		expect(readTags.raw['TPE2']).toBe(songMetadata.albumArtist);
+		expect(readTags.raw['TCON']).toBe(songMetadata.genre);
+		expect(readTags.raw['COMM']).toBeDefined();
+		expect(readTags.raw['USLT']).toBeDefined();
+		expect(readTags.raw['TRCK']).toBe(`${songMetadata.trackNumber}/${songMetadata.tracksTotal}`);
+		expect(readTags.raw['TPOS']).toBe(`${songMetadata.discNumber}/${songMetadata.discsTotal}`);
+		expect(readTags.raw['TDRC']).toBeDefined();
+	}
+});

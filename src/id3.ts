@@ -6,10 +6,13 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { decodeSynchsafe } from '../shared/mp3-misc';
+import { decodeSynchsafe, encodeSynchsafe } from '../shared/mp3-misc';
 import { MetadataTags } from './tags';
-import { coalesceIndex, textDecoder } from './misc';
+import { coalesceIndex, textDecoder, textEncoder, isIso88591Compatible, assertNever, keyValueIterator } from './misc';
 import { FileSlice, readAscii, readBytes, readU32Be, readU8 } from './reader';
+
+// Re-export for external use
+export { encodeSynchsafe, isIso88591Compatible };
 
 export type Id3V2Header = {
 	majorVersion: number;
@@ -630,5 +633,301 @@ export class Id3V2Reader {
 
 		const encoding = this.readId3V2TextEncoding();
 		return this.readId3V2Text(encoding, until);
+	}
+}
+
+/**
+ * Writer class for creating ID3v2 tags.
+ * @group ID3
+ * @public
+ */
+export class Id3V2Writer {
+	private writer: import('./writer').Writer;
+	private textEncoder = new TextEncoder();
+	private helper = new Uint8Array(256);
+
+	constructor(writer: import('./writer').Writer) {
+		this.writer = writer;
+	}
+
+	writeU8(value: number) {
+		this.helper[0] = value;
+		this.writer.write(this.helper.subarray(0, 1));
+	}
+
+	writeU16(value: number) {
+		this.helper[0] = (value >>> 8) & 0xff;
+		this.helper[1] = value & 0xff;
+		this.writer.write(this.helper.subarray(0, 2));
+	}
+
+	writeU32(value: number) {
+		this.helper[0] = (value >>> 24) & 0xff;
+		this.helper[1] = (value >>> 16) & 0xff;
+		this.helper[2] = (value >>> 8) & 0xff;
+		this.helper[3] = value & 0xff;
+		this.writer.write(this.helper.subarray(0, 4));
+	}
+
+	writeAscii(text: string) {
+		for (let i = 0; i < text.length; i++) {
+			this.helper[i] = text.charCodeAt(i);
+		}
+		this.writer.write(this.helper.subarray(0, text.length));
+	}
+
+	writeSynchsafeU32(value: number) {
+		this.writeU32(encodeSynchsafe(value));
+	}
+
+	writeIsoString(text: string) {
+		const bytes = new Uint8Array(text.length + 1);
+		for (let i = 0; i < text.length; i++) {
+			bytes[i] = text.charCodeAt(i);
+		}
+		bytes[text.length] = 0x00;
+		this.writer.write(bytes);
+	}
+
+	writeUtf8String(text: string) {
+		const utf8Data = this.textEncoder.encode(text);
+		this.writer.write(utf8Data);
+		this.writeU8(0x00);
+	}
+
+	writeId3V2TextFrame(frameId: string, text: string) {
+		const useIso88591 = isIso88591Compatible(text);
+		const textDataLength = useIso88591 ? text.length : this.textEncoder.encode(text).byteLength;
+		const frameSize = 1 + textDataLength + 1;
+
+		this.writeAscii(frameId);
+		this.writeSynchsafeU32(frameSize);
+		this.writeU16(0x0000);
+
+		this.writeU8(useIso88591 ? Id3V2TextEncoding.ISO_8859_1 : Id3V2TextEncoding.UTF_8);
+		if (useIso88591) {
+			this.writeIsoString(text);
+		} else {
+			this.writeUtf8String(text);
+		}
+	}
+
+	writeId3V2LyricsFrame(lyrics: string) {
+		const useIso88591 = isIso88591Compatible(lyrics);
+		const shortDescription = '';
+		const frameSize = 1 + 3 + shortDescription.length + 1 + lyrics.length + 1;
+
+		this.writeAscii('USLT');
+		this.writeSynchsafeU32(frameSize);
+		this.writeU16(0x0000);
+
+		this.writeU8(useIso88591 ? Id3V2TextEncoding.ISO_8859_1 : Id3V2TextEncoding.UTF_8);
+		this.writeAscii('und');
+
+		if (useIso88591) {
+			this.writeIsoString(shortDescription);
+			this.writeIsoString(lyrics);
+		} else {
+			this.writeUtf8String(shortDescription);
+			this.writeUtf8String(lyrics);
+		}
+	}
+
+	writeId3V2CommentFrame(comment: string) {
+		const useIso88591 = isIso88591Compatible(comment);
+		const textDataLength = useIso88591 ? comment.length : this.textEncoder.encode(comment).byteLength;
+		const shortDescription = '';
+		const frameSize = 1 + 3 + shortDescription.length + 1 + textDataLength + 1;
+
+		this.writeAscii('COMM');
+		this.writeSynchsafeU32(frameSize);
+		this.writeU16(0x0000);
+
+		this.writeU8(useIso88591 ? Id3V2TextEncoding.ISO_8859_1 : Id3V2TextEncoding.UTF_8);
+		this.writeU8(0x75); // 'u'
+		this.writeU8(0x6E); // 'n'
+		this.writeU8(0x64); // 'd'
+
+		if (useIso88591) {
+			this.writeIsoString(shortDescription);
+			this.writeIsoString(comment);
+		} else {
+			this.writeUtf8String(shortDescription);
+			this.writeUtf8String(comment);
+		}
+	}
+
+	writeId3V2ApicFrame(mimeType: string, pictureType: number, description: string, imageData: Uint8Array) {
+		const useIso88591 = isIso88591Compatible(mimeType) && isIso88591Compatible(description);
+		const descriptionDataLength = useIso88591
+			? description.length
+			: this.textEncoder.encode(description).byteLength;
+		const frameSize = 1 + mimeType.length + 1 + 1 + descriptionDataLength + 1 + imageData.byteLength;
+
+		this.writeAscii('APIC');
+		this.writeSynchsafeU32(frameSize);
+		this.writeU16(0x0000);
+
+		this.writeU8(useIso88591 ? Id3V2TextEncoding.ISO_8859_1 : Id3V2TextEncoding.UTF_8);
+
+		if (useIso88591) {
+			this.writeIsoString(mimeType);
+		} else {
+			this.writeUtf8String(mimeType);
+		}
+
+		this.writeU8(pictureType);
+
+		if (useIso88591) {
+			this.writeIsoString(description);
+		} else {
+			this.writeUtf8String(description);
+		}
+
+		this.writer.write(imageData);
+	}
+
+	/**
+	 * Writes a complete ID3v2.4 tag with header and all metadata frames.
+	 * @param metadata - The metadata to write
+	 * @returns The total size of the written ID3v2 tag (including header)
+	 */
+	writeCompleteId3V2Tag(metadata: MetadataTags): number {
+		const tagStartPos = this.writer.getPos();
+
+		// Write ID3v2.4 header
+		this.writeAscii('ID3');
+		this.writeU8(0x04); // Version 2.4
+		this.writeU8(0x00); // Revision 0
+		this.writeU8(0x00); // Flags
+		this.writeSynchsafeU32(0); // Size placeholder
+
+		const framesStartPos = this.writer.getPos();
+		const writtenTags = new Set<string>();
+
+		// Write all metadata frames
+		for (const { key, value } of keyValueIterator(metadata)) {
+			switch (key) {
+				case 'title': {
+					this.writeId3V2TextFrame('TIT2', value);
+					writtenTags.add('TIT2');
+				}; break;
+
+				case 'description': {
+					this.writeId3V2TextFrame('TIT3', value);
+					writtenTags.add('TIT3');
+				}; break;
+
+				case 'artist': {
+					this.writeId3V2TextFrame('TPE1', value);
+					writtenTags.add('TPE1');
+				}; break;
+
+				case 'album': {
+					this.writeId3V2TextFrame('TALB', value);
+					writtenTags.add('TALB');
+				}; break;
+
+				case 'albumArtist': {
+					this.writeId3V2TextFrame('TPE2', value);
+					writtenTags.add('TPE2');
+				}; break;
+
+				case 'trackNumber': {
+					const string = metadata.tracksTotal !== undefined
+						? `${value}/${metadata.tracksTotal}`
+						: value.toString();
+					this.writeId3V2TextFrame('TRCK', string);
+					writtenTags.add('TRCK');
+				}; break;
+
+				case 'discNumber': {
+					const string = metadata.discsTotal !== undefined
+						? `${value}/${metadata.discsTotal}`
+						: value.toString();
+					this.writeId3V2TextFrame('TPOS', string);
+					writtenTags.add('TPOS');
+				}; break;
+
+				case 'genre': {
+					this.writeId3V2TextFrame('TCON', value);
+					writtenTags.add('TCON');
+				}; break;
+
+				case 'date': {
+					this.writeId3V2TextFrame('TDRC', value.toISOString().slice(0, 10));
+					writtenTags.add('TDRC');
+				}; break;
+
+				case 'lyrics': {
+					this.writeId3V2LyricsFrame(value);
+					writtenTags.add('USLT');
+				}; break;
+
+				case 'comment': {
+					this.writeId3V2CommentFrame(value);
+					writtenTags.add('COMM');
+				}; break;
+
+				case 'images': {
+					const pictureTypeMap = { coverFront: 0x03, coverBack: 0x04, unknown: 0x00 };
+					for (const image of value) {
+						const pictureType = pictureTypeMap[image.kind] ?? 0x00;
+						const description = image.description ?? '';
+						this.writeId3V2ApicFrame(image.mimeType, pictureType, description, image.data);
+					}
+				}; break;
+
+				case 'tracksTotal':
+				case 'discsTotal': {
+					// Handled with trackNumber and discNumber respectively
+				}; break;
+
+				case 'raw': {
+					// Handled later
+				}; break;
+
+				default: {
+					assertNever(key);
+				}
+			}
+		}
+
+		if (metadata.raw) {
+			for (const key in metadata.raw) {
+				const value = metadata.raw[key];
+				if (value == null || key.length !== 4 || writtenTags.has(key)) {
+					continue;
+				}
+
+				let bytes: Uint8Array;
+				if (typeof value === 'string') {
+					const encoded = textEncoder.encode(value);
+					bytes = new Uint8Array(encoded.byteLength + 2);
+					bytes[0] = Id3V2TextEncoding.UTF_8;
+					bytes.set(encoded, 1);
+					// Last byte is the null terminator
+				} else if (value instanceof Uint8Array) {
+					bytes = value;
+				} else {
+					continue;
+				}
+
+				this.writeAscii(key);
+				this.writeSynchsafeU32(bytes.byteLength);
+				this.writeU16(0x0000);
+				this.writer.write(bytes);
+			}
+		}
+
+		const framesEndPos = this.writer.getPos();
+		const framesSize = framesEndPos - framesStartPos;
+
+		// Update the size field in the header (synchsafe)
+		this.writer.seek(tagStartPos + 6); // Skip 'ID3' + version + revision + flags
+		this.writeSynchsafeU32(framesSize);
+		this.writer.seek(framesEndPos);
+
+		return framesSize + 10; // +10 for the header size
 	}
 }

@@ -626,6 +626,13 @@ export type WavOutputFormatOptions = {
 	large?: boolean;
 
 	/**
+	 * When enabled, metadata will be written as an ID3v2 tag in addition to the standard RIFF INFO chunk.
+	 * This provides better metadata compatibility with some applications while maintaining broad support.
+	 * Defaults to `false`.
+	 */
+	writeId3Tag?: boolean;
+
+	/**
 	 * Will be called once the file header is written. The header consists of the RIFF header, the format chunk, and the
 	 * start of the data chunk (with a placeholder size of 0).
 	 */
@@ -648,6 +655,9 @@ export class WavOutputFormat extends OutputFormat {
 		}
 		if (options.large !== undefined && typeof options.large !== 'boolean') {
 			throw new TypeError('options.large, when provided, must be a boolean.');
+		}
+		if (options.writeId3Tag !== undefined && typeof options.writeId3Tag !== 'boolean') {
+			throw new TypeError('options.writeId3Tag, when provided, must be a boolean.');
 		}
 		if (options.onHeader !== undefined && typeof options.onHeader !== 'function') {
 			throw new TypeError('options.onHeader, when provided, must be a function.');
