@@ -18,6 +18,11 @@ export const PLACEHOLDER_DATA = new Uint8Array(0);
  */
 export type PacketType = 'key' | 'delta';
 
+export type EncodedPacketSideData = {
+	alpha?: Uint8Array;
+	alphaByteLength?: number;
+};
+
 /**
  * Represents an encoded chunk of media. Mainly used as an expressive wrapper around WebCodecs API's
  * [`EncodedVideoChunk`](https://developer.mozilla.org/en-US/docs/Web/API/EncodedVideoChunk) and
@@ -32,6 +37,8 @@ export class EncodedPacket {
 	 * `data` field contains no bytes.
 	 */
 	readonly byteLength: number;
+
+	readonly sideData: EncodedPacketSideData;
 
 	/** Creates a new {@link EncodedPacket} from raw bytes and timing information. */
 	constructor(
@@ -54,6 +61,7 @@ export class EncodedPacket {
 		 */
 		public readonly sequenceNumber = -1,
 		byteLength?: number,
+		sideData?: EncodedPacketSideData,
 	) {
 		if (data === PLACEHOLDER_DATA && byteLength === undefined) {
 			throw new Error(
@@ -83,8 +91,21 @@ export class EncodedPacket {
 		if (!Number.isInteger(byteLength) || byteLength < 0) {
 			throw new TypeError('byteLength must be a non-negative integer.');
 		}
+		if (sideData !== undefined && (typeof sideData !== 'object' || !sideData)) {
+			throw new TypeError('sideData, when provided, must be an object.');
+		}
+		if (sideData?.alpha !== undefined && !(sideData.alpha instanceof Uint8Array)) {
+			throw new TypeError('sideData.alpha, when provided, must be a Uint8Array.');
+		}
+		if (
+			sideData?.alphaByteLength !== undefined
+			&& (!Number.isInteger(sideData.alphaByteLength) || sideData.alphaByteLength < 0)
+		) {
+			throw new TypeError('sideData.alphaByteLength, when provided, must be a non-negative integer.');
+		}
 
 		this.byteLength = byteLength;
+		this.sideData = sideData ?? {};
 	}
 
 	/** If this packet is a metadata-only packet. Metadata-only packets don't contain their packet data. */
@@ -113,6 +134,25 @@ export class EncodedPacket {
 
 		return new EncodedVideoChunk({
 			data: this.data,
+			type: this.type,
+			timestamp: this.microsecondTimestamp,
+			duration: this.microsecondDuration,
+		});
+	}
+
+	alphaToEncodedVideoChunk() {
+		if (!this.sideData.alpha) {
+			throw new TypeError('This packet does not contain alpha side data.');
+		}
+		if (this.isMetadataOnly) {
+			throw new TypeError('Metadata-only packets cannot be converted to a video chunk.');
+		}
+		if (typeof EncodedVideoChunk === 'undefined') {
+			throw new Error('Your browser does not support EncodedVideoChunk.');
+		}
+
+		return new EncodedVideoChunk({
+			data: this.sideData.alpha,
 			type: this.type,
 			timestamp: this.microsecondTimestamp,
 			duration: this.microsecondDuration,

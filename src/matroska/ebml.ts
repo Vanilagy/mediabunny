@@ -100,6 +100,7 @@ export enum EBMLId {
 	Video = 0xe0,
 	PixelWidth = 0xb0,
 	PixelHeight = 0xba,
+	AlphaMode = 0x53c0,
 	Audio = 0xe1,
 	SamplingFrequency = 0xb5,
 	Channels = 0x9f,

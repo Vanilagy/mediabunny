@@ -11,5 +11,8 @@
 		"allowJs": true,
 		"noEmit": true,
 	},
-	"references": [{ "path": "./tsconfig.vite.json" }]
+	"references": [
+		{ "path": "./tsconfig.vite.json" },
+		{ "path": "./tsconfig.vitest.json" }
+	]
 }

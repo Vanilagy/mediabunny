@@ -312,7 +312,10 @@ export class InputVideoTrack extends InputTrack {
 			return null;
 		}
 
-		return determineVideoPacketType(this, packet);
+		const decoderConfig = await this.getDecoderConfig();
+		assert(decoderConfig);
+
+		return determineVideoPacketType(this.codec, decoderConfig, packet.data);
 	}
 }
 

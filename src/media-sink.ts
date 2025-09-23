@@ -7,7 +7,12 @@
  */
 
 import { parsePcmCodec, PCM_AUDIO_CODECS, PcmAudioCodec, VideoCodec, AudioCodec } from './codec';
-import { extractHevcNalUnits, extractNalUnitTypeForHevc, HevcNalUnitType } from './codec-data';
+import {
+	determineVideoPacketType,
+	extractHevcNalUnits,
+	extractNalUnitTypeForHevc,
+	HevcNalUnitType,
+} from './codec-data';
 import { CustomVideoDecoder, customVideoDecoders, CustomAudioDecoder, customAudioDecoders } from './custom-coder';
 import { InputDisposedError } from './input';
 import { InputAudioTrack, InputTrack, InputVideoTrack } from './input-track';
@@ -811,6 +816,15 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	currentPacketIndex = 0;
 	raslSkipped = false; // For HEVC stuff
 
+	// Alpha stuff
+	alphaDecoder: VideoDecoder | null = null;
+	alphaHadKeyframe = false;
+	colorQueue: VideoFrame[] = [];
+	alphaQueue: (VideoFrame | null)[] = [];
+	merger: ColorAlphaMerger | null = null;
+	currentAlphaPacketIndex = 0;
+	alphaRaslSkipped = false; // For HEVC stuff
+
 	constructor(
 		onSample: (sample: VideoSample) => unknown,
 		onError: (error: DOMException) => unknown,
@@ -840,55 +854,24 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 
 			void this.customDecoderCallSerializer.call(() => this.customDecoder!.init());
 		} else {
-			// Specific handler for the WebCodecs VideoDecoder to iron out browser differences
-			const sampleHandler = (sample: VideoSample) => {
-				if (isSafari()) {
-					// For correct B-frame handling, we don't just hand over the frames directly but instead add them to
-					// a queue, because we want to ensure frames are emitted in presentation order. We flush the queue
-					// each time we receive a frame with a timestamp larger than the highest we've seen so far, as we
-					// can sure that is not a B-frame. Typically, WebCodecs automatically guarantees that frames are
-					// emitted in presentation order, but Safari doesn't always follow this rule.
-					if (this.sampleQueue.length > 0 && (sample.timestamp >= last(this.sampleQueue)!.timestamp)) {
-						for (const sample of this.sampleQueue) {
-							this.finalizeAndEmitSample(sample);
-						}
+			const colorHandler = (frame: VideoFrame) => {
+				if (this.alphaQueue.length > 0) {
+					// Even when no alpha data is present (most of the time), there will be nulls in this queue
+					const alphaFrame = this.alphaQueue.shift();
+					assert(alphaFrame !== undefined);
 
-						this.sampleQueue.length = 0;
-					}
-
-					insertSorted(this.sampleQueue, sample, x => x.timestamp);
+					this.mergeAlpha(frame, alphaFrame);
 				} else {
-					// Assign it the next earliest timestamp from the input. We do this because browsers, by spec, are
-					// required to emit decoded frames in presentation order *while* retaining the timestamp of their
-					// originating EncodedVideoChunk. For files with B-frames but no out-of-order timestamps (like a
-					// missing ctts box, for example), this causes a mismatch. We therefore fix the timestamps and
-					// ensure they are sorted by doing this.
-					const timestamp = this.inputTimestamps.shift();
-
-					// There's no way we'd have more decoded frames than encoded packets we passed in. Actually, the
-					// correspondence should be 1:1.
-					assert(timestamp !== undefined);
-
-					sample.setTimestamp(timestamp);
-					this.finalizeAndEmitSample(sample);
+					this.colorQueue.push(frame);
 				}
 			};
 
 			this.decoder = new VideoDecoder({
-				output: frame => sampleHandler(new VideoSample(frame)),
+				output: frame => colorHandler(frame),
 				error: onError,
 			});
 			this.decoder.configure(decoderConfig);
 		}
-	}
-
-	finalizeAndEmitSample(sample: VideoSample) {
-		// Round the timestamps to the time resolution
-		sample.setTimestamp(Math.round(sample.timestamp * this.timeResolution) / this.timeResolution);
-		sample.setDuration(Math.round(sample.duration * this.timeResolution) / this.timeResolution);
-		sample.setRotation(this.rotation);
-
-		this.onSample(sample);
 	}
 
 	getDecodeQueueSize() {
@@ -896,23 +879,17 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			return this.customDecoderQueueSize;
 		} else {
 			assert(this.decoder);
-			return this.decoder.decodeQueueSize;
+
+			return Math.max(
+				this.decoder.decodeQueueSize,
+				this.alphaDecoder?.decodeQueueSize ?? 0,
+			);
 		}
 	}
 
 	decode(packet: EncodedPacket) {
 		if (this.codec === 'hevc' && this.currentPacketIndex > 0 && !this.raslSkipped) {
-			// If we're using HEVC, we need to make sure to skip any RASL slices that follow a non-IDR key frame such as
-			// CRA_NUT. This is because RASL slices cannot be decoded without data before the CRA_NUT. Browsers behave
-			// differently here: Chromium drops the packets, Safari throws a decoder error. Either way, it's not good
-			// and causes bugs upstream. So, let's take the dropping into our own hands.
-			const nalUnits = extractHevcNalUnits(packet.data, this.decoderConfig);
-			const hasRaslPicture = nalUnits.some((x) => {
-				const type = extractNalUnitTypeForHevc(x);
-				return type === HevcNalUnitType.RASL_N || type === HevcNalUnitType.RASL_R;
-			});
-
-			if (hasRaslPicture) {
+			if (this.hasHevcRaslPicture(packet.data)) {
 				return; // Drop
 			}
 
@@ -934,7 +911,144 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			}
 
 			this.decoder.decode(packet.toEncodedVideoChunk());
+			this.decodeAlphaData(packet);
 		}
+	}
+
+	decodeAlphaData(packet: EncodedPacket) {
+		if (!packet.sideData.alpha) {
+			// No alpha side data in the packet, most common case
+			this.alphaQueue.push(null);
+			return;
+		}
+
+		// Check if we need to set up the alpha decoder
+		if (!this.alphaDecoder) {
+			const alphaHandler = (frame: VideoFrame) => {
+				if (this.colorQueue.length > 0) {
+					const colorFrame = this.colorQueue.shift();
+					assert(colorFrame !== undefined);
+
+					this.mergeAlpha(colorFrame, frame);
+				} else {
+					this.alphaQueue.push(frame);
+				}
+			};
+
+			this.alphaDecoder = new VideoDecoder({
+				output: frame => alphaHandler(frame),
+				error: this.onError,
+			});
+			this.alphaDecoder.configure(this.decoderConfig);
+		}
+
+		// Alpha packets might follow a different key frame rhythm than the main packets. Therefore, before we start
+		// decoding, we must first find a packet that's actually a key frame. Until then, we treat the image as opaque.
+		if (!this.alphaHadKeyframe) {
+			const type = determineVideoPacketType(this.codec, this.decoderConfig, packet.sideData.alpha);
+			this.alphaHadKeyframe = type === 'key';
+		}
+
+		if (this.alphaHadKeyframe) {
+			// Same RASL skipping logic as for color, unlikely to be hit (since who uses HEVC with alpha??) but here
+			// for symmetry.
+			if (this.codec === 'hevc' && this.currentAlphaPacketIndex > 0 && !this.alphaRaslSkipped) {
+				if (this.hasHevcRaslPicture(packet.sideData.alpha)) {
+					this.alphaQueue.push(null);
+					return;
+				}
+
+				this.alphaRaslSkipped = true;
+			}
+
+			this.currentAlphaPacketIndex++;
+			this.alphaDecoder.decode(packet.alphaToEncodedVideoChunk());
+		} else {
+			this.alphaQueue.push(null);
+		}
+	}
+
+	/**
+	 * If we're using HEVC, we need to make sure to skip any RASL slices that follow a non-IDR key frame such as
+	 * CRA_NUT. This is because RASL slices cannot be decoded without data before the CRA_NUT. Browsers behave
+	 * differently here: Chromium drops the packets, Safari throws a decoder error. Either way, it's not good
+	 * and causes bugs upstream. So, let's take the dropping into our own hands.
+	 */
+	hasHevcRaslPicture(packetData: Uint8Array) {
+		const nalUnits = extractHevcNalUnits(packetData, this.decoderConfig);
+		return nalUnits.some((x) => {
+			const type = extractNalUnitTypeForHevc(x);
+			return type === HevcNalUnitType.RASL_N || type === HevcNalUnitType.RASL_R;
+		});
+	}
+
+	/** Handler for the WebCodecs VideoDecoder for ironing out browser differences. */
+	sampleHandler(sample: VideoSample) {
+		if (isSafari()) {
+			// For correct B-frame handling, we don't just hand over the frames directly but instead add them to
+			// a queue, because we want to ensure frames are emitted in presentation order. We flush the queue
+			// each time we receive a frame with a timestamp larger than the highest we've seen so far, as we
+			// can sure that is not a B-frame. Typically, WebCodecs automatically guarantees that frames are
+			// emitted in presentation order, but Safari doesn't always follow this rule.
+			if (this.sampleQueue.length > 0 && (sample.timestamp >= last(this.sampleQueue)!.timestamp)) {
+				for (const sample of this.sampleQueue) {
+					this.finalizeAndEmitSample(sample);
+				}
+
+				this.sampleQueue.length = 0;
+			}
+
+			insertSorted(this.sampleQueue, sample, x => x.timestamp);
+		} else {
+			// Assign it the next earliest timestamp from the input. We do this because browsers, by spec, are
+			// required to emit decoded frames in presentation order *while* retaining the timestamp of their
+			// originating EncodedVideoChunk. For files with B-frames but no out-of-order timestamps (like a
+			// missing ctts box, for example), this causes a mismatch. We therefore fix the timestamps and
+			// ensure they are sorted by doing this.
+			const timestamp = this.inputTimestamps.shift();
+
+			// There's no way we'd have more decoded frames than encoded packets we passed in. Actually, the
+			// correspondence should be 1:1.
+			assert(timestamp !== undefined);
+
+			sample.setTimestamp(timestamp);
+			this.finalizeAndEmitSample(sample);
+		}
+	}
+
+	finalizeAndEmitSample(sample: VideoSample) {
+		// Round the timestamps to the time resolution
+		sample.setTimestamp(Math.round(sample.timestamp * this.timeResolution) / this.timeResolution);
+		sample.setDuration(Math.round(sample.duration * this.timeResolution) / this.timeResolution);
+		sample.setRotation(this.rotation);
+
+		this.onSample(sample);
+	}
+
+	mergeAlpha(color: VideoFrame, alpha: VideoFrame | null) {
+		if (!alpha) {
+			// Nothing needs to be merged
+			const finalSample = new VideoSample(color);
+			this.sampleHandler(finalSample);
+
+			return;
+		}
+
+		if (!this.merger) {
+			this.merger = new ColorAlphaMerger(color.displayWidth, color.displayHeight);
+		}
+
+		this.merger.update(color, alpha);
+		color.close();
+		alpha.close();
+
+		const finalFrame = new VideoFrame(this.merger.canvas, {
+			timestamp: color.timestamp,
+			duration: color.duration ?? undefined,
+		});
+
+		const finalSample = new VideoSample(finalFrame);
+		this.sampleHandler(finalSample);
 	}
 
 	async flush() {
@@ -942,7 +1056,18 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			await this.customDecoderCallSerializer.call(() => this.customDecoder!.flush());
 		} else {
 			assert(this.decoder);
-			await this.decoder.flush();
+			await Promise.all([
+				this.decoder.flush(),
+				this.alphaDecoder?.flush(),
+			]);
+
+			this.colorQueue.forEach(x => x.close());
+			this.colorQueue.length = 0;
+			this.alphaQueue.forEach(x => x?.close());
+			this.alphaQueue.length = 0;
+
+			this.alphaHadKeyframe = false;
+			this.alphaRaslSkipped = false;
 		}
 
 		if (isSafari()) {
@@ -963,12 +1088,151 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 		} else {
 			assert(this.decoder);
 			this.decoder.close();
+			this.alphaDecoder?.close();
+
+			this.colorQueue.forEach(x => x.close());
+			this.colorQueue.length = 0;
+			this.alphaQueue.forEach(x => x?.close());
+			this.alphaQueue.length = 0;
 		}
 
 		for (const sample of this.sampleQueue) {
 			sample.close();
 		}
 		this.sampleQueue.length = 0;
+	}
+}
+
+/** Utility class that merges together color and alpha information using simple WebGL 2 shaders. */
+class ColorAlphaMerger {
+	public canvas: OffscreenCanvas | HTMLCanvasElement;
+	private gl: WebGL2RenderingContext;
+	private program: WebGLProgram;
+	private vao: WebGLVertexArrayObject;
+	private colorTexture: WebGLTexture;
+	private alphaTexture: WebGLTexture;
+
+	constructor(initialWidth: number, initialHeight: number) {
+		if (typeof OffscreenCanvas !== 'undefined') {
+			// Prefer OffscreenCanvas for Worker environments
+			this.canvas = new OffscreenCanvas(initialWidth, initialHeight);
+		} else {
+			this.canvas = document.createElement('canvas');
+			this.canvas.width = initialWidth;
+			this.canvas.height = initialHeight;
+		}
+
+		this.gl = this.canvas.getContext('webgl2', { premultipliedAlpha: false })!;
+		this.program = this.createProgram();
+		this.vao = this.createVAO();
+		this.colorTexture = this.createTexture();
+		this.alphaTexture = this.createTexture();
+
+		this.gl.useProgram(this.program);
+		this.gl.uniform1i(this.gl.getUniformLocation(this.program, 'u_colorTexture'), 0);
+		this.gl.uniform1i(this.gl.getUniformLocation(this.program, 'u_alphaTexture'), 1);
+	}
+
+	private createProgram(): WebGLProgram {
+		const vertexShader = this.createShader(this.gl.VERTEX_SHADER, `#version 300 es
+            in vec2 a_position;
+            in vec2 a_texCoord;
+            out vec2 v_texCoord;
+            
+            void main() {
+                gl_Position = vec4(a_position, 0.0, 1.0);
+                v_texCoord = a_texCoord;
+            }
+        `);
+
+		const fragmentShader = this.createShader(this.gl.FRAGMENT_SHADER, `#version 300 es
+            precision highp float;
+            
+            uniform sampler2D u_colorTexture;
+            uniform sampler2D u_alphaTexture;
+            in vec2 v_texCoord;
+            out vec4 fragColor;
+            
+            void main() {
+                vec3 color = texture(u_colorTexture, v_texCoord).rgb;
+                float alpha = texture(u_alphaTexture, v_texCoord).r;
+                fragColor = vec4(color, alpha);
+            }
+        `);
+
+		const program = this.gl.createProgram();
+		this.gl.attachShader(program, vertexShader);
+		this.gl.attachShader(program, fragmentShader);
+		this.gl.linkProgram(program);
+
+		return program;
+	}
+
+	private createShader(type: number, source: string): WebGLShader {
+		const shader = this.gl.createShader(type)!;
+		this.gl.shaderSource(shader, source);
+		this.gl.compileShader(shader);
+		return shader;
+	}
+
+	private createVAO(): WebGLVertexArrayObject {
+		const vao = this.gl.createVertexArray();
+		this.gl.bindVertexArray(vao);
+
+		const vertices = new Float32Array([
+			-1, -1, 0, 1,
+			1, -1, 1, 1,
+			-1, 1, 0, 0,
+			1, 1, 1, 0,
+		]);
+
+		const buffer = this.gl.createBuffer();
+		this.gl.bindBuffer(this.gl.ARRAY_BUFFER, buffer);
+		this.gl.bufferData(this.gl.ARRAY_BUFFER, vertices, this.gl.STATIC_DRAW);
+
+		const positionLocation = this.gl.getAttribLocation(this.program, 'a_position');
+		const texCoordLocation = this.gl.getAttribLocation(this.program, 'a_texCoord');
+
+		this.gl.enableVertexAttribArray(positionLocation);
+		this.gl.vertexAttribPointer(positionLocation, 2, this.gl.FLOAT, false, 16, 0);
+
+		this.gl.enableVertexAttribArray(texCoordLocation);
+		this.gl.vertexAttribPointer(texCoordLocation, 2, this.gl.FLOAT, false, 16, 8);
+
+		return vao;
+	}
+
+	private createTexture(): WebGLTexture {
+		const texture = this.gl.createTexture();
+
+		this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
+		this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);
+		this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
+		this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.LINEAR);
+		this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.LINEAR);
+
+		return texture;
+	}
+
+	public update(color: VideoFrame, alpha: VideoFrame): void {
+		if (color.displayWidth !== this.canvas.width || color.displayHeight !== this.canvas.height) {
+			this.canvas.width = color.displayWidth;
+			this.canvas.height = color.displayHeight;
+		}
+
+		this.gl.activeTexture(this.gl.TEXTURE0);
+		this.gl.bindTexture(this.gl.TEXTURE_2D, this.colorTexture);
+		this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, color);
+
+		this.gl.activeTexture(this.gl.TEXTURE1);
+		this.gl.bindTexture(this.gl.TEXTURE_2D, this.alphaTexture);
+		this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, alpha);
+
+		this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+		this.gl.clear(this.gl.COLOR_BUFFER_BIT);
+
+		this.gl.bindVertexArray(this.vao);
+		this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
 	}
 }
 
@@ -1249,8 +1513,9 @@ export class CanvasSink {
 			this._nextCanvasIndex = (this._nextCanvasIndex + 1) % this._canvasPool.length;
 		}
 
+		// temp temp temp todo
 		const context = canvas.getContext('2d', {
-			alpha: isFirefox(), // Firefox has VideoFrame glitches with opaque canvases
+			alpha: true, // isFirefox(), // Firefox has VideoFrame glitches with opaque canvases
 		}) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 		assert(context);
 
