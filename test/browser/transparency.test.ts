@@ -2,7 +2,7 @@ import { expect, test } from 'vitest';
 import { Input } from '../../src/input.js';
 import { UrlSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
-import { EncodedPacketSink, VideoSampleSink } from '../../src/media-sink.js';
+import { CanvasSink, EncodedPacketSink, VideoSampleSink } from '../../src/media-sink.js';
 
 test('Can decode transparent video', async () => {
 	using input = new Input({
@@ -42,4 +42,30 @@ test('Can decode faulty transparent video and behaves gracefully', async () => {
 
 	const secondSample = (await sink.getSample(secondKeyPacket.timestamp))!;
 	expect(secondSample.format).not.toContain('A'); // There was no alpha key frame for this one
+});
+
+test('Can extract transparent frames via CanvasSink', async () => {
+	using input = new Input({
+		source: new UrlSource('/transparency.webm'),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = (await input.getPrimaryVideoTrack())!;
+	const sink = new CanvasSink(videoTrack, { alpha: true });
+	const wrappedCanvas = (await sink.getCanvas(await videoTrack.getFirstTimestamp()))!;
+
+	const canvas = new OffscreenCanvas(wrappedCanvas.canvas.width, wrappedCanvas.canvas.height);
+	const context = canvas.getContext('2d')!;
+	context.drawImage(wrappedCanvas.canvas, 0, 0);
+
+	let imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+	expect(imageData.data[3]).toBeLessThan(255); // Check that there's actually transparent pixels
+
+	const opaqueSink = new CanvasSink(videoTrack); // Default is alpha: false
+	const opaqueWrappedCanvas = (await opaqueSink.getCanvas(await videoTrack.getFirstTimestamp()))!;
+
+	context.drawImage(opaqueWrappedCanvas.canvas, 0, 0);
+
+	imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+	expect(imageData.data[3]).toBe(255);
 });

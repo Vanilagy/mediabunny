@@ -942,10 +942,11 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			this.alphaDecoder.configure(this.decoderConfig);
 		}
 
+		const type = determineVideoPacketType(this.codec, this.decoderConfig, packet.sideData.alpha);
+
 		// Alpha packets might follow a different key frame rhythm than the main packets. Therefore, before we start
 		// decoding, we must first find a packet that's actually a key frame. Until then, we treat the image as opaque.
 		if (!this.alphaHadKeyframe) {
-			const type = determineVideoPacketType(this.codec, this.decoderConfig, packet.sideData.alpha);
 			this.alphaHadKeyframe = type === 'key';
 		}
 
@@ -962,7 +963,7 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			}
 
 			this.currentAlphaPacketIndex++;
-			this.alphaDecoder.decode(packet.alphaToEncodedVideoChunk());
+			this.alphaDecoder.decode(packet.alphaToEncodedVideoChunk(type ?? packet.type));
 		} else {
 			this.alphaQueue.push(null);
 		}
@@ -1342,6 +1343,7 @@ export type WrappedCanvas = {
  * @public
  */
 export type CanvasSinkOptions = {
+	alpha?: boolean;
 	/**
 	 * The width of the output canvas in pixels, defaulting to the display width of the video track. If height is not
 	 * set, it will be deduced automatically based on aspect ratio.
@@ -1394,6 +1396,8 @@ export class CanvasSink {
 	/** @internal */
 	_videoTrack: InputVideoTrack;
 	/** @internal */
+	_alpha: boolean;
+	/** @internal */
 	_width: number;
 	/** @internal */
 	_height: number;
@@ -1417,6 +1421,9 @@ export class CanvasSink {
 		}
 		if (options && typeof options !== 'object') {
 			throw new TypeError('options must be an object.');
+		}
+		if (options.alpha !== undefined && typeof options.alpha !== 'boolean') {
+			throw new TypeError('options.alpha, when provided, must be a boolean.');
 		}
 		if (options.width !== undefined && (!Number.isInteger(options.width) || options.width <= 0)) {
 			throw new TypeError('options.width, when defined, must be a positive integer.');
@@ -1478,6 +1485,7 @@ export class CanvasSink {
 		}
 
 		this._videoTrack = videoTrack;
+		this._alpha = options.alpha ?? false;
 		this._width = width;
 		this._height = height;
 		this._rotation = rotation;
@@ -1513,16 +1521,15 @@ export class CanvasSink {
 			this._nextCanvasIndex = (this._nextCanvasIndex + 1) % this._canvasPool.length;
 		}
 
-		// temp temp temp todo
 		const context = canvas.getContext('2d', {
-			alpha: true, // isFirefox(), // Firefox has VideoFrame glitches with opaque canvases
+			alpha: this._alpha || isFirefox(), // Firefox has VideoFrame glitches with opaque canvases
 		}) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 		assert(context);
 
 		context.resetTransform();
 
 		if (!canvasIsNew) {
-			if (isFirefox()) {
+			if (!this._alpha && isFirefox()) {
 				context.fillStyle = 'black';
 				context.fillRect(0, 0, this._width, this._height);
 			} else {

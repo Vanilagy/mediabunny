@@ -140,7 +140,7 @@ export class EncodedPacket {
 		});
 	}
 
-	alphaToEncodedVideoChunk() {
+	alphaToEncodedVideoChunk(type = this.type) {
 		if (!this.sideData.alpha) {
 			throw new TypeError('This packet does not contain alpha side data.');
 		}
@@ -153,7 +153,7 @@ export class EncodedPacket {
 
 		return new EncodedVideoChunk({
 			data: this.sideData.alpha,
-			type: this.type,
+			type,
 			timestamp: this.microsecondTimestamp,
 			duration: this.microsecondDuration,
 		});
