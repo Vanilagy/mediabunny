@@ -23,6 +23,7 @@ export default defineConfig({
 						provider: 'webdriverio',
 						instances: [{
 							browser: 'chrome',
+							/*
 							capabilities: {
 								'goog:chromeOptions': {
 									args: [
@@ -32,6 +33,7 @@ export default defineConfig({
 									],
 								},
 							},
+							*/
 							// xvfbAutoInstall: true,
 						}],
 						headless: false, // A bunch of features need the head
