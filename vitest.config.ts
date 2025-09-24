@@ -26,7 +26,7 @@ export default defineConfig({
 							capabilities: {
 								'goog:chromeOptions': {
 									args: [
-										'--user-data-dir=/tmp/chrome-user-data',
+										'--user-data-dir=/tmp/chrome-user-data-sussex1233412341234',
 									],
 								},
 							},
