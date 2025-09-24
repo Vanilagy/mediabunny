@@ -822,6 +822,7 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	colorQueue: VideoFrame[] = [];
 	alphaQueue: (VideoFrame | null)[] = [];
 	merger: ColorAlphaMerger | null = null;
+	mergerCreationFailed = false;
 	decodedAlphaChunkCount = 0;
 	alphaDecoderQueueSize = 0;
 	/** Each value is the number of decoded alpha chunks at which a null alpha frame should be added. */
@@ -926,10 +927,23 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	}
 
 	decodeAlphaData(packet: EncodedPacket) {
-		if (!packet.sideData.alpha) {
+		if (!packet.sideData.alpha || this.mergerCreationFailed) {
 			// No alpha side data in the packet, most common case
 			this.pushNullAlphaFrame();
 			return;
+		}
+
+		if (!this.merger) {
+			try {
+				this.merger = new ColorAlphaMerger();
+			} catch (error) {
+				console.error('Due to an error, only color data will be decoded.', error);
+
+				this.mergerCreationFailed = true;
+				this.decodeAlphaData(packet); // Go again
+
+				return;
+			}
 		}
 
 		// Check if we need to set up the alpha decoder
@@ -1084,9 +1098,7 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			return;
 		}
 
-		if (!this.merger) {
-			this.merger = new ColorAlphaMerger(color.displayWidth, color.displayHeight);
-		}
+		assert(this.merger);
 
 		this.merger.update(color, alpha);
 		color.close();
@@ -1144,6 +1156,8 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			this.colorQueue.length = 0;
 			this.alphaQueue.forEach(x => x?.close());
 			this.alphaQueue.length = 0;
+
+			this.merger?.close();
 		}
 
 		for (const sample of this.sampleQueue) {
@@ -1155,24 +1169,28 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 
 /** Utility class that merges together color and alpha information using simple WebGL 2 shaders. */
 class ColorAlphaMerger {
-	public canvas: OffscreenCanvas | HTMLCanvasElement;
+	canvas: OffscreenCanvas | HTMLCanvasElement;
 	private gl: WebGL2RenderingContext;
 	private program: WebGLProgram;
 	private vao: WebGLVertexArrayObject;
 	private colorTexture: WebGLTexture;
 	private alphaTexture: WebGLTexture;
 
-	constructor(initialWidth: number, initialHeight: number) {
+	constructor() {
+		// Canvas will be resized later
 		if (typeof OffscreenCanvas !== 'undefined') {
 			// Prefer OffscreenCanvas for Worker environments
-			this.canvas = new OffscreenCanvas(initialWidth, initialHeight);
+			this.canvas = new OffscreenCanvas(300, 150);
 		} else {
 			this.canvas = document.createElement('canvas');
-			this.canvas.width = initialWidth;
-			this.canvas.height = initialHeight;
 		}
 
-		this.gl = this.canvas.getContext('webgl2', { premultipliedAlpha: false })!;
+		const gl = this.canvas.getContext('webgl2', { premultipliedAlpha: false });
+		if (!gl) {
+			throw new Error('Couldn\'t acquire WebGL 2 context.');
+		}
+
+		this.gl = gl;
 		this.program = this.createProgram();
 		this.vao = this.createVAO();
 		this.colorTexture = this.createTexture();
@@ -1264,7 +1282,7 @@ class ColorAlphaMerger {
 		return texture;
 	}
 
-	public update(color: VideoFrame, alpha: VideoFrame): void {
+	update(color: VideoFrame, alpha: VideoFrame): void {
 		if (color.displayWidth !== this.canvas.width || color.displayHeight !== this.canvas.height) {
 			this.canvas.width = color.displayWidth;
 			this.canvas.height = color.displayHeight;
@@ -1283,6 +1301,11 @@ class ColorAlphaMerger {
 
 		this.gl.bindVertexArray(this.vao);
 		this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
+	}
+
+	close() {
+		this.gl.getExtension('WEBGL_lose_context')?.loseContext();
+		this.gl = null as unknown as WebGL2RenderingContext;
 	}
 }
 

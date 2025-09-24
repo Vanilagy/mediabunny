@@ -216,6 +216,7 @@ class VideoEncoderWrapper {
 	// Alpha stuff
 	private alphaEncoder: VideoEncoder | null = null;
 	private splitter: ColorAlphaSplitter | null = null;
+	private splitterCreationFailed = false;
 	private alphaFrameQueue: (VideoFrame | null)[] = [];
 
 	/**
@@ -357,9 +358,8 @@ class VideoEncoderWrapper {
 					// We're expected to encode alpha as well
 					const frameDefinitelyHasNoAlpha = !!videoFrame.format && !videoFrame.format.includes('A');
 
-					if (frameDefinitelyHasNoAlpha) {
+					if (frameDefinitelyHasNoAlpha || this.splitterCreationFailed) {
 						this.alphaFrameQueue.push(null);
-
 						this.encoder.encode(videoFrame, finalEncodeOptions);
 						videoFrame.close();
 					} else {
@@ -367,16 +367,27 @@ class VideoEncoderWrapper {
 						const height = videoFrame.displayHeight;
 
 						if (!this.splitter) {
-							this.splitter = new ColorAlphaSplitter(width, height);
+							try {
+								this.splitter = new ColorAlphaSplitter(width, height);
+							} catch (error) {
+								console.error('Due to an error, only color data will be encoded.', error);
+
+								this.splitterCreationFailed = true;
+								this.alphaFrameQueue.push(null);
+								this.encoder.encode(videoFrame, finalEncodeOptions);
+								videoFrame.close();
+							}
 						}
 
-						const alphaFrame = this.splitter.extractAlpha(videoFrame);
-						const colorFrame = this.splitter.extractColor(videoFrame);
+						if (this.splitter) {
+							const alphaFrame = this.splitter.extractAlpha(videoFrame);
+							const colorFrame = this.splitter.extractColor(videoFrame);
 
-						this.alphaFrameQueue.push(alphaFrame);
-						this.encoder.encode(colorFrame, finalEncodeOptions);
-						colorFrame.close();
-						videoFrame.close();
+							this.alphaFrameQueue.push(alphaFrame);
+							this.encoder.encode(colorFrame, finalEncodeOptions);
+							colorFrame.close();
+							videoFrame.close();
+						}
 					}
 				}
 
@@ -620,6 +631,8 @@ class VideoEncoderWrapper {
 			}
 
 			this.alphaFrameQueue.forEach(x => x?.close());
+
+			this.splitter?.close();
 		}
 
 		if (!forceClose) this.checkForEncoderError();
@@ -648,7 +661,7 @@ class VideoEncoderWrapper {
 
 /** Utility class for splitting a composite frame into separate color and alpha components. */
 class ColorAlphaSplitter {
-	public canvas: OffscreenCanvas | HTMLCanvasElement;
+	canvas: OffscreenCanvas | HTMLCanvasElement;
 
 	private gl: WebGL2RenderingContext;
 	private colorProgram: WebGLProgram;
@@ -667,9 +680,14 @@ class ColorAlphaSplitter {
 			this.canvas.height = initialHeight;
 		}
 
-		this.gl = this.canvas.getContext('webgl2', {
+		const gl = this.canvas.getContext('webgl2', {
 			alpha: true, // Needed due to the YUV thing we do for alpha
-		})!;
+		});
+		if (!gl) {
+			throw new Error('Couldn\'t acquire WebGL 2 context.');
+		}
+
+		this.gl = gl;
 
 		this.colorProgram = this.createColorProgram();
 		this.alphaProgram = this.createAlphaProgram();
@@ -835,7 +853,27 @@ class ColorAlphaSplitter {
 		return texture;
 	}
 
-	public extractColor(sourceFrame: VideoFrame) {
+	private updateTexture(sourceFrame: VideoFrame): void {
+		if (this.lastFrame === sourceFrame) {
+			return;
+		}
+
+		const width = sourceFrame.displayWidth;
+		const height = sourceFrame.displayHeight;
+
+		if (width !== this.canvas.width || height !== this.canvas.height) {
+			this.canvas.width = width;
+			this.canvas.height = height;
+		}
+
+		this.gl.activeTexture(this.gl.TEXTURE0);
+		this.gl.bindTexture(this.gl.TEXTURE_2D, this.sourceTexture);
+		this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, sourceFrame);
+
+		this.lastFrame = sourceFrame;
+	}
+
+	extractColor(sourceFrame: VideoFrame) {
 		this.updateTexture(sourceFrame);
 
 		this.gl.useProgram(this.colorProgram);
@@ -851,7 +889,7 @@ class ColorAlphaSplitter {
 		});
 	}
 
-	public extractAlpha(sourceFrame: VideoFrame) {
+	extractAlpha(sourceFrame: VideoFrame) {
 		this.updateTexture(sourceFrame);
 
 		this.gl.useProgram(this.alphaProgram);
@@ -884,24 +922,9 @@ class ColorAlphaSplitter {
 		});
 	}
 
-	private updateTexture(sourceFrame: VideoFrame): void {
-		if (this.lastFrame === sourceFrame) {
-			return;
-		}
-
-		const width = sourceFrame.displayWidth;
-		const height = sourceFrame.displayHeight;
-
-		if (width !== this.canvas.width || height !== this.canvas.height) {
-			this.canvas.width = width;
-			this.canvas.height = height;
-		}
-
-		this.gl.activeTexture(this.gl.TEXTURE0);
-		this.gl.bindTexture(this.gl.TEXTURE_2D, this.sourceTexture);
-		this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, sourceFrame);
-
-		this.lastFrame = sourceFrame;
+	close() {
+		this.gl.getExtension('WEBGL_lose_context')?.loseContext();
+		this.gl = null as unknown as WebGL2RenderingContext;
 	}
 }
 
