@@ -21,6 +21,11 @@ export default defineConfig({
 						provider: 'webdriverio',
 						instances: [{
 							browser: 'chrome',
+							capabilities: {
+								'goog:chromeOptions': {
+									args: ['--no-sandbox', '--disable-dev-shm-usage'],
+								},
+							},
 						}],
 						headless: false, // A bunch of features need the head
 						screenshotFailures: false,
