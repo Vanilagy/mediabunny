@@ -17,7 +17,7 @@ export default defineConfig({
 				test: {
 					name: 'browser',
 					root: 'test',
-					include: ['browser/**/flac.test.ts'],
+					include: ['browser/**/*.test.ts'],
 					browser: {
 						enabled: true,
 						provider: 'webdriverio',

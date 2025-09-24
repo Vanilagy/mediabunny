@@ -6,8 +6,6 @@ import { VideoSampleSource } from '../../src/media-source.js';
 import { canEncodeVideo, QUALITY_HIGH } from '../../src/encode.js';
 import { VideoSample } from '../../src/sample.js';
 
-/*
-
 test('Odd video dimensions fail for AVC', async () => {
 	const output = new Output({
 		format: new Mp4OutputFormat(),
@@ -81,5 +79,3 @@ test('Odd video dimensions encodability checks', async () => {
 	expect(await canEncodeVideo('vp9', { width: 1920, height: 1081 })).toBe(true);
 	expect(await canEncodeVideo('av1', { width: 1920, height: 1081 })).toBe(true);
 });
-
-*/

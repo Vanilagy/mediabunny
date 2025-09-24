@@ -3,8 +3,6 @@ import { UrlSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { Input } from '../../src/input.js';
 
-/*
-
 test('Should be able to load a very small video file via URL (<512 kB)', async () => {
 	const source = new UrlSource('/frames.webm');
 	using input = new Input({
@@ -19,5 +17,3 @@ test('Should be able to load a very small video file via URL (<512 kB)', async (
 	const duration = await primaryVideoTrack.computeDuration();
 	expect(duration).toBeCloseTo(3.33333);
 });
-
-*/

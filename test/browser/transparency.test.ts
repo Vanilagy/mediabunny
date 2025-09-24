@@ -10,8 +10,6 @@ import { CanvasSource, VideoSampleSource } from '../../src/media-source.js';
 import { canEncodeVideo, QUALITY_HIGH } from '../../src/encode.js';
 import { VideoSample } from '../../src/sample.js';
 
-/*
-
 test('Can decode transparent video', async () => {
 	using input = new Input({
 		source: new UrlSource('/transparency.webm'),
@@ -253,5 +251,3 @@ test('Positive encodability check with alpha', async () => {
 	const result = await canEncodeVideo('vp9', { alpha: 'keep' });
 	expect(result).toBe(true);
 });
-
-*/
