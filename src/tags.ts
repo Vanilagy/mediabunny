@@ -12,7 +12,7 @@
  * directly read or write the underlying metadata tags (which differ by format).
  *
  * - For MP4/QuickTime files, the metadata refers to the data in `'moov'`-level `'udta'` and `'meta'` atoms.
- * - For Matroska files, the metadata refers to the Tags and Attachments elements whose target is 50 (MOVIE).
+ * - For WebM/Matroska files, the metadata refers to the Tags and Attachments elements whose target is 50 (MOVIE).
  * - For MP3 files, the metadata refers to the ID3v2 or ID3v1 tags.
  * - For Ogg files, there is no global metadata so instead, the metadata refers to the combined metadata of all tracks,
  * in Vorbis-style comment headers.
@@ -65,9 +65,9 @@ export type MetadataTags = {
 	 * is also used, then the keys reflect the keys specified there (such as `'com.apple.quicktime.version'`).
 	 * Additionally, any atoms within the `'udta'` atom are dumped into here, however with unknown internal format
 	 * (`Uint8Array`).
-	 * - Matroska: `SimpleTag` elements whose target is 50 (MOVIE), either containing string or `Uint8Array` values.
-	 * Additionally, all attached files (such as font files) are included here, where the key corresponds to the FileUID
-	 * and the value is an {@link AttachedFile}.
+	 * - WebM/Matroska: `SimpleTag` elements whose target is 50 (MOVIE), either containing string or `Uint8Array`
+	 * values. Additionally, all attached files (such as font files) are included here, where the key corresponds to
+	 * the FileUID and the value is an {@link AttachedFile}.
 	 * - MP3: The ID3v2 tags, or a single `'TAG'` key with the contents of the ID3v1 tag.
 	 * - Ogg: The key-value string pairs from the Vorbis-style comment header (see RFC 7845, Section 5.2).
 	 * Additionally, the `'vendor'` key refers to the vendor string within this header.

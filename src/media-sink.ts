@@ -1185,7 +1185,9 @@ class ColorAlphaMerger {
 			this.canvas = document.createElement('canvas');
 		}
 
-		const gl = this.canvas.getContext('webgl2', { premultipliedAlpha: false });
+		const gl = this.canvas.getContext('webgl2', {
+			premultipliedAlpha: false,
+		}) as unknown as WebGL2RenderingContext | null; // Casting because of some TypeScript weirdness
 		if (!gl) {
 			throw new Error('Couldn\'t acquire WebGL 2 context.');
 		}

@@ -35,7 +35,7 @@
     "test": "npx vitest --run",
     "test-node": "npm run test node/",
     "test-browser": "npm run test browser/",
-    "check": "tsc -p src && tsc -p packages/mp3-encoder/src --noEmit && tsc -p tsconfig.vitest.json --noEmit && tsc -p scripts --noEmit && tsc -p tsconfig.vite.json --noEmit",
+    "check": "rm -rf dist/modules && tsc -p src && tsc -p packages/mp3-encoder/src --noEmit && tsc -p tsconfig.vitest.json --noEmit && tsc -p scripts --noEmit && tsc -p tsconfig.vite.json --noEmit",
     "check-docblocks": "tsx scripts/check-docblocks.ts dist/mediabunny.d.ts",
     "docs:dev": "vitepress dev docs",
     "docs:build": "npm run build && npm run docs:generate && vitepress build docs && npm run examples:build && cp dist/mediabunny.d.ts dist-docs/",

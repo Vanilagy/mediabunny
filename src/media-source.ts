@@ -682,7 +682,7 @@ class ColorAlphaSplitter {
 
 		const gl = this.canvas.getContext('webgl2', {
 			alpha: true, // Needed due to the YUV thing we do for alpha
-		});
+		}) as unknown as WebGL2RenderingContext | null; // Casting because of some TypeScript weirdness
 		if (!gl) {
 			throw new Error('Couldn\'t acquire WebGL 2 context.');
 		}
