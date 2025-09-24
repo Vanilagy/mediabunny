@@ -23,6 +23,13 @@ export default defineConfig({
 						provider: 'webdriverio',
 						instances: [{
 							browser: 'chrome',
+							capabilities: {
+								'goog:chromeOptions': {
+									args: [
+										'--user-data-dir=/tmp/chrome-user-data',
+									],
+								},
+							},
 							// xvfbAutoInstall: true,
 						}],
 						headless: false, // A bunch of features need the head
