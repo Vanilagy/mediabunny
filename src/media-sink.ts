@@ -1417,6 +1417,10 @@ export type WrappedCanvas = {
  * @public
  */
 export type CanvasSinkOptions = {
+	/**
+	 * Whether the output canvases should have transparency instead of a black background. Defaults to `false`. Set
+	 * this to `true` when using this sink to read transparent videos.
+	 */
 	alpha?: boolean;
 	/**
 	 * The width of the output canvas in pixels, defaulting to the display width of the video track. If height is not

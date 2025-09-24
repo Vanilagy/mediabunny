@@ -18,8 +18,21 @@ export const PLACEHOLDER_DATA = new Uint8Array(0);
  */
 export type PacketType = 'key' | 'delta';
 
+/**
+ * Holds additional data accompanying an {@link EncodedPacket}.
+ * @group Packets
+ * @public
+ */
 export type EncodedPacketSideData = {
+	/**
+	 * An encoded alpha frame, encoded with the same codec as the packet. Typically used for transparent videos, where
+	 * the alpha information is stored separately from the color information.
+	 */
 	alpha?: Uint8Array;
+	/**
+	 * The actual byte length of the alpha data. This field is useful for metadata-only packets where the
+	 * `alpha` field contains no bytes.
+	 */
 	alphaByteLength?: number;
 };
 
@@ -38,6 +51,7 @@ export class EncodedPacket {
 	 */
 	readonly byteLength: number;
 
+	/** Additional data carried with this packet. */
 	readonly sideData: EncodedPacketSideData;
 
 	/** Creates a new {@link EncodedPacket} from raw bytes and timing information. */
@@ -127,7 +141,9 @@ export class EncodedPacket {
 		return Math.trunc(SECOND_TO_MICROSECOND_FACTOR * this.duration);
 	}
 
-	/** Converts this packet to an EncodedVideoChunk for use with the WebCodecs API. */
+	/** Converts this packet to an
+	 * [`EncodedVideoChunk`](https://developer.mozilla.org/en-US/docs/Web/API/EncodedVideoChunk) for use with the
+	 * WebCodecs API. */
 	toEncodedVideoChunk() {
 		if (this.isMetadataOnly) {
 			throw new TypeError('Metadata-only packets cannot be converted to a video chunk.');
@@ -144,6 +160,11 @@ export class EncodedPacket {
 		});
 	}
 
+	/**
+	 * Converts this packet to an
+	 * [`EncodedVideoChunk`](https://developer.mozilla.org/en-US/docs/Web/API/EncodedVideoChunk) for use with the
+	 * WebCodecs API, using the alpha side data instead of the color data. Throws if no alpha side data is defined.
+	 */
 	alphaToEncodedVideoChunk(type = this.type) {
 		if (!this.sideData.alpha) {
 			throw new TypeError('This packet does not contain alpha side data.');
@@ -163,7 +184,9 @@ export class EncodedPacket {
 		});
 	}
 
-	/** Converts this packet to an EncodedAudioChunk for use with the WebCodecs API. */
+	/** Converts this packet to an
+	 * [`EncodedAudioChunk`](https://developer.mozilla.org/en-US/docs/Web/API/EncodedAudioChunk) for use with the
+	 * WebCodecs API. */
 	toEncodedAudioChunk() {
 		if (this.isMetadataOnly) {
 			throw new TypeError('Metadata-only packets cannot be converted to an audio chunk.');
@@ -181,8 +204,10 @@ export class EncodedPacket {
 	}
 
 	/**
-	 * Creates an EncodedPacket from an EncodedVideoChunk or EncodedAudioChunk. This method is useful for converting
-	 * chunks from the WebCodecs API to EncodedPackets.
+	 * Creates an {@link EncodedPacket} from an
+	 * [`EncodedVideoChunk`](https://developer.mozilla.org/en-US/docs/Web/API/EncodedVideoChunk) or
+	 * [`EncodedAudioChunk`](https://developer.mozilla.org/en-US/docs/Web/API/EncodedAudioChunk). This method is useful
+	 * for converting chunks from the WebCodecs API to `EncodedPacket` instances.
 	 */
 	static fromEncodedChunk(
 		chunk: EncodedVideoChunk | EncodedAudioChunk,

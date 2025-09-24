@@ -47,6 +47,7 @@ All video sources that handle encoding internally require you to specify a `Vide
 type VideoEncodingConfig = {
 	codec: VideoCodec;
 	bitrate: number | Quality;
+	alpha?: 'discard' | 'keep';
 	bitrateMode?: 'constant' | 'variable';
 	latencyMode?: 'quality' | 'realtime';
 	keyFrameInterval?: number;
@@ -67,6 +68,9 @@ type VideoEncodingConfig = {
 ```
 - `codec`: The [video codec](./supported-formats-and-codecs#video-codecs) used for encoding.
 - `bitrate`: The target number of bits per second. Alternatively, this can be a [subjective quality](#subjective-qualities).
+- `alpha`:  What to do with alpha data contained in the video samples.
+	- `'discard'` (default): Only the samples' color data is kept; the video is opaque.
+	- `'keep'`: The samples' alpha data is also encoded as side data. Make sure to pair this mode with a container format that supports transparency (such as WebM or Matroska).
 - `bitrateMode`: Can be used to control constant vs. variable bitrate.
 - `latencyMode`: The latency mode as specified by the WebCodecs API. Browsers default to `quality`. Media stream-driven video sources will automatically use the `realtime` setting.
 - `keyFrameInterval`: The maximum interval in seconds between two adjacent key frames. Defaults to 5 seconds. More frequent key frames improve seeking behavior but increase file size. When using multiple video tracks, this value should be set to the same value for all tracks.

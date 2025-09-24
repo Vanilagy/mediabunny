@@ -207,11 +207,11 @@ const main = () => {
 			console.log(`✅ All symbols in ${filePath} have meaningful docblocks.`);
 		} else {
 			console.log(
-				`❌ Found ${result.missingDocblocks.length} symbols with insufficient docblocks in ${filePath}:`,
+				`❌ Found ${result.missingDocblocks.length} symbols with insufficient docblocks:`,
 			);
 
 			result.missingDocblocks.forEach((item) => {
-				console.log(`  - ${item.kind} '${item.name}' at line ${item.line}: ${item.reason}`);
+				console.log(`  - ${item.kind} '${item.name}' at ${filePath}:${item.line}: ${item.reason}`);
 			});
 
 			process.exit(1);

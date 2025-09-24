@@ -107,6 +107,13 @@ export const validateVideoEncodingConfig = (config: VideoEncodingConfig) => {
  * @public
  */
 export type VideoEncodingAdditionalOptions = {
+	/**
+	 * What to do with alpha data contained in the video samples.
+	 *
+	 * - `'discard'` (default): Only the samples' color data is kept; the video is opaque.
+	 * - `'keep'`: The samples' alpha data is also encoded as side data. Make sure to pair this mode with a container
+	 * format that supports transparency (such as WebM or Matroska).
+	 */
 	alpha?: 'discard' | 'keep';
 	/** Configures the bitrate mode. */
 	bitrateMode?: 'constant' | 'variable';

@@ -21,6 +21,7 @@ test('Can decode transparent video', async () => {
 	const sample = (await sink.getSample(0.5))!;
 
 	expect(sample.format).toContain('A'); // Probably RGBA
+	expect(sample.hasAlpha).toBe(true);
 
 	const canvas = new OffscreenCanvas(sample.displayWidth, sample.displayHeight);
 	const context = canvas.getContext('2d')!;
@@ -48,6 +49,7 @@ test('Can decode faulty transparent video and behaves gracefully', async () => {
 
 	const secondSample = (await sink.getSample(secondKeyPacket.timestamp))!;
 	expect(secondSample.format).not.toContain('A'); // There was no alpha key frame for this one
+	expect(secondSample.hasAlpha).toBe(false);
 });
 
 test('Can extract transparent frames via CanvasSink', async () => {

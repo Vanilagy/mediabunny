@@ -97,6 +97,14 @@ export class VideoSample {
 	}
 
 	/**
+	 * Whether this sample uses a pixel format that can hold transparency data. Note that this doesn't necessarily mean
+	 * that the sample is transparent.
+	 */
+	get hasAlpha() {
+		return this.format && this.format.includes('A');
+	}
+
+	/**
 	 * Creates a new {@link VideoSample} from a
 	 * [`VideoFrame`](https://developer.mozilla.org/en-US/docs/Web/API/VideoFrame). This is essentially a near zero-cost
 	 * wrapper around `VideoFrame`. The sample's metadata is optionally refined using the data specified in `init`.
