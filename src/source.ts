@@ -21,7 +21,9 @@ import {
 import * as nodeAlias from './node';
 import { InputDisposedError } from './input';
 
-const node = nodeAlias; // Aliasing it prevents some bundler warnings
+const node = typeof nodeAlias !== 'undefined'
+	? nodeAlias // Aliasing it prevents some bundler warnings
+	: undefined!;
 
 export type ReadResult = {
 	bytes: Uint8Array;
