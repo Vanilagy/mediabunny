@@ -27,6 +27,8 @@ export default defineConfig({
 								'goog:chromeOptions': {
 									args: [
 										'--user-data-dir=/tmp/chrome-user-data-sussex1233412341234',
+										'--disable-dev-shm-usage',
+										'--no-sandbox',
 									],
 								},
 							},
