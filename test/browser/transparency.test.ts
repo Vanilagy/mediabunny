@@ -186,8 +186,13 @@ test.only('Can encode video with alternating transparency', async () => {
 	await output.start();
 
 	for (let i = 0; i < 64; i++) {
-		const sample = new VideoSample(i % 2 ? canvas2 : canvas1, { timestamp: i, duration: 1 });
-		console.log(i, sample.format);
+		const sample = new VideoSample(new Uint8Array(640 * 480 * 4), {
+			format: i % 2 ? 'RGBX' : 'RGBA',
+			codedWidth: 640,
+			codedHeight: 480,
+			timestamp: i,
+			duration: 1,
+		});
 		await source.add(sample);
 	}
 
@@ -203,20 +208,14 @@ test.only('Can encode video with alternating transparency', async () => {
 
 	let i = 0;
 	for await (const packet of packetSink.packets()) {
-		console.log(i, !!packet.sideData.alpha);
-
-		/*
 		if (i % 2) {
 			expect(packet.sideData.alpha).toBeUndefined();
 		} else {
 			expect(packet.sideData.alpha).toBeDefined();
 		}
-		*/
 
 		i++;
 	}
-
-	throw new Error('Bruh moment');
 
 	const sampleSink = new VideoSampleSink(videoTrack);
 
