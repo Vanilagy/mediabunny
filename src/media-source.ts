@@ -37,7 +37,7 @@ import {
 	customVideoEncoders,
 	customAudioEncoders,
 } from './custom-coder';
-import { EncodedPacket } from './packet';
+import { EncodedPacket, EncodedPacketSideData } from './packet';
 import { AudioSample, VideoSample } from './sample';
 import {
 	AudioEncodingConfig,
@@ -213,12 +213,18 @@ class VideoEncoderWrapper {
 	private customEncoderCallSerializer = new CallSerializer();
 	private customEncoderQueueSize = 0;
 
+	// Alpha stuff
+	private alphaEncoder: VideoEncoder | null = null;
+	private splitter: ColorAlphaSplitter | null = null;
+	private alphaFrameQueue: (VideoFrame | null)[] = [];
+
 	/**
 	 * Encoders typically throw their errors "out of band", meaning asynchronously in some other execution context.
 	 * However, we want to surface these errors to the user within the normal control flow, so they don't go uncaught.
 	 * So, we keep track of the encoder error and throw it as soon as we get the chance.
 	 */
-	private encoderError: Error | null = null;
+	private error: Error | null = null;
+	private errorNeedsNewStack = true;
 
 	constructor(private source: VideoSource, private encodingConfig: VideoEncodingConfig) {}
 
@@ -329,7 +335,7 @@ class VideoEncoderWrapper {
 				const promise = this.customEncoderCallSerializer
 					.call(() => this.customEncoder!.encode(clonedSample, finalEncodeOptions))
 					.then(() => this.customEncoderQueueSize--)
-					.catch((error: Error) => this.encoderError ??= error)
+					.catch((error: Error) => this.error ??= error)
 					.finally(() => {
 						clonedSample.close();
 						// `videoSample` gets closed in the finally block at the end of the method
@@ -340,9 +346,39 @@ class VideoEncoderWrapper {
 				}
 			} else {
 				assert(this.encoder);
+
 				const videoFrame = videoSample.toVideoFrame();
-				this.encoder.encode(videoFrame, finalEncodeOptions);
-				videoFrame.close();
+
+				if (!this.alphaEncoder) {
+					// No alpha encoder, simple case
+					this.encoder.encode(videoFrame, finalEncodeOptions);
+					videoFrame.close();
+				} else {
+					// We're expected to encode alpha as well
+					const frameDefinitelyHasNoAlpha = !!videoFrame.format && !videoFrame.format.includes('A');
+
+					if (frameDefinitelyHasNoAlpha) {
+						this.alphaFrameQueue.push(null);
+
+						this.encoder.encode(videoFrame, finalEncodeOptions);
+						videoFrame.close();
+					} else {
+						const width = videoFrame.displayWidth;
+						const height = videoFrame.displayHeight;
+
+						if (!this.splitter) {
+							this.splitter = new ColorAlphaSplitter(width, height);
+						}
+
+						const alphaFrame = this.splitter.extractAlpha(videoFrame);
+						const colorFrame = this.splitter.extractColor(videoFrame);
+
+						this.alphaFrameQueue.push(alphaFrame);
+						this.encoder.encode(colorFrame, finalEncodeOptions);
+						colorFrame.close();
+						videoFrame.close();
+					}
+				}
 
 				if (shouldClose) {
 					videoSample.close();
@@ -364,10 +400,6 @@ class VideoEncoderWrapper {
 	}
 
 	private ensureEncoder(videoSample: VideoSample) {
-		if (this.encoder) {
-			return;
-		}
-
 		const encoderError = new Error();
 		this.ensureEncoderPromise = (async () => {
 			const encoderConfig = buildVideoEncoderConfig({
@@ -400,13 +432,26 @@ class VideoEncoderWrapper {
 					}
 
 					this.encodingConfig.onEncodedPacket?.(packet, meta);
-					void this.muxer!.addEncodedVideoPacket(this.source._connectedTrack!, packet, meta);
+					void this.muxer!.addEncodedVideoPacket(this.source._connectedTrack!, packet, meta)
+						.catch((error) => {
+							this.error ??= error;
+							this.errorNeedsNewStack = false;
+						});
 				};
 
 				await this.customEncoder.init();
 			} else {
 				if (typeof VideoEncoder === 'undefined') {
 					throw new Error('VideoEncoder is not supported by this browser.');
+				}
+
+				encoderConfig.alpha = 'discard'; // Since we handle alpha ourselves
+
+				if (this.encodingConfig.alpha === 'keep') {
+					// Encoding alpha requires using two parallel encoders, so we need to make sure they stay in sync
+					// and that neither of them drops frames. Setting latencyMode to 'quality' achieves this, because
+					// "User Agents MUST not drop frames to achieve the target bitrate and/or framerate."
+					encoderConfig.latencyMode = 'quality';
 				}
 
 				const hasOddDimension = encoderConfig.width % 2 === 1 || encoderConfig.height % 2 === 1;
@@ -432,19 +477,116 @@ class VideoEncoderWrapper {
 					);
 				}
 
+				/** Queue of color chunks waiting for their alpha counterpart. */
+				const colorChunkQueue: {
+					chunk: EncodedVideoChunk;
+					meta: EncodedVideoChunkMetadata | undefined;
+				}[] = [];
+				/** Each value is the number of encoded alpha chunks at which a null alpha chunk should be added. */
+				const nullAlphaChunkQueue: number[] = [];
+				let encodedAlphaChunkCount = 0;
+				let alphaEncoderQueue = 0;
+
+				const addPacket = (
+					colorChunk: EncodedVideoChunk,
+					alphaChunk: EncodedVideoChunk | null,
+					meta: EncodedVideoChunkMetadata | undefined,
+				) => {
+					const sideData: EncodedPacketSideData = {};
+
+					if (alphaChunk) {
+						const alphaData = new Uint8Array(alphaChunk.byteLength);
+						alphaChunk.copyTo(alphaData);
+
+						sideData.alpha = alphaData;
+					}
+
+					const packet = EncodedPacket.fromEncodedChunk(colorChunk, sideData);
+
+					this.encodingConfig.onEncodedPacket?.(packet, meta);
+					void this.muxer!.addEncodedVideoPacket(this.source._connectedTrack!, packet, meta)
+						.catch((error) => {
+							this.error ??= error;
+							this.errorNeedsNewStack = false;
+						});
+				};
+
 				this.encoder = new VideoEncoder({
 					output: (chunk, meta) => {
-						const packet = EncodedPacket.fromEncodedChunk(chunk);
+						if (!this.alphaEncoder) {
+							// We're done
+							addPacket(chunk, null, meta);
+							return;
+						}
 
-						this.encodingConfig.onEncodedPacket?.(packet, meta);
-						void this.muxer!.addEncodedVideoPacket(this.source._connectedTrack!, packet, meta);
+						const alphaFrame = this.alphaFrameQueue.shift();
+						assert(alphaFrame !== undefined);
+
+						if (alphaFrame) {
+							this.alphaEncoder.encode(alphaFrame, {
+								// Crucial: The alpha frame is forced to be a key frame whenever the color frame
+								// also is. Without this, playback can glitch and even crash in some browsers.
+								// This is the reason why the two encoders are wired in series and not in parallel.
+								keyFrame: chunk.type === 'key',
+							});
+							alphaEncoderQueue++;
+							alphaFrame.close();
+							colorChunkQueue.push({ chunk, meta });
+						} else {
+							// There was no alpha component for this frame
+							if (alphaEncoderQueue === 0) {
+								// No pending alpha encodes either, so we're done
+								addPacket(chunk, null, meta);
+							} else {
+								// There are still alpha encodes pending, so we can't add the packet immediately since
+								// we'd end up with out-of-order packets. Instead, let's queue a null alpha chunk to be
+								// added in the future, after the current encoder workload has completed:
+								nullAlphaChunkQueue.push(encodedAlphaChunkCount + alphaEncoderQueue);
+								colorChunkQueue.push({ chunk, meta });
+							}
+						}
 					},
 					error: (error) => {
 						error.stack = encoderError.stack; // Provide a more useful stack trace
-						this.encoderError ??= error;
+						this.error ??= error;
 					},
 				});
 				this.encoder.configure(encoderConfig);
+
+				if (this.encodingConfig.alpha === 'keep') {
+					// We need to encode alpha as well, which we do with a separate encoder
+					this.alphaEncoder = new VideoEncoder({
+						// We ignore the alpha chunk's metadata
+						// eslint-disable-next-line @typescript-eslint/no-unused-vars
+						output: (chunk, meta) => {
+							alphaEncoderQueue--;
+
+							// There has to be a color chunk because the encoders are wired in series
+							const colorChunk = colorChunkQueue.shift();
+							assert(colorChunk !== undefined);
+
+							addPacket(colorChunk.chunk, chunk, colorChunk.meta);
+
+							// See if there are any null alpha chunks queued up
+							encodedAlphaChunkCount++;
+							while (
+								nullAlphaChunkQueue.length > 0
+								&& nullAlphaChunkQueue[0] === encodedAlphaChunkCount
+							) {
+								nullAlphaChunkQueue.shift();
+								const colorChunk = colorChunkQueue.shift();
+								assert(colorChunk !== undefined);
+
+								addPacket(colorChunk.chunk, null, colorChunk.meta);
+							}
+						},
+						error: (error) => {
+							error.stack = encoderError.stack; // Provide a more useful stack trace
+							this.error ??= error;
+						},
+					});
+					this.alphaEncoder.configure(encoderConfig);
+				}
 			}
 
 			assert(this.source._connectedTrack);
@@ -465,12 +607,19 @@ class VideoEncoderWrapper {
 			await this.customEncoderCallSerializer.call(() => this.customEncoder!.close());
 		} else if (this.encoder) {
 			if (!forceClose) {
+				// These are wired in series, therefore they must also be flushed in series
 				await this.encoder.flush();
+				await this.alphaEncoder?.flush();
 			}
 
 			if (this.encoder.state !== 'closed') {
 				this.encoder.close();
 			}
+			if (this.alphaEncoder && this.alphaEncoder.state !== 'closed') {
+				this.alphaEncoder.close();
+			}
+
+			this.alphaFrameQueue.forEach(x => x?.close());
 		}
 
 		if (!forceClose) this.checkForEncoderError();
@@ -480,15 +629,279 @@ class VideoEncoderWrapper {
 		if (this.customEncoder) {
 			return this.customEncoderQueueSize;
 		} else {
+			// Because the color and alpha encoders are wired in series, there's no need to also include the alpha
+			// encoder's queue size here
 			return this.encoder?.encodeQueueSize ?? 0;
 		}
 	}
 
 	checkForEncoderError() {
-		if (this.encoderError) {
-			this.encoderError.stack = new Error().stack; // Provide an even more useful stack trace
-			throw this.encoderError;
+		if (this.error) {
+			if (this.errorNeedsNewStack) {
+				this.error.stack = new Error().stack; // Provide an even more useful stack trace
+			}
+
+			throw this.error;
 		}
+	}
+}
+
+/** Utility class for splitting a composite frame into separate color and alpha components. */
+class ColorAlphaSplitter {
+	public canvas: OffscreenCanvas | HTMLCanvasElement;
+
+	private gl: WebGL2RenderingContext;
+	private colorProgram: WebGLProgram;
+	private alphaProgram: WebGLProgram;
+	private vao: WebGLVertexArrayObject;
+	private sourceTexture: WebGLTexture;
+	private lastFrame: VideoFrame | null = null;
+	private alphaResolutionLocation: WebGLUniformLocation;
+
+	constructor(initialWidth: number, initialHeight: number) {
+		if (typeof OffscreenCanvas !== 'undefined') {
+			this.canvas = new OffscreenCanvas(initialWidth, initialHeight);
+		} else {
+			this.canvas = document.createElement('canvas');
+			this.canvas.width = initialWidth;
+			this.canvas.height = initialHeight;
+		}
+
+		this.gl = this.canvas.getContext('webgl2', {
+			alpha: true, // Needed due to the YUV thing we do for alpha
+		})!;
+
+		this.colorProgram = this.createColorProgram();
+		this.alphaProgram = this.createAlphaProgram();
+		this.vao = this.createVAO();
+		this.sourceTexture = this.createTexture();
+
+		this.alphaResolutionLocation = this.gl.getUniformLocation(this.alphaProgram, 'u_resolution')!;
+
+		this.gl.useProgram(this.colorProgram);
+		this.gl.uniform1i(this.gl.getUniformLocation(this.colorProgram, 'u_sourceTexture'), 0);
+
+		this.gl.useProgram(this.alphaProgram);
+		this.gl.uniform1i(this.gl.getUniformLocation(this.alphaProgram, 'u_sourceTexture'), 0);
+	}
+
+	private createVertexShader(): WebGLShader {
+		return this.createShader(this.gl.VERTEX_SHADER, `#version 300 es
+            in vec2 a_position;
+            in vec2 a_texCoord;
+            out vec2 v_texCoord;
+            
+            void main() {
+                gl_Position = vec4(a_position, 0.0, 1.0);
+                v_texCoord = a_texCoord;
+            }
+        `);
+	}
+
+	private createColorProgram(): WebGLProgram {
+		const vertexShader = this.createVertexShader();
+
+		// This shader is simple, simply copy the color information while setting alpha to 1
+		const fragmentShader = this.createShader(this.gl.FRAGMENT_SHADER, `#version 300 es
+            precision highp float;
+            
+            uniform sampler2D u_sourceTexture;
+            in vec2 v_texCoord;
+            out vec4 fragColor;
+            
+            void main() {
+                vec4 source = texture(u_sourceTexture, v_texCoord);
+                fragColor = vec4(source.rgb, 1.0);
+            }
+        `);
+
+		const program = this.gl.createProgram();
+		this.gl.attachShader(program, vertexShader);
+		this.gl.attachShader(program, fragmentShader);
+		this.gl.linkProgram(program);
+
+		return program;
+	}
+
+	private createAlphaProgram(): WebGLProgram {
+		const vertexShader = this.createVertexShader();
+
+		// This shader's more complex. The main reason is that this shader writes data in I420 (yuv420) pixel format
+		// instead of regular RGBA. In other words, we use the shader to write out I420 data into an RGBA canvas, which
+		// we then later read out with JavaScript. The reason being that browsers weirdly encode canvases and mess up
+		// the color spaces, and the only way to have full control over the color space is by outputting YUV data
+		// directly (avoiding the RGB conversion). Doing this conversion in JS is painfully slow, so let's utlize the
+		// GPU since we're already calling it anyway.
+		const fragmentShader = this.createShader(this.gl.FRAGMENT_SHADER, `#version 300 es
+            precision highp float;
+            
+            uniform sampler2D u_sourceTexture;
+            uniform vec2 u_resolution; // The width and height of the canvas
+            in vec2 v_texCoord;
+            out vec4 fragColor;
+
+            // This function determines the value for a single byte in the YUV stream
+            float getByteValue(float byteOffset) {
+                float width = u_resolution.x;
+                float height = u_resolution.y;
+
+                float yPlaneSize = width * height;
+
+                if (byteOffset < yPlaneSize) {
+                    // This byte is in the Luma plane. Find the corresponding pixel coordinates to sample from.
+                    float y = floor(byteOffset / width);
+                    float x = mod(byteOffset, width);
+                    
+                    // Add 0.5 to sample the center of the texel
+                    vec2 sampleCoord = (vec2(x, y) + 0.5) / u_resolution;
+                    
+                    // The luma value is the alpha from the source texture
+                    return texture(u_sourceTexture, sampleCoord).a;
+                } else {
+                    // Write a fixed value for Chroma and beyond
+                    return 128.0 / 255.0;
+                }
+            }
+            
+            void main() {
+                // Each fragment writes 4 bytes (R, G, B, A)
+                float pixelIndex = floor(gl_FragCoord.y) * u_resolution.x + floor(gl_FragCoord.x);
+                float baseByteOffset = pixelIndex * 4.0;
+
+                vec4 result;
+                for (int i = 0; i < 4; i++) {
+                    float currentByteOffset = baseByteOffset + float(i);
+                    result[i] = getByteValue(currentByteOffset);
+                }
+                
+                fragColor = result;
+            }
+        `);
+
+		const program = this.gl.createProgram();
+		this.gl.attachShader(program, vertexShader);
+		this.gl.attachShader(program, fragmentShader);
+		this.gl.linkProgram(program);
+
+		return program;
+	}
+
+	private createShader(type: number, source: string): WebGLShader {
+		const shader = this.gl.createShader(type)!;
+		this.gl.shaderSource(shader, source);
+		this.gl.compileShader(shader);
+		if (!this.gl.getShaderParameter(shader, this.gl.COMPILE_STATUS)) {
+			console.error('Shader compile error:', this.gl.getShaderInfoLog(shader));
+		}
+		return shader;
+	}
+
+	private createVAO(): WebGLVertexArrayObject {
+		const vao = this.gl.createVertexArray();
+		this.gl.bindVertexArray(vao);
+
+		const vertices = new Float32Array([
+			-1, -1, 0, 1,
+			1, -1, 1, 1,
+			-1, 1, 0, 0,
+			1, 1, 1, 0,
+		]);
+
+		const buffer = this.gl.createBuffer();
+		this.gl.bindBuffer(this.gl.ARRAY_BUFFER, buffer);
+		this.gl.bufferData(this.gl.ARRAY_BUFFER, vertices, this.gl.STATIC_DRAW);
+
+		const positionLocation = this.gl.getAttribLocation(this.colorProgram, 'a_position');
+		const texCoordLocation = this.gl.getAttribLocation(this.colorProgram, 'a_texCoord');
+
+		this.gl.enableVertexAttribArray(positionLocation);
+		this.gl.vertexAttribPointer(positionLocation, 2, this.gl.FLOAT, false, 16, 0);
+
+		this.gl.enableVertexAttribArray(texCoordLocation);
+		this.gl.vertexAttribPointer(texCoordLocation, 2, this.gl.FLOAT, false, 16, 8);
+
+		return vao;
+	}
+
+	private createTexture(): WebGLTexture {
+		const texture = this.gl.createTexture();
+
+		this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
+		this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);
+		this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
+		this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.LINEAR);
+		this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.LINEAR);
+
+		return texture;
+	}
+
+	public extractColor(sourceFrame: VideoFrame) {
+		this.updateTexture(sourceFrame);
+
+		this.gl.useProgram(this.colorProgram);
+		this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+		this.gl.clear(this.gl.COLOR_BUFFER_BIT);
+		this.gl.bindVertexArray(this.vao);
+		this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
+
+		return new VideoFrame(this.canvas, {
+			timestamp: sourceFrame.timestamp,
+			duration: sourceFrame.duration ?? undefined,
+			alpha: 'discard',
+		});
+	}
+
+	public extractAlpha(sourceFrame: VideoFrame) {
+		this.updateTexture(sourceFrame);
+
+		this.gl.useProgram(this.alphaProgram);
+		this.gl.uniform2f(this.alphaResolutionLocation, this.canvas.width, this.canvas.height);
+
+		this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+		this.gl.clear(this.gl.COLOR_BUFFER_BIT);
+		this.gl.bindVertexArray(this.vao);
+		this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
+
+		const { width, height } = this.canvas;
+
+		const chromaSamples = Math.ceil(width / 2) * Math.ceil(height / 2);
+		const yuvSize = width * height + chromaSamples * 2;
+		const requiredHeight = Math.ceil(yuvSize / (width * 4));
+
+		let yuv = new Uint8Array(4 * width * requiredHeight);
+		this.gl.readPixels(0, 0, width, requiredHeight, this.gl.RGBA, this.gl.UNSIGNED_BYTE, yuv);
+		yuv = yuv.subarray(0, yuvSize);
+
+		assert(yuv[width * height] === 128); // Where chroma data starts
+		assert(yuv[yuv.length - 1] === 128); // Assert the YUV data has been fully written
+
+		return new VideoFrame(yuv, {
+			format: 'I420',
+			codedWidth: width,
+			codedHeight: height,
+			timestamp: sourceFrame.timestamp,
+			duration: sourceFrame.duration ?? undefined,
+		});
+	}
+
+	private updateTexture(sourceFrame: VideoFrame): void {
+		if (this.lastFrame === sourceFrame) {
+			return;
+		}
+
+		const width = sourceFrame.displayWidth;
+		const height = sourceFrame.displayHeight;
+
+		if (width !== this.canvas.width || height !== this.canvas.height) {
+			this.canvas.width = width;
+			this.canvas.height = height;
+		}
+
+		this.gl.activeTexture(this.gl.TEXTURE0);
+		this.gl.bindTexture(this.gl.TEXTURE_2D, this.sourceTexture);
+		this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, sourceFrame);
+
+		this.lastFrame = sourceFrame;
 	}
 }
 
@@ -858,7 +1271,8 @@ class AudioEncoderWrapper {
 	 * However, we want to surface these errors to the user within the normal control flow, so they don't go uncaught.
 	 * So, we keep track of the encoder error and throw it as soon as we get the chance.
 	 */
-	private encoderError: Error | null = null;
+	private error: Error | null = null;
+	private errorNeedsNewStack = true;
 
 	constructor(private source: AudioSource, private encodingConfig: AudioEncodingConfig) {}
 
@@ -909,7 +1323,7 @@ class AudioEncoderWrapper {
 				const promise = this.customEncoderCallSerializer
 					.call(() => this.customEncoder!.encode(clonedSample))
 					.then(() => this.customEncoderQueueSize--)
-					.catch((error: Error) => this.encoderError ??= error)
+					.catch((error: Error) => this.error ??= error)
 					.finally(() => {
 						clonedSample.close();
 						// `audioSample` gets closed in the finally block at the end of the method
@@ -1018,10 +1432,6 @@ class AudioEncoderWrapper {
 	}
 
 	private ensureEncoder(audioSample: AudioSample) {
-		if (this.encoderInitialized) {
-			return;
-		}
-
 		const encoderError = new Error();
 		this.ensureEncoderPromise = (async () => {
 			const { numberOfChannels, sampleRate } = audioSample;
@@ -1055,7 +1465,11 @@ class AudioEncoderWrapper {
 					}
 
 					this.encodingConfig.onEncodedPacket?.(packet, meta);
-					void this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet, meta);
+					void this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet, meta)
+						.catch((error) => {
+							this.error ??= error;
+							this.errorNeedsNewStack = false;
+						});
 				};
 
 				await this.customEncoder.init();
@@ -1080,11 +1494,15 @@ class AudioEncoderWrapper {
 						const packet = EncodedPacket.fromEncodedChunk(chunk);
 
 						this.encodingConfig.onEncodedPacket?.(packet, meta);
-						void this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet, meta);
+						void this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet, meta)
+							.catch((error) => {
+								this.error ??= error;
+								this.errorNeedsNewStack = false;
+							});
 					},
 					error: (error) => {
 						error.stack = encoderError.stack; // Provide a more useful stack trace
-						this.encoderError ??= error;
+						this.error ??= error;
 					},
 				});
 				this.encoder.configure(encoderConfig);
@@ -1223,9 +1641,12 @@ class AudioEncoderWrapper {
 	}
 
 	checkForEncoderError() {
-		if (this.encoderError) {
-			this.encoderError.stack = new Error().stack; // Provide an even more useful stack trace
-			throw this.encoderError;
+		if (this.error) {
+			if (this.errorNeedsNewStack) {
+				this.error.stack = new Error().stack; // Provide an even more useful stack trace
+			}
+
+			throw this.error;
 		}
 	}
 }
@@ -1679,6 +2100,8 @@ export abstract class SubtitleSource extends MediaSource {
 export class TextSubtitleSource extends SubtitleSource {
 	/** @internal */
 	private _parser: SubtitleParser;
+	/** @internal */
+	private _error: Error | null = null;
 
 	/** Creates a new {@link TextSubtitleSource} where added text chunks are in the specified `codec`. */
 	constructor(codec: SubtitleCodec) {
@@ -1686,8 +2109,12 @@ export class TextSubtitleSource extends SubtitleSource {
 
 		this._parser = new SubtitleParser({
 			codec,
-			output: (cue, metadata) =>
-				this._connectedTrack?.output._muxer.addSubtitleCue(this._connectedTrack, cue, metadata),
+			output: (cue, metadata) => {
+				void this._connectedTrack?.output._muxer.addSubtitleCue(this._connectedTrack, cue, metadata)
+					.catch((error) => {
+						this._error ??= error;
+					});
+			},
 		});
 	}
 
@@ -1703,9 +2130,25 @@ export class TextSubtitleSource extends SubtitleSource {
 			throw new TypeError('text must be a string.');
 		}
 
+		this._checkForError();
+
 		this._ensureValidAdd();
 		this._parser.parse(text);
 
 		return this._connectedTrack!.output._muxer.mutex.currentPromise;
+	}
+
+	/** @internal */
+	_checkForError() {
+		if (this._error) {
+			throw this._error;
+		}
+	}
+
+	/** @internal */
+	override async _flushAndClose(forceClose: boolean) {
+		if (!forceClose) {
+			this._checkForError();
+		}
 	}
 }

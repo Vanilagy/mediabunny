@@ -1,8 +1,14 @@
 import { expect, test } from 'vitest';
 import { Input } from '../../src/input.js';
-import { UrlSource } from '../../src/source.js';
+import { BufferSource, UrlSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { CanvasSink, EncodedPacketSink, VideoSampleSink } from '../../src/media-sink.js';
+import { Output } from '../../src/output.js';
+import { WebMOutputFormat } from '../../src/output-format.js';
+import { BufferTarget } from '../../src/target.js';
+import { CanvasSource, VideoSampleSource } from '../../src/media-source.js';
+import { canEncodeVideo, QUALITY_HIGH } from '../../src/encode.js';
+import { VideoSample } from '../../src/sample.js';
 
 test('Can decode transparent video', async () => {
 	using input = new Input({
@@ -68,4 +74,180 @@ test('Can extract transparent frames via CanvasSink', async () => {
 
 	imageData = context.getImageData(0, 0, canvas.width, canvas.height);
 	expect(imageData.data[3]).toBe(255);
+});
+
+test('Can encode transparent video', async () => {
+	const output = new Output({
+		format: new WebMOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const canvas = new OffscreenCanvas(1280, 720);
+	const context = canvas.getContext('2d')!;
+
+	const source = new CanvasSource(canvas, {
+		codec: 'vp9',
+		bitrate: QUALITY_HIGH,
+		alpha: 'keep',
+	});
+	output.addVideoTrack(source);
+
+	await output.start();
+
+	context.fillStyle = '#ff0000';
+	context.fillRect(200, 200, 200, 200);
+	await source.add(0, 1);
+
+	context.fillStyle = '#00ff00';
+	context.fillRect(300, 300, 200, 200);
+	await source.add(1, 1);
+
+	context.fillStyle = '#0000ff';
+	context.fillRect(400, 400, 200, 200);
+	await source.add(2, 1);
+
+	await output.finalize();
+
+	const blob = new Blob([output.target.buffer!], {
+		type: output.format.mimeType,
+	});
+	const url = URL.createObjectURL(blob);
+
+	const video = document.createElement('video');
+	video.src = url;
+	video.muted = true;
+	void video.play();
+
+	await new Promise(resolve => video.addEventListener('loadeddata', resolve));
+
+	expect(video.videoWidth).toBe(1280);
+	expect(video.videoHeight).toBe(720);
+
+	const probeCanvas = new OffscreenCanvas(1280, 720);
+	const probeContext = probeCanvas.getContext('2d')!;
+
+	probeContext.drawImage(video, 0, 0);
+
+	let imageData = probeContext.getImageData(0, 0, probeCanvas.width, probeCanvas.height);
+	expect(imageData.data[3]).lessThanOrEqual(1); // Transparent (within error)
+
+	const index = (201 + 201 * probeCanvas.width) * 4;
+
+	// Red (within error)
+	expect(imageData.data[index + 0]).greaterThanOrEqual(253);
+	expect(imageData.data[index + 1]).lessThanOrEqual(1);
+	expect(imageData.data[index + 2]).lessThanOrEqual(1);
+
+	expect(imageData.data[index + 3]).greaterThanOrEqual(253); // Opaque (within error)
+
+	// Let's also check it's read correctly by Mediabunny
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = (await input.getPrimaryVideoTrack())!;
+	const sink = new VideoSampleSink(videoTrack);
+
+	const firstSample = (await sink.getSample(0))!;
+	expect(firstSample.format).toContain('A');
+
+	probeContext.clearRect(0, 0, probeCanvas.width, probeCanvas.height);
+	firstSample.draw(probeContext, 0, 0);
+
+	imageData = probeContext.getImageData(0, 0, probeCanvas.width, probeCanvas.height);
+	expect(imageData.data[3]).lessThanOrEqual(1); // Transparent (within error)
+});
+
+test('Can encode video with alternating transparency', async () => {
+	const output = new Output({
+		format: new WebMOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const canvas1 = new OffscreenCanvas(640, 480);
+	const context1 = canvas1.getContext('2d', { alpha: true })!;
+	context1.fillStyle = '#ff000080';
+	context1.fillRect(0, 0, canvas1.width, canvas1.height);
+
+	const canvas2 = new OffscreenCanvas(640, 480);
+	const context2 = canvas2.getContext('2d', { alpha: false })!;
+	context2.fillStyle = '#0000ff';
+	context2.fillRect(0, 0, canvas2.width, canvas2.height);
+
+	const source = new VideoSampleSource({
+		codec: 'vp9',
+		bitrate: QUALITY_HIGH,
+		alpha: 'keep',
+	});
+	output.addVideoTrack(source);
+
+	await output.start();
+
+	for (let i = 0; i < 64; i++) {
+		const sample = new VideoSample(i % 2 ? canvas2 : canvas1, { timestamp: i, duration: 1 });
+		await source.add(sample);
+	}
+
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = (await input.getPrimaryVideoTrack())!;
+	const packetSink = new EncodedPacketSink(videoTrack);
+
+	let i = 0;
+	for await (const packet of packetSink.packets()) {
+		if (i % 2) {
+			expect(packet.sideData.alpha).toBeUndefined();
+		} else {
+			expect(packet.sideData.alpha).toBeDefined();
+		}
+
+		i++;
+	}
+
+	const sampleSink = new VideoSampleSink(videoTrack);
+
+	i = 0;
+	for await (const sample of sampleSink.samples()) {
+		if (i % 2) {
+			expect(sample.format).not.toContain('A');
+		} else {
+			expect(sample.format).toContain('A');
+		}
+
+		i++;
+	}
+});
+
+test('Can encode transparent video with odd dimensions', async () => {
+	const output = new Output({
+		format: new WebMOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const canvas = new OffscreenCanvas(641, 479);
+	const context = canvas.getContext('2d', { alpha: true })!;
+	context.fillStyle = '#ff000080';
+	context.fillRect(0, 0, canvas.width, canvas.height);
+
+	const source = new CanvasSource(canvas, {
+		codec: 'vp9',
+		bitrate: QUALITY_HIGH,
+		alpha: 'keep',
+	});
+	output.addVideoTrack(source);
+
+	await output.start();
+	await source.add(0, 1);
+	await output.finalize();
+});
+
+test('Positive encodability check with alpha', async () => {
+	const result = await canEncodeVideo('vp9', { alpha: 'keep' });
+	expect(result).toBe(true);
 });

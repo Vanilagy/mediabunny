@@ -34,8 +34,8 @@
 	}
 
 	const canvas = document.createElement('canvas');
-	canvas.width = 1280;
-	canvas.height = 720;
+	canvas.width = 640;
+	canvas.height = 480;
 	const context = canvas.getContext('2d');
 
 	let format = new Mediabunny.MkvOutputFormat({ streamable: false });
@@ -47,6 +47,7 @@
 	format = new Mediabunny.MkvOutputFormat();
 	format = new Mediabunny.MovOutputFormat();
 	format = new Mediabunny.Mp4OutputFormat({ fastStart: 'reserve' });
+	format = new Mediabunny.MkvOutputFormat();
 	let target = new Mediabunny.BufferTarget();
 
 	/*
@@ -120,6 +121,7 @@
 		codec: 'vp9',
 		//fullCodecString: 'avc1.42001f',
 		bitrate: 1e6,
+		alpha: 'keep',
 		onEncoderConfig: console.log,
 	});
 	let audioSource = new Mediabunny.AudioBufferSource({
@@ -209,5 +211,5 @@ Testing... <00:17.350>One... <00:18.125>Two...
 	await output.finalize();
 
 	console.log(target);
-	//download(new Blob([target.buffer]), 'test' + format.fileExtension);
+	download(new Blob([target.buffer]), 'test' + format.fileExtension);
 </script>

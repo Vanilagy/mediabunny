@@ -106,6 +106,10 @@ export class EncodedPacket {
 
 		this.byteLength = byteLength;
 		this.sideData = sideData ?? {};
+
+		if (this.sideData.alpha && this.sideData.alphaByteLength === undefined) {
+			this.sideData.alphaByteLength = this.sideData.alpha.byteLength;
+		}
 	}
 
 	/** If this packet is a metadata-only packet. Metadata-only packets don't contain their packet data. */
@@ -180,7 +184,10 @@ export class EncodedPacket {
 	 * Creates an EncodedPacket from an EncodedVideoChunk or EncodedAudioChunk. This method is useful for converting
 	 * chunks from the WebCodecs API to EncodedPackets.
 	 */
-	static fromEncodedChunk(chunk: EncodedVideoChunk | EncodedAudioChunk): EncodedPacket {
+	static fromEncodedChunk(
+		chunk: EncodedVideoChunk | EncodedAudioChunk,
+		sideData?: EncodedPacketSideData,
+	): EncodedPacket {
 		if (!(chunk instanceof EncodedVideoChunk || chunk instanceof EncodedAudioChunk)) {
 			throw new TypeError('chunk must be an EncodedVideoChunk or EncodedAudioChunk.');
 		}
@@ -193,6 +200,9 @@ export class EncodedPacket {
 			chunk.type as PacketType,
 			chunk.timestamp / 1e6,
 			(chunk.duration ?? 0) / 1e6,
+			undefined,
+			undefined,
+			sideData,
 		);
 	}
 

@@ -4,5 +4,6 @@ node_modules
 .DS_Store
 /docs/.vitepress/cache
 /docs/api
+*.tsbuildinfo
 
 packages/mp3-encoder/dist

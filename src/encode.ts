@@ -107,6 +107,7 @@ export const validateVideoEncodingConfig = (config: VideoEncodingConfig) => {
  * @public
  */
 export type VideoEncodingAdditionalOptions = {
+	alpha?: 'discard' | 'keep';
 	/** Configures the bitrate mode. */
 	bitrateMode?: 'constant' | 'variable';
 	/** The latency mode used by the encoder; controls the performance-quality tradeoff. */
@@ -135,6 +136,9 @@ export type VideoEncodingAdditionalOptions = {
 export const validateVideoEncodingAdditionalOptions = (codec: VideoCodec, options: VideoEncodingAdditionalOptions) => {
 	if (!options || typeof options !== 'object') {
 		throw new TypeError('Encoding options must be an object.');
+	}
+	if (options.alpha !== undefined && !['discard', 'keep'].includes(options.alpha)) {
+		throw new TypeError('options.alpha, when provided, must be \'discard\' or \'keep\'.');
 	}
 	if (options.bitrateMode !== undefined && !['constant', 'variable'].includes(options.bitrateMode)) {
 		throw new TypeError('bitrateMode, when provided, must be \'constant\' or \'variable\'.');
@@ -189,7 +193,8 @@ export const buildVideoEncoderConfig = (options: {
 		height: options.height,
 		bitrate: resolvedBitrate,
 		bitrateMode: options.bitrateMode,
-		framerate: options.framerate, // this.source._connectedTrack?.metadata.frameRate,
+		alpha: options.alpha ?? 'discard',
+		framerate: options.framerate,
 		latencyMode: options.latencyMode,
 		hardwareAcceleration: options.hardwareAcceleration,
 		scalabilityMode: options.scalabilityMode,
@@ -506,6 +511,7 @@ export const canEncodeVideo = async (
 		bitrate,
 		framerate: undefined,
 		...restOptions,
+		alpha: 'discard', // Since we handle alpha ourselves
 	});
 
 	const support = await VideoEncoder.isConfigSupported(encoderConfig);

@@ -370,7 +370,7 @@ abstract class DecoderWrapper<
 > {
 	constructor(
 		public onSample: (sample: MediaSample) => unknown,
-		public onError: (error: DOMException) => unknown,
+		public onError: (error: Error) => unknown,
 	) {}
 
 	abstract getDecodeQueueSize(): number;
@@ -393,7 +393,7 @@ export abstract class BaseMediaSampleSink<
 	/** @internal */
 	abstract _createDecoder(
 		onSample: (sample: MediaSample) => unknown,
-		onError: (error: DOMException) => unknown
+		onError: (error: Error) => unknown
 	): Promise<DecoderWrapper<MediaSample>>;
 	/** @internal */
 	abstract _createPacketSink(): EncodedPacketSink;
@@ -822,12 +822,16 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	colorQueue: VideoFrame[] = [];
 	alphaQueue: (VideoFrame | null)[] = [];
 	merger: ColorAlphaMerger | null = null;
+	decodedAlphaChunkCount = 0;
+	alphaDecoderQueueSize = 0;
+	/** Each value is the number of decoded alpha chunks at which a null alpha frame should be added. */
+	nullAlphaFrameQueue: number[] = [];
 	currentAlphaPacketIndex = 0;
 	alphaRaslSkipped = false; // For HEVC stuff
 
 	constructor(
 		onSample: (sample: VideoSample) => unknown,
-		onError: (error: DOMException) => unknown,
+		onError: (error: Error) => unknown,
 		public codec: VideoCodec,
 		public decoderConfig: VideoDecoderConfig,
 		public rotation: Rotation,
@@ -867,7 +871,13 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			};
 
 			this.decoder = new VideoDecoder({
-				output: frame => colorHandler(frame),
+				output: (frame) => {
+					try {
+						colorHandler(frame);
+					} catch (error) {
+						this.onError(error as Error);
+					}
+				},
 				error: onError,
 			});
 			this.decoder.configure(decoderConfig);
@@ -918,13 +928,15 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	decodeAlphaData(packet: EncodedPacket) {
 		if (!packet.sideData.alpha) {
 			// No alpha side data in the packet, most common case
-			this.alphaQueue.push(null);
+			this.pushNullAlphaFrame();
 			return;
 		}
 
 		// Check if we need to set up the alpha decoder
 		if (!this.alphaDecoder) {
 			const alphaHandler = (frame: VideoFrame) => {
+				this.alphaDecoderQueueSize--;
+
 				if (this.colorQueue.length > 0) {
 					const colorFrame = this.colorQueue.shift();
 					assert(colorFrame !== undefined);
@@ -933,10 +945,34 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 				} else {
 					this.alphaQueue.push(frame);
 				}
+
+				// Check if any null frames have been queued for this point
+				this.decodedAlphaChunkCount++;
+				while (
+					this.nullAlphaFrameQueue.length > 0
+					&& this.nullAlphaFrameQueue[0] === this.decodedAlphaChunkCount
+				) {
+					this.nullAlphaFrameQueue.shift();
+
+					if (this.colorQueue.length > 0) {
+						const colorFrame = this.colorQueue.shift();
+						assert(colorFrame !== undefined);
+
+						this.mergeAlpha(colorFrame, null);
+					} else {
+						this.alphaQueue.push(null);
+					}
+				}
 			};
 
 			this.alphaDecoder = new VideoDecoder({
-				output: frame => alphaHandler(frame),
+				output: (frame) => {
+					try {
+						alphaHandler(frame);
+					} catch (error) {
+						this.onError(error as Error);
+					}
+				},
 				error: this.onError,
 			});
 			this.alphaDecoder.configure(this.decoderConfig);
@@ -951,11 +987,11 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 		}
 
 		if (this.alphaHadKeyframe) {
-			// Same RASL skipping logic as for color, unlikely to be hit (since who uses HEVC with alpha??) but here
-			// for symmetry.
+			// Same RASL skipping logic as for color, unlikely to be hit (since who uses HEVC with separate alpha??) but
+			// here for symmetry.
 			if (this.codec === 'hevc' && this.currentAlphaPacketIndex > 0 && !this.alphaRaslSkipped) {
 				if (this.hasHevcRaslPicture(packet.sideData.alpha)) {
-					this.alphaQueue.push(null);
+					this.pushNullAlphaFrame();
 					return;
 				}
 
@@ -964,8 +1000,21 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 
 			this.currentAlphaPacketIndex++;
 			this.alphaDecoder.decode(packet.alphaToEncodedVideoChunk(type ?? packet.type));
+			this.alphaDecoderQueueSize++;
 		} else {
+			this.pushNullAlphaFrame();
+		}
+	}
+
+	pushNullAlphaFrame() {
+		if (this.alphaDecoderQueueSize === 0) {
+			// Easy
 			this.alphaQueue.push(null);
+		} else {
+			// There are still alpha chunks being decoded, so pushing `null` immediately would result in out-of-order
+			// data and be incorrect. Instead, we need to enqueue a "null frame" for when the current decoder workload
+			// has finished.
+			this.nullAlphaFrameQueue.push(this.decodedAlphaChunkCount + this.alphaDecoderQueueSize);
 		}
 	}
 
@@ -1260,7 +1309,7 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 	/** @internal */
 	async _createDecoder(
 		onSample: (sample: VideoSample) => unknown,
-		onError: (error: DOMException) => unknown,
+		onError: (error: Error) => unknown,
 	) {
 		if (!(await this._track.canDecode())) {
 			throw new Error(
@@ -1610,7 +1659,7 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 
 	constructor(
 		onSample: (sample: AudioSample) => unknown,
-		onError: (error: DOMException) => unknown,
+		onError: (error: Error) => unknown,
 		codec: AudioCodec,
 		decoderConfig: AudioDecoderConfig,
 	) {
@@ -1662,7 +1711,13 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 			void this.customDecoderCallSerializer.call(() => this.customDecoder!.init());
 		} else {
 			this.decoder = new AudioDecoder({
-				output: data => sampleHandler(new AudioSample(data)),
+				output: (data) => {
+					try {
+						sampleHandler(new AudioSample(data));
+					} catch (error) {
+						this.onError(error as Error);
+					}
+				},
 				error: onError,
 			});
 			this.decoder.configure(decoderConfig);
@@ -1727,7 +1782,7 @@ class PcmAudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 
 	constructor(
 		onSample: (sample: AudioSample) => unknown,
-		onError: (error: DOMException) => unknown,
+		onError: (error: Error) => unknown,
 		public decoderConfig: AudioDecoderConfig,
 	) {
 		super(onSample, onError);
@@ -1917,7 +1972,7 @@ export class AudioSampleSink extends BaseMediaSampleSink<AudioSample> {
 	/** @internal */
 	async _createDecoder(
 		onSample: (sample: AudioSample) => unknown,
-		onError: (error: DOMException) => unknown,
+		onError: (error: Error) => unknown,
 	) {
 		if (!(await this._track.canDecode())) {
 			throw new Error(
