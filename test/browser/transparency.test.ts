@@ -187,6 +187,7 @@ test.only('Can encode video with alternating transparency', async () => {
 
 	for (let i = 0; i < 64; i++) {
 		const sample = new VideoSample(i % 2 ? canvas2 : canvas1, { timestamp: i, duration: 1 });
+		console.log(i, sample.format);
 		await source.add(sample);
 	}
 
