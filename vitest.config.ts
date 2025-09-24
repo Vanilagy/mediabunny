@@ -1,3 +1,5 @@
+/// <reference types="@vitest/browser/providers/webdriverio" />
+
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
