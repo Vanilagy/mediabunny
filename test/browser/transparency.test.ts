@@ -131,7 +131,8 @@ test('Can encode transparent video', async () => {
 	let imageData = probeContext.getImageData(0, 0, probeCanvas.width, probeCanvas.height);
 	expect(imageData.data[3]).lessThanOrEqual(2); // Transparent (within error)
 
-	const index = (201 + 201 * probeCanvas.width) * 4;
+	const pos = { x: 300, y: 300 };
+	const index = (pos.x + pos.y * probeCanvas.width) * 4;
 
 	// Red (within error)
 	expect(imageData.data[index + 0]).greaterThanOrEqual(253);
