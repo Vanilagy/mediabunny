@@ -2966,6 +2966,10 @@ class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideo
 		};
 	}
 
+	async canBeTransparent() {
+		return false;
+	}
+
 	async getDecoderConfig(): Promise<VideoDecoderConfig | null> {
 		if (!this.internalTrack.info.codec) {
 			return null;

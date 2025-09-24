@@ -2376,6 +2376,10 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 		};
 	}
 
+	async canBeTransparent() {
+		return this.internalTrack.info.alphaMode;
+	}
+
 	async getDecoderConfig(): Promise<VideoDecoderConfig | null> {
 		if (!this.internalTrack.info.codec) {
 			return null;

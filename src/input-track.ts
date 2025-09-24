@@ -192,6 +192,7 @@ export interface InputVideoTrackBacking extends InputTrackBacking {
 	getCodedHeight(): number;
 	getRotation(): Rotation;
 	getColorSpace(): Promise<VideoColorSpaceInit>;
+	canBeTransparent(): Promise<boolean>;
 	getDecoderConfig(): Promise<VideoDecoderConfig | null>;
 }
 
@@ -258,6 +259,11 @@ export class InputVideoTrack extends InputTrack {
 		return (colorSpace.primaries as string) === 'bt2020' || (colorSpace.primaries as string) === 'smpte432'
 			|| (colorSpace.transfer as string) === 'pg' || (colorSpace.transfer as string) === 'hlg'
 			|| (colorSpace.matrix as string) === 'bt2020-ncl';
+	}
+
+	/** Checks if this track may contain transparent samples with alpha data. */
+	canBeTransparent() {
+		return this._backing.canBeTransparent();
 	}
 
 	/**

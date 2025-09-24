@@ -17,6 +17,8 @@ test('Can decode transparent video', async () => {
 	});
 
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
+	expect(await videoTrack.canBeTransparent()).toBe(true);
+
 	const sink = new VideoSampleSink(videoTrack);
 	const sample = (await sink.getSample(0.5))!;
 
@@ -122,7 +124,7 @@ test('Can encode transparent video', async () => {
 
 	await new Promise(resolve => video.addEventListener('loadeddata', resolve));
 
-	// Let the video play for a little bit
+	// Let the video play for a little bit to prevent flake
 	while (video.currentTime < 0.1) {
 		await new Promise(resolve => setTimeout(resolve, 0));
 	}
@@ -155,6 +157,8 @@ test('Can encode transparent video', async () => {
 	});
 
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
+	expect(await videoTrack.canBeTransparent()).toBe(true);
+
 	const sink = new VideoSampleSink(videoTrack);
 
 	const firstSample = (await sink.getSample(0))!;
