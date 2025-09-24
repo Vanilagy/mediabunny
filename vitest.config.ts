@@ -20,7 +20,7 @@ export default defineConfig({
 						enabled: true,
 						provider: 'webdriverio',
 						instances: [{ browser: 'chrome' }],
-						headless: false, // A bunch of features need the head
+						headless: true, // A bunch of features need the head
 						screenshotFailures: false,
 					},
 				},
