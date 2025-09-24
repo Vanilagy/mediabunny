@@ -21,7 +21,7 @@ export default defineConfig({
 						provider: 'webdriverio',
 						instances: [{
 							browser: 'chrome',
-							xvfbAutoInstall: true,
+							// xvfbAutoInstall: true,
 						}],
 						headless: false, // A bunch of features need the head
 						screenshotFailures: false,
