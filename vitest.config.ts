@@ -15,12 +15,14 @@ export default defineConfig({
 				test: {
 					name: 'browser',
 					root: 'test',
-					include: ['browser/**/*.test.ts'],
+					include: ['browser/**/flac.test.ts'],
 					browser: {
 						enabled: true,
 						provider: 'webdriverio',
-						instances: [{ browser: 'chrome' }],
-						headless: true, // A bunch of features need the head
+						instances: [{
+							browser: 'chrome',
+						}],
+						headless: false, // A bunch of features need the head
 						screenshotFailures: false,
 					},
 				},

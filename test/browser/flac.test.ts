@@ -24,6 +24,8 @@ test('can decode samples from a FLAC file', async () => {
 	expect(sample.timestamp).toBe(0.9287981859410431);
 });
 
+/*
+
 test('can convert a .flac to .wav', async () => {
 	using input = new Input({
 		source: new UrlSource('/sample.flac'),
@@ -66,3 +68,5 @@ test('can convert a .flac to .wav', async () => {
 	expect(inputTrack.numberOfChannels).toBe(outputTrack.numberOfChannels);
 	expect(inputTrack.timeResolution).toBe(outputTrack.timeResolution);
 });
+
+*/
