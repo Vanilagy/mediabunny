@@ -149,12 +149,18 @@ const initMediaPlayer = async (resource: File | string) => {
 		gainNode.connect(audioContext.destination);
 		updateVolume();
 
+		const videoCanBeTransparent = videoTrack
+			? await videoTrack.canBeTransparent()
+			: false;
+
+		playerContainer.style.background = videoCanBeTransparent ? 'transparent' : '';
+
 		// For video, let's use a CanvasSink as it handles rotation and closing video samples for us.
 		// Pool size of 2: We'll only ever have the current and the next frame around, so we only need two canvases.
 		videoSink = videoTrack && new CanvasSink(videoTrack, {
-			alpha: true, // temp? probably can condition this no?
 			poolSize: 2,
 			fit: 'contain', // In case the video changes dimensions over time
+			alpha: videoCanBeTransparent,
 		});
 		// For audio, we'll use an AudioBufferSink to directly retrieve AudioBuffers compatible with the Web Audio API
 		audioSink = audioTrack && new AudioBufferSink(audioTrack);

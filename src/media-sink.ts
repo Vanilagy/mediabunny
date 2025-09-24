@@ -1,10 +1,10 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
- *
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at https://mozilla.org/MPL/2.0/.
- */
+* Copyright (c) 2025-present, Vanilagy and contributors
+*
+* This Source Code Form is subject to the terms of the Mozilla Public
+* License, v. 2.0. If a copy of the MPL was not distributed with this
+* file, You can obtain one at https://mozilla.org/MPL/2.0/.
+*/
 
 import { parsePcmCodec, PCM_AUDIO_CODECS, PcmAudioCodec, VideoCodec, AudioCodec } from './codec';
 import {
@@ -1129,6 +1129,10 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			this.alphaQueue.length = 0;
 
 			this.alphaHadKeyframe = false;
+			this.decodedAlphaChunkCount = 0;
+			this.alphaDecoderQueueSize = 0;
+			this.nullAlphaFrameQueue.length = 0;
+			this.currentAlphaPacketIndex = 0;
 			this.alphaRaslSkipped = false;
 		}
 
@@ -1205,30 +1209,30 @@ class ColorAlphaMerger {
 
 	private createProgram(): WebGLProgram {
 		const vertexShader = this.createShader(this.gl.VERTEX_SHADER, `#version 300 es
-            in vec2 a_position;
-            in vec2 a_texCoord;
-            out vec2 v_texCoord;
-            
-            void main() {
-                gl_Position = vec4(a_position, 0.0, 1.0);
-                v_texCoord = a_texCoord;
-            }
-        `);
+			in vec2 a_position;
+			in vec2 a_texCoord;
+			out vec2 v_texCoord;
+			
+			void main() {
+				gl_Position = vec4(a_position, 0.0, 1.0);
+				v_texCoord = a_texCoord;
+			}
+		`);
 
 		const fragmentShader = this.createShader(this.gl.FRAGMENT_SHADER, `#version 300 es
-            precision highp float;
-            
-            uniform sampler2D u_colorTexture;
-            uniform sampler2D u_alphaTexture;
-            in vec2 v_texCoord;
-            out vec4 fragColor;
-            
-            void main() {
-                vec3 color = texture(u_colorTexture, v_texCoord).rgb;
-                float alpha = texture(u_alphaTexture, v_texCoord).r;
-                fragColor = vec4(color, alpha);
-            }
-        `);
+			precision highp float;
+			
+			uniform sampler2D u_colorTexture;
+			uniform sampler2D u_alphaTexture;
+			in vec2 v_texCoord;
+			out vec4 fragColor;
+			
+			void main() {
+				vec3 color = texture(u_colorTexture, v_texCoord).rgb;
+				float alpha = texture(u_alphaTexture, v_texCoord).r;
+				fragColor = vec4(color, alpha);
+			}
+		`);
 
 		const program = this.gl.createProgram();
 		this.gl.attachShader(program, vertexShader);
