@@ -78,7 +78,7 @@ test('Can extract transparent frames via CanvasSink', async () => {
 	expect(imageData.data[3]).toBe(255);
 });
 
-test('Can encode transparent video', async () => {
+test.only('Can encode transparent video', async () => {
 	const output = new Output({
 		format: new WebMOutputFormat(),
 		target: new BufferTarget(),
@@ -121,6 +121,11 @@ test('Can encode transparent video', async () => {
 	void video.play();
 
 	await new Promise(resolve => video.addEventListener('loadeddata', resolve));
+
+	// Let the video play for a little bit
+	while (video.currentTime < 0.1) {
+		await new Promise(resolve => setTimeout(resolve, 0));
+	}
 
 	expect(video.videoWidth).toBe(1280);
 	expect(video.videoHeight).toBe(720);
