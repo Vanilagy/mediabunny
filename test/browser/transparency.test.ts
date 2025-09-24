@@ -131,7 +131,7 @@ test('Can encode transparent video', async () => {
 	let imageData = probeContext.getImageData(0, 0, probeCanvas.width, probeCanvas.height);
 	expect(imageData.data[3]).lessThanOrEqual(2); // Transparent (within error)
 
-	const pos = { x: 300, y: 300 };
+	const pos = { x: 300, y: 300 }; // Dead center in the red square
 	const index = (pos.x + pos.y * probeCanvas.width) * 4;
 
 	// Red (within error)
@@ -160,7 +160,7 @@ test('Can encode transparent video', async () => {
 	expect(imageData.data[3]).lessThanOrEqual(2); // Transparent (within error)
 });
 
-test('Can encode video with alternating transparency', async () => {
+test.only('Can encode video with alternating transparency', async () => {
 	const output = new Output({
 		format: new WebMOutputFormat(),
 		target: new BufferTarget(),
@@ -202,6 +202,8 @@ test('Can encode video with alternating transparency', async () => {
 
 	let i = 0;
 	for await (const packet of packetSink.packets()) {
+		console.log(i, !!packet.sideData.alpha);
+
 		if (i % 2) {
 			expect(packet.sideData.alpha).toBeUndefined();
 		} else {
