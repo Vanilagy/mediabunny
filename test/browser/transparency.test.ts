@@ -160,7 +160,7 @@ test('Can encode transparent video', async () => {
 	expect(imageData.data[3]).lessThanOrEqual(2); // Transparent (within error)
 });
 
-test.only('Can encode video with alternating transparency', async () => {
+test('Can encode video with alternating transparency', async () => {
 	const output = new Output({
 		format: new WebMOutputFormat(),
 		target: new BufferTarget(),
