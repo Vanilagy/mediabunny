@@ -598,9 +598,7 @@ fullscreenButton.addEventListener('click', () => {
 
 // I'm sorry for this
 const isTouchDevice = () => {
-	return (('ontouchstart' in window)
-		|| (navigator.maxTouchPoints > 0)
-		|| ('msMaxTouchPoints' in navigator && (navigator.msMaxTouchPoints as number) > 0));
+	return 'ontouchstart' in window;
 };
 
 playerContainer.addEventListener('click', () => {
