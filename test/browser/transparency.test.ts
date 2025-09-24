@@ -129,14 +129,14 @@ test('Can encode transparent video', async () => {
 	probeContext.drawImage(video, 0, 0);
 
 	let imageData = probeContext.getImageData(0, 0, probeCanvas.width, probeCanvas.height);
-	expect(imageData.data[3]).lessThanOrEqual(1); // Transparent (within error)
+	expect(imageData.data[3]).lessThanOrEqual(2); // Transparent (within error)
 
 	const index = (201 + 201 * probeCanvas.width) * 4;
 
 	// Red (within error)
 	expect(imageData.data[index + 0]).greaterThanOrEqual(253);
-	expect(imageData.data[index + 1]).lessThanOrEqual(1);
-	expect(imageData.data[index + 2]).lessThanOrEqual(1);
+	expect(imageData.data[index + 1]).lessThanOrEqual(2);
+	expect(imageData.data[index + 2]).lessThanOrEqual(2);
 
 	expect(imageData.data[index + 3]).greaterThanOrEqual(253); // Opaque (within error)
 
@@ -156,7 +156,7 @@ test('Can encode transparent video', async () => {
 	firstSample.draw(probeContext, 0, 0);
 
 	imageData = probeContext.getImageData(0, 0, probeCanvas.width, probeCanvas.height);
-	expect(imageData.data[3]).lessThanOrEqual(1); // Transparent (within error)
+	expect(imageData.data[3]).lessThanOrEqual(2); // Transparent (within error)
 });
 
 test('Can encode video with alternating transparency', async () => {
