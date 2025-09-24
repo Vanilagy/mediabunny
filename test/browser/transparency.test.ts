@@ -204,14 +204,18 @@ test.only('Can encode video with alternating transparency', async () => {
 	for await (const packet of packetSink.packets()) {
 		console.log(i, !!packet.sideData.alpha);
 
+		/*
 		if (i % 2) {
 			expect(packet.sideData.alpha).toBeUndefined();
 		} else {
 			expect(packet.sideData.alpha).toBeDefined();
 		}
+		*/
 
 		i++;
 	}
+
+	throw new Error('Bruh moment');
 
 	const sampleSink = new VideoSampleSink(videoTrack);
 
