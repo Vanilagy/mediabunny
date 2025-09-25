@@ -521,7 +521,18 @@ export class Conversion {
 		const unintentionallyDiscardedTracks = this.discardedTracks.filter(x => x.reason !== 'discarded_by_user');
 		if (unintentionallyDiscardedTracks.length > 0) {
 			// Let's give the user a notice/warning about discarded tracks so they aren't confused
-			console.warn('Some tracks had to be discarded from the conversion:', unintentionallyDiscardedTracks);
+			const mp3EncoderIssue = unintentionallyDiscardedTracks.some(t =>
+				t.reason === 'no_encodable_target_codec'
+				&& t.track.type === 'audio'
+				&& this.output.format.getSupportedAudioCodecs().includes('mp3'),
+			);
+
+			const message = mp3EncoderIssue
+				? `Some tracks had to be discarded from the conversion. If you're trying to encode MP3, 
+				consider installing @mediabunny/mp3-encoder (https://mediabunny.dev/guide/extensions/mp3-encoder):`
+				: 'Some tracks had to be discarded from the conversion:';
+
+			console.warn(message, unintentionallyDiscardedTracks);
 		}
 
 		// Now, let's deal with metadata tags
