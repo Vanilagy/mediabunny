@@ -34,8 +34,8 @@
 	}
 
 	const canvas = document.createElement('canvas');
-	canvas.width = 1280;
-	canvas.height = 720;
+	canvas.width = 640;
+	canvas.height = 480;
 	const context = canvas.getContext('2d');
 
 	let format = new Mediabunny.MkvOutputFormat({ streamable: false });
@@ -47,6 +47,7 @@
 	format = new Mediabunny.MkvOutputFormat();
 	format = new Mediabunny.MovOutputFormat();
 	format = new Mediabunny.Mp4OutputFormat({ fastStart: 'reserve' });
+	format = new Mediabunny.WebMOutputFormat();
 	let target = new Mediabunny.BufferTarget();
 
 	/*
@@ -120,6 +121,7 @@
 		codec: 'vp9',
 		//fullCodecString: 'avc1.42001f',
 		bitrate: 1e6,
+		alpha: 'keep',
 		onEncoderConfig: console.log,
 	});
 	let audioSource = new Mediabunny.AudioBufferSource({
@@ -191,12 +193,17 @@ Testing... <00:17.350>One... <00:18.125>Two...
 
 	//subtitleSource.add(simpleWebvttFile);
 	//subtitleSource.close();
+	
+	const p = document.createElement('p');
+	document.body.append(p);
 
 	for (let i = 0; i < 100; i++) {
 		context.fillStyle = ['red', 'green', 'blue', 'yellow'][i % 4];
 		context.fillRect(canvas.width * Math.random(), canvas.height * Math.random(), canvas.width * Math.random(), canvas.height * Math.random());
 
 		await videoSource.add(i / 10, 1 / 10);
+
+		p.textContent = i;
 	}
 
 	let audioContext = new AudioContext();

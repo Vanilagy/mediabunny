@@ -155,7 +155,7 @@ export const writeBits = (bytes: Uint8Array, start: number, end: number, value: 
 };
 
 export const toUint8Array = (source: AllowSharedBufferSource): Uint8Array => {
-	if (source instanceof Uint8Array) {
+	if (source.constructor === Uint8Array) { // We want a true Uint8Array, not something that extends it like Buffer
 		return source;
 	} else if (source instanceof ArrayBuffer) {
 		return new Uint8Array(source);
@@ -165,7 +165,7 @@ export const toUint8Array = (source: AllowSharedBufferSource): Uint8Array => {
 };
 
 export const toDataView = (source: AllowSharedBufferSource) => {
-	if (source instanceof DataView) {
+	if (source.constructor === DataView) {
 		return source;
 	} else if (source instanceof ArrayBuffer) {
 		return new DataView(source);
@@ -779,4 +779,10 @@ export const uint8ArraysAreEqual = (a: Uint8Array, b: Uint8Array) => {
 	}
 
 	return true;
+};
+
+export const polyfillSymbolDispose = () => {
+	// https://www.typescriptlang.org/docs/handbook/release-notes/typescript-5-2.html
+	// @ts-expect-error Readonly
+	Symbol.dispose ??= Symbol('Symbol.dispose');
 };

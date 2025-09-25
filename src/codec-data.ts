@@ -6,8 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { VP9_LEVEL_TABLE } from './codec';
-import { InputVideoTrack } from './input-track';
+import { VideoCodec, VP9_LEVEL_TABLE } from './codec';
 import {
 	assert,
 	assertNever,
@@ -24,7 +23,7 @@ import {
 	toDataView,
 	toUint8Array,
 } from './misc';
-import { EncodedPacket, PacketType } from './packet';
+import { PacketType } from './packet';
 import { MetadataTags } from './tags';
 
 // References for AVC/HEVC code:
@@ -1479,28 +1478,21 @@ export const parseModesFromVorbisSetupPacket = (setupHeader: Uint8Array) => {
 };
 
 /** Determines a packet's type (key or delta) by digging into the packet bitstream. */
-export const determineVideoPacketType = async (
-	videoTrack: InputVideoTrack,
-	packet: EncodedPacket,
-): Promise<PacketType | null> => {
-	assert(videoTrack.codec);
-
-	switch (videoTrack.codec) {
+export const determineVideoPacketType = (
+	codec: VideoCodec,
+	decoderConfig: VideoDecoderConfig,
+	packetData: Uint8Array,
+): PacketType | null => {
+	switch (codec) {
 		case 'avc': {
-			const decoderConfig = await videoTrack.getDecoderConfig();
-			assert(decoderConfig);
-
-			const nalUnits = extractAvcNalUnits(packet.data, decoderConfig);
+			const nalUnits = extractAvcNalUnits(packetData, decoderConfig);
 			const isKeyframe = nalUnits.some(x => extractNalUnitTypeForAvc(x) === AvcNalUnitType.IDR);
 
 			return isKeyframe ? 'key' : 'delta';
 		};
 
 		case 'hevc': {
-			const decoderConfig = await videoTrack.getDecoderConfig();
-			assert(decoderConfig);
-
-			const nalUnits = extractHevcNalUnits(packet.data, decoderConfig);
+			const nalUnits = extractHevcNalUnits(packetData, decoderConfig);
 			const isKeyframe = nalUnits.some((x) => {
 				const type = extractNalUnitTypeForHevc(x);
 				return HevcNalUnitType.BLA_W_LP <= type && type <= HevcNalUnitType.RSV_IRAP_VCL23;
@@ -1511,12 +1503,12 @@ export const determineVideoPacketType = async (
 
 		case 'vp8': {
 			// VP8, once again, by far the easiest to deal with.
-			const frameType = packet.data[0]! & 0b1;
+			const frameType = packetData[0]! & 0b1;
 			return frameType === 0 ? 'key' : 'delta';
 		};
 
 		case 'vp9': {
-			const bitstream = new Bitstream(packet.data);
+			const bitstream = new Bitstream(packetData);
 
 			if (bitstream.readBits(2) !== 2) {
 				return null;
@@ -1543,7 +1535,7 @@ export const determineVideoPacketType = async (
 		case 'av1': {
 			let reducedStillPictureHeader = false;
 
-			for (const { type, data } of iterateAv1PacketObus(packet.data)) {
+			for (const { type, data } of iterateAv1PacketObus(packetData)) {
 				if (type === 1) { // OBU_SEQUENCE_HEADER
 					const bitstream = new Bitstream(data);
 
@@ -1573,7 +1565,7 @@ export const determineVideoPacketType = async (
 		};
 
 		default: {
-			assertNever(videoTrack.codec);
+			assertNever(codec);
 			assert(false);
 		};
 	}

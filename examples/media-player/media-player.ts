@@ -35,7 +35,7 @@ const fullscreenButton = document.querySelector('#fullscreen-button') as HTMLBut
 const errorElement = document.querySelector('#error-element') as HTMLDivElement;
 const warningElement = document.querySelector('#warning-element') as HTMLDivElement;
 
-const context = canvas.getContext('2d', { alpha: false, desynchronized: true })!;
+const context = canvas.getContext('2d')!;
 
 let audioContext: AudioContext | null = null;
 let gainNode: GainNode | null = null;
@@ -149,11 +149,18 @@ const initMediaPlayer = async (resource: File | string) => {
 		gainNode.connect(audioContext.destination);
 		updateVolume();
 
+		const videoCanBeTransparent = videoTrack
+			? await videoTrack.canBeTransparent()
+			: false;
+
+		playerContainer.style.background = videoCanBeTransparent ? 'transparent' : '';
+
 		// For video, let's use a CanvasSink as it handles rotation and closing video samples for us.
 		// Pool size of 2: We'll only ever have the current and the next frame around, so we only need two canvases.
 		videoSink = videoTrack && new CanvasSink(videoTrack, {
 			poolSize: 2,
 			fit: 'contain', // In case the video changes dimensions over time
+			alpha: videoCanBeTransparent,
 		});
 		// For audio, we'll use an AudioBufferSink to directly retrieve AudioBuffers compatible with the Web Audio API
 		audioSink = audioTrack && new AudioBufferSink(audioTrack);
@@ -226,6 +233,7 @@ const startVideoIterator = async () => {
 
 	if (firstFrame) {
 		// Draw the first frame
+		context.clearRect(0, 0, canvas.width, canvas.height);
 		context.drawImage(firstFrame.canvas, 0, 0);
 	}
 };
@@ -242,6 +250,7 @@ const render = (requestFrame = true) => {
 
 		// Check if the current playback time has caught up to the next frame
 		if (nextFrame && nextFrame.timestamp <= playbackTime) {
+			context.clearRect(0, 0, canvas.width, canvas.height);
 			context.drawImage(nextFrame.canvas, 0, 0);
 			nextFrame = null;
 
@@ -281,6 +290,7 @@ const updateNextFrame = async () => {
 		const playbackTime = getPlaybackTime();
 		if (newNextFrame.timestamp <= playbackTime) {
 			// Draw it immediately
+			context.clearRect(0, 0, canvas.width, canvas.height);
 			context.drawImage(newNextFrame.canvas, 0, 0);
 		} else {
 			// Save it for later
@@ -594,9 +604,7 @@ fullscreenButton.addEventListener('click', () => {
 
 // I'm sorry for this
 const isTouchDevice = () => {
-	return (('ontouchstart' in window)
-		|| (navigator.maxTouchPoints > 0)
-		|| ('msMaxTouchPoints' in navigator && (navigator.msMaxTouchPoints as number) > 0));
+	return 'ontouchstart' in window;
 };
 
 playerContainer.addEventListener('click', () => {

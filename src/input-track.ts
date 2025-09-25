@@ -192,6 +192,7 @@ export interface InputVideoTrackBacking extends InputTrackBacking {
 	getCodedHeight(): number;
 	getRotation(): Rotation;
 	getColorSpace(): Promise<VideoColorSpaceInit>;
+	canBeTransparent(): Promise<boolean>;
 	getDecoderConfig(): Promise<VideoDecoderConfig | null>;
 }
 
@@ -260,6 +261,11 @@ export class InputVideoTrack extends InputTrack {
 			|| (colorSpace.matrix as string) === 'bt2020-ncl';
 	}
 
+	/** Checks if this track may contain transparent samples with alpha data. */
+	canBeTransparent() {
+		return this._backing.canBeTransparent();
+	}
+
 	/**
 	 * Returns the [decoder configuration](https://www.w3.org/TR/webcodecs/#video-decoder-config) for decoding the
 	 * track's packets using a [`VideoDecoder`](https://developer.mozilla.org/en-US/docs/Web/API/VideoDecoder). Returns
@@ -312,7 +318,10 @@ export class InputVideoTrack extends InputTrack {
 			return null;
 		}
 
-		return determineVideoPacketType(this, packet);
+		const decoderConfig = await this.getDecoderConfig();
+		assert(decoderConfig);
+
+		return determineVideoPacketType(this.codec, decoderConfig, packet.data);
 	}
 }
 

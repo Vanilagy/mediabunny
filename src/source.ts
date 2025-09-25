@@ -764,6 +764,8 @@ export class StreamSource extends Source {
 			if (data instanceof Promise) data = await data;
 
 			if (data instanceof Uint8Array) {
+				data = toUint8Array(data); // Normalize things like Node.js Buffer to Uint8Array
+
 				if (data.length !== originalTargetPos - worker.currentPos) {
 					// Yes, we're that strict
 					throw new Error(
@@ -798,8 +800,10 @@ export class StreamSource extends Source {
 						throw new TypeError('ReadableStream returned by options.read must yield Uint8Array chunks.');
 					}
 
-					this.onread?.(worker.currentPos, worker.currentPos + value.length);
-					this._orchestrator.supplyWorkerData(worker, value);
+					const data = toUint8Array(value); // Normalize things like Node.js Buffer to Uint8Array
+
+					this.onread?.(worker.currentPos, worker.currentPos + data.length);
+					this._orchestrator.supplyWorkerData(worker, data);
 				}
 			} else {
 				throw new TypeError('options.read must return or resolve to a Uint8Array or a ReadableStream.');

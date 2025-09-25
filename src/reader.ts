@@ -149,16 +149,32 @@ export class FileSlice {
 	}
 }
 
+const checkIsInRange = (slice: FileSlice, bytesToRead: number) => {
+	if (slice.filePos < slice.start || slice.filePos + bytesToRead > slice.end) {
+		throw new RangeError(
+			`Tried reading [${slice.filePos}, ${slice.filePos + bytesToRead}), but slice is`
+			+ ` [${slice.start}, ${slice.end}).`,
+		);
+	}
+};
+
 export const readBytes = (slice: FileSlice, length: number) => {
+	checkIsInRange(slice, length);
+
 	const bytes = slice.bytes.subarray(slice.bufferPos, slice.bufferPos + length);
 	slice.bufferPos += length;
 
 	return bytes;
 };
 
-export const readU8 = (slice: FileSlice) => slice.view.getUint8(slice.bufferPos++);
+export const readU8 = (slice: FileSlice) => {
+	checkIsInRange(slice, 1);
+	return slice.view.getUint8(slice.bufferPos++);
+};
 
 export const readU16 = (slice: FileSlice, littleEndian: boolean) => {
+	checkIsInRange(slice, 2);
+
 	const value = slice.view.getUint16(slice.bufferPos, littleEndian);
 	slice.bufferPos += 2;
 
@@ -166,6 +182,8 @@ export const readU16 = (slice: FileSlice, littleEndian: boolean) => {
 };
 
 export const readU16Be = (slice: FileSlice) => {
+	checkIsInRange(slice, 2);
+
 	const value = slice.view.getUint16(slice.bufferPos, false);
 	slice.bufferPos += 2;
 
@@ -173,6 +191,8 @@ export const readU16Be = (slice: FileSlice) => {
 };
 
 export const readU24Be = (slice: FileSlice) => {
+	checkIsInRange(slice, 3);
+
 	const value = getUint24(slice.view, slice.bufferPos, false);
 	slice.bufferPos += 3;
 
@@ -180,6 +200,8 @@ export const readU24Be = (slice: FileSlice) => {
 };
 
 export const readI16Be = (slice: FileSlice) => {
+	checkIsInRange(slice, 2);
+
 	const value = slice.view.getInt16(slice.bufferPos, false);
 	slice.bufferPos += 2;
 
@@ -187,6 +209,8 @@ export const readI16Be = (slice: FileSlice) => {
 };
 
 export const readU32 = (slice: FileSlice, littleEndian: boolean) => {
+	checkIsInRange(slice, 4);
+
 	const value = slice.view.getUint32(slice.bufferPos, littleEndian);
 	slice.bufferPos += 4;
 
@@ -194,6 +218,8 @@ export const readU32 = (slice: FileSlice, littleEndian: boolean) => {
 };
 
 export const readU32Be = (slice: FileSlice) => {
+	checkIsInRange(slice, 4);
+
 	const value = slice.view.getUint32(slice.bufferPos, false);
 	slice.bufferPos += 4;
 
@@ -201,6 +227,8 @@ export const readU32Be = (slice: FileSlice) => {
 };
 
 export const readU32Le = (slice: FileSlice) => {
+	checkIsInRange(slice, 4);
+
 	const value = slice.view.getUint32(slice.bufferPos, true);
 	slice.bufferPos += 4;
 
@@ -208,6 +236,8 @@ export const readU32Le = (slice: FileSlice) => {
 };
 
 export const readI32Be = (slice: FileSlice) => {
+	checkIsInRange(slice, 4);
+
 	const value = slice.view.getInt32(slice.bufferPos, false);
 	slice.bufferPos += 4;
 
@@ -215,6 +245,8 @@ export const readI32Be = (slice: FileSlice) => {
 };
 
 export const readI32Le = (slice: FileSlice) => {
+	checkIsInRange(slice, 4);
+
 	const value = slice.view.getInt32(slice.bufferPos, true);
 	slice.bufferPos += 4;
 
@@ -255,6 +287,8 @@ export const readI64Le = (slice: FileSlice) => {
 };
 
 export const readF32Be = (slice: FileSlice) => {
+	checkIsInRange(slice, 4);
+
 	const value = slice.view.getFloat32(slice.bufferPos, false);
 	slice.bufferPos += 4;
 
@@ -262,6 +296,8 @@ export const readF32Be = (slice: FileSlice) => {
 };
 
 export const readF64Be = (slice: FileSlice) => {
+	checkIsInRange(slice, 8);
+
 	const value = slice.view.getFloat64(slice.bufferPos, false);
 	slice.bufferPos += 8;
 
@@ -269,9 +305,7 @@ export const readF64Be = (slice: FileSlice) => {
 };
 
 export const readAscii = (slice: FileSlice, length: number) => {
-	if (slice.bufferPos + length > slice.bytes.length) {
-		throw new RangeError('Reading past end of slice.');
-	}
+	checkIsInRange(slice, length);
 
 	let str = '';
 

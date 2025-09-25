@@ -397,6 +397,42 @@ await output.finalize();
 - This is basically [`MediaRecorder`](https://developer.mozilla.org/en-US/docs/Web/API/MediaRecorder), but less sucky.
 :::
 
+## Creating transparent video
+
+```ts
+import {
+	Output,
+	WebMOutputFormat,
+	BufferTarget,
+	CanvasSource,
+	QUALITY_MEDIUM,
+} from 'mediabunny';
+
+const output = new Output({
+	// Use a format that supports transparency:
+	format: new WebMOutputFormat(),
+	target: new BufferTarget(),
+});
+
+const canvas = new OffscreenCanvas(1280, 720);
+const context = canvas.getContext('2d', { alpha: true })!;
+
+const source = new CanvasSource(canvas, {
+	codec: 'vp9',
+	quality: QUALITY_MEDIUM,
+	alpha: 'keep', // => Also encode alpha data
+});
+output.addVideoTrack(source);
+
+await output.start();
+
+// Add data...
+await source.add(0, 1 / 30);
+// ...
+
+await output.finalize();
+```
+
 ## Check encoding support
 
 ```ts

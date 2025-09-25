@@ -102,8 +102,12 @@ export class WaveDemuxer extends Demuxer {
 				} else if (chunkId === 'ds64') {
 					// File and data chunk sizes are defined in here instead
 
-					const riffChunkSize = readU64(slice, littleEndian);
-					dataChunkSize = readU64(slice, littleEndian);
+					let ds64Slice = this.reader.requestSlice(startPos, chunkSize);
+					if (ds64Slice instanceof Promise) ds64Slice = await ds64Slice;
+					if (!ds64Slice) break;
+
+					const riffChunkSize = readU64(ds64Slice, littleEndian);
+					dataChunkSize = readU64(ds64Slice, littleEndian);
 
 					totalFileSize = Math.min(riffChunkSize + 8, this.reader.fileSize ?? Infinity);
 				} else if (chunkId === 'LIST') {

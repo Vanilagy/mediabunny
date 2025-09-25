@@ -16,7 +16,10 @@ import {
 	toUint8Array,
 	SetRequired,
 	isFirefox,
+	polyfillSymbolDispose,
 } from './misc';
+
+polyfillSymbolDispose();
 
 /**
  * Metadata used for VideoSample initialization.
@@ -49,7 +52,7 @@ export type VideoSampleInit = {
  * @group Samples
  * @public
  */
-export class VideoSample {
+export class VideoSample implements Disposable {
 	/** @internal */
 	_data!: VideoFrame | OffscreenCanvas | Uint8Array | null;
 	/** @internal */
@@ -94,6 +97,14 @@ export class VideoSample {
 	/** The duration of the frame in microseconds. */
 	get microsecondDuration() {
 		return Math.trunc(SECOND_TO_MICROSECOND_FACTOR * this.duration);
+	}
+
+	/**
+	 * Whether this sample uses a pixel format that can hold transparency data. Note that this doesn't necessarily mean
+	 * that the sample is transparent.
+	 */
+	get hasAlpha() {
+		return this.format && this.format.includes('A');
 	}
 
 	/**
@@ -728,6 +739,11 @@ export class VideoSample {
 		// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
 		(this.duration as number) = newDuration;
 	}
+
+	/** Calls `.close()`. */
+	[Symbol.dispose]() {
+		this.close();
+	}
 }
 
 const isVideoFrame = (x: unknown): x is VideoFrame => {
@@ -832,7 +848,7 @@ export type AudioSampleCopyToOptions = {
  * @group Samples
  * @public
  */
-export class AudioSample {
+export class AudioSample implements Disposable {
 	/** @internal */
 	_data: AudioData | Uint8Array;
 	/** @internal */
@@ -1266,6 +1282,11 @@ export class AudioSample {
 
 		// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
 		(this.timestamp as number) = newTimestamp;
+	}
+
+	/** Calls `.close()`. */
+	[Symbol.dispose]() {
+		this.close();
 	}
 
 	/** @internal */

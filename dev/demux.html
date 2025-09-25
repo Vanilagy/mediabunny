@@ -14,16 +14,29 @@
 			source: new Mediabunny.BlobSource(file),
 		});
 
-		window.doDispose = () => input.dispose();
+		const audioTrack = await input.getPrimaryAudioTrack();
+		
+		const sink = new Mediabunny.EncodedPacketSink(audioTrack);
+		for await (const packet of sink.packets()) {
+			console.log(packet)
+		}
 
+		/*
 		const videoTrack = await input.getPrimaryVideoTrack();
+		const sink = new Mediabunny.VideoSampleSink(videoTrack);
+
+		const sample = await sink.getSample(0);
+
+		console.log(sample);
+		*/
+
+		/*
 		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
 
-		for await (const sample of sink.packets()) {
-			console.log(sample.timestamp)
-			//sample.close();
-			await new Promise(resolve => setTimeout(resolve, 0))
+		for await (const packet of sink.packets()) {
+			console.log(packet.timestamp, packet.type, await videoTrack.determinePacketType(packet));
 		}
+		*/
 
 		/*
 		console.log(await input.computeDuration());

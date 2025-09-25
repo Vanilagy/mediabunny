@@ -89,6 +89,7 @@ type MatroskaTrackData = {
 		width: number;
 		height: number;
 		decoderConfig: VideoDecoderConfig;
+		alphaMode: boolean;
 	};
 } | {
 	track: OutputAudioTrack;
@@ -343,6 +344,7 @@ export class MatroskaMuxer extends Muxer {
 		const videoElement: EBMLElement = { id: EBMLId.Video, data: [
 			{ id: EBMLId.PixelWidth, data: trackData.info.width },
 			{ id: EBMLId.PixelHeight, data: trackData.info.height },
+			trackData.info.alphaMode ? { id: EBMLId.AlphaMode, data: 1 } : null,
 			(colorSpaceIsComplete(colorSpace)
 				? {
 						id: EBMLId.Colour,
@@ -695,7 +697,7 @@ export class MatroskaMuxer extends Muxer {
 		});
 	}
 
-	private getVideoTrackData(track: OutputVideoTrack, meta?: EncodedVideoChunkMetadata) {
+	private getVideoTrackData(track: OutputVideoTrack, packet: EncodedPacket, meta?: EncodedVideoChunkMetadata) {
 		const existingTrackData = this.trackDatas.find(x => x.track === track);
 		if (existingTrackData) {
 			return existingTrackData as MatroskaVideoTrackData;
@@ -715,6 +717,7 @@ export class MatroskaMuxer extends Muxer {
 				width: meta.decoderConfig.codedWidth,
 				height: meta.decoderConfig.codedHeight,
 				decoderConfig: meta.decoderConfig,
+				alphaMode: !!packet.sideData.alpha, // The first packet determines if this track has alpha or not
 			},
 			chunkQueue: [],
 			lastWrittenMsTimestamp: null,
@@ -819,7 +822,7 @@ export class MatroskaMuxer extends Muxer {
 		const release = await this.mutex.acquire();
 
 		try {
-			const trackData = this.getVideoTrackData(track, meta);
+			const trackData = this.getVideoTrackData(track, packet, meta);
 
 			const isKeyFrame = packet.type === 'key';
 			let timestamp = this.validateAndNormalizeTimestamp(trackData.track, packet.timestamp, isKeyFrame);
@@ -831,7 +834,11 @@ export class MatroskaMuxer extends Muxer {
 				duration = roundToMultiple(duration, 1 / track.metadata.frameRate);
 			}
 
-			const videoChunk = this.createInternalChunk(packet.data, timestamp, duration, packet.type);
+			const additions = trackData.info.alphaMode
+				? packet.sideData.alpha ?? null
+				: null;
+
+			const videoChunk = this.createInternalChunk(packet.data, timestamp, duration, packet.type, additions);
 			if (track.source._codec === 'vp9') this.fixVP9ColorSpace(trackData, videoChunk);
 
 			trackData.chunkQueue.push(videoChunk);
@@ -1086,8 +1093,8 @@ export class MatroskaMuxer extends Muxer {
 				chunk.additions
 					? { id: EBMLId.BlockAdditions, data: [
 							{ id: EBMLId.BlockMore, data: [
+								{ id: EBMLId.BlockAddID, data: 1 }, // Some players expect BlockAddID to come first
 								{ id: EBMLId.BlockAdditional, data: chunk.additions },
-								{ id: EBMLId.BlockAddID, data: 1 },
 							] },
 						] }
 					: null,

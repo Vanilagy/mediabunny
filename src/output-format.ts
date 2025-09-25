@@ -403,6 +403,10 @@ export type MkvOutputFormatOptions = {
 
 /**
  * Matroska file format.
+ *
+ * Supports writing transparent video. For a video track to be marked as transparent, the first packet added must
+ * contain alpha side data.
+ *
  * @group Output formats
  * @public
  */
@@ -490,6 +494,10 @@ export type WebMOutputFormatOptions = MkvOutputFormatOptions;
 
 /**
  * WebM file format, based on Matroska.
+ *
+ * Supports writing transparent video. For a video track to be marked as transparent, the first packet added must
+ * contain alpha side data.
+ *
  * @group Output formats
  * @public
  */

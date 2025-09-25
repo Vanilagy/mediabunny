@@ -8,9 +8,11 @@
 
 import { Demuxer } from './demuxer';
 import { InputFormat } from './input-format';
-import { assert } from './misc';
+import { assert, polyfillSymbolDispose } from './misc';
 import { Reader } from './reader';
 import { Source } from './source';
+
+polyfillSymbolDispose();
 
 /**
  * The options for creating an Input object.
@@ -23,10 +25,6 @@ export type InputOptions<S extends Source = Source> = {
 	/** The source from which data will be read. */
 	source: S;
 };
-
-// https://www.typescriptlang.org/docs/handbook/release-notes/typescript-5-2.html
-// @ts-expect-error Readonly
-Symbol.dispose ??= Symbol('Symbol.dispose');
 
 /**
  * Represents an input media file. This is the root object from which all media read operations start.

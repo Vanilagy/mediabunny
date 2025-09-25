@@ -50,7 +50,7 @@ import {
 	TRANSFER_CHARACTERISTICS_MAP_INVERSE,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
-import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
+import { EncodedPacket, EncodedPacketSideData, PLACEHOLDER_DATA } from '../packet';
 import {
 	assertDefinedSize,
 	CODEC_STRING_MAP,
@@ -143,6 +143,7 @@ type ClusterBlock = {
 	data: Uint8Array;
 	lacing: BlockLacing;
 	decoded: boolean;
+	mainAdditional: Uint8Array | null;
 };
 
 type CuePoint = {
@@ -204,6 +205,7 @@ type InternalTrack = {
 			codec: VideoCodec | null;
 			codecDescription: Uint8Array | null;
 			colorSpace: VideoColorSpaceInit | null;
+			alphaMode: boolean;
 		}
 		| {
 			type: 'audio';
@@ -236,6 +238,11 @@ export class MatroskaDemuxer extends Demuxer {
 	currentTrack: InternalTrack | null = null;
 	currentCluster: Cluster | null = null;
 	currentBlock: ClusterBlock | null = null;
+	currentBlockAdditional: {
+		addId: number;
+		data: Uint8Array | null;
+	} | null = null;
+
 	currentCueTime: number | null = null;
 	currentDecodingInstruction: DecodingInstruction | null = null;
 	currentTagTargetIsMovie: boolean = true;
@@ -845,6 +852,7 @@ export class MatroskaDemuxer extends Demuxer {
 					data: frameData,
 					lacing: BlockLacing.None,
 					decoded: true,
+					mainAdditional: originalBlock.mainAdditional,
 				});
 			}
 
@@ -1110,6 +1118,7 @@ export class MatroskaDemuxer extends Demuxer {
 						codec: null,
 						codecDescription: null,
 						colorSpace: null,
+						alphaMode: false,
 					};
 				} else if (type === 2) {
 					this.currentTrack.info = {
@@ -1212,6 +1221,12 @@ export class MatroskaDemuxer extends Demuxer {
 				if (this.currentTrack?.info?.type !== 'video') break;
 
 				this.currentTrack.info.height = readUnsignedInt(slice, size);
+			}; break;
+
+			case EBMLId.AlphaMode: {
+				if (this.currentTrack?.info?.type !== 'video') break;
+
+				this.currentTrack.info.alphaMode = readUnsignedInt(slice, size) === 1;
 			}; break;
 
 			case EBMLId.Colour: {
@@ -1365,6 +1380,7 @@ export class MatroskaDemuxer extends Demuxer {
 					data: blockData,
 					lacing,
 					decoded: !hasDecodingInstructions,
+					mainAdditional: null,
 				});
 			}; break;
 
@@ -1407,8 +1423,41 @@ export class MatroskaDemuxer extends Demuxer {
 					data: blockData,
 					lacing,
 					decoded: !hasDecodingInstructions,
+					mainAdditional: null,
 				};
 				trackData.blocks.push(this.currentBlock);
+			}; break;
+
+			case EBMLId.BlockAdditions: {
+				this.readContiguousElements(slice.slice(dataStartPos, size));
+			}; break;
+
+			case EBMLId.BlockMore: {
+				if (!this.currentBlock) break;
+
+				this.currentBlockAdditional = {
+					addId: 1,
+					data: null,
+				};
+
+				this.readContiguousElements(slice.slice(dataStartPos, size));
+
+				if (this.currentBlockAdditional.data && this.currentBlockAdditional.addId === 1) {
+					this.currentBlock.mainAdditional = this.currentBlockAdditional.data;
+				}
+				this.currentBlockAdditional = null;
+			}; break;
+
+			case EBMLId.BlockAdditional: {
+				if (!this.currentBlockAdditional) break;
+
+				this.currentBlockAdditional.data = readBytes(slice, size);
+			}; break;
+
+			case EBMLId.BlockAddID: {
+				if (!this.currentBlockAdditional) break;
+
+				this.currentBlockAdditional.addId = readUnsignedInt(slice, size);
 			}; break;
 
 			case EBMLId.BlockDuration: {
@@ -2004,6 +2053,13 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		const data = options.metadataOnly ? PLACEHOLDER_DATA : block.data;
 		const timestamp = block.timestamp / this.internalTrack.segment.timestampFactor;
 		const duration = block.duration / this.internalTrack.segment.timestampFactor;
+
+		const sideData: EncodedPacketSideData = {};
+		if (block.mainAdditional && this.internalTrack.info?.type === 'video' && this.internalTrack.info.alphaMode) {
+			sideData.alpha = options.metadataOnly ? PLACEHOLDER_DATA : block.mainAdditional;
+			sideData.alphaByteLength = block.mainAdditional.byteLength;
+		}
+
 		const packet = new EncodedPacket(
 			data,
 			block.isKeyFrame ? 'key' : 'delta',
@@ -2011,6 +2067,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 			duration,
 			cluster.dataStartPos + blockIndex,
 			block.data.byteLength,
+			sideData,
 		);
 
 		this.packetToClusterLocation.set(packet, { cluster, blockIndex });
@@ -2317,6 +2374,10 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 			matrix: this.internalTrack.info.colorSpace?.matrix,
 			fullRange: this.internalTrack.info.colorSpace?.fullRange,
 		};
+	}
+
+	async canBeTransparent() {
+		return this.internalTrack.info.alphaMode;
 	}
 
 	async getDecoderConfig(): Promise<VideoDecoderConfig | null> {

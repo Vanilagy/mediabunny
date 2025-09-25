@@ -19,6 +19,24 @@ export const PLACEHOLDER_DATA = new Uint8Array(0);
 export type PacketType = 'key' | 'delta';
 
 /**
+ * Holds additional data accompanying an {@link EncodedPacket}.
+ * @group Packets
+ * @public
+ */
+export type EncodedPacketSideData = {
+	/**
+	 * An encoded alpha frame, encoded with the same codec as the packet. Typically used for transparent videos, where
+	 * the alpha information is stored separately from the color information.
+	 */
+	alpha?: Uint8Array;
+	/**
+	 * The actual byte length of the alpha data. This field is useful for metadata-only packets where the
+	 * `alpha` field contains no bytes.
+	 */
+	alphaByteLength?: number;
+};
+
+/**
  * Represents an encoded chunk of media. Mainly used as an expressive wrapper around WebCodecs API's
  * [`EncodedVideoChunk`](https://developer.mozilla.org/en-US/docs/Web/API/EncodedVideoChunk) and
  * [`EncodedAudioChunk`](https://developer.mozilla.org/en-US/docs/Web/API/EncodedAudioChunk), but can also be used
@@ -32,6 +50,9 @@ export class EncodedPacket {
 	 * `data` field contains no bytes.
 	 */
 	readonly byteLength: number;
+
+	/** Additional data carried with this packet. */
+	readonly sideData: EncodedPacketSideData;
 
 	/** Creates a new {@link EncodedPacket} from raw bytes and timing information. */
 	constructor(
@@ -54,6 +75,7 @@ export class EncodedPacket {
 		 */
 		public readonly sequenceNumber = -1,
 		byteLength?: number,
+		sideData?: EncodedPacketSideData,
 	) {
 		if (data === PLACEHOLDER_DATA && byteLength === undefined) {
 			throw new Error(
@@ -83,8 +105,25 @@ export class EncodedPacket {
 		if (!Number.isInteger(byteLength) || byteLength < 0) {
 			throw new TypeError('byteLength must be a non-negative integer.');
 		}
+		if (sideData !== undefined && (typeof sideData !== 'object' || !sideData)) {
+			throw new TypeError('sideData, when provided, must be an object.');
+		}
+		if (sideData?.alpha !== undefined && !(sideData.alpha instanceof Uint8Array)) {
+			throw new TypeError('sideData.alpha, when provided, must be a Uint8Array.');
+		}
+		if (
+			sideData?.alphaByteLength !== undefined
+			&& (!Number.isInteger(sideData.alphaByteLength) || sideData.alphaByteLength < 0)
+		) {
+			throw new TypeError('sideData.alphaByteLength, when provided, must be a non-negative integer.');
+		}
 
 		this.byteLength = byteLength;
+		this.sideData = sideData ?? {};
+
+		if (this.sideData.alpha && this.sideData.alphaByteLength === undefined) {
+			this.sideData.alphaByteLength = this.sideData.alpha.byteLength;
+		}
 	}
 
 	/** If this packet is a metadata-only packet. Metadata-only packets don't contain their packet data. */
@@ -102,7 +141,9 @@ export class EncodedPacket {
 		return Math.trunc(SECOND_TO_MICROSECOND_FACTOR * this.duration);
 	}
 
-	/** Converts this packet to an EncodedVideoChunk for use with the WebCodecs API. */
+	/** Converts this packet to an
+	 * [`EncodedVideoChunk`](https://developer.mozilla.org/en-US/docs/Web/API/EncodedVideoChunk) for use with the
+	 * WebCodecs API. */
 	toEncodedVideoChunk() {
 		if (this.isMetadataOnly) {
 			throw new TypeError('Metadata-only packets cannot be converted to a video chunk.');
@@ -119,7 +160,33 @@ export class EncodedPacket {
 		});
 	}
 
-	/** Converts this packet to an EncodedAudioChunk for use with the WebCodecs API. */
+	/**
+	 * Converts this packet to an
+	 * [`EncodedVideoChunk`](https://developer.mozilla.org/en-US/docs/Web/API/EncodedVideoChunk) for use with the
+	 * WebCodecs API, using the alpha side data instead of the color data. Throws if no alpha side data is defined.
+	 */
+	alphaToEncodedVideoChunk(type = this.type) {
+		if (!this.sideData.alpha) {
+			throw new TypeError('This packet does not contain alpha side data.');
+		}
+		if (this.isMetadataOnly) {
+			throw new TypeError('Metadata-only packets cannot be converted to a video chunk.');
+		}
+		if (typeof EncodedVideoChunk === 'undefined') {
+			throw new Error('Your browser does not support EncodedVideoChunk.');
+		}
+
+		return new EncodedVideoChunk({
+			data: this.sideData.alpha,
+			type,
+			timestamp: this.microsecondTimestamp,
+			duration: this.microsecondDuration,
+		});
+	}
+
+	/** Converts this packet to an
+	 * [`EncodedAudioChunk`](https://developer.mozilla.org/en-US/docs/Web/API/EncodedAudioChunk) for use with the
+	 * WebCodecs API. */
 	toEncodedAudioChunk() {
 		if (this.isMetadataOnly) {
 			throw new TypeError('Metadata-only packets cannot be converted to an audio chunk.');
@@ -137,10 +204,15 @@ export class EncodedPacket {
 	}
 
 	/**
-	 * Creates an EncodedPacket from an EncodedVideoChunk or EncodedAudioChunk. This method is useful for converting
-	 * chunks from the WebCodecs API to EncodedPackets.
+	 * Creates an {@link EncodedPacket} from an
+	 * [`EncodedVideoChunk`](https://developer.mozilla.org/en-US/docs/Web/API/EncodedVideoChunk) or
+	 * [`EncodedAudioChunk`](https://developer.mozilla.org/en-US/docs/Web/API/EncodedAudioChunk). This method is useful
+	 * for converting chunks from the WebCodecs API to `EncodedPacket` instances.
 	 */
-	static fromEncodedChunk(chunk: EncodedVideoChunk | EncodedAudioChunk): EncodedPacket {
+	static fromEncodedChunk(
+		chunk: EncodedVideoChunk | EncodedAudioChunk,
+		sideData?: EncodedPacketSideData,
+	): EncodedPacket {
 		if (!(chunk instanceof EncodedVideoChunk || chunk instanceof EncodedAudioChunk)) {
 			throw new TypeError('chunk must be an EncodedVideoChunk or EncodedAudioChunk.');
 		}
@@ -153,6 +225,9 @@ export class EncodedPacket {
 			chunk.type as PacketType,
 			chunk.timestamp / 1e6,
 			(chunk.duration ?? 0) / 1e6,
+			undefined,
+			undefined,
+			sideData,
 		);
 	}
 

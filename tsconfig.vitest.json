@@ -1,0 +1,11 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"moduleResolution": "nodenext",
+		"module": "NodeNext",
+		"composite": true,
+		"noEmit": false
+	},
+	"include": ["vitest.config.ts", "./test/**/*"],
+	"references": [{ "path": "./src" }]
+}
