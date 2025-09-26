@@ -129,6 +129,11 @@ export class FileSlice {
 		this.bufferPos = value - this.offset;
 	}
 
+	/** The number of bytes left from the current pos to the end of the slice. */
+	get remainingLength() {
+		return Math.max(this.end - this.filePos, 0);
+	}
+
 	skip(byteCount: number) {
 		this.bufferPos += byteCount;
 	}
@@ -153,7 +158,8 @@ const checkIsInRange = (slice: FileSlice, bytesToRead: number) => {
 	if (slice.filePos < slice.start || slice.filePos + bytesToRead > slice.end) {
 		throw new RangeError(
 			`Tried reading [${slice.filePos}, ${slice.filePos + bytesToRead}), but slice is`
-			+ ` [${slice.start}, ${slice.end}).`,
+			+ ` [${slice.start}, ${slice.end}). This is likely an internal error, please report it alongside the file`
+			+ ` that caused it.`,
 		);
 	}
 };

@@ -90,19 +90,6 @@ import {
 } from '../reader';
 import { MetadataTags, RichImageData } from '../tags';
 
-// https://exiftool.org/TagNames/QuickTime.html
-const UDTA_STRING_KEYS = new Set([
-	'@day', '@mak', '@mod', '@swr', '@xyz', 'CAME', 'CNCV', 'CNFV', 'CNMN', 'FIRM', 'FOV\0', 'GoPr', 'LENS', 'PXMN',
-	'SIGM', 'SNum', 'TAGS', 'albm', 'albr', 'angl', 'auth', 'ccid', 'cdis', 'clfn', 'clid', 'clsf', 'cmid', 'cmnm',
-	'coll', 'cprt', 'cver', 'cvru', 'date', 'dscp', 'fsid', 'gnre', 'hinv', 'icnu', 'info', 'infu', 'kgtt', 'loci',
-	'lrcu', 'mcvr', 'name', 'perf', 'pmcc', 'reel', 'rtng', 'scen', 'shot', 'slno', 'thmb', 'titl', 'tnam', 'urat',
-	'uuid', 'vndr', 'yrrc', '©ART', '©TIM', '©TSC', '©TSZ', '©alb', '©arg', '©ark', '©cmt', '©cok', '©com', '©cpy',
-	'©day', '©dir', '©ed1', '©ed2', '©ed3', '©ed4', '©ed5', '©ed6', '©ed7', '©ed8', '©ed9', '©enc', '©fmt', '©fpt',
-	'©frl', '©fyw', '©gen', '©gpt', '©grl', '©grp', '©gyw', '©inf', '©isr', '©lab', '©lal', '©lyr', '©mak', '©mal',
-	'©mdl', '©mod', '©nam', '©pdk', '©phg', '©prd', '©prf', '©prk', '©prl', '©req', '©snk', '©snm', '©src', '©swf',
-	'©swk', '©swr', '©too', '©trk', '©wrt', '©xsp', '©xyz', '©ysp', '©zsp',
-]);
-
 type InternalTrack = {
 	id: number;
 	demuxer: IsobmffDemuxer;
@@ -2065,7 +2052,9 @@ export class IsobmffDemuxer extends Demuxer {
 						const startPos = slice.filePos;
 						this.metadataTags.raw ??= {};
 
-						if (UDTA_STRING_KEYS.has(boxInfo.name)) {
+						if (boxInfo.name[0] === '©') {
+							// https://mp4workshop.com/about
+							// Box name starting with © indicates "international text"
 							this.metadataTags.raw[boxInfo.name] ??= readMetadataStringShort(slice);
 						} else {
 							this.metadataTags.raw[boxInfo.name] ??= readBytes(slice, boxInfo.contentSize);

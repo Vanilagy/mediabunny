@@ -57,8 +57,10 @@ export const readIsomVariableInteger = (slice: FileSlice) => {
 };
 
 export const readMetadataStringShort = (slice: FileSlice) => {
-	const stringLength = readU16Be(slice);
+	let stringLength = readU16Be(slice);
 	slice.skip(2); // Language
+
+	stringLength = Math.min(stringLength, slice.remainingLength);
 	return textDecoder.decode(readBytes(slice, stringLength));
 };
 
