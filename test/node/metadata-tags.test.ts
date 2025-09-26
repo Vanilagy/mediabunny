@@ -147,6 +147,7 @@ test('Read and write metadata, QuickTime', async () => {
 		...songMetadata,
 		raw: {
 			'©sic': 'ko mode',
+			'cust': new Uint8Array([1, 2, 3, 4]),
 		},
 	});
 
@@ -179,11 +180,8 @@ test('Read and write metadata, QuickTime', async () => {
 
 	expect(readTags.raw!['©nam']).toBe(songMetadata.title);
 	// We don't know what the data type is, so the demuxer just returns Uint8Array
-	expect(readTags.raw!['©sic']).toEqual(new Uint8Array([
-		0, 7, // String length 7
-		85, 196, // Language code for 'und'
-		107, 111, 32, 109, 111, 100, 101, // 'ko mode'
-	]));
+	expect(readTags.raw!['©sic']).toBe('ko mode'); // Parsed as string because it begins with ©
+	expect(readTags.raw!['cust']).toEqual(new Uint8Array([1, 2, 3, 4]));
 });
 
 test('Read MOV metadata tags, ilst with keys', async () => {
