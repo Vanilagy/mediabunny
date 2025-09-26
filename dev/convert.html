@@ -4,7 +4,7 @@
 <script src="../packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.js"></script>
 
 <script type="module">
-	MediabunnyMp3Encoder.registerMp3Encoder();
+	//MediabunnyMp3Encoder.registerMp3Encoder();
 
 	const fileInput = document.createElement('input');
 	fileInput.type = 'file';
@@ -24,7 +24,7 @@
 			chunked: true,
 			chunkSize: 2**20
 		});
-		const outputFormat = new Mediabunny.Mp3OutputFormat({});
+		const outputFormat = new Mediabunny.Mp4OutputFormat({});
 
 		const button = document.createElement('button');
 		button.textContent = 'Cancel';
@@ -92,6 +92,9 @@
 			},
 			*/
 			video: () => ({
+				width: 300,
+				//alpha: 'keep',
+				//width: 320,
 				//discard: true,
 				//discard: true,
 				//crop: {
@@ -126,7 +129,7 @@
 				//width: 200,
 				//height: 100,
 			}),
-			tags: {
+			tags: {} ?? {
 				title: 'Bigggy',
 				artist: 'Buck Bunny',
 				images: [{
@@ -144,8 +147,8 @@
 				}
 			},
 			trim: {
-				//start: 10,
-				//end: 20
+				start: 0,
+				end: 10
 			},
 		});
 		console.log(conversion);

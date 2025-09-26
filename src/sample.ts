@@ -620,8 +620,8 @@ export class VideoSample implements Disposable {
 		const { sx, sy, sWidth, sHeight } = this._rotateSourceRegion(
 			options.crop?.left ?? 0,
 			options.crop?.top ?? 0,
-			options.crop?.width ?? this.codedWidth,
-			options.crop?.height ?? this.codedHeight,
+			options.crop?.width ?? rotatedWidth,
+			options.crop?.height ?? rotatedHeight,
 			rotation,
 		);
 

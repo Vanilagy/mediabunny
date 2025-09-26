@@ -184,6 +184,60 @@ test('Read and write metadata, QuickTime', async () => {
 	expect(readTags.raw!['cust']).toEqual(new Uint8Array([1, 2, 3, 4]));
 });
 
+test('Read and write metadata, MP4 with mdta format', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat({
+			metadataFormat: 'mdta',
+		}),
+		target: new BufferTarget(),
+	});
+
+	output.setMetadataTags({
+		...songMetadata,
+		raw: {
+			'AIGC': 'yes',
+			'this key is': 'crazy long',
+			'bytes': new Uint8Array([2, 3, 4, 5]),
+		},
+	});
+
+	const dummyTrack = createDummyAudioTrack('aac', output);
+
+	await output.start();
+	await dummyTrack.addPacket();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const readTags = await input.getMetadataTags();
+
+	expect(readTags.title).toBe(songMetadata.title);
+	expect(readTags.description).toBe(songMetadata.description);
+	expect(readTags.artist).toBe(songMetadata.artist);
+	expect(readTags.album).toBe(songMetadata.album);
+	expect(readTags.albumArtist).toBe(songMetadata.albumArtist);
+	expect(readTags.comment).toBe(songMetadata.comment);
+	expect(readTags.lyrics).toBe(songMetadata.lyrics);
+	expect(readTags.trackNumber).toBe(songMetadata.trackNumber);
+	expect(readTags.tracksTotal).toBe(songMetadata.tracksTotal);
+	expect(readTags.discNumber).toBeUndefined(); // Not written
+	expect(readTags.discsTotal).toBeUndefined();
+	expect(readTags.date).toEqual(readTags.date);
+	expect(readTags.images).toHaveLength(1);
+	expect(readTags.images![0]!.data).toEqual(coverArt);
+	expect(readTags.images![0]!.mimeType).toEqual('image/jpeg');
+	expect(readTags.images![0]!.kind).toEqual('coverFront');
+	expect(readTags.images![0]!.description).toBeUndefined(); // Lost in MP4
+
+	expect(readTags.raw!['title']).toBe(songMetadata.title);
+	expect(readTags.raw!['AIGC']).toBe('yes');
+	expect(readTags.raw!['this key is']).toBe('crazy long');
+	expect(readTags.raw!['bytes']).toEqual(new Uint8Array([2, 3, 4, 5]));
+});
+
 test('Read MOV metadata tags, ilst with keys', async () => {
 	using input = new Input({
 		source: new FilePathSource(path.join(__dirname, '../public/trunc-buck-bunny.mov')),

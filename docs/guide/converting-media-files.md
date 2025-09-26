@@ -13,6 +13,7 @@ It has the following features:
 - Video rotation
 - Video cropping
 - Video frame rate adjustment
+- Video transparency removal/preservation
 - Audio resampling
 - Audio up/downmixing
 
@@ -41,6 +42,14 @@ const output = new Output({
 });
 
 const conversion = await Conversion.init({ input, output });
+if (!conversion.isValid) {
+	// Conversion is invalid and cannot be executed without error.
+	// This field gives reasons for why tracks were discarded:
+	conversion.discardedTracks; // => DiscardedTrack[]
+
+	return;
+}
+
 await conversion.execute();
 
 // output.target.buffer contains the final file
@@ -57,7 +66,7 @@ Unconfigured, the conversion process handles all the details automatically, such
 - Copying media data whenever possible, otherwise transcoding it
 - Dropping tracks that aren't supported in the output format
 
-You should consider inspecting the [discarded tracks](#discarded-tracks) before executing a `Conversion`.
+You should consider inspecting `isValid` and the [discarded tracks](#discarded-tracks) before executing a `Conversion`.
 
 ### Monitoring progress
 
@@ -114,6 +123,7 @@ type ConversionVideoOptions = {
 	frameRate?: number;
 	codec?: VideoCodec;
 	bitrate?: number | Quality;
+	alpha?: 'discard' | 'keep'; // Defaults to 'discard'
 	forceTranscode?: boolean;
 };
 ```
@@ -351,6 +361,8 @@ type DiscardedTrack = {
 ```
 
 Since you can inspect this list before executing a `Conversion`, this gives you the option to decide if you still want to move forward with the conversion process.
+
+If `isValid` is `false`, then the discarded tracks caused the `Conversion` to become invalid. For example, this can happen when a format requires a specific codec but that codec cannot be encoded.
 
 ---
 

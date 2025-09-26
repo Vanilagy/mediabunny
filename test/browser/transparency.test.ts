@@ -9,6 +9,7 @@ import { BufferTarget } from '../../src/target.js';
 import { CanvasSource, VideoSampleSource } from '../../src/media-source.js';
 import { canEncodeVideo, QUALITY_HIGH } from '../../src/encode.js';
 import { VideoSample } from '../../src/sample.js';
+import { Conversion } from '../../src/conversion.js';
 
 test('Can decode transparent video', async () => {
 	using input = new Input({
@@ -268,4 +269,105 @@ test('Can encode transparent video with odd dimensions', async () => {
 test('Positive encodability check with alpha', async () => {
 	const result = await canEncodeVideo('vp9', { alpha: 'keep' });
 	expect(result).toBe(true);
+});
+
+test('Can transmux transparent video, discards alpha by default', async () => {
+	using input = new Input({
+		source: new UrlSource('/transparency.webm'),
+		formats: ALL_FORMATS,
+	});
+	const output = new Output({
+		format: new WebMOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({
+		input,
+		output,
+	});
+	await conversion.execute();
+
+	using outputInput = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = (await outputInput.getPrimaryVideoTrack())!;
+	expect(await videoTrack.canBeTransparent()).toBe(false);
+
+	const sink = new VideoSampleSink(videoTrack);
+	const sample = (await sink.getSample(await videoTrack.getFirstTimestamp()))!;
+	expect(sample.hasAlpha).toBe(false);
+});
+
+test('Can transmux transparent video, can keep alpha', async () => {
+	using input = new Input({
+		source: new UrlSource('/transparency.webm'),
+		formats: ALL_FORMATS,
+	});
+	const output = new Output({
+		format: new WebMOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({
+		input,
+		output,
+		video: {
+			alpha: 'keep',
+		},
+	});
+	await conversion.execute();
+
+	using outputInput = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = (await outputInput.getPrimaryVideoTrack())!;
+	expect(await videoTrack.canBeTransparent()).toBe(true);
+
+	const sink = new VideoSampleSink(videoTrack);
+	const sample = (await sink.getSample(await videoTrack.getFirstTimestamp()))!;
+	expect(sample.format).toContain('A');
+	expect(sample.hasAlpha).toBe(true);
+});
+
+test('Can reencode transparent video, keeping alpha', async () => {
+	using input = new Input({
+		source: new UrlSource('/transparency.webm'),
+		formats: ALL_FORMATS,
+	});
+	const output = new Output({
+		format: new WebMOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({
+		input,
+		output,
+		video: {
+			width: 320,
+			alpha: 'keep',
+		},
+		trim: {
+			start: 0,
+			end: 0.5,
+		},
+	});
+	await conversion.execute();
+
+	using outputInput = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = (await outputInput.getPrimaryVideoTrack())!;
+	expect(await videoTrack.canBeTransparent()).toBe(true);
+	expect(videoTrack.displayWidth).toBe(320);
+
+	const sink = new VideoSampleSink(videoTrack);
+	const sample = (await sink.getSample(await videoTrack.getFirstTimestamp()))!;
+	expect(sample.format).toContain('A');
+	expect(sample.hasAlpha).toBe(true);
 });

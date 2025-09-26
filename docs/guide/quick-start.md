@@ -484,7 +484,14 @@ const output = new Output({
 });
 
 const conversion = await Conversion.init({ input, output });
-conversion.discardedTracks; // List of tracks that won't make it into the output
+if (!conversion.isValid) {
+	// The conversion isn't possible and would error upon execution.
+	// Check `discardedTracks` for the reasons.
+	return;
+}
+
+// List of tracks that won't make it into the output:
+conversion.discardedTracks;
 
 conversion.onProgress = (progress) => {
 	progress; // Number between 0 and 1, inclusive
