@@ -419,7 +419,7 @@ const context = canvas.getContext('2d', { alpha: true })!;
 
 const source = new CanvasSource(canvas, {
 	codec: 'vp9',
-	quality: QUALITY_MEDIUM,
+	bitrate: QUALITY_MEDIUM,
 	alpha: 'keep', // => Also encode alpha data
 });
 output.addVideoTrack(source);
