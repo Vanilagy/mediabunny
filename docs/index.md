@@ -96,6 +96,9 @@ const sponsors = {
 		{ image: '/sponsors/diffusionstudio.png', name: 'Diffusion Studio', url: 'https://diffusion.studio/' },
 		{ image: '/sponsors/kino.jpg', name: 'Kino', url: 'https://kino.ai/' },
 	],
+	silver: [
+		{ image: '/sponsors/pqina.jpg', name: 'PQINA', url: 'https://pqina.nl/' },
+	],
 	bronze: [
 		{ image: '/sponsors/rve.svg', name: 'React Video Editor', url: 'https://www.reactvideoeditor.com/' },
 		{ image: '/sponsors/mux.jpg', name: 'Mux', url: 'https://www.mux.com/' },
@@ -343,10 +346,19 @@ await conversion.execute();
 	</h1>
 	<p class="max-w-2xl">Mediabunny is an open-source project released under the <a href="https://choosealicense.com/licenses/mpl-2.0/" target="_blank">MPL-2.0</a> and is therefore free to use for any purpose, including closed-source commercial use. A permissive license is essential for a foundational library like this to truly thrive. That said, this project requires an immense amount of work and care. This is made possible by the generous financial backing of these awesome sponsors:</p>
 	<template v-if="sponsors.gold.length > 0">
-		<h3 class="!text-2xl">Gold sponsors</h3>
+		<h3 class="!text-3xl">Gold sponsors</h3>
 		<div class="flex flex-wrap mt-1 justify-center gap-1">
-			<a v-for="sponsor in sponsors.gold" :href="sponsor.url" target="_blank" class="flex items-center p-2 rounded-full hover:bg-(--vp-c-gray-3) !text-(--vp-c-text-1) !no-underline">
+			<a v-for="sponsor in sponsors.gold" :href="sponsor.url" target="_blank" rel="sponsored" class="flex items-center p-2 rounded-full hover:bg-(--vp-c-gray-3) !text-(--vp-c-text-1) !no-underline">
 				<img :src="sponsor.image" class="size-16 rounded-full">
+				<p class="!my-0 !font-medium px-3 text-lg">{{ sponsor.name }}</p>
+			</a>
+		</div>
+	</template>
+	<template v-if="sponsors.silver.length > 0">
+		<h3 class="!text-2xl">Silver sponsors</h3>
+		<div class="flex flex-wrap mt-1 justify-center gap-1">
+			<a v-for="sponsor in sponsors.silver" :href="sponsor.url" target="_blank" rel="sponsored" class="flex items-center p-2 rounded-full hover:bg-(--vp-c-gray-3) !text-(--vp-c-text-1) !no-underline">
+				<img :src="sponsor.image" class="size-13 rounded-full">
 				<p class="!my-0 !font-medium px-3">{{ sponsor.name }}</p>
 			</a>
 		</div>
@@ -354,7 +366,7 @@ await conversion.execute();
 	<template v-if="sponsors.bronze.length > 0">
 		<h3 class="!text-xl">Bronze sponsors</h3>
 		<div class="flex flex-wrap mt-1 justify-center gap-1">
-			<a v-for="sponsor in sponsors.bronze" :href="sponsor.url" target="_blank" class="flex items-center p-2 rounded-full hover:bg-(--vp-c-gray-3) !text-(--vp-c-text-1) !no-underline">
+			<a v-for="sponsor in sponsors.bronze" :href="sponsor.url" target="_blank" rel="sponsored" class="flex items-center p-2 rounded-full hover:bg-(--vp-c-gray-3) !text-(--vp-c-text-1) !no-underline">
 				<img :src="sponsor.image" class="size-10 rounded-full">
 				<p class="!my-0 !font-medium px-3 text-sm">{{ sponsor.name }}</p>
 			</a>
@@ -363,7 +375,7 @@ await conversion.execute();
 	<template v-if="sponsors.individual.length > 0">
 		<h4 class="!text-base">Individual sponsors</h4>
 		<div class="flex flex-wrap mt-1 justify-center">
-			<a v-for="sponsor in sponsors.individual" :href="sponsor.url" target="_blank" class="flex gap-1 w-24 flex-col items-center p-2 rounded-xl hover:bg-(--vp-c-gray-3) !text-(--vp-c-text-1) !no-underline">
+			<a v-for="sponsor in sponsors.individual" :href="sponsor.url" target="_blank" rel="sponsored" class="flex gap-1 w-24 flex-col items-center p-2 rounded-xl hover:bg-(--vp-c-gray-3) !text-(--vp-c-text-1) !no-underline">
 				<img :src="sponsor.image" class="size-8 rounded-full">
 				<p class="!my-0 !font-medium text-xs !leading-4 text-center">{{ sponsor.name }}</p>
 			</a>
