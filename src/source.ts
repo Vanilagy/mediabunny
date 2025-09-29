@@ -11,6 +11,7 @@ import {
 	assert,
 	binarySearchLessOrEqual,
 	closedIntervalsOverlap,
+	isNumber,
 	MaybePromise,
 	mergeRequestInit,
 	promiseWithResolvers,
@@ -172,9 +173,9 @@ export class BlobSource extends Source {
 		}
 		if (
 			options.maxCacheSize !== undefined
-			&& (!Number.isInteger(options.maxCacheSize) || options.maxCacheSize < 0)
+			&& (!isNumber(options.maxCacheSize) || options.maxCacheSize < 0)
 		) {
-			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative integer.');
+			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative number.');
 		}
 
 		super();
@@ -331,9 +332,9 @@ export class UrlSource extends Source {
 		}
 		if (
 			options.maxCacheSize !== undefined
-			&& (!Number.isInteger(options.maxCacheSize) || options.maxCacheSize < 0)
+			&& (!isNumber(options.maxCacheSize) || options.maxCacheSize < 0)
 		) {
-			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative integer.');
+			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative number.');
 		}
 		if (options.fetchFn !== undefined && typeof options.fetchFn !== 'function') {
 			throw new TypeError('options.fetchFn, when provided, must be a function.');
@@ -591,9 +592,9 @@ export class FilePathSource extends Source {
 		}
 		if (
 			options.maxCacheSize !== undefined
-			&& (!Number.isInteger(options.maxCacheSize) || options.maxCacheSize < 0)
+			&& (!isNumber(options.maxCacheSize) || options.maxCacheSize < 0)
 		) {
-			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative integer.');
+			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative number.');
 		}
 
 		super();
@@ -704,9 +705,9 @@ export class StreamSource extends Source {
 		}
 		if (
 			options.maxCacheSize !== undefined
-			&& (!Number.isInteger(options.maxCacheSize) || options.maxCacheSize < 0)
+			&& (!isNumber(options.maxCacheSize) || options.maxCacheSize < 0)
 		) {
-			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative integer.');
+			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative number.');
 		}
 		if (options.prefetchProfile && !['none', 'fileSystem', 'network'].includes(options.prefetchProfile)) {
 			throw new TypeError(
@@ -884,9 +885,9 @@ export class ReadableStreamSource extends Source {
 		}
 		if (
 			options.maxCacheSize !== undefined
-			&& (!Number.isInteger(options.maxCacheSize) || options.maxCacheSize < 0)
+			&& (!isNumber(options.maxCacheSize) || options.maxCacheSize < 0)
 		) {
-			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative integer.');
+			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative number.');
 		}
 
 		super();

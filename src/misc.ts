@@ -786,3 +786,7 @@ export const polyfillSymbolDispose = () => {
 	// @ts-expect-error Readonly
 	Symbol.dispose ??= Symbol('Symbol.dispose');
 };
+
+export const isNumber = (x: unknown) => {
+	return typeof x === 'number' && !Number.isNaN(x);
+};

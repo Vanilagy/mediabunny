@@ -13,7 +13,7 @@ const walkDir = (dir: string) => {
 
 		if (stat.isDirectory()) {
 			files.push(...walkDir(fullPath));
-		} else if (item.endsWith('.js')) {
+		} else if (item.endsWith('.js') || item.endsWith('.ts')) {
 			files.push(fullPath);
 		}
 	}
@@ -23,8 +23,13 @@ const walkDir = (dir: string) => {
 
 const fixFile = (filePath: string) => {
 	const content = fs.readFileSync(filePath, 'utf8');
-	const fixed = content.replace(
-		/(\s+from\s+['"])(\.[^'"]*)(['"])/g, // This only matches relative imports
+	// We only match relative imports
+	let fixed = content.replace(
+		/(\s+from\s+['"])(\.[^'"]*)(['"])/g, // This matches static imports
+		'$1$2.js$3',
+	);
+	fixed = fixed.replace(
+		/(import\s*\(\s*['"])(\.[^'"]*)(['"]\s*\))/g, // This matches dynamic imports
 		'$1$2.js$3',
 	);
 

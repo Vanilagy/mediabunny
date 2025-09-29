@@ -41,13 +41,11 @@ import {
 import { PacketRetrievalOptions } from '../media-sink';
 import {
 	assert,
-	AsyncMutex,
 	binarySearchExact,
 	binarySearchLessOrEqual,
 	Bitstream,
 	COLOR_PRIMARIES_MAP_INVERSE,
 	findLastIndex,
-	insertSorted,
 	isIso639Dash2LanguageCode,
 	last,
 	MATRIX_COEFFICIENTS_MAP_INVERSE,
@@ -103,10 +101,17 @@ type InternalTrack = {
 	languageCode: string;
 	sampleTableByteOffset: number;
 	sampleTable: SampleTable | null;
-	fragmentLookupTable: FragmentLookupTableEntry[] | null;
+	fragmentLookupTable: FragmentLookupTableEntry[];
 	currentFragmentState: FragmentTrackState | null;
-	fragments: Fragment[];
-	fragmentsWithKeyFrame: Fragment[];
+	/**
+	 * List of all encountered fragment offsets alongside their timestamps. This list never gets truncated, but memory
+	 * consumption should be negligible.
+	 */
+	fragmentPositionCache: {
+		moofOffset: number;
+		startTimestamp: number;
+		endTimestamp: number;
+	}[];
 	/** The segment durations of all edit list entries leading up to the main one (from which the offset is taken.) */
 	editListPreviousSegmentDurations: number;
 	/** The media time offset of the main edit list entry (with media time !== -1) */
@@ -198,6 +203,7 @@ type FragmentTrackState = {
 };
 
 type FragmentTrackData = {
+	track: InternalTrack;
 	startTimestamp: number;
 	endTimestamp: number;
 	firstKeyFrameTimestamp: number | null;
@@ -222,10 +228,6 @@ type Fragment = {
 	moofSize: number;
 	implicitBaseDataOffset: number;
 	trackData: Map<InternalTrack['id'], FragmentTrackData>;
-	dataStart: number;
-	dataEnd: number;
-	nextFragment: Fragment | null;
-	isKnownToBeFirstFragment: boolean;
 };
 
 export class IsobmffDemuxer extends Demuxer {
@@ -243,9 +245,12 @@ export class IsobmffDemuxer extends Demuxer {
 
 	isFragmented = false;
 	fragmentTrackDefaults: FragmentTrackDefaults[] = [];
-	fragments: Fragment[] = [];
 	currentFragment: Fragment | null = null;
-	fragmentLookupMutex = new AsyncMutex();
+	/**
+	 * Caches the last fragment that was read. Based on the assumption that there will be multiple reads to the
+	 * same fragment in quick succession.
+	 */
+	lastReadFragment: Fragment | null = null;
 
 	constructor(input: Input) {
 		super(input);
@@ -502,6 +507,10 @@ export class IsobmffDemuxer extends Demuxer {
 	}
 
 	async readFragment(startPos: number): Promise<Fragment> {
+		if (this.lastReadFragment?.moofOffset === startPos) {
+			return this.lastReadFragment;
+		}
+
 		let headerSlice = this.reader.requestSliceRange(startPos, MIN_BOX_HEADER_SIZE, MAX_BOX_HEADER_SIZE);
 		if (headerSlice instanceof Promise) headerSlice = await headerSlice;
 		assert(headerSlice);
@@ -515,92 +524,65 @@ export class IsobmffDemuxer extends Demuxer {
 
 		this.traverseBox(entireSlice);
 
-		const index = binarySearchExact(this.fragments, startPos, x => x.moofOffset);
-		assert(index !== -1);
+		const fragment = this.lastReadFragment;
+		assert(fragment && fragment.moofOffset === startPos);
 
-		const fragment = this.fragments[index]!;
-		assert(fragment.moofOffset === startPos);
+		for (const [, trackData] of fragment.trackData) {
+			const track = trackData.track;
+			const { fragmentPositionCache } = track;
 
-		// It may be that some tracks don't define the base decode time, i.e. when the fragment begins. This means the
-		// only other option is to sum up the duration of all previous fragments.
-		for (const [trackId, trackData] of fragment.trackData) {
-			if (trackData.startTimestampIsFinal) {
-				continue;
-			}
+			if (!trackData.startTimestampIsFinal) {
+				// It may be that some tracks don't define the base decode time, i.e. when the fragment begins. This
+				// we'll need to figure out the start timestamp another way. We'll compute the timestamp by accessing
+				// the lookup entries and fragment cache, which works out nicely with the lookup algorithm: If these
+				// exist, then the lookup will automatically start at the furthest possible point. If they don't, the
+				// lookup starts sequentially from the start, incrementally summing up all fragment durations. It's sort
+				// of implicit, but it ends up working nicely.
 
-			const internalTrack = this.tracks.find(x => x.id === trackId)!;
-
-			let currentPos = 0;
-			let currentFragment: Fragment | null = null;
-			let lastFragment: Fragment | null = null;
-
-			const index = binarySearchLessOrEqual(
-				internalTrack.fragments,
-				startPos - 1,
-				x => x.moofOffset,
-			);
-			if (index !== -1) {
-				// Instead of starting at the start of the file, let's start at the previous fragment instead (which
-				// already has final timestamps).
-				currentFragment = internalTrack.fragments[index]!;
-				lastFragment = currentFragment;
-				currentPos = currentFragment.moofOffset + currentFragment.moofSize;
-			}
-
-			let nextFragmentIsFirstFragment = currentPos === 0;
-
-			while (currentPos <= startPos - MIN_BOX_HEADER_SIZE) {
-				if (currentFragment?.nextFragment) {
-					currentFragment = currentFragment.nextFragment;
-					currentPos = currentFragment.moofOffset + currentFragment.moofSize;
+				const lookupEntryIndex = binarySearchExact(
+					track.fragmentLookupTable,
+					fragment.moofOffset,
+					x => x.moofOffset,
+				);
+				if (lookupEntryIndex !== -1) {
+					// There's a lookup entry, let's use its timestamp
+					const lookupEntry = track.fragmentLookupTable[lookupEntryIndex]!;
+					offsetFragmentTrackDataByTimestamp(trackData, lookupEntry.timestamp);
 				} else {
-					let slice = this.reader.requestSliceRange(currentPos, MIN_BOX_HEADER_SIZE, MAX_BOX_HEADER_SIZE);
-					if (slice instanceof Promise) slice = await slice;
-					if (!slice) break;
-
-					const boxStartPos = currentPos;
-					const boxInfo = readBoxHeader(slice);
-					if (!boxInfo) {
-						break;
+					const lastCacheIndex = binarySearchLessOrEqual(
+						fragmentPositionCache,
+						fragment.moofOffset - 1,
+						x => x.moofOffset,
+					);
+					if (lastCacheIndex !== -1) {
+						// Let's use the timestamp of the previous fragment in the cache
+						const lastCache = fragmentPositionCache[lastCacheIndex]!;
+						offsetFragmentTrackDataByTimestamp(trackData, lastCache.endTimestamp);
+					} else {
+						// We're the first fragment I guess, "offset by 0"
 					}
-
-					if (boxInfo.name === 'moof') {
-						const index = binarySearchExact(this.fragments, boxStartPos, x => x.moofOffset);
-
-						let fragment: Fragment;
-						if (index === -1) {
-							fragment = await this.readFragment(boxStartPos); // Recursive call
-						} else {
-							// We already know this fragment
-							fragment = this.fragments[index]!;
-						}
-
-						// Even if we already know the fragment, we might not yet know its predecessor; always do this
-						if (currentFragment) currentFragment.nextFragment = fragment;
-						currentFragment = fragment;
-
-						if (nextFragmentIsFirstFragment) {
-							fragment.isKnownToBeFirstFragment = true;
-							nextFragmentIsFirstFragment = false;
-						}
-					}
-
-					currentPos = boxStartPos + boxInfo.totalSize;
 				}
 
-				if (currentFragment && currentFragment.trackData.has(trackId)) {
-					lastFragment = currentFragment;
-				}
+				trackData.startTimestampIsFinal = true;
 			}
 
-			if (lastFragment) {
-				const otherTrackData = lastFragment.trackData.get(trackId)!;
-				assert(otherTrackData.startTimestampIsFinal);
-
-				offsetFragmentTrackDataByTimestamp(trackData, otherTrackData.endTimestamp);
+			// Let's remember that a fragment with a given timestamp is here, speeding up future lookups if no
+			// lookup table exists
+			const insertionIndex = binarySearchLessOrEqual(
+				fragmentPositionCache,
+				trackData.startTimestamp,
+				x => x.startTimestamp,
+			);
+			if (
+				insertionIndex === -1
+				|| fragmentPositionCache[insertionIndex]!.moofOffset !== fragment.moofOffset
+			) {
+				fragmentPositionCache.splice(insertionIndex + 1, 0, {
+					moofOffset: fragment.moofOffset,
+					startTimestamp: trackData.startTimestamp,
+					endTimestamp: trackData.endTimestamp,
+				});
 			}
-
-			trackData.startTimestampIsFinal = true;
 		}
 
 		return fragment;
@@ -683,10 +665,9 @@ export class IsobmffDemuxer extends Demuxer {
 					languageCode: UNDETERMINED_LANGUAGE,
 					sampleTableByteOffset: -1,
 					sampleTable: null,
-					fragmentLookupTable: null,
+					fragmentLookupTable: [],
 					currentFragmentState: null,
-					fragments: [],
-					fragmentsWithKeyFrame: [],
+					fragmentPositionCache: [],
 					editListPreviousSegmentDurations: 0,
 					editListOffset: 0,
 				} satisfies InternalTrack as InternalTrack;
@@ -1735,8 +1716,6 @@ export class IsobmffDemuxer extends Demuxer {
 					break;
 				}
 
-				track.fragmentLookupTable = [];
-
 				const word = readU32Be(slice);
 
 				const lengthSizeOfTrafNum = (word & 0b110000) >> 4;
@@ -1771,31 +1750,11 @@ export class IsobmffDemuxer extends Demuxer {
 					moofSize: boxInfo.totalSize,
 					implicitBaseDataOffset: startPos,
 					trackData: new Map(),
-					dataStart: Infinity,
-					dataEnd: 0,
-					nextFragment: null,
-					isKnownToBeFirstFragment: false,
 				};
 
 				this.readContiguousBoxes(slice.slice(contentStartPos, boxInfo.contentSize));
 
-				insertSorted(this.fragments, this.currentFragment, x => x.moofOffset);
-
-				// Compute the byte range of the sample data in this fragment, so we can load the whole fragment at once
-				for (const [, trackData] of this.currentFragment.trackData) {
-					const firstSample = trackData.samples[0]!;
-					const lastSample = last(trackData.samples)!;
-
-					this.currentFragment.dataStart = Math.min(
-						this.currentFragment.dataStart,
-						firstSample.byteOffset,
-					);
-					this.currentFragment.dataEnd = Math.max(
-						this.currentFragment.dataEnd,
-						lastSample.byteOffset + lastSample.byteSize,
-					);
-				}
-
+				this.lastReadFragment = this.currentFragment;
 				this.currentFragment = null;
 			}; break;
 
@@ -1809,19 +1768,6 @@ export class IsobmffDemuxer extends Demuxer {
 				if (this.currentTrack) {
 					const trackData = this.currentFragment.trackData.get(this.currentTrack.id);
 					if (trackData) {
-						// We know there is sample data for this track in this fragment, so let's add it to the
-						// track's fragments:
-						insertSorted(this.currentTrack.fragments, this.currentFragment, x => x.moofOffset);
-
-						const hasKeyFrame = trackData.firstKeyFrameTimestamp !== null;
-						if (hasKeyFrame) {
-							insertSorted(
-								this.currentTrack.fragmentsWithKeyFrame,
-								this.currentFragment,
-								x => x.moofOffset,
-							);
-						}
-
 						const { currentFragmentState } = this.currentTrack;
 						assert(currentFragmentState);
 
@@ -1952,6 +1898,7 @@ export class IsobmffDemuxer extends Demuxer {
 				let currentTimestamp = 0;
 
 				const trackData: FragmentTrackData = {
+					track,
 					startTimestamp: 0,
 					endTimestamp: 0,
 					firstKeyFrameTimestamp: null,
@@ -2404,31 +2351,17 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		}
 
 		return this.performFragmentedLookup(
-			() => {
-				const startFragment = this.internalTrack.demuxer.fragments[0] ?? null;
-				if (startFragment?.isKnownToBeFirstFragment) {
-					// Walk from the very first fragment in the file until we find one with our track in it
-					let currentFragment: Fragment | null = startFragment;
-					while (currentFragment) {
-						const trackData = currentFragment.trackData.get(this.internalTrack.id);
-						if (trackData) {
-							return {
-								fragmentIndex: binarySearchExact(
-									this.internalTrack.fragments,
-									currentFragment.moofOffset,
-									x => x.moofOffset,
-								),
-								sampleIndex: 0,
-								correctSampleFound: true,
-							};
-						}
-
-						currentFragment = currentFragment.nextFragment;
-					}
+			null,
+			(fragment) => {
+				const trackData = fragment.trackData.get(this.internalTrack.id);
+				if (trackData) {
+					return {
+						sampleIndex: 0,
+						correctSampleFound: true,
+					};
 				}
 
 				return {
-					fragmentIndex: -1,
 					sampleIndex: -1,
 					correctSampleFound: false,
 				};
@@ -2459,7 +2392,24 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		}
 
 		return this.performFragmentedLookup(
-			() => this.findSampleInFragmentsForTimestamp(timestampInTimescale),
+			null,
+			(fragment) => {
+				const trackData = fragment.trackData.get(this.internalTrack.id);
+				if (!trackData) {
+					return { sampleIndex: -1, correctSampleFound: false };
+				}
+
+				const index = binarySearchLessOrEqual(
+					trackData.presentationTimestamps,
+					timestampInTimescale,
+					x => x.presentationTimestamp,
+				);
+
+				const sampleIndex = index !== -1 ? trackData.presentationTimestamps[index]!.sampleIndex : -1;
+				const correctSampleFound = index !== -1 && timestampInTimescale < trackData.endTimestamp;
+
+				return { sampleIndex, correctSampleFound };
+			},
 			timestampInTimescale,
 			timestampInTimescale,
 			options,
@@ -2479,53 +2429,32 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			throw new Error('Packet was not created from this track.');
 		}
 
-		const trackData = locationInFragment.fragment.trackData.get(this.internalTrack.id)!;
-
-		const fragmentIndex = binarySearchExact(
-			this.internalTrack.fragments,
-			locationInFragment.fragment.moofOffset,
-			x => x.moofOffset,
-		);
-		assert(fragmentIndex !== -1);
-
 		return this.performFragmentedLookup(
-			() => {
-				if (locationInFragment.sampleIndex + 1 < trackData.samples.length) {
-					// We can simply take the next sample in the fragment
-					return {
-						fragmentIndex,
-						sampleIndex: locationInFragment.sampleIndex + 1,
-						correctSampleFound: true,
-					};
-				} else {
-					// Walk the list of fragments until we find the next fragment for this track
-					let currentFragment = locationInFragment.fragment;
-					while (currentFragment.nextFragment) {
-						currentFragment = currentFragment.nextFragment;
-
-						const trackData = currentFragment.trackData.get(this.internalTrack.id);
-						if (trackData) {
-							const fragmentIndex = binarySearchExact(
-								this.internalTrack.fragments,
-								currentFragment.moofOffset,
-								x => x.moofOffset,
-							);
-							assert(fragmentIndex !== -1);
-
-							return {
-								fragmentIndex,
-								sampleIndex: 0,
-								correctSampleFound: true,
-							};
-						}
+			locationInFragment.fragment,
+			(fragment) => {
+				if (fragment === locationInFragment.fragment) {
+					const trackData = fragment.trackData.get(this.internalTrack.id)!;
+					if (locationInFragment.sampleIndex + 1 < trackData.samples.length) {
+						// We can simply take the next sample in the fragment
+						return {
+							sampleIndex: locationInFragment.sampleIndex + 1,
+							correctSampleFound: true,
+						};
 					}
-
-					return {
-						fragmentIndex,
-						sampleIndex: -1,
-						correctSampleFound: false,
-					};
+				} else {
+					const trackData = fragment.trackData.get(this.internalTrack.id);
+					if (trackData) {
+						return {
+							sampleIndex: 0,
+							correctSampleFound: true,
+						};
+					}
 				}
+
+				return {
+					sampleIndex: -1,
+					correctSampleFound: false,
+				};
 			},
 			-Infinity, // Use -Infinity as a search timestamp to avoid using the lookup entries
 			Infinity,
@@ -2549,7 +2478,23 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		}
 
 		return this.performFragmentedLookup(
-			() => this.findKeySampleInFragmentsForTimestamp(timestampInTimescale),
+			null,
+			(fragment) => {
+				const trackData = fragment.trackData.get(this.internalTrack.id);
+				if (!trackData) {
+					return { sampleIndex: -1, correctSampleFound: false };
+				}
+
+				const index = findLastIndex(trackData.presentationTimestamps, (x) => {
+					const sample = trackData.samples[x.sampleIndex]!;
+					return sample.isKeyFrame && x.presentationTimestamp <= timestampInTimescale;
+				});
+
+				const sampleIndex = index !== -1 ? trackData.presentationTimestamps[index]!.sampleIndex : -1;
+				const correctSampleFound = index !== -1 && timestampInTimescale < trackData.endTimestamp;
+
+				return { sampleIndex, correctSampleFound };
+			},
 			timestampInTimescale,
 			timestampInTimescale,
 			options,
@@ -2570,60 +2515,39 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			throw new Error('Packet was not created from this track.');
 		}
 
-		const trackData = locationInFragment.fragment.trackData.get(this.internalTrack.id)!;
-
-		const fragmentIndex = binarySearchExact(
-			this.internalTrack.fragments,
-			locationInFragment.fragment.moofOffset,
-			x => x.moofOffset,
-		);
-		assert(fragmentIndex !== -1);
-
 		return this.performFragmentedLookup(
-			() => {
-				const nextKeyFrameIndex = trackData.samples.findIndex(
-					(x, i) => x.isKeyFrame && i > locationInFragment.sampleIndex,
-				);
+			locationInFragment.fragment,
+			(fragment) => {
+				if (fragment === locationInFragment.fragment) {
+					const trackData = fragment.trackData.get(this.internalTrack.id)!;
+					const nextKeyFrameIndex = trackData.samples.findIndex(
+						(x, i) => x.isKeyFrame && i > locationInFragment.sampleIndex,
+					);
 
-				if (nextKeyFrameIndex !== -1) {
-					// We can simply take the next key frame in the fragment
-					return {
-						fragmentIndex,
-						sampleIndex: nextKeyFrameIndex,
-						correctSampleFound: true,
-					};
-				} else {
-					// Walk the list of fragments until we find the next fragment for this track with a key frame
-					let currentFragment = locationInFragment.fragment;
-					while (currentFragment.nextFragment) {
-						currentFragment = currentFragment.nextFragment;
-
-						const trackData = currentFragment.trackData.get(this.internalTrack.id);
-						if (trackData && trackData.firstKeyFrameTimestamp !== null) {
-							const fragmentIndex = binarySearchExact(
-								this.internalTrack.fragments,
-								currentFragment.moofOffset,
-								x => x.moofOffset,
-							);
-							assert(fragmentIndex !== -1);
-
-							const keyFrameIndex = trackData.samples.findIndex(x => x.isKeyFrame);
-							assert(keyFrameIndex !== -1); // There must be one
-
-							return {
-								fragmentIndex,
-								sampleIndex: keyFrameIndex,
-								correctSampleFound: true,
-							};
-						}
+					if (nextKeyFrameIndex !== -1) {
+						// We can simply take the next key frame in the fragment
+						return {
+							sampleIndex: nextKeyFrameIndex,
+							correctSampleFound: true,
+						};
 					}
+				} else {
+					const trackData = fragment.trackData.get(this.internalTrack.id);
+					if (trackData && trackData.firstKeyFrameTimestamp !== null) {
+						const keyFrameIndex = trackData.samples.findIndex(x => x.isKeyFrame);
+						assert(keyFrameIndex !== -1); // There must be one
 
-					return {
-						fragmentIndex,
-						sampleIndex: -1,
-						correctSampleFound: false,
-					};
+						return {
+							sampleIndex: keyFrameIndex,
+							correctSampleFound: true,
+						};
+					}
 				}
+
+				return {
+					sampleIndex: -1,
+					correctSampleFound: false,
+				};
 			},
 			-Infinity, // Use -Infinity as a search timestamp to avoid using the lookup entries
 			Infinity,
@@ -2713,77 +2637,12 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		return packet;
 	}
 
-	private findSampleInFragmentsForTimestamp(timestampInTimescale: number) {
-		const fragmentIndex = binarySearchLessOrEqual(
-			// This array is technically not sorted by start timestamp, but for any reasonable file, it basically is.
-			this.internalTrack.fragments,
-			timestampInTimescale,
-			x => x.trackData.get(this.internalTrack.id)!.startTimestamp,
-		);
-		let sampleIndex = -1;
-		let correctSampleFound = false;
-
-		if (fragmentIndex !== -1) {
-			const fragment = this.internalTrack.fragments[fragmentIndex]!;
-			const trackData = fragment.trackData.get(this.internalTrack.id)!;
-
-			const index = binarySearchLessOrEqual(
-				trackData.presentationTimestamps,
-				timestampInTimescale,
-				x => x.presentationTimestamp,
-			);
-			assert(index !== -1);
-
-			sampleIndex = trackData.presentationTimestamps[index]!.sampleIndex;
-			correctSampleFound = timestampInTimescale < trackData.endTimestamp;
-		}
-
-		return { fragmentIndex, sampleIndex, correctSampleFound };
-	}
-
-	private findKeySampleInFragmentsForTimestamp(timestampInTimescale: number) {
-		const indexInKeyFrameFragments = binarySearchLessOrEqual(
-			// This array is technically not sorted by start timestamp, but for any reasonable file, it basically is.
-			this.internalTrack.fragmentsWithKeyFrame,
-			timestampInTimescale,
-			x => x.trackData.get(this.internalTrack.id)!.startTimestamp,
-		);
-
-		let fragmentIndex = -1;
-		let sampleIndex = -1;
-		let correctSampleFound = false;
-
-		if (indexInKeyFrameFragments !== -1) {
-			const fragment = this.internalTrack.fragmentsWithKeyFrame[indexInKeyFrameFragments]!;
-
-			// Now, let's find the actual index of the fragment in the list of ALL fragments, not just key frame ones
-			fragmentIndex = binarySearchExact(
-				this.internalTrack.fragments,
-				fragment.moofOffset,
-				x => x.moofOffset,
-			);
-			assert(fragmentIndex !== -1);
-
-			const trackData = fragment.trackData.get(this.internalTrack.id)!;
-			const index = findLastIndex(trackData.presentationTimestamps, (x) => {
-				const sample = trackData.samples[x.sampleIndex]!;
-				return sample.isKeyFrame && x.presentationTimestamp <= timestampInTimescale;
-			});
-			assert(index !== -1); // It's a key frame fragment, so there must be a key frame
-
-			const entry = trackData.presentationTimestamps[index]!;
-			sampleIndex = entry.sampleIndex;
-			correctSampleFound = timestampInTimescale < trackData.endTimestamp;
-		}
-
-		return { fragmentIndex, sampleIndex, correctSampleFound };
-	}
-
 	/** Looks for a packet in the fragments while trying to load as few fragments as possible to retrieve it. */
 	private async performFragmentedLookup(
-		// This function returns the best-matching sample that is currently loaded. Based on this information, we know
-		// which fragments we need to load to find the actual match.
-		getBestMatch: () => { fragmentIndex: number; sampleIndex: number; correctSampleFound: boolean },
+		// The fragment where we start looking
+		startFragment: Fragment | null,
+		// This function returns the best-matching sample in a given fragment
+		getMatchInFragment: (fragment: Fragment) => { sampleIndex: number; correctSampleFound: boolean },
 		// The timestamp with which we can search the lookup table
 		searchTimestamp: number,
 		// The timestamp for which we know the correct sample will not come after it
@@ -2791,133 +2650,119 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		options: PacketRetrievalOptions,
 	): Promise<EncodedPacket | null> {
 		const demuxer = this.internalTrack.demuxer;
-		const release = await demuxer.fragmentLookupMutex.acquire(); // The algorithm requires exclusivity
 
-		try {
-			const { fragmentIndex, sampleIndex, correctSampleFound } = getBestMatch();
+		let currentFragment: Fragment | null = null;
+		let bestFragment: Fragment | null = null;
+		let bestSampleIndex = -1;
+
+		if (startFragment) {
+			const { sampleIndex, correctSampleFound } = getMatchInFragment(startFragment);
+
 			if (correctSampleFound) {
-				// The correct sample already exists, easy path.
-				const fragment = this.internalTrack.fragments[fragmentIndex]!;
-				return this.fetchPacketInFragment(fragment, sampleIndex, options);
+				return this.fetchPacketInFragment(startFragment, sampleIndex, options);
 			}
 
-			let prevFragment: Fragment | null = null;
-			let bestFragmentIndex = fragmentIndex;
-			let bestSampleIndex = sampleIndex;
+			if (sampleIndex !== -1) {
+				bestFragment = startFragment;
+				bestSampleIndex = sampleIndex;
+			}
+		}
 
-			// Search for a lookup entry; this way, we won't need to start searching from the start of the file
-			// but can jump right into the correct fragment (or at least nearby).
-			const lookupEntryIndex = this.internalTrack.fragmentLookupTable
-				? binarySearchLessOrEqual(
-						this.internalTrack.fragmentLookupTable,
-						searchTimestamp,
-						x => x.timestamp,
-					)
-				: -1;
-			const lookupEntry = lookupEntryIndex !== -1
-				? this.internalTrack.fragmentLookupTable![lookupEntryIndex]!
-				: null;
+		// Search for a lookup entry; this way, we won't need to start searching from the start of the file
+		// but can jump right into the correct fragment (or at least nearby).
+		const lookupEntryIndex = binarySearchLessOrEqual(
+			this.internalTrack.fragmentLookupTable,
+			searchTimestamp,
+			x => x.timestamp,
+		);
+		const lookupEntry = lookupEntryIndex !== -1
+			? this.internalTrack.fragmentLookupTable[lookupEntryIndex]!
+			: null;
 
-			let currentPos: number;
-			let nextFragmentIsFirstFragment = false;
+		const positionCacheIndex = binarySearchLessOrEqual(
+			this.internalTrack.fragmentPositionCache,
+			searchTimestamp,
+			x => x.startTimestamp,
+		);
+		const positionCacheEntry = positionCacheIndex !== -1
+			? this.internalTrack.fragmentPositionCache[positionCacheIndex]!
+			: null;
 
-			if (fragmentIndex === -1) {
-				currentPos = lookupEntry?.moofOffset ?? 0;
-				nextFragmentIsFirstFragment = currentPos === 0;
+		const lookupEntryPosition = Math.max(
+			lookupEntry?.moofOffset ?? 0,
+			positionCacheEntry?.moofOffset ?? 0,
+		) || null;
+
+		let currentPos: number;
+
+		if (!startFragment) {
+			currentPos = lookupEntryPosition ?? 0;
+		} else {
+			if (lookupEntryPosition === null || startFragment.moofOffset >= lookupEntryPosition) {
+				currentPos = startFragment.moofOffset + startFragment.moofSize;
+				currentFragment = startFragment;
 			} else {
-				const fragment = this.internalTrack.fragments[fragmentIndex]!;
-
-				if (!lookupEntry || fragment.moofOffset >= lookupEntry.moofOffset) {
-					currentPos = fragment.moofOffset + fragment.moofSize;
-					prevFragment = fragment;
-				} else {
-					// Use the lookup entry
-					currentPos = lookupEntry.moofOffset;
-				}
+				// Use the lookup entry
+				currentPos = lookupEntryPosition;
 			}
+		}
 
-			while (true) {
-				if (prevFragment) {
-					const trackData = prevFragment.trackData.get(this.internalTrack.id);
-					if (trackData && trackData.startTimestamp > latestTimestamp) {
-						// We're already past the upper bound, no need to keep searching
-						break;
-					}
-
-					if (prevFragment.nextFragment) {
-						// Skip ahead quickly without needing to read the file again
-						currentPos = prevFragment.nextFragment.moofOffset + prevFragment.nextFragment.moofSize;
-						prevFragment = prevFragment.nextFragment;
-						continue;
-					}
-				}
-
-				// Load the header
-				let slice = demuxer.reader.requestSliceRange(currentPos, MIN_BOX_HEADER_SIZE, MAX_BOX_HEADER_SIZE);
-				if (slice instanceof Promise) slice = await slice;
-				if (!slice) break;
-
-				const startPos = currentPos;
-				const boxInfo = readBoxHeader(slice);
-				if (!boxInfo) {
+		while (true) {
+			if (currentFragment) {
+				const trackData = currentFragment.trackData.get(this.internalTrack.id);
+				if (trackData && trackData.startTimestamp > latestTimestamp) {
+					// We're already past the upper bound, no need to keep searching
 					break;
 				}
+			}
 
-				if (boxInfo.name === 'moof') {
-					const index = binarySearchExact(demuxer.fragments, startPos, x => x.moofOffset);
+			// Load the header
+			let slice = demuxer.reader.requestSliceRange(currentPos, MIN_BOX_HEADER_SIZE, MAX_BOX_HEADER_SIZE);
+			if (slice instanceof Promise) slice = await slice;
+			if (!slice) break;
 
-					let fragment: Fragment;
-					if (index === -1) {
-						// This is the first time we've seen this fragment
-						fragment = await demuxer.readFragment(startPos);
-					} else {
-						// We already know this fragment
-						fragment = demuxer.fragments[index]!;
-					}
+			const boxStartPos = currentPos;
+			const boxInfo = readBoxHeader(slice);
+			if (!boxInfo) {
+				break;
+			}
 
-					// Even if we already know the fragment, we might not yet know its predecessor, so always do this
-					if (prevFragment) prevFragment.nextFragment = fragment;
-					prevFragment = fragment;
-
-					if (nextFragmentIsFirstFragment) {
-						fragment.isKnownToBeFirstFragment = true;
-						nextFragmentIsFirstFragment = false;
-					}
-
-					const { fragmentIndex, sampleIndex, correctSampleFound } = getBestMatch();
-					if (correctSampleFound) {
-						const fragment = this.internalTrack.fragments[fragmentIndex]!;
-						return this.fetchPacketInFragment(fragment, sampleIndex, options);
-					}
-					if (fragmentIndex !== -1) {
-						bestFragmentIndex = fragmentIndex;
-						bestSampleIndex = sampleIndex;
-					}
+			if (boxInfo.name === 'moof') {
+				currentFragment = await demuxer.readFragment(boxStartPos);
+				const { sampleIndex, correctSampleFound } = getMatchInFragment(currentFragment);
+				if (correctSampleFound) {
+					return this.fetchPacketInFragment(currentFragment, sampleIndex, options);
 				}
-
-				currentPos = startPos + boxInfo.totalSize;
+				if (sampleIndex !== -1) {
+					bestFragment = currentFragment;
+					bestSampleIndex = sampleIndex;
+				}
 			}
 
-			const bestFragment = bestFragmentIndex !== -1 ? this.internalTrack.fragments[bestFragmentIndex]! : null;
-
-			// Catch faulty lookup table entries
-			if (lookupEntry && (!bestFragment || bestFragment.moofOffset < lookupEntry.moofOffset)) {
-				// The lookup table entry lied to us! We found a lookup entry but no fragment there that satisfied
-				// the match. In this case, let's search again but using the lookup entry before that.
-				const previousLookupEntry = this.internalTrack.fragmentLookupTable![lookupEntryIndex - 1];
-				const newSearchTimestamp = previousLookupEntry?.timestamp ?? -Infinity;
-				return this.performFragmentedLookup(getBestMatch, newSearchTimestamp, latestTimestamp, options);
-			}
-
-			if (bestFragment) {
-				// If we finished looping but didn't find a perfect match, still return the best match we found
-				return this.fetchPacketInFragment(bestFragment, bestSampleIndex, options);
-			}
-
-			return null;
-		} finally {
-			release();
+			currentPos = boxStartPos + boxInfo.totalSize;
 		}
+
+		// Catch faulty lookup table entries
+		if (lookupEntry && (!bestFragment || bestFragment.moofOffset < lookupEntry.moofOffset)) {
+			// The lookup table entry lied to us! We found a lookup entry but no fragment there that satisfied
+			// the match. In this case, let's search again but using the lookup entry before that.
+			const previousLookupEntry = this.internalTrack.fragmentLookupTable[lookupEntryIndex - 1];
+			const newSearchTimestamp = previousLookupEntry?.timestamp ?? -Infinity;
+			return this.performFragmentedLookup(
+				null,
+				getMatchInFragment,
+				newSearchTimestamp,
+				latestTimestamp,
+				options,
+			);
+		}
+
+		if (bestFragment) {
+			// If we finished looping but didn't find a perfect match, still return the best match we found
+			return this.fetchPacketInFragment(bestFragment, bestSampleIndex, options);
+		}
+
+		return null;
 	}
 }
 

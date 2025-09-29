@@ -25,6 +25,7 @@ import {
 	getUint24,
 	insertSorted,
 	isFirefox,
+	isNumber,
 	isSafari,
 	last,
 	mapAsyncGenerator,
@@ -75,7 +76,7 @@ const validatePacketRetrievalOptions = (options: PacketRetrievalOptions) => {
 };
 
 const validateTimestamp = (timestamp: number) => {
-	if (typeof timestamp !== 'number' || Number.isNaN(timestamp)) {
+	if (!isNumber(timestamp)) {
 		throw new TypeError('timestamp must be a number.'); // It can be non-finite, that's fine
 	}
 };

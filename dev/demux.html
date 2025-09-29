@@ -14,12 +14,42 @@
 			source: new Mediabunny.BlobSource(file),
 		});
 
-		const audioTrack = await input.getPrimaryAudioTrack();
-		
-		const sink = new Mediabunny.EncodedPacketSink(audioTrack);
-		for await (const packet of sink.packets()) {
-			console.log(packet)
+		let total = 0;
+		input.source.onread = (start, end) => {
+			total += end - start;
+			//console.log(total / file.size, end - start);
 		}
+
+		const videoTrack = await input.getPrimaryVideoTrack();
+		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
+
+		//console.log(await sink.getPacket(0));
+		/*
+		console.time()
+		console.log(await sink.getPacket(500));
+		console.timeEnd()
+
+		console.time()
+		console.log(await sink.getPacket(400));
+		console.timeEnd()
+		*/
+		//console.log(await sink.getPacket(50));
+		//console.log(await sink.getPacket(8000));
+
+
+
+		const stats = await videoTrack.computePacketStats();
+		
+		/*
+		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
+		for await (const packet of sink.packets()) {
+			//console.log(packet)
+		}
+		*/
+		//console.log(await videoTrack.computeDuration());
+		console.log("Done", stats, total, file.size)
+
+		console.log(input);
 
 		/*
 		const videoTrack = await input.getPrimaryVideoTrack();

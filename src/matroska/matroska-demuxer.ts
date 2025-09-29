@@ -35,12 +35,9 @@ import { AttachedFile, MetadataTags } from '../tags';
 import { PacketRetrievalOptions } from '../media-sink';
 import {
 	assert,
-	AsyncMutex,
-	binarySearchExact,
 	binarySearchLessOrEqual,
 	COLOR_PRIMARIES_MAP_INVERSE,
 	findLastIndex,
-	insertSorted,
 	isIso639Dash2LanguageCode,
 	last,
 	MATRIX_COEFFICIENTS_MAP_INVERSE,
@@ -93,8 +90,11 @@ type Segment = {
 	elementEndPos: number | null;
 	clusterSeekStartPos: number;
 
-	clusters: Cluster[];
-	clusterLookupMutex: AsyncMutex;
+	/**
+	 * Caches the last cluster that was read. Based on the assumption that there will be multiple reads to the
+	 * same cluster in quick succession.
+	 */
+	lastReadCluster: Cluster | null;
 
 	metadataTags: MetadataTags;
 	metadataTagsCollected: boolean;
@@ -112,8 +112,6 @@ type Cluster = {
 	dataStartPos: number;
 	timestamp: number;
 	trackData: Map<number, ClusterTrackData>;
-	nextCluster: Cluster | null;
-	isKnownToBeFirstCluster: boolean;
 };
 
 type ClusterTrackData = {
@@ -182,8 +180,14 @@ type InternalTrack = {
 	id: number;
 	demuxer: MatroskaDemuxer;
 	segment: Segment;
-	clusters: Cluster[];
-	clustersWithKeyFrame: Cluster[];
+	/**
+	 * List of all encountered cluster offsets alongside their timestamps. This list never gets truncated, but memory
+	 * consumption should be negligible.
+	 */
+	clusterPositionCache: {
+		elementStartPos: number;
+		startTimestamp: number;
+	}[];
 	cuePoints: CuePoint[];
 
 	isDefault: boolean;
@@ -409,8 +413,7 @@ export class MatroskaDemuxer extends Demuxer {
 				: segmentDataStart + dataSize,
 			clusterSeekStartPos: segmentDataStart,
 
-			clusters: [],
-			clusterLookupMutex: new AsyncMutex(),
+			lastReadCluster: null,
 
 			metadataTags: {},
 			metadataTagsCollected: false,
@@ -591,6 +594,10 @@ export class MatroskaDemuxer extends Demuxer {
 	}
 
 	async readCluster(startPos: number, segment: Segment) {
+		if (segment.lastReadCluster?.elementStartPos === startPos) {
+			return segment.lastReadCluster;
+		}
+
 		let headerSlice = this.reader.requestSliceRange(startPos, MIN_HEADER_SIZE, MAX_HEADER_SIZE);
 		if (headerSlice instanceof Promise) headerSlice = await headerSlice;
 		assert(headerSlice);
@@ -600,6 +607,8 @@ export class MatroskaDemuxer extends Demuxer {
 		assert(elementHeader);
 
 		const id = elementHeader.id;
+		assert(id === EBMLId.Cluster);
+
 		let size = elementHeader.size;
 		const dataStartPos = headerSlice.filePos;
 
@@ -617,8 +626,6 @@ export class MatroskaDemuxer extends Demuxer {
 			size = nextElementPos.pos - dataStartPos;
 		}
 
-		assert(id === EBMLId.Cluster);
-
 		// Load the entire cluster
 		let dataSlice = this.reader.requestSlice(dataStartPos, size);
 		if (dataSlice instanceof Promise) dataSlice = await dataSlice;
@@ -630,8 +637,6 @@ export class MatroskaDemuxer extends Demuxer {
 			dataStartPos,
 			timestamp: -1,
 			trackData: new Map(),
-			nextCluster: null,
-			isKnownToBeFirstCluster: false,
 		};
 		this.currentCluster = cluster;
 
@@ -705,17 +710,24 @@ export class MatroskaDemuxer extends Demuxer {
 			trackData.startTimestamp = firstBlock.timestamp;
 			trackData.endTimestamp = lastBlock.timestamp + lastBlock.duration;
 
-			insertSorted(track.clusters, cluster, x => x.elementStartPos);
-
-			const hasKeyFrame = trackData.firstKeyFrameTimestamp !== null;
-			if (hasKeyFrame) {
-				insertSorted(track.clustersWithKeyFrame, cluster, x => x.elementStartPos);
+			// Let's remember that a cluster with a given timestamp is here, speeding up future lookups if no cues exist
+			const insertionIndex = binarySearchLessOrEqual(
+				track.clusterPositionCache,
+				trackData.startTimestamp,
+				x => x.startTimestamp,
+			);
+			if (
+				insertionIndex === -1
+				|| track.clusterPositionCache[insertionIndex]!.elementStartPos !== elementStartPos
+			) {
+				track.clusterPositionCache.splice(insertionIndex + 1, 0, {
+					elementStartPos: cluster.elementStartPos,
+					startTimestamp: trackData.startTimestamp,
+				});
 			}
 		}
 
-		insertSorted(segment.clusters, cluster, x => x.elementStartPos);
-		this.currentCluster = null;
-
+		segment.lastReadCluster = cluster;
 		return cluster;
 	}
 
@@ -977,8 +989,7 @@ export class MatroskaDemuxer extends Demuxer {
 					id: -1,
 					segment: this.currentSegment,
 					demuxer: this,
-					clusters: [],
-					clustersWithKeyFrame: [],
+					clusterPositionCache: [],
 					cuePoints: [],
 
 					isDefault: false,
@@ -1844,31 +1855,17 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 
 	async getFirstPacket(options: PacketRetrievalOptions) {
 		return this.performClusterLookup(
-			() => {
-				const startCluster = this.internalTrack.segment.clusters[0] ?? null;
-				if (startCluster?.isKnownToBeFirstCluster) {
-					// Walk from the very first cluster in the file until we find one with our track in it
-					let currentCluster: Cluster | null = startCluster;
-					while (currentCluster) {
-						const trackData = currentCluster.trackData.get(this.internalTrack.id);
-						if (trackData) {
-							return {
-								clusterIndex: binarySearchExact(
-									this.internalTrack.clusters,
-									currentCluster.elementStartPos,
-									x => x.elementStartPos,
-								),
-								blockIndex: 0,
-								correctBlockFound: true,
-							};
-						}
-
-						currentCluster = currentCluster.nextCluster;
-					}
+			null,
+			(cluster) => {
+				const trackData = cluster.trackData.get(this.internalTrack.id);
+				if (trackData) {
+					return {
+						blockIndex: 0,
+						correctBlockFound: true,
+					};
 				}
 
 				return {
-					clusterIndex: -1,
 					blockIndex: -1,
 					correctBlockFound: false,
 				};
@@ -1890,7 +1887,24 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		const timestampInTimescale = this.intoTimescale(timestamp);
 
 		return this.performClusterLookup(
-			() => this.findBlockInClustersForTimestamp(timestampInTimescale),
+			null,
+			(cluster) => {
+				const trackData = cluster.trackData.get(this.internalTrack.id);
+				if (!trackData) {
+					return { blockIndex: -1, correctBlockFound: false };
+				}
+
+				const index = binarySearchLessOrEqual(
+					trackData.presentationTimestamps,
+					timestampInTimescale,
+					x => x.timestamp,
+				);
+
+				const blockIndex = index !== -1 ? trackData.presentationTimestamps[index]!.blockIndex : -1;
+				const correctBlockFound = index !== -1 && timestampInTimescale < trackData.endTimestamp;
+
+				return { blockIndex, correctBlockFound };
+			},
 			timestampInTimescale,
 			timestampInTimescale,
 			options,
@@ -1903,53 +1917,32 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 			throw new Error('Packet was not created from this track.');
 		}
 
-		const trackData = locationInCluster.cluster.trackData.get(this.internalTrack.id)!;
-
-		const clusterIndex = binarySearchExact(
-			this.internalTrack.clusters,
-			locationInCluster.cluster.elementStartPos,
-			x => x.elementStartPos,
-		);
-		assert(clusterIndex !== -1);
-
 		return this.performClusterLookup(
-			() => {
-				if (locationInCluster.blockIndex + 1 < trackData.blocks.length) {
-					// We can simply take the next block in the cluster
-					return {
-						clusterIndex,
-						blockIndex: locationInCluster.blockIndex + 1,
-						correctBlockFound: true,
-					};
-				} else {
-					// Walk the list of clusters until we find the next cluster for this track
-					let currentCluster = locationInCluster.cluster;
-					while (currentCluster.nextCluster) {
-						currentCluster = currentCluster.nextCluster;
-
-						const trackData = currentCluster.trackData.get(this.internalTrack.id);
-						if (trackData) {
-							const clusterIndex = binarySearchExact(
-								this.internalTrack.clusters,
-								currentCluster.elementStartPos,
-								x => x.elementStartPos,
-							);
-							assert(clusterIndex !== -1);
-
-							return {
-								clusterIndex,
-								blockIndex: 0,
-								correctBlockFound: true,
-							};
-						}
+			locationInCluster.cluster,
+			(cluster) => {
+				if (cluster === locationInCluster.cluster) {
+					const trackData = cluster.trackData.get(this.internalTrack.id)!;
+					if (locationInCluster.blockIndex + 1 < trackData.blocks.length) {
+						// We can simply take the next block in the cluster
+						return {
+							blockIndex: locationInCluster.blockIndex + 1,
+							correctBlockFound: true,
+						};
 					}
-
-					return {
-						clusterIndex,
-						blockIndex: -1,
-						correctBlockFound: false,
-					};
+				} else {
+					const trackData = cluster.trackData.get(this.internalTrack.id);
+					if (trackData) {
+						return {
+							blockIndex: 0,
+							correctBlockFound: true,
+						};
+					}
 				}
+
+				return {
+					blockIndex: -1,
+					correctBlockFound: false,
+				};
 			},
 			-Infinity, // Use -Infinity as a search timestamp to avoid using the cues
 			Infinity,
@@ -1961,7 +1954,23 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		const timestampInTimescale = this.intoTimescale(timestamp);
 
 		return this.performClusterLookup(
-			() => this.findKeyBlockInClustersForTimestamp(timestampInTimescale),
+			null,
+			(cluster) => {
+				const trackData = cluster.trackData.get(this.internalTrack.id);
+				if (!trackData) {
+					return { blockIndex: -1, correctBlockFound: false };
+				}
+
+				const index = findLastIndex(trackData.presentationTimestamps, (x) => {
+					const block = trackData.blocks[x.blockIndex]!;
+					return block.isKeyFrame && x.timestamp <= timestampInTimescale;
+				});
+
+				const blockIndex = index !== -1 ? trackData.presentationTimestamps[index]!.blockIndex : -1;
+				const correctBlockFound = index !== -1 && timestampInTimescale < trackData.endTimestamp;
+
+				return { blockIndex, correctBlockFound };
+			},
 			timestampInTimescale,
 			timestampInTimescale,
 			options,
@@ -1974,60 +1983,39 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 			throw new Error('Packet was not created from this track.');
 		}
 
-		const trackData = locationInCluster.cluster.trackData.get(this.internalTrack.id)!;
-
-		const clusterIndex = binarySearchExact(
-			this.internalTrack.clusters,
-			locationInCluster.cluster.elementStartPos,
-			x => x.elementStartPos,
-		);
-		assert(clusterIndex !== -1);
-
 		return this.performClusterLookup(
-			() => {
-				const nextKeyFrameIndex = trackData.blocks.findIndex(
-					(x, i) => x.isKeyFrame && i > locationInCluster.blockIndex,
-				);
+			locationInCluster.cluster,
+			(cluster) => {
+				if (cluster === locationInCluster.cluster) {
+					const trackData = cluster.trackData.get(this.internalTrack.id)!;
+					const nextKeyFrameIndex = trackData.blocks.findIndex(
+						(x, i) => x.isKeyFrame && i > locationInCluster.blockIndex,
+					);
 
-				if (nextKeyFrameIndex !== -1) {
-					// We can simply take the next key frame in the cluster
-					return {
-						clusterIndex,
-						blockIndex: nextKeyFrameIndex,
-						correctBlockFound: true,
-					};
-				} else {
-					// Walk the list of clusters until we find the next cluster for this track with a key frame
-					let currentCluster = locationInCluster.cluster;
-					while (currentCluster.nextCluster) {
-						currentCluster = currentCluster.nextCluster;
-
-						const trackData = currentCluster.trackData.get(this.internalTrack.id);
-						if (trackData && trackData.firstKeyFrameTimestamp !== null) {
-							const clusterIndex = binarySearchExact(
-								this.internalTrack.clusters,
-								currentCluster.elementStartPos,
-								x => x.elementStartPos,
-							);
-							assert(clusterIndex !== -1);
-
-							const keyFrameIndex = trackData.blocks.findIndex(x => x.isKeyFrame);
-							assert(keyFrameIndex !== -1); // There must be one
-
-							return {
-								clusterIndex,
-								blockIndex: keyFrameIndex,
-								correctBlockFound: true,
-							};
-						}
+					if (nextKeyFrameIndex !== -1) {
+						// We can simply take the next key frame in the cluster
+						return {
+							blockIndex: nextKeyFrameIndex,
+							correctBlockFound: true,
+						};
 					}
+				} else {
+					const trackData = cluster.trackData.get(this.internalTrack.id);
+					if (trackData && trackData.firstKeyFrameTimestamp !== null) {
+						const keyFrameIndex = trackData.blocks.findIndex(x => x.isKeyFrame);
+						assert(keyFrameIndex !== -1); // There must be one
 
-					return {
-						clusterIndex,
-						blockIndex: -1,
-						correctBlockFound: false,
-					};
+						return {
+							blockIndex: keyFrameIndex,
+							correctBlockFound: true,
+						};
+					}
 				}
+
+				return {
+					blockIndex: -1,
+					correctBlockFound: false,
+				};
 			},
 			-Infinity, // Use -Infinity as a search timestamp to avoid using the cues
 			Infinity,
@@ -2075,77 +2063,12 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		return packet;
 	}
 
-	private findBlockInClustersForTimestamp(timestampInTimescale: number) {
-		const clusterIndex = binarySearchLessOrEqual(
-			// This array is technically not sorted by start timestamp, but for any reasonable file, it basically is.
-			this.internalTrack.clusters,
-			timestampInTimescale,
-			x => x.trackData.get(this.internalTrack.id)!.startTimestamp,
-		);
-		let blockIndex = -1;
-		let correctBlockFound = false;
-
-		if (clusterIndex !== -1) {
-			const cluster = this.internalTrack.clusters[clusterIndex]!;
-			const trackData = cluster.trackData.get(this.internalTrack.id)!;
-
-			const index = binarySearchLessOrEqual(
-				trackData.presentationTimestamps,
-				timestampInTimescale,
-				x => x.timestamp,
-			);
-			assert(index !== -1);
-
-			blockIndex = trackData.presentationTimestamps[index]!.blockIndex;
-			correctBlockFound = timestampInTimescale < trackData.endTimestamp;
-		}
-
-		return { clusterIndex, blockIndex, correctBlockFound };
-	}
-
-	private findKeyBlockInClustersForTimestamp(timestampInTimescale: number) {
-		const indexInKeyFrameClusters = binarySearchLessOrEqual(
-			// This array is technically not sorted by start timestamp, but for any reasonable file, it basically is.
-			this.internalTrack.clustersWithKeyFrame,
-			timestampInTimescale,
-			x => x.trackData.get(this.internalTrack.id)!.firstKeyFrameTimestamp!,
-		);
-
-		let clusterIndex = -1;
-		let blockIndex = -1;
-		let correctBlockFound = false;
-
-		if (indexInKeyFrameClusters !== -1) {
-			const cluster = this.internalTrack.clustersWithKeyFrame[indexInKeyFrameClusters]!;
-
-			// Now, let's find the actual index of the cluster in the list of ALL clusters, not just key frame ones
-			clusterIndex = binarySearchExact(
-				this.internalTrack.clusters,
-				cluster.elementStartPos,
-				x => x.elementStartPos,
-			);
-			assert(clusterIndex !== -1);
-
-			const trackData = cluster.trackData.get(this.internalTrack.id)!;
-			const index = findLastIndex(trackData.presentationTimestamps, (x) => {
-				const block = trackData.blocks[x.blockIndex]!;
-				return block.isKeyFrame && x.timestamp <= timestampInTimescale;
-			});
-			assert(index !== -1); // It's a key frame cluster, so there must be a key frame
-
-			const entry = trackData.presentationTimestamps[index]!;
-			blockIndex = entry.blockIndex;
-			correctBlockFound = timestampInTimescale < trackData.endTimestamp;
-		}
-
-		return { clusterIndex, blockIndex, correctBlockFound };
-	}
-
 	/** Looks for a packet in the clusters while trying to load as few clusters as possible to retrieve it. */
 	private async performClusterLookup(
-		// This function returns the best-matching block that is currently loaded. Based on this information, we know
-		// which clusters we need to load to find the actual match.
-		getBestMatch: () => { clusterIndex: number; blockIndex: number; correctBlockFound: boolean },
+		// The cluster where we start looking
+		startCluster: Cluster | null,
+		// This function returns the best-matching block in a given cluster
+		getMatchInCluster: (cluster: Cluster) => { blockIndex: number; correctBlockFound: boolean },
 		// The timestamp with which we can search the lookup table
 		searchTimestamp: number,
 		// The timestamp for which we know the correct block will not come after it
@@ -2153,192 +2076,179 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		options: PacketRetrievalOptions,
 	): Promise<EncodedPacket | null> {
 		const { demuxer, segment } = this.internalTrack;
-		const release = await segment.clusterLookupMutex.acquire(); // The algorithm requires exclusivity
 
-		try {
-			const { clusterIndex, blockIndex, correctBlockFound } = getBestMatch();
+		let currentCluster: Cluster | null = null;
+		let bestCluster: Cluster | null = null;
+		let bestBlockIndex = -1;
+
+		if (startCluster) {
+			const { blockIndex, correctBlockFound } = getMatchInCluster(startCluster);
+
 			if (correctBlockFound) {
-				// The correct block already exists, easy path.
-				const cluster = this.internalTrack.clusters[clusterIndex]!;
-				return this.fetchPacketInCluster(cluster, blockIndex, options);
+				return this.fetchPacketInCluster(startCluster, blockIndex, options);
 			}
 
-			let prevCluster: Cluster | null = null;
-			let bestClusterIndex = clusterIndex;
-			let bestBlockIndex = blockIndex;
+			if (blockIndex !== -1) {
+				bestCluster = startCluster;
+				bestBlockIndex = blockIndex;
+			}
+		}
 
-			// Search for a cue point; this way, we won't need to start searching from the start of the file
-			// but can jump right into the correct cluster (or at least nearby).
-			const cuePointIndex = binarySearchLessOrEqual(
-				this.internalTrack.cuePoints,
-				searchTimestamp,
-				x => x.time,
-			);
-			const cuePoint = cuePointIndex !== -1 ? this.internalTrack.cuePoints[cuePointIndex]! : null;
+		// Search for a cue point; this way, we won't need to start searching from the start of the file
+		// but can jump right into the correct cluster (or at least nearby).
+		const cuePointIndex = binarySearchLessOrEqual(
+			this.internalTrack.cuePoints,
+			searchTimestamp,
+			x => x.time,
+		);
+		const cuePoint = cuePointIndex !== -1
+			? this.internalTrack.cuePoints[cuePointIndex]!
+			: null;
 
-			let currentPos: number;
-			let nextClusterIsFirstCluster = false;
+		// Also check the position cache
+		const positionCacheIndex = binarySearchLessOrEqual(
+			this.internalTrack.clusterPositionCache,
+			searchTimestamp,
+			x => x.startTimestamp,
+		);
+		const positionCacheEntry = positionCacheIndex !== -1
+			? this.internalTrack.clusterPositionCache[positionCacheIndex]!
+			: null;
 
-			if (clusterIndex === -1) {
-				currentPos = cuePoint?.clusterPosition ?? segment.clusterSeekStartPos;
-				nextClusterIsFirstCluster = currentPos === segment.clusterSeekStartPos;
+		const lookupEntryPosition = Math.max(
+			cuePoint?.clusterPosition ?? 0,
+			positionCacheEntry?.elementStartPos ?? 0,
+		) || null;
+
+		let currentPos: number;
+
+		if (!startCluster) {
+			currentPos = lookupEntryPosition ?? segment.clusterSeekStartPos;
+		} else {
+			if (lookupEntryPosition === null || startCluster.elementStartPos >= lookupEntryPosition) {
+				currentPos = startCluster.elementEndPos;
+				currentCluster = startCluster;
 			} else {
-				const cluster = this.internalTrack.clusters[clusterIndex]!;
+				// Use the lookup entry
+				currentPos = lookupEntryPosition;
+			}
+		}
 
-				if (!cuePoint || cluster.elementStartPos >= cuePoint.clusterPosition) {
-					currentPos = cluster.elementEndPos;
-					prevCluster = cluster;
-				} else {
-					// Use the lookup entry
-					currentPos = cuePoint.clusterPosition;
+		while (segment.elementEndPos === null || currentPos <= segment.elementEndPos - MIN_HEADER_SIZE) {
+			if (currentCluster) {
+				const trackData = currentCluster.trackData.get(this.internalTrack.id);
+				if (trackData && trackData.startTimestamp > latestTimestamp) {
+					// We're already past the upper bound, no need to keep searching
+					break;
 				}
 			}
 
-			while (segment.elementEndPos === null || currentPos <= segment.elementEndPos - MIN_HEADER_SIZE) {
-				if (prevCluster) {
-					const trackData = prevCluster.trackData.get(this.internalTrack.id);
-					if (trackData && trackData.startTimestamp > latestTimestamp) {
-						// We're already past the upper bound, no need to keep searching
-						break;
-					}
+			// Load the header
+			let slice = demuxer.reader.requestSliceRange(currentPos, MIN_HEADER_SIZE, MAX_HEADER_SIZE);
+			if (slice instanceof Promise) slice = await slice;
+			if (!slice) break;
 
-					if (prevCluster.nextCluster) {
-						// Skip ahead quickly without needing to read the file again
-						currentPos = prevCluster.nextCluster.elementEndPos;
-						prevCluster = prevCluster.nextCluster;
-						continue;
-					}
+			const elementStartPos = currentPos;
+			const elementHeader = readElementHeader(slice);
+
+			if (
+				!elementHeader
+				|| (!LEVEL_1_EBML_IDS.includes(elementHeader.id) && elementHeader.id !== EBMLId.Void)
+			) {
+				// There's an element here that shouldn't be here. Might be garbage. In this case, let's
+				// try and resync to the next valid element.
+				const nextPos = await resync(
+					demuxer.reader,
+					elementStartPos,
+					LEVEL_1_EBML_IDS,
+					Math.min(segment.elementEndPos ?? Infinity, elementStartPos + MAX_RESYNC_LENGTH),
+				);
+
+				if (nextPos) {
+					currentPos = nextPos;
+					continue;
+				} else {
+					break; // Resync failed
+				}
+			}
+
+			const id = elementHeader.id;
+			let size = elementHeader.size;
+			const dataStartPos = slice.filePos;
+
+			if (id === EBMLId.Cluster) {
+				currentCluster = await demuxer.readCluster(elementStartPos, segment);
+
+				const { blockIndex, correctBlockFound } = getMatchInCluster(currentCluster);
+				if (correctBlockFound) {
+					return this.fetchPacketInCluster(currentCluster, blockIndex, options);
 				}
 
-				// Load the header
-				let slice = demuxer.reader.requestSliceRange(currentPos, MIN_HEADER_SIZE, MAX_HEADER_SIZE);
-				if (slice instanceof Promise) slice = await slice;
-				if (!slice) break;
-
-				const elementStartPos = currentPos;
-				const elementHeader = readElementHeader(slice);
-
-				if (
-					!elementHeader
-					|| (!LEVEL_1_EBML_IDS.includes(elementHeader.id) && elementHeader.id !== EBMLId.Void)
-				) {
-					// There's an element here that shouldn't be here. Might be garbage. In this case, let's
-					// try and resync to the next valid element.
-					const nextPos = await resync(
-						demuxer.reader,
-						elementStartPos,
-						LEVEL_1_EBML_IDS,
-						Math.min(segment.elementEndPos ?? Infinity, elementStartPos + MAX_RESYNC_LENGTH),
-					);
-
-					if (nextPos) {
-						currentPos = nextPos;
-						continue;
-					} else {
-						break; // Resync failed
-					}
+				if (blockIndex !== -1) {
+					bestCluster = currentCluster;
+					bestBlockIndex = blockIndex;
 				}
+			}
 
-				const id = elementHeader.id;
-				let size = elementHeader.size;
-				const dataStartPos = slice.filePos;
+			if (size === null) {
+				// Undefined element size (can happen in livestreamed files). In this case, we need to do some
+				// searching to determine the actual size of the element.
 
 				if (id === EBMLId.Cluster) {
-					const index = binarySearchExact(segment.clusters, elementStartPos, x => x.elementStartPos);
+					// The cluster should have already computed its length, we can just copy that result
+					assert(currentCluster);
+					size = currentCluster.elementEndPos - dataStartPos;
+				} else {
+					// Search for the next element at level 0 or 1
+					const nextElementPos = await searchForNextElementId(
+						demuxer.reader,
+						dataStartPos,
+						LEVEL_0_AND_1_EBML_IDS,
+						segment.elementEndPos,
+					);
 
-					let cluster: Cluster;
-					if (index === -1) {
-						// This is the first time we've seen this cluster
-						cluster = await demuxer.readCluster(elementStartPos, segment);
-					} else {
-						// We already know this cluster
-						cluster = segment.clusters[index]!;
-					}
-
-					// Even if we already know the cluster, we might not yet know its predecessor, so always do this
-					if (prevCluster) prevCluster.nextCluster = cluster;
-					prevCluster = cluster;
-
-					if (nextClusterIsFirstCluster) {
-						cluster.isKnownToBeFirstCluster = true;
-						nextClusterIsFirstCluster = false;
-					}
-
-					const { clusterIndex, blockIndex, correctBlockFound } = getBestMatch();
-					if (correctBlockFound) {
-						const cluster = this.internalTrack.clusters[clusterIndex]!;
-						return this.fetchPacketInCluster(cluster, blockIndex, options);
-					}
-					if (clusterIndex !== -1) {
-						bestClusterIndex = clusterIndex;
-						bestBlockIndex = blockIndex;
-					}
+					size = nextElementPos.pos - dataStartPos;
 				}
 
-				if (size === null) {
-					// Undefined element size (can happen in livestreamed files). In this case, we need to do some
-					// searching to determine the actual size of the element.
+				const endPos = dataStartPos + size;
+				if (segment.elementEndPos !== null && endPos > segment.elementEndPos - MIN_HEADER_SIZE) {
+					// No more elements fit in this segment
+					break;
+				} else {
+					// Check the next element. If it's a new segment, we know this segment ends here. The new
+					// segment is just ignored, since we're likely in a livestreamed file and thus only care about
+					// the first segment.
 
-					if (id === EBMLId.Cluster) {
-						// The cluster should have already computed its length, we can just copy that result
-						assert(prevCluster);
-						size = prevCluster.elementEndPos - dataStartPos;
-					} else {
-						// Search for the next element at level 0 or 1
-						const nextElementPos = await searchForNextElementId(
-							demuxer.reader,
-							dataStartPos,
-							LEVEL_0_AND_1_EBML_IDS,
-							segment.elementEndPos,
-						);
+					let slice = demuxer.reader.requestSliceRange(endPos, MIN_HEADER_SIZE, MAX_HEADER_SIZE);
+					if (slice instanceof Promise) slice = await slice;
+					if (!slice) break;
 
-						size = nextElementPos.pos - dataStartPos;
-					}
-
-					const endPos = dataStartPos + size;
-					if (segment.elementEndPos !== null && endPos > segment.elementEndPos - MIN_HEADER_SIZE) {
-						// No more elements fit in this segment
+					const elementId = readElementId(slice);
+					if (elementId === EBMLId.Segment) {
+						segment.elementEndPos = endPos;
 						break;
-					} else {
-						// Check the next element. If it's a new segment, we know this segment ends here. The new
-						// segment is just ignored, since we're likely in a livestreamed file and thus only care about
-						// the first segment.
-
-						let slice = demuxer.reader.requestSliceRange(endPos, MIN_HEADER_SIZE, MAX_HEADER_SIZE);
-						if (slice instanceof Promise) slice = await slice;
-						if (!slice) break;
-
-						const elementId = readElementId(slice);
-						if (elementId === EBMLId.Segment) {
-							segment.elementEndPos = endPos;
-							break;
-						}
 					}
 				}
-
-				currentPos = dataStartPos + size;
 			}
 
-			const bestCluster = bestClusterIndex !== -1 ? this.internalTrack.clusters[bestClusterIndex]! : null;
-
-			// Catch faulty cue points
-			if (cuePoint && (!bestCluster || bestCluster.elementStartPos < cuePoint.clusterPosition)) {
-				// The cue point lied to us! We found a cue point but no cluster there that satisfied the match. In this
-				// case, let's search again but using the cue point before that.
-				const previousCuePoint = this.internalTrack.cuePoints[cuePointIndex - 1];
-				const newSearchTimestamp = previousCuePoint?.time ?? -Infinity;
-				return this.performClusterLookup(getBestMatch, newSearchTimestamp, latestTimestamp, options);
-			}
-
-			if (bestCluster) {
-				// If we finished looping but didn't find a perfect match, still return the best match we found
-				return this.fetchPacketInCluster(bestCluster, bestBlockIndex, options);
-			}
-
-			return null;
-		} finally {
-			release();
+			currentPos = dataStartPos + size;
 		}
+
+		// Catch faulty cue points
+		if (cuePoint && (!bestCluster || bestCluster.elementStartPos < cuePoint.clusterPosition)) {
+			// The cue point lied to us! We found a cue point but no cluster there that satisfied the match. In this
+			// case, let's search again but using the cue point before that.
+			const previousCuePoint = this.internalTrack.cuePoints[cuePointIndex - 1];
+			const newSearchTimestamp = previousCuePoint?.time ?? -Infinity;
+			return this.performClusterLookup(null, getMatchInCluster, newSearchTimestamp, latestTimestamp, options);
+		}
+
+		if (bestCluster) {
+			// If we finished looping but didn't find a perfect match, still return the best match we found
+			return this.fetchPacketInCluster(bestCluster, bestBlockIndex, options);
+		}
+
+		return null;
 	}
 }
 
