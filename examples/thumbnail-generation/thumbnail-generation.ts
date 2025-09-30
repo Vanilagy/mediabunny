@@ -1,4 +1,7 @@
 import { Input, ALL_FORMATS, BlobSource, UrlSource, CanvasSink } from 'mediabunny';
+import { registerMpeg4Decoder } from '@mediabunny/mpeg4';
+
+registerMpeg4Decoder();
 
 import SampleFileUrl from '../../docs/assets/big-buck-bunny-trimmed.mp4';
 (document.querySelector('#sample-file-download') as HTMLAnchorElement).href = SampleFileUrl;

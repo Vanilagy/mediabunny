@@ -21,6 +21,8 @@ export default defineConfig({
 	resolve: {
 		alias: {
 			mediabunny: path.resolve(__dirname, './dist/bundles/mediabunny.mjs'),
+			'@mediabunny/mpeg4': path.resolve(__dirname, './packages/mpeg4/src/index.ts'),
+			'@mediabunny/eac3': path.resolve(__dirname, './packages/eac3/src/index.ts'),
 		},
 	},
 	plugins: [

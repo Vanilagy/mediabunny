@@ -35,6 +35,7 @@ Mediabunny ships with built-in decoders and encoders for all audio PCM codecs, m
 - `'vp8'` - VP8
 - `'vp9'` - VP9
 - `'av1'` - AOMedia Video 1 (AV1)
+- `'mpeg4'` - MPEG-4 Part 2 (requires [@mediabunny/mpeg4](https://www.npmjs.com/package/@mediabunny/mpeg4) extension)
 
 ### Audio codecs
 
@@ -77,6 +78,7 @@ Not all codecs can be used with all containers. The following table specifies th
 | `'vp8'`        |    ✓     |   ✓   |   ✓   |     ✓     |   ✓   |       |       |       |       |       |       |
 | `'vp9'`        |    ✓     |   ✓   |   ✓   |     ✓     |   ✓   |       |       |       |       |       |       |
 | `'av1'`        |    ✓     |   ✓   |   ✓   |     ✓     |   ✓   |       |       |       |       |       |       |
+| `'mpeg4'`      |    ✓     |   ✓   |   ✓   |           |   ✓   |       |       |       |       |       |       |
 | `'aac'`        |    ✓     |   ✓   |   ✓   |           |   ✓   |       |       |       |   ✓   |       |   ✓   |
 | `'opus'`       |    ✓     |   ✓   |   ✓   |     ✓     |       |   ✓   |       |       |       |       |       |
 | `'mp3'`        |    ✓     |   ✓   |   ✓   |           |   ✓   |       |   ✓   |       |       |       |   ✓   |

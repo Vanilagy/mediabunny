@@ -144,10 +144,42 @@ const ac3Variants = await createVariants(
 	},
 );
 
+const mpeg4Variants = await createVariants(
+	'packages/mpeg4/src/index.ts',
+	'MediabunnyMpeg4',
+	'packages/mpeg4/dist/bundles/mediabunny-mpeg4',
+	'js',
+	{
+		plugins: [
+			PluginExternalGlobal.externalGlobalPlugin({
+				mediabunny: 'Mediabunny',
+			}),
+			inlineWorkerPlugin({
+				define: {
+					'import.meta.url': '""',
+				},
+				legalComments: 'none',
+			}),
+		],
+	},
+	{
+		external: ['mediabunny'],
+		plugins: [
+			inlineWorkerPlugin({
+				define: {
+					'import.meta.url': '""',
+				},
+				legalComments: 'none',
+			}),
+		],
+	},
+);
+
 const contexts = [
 	...mediabunnyVariants,
 	...mp3EncoderVariants,
 	...ac3Variants,
+	...mpeg4Variants,
 ];
 
 if (process.argv[2] === '--watch') {

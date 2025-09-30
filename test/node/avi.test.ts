@@ -2,12 +2,18 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-import { expect, test } from 'vitest';
+import { expect, test, beforeAll } from 'vitest';
 import { Input, Output } from '../../src/index.js';
 import { BufferSource, BufferTarget } from '../../src/index.js';
 import { ALL_FORMATS, AVI, AviOutputFormat } from '../../src/index.js';
 import { EncodedVideoPacketSource, EncodedAudioPacketSource } from '../../src/index.js';
 import { EncodedPacket } from '../../src/index.js';
+import { registerMpeg4Decoder, registerMpeg4Encoder } from '../../packages/mpeg4/src/index.js';
+
+beforeAll(() => {
+	registerMpeg4Decoder();
+	registerMpeg4Encoder();
+});
 
 test('Should be able to detect AVI format', async () => {
 	const buffer = new ArrayBuffer(12);
@@ -135,6 +141,7 @@ test('Should properly handle AVI codec mappings', async () => {
 	expect(supportedVideoCodecs).toContain('vp8');
 	expect(supportedVideoCodecs).toContain('vp9');
 	expect(supportedVideoCodecs).toContain('av1');
+	expect(supportedVideoCodecs).toContain('mpeg4');
 
 	const supportedAudioCodecs = format.getSupportedAudioCodecs();
 	expect(supportedAudioCodecs).toContain('mp3');
@@ -230,6 +237,7 @@ test('Should read AVI files with various video codecs', async () => {
 		{ file: 'vp8-mp3.avi', expectedVideoCodec: 'vp8', expectedAudioCodec: 'mp3' },
 		{ file: 'vp9-vorbis.avi', expectedVideoCodec: 'vp9', expectedAudioCodec: 'vorbis' },
 		{ file: 'av1-aac.avi', expectedVideoCodec: 'av1', expectedAudioCodec: 'aac' },
+		{ file: 'mpeg4-mp3.avi', expectedVideoCodec: 'mpeg4', expectedAudioCodec: 'mp3' },
 	];
 
 	for (const { file, expectedVideoCodec, expectedAudioCodec } of testFiles) {

@@ -9,6 +9,10 @@ import {
 	Conversion,
 	QUALITY_VERY_LOW,
 } from 'mediabunny';
+import { registerMpeg4Decoder, registerMpeg4Encoder } from '@mediabunny/mpeg4';
+
+registerMpeg4Decoder();
+registerMpeg4Encoder();
 
 import SampleFileUrl from '../../docs/assets/big-buck-bunny-trimmed.mp4';
 (document.querySelector('#sample-file-download') as HTMLAnchorElement).href = SampleFileUrl;

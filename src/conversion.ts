@@ -773,13 +773,17 @@ export class Conversion {
 						`\nThe @mediabunny/mp3-encoder extension package provides support for encoding MP3.`,
 					);
 				}
-
-				if (codecs.includes('ac3') || codecs.includes('eac3')) {
-					elements.push(
-						'\nThe @mediabunny/ac3 extension package provides support'
-						+ ' for encoding and decoding AC-3/E-AC-3.',
-					);
-				}
+					if (codecs.includes('ac3') || codecs.includes('eac3')) {
+						elements.push(
+							'\nThe @mediabunny/ac3 extension package provides support'
+							+ ' for encoding and decoding AC-3/E-AC-3.',
+						);
+					}
+					if (codecs.includes('mpeg4')) {
+						elements.push(
+							`\nThe @mediabunny/mpeg4 extension package provides support for encoding and decoding MPEG-4 Part 2.`,
+						);
+					}
 			} else {
 				elements.push('\nCheck the discardedTracks field for more info.');
 			}

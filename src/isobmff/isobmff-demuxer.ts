@@ -915,6 +915,8 @@ export class IsobmffDemuxer extends Demuxer {
 							track.info.codec = 'vp9';
 						} else if (lowercaseBoxName === 'av01') {
 							track.info.codec = 'av1';
+						} else if (lowercaseBoxName === 'mp4v') {
+							track.info.codec = 'mpeg4';
 						} else {
 							console.warn(`Unsupported video codec (sample entry type '${sampleBoxInfo.name}').`);
 						}
@@ -1207,7 +1209,9 @@ export class IsobmffDemuxer extends Demuxer {
 				if (!track) {
 					break;
 				}
-				assert(track.info?.type === 'audio');
+				if (track.info?.type !== 'audio' && track.info?.type !== 'video') {
+					break;
+				}
 
 				slice.skip(4); // Version + flags
 
@@ -1242,20 +1246,26 @@ export class IsobmffDemuxer extends Demuxer {
 				const payloadStart = slice.filePos;
 
 				const objectTypeIndication = readU8(slice);
-				if (objectTypeIndication === 0x40 || objectTypeIndication === 0x67) {
-					track.info.codec = 'aac';
-					track.info.aacCodecInfo = {
-						isMpeg2: objectTypeIndication === 0x67,
-						objectType: null,
-					};
-				} else if (objectTypeIndication === 0x69 || objectTypeIndication === 0x6b) {
-					track.info.codec = 'mp3';
-				} else if (objectTypeIndication === 0xdd) {
-					track.info.codec = 'vorbis'; // "nonstandard, gpac uses it" - FFmpeg
-				} else {
-					console.warn(
-						`Unsupported audio codec (objectTypeIndication ${objectTypeIndication}) - discarding track.`,
-					);
+				if (track.info.type === 'audio') {
+					if (objectTypeIndication === 0x40 || objectTypeIndication === 0x67) {
+						track.info.codec = 'aac';
+						track.info.aacCodecInfo = {
+							isMpeg2: objectTypeIndication === 0x67,
+							objectType: null,
+						};
+					} else if (objectTypeIndication === 0x69 || objectTypeIndication === 0x6b) {
+						track.info.codec = 'mp3';
+					} else if (objectTypeIndication === 0xdd) {
+						track.info.codec = 'vorbis'; // "nonstandard, gpac uses it" - FFmpeg
+					} else {
+						console.warn(
+							`Unsupported audio codec (objectTypeIndication ${objectTypeIndication}) - discarding track.`,
+						);
+					}
+				} else if (track.info.type === 'video') {
+					if (objectTypeIndication === 0x20) {
+						track.info.codec = 'mpeg4';
+					}
 				}
 
 				slice.skip(1 + 3 + 4 + 4);
@@ -1269,7 +1279,7 @@ export class IsobmffDemuxer extends Demuxer {
 					const decoderSpecificInfoLength = readIsomVariableInteger(slice);
 					track.info.codecDescription = readBytes(slice, decoderSpecificInfoLength);
 
-					if (track.info.codec === 'aac') {
+					if (track.info.type === 'audio' && track.info.codec === 'aac') {
 						// Let's try to deduce more accurate values directly from the AudioSpecificConfig:
 						const audioSpecificConfig = parseAacAudioSpecificConfig(track.info.codecDescription);
 						if (audioSpecificConfig.numberOfChannels !== null) {
