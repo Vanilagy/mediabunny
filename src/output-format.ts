@@ -28,6 +28,7 @@ import { OggMuxer } from './ogg/ogg-muxer';
 import { Output, TrackType } from './output';
 import { MpegTsMuxer } from './mpeg-ts/mpeg-ts-muxer';
 import { WaveMuxer } from './wave/wave-muxer';
+import { AVIMuxer } from './avi/avi-muxer';
 
 /**
  * Specifies an inclusive range of integers.
@@ -936,6 +937,110 @@ export type FlacOutputFormatOptions = {
 	 */
 	onFrame?: (data: Uint8Array, position: number) => unknown;
 };
+
+/**
+ * AVI-specific output options.
+ * @group Output formats
+ * @public
+ */
+export type AviOutputFormatOptions = {
+	/**
+	 * When enabled, an RF64 file will be written, allowing for file sizes to exceed 4 GiB, which is otherwise not
+	 * possible for regular AVI files.
+	 */
+	large?: boolean;
+
+	/**
+	 * Will be called once the header list (hdrl) is finalized.
+	 *
+	 * @param data - The raw bytes.
+	 * @param position - The byte offset of the data in the file.
+	 */
+	onHeader?: (data: Uint8Array, position: number) => unknown;
+
+	/**
+	 * Will be called once the index (idx1) is finalized.
+	 *
+	 * @param data - The raw bytes.
+	 * @param position - The byte offset of the data in the file.
+	 */
+	onIndex?: (data: Uint8Array, position: number) => unknown;
+};
+
+/**
+ * AVI file format, based on RIFF.
+ *
+ * **Note:** MPEG-4 and E-AC-3/AC-3 codecs require their respective extensions
+ * ([\@mediabunny/mpeg4](https://www.npmjs.com/package/\@mediabunny/mpeg4),
+ * [\@mediabunny/eac3](https://www.npmjs.com/package/\@mediabunny/eac3)) to be registered.
+ *
+ * @group Output formats
+ * @public
+ */
+export class AviOutputFormat extends OutputFormat {
+	/** @internal */
+	_options: AviOutputFormatOptions;
+
+	/** Creates a new {@link AviOutputFormat} configured with the specified `options`. */
+	constructor(options: AviOutputFormatOptions = {}) {
+		if (!options || typeof options !== 'object') {
+			throw new TypeError('options must be an object.');
+		}
+		if (options.large !== undefined && typeof options.large !== 'boolean') {
+			throw new TypeError('options.large, when provided, must be a boolean.');
+		}
+		if (options.onHeader !== undefined && typeof options.onHeader !== 'function') {
+			throw new TypeError('options.onHeader, when provided, must be a function.');
+		}
+		if (options.onIndex !== undefined && typeof options.onIndex !== 'function') {
+			throw new TypeError('options.onIndex, when provided, must be a function.');
+		}
+
+		super();
+
+		this._options = options;
+	}
+
+	/** @internal */
+	_createMuxer(output: Output) {
+		return new AVIMuxer(output, this);
+	}
+
+	/** @internal */
+	get _name() {
+		return 'AVI';
+	}
+
+	getSupportedTrackCounts(): TrackCountLimits {
+		return {
+			video: { min: 0, max: Infinity },
+			audio: { min: 0, max: Infinity },
+			subtitle: { min: 0, max: 0 },
+			total: { min: 1, max: 2 ** 32 - 1 },
+		};
+	}
+
+	get fileExtension() {
+		return '.avi';
+	}
+
+	get mimeType() {
+		return 'video/x-msvideo';
+	}
+
+	getSupportedCodecs(): MediaCodec[] {
+		return [
+			...VIDEO_CODECS.filter(codec => ['avc', 'hevc', 'vp8', 'vp9', 'av1', 'mpeg4'].includes(codec)),
+			...AUDIO_CODECS.filter(codec =>
+				['mp3', 'aac', 'vorbis', 'flac', 'ac3', 'pcm-s16', 'pcm-s24', 'pcm-s32', 'pcm-f32', 'pcm-u8', 'ulaw', 'alaw'].includes(codec),
+			),
+		];
+	}
+
+	get supportsVideoRotationMetadata() {
+		return false;
+	}
+}
 
 /**
  * FLAC file format.
