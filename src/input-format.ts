@@ -29,6 +29,7 @@ import { WaveDemuxer } from './wave/wave-demuxer';
 import { MAX_ADTS_FRAME_HEADER_SIZE, MIN_ADTS_FRAME_HEADER_SIZE, readAdtsFrameHeader } from './adts/adts-reader';
 import { AdtsDemuxer } from './adts/adts-demuxer';
 import { readAscii, readBytes, readU32Be } from './reader';
+import { AVIDemuxer } from './avi/avi-demuxer';
 import { FlacDemuxer } from './flac/flac-demuxer';
 import { MpegTsDemuxer } from './mpeg-ts/mpeg-ts-demuxer';
 import { TS_PACKET_SIZE } from './mpeg-ts/mpeg-ts-misc';
@@ -616,9 +617,60 @@ export const FLAC = /* #__PURE__ */ new FlacInputFormat();
 export const MPEG_TS = /* #__PURE__ */ new MpegTsInputFormat();
 
 /**
+ * AVI file format.
+ *
+ * Do not instantiate this class; use the {@link AVI} singleton instead.
+ *
+ * **Note:** MPEG-4 and E-AC-3/AC-3 codecs require their respective extensions
+ * ([\@mediabunny/mpeg4](https://www.npmjs.com/package/\@mediabunny/mpeg4),
+ * [\@mediabunny/eac3](https://www.npmjs.com/package/\@mediabunny/eac3)) to be registered.
+ *
+ * @group Input formats
+ * @public
+ */
+export class AviInputFormat extends InputFormat {
+	/** @internal */
+	async _canReadInput(input: Input) {
+		let slice = input._reader.requestSlice(0, 12);
+		if (slice instanceof Promise) slice = await slice;
+		if (!slice) return false;
+
+		const riffType = readAscii(slice, 4);
+		if (riffType !== 'RIFF' && riffType !== 'RIFX' && riffType !== 'RF64') {
+			return false;
+		}
+
+		slice.skip(4);
+
+		const format = readAscii(slice, 4);
+		return format === 'AVI ';
+	}
+
+	/** @internal */
+	_createDemuxer(input: Input) {
+		return new AVIDemuxer(input);
+	}
+
+	get name() {
+		return 'AVI';
+	}
+
+	get mimeType() {
+		return 'video/x-msvideo';
+	}
+}
+
+/**
+ * AVI input format singleton.
+ * @group Input formats
+ * @public
+ */
+export const AVI = new AviInputFormat();
+
+/**
  * List of all input format singletons. If you don't need to support all input formats, you should specify the
  * formats individually for better tree shaking.
  * @group Input formats
  * @public
  */
-export const ALL_FORMATS: InputFormat[] = [MP4, QTFF, MATROSKA, WEBM, WAVE, OGG, FLAC, MP3, ADTS, MPEG_TS];
+export const ALL_FORMATS: InputFormat[] = [MP4, QTFF, MATROSKA, WEBM, WAVE, OGG, FLAC, MP3, ADTS, MPEG_TS, AVI];
