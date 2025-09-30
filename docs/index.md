@@ -97,7 +97,7 @@ const sponsors = {
 		{ image: '/sponsors/kino.jpg', name: 'Kino', url: 'https://kino.ai/' },
 	],
 	silver: [
-		{ image: '/sponsors/pqina.jpg', name: 'PQINA', url: 'https://pqina.nl/' },
+		{ image: '/sponsors/pintura-labs.png', name: 'Pintura Labs', url: 'https://pqina.nl/pintura/' },
 	],
 	bronze: [
 		{ image: '/sponsors/rve.svg', name: 'React Video Editor', url: 'https://www.reactvideoeditor.com/' },

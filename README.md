@@ -36,8 +36,8 @@ Mediabunny is a JavaScript library for reading, writing, and converting media fi
 ### Silver sponsors
 
 <div align="center">
-  <a href="https://pqina.nl/" target="_blank" rel="sponsored">
-    <img src="./docs/public/sponsors/pqina.jpg" width="50" height="50" alt="PQINA">
+  <a href="https://pqina.nl/pintura/" target="_blank" rel="sponsored">
+    <img src="./docs/public/sponsors/pintura-labs.png" width="50" height="50" alt="Pintura Labs">
   </a>
 </div>
 
