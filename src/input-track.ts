@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { AudioCodec, MediaCodec, VideoCodec } from './codec';
+import { AudioCodec, MediaCodec, SubtitleCodec, VideoCodec } from './codec';
 import { determineVideoPacketType } from './codec-data';
 import { customAudioDecoders, customVideoDecoders } from './custom-coder';
 import { Input } from './input';
@@ -15,6 +15,7 @@ import { assert, Rotation } from './misc';
 import { TrackType } from './output';
 import { EncodedPacket, PacketType } from './packet';
 import { TrackDisposition } from './metadata';
+import { SubtitleCue } from './subtitles';
 
 /**
  * Contains aggregate statistics about the encoded packets of a track.
@@ -88,6 +89,11 @@ export abstract class InputTrack {
 	/** Returns true if and only if this track is an audio track. */
 	isAudioTrack(): this is InputAudioTrack {
 		return this instanceof InputAudioTrack;
+	}
+
+	/** Returns true if and only if this track is a subtitle track. */
+	isSubtitleTrack(): this is InputSubtitleTrack {
+		return this instanceof InputSubtitleTrack;
 	}
 
 	/** The unique ID of this track in the input file. */
@@ -438,5 +444,97 @@ export class InputAudioTrack extends InputTrack {
 		}
 
 		return 'key'; // No audio codec with delta packets
+	}
+}
+
+export interface InputSubtitleTrackBacking extends InputTrackBacking {
+	getCodec(): SubtitleCodec | null;
+	getCodecPrivate(): string | null;
+	getCues(): AsyncGenerator<SubtitleCue>;
+}
+
+/**
+ * Represents a subtitle track in an input file.
+ * @group Input files & tracks
+ * @public
+ */
+export class InputSubtitleTrack extends InputTrack {
+	/** @internal */
+	override _backing: InputSubtitleTrackBacking;
+
+	/** @internal */
+	constructor(input: Input, backing: InputSubtitleTrackBacking) {
+		super(input, backing);
+
+		this._backing = backing;
+	}
+
+	get type(): TrackType {
+		return 'subtitle';
+	}
+
+	get codec(): SubtitleCodec | null {
+		return this._backing.getCodec();
+	}
+
+	/**
+	 * Returns an async iterator that yields all subtitle cues in this track.
+	 */
+	getCues(): AsyncGenerator<SubtitleCue> {
+		return this._backing.getCues();
+	}
+
+	/**
+	 * Exports all subtitle cues to text format. If targetFormat is specified,
+	 * attempts to convert to that format (limited conversion support).
+	 */
+	async exportToText(targetFormat?: SubtitleCodec): Promise<string> {
+		const cues: SubtitleCue[] = [];
+		for await (const cue of this.getCues()) {
+			cues.push(cue);
+		}
+
+		const codec = targetFormat || this.codec;
+		const codecPrivate = this._backing.getCodecPrivate();
+
+		if (codec === 'srt') {
+			const { formatCuesToSrt } = await import('./subtitles');
+			return formatCuesToSrt(cues);
+		} else if (codec === 'ass' || codec === 'ssa') {
+			const { formatCuesToAss, splitAssIntoCues } = await import('./subtitles');
+
+			// For ASS, we need to merge Comment lines from CodecPrivate with Dialogue lines from blocks
+			// CodecPrivate contains: header + Comment lines
+			// Blocks contain: Dialogue lines (without timestamps)
+			// We need to reconstruct full ASS file
+
+			// Parse CodecPrivate to extract the header with Comments preserved
+			const parsed = codecPrivate ? splitAssIntoCues(codecPrivate) : { header: '', cues: [] };
+
+			// Use the header (includes Comment lines) and add our cues (from blocks)
+			return formatCuesToAss(cues, parsed.header);
+		} else if (codec === 'webvtt') {
+			const { formatCuesToWebVTT } = await import('./subtitles');
+			// Use codecPrivate as preamble if available
+			return formatCuesToWebVTT(cues, codecPrivate || undefined);
+		} else {
+			// Fallback to SRT for unknown formats
+			const { formatCuesToSrt } = await import('./subtitles');
+			return formatCuesToSrt(cues);
+		}
+	}
+
+	async getCodecParameterString(): Promise<string | null> {
+		return this.codec;
+	}
+
+	async canDecode(): Promise<boolean> {
+		// Subtitles are always text-based and can be decoded
+		return this.codec !== null;
+	}
+
+	async determinePacketType(packet: EncodedPacket): Promise<PacketType | null> {
+		// Subtitle packets are always key packets
+		return 'key';
 	}
 }

@@ -17,6 +17,7 @@ import {
 	parsePcmCodec,
 	PCM_AUDIO_CODECS,
 	PcmAudioCodec,
+	SubtitleCodec,
 	VideoCodec,
 } from '../codec';
 import {
@@ -37,6 +38,8 @@ import { Input } from '../input';
 import {
 	InputAudioTrack,
 	InputAudioTrackBacking,
+	InputSubtitleTrack,
+	InputSubtitleTrackBacking,
 	InputTrack,
 	InputTrackBacking,
 	InputVideoTrack,
@@ -64,6 +67,7 @@ import {
 	roundIfAlmostInteger,
 } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
+import { SubtitleCue } from '../subtitles';
 import { buildIsobmffMimeType } from './isobmff-misc';
 import {
 	MAX_BOX_HEADER_SIZE,
@@ -147,10 +151,17 @@ type InternalTrack = {
 		codecDescription: Uint8Array | null;
 		aacCodecInfo: AacCodecInfo | null;
 	};
+} | {
+	info: {
+		type: 'subtitle';
+		codec: SubtitleCodec | null;
+		codecPrivateText: string | null;
+	};
 });
 
 type InternalVideoTrack = InternalTrack & {	info: { type: 'video' } };
 type InternalAudioTrack = InternalTrack & {	info: { type: 'audio' } };
+type InternalSubtitleTrack = InternalTrack & {	info: { type: 'subtitle' } };
 
 type SampleTable = {
 	sampleTimingEntries: SampleTimingEntry[];
@@ -692,6 +703,10 @@ export class IsobmffDemuxer extends Demuxer {
 						const audioTrack = track as InternalAudioTrack;
 						track.inputTrack = new InputAudioTrack(this.input, new IsobmffAudioTrackBacking(audioTrack));
 						this.tracks.push(track);
+					} else if (track.info.type === 'subtitle') {
+						const subtitleTrack = track as InternalSubtitleTrack;
+						track.inputTrack = new InputSubtitleTrack(this.input, new IsobmffSubtitleTrackBacking(subtitleTrack));
+						this.tracks.push(track);
 					}
 				}
 
@@ -864,6 +879,12 @@ export class IsobmffDemuxer extends Demuxer {
 						codecDescription: null,
 						aacCodecInfo: null,
 					};
+				} else if (handlerType === 'text' || handlerType === 'subt' || handlerType === 'sbtl') {
+					track.info = {
+						type: 'subtitle',
+						codec: null,
+						codecPrivateText: null,
+					};
 				}
 			}; break;
 
@@ -925,6 +946,28 @@ export class IsobmffDemuxer extends Demuxer {
 						track.info.height = readU16Be(slice);
 
 						slice.skip(4 + 4 + 4 + 2 + 32 + 2 + 2);
+
+						this.readContiguousBoxes(
+							slice.slice(
+								slice.filePos,
+								(sampleBoxStartPos + sampleBoxInfo.totalSize) - slice.filePos,
+							),
+						);
+					} else if (track.info.type === 'subtitle') {
+						// Parse subtitle sample entries
+						slice.skip(6); // Reserved
+						const dataReferenceIndex = readU16Be(slice);
+
+						// Detect subtitle codec based on sample entry box type
+						if (lowercaseBoxName === 'wvtt') {
+							track.info.codec = 'webvtt';
+						} else if (lowercaseBoxName === 'tx3g' || lowercaseBoxName === 'text') {
+							// 3GPP Timed Text - treat as SRT
+							track.info.codec = 'srt';
+						} else if (lowercaseBoxName === 'stpp') {
+							// TTML/XML subtitles - treat as WebVTT for now
+							track.info.codec = 'webvtt';
+						}
 
 						this.readContiguousBoxes(
 							slice.slice(
@@ -1092,7 +1135,9 @@ export class IsobmffDemuxer extends Demuxer {
 				}
 				assert(track.info);
 
-				track.info.codecDescription = readBytes(slice, boxInfo.contentSize);
+				if (track.info.type === 'video') {
+					track.info.codecDescription = readBytes(slice, boxInfo.contentSize);
+				}
 			}; break;
 
 			case 'hvcC': {
@@ -1102,7 +1147,9 @@ export class IsobmffDemuxer extends Demuxer {
 				}
 				assert(track.info);
 
-				track.info.codecDescription = readBytes(slice, boxInfo.contentSize);
+				if (track.info.type === 'video') {
+					track.info.codecDescription = readBytes(slice, boxInfo.contentSize);
+				}
 			}; break;
 
 			case 'vpcC': {
@@ -2959,6 +3006,92 @@ class IsobmffAudioTrackBacking extends IsobmffTrackBacking implements InputAudio
 			sampleRate: this.internalTrack.info.sampleRate,
 			description: this.internalTrack.info.codecDescription ?? undefined,
 		};
+	}
+}
+
+class IsobmffSubtitleTrackBacking extends IsobmffTrackBacking implements InputSubtitleTrackBacking {
+	override internalTrack: InternalSubtitleTrack;
+
+	constructor(internalTrack: InternalSubtitleTrack) {
+		super(internalTrack);
+		this.internalTrack = internalTrack;
+	}
+
+	override getCodec(): SubtitleCodec | null {
+		return this.internalTrack.info.codec;
+	}
+
+	getCodecPrivate(): string | null {
+		return this.internalTrack.info.codecPrivateText;
+	}
+
+	async *getCues(): AsyncGenerator<SubtitleCue> {
+		// Use the existing packet reading infrastructure
+		let packet = await this.getFirstPacket({});
+
+		while (packet) {
+			// Parse WebVTT box structure or plain text
+			let text = '';
+
+			if (this.internalTrack.info.codec === 'webvtt') {
+				// WebVTT in MP4 is stored as a series of boxes
+				const dataBytes = new Uint8Array(packet.data);
+				const dataSlice = new FileSlice(
+					dataBytes,
+					new DataView(dataBytes.buffer, dataBytes.byteOffset, dataBytes.byteLength),
+					0,
+					0,
+					dataBytes.length,
+				);
+
+				while (dataSlice.remainingLength > 0) {
+					const boxHeader = readBoxHeader(dataSlice);
+					if (!boxHeader) break;
+
+					if (boxHeader.name === 'vttc') {
+						// WebVTT cue box, contains the actual text
+						// Skip to content and continue parsing nested boxes
+						const vttcEnd = dataSlice.filePos + boxHeader.contentSize;
+
+						while (dataSlice.filePos < vttcEnd && dataSlice.remainingLength > 0) {
+							const innerBox = readBoxHeader(dataSlice);
+							if (!innerBox) break;
+
+							if (innerBox.name === 'payl') {
+								// Payload box contains the actual text
+								const textBytes = readBytes(dataSlice, innerBox.contentSize);
+								const decoder = new TextDecoder('utf-8');
+								text += decoder.decode(textBytes);
+							} else {
+								// Skip unknown boxes
+								dataSlice.skip(innerBox.contentSize);
+							}
+						}
+					} else if (boxHeader.name === 'vtte') {
+						// Empty cue box, skip it
+						dataSlice.skip(boxHeader.contentSize);
+					} else {
+						// Skip unknown boxes
+						dataSlice.skip(boxHeader.contentSize);
+					}
+				}
+			} else {
+				// Plain text for other subtitle formats (tx3g, etc.)
+				const decoder = new TextDecoder('utf-8');
+				text = decoder.decode(packet.data);
+			}
+
+			if (text) {
+				// Only yield cues with actual text content
+				yield {
+					timestamp: packet.timestamp,
+					duration: packet.duration,
+					text,
+				};
+			}
+
+			packet = await this.getNextPacket(packet, {});
+		}
 	}
 }
 

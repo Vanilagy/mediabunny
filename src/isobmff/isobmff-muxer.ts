@@ -274,6 +274,9 @@ export class IsobmffMuxer extends Muxer {
 			} else {
 				const map: Record<SubtitleCodec, string> = {
 					webvtt: 'wvtt',
+					srt: 'wvtt', // MP4 stores SRT as WebVTT
+					ass: 'wvtt', // MP4 stores ASS as WebVTT
+					ssa: 'wvtt', // MP4 stores SSA as WebVTT
 				};
 				return map[trackData.track.source._codec];
 			}
@@ -628,7 +631,9 @@ export class IsobmffMuxer extends Muxer {
 				trackData.cueQueue.push(cue);
 				await this.processWebVTTCues(trackData, cue.timestamp);
 			} else {
-				// TODO
+				throw new Error(
+					`${track.source._codec} subtitles are not supported in ${this.format._name}. Only WebVTT is supported.`,
+				);
 			}
 		} finally {
 			release();

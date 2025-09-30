@@ -1,0 +1,13 @@
+[Script Info]
+Title: Test Subtitles
+ScriptType: v4.00
+
+[V4 Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, TertiaryColour, BackColour, Bold, Italic, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, AlphaLevel, Encoding
+Style: Default,Arial,20,16777215,65535,65535,0,0,0,1,2,0,2,10,10,10,0,1
+
+[Events]
+Format: Marked, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: Marked=0,0:00:01.00,0:00:03.50,Default,,0,0,0,,Hello world!
+Dialogue: Marked=0,0:00:05.00,0:00:07.00,Default,,0,0,0,,This is a test.
+Dialogue: Marked=0,0:00:08.50,0:00:10.00,Default,,0,0,0,,Goodbye!

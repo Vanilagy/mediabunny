@@ -757,6 +757,9 @@ export const CODEC_STRING_MAP: Partial<Record<MediaCodec, string>> = {
 	'pcm-f64': 'A_PCM/FLOAT/IEEE',
 
 	'webvtt': 'S_TEXT/WEBVTT',
+	'srt': 'S_TEXT/UTF8',
+	'ass': 'S_TEXT/ASS',
+	'ssa': 'S_TEXT/SSA',
 };
 
 export function assertDefinedSize(size: number | undefined): asserts size is number {

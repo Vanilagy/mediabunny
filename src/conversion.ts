@@ -32,6 +32,7 @@ import {
 	AudioSource,
 	EncodedVideoPacketSource,
 	EncodedAudioPacketSource,
+	SubtitleSource,
 	VideoSource,
 	VideoSampleSource,
 	AudioSampleSource,
@@ -45,7 +46,7 @@ import {
 	promiseWithResolvers,
 	Rotation,
 } from './misc';
-import { Output, TrackType } from './output';
+import { Output, SubtitleTrackMetadata, TrackType } from './output';
 import { Mp4OutputFormat } from './output-format';
 import { AudioSample, clampCropRectangle, validateCropRectangle, VideoSample } from './sample';
 import { MetadataTags, validateMetadataTags } from './metadata';
@@ -499,6 +500,13 @@ export class Conversion {
 	/** @internal */
 	_canceled = false;
 
+	/** @internal */
+	_externalSubtitleSources: Array<{
+		source: SubtitleSource;
+		metadata: SubtitleTrackMetadata;
+		contentProvider?: () => Promise<void>;
+	}> = [];
+
 	/**
 	 * A callback that is fired whenever the conversion progresses. Returns a number between 0 and 1, indicating the
 	 * completion of the conversion. Note that a progress of 1 doesn't necessarily mean the conversion is complete;
@@ -789,6 +797,52 @@ export class Conversion {
 	}
 
 	/**
+	 * Adds an external subtitle track to the output. This can be called after `init()` but before `execute()`.
+	 * This is useful for adding subtitle tracks from separate files that are not part of the input video.
+	 *
+	 * @param source - The subtitle source to add
+	 * @param metadata - Optional metadata for the subtitle track
+	 * @param contentProvider - Optional async function that will be called after the output starts to add content to the subtitle source
+	 */
+	addExternalSubtitleTrack(
+		source: SubtitleSource,
+		metadata: SubtitleTrackMetadata = {},
+		contentProvider?: () => Promise<void>,
+	) {
+		if (this._executed) {
+			throw new Error('Cannot add subtitle tracks after conversion has been executed.');
+		}
+		if (this.output.state !== 'pending') {
+			throw new Error('Cannot add subtitle tracks after output has been started.');
+		}
+
+		// Check track count limits
+		const outputTrackCounts = this.output.format.getSupportedTrackCounts();
+		const currentSubtitleCount = this._addedCounts.subtitle + this._externalSubtitleSources.length;
+
+		if (currentSubtitleCount >= outputTrackCounts.subtitle.max) {
+			throw new Error(
+				`Cannot add more subtitle tracks. Maximum of ${outputTrackCounts.subtitle.max} subtitle track(s) allowed.`,
+			);
+		}
+
+		const totalTrackCount = this._totalTrackCount + this._externalSubtitleSources.length + 1;
+		if (totalTrackCount > outputTrackCounts.total.max) {
+			throw new Error(
+				`Cannot add more tracks. Maximum of ${outputTrackCounts.total.max} total track(s) allowed.`,
+			);
+		}
+
+		this._externalSubtitleSources.push({ source, metadata, contentProvider });
+
+		// Update validity check to include external subtitles
+		this.isValid = this._totalTrackCount + this._externalSubtitleSources.length >= outputTrackCounts.total.min
+			&& this._addedCounts.video >= outputTrackCounts.video.min
+			&& this._addedCounts.audio >= outputTrackCounts.audio.min
+			&& this._addedCounts.subtitle + this._externalSubtitleSources.length >= outputTrackCounts.subtitle.min;
+	}
+
+	/**
 	 * Executes the conversion process. Resolves once conversion is complete.
 	 *
 	 * Will throw if `isValid` is `false`.
@@ -825,8 +879,22 @@ export class Conversion {
 			this.onProgress?.(0);
 		}
 
+		// Add external subtitle tracks before starting the output
+		for (const { source, metadata } of this._externalSubtitleSources) {
+			this.output.addSubtitleTrack(source, metadata);
+		}
+
 		await this.output.start();
 		this._start();
+
+		// Now that output has started and tracks are connected, run content providers
+		const contentProviderPromises = this._externalSubtitleSources
+			.filter(s => s.contentProvider)
+			.map(s => s.contentProvider!());
+
+		if (contentProviderPromises.length > 0) {
+			this._trackPromises.push(...contentProviderPromises);
+		}
 
 		try {
 			await Promise.all(this._trackPromises);
