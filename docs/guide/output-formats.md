@@ -64,6 +64,7 @@ The following options are available:
 type IsobmffOutputFormatOptions = {
 	fastStart?: false | 'in-memory' | 'reserve' | 'fragmented';
 	minimumFragmentDuration?: number;
+	maximumFragmentDuration?: number;
 	metadataFormat?: 'mdir' | 'mdta' | 'udta' | 'auto';
 
 	onFtyp?: (data: Uint8Array, position: number) => unknown;
@@ -95,6 +96,8 @@ type IsobmffOutputFormatOptions = {
 		The default option; it behaves like `'in-memory'` when using [`BufferTarget`](./writing-media-files#buffertarget) and like `false` otherwise.
 - `minimumFragmentDuration`\
 	Only relevant when `fastStart` is `'fragmented'`. Sets the minimum duration in seconds a fragment must have to be finalized and written to the file. Defaults to 1 second.
+- `maximumFragmentDuration`\
+	Only relevant when `fastStart` is `'fragmented'`. Sets the maximum duration in seconds a fragment can have before it must be finalized and written to the file. Must be greater than or equal to `minimumFragmentDuration` when both are set.
 - `metadataFormat`\
 	The metadata format to use for writing metadata tags.
 	- `'auto'` (default): Behaves like `'mdir'` for MP4 and like `'udta'` for QuickTime, matching FFmpeg's default behavior.

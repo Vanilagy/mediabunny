@@ -141,6 +141,12 @@ export type IsobmffOutputFormatOptions = {
 	minimumFragmentDuration?: number;
 
 	/**
+	 * When using `fastStart: 'fragmented'`, this field controls the maximum duration of each fragment, in seconds.
+	 * When set, fragments will be finalized as soon as they exceed this duration.
+	 */
+	maximumFragmentDuration?: number;
+
+	/**
 	 * The metadata format to use for writing metadata tags.
 	 *
 	 * - `'auto'` (default): Behaves like `'mdir'` for MP4 and like `'udta'` for QuickTime, matching FFmpeg's default
@@ -215,6 +221,22 @@ export abstract class IsobmffOutputFormat extends OutputFormat {
 			&& (!Number.isFinite(options.minimumFragmentDuration) || options.minimumFragmentDuration < 0)
 		) {
 			throw new TypeError('options.minimumFragmentDuration, when provided, must be a non-negative number.');
+		}
+		if (
+			options.maximumFragmentDuration !== undefined
+			&& (!Number.isFinite(options.maximumFragmentDuration) || options.maximumFragmentDuration < 0)
+		) {
+			throw new TypeError('options.maximumFragmentDuration, when provided, must be a non-negative number.');
+		}
+		if (
+			options.minimumFragmentDuration !== undefined
+			&& options.maximumFragmentDuration !== undefined
+			&& options.maximumFragmentDuration < options.minimumFragmentDuration
+		) {
+			throw new TypeError(
+				'options.maximumFragmentDuration, when provided, must be greater than or equal to'
+				+ ' options.minimumFragmentDuration.',
+			);
 		}
 		if (options.onFtyp !== undefined && typeof options.onFtyp !== 'function') {
 			throw new TypeError('options.onFtyp, when provided, must be a function.');

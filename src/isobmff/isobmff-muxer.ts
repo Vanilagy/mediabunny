@@ -163,6 +163,7 @@ export class IsobmffMuxer extends Muxer {
 	// Only relevant for fragmented files, to make sure new fragments start with the highest timestamp seen so far
 	private maxWrittenTimestamp = -Infinity;
 	private minimumFragmentDuration: number;
+	private maximumFragmentDuration: number | undefined;
 
 	constructor(output: Output, format: IsobmffOutputFormat) {
 		super(output);
@@ -184,6 +185,7 @@ export class IsobmffMuxer extends Muxer {
 		}
 
 		this.minimumFragmentDuration = format._options.minimumFragmentDuration ?? 1;
+		this.maximumFragmentDuration = format._options.maximumFragmentDuration;
 	}
 
 	async start() {
@@ -898,10 +900,19 @@ export class IsobmffMuxer extends Muxer {
 					return otherTrackData.track.source._closed;
 				});
 
+				// Check if we should finalize based on maximum duration (if set)
+				const exceedsMaximumDuration = this.maximumFragmentDuration !== undefined
+					&& currentChunkDuration >= this.maximumFragmentDuration;
+
+				// Finalize if:
+				// 1. We've exceeded the maximum duration (if set), OR
+				// 2. We've met the minimum duration AND all tracks have keyframes available
 				if (
-					currentChunkDuration >= this.minimumFragmentDuration
-					&& keyFrameQueuedEverywhere
-					&& sample.timestamp > this.maxWrittenTimestamp
+					sample.timestamp > this.maxWrittenTimestamp
+					&& (
+						exceedsMaximumDuration
+						|| (currentChunkDuration >= this.minimumFragmentDuration && keyFrameQueuedEverywhere)
+					)
 				) {
 					beginNewChunk = true;
 					await this.finalizeFragment();
