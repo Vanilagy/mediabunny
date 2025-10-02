@@ -1224,6 +1224,7 @@ class ReadOrchestrator {
 	workers: ReadWorker[] = [];
 	cache: CacheEntry[] = [];
 	currentCacheSize = 0;
+	disposed = false;
 
 	constructor(public options: {
 		maxCacheSize: number;
@@ -1472,6 +1473,11 @@ class ReadOrchestrator {
 
 	/** Called by a worker when it has read some data. */
 	supplyWorkerData(worker: ReadWorker, bytes: Uint8Array) {
+		if (this.disposed) {
+			// Writes may still come in after disposal, but we just ignore those
+			return;
+		}
+
 		const start = worker.currentPos;
 		const end = start + bytes.length;
 
@@ -1645,5 +1651,6 @@ class ReadOrchestrator {
 
 		this.workers.length = 0;
 		this.cache.length = 0;
+		this.disposed = true;
 	}
 }

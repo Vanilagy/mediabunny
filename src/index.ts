@@ -92,6 +92,8 @@ export {
 export {
 	Target,
 	BufferTarget,
+	FilePathTarget,
+	FilePathTargetOptions,
 	NullTarget,
 	StreamTarget,
 	StreamTargetOptions,

@@ -290,7 +290,7 @@ By default, data will be emitted by the `StreamTarget` as soon as it is availabl
 new StreamTarget(writable, {
 	chunked: true,
 	chunkSize: 2 ** 20, // Optional; defaults to 16 MiB
-}),
+});
 ```
 
 #### Applying backpressure
@@ -327,6 +327,33 @@ const output = new Output({
 // ...
 
 await output.finalize(); // Will automatically close the writable stream
+```
+
+### `FilePathTarget`
+
+This target writes to a file at the specified path. It is intended for server-side usage in Node, Bun, or Deno, and offers a simpler API than `StreamTarget` when you just want to write directly to a file path.
+
+```ts
+import { Output, FilePathTarget } from 'mediabunny';
+
+const output = new Output({
+	target: new FilePathTarget('/path/to/output.mp4'),
+	// ...
+});
+
+// ...
+
+await output.finalize(); // Will automatically close the file handle
+```
+
+The internally held file handle will be closed when `finalize` or `cancel` are called on the `Output`.
+
+Writing is chunked by default, for performance. Like `StreamTarget`, you can configure chunked mode options:
+```ts
+new FilePathTarget('/path/to/output.mp4', {
+	chunked: false, // Disable chunking (slower)
+	chunkSize: 2 ** 20, // Optional; defaults to 16 MiB
+});
 ```
 
 ### `NullTarget`
