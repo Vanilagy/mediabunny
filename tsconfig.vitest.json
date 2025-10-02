@@ -7,5 +7,9 @@
 		"noEmit": false
 	},
 	"include": ["vitest.config.ts", "./test/**/*"],
-	"references": [{ "path": "./src" }]
+	"references": [
+		{ "path": "./src" },
+		{ "path": "./packages/mpeg4/src" },
+		{ "path": "./packages/eac3/src" }
+	]
 }
