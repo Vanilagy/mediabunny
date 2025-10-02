@@ -255,7 +255,38 @@ export class BlobSource extends Source {
 
 const URL_SOURCE_MIN_LOAD_AMOUNT = 0.5 * 2 ** 20; // 0.5 MiB
 const DEFAULT_RETRY_DELAY
-	= (previousAttempts => Math.min(2 ** (previousAttempts - 2), 16)) satisfies UrlSourceOptions['getRetryDelay'];
+	= ((previousAttempts, error, src) => {
+		// Check if this could be a CORS error. If so, we cannot recover from it and
+		// should not attempt to retry.
+		// CORS errors are intentionally not opaque, so we need to rely on heuristics.
+		const couldBeCorsError = error instanceof Error && (
+			error.message.includes('Failed to fetch') // Chrome
+			|| error.message.includes('Load failed') // Safari
+			|| error.message.includes('NetworkError when attempting to fetch resource') // Firefox
+		);
+
+		if (couldBeCorsError) {
+			let originOfSrc: string | null = null;
+			// Checking if the origin is different, because only then a CORS error could originate
+			try {
+				if (typeof window !== 'undefined' && typeof window.location !== 'undefined') {
+					originOfSrc = new URL(src instanceof Request ? src.url : src, window.location.href).origin;
+				}
+			} catch {
+				// URL parse failed
+			}
+
+			// If user is offline, it is probably not a CORS error.
+			const isOnline
+			= typeof navigator !== 'undefined' && typeof navigator.onLine === 'boolean' ? navigator.onLine : true;
+
+			if (isOnline && originOfSrc !== null && originOfSrc !== window.location.origin) {
+				return null;
+			}
+		}
+
+		return Math.min(2 ** (previousAttempts - 2), 16);
+	}) satisfies UrlSourceOptions['getRetryDelay'];
 
 /**
  * Options for {@link UrlSource}.
@@ -274,9 +305,10 @@ export type UrlSourceOptions = {
 	 * with the number of previous, unsuccessful attempts, as well as with the error with which the previous request
 	 * failed. If the function returns `null`, no more retries will be made.
 	 *
-	 * By default, it uses an exponential backoff algorithm that never fully gives up.
+	 * By default, it uses an exponential backoff algorithm that never gives up unless
+	 * a CORS error is suspected (`fetch()` did reject, `navigator.onLine` is true and origin is different)
 	 */
-	getRetryDelay?: (previousAttempts: number, error: unknown) => number | null;
+	getRetryDelay?: (previousAttempts: number, error: unknown, url: string | URL | Request) => number | null;
 
 	/** The maximum number of bytes the cache is allowed to hold in memory. Defaults to 64 MiB. */
 	maxCacheSize?: number;
@@ -298,7 +330,7 @@ export class UrlSource extends Source {
 	/** @internal */
 	_url: string | URL | Request;
 	/** @internal */
-	_getRetryDelay: (previousAttempts: number, error: unknown) => number | null;
+	_getRetryDelay: (previousAttempts: number, error: unknown, url: string | URL | Request) => number | null;
 	/** @internal */
 	_options: UrlSourceOptions;
 	/** @internal */
@@ -491,7 +523,7 @@ export class UrlSource extends Source {
 				try {
 					readResult = await reader.read();
 				} catch (error) {
-					const retryDelayInSeconds = this._getRetryDelay(1, error);
+					const retryDelayInSeconds = this._getRetryDelay(1, error, this._url);
 					if (retryDelayInSeconds !== null) {
 						console.error('Error while reading response stream. Attempting to resume.', error);
 						await new Promise(resolve => setTimeout(resolve, 1000 * retryDelayInSeconds));

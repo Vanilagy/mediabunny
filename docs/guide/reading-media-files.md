@@ -487,7 +487,7 @@ If you're using this source in the browser and the URL is on a different origin,
 ```ts
 type UrlSourceOptions = {
 	requestInit?: RequestInit;
-	getRetryDelay?: (previousAttempts: number) => number | null;
+	getRetryDelay?: (previousAttempts: number, error: unknown, url: string | URL | Request) => number | null;
 
 	// The maximum number of bytes the cache is allowed to hold
 	// in memory. Defaults to 8 MiB.
@@ -517,7 +517,9 @@ const source = new UrlSource('https://example.com/bigbuckbunny.mp4', {
 });
 ```
 
-Not setting `getRetryDelay` will default to an infinite, capped exponential backoff pattern.
+Not setting `getRetryDelay` will lead to the default being used:
+- Infinite exponential backoff pattern, capped at 16 seconds.  
+- If a CORS error is suspected (`fetch()` did reject even though `navigator.onLine` is true and origin is different), no further retries will be made.
 
 ---
 

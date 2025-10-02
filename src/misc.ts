@@ -578,7 +578,7 @@ export const retriedFetch = async (
 	fetchFn: typeof fetch,
 	url: string | URL | Request,
 	requestInit: RequestInit,
-	getRetryDelay: (previousAttempts: number, error: unknown) => number | null,
+	getRetryDelay: (previousAttempts: number, error: unknown, url: string | URL | Request) => number | null,
 ) => {
 	let attempts = 0;
 
@@ -587,7 +587,7 @@ export const retriedFetch = async (
 			return await fetchFn(url, requestInit);
 		} catch (error) {
 			attempts++;
-			const retryDelayInSeconds = getRetryDelay(attempts, error);
+			const retryDelayInSeconds = getRetryDelay(attempts, error, url);
 
 			if (retryDelayInSeconds === null) {
 				throw error;

@@ -539,14 +539,9 @@ export class IsobmffDemuxer extends Demuxer {
 				// lookup starts sequentially from the start, incrementally summing up all fragment durations. It's sort
 				// of implicit, but it ends up working nicely.
 
-				const lookupEntryIndex = binarySearchExact(
-					track.fragmentLookupTable,
-					fragment.moofOffset,
-					x => x.moofOffset,
-				);
-				if (lookupEntryIndex !== -1) {
+				const lookupEntry = track.fragmentLookupTable.find(x => x.moofOffset === fragment.moofOffset);
+				if (lookupEntry) {
 					// There's a lookup entry, let's use its timestamp
-					const lookupEntry = track.fragmentLookupTable[lookupEntryIndex]!;
 					offsetFragmentTrackDataByTimestamp(trackData, lookupEntry.timestamp);
 				} else {
 					const lastCacheIndex = binarySearchLessOrEqual(
@@ -1742,6 +1737,20 @@ export class IsobmffDemuxer extends Demuxer {
 						moofOffset,
 					});
 				}
+
+				// Sort by timestamp in case it's not naturally sorted
+				track.fragmentLookupTable.sort((a, b) => a.timestamp - b.timestamp);
+
+				// Remove multiple entries for the same time
+				for (let i = 0; i < track.fragmentLookupTable.length - 1; i++) {
+					const entry1 = track.fragmentLookupTable[i]!;
+					const entry2 = track.fragmentLookupTable[i + 1]!;
+
+					if (entry1.timestamp === entry2.timestamp) {
+						track.fragmentLookupTable.splice(i + 1, 1);
+						i--;
+					}
+				}
 			}; break;
 
 			case 'moof': {
@@ -2747,6 +2756,8 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			// The lookup table entry lied to us! We found a lookup entry but no fragment there that satisfied
 			// the match. In this case, let's search again but using the lookup entry before that.
 			const previousLookupEntry = this.internalTrack.fragmentLookupTable[lookupEntryIndex - 1];
+			assert(!previousLookupEntry || previousLookupEntry.timestamp < lookupEntry.timestamp);
+
 			const newSearchTimestamp = previousLookupEntry?.timestamp ?? -Infinity;
 			return this.performFragmentedLookup(
 				null,

@@ -541,53 +541,49 @@ export class MatroskaDemuxer extends Demuxer {
 		// Put default tracks first
 		this.currentSegment.tracks.sort((a, b) => Number(b.isDefault) - Number(a.isDefault));
 
-		// Sort cue points by cluster position (required for the next algorithm)
-		this.currentSegment.cuePoints.sort((a, b) => a.clusterPosition - b.clusterPosition);
+		// Now, let's distribute the cue points to the tracks
+		const idToTrack = new Map(this.currentSegment.tracks.map(x => [x.id, x]));
 
-		// Now, let's distribute the cue points to each track. Ideally, each track has their own cue point, but some
-		// Matroska files may only specify cue points for a single track. In this case, we still wanna use those cue
-		// points for all tracks.
-		const allTrackIds = this.currentSegment.tracks.map(x => x.id);
-		const remainingTrackIds = new Set<number>();
-		let lastClusterPosition: number | null = null;
-		let lastCuePoint: CuePoint | null = null;
-
+		// Assign cue points to their respective tracks
 		for (const cuePoint of this.currentSegment.cuePoints) {
-			if (cuePoint.clusterPosition !== lastClusterPosition) {
-				for (const id of remainingTrackIds) {
-					// These tracks didn't receive a cue point for the last cluster, so let's give them one
-					assert(lastCuePoint);
-					const track = this.currentSegment.tracks.find(x => x.id === id)!;
-					track.cuePoints.push(lastCuePoint);
-				}
-
-				for (const id of allTrackIds) {
-					remainingTrackIds.add(id);
-				}
+			const track = idToTrack.get(cuePoint.trackId);
+			if (track) {
+				track.cuePoints.push(cuePoint);
 			}
-
-			lastCuePoint = cuePoint;
-
-			if (!remainingTrackIds.has(cuePoint.trackId)) {
-				continue;
-			}
-
-			const track = this.currentSegment.tracks.find(x => x.id === cuePoint.trackId)!;
-			track.cuePoints.push(cuePoint);
-
-			remainingTrackIds.delete(cuePoint.trackId);
-			lastClusterPosition = cuePoint.clusterPosition;
-		}
-
-		for (const id of remainingTrackIds) {
-			assert(lastCuePoint);
-			const track = this.currentSegment.tracks.find(x => x.id === id)!;
-			track.cuePoints.push(lastCuePoint);
 		}
 
 		for (const track of this.currentSegment.tracks) {
 			// Sort cue points by time
 			track.cuePoints.sort((a, b) => a.time - b.time);
+
+			// Remove multiple cue points for the same time
+			for (let i = 0; i < track.cuePoints.length - 1; i++) {
+				const cuePoint1 = track.cuePoints[i]!;
+				const cuePoint2 = track.cuePoints[i + 1]!;
+
+				if (cuePoint1.time === cuePoint2.time) {
+					track.cuePoints.splice(i + 1, 1);
+					i--;
+				}
+			}
+		}
+
+		let trackWithMostCuePoints: InternalTrack | null = null;
+		let maxCuePointCount = -Infinity;
+		for (const track of this.currentSegment.tracks) {
+			if (track.cuePoints.length > maxCuePointCount) {
+				maxCuePointCount = track.cuePoints.length;
+				trackWithMostCuePoints = track;
+			}
+		}
+
+		// For every track that has received 0 cue points (can happen, often only the video track receives cue points),
+		// we still want to have better seeking. Therefore, let's give it the cue points of the track with the most cue
+		// points, which should provide us with the most fine-grained seeking.
+		for (const track of this.currentSegment.tracks) {
+			if (track.cuePoints.length === 0) {
+				track.cuePoints = trackWithMostCuePoints!.cuePoints;
+			}
 		}
 
 		this.currentSegment = null;
@@ -2239,6 +2235,8 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 			// The cue point lied to us! We found a cue point but no cluster there that satisfied the match. In this
 			// case, let's search again but using the cue point before that.
 			const previousCuePoint = this.internalTrack.cuePoints[cuePointIndex - 1];
+			assert(!previousCuePoint || previousCuePoint.time < cuePoint.time);
+
 			const newSearchTimestamp = previousCuePoint?.time ?? -Infinity;
 			return this.performClusterLookup(null, getMatchInCluster, newSearchTimestamp, latestTimestamp, options);
 		}
