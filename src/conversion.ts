@@ -1748,7 +1748,21 @@ export class Conversion {
 				} else if (targetCodec === 'webvtt') {
 					subtitleText = formatCuesToWebVTT(cues);
 				} else if (targetCodec === 'ass' || targetCodec === 'ssa') {
-					subtitleText = formatCuesToAss(cues, '');
+					// When converting to ASS/SSA, try to preserve the header from source if it's also ASS/SSA
+					let header = '';
+					if (sourceCodec === 'ass' || sourceCodec === 'ssa') {
+						// Get the full text to extract header
+						const fullText = await track.exportToText();
+						const eventsIndex = fullText.indexOf('[Events]');
+						if (eventsIndex !== -1) {
+							// Extract everything before [Events] + Format line
+							const formatMatch = fullText.substring(eventsIndex).match(/Format:[^\n]+\n/);
+							if (formatMatch) {
+								header = fullText.substring(0, eventsIndex + formatMatch.index! + formatMatch[0].length);
+							}
+						}
+					}
+					subtitleText = formatCuesToAss(cues, header);
 				} else {
 					// For other formats (tx3g, ttml), export from track
 					subtitleText = await track.exportToText(targetCodec);

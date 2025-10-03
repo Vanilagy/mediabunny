@@ -308,6 +308,53 @@ export const splitSrtIntoCues = (text: string): SubtitleCue[] => {
 };
 
 /**
+ * Extracts plain text from ASS/SSA Dialogue/Comment line.
+ * If the text is already plain (not ASS format), returns as-is.
+ */
+const extractTextFromAssCue = (text: string): string => {
+	// Check if this is an ASS Dialogue/Comment line
+	if (text.startsWith('Dialogue:') || text.startsWith('Comment:')) {
+		// ASS format: Dialogue: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
+		// We need to extract the last field (Text) which may contain commas
+		const colonIndex = text.indexOf(':');
+		if (colonIndex === -1) return text;
+
+		const afterColon = text.substring(colonIndex + 1);
+		const parts = afterColon.split(',');
+
+		// Text is the 10th field (index 9), but it may contain commas
+		// So we need to join everything from index 9 onward
+		if (parts.length >= 10) {
+			return parts.slice(9).join(',');
+		}
+	}
+
+	// Check if this is MKV ASS format (without Dialogue: prefix)
+	// MKV format: ReadOrder,Layer,Style,Name,MarginL,MarginR,MarginV,Effect,Text
+	// OR: Layer,Style,Name,MarginL,MarginR,MarginV,Effect,Text
+	const parts = text.split(',');
+	if (parts.length >= 8) {
+		const firstPart = parts[0]?.trim();
+		const secondPart = parts[1]?.trim();
+
+		// Check if first field is numeric (Layer or ReadOrder)
+		if (firstPart && !isNaN(parseInt(firstPart))) {
+			// Check if second field is also numeric (ReadOrder,Layer format)
+			if (secondPart && !isNaN(parseInt(secondPart)) && parts.length >= 9) {
+				// MKV format with ReadOrder: text is 9th field (index 8) onward
+				return parts.slice(8).join(',');
+			} else if (parts.length >= 8) {
+				// Standard ASS format without ReadOrder: text is 8th field (index 7) onward
+				return parts.slice(7).join(',');
+			}
+		}
+	}
+
+	// Not ASS format, return as-is
+	return text;
+};
+
+/**
  * Formats subtitle cues back to SRT text format.
  * @group Media sources
  * @public
@@ -317,8 +364,9 @@ export const formatCuesToSrt = (cues: SubtitleCue[]): string => {
 		const sequenceNumber = index + 1;
 		const startTime = formatSrtTimestamp(cue.timestamp);
 		const endTime = formatSrtTimestamp(cue.timestamp + cue.duration);
+		const text = extractTextFromAssCue(cue.text);
 
-		return `${sequenceNumber}\n${startTime} --> ${endTime}\n${cue.text}\n`;
+		return `${sequenceNumber}\n${startTime} --> ${endTime}\n${text}\n`;
 	}).join('\n');
 };
 
@@ -340,7 +388,7 @@ export const formatCuesToWebVTT = (cues: SubtitleCue[], preamble?: string): stri
 	const formattedCues = cues.map((cue) => {
 		const startTime = formatSubtitleTimestamp(cue.timestamp * 1000); // Convert to milliseconds
 		const endTime = formatSubtitleTimestamp((cue.timestamp + cue.duration) * 1000);
-		const text = cue.text;
+		const text = extractTextFromAssCue(cue.text);
 
 		// WebVTT doesn't require sequence numbers like SRT
 		return `${startTime} --> ${endTime}\n${text}`;
@@ -521,13 +569,27 @@ const parseAssFormat = (formatLine: string): Map<string, number> => {
  * @public
  */
 export const formatCuesToAss = (cues: SubtitleCue[], header: string): string => {
+	// If header is empty or missing, create a default ASS header
+	if (!header || header.trim() === '') {
+		header = `[Script Info]
+Title: Default
+ScriptType: v4.00+
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text`;
+	}
+
 	// Find [Events] section and its Format line
 	const headerLines = header.split('\n');
 	const eventsIndex = headerLines.findIndex(line => line.trim() === '[Events]');
 
 	if (eventsIndex === -1) {
-		// No [Events] section, just append
-		return header + '\n' + cues.map(c => c.text).join('\n');
+		// No [Events] section, create one
+		return header + `\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n` + cues.map(c => c.text).join('\n');
 	}
 
 	// Find Format line AFTER [Events]
@@ -558,7 +620,7 @@ export const formatCuesToAss = (cues: SubtitleCue[], header: string): string => 
 			}
 		}
 
-		// Parse MKV block data
+		// Parse MKV block data or plain text
 		let params = cue.text;
 		const isComment = params.startsWith('Comment:');
 		const prefix = isComment ? 'Comment:' : 'Dialogue:';
@@ -582,10 +644,17 @@ export const formatCuesToAss = (cues: SubtitleCue[], header: string): string => 
 			return `${prefix} ${layer},${startTime},${endTime},${restFields.join(',')}`;
 		}
 
-		// Standard format: Layer,Style,Name,...
-		const layer = parts[0];
-		const restFields = parts.slice(1);
-		return `${prefix} ${layer},${startTime},${endTime},${restFields.join(',')}`;
+		// Check if this is ASS-formatted (Layer,Style,Name,MarginL,MarginR,MarginV,Effect,Text)
+		if (parts.length >= 8 && !isNaN(parseInt(parts[0]!))) {
+			// Standard format: Layer,Style,Name,...
+			const layer = parts[0];
+			const restFields = parts.slice(1);
+			return `${prefix} ${layer},${startTime},${endTime},${restFields.join(',')}`;
+		}
+
+		// Plain text (from SRT, WebVTT, etc.) - create default ASS fields
+		// Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
+		return `${prefix} 0,${startTime},${endTime},Default,,0,0,0,,${cue.text}`;
 	});
 
 	if (formatIndex === -1) {
