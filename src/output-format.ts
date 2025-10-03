@@ -300,7 +300,8 @@ export class Mp4OutputFormat extends IsobmffOutputFormat {
 			'pcm-f32be',
 			'pcm-f64',
 			'pcm-f64be',
-			...SUBTITLE_CODECS,
+			// Only WebVTT subtitles are supported in MP4
+			'webvtt',
 		];
 	}
 
@@ -342,6 +343,8 @@ export class MovOutputFormat extends IsobmffOutputFormat {
 		return [
 			...VIDEO_CODECS,
 			...AUDIO_CODECS,
+			// Only WebVTT subtitles are supported in MOV
+			'webvtt',
 		];
 	}
 
