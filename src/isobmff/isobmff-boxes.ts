@@ -1769,17 +1769,19 @@ const audioCodecToConfigurationBox = (codec: AudioCodec, isQuickTime: boolean) =
 	return null;
 };
 
-// Only WebVTT is supported in MP4/MOV
 const SUBTITLE_CODEC_TO_BOX_NAME: Partial<Record<SubtitleCodec, string>> = {
 	webvtt: 'wvtt',
+	tx3g: 'tx3g',
+	ttml: 'stpp',
 };
 
-// Only WebVTT is supported in MP4/MOV
 const SUBTITLE_CODEC_TO_CONFIGURATION_BOX: Partial<Record<
 	SubtitleCodec,
 	(trackData: IsobmffSubtitleTrackData) => Box | null
 >> = {
 	webvtt: vttC,
+	tx3g: () => null, // tx3g doesn't require a configuration box
+	ttml: () => null, // stpp configuration is optional
 };
 
 const getLanguageCodeInt = (code: string) => {

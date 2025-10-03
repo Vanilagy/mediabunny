@@ -962,11 +962,11 @@ export class IsobmffDemuxer extends Demuxer {
 						if (lowercaseBoxName === 'wvtt') {
 							track.info.codec = 'webvtt';
 						} else if (lowercaseBoxName === 'tx3g' || lowercaseBoxName === 'text') {
-							// 3GPP Timed Text - treat as SRT
-							track.info.codec = 'srt';
+							// 3GPP Timed Text
+							track.info.codec = 'tx3g';
 						} else if (lowercaseBoxName === 'stpp') {
-							// TTML/XML subtitles - treat as WebVTT for now
-							track.info.codec = 'webvtt';
+							// TTML/IMSC subtitles
+							track.info.codec = 'ttml';
 						}
 
 						this.readContiguousBoxes(

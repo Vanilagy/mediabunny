@@ -274,6 +274,8 @@ export class IsobmffMuxer extends Muxer {
 			} else {
 				const map: Record<SubtitleCodec, string> = {
 					webvtt: 'wvtt',
+					tx3g: 'tx3g',
+					ttml: 'stpp',
 					srt: 'wvtt', // MP4 stores SRT as WebVTT
 					ass: 'wvtt', // MP4 stores ASS as WebVTT
 					ssa: 'wvtt', // MP4 stores SSA as WebVTT

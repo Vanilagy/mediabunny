@@ -89,6 +89,8 @@ export const AUDIO_CODECS = [
  */
 export const SUBTITLE_CODECS = [
 	'webvtt',
+	'tx3g',
+	'ttml',
 	'srt',
 	'ass',
 	'ssa',

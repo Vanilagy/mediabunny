@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tt xmlns="http://www.w3.org/ns/ttml" xmlns:tts="http://www.w3.org/ns/ttml#styling" xml:lang="en">
+  <head>
+    <styling>
+      <style xml:id="s1" tts:color="white" tts:fontFamily="Arial" tts:fontSize="100%"/>
+    </styling>
+  </head>
+  <body>
+    <div>
+      <p begin="00:00:01.000" end="00:00:03.000" style="s1">Hello world!</p>
+      <p begin="00:00:04.000" end="00:00:07.000" style="s1">This is a test subtitle.</p>
+    </div>
+  </body>
+</tt>
