@@ -136,6 +136,12 @@ export class Input<S extends Source = Source> implements Disposable {
 		return tracks.filter(x => x.isAudioTrack());
 	}
 
+	/** Returns the list of all subtitle tracks of this input file. */
+	async getSubtitleTracks() {
+		const tracks = await this.getTracks();
+		return tracks.filter(x => x.isSubtitleTrack());
+	}
+
 	/** Returns the primary video track of this input file, or null if there are no video tracks. */
 	async getPrimaryVideoTrack() {
 		const tracks = await this.getTracks();
@@ -146,6 +152,30 @@ export class Input<S extends Source = Source> implements Disposable {
 	async getPrimaryAudioTrack() {
 		const tracks = await this.getTracks();
 		return tracks.find(x => x.isAudioTrack()) ?? null;
+	}
+
+	/**
+	 * Returns the list of all subtitle tracks of this input file. This is a convenience property that calls
+	 * {@link Input.getSubtitleTracks} and caches the result. Note that this property is a promise!
+	 */
+	get subtitleTracks() {
+		return this.getSubtitleTracks();
+	}
+
+	/**
+	 * Returns the list of all video tracks of this input file. This is a convenience property that calls
+	 * {@link Input.getVideoTracks} and caches the result. Note that this property is a promise!
+	 */
+	get videoTracks() {
+		return this.getVideoTracks();
+	}
+
+	/**
+	 * Returns the list of all audio tracks of this input file. This is a convenience property that calls
+	 * {@link Input.getAudioTracks} and caches the result. Note that this property is a promise!
+	 */
+	get audioTracks() {
+		return this.getAudioTracks();
 	}
 
 	/** Returns the full MIME type of this input file, including track codecs. */

@@ -19,6 +19,7 @@ import {
 	extractVideoCodecString,
 	MediaCodec,
 	OPUS_SAMPLE_RATE,
+	SubtitleCodec,
 	VideoCodec,
 } from '../codec';
 import { Demuxer } from '../demuxer';
@@ -26,6 +27,8 @@ import { Input } from '../input';
 import {
 	InputAudioTrack,
 	InputAudioTrackBacking,
+	InputSubtitleTrack,
+	InputSubtitleTrackBacking,
 	InputTrack,
 	InputTrackBacking,
 	InputVideoTrack,
@@ -48,6 +51,7 @@ import {
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
 import { EncodedPacket, EncodedPacketSideData, PLACEHOLDER_DATA } from '../packet';
+import { SubtitleCue } from '../subtitles';
 import {
 	assertDefinedSize,
 	CODEC_STRING_MAP,
@@ -219,10 +223,16 @@ type InternalTrack = {
 			codec: AudioCodec | null;
 			codecDescription: Uint8Array | null;
 			aacCodecInfo: AacCodecInfo | null;
+		}
+		| {
+			type: 'subtitle';
+			codec: SubtitleCodec | null;
+			codecPrivateText: string | null;
 		};
 };
 type InternalVideoTrack = InternalTrack & { info: { type: 'video' } };
 type InternalAudioTrack = InternalTrack & { info: { type: 'audio' } };
+type InternalSubtitleTrack = InternalTrack & { info: { type: 'subtitle' } };
 
 const METADATA_ELEMENTS = [
 	{ id: EBMLId.SeekHead, flag: 'seekHeadSeen' },
@@ -1100,6 +1110,29 @@ export class MatroskaDemuxer extends Demuxer {
 						const inputTrack = new InputAudioTrack(this.input, new MatroskaAudioTrackBacking(audioTrack));
 						this.currentTrack.inputTrack = inputTrack;
 						this.currentSegment.tracks.push(this.currentTrack);
+					} else if (this.currentTrack.info.type === 'subtitle') {
+						// Map Matroska codec IDs to our subtitle codecs
+						const codecId = this.currentTrack.codecId;
+						if (codecId === 'S_TEXT/UTF8') {
+							this.currentTrack.info.codec = 'srt';
+						} else if (codecId === 'S_TEXT/SSA' || codecId === 'S_SSA') {
+							this.currentTrack.info.codec = 'ssa';
+						} else if (codecId === 'S_TEXT/ASS' || codecId === 'S_ASS') {
+							this.currentTrack.info.codec = 'ass';
+						} else if (codecId === 'S_TEXT/WEBVTT' || codecId === 'D_WEBVTT' || codecId === 'D_WEBVTT/SUBTITLES') {
+							this.currentTrack.info.codec = 'webvtt';
+						}
+
+						// Store CodecPrivate as text for ASS/SSA headers
+						if (this.currentTrack.codecPrivate) {
+							const decoder = new TextDecoder('utf-8');
+							this.currentTrack.info.codecPrivateText = decoder.decode(this.currentTrack.codecPrivate);
+						}
+
+						const subtitleTrack = this.currentTrack as InternalSubtitleTrack;
+						const inputTrack = new InputSubtitleTrack(this.input, new MatroskaSubtitleTrackBacking(subtitleTrack));
+						this.currentTrack.inputTrack = inputTrack;
+						this.currentSegment.tracks.push(this.currentTrack);
 					}
 				}
 
@@ -1136,6 +1169,12 @@ export class MatroskaDemuxer extends Demuxer {
 						codec: null,
 						codecDescription: null,
 						aacCodecInfo: null,
+					};
+				} else if (type === 17) {
+					this.currentTrack.info = {
+						type: 'subtitle',
+						codec: null,
+						codecPrivateText: null,
 					};
 				}
 			}; break;
@@ -2372,6 +2411,42 @@ class MatroskaAudioTrackBacking extends MatroskaTrackBacking implements InputAud
 			sampleRate: this.internalTrack.info.sampleRate,
 			description: this.internalTrack.info.codecDescription ?? undefined,
 		};
+	}
+}
+
+class MatroskaSubtitleTrackBacking extends MatroskaTrackBacking implements InputSubtitleTrackBacking {
+	override internalTrack: InternalSubtitleTrack;
+
+	constructor(internalTrack: InternalSubtitleTrack) {
+		super(internalTrack);
+		this.internalTrack = internalTrack;
+	}
+
+	override getCodec(): SubtitleCodec | null {
+		return this.internalTrack.info.codec;
+	}
+
+	getCodecPrivate(): string | null {
+		return this.internalTrack.info.codecPrivateText;
+	}
+
+	async *getCues(): AsyncGenerator<SubtitleCue> {
+		// Use the existing packet reading infrastructure
+		let packet = await this.getFirstPacket({});
+
+		while (packet) {
+			// Decode subtitle data as UTF-8 text
+			const decoder = new TextDecoder('utf-8');
+			const text = decoder.decode(packet.data);
+
+			yield {
+				timestamp: packet.timestamp,
+				duration: packet.duration,
+				text,
+			};
+
+			packet = await this.getNextPacket(packet, {});
+		}
 	}
 }
 
