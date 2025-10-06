@@ -46,6 +46,7 @@ import {
 	formatSubtitleTimestamp,
 	inlineTimestampRegex,
 	parseSubtitleTimestamp,
+	convertDialogueLineToMkvFormat,
 } from '../subtitles';
 import {
 	aacChannelMap,
@@ -954,14 +955,17 @@ export class MatroskaMuxer extends Muxer {
 			let bodyText = cue.text;
 			const timestampMs = Math.round(timestamp * 1000);
 
-			// Replace in-body timestamps so that they're relative to the cue start time
-			inlineTimestampRegex.lastIndex = 0;
-			bodyText = bodyText.replace(inlineTimestampRegex, (match) => {
-				const time = parseSubtitleTimestamp(match.slice(1, -1));
-				const offsetTime = time - timestampMs;
+			if (track.source._codec === 'ass' || track.source._codec === 'ssa') {
+				bodyText = convertDialogueLineToMkvFormat(bodyText);
+			} else {
+				inlineTimestampRegex.lastIndex = 0;
+				bodyText = bodyText.replace(inlineTimestampRegex, (match) => {
+					const time = parseSubtitleTimestamp(match.slice(1, -1));
+					const offsetTime = time - timestampMs;
 
-				return `<${formatSubtitleTimestamp(offsetTime)}>`;
-			});
+					return `<${formatSubtitleTimestamp(offsetTime)}>`;
+				});
+			}
 
 			const body = textEncoder.encode(bodyText);
 			const additions = `${cue.settings ?? ''}\n${cue.identifier ?? ''}\n${cue.notes ?? ''}`;

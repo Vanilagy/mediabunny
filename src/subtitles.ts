@@ -563,6 +563,26 @@ const parseAssFormat = (formatLine: string): Map<string, number> => {
 };
 
 /**
+ * Converts a full Dialogue/Comment line to MKV block format.
+ * @group Media sources
+ * @internal
+ */
+export const convertDialogueLineToMkvFormat = (line: string): string => {
+	const match = /^(Dialogue|Comment):\s*(\d+),\d+:\d{2}:\d{2}\.\d{2},\d+:\d{2}:\d{2}\.\d{2},(.*)$/.exec(line);
+	if (match) {
+		const layer = match[2];
+		const restFields = match[3];
+		return `${layer},${restFields}`;
+	}
+
+	if (line.startsWith('Dialogue:') || line.startsWith('Comment:')) {
+		return line.substring(line.indexOf(':') + 1).trim();
+	}
+
+	return line;
+};
+
+/**
  * Formats subtitle cues back to ASS/SSA text format with header.
  * Properly inserts Dialogue/Comment lines within [Events] section.
  * @group Media sources
@@ -633,28 +653,25 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text`
 		const startTime = formatAssTimestamp(cue.timestamp);
 		const endTime = formatAssTimestamp(cue.timestamp + cue.duration);
 
-		// MKV ASS format: ReadOrder,Layer,Style,Name,MarginL,MarginR,MarginV,Effect,Text
-		// Standard ASS: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
+		let layer: string;
+		let restFields: string[];
 
-		// Check if first two fields are both numeric (ReadOrder + Layer)
-		if (parts.length >= 10 && !isNaN(parseInt(parts[0]!)) && !isNaN(parseInt(parts[1]!))) {
-			// Has ReadOrder field - skip it
-			const layer = parts[1];
-			const restFields = parts.slice(2); // Style,Name,MarginL,MarginR,MarginV,Effect,Text
-			return `${prefix} ${layer},${startTime},${endTime},${restFields.join(',')}`;
+		// Detect ReadOrder format from actual block data first
+		// MKV blocks: ReadOrder,Layer,Style,... (9+ fields, first two numeric) OR Layer,Style,... (8+ fields, first numeric)
+		const blockHasReadOrder = parts.length >= 9 && !isNaN(parseInt(parts[0]!)) && !isNaN(parseInt(parts[1]!));
+		const blockHasLayer = parts.length >= 8 && !isNaN(parseInt(parts[0]!));
+
+		if (blockHasReadOrder) {
+			layer = parts[1] || '0';
+			restFields = parts.slice(2);
+		} else if (blockHasLayer) {
+			layer = parts[0] || '0';
+			restFields = parts.slice(1);
+		} else {
+			return `${prefix} 0,${startTime},${endTime},Default,,0,0,0,,${cue.text}`;
 		}
 
-		// Check if this is ASS-formatted (Layer,Style,Name,MarginL,MarginR,MarginV,Effect,Text)
-		if (parts.length >= 8 && !isNaN(parseInt(parts[0]!))) {
-			// Standard format: Layer,Style,Name,...
-			const layer = parts[0];
-			const restFields = parts.slice(1);
-			return `${prefix} ${layer},${startTime},${endTime},${restFields.join(',')}`;
-		}
-
-		// Plain text (from SRT, WebVTT, etc.) - create default ASS fields
-		// Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
-		return `${prefix} 0,${startTime},${endTime},Default,,0,0,0,,${cue.text}`;
+		return `${prefix} ${layer},${startTime},${endTime},${restFields.join(',')}`;
 	});
 
 	if (formatIndex === -1) {
