@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en" translate="no">
+	<head>
+		<meta charset="UTF-8">
+		<meta http-equiv="X-UA-Compatible" content="IE=edge">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<title>Subtitle muxing example | Mediabunny</title>
+		<script type="module" src="../base.ts"></script>
+		<script type="module" src="./subtitle-muxing.ts"></script>
+		<link rel="stylesheet" href="../base.css">
+		<link rel="icon" href="../../docs/public/mediabunny-logo.svg">
+	</head>
+
+	<body class="flex flex-col items-center py-10 bg-zinc-50 text-zinc-800 dark:bg-zinc-900 dark:text-zinc-200 px-2">
+		<h1 class="text-3xl font-bold text-blue-500 text-center">Subtitle muxing example</h1>
+		<p class="max-w-lg text-center">Add subtitle tracks to video files. Automatically chooses the best output format to preserve the original container when possible.</p>
+
+		<div class="flex flex-col items-center gap-4 mt-6 w-full max-w-2xl">
+			<div class="w-full p-4 bg-zinc-100 dark:bg-zinc-800 rounded-lg">
+				<label class="block font-semibold mb-2">1. Select video file:</label>
+				<button id="select-video" class="rounded-lg bg-zinc-200 dark:bg-zinc-750 hover:bg-zinc-300 dark:hover:bg-zinc-700 px-5 py-2">
+					Choose video
+				</button>
+				<p id="video-name" class="text-xs mt-2 opacity-60"></p>
+			</div>
+
+			<div class="w-full p-4 bg-zinc-100 dark:bg-zinc-800 rounded-lg">
+				<label class="block font-semibold mb-2">2. Select subtitle file:</label>
+				<p class="text-xs mb-2 opacity-70">Format detected automatically from file extension (.srt, .ass, .ssa, .vtt)</p>
+				<button id="select-subtitle" class="rounded-lg bg-zinc-200 dark:bg-zinc-750 hover:bg-zinc-300 dark:hover:bg-zinc-700 px-5 py-2">
+					Choose subtitle file
+				</button>
+				<p id="subtitle-name" class="text-xs mt-2 opacity-60"></p>
+			</div>
+
+			<button id="process-btn" disabled class="rounded-lg bg-blue-500 hover:bg-blue-600 disabled:bg-zinc-400 disabled:cursor-not-allowed text-white px-8 py-3 font-semibold">
+				Add Subtitles to Video
+			</button>
+
+			<div id="progress-bar" class="w-full h-6 bg-zinc-200 dark:bg-zinc-800 rounded-full overflow-hidden" style="display: none;">
+				<div id="progress-fill" class="h-full bg-gradient-to-r from-blue-500 to-cyan-500 flex items-center justify-center text-white text-xs font-semibold transition-all duration-300" style="width: 0%;">
+					0%
+				</div>
+			</div>
+
+			<div id="download-section" class="w-full p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg" style="display: none;">
+				<h3 class="text-lg font-semibold text-green-700 dark:text-green-400 mb-2">✓ Success!</h3>
+				<p class="text-sm mb-3">Your video with embedded subtitles is ready.</p>
+				<button id="download-btn" class="rounded-lg bg-green-600 hover:bg-green-700 text-white px-6 py-2 font-semibold">
+					Download Video
+				</button>
+			</div>
+
+			<p id="error-element" class="text-red-500 text-sm"></p>
+		</div>
+
+		<a href="/" class="fixed top-0 left-0 flex gap-2 py-2 px-5 items-center">
+			<img src="../../docs/public/mediabunny-logo.svg" class="size-6">
+			<p class="text-sm font-medium">Mediabunny</p>
+		</a>
+
+		<a
+			href="https://github.com/Vanilagy/mediabunny/tree/main/examples/subtitle-muxing"
+			target="_blank"
+			class="flex items-center gap-2 fixed top-0 right-0 py-2 px-5 bg-zinc-200 dark:bg-zinc-750 hover:bg-zinc-300 dark:hover:bg-zinc-700 rounded-bl-xl"
+		>
+			<img src="../../docs/assets/github-mark.svg" class="size-6 dark:invert">
+			<p>View source code</p>
+		</a>
+	</body>
+</html>
