@@ -1,6 +1,3 @@
-> [!NOTE]
-> I'm on vacation until 18 October, so expect slow or no replies to issues during that time. 🏖️
-
 # Mediabunny - JavaScript media toolkit
 
 [![](https://img.shields.io/npm/v/mediabunny)](https://www.npmjs.com/package/mediabunny)

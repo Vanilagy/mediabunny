@@ -579,3 +579,48 @@ await conversion.execute();
 ::: info
 - Check out the <a href="/examples/file-compression">File compression example</a> for this code in action.
 :::
+
+## Add a video overlay
+
+```ts
+import {
+	Input,
+	Output,
+	Conversion,
+} from 'mediabunny';
+
+// For example, let's load a watermark image
+const watermark = new Image();
+watermark.src = '/watermark.jpg';
+await new Promise(resolve => watermark.onload = resolve);
+
+const input = new Input(...);
+const output = new Output(...);
+
+let ctx: CanvasRenderingContext2D | null = null;
+const conversion = await Conversion.init({
+	input,
+	output,
+	video: {
+		process: (sample) => {
+			if (!ctx) {
+				// Create a canvas for image compositing
+				const canvas = new OffscreenCanvas(
+					sample.displayWidth,
+					sample.displayHeight,
+				);
+				ctx = canvas.getContext('2d')!;
+			}
+
+			ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+			sample.draw(ctx, 0, 0);
+			ctx.drawImage(watermark, 32, 32);
+
+			return ctx.canvas;
+		},
+	},
+});
+
+await conversion.execute();
+// Conversion is complete
+```

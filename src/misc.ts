@@ -208,7 +208,7 @@ export const TRANSFER_CHARACTERISTICS_MAP = {
 	'smpte170m': 6, // SMPTE 170M
 	'linear': 8, // Linear transfer characteristics
 	'iec61966-2-1': 13, // IEC 61966-2-1
-	'pg': 16, // Rec. ITU-R BT.2100-2 perceptual quantization (PQ) system
+	'pq': 16, // Rec. ITU-R BT.2100-2 perceptual quantization (PQ) system
 	'hlg': 18, // Rec. ITU-R BT.2100-2 hybrid loggamma (HLG) system
 };
 export const TRANSFER_CHARACTERISTICS_MAP_INVERSE = invertObject(TRANSFER_CHARACTERISTICS_MAP);
