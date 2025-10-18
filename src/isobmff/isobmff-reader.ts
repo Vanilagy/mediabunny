@@ -70,6 +70,10 @@ export const readDataBox = (slice: FileSlice) => {
 		return null;
 	}
 
+	if (slice.remainingLength < 4) {
+		return null;
+	}
+
 	const typeIndicator = readU32Be(slice);
 	slice.skip(4); // Locale indicator
 	const data = readBytes(slice, header.contentSize - 8);
