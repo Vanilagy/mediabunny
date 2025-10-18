@@ -1578,6 +1578,7 @@ const VIDEO_CODEC_TO_BOX_NAME: Record<VideoCodec, string> = {
 	vp8: 'vp08',
 	vp9: 'vp09',
 	av1: 'av01',
+	mpeg4: 'mp4v',
 };
 
 const VIDEO_CODEC_TO_CONFIGURATION_BOX: Record<VideoCodec, (trackData: IsobmffVideoTrackData) => Box | null> = {
@@ -1586,6 +1587,7 @@ const VIDEO_CODEC_TO_CONFIGURATION_BOX: Record<VideoCodec, (trackData: IsobmffVi
 	vp8: vpcC,
 	vp9: vpcC,
 	av1: av1C,
+	mpeg4: () => null,
 };
 
 const audioCodecToBoxName = (codec: AudioCodec, isQuickTime: boolean): string => {
@@ -1599,6 +1601,7 @@ const audioCodecToBoxName = (codec: AudioCodec, isQuickTime: boolean): string =>
 		case 'alaw': return 'alaw';
 		case 'pcm-u8': return 'raw ';
 		case 'pcm-s8': return 'sowt';
+		case 'eac3': return 'ec-3';
 	}
 
 	// Logic diverges here
@@ -1629,6 +1632,8 @@ const audioCodecToBoxName = (codec: AudioCodec, isQuickTime: boolean): string =>
 			case 'pcm-f64be': return 'fpcm';
 		}
 	}
+
+	throw new Error(`Unsupported audio codec: ${codec}`);
 };
 
 const audioCodecToConfigurationBox = (codec: AudioCodec, isQuickTime: boolean) => {

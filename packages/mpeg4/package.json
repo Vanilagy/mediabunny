@@ -1,0 +1,53 @@
+{
+  "name": "@mediabunny/mpeg4",
+  "author": "Vanilagy and contributors",
+  "contributors": [
+    "Wiedy Mi <https://github.com/wiedymi>"
+  ],
+  "version": "1.21.0",
+  "description": "MPEG-4 Part 2 (XVID/DIVX) decoder extension for Mediabunny.",
+  "main": "./dist/bundles/mediabunny-mpeg4.mjs",
+  "module": "./dist/bundles/mediabunny-mpeg4.mjs",
+  "types": "./dist/modules/src/index.d.ts",
+  "exports": {
+    "types": "./dist/modules/src/index.d.ts",
+    "import": "./dist/bundles/mediabunny-mpeg4.mjs",
+    "require": "./dist/bundles/mediabunny-mpeg4.mjs"
+  },
+  "files": [
+    "README.md",
+    "package.json",
+    "LICENSE",
+    "dist",
+    "src",
+    "dist/bundles/*.wasm"
+  ],
+  "sideEffects": false,
+  "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vanilagy/mediabunny.git",
+    "directory": "packages/mpeg4"
+  },
+  "bugs": {
+    "url": "https://github.com/Vanilagy/mediabunny/issues"
+  },
+  "homepage": "https://mediabunny.dev",
+  "peerDependencies": {
+    "mediabunny": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/emscripten": "^1.40.1"
+  },
+  "keywords": [
+    "mpeg4",
+    "xvid",
+    "divx",
+    "decoding",
+    "codec",
+    "mediabunny",
+    "browser",
+    "wasm",
+    "polyfill"
+  ]
+}
