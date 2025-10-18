@@ -1,0 +1,55 @@
+{
+  "name": "@mediabunny/eac3",
+  "author": "Vanilagy and contributors",
+  "contributors": [
+    "Wiedy Mi <https://github.com/wiedymi>"
+  ],
+  "version": "1.21.0",
+  "description": "E-AC-3 (Dolby Digital Plus) and AC-3 decoder/encoder for Mediabunny, based on FFmpeg.",
+  "main": "./dist/bundles/mediabunny-eac3.mjs",
+  "module": "./dist/bundles/mediabunny-eac3.mjs",
+  "types": "./dist/modules/src/index.d.ts",
+  "exports": {
+    "types": "./dist/modules/src/index.d.ts",
+    "import": "./dist/bundles/mediabunny-eac3.mjs",
+    "require": "./dist/bundles/mediabunny-eac3.mjs"
+  },
+  "files": [
+    "README.md",
+    "package.json",
+    "LICENSE",
+    "dist",
+    "src",
+    "dist/bundles/*.wasm"
+  ],
+  "sideEffects": false,
+  "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vanilagy/mediabunny.git",
+    "directory": "packages/eac3"
+  },
+  "bugs": {
+    "url": "https://github.com/Vanilagy/mediabunny/issues"
+  },
+  "homepage": "https://mediabunny.dev",
+  "peerDependencies": {
+    "mediabunny": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/emscripten": "^1.40.1"
+  },
+  "keywords": [
+    "eac3",
+    "ac3",
+    "dolby",
+    "atmos",
+    "decoding",
+    "encoding",
+    "codec",
+    "mediabunny",
+    "ffmpeg",
+    "browser",
+    "wasm"
+  ]
+}

@@ -343,6 +343,7 @@ export class Quality {
 			vp9: 0.6, // Similar to HEVC
 			av1: 0.4, // ~60% more efficient than AVC
 			vp8: 1.2, // Slightly less efficient than AVC
+			mpeg4: 1.5, // Less efficient than AVC
 		};
 
 		const referencePixels = 1920 * 1080;
@@ -367,6 +368,8 @@ export class Quality {
 			opus: 64000, // 64kbps base for Opus
 			mp3: 160000, // 160kbps base for MP3
 			vorbis: 64000, // 64kbps base for Vorbis
+			ac3: 640000, // 640kbps base for AC-3 (Dolby Digital)
+			eac3: 256000, // 256kbps base for E-AC-3 (Dolby Digital Plus)
 		};
 
 		const baseBitrate = baseRates[codec as keyof typeof baseRates];
