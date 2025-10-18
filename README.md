@@ -200,7 +200,7 @@ npm run lint # ESLint
 
 npm run docs:generate # Generates API docs
 npm run docs:dev # Start docs development server
-npm run dev # Start examples development server, will run at http://localhost:5173/examples/[name]/index.html
+npm run dev # Start examples development server, will run at http://localhost:5173/examples/[name]/
   
 npm run docs:build # Build docs and examples
 ```
