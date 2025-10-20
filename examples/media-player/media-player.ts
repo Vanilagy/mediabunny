@@ -240,7 +240,7 @@ const startVideoIterator = async () => {
 
 /** Runs every frame; updates the canvas if necessary. */
 const render = (requestFrame = true) => {
-	if (fileLoaded) {
+	if (fileLoaded && playing) {
 		const playbackTime = getPlaybackTime();
 		if (playbackTime >= totalDuration) {
 			// Pause playback once the end is reached
