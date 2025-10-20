@@ -186,7 +186,7 @@ export type ConversionVideoOptions = {
 	 *
 	 * This function can also be used to manually resize frames. When doing so, you should signal the post-process
 	 * dimensions using the `processedWidth` and `processedHeight` fields, which enables the encoder to better know what
-	 * to expect.
+	 * to expect. If these fields aren't set, Mediabunny will assume you won't perform any resizing.
 	 */
 	process?: (sample: VideoSample) => MaybePromise<
 		CanvasImageSource | VideoSample | (CanvasImageSource | VideoSample)[] | null
@@ -229,7 +229,8 @@ export type ConversionAudioOptions = {
 	 *
 	 * This function can also be used to manually perform remixing or resampling. When doing so, you should signal the
 	 * post-process parameters using the `processedNumberOfChannels` and `processedSampleRate` fields, which enables the
-	 * encoder to better know what to expect.
+	 * encoder to better know what to expect. If these fields aren't set, Mediabunny will assume you won't perform
+	 * remixing or resampling.
 	 */
 	process?: (sample: AudioSample) => MaybePromise<
 		AudioSample | AudioSample[] | null
@@ -1350,7 +1351,6 @@ export class Conversion {
 				!encodableCodecs.some(codec => (NON_PCM_AUDIO_CODECS as readonly string[]).includes(codec))
 				&& audioCodecs.some(codec => (NON_PCM_AUDIO_CODECS as readonly string[]).includes(codec))
 				&& (numberOfChannels !== FALLBACK_NUMBER_OF_CHANNELS || sampleRate !== FALLBACK_SAMPLE_RATE)
-				&& !trackOptions.process
 			) {
 				// We could not find a compatible non-PCM codec despite the container supporting them. This can be
 				// caused by strange channel count or sample rate configurations. Therefore, let's try again but with
