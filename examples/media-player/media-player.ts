@@ -7,35 +7,56 @@ import {
 	UrlSource,
 	WrappedAudioBuffer,
 	WrappedCanvas,
-} from 'mediabunny';
+} from "mediabunny";
 
-import SampleFileUrl from '../../docs/assets/big-buck-bunny-trimmed.mp4';
-(document.querySelector('#sample-file-download') as HTMLAnchorElement).href = SampleFileUrl;
+import SampleFileUrl from "../../docs/assets/big-buck-bunny-trimmed.mp4";
+(document.querySelector("#sample-file-download") as HTMLAnchorElement).href =
+	SampleFileUrl;
 
-const selectMediaButton = document.querySelector('#select-file') as HTMLButtonElement;
-const loadUrlButton = document.querySelector('#load-url') as HTMLButtonElement;
-const fileNameElement = document.querySelector('#file-name') as HTMLParagraphElement;
-const horizontalRule = document.querySelector('hr') as HTMLHRElement;
-const loadingElement = document.querySelector('#loading-element') as HTMLParagraphElement;
-const playerContainer = document.querySelector('#player') as HTMLDivElement;
-const canvas = document.querySelector('canvas') as HTMLCanvasElement;
-const controlsElement = document.querySelector('#controls') as HTMLDivElement;
-const playButton = document.querySelector('#play-button') as HTMLButtonElement;
-const playIcon = document.querySelector('#play-icon') as HTMLSpanElement;
-const pauseIcon = document.querySelector('#pause-icon') as HTMLSpanElement;
-const currentTimeElement = document.querySelector('#current-time') as HTMLSpanElement;
-const durationElement = document.querySelector('#duration') as HTMLSpanElement;
-const progressBarContainer = document.querySelector('#progress-bar-container') as HTMLDivElement;
-const progressBar = document.querySelector('#progress-bar') as HTMLDivElement;
-const volumeBarContainer = document.querySelector('#volume-bar-container') as HTMLDivElement;
-const volumeBar = document.querySelector('#volume-bar') as HTMLDivElement;
-const volumeIconWrapper = document.querySelector('#volume-icon-wrapper') as HTMLDivElement;
-const volumeButton = document.querySelector('#volume-button') as HTMLButtonElement;
-const fullscreenButton = document.querySelector('#fullscreen-button') as HTMLButtonElement;
-const errorElement = document.querySelector('#error-element') as HTMLDivElement;
-const warningElement = document.querySelector('#warning-element') as HTMLDivElement;
+const selectMediaButton = document.querySelector(
+	"#select-file"
+) as HTMLButtonElement;
+const loadUrlButton = document.querySelector("#load-url") as HTMLButtonElement;
+const fileNameElement = document.querySelector(
+	"#file-name"
+) as HTMLParagraphElement;
+const horizontalRule = document.querySelector("hr") as HTMLHRElement;
+const loadingElement = document.querySelector(
+	"#loading-element"
+) as HTMLParagraphElement;
+const playerContainer = document.querySelector("#player") as HTMLDivElement;
+const canvas = document.querySelector("canvas") as HTMLCanvasElement;
+const controlsElement = document.querySelector("#controls") as HTMLDivElement;
+const playButton = document.querySelector("#play-button") as HTMLButtonElement;
+const playIcon = document.querySelector("#play-icon") as HTMLSpanElement;
+const pauseIcon = document.querySelector("#pause-icon") as HTMLSpanElement;
+const currentTimeElement = document.querySelector(
+	"#current-time"
+) as HTMLSpanElement;
+const durationElement = document.querySelector("#duration") as HTMLSpanElement;
+const progressBarContainer = document.querySelector(
+	"#progress-bar-container"
+) as HTMLDivElement;
+const progressBar = document.querySelector("#progress-bar") as HTMLDivElement;
+const volumeBarContainer = document.querySelector(
+	"#volume-bar-container"
+) as HTMLDivElement;
+const volumeBar = document.querySelector("#volume-bar") as HTMLDivElement;
+const volumeIconWrapper = document.querySelector(
+	"#volume-icon-wrapper"
+) as HTMLDivElement;
+const volumeButton = document.querySelector(
+	"#volume-button"
+) as HTMLButtonElement;
+const fullscreenButton = document.querySelector(
+	"#fullscreen-button"
+) as HTMLButtonElement;
+const errorElement = document.querySelector("#error-element") as HTMLDivElement;
+const warningElement = document.querySelector(
+	"#warning-element"
+) as HTMLDivElement;
 
-const context = canvas.getContext('2d')!;
+const context = canvas.getContext("2d")!;
 
 let audioContext: AudioContext | null = null;
 let gainNode: GainNode | null = null;
@@ -51,8 +72,13 @@ let playing = false;
 /** The timestamp within the media file when the playback was started. */
 let playbackTimeAtStart = 0;
 
-let videoFrameIterator: AsyncGenerator<WrappedCanvas, void, unknown> | null = null;
-let audioBufferIterator: AsyncGenerator<WrappedAudioBuffer, void, unknown> | null = null;
+let videoFrameIterator: AsyncGenerator<WrappedCanvas, void, unknown> | null =
+	null;
+let audioBufferIterator: AsyncGenerator<
+	WrappedAudioBuffer,
+	void,
+	unknown
+> | null = null;
 let nextFrame: WrappedCanvas | null = null;
 const queuedAudioNodes: Set<AudioBufferSourceNode> = new Set();
 
@@ -82,17 +108,19 @@ const initMediaPlayer = async (resource: File | string) => {
 		asyncId++;
 
 		fileLoaded = false;
-		fileNameElement.textContent = resource instanceof File ? resource.name : resource;
-		horizontalRule.style.display = '';
-		loadingElement.style.display = '';
-		playerContainer.style.display = 'none';
-		errorElement.textContent = '';
-		warningElement.textContent = '';
+		fileNameElement.textContent =
+			resource instanceof File ? resource.name : resource;
+		horizontalRule.style.display = "";
+		loadingElement.style.display = "";
+		playerContainer.style.display = "none";
+		errorElement.textContent = "";
+		warningElement.textContent = "";
 
 		// Create an Input from the resource
-		const source = resource instanceof File
-			? new BlobSource(resource)
-			: new UrlSource(resource);
+		const source =
+			resource instanceof File
+				? new BlobSource(resource)
+				: new UrlSource(resource);
 		const input = new Input({
 			source,
 			formats: ALL_FORMATS,
@@ -105,31 +133,31 @@ const initMediaPlayer = async (resource: File | string) => {
 		let videoTrack = await input.getPrimaryVideoTrack();
 		let audioTrack = await input.getPrimaryAudioTrack();
 
-		let problemMessage = '';
+		let problemMessage = "";
 
 		if (videoTrack) {
 			if (videoTrack.codec === null) {
-				problemMessage += 'Unsupported video codec. ';
+				problemMessage += "Unsupported video codec. ";
 				videoTrack = null;
 			} else if (!(await videoTrack.canDecode())) {
-				problemMessage += 'Unable to decode the video track. ';
+				problemMessage += "Unable to decode the video track. ";
 				videoTrack = null;
 			}
 		}
 
 		if (audioTrack) {
 			if (audioTrack.codec === null) {
-				problemMessage += 'Unsupported audio codec. ';
+				problemMessage += "Unsupported audio codec. ";
 				audioTrack = null;
 			} else if (!(await audioTrack.canDecode())) {
-				problemMessage += 'Unable to decode the audio track. ';
+				problemMessage += "Unable to decode the audio track. ";
 				audioTrack = null;
 			}
 		}
 
 		if (!videoTrack && !audioTrack) {
 			if (!problemMessage) {
-				problemMessage = 'No audio or video track found.';
+				problemMessage = "No audio or video track found.";
 			}
 
 			throw new Error(problemMessage);
@@ -140,7 +168,8 @@ const initMediaPlayer = async (resource: File | string) => {
 		}
 
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
-		const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+		const AudioContext =
+			window.AudioContext || (window as any).webkitAudioContext;
 
 		// We must create the audio context with the matching sample rate for correct acoustic results
 		// (especially for low-sample rate files)
@@ -153,60 +182,64 @@ const initMediaPlayer = async (resource: File | string) => {
 			? await videoTrack.canBeTransparent()
 			: false;
 
-		playerContainer.style.background = videoCanBeTransparent ? 'transparent' : '';
+		playerContainer.style.background = videoCanBeTransparent
+			? "transparent"
+			: "";
 
 		// For video, let's use a CanvasSink as it handles rotation and closing video samples for us.
 		// Pool size of 2: We'll only ever have the current and the next frame around, so we only need two canvases.
-		videoSink = videoTrack && new CanvasSink(videoTrack, {
-			poolSize: 2,
-			fit: 'contain', // In case the video changes dimensions over time
-			alpha: videoCanBeTransparent,
-		});
+		videoSink =
+			videoTrack &&
+			new CanvasSink(videoTrack, {
+				poolSize: 2,
+				fit: "contain", // In case the video changes dimensions over time
+				alpha: videoCanBeTransparent,
+			});
 		// For audio, we'll use an AudioBufferSink to directly retrieve AudioBuffers compatible with the Web Audio API
 		audioSink = audioTrack && new AudioBufferSink(audioTrack);
 
 		// Show the canvas if there's a video track, otherwise hide it
 		if (videoTrack) {
-			canvas.style.display = '';
+			canvas.style.display = "";
 			canvas.width = videoTrack.displayWidth;
 			canvas.height = videoTrack.displayHeight;
 		} else {
-			canvas.style.display = 'none';
+			canvas.style.display = "none";
 		}
 
 		// Show volume controls if there's an audio track, otherwise hide them
 		if (audioTrack) {
-			volumeButton.style.display = '';
-			volumeBarContainer.style.display = '';
+			volumeButton.style.display = "";
+			volumeBarContainer.style.display = "";
 		} else {
-			volumeButton.style.display = 'none';
-			volumeBarContainer.style.display = 'none';
+			volumeButton.style.display = "none";
+			volumeBarContainer.style.display = "none";
 		}
 
 		fileLoaded = true;
 
 		await startVideoIterator();
 
-		if (audioContext.state === 'running') {
+		if (audioContext.state === "running") {
 			// Start playback automatically if the audio context permits
 			await play();
 		}
 
-		loadingElement.style.display = 'none';
-		playerContainer.style.display = '';
+		loadingElement.style.display = "none";
+		playerContainer.style.display = "";
 
 		if (!videoSink) {
 			// If there's only an audio track, always show the controls
-			controlsElement.style.opacity = '1';
-			controlsElement.style.pointerEvents = '';
-			playerContainer.style.cursor = '';
+			controlsElement.style.opacity = "1";
+			controlsElement.style.pointerEvents = "";
+			playerContainer.style.cursor = "";
 		}
 	} catch (error) {
 		console.error(error);
 
 		errorElement.textContent = String(error);
-		loadingElement.style.display = 'none';
-		playerContainer.style.display = 'none';
+		loadingElement.style.display = "none";
+		playerContainer.style.display = "none";
 	}
 };
 
@@ -240,7 +273,7 @@ const startVideoIterator = async () => {
 
 /** Runs every frame; updates the canvas if necessary. */
 const render = (requestFrame = true) => {
-	if (fileLoaded) {
+	if (fileLoaded && playing) {
 		const playbackTime = getPlaybackTime();
 		if (playbackTime >= totalDuration) {
 			// Pause playback once the end is reached
@@ -315,7 +348,8 @@ const runAudioIterator = async () => {
 		node.buffer = buffer;
 		node.connect(gainNode!);
 
-		const startTimestamp = audioContextStartTime! + timestamp - playbackTimeAtStart;
+		const startTimestamp =
+			audioContextStartTime! + timestamp - playbackTimeAtStart;
 
 		// Two cases: Either, the audio starts in the future or in the past
 		if (startTimestamp >= audioContext!.currentTime) {
@@ -323,7 +357,10 @@ const runAudioIterator = async () => {
 			node.start(startTimestamp);
 		} else {
 			// If it starts in the past, then let's only play the audible section that remains from here on out
-			node.start(audioContext!.currentTime, audioContext!.currentTime - startTimestamp);
+			node.start(
+				audioContext!.currentTime,
+				audioContext!.currentTime - startTimestamp
+			);
 		}
 
 		queuedAudioNodes.add(node);
@@ -353,14 +390,16 @@ const getPlaybackTime = () => {
 	if (playing) {
 		// To ensure perfect audio-video sync, we always use the audio context's clock to determine playback time, even
 		// when there is no audio track.
-		return audioContext!.currentTime - audioContextStartTime! + playbackTimeAtStart;
+		return (
+			audioContext!.currentTime - audioContextStartTime! + playbackTimeAtStart
+		);
 	} else {
 		return playbackTimeAtStart;
 	}
 };
 
 const play = async () => {
-	if (audioContext!.state === 'suspended') {
+	if (audioContext!.state === "suspended") {
 		await audioContext!.resume();
 	}
 
@@ -380,8 +419,8 @@ const play = async () => {
 		void runAudioIterator();
 	}
 
-	playIcon.style.display = 'none';
-	pauseIcon.style.display = '';
+	playIcon.style.display = "none";
+	pauseIcon.style.display = "";
 };
 
 const pause = () => {
@@ -396,8 +435,8 @@ const pause = () => {
 	}
 	queuedAudioNodes.clear();
 
-	playIcon.style.display = '';
-	pauseIcon.style.display = 'none';
+	playIcon.style.display = "";
+	pauseIcon.style.display = "none";
 };
 
 const togglePlay = () => {
@@ -433,33 +472,46 @@ const updateProgressBarTime = (seconds: number) => {
 	progressBar.style.width = `${(seconds / totalDuration) * 100}%`;
 };
 
-progressBarContainer.addEventListener('pointerdown', (event) => {
+progressBarContainer.addEventListener("pointerdown", (event) => {
 	draggingProgressBar = true;
 	progressBarContainer.setPointerCapture(event.pointerId);
 
 	const rect = progressBarContainer.getBoundingClientRect();
-	const completion = Math.max(Math.min((event.clientX - rect.left) / rect.width, 1), 0);
+	const completion = Math.max(
+		Math.min((event.clientX - rect.left) / rect.width, 1),
+		0
+	);
 	updateProgressBarTime(completion * totalDuration);
 
 	clearTimeout(hideControlsTimeout);
 
-	window.addEventListener('pointerup', (event) => {
-		draggingProgressBar = false;
-		progressBarContainer.releasePointerCapture(event.pointerId);
+	window.addEventListener(
+		"pointerup",
+		(event) => {
+			draggingProgressBar = false;
+			progressBarContainer.releasePointerCapture(event.pointerId);
 
-		const rect = progressBarContainer.getBoundingClientRect();
-		const completion = Math.max(Math.min((event.clientX - rect.left) / rect.width, 1), 0);
-		const newTime = completion * totalDuration;
+			const rect = progressBarContainer.getBoundingClientRect();
+			const completion = Math.max(
+				Math.min((event.clientX - rect.left) / rect.width, 1),
+				0
+			);
+			const newTime = completion * totalDuration;
 
-		void seekToTime(newTime);
-		showControlsTemporarily();
-	}, { once: true });
+			void seekToTime(newTime);
+			showControlsTemporarily();
+		},
+		{ once: true }
+	);
 });
 
-progressBarContainer.addEventListener('pointermove', (event) => {
+progressBarContainer.addEventListener("pointermove", (event) => {
 	if (draggingProgressBar) {
 		const rect = progressBarContainer.getBoundingClientRect();
-		const completion = Math.max(Math.min((event.clientX - rect.left) / rect.width, 1), 0);
+		const completion = Math.max(
+			Math.min((event.clientX - rect.left) / rect.width, 1),
+			0
+		);
 		updateProgressBarTime(completion * totalDuration);
 	}
 });
@@ -475,11 +527,11 @@ const updateVolume = () => {
 	const iconNumber = volumeMuted ? 0 : Math.ceil(1 + 3 * volume);
 	for (let i = 0; i < volumeIconWrapper.children.length; i++) {
 		const icon = volumeIconWrapper.children[i] as HTMLImageElement;
-		icon.style.display = i === iconNumber ? '' : 'none';
+		icon.style.display = i === iconNumber ? "" : "none";
 	}
 };
 
-volumeBarContainer.addEventListener('pointerdown', (event) => {
+volumeBarContainer.addEventListener("pointerdown", (event) => {
 	draggingVolumeBar = true;
 	volumeBarContainer.setPointerCapture(event.pointerId);
 
@@ -490,24 +542,31 @@ volumeBarContainer.addEventListener('pointerdown', (event) => {
 
 	clearTimeout(hideControlsTimeout);
 
-	window.addEventListener('pointerup', (event) => {
-		draggingVolumeBar = false;
-		volumeBarContainer.releasePointerCapture(event.pointerId);
+	window.addEventListener(
+		"pointerup",
+		(event) => {
+			draggingVolumeBar = false;
+			volumeBarContainer.releasePointerCapture(event.pointerId);
 
-		const rect = volumeBarContainer.getBoundingClientRect();
-		volume = Math.max(Math.min((event.clientX - rect.left) / rect.width, 1), 0);
-		updateVolume();
+			const rect = volumeBarContainer.getBoundingClientRect();
+			volume = Math.max(
+				Math.min((event.clientX - rect.left) / rect.width, 1),
+				0
+			);
+			updateVolume();
 
-		showControlsTemporarily();
-	}, { once: true });
+			showControlsTemporarily();
+		},
+		{ once: true }
+	);
 });
 
-volumeButton.addEventListener('click', () => {
+volumeButton.addEventListener("click", () => {
 	volumeMuted = !volumeMuted;
 	updateVolume();
 });
 
-volumeBarContainer.addEventListener('pointermove', (event) => {
+volumeBarContainer.addEventListener("pointermove", (event) => {
 	if (draggingVolumeBar) {
 		const rect = volumeBarContainer.getBoundingClientRect();
 		volume = Math.max(Math.min((event.clientX - rect.left) / rect.width, 1), 0);
@@ -523,9 +582,9 @@ const showControlsTemporarily = () => {
 		return;
 	}
 
-	controlsElement.style.opacity = '1';
-	controlsElement.style.pointerEvents = '';
-	playerContainer.style.cursor = '';
+	controlsElement.style.opacity = "1";
+	controlsElement.style.pointerEvents = "";
+	playerContainer.style.cursor = "";
 
 	clearTimeout(hideControlsTimeout);
 	hideControlsTimeout = window.setTimeout(() => {
@@ -534,29 +593,33 @@ const showControlsTemporarily = () => {
 		}
 
 		hideControls();
-		playerContainer.style.cursor = 'none';
+		playerContainer.style.cursor = "none";
 	}, 2000);
 };
 
 const hideControls = () => {
-	controlsElement.style.opacity = '0';
-	controlsElement.style.pointerEvents = 'none';
+	controlsElement.style.opacity = "0";
+	controlsElement.style.pointerEvents = "none";
 };
 hideControls();
 
 let hideControlsTimeout = -1;
-playerContainer.addEventListener('pointermove', (event) => {
-	if (event.pointerType !== 'touch') {
+playerContainer.addEventListener("pointermove", (event) => {
+	if (event.pointerType !== "touch") {
 		showControlsTemporarily();
 	}
 });
-playerContainer.addEventListener('pointerleave', (event) => {
+playerContainer.addEventListener("pointerleave", (event) => {
 	if (!videoSink) {
 		// Shouldn't run if there's only an audio track
 		return;
 	}
 
-	if (draggingProgressBar || draggingVolumeBar || event.pointerType === 'touch') {
+	if (
+		draggingProgressBar ||
+		draggingVolumeBar ||
+		event.pointerType === "touch"
+	) {
 		return;
 	}
 
@@ -566,23 +629,23 @@ playerContainer.addEventListener('pointerleave', (event) => {
 
 /** === EVENT LISTENERS === */
 
-playButton.addEventListener('click', togglePlay);
-window.addEventListener('keydown', (e) => {
+playButton.addEventListener("click", togglePlay);
+window.addEventListener("keydown", (e) => {
 	if (!fileLoaded) {
 		return;
 	}
 
-	if (e.code === 'Space' || e.code === 'KeyK') {
+	if (e.code === "Space" || e.code === "KeyK") {
 		togglePlay();
-	} else if (e.code === 'KeyF') {
+	} else if (e.code === "KeyF") {
 		fullscreenButton.click();
-	} else if (e.code === 'ArrowLeft') {
+	} else if (e.code === "ArrowLeft") {
 		const newTime = Math.max(getPlaybackTime() - 5, 0);
 		void seekToTime(newTime);
-	} else if (e.code === 'ArrowRight') {
+	} else if (e.code === "ArrowRight") {
 		const newTime = Math.min(getPlaybackTime() + 5, totalDuration);
 		void seekToTime(newTime);
-	} else if (e.code === 'KeyM') {
+	} else if (e.code === "KeyM") {
 		volumeButton.click();
 	} else {
 		return;
@@ -592,24 +655,24 @@ window.addEventListener('keydown', (e) => {
 	e.preventDefault();
 });
 
-fullscreenButton.addEventListener('click', () => {
+fullscreenButton.addEventListener("click", () => {
 	if (document.fullscreenElement) {
 		void document.exitFullscreen();
 	} else {
 		playerContainer.requestFullscreen().catch((e) => {
-			console.error('Failed to enter fullscreen mode:', e);
+			console.error("Failed to enter fullscreen mode:", e);
 		});
 	}
 });
 
 // I'm sorry for this
 const isTouchDevice = () => {
-	return 'ontouchstart' in window;
+	return "ontouchstart" in window;
 };
 
-playerContainer.addEventListener('click', () => {
+playerContainer.addEventListener("click", () => {
 	if (isTouchDevice()) {
-		if (controlsElement.style.opacity === '1') {
+		if (controlsElement.style.opacity === "1") {
 			hideControls();
 		} else {
 			showControlsTemporarily();
@@ -618,7 +681,7 @@ playerContainer.addEventListener('click', () => {
 		togglePlay();
 	}
 });
-controlsElement.addEventListener('click', (event) => {
+controlsElement.addEventListener("click", (event) => {
 	// Make sure this does NOT toggle play
 	event.stopPropagation();
 	showControlsTemporarily();
@@ -634,14 +697,19 @@ const formatSeconds = (seconds: number) => {
 	const hours = Math.floor(seconds / 3600);
 	const minutes = Math.floor((seconds % 3600) / 60);
 	const remainingSeconds = Math.floor(seconds % 60);
-	const millisecs = Math.floor(1000 * seconds % 1000).toString().padStart(3, '0');
+	const millisecs = Math.floor((1000 * seconds) % 1000)
+		.toString()
+		.padStart(3, "0");
 
 	let result: string;
 	if (hours > 0) {
-		result = `${hours}:${minutes.toString().padStart(2, '0')}`
-			+ `:${remainingSeconds.toString().padStart(2, '0')}`;
+		result =
+			`${hours}:${minutes.toString().padStart(2, "0")}` +
+			`:${remainingSeconds.toString().padStart(2, "0")}`;
 	} else {
-		result = `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
+		result = `${minutes.toString().padStart(2, "0")}:${remainingSeconds
+			.toString()
+			.padStart(2, "0")}`;
 	}
 
 	if (showMilliseconds) {
@@ -651,7 +719,7 @@ const formatSeconds = (seconds: number) => {
 	return result;
 };
 
-window.addEventListener('resize', () => {
+window.addEventListener("resize", () => {
 	if (totalDuration) {
 		updateProgressBarTime(getPlaybackTime());
 		durationElement.textContent = formatSeconds(totalDuration);
@@ -660,11 +728,11 @@ window.addEventListener('resize', () => {
 
 /** === FILE SELECTION LOGIC === */
 
-selectMediaButton.addEventListener('click', () => {
-	const fileInput = document.createElement('input');
-	fileInput.type = 'file';
-	fileInput.accept = 'video/*,video/x-matroska,audio/*,audio/aac';
-	fileInput.addEventListener('change', () => {
+selectMediaButton.addEventListener("click", () => {
+	const fileInput = document.createElement("input");
+	fileInput.type = "file";
+	fileInput.accept = "video/*,video/x-matroska,audio/*,audio/aac";
+	fileInput.addEventListener("change", () => {
 		const file = fileInput.files?.[0];
 		if (!file) {
 			return;
@@ -676,11 +744,11 @@ selectMediaButton.addEventListener('click', () => {
 	fileInput.click();
 });
 
-loadUrlButton.addEventListener('click', () => {
+loadUrlButton.addEventListener("click", () => {
 	const url = prompt(
-		'Please enter a URL of a media file. Note that it must be HTTPS and support cross-origin requests, so have the'
-		+ ' right CORS headers set.',
-		'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+		"Please enter a URL of a media file. Note that it must be HTTPS and support cross-origin requests, so have the" +
+			" right CORS headers set.",
+		"https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
 	);
 	if (!url) {
 		return;
@@ -689,12 +757,12 @@ loadUrlButton.addEventListener('click', () => {
 	void initMediaPlayer(url);
 });
 
-document.addEventListener('dragover', (event) => {
+document.addEventListener("dragover", (event) => {
 	event.preventDefault();
-	event.dataTransfer!.dropEffect = 'copy';
+	event.dataTransfer!.dropEffect = "copy";
 });
 
-document.addEventListener('drop', (event) => {
+document.addEventListener("drop", (event) => {
 	event.preventDefault();
 	const files = event.dataTransfer?.files;
 	const file = files && files.length > 0 ? files[0] : undefined;
