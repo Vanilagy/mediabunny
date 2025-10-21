@@ -637,7 +637,10 @@ export class MatroskaDemuxer extends Demuxer {
 		this.currentCluster = cluster;
 
 		if (dataSlice) {
-			this.readContiguousElements(dataSlice);
+			// Read the children of the cluster, stopping early at level 0 or 1 EBML elements. We do this because some
+			// clusters have incorrect sizes that are too large
+			const endPos = this.readContiguousElements(dataSlice, LEVEL_0_AND_1_EBML_IDS);
+			cluster.elementEndPos = endPos;
 		}
 
 		for (const [, trackData] of cluster.trackData) {
@@ -913,21 +916,28 @@ export class MatroskaDemuxer extends Demuxer {
 		}
 	}
 
-	readContiguousElements(slice: FileSlice) {
+	readContiguousElements(slice: FileSlice, stopIds?: number[]) {
 		const startIndex = slice.filePos;
 
 		while (slice.filePos - startIndex <= slice.length - MIN_HEADER_SIZE) {
-			const foundElement = this.traverseElement(slice);
+			const startPos = slice.filePos;
+			const foundElement = this.traverseElement(slice, stopIds);
 
 			if (!foundElement) {
-				break;
+				return startPos;
 			}
 		}
+
+		return slice.filePos;
 	}
 
-	traverseElement(slice: FileSlice): boolean {
+	traverseElement(slice: FileSlice, stopIds?: number[]): boolean {
 		const header = readElementHeader(slice);
 		if (!header) {
+			return false;
+		}
+
+		if (stopIds && stopIds.includes(header.id)) {
 			return false;
 		}
 
@@ -2174,6 +2184,8 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 
 			if (id === EBMLId.Cluster) {
 				currentCluster = await demuxer.readCluster(elementStartPos, segment);
+				// readCluster computes the proper size even if it's undefined in the header, so let's use that instead
+				size = currentCluster.elementEndPos - dataStartPos;
 
 				const { blockIndex, correctBlockFound } = getMatchInCluster(currentCluster);
 				if (correctBlockFound) {
@@ -2190,44 +2202,37 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 				// Undefined element size (can happen in livestreamed files). In this case, we need to do some
 				// searching to determine the actual size of the element.
 
-				if (id === EBMLId.Cluster) {
-					// The cluster should have already computed its length, we can just copy that result
-					assert(currentCluster);
-					size = currentCluster.elementEndPos - dataStartPos;
-				} else {
-					// Search for the next element at level 0 or 1
-					const nextElementPos = await searchForNextElementId(
-						demuxer.reader,
-						dataStartPos,
-						LEVEL_0_AND_1_EBML_IDS,
-						segment.elementEndPos,
-					);
+				assert(id !== EBMLId.Cluster); // Undefined cluster sizes are fixed further up
 
-					size = nextElementPos.pos - dataStartPos;
-				}
+				// Search for the next element at level 0 or 1
+				const nextElementPos = await searchForNextElementId(
+					demuxer.reader,
+					dataStartPos,
+					LEVEL_0_AND_1_EBML_IDS,
+					segment.elementEndPos,
+				);
 
-				const endPos = dataStartPos + size;
-				if (segment.elementEndPos !== null && endPos > segment.elementEndPos - MIN_HEADER_SIZE) {
-					// No more elements fit in this segment
+				size = nextElementPos.pos - dataStartPos;
+			}
+
+			const endPos = dataStartPos + size;
+			if (segment.elementEndPos === null) {
+				// Check the next element. If it's a new segment, we know this segment ends here. The new
+				// segment is just ignored, since we're likely in a livestreamed file and thus only care about
+				// the first segment.
+
+				let slice = demuxer.reader.requestSliceRange(endPos, MIN_HEADER_SIZE, MAX_HEADER_SIZE);
+				if (slice instanceof Promise) slice = await slice;
+				if (!slice) break;
+
+				const elementId = readElementId(slice);
+				if (elementId === EBMLId.Segment) {
+					segment.elementEndPos = endPos; // We now know the segment's size
 					break;
-				} else {
-					// Check the next element. If it's a new segment, we know this segment ends here. The new
-					// segment is just ignored, since we're likely in a livestreamed file and thus only care about
-					// the first segment.
-
-					let slice = demuxer.reader.requestSliceRange(endPos, MIN_HEADER_SIZE, MAX_HEADER_SIZE);
-					if (slice instanceof Promise) slice = await slice;
-					if (!slice) break;
-
-					const elementId = readElementId(slice);
-					if (elementId === EBMLId.Segment) {
-						segment.elementEndPos = endPos;
-						break;
-					}
 				}
 			}
 
-			currentPos = dataStartPos + size;
+			currentPos = endPos;
 		}
 
 		// Catch faulty cue points
