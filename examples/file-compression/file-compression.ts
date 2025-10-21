@@ -9,6 +9,13 @@ import {
 	Conversion,
 	QUALITY_VERY_LOW,
 } from 'mediabunny';
+import { registerMpeg4Decoder, registerMpeg4Encoder } from '@mediabunny/mpeg4';
+import { registerEac3Decoder, registerEac3Encoder } from '@mediabunny/eac3';
+
+registerMpeg4Decoder();
+registerMpeg4Encoder();
+registerEac3Decoder();
+registerEac3Encoder();
 
 import SampleFileUrl from '../../docs/assets/big-buck-bunny-trimmed.mp4';
 (document.querySelector('#sample-file-download') as HTMLAnchorElement).href = SampleFileUrl;
@@ -124,7 +131,7 @@ const compressFile = async (resource: File | string) => {
 selectMediaButton.addEventListener('click', () => {
 	const fileInput = document.createElement('input');
 	fileInput.type = 'file';
-	fileInput.accept = 'video/*,video/x-matroska,audio/*,audio/aac';
+	fileInput.accept = 'video/*,video/x-matroska,video/x-msvideo,audio/*,audio/aac';
 	fileInput.addEventListener('change', () => {
 		const file = fileInput.files?.[0];
 		if (!file) {
