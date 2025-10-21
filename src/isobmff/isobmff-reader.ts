@@ -70,7 +70,7 @@ export const readDataBox = (slice: FileSlice) => {
 		return null;
 	}
 
-	if (slice.remainingLength < 4) {
+	if (slice.remainingLength < 8) {
 		return null;
 	}
 
