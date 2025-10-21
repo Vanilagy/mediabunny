@@ -37,6 +37,7 @@ export const VIDEO_CODECS = [
 	'vp9',
 	'av1',
 	'vp8',
+	'mpeg4',
 ] as const;
 /**
  * List of known PCM (uncompressed) audio codecs, ordered by encoding preference.
@@ -271,6 +272,8 @@ export const buildVideoCodecString = (codec: VideoCodec, width: number, height: 
 		const bitDepth = '08'; // 8-bit
 
 		return `av01.${profile}.${level}${levelInfo.tier}.${bitDepth}`;
+	} else if (codec === 'mpeg4') {
+		return 'mp4v.20.9';
 	}
 
 	// eslint-disable-next-line @typescript-eslint/restrict-template-expressions
@@ -498,6 +501,8 @@ export const extractVideoCodecString = (trackInfo: {
 		}
 
 		return string;
+	} else if (codec === 'mpeg4') {
+		return 'mp4v';
 	}
 
 	throw new TypeError(`Unhandled codec '${codec}'.`);
@@ -665,6 +670,8 @@ export const inferCodecFromCodecString = (codecString: string): MediaCodec | nul
 		return 'vp9';
 	} else if (codecString.startsWith('av01')) {
 		return 'av1';
+	} else if (codecString === 'mp4v' || codecString.startsWith('mp4v.')) {
+		return 'mpeg4';
 	}
 
 	// Audio codecs
@@ -735,7 +742,7 @@ export const getAudioEncoderConfigExtension = (codec: AudioCodec) => {
 	return {};
 };
 
-const VALID_VIDEO_CODEC_STRING_PREFIXES = ['avc1', 'avc3', 'hev1', 'hvc1', 'vp8', 'vp09', 'av01'];
+const VALID_VIDEO_CODEC_STRING_PREFIXES = ['avc1', 'avc3', 'hev1', 'hvc1', 'vp8', 'vp09', 'av01', 'mp4v'];
 const AVC_CODEC_STRING_REGEX = /^(avc1|avc3)\.[0-9a-fA-F]{6}$/;
 const HEVC_CODEC_STRING_REGEX = /^(hev1|hvc1)\.(?:[ABC]?\d+)\.[0-9a-fA-F]{1,8}\.[LH]\d+(?:\.[0-9a-fA-F]{1,2}){0,6}$/;
 const VP9_CODEC_STRING_REGEX = /^vp09(?:\.\d{2}){3}(?:(?:\.\d{2}){5})?$/;
@@ -871,10 +878,15 @@ export const validateVideoChunkMetadata = (metadata: EncodedVideoChunkMetadata |
 				+ ' specified in Section "Codecs Parameter String" of https://aomediacodec.github.io/av1-isobmff/.',
 			);
 		}
+	} else if (metadata.decoderConfig.codec === 'mp4v' || metadata.decoderConfig.codec.startsWith('mp4v.')) {
+		// MPEG-4 Part 2 validation
+		if (metadata.decoderConfig.codec !== 'mp4v') {
+			throw new TypeError('Video chunk metadata decoder configuration codec string for MPEG-4 must be "mp4v".');
+		}
 	}
 };
 
-const VALID_AUDIO_CODEC_STRING_PREFIXES = ['mp4a', 'mp3', 'opus', 'vorbis', 'flac', 'ulaw', 'alaw', 'pcm'];
+const VALID_AUDIO_CODEC_STRING_PREFIXES = ['mp4a', 'mp3', 'opus', 'vorbis', 'flac', 'ulaw', 'alaw', 'pcm', 'ac-3', 'ec-3'];
 
 export const validateAudioChunkMetadata = (metadata: EncodedAudioChunkMetadata | undefined) => {
 	if (!metadata) {
