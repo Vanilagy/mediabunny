@@ -1466,7 +1466,9 @@ class ReadOrchestrator {
 					worker.pendingSlices.forEach(x => x.reject(error)); // Make sure to propagate any errors
 					worker.pendingSlices.length = 0;
 				} else {
-					throw error; // So it doesn't get swallowed
+					if (!this.disposed) {
+						throw error; // So it doesn't get swallowed
+					}
 				}
 			});
 	}
