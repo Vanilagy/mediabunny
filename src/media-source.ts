@@ -1159,7 +1159,7 @@ export class MediaStreamVideoTrackSource extends VideoSource {
 					type: 'videoTrack',
 					trackId: this._workerTrackId,
 					track: this._track,
-				}, [this._track]);
+				});
 
 				this._workerListener = (event: MessageEvent) => {
 					const message = event.data as MediaStreamTrackProcessorWorkerMessage;
@@ -1978,17 +1978,19 @@ const mediaStreamTrackProcessorWorkerCode = () => {
 	});
 
 	const abortControllers = new Map<number, AbortController>();
-	const stoppedTracks = new Set<number>();
+	const activeTracks = new Map<number, MediaStreamVideoTrack>();
 
 	self.addEventListener('message', (event) => {
 		const message = event.data as MediaStreamTrackProcessorControllerMessage;
 
 		switch (message.type) {
 			case 'videoTrack': {
+				activeTracks.set(message.trackId, message.track);
+
 				const processor = new MediaStreamTrackProcessor({ track: message.track });
 				const consumer = new WritableStream<VideoFrame>({
 					write: (videoFrame) => {
-						if (stoppedTracks.has(message.trackId)) {
+						if (!activeTracks.has(message.trackId)) {
 							videoFrame.close();
 							return;
 						}
@@ -2026,7 +2028,9 @@ const mediaStreamTrackProcessorWorkerCode = () => {
 					abortControllers.delete(message.trackId);
 				}
 
-				stoppedTracks.add(message.trackId);
+				const track = activeTracks.get(message.trackId);
+				track?.stop();
+				activeTracks.delete(message.trackId);
 
 				sendMessage({
 					type: 'trackStopped',
