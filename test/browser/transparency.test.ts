@@ -139,21 +139,18 @@ test('Can encode transparent video', async () => {
 	probeContext.drawImage(video, 0, 0);
 
 	let imageData = probeContext.getImageData(0, 0, probeCanvas.width, probeCanvas.height);
-	const otherIndex = (100 + 100 * probeCanvas.width) * 4;
-	console.log('dayte', imageData.data[otherIndex + 3]);
-	expect(imageData.data[otherIndex + 3]).lessThanOrEqual(2); // Transparent (within error)
+	const index1 = (100 + 100 * probeCanvas.width) * 4;
+	expect(imageData.data[index1 + 3]).toBe(0); // Transparent
 
 	const pos = { x: 300, y: 300 }; // Dead center in the red square
-	const index = (pos.x + pos.y * probeCanvas.width) * 4;
+	const index2 = (pos.x + pos.y * probeCanvas.width) * 4;
 
 	// Red (within error)
-	expect(imageData.data[index + 0]).greaterThanOrEqual(253);
-	expect(imageData.data[index + 1]).lessThanOrEqual(2);
-	expect(imageData.data[index + 2]).lessThanOrEqual(2);
+	expect(imageData.data[index2 + 0]).greaterThanOrEqual(253);
+	expect(imageData.data[index2 + 1]).lessThanOrEqual(2);
+	expect(imageData.data[index2 + 2]).lessThanOrEqual(2);
 
-	console.log('the other', imageData.data[index + 3]);
-
-	expect(imageData.data[index + 3]).greaterThanOrEqual(253); // Opaque (within error)
+	expect(imageData.data[index2 + 3]).toBe(255); // Opaque
 
 	// Let's also check it's read correctly by Mediabunny
 	using input = new Input({
@@ -174,8 +171,7 @@ test('Can encode transparent video', async () => {
 
 	imageData = probeContext.getImageData(0, 0, probeCanvas.width, probeCanvas.height);
 
-	console.log('pish', imageData.data[3]);
-	expect(imageData.data[3]).lessThanOrEqual(2); // Transparent (within error)
+	expect(imageData.data[3]).toBe(0); // Transparent
 });
 
 test('Can encode video with alternating transparency', async () => {
