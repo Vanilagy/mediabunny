@@ -234,10 +234,18 @@ export class BlobSource extends Source {
 					break;
 				}
 
+				if (worker.aborted) {
+					break;
+				}
+
 				this.onread?.(worker.currentPos, worker.currentPos + value.length);
 				this._orchestrator.supplyWorkerData(worker, value);
 			} else {
 				const data = await this._blob.slice(worker.currentPos, worker.targetPos).arrayBuffer();
+
+				if (worker.aborted) {
+					break;
+				}
 
 				this.onread?.(worker.currentPos, worker.currentPos + data.byteLength);
 				this._orchestrator.supplyWorkerData(worker, new Uint8Array(data));
@@ -457,7 +465,7 @@ export class UrlSource extends Source {
 	/** @internal */
 	private async _runWorker(worker: ReadWorker) {
 		// The outer loop is for resuming a request if it dies mid-response
-		while (!worker.aborted) {
+		while (true) {
 			const existing = this._existingResponses.get(worker);
 			this._existingResponses.delete(worker);
 
@@ -534,6 +542,10 @@ export class UrlSource extends Source {
 					}
 				}
 
+				if (worker.aborted) {
+					break;
+				}
+
 				const { done, value } = readResult;
 
 				if (done) {
@@ -551,6 +563,10 @@ export class UrlSource extends Source {
 
 				this.onread?.(worker.currentPos, worker.currentPos + value.length);
 				this._orchestrator.supplyWorkerData(worker, value);
+			}
+
+			if (worker.aborted) {
+				break;
 			}
 		}
 
@@ -796,6 +812,10 @@ export class StreamSource extends Source {
 			let data = this._options.read(worker.currentPos, originalTargetPos);
 			if (data instanceof Promise) data = await data;
 
+			if (worker.aborted) {
+				break;
+			}
+
 			if (data instanceof Uint8Array) {
 				data = toUint8Array(data); // Normalize things like Node.js Buffer to Uint8Array
 
@@ -831,6 +851,10 @@ export class StreamSource extends Source {
 
 					if (!(value instanceof Uint8Array)) {
 						throw new TypeError('ReadableStream returned by options.read must yield Uint8Array chunks.');
+					}
+
+					if (worker.aborted) {
+						break;
 					}
 
 					const data = toUint8Array(value); // Normalize things like Node.js Buffer to Uint8Array
@@ -1420,7 +1444,10 @@ class ReadOrchestrator {
 			currentPos: startPos,
 			targetPos,
 			running: false,
-			aborted: false,
+			// Due to async shenanigans, it can happen that workers are started after disposal. In this case, instead of
+			// simply not creating the worker, we allow it to run but immediately label it as aborted, so it can then
+			// shut itself down.
+			aborted: this.disposed,
 			pendingSlices: [],
 			age: this.nextAge++,
 		};
@@ -1473,10 +1500,7 @@ class ReadOrchestrator {
 
 	/** Called by a worker when it has read some data. */
 	supplyWorkerData(worker: ReadWorker, bytes: Uint8Array) {
-		if (this.disposed) {
-			// Writes may still come in after disposal, but we just ignore those
-			return;
-		}
+		assert(!worker.aborted);
 
 		const start = worker.currentPos;
 		const end = start + bytes.length;
