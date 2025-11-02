@@ -151,6 +151,8 @@ test('Can encode transparent video', async () => {
 	expect(imageData.data[index + 1]).lessThanOrEqual(2);
 	expect(imageData.data[index + 2]).lessThanOrEqual(2);
 
+	console.log('the other', imageData.data[index + 3]);
+
 	expect(imageData.data[index + 3]).greaterThanOrEqual(253); // Opaque (within error)
 
 	// Let's also check it's read correctly by Mediabunny
@@ -171,6 +173,8 @@ test('Can encode transparent video', async () => {
 	firstSample.draw(probeContext, 0, 0);
 
 	imageData = probeContext.getImageData(0, 0, probeCanvas.width, probeCanvas.height);
+
+	console.log('pish', imageData.data[3]);
 	expect(imageData.data[3]).lessThanOrEqual(2); // Transparent (within error)
 });
 
