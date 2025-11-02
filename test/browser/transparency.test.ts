@@ -140,6 +140,7 @@ test('Can encode transparent video', async () => {
 
 	let imageData = probeContext.getImageData(0, 0, probeCanvas.width, probeCanvas.height);
 	const otherIndex = (100 + 100 * probeCanvas.width) * 4;
+	console.log('dayte', imageData.data[otherIndex + 3]);
 	expect(imageData.data[otherIndex + 3]).lessThanOrEqual(2); // Transparent (within error)
 
 	const pos = { x: 300, y: 300 }; // Dead center in the red square
