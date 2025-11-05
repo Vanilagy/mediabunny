@@ -349,11 +349,22 @@ export class FlacDemuxer extends Demuxer {
 					continue;
 				}
 
-				// Ensure the frameOrSampleNum is consecutive:
+				// Ensure the frameOrSampleNum is consecutive.
 				// https://github.com/Vanilagy/mediabunny/issues/194
-				if (nextIsLegit.num - frameHeader.num !== 1) {
-					slice.skip(-1);
-					continue;
+
+				if (this.blockingBit === 0) {
+					// Case A: If the stream is fixed block size, this is the frame number, which increments by 1
+					if (nextIsLegit.num - frameHeader.num !== 1) {
+						slice.skip(-1);
+						continue;
+					}
+				} else {
+					// Case B: If the stream is variable block size, this is the sample number, which increments by
+					// amount of samples in a frame.
+					if (nextIsLegit.num - frameHeader.num !== frameHeader.blockSize) {
+						slice.skip(-1);
+						continue;
+					}
 				}
 
 				return {
