@@ -449,6 +449,11 @@ export class FlacDemuxer extends Demuxer {
 			return null;
 		}
 
+		if (sampleRate !== this.audioInfo.sampleRate) {
+			// This cannot be a valid FLAC frame, the sample rate is not the same as in the stream info
+			return null;
+		}
+
 		const size = slice.filePos - startOffset;
 		const crc = readU8(slice);
 
