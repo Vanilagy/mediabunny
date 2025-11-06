@@ -161,7 +161,10 @@ export class VideoSample implements Disposable {
 			this.format = init.format;
 			this.codedWidth = init.codedWidth!;
 			this.codedHeight = init.codedHeight!;
-			this.rotation = init.rotation ?? 0;
+			this.rotation = init.rotation
+				?? (typeof VideoFrame !== 'undefined' && data instanceof VideoFrame && 'rotation' in data
+					? data.rotation as Rotation
+					: 0);
 			this.timestamp = init.timestamp!;
 			this.duration = init.duration ?? 0;
 			this.colorSpace = new VideoColorSpace(init.colorSpace);
