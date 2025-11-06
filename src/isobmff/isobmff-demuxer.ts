@@ -692,12 +692,7 @@ export class IsobmffDemuxer extends Demuxer {
 				}
 
 				const version = readU8(slice);
-				const flags = readU24Be(slice);
-
-				const trackEnabled = (flags & 0x1) !== 0;
-				if (!trackEnabled) {
-					break;
-				}
+				slice.skip(3);
 
 				// Skip over creation & modification time to reach the track ID
 				if (version === 0) {
