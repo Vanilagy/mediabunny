@@ -126,7 +126,10 @@ export class EncodedPacket {
 		}
 	}
 
-	/** If this packet is a metadata-only packet. Metadata-only packets don't contain their packet data. */
+	/**
+	 * If this packet is a metadata-only packet. Metadata-only packets don't contain their packet data. They are the
+	 * result of retrieving packets with {@link PacketRetrievalOptions.metadataOnly} set to `true`.
+	 */
 	get isMetadataOnly() {
 		return this.data === PLACEHOLDER_DATA;
 	}
