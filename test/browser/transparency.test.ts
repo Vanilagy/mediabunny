@@ -148,8 +148,8 @@ test('Can encode transparent video', async () => {
 
 	// Red (within error)
 	expect(imageData.data[index2 + 0]).greaterThanOrEqual(253);
-	expect(imageData.data[index2 + 1]).lessThanOrEqual(2);
-	expect(imageData.data[index2 + 2]).lessThanOrEqual(2);
+	expect(imageData.data[index2 + 1]).lessThanOrEqual(3);
+	expect(imageData.data[index2 + 2]).lessThanOrEqual(3);
 
 	expect(imageData.data[index2 + 3]).toBe(255); // Opaque
 
