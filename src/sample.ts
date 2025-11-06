@@ -379,24 +379,34 @@ export class VideoSample implements Disposable {
 		assert(this._data !== null);
 
 		if (isVideoFrame(this._data)) {
-			return new VideoFrame(this._data, {
+			const init: VideoFrameInit = {
 				timestamp: this.microsecondTimestamp,
 				duration: this.microsecondDuration || undefined, // Drag 0 duration to undefined, glitches some codecs
-			});
+				// @ts-expect-error - WebCodecs types do not yet support rotation
+				rotation: this.rotation,
+			};
+			return new VideoFrame(this._data, init);
 		} else if (this._data instanceof Uint8Array) {
-			return new VideoFrame(this._data, {
+			const init: VideoFrameBufferInit = {
 				format: this.format!,
 				codedWidth: this.codedWidth,
 				codedHeight: this.codedHeight,
 				timestamp: this.microsecondTimestamp,
 				duration: this.microsecondDuration || undefined,
 				colorSpace: this.colorSpace,
-			});
+				// @ts-expect-error - WebCodecs types do not yet support rotation
+				rotation: this.rotation,
+			};
+
+			return new VideoFrame(this._data, init);
 		} else {
-			return new VideoFrame(this._data, {
+			const init: VideoFrameInit = {
 				timestamp: this.microsecondTimestamp,
 				duration: this.microsecondDuration || undefined,
-			});
+				// @ts-expect-error - WebCodecs types do not yet support rotation
+				rotation: this.rotation,
+			};
+			return new VideoFrame(this._data, init);
 		}
 	}
 
