@@ -339,14 +339,32 @@ export class FlacDemuxer extends Demuxer {
 				slice.skip(-2);
 				const lengthIfNextFlacFrameHeaderIsLegit = slice.filePos - startPos;
 
-				const nextIsLegit = this.readFlacFrameHeader({
+				const nextFrameHeader = this.readFlacFrameHeader({
 					slice,
 					isFirstPacket: false,
 				});
 
-				if (!nextIsLegit) {
+				if (!nextFrameHeader) {
 					slice.skip(-1);
 					continue;
+				}
+
+				// Ensure the frameOrSampleNum is consecutive.
+				// https://github.com/Vanilagy/mediabunny/issues/194
+
+				if (this.blockingBit === 0) {
+					// Case A: If the stream is fixed block size, this is the frame number, which increments by 1
+					if (nextFrameHeader.num - frameHeader.num !== 1) {
+						slice.skip(-1);
+						continue;
+					}
+				} else {
+					// Case B: If the stream is variable block size, this is the sample number, which increments by
+					// amount of samples in a frame.
+					if (nextFrameHeader.num - frameHeader.num !== frameHeader.blockSize) {
+						slice.skip(-1);
+						continue;
+					}
 				}
 
 				return {
@@ -439,6 +457,11 @@ export class FlacDemuxer extends Demuxer {
 		const sampleRate = readSampleRate(slice, sampleRateOrUncommon);
 		if (sampleRate === null) {
 			// This cannot be a valid FLAC frame, the syncword was just coincidental
+			return null;
+		}
+
+		if (sampleRate !== this.audioInfo.sampleRate) {
+			// This cannot be a valid FLAC frame, the sample rate is not the same as in the stream info
 			return null;
 		}
 
