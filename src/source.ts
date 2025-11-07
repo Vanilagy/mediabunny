@@ -12,6 +12,7 @@ import {
 	binarySearchLessOrEqual,
 	closedIntervalsOverlap,
 	isNumber,
+	isWebKit,
 	MaybePromise,
 	mergeRequestInit,
 	promiseWithResolvers,
@@ -209,7 +210,13 @@ export class BlobSource extends Source {
 	private async _runWorker(worker: ReadWorker) {
 		let reader = this._readers.get(worker);
 		if (reader === undefined) {
-			if ('stream' in this._blob) {
+			// WebKit has critical bugs with blob.stream():
+			// - WebKitBlobResource error 1 when streaming large files
+			// - Memory buildup and reload loops on iOS (network process crashes)
+			// - ReadableStream stalls under backpressure (especially video)
+			// Affects Safari and all iOS browsers (Chrome, Firefox, etc.).
+			// Use arrayBuffer() fallback for WebKit browsers.
+			if ('stream' in this._blob && !isWebKit()) {
 				// Get a reader of the blob starting at the required offset, and then keep it around
 				const slice = this._blob.slice(worker.currentPos);
 				reader = slice.stream().getReader();

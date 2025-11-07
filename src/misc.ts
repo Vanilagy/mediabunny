@@ -676,6 +676,28 @@ export const isSafari = () => {
 	return result;
 };
 
+let isWebKitCache: boolean | null = null;
+export const isWebKit = () => {
+	if (isWebKitCache !== null) return isWebKitCache;
+	if (typeof navigator === 'undefined') return (isWebKitCache = false);
+
+	const ua = navigator.userAgent || '';
+	const maxTouchPoints = navigator.maxTouchPoints || 0;
+
+	// iOS/iPadOS detection:
+	// - All iOS/iPadOS browsers use WebKit (WKWebView)
+	// - iPadOS 13+ can report "Macintosh" in UA; detect via touch points
+	const isIOSLike
+    = /iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && maxTouchPoints > 1);
+
+	// On iOS/iPadOS: always WebKit (even if UA says CriOS/Edg/OPR/etc.)
+	if (isIOSLike) return (isWebKitCache = true);
+
+	// Off iOS: only Safari is WebKit on mainstream desktops
+	const result = isSafari();
+	return (isWebKitCache = result);
+};
+
 let isFirefoxCache: boolean | null = null;
 export const isFirefox = () => {
 	if (isFirefoxCache !== null) {
