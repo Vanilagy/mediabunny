@@ -658,44 +658,17 @@ export class CallSerializer {
 	}
 }
 
-let isSafariCache: boolean | null = null;
-export const isSafari = () => {
-	if (isSafariCache !== null) {
-		return isSafariCache;
-	}
-
-	const result = !!(
-		typeof navigator !== 'undefined'
-		&& navigator.vendor?.match(/apple/i)
-		&& !navigator.userAgent?.match(/crios/i)
-		&& !navigator.userAgent?.match(/fxios/i)
-		&& !navigator.userAgent?.match(/Opera|OPT\//)
-	);
-
-	isSafariCache = result;
-	return result;
-};
-
 let isWebKitCache: boolean | null = null;
 export const isWebKit = () => {
-	if (isWebKitCache !== null) return isWebKitCache;
-	if (typeof navigator === 'undefined') return (isWebKitCache = false);
+	if (isWebKitCache !== null) {
+		return isWebKitCache;
+	}
 
-	const ua = navigator.userAgent || '';
-	const maxTouchPoints = navigator.maxTouchPoints || 0;
+	// This even returns true for WebKit-wrapping browsers such as Chrome on iOS
+	const result = !!(typeof navigator !== 'undefined' && navigator.vendor?.match(/apple/i));
 
-	// iOS/iPadOS detection:
-	// - All iOS/iPadOS browsers use WebKit (WKWebView)
-	// - iPadOS 13+ can report "Macintosh" in UA; detect via touch points
-	const isIOSLike
-    = /iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && maxTouchPoints > 1);
-
-	// On iOS/iPadOS: always WebKit (even if UA says CriOS/Edg/OPR/etc.)
-	if (isIOSLike) return (isWebKitCache = true);
-
-	// Off iOS: only Safari is WebKit on mainstream desktops
-	const result = isSafari();
-	return (isWebKitCache = result);
+	isWebKitCache = result;
+	return result;
 };
 
 let isFirefoxCache: boolean | null = null;

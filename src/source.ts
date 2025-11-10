@@ -210,6 +210,7 @@ export class BlobSource extends Source {
 	private async _runWorker(worker: ReadWorker) {
 		let reader = this._readers.get(worker);
 		if (reader === undefined) {
+			// https://github.com/Vanilagy/mediabunny/issues/184
 			// WebKit has critical bugs with blob.stream():
 			// - WebKitBlobResource error 1 when streaming large files
 			// - Memory buildup and reload loops on iOS (network process crashes)
