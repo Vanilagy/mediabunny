@@ -844,12 +844,12 @@ export class MatroskaDemuxer extends Demuxer {
 
 			blocks.splice(blockIndex, 1); // Remove the original block
 
+			const blockDuration = originalBlock.duration || frameCount * (track.defaultDuration ?? 0);
+
 			// Now, let's insert each frame as its own block
 			for (let i = 0; i < frameCount; i++) {
 				const frameSize = frameSizes[i]!;
 				const frameData = readBytes(slice, frameSize);
-
-				const blockDuration = originalBlock.duration || (frameCount * (track.defaultDuration ?? 0));
 
 				// Distribute timestamps evenly across the block duration
 				const frameTimestamp = originalBlock.timestamp + (blockDuration * i / frameCount);
@@ -1181,9 +1181,8 @@ export class MatroskaDemuxer extends Demuxer {
 			case EBMLId.DefaultDuration: {
 				if (!this.currentTrack) break;
 
-				// Floored to reduce chance of overlapping packets (https://github.com/Vanilagy/mediabunny/issues/170)
 				this.currentTrack.defaultDuration
-					= Math.floor(this.currentTrack.segment.timestampFactor * readUnsignedInt(slice, size) / 1e9);
+					= this.currentTrack.segment.timestampFactor * readUnsignedInt(slice, size) / 1e9;
 			}; break;
 
 			case EBMLId.Name: {
