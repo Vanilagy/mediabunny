@@ -621,6 +621,54 @@ export const parseAacAudioSpecificConfig = (bytes: Uint8Array | null): AacAudioS
 	};
 };
 
+export const buildAacAudioSpecificConfig = (config: {
+	objectType: number;
+	sampleRate: number;
+	numberOfChannels: number;
+}) => {
+	let frequencyIndex = aacFrequencyTable.indexOf(config.sampleRate);
+	let customSampleRate: number | null = null;
+
+	if (frequencyIndex === -1) {
+		frequencyIndex = 15;
+		customSampleRate = config.sampleRate;
+	}
+
+	const channelConfiguration = aacChannelMap.indexOf(config.numberOfChannels);
+	if (channelConfiguration === -1) {
+		throw new TypeError(`Unsupported number of channels: ${config.numberOfChannels}`);
+	}
+
+	let bitCount = 5 + 4 + 4;
+	if (config.objectType >= 32) {
+		bitCount += 6;
+	}
+	if (frequencyIndex === 15) {
+		bitCount += 24;
+	}
+
+	const byteCount = Math.ceil(bitCount / 8);
+	const bytes = new Uint8Array(byteCount);
+	const bitstream = new Bitstream(bytes);
+
+	if (config.objectType < 32) {
+		bitstream.writeBits(5, config.objectType);
+	} else {
+		bitstream.writeBits(5, 31);
+		bitstream.writeBits(6, config.objectType - 32);
+	}
+
+	bitstream.writeBits(4, frequencyIndex);
+
+	if (frequencyIndex === 15) {
+		bitstream.writeBits(24, customSampleRate!);
+	}
+
+	bitstream.writeBits(4, channelConfiguration);
+
+	return bytes;
+};
+
 export const OPUS_SAMPLE_RATE = 48_000;
 
 const PCM_CODEC_REGEX = /^pcm-([usf])(\d+)+(be)?$/;

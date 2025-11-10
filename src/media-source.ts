@@ -9,6 +9,8 @@
 import {
 	AUDIO_CODECS,
 	AudioCodec,
+	buildAacAudioSpecificConfig,
+	parseAacAudioSpecificConfig,
 	parsePcmCodec,
 	PCM_AUDIO_CODECS,
 	PcmAudioCodec,
@@ -24,9 +26,11 @@ import {
 	CallSerializer,
 	clamp,
 	isFirefox,
+	last,
 	promiseWithResolvers,
 	setInt24,
 	setUint24,
+	toUint8Array,
 } from './misc';
 import { Muxer } from './muxer';
 import { SubtitleParser } from './subtitles';
@@ -1515,6 +1519,32 @@ class AudioEncoderWrapper {
 
 				this.encoder = new AudioEncoder({
 					output: (chunk, meta) => {
+						// WebKit emits an invalid description for AAC (https://bugs.webkit.org/show_bug.cgi?id=302253),
+						// which we try to detect here. If detected, we'll provide our own description instead, derived
+						// from the codec string and audio parameters.
+						if (this.encodingConfig.codec === 'aac' && meta?.decoderConfig) {
+							let needsDescriptionOverwrite = false;
+							if (!meta.decoderConfig.description || meta.decoderConfig.description.byteLength < 2) {
+								needsDescriptionOverwrite = true;
+							} else {
+								const audioSpecificConfig = parseAacAudioSpecificConfig(
+									toUint8Array(meta.decoderConfig.description),
+								);
+
+								needsDescriptionOverwrite = audioSpecificConfig.objectType === 0;
+							}
+
+							if (needsDescriptionOverwrite) {
+								const objectType = Number(last(encoderConfig.codec.split('.')));
+
+								meta.decoderConfig.description = buildAacAudioSpecificConfig({
+									objectType,
+									numberOfChannels: meta.decoderConfig.numberOfChannels,
+									sampleRate: meta.decoderConfig.sampleRate,
+								});
+							}
+						}
+
 						const packet = EncodedPacket.fromEncodedChunk(chunk);
 
 						this.encodingConfig.onEncodedPacket?.(packet, meta);
