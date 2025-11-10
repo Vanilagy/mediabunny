@@ -1181,8 +1181,9 @@ export class MatroskaDemuxer extends Demuxer {
 			case EBMLId.DefaultDuration: {
 				if (!this.currentTrack) break;
 
+				// Floored to reduce chance of overlapping packets (https://github.com/Vanilagy/mediabunny/issues/170)
 				this.currentTrack.defaultDuration
-					= this.currentTrack.segment.timestampFactor * readUnsignedInt(slice, size) / 1e9;
+					= Math.floor(this.currentTrack.segment.timestampFactor * readUnsignedInt(slice, size) / 1e9);
 			}; break;
 
 			case EBMLId.Name: {

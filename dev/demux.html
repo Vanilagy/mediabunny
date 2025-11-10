@@ -15,6 +15,31 @@
 		});
 
 		const videoTrack = await input.getPrimaryVideoTrack();
+		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
+
+		for await (const packet of sink.packets()) {
+			console.log(packet.timestamp, packet.duration, packet.timestamp + packet.duration);
+		}
+
+		/*
+		const sink = new Mediabunny.VideoSampleSink(videoTrack);
+
+		for await (const sample of sink.samples()) {
+			console.log(sample.timestamp, sample.duration);
+			sample.close();
+		}
+		*/
+
+		/*
+		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
+
+		for await (const packet of sink.packets()) {
+			console.log(packet.timestamp, packet.timestamp + packet.duration);
+		}
+		*/
+
+
+		/*
 		const sink = new Mediabunny.VideoSampleSink(videoTrack);
 
 		console.log(await videoTrack.getDecoderConfig())
@@ -30,6 +55,7 @@
 		for await (const sample of sink.samples()) {
 			console.log(sample);
 		}
+		*/
 
 		/*
 		let total = 0;
