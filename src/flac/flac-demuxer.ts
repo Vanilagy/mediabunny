@@ -328,11 +328,13 @@ export class FlacDemuxer extends Demuxer {
 
 			const nextByte = readU8(slice);
 			if (nextByte === 0xff) {
+				const positionBeforeReading = slice.filePos;
+
 				const byteAfterNextByte = readU8(slice);
 
 				const expected = this.blockingBit === 1 ? 0b1111_1001 : 0b1111_1000;
 				if (byteAfterNextByte !== expected) {
-					slice.skip(-1);
+					slice.filePos = positionBeforeReading;
 					continue;
 				}
 
@@ -345,7 +347,7 @@ export class FlacDemuxer extends Demuxer {
 				});
 
 				if (!nextFrameHeader) {
-					slice.skip(-1);
+					slice.filePos = positionBeforeReading;
 					continue;
 				}
 
@@ -355,14 +357,14 @@ export class FlacDemuxer extends Demuxer {
 				if (this.blockingBit === 0) {
 					// Case A: If the stream is fixed block size, this is the frame number, which increments by 1
 					if (nextFrameHeader.num - frameHeader.num !== 1) {
-						slice.skip(-1);
+						slice.filePos = positionBeforeReading;
 						continue;
 					}
 				} else {
 					// Case B: If the stream is variable block size, this is the sample number, which increments by
 					// amount of samples in a frame.
 					if (nextFrameHeader.num - frameHeader.num !== frameHeader.blockSize) {
-						slice.skip(-1);
+						slice.filePos = positionBeforeReading;
 						continue;
 					}
 				}

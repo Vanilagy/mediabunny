@@ -48,6 +48,7 @@
 			target
 		});
 
+		let ctx = null;
 		const conversion = await Mediabunny.Conversion.init({
 			input: new Mediabunny.Input({
 				formats: Mediabunny.ALL_FORMATS,	
@@ -56,6 +57,8 @@
 			output,
 			audio: (_, n) => ({
 				discard: n > 1,
+				codec: 'aac',
+				//codec: 'opus',
 				/*
 				process: (sample) => {
 					return sample;
@@ -70,7 +73,7 @@
 				//numberOfChannels: 1,
 				//sampleRate: 4000
 				//discard: true
-				//forceTranscode: true,
+				forceTranscode: true,
 			}),
 			/*
 			video: {
@@ -97,6 +100,7 @@
 			},
 			*/
 			video: () => ({
+				//discard: true,
 				/*
 				process: (sample) => {
 					if (!ctx) {
@@ -108,9 +112,11 @@
 						ctx = canvas.getContext('2d');
 					}
 
+					console.log(ctx.canvas.width, ctx.canvas.height);
+
 					ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-					sample.draw(ctx, 0, 0);
-					ctx.drawImage(watermark, 32, 32);
+					sample.drawWithFit(ctx, { fit: 'fill' });
+					//ctx.drawImage(watermark, 32, 32);
 
 					return ctx.canvas;
 				},
@@ -170,8 +176,8 @@
 				}
 			},
 			trim: {
-				start: 0,
-				end: 10
+				//start: 0,
+				//end: 10
 			},
 		});
 		console.log(conversion);
