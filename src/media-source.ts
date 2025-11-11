@@ -1294,6 +1294,8 @@ class AudioEncoderWrapper {
 	private customEncoderCallSerializer = new CallSerializer();
 	private customEncoderQueueSize = 0;
 
+	private lastEndSampleIndex: number | null = null;
+
 	/**
 	 * Encoders typically throw their errors "out of band", meaning asynchronously in some other execution context.
 	 * However, we want to surface these errors to the user within the normal control flow, so they don't go uncaught.
@@ -1341,6 +1343,35 @@ class AudioEncoderWrapper {
 				}
 			}
 			assert(this.encoderInitialized);
+
+			// Handle padding of gaps with silence to avoid audio drift over time, like in
+			// https://github.com/Vanilagy/mediabunny/issues/176
+			// TODO An open question is how encoders deal with the first AudioData having a non-zero timestamp, and with
+			// AudioDatas that have an overlapping timestamp range.
+			{
+				const startSampleIndex = Math.round(
+					audioSample.timestamp * audioSample.sampleRate,
+				);
+				const endSampleIndex = Math.round(
+					(audioSample.timestamp + audioSample.duration) * audioSample.sampleRate,
+				);
+
+				if (this.lastEndSampleIndex !== null && startSampleIndex > this.lastEndSampleIndex) {
+					const sampleCount = startSampleIndex - this.lastEndSampleIndex;
+					const fillSample = new AudioSample({
+						data: new Float32Array(sampleCount * audioSample.numberOfChannels),
+						format: 'f32-planar',
+						sampleRate: audioSample.sampleRate,
+						numberOfChannels: audioSample.numberOfChannels,
+						numberOfFrames: sampleCount,
+						timestamp: this.lastEndSampleIndex / audioSample.sampleRate,
+					});
+
+					await this.add(fillSample, true); // Recursive call
+				}
+
+				this.lastEndSampleIndex = endSampleIndex;
+			}
 
 			if (this.customEncoder) {
 				this.customEncoderQueueSize++;

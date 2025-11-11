@@ -57,6 +57,7 @@
 			output,
 			audio: (_, n) => ({
 				discard: n > 1,
+				codec: 'aac',
 				//codec: 'opus',
 				/*
 				process: (sample) => {
@@ -72,7 +73,7 @@
 				//numberOfChannels: 1,
 				//sampleRate: 4000
 				//discard: true
-				//forceTranscode: true,
+				forceTranscode: true,
 			}),
 			/*
 			video: {
@@ -100,6 +101,7 @@
 			*/
 			video: () => ({
 				//discard: true,
+				/*
 				process: (sample) => {
 					if (!ctx) {
 						// Create a canvas for image compositing
@@ -118,6 +120,7 @@
 
 					return ctx.canvas;
 				},
+				*/
 				//width: 300,
 				//alpha: 'keep',
 				//width: 320,
