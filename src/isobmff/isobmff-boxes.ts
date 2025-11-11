@@ -577,7 +577,7 @@ export const stsd = (trackData: IsobmffTrackData) => {
 
 	if (trackData.type === 'video') {
 		sampleDescription = videoSampleDescription(
-			VIDEO_CODEC_TO_BOX_NAME[trackData.track.source._codec],
+			videoCodecToBoxName(trackData.track.source._codec, trackData.info.decoderConfig.codec),
 			trackData,
 		);
 	} else if (trackData.type === 'audio') {
@@ -1572,12 +1572,14 @@ const dataStringBoxLong = (value: string) => {
 	]);
 };
 
-const VIDEO_CODEC_TO_BOX_NAME: Record<VideoCodec, string> = {
-	avc: 'avc1',
-	hevc: 'hvc1',
-	vp8: 'vp08',
-	vp9: 'vp09',
-	av1: 'av01',
+const videoCodecToBoxName = (codec: VideoCodec, fullCodecString: string) => {
+	switch (codec) {
+		case 'avc': return fullCodecString.startsWith('avc3') ? 'avc3' : 'avc1';
+		case 'hevc': return 'hvc1';
+		case 'vp8': return 'vp08';
+		case 'vp9': return 'vp09';
+		case 'av1': return 'av01';
+	}
 };
 
 const VIDEO_CODEC_TO_CONFIGURATION_BOX: Record<VideoCodec, (trackData: IsobmffVideoTrackData) => Box | null> = {
