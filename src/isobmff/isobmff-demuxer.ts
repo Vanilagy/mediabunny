@@ -126,6 +126,7 @@ type InternalTrack = {
 		codec: VideoCodec | null;
 		codecDescription: Uint8Array | null;
 		colorSpace: VideoColorSpaceInit | null;
+		avcType: 1 | 3 | null;
 		avcCodecInfo: AvcDecoderConfigurationRecord | null;
 		hevcCodecInfo: HevcDecoderConfigurationRecord | null;
 		vp9CodecInfo: Vp9CodecInfo | null;
@@ -836,6 +837,7 @@ export class IsobmffDemuxer extends Demuxer {
 						codec: null,
 						codecDescription: null,
 						colorSpace: null,
+						avcType: null,
 						avcCodecInfo: null,
 						hevcCodecInfo: null,
 						vp9CodecInfo: null,
@@ -890,8 +892,9 @@ export class IsobmffDemuxer extends Demuxer {
 					const lowercaseBoxName = sampleBoxInfo.name.toLowerCase();
 
 					if (track.info.type === 'video') {
-						if (lowercaseBoxName === 'avc1') {
+						if (lowercaseBoxName === 'avc1' || lowercaseBoxName === 'avc3') {
 							track.info.codec = 'avc';
+							track.info.avcType = lowercaseBoxName === 'avc1' ? 1 : 3;
 						} else if (lowercaseBoxName === 'hvc1' || lowercaseBoxName === 'hev1') {
 							track.info.codec = 'hevc';
 						} else if (lowercaseBoxName === 'vp08') {

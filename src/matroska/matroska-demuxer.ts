@@ -2319,6 +2319,7 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 					codec: this.internalTrack.info.codec,
 					codecDescription: this.internalTrack.info.codecDescription,
 					colorSpace: this.internalTrack.info.colorSpace,
+					avcType: 1, // We don't know better (or do we?) so just assume 'avc1'
 					avcCodecInfo: this.internalTrack.info.codec === 'avc' && firstPacket
 						? extractAvcDecoderConfigurationRecord(firstPacket.data)
 						: null,
