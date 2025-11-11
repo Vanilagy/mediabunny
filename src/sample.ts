@@ -552,7 +552,6 @@ export class VideoSample implements Disposable {
 			dHeight,
 		);
 
-		// Restore the previous transformation state
 		context.restore();
 	}
 
@@ -644,6 +643,8 @@ export class VideoSample implements Disposable {
 			dy = (canvasHeight - newHeight) / 2;
 		}
 
+		context.save();
+
 		const aspectRatioChange = rotation % 180 === 0 ? 1 : newWidth / newHeight;
 		context.translate(canvasWidth / 2, canvasHeight / 2);
 		context.rotate(rotation * Math.PI / 180);
@@ -655,6 +656,8 @@ export class VideoSample implements Disposable {
 		// Important that we don't use .draw() here since that would take rotation into account, but we wanna handle it
 		// ourselves here
 		context.drawImage(this.toCanvasImageSource(), sx, sy, sWidth, sHeight, dx, dy, newWidth, newHeight);
+
+		context.restore();
 	}
 
 	/** @internal */
