@@ -844,12 +844,12 @@ export class MatroskaDemuxer extends Demuxer {
 
 			blocks.splice(blockIndex, 1); // Remove the original block
 
+			const blockDuration = originalBlock.duration || frameCount * (track.defaultDuration ?? 0);
+
 			// Now, let's insert each frame as its own block
 			for (let i = 0; i < frameCount; i++) {
 				const frameSize = frameSizes[i]!;
 				const frameData = readBytes(slice, frameSize);
-
-				const blockDuration = originalBlock.duration || (frameCount * (track.defaultDuration ?? 0));
 
 				// Distribute timestamps evenly across the block duration
 				const frameTimestamp = originalBlock.timestamp + (blockDuration * i / frameCount);

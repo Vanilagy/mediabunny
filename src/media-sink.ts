@@ -26,7 +26,7 @@ import {
 	insertSorted,
 	isFirefox,
 	isNumber,
-	isSafari,
+	isWebKit,
 	last,
 	mapAsyncGenerator,
 	promiseWithResolvers,
@@ -918,7 +918,7 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 		} else {
 			assert(this.decoder);
 
-			if (!isSafari()) {
+			if (!isWebKit()) {
 				insertSorted(this.inputTimestamps, packet.timestamp, x => x);
 			}
 
@@ -1049,7 +1049,7 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 
 	/** Handler for the WebCodecs VideoDecoder for ironing out browser differences. */
 	sampleHandler(sample: VideoSample) {
-		if (isSafari()) {
+		if (isWebKit()) {
 			// For correct B-frame handling, we don't just hand over the frames directly but instead add them to
 			// a queue, because we want to ensure frames are emitted in presentation order. We flush the queue
 			// each time we receive a frame with a timestamp larger than the highest we've seen so far, as we
@@ -1137,7 +1137,7 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			this.alphaRaslSkipped = false;
 		}
 
-		if (isSafari()) {
+		if (isWebKit()) {
 			for (const sample of this.sampleQueue) {
 				this.finalizeAndEmitSample(sample);
 			}

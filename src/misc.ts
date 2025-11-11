@@ -658,21 +658,16 @@ export class CallSerializer {
 	}
 }
 
-let isSafariCache: boolean | null = null;
-export const isSafari = () => {
-	if (isSafariCache !== null) {
-		return isSafariCache;
+let isWebKitCache: boolean | null = null;
+export const isWebKit = () => {
+	if (isWebKitCache !== null) {
+		return isWebKitCache;
 	}
 
-	const result = !!(
-		typeof navigator !== 'undefined'
-		&& navigator.vendor?.match(/apple/i)
-		&& !navigator.userAgent?.match(/crios/i)
-		&& !navigator.userAgent?.match(/fxios/i)
-		&& !navigator.userAgent?.match(/Opera|OPT\//)
-	);
+	// This even returns true for WebKit-wrapping browsers such as Chrome on iOS
+	const result = !!(typeof navigator !== 'undefined' && navigator.vendor?.match(/apple/i));
 
-	isSafariCache = result;
+	isWebKitCache = result;
 	return result;
 };
 

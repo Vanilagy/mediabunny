@@ -182,7 +182,8 @@ export type ConversionVideoOptions = {
 	 * corrections.
 	 *
 	 * Must return a {@link VideoSample} or a `CanvasImageSource`, an array of them, or `null` for dropping the frame.
-	 * When non-timestamped data is returned, the timestamp and duration from the source sample will be used.
+	 * When non-timestamped data is returned, the timestamp and duration from the source sample will be used. Rotation
+	 * metadata of the returned sample will be ignored.
 	 *
 	 * This function can also be used to manually resize frames. When doing so, you should signal the post-process
 	 * dimensions using the `processedWidth` and `processedHeight` fields, which enables the encoder to better know what
@@ -873,7 +874,10 @@ export class Conversion {
 			|| trackOptions.process !== undefined;
 		let needsRerender = width !== originalWidth
 			|| height !== originalHeight
-			|| (totalRotation !== 0 && !outputSupportsRotation)
+			// TODO This is suboptimal: Forcing a rerender when both rotation and process are set is not
+			// performance-optimal, but right now there's no other way because we can't change the track rotation
+			// metadata after the output has already started. Should be possible with API changes in v2, though!
+			|| (totalRotation !== 0 && (!outputSupportsRotation || trackOptions.process !== undefined))
 			|| !!crop;
 
 		const alpha = trackOptions.alpha ?? 'discard';
