@@ -14,8 +14,8 @@
 			source: new Mediabunny.BlobSource(file),
 		});
 
-		const videoTrack = await input.getPrimaryVideoTrack();
-		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
+		const audioTrack = await input.getPrimaryAudioTrack();
+		const sink = new Mediabunny.EncodedPacketSink(audioTrack);
 
 		for await (const packet of sink.packets()) {
 			console.log(packet.timestamp, packet.duration, packet.type)

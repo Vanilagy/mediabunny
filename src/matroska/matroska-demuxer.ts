@@ -1374,8 +1374,16 @@ export class MatroskaDemuxer extends Demuxer {
 				const relativeTimestamp = readI16Be(slice);
 
 				const flags = readU8(slice);
-				const isKeyFrame = !!(flags & 0x80);
 				const lacing = (flags >> 1) & 0x3 as BlockLacing; // If the block is laced, we'll expand it later
+
+				let isKeyFrame = !!(flags & 0x80);
+				if (trackData.track.info?.type === 'audio' && trackData.track.info.codec) {
+					// Some files don't mark their audio packets as key packets (I'm looking at you, Firefox). But, we
+					// can fix this in most cases: if we recognize the codec of the track, then we know every packet is
+					// necessarily a key packet, no matter what the container says.
+					// https://github.com/Vanilagy/mediabunny/issues/192
+					isKeyFrame = true;
+				}
 
 				const blockData = readBytes(slice, size - (slice.filePos - dataStartPos));
 				const hasDecodingInstructions = trackData.track.decodingInstructions.length > 0;
