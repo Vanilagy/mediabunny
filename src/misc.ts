@@ -665,10 +665,7 @@ export const isWebKit = () => {
 	}
 
 	// This even returns true for WebKit-wrapping browsers such as Chrome on iOS
-	const result = !!(typeof navigator !== 'undefined' && navigator.vendor?.match(/apple/i));
-
-	isWebKitCache = result;
-	return result;
+	return isWebKitCache = !!(typeof navigator !== 'undefined' && navigator.vendor?.match(/apple/i));
 };
 
 let isFirefoxCache: boolean | null = null;
@@ -678,6 +675,15 @@ export const isFirefox = () => {
 	}
 
 	return isFirefoxCache = typeof navigator !== 'undefined' && navigator.userAgent?.includes('Firefox');
+};
+
+let isChromiumCache: boolean | null = null;
+export const isChromium = () => {
+	if (isChromiumCache !== null) {
+		return isChromiumCache;
+	}
+
+	return isChromiumCache = !!(typeof navigator !== 'undefined' && navigator.vendor?.includes('Google Inc'));
 };
 
 /**
