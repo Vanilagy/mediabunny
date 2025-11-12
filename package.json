@@ -1,7 +1,7 @@
 {
   "name": "mediabunny",
   "author": "Vanilagy",
-  "version": "1.24.5",
+  "version": "1.24.6",
   "description": "Pure TypeScript media toolkit for reading, writing, and converting media files, directly in the browser.",
   "type": "module",
   "workspaces": [
