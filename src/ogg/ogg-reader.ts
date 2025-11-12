@@ -11,7 +11,7 @@ import { OGGS } from './ogg-misc';
 
 export const MIN_PAGE_HEADER_SIZE = 27;
 export const MAX_PAGE_HEADER_SIZE = 27 + 255;
-export const MAX_PAGE_SIZE = MAX_PAGE_HEADER_SIZE + 255 * 255;
+export const MAX_PAGE_SIZE = /* #__PURE__ */ MAX_PAGE_HEADER_SIZE + 255 * 255;
 
 export type Page = {
 	headerStartPos: number;

@@ -403,31 +403,31 @@ export class Quality {
  * @group Encoding
  * @public
  */
-export const QUALITY_VERY_LOW = new Quality(0.3);
+export const QUALITY_VERY_LOW = /* #__PURE__ */ new Quality(0.3);
 /**
  * Represents a low media quality.
  * @group Encoding
  * @public
  */
-export const QUALITY_LOW = new Quality(0.6);
+export const QUALITY_LOW = /* #__PURE__ */ new Quality(0.6);
 /**
  * Represents a medium media quality.
  * @group Encoding
  * @public
  */
-export const QUALITY_MEDIUM = new Quality(1);
+export const QUALITY_MEDIUM = /* #__PURE__ */ new Quality(1);
 /**
  * Represents a high media quality.
  * @group Encoding
  * @public
  */
-export const QUALITY_HIGH = new Quality(2);
+export const QUALITY_HIGH = /* #__PURE__ */ new Quality(2);
 /**
  * Represents a very high media quality.
  * @group Encoding
  * @public
  */
-export const QUALITY_VERY_HIGH = new Quality(4);
+export const QUALITY_VERY_HIGH = /* #__PURE__ */ new Quality(4);
 
 /**
  * Checks if the browser is able to encode the given codec.

@@ -135,8 +135,8 @@ export class IsobmffBoxWriter {
 	}
 }
 
-const bytes = new Uint8Array(8);
-const view = new DataView(bytes.buffer);
+const bytes = /* #__PURE__ */ new Uint8Array(8);
+const view = /* #__PURE__ */ new DataView(bytes.buffer);
 
 const u8 = (value: number) => {
 	return [(value % 0x100 + 0x100) % 0x100];
@@ -243,7 +243,7 @@ const rotationMatrix = (rotationInDegrees: number): TransformationMatrix => {
 		0, 0, 1,
 	];
 };
-const IDENTITY_MATRIX = rotationMatrix(0);
+const IDENTITY_MATRIX = /* #__PURE__ */ rotationMatrix(0);
 
 const matrixToBytes = (matrix: TransformationMatrix) => {
 	return [

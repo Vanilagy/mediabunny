@@ -174,8 +174,8 @@ export const toDataView = (source: AllowSharedBufferSource) => {
 	}
 };
 
-export const textDecoder = new TextDecoder();
-export const textEncoder = new TextEncoder();
+export const textDecoder = /* #__PURE__ */ new TextDecoder();
+export const textEncoder = /* #__PURE__ */ new TextEncoder();
 
 export const isIso88591Compatible = (text: string) => {
 	for (let i = 0; i < text.length; i++) {
@@ -201,7 +201,7 @@ export const COLOR_PRIMARIES_MAP = {
 	bt2020: 9, // ITU-R BT.202
 	smpte432: 12, // SMPTE EG 432-1
 };
-export const COLOR_PRIMARIES_MAP_INVERSE = invertObject(COLOR_PRIMARIES_MAP);
+export const COLOR_PRIMARIES_MAP_INVERSE = /* #__PURE__ */ invertObject(COLOR_PRIMARIES_MAP);
 
 export const TRANSFER_CHARACTERISTICS_MAP = {
 	'bt709': 1, // ITU-R BT.709
@@ -211,7 +211,7 @@ export const TRANSFER_CHARACTERISTICS_MAP = {
 	'pq': 16, // Rec. ITU-R BT.2100-2 perceptual quantization (PQ) system
 	'hlg': 18, // Rec. ITU-R BT.2100-2 hybrid loggamma (HLG) system
 };
-export const TRANSFER_CHARACTERISTICS_MAP_INVERSE = invertObject(TRANSFER_CHARACTERISTICS_MAP);
+export const TRANSFER_CHARACTERISTICS_MAP_INVERSE = /* #__PURE__ */ invertObject(TRANSFER_CHARACTERISTICS_MAP);
 
 export const MATRIX_COEFFICIENTS_MAP = {
 	'rgb': 0, // Identity
@@ -220,7 +220,7 @@ export const MATRIX_COEFFICIENTS_MAP = {
 	'smpte170m': 6, // SMPTE 170M
 	'bt2020-ncl': 9, // ITU-R BT.2020-2 (non-constant luminance)
 };
-export const MATRIX_COEFFICIENTS_MAP_INVERSE = invertObject(MATRIX_COEFFICIENTS_MAP);
+export const MATRIX_COEFFICIENTS_MAP_INVERSE = /* #__PURE__ */ invertObject(MATRIX_COEFFICIENTS_MAP);
 
 export type RequiredNonNull<T> = {
 	[K in keyof T]-?: NonNullable<T[K]>;
@@ -510,7 +510,7 @@ export const isIso639Dash2LanguageCode = (x: string) => {
 };
 
 // Since the result will be truncated, add a bit of eps to compensate for floating point errors
-export const SECOND_TO_MICROSECOND_FACTOR = 1e6 * (1 + Number.EPSILON);
+export const SECOND_TO_MICROSECOND_FACTOR = /* #__PURE__ */ 1e6 * (1 + Number.EPSILON);
 
 /**
  * Sets all keys K of T to be required.

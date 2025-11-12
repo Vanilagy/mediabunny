@@ -89,8 +89,8 @@ export abstract class Writer {
 	}
 }
 
-const ARRAY_BUFFER_INITIAL_SIZE = 2 ** 16;
-const ARRAY_BUFFER_MAX_SIZE = 2 ** 32;
+const ARRAY_BUFFER_INITIAL_SIZE = /* #__PURE__ */ 2 ** 16;
+const ARRAY_BUFFER_MAX_SIZE = /* #__PURE__ */ 2 ** 32;
 
 export class BufferTargetWriter extends Writer {
 	private pos = 0;
@@ -184,7 +184,7 @@ export class BufferTargetWriter extends Writer {
 	}
 }
 
-const DEFAULT_CHUNK_SIZE = 2 ** 24;
+const DEFAULT_CHUNK_SIZE = /* #__PURE__ */ 2 ** 24;
 const MAX_CHUNKS_AT_ONCE = 2;
 
 interface Chunk {
