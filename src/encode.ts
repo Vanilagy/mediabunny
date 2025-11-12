@@ -115,9 +115,15 @@ export type VideoEncodingAdditionalOptions = {
 	 * format that supports transparency (such as WebM or Matroska).
 	 */
 	alpha?: 'discard' | 'keep';
-	/** Configures the bitrate mode. */
+	/** Configures the bitrate mode; defaults to `'variable'`. */
 	bitrateMode?: 'constant' | 'variable';
-	/** The latency mode used by the encoder; controls the performance-quality tradeoff. */
+	/**
+	 * The latency mode used by the encoder; controls the performance-quality tradeoff.
+	 *
+	 * - `'quality'` (default): The encoder prioritizes quality over latency, and no frames can be dropped.
+	 * - `'realtime'`: The encoder prioritizes low latency over quality, and may drop frames if the encoder becomes
+	 * overloaded to keep up with real-time requirements.
+	 */
 	latencyMode?: 'quality' | 'realtime';
 	/**
 	 * The full codec string as specified in the WebCodecs Codec Registry. This string must match the codec
@@ -125,7 +131,8 @@ export type VideoEncodingAdditionalOptions = {
 	 */
 	fullCodecString?: string;
 	/**
-	 * A hint that configures the hardware acceleration method of this codec. This is best left on `'no-preference'`.
+	 * A hint that configures the hardware acceleration method of this codec. This is best left on `'no-preference'`,
+	 * the default.
 	 */
 	hardwareAcceleration?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
 	/**
