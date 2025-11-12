@@ -486,9 +486,14 @@ export const clamp = (value: number, min: number, max: number) => {
 
 export const UNDETERMINED_LANGUAGE = 'und';
 
-export const roundToPrecision = (value: number, digits: number) => {
-	const factor = 10 ** digits;
-	return Math.round(value * factor) / factor;
+export const roundIfAlmostInteger = (value: number) => {
+	const rounded = Math.round(value);
+
+	if (Math.abs(value / rounded - 1) < 10 * Number.EPSILON) {
+		return rounded;
+	} else {
+		return value;
+	}
 };
 
 export const roundToMultiple = (value: number, multiple: number) => {

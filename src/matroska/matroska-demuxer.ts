@@ -43,7 +43,7 @@ import {
 	MATRIX_COEFFICIENTS_MAP_INVERSE,
 	normalizeRotation,
 	Rotation,
-	roundToPrecision,
+	roundIfAlmostInteger,
 	TRANSFER_CHARACTERISTICS_MAP_INVERSE,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
@@ -1874,7 +1874,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		// Do a little rounding to catch cases where the result is very close to an integer. If it is, it's likely
 		// that the number was originally an integer divided by the timescale. For stability, it's best
 		// to return the integer in this case.
-		return roundToPrecision(timestamp * this.internalTrack.segment.timestampFactor, 14);
+		return roundIfAlmostInteger(timestamp * this.internalTrack.segment.timestampFactor);
 	}
 
 	async getPacket(timestamp: number, options: PacketRetrievalOptions) {
