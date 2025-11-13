@@ -11,7 +11,7 @@ import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
-import { MetadataTags } from '../tags';
+import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
 import { assert, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readAscii, readBytes, Reader, readU16, readU32, readU64 } from '../reader';
@@ -405,6 +405,12 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 
 	getLanguageCode() {
 		return UNDETERMINED_LANGUAGE;
+	}
+
+	getDisposition() {
+		return {
+			...DEFAULT_TRACK_DISPOSITION,
+		};
 	}
 
 	async getFirstTimestamp() {

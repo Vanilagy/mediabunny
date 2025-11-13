@@ -56,6 +56,7 @@ output.addVideoTrack(videoSource, {
 output.addAudioTrack(audioSourceEng, {
 	language: 'eng', // ISO 639-2/T language code
 	name: 'Developer Commentary', // Sets a user-defined track name
+	disposition: { commentary: true }, // Sets additional flags in the file
 });
 output.addAudioTrack(audioSourceGer, {
 	language: 'ger',

@@ -28,7 +28,7 @@ import {
 	readU32Be,
 	readU8,
 } from '../reader';
-import { MetadataTags } from '../tags';
+import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
 import {
 	calculateCrc8,
 	readBlockSize,
@@ -563,6 +563,12 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 	getTimeResolution() {
 		assert(this.demuxer.audioInfo);
 		return this.demuxer.audioInfo.sampleRate;
+	}
+
+	getDisposition() {
+		return {
+			...DEFAULT_TRACK_DISPOSITION,
+		};
 	}
 
 	async getFirstTimestamp() {

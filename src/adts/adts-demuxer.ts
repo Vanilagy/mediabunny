@@ -21,6 +21,7 @@ import {
 } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readBytes, Reader } from '../reader';
+import { DEFAULT_TRACK_DISPOSITION } from '../metadata';
 import { FrameHeader, MAX_FRAME_HEADER_SIZE, MIN_FRAME_HEADER_SIZE, readFrameHeader } from './adts-reader';
 
 const SAMPLES_PER_AAC_FRAME = 1024;
@@ -186,6 +187,12 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 		assert(sampleRate !== undefined);
 
 		return sampleRate;
+	}
+
+	getDisposition() {
+		return {
+			...DEFAULT_TRACK_DISPOSITION,
+		};
 	}
 
 	async getDecoderConfig(): Promise<AudioDecoderConfig> {

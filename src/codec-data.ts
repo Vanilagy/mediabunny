@@ -24,7 +24,7 @@ import {
 	toUint8Array,
 } from './misc';
 import { PacketType } from './packet';
-import { MetadataTags } from './tags';
+import { MetadataTags } from './metadata';
 
 // References for AVC/HEVC code:
 // ISO 14496-15

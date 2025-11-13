@@ -15,7 +15,7 @@ import { EncodedPacket } from '../../src/packet.js';
 import { Input } from '../../src/input.js';
 import { BufferSource, FilePathSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
-import { AttachedFile, MetadataTags } from '../../src/tags.js';
+import { AttachedFile, MetadataTags } from '../../src/metadata.js';
 import path from 'node:path';
 import { AudioCodec, buildAudioCodecString } from '../../src/codec.js';
 import { Conversion } from '../../src/conversion.js';

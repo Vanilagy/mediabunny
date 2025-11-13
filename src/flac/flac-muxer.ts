@@ -20,7 +20,7 @@ import { Output, OutputAudioTrack } from '../output';
 import { FlacOutputFormat } from '../output-format';
 import { EncodedPacket } from '../packet';
 import { FileSlice, readBytes } from '../reader';
-import { AttachedImage, metadataTagsAreEmpty } from '../tags';
+import { AttachedImage, metadataTagsAreEmpty } from '../metadata';
 import { Writer } from '../writer';
 import {
 	readBlockSize,
