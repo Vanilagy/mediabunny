@@ -12,7 +12,7 @@ import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
-import { MetadataTags } from '../tags';
+import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
 import {
 	assert,
 	AsyncMutex,
@@ -461,6 +461,12 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 
 	getLanguageCode() {
 		return UNDETERMINED_LANGUAGE;
+	}
+
+	getDisposition() {
+		return {
+			...DEFAULT_TRACK_DISPOSITION,
+		};
 	}
 
 	async getFirstTimestamp() {

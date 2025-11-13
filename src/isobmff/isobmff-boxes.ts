@@ -44,7 +44,7 @@ import {
 	Sample,
 } from './isobmff-muxer';
 import { parseOpusIdentificationHeader } from '../codec-data';
-import { MetadataTags, RichImageData } from '../tags';
+import { MetadataTags, RichImageData } from '../metadata';
 
 export class IsobmffBoxWriter {
 	private helper = new Uint8Array(8);
@@ -421,7 +421,12 @@ export const tkhd = (
 		matrix = IDENTITY_MATRIX;
 	}
 
-	return fullBox('tkhd', +needsU64, 3, [
+	let flags = 0x2; // Track in movie
+	if (trackData.track.metadata.disposition?.default !== false) {
+		flags |= 0x1; // Track enabled
+	}
+
+	return fullBox('tkhd', +needsU64, flags, [
 		u32OrU64(creationTime), // Creation time
 		u32OrU64(creationTime), // Modification time
 		u32(trackData.track.id), // Track ID

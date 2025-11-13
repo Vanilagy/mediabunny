@@ -86,13 +86,13 @@ import {
 	readU8,
 	readAscii,
 } from '../reader';
-import { MetadataTags, RichImageData } from '../tags';
+import { DEFAULT_TRACK_DISPOSITION, MetadataTags, RichImageData, TrackDisposition } from '../metadata';
 
 type InternalTrack = {
 	id: number;
 	demuxer: IsobmffDemuxer;
 	inputTrack: InputTrack | null;
-	isDefault: boolean;
+	disposition: TrackDisposition;
 	timescale: number;
 	durationInMovieTimescale: number;
 	durationInMediaTimescale: number;
@@ -317,7 +317,7 @@ export class IsobmffDemuxer extends Demuxer {
 					this.readContiguousBoxes(this.moovSlice);
 
 					// Put default tracks first
-					this.tracks.sort((a, b) => Number(b.isDefault) - Number(a.isDefault));
+					this.tracks.sort((a, b) => Number(b.disposition.default) - Number(a.disposition.default));
 
 					for (const track of this.tracks) {
 						// Modify the edit list offset based on the previous segment durations. They are in different
@@ -655,7 +655,9 @@ export class IsobmffDemuxer extends Demuxer {
 					id: -1,
 					demuxer: this,
 					inputTrack: null,
-					isDefault: false,
+					disposition: {
+						...DEFAULT_TRACK_DISPOSITION,
+					},
 					info: null,
 					timescale: -1,
 					durationInMovieTimescale: -1,
@@ -703,7 +705,7 @@ export class IsobmffDemuxer extends Demuxer {
 				// Spec says disabled tracks are to be treated like they don't exist, but in practice, they are treated
 				// more like non-default tracks.
 				const trackEnabled = !!(flags & 0x1);
-				track.isDefault = trackEnabled;
+				track.disposition.default = trackEnabled;
 
 				// Skip over creation & modification time to reach the track ID
 				if (version === 0) {
@@ -2348,6 +2350,10 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 
 	getTimeResolution() {
 		return this.internalTrack.timescale;
+	}
+
+	getDisposition() {
+		return this.internalTrack.disposition;
 	}
 
 	async computeDuration() {

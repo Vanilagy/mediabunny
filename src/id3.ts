@@ -7,7 +7,7 @@
  */
 
 import { decodeSynchsafe, encodeSynchsafe } from '../shared/mp3-misc';
-import { MetadataTags } from './tags';
+import { MetadataTags } from './metadata';
 import {
 	coalesceIndex,
 	textDecoder,

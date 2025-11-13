@@ -259,3 +259,62 @@ export const metadataTagsAreEmpty = (tags: MetadataTags) => {
 		&& tags.comment === undefined
 		&& (tags.raw === undefined || Object.keys(tags.raw).length === 0);
 };
+
+/**
+ * Specifies a track's disposition, i.e. information about its intended usage.
+ * @public
+ * @group Miscellaneous
+ */
+export type TrackDisposition = {
+	/**
+	 * Indicates that this track is eligible for automatic selection by a player; that it is the main track among other,
+	 * non-default tracks of the same type.
+	 */
+	default: boolean;
+	/**
+	 * Indicates that players should always display this track by default, even if it goes against the user's default
+	 * preferences. For example, a subtitle track only containing translations of foreign-language audio.
+	 */
+	forced: boolean;
+	/** Indicates that this track is in the content's original language. */
+	original: boolean;
+	/** Indicates that this track contains commentary. */
+	commentary: boolean;
+	/** Indicates that this track is intended for hearing-impaired users. */
+	hearingImpaired: boolean;
+	/** Indicates that this track is intended for visually-impaired users. */
+	visuallyImpaired: boolean;
+};
+
+export const DEFAULT_TRACK_DISPOSITION: TrackDisposition = {
+	default: true,
+	forced: false,
+	original: false,
+	commentary: false,
+	hearingImpaired: false,
+	visuallyImpaired: false,
+};
+
+export const validateTrackDisposition = (disposition: Partial<TrackDisposition>) => {
+	if (!disposition || typeof disposition !== 'object') {
+		throw new TypeError('disposition must be an object.');
+	}
+	if (disposition.default !== undefined && typeof disposition.default !== 'boolean') {
+		throw new TypeError('disposition.default must be a boolean.');
+	}
+	if (disposition.forced !== undefined && typeof disposition.forced !== 'boolean') {
+		throw new TypeError('disposition.forced must be a boolean.');
+	}
+	if (disposition.original !== undefined && typeof disposition.original !== 'boolean') {
+		throw new TypeError('disposition.original must be a boolean.');
+	}
+	if (disposition.commentary !== undefined && typeof disposition.commentary !== 'boolean') {
+		throw new TypeError('disposition.commentary must be a boolean.');
+	}
+	if (disposition.hearingImpaired !== undefined && typeof disposition.hearingImpaired !== 'boolean') {
+		throw new TypeError('disposition.hearingImpaired must be a boolean.');
+	}
+	if (disposition.visuallyImpaired !== undefined && typeof disposition.visuallyImpaired !== 'boolean') {
+		throw new TypeError('disposition.visuallyImpaired must be a boolean.');
+	}
+};

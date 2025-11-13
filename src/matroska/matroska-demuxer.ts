@@ -31,7 +31,7 @@ import {
 	InputVideoTrack,
 	InputVideoTrackBacking,
 } from '../input-track';
-import { AttachedFile, MetadataTags } from '../tags';
+import { AttachedFile, DEFAULT_TRACK_DISPOSITION, MetadataTags, TrackDisposition } from '../metadata';
 import { PacketRetrievalOptions } from '../media-sink';
 import {
 	assert,
@@ -188,7 +188,7 @@ type InternalTrack = {
 	}[];
 	cuePoints: CuePoint[];
 
-	isDefault: boolean;
+	disposition: TrackDisposition;
 	inputTrack: InputTrack | null;
 	codecId: string | null;
 	codecPrivate: Uint8Array | null;
@@ -537,7 +537,7 @@ export class MatroskaDemuxer extends Demuxer {
 		}
 
 		// Put default tracks first
-		this.currentSegment.tracks.sort((a, b) => Number(b.isDefault) - Number(a.isDefault));
+		this.currentSegment.tracks.sort((a, b) => Number(b.disposition.default) - Number(a.disposition.default));
 
 		// Now, let's distribute the cue points to the tracks
 		const idToTrack = new Map(this.currentSegment.tracks.map(x => [x.id, x]));
@@ -989,7 +989,9 @@ export class MatroskaDemuxer extends Demuxer {
 					clusterPositionCache: [],
 					cuePoints: [],
 
-					isDefault: false,
+					disposition: {
+						...DEFAULT_TRACK_DISPOSITION,
+					},
 					inputTrack: null,
 					codecId: null,
 					codecPrivate: null,
@@ -1154,7 +1156,37 @@ export class MatroskaDemuxer extends Demuxer {
 			case EBMLId.FlagDefault: {
 				if (!this.currentTrack) break;
 
-				this.currentTrack.isDefault = !!readUnsignedInt(slice, size);
+				this.currentTrack.disposition.default = !!readUnsignedInt(slice, size);
+			}; break;
+
+			case EBMLId.FlagForced: {
+				if (!this.currentTrack) break;
+
+				this.currentTrack.disposition.forced = !!readUnsignedInt(slice, size);
+			}; break;
+
+			case EBMLId.FlagOriginal: {
+				if (!this.currentTrack) break;
+
+				this.currentTrack.disposition.original = !!readUnsignedInt(slice, size);
+			}; break;
+
+			case EBMLId.FlagHearingImpaired: {
+				if (!this.currentTrack) break;
+
+				this.currentTrack.disposition.hearingImpaired = !!readUnsignedInt(slice, size);
+			}; break;
+
+			case EBMLId.FlagVisualImpaired: {
+				if (!this.currentTrack) break;
+
+				this.currentTrack.disposition.visuallyImpaired = !!readUnsignedInt(slice, size);
+			}; break;
+
+			case EBMLId.FlagCommentary: {
+				if (!this.currentTrack) break;
+
+				this.currentTrack.disposition.commentary = !!readUnsignedInt(slice, size);
 			}; break;
 
 			case EBMLId.CodecID: {
@@ -1845,6 +1877,10 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 
 	getTimeResolution() {
 		return this.internalTrack.segment.timestampFactor;
+	}
+
+	getDisposition() {
+		return this.internalTrack.disposition;
 	}
 
 	async getFirstPacket(options: PacketRetrievalOptions) {

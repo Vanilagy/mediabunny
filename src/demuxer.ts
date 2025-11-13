@@ -8,7 +8,7 @@
 
 import { Input } from './input';
 import { InputTrack } from './input-track';
-import { MetadataTags } from './tags';
+import { MetadataTags } from './metadata';
 
 export abstract class Demuxer {
 	input: Input;

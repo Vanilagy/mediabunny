@@ -202,6 +202,7 @@ export {
 	AttachedImage,
 	RichImageData,
 	AttachedFile,
-} from './tags';
+	TrackDisposition,
+} from './metadata';
 
 // 🐡🦔

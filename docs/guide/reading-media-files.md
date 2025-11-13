@@ -106,6 +106,10 @@ track.languageCode; // => string
 
 // A user-defined name for this track.
 track.name; // => string
+
+// Information about the intended usage of the track
+// (default, commentary, hearing-impaired, visually-impaired, etc.)
+track.disposition; // TrackDisposition
 ```
 
 #### Codec information
