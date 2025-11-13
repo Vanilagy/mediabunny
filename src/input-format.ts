@@ -481,56 +481,56 @@ export class AdtsInputFormat extends InputFormat {
  * @group Input formats
  * @public
  */
-export const MP4 = new Mp4InputFormat();
+export const MP4 = /* #__PURE__ */ new Mp4InputFormat();
 /**
  * QuickTime File Format input format singleton.
  * @group Input formats
  * @public
  */
-export const QTFF = new QuickTimeInputFormat();
+export const QTFF = /* #__PURE__ */ new QuickTimeInputFormat();
 /**
  * Matroska input format singleton.
  * @group Input formats
  * @public
  */
-export const MATROSKA = new MatroskaInputFormat();
+export const MATROSKA = /* #__PURE__ */ new MatroskaInputFormat();
 /**
  * WebM input format singleton.
  * @group Input formats
  * @public
  */
-export const WEBM = new WebMInputFormat();
+export const WEBM = /* #__PURE__ */ new WebMInputFormat();
 /**
  * MP3 input format singleton.
  * @group Input formats
  * @public
  */
-export const MP3 = new Mp3InputFormat();
+export const MP3 = /* #__PURE__ */ new Mp3InputFormat();
 /**
  * WAVE input format singleton.
  * @group Input formats
  * @public
  */
-export const WAVE = new WaveInputFormat();
+export const WAVE = /* #__PURE__ */ new WaveInputFormat();
 /**
  * Ogg input format singleton.
  * @group Input formats
  * @public
  */
-export const OGG = new OggInputFormat();
+export const OGG = /* #__PURE__ */ new OggInputFormat();
 /**
  * ADTS input format singleton.
  * @group Input formats
  * @public
  */
-export const ADTS = new AdtsInputFormat();
+export const ADTS = /* #__PURE__ */ new AdtsInputFormat();
 
 /**
  * FLAC input format singleton.
  * @group Input formats
  * @public
  */
-export const FLAC = new FlacInputFormat();
+export const FLAC = /* #__PURE__ */ new FlacInputFormat();
 
 /**
  * List of all input format singletons. If you don't need to support all input formats, you should specify the

@@ -57,7 +57,7 @@
 			output,
 			audio: (_, n) => ({
 				discard: n > 1,
-				codec: 'aac',
+				//codec: 'opus',
 				//codec: 'opus',
 				/*
 				process: (sample) => {
@@ -73,7 +73,7 @@
 				//numberOfChannels: 1,
 				//sampleRate: 4000
 				//discard: true
-				forceTranscode: true,
+				//forceTranscode: true,
 			}),
 			/*
 			video: {
@@ -100,6 +100,9 @@
 			},
 			*/
 			video: () => ({
+				width: 720,
+				frameRate: 30,
+				bitrate: Mediabunny.QUALITY_VERY_LOW,
 				//discard: true,
 				/*
 				process: (sample) => {
@@ -176,8 +179,8 @@
 				}
 			},
 			trim: {
-				//start: 0,
-				//end: 10
+				start: 0,
+				end: 20
 			},
 		});
 		console.log(conversion);

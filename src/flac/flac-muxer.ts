@@ -28,7 +28,7 @@ import {
 	readCodedNumber,
 } from './flac-misc';
 
-const FLAC_HEADER = new Uint8Array([0x66, 0x4c, 0x61, 0x43]); // 'fLaC'
+const FLAC_HEADER = /* #__PURE__ */ new Uint8Array([0x66, 0x4c, 0x61, 0x43]); // 'fLaC'
 const STREAMINFO_SIZE = 38;
 const STREAMINFO_BLOCK_SIZE = 34;
 

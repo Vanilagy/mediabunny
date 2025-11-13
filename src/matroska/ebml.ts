@@ -463,7 +463,7 @@ export class EBMLWriter {
 
 export const MAX_VAR_INT_SIZE = 8;
 export const MIN_HEADER_SIZE = 2; // 1-byte ID and 1-byte size
-export const MAX_HEADER_SIZE = 2 * MAX_VAR_INT_SIZE; // 8-byte ID and 8-byte size
+export const MAX_HEADER_SIZE = /* #__PURE__ */ 2 * MAX_VAR_INT_SIZE; // 8-byte ID and 8-byte size
 
 export const readVarIntSize = (slice: FileSlice) => {
 	const firstByte = readU8(slice);

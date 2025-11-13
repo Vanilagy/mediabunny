@@ -51,13 +51,13 @@ import {
 	MATRIX_COEFFICIENTS_MAP_INVERSE,
 	normalizeRotation,
 	roundToMultiple,
-	roundToPrecision,
 	Rotation,
 	textDecoder,
 	TransformationMatrix,
 	TRANSFER_CHARACTERISTICS_MAP_INVERSE,
 	UNDETERMINED_LANGUAGE,
 	toDataView,
+	roundIfAlmostInteger,
 } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { buildIsobmffMimeType } from './isobmff-misc';
@@ -2388,7 +2388,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		// Do a little rounding to catch cases where the result is very close to an integer. If it is, it's likely
 		// that the number was originally an integer divided by the timescale. For stability, it's best
 		// to return the integer in this case.
-		return roundToPrecision(timestamp * this.internalTrack.timescale, 14) + this.internalTrack.editListOffset;
+		return roundIfAlmostInteger(timestamp * this.internalTrack.timescale) + this.internalTrack.editListOffset;
 	}
 
 	async getPacket(timestamp: number, options: PacketRetrievalOptions) {

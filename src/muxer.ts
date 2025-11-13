@@ -46,21 +46,21 @@ export abstract class Muxer {
 
 	private trackTimestampInfo = new WeakMap<OutputTrack, {
 		maxTimestamp: number;
-		maxTimestampBeforeLastKeyFrame: number;
+		maxTimestampBeforeLastKeyPacket: number;
 	}>();
 
-	protected validateAndNormalizeTimestamp(track: OutputTrack, timestampInSeconds: number, isKeyFrame: boolean) {
+	protected validateAndNormalizeTimestamp(track: OutputTrack, timestampInSeconds: number, isKeyPacket: boolean) {
 		timestampInSeconds += track.source._timestampOffset;
 
 		let timestampInfo = this.trackTimestampInfo.get(track);
 		if (!timestampInfo) {
-			if (!isKeyFrame) {
-				throw new Error('First frame must be a key frame.');
+			if (!isKeyPacket) {
+				throw new Error('First packet must be a key packet.');
 			}
 
 			timestampInfo = {
 				maxTimestamp: timestampInSeconds,
-				maxTimestampBeforeLastKeyFrame: timestampInSeconds,
+				maxTimestampBeforeLastKeyPacket: timestampInSeconds,
 			};
 			this.trackTimestampInfo.set(track, timestampInfo);
 		}
@@ -69,15 +69,15 @@ export abstract class Muxer {
 			throw new Error(`Timestamps must be non-negative (got ${timestampInSeconds}s).`);
 		}
 
-		if (isKeyFrame) {
-			timestampInfo.maxTimestampBeforeLastKeyFrame = timestampInfo.maxTimestamp;
+		if (isKeyPacket) {
+			timestampInfo.maxTimestampBeforeLastKeyPacket = timestampInfo.maxTimestamp;
 		}
 
-		if (timestampInSeconds < timestampInfo.maxTimestampBeforeLastKeyFrame) {
+		if (timestampInSeconds < timestampInfo.maxTimestampBeforeLastKeyPacket) {
 			throw new Error(
-				`Timestamps cannot be smaller than the highest timestamp of the previous GOP (a GOP begins with a key`
-				+ ` frame and ends right before the next key frame). Got ${timestampInSeconds}s, but highest timestamp`
-				+ ` is ${timestampInfo.maxTimestampBeforeLastKeyFrame}s.`,
+				`Timestamps cannot be smaller than the largest timestamp of the previous GOP (a GOP begins with a key`
+				+ ` packet and ends right before the next key packet). Got ${timestampInSeconds}s, but largest`
+				+ ` timestamp is ${timestampInfo.maxTimestampBeforeLastKeyPacket}s.`,
 			);
 		}
 
