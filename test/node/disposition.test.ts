@@ -40,7 +40,7 @@ test('Default track disposition', async () => {
 		forced: false,
 		original: false,
 		hearingImpaired: false,
-		visionImpaired: false,
+		visuallyImpaired: false,
 		commentary: false,
 	});
 });
@@ -86,7 +86,7 @@ test('Customized track disposition', async () => {
 		forced: true,
 		original: true,
 		hearingImpaired: true,
-		visionImpaired: true,
+		visuallyImpaired: true,
 		commentary: true,
 	});
 });
