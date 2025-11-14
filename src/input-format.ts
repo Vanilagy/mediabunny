@@ -259,6 +259,7 @@ export class WebMInputFormat extends MatroskaInputFormat {
 export class Mp3InputFormat extends InputFormat {
 	/** @internal */
 	async _canReadInput(input: Input) {
+		return true;
 		let slice = input._reader.requestSlice(0, 10);
 		if (slice instanceof Promise) slice = await slice;
 		if (!slice) return false;

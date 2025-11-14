@@ -7,12 +7,18 @@
  */
 
 import { FRAME_HEADER_SIZE, FrameHeader, readFrameHeader } from '../../shared/mp3-misc';
+import { ResultValue, Yo } from '../misc';
 import { Reader, readU32Be } from '../reader';
 
-export const readNextFrameHeader = async (reader: Reader, startPos: number, until: number | null): Promise<{
-	header: FrameHeader;
-	startPos: number;
-} | null> => {
+export const readNextFrameHeader = async (
+	res: ResultValue<{
+		header: FrameHeader;
+		startPos: number;
+	} | null>,
+	reader: Reader,
+	startPos: number,
+	until: number | null,
+): Promise<Yo> => {
 	let currentPos = startPos;
 
 	while (until === null || currentPos < until) {
@@ -24,11 +30,11 @@ export const readNextFrameHeader = async (reader: Reader, startPos: number, unti
 
 		const result = readFrameHeader(word, reader.fileSize !== null ? reader.fileSize - currentPos : null);
 		if (result.header) {
-			return { header: result.header, startPos: currentPos };
+			return res.set({ header: result.header, startPos: currentPos });
 		}
 
 		currentPos += result.bytesAdvanced;
 	}
 
-	return null;
+	return res.set(null);
 };

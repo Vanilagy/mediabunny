@@ -32,12 +32,15 @@ import {
 	isWebKit,
 	last,
 	mapAsyncGenerator,
+	MaybePromise,
 	promiseWithResolvers,
+	ResultValue,
 	Rotation,
 	toAsyncIterator,
 	toDataView,
 	toUint8Array,
 	validateAnyIterable,
+	Yo,
 } from './misc';
 import { EncodedPacket } from './packet';
 import { fromAlaw, fromUlaw } from './pcm';
@@ -131,14 +134,20 @@ export class EncodedPacketSink {
 	 * Retrieves the track's first packet (in decode order), or null if it has no packets. The first packet is very
 	 * likely to be a key packet.
 	 */
-	getFirstPacket(options: PacketRetrievalOptions = {}) {
+	getFirstPacket(options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
 		validatePacketRetrievalOptions(options);
 
 		if (this._track.input._disposed) {
 			throw new InputDisposedError();
 		}
 
-		return maybeFixPacketType(this._track, this._track._backing.getFirstPacket(options), options);
+		const result = new ResultValue<EncodedPacket | null>();
+		const promise = this._track._backing.getFirstPacket(result, options);
+		if (result.pending) return (promise as Promise<Yo>).then(() => result.value);
+
+		return result.value;
+
+		// return maybeFixPacketType(this._track, this._track._backing.getFirstPacket(options), options);
 	}
 
 	/**
@@ -174,7 +183,13 @@ export class EncodedPacketSink {
 			throw new InputDisposedError();
 		}
 
-		return maybeFixPacketType(this._track, this._track._backing.getNextPacket(packet, options), options);
+		const result = new ResultValue<EncodedPacket | null>();
+		const promise = this._track._backing.getNextPacket(result, packet, options);
+		if (result.pending) return (promise as Promise<Yo>).then(() => result.value);
+
+		return result.value;
+
+		// return maybeFixPacketType(this._track, this._track._backing.getNextPacket(packet, options), options);
 	}
 
 	/**
@@ -809,7 +824,7 @@ const computeMaxQueueSize = (decodedSampleQueueSize: number) => {
 	return decodedSampleQueueSize === 0 ? 40 : 8;
 };
 
-class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
+export class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	decoder: VideoDecoder | null = null;
 
 	customDecoder: CustomVideoDecoder | null = null;

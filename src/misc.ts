@@ -796,3 +796,46 @@ export const polyfillSymbolDispose = () => {
 export const isNumber = (x: unknown) => {
 	return typeof x === 'number' && !Number.isNaN(x);
 };
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const yo: unique symbol = Symbol();
+export type Yo = typeof yo;
+
+export class ResultValue<T> {
+	value!: T;
+	pending = true;
+
+	// @ts-expect-error Just for the types
+	set(value: T): Yo {
+		this.value = value;
+		this.pending = false;
+	}
+
+	// @ts-expect-error Just for the types
+	pass(): Yo {
+		assert(!this.pending);
+	}
+}
+
+export class AsyncMutex2 {
+	locked = false;
+	promise = Promise.resolve();
+
+	lock() {
+		if (this.locked) {
+			throw new Error('Mutex already locked.');
+		}
+
+		this.locked = true;
+
+		const { promise, resolve } = promiseWithResolvers();
+		this.promise = promise;
+
+		return {
+			[Symbol.dispose]: () => {
+				resolve();
+				this.locked = false;
+			},
+		};
+	}
+}

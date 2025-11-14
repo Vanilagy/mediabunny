@@ -11,7 +11,7 @@ import { determineVideoPacketType } from './codec-data';
 import { customAudioDecoders, customVideoDecoders } from './custom-coder';
 import { Input } from './input';
 import { EncodedPacketSink, PacketRetrievalOptions } from './media-sink';
-import { assert, Rotation } from './misc';
+import { assert, MaybePromise, ResultValue, Rotation, Yo } from './misc';
 import { TrackType } from './output';
 import { EncodedPacket, PacketType } from './packet';
 import { TrackDisposition } from './metadata';
@@ -41,11 +41,17 @@ export interface InputTrackBacking {
 	getFirstTimestamp(): Promise<number>;
 	computeDuration(): Promise<number>;
 
-	getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
-	getPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
-	getNextPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
-	getKeyPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
-	getNextKeyPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
+	getFirstPacket(res: ResultValue<EncodedPacket | null>, options: PacketRetrievalOptions): MaybePromise<Yo>;
+	getNextPacket(res: ResultValue<EncodedPacket | null>, packet: EncodedPacket, options: PacketRetrievalOptions): MaybePromise<Yo>;
+	getPacket(res: ResultValue<EncodedPacket | null>, timestamp: number, options: PacketRetrievalOptions): MaybePromise<Yo>;
+	getKeyPacket(res: ResultValue<EncodedPacket | null>, timestamp: number, options: PacketRetrievalOptions): MaybePromise<Yo>;
+	getNextKeyPacket(res: ResultValue<EncodedPacket | null>, packet: EncodedPacket, options: PacketRetrievalOptions): MaybePromise<Yo>;
+
+	// getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
+	// getPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
+	// getNextPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
+	// getKeyPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
+	// getNextKeyPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
 }
 
 /**

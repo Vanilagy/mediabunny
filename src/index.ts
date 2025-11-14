@@ -183,6 +183,10 @@ export {
 	WrappedCanvas,
 } from './media-sink';
 export {
+	PacketCursor,
+	VideoSampleCursor2,
+} from './cursors';
+export {
 	Conversion,
 	ConversionOptions,
 	ConversionVideoOptions,
