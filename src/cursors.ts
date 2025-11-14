@@ -193,6 +193,11 @@ export class PacketCursor {
 	}
 }
 
+for (const timestamp of timestamps) {
+	const thumbnail = await cursor.seekTo(timestamp);
+	console.log(thumbnail);
+}
+
 export class VideoSampleCursor2 {
 	track: InputVideoTrack;
 	initialized = false;
@@ -212,6 +217,7 @@ export class VideoSampleCursor2 {
 
 	decodedTimestamps: number[] = [];
 	maxDecodedSequenceNumber = -1;
+	pumpTargetSequenceNumber = -1;
 	pumpMutex = new AsyncMutex2();
 
 	private constructor(track: InputVideoTrack, decoder: VideoDecoderWrapper) {
@@ -238,22 +244,28 @@ export class VideoSampleCursor2 {
 					cursor.decodedTimestamps.shift();
 				}
 
-				if (cursor.stopPump) {
-					sample.close();
-					return;
-				}
-
-				console.log('revc', sample.timestamp);
+				console.log('revc', sample.timestamp, cursor.pendingRequests.length);
 
 				if (cursor.pendingRequests.length === 0) {
-					cursor.sampleQueue.push(sample);
+					if (cursor.stopPump) {
+						sample.close();
+					} else {
+						cursor.sampleQueue.push(sample);
+					}
 				} else {
+					let given = false;
+
 					for (let i = 0; i < cursor.pendingRequests.length; i++) {
 						const request = cursor.pendingRequests[i]!;
 						if (request.timestamp <= sample.timestamp) {
-							request.resolve(sample.clone());
+							request.resolve(given ? sample.clone() : sample);
 							cursor.pendingRequests.splice(i--, 1);
+							given = true;
 						}
+					}
+
+					if (!given) {
+						sample.close();
 					}
 				}
 
@@ -296,6 +308,7 @@ export class VideoSampleCursor2 {
 		using _ = this.pumpMutex.lock();
 
 		const targetPacket = await this.packetCursor.peekAt(timestamp);
+		console.log('target');
 		if (!targetPacket) {
 			return null;
 		}
@@ -351,6 +364,7 @@ export class VideoSampleCursor2 {
 				this.sampleQueue.length = 0;
 				this.maxDecodedSequenceNumber = -1;
 				this.decodedTimestamps.length = 0;
+				this.pumpTargetSequenceNumber = -1;
 				this.stopPump = false;
 			}
 
@@ -364,6 +378,10 @@ export class VideoSampleCursor2 {
 			timestamp: targetPacket.timestamp,
 			resolve: request.resolve,
 		});
+		this.pumpTargetSequenceNumber = Math.max(this.pumpTargetSequenceNumber, targetPacket.sequenceNumber);
+
+		console.log('requesting', targetPacket.timestamp);
+		console.log('Done', this.pumpTargetSequenceNumber);
 
 		return request.promise;
 	}
@@ -404,12 +422,17 @@ export class VideoSampleCursor2 {
 
 		this.pumpRunning = true;
 
-		while (this.packetCursor.current && !this.stopPump) {
+		while (
+			this.packetCursor.current
+			&& (!this.stopPump || this.packetCursor.current.sequenceNumber <= this.pumpTargetSequenceNumber)
+		) {
 			const maxQueueSize = 8 ?? computeMaxQueueSize(this.sampleQueue.length); // temp
-			if (this.sampleQueue.length + this.decoder.getDecodeQueueSize() > maxQueueSize) {
+			if (!this.stopPump && this.sampleQueue.length + this.decoder.getDecodeQueueSize() > maxQueueSize) {
 				await this.queueDequeue.promise;
 				continue;
 			}
+
+			console.log('DECODING', this.packetCursor.current.timestamp);
 
 			insertSorted(this.decodedTimestamps, this.packetCursor.current.timestamp, x => x);
 			this.maxDecodedSequenceNumber = this.packetCursor.current.sequenceNumber;
@@ -423,10 +446,11 @@ export class VideoSampleCursor2 {
 		this.pumpStopped.resolve();
 		this.pumpStopped = promiseWithResolvers();
 
-		this.pumpRunning = false;
-
 		this.pendingRequests.forEach(x => x.resolve(null));
 		this.pendingRequests.length = 0;
+
+		this.pumpRunning = false;
+		console.log('pump stopped/ended');
 	}
 }
 
