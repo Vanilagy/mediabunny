@@ -515,7 +515,7 @@ export const isIso639Dash2LanguageCode = (x: string) => {
 };
 
 // Since the result will be truncated, add a bit of eps to compensate for floating point errors
-export const SECOND_TO_MICROSECOND_FACTOR = /* #__PURE__ */ 1e6 * (1 + Number.EPSILON);
+export const SECOND_TO_MICROSECOND_FACTOR = 1e6 * (1 + Number.EPSILON);
 
 /**
  * Sets all keys K of T to be required.

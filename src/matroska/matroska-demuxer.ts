@@ -228,7 +228,7 @@ const METADATA_ELEMENTS = [
 	{ id: EBMLId.Tracks, flag: 'tracksSeen' },
 	{ id: EBMLId.Cues, flag: 'cuesSeen' },
 ] as const;
-const MAX_RESYNC_LENGTH = /* #__PURE__ */ 10 * 2 ** 20; // 10 MiB
+const MAX_RESYNC_LENGTH = 10 * 2 ** 20; // 10 MiB
 
 export class MatroskaDemuxer extends Demuxer {
 	reader: Reader;
