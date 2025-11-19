@@ -193,10 +193,27 @@ export class PacketCursor {
 	}
 }
 
+/*
 for (const timestamp of timestamps) {
 	const thumbnail = await cursor.seekTo(timestamp);
 	console.log(thumbnail);
 }
+*/
+
+// Problem: Decoding further than is needed. This is not a problem for playback-like operations where it is desired to
+// maintain a buffer of pre-decoded frames. It breaks down when using the cursor for quick, pinpointed seek operations.
+// It would be cool if the cursor could still be used for pinpointed seeks. This provides a unified API for both
+// sequential as well as random access patterns.
+// Idea: By default, queue only the packets that are needed to reach a packet. Then, when encode size reaches zero and
+// the thing has not been yielded yet, give it another group of packets.
+// But that doesn't properly fill the decoder queue when just iterating using next().
+// Idea: Calling next() "unlocks" the decoder, keeping a healthy queue into the future until seek is called? I don't
+// know, feels weird. What I like better is something like, queue until the target packet first, then when the
+// decode queue drops to zero and there are no new requests, queue more packets. This means that in moments of silence,
+// the next samples will be queued. I think this might be better than going off of next(). This is because I can think
+// of use cases that don't need next() but still perform playback-like operations using ONLY seeks.
+// Or: make it configurable? Like some sort of queueLength or maxQueueLength? Then it's controllable but also adds
+// another layer the user has to "know" to do.
 
 export class VideoSampleCursor2 {
 	track: InputVideoTrack;
