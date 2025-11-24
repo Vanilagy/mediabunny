@@ -650,7 +650,7 @@ export class FilePathSource extends Source {
 	_fileHandle: FileHandle | null = null;
 
 	/** Creates a new {@link FilePathSource} backed by the file at the specified file path. */
-	constructor(filePath: string, options: BlobSourceOptions = {}) {
+	constructor(filePath: string, options: FilePathSourceOptions = {}) {
 		if (typeof filePath !== 'string') {
 			throw new TypeError('filePath must be a string.');
 		}
