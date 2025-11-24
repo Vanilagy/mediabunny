@@ -14,6 +14,9 @@ export default withMermaid({
 	title: 'Mediabunny',
 	description: DESCRIPTION,
 	cleanUrls: true,
+	sitemap: {
+		hostname: 'https://mediabunny.dev',
+	},
 	head: [
 		['link', { rel: 'icon', type: 'image/png', href: '/mediabunny-logo.png' }],
 		['link', { rel: 'icon', type: 'image/svg+xml', href: '/mediabunny-logo.svg' }],
