@@ -22,6 +22,7 @@ import {
 	VideoCodec,
 } from './codec';
 import { customAudioEncoders, customVideoEncoders } from './custom-coder';
+import { isFirefox } from './misc';
 import { EncodedPacket } from './packet';
 
 /**
@@ -529,7 +530,45 @@ export const canEncodeVideo = async (
 	});
 
 	const support = await VideoEncoder.isConfigSupported(encoderConfig);
-	return support.supported === true;
+	if (!support.supported) {
+		return false;
+	}
+
+	if (isFirefox()) {
+		// isConfigSupported on Firefox appears to unreliably indicate if encoding will actually succeed. Therefore, we
+		// just try encoding a frame to see if it actually works.
+		// https://github.com/Vanilagy/mediabunny/issues/222
+
+		// eslint-disable-next-line @typescript-eslint/no-misused-promises, no-async-promise-executor
+		return new Promise<boolean>(async (resolve) => {
+			try {
+				const encoder = new VideoEncoder({
+					output: () => {},
+					error: () => resolve(false),
+				});
+				encoder.configure(encoderConfig);
+
+				const frameData = new Uint8Array(width * height * 4);
+				const frame = new VideoFrame(frameData, {
+					format: 'RGBA',
+					codedWidth: width,
+					codedHeight: height,
+					timestamp: 0,
+				});
+
+				encoder.encode(frame);
+				frame.close();
+
+				await encoder.flush();
+
+				resolve(true);
+			} catch {
+				resolve(false);
+			}
+		});
+	} else {
+		return true;
+	}
 };
 
 /**
