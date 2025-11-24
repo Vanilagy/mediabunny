@@ -297,6 +297,10 @@ const DEFAULT_RETRY_DELAY
 			= typeof navigator !== 'undefined' && typeof navigator.onLine === 'boolean' ? navigator.onLine : true;
 
 			if (isOnline && originOfSrc !== null && originOfSrc !== window.location.origin) {
+				console.warn(
+					`Request will not be retried because a CORS error was suspected due to different origins. You can`
+					+ ` modify this behavior by providing your own function for the 'getRetryDelay' option.`,
+				);
 				return null;
 			}
 		}
@@ -425,6 +429,7 @@ export class UrlSource extends Source {
 				signal: abortController.signal,
 			}),
 			this._getRetryDelay,
+			() => this._disposed,
 		);
 
 		if (!response.ok) {
@@ -492,6 +497,7 @@ export class UrlSource extends Source {
 						signal: abortController.signal,
 					}),
 					this._getRetryDelay,
+					() => this._disposed,
 				);
 			}
 
@@ -539,6 +545,11 @@ export class UrlSource extends Source {
 				try {
 					readResult = await reader.read();
 				} catch (error) {
+					if (this._disposed) {
+						// No need to try to retry
+						throw error;
+					}
+
 					const retryDelayInSeconds = this._getRetryDelay(1, error, this._url);
 					if (retryDelayInSeconds !== null) {
 						console.error('Error while reading response stream. Attempting to resume.', error);
