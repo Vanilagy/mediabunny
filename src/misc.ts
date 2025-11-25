@@ -584,6 +584,7 @@ export const retriedFetch = async (
 	url: string | URL | Request,
 	requestInit: RequestInit,
 	getRetryDelay: (previousAttempts: number, error: unknown, url: string | URL | Request) => number | null,
+	shouldStop: () => boolean,
 ) => {
 	let attempts = 0;
 
@@ -591,6 +592,10 @@ export const retriedFetch = async (
 		try {
 			return await fetchFn(url, requestInit);
 		} catch (error) {
+			if (shouldStop()) {
+				throw error;
+			}
+
 			attempts++;
 			const retryDelayInSeconds = getRetryDelay(attempts, error, url);
 
@@ -606,6 +611,10 @@ export const retriedFetch = async (
 
 			if (retryDelayInSeconds > 0) {
 				await new Promise(resolve => setTimeout(resolve, 1000 * retryDelayInSeconds));
+			}
+
+			if (shouldStop()) {
+				throw error;
 			}
 		}
 	}
