@@ -102,10 +102,17 @@ export class BufferSource extends Source {
 	/** @internal */
 	_onreadCalled = false;
 
-	/** Creates a new {@link BufferSource} backed the specified `ArrayBuffer` or `ArrayBufferView`. */
-	constructor(buffer: ArrayBuffer | ArrayBufferView) {
-		if (!(buffer instanceof ArrayBuffer) && !ArrayBuffer.isView(buffer)) {
-			throw new TypeError('buffer must be an ArrayBuffer or ArrayBufferView.');
+	/**
+	 * Creates a new {@link BufferSource} backed by the specified `ArrayBuffer`, `SharedArrayBuffer`,
+	 * or `ArrayBufferView`.
+	 */
+	constructor(buffer: AllowSharedBufferSource) {
+		if (
+			!(buffer instanceof ArrayBuffer)
+			&& !(typeof SharedArrayBuffer !== 'undefined' && buffer instanceof SharedArrayBuffer)
+			&& !ArrayBuffer.isView(buffer)
+		) {
+			throw new TypeError('buffer must be an ArrayBuffer, SharedArrayBuffer, or ArrayBufferView.');
 		}
 
 		super();

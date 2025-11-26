@@ -97,7 +97,7 @@ const extractMetadata = (resource: File | string) => {
 				'Lyrics': tags.lyrics,
 				'Comment': tags.comment,
 				'Images': tags.images?.map((image) => {
-					const blob = new Blob([image.data], { type: image.mimeType });
+					const blob = new Blob([image.data.slice()], { type: image.mimeType });
 					const element = new Image();
 					element.src = URL.createObjectURL(blob);
 
