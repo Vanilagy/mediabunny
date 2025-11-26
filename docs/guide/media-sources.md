@@ -434,3 +434,11 @@ await textSource.add('00:00:02.500 --> 00:00:04.000\nChunky chunks.\n\n');
 ```
 
 The chunks have certain constraints: A cue must be fully contained within a chunk and cannot be split across multiple smaller chunks (although a chunk can contain multiple cues). Also, the WebVTT preamble must be added first and all at once.
+
+::: info
+For QuickTime to display WebVTT subtitles, it typically expects alignment information to be specified:
+```
+00:00:00.000 --> 00:00:02.000 align:center
+This is your last chance.
+```
+:::

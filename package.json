@@ -1,7 +1,7 @@
 {
   "name": "mediabunny",
   "author": "Vanilagy",
-  "version": "1.24.7",
+  "version": "1.25.2",
   "description": "Pure TypeScript media toolkit for reading, writing, and converting media files, directly in the browser.",
   "type": "module",
   "workspaces": [
@@ -70,7 +70,7 @@
     "@eslint/js": "^9.22.0",
     "@fontsource-variable/rubik": "^5.2.6",
     "@fontsource/dm-mono": "^5.2.6",
-    "@microsoft/api-extractor": "^7.52.1",
+    "@microsoft/api-extractor": "^7.55.1",
     "@stylistic/eslint-plugin": "^4.2.0",
     "@tailwindcss/vite": "^4.1.7",
     "@types/markdown-it-footnote": "^3.0.4",
@@ -84,8 +84,8 @@
     "mermaid": "^11.6.0",
     "tailwindcss": "^4.1.7",
     "tsx": "^4.19.4",
-    "typescript": "^5.8.2",
-    "typescript-eslint": "^8.26.1",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.48.0",
     "vite": "^6.3.5",
     "vitepress": "^1.6.3",
     "vitepress-plugin-llms": "^1.5.1",

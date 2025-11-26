@@ -65,8 +65,8 @@ import { EncodedPacket } from '../packet';
 import { parseOpusIdentificationHeader } from '../codec-data';
 import { AttachedFile } from '../metadata';
 
-const MIN_CLUSTER_TIMESTAMP_MS = /* #__PURE__ */ -(2 ** 15);
-const MAX_CLUSTER_TIMESTAMP_MS = /* #__PURE__ */ 2 ** 15 - 1;
+const MIN_CLUSTER_TIMESTAMP_MS = -(2 ** 15);
+const MAX_CLUSTER_TIMESTAMP_MS = 2 ** 15 - 1;
 const APP_NAME = 'Mediabunny';
 const SEGMENT_SIZE_BYTES = 6;
 const CLUSTER_SIZE_BYTES = 5;

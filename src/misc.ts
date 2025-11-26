@@ -157,20 +157,20 @@ export const writeBits = (bytes: Uint8Array, start: number, end: number, value: 
 export const toUint8Array = (source: AllowSharedBufferSource): Uint8Array => {
 	if (source.constructor === Uint8Array) { // We want a true Uint8Array, not something that extends it like Buffer
 		return source;
-	} else if (source instanceof ArrayBuffer) {
-		return new Uint8Array(source);
-	} else {
+	} else if (ArrayBuffer.isView(source)) {
 		return new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
+	} else {
+		return new Uint8Array(source);
 	}
 };
 
-export const toDataView = (source: AllowSharedBufferSource) => {
+export const toDataView = (source: AllowSharedBufferSource): DataView => {
 	if (source.constructor === DataView) {
 		return source;
-	} else if (source instanceof ArrayBuffer) {
-		return new DataView(source);
-	} else {
+	} else if (ArrayBuffer.isView(source)) {
 		return new DataView(source.buffer, source.byteOffset, source.byteLength);
+	} else {
+		return new DataView(source);
 	}
 };
 
@@ -515,7 +515,7 @@ export const isIso639Dash2LanguageCode = (x: string) => {
 };
 
 // Since the result will be truncated, add a bit of eps to compensate for floating point errors
-export const SECOND_TO_MICROSECOND_FACTOR = /* #__PURE__ */ 1e6 * (1 + Number.EPSILON);
+export const SECOND_TO_MICROSECOND_FACTOR = 1e6 * (1 + Number.EPSILON);
 
 /**
  * Sets all keys K of T to be required.
@@ -584,6 +584,7 @@ export const retriedFetch = async (
 	url: string | URL | Request,
 	requestInit: RequestInit,
 	getRetryDelay: (previousAttempts: number, error: unknown, url: string | URL | Request) => number | null,
+	shouldStop: () => boolean,
 ) => {
 	let attempts = 0;
 
@@ -591,6 +592,10 @@ export const retriedFetch = async (
 		try {
 			return await fetchFn(url, requestInit);
 		} catch (error) {
+			if (shouldStop()) {
+				throw error;
+			}
+
 			attempts++;
 			const retryDelayInSeconds = getRetryDelay(attempts, error, url);
 
@@ -606,6 +611,10 @@ export const retriedFetch = async (
 
 			if (retryDelayInSeconds > 0) {
 				await new Promise(resolve => setTimeout(resolve, 1000 * retryDelayInSeconds));
+			}
+
+			if (shouldStop()) {
+				throw error;
 			}
 		}
 	}
