@@ -850,7 +850,7 @@ export const dOps = (trackData: IsobmffAudioTrackData) => {
 	let inputSampleRate = trackData.info.sampleRate;
 	let outputGain = 0;
 	let channelMappingFamily = 0;
-	let channelMappingTable = new Uint8Array(0);
+	let channelMappingTable: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
 
 	// Read preskip and from codec private data from the encoder
 	// https://www.rfc-editor.org/rfc/rfc7845#section-5

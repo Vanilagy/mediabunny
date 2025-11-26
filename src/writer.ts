@@ -190,7 +190,7 @@ const MAX_CHUNKS_AT_ONCE = 2;
 interface Chunk {
 	start: number;
 	written: ChunkSection[];
-	data: Uint8Array;
+	data: Uint8Array<ArrayBuffer>;
 	shouldFlush: boolean;
 }
 
@@ -281,7 +281,7 @@ export class StreamTargetWriter extends Writer {
 		const chunks: {
 			start: number;
 			size: number;
-			data?: Uint8Array;
+			data?: Uint8Array<ArrayBuffer>;
 		}[] = [];
 		const sorted = [...this.sections].sort((a, b) => a.start - b.start);
 

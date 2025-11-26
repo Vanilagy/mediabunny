@@ -157,20 +157,20 @@ export const writeBits = (bytes: Uint8Array, start: number, end: number, value: 
 export const toUint8Array = (source: AllowSharedBufferSource): Uint8Array => {
 	if (source.constructor === Uint8Array) { // We want a true Uint8Array, not something that extends it like Buffer
 		return source;
-	} else if (source instanceof ArrayBuffer) {
-		return new Uint8Array(source);
-	} else {
+	} else if (ArrayBuffer.isView(source)) {
 		return new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
+	} else {
+		return new Uint8Array(source);
 	}
 };
 
-export const toDataView = (source: AllowSharedBufferSource) => {
+export const toDataView = (source: AllowSharedBufferSource): DataView => {
 	if (source.constructor === DataView) {
 		return source;
-	} else if (source instanceof ArrayBuffer) {
-		return new DataView(source);
-	} else {
+	} else if (ArrayBuffer.isView(source)) {
 		return new DataView(source.buffer, source.byteOffset, source.byteLength);
+	} else {
+		return new DataView(source);
 	}
 };
 
