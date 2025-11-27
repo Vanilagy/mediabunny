@@ -180,6 +180,8 @@ export class Input<S extends Source = Source> implements Disposable {
 
 		this._source._disposed = true;
 		this._source._dispose();
+
+		// TODO this should dispose cursors probably
 	}
 
 	/**

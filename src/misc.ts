@@ -666,9 +666,15 @@ export const computeRationalApproximation = (x: number, maxDenominator: number) 
 
 export class CallSerializer {
 	currentPromise = Promise.resolve();
+	errored = false;
 
 	call(fn: () => Promise<void> | void) {
-		return this.currentPromise = this.currentPromise.then(fn);
+		return this.currentPromise = this.currentPromise
+			.then(fn)
+			.catch((error) => {
+				this.errored = true;
+				throw error;
+			});
 	}
 }
 
@@ -840,11 +846,143 @@ export class AsyncMutex2 {
 		const { promise, resolve } = promiseWithResolvers();
 		this.promise = promise;
 
+		let released = false;
+
 		return {
-			[Symbol.dispose]: () => {
+			release: () => {
+				if (released) {
+					return;
+				}
+				released = true;
+
 				resolve();
 				this.locked = false;
+			},
+			[Symbol.dispose]() {
+				this.release();
 			},
 		};
 	}
 }
+
+export type AsyncMutexLock = {
+	release: () => void;
+	[Symbol.dispose]: () => void;
+};
+
+export class AsyncMutex3 {
+	locked = false;
+	resolverQueue: (() => void)[] = [];
+
+	lock(): AsyncMutexLock {
+		if (this.locked) {
+			throw new Error('Mutex already locked.');
+		}
+
+		this.locked = true;
+		let released = false;
+
+		return {
+			release: () => {
+				if (released) {
+					return;
+				}
+				released = true;
+
+				this.locked = false;
+
+				if (this.resolverQueue.length > 0) {
+					const resolve = this.resolverQueue.shift()!;
+					resolve();
+				}
+			},
+			[Symbol.dispose]() {
+				this.release();
+			},
+		};
+	}
+
+	request() {
+		if (!this.locked) {
+			return null;
+		}
+
+		const { promise, resolve } = promiseWithResolvers();
+		this.resolverQueue.push(resolve);
+
+		return promise;
+	}
+}
+
+export class CallSerializer2 {
+	private currentPromise: Promise<unknown> | null = null;
+	private queuedCalls = 0;
+
+	call<T>(fn: () => T) {
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		type ReturnType = T extends Promise<any> ? T : T | Promise<T>;
+
+		if (this.currentPromise) {
+			this.queuedCalls++;
+
+			return (this.currentPromise = this.currentPromise
+				.catch(() => {})
+				.then(() => {
+					this.queuedCalls--;
+					return fn();
+				})
+				.finally(() => {
+					if (this.queuedCalls === 0) {
+						this.currentPromise = null;
+					}
+				})) as unknown as ReturnType;
+		} else {
+			const result = fn();
+
+			if (result instanceof Promise) {
+				this.currentPromise = result
+					.finally(() => {
+						if (this.queuedCalls === 0) {
+							this.currentPromise = null;
+						}
+					});
+			}
+
+			return result as unknown as ReturnType;
+		}
+	}
+
+	done() {
+		if (this.currentPromise) {
+			return this.currentPromise
+				.catch(() => {})
+				.then(() => {});
+		} else {
+			return null;
+		}
+	}
+}
+
+export const defer = (callback: () => void) => {
+	let executed = false;
+
+	return {
+		execute() {
+			if (executed) {
+				return;
+			}
+
+			executed = true;
+			callback();
+		},
+		[Symbol.dispose]() {
+			this.execute();
+		},
+	};
+};
+
+export const promiseIterateAll = async function* <T>(iterable: Iterable<T>) {
+	for (const promise of iterable) {
+		yield await promise;
+	}
+};

@@ -67,7 +67,7 @@ export type PacketRetrievalOptions = {
 	verifyKeyPackets?: boolean;
 };
 
-const validatePacketRetrievalOptions = (options: PacketRetrievalOptions) => {
+export const validatePacketRetrievalOptions = (options: PacketRetrievalOptions) => {
 	if (!options || typeof options !== 'object') {
 		throw new TypeError('options must be an object.');
 	}
@@ -82,7 +82,7 @@ const validatePacketRetrievalOptions = (options: PacketRetrievalOptions) => {
 	}
 };
 
-const validateTimestamp = (timestamp: number) => {
+export const validateTimestamp = (timestamp: number) => {
 	if (!isNumber(timestamp)) {
 		throw new TypeError('timestamp must be a number.'); // It can be non-finite, that's fine
 	}
@@ -830,6 +830,7 @@ export class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	customDecoder: CustomVideoDecoder | null = null;
 	customDecoderCallSerializer = new CallSerializer();
 	customDecoderQueueSize = 0;
+	customDecoderClosed = false;
 
 	inputTimestamps: number[] = []; // Timestamps input into the decoder, sorted.
 	sampleQueue: VideoSample[] = []; // Safari-specific thing, check usage.
@@ -849,6 +850,8 @@ export class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	nullAlphaFrameQueue: number[] = [];
 	currentAlphaPacketIndex = 0;
 	alphaRaslSkipped = false; // For HEVC stuff
+
+	onDequeue: (() => unknown) | null = null;
 
 	constructor(
 		onSample: (sample: VideoSample) => unknown,
@@ -918,6 +921,10 @@ export class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 				error: onError,
 			});
 			this.decoder.configure(this.decoderConfig);
+
+			this.decoder.addEventListener('dequeue', () => {
+				this.onDequeue?.();
+			});
 		}
 	}
 
@@ -949,7 +956,10 @@ export class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			this.customDecoderQueueSize++;
 			void this.customDecoderCallSerializer
 				.call(() => this.customDecoder!.decode(packet))
-				.then(() => this.customDecoderQueueSize--);
+				.then(() => {
+					this.customDecoderQueueSize--;
+					this.onDequeue?.();
+				});
 		} else {
 			assert(this.decoder);
 
@@ -1026,6 +1036,10 @@ export class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 				error: this.onError,
 			});
 			this.alphaDecoder.configure(this.decoderConfig);
+
+			this.alphaDecoder.addEventListener('dequeue', () => {
+				this.onDequeue?.();
+			});
 		}
 
 		const type = determineVideoPacketType(this.codec, this.decoderConfig, packet.sideData.alpha);
@@ -1186,11 +1200,19 @@ export class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 
 	close() {
 		if (this.customDecoder) {
-			void this.customDecoderCallSerializer.call(() => this.customDecoder!.close());
+			if (!this.customDecoderClosed) {
+				this.customDecoderClosed = true;
+				void this.customDecoderCallSerializer.call(() => this.customDecoder!.close());
+			}
 		} else {
 			assert(this.decoder);
-			this.decoder.close();
-			this.alphaDecoder?.close();
+
+			if (this.decoder.state !== 'closed') {
+				this.decoder.close();
+			}
+			if (this.alphaDecoder && this.alphaDecoder.state !== 'closed') {
+				this.alphaDecoder.close();
+			}
 
 			this.colorQueue.forEach(x => x.close());
 			this.colorQueue.length = 0;
@@ -1204,6 +1226,19 @@ export class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			sample.close();
 		}
 		this.sampleQueue.length = 0;
+	}
+
+	get closed() {
+		if (this.customDecoder) {
+			if (this.customDecoderClosed) {
+				return true;
+			}
+
+			return !this.customDecoderCallSerializer.errored;
+		} else {
+			assert(this.decoder);
+			return this.decoder.state === 'closed';
+		}
 	}
 }
 

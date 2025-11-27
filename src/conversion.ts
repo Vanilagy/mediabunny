@@ -134,7 +134,8 @@ export type ConversionVideoOptions = {
 	fit?: 'fill' | 'contain' | 'cover';
 	/**
 	 * The angle in degrees to rotate the input video by, clockwise. Rotation is applied before cropping and resizing.
-	 * This rotation is _in addition to_ the natural rotation of the input video as specified in input file's metadata.
+	 * This rotation is _in addition to_ the natural rotation of the input video as specified in the input file's
+	 * metadata.
 	 */
 	rotate?: Rotation;
 	/**
@@ -171,7 +172,7 @@ export type ConversionVideoOptions = {
 	 * frames improve seeking behavior but increase file size. When using multiple video tracks, you should give them
 	 * all the same key frame interval.
 	 *
-	 * Setting this fields forces a transcode.
+	 * Setting this field forces a transcode.
 	 */
 	keyFrameInterval?: number;
 	/** When `true`, video will always be re-encoded instead of directly copying over the encoded samples. */

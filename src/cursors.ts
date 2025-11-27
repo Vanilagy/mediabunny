@@ -2,25 +2,76 @@
 // Useful in packet context? Or only for sample?
 
 import { InputTrack, InputVideoTrack } from './input-track';
-import { PacketRetrievalOptions, VideoDecoderWrapper } from './media-sink';
-import { assert, assertNever, AsyncMutex, AsyncMutex2, insertSorted, last, MaybePromise, promiseWithResolvers, ResultValue, Yo } from './misc';
+import { PacketRetrievalOptions, validatePacketRetrievalOptions, validateTimestamp, VideoDecoderWrapper } from './media-sink';
+import { assert, assertNever, AsyncMutex, AsyncMutex2, AsyncMutex3, AsyncMutexLock, CallSerializer2, defer, insertSorted, last, MaybePromise, promiseWithResolvers, ResultValue, Yo } from './misc';
 import { EncodedPacket } from './packet';
 import { VideoSample } from './sample';
 
-export class PacketCursor {
-	track: InputTrack;
-	_options: PacketRetrievalOptions;
-	current: EncodedPacket | null = null;
-	initialized = false;
+export class PacketReader<T extends InputTrack = InputTrack> {
+	track: T;
 
-	constructor(track: InputTrack, options: PacketRetrievalOptions = {}) {
+	constructor(track: T) {
+		if (!(track instanceof InputTrack)) {
+			throw new TypeError('track must be an InputTrack.');
+		}
 		this.track = track;
-		this._options = options;
 	}
 
-	peekAtStart(): MaybePromise<EncodedPacket | null> {
+	private maybeVerifyPacketType(
+		packet: EncodedPacket | null,
+		options: PacketRetrievalOptions,
+	): MaybePromise<EncodedPacket | null> {
+		if (!options.verifyKeyPackets || !packet || packet.type === 'delta') {
+			return packet;
+		}
+
+		return this.track.determinePacketType(packet).then((determinedType) => {
+			if (determinedType) {
+				// @ts-expect-error Technically readonly
+				packet.type = determinedType;
+			}
+
+			return packet;
+		});
+	}
+
+	readFirst(options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
+		validatePacketRetrievalOptions(options);
+
 		const result = new ResultValue<EncodedPacket | null>();
-		const promise = this.track._backing.getFirstPacket(result, this._options);
+		const promise = this.track._backing.getFirstPacket(result, options);
+
+		if (result.pending) {
+			return (promise as Promise<Yo>).then(() => this.maybeVerifyPacketType(result.value, options));
+		} else {
+			return this.maybeVerifyPacketType(result.value, options);
+		}
+	}
+
+	readAt(timestamp: number, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
+		validateTimestamp(timestamp);
+		validatePacketRetrievalOptions(options);
+
+		const result = new ResultValue<EncodedPacket | null>();
+		const promise = this.track._backing.getPacket(result, timestamp, options);
+
+		if (result.pending) {
+			return (promise as Promise<Yo>).then(() => this.maybeVerifyPacketType(result.value, options));
+		} else {
+			return this.maybeVerifyPacketType(result.value, options);
+		}
+	}
+
+	readKeyAt(timestamp: number, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
+		validateTimestamp(timestamp);
+		validatePacketRetrievalOptions(options);
+
+		if (options.verifyKeyPackets) {
+			return this.readKeyAtVerified(timestamp, options);
+		}
+
+		const result = new ResultValue<EncodedPacket | null>();
+		const promise = this.track._backing.getKeyPacket(result, timestamp, options);
 
 		if (result.pending) {
 			return (promise as Promise<Yo>).then(() => result.value);
@@ -29,169 +80,555 @@ export class PacketCursor {
 		}
 	}
 
-	seekToStart(): MaybePromise<EncodedPacket | null> {
+	private async readKeyAtVerified(
+		timestamp: number,
+		options: PacketRetrievalOptions,
+	): Promise<EncodedPacket | null> {
 		const result = new ResultValue<EncodedPacket | null>();
-		const promise = this.track._backing.getFirstPacket(result, this._options);
+		const promise = this.track._backing.getKeyPacket(result, timestamp, options);
+		if (result.pending) await promise;
+
+		const packet = result.value;
+		if (!packet) {
+			return null;
+		}
+
+		const determinedType = await this.track.determinePacketType(packet);
+		if (determinedType === 'delta') {
+			// Try returning the previous key packet (in hopes that it's actually a key packet)
+			return this.readKeyAtVerified(packet.timestamp - 1 / this.track.timeResolution, options);
+		}
+
+		return packet;
+	}
+
+	readNext(from: EncodedPacket, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
+		if (!(from instanceof EncodedPacket)) {
+			throw new TypeError('from must be an EncodedPacket.');
+		}
+		validatePacketRetrievalOptions(options);
+
+		const result = new ResultValue<EncodedPacket | null>();
+		const promise = this.track._backing.getNextPacket(result, from, options);
 
 		if (result.pending) {
-			return (promise as Promise<Yo>).then(() => {
-				this.initialized = true;
-				return this.current = result.value;
-			});
+			return (promise as Promise<Yo>).then(() => this.maybeVerifyPacketType(result.value, options));
 		} else {
-			this.initialized = true;
-			return this.current = result.value;
+			return this.maybeVerifyPacketType(result.value, options);
 		}
 	}
 
-	peekAt(timestamp: number): MaybePromise<EncodedPacket | null> {
+	readNextKey(from: EncodedPacket, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
+		if (!(from instanceof EncodedPacket)) {
+			throw new TypeError('from must be an EncodedPacket.');
+		}
+		validatePacketRetrievalOptions(options);
+
+		if (options.verifyKeyPackets) {
+			return this.readNextKeyVerified(from, options);
+		}
+
 		const result = new ResultValue<EncodedPacket | null>();
-		const promise = this.track._backing.getPacket(result, timestamp, this._options);
+		const promise = this.track._backing.getNextKeyPacket(result, from, options);
 
 		if (result.pending) {
 			return (promise as Promise<Yo>).then(() => result.value);
 		} else {
 			return result.value;
 		}
+	}
+
+	private async readNextKeyVerified(
+		from: EncodedPacket,
+		options: PacketRetrievalOptions,
+	): Promise<EncodedPacket | null> {
+		const result = new ResultValue<EncodedPacket | null>();
+		const promise = this.track._backing.getNextKeyPacket(result, from, options);
+		if (result.pending) await promise;
+
+		const nextPacket = result.value;
+		if (!nextPacket) {
+			return null;
+		}
+
+		const determinedType = await this.track.determinePacketType(nextPacket);
+		if (determinedType === 'delta') {
+			// Try returning the next key packet (in hopes that it's actually a key packet)
+			return this.readNextKeyVerified(nextPacket, options);
+		}
+
+		return nextPacket;
+	}
+}
+
+export class PacketCursor {
+	reader: PacketReader;
+	options: PacketRetrievalOptions;
+
+	current: EncodedPacket | null = null;
+	nextIsFirst = true;
+	callSerializer = new CallSerializer2();
+
+	constructor(reader: PacketReader, options: PacketRetrievalOptions = {}) {
+		if (!(reader instanceof PacketReader)) {
+			throw new TypeError('reader must be a PacketReader.');
+		}
+		validatePacketRetrievalOptions(options);
+
+		this.reader = reader;
+		this.options = options;
+	}
+
+	private seekToFirstDirect(): MaybePromise<EncodedPacket | null> {
+		const result = this.reader.readFirst(this.options);
+
+		const onPacket = (packet: EncodedPacket | null) => {
+			this.nextIsFirst = false;
+			return this.current = packet;
+		};
+
+		if (result instanceof Promise) {
+			return result.then(onPacket);
+		} else {
+			return onPacket(result);
+		}
+	}
+
+	seekToFirst(): MaybePromise<EncodedPacket | null> {
+		return this.callSerializer.call(() => this.seekToFirstDirect());
 	}
 
 	seekTo(timestamp: number): MaybePromise<EncodedPacket | null> {
-		const result = new ResultValue<EncodedPacket | null>();
-		const promise = this.track._backing.getPacket(result, timestamp, this._options);
+		return this.callSerializer.call(() => {
+			const result = this.reader.readAt(timestamp, this.options);
 
-		if (result.pending) {
-			return (promise as Promise<Yo>).then(() => {
-				this.initialized = true;
-				return this.current = result.value;
-			});
-		} else {
-			this.initialized = true;
-			return this.current = result.value;
-		}
-	}
+			const onPacket = (packet: EncodedPacket | null) => {
+				this.nextIsFirst = !packet;
+				return this.current = packet;
+			};
 
-	peekKeyAt(timestamp: number): MaybePromise<EncodedPacket | null> {
-		const result = new ResultValue<EncodedPacket | null>();
-		const promise = this.track._backing.getKeyPacket(result, timestamp, this._options);
-
-		if (result.pending) {
-			return (promise as Promise<Yo>).then(() => result.value);
-		} else {
-			return result.value;
-		}
+			if (result instanceof Promise) {
+				return result.then(onPacket);
+			} else {
+				return onPacket(result);
+			}
+		});
 	}
 
 	seekToKey(timestamp: number): MaybePromise<EncodedPacket | null> {
-		const result = new ResultValue<EncodedPacket | null>();
-		const promise = this.track._backing.getKeyPacket(result, timestamp, this._options);
+		return this.callSerializer.call(() => {
+			const result = this.reader.readKeyAt(timestamp, this.options);
 
-		if (result.pending) {
-			return (promise as Promise<Yo>).then(() => {
-				this.initialized = true;
-				return this.current = result.value;
-			});
-		} else {
-			this.initialized = true;
-			return this.current = result.value;
-		}
-	}
+			const onPacket = (packet: EncodedPacket | null) => {
+				this.nextIsFirst = !packet;
+				return this.current = packet;
+			};
 
-	_ensureInitialized() {
-		if (!this.initialized) {
-			throw new Error('You must first initialize the cursor to a position by calling any of the seek methods.');
-		}
+			if (result instanceof Promise) {
+				return result.then(onPacket);
+			} else {
+				return onPacket(result);
+			}
+		});
 	}
 
 	next(): MaybePromise<EncodedPacket | null> {
-		this._ensureInitialized();
+		return this.callSerializer.call(() => {
+			if (this.nextIsFirst) {
+				return this.seekToFirstDirect();
+			}
 
-		if (!this.current) {
-			return null;
-		}
+			if (!this.current) {
+				return null;
+			}
 
-		const result = new ResultValue<EncodedPacket | null>();
-		const promise = this.track._backing.getNextPacket(result, this.current, this._options);
+			const result = this.reader.readNext(this.current, this.options);
 
-		if (result.pending) {
-			return (promise as Promise<Yo>).then(() => {
-				return this.current = result.value;
-			});
-		} else {
-			return this.current = result.value;
-		}
-	}
+			const onPacket = (packet: EncodedPacket | null) => {
+				return this.current = packet;
+			};
 
-	peekNextKey(): MaybePromise<EncodedPacket | null> {
-		this._ensureInitialized();
-
-		if (!this.current) {
-			return null;
-		}
-
-		const result = new ResultValue<EncodedPacket | null>();
-		const promise = this.track._backing.getNextKeyPacket(result, this.current, this._options);
-
-		if (result.pending) {
-			return (promise as Promise<Yo>).then(() => result.value);
-		} else {
-			return result.value;
-		}
+			if (result instanceof Promise) {
+				return result.then(onPacket);
+			} else {
+				return onPacket(result);
+			}
+		});
 	}
 
 	nextKey(): MaybePromise<EncodedPacket | null> {
-		this._ensureInitialized();
+		return this.callSerializer.call(() => {
+			if (this.nextIsFirst) {
+				return this.seekToFirstDirect();
+			}
 
-		if (!this.current) {
-			return null;
-		}
+			if (!this.current) {
+				return null;
+			}
 
-		const result = new ResultValue<EncodedPacket | null>();
-		const promise = this.track._backing.getNextKeyPacket(result, this.current, this._options);
+			const result = this.reader.readNextKey(this.current, this.options);
 
-		if (result.pending) {
-			return (promise as Promise<Yo>).then(() => {
-				return this.current = result.value;
-			});
-		} else {
-			return this.current = result.value;
-		}
+			const onPacket = (packet: EncodedPacket | null) => {
+				return this.current = packet;
+			};
+
+			if (result instanceof Promise) {
+				return result.then(onPacket);
+			} else {
+				return onPacket(result);
+			}
+		});
 	}
 
-	async iterate(callback: (packet: EncodedPacket, stop: () => void) => MaybePromise<void>) {
-		this._ensureInitialized();
-
+	async iterate(
+		callback: (packet: EncodedPacket, stop: () => void) => MaybePromise<unknown>,
+	) {
 		let stopped = false;
 		const stop = () => stopped = true;
 
-		while (this.current) {
-			const result = callback(this.current, stop);
-			if (result instanceof Promise) await result;
+		const donePromise = this.callSerializer.done();
+		if (donePromise) await donePromise;
+
+		while (true) {
+			if (this.current) {
+				const result = callback(this.current, stop);
+				if (result instanceof Promise) await result;
+			}
 
 			if (stopped) {
 				break;
 			}
 
-			let next = this.next();
-			if (next instanceof Promise) next = await next;
+			const result = this.next();
+			if (result instanceof Promise) await result;
 
-			this.current = next;
+			if (!this.current) {
+				break;
+			}
 		}
 	}
 
 	// eslint-disable-next-line @stylistic/generator-star-spacing
 	async *[Symbol.asyncIterator]() {
-		this._ensureInitialized();
+		const donePromise = this.callSerializer.done();
+		if (donePromise) await donePromise;
 
-		while (this.current) {
-			yield this.current;
+		while (true) {
+			if (this.current) {
+				yield this.current;
+			}
 
-			let next = this.next();
-			if (next instanceof Promise) next = await next;
+			const result = this.next();
+			if (result instanceof Promise) await result;
 
-			this.current = next;
+			if (!this.current) {
+				break;
+			}
 		}
 	}
+
+	waitUntilIdle() {
+		return this.callSerializer.done();
+	}
 }
+
+/*
+export class PacketCursor {
+	track: InputTrack;
+	current: EncodedPacket | null = null;
+	nextIsFirst = true;
+	callSerializer = new CallSerializer2();
+
+	constructor(track: InputTrack) {
+		if (!(track instanceof InputTrack)) {
+			throw new TypeError('track must be an InputTrack.');
+		}
+
+		this.track = track;
+	}
+
+	peekAtStart(options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
+		validatePacketRetrievalOptions(options);
+
+		const result = new ResultValue<EncodedPacket | null>();
+		const promise = this.track._backing.getFirstPacket(result, options);
+
+		if (result.pending) {
+			return (promise as Promise<Yo>).then(() => result.value);
+		} else {
+			return result.value;
+		}
+	}
+
+	seekToStartDirect(options: PacketRetrievalOptions): MaybePromise<EncodedPacket | null> {
+		const result = new ResultValue<EncodedPacket | null>();
+		const promise = this.track._backing.getFirstPacket(result, options);
+
+		const onPacket = () => {
+			this.nextIsFirst = false;
+			return this.current = result.value;
+		};
+
+		if (result.pending) {
+			return (promise as Promise<Yo>).then(onPacket);
+		} else {
+			return onPacket();
+		}
+	}
+
+	seekToStart(options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
+		validatePacketRetrievalOptions(options);
+
+		return this.callSerializer.call(() => this.seekToStartDirect(options));
+	}
+
+	peekAt(timestamp: number, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
+		validateTimestamp(timestamp);
+		validatePacketRetrievalOptions(options);
+
+		const result = new ResultValue<EncodedPacket | null>();
+		const promise = this.track._backing.getPacket(result, timestamp, options);
+
+		if (result.pending) {
+			return (promise as Promise<Yo>).then(() => result.value);
+		} else {
+			return result.value;
+		}
+	}
+
+	seekTo(timestamp: number, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
+		validateTimestamp(timestamp);
+		validatePacketRetrievalOptions(options);
+
+		return this.callSerializer.call(() => {
+			const result = new ResultValue<EncodedPacket | null>();
+			const promise = this.track._backing.getPacket(result, timestamp, options);
+
+			const onPacket = () => {
+				this.nextIsFirst = !result.value;
+				return this.current = result.value;
+			};
+
+			if (result.pending) {
+				return (promise as Promise<Yo>).then(onPacket);
+			} else {
+				return onPacket();
+			}
+		});
+	}
+
+	peekKeyAt(timestamp: number, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
+		validateTimestamp(timestamp);
+		validatePacketRetrievalOptions(options);
+
+		const result = new ResultValue<EncodedPacket | null>();
+		const promise = this.track._backing.getKeyPacket(result, timestamp, options);
+
+		if (result.pending) {
+			return (promise as Promise<Yo>).then(() => result.value);
+		} else {
+			return result.value;
+		}
+	}
+
+	seekToKey(timestamp: number, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
+		validateTimestamp(timestamp);
+		validatePacketRetrievalOptions(options);
+
+		return this.callSerializer.call(() => {
+			const result = new ResultValue<EncodedPacket | null>();
+			const promise = this.track._backing.getKeyPacket(result, timestamp, options);
+
+			const onPacket = () => {
+				this.nextIsFirst = !result.value;
+				return this.current = result.value;
+			};
+
+			if (result.pending) {
+				return (promise as Promise<Yo>).then(onPacket);
+			} else {
+				return onPacket();
+			}
+		});
+	}
+
+	peekNext(from?: EncodedPacket | null, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
+		if (from != null && !(from instanceof EncodedPacket)) {
+			throw new TypeError('from, when provided, must be an EncodedPacket or null.');
+		}
+		validatePacketRetrievalOptions(options);
+
+		const run = () => {
+			if (from === null) {
+				if (this.nextIsFirst) {
+					return this.peekAtStart();
+				} else {
+					return null;
+				}
+			}
+
+			assert(from);
+
+			const result = new ResultValue<EncodedPacket | null>();
+			const promise = this.track._backing.getNextPacket(result, from, options);
+
+			if (result.pending) {
+				return (promise as Promise<Yo>).then(() => result.value);
+			} else {
+				return result.value;
+			}
+		};
+
+		if (from === undefined) {
+			return this.callSerializer.call(() => {
+				from = this.current;
+				return run();
+			});
+		} else {
+			return run();
+		}
+	}
+
+	next(options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
+		validatePacketRetrievalOptions(options);
+
+		return this.callSerializer.call(() => {
+			if (this.nextIsFirst) {
+				return this.seekToStartDirect(options);
+			}
+
+			if (!this.current) {
+				return null;
+			}
+
+			const result = new ResultValue<EncodedPacket | null>();
+			const promise = this.track._backing.getNextPacket(result, this.current, options);
+
+			const onPacket = () => {
+				return this.current = result.value;
+			};
+
+			if (result.pending) {
+				return (promise as Promise<Yo>).then(onPacket);
+			} else {
+				return onPacket();
+			}
+		});
+	}
+
+	peekNextKey(from?: EncodedPacket | null, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
+		if (from != null && !(from instanceof EncodedPacket)) {
+			throw new TypeError('from, when provided, must be an EncodedPacket or null.');
+		}
+		validatePacketRetrievalOptions(options);
+
+		const run = () => {
+			if (from === null) {
+				if (this.nextIsFirst) {
+					return this.peekAtStart();
+				} else {
+					return null;
+				}
+			}
+
+			assert(from);
+
+			const result = new ResultValue<EncodedPacket | null>();
+			const promise = this.track._backing.getNextKeyPacket(result, from, options);
+
+			if (result.pending) {
+				return (promise as Promise<Yo>).then(() => result.value);
+			} else {
+				return result.value;
+			}
+		};
+
+		if (from === undefined) {
+			return this.callSerializer.call(() => {
+				from = this.current;
+				return run();
+			});
+		} else {
+			return run();
+		}
+	}
+
+	nextKey(options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
+		return this.callSerializer.call(() => {
+			if (this.nextIsFirst) {
+				return this.seekToStartDirect(options);
+			}
+
+			if (!this.current) {
+				return null;
+			}
+
+			const result = new ResultValue<EncodedPacket | null>();
+			const promise = this.track._backing.getNextKeyPacket(result, this.current, options);
+
+			if (result.pending) {
+				return (promise as Promise<Yo>).then(() => {
+					return this.current = result.value;
+				});
+			} else {
+				return this.current = result.value;
+			}
+		});
+	}
+
+	async iterate(
+		callback: (packet: EncodedPacket, stop: () => void) => MaybePromise<unknown>,
+		options: PacketRetrievalOptions = {},
+	) {
+		let stopped = false;
+		const stop = () => stopped = true;
+
+		const donePromise = this.callSerializer.done();
+		if (donePromise) await donePromise;
+
+		while (true) {
+			if (this.current) {
+				const result = callback(this.current, stop);
+				if (result instanceof Promise) await result;
+			}
+
+			if (stopped) {
+				break;
+			}
+
+			const result = this.next();
+			if (result instanceof Promise) await result;
+
+			if (!this.current) {
+				break;
+			}
+		}
+	}
+
+	// eslint-disable-next-line @stylistic/generator-star-spacing
+	async *[Symbol.asyncIterator]() {
+		const donePromise = this.callSerializer.done();
+		if (donePromise) await donePromise;
+
+		while (true) {
+			if (this.current) {
+				yield this.current;
+			}
+
+			const result = this.next();
+			if (result instanceof Promise) await result;
+
+			if (!this.current) {
+				break;
+			}
+		}
+	}
+
+	waitUntilIdle() {
+		return this.callSerializer.done();
+	}
+}
+*/
 
 /*
 for (const timestamp of timestamps) {
@@ -200,50 +637,70 @@ for (const timestamp of timestamps) {
 }
 */
 
-// Problem: Decoding further than is needed. This is not a problem for playback-like operations where it is desired to
-// maintain a buffer of pre-decoded frames. It breaks down when using the cursor for quick, pinpointed seek operations.
-// It would be cool if the cursor could still be used for pinpointed seeks. This provides a unified API for both
-// sequential as well as random access patterns.
-// Idea: By default, queue only the packets that are needed to reach a packet. Then, when encode size reaches zero and
-// the thing has not been yielded yet, give it another group of packets.
-// But that doesn't properly fill the decoder queue when just iterating using next().
-// Idea: Calling next() "unlocks" the decoder, keeping a healthy queue into the future until seek is called? I don't
-// know, feels weird. What I like better is something like, queue until the target packet first, then when the
-// decode queue drops to zero and there are no new requests, queue more packets. This means that in moments of silence,
-// the next samples will be queued. I think this might be better than going off of next(). This is because I can think
-// of use cases that don't need next() but still perform playback-like operations using ONLY seeks.
-// Or: make it configurable? Like some sort of queueLength or maxQueueLength? Then it's controllable but also adds
-// another layer the user has to "know" to do.
+type PendingRequest = {
+	timestamp: number;
+	promise: Promise<VideoSample | null>;
+	resolve: (sample: VideoSample | null) => void;
+	reject: (error: unknown) => void;
+	successor: PendingRequest | null;
+};
 
-export class VideoSampleCursor2 {
-	track: InputVideoTrack;
-	initialized = false;
+type VideoSampleCursorOptions = {
+	autoClose?: boolean;
+};
+
+export class VideoSampleCursor {
+	packetReader: PacketReader<InputVideoTrack>;
 	packetCursor: PacketCursor;
+	options: VideoSampleCursorOptions;
+	autoClose: boolean;
 	pumpRunning = false;
 	decoder: VideoDecoderWrapper;
-	// current: VideoSample | null = null;
+	current: VideoSample | null = null;
 	sampleQueue: VideoSample[] = [];
 	queueDequeue = promiseWithResolvers();
-	pendingRequests: {
-		timestamp: number;
-		resolve: (sample: VideoSample | null) => void;
-	}[] = [];
+	pendingRequests: PendingRequest[] = [];
+	lastPendingRequest: PendingRequest | null = null;
 
-	stopPump = false;
+	predictedRequests = 0;
+	nextIsFirst = true;
+
+	pumpStopQueued = false;
 	pumpStopped = promiseWithResolvers();
 
 	decodedTimestamps: number[] = [];
 	maxDecodedSequenceNumber = -1;
-	pumpTargetSequenceNumber = -1;
-	pumpMutex = new AsyncMutex2();
+	pumpTarget: EncodedPacket | null = null;
+	pumpMutex = new AsyncMutex3();
+	closed = false;
 
-	private constructor(track: InputVideoTrack, decoder: VideoDecoderWrapper) {
-		this.track = track;
+	debugInfo = {
+		enabled: false,
+		pumpsStarted: 0,
+		seekPackets: [] as (EncodedPacket | null)[],
+		decodedPackets: [] as EncodedPacket[],
+		throwInPump: false,
+	};
+
+	private constructor(
+		reader: PacketReader<InputVideoTrack>,
+		decoder: VideoDecoderWrapper,
+		options: VideoSampleCursorOptions,
+	) {
+		this.packetReader = reader;
 		this.decoder = decoder;
-		this.packetCursor = new PacketCursor(track);
+		this.packetCursor = new PacketCursor(reader);
+		this.options = options;
+		this.autoClose = options.autoClose ?? true;
 	}
 
-	static async init(track: InputVideoTrack) {
+	static async init(reader: PacketReader<InputVideoTrack>, options: VideoSampleCursorOptions = {}) {
+		if (!(reader instanceof PacketReader) || !(reader.track instanceof InputVideoTrack)) {
+			throw new TypeError('reader must be a PacketReader for an InputVideoTrack.');
+		}
+
+		const track = reader.track;
+
 		if (!(await track.canDecode())) {
 			throw new Error(
 				'This video track cannot be decoded by this browser. Make sure to check decodability before using'
@@ -261,10 +718,8 @@ export class VideoSampleCursor2 {
 					cursor.decodedTimestamps.shift();
 				}
 
-				console.log('revc', sample.timestamp, cursor.pendingRequests.length);
-
 				if (cursor.pendingRequests.length === 0) {
-					if (cursor.stopPump) {
+					if (cursor.pumpStopQueued) {
 						sample.close();
 					} else {
 						cursor.sampleQueue.push(sample);
@@ -274,10 +729,18 @@ export class VideoSampleCursor2 {
 
 					for (let i = 0; i < cursor.pendingRequests.length; i++) {
 						const request = cursor.pendingRequests[i]!;
-						if (request.timestamp <= sample.timestamp) {
-							request.resolve(given ? sample.clone() : sample);
-							cursor.pendingRequests.splice(i--, 1);
-							given = true;
+						if (request.timestamp > sample.timestamp) {
+							break;
+						}
+
+						request.resolve(sample);
+						cursor.pendingRequests.splice(i--, 1);
+						cursor.setCurrent(sample);
+						given = true;
+
+						if (request.successor) {
+							cursor.pendingRequests.unshift(request.successor);
+							i++;
 						}
 					}
 
@@ -286,13 +749,11 @@ export class VideoSampleCursor2 {
 					}
 				}
 
-				// cursor.current?.close();
-				// cursor.current = sample;
-
 				cursor.queueDequeue.resolve();
 				cursor.queueDequeue = promiseWithResolvers();
 			},
 			(error) => {
+				// TODO THIS TODO THIS TODO THIS TODO THIS
 				console.error(error);
 			},
 			track.codec,
@@ -301,8 +762,21 @@ export class VideoSampleCursor2 {
 			track.timeResolution,
 		);
 
-		const cursor = new VideoSampleCursor2(track, decoder);
+		decoder.onDequeue = () => {
+			cursor.queueDequeue.resolve();
+			cursor.queueDequeue = promiseWithResolvers();
+		};
+
+		const cursor = new VideoSampleCursor(reader, decoder, options);
 		return cursor;
+	}
+
+	setCurrent(newCurrent: VideoSample | null) {
+		if (this.autoClose && this.current && this.current !== newCurrent) {
+			this.current.close();
+		}
+
+		this.current = newCurrent;
 	}
 
 	getNextExpectedTimestamp() {
@@ -311,106 +785,179 @@ export class VideoSampleCursor2 {
 		}
 	}
 
-	async seekTo(timestamp: number): Promise<VideoSample | null> {
-		this.initialized = true; // too late?
+	_ensureNotClosed() {
+		if (this.closed) {
+			throw new Error('This cursor has been closed and can no longer be used.');
+		}
+	}
 
-		console.log('a');
-		while (this.pumpMutex.locked) {
-			console.log('waiting...');
-			await this.pumpMutex.promise;
+	async _seekToPacket(
+		res: ResultValue<VideoSample | null>,
+		targetPacketPromise: MaybePromise<EncodedPacket | null>,
+		lock?: AsyncMutexLock,
+	): Promise<Yo> {
+		this.predictedRequests++;
+
+		if (!lock) {
+			const mutexPromise = this.pumpMutex.request();
+			if (mutexPromise) {
+				await mutexPromise;
+			}
+			lock = this.pumpMutex.lock();
 		}
 
-		console.log('GOIN IN');
+		using deferred = defer(() => {
+			lock?.release();
+			this.predictedRequests--;
+		});
 
-		using _ = this.pumpMutex.lock();
+		const targetPacket = targetPacketPromise instanceof Promise
+			? await targetPacketPromise
+			: targetPacketPromise;
 
-		const targetPacket = await this.packetCursor.peekAt(timestamp);
-		console.log('target');
+		if (this.debugInfo.enabled) {
+			this.debugInfo.seekPackets.push(targetPacket);
+		}
+
+		this.nextIsFirst = !targetPacket;
+
 		if (!targetPacket) {
-			return null;
+			this.setCurrent(null);
+			return res.set(null);
+		}
+
+		if (this.current?.timestamp === targetPacket.timestamp) {
+			return res.set(this.current);
 		}
 
 		let setNewPump = true;
 
-		if (this.sampleQueue.length > 0 && targetPacket.timestamp <= this.sampleQueue[0]!.timestamp) {
-			console.log('This bitch case kicked');
+		if (this.sampleQueue.length > 0 && targetPacket.timestamp < this.sampleQueue[0]!.timestamp) {
+
 		} else {
 			while (this.sampleQueue.length > 0) {
 				const nextSample = this.sampleQueue[0]!;
 				if (targetPacket.timestamp <= nextSample.timestamp) {
-					console.log('used this path');
-					return nextSample;
+					this.setCurrent(nextSample);
+					return res.set(nextSample);
 				}
 
 				this.sampleQueue.shift();
 				this.queueDequeue.resolve();
 				this.queueDequeue = promiseWithResolvers();
+				nextSample.close();
 			}
 
-			if (this.maxDecodedSequenceNumber !== -1) {
-				// This means a packet was queued for decode and the cursor is initialized
+			if (this.pumpTarget) {
+				const max = Math.max(this.pumpTarget.sequenceNumber, this.maxDecodedSequenceNumber);
 
-				if (targetPacket.sequenceNumber <= this.maxDecodedSequenceNumber) {
-					const nextExpectedTimestamp = this.decodedTimestamps[0];
-					if (!nextExpectedTimestamp || nextExpectedTimestamp > timestamp) {
+				if (targetPacket.sequenceNumber <= max) {
+					const nextExpectedTimestamp = this.decodedTimestamps[0] ?? this.packetCursor.current?.timestamp;
+					if (nextExpectedTimestamp === undefined || nextExpectedTimestamp > targetPacket.timestamp) {
 						// yeah
+						// formulate the "no nextExpectedTimestamp" case
 					} else {
 						setNewPump = false;
 					}
 				} else {
-					const key = await this.packetCursor.peekNextKey();
-					if (!key || targetPacket.sequenceNumber < key.sequenceNumber) {
+					if (targetPacket.timestamp - this.pumpTarget.timestamp < 0.1) {
 						setNewPump = false;
+					} else {
+						let key = this.packetReader.readNextKey(this.pumpTarget, { verifyKeyPackets: true });
+						if (key instanceof Promise) key = await key;
+
+						if (
+							!key
+							|| targetPacket.sequenceNumber < key.sequenceNumber
+						) {
+							setNewPump = false;
+						}
 					}
 				}
 			}
 		}
 
+		if (setNewPump && this.pumpRunning) {
+			await this.stopPump();
+		}
+
+		if (!this.pumpTarget || targetPacket.sequenceNumber > this.pumpTarget.sequenceNumber) {
+			this.pumpTarget = targetPacket;
+		}
+
 		if (setNewPump) {
-			console.log('setting up a new PUMP');
+			const result = this.packetCursor.seekToKey(targetPacket.timestamp);
+			if (result instanceof Promise) await result;
 
-			if (this.pumpRunning) {
-				this.stopPump = true;
-				this.queueDequeue.resolve();
-				this.queueDequeue = promiseWithResolvers();
-				await this.pumpStopped.promise;
-
-				for (const sample of this.sampleQueue) {
-					sample.close();
-				}
-				this.sampleQueue.length = 0;
-				this.maxDecodedSequenceNumber = -1;
-				this.decodedTimestamps.length = 0;
-				this.pumpTargetSequenceNumber = -1;
-				this.stopPump = false;
-			}
-
-			await this.packetCursor.seekToKey(timestamp);
 			void this.runPump();
-			await Promise.resolve(); // lol
 		}
 
 		const request = promiseWithResolvers<VideoSample | null>();
-		this.pendingRequests.push({
+		const pendingRequest: PendingRequest = {
 			timestamp: targetPacket.timestamp,
+			promise: request.promise,
 			resolve: request.resolve,
-		});
-		this.pumpTargetSequenceNumber = Math.max(this.pumpTargetSequenceNumber, targetPacket.sequenceNumber);
+			reject: request.reject,
+			successor: null,
+		};
+		this.pendingRequests.push(pendingRequest);
+		this.pendingRequests.sort((a, b) => a.timestamp - b.timestamp);
+		this.lastPendingRequest = pendingRequest;
 
-		console.log('requesting', targetPacket.timestamp);
-		console.log('Done', this.pumpTargetSequenceNumber);
+		this.queueDequeue.resolve();
+		this.queueDequeue = promiseWithResolvers();
 
-		return request.promise;
+		deferred.execute(); // Waiting for the return would be too long
+
+		return res.set(await request.promise);
 	}
 
-	async next() {
-		while (this.pumpMutex.locked) {
-			console.log('waiting next...');
-			await this.pumpMutex.promise;
-		}
+	seekToFirst(): MaybePromise<VideoSample | null> {
+		this._ensureNotClosed();
 
-		if (!this.initialized) {
-			throw new Error('This shud be the indicator the next not being available I think');
+		const result = new ResultValue<VideoSample | null>();
+		const promise = this._seekToPacket(result, this.packetReader.readFirst());
+
+		if (result.pending) {
+			return promise.then(() => result.value);
+		} else {
+			return result.value;
+		}
+	}
+
+	seekTo(timestamp: number): MaybePromise<VideoSample | null> {
+		this._ensureNotClosed();
+
+		const result = new ResultValue<VideoSample | null>();
+		const promise = this._seekToPacket(result, this.packetReader.readAt(timestamp));
+
+		if (result.pending) {
+			return promise.then(() => result.value);
+		} else {
+			return result.value;
+		}
+	}
+
+	seekToKey(timestamp: number): MaybePromise<VideoSample | null> {
+		this._ensureNotClosed();
+
+		const result = new ResultValue<VideoSample | null>();
+		const promise = this._seekToPacket(result, this.packetReader.readKeyAt(timestamp, { verifyKeyPackets: true }));
+
+		if (result.pending) {
+			return promise.then(() => result.value);
+		} else {
+			return result.value;
+		}
+	}
+
+	async _nextInternal(res: ResultValue<VideoSample | null>): Promise<Yo> {
+		const mutexPromise = this.pumpMutex.request();
+		if (mutexPromise) await mutexPromise;
+		using lock = this.pumpMutex.lock();
+
+		if (this.nextIsFirst) {
+			return await this._seekToPacket(res, this.packetReader.readFirst(), lock);
 		}
 
 		if (this.sampleQueue.length > 0) {
@@ -418,236 +965,247 @@ export class VideoSampleCursor2 {
 			this.queueDequeue.resolve();
 			this.queueDequeue = promiseWithResolvers();
 
-			return nextSample;
+			this.setCurrent(nextSample);
+			return res.set(nextSample);
 		}
 
 		if (!this.pumpRunning) {
-			return null; // None more after this, boy
+			this.setCurrent(null);
+			return res.set(null); // None more after this, boy
 		}
+
+		assert(this.lastPendingRequest);
 
 		const request = promiseWithResolvers<VideoSample | null>();
-		this.pendingRequests.push({
-			timestamp: -Infinity, // Matches any sample timestamp, so any next one will match
+		const pendingRequest: PendingRequest = {
+			timestamp: -Infinity,
+			promise: request.promise,
 			resolve: request.resolve,
-		});
+			reject: request.reject,
+			successor: null,
+		};
 
-		return request.promise;
-	}
+		if (this.pendingRequests.length === 0) {
+			this.pendingRequests.push(pendingRequest);
+		} else {
+			this.lastPendingRequest.successor = pendingRequest;
+		}
+		this.lastPendingRequest = pendingRequest;
 
-	async runPump() {
-		assert(this.packetCursor.current);
-
-		this.pumpRunning = true;
-
-		while (
-			this.packetCursor.current
-			&& (!this.stopPump || this.packetCursor.current.sequenceNumber <= this.pumpTargetSequenceNumber)
-		) {
-			const maxQueueSize = 8 ?? computeMaxQueueSize(this.sampleQueue.length); // temp
-			if (!this.stopPump && this.sampleQueue.length + this.decoder.getDecodeQueueSize() > maxQueueSize) {
-				await this.queueDequeue.promise;
-				continue;
-			}
-
-			console.log('DECODING', this.packetCursor.current.timestamp);
-
-			insertSorted(this.decodedTimestamps, this.packetCursor.current.timestamp, x => x);
-			this.maxDecodedSequenceNumber = this.packetCursor.current.sequenceNumber;
-			this.decoder.decode(this.packetCursor.current);
-			await this.packetCursor.next();
+		// Note that the next packet we get here is not necessarily the packet belonging to the next sample, since we
+		// can have out of order timestamps when B-frames are at play. However, if next() is called a sufficiently
+		// large amount of times, then the pump target will stay roughly in sync with the desired next sample.
+		const next = this.pumpTarget && await this.packetReader.readNext(this.pumpTarget, { metadataOnly: true });
+		if (next) {
+			this.pumpTarget = next;
 		}
 
-		console.log('stopping current pump...');
-		await this.decoder.flush();
+		lock.release(); // Waiting for the return would be too long
 
-		this.pumpStopped.resolve();
-		this.pumpStopped = promiseWithResolvers();
-
-		this.pendingRequests.forEach(x => x.resolve(null));
-		this.pendingRequests.length = 0;
-
-		this.pumpRunning = false;
-		console.log('pump stopped/ended');
-	}
-}
-
-async function weJustTesting() {
-	const cursor = new VideoSampleCursor2();
-
-	// Spins up decoder and resolves to the sample
-	await cursor.seekTo(2);
-
-	// This can do multiple things:
-	// - It pops its internal sample queue until it finds a matching frame; in this case, it returns instantly (no promise)
-	// - If that wasn't possible, but the packet that corresponds to the requested sample was already queued for encoding,
-	//   it will wait for the decoder to spit it out and then returns it. I guess this requires a "pending requests" ahh
-	//   structure somewhere.
-	// - If that's also not the case, but the seeked packet is in the current GOP, then it just keeps pumping packets into
-	//   the decoder.
-	// - If the requested packet is outside of the current GOP or "backwards" from the current stream, it resets the
-	//   internal decoder
-	// In any case, there's always a "pump" running that supplies the decoder with new packets to decode. This pump is
-	// halted if the internal queue is sufficiently large, and is resumed when samples are consumed.
-	// This pump is reset if necessary.
-	await cursor.seekTo(2.1);
-}
-
-export class VideoSampleCursor {
-	track: InputVideoTrack;
-	current: EncodedPacket | null = null;
-	initialized = false;
-	packetCursor: PacketCursor;
-	packetCursor2: PacketCursor;
-
-	decoder!: VideoDecoderWrapper;
-
-	constructor(track: InputVideoTrack) {
-		this.track = track;
-		this.packetCursor = new PacketCursor(track, { verifyKeyPackets: true });
-		this.packetCursor2 = new PacketCursor(track, { verifyKeyPackets: true }); // not good
+		return res.set(await request.promise);
 	}
 
-	async init() {
-		if (!(await this.track.canDecode())) {
-			throw new Error(
-				'This video track cannot be decoded by this browser. Make sure to check decodability before using'
-				+ ' a track.',
-			);
+	next(): MaybePromise<VideoSample | null> {
+		this._ensureNotClosed();
+
+		const result = new ResultValue<VideoSample | null>();
+		const promise = this._nextInternal(result);
+
+		if (result.pending) {
+			return promise.then(() => result.value);
+		} else {
+			return result.value;
 		}
-
-		const decoderConfig = await this.track.getDecoderConfig();
-
-		this.decoder = new VideoDecoderWrapper(
-			(sample) => {
-				this.sampleQueue.push(sample);
-			},
-			(error) => {
-				// Un que?
-			},
-			this.track.codec!,
-			decoderConfig!,
-			this.track.rotation,
-			this.track.timeResolution,
-		);
 	}
 
-	pumpFinished = promiseWithResolvers();
-	queueDequeue = promiseWithResolvers();
-	terminatePump = false;
-	pumpRunning = false;
-	sampleQueue: VideoSample[] = [];
+	async iterate(
+		callback: (packet: VideoSample, stop: () => void) => MaybePromise<unknown>,
+	) {
+		let stopped = false;
+		const stop = () => stopped = true;
 
-	async runPump() {
-		this.pumpRunning = true;
+		const waitPromise = this.waitUntilIdle();
+		if (waitPromise) await waitPromise;
 
-		while (this.packetCursor.current && !this.terminatePump) {
-			const maxQueueSize = computeMaxQueueSize(0);
-			if (0 + this.decoder.getDecodeQueueSize() > maxQueueSize) {
-				this.queueDequeue = promiseWithResolvers();
-				await this.queueDequeue.promise;
-				continue;
+		while (true) {
+			if (this.current) {
+				const result = callback(this.current, stop);
+				if (result instanceof Promise) await result;
 			}
 
-			this.decoder.decode(this.packetCursor.current);
+			if (stopped) {
+				break;
+			}
 
-			const result = this.packetCursor.next();
+			const result = this.next();
 			if (result instanceof Promise) await result;
-		}
 
-		await this.decoder.flush();
-		this.pumpFinished.resolve();
-		this.pumpRunning = false;
+			if (!this.current) {
+				break;
+			}
+		}
 	}
 
-	async beginNewRun() {
-		if (this.pumpRunning) {
-			this.terminatePump = true;
-			await this.pumpFinished.promise;
+	// eslint-disable-next-line @stylistic/generator-star-spacing
+	async *[Symbol.asyncIterator]() {
+		const waitPromise = this.waitUntilIdle();
+		if (waitPromise) await waitPromise;
 
+		while (true) {
+			if (this.current) {
+				yield this.current;
+			}
+
+			const result = this.next();
+			if (result instanceof Promise) await result;
+
+			if (!this.current) {
+				break;
+			}
+		}
+	}
+
+	waitUntilIdle() {
+		if (this.pendingRequests.length === 0) {
+			return null;
+		}
+
+		let lastRequest = last(this.pendingRequests)!;
+		while (lastRequest.successor) {
+			lastRequest = lastRequest.successor;
+		}
+
+		return lastRequest.promise
+			.catch(() => {})
+			.then(() => {});
+	}
+
+	closePromise: Promise<void> | null = null;
+
+	close() {
+		return this.closePromise ??= (async () => {
+			this.predictedRequests++;
+
+			const mutexPromise = this.pumpMutex.request();
+			if (mutexPromise) await mutexPromise;
+
+			this.closed = true;
+
+			if (this.pumpRunning) {
+				await this.stopPump();
+			}
+
+			this.setCurrent(null);
+			this.decoder.close();
+		})();
+	}
+
+	async stopPump() {
+		assert(this.pumpRunning);
+
+		this.pumpStopQueued = true;
+		this.queueDequeue.resolve();
+		this.queueDequeue = promiseWithResolvers();
+		await this.pumpStopped.promise;
+	}
+
+	async runPump() {
+		try {
+			assert(this.packetCursor.current);
+			assert(this.pumpTarget);
+
+			this.pumpRunning = true;
+
+			if (this.debugInfo.enabled) {
+				this.debugInfo.pumpsStarted++;
+			}
+
+			while (
+				this.packetCursor.current
+				&& (
+					!this.pumpStopQueued
+					|| this.packetCursor.current.sequenceNumber <= this.pumpTarget.sequenceNumber
+					|| this.pendingRequests.some(x => x.successor || x.timestamp === -Infinity)
+				)
+			) {
+				if (this.debugInfo.enabled && this.debugInfo.throwInPump) {
+					throw new Error('Throwing artificially.');
+				}
+
+				if (
+					this.packetCursor.current.sequenceNumber > this.pumpTarget.sequenceNumber
+					&& this.predictedRequests > 0
+					&& !this.pendingRequests.some(x => x.successor || x.timestamp === -Infinity)
+				) {
+					await this.queueDequeue.promise;
+					continue;
+				}
+
+				const decodeQueueSize = this.decoder.getDecodeQueueSize();
+				if (this.sampleQueue.length + decodeQueueSize >= 4) {
+					await this.queueDequeue.promise;
+					continue;
+				}
+
+				insertSorted(this.decodedTimestamps, this.packetCursor.current.timestamp, x => x);
+				this.maxDecodedSequenceNumber = this.packetCursor.current.sequenceNumber;
+				this.decoder.decode(this.packetCursor.current);
+
+				if (this.debugInfo.enabled) {
+					this.debugInfo.decodedPackets.push(this.packetCursor.current);
+				}
+
+				await this.packetCursor.next();
+			}
+
+			if (this.pendingRequests.length > 0 || !this.closed) {
+				await this.decoder.flush();
+			}
+
+			const uh = (request: PendingRequest) => {
+				request.resolve(null);
+				if (request.successor) {
+					uh(request.successor);
+				}
+			};
+
+			this.pendingRequests.forEach(uh);
+			this.setCurrent(null);
+		} catch (error) {
+			if (!this.decoder.closed) {
+				if (this.pendingRequests.length > 0 || !this.closed) {
+					await this.decoder.flush();
+				}
+			}
+
+			const uh = (request: PendingRequest) => {
+				request.reject(error);
+				if (request.successor) {
+					uh(request.successor);
+				}
+			};
+
+			if (this.pendingRequests.length > 0) {
+				this.pendingRequests.forEach(uh);
+				this.setCurrent(null);
+			} else {
+				throw error; // To make sure it isn't lost
+			}
+		} finally {
 			for (const sample of this.sampleQueue) {
 				sample.close();
 			}
 			this.sampleQueue.length = 0;
+
+			this.pendingRequests.length = 0;
+			this.lastPendingRequest = null;
+			this.pumpStopped.resolve();
+			this.pumpStopped = promiseWithResolvers();
+			this.pumpRunning = false;
+			this.maxDecodedSequenceNumber = -1;
+			this.decodedTimestamps.length = 0;
+			this.pumpTarget = null;
+			this.pumpStopQueued = false;
 		}
-
-		// todo errors
-		void this.runPump();
-	}
-
-	async _seekToCurrentPacket(res: ResultValue<VideoSample | null>): Promise<Yo> {
-		const targetPacket = this.packetCursor.current;
-		assert(targetPacket);
-
-		if (targetPacket.type !== 'key') {
-			await this.packetCursor.seekToKey(targetPacket.timestamp);
-		}
-	}
-
-	/*
-	seekToStart(): MaybePromise<VideoSample | null> {
-		const onPacket = (packet: EncodedPacket | null) => {
-			if (!packet) {
-				return null;
-			}
-
-			const result = new ResultValue<VideoSample | null>();
-			const promise = this._seekToPacket(result, packet);
-
-			if (result.pending) {
-				return promise.then(() => result.value);
-			} else {
-				return result.value;
-			}
-		};
-
-		const packet = this.packetCursor.seekToStart();
-		if (packet instanceof Promise) {
-			return packet.then(onPacket);
-		} else {
-			return onPacket(packet);
-		}
-	}
-	*/
-
-	async seekTo(timestamp: number): Promise<VideoSample | null> {
-		const packet = await this.packetCursor2.seekTo(timestamp);
-		if (!packet) {
-			return null; // I guess?
-		}
-
-		if (this.packetCursor.current) {
-			// if (packet.sequenceNumber)
-		}
-
-		/*
-		const onPacket = (packet: EncodedPacket | null) => {
-			if (!packet) {
-				return null;
-			}
-
-			const result = new ResultValue<VideoSample | null>();
-			const promise = this._seekToPacket(result, packet);
-
-			if (result.pending) {
-				return promise.then(() => result.value);
-			} else {
-				return result.value;
-			}
-		};
-
-		const packet = this.packetCursor.seekTo(timestamp);
-		if (packet instanceof Promise) {
-			return packet.then(onPacket);
-		} else {
-			return onPacket(packet);
-		}
-		*/
 	}
 }
-
-const computeMaxQueueSize = (decodedSampleQueueSize: number) => {
-	// If we have decoded samples lying around, limit the total queue size to a small value (decoded samples can use up
-	// a lot of memory). If not, we're fine with a much bigger queue of encoded packets waiting to be decoded. In fact,
-	// some decoders only start flushing out decoded chunks when the packet queue is large enough.
-	return decodedSampleQueueSize === 0 ? 40 : 8;
-};

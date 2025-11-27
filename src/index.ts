@@ -184,7 +184,7 @@ export {
 } from './media-sink';
 export {
 	PacketCursor,
-	VideoSampleCursor2,
+	VideoSampleCursor,
 } from './cursors';
 export {
 	Conversion,

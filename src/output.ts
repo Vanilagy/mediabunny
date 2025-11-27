@@ -77,7 +77,7 @@ export type BaseTrackMetadata = {
 	/** The track's disposition, i.e. information about its intended usage. */
 	disposition?: Partial<TrackDisposition>;
 	/**
-	 * The maximum amount of encoded packets that will be added to this track. Setting this field provides the muxer
+	 * The maximum number of encoded packets that will be added to this track. Setting this field provides the muxer
 	 * with an additional signal that it can use to preallocate space in the file.
 	 *
 	 * When this field is set, it is an error to provide more packets than whatever this field specifies.

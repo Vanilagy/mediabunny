@@ -54,6 +54,9 @@ export type VideoSampleInit = {
  */
 export class VideoSample implements Disposable {
 	/** @internal */
+	static _openSampleCount = 0;
+
+	/** @internal */
 	_data!: VideoFrame | OffscreenCanvas | Uint8Array | null;
 	/** @internal */
 	_closed: boolean = false;
@@ -105,6 +108,14 @@ export class VideoSample implements Disposable {
 	 */
 	get hasAlpha() {
 		return this.format && this.format.includes('A');
+	}
+
+	/**
+	 * Whether this sample is closed, meaning its underlying data has been discarded. When a sample is closed, most
+	 * operations will fail.
+	 */
+	get closed() {
+		return this._closed;
 	}
 
 	/**
@@ -265,6 +276,8 @@ export class VideoSample implements Disposable {
 		} else {
 			throw new TypeError('Invalid data type: Must be a BufferSource or CanvasImageSource.');
 		}
+
+		VideoSample._openSampleCount++;
 	}
 
 	/** Clones this video sample. */
@@ -320,6 +333,7 @@ export class VideoSample implements Disposable {
 		}
 
 		this._closed = true;
+		VideoSample._openSampleCount--;
 	}
 
 	/** Returns the number of bytes required to hold this video sample's pixel data. */
@@ -886,6 +900,14 @@ export class AudioSample implements Disposable {
 	/** The duration of the sample in microseconds. */
 	get microsecondDuration() {
 		return Math.trunc(SECOND_TO_MICROSECOND_FACTOR * this.duration);
+	}
+
+	/**
+	 * Whether this sample is closed, meaning its underlying data has been discarded. When a sample is closed, most
+	 * operations will fail.
+	 */
+	get closed() {
+		return this._closed;
 	}
 
 	/**

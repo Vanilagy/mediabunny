@@ -23,11 +23,54 @@
 		console.log(await cursor.next());
 		*/
 
+		//console.log(await cursor.seekTo(4.9))
+		//console.log(await cursor.seekTo(5.1))
+		//return;
+
 		const mh = [
-			cursor.seekTo(2.10),
-			cursor.seekTo(5),
+			cursor.seekTo(2.05),
+			//cursor.seekTo(4.9),
+			//cursor.seekTo(4.9),
+			//cursor.seekTo(4.9),
+			//cursor.seekTo(4.9),
+			//cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.close(),
+			//cursor.next(),
+			//cursor.next(),
+			//cursor.next(),
+			//cursor.next(),
+			//cursor.close(),
+			//cursor.seekTo(2.10),
+			//cursor.seekTo(5),
+			//cursor.close(),
 			//cursor.seekTo(2.00),
 		];
+
+		/*
+		for (const yo of mh) {
+			const samp = await yo;
+			console.log(samp)
+			samp?.close();
+		}
+
+		console.log("done")
+		*/
 
 		console.log(await Promise.all(mh));
 
