@@ -17,9 +17,25 @@ import {
 	SetRequired,
 	isFirefox,
 	polyfillSymbolDispose,
+	normalizeRotation,
 } from './misc';
 
 polyfillSymbolDispose();
+
+// Patch the type
+declare global {
+	interface VideoFrame {
+		rotation?: number;
+	}
+
+	interface VideoFrameInit {
+		rotation?: number;
+	}
+
+	interface VideoFrameBufferInit {
+		rotation?: number;
+	}
+}
 
 /**
  * Metadata used for VideoSample initialization.
@@ -179,12 +195,21 @@ export class VideoSample implements Disposable {
 			this._data = data;
 
 			this.format = data.format;
-			// Copying the display dimensions here, assuming no innate VideoFrame rotation
+
+			// Copying the display dimensions here because the way codedWidth and codedHeight are defined is a bit wrong
+			// (they're defined as the pre-rotation dimensions, not the coded dimensions which is a different thing)
 			this.codedWidth = data.displayWidth;
 			this.codedHeight = data.displayHeight;
+
+			const frameRotation = normalizeRotation(data.rotation ?? 0);
+			if (frameRotation % 180 !== 0) {
+				this.codedWidth = data.displayHeight;
+				this.codedHeight = data.displayWidth;
+			}
+
 			// The VideoFrame's rotation is ignored here. It's still a new field, and I'm not sure of any application
 			// where the browser makes use of it. If a case gets found, I'll add it.
-			this.rotation = init?.rotation ?? 0;
+			this.rotation = init?.rotation ?? frameRotation;
 			this.timestamp = init?.timestamp ?? data.timestamp / 1e6;
 			this.duration = init?.duration ?? (data.duration ?? 0) / 1e6;
 			this.colorSpace = data.colorSpace;
@@ -379,24 +404,33 @@ export class VideoSample implements Disposable {
 		assert(this._data !== null);
 
 		if (isVideoFrame(this._data)) {
-			return new VideoFrame(this._data, {
+			const init: VideoFrameInit = {
 				timestamp: this.microsecondTimestamp,
 				duration: this.microsecondDuration || undefined, // Drag 0 duration to undefined, glitches some codecs
-			});
+				// The rotation field here is additive (adds to the existing rotation), but we want it to act like an
+				// override instead, so we need to do some subtraction
+				rotation: this.rotation - (this._data.rotation ?? 0),
+			};
+			return new VideoFrame(this._data, init);
 		} else if (this._data instanceof Uint8Array) {
-			return new VideoFrame(this._data, {
+			const init: VideoFrameBufferInit = {
 				format: this.format!,
 				codedWidth: this.codedWidth,
 				codedHeight: this.codedHeight,
 				timestamp: this.microsecondTimestamp,
 				duration: this.microsecondDuration || undefined,
 				colorSpace: this.colorSpace,
-			});
+				rotation: this.rotation,
+			};
+
+			return new VideoFrame(this._data, init);
 		} else {
-			return new VideoFrame(this._data, {
+			const init: VideoFrameInit = {
 				timestamp: this.microsecondTimestamp,
 				duration: this.microsecondDuration || undefined,
-			});
+				rotation: this.rotation,
+			};
+			return new VideoFrame(this._data, init);
 		}
 	}
 
@@ -523,9 +557,14 @@ export class VideoSample implements Disposable {
 			throw new Error('VideoSample is closed.');
 		}
 
-		({ sx, sy, sWidth, sHeight } = this._rotateSourceRegion(sx, sy, sWidth, sHeight, this.rotation));
-
 		const source = this.toCanvasImageSource();
+
+		// Relative to the innate rotation of the source
+		const relativeRotation = typeof VideoFrame !== 'undefined' && source instanceof VideoFrame
+			? normalizeRotation(this.rotation - (source.rotation ?? 0))
+			: this.rotation;
+
+		({ sx, sy, sWidth, sHeight } = this._rotateSourceRegion(sx, sy, sWidth, sHeight, relativeRotation));
 
 		context.save();
 
@@ -533,9 +572,9 @@ export class VideoSample implements Disposable {
 		const centerY = dy + dHeight / 2;
 
 		context.translate(centerX, centerY);
-		context.rotate(this.rotation * Math.PI / 180);
+		context.rotate(relativeRotation * Math.PI / 180);
 
-		const aspectRatioChange = this.rotation % 180 === 0 ? 1 : dWidth / dHeight;
+		const aspectRatioChange = relativeRotation % 180 === 0 ? 1 : dWidth / dHeight;
 
 		// Scale to compensate for aspect ratio changes when rotated
 		context.scale(1 / aspectRatioChange, aspectRatioChange);
@@ -602,6 +641,13 @@ export class VideoSample implements Disposable {
 		const canvasHeight = context.canvas.height;
 		const rotation = options.rotation ?? this.rotation;
 
+		const source = this.toCanvasImageSource();
+
+		// Relative to the innate rotation of the source
+		const relativeRotation = typeof VideoFrame !== 'undefined' && source instanceof VideoFrame
+			? normalizeRotation(rotation - (source.rotation ?? 0))
+			: rotation;
+
 		const [rotatedWidth, rotatedHeight] = rotation % 180 === 0
 			? [this.codedWidth, this.codedHeight]
 			: [this.codedHeight, this.codedWidth];
@@ -621,7 +667,7 @@ export class VideoSample implements Disposable {
 			options.crop?.top ?? 0,
 			options.crop?.width ?? rotatedWidth,
 			options.crop?.height ?? rotatedHeight,
-			rotation,
+			relativeRotation,
 		);
 
 		if (options.fit === 'fill') {
@@ -645,9 +691,9 @@ export class VideoSample implements Disposable {
 
 		context.save();
 
-		const aspectRatioChange = rotation % 180 === 0 ? 1 : newWidth / newHeight;
+		const aspectRatioChange = relativeRotation % 180 === 0 ? 1 : newWidth / newHeight;
 		context.translate(canvasWidth / 2, canvasHeight / 2);
-		context.rotate(rotation * Math.PI / 180);
+		context.rotate(relativeRotation * Math.PI / 180);
 		// This aspect ratio compensation is done so that we can draw the sample with the intended dimensions and
 		// don't need to think about how those dimensions change after the rotation
 		context.scale(1 / aspectRatioChange, aspectRatioChange);
@@ -655,30 +701,39 @@ export class VideoSample implements Disposable {
 
 		// Important that we don't use .draw() here since that would take rotation into account, but we wanna handle it
 		// ourselves here
-		context.drawImage(this.toCanvasImageSource(), sx, sy, sWidth, sHeight, dx, dy, newWidth, newHeight);
+		context.drawImage(source, sx, sy, sWidth, sHeight, dx, dy, newWidth, newHeight);
 
 		context.restore();
 	}
 
 	/** @internal */
-	_rotateSourceRegion(sx: number, sy: number, sWidth: number, sHeight: number, rotation: number) {
+	_rotateSourceRegion(sx: number, sy: number, sWidth: number, sHeight: number, rotation: Rotation) {
+		let sourceWidth = this.codedWidth;
+		let sourceHeight = this.codedHeight;
+
+		if (typeof VideoFrame !== 'undefined' && this._data instanceof VideoFrame) {
+			// Kinda dirty but has to be done
+			sourceWidth = this._data.displayWidth;
+			sourceHeight = this._data.displayHeight;
+		}
+
 		// The provided sx,sy,sWidth,sHeight refer to the final rotated image, but that's not actually how the image is
 		// stored. Therefore, we must map these back onto the original, pre-rotation image.
 		if (rotation === 90) {
 			[sx, sy, sWidth, sHeight] = [
 				sy,
-				this.codedHeight - sx - sWidth,
+				sourceHeight - sx - sWidth,
 				sHeight,
 				sWidth,
 			];
 		} else if (rotation === 180) {
 			[sx, sy] = [
-				this.codedWidth - sx - sWidth,
-				this.codedHeight - sy - sHeight,
+				sourceWidth - sx - sWidth,
+				sourceHeight - sy - sHeight,
 			];
 		} else if (rotation === 270) {
 			[sx, sy, sWidth, sHeight] = [
-				this.codedWidth - sy - sHeight,
+				sourceWidth - sy - sHeight,
 				sx,
 				sHeight,
 				sWidth,
