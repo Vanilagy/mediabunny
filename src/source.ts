@@ -429,6 +429,10 @@ export class UrlSource extends Source {
 					Range: 'bytes=0-',
 				},
 				signal: abortController.signal,
+				// Bypass browser HTTP cache to avoid issues with partial content caching.
+				// Chrome's cache can fail to revalidate partial entries when CDNs use `vary` headers,
+				// causing range requests to return 200 instead of 206.
+				cache: 'no-store',
 			}),
 			this._getRetryDelay,
 			() => this._disposed,
@@ -497,6 +501,10 @@ export class UrlSource extends Source {
 							Range: `bytes=${worker.currentPos}-`,
 						},
 						signal: abortController.signal,
+						// Bypass browser HTTP cache to avoid issues with partial content caching.
+						// Chrome's cache can fail to revalidate partial entries when CDNs use `vary` headers,
+						// causing range requests to return 200 instead of 206.
+						cache: 'no-store',
 					}),
 					this._getRetryDelay,
 					() => this._disposed,
