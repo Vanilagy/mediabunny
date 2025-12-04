@@ -909,8 +909,8 @@ export type AudioSampleCopyToOptions = {
  */
 export class AudioSample implements Disposable {
 	/** @internal */
-	/** @internal */
 	_data: AudioData | Uint8Array;
+	/** @internal */
 	_closed: boolean = false;
 
 	/**
