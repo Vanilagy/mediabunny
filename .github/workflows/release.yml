@@ -34,6 +34,9 @@ jobs:
           cache: 'npm'
           registry-url: https://registry.npmjs.org
 
+      - name: Update npm
+        run: npm install -g npm@latest
+
       - name: Get package.json version
         id: package-json-version
         run: echo "version=v$(cat package.json | jq '.version' --raw-output)" >> $GITHUB_OUTPUT
