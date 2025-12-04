@@ -5,6 +5,7 @@ on:
     types: [published]
 
 permissions:
+  id-token: write  # Required for OIDC
   contents: read
 
 jobs:
@@ -59,10 +60,6 @@ jobs:
 
       - name: Publish Mediabunny to npm
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish workspace packages to npm
         run: npm publish --provenance --access public --workspaces 
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
