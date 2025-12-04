@@ -590,9 +590,7 @@ export const extractNalUnitTypeForHevc = (data: Uint8Array) => {
 };
 
 /** Builds a HevcDecoderConfigurationRecord from an HEVC packet in Annex B format. */
-export const extractHevcDecoderConfigurationRecord = (
-	packetData: Uint8Array,
-) => {
+export const extractHevcDecoderConfigurationRecord = (packetData: Uint8Array) => {
 	try {
 		const nalUnits = findNalUnitsInAnnexB(packetData);
 
@@ -1456,6 +1454,69 @@ export const extractAv1CodecInfoFromPacket = (
 			}
 		}
 
+		// Frame size
+		const frameWidthBitsMinus1 = bitstream.readBits(4);
+		const frameHeightBitsMinus1 = bitstream.readBits(4);
+		const n1 = frameWidthBitsMinus1 + 1;
+		bitstream.skipBits(n1); // max_frame_width_minus_1
+		const n2 = frameHeightBitsMinus1 + 1;
+		bitstream.skipBits(n2); // max_frame_height_minus_1
+
+		// Frame IDs
+		let frameIdNumbersPresentFlag = 0;
+		if (reducedStillPictureHeader) {
+			frameIdNumbersPresentFlag = 0;
+		} else {
+			frameIdNumbersPresentFlag = bitstream.readBits(1);
+		}
+
+		if (frameIdNumbersPresentFlag) {
+			bitstream.skipBits(4); // delta_frame_id_length_minus_2
+			bitstream.skipBits(3); // additional_frame_id_length_minus_1
+		}
+
+		bitstream.skipBits(1); // use_128x128_superblock
+		bitstream.skipBits(1); // enable_filter_intra
+		bitstream.skipBits(1); // enable_intra_edge_filter
+
+		if (!reducedStillPictureHeader) {
+			bitstream.skipBits(1); // enable_interintra_compound
+			bitstream.skipBits(1); // enable_masked_compound
+			bitstream.skipBits(1); // enable_warped_motion
+			bitstream.skipBits(1); // enable_dual_filter
+			const enableOrderHint = bitstream.readBits(1);
+
+			if (enableOrderHint) {
+				bitstream.skipBits(1); // enable_jnt_comp
+				bitstream.skipBits(1); // enable_ref_frame_mvs
+			}
+
+			const seqChooseScreenContentTools = bitstream.readBits(1);
+			let seqForceScreenContentTools = 0;
+
+			if (seqChooseScreenContentTools) {
+				seqForceScreenContentTools = 2; // SELECT_SCREEN_CONTENT_TOOLS
+			} else {
+				seqForceScreenContentTools = bitstream.readBits(1);
+			}
+
+			if (seqForceScreenContentTools > 0) {
+				const seqChooseIntegerMv = bitstream.readBits(1);
+				if (!seqChooseIntegerMv) {
+					bitstream.skipBits(1); // seq_force_integer_mv
+				}
+			}
+
+			if (enableOrderHint) {
+				bitstream.skipBits(3); // order_hint_bits_minus_1
+			}
+		}
+
+		bitstream.skipBits(1); // enable_superres
+		bitstream.skipBits(1); // enable_cdef
+		bitstream.skipBits(1); // enable_restoration
+
+		// color_config()
 		const highBitdepth = bitstream.readBits(1);
 
 		let bitDepth = 8;

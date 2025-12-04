@@ -1509,7 +1509,10 @@ export class Conversion {
 				targetSampleRate,
 				startTime: this._startTimestamp,
 				endTime: this._endTimestamp,
-				onSample: sample => this._registerAudioSample(track, trackOptions, source, sample),
+				onSample: async (sample) => {
+					await this._registerAudioSample(track, trackOptions, source, sample);
+					sample.close();
+				},
 			});
 
 			const sink = new AudioSampleSink(track);
@@ -1521,6 +1524,7 @@ export class Conversion {
 				}
 
 				await resampler.add(sample);
+				sample.close();
 			}
 
 			await resampler.finalize();
