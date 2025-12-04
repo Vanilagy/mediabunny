@@ -82,10 +82,16 @@ export type ConversionOptions = {
 
 	/** Options to trim the input file. */
 	trim?: {
-		/** The time in the input file in seconds at which the output file should start. Must be less than `end`.  */
-		start: number;
-		/** The time in the input file in seconds at which the output file should end. Must be greater than `start`. */
-		end: number;
+		/**
+		 * The time in the input file in seconds at which the output file should start. Must be less than `end`.
+		 * Defaults to 0 when omitted.
+		 */
+		start?: number;
+		/**
+		 * The time in the input file in seconds at which the output file should end. Must be greater than `start`.
+		 * Defaults to the duration of the input when omitted.
+		 */
+		end?: number;
 	};
 
 	/**
