@@ -2127,11 +2127,14 @@ export class AudioBufferSink {
 
 	/** @internal */
 	_audioSampleToWrappedArrayBuffer(sample: AudioSample): WrappedAudioBuffer {
-		return {
+		const result: WrappedAudioBuffer = {
 			buffer: sample.toAudioBuffer(),
 			timestamp: sample.timestamp,
 			duration: sample.duration,
 		};
+
+		sample.close();
+		return result;
 	}
 
 	/**
