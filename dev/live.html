@@ -1,6 +1,7 @@
 <button>Go</button>
 
 <script src="../dist/bundles/mediabunny.cjs"></script>
+<script src="../packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.js"></script>
 
 <script type="module">
     function download(blob, filename) {
@@ -11,6 +12,8 @@
 		a.click();
 		URL.revokeObjectURL(url);
 	}
+
+	MediabunnyMp3Encoder.registerMp3Encoder();
 
     const button = document.querySelector('button');
     button.addEventListener('click', async () => {
@@ -34,7 +37,7 @@
         }
         if (audioTrack) {
             const source = new Mediabunny.MediaStreamAudioTrackSource(audioTrack, {
-                codec: 'aac',
+                codec: 'mp3',
                 bitrate: Mediabunny.QUALITY_MEDIUM
             });
 

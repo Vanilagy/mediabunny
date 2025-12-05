@@ -22,7 +22,7 @@ class Mp3Encoder extends CustomAudioEncoder {
 
 	private buffer = new Uint8Array(2 ** 16);
 	private currentBufferOffset = 0;
-	private currentTimestamp = 0;
+	private currentTimestamp: number | null = null;
 	private chunkMetadata: EncodedAudioChunkMetadata = {};
 
 	static override supports(codec: AudioCodec, config: AudioDecoderConfig): boolean {
@@ -79,6 +79,11 @@ class Mp3Encoder extends CustomAudioEncoder {
 	}
 
 	async encode(audioSample: AudioSample) {
+		if (this.currentTimestamp === null) {
+			// The first sample's timestamp determines where we start
+			this.currentTimestamp = audioSample.timestamp;
+		}
+
 		const sizePerChannel = audioSample.allocationSize({
 			format: 's16-planar',
 			planeIndex: 0,
@@ -123,6 +128,8 @@ class Mp3Encoder extends CustomAudioEncoder {
 	 * these chunks and extract the MP3 frames only when they're complete.
 	 */
 	private digestOutput(bytes: Uint8Array) {
+		assert(this.currentTimestamp !== null);
+
 		const requiredBufferSize = this.currentBufferOffset + bytes.length;
 		if (requiredBufferSize > this.buffer.length) {
 			// Grow the buffer to the required size

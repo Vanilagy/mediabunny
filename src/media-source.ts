@@ -1356,21 +1356,27 @@ class AudioEncoderWrapper {
 					(audioSample.timestamp + audioSample.duration) * audioSample.sampleRate,
 				);
 
-				if (this.lastEndSampleIndex !== null && startSampleIndex > this.lastEndSampleIndex) {
-					const sampleCount = startSampleIndex - this.lastEndSampleIndex;
-					const fillSample = new AudioSample({
-						data: new Float32Array(sampleCount * audioSample.numberOfChannels),
-						format: 'f32-planar',
-						sampleRate: audioSample.sampleRate,
-						numberOfChannels: audioSample.numberOfChannels,
-						numberOfFrames: sampleCount,
-						timestamp: this.lastEndSampleIndex / audioSample.sampleRate,
-					});
+				if (this.lastEndSampleIndex === null) {
+					this.lastEndSampleIndex = endSampleIndex;
+				} else {
+					const sampleDiff = startSampleIndex - this.lastEndSampleIndex;
 
-					await this.add(fillSample, true); // Recursive call
+					if (sampleDiff >= 64) {
+						// The gap is big enough, let's add a correction sample
+						const fillSample = new AudioSample({
+							data: new Float32Array(sampleDiff * audioSample.numberOfChannels),
+							format: 'f32-planar',
+							sampleRate: audioSample.sampleRate,
+							numberOfChannels: audioSample.numberOfChannels,
+							numberOfFrames: sampleDiff,
+							timestamp: this.lastEndSampleIndex / audioSample.sampleRate,
+						});
+
+						await this.add(fillSample, true); // Recursive call
+					}
+
+					this.lastEndSampleIndex += audioSample.numberOfFrames;
 				}
-
-				this.lastEndSampleIndex = endSampleIndex;
 			}
 
 			if (this.customEncoder) {

@@ -2489,11 +2489,8 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		const timestampInTimescale = this.mapTimestampIntoTimescale(timestamp);
 
 		const sampleTable = this.internalTrack.demuxer.getSampleTableForTrack(this.internalTrack);
-		const sampleIndex = getSampleIndexForTimestamp(sampleTable, timestampInTimescale);
-		const keyFrameSampleIndex = sampleIndex === -1
-			? -1
-			: getRelevantKeyframeIndexForSample(sampleTable, sampleIndex);
-		const regularPacket = await this.fetchPacketForSampleIndex(keyFrameSampleIndex, options);
+		const sampleIndex = getKeyframeSampleIndexForTimestamp(sampleTable, timestampInTimescale);
+		const regularPacket = await this.fetchPacketForSampleIndex(sampleIndex, options);
 
 		if (!sampleTableIsEmpty(sampleTable) || !this.internalTrack.demuxer.isFragmented) {
 			// Prefer the non-fragmented packet
@@ -2913,7 +2910,45 @@ const getSampleIndexForTimestamp = (sampleTable: SampleTable, timescaleUnits: nu
 
 		const entry = sampleTable.sampleTimingEntries[index]!;
 		return entry.startIndex
-			+ Math.min(Math.floor((timescaleUnits - entry.startDecodeTimestamp) / entry.delta), entry.count - 1);
+			+ Math.min(
+				Math.floor((timescaleUnits - entry.startDecodeTimestamp) / entry.delta),
+				entry.count - 1,
+			);
+	}
+};
+
+const getKeyframeSampleIndexForTimestamp = (sampleTable: SampleTable, timescaleUnits: number) => {
+	if (!sampleTable.keySampleIndices) {
+		// Every sample is a keyframe
+		return getSampleIndexForTimestamp(sampleTable, timescaleUnits);
+	}
+
+	if (sampleTable.presentationTimestamps) {
+		const index = binarySearchLessOrEqual(
+			sampleTable.presentationTimestamps,
+			timescaleUnits,
+			x => x.presentationTimestamp,
+		);
+		if (index === -1) {
+			return -1;
+		}
+
+		// Walk the samples in presentation order until we find one that's a keyframe
+		for (let i = index; i >= 0; i--) {
+			const sampleIndex = sampleTable.presentationTimestamps[i]!.sampleIndex;
+			const isKeyFrame = binarySearchExact(sampleTable.keySampleIndices, sampleIndex, x => x) !== -1;
+
+			if (isKeyFrame) {
+				return sampleIndex;
+			}
+		}
+
+		return -1;
+	} else {
+		const sampleIndex = getSampleIndexForTimestamp(sampleTable, timescaleUnits);
+
+		const index = binarySearchLessOrEqual(sampleTable.keySampleIndices, sampleIndex, x => x);
+		return sampleTable.keySampleIndices[index] ?? -1;
 	}
 };
 
@@ -3000,15 +3035,6 @@ const getSampleInfo = (sampleTable: SampleTable, sampleIndex: number): SampleInf
 			? binarySearchExact(sampleTable.keySampleIndices, sampleIndex, x => x) !== -1
 			: true,
 	};
-};
-
-const getRelevantKeyframeIndexForSample = (sampleTable: SampleTable, sampleIndex: number) => {
-	if (!sampleTable.keySampleIndices) {
-		return sampleIndex;
-	}
-
-	const index = binarySearchLessOrEqual(sampleTable.keySampleIndices, sampleIndex, x => x);
-	return sampleTable.keySampleIndices[index] ?? -1;
 };
 
 const getNextKeyframeIndexForSample = (sampleTable: SampleTable, sampleIndex: number) => {
