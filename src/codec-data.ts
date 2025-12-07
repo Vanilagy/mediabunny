@@ -22,6 +22,8 @@ import {
 	textEncoder,
 	toDataView,
 	toUint8Array,
+	getChromiumVersion,
+	isChromium,
 } from './misc';
 import { PacketType } from './packet';
 import { MetadataTags } from './metadata';
@@ -34,6 +36,7 @@ import { MetadataTags } from './metadata';
 
 export enum AvcNalUnitType {
 	IDR = 5,
+	SEI = 6,
 	SPS = 7,
 	PPS = 8,
 	SPS_EXT = 13,
@@ -1714,7 +1717,68 @@ export const determineVideoPacketType = (
 	switch (codec) {
 		case 'avc': {
 			const nalUnits = extractAvcNalUnits(packetData, decoderConfig);
-			const isKeyframe = nalUnits.some(x => extractNalUnitTypeForAvc(x) === AvcNalUnitType.IDR);
+			let isKeyframe = nalUnits.some(x => extractNalUnitTypeForAvc(x) === AvcNalUnitType.IDR);
+
+			if (!isKeyframe && (!isChromium() || getChromiumVersion()! >= 144)) {
+				// In addition to IDR, Recovery Point SEI also counts as a valid H.264 keyframe by current consensus.
+				// See https://github.com/w3c/webcodecs/issues/650 for the relevant discussion. WebKit and Firefox have
+				// always supported them, but Chromium hasn't, therefore the (admittedly dirty) version check.
+
+				for (const nalUnit of nalUnits) {
+					const type = extractNalUnitTypeForAvc(nalUnit);
+					if (type !== AvcNalUnitType.SEI) {
+						continue;
+					}
+
+					const bytes = removeEmulationPreventionBytes(nalUnit);
+					let pos = 1; // Skip NALU header
+
+					// sei_rbsp()
+					do {
+						// sei_message()
+						let payloadType = 0;
+						while (true) {
+							const nextByte = bytes[pos++];
+							if (nextByte === undefined) break;
+							payloadType += nextByte;
+
+							if (nextByte < 255) {
+								break;
+							}
+						}
+
+						let payloadSize = 0;
+						while (true) {
+							const nextByte = bytes[pos++];
+							if (nextByte === undefined) break;
+							payloadSize += nextByte;
+
+							if (nextByte < 255) {
+								break;
+							}
+						}
+
+						// sei_payload()
+						const PAYLOAD_TYPE_RECOVERY_POINT = 6;
+						if (payloadType === PAYLOAD_TYPE_RECOVERY_POINT) {
+							const bitstream = new Bitstream(bytes);
+							bitstream.pos = 8 * pos;
+
+							const recoveryFrameCount = readExpGolomb(bitstream);
+							const exactMatchFlag = bitstream.readBits(1);
+
+							if (recoveryFrameCount === 0 && exactMatchFlag === 1) {
+								// https://github.com/w3c/webcodecs/pull/910
+								// "recovery_frame_cnt == 0 and exact_match_flag=1 in the SEI recovery payload"
+								isKeyframe = true;
+								break;
+							}
+						}
+
+						pos += payloadSize;
+					} while (pos < bytes.length - 1);
+				}
+			}
 
 			return isKeyframe ? 'key' : 'delta';
 		};

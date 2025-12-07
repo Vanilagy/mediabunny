@@ -700,6 +700,24 @@ export const isChromium = () => {
 	return isChromiumCache = !!(typeof navigator !== 'undefined' && navigator.vendor?.includes('Google Inc'));
 };
 
+let chromiumVersionCache: number | null = null;
+export const getChromiumVersion = () => {
+	if (chromiumVersionCache !== null) {
+		return chromiumVersionCache;
+	}
+
+	if (typeof navigator === 'undefined') {
+		return null;
+	}
+
+	const match = /\bChrome\/(\d+)/.exec(navigator.userAgent);
+	if (!match) {
+		return null;
+	}
+
+	return chromiumVersionCache = Number(match[1]!);
+};
+
 /**
  * T or a promise that resolves to T.
  * @group Miscellaneous
