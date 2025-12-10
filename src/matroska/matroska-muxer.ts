@@ -82,6 +82,7 @@ type InternalMediaChunk = {
 type MatroskaTrackData = {
 	chunkQueue: InternalMediaChunk[];
 	lastWrittenMsTimestamp: number | null;
+	codecPrivate: AllowSharedBufferSource | null;
 } & ({
 	track: OutputVideoTrack;
 	type: 'video';
@@ -325,6 +326,9 @@ export class MatroskaMuxer extends Muxer {
 				{ id: EBMLId.FlagLacing, data: 0 },
 				{ id: EBMLId.Language, data: trackData.track.metadata.languageCode ?? UNDETERMINED_LANGUAGE },
 				{ id: EBMLId.CodecID, data: codecId },
+				trackData.codecPrivate
+					? { id: EBMLId.CodecPrivate, data: toUint8Array(trackData.codecPrivate) }
+					: null,
 				{ id: EBMLId.CodecDelay, data: 0 },
 				{ id: EBMLId.SeekPreRoll, data: seekPreRollNs },
 				trackData.track.metadata.name !== undefined
@@ -341,12 +345,6 @@ export class MatroskaMuxer extends Muxer {
 		const { frameRate, rotation } = trackData.track.metadata;
 
 		const elements: EBMLElement['data'] = [
-			(trackData.info.decoderConfig.description
-				? {
-						id: EBMLId.CodecPrivate,
-						data: toUint8Array(trackData.info.decoderConfig.description),
-					}
-				: null),
 			(frameRate
 				? {
 						id: EBMLId.DefaultDuration,
@@ -414,12 +412,6 @@ export class MatroskaMuxer extends Muxer {
 			: null;
 
 		return [
-			(trackData.info.decoderConfig.description
-				? {
-						id: EBMLId.CodecPrivate,
-						data: toUint8Array(trackData.info.decoderConfig.description),
-					}
-				: null),
 			{ id: EBMLId.Audio, data: [
 				{ id: EBMLId.SamplingFrequency, data: new EBMLFloat32(trackData.info.sampleRate) },
 				{ id: EBMLId.Channels, data: trackData.info.numberOfChannels },
@@ -428,10 +420,9 @@ export class MatroskaMuxer extends Muxer {
 		];
 	}
 
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	private subtitleSpecificTrackInfo(trackData: MatroskaSubtitleTrackData) {
-		return [
-			{ id: EBMLId.CodecPrivate, data: textEncoder.encode(trackData.info.config.description) },
-		];
+		return [];
 	}
 
 	private maybeCreateTags() {
@@ -739,27 +730,28 @@ export class MatroskaMuxer extends Muxer {
 			},
 			chunkQueue: [],
 			lastWrittenMsTimestamp: null,
+			codecPrivate: meta.decoderConfig.description ?? null,
 		};
 
 		if (track.source._codec === 'vp9') {
 			// https://www.webmproject.org/docs/container specifies that VP9 "SHOULD" make use of the CodecPrivate
 			// field. Since WebCodecs makes no use of the description field for VP9, we need to derive it ourselves:
-			newTrackData.info.decoderConfig = {
-				...newTrackData.info.decoderConfig,
-				description: new Uint8Array(
-					generateVp9CodecConfigurationFromCodecString(newTrackData.info.decoderConfig.codec),
-				),
-			};
+			newTrackData.codecPrivate = new Uint8Array(
+				generateVp9CodecConfigurationFromCodecString(newTrackData.info.decoderConfig.codec),
+			);
 		} else if (track.source._codec === 'av1') {
 			// Per https://github.com/ietf-wg-cellar/matroska-specification/blob/master/codec/av1.md, AV1 requires
 			// CodecPrivate to be set, but WebCodecs makes no use of the description field for AV1. Thus, let's derive
 			// it ourselves:
-			newTrackData.info.decoderConfig = {
-				...newTrackData.info.decoderConfig,
-				description: new Uint8Array(
-					generateAv1CodecConfigurationFromCodecString(newTrackData.info.decoderConfig.codec),
-				),
-			};
+			newTrackData.codecPrivate = new Uint8Array(
+				generateAv1CodecConfigurationFromCodecString(newTrackData.info.decoderConfig.codec),
+			);
+		} else if (track.source._codec === 'prores') {
+			const format = meta.decoderConfig.codec.split('.')[1];
+			assert(format);
+
+			// "The Private Data contains the FourCC as found in MP4 movies"
+			newTrackData.codecPrivate = textEncoder.encode(format);
 		}
 
 		this.trackDatas.push(newTrackData);
@@ -793,6 +785,7 @@ export class MatroskaMuxer extends Muxer {
 			},
 			chunkQueue: [],
 			lastWrittenMsTimestamp: null,
+			codecPrivate: meta.decoderConfig.description ?? null,
 		};
 
 		this.trackDatas.push(newTrackData);
@@ -824,6 +817,7 @@ export class MatroskaMuxer extends Muxer {
 			},
 			chunkQueue: [],
 			lastWrittenMsTimestamp: null,
+			codecPrivate: textEncoder.encode(meta.config.description),
 		};
 
 		this.trackDatas.push(newTrackData);

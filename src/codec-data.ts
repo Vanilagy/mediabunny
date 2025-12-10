@@ -1856,6 +1856,10 @@ export const determineVideoPacketType = (
 			return null;
 		};
 
+		case 'prores': {
+			return 'key';
+		};
+
 		default: {
 			assertNever(codec);
 			assert(false);

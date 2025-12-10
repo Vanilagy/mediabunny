@@ -701,6 +701,7 @@ export const CODEC_STRING_MAP: Partial<Record<MediaCodec, string>> = {
 	'vp8': 'V_VP8',
 	'vp9': 'V_VP9',
 	'av1': 'V_AV1',
+	'prores': 'V_PRORES',
 
 	'aac': 'A_AAC',
 	'mp3': 'A_MPEG/L3',

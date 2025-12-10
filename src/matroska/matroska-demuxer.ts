@@ -44,6 +44,7 @@ import {
 	normalizeRotation,
 	Rotation,
 	roundIfAlmostInteger,
+	textDecoder,
 	TRANSFER_CHARACTERISTICS_MAP_INVERSE,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
@@ -1042,6 +1043,8 @@ export class MatroskaDemuxer extends Demuxer {
 							this.currentTrack.info.codec = 'vp9';
 						} else if (codecIdWithoutSuffix === CODEC_STRING_MAP.av1) {
 							this.currentTrack.info.codec = 'av1';
+						} else if (codecIdWithoutSuffix === CODEC_STRING_MAP.prores) {
+							this.currentTrack.info.codec = 'prores';
 						}
 
 						const videoTrack = this.currentTrack as InternalVideoTrack;
@@ -2355,6 +2358,9 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 						: null,
 					av1CodecInfo: this.internalTrack.info.codec === 'av1' && firstPacket
 						? extractAv1CodecInfoFromPacket(firstPacket.data)
+						: null,
+					proresFormat: this.internalTrack.info.codec === 'prores' && this.internalTrack.codecPrivate
+						? textDecoder.decode(this.internalTrack.codecPrivate)
 						: null,
 				}),
 				codedWidth: this.internalTrack.info.width,

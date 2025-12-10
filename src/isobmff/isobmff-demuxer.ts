@@ -17,6 +17,7 @@ import {
 	parsePcmCodec,
 	PCM_AUDIO_CODECS,
 	PcmAudioCodec,
+	PRORES_FOURCCS,
 	VideoCodec,
 } from '../codec';
 import {
@@ -132,6 +133,7 @@ type InternalTrack = {
 		hevcCodecInfo: HevcDecoderConfigurationRecord | null;
 		vp9CodecInfo: Vp9CodecInfo | null;
 		av1CodecInfo: Av1CodecInfo | null;
+		proresFormat: string | null;
 	};
 } | {
 	info: {
@@ -849,6 +851,7 @@ export class IsobmffDemuxer extends Demuxer {
 						hevcCodecInfo: null,
 						vp9CodecInfo: null,
 						av1CodecInfo: null,
+						proresFormat: null,
 					};
 				} else if (handlerType === 'soun') {
 					track.info = {
@@ -910,6 +913,9 @@ export class IsobmffDemuxer extends Demuxer {
 							track.info.codec = 'vp9';
 						} else if (lowercaseBoxName === 'av01') {
 							track.info.codec = 'av1';
+						} else if (PRORES_FOURCCS.includes(lowercaseBoxName)) {
+							track.info.codec = 'prores';
+							track.info.proresFormat = lowercaseBoxName;
 						} else {
 							console.warn(`Unsupported video codec (sample entry type '${sampleBoxInfo.name}').`);
 						}
