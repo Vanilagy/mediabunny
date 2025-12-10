@@ -19,6 +19,7 @@ import {
 	extractVideoCodecString,
 	MediaCodec,
 	OPUS_SAMPLE_RATE,
+	PRORES_FOURCCS,
 	VideoCodec,
 } from '../codec';
 import { Demuxer } from '../demuxer';
@@ -1044,7 +1045,15 @@ export class MatroskaDemuxer extends Demuxer {
 						} else if (codecIdWithoutSuffix === CODEC_STRING_MAP.av1) {
 							this.currentTrack.info.codec = 'av1';
 						} else if (codecIdWithoutSuffix === CODEC_STRING_MAP.prores) {
-							this.currentTrack.info.codec = 'prores';
+							const format = this.currentTrack.codecPrivate
+								? textDecoder.decode(this.currentTrack.codecPrivate)
+								: '';
+
+							if (PRORES_FOURCCS.includes(format)) {
+								this.currentTrack.info.codec = 'prores';
+							} else {
+								// We don't support ProRes RAW yet
+							}
 						}
 
 						const videoTrack = this.currentTrack as InternalVideoTrack;

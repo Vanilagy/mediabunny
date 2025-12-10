@@ -9,7 +9,7 @@ import { Conversion } from '../../src/conversion.js';
 
 test.concurrent('ProRes MOV file reading', async () => {
 	using input = new Input({
-		source: new UrlSource('https://pub-cf9fcfcb5c0a44e9b1bb5ff890e041ae.r2.dev/IMG_0158-prores-raw.MOV'),
+		source: new UrlSource('https://pub-cf9fcfcb5c0a44e9b1bb5ff890e041ae.r2.dev/IMG_0158-prores-log.MOV'),
 		formats: ALL_FORMATS,
 	});
 
@@ -19,13 +19,13 @@ test.concurrent('ProRes MOV file reading', async () => {
 	expect(videoTrack.codedHeight).toBe(1080);
 
 	const decoderConfig = (await videoTrack.getDecoderConfig())!;
-	expect(decoderConfig.codec).toBe('apr1.apch');
+	expect(decoderConfig.codec).toBe('apch');
 	expect(decoderConfig.description).toBeUndefined();
 });
 
-test.concurrent('ProRes transcoding into MOV', { timeout: 60_000 }, async () => {
+test.concurrent('ProRes transmuxing into MOV', { timeout: 60_000 }, async () => {
 	using input = new Input({
-		source: new UrlSource('https://pub-cf9fcfcb5c0a44e9b1bb5ff890e041ae.r2.dev/IMG_0158-prores-raw.MOV'),
+		source: new UrlSource('https://pub-cf9fcfcb5c0a44e9b1bb5ff890e041ae.r2.dev/IMG_0158-prores-log.MOV'),
 		formats: ALL_FORMATS,
 	});
 
@@ -56,13 +56,13 @@ test.concurrent('ProRes transcoding into MOV', { timeout: 60_000 }, async () => 
 	expect((await videoTrack.computePacketStats()).packetCount).toBe(15);
 
 	const decoderConfig = (await videoTrack.getDecoderConfig())!;
-	expect(decoderConfig.codec).toBe('apr1.apch');
+	expect(decoderConfig.codec).toBe('apch');
 	expect(decoderConfig.description).toBeUndefined();
 });
 
-test.concurrent('ProRes transcoding into MKV', { timeout: 60_000 }, async () => {
+test.concurrent('ProRes transmuxing into MKV', { timeout: 60_000 }, async () => {
 	using input = new Input({
-		source: new UrlSource('https://pub-cf9fcfcb5c0a44e9b1bb5ff890e041ae.r2.dev/IMG_0158-prores-raw.MOV'),
+		source: new UrlSource('https://pub-cf9fcfcb5c0a44e9b1bb5ff890e041ae.r2.dev/IMG_0158-prores-log.MOV'),
 		formats: ALL_FORMATS,
 	});
 
@@ -96,6 +96,6 @@ test.concurrent('ProRes transcoding into MKV', { timeout: 60_000 }, async () => 
 	expect((await videoTrack.computePacketStats()).packetCount).toBe(15);
 
 	const decoderConfig = (await videoTrack.getDecoderConfig())!;
-	expect(decoderConfig.codec).toBe('apr1.apch');
+	expect(decoderConfig.codec).toBe('apch');
 	expect(decoderConfig.description).toBeUndefined();
 });

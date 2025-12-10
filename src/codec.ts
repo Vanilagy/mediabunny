@@ -215,14 +215,12 @@ const VP9_DEFAULT_SUFFIX = '.01.01.01.01.00';
 const AV1_DEFAULT_SUFFIX = '.0.110.01.01.01.0';
 
 export const PRORES_FOURCCS = [
-	'ap4x',
-	'ap4h',
-	'apch',
-	'apcn',
-	'apcs',
-	'apco',
-	'aprh',
-	'aprn',
+	'ap4x', // ProRes 4444 XQ
+	'ap4h', // ProRes 4444
+	'apch', // ProRes 422 High Quality
+	'apcn', // ProRes 422 Standard Definition
+	'apcs', // ProRes 422 LT
+	'apco', // ProRes 422 Proxy
 ];
 
 export const buildVideoCodecString = (codec: VideoCodec, width: number, height: number, bitrate: number) => {
@@ -285,7 +283,7 @@ export const buildVideoCodecString = (codec: VideoCodec, width: number, height: 
 
 		return `av01.${profile}.${level}${levelInfo.tier}.${bitDepth}`;
 	} else if (codec === 'prores') {
-		return 'apr1.apch';
+		return 'apch';
 	} else {
 		assertNever(codec);
 	}
@@ -528,7 +526,7 @@ export const extractVideoCodecString = (trackInfo: {
 
 		return string;
 	} else if (codec === 'prores') {
-		return `apr1.${proresFormat ?? 'apch'}`;
+		return proresFormat ?? 'apch';
 	} else if (codec !== null) {
 		assertNever(codec);
 	}
@@ -816,7 +814,7 @@ export const getAudioEncoderConfigExtension = (codec: AudioCodec) => {
 	return {};
 };
 
-const VALID_VIDEO_CODEC_STRING_PREFIXES = ['avc1', 'avc3', 'hev1', 'hvc1', 'vp8', 'vp09', 'av01', 'apr1'];
+const VALID_VIDEO_CODEC_STRING_PREFIXES = ['avc1', 'avc3', 'hev1', 'hvc1', 'vp8', 'vp09', 'av01', ...PRORES_FOURCCS];
 const AVC_CODEC_STRING_REGEX = /^(avc1|avc3)\.[0-9a-fA-F]{6}$/;
 const HEVC_CODEC_STRING_REGEX = /^(hev1|hvc1)\.(?:[ABC]?\d+)\.[0-9a-fA-F]{1,8}\.[LH]\d+(?:\.[0-9a-fA-F]{1,2}){0,6}$/;
 const VP9_CODEC_STRING_REGEX = /^vp09(?:\.\d{2}){3}(?:(?:\.\d{2}){5})?$/;
@@ -952,14 +950,13 @@ export const validateVideoChunkMetadata = (metadata: EncodedVideoChunkMetadata |
 				+ ' specified in Section "Codecs Parameter String" of https://aomediacodec.github.io/av1-isobmff/.',
 			);
 		}
-	} else if (metadata.decoderConfig.codec.startsWith('apr1')) {
+	} else if (PRORES_FOURCCS.some(x => metadata.decoderConfig!.codec.startsWith(x))) {
 		// ProRes-specific validation
 
-		const parts = metadata.decoderConfig.codec.split('.');
-		if (parts.length !== 2 || parts[0] !== 'apr1' || !PRORES_FOURCCS.includes(parts[1]!)) {
+		if (!PRORES_FOURCCS.some(x => metadata.decoderConfig!.codec === x)) {
 			throw new TypeError(
-				'Video chunk metadata decoder configuration codec string for ProRes must be a valid ProRes codec'
-				+ ' string as specified in the Mediabunny Codec Registry.',
+				'Video chunk metadata decoder configuration codec string for ProRes must be one of the valid ProRes'
+				+ ` four-character codes: ${PRORES_FOURCCS.join(', ')}.`,
 			);
 		}
 	}

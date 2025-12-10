@@ -747,11 +747,8 @@ export class MatroskaMuxer extends Muxer {
 				generateAv1CodecConfigurationFromCodecString(newTrackData.info.decoderConfig.codec),
 			);
 		} else if (track.source._codec === 'prores') {
-			const format = meta.decoderConfig.codec.split('.')[1];
-			assert(format);
-
 			// "The Private Data contains the FourCC as found in MP4 movies"
-			newTrackData.codecPrivate = textEncoder.encode(format);
+			newTrackData.codecPrivate = textEncoder.encode(meta.decoderConfig.codec);
 		}
 
 		this.trackDatas.push(newTrackData);

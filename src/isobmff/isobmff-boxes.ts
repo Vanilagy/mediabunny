@@ -1584,7 +1584,7 @@ const videoCodecToBoxName = (codec: VideoCodec, fullCodecString: string) => {
 		case 'vp8': return 'vp08';
 		case 'vp9': return 'vp09';
 		case 'av1': return 'av01';
-		case 'prores': return fullCodecString.split('.')[1]!;
+		case 'prores': return fullCodecString;
 	}
 };
 
