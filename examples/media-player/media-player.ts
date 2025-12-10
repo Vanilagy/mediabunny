@@ -460,7 +460,8 @@ progressBarContainer.addEventListener('pointermove', (event) => {
 	if (draggingProgressBar) {
 		const rect = progressBarContainer.getBoundingClientRect();
 		const completion = Math.max(Math.min((event.clientX - rect.left) / rect.width, 1), 0);
-		updateProgressBarTime(completion * totalDuration);
+		const newTime = completion * totalDuration;
+		void seekToTime(newTime);
 	}
 });
 
