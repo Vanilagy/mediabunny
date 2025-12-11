@@ -120,6 +120,7 @@ type ConversionVideoOptions = {
 	height?: number;
 	fit?: 'fill' | 'contain' | 'cover';
 	rotate?: 0 | 90 | 180 | 270;
+	allowRotationMetadata?: boolean;
 	crop?: { left: number; top: number; width: number; height: number };
 	frameRate?: number;
 	codec?: VideoCodec;
@@ -174,6 +175,8 @@ In the rare case that the input video changes size over time, the `fit` field ca
 ### Rotating video
 
 `rotation` rotates the video by the specified number of degrees clockwise. This rotation is applied on top of any rotation metadata in the original input file and happens before cropping and resizing.
+
+By default, Mediabunny will try to make use of rotation metadata in the output file to perform the rotation whenever possible. However, if you don't want this to happen, or you want to use Mediabunny to strip all rotation metadata from a file, you can set `allowRotationMetadata` to `false`.
 
 ### Cropping video
 
