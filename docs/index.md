@@ -124,6 +124,7 @@ const sponsors = {
 		{ image: 'https://avatars.githubusercontent.com/u/97225946', name: '808vita', url: 'https://github.com/808vita' },
 		{ image: 'https://avatars.githubusercontent.com/u/3709646', name: 'Rodrigo Belfiore', url: 'https://github.com/roprgm' },
 		{ image: 'https://avatars.githubusercontent.com/u/31102694', name: 'Aiden Liu', url: 'https://github.com/aidenlx' },
+		{ image: 'https://avatars.githubusercontent.com/u/41021374', name: 'arthco', url: 'https://github.com/arthtyagi' },
 	],
 };
 </script>
