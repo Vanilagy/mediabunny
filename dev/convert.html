@@ -100,9 +100,10 @@
 			},
 			*/
 			video: () => ({
-				width: 720,
-				frameRate: 30,
-				bitrate: Mediabunny.QUALITY_VERY_LOW,
+				allowRotationMetadata: false,
+				//width: 720,
+				//frameRate: 30,
+				//bitrate: Mediabunny.QUALITY_VERY_LOW,
 				//discard: true,
 				/*
 				process: (sample) => {
@@ -180,7 +181,7 @@
 			},
 			trim: {
 				start: 0,
-				end: 20
+				end: 4
 			},
 		});
 		console.log(conversion);
