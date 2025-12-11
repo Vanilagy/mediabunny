@@ -1890,38 +1890,49 @@ export class MediaStreamAudioTrackSource extends AudioSource {
 
 		this._abortController = new AbortController();
 
+		let firstAudioDataTimestamp: number | null = null;
+		let errored = false;
+
+		const onAudioSample = (audioSample: AudioSample) => {
+			if (errored) {
+				audioSample.close();
+				return;
+			}
+
+			if (firstAudioDataTimestamp === null) {
+				firstAudioDataTimestamp = audioSample.timestamp;
+
+				const muxer = this._connectedTrack!.output._muxer;
+				if (muxer.firstMediaStreamTimestamp === null) {
+					muxer.firstMediaStreamTimestamp = performance.now() / 1000;
+					this._timestampOffset = -firstAudioDataTimestamp;
+				} else {
+					this._timestampOffset = (performance.now() / 1000 - muxer.firstMediaStreamTimestamp)
+						- firstAudioDataTimestamp;
+				}
+			}
+
+			if (this._encoder.getQueueSize() >= 4) {
+				// Drop data if the encoder is overloaded
+				audioSample.close();
+				return;
+			}
+
+			void this._encoder.add(audioSample, true)
+				.catch((error) => {
+					errored = true;
+
+					this._abortController?.abort();
+					this._promiseWithResolvers.reject(error);
+					void this._audioContext?.suspend();
+				});
+		};
+
 		if (typeof MediaStreamTrackProcessor !== 'undefined') {
 			// Great, MediaStreamTrackProcessor is supported, this is the preferred way of doing things
-			let firstAudioDataTimestamp: number | null = null;
-
 			const processor = new MediaStreamTrackProcessor({ track: this._track });
 			const consumer = new WritableStream<AudioData>({
-				write: (audioData) => {
-					if (firstAudioDataTimestamp === null) {
-						firstAudioDataTimestamp = audioData.timestamp / 1e6;
-
-						const muxer = this._connectedTrack!.output._muxer;
-						if (muxer.firstMediaStreamTimestamp === null) {
-							muxer.firstMediaStreamTimestamp = performance.now() / 1000;
-							this._timestampOffset = -firstAudioDataTimestamp;
-						} else {
-							this._timestampOffset = (performance.now() / 1000 - muxer.firstMediaStreamTimestamp)
-								- firstAudioDataTimestamp;
-						}
-					}
-
-					if (this._encoder.getQueueSize() >= 4) {
-						// Drop data if the encoder is overloaded
-						audioData.close();
-						return;
-					}
-
-					void this._encoder.add(new AudioSample(audioData), true)
-						.catch((error) => {
-							this._abortController?.abort();
-							this._promiseWithResolvers.reject(error);
-						});
-				},
+				write: audioData => onAudioSample(new AudioSample(audioData)),
 			});
 
 			processor.readable.pipeTo(consumer, {
@@ -1949,7 +1960,6 @@ export class MediaStreamAudioTrackSource extends AudioSource {
 			sourceNode.connect(this._scriptProcessorNode);
 			this._scriptProcessorNode.connect(this._audioContext.destination);
 
-			let audioReceived = false;
 			let totalDuration = 0;
 
 			this._scriptProcessorNode.onaudioprocess = (event) => {
@@ -1957,28 +1967,7 @@ export class MediaStreamAudioTrackSource extends AudioSource {
 				totalDuration += event.inputBuffer.duration;
 
 				for (const audioSample of iterator) {
-					if (!audioReceived) {
-						audioReceived = true;
-
-						const muxer = this._connectedTrack!.output._muxer;
-						if (muxer.firstMediaStreamTimestamp === null) {
-							muxer.firstMediaStreamTimestamp = performance.now() / 1000;
-						} else {
-							this._timestampOffset = performance.now() / 1000 - muxer.firstMediaStreamTimestamp;
-						}
-					}
-
-					if (this._encoder.getQueueSize() >= 4) {
-						// Drop data if the encoder is overloaded
-						audioSample.close();
-						continue;
-					}
-
-					void this._encoder.add(audioSample, true)
-						.catch((error) => {
-							void this._audioContext!.suspend();
-							this._promiseWithResolvers.reject(error);
-						});
+					onAudioSample(audioSample);
 				}
 			};
 		}
