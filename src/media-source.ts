@@ -1055,11 +1055,22 @@ export class MediaStreamVideoTrackSource extends VideoSource {
 	private _promiseWithResolvers = promiseWithResolvers();
 	/** @internal */
 	private _errorPromiseAccessed = false;
+	/** @internal */
+	private _paused = false;
+	/** @internal */
+	private _lastSampleTimestamp: number | null = null;
+	/** @internal */
+	private _pauseOffset = 0;
 
 	/** A promise that rejects upon any error within this source. This promise never resolves. */
 	get errorPromise() {
 		this._errorPromiseAccessed = true;
 		return this._promiseWithResolvers.promise;
+	}
+
+	/** Whether this source is currently paused as a result of calling `.pause()`. */
+	get paused() {
+		return this._paused;
 	}
 
 	/**
@@ -1103,8 +1114,29 @@ export class MediaStreamVideoTrackSource extends VideoSource {
 				return;
 			}
 
+			const currentTimestamp = videoFrame.timestamp / 1e6;
+
+			if (this._paused) {
+				const frameSeen = firstVideoFrameTimestamp !== null;
+				if (frameSeen) {
+					if (this._lastSampleTimestamp !== null) {
+						// In addition to dropping this frame, let's also keep track of the time we have lost due to the
+						// pause. Doing it like this instead of simply keeping track of the paused time is better since
+						// it retains the frame rate of the underlying source.
+						const timeDelta = currentTimestamp - this._lastSampleTimestamp;
+						// We modify this field instead of _timestampOffset since we still might have data in flight
+						// in the encoder, with which we don't want to mess.
+						this._pauseOffset -= timeDelta;
+					}
+					this._lastSampleTimestamp = currentTimestamp;
+				}
+
+				videoFrame.close();
+				return;
+			}
+
 			if (firstVideoFrameTimestamp === null) {
-				firstVideoFrameTimestamp = videoFrame.timestamp / 1e6;
+				firstVideoFrameTimestamp = currentTimestamp;
 
 				const muxer = this._connectedTrack!.output._muxer;
 				if (muxer.firstMediaStreamTimestamp === null) {
@@ -1116,13 +1148,19 @@ export class MediaStreamVideoTrackSource extends VideoSource {
 				}
 			}
 
+			this._lastSampleTimestamp = currentTimestamp;
+
 			if (this._encoder.getQueueSize() >= 4) {
 				// Drop frames if the encoder is overloaded
 				videoFrame.close();
 				return;
 			}
 
-			void this._encoder.add(new VideoSample(videoFrame), true)
+			const sample = new VideoSample(videoFrame, {
+				timestamp: currentTimestamp + this._pauseOffset,
+			});
+
+			void this._encoder.add(sample, true)
 				.catch((error) => {
 					errored = true;
 
@@ -1180,6 +1218,19 @@ export class MediaStreamVideoTrackSource extends VideoSource {
 				throw new Error('MediaStreamTrackProcessor is required but not supported by this browser.');
 			}
 		}
+	}
+
+	/**
+	 * Pauses the capture of video frames - any video frames emitted by the underlying media stream will be ignored
+	 * while paused. This does *not* close the underlying `MediaStreamVideoTrack`, it just ignores its output.
+	 */
+	pause() {
+		this._paused = true;
+	}
+
+	/** Resumes the capture of video frames after being paused. */
+	resume() {
+		this._paused = false;
 	}
 
 	/** @internal */
@@ -1857,11 +1908,22 @@ export class MediaStreamAudioTrackSource extends AudioSource {
 	private _promiseWithResolvers = promiseWithResolvers();
 	/** @internal */
 	private _errorPromiseAccessed = false;
+	/** @internal */
+	private _paused = false;
+	/** @internal */
+	private _lastSampleTimestamp: number | null = null;
+	/** @internal */
+	private _pauseOffset = 0;
 
 	/** A promise that rejects upon any error within this source. This promise never resolves. */
 	get errorPromise() {
 		this._errorPromiseAccessed = true;
 		return this._promiseWithResolvers.promise;
+	}
+
+	/** Whether this source is currently paused as a result of calling `.pause()`. */
+	get paused() {
+		return this._paused;
 	}
 
 	/**
@@ -1899,6 +1961,27 @@ export class MediaStreamAudioTrackSource extends AudioSource {
 				return;
 			}
 
+			const currentTimestamp = audioSample.timestamp;
+
+			if (this._paused) {
+				const dataSeen = firstAudioDataTimestamp !== null;
+				if (dataSeen) {
+					if (this._lastSampleTimestamp !== null) {
+						// In addition to dropping this sample, let's also keep track of the time we have lost due to
+						// the pause. Doing it like this instead of simply keeping track of the paused time is better
+						// since it retains the sample rate of the underlying source.
+						const timeDelta = currentTimestamp - this._lastSampleTimestamp;
+						// We modify this field instead of _timestampOffset since we still might have data in flight
+						// in the encoder, with which we don't want to mess.
+						this._pauseOffset -= timeDelta;
+					}
+					this._lastSampleTimestamp = currentTimestamp;
+				}
+
+				audioSample.close();
+				return;
+			}
+
 			if (firstAudioDataTimestamp === null) {
 				firstAudioDataTimestamp = audioSample.timestamp;
 
@@ -1912,11 +1995,15 @@ export class MediaStreamAudioTrackSource extends AudioSource {
 				}
 			}
 
+			this._lastSampleTimestamp = currentTimestamp;
+
 			if (this._encoder.getQueueSize() >= 4) {
 				// Drop data if the encoder is overloaded
 				audioSample.close();
 				return;
 			}
+
+			audioSample.setTimestamp(currentTimestamp + this._pauseOffset);
 
 			void this._encoder.add(audioSample, true)
 				.catch((error) => {
@@ -1971,6 +2058,19 @@ export class MediaStreamAudioTrackSource extends AudioSource {
 				}
 			};
 		}
+	}
+
+	/**
+	 * Pauses the capture of audio data - any audio data emitted by the underlying media stream will be ignored
+	 * while paused. This does *not* close the underlying `MediaStreamAudioTrack`, it just ignores its output.
+	 */
+	pause() {
+		this._paused = true;
+	}
+
+	/** Resumes the capture of audio data after being paused. */
+	resume() {
+		this._paused = false;
 	}
 
 	/** @internal */

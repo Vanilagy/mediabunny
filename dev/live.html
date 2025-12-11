@@ -25,28 +25,40 @@
             target: new Mediabunny.BufferTarget(),
             format: new Mediabunny.Mp4OutputFormat(),
         });
+		let videoSource = null;
+		let audioSource = null;
         if (videoTrack) {
-            const source = new Mediabunny.MediaStreamVideoTrackSource(videoTrack, {
+            videoSource = new Mediabunny.MediaStreamVideoTrackSource(videoTrack, {
                 codec: 'avc',
                 bitrate: Mediabunny.QUALITY_MEDIUM
             });
 
-            source.errorPromise.catch((d) => console.log("Hello?????", d));
+            videoSource.errorPromise.catch((d) => console.log("Hello?????", d));
 
-            output.addVideoTrack(source);
+            output.addVideoTrack(videoSource);
         }
         if (audioTrack) {
-            const source = new Mediabunny.MediaStreamAudioTrackSource(audioTrack, {
+            audioSource = new Mediabunny.MediaStreamAudioTrackSource(audioTrack, {
                 codec: 'mp3',
                 bitrate: Mediabunny.QUALITY_MEDIUM
             });
 
-            source.errorPromise.catch((d) => console.log("Hello!!???", d));
+            audioSource.errorPromise.catch((d) => console.log("Hello!!???", d));
 
-            output.addAudioTrack(source);
+            output.addAudioTrack(audioSource);
         }
 
         await output.start();
+
+		setTimeout(() => {
+			videoSource?.pause();
+			audioSource?.pause();
+
+			setTimeout(() => {
+				videoSource?.resume();
+				audioSource?.resume();
+			}, 1000);
+		}, 1000);
 
         await new Promise(resolve => setTimeout(resolve, 5000));
 
