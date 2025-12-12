@@ -5,6 +5,7 @@ on:
     types: [published]
 
 permissions:
+  id-token: write  # Required for OIDC
   contents: read
 
 jobs:
@@ -14,7 +15,7 @@ jobs:
     permissions: write-all
     steps:
       - name: Checkout repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -27,11 +28,14 @@ jobs:
           git push origin release
 
       - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: 'npm'
           registry-url: https://registry.npmjs.org
+
+      - name: Update npm
+        run: npm install -g npm@latest
 
       - name: Get package.json version
         id: package-json-version
@@ -58,11 +62,7 @@ jobs:
         run: gh release upload ${{ github.event.release.tag_name }} dist/bundles/mediabunny.cjs dist/bundles/mediabunny.min.cjs dist/bundles/mediabunny.mjs dist/bundles/mediabunny.min.mjs dist/mediabunny.d.ts packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.js packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.min.js packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.mjs packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.min.mjs packages/mp3-encoder/dist/mediabunny-mp3-encoder.d.ts
 
       - name: Publish Mediabunny to npm
-        run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
 
       - name: Publish workspace packages to npm
-        run: npm publish --provenance --access public --workspaces 
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --workspaces 

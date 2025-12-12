@@ -21,6 +21,54 @@ import {
 
 polyfillSymbolDispose();
 
+type FinalizationRegistryValue = {
+	type: 'video';
+	data: VideoFrame | OffscreenCanvas | Uint8Array;
+} | {
+	type: 'audio';
+	data: AudioData | Uint8Array;
+};
+
+// Let's manually handle logging the garbage collection errors that are typically logged by the browser. This way, they
+// also kick for audio samples (which is normally not the case), making sure any incorrect code is quickly caught.
+let lastVideoGcErrorLog = -Infinity;
+let lastAudioGcErrorLog = -Infinity;
+let finalizationRegistry: FinalizationRegistry<FinalizationRegistryValue> | null = null;
+if (typeof FinalizationRegistry !== 'undefined') {
+	finalizationRegistry = new FinalizationRegistry<FinalizationRegistryValue>((value) => {
+		const now = Date.now();
+
+		if (value.type === 'video') {
+			if (now - lastVideoGcErrorLog >= 1000) {
+				// This error is annoying but oh so important
+				console.error(
+					`A VideoSample was garbage collected without first being closed. For proper resource management,`
+					+ ` make sure to call close() on all your VideoSamples as soon as you're done using them.`,
+				);
+
+				lastVideoGcErrorLog = now;
+			}
+
+			if (typeof VideoFrame !== 'undefined' && value.data instanceof VideoFrame) {
+				value.data.close(); // Prevent the browser error since we're logging our own
+			}
+		} else {
+			if (now - lastAudioGcErrorLog >= 1000) {
+				console.error(
+					`An AudioSample was garbage collected without first being closed. For proper resource management,`
+					+ ` make sure to call close() on all your AudioSamples as soon as you're done using them.`,
+				);
+
+				lastAudioGcErrorLog = now;
+			}
+
+			if (typeof AudioData !== 'undefined' && value.data instanceof AudioData) {
+				value.data.close();
+			}
+		}
+	});
+}
+
 /**
  * Metadata used for VideoSample initialization.
  * @group Samples
@@ -144,7 +192,11 @@ export class VideoSample implements Disposable {
 		data: VideoFrame | CanvasImageSource | AllowSharedBufferSource,
 		init?: VideoSampleInit,
 	) {
-		if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
+		if (
+			data instanceof ArrayBuffer
+			|| (typeof SharedArrayBuffer !== 'undefined' && data instanceof SharedArrayBuffer)
+			|| ArrayBuffer.isView(data)
+		) {
 			if (!init || typeof init !== 'object') {
 				throw new TypeError('init must be an object.');
 			}
@@ -278,6 +330,7 @@ export class VideoSample implements Disposable {
 		}
 
 		VideoSample._openSampleCount++;
+		finalizationRegistry?.register(this, { type: 'video', data: this._data }, this);
 	}
 
 	/** Clones this video sample. */
@@ -325,6 +378,8 @@ export class VideoSample implements Disposable {
 		if (this._closed) {
 			return;
 		}
+
+		finalizationRegistry?.unregister(this);
 
 		if (isVideoFrame(this._data)) {
 			this._data.close();
@@ -977,6 +1032,8 @@ export class AudioSample implements Disposable {
 
 			this._data = dataBuffer;
 		}
+
+		finalizationRegistry?.register(this, { type: 'audio', data: this._data }, this);
 	}
 
 	/** Returns the number of bytes required to hold the audio sample's data as specified by the given options. */
@@ -1138,9 +1195,8 @@ export class AudioSample implements Disposable {
 				}
 			}
 		} else {
-			// Branch for Uint8Array data (non-AudioData)
 			const uint8Data = this._data;
-			const srcView = new DataView(uint8Data.buffer, uint8Data.byteOffset, uint8Data.byteLength);
+			const srcView = toDataView(uint8Data);
 
 			const srcFormat = this.format;
 			const readFn = getReadFunction(srcFormat);
@@ -1209,6 +1265,8 @@ export class AudioSample implements Disposable {
 		if (this._closed) {
 			return;
 		}
+
+		finalizationRegistry?.unregister(this);
 
 		if (isAudioData(this._data)) {
 			this._data.close();

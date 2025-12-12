@@ -82,10 +82,16 @@ export type ConversionOptions = {
 
 	/** Options to trim the input file. */
 	trim?: {
-		/** The time in the input file in seconds at which the output file should start. Must be less than `end`.  */
-		start: number;
-		/** The time in the input file in seconds at which the output file should end. Must be greater than `start`. */
-		end: number;
+		/**
+		 * The time in the input file in seconds at which the output file should start. Must be less than `end`.
+		 * Defaults to 0 when omitted.
+		 */
+		start?: number;
+		/**
+		 * The time in the input file in seconds at which the output file should end. Must be greater than `start`.
+		 * Defaults to the duration of the input when omitted.
+		 */
+		end?: number;
 	};
 
 	/**
@@ -138,6 +144,12 @@ export type ConversionVideoOptions = {
 	 * metadata.
 	 */
 	rotate?: Rotation;
+	/**
+	 * Defaults to `true`. When enabaled, Mediabunny will use the rotation metadata in the output file to perform video
+	 * rotation whenever possible. Set this field to `false` if you want to ensure the output file does not make use of
+	 * rotation metadata and that any rotation is baked into the video frames directly.
+	 */
+	allowRotationMetadata?: boolean;
 	/**
 	 * Specifies the rectangular region of the input video to crop to. The crop region will automatically be clamped to
 	 * the dimensions of the input video track. Cropping is performed after rotation but before resizing.
@@ -298,6 +310,9 @@ const validateVideoOptions = (videoOptions: ConversionVideoOptions | undefined) 
 	}
 	if (videoOptions?.rotate !== undefined && ![0, 90, 180, 270].includes(videoOptions.rotate)) {
 		throw new TypeError('options.video.rotate, when provided, must be 0, 90, 180 or 270.');
+	}
+	if (videoOptions?.allowRotationMetadata !== undefined && typeof videoOptions.allowRotationMetadata !== 'boolean') {
+		throw new TypeError('options.video.allowRotationMetadata, when provided, must be a boolean.');
 	}
 	if (videoOptions?.crop !== undefined) {
 		validateCropRectangle(videoOptions.crop, 'options.video.');
@@ -833,7 +848,8 @@ export class Conversion {
 		let videoSource: VideoSource;
 
 		const totalRotation = normalizeRotation(track.rotation + (trackOptions.rotate ?? 0));
-		const outputSupportsRotation = this.output.format.supportsVideoRotationMetadata;
+		const canUseRotationMetadata = this.output.format.supportsVideoRotationMetadata
+			&& (trackOptions.allowRotationMetadata ?? true);
 
 		const [rotatedWidth, rotatedHeight] = totalRotation % 180 === 0
 			? [track.codedWidth, track.codedHeight]
@@ -878,7 +894,7 @@ export class Conversion {
 			// TODO This is suboptimal: Forcing a rerender when both rotation and process are set is not
 			// performance-optimal, but right now there's no other way because we can't change the track rotation
 			// metadata after the output has already started. Should be possible with API changes in v2, though!
-			|| (totalRotation !== 0 && (!outputSupportsRotation || trackOptions.process !== undefined))
+			|| (totalRotation !== 0 && (!canUseRotationMetadata || trackOptions.process !== undefined))
 			|| !!crop;
 
 		const alpha = trackOptions.alpha ?? 'discard';
@@ -1510,7 +1526,10 @@ export class Conversion {
 				targetSampleRate,
 				startTime: this._startTimestamp,
 				endTime: this._endTimestamp,
-				onSample: sample => this._registerAudioSample(track, trackOptions, source, sample),
+				onSample: async (sample) => {
+					await this._registerAudioSample(track, trackOptions, source, sample);
+					sample.close();
+				},
 			});
 
 			const sink = new AudioSampleSink(track);
@@ -1522,6 +1541,7 @@ export class Conversion {
 				}
 
 				await resampler.add(sample);
+				sample.close();
 			}
 
 			await resampler.finalize();

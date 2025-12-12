@@ -216,9 +216,10 @@ export class EncodedPacketSink {
 		}
 
 		const packet = await this._track._backing.getKeyPacket(timestamp, options);
-		if (!packet || packet.type === 'delta') {
+		if (!packet) {
 			return packet;
 		}
+		assert(packet.type === 'key');
 
 		const determinedType = await this._track.determinePacketType(packet);
 		if (determinedType === 'delta') {
@@ -250,9 +251,10 @@ export class EncodedPacketSink {
 		}
 
 		const nextPacket = await this._track._backing.getNextKeyPacket(packet, options);
-		if (!nextPacket || nextPacket.type === 'delta') {
+		if (!nextPacket) {
 			return nextPacket;
 		}
+		assert(nextPacket.type === 'key');
 
 		const determinedType = await this._track.determinePacketType(nextPacket);
 		if (determinedType === 'delta') {
@@ -489,9 +491,6 @@ export abstract class BaseMediaSampleSink<
 			const packetSink = this._createPacketSink();
 			const keyPacket = await packetSink.getKeyPacket(startTimestamp, { verifyKeyPackets: true })
 				?? await packetSink.getFirstPacket();
-			if (!keyPacket) {
-				return;
-			}
 
 			let currentPacket: EncodedPacket | null = keyPacket;
 
@@ -513,7 +512,7 @@ export abstract class BaseMediaSampleSink<
 				}
 			}
 
-			const packets = packetSink.packets(keyPacket, endPacket);
+			const packets = packetSink.packets(keyPacket ?? undefined, endPacket);
 			await packets.next(); // Skip the start packet as we already have it
 
 			while (currentPacket && !ended && !this._track.input._disposed) {
@@ -2177,11 +2176,14 @@ export class AudioBufferSink {
 
 	/** @internal */
 	_audioSampleToWrappedArrayBuffer(sample: AudioSample): WrappedAudioBuffer {
-		return {
+		const result: WrappedAudioBuffer = {
 			buffer: sample.toAudioBuffer(),
 			timestamp: sample.timestamp,
 			duration: sample.duration,
 		};
+
+		sample.close();
+		return result;
 	}
 
 	/**

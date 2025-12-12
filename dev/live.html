@@ -1,6 +1,7 @@
 <button>Go</button>
 
 <script src="../dist/bundles/mediabunny.cjs"></script>
+<script src="../packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.js"></script>
 
 <script type="module">
     function download(blob, filename) {
@@ -12,6 +13,8 @@
 		URL.revokeObjectURL(url);
 	}
 
+	MediabunnyMp3Encoder.registerMp3Encoder();
+
     const button = document.querySelector('button');
     button.addEventListener('click', async () => {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
@@ -22,28 +25,40 @@
             target: new Mediabunny.BufferTarget(),
             format: new Mediabunny.Mp4OutputFormat(),
         });
+		let videoSource = null;
+		let audioSource = null;
         if (videoTrack) {
-            const source = new Mediabunny.MediaStreamVideoTrackSource(videoTrack, {
+            videoSource = new Mediabunny.MediaStreamVideoTrackSource(videoTrack, {
                 codec: 'avc',
                 bitrate: Mediabunny.QUALITY_MEDIUM
             });
 
-            source.errorPromise.catch((d) => console.log("Hello?????", d));
+            videoSource.errorPromise.catch((d) => console.log("Hello?????", d));
 
-            output.addVideoTrack(source);
+            output.addVideoTrack(videoSource);
         }
         if (audioTrack) {
-            const source = new Mediabunny.MediaStreamAudioTrackSource(audioTrack, {
-                codec: 'aac',
+            audioSource = new Mediabunny.MediaStreamAudioTrackSource(audioTrack, {
+                codec: 'mp3',
                 bitrate: Mediabunny.QUALITY_MEDIUM
             });
 
-            source.errorPromise.catch((d) => console.log("Hello!!???", d));
+            audioSource.errorPromise.catch((d) => console.log("Hello!!???", d));
 
-            output.addAudioTrack(source);
+            output.addAudioTrack(audioSource);
         }
 
         await output.start();
+
+		setTimeout(() => {
+			videoSource?.pause();
+			audioSource?.pause();
+
+			setTimeout(() => {
+				videoSource?.resume();
+				audioSource?.resume();
+			}, 1000);
+		}, 1000);
 
         await new Promise(resolve => setTimeout(resolve, 5000));
 

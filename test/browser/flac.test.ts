@@ -19,7 +19,7 @@ test('can decode samples from a FLAC file', async () => {
 
 	const sink = new AudioSampleSink(track);
 
-	const sample = await sink.getSample(1);
+	using sample = await sink.getSample(1);
 	assert(sample);
 	expect(sample.timestamp).toBe(0.9287981859410431);
 });

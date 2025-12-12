@@ -91,7 +91,7 @@ const bundleSizes = [
 
 const sponsors = {
 	gold: [
-		{ image: '/sponsors/remotion.png', name: 'Remotion', url: 'https://remotion.dev/' },
+		{ image: '/sponsors/remotion-light.png', name: 'Remotion', url: 'https://remotion.dev/' },
 		{ image: '/sponsors/gling.svg', name: 'Gling AI', url: 'https://www.gling.ai/' },
 		{ image: '/sponsors/diffusionstudio.png', name: 'Diffusion Studio', url: 'https://diffusion.studio/' },
 		{ image: '/sponsors/kino.jpg', name: 'Kino', url: 'https://kino.ai/' },
@@ -114,6 +114,7 @@ const sponsors = {
 		{ image: 'https://avatars.githubusercontent.com/u/2698271', name: 'Matthew Gardner', url: 'https://github.com/spheric' },
 		{ image: 'https://avatars.githubusercontent.com/u/5475819', name: 'AJ Funk', url: 'https://github.com/AJFunk' },
 		{ image: 'https://avatars.githubusercontent.com/u/30229596', name: 'Pablo Bonilla', url: 'https://github.com/devPablo' },
+		{ image: 'https://avatars.githubusercontent.com/u/56988069', name: 'SyhabouthAlex', url: 'https://github.com/SyhabouthAlex' },
 		{ image: 'https://avatars.githubusercontent.com/u/38181164', name: 'wcw', url: 'https://github.com/asd55667' },
 		{ image: 'https://avatars.githubusercontent.com/u/1836701', name: 'Bean Deng', url: 'https://github.com/HADB' },
 		{ image: 'https://avatars.githubusercontent.com/u/63088713', name: 'taf2000', url: 'https://github.com/taf2000' },
@@ -123,6 +124,7 @@ const sponsors = {
 		{ image: 'https://avatars.githubusercontent.com/u/97225946', name: '808vita', url: 'https://github.com/808vita' },
 		{ image: 'https://avatars.githubusercontent.com/u/3709646', name: 'Rodrigo Belfiore', url: 'https://github.com/roprgm' },
 		{ image: 'https://avatars.githubusercontent.com/u/31102694', name: 'Aiden Liu', url: 'https://github.com/aidenlx' },
+		{ image: 'https://avatars.githubusercontent.com/u/41021374', name: 'arthco', url: 'https://github.com/arthtyagi' },
 	],
 };
 </script>
