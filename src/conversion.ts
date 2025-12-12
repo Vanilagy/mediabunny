@@ -144,6 +144,12 @@ export type ConversionVideoOptions = {
 	 */
 	rotate?: Rotation;
 	/**
+	 * Defaults to `true`. When enabaled, Mediabunny will use the rotation metadata in the output file to perform video
+	 * rotation whenever possible. Set this field to `false` if you want to ensure the output file does not make use of
+	 * rotation metadata and that any rotation is baked into the video frames directly.
+	 */
+	allowRotationMetadata?: boolean;
+	/**
 	 * Specifies the rectangular region of the input video to crop to. The crop region will automatically be clamped to
 	 * the dimensions of the input video track. Cropping is performed after rotation but before resizing.
 	 */
@@ -303,6 +309,9 @@ const validateVideoOptions = (videoOptions: ConversionVideoOptions | undefined) 
 	}
 	if (videoOptions?.rotate !== undefined && ![0, 90, 180, 270].includes(videoOptions.rotate)) {
 		throw new TypeError('options.video.rotate, when provided, must be 0, 90, 180 or 270.');
+	}
+	if (videoOptions?.allowRotationMetadata !== undefined && typeof videoOptions.allowRotationMetadata !== 'boolean') {
+		throw new TypeError('options.video.allowRotationMetadata, when provided, must be a boolean.');
 	}
 	if (videoOptions?.crop !== undefined) {
 		validateCropRectangle(videoOptions.crop, 'options.video.');
@@ -838,7 +847,8 @@ export class Conversion {
 		let videoSource: VideoSource;
 
 		const totalRotation = normalizeRotation(track.rotation + (trackOptions.rotate ?? 0));
-		const outputSupportsRotation = this.output.format.supportsVideoRotationMetadata;
+		const canUseRotationMetadata = this.output.format.supportsVideoRotationMetadata
+			&& (trackOptions.allowRotationMetadata ?? true);
 
 		const [rotatedWidth, rotatedHeight] = totalRotation % 180 === 0
 			? [track.codedWidth, track.codedHeight]
@@ -883,7 +893,7 @@ export class Conversion {
 			// TODO This is suboptimal: Forcing a rerender when both rotation and process are set is not
 			// performance-optimal, but right now there's no other way because we can't change the track rotation
 			// metadata after the output has already started. Should be possible with API changes in v2, though!
-			|| (totalRotation !== 0 && (!outputSupportsRotation || trackOptions.process !== undefined))
+			|| (totalRotation !== 0 && (!canUseRotationMetadata || trackOptions.process !== undefined))
 			|| !!crop;
 
 		const alpha = trackOptions.alpha ?? 'discard';
