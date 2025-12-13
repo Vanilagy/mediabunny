@@ -922,6 +922,9 @@ export type AudioSampleCopyToOptions = {
  */
 export class AudioSample implements Disposable {
 	/** @internal */
+	static _openSampleCount = 0;
+
+	/** @internal */
 	_data: AudioData | Uint8Array;
 	/** @internal */
 	_closed: boolean = false;
@@ -1033,6 +1036,7 @@ export class AudioSample implements Disposable {
 			this._data = dataBuffer;
 		}
 
+		AudioSample._openSampleCount++;
 		finalizationRegistry?.register(this, { type: 'audio', data: this._data }, this);
 	}
 
@@ -1275,6 +1279,7 @@ export class AudioSample implements Disposable {
 		}
 
 		this._closed = true;
+		AudioSample._openSampleCount--;
 	}
 
 	/**
