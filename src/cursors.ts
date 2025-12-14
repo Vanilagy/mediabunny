@@ -4,7 +4,7 @@
 import { PCM_AUDIO_CODECS } from './codec';
 import { InputAudioTrack, InputTrack, InputVideoTrack } from './input-track';
 import { AudioDecoderWrapper, DecoderWrapper, PacketRetrievalOptions, PcmAudioDecoderWrapper, validatePacketRetrievalOptions, validateTimestamp, VideoDecoderWrapper } from './media-sink';
-import { assert, AsyncMutex3, AsyncMutexLock, CallSerializer2, defer, insertSorted, isFirefox, last, MaybePromise, polyfillSymbolDispose, promiseWithResolvers, ResultValue, Rotation, Yo } from './misc';
+import { assert, AsyncMutex4, AsyncMutexLock, CallSerializer2, defer, insertSorted, isFirefox, last, MaybePromise, polyfillSymbolDispose, promiseWithResolvers, ResultValue, Rotation, Yo } from './misc';
 import { EncodedPacket } from './packet';
 import { AudioSample, clampCropRectangle, CropRectangle, validateCropRectangle, VideoSample } from './sample';
 
@@ -377,9 +377,9 @@ export abstract class SampleCursor<
 	decodedTimestamps: number[] = [];
 	maxDecodedSequenceNumber = -1;
 	pumpTarget: EncodedPacket | null = null;
-	pumpMutex = new AsyncMutex3();
+	pumpMutex = new AsyncMutex4();
 	_closed = false;
-	otherMutex = new AsyncMutex3(); // TODO: THIS IS STILL A BUGGED MUTEX! ASYNC MUTEX 4
+	otherMutex = new AsyncMutex4();
 
 	error: unknown = null;
 	errorSet = false;
@@ -419,9 +419,8 @@ export abstract class SampleCursor<
 				return this.onDecoderError(new Error('Fake decoder error!'));
 			}
 
-			const mutexPromise = this.otherMutex.request();
-			if (mutexPromise) await mutexPromise;
-			using _ = this.otherMutex.lock();
+			using lock = this.otherMutex.lock();
+			if (lock.pending) await lock.ready;
 
 			while (this.decodedTimestamps.length > 0 && this.decodedTimestamps[0]! <= sample.timestamp) {
 				this.decodedTimestamps.shift();
@@ -474,9 +473,8 @@ export abstract class SampleCursor<
 	}
 
 	async onDecoderError(error: unknown) {
-		const mutexPromise = this.otherMutex.request();
-		if (mutexPromise) await mutexPromise;
-		using _ = this.otherMutex.lock();
+		using lock = this.otherMutex.lock();
+		if (lock.pending) await lock.ready;
 
 		await this.closeWithError(error);
 	}
@@ -519,9 +517,8 @@ export abstract class SampleCursor<
 		this.predictedRequests++;
 
 		if (!lock) {
-			const mutexPromise = this.pumpMutex.request();
-			if (mutexPromise) await mutexPromise;
 			lock = this.pumpMutex.lock();
+			if (lock.pending) await lock.ready;
 		}
 
 		this._ensureNotClosed();
@@ -698,9 +695,8 @@ export abstract class SampleCursor<
 	}
 
 	async _nextInternal(res: ResultValue<TransformedSample | null>): Promise<Yo> {
-		const mutexPromise = this.pumpMutex.request();
-		if (mutexPromise) await mutexPromise;
 		using lock = this.pumpMutex.lock();
+		if (lock.pending) await lock.ready;
 
 		this._ensureNotClosed();
 
@@ -850,9 +846,8 @@ export abstract class SampleCursor<
 			this.predictedRequests++;
 			this.packetReader.track.input._openSampleCursors.delete(this);
 
-			const mutexPromise = this.pumpMutex.request();
-			if (mutexPromise) await mutexPromise;
-			using _ = this.pumpMutex.lock();
+			using lock = this.pumpMutex.lock();
+			if (lock.pending) await lock.ready;
 
 			this._closed = true;
 

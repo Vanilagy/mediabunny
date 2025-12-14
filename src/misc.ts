@@ -896,36 +896,39 @@ export class AsyncMutex2 {
 	}
 }
 
-export type AsyncMutexLock = {
-	release: () => void;
-	[Symbol.dispose]: () => void;
-};
+export interface AsyncMutexLock extends Disposable {
+	readonly pending: boolean;
+	readonly ready: Promise<void> | null;
+	release(): void;
+}
 
-export class AsyncMutex3 {
-	locked = false;
-	resolverQueue: (() => void)[] = [];
+export class AsyncMutex4 {
+	private locked = false;
+	private resolverQueue: (() => void)[] = [];
 
-	lock(): AsyncMutexLock {
-		if (this.locked) {
-			throw new Error('Mutex already locked.');
+	lock() {
+		if (!this.locked) {
+			// Fast path
+			this.locked = true;
+			return this.createLock(false, null);
 		}
 
-		this.locked = true;
+		const { promise, resolve } = promiseWithResolvers();
+		this.resolverQueue.push(resolve);
+
+		return this.createLock(true, promise);
+	}
+
+	private createLock(pending: boolean, ready: Promise<void> | null): AsyncMutexLock {
 		let released = false;
 
 		return {
+			pending,
+			ready,
 			release: () => {
-				if (released) {
-					return;
-				}
+				if (released) return;
 				released = true;
-
-				this.locked = false;
-
-				if (this.resolverQueue.length > 0) {
-					const resolve = this.resolverQueue.shift()!;
-					resolve();
-				}
+				this.dispatch();
 			},
 			[Symbol.dispose]() {
 				this.release();
@@ -933,15 +936,13 @@ export class AsyncMutex3 {
 		};
 	}
 
-	request() {
-		if (!this.locked) {
-			return null;
+	private dispatch() {
+		if (this.resolverQueue.length > 0) {
+			const resolve = this.resolverQueue.shift()!;
+			resolve();
+		} else {
+			this.locked = false;
 		}
-
-		const { promise, resolve } = promiseWithResolvers();
-		this.resolverQueue.push(resolve);
-
-		return promise;
 	}
 }
 
