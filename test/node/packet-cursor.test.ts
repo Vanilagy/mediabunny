@@ -297,7 +297,7 @@ test('Command queuing', async () => {
 
 test('verifyKeyPackets with faultily-labeled key frames', async () => {
 	using input = new Input({
-		source: new FilePathSource(path.join(__dirname, '../public/fake-cod.mp4')),
+		source: new FilePathSource(path.join(__dirname, '../public/fucked-keyframes.mp4')),
 		formats: ALL_FORMATS,
 	});
 

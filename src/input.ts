@@ -6,6 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { SampleCursor } from './cursors';
 import { Demuxer } from './demuxer';
 import { InputFormat } from './input-format';
 import { assert, polyfillSymbolDispose } from './misc';
@@ -44,6 +45,9 @@ export class Input<S extends Source = Source> implements Disposable {
 	_reader: Reader;
 	/** @internal */
 	_disposed = false;
+	/** @internal */
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	_openSampleCursors = new Set<SampleCursor<any>>();
 
 	/** True if the input has been disposed. */
 	get disposed() {
@@ -181,7 +185,9 @@ export class Input<S extends Source = Source> implements Disposable {
 		this._source._disposed = true;
 		this._source._dispose();
 
-		// TODO this should dispose cursors probably
+		for (const cursor of [...this._openSampleCursors]) {
+			void cursor.close();
+		}
 	}
 
 	/**

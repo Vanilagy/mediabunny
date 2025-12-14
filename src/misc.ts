@@ -835,6 +835,8 @@ export const polyfillSymbolDispose = () => {
 	// https://www.typescriptlang.org/docs/handbook/release-notes/typescript-5-2.html
 	// @ts-expect-error Readonly
 	Symbol.dispose ??= Symbol('Symbol.dispose');
+	// @ts-expect-error Readonly
+	Symbol.asyncDispose ??= Symbol('Symbol.asyncDispose');
 };
 
 export const isNumber = (x: unknown) => {
