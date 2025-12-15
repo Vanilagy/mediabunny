@@ -422,6 +422,19 @@ export abstract class SampleCursor<
 			.finally(() => lock.release());
 	}
 
+	transformSample() {
+		assert(this.currentRaw && !this.currentRaw.closed);
+
+		if (this.autoClose) {
+			return this.current ??= this.transform(this.currentRaw);
+		} else {
+			const clone = this.currentRaw.clone();
+			const transformed = this.transform(clone as Sample);
+
+			return this.current = transformed;
+		}
+	}
+
 	onDecoderSample(sample: Sample): void {
 		try {
 			if (this.debugInfo.enabled && this.debugInfo.throwDecoderError) {
@@ -446,7 +459,6 @@ export abstract class SampleCursor<
 				}
 			} else {
 				let given = false;
-				let transformed: TransformedSample | null = null;
 
 				for (let i = 0; i < this.pendingRequests.length; i++) {
 					const request = this.pendingRequests[i]!;
@@ -454,11 +466,10 @@ export abstract class SampleCursor<
 						break;
 					}
 
-					transformed ??= this.transform(sample);
+					this.setCurrentRaw(sample);
+					request.resolve(this.transformSample());
 
-					request.resolve(transformed);
 					this.pendingRequests.splice(i--, 1);
-					this.setCurrent(sample, transformed);
 					given = true;
 
 					if (request.successor) {
@@ -488,13 +499,14 @@ export abstract class SampleCursor<
 		this.queueDequeue = promiseWithResolvers();
 	}
 
-	setCurrent(newCurrentRaw: Sample | null, newCurrent: TransformedSample | null) {
-		if (this.autoClose && this.currentRaw && this.currentRaw !== newCurrentRaw) {
-			this.currentRaw.close();
+	setCurrentRaw(newCurrentRaw: Sample | null) {
+		if (this.currentRaw === newCurrentRaw) {
+			return;
 		}
 
+		this.currentRaw?.close();
 		this.currentRaw = newCurrentRaw;
-		this.current = newCurrent;
+		this.current = null;
 	}
 
 	getNextExpectedTimestamp() {
@@ -543,12 +555,12 @@ export abstract class SampleCursor<
 		this.nextIsFirst = !targetPacket;
 
 		if (!targetPacket) {
-			this.setCurrent(null, null);
+			this.setCurrentRaw(null);
 			return res.set(null);
 		}
 
-		if (this.currentRaw?.timestamp === targetPacket.timestamp) {
-			return res.set(this.current);
+		if (this.currentRaw?.timestamp === targetPacket.timestamp && !this.currentRaw.closed) {
+			return res.set(this.transformSample());
 		}
 
 		let setNewPump = true;
@@ -562,9 +574,8 @@ export abstract class SampleCursor<
 				this.queueDequeue = promiseWithResolvers();
 
 				if (targetPacket.timestamp <= nextSample.timestamp) {
-					const transformed = this.transform(nextSample);
-					this.setCurrent(nextSample, transformed);
-					return res.set(transformed);
+					this.setCurrentRaw(nextSample);
+					return res.set(this.transformSample());
 				} else {
 					nextSample.close();
 				}
@@ -711,13 +722,12 @@ export abstract class SampleCursor<
 			this.queueDequeue.resolve();
 			this.queueDequeue = promiseWithResolvers();
 
-			const transformed = this.transform(nextSample);
-			this.setCurrent(nextSample, transformed);
-			return res.set(transformed);
+			this.setCurrentRaw(nextSample);
+			return res.set(this.transformSample());
 		}
 
 		if (!this.pumpRunning) {
-			this.setCurrent(null, null);
+			this.setCurrentRaw(null);
 			return res.set(null); // None more after this, boy
 		}
 
@@ -865,7 +875,7 @@ export abstract class SampleCursor<
 			await this.stopPump();
 		}
 
-		this.setCurrent(null, null);
+		this.setCurrentRaw(null);
 		this.decoder?.close();
 		this.decoder = null;
 	}
@@ -944,8 +954,8 @@ export abstract class SampleCursor<
 				}
 			};
 
+			this.setCurrentRaw(null);
 			this.pendingRequests.forEach(uh);
-			this.setCurrent(null, null);
 		} catch (error) {
 			if (!this.decoder.closed && this.pendingRequests.length > 0) {
 				await this.decoder.flush();

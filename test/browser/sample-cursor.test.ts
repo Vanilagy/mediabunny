@@ -286,6 +286,71 @@ test('Sample cursor advancing, cold start', async () => {
 	expect(VideoSample._openSampleCount).toBe(0);
 });
 
+test('Sample cursor sample reuse', async () => {
+	using input = new Input({
+		source: new UrlSource('/trim-buck-bunny.mov'),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = (await input.getPrimaryVideoTrack())!;
+	const reader = new PacketReader(videoTrack);
+	const cursor1 = new VideoSampleCursor(reader);
+	cursor1.debugInfo.enabled = true;
+
+	const sample1 = await cursor1.seekToFirst();
+	const sample2 = await cursor1.seekToFirst();
+
+	expect(cursor1.debugInfo.pumpsStarted).toBe(1);
+	expect(sample1!.timestamp).toBe(sample2!.timestamp);
+	expect(sample1).toBe(sample2);
+
+	await cursor1.next();
+	expect(sample1!.closed).toBe(true);
+	expect(sample2!.closed).toBe(true);
+
+	const cursor2 = new VideoSampleCursor(reader, {
+		autoClose: false,
+	});
+
+	const sample3 = await cursor2.seekToFirst();
+	const sample4 = await cursor2.seekToFirst();
+	expect(sample3!.timestamp).toBe(sample4!.timestamp);
+	expect(sample3).not.toBe(sample4);
+
+	sample3!.close();
+	expect(sample3!.closed).toBe(true);
+	expect(sample4!.closed).toBe(false);
+	sample4!.close();
+
+	let count = 0;
+	const cursor3 = new VideoSampleCursor(reader, {
+		transform: () => count++,
+	});
+
+	await cursor3.seekToFirst();
+	await cursor3.seekToFirst();
+
+	expect(count).toBe(1);
+
+	count = 0;
+	const cursor4 = new VideoSampleCursor(reader, {
+		autoClose: false,
+		transform: sample => (sample.close(), count++),
+	});
+
+	await cursor4.seekToFirst();
+	await cursor4.seekToFirst();
+
+	expect(count).toBe(2);
+
+	await cursor1.close();
+	await cursor2.close();
+	await cursor3.close();
+	await cursor4.close();
+
+	expect(VideoSample._openSampleCount).toBe(0);
+});
+
 test('Sample cursor reset', async () => {
 	using input = new Input({
 		source: new UrlSource('/trim-buck-bunny.mov'),
@@ -703,6 +768,22 @@ test('Command queuing', async () => {
 	}
 
 	await cursor8.close();
+
+	const cursor9 = new VideoSampleCursor(reader, { autoClose: false });
+
+	const commands9 = [
+		cursor9.seekToFirst(),
+		cursor9.seekToFirst(),
+		cursor9.seekToFirst(),
+	];
+	expect(commands9.every(x => x instanceof Promise)).toBe(true);
+
+	for await (using sample of promiseIterateAll(commands9)) {
+		expect(sample!.timestamp).toBe(0);
+		expect(sample!.closed).toBe(false);
+	}
+
+	await cursor9.close();
 
 	expect(VideoSample._openSampleCount).toBe(0);
 });
