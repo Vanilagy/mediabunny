@@ -286,7 +286,72 @@ test('Sample cursor advancing, cold start', async () => {
 	expect(VideoSample._openSampleCount).toBe(0);
 });
 
-test('Decoder setup error', async () => {
+test('Sample cursor reset', async () => {
+	using input = new Input({
+		source: new UrlSource('/trim-buck-bunny.mov'),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = (await input.getPrimaryVideoTrack())!;
+	const reader = new PacketReader(videoTrack);
+	await using cursor = new VideoSampleCursor(reader);
+
+	expect(cursor.closed).toBe(false);
+
+	await cursor.close();
+	expect(cursor.closed).toBe(true);
+
+	expect(() => cursor.seekToFirst()).toThrow('cursor has been closed');
+
+	await cursor.reset();
+	expect(cursor.closed).toBe(false);
+
+	const firstSample = await cursor.seekToFirst();
+	expect(firstSample).not.toBe(null);
+
+	await cursor.close();
+	await cursor.reset();
+
+	const nextSample = await cursor.next();
+	expect(nextSample).not.toBe(null);
+	expect(nextSample!.timestamp).toBe(firstSample!.timestamp);
+
+	// Absolutely deranged usage, but it's gotta work!
+	const commands = [
+		cursor.next(),
+		cursor.close(),
+		cursor.reset(),
+		cursor.next(),
+		cursor.next(),
+		cursor.reset(),
+		cursor.next(),
+	];
+
+	// eslint-disable-next-line @typescript-eslint/await-thenable
+	const results = await Promise.all(commands);
+
+	expect(cursor.closed).toBe(false);
+	expect(results[0]!.timestamp).toBeGreaterThan(firstSample!.timestamp);
+	expect(results[3]!.timestamp).toBe(firstSample!.timestamp);
+	expect(results[4]!.timestamp).toBe(results[0]!.timestamp);
+	expect(results[6]!.timestamp).toBe(firstSample!.timestamp);
+
+	await using cursor2 = new VideoSampleCursor(reader);
+	cursor2.debugInfo.enabled = true;
+
+	// Test if queueing a reset makes the decoder decode minimally many packets
+	const commands2 = [
+		cursor2.seekToFirst(),
+		cursor2.reset(),
+	];
+
+	// eslint-disable-next-line @typescript-eslint/await-thenable
+	await Promise.all(commands2);
+
+	expect(cursor2.debugInfo.decodedPackets).toHaveLength(1);
+});
+
+test('Decoder setup error & reset', async () => {
 	using input = new Input({
 		source: new UrlSource('/trim-buck-bunny.mov'),
 		formats: ALL_FORMATS,
@@ -297,18 +362,32 @@ test('Decoder setup error', async () => {
 	await using cursor1 = new VideoSampleCursor(reader);
 	cursor1.debugInfo.enabled = true;
 	cursor1.debugInfo.throwInDecoderInit = true;
+	expect(cursor1.closed).toBe(false);
 
 	await expect(cursor1.seekToFirst()).rejects.toThrow('Fake decoder init error');
 
 	expect(cursor1.closed).toBe(true);
 
+	expect(() => cursor1.seekToFirst()).toThrow('Fake decoder init error'); // Bricked
+
+	await expect(cursor1.reset()).rejects.toThrow('Fake decoder init error');
+	expect(cursor1.closed).toBe(true);
+
+	cursor1.debugInfo.throwInDecoderInit = false;
+	await cursor1.reset();
+	expect(cursor1.closed).toBe(false);
+
+	const firstSample = (await cursor1.seekToFirst())!;
+	expect(firstSample).not.toBe(null);
+
+	// Let's test directly closing after opening
 	const cursor2 = new VideoSampleCursor(reader);
 	cursor2.debugInfo.enabled = true;
 	cursor2.debugInfo.throwInDecoderInit = true;
 	await cursor2.close();
 });
 
-test('Decoder pump error handling', async () => {
+test('Decoder pump error handling & reset', async () => {
 	using input = new Input({
 		source: new UrlSource('/trim-buck-bunny.mov'),
 		formats: ALL_FORMATS,
@@ -320,18 +399,23 @@ test('Decoder pump error handling', async () => {
 	cursor.debugInfo.enabled = true;
 
 	cursor.debugInfo.throwInPump = true;
-	await expect(async () => cursor.seekToFirst()).rejects.toThrow();
+	await expect(async () => cursor.seekToFirst()).rejects.toThrow('Fake pump error');
 
 	expect(cursor.closed).toBe(true);
 	expect(cursor.current).toBe(null);
 
 	cursor.debugInfo.throwInPump = false;
-	await expect(async () => cursor.seekToFirst()).rejects.toThrow(); // It's bricked
+	await expect(async () => cursor.seekToFirst()).rejects.toThrow('Fake pump error'); // It's bricked
 
 	expect(VideoSample._openSampleCount).toBe(0);
+
+	await cursor.reset();
+
+	const firstSample = await cursor.seekToFirst();
+	expect(firstSample!.timestamp).toBe(0);
 });
 
-test('Decoder errors', async () => {
+test('Decoder errors & reset', async () => {
 	using input = new Input({
 		source: new UrlSource('/trim-buck-bunny.mov'),
 		formats: ALL_FORMATS,
@@ -346,6 +430,14 @@ test('Decoder errors', async () => {
 
 	await expect(cursor1.seekToFirst()).rejects.toThrow('Fake decoder error');
 	expect(cursor1.closed).toBe(true);
+
+	cursor1.debugInfo.throwDecoderError = false;
+	expect(() => cursor1.seekToFirst()).toThrow('Fake decoder error'); // Bricked
+
+	await cursor1.reset();
+
+	const firstSample = await cursor1.seekToFirst();
+	expect(firstSample!.timestamp).toBe(0);
 
 	const cursor2 = new VideoSampleCursor(reader);
 	cursor2.debugInfo.enabled = true;
@@ -391,6 +483,9 @@ test('Use after close', async () => {
 	await expect(commands2[1]).resolves.toBeInstanceOf(VideoSample);
 	await expect(commands2[2]).resolves.toBeUndefined();
 	await expect(commands2[3]).rejects.toThrow('cursor has been closed');
+
+	expect(cursor2.pumpRunning).toBe(false);
+	expect(cursor2.decoder).toBe(null);
 
 	const cursor3 = new VideoSampleCursor(reader);
 	const commands3 = [

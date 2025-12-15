@@ -343,7 +343,7 @@ type PendingRequest<T> = {
 	successor: PendingRequest<T> | null;
 };
 
-type SampleTransformer<Sample, TransformedSample> = (sample: Sample) => MaybePromise<TransformedSample>;
+type SampleTransformer<Sample, TransformedSample> = (sample: Sample) => TransformedSample;
 
 type SampleCursorOptions<Sample, TransformedSample> = {
 	autoClose?: boolean;
@@ -379,7 +379,6 @@ export abstract class SampleCursor<
 	pumpTarget: EncodedPacket | null = null;
 	pumpMutex = new AsyncMutex4();
 	_closed = false;
-	otherMutex = new AsyncMutex4();
 
 	error: unknown = null;
 	errorSet = false;
@@ -423,15 +422,17 @@ export abstract class SampleCursor<
 			.finally(() => lock.release());
 	}
 
-	async onDecoderSample(sample: Sample) {
+	onDecoderSample(sample: Sample): void {
 		try {
 			if (this.debugInfo.enabled && this.debugInfo.throwDecoderError) {
 				sample.close();
-				return this.onDecoderError(new Error('Fake decoder error!'));
-			}
 
-			using lock = this.otherMutex.lock();
-			if (lock.pending) await lock.ready;
+				if (!this._closed) {
+					return this.onDecoderError(new Error('Fake decoder error!'));
+				} else {
+					return;
+				}
+			}
 
 			while (this.decodedTimestamps.length > 0 && this.decodedTimestamps[0]! <= sample.timestamp) {
 				this.decodedTimestamps.shift();
@@ -453,12 +454,7 @@ export abstract class SampleCursor<
 						break;
 					}
 
-					if (!transformed) {
-						let result = this.transform(sample);
-						if (result instanceof Promise) result = await result;
-
-						transformed = result;
-					}
+					transformed ??= this.transform(sample);
 
 					request.resolve(transformed);
 					this.pendingRequests.splice(i--, 1);
@@ -479,15 +475,12 @@ export abstract class SampleCursor<
 			this.queueDequeue.resolve();
 			this.queueDequeue = promiseWithResolvers();
 		} catch (error) {
-			await this.closeWithError(error);
+			void this.closeWithError(error);
 		}
 	}
 
-	async onDecoderError(error: unknown) {
-		using lock = this.otherMutex.lock();
-		if (lock.pending) await lock.ready;
-
-		await this.closeWithError(error);
+	onDecoderError(error: unknown): void {
+		void this.closeWithError(error);
 	}
 
 	onDecoderDequeue() {
@@ -569,9 +562,7 @@ export abstract class SampleCursor<
 				this.queueDequeue = promiseWithResolvers();
 
 				if (targetPacket.timestamp <= nextSample.timestamp) {
-					let transformed = this.transform(nextSample);
-					if (transformed instanceof Promise) transformed = await transformed;
-
+					const transformed = this.transform(nextSample);
 					this.setCurrent(nextSample, transformed);
 					return res.set(transformed);
 				} else {
@@ -720,9 +711,7 @@ export abstract class SampleCursor<
 			this.queueDequeue.resolve();
 			this.queueDequeue = promiseWithResolvers();
 
-			let transformed = this.transform(nextSample);
-			if (transformed instanceof Promise) transformed = await transformed;
-
+			const transformed = this.transform(nextSample);
 			this.setCurrent(nextSample, transformed);
 			return res.set(transformed);
 		}
@@ -853,10 +842,13 @@ export abstract class SampleCursor<
 	closePromise: Promise<void> | null = null;
 
 	close() {
-		return this.closePromise ??= this.closeInternal();
+		return this.closePromise ??= this._closed
+			? Promise.resolve()
+			: this.closeInternal();
 	}
 
 	async closeInternal(doLock = true) {
+		// Almost correct, but not quite
 		this.predictedRequests++;
 		this.packetReader.track.input._openSampleCursors.delete(this);
 
@@ -875,6 +867,7 @@ export abstract class SampleCursor<
 
 		this.setCurrent(null, null);
 		this.decoder?.close();
+		this.decoder = null;
 	}
 
 	[Symbol.asyncDispose]() {
@@ -998,9 +991,48 @@ export abstract class SampleCursor<
 		return this.closeInternal(doLock);
 	}
 
-	closeWithErrorAndThrow(error: unknown): never {
-		void this.closeWithError(error);
+	closeWithErrorAndThrow(error: unknown, doLock?: boolean): never {
+		void this.closeWithError(error, doLock);
 		throw error;
+	}
+
+	async reset() {
+		this.predictedRequests++;
+
+		using lock = this.pumpMutex.lock();
+		if (lock.pending) await lock.ready;
+
+		if (!this._closed) {
+			await this.closeInternal(false);
+		}
+
+		assert(!this.pumpRunning);
+		assert(!this.pumpStopQueued);
+		assert(!this.currentRaw);
+		assert(!this.current);
+		assert(this.sampleQueue.length === 0);
+		assert(this.pendingRequests.length === 0);
+		assert(this.lastPendingRequest === null);
+		assert(this.decodedTimestamps.length === 0);
+		assert(this.maxDecodedSequenceNumber === -1);
+		assert(this.pumpTarget === null);
+		assert(!this.decoder || this.decoder.closed);
+
+		this._closed = false;
+		this.closePromise = null;
+		this.error = null;
+		this.errorSet = false;
+		this.nextIsFirst = true;
+		this.predictedRequests = 0;
+
+		this.packetReader.track.input._openSampleCursors.add(this);
+
+		try {
+			const newDecoder = await this.initDecoder();
+			this.decoder = newDecoder;
+		} catch (error) {
+			this.closeWithErrorAndThrow(error);
+		}
 	}
 }
 
