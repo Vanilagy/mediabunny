@@ -360,7 +360,7 @@ export abstract class SampleCursor<
 	transform: SampleTransformer<Sample, TransformedSample>;
 	autoClose: boolean;
 	pumpRunning = false;
-	decoder: DecoderWrapper<Sample>;
+	decoder: DecoderWrapper<Sample> | null = null;
 	currentRaw: Sample | null = null;
 	current: TransformedSample | null = null;
 	sampleQueue: Sample[] = [];
@@ -389,6 +389,7 @@ export abstract class SampleCursor<
 		pumpsStarted: 0,
 		seekPackets: [] as (EncodedPacket | null)[],
 		decodedPackets: [] as EncodedPacket[],
+		throwInDecoderInit: false,
 		throwInPump: false,
 		throwDecoderError: false,
 	};
@@ -397,19 +398,29 @@ export abstract class SampleCursor<
 		return this._closed;
 	}
 
-	protected constructor(
+	abstract initDecoder(): Promise<DecoderWrapper<Sample>>;
+
+	constructor(
 		reader: PacketReader,
-		decoder: DecoderWrapper<Sample>,
 		options: SampleCursorOptions<Sample, TransformedSample>,
 	) {
+		// todo options validation
+
 		this.packetReader = reader;
-		this.decoder = decoder;
 		this.packetCursor = new PacketCursor(reader);
 		this.options = options;
 		this.autoClose = options.autoClose ?? true;
 		this.transform = options.transform ?? (sample => sample as unknown as TransformedSample);
 
 		reader.track.input._openSampleCursors.add(this);
+
+		const lock = this.pumpMutex.lock();
+		assert(!lock.pending);
+
+		void this.initDecoder()
+			.then(decoder => this.decoder = decoder)
+			.catch(error => this.closeWithError(error, false))
+			.finally(() => lock.release());
 	}
 
 	async onDecoderSample(sample: Sample) {
@@ -521,12 +532,12 @@ export abstract class SampleCursor<
 			if (lock.pending) await lock.ready;
 		}
 
-		this._ensureNotClosed();
-
 		using deferred = defer(() => {
 			lock?.release();
 			this.predictedRequests--;
 		});
+
+		this._ensureNotClosed();
 
 		const targetPacket = targetPacketPromise instanceof Promise
 			? await targetPacketPromise
@@ -842,22 +853,28 @@ export abstract class SampleCursor<
 	closePromise: Promise<void> | null = null;
 
 	close() {
-		return this.closePromise ??= (async () => {
-			this.predictedRequests++;
-			this.packetReader.track.input._openSampleCursors.delete(this);
+		return this.closePromise ??= this.closeInternal();
+	}
 
-			using lock = this.pumpMutex.lock();
+	async closeInternal(doLock = true) {
+		this.predictedRequests++;
+		this.packetReader.track.input._openSampleCursors.delete(this);
+
+		let lock: AsyncMutexLock | null = null;
+		if (doLock) {
+			lock = this.pumpMutex.lock();
 			if (lock.pending) await lock.ready;
+		}
+		using _ = defer(() => lock?.release());
 
-			this._closed = true;
+		this._closed = true;
 
-			if (this.pumpRunning) {
-				await this.stopPump();
-			}
+		if (this.pumpRunning) {
+			await this.stopPump();
+		}
 
-			this.setCurrent(null, null);
-			this.decoder.close();
-		})();
+		this.setCurrent(null, null);
+		this.decoder?.close();
 	}
 
 	[Symbol.asyncDispose]() {
@@ -874,10 +891,11 @@ export abstract class SampleCursor<
 	}
 
 	async runPump() {
-		try {
-			assert(this.packetCursor.current);
-			assert(this.pumpTarget);
+		assert(this.packetCursor.current);
+		assert(this.pumpTarget);
+		assert(this.decoder);
 
+		try {
 			this.pumpRunning = true;
 
 			if (this.debugInfo.enabled) {
@@ -960,7 +978,7 @@ export abstract class SampleCursor<
 		}
 	}
 
-	closeWithError(error: unknown) {
+	closeWithError(error: unknown, doLock?: boolean) {
 		if (this._closed) {
 			return;
 		}
@@ -977,7 +995,7 @@ export abstract class SampleCursor<
 		};
 		this.pendingRequests.forEach(uh);
 
-		return this.close();
+		return this.closeInternal(doLock);
 	}
 
 	closeWithErrorAndThrow(error: unknown): never {
@@ -987,15 +1005,21 @@ export abstract class SampleCursor<
 }
 
 export class VideoSampleCursor<TransformedSample = VideoSample> extends SampleCursor<VideoSample, TransformedSample> {
-	static async init<T = VideoSample>(
+	override packetReader!: PacketReader<InputVideoTrack>;
+
+	constructor(
 		reader: PacketReader<InputVideoTrack>,
-		options: SampleCursorOptions<VideoSample, T> = {},
+		options: SampleCursorOptions<VideoSample, TransformedSample> = {},
 	) {
 		if (!(reader instanceof PacketReader) || !(reader.track instanceof InputVideoTrack)) {
 			throw new TypeError('reader must be a PacketReader for an InputVideoTrack.');
 		}
 
-		const track = reader.track;
+		super(reader, options);
+	}
+
+	override async initDecoder(): Promise<DecoderWrapper<VideoSample>> {
+		const track = this.packetReader.track;
 
 		if (!(await track.canDecode())) {
 			throw new Error(
@@ -1004,42 +1028,55 @@ export class VideoSampleCursor<TransformedSample = VideoSample> extends SampleCu
 			);
 		}
 
+		if (this.debugInfo.enabled && this.debugInfo.throwInDecoderInit) {
+			throw new Error('Fake decoder init error!');
+		}
+
 		const decoderConfig = await track.getDecoderConfig();
 		assert(decoderConfig);
 		assert(track.codec);
 
 		const decoder = new VideoDecoderWrapper(
-			sample => cursor.onDecoderSample(sample),
-			error => cursor.onDecoderError(error),
+			sample => this.onDecoderSample(sample),
+			error => this.onDecoderError(error),
 			track.codec,
 			decoderConfig,
 			track.rotation,
 			track.timeResolution,
 		);
 
-		decoder.onDequeue = () => cursor.onDecoderDequeue();
+		decoder.onDequeue = () => this.onDecoderDequeue();
 
-		const cursor: VideoSampleCursor<T> = new VideoSampleCursor(reader, decoder, options);
-		return cursor;
+		return decoder;
 	}
 }
 
 export class AudioSampleCursor<TransformedSample = AudioSample> extends SampleCursor<AudioSample, TransformedSample> {
-	static async init<T = AudioSample>(
+	override packetReader!: PacketReader<InputAudioTrack>;
+
+	constructor(
 		reader: PacketReader<InputAudioTrack>,
-		options: SampleCursorOptions<AudioSample, T> = {},
+		options: SampleCursorOptions<AudioSample, TransformedSample> = {},
 	) {
 		if (!(reader instanceof PacketReader) || !(reader.track instanceof InputAudioTrack)) {
 			throw new TypeError('reader must be a PacketReader for an InputAudioTrack.');
 		}
 
-		const track = reader.track;
+		super(reader, options);
+	}
+
+	override async initDecoder(): Promise<DecoderWrapper<AudioSample>> {
+		const track = this.packetReader.track;
 
 		if (!(await track.canDecode())) {
 			throw new Error(
 				'This audio track cannot be decoded by this browser. Make sure to check decodability before using'
 				+ ' a track.',
 			);
+		}
+
+		if (this.debugInfo.enabled && this.debugInfo.throwInDecoderInit) {
+			throw new Error('Fake decoder init error!');
 		}
 
 		const codec = track.codec;
@@ -1049,23 +1086,22 @@ export class AudioSampleCursor<TransformedSample = AudioSample> extends SampleCu
 		let decoder: AudioDecoderWrapper | PcmAudioDecoderWrapper;
 		if ((PCM_AUDIO_CODECS as readonly string[]).includes(decoderConfig.codec)) {
 			decoder = new PcmAudioDecoderWrapper(
-				sample => cursor.onDecoderSample(sample),
-				error => cursor.onDecoderError(error),
+				sample => this.onDecoderSample(sample),
+				error => this.onDecoderError(error),
 				decoderConfig,
 			);
 		} else {
 			decoder = new AudioDecoderWrapper(
-				sample => cursor.onDecoderSample(sample),
-				error => cursor.onDecoderError(error),
+				sample => this.onDecoderSample(sample),
+				error => this.onDecoderError(error),
 				codec,
 				decoderConfig,
 			);
 		}
 
-		decoder.onDequeue = () => cursor.onDecoderDequeue();
+		decoder.onDequeue = () => this.onDecoderDequeue();
 
-		const cursor: AudioSampleCursor<T> = new AudioSampleCursor(reader, decoder, options);
-		return cursor;
+		return decoder;
 	}
 }
 
