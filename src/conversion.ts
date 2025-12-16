@@ -214,6 +214,11 @@ export type ConversionVideoOptions = {
 	 * encoder configuration.
 	 */
 	processedHeight?: number;
+	/**
+	 * A hint that configures the hardware acceleration method of this codec. This is best left on `'no-preference'`,
+	 * the default.
+	 */
+	hardwareAcceleration?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
 };
 
 /**
@@ -345,6 +350,15 @@ const validateVideoOptions = (videoOptions: ConversionVideoOptions | undefined) 
 		&& (!Number.isInteger(videoOptions.processedHeight) || videoOptions.processedHeight <= 0)
 	) {
 		throw new TypeError('options.video.processedHeight, when provided, must be a positive integer.');
+	}
+	if (
+		videoOptions?.hardwareAcceleration !== undefined
+		&& !['no-preference', 'prefer-hardware', 'prefer-software'].includes(videoOptions.hardwareAcceleration)
+	) {
+		throw new TypeError(
+			'options.video.hardwareAcceleration, when provided, must be \'no-preference\', \'prefer-hardware\' or'
+			+ ' \'prefer-software\'.',
+		);
 	}
 };
 
@@ -984,6 +998,7 @@ export class Conversion {
 				keyFrameInterval: trackOptions.keyFrameInterval,
 				sizeChangeBehavior: trackOptions.fit ?? 'passThrough',
 				alpha,
+				hardwareAcceleration: trackOptions.hardwareAcceleration,
 			};
 
 			const source = new VideoSampleSource(encodingConfig);
