@@ -125,7 +125,7 @@ export class VideoSample implements Disposable {
 	/** The duration of the frame in seconds. */
 	readonly duration!: number;
 	/** The color space of the frame. */
-	readonly colorSpace!: VideoColorSpace;
+	readonly colorSpace!: VideoSampleColorSpace;
 
 	/** The width of the frame in pixels after rotation. */
 	get displayWidth() {
@@ -216,7 +216,7 @@ export class VideoSample implements Disposable {
 			this.rotation = init.rotation ?? 0;
 			this.timestamp = init.timestamp!;
 			this.duration = init.duration ?? 0;
-			this.colorSpace = new VideoColorSpace(init.colorSpace);
+			this.colorSpace = new VideoSampleColorSpace(init.colorSpace);
 		} else if (typeof VideoFrame !== 'undefined' && data instanceof VideoFrame) {
 			if (init?.rotation !== undefined && ![0, 90, 180, 270].includes(init.rotation)) {
 				throw new TypeError('init.rotation, when provided, must be 0, 90, 180, or 270.');
@@ -239,7 +239,7 @@ export class VideoSample implements Disposable {
 			this.rotation = init?.rotation ?? 0;
 			this.timestamp = init?.timestamp ?? data.timestamp / 1e6;
 			this.duration = init?.duration ?? (data.duration ?? 0) / 1e6;
-			this.colorSpace = data.colorSpace;
+			this.colorSpace = new VideoSampleColorSpace(data.colorSpace);
 		} else if (
 			(typeof HTMLImageElement !== 'undefined' && data instanceof HTMLImageElement)
 			|| (typeof SVGImageElement !== 'undefined' && data instanceof SVGImageElement)
@@ -308,7 +308,7 @@ export class VideoSample implements Disposable {
 			this.rotation = init.rotation ?? 0;
 			this.timestamp = init.timestamp!;
 			this.duration = init.duration ?? 0;
-			this.colorSpace = new VideoColorSpace({
+			this.colorSpace = new VideoSampleColorSpace({
 				matrix: 'rgb',
 				primaries: 'bt709',
 				transfer: 'iec61966-2-1',
@@ -802,6 +802,40 @@ export class VideoSample implements Disposable {
 	/** Calls `.close()`. */
 	[Symbol.dispose]() {
 		this.close();
+	}
+}
+
+/**
+ * Describes the color space of a {@link VideoSample}. Corresponds to the WebCodecs API's VideoColorSpace.
+ * @group Samples
+ * @public
+ */
+export class VideoSampleColorSpace {
+	/** The color primaries standard used. */
+	readonly primaries: VideoColorPrimaries | null;
+	/** The transfer characteristics used. */
+	readonly transfer: VideoTransferCharacteristics | null;
+	/** The color matrix coefficients used. */
+	readonly matrix: VideoMatrixCoefficients | null;
+	/** Whether the color values use the full range or limited range. */
+	readonly fullRange: boolean | null;
+
+	/** Creates a new VideoSampleColorSpace. */
+	constructor(init?: VideoColorSpaceInit) {
+		this.primaries = init?.primaries ?? null;
+		this.transfer = init?.transfer ?? null;
+		this.matrix = init?.matrix ?? null;
+		this.fullRange = init?.fullRange ?? null;
+	}
+
+	/** Serializes the color space to a JSON object. */
+	toJSON(): VideoColorSpaceInit {
+		return {
+			primaries: this.primaries,
+			transfer: this.transfer,
+			matrix: this.matrix,
+			fullRange: this.fullRange,
+		};
 	}
 }
 

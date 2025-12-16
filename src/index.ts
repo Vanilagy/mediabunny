@@ -168,6 +168,7 @@ export {
 	AudioSampleCopyToOptions,
 	VideoSample,
 	VideoSampleInit,
+	VideoSampleColorSpace,
 	CropRectangle,
 } from './sample';
 export {
