@@ -378,13 +378,11 @@ const bytesNeeded = videoSample.allocationSize(); // => number
 Then, use `copyTo` to copy the pixel data into the destination buffer:
 ```ts
 const bytes = new Uint8Array(bytesNeeded);
-videoSample.copyTo(bytes);
+const planeLayout = await videoSample.copyTo(bytes);
 ```
 
 ::: info
-The data will always be in the pixel format specified in the `format` field.
-
-To convert the data into a different pixel format, or to extract only a section of the frame, please use the [`allocationSize`](https://developer.mozilla.org/en-US/docs/Web/API/VideoFrame/allocationSize) and [`copyTo`](https://developer.mozilla.org/en-US/docs/Web/API/VideoFrame/copyTo) methods on `VideoFrame` instead. Get a `VideoFrame` by running `videoSample.toVideoFrame()`.
+You can pass additional options to `allocationSize` and `copyTo` to extract data in a different pixel format.
 :::
 
 ---
