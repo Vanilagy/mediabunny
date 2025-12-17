@@ -23,10 +23,10 @@ polyfillSymbolDispose();
 
 type FinalizationRegistryValue = {
 	type: 'video';
-	data: VideoFrame | OffscreenCanvas | Uint8Array;
+	data: VideoFrame | OffscreenCanvas | Uint8Array | VideoSampleResource;
 } | {
 	type: 'audio';
-	data: AudioData | Uint8Array;
+	data: AudioData | Uint8Array | AudioSampleResource;
 };
 
 // Let's manually handle logging the garbage collection errors that are typically logged by the browser. This way, they
@@ -70,6 +70,46 @@ if (typeof FinalizationRegistry !== 'undefined') {
 }
 
 /**
+ * Abstract base class for custom video sample resources. Implement this class to provide custom backing
+ * for VideoSample instances.
+ * @group Samples
+ * @public
+ */
+export abstract class VideoSampleResource {
+	/** @internal */
+	_referenceCount: number = 0;
+	/** @internal */
+	_lastAllocationBuffer: ArrayBuffer | null = null;
+
+	/**
+	 * Returns the internal pixel format in which the frame is stored.
+	 * [See pixel formats](https://developer.mozilla.org/en-US/docs/Web/API/VideoFrame/format)
+	 */
+	abstract getFormat(): VideoPixelFormat | null;
+
+	/** Returns the width of the frame in pixels. */
+	abstract getCodedWidth(): number;
+
+	/** Returns the height of the frame in pixels. */
+	abstract getCodedHeight(): number;
+
+	/** Returns the color space of the frame. */
+	abstract getColorSpace(): VideoSampleColorSpace;
+
+	/**
+	 * Closes this resource, releasing held resources. Called automatically when the last {@link VideoSample} using this
+	 * resource is closed.
+	 */
+	abstract close(): void;
+
+	/** Returns the number of bytes required to hold this video sample's pixel data. */
+	abstract allocationSize(options: VideoFrameCopyToOptions): number;
+
+	/** Copies this video sample's pixel data to an ArrayBuffer or ArrayBufferView. */
+	abstract copyTo(destination: AllowSharedBufferSource, options: VideoFrameCopyToOptions): PlaneLayout[];
+}
+
+/**
  * Metadata used for VideoSample initialization.
  * @group Samples
  * @public
@@ -102,7 +142,7 @@ export type VideoSampleInit = {
  */
 export class VideoSample implements Disposable {
 	/** @internal */
-	_data!: VideoFrame | OffscreenCanvas | Uint8Array | null;
+	_data!: VideoFrame | OffscreenCanvas | Uint8Array | VideoSampleResource | null;
 	/** @internal */
 	_closed: boolean = false;
 
@@ -177,8 +217,12 @@ export class VideoSample implements Disposable {
 		data: AllowSharedBufferSource,
 		init: SetRequired<VideoSampleInit, 'format' | 'codedWidth' | 'codedHeight' | 'timestamp'>
 	);
+	/**
+	 * Creates a new {@link VideoSample} backed by a custom {@link VideoSampleResource}.
+	 */
+	constructor(resource: VideoSampleResource, init: SetRequired<VideoSampleInit, 'timestamp'>);
 	constructor(
-		data: VideoFrame | CanvasImageSource | AllowSharedBufferSource,
+		data: VideoFrame | CanvasImageSource | AllowSharedBufferSource | VideoSampleResource,
 		init?: VideoSampleInit,
 	) {
 		if (
@@ -314,8 +358,34 @@ export class VideoSample implements Disposable {
 				transfer: 'iec61966-2-1',
 				fullRange: true,
 			});
+		} else if (data instanceof VideoSampleResource) {
+			if (!init || typeof init !== 'object') {
+				throw new TypeError('init must be an object.');
+			}
+			if (init.rotation !== undefined && ![0, 90, 180, 270].includes(init.rotation)) {
+				throw new TypeError('init.rotation, when provided, must be 0, 90, 180, or 270.');
+			}
+			if (!Number.isFinite(init.timestamp)) {
+				throw new TypeError('init.timestamp must be a number.');
+			}
+			if (init.duration !== undefined && (!Number.isFinite(init.duration) || init.duration < 0)) {
+				throw new TypeError('init.duration, when provided, must be a non-negative number.');
+			}
+
+			this._data = data;
+			data._referenceCount++;
+
+			this.format = data.getFormat();
+			this.codedWidth = data.getCodedWidth();
+			this.codedHeight = data.getCodedHeight();
+			this.rotation = init.rotation ?? 0;
+			this.timestamp = init.timestamp!;
+			this.duration = init.duration ?? 0;
+			this.colorSpace = data.getColorSpace();
 		} else {
-			throw new TypeError('Invalid data type: Must be a BufferSource or CanvasImageSource.');
+			throw new TypeError(
+				'Invalid data type: Must be a BufferSource, CanvasImageSource, or VideoSampleResource.',
+			);
 		}
 
 		finalizationRegistry?.register(this, { type: 'video', data: this._data }, this);
@@ -329,7 +399,13 @@ export class VideoSample implements Disposable {
 
 		assert(this._data !== null);
 
-		if (isVideoFrame(this._data)) {
+		if (this._data instanceof VideoSampleResource) {
+			return new VideoSample(this._data, {
+				timestamp: this.timestamp,
+				duration: this.duration,
+				rotation: this.rotation,
+			});
+		} else if (isVideoFrame(this._data)) {
 			return new VideoSample(this._data.clone(), {
 				timestamp: this.timestamp,
 				duration: this.duration,
@@ -369,7 +445,12 @@ export class VideoSample implements Disposable {
 
 		finalizationRegistry?.unregister(this);
 
-		if (isVideoFrame(this._data)) {
+		if (this._data instanceof VideoSampleResource) {
+			this._data._referenceCount--;
+			if (this._data._referenceCount === 0) {
+				this._data.close();
+			}
+		} else if (isVideoFrame(this._data)) {
 			this._data.close();
 		} else {
 			this._data = null; // GC that shit
@@ -379,15 +460,17 @@ export class VideoSample implements Disposable {
 	}
 
 	/** Returns the number of bytes required to hold this video sample's pixel data. */
-	allocationSize() {
+	allocationSize(options: VideoFrameCopyToOptions = {}) {
 		if (this._closed) {
 			throw new Error('VideoSample is closed.');
 		}
 
 		assert(this._data !== null);
 
-		if (isVideoFrame(this._data)) {
-			return this._data.allocationSize();
+		if (this._data instanceof VideoSampleResource) {
+			return this._data.allocationSize(options);
+		} else if (isVideoFrame(this._data)) {
+			return this._data.allocationSize(options);
 		} else if (this._data instanceof Uint8Array) {
 			return this._data.byteLength;
 		} else {
@@ -396,7 +479,7 @@ export class VideoSample implements Disposable {
 	}
 
 	/** Copies this video sample's pixel data to an ArrayBuffer or ArrayBufferView. */
-	async copyTo(destination: AllowSharedBufferSource) {
+	async copyTo(destination: AllowSharedBufferSource, options: VideoFrameCopyToOptions = {}) {
 		if (!isAllowSharedBufferSource(destination)) {
 			throw new TypeError('destination must be an ArrayBuffer or an ArrayBuffer view.');
 		}
@@ -407,8 +490,10 @@ export class VideoSample implements Disposable {
 
 		assert(this._data !== null);
 
-		if (isVideoFrame(this._data)) {
-			await this._data.copyTo(destination);
+		if (this._data instanceof VideoSampleResource) {
+			this._data.copyTo(destination, options);
+		} else if (isVideoFrame(this._data)) {
+			await this._data.copyTo(destination, options);
 		} else if (this._data instanceof Uint8Array) {
 			const dest = toUint8Array(destination);
 			dest.set(this._data);
@@ -427,14 +512,35 @@ export class VideoSample implements Disposable {
 	 * Converts this video sample to a VideoFrame for use with the WebCodecs API. The VideoFrame returned by this
 	 * method *must* be closed separately from this video sample.
 	 */
-	toVideoFrame() {
+	toVideoFrame(): VideoFrame {
 		if (this._closed) {
 			throw new Error('VideoSample is closed.');
 		}
 
 		assert(this._data !== null);
 
-		if (isVideoFrame(this._data)) {
+		if (this._data instanceof VideoSampleResource) {
+			const format = this._data.getFormat() ?? 'RGBA';
+			const allocationSize = this._data.allocationSize({ format });
+
+			let data: ArrayBuffer;
+			if (this._data._lastAllocationBuffer?.byteLength === allocationSize) {
+				data = this._data._lastAllocationBuffer;
+			} else {
+				data = this._data._lastAllocationBuffer = new ArrayBuffer(allocationSize);
+			}
+			const layout = this._data.copyTo(data, { format });
+
+			return new VideoFrame(data, {
+				format,
+				codedWidth: this._data.getCodedWidth(),
+				codedHeight: this._data.getCodedHeight(),
+				colorSpace: this._data.getColorSpace(),
+				layout,
+				timestamp: this.microsecondTimestamp,
+				duration: this.microsecondDuration,
+			});
+		} else if (isVideoFrame(this._data)) {
 			return new VideoFrame(this._data, {
 				timestamp: this.microsecondTimestamp,
 				duration: this.microsecondDuration || undefined, // Drag 0 duration to undefined, glitches some codecs
@@ -748,7 +854,7 @@ export class VideoSample implements Disposable {
 	 * Converts this video sample to a
 	 * [`CanvasImageSource`](https://udn.realityripple.com/docs/Web/API/CanvasImageSource) for drawing to a canvas.
 	 *
-	 * You must use the value returned by this method immediately, as any VideoFrame created internally will
+	 * You must use the value returned by this method immediately, as any VideoFrame created internally may
 	 * automatically be closed in the next microtask.
 	 */
 	toCanvasImageSource() {
@@ -758,7 +864,7 @@ export class VideoSample implements Disposable {
 
 		assert(this._data !== null);
 
-		if (this._data instanceof Uint8Array) {
+		if (this._data instanceof VideoSampleResource || this._data instanceof Uint8Array) {
 			// Requires VideoFrame to be defined
 			const videoFrame = this.toVideoFrame();
 			queueMicrotask(() => videoFrame.close()); // Let's automatically close the frame in the next microtask
@@ -892,6 +998,51 @@ const AUDIO_SAMPLE_FORMATS = new Set(
 );
 
 /**
+ * Abstract base class for custom audio sample resources. Implement this class to provide custom backing
+ * for AudioSample instances.
+ * @group Samples
+ * @public
+ */
+export abstract class AudioSampleResource {
+	/** @internal */
+	_referenceCount: number = 0;
+
+	/**
+	 * Returns the audio sample format.
+	 * [See sample formats](https://developer.mozilla.org/en-US/docs/Web/API/AudioData/format)
+	 */
+	abstract getFormat(): AudioSampleFormat;
+
+	/** Returns the audio sample rate in hertz. */
+	abstract getSampleRate(): number;
+
+	/** Returns the number of audio frames in the sample, per channel. */
+	abstract getNumberOfFrames(): number;
+
+	/** Returns the number of audio channels. */
+	abstract getNumberOfChannels(): number;
+
+	/** Returns the presentation timestamp of the sample in seconds. */
+	abstract getTimestamp(): number;
+
+	/**
+	 * Closes this resource, releasing held resources. Called automatically when the last {@link AudioSample} using this
+	 * resource is closed.
+	 */
+	abstract close(): void;
+
+	/**
+	 * Returns the number of bytes required to hold the underlying audio data as specified by the given options.
+	 */
+	abstract allocationSize(options: AudioSampleCopyToOptions): number;
+
+	/**
+	 * Copies the underlying audio data to an ArrayBuffer or ArrayBufferView as specified by the given options.
+	 */
+	abstract copyTo(destination: AllowSharedBufferSource, options: AudioSampleCopyToOptions): void;
+}
+
+/**
  * Metadata used for AudioSample initialization.
  * @group Samples
  * @public
@@ -943,7 +1094,7 @@ export type AudioSampleCopyToOptions = {
  */
 export class AudioSample implements Disposable {
 	/** @internal */
-	_data: AudioData | Uint8Array;
+	_data: AudioData | Uint8Array | AudioSampleResource;
 	/** @internal */
 	_closed: boolean = false;
 
@@ -983,7 +1134,8 @@ export class AudioSample implements Disposable {
 	 * [`AudioData`](https://developer.mozilla.org/en-US/docs/Web/API/AudioData) or from raw bytes specified in
 	 * {@link AudioSampleInit}.
 	 */
-	constructor(init: AudioData | AudioSampleInit) {
+	constructor(init: AudioData | AudioSampleInit | AudioSampleResource);
+	constructor(init: AudioData | AudioSampleInit | AudioSampleResource) {
 		if (isAudioData(init)) {
 			if (init.format === null) {
 				throw new TypeError('AudioData with null format is not supported.');
@@ -997,6 +1149,16 @@ export class AudioSample implements Disposable {
 			this.numberOfChannels = init.numberOfChannels;
 			this.timestamp = init.timestamp / 1e6;
 			this.duration = init.numberOfFrames / init.sampleRate;
+		} else if (init instanceof AudioSampleResource) {
+			this._data = init;
+			init._referenceCount++;
+
+			this.format = init.getFormat();
+			this.sampleRate = init.getSampleRate();
+			this.numberOfFrames = init.getNumberOfFrames();
+			this.numberOfChannels = init.getNumberOfChannels();
+			this.timestamp = init.getTimestamp();
+			this.duration = this.numberOfFrames / this.sampleRate;
 		} else {
 			if (!init || typeof init !== 'object') {
 				throw new TypeError('Invalid AudioDataInit: must be an object.');
@@ -1072,6 +1234,10 @@ export class AudioSample implements Disposable {
 			throw new Error('AudioSample is closed.');
 		}
 
+		if (this._data instanceof AudioSampleResource) {
+			return this._data.allocationSize(options);
+		}
+
 		const destFormat = options.format ?? this.format;
 
 		const frameOffset = options.frameOffset ?? 0;
@@ -1122,6 +1288,10 @@ export class AudioSample implements Disposable {
 
 		if (this._closed) {
 			throw new Error('AudioSample is closed.');
+		}
+
+		if (this._data instanceof AudioSampleResource) {
+			return this._data.copyTo(destination, options);
 		}
 
 		const { planeIndex, format, frameCount: optFrameCount, frameOffset: optFrameOffset } = options;
@@ -1253,9 +1423,14 @@ export class AudioSample implements Disposable {
 			throw new Error('AudioSample is closed.');
 		}
 
-		if (isAudioData(this._data)) {
+		if (this._data instanceof AudioSampleResource) {
+			const sample = new AudioSample(this._data);
+			sample.setTimestamp(this.timestamp); // Make sure the timestamp is correct
+
+			return sample;
+		} else if (isAudioData(this._data)) {
 			const sample = new AudioSample(this._data.clone());
-			sample.setTimestamp(this.timestamp); // Make sure the timestamp is precise (beyond microsecond accuracy)
+			sample.setTimestamp(this.timestamp);
 
 			return sample;
 		} else {
@@ -1281,7 +1456,12 @@ export class AudioSample implements Disposable {
 
 		finalizationRegistry?.unregister(this);
 
-		if (isAudioData(this._data)) {
+		if (this._data instanceof AudioSampleResource) {
+			this._data._referenceCount--;
+			if (this._data._referenceCount === 0) {
+				this._data.close();
+			}
+		} else if (isAudioData(this._data)) {
 			this._data.close();
 		} else {
 			this._data = new Uint8Array(0);
@@ -1299,42 +1479,15 @@ export class AudioSample implements Disposable {
 			throw new Error('AudioSample is closed.');
 		}
 
-		if (isAudioData(this._data)) {
+		if (this._data instanceof AudioSampleResource) {
+			return this._createAudioDataFromData();
+		} else if (isAudioData(this._data)) {
 			if (this._data.timestamp === this.microsecondTimestamp) {
 				// Timestamp matches, let's just return the data (but cloned)
 				return this._data.clone();
 			} else {
 				// It's impossible to simply change an AudioData's timestamp, so we'll need to create a new one
-				if (formatIsPlanar(this.format)) {
-					const size = this.allocationSize({ planeIndex: 0, format: this.format });
-					const data = new ArrayBuffer(size * this.numberOfChannels);
-
-					// We gotta read out each plane individually
-					for (let i = 0; i < this.numberOfChannels; i++) {
-						this.copyTo(new Uint8Array(data, i * size, size), { planeIndex: i, format: this.format });
-					}
-
-					return new AudioData({
-						format: this.format,
-						sampleRate: this.sampleRate,
-						numberOfFrames: this.numberOfFrames,
-						numberOfChannels: this.numberOfChannels,
-						timestamp: this.microsecondTimestamp,
-						data,
-					});
-				} else {
-					const data = new ArrayBuffer(this.allocationSize({ planeIndex: 0, format: this.format }));
-					this.copyTo(data, { planeIndex: 0, format: this.format });
-
-					return new AudioData({
-						format: this.format,
-						sampleRate: this.sampleRate,
-						numberOfFrames: this.numberOfFrames,
-						numberOfChannels: this.numberOfChannels,
-						timestamp: this.microsecondTimestamp,
-						data,
-					});
-				}
+				return this._createAudioDataFromData();
 			}
 		} else {
 			return new AudioData({
@@ -1346,6 +1499,40 @@ export class AudioSample implements Disposable {
 				data: this._data.buffer instanceof ArrayBuffer
 					? this._data.buffer
 					: this._data.slice(), // In the case of SharedArrayBuffer, convert to ArrayBuffer
+			});
+		}
+	}
+
+	/** @internal */
+	_createAudioDataFromData() {
+		if (formatIsPlanar(this.format)) {
+			const size = this.allocationSize({ planeIndex: 0, format: this.format });
+			const data = new ArrayBuffer(size * this.numberOfChannels);
+
+			// We gotta read out each plane individually
+			for (let i = 0; i < this.numberOfChannels; i++) {
+				this.copyTo(new Uint8Array(data, i * size, size), { planeIndex: i, format: this.format });
+			}
+
+			return new AudioData({
+				format: this.format,
+				sampleRate: this.sampleRate,
+				numberOfFrames: this.numberOfFrames,
+				numberOfChannels: this.numberOfChannels,
+				timestamp: this.microsecondTimestamp,
+				data,
+			});
+		} else {
+			const data = new ArrayBuffer(this.allocationSize({ planeIndex: 0, format: this.format }));
+			this.copyTo(data, { planeIndex: 0, format: this.format });
+
+			return new AudioData({
+				format: this.format,
+				sampleRate: this.sampleRate,
+				numberOfFrames: this.numberOfFrames,
+				numberOfChannels: this.numberOfChannels,
+				timestamp: this.microsecondTimestamp,
+				data,
 			});
 		}
 	}
