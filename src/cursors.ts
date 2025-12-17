@@ -2,6 +2,7 @@
 // Useful in packet context? Or only for sample?
 
 import { PCM_AUDIO_CODECS } from './codec';
+import { InputDisposedError } from './input';
 import { InputAudioTrack, InputTrack, InputVideoTrack } from './input-track';
 import { AudioDecoderWrapper, DecoderWrapper, PacketRetrievalOptions, PcmAudioDecoderWrapper, validatePacketRetrievalOptions, validateTimestamp, VideoDecoderWrapper } from './media-sink';
 import { assert, AsyncMutex4, AsyncMutexLock, CallSerializer2, defer, insertSorted, isFirefox, last, MaybePromise, polyfillSymbolDispose, promiseWithResolvers, ResultValue, Rotation, Yo } from './misc';
@@ -41,6 +42,10 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 	readFirst(options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
 		validatePacketRetrievalOptions(options);
 
+		if (this.track.input._disposed) {
+			throw new InputDisposedError();
+		}
+
 		const result = new ResultValue<EncodedPacket | null>();
 		const promise = this.track._backing.getFirstPacket(result, options);
 
@@ -55,6 +60,10 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 		validateTimestamp(timestamp);
 		validatePacketRetrievalOptions(options);
 
+		if (this.track.input._disposed) {
+			throw new InputDisposedError();
+		}
+
 		const result = new ResultValue<EncodedPacket | null>();
 		const promise = this.track._backing.getPacket(result, timestamp, options);
 
@@ -68,6 +77,10 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 	readKeyAt(timestamp: number, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
 		validateTimestamp(timestamp);
 		validatePacketRetrievalOptions(options);
+
+		if (this.track.input._disposed) {
+			throw new InputDisposedError();
+		}
 
 		if (options.verifyKeyPackets) {
 			return this.readKeyAtVerified(timestamp, options);
@@ -111,6 +124,10 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 		}
 		validatePacketRetrievalOptions(options);
 
+		if (this.track.input._disposed) {
+			throw new InputDisposedError();
+		}
+
 		const result = new ResultValue<EncodedPacket | null>();
 		const promise = this.track._backing.getNextPacket(result, from, options);
 
@@ -126,6 +143,10 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 			throw new TypeError('from must be an EncodedPacket.');
 		}
 		validatePacketRetrievalOptions(options);
+
+		if (this.track.input._disposed) {
+			throw new InputDisposedError();
+		}
 
 		if (options.verifyKeyPackets) {
 			return this.readNextKeyVerified(from, options);
