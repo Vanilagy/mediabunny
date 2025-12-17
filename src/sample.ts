@@ -110,7 +110,7 @@ export abstract class VideoSampleResource {
 	abstract copyTo(destination: AllowSharedBufferSource, options: VideoFrameCopyToOptions): PlaneLayout[];
 }
 
-/*
+/**
  * The list of {@link VideoSample} pixel formats.
  * @group Samples
  * @public
