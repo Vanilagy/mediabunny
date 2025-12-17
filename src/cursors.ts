@@ -223,6 +223,8 @@ export class PacketCursor {
 	}
 
 	seekTo(timestamp: number): MaybePromise<EncodedPacket | null> {
+		validateTimestamp(timestamp);
+
 		return this.callSerializer.call(() => {
 			const result = this.reader.readAt(timestamp, this.options);
 
@@ -240,6 +242,8 @@ export class PacketCursor {
 	}
 
 	seekToKey(timestamp: number): MaybePromise<EncodedPacket | null> {
+		validateTimestamp(timestamp);
+
 		return this.callSerializer.call(() => {
 			const result = this.reader.readKeyAt(timestamp, this.options);
 
@@ -307,6 +311,10 @@ export class PacketCursor {
 	async iterate(
 		callback: (packet: EncodedPacket, stop: () => void) => MaybePromise<unknown>,
 	) {
+		if (typeof callback !== 'function') {
+			throw new TypeError('callback must be a function.');
+		}
+
 		let stopped = false;
 		const stop = () => stopped = true;
 
@@ -371,6 +379,20 @@ type SampleCursorOptions<Sample, TransformedSample> = {
 	transform?: SampleTransformer<Sample, TransformedSample>;
 };
 
+const validateSampleCursorOptions = <Sample, TransformedSample>(
+	options: SampleCursorOptions<Sample, TransformedSample>,
+) => {
+	if (!options || typeof options !== 'object') {
+		throw new TypeError('options must an object.');
+	}
+	if (options.autoClose !== undefined && typeof options.autoClose !== 'boolean') {
+		throw new TypeError('options.autoClose, when provided, must be a boolean.');
+	}
+	if (options.transform !== undefined && typeof options.transform !== 'function') {
+		throw new TypeError('options.transform, when provided, must be a function.');
+	}
+};
+
 export abstract class SampleCursor<
 	Sample extends VideoSample | AudioSample,
 	TransformedSample = Sample,
@@ -420,12 +442,10 @@ export abstract class SampleCursor<
 
 	abstract initDecoder(): Promise<DecoderWrapper<Sample>>;
 
-	constructor(
+	protected constructor(
 		reader: PacketReader,
 		options: SampleCursorOptions<Sample, TransformedSample>,
 	) {
-		// todo options validation
-
 		this.packetReader = reader;
 		this.packetCursor = new PacketCursor(reader);
 		this.options = options;
@@ -678,6 +698,7 @@ export abstract class SampleCursor<
 	}
 
 	seekTo(timestamp: number): MaybePromise<TransformedSample | null> {
+		validateTimestamp(timestamp);
 		this._ensureWillBeOpen();
 
 		try {
@@ -697,6 +718,7 @@ export abstract class SampleCursor<
 	}
 
 	seekToKey(timestamp: number): MaybePromise<TransformedSample | null> {
+		validateTimestamp(timestamp);
 		this._ensureWillBeOpen();
 
 		try {
@@ -789,6 +811,10 @@ export abstract class SampleCursor<
 	async iterate(
 		callback: (sample: TransformedSample, stop: () => void) => MaybePromise<unknown>,
 	) {
+		if (typeof callback !== 'function') {
+			throw new TypeError('callback must be a function.');
+		}
+
 		this._ensureWillBeOpen();
 
 		let stopped = false;
@@ -1069,6 +1095,7 @@ export class VideoSampleCursor<TransformedSample = VideoSample> extends SampleCu
 		if (!(reader instanceof PacketReader) || !(reader.track instanceof InputVideoTrack)) {
 			throw new TypeError('reader must be a PacketReader for an InputVideoTrack.');
 		}
+		validateSampleCursorOptions(options);
 
 		super(reader, options);
 	}
@@ -1116,6 +1143,7 @@ export class AudioSampleCursor<TransformedSample = AudioSample> extends SampleCu
 		if (!(reader instanceof PacketReader) || !(reader.track instanceof InputAudioTrack)) {
 			throw new TypeError('reader must be a PacketReader for an InputAudioTrack.');
 		}
+		validateSampleCursorOptions(options);
 
 		super(reader, options);
 	}
