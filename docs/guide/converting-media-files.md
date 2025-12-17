@@ -124,9 +124,9 @@ type ConversionVideoOptions = {
 	crop?: { left: number; top: number; width: number; height: number };
 	frameRate?: number;
 	codec?: VideoCodec;
-	hardwareAcceleration?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
 	bitrate?: number | Quality;
 	alpha?: 'discard' | 'keep'; // Defaults to 'discard'
+	hardwareAcceleration?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
 	keyFrameInterval?: number;
 	forceTranscode?: boolean;
 	process?: (sample: VideoSample) => MaybePromise<
@@ -196,10 +196,7 @@ Use the `bitrate` property to control the bitrate of the output video. For examp
 Use the `keyFrameInterval` property to control the maximum interval in seconds between key frames in the output video. Setting this fields forces a transcode.
 If you want to prevent direct copying of media data and force a transcoding step, use `forceTranscode: true`.
 
-Use the `hardwareAcceleration` property to control whether hardware or software acceleration is used for video encoding. Accepted values are:
-- `'no-preference'` (default): Let the browser decide whether to use hardware or software acceleration
-- `'prefer-hardware'`: Request hardware acceleration if available
-- `'prefer-software'`: Request software acceleration
+Use the `hardwareAcceleration` property to control whether hardware or software acceleration is used for video transcoding.
 
 ### Processing video
 

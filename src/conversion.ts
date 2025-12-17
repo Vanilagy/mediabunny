@@ -186,6 +186,11 @@ export type ConversionVideoOptions = {
 	 * Setting this fields forces a transcode.
 	 */
 	keyFrameInterval?: number;
+	/**
+	 * A hint that configures the hardware acceleration method used when transcoding. This is best left on
+	 * `'no-preference'`, the default.
+	 */
+	hardwareAcceleration?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
 	/** When `true`, video will always be re-encoded instead of directly copying over the encoded samples. */
 	forceTranscode?: boolean;
 	/**
@@ -214,11 +219,6 @@ export type ConversionVideoOptions = {
 	 * encoder configuration.
 	 */
 	processedHeight?: number;
-	/**
-	 * A hint that configures the hardware acceleration method of this codec. This is best left on `'no-preference'`,
-	 * the default.
-	 */
-	hardwareAcceleration?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
 };
 
 /**
