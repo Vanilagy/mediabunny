@@ -17,6 +17,7 @@ import {
 	SetRequired,
 	isFirefox,
 	polyfillSymbolDispose,
+	assertNever,
 } from './misc';
 
 polyfillSymbolDispose();
@@ -109,6 +110,57 @@ export abstract class VideoSampleResource {
 	abstract copyTo(destination: AllowSharedBufferSource, options: VideoFrameCopyToOptions): PlaneLayout[];
 }
 
+/*
+ * The list of {@link VideoSample} pixel formats.
+ * @group Samples
+ * @public
+ */
+export const VIDEO_SAMPLE_PIXEL_FORMATS = [
+	// 4:2:0 Y, U, V
+	'I420',
+	'I420P10',
+	'I420P12',
+	// 4:2:0 Y, U, V, A
+	'I420A',
+	'I420AP10',
+	'I420AP12',
+	// 4:2:2 Y, U, V
+	'I422',
+	'I422P10',
+	'I422P12',
+	// 4:2:2 Y, U, V, A
+	'I422A',
+	'I422AP10',
+	'I422AP12',
+	// 4:4:4 Y, U, V
+	'I444',
+	'I444P10',
+	'I444P12',
+	// 4:4:4 Y, U, V, A
+	'I444A',
+	'I444AP10',
+	'I444AP12',
+	// 4:2:0 Y, UV
+	'NV12',
+	// 4:4:4 RGBA
+	'RGBA',
+	// 4:4:4 RGBX (opaque)
+	'RGBX',
+	// 4:4:4 BGRA
+	'BGRA',
+	// 4:4:4 BGRX (opaque)
+	'BGRX',
+] as const;
+const VIDEO_SAMPLE_PIXEL_FORMATS_SET = new Set(VIDEO_SAMPLE_PIXEL_FORMATS);
+
+/**
+ * The internal pixel format with which a {@link VideoSample} is stored.
+ * [See pixel formats](https://www.w3.org/TR/webcodecs/#pixel-format) for more.
+ * @group Samples
+ * @public
+ */
+export type VideoSamplePixelFormat = typeof VIDEO_SAMPLE_PIXEL_FORMATS[number];
+
 /**
  * Metadata used for VideoSample initialization.
  * @group Samples
@@ -117,9 +169,9 @@ export abstract class VideoSampleResource {
 export type VideoSampleInit = {
 	/**
 	 * The internal pixel format in which the frame is stored.
-	 * [See pixel formats](https://developer.mozilla.org/en-US/docs/Web/API/VideoFrame/format)
+	 * [See pixel formats](https://www.w3.org/TR/webcodecs/#pixel-format)
 	 */
-	format?: VideoPixelFormat;
+	format?: VideoSamplePixelFormat;
 	/** The width of the frame in pixels. */
 	codedWidth?: number;
 	/** The height of the frame in pixels. */
@@ -132,6 +184,8 @@ export type VideoSampleInit = {
 	duration?: number;
 	/** The color space of the frame. */
 	colorSpace?: VideoColorSpaceInit;
+	/** The byte layout of the planes of the frame. */
+	layout?: PlaneLayout[];
 };
 
 /**
@@ -143,14 +197,20 @@ export type VideoSampleInit = {
 export class VideoSample implements Disposable {
 	/** @internal */
 	_data!: VideoFrame | OffscreenCanvas | Uint8Array | VideoSampleResource | null;
+	/**
+	 * Used for the ArrayBuffer-backed case.
+	 * @internal
+	 */
+	_layout!: PlaneLayout[] | null;
 	/** @internal */
 	_closed: boolean = false;
 
 	/**
-	 * The internal pixel format in which the frame is stored.
-	 * [See pixel formats](https://developer.mozilla.org/en-US/docs/Web/API/VideoFrame/format)
+	 * The internal pixel format in which the frame is stored. Will be `null` if it's using an arbitrary internal
+	 * format not representable by `VideoPixelFormat`.
+	 * [See pixel formats](https://www.w3.org/TR/webcodecs/#pixel-format)
 	 */
-	readonly format!: VideoPixelFormat | null;
+	readonly format!: VideoSamplePixelFormat | null;
 	/** The width of the frame in pixels. */
 	readonly codedWidth!: number;
 	/** The height of the frame in pixels. */
@@ -233,8 +293,8 @@ export class VideoSample implements Disposable {
 			if (!init || typeof init !== 'object') {
 				throw new TypeError('init must be an object.');
 			}
-			if (!('format' in init) || typeof init.format !== 'string') {
-				throw new TypeError('init.format must be a string.');
+			if (init.format === undefined || !VIDEO_SAMPLE_PIXEL_FORMATS_SET.has(init.format)) {
+				throw new TypeError('init.format must be one of: ' + VIDEO_SAMPLE_PIXEL_FORMATS.join(', '));
 			}
 			if (!Number.isInteger(init.codedWidth) || init.codedWidth! <= 0) {
 				throw new TypeError('init.codedWidth must be a positive integer.');
@@ -253,6 +313,7 @@ export class VideoSample implements Disposable {
 			}
 
 			this._data = toUint8Array(data).slice(); // Copy it
+			this._layout = init.layout ?? createDefaultPlaneLayout(init.format, init.codedWidth!, init.codedHeight!);
 
 			this.format = init.format;
 			this.codedWidth = init.codedWidth!;
@@ -273,6 +334,7 @@ export class VideoSample implements Disposable {
 			}
 
 			this._data = data;
+			this._layout = null;
 
 			this.format = data.format;
 			// Copying the display dimensions here, assuming no innate VideoFrame rotation
@@ -345,6 +407,7 @@ export class VideoSample implements Disposable {
 			// Draw it to a canvas
 			context.drawImage(data, 0, 0);
 			this._data = canvas;
+			this._layout = null;
 
 			this.format = 'RGBX';
 			this.codedWidth = width;
@@ -412,8 +475,11 @@ export class VideoSample implements Disposable {
 				rotation: this.rotation,
 			});
 		} else if (this._data instanceof Uint8Array) {
-			return new VideoSample(this._data.slice(), {
+			assert(this._layout);
+
+			return new VideoSample(this._data, {
 				format: this.format!,
+				layout: this._layout,
 				codedWidth: this.codedWidth,
 				codedHeight: this.codedHeight,
 				timestamp: this.timestamp,
@@ -459,17 +525,46 @@ export class VideoSample implements Disposable {
 		this._closed = true;
 	}
 
-	/** Returns the number of bytes required to hold this video sample's pixel data. */
-	allocationSize(options: VideoFrameCopyToOptions = {}) {
+	/**
+	 * Returns the number of bytes required to hold this video sample's pixel data. Throws if `format` is `null`;
+	 * specify an explicit RGB format in the options in this case.
+	 */
+	allocationSize(options: VideoFrameCopyToOptions = {}): number {
+		validateVideoFrameCopyToOptions(options);
+
 		if (this._closed) {
 			throw new Error('VideoSample is closed.');
+		}
+		if ((options.format ?? this.format) === null) {
+			throw new Error(
+				'Cannot get allocation size when format is null. Please manually provide an RGB pixel format in the'
+				+ ' options instead.',
+			);
 		}
 
 		assert(this._data !== null);
 
 		if (this._data instanceof VideoSampleResource) {
 			return this._data.allocationSize(options);
-		} else if (isVideoFrame(this._data)) {
+		}
+
+		if (!isVideoFrame(this._data)) {
+			if (
+				options.colorSpace
+				|| (options.format && options.format !== this.format)
+				|| options.layout
+				|| options.rect
+			) {
+				// Temporarily convert to VideoFrame to get it done
+				const videoFrame = this.toVideoFrame();
+				const size = videoFrame.allocationSize(options);
+				videoFrame.close();
+
+				return size;
+			}
+		}
+
+		if (isVideoFrame(this._data)) {
 			return this._data.allocationSize(options);
 		} else if (this._data instanceof Uint8Array) {
 			return this._data.byteLength;
@@ -478,25 +573,58 @@ export class VideoSample implements Disposable {
 		}
 	}
 
-	/** Copies this video sample's pixel data to an ArrayBuffer or ArrayBufferView. */
-	async copyTo(destination: AllowSharedBufferSource, options: VideoFrameCopyToOptions = {}) {
+	/**
+	 * Copies this video sample's pixel data to an ArrayBuffer or ArrayBufferView. Throws if `format` is `null`;
+	 * specify an explicit RGB format in the options in this case.
+	 * @returns The byte layout of the planes of the copied data.
+	 */
+	async copyTo(destination: AllowSharedBufferSource, options: VideoFrameCopyToOptions = {}): Promise<PlaneLayout[]> {
 		if (!isAllowSharedBufferSource(destination)) {
 			throw new TypeError('destination must be an ArrayBuffer or an ArrayBuffer view.');
 		}
+		validateVideoFrameCopyToOptions(options);
 
 		if (this._closed) {
 			throw new Error('VideoSample is closed.');
+		}
+		if ((options.format ?? this.format) === null) {
+			throw new Error(
+				'Cannot copy video sample data when format is null. Please manually provide an RGB pixel format in the'
+				+ ' options instead.',
+			);
 		}
 
 		assert(this._data !== null);
 
 		if (this._data instanceof VideoSampleResource) {
-			this._data.copyTo(destination, options);
-		} else if (isVideoFrame(this._data)) {
-			await this._data.copyTo(destination, options);
+			return this._data.copyTo(destination, options);
+		}
+
+		if (!isVideoFrame(this._data)) {
+			if (
+				options.colorSpace
+				|| (options.format && options.format !== this.format)
+				|| options.layout
+				|| options.rect
+			) {
+				// Temporarily convert to VideoFrame to get it done
+				const videoFrame = this.toVideoFrame();
+				const layout = await videoFrame.copyTo(destination, options);
+				videoFrame.close();
+
+				return layout;
+			}
+		}
+
+		if (isVideoFrame(this._data)) {
+			return this._data.copyTo(destination, options);
 		} else if (this._data instanceof Uint8Array) {
+			assert(this._layout);
+
 			const dest = toUint8Array(destination);
 			dest.set(this._data);
+
+			return this._layout;
 		} else {
 			const canvas = this._data;
 			const context = canvas.getContext('2d');
@@ -505,6 +633,11 @@ export class VideoSample implements Disposable {
 			const imageData = context.getImageData(0, 0, this.codedWidth, this.codedHeight);
 			const dest = toUint8Array(destination);
 			dest.set(imageData.data);
+
+			return [{
+				offset: 0,
+				stride: 4 * this.codedWidth,
+			}];
 		}
 	}
 
@@ -547,7 +680,7 @@ export class VideoSample implements Disposable {
 			});
 		} else if (this._data instanceof Uint8Array) {
 			return new VideoFrame(this._data, {
-				format: this.format!,
+				format: this.format! as VideoPixelFormat,
 				codedWidth: this.codedWidth,
 				codedHeight: this.codedHeight,
 				timestamp: this.microsecondTimestamp,
@@ -993,7 +1126,168 @@ export const validateCropRectangle = (crop: CropRectangle, prefix: string) => {
 	}
 };
 
-const AUDIO_SAMPLE_FORMATS = new Set(
+const validateVideoFrameCopyToOptions = (options: VideoFrameCopyToOptions) => {
+	if (!options || typeof options !== 'object') {
+		throw new TypeError('options must be an object.');
+	}
+	if (options.colorSpace !== undefined && !['display-p3', 'srgb'].includes(options.colorSpace)) {
+		throw new TypeError('options.colorSpace, when provided, must be \'display-p3\' or \'srgb\'.');
+	}
+	if (options.format !== undefined && typeof options.format !== 'string') {
+		throw new TypeError('options.format, when provided, must be a string.');
+	}
+	if (options.layout !== undefined) {
+		if (!Array.isArray(options.layout)) {
+			throw new TypeError('options.layout, when provided, must be an array.');
+		}
+
+		for (const plane of options.layout) {
+			if (!plane || typeof plane !== 'object') {
+				throw new TypeError('Each entry in options.layout must be an object.');
+			}
+			if (!Number.isInteger(plane.offset) || plane.offset < 0) {
+				throw new TypeError('plane.offset must be a non-negative integer.');
+			}
+			if (!Number.isInteger(plane.stride) || plane.stride < 0) {
+				throw new TypeError('plane.stride must be a non-negative integer.');
+			}
+		}
+	}
+	if (options.rect !== undefined) {
+		if (!options.rect || typeof options.rect !== 'object') {
+			throw new TypeError('options.rect, when provided, must be an object.');
+		}
+		if (options.rect.x !== undefined && (!Number.isInteger(options.rect.x) || options.rect.x < 0)) {
+			throw new TypeError('options.rect.x, when provided, must be a non-negative integer.');
+		}
+		if (options.rect.y !== undefined && (!Number.isInteger(options.rect.y) || options.rect.y < 0)) {
+			throw new TypeError('options.rect.y, when provided, must be a non-negative integer.');
+		}
+		if (options.rect.width !== undefined && (!Number.isInteger(options.rect.width) || options.rect.width < 0)) {
+			throw new TypeError('options.rect.width, when provided, must be a non-negative integer.');
+		}
+		if (options.rect.height !== undefined && (!Number.isInteger(options.rect.height) || options.rect.height < 0)) {
+			throw new TypeError('options.rect.height, when provided, must be a non-negative integer.');
+		}
+	}
+};
+
+/** Implements logic from WebCodecs § 9.4.6 "Compute Layout and Allocation Size" */
+const createDefaultPlaneLayout = (
+	format: VideoSamplePixelFormat,
+	codedWidth: number,
+	codedHeight: number,
+): PlaneLayout[] => {
+	const planes = getPlaneConfigs(format);
+	const layouts: PlaneLayout[] = [];
+	let currentOffset = 0;
+
+	for (const plane of planes) {
+		// Per § 9.8, dimensions are usually "rounded up to the nearest integer".
+		const planeWidth = Math.ceil(codedWidth / plane.widthDivisor);
+		const planeHeight = Math.ceil(codedHeight / plane.heightDivisor);
+
+		const stride = planeWidth * plane.sampleBytes;
+
+		// Tight packing
+		const planeSize = stride * planeHeight;
+
+		layouts.push({
+			offset: currentOffset,
+			stride: stride,
+		});
+
+		currentOffset += planeSize;
+	}
+
+	return layouts;
+};
+
+type PlaneConfig = {
+	sampleBytes: number;
+	widthDivisor: number; // Horizontal sub-sampling factor
+	heightDivisor: number; // Vertical sub-sampling factor
+};
+
+/** Helper to retrieve plane configurations based on WebCodecs § 9.8 Pixel Format definitions. */
+const getPlaneConfigs = (format: VideoSamplePixelFormat): PlaneConfig[] => {
+	// Helper for standard YUV planes
+	const yuv = (
+		yBytes: number,
+		uvBytes: number,
+		subX: number,
+		subY: number,
+		hasAlpha: boolean,
+	): PlaneConfig[] => {
+		const configs: PlaneConfig[] = [
+			{ sampleBytes: yBytes, widthDivisor: 1, heightDivisor: 1 },
+			{ sampleBytes: uvBytes, widthDivisor: subX, heightDivisor: subY },
+			{ sampleBytes: uvBytes, widthDivisor: subX, heightDivisor: subY },
+		];
+
+		if (hasAlpha) {
+			// Match luma dimensions
+			configs.push({ sampleBytes: yBytes, widthDivisor: 1, heightDivisor: 1 });
+		}
+
+		return configs;
+	};
+
+	switch (format) {
+		case 'I420':
+			return yuv(1, 1, 2, 2, false);
+		case 'I420P10':
+		case 'I420P12':
+			return yuv(2, 2, 2, 2, false);
+		case 'I420A':
+			return yuv(1, 1, 2, 2, true);
+		case 'I420AP10':
+		case 'I420AP12':
+			return yuv(2, 2, 2, 2, true);
+
+		case 'I422':
+			return yuv(1, 1, 2, 1, false);
+		case 'I422P10':
+		case 'I422P12':
+			return yuv(2, 2, 2, 1, false);
+		case 'I422A':
+			return yuv(1, 1, 2, 1, true);
+		case 'I422AP10':
+		case 'I422AP12':
+			return yuv(2, 2, 2, 1, true);
+
+		case 'I444':
+			return yuv(1, 1, 1, 1, false);
+		case 'I444P10':
+		case 'I444P12':
+			return yuv(2, 2, 1, 1, false);
+		case 'I444A':
+			return yuv(1, 1, 1, 1, true);
+		case 'I444AP10':
+		case 'I444AP12':
+			return yuv(2, 2, 1, 1, true);
+
+		case 'NV12':
+			return [
+				{ sampleBytes: 1, widthDivisor: 1, heightDivisor: 1 },
+				{ sampleBytes: 2, widthDivisor: 2, heightDivisor: 2 }, // Interleaved U and V
+			];
+
+		case 'RGBA':
+		case 'RGBX':
+		case 'BGRA':
+		case 'BGRX':
+			return [
+				{ sampleBytes: 4, widthDivisor: 1, heightDivisor: 1 },
+			];
+
+		default:
+			assertNever(format);
+			assert(false);
+	}
+};
+
+const AUDIO_SAMPLE_FORMATS = new Set<AudioSampleFormat>(
 	['f32', 'f32-planar', 's16', 's16-planar', 's32', 's32-planar', 'u8', 'u8-planar'],
 );
 

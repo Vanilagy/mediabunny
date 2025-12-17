@@ -429,7 +429,6 @@ export abstract class BaseMediaSampleSink<
 
 		// The following is the "pump" process that keeps pumping packets into the decoder
 		(async () => {
-			const decoderError = new Error();
 			const decoder = await this._createDecoder((sample) => {
 				onQueueDequeue();
 				if (sample.timestamp >= endTimestamp) {
@@ -467,7 +466,6 @@ export abstract class BaseMediaSampleSink<
 				}
 			}, (error) => {
 				if (!outOfBandError) {
-					error.stack = decoderError.stack; // Provide a more useful stack trace
 					outOfBandError = error;
 					onQueueNotEmpty();
 				}
@@ -613,7 +611,6 @@ export abstract class BaseMediaSampleSink<
 
 		// The following is the "pump" process that keeps pumping packets into the decoder
 		(async () => {
-			const decoderError = new Error();
 			const decoder = await this._createDecoder((sample) => {
 				onQueueDequeue();
 
@@ -641,7 +638,6 @@ export abstract class BaseMediaSampleSink<
 				}
 			}, (error) => {
 				if (!outOfBandError) {
-					error.stack = decoderError.stack; // Provide a more useful stack trace
 					outOfBandError = error;
 					onQueueNotEmpty();
 				}
@@ -891,6 +887,8 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 				}
 			}
 
+			const stack = new Error('Decoding error').stack;
+
 			this.decoder = new VideoDecoder({
 				output: (frame) => {
 					try {
@@ -899,7 +897,10 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 						this.onError(error as Error);
 					}
 				},
-				error: onError,
+				error: (error) => {
+					error.stack = stack; // Provide a more useful stack trace, the default one sucks
+					this.onError(error);
+				},
 			});
 			this.decoder.configure(this.decoderConfig);
 		}
@@ -999,6 +1000,8 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 				}
 			};
 
+			const stack = new Error('Decoding error').stack;
+
 			this.alphaDecoder = new VideoDecoder({
 				output: (frame) => {
 					try {
@@ -1007,7 +1010,10 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 						this.onError(error as Error);
 					}
 				},
-				error: this.onError,
+				error: (error) => {
+					error.stack = stack; // Provide a more useful stack trace, the default one sucks
+					this.onError(error);
+				},
 			});
 			this.alphaDecoder.configure(this.decoderConfig);
 		}
@@ -1763,6 +1769,8 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 
 			void this.customDecoderCallSerializer.call(() => this.customDecoder!.init());
 		} else {
+			const stack = new Error('Decoding error').stack;
+
 			this.decoder = new AudioDecoder({
 				output: (data) => {
 					try {
@@ -1771,7 +1779,10 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 						this.onError(error as Error);
 					}
 				},
-				error: onError,
+				error: (error) => {
+					error.stack = stack; // Provide a more useful stack trace, the default one sucks
+					this.onError(error);
+				},
 			});
 			this.decoder.configure(decoderConfig);
 		}
