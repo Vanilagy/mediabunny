@@ -374,11 +374,11 @@ export abstract class SampleCursor<
 	pumpStopQueued = false;
 	pumpStopped = promiseWithResolvers();
 
-	decodedTimestamps: number[] = [];
-	maxDecodedSequenceNumber = -1;
 	pumpTarget: EncodedPacket | null = null;
+	lastTarget: EncodedPacket | null = null;
 	pumpMutex = new AsyncMutex4();
 	_closed = false;
+	queuedResets = 0;
 
 	error: unknown = null;
 	errorSet = false;
@@ -445,10 +445,6 @@ export abstract class SampleCursor<
 				} else {
 					return;
 				}
-			}
-
-			while (this.decodedTimestamps.length > 0 && this.decodedTimestamps[0]! <= sample.timestamp) {
-				this.decodedTimestamps.shift();
 			}
 
 			if (this.pendingRequests.length === 0) {
@@ -525,6 +521,14 @@ export abstract class SampleCursor<
 		}
 	}
 
+	_ensureWillBeOpen() {
+		if (this.queuedResets > 0) {
+			return;
+		}
+
+		this._ensureNotClosed();
+	}
+
 	async _seekToPacket(
 		res: ResultValue<TransformedSample | null>,
 		targetPacketPromise: MaybePromise<EncodedPacket | null>,
@@ -565,9 +569,7 @@ export abstract class SampleCursor<
 
 		let setNewPump = true;
 
-		if (this.sampleQueue.length > 0 && targetPacket.timestamp < this.sampleQueue[0]!.timestamp) {
-
-		} else {
+		if (this.lastTarget && this.lastTarget.timestamp <= targetPacket.timestamp) {
 			while (this.sampleQueue.length > 0) {
 				const nextSample = this.sampleQueue.shift()!;
 				this.queueDequeue.resolve();
@@ -581,31 +583,17 @@ export abstract class SampleCursor<
 				}
 			}
 
-			if (this.pumpTarget) {
-				const max = Math.max(this.pumpTarget.sequenceNumber, this.maxDecodedSequenceNumber);
+			if (targetPacket.timestamp - this.lastTarget.timestamp < 0.1) {
+				setNewPump = false;
+			} else {
+				let key = this.packetReader.readNextKey(this.lastTarget, { verifyKeyPackets: true });
+				if (key instanceof Promise) key = await key;
 
-				if (targetPacket.sequenceNumber <= max) {
-					const nextExpectedTimestamp = this.decodedTimestamps[0] ?? this.packetCursor.current?.timestamp;
-					if (nextExpectedTimestamp === undefined || nextExpectedTimestamp > targetPacket.timestamp) {
-						// yeah
-						// formulate the "no nextExpectedTimestamp" case
-					} else {
-						setNewPump = false;
-					}
-				} else {
-					if (targetPacket.timestamp - this.pumpTarget.timestamp < 0.1) {
-						setNewPump = false;
-					} else {
-						let key = this.packetReader.readNextKey(this.pumpTarget, { verifyKeyPackets: true });
-						if (key instanceof Promise) key = await key;
-
-						if (
-							!key
-							|| targetPacket.sequenceNumber < key.sequenceNumber
-						) {
-							setNewPump = false;
-						}
-					}
+				if (
+					!key
+					|| targetPacket.sequenceNumber < key.sequenceNumber
+				) {
+					setNewPump = false;
 				}
 			}
 		}
@@ -613,6 +601,8 @@ export abstract class SampleCursor<
 		if (setNewPump && this.pumpRunning) {
 			await this.stopPump();
 		}
+
+		this.lastTarget = targetPacket;
 
 		if (!this.pumpTarget || targetPacket.sequenceNumber > this.pumpTarget.sequenceNumber) {
 			this.pumpTarget = targetPacket;
@@ -648,7 +638,7 @@ export abstract class SampleCursor<
 	}
 
 	seekToFirst(): MaybePromise<TransformedSample | null> {
-		this._ensureNotClosed();
+		this._ensureWillBeOpen();
 
 		try {
 			const result = new ResultValue<TransformedSample | null>();
@@ -667,7 +657,7 @@ export abstract class SampleCursor<
 	}
 
 	seekTo(timestamp: number): MaybePromise<TransformedSample | null> {
-		this._ensureNotClosed();
+		this._ensureWillBeOpen();
 
 		try {
 			const result = new ResultValue<TransformedSample | null>();
@@ -686,7 +676,7 @@ export abstract class SampleCursor<
 	}
 
 	seekToKey(timestamp: number): MaybePromise<TransformedSample | null> {
-		this._ensureNotClosed();
+		this._ensureWillBeOpen();
 
 		try {
 			const result = new ResultValue<TransformedSample | null>();
@@ -751,21 +741,13 @@ export abstract class SampleCursor<
 		}
 		this.lastPendingRequest = pendingRequest;
 
-		// Note that the next packet we get here is not necessarily the packet belonging to the next sample, since we
-		// can have out of order timestamps when B-frames are at play. However, if next() is called a sufficiently
-		// large amount of times, then the pump target will stay roughly in sync with the desired next sample.
-		const next = this.pumpTarget && await this.packetReader.readNext(this.pumpTarget, { metadataOnly: true });
-		if (next) {
-			this.pumpTarget = next;
-		}
-
 		lock.release(); // Waiting for the return would be too long
 
 		return res.set(await request.promise);
 	}
 
 	next(): MaybePromise<TransformedSample | null> {
-		this._ensureNotClosed();
+		this._ensureWillBeOpen();
 
 		try {
 			const result = new ResultValue<TransformedSample | null>();
@@ -786,13 +768,19 @@ export abstract class SampleCursor<
 	async iterate(
 		callback: (sample: TransformedSample, stop: () => void) => MaybePromise<unknown>,
 	) {
-		this._ensureNotClosed();
+		this._ensureWillBeOpen();
 
 		let stopped = false;
 		const stop = () => stopped = true;
 
 		const waitPromise = this.waitUntilIdle();
 		if (waitPromise) await waitPromise;
+
+		const lock = this.pumpMutex.lock();
+		if (lock.pending) await lock.ready;
+		lock.release();
+
+		this._ensureNotClosed();
 
 		while (true) {
 			if (this.current) {
@@ -815,10 +803,16 @@ export abstract class SampleCursor<
 
 	// eslint-disable-next-line @stylistic/generator-star-spacing
 	async *[Symbol.asyncIterator]() {
-		this._ensureNotClosed();
+		this._ensureWillBeOpen();
 
 		const waitPromise = this.waitUntilIdle();
 		if (waitPromise) await waitPromise;
+
+		const lock = this.pumpMutex.lock();
+		if (lock.pending) await lock.ready;
+		lock.release();
+
+		this._ensureNotClosed();
 
 		while (true) {
 			if (this.current) {
@@ -932,8 +926,6 @@ export abstract class SampleCursor<
 					continue;
 				}
 
-				insertSorted(this.decodedTimestamps, this.packetCursor.current.timestamp, x => x);
-				this.maxDecodedSequenceNumber = this.packetCursor.current.sequenceNumber;
 				this.decoder.decode(this.packetCursor.current);
 
 				if (this.debugInfo.enabled) {
@@ -974,10 +966,9 @@ export abstract class SampleCursor<
 			this.pumpStopped.resolve();
 			this.pumpStopped = promiseWithResolvers();
 			this.pumpRunning = false;
-			this.maxDecodedSequenceNumber = -1;
-			this.decodedTimestamps.length = 0;
 			this.pumpTarget = null;
 			this.pumpStopQueued = false;
+			this.lastTarget = null;
 		}
 	}
 
@@ -1009,6 +1000,9 @@ export abstract class SampleCursor<
 	async reset() {
 		this.predictedRequests++;
 
+		this.queuedResets++;
+		using _ = defer(() => this.queuedResets--);
+
 		using lock = this.pumpMutex.lock();
 		if (lock.pending) await lock.ready;
 
@@ -1023,8 +1017,6 @@ export abstract class SampleCursor<
 		assert(this.sampleQueue.length === 0);
 		assert(this.pendingRequests.length === 0);
 		assert(this.lastPendingRequest === null);
-		assert(this.decodedTimestamps.length === 0);
-		assert(this.maxDecodedSequenceNumber === -1);
 		assert(this.pumpTarget === null);
 		assert(!this.decoder || this.decoder.closed);
 

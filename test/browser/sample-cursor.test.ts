@@ -10,7 +10,36 @@ import {
 	VideoSampleCursor,
 } from '../../src/cursors.js';
 import { AudioSample, VideoSample } from '../../src/sample.js';
-import { promiseIterateAll } from '../../src/misc.js';
+import { promiseIterateAll, promiseWithResolvers } from '../../src/misc.js';
+
+const promiseAllEnsureOrder = async <T>(promises: T[]) => {
+	const results: Awaited<T>[] = [];
+	const { promise, resolve, reject } = promiseWithResolvers();
+
+	const onValue = (value: Awaited<T>, i: number) => {
+		if (results.length === i) {
+			results.push(value);
+
+			if (results.length === promises.length) {
+				resolve();
+			}
+		} else {
+			reject(new Error('Order violation'));
+		}
+	};
+
+	for (let i = 0; i < promises.length; i++) {
+		const value = promises[i]!;
+		if (value instanceof Promise) {
+			void value.then(x => onValue(x as Awaited<T>, i));
+		} else {
+			onValue(value as Awaited<T>, i);
+		}
+	}
+
+	await promise;
+	return results;
+};
 
 test('Sample cursor seeking', async () => {
 	using input = new Input({
@@ -392,8 +421,7 @@ test('Sample cursor reset', async () => {
 		cursor.next(),
 	];
 
-	// eslint-disable-next-line @typescript-eslint/await-thenable
-	const results = await Promise.all(commands);
+	const results = await promiseAllEnsureOrder(commands);
 
 	expect(cursor.closed).toBe(false);
 	expect(results[0]!.timestamp).toBeGreaterThan(firstSample!.timestamp);
@@ -410,8 +438,7 @@ test('Sample cursor reset', async () => {
 		cursor2.reset(),
 	];
 
-	// eslint-disable-next-line @typescript-eslint/await-thenable
-	await Promise.all(commands2);
+	await promiseAllEnsureOrder(commands2);
 
 	expect(cursor2.debugInfo.decodedPackets).toHaveLength(1);
 });
@@ -588,8 +615,7 @@ test('Command queuing', async () => {
 	];
 	expect(commands0.every(x => x instanceof Promise)).toBe(true);
 
-	// eslint-disable-next-line @typescript-eslint/await-thenable
-	await Promise.all(commands0);
+	await promiseAllEnsureOrder(commands0);
 
 	expect(cursor0.debugInfo.pumpsStarted).toBe(1);
 
@@ -602,8 +628,7 @@ test('Command queuing', async () => {
 	];
 	expect(commands1.every(x => x instanceof Promise)).toBe(true);
 
-	// eslint-disable-next-line @typescript-eslint/await-thenable
-	const results1 = await Promise.all(commands1);
+	const results1 = await promiseAllEnsureOrder(commands1);
 	expect(results1[0]!.timestamp).toBe(0);
 	expect(cursor1.debugInfo.decodedPackets.map(x => x.timestamp)).toEqual([0]);
 
@@ -621,8 +646,7 @@ test('Command queuing', async () => {
 	];
 	expect(commands2.every(x => x instanceof Promise)).toBe(true);
 
-	// eslint-disable-next-line @typescript-eslint/await-thenable
-	const results2 = await Promise.all(commands2);
+	const results2 = await promiseAllEnsureOrder(commands2);
 	expect(results2[0]!.timestamp).toBe(0);
 	expect(results2[1]!.timestamp).toBe(1);
 	expect(results2[2]!.timestamp).toBe(2);
@@ -632,6 +656,7 @@ test('Command queuing', async () => {
 	expect(cursor2.debugInfo.decodedPackets.map(x => x.timestamp)).toEqual([
 		0, 1, 2, 3, 4, 5,
 	]);
+	expect(cursor2.debugInfo.pumpsStarted).toBe(6);
 
 	const cursor3 = new VideoSampleCursor(reader);
 	cursor3.debugInfo.enabled = true;
@@ -647,8 +672,7 @@ test('Command queuing', async () => {
 	];
 	expect(commands3.every(x => x instanceof Promise)).toBe(true);
 
-	// eslint-disable-next-line @typescript-eslint/await-thenable
-	const results3 = await Promise.all(commands3);
+	const results3 = await promiseAllEnsureOrder(commands3);
 
 	expect(results3[0]!.timestamp).toBeLessThanOrEqual(0.5);
 	expect(results3[1]!.timestamp).toBeLessThanOrEqual(0.4);
@@ -657,7 +681,7 @@ test('Command queuing', async () => {
 	expect(results3[4]!.timestamp).toBeLessThanOrEqual(0.1);
 	expect(results3[5]!.timestamp).toBe(0);
 	expect(cursor3.debugInfo.decodedPackets.every(x => x.timestamp <= 0.5)).toBe(true);
-	expect(cursor3.debugInfo.pumpsStarted).toBe(1);
+	expect(cursor3.debugInfo.pumpsStarted).toBe(6);
 
 	const cursor4 = new VideoSampleCursor(reader);
 	cursor4.debugInfo.enabled = true;
@@ -671,8 +695,7 @@ test('Command queuing', async () => {
 
 	expect(commands4.every(x => x instanceof Promise)).toBe(true);
 
-	// eslint-disable-next-line @typescript-eslint/await-thenable
-	const results4 = await Promise.all(commands4);
+	const results4 = await promiseAllEnsureOrder(commands4);
 
 	expect(results4[0]!.timestamp).toBe(0);
 	expect(results4[1]!.timestamp).toBeGreaterThan(results4[0]!.timestamp);
@@ -697,8 +720,7 @@ test('Command queuing', async () => {
 		cursor5.close(),
 	];
 
-	// eslint-disable-next-line @typescript-eslint/await-thenable
-	const results5 = await Promise.all(commands5);
+	const results5 = await promiseAllEnsureOrder(commands5);
 
 	expect(results5[0]!.timestamp).toBe(0);
 	expect(results5[1]!.timestamp).toBeGreaterThan(results5[0]!.timestamp);
@@ -714,7 +736,7 @@ test('Command queuing', async () => {
 	expect(results5[9]!.timestamp).toBe(0);
 	expect(results5[10]!.timestamp).toBeGreaterThan(results5[9]!.timestamp);
 
-	expect(cursor5.debugInfo.pumpsStarted).toBe(1);
+	expect(cursor5.debugInfo.pumpsStarted).toBe(2);
 
 	const cursor6 = new VideoSampleCursor(reader);
 	cursor6.debugInfo.enabled = true;
@@ -729,8 +751,7 @@ test('Command queuing', async () => {
 		cursor6.close(),
 	];
 
-	// eslint-disable-next-line @typescript-eslint/await-thenable
-	const results6 = await Promise.all(commands6);
+	const results6 = await promiseAllEnsureOrder(commands6);
 
 	expect(results6[0]!.timestamp).toBe(0);
 	expect(results6[1]!.timestamp).toBeLessThanOrEqual(0.4);
@@ -748,7 +769,7 @@ test('Command queuing', async () => {
 	];
 	expect(commands7[0]).toBe(commands7[1]); // Same Promise
 
-	await Promise.all(commands7);
+	await promiseAllEnsureOrder(commands7);
 
 	const cursor8 = new VideoSampleCursor(reader, { autoClose: false });
 
@@ -881,8 +902,7 @@ test('AudioSampleCursor', async () => {
 		cursor.seekTo(0.2),
 	];
 
-	// eslint-disable-next-line @typescript-eslint/await-thenable
-	const result = await Promise.all(commands);
+	const result = await promiseAllEnsureOrder(commands);
 
 	expect(result[0]!.timestamp).toBeLessThanOrEqual(0);
 	expect(result[1]!.timestamp).toBeLessThanOrEqual(0.05);
