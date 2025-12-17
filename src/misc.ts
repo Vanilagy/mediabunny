@@ -338,6 +338,35 @@ export const promiseWithResolvers = <T = void>() => {
 	return { promise, resolve: resolve!, reject: reject! };
 };
 
+export const promiseAllEnsureOrder = async <T>(promises: T[]) => {
+	const results: Awaited<T>[] = [];
+	const { promise, resolve, reject } = promiseWithResolvers();
+
+	const onValue = (value: Awaited<T>, i: number) => {
+		if (results.length === i) {
+			results.push(value);
+
+			if (results.length === promises.length) {
+				resolve();
+			}
+		} else {
+			reject(new Error('Order violation'));
+		}
+	};
+
+	for (let i = 0; i < promises.length; i++) {
+		const value = promises[i]!;
+		if (value instanceof Promise) {
+			void value.then(x => onValue(x as Awaited<T>, i));
+		} else {
+			onValue(value as Awaited<T>, i);
+		}
+	}
+
+	await promise;
+	return results;
+};
+
 export const removeItem = <T>(arr: T[], item: T) => {
 	const index = arr.indexOf(item);
 	if (index !== -1) {

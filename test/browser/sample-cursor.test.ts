@@ -10,36 +10,7 @@ import {
 	VideoSampleCursor,
 } from '../../src/cursors.js';
 import { AudioSample, VideoSample } from '../../src/sample.js';
-import { promiseIterateAll, promiseWithResolvers } from '../../src/misc.js';
-
-const promiseAllEnsureOrder = async <T>(promises: T[]) => {
-	const results: Awaited<T>[] = [];
-	const { promise, resolve, reject } = promiseWithResolvers();
-
-	const onValue = (value: Awaited<T>, i: number) => {
-		if (results.length === i) {
-			results.push(value);
-
-			if (results.length === promises.length) {
-				resolve();
-			}
-		} else {
-			reject(new Error('Order violation'));
-		}
-	};
-
-	for (let i = 0; i < promises.length; i++) {
-		const value = promises[i]!;
-		if (value instanceof Promise) {
-			void value.then(x => onValue(x as Awaited<T>, i));
-		} else {
-			onValue(value as Awaited<T>, i);
-		}
-	}
-
-	await promise;
-	return results;
-};
+import { promiseAllEnsureOrder, promiseIterateAll } from '../../src/misc.js';
 
 test('Sample cursor seeking', async () => {
 	using input = new Input({

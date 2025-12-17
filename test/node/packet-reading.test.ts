@@ -5,6 +5,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { PacketCursor, PacketReader } from '../../src/cursors.js';
+import { promiseAllEnsureOrder } from '../../src/misc.js';
 
 const __dirname = new URL('.', import.meta.url).pathname;
 
@@ -251,8 +252,7 @@ test('Command queuing', async () => {
 
 	expect(commands.every(x => x instanceof Promise)).toBe(true);
 
-	// eslint-disable-next-line @typescript-eslint/await-thenable
-	const resolved = await Promise.all(commands);
+	const resolved = await promiseAllEnsureOrder(commands);
 
 	expect(resolved[0]!.timestamp).toBe(0);
 
