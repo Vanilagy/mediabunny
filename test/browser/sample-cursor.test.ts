@@ -996,6 +996,18 @@ test('AudioSampleCursor', async () => {
 	// One pump was used for all the above commands, even tho they all seek to different key packets
 	expect(cursor.debugInfo.pumpsStarted).toBe(4);
 
+	await cursor.seekToFirst();
+	const nextSample = (await cursor.nextKey())!; // nextKey acts like next for audio tracks
+	const nextNextSample = (await cursor.nextKey())!;
+	expect(nextSample.timestamp).toBeCloseTo(firstSample.timestamp + firstSample.duration);
+	expect(nextNextSample.timestamp).toBeCloseTo(nextSample.timestamp + firstSample.duration);
+
+	await cursor.seekToFirst();
+	const actualNextSample = (await cursor.next())!;
+	expect(nextSample.timestamp).toBe(actualNextSample.timestamp);
+
+	expect(cursor.debugInfo.pumpsStarted).toBe(6);
+
 	await cursor.close();
 
 	expect(AudioSample._openSampleCount).toBe(0);
