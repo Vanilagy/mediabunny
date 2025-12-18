@@ -187,11 +187,11 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 
 export class PacketCursor {
 	reader: PacketReader;
-	options: PacketRetrievalOptions;
-
 	current: EncodedPacket | null = null;
-	nextIsFirst = true;
-	callSerializer = new CallSerializer2();
+
+	private _options: PacketRetrievalOptions;
+	private _nextIsFirst = true;
+	private _callSerializer = new CallSerializer2();
 
 	constructor(reader: PacketReader, options: PacketRetrievalOptions = {}) {
 		if (!(reader instanceof PacketReader)) {
@@ -200,14 +200,14 @@ export class PacketCursor {
 		validatePacketRetrievalOptions(options);
 
 		this.reader = reader;
-		this.options = options;
+		this._options = options;
 	}
 
-	private seekToFirstDirect(): MaybePromise<EncodedPacket | null> {
-		const result = this.reader.readFirst(this.options);
+	private _seekToFirstDirect(): MaybePromise<EncodedPacket | null> {
+		const result = this.reader.readFirst(this._options);
 
 		const onPacket = (packet: EncodedPacket | null) => {
-			this.nextIsFirst = false;
+			this._nextIsFirst = false;
 			return this.current = packet;
 		};
 
@@ -219,17 +219,17 @@ export class PacketCursor {
 	}
 
 	seekToFirst(): MaybePromise<EncodedPacket | null> {
-		return this.callSerializer.call(() => this.seekToFirstDirect());
+		return this._callSerializer.call(() => this._seekToFirstDirect());
 	}
 
 	seekTo(timestamp: number): MaybePromise<EncodedPacket | null> {
 		validateTimestamp(timestamp);
 
-		return this.callSerializer.call(() => {
-			const result = this.reader.readAt(timestamp, this.options);
+		return this._callSerializer.call(() => {
+			const result = this.reader.readAt(timestamp, this._options);
 
 			const onPacket = (packet: EncodedPacket | null) => {
-				this.nextIsFirst = !packet;
+				this._nextIsFirst = !packet;
 				return this.current = packet;
 			};
 
@@ -244,11 +244,11 @@ export class PacketCursor {
 	seekToKey(timestamp: number): MaybePromise<EncodedPacket | null> {
 		validateTimestamp(timestamp);
 
-		return this.callSerializer.call(() => {
-			const result = this.reader.readKeyAt(timestamp, this.options);
+		return this._callSerializer.call(() => {
+			const result = this.reader.readKeyAt(timestamp, this._options);
 
 			const onPacket = (packet: EncodedPacket | null) => {
-				this.nextIsFirst = !packet;
+				this._nextIsFirst = !packet;
 				return this.current = packet;
 			};
 
@@ -261,16 +261,16 @@ export class PacketCursor {
 	}
 
 	next(): MaybePromise<EncodedPacket | null> {
-		return this.callSerializer.call(() => {
-			if (this.nextIsFirst) {
-				return this.seekToFirstDirect();
+		return this._callSerializer.call(() => {
+			if (this._nextIsFirst) {
+				return this._seekToFirstDirect();
 			}
 
 			if (!this.current) {
 				return null;
 			}
 
-			const result = this.reader.readNext(this.current, this.options);
+			const result = this.reader.readNext(this.current, this._options);
 
 			const onPacket = (packet: EncodedPacket | null) => {
 				return this.current = packet;
@@ -285,16 +285,16 @@ export class PacketCursor {
 	}
 
 	nextKey(): MaybePromise<EncodedPacket | null> {
-		return this.callSerializer.call(() => {
-			if (this.nextIsFirst) {
-				return this.seekToFirstDirect();
+		return this._callSerializer.call(() => {
+			if (this._nextIsFirst) {
+				return this._seekToFirstDirect();
 			}
 
 			if (!this.current) {
 				return null;
 			}
 
-			const result = this.reader.readNextKey(this.current, this.options);
+			const result = this.reader.readNextKey(this.current, this._options);
 
 			const onPacket = (packet: EncodedPacket | null) => {
 				return this.current = packet;
@@ -318,7 +318,7 @@ export class PacketCursor {
 		let stopped = false;
 		const stop = () => stopped = true;
 
-		const donePromise = this.callSerializer.done();
+		const donePromise = this._callSerializer.done();
 		if (donePromise) await donePromise;
 
 		while (true) {
@@ -342,7 +342,7 @@ export class PacketCursor {
 
 	// eslint-disable-next-line @stylistic/generator-star-spacing
 	async *[Symbol.asyncIterator]() {
-		const donePromise = this.callSerializer.done();
+		const donePromise = this._callSerializer.done();
 		if (donePromise) await donePromise;
 
 		while (true) {
@@ -360,7 +360,7 @@ export class PacketCursor {
 	}
 
 	waitUntilIdle() {
-		return this.callSerializer.done();
+		return this._callSerializer.done();
 	}
 }
 
@@ -600,6 +600,7 @@ export abstract class SampleCursor<
 		this.nextIsFirst = !targetPacket;
 
 		if (!targetPacket) {
+			this.lastTarget = null;
 			this.setCurrentRaw(null);
 			return res.set(null);
 		}
@@ -747,6 +748,7 @@ export abstract class SampleCursor<
 		this._ensureNotClosed();
 
 		if (this.nextIsFirst) {
+			// await is important so that the lock doesn't release too early
 			return await this._seekToPacket(res, this.packetReader.readFirst(), lock);
 		}
 
@@ -808,6 +810,83 @@ export abstract class SampleCursor<
 		}
 	}
 
+	async _nextKeyInternal(res: ResultValue<TransformedSample | null>): Promise<Yo> {
+		using lock = this.pumpMutex.lock();
+		if (lock.pending) await lock.ready;
+
+		this._ensureNotClosed();
+
+		if (this.nextIsFirst) {
+			// await is important so that the lock doesn't release too early
+			return await this._seekToPacket(res, this.packetReader.readFirst(), lock);
+		}
+
+		let timestampToCheck: number;
+
+		const lastPendingRequest = last(this.pendingRequests);
+		if (lastPendingRequest && !lastPendingRequest.successor) {
+			timestampToCheck = lastPendingRequest.timestamp;
+		} else {
+			if (lastPendingRequest?.successor) {
+				let last = lastPendingRequest.successor;
+				while (last.successor) {
+					last = last.successor;
+				}
+
+				await last.promise
+					.then(() => {})
+					.catch(() => {});
+
+				this._ensureNotClosed();
+			}
+
+			if (this.currentRaw) {
+				timestampToCheck = this.currentRaw.timestamp;
+			} else {
+				// We're at the end
+				return res.set(null);
+			}
+		}
+
+		// The reason we don't just call readNextKey directly is as follows: readNextKey retrieves the next key in
+		// *decode* order, however we want the next key in *presentation* order. We know that at least the key frames
+		// are ascending in timestamp, so we first get the current key (based on a presentation-order search), then
+		// get the next key after that, which will be the answer we're looking for.
+
+		let key = this.packetReader.readKeyAt(timestampToCheck, { verifyKeyPackets: true });
+		if (key instanceof Promise) key = await key;
+		assert(key); // Must be
+
+		let nextKey = this.packetReader.readNextKey(key, { verifyKeyPackets: true });
+		if (nextKey instanceof Promise) nextKey = await nextKey;
+
+		if (!nextKey) {
+			this.setCurrentRaw(null);
+			return res.set(null);
+		}
+
+		return await this._seekToPacket(res, nextKey, lock);
+	}
+
+	nextKey(): MaybePromise<TransformedSample | null> {
+		this._ensureWillBeOpen();
+
+		try {
+			const result = new ResultValue<TransformedSample | null>();
+			const promise = this._nextKeyInternal(result);
+
+			if (result.pending) {
+				return promise
+					.then(() => result.value)
+					.catch(this.closeWithErrorAndThrow.bind(this));
+			} else {
+				return result.value;
+			}
+		} catch (error) {
+			this.closeWithErrorAndThrow(error);
+		}
+	}
+
 	async iterate(
 		callback: (sample: TransformedSample, stop: () => void) => MaybePromise<unknown>,
 	) {
@@ -822,10 +901,6 @@ export abstract class SampleCursor<
 
 		const waitPromise = this.waitUntilIdle();
 		if (waitPromise) await waitPromise;
-
-		const lock = this.pumpMutex.lock();
-		if (lock.pending) await lock.ready;
-		lock.release();
 
 		this._ensureNotClosed();
 
@@ -855,10 +930,6 @@ export abstract class SampleCursor<
 		const waitPromise = this.waitUntilIdle();
 		if (waitPromise) await waitPromise;
 
-		const lock = this.pumpMutex.lock();
-		if (lock.pending) await lock.ready;
-		lock.release();
-
 		this._ensureNotClosed();
 
 		while (true) {
@@ -875,19 +946,36 @@ export abstract class SampleCursor<
 		}
 	}
 
-	waitUntilIdle() {
-		if (this.pendingRequests.length === 0) {
+	waitUntilIdle(): Promise<void> | null {
+		const lock = this.pumpMutex.lock();
+		if (!lock.pending && this.pendingRequests.length === 0) {
+			lock.release();
 			return null;
 		}
 
-		let lastRequest = last(this.pendingRequests)!;
-		while (lastRequest.successor) {
-			lastRequest = lastRequest.successor;
-		}
+		const getLastPendingPromise = () => {
+			lock.release();
 
-		return lastRequest.promise
-			.catch(() => {})
-			.then(() => {});
+			if (this.pendingRequests.length === 0) {
+				return;
+			}
+
+			let lastRequest = last(this.pendingRequests)!;
+			while (lastRequest.successor) {
+				lastRequest = lastRequest.successor;
+			}
+
+			return lastRequest.promise
+				.catch(() => {})
+				.then(() => {});
+		};
+
+		if (lock.pending) {
+			assert(lock.ready);
+			return lock.ready.then(getLastPendingPromise);
+		} else {
+			return getLastPendingPromise() ?? null;
+		}
 	}
 
 	closePromise: Promise<void> | null = null;
@@ -979,7 +1067,8 @@ export abstract class SampleCursor<
 					this.debugInfo.decodedPackets.push(this.packetCursor.current);
 				}
 
-				await this.packetCursor.next();
+				const maybePromise = this.packetCursor.next();
+				if (maybePromise instanceof Promise) await maybePromise;
 			}
 
 			if (this.pendingRequests.length > 0 || !this._closed) {
