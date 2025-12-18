@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { Input } from '../../src/input.js';
+import { Input, InputDisposedError } from '../../src/input.js';
 import { BufferSource, FilePathSource } from '../../src/source.js';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -35,6 +35,26 @@ test('Packet reader', async () => {
 	const packet6 = (await reader.readAt(2.4))!;
 	expect(packet6.timestamp).toBeGreaterThan(2);
 	expect(packet6.timestamp).toBeLessThanOrEqual(2.4);
+});
+
+test('Packet reading throwing after Input disposal', async () => {
+	const input = new Input({
+		source: new BufferSource(fs.readFileSync(path.join(__dirname, '../public/trim-buck-bunny.mov'))),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = (await input.getPrimaryVideoTrack())!;
+	const reader = new PacketReader(videoTrack);
+
+	const first = await reader.readFirst();
+
+	input.dispose();
+
+	expect(() => reader.readFirst()).toThrow(InputDisposedError);
+	expect(() => reader.readAt(0)).toThrow(InputDisposedError);
+	expect(() => reader.readKeyAt(0)).toThrow(InputDisposedError);
+	expect(() => reader.readNext(first!)).toThrow(InputDisposedError);
+	expect(() => reader.readNextKey(first!)).toThrow(InputDisposedError);
 });
 
 test('Packet cursor seeking', async () => {

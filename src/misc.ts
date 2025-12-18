@@ -1024,6 +1024,24 @@ export class CallSerializer2 {
 	}
 }
 
+export class AsyncGate {
+	resolvers: (() => void)[] = [];
+
+	wait() {
+		const { promise, resolve } = promiseWithResolvers();
+
+		this.resolvers.push(resolve);
+		return promise;
+	}
+
+	open() {
+		if (this.resolvers.length > 0) {
+			this.resolvers.forEach(fn => fn());
+			this.resolvers.length = 0;
+		}
+	}
+}
+
 export const defer = (callback: () => void) => {
 	let executed = false;
 

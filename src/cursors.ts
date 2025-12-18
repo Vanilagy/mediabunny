@@ -1,11 +1,31 @@
-// Two parallelism modes: Cancel and queue (right?)
-// Useful in packet context? Or only for sample?
-
 import { PCM_AUDIO_CODECS } from './codec';
 import { InputDisposedError } from './input';
 import { InputAudioTrack, InputTrack, InputVideoTrack } from './input-track';
-import { AudioDecoderWrapper, DecoderWrapper, PacketRetrievalOptions, PcmAudioDecoderWrapper, validatePacketRetrievalOptions, validateTimestamp, VideoDecoderWrapper } from './media-sink';
-import { assert, AsyncMutex4, AsyncMutexLock, CallSerializer2, defer, insertSorted, isFirefox, last, MaybePromise, polyfillSymbolDispose, promiseWithResolvers, ResultValue, Rotation, Yo } from './misc';
+import {
+	AudioDecoderWrapper,
+	DecoderWrapper,
+	PacketRetrievalOptions,
+	PcmAudioDecoderWrapper,
+	validatePacketRetrievalOptions,
+	validateTimestamp,
+	VideoDecoderWrapper,
+} from './media-sink';
+import {
+	assert,
+	AsyncMutex4,
+	AsyncMutexLock,
+	CallSerializer2,
+	defer,
+	isFirefox,
+	last,
+	MaybePromise,
+	polyfillSymbolDispose,
+	promiseWithResolvers,
+	ResultValue,
+	Rotation,
+	AsyncGate,
+	Yo,
+} from './misc';
 import { EncodedPacket } from './packet';
 import { AudioSample, clampCropRectangle, CropRectangle, validateCropRectangle, VideoSample } from './sample';
 
@@ -397,36 +417,48 @@ export abstract class SampleCursor<
 	Sample extends VideoSample | AudioSample,
 	TransformedSample = Sample,
 > implements AsyncDisposable {
-	packetReader: PacketReader;
-	packetCursor: PacketCursor;
-	options: SampleCursorOptions<Sample, TransformedSample>;
-	transform: SampleTransformer<Sample, TransformedSample>;
-	autoClose: boolean;
-	pumpRunning = false;
-	decoder: DecoderWrapper<Sample> | null = null;
-	currentRaw: Sample | null = null;
+	reader: PacketReader;
 	current: TransformedSample | null = null;
-	sampleQueue: Sample[] = [];
-	queueDequeue = promiseWithResolvers();
-	pendingRequests: PendingRequest<TransformedSample>[] = [];
-	lastPendingRequest: PendingRequest<TransformedSample> | null = null;
 
-	predictedRequests = 0;
-	nextIsFirst = true;
+	private _transform: SampleTransformer<Sample, TransformedSample>;
+	private _autoClose: boolean;
 
-	pumpStopQueued = false;
-	pumpStopped = promiseWithResolvers();
+	private _mutex = new AsyncMutex4();
 
-	pumpTarget: EncodedPacket | null = null;
-	lastTarget: EncodedPacket | null = null;
-	pumpMutex = new AsyncMutex4();
-	_closed = false;
-	queuedResets = 0;
+	private _packetCursor: PacketCursor;
+	/** @internal */
+	_decoder: DecoderWrapper<Sample> | null = null;
+	private _currentSample: Sample | null = null;
+	/** The queue of samples that have been decoded and are now waiting. */
+	private _sampleQueue: Sample[] = [];
+	/** Used to pause and resume the pump. */
+	private _pumpGate = new AsyncGate();
+	private _pendingRequests: PendingRequest<TransformedSample>[] = [];
+	private _lastPendingRequest: PendingRequest<TransformedSample> | null = null;
+	/**
+	 * When this value is above 0, the pump is instructed to be lazy: that is, only decode packets until the target and
+	 * not further to increase decoder efficiency.
+	 */
+	private _lazyPump = 0;
+	/** Whether the next sample is the first sample. */
+	private _nextIsFirst = true;
+	private _queuedResets = 0;
 
-	error: unknown = null;
-	errorSet = false;
+	/** @internal */
+	_pumpRunning = false;
+	private _pumpStopQueued = false;
+	private _pumpStopped = new AsyncGate();
+	/** The minimum target packet until which the pump should decode. */
+	private _pumpTarget: EncodedPacket | null = null;
+	private _lastTarget: EncodedPacket | null = null;
 
-	debugInfo = {
+	private _closed = false;
+	private _closePromise: Promise<void> | null = null;
+	private _error: unknown = null;
+	private _errorSet = false;
+
+	/** @internal */
+	_debug = {
 		enabled: false,
 		pumpsStarted: 0,
 		seekPackets: [] as (EncodedPacket | null)[],
@@ -440,450 +472,70 @@ export abstract class SampleCursor<
 		return this._closed;
 	}
 
-	abstract initDecoder(): Promise<DecoderWrapper<Sample>>;
+	get errored(): boolean {
+		return this._errorSet;
+	}
 
 	protected constructor(
 		reader: PacketReader,
 		options: SampleCursorOptions<Sample, TransformedSample>,
 	) {
-		this.packetReader = reader;
-		this.packetCursor = new PacketCursor(reader);
-		this.options = options;
-		this.autoClose = options.autoClose ?? true;
-		this.transform = options.transform ?? (sample => sample as unknown as TransformedSample);
+		this.reader = reader;
+		this._packetCursor = new PacketCursor(reader);
+		this._autoClose = options.autoClose ?? true;
+		this._transform = options.transform ?? (sample => sample as unknown as TransformedSample);
 
 		reader.track.input._openSampleCursors.add(this);
 
-		const lock = this.pumpMutex.lock();
+		const lock = this._mutex.lock();
 		assert(!lock.pending);
 
-		void this.initDecoder()
-			.then(decoder => this.decoder = decoder)
-			.catch(error => this.closeWithError(error, false))
+		void this._initDecoder()
+			.then(decoder => this._decoder = decoder)
+			.catch(error => this._closeWithError(error, false))
 			.finally(() => lock.release());
 	}
 
-	transformSample() {
-		assert(this.currentRaw && !this.currentRaw.closed);
-
-		if (this.autoClose) {
-			return this.current ??= this.transform(this.currentRaw);
-		} else {
-			const clone = this.currentRaw.clone();
-			const transformed = this.transform(clone as Sample);
-
-			return this.current = transformed;
-		}
-	}
-
-	onDecoderSample(sample: Sample): void {
-		try {
-			if (this.debugInfo.enabled && this.debugInfo.throwDecoderError) {
-				sample.close();
-
-				if (!this._closed) {
-					return this.onDecoderError(new Error('Fake decoder error!'));
-				} else {
-					return;
-				}
-			}
-
-			if (this.pendingRequests.length === 0) {
-				if (this.pumpStopQueued) {
-					sample.close();
-				} else {
-					this.sampleQueue.push(sample);
-				}
-			} else {
-				let given = false;
-
-				for (let i = 0; i < this.pendingRequests.length; i++) {
-					const request = this.pendingRequests[i]!;
-					if (request.timestamp > sample.timestamp) {
-						break;
-					}
-
-					this.setCurrentRaw(sample);
-					request.resolve(this.transformSample());
-
-					this.pendingRequests.splice(i--, 1);
-					given = true;
-
-					if (request.successor) {
-						this.pendingRequests.unshift(request.successor);
-						i++;
-					}
-				}
-
-				if (!given) {
-					sample.close();
-				}
-			}
-
-			this.queueDequeue.resolve();
-			this.queueDequeue = promiseWithResolvers();
-		} catch (error) {
-			void this.closeWithError(error);
-		}
-	}
-
-	onDecoderError(error: unknown): void {
-		void this.closeWithError(error);
-	}
-
-	onDecoderDequeue() {
-		this.queueDequeue.resolve();
-		this.queueDequeue = promiseWithResolvers();
-	}
-
-	setCurrentRaw(newCurrentRaw: Sample | null) {
-		if (this.currentRaw === newCurrentRaw) {
-			return;
-		}
-
-		this.currentRaw?.close();
-		this.currentRaw = newCurrentRaw;
-		this.current = null;
-	}
-
-	getNextExpectedTimestamp() {
-		if (this.sampleQueue.length > 0) {
-			return this.sampleQueue[0]!.timestamp;
-		}
-	}
-
-	_ensureNotClosed() {
-		if (this.closed) {
-			if (this.errorSet) {
-				throw this.error;
-			} else {
-				throw new Error('This cursor has been closed and can no longer be used.');
-			}
-		}
-	}
-
-	_ensureWillBeOpen() {
-		if (this.queuedResets > 0) {
-			return;
-		}
-
-		this._ensureNotClosed();
-	}
-
-	async _seekToPacket(
-		res: ResultValue<TransformedSample | null>,
-		targetPacketPromise: MaybePromise<EncodedPacket | null>,
-		lock?: AsyncMutexLock,
-	): Promise<Yo> {
-		this.predictedRequests++;
-
-		if (!lock) {
-			lock = this.pumpMutex.lock();
-			if (lock.pending) await lock.ready;
-		}
-
-		using deferred = defer(() => {
-			lock?.release();
-			this.predictedRequests--;
-		});
-
-		this._ensureNotClosed();
-
-		const targetPacket = targetPacketPromise instanceof Promise
-			? await targetPacketPromise
-			: targetPacketPromise;
-
-		if (this.debugInfo.enabled) {
-			this.debugInfo.seekPackets.push(targetPacket);
-		}
-
-		this.nextIsFirst = !targetPacket;
-
-		if (!targetPacket) {
-			this.lastTarget = null;
-			this.setCurrentRaw(null);
-			return res.set(null);
-		}
-
-		if (this.currentRaw?.timestamp === targetPacket.timestamp && !this.currentRaw.closed) {
-			return res.set(this.transformSample());
-		}
-
-		let setNewPump = true;
-
-		if (this.lastTarget && this.lastTarget.timestamp <= targetPacket.timestamp) {
-			while (this.sampleQueue.length > 0) {
-				const nextSample = this.sampleQueue.shift()!;
-				this.queueDequeue.resolve();
-				this.queueDequeue = promiseWithResolvers();
-
-				if (targetPacket.timestamp <= nextSample.timestamp) {
-					this.setCurrentRaw(nextSample);
-					return res.set(this.transformSample());
-				} else {
-					nextSample.close();
-				}
-			}
-
-			if (targetPacket.timestamp - this.lastTarget.timestamp < 0.1) {
-				setNewPump = false;
-			} else {
-				let key = this.packetReader.readNextKey(this.lastTarget, { verifyKeyPackets: true });
-				if (key instanceof Promise) key = await key;
-
-				if (
-					!key
-					|| targetPacket.sequenceNumber < key.sequenceNumber
-				) {
-					setNewPump = false;
-				}
-			}
-		}
-
-		if (setNewPump && this.pumpRunning) {
-			await this.stopPump();
-		}
-
-		this.lastTarget = targetPacket;
-
-		if (!this.pumpTarget || targetPacket.sequenceNumber > this.pumpTarget.sequenceNumber) {
-			this.pumpTarget = targetPacket;
-		}
-
-		if (setNewPump) {
-			const result = this.packetCursor.seekToKey(targetPacket.timestamp);
-			if (result instanceof Promise) await result;
-
-			void this.runPump();
-		}
-
-		this._ensureNotClosed();
-
-		const request = promiseWithResolvers<TransformedSample | null>();
-		const pendingRequest: PendingRequest<TransformedSample> = {
-			timestamp: targetPacket.timestamp,
-			promise: request.promise,
-			resolve: request.resolve,
-			reject: request.reject,
-			successor: null,
-		};
-		this.pendingRequests.push(pendingRequest);
-		this.pendingRequests.sort((a, b) => a.timestamp - b.timestamp);
-		this.lastPendingRequest = pendingRequest;
-
-		this.queueDequeue.resolve();
-		this.queueDequeue = promiseWithResolvers();
-
-		deferred.execute(); // Waiting for the return would be too long
-
-		return res.set(await request.promise);
-	}
-
 	seekToFirst(): MaybePromise<TransformedSample | null> {
-		this._ensureWillBeOpen();
-
-		try {
-			const result = new ResultValue<TransformedSample | null>();
-			const promise = this._seekToPacket(result, this.packetReader.readFirst());
-
-			if (result.pending) {
-				return promise
-					.then(() => result.value)
-					.catch(this.closeWithErrorAndThrow.bind(this));
-			} else {
-				return result.value;
-			}
-		} catch (error) {
-			this.closeWithErrorAndThrow(error);
-		}
+		return this._getSample(result => this._seekToPacket(result, this.reader.readFirst()));
 	}
 
 	seekTo(timestamp: number): MaybePromise<TransformedSample | null> {
 		validateTimestamp(timestamp);
-		this._ensureWillBeOpen();
-
-		try {
-			const result = new ResultValue<TransformedSample | null>();
-			const promise = this._seekToPacket(result, this.packetReader.readAt(timestamp));
-
-			if (result.pending) {
-				return promise
-					.then(() => result.value)
-					.catch(this.closeWithErrorAndThrow.bind(this));
-			} else {
-				return result.value;
-			}
-		} catch (error) {
-			this.closeWithErrorAndThrow(error);
-		}
+		return this._getSample(result => this._seekToPacket(result, this.reader.readAt(timestamp)));
 	}
 
 	seekToKey(timestamp: number): MaybePromise<TransformedSample | null> {
 		validateTimestamp(timestamp);
-		this._ensureWillBeOpen();
-
-		try {
-			const result = new ResultValue<TransformedSample | null>();
-			const promise = this._seekToPacket(
-				result,
-				this.packetReader.readKeyAt(timestamp, { verifyKeyPackets: true }),
-			);
-
-			if (result.pending) {
-				return promise
-					.then(() => result.value)
-					.catch(this.closeWithErrorAndThrow.bind(this));
-			} else {
-				return result.value;
-			}
-		} catch (error) {
-			this.closeWithErrorAndThrow(error);
-		}
-	}
-
-	async _nextInternal(res: ResultValue<TransformedSample | null>): Promise<Yo> {
-		using lock = this.pumpMutex.lock();
-		if (lock.pending) await lock.ready;
-
-		this._ensureNotClosed();
-
-		if (this.nextIsFirst) {
-			// await is important so that the lock doesn't release too early
-			return await this._seekToPacket(res, this.packetReader.readFirst(), lock);
-		}
-
-		if (this.sampleQueue.length > 0) {
-			const nextSample = this.sampleQueue.shift()!;
-			this.queueDequeue.resolve();
-			this.queueDequeue = promiseWithResolvers();
-
-			this.setCurrentRaw(nextSample);
-			return res.set(this.transformSample());
-		}
-
-		if (!this.pumpRunning) {
-			this.setCurrentRaw(null);
-			return res.set(null); // None more after this, boy
-		}
-
-		assert(this.lastPendingRequest);
-
-		this._ensureNotClosed();
-
-		const request = promiseWithResolvers<TransformedSample | null>();
-		const pendingRequest: PendingRequest<TransformedSample> = {
-			timestamp: -Infinity,
-			promise: request.promise,
-			resolve: request.resolve,
-			reject: request.reject,
-			successor: null,
-		};
-
-		if (this.pendingRequests.length === 0) {
-			this.pendingRequests.push(pendingRequest);
-		} else {
-			this.lastPendingRequest.successor = pendingRequest;
-		}
-		this.lastPendingRequest = pendingRequest;
-
-		lock.release(); // Waiting for the return would be too long
-
-		return res.set(await request.promise);
+		return this._getSample(result => this._seekToPacket(result, this.reader.readKeyAt(timestamp)));
 	}
 
 	next(): MaybePromise<TransformedSample | null> {
-		this._ensureWillBeOpen();
-
-		try {
-			const result = new ResultValue<TransformedSample | null>();
-			const promise = this._nextInternal(result);
-
-			if (result.pending) {
-				return promise
-					.then(() => result.value)
-					.catch(this.closeWithErrorAndThrow.bind(this));
-			} else {
-				return result.value;
-			}
-		} catch (error) {
-			this.closeWithErrorAndThrow(error);
-		}
-	}
-
-	async _nextKeyInternal(res: ResultValue<TransformedSample | null>): Promise<Yo> {
-		using lock = this.pumpMutex.lock();
-		if (lock.pending) await lock.ready;
-
-		this._ensureNotClosed();
-
-		if (this.nextIsFirst) {
-			// await is important so that the lock doesn't release too early
-			return await this._seekToPacket(res, this.packetReader.readFirst(), lock);
-		}
-
-		let timestampToCheck: number;
-
-		const lastPendingRequest = last(this.pendingRequests);
-		if (lastPendingRequest && !lastPendingRequest.successor) {
-			timestampToCheck = lastPendingRequest.timestamp;
-		} else {
-			if (lastPendingRequest?.successor) {
-				let last = lastPendingRequest.successor;
-				while (last.successor) {
-					last = last.successor;
-				}
-
-				await last.promise
-					.then(() => {})
-					.catch(() => {});
-
-				this._ensureNotClosed();
-			}
-
-			if (this.currentRaw) {
-				timestampToCheck = this.currentRaw.timestamp;
-			} else {
-				// We're at the end
-				return res.set(null);
-			}
-		}
-
-		// The reason we don't just call readNextKey directly is as follows: readNextKey retrieves the next key in
-		// *decode* order, however we want the next key in *presentation* order. We know that at least the key frames
-		// are ascending in timestamp, so we first get the current key (based on a presentation-order search), then
-		// get the next key after that, which will be the answer we're looking for.
-
-		let key = this.packetReader.readKeyAt(timestampToCheck, { verifyKeyPackets: true });
-		if (key instanceof Promise) key = await key;
-		assert(key); // Must be
-
-		let nextKey = this.packetReader.readNextKey(key, { verifyKeyPackets: true });
-		if (nextKey instanceof Promise) nextKey = await nextKey;
-
-		if (!nextKey) {
-			this.setCurrentRaw(null);
-			return res.set(null);
-		}
-
-		return await this._seekToPacket(res, nextKey, lock);
+		return this._getSample(result => this._nextInternal(result));
 	}
 
 	nextKey(): MaybePromise<TransformedSample | null> {
+		return this._getSample(result => this._nextKeyInternal(result));
+	}
+
+	private _getSample(
+		callback: (result: ResultValue<TransformedSample | null>) => Promise<Yo>,
+	): MaybePromise<TransformedSample | null> {
 		this._ensureWillBeOpen();
 
 		try {
 			const result = new ResultValue<TransformedSample | null>();
-			const promise = this._nextKeyInternal(result);
+			const promise = callback(result);
 
 			if (result.pending) {
 				return promise
 					.then(() => result.value)
-					.catch(this.closeWithErrorAndThrow.bind(this));
+					.catch(this._closeWithErrorAndThrow.bind(this));
 			} else {
 				return result.value;
 			}
 		} catch (error) {
-			this.closeWithErrorAndThrow(error);
+			this._closeWithErrorAndThrow(error);
 		}
 	}
 
@@ -896,13 +548,13 @@ export abstract class SampleCursor<
 
 		this._ensureWillBeOpen();
 
-		let stopped = false;
-		const stop = () => stopped = true;
-
 		const waitPromise = this.waitUntilIdle();
 		if (waitPromise) await waitPromise;
 
 		this._ensureNotClosed();
+
+		let stopped = false;
+		const stop = () => stopped = true;
 
 		while (true) {
 			if (this.current) {
@@ -946,9 +598,64 @@ export abstract class SampleCursor<
 		}
 	}
 
+	close() {
+		return this._closePromise ??= this._closed
+			? Promise.resolve()
+			: this._closeInternal();
+	}
+
+	[Symbol.asyncDispose]() {
+		return this.close();
+	}
+
+	async reset() {
+		this._lazyPump++;
+
+		this._queuedResets++;
+		using _ = defer(() => this._queuedResets--);
+
+		using lock = this._mutex.lock();
+		if (lock.pending) await lock.ready;
+
+		if (!this._closed) {
+			await this._closeInternal(false);
+		}
+
+		// All of this should automatically be true after a close
+		assert(!this._pumpRunning);
+		assert(!this._pumpStopQueued);
+		assert(!this._currentSample);
+		assert(!this.current);
+		assert(this._sampleQueue.length === 0);
+		assert(this._pendingRequests.length === 0);
+		assert(this._lastPendingRequest === null);
+		assert(this._pumpTarget === null);
+		assert(!this._decoder || this._decoder.closed);
+
+		this._closed = false;
+		this._closePromise = null;
+		this._error = null;
+		this._errorSet = false;
+		this._nextIsFirst = true;
+		this._lazyPump = 0;
+
+		this.reader.track.input._openSampleCursors.add(this);
+
+		try {
+			const newDecoder = await this._initDecoder();
+			this._decoder = newDecoder;
+		} catch (error) {
+			this._closeWithErrorAndThrow(error, false);
+		}
+	}
+
+	/**
+	 * Returns a Promise that resolves when currently pending operations (at the time of calling this method)
+	 * are settled, or `null` if there are none.
+	 */
 	waitUntilIdle(): Promise<void> | null {
-		const lock = this.pumpMutex.lock();
-		if (!lock.pending && this.pendingRequests.length === 0) {
+		const lock = this._mutex.lock();
+		if (!lock.pending && this._pendingRequests.length === 0) {
 			lock.release();
 			return null;
 		}
@@ -956,11 +663,11 @@ export abstract class SampleCursor<
 		const getLastPendingPromise = () => {
 			lock.release();
 
-			if (this.pendingRequests.length === 0) {
+			if (this._pendingRequests.length === 0) {
 				return;
 			}
 
-			let lastRequest = last(this.pendingRequests)!;
+			let lastRequest = last(this._pendingRequests)!;
 			while (lastRequest.successor) {
 				lastRequest = lastRequest.successor;
 			}
@@ -978,204 +685,524 @@ export abstract class SampleCursor<
 		}
 	}
 
-	closePromise: Promise<void> | null = null;
+	/** @internal */
+	abstract _initDecoder(): Promise<DecoderWrapper<Sample>>;
 
-	close() {
-		return this.closePromise ??= this._closed
-			? Promise.resolve()
-			: this.closeInternal();
+	protected _onDecoderSample(sample: Sample): void {
+		try {
+			if (this._debug.enabled && this._debug.throwDecoderError) {
+				sample.close();
+
+				if (!this._closed) {
+					// Let's fake a decoder error this way
+					return this._onDecoderError(new Error('Fake decoder error!'));
+				} else {
+					return;
+				}
+			}
+
+			if (this._pendingRequests.length === 0) {
+				if (this._pumpStopQueued || !this._pumpRunning) {
+					// Don't care about it anymore
+					sample.close();
+				} else {
+					// Let's save it for later
+					this._sampleQueue.push(sample);
+				}
+			} else {
+				let given = false;
+				let nextInsertionIndex = 0;
+
+				// Let's hand the sample to all matching requests
+				for (let i = 0; i < this._pendingRequests.length; i++) {
+					const request = this._pendingRequests[i]!;
+					if (request.timestamp > sample.timestamp) {
+						break;
+					}
+
+					this._setCurrentRaw(sample);
+					request.resolve(this._transformSample());
+
+					this._pendingRequests.splice(i--, 1);
+					given = true;
+
+					if (request.successor) {
+						// If the request has a successor request, "unlock" that successor and add it to the
+						// start of the queue
+						this._pendingRequests.splice(nextInsertionIndex, 0, request.successor);
+						i++;
+						nextInsertionIndex++;
+					}
+				}
+
+				if (!given) {
+					sample.close();
+				}
+			}
+
+			this._pumpGate.open();
+		} catch (error) {
+			void this._closeWithError(error);
+		}
 	}
 
-	async closeInternal(doLock = true) {
-		// Almost correct, but not quite
-		this.predictedRequests++;
-		this.packetReader.track.input._openSampleCursors.delete(this);
+	protected _onDecoderError(error: unknown): void {
+		void this._closeWithError(error);
+	}
+
+	protected _onDecoderDequeue() {
+		this._pumpGate.open();
+	}
+
+	private _setCurrentRaw(newCurrentRaw: Sample | null) {
+		if (this._currentSample === newCurrentRaw) {
+			return;
+		}
+
+		this._currentSample?.close();
+		this._currentSample = newCurrentRaw;
+		this.current = null;
+	}
+
+	private _transformSample() {
+		assert(this._currentSample && !this._currentSample.closed);
+
+		if (this._autoClose) {
+			// Here, the transformation is memoized: repeated calls will not transform the same sample twice.
+			return this.current ??= this._transform(this._currentSample);
+		} else {
+			// Here, the transformation happens every time since the sample is also cloned every time
+			const clone = this._currentSample.clone();
+			const transformed = this._transform(clone as Sample);
+
+			return this.current = transformed;
+		}
+	}
+
+	private async _seekToPacket(
+		res: ResultValue<TransformedSample | null>,
+		targetPacketPromise: MaybePromise<EncodedPacket | null>,
+		lock?: AsyncMutexLock,
+	): Promise<Yo> {
+		this._lazyPump++;
+
+		if (!lock) {
+			lock = this._mutex.lock();
+			if (lock.pending) await lock.ready;
+		}
+
+		using deferred = defer(() => {
+			lock?.release();
+			this._lazyPump--;
+		});
+
+		this._ensureNotClosed();
+
+		// First, let's wait for the packet to be retrieved
+		const targetPacket = targetPacketPromise instanceof Promise
+			? await targetPacketPromise
+			: targetPacketPromise;
+
+		if (this._debug.enabled) {
+			this._debug.seekPackets.push(targetPacket);
+		}
+
+		// A null packet means we're before the first packet
+		this._nextIsFirst = !targetPacket;
+
+		if (!targetPacket) {
+			this._lastTarget = null;
+			this._setCurrentRaw(null);
+			return res.set(null);
+		}
+
+		if (this._currentSample?.timestamp === targetPacket.timestamp && !this._currentSample.closed) {
+			// We can reuse the current sample, the timestamp is the same
+			return res.set(this._transformSample());
+		}
+
+		let needsNewPump: boolean;
+
+		let lastRequest = last(this._pendingRequests) ?? null;
+		while (lastRequest?.successor) {
+			lastRequest = lastRequest.successor;
+		}
+
+		if (lastRequest?.timestamp === -Infinity) {
+			// next() requests are queued, so in order to know if we need to start a new pump or not, we'll need to wait
+			await lastRequest.promise
+				.then(() => {})
+				.catch(() => {});
+
+			this._ensureNotClosed();
+		}
+
+		const lastTimestamp = Math.max(
+			this._lastTarget?.timestamp ?? -Infinity,
+			this._currentSample?.timestamp ?? -Infinity, // This one's revelant if we had next() requests
+		);
+
+		if (lastTimestamp !== -Infinity && lastTimestamp <= targetPacket.timestamp) {
+			// First, let's see if an already-decoded sample can satisfy the request
+			while (this._sampleQueue.length > 0) {
+				const nextSample = this._sampleQueue.shift()!;
+				this._pumpGate.open();
+
+				if (targetPacket.timestamp <= nextSample.timestamp) {
+					this._setCurrentRaw(nextSample);
+					return res.set(this._transformSample());
+				} else {
+					nextSample.close();
+				}
+			}
+
+			if (targetPacket.timestamp - lastTimestamp < 0.1) {
+				// The difference is too small for it to be worth to set up a new pump (especially relevant for
+				// audio tracks)
+				needsNewPump = false;
+			} else {
+				if (this._packetCursor.current) {
+					// We need to see if the target packet is ahead of the decoder, GOP-wise
+					let nextKey = this.reader.readNextKey(this._packetCursor.current, { verifyKeyPackets: true });
+					if (nextKey instanceof Promise) nextKey = await nextKey;
+
+					needsNewPump = !!nextKey && targetPacket.sequenceNumber >= nextKey.sequenceNumber;
+				} else {
+					needsNewPump = true;
+				}
+			}
+		} else {
+			// This is the first packet or we went backwards, create a new pump
+			needsNewPump = true;
+		}
+
+		if (needsNewPump && this._pumpRunning) {
+			await this._stopPump();
+		}
+
+		if (!this._pumpTarget || targetPacket.sequenceNumber > this._pumpTarget.sequenceNumber) {
+			this._pumpTarget = targetPacket;
+		}
+		this._lastTarget = targetPacket;
+
+		if (needsNewPump) {
+			// Set the cursor to the right spot
+			const result = this._packetCursor.seekToKey(targetPacket.timestamp);
+			if (result instanceof Promise) await result;
+
+			// Start the new pump
+			void this._runPump();
+		}
+
+		this._ensureNotClosed();
+
+		// Add the request to the queue
+		const request = promiseWithResolvers<TransformedSample | null>();
+		const pendingRequest: PendingRequest<TransformedSample> = {
+			timestamp: targetPacket.timestamp,
+			promise: request.promise,
+			resolve: request.resolve,
+			reject: request.reject,
+			successor: null,
+		};
+		this._pendingRequests.push(pendingRequest);
+		this._lastPendingRequest = pendingRequest;
+
+		this._pumpGate.open();
+
+		deferred.execute(); // Waiting for the return would be too long
+
+		return res.set(await request.promise);
+	}
+
+	private async _nextInternal(res: ResultValue<TransformedSample | null>): Promise<Yo> {
+		using lock = this._mutex.lock();
+		if (lock.pending) await lock.ready;
+
+		this._ensureNotClosed();
+
+		if (this._nextIsFirst) {
+			// Easy, just seek to the first sample
+			// await is important so that the lock doesn't release too early
+			return await this._seekToPacket(res, this.reader.readFirst(), lock);
+		}
+
+		// See if the request can be satisfied using already-decoded samples
+		if (this._sampleQueue.length > 0) {
+			const nextSample = this._sampleQueue.shift()!;
+			this._pumpGate.open();
+
+			this._setCurrentRaw(nextSample);
+			return res.set(this._transformSample());
+		}
+
+		if (!this._pumpRunning) {
+			// No pump is running (but the cursor isn't closed), the pump must've reached the end
+			this._setCurrentRaw(null);
+			return res.set(null);
+		}
+
+		assert(this._lastPendingRequest);
+
+		this._ensureNotClosed();
+
+		// Instead of figuring out what the next presentation timestamp is (no easy way to do that), we simply add a
+		// new request that can be fulfilled by *any* timestamp. This way, whatever the decoder produces next (and the
+		// decoder is required to output samples in presentation order) is what we'll return.
+		const request = promiseWithResolvers<TransformedSample | null>();
+		const pendingRequest: PendingRequest<TransformedSample> = {
+			timestamp: -Infinity,
+			promise: request.promise,
+			resolve: request.resolve,
+			reject: request.reject,
+			successor: null,
+		};
+
+		if (this._pendingRequests.length === 0) {
+			this._pendingRequests.push(pendingRequest);
+		} else {
+			// The request will only get "unlocked" when the previous request is fulfilled
+			this._lastPendingRequest.successor = pendingRequest;
+		}
+		this._lastPendingRequest = pendingRequest;
+
+		lock.release(); // Waiting for the return would be too long
+
+		return res.set(await request.promise);
+	}
+
+	private async _nextKeyInternal(res: ResultValue<TransformedSample | null>): Promise<Yo> {
+		using lock = this._mutex.lock();
+		if (lock.pending) await lock.ready;
+
+		this._ensureNotClosed();
+
+		if (this._nextIsFirst) {
+			// await is important so that the lock doesn't release too early
+			return await this._seekToPacket(res, this.reader.readFirst(), lock);
+		}
+
+		let timestampToCheck: number;
+
+		const lastPendingRequest = last(this._pendingRequests);
+		if (lastPendingRequest && !lastPendingRequest.successor) {
+			timestampToCheck = lastPendingRequest.timestamp;
+		} else {
+			if (lastPendingRequest?.successor) {
+				let last = lastPendingRequest.successor;
+				while (last.successor) {
+					last = last.successor;
+				}
+
+				await last.promise
+					.then(() => {})
+					.catch(() => {});
+
+				this._ensureNotClosed();
+			}
+
+			if (this._currentSample) {
+				timestampToCheck = this._currentSample.timestamp;
+			} else {
+				// We're at the end
+				return res.set(null);
+			}
+		}
+
+		// The reason we don't just call readNextKey directly is as follows: readNextKey retrieves the next key in
+		// *decode* order, however we want the next key in *presentation* order. We know that at least the key frames
+		// are ascending in timestamp, so we first get the current key (based on a presentation-order search), then
+		// get the next key after that, which will be the answer we're looking for.
+
+		let key = this.reader.readKeyAt(timestampToCheck, { verifyKeyPackets: true });
+		if (key instanceof Promise) key = await key;
+		assert(key); // Must be
+
+		let nextKey = this.reader.readNextKey(key, { verifyKeyPackets: true });
+		if (nextKey instanceof Promise) nextKey = await nextKey;
+
+		if (!nextKey) {
+			this._setCurrentRaw(null);
+			return res.set(null);
+		}
+
+		return await this._seekToPacket(res, nextKey, lock);
+	}
+
+	/**
+	 * Starts the "pump process", which handles pushing packets into the decoder. It throttles itself if it is far
+	 * enough ahead and must be woken up again by the outside. It also stops itself when the outside tells it to.
+	 */
+	private async _runPump() {
+		assert(this._packetCursor.current);
+		assert(this._pumpTarget);
+		assert(this._decoder);
+
+		try {
+			this._pumpRunning = true;
+
+			if (this._debug.enabled) {
+				this._debug.pumpsStarted++;
+			}
+
+			// Main loop
+			while (this._packetCursor.current) {
+				if (this._debug.enabled && this._debug.throwInPump) {
+					throw new Error('Fake pump error!');
+				}
+
+				const isAheadOfTarget = this._packetCursor.current.sequenceNumber > this._pumpTarget.sequenceNumber;
+				const nextRequestExists = this._pendingRequests.some(x => x.successor || x.timestamp === -Infinity);
+				if (isAheadOfTarget && !nextRequestExists) {
+					if (this._pumpStopQueued) {
+						break;
+					}
+
+					if (this._lazyPump > 0) {
+						await this._pumpGate.wait();
+						continue;
+					} else {
+						// We're eager! That means even if we're past the target, we'll keep decoding samples to
+						// prefill the sample queue to have samples ready. This is the common case when not batching
+						// commands.
+					}
+				}
+
+				const decodeQueueSize = this._decoder.getDecodeQueueSize();
+				if (this._sampleQueue.length + decodeQueueSize >= 4 && !this._pumpStopQueued) {
+					await this._pumpGate.wait();
+					continue;
+				}
+
+				// Send the packet to the decoder
+				this._decoder.decode(this._packetCursor.current);
+
+				if (this._debug.enabled) {
+					this._debug.decodedPackets.push(this._packetCursor.current);
+				}
+
+				// Advance the cursor
+				const maybePromise = this._packetCursor.next();
+				if (maybePromise instanceof Promise) await maybePromise;
+			}
+
+			if (this._pendingRequests.length > 0 || !this._closed) {
+				await this._decoder.flush();
+			}
+
+			const resolveWithNull = (request: PendingRequest<TransformedSample>) => {
+				request.resolve(null);
+				if (request.successor) {
+					resolveWithNull(request.successor);
+				}
+			};
+
+			// Resolve whatever requests remain with null
+			this._setCurrentRaw(null);
+			this._pendingRequests.forEach(resolveWithNull);
+		} catch (error) {
+			if (!this._decoder.closed && this._pendingRequests.length > 0) {
+				// The pump errored but the decoder is still fine, let's first flush the decoder before continuing
+				await this._decoder.flush();
+			}
+
+			this._pumpRunning = false; // So that close() doesn't attempt to stop the pump
+			void this._closeWithError(error);
+		} finally {
+			for (const sample of this._sampleQueue) {
+				sample.close();
+			}
+			this._sampleQueue.length = 0;
+
+			this._pendingRequests.length = 0;
+			this._lastPendingRequest = null;
+			this._pumpRunning = false;
+			this._pumpTarget = null;
+			this._pumpStopQueued = false;
+			this._lastTarget = null;
+
+			this._pumpStopped.open();
+		}
+	}
+
+	private async _stopPump() {
+		assert(this._pumpRunning);
+
+		this._pumpStopQueued = true;
+		this._pumpGate.open();
+		await this._pumpStopped.wait();
+	}
+
+	private async _closeInternal(doLock = true) {
+		this._lazyPump++;
+		this.reader.track.input._openSampleCursors.delete(this);
 
 		let lock: AsyncMutexLock | null = null;
 		if (doLock) {
-			lock = this.pumpMutex.lock();
+			lock = this._mutex.lock();
 			if (lock.pending) await lock.ready;
 		}
 		using _ = defer(() => lock?.release());
 
 		this._closed = true;
 
-		if (this.pumpRunning) {
-			await this.stopPump();
+		if (this._pumpRunning) {
+			await this._stopPump();
 		}
 
-		this.setCurrentRaw(null);
-		this.decoder?.close();
-		this.decoder = null;
+		this._setCurrentRaw(null);
+		this._decoder?.close();
+		this._decoder = null;
 	}
 
-	[Symbol.asyncDispose]() {
-		return this.close();
-	}
-
-	async stopPump() {
-		assert(this.pumpRunning);
-
-		this.pumpStopQueued = true;
-		this.queueDequeue.resolve();
-		this.queueDequeue = promiseWithResolvers();
-		await this.pumpStopped.promise;
-	}
-
-	async runPump() {
-		assert(this.packetCursor.current);
-		assert(this.pumpTarget);
-		assert(this.decoder);
-
-		try {
-			this.pumpRunning = true;
-
-			if (this.debugInfo.enabled) {
-				this.debugInfo.pumpsStarted++;
-			}
-
-			while (
-				this.packetCursor.current
-				&& (
-					!this.pumpStopQueued
-					|| this.packetCursor.current.sequenceNumber <= this.pumpTarget.sequenceNumber
-					|| this.pendingRequests.some(x => x.successor || x.timestamp === -Infinity)
-				)
-			) {
-				if (this.debugInfo.enabled && this.debugInfo.throwInPump) {
-					throw new Error('Fake pump error!');
-				}
-
-				if (
-					this.packetCursor.current.sequenceNumber > this.pumpTarget.sequenceNumber
-					&& this.predictedRequests > 0
-					&& !this.pendingRequests.some(x => x.successor || x.timestamp === -Infinity)
-				) {
-					await this.queueDequeue.promise;
-					continue;
-				}
-
-				const decodeQueueSize = this.decoder.getDecodeQueueSize();
-				if (this.sampleQueue.length + decodeQueueSize >= 4) {
-					await this.queueDequeue.promise;
-					continue;
-				}
-
-				this.decoder.decode(this.packetCursor.current);
-
-				if (this.debugInfo.enabled) {
-					this.debugInfo.decodedPackets.push(this.packetCursor.current);
-				}
-
-				const maybePromise = this.packetCursor.next();
-				if (maybePromise instanceof Promise) await maybePromise;
-			}
-
-			if (this.pendingRequests.length > 0 || !this._closed) {
-				await this.decoder.flush();
-			}
-
-			const uh = (request: PendingRequest<TransformedSample>) => {
-				request.resolve(null);
-				if (request.successor) {
-					uh(request.successor);
-				}
-			};
-
-			this.setCurrentRaw(null);
-			this.pendingRequests.forEach(uh);
-		} catch (error) {
-			if (!this.decoder.closed && this.pendingRequests.length > 0) {
-				await this.decoder.flush();
-			}
-
-			this.pumpRunning = false; // So that close() doesn't attempt to stop the pump
-			void this.closeWithError(error);
-		} finally {
-			for (const sample of this.sampleQueue) {
-				sample.close();
-			}
-			this.sampleQueue.length = 0;
-
-			this.pendingRequests.length = 0;
-			this.lastPendingRequest = null;
-			this.pumpStopped.resolve();
-			this.pumpStopped = promiseWithResolvers();
-			this.pumpRunning = false;
-			this.pumpTarget = null;
-			this.pumpStopQueued = false;
-			this.lastTarget = null;
-		}
-	}
-
-	closeWithError(error: unknown, doLock?: boolean) {
+	private _closeWithError(error: unknown, doLock?: boolean) {
 		if (this._closed) {
 			return;
 		}
 
 		this._closed = true;
-		this.error = error;
-		this.errorSet = true;
+		this._error = error;
+		this._errorSet = true;
 
-		const uh = (request: PendingRequest<TransformedSample>) => {
+		const rejectWithError = (request: PendingRequest<TransformedSample>) => {
 			request.reject(error);
 			if (request.successor) {
-				uh(request.successor);
+				rejectWithError(request.successor);
 			}
 		};
-		this.pendingRequests.forEach(uh);
+		this._pendingRequests.forEach(rejectWithError);
 
-		return this.closeInternal(doLock);
+		return this._closeInternal(doLock);
 	}
 
-	closeWithErrorAndThrow(error: unknown, doLock?: boolean): never {
-		void this.closeWithError(error, doLock);
+	private _closeWithErrorAndThrow(error: unknown, doLock?: boolean): never {
+		void this._closeWithError(error, doLock);
 		throw error;
 	}
 
-	async reset() {
-		this.predictedRequests++;
+	/** Ensures that the cursor is not currently closed. */
+	private _ensureNotClosed() {
+		if (this.closed) {
+			if (this._errorSet) {
+				throw this._error;
+			} else {
+				throw new Error('This cursor has been closed and can no longer be used.');
+			}
+		}
+	}
 
-		this.queuedResets++;
-		using _ = defer(() => this.queuedResets--);
-
-		using lock = this.pumpMutex.lock();
-		if (lock.pending) await lock.ready;
-
-		if (!this._closed) {
-			await this.closeInternal(false);
+	/** Ensures that the cursor is either open or will be open again at some point, even if it currently closed. */
+	private _ensureWillBeOpen() {
+		if (this._queuedResets > 0) {
+			return;
 		}
 
-		assert(!this.pumpRunning);
-		assert(!this.pumpStopQueued);
-		assert(!this.currentRaw);
-		assert(!this.current);
-		assert(this.sampleQueue.length === 0);
-		assert(this.pendingRequests.length === 0);
-		assert(this.lastPendingRequest === null);
-		assert(this.pumpTarget === null);
-		assert(!this.decoder || this.decoder.closed);
-
-		this._closed = false;
-		this.closePromise = null;
-		this.error = null;
-		this.errorSet = false;
-		this.nextIsFirst = true;
-		this.predictedRequests = 0;
-
-		this.packetReader.track.input._openSampleCursors.add(this);
-
-		try {
-			const newDecoder = await this.initDecoder();
-			this.decoder = newDecoder;
-		} catch (error) {
-			this.closeWithErrorAndThrow(error);
-		}
+		this._ensureNotClosed();
 	}
 }
 
 export class VideoSampleCursor<TransformedSample = VideoSample> extends SampleCursor<VideoSample, TransformedSample> {
-	override packetReader!: PacketReader<InputVideoTrack>;
+	override reader!: PacketReader<InputVideoTrack>;
 
 	constructor(
 		reader: PacketReader<InputVideoTrack>,
@@ -1189,8 +1216,9 @@ export class VideoSampleCursor<TransformedSample = VideoSample> extends SampleCu
 		super(reader, options);
 	}
 
-	override async initDecoder(): Promise<DecoderWrapper<VideoSample>> {
-		const track = this.packetReader.track;
+	/** @internal */
+	override async _initDecoder(): Promise<DecoderWrapper<VideoSample>> {
+		const track = this.reader.track;
 
 		if (!(await track.canDecode())) {
 			throw new Error(
@@ -1199,7 +1227,7 @@ export class VideoSampleCursor<TransformedSample = VideoSample> extends SampleCu
 			);
 		}
 
-		if (this.debugInfo.enabled && this.debugInfo.throwInDecoderInit) {
+		if (this._debug.enabled && this._debug.throwInDecoderInit) {
 			throw new Error('Fake decoder init error!');
 		}
 
@@ -1208,22 +1236,22 @@ export class VideoSampleCursor<TransformedSample = VideoSample> extends SampleCu
 		assert(track.codec);
 
 		const decoder = new VideoDecoderWrapper(
-			sample => this.onDecoderSample(sample),
-			error => this.onDecoderError(error),
+			sample => this._onDecoderSample(sample),
+			error => this._onDecoderError(error),
 			track.codec,
 			decoderConfig,
 			track.rotation,
 			track.timeResolution,
 		);
 
-		decoder.onDequeue = () => this.onDecoderDequeue();
+		decoder.onDequeue = () => this._onDecoderDequeue();
 
 		return decoder;
 	}
 }
 
 export class AudioSampleCursor<TransformedSample = AudioSample> extends SampleCursor<AudioSample, TransformedSample> {
-	override packetReader!: PacketReader<InputAudioTrack>;
+	override reader!: PacketReader<InputAudioTrack>;
 
 	constructor(
 		reader: PacketReader<InputAudioTrack>,
@@ -1237,8 +1265,9 @@ export class AudioSampleCursor<TransformedSample = AudioSample> extends SampleCu
 		super(reader, options);
 	}
 
-	override async initDecoder(): Promise<DecoderWrapper<AudioSample>> {
-		const track = this.packetReader.track;
+	/** @internal */
+	override async _initDecoder(): Promise<DecoderWrapper<AudioSample>> {
+		const track = this.reader.track;
 
 		if (!(await track.canDecode())) {
 			throw new Error(
@@ -1247,7 +1276,7 @@ export class AudioSampleCursor<TransformedSample = AudioSample> extends SampleCu
 			);
 		}
 
-		if (this.debugInfo.enabled && this.debugInfo.throwInDecoderInit) {
+		if (this._debug.enabled && this._debug.throwInDecoderInit) {
 			throw new Error('Fake decoder init error!');
 		}
 
@@ -1258,20 +1287,20 @@ export class AudioSampleCursor<TransformedSample = AudioSample> extends SampleCu
 		let decoder: AudioDecoderWrapper | PcmAudioDecoderWrapper;
 		if ((PCM_AUDIO_CODECS as readonly string[]).includes(decoderConfig.codec)) {
 			decoder = new PcmAudioDecoderWrapper(
-				sample => this.onDecoderSample(sample),
-				error => this.onDecoderError(error),
+				sample => this._onDecoderSample(sample),
+				error => this._onDecoderError(error),
 				decoderConfig,
 			);
 		} else {
 			decoder = new AudioDecoderWrapper(
-				sample => this.onDecoderSample(sample),
-				error => this.onDecoderError(error),
+				sample => this._onDecoderSample(sample),
+				error => this._onDecoderError(error),
 				codec,
 				decoderConfig,
 			);
 		}
 
-		decoder.onDequeue = () => this.onDecoderDequeue();
+		decoder.onDequeue = () => this._onDecoderDequeue();
 
 		return decoder;
 	}
@@ -1291,13 +1320,13 @@ export type WrappedCanvas = {
 };
 
 /**
- * Options for constructing a canvas transformer.
+ * Options for constructing a canvas transformer to be used with {@link VideoSampleCursor}.
  * @public
  */
 export type CanvasTransformerOptions = {
 	/**
 	 * Whether the output canvases should have transparency instead of a black background. Defaults to `false`. Set
-	 * this to `true` when using this sink to read transparent videos.
+	 * this to `true` when reading transparent videos.
 	 */
 	alpha?: boolean;
 	/**
