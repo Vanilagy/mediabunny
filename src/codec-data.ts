@@ -212,17 +212,6 @@ export const concatNalUnitsInLengthPrefixed = (nalUnits: Uint8Array[], lengthSiz
 	return result;
 };
 
-/** Converts an AVC packet in Annex B format to length-prefixed format. */
-export const transformAnnexBToLengthPrefixed = (packetData: Uint8Array) => {
-	const nalUnits = findNalUnitsInAnnexB(packetData);
-	if (nalUnits.length === 0) {
-		// It's not valid Annex B data
-		return null;
-	}
-
-	return concatNalUnitsInLengthPrefixed(nalUnits, 4);
-};
-
 // Data specified in ISO 14496-15
 export type AvcDecoderConfigurationRecord = {
 	configurationVersion: number;
