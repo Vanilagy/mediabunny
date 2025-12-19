@@ -8,9 +8,12 @@
 
 import { parsePcmCodec, PCM_AUDIO_CODECS, PcmAudioCodec, VideoCodec, AudioCodec } from './codec';
 import {
+	concatAvcNalUnits,
 	deserializeAvcDecoderConfigurationRecord,
 	determineVideoPacketType,
+	extractAvcNalUnits,
 	extractHevcNalUnits,
+	extractNalUnitTypeForAvc,
 	extractNalUnitTypeForHevc,
 	HevcNalUnitType,
 	parseAvcSps,
@@ -928,8 +931,6 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			this.raslSkipped = true;
 		}
 
-		this.currentPacketIndex++;
-
 		if (this.customDecoder) {
 			this.customDecoderQueueSize++;
 			void this.customDecoderCallSerializer
@@ -942,9 +943,24 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 				insertSorted(this.inputTimestamps, packet.timestamp, x => x);
 			}
 
+			// Workaround for https://issues.chromium.org/issues/470109459
+			if (isChromium() && this.currentPacketIndex === 0 && this.codec === 'avc') {
+				const nalUnits = extractAvcNalUnits(packet.data, this.decoderConfig);
+				const filteredNalUnits = nalUnits.filter((x) => {
+					const type = extractNalUnitTypeForAvc(x);
+					// These trip up Chromium's key frame detection, so let's strip them
+					return !(type >= 20 && type <= 31);
+				});
+
+				const newData = concatAvcNalUnits(filteredNalUnits, this.decoderConfig);
+				packet = new EncodedPacket(newData, packet.type, packet.timestamp, packet.duration);
+			}
+
 			this.decoder.decode(packet.toEncodedVideoChunk());
 			this.decodeAlphaData(packet);
 		}
+
+		this.currentPacketIndex++;
 	}
 
 	decodeAlphaData(packet: EncodedPacket) {

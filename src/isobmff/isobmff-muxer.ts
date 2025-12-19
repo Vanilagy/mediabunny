@@ -25,11 +25,12 @@ import {
 import { BufferTarget } from '../target';
 import { EncodedPacket, PacketType } from '../packet';
 import {
+	concatNalUnitsInLengthPrefixed,
 	extractAvcDecoderConfigurationRecord,
 	extractHevcDecoderConfigurationRecord,
+	findNalUnitsInAnnexB,
 	serializeAvcDecoderConfigurationRecord,
 	serializeHevcDecoderConfigurationRecord,
-	transformAnnexBToLengthPrefixed,
 } from '../codec-data';
 import { buildIsobmffMimeType } from './isobmff-misc';
 import { MAX_BOX_HEADER_SIZE, MIN_BOX_HEADER_SIZE } from './isobmff-reader';
@@ -464,15 +465,18 @@ export class IsobmffMuxer extends Muxer {
 
 			let packetData = packet.data;
 			if (trackData.info.requiresAnnexBTransformation) {
-				const transformedData = transformAnnexBToLengthPrefixed(packetData);
-				if (!transformedData) {
+				const nalUnits = findNalUnitsInAnnexB(packetData);
+				if (nalUnits.length === 0) {
+					// It's not valid Annex B data
 					throw new Error(
 						'Failed to transform packet data. Make sure all packets are provided in Annex B format, as'
 						+ ' specified in ITU-T-REC-H.264 and ITU-T-REC-H.265.',
 					);
 				}
 
-				packetData = transformedData;
+				// We don't strip things like SPS or PPS NALUs here, mainly because they can also appear in the middle
+				// of a stream and potentially modify the parameters of it. So, let's just leave them in to be sure.
+				packetData = concatNalUnitsInLengthPrefixed(nalUnits, 4);
 			}
 
 			const timestamp = this.validateAndNormalizeTimestamp(
