@@ -1,4 +1,4 @@
-import { expect, test } from 'vitest';
+import { afterEach, expect, test } from 'vitest';
 import { Input } from '../../src/input.js';
 import { BufferSource, UrlSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
@@ -6,11 +6,15 @@ import {
 	audioBufferTransformer,
 	AudioSampleCursor,
 	canvasTransformer,
-	PacketReader,
 	VideoSampleCursor,
 } from '../../src/cursors.js';
 import { AudioSample, VideoSample } from '../../src/sample.js';
 import { promiseAllEnsureOrder, promiseIterateAll } from '../../src/misc.js';
+
+afterEach(() => {
+	expect(VideoSample._openSampleCount).toBe(0);
+	expect(AudioSample._openSampleCount).toBe(0);
+});
 
 test('Sample cursor seeking', async () => {
 	using input = new Input({
@@ -19,8 +23,7 @@ test('Sample cursor seeking', async () => {
 	});
 
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
-	const reader = new PacketReader(videoTrack);
-	await using cursor = new VideoSampleCursor(reader);
+	await using cursor = new VideoSampleCursor(videoTrack);
 	cursor._debug.enabled = true;
 
 	expect(cursor.current).toBe(null);
@@ -124,28 +127,38 @@ test('Sample cursor seeking', async () => {
 
 	expect(cursor._debug.pumpsStarted).toBe(5);
 
+	await new Promise(resolve => setTimeout(resolve, 200));
+	expect(cursor.current).toBe(sample9);
+
+	// Seek to the end again
+	const seekToResult10 = cursor.seekTo(Infinity);
+	expect(seekToResult10).not.toBeInstanceOf(Promise);
+	const sample10 = await seekToResult10;
+	expect(sample9).toBe(sample10);
+
+	await new Promise(resolve => setTimeout(resolve, 200));
+	expect(cursor._debug.pumpsStarted).toBe(5);
+
 	// Seek to before the start
-	const seekToResult10 = cursor.seekTo(-Infinity);
-	expect(seekToResult10).toBe(null);
+	const seekToResult11 = cursor.seekTo(-Infinity);
+	expect(seekToResult11).toBe(null);
 	expect(sample9.closed).toBe(true);
 	expect(cursor.current).toBe(null);
 
-	const seekToResult11 = cursor.seekToKey(2.5);
-	expect(seekToResult11).toBeInstanceOf(Promise);
-	const sample11 = (await seekToResult11)!;
-	expect(sample11).toBe(cursor.current);
-	expect(sample11.timestamp).toBe(2);
-	expect(sample11.closed).toBe(false);
+	const seekToResult12 = cursor.seekToKey(2.5);
+	expect(seekToResult12).toBeInstanceOf(Promise);
+	const sample12 = (await seekToResult12)!;
+	expect(sample12).toBe(cursor.current);
+	expect(sample12.timestamp).toBe(2);
+	expect(sample12.closed).toBe(false);
 
 	await cursor.close();
 
-	expect(sample11.closed).toBe(true);
+	expect(sample12.closed).toBe(true);
 	expect(cursor.current).toBe(null);
 	expect(cursor._debug.pumpsStarted).toBe(6);
 
 	await cursor.close();
-
-	expect(VideoSample._openSampleCount).toBe(0);
 });
 
 test('Sample cursor advancing', async () => {
@@ -155,8 +168,7 @@ test('Sample cursor advancing', async () => {
 	});
 
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
-	const reader = new PacketReader(videoTrack);
-	const cursor = new VideoSampleCursor(reader);
+	const cursor = new VideoSampleCursor(videoTrack);
 	cursor._debug.enabled = true;
 
 	expect(cursor.current).toBe(null);
@@ -239,8 +251,6 @@ test('Sample cursor advancing', async () => {
 	await cursor.close();
 
 	expect(cursor._debug.pumpsStarted).toBe(5);
-
-	expect(VideoSample._openSampleCount).toBe(0);
 });
 
 test('Sample cursor advancing, cold start', async () => {
@@ -250,8 +260,7 @@ test('Sample cursor advancing, cold start', async () => {
 	});
 
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
-	const reader = new PacketReader(videoTrack);
-	const cursor = new VideoSampleCursor(reader);
+	const cursor = new VideoSampleCursor(videoTrack);
 	cursor._debug.enabled = true;
 
 	let firstSample = (await cursor.next())!;
@@ -281,7 +290,7 @@ test('Sample cursor advancing, cold start', async () => {
 	// Ensure the calls were serialized correctly
 	expect(cursor._debug.seekPackets.map(x => x?.timestamp ?? null)).toEqual([0, null, 0, null, 0, 2]);
 
-	const cursor2 = new VideoSampleCursor(reader);
+	const cursor2 = new VideoSampleCursor(videoTrack);
 	for await (const sample of cursor2) {
 		expect(sample.timestamp).toBe(0);
 		break;
@@ -293,8 +302,6 @@ test('Sample cursor advancing, cold start', async () => {
 	});
 
 	await cursor2.close();
-
-	expect(VideoSample._openSampleCount).toBe(0);
 });
 
 test('Sample cursor advancing, nextKey', async () => {
@@ -304,8 +311,7 @@ test('Sample cursor advancing, nextKey', async () => {
 	});
 
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
-	const reader = new PacketReader(videoTrack);
-	await using cursor = new VideoSampleCursor(reader);
+	await using cursor = new VideoSampleCursor(videoTrack);
 
 	await cursor.seekToFirst();
 
@@ -348,8 +354,7 @@ test('Sample cursor sample reuse', async () => {
 	});
 
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
-	const reader = new PacketReader(videoTrack);
-	const cursor1 = new VideoSampleCursor(reader);
+	const cursor1 = new VideoSampleCursor(videoTrack);
 	cursor1._debug.enabled = true;
 
 	const sample1 = await cursor1.seekToFirst();
@@ -363,7 +368,7 @@ test('Sample cursor sample reuse', async () => {
 	expect(sample1!.closed).toBe(true);
 	expect(sample2!.closed).toBe(true);
 
-	const cursor2 = new VideoSampleCursor(reader, {
+	const cursor2 = new VideoSampleCursor(videoTrack, {
 		autoClose: false,
 	});
 
@@ -378,7 +383,7 @@ test('Sample cursor sample reuse', async () => {
 	sample4!.close();
 
 	let count = 0;
-	const cursor3 = new VideoSampleCursor(reader, {
+	const cursor3 = new VideoSampleCursor(videoTrack, {
 		transform: () => count++,
 	});
 
@@ -388,7 +393,7 @@ test('Sample cursor sample reuse', async () => {
 	expect(count).toBe(1);
 
 	count = 0;
-	const cursor4 = new VideoSampleCursor(reader, {
+	const cursor4 = new VideoSampleCursor(videoTrack, {
 		autoClose: false,
 		transform: sample => (sample.close(), count++),
 	});
@@ -402,8 +407,6 @@ test('Sample cursor sample reuse', async () => {
 	await cursor2.close();
 	await cursor3.close();
 	await cursor4.close();
-
-	expect(VideoSample._openSampleCount).toBe(0);
 });
 
 test('Sample cursor reset', async () => {
@@ -413,8 +416,7 @@ test('Sample cursor reset', async () => {
 	});
 
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
-	const reader = new PacketReader(videoTrack);
-	await using cursor = new VideoSampleCursor(reader);
+	await using cursor = new VideoSampleCursor(videoTrack);
 
 	expect(cursor.closed).toBe(false);
 
@@ -455,7 +457,7 @@ test('Sample cursor reset', async () => {
 	expect(results[4]!.timestamp).toBe(results[0]!.timestamp);
 	expect(results[6]!.timestamp).toBe(firstSample!.timestamp);
 
-	await using cursor2 = new VideoSampleCursor(reader);
+	await using cursor2 = new VideoSampleCursor(videoTrack);
 	cursor2._debug.enabled = true;
 
 	// Test if queueing a reset makes the decoder decode minimally many packets
@@ -476,8 +478,7 @@ test('Decoder setup error & reset', async () => {
 	});
 
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
-	const reader = new PacketReader(videoTrack);
-	await using cursor1 = new VideoSampleCursor(reader);
+	await using cursor1 = new VideoSampleCursor(videoTrack);
 	cursor1._debug.enabled = true;
 	cursor1._debug.throwInDecoderInit = true;
 	expect(cursor1.closed).toBe(false);
@@ -501,7 +502,7 @@ test('Decoder setup error & reset', async () => {
 	expect(firstSample).not.toBe(null);
 
 	// Let's test directly closing after opening
-	const cursor2 = new VideoSampleCursor(reader);
+	const cursor2 = new VideoSampleCursor(videoTrack);
 	cursor2._debug.enabled = true;
 	cursor2._debug.throwInDecoderInit = true;
 	await cursor2.close();
@@ -514,8 +515,7 @@ test('Decoder pump error handling & reset', async () => {
 	});
 
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
-	const reader = new PacketReader(videoTrack);
-	const cursor = new VideoSampleCursor(reader);
+	const cursor = new VideoSampleCursor(videoTrack);
 	cursor._debug.enabled = true;
 
 	cursor._debug.throwInPump = true;
@@ -527,8 +527,6 @@ test('Decoder pump error handling & reset', async () => {
 
 	cursor._debug.throwInPump = false;
 	await expect(async () => cursor.seekToFirst()).rejects.toThrow('Fake pump error'); // It's bricked
-
-	expect(VideoSample._openSampleCount).toBe(0);
 
 	await cursor.reset();
 
@@ -543,9 +541,8 @@ test('Decoder errors & reset', async () => {
 	});
 
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
-	const reader = new PacketReader(videoTrack);
 
-	const cursor1 = new VideoSampleCursor(reader);
+	const cursor1 = new VideoSampleCursor(videoTrack);
 	cursor1._debug.enabled = true;
 	cursor1._debug.throwDecoderError = true;
 
@@ -561,7 +558,7 @@ test('Decoder errors & reset', async () => {
 	const firstSample = await cursor1.seekToFirst();
 	expect(firstSample!.timestamp).toBe(0);
 
-	const cursor2 = new VideoSampleCursor(reader);
+	const cursor2 = new VideoSampleCursor(videoTrack);
 	cursor2._debug.enabled = true;
 
 	await cursor2.seekToFirst();
@@ -580,9 +577,8 @@ test('Use after close', async () => {
 	});
 
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
-	const reader = new PacketReader(videoTrack);
 
-	const cursor1 = new VideoSampleCursor(reader);
+	const cursor1 = new VideoSampleCursor(videoTrack);
 
 	expect(cursor1.closed).toBe(false);
 	await cursor1.close();
@@ -593,7 +589,7 @@ test('Use after close', async () => {
 	await expect(async () => await cursor1.seekToKey(0)).rejects.toThrow('cursor has been closed');
 	await expect(async () => await cursor1.next()).rejects.toThrow('cursor has been closed');
 
-	const cursor2 = new VideoSampleCursor(reader);
+	const cursor2 = new VideoSampleCursor(videoTrack);
 	const commands2 = [
 		cursor2.seekToFirst(),
 		cursor2.next(),
@@ -609,7 +605,7 @@ test('Use after close', async () => {
 	expect(cursor2._pumpRunning).toBe(false);
 	expect(cursor2._decoder).toBe(null);
 
-	const cursor3 = new VideoSampleCursor(reader);
+	const cursor3 = new VideoSampleCursor(videoTrack);
 	const commands3 = [
 		cursor3.seekToFirst(),
 		cursor3.next(),
@@ -621,8 +617,6 @@ test('Use after close', async () => {
 	await expect(commands3[1]).resolves.toBeInstanceOf(VideoSample);
 	await expect(commands3[2]).resolves.toBeUndefined();
 	await expect(commands3[3]).rejects.toThrow('cursor has been closed');
-
-	expect(VideoSample._openSampleCount).toBe(0);
 });
 
 test('Wait until idle', async () => {
@@ -634,23 +628,26 @@ test('Wait until idle', async () => {
 	});
 
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
-	const reader = new PacketReader(videoTrack);
-	const cursor = new VideoSampleCursor(reader);
+	const cursor = new VideoSampleCursor(videoTrack);
 
 	const promise1 = cursor.waitUntilIdle();
 	expect(promise1).toBeInstanceOf(Promise); // The decoder is setting up
+	expect(cursor.isIdle()).toBe(false);
 	await promise1;
 
 	expect(cursor.waitUntilIdle()).toBe(null);
+	expect(cursor.isIdle()).toBe(true);
 
 	const promise2 = cursor.seekToFirst();
 	const promise3 = cursor.waitUntilIdle();
+	expect(cursor.isIdle()).toBe(false);
 	expect(promise2).toBeInstanceOf(Promise);
 	expect(promise3).toBeInstanceOf(Promise);
 
 	expect(cursor.current).toBe(null);
 	await promise3;
 	expect(cursor.current!.timestamp).toBe(0);
+	expect(cursor.isIdle()).toBe(true);
 
 	expect(cursor.waitUntilIdle()).toBe(null);
 
@@ -672,6 +669,7 @@ test('Wait until idle', async () => {
 	expect(cursor.closed).toBe(false);
 	await promise7;
 	expect(cursor.closed).toBe(true);
+	expect(cursor.isIdle()).toBe(true);
 });
 
 test('Command queuing', async () => {
@@ -682,9 +680,8 @@ test('Command queuing', async () => {
 	});
 
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
-	const reader = new PacketReader(videoTrack);
 
-	const cursor0 = new VideoSampleCursor(reader);
+	const cursor0 = new VideoSampleCursor(videoTrack);
 	cursor0._debug.enabled = true;
 
 	const commands0 = [
@@ -698,7 +695,7 @@ test('Command queuing', async () => {
 
 	expect(cursor0._debug.pumpsStarted).toBe(1);
 
-	const cursor1 = new VideoSampleCursor(reader);
+	const cursor1 = new VideoSampleCursor(videoTrack);
 	cursor1._debug.enabled = true;
 
 	const commands1 = [
@@ -711,7 +708,7 @@ test('Command queuing', async () => {
 	expect(results1[0]!.timestamp).toBe(0);
 	expect(cursor1._debug.decodedPackets.map(x => x.timestamp)).toEqual([0]);
 
-	const cursor2 = new VideoSampleCursor(reader);
+	const cursor2 = new VideoSampleCursor(videoTrack);
 	cursor2._debug.enabled = true;
 
 	const commands2 = [
@@ -739,7 +736,7 @@ test('Command queuing', async () => {
 	]);
 	expect(cursor2._debug.pumpsStarted).toBe(6);
 
-	const cursor3 = new VideoSampleCursor(reader);
+	const cursor3 = new VideoSampleCursor(videoTrack);
 	cursor3._debug.enabled = true;
 
 	const commands3 = [
@@ -766,7 +763,7 @@ test('Command queuing', async () => {
 	expect(cursor3._debug.decodedPackets.every(x => x.timestamp <= 0.5)).toBe(true);
 	expect(cursor3._debug.pumpsStarted).toBe(6);
 
-	const cursor4 = new VideoSampleCursor(reader);
+	const cursor4 = new VideoSampleCursor(videoTrack);
 	cursor4._debug.enabled = true;
 
 	const commands4 = [
@@ -787,7 +784,7 @@ test('Command queuing', async () => {
 	expect(results4[3]!.timestamp).toBe(1);
 	expect(cursor4._debug.decodedPackets.length).toBeGreaterThan(3); // Because .next() goes into "sequential mode"
 
-	const cursor5 = new VideoSampleCursor(reader);
+	const cursor5 = new VideoSampleCursor(videoTrack);
 	cursor5._debug.enabled = true;
 
 	const commands5 = [
@@ -823,7 +820,7 @@ test('Command queuing', async () => {
 
 	expect(cursor5._debug.pumpsStarted).toBe(2);
 
-	const cursor6 = new VideoSampleCursor(reader);
+	const cursor6 = new VideoSampleCursor(videoTrack);
 	cursor6._debug.enabled = true;
 
 	const commands6 = [
@@ -849,7 +846,7 @@ test('Command queuing', async () => {
 
 	expect(cursor6._debug.pumpsStarted).toBe(3);
 
-	const cursor7 = new VideoSampleCursor(reader);
+	const cursor7 = new VideoSampleCursor(videoTrack);
 	const commands7 = [
 		cursor7.close(),
 		cursor7.close(),
@@ -858,7 +855,7 @@ test('Command queuing', async () => {
 
 	await promiseAllEnsureOrder(commands7);
 
-	const cursor8 = new VideoSampleCursor(reader, { autoClose: false });
+	const cursor8 = new VideoSampleCursor(videoTrack, { autoClose: false });
 
 	const firstSample = await cursor8.seekToFirst();
 	firstSample!.close();
@@ -877,7 +874,7 @@ test('Command queuing', async () => {
 
 	await cursor8.close();
 
-	const cursor9 = new VideoSampleCursor(reader, { autoClose: false });
+	const cursor9 = new VideoSampleCursor(videoTrack, { autoClose: false });
 
 	const commands9 = [
 		cursor9.seekToFirst(),
@@ -893,7 +890,7 @@ test('Command queuing', async () => {
 
 	await cursor9.close();
 
-	const cursor10 = new VideoSampleCursor(reader);
+	const cursor10 = new VideoSampleCursor(videoTrack);
 	cursor10._debug.enabled = true;
 
 	const commands10 = [
@@ -911,8 +908,6 @@ test('Command queuing', async () => {
 	expect(results10[2]!.timestamp).toBe(0);
 	expect(results10[3]!.timestamp).toBe(results10[1]!.timestamp);
 	expect(cursor10._debug.pumpsStarted).toBe(2);
-
-	expect(VideoSample._openSampleCount).toBe(0);
 });
 
 test('Automatic cursor disposal', async () => {
@@ -922,9 +917,8 @@ test('Automatic cursor disposal', async () => {
 	});
 
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
-	const reader = new PacketReader(videoTrack);
 
-	const cursor = new VideoSampleCursor(reader);
+	const cursor = new VideoSampleCursor(videoTrack);
 	await cursor.seekToFirst();
 
 	// No cursor.close() here, but the disposed Input closes the cursor
@@ -943,8 +937,7 @@ test('Video with stubborn first sample emit', async () => {
 	});
 
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
-	const reader = new PacketReader(videoTrack);
-	await using cursor = new VideoSampleCursor(reader);
+	await using cursor = new VideoSampleCursor(videoTrack);
 
 	const firstSample = (await cursor.seekToFirst())!;
 	expect(firstSample).not.toBe(null);
@@ -958,8 +951,7 @@ test('AudioSampleCursor', async () => {
 	});
 
 	const audioTrack = (await input.getPrimaryAudioTrack())!;
-	const reader = new PacketReader(audioTrack);
-	const cursor = new AudioSampleCursor(reader);
+	const cursor = new AudioSampleCursor(audioTrack);
 	cursor._debug.enabled = true;
 
 	const firstSample = (await cursor.seekToFirst())!;
@@ -1032,8 +1024,6 @@ test('AudioSampleCursor', async () => {
 	expect(cursor._debug.pumpsStarted).toBe(6);
 
 	await cursor.close();
-
-	expect(AudioSample._openSampleCount).toBe(0);
 });
 
 test('Sample mapping', async () => {
@@ -1043,10 +1033,9 @@ test('Sample mapping', async () => {
 	});
 
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
-	const reader = new PacketReader(videoTrack);
 
 	let callCount = 0;
-	await using cursor = new VideoSampleCursor(reader, {
+	await using cursor = new VideoSampleCursor(videoTrack, {
 		transform: (sample) => {
 			callCount++;
 
@@ -1081,9 +1070,8 @@ test('Canvas transformer', async () => {
 	});
 
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
-	const reader = new PacketReader(videoTrack);
 
-	const cursor1 = new VideoSampleCursor(reader, {
+	const cursor1 = new VideoSampleCursor(videoTrack, {
 		transform: canvasTransformer(),
 	});
 
@@ -1101,7 +1089,7 @@ test('Canvas transformer', async () => {
 
 	await cursor1.close();
 
-	const cursor2 = new VideoSampleCursor(reader, {
+	const cursor2 = new VideoSampleCursor(videoTrack, {
 		transform: canvasTransformer({
 			width: 320,
 			poolSize: 2,
@@ -1124,8 +1112,6 @@ test('Canvas transformer', async () => {
 	expect(sample2.canvas).toBe(sample4.canvas);
 
 	await cursor2.close();
-
-	expect(VideoSample._openSampleCount).toBe(0);
 });
 
 test('AudioBuffer transformer', async () => {
@@ -1135,9 +1121,8 @@ test('AudioBuffer transformer', async () => {
 	});
 
 	const audioTrack = (await input.getPrimaryAudioTrack())!;
-	const reader = new PacketReader(audioTrack);
 
-	const cursor = new AudioSampleCursor(reader, {
+	const cursor = new AudioSampleCursor(audioTrack, {
 		transform: audioBufferTransformer(),
 	});
 
@@ -1154,6 +1139,75 @@ test('AudioBuffer transformer', async () => {
 	expect(nextSample.buffer.duration).toBe(nextSample.duration);
 
 	await cursor.close();
+});
 
-	expect(AudioSample._openSampleCount).toBe(0);
+test('Unthrottled decoder', async () => {
+	// While the decoder is throttled in practice, these tests simulate what happens when the decoder naturally reaches
+	// the end of the encodable packets without having been stopped; in this case, we still expect the cursor to keep
+	// functioning normally, just that requests are now fully resolved through the sample queue only (when possible).
+
+	using input = new Input({
+		source: new BufferSource(await fetch('/trim-buck-bunny.mov').then(x => x.arrayBuffer())),
+		formats: ALL_FORMATS,
+	});
+
+	const audioTrack = (await input.getPrimaryAudioTrack())!;
+
+	const cursor1 = new AudioSampleCursor(audioTrack);
+	cursor1._debug.enabled = true;
+	cursor1._debug.unthrottledPump = true;
+
+	const first = await cursor1.seekToFirst();
+	expect(first!.timestamp).toBe(0);
+
+	await cursor1._debug.pumpEnded.wait();
+	expect(cursor1._pumpRunning).toBe(false);
+
+	// All of these requests can be fully satisfied only by using the sample queue:
+
+	const next = await cursor1.next();
+	expect(next).not.toBe(null);
+	expect(next!.timestamp).toBeCloseTo(first!.timestamp + first!.duration);
+
+	const nextNext = await cursor1.next();
+	expect(nextNext).not.toBe(null);
+	expect(nextNext!.timestamp).toBeCloseTo(next!.timestamp + next!.duration);
+
+	const seeked = await cursor1.seekTo(1);
+	expect(seeked).not.toBe(null);
+	expect(seeked!.timestamp).toBeGreaterThan(0.9);
+	expect(seeked!.timestamp).toBeLessThanOrEqual(1);
+
+	const nextKey = await cursor1.nextKey();
+	expect(nextKey).not.toBe(null);
+	expect(nextKey!.timestamp).toBeCloseTo(seeked!.timestamp + seeked!.duration);
+
+	const theLast = await cursor1.seekTo(Infinity);
+	expect(theLast).not.toBe(null);
+
+	const pastTheLast = await cursor1.next();
+	expect(pastTheLast).toBe(null);
+
+	expect(cursor1._debug.pumpsStarted).toBe(1);
+
+	const someRandomSample = await cursor1.seekTo(0.5);
+	expect(someRandomSample).not.toBe(null);
+	expect(someRandomSample!.timestamp).toBeGreaterThan(0.4);
+	expect(someRandomSample!.timestamp).toBeLessThanOrEqual(0.5);
+
+	expect(cursor1._debug.pumpsStarted).toBe(2);
+
+	await cursor1.close();
+
+	const cursor2 = new AudioSampleCursor(audioTrack);
+	cursor2._debug.enabled = true;
+	cursor2._debug.unthrottledPump = true;
+
+	await cursor2.seekToFirst();
+
+	await cursor2._debug.pumpEnded.wait();
+	expect(cursor2._pumpRunning).toBe(false);
+
+	// Test that all samples in the queue get closed now
+	await cursor2.close();
 });

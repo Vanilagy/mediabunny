@@ -932,7 +932,7 @@ export interface AsyncMutexLock extends Disposable {
 }
 
 export class AsyncMutex4 {
-	private locked = false;
+	locked = false;
 	private resolverQueue: (() => void)[] = [];
 
 	lock() {
@@ -1013,7 +1013,7 @@ export class CallSerializer2 {
 		}
 	}
 
-	done() {
+	waitUntilIdle() {
 		if (this.currentPromise) {
 			return this.currentPromise
 				.catch(() => {})
@@ -1021,6 +1021,10 @@ export class CallSerializer2 {
 		} else {
 			return null;
 		}
+	}
+
+	isIdle() {
+		return !this.currentPromise;
 	}
 }
 

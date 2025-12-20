@@ -75,6 +75,7 @@
     "@tailwindcss/vite": "^4.1.7",
     "@types/markdown-it-footnote": "^3.0.4",
     "@types/node": "^22.13.10",
+    "@vitest/browser": "3.2.4",
     "esbuild": "^0.25.1",
     "esbuild-plugin-external-global": "^1.0.1",
     "eslint": "^9.22.0",
@@ -91,7 +92,6 @@
     "vitepress-plugin-llms": "^1.5.1",
     "vitepress-plugin-mermaid": "^2.0.17",
     "vitest": "3.2.4",
-    "@vitest/browser": "3.2.4",
     "webdriverio": "9.19.2"
   },
   "keywords": [

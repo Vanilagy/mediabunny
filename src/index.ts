@@ -183,8 +183,11 @@ export {
 	WrappedCanvas,
 } from './media-sink';
 export {
+	PacketReader,
 	PacketCursor,
+	SampleCursor,
 	VideoSampleCursor,
+	AudioSampleCursor,
 } from './cursors';
 export {
 	Conversion,

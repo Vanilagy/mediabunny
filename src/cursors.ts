@@ -338,7 +338,7 @@ export class PacketCursor {
 		let stopped = false;
 		const stop = () => stopped = true;
 
-		const donePromise = this._callSerializer.done();
+		const donePromise = this._callSerializer.waitUntilIdle();
 		if (donePromise) await donePromise;
 
 		while (true) {
@@ -362,7 +362,7 @@ export class PacketCursor {
 
 	// eslint-disable-next-line @stylistic/generator-star-spacing
 	async *[Symbol.asyncIterator]() {
-		const donePromise = this._callSerializer.done();
+		const donePromise = this._callSerializer.waitUntilIdle();
 		if (donePromise) await donePromise;
 
 		while (true) {
@@ -380,7 +380,11 @@ export class PacketCursor {
 	}
 
 	waitUntilIdle() {
-		return this._callSerializer.done();
+		return this._callSerializer.waitUntilIdle();
+	}
+
+	isIdle() {
+		return this._callSerializer.isIdle();
 	}
 }
 
@@ -417,7 +421,7 @@ export abstract class SampleCursor<
 	Sample extends VideoSample | AudioSample,
 	TransformedSample = Sample,
 > implements AsyncDisposable {
-	reader: PacketReader;
+	track: InputTrack;
 	current: TransformedSample | null = null;
 
 	private _transform: SampleTransformer<Sample, TransformedSample>;
@@ -425,10 +429,13 @@ export abstract class SampleCursor<
 
 	private _mutex = new AsyncMutex4();
 
+	private _packetReader: PacketReader;
 	private _packetCursor: PacketCursor;
 	/** @internal */
 	_decoder: DecoderWrapper<Sample> | null = null;
 	private _currentSample: Sample | null = null;
+	/** Updated when _currentSample is updated, but reset when a new pump is started. */
+	private _currentSampleTimestamp: number | null = null;
 	/** The queue of samples that have been decoded and are now waiting. */
 	private _sampleQueue: Sample[] = [];
 	/** Used to pause and resume the pump. */
@@ -457,7 +464,10 @@ export abstract class SampleCursor<
 	private _error: unknown = null;
 	private _errorSet = false;
 
-	/** @internal */
+	/**
+	 * A bunch of utilities for simulating certain behaviors for testing.
+	 * @internal
+	 */
 	_debug = {
 		enabled: false,
 		pumpsStarted: 0,
@@ -466,6 +476,8 @@ export abstract class SampleCursor<
 		throwInDecoderInit: false,
 		throwInPump: false,
 		throwDecoderError: false,
+		unthrottledPump: false,
+		pumpEnded: new AsyncGate(),
 	};
 
 	get closed(): boolean {
@@ -477,15 +489,16 @@ export abstract class SampleCursor<
 	}
 
 	protected constructor(
-		reader: PacketReader,
+		track: InputTrack,
 		options: SampleCursorOptions<Sample, TransformedSample>,
 	) {
-		this.reader = reader;
-		this._packetCursor = new PacketCursor(reader);
+		this.track = track;
+		this._packetReader = new PacketReader(track);
+		this._packetCursor = new PacketCursor(this._packetReader);
 		this._autoClose = options.autoClose ?? true;
 		this._transform = options.transform ?? (sample => sample as unknown as TransformedSample);
 
-		reader.track.input._openSampleCursors.add(this);
+		track.input._openSampleCursors.add(this);
 
 		const lock = this._mutex.lock();
 		assert(!lock.pending);
@@ -497,17 +510,17 @@ export abstract class SampleCursor<
 	}
 
 	seekToFirst(): MaybePromise<TransformedSample | null> {
-		return this._getSample(result => this._seekToPacket(result, this.reader.readFirst()));
+		return this._getSample(result => this._seekToPacket(result, this._packetReader.readFirst()));
 	}
 
 	seekTo(timestamp: number): MaybePromise<TransformedSample | null> {
 		validateTimestamp(timestamp);
-		return this._getSample(result => this._seekToPacket(result, this.reader.readAt(timestamp)));
+		return this._getSample(result => this._seekToPacket(result, this._packetReader.readAt(timestamp)));
 	}
 
 	seekToKey(timestamp: number): MaybePromise<TransformedSample | null> {
 		validateTimestamp(timestamp);
-		return this._getSample(result => this._seekToPacket(result, this.reader.readKeyAt(timestamp)));
+		return this._getSample(result => this._seekToPacket(result, this._packetReader.readKeyAt(timestamp)));
 	}
 
 	next(): MaybePromise<TransformedSample | null> {
@@ -639,7 +652,7 @@ export abstract class SampleCursor<
 		this._nextIsFirst = true;
 		this._lazyPump = 0;
 
-		this.reader.track.input._openSampleCursors.add(this);
+		this.track.input._openSampleCursors.add(this);
 
 		try {
 			const newDecoder = await this._initDecoder();
@@ -683,6 +696,10 @@ export abstract class SampleCursor<
 		} else {
 			return getLastPendingPromise() ?? null;
 		}
+	}
+
+	isIdle(): boolean {
+		return this._pendingRequests.length === 0 && !this._mutex.locked;
 	}
 
 	/** @internal */
@@ -761,6 +778,7 @@ export abstract class SampleCursor<
 
 		this._currentSample?.close();
 		this._currentSample = newCurrentRaw;
+		this._currentSampleTimestamp = newCurrentRaw?.timestamp ?? null;
 		this.current = null;
 	}
 
@@ -839,7 +857,7 @@ export abstract class SampleCursor<
 
 		const lastTimestamp = Math.max(
 			this._lastTarget?.timestamp ?? -Infinity,
-			this._currentSample?.timestamp ?? -Infinity, // This one's revelant if we had next() requests
+			this._currentSampleTimestamp ?? -Infinity, // This one's revelant if we had next() requests
 		);
 
 		if (lastTimestamp !== -Infinity && lastTimestamp <= targetPacket.timestamp) {
@@ -863,7 +881,10 @@ export abstract class SampleCursor<
 			} else {
 				if (this._packetCursor.current) {
 					// We need to see if the target packet is ahead of the decoder, GOP-wise
-					let nextKey = this.reader.readNextKey(this._packetCursor.current, { verifyKeyPackets: true });
+					let nextKey = this._packetReader.readNextKey(
+						this._packetCursor.current,
+						{ verifyKeyPackets: true },
+					);
 					if (nextKey instanceof Promise) nextKey = await nextKey;
 
 					needsNewPump = !!nextKey && targetPacket.sequenceNumber >= nextKey.sequenceNumber;
@@ -924,7 +945,7 @@ export abstract class SampleCursor<
 		if (this._nextIsFirst) {
 			// Easy, just seek to the first sample
 			// await is important so that the lock doesn't release too early
-			return await this._seekToPacket(res, this.reader.readFirst(), lock);
+			return await this._seekToPacket(res, this._packetReader.readFirst(), lock);
 		}
 
 		// See if the request can be satisfied using already-decoded samples
@@ -979,7 +1000,7 @@ export abstract class SampleCursor<
 
 		if (this._nextIsFirst) {
 			// await is important so that the lock doesn't release too early
-			return await this._seekToPacket(res, this.reader.readFirst(), lock);
+			return await this._seekToPacket(res, this._packetReader.readFirst(), lock);
 		}
 
 		let timestampToCheck: number;
@@ -1001,8 +1022,8 @@ export abstract class SampleCursor<
 				this._ensureNotClosed();
 			}
 
-			if (this._currentSample) {
-				timestampToCheck = this._currentSample.timestamp;
+			if (this._currentSampleTimestamp !== null) {
+				timestampToCheck = this._currentSampleTimestamp;
 			} else {
 				// We're at the end
 				return res.set(null);
@@ -1014,11 +1035,11 @@ export abstract class SampleCursor<
 		// are ascending in timestamp, so we first get the current key (based on a presentation-order search), then
 		// get the next key after that, which will be the answer we're looking for.
 
-		let key = this.reader.readKeyAt(timestampToCheck, { verifyKeyPackets: true });
+		let key = this._packetReader.readKeyAt(timestampToCheck, { verifyKeyPackets: true });
 		if (key instanceof Promise) key = await key;
 		assert(key); // Must be
 
-		let nextKey = this.reader.readNextKey(key, { verifyKeyPackets: true });
+		let nextKey = this._packetReader.readNextKey(key, { verifyKeyPackets: true });
 		if (nextKey instanceof Promise) nextKey = await nextKey;
 
 		if (!nextKey) {
@@ -1038,8 +1059,16 @@ export abstract class SampleCursor<
 		assert(this._pumpTarget);
 		assert(this._decoder);
 
+		// Close whatever's left from the previous pump run (only relevant if the previous pump ended naturally, i.e.
+		// it wasn't stopped)
+		for (const sample of this._sampleQueue) {
+			sample.close();
+		}
+		this._sampleQueue.length = 0;
+
 		try {
 			this._pumpRunning = true;
+			this._currentSampleTimestamp = null;
 
 			if (this._debug.enabled) {
 				this._debug.pumpsStarted++;
@@ -1069,7 +1098,11 @@ export abstract class SampleCursor<
 				}
 
 				const decodeQueueSize = this._decoder.getDecodeQueueSize();
-				if (this._sampleQueue.length + decodeQueueSize >= 4 && !this._pumpStopQueued) {
+				if (
+					this._sampleQueue.length + decodeQueueSize >= 4
+					&& !this._pumpStopQueued
+					&& !(this._debug.enabled && this._debug.unthrottledPump)
+				) {
 					await this._pumpGate.wait();
 					continue;
 				}
@@ -1086,19 +1119,24 @@ export abstract class SampleCursor<
 				if (maybePromise instanceof Promise) await maybePromise;
 			}
 
-			if (this._pendingRequests.length > 0 || !this._closed) {
+			if (!this._closed || this._pendingRequests.length > 0) {
 				await this._decoder.flush();
+			} else {
+				// We're closed with no pending requests, don't bother flushing what's left
 			}
 
+			// Resolve whatever requests remain with null. The reason this is correct: assume there are still pending
+			// requests. Then the above flush() call ensured that all possible samples that we can get from the decoder
+			// we have received. If some of the pending requests are still unsatisfied after seeing all samples we
+			// decoded, then there is no other way for them to be solved but with null.
 			const resolveWithNull = (request: PendingRequest<TransformedSample>) => {
+				this._setCurrentRaw(null); // Note that this only runs if there exists at least one pending request
+
 				request.resolve(null);
 				if (request.successor) {
 					resolveWithNull(request.successor);
 				}
 			};
-
-			// Resolve whatever requests remain with null
-			this._setCurrentRaw(null);
 			this._pendingRequests.forEach(resolveWithNull);
 		} catch (error) {
 			if (!this._decoder.closed && this._pendingRequests.length > 0) {
@@ -1109,11 +1147,6 @@ export abstract class SampleCursor<
 			this._pumpRunning = false; // So that close() doesn't attempt to stop the pump
 			void this._closeWithError(error);
 		} finally {
-			for (const sample of this._sampleQueue) {
-				sample.close();
-			}
-			this._sampleQueue.length = 0;
-
 			this._pendingRequests.length = 0;
 			this._lastPendingRequest = null;
 			this._pumpRunning = false;
@@ -1122,6 +1155,10 @@ export abstract class SampleCursor<
 			this._lastTarget = null;
 
 			this._pumpStopped.open();
+
+			if (this._debug.enabled) {
+				this._debug.pumpEnded.open();
+			}
 		}
 	}
 
@@ -1130,12 +1167,18 @@ export abstract class SampleCursor<
 
 		this._pumpStopQueued = true;
 		this._pumpGate.open();
+
+		for (const sample of this._sampleQueue) {
+			sample.close();
+		}
+		this._sampleQueue.length = 0;
+
 		await this._pumpStopped.wait();
 	}
 
 	private async _closeInternal(doLock = true) {
 		this._lazyPump++;
-		this.reader.track.input._openSampleCursors.delete(this);
+		this.track.input._openSampleCursors.delete(this);
 
 		let lock: AsyncMutexLock | null = null;
 		if (doLock) {
@@ -1149,6 +1192,11 @@ export abstract class SampleCursor<
 		if (this._pumpRunning) {
 			await this._stopPump();
 		}
+
+		for (const sample of this._sampleQueue) {
+			sample.close();
+		}
+		this._sampleQueue.length = 0;
 
 		this._setCurrentRaw(null);
 		this._decoder?.close();
@@ -1202,25 +1250,23 @@ export abstract class SampleCursor<
 }
 
 export class VideoSampleCursor<TransformedSample = VideoSample> extends SampleCursor<VideoSample, TransformedSample> {
-	override reader!: PacketReader<InputVideoTrack>;
+	override track!: InputVideoTrack;
 
 	constructor(
-		reader: PacketReader<InputVideoTrack>,
+		track: InputVideoTrack,
 		options: SampleCursorOptions<VideoSample, TransformedSample> = {},
 	) {
-		if (!(reader instanceof PacketReader) || !(reader.track instanceof InputVideoTrack)) {
-			throw new TypeError('reader must be a PacketReader for an InputVideoTrack.');
+		if (!(track instanceof InputVideoTrack)) {
+			throw new TypeError('track must be an InputVideoTrack.');
 		}
 		validateSampleCursorOptions(options);
 
-		super(reader, options);
+		super(track, options);
 	}
 
 	/** @internal */
 	override async _initDecoder(): Promise<DecoderWrapper<VideoSample>> {
-		const track = this.reader.track;
-
-		if (!(await track.canDecode())) {
+		if (!(await this.track.canDecode())) {
 			throw new Error(
 				'This video track cannot be decoded by this browser. Make sure to check decodability before using'
 				+ ' a track.',
@@ -1231,17 +1277,17 @@ export class VideoSampleCursor<TransformedSample = VideoSample> extends SampleCu
 			throw new Error('Fake decoder init error!');
 		}
 
-		const decoderConfig = await track.getDecoderConfig();
+		const decoderConfig = await this.track.getDecoderConfig();
 		assert(decoderConfig);
-		assert(track.codec);
+		assert(this.track.codec);
 
 		const decoder = new VideoDecoderWrapper(
 			sample => this._onDecoderSample(sample),
 			error => this._onDecoderError(error),
-			track.codec,
+			this.track.codec,
 			decoderConfig,
-			track.rotation,
-			track.timeResolution,
+			this.track.rotation,
+			this.track.timeResolution,
 		);
 
 		decoder.onDequeue = () => this._onDecoderDequeue();
@@ -1251,25 +1297,23 @@ export class VideoSampleCursor<TransformedSample = VideoSample> extends SampleCu
 }
 
 export class AudioSampleCursor<TransformedSample = AudioSample> extends SampleCursor<AudioSample, TransformedSample> {
-	override reader!: PacketReader<InputAudioTrack>;
+	override track!: InputAudioTrack;
 
 	constructor(
-		reader: PacketReader<InputAudioTrack>,
+		track: InputAudioTrack,
 		options: SampleCursorOptions<AudioSample, TransformedSample> = {},
 	) {
-		if (!(reader instanceof PacketReader) || !(reader.track instanceof InputAudioTrack)) {
-			throw new TypeError('reader must be a PacketReader for an InputAudioTrack.');
+		if (!(track instanceof InputAudioTrack)) {
+			throw new TypeError('track must be an InputAudioTrack.');
 		}
 		validateSampleCursorOptions(options);
 
-		super(reader, options);
+		super(track, options);
 	}
 
 	/** @internal */
 	override async _initDecoder(): Promise<DecoderWrapper<AudioSample>> {
-		const track = this.reader.track;
-
-		if (!(await track.canDecode())) {
+		if (!(await this.track.canDecode())) {
 			throw new Error(
 				'This audio track cannot be decoded by this browser. Make sure to check decodability before using'
 				+ ' a track.',
@@ -1280,8 +1324,8 @@ export class AudioSampleCursor<TransformedSample = AudioSample> extends SampleCu
 			throw new Error('Fake decoder init error!');
 		}
 
-		const codec = track.codec;
-		const decoderConfig = await track.getDecoderConfig();
+		const codec = this.track.codec;
+		const decoderConfig = await this.track.getDecoderConfig();
 		assert(codec && decoderConfig);
 
 		let decoder: AudioDecoderWrapper | PcmAudioDecoderWrapper;
