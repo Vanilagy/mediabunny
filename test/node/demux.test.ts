@@ -3,7 +3,7 @@ import { Input } from '../../src/input.js';
 import { BufferSource, FilePathSource } from '../../src/source.js';
 import path from 'node:path';
 import fs from 'node:fs';
-import { ALL_FORMATS, MP3, MP4, QTFF, WEBM } from '../../src/input-format.js';
+import { ALL_FORMATS, MP3, MP4, QTFF, WAVE, WEBM } from '../../src/input-format.js';
 import { PacketReader } from '../../src/cursors.js';
 import { InputAudioTrack, InputTrack } from '../../src/input-track.js';
 import { assert } from '../../src/misc.js';
@@ -45,6 +45,24 @@ const testBasicPacketReading = async (track: InputTrack) => {
 
 	const afterLast = await reader.readNext(last!);
 	expect(afterLast).toBe(null);
+};
+
+const testSyncPacketReading = (track: InputTrack) => {
+	const reader = new PacketReader(track);
+
+	let current = reader.readFirst() as EncodedPacket | null;
+	expect(current).toBeInstanceOf(EncodedPacket);
+
+	let count = 0;
+	while (current) {
+		current = reader.readNext(current) as EncodedPacket | null;
+		expect(current instanceof EncodedPacket || current === null).toBe(true);
+		count++;
+	}
+
+	expect(count).toBeGreaterThan(0);
+
+	return count;
 };
 
 test('Regular ISOBMFF demuxing', async () => {
@@ -177,24 +195,6 @@ test('MP3 demuxing', async () => {
 	expect(duration).toBeGreaterThan(0);
 });
 
-const testSyncPacketReading = (track: InputTrack) => {
-	const reader = new PacketReader(track);
-
-	let current = reader.readFirst() as EncodedPacket | null;
-	expect(current).toBeInstanceOf(EncodedPacket);
-
-	let count = 0;
-	while (current) {
-		current = reader.readNext(current) as EncodedPacket | null;
-		expect(current instanceof EncodedPacket || current === null).toBe(true);
-		count++;
-	}
-
-	expect(count).toBeGreaterThan(0);
-
-	return count;
-};
-
 test('MP3 sync reading', async () => {
 	using input = new Input({
 		source: new BufferSource(fs.readFileSync(path.join(__dirname, '../public/AudacityTest1.mp3'))),
@@ -206,4 +206,36 @@ test('MP3 sync reading', async () => {
 
 	const count = testSyncPacketReading(audioTrack);
 	expect(count).toBe(475);
+});
+
+test('WAVE demuxing', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/glitch-hop-is-dead.wav')),
+		formats: ALL_FORMATS,
+	});
+
+	expect(await input.getFormat()).toBe(WAVE);
+
+	const tracks = await input.getTracks();
+	expect(tracks).toHaveLength(1);
+
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	await testBasicPacketReading(audioTrack);
+
+	expect(await input.computeDuration()).toBeCloseTo(9.637188208616779);
+});
+
+test('WAVE sync reading', async () => {
+	using input = new Input({
+		source: new BufferSource(fs.readFileSync(path.join(__dirname, '../public/glitch-hop-is-dead.wav'))),
+		formats: ALL_FORMATS,
+	});
+
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	const count = testSyncPacketReading(audioTrack);
+	expect(count).toBe(208);
 });

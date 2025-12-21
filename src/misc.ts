@@ -885,6 +885,10 @@ export class ResultValue<T> {
 		this.value = value;
 		this.pending = false;
 	}
+
+	reset() {
+		this.pending = true;
+	}
 }
 
 export class AsyncMutex2 {
