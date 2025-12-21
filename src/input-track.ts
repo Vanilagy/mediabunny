@@ -144,37 +144,21 @@ export abstract class InputTrack {
 	 * may be positive or even negative. A negative starting timestamp means the track's timing has been offset. Samples
 	 * with a negative timestamp should not be presented.
 	 */
-	getFirstTimestamp() {
+	async getFirstTimestamp() {
 		const result = new ResultValue<EncodedPacket | null>();
-		const promise = this._backing.getFirstPacket(result, { metadataOnly: true });
+		await this._backing.getFirstPacket(result, { metadataOnly: true });
 
-		const getValue = () => {
-			const firstPacket = result.value;
-			return firstPacket?.timestamp ?? 0;
-		};
-
-		if (result.pending) {
-			return (promise).then(getValue);
-		} else {
-			return getValue();
-		}
+		const firstPacket = result.value;
+		return firstPacket?.timestamp ?? 0;
 	}
 
 	/** Returns the end timestamp of the last packet of this track, in seconds. */
-	computeDuration(): MaybePromise<number> {
+	async computeDuration() {
 		const result = new ResultValue<EncodedPacket | null>();
-		const promise = this._backing.getPacket(result, Infinity, { metadataOnly: true });
+		await this._backing.getPacket(result, Infinity, { metadataOnly: true });
 
-		const getValue = () => {
-			const lastPacket = result.value;
-			return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
-		};
-
-		if (result.pending) {
-			return (promise).then(getValue);
-		} else {
-			return getValue();
-		}
+		const lastPacket = result.value;
+		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
 	}
 
 	/**

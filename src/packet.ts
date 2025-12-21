@@ -54,6 +54,12 @@ export class EncodedPacket {
 	/** Additional data carried with this packet. */
 	readonly sideData: EncodedPacketSideData;
 
+	/**
+	 * Data that demuxers can populate for whatever internal use they have.
+	 * @internal
+	 */
+	_internal: unknown = undefined;
+
 	/** Creates a new {@link EncodedPacket} from raw bytes and timing information. */
 	constructor(
 		/** The encoded data of this packet. */

@@ -885,11 +885,6 @@ export class ResultValue<T> {
 		this.value = value;
 		this.pending = false;
 	}
-
-	// @ts-expect-error Just for the types
-	pass(): Yo {
-		assert(!this.pending);
-	}
 }
 
 export class AsyncMutex2 {

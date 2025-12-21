@@ -70,7 +70,7 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 		const promise = this.track._backing.getFirstPacket(result, options);
 
 		if (result.pending) {
-			return (promise as Promise<Yo>).then(() => this.maybeVerifyPacketType(result.value, options));
+			return promise.then(() => this.maybeVerifyPacketType(result.value, options));
 		} else {
 			return this.maybeVerifyPacketType(result.value, options);
 		}
@@ -88,7 +88,7 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 		const promise = this.track._backing.getPacket(result, timestamp, options);
 
 		if (result.pending) {
-			return (promise as Promise<Yo>).then(() => this.maybeVerifyPacketType(result.value, options));
+			return promise.then(() => this.maybeVerifyPacketType(result.value, options));
 		} else {
 			return this.maybeVerifyPacketType(result.value, options);
 		}
@@ -110,7 +110,7 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 		const promise = this.track._backing.getKeyPacket(result, timestamp, options);
 
 		if (result.pending) {
-			return (promise as Promise<Yo>).then(() => result.value);
+			return promise.then(() => result.value);
 		} else {
 			return result.value;
 		}
@@ -152,7 +152,7 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 		const promise = this.track._backing.getNextPacket(result, from, options);
 
 		if (result.pending) {
-			return (promise as Promise<Yo>).then(() => this.maybeVerifyPacketType(result.value, options));
+			return promise.then(() => this.maybeVerifyPacketType(result.value, options));
 		} else {
 			return this.maybeVerifyPacketType(result.value, options);
 		}
@@ -176,7 +176,7 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 		const promise = this.track._backing.getNextKeyPacket(result, from, options);
 
 		if (result.pending) {
-			return (promise as Promise<Yo>).then(() => result.value);
+			return promise.then(() => result.value);
 		} else {
 			return result.value;
 		}
@@ -205,26 +205,28 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 	}
 }
 
-export class PacketCursor {
-	reader: PacketReader;
+export class PacketCursor<T extends InputTrack = InputTrack> {
+	track: T;
 	current: EncodedPacket | null = null;
 
+	private _reader: PacketReader<T>;
 	private _options: PacketRetrievalOptions;
 	private _nextIsFirst = true;
 	private _callSerializer = new CallSerializer2();
 
-	constructor(reader: PacketReader, options: PacketRetrievalOptions = {}) {
-		if (!(reader instanceof PacketReader)) {
-			throw new TypeError('reader must be a PacketReader.');
+	constructor(track: T, options: PacketRetrievalOptions = {}) {
+		if (!(track instanceof InputTrack)) {
+			throw new TypeError('track must be an InputTrack.');
 		}
 		validatePacketRetrievalOptions(options);
 
-		this.reader = reader;
+		this.track = track;
+		this._reader = new PacketReader(track);
 		this._options = options;
 	}
 
 	private _seekToFirstDirect(): MaybePromise<EncodedPacket | null> {
-		const result = this.reader.readFirst(this._options);
+		const result = this._reader.readFirst(this._options);
 
 		const onPacket = (packet: EncodedPacket | null) => {
 			this._nextIsFirst = false;
@@ -246,7 +248,7 @@ export class PacketCursor {
 		validateTimestamp(timestamp);
 
 		return this._callSerializer.call(() => {
-			const result = this.reader.readAt(timestamp, this._options);
+			const result = this._reader.readAt(timestamp, this._options);
 
 			const onPacket = (packet: EncodedPacket | null) => {
 				this._nextIsFirst = !packet;
@@ -265,7 +267,7 @@ export class PacketCursor {
 		validateTimestamp(timestamp);
 
 		return this._callSerializer.call(() => {
-			const result = this.reader.readKeyAt(timestamp, this._options);
+			const result = this._reader.readKeyAt(timestamp, this._options);
 
 			const onPacket = (packet: EncodedPacket | null) => {
 				this._nextIsFirst = !packet;
@@ -290,7 +292,7 @@ export class PacketCursor {
 				return null;
 			}
 
-			const result = this.reader.readNext(this.current, this._options);
+			const result = this._reader.readNext(this.current, this._options);
 
 			const onPacket = (packet: EncodedPacket | null) => {
 				return this.current = packet;
@@ -314,7 +316,7 @@ export class PacketCursor {
 				return null;
 			}
 
-			const result = this.reader.readNextKey(this.current, this._options);
+			const result = this._reader.readNextKey(this.current, this._options);
 
 			const onPacket = (packet: EncodedPacket | null) => {
 				return this.current = packet;
@@ -494,7 +496,7 @@ export abstract class SampleCursor<
 	) {
 		this.track = track;
 		this._packetReader = new PacketReader(track);
-		this._packetCursor = new PacketCursor(this._packetReader);
+		this._packetCursor = new PacketCursor(track);
 		this._autoClose = options.autoClose ?? true;
 		this._transform = options.transform ?? (sample => sample as unknown as TransformedSample);
 

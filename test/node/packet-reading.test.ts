@@ -64,8 +64,7 @@ test('Packet cursor seeking', async () => {
 	});
 
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
-	const reader = new PacketReader(videoTrack);
-	const cursor = new PacketCursor(reader);
+	const cursor = new PacketCursor(videoTrack);
 
 	expect(cursor.current).toBe(null);
 
@@ -102,8 +101,7 @@ test('Packet cursor iteration', async () => {
 	});
 
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
-	const reader = new PacketReader(videoTrack);
-	const cursor = new PacketCursor(reader);
+	const cursor = new PacketCursor(videoTrack);
 
 	const packet0 = (await cursor.seekToFirst())!;
 	expect(cursor.current!.timestamp).toBe(0);
@@ -211,7 +209,7 @@ test('Packet cursor iteration', async () => {
 
 	expect(total).toBe(121);
 
-	const cursor2 = new PacketCursor(reader);
+	const cursor2 = new PacketCursor(videoTrack);
 	const packet9 = (await cursor2.next())!; // Without any prior seeks
 	expect(packet9.sequenceNumber).toBe(packet0.sequenceNumber);
 });
@@ -224,7 +222,7 @@ test('Synchronous packet reading', async () => {
 
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
 	const reader = new PacketReader(videoTrack);
-	const cursor = new PacketCursor(reader);
+	const cursor = new PacketCursor(videoTrack);
 
 	expect(reader.readFirst()).not.toBeInstanceOf(Promise);
 
@@ -249,8 +247,7 @@ test('Command queuing', async () => {
 	});
 
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
-	const reader = new PacketReader(videoTrack);
-	const cursor = new PacketCursor(reader);
+	const cursor = new PacketCursor(videoTrack);
 
 	expect(cursor.waitUntilIdle()).toBe(null);
 
