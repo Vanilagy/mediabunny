@@ -21,7 +21,7 @@ import {
 } from './matroska/ebml';
 import { MatroskaDemuxer } from './matroska/matroska-demuxer';
 import { Mp3Demuxer } from './mp3/mp3-demuxer';
-import { FRAME_HEADER_SIZE } from '../shared/mp3-misc';
+import { FRAME_HEADER_SIZE, FrameHeader } from '../shared/mp3-misc';
 import { ID3_V2_HEADER_SIZE, readId3V2Header } from './id3';
 import { readNextFrameHeader } from './mp3/mp3-reader';
 import { OggDemuxer } from './ogg/ogg-demuxer';
@@ -30,6 +30,7 @@ import { MAX_FRAME_HEADER_SIZE, MIN_FRAME_HEADER_SIZE, readFrameHeader } from '.
 import { AdtsDemuxer } from './adts/adts-demuxer';
 import { readAscii } from './reader';
 import { FlacDemuxer } from './flac/flac-demuxer';
+import { ResultValue } from './misc';
 
 /**
  * Base class representing an input media file format.
@@ -259,7 +260,6 @@ export class WebMInputFormat extends MatroskaInputFormat {
 export class Mp3InputFormat extends InputFormat {
 	/** @internal */
 	async _canReadInput(input: Input) {
-		return true;
 		let slice = input._reader.requestSlice(0, 10);
 		if (slice instanceof Promise) slice = await slice;
 		if (!slice) return false;
@@ -281,7 +281,13 @@ export class Mp3InputFormat extends InputFormat {
 			currentPos = slice.filePos + id3V2Header.size;
 		}
 
-		const firstResult = await readNextFrameHeader(input._reader, currentPos, currentPos + 4096);
+		const result = new ResultValue<{
+			header: FrameHeader;
+			startPos: number;
+		} | null>();
+
+		await readNextFrameHeader(result, input._reader, currentPos, currentPos + 4096);
+		const firstResult = result.value;
 		if (!firstResult) {
 			return false;
 		}
@@ -295,7 +301,8 @@ export class Mp3InputFormat extends InputFormat {
 
 		// Fine, we found one frame header, but we're still not entirely sure this is MP3. Let's check if we can find
 		// another header right after it:
-		const secondResult = await readNextFrameHeader(input._reader, currentPos, currentPos + FRAME_HEADER_SIZE);
+		await readNextFrameHeader(result, input._reader, currentPos, currentPos + FRAME_HEADER_SIZE);
+		const secondResult = result.value;
 		if (!secondResult) {
 			return false;
 		}

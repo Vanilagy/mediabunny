@@ -3,7 +3,7 @@ import { Input } from '../../src/input.js';
 import { BufferSource, FilePathSource } from '../../src/source.js';
 import path from 'node:path';
 import fs from 'node:fs';
-import { ALL_FORMATS, MP3, MP4, QTFF, WAVE, WEBM } from '../../src/input-format.js';
+import { ADTS, ALL_FORMATS, MP3, MP4, QTFF, WAVE, WEBM } from '../../src/input-format.js';
 import { PacketReader } from '../../src/cursors.js';
 import { InputAudioTrack, InputTrack } from '../../src/input-track.js';
 import { assert } from '../../src/misc.js';
@@ -238,4 +238,41 @@ test('WAVE sync reading', async () => {
 
 	const count = testSyncPacketReading(audioTrack);
 	expect(count).toBe(208);
+});
+
+test('ADTS demuxing', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/trim-buck-bunny.aac')),
+		formats: ALL_FORMATS,
+	});
+
+	expect(await input.getFormat()).toBe(ADTS);
+	expect(await input.getMimeType()).toBe('audio/aac');
+
+	const tracks = await input.getTracks();
+	expect(tracks).toHaveLength(1);
+	const audioTrack = tracks[0] as InputAudioTrack;
+	expect(audioTrack).toBeInstanceOf(InputAudioTrack);
+
+	expect(audioTrack.codec).toBe('aac');
+	expect(audioTrack.numberOfChannels).toBeGreaterThan(0);
+	expect(audioTrack.sampleRate).toBeGreaterThan(0);
+
+	await testBasicPacketReading(audioTrack);
+
+	const duration = await audioTrack.computeDuration();
+	expect(duration).toBeGreaterThan(0);
+});
+
+test('ADTS sync reading', async () => {
+	using input = new Input({
+		source: new BufferSource(fs.readFileSync(path.join(__dirname, '../public/trim-buck-bunny.aac'))),
+		formats: ALL_FORMATS,
+	});
+
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	const count = testSyncPacketReading(audioTrack);
+	expect(count).toBeGreaterThan(0);
 });

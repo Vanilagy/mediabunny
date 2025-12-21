@@ -13,11 +13,13 @@ import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
 import {
 	assert,
-	AsyncMutex,
+	AsyncMutex4,
 	binarySearchExact,
 	binarySearchLessOrEqual,
 	Bitstream,
+	ResultValue,
 	UNDETERMINED_LANGUAGE,
+	Yo,
 } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readBytes, Reader } from '../reader';
@@ -42,7 +44,7 @@ export class AdtsDemuxer extends Demuxer {
 
 	tracks: InputAudioTrack[] = [];
 
-	readingMutex = new AsyncMutex();
+	readingMutex = new AsyncMutex4();
 	lastSampleLoaded = false;
 	lastLoadedPos = 0;
 	nextTimestampInSamples = 0;
@@ -57,35 +59,38 @@ export class AdtsDemuxer extends Demuxer {
 		return this.metadataPromise ??= (async () => {
 			// Keep loading until we find the first frame header
 			while (!this.firstFrameHeader && !this.lastSampleLoaded) {
-				await this.advanceReader();
+				const result = new ResultValue<void>();
+				const promise = this.advanceReader(result);
+				if (result.pending) await promise;
 			}
 
-			// There has to be a frame if this demuxer got selected
-			assert(this.firstFrameHeader);
+			if (!this.firstFrameHeader) {
+				throw new Error('No valid ADTS frame found.');
+			}
 
 			// Create the single audio track
 			this.tracks = [new InputAudioTrack(this.input, new AdtsAudioTrackBacking(this))];
 		})();
 	}
 
-	async advanceReader() {
+	async advanceReader(res: ResultValue<void>): Promise<Yo> {
 		let slice = this.reader.requestSliceRange(this.lastLoadedPos, MIN_FRAME_HEADER_SIZE, MAX_FRAME_HEADER_SIZE);
 		if (slice instanceof Promise) slice = await slice;
 		if (!slice) {
 			this.lastSampleLoaded = true;
-			return;
+			return res.set();
 		}
 
 		const header = readFrameHeader(slice);
 		if (!header) {
 			this.lastSampleLoaded = true;
-			return;
+			return res.set();
 		}
 
 		if (this.reader.fileSize !== null && header.startPos + header.frameLength > this.reader.fileSize) {
 			// Frame doesn't fit in the rest of the file
 			this.lastSampleLoaded = true;
-			return;
+			return res.set();
 		}
 
 		if (!this.firstFrameHeader) {
@@ -107,6 +112,8 @@ export class AdtsDemuxer extends Demuxer {
 		this.loadedSamples.push(sample);
 		this.nextTimestampInSamples += SAMPLES_PER_AAC_FRAME;
 		this.lastLoadedPos = header.startPos + header.frameLength;
+
+		return res.set();
 	}
 
 	async getMimeType() {
@@ -116,15 +123,6 @@ export class AdtsDemuxer extends Demuxer {
 	async getTracks() {
 		await this.readMetadata();
 		return this.tracks;
-	}
-
-	async computeDuration() {
-		await this.readMetadata();
-
-		const track = this.tracks[0];
-		assert(track);
-
-		return track.computeDuration();
 	}
 
 	async getMetadataTags() {
@@ -139,18 +137,9 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 		return 1;
 	}
 
-	async getFirstTimestamp() {
-		return 0;
-	}
-
 	getTimeResolution() {
 		const sampleRate = this.getSampleRate();
 		return sampleRate / SAMPLES_PER_AAC_FRAME;
-	}
-
-	async computeDuration() {
-		const lastPacket = await this.getPacket(Infinity, { metadataOnly: true });
-		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
 	}
 
 	getName() {
@@ -222,14 +211,18 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 		};
 	}
 
-	async getPacketAtIndex(sampleIndex: number, options: PacketRetrievalOptions) {
+	async getPacketAtIndex(
+		res: ResultValue<EncodedPacket | null>,
+		sampleIndex: number,
+		options: PacketRetrievalOptions,
+	): Promise<Yo> {
 		if (sampleIndex === -1) {
-			return null;
+			return res.set(null);
 		}
 
 		const rawSample = this.demuxer.loadedSamples[sampleIndex];
 		if (!rawSample) {
-			return null;
+			return res.set(null);
 		}
 
 		let data: Uint8Array;
@@ -240,92 +233,107 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 			if (slice instanceof Promise) slice = await slice;
 
 			if (!slice) {
-				return null; // Data didn't fit into the rest of the file
+				return res.set(null); // Data didn't fit into the rest of the file
 			}
 
 			data = readBytes(slice, rawSample.dataSize);
 		}
 
-		return new EncodedPacket(
+		return res.set(new EncodedPacket(
 			data,
 			'key',
 			rawSample.timestamp,
 			rawSample.duration,
 			sampleIndex,
 			rawSample.dataSize,
+		));
+	}
+
+	getFirstPacket(res: ResultValue<EncodedPacket | null>, options: PacketRetrievalOptions) {
+		return this.getPacketAtIndex(res, 0, options);
+	}
+
+	async getNextPacket(
+		res: ResultValue<EncodedPacket | null>,
+		packet: EncodedPacket,
+		options: PacketRetrievalOptions,
+	): Promise<Yo> {
+		using lock = this.demuxer.readingMutex.lock();
+		if (lock.pending) await lock.ready;
+
+		const sampleIndex = binarySearchExact(
+			this.demuxer.loadedSamples,
+			packet.timestamp,
+			x => x.timestamp,
 		);
+		if (sampleIndex === -1) {
+			throw new Error('Packet was not created from this track.');
+		}
+
+		const nextIndex = sampleIndex + 1;
+		// Ensure the next sample exists
+		while (
+			nextIndex >= this.demuxer.loadedSamples.length
+			&& !this.demuxer.lastSampleLoaded
+		) {
+			const result = new ResultValue<void>();
+			const promise = this.demuxer.advanceReader(result);
+			if (result.pending) await promise;
+		}
+
+		return this.getPacketAtIndex(res, nextIndex, options);
 	}
 
-	getFirstPacket(options: PacketRetrievalOptions) {
-		return this.getPacketAtIndex(0, options);
-	}
+	async getPacket(
+		res: ResultValue<EncodedPacket | null>,
+		timestamp: number,
+		options: PacketRetrievalOptions,
+	): Promise<Yo> {
+		using lock = this.demuxer.readingMutex.lock();
+		if (lock.pending) await lock.ready;
 
-	async getNextPacket(packet: EncodedPacket, options: PacketRetrievalOptions) {
-		const release = await this.demuxer.readingMutex.acquire();
-
-		try {
-			const sampleIndex = binarySearchExact(
+		while (true) {
+			const index = binarySearchLessOrEqual(
 				this.demuxer.loadedSamples,
-				packet.timestamp,
+				timestamp,
 				x => x.timestamp,
 			);
-			if (sampleIndex === -1) {
-				throw new Error('Packet was not created from this track.');
+
+			if (index === -1 && this.demuxer.loadedSamples.length > 0) {
+				// We're before the first sample
+				return res.set(null);
 			}
 
-			const nextIndex = sampleIndex + 1;
-			// Ensure the next sample exists
-			while (
-				nextIndex >= this.demuxer.loadedSamples.length
-				&& !this.demuxer.lastSampleLoaded
-			) {
-				await this.demuxer.advanceReader();
+			if (this.demuxer.lastSampleLoaded) {
+				// All data is loaded, return what we found
+				return this.getPacketAtIndex(res, index, options);
 			}
 
-			return this.getPacketAtIndex(nextIndex, options);
-		} finally {
-			release();
+			if (index >= 0 && index + 1 < this.demuxer.loadedSamples.length) {
+				// The next packet also exists, we're done
+				return this.getPacketAtIndex(res, index, options);
+			}
+
+			// Otherwise, keep loading data
+			const result = new ResultValue<void>();
+			const promise = this.demuxer.advanceReader(result);
+			if (result.pending) await promise;
 		}
 	}
 
-	async getPacket(timestamp: number, options: PacketRetrievalOptions) {
-		const release = await this.demuxer.readingMutex.acquire();
-
-		try {
-			while (true) {
-				const index = binarySearchLessOrEqual(
-					this.demuxer.loadedSamples,
-					timestamp,
-					x => x.timestamp,
-				);
-				if (index === -1 && this.demuxer.loadedSamples.length > 0) {
-					// We're before the first sample
-					return null;
-				}
-
-				if (this.demuxer.lastSampleLoaded) {
-					// All data is loaded, return what we found
-					return this.getPacketAtIndex(index, options);
-				}
-
-				if (index >= 0 && index + 1 < this.demuxer.loadedSamples.length) {
-					// The next packet also exists, we're done
-					return this.getPacketAtIndex(index, options);
-				}
-
-				// Otherwise, keep loading data
-				await this.demuxer.advanceReader();
-			}
-		} finally {
-			release();
-		}
+	getKeyPacket(
+		res: ResultValue<EncodedPacket | null>,
+		timestamp: number,
+		options: PacketRetrievalOptions,
+	): Promise<Yo> {
+		return this.getPacket(res, timestamp, options);
 	}
 
-	getKeyPacket(timestamp: number, options: PacketRetrievalOptions) {
-		return this.getPacket(timestamp, options);
-	}
-
-	getNextKeyPacket(packet: EncodedPacket, options: PacketRetrievalOptions) {
-		return this.getNextPacket(packet, options);
+	getNextKeyPacket(
+		res: ResultValue<EncodedPacket | null>,
+		packet: EncodedPacket,
+		options: PacketRetrievalOptions,
+	): Promise<Yo> {
+		return this.getNextPacket(res, packet, options);
 	}
 }
