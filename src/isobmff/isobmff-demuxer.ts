@@ -2368,7 +2368,10 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 	}
 
 	async getFirstTimestamp() {
-		const firstPacket = await this.getFirstPacket({ metadataOnly: true });
+		const result = new ResultValue<EncodedPacket | null>();
+		await this.getFirstPacket(result, { metadataOnly: true });
+
+		const firstPacket = result.value;
 		return firstPacket?.timestamp ?? 0;
 	}
 

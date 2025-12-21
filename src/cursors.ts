@@ -930,7 +930,6 @@ export abstract class SampleCursor<
 		this._lastPendingRequest = pendingRequest;
 
 		this._pumpGate.open();
-
 		deferred.execute(); // Waiting for the return would be too long
 
 		return res.set(await request.promise);
@@ -987,6 +986,7 @@ export abstract class SampleCursor<
 		}
 		this._lastPendingRequest = pendingRequest;
 
+		this._pumpGate.open();
 		lock.release(); // Waiting for the return would be too long
 
 		return res.set(await request.promise);
