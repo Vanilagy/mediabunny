@@ -38,14 +38,12 @@ export interface InputTrackBacking {
 	getLanguageCode(): string;
 	getTimeResolution(): number;
 	getDisposition(): TrackDisposition;
-	getFirstTimestamp(): Promise<number>;
-	computeDuration(): Promise<number>;
 
-	getFirstPacket(res: ResultValue<EncodedPacket | null>, options: PacketRetrievalOptions): MaybePromise<Yo>;
-	getNextPacket(res: ResultValue<EncodedPacket | null>, packet: EncodedPacket, options: PacketRetrievalOptions): MaybePromise<Yo>;
-	getPacket(res: ResultValue<EncodedPacket | null>, timestamp: number, options: PacketRetrievalOptions): MaybePromise<Yo>;
-	getKeyPacket(res: ResultValue<EncodedPacket | null>, timestamp: number, options: PacketRetrievalOptions): MaybePromise<Yo>;
-	getNextKeyPacket(res: ResultValue<EncodedPacket | null>, packet: EncodedPacket, options: PacketRetrievalOptions): MaybePromise<Yo>;
+	getFirstPacket(res: ResultValue<EncodedPacket | null>, options: PacketRetrievalOptions): Promise<Yo>;
+	getNextPacket(res: ResultValue<EncodedPacket | null>, packet: EncodedPacket, options: PacketRetrievalOptions): Promise<Yo>;
+	getPacket(res: ResultValue<EncodedPacket | null>, timestamp: number, options: PacketRetrievalOptions): Promise<Yo>;
+	getKeyPacket(res: ResultValue<EncodedPacket | null>, timestamp: number, options: PacketRetrievalOptions): Promise<Yo>;
+	getNextKeyPacket(res: ResultValue<EncodedPacket | null>, packet: EncodedPacket, options: PacketRetrievalOptions): Promise<Yo>;
 
 	// getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
 	// getPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
@@ -147,12 +145,36 @@ export abstract class InputTrack {
 	 * with a negative timestamp should not be presented.
 	 */
 	getFirstTimestamp() {
-		return this._backing.getFirstTimestamp();
+		const result = new ResultValue<EncodedPacket | null>();
+		const promise = this._backing.getFirstPacket(result, { metadataOnly: true });
+
+		const getValue = () => {
+			const firstPacket = result.value;
+			return firstPacket?.timestamp ?? 0;
+		};
+
+		if (result.pending) {
+			return (promise).then(getValue);
+		} else {
+			return getValue();
+		}
 	}
 
 	/** Returns the end timestamp of the last packet of this track, in seconds. */
-	computeDuration() {
-		return this._backing.computeDuration();
+	computeDuration(): MaybePromise<number> {
+		const result = new ResultValue<EncodedPacket | null>();
+		const promise = this._backing.getPacket(result, Infinity, { metadataOnly: true });
+
+		const getValue = () => {
+			const lastPacket = result.value;
+			return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
+		};
+
+		if (result.pending) {
+			return (promise).then(getValue);
+		} else {
+			return getValue();
+		}
 	}
 
 	/**

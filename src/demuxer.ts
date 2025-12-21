@@ -17,8 +17,18 @@ export abstract class Demuxer {
 		this.input = input;
 	}
 
-	abstract computeDuration(): Promise<number>;
 	abstract getTracks(): Promise<InputTrack[]>;
 	abstract getMimeType(): Promise<string>;
 	abstract getMetadataTags(): Promise<MetadataTags>;
+
+	async computeDuration(): Promise<number> {
+		const tracks = await this.getTracks();
+		if (tracks.length === 0) {
+			return 0;
+		}
+
+		// eslint-disable-next-line @typescript-eslint/await-thenable
+		const trackDurations = await Promise.all(tracks.map(x => x.computeDuration()));
+		return Math.max(...trackDurations);
+	}
 }

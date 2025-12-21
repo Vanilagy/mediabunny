@@ -12,7 +12,15 @@ import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
 import { PacketRetrievalOptions } from '../media-sink';
-import { assert, AsyncMutex, AsyncMutex2, binarySearchExact, binarySearchLessOrEqual, ResultValue, UNDETERMINED_LANGUAGE, Yo } from '../misc';
+import {
+	assert,
+	AsyncMutex4,
+	binarySearchExact,
+	binarySearchLessOrEqual,
+	ResultValue,
+	UNDETERMINED_LANGUAGE,
+	Yo,
+} from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { FrameHeader, getXingOffset, INFO, XING } from '../../shared/mp3-misc';
 import {
@@ -42,8 +50,7 @@ export class Mp3Demuxer extends Demuxer {
 
 	tracks: InputAudioTrack[] = [];
 
-	// readingMutex = new AsyncMutex();
-	readingMutex = new AsyncMutex2();
+	readingMutex = new AsyncMutex4();
 	lastSampleLoaded = false;
 	lastLoadedPos = 0;
 	nextTimestampInSamples = 0;
@@ -156,66 +163,54 @@ export class Mp3Demuxer extends Demuxer {
 		return this.tracks;
 	}
 
-	async computeDuration() {
+	async getMetadataTags() {
+		using lock = this.readingMutex.lock();
+		if (lock.pending) await lock.ready;
+
 		await this.readMetadata();
 
-		const track = this.tracks[0];
-		assert(track);
-
-		return track.computeDuration();
-	}
-
-	async getMetadataTags() {
-		const release = await this.readingMutex.acquire();
-
-		try {
-			await this.readMetadata();
-
-			if (this.metadataTags) {
-				return this.metadataTags;
-			}
-
-			this.metadataTags = {};
-			let currentPos = 0;
-			let id3V2HeaderFound = false;
-
-			while (true) {
-				let headerSlice = this.reader.requestSlice(currentPos, ID3_V2_HEADER_SIZE);
-				if (headerSlice instanceof Promise) headerSlice = await headerSlice;
-				if (!headerSlice) break;
-
-				const id3V2Header = readId3V2Header(headerSlice);
-				if (!id3V2Header) {
-					break;
-				}
-
-				id3V2HeaderFound = true;
-
-				let contentSlice = this.reader.requestSlice(headerSlice.filePos, id3V2Header.size);
-				if (contentSlice instanceof Promise) contentSlice = await contentSlice;
-				if (!contentSlice) break;
-
-				parseId3V2Tag(contentSlice, id3V2Header, this.metadataTags);
-
-				currentPos = headerSlice.filePos + id3V2Header.size;
-			}
-
-			if (!id3V2HeaderFound && this.reader.fileSize !== null && this.reader.fileSize >= ID3_V1_TAG_SIZE) {
-				// Try reading an ID3v1 tag at the end of the file
-				let slice = this.reader.requestSlice(this.reader.fileSize - ID3_V1_TAG_SIZE, ID3_V1_TAG_SIZE);
-				if (slice instanceof Promise) slice = await slice;
-				assert(slice);
-
-				const tag = readAscii(slice, 3);
-				if (tag === 'TAG') {
-					parseId3V1Tag(slice, this.metadataTags);
-				}
-			}
-
+		if (this.metadataTags) {
 			return this.metadataTags;
-		} finally {
-			release();
 		}
+
+		this.metadataTags = {};
+		let currentPos = 0;
+		let id3V2HeaderFound = false;
+
+		while (true) {
+			let headerSlice = this.reader.requestSlice(currentPos, ID3_V2_HEADER_SIZE);
+			if (headerSlice instanceof Promise) headerSlice = await headerSlice;
+			if (!headerSlice) break;
+
+			const id3V2Header = readId3V2Header(headerSlice);
+			if (!id3V2Header) {
+				break;
+			}
+
+			id3V2HeaderFound = true;
+
+			let contentSlice = this.reader.requestSlice(headerSlice.filePos, id3V2Header.size);
+			if (contentSlice instanceof Promise) contentSlice = await contentSlice;
+			if (!contentSlice) break;
+
+			parseId3V2Tag(contentSlice, id3V2Header, this.metadataTags);
+
+			currentPos = headerSlice.filePos + id3V2Header.size;
+		}
+
+		if (!id3V2HeaderFound && this.reader.fileSize !== null && this.reader.fileSize >= ID3_V1_TAG_SIZE) {
+			// Try reading an ID3v1 tag at the end of the file
+			let slice = this.reader.requestSlice(this.reader.fileSize - ID3_V1_TAG_SIZE, ID3_V1_TAG_SIZE);
+			if (slice instanceof Promise) slice = await slice;
+			assert(slice);
+
+			const tag = readAscii(slice, 3);
+			if (tag === 'TAG') {
+				parseId3V1Tag(slice, this.metadataTags);
+			}
+		}
+
+		return this.metadataTags;
 	}
 }
 
@@ -226,18 +221,9 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 		return 1;
 	}
 
-	async getFirstTimestamp() {
-		return 0;
-	}
-
 	getTimeResolution() {
 		assert(this.demuxer.firstFrameHeader);
 		return this.demuxer.firstFrameHeader.sampleRate / this.demuxer.firstFrameHeader.audioSamplesInFrame;
-	}
-
-	async computeDuration() {
-		const lastPacket = await this.getPacket(Infinity, { metadataOnly: true });
-		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
 	}
 
 	getName() {
@@ -282,7 +268,11 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 		};
 	}
 
-	async getPacketAtIndex(res: ResultValue<EncodedPacket | null>, sampleIndex: number, options: PacketRetrievalOptions): Promise<Yo> {
+	async getPacketAtIndex(
+		res: ResultValue<EncodedPacket | null>,
+		sampleIndex: number,
+		options: PacketRetrievalOptions,
+	): Promise<Yo> {
 		if (sampleIndex === -1) {
 			return res.set(null);
 		}
@@ -320,80 +310,87 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 		return this.getPacketAtIndex(res, 0, options);
 	}
 
-	async getNextPacket(res: ResultValue<EncodedPacket | null>, packet: EncodedPacket, options: PacketRetrievalOptions): Promise<Yo> {
-		// using foo = 5;
-		while (this.demuxer.readingMutex.locked) await this.demuxer.readingMutex.promise;
+	async getNextPacket(
+		res: ResultValue<EncodedPacket | null>,
+		packet: EncodedPacket,
+		options: PacketRetrievalOptions,
+	): Promise<Yo> {
+		using lock = this.demuxer.readingMutex.lock();
+		if (lock.pending) await lock.ready;
 
-		// eslint-disable-next-line @typescript-eslint/no-unused-vars
-		using _ = this.demuxer.readingMutex.lock();
-		// const release = await this.demuxer.readingMutex.acquire();
+		const sampleIndex = binarySearchExact(
+			this.demuxer.loadedSamples,
+			packet.timestamp,
+			x => x.timestamp,
+		);
+		if (sampleIndex === -1) {
+			throw new Error('Packet was not created from this track.');
+		}
 
-		try {
-			const sampleIndex = binarySearchExact(
+		const nextIndex = sampleIndex + 1;
+		// Ensure the next sample exists
+		while (
+			nextIndex >= this.demuxer.loadedSamples.length
+			&& !this.demuxer.lastSampleLoaded
+		) {
+			const result = new ResultValue<void>();
+			const promise = this.demuxer.advanceReader(result);
+			if (result.pending) await promise;
+		}
+
+		return this.getPacketAtIndex(res, nextIndex, options);
+	}
+
+	async getPacket(
+		res: ResultValue<EncodedPacket | null>,
+		timestamp: number,
+		options: PacketRetrievalOptions,
+	): Promise<Yo> {
+		using lock = this.demuxer.readingMutex.lock();
+		if (lock.pending) await lock.ready;
+
+		while (true) {
+			const index = binarySearchLessOrEqual(
 				this.demuxer.loadedSamples,
-				packet.timestamp,
+				timestamp,
 				x => x.timestamp,
 			);
-			if (sampleIndex === -1) {
-				throw new Error('Packet was not created from this track.');
+
+			if (index === -1 && this.demuxer.loadedSamples.length > 0) {
+				// We're before the first sample
+				return res.set(null);
 			}
 
-			const nextIndex = sampleIndex + 1;
-			// Ensure the next sample exists
-			while (
-				nextIndex >= this.demuxer.loadedSamples.length
-				&& !this.demuxer.lastSampleLoaded
-			) {
-				const result = new ResultValue<void>();
-				const promise = this.demuxer.advanceReader(result);
-				if (result.pending) await promise;
+			if (this.demuxer.lastSampleLoaded) {
+				// All data is loaded, return what we found
+				return this.getPacketAtIndex(res, index, options);
 			}
 
-			return this.getPacketAtIndex(res, nextIndex, options);
-		} finally {
-			// release();
+			if (index >= 0 && index + 1 < this.demuxer.loadedSamples.length) {
+				// The next packet also exists, we're done
+				return this.getPacketAtIndex(res, index, options);
+			}
+
+			// Otherwise, keep loading data
+			const result = new ResultValue<void>();
+			const promise = this.demuxer.advanceReader(result);
+			if (result.pending) await promise;
 		}
 	}
 
-	async getPacket(timestamp: number, options: PacketRetrievalOptions) {
-		const release = await this.demuxer.readingMutex.acquire();
-
-		try {
-			while (true) {
-				const index = binarySearchLessOrEqual(
-					this.demuxer.loadedSamples,
-					timestamp,
-					x => x.timestamp,
-				);
-
-				if (index === -1 && this.demuxer.loadedSamples.length > 0) {
-					// We're before the first sample
-					return null;
-				}
-
-				if (this.demuxer.lastSampleLoaded) {
-					// All data is loaded, return what we found
-					return this.getPacketAtIndex(index, options);
-				}
-
-				if (index >= 0 && index + 1 < this.demuxer.loadedSamples.length) {
-					// The next packet also exists, we're done
-					return this.getPacketAtIndex(index, options);
-				}
-
-				// Otherwise, keep loading data
-				await this.demuxer.advanceReader();
-			}
-		} finally {
-			release();
-		}
+	getKeyPacket(
+		res: ResultValue<EncodedPacket | null>,
+		timestamp: number,
+		options: PacketRetrievalOptions,
+	): Promise<Yo> {
+		return this.getPacket(res, timestamp, options);
 	}
 
-	getKeyPacket(timestamp: number, options: PacketRetrievalOptions) {
-		return this.getPacket(timestamp, options);
-	}
-
-	getNextKeyPacket(packet: EncodedPacket, options: PacketRetrievalOptions) {
-		return this.getNextPacket(packet, options);
+	getNextKeyPacket(
+		res: ResultValue<EncodedPacket | null>,
+		packet: EncodedPacket,
+		options: PacketRetrievalOptions,
+	): Promise<Yo> {
+		return this.getNextPacket(res, packet, options);
 	}
 }
