@@ -3,7 +3,7 @@ import { Input } from '../../src/input.js';
 import { BufferSource, FilePathSource } from '../../src/source.js';
 import path from 'node:path';
 import fs from 'node:fs';
-import { ADTS, ALL_FORMATS, MP3, MP4, QTFF, WAVE, WEBM } from '../../src/input-format.js';
+import { ADTS, ALL_FORMATS, MP3, MP4, OGG, QTFF, WAVE, WEBM } from '../../src/input-format.js';
 import { PacketReader } from '../../src/cursors.js';
 import { InputAudioTrack, InputTrack } from '../../src/input-track.js';
 import { assert } from '../../src/misc.js';
@@ -49,6 +49,9 @@ const testBasicPacketReading = async (track: InputTrack) => {
 
 const testSyncPacketReading = (track: InputTrack) => {
 	const reader = new PacketReader(track);
+
+	const seeked = reader.readAt(1) as EncodedPacket | null;
+	expect(seeked).toBeInstanceOf(EncodedPacket);
 
 	let current = reader.readFirst() as EncodedPacket | null;
 	expect(current).toBeInstanceOf(EncodedPacket);
@@ -261,7 +264,7 @@ test('ADTS demuxing', async () => {
 	await testBasicPacketReading(audioTrack);
 
 	const duration = await audioTrack.computeDuration();
-	expect(duration).toBeGreaterThan(0);
+	expect(duration).toBeCloseTo(4.992);
 });
 
 test('ADTS sync reading', async () => {
@@ -274,5 +277,42 @@ test('ADTS sync reading', async () => {
 	assert(audioTrack);
 
 	const count = testSyncPacketReading(audioTrack);
-	expect(count).toBeGreaterThan(0);
+	expect(count).toBe(234);
+});
+
+test('Ogg demuxing', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/beach-party.ogg')),
+		formats: ALL_FORMATS,
+	});
+
+	expect(await input.getFormat()).toBe(OGG);
+	expect(await input.getMimeType()).toBe('audio/ogg; codecs="vorbis"');
+
+	const tracks = await input.getTracks();
+	expect(tracks).toHaveLength(1);
+	const audioTrack = tracks[0] as InputAudioTrack;
+	expect(audioTrack).toBeInstanceOf(InputAudioTrack);
+
+	expect(audioTrack.codec).toBe('vorbis');
+	expect(audioTrack.numberOfChannels).toBeGreaterThan(0);
+	expect(audioTrack.sampleRate).toBeGreaterThan(0);
+
+	await testBasicPacketReading(audioTrack);
+
+	const duration = await audioTrack.computeDuration();
+	expect(duration).toBeCloseTo(57.325714285714284);
+});
+
+test('Ogg sync reading', async () => {
+	using input = new Input({
+		source: new BufferSource(fs.readFileSync(path.join(__dirname, '../public/beach-party.ogg'))),
+		formats: ALL_FORMATS,
+	});
+
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	const count = testSyncPacketReading(audioTrack);
+	expect(count).toBe(5041);
 });

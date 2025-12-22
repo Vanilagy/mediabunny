@@ -15,13 +15,15 @@ import { PacketRetrievalOptions } from '../media-sink';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
 import {
 	assert,
-	AsyncMutex,
+	AsyncMutex4,
 	binarySearchLessOrEqual,
 	findLast,
 	last,
+	ResultValue,
 	roundIfAlmostInteger,
 	toDataView,
 	UNDETERMINED_LANGUAGE,
+	Yo,
 } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readBytes, Reader } from '../reader';
@@ -50,6 +52,11 @@ type Packet = {
 	data: Uint8Array;
 	endPage: Page;
 	endSegmentIndex: number;
+};
+
+type PacketStart = {
+	startPage: Page;
+	startSegmentIndex: number;
 };
 
 export class OggDemuxer extends Demuxer {
@@ -105,7 +112,10 @@ export class OggDemuxer extends Demuxer {
 			}
 
 			for (const bitstream of this.bitstreams) {
-				const firstPacket = await this.readPacket(bitstream.bosPage, 0);
+				const packetResult = new ResultValue<Packet | null>();
+				await this.readPacket(packetResult, bitstream.bosPage, 0);
+
+				const firstPacket = packetResult.value;
 				if (!firstPacket) {
 					continue;
 				}
@@ -145,22 +155,32 @@ export class OggDemuxer extends Demuxer {
 	}
 
 	async readVorbisMetadata(firstPacket: Packet, bitstream: LogicalBitstream) {
-		let nextPacketPosition = await this.findNextPacketStart(firstPacket);
+		const positionResult = new ResultValue<PacketStart | null>();
+		await this.findNextPacketStart(positionResult, firstPacket);
+
+		let nextPacketPosition = positionResult.value;
 		if (!nextPacketPosition) {
 			return;
 		}
 
-		const secondPacket = await this.readPacket(nextPacketPosition.startPage, nextPacketPosition.startSegmentIndex);
+		const packetResult = new ResultValue<Packet | null>();
+		await this.readPacket(packetResult, nextPacketPosition.startPage, nextPacketPosition.startSegmentIndex);
+
+		const secondPacket = packetResult.value;
 		if (!secondPacket) {
 			return;
 		}
 
-		nextPacketPosition = await this.findNextPacketStart(secondPacket);
+		await this.findNextPacketStart(positionResult, secondPacket);
+
+		nextPacketPosition = positionResult.value;
 		if (!nextPacketPosition) {
 			return;
 		}
 
-		const thirdPacket = await this.readPacket(nextPacketPosition.startPage, nextPacketPosition.startSegmentIndex);
+		await this.readPacket(packetResult, nextPacketPosition.startPage, nextPacketPosition.startSegmentIndex);
+
+		const thirdPacket = packetResult.value;
 		if (!thirdPacket) {
 			return;
 		}
@@ -228,15 +248,19 @@ export class OggDemuxer extends Demuxer {
 		// From https://datatracker.ietf.org/doc/html/rfc7845#section-5:
 		// "An Ogg Opus logical stream contains exactly two mandatory header packets: an identification header and a
 		// comment header."
-		const nextPacketPosition = await this.findNextPacketStart(firstPacket);
+
+		const positionResult = new ResultValue<PacketStart | null>();
+		await this.findNextPacketStart(positionResult, firstPacket);
+
+		const nextPacketPosition = positionResult.value;
 		if (!nextPacketPosition) {
 			return;
 		}
 
-		const secondPacket = await this.readPacket(
-			nextPacketPosition.startPage,
-			nextPacketPosition.startSegmentIndex,
-		);
+		const packetResult = new ResultValue<Packet | null>();
+		await this.readPacket(packetResult, nextPacketPosition.startPage, nextPacketPosition.startSegmentIndex);
+
+		const secondPacket = packetResult.value;
 		if (!secondPacket) {
 			return;
 		}
@@ -256,7 +280,7 @@ export class OggDemuxer extends Demuxer {
 		readVorbisComments(secondPacket.data.subarray(8), this.metadataTags); // Skip 'OpusTags'
 	}
 
-	async readPacket(startPage: Page, startSegmentIndex: number): Promise<Packet | null> {
+	async readPacket(res: ResultValue<Packet | null>, startPage: Page, startSegmentIndex: number): Promise<Yo> {
 		assert(startSegmentIndex < startPage.lacingValues.length);
 
 		let startDataOffset = 0;
@@ -301,12 +325,12 @@ export class OggDemuxer extends Demuxer {
 				let headerSlice = this.reader.requestSliceRange(currentPos, MIN_PAGE_HEADER_SIZE, MAX_PAGE_HEADER_SIZE);
 				if (headerSlice instanceof Promise) headerSlice = await headerSlice;
 				if (!headerSlice) {
-					return null;
+					return res.set(null);
 				}
 
 				const nextPage = readPageHeader(headerSlice);
 				if (!nextPage) {
-					return null;
+					return res.set(null);
 				}
 
 				currentPage = nextPage;
@@ -321,33 +345,40 @@ export class OggDemuxer extends Demuxer {
 			currentSegmentIndex = 0;
 		}
 
-		const totalPacketSize = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-		const packetData = new Uint8Array(totalPacketSize);
+		let packetData: Uint8Array;
 
-		let offset = 0;
-		for (let i = 0; i < chunks.length; i++) {
-			const chunk = chunks[i]!;
-			packetData.set(chunk, offset);
-			offset += chunk.length;
+		if (chunks.length === 1) {
+			// Fast path, no need for an allocation. Also typically the common path!
+			packetData = chunks[0]!;
+		} else {
+			const totalPacketSize = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+			packetData = new Uint8Array(totalPacketSize);
+
+			let offset = 0;
+			for (let i = 0; i < chunks.length; i++) {
+				const chunk = chunks[i]!;
+				packetData.set(chunk, offset);
+				offset += chunk.length;
+			}
 		}
 
-		return {
+		return res.set({
 			data: packetData,
 			endPage: currentPage,
 			endSegmentIndex: currentSegmentIndex,
-		};
+		});
 	}
 
-	async findNextPacketStart(lastPacket: Packet) {
+	async findNextPacketStart(res: ResultValue<PacketStart | null>, lastPacket: Packet): Promise<Yo> {
 		// If there's another segment in the same page, return it
 		if (lastPacket.endSegmentIndex < lastPacket.endPage.lacingValues.length - 1) {
-			return { startPage: lastPacket.endPage, startSegmentIndex: lastPacket.endSegmentIndex + 1 };
+			return res.set({ startPage: lastPacket.endPage, startSegmentIndex: lastPacket.endSegmentIndex + 1 });
 		}
 
 		const isEos = !!(lastPacket.endPage.headerType & 0x04);
 		if (isEos) {
 			// The page is marked as the last page of the logical bitstream, so we won't find anything beyond it
-			return null;
+			return res.set(null);
 		}
 
 		// Otherwise, search for the next page belonging to the same bitstream
@@ -356,16 +387,16 @@ export class OggDemuxer extends Demuxer {
 			let slice = this.reader.requestSliceRange(currentPos, MIN_PAGE_HEADER_SIZE, MAX_PAGE_HEADER_SIZE);
 			if (slice instanceof Promise) slice = await slice;
 			if (!slice) {
-				return null;
+				return res.set(null);
 			}
 
 			const nextPage = readPageHeader(slice);
 			if (!nextPage) {
-				return null;
+				return res.set(null);
 			}
 
 			if (nextPage.serialNumber === lastPacket.endPage.serialNumber) {
-				return { startPage: nextPage, startSegmentIndex: 0 };
+				return res.set({ startPage: nextPage, startSegmentIndex: 0 });
 			}
 
 			currentPos = nextPage.headerStartPos + nextPage.totalSize;
@@ -387,12 +418,6 @@ export class OggDemuxer extends Demuxer {
 		return this.tracks;
 	}
 
-	async computeDuration() {
-		const tracks = await this.getTracks();
-		const trackDurations = await Promise.all(tracks.map(x => x.computeDuration()));
-		return Math.max(0, ...trackDurations);
-	}
-
 	async getMetadataTags() {
 		await this.readMetadata();
 		return this.metadataTags;
@@ -409,9 +434,8 @@ type EncodedPacketMetadata = {
 
 class OggAudioTrackBacking implements InputAudioTrackBacking {
 	internalSampleRate: number;
-	encodedPacketToMetadata = new WeakMap<EncodedPacket, EncodedPacketMetadata>();
 	sequentialScanCache: EncodedPacketMetadata[] = [];
-	sequentialScanMutex = new AsyncMutex();
+	sequentialScanMutex = new AsyncMutex4();
 
 	constructor(public bitstream: LogicalBitstream, public demuxer: OggDemuxer) {
 		// Opus always uses a fixed sample rate for its internal calculations, even if the actual rate is different
@@ -469,15 +493,6 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		};
 	}
 
-	async getFirstTimestamp() {
-		return 0;
-	}
-
-	async computeDuration() {
-		const lastPacket = await this.getPacket(Infinity, { metadataOnly: true });
-		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
-	}
-
 	granulePositionToTimestampInSamples(granulePosition: number) {
 		if (this.bitstream.codecInfo.codec === 'opus') {
 			assert(this.bitstream.codecInfo.opusInfo);
@@ -514,21 +529,28 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 			packet.data.byteLength,
 		);
 
-		this.encodedPacketToMetadata.set(encodedPacket, {
+		encodedPacket._internal = {
 			packet,
 			timestampInSamples: additional.timestampInSamples,
 			durationInSamples,
 			vorbisLastBlockSize: additional.vorbisLastBlocksize,
 			vorbisBlockSize,
-		});
+		} satisfies EncodedPacketMetadata;
+
 		return encodedPacket;
 	}
 
-	async getFirstPacket(options: PacketRetrievalOptions) {
+	async getFirstPacket(res: ResultValue<EncodedPacket | null>, options: PacketRetrievalOptions): Promise<Yo> {
 		assert(this.bitstream.lastMetadataPacket);
-		const packetPosition = await this.demuxer.findNextPacketStart(this.bitstream.lastMetadataPacket);
+
+		const positionResult = new ResultValue<PacketStart | null>();
+		let promise = this.demuxer.findNextPacketStart(positionResult, this.bitstream.lastMetadataPacket);
+		if (positionResult.pending) await promise;
+
+		const packetPosition = positionResult.value;
+
 		if (!packetPosition) {
-			return null;
+			return res.set(null);
 		}
 
 		let timestampInSamples = 0;
@@ -537,66 +559,84 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 			timestampInSamples -= this.bitstream.codecInfo.opusInfo.preSkip;
 		}
 
-		const packet = await this.demuxer.readPacket(packetPosition.startPage, packetPosition.startSegmentIndex);
+		const packetResult = new ResultValue<Packet | null>();
+		promise = this.demuxer.readPacket(packetResult, packetPosition.startPage, packetPosition.startSegmentIndex);
+		if (packetResult.pending) await promise;
 
-		return this.createEncodedPacketFromOggPacket(
-			packet,
+		return res.set(this.createEncodedPacketFromOggPacket(
+			packetResult.value,
 			{
 				timestampInSamples,
 				vorbisLastBlocksize: null,
 			},
 			options,
-		);
+		));
 	}
 
-	async getNextPacket(prevPacket: EncodedPacket, options: PacketRetrievalOptions) {
-		const prevMetadata = this.encodedPacketToMetadata.get(prevPacket);
+	async getNextPacket(
+		res: ResultValue<EncodedPacket | null>,
+		prevPacket: EncodedPacket,
+		options: PacketRetrievalOptions,
+	): Promise<Yo> {
+		const prevMetadata = prevPacket._internal as EncodedPacketMetadata | undefined;
 		if (!prevMetadata) {
 			throw new Error('Packet was not created from this track.');
 		}
 
-		const packetPosition = await this.demuxer.findNextPacketStart(prevMetadata.packet);
+		const positionResult = new ResultValue<PacketStart | null>();
+		let promise = this.demuxer.findNextPacketStart(positionResult, prevMetadata.packet);
+		if (positionResult.pending) await promise;
+
+		const packetPosition = positionResult.value;
 		if (!packetPosition) {
-			return null;
+			return res.set(null);
 		}
 
 		const timestampInSamples = prevMetadata.timestampInSamples + prevMetadata.durationInSamples;
 
-		const packet = await this.demuxer.readPacket(
-			packetPosition.startPage,
-			packetPosition.startSegmentIndex,
-		);
+		const packetResult = new ResultValue<Packet | null>();
+		promise = this.demuxer.readPacket(packetResult, packetPosition.startPage, packetPosition.startSegmentIndex);
+		if (packetResult.pending) await promise;
 
-		return this.createEncodedPacketFromOggPacket(
-			packet,
+		return res.set(this.createEncodedPacketFromOggPacket(
+			packetResult.value,
 			{
 				timestampInSamples,
 				vorbisLastBlocksize: prevMetadata.vorbisBlockSize,
 			},
 			options,
-		);
+		));
 	}
 
-	async getPacket(timestamp: number, options: PacketRetrievalOptions) {
+	async getPacket(
+		res: ResultValue<EncodedPacket | null>,
+		timestamp: number,
+		options: PacketRetrievalOptions,
+	): Promise<Yo> {
 		if (this.demuxer.reader.fileSize === null) {
 			// No file size known, can't do binary search, but fall back to sequential algo instead
-			return this.getPacketSequential(timestamp, options);
+			return this.getPacketSequential(res, timestamp, options);
 		}
 
 		const timestampInSamples = roundIfAlmostInteger(timestamp * this.internalSampleRate);
 		if (timestampInSamples === 0) {
 			// Fast path for timestamp 0 - avoids binary search when playing back from the start
-			return this.getFirstPacket(options);
+			return this.getFirstPacket(res, options);
 		}
 		if (timestampInSamples < 0) {
 			// There's nothing here
-			return null;
+			return res.set(null);
 		}
 
 		assert(this.bitstream.lastMetadataPacket);
-		const startPosition = await this.demuxer.findNextPacketStart(this.bitstream.lastMetadataPacket);
+
+		const positionResult = new ResultValue<PacketStart | null>();
+		const promise = this.demuxer.findNextPacketStart(positionResult, this.bitstream.lastMetadataPacket);
+		if (positionResult.pending) await promise;
+
+		const startPosition = positionResult.value;
 		if (!startPosition) {
-			return null;
+			return res.set(null);
 		}
 
 		let lowPage = startPosition.startPage;
@@ -778,7 +818,12 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 				endPage,
 				endSegmentIndex,
 			};
-			const nextPosition = await this.demuxer.findNextPacketStart(pseudopacket);
+
+			positionResult.reset();
+			const promise = this.demuxer.findNextPacketStart(positionResult, pseudopacket);
+			if (positionResult.pending) await promise;
+
+			const nextPosition = positionResult.value;
 
 			if (nextPosition) {
 				// Let's rewind a single step (packet) - this previous packet ensures that we'll correctly compute
@@ -827,12 +872,18 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		let lastEncodedPacket: EncodedPacket | null = null;
 		let lastEncodedPacketMetadata: EncodedPacketMetadata | null = null;
 
+		const packetResult = new ResultValue<Packet | null>();
+
 		// Alright, now it's time for the final, granular seek: We keep iterating over packets until we've found the
 		// one with the correct timestamp - i.e., the last one with a timestamp <= the timestamp we're looking for.
 		while (currentPage !== null) {
 			assert(currentSegmentIndex !== null);
 
-			const packet = await this.demuxer.readPacket(currentPage, currentSegmentIndex);
+			packetResult.reset();
+			let promise = this.demuxer.readPacket(packetResult, currentPage, currentSegmentIndex);
+			if (packetResult.pending) await promise;
+
+			const packet = packetResult.value;
 			if (!packet) {
 				break;
 			}
@@ -852,7 +903,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 				);
 				assert(encodedPacket);
 
-				let encodedPacketMetadata = this.encodedPacketToMetadata.get(encodedPacket);
+				let encodedPacketMetadata = encodedPacket._internal as EncodedPacketMetadata | undefined;
 				assert(encodedPacketMetadata);
 
 				if (
@@ -877,7 +928,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 					);
 					assert(encodedPacket);
 
-					encodedPacketMetadata = this.encodedPacketToMetadata.get(encodedPacket);
+					encodedPacketMetadata = encodedPacket._internal as EncodedPacketMetadata | undefined;
 					assert(encodedPacketMetadata);
 				} else {
 					currentTimestampInSamples += encodedPacketMetadata.durationInSamples;
@@ -899,7 +950,11 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 				}
 			}
 
-			const nextPosition = await this.demuxer.findNextPacketStart(packet);
+			positionResult.reset();
+			promise = this.demuxer.findNextPacketStart(positionResult, packet);
+			if (positionResult.pending) await promise;
+
+			const nextPosition = positionResult.value;
 			if (!nextPosition) {
 				break;
 			}
@@ -908,77 +963,89 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 			currentSegmentIndex = nextPosition.startSegmentIndex;
 		}
 
-		return lastEncodedPacket;
+		return res.set(lastEncodedPacket);
 	}
 
 	// A slower but simpler and sequential algorithm for finding a packet in a file
-	async getPacketSequential(timestamp: number, options: PacketRetrievalOptions) {
-		const release = await this.sequentialScanMutex.acquire(); // Requires exclusivity because we write to a cache
+	async getPacketSequential(
+		res: ResultValue<EncodedPacket | null>,
+		timestamp: number,
+		options: PacketRetrievalOptions,
+	): Promise<Yo> {
+		using lock = this.sequentialScanMutex.lock(); // Requires exclusivity because we write to a cache
+		if (lock.pending) await lock.ready;
 
-		try {
-			const timestampInSamples = roundIfAlmostInteger(timestamp * this.internalSampleRate);
-			timestamp = timestampInSamples / this.internalSampleRate;
+		const timestampInSamples = roundIfAlmostInteger(timestamp * this.internalSampleRate);
+		timestamp = timestampInSamples / this.internalSampleRate;
 
-			const index = binarySearchLessOrEqual(
-				this.sequentialScanCache,
-				timestampInSamples,
-				x => x.timestampInSamples,
+		const index = binarySearchLessOrEqual(
+			this.sequentialScanCache,
+			timestampInSamples,
+			x => x.timestampInSamples,
+		);
+
+		const result = new ResultValue<EncodedPacket | null>();
+		let currentPacket: EncodedPacket | null;
+
+		if (index !== -1) {
+			// We don't need to start from the beginning, we can start at a previous scan point
+			const cacheEntry = this.sequentialScanCache[index]!;
+			currentPacket = this.createEncodedPacketFromOggPacket(
+				cacheEntry.packet,
+				{
+					timestampInSamples: cacheEntry.timestampInSamples,
+					vorbisLastBlocksize: cacheEntry.vorbisLastBlockSize,
+				},
+				options,
 			);
+		} else {
+			const promise = this.getFirstPacket(result, options);
+			if (result.pending) await promise;
 
-			let currentPacket: EncodedPacket | null;
-			if (index !== -1) {
-				// We don't need to start from the beginning, we can start at a previous scan point
-				const cacheEntry = this.sequentialScanCache[index]!;
-				currentPacket = this.createEncodedPacketFromOggPacket(
-					cacheEntry.packet,
-					{
-						timestampInSamples: cacheEntry.timestampInSamples,
-						vorbisLastBlocksize: cacheEntry.vorbisLastBlockSize,
-					},
-					options,
-				);
-			} else {
-				currentPacket = await this.getFirstPacket(options);
-			}
-
-			let i = 0;
-
-			while (currentPacket && currentPacket.timestamp < timestamp) {
-				const nextPacket = await this.getNextPacket(currentPacket, options);
-				if (!nextPacket || nextPacket.timestamp > timestamp) {
-					break;
-				}
-
-				currentPacket = nextPacket;
-				i++;
-
-				if (i === 100) {
-					// Add "checkpoints" every once in a while to speed up subsequent random accesses
-					i = 0;
-					const metadata = this.encodedPacketToMetadata.get(currentPacket);
-					assert(metadata);
-
-					if (this.sequentialScanCache.length > 0) {
-						// If we reach this case, we must be at the end of the cache
-						assert(last(this.sequentialScanCache)!.timestampInSamples <= metadata.timestampInSamples);
-					}
-
-					this.sequentialScanCache.push(metadata);
-				}
-			}
-
-			return currentPacket;
-		} finally {
-			release();
+			currentPacket = result.value;
 		}
+
+		let i = 0;
+
+		while (currentPacket && currentPacket.timestamp < timestamp) {
+			result.reset();
+			const promise = this.getNextPacket(result, currentPacket, options);
+			if (result.pending) await promise;
+
+			const nextPacket = result.value;
+			if (!nextPacket || nextPacket.timestamp > timestamp) {
+				break;
+			}
+
+			currentPacket = nextPacket;
+			i++;
+
+			if (i === 100) {
+				// Add "checkpoints" every once in a while to speed up subsequent random accesses
+				i = 0;
+				const metadata = currentPacket._internal as EncodedPacketMetadata | undefined;
+				assert(metadata);
+
+				if (this.sequentialScanCache.length > 0) {
+					// If we reach this case, we must be at the end of the cache
+					assert(last(this.sequentialScanCache)!.timestampInSamples <= metadata.timestampInSamples);
+				}
+
+				this.sequentialScanCache.push(metadata);
+			}
+		}
+
+		return res.set(currentPacket);
 	}
 
-	getKeyPacket(timestamp: number, options: PacketRetrievalOptions) {
-		return this.getPacket(timestamp, options);
+	getKeyPacket(res: ResultValue<EncodedPacket | null>, timestamp: number, options: PacketRetrievalOptions) {
+		// Correct since only audio codecs are supported
+		return this.getPacket(res, timestamp, options);
 	}
 
-	getNextKeyPacket(packet: EncodedPacket, options: PacketRetrievalOptions) {
-		return this.getNextPacket(packet, options);
+	getNextKeyPacket(res: ResultValue<EncodedPacket | null>, packet: EncodedPacket, options: PacketRetrievalOptions) {
+		// Correct since only audio codecs are supported
+		return this.getNextPacket(res, packet, options);
 	}
 }
 

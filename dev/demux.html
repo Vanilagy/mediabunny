@@ -14,15 +14,15 @@
 			source: new Mediabunny.BufferSource(await file.arrayBuffer()),
 		});
 
-		const videoTrack = await input.getPrimaryVideoTrack();
+		const audioTrack = await input.getPrimaryAudioTrack();
 
-		const iters = 50;
+		const iters = 250;
 		let total = 0;
 
 		for (let i = 0; i < iters; i++) {
 			const start = performance.now();
 			let count = 0;
-			const reader = new Mediabunny.PacketCursor(videoTrack);
+			const reader = new Mediabunny.PacketCursor(audioTrack);
 			await reader.iterate(() => count++);
 
 			console.log(count)
