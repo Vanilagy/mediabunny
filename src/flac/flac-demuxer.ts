@@ -644,6 +644,10 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		using lock = this.demuxer.readingMutex.lock();
 		if (lock.pending) await lock.ready;
 
+		if (packet.sequenceNumber < 0) {
+			throw new Error('Packet was not created from this track.');
+		}
+
 		const nextIndex = packet.sequenceNumber + 1;
 		if (
 			this.demuxer.lastSampleLoaded

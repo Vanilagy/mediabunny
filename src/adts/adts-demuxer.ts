@@ -14,7 +14,6 @@ import { PacketRetrievalOptions } from '../media-sink';
 import {
 	assert,
 	AsyncMutex4,
-	binarySearchExact,
 	binarySearchLessOrEqual,
 	Bitstream,
 	ResultValue,
@@ -261,16 +260,13 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 		using lock = this.demuxer.readingMutex.lock();
 		if (lock.pending) await lock.ready;
 
-		const sampleIndex = binarySearchExact(
-			this.demuxer.loadedSamples,
-			packet.timestamp,
-			x => x.timestamp,
-		);
+		const sampleIndex = packet.sequenceNumber;
 		if (sampleIndex === -1) {
 			throw new Error('Packet was not created from this track.');
 		}
 
 		const nextIndex = sampleIndex + 1;
+
 		// Ensure the next sample exists
 		while (
 			nextIndex >= this.demuxer.loadedSamples.length
