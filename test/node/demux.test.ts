@@ -3,7 +3,7 @@ import { Input } from '../../src/input.js';
 import { BufferSource, FilePathSource } from '../../src/source.js';
 import path from 'node:path';
 import fs from 'node:fs';
-import { ADTS, ALL_FORMATS, MP3, MP4, OGG, QTFF, WAVE, WEBM } from '../../src/input-format.js';
+import { ADTS, ALL_FORMATS, FLAC, MP3, MP4, OGG, QTFF, WAVE, WEBM } from '../../src/input-format.js';
 import { PacketReader } from '../../src/cursors.js';
 import { InputAudioTrack, InputTrack } from '../../src/input-track.js';
 import { assert } from '../../src/misc.js';
@@ -88,6 +88,19 @@ test('Regular ISOBMFF demuxing', async () => {
 	expect(await input.computeDuration()).toBeCloseTo(5.041666666666667);
 });
 
+test('Regular ISOBMFF sync reading', async () => {
+	using input = new Input({
+		source: new BufferSource(fs.readFileSync(path.join(__dirname, '../public/trim-buck-bunny.mov'))),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	const count = testSyncPacketReading(videoTrack);
+	expect(count).toBe(121);
+});
+
 test('Fragmented ISOBMFF demuxing', async () => {
 	using input = new Input({
 		source: new FilePathSource(path.join(__dirname, '../public/frag-buck-bunny.mp4')),
@@ -106,19 +119,6 @@ test('Fragmented ISOBMFF demuxing', async () => {
 	await testBasicPacketReading(videoTrack);
 
 	expect(await input.computeDuration()).toBeCloseTo(5);
-});
-
-test('Regular ISOBMFF sync reading', async () => {
-	using input = new Input({
-		source: new BufferSource(fs.readFileSync(path.join(__dirname, '../public/trim-buck-bunny.mov'))),
-		formats: ALL_FORMATS,
-	});
-
-	const videoTrack = await input.getPrimaryVideoTrack();
-	assert(videoTrack);
-
-	const count = testSyncPacketReading(videoTrack);
-	expect(count).toBe(121);
 });
 
 test('Fragmented ISOBMFF sync reading', async () => {
@@ -315,4 +315,41 @@ test('Ogg sync reading', async () => {
 
 	const count = testSyncPacketReading(audioTrack);
 	expect(count).toBe(5041);
+});
+
+test('FLAC demuxing', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/sample.flac')),
+		formats: ALL_FORMATS,
+	});
+
+	expect(await input.getFormat()).toBe(FLAC);
+	expect(await input.getMimeType()).toBe('audio/flac');
+
+	const tracks = await input.getTracks();
+	expect(tracks).toHaveLength(1);
+	const audioTrack = tracks[0] as InputAudioTrack;
+	expect(audioTrack).toBeInstanceOf(InputAudioTrack);
+
+	expect(audioTrack.codec).toBe('flac');
+	expect(audioTrack.numberOfChannels).toBeGreaterThan(0);
+	expect(audioTrack.sampleRate).toBeGreaterThan(0);
+
+	await testBasicPacketReading(audioTrack);
+
+	const duration = await audioTrack.computeDuration();
+	expect(duration).toBeCloseTo(19.71428571428571);
+});
+
+test('FLAC sync reading', async () => {
+	using input = new Input({
+		source: new BufferSource(fs.readFileSync(path.join(__dirname, '../public/sample.flac'))),
+		formats: ALL_FORMATS,
+	});
+
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	const count = testSyncPacketReading(audioTrack);
+	expect(count).toBe(213);
 });

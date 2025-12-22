@@ -118,8 +118,13 @@ export class Input<S extends Source = Source> implements Disposable {
 	 * all tracks.
 	 */
 	async computeDuration() {
-		const demuxer = await this._getDemuxer();
-		return demuxer.computeDuration();
+		const tracks = await this.getTracks();
+		if (tracks.length === 0) {
+			return 0;
+		}
+
+		const trackDurations = await Promise.all(tracks.map(x => x.computeDuration()));
+		return Math.max(...trackDurations);
 	}
 
 	/** Returns the list of all tracks of this input file. */
