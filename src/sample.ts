@@ -1217,14 +1217,20 @@ export class AudioSample implements Disposable {
 	}
 
 	/** Clones this audio sample. */
-	clone(): AudioSample {
+	clone(override?: {
+		timestamp?: number;
+	}): AudioSample {
 		if (this._closed) {
 			throw new Error('AudioSample is closed.');
 		}
 
+		const timestamp = override?.timestamp ?? this.timestamp;
+
 		if (isAudioData(this._data)) {
 			const sample = new AudioSample(this._data.clone());
-			sample.setTimestamp(this.timestamp); // Make sure the timestamp is precise (beyond microsecond accuracy)
+
+			// @ts-expect-error Readonly
+			sample.timestamp = timestamp; // Make sure the timestamp is precise (beyond microsecond accuracy)
 
 			return sample;
 		} else {
@@ -1340,16 +1346,6 @@ export class AudioSample implements Disposable {
 		}
 
 		return audioBuffer;
-	}
-
-	/** Sets the presentation timestamp of this audio sample, in seconds. */
-	setTimestamp(newTimestamp: number) {
-		if (!Number.isFinite(newTimestamp)) {
-			throw new TypeError('newTimestamp must be a number.');
-		}
-
-		// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-		(this.timestamp as number) = newTimestamp;
 	}
 
 	/** Calls `.close()`. */

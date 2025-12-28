@@ -650,7 +650,8 @@ export class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 
 			// Round the timestamp to the sample rate
 			const sampleRate = decoderConfig.sampleRate;
-			sample.setTimestamp(Math.round(preciseTimestamp * sampleRate) / sampleRate);
+			// @ts-expect-error Readonly
+			sample.timestamp = Math.round(preciseTimestamp * sampleRate) / sampleRate;
 
 			onSample(sample);
 		};

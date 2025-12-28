@@ -2003,7 +2003,8 @@ export class MediaStreamAudioTrackSource extends AudioSource {
 				return;
 			}
 
-			audioSample.setTimestamp(currentTimestamp + this._pauseOffset);
+			// @ts-expect-error Readonly
+			audioSample.timestamp = currentTimestamp + this._pauseOffset;
 
 			void this._encoder.add(audioSample, true)
 				.catch((error) => {
