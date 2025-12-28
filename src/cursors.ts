@@ -1,15 +1,7 @@
 import { PCM_AUDIO_CODECS } from './codec';
+import { AudioDecoderWrapper, DecoderWrapper, PcmAudioDecoderWrapper, VideoDecoderWrapper } from './decode';
 import { InputDisposedError } from './input';
 import { InputAudioTrack, InputTrack, InputVideoTrack } from './input-track';
-import {
-	AudioDecoderWrapper,
-	DecoderWrapper,
-	PacketRetrievalOptions,
-	PcmAudioDecoderWrapper,
-	validatePacketRetrievalOptions,
-	validateTimestamp,
-	VideoDecoderWrapper,
-} from './media-sink';
 import {
 	assert,
 	AsyncMutex4,
@@ -25,11 +17,54 @@ import {
 	Rotation,
 	AsyncGate,
 	Yo,
+	isNumber,
 } from './misc';
 import { EncodedPacket } from './packet';
 import { AudioSample, clampCropRectangle, CropRectangle, validateCropRectangle, VideoSample } from './sample';
 
 polyfillSymbolDispose();
+
+/**
+ * Additional options for controlling packet retrieval.
+ * @group Media sinks
+ * @public
+ */
+export type PacketRetrievalOptions = {
+	/**
+	 * When set to `true`, only packet metadata (like timestamp) will be retrieved - the actual packet data will not
+	 * be loaded.
+	 */
+	metadataOnly?: boolean;
+
+	/**
+	 * When set to true, key packets will be verified upon retrieval by looking into the packet's bitstream.
+	 * If not enabled, the packet types will be determined solely by what's stored in the containing file and may be
+	 * incorrect, potentially leading to decoder errors. Since determining a packet's actual type requires looking into
+	 * its data, this option cannot be enabled together with `metadataOnly`.
+	 */
+	verifyKeyPackets?: boolean;
+};
+
+export const validatePacketRetrievalOptions = (options: PacketRetrievalOptions) => {
+	if (!options || typeof options !== 'object') {
+		throw new TypeError('options must be an object.');
+	}
+	if (options.metadataOnly !== undefined && typeof options.metadataOnly !== 'boolean') {
+		throw new TypeError('options.metadataOnly, when defined, must be a boolean.');
+	}
+	if (options.verifyKeyPackets !== undefined && typeof options.verifyKeyPackets !== 'boolean') {
+		throw new TypeError('options.verifyKeyPackets, when defined, must be a boolean.');
+	}
+	if (options.verifyKeyPackets && options.metadataOnly) {
+		throw new TypeError('options.verifyKeyPackets and options.metadataOnly cannot be enabled together.');
+	}
+};
+
+export const validateTimestamp = (timestamp: number) => {
+	if (!isNumber(timestamp)) {
+		throw new TypeError('timestamp must be a number.'); // It can be non-finite, that's fine
+	}
+};
 
 export class PacketReader<T extends InputTrack = InputTrack> {
 	track: T;
@@ -331,26 +366,23 @@ export class PacketCursor<T extends InputTrack = InputTrack> {
 	}
 
 	async iterate(
-		callback: (packet: EncodedPacket, stop: () => void) => MaybePromise<unknown>,
+		callback: (packet: EncodedPacket) => MaybePromise<void | boolean>,
 	) {
 		if (typeof callback !== 'function') {
 			throw new TypeError('callback must be a function.');
 		}
-
-		let stopped = false;
-		const stop = () => stopped = true;
 
 		const donePromise = this._callSerializer.waitUntilIdle();
 		if (donePromise) await donePromise;
 
 		while (true) {
 			if (this.current) {
-				const result = callback(this.current, stop);
-				if (result instanceof Promise) await result;
-			}
+				let result = callback(this.current);
+				if (result instanceof Promise) result = await result;
 
-			if (stopped) {
-				break;
+				if (result === false) {
+					break;
+				}
 			}
 
 			const result = this.next();
@@ -398,9 +430,9 @@ type PendingRequest<T> = {
 	successor: PendingRequest<T> | null;
 };
 
-type SampleTransformer<Sample, TransformedSample> = (sample: Sample) => TransformedSample;
+export type SampleTransformer<Sample, TransformedSample> = (sample: Sample) => TransformedSample;
 
-type SampleCursorOptions<Sample, TransformedSample> = {
+export type SampleCursorOptions<Sample, TransformedSample> = {
 	autoClose?: boolean;
 	transform?: SampleTransformer<Sample, TransformedSample>;
 };
@@ -440,26 +472,27 @@ export abstract class SampleCursor<
 	private _currentSampleTimestamp: number | null = null;
 	/** The queue of samples that have been decoded and are now waiting. */
 	private _sampleQueue: Sample[] = [];
-	/** Used to pause and resume the pump. */
-	private _pumpGate = new AsyncGate();
 	private _pendingRequests: PendingRequest<TransformedSample>[] = [];
 	private _lastPendingRequest: PendingRequest<TransformedSample> | null = null;
-	/**
-	 * When this value is above 0, the pump is instructed to be lazy: that is, only decode packets until the target and
-	 * not further to increase decoder efficiency.
-	 */
-	private _lazyPump = 0;
 	/** Whether the next sample is the first sample. */
 	private _nextIsFirst = true;
 	private _queuedResets = 0;
 
 	/** @internal */
 	_pumpRunning = false;
+	/** Used to pause and resume the pump. */
+	private _pumpGate = new AsyncGate();
 	private _pumpStopQueued = false;
 	private _pumpStopped = new AsyncGate();
 	/** The minimum target packet until which the pump should decode. */
 	private _pumpTarget: EncodedPacket | null = null;
 	private _lastTarget: EncodedPacket | null = null;
+	private _decoderFlushPromise: Promise<void> | null = null;
+	/**
+	 * When this value is above 0, the pump is instructed to be lazy: that is, only decode packets until the target and
+	 * not further to increase decoder efficiency.
+	 */
+	private _lazyPump = 0;
 
 	private _closed = false;
 	private _closePromise: Promise<void> | null = null;
@@ -511,6 +544,27 @@ export abstract class SampleCursor<
 			.finally(() => lock.release());
 	}
 
+	private _getSample(
+		callback: (result: ResultValue<TransformedSample | null>) => Promise<Yo>,
+	): MaybePromise<TransformedSample | null> {
+		this._ensureWillBeOpen();
+
+		try {
+			const result = new ResultValue<TransformedSample | null>();
+			const promise = callback(result);
+
+			if (result.pending) {
+				return promise
+					.then(() => result.value)
+					.catch(this._closeWithErrorAndThrow.bind(this));
+			} else {
+				return result.value;
+			}
+		} catch (error) {
+			this._closeWithErrorAndThrow(error);
+		}
+	}
+
 	seekToFirst(): MaybePromise<TransformedSample | null> {
 		return this._getSample(result => this._seekToPacket(result, this._packetReader.readFirst()));
 	}
@@ -533,14 +587,12 @@ export abstract class SampleCursor<
 		return this._getSample(result => this._nextKeyInternal(result));
 	}
 
-	private _getSample(
-		callback: (result: ResultValue<TransformedSample | null>) => Promise<Yo>,
-	): MaybePromise<TransformedSample | null> {
+	hasNext(): MaybePromise<boolean> {
 		this._ensureWillBeOpen();
 
 		try {
-			const result = new ResultValue<TransformedSample | null>();
-			const promise = callback(result);
+			const result = new ResultValue<boolean>();
+			const promise = this._hasNextInternal(result);
 
 			if (result.pending) {
 				return promise
@@ -555,7 +607,7 @@ export abstract class SampleCursor<
 	}
 
 	async iterate(
-		callback: (sample: TransformedSample, stop: () => void) => MaybePromise<unknown>,
+		callback: (sample: TransformedSample) => MaybePromise<void | boolean>,
 	) {
 		if (typeof callback !== 'function') {
 			throw new TypeError('callback must be a function.');
@@ -568,17 +620,14 @@ export abstract class SampleCursor<
 
 		this._ensureNotClosed();
 
-		let stopped = false;
-		const stop = () => stopped = true;
-
 		while (true) {
 			if (this.current) {
-				const result = callback(this.current, stop);
-				if (result instanceof Promise) await result;
-			}
+				let result = callback(this.current);
+				if (result instanceof Promise) result = await result;
 
-			if (stopped) {
-				break;
+				if (result === false) {
+					break;
+				}
 			}
 
 			const result = this.next();
@@ -1052,6 +1101,30 @@ export abstract class SampleCursor<
 		return await this._seekToPacket(res, nextKey, lock);
 	}
 
+	private async _hasNextInternal(res: ResultValue<boolean>): Promise<Yo> {
+		using lock = this._mutex.lock();
+		if (lock.pending) await lock.ready;
+
+		this._ensureNotClosed();
+
+		if (this._nextIsFirst) {
+			let first = this._packetReader.readFirst();
+			if (first instanceof Promise) first = await first;
+
+			return res.set(!!first);
+		}
+
+		if (!this._pumpRunning) {
+			return res.set(false);
+		}
+
+		if (this._decoderFlushPromise) {
+			await this._decoderFlushPromise;
+		}
+
+		return res.set(this._sampleQueue.length > 0 || this._pumpRunning);
+	}
+
 	/**
 	 * Starts the "pump process", which handles pushing packets into the decoder. It throttles itself if it is far
 	 * enough ahead and must be woken up again by the outside. It also stops itself when the outside tells it to.
@@ -1122,7 +1195,15 @@ export abstract class SampleCursor<
 			}
 
 			if (!this._closed || this._pendingRequests.length > 0) {
-				await this._decoder.flush();
+				const { promise, resolve } = promiseWithResolvers();
+				this._decoderFlushPromise = promise;
+
+				try {
+					await this._decoder.flush();
+				} finally {
+					resolve();
+					this._decoderFlushPromise = null;
+				}
 			} else {
 				// We're closed with no pending requests, don't bother flushing what's left
 			}
@@ -1356,13 +1437,19 @@ export class AudioSampleCursor<TransformedSample = AudioSample> extends SampleCu
  * A canvas with additional timing information (timestamp & duration).
  * @public
  */
-export type WrappedCanvas = {
+export class WrappedCanvas {
 	/** A canvas element or offscreen canvas. */
 	canvas: HTMLCanvasElement | OffscreenCanvas;
 	/** The timestamp of the corresponding video sample, in seconds. */
 	timestamp: number;
 	/** The duration of the corresponding video sample, in seconds. */
 	duration: number;
+
+	constructor(canvas: HTMLCanvasElement | OffscreenCanvas, timestamp: number, duration: number) {
+		this.canvas = canvas;
+		this.timestamp = timestamp;
+		this.duration = duration;
+	}
 };
 
 /**
@@ -1540,15 +1627,9 @@ export const canvasTransformer = (
 		}
 
 		sample.drawWithFit(context, { fit, rotation, crop });
-
-		const result = {
-			canvas,
-			timestamp: sample.timestamp,
-			duration: sample.duration,
-		};
-
 		sample.close();
-		return result;
+
+		return new WrappedCanvas(canvas, sample.timestamp, sample.duration);
 	};
 };
 

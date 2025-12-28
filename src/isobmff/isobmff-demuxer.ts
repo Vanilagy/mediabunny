@@ -38,7 +38,6 @@ import {
 	InputVideoTrack,
 	InputVideoTrackBacking,
 } from '../input-track';
-import { PacketRetrievalOptions } from '../media-sink';
 import {
 	assert,
 	binarySearchExact,
@@ -89,6 +88,7 @@ import {
 	readAscii,
 } from '../reader';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags, RichImageData, TrackDisposition } from '../metadata';
+import { PacketRetrievalOptions } from '../cursors';
 
 type InternalTrack = {
 	id: number;

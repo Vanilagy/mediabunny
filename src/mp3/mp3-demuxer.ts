@@ -11,7 +11,6 @@ import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
-import { PacketRetrievalOptions } from '../media-sink';
 import {
 	assert,
 	AsyncMutex4,
@@ -31,6 +30,7 @@ import {
 } from '../id3';
 import { readNextFrameHeader } from './mp3-reader';
 import { readAscii, readBytes, Reader, readU32Be } from '../reader';
+import { PacketRetrievalOptions } from '../cursors';
 
 type Sample = {
 	timestamp: number;

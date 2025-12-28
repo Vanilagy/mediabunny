@@ -10,7 +10,6 @@ import { aacChannelMap, aacFrequencyTable, AudioCodec } from '../codec';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
-import { PacketRetrievalOptions } from '../media-sink';
 import {
 	assert,
 	AsyncMutex4,
@@ -24,6 +23,7 @@ import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readBytes, Reader } from '../reader';
 import { DEFAULT_TRACK_DISPOSITION } from '../metadata';
 import { FrameHeader, MAX_FRAME_HEADER_SIZE, MIN_FRAME_HEADER_SIZE, readFrameHeader } from './adts-reader';
+import { PacketRetrievalOptions } from '../cursors';
 
 const SAMPLES_PER_AAC_FRAME = 1024;
 

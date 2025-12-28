@@ -178,17 +178,16 @@ test('Packet cursor iteration', async () => {
 
 	total = 0;
 	await cursor.seekToFirst();
-	await cursor.iterate(() => total++);
+	await cursor.iterate(() => void total++);
 
 	expect(total).toBe(121);
 	expect(cursor.current).toBe(null);
 
 	total = 0;
 	await cursor.seekToFirst();
-	await cursor.iterate((packet, stop) => {
+	await cursor.iterate((packet) => {
 		if (packet.timestamp === 1) {
-			stop();
-			return;
+			return false;
 		}
 
 		total++;
@@ -205,7 +204,7 @@ test('Packet cursor iteration', async () => {
 
 	await cursor.seekTo(-Infinity);
 	total = 0;
-	await cursor.iterate(() => total++);
+	await cursor.iterate(() => void total++);
 
 	expect(total).toBe(121);
 
@@ -300,9 +299,9 @@ test('Command queuing', async () => {
 	expect(resolved[12]!.type).toBe('key');
 
 	void cursor.seekTo(1);
-	await cursor.iterate((packet, stop) => {
+	await cursor.iterate((packet) => {
 		expect(packet.timestamp).toBe(1);
-		stop();
+		return false;
 	});
 
 	void cursor.seekTo(3);

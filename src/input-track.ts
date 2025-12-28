@@ -10,11 +10,11 @@ import { AudioCodec, MediaCodec, VideoCodec } from './codec';
 import { determineVideoPacketType } from './codec-data';
 import { customAudioDecoders, customVideoDecoders } from './custom-coder';
 import { Input } from './input';
-import { EncodedPacketSink, PacketRetrievalOptions } from './media-sink';
 import { assert, ResultValue, Rotation, Yo } from './misc';
 import { TrackType } from './output';
 import { EncodedPacket, PacketType } from './packet';
 import { TrackDisposition } from './metadata';
+import { PacketCursor, PacketRetrievalOptions } from './cursors';
 
 /**
  * Contains aggregate statistics about the encoded packets of a track.
@@ -183,20 +183,20 @@ export abstract class InputTrack {
 	 * entire file.
 	 */
 	async computePacketStats(targetPacketCount = Infinity): Promise<PacketStats> {
-		const sink = new EncodedPacketSink(this);
+		const cursor = new PacketCursor(this, { metadataOnly: true });
 
 		let startTimestamp = Infinity;
 		let endTimestamp = -Infinity;
 		let packetCount = 0;
 		let totalPacketBytes = 0;
 
-		for await (const packet of sink.packets(undefined, undefined, { metadataOnly: true })) {
+		await cursor.iterate((packet) => {
 			if (
 				packetCount >= targetPacketCount
 				// This additional condition is needed to produce correct results with out-of-presentation-order packets
 				&& packet.timestamp >= endTimestamp
 			) {
-				break;
+				return false;
 			}
 
 			startTimestamp = Math.min(startTimestamp, packet.timestamp);
@@ -204,7 +204,7 @@ export abstract class InputTrack {
 
 			packetCount++;
 			totalPacketBytes += packet.byteLength;
-		}
+		});
 
 		return {
 			packetCount,

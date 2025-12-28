@@ -32,7 +32,6 @@ import {
 	InputVideoTrackBacking,
 } from '../input-track';
 import { AttachedFile, DEFAULT_TRACK_DISPOSITION, MetadataTags, TrackDisposition } from '../metadata';
-import { PacketRetrievalOptions } from '../media-sink';
 import {
 	assert,
 	binarySearchLessOrEqual,
@@ -71,6 +70,7 @@ import {
 } from './ebml';
 import { buildMatroskaMimeType } from './matroska-misc';
 import { FileSlice, readBytes, Reader, readI16Be, readU8 } from '../reader';
+import { PacketRetrievalOptions } from '../cursors';
 
 type Segment = {
 	seekHeadSeen: boolean;

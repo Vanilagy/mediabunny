@@ -171,18 +171,6 @@ export {
 	CropRectangle,
 } from './sample';
 export {
-	AudioBufferSink,
-	AudioSampleSink,
-	BaseMediaSampleSink,
-	CanvasSink,
-	CanvasSinkOptions,
-	EncodedPacketSink,
-	PacketRetrievalOptions,
-	VideoSampleSink,
-	WrappedAudioBuffer,
-	WrappedCanvas,
-} from './media-sink';
-export {
 	PacketReader,
 	PacketCursor,
 	SampleCursor,

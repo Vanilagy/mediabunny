@@ -7,6 +7,7 @@ import {
 	AudioSampleCursor,
 	canvasTransformer,
 	VideoSampleCursor,
+	WrappedCanvas,
 } from '../../src/cursors.js';
 import { AudioSample, VideoSample } from '../../src/sample.js';
 import { promiseAllEnsureOrder, promiseIterateAll } from '../../src/misc.js';
@@ -221,15 +222,14 @@ test('Sample cursor advancing', async () => {
 	expect(cursor.current).toBe(null);
 
 	total = 0;
-	await cursor.iterate(() => total++);
+	await cursor.iterate(() => void total++);
 	expect(total).toBe(0); // Since we're at the end
 
 	await cursor.seekToFirst(); ;
 	total = 0;
-	await cursor.iterate((sample, stop) => {
+	await cursor.iterate((sample) => {
 		if (sample.timestamp === 1) {
-			stop();
-			return;
+			return false;
 		}
 
 		total++;
@@ -296,9 +296,9 @@ test('Sample cursor advancing, cold start', async () => {
 		break;
 	}
 
-	await cursor2.iterate((sample, stop) => {
+	await cursor2.iterate((sample) => {
 		expect(sample.timestamp).toBe(0);
-		stop();
+		return false;
 	});
 
 	await cursor2.close();
@@ -1076,6 +1076,7 @@ test('Canvas transformer', async () => {
 	});
 
 	const firstSample = (await cursor1.seekToFirst())!;
+	expect(firstSample).toBeInstanceOf(WrappedCanvas);
 	expect(firstSample.canvas).toBeInstanceOf(HTMLCanvasElement);
 	expect(firstSample.canvas.width).toBe(videoTrack.displayWidth);
 	expect(firstSample.canvas.height).toBe(videoTrack.displayHeight);
@@ -1210,4 +1211,36 @@ test('Unthrottled decoder', async () => {
 
 	// Test that all samples in the queue get closed now
 	await cursor2.close();
+});
+
+test('hasNext', async () => {
+	using input = new Input({
+		source: new UrlSource('/trim-buck-bunny.mov'),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = (await input.getPrimaryVideoTrack())!;
+	await using cursor = new VideoSampleCursor(videoTrack);
+
+	expect(cursor.current).toBe(null);
+	expect(await cursor.hasNext()).toBe(true);
+
+	await cursor.seekToFirst();
+	expect(await cursor.hasNext()).toBe(true);
+
+	await cursor.seekTo(Infinity);
+	expect(cursor.current).not.toBe(null);
+	expect(await cursor.hasNext()).toBe(false);
+
+	await cursor.next();
+	expect(cursor.current).toBe(null);
+	expect(await cursor.hasNext()).toBe(false);
+
+	void cursor.seekTo(2.5);
+	expect(await cursor.hasNext()).toBe(true);
+
+	void cursor.seekTo(Infinity);
+	expect(await cursor.hasNext()).toBe(false);
+
+	expect(cursor.hasNext()).not.toBeInstanceOf(Promise);
 });

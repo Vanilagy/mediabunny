@@ -23,12 +23,6 @@ import {
 import { Input } from './input';
 import { InputAudioTrack, InputTrack, InputVideoTrack } from './input-track';
 import {
-	AudioSampleSink,
-	CanvasSink,
-	EncodedPacketSink,
-	VideoSampleSink,
-} from './media-sink';
-import {
 	AudioSource,
 	EncodedVideoPacketSource,
 	EncodedAudioPacketSource,
@@ -50,6 +44,7 @@ import { Mp4OutputFormat } from './output-format';
 import { AudioSample, clampCropRectangle, validateCropRectangle, VideoSample } from './sample';
 import { MetadataTags, validateMetadataTags } from './metadata';
 import { NullTarget } from './target';
+import { AudioSampleCursor, canvasTransformer, PacketCursor, VideoSampleCursor, WrappedCanvas } from './cursors';
 
 /**
  * The options for media file conversion.
@@ -915,16 +910,13 @@ export class Conversion {
 			this._trackPromises.push((async () => {
 				await this._started;
 
-				const sink = new EncodedPacketSink(track);
+				const cursor = new PacketCursor(track, { verifyKeyPackets: true });
 				const decoderConfig = await track.getDecoderConfig();
 				const meta: EncodedVideoChunkMetadata = { decoderConfig: decoderConfig ?? undefined };
-				const endPacket = Number.isFinite(this._endTimestamp)
-					? await sink.getPacket(this._endTimestamp, { metadataOnly: true }) ?? undefined
-					: undefined;
 
-				for await (const packet of sink.packets(undefined, endPacket, { verifyKeyPackets: true })) {
-					if (this._canceled) {
-						return;
+				await cursor.iterate(async (packet) => {
+					if (packet.timestamp >= this._endTimestamp || this._canceled) {
+						return false;
 					}
 
 					if (alpha === 'discard') {
@@ -933,16 +925,20 @@ export class Conversion {
 						delete packet.sideData.alphaByteLength;
 					}
 
-					this._reportProgress(track.id, packet.timestamp);
+					this._updateProgress(track.id, packet.timestamp);
 					await source.add(packet, meta);
 
 					if (this._synchronizer.shouldWait(track.id, packet.timestamp)) {
 						await this._synchronizer.wait(packet.timestamp);
 					}
+				});
+
+				if (this._canceled) {
+					return;
 				}
 
 				source.close();
-				this._synchronizer.closeTrack(track.id);
+				this._closeTrack(track.id);
 			})());
 		} else {
 			// We need to decode & reencode the video
@@ -1009,13 +1005,13 @@ export class Conversion {
 
 				await tempOutput.start();
 
-				const sink = new VideoSampleSink(track);
-				const firstSample = await sink.getSample(firstTimestamp); // Let's just use the first sample
+				const cursor = new VideoSampleCursor(track, { autoClose: false });
+				using firstSample = await cursor.seekToFirst(); // Let's just use the first sample
+				await cursor.close();
 
 				if (firstSample) {
 					try {
 						await tempSource.add(firstSample);
-						firstSample.close();
 						await tempOutput.finalize();
 					} catch (error) {
 						console.info('Error when probing encoder support. Falling back to rerender path.', error);
@@ -1027,176 +1023,94 @@ export class Conversion {
 				}
 			}
 
-			if (needsRerender) {
-				this._trackPromises.push((async () => {
-					await this._started;
+			this._trackPromises.push((async () => {
+				await this._started;
 
-					const sink = new CanvasSink(track, {
-						width,
-						height,
-						fit: trackOptions.fit ?? 'fill',
-						rotation: totalRotation, // Bake the rotation into the output
-						crop: trackOptions.crop,
-						poolSize: 1,
-						alpha: alpha === 'keep',
-					});
-					const iterator = sink.canvases(this._startTimestamp, this._endTimestamp);
-					const frameRate = trackOptions.frameRate;
+				const transform = needsRerender
+					? canvasTransformer({
+							width,
+							height,
+							fit: trackOptions.fit ?? 'fill',
+							rotation: totalRotation, // Bake the rotation into the output
+							crop: trackOptions.crop,
+							poolSize: 1,
+							alpha: alpha === 'keep',
+						})
+					: undefined;
 
-					let lastCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
-					let lastCanvasTimestamp: number | null = null;
-					let lastCanvasEndTimestamp: number | null = null;
+				await using cursor = new VideoSampleCursor<VideoSample | WrappedCanvas>(track, { transform });
+				const frameRate = trackOptions.frameRate;
 
-					/** Repeats the last sample to pad out the time until the specified timestamp. */
-					const padFrames = async (until: number) => {
-						assert(lastCanvas);
-						assert(frameRate !== undefined);
+				if (frameRate === undefined) {
+					await cursor.seekTo(this._startTimestamp);
 
-						const frameDifference = Math.round((until - lastCanvasTimestamp!) * frameRate);
-
-						for (let i = 1; i < frameDifference; i++) {
-							const sample = new VideoSample(lastCanvas, {
-								timestamp: lastCanvasTimestamp! + i / frameRate,
-								duration: 1 / frameRate,
-							});
-							await this._registerVideoSample(track, trackOptions, source, sample);
-							sample.close();
-						}
-					};
-
-					for await (const { canvas, timestamp, duration } of iterator) {
+					for await (const it of cursor) {
 						if (this._canceled) {
 							return;
 						}
 
-						let adjustedSampleTimestamp = Math.max(timestamp - this._startTimestamp, 0);
-						lastCanvasEndTimestamp = adjustedSampleTimestamp + duration;
-
-						if (frameRate !== undefined) {
-							// Logic for skipping/repeating frames when a frame rate is set
-							const alignedTimestamp = Math.floor(adjustedSampleTimestamp * frameRate) / frameRate;
-
-							if (lastCanvas !== null) {
-								if (alignedTimestamp <= lastCanvasTimestamp!) {
-									lastCanvas = canvas;
-									lastCanvasTimestamp = alignedTimestamp;
-
-									// Skip this sample, since we already added one for this frame
-									continue;
-								} else {
-									// Check if we may need to repeat the previous frame
-									await padFrames(alignedTimestamp);
-								}
-							}
-
-							adjustedSampleTimestamp = alignedTimestamp;
+						if (it.timestamp >= this._endTimestamp) {
+							break;
 						}
 
-						const sample = new VideoSample(canvas, {
-							timestamp: adjustedSampleTimestamp,
-							duration: frameRate !== undefined ? 1 / frameRate : duration,
-						});
+						const timestamp = Math.max(it.timestamp - this._startTimestamp, 0);
+						const duration = clamp(
+							it.timestamp + it.duration - this._startTimestamp,
+							0,
+							it.duration,
+						);
+
+						using sample = it instanceof WrappedCanvas
+							? new VideoSample(it.canvas, { timestamp, duration })
+							: it.clone({ timestamp, duration });
+
 						await this._registerVideoSample(track, trackOptions, source, sample);
-						sample.close();
-
-						if (frameRate !== undefined) {
-							lastCanvas = canvas;
-							lastCanvasTimestamp = adjustedSampleTimestamp;
-						}
 					}
+				} else {
+					let targetFrame = 0;
 
-					if (lastCanvas) {
-						assert(lastCanvasEndTimestamp !== null);
-						assert(frameRate !== undefined);
-
-						// If necessary, pad until the end timestamp of the last sample
-						await padFrames(Math.floor(lastCanvasEndTimestamp * frameRate) / frameRate);
-					}
-
-					source.close();
-					this._synchronizer.closeTrack(track.id);
-				})());
-			} else {
-				this._trackPromises.push((async () => {
-					await this._started;
-
-					const sink = new VideoSampleSink(track);
-					const frameRate = trackOptions.frameRate;
-
-					let lastSample: VideoSample | null = null;
-					let lastSampleTimestamp: number | null = null;
-					let lastSampleEndTimestamp: number | null = null;
-
-					/** Repeats the last sample to pad out the time until the specified timestamp. */
-					const padFrames = async (until: number) => {
-						assert(lastSample);
-						assert(frameRate !== undefined);
-
-						const frameDifference = Math.round((until - lastSampleTimestamp!) * frameRate);
-
-						for (let i = 1; i < frameDifference; i++) {
-							lastSample.setTimestamp(lastSampleTimestamp! + i / frameRate);
-							lastSample.setDuration(1 / frameRate);
-							await this._registerVideoSample(track, trackOptions, source, lastSample);
-						}
-
-						lastSample.close();
-					};
-
-					for await (const sample of sink.samples(this._startTimestamp, this._endTimestamp)) {
+					while (true) {
 						if (this._canceled) {
-							lastSample?.close();
 							return;
 						}
 
-						let adjustedSampleTimestamp = Math.max(sample.timestamp - this._startTimestamp, 0);
-						lastSampleEndTimestamp = adjustedSampleTimestamp + sample.duration;
+						const targetTimestamp = targetFrame / frameRate;
+						const sourceTimestamp = this._startTimestamp + targetTimestamp;
 
-						if (frameRate !== undefined) {
-							// Logic for skipping/repeating frames when a frame rate is set
-							const alignedTimestamp = Math.floor(adjustedSampleTimestamp * frameRate) / frameRate;
-
-							if (lastSample !== null) {
-								if (alignedTimestamp <= lastSampleTimestamp!) {
-									lastSample.close();
-									lastSample = sample;
-									lastSampleTimestamp = alignedTimestamp;
-
-									// Skip this sample, since we already added one for this frame
-									continue;
-								} else {
-									// Check if we may need to repeat the previous frame
-									await padFrames(alignedTimestamp);
-								}
-							}
-
-							adjustedSampleTimestamp = alignedTimestamp;
-							sample.setDuration(1 / frameRate);
+						if (sourceTimestamp >= this._endTimestamp) {
+							break;
 						}
 
-						sample.setTimestamp(adjustedSampleTimestamp);
+						let it = await cursor.seekTo(sourceTimestamp);
+						if (!it) {
+							it = await cursor.seekToFirst();
+						}
+
+						if (!it) {
+							break;
+						}
+
+						const timestamp = targetTimestamp;
+						const duration = 1 / frameRate;
+						using sample = it instanceof WrappedCanvas
+							? new VideoSample(it.canvas, { timestamp, duration })
+							: it.clone({ timestamp, duration });
+
 						await this._registerVideoSample(track, trackOptions, source, sample);
 
-						if (frameRate !== undefined) {
-							lastSample = sample;
-							lastSampleTimestamp = adjustedSampleTimestamp;
-						} else {
-							sample.close();
+						const hasNext = await cursor.hasNext();
+						if (!hasNext && sourceTimestamp >= it.timestamp + it.duration) {
+							// We've reached the end
+							break;
 						}
+
+						targetFrame++;
 					}
+				}
 
-					if (lastSample) {
-						assert(lastSampleEndTimestamp !== null);
-						assert(frameRate !== undefined);
-
-						// If necessary, pad until the end timestamp of the last sample
-						await padFrames(Math.floor(lastSampleEndTimestamp * frameRate) / frameRate);
-					}
-
-					source.close();
-					this._synchronizer.closeTrack(track.id);
-				})());
-			}
+				source.close();
+				this._closeTrack(track.id);
+			})());
 		}
 
 		this.output.addVideoTrack(videoSource, {
@@ -1224,7 +1138,7 @@ export class Conversion {
 			return;
 		}
 
-		this._reportProgress(track.id, sample.timestamp);
+		this._updateProgress(track.id, sample.timestamp);
 
 		let finalSamples: VideoSample[];
 		if (!trackOptions.process) {
@@ -1316,28 +1230,29 @@ export class Conversion {
 			this._trackPromises.push((async () => {
 				await this._started;
 
-				const sink = new EncodedPacketSink(track);
+				const cursor = new PacketCursor(track);
 				const decoderConfig = await track.getDecoderConfig();
 				const meta: EncodedAudioChunkMetadata = { decoderConfig: decoderConfig ?? undefined };
-				const endPacket = Number.isFinite(this._endTimestamp)
-					? await sink.getPacket(this._endTimestamp, { metadataOnly: true }) ?? undefined
-					: undefined;
 
-				for await (const packet of sink.packets(undefined, endPacket)) {
-					if (this._canceled) {
-						return;
+				await cursor.iterate(async (packet) => {
+					if (packet.timestamp >= this._endTimestamp || this._canceled) {
+						return false;
 					}
 
-					this._reportProgress(track.id, packet.timestamp);
+					this._updateProgress(track.id, packet.timestamp);
 					await source.add(packet, meta);
 
 					if (this._synchronizer.shouldWait(track.id, packet.timestamp)) {
 						await this._synchronizer.wait(packet.timestamp);
 					}
+				});
+
+				if (this._canceled) {
+					return;
 				}
 
 				source.close();
-				this._synchronizer.closeTrack(track.id);
+				this._closeTrack(track.id);
 			})());
 		} else {
 			// We need to decode & reencode the audio
@@ -1424,18 +1339,22 @@ export class Conversion {
 				this._trackPromises.push((async () => {
 					await this._started;
 
-					const sink = new AudioSampleSink(track);
-					for await (const sample of sink.samples(undefined, this._endTimestamp)) {
+					await using cursor = new AudioSampleCursor(track);
+
+					for await (const sample of cursor) {
 						if (this._canceled) {
 							return;
 						}
 
+						if (sample.timestamp >= this._endTimestamp) {
+							break;
+						}
+
 						await this._registerAudioSample(track, trackOptions, source, sample);
-						sample.close();
 					}
 
 					source.close();
-					this._synchronizer.closeTrack(track.id);
+					this._closeTrack(track.id);
 				})());
 			}
 		}
@@ -1463,7 +1382,7 @@ export class Conversion {
 			return;
 		}
 
-		this._reportProgress(track.id, sample.timestamp);
+		this._updateProgress(track.id, sample.timestamp);
 
 		let finalSamples: AudioSample[];
 		if (!trackOptions.process) {
@@ -1532,38 +1451,53 @@ export class Conversion {
 				},
 			});
 
-			const sink = new AudioSampleSink(track);
-			const iterator = sink.samples(this._startTimestamp, this._endTimestamp);
+			await using cursor = new AudioSampleCursor(track);
+			await cursor.seekTo(this._startTimestamp);
 
-			for await (const sample of iterator) {
+			for await (const sample of cursor) {
 				if (this._canceled) {
 					return;
 				}
 
+				if (sample.timestamp >= this._endTimestamp) {
+					break;
+				}
+
 				await resampler.add(sample);
-				sample.close();
 			}
 
 			await resampler.finalize();
 
 			source.close();
-			this._synchronizer.closeTrack(track.id);
+			this._closeTrack(track.id);
 		})());
 
 		return source;
 	}
 
 	/** @internal */
-	_reportProgress(trackId: number, endTimestamp: number) {
-		if (!this._computeProgress) {
-			return;
-		}
-		assert(this._totalDuration !== null);
+	_closeTrack(id: number) {
+		this._synchronizer.closeTrack(id);
 
+		this._maxTimestamps.delete(id);
+		this._reportProgress();
+	}
+
+	/** @internal */
+	_updateProgress(trackId: number, endTimestamp: number) {
 		this._maxTimestamps.set(
 			trackId,
 			Math.max(endTimestamp, this._maxTimestamps.get(trackId)!),
 		);
+		this._reportProgress();
+	}
+
+	/** @internal */
+	_reportProgress() {
+		if (!this._computeProgress || this._maxTimestamps.size === 0) {
+			return;
+		}
+		assert(this._totalDuration !== null);
 
 		const minTimestamp = Math.min(...this._maxTimestamps.values());
 		const newProgress = clamp(minTimestamp / this._totalDuration, 0, 1);

@@ -924,12 +924,6 @@ export class AsyncMutex2 {
 	}
 }
 
-export interface AsyncMutexLock extends Disposable {
-	readonly pending: boolean;
-	readonly ready: Promise<void> | null;
-	release(): void;
-}
-
 export class AsyncMutex4 {
 	locked = false;
 	private resolverQueue: (() => void)[] = [];
@@ -938,39 +932,45 @@ export class AsyncMutex4 {
 		if (!this.locked) {
 			// Fast path
 			this.locked = true;
-			return this.createLock(false, null);
+			return new AsyncMutexLock(this, false, null);
 		}
 
 		const { promise, resolve } = promiseWithResolvers();
 		this.resolverQueue.push(resolve);
 
-		return this.createLock(true, promise);
+		return new AsyncMutexLock(this, true, promise);
 	}
 
-	private createLock(pending: boolean, ready: Promise<void> | null): AsyncMutexLock {
-		let released = false;
-
-		return {
-			pending,
-			ready,
-			release: () => {
-				if (released) return;
-				released = true;
-				this.dispatch();
-			},
-			[Symbol.dispose]() {
-				this.release();
-			},
-		};
-	}
-
-	private dispatch() {
+	dispatch() {
 		if (this.resolverQueue.length > 0) {
 			const resolve = this.resolverQueue.shift()!;
 			resolve();
 		} else {
 			this.locked = false;
 		}
+	}
+}
+
+export class AsyncMutexLock implements Disposable {
+	private released = false;
+
+	constructor(
+		private readonly mutex: AsyncMutex4,
+		public readonly pending: boolean,
+		public readonly ready: Promise<void> | null,
+	) {}
+
+	release() {
+		if (this.released) {
+			return;
+		}
+
+		this.released = true;
+		this.mutex.dispatch();
+	}
+
+	[Symbol.dispose]() {
+		this.release();
 	}
 }
 

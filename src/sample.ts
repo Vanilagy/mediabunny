@@ -334,38 +334,46 @@ export class VideoSample implements Disposable {
 	}
 
 	/** Clones this video sample. */
-	clone() {
+	clone(override?: {
+		timestamp?: number;
+		duration?: number;
+		rotation?: Rotation;
+	}) {
 		if (this._closed) {
 			throw new Error('VideoSample is closed.');
 		}
 
 		assert(this._data !== null);
 
+		const timestamp = override?.timestamp ?? this.timestamp;
+		const duration = override?.duration ?? this.duration;
+		const rotation = override?.rotation ?? this.rotation;
+
 		if (isVideoFrame(this._data)) {
 			return new VideoSample(this._data.clone(), {
-				timestamp: this.timestamp,
-				duration: this.duration,
-				rotation: this.rotation,
+				timestamp,
+				duration,
+				rotation,
 			});
 		} else if (this._data instanceof Uint8Array) {
 			return new VideoSample(this._data.slice(), {
 				format: this.format!,
 				codedWidth: this.codedWidth,
 				codedHeight: this.codedHeight,
-				timestamp: this.timestamp,
-				duration: this.duration,
+				timestamp,
+				duration,
 				colorSpace: this.colorSpace,
-				rotation: this.rotation,
+				rotation,
 			});
 		} else {
 			return new VideoSample(this._data, {
 				format: this.format!,
 				codedWidth: this.codedWidth,
 				codedHeight: this.codedHeight,
-				timestamp: this.timestamp,
-				duration: this.duration,
+				timestamp,
+				duration,
 				colorSpace: this.colorSpace,
-				rotation: this.rotation,
+				rotation,
 			});
 		}
 	}
@@ -780,36 +788,6 @@ export class VideoSample implements Disposable {
 		} else {
 			return this._data;
 		}
-	}
-
-	/** Sets the rotation metadata of this video sample. */
-	setRotation(newRotation: Rotation) {
-		if (![0, 90, 180, 270].includes(newRotation)) {
-			throw new TypeError('newRotation must be 0, 90, 180, or 270.');
-		}
-
-		// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-		(this.rotation as Rotation) = newRotation;
-	}
-
-	/** Sets the presentation timestamp of this video sample, in seconds. */
-	setTimestamp(newTimestamp: number) {
-		if (!Number.isFinite(newTimestamp)) {
-			throw new TypeError('newTimestamp must be a number.');
-		}
-
-		// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-		(this.timestamp as number) = newTimestamp;
-	}
-
-	/** Sets the duration of this video sample, in seconds. */
-	setDuration(newDuration: number) {
-		if (!Number.isFinite(newDuration) || newDuration < 0) {
-			throw new TypeError('newDuration must be a non-negative number.');
-		}
-
-		// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-		(this.duration as number) = newDuration;
 	}
 
 	/** Calls `.close()`. */

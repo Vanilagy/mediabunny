@@ -10,7 +10,6 @@ import { FlacBlockType, readVorbisComments } from '../codec-data';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
-import { PacketRetrievalOptions } from '../media-sink';
 import {
 	assert,
 	AsyncMutex4,
@@ -39,6 +38,7 @@ import {
 	readSampleRate,
 	getSampleRateOrUncommon,
 } from './flac-misc';
+import { PacketRetrievalOptions } from '../cursors';
 
 type FlacAudioInfo = {
 	numberOfChannels: number;
