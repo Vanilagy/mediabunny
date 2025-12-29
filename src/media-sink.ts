@@ -824,7 +824,7 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	alphaHadKeyframe = false;
 	colorQueue: VideoFrame[] = [];
 	alphaQueue: (VideoFrame | null)[] = [];
-	merger: ColorAlphaMerger | null = null;
+	merger: ColorAlphaMerger | ColorAlphaMerger2D | null = null;
 	mergerCreationFailed = false;
 	decodedAlphaChunkCount = 0;
 	alphaDecoderQueueSize = 0;
@@ -840,6 +840,7 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 		public decoderConfig: VideoDecoderConfig,
 		public rotation: Rotation,
 		public timeResolution: number,
+		public alphaMergerType: AlphaMergerType = 'webgl',
 	) {
 		super(onSample, onError);
 
@@ -972,7 +973,9 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 
 		if (!this.merger) {
 			try {
-				this.merger = new ColorAlphaMerger();
+				this.merger = this.alphaMergerType === '2d'
+					? new ColorAlphaMerger2D()
+					: new ColorAlphaMerger();
 			} catch (error) {
 				console.error('Due to an error, only color data will be decoded.', error);
 
@@ -1358,6 +1361,97 @@ class ColorAlphaMerger {
 }
 
 /**
+ * The rendering backend type for merging alpha channels in transparent videos.
+ * @group Media sinks
+ * @public
+ */
+export type AlphaMergerType = 'webgl' | '2d';
+
+/** Utility class that merges together color and alpha information using 2D canvas operations. */
+class ColorAlphaMerger2D {
+	canvas: OffscreenCanvas | HTMLCanvasElement;
+	private ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+	private alphaCanvas: OffscreenCanvas | HTMLCanvasElement;
+	private alphaCtx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+	private w = 0;
+	private h = 0;
+
+	constructor() {
+		// Create canvases
+		if (typeof OffscreenCanvas !== 'undefined') {
+			this.canvas = new OffscreenCanvas(1, 1);
+			this.alphaCanvas = new OffscreenCanvas(1, 1);
+		} else {
+			this.canvas = document.createElement('canvas');
+			this.alphaCanvas = document.createElement('canvas');
+		}
+
+		const ctx = this.canvas.getContext('2d', { alpha: true, willReadFrequently: true });
+		const alphaCtx = this.alphaCanvas.getContext('2d', { alpha: true, willReadFrequently: true });
+
+		if (!ctx || !alphaCtx) {
+			throw new Error("Couldn't acquire 2D canvas context.");
+		}
+
+		this.ctx = ctx as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+		this.alphaCtx = alphaCtx as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+	}
+
+	update(color: VideoFrame, alpha: VideoFrame): void {
+		const w = color.displayWidth;
+		const h = color.displayHeight;
+
+		if (w !== this.w || h !== this.h) {
+			this.w = w;
+			this.h = h;
+			this.canvas.width = w;
+			this.canvas.height = h;
+			this.alphaCanvas.width = w;
+			this.alphaCanvas.height = h;
+		}
+
+		// Draw color and get pixels
+		this.ctx.drawImage(color, 0, 0, w, h);
+		const colorImg = this.ctx.getImageData(0, 0, w, h);
+
+		// Draw alpha and get pixels
+		this.alphaCtx.clearRect(0, 0, w, h);
+		this.alphaCtx.drawImage(alpha, 0, 0, w, h);
+		const alphaImg = this.alphaCtx.getImageData(0, 0, w, h);
+
+		// Modify alpha channel in-place (red channel of alpha frame becomes alpha)
+		const cData = colorImg.data;
+		const aData = alphaImg.data;
+		for (let i = 0; i < cData.length; i += 4) {
+			cData[i + 3] = aData[i]!; // red channel as alpha
+		}
+
+		// Write merged result
+		this.ctx.putImageData(colorImg, 0, 0);
+	}
+
+	close() {
+		// Release references
+		this.ctx = null as unknown as CanvasRenderingContext2D;
+		this.alphaCtx = null as unknown as CanvasRenderingContext2D;
+	}
+}
+
+/**
+ * Options for constructing a VideoSampleSink.
+ * @group Media sinks
+ * @public
+ */
+export type VideoSampleSinkOptions = {
+	/**
+	 * The rendering backend for merging alpha channels in transparent videos.
+	 * - `'webgl'` (default): Uses WebGL2 shaders, faster on GPU but slow in headless environments.
+	 * - `'2d'`: Uses 2D canvas, more compatible and performant in Puppeteer/headless browsers.
+	 */
+	alphaMerger?: AlphaMergerType;
+};
+
+/**
  * A sink that retrieves decoded video samples (video frames) from a video track.
  * @group Media sinks
  * @public
@@ -1365,16 +1459,25 @@ class ColorAlphaMerger {
 export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 	/** @internal */
 	_track: InputVideoTrack;
+	/** @internal */
+	_alphaMergerType: AlphaMergerType;
 
 	/** Creates a new {@link VideoSampleSink} for the given {@link InputVideoTrack}. */
-	constructor(videoTrack: InputVideoTrack) {
+	constructor(videoTrack: InputVideoTrack, options: VideoSampleSinkOptions = {}) {
 		if (!(videoTrack instanceof InputVideoTrack)) {
 			throw new TypeError('videoTrack must be an InputVideoTrack.');
+		}
+		if (options && typeof options !== 'object') {
+			throw new TypeError('options must be an object.');
+		}
+		if (options.alphaMerger !== undefined && options.alphaMerger !== 'webgl' && options.alphaMerger !== '2d') {
+			throw new TypeError('options.alphaMerger, when provided, must be "webgl" or "2d".');
 		}
 
 		super();
 
 		this._track = videoTrack;
+		this._alphaMergerType = options.alphaMerger ?? 'webgl';
 	}
 
 	/** @internal */
@@ -1395,7 +1498,15 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 		const timeResolution = this._track.timeResolution;
 		assert(codec && decoderConfig);
 
-		return new VideoDecoderWrapper(onSample, onError, codec, decoderConfig, rotation, timeResolution);
+		return new VideoDecoderWrapper(
+			onSample,
+			onError,
+			codec,
+			decoderConfig,
+			rotation,
+			timeResolution,
+			this._alphaMergerType,
+		);
 	}
 
 	/** @internal */
@@ -1504,6 +1615,12 @@ export type CanvasSinkOptions = {
 	 * canvas is created each time.
 	 */
 	poolSize?: number;
+	/**
+	 * The rendering backend for merging alpha channels in transparent videos.
+	 * - `'webgl'` (default): Uses WebGL2 shaders, faster on GPU but slow in headless environments.
+	 * - `'2d'`: Uses 2D canvas, more compatible and performant in Puppeteer/headless browsers.
+	 */
+	alphaMerger?: AlphaMergerType;
 };
 
 /**
@@ -1579,6 +1696,9 @@ export class CanvasSink {
 		) {
 			throw new TypeError('poolSize must be a non-negative integer.');
 		}
+		if (options.alphaMerger !== undefined && options.alphaMerger !== 'webgl' && options.alphaMerger !== '2d') {
+			throw new TypeError('options.alphaMerger, when provided, must be "webgl" or "2d".');
+		}
 
 		const rotation = options.rotation ?? videoTrack.rotation;
 
@@ -1615,7 +1735,9 @@ export class CanvasSink {
 		this._rotation = rotation;
 		this._crop = crop;
 		this._fit = options.fit ?? 'fill';
-		this._videoSampleSink = new VideoSampleSink(videoTrack);
+		this._videoSampleSink = new VideoSampleSink(videoTrack, {
+			alphaMerger: options.alphaMerger,
+		});
 		this._canvasPool = Array.from({ length: options.poolSize ?? 0 }, () => null);
 	}
 

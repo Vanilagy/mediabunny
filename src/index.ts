@@ -174,6 +174,7 @@ export {
 	VIDEO_SAMPLE_PIXEL_FORMATS,
 } from './sample';
 export {
+	AlphaMergerType,
 	AudioBufferSink,
 	AudioSampleSink,
 	BaseMediaSampleSink,
@@ -182,6 +183,7 @@ export {
 	EncodedPacketSink,
 	PacketRetrievalOptions,
 	VideoSampleSink,
+	VideoSampleSinkOptions,
 	WrappedAudioBuffer,
 	WrappedCanvas,
 } from './media-sink';
