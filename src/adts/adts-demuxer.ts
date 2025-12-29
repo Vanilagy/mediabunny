@@ -12,7 +12,7 @@ import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import {
 	assert,
-	AsyncMutex4,
+	AsyncMutex,
 	binarySearchLessOrEqual,
 	Bitstream,
 	MaybeRelevantPromise,
@@ -43,7 +43,7 @@ export class AdtsDemuxer extends Demuxer {
 
 	tracks: InputAudioTrack[] = [];
 
-	readingMutex = new AsyncMutex4();
+	readingMutex = new AsyncMutex();
 	lastSampleLoaded = false;
 	lastLoadedPos = 0;
 	nextTimestampInSamples = 0;

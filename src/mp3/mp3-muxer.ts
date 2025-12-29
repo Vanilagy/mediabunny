@@ -53,70 +53,67 @@ export class Mp3Muxer extends Muxer {
 		track: OutputAudioTrack,
 		packet: EncodedPacket,
 	) {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
-		try {
-			const writeXingHeader = this.format._options.xingHeader !== false;
+		const writeXingHeader = this.format._options.xingHeader !== false;
 
-			if (!this.xingFrameData && writeXingHeader) {
-				const view = toDataView(packet.data);
-				if (view.byteLength < 4) {
-					throw new Error('Invalid MP3 header in sample.');
-				}
-
-				const word = view.getUint32(0, false);
-				const header = readFrameHeader(word, null).header;
-				if (!header) {
-					throw new Error('Invalid MP3 header in sample.');
-				}
-
-				const xingOffset = getXingOffset(header.mpegVersionId, header.channel);
-				if (view.byteLength >= xingOffset + 4) {
-					const word = view.getUint32(xingOffset, false);
-					const isXing = word === XING || word === INFO;
-
-					if (isXing) {
-						// This is not a data frame, so let's completely ignore this sample
-						return;
-					}
-				}
-
-				this.xingFrameData = {
-					mpegVersionId: header.mpegVersionId,
-					layer: header.layer,
-					frequencyIndex: header.frequencyIndex,
-					sampleRate: header.sampleRate,
-					channel: header.channel,
-					modeExtension: header.modeExtension,
-					copyright: header.copyright,
-					original: header.original,
-					emphasis: header.emphasis,
-
-					frameCount: null,
-					fileSize: null,
-					toc: null,
-				};
-
-				// Write a Xing frame because this muxer doesn't make any bitrate constraints, meaning we don't know if
-				// this will be a constant or variable bitrate file. Therefore, always write the Xing frame.
-				this.xingFramePos = this.writer.getPos();
-				this.mp3Writer.writeXingFrame(this.xingFrameData);
-
-				this.frameCount++;
+		if (!this.xingFrameData && writeXingHeader) {
+			const view = toDataView(packet.data);
+			if (view.byteLength < 4) {
+				throw new Error('Invalid MP3 header in sample.');
 			}
 
-			this.validateAndNormalizeTimestamp(track, packet.timestamp, packet.type === 'key');
+			const word = view.getUint32(0, false);
+			const header = readFrameHeader(word, null).header;
+			if (!header) {
+				throw new Error('Invalid MP3 header in sample.');
+			}
 
-			this.writer.write(packet.data);
+			const xingOffset = getXingOffset(header.mpegVersionId, header.channel);
+			if (view.byteLength >= xingOffset + 4) {
+				const word = view.getUint32(xingOffset, false);
+				const isXing = word === XING || word === INFO;
+
+				if (isXing) {
+					// This is not a data frame, so let's completely ignore this sample
+					return;
+				}
+			}
+
+			this.xingFrameData = {
+				mpegVersionId: header.mpegVersionId,
+				layer: header.layer,
+				frequencyIndex: header.frequencyIndex,
+				sampleRate: header.sampleRate,
+				channel: header.channel,
+				modeExtension: header.modeExtension,
+				copyright: header.copyright,
+				original: header.original,
+				emphasis: header.emphasis,
+
+				frameCount: null,
+				fileSize: null,
+				toc: null,
+			};
+
+			// Write a Xing frame because this muxer doesn't make any bitrate constraints, meaning we don't know if
+			// this will be a constant or variable bitrate file. Therefore, always write the Xing frame.
+			this.xingFramePos = this.writer.getPos();
+			this.mp3Writer.writeXingFrame(this.xingFrameData);
+
 			this.frameCount++;
+		}
 
-			await this.writer.flush();
+		this.validateAndNormalizeTimestamp(track, packet.timestamp, packet.type === 'key');
 
-			if (writeXingHeader) {
-				this.framePositions.push(this.writer.getPos());
-			}
-		} finally {
-			release();
+		this.writer.write(packet.data);
+		this.frameCount++;
+
+		await this.writer.flush();
+
+		if (writeXingHeader) {
+			this.framePositions.push(this.writer.getPos());
 		}
 	}
 
@@ -129,7 +126,8 @@ export class Mp3Muxer extends Muxer {
 			return;
 		}
 
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		const endPos = this.writer.getPos();
 
@@ -160,7 +158,5 @@ export class Mp3Muxer extends Muxer {
 		}
 
 		this.writer.seek(endPos);
-
-		release();
 	}
 }

@@ -405,7 +405,7 @@ class VideoEncoderWrapper {
 				}
 			}
 
-			await this.muxer!.mutex.currentPromise; // Allow the writer to apply backpressure
+			await this.muxer!.mutex.waitForUnlock(); // Allow the writer to apply backpressure
 		} finally {
 			if (shouldClose) {
 				// Make sure it's always closed, even if there was an error
@@ -1449,7 +1449,7 @@ class AudioEncoderWrapper {
 					await promise;
 				}
 
-				await this.muxer!.mutex.currentPromise; // Allow the writer to apply backpressure
+				await this.muxer!.mutex.waitForUnlock(); // Allow the writer to apply backpressure
 			} else if (this.isPcmEncoder) {
 				await this.doPcmEncoding(audioSample, shouldClose);
 			} else {
@@ -1466,7 +1466,7 @@ class AudioEncoderWrapper {
 					await new Promise(resolve => this.encoder!.addEventListener('dequeue', resolve, { once: true }));
 				}
 
-				await this.muxer!.mutex.currentPromise; // Allow the writer to apply backpressure
+				await this.muxer!.mutex.waitForUnlock(); // Allow the writer to apply backpressure
 			}
 		} finally {
 			if (shouldClose) {
@@ -2320,7 +2320,7 @@ export class TextSubtitleSource extends SubtitleSource {
 		this._ensureValidAdd();
 		this._parser.parse(text);
 
-		return this._connectedTrack!.output._muxer.mutex.currentPromise;
+		return this._connectedTrack!.output._muxer.mutex.waitForUnlock();
 	}
 
 	/** @internal */

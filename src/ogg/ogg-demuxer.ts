@@ -15,7 +15,7 @@ import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
 import {
 	assert,
-	AsyncMutex4,
+	AsyncMutex,
 	binarySearchLessOrEqual,
 	findLast,
 	last,
@@ -439,7 +439,7 @@ type EncodedPacketMetadata = {
 class OggAudioTrackBacking implements InputAudioTrackBacking {
 	internalSampleRate: number;
 	sequentialScanCache: EncodedPacketMetadata[] = [];
-	sequentialScanMutex = new AsyncMutex4();
+	sequentialScanMutex = new AsyncMutex();
 
 	constructor(public bitstream: LogicalBitstream, public demuxer: OggDemuxer) {
 		// Opus always uses a fixed sample rate for its internal calculations, even if the actual rate is different

@@ -12,7 +12,7 @@ import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import {
 	assert,
-	AsyncMutex4,
+	AsyncMutex,
 	binarySearchLessOrEqual,
 	Bitstream,
 	MaybeRelevantPromise,
@@ -79,7 +79,7 @@ export class FlacDemuxer extends Demuxer {
 	lastLoadedPos: number | null = null;
 	blockingBit: number | null = null;
 
-	readingMutex = new AsyncMutex4();
+	readingMutex = new AsyncMutex();
 	lastSampleLoaded = false;
 
 	constructor(input: Input) {

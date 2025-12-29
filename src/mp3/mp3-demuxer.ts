@@ -13,7 +13,7 @@ import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
 import {
 	assert,
-	AsyncMutex4,
+	AsyncMutex,
 	binarySearchLessOrEqual,
 	MaybeRelevantPromise,
 	ResultValue,
@@ -49,7 +49,7 @@ export class Mp3Demuxer extends Demuxer {
 
 	tracks: InputAudioTrack[] = [];
 
-	readingMutex = new AsyncMutex4();
+	readingMutex = new AsyncMutex();
 	lastSampleLoaded = false;
 	lastLoadedPos = 0;
 	nextTimestampInSamples = 0;

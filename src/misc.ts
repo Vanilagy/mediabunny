@@ -246,24 +246,6 @@ export const isAllowSharedBufferSource = (x: unknown) => {
 	);
 };
 
-export class AsyncMutex {
-	currentPromise = Promise.resolve();
-
-	async acquire() {
-		let resolver: () => void;
-		const nextPromise = new Promise<void>((resolve) => {
-			resolver = resolve;
-		});
-
-		const currentPromiseAlias = this.currentPromise;
-		this.currentPromise = nextPromise;
-
-		await currentPromiseAlias;
-
-		return resolver!;
-	}
-}
-
 export const bytesToHexString = (bytes: Uint8Array) => {
 	return [...bytes].map(x => x.toString(16).padStart(2, '0')).join('');
 };
@@ -900,40 +882,7 @@ export class ResultValue<T> {
 	}
 }
 
-export class AsyncMutex2 {
-	locked = false;
-	promise = Promise.resolve();
-
-	lock() {
-		if (this.locked) {
-			throw new Error('Mutex already locked.');
-		}
-
-		this.locked = true;
-
-		const { promise, resolve } = promiseWithResolvers();
-		this.promise = promise;
-
-		let released = false;
-
-		return {
-			release: () => {
-				if (released) {
-					return;
-				}
-				released = true;
-
-				resolve();
-				this.locked = false;
-			},
-			[Symbol.dispose]() {
-				this.release();
-			},
-		};
-	}
-}
-
-export class AsyncMutex4 {
+export class AsyncMutex {
 	locked = false;
 	private resolverQueue: (() => void)[] = [];
 
@@ -958,13 +907,19 @@ export class AsyncMutex4 {
 			this.locked = false;
 		}
 	}
+
+	async waitForUnlock() {
+		const lock = this.lock();
+		await lock.ready;
+		lock.release();
+	}
 }
 
 export class AsyncMutexLock implements Disposable {
 	private released = false;
 
 	constructor(
-		private readonly mutex: AsyncMutex4,
+		private readonly mutex: AsyncMutex,
 		public readonly pending: boolean,
 		public readonly ready: Promise<void> | null,
 	) {}

@@ -12,7 +12,7 @@ import { InputDisposedError } from './input';
 import { InputAudioTrack, InputTrack, InputVideoTrack } from './input-track';
 import {
 	assert,
-	AsyncMutex4,
+	AsyncMutex,
 	AsyncMutexLock,
 	CallSerializer2,
 	defer,
@@ -469,7 +469,7 @@ export abstract class SampleCursor<
 	private _transform: SampleTransformer<Sample, TransformedSample>;
 	private _autoClose: boolean;
 
-	private _mutex = new AsyncMutex4();
+	private _mutex = new AsyncMutex();
 
 	private _packetReader: PacketReader;
 	private _packetCursor: PacketCursor;

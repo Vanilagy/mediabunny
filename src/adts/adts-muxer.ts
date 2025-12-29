@@ -47,60 +47,57 @@ export class AdtsMuxer extends Muxer {
 	) {
 		// https://wiki.multimedia.cx/index.php/ADTS (last visited: 2025/08/17)
 
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
-		try {
-			this.validateAndNormalizeTimestamp(track, packet.timestamp, packet.type === 'key');
+		this.validateAndNormalizeTimestamp(track, packet.timestamp, packet.type === 'key');
 
-			if (!this.audioSpecificConfig) {
-				validateAudioChunkMetadata(meta);
+		if (!this.audioSpecificConfig) {
+			validateAudioChunkMetadata(meta);
 
-				const description = meta?.decoderConfig?.description;
-				assert(description);
+			const description = meta?.decoderConfig?.description;
+			assert(description);
 
-				this.audioSpecificConfig = parseAacAudioSpecificConfig(toUint8Array(description));
+			this.audioSpecificConfig = parseAacAudioSpecificConfig(toUint8Array(description));
 
-				const { objectType, frequencyIndex, channelConfiguration } = this.audioSpecificConfig;
-				const profile = objectType - 1;
+			const { objectType, frequencyIndex, channelConfiguration } = this.audioSpecificConfig;
+			const profile = objectType - 1;
 
-				this.headerBitstream.writeBits(12, 0b1111_11111111); // Syncword
-				this.headerBitstream.writeBits(1, 0); // MPEG Version
-				this.headerBitstream.writeBits(2, 0); // Layer
-				this.headerBitstream.writeBits(1, 1); // Protection absence
-				this.headerBitstream.writeBits(2, profile); // Profile
-				this.headerBitstream.writeBits(4, frequencyIndex); // MPEG-4 Sampling Frequency Index
-				this.headerBitstream.writeBits(1, 0); // Private bit
-				this.headerBitstream.writeBits(3, channelConfiguration); // MPEG-4 Channel Configuration
-				this.headerBitstream.writeBits(1, 0); // Originality
-				this.headerBitstream.writeBits(1, 0); // Home
-				this.headerBitstream.writeBits(1, 0); // Copyright ID bit
-				this.headerBitstream.writeBits(1, 0); // Copyright ID start
-				this.headerBitstream.skipBits(13); // Frame length
-				this.headerBitstream.writeBits(11, 0x7ff); // Buffer fullness
-				this.headerBitstream.writeBits(2, 0); // Number of AAC frames minus 1
-				// Omit CRC check
-			}
-
-			const frameLength = packet.data.byteLength + this.header.byteLength;
-			this.headerBitstream.pos = 30;
-			this.headerBitstream.writeBits(13, frameLength);
-
-			const startPos = this.writer.getPos();
-			this.writer.write(this.header);
-			this.writer.write(packet.data);
-
-			if (this.format._options.onFrame) {
-				const frameBytes = new Uint8Array(frameLength);
-				frameBytes.set(this.header, 0);
-				frameBytes.set(packet.data, this.header.byteLength);
-
-				this.format._options.onFrame(frameBytes, startPos);
-			}
-
-			await this.writer.flush();
-		} finally {
-			release();
+			this.headerBitstream.writeBits(12, 0b1111_11111111); // Syncword
+			this.headerBitstream.writeBits(1, 0); // MPEG Version
+			this.headerBitstream.writeBits(2, 0); // Layer
+			this.headerBitstream.writeBits(1, 1); // Protection absence
+			this.headerBitstream.writeBits(2, profile); // Profile
+			this.headerBitstream.writeBits(4, frequencyIndex); // MPEG-4 Sampling Frequency Index
+			this.headerBitstream.writeBits(1, 0); // Private bit
+			this.headerBitstream.writeBits(3, channelConfiguration); // MPEG-4 Channel Configuration
+			this.headerBitstream.writeBits(1, 0); // Originality
+			this.headerBitstream.writeBits(1, 0); // Home
+			this.headerBitstream.writeBits(1, 0); // Copyright ID bit
+			this.headerBitstream.writeBits(1, 0); // Copyright ID start
+			this.headerBitstream.skipBits(13); // Frame length
+			this.headerBitstream.writeBits(11, 0x7ff); // Buffer fullness
+			this.headerBitstream.writeBits(2, 0); // Number of AAC frames minus 1
+			// Omit CRC check
 		}
+
+		const frameLength = packet.data.byteLength + this.header.byteLength;
+		this.headerBitstream.pos = 30;
+		this.headerBitstream.writeBits(13, frameLength);
+
+		const startPos = this.writer.getPos();
+		this.writer.write(this.header);
+		this.writer.write(packet.data);
+
+		if (this.format._options.onFrame) {
+			const frameBytes = new Uint8Array(frameLength);
+			frameBytes.set(this.header, 0);
+			frameBytes.set(packet.data, this.header.byteLength);
+
+			this.format._options.onFrame(frameBytes, startPos);
+		}
+
+		await this.writer.flush();
 	}
 
 	async addSubtitleCue() {
