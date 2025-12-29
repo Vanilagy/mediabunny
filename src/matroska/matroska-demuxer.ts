@@ -31,7 +31,7 @@ import {
 	InputVideoTrack,
 	InputVideoTrackBacking,
 } from '../input-track';
-import { AttachedFile, MetadataTags } from '../tags';
+import { AttachedFile, DEFAULT_TRACK_DISPOSITION, MetadataTags, TrackDisposition } from '../metadata';
 import { PacketRetrievalOptions } from '../media-sink';
 import {
 	assert,
@@ -43,7 +43,7 @@ import {
 	MATRIX_COEFFICIENTS_MAP_INVERSE,
 	normalizeRotation,
 	Rotation,
-	roundToPrecision,
+	roundIfAlmostInteger,
 	TRANSFER_CHARACTERISTICS_MAP_INVERSE,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
@@ -61,7 +61,6 @@ import {
 	readElementHeader,
 	readElementId,
 	readFloat,
-	readSignedInt,
 	readUnsignedInt,
 	readVarInt,
 	resync,
@@ -137,7 +136,6 @@ type ClusterBlock = {
 	timestamp: number;
 	duration: number;
 	isKeyFrame: boolean;
-	referencedTimestamps: number[];
 	data: Uint8Array;
 	lacing: BlockLacing;
 	decoded: boolean;
@@ -190,7 +188,7 @@ type InternalTrack = {
 	}[];
 	cuePoints: CuePoint[];
 
-	isDefault: boolean;
+	disposition: TrackDisposition;
 	inputTrack: InputTrack | null;
 	codecId: string | null;
 	codecPrivate: Uint8Array | null;
@@ -539,7 +537,7 @@ export class MatroskaDemuxer extends Demuxer {
 		}
 
 		// Put default tracks first
-		this.currentSegment.tracks.sort((a, b) => Number(b.isDefault) - Number(a.isDefault));
+		this.currentSegment.tracks.sort((a, b) => Number(b.disposition.default) - Number(a.disposition.default));
 
 		// Now, let's distribute the cue points to the tracks
 		const idToTrack = new Map(this.currentSegment.tracks.map(x => [x.id, x]));
@@ -649,19 +647,13 @@ export class MatroskaDemuxer extends Demuxer {
 			// This must hold, as track datas only get created if a block for that track is encountered
 			assert(trackData.blocks.length > 0);
 
-			let blockReferencesExist = false;
 			let hasLacedBlocks = false;
 
 			for (let i = 0; i < trackData.blocks.length; i++) {
 				const block = trackData.blocks[i]!;
 				block.timestamp += cluster.timestamp;
 
-				blockReferencesExist ||= block.referencedTimestamps.length > 0;
 				hasLacedBlocks ||= block.lacing !== BlockLacing.None;
-			}
-
-			if (blockReferencesExist) {
-				trackData.blocks = sortBlocksByReferences(trackData.blocks);
 			}
 
 			trackData.presentationTimestamps = trackData.blocks
@@ -859,7 +851,6 @@ export class MatroskaDemuxer extends Demuxer {
 					timestamp: frameTimestamp,
 					duration: frameDuration,
 					isKeyFrame: originalBlock.isKeyFrame,
-					referencedTimestamps: originalBlock.referencedTimestamps,
 					data: frameData,
 					lacing: BlockLacing.None,
 					decoded: true,
@@ -998,7 +989,9 @@ export class MatroskaDemuxer extends Demuxer {
 					clusterPositionCache: [],
 					cuePoints: [],
 
-					isDefault: false,
+					disposition: {
+						...DEFAULT_TRACK_DISPOSITION,
+					},
 					inputTrack: null,
 					codecId: null,
 					codecPrivate: null,
@@ -1163,7 +1156,37 @@ export class MatroskaDemuxer extends Demuxer {
 			case EBMLId.FlagDefault: {
 				if (!this.currentTrack) break;
 
-				this.currentTrack.isDefault = !!readUnsignedInt(slice, size);
+				this.currentTrack.disposition.default = !!readUnsignedInt(slice, size);
+			}; break;
+
+			case EBMLId.FlagForced: {
+				if (!this.currentTrack) break;
+
+				this.currentTrack.disposition.forced = !!readUnsignedInt(slice, size);
+			}; break;
+
+			case EBMLId.FlagOriginal: {
+				if (!this.currentTrack) break;
+
+				this.currentTrack.disposition.original = !!readUnsignedInt(slice, size);
+			}; break;
+
+			case EBMLId.FlagHearingImpaired: {
+				if (!this.currentTrack) break;
+
+				this.currentTrack.disposition.hearingImpaired = !!readUnsignedInt(slice, size);
+			}; break;
+
+			case EBMLId.FlagVisualImpaired: {
+				if (!this.currentTrack) break;
+
+				this.currentTrack.disposition.visuallyImpaired = !!readUnsignedInt(slice, size);
+			}; break;
+
+			case EBMLId.FlagCommentary: {
+				if (!this.currentTrack) break;
+
+				this.currentTrack.disposition.commentary = !!readUnsignedInt(slice, size);
 			}; break;
 
 			case EBMLId.CodecID: {
@@ -1383,8 +1406,16 @@ export class MatroskaDemuxer extends Demuxer {
 				const relativeTimestamp = readI16Be(slice);
 
 				const flags = readU8(slice);
-				const isKeyFrame = !!(flags & 0x80);
 				const lacing = (flags >> 1) & 0x3 as BlockLacing; // If the block is laced, we'll expand it later
+
+				let isKeyFrame = !!(flags & 0x80);
+				if (trackData.track.info?.type === 'audio' && trackData.track.info.codec) {
+					// Some files don't mark their audio packets as key packets (I'm looking at you, Firefox). But, we
+					// can fix this in most cases: if we recognize the codec of the track, then we know every packet is
+					// necessarily a key packet, no matter what the container says.
+					// https://github.com/Vanilagy/mediabunny/issues/192
+					isKeyFrame = true;
+				}
 
 				const blockData = readBytes(slice, size - (slice.filePos - dataStartPos));
 				const hasDecodingInstructions = trackData.track.decodingInstructions.length > 0;
@@ -1393,7 +1424,6 @@ export class MatroskaDemuxer extends Demuxer {
 					timestamp: relativeTimestamp, // We'll add the cluster's timestamp to this later
 					duration: 0, // Will set later
 					isKeyFrame,
-					referencedTimestamps: [],
 					data: blockData,
 					lacing,
 					decoded: !hasDecodingInstructions,
@@ -1406,13 +1436,7 @@ export class MatroskaDemuxer extends Demuxer {
 
 				this.readContiguousElements(slice.slice(dataStartPos, size));
 
-				if (this.currentBlock) {
-					for (let i = 0; i < this.currentBlock.referencedTimestamps.length; i++) {
-						this.currentBlock.referencedTimestamps[i]! += this.currentBlock.timestamp;
-					}
-
-					this.currentBlock = null;
-				}
+				this.currentBlock = null;
 			}; break;
 
 			case EBMLId.Block: {
@@ -1436,7 +1460,6 @@ export class MatroskaDemuxer extends Demuxer {
 					timestamp: relativeTimestamp, // We'll add the cluster's timestamp to this later
 					duration: 0, // Will set later
 					isKeyFrame: true,
-					referencedTimestamps: [],
 					data: blockData,
 					lacing,
 					decoded: !hasDecodingInstructions,
@@ -1487,11 +1510,8 @@ export class MatroskaDemuxer extends Demuxer {
 				if (!this.currentBlock) break;
 
 				this.currentBlock.isKeyFrame = false;
-
-				const relativeTimestamp = readSignedInt(slice, size);
-
-				// We'll offset this by the block's timestamp later
-				this.currentBlock.referencedTimestamps.push(relativeTimestamp);
+				// We ignore the actual value here, we just use the reference as an indicator for "not a key frame".
+				// This is in line with FFmpeg's behavior.
 			}; break;
 
 			case EBMLId.Tag: {
@@ -1859,6 +1879,10 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		return this.internalTrack.segment.timestampFactor;
 	}
 
+	getDisposition() {
+		return this.internalTrack.disposition;
+	}
+
 	async getFirstPacket(options: PacketRetrievalOptions) {
 		return this.performClusterLookup(
 			null,
@@ -1886,7 +1910,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		// Do a little rounding to catch cases where the result is very close to an integer. If it is, it's likely
 		// that the number was originally an integer divided by the timescale. For stability, it's best
 		// to return the integer in this case.
-		return roundToPrecision(timestamp * this.internalTrack.segment.timestampFactor, 14);
+		return roundIfAlmostInteger(timestamp * this.internalTrack.segment.timestampFactor);
 	}
 
 	async getPacket(timestamp: number, options: PacketRetrievalOptions) {
@@ -2319,6 +2343,7 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 					codec: this.internalTrack.info.codec,
 					codecDescription: this.internalTrack.info.codecDescription,
 					colorSpace: this.internalTrack.info.colorSpace,
+					avcType: 1, // We don't know better (or do we?) so just assume 'avc1'
 					avcCodecInfo: this.internalTrack.info.codec === 'avc' && firstPacket
 						? extractAvcDecoderConfigurationRecord(firstPacket.data)
 						: null,
@@ -2379,43 +2404,3 @@ class MatroskaAudioTrackBacking extends MatroskaTrackBacking implements InputAud
 		};
 	}
 }
-
-/** Sorts blocks such that referenced blocks come before the blocks that reference them. */
-const sortBlocksByReferences = (blocks: ClusterBlock[]) => {
-	const timestampToBlock = new Map<number, ClusterBlock>();
-
-	for (let i = 0; i < blocks.length; i++) {
-		const block = blocks[i]!;
-		timestampToBlock.set(block.timestamp, block);
-	}
-
-	const processedBlocks = new Set<ClusterBlock>();
-	const result: ClusterBlock[] = [];
-
-	const processBlock = (block: ClusterBlock) => {
-		if (processedBlocks.has(block)) {
-			return;
-		}
-
-		// Marking the block as processed here already; prevents this algorithm from dying on cycles
-		processedBlocks.add(block);
-
-		for (let j = 0; j < block.referencedTimestamps.length; j++) {
-			const timestamp = block.referencedTimestamps[j]!;
-			const otherBlock = timestampToBlock.get(timestamp);
-			if (!otherBlock) {
-				continue;
-			}
-
-			processBlock(otherBlock);
-		}
-
-		result.push(block);
-	};
-
-	for (let i = 0; i < blocks.length; i++) {
-		processBlock(blocks[i]!);
-	}
-
-	return result;
-};

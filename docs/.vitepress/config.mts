@@ -14,6 +14,9 @@ export default withMermaid({
 	title: 'Mediabunny',
 	description: DESCRIPTION,
 	cleanUrls: true,
+	sitemap: {
+		hostname: 'https://mediabunny.dev',
+	},
 	head: [
 		['link', { rel: 'icon', type: 'image/png', href: '/mediabunny-logo.png' }],
 		['link', { rel: 'icon', type: 'image/svg+xml', href: '/mediabunny-logo.svg' }],
@@ -34,7 +37,7 @@ export default withMermaid({
 		// https://vitepress.dev/reference/default-theme-config
 		nav: [
 			{ text: 'Guide', link: '/guide/introduction', activeMatch: '/guide' },
-			{ text: 'API', link: '/api', activeMatch: '/api' },
+			{ text: 'API', link: '/api/', activeMatch: '/api' },
 			{ text: 'LLMs', link: '/llms', activeMatch: '/llms' },
 			{ text: 'Examples', link: '/examples', activeMatch: '/examples' },
 			{ text: 'Sponsors', link: '/#sponsors', activeMatch: '/#sponsors' },

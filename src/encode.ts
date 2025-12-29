@@ -22,6 +22,7 @@ import {
 	VideoCodec,
 } from './codec';
 import { customAudioEncoders, customVideoEncoders } from './custom-coder';
+import { isFirefox } from './misc';
 import { EncodedPacket } from './packet';
 
 /**
@@ -115,9 +116,15 @@ export type VideoEncodingAdditionalOptions = {
 	 * format that supports transparency (such as WebM or Matroska).
 	 */
 	alpha?: 'discard' | 'keep';
-	/** Configures the bitrate mode. */
+	/** Configures the bitrate mode; defaults to `'variable'`. */
 	bitrateMode?: 'constant' | 'variable';
-	/** The latency mode used by the encoder; controls the performance-quality tradeoff. */
+	/**
+	 * The latency mode used by the encoder; controls the performance-quality tradeoff.
+	 *
+	 * - `'quality'` (default): The encoder prioritizes quality over latency, and no frames can be dropped.
+	 * - `'realtime'`: The encoder prioritizes low latency over quality, and may drop frames if the encoder becomes
+	 * overloaded to keep up with real-time requirements.
+	 */
 	latencyMode?: 'quality' | 'realtime';
 	/**
 	 * The full codec string as specified in the WebCodecs Codec Registry. This string must match the codec
@@ -125,7 +132,8 @@ export type VideoEncodingAdditionalOptions = {
 	 */
 	fullCodecString?: string;
 	/**
-	 * A hint that configures the hardware acceleration method of this codec. This is best left on `'no-preference'`.
+	 * A hint that configures the hardware acceleration method of this codec. This is best left on `'no-preference'`,
+	 * the default.
 	 */
 	hardwareAcceleration?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
 	/**
@@ -403,31 +411,31 @@ export class Quality {
  * @group Encoding
  * @public
  */
-export const QUALITY_VERY_LOW = new Quality(0.3);
+export const QUALITY_VERY_LOW = /* #__PURE__ */ new Quality(0.3);
 /**
  * Represents a low media quality.
  * @group Encoding
  * @public
  */
-export const QUALITY_LOW = new Quality(0.6);
+export const QUALITY_LOW = /* #__PURE__ */ new Quality(0.6);
 /**
  * Represents a medium media quality.
  * @group Encoding
  * @public
  */
-export const QUALITY_MEDIUM = new Quality(1);
+export const QUALITY_MEDIUM = /* #__PURE__ */ new Quality(1);
 /**
  * Represents a high media quality.
  * @group Encoding
  * @public
  */
-export const QUALITY_HIGH = new Quality(2);
+export const QUALITY_HIGH = /* #__PURE__ */ new Quality(2);
 /**
  * Represents a very high media quality.
  * @group Encoding
  * @public
  */
-export const QUALITY_VERY_HIGH = new Quality(4);
+export const QUALITY_VERY_HIGH = /* #__PURE__ */ new Quality(4);
 
 /**
  * Checks if the browser is able to encode the given codec.
@@ -522,7 +530,45 @@ export const canEncodeVideo = async (
 	});
 
 	const support = await VideoEncoder.isConfigSupported(encoderConfig);
-	return support.supported === true;
+	if (!support.supported) {
+		return false;
+	}
+
+	if (isFirefox()) {
+		// isConfigSupported on Firefox appears to unreliably indicate if encoding will actually succeed. Therefore, we
+		// just try encoding a frame to see if it actually works.
+		// https://github.com/Vanilagy/mediabunny/issues/222
+
+		// eslint-disable-next-line @typescript-eslint/no-misused-promises, no-async-promise-executor
+		return new Promise<boolean>(async (resolve) => {
+			try {
+				const encoder = new VideoEncoder({
+					output: () => {},
+					error: () => resolve(false),
+				});
+				encoder.configure(encoderConfig);
+
+				const frameData = new Uint8Array(width * height * 4);
+				const frame = new VideoFrame(frameData, {
+					format: 'RGBA',
+					codedWidth: width,
+					codedHeight: height,
+					timestamp: 0,
+				});
+
+				encoder.encode(frame);
+				frame.close();
+
+				await encoder.flush();
+
+				resolve(true);
+			} catch {
+				resolve(false);
+			}
+		});
+	} else {
+		return true;
+	}
 };
 
 /**

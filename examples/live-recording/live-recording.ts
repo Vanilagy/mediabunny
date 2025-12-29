@@ -21,7 +21,7 @@ const context = canvas.getContext('2d', { alpha: false, desynchronized: true })!
 
 const frameRate = 30;
 
-const chunks: Uint8Array[] = [];
+const chunks: Uint8Array<ArrayBuffer>[] = [];
 let recording = false;
 let output: Output;
 let videoSource: CanvasSource;

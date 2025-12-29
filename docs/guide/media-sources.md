@@ -187,6 +187,16 @@ videoTrackSource.errorPromise.catch((error) => ...);
 
 This source requires no additional method calls; data will automatically be captured and piped to the output file as soon as `start()` is called on the `Output`. Make sure to `stop()` on `videoTrack` after finalizing the `Output` if you don't need the user's media anymore.
 
+If you want to temporarily stop capturing video frames from this source, you can use the `pause()` and `resume()` methods:
+```ts
+videoTrackSource.pause();
+
+// Later:
+videoTrackSource.resume();
+```
+
+While paused, video frames emitted by the stream will be ignored. When resumed, video frames are let through again, offset in timestamp such that the result plays back continuously with no gap in playback. Note that pausing does *not* stop the underlying media stream.
+
 ::: info
 If this source is the only MediaStreamTrack source in the `Output`, then the first video sample added by it starts at timestamp 0. If there are multiple, then the earliest media sample across all tracks starts at timestamp 0, and all tracks will be perfectly synchronized with each other.
 :::
@@ -344,6 +354,16 @@ audioTrackSource.errorPromise.catch((error) => ...);
 
 This source requires no additional method calls; data will automatically be captured and piped to the output file as soon as `start()` is called on the `Output`. Make sure to `stop()` on `audioTrack` after finalizing the `Output` if you don't need the user's media anymore.
 
+If you want to temporarily stop capturing audio data from this source, you can use the `pause()` and `resume()` methods:
+```ts
+audioTrackSource.pause();
+
+// Later:
+audioTrackSource.resume();
+```
+
+While paused, audio data emitted by the stream will be ignored. When resumed, audio data are let through again, offset in timestamp such that the result plays back continuously with no gap in playback. Note that pausing does *not* stop the underlying media stream.
+
 ::: info
 If this source is the only MediaStreamTrack source in the `Output`, then the first audio sample added by it starts at timestamp 0. If there are multiple, then the earliest media sample across all tracks starts at timestamp 0, and all tracks will be perfectly synchronized with each other.
 :::
@@ -434,3 +454,11 @@ await textSource.add('00:00:02.500 --> 00:00:04.000\nChunky chunks.\n\n');
 ```
 
 The chunks have certain constraints: A cue must be fully contained within a chunk and cannot be split across multiple smaller chunks (although a chunk can contain multiple cues). Also, the WebVTT preamble must be added first and all at once.
+
+::: info
+For QuickTime to display WebVTT subtitles, it typically expects alignment information to be specified:
+```
+00:00:00.000 --> 00:00:02.000 align:center
+This is your last chance.
+```
+:::

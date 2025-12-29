@@ -7,7 +7,7 @@
  */
 
 import { assert, toDataView } from '../misc';
-import { metadataTagsAreEmpty } from '../tags';
+import { metadataTagsAreEmpty } from '../metadata';
 import { Muxer } from '../muxer';
 import { Output, OutputAudioTrack } from '../output';
 import { Mp3OutputFormat } from '../output-format';

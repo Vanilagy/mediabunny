@@ -12,14 +12,14 @@ import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
-import { MetadataTags } from '../tags';
+import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
 import {
 	assert,
 	AsyncMutex,
 	binarySearchLessOrEqual,
 	findLast,
 	last,
-	roundToPrecision,
+	roundIfAlmostInteger,
 	toDataView,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
@@ -463,6 +463,12 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		return UNDETERMINED_LANGUAGE;
 	}
 
+	getDisposition() {
+		return {
+			...DEFAULT_TRACK_DISPOSITION,
+		};
+	}
+
 	async getFirstTimestamp() {
 		return 0;
 	}
@@ -577,7 +583,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 			return this.getPacketSequential(timestamp, options);
 		}
 
-		const timestampInSamples = roundToPrecision(timestamp * this.internalSampleRate, 14);
+		const timestampInSamples = roundIfAlmostInteger(timestamp * this.internalSampleRate);
 		if (timestampInSamples === 0) {
 			// Fast path for timestamp 0 - avoids binary search when playing back from the start
 			return this.getFirstPacket(options);
@@ -910,7 +916,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		const release = await this.sequentialScanMutex.acquire(); // Requires exclusivity because we write to a cache
 
 		try {
-			const timestampInSamples = roundToPrecision(timestamp * this.internalSampleRate, 14);
+			const timestampInSamples = roundIfAlmostInteger(timestamp * this.internalSampleRate);
 			timestamp = timestampInSamples / this.internalSampleRate;
 
 			const index = binarySearchLessOrEqual(

@@ -45,7 +45,51 @@
 			source: new Mediabunny.BlobSource(file),
 		});
 
-		const videoTrack = await input.getPrimaryAudioTrack();
+		const videoTrack = await input.getPrimaryVideoTrack();
+		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
+
+		for await (const packet of sink.packets()) {
+			console.log(packet);
+		}
+
+
+		/*
+		const videoTrack = await input.getPrimaryVideoTrack();
+		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
+
+		for await (const packet of sink.packets()) {
+			console.log(packet);
+		}
+		*/
+
+		/*
+		return;
+
+		const audioTrack = await input.getPrimaryAudioTrack();
+		const sink = new Mediabunny.EncodedPacketSink(audioTrack);
+
+		for await (const packet of sink.packets()) {
+			console.log(packet.timestamp, packet.duration, packet.type)
+		}
+		*/
+
+		/*
+		const audioTrack = await input.getPrimaryAudioTrack();
+		const sink = new Mediabunny.AudioSampleSink(audioTrack);
+
+		let lastEnd = 0;
+		for await (const sample of sink.samples()) {
+			if (sample.timestamp - lastEnd > 0) {
+				console.warn(sample.timestamp - lastEnd)
+				console.log(sample.timestamp, sample.duration, "diffie", sample.timestamp - lastEnd);
+			}
+
+			lastEnd = sample.timestamp + sample.duration;
+			sample.close();
+		}
+		*/
+		
+		/*
 		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
 
 		for await (const packet of sink.packets()) {
@@ -53,6 +97,7 @@
 
 			if (packet.timestamp > 10) break;
 		}
+		*/
 
 		/*
 		const sink = new Mediabunny.VideoSampleSink(videoTrack);

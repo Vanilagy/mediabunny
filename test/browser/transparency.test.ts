@@ -21,7 +21,7 @@ test('Can decode transparent video', async () => {
 	expect(await videoTrack.canBeTransparent()).toBe(true);
 
 	const sink = new VideoSampleSink(videoTrack);
-	const sample = (await sink.getSample(0.5))!;
+	using sample = (await sink.getSample(0.5))!;
 
 	expect(sample.format).toContain('A'); // Probably RGBA
 	expect(sample.hasAlpha).toBe(true);
@@ -47,10 +47,10 @@ test('Can decode faulty transparent video and behaves gracefully', async () => {
 
 	const sink = new VideoSampleSink(videoTrack);
 
-	const startSample = (await sink.getSample(await videoTrack.getFirstTimestamp()))!;
+	using startSample = (await sink.getSample(await videoTrack.getFirstTimestamp()))!;
 	expect(startSample.format).toContain('A');
 
-	const secondSample = (await sink.getSample(secondKeyPacket.timestamp))!;
+	using secondSample = (await sink.getSample(secondKeyPacket.timestamp))!;
 	expect(secondSample.format).not.toContain('A'); // There was no alpha key frame for this one
 	expect(secondSample.hasAlpha).toBe(false);
 });
@@ -164,7 +164,7 @@ test('Can encode transparent video', async () => {
 
 	const sink = new VideoSampleSink(videoTrack);
 
-	const firstSample = (await sink.getSample(0))!;
+	using firstSample = (await sink.getSample(0))!;
 	expect(firstSample.format).toContain('A');
 
 	probeContext.clearRect(0, 0, probeCanvas.width, probeCanvas.height);
@@ -201,7 +201,7 @@ test('Can encode video with alternating transparency', async () => {
 	await output.start();
 
 	for (let i = 0; i < 64; i++) {
-		const sample = new VideoSample(new Uint8Array(640 * 480 * 4), {
+		using sample = new VideoSample(new Uint8Array(640 * 480 * 4), {
 			format: i % 2 ? 'RGBX' : 'RGBA',
 			codedWidth: 640,
 			codedHeight: 480,
@@ -235,7 +235,7 @@ test('Can encode video with alternating transparency', async () => {
 	const sampleSink = new VideoSampleSink(videoTrack);
 
 	i = 0;
-	for await (const sample of sampleSink.samples()) {
+	for await (using sample of sampleSink.samples()) {
 		if (i % 2) {
 			expect(sample.format).not.toContain('A');
 		} else {
@@ -299,7 +299,7 @@ test('Can transmux transparent video, discards alpha by default', async () => {
 	expect(await videoTrack.canBeTransparent()).toBe(false);
 
 	const sink = new VideoSampleSink(videoTrack);
-	const sample = (await sink.getSample(await videoTrack.getFirstTimestamp()))!;
+	using sample = (await sink.getSample(await videoTrack.getFirstTimestamp()))!;
 	expect(sample.hasAlpha).toBe(false);
 });
 
@@ -331,7 +331,7 @@ test('Can transmux transparent video, can keep alpha', async () => {
 	expect(await videoTrack.canBeTransparent()).toBe(true);
 
 	const sink = new VideoSampleSink(videoTrack);
-	const sample = (await sink.getSample(await videoTrack.getFirstTimestamp()))!;
+	using sample = (await sink.getSample(await videoTrack.getFirstTimestamp()))!;
 	expect(sample.format).toContain('A');
 	expect(sample.hasAlpha).toBe(true);
 });
@@ -370,7 +370,7 @@ test('Can reencode transparent video, keeping alpha', async () => {
 	expect(videoTrack.displayWidth).toBe(320);
 
 	const sink = new VideoSampleSink(videoTrack);
-	const sample = (await sink.getSample(await videoTrack.getFirstTimestamp()))!;
+	using sample = (await sink.getSample(await videoTrack.getFirstTimestamp()))!;
 	expect(sample.format).toContain('A');
 	expect(sample.hasAlpha).toBe(true);
 });

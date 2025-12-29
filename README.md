@@ -17,7 +17,10 @@ Mediabunny is a JavaScript library for reading, writing, and converting media fi
 
 <div align="center">
   <a href="https://remotion.dev/" target="_blank" rel="sponsored">
-    <img src="./docs/public/sponsors/remotion.png" width="60" height="60" alt="Remotion">
+    <picture>
+      <source srcset="./docs/public/sponsors/remotion-dark.png" media="(prefers-color-scheme: dark)">
+      <img src="./docs/public/sponsors/remotion-light.png" width="60" height="60" alt="Remotion">
+    </picture>
   </a>
   &nbsp;&nbsp;&nbsp;&nbsp;
   <a href="https://www.gling.ai/" target="_blank" rel="sponsored">
@@ -38,6 +41,10 @@ Mediabunny is a JavaScript library for reading, writing, and converting media fi
 <div align="center">
   <a href="https://pqina.nl/pintura/" target="_blank" rel="sponsored">
     <img src="./docs/public/sponsors/pintura-labs.png" width="50" height="50" alt="Pintura Labs">
+  </a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://ponder.ai/" target="_blank" rel="sponsored">
+    <img src="./docs/public/sponsors/ponder.png" width="50" height="50" alt="Ponder">
   </a>
 </div>
 

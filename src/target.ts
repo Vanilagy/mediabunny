@@ -62,7 +62,7 @@ export type StreamTargetChunk = {
 	/** The operation type. */
 	type: 'write'; // This ensures automatic compatibility with FileSystemWritableFileStream
 	/** The data to write. */
-	data: Uint8Array;
+	data: Uint8Array<ArrayBuffer>;
 	/** The byte offset in the output file at which to write the data. */
 	position: number;
 };

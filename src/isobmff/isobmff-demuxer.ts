@@ -51,13 +51,13 @@ import {
 	MATRIX_COEFFICIENTS_MAP_INVERSE,
 	normalizeRotation,
 	roundToMultiple,
-	roundToPrecision,
 	Rotation,
 	textDecoder,
 	TransformationMatrix,
 	TRANSFER_CHARACTERISTICS_MAP_INVERSE,
 	UNDETERMINED_LANGUAGE,
 	toDataView,
+	roundIfAlmostInteger,
 } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { buildIsobmffMimeType } from './isobmff-misc';
@@ -86,12 +86,13 @@ import {
 	readU8,
 	readAscii,
 } from '../reader';
-import { MetadataTags, RichImageData } from '../tags';
+import { DEFAULT_TRACK_DISPOSITION, MetadataTags, RichImageData, TrackDisposition } from '../metadata';
 
 type InternalTrack = {
 	id: number;
 	demuxer: IsobmffDemuxer;
 	inputTrack: InputTrack | null;
+	disposition: TrackDisposition;
 	timescale: number;
 	durationInMovieTimescale: number;
 	durationInMediaTimescale: number;
@@ -126,6 +127,7 @@ type InternalTrack = {
 		codec: VideoCodec | null;
 		codecDescription: Uint8Array | null;
 		colorSpace: VideoColorSpaceInit | null;
+		avcType: 1 | 3 | null;
 		avcCodecInfo: AvcDecoderConfigurationRecord | null;
 		hevcCodecInfo: HevcDecoderConfigurationRecord | null;
 		vp9CodecInfo: Vp9CodecInfo | null;
@@ -313,6 +315,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 					this.moovSlice = moovSlice;
 					this.readContiguousBoxes(this.moovSlice);
+
+					// Put default tracks first
+					this.tracks.sort((a, b) => Number(b.disposition.default) - Number(a.disposition.default));
 
 					for (const track of this.tracks) {
 						// Modify the edit list offset based on the previous segment durations. They are in different
@@ -650,6 +655,9 @@ export class IsobmffDemuxer extends Demuxer {
 					id: -1,
 					demuxer: this,
 					inputTrack: null,
+					disposition: {
+						...DEFAULT_TRACK_DISPOSITION,
+					},
 					info: null,
 					timescale: -1,
 					durationInMovieTimescale: -1,
@@ -694,10 +702,10 @@ export class IsobmffDemuxer extends Demuxer {
 				const version = readU8(slice);
 				const flags = readU24Be(slice);
 
-				const trackEnabled = (flags & 0x1) !== 0;
-				if (!trackEnabled) {
-					break;
-				}
+				// Spec says disabled tracks are to be treated like they don't exist, but in practice, they are treated
+				// more like non-default tracks.
+				const trackEnabled = !!(flags & 0x1);
+				track.disposition.default = trackEnabled;
 
 				// Skip over creation & modification time to reach the track ID
 				if (version === 0) {
@@ -836,6 +844,7 @@ export class IsobmffDemuxer extends Demuxer {
 						codec: null,
 						codecDescription: null,
 						colorSpace: null,
+						avcType: null,
 						avcCodecInfo: null,
 						hevcCodecInfo: null,
 						vp9CodecInfo: null,
@@ -890,8 +899,9 @@ export class IsobmffDemuxer extends Demuxer {
 					const lowercaseBoxName = sampleBoxInfo.name.toLowerCase();
 
 					if (track.info.type === 'video') {
-						if (lowercaseBoxName === 'avc1') {
+						if (lowercaseBoxName === 'avc1' || lowercaseBoxName === 'avc3') {
 							track.info.codec = 'avc';
+							track.info.avcType = lowercaseBoxName === 'avc1' ? 1 : 3;
 						} else if (lowercaseBoxName === 'hvc1' || lowercaseBoxName === 'hev1') {
 							track.info.codec = 'hevc';
 						} else if (lowercaseBoxName === 'vp08') {
@@ -2342,6 +2352,10 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		return this.internalTrack.timescale;
 	}
 
+	getDisposition() {
+		return this.internalTrack.disposition;
+	}
+
 	async computeDuration() {
 		const lastPacket = await this.getPacket(Infinity, { metadataOnly: true });
 		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
@@ -2385,7 +2399,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		// Do a little rounding to catch cases where the result is very close to an integer. If it is, it's likely
 		// that the number was originally an integer divided by the timescale. For stability, it's best
 		// to return the integer in this case.
-		return roundToPrecision(timestamp * this.internalTrack.timescale, 14) + this.internalTrack.editListOffset;
+		return roundIfAlmostInteger(timestamp * this.internalTrack.timescale) + this.internalTrack.editListOffset;
 	}
 
 	async getPacket(timestamp: number, options: PacketRetrievalOptions) {
@@ -2475,11 +2489,8 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		const timestampInTimescale = this.mapTimestampIntoTimescale(timestamp);
 
 		const sampleTable = this.internalTrack.demuxer.getSampleTableForTrack(this.internalTrack);
-		const sampleIndex = getSampleIndexForTimestamp(sampleTable, timestampInTimescale);
-		const keyFrameSampleIndex = sampleIndex === -1
-			? -1
-			: getRelevantKeyframeIndexForSample(sampleTable, sampleIndex);
-		const regularPacket = await this.fetchPacketForSampleIndex(keyFrameSampleIndex, options);
+		const sampleIndex = getKeyframeSampleIndexForTimestamp(sampleTable, timestampInTimescale);
+		const regularPacket = await this.fetchPacketForSampleIndex(sampleIndex, options);
 
 		if (!sampleTableIsEmpty(sampleTable) || !this.internalTrack.demuxer.isFragmented) {
 			// Prefer the non-fragmented packet
@@ -2899,7 +2910,45 @@ const getSampleIndexForTimestamp = (sampleTable: SampleTable, timescaleUnits: nu
 
 		const entry = sampleTable.sampleTimingEntries[index]!;
 		return entry.startIndex
-			+ Math.min(Math.floor((timescaleUnits - entry.startDecodeTimestamp) / entry.delta), entry.count - 1);
+			+ Math.min(
+				Math.floor((timescaleUnits - entry.startDecodeTimestamp) / entry.delta),
+				entry.count - 1,
+			);
+	}
+};
+
+const getKeyframeSampleIndexForTimestamp = (sampleTable: SampleTable, timescaleUnits: number) => {
+	if (!sampleTable.keySampleIndices) {
+		// Every sample is a keyframe
+		return getSampleIndexForTimestamp(sampleTable, timescaleUnits);
+	}
+
+	if (sampleTable.presentationTimestamps) {
+		const index = binarySearchLessOrEqual(
+			sampleTable.presentationTimestamps,
+			timescaleUnits,
+			x => x.presentationTimestamp,
+		);
+		if (index === -1) {
+			return -1;
+		}
+
+		// Walk the samples in presentation order until we find one that's a keyframe
+		for (let i = index; i >= 0; i--) {
+			const sampleIndex = sampleTable.presentationTimestamps[i]!.sampleIndex;
+			const isKeyFrame = binarySearchExact(sampleTable.keySampleIndices, sampleIndex, x => x) !== -1;
+
+			if (isKeyFrame) {
+				return sampleIndex;
+			}
+		}
+
+		return -1;
+	} else {
+		const sampleIndex = getSampleIndexForTimestamp(sampleTable, timescaleUnits);
+
+		const index = binarySearchLessOrEqual(sampleTable.keySampleIndices, sampleIndex, x => x);
+		return sampleTable.keySampleIndices[index] ?? -1;
 	}
 };
 
@@ -2986,15 +3035,6 @@ const getSampleInfo = (sampleTable: SampleTable, sampleIndex: number): SampleInf
 			? binarySearchExact(sampleTable.keySampleIndices, sampleIndex, x => x) !== -1
 			: true,
 	};
-};
-
-const getRelevantKeyframeIndexForSample = (sampleTable: SampleTable, sampleIndex: number) => {
-	if (!sampleTable.keySampleIndices) {
-		return sampleIndex;
-	}
-
-	const index = binarySearchLessOrEqual(sampleTable.keySampleIndices, sampleIndex, x => x);
-	return sampleTable.keySampleIndices[index] ?? -1;
 };
 
 const getNextKeyframeIndexForSample = (sampleTable: SampleTable, sampleIndex: number) => {

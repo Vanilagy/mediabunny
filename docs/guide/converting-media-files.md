@@ -120,11 +120,13 @@ type ConversionVideoOptions = {
 	height?: number;
 	fit?: 'fill' | 'contain' | 'cover';
 	rotate?: 0 | 90 | 180 | 270;
+	allowRotationMetadata?: boolean;
 	crop?: { left: number; top: number; width: number; height: number };
 	frameRate?: number;
 	codec?: VideoCodec;
 	bitrate?: number | Quality;
 	alpha?: 'discard' | 'keep'; // Defaults to 'discard'
+	hardwareAcceleration?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
 	keyFrameInterval?: number;
 	forceTranscode?: boolean;
 	process?: (sample: VideoSample) => MaybePromise<
@@ -175,6 +177,8 @@ In the rare case that the input video changes size over time, the `fit` field ca
 
 `rotation` rotates the video by the specified number of degrees clockwise. This rotation is applied on top of any rotation metadata in the original input file and happens before cropping and resizing.
 
+By default, Mediabunny will try to make use of rotation metadata in the output file to perform the rotation whenever possible. However, if you don't want this to happen, or you want to use Mediabunny to strip all rotation metadata from a file, you can set `allowRotationMetadata` to `false`.
+
 ### Cropping video
 
 `crop` can be used to extract a rectangular region from the original video. The rectangle is specified using `left`, `top`, `width` and `height` and is clamped to the dimensions of the video. Cropping is applied after rotation but before resizing.
@@ -190,8 +194,9 @@ Use the `codec` property to control the codec of the output track. This should b
 Use the `bitrate` property to control the bitrate of the output video. For example, you can use this field to compress the video track. Accepted values are the number of bits per second or a [subjective quality](./media-sources#subjective-qualities). If this property is set, transcoding will always happen. If this property is not set but transcoding is still required, `QUALITY_HIGH` will be used as the value.
 
 Use the `keyFrameInterval` property to control the maximum interval in seconds between key frames in the output video. Setting this fields forces a transcode.
-
 If you want to prevent direct copying of media data and force a transcoding step, use `forceTranscode: true`.
+
+Use the `hardwareAcceleration` property to control whether hardware or software acceleration is used for video transcoding.
 
 ### Processing video
 

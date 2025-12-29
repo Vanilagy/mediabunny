@@ -10,7 +10,7 @@ import { AudioCodec } from '../codec';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
-import { MetadataTags } from '../tags';
+import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
 import { PacketRetrievalOptions } from '../media-sink';
 import { assert, AsyncMutex, binarySearchExact, binarySearchLessOrEqual, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
@@ -255,6 +255,12 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 	getSampleRate() {
 		assert(this.demuxer.firstFrameHeader);
 		return this.demuxer.firstFrameHeader.sampleRate;
+	}
+
+	getDisposition() {
+		return {
+			...DEFAULT_TRACK_DISPOSITION,
+		};
 	}
 
 	async getDecoderConfig(): Promise<AudioDecoderConfig> {

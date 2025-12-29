@@ -157,25 +157,25 @@ export const writeBits = (bytes: Uint8Array, start: number, end: number, value: 
 export const toUint8Array = (source: AllowSharedBufferSource): Uint8Array => {
 	if (source.constructor === Uint8Array) { // We want a true Uint8Array, not something that extends it like Buffer
 		return source;
-	} else if (source instanceof ArrayBuffer) {
-		return new Uint8Array(source);
-	} else {
+	} else if (ArrayBuffer.isView(source)) {
 		return new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
+	} else {
+		return new Uint8Array(source);
 	}
 };
 
-export const toDataView = (source: AllowSharedBufferSource) => {
+export const toDataView = (source: AllowSharedBufferSource): DataView => {
 	if (source.constructor === DataView) {
 		return source;
-	} else if (source instanceof ArrayBuffer) {
-		return new DataView(source);
-	} else {
+	} else if (ArrayBuffer.isView(source)) {
 		return new DataView(source.buffer, source.byteOffset, source.byteLength);
+	} else {
+		return new DataView(source);
 	}
 };
 
-export const textDecoder = new TextDecoder();
-export const textEncoder = new TextEncoder();
+export const textDecoder = /* #__PURE__ */ new TextDecoder();
+export const textEncoder = /* #__PURE__ */ new TextEncoder();
 
 export const isIso88591Compatible = (text: string) => {
 	for (let i = 0; i < text.length; i++) {
@@ -201,7 +201,7 @@ export const COLOR_PRIMARIES_MAP = {
 	bt2020: 9, // ITU-R BT.202
 	smpte432: 12, // SMPTE EG 432-1
 };
-export const COLOR_PRIMARIES_MAP_INVERSE = invertObject(COLOR_PRIMARIES_MAP);
+export const COLOR_PRIMARIES_MAP_INVERSE = /* #__PURE__ */ invertObject(COLOR_PRIMARIES_MAP);
 
 export const TRANSFER_CHARACTERISTICS_MAP = {
 	'bt709': 1, // ITU-R BT.709
@@ -211,7 +211,7 @@ export const TRANSFER_CHARACTERISTICS_MAP = {
 	'pq': 16, // Rec. ITU-R BT.2100-2 perceptual quantization (PQ) system
 	'hlg': 18, // Rec. ITU-R BT.2100-2 hybrid loggamma (HLG) system
 };
-export const TRANSFER_CHARACTERISTICS_MAP_INVERSE = invertObject(TRANSFER_CHARACTERISTICS_MAP);
+export const TRANSFER_CHARACTERISTICS_MAP_INVERSE = /* #__PURE__ */ invertObject(TRANSFER_CHARACTERISTICS_MAP);
 
 export const MATRIX_COEFFICIENTS_MAP = {
 	'rgb': 0, // Identity
@@ -220,7 +220,7 @@ export const MATRIX_COEFFICIENTS_MAP = {
 	'smpte170m': 6, // SMPTE 170M
 	'bt2020-ncl': 9, // ITU-R BT.2020-2 (non-constant luminance)
 };
-export const MATRIX_COEFFICIENTS_MAP_INVERSE = invertObject(MATRIX_COEFFICIENTS_MAP);
+export const MATRIX_COEFFICIENTS_MAP_INVERSE = /* #__PURE__ */ invertObject(MATRIX_COEFFICIENTS_MAP);
 
 export type RequiredNonNull<T> = {
 	[K in keyof T]-?: NonNullable<T[K]>;
@@ -486,9 +486,14 @@ export const clamp = (value: number, min: number, max: number) => {
 
 export const UNDETERMINED_LANGUAGE = 'und';
 
-export const roundToPrecision = (value: number, digits: number) => {
-	const factor = 10 ** digits;
-	return Math.round(value * factor) / factor;
+export const roundIfAlmostInteger = (value: number) => {
+	const rounded = Math.round(value);
+
+	if (Math.abs(value / rounded - 1) < 10 * Number.EPSILON) {
+		return rounded;
+	} else {
+		return value;
+	}
 };
 
 export const roundToMultiple = (value: number, multiple: number) => {
@@ -579,6 +584,7 @@ export const retriedFetch = async (
 	url: string | URL | Request,
 	requestInit: RequestInit,
 	getRetryDelay: (previousAttempts: number, error: unknown, url: string | URL | Request) => number | null,
+	shouldStop: () => boolean,
 ) => {
 	let attempts = 0;
 
@@ -586,6 +592,10 @@ export const retriedFetch = async (
 		try {
 			return await fetchFn(url, requestInit);
 		} catch (error) {
+			if (shouldStop()) {
+				throw error;
+			}
+
 			attempts++;
 			const retryDelayInSeconds = getRetryDelay(attempts, error, url);
 
@@ -601,6 +611,10 @@ export const retriedFetch = async (
 
 			if (retryDelayInSeconds > 0) {
 				await new Promise(resolve => setTimeout(resolve, 1000 * retryDelayInSeconds));
+			}
+
+			if (shouldStop()) {
+				throw error;
 			}
 		}
 	}
@@ -665,10 +679,15 @@ export const isWebKit = () => {
 	}
 
 	// This even returns true for WebKit-wrapping browsers such as Chrome on iOS
-	const result = !!(typeof navigator !== 'undefined' && navigator.vendor?.match(/apple/i));
-
-	isWebKitCache = result;
-	return result;
+	return isWebKitCache = !!(
+		typeof navigator !== 'undefined'
+		&& (
+			navigator.vendor?.match(/apple/i)
+			// Or, in workers:
+			|| (/AppleWebKit/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent))
+			|| /\b(iPad|iPhone|iPod)\b/.test(navigator.userAgent)
+		)
+	);
 };
 
 let isFirefoxCache: boolean | null = null;
@@ -678,6 +697,36 @@ export const isFirefox = () => {
 	}
 
 	return isFirefoxCache = typeof navigator !== 'undefined' && navigator.userAgent?.includes('Firefox');
+};
+
+let isChromiumCache: boolean | null = null;
+export const isChromium = () => {
+	if (isChromiumCache !== null) {
+		return isChromiumCache;
+	}
+
+	return isChromiumCache = !!(
+		typeof navigator !== 'undefined'
+		&& (navigator.vendor?.includes('Google Inc') || /Chrome/.test(navigator.userAgent))
+	);
+};
+
+let chromiumVersionCache: number | null = null;
+export const getChromiumVersion = () => {
+	if (chromiumVersionCache !== null) {
+		return chromiumVersionCache;
+	}
+
+	if (typeof navigator === 'undefined') {
+		return null;
+	}
+
+	const match = /\bChrome\/(\d+)/.exec(navigator.userAgent);
+	if (!match) {
+		return null;
+	}
+
+	return chromiumVersionCache = Number(match[1]!);
 };
 
 /**

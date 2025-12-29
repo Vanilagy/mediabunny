@@ -14,6 +14,7 @@ import { EncodedPacketSink, PacketRetrievalOptions } from './media-sink';
 import { assert, Rotation } from './misc';
 import { TrackType } from './output';
 import { EncodedPacket, PacketType } from './packet';
+import { TrackDisposition } from './metadata';
 
 /**
  * Contains aggregate statistics about the encoded packets of a track.
@@ -36,6 +37,7 @@ export interface InputTrackBacking {
 	getName(): string | null;
 	getLanguageCode(): string;
 	getTimeResolution(): number;
+	getDisposition(): TrackDisposition;
 	getFirstTimestamp(): Promise<number>;
 	computeDuration(): Promise<number>;
 
@@ -126,6 +128,11 @@ export abstract class InputTrack {
 	 */
 	get timeResolution() {
 		return this._backing.getTimeResolution();
+	}
+
+	/** The track's disposition, i.e. information about its intended usage. */
+	get disposition() {
+		return this._backing.getDisposition();
 	}
 
 	/**

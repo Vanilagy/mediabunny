@@ -48,7 +48,7 @@ import {
 import { Output, TrackType } from './output';
 import { Mp4OutputFormat } from './output-format';
 import { AudioSample, clampCropRectangle, validateCropRectangle, VideoSample } from './sample';
-import { MetadataTags, validateMetadataTags } from './tags';
+import { MetadataTags, validateMetadataTags } from './metadata';
 import { NullTarget } from './target';
 
 /**
@@ -82,10 +82,16 @@ export type ConversionOptions = {
 
 	/** Options to trim the input file. */
 	trim?: {
-		/** The time in the input file in seconds at which the output file should start. Must be less than `end`.  */
-		start: number;
-		/** The time in the input file in seconds at which the output file should end. Must be greater than `start`. */
-		end: number;
+		/**
+		 * The time in the input file in seconds at which the output file should start. Must be less than `end`.
+		 * Defaults to 0 when omitted.
+		 */
+		start?: number;
+		/**
+		 * The time in the input file in seconds at which the output file should end. Must be greater than `start`.
+		 * Defaults to the duration of the input when omitted.
+		 */
+		end?: number;
 	};
 
 	/**
@@ -138,6 +144,12 @@ export type ConversionVideoOptions = {
 	 */
 	rotate?: Rotation;
 	/**
+	 * Defaults to `true`. When enabaled, Mediabunny will use the rotation metadata in the output file to perform video
+	 * rotation whenever possible. Set this field to `false` if you want to ensure the output file does not make use of
+	 * rotation metadata and that any rotation is baked into the video frames directly.
+	 */
+	allowRotationMetadata?: boolean;
+	/**
 	 * Specifies the rectangular region of the input video to crop to. The crop region will automatically be clamped to
 	 * the dimensions of the input video track. Cropping is performed after rotation but before resizing.
 	 */
@@ -174,6 +186,11 @@ export type ConversionVideoOptions = {
 	 * Setting this fields forces a transcode.
 	 */
 	keyFrameInterval?: number;
+	/**
+	 * A hint that configures the hardware acceleration method used when transcoding. This is best left on
+	 * `'no-preference'`, the default.
+	 */
+	hardwareAcceleration?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
 	/** When `true`, video will always be re-encoded instead of directly copying over the encoded samples. */
 	forceTranscode?: boolean;
 	/**
@@ -298,6 +315,9 @@ const validateVideoOptions = (videoOptions: ConversionVideoOptions | undefined) 
 	if (videoOptions?.rotate !== undefined && ![0, 90, 180, 270].includes(videoOptions.rotate)) {
 		throw new TypeError('options.video.rotate, when provided, must be 0, 90, 180 or 270.');
 	}
+	if (videoOptions?.allowRotationMetadata !== undefined && typeof videoOptions.allowRotationMetadata !== 'boolean') {
+		throw new TypeError('options.video.allowRotationMetadata, when provided, must be a boolean.');
+	}
 	if (videoOptions?.crop !== undefined) {
 		validateCropRectangle(videoOptions.crop, 'options.video.');
 	}
@@ -330,6 +350,15 @@ const validateVideoOptions = (videoOptions: ConversionVideoOptions | undefined) 
 		&& (!Number.isInteger(videoOptions.processedHeight) || videoOptions.processedHeight <= 0)
 	) {
 		throw new TypeError('options.video.processedHeight, when provided, must be a positive integer.');
+	}
+	if (
+		videoOptions?.hardwareAcceleration !== undefined
+		&& !['no-preference', 'prefer-hardware', 'prefer-software'].includes(videoOptions.hardwareAcceleration)
+	) {
+		throw new TypeError(
+			'options.video.hardwareAcceleration, when provided, must be \'no-preference\', \'prefer-hardware\' or'
+			+ ' \'prefer-software\'.',
+		);
 	}
 };
 
@@ -832,7 +861,8 @@ export class Conversion {
 		let videoSource: VideoSource;
 
 		const totalRotation = normalizeRotation(track.rotation + (trackOptions.rotate ?? 0));
-		const outputSupportsRotation = this.output.format.supportsVideoRotationMetadata;
+		const canUseRotationMetadata = this.output.format.supportsVideoRotationMetadata
+			&& (trackOptions.allowRotationMetadata ?? true);
 
 		const [rotatedWidth, rotatedHeight] = totalRotation % 180 === 0
 			? [track.codedWidth, track.codedHeight]
@@ -877,7 +907,7 @@ export class Conversion {
 			// TODO This is suboptimal: Forcing a rerender when both rotation and process are set is not
 			// performance-optimal, but right now there's no other way because we can't change the track rotation
 			// metadata after the output has already started. Should be possible with API changes in v2, though!
-			|| (totalRotation !== 0 && (!outputSupportsRotation || trackOptions.process !== undefined))
+			|| (totalRotation !== 0 && (!canUseRotationMetadata || trackOptions.process !== undefined))
 			|| !!crop;
 
 		const alpha = trackOptions.alpha ?? 'discard';
@@ -968,6 +998,7 @@ export class Conversion {
 				keyFrameInterval: trackOptions.keyFrameInterval,
 				sizeChangeBehavior: trackOptions.fit ?? 'passThrough',
 				alpha,
+				hardwareAcceleration: trackOptions.hardwareAcceleration,
 			};
 
 			const source = new VideoSampleSource(encodingConfig);
@@ -1043,6 +1074,7 @@ export class Conversion {
 								duration: 1 / frameRate,
 							});
 							await this._registerVideoSample(track, trackOptions, source, sample);
+							sample.close();
 						}
 					};
 
@@ -1079,12 +1111,11 @@ export class Conversion {
 							duration: frameRate !== undefined ? 1 / frameRate : duration,
 						});
 						await this._registerVideoSample(track, trackOptions, source, sample);
+						sample.close();
 
 						if (frameRate !== undefined) {
 							lastCanvas = canvas;
 							lastCanvasTimestamp = adjustedSampleTimestamp;
-						} else {
-							sample.close();
 						}
 					}
 
@@ -1184,9 +1215,10 @@ export class Conversion {
 
 		this.output.addVideoTrack(videoSource, {
 			frameRate: trackOptions.frameRate,
-			// TEMP: This condition can be removed when all demuxers properly homogenize to BCP47 in v2
+			// TODO: This condition can be removed when all demuxers properly homogenize to BCP47 in v2
 			languageCode: isIso639Dash2LanguageCode(track.languageCode) ? track.languageCode : undefined,
 			name: track.name ?? undefined,
+			disposition: track.disposition,
 			rotation: needsRerender ? 0 : totalRotation, // Rerendering will bake the rotation into the output
 		});
 		this._addedCounts.video++;
@@ -1423,9 +1455,10 @@ export class Conversion {
 		}
 
 		this.output.addAudioTrack(audioSource, {
-			// TEMP: This condition can be removed when all demuxers properly homogenize to BCP47 in v2
+			// TODO: This condition can be removed when all demuxers properly homogenize to BCP47 in v2
 			languageCode: isIso639Dash2LanguageCode(track.languageCode) ? track.languageCode : undefined,
 			name: track.name ?? undefined,
+			disposition: track.disposition,
 		});
 		this._addedCounts.audio++;
 		this._totalTrackCount++;
@@ -1507,7 +1540,10 @@ export class Conversion {
 				targetSampleRate,
 				startTime: this._startTimestamp,
 				endTime: this._endTimestamp,
-				onSample: sample => this._registerAudioSample(track, trackOptions, source, sample),
+				onSample: async (sample) => {
+					await this._registerAudioSample(track, trackOptions, source, sample);
+					sample.close();
+				},
 			});
 
 			const sink = new AudioSampleSink(track);
@@ -1519,6 +1555,7 @@ export class Conversion {
 				}
 
 				await resampler.add(sample);
+				sample.close();
 			}
 
 			await resampler.finalize();

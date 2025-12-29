@@ -337,6 +337,7 @@ export const extractVideoCodecString = (trackInfo: {
 	codec: VideoCodec | null;
 	codecDescription: Uint8Array | null;
 	colorSpace: VideoColorSpaceInit | null;
+	avcType: 1 | 3 | null;
 	avcCodecInfo: AvcDecoderConfigurationRecord | null;
 	hevcCodecInfo: HevcDecoderConfigurationRecord | null;
 	vp9CodecInfo: Vp9CodecInfo | null;
@@ -345,6 +346,8 @@ export const extractVideoCodecString = (trackInfo: {
 	const { codec, codecDescription, colorSpace, avcCodecInfo, hevcCodecInfo, vp9CodecInfo, av1CodecInfo } = trackInfo;
 
 	if (codec === 'avc') {
+		assert(trackInfo.avcType !== null);
+
 		if (avcCodecInfo) {
 			const bytes = new Uint8Array([
 				avcCodecInfo.avcProfileIndication,
@@ -352,14 +355,14 @@ export const extractVideoCodecString = (trackInfo: {
 				avcCodecInfo.avcLevelIndication,
 			]);
 
-			return `avc1.${bytesToHexString(bytes)}`;
+			return `avc${trackInfo.avcType}.${bytesToHexString(bytes)}`;
 		}
 
 		if (!codecDescription || codecDescription.byteLength < 4) {
 			throw new TypeError('AVC decoder description is not provided or is not at least 4 bytes long.');
 		}
 
-		return `avc1.${bytesToHexString(codecDescription.subarray(1, 4))}`;
+		return `avc${trackInfo.avcType}.${bytesToHexString(codecDescription.subarray(1, 4))}`;
 	} else if (codec === 'hevc') {
 		let generalProfileSpace: number;
 		let generalProfileIdc: number;

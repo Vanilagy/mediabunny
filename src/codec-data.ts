@@ -22,9 +22,12 @@ import {
 	textEncoder,
 	toDataView,
 	toUint8Array,
+	getChromiumVersion,
+	isChromium,
+	setUint24,
 } from './misc';
 import { PacketType } from './packet';
-import { MetadataTags } from './tags';
+import { MetadataTags } from './metadata';
 
 // References for AVC/HEVC code:
 // ISO 14496-15
@@ -34,6 +37,7 @@ import { MetadataTags } from './tags';
 
 export enum AvcNalUnitType {
 	IDR = 5,
+	SEI = 6,
 	SPS = 7,
 	PPS = 8,
 	SPS_EXT = 13,
@@ -158,38 +162,54 @@ const removeEmulationPreventionBytes = (data: Uint8Array) => {
 	return new Uint8Array(result);
 };
 
-/** Converts an AVC packet in Annex B format to length-prefixed format. */
-export const transformAnnexBToLengthPrefixed = (packetData: Uint8Array) => {
-	const NAL_UNIT_LENGTH_SIZE = 4;
+const ANNEX_B_START_CODE = new Uint8Array([0, 0, 0, 1]);
 
-	const nalUnits = findNalUnitsInAnnexB(packetData);
-
-	if (nalUnits.length === 0) {
-		// If no NAL units were found, it's not valid Annex B data
-		return null;
-	}
-
-	let totalSize = 0;
-	for (const nalUnit of nalUnits) {
-		totalSize += NAL_UNIT_LENGTH_SIZE + nalUnit.byteLength;
-	}
-
-	const avccData = new Uint8Array(totalSize);
-	const dataView = new DataView(avccData.buffer);
+export const concatNalUnitsInAnnexB = (nalUnits: Uint8Array[]) => {
+	const totalLength = nalUnits.reduce((a, b) => a + ANNEX_B_START_CODE.byteLength + b.byteLength, 0);
+	const result = new Uint8Array(totalLength);
 	let offset = 0;
 
-	// Write each NAL unit with its length prefix
 	for (const nalUnit of nalUnits) {
-		const length = nalUnit.byteLength;
+		result.set(ANNEX_B_START_CODE, offset);
+		offset += ANNEX_B_START_CODE.byteLength;
 
-		dataView.setUint32(offset, length, false);
-		offset += 4;
-
-		avccData.set(nalUnit, offset);
+		result.set(nalUnit, offset);
 		offset += nalUnit.byteLength;
 	}
 
-	return avccData;
+	return result;
+};
+
+export const concatNalUnitsInLengthPrefixed = (nalUnits: Uint8Array[], lengthSize: 1 | 2 | 3 | 4) => {
+	const totalLength = nalUnits.reduce((a, b) => a + lengthSize + b.byteLength, 0);
+	const result = new Uint8Array(totalLength);
+	let offset = 0;
+
+	for (const nalUnit of nalUnits) {
+		const dataView = new DataView(result.buffer, result.byteOffset, result.byteLength);
+
+		switch (lengthSize) {
+			case 1:
+				dataView.setUint8(offset, nalUnit.byteLength);
+				break;
+			case 2:
+				dataView.setUint16(offset, nalUnit.byteLength, false);
+				break;
+			case 3:
+				setUint24(dataView, offset, nalUnit.byteLength, false);
+				break;
+			case 4:
+				dataView.setUint32(offset, nalUnit.byteLength, false);
+				break;
+		}
+
+		offset += lengthSize;
+
+		result.set(nalUnit, offset);
+		offset += nalUnit.byteLength;
+	}
+
+	return result;
 };
 
 // Data specified in ISO 14496-15
@@ -224,12 +244,27 @@ export const extractAvcNalUnits = (packetData: Uint8Array, decoderConfig: VideoD
 	}
 };
 
-const extractNalUnitTypeForAvc = (data: Uint8Array) => {
+export const concatAvcNalUnits = (nalUnits: Uint8Array[], decoderConfig: VideoDecoderConfig) => {
+	if (decoderConfig.description) {
+		// Stream is length-prefixed. Let's extract the size of the length prefix from the decoder config
+
+		const bytes = toUint8Array(decoderConfig.description);
+		const lengthSizeMinusOne = bytes[4]! & 0b11;
+		const lengthSize = (lengthSizeMinusOne + 1) as 1 | 2 | 3 | 4;
+
+		return concatNalUnitsInLengthPrefixed(nalUnits, lengthSize);
+	} else {
+		// Stream is in Annex B format
+		return concatNalUnitsInAnnexB(nalUnits);
+	}
+};
+
+export const extractNalUnitTypeForAvc = (data: Uint8Array) => {
 	return data[0]! & 0x1F;
 };
 
 /** Builds an AvcDecoderConfigurationRecord from an AVC packet in Annex B format. */
-export const extractAvcDecoderConfigurationRecord = (packetData: Uint8Array) => {
+export const extractAvcDecoderConfigurationRecord = (packetData: Uint8Array): AvcDecoderConfigurationRecord | null => {
 	try {
 		const nalUnits = findNalUnitsInAnnexB(packetData);
 
@@ -247,60 +282,27 @@ export const extractAvcDecoderConfigurationRecord = (packetData: Uint8Array) => 
 
 		// Let's get the first SPS for profile and level information
 		const spsData = spsUnits[0]!;
-		const bitstream = new Bitstream(removeEmulationPreventionBytes(spsData));
+		const spsInfo = parseAvcSps(spsData);
+		assert(spsInfo !== null);
 
-		bitstream.skipBits(1); // forbidden_zero_bit
-		bitstream.skipBits(2); // nal_ref_idc
-		const nal_unit_type = bitstream.readBits(5);
+		const hasExtendedData = spsInfo.profileIdc === 100
+			|| spsInfo.profileIdc === 110
+			|| spsInfo.profileIdc === 122
+			|| spsInfo.profileIdc === 144;
 
-		if (nal_unit_type !== 7) { // SPS NAL unit type is 7
-			console.error('Invalid SPS NAL unit type');
-			return null;
-		}
-
-		const profile_idc = bitstream.readAlignedByte();
-		const constraint_flags = bitstream.readAlignedByte();
-		const level_idc = bitstream.readAlignedByte();
-
-		const record: AvcDecoderConfigurationRecord = {
+		return {
 			configurationVersion: 1,
-			avcProfileIndication: profile_idc,
-			profileCompatibility: constraint_flags,
-			avcLevelIndication: level_idc,
+			avcProfileIndication: spsInfo.profileIdc,
+			profileCompatibility: spsInfo.constraintFlags,
+			avcLevelIndication: spsInfo.levelIdc,
 			lengthSizeMinusOne: 3, // Typically 4 bytes for length field
 			sequenceParameterSets: spsUnits,
 			pictureParameterSets: ppsUnits,
-			chromaFormat: null,
-			bitDepthLumaMinus8: null,
-			bitDepthChromaMinus8: null,
-			sequenceParameterSetExt: null,
+			chromaFormat: hasExtendedData ? spsInfo.chromaFormatIdc : null,
+			bitDepthLumaMinus8: hasExtendedData ? spsInfo.bitDepthLumaMinus8 : null,
+			bitDepthChromaMinus8: hasExtendedData ? spsInfo.bitDepthChromaMinus8 : null,
+			sequenceParameterSetExt: hasExtendedData ? spsExtUnits : null,
 		};
-
-		if (
-			profile_idc === 100
-			|| profile_idc === 110
-			|| profile_idc === 122
-			|| profile_idc === 144
-		) {
-			readExpGolomb(bitstream); // seq_parameter_set_id
-
-			const chroma_format_idc = readExpGolomb(bitstream);
-
-			if (chroma_format_idc === 3) {
-				bitstream.skipBits(1); // separate_colour_plane_flag
-			}
-
-			const bit_depth_luma_minus8 = readExpGolomb(bitstream);
-
-			const bit_depth_chroma_minus8 = readExpGolomb(bitstream);
-
-			record.chromaFormat = chroma_format_idc;
-			record.bitDepthLumaMinus8 = bit_depth_luma_minus8;
-			record.bitDepthChromaMinus8 = bit_depth_chroma_minus8;
-			record.sequenceParameterSetExt = spsExtUnits;
-		}
-
-		return record;
 	} catch (error) {
 		console.error('Error building AVC Decoder Configuration Record:', error);
 		return null;
@@ -377,6 +379,206 @@ export const serializeAvcDecoderConfigurationRecord = (record: AvcDecoderConfigu
 	return new Uint8Array(bytes);
 };
 
+/** Deserializes an AvcDecoderConfigurationRecord from the format specified in Section 5.3.3.1 of ISO 14496-15. */
+export const deserializeAvcDecoderConfigurationRecord = (data: Uint8Array): AvcDecoderConfigurationRecord | null => {
+	try {
+		const view = toDataView(data);
+		let offset = 0;
+
+		// Read header
+		const configurationVersion = view.getUint8(offset++);
+		const avcProfileIndication = view.getUint8(offset++);
+		const profileCompatibility = view.getUint8(offset++);
+		const avcLevelIndication = view.getUint8(offset++);
+		const lengthSizeMinusOne = view.getUint8(offset++) & 0x03;
+
+		const numOfSequenceParameterSets = view.getUint8(offset++) & 0x1F;
+
+		// Read SPS
+		const sequenceParameterSets: Uint8Array[] = [];
+		for (let i = 0; i < numOfSequenceParameterSets; i++) {
+			const length = view.getUint16(offset, false);
+			offset += 2;
+
+			sequenceParameterSets.push(data.subarray(offset, offset + length));
+			offset += length;
+		}
+
+		const numOfPictureParameterSets = view.getUint8(offset++);
+
+		// Read PPS
+		const pictureParameterSets: Uint8Array[] = [];
+		for (let i = 0; i < numOfPictureParameterSets; i++) {
+			const length = view.getUint16(offset, false);
+			offset += 2;
+
+			pictureParameterSets.push(data.subarray(offset, offset + length));
+			offset += length;
+		}
+
+		const record: AvcDecoderConfigurationRecord = {
+			configurationVersion,
+			avcProfileIndication,
+			profileCompatibility,
+			avcLevelIndication,
+			lengthSizeMinusOne,
+			sequenceParameterSets,
+			pictureParameterSets,
+			chromaFormat: null,
+			bitDepthLumaMinus8: null,
+			bitDepthChromaMinus8: null,
+			sequenceParameterSetExt: null,
+		};
+
+		// Check if there are extended profile fields
+		if (
+			(
+				avcProfileIndication === 100
+				|| avcProfileIndication === 110
+				|| avcProfileIndication === 122
+				|| avcProfileIndication === 144
+			)
+			&& offset + 4 <= data.length
+		) {
+			const chromaFormat = view.getUint8(offset++) & 0x03;
+			const bitDepthLumaMinus8 = view.getUint8(offset++) & 0x07;
+			const bitDepthChromaMinus8 = view.getUint8(offset++) & 0x07;
+			const numOfSequenceParameterSetExt = view.getUint8(offset++);
+
+			record.chromaFormat = chromaFormat;
+			record.bitDepthLumaMinus8 = bitDepthLumaMinus8;
+			record.bitDepthChromaMinus8 = bitDepthChromaMinus8;
+
+			// Read SPS Ext
+			const sequenceParameterSetExt: Uint8Array[] = [];
+			for (let i = 0; i < numOfSequenceParameterSetExt; i++) {
+				const length = view.getUint16(offset, false);
+				offset += 2;
+
+				sequenceParameterSetExt.push(data.subarray(offset, offset + length));
+				offset += length;
+			}
+
+			record.sequenceParameterSetExt = sequenceParameterSetExt;
+		}
+
+		return record;
+	} catch (error) {
+		console.error('Error deserializing AVC Decoder Configuration Record:', error);
+		return null;
+	}
+};
+
+export type AvcSpsInfo = {
+	profileIdc: number;
+	constraintFlags: number;
+	levelIdc: number;
+	frameMbsOnlyFlag: number;
+	chromaFormatIdc: number | null;
+	bitDepthLumaMinus8: number | null;
+	bitDepthChromaMinus8: number | null;
+};
+
+/** Parses an AVC SPS (Sequence Parameter Set) to extract basic information. */
+export const parseAvcSps = (sps: Uint8Array): AvcSpsInfo | null => {
+	try {
+		const bitstream = new Bitstream(removeEmulationPreventionBytes(sps));
+
+		bitstream.skipBits(1); // forbidden_zero_bit
+		bitstream.skipBits(2); // nal_ref_idc
+		const nalUnitType = bitstream.readBits(5);
+
+		if (nalUnitType !== 7) { // SPS NAL unit type is 7
+			return null;
+		}
+
+		const profileIdc = bitstream.readAlignedByte();
+		const constraintFlags = bitstream.readAlignedByte();
+		const levelIdc = bitstream.readAlignedByte();
+
+		readExpGolomb(bitstream); // seq_parameter_set_id
+
+		let chromaFormatIdc: number | null = null;
+		let bitDepthLumaMinus8: number | null = null;
+		let bitDepthChromaMinus8: number | null = null;
+
+		// Handle high profile chroma_format_idc
+		if (
+			profileIdc === 100
+			|| profileIdc === 110
+			|| profileIdc === 122
+			|| profileIdc === 244
+			|| profileIdc === 44
+			|| profileIdc === 83
+			|| profileIdc === 86
+			|| profileIdc === 118
+			|| profileIdc === 128
+		) {
+			chromaFormatIdc = readExpGolomb(bitstream);
+			if (chromaFormatIdc === 3) {
+				bitstream.skipBits(1); // separate_colour_plane_flag
+			}
+			bitDepthLumaMinus8 = readExpGolomb(bitstream);
+			bitDepthChromaMinus8 = readExpGolomb(bitstream);
+			bitstream.skipBits(1); // qpprime_y_zero_transform_bypass_flag
+			const seqScalingMatrixPresentFlag = bitstream.readBits(1);
+			if (seqScalingMatrixPresentFlag) {
+				for (let i = 0; i < (chromaFormatIdc !== 3 ? 8 : 12); i++) {
+					const seqScalingListPresentFlag = bitstream.readBits(1);
+					if (seqScalingListPresentFlag) {
+						const sizeOfScalingList = i < 6 ? 16 : 64;
+						let lastScale = 8;
+						let nextScale = 8;
+						for (let j = 0; j < sizeOfScalingList; j++) {
+							if (nextScale !== 0) {
+								const deltaScale = readSignedExpGolomb(bitstream);
+								nextScale = (lastScale + deltaScale + 256) % 256;
+							}
+							lastScale = nextScale === 0 ? lastScale : nextScale;
+						}
+					}
+				}
+			}
+		}
+
+		readExpGolomb(bitstream); // log2_max_frame_num_minus4
+
+		const picOrderCntType = readExpGolomb(bitstream);
+		if (picOrderCntType === 0) {
+			readExpGolomb(bitstream); // log2_max_pic_order_cnt_lsb_minus4
+		} else if (picOrderCntType === 1) {
+			bitstream.skipBits(1); // delta_pic_order_always_zero_flag
+			readSignedExpGolomb(bitstream); // offset_for_non_ref_pic
+			readSignedExpGolomb(bitstream); // offset_for_top_to_bottom_field
+			const numRefFramesInPicOrderCntCycle = readExpGolomb(bitstream);
+			for (let i = 0; i < numRefFramesInPicOrderCntCycle; i++) {
+				readSignedExpGolomb(bitstream); // offset_for_ref_frame[i]
+			}
+		}
+
+		readExpGolomb(bitstream); // max_num_ref_frames
+		bitstream.skipBits(1); // gaps_in_frame_num_value_allowed_flag
+
+		readExpGolomb(bitstream); // pic_width_in_mbs_minus1
+		readExpGolomb(bitstream); // pic_height_in_map_units_minus1
+
+		const frameMbsOnlyFlag = bitstream.readBits(1);
+
+		return {
+			profileIdc,
+			constraintFlags,
+			levelIdc,
+			frameMbsOnlyFlag,
+			chromaFormatIdc,
+			bitDepthLumaMinus8,
+			bitDepthChromaMinus8,
+		};
+	} catch (error) {
+		console.error('Error parsing AVC SPS:', error);
+		return null;
+	}
+};
+
 // Data specified in ISO 14496-15
 export type HevcDecoderConfigurationRecord = {
 	configurationVersion: number;
@@ -423,9 +625,7 @@ export const extractNalUnitTypeForHevc = (data: Uint8Array) => {
 };
 
 /** Builds a HevcDecoderConfigurationRecord from an HEVC packet in Annex B format. */
-export const extractHevcDecoderConfigurationRecord = (
-	packetData: Uint8Array,
-) => {
+export const extractHevcDecoderConfigurationRecord = (packetData: Uint8Array) => {
 	try {
 		const nalUnits = findNalUnitsInAnnexB(packetData);
 
@@ -1289,6 +1489,69 @@ export const extractAv1CodecInfoFromPacket = (
 			}
 		}
 
+		// Frame size
+		const frameWidthBitsMinus1 = bitstream.readBits(4);
+		const frameHeightBitsMinus1 = bitstream.readBits(4);
+		const n1 = frameWidthBitsMinus1 + 1;
+		bitstream.skipBits(n1); // max_frame_width_minus_1
+		const n2 = frameHeightBitsMinus1 + 1;
+		bitstream.skipBits(n2); // max_frame_height_minus_1
+
+		// Frame IDs
+		let frameIdNumbersPresentFlag = 0;
+		if (reducedStillPictureHeader) {
+			frameIdNumbersPresentFlag = 0;
+		} else {
+			frameIdNumbersPresentFlag = bitstream.readBits(1);
+		}
+
+		if (frameIdNumbersPresentFlag) {
+			bitstream.skipBits(4); // delta_frame_id_length_minus_2
+			bitstream.skipBits(3); // additional_frame_id_length_minus_1
+		}
+
+		bitstream.skipBits(1); // use_128x128_superblock
+		bitstream.skipBits(1); // enable_filter_intra
+		bitstream.skipBits(1); // enable_intra_edge_filter
+
+		if (!reducedStillPictureHeader) {
+			bitstream.skipBits(1); // enable_interintra_compound
+			bitstream.skipBits(1); // enable_masked_compound
+			bitstream.skipBits(1); // enable_warped_motion
+			bitstream.skipBits(1); // enable_dual_filter
+			const enableOrderHint = bitstream.readBits(1);
+
+			if (enableOrderHint) {
+				bitstream.skipBits(1); // enable_jnt_comp
+				bitstream.skipBits(1); // enable_ref_frame_mvs
+			}
+
+			const seqChooseScreenContentTools = bitstream.readBits(1);
+			let seqForceScreenContentTools = 0;
+
+			if (seqChooseScreenContentTools) {
+				seqForceScreenContentTools = 2; // SELECT_SCREEN_CONTENT_TOOLS
+			} else {
+				seqForceScreenContentTools = bitstream.readBits(1);
+			}
+
+			if (seqForceScreenContentTools > 0) {
+				const seqChooseIntegerMv = bitstream.readBits(1);
+				if (!seqChooseIntegerMv) {
+					bitstream.skipBits(1); // seq_force_integer_mv
+				}
+			}
+
+			if (enableOrderHint) {
+				bitstream.skipBits(3); // order_hint_bits_minus_1
+			}
+		}
+
+		bitstream.skipBits(1); // enable_superres
+		bitstream.skipBits(1); // enable_cdef
+		bitstream.skipBits(1); // enable_restoration
+
+		// color_config()
 		const highBitdepth = bitstream.readBits(1);
 
 		let bitDepth = 8;
@@ -1486,7 +1749,68 @@ export const determineVideoPacketType = (
 	switch (codec) {
 		case 'avc': {
 			const nalUnits = extractAvcNalUnits(packetData, decoderConfig);
-			const isKeyframe = nalUnits.some(x => extractNalUnitTypeForAvc(x) === AvcNalUnitType.IDR);
+			let isKeyframe = nalUnits.some(x => extractNalUnitTypeForAvc(x) === AvcNalUnitType.IDR);
+
+			if (!isKeyframe && (!isChromium() || getChromiumVersion()! >= 144)) {
+				// In addition to IDR, Recovery Point SEI also counts as a valid H.264 keyframe by current consensus.
+				// See https://github.com/w3c/webcodecs/issues/650 for the relevant discussion. WebKit and Firefox have
+				// always supported them, but Chromium hasn't, therefore the (admittedly dirty) version check.
+
+				for (const nalUnit of nalUnits) {
+					const type = extractNalUnitTypeForAvc(nalUnit);
+					if (type !== AvcNalUnitType.SEI) {
+						continue;
+					}
+
+					const bytes = removeEmulationPreventionBytes(nalUnit);
+					let pos = 1; // Skip NALU header
+
+					// sei_rbsp()
+					do {
+						// sei_message()
+						let payloadType = 0;
+						while (true) {
+							const nextByte = bytes[pos++];
+							if (nextByte === undefined) break;
+							payloadType += nextByte;
+
+							if (nextByte < 255) {
+								break;
+							}
+						}
+
+						let payloadSize = 0;
+						while (true) {
+							const nextByte = bytes[pos++];
+							if (nextByte === undefined) break;
+							payloadSize += nextByte;
+
+							if (nextByte < 255) {
+								break;
+							}
+						}
+
+						// sei_payload()
+						const PAYLOAD_TYPE_RECOVERY_POINT = 6;
+						if (payloadType === PAYLOAD_TYPE_RECOVERY_POINT) {
+							const bitstream = new Bitstream(bytes);
+							bitstream.pos = 8 * pos;
+
+							const recoveryFrameCount = readExpGolomb(bitstream);
+							const exactMatchFlag = bitstream.readBits(1);
+
+							if (recoveryFrameCount === 0 && exactMatchFlag === 1) {
+								// https://github.com/w3c/webcodecs/pull/910
+								// "recovery_frame_cnt == 0 and exact_match_flag=1 in the SEI recovery payload"
+								isKeyframe = true;
+								break;
+							}
+						}
+
+						pos += payloadSize;
+					} while (pos < bytes.length - 1);
+				}
+			}
 
 			return isKeyframe ? 'key' : 'delta';
 		};

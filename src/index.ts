@@ -168,7 +168,10 @@ export {
 	AudioSampleCopyToOptions,
 	VideoSample,
 	VideoSampleInit,
+	VideoSamplePixelFormat,
+	VideoSampleColorSpace,
 	CropRectangle,
+	VIDEO_SAMPLE_PIXEL_FORMATS,
 } from './sample';
 export {
 	AudioBufferSink,
@@ -202,6 +205,7 @@ export {
 	AttachedImage,
 	RichImageData,
 	AttachedFile,
-} from './tags';
+	TrackDisposition,
+} from './metadata';
 
 // 🐡🦔

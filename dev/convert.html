@@ -58,6 +58,7 @@
 			audio: (_, n) => ({
 				discard: n > 1,
 				//codec: 'opus',
+				//codec: 'opus',
 				/*
 				process: (sample) => {
 					return sample;
@@ -99,7 +100,12 @@
 			},
 			*/
 			video: () => ({
+				allowRotationMetadata: false,
+				//width: 720,
+				//frameRate: 30,
+				//bitrate: Mediabunny.QUALITY_VERY_LOW,
 				//discard: true,
+				/*
 				process: (sample) => {
 					if (!ctx) {
 						// Create a canvas for image compositing
@@ -118,6 +124,7 @@
 
 					return ctx.canvas;
 				},
+				*/
 				//width: 300,
 				//alpha: 'keep',
 				//width: 320,
@@ -173,8 +180,8 @@
 				}
 			},
 			trim: {
-				//start: 0,
-				//end: 10
+				start: 0,
+				end: 4
 			},
 		});
 		console.log(conversion);

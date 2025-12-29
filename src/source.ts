@@ -102,10 +102,17 @@ export class BufferSource extends Source {
 	/** @internal */
 	_onreadCalled = false;
 
-	/** Creates a new {@link BufferSource} backed the specified `ArrayBuffer` or `ArrayBufferView`. */
-	constructor(buffer: ArrayBuffer | ArrayBufferView) {
-		if (!(buffer instanceof ArrayBuffer) && !ArrayBuffer.isView(buffer)) {
-			throw new TypeError('buffer must be an ArrayBuffer or ArrayBufferView.');
+	/**
+	 * Creates a new {@link BufferSource} backed by the specified `ArrayBuffer`, `SharedArrayBuffer`,
+	 * or `ArrayBufferView`.
+	 */
+	constructor(buffer: AllowSharedBufferSource) {
+		if (
+			!(buffer instanceof ArrayBuffer)
+			&& !(typeof SharedArrayBuffer !== 'undefined' && buffer instanceof SharedArrayBuffer)
+			&& !ArrayBuffer.isView(buffer)
+		) {
+			throw new TypeError('buffer must be an ArrayBuffer, SharedArrayBuffer, or ArrayBufferView.');
 		}
 
 		super();
@@ -234,12 +241,7 @@ export class BlobSource extends Source {
 				const { done, value } = await reader.read();
 				if (done) {
 					this._orchestrator.forgetWorker(worker);
-
-					if (worker.currentPos < worker.targetPos) { // I think this `if` should always hit?
-						throw new Error('Blob reader stopped unexpectedly before all requested data was read.');
-					}
-
-					break;
+					throw new Error('Blob reader stopped unexpectedly before all requested data was read.');
 				}
 
 				if (worker.aborted) {
@@ -261,6 +263,11 @@ export class BlobSource extends Source {
 		}
 
 		worker.running = false;
+
+		if (worker.aborted) {
+			// MDN: "Calling this method signals a loss of interest in the stream by a consumer."
+			await reader?.cancel();
+		}
 	}
 
 	/** @internal */
@@ -297,6 +304,10 @@ const DEFAULT_RETRY_DELAY
 			= typeof navigator !== 'undefined' && typeof navigator.onLine === 'boolean' ? navigator.onLine : true;
 
 			if (isOnline && originOfSrc !== null && originOfSrc !== window.location.origin) {
+				console.warn(
+					`Request will not be retried because a CORS error was suspected due to different origins. You can`
+					+ ` modify this behavior by providing your own function for the 'getRetryDelay' option.`,
+				);
 				return null;
 			}
 		}
@@ -425,6 +436,7 @@ export class UrlSource extends Source {
 				signal: abortController.signal,
 			}),
 			this._getRetryDelay,
+			() => this._disposed,
 		);
 
 		if (!response.ok) {
@@ -436,7 +448,7 @@ export class UrlSource extends Source {
 		let fileSize: number;
 
 		if (response.status === 206) {
-			fileSize = this._getPartialLengthFromRangeResponse(response);
+			fileSize = this._getTotalLengthFromRangeResponse(response);
 			worker = this._orchestrator.createWorker(0, Math.min(fileSize, URL_SOURCE_MIN_LOAD_AMOUNT));
 		} else {
 			// Server probably returned a 200.
@@ -492,6 +504,7 @@ export class UrlSource extends Source {
 						signal: abortController.signal,
 					}),
 					this._getRetryDelay,
+					() => this._disposed,
 				);
 			}
 
@@ -506,14 +519,6 @@ export class UrlSource extends Source {
 				throw new Error(
 					'HTTP server did not respond with 206 Partial Content to a range request. To enable efficient media'
 					+ ' file streaming across a network, please make sure your server supports range requests.',
-				);
-			}
-
-			const length = this._getPartialLengthFromRangeResponse(response);
-			const required = worker.targetPos - worker.currentPos;
-			if (length < required) {
-				throw new Error(
-					`HTTP response unexpectedly too short: Needed at least ${required} bytes, got only ${length}.`,
 				);
 			}
 
@@ -539,6 +544,11 @@ export class UrlSource extends Source {
 				try {
 					readResult = await reader.read();
 				} catch (error) {
+					if (this._disposed) {
+						// No need to try to retry
+						throw error;
+					}
+
 					const retryDelayInSeconds = this._getRetryDelay(1, error, this._url);
 					if (retryDelayInSeconds !== null) {
 						console.error('Error while reading response stream. Attempting to resume.', error);
@@ -551,34 +561,29 @@ export class UrlSource extends Source {
 				}
 
 				if (worker.aborted) {
-					break;
+					continue; // Cleanup happens in next iteration
 				}
 
 				const { done, value } = readResult;
 
 				if (done) {
-					this._orchestrator.forgetWorker(worker);
-
-					if (worker.currentPos < worker.targetPos) {
-						throw new Error(
-							'Response stream reader stopped unexpectedly before all requested data was read.',
-						);
+					if (worker.currentPos >= worker.targetPos) {
+						// All data was delivered, we're good
+						this._orchestrator.forgetWorker(worker);
+						worker.running = false;
+						return;
 					}
 
-					worker.running = false;
-					return;
+					// The response stopped early, before the target. This can happen if server decides to cap range
+					// requests arbitrarily, even if the request had an uncapped end. In this case, let's fetch the rest
+					// of the data using a new request.
+					break;
 				}
 
 				this.onread?.(worker.currentPos, worker.currentPos + value.length);
 				this._orchestrator.supplyWorkerData(worker, value);
 			}
-
-			if (worker.aborted) {
-				break;
-			}
 		}
-
-		worker.running = false;
 
 		// The previous UrlSource had logic for circumventing https://issues.chromium.org/issues/436025873; I haven't
 		// been able to observe this bug with the new UrlSource (maybe because we're using response streaming), so the
@@ -586,25 +591,23 @@ export class UrlSource extends Source {
 	}
 
 	/** @internal */
-	private _getPartialLengthFromRangeResponse(response: Response) {
+	private _getTotalLengthFromRangeResponse(response: Response) {
 		const contentRange = response.headers.get('Content-Range');
 		if (contentRange) {
 			const match = /\/(\d+)/.exec(contentRange);
 			if (match) {
 				return Number(match[1]);
-			} else {
-				throw new Error(`Invalid Content-Range header: ${contentRange}`);
 			}
+		}
+
+		const contentLength = response.headers.get('Content-Length');
+		if (contentLength) {
+			return Number(contentLength);
 		} else {
-			const contentLength = response.headers.get('Content-Length');
-			if (contentLength) {
-				return Number(contentLength);
-			} else {
-				throw new Error(
-					'Partial HTTP response (status 206) must surface either Content-Range or'
-					+ ' Content-Length header.',
-				);
-			}
+			throw new Error(
+				'Partial HTTP response (status 206) must surface either Content-Range or'
+				+ ' Content-Length header.',
+			);
 		}
 	}
 
@@ -639,7 +642,7 @@ export class FilePathSource extends Source {
 	_fileHandle: FileHandle | null = null;
 
 	/** Creates a new {@link FilePathSource} backed by the file at the specified file path. */
-	constructor(filePath: string, options: BlobSourceOptions = {}) {
+	constructor(filePath: string, options: FilePathSourceOptions = {}) {
 		if (typeof filePath !== 'string') {
 			throw new TypeError('filePath must be a string.');
 		}
