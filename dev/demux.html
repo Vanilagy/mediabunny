@@ -7,37 +7,6 @@
 	fileInput.type = 'file';
 	document.body.append(fileInput);
 
-	const canvas = document.createElement('canvas');
-	const ctx = canvas.getContext('2d');
-	canvas.style.border = '1px solid black';
-
-	ctx.fillStyle = 'blue';
-	ctx.fillRect(0, 0, canvas.width, canvas.height);
-	ctx.fillStyle = 'red';
-	ctx.fillRect(0, 0, 200, 30);
-
-	document.body.append(canvas);
-
-	console.log("argh", new VideoFrame(canvas, {timestamp: 0, rotation: 90}))
-
-	const sample = new Mediabunny.VideoSample(new VideoFrame(canvas, {timestamp: 0, rotation: 90}));
-	console.log(sample);
-
-	sample.setRotation(0);
-
-	/*
-	//sample.setRotation(90);
-	console.log(sample);
-	
-	const frame = sample.toVideoFrame();
-	console.log(frame)
-	*/
-
-	ctx.clearRect(0, 0, canvas.width, canvas.height);
-	sample.draw(ctx, 0, 0);
-	//sample.drawWithFit(ctx, { fit: 'contain' });
-	//ctx.drawImage(frame, 0, 0);
-
 	fileInput.addEventListener('change', async () => {
 		const file = fileInput.files[0];
 		const input = new Mediabunny.Input({
