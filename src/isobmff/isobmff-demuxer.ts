@@ -58,7 +58,7 @@ import {
 	toDataView,
 	roundIfAlmostInteger,
 	ResultValue,
-	Yo,
+	MaybeRelevantPromise,
 } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { buildIsobmffMimeType } from './isobmff-misc';
@@ -507,7 +507,7 @@ export class IsobmffDemuxer extends Demuxer {
 		return sampleTable;
 	}
 
-	async readFragment(res: ResultValue<Fragment>, startPos: number): Promise<Yo> {
+	async readFragment(res: ResultValue<Fragment>, startPos: number): MaybeRelevantPromise {
 		if (this.lastReadFragment?.moofOffset === startPos) {
 			return res.set(this.lastReadFragment);
 		}
@@ -2354,7 +2354,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		return firstPacket?.timestamp ?? 0;
 	}
 
-	async getFirstPacket(res: ResultValue<EncodedPacket | null>, options: PacketRetrievalOptions): Promise<Yo> {
+	async getFirstPacket(res: ResultValue<EncodedPacket | null>, options: PacketRetrievalOptions): MaybeRelevantPromise {
 		const result = new ResultValue<EncodedPacket | null>();
 		const promise = this.fetchPacketForSampleIndex(result, 0, options);
 		if (result.pending) await promise;
@@ -2398,7 +2398,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		const timestampInTimescale = this.mapTimestampIntoTimescale(timestamp);
 
 		const sampleTable = this.internalTrack.demuxer.getSampleTableForTrack(this.internalTrack);
@@ -2438,7 +2438,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		const isFromFragment = packet._internal !== undefined;
 		if (!isFromFragment) {
 			const sampleIndex = packet.sequenceNumber; // sequenceNumber = sampleIndex in this case
@@ -2492,7 +2492,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		const timestampInTimescale = this.mapTimestampIntoTimescale(timestamp);
 
 		const sampleTable = this.internalTrack.demuxer.getSampleTableForTrack(this.internalTrack);
@@ -2531,7 +2531,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		const isFromFragment = packet._internal !== undefined;
 		if (!isFromFragment) {
 			const sampleIndex = packet.sequenceNumber; // sequenceNumber = sampleIndex in this case
@@ -2594,7 +2594,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		sampleIndex: number,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		if (sampleIndex === -1) {
 			return res.set(null);
 		}
@@ -2639,7 +2639,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		fragment: Fragment,
 		sampleIndex: number,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		if (sampleIndex === -1) {
 			return res.set(null);
 		}
@@ -2691,7 +2691,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		// The timestamp for which we know the correct sample will not come after it
 		latestTimestamp: number,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		const demuxer = this.internalTrack.demuxer;
 
 		let currentPos = startOffset ?? 0;

@@ -11,7 +11,7 @@ import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
-import { assert, ResultValue, UNDETERMINED_LANGUAGE, Yo } from '../misc';
+import { assert, MaybeRelevantPromise, ResultValue, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readAscii, readBytes, Reader, readU16, readU32, readU64 } from '../reader';
 import { parseId3V2Tag, readId3V2Header } from '../id3';
@@ -403,7 +403,7 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		packetIndex: number,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		assert(this.demuxer.audioInfo);
 		const startOffset = packetIndex * PACKET_SIZE_IN_FRAMES * this.demuxer.audioInfo.blockSizeInBytes;
 		if (startOffset >= this.demuxer.dataSize) {
@@ -457,7 +457,7 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		));
 	}
 
-	getFirstPacket(res: ResultValue<EncodedPacket | null>, options: PacketRetrievalOptions): Promise<Yo> {
+	getFirstPacket(res: ResultValue<EncodedPacket | null>, options: PacketRetrievalOptions): MaybeRelevantPromise {
 		return this.getPacketAtIndex(res, 0, options);
 	}
 
@@ -465,7 +465,7 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		assert(this.demuxer.audioInfo);
 
 		const packetIndex = Math.floor(Math.min(
@@ -514,7 +514,7 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		assert(this.demuxer.audioInfo);
 
 		const packetIndex = packet.sequenceNumber;
@@ -529,7 +529,7 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		return this.getPacket(res, timestamp, options);
 	}
 
@@ -537,7 +537,7 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		return this.getNextPacket(res, packet, options);
 	}
 }

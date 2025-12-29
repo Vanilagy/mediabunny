@@ -40,13 +40,13 @@ import {
 	isIso639Dash2LanguageCode,
 	last,
 	MATRIX_COEFFICIENTS_MAP_INVERSE,
+	MaybeRelevantPromise,
 	normalizeRotation,
 	ResultValue,
 	Rotation,
 	roundIfAlmostInteger,
 	TRANSFER_CHARACTERISTICS_MAP_INVERSE,
 	UNDETERMINED_LANGUAGE,
-	Yo,
 } from '../misc';
 import { EncodedPacket, EncodedPacketSideData, PLACEHOLDER_DATA } from '../packet';
 import {
@@ -583,7 +583,7 @@ export class MatroskaDemuxer extends Demuxer {
 		this.currentSegment = null;
 	}
 
-	async readCluster(res: ResultValue<Cluster>, startPos: number, segment: Segment): Promise<Yo> {
+	async readCluster(res: ResultValue<Cluster>, startPos: number, segment: Segment): MaybeRelevantPromise {
 		if (segment.lastReadCluster?.elementStartPos === startPos) {
 			return res.set(segment.lastReadCluster);
 		}
@@ -1864,7 +1864,10 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		return this.internalTrack.disposition;
 	}
 
-	async getFirstPacket(res: ResultValue<EncodedPacket | null>, options: PacketRetrievalOptions): Promise<Yo> {
+	async getFirstPacket(
+		res: ResultValue<EncodedPacket | null>,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise {
 		return this.performClusterLookup(
 			res,
 			null,
@@ -1899,7 +1902,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		const timestampInTimescale = this.intoTimescale(timestamp);
 
 		return this.performClusterLookup(
@@ -1932,7 +1935,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		const clusterStartPos = packet._internal;
 		if (clusterStartPos === undefined) {
 			throw new Error('Packet was not created from this track.');
@@ -1981,7 +1984,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		const timestampInTimescale = this.intoTimescale(timestamp);
 
 		return this.performClusterLookup(
@@ -2013,7 +2016,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		const clusterStartPos = packet._internal;
 		if (clusterStartPos === undefined) {
 			throw new Error('Packet was not created from this track.');
@@ -2066,13 +2069,12 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 	}
 
 	private fetchPacketInCluster(
-		res: ResultValue<EncodedPacket | null>,
 		cluster: Cluster,
 		blockIndex: number,
 		options: PacketRetrievalOptions,
-	): Yo {
+	) {
 		if (blockIndex === -1) {
-			return res.set(null);
+			return null;
 		}
 
 		const trackData = cluster.trackData.get(this.internalTrack.id)!;
@@ -2107,7 +2109,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 
 		packet._internal = cluster.elementStartPos;
 
-		return res.set(packet);
+		return packet;
 	}
 
 	/** Looks for a packet in the clusters while trying to load as few clusters as possible to retrieve it. */
@@ -2122,7 +2124,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		// The timestamp for which we know the correct block will not come after it
 		latestTimestamp: number,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		const { demuxer, segment } = this.internalTrack;
 
 		let currentPos = startOffset ?? 0;
@@ -2135,7 +2137,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 			const { blockIndex, correctBlockFound } = getMatchInCluster(startCluster);
 
 			if (correctBlockFound) {
-				return this.fetchPacketInCluster(res, startCluster, blockIndex, options);
+				return res.set(this.fetchPacketInCluster(startCluster, blockIndex, options));
 			}
 
 			currentPos = startCluster.elementEndPos; // Start reading from the next cluster
@@ -2237,7 +2239,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 
 				const { blockIndex, correctBlockFound } = getMatchInCluster(currentCluster);
 				if (correctBlockFound) {
-					return this.fetchPacketInCluster(res, currentCluster, blockIndex, options);
+					return res.set(this.fetchPacketInCluster(currentCluster, blockIndex, options));
 				}
 
 				if (blockIndex !== -1) {
@@ -2298,7 +2300,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 
 		if (bestCluster) {
 			// If we finished looping but didn't find a perfect match, still return the best match we found
-			return this.fetchPacketInCluster(res, bestCluster, bestBlockIndex, options);
+			return res.set(this.fetchPacketInCluster(bestCluster, bestBlockIndex, options));
 		}
 
 		return res.set(null);

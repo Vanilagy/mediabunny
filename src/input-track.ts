@@ -10,7 +10,7 @@ import { AudioCodec, MediaCodec, VideoCodec } from './codec';
 import { determineVideoPacketType } from './codec-data';
 import { customAudioDecoders, customVideoDecoders } from './custom-coder';
 import { Input } from './input';
-import { assert, ResultValue, Rotation, Yo } from './misc';
+import { assert, MaybeRelevantPromise, ResultValue, Rotation } from './misc';
 import { TrackType } from './output';
 import { EncodedPacket, PacketType } from './packet';
 import { TrackDisposition } from './metadata';
@@ -42,27 +42,27 @@ export interface InputTrackBacking {
 	getFirstPacket(
 		res: ResultValue<EncodedPacket | null>,
 		options: PacketRetrievalOptions,
-	): Promise<Yo>;
+	): MaybeRelevantPromise;
 	getNextPacket(
 		res: ResultValue<EncodedPacket | null>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
-	): Promise<Yo>;
+	): MaybeRelevantPromise;
 	getPacket(
 		res: ResultValue<EncodedPacket | null>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
-	): Promise<Yo>;
+	): MaybeRelevantPromise;
 	getKeyPacket(
 		res: ResultValue<EncodedPacket | null>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
-	): Promise<Yo>;
+	): MaybeRelevantPromise;
 	getNextKeyPacket(
 		res: ResultValue<EncodedPacket | null>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
-	): Promise<Yo>;
+	): MaybeRelevantPromise;
 }
 
 /**

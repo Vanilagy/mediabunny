@@ -872,16 +872,25 @@ export const isNumber = (x: unknown) => {
 	return typeof x === 'number' && !Number.isNaN(x);
 };
 
+// We use a unique symbol to ensure that any function using the ResultValue system actually returns when setting it,
+// instead of simply setting it and continuing on.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-const yo: unique symbol = Symbol();
-export type Yo = typeof yo;
+const returnSymbol: unique symbol = Symbol();
+export type ReturnSymbol = typeof returnSymbol;
+export type MaybeRelevantPromise = Promise<ReturnSymbol>;
 
+/**
+ * Represents a wrapper that holds a function's return value. Instead of the function returning its return value, it
+ * instead gets passed a ResultValue instance and writes the return value into it. This allows async functions that
+ * don't hit any async path to synchronously expose their return value, allowing the caller to ignore the returned
+ * promise if possible. This allows for "optinally-asynchronous code".
+ */
 export class ResultValue<T> {
 	value!: T;
 	pending = true;
 
-	// @ts-expect-error Just for the types
-	set(value: T): Yo {
+	// @ts-expect-error Return value just for the types
+	set(value: T): ReturnSymbol {
 		this.value = value;
 		this.pending = false;
 	}

@@ -7,7 +7,7 @@
  */
 
 import { FRAME_HEADER_SIZE, FrameHeader, readFrameHeader } from '../../shared/mp3-misc';
-import { ResultValue, Yo } from '../misc';
+import { MaybeRelevantPromise, ResultValue } from '../misc';
 import { Reader, readU32Be } from '../reader';
 
 export const readNextFrameHeader = async (
@@ -18,7 +18,7 @@ export const readNextFrameHeader = async (
 	reader: Reader,
 	startPos: number,
 	until: number | null,
-): Promise<Yo> => {
+): MaybeRelevantPromise => {
 	let currentPos = startPos;
 
 	while (until === null || currentPos < until) {

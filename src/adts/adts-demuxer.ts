@@ -15,9 +15,9 @@ import {
 	AsyncMutex4,
 	binarySearchLessOrEqual,
 	Bitstream,
+	MaybeRelevantPromise,
 	ResultValue,
 	UNDETERMINED_LANGUAGE,
-	Yo,
 } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readBytes, Reader } from '../reader';
@@ -72,7 +72,7 @@ export class AdtsDemuxer extends Demuxer {
 		})();
 	}
 
-	async advanceReader(res: ResultValue<void>): Promise<Yo> {
+	async advanceReader(res: ResultValue<void>): MaybeRelevantPromise {
 		let slice = this.reader.requestSliceRange(this.lastLoadedPos, MIN_FRAME_HEADER_SIZE, MAX_FRAME_HEADER_SIZE);
 		if (slice instanceof Promise) slice = await slice;
 		if (!slice) {
@@ -214,7 +214,7 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		sampleIndex: number,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		if (sampleIndex === -1) {
 			return res.set(null);
 		}
@@ -256,7 +256,7 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		using lock = this.demuxer.readingMutex.lock();
 		if (lock.pending) await lock.ready;
 
@@ -284,7 +284,7 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		using lock = this.demuxer.readingMutex.lock();
 		if (lock.pending) await lock.ready;
 
@@ -321,7 +321,7 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		return this.getPacket(res, timestamp, options);
 	}
 
@@ -329,7 +329,7 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		return this.getNextPacket(res, packet, options);
 	}
 }

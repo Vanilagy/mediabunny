@@ -19,11 +19,11 @@ import {
 	binarySearchLessOrEqual,
 	findLast,
 	last,
+	MaybeRelevantPromise,
 	ResultValue,
 	roundIfAlmostInteger,
 	toDataView,
 	UNDETERMINED_LANGUAGE,
-	Yo,
 } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readBytes, Reader } from '../reader';
@@ -280,7 +280,11 @@ export class OggDemuxer extends Demuxer {
 		readVorbisComments(secondPacket.data.subarray(8), this.metadataTags); // Skip 'OpusTags'
 	}
 
-	async readPacket(res: ResultValue<Packet | null>, startPage: Page, startSegmentIndex: number): Promise<Yo> {
+	async readPacket(
+		res: ResultValue<Packet | null>,
+		startPage: Page,
+		startSegmentIndex: number,
+	): MaybeRelevantPromise {
 		assert(startSegmentIndex < startPage.lacingValues.length);
 
 		let startDataOffset = 0;
@@ -369,7 +373,7 @@ export class OggDemuxer extends Demuxer {
 		});
 	}
 
-	async findNextPacketStart(res: ResultValue<PacketStart | null>, lastPacket: Packet): Promise<Yo> {
+	async findNextPacketStart(res: ResultValue<PacketStart | null>, lastPacket: Packet): MaybeRelevantPromise {
 		// If there's another segment in the same page, return it
 		if (lastPacket.endSegmentIndex < lastPacket.endPage.lacingValues.length - 1) {
 			return res.set({ startPage: lastPacket.endPage, startSegmentIndex: lastPacket.endSegmentIndex + 1 });
@@ -540,7 +544,10 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		return encodedPacket;
 	}
 
-	async getFirstPacket(res: ResultValue<EncodedPacket | null>, options: PacketRetrievalOptions): Promise<Yo> {
+	async getFirstPacket(
+		res: ResultValue<EncodedPacket | null>,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise {
 		assert(this.bitstream.lastMetadataPacket);
 
 		const positionResult = new ResultValue<PacketStart | null>();
@@ -577,7 +584,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		prevPacket: EncodedPacket,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		const prevMetadata = prevPacket._internal as EncodedPacketMetadata | undefined;
 		if (!prevMetadata) {
 			throw new Error('Packet was not created from this track.');
@@ -612,7 +619,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		if (this.demuxer.reader.fileSize === null) {
 			// No file size known, can't do binary search, but fall back to sequential algo instead
 			return this.getPacketSequential(res, timestamp, options);
@@ -971,7 +978,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		using lock = this.sequentialScanMutex.lock(); // Requires exclusivity because we write to a cache
 		if (lock.pending) await lock.ready;
 

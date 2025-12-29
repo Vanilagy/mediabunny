@@ -24,8 +24,8 @@ import {
 	ResultValue,
 	Rotation,
 	AsyncGate,
-	Yo,
 	isNumber,
+	MaybeRelevantPromise,
 } from './misc';
 import { EncodedPacket } from './packet';
 import { AudioSample, clampCropRectangle, CropRectangle, validateCropRectangle, VideoSample } from './sample';
@@ -553,7 +553,7 @@ export abstract class SampleCursor<
 	}
 
 	private _getSample(
-		callback: (result: ResultValue<TransformedSample | null>) => Promise<Yo>,
+		callback: (result: ResultValue<TransformedSample | null>) => MaybeRelevantPromise,
 	): MaybePromise<TransformedSample | null> {
 		this._ensureWillBeOpen();
 
@@ -860,7 +860,7 @@ export abstract class SampleCursor<
 		res: ResultValue<TransformedSample | null>,
 		targetPacketPromise: MaybePromise<EncodedPacket | null>,
 		lock?: AsyncMutexLock,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		this._lazyPump++;
 
 		if (!lock) {
@@ -994,7 +994,7 @@ export abstract class SampleCursor<
 		return res.set(await request.promise);
 	}
 
-	private async _nextInternal(res: ResultValue<TransformedSample | null>): Promise<Yo> {
+	private async _nextInternal(res: ResultValue<TransformedSample | null>): MaybeRelevantPromise {
 		using lock = this._mutex.lock();
 		if (lock.pending) await lock.ready;
 
@@ -1051,7 +1051,7 @@ export abstract class SampleCursor<
 		return res.set(await request.promise);
 	}
 
-	private async _nextKeyInternal(res: ResultValue<TransformedSample | null>): Promise<Yo> {
+	private async _nextKeyInternal(res: ResultValue<TransformedSample | null>): MaybeRelevantPromise {
 		using lock = this._mutex.lock();
 		if (lock.pending) await lock.ready;
 
@@ -1109,7 +1109,7 @@ export abstract class SampleCursor<
 		return await this._seekToPacket(res, nextKey, lock);
 	}
 
-	private async _hasNextInternal(res: ResultValue<boolean>): Promise<Yo> {
+	private async _hasNextInternal(res: ResultValue<boolean>): MaybeRelevantPromise {
 		using lock = this._mutex.lock();
 		if (lock.pending) await lock.ready;
 

@@ -15,10 +15,10 @@ import {
 	AsyncMutex4,
 	binarySearchLessOrEqual,
 	Bitstream,
+	MaybeRelevantPromise,
 	ResultValue,
 	textDecoder,
 	UNDETERMINED_LANGUAGE,
-	Yo,
 } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import {
@@ -266,7 +266,7 @@ export class FlacDemuxer extends Demuxer {
 			startPos: number;
 			isFirstPacket: boolean;
 		},
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		assert(this.audioInfo);
 		// we expect that there are at least `minimumFrameSize` bytes left in the file
 
@@ -483,7 +483,7 @@ export class FlacDemuxer extends Demuxer {
 		return { num, blockSize, sampleRate };
 	}
 
-	async advanceReader(res: ResultValue<void>): Promise<Yo> {
+	async advanceReader(res: ResultValue<void>): MaybeRelevantPromise {
 		assert(this.lastLoadedPos !== null);
 		assert(this.audioInfo);
 		const startPos = this.lastLoadedPos;
@@ -585,7 +585,7 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		assert(this.demuxer.audioInfo);
 		if (timestamp < 0) {
 			throw new Error('Timestamp cannot be negative');
@@ -640,7 +640,7 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		using lock = this.demuxer.readingMutex.lock();
 		if (lock.pending) await lock.ready;
 
@@ -675,7 +675,7 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		return this.getPacket(res, timestamp, options);
 	}
 
@@ -683,7 +683,7 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		return this.getNextPacket(res, packet, options);
 	}
 
@@ -691,7 +691,7 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		sampleIndex: number,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		const rawSample = this.demuxer.loadedSamples[sampleIndex];
 		if (!rawSample) {
 			return res.set(null);
@@ -731,7 +731,7 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 	async getFirstPacket(
 		res: ResultValue<EncodedPacket | null>,
 		options: PacketRetrievalOptions,
-	): Promise<Yo> {
+	): MaybeRelevantPromise {
 		const advanceResult = new ResultValue<void>();
 
 		// Ensure the next sample exists
