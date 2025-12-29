@@ -14,6 +14,9 @@ import {
 	extractHevcNalUnits,
 	extractNalUnitTypeForHevc,
 	HevcNalUnitType,
+	extractAvcNalUnits,
+	extractNalUnitTypeForAvc,
+	concatAvcNalUnits,
 } from './codec-data';
 import { CustomAudioDecoder, customAudioDecoders, CustomVideoDecoder, customVideoDecoders } from './custom-coder';
 import {
@@ -139,6 +142,8 @@ export class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 				}
 			}
 
+			const stack = new Error('Decoding error').stack;
+
 			this.decoder = new VideoDecoder({
 				output: (frame) => {
 					try {
@@ -147,7 +152,10 @@ export class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 						this.onError(error as Error);
 					}
 				},
-				error: onError,
+				error: (error) => {
+					error.stack = stack; // Provide a more useful stack trace, the default one sucks
+					this.onError(error);
+				},
 			});
 			this.decoder.configure(this.decoderConfig);
 
@@ -179,8 +187,6 @@ export class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			this.raslSkipped = true;
 		}
 
-		this.currentPacketIndex++;
-
 		if (this.customDecoder) {
 			this.customDecoderQueueSize++;
 			void this.customDecoderCallSerializer
@@ -196,9 +202,24 @@ export class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 				insertSorted(this.inputTimestamps, packet.timestamp, x => x);
 			}
 
+			// Workaround for https://issues.chromium.org/issues/470109459
+			if (isChromium() && this.currentPacketIndex === 0 && this.codec === 'avc') {
+				const nalUnits = extractAvcNalUnits(packet.data, this.decoderConfig);
+				const filteredNalUnits = nalUnits.filter((x) => {
+					const type = extractNalUnitTypeForAvc(x);
+					// These trip up Chromium's key frame detection, so let's strip them
+					return !(type >= 20 && type <= 31);
+				});
+
+				const newData = concatAvcNalUnits(filteredNalUnits, this.decoderConfig);
+				packet = new EncodedPacket(newData, packet.type, packet.timestamp, packet.duration);
+			}
+
 			this.decoder.decode(packet.toEncodedVideoChunk());
 			this.decodeAlphaData(packet);
 		}
+
+		this.currentPacketIndex++;
 	}
 
 	decodeAlphaData(packet: EncodedPacket) {
@@ -254,6 +275,8 @@ export class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 				}
 			};
 
+			const stack = new Error('Decoding error').stack;
+
 			this.alphaDecoder = new VideoDecoder({
 				output: (frame) => {
 					try {
@@ -262,7 +285,10 @@ export class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 						this.onError(error as Error);
 					}
 				},
-				error: this.onError,
+				error: (error) => {
+					error.stack = stack; // Provide a more useful stack trace, the default one sucks
+					this.onError(error);
+				},
 			});
 			this.alphaDecoder.configure(this.decoderConfig);
 
@@ -683,6 +709,8 @@ export class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 
 			void this.customDecoderCallSerializer.call(() => this.customDecoder!.init());
 		} else {
+			const stack = new Error('Decoding error').stack;
+
 			this.decoder = new AudioDecoder({
 				output: (data) => {
 					try {
@@ -691,7 +719,10 @@ export class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 						this.onError(error as Error);
 					}
 				},
-				error: onError,
+				error: (error) => {
+					error.stack = stack; // Provide a more useful stack trace, the default one sucks
+					this.onError(error);
+				},
 			});
 			this.decoder.configure(decoderConfig);
 
