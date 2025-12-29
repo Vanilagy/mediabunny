@@ -90,7 +90,9 @@ export default withMermaid({
 					],
 				},
 			],
-			'/api': apiRoutes,
+			// Fails in CI without this
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			'/api': apiRoutes as any[],
 		},
 
 		socialLinks: [
