@@ -2353,7 +2353,10 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		return firstPacket?.timestamp ?? 0;
 	}
 
-	async getFirstPacket(res: ResultValue<EncodedPacket | null>, options: PacketRetrievalOptions): MaybeRelevantPromise {
+	async getFirstPacket(
+		res: ResultValue<EncodedPacket | null>,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise {
 		const result = new ResultValue<EncodedPacket | null>();
 		const promise = this.fetchPacketForSampleIndex(result, 0, options);
 		if (result.pending) await promise;
