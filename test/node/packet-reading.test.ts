@@ -18,21 +18,21 @@ test('Packet reader', async () => {
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
 	const reader = new PacketReader(videoTrack);
 
-	const packet1 = (await reader.readFirst())!;
+	const packet1 = (await reader.getFirst())!;
 	expect(packet1.timestamp).toBe(0);
 
-	const packet3 = (await reader.readNext(packet1))!;
+	const packet3 = (await reader.getNext(packet1))!;
 	expect(packet3.sequenceNumber).toBeGreaterThan(packet1.sequenceNumber);
 
-	const packet4 = (await reader.readNextKey(packet1))!;
+	const packet4 = (await reader.getNextKey(packet1))!;
 	expect(packet4.sequenceNumber).toBeGreaterThan(packet3.sequenceNumber);
 	expect(packet4.type).toBe('key');
 
-	const packet5 = (await reader.readNext(packet3))!;
+	const packet5 = (await reader.getNext(packet3))!;
 	expect(packet5.sequenceNumber).toBeGreaterThan(packet3.sequenceNumber);
 	expect(packet5.sequenceNumber).toBeLessThan(packet4.sequenceNumber);
 
-	const packet6 = (await reader.readAt(2.4))!;
+	const packet6 = (await reader.getAt(2.4))!;
 	expect(packet6.timestamp).toBeGreaterThan(2);
 	expect(packet6.timestamp).toBeLessThanOrEqual(2.4);
 });
@@ -46,15 +46,15 @@ test('Packet reading throwing after Input disposal', async () => {
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
 	const reader = new PacketReader(videoTrack);
 
-	const first = await reader.readFirst();
+	const first = await reader.getFirst();
 
 	input.dispose();
 
-	expect(() => reader.readFirst()).toThrow(InputDisposedError);
-	expect(() => reader.readAt(0)).toThrow(InputDisposedError);
-	expect(() => reader.readKeyAt(0)).toThrow(InputDisposedError);
-	expect(() => reader.readNext(first!)).toThrow(InputDisposedError);
-	expect(() => reader.readNextKey(first!)).toThrow(InputDisposedError);
+	expect(() => reader.getFirst()).toThrow(InputDisposedError);
+	expect(() => reader.getAt(0)).toThrow(InputDisposedError);
+	expect(() => reader.getKeyAt(0)).toThrow(InputDisposedError);
+	expect(() => reader.getNext(first!)).toThrow(InputDisposedError);
+	expect(() => reader.getNextKey(first!)).toThrow(InputDisposedError);
 });
 
 test('Packet cursor seeking', async () => {
@@ -223,7 +223,7 @@ test('Synchronous packet reading', async () => {
 	const reader = new PacketReader(videoTrack);
 	const cursor = new PacketCursor(videoTrack);
 
-	expect(reader.readFirst()).not.toBeInstanceOf(Promise);
+	expect(reader.getFirst()).not.toBeInstanceOf(Promise);
 
 	expect(cursor.seekToFirst()).not.toBeInstanceOf(Promise);
 	expect(cursor.seekTo(0.1)).not.toBeInstanceOf(Promise);
@@ -320,31 +320,31 @@ test('verifyKeyPackets with faultily-labeled key frames', async () => {
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
 	const reader = new PacketReader(videoTrack);
 
-	const firstPacket = (await reader.readFirst())!;
+	const firstPacket = (await reader.getFirst())!;
 	expect(firstPacket.type).toBe('key');
 
-	const fakeKeyPacket = (await reader.readNextKey(firstPacket))!;
+	const fakeKeyPacket = (await reader.getNextKey(firstPacket))!;
 	expect(fakeKeyPacket).not.toBe(null);
 	expect(fakeKeyPacket.type).toBe('key'); // Metadata says it's a key frame
 	expect(fakeKeyPacket.sequenceNumber).toBeGreaterThan(firstPacket.sequenceNumber);
 
-	const verifiedPacket = (await reader.readAt(fakeKeyPacket.timestamp, { verifyKeyPackets: true }))!;
+	const verifiedPacket = (await reader.getAt(fakeKeyPacket.timestamp, { verifyKeyPackets: true }))!;
 	expect(verifiedPacket.sequenceNumber).toBe(fakeKeyPacket.sequenceNumber);
 	expect(verifiedPacket.type).toBe('delta'); // After verification, it's actually a delta frame
 
-	const unverifiedKeyAt = (await reader.readKeyAt(fakeKeyPacket.timestamp))!;
+	const unverifiedKeyAt = (await reader.getKeyAt(fakeKeyPacket.timestamp))!;
 	expect(unverifiedKeyAt.sequenceNumber).toBe(fakeKeyPacket.sequenceNumber);
 	expect(unverifiedKeyAt.type).toBe('key');
 
-	const verifiedKeyAt = (await reader.readKeyAt(fakeKeyPacket.timestamp, { verifyKeyPackets: true }))!;
+	const verifiedKeyAt = (await reader.getKeyAt(fakeKeyPacket.timestamp, { verifyKeyPackets: true }))!;
 	expect(verifiedKeyAt.sequenceNumber).toBe(firstPacket.sequenceNumber);
 	expect(verifiedKeyAt.type).toBe('key');
 
-	const unverifiedNextKey = (await reader.readNextKey(firstPacket))!;
+	const unverifiedNextKey = (await reader.getNextKey(firstPacket))!;
 	expect(unverifiedNextKey).not.toBe(null);
 	expect(unverifiedNextKey.type).toBe('key');
 	expect(unverifiedNextKey.sequenceNumber).toBe(fakeKeyPacket.sequenceNumber);
 
-	const verifiedNextKey = await reader.readNextKey(firstPacket, { verifyKeyPackets: true });
+	const verifiedNextKey = await reader.getNextKey(firstPacket, { verifyKeyPackets: true });
 	expect(verifiedNextKey).toBe(null);
 });

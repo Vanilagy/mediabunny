@@ -13,52 +13,52 @@ const __dirname = new URL('.', import.meta.url).pathname;
 
 const testBasicPacketReading = async (track: InputTrack) => {
 	const reader = new PacketReader(track);
-	const first = await reader.readFirst();
+	const first = await reader.getFirst();
 	expect(first).not.toBe(null);
 	expect(first!.timestamp).toBe(0);
 
-	const next = await reader.readNext(first!);
+	const next = await reader.getNext(first!);
 	expect(next).not.toBe(null);
 	expect(next!.timestamp).toBeCloseTo(first!.timestamp + first!.duration);
 	expect(next!.sequenceNumber).toBeGreaterThan(first!.sequenceNumber);
 
-	const nextKey = await reader.readNextKey(first!);
+	const nextKey = await reader.getNextKey(first!);
 	expect(nextKey).not.toBe(null);
 	expect(nextKey!.type).toBe('key');
 	expect(nextKey!.timestamp).toBeGreaterThanOrEqual(next!.timestamp);
 
-	const seeked = await reader.readAt(1);
+	const seeked = await reader.getAt(1);
 	expect(seeked).not.toBe(null);
 	expect(seeked!.timestamp).toBeGreaterThan(0.9);
 	expect(seeked!.timestamp).toBeLessThanOrEqual(1);
 	expect(seeked!.sequenceNumber).toBeGreaterThan(next!.sequenceNumber);
 
-	const seekedKey = await reader.readKeyAt(1);
+	const seekedKey = await reader.getKeyAt(1);
 	expect(seekedKey).not.toBe(null);
 	expect(seekedKey!.type).toBe('key');
 	expect(seekedKey!.sequenceNumber).toBeGreaterThanOrEqual(first!.sequenceNumber);
 	expect(seekedKey!.sequenceNumber).toBeLessThanOrEqual(seeked!.sequenceNumber);
 
-	const last = await reader.readAt(Infinity);
+	const last = await reader.getAt(Infinity);
 	expect(last).not.toBe(null);
 	expect(last!.sequenceNumber).toBeGreaterThan(seeked!.sequenceNumber);
 
-	const afterLast = await reader.readNext(last!);
+	const afterLast = await reader.getNext(last!);
 	expect(afterLast).toBe(null);
 };
 
 const testSyncPacketReading = (track: InputTrack) => {
 	const reader = new PacketReader(track);
 
-	const seeked = reader.readAt(1) as EncodedPacket | null;
+	const seeked = reader.getAt(1) as EncodedPacket | null;
 	expect(seeked).toBeInstanceOf(EncodedPacket);
 
-	let current = reader.readFirst() as EncodedPacket | null;
+	let current = reader.getFirst() as EncodedPacket | null;
 	expect(current).toBeInstanceOf(EncodedPacket);
 
 	let count = 0;
 	while (current) {
-		current = reader.readNext(current) as EncodedPacket | null;
+		current = reader.getNext(current) as EncodedPacket | null;
 		expect(current instanceof EncodedPacket || current === null).toBe(true);
 		count++;
 	}

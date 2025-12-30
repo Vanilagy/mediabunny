@@ -67,21 +67,21 @@ test('can do random access', async () => {
 
 	const reader = new PacketReader(track);
 
-	const packet = await reader.readAt(10);
+	const packet = await reader.getAt(10);
 	assert(packet);
 	expect(packet.timestamp).toBe(9.93814058956916);
 	expect(packet.data.byteLength).toBe(8345);
 	expect(packet.sequenceNumber).toBe(107);
 	expect(packet.duration).toBe(0.09287981859410431);
 
-	const nextPacket = await reader.readNext(packet);
+	const nextPacket = await reader.getNext(packet);
 	assert(nextPacket);
 	expect(nextPacket.timestamp).toBe(10.031020408163265);
 	expect(nextPacket.data.byteLength).toBe(8988);
 	expect(nextPacket.sequenceNumber).toBe(108);
 	expect(nextPacket.duration).toBe(0.09287981859410431);
 
-	const priorPacket = await reader.readAt(3);
+	const priorPacket = await reader.getAt(3);
 	assert(priorPacket);
 	expect(priorPacket.timestamp).toBe(2.972154195011338);
 	expect(priorPacket.data.byteLength).toBe(6877);
@@ -101,7 +101,7 @@ test('can get metadata-only packets', async () => {
 
 	const reader = new PacketReader(track);
 
-	const packet = await reader.readAt(10, { metadataOnly: true });
+	const packet = await reader.getAt(10, { metadataOnly: true });
 	assert(packet);
 	expect(packet.timestamp).toBe(9.93814058956916);
 	expect(packet.isMetadataOnly).toBe(true);
@@ -227,8 +227,8 @@ test('can re-mux a .flac', async () => {
 	expect(timestamp).toBe(19.690521541950112);
 
 	// Test that packets are byte-identical
-	const inputPacket = await inputReader.readAt(10);
-	const outputPacket = await outputReader.readAt(10);
+	const inputPacket = await inputReader.getAt(10);
+	const outputPacket = await outputReader.getAt(10);
 
 	assert(inputPacket);
 	assert(outputPacket);

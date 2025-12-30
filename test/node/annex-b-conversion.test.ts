@@ -23,7 +23,7 @@ test('Annex B to length-prefixed conversion, MP4', async () => {
 	expect(originalVideoTrack.codec).toBe('avc');
 
 	const originalReader = new PacketReader(originalVideoTrack);
-	const originalFirstPacket = await originalReader.readFirst();
+	const originalFirstPacket = await originalReader.getFirst();
 	expect([...originalFirstPacket!.data.slice(0, 4)]).toEqual([0, 0, 0, 1]);
 
 	const originalNalUnits = extractAvcNalUnits(originalFirstPacket!.data, originalDecoderConfig);
@@ -46,7 +46,7 @@ test('Annex B to length-prefixed conversion, MP4', async () => {
 	expect(newVideoTrack.codec).toBe('avc');
 
 	const newReader = new PacketReader(newVideoTrack);
-	const newFirstPacket = await newReader.readFirst();
+	const newFirstPacket = await newReader.getFirst();
 	expect([...newFirstPacket!.data.slice(0, 4)]).not.toEqual([0, 0, 0, 1]); // Successfully converted
 
 	const newNalUnits = extractAvcNalUnits(newFirstPacket!.data, newDecoderConfig);

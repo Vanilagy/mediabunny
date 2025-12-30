@@ -84,7 +84,7 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 		this.track = track;
 	}
 
-	private maybeVerifyPacketType(
+	private _maybeVerifyPacketType(
 		packet: EncodedPacket | null,
 		options: PacketRetrievalOptions,
 	): MaybePromise<EncodedPacket | null> {
@@ -102,7 +102,7 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 		});
 	}
 
-	readFirst(options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
+	getFirst(options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
 		validatePacketRetrievalOptions(options);
 
 		if (this.track.input._disposed) {
@@ -113,13 +113,13 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 		const promise = this.track._backing.getFirstPacket(result, options);
 
 		if (result.pending) {
-			return promise.then(() => this.maybeVerifyPacketType(result.value, options));
+			return promise.then(() => this._maybeVerifyPacketType(result.value, options));
 		} else {
-			return this.maybeVerifyPacketType(result.value, options);
+			return this._maybeVerifyPacketType(result.value, options);
 		}
 	}
 
-	readAt(timestamp: number, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
+	getAt(timestamp: number, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
 		validateTimestamp(timestamp);
 		validatePacketRetrievalOptions(options);
 
@@ -131,13 +131,13 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 		const promise = this.track._backing.getPacket(result, timestamp, options);
 
 		if (result.pending) {
-			return promise.then(() => this.maybeVerifyPacketType(result.value, options));
+			return promise.then(() => this._maybeVerifyPacketType(result.value, options));
 		} else {
-			return this.maybeVerifyPacketType(result.value, options);
+			return this._maybeVerifyPacketType(result.value, options);
 		}
 	}
 
-	readKeyAt(timestamp: number, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
+	getKeyAt(timestamp: number, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
 		validateTimestamp(timestamp);
 		validatePacketRetrievalOptions(options);
 
@@ -146,7 +146,7 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 		}
 
 		if (options.verifyKeyPackets) {
-			return this.readKeyAtVerified(timestamp, options);
+			return this._readKeyAtVerified(timestamp, options);
 		}
 
 		const result = new ResultValue<EncodedPacket | null>();
@@ -159,7 +159,7 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 		}
 	}
 
-	private async readKeyAtVerified(
+	private async _readKeyAtVerified(
 		timestamp: number,
 		options: PacketRetrievalOptions,
 	): Promise<EncodedPacket | null> {
@@ -175,13 +175,13 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 		const determinedType = await this.track.determinePacketType(packet);
 		if (determinedType === 'delta') {
 			// Try returning the previous key packet (in hopes that it's actually a key packet)
-			return this.readKeyAtVerified(packet.timestamp - 1 / this.track.timeResolution, options);
+			return this._readKeyAtVerified(packet.timestamp - 1 / this.track.timeResolution, options);
 		}
 
 		return packet;
 	}
 
-	readNext(from: EncodedPacket, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
+	getNext(from: EncodedPacket, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
 		if (!(from instanceof EncodedPacket)) {
 			throw new TypeError('from must be an EncodedPacket.');
 		}
@@ -195,13 +195,13 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 		const promise = this.track._backing.getNextPacket(result, from, options);
 
 		if (result.pending) {
-			return promise.then(() => this.maybeVerifyPacketType(result.value, options));
+			return promise.then(() => this._maybeVerifyPacketType(result.value, options));
 		} else {
-			return this.maybeVerifyPacketType(result.value, options);
+			return this._maybeVerifyPacketType(result.value, options);
 		}
 	}
 
-	readNextKey(from: EncodedPacket, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
+	getNextKey(from: EncodedPacket, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
 		if (!(from instanceof EncodedPacket)) {
 			throw new TypeError('from must be an EncodedPacket.');
 		}
@@ -212,7 +212,7 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 		}
 
 		if (options.verifyKeyPackets) {
-			return this.readNextKeyVerified(from, options);
+			return this._getNextKeyVerified(from, options);
 		}
 
 		const result = new ResultValue<EncodedPacket | null>();
@@ -225,7 +225,7 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 		}
 	}
 
-	private async readNextKeyVerified(
+	private async _getNextKeyVerified(
 		from: EncodedPacket,
 		options: PacketRetrievalOptions,
 	): Promise<EncodedPacket | null> {
@@ -241,7 +241,7 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 		const determinedType = await this.track.determinePacketType(nextPacket);
 		if (determinedType === 'delta') {
 			// Try returning the next key packet (in hopes that it's actually a key packet)
-			return this.readNextKeyVerified(nextPacket, options);
+			return this._getNextKeyVerified(nextPacket, options);
 		}
 
 		return nextPacket;
@@ -269,7 +269,7 @@ export class PacketCursor<T extends InputTrack = InputTrack> {
 	}
 
 	private _seekToFirstDirect(): MaybePromise<EncodedPacket | null> {
-		const result = this._reader.readFirst(this._options);
+		const result = this._reader.getFirst(this._options);
 
 		const onPacket = (packet: EncodedPacket | null) => {
 			this._nextIsFirst = false;
@@ -291,7 +291,7 @@ export class PacketCursor<T extends InputTrack = InputTrack> {
 		validateTimestamp(timestamp);
 
 		return this._callSerializer.call(() => {
-			const result = this._reader.readAt(timestamp, this._options);
+			const result = this._reader.getAt(timestamp, this._options);
 
 			const onPacket = (packet: EncodedPacket | null) => {
 				this._nextIsFirst = !packet;
@@ -310,7 +310,7 @@ export class PacketCursor<T extends InputTrack = InputTrack> {
 		validateTimestamp(timestamp);
 
 		return this._callSerializer.call(() => {
-			const result = this._reader.readKeyAt(timestamp, this._options);
+			const result = this._reader.getKeyAt(timestamp, this._options);
 
 			const onPacket = (packet: EncodedPacket | null) => {
 				this._nextIsFirst = !packet;
@@ -335,7 +335,7 @@ export class PacketCursor<T extends InputTrack = InputTrack> {
 				return null;
 			}
 
-			const result = this._reader.readNext(this.current, this._options);
+			const result = this._reader.getNext(this.current, this._options);
 
 			const onPacket = (packet: EncodedPacket | null) => {
 				return this.current = packet;
@@ -359,7 +359,7 @@ export class PacketCursor<T extends InputTrack = InputTrack> {
 				return null;
 			}
 
-			const result = this._reader.readNextKey(this.current, this._options);
+			const result = this._reader.getNextKey(this.current, this._options);
 
 			const onPacket = (packet: EncodedPacket | null) => {
 				return this.current = packet;
@@ -574,17 +574,17 @@ export abstract class SampleCursor<
 	}
 
 	seekToFirst(): MaybePromise<TransformedSample | null> {
-		return this._getSample(result => this._seekToPacket(result, this._packetReader.readFirst()));
+		return this._getSample(result => this._seekToPacket(result, this._packetReader.getFirst()));
 	}
 
 	seekTo(timestamp: number): MaybePromise<TransformedSample | null> {
 		validateTimestamp(timestamp);
-		return this._getSample(result => this._seekToPacket(result, this._packetReader.readAt(timestamp)));
+		return this._getSample(result => this._seekToPacket(result, this._packetReader.getAt(timestamp)));
 	}
 
 	seekToKey(timestamp: number): MaybePromise<TransformedSample | null> {
 		validateTimestamp(timestamp);
-		return this._getSample(result => this._seekToPacket(result, this._packetReader.readKeyAt(timestamp)));
+		return this._getSample(result => this._seekToPacket(result, this._packetReader.getKeyAt(timestamp)));
 	}
 
 	next(): MaybePromise<TransformedSample | null> {
@@ -940,7 +940,7 @@ export abstract class SampleCursor<
 			} else {
 				if (this._packetCursor.current) {
 					// We need to see if the target packet is ahead of the decoder, GOP-wise
-					let nextKey = this._packetReader.readNextKey(
+					let nextKey = this._packetReader.getNextKey(
 						this._packetCursor.current,
 						{ verifyKeyPackets: true },
 					);
@@ -1003,7 +1003,7 @@ export abstract class SampleCursor<
 		if (this._nextIsFirst) {
 			// Easy, just seek to the first sample
 			// await is important so that the lock doesn't release too early
-			return await this._seekToPacket(res, this._packetReader.readFirst(), lock);
+			return await this._seekToPacket(res, this._packetReader.getFirst(), lock);
 		}
 
 		// See if the request can be satisfied using already-decoded samples
@@ -1059,7 +1059,7 @@ export abstract class SampleCursor<
 
 		if (this._nextIsFirst) {
 			// await is important so that the lock doesn't release too early
-			return await this._seekToPacket(res, this._packetReader.readFirst(), lock);
+			return await this._seekToPacket(res, this._packetReader.getFirst(), lock);
 		}
 
 		let timestampToCheck: number;
@@ -1094,11 +1094,11 @@ export abstract class SampleCursor<
 		// are ascending in timestamp, so we first get the current key (based on a presentation-order search), then
 		// get the next key after that, which will be the answer we're looking for.
 
-		let key = this._packetReader.readKeyAt(timestampToCheck, { verifyKeyPackets: true });
+		let key = this._packetReader.getKeyAt(timestampToCheck, { verifyKeyPackets: true });
 		if (key instanceof Promise) key = await key;
 		assert(key); // Must be
 
-		let nextKey = this._packetReader.readNextKey(key, { verifyKeyPackets: true });
+		let nextKey = this._packetReader.getNextKey(key, { verifyKeyPackets: true });
 		if (nextKey instanceof Promise) nextKey = await nextKey;
 
 		if (!nextKey) {
@@ -1116,7 +1116,7 @@ export abstract class SampleCursor<
 		this._ensureNotClosed();
 
 		if (this._nextIsFirst) {
-			let first = this._packetReader.readFirst();
+			let first = this._packetReader.getFirst();
 			if (first instanceof Promise) first = await first;
 
 			return res.set(!!first);

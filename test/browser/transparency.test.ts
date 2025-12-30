@@ -43,7 +43,7 @@ test('Can decode faulty transparent video and behaves gracefully', async () => {
 
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
 	const reader = new PacketReader(videoTrack);
-	const secondKeyPacket = (await reader.readNextKey((await reader.readFirst())!))!;
+	const secondKeyPacket = (await reader.getNextKey((await reader.getFirst())!))!;
 
 	await using cursor = new VideoSampleCursor(videoTrack);
 
