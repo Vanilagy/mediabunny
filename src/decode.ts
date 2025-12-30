@@ -20,7 +20,7 @@ import {
 } from './codec-data';
 import { CustomAudioDecoder, customAudioDecoders, CustomVideoDecoder, customVideoDecoders } from './custom-coder';
 import {
-	CallSerializer,
+	NaiveCallSerializer,
 	Rotation,
 	isChromium,
 	toUint8Array,
@@ -57,7 +57,7 @@ export class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	decoder: VideoDecoder | null = null;
 
 	customDecoder: CustomVideoDecoder | null = null;
-	customDecoderCallSerializer = new CallSerializer();
+	customDecoderCallSerializer = new NaiveCallSerializer();
 	customDecoderQueueSize = 0;
 	customDecoderClosed = false;
 
@@ -645,7 +645,7 @@ export class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 	decoder: AudioDecoder | null = null;
 
 	customDecoder: CustomAudioDecoder | null = null;
-	customDecoderCallSerializer = new CallSerializer();
+	customDecoderCallSerializer = new NaiveCallSerializer();
 	customDecoderQueueSize = 0;
 	customDecoderClosed = false;
 

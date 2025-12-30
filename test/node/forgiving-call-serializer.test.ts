@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { CallSerializer2 } from '../../src/misc.js';
+import { ForgivingCallSerializer } from '../../src/misc.js';
 
 const executeDelayed = async <T>(fn: () => T) => {
 	await new Promise(resolve => setTimeout(resolve, 10));
@@ -8,7 +8,7 @@ const executeDelayed = async <T>(fn: () => T) => {
 
 test('Call serialization and return values', async () => {
 	const numbers: number[] = [];
-	const serializer = new CallSerializer2();
+	const serializer = new ForgivingCallSerializer();
 
 	const first = serializer.call(() => numbers.push(1));
 	const second = serializer.call(() => executeDelayed(() => numbers.push(2)));
@@ -25,7 +25,7 @@ test('Call serialization and return values', async () => {
 });
 
 test('Synchronous return value', async () => {
-	const serializer = new CallSerializer2();
+	const serializer = new ForgivingCallSerializer();
 
 	const first = serializer.call(() => {});
 	expect(first).not.toBeInstanceOf(Promise);
@@ -42,7 +42,7 @@ test('Synchronous return value', async () => {
 });
 
 test('Error handling', async () => {
-	const serializer = new CallSerializer2();
+	const serializer = new ForgivingCallSerializer();
 
 	expect(() => serializer.call(() => {
 		throw new Error('yo');

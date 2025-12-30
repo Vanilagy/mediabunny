@@ -23,7 +23,7 @@ import { OutputAudioTrack, OutputSubtitleTrack, OutputTrack, OutputVideoTrack } 
 import {
 	assert,
 	assertNever,
-	CallSerializer,
+	NaiveCallSerializer,
 	clamp,
 	isFirefox,
 	last,
@@ -214,7 +214,7 @@ class VideoEncoderWrapper {
 	private resizeCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
 
 	private customEncoder: CustomVideoEncoder | null = null;
-	private customEncoderCallSerializer = new CallSerializer();
+	private customEncoderCallSerializer = new NaiveCallSerializer();
 	private customEncoderQueueSize = 0;
 
 	// Alpha stuff
@@ -1342,7 +1342,7 @@ class AudioEncoderWrapper {
 	private writeOutputValue: ((view: DataView, byteOffset: number, value: number) => void) | null = null;
 
 	private customEncoder: CustomAudioEncoder | null = null;
-	private customEncoderCallSerializer = new CallSerializer();
+	private customEncoderCallSerializer = new NaiveCallSerializer();
 	private customEncoderQueueSize = 0;
 
 	private lastEndSampleIndex: number | null = null;

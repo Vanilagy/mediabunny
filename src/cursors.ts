@@ -14,7 +14,7 @@ import {
 	assert,
 	AsyncMutex,
 	AsyncMutexLock,
-	CallSerializer2,
+	ForgivingCallSerializer,
 	defer,
 	isFirefox,
 	last,
@@ -255,7 +255,7 @@ export class PacketCursor<T extends InputTrack = InputTrack> {
 	private _reader: PacketReader<T>;
 	private _options: PacketRetrievalOptions;
 	private _nextIsFirst = true;
-	private _callSerializer = new CallSerializer2();
+	private _callSerializer = new ForgivingCallSerializer();
 
 	constructor(track: T, options: PacketRetrievalOptions = {}) {
 		if (!(track instanceof InputTrack)) {

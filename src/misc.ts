@@ -675,20 +675,6 @@ export const computeRationalApproximation = (x: number, maxDenominator: number) 
 	};
 };
 
-export class CallSerializer {
-	currentPromise = Promise.resolve();
-	errored = false;
-
-	call(fn: () => Promise<void> | void) {
-		return this.currentPromise = this.currentPromise
-			.then(fn)
-			.catch((error) => {
-				this.errored = true;
-				throw error;
-			});
-	}
-}
-
 let isWebKitCache: boolean | null = null;
 export const isWebKit = () => {
 	if (isWebKitCache !== null) {
@@ -938,7 +924,30 @@ export class AsyncMutexLock implements Disposable {
 	}
 }
 
-export class CallSerializer2 {
+/**
+ * A simple call serializer that works by chaining promises. When one callback throws, the serializer becomes bricked,
+ * meaning all future calls will also throw.
+ */
+export class NaiveCallSerializer {
+	currentPromise = Promise.resolve();
+	errored = false;
+
+	call(fn: () => Promise<void> | void) {
+		return this.currentPromise = this.currentPromise
+			.then(fn)
+			.catch((error) => {
+				this.errored = true;
+				throw error;
+			});
+	}
+}
+
+/**
+ * A more complex call serializer implementation that works with optionally asynchronous functions. It is forgiving
+ * in the sense that when a call throws, the error is surfaced but subsequent calls will go through again. So, it
+ * recovers.
+ */
+export class ForgivingCallSerializer {
 	private currentPromise: Promise<unknown> | null = null;
 	private queuedCalls = 0;
 
