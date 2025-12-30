@@ -9,7 +9,8 @@ import { CanvasSource, VideoSampleSource } from '../../src/media-source.js';
 import { canEncodeVideo, QUALITY_HIGH } from '../../src/encode.js';
 import { VideoSample } from '../../src/sample.js';
 import { Conversion } from '../../src/conversion.js';
-import { canvasTransformer, PacketCursor, PacketReader, VideoSampleCursor } from '../../src/cursors.js';
+import { canvasTransformer, PacketCursor, VideoSampleCursor } from '../../src/cursors.js';
+import { PacketReader } from '../../src/packet.js';
 
 test('Can decode transparent video', async () => {
 	using input = new Input({

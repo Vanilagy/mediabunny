@@ -60,7 +60,7 @@ import {
 	ResultValue,
 	MaybeRelevantPromise,
 } from '../misc';
-import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
+import { EncodedPacket, PacketRetrievalOptions, PLACEHOLDER_DATA } from '../packet';
 import { buildIsobmffMimeType } from './isobmff-misc';
 import {
 	MAX_BOX_HEADER_SIZE,
@@ -88,7 +88,6 @@ import {
 	readAscii,
 } from '../reader';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags, RichImageData, TrackDisposition } from '../metadata';
-import { PacketRetrievalOptions } from '../cursors';
 
 type InternalTrack = {
 	id: number;

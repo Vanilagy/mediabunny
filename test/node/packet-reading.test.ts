@@ -4,8 +4,9 @@ import { BufferSource, FilePathSource } from '../../src/source.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import { ALL_FORMATS } from '../../src/input-format.js';
-import { PacketCursor, PacketReader } from '../../src/cursors.js';
+import { PacketCursor } from '../../src/cursors.js';
 import { promiseAllEnsureOrder } from '../../src/misc.js';
+import { PacketReader } from '../../src/packet.js';
 
 const __dirname = new URL('.', import.meta.url).pathname;
 

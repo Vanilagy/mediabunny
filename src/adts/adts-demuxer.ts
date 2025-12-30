@@ -19,11 +19,10 @@ import {
 	ResultValue,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
-import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
+import { EncodedPacket, PacketRetrievalOptions, PLACEHOLDER_DATA } from '../packet';
 import { readBytes, Reader } from '../reader';
 import { DEFAULT_TRACK_DISPOSITION } from '../metadata';
 import { FrameHeader, MAX_FRAME_HEADER_SIZE, MIN_FRAME_HEADER_SIZE, readFrameHeader } from './adts-reader';
-import { PacketRetrievalOptions } from '../cursors';
 
 const SAMPLES_PER_AAC_FRAME = 1024;
 

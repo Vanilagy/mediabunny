@@ -8,7 +8,8 @@ import { Output } from '../../src/output.js';
 import { BufferTarget } from '../../src/target.js';
 import { FlacOutputFormat } from '../../src/output-format.js';
 import { Conversion } from '../../src/conversion.js';
-import { PacketCursor, PacketReader } from '../../src/cursors.js';
+import { PacketCursor } from '../../src/cursors.js';
+import { PacketReader } from '../../src/packet.js';
 
 const __dirname = new URL('.', import.meta.url).pathname;
 

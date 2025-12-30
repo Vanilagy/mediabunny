@@ -12,9 +12,9 @@ import { customAudioDecoders, customVideoDecoders } from './custom-coder';
 import { Input } from './input';
 import { assert, MaybeRelevantPromise, ResultValue, Rotation } from './misc';
 import { TrackType } from './output';
-import { EncodedPacket, PacketType } from './packet';
+import { EncodedPacket, PacketRetrievalOptions, PacketType } from './packet';
 import { TrackDisposition } from './metadata';
-import { PacketCursor, PacketRetrievalOptions } from './cursors';
+import { PacketCursor } from './cursors';
 
 /**
  * Contains aggregate statistics about the encoded packets of a track.

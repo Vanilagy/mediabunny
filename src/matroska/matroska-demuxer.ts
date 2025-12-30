@@ -48,7 +48,7 @@ import {
 	TRANSFER_CHARACTERISTICS_MAP_INVERSE,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
-import { EncodedPacket, EncodedPacketSideData, PLACEHOLDER_DATA } from '../packet';
+import { EncodedPacket, EncodedPacketSideData, PacketRetrievalOptions, PLACEHOLDER_DATA } from '../packet';
 import {
 	assertDefinedSize,
 	CODEC_STRING_MAP,
@@ -70,7 +70,6 @@ import {
 } from './ebml';
 import { buildMatroskaMimeType } from './matroska-misc';
 import { FileSlice, readBytes, Reader, readI16Be, readU8 } from '../reader';
-import { PacketRetrievalOptions } from '../cursors';
 
 type Segment = {
 	seekHeadSeen: boolean;

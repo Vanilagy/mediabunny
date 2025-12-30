@@ -161,6 +161,7 @@ export {
 	EncodedPacket,
 	EncodedPacketSideData,
 	PacketType,
+	PacketReader,
 } from './packet';
 export {
 	AudioSample,
@@ -174,7 +175,6 @@ export {
 	VIDEO_SAMPLE_PIXEL_FORMATS,
 } from './sample';
 export {
-	PacketReader,
 	PacketCursor,
 	SampleCursor,
 	VideoSampleCursor,

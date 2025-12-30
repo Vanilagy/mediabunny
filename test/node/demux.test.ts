@@ -4,10 +4,9 @@ import { BufferSource, FilePathSource } from '../../src/source.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import { ADTS, ALL_FORMATS, FLAC, MP3, MP4, OGG, QTFF, WAVE, WEBM } from '../../src/input-format.js';
-import { PacketReader } from '../../src/cursors.js';
 import { InputAudioTrack, InputTrack } from '../../src/input-track.js';
 import { assert } from '../../src/misc.js';
-import { EncodedPacket } from '../../src/packet.js';
+import { EncodedPacket, PacketReader } from '../../src/packet.js';
 
 const __dirname = new URL('.', import.meta.url).pathname;
 

@@ -3,7 +3,6 @@ import { Input } from '../../src/input.js';
 import { BufferSource, UrlSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import {
-	audioBufferTransformer,
 	AudioSampleCursor,
 	canvasTransformer,
 	VideoSampleCursor,
@@ -1113,33 +1112,6 @@ test('Canvas transformer', async () => {
 	expect(sample2.canvas).toBe(sample4.canvas);
 
 	await cursor2.close();
-});
-
-test('AudioBuffer transformer', async () => {
-	using input = new Input({
-		source: new UrlSource('/trim-buck-bunny.mov'),
-		formats: ALL_FORMATS,
-	});
-
-	const audioTrack = (await input.getPrimaryAudioTrack())!;
-
-	const cursor = new AudioSampleCursor(audioTrack, {
-		transform: audioBufferTransformer(),
-	});
-
-	const firstSample = (await cursor.seekToFirst())!;
-	expect(firstSample.buffer).toBeInstanceOf(AudioBuffer);
-	expect(firstSample.timestamp).toBe(0);
-	expect(firstSample.duration).toBeGreaterThan(0);
-	expect(firstSample.buffer.duration).toBe(firstSample.duration);
-
-	const nextSample = (await cursor.next())!;
-	expect(nextSample.buffer).toBeInstanceOf(AudioBuffer);
-	expect(nextSample.timestamp).toBeGreaterThan(firstSample.timestamp);
-	expect(nextSample.buffer).not.toBe(firstSample.buffer);
-	expect(nextSample.buffer.duration).toBe(nextSample.duration);
-
-	await cursor.close();
 });
 
 test('Unthrottled decoder', async () => {

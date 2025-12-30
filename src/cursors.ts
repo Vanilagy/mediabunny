@@ -8,7 +8,6 @@
 
 import { PCM_AUDIO_CODECS } from './codec';
 import { AudioDecoderWrapper, DecoderWrapper, PcmAudioDecoderWrapper, VideoDecoderWrapper } from './decode';
-import { InputDisposedError } from './input';
 import { InputAudioTrack, InputTrack, InputVideoTrack } from './input-track';
 import {
 	assert,
@@ -24,229 +23,18 @@ import {
 	ResultValue,
 	Rotation,
 	AsyncGate,
-	isNumber,
 	MaybeRelevantPromise,
 } from './misc';
-import { EncodedPacket } from './packet';
+import {
+	EncodedPacket,
+	PacketReader,
+	PacketRetrievalOptions,
+	validatePacketRetrievalOptions,
+	validateTimestamp,
+} from './packet';
 import { AudioSample, clampCropRectangle, CropRectangle, validateCropRectangle, VideoSample } from './sample';
 
 polyfillSymbolDispose();
-
-/**
- * Additional options for controlling packet retrieval.
- * @group Media sinks
- * @public
- */
-export type PacketRetrievalOptions = {
-	/**
-	 * When set to `true`, only packet metadata (like timestamp) will be retrieved - the actual packet data will not
-	 * be loaded.
-	 */
-	metadataOnly?: boolean;
-
-	/**
-	 * When set to true, key packets will be verified upon retrieval by looking into the packet's bitstream.
-	 * If not enabled, the packet types will be determined solely by what's stored in the containing file and may be
-	 * incorrect, potentially leading to decoder errors. Since determining a packet's actual type requires looking into
-	 * its data, this option cannot be enabled together with `metadataOnly`.
-	 */
-	verifyKeyPackets?: boolean;
-};
-
-export const validatePacketRetrievalOptions = (options: PacketRetrievalOptions) => {
-	if (!options || typeof options !== 'object') {
-		throw new TypeError('options must be an object.');
-	}
-	if (options.metadataOnly !== undefined && typeof options.metadataOnly !== 'boolean') {
-		throw new TypeError('options.metadataOnly, when defined, must be a boolean.');
-	}
-	if (options.verifyKeyPackets !== undefined && typeof options.verifyKeyPackets !== 'boolean') {
-		throw new TypeError('options.verifyKeyPackets, when defined, must be a boolean.');
-	}
-	if (options.verifyKeyPackets && options.metadataOnly) {
-		throw new TypeError('options.verifyKeyPackets and options.metadataOnly cannot be enabled together.');
-	}
-};
-
-export const validateTimestamp = (timestamp: number) => {
-	if (!isNumber(timestamp)) {
-		throw new TypeError('timestamp must be a number.'); // It can be non-finite, that's fine
-	}
-};
-
-export class PacketReader<T extends InputTrack = InputTrack> {
-	track: T;
-
-	constructor(track: T) {
-		if (!(track instanceof InputTrack)) {
-			throw new TypeError('track must be an InputTrack.');
-		}
-		this.track = track;
-	}
-
-	private _maybeVerifyPacketType(
-		packet: EncodedPacket | null,
-		options: PacketRetrievalOptions,
-	): MaybePromise<EncodedPacket | null> {
-		if (!options.verifyKeyPackets || !packet || packet.type === 'delta') {
-			return packet;
-		}
-
-		return this.track.determinePacketType(packet).then((determinedType) => {
-			if (determinedType) {
-				// @ts-expect-error Technically readonly
-				packet.type = determinedType;
-			}
-
-			return packet;
-		});
-	}
-
-	getFirst(options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
-		validatePacketRetrievalOptions(options);
-
-		if (this.track.input._disposed) {
-			throw new InputDisposedError();
-		}
-
-		const result = new ResultValue<EncodedPacket | null>();
-		const promise = this.track._backing.getFirstPacket(result, options);
-
-		if (result.pending) {
-			return promise.then(() => this._maybeVerifyPacketType(result.value, options));
-		} else {
-			return this._maybeVerifyPacketType(result.value, options);
-		}
-	}
-
-	getAt(timestamp: number, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
-		validateTimestamp(timestamp);
-		validatePacketRetrievalOptions(options);
-
-		if (this.track.input._disposed) {
-			throw new InputDisposedError();
-		}
-
-		const result = new ResultValue<EncodedPacket | null>();
-		const promise = this.track._backing.getPacket(result, timestamp, options);
-
-		if (result.pending) {
-			return promise.then(() => this._maybeVerifyPacketType(result.value, options));
-		} else {
-			return this._maybeVerifyPacketType(result.value, options);
-		}
-	}
-
-	getKeyAt(timestamp: number, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
-		validateTimestamp(timestamp);
-		validatePacketRetrievalOptions(options);
-
-		if (this.track.input._disposed) {
-			throw new InputDisposedError();
-		}
-
-		if (options.verifyKeyPackets) {
-			return this._readKeyAtVerified(timestamp, options);
-		}
-
-		const result = new ResultValue<EncodedPacket | null>();
-		const promise = this.track._backing.getKeyPacket(result, timestamp, options);
-
-		if (result.pending) {
-			return promise.then(() => result.value);
-		} else {
-			return result.value;
-		}
-	}
-
-	private async _readKeyAtVerified(
-		timestamp: number,
-		options: PacketRetrievalOptions,
-	): Promise<EncodedPacket | null> {
-		const result = new ResultValue<EncodedPacket | null>();
-		const promise = this.track._backing.getKeyPacket(result, timestamp, options);
-		if (result.pending) await promise;
-
-		const packet = result.value;
-		if (!packet) {
-			return null;
-		}
-
-		const determinedType = await this.track.determinePacketType(packet);
-		if (determinedType === 'delta') {
-			// Try returning the previous key packet (in hopes that it's actually a key packet)
-			return this._readKeyAtVerified(packet.timestamp - 1 / this.track.timeResolution, options);
-		}
-
-		return packet;
-	}
-
-	getNext(from: EncodedPacket, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
-		if (!(from instanceof EncodedPacket)) {
-			throw new TypeError('from must be an EncodedPacket.');
-		}
-		validatePacketRetrievalOptions(options);
-
-		if (this.track.input._disposed) {
-			throw new InputDisposedError();
-		}
-
-		const result = new ResultValue<EncodedPacket | null>();
-		const promise = this.track._backing.getNextPacket(result, from, options);
-
-		if (result.pending) {
-			return promise.then(() => this._maybeVerifyPacketType(result.value, options));
-		} else {
-			return this._maybeVerifyPacketType(result.value, options);
-		}
-	}
-
-	getNextKey(from: EncodedPacket, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
-		if (!(from instanceof EncodedPacket)) {
-			throw new TypeError('from must be an EncodedPacket.');
-		}
-		validatePacketRetrievalOptions(options);
-
-		if (this.track.input._disposed) {
-			throw new InputDisposedError();
-		}
-
-		if (options.verifyKeyPackets) {
-			return this._getNextKeyVerified(from, options);
-		}
-
-		const result = new ResultValue<EncodedPacket | null>();
-		const promise = this.track._backing.getNextKeyPacket(result, from, options);
-
-		if (result.pending) {
-			return promise.then(() => result.value);
-		} else {
-			return result.value;
-		}
-	}
-
-	private async _getNextKeyVerified(
-		from: EncodedPacket,
-		options: PacketRetrievalOptions,
-	): Promise<EncodedPacket | null> {
-		const result = new ResultValue<EncodedPacket | null>();
-		const promise = this.track._backing.getNextKeyPacket(result, from, options);
-		if (result.pending) await promise;
-
-		const nextPacket = result.value;
-		if (!nextPacket) {
-			return null;
-		}
-
-		const determinedType = await this.track.determinePacketType(nextPacket);
-		if (determinedType === 'delta') {
-			// Try returning the next key packet (in hopes that it's actually a key packet)
-			return this._getNextKeyVerified(nextPacket, options);
-		}
-
-		return nextPacket;
-	}
-}
 
 export class PacketCursor<T extends InputTrack = InputTrack> {
 	track: T;
@@ -1638,31 +1426,5 @@ export const canvasTransformer = (
 		sample.close();
 
 		return new WrappedCanvas(canvas, sample.timestamp, sample.duration);
-	};
-};
-
-/**
- * An AudioBuffer with additional timing information (timestamp & duration).
- * @public
- */
-export type WrappedAudioBuffer = {
-	/** An AudioBuffer. */
-	buffer: AudioBuffer;
-	/** The timestamp of the corresponding audio sample, in seconds. */
-	timestamp: number;
-	/** The duration of the corresponding audio sample, in seconds. */
-	duration: number;
-};
-
-export const audioBufferTransformer = (): SampleTransformer<AudioSample, WrappedAudioBuffer> => {
-	return (sample) => {
-		const result: WrappedAudioBuffer = {
-			buffer: sample.toAudioBuffer(),
-			timestamp: sample.timestamp,
-			duration: sample.duration,
-		};
-
-		sample.close();
-		return result;
 	};
 };

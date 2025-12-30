@@ -20,7 +20,7 @@ import {
 	textDecoder,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
-import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
+import { EncodedPacket, PacketRetrievalOptions, PLACEHOLDER_DATA } from '../packet';
 import {
 	FileSlice,
 	readBytes,
@@ -38,7 +38,6 @@ import {
 	readSampleRate,
 	getSampleRateOrUncommon,
 } from './flac-misc';
-import { PacketRetrievalOptions } from '../cursors';
 
 type FlacAudioInfo = {
 	numberOfChannels: number;

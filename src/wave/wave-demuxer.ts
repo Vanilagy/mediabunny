@@ -12,10 +12,9 @@ import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
 import { assert, MaybeRelevantPromise, ResultValue, UNDETERMINED_LANGUAGE } from '../misc';
-import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
+import { EncodedPacket, PacketRetrievalOptions, PLACEHOLDER_DATA } from '../packet';
 import { readAscii, readBytes, Reader, readU16, readU32, readU64 } from '../reader';
 import { parseId3V2Tag, readId3V2Header } from '../id3';
-import { PacketRetrievalOptions } from '../cursors';
 
 export enum WaveFormat {
 	PCM = 0x0001,

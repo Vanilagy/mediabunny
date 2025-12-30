@@ -19,7 +19,7 @@ import {
 	ResultValue,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
-import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
+import { EncodedPacket, PacketRetrievalOptions, PLACEHOLDER_DATA } from '../packet';
 import { FrameHeader, getXingOffset, INFO, XING } from '../../shared/mp3-misc';
 import {
 	ID3_V1_TAG_SIZE,
@@ -30,7 +30,6 @@ import {
 } from '../id3';
 import { readNextFrameHeader } from './mp3-reader';
 import { readAscii, readBytes, Reader, readU32Be } from '../reader';
-import { PacketRetrievalOptions } from '../cursors';
 
 type Sample = {
 	timestamp: number;

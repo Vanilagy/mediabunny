@@ -8,7 +8,7 @@ import { Mp4OutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
 import { Conversion } from '../../src/conversion.js';
 import { extractAvcNalUnits } from '../../src/codec-data.js';
-import { PacketReader } from '../../src/cursors.js';
+import { PacketReader } from '../../src/packet.js';
 
 const __dirname = new URL('.', import.meta.url).pathname;
 
