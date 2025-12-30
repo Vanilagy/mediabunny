@@ -272,6 +272,10 @@ const output = new Output({
 });
 ```
 
+::: info
+This format ensures [append-only writing](#append-only-writing).
+:::
+
 The following options are available:
 ```ts
 type AdtsOutputFormatOptions = {

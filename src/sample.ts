@@ -18,6 +18,7 @@ import {
 	isFirefox,
 	polyfillSymbolDispose,
 	assertNever,
+	isWebKit,
 } from './misc';
 
 polyfillSymbolDispose();
@@ -1590,6 +1591,7 @@ export class AudioSample implements Disposable {
 
 		const { planeIndex, format, frameCount: optFrameCount, frameOffset: optFrameOffset } = options;
 
+		const srcFormat = this.format;
 		const destFormat = format ?? this.format;
 		if (!destFormat) throw new Error('Destination format not determined');
 
@@ -1624,58 +1626,31 @@ export class AudioSample implements Disposable {
 		const writeFn = getWriteFunction(destFormat);
 
 		if (isAudioData(this._data)) {
-			if (destIsPlanar) {
-				if (destFormat === 'f32-planar') {
-					// Simple, since the browser must support f32-planar, we can just delegate here
-					this._data.copyTo(destination, {
-						planeIndex,
-						frameOffset,
-						frameCount: copyFrameCount,
-						format: 'f32-planar',
-					});
-				} else {
-					// Allocate temporary buffer for f32-planar data
-					const tempBuffer = new ArrayBuffer(copyFrameCount * 4);
-					const tempArray = new Float32Array(tempBuffer);
-					this._data.copyTo(tempArray, {
-						planeIndex,
-						frameOffset,
-						frameCount: copyFrameCount,
-						format: 'f32-planar',
-					});
-
-					// Convert each f32 sample to destination format
-					const tempView = new DataView(tempBuffer);
-					for (let i = 0; i < copyFrameCount; i++) {
-						const destOffset = i * destBytesPerSample;
-						const sample = tempView.getFloat32(i * 4, true);
-						writeFn(destView, destOffset, sample);
-					}
-				}
+			if (isWebKit() && numChannels > 2 && destFormat !== srcFormat) {
+				// WebKit bug workaround
+				doAudioDataCopyToWebKitWorkaround(
+					this._data,
+					destView,
+					srcFormat,
+					destFormat,
+					numChannels,
+					planeIndex,
+					frameOffset,
+					copyFrameCount,
+				);
 			} else {
-				// Destination is interleaved.
-				// Allocate a temporary Float32Array to hold one channel's worth of data.
-				const numCh = numChannels;
-				const temp = new Float32Array(copyFrameCount);
-				for (let ch = 0; ch < numCh; ch++) {
-					this._data.copyTo(temp, {
-						planeIndex: ch,
-						frameOffset,
-						frameCount: copyFrameCount,
-						format: 'f32-planar',
-					});
-					for (let i = 0; i < copyFrameCount; i++) {
-						const destIndex = i * numCh + ch;
-						const destOffset = destIndex * destBytesPerSample;
-						writeFn(destView, destOffset, temp[i]!);
-					}
-				}
+				// Per spec, only f32-planar conversion must be supported, but in practice, all browsers support all
+				// destination formats, so let's just delegate here:
+				this._data.copyTo(destination, {
+					planeIndex,
+					frameOffset,
+					frameCount: copyFrameCount,
+					format: destFormat,
+				});
 			}
 		} else {
 			const uint8Data = this._data;
 			const srcView = toDataView(uint8Data);
-
-			const srcFormat = this.format;
 			const readFn = getReadFunction(srcFormat);
 			const srcBytesPerSample = getBytesPerSample(srcFormat);
 			const srcIsPlanar = formatIsPlanar(srcFormat);
@@ -2034,4 +2009,113 @@ const getWriteFunction = (format: AudioSampleFormat): (view: DataView, offset: n
 
 const isAudioData = (x: unknown): x is AudioData => {
 	return typeof AudioData !== 'undefined' && x instanceof AudioData;
+};
+
+/**
+ * WebKit has a bug where calling AudioData.copyTo with a format different from the source format
+ * crashes the tab when there are more than 2 channels. This function works around that by always
+ * copying with the source format and then manually converting to the destination format.
+ *
+ * See https://bugs.webkit.org/show_bug.cgi?id=302521.
+ */
+const doAudioDataCopyToWebKitWorkaround = (
+	audioData: AudioData,
+	destView: DataView,
+	srcFormat: AudioSampleFormat,
+	destFormat: AudioSampleFormat,
+	numChannels: number,
+	planeIndex: number,
+	frameOffset: number,
+	copyFrameCount: number,
+) => {
+	const readFn = getReadFunction(srcFormat);
+	const writeFn = getWriteFunction(destFormat);
+	const srcBytesPerSample = getBytesPerSample(srcFormat);
+	const destBytesPerSample = getBytesPerSample(destFormat);
+	const srcIsPlanar = formatIsPlanar(srcFormat);
+	const destIsPlanar = formatIsPlanar(destFormat);
+
+	if (destIsPlanar) {
+		if (srcIsPlanar) {
+			// src planar -> dest planar: copy single plane and convert
+			const data = new ArrayBuffer(copyFrameCount * srcBytesPerSample);
+			const dataView = toDataView(data);
+
+			audioData.copyTo(data, {
+				planeIndex,
+				frameOffset,
+				frameCount: copyFrameCount,
+				format: srcFormat,
+			});
+
+			for (let i = 0; i < copyFrameCount; i++) {
+				const srcOffset = i * srcBytesPerSample;
+				const destOffset = i * destBytesPerSample;
+				const sample = readFn(dataView, srcOffset);
+				writeFn(destView, destOffset, sample);
+			}
+		} else {
+			// src interleaved -> dest planar: copy all interleaved data, extract one channel
+			const data = new ArrayBuffer(copyFrameCount * numChannels * srcBytesPerSample);
+			const dataView = toDataView(data);
+
+			audioData.copyTo(data, {
+				planeIndex: 0,
+				frameOffset,
+				frameCount: copyFrameCount,
+				format: srcFormat,
+			});
+
+			for (let i = 0; i < copyFrameCount; i++) {
+				const srcOffset = (i * numChannels + planeIndex) * srcBytesPerSample;
+				const destOffset = i * destBytesPerSample;
+				const sample = readFn(dataView, srcOffset);
+				writeFn(destView, destOffset, sample);
+			}
+		}
+	} else {
+		if (srcIsPlanar) {
+			// src planar -> dest interleaved: copy each plane and interleave
+			const planeSize = copyFrameCount * srcBytesPerSample;
+			const data = new ArrayBuffer(planeSize);
+			const dataView = toDataView(data);
+
+			for (let ch = 0; ch < numChannels; ch++) {
+				audioData.copyTo(data, {
+					planeIndex: ch,
+					frameOffset,
+					frameCount: copyFrameCount,
+					format: srcFormat,
+				});
+
+				for (let i = 0; i < copyFrameCount; i++) {
+					const srcOffset = i * srcBytesPerSample;
+					const destOffset = (i * numChannels + ch) * destBytesPerSample;
+					const sample = readFn(dataView, srcOffset);
+					writeFn(destView, destOffset, sample);
+				}
+			}
+		} else {
+			// src interleaved -> dest interleaved: copy all and convert
+			const data = new ArrayBuffer(copyFrameCount * numChannels * srcBytesPerSample);
+			const dataView = toDataView(data);
+
+			audioData.copyTo(data, {
+				planeIndex: 0,
+				frameOffset,
+				frameCount: copyFrameCount,
+				format: srcFormat,
+			});
+
+			for (let i = 0; i < copyFrameCount; i++) {
+				for (let ch = 0; ch < numChannels; ch++) {
+					const idx = i * numChannels + ch;
+					const srcOffset = idx * srcBytesPerSample;
+					const destOffset = idx * destBytesPerSample;
+					const sample = readFn(dataView, srcOffset);
+					writeFn(destView, destOffset, sample);
+				}
+			}
+		}
+	}
 };

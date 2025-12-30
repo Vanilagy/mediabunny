@@ -263,6 +263,11 @@ export class BlobSource extends Source {
 		}
 
 		worker.running = false;
+
+		if (worker.aborted) {
+			// MDN: "Calling this method signals a loss of interest in the stream by a consumer."
+			await reader?.cancel();
+		}
 	}
 
 	/** @internal */
@@ -556,7 +561,7 @@ export class UrlSource extends Source {
 				}
 
 				if (worker.aborted) {
-					break;
+					continue; // Cleanup happens in next iteration
 				}
 
 				const { done, value } = readResult;
@@ -578,13 +583,7 @@ export class UrlSource extends Source {
 				this.onread?.(worker.currentPos, worker.currentPos + value.length);
 				this._orchestrator.supplyWorkerData(worker, value);
 			}
-
-			if (worker.aborted) {
-				break;
-			}
 		}
-
-		worker.running = false;
 
 		// The previous UrlSource had logic for circumventing https://issues.chromium.org/issues/436025873; I haven't
 		// been able to observe this bug with the new UrlSource (maybe because we're using response streaming), so the

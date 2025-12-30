@@ -24,6 +24,7 @@ import {
 	toUint8Array,
 	getChromiumVersion,
 	isChromium,
+	setUint24,
 } from './misc';
 import { PacketType } from './packet';
 import { MetadataTags } from './metadata';
@@ -161,38 +162,54 @@ const removeEmulationPreventionBytes = (data: Uint8Array) => {
 	return new Uint8Array(result);
 };
 
-/** Converts an AVC packet in Annex B format to length-prefixed format. */
-export const transformAnnexBToLengthPrefixed = (packetData: Uint8Array) => {
-	const NAL_UNIT_LENGTH_SIZE = 4;
+const ANNEX_B_START_CODE = new Uint8Array([0, 0, 0, 1]);
 
-	const nalUnits = findNalUnitsInAnnexB(packetData);
-
-	if (nalUnits.length === 0) {
-		// If no NAL units were found, it's not valid Annex B data
-		return null;
-	}
-
-	let totalSize = 0;
-	for (const nalUnit of nalUnits) {
-		totalSize += NAL_UNIT_LENGTH_SIZE + nalUnit.byteLength;
-	}
-
-	const avccData = new Uint8Array(totalSize);
-	const dataView = new DataView(avccData.buffer);
+export const concatNalUnitsInAnnexB = (nalUnits: Uint8Array[]) => {
+	const totalLength = nalUnits.reduce((a, b) => a + ANNEX_B_START_CODE.byteLength + b.byteLength, 0);
+	const result = new Uint8Array(totalLength);
 	let offset = 0;
 
-	// Write each NAL unit with its length prefix
 	for (const nalUnit of nalUnits) {
-		const length = nalUnit.byteLength;
+		result.set(ANNEX_B_START_CODE, offset);
+		offset += ANNEX_B_START_CODE.byteLength;
 
-		dataView.setUint32(offset, length, false);
-		offset += 4;
-
-		avccData.set(nalUnit, offset);
+		result.set(nalUnit, offset);
 		offset += nalUnit.byteLength;
 	}
 
-	return avccData;
+	return result;
+};
+
+export const concatNalUnitsInLengthPrefixed = (nalUnits: Uint8Array[], lengthSize: 1 | 2 | 3 | 4) => {
+	const totalLength = nalUnits.reduce((a, b) => a + lengthSize + b.byteLength, 0);
+	const result = new Uint8Array(totalLength);
+	let offset = 0;
+
+	for (const nalUnit of nalUnits) {
+		const dataView = new DataView(result.buffer, result.byteOffset, result.byteLength);
+
+		switch (lengthSize) {
+			case 1:
+				dataView.setUint8(offset, nalUnit.byteLength);
+				break;
+			case 2:
+				dataView.setUint16(offset, nalUnit.byteLength, false);
+				break;
+			case 3:
+				setUint24(dataView, offset, nalUnit.byteLength, false);
+				break;
+			case 4:
+				dataView.setUint32(offset, nalUnit.byteLength, false);
+				break;
+		}
+
+		offset += lengthSize;
+
+		result.set(nalUnit, offset);
+		offset += nalUnit.byteLength;
+	}
+
+	return result;
 };
 
 // Data specified in ISO 14496-15
@@ -227,7 +244,22 @@ export const extractAvcNalUnits = (packetData: Uint8Array, decoderConfig: VideoD
 	}
 };
 
-const extractNalUnitTypeForAvc = (data: Uint8Array) => {
+export const concatAvcNalUnits = (nalUnits: Uint8Array[], decoderConfig: VideoDecoderConfig) => {
+	if (decoderConfig.description) {
+		// Stream is length-prefixed. Let's extract the size of the length prefix from the decoder config
+
+		const bytes = toUint8Array(decoderConfig.description);
+		const lengthSizeMinusOne = bytes[4]! & 0b11;
+		const lengthSize = (lengthSizeMinusOne + 1) as 1 | 2 | 3 | 4;
+
+		return concatNalUnitsInLengthPrefixed(nalUnits, lengthSize);
+	} else {
+		// Stream is in Annex B format
+		return concatNalUnitsInAnnexB(nalUnits);
+	}
+};
+
+export const extractNalUnitTypeForAvc = (data: Uint8Array) => {
 	return data[0]! & 0x1F;
 };
 
