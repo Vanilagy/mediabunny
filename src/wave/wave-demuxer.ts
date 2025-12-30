@@ -10,10 +10,9 @@ import { AudioCodec } from '../codec';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
-import { PacketRetrievalOptions } from '../media-sink';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
-import { assert, UNDETERMINED_LANGUAGE } from '../misc';
-import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
+import { assert, MaybeRelevantPromise, ResultValue, UNDETERMINED_LANGUAGE } from '../misc';
+import { EncodedPacket, PacketRetrievalOptions, PLACEHOLDER_DATA } from '../packet';
 import { readAscii, readBytes, Reader, readU16, readU32, readU64 } from '../reader';
 import { parseId3V2Tag, readId3V2Header } from '../id3';
 
@@ -327,15 +326,6 @@ export class WaveDemuxer extends Demuxer {
 		return 'audio/wav';
 	}
 
-	async computeDuration() {
-		await this.readMetadata();
-
-		const track = this.tracks[0];
-		assert(track);
-
-		return track.computeDuration();
-	}
-
 	async getTracks() {
 		await this.readMetadata();
 		return this.tracks;
@@ -379,11 +369,6 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		};
 	}
 
-	async computeDuration() {
-		const lastPacket = await this.getPacket(Infinity, { metadataOnly: true });
-		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
-	}
-
 	getNumberOfChannels() {
 		assert(this.demuxer.audioInfo);
 		return this.demuxer.audioInfo.numberOfChannels;
@@ -413,18 +398,15 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		};
 	}
 
-	async getFirstTimestamp() {
-		return 0;
-	}
-
 	private async getPacketAtIndex(
+		res: ResultValue<EncodedPacket | null>,
 		packetIndex: number,
 		options: PacketRetrievalOptions,
-	): Promise<EncodedPacket | null> {
+	): MaybeRelevantPromise {
 		assert(this.demuxer.audioInfo);
 		const startOffset = packetIndex * PACKET_SIZE_IN_FRAMES * this.demuxer.audioInfo.blockSizeInBytes;
 		if (startOffset >= this.demuxer.dataSize) {
-			return null;
+			return res.set(null);
 		}
 
 		const sizeInBytes = Math.min(
@@ -441,7 +423,7 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 			if (slice instanceof Promise) slice = await slice;
 
 			if (!slice) {
-				return null;
+				return res.set(null);
 			}
 		}
 
@@ -464,21 +446,25 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 			timestamp,
 		);
 
-		return new EncodedPacket(
+		return res.set(new EncodedPacket(
 			data,
 			'key',
 			timestamp,
 			duration,
 			packetIndex,
 			sizeInBytes,
-		);
+		));
 	}
 
-	getFirstPacket(options: PacketRetrievalOptions) {
-		return this.getPacketAtIndex(0, options);
+	getFirstPacket(res: ResultValue<EncodedPacket | null>, options: PacketRetrievalOptions): MaybeRelevantPromise {
+		return this.getPacketAtIndex(res, 0, options);
 	}
 
-	async getPacket(timestamp: number, options: PacketRetrievalOptions) {
+	async getPacket(
+		res: ResultValue<EncodedPacket | null>,
+		timestamp: number,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise {
 		assert(this.demuxer.audioInfo);
 
 		const packetIndex = Math.floor(Math.min(
@@ -486,22 +472,33 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 			(this.demuxer.dataSize - 1) / (PACKET_SIZE_IN_FRAMES * this.demuxer.audioInfo.blockSizeInBytes),
 		));
 
-		const packet = await this.getPacketAtIndex(packetIndex, options);
-		if (packet) {
-			return packet;
+		const result = new ResultValue<EncodedPacket | null>();
+		let promise = this.getPacketAtIndex(result, packetIndex, options);
+		if (result.pending) await promise;
+
+		if (result.value) {
+			return res.set(result.value);
 		}
 
 		if (packetIndex === 0) {
-			return null; // Empty data chunk
+			return res.set(null); // Empty data chunk
 		}
 
 		assert(this.demuxer.reader.fileSize === null);
 
 		// The file is shorter than we thought, meaning the packet we were looking for doesn't exist. So, let's find
 		// the last packet by doing a sequential scan, instead.
-		let currentPacket = await this.getPacketAtIndex(this.demuxer.lastKnownPacketIndex, options);
+		result.reset();
+		promise = this.getPacketAtIndex(result, this.demuxer.lastKnownPacketIndex, options);
+		if (result.pending) await promise;
+
+		let currentPacket = result.value;
 		while (currentPacket) {
-			const nextPacket = await this.getNextPacket(currentPacket, options);
+			result.reset();
+			promise = this.getNextPacket(result, currentPacket, options);
+			if (result.pending) await promise;
+
+			const nextPacket = result.value;
 			if (!nextPacket) {
 				break;
 			}
@@ -509,21 +506,37 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 			currentPacket = nextPacket;
 		}
 
-		return currentPacket;
+		return res.set(currentPacket);
 	}
 
-	getNextPacket(packet: EncodedPacket, options: PacketRetrievalOptions) {
+	getNextPacket(
+		res: ResultValue<EncodedPacket | null>,
+		packet: EncodedPacket,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise {
 		assert(this.demuxer.audioInfo);
-		const packetIndex = Math.round(packet.timestamp * this.demuxer.audioInfo.sampleRate / PACKET_SIZE_IN_FRAMES);
 
-		return this.getPacketAtIndex(packetIndex + 1, options);
+		const packetIndex = packet.sequenceNumber;
+		if (packetIndex < 0) {
+			throw new Error('Packet was not created from this track.');
+		}
+
+		return this.getPacketAtIndex(res, packetIndex + 1, options);
 	}
 
-	getKeyPacket(timestamp: number, options: PacketRetrievalOptions) {
-		return this.getPacket(timestamp, options);
+	getKeyPacket(
+		res: ResultValue<EncodedPacket | null>,
+		timestamp: number,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise {
+		return this.getPacket(res, timestamp, options);
 	}
 
-	getNextKeyPacket(packet: EncodedPacket, options: PacketRetrievalOptions) {
-		return this.getNextPacket(packet, options);
+	getNextKeyPacket(
+		res: ResultValue<EncodedPacket | null>,
+		packet: EncodedPacket,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise {
+		return this.getNextPacket(res, packet, options);
 	}
 }

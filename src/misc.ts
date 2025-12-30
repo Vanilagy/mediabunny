@@ -246,24 +246,6 @@ export const isAllowSharedBufferSource = (x: unknown) => {
 	);
 };
 
-export class AsyncMutex {
-	currentPromise = Promise.resolve();
-
-	async acquire() {
-		let resolver: () => void;
-		const nextPromise = new Promise<void>((resolve) => {
-			resolver = resolve;
-		});
-
-		const currentPromiseAlias = this.currentPromise;
-		this.currentPromise = nextPromise;
-
-		await currentPromiseAlias;
-
-		return resolver!;
-	}
-}
-
 export const bytesToHexString = (bytes: Uint8Array) => {
 	return [...bytes].map(x => x.toString(16).padStart(2, '0')).join('');
 };
@@ -336,6 +318,35 @@ export const promiseWithResolvers = <T = void>() => {
 	});
 
 	return { promise, resolve: resolve!, reject: reject! };
+};
+
+export const promiseAllEnsureOrder = async <T>(promises: T[]) => {
+	const results: Awaited<T>[] = [];
+	const { promise, resolve, reject } = promiseWithResolvers();
+
+	const onValue = (value: Awaited<T>, i: number) => {
+		if (results.length === i) {
+			results.push(value);
+
+			if (results.length === promises.length) {
+				resolve();
+			}
+		} else {
+			reject(new Error('Order violation'));
+		}
+	};
+
+	for (let i = 0; i < promises.length; i++) {
+		const value = promises[i]!;
+		if (value instanceof Promise) {
+			void value.then(x => onValue(x as Awaited<T>, i));
+		} else {
+			onValue(value as Awaited<T>, i);
+		}
+	}
+
+	await promise;
+	return results;
 };
 
 export const removeItem = <T>(arr: T[], item: T) => {
@@ -664,14 +675,6 @@ export const computeRationalApproximation = (x: number, maxDenominator: number) 
 	};
 };
 
-export class CallSerializer {
-	currentPromise = Promise.resolve();
-
-	call(fn: () => Promise<void> | void) {
-		return this.currentPromise = this.currentPromise.then(fn);
-	}
-}
-
 let isWebKitCache: boolean | null = null;
 export const isWebKit = () => {
 	if (isWebKitCache !== null) {
@@ -829,8 +832,212 @@ export const polyfillSymbolDispose = () => {
 	// https://www.typescriptlang.org/docs/handbook/release-notes/typescript-5-2.html
 	// @ts-expect-error Readonly
 	Symbol.dispose ??= Symbol('Symbol.dispose');
+	// @ts-expect-error Readonly
+	Symbol.asyncDispose ??= Symbol('Symbol.asyncDispose');
 };
 
 export const isNumber = (x: unknown) => {
 	return typeof x === 'number' && !Number.isNaN(x);
+};
+
+// We use a unique symbol to ensure that any function using the ResultValue system actually returns when setting it,
+// instead of simply setting it and continuing on.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const returnSymbol: unique symbol = Symbol();
+export type ReturnSymbol = typeof returnSymbol;
+export type MaybeRelevantPromise = Promise<ReturnSymbol>;
+
+/**
+ * Represents a wrapper that holds a function's return value. Instead of the function returning its return value, it
+ * instead gets passed a ResultValue instance and writes the return value into it. This allows async functions that
+ * don't hit any async path to synchronously expose their return value, allowing the caller to ignore the returned
+ * promise if possible. This allows for "optinally-asynchronous code".
+ */
+export class ResultValue<T> {
+	value!: T;
+	pending = true;
+
+	// @ts-expect-error Return value just for the types
+	set(value: T): ReturnSymbol {
+		this.value = value;
+		this.pending = false;
+	}
+
+	reset() {
+		this.pending = true;
+	}
+}
+
+export class AsyncMutex {
+	locked = false;
+	private resolverQueue: (() => void)[] = [];
+
+	lock() {
+		if (!this.locked) {
+			// Fast path
+			this.locked = true;
+			return new AsyncMutexLock(this, false, null);
+		}
+
+		const { promise, resolve } = promiseWithResolvers();
+		this.resolverQueue.push(resolve);
+
+		return new AsyncMutexLock(this, true, promise);
+	}
+
+	dispatch() {
+		if (this.resolverQueue.length > 0) {
+			const resolve = this.resolverQueue.shift()!;
+			resolve();
+		} else {
+			this.locked = false;
+		}
+	}
+
+	async waitForUnlock() {
+		const lock = this.lock();
+		await lock.ready;
+		lock.release();
+	}
+}
+
+export class AsyncMutexLock implements Disposable {
+	private released = false;
+
+	constructor(
+		private readonly mutex: AsyncMutex,
+		public readonly pending: boolean,
+		public readonly ready: Promise<void> | null,
+	) {}
+
+	release() {
+		if (this.released) {
+			return;
+		}
+
+		this.released = true;
+		this.mutex.dispatch();
+	}
+
+	[Symbol.dispose]() {
+		this.release();
+	}
+}
+
+/**
+ * A simple call serializer that works by chaining promises. When one callback throws, the serializer becomes bricked,
+ * meaning all future calls will also throw.
+ */
+export class NaiveCallSerializer {
+	currentPromise = Promise.resolve();
+	errored = false;
+
+	call(fn: () => Promise<void> | void) {
+		return this.currentPromise = this.currentPromise
+			.then(fn)
+			.catch((error) => {
+				this.errored = true;
+				throw error;
+			});
+	}
+}
+
+/**
+ * A more complex call serializer implementation that works with optionally asynchronous functions. It is forgiving
+ * in the sense that when a call throws, the error is surfaced but subsequent calls will go through again. So, it
+ * recovers.
+ */
+export class ForgivingCallSerializer {
+	private currentPromise: Promise<unknown> | null = null;
+	private queuedCalls = 0;
+
+	call<T>(fn: () => T) {
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		type ReturnType = T extends Promise<any> ? T : T | Promise<T>;
+
+		if (this.currentPromise) {
+			this.queuedCalls++;
+
+			return (this.currentPromise = this.currentPromise
+				.catch(() => {})
+				.then(() => {
+					this.queuedCalls--;
+					return fn();
+				})
+				.finally(() => {
+					if (this.queuedCalls === 0) {
+						this.currentPromise = null;
+					}
+				})) as unknown as ReturnType;
+		} else {
+			const result = fn();
+
+			if (result instanceof Promise) {
+				this.currentPromise = result
+					.finally(() => {
+						if (this.queuedCalls === 0) {
+							this.currentPromise = null;
+						}
+					});
+			}
+
+			return result as unknown as ReturnType;
+		}
+	}
+
+	waitUntilIdle() {
+		if (this.currentPromise) {
+			return this.currentPromise
+				.catch(() => {})
+				.then(() => {});
+		} else {
+			return null;
+		}
+	}
+
+	isIdle() {
+		return !this.currentPromise;
+	}
+}
+
+export class AsyncGate {
+	resolvers: (() => void)[] = [];
+
+	wait() {
+		const { promise, resolve } = promiseWithResolvers();
+
+		this.resolvers.push(resolve);
+		return promise;
+	}
+
+	open() {
+		if (this.resolvers.length > 0) {
+			this.resolvers.forEach(fn => fn());
+			this.resolvers.length = 0;
+		}
+	}
+}
+
+export const defer = (callback: () => void) => {
+	let executed = false;
+
+	return {
+		execute() {
+			if (executed) {
+				return;
+			}
+
+			executed = true;
+			callback();
+		},
+		[Symbol.dispose]() {
+			this.execute();
+		},
+	};
+};
+
+export const promiseIterateAll = async function* <T>(iterable: Iterable<T>) {
+	for (const promise of iterable) {
+		yield await promise;
+	}
 };

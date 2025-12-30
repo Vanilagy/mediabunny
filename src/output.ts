@@ -77,7 +77,7 @@ export type BaseTrackMetadata = {
 	/** The track's disposition, i.e. information about its intended usage. */
 	disposition?: Partial<TrackDisposition>;
 	/**
-	 * The maximum amount of encoded packets that will be added to this track. Setting this field provides the muxer
+	 * The maximum number of encoded packets that will be added to this track. Setting this field provides the muxer
 	 * with an additional signal that it can use to preallocate space in the file.
 	 *
 	 * When this field is set, it is an error to provide more packets than whatever this field specifies.
@@ -402,14 +402,13 @@ export class Output<
 			this.state = 'started';
 			this._writer.start();
 
-			const release = await this._mutex.acquire();
+			using lock = this._mutex.lock();
+			if (lock.pending) await lock.ready;
 
 			await this._muxer.start();
 
 			const promises = this._tracks.map(track => track.source._start());
 			await Promise.all(promises);
-
-			release();
 		})();
 	}
 
@@ -440,14 +439,13 @@ export class Output<
 		return this._cancelPromise = (async () => {
 			this.state = 'canceled';
 
-			const release = await this._mutex.acquire();
+			using lock = this._mutex.lock();
+			if (lock.pending) await lock.ready;
 
 			const promises = this._tracks.map(x => x.source._flushOrWaitForOngoingClose(true)); // Force close
 			await Promise.all(promises);
 
 			await this._writer.close();
-
-			release();
 		})();
 	}
 
@@ -470,7 +468,8 @@ export class Output<
 		return this._finalizePromise = (async () => {
 			this.state = 'finalizing';
 
-			const release = await this._mutex.acquire();
+			using lock = this._mutex.lock();
+			if (lock.pending) await lock.ready;
 
 			const promises = this._tracks.map(x => x.source._flushOrWaitForOngoingClose(false));
 			await Promise.all(promises);
@@ -481,8 +480,6 @@ export class Output<
 			await this._writer.finalize();
 
 			this.state = 'finalized';
-
-			release();
 		})();
 	}
 }

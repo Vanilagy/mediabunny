@@ -39,7 +39,7 @@ const sampleCanvasColor = (ctx: CanvasRenderingContext2D, x: number, y: number):
 
 test('Can create VideoSample from VideoFrame and modify rotation', () => {
 	const frame = new VideoFrame(createCanvas(), { timestamp: 0 });
-	const sample = new VideoSample(frame);
+	using sample = new VideoSample(frame);
 
 	expect(frame.rotation).toBe(0);
 	expect(sample.rotation).toBe(0);
@@ -55,21 +55,21 @@ test('Can create VideoSample from VideoFrame and modify rotation', () => {
 	expect(colorDistance(sampleCanvasColor(ctx, 5, 55), { r: 0, g: 0, b: 255 })).toBeLessThan(10);
 	expect(colorDistance(sampleCanvasColor(ctx, 110, 5), { r: 0, g: 0, b: 255 })).toBeLessThan(10);
 
-	sample.setRotation(90);
-	expect(sample.rotation).toBe(90);
+	using rotated = sample.clone({ rotation: 90 });
+	expect(rotated.rotation).toBe(90);
 
 	ctx.clearRect(0, 0, canvas.width, canvas.height);
-	sample.draw(ctx, 0, 0);
+	rotated.draw(ctx, 0, 0);
 
 	expect(colorDistance(sampleCanvasColor(ctx, 145, 5), { r: 255, g: 0, b: 0 })).toBeLessThan(10);
 	expect(colorDistance(sampleCanvasColor(ctx, 95, 5), { r: 0, g: 0, b: 255 })).toBeLessThan(10);
 	expect(colorDistance(sampleCanvasColor(ctx, 145, 110), { r: 0, g: 0, b: 255 })).toBeLessThan(10);
 
-	const extracted = sample.toVideoFrame();
+	const extracted = rotated.toVideoFrame();
 	expect(extracted.rotation).toBe(90); // It was changed
 
 	ctx.clearRect(0, 0, canvas.width, canvas.height);
-	sample.drawWithFit(ctx, { fit: 'fill' });
+	rotated.drawWithFit(ctx, { fit: 'fill' });
 
 	expect(colorDistance(sampleCanvasColor(ctx, 295, 5), { r: 255, g: 0, b: 0 })).toBeLessThan(10);
 	expect(colorDistance(sampleCanvasColor(ctx, 295, 55), { r: 0, g: 0, b: 255 })).toBeLessThan(10);
@@ -77,7 +77,7 @@ test('Can create VideoSample from VideoFrame and modify rotation', () => {
 
 test('Can create VideoSample from rotated VideoFrame', () => {
 	const frame = new VideoFrame(createCanvas(), { timestamp: 0, rotation: 90 });
-	const sample = new VideoSample(frame);
+	using sample = new VideoSample(frame);
 
 	expect(frame.rotation).toBe(90);
 	expect(sample.rotation).toBe(90);
@@ -99,18 +99,18 @@ test('Can create VideoSample from rotated VideoFrame', () => {
 	expect(colorDistance(sampleCanvasColor(ctx, 295, 5), { r: 255, g: 0, b: 0 })).toBeLessThan(10);
 	expect(colorDistance(sampleCanvasColor(ctx, 295, 55), { r: 0, g: 0, b: 255 })).toBeLessThan(10);
 
-	sample.setRotation(0);
-	expect(sample.rotation).toBe(0);
+	using unrotated = sample.clone({ rotation: 0 });
+	expect(unrotated.rotation).toBe(0);
 
 	ctx.clearRect(0, 0, canvas.width, canvas.height);
-	sample.draw(ctx, 0, 0);
+	unrotated.draw(ctx, 0, 0);
 
 	expect(colorDistance(sampleCanvasColor(ctx, 5, 5), { r: 255, g: 0, b: 0 })).toBeLessThan(10);
 	expect(colorDistance(sampleCanvasColor(ctx, 5, 55), { r: 0, g: 0, b: 255 })).toBeLessThan(10);
 	expect(colorDistance(sampleCanvasColor(ctx, 110, 5), { r: 0, g: 0, b: 255 })).toBeLessThan(10);
 
 	ctx.clearRect(0, 0, canvas.width, canvas.height);
-	sample.drawWithFit(ctx, { fit: 'fill' });
+	unrotated.drawWithFit(ctx, { fit: 'fill' });
 
 	expect(colorDistance(sampleCanvasColor(ctx, 5, 5), { r: 255, g: 0, b: 0 })).toBeLessThan(10);
 	expect(colorDistance(sampleCanvasColor(ctx, 5, 55), { r: 0, g: 0, b: 255 })).toBeLessThan(10);

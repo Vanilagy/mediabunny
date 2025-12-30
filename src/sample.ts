@@ -172,6 +172,9 @@ export type VideoSampleInit = {
  */
 export class VideoSample implements Disposable {
 	/** @internal */
+	static _openSampleCount = 0;
+
+	/** @internal */
 	_data!: VideoFrame | OffscreenCanvas | Uint8Array | null;
 	/**
 	 * Used for the ArrayBuffer-backed case.
@@ -229,6 +232,14 @@ export class VideoSample implements Disposable {
 	 */
 	get hasAlpha() {
 		return this.format && this.format.includes('A');
+	}
+
+	/**
+	 * Whether this sample is closed, meaning its underlying data has been discarded. When a sample is closed, most
+	 * operations will fail.
+	 */
+	get closed() {
+		return this._closed;
 	}
 
 	/**
@@ -406,22 +417,31 @@ export class VideoSample implements Disposable {
 			throw new TypeError('Invalid data type: Must be a BufferSource or CanvasImageSource.');
 		}
 
+		VideoSample._openSampleCount++;
 		finalizationRegistry?.register(this, { type: 'video', data: this._data }, this);
 	}
 
 	/** Clones this video sample. */
-	clone() {
+	clone(override?: {
+		timestamp?: number;
+		duration?: number;
+		rotation?: Rotation;
+	}) {
 		if (this._closed) {
 			throw new Error('VideoSample is closed.');
 		}
 
 		assert(this._data !== null);
 
+		const timestamp = override?.timestamp ?? this.timestamp;
+		const duration = override?.duration ?? this.duration;
+		const rotation = override?.rotation ?? this.rotation;
+
 		if (isVideoFrame(this._data)) {
 			return new VideoSample(this._data.clone(), {
-				timestamp: this.timestamp,
-				duration: this.duration,
-				rotation: this.rotation,
+				timestamp,
+				duration,
+				rotation,
 			});
 		} else if (this._data instanceof Uint8Array) {
 			assert(this._layout);
@@ -431,20 +451,20 @@ export class VideoSample implements Disposable {
 				layout: this._layout,
 				codedWidth: this.codedWidth,
 				codedHeight: this.codedHeight,
-				timestamp: this.timestamp,
-				duration: this.duration,
+				timestamp,
+				duration,
 				colorSpace: this.colorSpace,
-				rotation: this.rotation,
+				rotation,
 			});
 		} else {
 			return new VideoSample(this._data, {
 				format: this.format!,
 				codedWidth: this.codedWidth,
 				codedHeight: this.codedHeight,
-				timestamp: this.timestamp,
-				duration: this.duration,
+				timestamp,
+				duration,
 				colorSpace: this.colorSpace,
-				rotation: this.rotation,
+				rotation,
 			});
 		}
 	}
@@ -467,6 +487,7 @@ export class VideoSample implements Disposable {
 		}
 
 		this._closed = true;
+		VideoSample._openSampleCount--;
 	}
 
 	/**
@@ -951,36 +972,6 @@ export class VideoSample implements Disposable {
 		}
 	}
 
-	/** Sets the rotation metadata of this video sample. */
-	setRotation(newRotation: Rotation) {
-		if (![0, 90, 180, 270].includes(newRotation)) {
-			throw new TypeError('newRotation must be 0, 90, 180, or 270.');
-		}
-
-		// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-		(this.rotation as Rotation) = newRotation;
-	}
-
-	/** Sets the presentation timestamp of this video sample, in seconds. */
-	setTimestamp(newTimestamp: number) {
-		if (!Number.isFinite(newTimestamp)) {
-			throw new TypeError('newTimestamp must be a number.');
-		}
-
-		// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-		(this.timestamp as number) = newTimestamp;
-	}
-
-	/** Sets the duration of this video sample, in seconds. */
-	setDuration(newDuration: number) {
-		if (!Number.isFinite(newDuration) || newDuration < 0) {
-			throw new TypeError('newDuration must be a non-negative number.');
-		}
-
-		// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-		(this.duration as number) = newDuration;
-	}
-
 	/** Calls `.close()`. */
 	[Symbol.dispose]() {
 		this.close();
@@ -1286,6 +1277,9 @@ export type AudioSampleCopyToOptions = {
  */
 export class AudioSample implements Disposable {
 	/** @internal */
+	static _openSampleCount = 0;
+
+	/** @internal */
 	_data: AudioData | Uint8Array;
 	/** @internal */
 	_closed: boolean = false;
@@ -1319,6 +1313,14 @@ export class AudioSample implements Disposable {
 	/** The duration of the sample in microseconds. */
 	get microsecondDuration() {
 		return Math.trunc(SECOND_TO_MICROSECOND_FACTOR * this.duration);
+	}
+
+	/**
+	 * Whether this sample is closed, meaning its underlying data has been discarded. When a sample is closed, most
+	 * operations will fail.
+	 */
+	get closed() {
+		return this._closed;
 	}
 
 	/**
@@ -1389,6 +1391,7 @@ export class AudioSample implements Disposable {
 			this._data = dataBuffer;
 		}
 
+		AudioSample._openSampleCount++;
 		finalizationRegistry?.register(this, { type: 'audio', data: this._data }, this);
 	}
 
@@ -1591,14 +1594,20 @@ export class AudioSample implements Disposable {
 	}
 
 	/** Clones this audio sample. */
-	clone(): AudioSample {
+	clone(override?: {
+		timestamp?: number;
+	}): AudioSample {
 		if (this._closed) {
 			throw new Error('AudioSample is closed.');
 		}
 
+		const timestamp = override?.timestamp ?? this.timestamp;
+
 		if (isAudioData(this._data)) {
 			const sample = new AudioSample(this._data.clone());
-			sample.setTimestamp(this.timestamp); // Make sure the timestamp is precise (beyond microsecond accuracy)
+
+			// @ts-expect-error Readonly
+			sample.timestamp = timestamp; // Make sure the timestamp is precise (beyond microsecond accuracy)
 
 			return sample;
 		} else {
@@ -1631,6 +1640,7 @@ export class AudioSample implements Disposable {
 		}
 
 		this._closed = true;
+		AudioSample._openSampleCount--;
 	}
 
 	/**
@@ -1713,16 +1723,6 @@ export class AudioSample implements Disposable {
 		}
 
 		return audioBuffer;
-	}
-
-	/** Sets the presentation timestamp of this audio sample, in seconds. */
-	setTimestamp(newTimestamp: number) {
-		if (!Number.isFinite(newTimestamp)) {
-			throw new TypeError('newTimestamp must be a number.');
-		}
-
-		// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-		(this.timestamp as number) = newTimestamp;
 	}
 
 	/** Calls `.close()`. */

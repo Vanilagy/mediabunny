@@ -157,7 +157,8 @@ export class MatroskaMuxer extends Muxer {
 	}
 
 	async start() {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		this.writeEBMLHeader();
 
@@ -165,8 +166,6 @@ export class MatroskaMuxer extends Muxer {
 		this.createCues();
 
 		await this.writer.flush();
-
-		release();
 	}
 
 	private writeEBMLHeader() {
@@ -837,88 +836,79 @@ export class MatroskaMuxer extends Muxer {
 	}
 
 	async addEncodedVideoPacket(track: OutputVideoTrack, packet: EncodedPacket, meta?: EncodedVideoChunkMetadata) {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
-		try {
-			const trackData = this.getVideoTrackData(track, packet, meta);
+		const trackData = this.getVideoTrackData(track, packet, meta);
 
-			const isKeyFrame = packet.type === 'key';
-			let timestamp = this.validateAndNormalizeTimestamp(trackData.track, packet.timestamp, isKeyFrame);
-			let duration = packet.duration;
+		const isKeyFrame = packet.type === 'key';
+		let timestamp = this.validateAndNormalizeTimestamp(trackData.track, packet.timestamp, isKeyFrame);
+		let duration = packet.duration;
 
-			if (track.metadata.frameRate !== undefined) {
-				// Constrain the time values to the frame rate
-				timestamp = roundToMultiple(timestamp, 1 / track.metadata.frameRate);
-				duration = roundToMultiple(duration, 1 / track.metadata.frameRate);
-			}
-
-			const additions = trackData.info.alphaMode
-				? packet.sideData.alpha ?? null
-				: null;
-
-			const videoChunk = this.createInternalChunk(packet.data, timestamp, duration, packet.type, additions);
-			if (track.source._codec === 'vp9') this.fixVP9ColorSpace(trackData, videoChunk);
-
-			trackData.chunkQueue.push(videoChunk);
-			await this.interleaveChunks();
-		} finally {
-			release();
+		if (track.metadata.frameRate !== undefined) {
+			// Constrain the time values to the frame rate
+			timestamp = roundToMultiple(timestamp, 1 / track.metadata.frameRate);
+			duration = roundToMultiple(duration, 1 / track.metadata.frameRate);
 		}
+
+		const additions = trackData.info.alphaMode
+			? packet.sideData.alpha ?? null
+			: null;
+
+		const videoChunk = this.createInternalChunk(packet.data, timestamp, duration, packet.type, additions);
+		if (track.source._codec === 'vp9') this.fixVP9ColorSpace(trackData, videoChunk);
+
+		trackData.chunkQueue.push(videoChunk);
+		await this.interleaveChunks();
 	}
 
 	async addEncodedAudioPacket(track: OutputAudioTrack, packet: EncodedPacket, meta?: EncodedAudioChunkMetadata) {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
-		try {
-			const trackData = this.getAudioTrackData(track, meta);
+		const trackData = this.getAudioTrackData(track, meta);
 
-			const isKeyFrame = packet.type === 'key';
-			const timestamp = this.validateAndNormalizeTimestamp(trackData.track, packet.timestamp, isKeyFrame);
-			const audioChunk = this.createInternalChunk(packet.data, timestamp, packet.duration, packet.type);
+		const isKeyFrame = packet.type === 'key';
+		const timestamp = this.validateAndNormalizeTimestamp(trackData.track, packet.timestamp, isKeyFrame);
+		const audioChunk = this.createInternalChunk(packet.data, timestamp, packet.duration, packet.type);
 
-			trackData.chunkQueue.push(audioChunk);
-			await this.interleaveChunks();
-		} finally {
-			release();
-		}
+		trackData.chunkQueue.push(audioChunk);
+		await this.interleaveChunks();
 	}
 
 	async addSubtitleCue(track: OutputSubtitleTrack, cue: SubtitleCue, meta?: SubtitleMetadata) {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
-		try {
-			const trackData = this.getSubtitleTrackData(track, meta);
+		const trackData = this.getSubtitleTrackData(track, meta);
 
-			const timestamp = this.validateAndNormalizeTimestamp(trackData.track, cue.timestamp, true);
+		const timestamp = this.validateAndNormalizeTimestamp(trackData.track, cue.timestamp, true);
 
-			let bodyText = cue.text;
-			const timestampMs = Math.round(timestamp * 1000);
+		let bodyText = cue.text;
+		const timestampMs = Math.round(timestamp * 1000);
 
-			// Replace in-body timestamps so that they're relative to the cue start time
-			inlineTimestampRegex.lastIndex = 0;
-			bodyText = bodyText.replace(inlineTimestampRegex, (match) => {
-				const time = parseSubtitleTimestamp(match.slice(1, -1));
-				const offsetTime = time - timestampMs;
+		// Replace in-body timestamps so that they're relative to the cue start time
+		inlineTimestampRegex.lastIndex = 0;
+		bodyText = bodyText.replace(inlineTimestampRegex, (match) => {
+			const time = parseSubtitleTimestamp(match.slice(1, -1));
+			const offsetTime = time - timestampMs;
 
-				return `<${formatSubtitleTimestamp(offsetTime)}>`;
-			});
+			return `<${formatSubtitleTimestamp(offsetTime)}>`;
+		});
 
-			const body = textEncoder.encode(bodyText);
-			const additions = `${cue.settings ?? ''}\n${cue.identifier ?? ''}\n${cue.notes ?? ''}`;
+		const body = textEncoder.encode(bodyText);
+		const additions = `${cue.settings ?? ''}\n${cue.identifier ?? ''}\n${cue.notes ?? ''}`;
 
-			const subtitleChunk = this.createInternalChunk(
-				body,
-				timestamp,
-				cue.duration,
-				'key',
-				additions.trim() ? textEncoder.encode(additions) : null,
-			);
+		const subtitleChunk = this.createInternalChunk(
+			body,
+			timestamp,
+			cue.duration,
+			'key',
+			additions.trim() ? textEncoder.encode(additions) : null,
+		);
 
-			trackData.chunkQueue.push(subtitleChunk);
-			await this.interleaveChunks();
-		} finally {
-			release();
-		}
+		trackData.chunkQueue.push(subtitleChunk);
+		await this.interleaveChunks();
 	}
 
 	private async interleaveChunks(isFinalCall = false) {
@@ -1208,7 +1198,8 @@ export class MatroskaMuxer extends Muxer {
 
 	// eslint-disable-next-line @typescript-eslint/no-misused-promises
 	override async onTrackClose() {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		if (this.allTracksAreKnown()) {
 			this.allTracksKnown.resolve();
@@ -1216,15 +1207,12 @@ export class MatroskaMuxer extends Muxer {
 
 		// Since a track is now closed, we may be able to write out chunks that were previously waiting
 		await this.interleaveChunks();
-
-		release();
 	}
 
 	/** Finalizes the file, making it ready for use. Must be called after all media chunks have been added. */
 	async finalize() {
-		const release = await this.mutex.acquire();
-
-		this.allTracksKnown.resolve();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		if (!this.segment) {
 			this.createSegment();
@@ -1261,7 +1249,5 @@ export class MatroskaMuxer extends Muxer {
 
 			this.writer.seek(endPos);
 		}
-
-		release();
 	}
 }
