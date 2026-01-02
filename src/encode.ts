@@ -103,7 +103,7 @@ export const validateVideoEncodingConfig = (config: VideoEncodingConfig) => {
 };
 
 /**
- * Additional options that control audio encoding.
+ * Additional options that control video encoding.
  * @group Encoding
  * @public
  */

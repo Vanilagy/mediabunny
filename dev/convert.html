@@ -56,6 +56,7 @@
 			}),
 			output,
 			audio: (_, n) => ({
+				codec: 'opus',
 				discard: n > 1,
 				//codec: 'opus',
 				//codec: 'opus',
@@ -100,7 +101,12 @@
 			},
 			*/
 			video: () => ({
+				//discard: true,
 				allowRotationMetadata: false,
+				forceTranscode: true,
+				width: 320,
+				frameRate: 3,
+				//frameRate: 30,
 				//width: 720,
 				//frameRate: 30,
 				//bitrate: Mediabunny.QUALITY_VERY_LOW,
@@ -180,8 +186,8 @@
 				}
 			},
 			trim: {
-				start: 0,
-				end: 4
+				start: 590,
+				//end: 590
 			},
 		});
 		console.log(conversion);

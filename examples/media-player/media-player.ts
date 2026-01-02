@@ -1,12 +1,10 @@
 import {
 	ALL_FORMATS,
-	AudioBufferSink,
+	AudioSampleCursor,
 	BlobSource,
-	CanvasSink,
 	Input,
 	UrlSource,
-	WrappedAudioBuffer,
-	WrappedCanvas,
+	VideoSampleCursor,
 } from 'mediabunny';
 
 import SampleFileUrl from '../../docs/assets/big-buck-bunny-trimmed.mp4';
@@ -41,8 +39,8 @@ let audioContext: AudioContext | null = null;
 let gainNode: GainNode | null = null;
 
 let fileLoaded = false;
-let videoSink: CanvasSink | null = null;
-let audioSink: AudioBufferSink | null = null;
+let videoCursor: VideoSampleCursor | null = null;
+let audioCursor: AudioSampleCursor | null = null;
 
 let totalDuration = 0;
 /** The value of the audio context's currentTime the moment the playback was started. */
@@ -51,16 +49,7 @@ let playing = false;
 /** The timestamp within the media file when the playback was started. */
 let playbackTimeAtStart = 0;
 
-let videoFrameIterator: AsyncGenerator<WrappedCanvas, void, unknown> | null = null;
-let audioBufferIterator: AsyncGenerator<WrappedAudioBuffer, void, unknown> | null = null;
-let nextFrame: WrappedCanvas | null = null;
 const queuedAudioNodes: Set<AudioBufferSourceNode> = new Set();
-
-/**
- * Used to prevent async race conditions. When seekId is incremented, already-running async functions will be prevented
- * from having an effect.
- */
-let asyncId = 0;
 
 let draggingProgressBar = false;
 let volume = 0.7;
@@ -77,9 +66,8 @@ const initMediaPlayer = async (resource: File | string) => {
 			pause();
 		}
 
-		void videoFrameIterator?.return();
-		void audioBufferIterator?.return();
-		asyncId++;
+		void videoCursor?.close();
+		void audioCursor?.close();
 
 		fileLoaded = false;
 		fileNameElement.textContent = resource instanceof File ? resource.name : resource;
@@ -155,15 +143,14 @@ const initMediaPlayer = async (resource: File | string) => {
 
 		playerContainer.style.background = videoCanBeTransparent ? 'transparent' : '';
 
-		// For video, let's use a CanvasSink as it handles rotation and closing video samples for us.
-		// Pool size of 2: We'll only ever have the current and the next frame around, so we only need two canvases.
-		videoSink = videoTrack && new CanvasSink(videoTrack, {
-			poolSize: 2,
-			fit: 'contain', // In case the video changes dimensions over time
-			alpha: videoCanBeTransparent,
-		});
-		// For audio, we'll use an AudioBufferSink to directly retrieve AudioBuffers compatible with the Web Audio API
-		audioSink = audioTrack && new AudioBufferSink(audioTrack);
+		if (videoTrack) {
+			videoCursor = new VideoSampleCursor(videoTrack);
+			await videoCursor.seekToFirst();
+		}
+		if (audioTrack) {
+			audioCursor = new AudioSampleCursor(audioTrack);
+			await audioCursor.seekToFirst();
+		}
 
 		// Show the canvas if there's a video track, otherwise hide it
 		if (videoTrack) {
@@ -185,8 +172,6 @@ const initMediaPlayer = async (resource: File | string) => {
 
 		fileLoaded = true;
 
-		await startVideoIterator();
-
 		if (audioContext.state === 'running') {
 			// Start playback automatically if the audio context permits
 			await play();
@@ -195,7 +180,7 @@ const initMediaPlayer = async (resource: File | string) => {
 		loadingElement.style.display = 'none';
 		playerContainer.style.display = '';
 
-		if (!videoSink) {
+		if (!videoCursor) {
 			// If there's only an audio track, always show the controls
 			controlsElement.style.opacity = '1';
 			controlsElement.style.pointerEvents = '';
@@ -212,33 +197,7 @@ const initMediaPlayer = async (resource: File | string) => {
 
 /** === VIDEO RENDERING LOGIC === */
 
-/** Creates a new video frame iterator and renders the first video frame. */
-const startVideoIterator = async () => {
-	if (!videoSink) {
-		return;
-	}
-
-	asyncId++;
-
-	await videoFrameIterator?.return(); // Dispose of the current iterator
-
-	// Create a new iterator
-	videoFrameIterator = videoSink.canvases(getPlaybackTime());
-
-	// Get the first two frames
-	const firstFrame = (await videoFrameIterator.next()).value ?? null;
-	const secondFrame = (await videoFrameIterator.next()).value ?? null;
-
-	nextFrame = secondFrame;
-
-	if (firstFrame) {
-		// Draw the first frame
-		context.clearRect(0, 0, canvas.width, canvas.height);
-		context.drawImage(firstFrame.canvas, 0, 0);
-	}
-};
-
-/** Runs every frame; updates the canvas if necessary. */
+/** Runs every frame and updates the canvas if possible. */
 const render = (requestFrame = true) => {
 	if (fileLoaded) {
 		const playbackTime = getPlaybackTime();
@@ -248,14 +207,17 @@ const render = (requestFrame = true) => {
 			playbackTimeAtStart = totalDuration;
 		}
 
-		// Check if the current playback time has caught up to the next frame
-		if (nextFrame && nextFrame.timestamp <= playbackTime) {
-			context.clearRect(0, 0, canvas.width, canvas.height);
-			context.drawImage(nextFrame.canvas, 0, 0);
-			nextFrame = null;
+		if (videoCursor) {
+			if (videoCursor.isIdle()) {
+				// The seek is instant if the frame has already been decoded under the hood; if it is not, we'll just
+				// render the old frame until the new one is ready.
+				void videoCursor.seekTo(playbackTime);
+			}
 
-			// Request the next frame
-			void updateNextFrame();
+			context.clearRect(0, 0, canvas.width, canvas.height);
+			if (videoCursor.current) {
+				videoCursor.current.drawWithFit(context, { fit: 'contain' });
+			}
 		}
 
 		if (!draggingProgressBar) {
@@ -272,50 +234,30 @@ render();
 // Also call the render function on an interval to make sure the video keeps updating even if the tab isn't visible
 setInterval(() => render(false), 500);
 
-/** Iterates over the video frame iterator until it finds a video frame in the future. */
-const updateNextFrame = async () => {
-	const currentAsyncId = asyncId;
-
-	// We have a loop here because we may need to iterate over multiple frames until we reach a frame in the future
-	while (true) {
-		const newNextFrame = (await videoFrameIterator!.next()).value ?? null;
-		if (!newNextFrame) {
-			break;
-		}
-
-		if (currentAsyncId !== asyncId) {
-			break;
-		}
-
-		const playbackTime = getPlaybackTime();
-		if (newNextFrame.timestamp <= playbackTime) {
-			// Draw it immediately
-			context.clearRect(0, 0, canvas.width, canvas.height);
-			context.drawImage(newNextFrame.canvas, 0, 0);
-		} else {
-			// Save it for later
-			nextFrame = newNextFrame;
-			break;
-		}
-	}
-};
-
 /** === AUDIO PLAYBACK LOGIC === */
+
+let currentAudioIteratorId = 0;
 
 /** Loops over the audio buffer iterator, scheduling the audio to be played in the audio context. */
 const runAudioIterator = async () => {
-	if (!audioSink) {
+	if (!audioCursor) {
 		return;
 	}
 
+	const id = ++currentAudioIteratorId;
+
 	// To play back audio, we loop over all audio chunks (typically very short) of the file and play them at the correct
 	// timestamp. The result is a continuous, uninterrupted audio signal.
-	for await (const { buffer, timestamp } of audioBufferIterator!) {
+	for await (const sample of audioCursor) {
+		if (id !== currentAudioIteratorId) {
+			break;
+		}
+
 		const node = audioContext!.createBufferSource();
-		node.buffer = buffer;
+		node.buffer = sample.toAudioBuffer();
 		node.connect(gainNode!);
 
-		const startTimestamp = audioContextStartTime! + timestamp - playbackTimeAtStart;
+		const startTimestamp = audioContextStartTime! + sample.timestamp - playbackTimeAtStart;
 
 		// Two cases: Either, the audio starts in the future or in the past
 		if (startTimestamp >= audioContext!.currentTime) {
@@ -333,15 +275,20 @@ const runAudioIterator = async () => {
 
 		// If we're more than a second ahead of the current playback time, let's slow down the loop until time has
 		// passed.
-		if (timestamp - getPlaybackTime() >= 1) {
+		if (sample.timestamp - getPlaybackTime() >= 1) {
 			await new Promise<void>((resolve) => {
-				const id = setInterval(() => {
-					if (timestamp - getPlaybackTime() < 1) {
-						clearInterval(id);
+				const timeoutId = setInterval(() => {
+					if (sample.timestamp - getPlaybackTime() < 1 || id !== currentAudioIteratorId) {
+						clearInterval(timeoutId);
 						resolve();
 					}
 				}, 100);
 			});
+
+			// This check is required to prevent advancing the cursor when it is no longer in our control
+			if (id !== currentAudioIteratorId) {
+				break;
+			}
 		}
 	}
 };
@@ -367,16 +314,15 @@ const play = async () => {
 	if (getPlaybackTime() === totalDuration) {
 		// If we're at the end, let's snap back to the start
 		playbackTimeAtStart = 0;
-		await startVideoIterator();
+		await videoCursor?.seekTo(0);
 	}
 
 	audioContextStartTime = audioContext!.currentTime;
 	playing = true;
 
-	if (audioSink) {
+	if (audioCursor) {
 		// Start the audio iterator
-		void audioBufferIterator?.return();
-		audioBufferIterator = audioSink?.buffers(getPlaybackTime());
+		void audioCursor.seekTo(getPlaybackTime());
 		void runAudioIterator();
 	}
 
@@ -387,8 +333,8 @@ const play = async () => {
 const pause = () => {
 	playbackTimeAtStart = getPlaybackTime();
 	playing = false;
-	void audioBufferIterator?.return(); // This stops any for-loops that are iterating the iterator
-	audioBufferIterator = null;
+
+	currentAudioIteratorId++; // This stops any ongoing cursor iteration
 
 	// Stop all audio nodes that were already queued to play
 	for (const node of queuedAudioNodes) {
@@ -419,7 +365,7 @@ const seekToTime = async (seconds: number) => {
 
 	playbackTimeAtStart = seconds;
 
-	await startVideoIterator();
+	await videoCursor?.seekTo(seconds);
 
 	if (wasPlaying && playbackTimeAtStart < totalDuration) {
 		void play();
@@ -518,7 +464,7 @@ volumeBarContainer.addEventListener('pointermove', (event) => {
 /** === CONTROL UI LOGIC === */
 
 const showControlsTemporarily = () => {
-	if (!videoSink) {
+	if (!videoCursor) {
 		// Shouldn't run if there's only an audio track
 		return;
 	}
@@ -551,7 +497,7 @@ playerContainer.addEventListener('pointermove', (event) => {
 	}
 });
 playerContainer.addEventListener('pointerleave', (event) => {
-	if (!videoSink) {
+	if (!videoCursor) {
 		// Shouldn't run if there's only an audio track
 		return;
 	}

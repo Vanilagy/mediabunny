@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import path from 'node:path';
-import { ALL_FORMATS, MP4, EncodedPacketSink, Input, FilePathSource } from '../../src/index.js';
+import { ALL_FORMATS, MP4, Input, FilePathSource, PacketCursor } from '../../src/index.js';
 
 const __dirname = new URL('.', import.meta.url).pathname;
 
@@ -18,12 +18,12 @@ test('Should be able to get packets from a .MP4 file', async () => {
 	const track = await input.getPrimaryVideoTrack();
 	if (!track) throw new Error('No video track found');
 
-	const sink = new EncodedPacketSink(track);
+	const cursor = new PacketCursor(track);
 
 	let samples = 0;
 	const timestamps: number[] = [];
 
-	for await (const packet of sink.packets()) {
+	for await (const packet of cursor) {
 		timestamps.push(packet.timestamp);
 		samples++;
 	}

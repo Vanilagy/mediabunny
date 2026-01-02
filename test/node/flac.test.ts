@@ -4,11 +4,12 @@ import { assert, toUint8Array } from '../../src/misc.js';
 import { Input } from '../../src/input.js';
 import { BufferSource, FilePathSource } from '../../src/source.js';
 import { ALL_FORMATS, FLAC } from '../../src/input-format.js';
-import { EncodedPacketSink } from '../../src/media-sink.js';
 import { Output } from '../../src/output.js';
 import { BufferTarget } from '../../src/target.js';
 import { FlacOutputFormat } from '../../src/output-format.js';
 import { Conversion } from '../../src/conversion.js';
+import { PacketCursor } from '../../src/cursors.js';
+import { PacketReader } from '../../src/packet.js';
 
 const __dirname = new URL('.', import.meta.url).pathname;
 
@@ -36,10 +37,11 @@ test('can loop over all samples', async () => {
 	expect(track.timeResolution).toEqual(44100);
 	expect(await input.getMimeType()).toEqual('audio/flac');
 
-	const sink = new EncodedPacketSink(track);
+	const cursor = new PacketCursor(track);
+
 	let samples = 0;
 	let lastSampleTimestamp = 0;
-	for await (const sample of sink.packets()) {
+	for await (const sample of cursor) {
 		samples++;
 		lastSampleTimestamp = sample.timestamp;
 		if (sample.sequenceNumber === 212) {
@@ -63,23 +65,24 @@ test('can do random access', async () => {
 
 	const track = await input.getPrimaryAudioTrack();
 	assert(track);
-	const packetSink = new EncodedPacketSink(track);
 
-	const packet = await packetSink.getPacket(10);
+	const reader = new PacketReader(track);
+
+	const packet = await reader.getAt(10);
 	assert(packet);
 	expect(packet.timestamp).toBe(9.93814058956916);
 	expect(packet.data.byteLength).toBe(8345);
 	expect(packet.sequenceNumber).toBe(107);
 	expect(packet.duration).toBe(0.09287981859410431);
 
-	const nextPacket = await packetSink.getNextPacket(packet);
+	const nextPacket = await reader.getNext(packet);
 	assert(nextPacket);
 	expect(nextPacket.timestamp).toBe(10.031020408163265);
 	expect(nextPacket.data.byteLength).toBe(8988);
 	expect(nextPacket.sequenceNumber).toBe(108);
 	expect(nextPacket.duration).toBe(0.09287981859410431);
 
-	const priorPacket = await packetSink.getPacket(3);
+	const priorPacket = await reader.getAt(3);
 	assert(priorPacket);
 	expect(priorPacket.timestamp).toBe(2.972154195011338);
 	expect(priorPacket.data.byteLength).toBe(6877);
@@ -96,9 +99,10 @@ test('can get metadata-only packets', async () => {
 
 	const track = await input.getPrimaryAudioTrack();
 	assert(track);
-	const packetSink = new EncodedPacketSink(track);
 
-	const packet = await packetSink.getPacket(10, { metadataOnly: true });
+	const reader = new PacketReader(track);
+
+	const packet = await reader.getAt(10, { metadataOnly: true });
 	assert(packet);
 	expect(packet.timestamp).toBe(9.93814058956916);
 	expect(packet.isMetadataOnly).toBe(true);
@@ -209,11 +213,13 @@ test('can re-mux a .flac', async () => {
 		images: inputImages,
 	});
 
-	const inputPacketSink = new EncodedPacketSink(inputTrack);
-	const outputPacketSink = new EncodedPacketSink(outputTrack);
+	const inputReader = new PacketReader(inputTrack);
+	const outputReader = new PacketReader(outputTrack);
+	const outputCursor = new PacketCursor(outputTrack);
+
 	let packets = 0;
 	let timestamp = 0;
-	for await (const packet of outputPacketSink.packets()) {
+	for await (const packet of outputCursor) {
 		packets++;
 		timestamp = packet.timestamp;
 	}
@@ -222,8 +228,8 @@ test('can re-mux a .flac', async () => {
 	expect(timestamp).toBe(19.690521541950112);
 
 	// Test that packets are byte-identical
-	const inputPacket = await inputPacketSink.getPacket(10);
-	const outputPacket = await outputPacketSink.getPacket(10);
+	const inputPacket = await inputReader.getAt(10);
+	const outputPacket = await outputReader.getAt(10);
 
 	assert(inputPacket);
 	assert(outputPacket);

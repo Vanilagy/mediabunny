@@ -23,7 +23,7 @@ import { OutputAudioTrack, OutputSubtitleTrack, OutputTrack, OutputVideoTrack } 
 import {
 	assert,
 	assertNever,
-	CallSerializer,
+	NaiveCallSerializer,
 	clamp,
 	isFirefox,
 	last,
@@ -214,7 +214,7 @@ class VideoEncoderWrapper {
 	private resizeCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
 
 	private customEncoder: CustomVideoEncoder | null = null;
-	private customEncoderCallSerializer = new CallSerializer();
+	private customEncoderCallSerializer = new NaiveCallSerializer();
 	private customEncoderQueueSize = 0;
 
 	// Alpha stuff
@@ -405,7 +405,7 @@ class VideoEncoderWrapper {
 				}
 			}
 
-			await this.muxer!.mutex.currentPromise; // Allow the writer to apply backpressure
+			await this.muxer!.mutex.waitForUnlock(); // Allow the writer to apply backpressure
 		} finally {
 			if (shouldClose) {
 				// Make sure it's always closed, even if there was an error
@@ -1342,7 +1342,7 @@ class AudioEncoderWrapper {
 	private writeOutputValue: ((view: DataView, byteOffset: number, value: number) => void) | null = null;
 
 	private customEncoder: CustomAudioEncoder | null = null;
-	private customEncoderCallSerializer = new CallSerializer();
+	private customEncoderCallSerializer = new NaiveCallSerializer();
 	private customEncoderQueueSize = 0;
 
 	private lastEndSampleIndex: number | null = null;
@@ -1449,7 +1449,7 @@ class AudioEncoderWrapper {
 					await promise;
 				}
 
-				await this.muxer!.mutex.currentPromise; // Allow the writer to apply backpressure
+				await this.muxer!.mutex.waitForUnlock(); // Allow the writer to apply backpressure
 			} else if (this.isPcmEncoder) {
 				await this.doPcmEncoding(audioSample, shouldClose);
 			} else {
@@ -1466,7 +1466,7 @@ class AudioEncoderWrapper {
 					await new Promise(resolve => this.encoder!.addEventListener('dequeue', resolve, { once: true }));
 				}
 
-				await this.muxer!.mutex.currentPromise; // Allow the writer to apply backpressure
+				await this.muxer!.mutex.waitForUnlock(); // Allow the writer to apply backpressure
 			}
 		} finally {
 			if (shouldClose) {
@@ -2003,7 +2003,8 @@ export class MediaStreamAudioTrackSource extends AudioSource {
 				return;
 			}
 
-			audioSample.setTimestamp(currentTimestamp + this._pauseOffset);
+			// @ts-expect-error Readonly
+			audioSample.timestamp = currentTimestamp + this._pauseOffset;
 
 			void this._encoder.add(audioSample, true)
 				.catch((error) => {
@@ -2319,7 +2320,7 @@ export class TextSubtitleSource extends SubtitleSource {
 		this._ensureValidAdd();
 		this._parser.parse(text);
 
-		return this._connectedTrack!.output._muxer.mutex.currentPromise;
+		return this._connectedTrack!.output._muxer.mutex.waitForUnlock();
 	}
 
 	/** @internal */

@@ -10,11 +10,11 @@ import { AudioCodec, MediaCodec, VideoCodec } from './codec';
 import { determineVideoPacketType } from './codec-data';
 import { customAudioDecoders, customVideoDecoders } from './custom-coder';
 import { Input } from './input';
-import { EncodedPacketSink, PacketRetrievalOptions } from './media-sink';
-import { assert, Rotation } from './misc';
+import { assert, MaybeRelevantPromise, ResultValue, Rotation } from './misc';
 import { TrackType } from './output';
-import { EncodedPacket, PacketType } from './packet';
+import { EncodedPacket, PacketRetrievalOptions, PacketType } from './packet';
 import { TrackDisposition } from './metadata';
+import { PacketCursor } from './cursors';
 
 /**
  * Contains aggregate statistics about the encoded packets of a track.
@@ -38,14 +38,31 @@ export interface InputTrackBacking {
 	getLanguageCode(): string;
 	getTimeResolution(): number;
 	getDisposition(): TrackDisposition;
-	getFirstTimestamp(): Promise<number>;
-	computeDuration(): Promise<number>;
 
-	getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
-	getPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
-	getNextPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
-	getKeyPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
-	getNextKeyPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
+	getFirstPacket(
+		res: ResultValue<EncodedPacket | null>,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise;
+	getNextPacket(
+		res: ResultValue<EncodedPacket | null>,
+		packet: EncodedPacket,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise;
+	getPacket(
+		res: ResultValue<EncodedPacket | null>,
+		timestamp: number,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise;
+	getKeyPacket(
+		res: ResultValue<EncodedPacket | null>,
+		timestamp: number,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise;
+	getNextKeyPacket(
+		res: ResultValue<EncodedPacket | null>,
+		packet: EncodedPacket,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise;
 }
 
 /**
@@ -140,13 +157,21 @@ export abstract class InputTrack {
 	 * may be positive or even negative. A negative starting timestamp means the track's timing has been offset. Samples
 	 * with a negative timestamp should not be presented.
 	 */
-	getFirstTimestamp() {
-		return this._backing.getFirstTimestamp();
+	async getFirstTimestamp() {
+		const result = new ResultValue<EncodedPacket | null>();
+		await this._backing.getFirstPacket(result, { metadataOnly: true });
+
+		const firstPacket = result.value;
+		return firstPacket?.timestamp ?? 0;
 	}
 
 	/** Returns the end timestamp of the last packet of this track, in seconds. */
-	computeDuration() {
-		return this._backing.computeDuration();
+	async computeDuration() {
+		const result = new ResultValue<EncodedPacket | null>();
+		await this._backing.getPacket(result, Infinity, { metadataOnly: true });
+
+		const lastPacket = result.value;
+		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
 	}
 
 	/**
@@ -158,20 +183,20 @@ export abstract class InputTrack {
 	 * entire file.
 	 */
 	async computePacketStats(targetPacketCount = Infinity): Promise<PacketStats> {
-		const sink = new EncodedPacketSink(this);
+		const cursor = new PacketCursor(this, { metadataOnly: true });
 
 		let startTimestamp = Infinity;
 		let endTimestamp = -Infinity;
 		let packetCount = 0;
 		let totalPacketBytes = 0;
 
-		for await (const packet of sink.packets(undefined, undefined, { metadataOnly: true })) {
+		await cursor.iterate((packet) => {
 			if (
 				packetCount >= targetPacketCount
 				// This additional condition is needed to produce correct results with out-of-presentation-order packets
 				&& packet.timestamp >= endTimestamp
 			) {
-				break;
+				return false;
 			}
 
 			startTimestamp = Math.min(startTimestamp, packet.timestamp);
@@ -179,7 +204,7 @@ export abstract class InputTrack {
 
 			packetCount++;
 			totalPacketBytes += packet.byteLength;
-		}
+		});
 
 		return {
 			packetCount,

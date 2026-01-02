@@ -175,7 +175,7 @@ export const readBytes = (slice: FileSlice, length: number) => {
 
 export const readU8 = (slice: FileSlice) => {
 	checkIsInRange(slice, 1);
-	return slice.view.getUint8(slice.bufferPos++);
+	return slice.bytes[slice.bufferPos++]!;
 };
 
 export const readU16 = (slice: FileSlice, littleEndian: boolean) => {

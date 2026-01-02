@@ -30,6 +30,19 @@ export default tseslint.config(
 			'@typescript-eslint/require-await': 'off',
 			'@stylistic/yield-star-spacing': ['error', { before: false, after: true }],
 			'@typescript-eslint/no-unsafe-enum-comparison': 'off',
+			'@typescript-eslint/no-unused-vars': [
+				'error',
+				{
+					// From https://typescript-eslint.io/rules/no-unused-vars/
+					"args": "all",
+					"argsIgnorePattern": "^_",
+					"caughtErrors": "all",
+					"caughtErrorsIgnorePattern": "^_",
+					"destructuredArrayIgnorePattern": "^_",
+					"varsIgnorePattern": "^_",
+					"ignoreRestSiblings": true,
+				},
+			],
 		},
 	},
 	{

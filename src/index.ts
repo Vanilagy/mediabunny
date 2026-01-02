@@ -161,6 +161,7 @@ export {
 	EncodedPacket,
 	EncodedPacketSideData,
 	PacketType,
+	PacketReader,
 } from './packet';
 export {
 	AudioSample,
@@ -174,17 +175,11 @@ export {
 	VIDEO_SAMPLE_PIXEL_FORMATS,
 } from './sample';
 export {
-	AudioBufferSink,
-	AudioSampleSink,
-	BaseMediaSampleSink,
-	CanvasSink,
-	CanvasSinkOptions,
-	EncodedPacketSink,
-	PacketRetrievalOptions,
-	VideoSampleSink,
-	WrappedAudioBuffer,
-	WrappedCanvas,
-} from './media-sink';
+	PacketCursor,
+	SampleCursor,
+	VideoSampleCursor,
+	AudioSampleCursor,
+} from './cursors';
 export {
 	Conversion,
 	ConversionOptions,
