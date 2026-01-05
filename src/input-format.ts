@@ -30,6 +30,7 @@ import { MAX_FRAME_HEADER_SIZE, MIN_FRAME_HEADER_SIZE, readFrameHeader } from '.
 import { AdtsDemuxer } from './adts/adts-demuxer';
 import { readAscii } from './reader';
 import { FlacDemuxer } from './flac/flac-demuxer';
+import { MpegTsDemuxer } from './mpeg-ts/mpeg-ts-demuxer';
 
 /**
  * Base class representing an input media file format.
@@ -476,6 +477,26 @@ export class AdtsInputFormat extends InputFormat {
 	}
 }
 
+export class MpegTsInputFormat extends InputFormat {
+	/** @internal */
+	async _canReadInput(input: Input) {
+		return true; // TEMP
+	}
+
+	/** @internal */
+	_createDemuxer(input: Input) {
+		return new MpegTsDemuxer(input);
+	}
+
+	get name() {
+		return 'MPEG Transport Stream';
+	}
+
+	get mimeType() {
+		return 'video/MP2T'; // todo correct?
+	}
+}
+
 /**
  * MP4 input format singleton.
  * @group Input formats
@@ -532,10 +553,12 @@ export const ADTS = /* #__PURE__ */ new AdtsInputFormat();
  */
 export const FLAC = /* #__PURE__ */ new FlacInputFormat();
 
+export const MPEG_TS = /* #__PURE__ */ new MpegTsInputFormat();
+
 /**
  * List of all input format singletons. If you don't need to support all input formats, you should specify the
  * formats individually for better tree shaking.
  * @group Input formats
  * @public
  */
-export const ALL_FORMATS: InputFormat[] = [MP4, QTFF, MATROSKA, WEBM, WAVE, OGG, FLAC, MP3, ADTS];
+export const ALL_FORMATS: InputFormat[] = [MP4, QTFF, MATROSKA, WEBM, WAVE, OGG, FLAC, MP3, ADTS, MPEG_TS];
