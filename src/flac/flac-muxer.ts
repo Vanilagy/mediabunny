@@ -205,7 +205,8 @@ export class FlacMuxer extends Muxer {
 		packet: EncodedPacket,
 		meta?: EncodedAudioChunkMetadata,
 	): Promise<void> {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		validateAudioChunkMetadata(meta);
 
@@ -213,62 +214,58 @@ export class FlacMuxer extends Muxer {
 		assert(meta.decoderConfig);
 		assert(meta.decoderConfig.description);
 
-		try {
-			this.validateAndNormalizeTimestamp(
-				track,
-				packet.timestamp,
-				packet.type === 'key',
-			);
+		this.validateAndNormalizeTimestamp(
+			track,
+			packet.timestamp,
+			packet.type === 'key',
+		);
 
-			if (this.sampleRate === null) {
-				this.sampleRate = meta.decoderConfig.sampleRate;
-			}
-
-			if (this.channels === null) {
-				this.channels = meta.decoderConfig.numberOfChannels;
-			}
-
-			if (this.bitsPerSample === null) {
-				const descriptionBitstream = new Bitstream(
-					toUint8Array(meta.decoderConfig.description),
-				);
-				// skip 'fLaC' + block size + frame size + sample rate + number of channels
-				// See demuxer for the exact structure
-				descriptionBitstream.skipBits(103 + 64);
-				const bitsPerSample = descriptionBitstream.readBits(5) + 1;
-				this.bitsPerSample = bitsPerSample;
-			}
-
-			if (!this.metadataWritten) {
-				this.writeVorbisCommentAndPictureBlock();
-			}
-
-			const slice = FileSlice.tempFromBytes(packet.data);
-			readBytes(slice, 2);
-			const bytes = readBytes(slice, 2);
-			const bitstream = new Bitstream(bytes);
-			const blockSizeOrUncommon = getBlockSizeOrUncommon(bitstream.readBits(4));
-			if (blockSizeOrUncommon === null) {
-				throw new Error('Invalid FLAC frame: Invalid block size.');
-			}
-
-			readCodedNumber(slice); // num
-			const blockSize = readBlockSize(slice, blockSizeOrUncommon);
-
-			this.blockSizes.push(blockSize);
-			this.frameSizes.push(packet.data.length);
-
-			const startPos = this.writer.getPos();
-			this.writer.write(packet.data);
-
-			if (this.format._options.onFrame) {
-				this.format._options.onFrame(packet.data, startPos);
-			}
-
-			await this.writer.flush();
-		} finally {
-			release();
+		if (this.sampleRate === null) {
+			this.sampleRate = meta.decoderConfig.sampleRate;
 		}
+
+		if (this.channels === null) {
+			this.channels = meta.decoderConfig.numberOfChannels;
+		}
+
+		if (this.bitsPerSample === null) {
+			const descriptionBitstream = new Bitstream(
+				toUint8Array(meta.decoderConfig.description),
+			);
+			// skip 'fLaC' + block size + frame size + sample rate + number of channels
+			// See demuxer for the exact structure
+			descriptionBitstream.skipBits(103 + 64);
+			const bitsPerSample = descriptionBitstream.readBits(5) + 1;
+			this.bitsPerSample = bitsPerSample;
+		}
+
+		if (!this.metadataWritten) {
+			this.writeVorbisCommentAndPictureBlock();
+		}
+
+		const slice = FileSlice.tempFromBytes(packet.data);
+		readBytes(slice, 2);
+		const bytes = readBytes(slice, 2);
+		const bitstream = new Bitstream(bytes);
+		const blockSizeOrUncommon = getBlockSizeOrUncommon(bitstream.readBits(4));
+		if (blockSizeOrUncommon === null) {
+			throw new Error('Invalid FLAC frame: Invalid block size.');
+		}
+
+		readCodedNumber(slice); // num
+		const blockSize = readBlockSize(slice, blockSizeOrUncommon);
+
+		this.blockSizes.push(blockSize);
+		this.frameSizes.push(packet.data.length);
+
+		const startPos = this.writer.getPos();
+		this.writer.write(packet.data);
+
+		if (this.format._options.onFrame) {
+			this.format._options.onFrame(packet.data, startPos);
+		}
+
+		await this.writer.flush();
 	}
 
 	override addSubtitleCue(): Promise<void> {
@@ -276,7 +273,8 @@ export class FlacMuxer extends Muxer {
 	}
 
 	async finalize(): Promise<void> {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		let minimumBlockSize = Infinity;
 		let maximumBlockSize = 0;
@@ -314,7 +312,5 @@ export class FlacMuxer extends Muxer {
 			bitsPerSample: this.bitsPerSample,
 			totalSamples,
 		});
-
-		release();
 	}
 }

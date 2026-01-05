@@ -11,24 +11,123 @@
 		const file = fileInput.files[0];
 		const input = new Mediabunny.Input({
 			formats: Mediabunny.ALL_FORMATS,
-			source: new Mediabunny.BlobSource(file),
+			source: new Mediabunny.BufferSource(await file.arrayBuffer()),
 		});
 
-		const videoTrack = await input.getPrimaryVideoTrack();
-		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
+		const audioTrack = await input.getPrimaryAudioTrack();
 
-		for await (const packet of sink.packets()) {
-			console.log(packet);
+		const iters = 250;
+		let total = 0;
+
+		for (let i = 0; i < iters; i++) {
+			const start = performance.now();
+			let count = 0;
+			const reader = new Mediabunny.PacketCursor(audioTrack);
+			await reader.iterate(() => count++);
+
+			console.log(count)
+
+			total += performance.now() - start;
 		}
+
+		alert(total / iters);
+
+		/*
+		console.log(await cursor.seekTo(2.00));
+		console.log(await cursor.next());
+		console.log(await cursor.next());
+		*/
+
+		//console.log(await cursor.seekTo(4.9))
+		//console.log(await cursor.seekTo(5.1))
+		//return;
+
+		/*
+		const mh = [
+			cursor.seekTo(2.05),
+			//cursor.seekTo(4.9),
+			//cursor.seekTo(4.9),
+			//cursor.seekTo(4.9),
+			//cursor.seekTo(4.9),
+			//cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.next(),
+			cursor.close(),
+			//cursor.next(),
+			//cursor.next(),
+			//cursor.next(),
+			//cursor.next(),
+			//cursor.close(),
+			//cursor.seekTo(2.10),
+			//cursor.seekTo(5),
+			//cursor.close(),
+			//cursor.seekTo(2.00),
+		];
+		*/
+
+		/*
+		for (const yo of mh) {
+			const samp = await yo;
+			console.log(samp)
+			samp?.close();
+		}
+
+		console.log("done")
+		*/
+
+		//console.log(await Promise.all(mh));
+
+		//console.log(await cursor.seekTo(2.05));
+		//console.log(await cursor.seekTo(2.10));
+		//console.log(await cursor.seekTo(10.2));
+		//console.log(await cursor.seekTo(5.2));
+
+		/*
+		setTimeout(async () => {
+			console.log("this")
+			
+		}, 500);
+		*/
 
 
 		/*
-		const videoTrack = await input.getPrimaryVideoTrack();
-		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
+		const iters = 5;
+		let total = 0;
 
-		for await (const packet of sink.packets()) {
-			console.log(packet);
+		for (let i = 0; i < iters; i++) {
+			const file = fileInput.files[0];
+			const input = new Mediabunny.Input({
+				formats: Mediabunny.ALL_FORMATS,
+				source: new Mediabunny.BufferSource(await file.arrayBuffer()),
+			});
+
+			const audioTrack = await input.getPrimaryAudioTrack();
+			const cursor = new Mediabunny.PacketCursor(audioTrack);
+
+			await cursor.seekToStart();
+
+			const start = performance.now();
+			await cursor.iterate(() => {});
+			//alert(performance.now() - start)
+
+			total += performance.now() - start;
 		}
+
+		alert(total / iters);
 		*/
 
 		/*
@@ -110,6 +209,8 @@
 			total += end - start;
 			//console.log(total / file.size, end - start);
 		}
+		alert(elapsed / iters);
+		
 
 		const videoTrack = await input.getPrimaryVideoTrack();
 		const sink = new Mediabunny.EncodedPacketSink(videoTrack);

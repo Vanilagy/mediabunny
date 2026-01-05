@@ -188,7 +188,8 @@ export class IsobmffMuxer extends Muxer {
 	}
 
 	async start() {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		const holdsAvc = this.output._tracks.some(x => x.type === 'video' && x.source._codec === 'avc');
 
@@ -238,8 +239,6 @@ export class IsobmffMuxer extends Muxer {
 		}
 
 		await this.writer.flush();
-
-		release();
 	}
 
 	private allTracksAreKnown() {
@@ -458,73 +457,67 @@ export class IsobmffMuxer extends Muxer {
 	}
 
 	async addEncodedVideoPacket(track: OutputVideoTrack, packet: EncodedPacket, meta?: EncodedVideoChunkMetadata) {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
-		try {
-			const trackData = this.getVideoTrackData(track, packet, meta);
+		const trackData = this.getVideoTrackData(track, packet, meta);
 
-			let packetData = packet.data;
-			if (trackData.info.requiresAnnexBTransformation) {
-				const nalUnits = findNalUnitsInAnnexB(packetData);
-				if (nalUnits.length === 0) {
-					// It's not valid Annex B data
-					throw new Error(
-						'Failed to transform packet data. Make sure all packets are provided in Annex B format, as'
-						+ ' specified in ITU-T-REC-H.264 and ITU-T-REC-H.265.',
-					);
-				}
-
-				// We don't strip things like SPS or PPS NALUs here, mainly because they can also appear in the middle
-				// of a stream and potentially modify the parameters of it. So, let's just leave them in to be sure.
-				packetData = concatNalUnitsInLengthPrefixed(nalUnits, 4);
+		let packetData = packet.data;
+		if (trackData.info.requiresAnnexBTransformation) {
+			const nalUnits = findNalUnitsInAnnexB(packetData);
+			if (nalUnits.length === 0) {
+				// It's not valid Annex B data
+				throw new Error(
+					'Failed to transform packet data. Make sure all packets are provided in Annex B format, as'
+					+ ' specified in ITU-T-REC-H.264 and ITU-T-REC-H.265.',
+				);
 			}
 
-			const timestamp = this.validateAndNormalizeTimestamp(
-				trackData.track,
-				packet.timestamp,
-				packet.type === 'key',
-			);
-			const internalSample = this.createSampleForTrack(
-				trackData,
-				packetData,
-				timestamp,
-				packet.duration,
-				packet.type,
-			);
-
-			await this.registerSample(trackData, internalSample);
-		} finally {
-			release();
+			// We don't strip things like SPS or PPS NALUs here, mainly because they can also appear in the middle
+			// of a stream and potentially modify the parameters of it. So, let's just leave them in to be sure.
+			packetData = concatNalUnitsInLengthPrefixed(nalUnits, 4);
 		}
+
+		const timestamp = this.validateAndNormalizeTimestamp(
+			trackData.track,
+			packet.timestamp,
+			packet.type === 'key',
+		);
+		const internalSample = this.createSampleForTrack(
+			trackData,
+			packetData,
+			timestamp,
+			packet.duration,
+			packet.type,
+		);
+
+		await this.registerSample(trackData, internalSample);
 	}
 
 	async addEncodedAudioPacket(track: OutputAudioTrack, packet: EncodedPacket, meta?: EncodedAudioChunkMetadata) {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
-		try {
-			const trackData = this.getAudioTrackData(track, meta);
+		const trackData = this.getAudioTrackData(track, meta);
 
-			const timestamp = this.validateAndNormalizeTimestamp(
-				trackData.track,
-				packet.timestamp,
-				packet.type === 'key',
-			);
-			const internalSample = this.createSampleForTrack(
-				trackData,
-				packet.data,
-				timestamp,
-				packet.duration,
-				packet.type,
-			);
+		const timestamp = this.validateAndNormalizeTimestamp(
+			trackData.track,
+			packet.timestamp,
+			packet.type === 'key',
+		);
+		const internalSample = this.createSampleForTrack(
+			trackData,
+			packet.data,
+			timestamp,
+			packet.duration,
+			packet.type,
+		);
 
-			if (trackData.info.requiresPcmTransformation) {
-				await this.maybePadWithSilence(trackData, timestamp);
-			}
-
-			await this.registerSample(trackData, internalSample);
-		} finally {
-			release();
+		if (trackData.info.requiresPcmTransformation) {
+			await this.maybePadWithSilence(trackData, timestamp);
 		}
+
+		await this.registerSample(trackData, internalSample);
 	}
 
 	private async maybePadWithSilence(trackData: IsobmffAudioTrackData, untilTimestamp: number) {
@@ -559,21 +552,18 @@ export class IsobmffMuxer extends Muxer {
 	}
 
 	async addSubtitleCue(track: OutputSubtitleTrack, cue: SubtitleCue, meta?: SubtitleMetadata) {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
-		try {
-			const trackData = this.getSubtitleTrackData(track, meta);
+		const trackData = this.getSubtitleTrackData(track, meta);
 
-			this.validateAndNormalizeTimestamp(trackData.track, cue.timestamp, true);
+		this.validateAndNormalizeTimestamp(trackData.track, cue.timestamp, true);
 
-			if (track.source._codec === 'webvtt') {
-				trackData.cueQueue.push(cue);
-				await this.processWebVTTCues(trackData, cue.timestamp);
-			} else {
-				// TODO
-			}
-		} finally {
-			release();
+		if (track.source._codec === 'webvtt') {
+			trackData.cueQueue.push(cue);
+			await this.processWebVTTCues(trackData, cue.timestamp);
+		} else {
+			// TODO
 		}
 	}
 
@@ -1176,7 +1166,8 @@ export class IsobmffMuxer extends Muxer {
 
 	// eslint-disable-next-line @typescript-eslint/no-misused-promises
 	override async onTrackClose(track: OutputTrack) {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		if (track.type === 'subtitle' && track.source._codec === 'webvtt') {
 			const trackData = this.trackDatas.find(x => x.track === track) as IsobmffSubtitleTrackData;
@@ -1193,13 +1184,12 @@ export class IsobmffMuxer extends Muxer {
 			// Since a track is now closed, we may be able to write out chunks that were previously waiting
 			await this.interleaveSamples();
 		}
-
-		release();
 	}
 
 	/** Finalizes the file, making it ready for use. Must be called after all video and audio chunks have been added. */
 	async finalize() {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		this.allTracksKnown.resolve();
 
@@ -1339,7 +1329,5 @@ export class IsobmffMuxer extends Muxer {
 				this.format._options.onMoov(data, start);
 			}
 		}
-
-		release();
 	}
 }
