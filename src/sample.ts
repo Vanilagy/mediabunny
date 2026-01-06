@@ -446,8 +446,7 @@ export class VideoSample implements Disposable {
 	}
 
 	/**
-	 * Returns the number of bytes required to hold this video sample's pixel data. Throws if `format` is `null`;
-	 * specify an explicit RGB format in the options in this case.
+	 * Returns the number of bytes required to hold this video sample's pixel data. Throws if `format` is `null`.
 	 */
 	allocationSize(options: VideoFrameCopyToOptions = {}): number {
 		validateVideoFrameCopyToOptions(options);
@@ -455,11 +454,10 @@ export class VideoSample implements Disposable {
 		if (this._closed) {
 			throw new Error('VideoSample is closed.');
 		}
-		if ((options.format ?? this.format) === null) {
-			throw new Error(
-				'Cannot get allocation size when format is null. Please manually provide an RGB pixel format in the'
-				+ ' options instead.',
-			);
+		if (this.format === null) {
+			// https://github.com/Vanilagy/mediabunny/issues/267
+			// https://github.com/w3c/webcodecs/issues/920
+			throw new Error('Cannot get allocation size when format is null. Sorry!');
 		}
 
 		assert(this._data !== null);
@@ -472,6 +470,7 @@ export class VideoSample implements Disposable {
 				|| options.rect
 			) {
 				// Temporarily convert to VideoFrame to get it done
+				// TODO: Compute this directly without needing to go through VideoFrame
 				const videoFrame = this.toVideoFrame();
 				const size = videoFrame.allocationSize(options);
 				videoFrame.close();
@@ -490,8 +489,7 @@ export class VideoSample implements Disposable {
 	}
 
 	/**
-	 * Copies this video sample's pixel data to an ArrayBuffer or ArrayBufferView. Throws if `format` is `null`;
-	 * specify an explicit RGB format in the options in this case.
+	 * Copies this video sample's pixel data to an ArrayBuffer or ArrayBufferView. Throws if `format` is `null`.
 	 * @returns The byte layout of the planes of the copied data.
 	 */
 	async copyTo(destination: AllowSharedBufferSource, options: VideoFrameCopyToOptions = {}): Promise<PlaneLayout[]> {
@@ -503,11 +501,8 @@ export class VideoSample implements Disposable {
 		if (this._closed) {
 			throw new Error('VideoSample is closed.');
 		}
-		if ((options.format ?? this.format) === null) {
-			throw new Error(
-				'Cannot copy video sample data when format is null. Please manually provide an RGB pixel format in the'
-				+ ' options instead.',
-			);
+		if (this.format === null) {
+			throw new Error('Cannot copy video sample data when format is null. Sorry!');
 		}
 
 		assert(this._data !== null);
@@ -520,6 +515,7 @@ export class VideoSample implements Disposable {
 				|| options.rect
 			) {
 				// Temporarily convert to VideoFrame to get it done
+				// TODO: Do this directly without needing to go through VideoFrame
 				const videoFrame = this.toVideoFrame();
 				const layout = await videoFrame.copyTo(destination, options);
 				videoFrame.close();

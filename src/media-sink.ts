@@ -480,23 +480,13 @@ export abstract class BaseMediaSampleSink<
 
 			let currentPacket: EncodedPacket | null = keyPacket;
 
-			let endPacket: EncodedPacket | undefined = undefined;
-			if (endTimestamp < Infinity) {
-				// When an end timestamp is set, we cannot simply use that for the packet iterator due to out-of-order
-				// frames (B-frames). Instead, we'll need to keep decoding packets until we get a frame that exceeds
-				// this end time. However, we can still put a bound on it: Since key frames are by definition never
-				// out of order, we can stop at the first key frame after the end timestamp.
-				const packet = await packetSink.getPacket(endTimestamp);
-				const keyPacket = !packet
-					? null
-					: packet.type === 'key' && packet.timestamp === endTimestamp
-						? packet
-						: await packetSink.getNextKeyPacket(packet, { verifyKeyPackets: true });
-
-				if (keyPacket) {
-					endPacket = keyPacket;
-				}
-			}
+			// B-frames make it exceedingly difficult to properly define an upper bound for packet iteration if an end
+			// timestamp is set, so we just don't do it. The case that makes it especially tricky is when the frames
+			// following a key frame have a lower timestamp than the keyframe; something that quite frequently happens
+			// in HEVC streams. The price to pay for not upper-bounding the packet iterator is a slight increase in
+			// decoder work at the end of the range, but the added correctness and reliability makes this tradeoff worth
+			// it.
+			const endPacket = undefined;
 
 			const packets = packetSink.packets(keyPacket ?? undefined, endPacket);
 			await packets.next(); // Skip the start packet as we already have it
