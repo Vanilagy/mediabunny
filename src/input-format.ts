@@ -154,10 +154,11 @@ export class MatroskaInputFormat extends InputFormat {
 			return false;
 		}
 
-		const dataSize = readElementSize(headerSlice);
-		if (dataSize === null) {
+		const dataSizeResult = readElementSize(headerSlice);
+		if (dataSizeResult === null || dataSizeResult.size === null) {
 			return false; // Miss me with that shit
 		}
+		const dataSize = dataSizeResult.size;
 
 		let dataSlice = input._reader.requestSlice(headerSlice.filePos, dataSize);
 		if (dataSlice instanceof Promise) dataSlice = await dataSlice;

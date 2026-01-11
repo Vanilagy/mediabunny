@@ -908,9 +908,7 @@ export class MatroskaDemuxer extends Demuxer {
 	}
 
 	readContiguousElements(slice: FileSlice, stopIds?: number[]) {
-		const startIndex = slice.filePos;
-
-		while (slice.filePos - startIndex <= slice.length - MIN_HEADER_SIZE) {
+		while (slice.remainingLength >= MIN_HEADER_SIZE) {
 			const startPos = slice.filePos;
 			const foundElement = this.traverseElement(slice, stopIds);
 
