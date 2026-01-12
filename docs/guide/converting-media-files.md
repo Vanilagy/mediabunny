@@ -108,7 +108,7 @@ Sometimes, you may want to cancel an ongoing conversion process. For this, use t
 await conversion.cancel(); // Resolves once the conversion is canceled
 ```
 
-This automatically frees up all resources used by the conversion process.
+This automatically frees up all resources used by the conversion process and will cause any ongoing call to `execute` to throw a `ConversionCanceledError`.
 
 ## Video options
 

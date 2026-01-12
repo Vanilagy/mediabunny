@@ -822,7 +822,7 @@ export class Conversion {
 		}
 
 		if (this._canceled) {
-			await new Promise(() => {}); // Never resolve
+			throw new ConversionCanceledError();
 		}
 
 		await this.output.finalize();
@@ -832,7 +832,10 @@ export class Conversion {
 		}
 	}
 
-	/** Cancels the conversion process. Does nothing if the conversion is already complete. */
+	/**
+	 * Cancels the conversion process, causing any ongoing `execute` call to throw a `ConversionCanceledError`.
+	 * Does nothing if the conversion is already complete.
+	 */
 	async cancel() {
 		if (this.output.state === 'finalizing' || this.output.state === 'finalized') {
 			return;
@@ -1586,6 +1589,19 @@ export class Conversion {
 			this._lastProgress = newProgress;
 			this.onProgress?.(newProgress);
 		}
+	}
+}
+
+/**
+ * Thrown when a conversion couldn't complete due to being canceled.
+ * @group Conversion
+ * @public
+ */
+export class ConversionCanceledError extends Error {
+	/** Creates a new {@link ConversionCanceledError}. */
+	constructor(message = 'Conversion has been canceled.') {
+		super(message);
+		this.name = 'ConversionCanceledError';
 	}
 }
 
