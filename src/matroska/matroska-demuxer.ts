@@ -1160,7 +1160,6 @@ export class MatroskaDemuxer extends Demuxer {
 
 				const enabled = readUnsignedInt(slice, size);
 				if (!enabled) {
-					this.currentSegment!.tracks.pop();
 					this.currentTrack = null;
 				}
 			}; break;
