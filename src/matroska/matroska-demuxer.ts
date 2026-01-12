@@ -1012,6 +1012,11 @@ export class MatroskaDemuxer extends Demuxer {
 
 				this.readContiguousElements(slice.slice(dataStartPos, size));
 
+				// Check if track was disabled during parsing (e.g., by FlagEnabled being 0)
+				if (!this.currentTrack) {
+					break;
+				}
+
 				if (this.currentTrack.decodingInstructions.some((instruction) => {
 					return instruction.data?.type !== 'decompress'
 						|| instruction.scope !== ContentEncodingScope.Block
