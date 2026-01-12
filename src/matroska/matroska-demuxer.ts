@@ -364,7 +364,7 @@ export class MatroskaDemuxer extends Demuxer {
 					// doesn't contain any of the clusters that follow it. In the case, we apply the following logic: if
 					// we find a top-level cluster, attribute it to the previous segment.
 
-					if (size === null) {
+					if (size === undefined) {
 						// Just in case this is one of those weird sizeless clusters, let's do our best and still try to
 						// determine its size.
 						const nextElementPos = await searchForNextElementId(
@@ -389,7 +389,7 @@ export class MatroskaDemuxer extends Demuxer {
 		})();
 	}
 
-	async readSegment(segmentDataStart: number, dataSize: number | null) {
+	async readSegment(segmentDataStart: number, dataSize: number | undefined) {
 		this.currentSegment = {
 			seekHeadSeen: false,
 			infoSeen: false,
@@ -406,7 +406,7 @@ export class MatroskaDemuxer extends Demuxer {
 			cuePoints: [],
 
 			dataStartPos: segmentDataStart,
-			elementEndPos: dataSize === null
+			elementEndPos: dataSize === undefined
 				? null // Assume it goes until the end of the file
 				: segmentDataStart + dataSize,
 			clusterSeekStartPos: segmentDataStart,
@@ -483,7 +483,7 @@ export class MatroskaDemuxer extends Demuxer {
 				break; // Stop at the first cluster
 			}
 
-			if (size === null) {
+			if (size === undefined) {
 				break;
 			} else {
 				currentPos = dataStartPos + size;
@@ -606,7 +606,7 @@ export class MatroskaDemuxer extends Demuxer {
 		let size = elementHeader.size;
 		const dataStartPos = headerSlice.filePos;
 
-		if (size === null) {
+		if (size === undefined) {
 			// The cluster's size is undefined (can happen in livestreamed files). We'd still like to know the size of
 			// it, so we have no other choice but to iterate over the EBML structure until we find an element at level
 			// 0 or 1, indicating the end of the cluster (all elements inside the cluster are at level 2).
@@ -2220,7 +2220,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 				}
 			}
 
-			if (size === null) {
+			if (size === undefined) {
 				// Undefined element size (can happen in livestreamed files). In this case, we need to do some
 				// searching to determine the actual size of the element.
 

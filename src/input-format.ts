@@ -154,11 +154,10 @@ export class MatroskaInputFormat extends InputFormat {
 			return false;
 		}
 
-		const dataSizeResult = readElementSize(headerSlice);
-		if (dataSizeResult === null || dataSizeResult.size === null) {
+		const dataSize = readElementSize(headerSlice);
+		if (typeof dataSize !== 'number') {
 			return false; // Miss me with that shit
 		}
-		const dataSize = dataSizeResult.size;
 
 		let dataSlice = input._reader.requestSlice(headerSlice.filePos, dataSize);
 		if (dataSlice instanceof Promise) dataSlice = await dataSlice;
@@ -172,7 +171,7 @@ export class MatroskaInputFormat extends InputFormat {
 
 			const { id, size } = header;
 			const dataStartPos = dataSlice.filePos;
-			if (size === null) return false;
+			if (size === undefined) return false;
 
 			switch (id) {
 				case EBMLId.EBMLVersion: {
