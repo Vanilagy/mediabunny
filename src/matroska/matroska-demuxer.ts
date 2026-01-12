@@ -1014,6 +1014,9 @@ export class MatroskaDemuxer extends Demuxer {
 
 				this.readContiguousElements(slice.slice(dataStartPos, size));
 
+				// Check if track was disabled during parsing (e.g., by FlagEnabled being 0)
+				if (!this.currentTrack) break;
+
 				if (this.currentTrack.decodingInstructions.some((instruction) => {
 					return instruction.data?.type !== 'decompress'
 						|| instruction.scope !== ContentEncodingScope.Block
@@ -1157,7 +1160,17 @@ export class MatroskaDemuxer extends Demuxer {
 
 				const enabled = readUnsignedInt(slice, size);
 				if (!enabled) {
-					this.currentSegment!.tracks.pop();
+					// Mark the track as disabled. Element order within TrackEntry
+					// is not guaranteed, so FlagEnabled could appear before or after the track has been added to
+					// the tracks array. We need to handle both cases.
+					if (this.currentTrack.inputTrack) {
+						// Track was already added to the array, remove it
+						const index = this.currentSegment!.tracks.indexOf(this.currentTrack);
+						if (index !== -1) {
+							this.currentSegment!.tracks.splice(index, 1);
+						}
+					}
+					// Mark as null to prevent it from being added later if it hasn't been added yet
 					this.currentTrack = null;
 				}
 			}; break;
