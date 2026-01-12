@@ -346,7 +346,7 @@ export class MatroskaDemuxer extends Demuxer {
 				} else if (id === EBMLId.Segment) { // Segment found!
 					await this.readSegment(dataStartPos, size);
 
-					if (size === null) {
+					if (size === undefined) {
 						// Segment sizes can be undefined (common in livestreamed files), so assume this is the last
 						// and only segment
 						break;
