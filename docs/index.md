@@ -128,6 +128,8 @@ const sponsors = {
 		{ image: 'https://avatars.githubusercontent.com/u/3709646', name: 'Rodrigo Belfiore', url: 'https://github.com/roprgm' },
 		{ image: 'https://avatars.githubusercontent.com/u/31102694', name: 'Aiden Liu', url: 'https://github.com/aidenlx' },
 		{ image: 'https://avatars.githubusercontent.com/u/41021374', name: 'arthco', url: 'https://github.com/arthtyagi' },
+		{ image: 'https://avatars.githubusercontent.com/u/36898190', name: 'alakhpc', url: 'https://github.com/alakhpc' },
+		{ image: 'https://avatars.githubusercontent.com/u/5907357', name: 'Harvey Zhao', url: 'https://github.com/zhw2590582' },
 	],
 };
 </script>
