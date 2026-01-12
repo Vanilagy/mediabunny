@@ -1162,6 +1162,7 @@ export class Conversion {
 
 					for await (const sample of sink.samples(this._startTimestamp, this._endTimestamp)) {
 						if (this._canceled) {
+							sample.close();
 							lastSample?.close();
 							return;
 						}
@@ -1444,6 +1445,7 @@ export class Conversion {
 					const sink = new AudioSampleSink(track);
 					for await (const sample of sink.samples(undefined, this._endTimestamp)) {
 						if (this._canceled) {
+							sample.close();
 							return;
 						}
 
@@ -1554,6 +1556,7 @@ export class Conversion {
 
 			for await (const sample of iterator) {
 				if (this._canceled) {
+					sample.close();
 					return;
 				}
 
