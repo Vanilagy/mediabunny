@@ -193,6 +193,7 @@ type InternalTrack = {
 	codecId: string | null;
 	codecPrivate: Uint8Array | null;
 	defaultDuration: number | null;
+	defaultDurationNs: number | null;
 	name: string | null;
 	languageCode: string;
 	decodingInstructions: DecodingInstruction[];
@@ -534,6 +535,13 @@ export class MatroskaDemuxer extends Demuxer {
 			// which is 1e6.
 			this.currentSegment.timestampScale = 1e6;
 			this.currentSegment.timestampFactor = 1e9 / 1e6;
+		}
+
+		// Compute default duration for all tracks now that we have the timestamp factor
+		for (const track of this.currentSegment.tracks) {
+			if (track.defaultDurationNs !== null) {
+				track.defaultDuration = (this.currentSegment.timestampFactor * track.defaultDurationNs) / 1e9;
+			}
 		}
 
 		// Put default tracks first
@@ -996,6 +1004,7 @@ export class MatroskaDemuxer extends Demuxer {
 					codecId: null,
 					codecPrivate: null,
 					defaultDuration: null,
+					defaultDurationNs: null,
 					name: null,
 					languageCode: UNDETERMINED_LANGUAGE,
 					decodingInstructions: [],
@@ -1203,9 +1212,7 @@ export class MatroskaDemuxer extends Demuxer {
 
 			case EBMLId.DefaultDuration: {
 				if (!this.currentTrack) break;
-
-				this.currentTrack.defaultDuration
-					= this.currentTrack.segment.timestampFactor * readUnsignedInt(slice, size) / 1e9;
+				this.currentTrack.defaultDurationNs = readUnsignedInt(slice, size);
 			}; break;
 
 			case EBMLId.Name: {
