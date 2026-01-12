@@ -155,7 +155,7 @@ export class MatroskaInputFormat extends InputFormat {
 		}
 
 		const dataSize = readElementSize(headerSlice);
-		if (dataSize === null) {
+		if (typeof dataSize !== 'number') {
 			return false; // Miss me with that shit
 		}
 
@@ -171,7 +171,7 @@ export class MatroskaInputFormat extends InputFormat {
 
 			const { id, size } = header;
 			const dataStartPos = dataSlice.filePos;
-			if (size === null) return false;
+			if (size === undefined) return false;
 
 			switch (id) {
 				case EBMLId.EBMLVersion: {

@@ -7,7 +7,7 @@
  */
 
 import { MediaCodec } from '../codec';
-import { assertNever, textDecoder, textEncoder } from '../misc';
+import { assert, assertNever, textDecoder, textEncoder } from '../misc';
 import { FileSlice, readBytes, Reader, readF32Be, readF64Be, readU8 } from '../reader';
 import { Writer } from '../writer';
 
@@ -470,6 +470,10 @@ export const MIN_HEADER_SIZE = 2; // 1-byte ID and 1-byte size
 export const MAX_HEADER_SIZE = 2 * MAX_VAR_INT_SIZE; // 8-byte ID and 8-byte size
 
 export const readVarIntSize = (slice: FileSlice) => {
+	if (slice.remainingLength < 1) {
+		return null;
+	}
+
 	const firstByte = readU8(slice);
 	slice.skip(-1);
 
@@ -484,10 +488,19 @@ export const readVarIntSize = (slice: FileSlice) => {
 		mask >>= 1;
 	}
 
+	// Check if we have enough bytes to read the full varint
+	if (slice.remainingLength < width) {
+		return null;
+	}
+
 	return width;
 };
 
 export const readVarInt = (slice: FileSlice) => {
+	if (slice.remainingLength < 1) {
+		return null;
+	}
+
 	// Read the first byte to determine the width of the variable-length integer
 	const firstByte = readU8(slice);
 
@@ -501,6 +514,11 @@ export const readVarInt = (slice: FileSlice) => {
 	while ((firstByte & mask) === 0) {
 		width++;
 		mask >>= 1;
+	}
+
+	if (slice.remainingLength < width - 1) {
+		// Not enough bytes
+		return null;
 	}
 
 	// First byte's value needs the marker bit cleared
@@ -563,39 +581,58 @@ export const readElementId = (slice: FileSlice) => {
 		return null;
 	}
 
+	if (slice.remainingLength < size) {
+		return null; // It don't fit
+	}
+
 	const id = readUnsignedInt(slice, size);
 	return id;
 };
 
-export const readElementSize = (slice: FileSlice) => {
-	let size: number | null = readU8(slice);
+/** Returns `undefined` to indicate the EBML undefined size. Returns `null` if the size couldn't be read. */
+export const readElementSize = (slice: FileSlice): number | undefined | null => {
+	// Need at least 1 byte to read the size
+	if (slice.remainingLength < 1) {
+		return null;
+	}
 
-	if (size === 0xff) {
-		size = null;
-	} else {
-		slice.skip(-1);
-		size = readVarInt(slice);
+	const firstByte = readU8(slice);
 
-		// In some (livestreamed) files, this is the value of the size field. While this technically is just a very
-		// large number, it is intended to behave like the reserved size 0xFF, meaning the size is undefined. We
-		// catch the number here. Note that it cannot be perfectly represented as a double, but the comparison works
-		// nonetheless.
-		// eslint-disable-next-line no-loss-of-precision
-		if (size === 0x00ffffffffffffff) {
-			size = null;
-		}
+	if (firstByte === 0xff) {
+		return undefined;
+	}
+
+	slice.skip(-1);
+	const size = readVarInt(slice);
+
+	if (size === null) {
+		return null;
+	}
+
+	// In some (livestreamed) files, this is the value of the size field. While this technically is just a very
+	// large number, it is intended to behave like the reserved size 0xFF, meaning the size is undefined. We
+	// catch the number here. Note that it cannot be perfectly represented as a double, but the comparison works
+	// nonetheless.
+	// eslint-disable-next-line no-loss-of-precision
+	if (size === 0x00ffffffffffffff) {
+		return undefined;
 	}
 
 	return size;
 };
 
 export const readElementHeader = (slice: FileSlice) => {
+	assert(slice.remainingLength >= MIN_HEADER_SIZE);
+
 	const id = readElementId(slice);
 	if (id === null) {
 		return null;
 	}
 
 	const size = readElementSize(slice);
+	if (size === null) {
+		return null;
+	}
 
 	return { id, size };
 };
@@ -720,8 +757,8 @@ export const CODEC_STRING_MAP: Partial<Record<MediaCodec, string>> = {
 	'webvtt': 'S_TEXT/WEBVTT',
 };
 
-export function assertDefinedSize(size: number | null): asserts size is number {
-	if (size === null) {
+export function assertDefinedSize(size: number | undefined): asserts size is number {
+	if (size === undefined) {
 		throw new Error('Undefined element size is used in a place where it is not supported.');
 	}
 };
