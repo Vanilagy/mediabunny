@@ -322,6 +322,10 @@ export class OggDemuxer extends Demuxer {
 		}
 
 		const totalPacketSize = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+		if (totalPacketSize === 0) {
+			return null; // Invalid packet, treat it as end of stream
+		}
+
 		const packetData = new Uint8Array(totalPacketSize);
 
 		let offset = 0;
@@ -496,10 +500,6 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		options: PacketRetrievalOptions,
 	) {
 		if (!packet) {
-			return null;
-		}
-
-		if (packet.data.byteLength === 0) {
 			return null;
 		}
 
