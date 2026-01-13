@@ -499,6 +499,10 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 			return null;
 		}
 
+		if (packet.data.byteLength === 0) {
+			return null;
+		}
+
 		const { durationInSamples, vorbisBlockSize } = extractSampleMetadata(
 			packet.data,
 			this.bitstream.codecInfo,
