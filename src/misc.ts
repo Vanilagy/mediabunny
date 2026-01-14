@@ -248,15 +248,27 @@ export const isAllowSharedBufferSource = (x: unknown) => {
 
 export class AsyncMutex {
 	currentPromise = Promise.resolve();
+	pending = 0;
 
 	async acquire() {
 		let resolver: () => void;
 		const nextPromise = new Promise<void>((resolve) => {
-			resolver = resolve;
+			let resolved = false;
+
+			resolver = () => {
+				if (resolved) {
+					return;
+				}
+
+				resolve();
+				this.pending--;
+				resolved = true;
+			};
 		});
 
 		const currentPromiseAlias = this.currentPromise;
 		this.currentPromise = nextPromise;
+		this.pending++;
 
 		await currentPromiseAlias;
 

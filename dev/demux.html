@@ -13,8 +13,11 @@
 			formats: Mediabunny.ALL_FORMATS,
 			source: new Mediabunny.BlobSource(file),
 		});
-		
-		console.log(await input.getTracks());
+
+		const videoTrack = await input.getPrimaryVideoTrack();
+		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
+
+		console.log(await sink.getKeyPacket(Infinity));
 
 
 		/*

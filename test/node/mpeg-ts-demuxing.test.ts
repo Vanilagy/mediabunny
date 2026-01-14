@@ -204,8 +204,8 @@ test('MPEG-TS video seeking', async () => {
 	const firstTimestamp = await videoTrack.getFirstTimestamp();
 	const firstPacket = await sink.getPacket(firstTimestamp);
 	assert(firstPacket);
-
 	expect(firstPacket.timestamp).toBe(firstTimestamp);
+	expect(firstPacket.sequenceNumber).toBe((await sink.getFirstPacket())?.sequenceNumber);
 
 	const lastPacket = await sink.getPacket(Infinity);
 	assert(lastPacket);
@@ -226,6 +226,8 @@ test('MPEG-TS video seeking', async () => {
 		allPackets.push(currentPacket);
 		currentPacket = await sink.getNextPacket(currentPacket);
 	}
+
+	expect(allPackets).toHaveLength(298);
 
 	for (const packet of allPackets) {
 		const seekedPacked = await sink.getPacket(packet.timestamp);
@@ -249,8 +251,8 @@ test('MPEG-TS audio seeking', async () => {
 	const firstTimestamp = await audioTrack.getFirstTimestamp();
 	const firstPacket = await sink.getPacket(firstTimestamp);
 	assert(firstPacket);
-
 	expect(firstPacket.timestamp).toBe(firstTimestamp);
+	expect(firstPacket.sequenceNumber).toBe((await sink.getFirstPacket())?.sequenceNumber);
 
 	const lastPacket = await sink.getPacket(Infinity);
 	assert(lastPacket);
@@ -272,11 +274,45 @@ test('MPEG-TS audio seeking', async () => {
 		currentPacket = await sink.getNextPacket(currentPacket);
 	}
 
+	expect(allPackets).toHaveLength(234);
+
 	for (const packet of allPackets) {
 		const seekedPacket = await sink.getPacket(packet.timestamp);
 		assert(seekedPacket);
 		expect(seekedPacket.timestamp).toBe(packet.timestamp); // The correct timestamp was retrieved for this packet
 		expect(seekedPacket.sequenceNumber).toBe(packet.sequenceNumber);
+	}
+});
+
+test('MPEG-TS seeking race condition test', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/0.ts')),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	const sink = new EncodedPacketSink(videoTrack);
+
+	const allPackets: EncodedPacket[] = [];
+	let currentPacket: EncodedPacket | null = await sink.getFirstPacket();
+
+	while (currentPacket) {
+		allPackets.push(currentPacket);
+		currentPacket = await sink.getNextPacket(currentPacket);
+	}
+
+	// Perform all seeks concurrently
+	const seekPromises = allPackets.map(packet => sink.getPacket(packet.timestamp));
+	const seekedPackets = await Promise.all(seekPromises);
+
+	for (let i = 0; i < allPackets.length; i++) {
+		const originalPacket = allPackets[i]!;
+		const seekedPacket = seekedPackets[i]!;
+		assert(seekedPacket);
+		expect(seekedPacket.timestamp).toBe(originalPacket.timestamp);
+		expect(seekedPacket.sequenceNumber).toBe(originalPacket.sequenceNumber);
 	}
 });
 
