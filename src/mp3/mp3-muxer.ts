@@ -13,7 +13,7 @@ import { Output, OutputAudioTrack } from '../output';
 import { Mp3OutputFormat } from '../output-format';
 import { EncodedPacket } from '../packet';
 import { Writer } from '../writer';
-import { getXingOffset, INFO, readFrameHeader, XING } from '../../shared/mp3-misc';
+import { getXingOffset, INFO, readMp3FrameHeader, XING } from '../../shared/mp3-misc';
 import { Mp3Writer, XingFrameData } from './mp3-writer';
 import { Id3V2Writer } from '../id3';
 
@@ -65,7 +65,7 @@ export class Mp3Muxer extends Muxer {
 				}
 
 				const word = view.getUint32(0, false);
-				const header = readFrameHeader(word, null).header;
+				const header = readMp3FrameHeader(word, null).header;
 				if (!header) {
 					throw new Error('Invalid MP3 header in sample.');
 				}

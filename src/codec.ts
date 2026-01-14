@@ -537,6 +537,7 @@ export const buildAudioCodecString = (codec: AudioCodec, numberOfChannels: numbe
 
 export type AacCodecInfo = {
 	isMpeg2: boolean;
+	objectType: number | null;
 };
 
 export const extractAudioCodecString = (trackInfo: {
@@ -554,8 +555,15 @@ export const extractAudioCodecString = (trackInfo: {
 		if (aacCodecInfo.isMpeg2) {
 			return 'mp4a.67';
 		} else {
-			const audioSpecificConfig = parseAacAudioSpecificConfig(codecDescription);
-			return `mp4a.40.${audioSpecificConfig.objectType}`;
+			let objectType: number;
+			if (aacCodecInfo.objectType !== null) {
+				objectType = aacCodecInfo.objectType;
+			} else {
+				const audioSpecificConfig = parseAacAudioSpecificConfig(codecDescription);
+				objectType = audioSpecificConfig.objectType;
+			}
+
+			return `mp4a.40.${objectType}`;
 		}
 	} else if (codec === 'mp3') {
 		return 'mp3';

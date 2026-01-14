@@ -27,7 +27,7 @@ export const XING = 0x58696e67;
 /** 'Info' */
 export const INFO = 0x496e666f;
 
-export type FrameHeader = {
+export type Mp3FrameHeader = {
 	totalSize: number;
 	mpegVersionId: number;
 	layer: number;
@@ -66,8 +66,8 @@ export const getXingOffset = (mpegVersionId: number, channel: number) => {
 		: (channel === 3 ? 13 : 21);
 };
 
-export const readFrameHeader = (word: number, remainingBytes: number | null): {
-	header: FrameHeader | null;
+export const readMp3FrameHeader = (word: number, remainingBytes: number | null): {
+	header: Mp3FrameHeader | null;
 	bytesAdvanced: number;
 } => {
 	const firstByte = word >>> 24;

@@ -22,9 +22,9 @@ import {
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readBytes, Reader } from '../reader';
 import { DEFAULT_TRACK_DISPOSITION } from '../metadata';
-import { FrameHeader, MAX_FRAME_HEADER_SIZE, MIN_FRAME_HEADER_SIZE, readFrameHeader } from './adts-reader';
+import { AdtsFrameHeader, MAX_FRAME_HEADER_SIZE, MIN_FRAME_HEADER_SIZE, readAdtsFrameHeader } from './adts-reader';
 
-const SAMPLES_PER_AAC_FRAME = 1024;
+export const SAMPLES_PER_AAC_FRAME = 1024;
 
 type Sample = {
 	timestamp: number;
@@ -37,7 +37,7 @@ export class AdtsDemuxer extends Demuxer {
 	reader: Reader;
 
 	metadataPromise: Promise<void> | null = null;
-	firstFrameHeader: FrameHeader | null = null;
+	firstFrameHeader: AdtsFrameHeader | null = null;
 	loadedSamples: Sample[] = [];
 
 	tracks: InputAudioTrack[] = [];
@@ -76,7 +76,7 @@ export class AdtsDemuxer extends Demuxer {
 			return;
 		}
 
-		const header = readFrameHeader(slice);
+		const header = readAdtsFrameHeader(slice);
 		if (!header) {
 			this.lastSampleLoaded = true;
 			return;

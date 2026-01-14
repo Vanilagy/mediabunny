@@ -1,0 +1,349 @@
+import { expect, test } from 'vitest';
+import { Input } from '../../src/input.js';
+import { FilePathSource } from '../../src/source.js';
+import path from 'node:path';
+import { ALL_FORMATS, MPEG_TS } from '../../src/input-format.js';
+import { assert } from '../../src/misc.js';
+import { EncodedPacketSink } from '../../src/media-sink.js';
+import { EncodedPacket } from '../../src/packet.js';
+
+const __dirname = new URL('.', import.meta.url).pathname;
+
+test('MPEG-TS metadata reading', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/0.ts')),
+		formats: ALL_FORMATS,
+	});
+
+	expect(await input.getFormat()).toBe(MPEG_TS);
+	expect(await input.getMimeType()).toBe('video/MP2T');
+
+	const tracks = await input.getTracks();
+	expect(tracks).toHaveLength(2);
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	expect(videoTrack.id).toBe(0x100);
+	expect(videoTrack.codec).toBe('avc');
+	expect(videoTrack.internalCodecId).toBe(0x1b);
+	expect(videoTrack.displayWidth).toEqual(720);
+	expect(videoTrack.displayHeight).toEqual(720);
+	expect(videoTrack.timeResolution).toBe(90_000);
+
+	const videoDecoderConfig = await videoTrack.getDecoderConfig();
+	expect(videoDecoderConfig).toEqual({
+		codec: 'avc1.640020',
+		codedWidth: 720,
+		codedHeight: 720,
+		colorSpace: {
+			primaries: 'bt2020',
+			transfer: 'hlg',
+			matrix: 'bt2020-ncl',
+			fullRange: false,
+		},
+		// No description, it's Annex B
+	});
+
+	expect(await videoTrack.getFirstTimestamp()).toBe(10.033333333333333);
+
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	expect(audioTrack.id).toBe(0x101);
+	expect(audioTrack.codec).toBe('aac');
+	expect(audioTrack.numberOfChannels).toBe(2);
+	expect(audioTrack.sampleRate).toBe(48000);
+
+	const audioDecoderConfig = await audioTrack.getDecoderConfig();
+	expect(audioDecoderConfig).toEqual({
+		codec: 'mp4a.40.2',
+		numberOfChannels: 2,
+		sampleRate: 48000,
+		// No description, it's ADTS audio
+	});
+
+	expect(await audioTrack.getFirstTimestamp()).toBe(10.012);
+});
+
+test('MPEG-TS AVC video packets', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/0.ts')),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	const sink = new EncodedPacketSink(videoTrack);
+
+	const firstPacket = await sink.getFirstPacket();
+	assert(firstPacket);
+
+	expect([...firstPacket.data.slice(0, 4)]).toEqual([0, 0, 0, 1]);
+	expect(firstPacket.data.byteLength).toBe(23813);
+	expect(firstPacket.type).toBe('key');
+	expect(firstPacket.timestamp).toBe(10.033333333333333);
+	expect(firstPacket.duration).toBe(0);
+	expect(firstPacket.sequenceNumber).not.toBe(-1);
+
+	const firstPacketMetadataOnly = await sink.getFirstPacket({ metadataOnly: true });
+	assert(firstPacketMetadataOnly);
+	expect(firstPacketMetadataOnly.data).toHaveLength(0);
+	expect(firstPacketMetadataOnly.byteLength).toBe(23813);
+
+	const secondPacket = await sink.getNextPacket(firstPacket);
+	assert(secondPacket);
+
+	expect([...secondPacket.data.slice(0, 4)]).toEqual([0, 0, 0, 1]);
+	expect(secondPacket.data.byteLength).toBe(5700);
+	expect(secondPacket.type).toBe('delta');
+	expect(secondPacket.timestamp).toBe(10.1);
+	expect(secondPacket.duration).toBe(0);
+	expect(secondPacket.sequenceNumber).toBeGreaterThan(firstPacket.sequenceNumber);
+
+	let currentPacket: EncodedPacket | null = firstPacket;
+	let count = 0;
+
+	while (currentPacket) {
+		count++;
+		currentPacket = await sink.getNextPacket(currentPacket);
+	}
+
+	expect(count).toBe(298);
+});
+
+test('MPEG-TS AAC audio packets', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/0.ts')),
+		formats: ALL_FORMATS,
+	});
+
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	const sink = new EncodedPacketSink(audioTrack);
+
+	const firstPacket = await sink.getFirstPacket();
+	assert(firstPacket);
+
+	expect(firstPacket.data[0]).toEqual(0xff);
+	expect(firstPacket.data.byteLength).toBe(348);
+	expect(firstPacket.type).toBe('key');
+	expect(firstPacket.timestamp).toBe(10.012);
+	expect(firstPacket.duration).toBeCloseTo(0.021333333333333333);
+	expect(firstPacket.sequenceNumber).not.toBe(-1);
+
+	const secondPacket = await sink.getNextPacket(firstPacket);
+	assert(secondPacket);
+
+	expect(secondPacket.data[0]).toEqual(0xff);
+	expect(secondPacket.data.byteLength).toBe(349);
+	expect(secondPacket.type).toBe('key');
+	expect(secondPacket.timestamp).toBeCloseTo(10.033333333333333);
+	expect(secondPacket.duration).toBeCloseTo(0.021333333333333333);
+	expect(secondPacket.sequenceNumber).toBeGreaterThan(firstPacket.sequenceNumber);
+
+	let currentPacket: EncodedPacket | null = firstPacket;
+	let count = 0;
+
+	while (currentPacket) {
+		count++;
+		currentPacket = await sink.getNextPacket(currentPacket);
+	}
+
+	expect(count).toBe(234);
+});
+
+test('MPEG-TS video seeking', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/0.ts')),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	const sink = new EncodedPacketSink(videoTrack);
+
+	const firstTimestamp = await videoTrack.getFirstTimestamp();
+	const firstPacket = await sink.getPacket(firstTimestamp);
+	assert(firstPacket);
+
+	expect(firstPacket.timestamp).toBe(firstTimestamp);
+
+	const lastPacket = await sink.getPacket(Infinity);
+	assert(lastPacket);
+
+	expect(lastPacket.timestamp).toBeCloseTo(14.983333333333333);
+
+	const beforeFirst = await sink.getPacket(-10);
+	expect(beforeFirst).toBeNull();
+
+	const middlePacket = await sink.getPacket(12.5);
+	assert(middlePacket);
+	expect(middlePacket.timestamp).toBeCloseTo(12.5);
+
+	const allPackets: EncodedPacket[] = [];
+	let currentPacket: EncodedPacket | null = firstPacket;
+
+	while (currentPacket) {
+		allPackets.push(currentPacket);
+		currentPacket = await sink.getNextPacket(currentPacket);
+	}
+
+	for (const packet of allPackets) {
+		const seekedPacked = await sink.getPacket(packet.timestamp);
+		assert(seekedPacked);
+		expect(seekedPacked.timestamp).toBe(packet.timestamp); // The correct timestamp was retrieved for this packet
+		expect(seekedPacked.sequenceNumber).toBe(packet.sequenceNumber);
+	}
+});
+
+test('MPEG-TS audio seeking', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/0.ts')),
+		formats: ALL_FORMATS,
+	});
+
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	const sink = new EncodedPacketSink(audioTrack);
+
+	const firstTimestamp = await audioTrack.getFirstTimestamp();
+	const firstPacket = await sink.getPacket(firstTimestamp);
+	assert(firstPacket);
+
+	expect(firstPacket.timestamp).toBe(firstTimestamp);
+
+	const lastPacket = await sink.getPacket(Infinity);
+	assert(lastPacket);
+
+	expect(lastPacket.timestamp).toBeCloseTo(14.982666666666667);
+
+	const beforeFirst = await sink.getPacket(-10);
+	expect(beforeFirst).toBeNull();
+
+	const middlePacket = await sink.getPacket(12.5);
+	assert(middlePacket);
+	expect(middlePacket.timestamp).toBeCloseTo(12.486666666666666);
+
+	const allPackets: EncodedPacket[] = [];
+	let currentPacket: EncodedPacket | null = firstPacket;
+
+	while (currentPacket) {
+		allPackets.push(currentPacket);
+		currentPacket = await sink.getNextPacket(currentPacket);
+	}
+
+	for (const packet of allPackets) {
+		const seekedPacket = await sink.getPacket(packet.timestamp);
+		assert(seekedPacket);
+		expect(seekedPacket.timestamp).toBe(packet.timestamp); // The correct timestamp was retrieved for this packet
+		expect(seekedPacket.sequenceNumber).toBe(packet.sequenceNumber);
+	}
+});
+
+test('MPEG-TS video key packets', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/193039199_mp4_h264_aac_fhd_7.ts')),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	const sink = new EncodedPacketSink(videoTrack);
+
+	const firstPacket = await sink.getFirstPacket();
+	assert(firstPacket);
+	expect(firstPacket.type).toBe('key');
+
+	const secondPacket = await sink.getNextPacket(firstPacket);
+	assert(secondPacket);
+	expect(secondPacket.type).toBe('delta');
+
+	const nextKeyPacket = await sink.getNextKeyPacket(firstPacket);
+	assert(nextKeyPacket);
+	expect(nextKeyPacket.type).toBe('key');
+	expect(nextKeyPacket.sequenceNumber).toBeGreaterThan(secondPacket.sequenceNumber);
+
+	const firstKeyPacket = await sink.getKeyPacket(firstPacket.timestamp + 1);
+	assert(firstKeyPacket);
+	expect(firstKeyPacket.type).toBe('key');
+	expect(firstKeyPacket.sequenceNumber).toBe(firstPacket.sequenceNumber);
+
+	const secondKeyPacket = await sink.getKeyPacket(15);
+	assert(secondKeyPacket);
+	expect(secondKeyPacket.type).toBe('key');
+	expect(secondKeyPacket.sequenceNumber).toBe(nextKeyPacket.sequenceNumber);
+
+	const lastKeyPacket = await sink.getKeyPacket(Infinity);
+	assert(lastKeyPacket);
+	expect(lastKeyPacket.type).toBe('key');
+	expect(lastKeyPacket.sequenceNumber).toBe(secondKeyPacket.sequenceNumber); // It's actually the last key packet
+
+	const allKeyPackets: EncodedPacket[] = [];
+	let currentKeyPacket: EncodedPacket | null = firstPacket;
+
+	while (currentKeyPacket) {
+		allKeyPackets.push(currentKeyPacket);
+		currentKeyPacket = await sink.getNextKeyPacket(currentKeyPacket);
+	}
+
+	for (const packet of allKeyPackets) {
+		const keyPacket = await sink.getKeyPacket(packet.timestamp);
+		assert(keyPacket);
+		expect(keyPacket.timestamp).toBe(packet.timestamp); // The correct timestamp was retrieved for this packet
+		expect(keyPacket.sequenceNumber).toBe(packet.sequenceNumber);
+	}
+});
+
+test('MPEG-TS audio key packets', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/193039199_mp4_h264_aac_fhd_7.ts')),
+		formats: ALL_FORMATS,
+	});
+
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	const sink = new EncodedPacketSink(audioTrack);
+
+	const firstPacket = await sink.getFirstPacket();
+	assert(firstPacket);
+	expect(firstPacket.type).toBe('key');
+
+	const secondPacket = await sink.getNextPacket(firstPacket);
+	assert(secondPacket);
+	expect(secondPacket.type).toBe('key');
+
+	const nextKeyPacket = await sink.getNextKeyPacket(firstPacket);
+	assert(nextKeyPacket);
+	expect(nextKeyPacket.type).toBe('key');
+	expect(nextKeyPacket.sequenceNumber).toBe(secondPacket.sequenceNumber); // All audio packets are key packets
+
+	const lastPacket = await sink.getPacket(Infinity);
+	assert(lastPacket);
+
+	const lastKeyPacket = await sink.getKeyPacket(Infinity);
+	assert(lastKeyPacket);
+	expect(lastKeyPacket.type).toBe('key');
+	expect(lastKeyPacket.sequenceNumber).toBe(lastPacket.sequenceNumber); // It's actually the last packet
+
+	const allKeyPackets: EncodedPacket[] = [];
+	let currentKeyPacket: EncodedPacket | null = firstPacket;
+
+	while (currentKeyPacket) {
+		allKeyPackets.push(currentKeyPacket);
+		currentKeyPacket = await sink.getNextKeyPacket(currentKeyPacket);
+	}
+
+	for (const packet of allKeyPackets) {
+		const keyPacket = await sink.getKeyPacket(packet.timestamp);
+		assert(keyPacket);
+		expect(keyPacket.timestamp).toBe(packet.timestamp); // The correct timestamp was retrieved for this packet
+		expect(keyPacket.sequenceNumber).toBe(packet.sequenceNumber);
+	}
+});

@@ -12,7 +12,7 @@ import { FileSlice, readBytes } from '../reader';
 export const MIN_FRAME_HEADER_SIZE = 7;
 export const MAX_FRAME_HEADER_SIZE = 9;
 
-export type FrameHeader = {
+export type AdtsFrameHeader = {
 	objectType: number;
 	samplingFrequencyIndex: number;
 	channelConfiguration: number;
@@ -22,7 +22,7 @@ export type FrameHeader = {
 	startPos: number;
 };
 
-export const readFrameHeader = (slice: FileSlice): FrameHeader | null => {
+export const readAdtsFrameHeader = (slice: FileSlice): AdtsFrameHeader | null => {
 	// https://wiki.multimedia.cx/index.php/ADTS (last visited: 2025/08/17)
 
 	const startPos = slice.filePos;

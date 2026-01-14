@@ -7,5 +7,6 @@
 		"noEmit": false
 	},
 	"include": ["vitest.config.ts", "./test/**/*"],
+	"exclude": ["./test/public/**/*"],
 	"references": [{ "path": "./src" }]
 }

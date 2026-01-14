@@ -1057,6 +1057,7 @@ export class MatroskaDemuxer extends Demuxer {
 							this.currentTrack.info.codec = 'aac';
 							this.currentTrack.info.aacCodecInfo = {
 								isMpeg2: this.currentTrack.codecId.includes('MPEG2'),
+								objectType: null,
 							};
 							this.currentTrack.info.codecDescription = this.currentTrack.codecPrivate;
 						} else if (this.currentTrack.codecId === CODEC_STRING_MAP.mp3) {

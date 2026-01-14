@@ -20,6 +20,10 @@ export class Reader {
 			throw new InputDisposedError();
 		}
 
+		if (start < 0) {
+			return null;
+		}
+
 		if (this.fileSize !== null && start + length > this.fileSize) {
 			return null;
 		}
@@ -47,6 +51,10 @@ export class Reader {
 	requestSliceRange(start: number, minLength: number, maxLength: number): MaybePromise<FileSlice | null> {
 		if (this.source._disposed) {
 			throw new InputDisposedError();
+		}
+
+		if (start < 0) {
+			return null;
 		}
 
 		if (this.fileSize !== null) {

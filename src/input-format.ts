@@ -23,10 +23,10 @@ import { MatroskaDemuxer } from './matroska/matroska-demuxer';
 import { Mp3Demuxer } from './mp3/mp3-demuxer';
 import { FRAME_HEADER_SIZE } from '../shared/mp3-misc';
 import { ID3_V2_HEADER_SIZE, readId3V2Header } from './id3';
-import { readNextFrameHeader } from './mp3/mp3-reader';
+import { readNextMp3FrameHeader } from './mp3/mp3-reader';
 import { OggDemuxer } from './ogg/ogg-demuxer';
 import { WaveDemuxer } from './wave/wave-demuxer';
-import { MAX_FRAME_HEADER_SIZE, MIN_FRAME_HEADER_SIZE, readFrameHeader } from './adts/adts-reader';
+import { MAX_FRAME_HEADER_SIZE, MIN_FRAME_HEADER_SIZE, readAdtsFrameHeader } from './adts/adts-reader';
 import { AdtsDemuxer } from './adts/adts-demuxer';
 import { readAscii } from './reader';
 import { FlacDemuxer } from './flac/flac-demuxer';
@@ -281,7 +281,7 @@ export class Mp3InputFormat extends InputFormat {
 			currentPos = slice.filePos + id3V2Header.size;
 		}
 
-		const firstResult = await readNextFrameHeader(input._reader, currentPos, currentPos + 4096);
+		const firstResult = await readNextMp3FrameHeader(input._reader, currentPos, currentPos + 4096);
 		if (!firstResult) {
 			return false;
 		}
@@ -295,7 +295,7 @@ export class Mp3InputFormat extends InputFormat {
 
 		// Fine, we found one frame header, but we're still not entirely sure this is MP3. Let's check if we can find
 		// another header right after it:
-		const secondResult = await readNextFrameHeader(input._reader, currentPos, currentPos + FRAME_HEADER_SIZE);
+		const secondResult = await readNextMp3FrameHeader(input._reader, currentPos, currentPos + FRAME_HEADER_SIZE);
 		if (!secondResult) {
 			return false;
 		}
@@ -444,7 +444,7 @@ export class AdtsInputFormat extends InputFormat {
 		if (slice instanceof Promise) slice = await slice;
 		if (!slice) return false;
 
-		const firstHeader = readFrameHeader(slice);
+		const firstHeader = readAdtsFrameHeader(slice);
 		if (!firstHeader) {
 			return false;
 		}
@@ -453,7 +453,7 @@ export class AdtsInputFormat extends InputFormat {
 		if (slice instanceof Promise) slice = await slice;
 		if (!slice) return false;
 
-		const secondHeader = readFrameHeader(slice);
+		const secondHeader = readAdtsFrameHeader(slice);
 		if (!secondHeader) {
 			return false;
 		}

@@ -40,6 +40,7 @@ export enum AvcNalUnitType {
 	SEI = 6,
 	SPS = 7,
 	PPS = 8,
+	AUD = 9,
 	SPS_EXT = 13,
 }
 
@@ -474,9 +475,17 @@ export type AvcSpsInfo = {
 	constraintFlags: number;
 	levelIdc: number;
 	frameMbsOnlyFlag: number;
-	chromaFormatIdc: number | null;
-	bitDepthLumaMinus8: number | null;
-	bitDepthChromaMinus8: number | null;
+	chromaFormatIdc: number;
+	bitDepthLumaMinus8: number;
+	bitDepthChromaMinus8: number;
+	codedWidth: number;
+	codedHeight: number;
+	displayWidth: number;
+	displayHeight: number;
+	colourPrimaries: number;
+	transferCharacteristics: number;
+	matrixCoefficients: number;
+	fullRangeFlag: number;
 };
 
 /** Parses an AVC SPS (Sequence Parameter Set) to extract basic information. */
@@ -498,9 +507,14 @@ export const parseAvcSps = (sps: Uint8Array): AvcSpsInfo | null => {
 
 		readExpGolomb(bitstream); // seq_parameter_set_id
 
-		let chromaFormatIdc: number | null = null;
-		let bitDepthLumaMinus8: number | null = null;
-		let bitDepthChromaMinus8: number | null = null;
+		// "When chroma_format_idc is not present, it shall be inferred to be equal to 1 (4:2:0 chroma format)."
+		let chromaFormatIdc = 1;
+		// "When bit_depth_luma_minus8 is not present, it shall be inferred to be equal to 0.""
+		let bitDepthLumaMinus8 = 0;
+		// "When bit_depth_chroma_minus8 is not present, it shall be inferred to be equal to 0."
+		let bitDepthChromaMinus8 = 0;
+		// "When separate_colour_plane_flag is not present, it shall be inferred to be equal to 0."
+		let separateColourPlaneFlag = 0;
 
 		// Handle high profile chroma_format_idc
 		if (
@@ -516,7 +530,7 @@ export const parseAvcSps = (sps: Uint8Array): AvcSpsInfo | null => {
 		) {
 			chromaFormatIdc = readExpGolomb(bitstream);
 			if (chromaFormatIdc === 3) {
-				bitstream.skipBits(1); // separate_colour_plane_flag
+				separateColourPlaneFlag = bitstream.readBits(1);
 			}
 			bitDepthLumaMinus8 = readExpGolomb(bitstream);
 			bitDepthChromaMinus8 = readExpGolomb(bitstream);
@@ -559,10 +573,80 @@ export const parseAvcSps = (sps: Uint8Array): AvcSpsInfo | null => {
 		readExpGolomb(bitstream); // max_num_ref_frames
 		bitstream.skipBits(1); // gaps_in_frame_num_value_allowed_flag
 
-		readExpGolomb(bitstream); // pic_width_in_mbs_minus1
-		readExpGolomb(bitstream); // pic_height_in_map_units_minus1
+		const codedWidth = 16 * (readExpGolomb(bitstream) + 1); // pic_width_in_mbs_minus1
+		const codedHeight = 16 * (readExpGolomb(bitstream) + 1); // pic_height_in_map_units_minus1
+		let displayWidth = codedWidth;
+		let displayHeight = codedHeight;
 
 		const frameMbsOnlyFlag = bitstream.readBits(1);
+		if (!frameMbsOnlyFlag) {
+			bitstream.skipBits(1); // mb_adaptive_frame_field_flag
+		}
+
+		bitstream.skipBits(1); // direct_8x8_inference_flag
+		const frameCroppingFlag = bitstream.readBits(1);
+
+		if (frameCroppingFlag) {
+			const frameCropLeftOffset = readExpGolomb(bitstream);
+			const frameCropRightOffset = readExpGolomb(bitstream);
+			const frameCropTopOffset = readExpGolomb(bitstream);
+			const frameCropBottomOffset = readExpGolomb(bitstream);
+
+			let cropUnitX: number;
+			let cropUnitY: number;
+
+			const chromaArrayType = separateColourPlaneFlag === 0 ? chromaFormatIdc : 0;
+			if (chromaArrayType === 0) {
+				// "If ChromaArrayType is equal to 0, CropUnitX and CropUnitY are derived as:"
+				cropUnitX = 1;
+				cropUnitY = 2 - frameMbsOnlyFlag;
+			} else {
+				// "Otherwise (ChromaArrayType is equal to 1, 2, or 3), CropUnitX and CropUnitY are derived as:"
+				const subWidthC = chromaFormatIdc === 3 ? 1 : 2;
+				const subHeightC = chromaFormatIdc === 1 ? 2 : 1;
+
+				cropUnitX = subWidthC;
+				cropUnitY = subHeightC * (2 - frameMbsOnlyFlag);
+			}
+
+			displayWidth -= (cropUnitX * (frameCropLeftOffset + frameCropRightOffset));
+			displayHeight -= (cropUnitY * (frameCropTopOffset + frameCropBottomOffset));
+		}
+
+		// 2 = unspecified
+		let colourPrimaries = 2;
+		let transferCharacteristics = 2;
+		let matrixCoefficients = 2;
+		let fullRangeFlag = 0;
+
+		const vuiParametersPresentFlag = bitstream.readBits(1);
+		if (vuiParametersPresentFlag) {
+			const aspectRatioInfoPresentFlag = bitstream.readBits(1);
+			if (aspectRatioInfoPresentFlag) {
+				const aspectRatioIdc = bitstream.readBits(8);
+				if (aspectRatioIdc === 255) { // Extended_SAR
+					bitstream.skipBits(16); // sar_width
+					bitstream.skipBits(16); // sar_height
+				}
+			}
+
+			const overscanInfoPresentFlag = bitstream.readBits(1);
+			if (overscanInfoPresentFlag) {
+				bitstream.skipBits(1); // overscan_appropriate_flag
+			}
+
+			const videoSignalTypePresentFlag = bitstream.readBits(1);
+			if (videoSignalTypePresentFlag) {
+				bitstream.skipBits(3); // video_format
+				fullRangeFlag = bitstream.readBits(1);
+				const colourDescriptionPresentFlag = bitstream.readBits(1);
+				if (colourDescriptionPresentFlag) {
+					colourPrimaries = bitstream.readBits(8);
+					transferCharacteristics = bitstream.readBits(8);
+					matrixCoefficients = bitstream.readBits(8);
+				}
+			}
+		}
 
 		return {
 			profileIdc,
@@ -572,6 +656,14 @@ export const parseAvcSps = (sps: Uint8Array): AvcSpsInfo | null => {
 			chromaFormatIdc,
 			bitDepthLumaMinus8,
 			bitDepthChromaMinus8,
+			codedWidth,
+			codedHeight,
+			displayWidth,
+			displayHeight,
+			colourPrimaries,
+			matrixCoefficients,
+			transferCharacteristics,
+			fullRangeFlag,
 		};
 	} catch (error) {
 		console.error('Error parsing AVC SPS:', error);

@@ -118,6 +118,20 @@ export class Input<S extends Source = Source> implements Disposable {
 		return demuxer.computeDuration();
 	}
 
+	/**
+	 * Returns the timestamp at which the input file starts. More precisely, returns the smallest starting timestamp
+	 * among all tracks.
+	 */
+	async getFirstTimestamp() {
+		const tracks = await this.getTracks();
+		if (tracks.length === 0) {
+			return 0;
+		}
+
+		const firstTimestamps = await Promise.all(tracks.map(x => x.getFirstTimestamp()));
+		return Math.min(...firstTimestamps);
+	}
+
 	/** Returns the list of all tracks of this input file. */
 	async getTracks() {
 		const demuxer = await this._getDemuxer();
