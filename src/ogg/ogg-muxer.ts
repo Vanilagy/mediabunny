@@ -47,12 +47,13 @@ type OggTrackData = {
 	currentPageData: Uint8Array[];
 	currentPageSize: number;
 	currentPageStartsWithFreshPacket: boolean;
+	currentPageStartTimestampInSamples: number;
 };
 
 type Packet = {
 	data: Uint8Array;
-	endGranulePosition: number;
-	timestamp: number;
+	timestampInSamples: number;
+	durationInSamples: number;
 	forcePageFlush: boolean;
 };
 
@@ -132,6 +133,7 @@ export class OggMuxer extends Muxer {
 			currentPageData: [],
 			currentPageSize: 27,
 			currentPageStartsWithFreshPacket: true,
+			currentPageStartTimestampInSamples: 0,
 		};
 
 		this.queueHeaderPackets(newTrackData, meta);
@@ -199,18 +201,18 @@ export class OggMuxer extends Muxer {
 
 			trackData.packetQueue.push({
 				data: identificationHeader,
-				endGranulePosition: 0,
-				timestamp: 0,
+				timestampInSamples: 0,
+				durationInSamples: 0,
 				forcePageFlush: true,
 			}, {
 				data: commentHeader,
-				endGranulePosition: 0,
-				timestamp: 0,
+				timestampInSamples: 0,
+				durationInSamples: 0,
 				forcePageFlush: false,
 			}, {
 				data: setupHeader,
-				endGranulePosition: 0,
-				timestamp: 0,
+				timestampInSamples: 0,
+				durationInSamples: 0,
 				forcePageFlush: true, // The last header packet must flush the page
 			});
 
@@ -239,13 +241,13 @@ export class OggMuxer extends Muxer {
 
 			trackData.packetQueue.push({
 				data: identificationHeader,
-				endGranulePosition: 0,
-				timestamp: 0,
+				timestampInSamples: 0,
+				durationInSamples: 0,
 				forcePageFlush: true,
 			}, {
 				data: commentHeader,
-				endGranulePosition: 0,
-				timestamp: 0,
+				timestampInSamples: 0,
+				durationInSamples: 0,
 				forcePageFlush: true, // The last header packet must flush the page
 			});
 
@@ -275,8 +277,8 @@ export class OggMuxer extends Muxer {
 
 			trackData.packetQueue.push({
 				data: packet.data,
-				endGranulePosition: trackData.currentTimestampInSamples,
-				timestamp: currentTimestampInSamples / trackData.internalSampleRate,
+				timestampInSamples: currentTimestampInSamples,
+				durationInSamples,
 				forcePageFlush: false,
 			});
 
@@ -338,10 +340,10 @@ export class OggMuxer extends Muxer {
 
 				if (
 					trackData.packetQueue.length > 0
-					&& trackData.packetQueue[0]!.timestamp < minTimestamp
+					&& trackData.packetQueue[0]!.timestampInSamples < minTimestamp
 				) {
 					trackWithMinTimestamp = trackData;
-					minTimestamp = trackData.packetQueue[0]!.timestamp;
+					minTimestamp = trackData.packetQueue[0]!.timestampInSamples;
 				}
 			}
 
@@ -361,6 +363,20 @@ export class OggMuxer extends Muxer {
 	}
 
 	writePacket(trackData: OggTrackData, packet: Packet, isFinalPacket: boolean) {
+		const packetEndTimestampInSamples = packet.timestampInSamples + packet.durationInSamples;
+
+		if (this.format._options.maximumPageDuration !== undefined) {
+			const maxDurationInSamples = this.format._options.maximumPageDuration * trackData.internalSampleRate;
+
+			if (
+				trackData.currentLacingValues.length > 0
+				&& packetEndTimestampInSamples - trackData.currentPageStartTimestampInSamples > maxDurationInSamples
+			) {
+				// Flush the current page early to avoid exceeding the maximum page duration
+				this.writePage(trackData, false);
+			}
+		}
+
 		let remainingLength = packet.data.length;
 		let dataStartOffset = 0;
 		let dataOffset = 0;
@@ -401,7 +417,7 @@ export class OggMuxer extends Muxer {
 		const slice = packet.data.subarray(dataStartOffset);
 		trackData.currentPageData.push(slice);
 		trackData.currentPageSize += slice.length;
-		trackData.currentGranulePosition = packet.endGranulePosition;
+		trackData.currentGranulePosition = packetEndTimestampInSamples;
 
 		if (trackData.currentPageSize >= PAGE_SIZE_TARGET || packet.forcePageFlush) {
 			this.writePage(trackData, isFinalPacket);
@@ -452,6 +468,7 @@ export class OggMuxer extends Muxer {
 		trackData.currentPageData.length = 0;
 		trackData.currentPageSize = 27;
 		trackData.currentPageStartsWithFreshPacket = true;
+		trackData.currentPageStartTimestampInSamples = trackData.currentGranulePosition;
 
 		if (this.format._options.onPage) {
 			this.writer.startTrackingWrites();
