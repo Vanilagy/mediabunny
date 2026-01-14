@@ -907,6 +907,18 @@ const pcmC = (trackData: IsobmffAudioTrackData) => {
 	]);
 };
 
+/** AC-3 Specific Box, ETSI TS 102 366 V1.4.1 Section F.4. */
+const dac3 = (trackData: IsobmffAudioTrackData) => {
+	const bytes = toUint8Array(trackData.info.decoderConfig!.description!);
+	return box('dac3', [...bytes.subarray(0, 3)]);
+};
+
+/** EC3SpecificBox (E-AC-3/Enhanced AC-3), ETSI TS 102 366 V1.4.1 Section F.6. */
+const dec3 = (trackData: IsobmffAudioTrackData) => {
+	const bytes = toUint8Array(trackData.info.decoderConfig!.description!);
+	return box('dec3', [...bytes]);
+};
+
 export const subtitleSampleDescription = (
 	compressionType: string,
 	trackData: IsobmffSubtitleTrackData,
@@ -1606,6 +1618,8 @@ const audioCodecToBoxName = (codec: AudioCodec, isQuickTime: boolean): string =>
 		case 'alaw': return 'alaw';
 		case 'pcm-u8': return 'raw ';
 		case 'pcm-s8': return 'sowt';
+		case 'ac3': return 'ac-3';
+		case 'eac3': return 'ec-3';
 	}
 
 	// Logic diverges here
@@ -1645,6 +1659,8 @@ const audioCodecToConfigurationBox = (codec: AudioCodec, isQuickTime: boolean) =
 		case 'opus': return dOps;
 		case 'vorbis': return esds;
 		case 'flac': return dfLa;
+		case 'ac3': return dac3;
+		case 'eac3': return dec3;
 	}
 
 	// Logic diverges here

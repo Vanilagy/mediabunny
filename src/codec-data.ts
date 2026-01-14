@@ -2233,3 +2233,376 @@ export const createVorbisComments = (headerBytes: Uint8Array, tags: MetadataTags
 
 	return commentHeader;
 };
+
+// ============================================================================
+// AC-3 / E-AC-3 Parsing
+// Reference: ETSI TS 102 366 V1.4.1
+// ============================================================================
+
+/** Sample rates indexed by fscod (Table 4.1) */
+export const AC3_SAMPLE_RATES = [48000, 44100, 32000] as const;
+
+/**
+ * Channel counts indexed by acmod (Table 4.3).
+ * Does NOT include LFE - add lfeon to get total channel count.
+ */
+export const AC3_ACMOD_CHANNEL_COUNTS = [2, 1, 2, 3, 3, 4, 4, 5] as const;
+
+export interface AC3FrameInfo {
+	/** Sample rate code */
+	fscod: number;
+	/** Bitstream ID */
+	bsid: number;
+	/** Bitstream mode */
+	bsmod: number;
+	/** Audio coding mode */
+	acmod: number;
+	/** LFE channel on */
+	lfeon: number;
+	/** Bit rate code (0-18, maps to bitrate via Table F.4.1) */
+	bitRateCode: number;
+}
+
+/**
+ * Parse an AC-3 syncframe to extract BSI (Bit Stream Information) fields.
+ * Section 4.3
+ *
+ * Handles both standard AC-3 (bsid=8) and alternate syntax (bsid=6, Annex D),
+ * as the relevant fields (fscod, acmod, lfeon, etc.) are in the same positions.
+ */
+export const parseAC3SyncFrame = (data: Uint8Array): AC3FrameInfo | null => {
+	if (data.length < 7) return null;
+
+	// Check sync word (0x0B77)
+	if (data[0] !== 0x0B || data[1] !== 0x77) return null;
+
+	const bitstream = new Bitstream(data);
+	bitstream.skipBits(16); // sync word
+	bitstream.skipBits(16); // crc1
+
+	const fscod = bitstream.readBits(2);
+	if (fscod === 3) return null; // Reserved, invalid
+
+	const frmsizecod = bitstream.readBits(6);
+	const bsid = bitstream.readBits(5);
+
+	// Verify this is AC-3
+	if (bsid > 8) return null;
+
+	const bsmod = bitstream.readBits(3);
+	const acmod = bitstream.readBits(3);
+
+	// Skip cmixlev (center downmix level) if three front channels are in use (L, C, R).
+	if ((acmod & 0x1) !== 0 && acmod !== 0x1) {
+		bitstream.skipBits(2);
+	}
+
+	// Skip surmixlev (surround downmix level) if surround channels are in use.
+	if ((acmod & 0x4) !== 0) {
+		bitstream.skipBits(2);
+	}
+
+	// Skip dsurmod if stereo (acmod === 2)
+	if (acmod === 0x2) {
+		bitstream.skipBits(2);
+	}
+
+	const lfeon = bitstream.readBits(1);
+	const bitRateCode = Math.floor(frmsizecod / 2);
+
+	return { fscod, bsid, bsmod, acmod, lfeon, bitRateCode };
+};
+
+/**
+ * Parse a dac3 box to extract audio parameters.
+ * Section F.4
+ */
+export const parseAC3Config = (data: Uint8Array): AC3FrameInfo | null => {
+	if (data.length < 3) return null;
+
+	const bitstream = new Bitstream(data);
+
+	const fscod = bitstream.readBits(2);
+	const bsid = bitstream.readBits(5);
+	const bsmod = bitstream.readBits(3);
+	const acmod = bitstream.readBits(3);
+	const lfeon = bitstream.readBits(1);
+	const bitRateCode = bitstream.readBits(5);
+	// 5 bits reserved, not read
+
+	return { fscod, bsid, bsmod, acmod, lfeon, bitRateCode };
+};
+
+/**
+ * Serialize AC-3 config to dac3 box format (3 bytes).
+ * Section F.4
+ */
+export const serializeAC3Config = (info: AC3FrameInfo): Uint8Array => {
+	const bytes = new Uint8Array(3);
+	const bitstream = new Bitstream(bytes);
+
+	bitstream.writeBits(2, info.fscod);
+	bitstream.writeBits(5, info.bsid);
+	bitstream.writeBits(3, info.bsmod);
+	bitstream.writeBits(3, info.acmod);
+	bitstream.writeBits(1, info.lfeon);
+	bitstream.writeBits(5, info.bitRateCode);
+	bitstream.writeBits(5, 0); // reserved
+
+	return bytes;
+};
+
+// ============================================================================
+// E-AC-3 (Enhanced AC-3) Parsing
+// Reference: ETSI TS 102 366 V1.4.1, Annex E and Section F.6
+// ============================================================================
+
+/** E-AC-3 reduced sample rates for fscod2 per ATSC A/52:2018 */
+const EAC3_REDUCED_SAMPLE_RATES = [24000, 22050, 16000] as const;
+
+/** Number of audio blocks per syncframe, indexed by numblkscod */
+const EAC3_NUMBLKS_TABLE = [1, 2, 3, 6] as const;
+
+/**
+ * E-AC-3 independent substream info.
+ * Each independent substream represents a separate audio program.
+ */
+export interface EAC3SubstreamInfo {
+	/** Sample rate code */
+	fscod: number;
+	/** Sample rate code 2 */
+	fscod2: number;
+	/** Bitstream ID */
+	bsid: number;
+	/** Bitstream mode */
+	bsmod: number;
+	/** Audio coding mode */
+	acmod: number;
+	/** LFE channel on */
+	lfeon: number;
+	/** Number of dependent substreams */
+	numDepSub: number;
+	/** Channel locations for dependent substreams */
+	chanLoc: number;
+}
+
+/**
+ * E-AC-3 decoder configuration (dec3 box contents).
+ */
+export interface EAC3Config {
+	/** Data rate in kbps */
+	dataRate: number;
+	/** Independent substreams */
+	substreams: EAC3SubstreamInfo[];
+}
+
+/**
+ * Parse an E-AC-3 syncframe to extract BSI fields.
+ * Section E.1.2
+ */
+export const parseEAC3SyncFrame = (data: Uint8Array): EAC3Config | null => {
+	if (data.length < 6) return null;
+
+	// Check sync word (0x0B77)
+	if (data[0] !== 0x0B || data[1] !== 0x77) return null;
+
+	const bitstream = new Bitstream(data);
+	bitstream.skipBits(16); // sync word
+
+	const strmtyp = bitstream.readBits(2);
+	bitstream.skipBits(3); // substreamid
+
+	// Only parse independent substreams (strmtyp 0 or 2)
+	if (strmtyp !== 0 && strmtyp !== 2) {
+		return null;
+	}
+
+	const frmsiz = bitstream.readBits(11);
+	const fscod = bitstream.readBits(2);
+
+	let fscod2 = 0;
+	let numblkscod: number;
+
+	if (fscod === 3) {
+		// fscod2 enables reduced sample rates (24/22.05/16 kHz) per ATSC A/52:2018
+		fscod2 = bitstream.readBits(2);
+		numblkscod = 3; // Implicitly 6 blocks when fscod=3
+	} else {
+		numblkscod = bitstream.readBits(2);
+	}
+
+	const acmod = bitstream.readBits(3);
+	const lfeon = bitstream.readBits(1);
+	const bsid = bitstream.readBits(5);
+
+	// Verify this is E-AC-3
+	if (bsid < 11 || bsid > 16) return null;
+
+	// Calculate data rate: ((frmsiz + 1) * fs) / (numblks * 16)
+	const numblks = EAC3_NUMBLKS_TABLE[numblkscod]!;
+	let fs: number;
+	if (fscod < 3) {
+		fs = AC3_SAMPLE_RATES[fscod]! / 1000;
+	} else {
+		fs = EAC3_REDUCED_SAMPLE_RATES[fscod2]! / 1000;
+	}
+	const dataRate = Math.round(((frmsiz + 1) * fs) / (numblks * 16));
+
+	// These fields require parsing beyond the first frame.
+	// Defaults are correct for almost all content.
+	const bsmod = 0;
+	const numDepSub = 0;
+	const chanLoc = 0;
+
+	const substream: EAC3SubstreamInfo = {
+		fscod,
+		fscod2,
+		bsid,
+		bsmod,
+		acmod,
+		lfeon,
+		numDepSub,
+		chanLoc,
+	};
+
+	return {
+		dataRate,
+		substreams: [substream],
+	};
+};
+
+/**
+ * Parse a dec3 box to extract E-AC-3 parameters.
+ * Section F.6
+ */
+export const parseEAC3Config = (data: Uint8Array): EAC3Config | null => {
+	if (data.length < 2) return null;
+
+	const bitstream = new Bitstream(data);
+
+	const dataRate = bitstream.readBits(13);
+	const numIndSub = bitstream.readBits(3);
+
+	const substreams: EAC3SubstreamInfo[] = [];
+
+	for (let i = 0; i <= numIndSub; i++) {
+		// Check we have enough data for this substream
+		// Each substream needs at least 24 bits (3 bytes) without dependent subs
+		if (Math.ceil(bitstream.pos / 8) + 3 > data.length) break;
+
+		const fscod = bitstream.readBits(2);
+		const bsid = bitstream.readBits(5);
+		bitstream.skipBits(1); // reserved
+		bitstream.skipBits(1); // asvc
+		const bsmod = bitstream.readBits(3);
+		const acmod = bitstream.readBits(3);
+		const lfeon = bitstream.readBits(1);
+		bitstream.skipBits(3); // reserved
+		const numDepSub = bitstream.readBits(4);
+
+		let chanLoc = 0;
+		const fscod2 = 0;
+
+		if (numDepSub > 0) {
+			chanLoc = bitstream.readBits(9);
+		} else {
+			bitstream.skipBits(1); // reserved
+		}
+
+		substreams.push({
+			fscod,
+			fscod2,
+			bsid,
+			bsmod,
+			acmod,
+			lfeon,
+			numDepSub,
+			chanLoc,
+		});
+	}
+
+	if (substreams.length === 0) return null;
+
+	return { dataRate, substreams };
+};
+
+/**
+ * Serialize E-AC-3 config to dec3 box format.
+ * Section F.6
+ */
+export const serializeEAC3Config = (config: EAC3Config): Uint8Array => {
+	// Calculate size bit-by-bit due to non-byte-aligned chan_loc
+	let totalBits = 16; // header: data_rate (13) + num_ind_sub (3)
+	for (const sub of config.substreams) {
+		totalBits += 24; // fixed fields per substream
+		if (sub.numDepSub > 0) {
+			totalBits += 9; // chan_loc
+		} else {
+			totalBits += 1; // reserved
+		}
+	}
+	const size = Math.ceil(totalBits / 8);
+
+	const bytes = new Uint8Array(size);
+	const bitstream = new Bitstream(bytes);
+
+	bitstream.writeBits(13, config.dataRate);
+	bitstream.writeBits(3, config.substreams.length - 1); // num_ind_sub
+
+	for (const sub of config.substreams) {
+		bitstream.writeBits(2, sub.fscod);
+		bitstream.writeBits(5, sub.bsid);
+		bitstream.writeBits(1, 0); // reserved
+		bitstream.writeBits(1, 0); // asvc = 0 (full service)
+		bitstream.writeBits(3, sub.bsmod);
+		bitstream.writeBits(3, sub.acmod);
+		bitstream.writeBits(1, sub.lfeon);
+		bitstream.writeBits(3, 0); // reserved
+		bitstream.writeBits(4, sub.numDepSub);
+
+		if (sub.numDepSub > 0) {
+			bitstream.writeBits(9, sub.chanLoc);
+		} else {
+			bitstream.writeBits(1, 0); // reserved
+		}
+	}
+
+	return bytes;
+};
+
+/**
+ * Get sample rate from E-AC-3 config.
+ */
+export const getEAC3SampleRate = (config: EAC3Config): number => {
+	const sub = config.substreams[0];
+	if (!sub) return 48000;
+
+	if (sub.fscod < 3) {
+		return AC3_SAMPLE_RATES[sub.fscod]!;
+	} else if (sub.fscod2 < 3) {
+		return EAC3_REDUCED_SAMPLE_RATES[sub.fscod2]!;
+	}
+	return 48000;
+};
+
+/**
+ * Get channel count from E-AC-3 config (first independent substream only).
+ */
+export const getEAC3ChannelCount = (config: EAC3Config): number => {
+	const sub = config.substreams[0];
+	if (!sub) return 2;
+
+	let channels = AC3_ACMOD_CHANNEL_COUNTS[sub.acmod]! + sub.lfeon;
+
+	// Add channels from dependent substreams
+	if (sub.numDepSub > 0) {
+		const CHAN_LOC_COUNTS = [2, 2, 1, 1, 2, 2, 2, 1, 1];
+		for (let bit = 0; bit < 9; bit++) {
+			if (sub.chanLoc & (1 << (8 - bit))) {
+				channels += CHAN_LOC_COUNTS[bit]!;
+			}
+		}
+	}
+
+	return channels;
+};
