@@ -442,7 +442,7 @@ export class MpegTsDemuxer extends Demuxer {
 	}
 
 	async readPacket(pos: number): Promise<PacketHeader | null> {
-		let slice = this.reader.requestSlice(pos + this.packetOffset, TS_PACKET_SIZE);
+		let slice = this.reader.requestSlice(pos, TS_PACKET_SIZE);
 		if (slice instanceof Promise) slice = await slice;
 
 		if (!slice) {
