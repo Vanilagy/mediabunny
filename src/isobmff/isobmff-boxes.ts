@@ -909,13 +909,13 @@ const pcmC = (trackData: IsobmffAudioTrackData) => {
 
 /** AC-3 Specific Box, ETSI TS 102 366 V1.4.1 Section F.4. */
 const dac3 = (trackData: IsobmffAudioTrackData) => {
-	const bytes = toUint8Array(trackData.info.decoderConfig!.description!);
+	const bytes = toUint8Array(trackData.info.decoderConfig.description!);
 	return box('dac3', [...bytes.subarray(0, 3)]);
 };
 
 /** EC3SpecificBox (E-AC-3/Enhanced AC-3), ETSI TS 102 366 V1.4.1 Section F.6. */
 const dec3 = (trackData: IsobmffAudioTrackData) => {
-	const bytes = toUint8Array(trackData.info.decoderConfig!.description!);
+	const bytes = toUint8Array(trackData.info.decoderConfig.description!);
 	return box('dec3', [...bytes]);
 };
 

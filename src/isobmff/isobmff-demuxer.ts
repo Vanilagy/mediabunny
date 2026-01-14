@@ -1471,14 +1471,13 @@ export class IsobmffDemuxer extends Demuxer {
 			}; break;
 
 			// AC3 info
-			case 'dac3': {
+			case 'dac3': { // AC3SpecificBox
 				const track = this.currentTrack;
 				if (!track) {
 					break;
 				}
 				assert(track.info?.type === 'audio');
 
-				// ETSI TS 102 366, Section F.4 - AC3SpecificBox
 				const bytes = readBytes(slice, 3);
 				const config = parseAC3Config(bytes);
 
@@ -1487,19 +1486,16 @@ export class IsobmffDemuxer extends Demuxer {
 					track.info.numberOfChannels = AC3_ACMOD_CHANNEL_COUNTS[config.acmod]! + config.lfeon;
 				}
 
-				// Store raw bytes for passthrough muxing
 				track.info.codecDescription = bytes;
 			}; break;
 
-			// EAC3 info
-			case 'dec3': {
+			case 'dec3': { // EC3SpecificBox
 				const track = this.currentTrack;
 				if (!track) {
 					break;
 				}
 				assert(track.info?.type === 'audio');
 
-				// ETSI TS 102 366, Section F.6 - EC3SpecificBox (variable length)
 				const bytes = readBytes(slice, boxInfo.contentSize);
 				const config = parseEAC3Config(bytes);
 
@@ -1508,7 +1504,6 @@ export class IsobmffDemuxer extends Demuxer {
 					track.info.numberOfChannels = getEAC3ChannelCount(config);
 				}
 
-				// Store raw bytes for passthrough muxing
 				track.info.codecDescription = bytes;
 			}; break;
 

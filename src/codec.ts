@@ -1069,10 +1069,11 @@ export const validateAudioChunkMetadata = (metadata: EncodedAudioChunkMetadata |
 			throw new TypeError('Audio chunk metadata decoder configuration codec string for AC-3 must be "ac-3".');
 		}
 
-		if (!metadata.decoderConfig.description || metadata.decoderConfig.description.byteLength < 3) {
+		// Description is optional - the muxer can generate it from the AC-3 sync frame if not provided
+		if (metadata.decoderConfig.description && metadata.decoderConfig.description.byteLength < 3) {
 			throw new TypeError(
-				'Audio chunk metadata decoder configuration for AC-3 must include a description, which is expected to'
-				+ ' be a dac3 box payload as specified in ETSI TS 102 366.',
+				'Audio chunk metadata decoder configuration description for AC-3, when provided, must be at least 3'
+				+ ' bytes and is expected to be a dac3 box payload as specified in ETSI TS 102 366.',
 			);
 		}
 	} else if (metadata.decoderConfig.codec.startsWith('ec-3') || metadata.decoderConfig.codec.startsWith('eac3')) {
@@ -1082,10 +1083,11 @@ export const validateAudioChunkMetadata = (metadata: EncodedAudioChunkMetadata |
 			throw new TypeError('Audio chunk metadata decoder configuration codec string for EC-3 must be "ec-3".');
 		}
 
-		if (!metadata.decoderConfig.description || metadata.decoderConfig.description.byteLength < 5) {
+		// Description is optional - the muxer can generate it from the E-AC-3 sync frame if not provided
+		if (metadata.decoderConfig.description && metadata.decoderConfig.description.byteLength < 5) {
 			throw new TypeError(
-				'Audio chunk metadata decoder configuration for EC-3 must include a description, which is expected to'
-				+ ' be a dec3 box payload as specified in ETSI TS 102 366.',
+				'Audio chunk metadata decoder configuration description for EC-3, when provided, must be at least 5'
+				+ ' bytes and is expected to be a dec3 box payload as specified in ETSI TS 102 366.',
 			);
 		}
 	} else if (
