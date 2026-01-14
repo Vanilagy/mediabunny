@@ -993,12 +993,9 @@ export const validateAudioChunkMetadata = (metadata: EncodedAudioChunkMetadata |
 			);
 		}
 
-		if (!metadata.decoderConfig.description) {
-			throw new TypeError(
-				'Audio chunk metadata decoder configuration for AAC must include a description, which is expected to be'
-				+ ' an AudioSpecificConfig as specified in ISO 14496-3.',
-			);
-		}
+		// `description` may or may not be set, depending on if the format is AAC or ADTS, so don't perform any
+		// validation for it.
+		// https://www.w3.org/TR/webcodecs-aac-codec-registration
 	} else if (metadata.decoderConfig.codec.startsWith('mp3') || metadata.decoderConfig.codec.startsWith('mp4a')) {
 		// MP3-specific validation
 

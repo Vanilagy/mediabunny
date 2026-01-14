@@ -16,13 +16,12 @@ import {
 	AsyncMutex,
 	binarySearchExact,
 	binarySearchLessOrEqual,
-	Bitstream,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readBytes, Reader } from '../reader';
 import { DEFAULT_TRACK_DISPOSITION } from '../metadata';
-import { AdtsFrameHeader, MAX_FRAME_HEADER_SIZE, MIN_FRAME_HEADER_SIZE, readAdtsFrameHeader } from './adts-reader';
+import { AdtsFrameHeader, MIN_FRAME_HEADER_SIZE, MAX_FRAME_HEADER_SIZE, readAdtsFrameHeader } from './adts-reader';
 
 export const SAMPLES_PER_AAC_FRAME = 1024;
 
@@ -95,13 +94,12 @@ export class AdtsDemuxer extends Demuxer {
 		const sampleRate = aacFrequencyTable[header.samplingFrequencyIndex];
 		assert(sampleRate !== undefined);
 		const sampleDuration = SAMPLES_PER_AAC_FRAME / sampleRate;
-		const headerSize = header.crcCheck ? MAX_FRAME_HEADER_SIZE : MIN_FRAME_HEADER_SIZE;
 
 		const sample: Sample = {
 			timestamp: this.nextTimestampInSamples / sampleRate,
 			duration: sampleDuration,
-			dataStart: header.startPos + headerSize,
-			dataSize: header.frameLength - headerSize,
+			dataStart: header.startPos,
+			dataSize: header.frameLength,
 		};
 
 		this.loadedSamples.push(sample);
@@ -198,27 +196,10 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 	async getDecoderConfig(): Promise<AudioDecoderConfig> {
 		assert(this.demuxer.firstFrameHeader);
 
-		const bytes = new Uint8Array(3); // 19 bits max
-		const bitstream = new Bitstream(bytes);
-
-		const { objectType, samplingFrequencyIndex, channelConfiguration } = this.demuxer.firstFrameHeader;
-
-		if (objectType > 31) {
-			bitstream.writeBits(5, 31);
-			bitstream.writeBits(6, objectType - 32);
-		} else {
-			bitstream.writeBits(5, objectType);
-		}
-
-		bitstream.writeBits(4, samplingFrequencyIndex); // samplingFrequencyIndex === 15 is forbidden
-
-		bitstream.writeBits(4, channelConfiguration);
-
 		return {
 			codec: `mp4a.40.${this.demuxer.firstFrameHeader.objectType}`,
 			numberOfChannels: this.getNumberOfChannels(),
 			sampleRate: this.getSampleRate(),
-			description: bytes.subarray(0, Math.ceil((bitstream.pos - 1) / 8)),
 		};
 	}
 
