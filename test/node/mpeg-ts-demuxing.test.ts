@@ -1,11 +1,14 @@
 import { expect, test } from 'vitest';
 import { Input } from '../../src/input.js';
-import { FilePathSource } from '../../src/source.js';
+import { FilePathSource, ReadableStreamSource } from '../../src/source.js';
 import path from 'node:path';
+import fs from 'node:fs';
+import { Readable } from 'node:stream';
 import { ALL_FORMATS, MPEG_TS } from '../../src/input-format.js';
 import { assert } from '../../src/misc.js';
 import { EncodedPacketSink } from '../../src/media-sink.js';
 import { EncodedPacket } from '../../src/packet.js';
+import { MpegTsTrackBacking } from '../../src/mpeg-ts/mpeg-ts-demuxer.js';
 
 const __dirname = new URL('.', import.meta.url).pathname;
 
@@ -16,7 +19,8 @@ test('MPEG-TS metadata reading', async () => {
 	});
 
 	expect(await input.getFormat()).toBe(MPEG_TS);
-	expect(await input.getMimeType()).toBe('video/MP2T');
+	expect((await input.getFormat()).mimeType).toBe('video/MP2T');
+	expect(await input.getMimeType()).toBe('video/MP2T; codecs="avc1.640020, mp4a.40.2"');
 
 	const tracks = await input.getTracks();
 	expect(tracks).toHaveLength(2);
@@ -64,6 +68,37 @@ test('MPEG-TS metadata reading', async () => {
 	});
 
 	expect(await audioTrack.getFirstTimestamp()).toBe(10.012);
+});
+
+test('MPEG-TS durations', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/0.ts')),
+		formats: ALL_FORMATS,
+	});
+
+	const firstTimestamp = await input.getFirstTimestamp();
+	expect(firstTimestamp).toBe(10.012);
+
+	const duration = await input.computeDuration();
+	expect(duration).toBeCloseTo(15.004);
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	const videoFirstTimestamp = await videoTrack.getFirstTimestamp();
+	expect(videoFirstTimestamp).toBe(10.033333333333333);
+
+	const videoDuration = await videoTrack.computeDuration();
+	expect(videoDuration).toBeCloseTo(14.983333333333333);
+
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	const audioFirstTimestamp = await audioTrack.getFirstTimestamp();
+	expect(audioFirstTimestamp).toBe(10.012);
+
+	const audioDuration = await audioTrack.computeDuration();
+	expect(audioDuration).toBeCloseTo(15.004);
 });
 
 test('MPEG-TS AVC video packets', async () => {
@@ -346,4 +381,36 @@ test('MPEG-TS audio key packets', async () => {
 		expect(keyPacket.timestamp).toBe(packet.timestamp); // The correct timestamp was retrieved for this packet
 		expect(keyPacket.sequenceNumber).toBe(packet.sequenceNumber);
 	}
+});
+
+test('MPEG-TS with unknown file size (ReadableStreamSource)', async () => {
+	const filePath = path.join(__dirname, '../public/0.ts');
+	const fileStream = fs.createReadStream(filePath);
+	const webStream = Readable.toWeb(fileStream) as ReadableStream<Uint8Array>;
+
+	using input = new Input({
+		source: new ReadableStreamSource(webStream),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	const sink = new EncodedPacketSink(videoTrack);
+
+	const firstPacket = await sink.getFirstPacket();
+	assert(firstPacket);
+	expect(firstPacket.type).toBe('key');
+	expect(firstPacket.timestamp).toBe(10.033333333333333);
+
+	const middlePacket = await sink.getPacket(12.5);
+	assert(middlePacket);
+	expect(middlePacket.timestamp).toBeCloseTo(12.5);
+
+	const duration = await videoTrack.computeDuration();
+	expect(duration).toBeCloseTo(14.983333333333333);
+
+	// Ensure that reference points have still been added
+	expect((videoTrack._backing as unknown as MpegTsTrackBacking).referencePesPackets.length)
+		.toBeGreaterThanOrEqual(10);
 });

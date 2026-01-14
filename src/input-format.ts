@@ -28,7 +28,7 @@ import { OggDemuxer } from './ogg/ogg-demuxer';
 import { WaveDemuxer } from './wave/wave-demuxer';
 import { MAX_FRAME_HEADER_SIZE, MIN_FRAME_HEADER_SIZE, readAdtsFrameHeader } from './adts/adts-reader';
 import { AdtsDemuxer } from './adts/adts-demuxer';
-import { readAscii } from './reader';
+import { readAscii, readBytes } from './reader';
 import { FlacDemuxer } from './flac/flac-demuxer';
 import { MpegTsDemuxer } from './mpeg-ts/mpeg-ts-demuxer';
 
@@ -477,10 +477,30 @@ export class AdtsInputFormat extends InputFormat {
 	}
 }
 
+const TS_PACKET_SIZE = 188;
+
 export class MpegTsInputFormat extends InputFormat {
 	/** @internal */
 	async _canReadInput(input: Input) {
-		return true; // TEMP
+		const lengthToCheck = TS_PACKET_SIZE + 16 + 1;
+		let slice = input._reader.requestSlice(0, lengthToCheck);
+		if (slice instanceof Promise) slice = await slice;
+		if (!slice) return false;
+
+		const bytes = readBytes(slice, lengthToCheck);
+
+		if (bytes[0] === 0x47 && bytes[TS_PACKET_SIZE] === 0x47) {
+			// Regular MPEG-TS
+			return true;
+		} else if (bytes[0] === 0x47 && bytes[TS_PACKET_SIZE + 16] === 0x47) {
+			// MPEG-TS with Forward Error Correction
+			return true;
+		} else if (bytes[4] === 0x47 && bytes[4 + TS_PACKET_SIZE] === 0x47) {
+			// MPEG-2-TS (DVHS)
+			return true;
+		}
+
+		return false;
 	}
 
 	/** @internal */
@@ -493,7 +513,7 @@ export class MpegTsInputFormat extends InputFormat {
 	}
 
 	get mimeType() {
-		return 'video/MP2T'; // todo correct?
+		return 'video/MP2T';
 	}
 }
 

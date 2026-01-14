@@ -1,6 +1,15 @@
 import { SAMPLES_PER_AAC_FRAME } from '../adts/adts-demuxer';
-import { MAX_FRAME_HEADER_SIZE, MIN_FRAME_HEADER_SIZE, readAdtsFrameHeader } from '../adts/adts-reader';
-import { aacChannelMap, AacCodecInfo, aacFrequencyTable, AudioCodec, extractAudioCodecString, extractVideoCodecString, MediaCodec, VideoCodec } from '../codec';
+import { MAX_FRAME_HEADER_SIZE, readAdtsFrameHeader } from '../adts/adts-reader';
+import {
+	aacChannelMap,
+	AacCodecInfo,
+	aacFrequencyTable,
+	AudioCodec,
+	extractAudioCodecString,
+	extractVideoCodecString,
+	MediaCodec,
+	VideoCodec,
+} from '../codec';
 import {
 	AvcDecoderConfigurationRecord,
 	AvcNalUnitType,
@@ -12,14 +21,35 @@ import {
 } from '../codec-data';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
-import { InputAudioTrack, InputAudioTrackBacking, InputTrack, InputTrackBacking, InputVideoTrack, InputVideoTrackBacking } from '../input-track';
+import {
+	InputAudioTrack,
+	InputAudioTrackBacking,
+	InputTrack,
+	InputTrackBacking,
+	InputVideoTrack,
+	InputVideoTrackBacking,
+} from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
-import { assert, binarySearchLessOrEqual, Bitstream, COLOR_PRIMARIES_MAP_INVERSE, last, MATRIX_COEFFICIENTS_MAP_INVERSE, removeItem, Rotation, roundIfAlmostInteger, roundToMultiple, TRANSFER_CHARACTERISTICS_MAP_INVERSE, UNDETERMINED_LANGUAGE } from '../misc';
+import {
+	assert,
+	binarySearchLessOrEqual,
+	Bitstream,
+	COLOR_PRIMARIES_MAP_INVERSE,
+	last,
+	MATRIX_COEFFICIENTS_MAP_INVERSE,
+	Rotation,
+	roundIfAlmostInteger,
+	roundToMultiple,
+	TRANSFER_CHARACTERISTICS_MAP_INVERSE,
+	UNDETERMINED_LANGUAGE,
+} from '../misc';
 import { EncodedPacket, PacketType, PLACEHOLDER_DATA } from '../packet';
 import { FileSlice, readBytes, Reader, readU16Be, readU8 } from '../reader';
 
 const TIMESCALE = 90_000; // MPEG-TS timestamps run on a 90 kHz clock
+const TS_PACKET_SIZE = 188;
+const MISSING_PES_PACKET_ERROR = 'No PES packet found where one was expected.';
 
 type ElementaryStream = {
 	demuxer: MpegTsDemuxer;
@@ -66,6 +96,8 @@ export class MpegTsDemuxer extends Demuxer {
 	metadataPromise: Promise<void> | null = null;
 	elementaryStreams: ElementaryStream[] = [];
 	tracks: InputTrack[] = [];
+	packetOffset = 0;
+	packetStride = -1;
 
 	constructor(input: Input) {
 		super(input);
@@ -75,7 +107,30 @@ export class MpegTsDemuxer extends Demuxer {
 
 	async readMetadata() {
 		return this.metadataPromise ??= (async () => {
-			let currentPos = 0;
+			const lengthToCheck = TS_PACKET_SIZE + 16 + 1;
+			let startingSlice = this.reader.requestSlice(0, lengthToCheck);
+			if (startingSlice instanceof Promise) startingSlice = await startingSlice;
+			assert(startingSlice);
+
+			const startingBytes = readBytes(startingSlice, lengthToCheck);
+
+			if (startingBytes[0] === 0x47 && startingBytes[TS_PACKET_SIZE] === 0x47) {
+				// Regular MPEG-TS
+				this.packetOffset = 0;
+				this.packetStride = TS_PACKET_SIZE;
+			} else if (startingBytes[0] === 0x47 && startingBytes[TS_PACKET_SIZE + 16] === 0x47) {
+				// MPEG-TS with Forward Error Correction
+				this.packetOffset = 0;
+				this.packetStride = TS_PACKET_SIZE + 16;
+			} else if (startingBytes[4] === 0x47 && startingBytes[4 + TS_PACKET_SIZE] === 0x47) {
+				// MPEG-2-TS (DVHS)
+				this.packetOffset = 4;
+				this.packetStride = TS_PACKET_SIZE;
+			} else {
+				throw new Error('Unreachable.');
+			}
+
+			let currentPos = this.packetOffset;
 
 			let programMapPid: number | null = null;
 			let hasProgramMap = false;
@@ -87,7 +142,7 @@ export class MpegTsDemuxer extends Demuxer {
 				}
 
 				const BYTES_BEFORE_SECTION_LENGTH = 3;
-				const BITS_IN_CRC_32 = 32;
+				const BITS_IN_CRC_32 = 32; // Duh
 
 				if (section.pid === 0) {
 					const bitstream = new Bitstream(section.payload);
@@ -126,6 +181,7 @@ export class MpegTsDemuxer extends Demuxer {
 					const sectionLength = bitstream.readBits(12);
 
 					bitstream.skipBits(43);
+					// eslint-disable-next-line @typescript-eslint/no-unused-vars
 					const pcrPid = bitstream.readBits(13);
 
 					bitstream.skipBits(6);
@@ -206,7 +262,10 @@ export class MpegTsDemuxer extends Demuxer {
 									= extractAvcDecoderConfigurationRecord(pesPacket.data);
 
 								if (!elementaryStream.info.avcCodecInfo) {
-									throw new Error('TODO message');
+									throw new Error(
+										'Invalid AVC video stream; could not extract AVCDecoderConfigurationRecord'
+										+ ' from first packet.',
+									);
 								}
 
 								const nalUnits = findNalUnitsInAnnexB(pesPacket.data);
@@ -232,7 +291,9 @@ export class MpegTsDemuxer extends Demuxer {
 								const slice = FileSlice.tempFromBytes(pesPacket.data);
 								const header = readAdtsFrameHeader(slice);
 								if (!header) {
-									throw new Error('TODO message');
+									throw new Error(
+										'Invalid AAC audio stream; could not read ADTS frame header from first packet.',
+									);
 								}
 
 								elementaryStream.info.aacCodecInfo = {
@@ -290,7 +351,19 @@ export class MpegTsDemuxer extends Demuxer {
 	}
 
 	async getMimeType(): Promise<string> {
-		return 'video/MP2T'; // TODO TODO
+		await this.readMetadata();
+
+		const tracks = await this.getTracks();
+		const codecStrings = await Promise.all(tracks.map(x => x.getCodecParameterString()));
+
+		let string = 'video/MP2T';
+
+		const uniqueCodecStrings = [...new Set(codecStrings.filter(Boolean))];
+		if (uniqueCodecStrings.length > 0) {
+			string += `; codecs="${uniqueCodecStrings.join(', ')}"`;
+		}
+
+		return string;
 	}
 
 	async readSection(startPos: number): Promise<Section | null> {
@@ -302,7 +375,7 @@ export class MpegTsDemuxer extends Demuxer {
 
 		while (true) {
 			const packet = await this.readPacket(currentPos);
-			currentPos += 188;
+			currentPos += this.packetStride;
 
 			if (!packet) {
 				break;
@@ -369,7 +442,7 @@ export class MpegTsDemuxer extends Demuxer {
 	}
 
 	async readPacket(pos: number): Promise<PacketHeader | null> {
-		let slice = this.reader.requestSlice(pos, 188);
+		let slice = this.reader.requestSlice(pos + this.packetOffset, TS_PACKET_SIZE);
 		if (slice instanceof Promise) slice = await slice;
 
 		if (!slice) {
@@ -378,18 +451,22 @@ export class MpegTsDemuxer extends Demuxer {
 
 		const syncByte = readU8(slice);
 		if (syncByte !== 0x47) {
-			throw new Error('Invalid sync byte.');
+			throw new Error('Invalid TS packet sync byte. Likely an internal bug, please report this file.');
 		}
 
 		const nextTwoBytes = readU16Be(slice);
+		// eslint-disable-next-line @typescript-eslint/no-unused-vars
 		const transportErrorIndicator = nextTwoBytes >> 15;
 		const payloadUnitStartIndicator = (nextTwoBytes >> 14) & 0x1;
+		// eslint-disable-next-line @typescript-eslint/no-unused-vars
 		const transportPriority = (nextTwoBytes >> 13) & 0x1;
 		const pid = nextTwoBytes & 0x1FFF;
 
 		const nextByte = readU8(slice);
+		// eslint-disable-next-line @typescript-eslint/no-unused-vars
 		const transportScramblingControl = nextByte >> 6;
 		const adaptationFieldControl = (nextByte >> 4) & 0x3;
+		// eslint-disable-next-line @typescript-eslint/no-unused-vars
 		const continuityCounter = nextByte & 0xF;
 
 		return {
@@ -417,8 +494,8 @@ const readPesPacket = (section: Section): PesPacket | null => {
 	}
 
 	const streamId = bitstream.readBits(8);
-
 	const pesPacketLength = bitstream.readBits(16);
+	const BYTES_UNTIL_END_OF_PES_PACKET_LENGTH = 6;
 
 	if (
 		streamId === 0b10111100 // program_stream_map
@@ -462,7 +539,15 @@ const readPesPacket = (section: Section): PesPacket | null => {
 	const bytePos = pesHeaderEndPos / 8;
 	assert(Number.isInteger(bytePos));
 
-	const data = section.payload.subarray(bytePos);
+	const data = section.payload.subarray(
+		bytePos,
+		// "A value of 0 indicates that the PES packet length is neither specified nor bounded and is allowed only in
+		// PES packets whose payload consists of bytes from a video elementary stream contained in
+		// transport stream packets."
+		pesPacketLength > 0
+			? BYTES_UNTIL_END_OF_PES_PACKET_LENGTH + pesPacketLength
+			: section.payload.byteLength,
+	);
 
 	return {
 		sectionStartPos: section.startPos,
@@ -472,7 +557,7 @@ const readPesPacket = (section: Section): PesPacket | null => {
 	};
 };
 
-abstract class MpegTsTrackBacking implements InputTrackBacking {
+export abstract class MpegTsTrackBacking implements InputTrackBacking {
 	/**
 	 * Reference PES packets, spread throughout the file, to be used to speed up random access and perform
 	 * binary search for packets.
@@ -561,9 +646,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 		assert(section);
 
 		const pesPacket = readPesPacket(section);
-		if (!pesPacket) {
-			throw new Error('TODO message');
-		}
+		assert(pesPacket);
 
 		const context = new PacketReadingContext(this, pesPacket, true);
 		await this.markNextPacket(context);
@@ -624,10 +707,6 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 		const demuxer = this.elementaryStream.demuxer;
 		const reader = demuxer.reader;
 
-		if (reader.fileSize === null) {
-			throw new Error('TODO TODO TODO');
-		}
-
 		if (this.referencePesPackets.length === 0) {
 			// We've never read a packet, let's read the first one
 			const firstPacket = await this.getFirstPacket({});
@@ -645,19 +724,21 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 		}
 
 		// If we're at the end of the reference array, we must make sure we also know about the last packet of the
-		// track. Without it, we can't perform binary search.
+		// track. Without it, we can't perform binary search. This optimization is only possible when we know the file
+		// size, otherwise the linear refinement will naturally discover the end.
 		const needsToLookForLastPacket
-			= currentIndex === this.referencePesPackets.length - 1 && !this.endReferencePesPacketAdded;
+			= reader.fileSize !== null
+				&& currentIndex === this.referencePesPackets.length - 1
+				&& !this.endReferencePesPacketAdded;
 		if (needsToLookForLastPacket) {
-			// Todo, better sync logic here?
-			let currentPos = reader.fileSize - 188;
+			let currentPos = reader.fileSize! - demuxer.packetStride + demuxer.packetOffset;
 			let packet = await demuxer.readPacket(currentPos);
 			if (!packet) {
 				return null;
 			}
 
 			while (packet.pid !== this.elementaryStream.pid || packet.payloadUnitStartIndicator === 0) {
-				currentPos -= 188;
+				currentPos -= demuxer.packetStride;
 				const previousPacket = await demuxer.readPacket(currentPos);
 				if (!previousPacket) {
 					return null;
@@ -671,7 +752,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 
 			const pesPacket = readPesPacket(section);
 			if (!pesPacket) {
-				throw new Error('TODO message');
+				throw new Error(MISSING_PES_PACKET_ERROR);
 			}
 
 			this.maybeInsertReferencePacket(pesPacket, true);
@@ -682,7 +763,8 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 		currentIndex = binarySearchLessOrEqual(this.referencePesPackets, searchPts, x => x.pts);
 		assert(currentIndex !== -1);
 
-		while (true) {
+		// Perform binary search based on the reference PES packets, narrowing in to the timestamp we're interested in
+		while (reader.fileSize !== null) { // Only do the binary search if the file size is known
 			const currentEntry = this.referencePesPackets[currentIndex]!;
 			const nextEntry = this.referencePesPackets[currentIndex + 1];
 
@@ -692,7 +774,10 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 			}
 
 			// Jump in between the two entries, and then find a fitting packet there
-			const midpoint = roundToMultiple((currentEntry.sectionStartPos + nextEntry.sectionStartPos) / 2, 188);
+			const midpoint = roundToMultiple(
+				(currentEntry.sectionStartPos + nextEntry.sectionStartPos) / 2,
+				demuxer.packetStride,
+			) + demuxer.packetOffset;
 			let currentPos = midpoint;
 			let packet = await demuxer.readPacket(currentPos);
 			assert(packet);
@@ -701,7 +786,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 				currentPos < nextEntry.sectionStartPos
 				&& (packet.pid !== this.elementaryStream.pid || packet.payloadUnitStartIndicator === 0)
 			) {
-				currentPos += 188;
+				currentPos += demuxer.packetStride;
 				const previousPacket = await demuxer.readPacket(currentPos);
 				if (!previousPacket) {
 					return null;
@@ -720,7 +805,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 
 			const pesPacket = readPesPacket(section);
 			if (!pesPacket) {
-				throw new Error('TODO message');
+				throw new Error(MISSING_PES_PACKET_ERROR);
 			}
 
 			const addedPoint = this.maybeInsertReferencePacket(pesPacket, false);
@@ -773,7 +858,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 					break;
 				}
 
-				currentPos += 188;
+				currentPos += demuxer.packetStride;
 			}
 
 			const nextSection = await demuxer.readSection(currentPos);
@@ -783,7 +868,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 
 			const nextPesPacket = readPesPacket(nextSection);
 			if (!nextPesPacket) {
-				throw new Error('TODO message');
+				throw new Error(MISSING_PES_PACKET_ERROR);
 			}
 
 			if (nextPesPacket.pts > searchPts) {
@@ -802,6 +887,12 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 
 			currentPesPacket = nextPesPacket;
 			advancedPesPackets.push(nextPesPacket);
+
+			if (reader.fileSize === null) {
+				// If the file size is undefined, that means that the binary search step is skipped, meaning no
+				// reference packets are inserted. So, let's instead insert reference packets in the linear search step.
+				this.maybeInsertReferencePacket(nextPesPacket, false);
+			}
 		}
 
 		// Lookaround is needed in the first place because packets don't need to appear in PTS order, they only appear
@@ -830,7 +921,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 						break;
 					}
 
-					currentPos += 188;
+					currentPos += demuxer.packetStride;
 				}
 
 				const section = await demuxer.readSection(currentPos);
@@ -839,7 +930,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 
 				const pesPacket = readPesPacket(section);
 				if (!pesPacket) {
-					throw new Error('TODO message');
+					throw new Error(MISSING_PES_PACKET_ERROR);
 				}
 
 				if (
@@ -861,7 +952,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 				let currentPos = minPos;
 
 				while (true) {
-					currentPos -= 188;
+					currentPos -= demuxer.packetStride;
 
 					const packet = await demuxer.readPacket(currentPos);
 					if (!packet) {
@@ -888,7 +979,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 			let currentPos = minPos;
 
 			while (true) {
-				currentPos -= 188;
+				currentPos -= demuxer.packetStride;
 
 				const packet = await demuxer.readPacket(currentPos);
 				if (!packet) {
@@ -901,7 +992,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 
 					const pesPacket = readPesPacket(section);
 					if (!pesPacket) {
-						throw new Error('TODO message');
+						throw new Error(MISSING_PES_PACKET_ERROR);
 					}
 
 					if (pesPacket.pts <= searchPts && (await pesPacketHasKeyframe(pesPacket))) {
@@ -953,7 +1044,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 			let currentPos = bestPesPacket.sectionStartPos;
 
 			while (true) {
-				currentPos -= 188;
+				currentPos -= demuxer.packetStride;
 
 				const packet = await demuxer.readPacket(currentPos);
 				if (!packet) {
@@ -967,7 +1058,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 
 					const pesPacket = readPesPacket(section);
 					if (!pesPacket) {
-						throw new Error('TODO message');
+						throw new Error(MISSING_PES_PACKET_ERROR);
 					}
 
 					if (pesPacket.pts <= searchPts) {
@@ -1312,7 +1403,7 @@ class PacketReadingContext {
 						break;
 					}
 
-					currentPos += 188;
+					currentPos += this.demuxer.packetStride;
 				}
 
 				const nextSection = await this.demuxer.readSection(currentPos);
@@ -1320,12 +1411,12 @@ class PacketReadingContext {
 					return;
 				}
 
-				const maybePesPacket = readPesPacket(nextSection);
-				if (!maybePesPacket) {
-					throw new Error('TODO message');
+				const nextPesPacket = readPesPacket(nextSection);
+				if (!nextPesPacket) {
+					throw new Error(MISSING_PES_PACKET_ERROR);
 				}
 
-				pesPacket = maybePesPacket;
+				pesPacket = nextPesPacket;
 			}
 
 			this.pesPackets.push(pesPacket);
