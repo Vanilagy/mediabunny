@@ -388,7 +388,7 @@ export class IsobmffMuxer extends Muxer {
 			if (!frameInfo) {
 				throw new Error(
 					'Couldn\'t extract AC-3 frame info from the audio packet. '
-					+ 'Ensure the packets contain valid AC-3 sync frames (starting with 0x0B77).',
+					+ 'Ensure the packets contain valid AC-3 sync frames (as specified in ETSI TS 102 366).',
 				);
 			}
 			decoderConfig.description = serializeAC3Config(frameInfo);
@@ -400,7 +400,7 @@ export class IsobmffMuxer extends Muxer {
 			if (!config) {
 				throw new Error(
 					'Couldn\'t extract E-AC-3 frame info from the audio packet. '
-					+ 'Ensure the packets contain valid E-AC-3 sync frames (starting with 0x0B77).',
+					+ 'Ensure the packets contain valid E-AC-3 sync frames (as specified in ETSI TS 102 366).',
 				);
 			}
 			decoderConfig.description = serializeEAC3Config(config);

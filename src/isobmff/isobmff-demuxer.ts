@@ -1470,7 +1470,6 @@ export class IsobmffDemuxer extends Demuxer {
 				track.info.codecDescription = description;
 			}; break;
 
-			// AC3 info
 			case 'dac3': { // AC3SpecificBox
 				const track = this.currentTrack;
 				if (!track) {

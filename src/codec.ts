@@ -1069,7 +1069,6 @@ export const validateAudioChunkMetadata = (metadata: EncodedAudioChunkMetadata |
 			throw new TypeError('Audio chunk metadata decoder configuration codec string for AC-3 must be "ac-3".');
 		}
 
-		// Description is optional - the muxer can generate it from the AC-3 sync frame if not provided
 		if (metadata.decoderConfig.description && metadata.decoderConfig.description.byteLength < 3) {
 			throw new TypeError(
 				'Audio chunk metadata decoder configuration description for AC-3, when provided, must be at least 3'
@@ -1083,7 +1082,6 @@ export const validateAudioChunkMetadata = (metadata: EncodedAudioChunkMetadata |
 			throw new TypeError('Audio chunk metadata decoder configuration codec string for EC-3 must be "ec-3".');
 		}
 
-		// Description is optional - the muxer can generate it from the E-AC-3 sync frame if not provided
 		if (metadata.decoderConfig.description && metadata.decoderConfig.description.byteLength < 5) {
 			throw new TypeError(
 				'Audio chunk metadata decoder configuration description for EC-3, when provided, must be at least 5'

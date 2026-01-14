@@ -2266,9 +2266,6 @@ export interface AC3FrameInfo {
 /**
  * Parse an AC-3 syncframe to extract BSI (Bit Stream Information) fields.
  * Section 4.3
- *
- * Handles both standard AC-3 (bsid=8) and alternate syntax (bsid=6, Annex D),
- * as the relevant fields (fscod, acmod, lfeon, etc.) are in the same positions.
  */
 export const parseAC3SyncFrame = (data: Uint8Array): AC3FrameInfo | null => {
 	if (data.length < 7) return null;
@@ -2352,11 +2349,6 @@ export const serializeAC3Config = (info: AC3FrameInfo): Uint8Array => {
 	return bytes;
 };
 
-// ============================================================================
-// E-AC-3 (Enhanced AC-3) Parsing
-// Reference: ETSI TS 102 366 V1.4.1, Annex E and Section F.6
-// ============================================================================
-
 /** E-AC-3 reduced sample rates for fscod2 per ATSC A/52:2018 */
 const EAC3_REDUCED_SAMPLE_RATES = [24000, 22050, 16000] as const;
 
@@ -2370,7 +2362,7 @@ const EAC3_NUMBLKS_TABLE = [1, 2, 3, 6] as const;
 export interface EAC3SubstreamInfo {
 	/** Sample rate code */
 	fscod: number;
-	/** Sample rate code 2 */
+	/** Sample rate code 2 (ATSC A/52:2018) */
 	fscod2: number;
 	/** Bitstream ID */
 	bsid: number;
@@ -2531,10 +2523,10 @@ export const parseEAC3Config = (data: Uint8Array): EAC3Config | null => {
  * Section F.6
  */
 export const serializeEAC3Config = (config: EAC3Config): Uint8Array => {
-	// Calculate size bit-by-bit due to non-byte-aligned chan_loc
+	// Calculate size
 	let totalBits = 16; // header: data_rate (13) + num_ind_sub (3)
 	for (const sub of config.substreams) {
-		totalBits += 24; // fixed fields per substream
+		totalBits += 23; // fixed fields per substream
 		if (sub.numDepSub > 0) {
 			totalBits += 9; // chan_loc
 		} else {
@@ -2553,7 +2545,7 @@ export const serializeEAC3Config = (config: EAC3Config): Uint8Array => {
 		bitstream.writeBits(2, sub.fscod);
 		bitstream.writeBits(5, sub.bsid);
 		bitstream.writeBits(1, 0); // reserved
-		bitstream.writeBits(1, 0); // asvc = 0 (full service)
+		bitstream.writeBits(1, 0); // asvc = 0
 		bitstream.writeBits(3, sub.bsmod);
 		bitstream.writeBits(3, sub.acmod);
 		bitstream.writeBits(1, sub.lfeon);
@@ -2572,6 +2564,7 @@ export const serializeEAC3Config = (config: EAC3Config): Uint8Array => {
 
 /**
  * Get sample rate from E-AC-3 config.
+ * See ATSC A/52:2018 for handling fscod2.
  */
 export const getEAC3SampleRate = (config: EAC3Config): number => {
 	const sub = config.substreams[0];
