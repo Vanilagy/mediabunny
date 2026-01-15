@@ -116,26 +116,26 @@ export type SubtitleCodec = typeof SUBTITLE_CODECS[number];
 export type MediaCodec = VideoCodec | AudioCodec | SubtitleCodec;
 
 // https://en.wikipedia.org/wiki/Advanced_Video_Coding
-const AVC_LEVEL_TABLE = [
-	{ maxMacroblocks: 99, maxBitrate: 64000, level: 0x0A }, // Level 1
-	{ maxMacroblocks: 396, maxBitrate: 192000, level: 0x0B }, // Level 1.1
-	{ maxMacroblocks: 396, maxBitrate: 384000, level: 0x0C }, // Level 1.2
-	{ maxMacroblocks: 396, maxBitrate: 768000, level: 0x0D }, // Level 1.3
-	{ maxMacroblocks: 396, maxBitrate: 2000000, level: 0x14 }, // Level 2
-	{ maxMacroblocks: 792, maxBitrate: 4000000, level: 0x15 }, // Level 2.1
-	{ maxMacroblocks: 1620, maxBitrate: 4000000, level: 0x16 }, // Level 2.2
-	{ maxMacroblocks: 1620, maxBitrate: 10000000, level: 0x1E }, // Level 3
-	{ maxMacroblocks: 3600, maxBitrate: 14000000, level: 0x1F }, // Level 3.1
-	{ maxMacroblocks: 5120, maxBitrate: 20000000, level: 0x20 }, // Level 3.2
-	{ maxMacroblocks: 8192, maxBitrate: 20000000, level: 0x28 }, // Level 4
-	{ maxMacroblocks: 8192, maxBitrate: 50000000, level: 0x29 }, // Level 4.1
-	{ maxMacroblocks: 8704, maxBitrate: 50000000, level: 0x2A }, // Level 4.2
-	{ maxMacroblocks: 22080, maxBitrate: 135000000, level: 0x32 }, // Level 5
-	{ maxMacroblocks: 36864, maxBitrate: 240000000, level: 0x33 }, // Level 5.1
-	{ maxMacroblocks: 36864, maxBitrate: 240000000, level: 0x34 }, // Level 5.2
-	{ maxMacroblocks: 139264, maxBitrate: 240000000, level: 0x3C }, // Level 6
-	{ maxMacroblocks: 139264, maxBitrate: 480000000, level: 0x3D }, // Level 6.1
-	{ maxMacroblocks: 139264, maxBitrate: 800000000, level: 0x3E }, // Level 6.2
+export const AVC_LEVEL_TABLE = [
+	{ maxMacroblocks: 99, maxBitrate: 64000, maxDpbMbs: 396, level: 0x0A }, // Level 1
+	{ maxMacroblocks: 396, maxBitrate: 192000, maxDpbMbs: 900, level: 0x0B }, // Level 1.1
+	{ maxMacroblocks: 396, maxBitrate: 384000, maxDpbMbs: 2376, level: 0x0C }, // Level 1.2
+	{ maxMacroblocks: 396, maxBitrate: 768000, maxDpbMbs: 2376, level: 0x0D }, // Level 1.3
+	{ maxMacroblocks: 396, maxBitrate: 2000000, maxDpbMbs: 2376, level: 0x14 }, // Level 2
+	{ maxMacroblocks: 792, maxBitrate: 4000000, maxDpbMbs: 4752, level: 0x15 }, // Level 2.1
+	{ maxMacroblocks: 1620, maxBitrate: 4000000, maxDpbMbs: 8100, level: 0x16 }, // Level 2.2
+	{ maxMacroblocks: 1620, maxBitrate: 10000000, maxDpbMbs: 8100, level: 0x1E }, // Level 3
+	{ maxMacroblocks: 3600, maxBitrate: 14000000, maxDpbMbs: 18000, level: 0x1F }, // Level 3.1
+	{ maxMacroblocks: 5120, maxBitrate: 20000000, maxDpbMbs: 20480, level: 0x20 }, // Level 3.2
+	{ maxMacroblocks: 8192, maxBitrate: 20000000, maxDpbMbs: 32768, level: 0x28 }, // Level 4
+	{ maxMacroblocks: 8192, maxBitrate: 50000000, maxDpbMbs: 32768, level: 0x29 }, // Level 4.1
+	{ maxMacroblocks: 8704, maxBitrate: 50000000, maxDpbMbs: 34816, level: 0x2A }, // Level 4.2
+	{ maxMacroblocks: 22080, maxBitrate: 135000000, maxDpbMbs: 110400, level: 0x32 }, // Level 5
+	{ maxMacroblocks: 36864, maxBitrate: 240000000, maxDpbMbs: 184320, level: 0x33 }, // Level 5.1
+	{ maxMacroblocks: 36864, maxBitrate: 240000000, maxDpbMbs: 184320, level: 0x34 }, // Level 5.2
+	{ maxMacroblocks: 139264, maxBitrate: 240000000, maxDpbMbs: 696320, level: 0x3C }, // Level 6
+	{ maxMacroblocks: 139264, maxBitrate: 480000000, maxDpbMbs: 696320, level: 0x3D }, // Level 6.1
+	{ maxMacroblocks: 139264, maxBitrate: 800000000, maxDpbMbs: 696320, level: 0x3E }, // Level 6.2
 ];
 
 // https://en.wikipedia.org/wiki/High_Efficiency_Video_Coding

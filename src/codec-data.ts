@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { VideoCodec, VP9_LEVEL_TABLE } from './codec';
+import { AVC_LEVEL_TABLE, VideoCodec, VP9_LEVEL_TABLE } from './codec';
 import {
 	assert,
 	assertNever,
@@ -486,6 +486,8 @@ export type AvcSpsInfo = {
 	transferCharacteristics: number;
 	matrixCoefficients: number;
 	fullRangeFlag: number;
+	numReorderFrames: number;
+	maxDecFrameBuffering: number;
 };
 
 /** Parses an AVC SPS (Sequence Parameter Set) to extract basic information. */
@@ -573,8 +575,10 @@ export const parseAvcSps = (sps: Uint8Array): AvcSpsInfo | null => {
 		readExpGolomb(bitstream); // max_num_ref_frames
 		bitstream.skipBits(1); // gaps_in_frame_num_value_allowed_flag
 
-		const codedWidth = 16 * (readExpGolomb(bitstream) + 1); // pic_width_in_mbs_minus1
-		const codedHeight = 16 * (readExpGolomb(bitstream) + 1); // pic_height_in_map_units_minus1
+		const picWidthInMbsMinus1 = readExpGolomb(bitstream);
+		const picHeightInMapUnitsMinus1 = readExpGolomb(bitstream);
+		const codedWidth = 16 * (picWidthInMbsMinus1 + 1);
+		const codedHeight = 16 * (picHeightInMapUnitsMinus1 + 1);
 		let displayWidth = codedWidth;
 		let displayHeight = codedHeight;
 
@@ -619,6 +623,9 @@ export const parseAvcSps = (sps: Uint8Array): AvcSpsInfo | null => {
 		let matrixCoefficients = 2;
 		let fullRangeFlag = 0;
 
+		let numReorderFrames: number | null = null;
+		let maxDecFrameBuffering: number | null = null;
+
 		const vuiParametersPresentFlag = bitstream.readBits(1);
 		if (vuiParametersPresentFlag) {
 			const aspectRatioInfoPresentFlag = bitstream.readBits(1);
@@ -646,7 +653,84 @@ export const parseAvcSps = (sps: Uint8Array): AvcSpsInfo | null => {
 					matrixCoefficients = bitstream.readBits(8);
 				}
 			}
+
+			const chromaLocInfoPresentFlag = bitstream.readBits(1);
+			if (chromaLocInfoPresentFlag) {
+				readExpGolomb(bitstream); // chroma_sample_loc_type_top_field
+				readExpGolomb(bitstream); // chroma_sample_loc_type_bottom_field
+			}
+
+			const timingInfoPresentFlag = bitstream.readBits(1);
+			if (timingInfoPresentFlag) {
+				bitstream.skipBits(32); // num_units_in_tick
+				bitstream.skipBits(32); // time_scale
+				bitstream.skipBits(1); // fixed_frame_rate_flag
+			}
+
+			const nalHrdParametersPresentFlag = bitstream.readBits(1);
+			if (nalHrdParametersPresentFlag) {
+				skipAvcHrdParameters(bitstream);
+			}
+
+			const vclHrdParametersPresentFlag = bitstream.readBits(1);
+			if (vclHrdParametersPresentFlag) {
+				skipAvcHrdParameters(bitstream);
+			}
+
+			if (nalHrdParametersPresentFlag || vclHrdParametersPresentFlag) {
+				bitstream.skipBits(1); // low_delay_hrd_flag
+			}
+
+			bitstream.skipBits(1); // pic_struct_present_flag
+
+			const bitstreamRestrictionFlag = bitstream.readBits(1);
+			if (bitstreamRestrictionFlag) {
+				bitstream.skipBits(1); // motion_vectors_over_pic_boundaries_flag
+				readExpGolomb(bitstream); // max_bytes_per_pic_denom
+				readExpGolomb(bitstream); // max_bits_per_mb_denom
+				readExpGolomb(bitstream); // log2_max_mv_length_horizontal
+				readExpGolomb(bitstream); // log2_max_mv_length_vertical
+				numReorderFrames = readExpGolomb(bitstream);
+				maxDecFrameBuffering = readExpGolomb(bitstream);
+			}
 		}
+
+		if (numReorderFrames === null) {
+			assert(maxDecFrameBuffering === null);
+			const constraintSet3Flag = constraintFlags & 0b00010000;
+
+			if (
+				(profileIdc === 44 || profileIdc === 86 || profileIdc === 100
+					|| profileIdc === 110 || profileIdc === 122 || profileIdc === 244
+				) && constraintSet3Flag
+			) {
+				// "If profile_idc is equal to 44, 86, 100, 110, 122, or 244 and constraint_set3_flag is equal to 1, the
+				// value of num_reorder_frames shall be inferred to be equal to 0."
+				numReorderFrames = 0;
+				maxDecFrameBuffering = 0;
+			} else {
+				const picWidthInMbs = picWidthInMbsMinus1 + 1;
+				const picHeightInMapUnits = picHeightInMapUnitsMinus1 + 1;
+				const frameHeightInMbs = (2 - frameMbsOnlyFlag) * picHeightInMapUnits;
+
+				const levelInfo = AVC_LEVEL_TABLE.find(
+					x => x.level >= levelIdc,
+				) ?? last(AVC_LEVEL_TABLE)!;
+
+				// "MaxDpbFrames is equal to
+				// Min( MaxDpbMbs / ( picWidthInMbs * frameHeightInMbs ), 16 ) and MaxDpbMbs is given in Table A-1."
+				const maxDpbFrames = Math.min(
+					Math.floor(levelInfo.maxDpbMbs / (picWidthInMbs * frameHeightInMbs)),
+					16,
+				);
+
+				// "Otherwise, [...] the value of num_reorder_frames shall be inferred to be equal to MaxDpbFrames."
+				numReorderFrames = maxDpbFrames;
+				maxDecFrameBuffering = maxDpbFrames;
+			}
+		}
+
+		assert(maxDecFrameBuffering !== null);
 
 		return {
 			profileIdc,
@@ -664,11 +748,30 @@ export const parseAvcSps = (sps: Uint8Array): AvcSpsInfo | null => {
 			matrixCoefficients,
 			transferCharacteristics,
 			fullRangeFlag,
+			numReorderFrames,
+			maxDecFrameBuffering,
 		};
 	} catch (error) {
 		console.error('Error parsing AVC SPS:', error);
 		return null;
 	}
+};
+
+const skipAvcHrdParameters = (bitstream: Bitstream) => {
+	const cpb_cnt_minus1 = readExpGolomb(bitstream);
+	bitstream.skipBits(4); // bit_rate_scale
+	bitstream.skipBits(4); // cpb_size_scale
+
+	for (let i = 0; i <= cpb_cnt_minus1; i++) {
+		readExpGolomb(bitstream); // bit_rate_value_minus1[i]
+		readExpGolomb(bitstream); // cpb_size_value_minus1[i]
+		bitstream.skipBits(1); // cbr_flag[i]
+	}
+
+	bitstream.skipBits(5); // initial_cpb_removal_delay_length_minus1
+	bitstream.skipBits(5); // cpb_removal_delay_length_minus1
+	bitstream.skipBits(5); // dpb_output_delay_length_minus1
+	bitstream.skipBits(5); // time_offset_length
 };
 
 // Data specified in ISO 14496-15
@@ -1085,7 +1188,7 @@ const parseVuiForMinSpatialSegmentationIdc = (bitstream: Bitstream, sps_max_sub_
 			readExpGolomb(bitstream); // vui_num_ticks_poc_diff_one_minus1
 		}
 		if (bitstream.readBits(1)) {
-			skipHrdParameters(bitstream, true, sps_max_sub_layers_minus1);
+			skipHevcHrdParameters(bitstream, true, sps_max_sub_layers_minus1);
 		}
 	}
 	if (bitstream.readBits(1)) { // bitstream_restriction_flag
@@ -1103,7 +1206,7 @@ const parseVuiForMinSpatialSegmentationIdc = (bitstream: Bitstream, sps_max_sub_
 	return 0;
 };
 
-const skipHrdParameters = (
+const skipHevcHrdParameters = (
 	bitstream: Bitstream,
 	commonInfPresentFlag: boolean,
 	maxNumSubLayersMinus1: number,
