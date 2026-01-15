@@ -135,8 +135,9 @@ export class MpegTsDemuxer extends Demuxer {
 			}
 
 			let currentPos = this.packetOffset;
-
 			let programMapPid: number | null = null;
+			// Some files contain these multiple times, but we only care about their first appearance
+			let hasProgramAssociationTable = false;
 			let hasProgramMap = false;
 
 			while (true) {
@@ -148,7 +149,7 @@ export class MpegTsDemuxer extends Demuxer {
 				const BYTES_BEFORE_SECTION_LENGTH = 3;
 				const BITS_IN_CRC_32 = 32; // Duh
 
-				if (section.pid === 0) {
+				if (section.pid === 0 && !hasProgramAssociationTable) {
 					const bitstream = new Bitstream(section.payload);
 					const pointerField = bitstream.readAlignedByte();
 
@@ -175,7 +176,9 @@ export class MpegTsDemuxer extends Demuxer {
 					if (programMapPid === null) {
 						throw new Error('Program Association Table must link to a Program Map Table.');
 					}
-				} else if (section.pid === programMapPid) {
+
+					hasProgramAssociationTable = true;
+				} else if (section.pid === programMapPid && !hasProgramMap) {
 					const bitstream = new Bitstream(section.payload);
 					const pointerField = bitstream.readAlignedByte();
 
@@ -1258,8 +1261,9 @@ class MpegTsVideoTrackBacking extends MpegTsTrackBacking implements InputVideoTr
 			let remaining = context.ensureBuffered(CHUNK_SIZE);
 			if (remaining instanceof Promise) remaining = await remaining;
 
-			// Search for start codes in the current chunk
-			for (let i = 0; i < remaining; i++) {
+			const startPos = context.currentPos;
+
+			while (context.currentPos - startPos < remaining) {
 				const byte = context.readU8();
 
 				// Look for 0x00 as potential start of a start code
@@ -1281,6 +1285,7 @@ class MpegTsVideoTrackBacking extends MpegTsTrackBacking implements InputVideoTr
 						context.seekTo(packetStartPos);
 						return context.supplyPacket(packetLength, 0);
 					}
+
 					return;
 				}
 
@@ -1394,14 +1399,16 @@ class MpegTsAudioTrackBacking extends MpegTsTrackBacking implements InputAudioTr
 			let remaining = context.ensureBuffered(CHUNK_SIZE);
 			if (remaining instanceof Promise) remaining = await remaining;
 
-			for (let i = 0; i < remaining; i++) {
+			const startPos = context.currentPos;
+
+			while (context.currentPos - startPos < remaining) {
 				const byte = context.readU8();
 				if (byte !== 0xff) {
 					continue;
 				}
 
 				context.skip(-1);
-				const startPos = context.currentPos;
+				const possibleHeaderStartPos = context.currentPos;
 
 				let remaining = context.ensureBuffered(MAX_FRAME_HEADER_SIZE);
 				if (remaining instanceof Promise) remaining = await remaining;
@@ -1414,7 +1421,7 @@ class MpegTsAudioTrackBacking extends MpegTsTrackBacking implements InputAudioTr
 				const header = readAdtsFrameHeader(FileSlice.tempFromBytes(headerBytes));
 
 				if (header) {
-					context.seekTo(startPos);
+					context.seekTo(possibleHeaderStartPos);
 
 					let remaining = context.ensureBuffered(header.frameLength);
 					if (remaining instanceof Promise) remaining = await remaining;
@@ -1423,6 +1430,8 @@ class MpegTsAudioTrackBacking extends MpegTsTrackBacking implements InputAudioTr
 						remaining,
 						Math.round(SAMPLES_PER_AAC_FRAME * TIMESCALE / this.elementaryStream.info.sampleRate),
 					);
+				} else {
+					context.seekTo(possibleHeaderStartPos + 1);
 				}
 			}
 

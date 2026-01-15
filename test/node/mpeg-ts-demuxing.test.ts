@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import { Input } from '../../src/input.js';
-import { FilePathSource, ReadableStreamSource } from '../../src/source.js';
+import { FilePathSource, ReadableStreamSource, UrlSource } from '../../src/source.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import { Readable } from 'node:stream';
@@ -449,4 +449,23 @@ test('MPEG-TS with unknown file size (ReadableStreamSource)', async () => {
 	// Ensure that reference points have still been added
 	expect((videoTrack._backing as unknown as MpegTsTrackBacking).referencePesPackets.length)
 		.toBeGreaterThanOrEqual(10);
+});
+
+test('MPEG-TS transmuxed by FFmpeg', async () => {
+	using input = new Input({
+		source: new UrlSource('https://pub-cf9fcfcb5c0a44e9b1bb5ff890e041ae.r2.dev/trim-buck-bunny-ffmpeg.ts'),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	const videoPacketStats = await videoTrack.computePacketStats();
+	const audioPacketStats = await audioTrack.computePacketStats();
+
+	expect(videoPacketStats.packetCount).toBe(121);
+	expect(audioPacketStats.packetCount).toBe(235);
 });
