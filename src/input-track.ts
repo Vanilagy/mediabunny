@@ -104,6 +104,7 @@ export abstract class InputTrack {
 	 * - For Matroska files, this field returns the value of the `CodecID` element.
 	 * - For WAVE files, this field returns the value of the format tag in the `'fmt '` chunk.
 	 * - For ADTS files, this field contains the `MPEG-4 Audio Object Type`.
+	 * - For MPEG-TS files, this field contains the `streamType` value from the Program Map Table.
 	 * - In all other cases, this field is `null`.
 	 */
 	get internalCodecId() {
