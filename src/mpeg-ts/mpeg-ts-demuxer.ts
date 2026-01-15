@@ -353,7 +353,7 @@ export class MpegTsDemuxer extends Demuxer {
 	}
 
 	async getMetadataTags(): Promise<MetadataTags> {
-		return {}; // TODO
+		return {}; // Nothing for now
 	}
 
 	async computeDuration() {
