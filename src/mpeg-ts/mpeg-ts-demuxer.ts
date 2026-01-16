@@ -50,12 +50,21 @@ import {
 	TRANSFER_CHARACTERISTICS_MAP_INVERSE,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
+import { FRAME_HEADER_SIZE as MP3_FRAME_HEADER_SIZE, readMp3FrameHeader } from '../../shared/mp3-misc';
 import { EncodedPacket, PacketType, PLACEHOLDER_DATA } from '../packet';
-import { FileSlice, readBytes, Reader, readU16Be, readU8 } from '../reader';
+import { FileSlice, readBytes, Reader, readU16Be, readU32Be, readU8 } from '../reader';
 
 const TIMESCALE = 90_000; // MPEG-TS timestamps run on a 90 kHz clock
 const TS_PACKET_SIZE = 188;
 const MISSING_PES_PACKET_ERROR = 'No PES packet found where one was expected.';
+
+const enum MpegTsStreamType {
+	MP3_MPEG1 = 0x03,
+	MP3_MPEG2 = 0x04,
+	AAC = 0x0f,
+	AVC = 0x1b,
+	HEVC = 0x24,
+}
 
 type ElementaryStream = {
 	demuxer: MpegTsDemuxer;
@@ -218,7 +227,18 @@ export class MpegTsDemuxer extends Demuxer {
 						let info: ElementaryStream['info'] | null = null;
 
 						switch (streamType) {
-							case 0xf: {
+							case MpegTsStreamType.MP3_MPEG1:
+							case MpegTsStreamType.MP3_MPEG2: {
+								info = {
+									type: 'audio',
+									codec: 'mp3',
+									aacCodecInfo: null,
+									numberOfChannels: -1,
+									sampleRate: -1,
+								};
+							}; break;
+
+							case MpegTsStreamType.AAC: {
 								info = {
 									type: 'audio',
 									codec: 'aac',
@@ -228,9 +248,9 @@ export class MpegTsDemuxer extends Demuxer {
 								};
 							}; break;
 
-							case 0x1b:
-							case 0x24: {
-								const codec = streamType === 0x1b ? 'avc' : 'hevc';
+							case MpegTsStreamType.AVC:
+							case MpegTsStreamType.HEVC: {
+								const codec = streamType === MpegTsStreamType.AVC ? 'avc' : 'hevc';
 
 								info = {
 									type: 'video',
@@ -358,6 +378,19 @@ export class MpegTsDemuxer extends Demuxer {
 									= aacChannelMap[header.channelConfiguration]!;
 								elementaryStream.info.sampleRate
 									= aacFrequencyTable[header.samplingFrequencyIndex]!;
+
+								elementaryStream.initialized = true;
+							} else if (elementaryStream.info.codec === 'mp3') {
+								const word = readU32Be(FileSlice.tempFromBytes(pesPacket.data));
+								const result = readMp3FrameHeader(word, pesPacket.data.byteLength);
+								if (!result.header) {
+									throw new Error(
+										'Invalid MP3 audio stream; could not read frame header from first packet.',
+									);
+								}
+
+								elementaryStream.info.numberOfChannels = result.header.channel === 3 ? 1 : 2;
+								elementaryStream.info.sampleRate = result.header.sampleRate;
 
 								elementaryStream.initialized = true;
 							} else {
@@ -1438,6 +1471,7 @@ class MpegTsAudioTrackBacking extends MpegTsTrackBacking implements InputAudioTr
 	override async markNextPacket(context: PacketReadingContext): Promise<void> {
 		assert(!context.suppliedPacket);
 
+		const codec = this.elementaryStream.info.codec;
 		const CHUNK_SIZE = 128;
 
 		while (true) {
@@ -1448,35 +1482,71 @@ class MpegTsAudioTrackBacking extends MpegTsTrackBacking implements InputAudioTr
 
 			while (context.currentPos - startPos < remaining) {
 				const byte = context.readU8();
-				if (byte !== 0xff) {
-					continue;
-				}
 
-				context.skip(-1);
-				const possibleHeaderStartPos = context.currentPos;
+				if (codec === 'aac') {
+					if (byte !== 0xff) {
+						continue;
+					}
 
-				let remaining = context.ensureBuffered(MAX_FRAME_HEADER_SIZE);
-				if (remaining instanceof Promise) remaining = await remaining;
+					context.skip(-1);
+					const possibleHeaderStartPos = context.currentPos;
 
-				if (remaining < MAX_FRAME_HEADER_SIZE) {
-					return;
-				}
-
-				const headerBytes = context.readBytes(MAX_FRAME_HEADER_SIZE);
-				const header = readAdtsFrameHeader(FileSlice.tempFromBytes(headerBytes));
-
-				if (header) {
-					context.seekTo(possibleHeaderStartPos);
-
-					let remaining = context.ensureBuffered(header.frameLength);
+					let remaining = context.ensureBuffered(MAX_FRAME_HEADER_SIZE);
 					if (remaining instanceof Promise) remaining = await remaining;
 
-					return context.supplyPacket(
-						remaining,
-						Math.round(SAMPLES_PER_AAC_FRAME * TIMESCALE / this.elementaryStream.info.sampleRate),
-					);
+					if (remaining < MAX_FRAME_HEADER_SIZE) {
+						return;
+					}
+
+					const headerBytes = context.readBytes(MAX_FRAME_HEADER_SIZE);
+					const header = readAdtsFrameHeader(FileSlice.tempFromBytes(headerBytes));
+
+					if (header) {
+						context.seekTo(possibleHeaderStartPos);
+
+						let remaining = context.ensureBuffered(header.frameLength);
+						if (remaining instanceof Promise) remaining = await remaining;
+
+						return context.supplyPacket(
+							remaining,
+							Math.round(SAMPLES_PER_AAC_FRAME * TIMESCALE / this.elementaryStream.info.sampleRate),
+						);
+					} else {
+						context.seekTo(possibleHeaderStartPos + 1);
+					}
+				} else if (codec === 'mp3') {
+					if (byte !== 0xff) {
+						continue;
+					}
+
+					context.skip(-1);
+					const possibleHeaderStartPos = context.currentPos;
+
+					let remaining = context.ensureBuffered(MP3_FRAME_HEADER_SIZE);
+					if (remaining instanceof Promise) remaining = await remaining;
+
+					if (remaining < MP3_FRAME_HEADER_SIZE) {
+						return;
+					}
+
+					const headerBytes = context.readBytes(MP3_FRAME_HEADER_SIZE);
+					const word = readU32Be(FileSlice.tempFromBytes(headerBytes));
+					const result = readMp3FrameHeader(word, null);
+
+					if (result.header) {
+						context.seekTo(possibleHeaderStartPos);
+
+						let remaining = context.ensureBuffered(result.header.totalSize);
+						if (remaining instanceof Promise) remaining = await remaining;
+
+						const duration = result.header.audioSamplesInFrame * TIMESCALE
+							/ this.elementaryStream.info.sampleRate;
+						return context.supplyPacket(remaining, Math.round(duration));
+					} else {
+						context.seekTo(possibleHeaderStartPos + 1);
+					}
 				} else {
-					context.seekTo(possibleHeaderStartPos + 1);
+					throw new Error('Unreachable');
 				}
 			}
 

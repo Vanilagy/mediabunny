@@ -483,7 +483,7 @@ test('MPEG-TS transmuxed by FFmpeg', async () => {
 	expect(audioPacketStats.packetCount).toBe(235);
 });
 
-test.only('MPEG-TS with HEVC video', async () => {
+test('MPEG-TS with HEVC video', async () => {
 	using input = new Input({
 		source: new FilePathSource(path.join(__dirname, '../public/hevc.ts')),
 		formats: ALL_FORMATS,
@@ -517,4 +517,41 @@ test.only('MPEG-TS with HEVC video', async () => {
 		expect(packet.data.slice(0, 4)).toEqual(new Uint8Array([0, 0, 0, 1])); // Annex B
 		expect(packet.duration).toBeCloseTo(0.04166666666);
 	}
+});
+
+test('MPEG-TS with MP3 audio', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/mp3.ts')),
+		formats: ALL_FORMATS,
+	});
+
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	expect(audioTrack.codec).toBe('mp3');
+	expect(audioTrack.internalCodecId).toBe(0x03);
+
+	const audioDecoderConfig = await audioTrack.getDecoderConfig();
+	expect(audioDecoderConfig).toEqual({
+		codec: 'mp3',
+		numberOfChannels: 2,
+		sampleRate: 48000,
+	});
+
+	const sink = new EncodedPacketSink(audioTrack);
+
+	const firstPacket = await sink.getFirstPacket();
+	assert(firstPacket);
+
+	expect(firstPacket.data[0]).toBe(0xff); // MP3 sync byte
+	expect(firstPacket.type).toBe('key');
+	expect(firstPacket.duration).toBeGreaterThan(0);
+
+	let count = 0;
+	for await (const packet of sink.packets()) {
+		expect(packet.data[0]).toBe(0xff);
+		count++;
+	}
+
+	expect(count).toBeGreaterThan(0);
 });
