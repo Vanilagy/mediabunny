@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -16,15 +16,19 @@ import {
 	AsyncMutex,
 	binarySearchExact,
 	binarySearchLessOrEqual,
-	Bitstream,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readBytes, Reader } from '../reader';
 import { DEFAULT_TRACK_DISPOSITION } from '../metadata';
-import { FrameHeader, MAX_FRAME_HEADER_SIZE, MIN_FRAME_HEADER_SIZE, readFrameHeader } from './adts-reader';
+import {
+	AdtsFrameHeader,
+	MIN_ADTS_FRAME_HEADER_SIZE,
+	MAX_ADTS_FRAME_HEADER_SIZE,
+	readAdtsFrameHeader,
+} from './adts-reader';
 
-const SAMPLES_PER_AAC_FRAME = 1024;
+export const SAMPLES_PER_AAC_FRAME = 1024;
 
 type Sample = {
 	timestamp: number;
@@ -37,7 +41,7 @@ export class AdtsDemuxer extends Demuxer {
 	reader: Reader;
 
 	metadataPromise: Promise<void> | null = null;
-	firstFrameHeader: FrameHeader | null = null;
+	firstFrameHeader: AdtsFrameHeader | null = null;
 	loadedSamples: Sample[] = [];
 
 	tracks: InputAudioTrack[] = [];
@@ -69,14 +73,18 @@ export class AdtsDemuxer extends Demuxer {
 	}
 
 	async advanceReader() {
-		let slice = this.reader.requestSliceRange(this.lastLoadedPos, MIN_FRAME_HEADER_SIZE, MAX_FRAME_HEADER_SIZE);
+		let slice = this.reader.requestSliceRange(
+			this.lastLoadedPos,
+			MIN_ADTS_FRAME_HEADER_SIZE,
+			MAX_ADTS_FRAME_HEADER_SIZE,
+		);
 		if (slice instanceof Promise) slice = await slice;
 		if (!slice) {
 			this.lastSampleLoaded = true;
 			return;
 		}
 
-		const header = readFrameHeader(slice);
+		const header = readAdtsFrameHeader(slice);
 		if (!header) {
 			this.lastSampleLoaded = true;
 			return;
@@ -95,13 +103,12 @@ export class AdtsDemuxer extends Demuxer {
 		const sampleRate = aacFrequencyTable[header.samplingFrequencyIndex];
 		assert(sampleRate !== undefined);
 		const sampleDuration = SAMPLES_PER_AAC_FRAME / sampleRate;
-		const headerSize = header.crcCheck ? MAX_FRAME_HEADER_SIZE : MIN_FRAME_HEADER_SIZE;
 
 		const sample: Sample = {
 			timestamp: this.nextTimestampInSamples / sampleRate,
 			duration: sampleDuration,
-			dataStart: header.startPos + headerSize,
-			dataSize: header.frameLength - headerSize,
+			dataStart: header.startPos,
+			dataSize: header.frameLength,
 		};
 
 		this.loadedSamples.push(sample);
@@ -198,27 +205,10 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 	async getDecoderConfig(): Promise<AudioDecoderConfig> {
 		assert(this.demuxer.firstFrameHeader);
 
-		const bytes = new Uint8Array(3); // 19 bits max
-		const bitstream = new Bitstream(bytes);
-
-		const { objectType, samplingFrequencyIndex, channelConfiguration } = this.demuxer.firstFrameHeader;
-
-		if (objectType > 31) {
-			bitstream.writeBits(5, 31);
-			bitstream.writeBits(6, objectType - 32);
-		} else {
-			bitstream.writeBits(5, objectType);
-		}
-
-		bitstream.writeBits(4, samplingFrequencyIndex); // samplingFrequencyIndex === 15 is forbidden
-
-		bitstream.writeBits(4, channelConfiguration);
-
 		return {
 			codec: `mp4a.40.${this.demuxer.firstFrameHeader.objectType}`,
 			numberOfChannels: this.getNumberOfChannels(),
 			sampleRate: this.getSampleRate(),
-			description: bytes.subarray(0, Math.ceil((bitstream.pos - 1) / 8)),
 		};
 	}
 

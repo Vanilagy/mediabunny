@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -31,6 +31,8 @@ export {
 	Mp3OutputFormat,
 	Mp3OutputFormatOptions,
 	Mp4OutputFormat,
+	MpegTsOutputFormat,
+	MpegTsOutputFormatOptions,
 	OggOutputFormat,
 	OggOutputFormatOptions,
 	WavOutputFormat,
@@ -126,25 +128,27 @@ export {
 export {
 	InputFormat,
 	AdtsInputFormat,
+	FlacInputFormat,
 	IsobmffInputFormat,
 	MatroskaInputFormat,
 	Mp3InputFormat,
 	Mp4InputFormat,
+	MpegTsInputFormat,
 	OggInputFormat,
 	QuickTimeInputFormat,
 	WaveInputFormat,
 	WebMInputFormat,
-	FlacInputFormat,
 	ALL_FORMATS,
 	ADTS,
+	FLAC,
 	MATROSKA,
 	MP3,
 	MP4,
+	MPEG_TS,
 	OGG,
 	QTFF,
 	WAVE,
 	WEBM,
-	FLAC,
 } from './input-format';
 export {
 	Input,

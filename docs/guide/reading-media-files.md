@@ -60,6 +60,11 @@ await input.computeDuration(); // => 1905.4615
 ```
 More specifically, the duration is defined as the maximum end timestamp across all tracks.
 
+Since not all media files begin at time zero, you can also retrieve the *starting timestamp* of the media file in seconds:
+```ts
+await input.getFirstTimestamp(); // => 0.0
+```
+
 Mediabunny also lets you read descriptive metadata tags from media files, such as title, artist, or cover art:
 ```ts
 await input.getMetadataTags(); // => MetadataTags

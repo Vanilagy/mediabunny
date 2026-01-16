@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -19,6 +19,7 @@
  * - For WAVE files, the metadata refers to the chunks within the RIFF INFO chunk.
  * - For ADTS files, there is no metadata.
  * - For FLAC files, the metadata lives in Vorbis style in the Vorbis comment block.
+ * - For MPEG-TS files, metadata tags are currently not supported.
  *
  * @group Metadata tags
  * @public
@@ -74,6 +75,7 @@ export type MetadataTags = {
 	 * - WAVE: The individual metadata chunks within the RIFF INFO chunk. Values are always ISO 8859-1 strings.
 	 * - FLAC: The key-value string pairs from the vorbis metadata block (see RFC 9639, Section D.2.3).
 	 * Additionally, the `'vendor'` key refers to the vendor string within this header.
+	 * - MPEG-TS: Not supported.
 	*/
 	raw?: Record<string, string | Uint8Array | RichImageData | AttachedFile | null>;
 };

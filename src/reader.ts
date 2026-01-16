@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -18,6 +18,10 @@ export class Reader {
 	requestSlice(start: number, length: number): MaybePromise<FileSlice | null> {
 		if (this.source._disposed) {
 			throw new InputDisposedError();
+		}
+
+		if (start < 0) {
+			return null;
 		}
 
 		if (this.fileSize !== null && start + length > this.fileSize) {
@@ -47,6 +51,10 @@ export class Reader {
 	requestSliceRange(start: number, minLength: number, maxLength: number): MaybePromise<FileSlice | null> {
 		if (this.source._disposed) {
 			throw new InputDisposedError();
+		}
+
+		if (start < 0) {
+			return null;
 		}
 
 		if (this.fileSize !== null) {

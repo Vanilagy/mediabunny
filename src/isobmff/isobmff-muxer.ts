@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -14,6 +14,9 @@ import { assert, computeRationalApproximation, last, promiseWithResolvers } from
 import { IsobmffOutputFormatOptions, IsobmffOutputFormat, MovOutputFormat } from '../output-format';
 import { inlineTimestampRegex, SubtitleConfig, SubtitleCue, SubtitleMetadata } from '../subtitles';
 import {
+	aacChannelMap,
+	aacFrequencyTable,
+	buildAacAudioSpecificConfig,
 	parsePcmCodec,
 	PCM_AUDIO_CODECS,
 	PcmAudioCodec,
@@ -22,13 +25,15 @@ import {
 	validateSubtitleMetadata,
 	validateVideoChunkMetadata,
 } from '../codec';
+import { MAX_ADTS_FRAME_HEADER_SIZE, MIN_ADTS_FRAME_HEADER_SIZE, readAdtsFrameHeader } from '../adts/adts-reader';
+import { FileSlice } from '../reader';
 import { BufferTarget } from '../target';
 import { EncodedPacket, PacketType } from '../packet';
 import {
 	concatNalUnitsInLengthPrefixed,
 	extractAvcDecoderConfigurationRecord,
 	extractHevcDecoderConfigurationRecord,
-	findNalUnitsInAnnexB,
+	iterateNalUnitsInAnnexB,
 	serializeAvcDecoderConfigurationRecord,
 	serializeHevcDecoderConfigurationRecord,
 } from '../codec-data';
@@ -101,6 +106,11 @@ export type IsobmffTrackData = {
 		 * Some players expect this for PCM audio.
 		 */
 		requiresPcmTransformation: boolean;
+		/**
+		 * The "ADTS stripping" involves removing the ADTS header from each AAC packet. SOBMFF stores raw AAC data, not
+		 * ADTS-wrapped data.
+		 */
+		requiresAdtsStripping: boolean;
 	};
 } | {
 	track: OutputSubtitleTrack;
@@ -365,7 +375,7 @@ export class IsobmffMuxer extends Muxer {
 		return newTrackData;
 	}
 
-	private getAudioTrackData(track: OutputAudioTrack, meta?: EncodedAudioChunkMetadata) {
+	private getAudioTrackData(track: OutputAudioTrack, packet: EncodedPacket, meta?: EncodedAudioChunkMetadata) {
 		const existingTrackData = this.trackDatas.find(x => x.track === track);
 		if (existingTrackData) {
 			return existingTrackData as IsobmffAudioTrackData;
@@ -376,6 +386,37 @@ export class IsobmffMuxer extends Muxer {
 		assert(meta);
 		assert(meta.decoderConfig);
 
+		const decoderConfig = { ...meta.decoderConfig };
+		let requiresAdtsStripping = false;
+
+		if (track.source._codec === 'aac' && !decoderConfig.description) {
+			// ISOBMFF can only hold AAC in raw format, not ADTS, but the missing description indicates ADTS.
+			// Parse the first packet to extract the AudioSpecificConfig.
+			const adtsFrame = readAdtsFrameHeader(FileSlice.tempFromBytes(packet.data));
+			if (!adtsFrame) {
+				throw new Error(
+					'Couldn\'t parse ADTS header from the AAC packet. Make sure the packets are in ADTS format'
+					+ ' (as specified in ISO 13818-7) when not providing a description, or provide a description'
+					+ ' (must be an AudioSpecificConfig as specified in ISO 14496-3) and ensure the packets'
+					+ ' are raw AAC data.',
+				);
+			}
+
+			const sampleRate = aacFrequencyTable[adtsFrame.samplingFrequencyIndex];
+			const numberOfChannels = aacChannelMap[adtsFrame.channelConfiguration];
+
+			if (sampleRate === undefined || numberOfChannels === undefined) {
+				throw new Error('Invalid ADTS frame header.');
+			}
+
+			decoderConfig.description = buildAacAudioSpecificConfig({
+				objectType: adtsFrame.objectType,
+				sampleRate,
+				numberOfChannels,
+			});
+			requiresAdtsStripping = true;
+		}
+
 		const newTrackData: IsobmffAudioTrackData = {
 			muxer: this,
 			track,
@@ -383,10 +424,11 @@ export class IsobmffMuxer extends Muxer {
 			info: {
 				numberOfChannels: meta.decoderConfig.numberOfChannels,
 				sampleRate: meta.decoderConfig.sampleRate,
-				decoderConfig: meta.decoderConfig,
+				decoderConfig,
 				requiresPcmTransformation:
 					!this.isFragmented
 					&& (PCM_AUDIO_CODECS as readonly string[]).includes(track.source._codec),
+				requiresAdtsStripping,
 			},
 			timescale: meta.decoderConfig.sampleRate,
 			samples: [],
@@ -465,7 +507,8 @@ export class IsobmffMuxer extends Muxer {
 
 			let packetData = packet.data;
 			if (trackData.info.requiresAnnexBTransformation) {
-				const nalUnits = findNalUnitsInAnnexB(packetData);
+				const nalUnits = [...iterateNalUnitsInAnnexB(packetData)]
+					.map(loc => packetData.subarray(loc.offset, loc.offset + loc.length));
 				if (nalUnits.length === 0) {
 					// It's not valid Annex B data
 					throw new Error(
@@ -502,7 +545,20 @@ export class IsobmffMuxer extends Muxer {
 		const release = await this.mutex.acquire();
 
 		try {
-			const trackData = this.getAudioTrackData(track, meta);
+			const trackData = this.getAudioTrackData(track, packet, meta);
+
+			let packetData = packet.data;
+			if (trackData.info.requiresAdtsStripping) {
+				const adtsFrame = readAdtsFrameHeader(FileSlice.tempFromBytes(packetData));
+				if (!adtsFrame) {
+					throw new Error('Expected ADTS frame, didn\'t get one.');
+				}
+
+				const headerLength = adtsFrame.crcCheck === null
+					? MIN_ADTS_FRAME_HEADER_SIZE
+					: MAX_ADTS_FRAME_HEADER_SIZE;
+				packetData = packetData.subarray(headerLength);
+			}
 
 			const timestamp = this.validateAndNormalizeTimestamp(
 				trackData.track,
@@ -511,7 +567,7 @@ export class IsobmffMuxer extends Muxer {
 			);
 			const internalSample = this.createSampleForTrack(
 				trackData,
-				packet.data,
+				packetData,
 				timestamp,
 				packet.duration,
 				packet.type,

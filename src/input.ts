@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -116,6 +116,20 @@ export class Input<S extends Source = Source> implements Disposable {
 	async computeDuration() {
 		const demuxer = await this._getDemuxer();
 		return demuxer.computeDuration();
+	}
+
+	/**
+	 * Returns the timestamp at which the input file starts. More precisely, returns the smallest starting timestamp
+	 * among all tracks.
+	 */
+	async getFirstTimestamp() {
+		const tracks = await this.getTracks();
+		if (tracks.length === 0) {
+			return 0;
+		}
+
+		const firstTimestamps = await Promise.all(tracks.map(x => x.getFirstTimestamp()));
+		return Math.min(...firstTimestamps);
 	}
 
 	/** Returns the list of all tracks of this input file. */

@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -248,15 +248,27 @@ export const isAllowSharedBufferSource = (x: unknown) => {
 
 export class AsyncMutex {
 	currentPromise = Promise.resolve();
+	pending = 0;
 
 	async acquire() {
 		let resolver: () => void;
 		const nextPromise = new Promise<void>((resolve) => {
-			resolver = resolve;
+			let resolved = false;
+
+			resolver = () => {
+				if (resolved) {
+					return;
+				}
+
+				resolve();
+				this.pending--;
+				resolved = true;
+			};
 		});
 
 		const currentPromiseAlias = this.currentPromise;
 		this.currentPromise = nextPromise;
+		this.pending++;
 
 		await currentPromiseAlias;
 

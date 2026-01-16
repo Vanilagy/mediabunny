@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -104,6 +104,7 @@ export abstract class InputTrack {
 	 * - For Matroska files, this field returns the value of the `CodecID` element.
 	 * - For WAVE files, this field returns the value of the format tag in the `'fmt '` chunk.
 	 * - For ADTS files, this field contains the `MPEG-4 Audio Object Type`.
+	 * - For MPEG-TS files, this field contains the `streamType` value from the Program Map Table.
 	 * - In all other cases, this field is `null`.
 	 */
 	get internalCodecId() {

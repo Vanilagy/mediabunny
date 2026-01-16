@@ -12,7 +12,7 @@ Here's a long list of stuff this library does:
 - Converting media files
 - Hardware-accelerated decoding & encoding (via the WebCodecs API)
 - Support for multiple video, audio and subtitle tracks
-- Read & write support for many container formats (.mp4, .mov, .webm, .mkv, .mp3, .wav, .ogg, .aac, .flac), including variations such as MP4 with Fast Start, fragmented MP4, streamable Matroska, transparent WebM, etc.
+- Read & write support for many container formats (.mp4, .mov, .webm, .mkv, .mp3, .wav, .ogg, .aac, .flac, .ts), including variations such as MP4 with Fast Start, fragmented MP4, streamable Matroska, transparent WebM, etc.
 - Support for 25 different codecs
 - Lazy, optimized, on-demand file reading
 - Input and output streaming, arbitrary file size support

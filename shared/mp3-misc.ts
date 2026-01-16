@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -27,7 +27,7 @@ export const XING = 0x58696e67;
 /** 'Info' */
 export const INFO = 0x496e666f;
 
-export type FrameHeader = {
+export type Mp3FrameHeader = {
 	totalSize: number;
 	mpegVersionId: number;
 	layer: number;
@@ -66,8 +66,8 @@ export const getXingOffset = (mpegVersionId: number, channel: number) => {
 		: (channel === 3 ? 13 : 21);
 };
 
-export const readFrameHeader = (word: number, remainingBytes: number | null): {
-	header: FrameHeader | null;
+export const readMp3FrameHeader = (word: number, remainingBytes: number | null): {
+	header: Mp3FrameHeader | null;
 	bytesAdvanced: number;
 } => {
 	const firstByte = word >>> 24;

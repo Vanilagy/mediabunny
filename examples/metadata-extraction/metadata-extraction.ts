@@ -43,12 +43,14 @@ const extractMetadata = (resource: File | string) => {
 	const object = {
 		'Format': input.getFormat().then(format => format.name),
 		'Full MIME type': input.getMimeType(),
-		'Duration': input.computeDuration().then(duration => `${duration} seconds`),
+		'Starts at': input.getFirstTimestamp().then(start => `${start} seconds`),
+		'Ends at': input.computeDuration().then(duration => `${duration} seconds`),
 		'Tracks': input.getTracks().then(tracks => tracks.map(track => ({
 			'Type': track.type,
 			'Codec': track.codec,
 			'Full codec string': track.getCodecParameterString(),
-			'Duration': track.computeDuration().then(duration => `${duration} seconds`),
+			'Starts at': track.getFirstTimestamp().then(start => `${start} seconds`),
+			'Ends at': track.computeDuration().then(duration => `${duration} seconds`),
 			'Language code': track.languageCode,
 			...(track.isVideoTrack()
 				? {
@@ -202,7 +204,7 @@ const shortDelay = () => {
 selectMediaButton.addEventListener('click', () => {
 	const fileInput = document.createElement('input');
 	fileInput.type = 'file';
-	fileInput.accept = 'video/*,video/x-matroska,audio/*,audio/aac';
+	fileInput.accept = 'video/*,video/x-matroska,video/mp2t,.ts,audio/*,audio/aac';
 	fileInput.addEventListener('change', () => {
 		const file = fileInput.files?.[0];
 		if (!file) {

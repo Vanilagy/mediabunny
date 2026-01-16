@@ -292,7 +292,7 @@ type AdtsOutputFormatOptions = {
 
 This output format creates FLAC (.flac) files.
 ```ts
-import { Output, FlacOutputFormat } from 'mediabunny';	
+import { Output, FlacOutputFormat } from 'mediabunny';
 
 const output = new Output({
 	format: new FlacOutputFormat(options),
@@ -308,3 +308,28 @@ type FlacOutputFormatOptions = {
 ```
 - `onFrame`\
 	Will be called for each FLAC frame that is written.
+
+## MPEG-TS
+
+This output format creates MPEG Transport Stream (.ts) files.
+```ts
+import { Output, MpegTsOutputFormat } from 'mediabunny';
+
+const output = new Output({
+	format: new MpegTsOutputFormat(options),
+	// ...
+});
+```
+
+::: info
+This format ensures [append-only writing](#append-only-writing).
+:::
+
+The following options are available:
+```ts
+type MpegTsOutputFormatOptions = {
+	onPacket?: (data: Uint8Array, position: number) => unknown;
+};
+```
+- `onPacket`\
+	Will be called for each 188-byte Transport Stream packet that is written.
