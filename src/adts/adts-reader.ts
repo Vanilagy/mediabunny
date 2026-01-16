@@ -9,8 +9,8 @@
 import { Bitstream } from '../misc';
 import { FileSlice, readBytes } from '../reader';
 
-export const MIN_FRAME_HEADER_SIZE = 7;
-export const MAX_FRAME_HEADER_SIZE = 9;
+export const MIN_ADTS_FRAME_HEADER_SIZE = 7;
+export const MAX_ADTS_FRAME_HEADER_SIZE = 9;
 
 export type AdtsFrameHeader = {
 	objectType: number;

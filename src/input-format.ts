@@ -26,7 +26,7 @@ import { ID3_V2_HEADER_SIZE, readId3V2Header } from './id3';
 import { readNextMp3FrameHeader } from './mp3/mp3-reader';
 import { OggDemuxer } from './ogg/ogg-demuxer';
 import { WaveDemuxer } from './wave/wave-demuxer';
-import { MAX_FRAME_HEADER_SIZE, MIN_FRAME_HEADER_SIZE, readAdtsFrameHeader } from './adts/adts-reader';
+import { MAX_ADTS_FRAME_HEADER_SIZE, MIN_ADTS_FRAME_HEADER_SIZE, readAdtsFrameHeader } from './adts/adts-reader';
 import { AdtsDemuxer } from './adts/adts-demuxer';
 import { readAscii, readBytes } from './reader';
 import { FlacDemuxer } from './flac/flac-demuxer';
@@ -440,7 +440,11 @@ export class FlacInputFormat extends InputFormat {
 export class AdtsInputFormat extends InputFormat {
 	/** @internal */
 	async _canReadInput(input: Input) {
-		let slice = input._reader.requestSliceRange(0, MIN_FRAME_HEADER_SIZE, MAX_FRAME_HEADER_SIZE);
+		let slice = input._reader.requestSliceRange(
+			0,
+			MIN_ADTS_FRAME_HEADER_SIZE,
+			MAX_ADTS_FRAME_HEADER_SIZE,
+		);
 		if (slice instanceof Promise) slice = await slice;
 		if (!slice) return false;
 
@@ -449,7 +453,11 @@ export class AdtsInputFormat extends InputFormat {
 			return false;
 		}
 
-		slice = input._reader.requestSliceRange(firstHeader.frameLength, MIN_FRAME_HEADER_SIZE, MAX_FRAME_HEADER_SIZE);
+		slice = input._reader.requestSliceRange(
+			firstHeader.frameLength,
+			MIN_ADTS_FRAME_HEADER_SIZE,
+			MAX_ADTS_FRAME_HEADER_SIZE,
+		);
 		if (slice instanceof Promise) slice = await slice;
 		if (!slice) return false;
 

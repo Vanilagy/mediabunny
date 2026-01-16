@@ -7,7 +7,7 @@
  */
 
 import { SAMPLES_PER_AAC_FRAME } from '../adts/adts-demuxer';
-import { MAX_FRAME_HEADER_SIZE, readAdtsFrameHeader } from '../adts/adts-reader';
+import { MAX_ADTS_FRAME_HEADER_SIZE, readAdtsFrameHeader } from '../adts/adts-reader';
 import {
 	aacChannelMap,
 	AacCodecInfo,
@@ -1468,14 +1468,14 @@ class MpegTsAudioTrackBacking extends MpegTsTrackBacking implements InputAudioTr
 					context.skip(-1);
 					const possibleHeaderStartPos = context.currentPos;
 
-					let remaining = context.ensureBuffered(MAX_FRAME_HEADER_SIZE);
+					let remaining = context.ensureBuffered(MAX_ADTS_FRAME_HEADER_SIZE);
 					if (remaining instanceof Promise) remaining = await remaining;
 
-					if (remaining < MAX_FRAME_HEADER_SIZE) {
+					if (remaining < MAX_ADTS_FRAME_HEADER_SIZE) {
 						return;
 					}
 
-					const headerBytes = context.readBytes(MAX_FRAME_HEADER_SIZE);
+					const headerBytes = context.readBytes(MAX_ADTS_FRAME_HEADER_SIZE);
 					const header = readAdtsFrameHeader(FileSlice.tempFromBytes(headerBytes));
 
 					if (header) {

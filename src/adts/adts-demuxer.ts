@@ -21,7 +21,12 @@ import {
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readBytes, Reader } from '../reader';
 import { DEFAULT_TRACK_DISPOSITION } from '../metadata';
-import { AdtsFrameHeader, MIN_FRAME_HEADER_SIZE, MAX_FRAME_HEADER_SIZE, readAdtsFrameHeader } from './adts-reader';
+import {
+	AdtsFrameHeader,
+	MIN_ADTS_FRAME_HEADER_SIZE,
+	MAX_ADTS_FRAME_HEADER_SIZE,
+	readAdtsFrameHeader,
+} from './adts-reader';
 
 export const SAMPLES_PER_AAC_FRAME = 1024;
 
@@ -68,7 +73,11 @@ export class AdtsDemuxer extends Demuxer {
 	}
 
 	async advanceReader() {
-		let slice = this.reader.requestSliceRange(this.lastLoadedPos, MIN_FRAME_HEADER_SIZE, MAX_FRAME_HEADER_SIZE);
+		let slice = this.reader.requestSliceRange(
+			this.lastLoadedPos,
+			MIN_ADTS_FRAME_HEADER_SIZE,
+			MAX_ADTS_FRAME_HEADER_SIZE,
+		);
 		if (slice instanceof Promise) slice = await slice;
 		if (!slice) {
 			this.lastSampleLoaded = true;
