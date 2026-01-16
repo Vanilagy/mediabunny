@@ -479,6 +479,14 @@ export class AdtsInputFormat extends InputFormat {
 
 const TS_PACKET_SIZE = 188;
 
+/**
+ * MPEG Transport Stream (MPEG-TS) file format.
+ *
+ * Do not instantiate this class; use the {@link MPEG_TS} singleton instead.
+ *
+ * @group Input formats
+ * @public
+ */
 export class MpegTsInputFormat extends InputFormat {
 	/** @internal */
 	async _canReadInput(input: Input) {
@@ -573,6 +581,11 @@ export const ADTS = /* #__PURE__ */ new AdtsInputFormat();
  */
 export const FLAC = /* #__PURE__ */ new FlacInputFormat();
 
+/**
+ * MPEG-TS input format singleton.
+ * @group Input formats
+ * @public
+ */
 export const MPEG_TS = /* #__PURE__ */ new MpegTsInputFormat();
 
 /**
