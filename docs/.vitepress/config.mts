@@ -91,7 +91,8 @@ export default withMermaid({
 				},
 			],
 
-			'/api': apiRoutes,
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment
+			'/api': apiRoutes as any,
 		},
 
 		socialLinks: [
