@@ -90,7 +90,7 @@ export default withMermaid({
 					],
 				},
 			],
-			// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+
 			'/api': apiRoutes,
 		},
 
@@ -111,7 +111,7 @@ export default withMermaid({
 
 		footer: {
 			message: 'Released under the Mozilla Public License 2.0.',
-			copyright: 'Copyright © 2025-present Vanilagy',
+			copyright: 'Copyright © 2026-present Vanilagy',
 		},
 	},
 	markdown: {
