@@ -28,7 +28,7 @@ import {
 	concatNalUnitsInLengthPrefixed,
 	extractAvcDecoderConfigurationRecord,
 	extractHevcDecoderConfigurationRecord,
-	findNalUnitsInAnnexB,
+	iterateNalUnitsInAnnexB,
 	serializeAvcDecoderConfigurationRecord,
 	serializeHevcDecoderConfigurationRecord,
 } from '../codec-data';
@@ -465,7 +465,8 @@ export class IsobmffMuxer extends Muxer {
 
 			let packetData = packet.data;
 			if (trackData.info.requiresAnnexBTransformation) {
-				const nalUnits = findNalUnitsInAnnexB(packetData);
+				const nalUnits = [...iterateNalUnitsInAnnexB(packetData)]
+					.map(loc => packetData.subarray(loc.offset, loc.offset + loc.length));
 				if (nalUnits.length === 0) {
 					// It's not valid Annex B data
 					throw new Error(

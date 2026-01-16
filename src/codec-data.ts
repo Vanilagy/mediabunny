@@ -36,6 +36,10 @@ import { MetadataTags } from './metadata';
 // https://stackoverflow.com/questions/24884827
 
 export enum AvcNalUnitType {
+	NON_IDR_SLICE = 1,
+	SLICE_DPA = 2,
+	SLICE_DPB = 3,
+	SLICE_DPC = 4,
 	IDR = 5,
 	SEI = 6,
 	SPS = 7,
@@ -57,68 +61,68 @@ export enum HevcNalUnitType {
 	SUFFIX_SEI_NUT = 40,
 }
 
-/** Finds all NAL units in an AVC packet in Annex B format. */
-export const findNalUnitsInAnnexB = (packetData: Uint8Array) => {
-	const nalUnits: Uint8Array[] = [];
-	let i = 0;
-
-	while (i < packetData.length) {
-		let startCodePos = -1;
-		let startCodeLength = 0;
-
-		for (let j = i; j < packetData.length - 3; j++) {
-			// Check for 3-byte start code (0x000001)
-			if (packetData[j] === 0 && packetData[j + 1] === 0 && packetData[j + 2] === 1) {
-				startCodePos = j;
-				startCodeLength = 3;
-				break;
-			}
-
-			// Check for 4-byte start code (0x00000001)
-			if (
-				j < packetData.length - 4
-				&& packetData[j] === 0
-				&& packetData[j + 1] === 0
-				&& packetData[j + 2] === 0
-				&& packetData[j + 3] === 1
-			) {
-				startCodePos = j;
-				startCodeLength = 4;
-				break;
-			}
-		}
-
-		if (startCodePos === -1) {
-			break; // No more start codes found
-		}
-
-		// If this isn't the first start code, extract the previous NAL unit
-		if (i > 0 && startCodePos > i) {
-			const nalData = packetData.subarray(i, startCodePos);
-			if (nalData.length > 0) {
-				nalUnits.push(nalData);
-			}
-		}
-
-		i = startCodePos + startCodeLength;
-	}
-
-	// Extract the last NAL unit if there is one
-	if (i < packetData.length) {
-		const nalData = packetData.subarray(i);
-		if (nalData.length > 0) {
-			nalUnits.push(nalData);
-		}
-	}
-
-	return nalUnits;
+export type NalUnitLocation = {
+	offset: number;
+	length: number;
 };
 
-/** Finds all NAL units in an AVC packet in length-prefixed format. */
-const findNalUnitsInLengthPrefixed = (packetData: Uint8Array, lengthSize: 1 | 2 | 3 | 4) => {
-	const nalUnits: Uint8Array[] = [];
-	let offset = 0;
+export const iterateNalUnitsInAnnexB = function* (packetData: Uint8Array): Generator<NalUnitLocation> {
+	let i = 0;
+	let nalStart = -1;
 
+	while (i < packetData.length - 2) {
+		const zeroIndex = packetData.indexOf(0, i);
+		if (zeroIndex === -1 || zeroIndex >= packetData.length - 2) {
+			break;
+		}
+		i = zeroIndex;
+
+		let startCodeLength = 0;
+
+		// Check for 4-byte start code (0x00000001)
+		if (
+			i + 3 < packetData.length
+			&& packetData[i + 1] === 0
+			&& packetData[i + 2] === 0
+			&& packetData[i + 3] === 1
+		) {
+			startCodeLength = 4;
+		} else if (packetData[i + 1] === 0 && packetData[i + 2] === 1) {
+			// Check for 3-byte start code (0x000001)
+			startCodeLength = 3;
+		}
+
+		if (startCodeLength === 0) {
+			i++;
+			continue;
+		}
+
+		// If we had a previous NAL unit, yield it
+		if (nalStart !== -1 && i > nalStart) {
+			yield {
+				offset: nalStart,
+				length: i - nalStart,
+			};
+		}
+
+		nalStart = i + startCodeLength;
+		i = nalStart;
+	}
+
+	// Yield the last NAL unit if there is one
+	if (nalStart !== -1 && nalStart < packetData.length) {
+		yield {
+			offset: nalStart,
+			length: packetData.length - nalStart,
+		};
+	}
+};
+
+const iterateNalUnitsInLengthPrefixed = function* (
+	packetData: Uint8Array,
+	lengthSize: 1 | 2 | 3 | 4,
+): Generator<NalUnitLocation> {
+	let offset = 0;
 	const dataView = new DataView(packetData.buffer, packetData.byteOffset, packetData.byteLength);
 
 	while (offset + lengthSize <= packetData.length) {
@@ -129,22 +133,40 @@ const findNalUnitsInLengthPrefixed = (packetData: Uint8Array, lengthSize: 1 | 2 
 			nalUnitLength = dataView.getUint16(offset, false);
 		} else if (lengthSize === 3) {
 			nalUnitLength = getUint24(dataView, offset, false);
-		} else if (lengthSize === 4) {
-			nalUnitLength = dataView.getUint32(offset, false);
 		} else {
-			assertNever(lengthSize);
-			assert(false);
+			assert(lengthSize === 4);
+			nalUnitLength = dataView.getUint32(offset, false);
 		}
 
 		offset += lengthSize;
 
-		const nalUnit = packetData.subarray(offset, offset + nalUnitLength);
-		nalUnits.push(nalUnit);
+		yield {
+			offset,
+			length: nalUnitLength,
+		};
 
 		offset += nalUnitLength;
 	}
+};
 
-	return nalUnits;
+export const iterateAvcNalUnits = (packetData: Uint8Array, decoderConfig: VideoDecoderConfig) => {
+	if (decoderConfig.description) {
+		const bytes = toUint8Array(decoderConfig.description);
+		const lengthSizeMinusOne = bytes[4]! & 0b11;
+		const lengthSize = (lengthSizeMinusOne + 1) as 1 | 2 | 3 | 4;
+
+		return iterateNalUnitsInLengthPrefixed(packetData, lengthSize);
+	} else {
+		return iterateNalUnitsInAnnexB(packetData);
+	}
+};
+
+export const iterateAvcNalUnitsAnnexB = function* (packetData: Uint8Array): Generator<NalUnitLocation> {
+	yield* iterateNalUnitsInAnnexB(packetData);
+};
+
+export const extractNalUnitTypeForAvc = (byte: number) => {
+	return byte & 0x1F;
 };
 
 const removeEmulationPreventionBytes = (data: Uint8Array) => {
@@ -231,21 +253,6 @@ export type AvcDecoderConfigurationRecord = {
 	sequenceParameterSetExt: Uint8Array[] | null;
 };
 
-export const extractAvcNalUnits = (packetData: Uint8Array, decoderConfig: VideoDecoderConfig) => {
-	if (decoderConfig.description) {
-		// Stream is length-prefixed. Let's extract the size of the length prefix from the decoder config
-
-		const bytes = toUint8Array(decoderConfig.description);
-		const lengthSizeMinusOne = bytes[4]! & 0b11;
-		const lengthSize = (lengthSizeMinusOne + 1) as 1 | 2 | 3 | 4;
-
-		return findNalUnitsInLengthPrefixed(packetData, lengthSize);
-	} else {
-		// Stream is in Annex B format
-		return findNalUnitsInAnnexB(packetData);
-	}
-};
-
 export const concatAvcNalUnits = (nalUnits: Uint8Array[], decoderConfig: VideoDecoderConfig) => {
 	if (decoderConfig.description) {
 		// Stream is length-prefixed. Let's extract the size of the length prefix from the decoder config
@@ -261,18 +268,25 @@ export const concatAvcNalUnits = (nalUnits: Uint8Array[], decoderConfig: VideoDe
 	}
 };
 
-export const extractNalUnitTypeForAvc = (data: Uint8Array) => {
-	return data[0]! & 0x1F;
-};
-
 /** Builds an AvcDecoderConfigurationRecord from an AVC packet in Annex B format. */
 export const extractAvcDecoderConfigurationRecord = (packetData: Uint8Array): AvcDecoderConfigurationRecord | null => {
 	try {
-		const nalUnits = findNalUnitsInAnnexB(packetData);
+		const spsUnits: Uint8Array[] = [];
+		const ppsUnits: Uint8Array[] = [];
+		const spsExtUnits: Uint8Array[] = [];
 
-		const spsUnits = nalUnits.filter(unit => extractNalUnitTypeForAvc(unit) === AvcNalUnitType.SPS);
-		const ppsUnits = nalUnits.filter(unit => extractNalUnitTypeForAvc(unit) === AvcNalUnitType.PPS);
-		const spsExtUnits = nalUnits.filter(unit => extractNalUnitTypeForAvc(unit) === AvcNalUnitType.SPS_EXT);
+		for (const loc of iterateAvcNalUnitsAnnexB(packetData)) {
+			const nalUnit = packetData.subarray(loc.offset, loc.offset + loc.length);
+			const type = extractNalUnitTypeForAvc(nalUnit[0]!);
+
+			if (type === AvcNalUnitType.SPS) {
+				spsUnits.push(nalUnit);
+			} else if (type === AvcNalUnitType.PPS) {
+				ppsUnits.push(nalUnit);
+			} else if (type === AvcNalUnitType.SPS_EXT) {
+				spsExtUnits.push(nalUnit);
+			}
+		}
 
 		if (spsUnits.length === 0) {
 			return null;
@@ -823,23 +837,24 @@ export type HevcSpsInfo = {
 	minSpatialSegmentationIdc: number;
 };
 
-export const extractHevcNalUnits = (packetData: Uint8Array, decoderConfig: VideoDecoderConfig) => {
+export const iterateHevcNalUnits = (packetData: Uint8Array, decoderConfig: VideoDecoderConfig) => {
 	if (decoderConfig.description) {
-		// Stream is length-prefixed. Let's extract the size of the length prefix from the decoder config
-
 		const bytes = toUint8Array(decoderConfig.description);
 		const lengthSizeMinusOne = bytes[21]! & 0b11;
 		const lengthSize = (lengthSizeMinusOne + 1) as 1 | 2 | 3 | 4;
 
-		return findNalUnitsInLengthPrefixed(packetData, lengthSize);
+		return iterateNalUnitsInLengthPrefixed(packetData, lengthSize);
 	} else {
-		// Stream is in Annex B format
-		return findNalUnitsInAnnexB(packetData);
+		return iterateNalUnitsInAnnexB(packetData);
 	}
 };
 
-export const extractNalUnitTypeForHevc = (data: Uint8Array) => {
-	return (data[0]! >> 1) & 0x3F;
+export const iterateHevcNalUnitsAnnexB = function* (packetData: Uint8Array): Generator<NalUnitLocation> {
+	yield* iterateNalUnitsInAnnexB(packetData);
+};
+
+export const extractNalUnitTypeForHevc = (byte: number) => {
+	return (byte >> 1) & 0x3F;
 };
 
 /** Parses an HEVC SPS (Sequence Parameter Set) to extract video information. */
@@ -994,15 +1009,25 @@ export const parseHevcSps = (sps: Uint8Array): HevcSpsInfo | null => {
 /** Builds a HevcDecoderConfigurationRecord from an HEVC packet in Annex B format. */
 export const extractHevcDecoderConfigurationRecord = (packetData: Uint8Array) => {
 	try {
-		const nalUnits = findNalUnitsInAnnexB(packetData);
+		const vpsUnits: Uint8Array[] = [];
+		const spsUnits: Uint8Array[] = [];
+		const ppsUnits: Uint8Array[] = [];
+		const seiUnits: Uint8Array[] = [];
 
-		const vpsUnits = nalUnits.filter(unit => extractNalUnitTypeForHevc(unit) === HevcNalUnitType.VPS_NUT);
-		const spsUnits = nalUnits.filter(unit => extractNalUnitTypeForHevc(unit) === HevcNalUnitType.SPS_NUT);
-		const ppsUnits = nalUnits.filter(unit => extractNalUnitTypeForHevc(unit) === HevcNalUnitType.PPS_NUT);
-		const seiUnits = nalUnits.filter(
-			unit => extractNalUnitTypeForHevc(unit) === HevcNalUnitType.PREFIX_SEI_NUT
-				|| extractNalUnitTypeForHevc(unit) === HevcNalUnitType.SUFFIX_SEI_NUT,
-		);
+		for (const loc of iterateHevcNalUnitsAnnexB(packetData)) {
+			const nalUnit = packetData.subarray(loc.offset, loc.offset + loc.length);
+			const type = extractNalUnitTypeForHevc(nalUnit[0]!);
+
+			if (type === HevcNalUnitType.VPS_NUT) {
+				vpsUnits.push(nalUnit);
+			} else if (type === HevcNalUnitType.SPS_NUT) {
+				spsUnits.push(nalUnit);
+			} else if (type === HevcNalUnitType.PPS_NUT) {
+				ppsUnits.push(nalUnit);
+			} else if (type === HevcNalUnitType.PREFIX_SEI_NUT || type === HevcNalUnitType.SUFFIX_SEI_NUT) {
+				seiUnits.push(nalUnit);
+			}
+		}
 
 		if (spsUnits.length === 0 || ppsUnits.length === 0) return null;
 
@@ -1078,7 +1103,7 @@ export const extractHevcDecoderConfigurationRecord = (packetData: Uint8Array) =>
 				? [
 						{
 							arrayCompleteness: 1,
-							nalUnitType: extractNalUnitTypeForHevc(seiUnits[0]!),
+							nalUnitType: extractNalUnitTypeForHevc(seiUnits[0]![0]!),
 							nalUnits: seiUnits,
 						},
 					]
@@ -2041,20 +2066,23 @@ export const determineVideoPacketType = (
 ): PacketType | null => {
 	switch (codec) {
 		case 'avc': {
-			const nalUnits = extractAvcNalUnits(packetData, decoderConfig);
-			let isKeyframe = nalUnits.some(x => extractNalUnitTypeForAvc(x) === AvcNalUnitType.IDR);
+			for (const loc of iterateAvcNalUnits(packetData, decoderConfig)) {
+				const nalTypeByte = packetData[loc.offset]!;
+				const type = extractNalUnitTypeForAvc(nalTypeByte);
 
-			if (!isKeyframe && (!isChromium() || getChromiumVersion()! >= 144)) {
+				if (type >= AvcNalUnitType.NON_IDR_SLICE && type <= AvcNalUnitType.SLICE_DPC) {
+					return 'delta';
+				}
+
+				if (type === AvcNalUnitType.IDR) {
+					return 'key';
+				}
+
 				// In addition to IDR, Recovery Point SEI also counts as a valid H.264 keyframe by current consensus.
 				// See https://github.com/w3c/webcodecs/issues/650 for the relevant discussion. WebKit and Firefox have
 				// always supported them, but Chromium hasn't, therefore the (admittedly dirty) version check.
-
-				for (const nalUnit of nalUnits) {
-					const type = extractNalUnitTypeForAvc(nalUnit);
-					if (type !== AvcNalUnitType.SEI) {
-						continue;
-					}
-
+				if (type === AvcNalUnitType.SEI && (!isChromium() || getChromiumVersion()! >= 144)) {
+					const nalUnit = packetData.subarray(loc.offset, loc.offset + loc.length);
 					const bytes = removeEmulationPreventionBytes(nalUnit);
 					let pos = 1; // Skip NALU header
 
@@ -2095,8 +2123,7 @@ export const determineVideoPacketType = (
 							if (recoveryFrameCount === 0 && exactMatchFlag === 1) {
 								// https://github.com/w3c/webcodecs/pull/910
 								// "recovery_frame_cnt == 0 and exact_match_flag=1 in the SEI recovery payload"
-								isKeyframe = true;
-								break;
+								return 'key';
 							}
 						}
 
@@ -2105,17 +2132,22 @@ export const determineVideoPacketType = (
 				}
 			}
 
-			return isKeyframe ? 'key' : 'delta';
+			return 'delta';
 		};
 
 		case 'hevc': {
-			const nalUnits = extractHevcNalUnits(packetData, decoderConfig);
-			const isKeyframe = nalUnits.some((x) => {
-				const type = extractNalUnitTypeForHevc(x);
-				return HevcNalUnitType.BLA_W_LP <= type && type <= HevcNalUnitType.RSV_IRAP_VCL23;
-			});
+			for (const loc of iterateHevcNalUnits(packetData, decoderConfig)) {
+				const type = extractNalUnitTypeForHevc(packetData[loc.offset]!);
+				if (type < HevcNalUnitType.BLA_W_LP) {
+					return 'delta';
+				}
 
-			return isKeyframe ? 'key' : 'delta';
+				if (type <= HevcNalUnitType.RSV_IRAP_VCL23) {
+					return 'key';
+				}
+			}
+
+			return 'delta';
 		};
 
 		case 'vp8': {

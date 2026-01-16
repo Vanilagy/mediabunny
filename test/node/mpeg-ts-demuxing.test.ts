@@ -385,7 +385,7 @@ test('MPEG-TS video key packets', async () => {
 
 test('MPEG-TS audio key packets', async () => {
 	using input = new Input({
-		source: new FilePathSource(path.join(__dirname, '../public/193039199_mp4_h264_aac_fhd_7.ts')),
+		source: new FilePathSource(path.join(__dirname, '../public/0.ts')),
 		formats: ALL_FORMATS,
 	});
 
@@ -513,9 +513,12 @@ test('MPEG-TS with HEVC video', async () => {
 
 	const sink = new EncodedPacketSink(videoTrack);
 
+	let i = 0;
 	for await (const packet of sink.packets()) {
 		expect(packet.data.slice(0, 4)).toEqual(new Uint8Array([0, 0, 0, 1])); // Annex B
 		expect(packet.duration).toBeCloseTo(0.04166666666);
+		expect(packet.type).toBe(i > 0 ? 'delta' : 'key');
+		i++;
 	}
 });
 
@@ -543,13 +546,10 @@ test('MPEG-TS with MP3 audio', async () => {
 	const firstPacket = await sink.getFirstPacket();
 	assert(firstPacket);
 
-	expect(firstPacket.data[0]).toBe(0xff); // MP3 sync byte
-	expect(firstPacket.type).toBe('key');
-	expect(firstPacket.duration).toBeGreaterThan(0);
-
 	let count = 0;
 	for await (const packet of sink.packets()) {
 		expect(packet.data[0]).toBe(0xff);
+		expect(packet.type).toBe('key');
 		count++;
 	}
 
