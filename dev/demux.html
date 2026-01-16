@@ -14,11 +14,11 @@
 			source: new Mediabunny.BufferSource(await file.arrayBuffer()),
 		});
 
-		const track = await input.getPrimaryAudioTrack();
+		const track = await input.getPrimaryVideoTrack();
 		const sink = new Mediabunny.EncodedPacketSink(track);
 
 		for await (const packet of sink.packets()) {
-			console.log(packet.timestamp, packet.duration, packet.type);
+			//console.log(packet.timestamp, packet.duration, packet.type);
 		}
 
 		/*

@@ -638,10 +638,6 @@ const readPesPacketHeader = (section: Section): PesPacketHeader | null => {
 
 	bitstream.skipBits(14);
 
-	if (ptsDtsFlags !== 0b10 && ptsDtsFlags !== 0b11) {
-		return null; // Support only timestamped packets
-	}
-
 	let pts = 0;
 	if (ptsDtsFlags === 0b10 || ptsDtsFlags === 0b11) {
 		bitstream.skipBits(4);
@@ -651,7 +647,10 @@ const readPesPacketHeader = (section: Section): PesPacketHeader | null => {
 		bitstream.skipBits(1);
 		pts += bitstream.readBits(15);
 	} else {
-		return null; // Support only timestamped packets
+		throw new Error(
+			'PES packets without PTS are not currently supported. If you think this file should be supported,'
+			+ ' please report it.',
+		);
 	}
 
 	return {

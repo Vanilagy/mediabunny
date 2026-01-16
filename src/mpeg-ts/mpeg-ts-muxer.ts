@@ -52,6 +52,7 @@ type MpegTsTrackData = {
 	hevcDecoderConfig: HevcDecoderConfigurationRecord | null;
 	adtsHeader: Uint8Array | null;
 	adtsHeaderBitstream: Bitstream | null;
+	firstPacketWritten: boolean;
 };
 
 type QueuedPacket = {
@@ -128,6 +129,7 @@ export class MpegTsMuxer extends Muxer {
 			hevcDecoderConfig: null,
 			adtsHeader: null,
 			adtsHeaderBitstream: null,
+			firstPacketWritten: false,
 		};
 
 		this.trackDatas.push(newTrackData);
@@ -168,6 +170,7 @@ export class MpegTsMuxer extends Muxer {
 			hevcDecoderConfig: null,
 			adtsHeader: null,
 			adtsHeaderBitstream: null,
+			firstPacketWritten: false,
 		};
 
 		this.trackDatas.push(newTrackData);
@@ -518,18 +521,19 @@ export class MpegTsMuxer extends Muxer {
 
 		const totalLength = this.pesHeaderBuffer.length + queuedPacket.data.length;
 		let offset = 0;
-		let isFirst = true;
+		let isFirstTsPacket = true;
 
 		while (offset < totalLength) {
-			const pusi = isFirst;
+			const pusi = isFirstTsPacket;
 			const remainingData = totalLength - offset;
 
-			const needsRandomAccessIndicator = isFirst && queuedPacket.isKeyframe;
+			const randomAccessIndicator = isFirstTsPacket && queuedPacket.isKeyframe;
+			const discontinuityIndicator = isFirstTsPacket && !trackData.firstPacketWritten;
 			const basePaddingNeeded = Math.max(0, 184 - remainingData);
 
 			let adaptationFieldSize: number;
-			if (needsRandomAccessIndicator) {
-				// Random access indicator requires at least 2 bytes
+			if (randomAccessIndicator || discontinuityIndicator) {
+				// We need at least two bytes
 				adaptationFieldSize = Math.max(2, basePaddingNeeded);
 			} else {
 				adaptationFieldSize = basePaddingNeeded;
@@ -543,7 +547,9 @@ export class MpegTsMuxer extends Muxer {
 					buf[0] = 0; // adaptation_field_length
 				} else {
 					buf[0] = adaptationFieldSize - 1; // adaptation_field_length
-					buf[1] = Number(needsRandomAccessIndicator) << 6; // flags (random_access_indicator in bit 6)
+					buf[1]
+						= (Number(discontinuityIndicator) << 7) // discontinuity_indicator
+							| (Number(randomAccessIndicator) << 6); // random_access_indicator
 					buf.fill(0xFF, 2, adaptationFieldSize); // stuffing_bytes
 				}
 
@@ -569,8 +575,10 @@ export class MpegTsMuxer extends Muxer {
 			this.writeTsPacket(trackData.pid, pusi, adaptationField, payload);
 
 			offset += payloadSize;
-			isFirst = false;
+			isFirstTsPacket = false;
 		}
+
+		trackData.firstPacketWritten = true;
 	}
 
 	private writeTsPacket(
