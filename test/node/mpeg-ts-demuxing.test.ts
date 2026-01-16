@@ -482,3 +482,39 @@ test('MPEG-TS transmuxed by FFmpeg', async () => {
 	expect(videoPacketStats.packetCount).toBe(121);
 	expect(audioPacketStats.packetCount).toBe(235);
 });
+
+test.only('MPEG-TS with HEVC video', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/hevc.ts')),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	expect(videoTrack.codec).toBe('hevc');
+	expect(videoTrack.internalCodecId).toBe(0x24);
+	expect(videoTrack.displayWidth).toBe(1920);
+	expect(videoTrack.displayHeight).toBe(1080);
+
+	const videoDecoderConfig = await videoTrack.getDecoderConfig();
+	expect(videoDecoderConfig).toEqual({
+		codec: 'hev1.1.6.L120.90',
+		codedWidth: 1920,
+		codedHeight: 1080,
+		colorSpace: {
+			primaries: 'bt709',
+			transfer: 'bt709',
+			matrix: 'bt709',
+			fullRange: false,
+		},
+		// No description, it's Annex B
+	});
+
+	const sink = new EncodedPacketSink(videoTrack);
+
+	for await (const packet of sink.packets()) {
+		expect(packet.data.slice(0, 4)).toEqual(new Uint8Array([0, 0, 0, 1])); // Annex B
+		expect(packet.duration).toBeCloseTo(0.04166666666);
+	}
+});

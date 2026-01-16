@@ -52,6 +52,7 @@ export enum HevcNalUnitType {
 	VPS_NUT = 32,
 	SPS_NUT = 33,
 	PPS_NUT = 34,
+	AUD_NUT = 35,
 	PREFIX_SEI_NUT = 39,
 	SUFFIX_SEI_NUT = 40,
 }
@@ -800,6 +801,28 @@ export type HevcDecoderConfigurationRecord = {
 	}[];
 };
 
+export type HevcSpsInfo = {
+	displayWidth: number;
+	displayHeight: number;
+	colourPrimaries: number;
+	transferCharacteristics: number;
+	matrixCoefficients: number;
+	fullRangeFlag: number;
+	maxDecFrameBuffering: number;
+	spsMaxSubLayersMinus1: number;
+	spsTemporalIdNestingFlag: number;
+	generalProfileSpace: number;
+	generalTierFlag: number;
+	generalProfileIdc: number;
+	generalProfileCompatibilityFlags: number;
+	generalConstraintIndicatorFlags: Uint8Array;
+	generalLevelIdc: number;
+	chromaFormatIdc: number;
+	bitDepthLumaMinus8: number;
+	bitDepthChromaMinus8: number;
+	minSpatialSegmentationIdc: number;
+};
+
 export const extractHevcNalUnits = (packetData: Uint8Array, decoderConfig: VideoDecoderConfig) => {
 	if (decoderConfig.description) {
 		// Stream is length-prefixed. Let's extract the size of the length prefix from the decoder config
@@ -819,29 +842,16 @@ export const extractNalUnitTypeForHevc = (data: Uint8Array) => {
 	return (data[0]! >> 1) & 0x3F;
 };
 
-/** Builds a HevcDecoderConfigurationRecord from an HEVC packet in Annex B format. */
-export const extractHevcDecoderConfigurationRecord = (packetData: Uint8Array) => {
+/** Parses an HEVC SPS (Sequence Parameter Set) to extract video information. */
+export const parseHevcSps = (sps: Uint8Array): HevcSpsInfo | null => {
 	try {
-		const nalUnits = findNalUnitsInAnnexB(packetData);
-
-		const vpsUnits = nalUnits.filter(unit => extractNalUnitTypeForHevc(unit) === HevcNalUnitType.VPS_NUT);
-		const spsUnits = nalUnits.filter(unit => extractNalUnitTypeForHevc(unit) === HevcNalUnitType.SPS_NUT);
-		const ppsUnits = nalUnits.filter(unit => extractNalUnitTypeForHevc(unit) === HevcNalUnitType.PPS_NUT);
-		const seiUnits = nalUnits.filter(
-			unit => extractNalUnitTypeForHevc(unit) === HevcNalUnitType.PREFIX_SEI_NUT
-				|| extractNalUnitTypeForHevc(unit) === HevcNalUnitType.SUFFIX_SEI_NUT,
-		);
-
-		if (spsUnits.length === 0 || ppsUnits.length === 0) return null;
-
-		const sps = spsUnits[0]!;
 		const bitstream = new Bitstream(removeEmulationPreventionBytes(sps));
 
 		bitstream.skipBits(16); // NAL header
 
 		bitstream.readBits(4); // sps_video_parameter_set_id
-		const sps_max_sub_layers_minus1 = bitstream.readBits(3);
-		const sps_temporal_id_nesting_flag = bitstream.readBits(1);
+		const spsMaxSubLayersMinus1 = bitstream.readBits(3);
+		const spsTemporalIdNestingFlag = bitstream.readBits(1);
 
 		const {
 			general_profile_space,
@@ -850,33 +860,54 @@ export const extractHevcDecoderConfigurationRecord = (packetData: Uint8Array) =>
 			general_profile_compatibility_flags,
 			general_constraint_indicator_flags,
 			general_level_idc,
-		} = parseProfileTierLevel(bitstream, sps_max_sub_layers_minus1);
+		} = parseProfileTierLevel(bitstream, spsMaxSubLayersMinus1);
 
 		readExpGolomb(bitstream); // sps_seq_parameter_set_id
 
-		const chroma_format_idc = readExpGolomb(bitstream);
-		if (chroma_format_idc === 3) bitstream.skipBits(1); // separate_colour_plane_flag
-
-		readExpGolomb(bitstream); // pic_width_in_luma_samples
-		readExpGolomb(bitstream); // pic_height_in_luma_samples
-
-		if (bitstream.readBits(1)) { // conformance_window_flag
-			readExpGolomb(bitstream); // conf_win_left_offset
-			readExpGolomb(bitstream); // conf_win_right_offset
-			readExpGolomb(bitstream); // conf_win_top_offset
-			readExpGolomb(bitstream); // conf_win_bottom_offset
+		const chromaFormatIdc = readExpGolomb(bitstream);
+		let separateColourPlaneFlag = 0;
+		if (chromaFormatIdc === 3) {
+			separateColourPlaneFlag = bitstream.readBits(1);
 		}
 
-		const bit_depth_luma_minus8 = readExpGolomb(bitstream);
-		const bit_depth_chroma_minus8 = readExpGolomb(bitstream);
+		const picWidthInLumaSamples = readExpGolomb(bitstream);
+		const picHeightInLumaSamples = readExpGolomb(bitstream);
 
+		let displayWidth = picWidthInLumaSamples;
+		let displayHeight = picHeightInLumaSamples;
+
+		if (bitstream.readBits(1)) { // conformance_window_flag
+			const confWinLeftOffset = readExpGolomb(bitstream);
+			const confWinRightOffset = readExpGolomb(bitstream);
+			const confWinTopOffset = readExpGolomb(bitstream);
+			const confWinBottomOffset = readExpGolomb(bitstream);
+
+			// SubWidthC and SubHeightC depend on chroma_format_idc and separate_colour_plane_flag
+			let subWidthC = 1;
+			let subHeightC = 1;
+			const chromaArrayType = separateColourPlaneFlag === 0 ? chromaFormatIdc : 0;
+			if (chromaArrayType === 1) {
+				subWidthC = 2;
+				subHeightC = 2;
+			} else if (chromaArrayType === 2) {
+				subWidthC = 2;
+				subHeightC = 1;
+			}
+
+			displayWidth -= (confWinLeftOffset + confWinRightOffset) * subWidthC;
+			displayHeight -= (confWinTopOffset + confWinBottomOffset) * subHeightC;
+		}
+
+		const bitDepthLumaMinus8 = readExpGolomb(bitstream);
+		const bitDepthChromaMinus8 = readExpGolomb(bitstream);
 		readExpGolomb(bitstream); // log2_max_pic_order_cnt_lsb_minus4
 
-		const sps_sub_layer_ordering_info_present_flag = bitstream.readBits(1);
-		const maxNum = sps_sub_layer_ordering_info_present_flag ? 0 : sps_max_sub_layers_minus1;
-		for (let i = maxNum; i <= sps_max_sub_layers_minus1; i++) {
+		const spsSubLayerOrderingInfoPresentFlag = bitstream.readBits(1);
+		const startI = spsSubLayerOrderingInfoPresentFlag ? 0 : spsMaxSubLayersMinus1;
+		let spsMaxNumReorderPics = 0;
+		for (let i = startI; i <= spsMaxSubLayersMinus1; i++) {
 			readExpGolomb(bitstream); // sps_max_dec_pic_buffering_minus1[i]
-			readExpGolomb(bitstream); // sps_max_num_reorder_pics[i]
+			spsMaxNumReorderPics = readExpGolomb(bitstream); // sps_max_num_reorder_pics[i]
 			readExpGolomb(bitstream); // sps_max_latency_increase_plus1[i]
 		}
 
@@ -904,12 +935,12 @@ export const extractHevcDecoderConfigurationRecord = (packetData: Uint8Array) =>
 			bitstream.skipBits(1); // pcm_loop_filter_disabled_flag
 		}
 
-		const num_short_term_ref_pic_sets = readExpGolomb(bitstream);
-		skipAllStRefPicSets(bitstream, num_short_term_ref_pic_sets);
+		const numShortTermRefPicSets = readExpGolomb(bitstream);
+		skipAllStRefPicSets(bitstream, numShortTermRefPicSets);
 
 		if (bitstream.readBits(1)) { // long_term_ref_pics_present_flag
-			const num_long_term_ref_pics_sps = readExpGolomb(bitstream);
-			for (let i = 0; i < num_long_term_ref_pics_sps; i++) {
+			const numLongTermRefPicsSps = readExpGolomb(bitstream);
+			for (let i = 0; i < numLongTermRefPicsSps; i++) {
 				readExpGolomb(bitstream); // lt_ref_pic_poc_lsb_sps[i]
 				bitstream.skipBits(1); // used_by_curr_pic_lt_sps_flag[i]
 			}
@@ -918,10 +949,65 @@ export const extractHevcDecoderConfigurationRecord = (packetData: Uint8Array) =>
 		bitstream.skipBits(1); // sps_temporal_mvp_enabled_flag
 		bitstream.skipBits(1); // strong_intra_smoothing_enabled_flag
 
-		let min_spatial_segmentation_idc = 0;
+		let colourPrimaries = 2;
+		let transferCharacteristics = 2;
+		let matrixCoefficients = 2;
+		let fullRangeFlag = 0;
+		let minSpatialSegmentationIdc = 0;
+
 		if (bitstream.readBits(1)) { // vui_parameters_present_flag
-			min_spatial_segmentation_idc = parseVuiForMinSpatialSegmentationIdc(bitstream, sps_max_sub_layers_minus1);
+			const vui = parseHevcVui(bitstream, spsMaxSubLayersMinus1);
+			colourPrimaries = vui.colourPrimaries;
+			transferCharacteristics = vui.transferCharacteristics;
+			matrixCoefficients = vui.matrixCoefficients;
+			fullRangeFlag = vui.fullRangeFlag;
+			minSpatialSegmentationIdc = vui.minSpatialSegmentationIdc;
 		}
+
+		return {
+			displayWidth,
+			displayHeight,
+			colourPrimaries,
+			transferCharacteristics,
+			matrixCoefficients,
+			fullRangeFlag,
+			maxDecFrameBuffering: spsMaxNumReorderPics + 1,
+			spsMaxSubLayersMinus1,
+			spsTemporalIdNestingFlag,
+			generalProfileSpace: general_profile_space,
+			generalTierFlag: general_tier_flag,
+			generalProfileIdc: general_profile_idc,
+			generalProfileCompatibilityFlags: general_profile_compatibility_flags,
+			generalConstraintIndicatorFlags: general_constraint_indicator_flags,
+			generalLevelIdc: general_level_idc,
+			chromaFormatIdc,
+			bitDepthLumaMinus8,
+			bitDepthChromaMinus8,
+			minSpatialSegmentationIdc,
+		};
+	} catch (error) {
+		console.error('Error parsing HEVC SPS:', error);
+		return null;
+	}
+};
+
+/** Builds a HevcDecoderConfigurationRecord from an HEVC packet in Annex B format. */
+export const extractHevcDecoderConfigurationRecord = (packetData: Uint8Array) => {
+	try {
+		const nalUnits = findNalUnitsInAnnexB(packetData);
+
+		const vpsUnits = nalUnits.filter(unit => extractNalUnitTypeForHevc(unit) === HevcNalUnitType.VPS_NUT);
+		const spsUnits = nalUnits.filter(unit => extractNalUnitTypeForHevc(unit) === HevcNalUnitType.SPS_NUT);
+		const ppsUnits = nalUnits.filter(unit => extractNalUnitTypeForHevc(unit) === HevcNalUnitType.PPS_NUT);
+		const seiUnits = nalUnits.filter(
+			unit => extractNalUnitTypeForHevc(unit) === HevcNalUnitType.PREFIX_SEI_NUT
+				|| extractNalUnitTypeForHevc(unit) === HevcNalUnitType.SUFFIX_SEI_NUT,
+		);
+
+		if (spsUnits.length === 0 || ppsUnits.length === 0) return null;
+
+		const spsInfo = parseHevcSps(spsUnits[0]!);
+		if (!spsInfo) return null;
 
 		// Parse PPS for parallelismType
 		let parallelismType = 0;
@@ -1001,21 +1087,21 @@ export const extractHevcDecoderConfigurationRecord = (packetData: Uint8Array) =>
 
 		const record: HevcDecoderConfigurationRecord = {
 			configurationVersion: 1,
-			generalProfileSpace: general_profile_space,
-			generalTierFlag: general_tier_flag,
-			generalProfileIdc: general_profile_idc,
-			generalProfileCompatibilityFlags: general_profile_compatibility_flags,
-			generalConstraintIndicatorFlags: general_constraint_indicator_flags,
-			generalLevelIdc: general_level_idc,
-			minSpatialSegmentationIdc: min_spatial_segmentation_idc,
+			generalProfileSpace: spsInfo.generalProfileSpace,
+			generalTierFlag: spsInfo.generalTierFlag,
+			generalProfileIdc: spsInfo.generalProfileIdc,
+			generalProfileCompatibilityFlags: spsInfo.generalProfileCompatibilityFlags,
+			generalConstraintIndicatorFlags: spsInfo.generalConstraintIndicatorFlags,
+			generalLevelIdc: spsInfo.generalLevelIdc,
+			minSpatialSegmentationIdc: spsInfo.minSpatialSegmentationIdc,
 			parallelismType,
-			chromaFormatIdc: chroma_format_idc,
-			bitDepthLumaMinus8: bit_depth_luma_minus8,
-			bitDepthChromaMinus8: bit_depth_chroma_minus8,
+			chromaFormatIdc: spsInfo.chromaFormatIdc,
+			bitDepthLumaMinus8: spsInfo.bitDepthLumaMinus8,
+			bitDepthChromaMinus8: spsInfo.bitDepthChromaMinus8,
 			avgFrameRate: 0,
 			constantFrameRate: 0,
-			numTemporalLayers: sps_max_sub_layers_minus1 + 1,
-			temporalIdNested: sps_temporal_id_nesting_flag,
+			numTemporalLayers: spsInfo.spsMaxSubLayersMinus1 + 1,
+			temporalIdNested: spsInfo.spsTemporalIdNestingFlag,
 			lengthSizeMinusOne: 3,
 			arrays,
 		};
@@ -1148,7 +1234,14 @@ const skipStRefPicSet = (
 	return NumDeltaPocsThis;
 };
 
-const parseVuiForMinSpatialSegmentationIdc = (bitstream: Bitstream, sps_max_sub_layers_minus1: number) => {
+const parseHevcVui = (bitstream: Bitstream, sps_max_sub_layers_minus1: number) => {
+	// Defaults: 2 = unspecified
+	let colourPrimaries = 2;
+	let transferCharacteristics = 2;
+	let matrixCoefficients = 2;
+	let fullRangeFlag = 0;
+	let minSpatialSegmentationIdc = 0;
+
 	if (bitstream.readBits(1)) { // aspect_ratio_info_present_flag
 		const aspect_ratio_idc = bitstream.readBits(8);
 		if (aspect_ratio_idc === 255) {
@@ -1161,11 +1254,11 @@ const parseVuiForMinSpatialSegmentationIdc = (bitstream: Bitstream, sps_max_sub_
 	}
 	if (bitstream.readBits(1)) { // video_signal_type_present_flag
 		bitstream.readBits(3); // video_format
-		bitstream.readBits(1); // video_full_range_flag
-		if (bitstream.readBits(1)) {
-			bitstream.readBits(8); // colour_primaries
-			bitstream.readBits(8); // transfer_characteristics
-			bitstream.readBits(8); // matrix_coeffs
+		fullRangeFlag = bitstream.readBits(1);
+		if (bitstream.readBits(1)) { // colour_description_present_flag
+			colourPrimaries = bitstream.readBits(8);
+			transferCharacteristics = bitstream.readBits(8);
+			matrixCoefficients = bitstream.readBits(8);
 		}
 	}
 	if (bitstream.readBits(1)) { // chroma_loc_info_present_flag
@@ -1195,15 +1288,20 @@ const parseVuiForMinSpatialSegmentationIdc = (bitstream: Bitstream, sps_max_sub_
 		bitstream.readBits(1); // tiles_fixed_structure_flag
 		bitstream.readBits(1); // motion_vectors_over_pic_boundaries_flag
 		bitstream.readBits(1); // restricted_ref_pic_lists_flag
-		const min_spatial_segmentation_idc = readExpGolomb(bitstream);
-		// skip the rest
+		minSpatialSegmentationIdc = readExpGolomb(bitstream);
 		readExpGolomb(bitstream); // max_bytes_per_pic_denom
 		readExpGolomb(bitstream); // max_bits_per_min_cu_denom
 		readExpGolomb(bitstream); // log2_max_mv_length_horizontal
 		readExpGolomb(bitstream); // log2_max_mv_length_vertical
-		return min_spatial_segmentation_idc;
 	}
-	return 0;
+
+	return {
+		colourPrimaries,
+		transferCharacteristics,
+		matrixCoefficients,
+		fullRangeFlag,
+		minSpatialSegmentationIdc,
+	};
 };
 
 const skipHevcHrdParameters = (

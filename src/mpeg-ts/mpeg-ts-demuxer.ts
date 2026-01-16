@@ -15,9 +15,13 @@ import {
 	AvcNalUnitType,
 	determineVideoPacketType,
 	extractAvcDecoderConfigurationRecord,
+	extractHevcDecoderConfigurationRecord,
 	extractNalUnitTypeForAvc,
-	findNalUnitsInAnnexB,
+	extractNalUnitTypeForHevc,
+	HevcDecoderConfigurationRecord,
+	HevcNalUnitType,
 	parseAvcSps,
+	parseHevcSps,
 } from '../codec-data';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
@@ -63,6 +67,7 @@ type ElementaryStream = {
 		type: 'video';
 		codec: VideoCodec;
 		avcCodecInfo: AvcDecoderConfigurationRecord | null;
+		hevcCodecInfo: HevcDecoderConfigurationRecord | null;
 		colorSpace: VideoColorSpaceInit;
 		width: number;
 		height: number;
@@ -223,11 +228,15 @@ export class MpegTsDemuxer extends Demuxer {
 								};
 							}; break;
 
-							case 0x1b: {
+							case 0x1b:
+							case 0x24: {
+								const codec = streamType === 0x1b ? 'avc' : 'hevc';
+
 								info = {
 									type: 'video',
-									codec: 'avc',
+									codec: codec,
 									avcCodecInfo: null,
+									hevcCodecInfo: null,
 									colorSpace: {
 										primaries: null,
 										transfer: null,
@@ -278,8 +287,8 @@ export class MpegTsDemuxer extends Demuxer {
 									);
 								}
 
-								const nalUnits = findNalUnitsInAnnexB(pesPacket.data);
-								const spsUnit = nalUnits.find(x => extractNalUnitTypeForAvc(x) === AvcNalUnitType.SPS)!;
+								const spsUnit = elementaryStream.info.avcCodecInfo.sequenceParameterSets[0];
+								assert(spsUnit);
 								const spsInfo = parseAvcSps(spsUnit)!;
 
 								elementaryStream.info.width = spsInfo.displayWidth;
@@ -296,6 +305,40 @@ export class MpegTsDemuxer extends Demuxer {
 								elementaryStream.info.reorderSize = spsInfo.maxDecFrameBuffering;
 
 								elementaryStream.initialized = true;
+							} else if (elementaryStream.info.codec === 'hevc') {
+								elementaryStream.info.hevcCodecInfo
+									= extractHevcDecoderConfigurationRecord(pesPacket.data);
+
+								if (!elementaryStream.info.hevcCodecInfo) {
+									throw new Error(
+										'Invalid HEVC video stream; could not extract HVCDecoderConfigurationRecord'
+										+ ' from first packet.',
+									);
+								}
+
+								const spsArray = elementaryStream.info.hevcCodecInfo.arrays.find(
+									a => a.nalUnitType === HevcNalUnitType.SPS_NUT,
+								)!;
+								const spsUnit = spsArray.nalUnits[0];
+								assert(spsUnit);
+								const spsInfo = parseHevcSps(spsUnit)!;
+
+								elementaryStream.info.width = spsInfo.displayWidth;
+								elementaryStream.info.height = spsInfo.displayHeight;
+								elementaryStream.info.colorSpace = {
+									primaries: COLOR_PRIMARIES_MAP_INVERSE[spsInfo.colourPrimaries] as
+										VideoColorPrimaries | undefined,
+									transfer: TRANSFER_CHARACTERISTICS_MAP_INVERSE[spsInfo.transferCharacteristics] as
+										VideoTransferCharacteristics | undefined,
+									matrix: MATRIX_COEFFICIENTS_MAP_INVERSE[spsInfo.matrixCoefficients] as
+										VideoMatrixCoefficients | undefined,
+									fullRange: !!spsInfo.fullRangeFlag,
+								};
+								elementaryStream.info.reorderSize = spsInfo.maxDecFrameBuffering;
+
+								elementaryStream.initialized = true;
+							} else {
+								throw new Error('Unhandled.');
 							}
 						} else {
 							if (elementaryStream.info.codec === 'aac') {
@@ -317,6 +360,8 @@ export class MpegTsDemuxer extends Demuxer {
 									= aacFrequencyTable[header.samplingFrequencyIndex]!;
 
 								elementaryStream.initialized = true;
+							} else {
+								throw new Error('Unhandled.');
 							}
 						}
 					}
@@ -1196,7 +1241,7 @@ class MpegTsVideoTrackBacking extends MpegTsTrackBacking implements InputVideoTr
 				colorSpace: this.elementaryStream.info.colorSpace,
 				avcType: 1,
 				avcCodecInfo: this.elementaryStream.info.avcCodecInfo,
-				hevcCodecInfo: null,
+				hevcCodecInfo: this.elementaryStream.info.hevcCodecInfo,
 				vp9CodecInfo: null,
 				av1CodecInfo: null,
 			}),
@@ -1245,6 +1290,7 @@ class MpegTsVideoTrackBacking extends MpegTsTrackBacking implements InputVideoTr
 	override async markNextPacket(context: PacketReadingContext): Promise<void> {
 		assert(!context.suppliedPacket);
 
+		const codec = this.elementaryStream.info.codec;
 		const CHUNK_SIZE = 128;
 
 		let packetStartPos: number | null = null;
@@ -1315,9 +1361,14 @@ class MpegTsVideoTrackBacking extends MpegTsTrackBacking implements InputVideoTr
 
 				// We have a second start code. Check if it's an AUD.
 				if (nalUnitTypeByte !== null) {
-					const nalUnitType = extractNalUnitTypeForAvc(new Uint8Array([nalUnitTypeByte]));
+					const nalUnitType = codec === 'avc'
+						? extractNalUnitTypeForAvc(new Uint8Array([nalUnitTypeByte]))
+						: extractNalUnitTypeForHevc(new Uint8Array([nalUnitTypeByte]));
+					const isAud = codec === 'avc'
+						? nalUnitType === AvcNalUnitType.AUD
+						: nalUnitType === HevcNalUnitType.AUD_NUT;
 
-					if (nalUnitType === AvcNalUnitType.AUD) {
+					if (isAud) {
 						// End the packet at this start code (before the AUD)
 						const packetLength = startCodePos - packetStartPos;
 						context.seekTo(packetStartPos);

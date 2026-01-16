@@ -16,17 +16,13 @@
 
 		const track = await input.getPrimaryVideoTrack();
 		const sink = new Mediabunny.EncodedPacketSink(track);
-
-		const packet = await sink.getPacket(12.5);
-		console.log(packet, await sink.getNextPacket(packet))
-
-		/*
-
+		
 		let currentPacket = await sink.getFirstPacket();
 		while (currentPacket) {
 			console.log(currentPacket);
 			currentPacket = await sink.getNextPacket(currentPacket);
 		}
+		/*
 		
 		//const secondPacket = await sink.getNextPacket(firstPacket);
 		//const thirdPacket = await sink.getNextPacket(secondPacket);
