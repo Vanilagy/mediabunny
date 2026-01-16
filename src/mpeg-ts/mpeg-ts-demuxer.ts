@@ -55,6 +55,7 @@ import {
 	Rotation,
 	roundIfAlmostInteger,
 	roundToMultiple,
+	toDataView,
 	TRANSFER_CHARACTERISTICS_MAP_INVERSE,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
@@ -1507,7 +1508,7 @@ class MpegTsAudioTrackBacking extends MpegTsTrackBacking implements InputAudioTr
 					}
 
 					const headerBytes = context.readBytes(MP3_FRAME_HEADER_SIZE);
-					const word = readU32Be(FileSlice.tempFromBytes(headerBytes));
+					const word = toDataView(headerBytes).getUint32(0);
 					const result = readMp3FrameHeader(word, null);
 
 					if (result.header) {
