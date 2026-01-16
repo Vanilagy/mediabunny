@@ -302,7 +302,7 @@ export class OggMuxer extends Muxer {
 
 	async interleavePages(isFinalCall = false) {
 		if (!this.bosPagesWritten) {
-			if (!this.allTracksAreKnown()) {
+			if (!this.allTracksAreKnown() && !isFinalCall) {
 				return; // We can't interleave yet as we don't yet know how many tracks we'll truly have
 			}
 

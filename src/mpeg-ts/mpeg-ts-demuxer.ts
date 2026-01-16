@@ -53,18 +53,9 @@ import {
 import { FRAME_HEADER_SIZE as MP3_FRAME_HEADER_SIZE, readMp3FrameHeader } from '../../shared/mp3-misc';
 import { EncodedPacket, PacketType, PLACEHOLDER_DATA } from '../packet';
 import { FileSlice, readBytes, Reader, readU16Be, readU32Be, readU8 } from '../reader';
+import { buildMpegTsMimeType, MpegTsStreamType, TIMESCALE, TS_PACKET_SIZE } from './mpeg-ts-misc';
 
-const TIMESCALE = 90_000; // MPEG-TS timestamps run on a 90 kHz clock
-const TS_PACKET_SIZE = 188;
 const MISSING_PES_PACKET_ERROR = 'No PES packet found where one was expected.';
-
-const enum MpegTsStreamType {
-	MP3_MPEG1 = 0x03,
-	MP3_MPEG2 = 0x04,
-	AAC = 0x0f,
-	AVC = 0x1b,
-	HEVC = 0x24,
-}
 
 type ElementaryStream = {
 	demuxer: MpegTsDemuxer;
@@ -446,14 +437,7 @@ export class MpegTsDemuxer extends Demuxer {
 		const tracks = await this.getTracks();
 		const codecStrings = await Promise.all(tracks.map(x => x.getCodecParameterString()));
 
-		let string = 'video/MP2T';
-
-		const uniqueCodecStrings = [...new Set(codecStrings.filter(Boolean))];
-		if (uniqueCodecStrings.length > 0) {
-			string += `; codecs="${uniqueCodecStrings.join(', ')}"`;
-		}
-
-		return string;
+		return buildMpegTsMimeType(codecStrings);
 	}
 
 	async readSection(startPos: number, full: boolean): Promise<Section | null> {
@@ -1229,6 +1213,7 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 				continue;
 			}
 
+			context.uncapped = true; // Upgrade it to an uncapped context
 			const buffer = new PacketBuffer(this, context);
 
 			const result = await buffer.readNext();

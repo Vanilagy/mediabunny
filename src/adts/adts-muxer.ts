@@ -6,20 +6,20 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { AacAudioSpecificConfig, parseAacAudioSpecificConfig, validateAudioChunkMetadata } from '../codec';
-import { Bitstream, toUint8Array } from '../misc';
+import { parseAacAudioSpecificConfig, validateAudioChunkMetadata } from '../codec';
+import { assert, Bitstream, toUint8Array } from '../misc';
 import { Muxer } from '../muxer';
 import { Output, OutputAudioTrack } from '../output';
 import { AdtsOutputFormat } from '../output-format';
 import { EncodedPacket } from '../packet';
 import { Writer } from '../writer';
+import { buildAdtsHeaderTemplate, writeAdtsFrameLength } from './adts-misc';
 
 export class AdtsMuxer extends Muxer {
 	private format: AdtsOutputFormat;
 	private writer: Writer;
-	private header = new Uint8Array(7);
-	private headerBitstream = new Bitstream(this.header);
-	private audioSpecificConfig: AacAudioSpecificConfig | null = null;
+	private header: Uint8Array | null = null;
+	private headerBitstream: Bitstream | null = null;
 	private inputIsAdts: boolean | null = null;
 
 	constructor(output: Output, format: AdtsOutputFormat) {
@@ -46,13 +46,12 @@ export class AdtsMuxer extends Muxer {
 		packet: EncodedPacket,
 		meta?: EncodedAudioChunkMetadata,
 	) {
-		// https://wiki.multimedia.cx/index.php/ADTS (last visited: 2025/08/17)
-
 		const release = await this.mutex.acquire();
 
 		try {
 			this.validateAndNormalizeTimestamp(track, packet.timestamp, packet.type === 'key');
 
+			// First packet - determine input format from metadata
 			if (this.inputIsAdts === null) {
 				validateAudioChunkMetadata(meta);
 
@@ -65,27 +64,10 @@ export class AdtsMuxer extends Muxer {
 				this.inputIsAdts = !description;
 
 				if (!this.inputIsAdts) {
-					this.audioSpecificConfig = parseAacAudioSpecificConfig(toUint8Array(description!));
-
-					const { objectType, frequencyIndex, channelConfiguration } = this.audioSpecificConfig;
-					const profile = objectType - 1;
-
-					this.headerBitstream.writeBits(12, 0b1111_11111111); // Syncword
-					this.headerBitstream.writeBits(1, 0); // MPEG Version
-					this.headerBitstream.writeBits(2, 0); // Layer
-					this.headerBitstream.writeBits(1, 1); // Protection absence
-					this.headerBitstream.writeBits(2, profile); // Profile
-					this.headerBitstream.writeBits(4, frequencyIndex); // MPEG-4 Sampling Frequency Index
-					this.headerBitstream.writeBits(1, 0); // Private bit
-					this.headerBitstream.writeBits(3, channelConfiguration); // MPEG-4 Channel Configuration
-					this.headerBitstream.writeBits(1, 0); // Originality
-					this.headerBitstream.writeBits(1, 0); // Home
-					this.headerBitstream.writeBits(1, 0); // Copyright ID bit
-					this.headerBitstream.writeBits(1, 0); // Copyright ID start
-					this.headerBitstream.skipBits(13); // Frame length
-					this.headerBitstream.writeBits(11, 0x7ff); // Buffer fullness
-					this.headerBitstream.writeBits(2, 0); // Number of AAC frames minus 1
-					// Omit CRC check
+					const config = parseAacAudioSpecificConfig(toUint8Array(description!));
+					const template = buildAdtsHeaderTemplate(config);
+					this.header = template.header;
+					this.headerBitstream = template.bitstream;
 				}
 			}
 
@@ -98,10 +80,11 @@ export class AdtsMuxer extends Muxer {
 					this.format._options.onFrame(packet.data, startPos);
 				}
 			} else {
-				// Packets are raw AAC, prepend ADTS header
+				assert(this.header);
+
+				// Packets are raw AAC, we gotta turn it into ADTS
 				const frameLength = packet.data.byteLength + this.header.byteLength;
-				this.headerBitstream.pos = 30;
-				this.headerBitstream.writeBits(13, frameLength);
+				writeAdtsFrameLength(this.headerBitstream!, frameLength);
 
 				const startPos = this.writer.getPos();
 				this.writer.write(this.header);

@@ -17,7 +17,9 @@
 		const track = await input.getPrimaryAudioTrack();
 		const sink = new Mediabunny.EncodedPacketSink(track);
 
-		console.log("Done")
+		for await (const packet of sink.packets()) {
+			console.log(packet.timestamp, packet.duration, packet.type);
+		}
 
 		/*
 		

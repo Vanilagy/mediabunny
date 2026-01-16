@@ -12,6 +12,11 @@ import { MpegTsTrackBacking } from '../../src/mpeg-ts/mpeg-ts-demuxer.js';
 
 const __dirname = new URL('.', import.meta.url).pathname;
 
+test('MPEG-TS input format', async () => {
+	expect(MPEG_TS.mimeType).toBe('video/MP2T');
+	expect(MPEG_TS.name).toBe('MPEG Transport Stream');
+});
+
 test('MPEG-TS metadata reading', async () => {
 	using input = new Input({
 		source: new FilePathSource(path.join(__dirname, '../public/0.ts')),
@@ -356,6 +361,11 @@ test('MPEG-TS video key packets', async () => {
 	expect(firstKeyPacket.type).toBe('key');
 	expect(firstKeyPacket.sequenceNumber).toBe(firstPacket.sequenceNumber);
 
+	const afterKeyPacket = await sink.getNextPacket(firstKeyPacket);
+	expect(afterKeyPacket).not.toBe(null);
+	expect(afterKeyPacket!.type).toBe('delta');
+	expect(afterKeyPacket!.sequenceNumber).toBe(secondPacket.sequenceNumber);
+
 	const secondKeyPacket = await sink.getKeyPacket(15);
 	assert(secondKeyPacket);
 	expect(secondKeyPacket.type).toBe('key');
@@ -406,6 +416,14 @@ test('MPEG-TS audio key packets', async () => {
 	assert(nextKeyPacket);
 	expect(nextKeyPacket.type).toBe('key');
 	expect(nextKeyPacket.sequenceNumber).toBe(secondPacket.sequenceNumber); // All audio packets are key packets
+
+	const middleKeyPacket = await sink.getKeyPacket(12.5);
+	assert(middleKeyPacket);
+	expect(middleKeyPacket.type).toBe('key');
+
+	const afterKeyPacket = await sink.getNextPacket(middleKeyPacket);
+	expect(afterKeyPacket).not.toBe(null);
+	expect(afterKeyPacket!.type).toBe('key');
 
 	const lastPacket = await sink.getPacket(Infinity);
 	assert(lastPacket);

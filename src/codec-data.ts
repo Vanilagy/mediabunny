@@ -118,7 +118,7 @@ export const iterateNalUnitsInAnnexB = function* (packetData: Uint8Array): Gener
 	}
 };
 
-const iterateNalUnitsInLengthPrefixed = function* (
+export const iterateNalUnitsInLengthPrefixed = function* (
 	packetData: Uint8Array,
 	lengthSize: 1 | 2 | 3 | 4,
 ): Generator<NalUnitLocation> {
@@ -1470,6 +1470,99 @@ export const serializeHevcDecoderConfigurationRecord = (record: HevcDecoderConfi
 	}
 
 	return new Uint8Array(bytes);
+};
+
+/** Deserializes an HevcDecoderConfigurationRecord from the format specified in Section 8.3.3.1 of ISO 14496-15. */
+export const deserializeHevcDecoderConfigurationRecord = (data: Uint8Array): HevcDecoderConfigurationRecord | null => {
+	try {
+		const view = toDataView(data);
+		let offset = 0;
+
+		const configurationVersion = view.getUint8(offset++);
+
+		const byte1 = view.getUint8(offset++);
+		const generalProfileSpace = (byte1 >> 6) & 0x3;
+		const generalTierFlag = (byte1 >> 5) & 0x1;
+		const generalProfileIdc = byte1 & 0x1F;
+
+		const generalProfileCompatibilityFlags = view.getUint32(offset, false);
+		offset += 4;
+
+		const generalConstraintIndicatorFlags = data.subarray(offset, offset + 6);
+		offset += 6;
+
+		const generalLevelIdc = view.getUint8(offset++);
+
+		const minSpatialSegmentationIdc = ((view.getUint8(offset++) & 0x0F) << 8) | view.getUint8(offset++);
+
+		const parallelismType = view.getUint8(offset++) & 0x03;
+
+		const chromaFormatIdc = view.getUint8(offset++) & 0x03;
+
+		const bitDepthLumaMinus8 = view.getUint8(offset++) & 0x07;
+
+		const bitDepthChromaMinus8 = view.getUint8(offset++) & 0x07;
+
+		const avgFrameRate = view.getUint16(offset, false);
+		offset += 2;
+
+		const byte21 = view.getUint8(offset++);
+		const constantFrameRate = (byte21 >> 6) & 0x03;
+		const numTemporalLayers = (byte21 >> 3) & 0x07;
+		const temporalIdNested = (byte21 >> 2) & 0x01;
+		const lengthSizeMinusOne = byte21 & 0x03;
+
+		const numOfArrays = view.getUint8(offset++);
+
+		const arrays: HevcDecoderConfigurationRecord['arrays'] = [];
+		for (let i = 0; i < numOfArrays; i++) {
+			const arrByte = view.getUint8(offset++);
+			const arrayCompleteness = (arrByte >> 7) & 0x01;
+			const nalUnitType = arrByte & 0x3F;
+
+			const numNalus = view.getUint16(offset, false);
+			offset += 2;
+
+			const nalUnits: Uint8Array[] = [];
+			for (let j = 0; j < numNalus; j++) {
+				const nalUnitLength = view.getUint16(offset, false);
+				offset += 2;
+
+				nalUnits.push(data.subarray(offset, offset + nalUnitLength));
+				offset += nalUnitLength;
+			}
+
+			arrays.push({
+				arrayCompleteness,
+				nalUnitType,
+				nalUnits,
+			});
+		}
+
+		return {
+			configurationVersion,
+			generalProfileSpace,
+			generalTierFlag,
+			generalProfileIdc,
+			generalProfileCompatibilityFlags,
+			generalConstraintIndicatorFlags,
+			generalLevelIdc,
+			minSpatialSegmentationIdc,
+			parallelismType,
+			chromaFormatIdc,
+			bitDepthLumaMinus8,
+			bitDepthChromaMinus8,
+			avgFrameRate,
+			constantFrameRate,
+			numTemporalLayers,
+			temporalIdNested,
+			lengthSizeMinusOne,
+			arrays,
+		};
+	} catch (error) {
+		console.error('Error deserializing HEVC Decoder Configuration Record:', error);
+		return null;
+	}
 };
 
 export type Vp9CodecInfo = {
