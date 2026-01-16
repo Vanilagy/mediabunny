@@ -193,6 +193,7 @@ type InternalTrack = {
 	codecId: string | null;
 	codecPrivate: Uint8Array | null;
 	defaultDuration: number | null;
+	defaultDurationNs: number | null;
 	name: string | null;
 	languageCode: string;
 	decodingInstructions: DecodingInstruction[];
@@ -346,7 +347,7 @@ export class MatroskaDemuxer extends Demuxer {
 				} else if (id === EBMLId.Segment) { // Segment found!
 					await this.readSegment(dataStartPos, size);
 
-					if (size === null) {
+					if (size === undefined) {
 						// Segment sizes can be undefined (common in livestreamed files), so assume this is the last
 						// and only segment
 						break;
@@ -364,7 +365,7 @@ export class MatroskaDemuxer extends Demuxer {
 					// doesn't contain any of the clusters that follow it. In the case, we apply the following logic: if
 					// we find a top-level cluster, attribute it to the previous segment.
 
-					if (size === null) {
+					if (size === undefined) {
 						// Just in case this is one of those weird sizeless clusters, let's do our best and still try to
 						// determine its size.
 						const nextElementPos = await searchForNextElementId(
@@ -389,7 +390,7 @@ export class MatroskaDemuxer extends Demuxer {
 		})();
 	}
 
-	async readSegment(segmentDataStart: number, dataSize: number | null) {
+	async readSegment(segmentDataStart: number, dataSize: number | undefined) {
 		this.currentSegment = {
 			seekHeadSeen: false,
 			infoSeen: false,
@@ -406,7 +407,7 @@ export class MatroskaDemuxer extends Demuxer {
 			cuePoints: [],
 
 			dataStartPos: segmentDataStart,
-			elementEndPos: dataSize === null
+			elementEndPos: dataSize === undefined
 				? null // Assume it goes until the end of the file
 				: segmentDataStart + dataSize,
 			clusterSeekStartPos: segmentDataStart,
@@ -483,7 +484,7 @@ export class MatroskaDemuxer extends Demuxer {
 				break; // Stop at the first cluster
 			}
 
-			if (size === null) {
+			if (size === undefined) {
 				break;
 			} else {
 				currentPos = dataStartPos + size;
@@ -534,6 +535,13 @@ export class MatroskaDemuxer extends Demuxer {
 			// which is 1e6.
 			this.currentSegment.timestampScale = 1e6;
 			this.currentSegment.timestampFactor = 1e9 / 1e6;
+		}
+
+		// Compute default duration for all tracks now that we have the timestamp factor
+		for (const track of this.currentSegment.tracks) {
+			if (track.defaultDurationNs !== null) {
+				track.defaultDuration = (this.currentSegment.timestampFactor * track.defaultDurationNs) / 1e9;
+			}
 		}
 
 		// Put default tracks first
@@ -606,7 +614,7 @@ export class MatroskaDemuxer extends Demuxer {
 		let size = elementHeader.size;
 		const dataStartPos = headerSlice.filePos;
 
-		if (size === null) {
+		if (size === undefined) {
 			// The cluster's size is undefined (can happen in livestreamed files). We'd still like to know the size of
 			// it, so we have no other choice but to iterate over the EBML structure until we find an element at level
 			// 0 or 1, indicating the end of the cluster (all elements inside the cluster are at level 2).
@@ -908,9 +916,7 @@ export class MatroskaDemuxer extends Demuxer {
 	}
 
 	readContiguousElements(slice: FileSlice, stopIds?: number[]) {
-		const startIndex = slice.filePos;
-
-		while (slice.filePos - startIndex <= slice.length - MIN_HEADER_SIZE) {
+		while (slice.remainingLength >= MIN_HEADER_SIZE) {
 			const startPos = slice.filePos;
 			const foundElement = this.traverseElement(slice, stopIds);
 
@@ -996,6 +1002,7 @@ export class MatroskaDemuxer extends Demuxer {
 					codecId: null,
 					codecPrivate: null,
 					defaultDuration: null,
+					defaultDurationNs: null,
 					name: null,
 					languageCode: UNDETERMINED_LANGUAGE,
 					decodingInstructions: [],
@@ -1004,6 +1011,11 @@ export class MatroskaDemuxer extends Demuxer {
 				};
 
 				this.readContiguousElements(slice.slice(dataStartPos, size));
+
+				// Check if track was disabled during parsing (e.g., by FlagEnabled being 0)
+				if (!this.currentTrack) {
+					break;
+				}
 
 				if (this.currentTrack.decodingInstructions.some((instruction) => {
 					return instruction.data?.type !== 'decompress'
@@ -1149,7 +1161,6 @@ export class MatroskaDemuxer extends Demuxer {
 
 				const enabled = readUnsignedInt(slice, size);
 				if (!enabled) {
-					this.currentSegment!.tracks.pop();
 					this.currentTrack = null;
 				}
 			}; break;
@@ -1204,9 +1215,7 @@ export class MatroskaDemuxer extends Demuxer {
 
 			case EBMLId.DefaultDuration: {
 				if (!this.currentTrack) break;
-
-				this.currentTrack.defaultDuration
-					= this.currentTrack.segment.timestampFactor * readUnsignedInt(slice, size) / 1e9;
+				this.currentTrack.defaultDurationNs = readUnsignedInt(slice, size);
 			}; break;
 
 			case EBMLId.Name: {
@@ -2223,7 +2232,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 				}
 			}
 
-			if (size === null) {
+			if (size === undefined) {
 				// Undefined element size (can happen in livestreamed files). In this case, we need to do some
 				// searching to determine the actual size of the element.
 

@@ -731,6 +731,12 @@ export class WavOutputFormat extends OutputFormat {
  */
 export type OggOutputFormatOptions = {
 	/**
+	 * The maximum duration of each Ogg page, in seconds. This is useful for streaming contexts where more frequent page
+	 * output is desired. By default, pages are only flushed when they exceed a certain size.
+	 */
+	maximumPageDuration?: number;
+
+	/**
 	 * Will be called for each Ogg page that is written.
 	 *
 	 * @param data - The raw bytes.
@@ -753,6 +759,12 @@ export class OggOutputFormat extends OutputFormat {
 	constructor(options: OggOutputFormatOptions = {}) {
 		if (!options || typeof options !== 'object') {
 			throw new TypeError('options must be an object.');
+		}
+		if (
+			options.maximumPageDuration !== undefined
+			&& (!Number.isFinite(options.maximumPageDuration) || options.maximumPageDuration <= 0)
+		) {
+			throw new TypeError('options.maximumPageDuration, when provided, must be a positive number.');
 		}
 		if (options.onPage !== undefined && typeof options.onPage !== 'function') {
 			throw new TypeError('options.onPage, when provided, must be a function.');

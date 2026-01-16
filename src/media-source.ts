@@ -134,12 +134,10 @@ export abstract class MediaSource {
 
 	/** @internal */
 	async _flushOrWaitForOngoingClose(forceClose: boolean) {
-		if (this._closingPromise) {
-			// Since closing also flushes, we don't want to do it twice
-			return this._closingPromise;
-		} else {
-			return this._flushAndClose(forceClose);
-		}
+		return this._closingPromise ??= (async () => {
+			await this._flushAndClose(forceClose);
+			this._closed = true;
+		})();
 	}
 }
 

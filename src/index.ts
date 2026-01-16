@@ -194,6 +194,7 @@ export {
 	ConversionOptions,
 	ConversionVideoOptions,
 	ConversionAudioOptions,
+	ConversionCanceledError,
 	DiscardedTrack,
 } from './conversion';
 export {
