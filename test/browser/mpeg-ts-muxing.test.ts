@@ -5,7 +5,7 @@ import { ALL_FORMATS, MPEG_TS } from '../../src/input-format.js';
 import { Output } from '../../src/output.js';
 import { MpegTsOutputFormat } from '../../src/output-format.js';
 import { BufferTarget, StreamTarget, StreamTargetChunk } from '../../src/target.js';
-import { AudioBufferSource, CanvasSource, EncodedAudioPacketSource } from '../../src/media-source.js';
+import { CanvasSource, EncodedAudioPacketSource } from '../../src/media-source.js';
 import { QUALITY_HIGH } from '../../src/encode.js';
 import { EncodedPacketSink } from '../../src/media-sink.js';
 import { assert } from '../../src/misc.js';
@@ -63,10 +63,7 @@ test('MPEG-TS muxing with AVC and AAC', async () => {
 	});
 	output.addVideoTrack(videoSource);
 
-	const audioSource = new AudioBufferSource({
-		codec: 'aac',
-		bitrate: QUALITY_HIGH,
-	});
+	const audioSource = new EncodedAudioPacketSource('aac');
 	output.addAudioTrack(audioSource);
 
 	await output.start();
@@ -81,12 +78,27 @@ test('MPEG-TS muxing with AVC and AAC', async () => {
 		await videoSource.add(i * frameDuration, frameDuration);
 	}
 
-	const audioBuffer = new AudioBuffer({
-		length: 48000 * duration,
-		numberOfChannels: 2,
-		sampleRate: 48000,
+	using aacInput = new Input({
+		source: new UrlSource('/video.mp4'),
+		formats: ALL_FORMATS,
 	});
-	await audioSource.add(audioBuffer);
+
+	const aacTrack = await aacInput.getPrimaryAudioTrack();
+	assert(aacTrack);
+
+	const aacSink = new EncodedPacketSink(aacTrack);
+
+	let isFirst = true;
+	for await (const packet of aacSink.packets()) {
+		if (packet.timestamp >= duration) break;
+
+		await audioSource.add(packet, {
+			decoderConfig: isFirst
+				? (await aacTrack.getDecoderConfig())!
+				: undefined,
+		});
+		isFirst = false;
+	}
 
 	await output.finalize();
 	finalized = true;
@@ -188,7 +200,7 @@ test('MPEG-TS muxing with AVC and AAC', async () => {
 	const audioDuration = await audioTrack.computeDuration();
 
 	expect(videoDuration).toBeCloseTo(5, 1);
-	expect(audioDuration).toBeCloseTo(5.077333333333334, 1);
+	expect(audioDuration).toBeCloseTo(5, 1);
 });
 
 test('MPEG-TS muxing with HEVC and MP3', async () => {
@@ -410,21 +422,34 @@ test('MPEG-TS muxing with audio only', async () => {
 		target: new BufferTarget(),
 	});
 
-	const audioSource = new AudioBufferSource({
-		codec: 'aac',
-		bitrate: QUALITY_HIGH,
-	});
+	const audioSource = new EncodedAudioPacketSource('aac');
 	output.addAudioTrack(audioSource);
 
 	await output.start();
 
 	const duration = 1;
-	const audioBuffer = new AudioBuffer({
-		length: 48000 * duration,
-		numberOfChannels: 2,
-		sampleRate: 48000,
+
+	using aacInput = new Input({
+		source: new UrlSource('/video.mp4'),
+		formats: ALL_FORMATS,
 	});
-	await audioSource.add(audioBuffer);
+
+	const aacTrack = await aacInput.getPrimaryAudioTrack();
+	assert(aacTrack);
+
+	const aacSink = new EncodedPacketSink(aacTrack);
+
+	let isFirst = true;
+	for await (const packet of aacSink.packets()) {
+		if (packet.timestamp >= duration) break;
+
+		await audioSource.add(packet, {
+			decoderConfig: isFirst
+				? (await aacTrack.getDecoderConfig())!
+				: undefined,
+		});
+		isFirst = false;
+	}
 
 	await output.finalize();
 
@@ -510,8 +535,8 @@ test('MPEG-TS muxing with two audio tracks', async () => {
 		target: new BufferTarget(),
 	});
 
-	const audioSource1 = new AudioBufferSource({ codec: 'aac', bitrate: QUALITY_HIGH });
-	const audioSource2 = new AudioBufferSource({ codec: 'aac', bitrate: QUALITY_HIGH });
+	const audioSource1 = new EncodedAudioPacketSource('aac');
+	const audioSource2 = new EncodedAudioPacketSource('aac');
 
 	output.addAudioTrack(audioSource1);
 	output.addAudioTrack(audioSource2);
@@ -519,19 +544,39 @@ test('MPEG-TS muxing with two audio tracks', async () => {
 	await output.start();
 
 	const duration = 1;
-	const audioBuffer1 = new AudioBuffer({
-		length: 48000 * duration,
-		numberOfChannels: 2,
-		sampleRate: 48000,
-	});
-	const audioBuffer2 = new AudioBuffer({
-		length: 44100 * duration,
-		numberOfChannels: 1,
-		sampleRate: 44100,
+
+	using aacInput = new Input({
+		source: new UrlSource('/video.mp4'),
+		formats: ALL_FORMATS,
 	});
 
-	await audioSource1.add(audioBuffer1);
-	await audioSource2.add(audioBuffer2);
+	const aacTrack = await aacInput.getPrimaryAudioTrack();
+	assert(aacTrack);
+
+	const aacSink = new EncodedPacketSink(aacTrack);
+
+	const decoderConfig = await aacTrack.getDecoderConfig();
+	assert(decoderConfig);
+
+	let isFirst1 = true;
+	for await (const packet of aacSink.packets()) {
+		if (packet.timestamp >= duration) break;
+
+		await audioSource1.add(packet, {
+			decoderConfig: isFirst1 ? decoderConfig : undefined,
+		});
+		isFirst1 = false;
+	}
+
+	let isFirst2 = true;
+	for await (const packet of aacSink.packets()) {
+		if (packet.timestamp >= duration) break;
+
+		await audioSource2.add(packet, {
+			decoderConfig: isFirst2 ? decoderConfig : undefined,
+		});
+		isFirst2 = false;
+	}
 
 	await output.finalize();
 
