@@ -29,6 +29,10 @@ import {
 	extractAvcDecoderConfigurationRecord,
 	extractHevcDecoderConfigurationRecord,
 	findNalUnitsInAnnexB,
+	parseAC3SyncFrame,
+	parseEAC3SyncFrame,
+	serializeAC3Config,
+	serializeEAC3Config,
 	serializeAvcDecoderConfigurationRecord,
 	serializeHevcDecoderConfigurationRecord,
 } from '../codec-data';
@@ -365,7 +369,7 @@ export class IsobmffMuxer extends Muxer {
 		return newTrackData;
 	}
 
-	private getAudioTrackData(track: OutputAudioTrack, meta?: EncodedAudioChunkMetadata) {
+	private getAudioTrackData(track: OutputAudioTrack, packet: EncodedPacket, meta?: EncodedAudioChunkMetadata) {
 		const existingTrackData = this.trackDatas.find(x => x.track === track);
 		if (existingTrackData) {
 			return existingTrackData as IsobmffAudioTrackData;
@@ -376,19 +380,45 @@ export class IsobmffMuxer extends Muxer {
 		assert(meta);
 		assert(meta.decoderConfig);
 
+		const decoderConfig = { ...meta.decoderConfig };
+
+		// Parse AC-3 syncframe if no description provided
+		if (track.source._codec === 'ac3' && !decoderConfig.description) {
+			const frameInfo = parseAC3SyncFrame(packet.data);
+			if (!frameInfo) {
+				throw new Error(
+					'Couldn\'t extract AC-3 frame info from the audio packet. '
+					+ 'Ensure the packets contain valid AC-3 sync frames (as specified in ETSI TS 102 366).',
+				);
+			}
+			decoderConfig.description = serializeAC3Config(frameInfo);
+		}
+
+		// Parse E-AC-3 syncframe if no description provided
+		if (track.source._codec === 'eac3' && !decoderConfig.description) {
+			const config = parseEAC3SyncFrame(packet.data);
+			if (!config) {
+				throw new Error(
+					'Couldn\'t extract E-AC-3 frame info from the audio packet. '
+					+ 'Ensure the packets contain valid E-AC-3 sync frames (as specified in ETSI TS 102 366).',
+				);
+			}
+			decoderConfig.description = serializeEAC3Config(config);
+		}
+
 		const newTrackData: IsobmffAudioTrackData = {
 			muxer: this,
 			track,
 			type: 'audio',
 			info: {
-				numberOfChannels: meta.decoderConfig.numberOfChannels,
-				sampleRate: meta.decoderConfig.sampleRate,
-				decoderConfig: meta.decoderConfig,
+				numberOfChannels: decoderConfig.numberOfChannels,
+				sampleRate: decoderConfig.sampleRate,
+				decoderConfig: decoderConfig,
 				requiresPcmTransformation:
 					!this.isFragmented
 					&& (PCM_AUDIO_CODECS as readonly string[]).includes(track.source._codec),
 			},
-			timescale: meta.decoderConfig.sampleRate,
+			timescale: decoderConfig.sampleRate,
 			samples: [],
 			sampleQueue: [],
 			timestampProcessingQueue: [],
@@ -502,7 +532,7 @@ export class IsobmffMuxer extends Muxer {
 		const release = await this.mutex.acquire();
 
 		try {
-			const trackData = this.getAudioTrackData(track, meta);
+			const trackData = this.getAudioTrackData(track, packet, meta);
 
 			const timestamp = this.validateAndNormalizeTimestamp(
 				trackData.track,

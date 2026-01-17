@@ -27,6 +27,12 @@ import {
 	FlacBlockType,
 	HevcDecoderConfigurationRecord,
 	Vp9CodecInfo,
+	parseAC3Config,
+	parseEAC3Config,
+	getEAC3SampleRate,
+	getEAC3ChannelCount,
+	AC3_SAMPLE_RATES,
+	AC3_ACMOD_CHANNEL_COUNTS,
 } from '../codec-data';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
@@ -952,6 +958,10 @@ export class IsobmffDemuxer extends Demuxer {
 							track.info.codec = 'ulaw';
 						} else if (lowercaseBoxName === 'alaw') {
 							track.info.codec = 'alaw';
+						} else if (lowercaseBoxName === 'ac-3') {
+							track.info.codec = 'ac3';
+						} else if (lowercaseBoxName === 'ec-3') {
+							track.info.codec = 'eac3';
 						} else {
 							console.warn(`Unsupported audio codec (sample entry type '${sampleBoxInfo.name}').`);
 						}
@@ -1458,6 +1468,42 @@ export class IsobmffDemuxer extends Demuxer {
 
 				// Set the codec description to be 'fLaC' + all metadata blocks
 				track.info.codecDescription = description;
+			}; break;
+
+			case 'dac3': { // AC3SpecificBox
+				const track = this.currentTrack;
+				if (!track) {
+					break;
+				}
+				assert(track.info?.type === 'audio');
+
+				const bytes = readBytes(slice, 3);
+				const config = parseAC3Config(bytes);
+
+				if (config && config.fscod < 3) {
+					track.info.sampleRate = AC3_SAMPLE_RATES[config.fscod]!;
+					track.info.numberOfChannels = AC3_ACMOD_CHANNEL_COUNTS[config.acmod]! + config.lfeon;
+				}
+
+				track.info.codecDescription = bytes;
+			}; break;
+
+			case 'dec3': { // EC3SpecificBox
+				const track = this.currentTrack;
+				if (!track) {
+					break;
+				}
+				assert(track.info?.type === 'audio');
+
+				const bytes = readBytes(slice, boxInfo.contentSize);
+				const config = parseEAC3Config(bytes);
+
+				if (config) {
+					track.info.sampleRate = getEAC3SampleRate(config);
+					track.info.numberOfChannels = getEAC3ChannelCount(config);
+				}
+
+				track.info.codecDescription = bytes;
 			}; break;
 
 			case 'stts': {

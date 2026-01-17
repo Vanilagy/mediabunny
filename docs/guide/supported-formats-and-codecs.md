@@ -39,6 +39,8 @@ Mediabunny ships with built-in decoders and encoders for all audio PCM codecs, m
 - `'mp3'` - MP3
 - `'vorbis'` - Vorbis
 - `'flac'` - Free Lossless Audio Codec (FLAC)
+- `'ac3'` - Dolby Digital (AC-3)
+- `'eac3'` - Dolby Digital Plus (E-AC-3)
 - `'pcm-u8'` - 8-bit unsigned PCM
 - `'pcm-s8'` - 8-bit signed PCM
 - `'pcm-s16'` - 16-bit little-endian signed PCM
@@ -74,6 +76,8 @@ Not all codecs can be used with all containers. The following table specifies th
 | `'mp3'`        |    ✓     |   ✓   |   ✓   |           |       |   ✓   |       |       |       |
 | `'vorbis'`     |    ✓     |   ✓   |   ✓   |     ✓     |   ✓   |       |       |       |       |
 | `'flac'`       |    ✓     |   ✓   |   ✓   |           |       |       |       |       |   ✓   |
+| `'ac3'`[^2]    |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |
+| `'eac3'`[^2]   |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |
 | `'pcm-u8'`     |          |   ✓   |   ✓   |           |       |       |   ✓   |       |       |
 | `'pcm-s8'`     |          |   ✓   |       |           |       |       |       |       |       |
 | `'pcm-s16'`    |    ✓     |   ✓   |   ✓   |           |       |       |   ✓   |       |       |
@@ -88,11 +92,12 @@ Not all codecs can be used with all containers. The following table specifies th
 | `'pcm-f64be'`  |    ✓     |   ✓   |       |           |       |       |       |       |       |
 | `'ulaw'`       |          |   ✓   |       |           |       |       |   ✓   |       |       |
 | `'alaw'`       |          |   ✓   |       |           |       |       |   ✓   |       |       |
-| `'webvtt'`[^2] |   (✓)    |       |  (✓)  |    (✓)    |       |       |       |       |       |
+| `'webvtt'`[^3] |   (✓)    |       |  (✓)  |    (✓)    |       |       |       |       |       |
 
 
 [^1]: WebM only supports a small subset of the codecs supported by Matroska. However, this library can technically read all codecs from a WebM that are supported by Matroska.
-[^2]: WebVTT can only be written, not read.
+[^2]: AC-3 and E-AC-3 are not natively supported by WebCodecs. To encode or decode these codecs, you must provide a [custom coder](#custom-coders).
+[^3]: WebVTT can only be written, not read.
 
 ## Querying codec encodability
 
