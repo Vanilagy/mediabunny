@@ -31,6 +31,7 @@ import { AdtsDemuxer } from './adts/adts-demuxer';
 import { readAscii, readBytes } from './reader';
 import { FlacDemuxer } from './flac/flac-demuxer';
 import { MpegTsDemuxer } from './mpeg-ts/mpeg-ts-demuxer';
+import { TS_PACKET_SIZE } from './mpeg-ts/mpeg-ts-misc';
 
 /**
  * Base class representing an input media file format.
@@ -484,8 +485,6 @@ export class AdtsInputFormat extends InputFormat {
 		return 'audio/aac';
 	}
 }
-
-const TS_PACKET_SIZE = 188;
 
 /**
  * MPEG Transport Stream (MPEG-TS) file format.
