@@ -258,6 +258,7 @@ export class EncodedPacket {
 			options?.duration ?? this.duration,
 			this.sequenceNumber,
 			this.byteLength,
+			this.sideData,
 		);
 	}
 }
