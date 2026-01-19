@@ -239,7 +239,6 @@ test('MPEG-TS muxing with HEVC and MP3', async () => {
 	let isFirstVideo = true;
 	let videoPacketCountWritten = 0;
 	for await (const packet of hevcSink.packets()) {
-		console.log(packet.timestamp);
 		if (packet.timestamp >= duration) break;
 
 		await videoSource.add(packet, {
@@ -620,7 +619,11 @@ test('MPEG-TS transmux (Annex B and ADTS passthrough)', async () => {
 		target: new BufferTarget(),
 	});
 
-	const conversion = await Conversion.init({ input, output });
+	const conversion = await Conversion.init({
+		input,
+		output,
+		trim: { start: 0 }, // So we maintain the timestamps
+	});
 	expect(conversion.isValid).toBe(true);
 
 	await conversion.execute();

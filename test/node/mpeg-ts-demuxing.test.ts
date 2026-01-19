@@ -482,7 +482,7 @@ test('MPEG-TS with unknown file size (ReadableStreamSource)', async () => {
 		.toBeGreaterThanOrEqual(10);
 });
 
-test('MPEG-TS transmuxed by FFmpeg', async () => {
+test('MPEG-TS transmuxed by FFmpeg', { timeout: 30_000 }, async () => {
 	using input = new Input({
 		source: new UrlSource('https://pub-cf9fcfcb5c0a44e9b1bb5ff890e041ae.r2.dev/trim-buck-bunny-ffmpeg.ts'),
 		formats: ALL_FORMATS,
