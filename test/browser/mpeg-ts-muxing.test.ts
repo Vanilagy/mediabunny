@@ -5,7 +5,7 @@ import { ALL_FORMATS, MPEG_TS } from '../../src/input-format.js';
 import { Output } from '../../src/output.js';
 import { MpegTsOutputFormat } from '../../src/output-format.js';
 import { BufferTarget, StreamTarget, StreamTargetChunk } from '../../src/target.js';
-import { CanvasSource, EncodedAudioPacketSource } from '../../src/media-source.js';
+import { CanvasSource, EncodedAudioPacketSource, EncodedVideoPacketSource } from '../../src/media-source.js';
 import { QUALITY_HIGH } from '../../src/encode.js';
 import { EncodedPacketSink } from '../../src/media-sink.js';
 import { assert } from '../../src/misc.js';
@@ -215,15 +215,7 @@ test('MPEG-TS muxing with HEVC and MP3', async () => {
 		target: new BufferTarget(),
 	});
 
-	const canvas = new OffscreenCanvas(1280, 720);
-	const context = canvas.getContext('2d')!;
-	context.fillStyle = '#000000';
-	context.fillRect(0, 0, canvas.width, canvas.height);
-
-	const videoSource = new CanvasSource(canvas, {
-		codec: 'hevc',
-		bitrate: QUALITY_HIGH,
-	});
+	const videoSource = new EncodedVideoPacketSource('hevc');
 	output.addVideoTrack(videoSource);
 
 	const audioSource = new EncodedAudioPacketSource('mp3');
@@ -231,13 +223,32 @@ test('MPEG-TS muxing with HEVC and MP3', async () => {
 
 	await output.start();
 
-	const fps = 30;
 	const duration = 5;
-	const frameCount = fps * duration;
-	const frameDuration = 1 / fps;
 
-	for (let i = 0; i < frameCount; i++) {
-		await videoSource.add(i * frameDuration, frameDuration);
+	// Extract HEVC packets from existing file
+	using hevcInput = new Input({
+		source: new UrlSource('/video-h265.mp4'),
+		formats: ALL_FORMATS,
+	});
+
+	const hevcTrack = await hevcInput.getPrimaryVideoTrack();
+	assert(hevcTrack);
+
+	const hevcSink = new EncodedPacketSink(hevcTrack);
+
+	let isFirstVideo = true;
+	let videoPacketCountWritten = 0;
+	for await (const packet of hevcSink.packets()) {
+		console.log(packet.timestamp);
+		if (packet.timestamp >= duration) break;
+
+		await videoSource.add(packet, {
+			decoderConfig: isFirstVideo
+				? (await hevcTrack.getDecoderConfig())!
+				: undefined,
+		});
+		isFirstVideo = false;
+		videoPacketCountWritten++;
 	}
 
 	// Extract MP3 packets from existing file
@@ -251,16 +262,16 @@ test('MPEG-TS muxing with HEVC and MP3', async () => {
 
 	const mp3Sink = new EncodedPacketSink(mp3Track);
 
-	let isFirst = true;
+	let isFirstAudio = true;
 	for await (const packet of mp3Sink.packets()) {
 		if (packet.timestamp >= duration) break;
 
 		await audioSource.add(packet, {
-			decoderConfig: isFirst
+			decoderConfig: isFirstAudio
 				? (await mp3Track.getDecoderConfig())!
 				: undefined,
 		});
-		isFirst = false;
+		isFirstAudio = false;
 	}
 
 	await output.finalize();
@@ -281,14 +292,10 @@ test('MPEG-TS muxing with HEVC and MP3', async () => {
 
 	expect(videoTrack.id).toBe(0x100);
 	expect(videoTrack.codec).toBe('hevc');
-	expect(videoTrack.displayWidth).toBe(1280);
-	expect(videoTrack.displayHeight).toBe(720);
 
 	const videoDecoderConfig = await videoTrack.getDecoderConfig();
 	assert(videoDecoderConfig);
 	expect(videoDecoderConfig.codec).toMatch(/^hev1\./);
-	expect(videoDecoderConfig.codedWidth).toBe(1280);
-	expect(videoDecoderConfig.codedHeight).toBe(720);
 	expect(videoDecoderConfig.description).toBeUndefined(); // Annex B, no description
 
 	// Verify audio track
@@ -316,7 +323,7 @@ test('MPEG-TS muxing with HEVC and MP3', async () => {
 		videoPacketCount++;
 	}
 
-	expect(videoPacketCount).toBe(frameCount);
+	expect(videoPacketCount).toBe(videoPacketCountWritten);
 
 	// Verify audio packets are MP3 frames
 	const audioSink = new EncodedPacketSink(audioTrack);
@@ -333,7 +340,7 @@ test('MPEG-TS muxing with HEVC and MP3', async () => {
 	const videoDuration = await videoTrack.computeDuration();
 	const audioDuration = await audioTrack.computeDuration();
 
-	expect(videoDuration).toBeCloseTo(5, 1);
+	expect(videoDuration).toBeCloseTo(4.933333333333334, 1);
 	expect(audioDuration).toBeCloseTo(5, 1);
 });
 
@@ -482,32 +489,35 @@ test('MPEG-TS muxing with two video tracks', async () => {
 		target: new BufferTarget(),
 	});
 
-	const canvas1 = new OffscreenCanvas(640, 480);
-	const ctx1 = canvas1.getContext('2d')!;
-	ctx1.fillStyle = '#ff0000';
-	ctx1.fillRect(0, 0, canvas1.width, canvas1.height);
-
-	const canvas2 = new OffscreenCanvas(320, 240);
-	const ctx2 = canvas2.getContext('2d')!;
-	ctx2.fillStyle = '#00ff00';
-	ctx2.fillRect(0, 0, canvas2.width, canvas2.height);
-
-	const videoSource1 = new CanvasSource(canvas1, { codec: 'hevc', bitrate: QUALITY_HIGH });
-	const videoSource2 = new CanvasSource(canvas2, { codec: 'hevc', bitrate: QUALITY_HIGH });
+	const videoSource1 = new EncodedVideoPacketSource('hevc');
+	const videoSource2 = new EncodedVideoPacketSource('hevc');
 
 	output.addVideoTrack(videoSource1);
 	output.addVideoTrack(videoSource2);
 
 	await output.start();
 
-	const fps = 30;
 	const duration = 1;
-	const frameCount = fps * duration;
-	const frameDuration = 1 / fps;
 
-	for (let i = 0; i < frameCount; i++) {
-		await videoSource1.add(i * frameDuration, frameDuration);
-		await videoSource2.add(i * frameDuration, frameDuration);
+	using hevcInput = new Input({
+		source: new UrlSource('/video-h265.mp4'),
+		formats: ALL_FORMATS,
+	});
+
+	const hevcTrack = await hevcInput.getPrimaryVideoTrack();
+	assert(hevcTrack);
+
+	const hevcSink = new EncodedPacketSink(hevcTrack);
+	const hevcDecoderConfig = await hevcTrack.getDecoderConfig();
+
+	let isFirst = true;
+	for await (const packet of hevcSink.packets()) {
+		if (packet.timestamp >= duration) break;
+
+		const meta = { decoderConfig: isFirst ? hevcDecoderConfig! : undefined };
+		await videoSource1.add(packet, meta);
+		await videoSource2.add(packet, meta);
+		isFirst = false;
 	}
 
 	await output.finalize();

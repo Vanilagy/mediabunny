@@ -11,14 +11,14 @@
 		const file = fileInput.files[0];
 		const input = new Mediabunny.Input({
 			formats: Mediabunny.ALL_FORMATS,
-			source: new Mediabunny.BufferSource(await file.arrayBuffer()),
+			source: new Mediabunny.BlobSource(file),
 		});
 
 		const track = await input.getPrimaryVideoTrack();
 		const sink = new Mediabunny.EncodedPacketSink(track);
 
 		for await (const packet of sink.packets()) {
-			//console.log(packet.timestamp, packet.duration, packet.type);
+			console.log(packet);
 		}
 
 		/*
