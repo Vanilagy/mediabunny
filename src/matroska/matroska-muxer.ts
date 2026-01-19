@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -48,6 +48,9 @@ import {
 	parseSubtitleTimestamp,
 } from '../subtitles';
 import {
+	aacChannelMap,
+	aacFrequencyTable,
+	buildAacAudioSpecificConfig,
 	OPUS_SAMPLE_RATE,
 	PCM_AUDIO_CODECS,
 	PcmAudioCodec,
@@ -59,6 +62,8 @@ import {
 	validateSubtitleMetadata,
 	validateVideoChunkMetadata,
 } from '../codec';
+import { MAX_ADTS_FRAME_HEADER_SIZE, MIN_ADTS_FRAME_HEADER_SIZE, readAdtsFrameHeader } from '../adts/adts-reader';
+import { FileSlice } from '../reader';
 import { Muxer } from '../muxer';
 import { Writer } from '../writer';
 import { EncodedPacket } from '../packet';
@@ -98,6 +103,11 @@ type MatroskaTrackData = {
 		numberOfChannels: number;
 		sampleRate: number;
 		decoderConfig: AudioDecoderConfig;
+		/**
+		 * The "ADTS stripping" involves removing the ADTS header from each AAC packet. SOBMFF stores raw AAC data, not
+		 * ADTS-wrapped data.
+		 */
+		requiresAdtsStripping: boolean;
 	};
 } | {
 	track: OutputSubtitleTrack;
@@ -772,7 +782,7 @@ export class MatroskaMuxer extends Muxer {
 		return newTrackData;
 	}
 
-	private getAudioTrackData(track: OutputAudioTrack, meta?: EncodedAudioChunkMetadata) {
+	private getAudioTrackData(track: OutputAudioTrack, packet: EncodedPacket, meta?: EncodedAudioChunkMetadata) {
 		const existingTrackData = this.trackDatas.find(x => x.track === track);
 		if (existingTrackData) {
 			return existingTrackData as MatroskaAudioTrackData;
@@ -783,13 +793,45 @@ export class MatroskaMuxer extends Muxer {
 		assert(meta);
 		assert(meta.decoderConfig);
 
+		const decoderConfig = { ...meta.decoderConfig };
+		let requiresAdtsStripping = false;
+
+		if (track.source._codec === 'aac' && !decoderConfig.description) {
+			// Matroska stores raw AAC with AudioSpecificConfig in CodecPrivate, not ADTS-wrapped data.
+			// Parse the first packet to extract the AudioSpecificConfig.
+			const adtsFrame = readAdtsFrameHeader(FileSlice.tempFromBytes(packet.data));
+			if (!adtsFrame) {
+				throw new Error(
+					'Couldn\'t parse ADTS header from the AAC packet. Make sure the packets are in ADTS format'
+					+ ' (as specified in ISO 13818-7) when not providing a description, or provide a description'
+					+ ' (must be an AudioSpecificConfig as specified in ISO 14496-3) and ensure the packets'
+					+ ' are raw AAC data.',
+				);
+			}
+
+			const sampleRate = aacFrequencyTable[adtsFrame.samplingFrequencyIndex];
+			const numberOfChannels = aacChannelMap[adtsFrame.channelConfiguration];
+
+			if (sampleRate === undefined || numberOfChannels === undefined) {
+				throw new Error('Invalid ADTS frame header.');
+			}
+
+			decoderConfig.description = buildAacAudioSpecificConfig({
+				objectType: adtsFrame.objectType,
+				sampleRate,
+				numberOfChannels,
+			});
+			requiresAdtsStripping = true;
+		}
+
 		const newTrackData: MatroskaAudioTrackData = {
 			track,
 			type: 'audio',
 			info: {
 				numberOfChannels: meta.decoderConfig.numberOfChannels,
 				sampleRate: meta.decoderConfig.sampleRate,
-				decoderConfig: meta.decoderConfig,
+				decoderConfig,
+				requiresAdtsStripping,
 			},
 			chunkQueue: [],
 			lastWrittenMsTimestamp: null,
@@ -870,11 +912,24 @@ export class MatroskaMuxer extends Muxer {
 		const release = await this.mutex.acquire();
 
 		try {
-			const trackData = this.getAudioTrackData(track, meta);
+			const trackData = this.getAudioTrackData(track, packet, meta);
+
+			let packetData = packet.data;
+			if (trackData.info.requiresAdtsStripping) {
+				const adtsFrame = readAdtsFrameHeader(FileSlice.tempFromBytes(packetData));
+				if (!adtsFrame) {
+					throw new Error('Expected ADTS frame, didn\'t get one.');
+				}
+
+				const headerLength = adtsFrame.crcCheck === null
+					? MIN_ADTS_FRAME_HEADER_SIZE
+					: MAX_ADTS_FRAME_HEADER_SIZE;
+				packetData = packetData.subarray(headerLength);
+			}
 
 			const isKeyFrame = packet.type === 'key';
 			const timestamp = this.validateAndNormalizeTimestamp(trackData.track, packet.timestamp, isKeyFrame);
-			const audioChunk = this.createInternalChunk(packet.data, timestamp, packet.duration, packet.type);
+			const audioChunk = this.createInternalChunk(packetData, timestamp, packet.duration, packet.type);
 
 			trackData.chunkQueue.push(audioChunk);
 			await this.interleaveChunks();

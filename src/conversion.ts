@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -84,7 +84,7 @@ export type ConversionOptions = {
 	trim?: {
 		/**
 		 * The time in the input file in seconds at which the output file should start. Must be less than `end`.
-		 * Defaults to 0 when omitted.
+		 * When omitted, defaults to the start timestamp of the input or to 0, whichever is higher.
 		 */
 		start?: number;
 		/**
@@ -462,9 +462,9 @@ export class Conversion {
 	/** @internal */
 	_options: ConversionOptions;
 	/** @internal */
-	_startTimestamp: number;
+	_startTimestamp!: number;
 	/** @internal */
-	_endTimestamp: number;
+	_endTimestamp!: number;
 
 	/** @internal */
 	_addedCounts: Record<TrackType, number> = {
@@ -592,9 +592,6 @@ export class Conversion {
 		this.input = options.input;
 		this.output = options.output;
 
-		this._startTimestamp = options.trim?.start ?? 0;
-		this._endTimestamp = options.trim?.end ?? Infinity;
-
 		const { promise: started, resolve: start } = promiseWithResolvers();
 		this._started = started;
 		this._start = start;
@@ -602,6 +599,14 @@ export class Conversion {
 
 	/** @internal */
 	async _init() {
+		this._startTimestamp = this._options.trim?.start ?? Math.max(
+			await this.input.getFirstTimestamp(),
+			// Samples can also have negative timestamps, but the meaning typically is "don't present me", so let's cut
+			// those out by default.
+			0,
+		);
+		this._endTimestamp = this._options.trim?.end ?? Infinity;
+
 		const inputTracks = await this.input.getTracks();
 		const outputTrackCounts = this.output.format.getSupportedTrackCounts();
 
@@ -900,8 +905,7 @@ export class Conversion {
 
 		const firstTimestamp = await track.getFirstTimestamp();
 		const needsTranscode = !!trackOptions.forceTranscode
-			|| this._startTimestamp > 0
-			|| firstTimestamp < 0
+			|| firstTimestamp < this._startTimestamp
 			|| !!trackOptions.frameRate
 			|| trackOptions.keyFrameInterval !== undefined
 			|| trackOptions.process !== undefined;
@@ -943,17 +947,19 @@ export class Conversion {
 						return;
 					}
 
-					if (alpha === 'discard') {
-						// Feels hacky given that the rest of the packet is readonly. But, works for now.
-						delete packet.sideData.alpha;
-						delete packet.sideData.alphaByteLength;
-					}
+					const modifiedPacket = packet.clone({
+						timestamp: packet.timestamp - this._startTimestamp,
+						sideData: alpha === 'discard'
+							? {} // Remove alpha side data
+							: packet.sideData,
+					});
+					assert(modifiedPacket.timestamp >= 0);
 
-					this._reportProgress(track.id, packet.timestamp);
-					await source.add(packet, meta);
+					this._reportProgress(track.id, modifiedPacket.timestamp);
+					await source.add(modifiedPacket, meta);
 
-					if (this._synchronizer.shouldWait(track.id, packet.timestamp)) {
-						await this._synchronizer.wait(packet.timestamp);
+					if (this._synchronizer.shouldWait(track.id, modifiedPacket.timestamp)) {
+						await this._synchronizer.wait(modifiedPacket.timestamp);
 					}
 				}
 
@@ -1314,8 +1320,7 @@ export class Conversion {
 		let sampleRate = trackOptions.sampleRate ?? originalSampleRate;
 		let needsResample = numberOfChannels !== originalNumberOfChannels
 			|| sampleRate !== originalSampleRate
-			|| this._startTimestamp > 0
-			|| firstTimestamp < 0;
+			|| firstTimestamp < this._startTimestamp;
 
 		let audioCodecs = this.output.format.getSupportedAudioCodecs();
 		if (
@@ -1346,11 +1351,16 @@ export class Conversion {
 						return;
 					}
 
-					this._reportProgress(track.id, packet.timestamp);
-					await source.add(packet, meta);
+					const modifiedPacket = packet.clone({
+						timestamp: packet.timestamp - this._startTimestamp,
+					});
+					assert(modifiedPacket.timestamp >= 0);
 
-					if (this._synchronizer.shouldWait(track.id, packet.timestamp)) {
-						await this._synchronizer.wait(packet.timestamp);
+					this._reportProgress(track.id, modifiedPacket.timestamp);
+					await source.add(modifiedPacket, meta);
+
+					if (this._synchronizer.shouldWait(track.id, modifiedPacket.timestamp)) {
+						await this._synchronizer.wait(modifiedPacket.timestamp);
 					}
 				}
 
@@ -1448,6 +1458,9 @@ export class Conversion {
 							sample.close();
 							return;
 						}
+
+						// Offset the timestamp as needed
+						sample.setTimestamp(sample.timestamp - this._startTimestamp);
 
 						await this._registerAudioSample(track, trackOptions, source, sample);
 						sample.close();

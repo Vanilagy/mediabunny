@@ -14,12 +14,39 @@
 			source: new Mediabunny.BlobSource(file),
 		});
 
-		const videoTrack = await input.getPrimaryVideoTrack();
-		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
+		const track = await input.getPrimaryVideoTrack();
+		const sink = new Mediabunny.EncodedPacketSink(track);
 
 		for await (const packet of sink.packets()) {
 			console.log(packet);
 		}
+
+		/*
+		
+		//const secondPacket = await sink.getNextPacket(firstPacket);
+		//const thirdPacket = await sink.getNextPacket(secondPacket);
+		//const fourthPacket = await sink.getNextPacket(thirdPacket);
+		//const fifthPacket = await sink.getNextPacket(fourthPacket);
+		//const sixthPacket = await sink.getNextPacket(fifthPacket);
+		//const seventhPacket = await sink.getNextPacket(sixthPacket);
+		//const eighthPacket = await sink.getNextPacket(seventhPacket);
+		//const ninthPacket = await sink.getNextPacket(eighthPacket);
+		//const tenthPacket = await sink.getNextPacket(ninthPacket);
+
+		console.log(firstPacket, secondPacket, thirdPacket, fourthPacket, fifthPacket, sixthPacket, seventhPacket, eighthPacket, ninthPacket, tenthPacket);
+
+		const packets = [firstPacket, secondPacket, thirdPacket, fourthPacket, fifthPacket, sixthPacket, seventhPacket, eighthPacket, ninthPacket, tenthPacket];
+
+		const videoDecoder = new VideoDecoder({
+			output: (frame) => console.log(frame.timestamp, frame),
+			error: console.error,
+		});
+		videoDecoder.configure(await videoTrack.getDecoderConfig());
+
+		for (const packet of packets) {
+			//videoDecoder.decode(packet.toEncodedVideoChunk());
+		}
+		*/
 
 
 		/*
