@@ -365,6 +365,8 @@ In this case, the output will be 15 seconds long.
 
 If only `start` is set, the clip will run until the end of the input file. If only `end` is set, the clip will start at the beginning of the input file.
 
+Note that when using the trimming defaults, the resulting media file will always begin at timestamp 0. If your input file has a start time offset (like is common with MPEG-TS files) and you want to retain that, use `trim: { start: 0 }` to ensure timestamps don't get shifted.
+
 ## Metadata tags
 
 By default, any [descriptive metadata tags](../api/MetadataTags.md) of the input will be copied to the output. If you want to further control the metadata tags written to the output, you can use the `tags` options:

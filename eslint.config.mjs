@@ -40,6 +40,7 @@ export default tseslint.config(
 			'packages/mp3-encoder/build',
 			'eslint.config.mjs',
 			'docs/.vitepress/cache',
+			'test/public',
 		]
 	}
 );
