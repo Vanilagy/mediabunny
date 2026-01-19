@@ -1,0 +1,4 @@
+- Prefer functions declared using const, not using the function keyword
+- Code style is tab indent with semicolons
+- Mediabunny core code is contained in src/, extensions are in packages/*/, website is in docs/
+- Tests: Prefer fewer, longer test files over many small ones. Test files should be named after the general catergory of thing that is being tested, not after any individual single test.
