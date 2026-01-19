@@ -176,7 +176,7 @@ Negative sequence numbers mean the packet's ordering is undefined. When creating
 
 ### Cloning packets
 
-Use the `clone` method to create a new packet from an existing packet. While doing so, you can change its timestamp and duration.
+Use the `clone` method to create a new packet from an existing packet. While doing so, you can partially change its data.
 ```ts
 // Creates a clone identical to the original:
 packet.clone();

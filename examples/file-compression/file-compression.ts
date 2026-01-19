@@ -75,7 +75,7 @@ const compressFile = async (resource: File | string) => {
 		let progress = 0;
 		currentConversion.onProgress = newProgress => progress = newProgress;
 
-		const fileDuration = await input.computeDuration();
+		const fileDuration = (await input.computeDuration()) - (await input.getFirstTimestamp());
 		const startTime = performance.now();
 
 		const updateProgress = () => {

@@ -234,15 +234,29 @@ export class EncodedPacket {
 		);
 	}
 
-	/** Clones this packet while optionally updating timing information. */
+	/** Clones this packet while optionally modifying the new packet's data. */
 	clone(options?: {
+		/** The data of the cloned packet. */
+		data?: Uint8Array;
+		/** The type of the cloned packet. */
+		type?: PacketType;
 		/** The timestamp of the cloned packet in seconds. */
 		timestamp?: number;
 		/** The duration of the cloned packet in seconds. */
 		duration?: number;
+		/** The sequence number of the cloned packet. */
+		sequenceNumber?: number;
+		/** The side data of the cloned packet. */
+		sideData?: EncodedPacketSideData;
 	}): EncodedPacket {
 		if (options !== undefined && (typeof options !== 'object' || options === null)) {
 			throw new TypeError('options, when provided, must be an object.');
+		}
+		if (options?.data !== undefined && !(options.data instanceof Uint8Array)) {
+			throw new TypeError('options.data, when provided, must be a Uint8Array.');
+		}
+		if (options?.type !== undefined && options.type !== 'key' && options.type !== 'delta') {
+			throw new TypeError('options.type, when provided, must be either "key" or "delta".');
 		}
 		if (options?.timestamp !== undefined && !Number.isFinite(options.timestamp)) {
 			throw new TypeError('options.timestamp, when provided, must be a number.');
@@ -250,15 +264,21 @@ export class EncodedPacket {
 		if (options?.duration !== undefined && !Number.isFinite(options.duration)) {
 			throw new TypeError('options.duration, when provided, must be a number.');
 		}
+		if (options?.sequenceNumber !== undefined && !Number.isFinite(options.sequenceNumber)) {
+			throw new TypeError('options.sequenceNumber, when provided, must be a number.');
+		}
+		if (options?.sideData !== undefined && (typeof options.sideData !== 'object' || options.sideData === null)) {
+			throw new TypeError('options.sideData, when provided, must be an object.');
+		}
 
 		return new EncodedPacket(
-			this.data,
-			this.type,
+			options?.data ?? this.data,
+			options?.type ?? this.type,
 			options?.timestamp ?? this.timestamp,
 			options?.duration ?? this.duration,
-			this.sequenceNumber,
+			options?.sequenceNumber ?? this.sequenceNumber,
 			this.byteLength,
-			this.sideData,
+			options?.sideData ?? this.sideData,
 		);
 	}
 }

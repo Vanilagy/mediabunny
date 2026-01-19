@@ -228,20 +228,13 @@ export class MpegTsDemuxer extends Demuxer {
 
 						switch (streamType) {
 							case MpegTsStreamType.MP3_MPEG1:
-							case MpegTsStreamType.MP3_MPEG2: {
-								info = {
-									type: 'audio',
-									codec: 'mp3',
-									aacCodecInfo: null,
-									numberOfChannels: -1,
-									sampleRate: -1,
-								};
-							}; break;
-
+							case MpegTsStreamType.MP3_MPEG2:
 							case MpegTsStreamType.AAC: {
+								const codec = streamType === MpegTsStreamType.AAC ? 'aac' : 'mp3';
+
 								info = {
 									type: 'audio',
-									codec: 'aac',
+									codec,
 									aacCodecInfo: null,
 									numberOfChannels: -1,
 									sampleRate: -1,
@@ -268,6 +261,11 @@ export class MpegTsDemuxer extends Demuxer {
 									reorderSize: -1,
 								};
 							}; break;
+
+							default: {
+								// If we don't recognize the codec, we don't surface the track at all. This is because
+								// we can't determine its metadata and also have no idea how to packetize its data.
+							}
 						}
 
 						if (info) {
