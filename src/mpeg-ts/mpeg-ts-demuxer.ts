@@ -1303,6 +1303,10 @@ class MpegTsVideoTrackBacking extends MpegTsTrackBacking implements InputVideoTr
 		const codec = this.elementaryStream.info.codec;
 		const CHUNK_SIZE = 1024;
 
+		if (codec !== 'avc' && codec !== 'hevc') {
+			throw new Error('Unhandled.');
+		}
+
 		let packetStartPos: number | null = null;
 
 		while (true) {
@@ -1522,7 +1526,7 @@ class MpegTsAudioTrackBacking extends MpegTsTrackBacking implements InputAudioTr
 						context.seekTo(possibleHeaderStartPos + 1);
 					}
 				} else {
-					throw new Error('Unreachable');
+					throw new Error('Unhandled.');
 				}
 			}
 
