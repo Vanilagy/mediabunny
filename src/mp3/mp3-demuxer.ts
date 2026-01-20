@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -14,7 +14,7 @@ import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
 import { PacketRetrievalOptions } from '../media-sink';
 import { assert, AsyncMutex, binarySearchExact, binarySearchLessOrEqual, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
-import { FrameHeader, getXingOffset, INFO, XING } from '../../shared/mp3-misc';
+import { Mp3FrameHeader, getXingOffset, INFO, XING } from '../../shared/mp3-misc';
 import {
 	ID3_V1_TAG_SIZE,
 	ID3_V2_HEADER_SIZE,
@@ -22,7 +22,7 @@ import {
 	parseId3V2Tag,
 	readId3V2Header,
 } from '../id3';
-import { readNextFrameHeader } from './mp3-reader';
+import { readNextMp3FrameHeader } from './mp3-reader';
 import { readAscii, readBytes, Reader, readU32Be } from '../reader';
 
 type Sample = {
@@ -36,7 +36,7 @@ export class Mp3Demuxer extends Demuxer {
 	reader: Reader;
 
 	metadataPromise: Promise<void> | null = null;
-	firstFrameHeader: FrameHeader | null = null;
+	firstFrameHeader: Mp3FrameHeader | null = null;
 	loadedSamples: Sample[] = []; // All samples from the start of the file to lastLoadedPos
 	metadataTags: MetadataTags | null = null;
 
@@ -89,7 +89,7 @@ export class Mp3Demuxer extends Demuxer {
 			}
 		}
 
-		const result = await readNextFrameHeader(this.reader, this.lastLoadedPos, this.reader.fileSize);
+		const result = await readNextMp3FrameHeader(this.reader, this.lastLoadedPos, this.reader.fileSize);
 		if (!result) {
 			this.lastSampleLoaded = true;
 			return;

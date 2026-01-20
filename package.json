@@ -1,7 +1,7 @@
 {
   "name": "mediabunny",
   "author": "Vanilagy",
-  "version": "1.28.0",
+  "version": "1.29.0",
   "description": "Pure TypeScript media toolkit for reading, writing, and converting media files, directly in the browser.",
   "type": "module",
   "workspaces": [
@@ -35,7 +35,7 @@
     "test": "npx vitest --run",
     "test-node": "npm run test node/",
     "test-browser": "npm run test browser/",
-    "check": "rm -rf dist/modules && tsc -p src && tsc -p packages/mp3-encoder/src --noEmit && tsc -p tsconfig.vitest.json --noEmit && tsc -p scripts --noEmit && tsc -p tsconfig.vite.json --noEmit",
+    "check": "rm -rf dist/modules && tsc -p src --stripInternal false && tsc -p packages/mp3-encoder/src --noEmit && tsc -p tsconfig.vitest.json --noEmit && tsc -p scripts --noEmit && tsc -p tsconfig.vite.json --noEmit",
     "check-docblocks": "tsx scripts/check-docblocks.ts dist/mediabunny.d.ts",
     "docs:dev": "vitepress dev docs",
     "docs:build": "npm run build && npm run docs:generate && vitepress build docs && npm run examples:build && cp dist/mediabunny.d.ts dist-docs/",

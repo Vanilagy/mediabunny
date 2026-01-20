@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -13,7 +13,7 @@ import { Output, OutputAudioTrack } from '../output';
 import { Mp3OutputFormat } from '../output-format';
 import { EncodedPacket } from '../packet';
 import { Writer } from '../writer';
-import { getXingOffset, INFO, readFrameHeader, XING } from '../../shared/mp3-misc';
+import { getXingOffset, INFO, readMp3FrameHeader, XING } from '../../shared/mp3-misc';
 import { Mp3Writer, XingFrameData } from './mp3-writer';
 import { Id3V2Writer } from '../id3';
 
@@ -65,7 +65,7 @@ export class Mp3Muxer extends Muxer {
 				}
 
 				const word = view.getUint32(0, false);
-				const header = readFrameHeader(word, null).header;
+				const header = readMp3FrameHeader(word, null).header;
 				if (!header) {
 					throw new Error('Invalid MP3 header in sample.');
 				}

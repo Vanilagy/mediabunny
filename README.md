@@ -70,7 +70,7 @@ Mediabunny is a JavaScript library for reading, writing, and converting media fi
 
 Core features include:
 
-- **Wide format support**: Read and write MP4, MOV, WebM, MKV, WAVE, MP3, Ogg, ADTS, FLAC
+- **Wide format support**: Read and write MP4, MOV, WebM, MKV, WAVE, MP3, Ogg, ADTS, FLAC, MPEG-TS
 - **Built-in encoding & decoding**: Supports 25+ video, audio, and subtitle codecs, hardware-accelerated using the WebCodecs API
 - **High precision**: Fine-grained, microsecond-accurate reading and writing operations
 - **Conversion API**: Easy-to-use API with features such as transmuxing, transcoding, resizing, rotation, cropping, resampling, trimming, and more

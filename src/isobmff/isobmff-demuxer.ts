@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -1245,7 +1245,10 @@ export class IsobmffDemuxer extends Demuxer {
 				const objectTypeIndication = readU8(slice);
 				if (objectTypeIndication === 0x40 || objectTypeIndication === 0x67) {
 					track.info.codec = 'aac';
-					track.info.aacCodecInfo = { isMpeg2: objectTypeIndication === 0x67 };
+					track.info.aacCodecInfo = {
+						isMpeg2: objectTypeIndication === 0x67,
+						objectType: null,
+					};
 				} else if (objectTypeIndication === 0x69 || objectTypeIndication === 0x6b) {
 					track.info.codec = 'mp3';
 				} else if (objectTypeIndication === 0xdd) {

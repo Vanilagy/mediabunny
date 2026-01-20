@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -1069,6 +1069,7 @@ export class MatroskaDemuxer extends Demuxer {
 							this.currentTrack.info.codec = 'aac';
 							this.currentTrack.info.aacCodecInfo = {
 								isMpeg2: this.currentTrack.codecId.includes('MPEG2'),
+								objectType: null,
 							};
 							this.currentTrack.info.codecDescription = this.currentTrack.codecPrivate;
 						} else if (this.currentTrack.codecId === CODEC_STRING_MAP.mp3) {

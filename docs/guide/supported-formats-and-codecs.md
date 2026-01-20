@@ -13,6 +13,7 @@ Mediabunny supports many commonly used media container formats, all of which are
 - WAVE (.wav)
 - ADTS (.aac)
 - FLAC (.flac)
+- MPEG Transport Stream (.ts)
 
 ## Codecs
 
@@ -64,35 +65,35 @@ Mediabunny ships with built-in decoders and encoders for all audio PCM codecs, m
 
 Not all codecs can be used with all containers. The following table specifies the supported codec-container combinations:
 
-|                |   .mp4   | .mov  | .mkv  | .webm[^1] | .ogg  | .mp3  | .wav  | .aac  | .flac |
-|:--------------:|:--------:|:-----:|:-----:|:---------:|:-----:|:-----:|:-----:|:-----:|:-----:|
-| `'avc'`        |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |
-| `'hevc'`       |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |
-| `'vp8'`        |    ✓     |   ✓   |   ✓   |     ✓     |       |       |       |       |       |
-| `'vp9'`        |    ✓     |   ✓   |   ✓   |     ✓     |       |       |       |       |       |
-| `'av1'`        |    ✓     |   ✓   |   ✓   |     ✓     |       |       |       |       |       |
-| `'aac'`        |    ✓     |   ✓   |   ✓   |           |       |       |       |   ✓   |       |
-| `'opus'`       |    ✓     |   ✓   |   ✓   |     ✓     |   ✓   |       |       |       |       |
-| `'mp3'`        |    ✓     |   ✓   |   ✓   |           |       |   ✓   |       |       |       |
-| `'vorbis'`     |    ✓     |   ✓   |   ✓   |     ✓     |   ✓   |       |       |       |       |
-| `'flac'`       |    ✓     |   ✓   |   ✓   |           |       |       |       |       |   ✓   |
-| `'ac3'`[^2]    |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |
-| `'eac3'`[^2]   |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |
-| `'pcm-u8'`     |          |   ✓   |   ✓   |           |       |       |   ✓   |       |       |
-| `'pcm-s8'`     |          |   ✓   |       |           |       |       |       |       |       |
-| `'pcm-s16'`    |    ✓     |   ✓   |   ✓   |           |       |       |   ✓   |       |       |
-| `'pcm-s16be'`  |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |
-| `'pcm-s24'`    |    ✓     |   ✓   |   ✓   |           |       |       |   ✓   |       |       |
-| `'pcm-s24be'`  |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |
-| `'pcm-s32'`    |    ✓     |   ✓   |   ✓   |           |       |       |   ✓   |       |       |
-| `'pcm-s32be'`  |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |
-| `'pcm-f32'`    |    ✓     |   ✓   |   ✓   |           |       |       |   ✓   |       |       |
-| `'pcm-f32be'`  |    ✓     |   ✓   |       |           |       |       |       |       |       |
-| `'pcm-f64'`    |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |
-| `'pcm-f64be'`  |    ✓     |   ✓   |       |           |       |       |       |       |       |
-| `'ulaw'`       |          |   ✓   |       |           |       |       |   ✓   |       |       |
-| `'alaw'`       |          |   ✓   |       |           |       |       |   ✓   |       |       |
-| `'webvtt'`[^3] |   (✓)    |       |  (✓)  |    (✓)    |       |       |       |       |       |
+|                |   .mp4   | .mov  | .mkv  | .webm[^1] | .ogg  | .mp3  | .wav  | .aac  | .flac |  .ts  |
+|:--------------:|:--------:|:-----:|:-----:|:---------:|:-----:|:-----:|:-----:|:-----:|:-----:|:-----:|
+| `'avc'`        |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |   ✓   |
+| `'hevc'`       |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |   ✓   |
+| `'vp8'`        |    ✓     |   ✓   |   ✓   |     ✓     |       |       |       |       |       |       |
+| `'vp9'`        |    ✓     |   ✓   |   ✓   |     ✓     |       |       |       |       |       |       |
+| `'av1'`        |    ✓     |   ✓   |   ✓   |     ✓     |       |       |       |       |       |       |
+| `'aac'`        |    ✓     |   ✓   |   ✓   |           |       |       |       |   ✓   |       |   ✓   |
+| `'opus'`       |    ✓     |   ✓   |   ✓   |     ✓     |   ✓   |       |       |       |       |       |
+| `'mp3'`        |    ✓     |   ✓   |   ✓   |           |       |   ✓   |       |       |       |   ✓   |
+| `'vorbis'`     |    ✓     |   ✓   |   ✓   |     ✓     |   ✓   |       |       |       |       |       |
+| `'flac'`       |    ✓     |   ✓   |   ✓   |           |       |       |       |       |   ✓   |       |
+| `'ac3'`[^2]    |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |       |
+| `'eac3'`[^2]   |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |       |
+| `'pcm-u8'`     |          |   ✓   |   ✓   |           |       |       |   ✓   |       |       |       |
+| `'pcm-s8'`     |          |   ✓   |       |           |       |       |       |       |       |       |
+| `'pcm-s16'`    |    ✓     |   ✓   |   ✓   |           |       |       |   ✓   |       |       |       |
+| `'pcm-s16be'`  |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |       |
+| `'pcm-s24'`    |    ✓     |   ✓   |   ✓   |           |       |       |   ✓   |       |       |       |
+| `'pcm-s24be'`  |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |       |
+| `'pcm-s32'`    |    ✓     |   ✓   |   ✓   |           |       |       |   ✓   |       |       |       |
+| `'pcm-s32be'`  |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |       |
+| `'pcm-f32'`    |    ✓     |   ✓   |   ✓   |           |       |       |   ✓   |       |       |       |
+| `'pcm-f32be'`  |    ✓     |   ✓   |       |           |       |       |       |       |       |       |
+| `'pcm-f64'`    |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |       |
+| `'pcm-f64be'`  |    ✓     |   ✓   |       |           |       |       |       |       |       |       |
+| `'ulaw'`       |          |   ✓   |       |           |       |       |   ✓   |       |       |       |
+| `'alaw'`       |          |   ✓   |       |           |       |       |   ✓   |       |       |       |
+| `'webvtt'`[^3] |   (✓)    |       |  (✓)  |    (✓)    |       |       |       |       |       |       |
 
 
 [^1]: WebM only supports a small subset of the codecs supported by Matroska. However, this library can technically read all codecs from a WebM that are supported by Matroska.

@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -11,11 +11,11 @@ import {
 	concatAvcNalUnits,
 	deserializeAvcDecoderConfigurationRecord,
 	determineVideoPacketType,
-	extractAvcNalUnits,
-	extractHevcNalUnits,
 	extractNalUnitTypeForAvc,
 	extractNalUnitTypeForHevc,
 	HevcNalUnitType,
+	iterateAvcNalUnits,
+	iterateHevcNalUnits,
 	parseAvcSps,
 } from './codec-data';
 import { CustomVideoDecoder, customVideoDecoders, CustomAudioDecoder, customAudioDecoders } from './custom-coder';
@@ -935,12 +935,15 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 
 			// Workaround for https://issues.chromium.org/issues/470109459
 			if (isChromium() && this.currentPacketIndex === 0 && this.codec === 'avc') {
-				const nalUnits = extractAvcNalUnits(packet.data, this.decoderConfig);
-				const filteredNalUnits = nalUnits.filter((x) => {
-					const type = extractNalUnitTypeForAvc(x);
+				const filteredNalUnits: Uint8Array[] = [];
+
+				for (const loc of iterateAvcNalUnits(packet.data, this.decoderConfig)) {
+					const type = extractNalUnitTypeForAvc(packet.data[loc.offset]!);
 					// These trip up Chromium's key frame detection, so let's strip them
-					return !(type >= 20 && type <= 31);
-				});
+					if (!(type >= 20 && type <= 31)) {
+						filteredNalUnits.push(packet.data.subarray(loc.offset, loc.offset + loc.length));
+					}
+				}
 
 				const newData = concatAvcNalUnits(filteredNalUnits, this.decoderConfig);
 				packet = new EncodedPacket(newData, packet.type, packet.timestamp, packet.duration);
@@ -1071,11 +1074,14 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	 * and causes bugs upstream. So, let's take the dropping into our own hands.
 	 */
 	hasHevcRaslPicture(packetData: Uint8Array) {
-		const nalUnits = extractHevcNalUnits(packetData, this.decoderConfig);
-		return nalUnits.some((x) => {
-			const type = extractNalUnitTypeForHevc(x);
-			return type === HevcNalUnitType.RASL_N || type === HevcNalUnitType.RASL_R;
-		});
+		for (const loc of iterateHevcNalUnits(packetData, this.decoderConfig)) {
+			const type = extractNalUnitTypeForHevc(packetData[loc.offset]!);
+			if (type === HevcNalUnitType.RASL_N || type === HevcNalUnitType.RASL_R) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/** Handler for the WebCodecs VideoDecoder for ironing out browser differences. */
