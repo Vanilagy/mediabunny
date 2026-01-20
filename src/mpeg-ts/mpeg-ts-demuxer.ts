@@ -46,6 +46,7 @@ import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
 import {
 	assert,
 	AsyncMutex,
+	binarySearchExact,
 	binarySearchLessOrEqual,
 	Bitstream,
 	COLOR_PRIMARIES_MAP_INVERSE,
@@ -118,6 +119,7 @@ export class MpegTsDemuxer extends Demuxer {
 	tracks: InputTrack[] = [];
 	packetOffset = 0;
 	packetStride = -1;
+	sectionEndPositions: number[] = [];
 
 	constructor(input: Input) {
 		super(input);
@@ -157,7 +159,11 @@ export class MpegTsDemuxer extends Demuxer {
 			let hasProgramMap = false;
 
 			while (true) {
-				const section = await this.readSection(currentPos, true);
+				const section = await this.readSection(
+					currentPos,
+					true,
+					!hasProgramMap, // Expect contiguous sections as long as we don't have the PMT
+				);
 				if (!section) {
 					break;
 				}
@@ -447,13 +453,13 @@ export class MpegTsDemuxer extends Demuxer {
 		return buildMpegTsMimeType(codecStrings);
 	}
 
-	async readSection(startPos: number, full: boolean): Promise<Section | null> {
+	async readSection(startPos: number, full: boolean, contiguous = false): Promise<Section | null> {
 		let endPos = startPos;
 		let currentPos = startPos;
 		const chunks: Uint8Array[] = [];
 		let chunksByteLength = 0;
-
 		let firstPacket: TsPacket | null = null;
+		let mustAddSectionEnd = true;
 
 		while (true) {
 			const packet = await this.readPacket(currentPos);
@@ -471,7 +477,11 @@ export class MpegTsDemuxer extends Demuxer {
 				firstPacket = packet;
 			} else {
 				if (packet.pid !== firstPacket.pid) {
-					continue; // Ignore this packet
+					if (contiguous) {
+						break; // End of section
+					} else {
+						continue; // Ignore this packet
+					}
 				}
 
 				if (packet.payloadUnitStartIndicator === 1) {
@@ -501,8 +511,21 @@ export class MpegTsDemuxer extends Demuxer {
 
 			// 64 is just "a bit of data", enough for the PES packet header
 			if (!full && chunksByteLength >= 64) {
+				mustAddSectionEnd = false; // Not the actual section end
 				break;
 			}
+
+			// Check if we already know this is a section end
+			const isKnownSectionEnd = binarySearchExact(this.sectionEndPositions, endPos, x => x) !== -1;
+			if (isKnownSectionEnd) {
+				mustAddSectionEnd = false;
+				break;
+			}
+		}
+
+		if (mustAddSectionEnd) {
+			const index = binarySearchLessOrEqual(this.sectionEndPositions, endPos, x => x);
+			this.sectionEndPositions.splice(index + 1, 0, endPos);
 		}
 
 		if (!firstPacket) {
