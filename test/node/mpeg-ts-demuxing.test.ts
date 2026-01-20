@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import { Input } from '../../src/input.js';
-import { FilePathSource, ReadableStreamSource, UrlSource } from '../../src/source.js';
+import { FilePathSource, ReadableStreamSource, StreamSource, UrlSource } from '../../src/source.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import { Readable } from 'node:stream';
@@ -241,11 +241,11 @@ test('MPEG-TS video seeking', async () => {
 	expect(allPackets).toHaveLength(298);
 
 	for (const packet of allPackets) {
-		const seekedPacked = await sink.getPacket(packet.timestamp);
-		assert(seekedPacked);
-		expect(seekedPacked.timestamp).toBe(packet.timestamp); // The correct timestamp was retrieved for this packet
-		expect(seekedPacked.duration).toBe(packet.duration); // The correct duration was retrieved for this packet
-		expect(seekedPacked.sequenceNumber).toBe(packet.sequenceNumber);
+		const seekedPacket = await sink.getPacket(packet.timestamp);
+		assert(seekedPacket);
+		expect(seekedPacket.timestamp).toBe(packet.timestamp); // The correct timestamp was retrieved for this packet
+		expect(seekedPacket.duration).toBe(packet.duration); // The correct duration was retrieved for this packet
+		expect(seekedPacket.sequenceNumber).toBe(packet.sequenceNumber);
 	}
 });
 
@@ -572,4 +572,28 @@ test('MPEG-TS with MP3 audio', async () => {
 	}
 
 	expect(count).toBeGreaterThan(0);
+});
+
+test('MPEG-TS partial reading', async () => {
+	const fullPath = path.join(__dirname, '../public/193039199_mp4_h264_aac_fhd_7.ts');
+	const buffer = await fs.promises.readFile(fullPath);
+	let maxEnd = 0;
+
+	using input = new Input({
+		source: new StreamSource({
+			getSize: () => {
+				return buffer.byteLength;
+			},
+			read: (start, end) => {
+				maxEnd = Math.max(maxEnd, end);
+				return buffer.subarray(start, end);
+			},
+		}),
+		formats: ALL_FORMATS,
+	});
+
+	await input.getTracks();
+
+	// Not much of the file has been read since we only requested metadata
+	expect(maxEnd).toBeLessThanOrEqual(86480);
 });
