@@ -746,6 +746,25 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 		return this.elementaryStream.pid;
 	}
 
+	getNumber() {
+		const demuxer = this.elementaryStream.demuxer;
+		const trackType = this.elementaryStream.info.type;
+
+		let number = 0;
+		for (const track of demuxer.tracks) {
+			if (track.type === trackType) {
+				number++;
+			}
+
+			assert(track._backing instanceof MpegTsTrackBacking);
+			if (track._backing.elementaryStream === this.elementaryStream) {
+				break;
+			}
+		}
+
+		return number;
+	}
+
 	getCodec(): MediaCodec | null {
 		throw new Error('Not implemented on base class.');
 	}

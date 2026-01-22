@@ -529,6 +529,10 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		return 1;
 	}
 
+	getNumber() {
+		return 1;
+	}
+
 	getCodec() {
 		return 'flac' as const;
 	}

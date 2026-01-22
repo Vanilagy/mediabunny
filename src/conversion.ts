@@ -66,7 +66,8 @@ export type ConversionOptions = {
 	 * Video-specific options. When passing an object, the same options are applied to all video tracks. When passing a
 	 * function, it will be invoked for each video track and is expected to return or resolve to the options
 	 * for that specific track. The function is passed an instance of {@link InputVideoTrack} as well as a number `n`,
-	 * which is the 1-based index of the track in the list of all video tracks.
+	 * which is the 1-based index of the track in the list of all video tracks. Using `n` is deprecated, prefer the
+	 * identical `track.number` instead.
 	 */
 	video?: ConversionVideoOptions
 		| ((track: InputVideoTrack, n: number) => MaybePromise<ConversionVideoOptions | undefined>);
@@ -75,7 +76,8 @@ export type ConversionOptions = {
 	 * Audio-specific options. When passing an object, the same options are applied to all audio tracks. When passing a
 	 * function, it will be invoked for each audio track and is expected to return or resolve to the options
 	 * for that specific track. The function is passed an instance of {@link InputAudioTrack} as well as a number `n`,
-	 * which is the 1-based index of the track in the list of all audio tracks.
+	 * which is the 1-based index of the track in the list of all audio tracks. Using `n` is deprecated, prefer the
+	 * identical `track.number` instead.
 	 */
 	audio?: ConversionAudioOptions
 		| ((track: InputAudioTrack, n: number) => MaybePromise<ConversionAudioOptions | undefined>);

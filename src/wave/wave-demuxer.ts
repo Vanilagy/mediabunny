@@ -356,6 +356,10 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		return 1;
 	}
 
+	getNumber() {
+		return 1;
+	}
+
 	getCodec() {
 		return this.demuxer.getCodec();
 	}

@@ -62,13 +62,15 @@ const compressFile = async (resource: File | string) => {
 		currentConversion = await Conversion.init({
 			input,
 			output,
-			video: {
+			video: track => ({
 				width: 320, // Height will be deduced automatically to retain aspect ratio
 				bitrate: QUALITY_VERY_LOW,
-			},
-			audio: {
+				discard: track.number > 1, // Keep only the first video track
+			}),
+			audio: track => ({
 				bitrate: 32e3,
-			},
+				discard: track.number > 1, // Keep only the first audio track
+			}),
 		});
 
 		// Keep track of progress
