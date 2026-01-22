@@ -98,7 +98,7 @@ export abstract class InputTrack {
 	/**
 	 * The 1-based index of this track among all tracks of the same type in the input file. For example, the first
 	 * video track has number 1, the second video track has number 2, and so on. The index refers to the order in
-	 * which the tracks are returned by {@link Input.getTracks()}.
+	 * which the tracks are returned by {@link Input.getTracks}.
 	 */
 	get number() {
 		return this._backing.getNumber();
