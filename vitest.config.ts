@@ -23,6 +23,17 @@ export default defineConfig({
 						provider: 'webdriverio',
 						instances: [{
 							browser: 'chrome',
+							capabilities: {
+								'goog:chromeOptions': {
+									args: [
+										'--enable-webgl',
+										'--ignore-gpu-blocklist',
+										'--enable-gpu',
+										'--use-gl=swiftshader',
+										'--use-angle=swiftshader-webgl',
+									],
+								},
+							},
 						}],
 						headless: false, // A bunch of features need the head
 						screenshotFailures: false,
