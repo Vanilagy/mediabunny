@@ -161,10 +161,6 @@ export const iterateAvcNalUnits = (packetData: Uint8Array, decoderConfig: VideoD
 	}
 };
 
-export const iterateAvcNalUnitsAnnexB = function* (packetData: Uint8Array): Generator<NalUnitLocation> {
-	yield* iterateNalUnitsInAnnexB(packetData);
-};
-
 export const extractNalUnitTypeForAvc = (byte: number) => {
 	return byte & 0x1F;
 };
@@ -275,7 +271,7 @@ export const extractAvcDecoderConfigurationRecord = (packetData: Uint8Array): Av
 		const ppsUnits: Uint8Array[] = [];
 		const spsExtUnits: Uint8Array[] = [];
 
-		for (const loc of iterateAvcNalUnitsAnnexB(packetData)) {
+		for (const loc of iterateNalUnitsInAnnexB(packetData)) {
 			const nalUnit = packetData.subarray(loc.offset, loc.offset + loc.length);
 			const type = extractNalUnitTypeForAvc(nalUnit[0]!);
 
@@ -849,10 +845,6 @@ export const iterateHevcNalUnits = (packetData: Uint8Array, decoderConfig: Video
 	}
 };
 
-export const iterateHevcNalUnitsAnnexB = function* (packetData: Uint8Array): Generator<NalUnitLocation> {
-	yield* iterateNalUnitsInAnnexB(packetData);
-};
-
 export const extractNalUnitTypeForHevc = (byte: number) => {
 	return (byte >> 1) & 0x3F;
 };
@@ -1014,7 +1006,7 @@ export const extractHevcDecoderConfigurationRecord = (packetData: Uint8Array) =>
 		const ppsUnits: Uint8Array[] = [];
 		const seiUnits: Uint8Array[] = [];
 
-		for (const loc of iterateHevcNalUnitsAnnexB(packetData)) {
+		for (const loc of iterateNalUnitsInAnnexB(packetData)) {
 			const nalUnit = packetData.subarray(loc.offset, loc.offset + loc.length);
 			const type = extractNalUnitTypeForHevc(nalUnit[0]!);
 
