@@ -428,6 +428,16 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		return this.bitstream.serialNumber;
 	}
 
+	getNumber() {
+		// All Ogg tracks are audio, so the track's index + 1 is its number
+		const index = this.demuxer.tracks.findIndex(
+			t => (t._backing as OggAudioTrackBacking).bitstream === this.bitstream,
+		);
+		assert(index !== -1);
+
+		return index + 1;
+	}
+
 	getNumberOfChannels() {
 		return this.bitstream.numberOfChannels;
 	}

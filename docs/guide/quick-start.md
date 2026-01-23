@@ -556,14 +556,16 @@ const output = new Output(...);
 const conversion = await Conversion.init({
 	input,
 	output,
-	video: {
+	video: track => ({
 		width: 480,
 		bitrate: QUALITY_LOW,
-	},
-	audio: {
+		discard: track.number > 1, // Keep only the first video track
+	}),
+	audio: track => ({
 		numberOfChannels: 1,
 		bitrate: QUALITY_LOW,
-	},
+		discard: track.number > 1, // Keep only the first audio track
+	}),
 	trim: {
 		// Let's keep only the first 60 seconds
 		start: 0,

@@ -324,6 +324,9 @@ export type UrlSourceOptions = {
 	/**
 	 * The [`RequestInit`](https://developer.mozilla.org/en-US/docs/Web/API/RequestInit) used by the Fetch API. Can be
 	 * used to further control the requests, such as setting custom headers.
+	 *
+	 * All fields will work except for `signal` and `headers.Range`; these will be overridden by Mediabunny. If you want
+	 * to cancel ongoing requests, use {@link Input.dispose}.
 	 */
 	requestInit?: RequestInit;
 
@@ -368,7 +371,12 @@ export class UrlSource extends Source {
 		abortController: AbortController;
 	}>();
 
-	/** Creates a new {@link UrlSource} backed by the resource at the specified URL. */
+	/**
+	 * Creates a new {@link UrlSource} backed by the resource at the specified URL.
+	 *
+	 * When passing a `Request` instance, note that the `signal` and `headers.Range` options will be overridden by
+	 * Mediabunny. If you want to cancel ongoing requests, use {@link Input.dispose}.
+	 */
 	constructor(
 		url: string | URL | Request,
 		options: UrlSourceOptions = {},

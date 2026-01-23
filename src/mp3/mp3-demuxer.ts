@@ -217,6 +217,10 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 		return 1;
 	}
 
+	getNumber() {
+		return 1;
+	}
+
 	async getFirstTimestamp() {
 		return 0;
 	}

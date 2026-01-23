@@ -306,8 +306,8 @@ const conversion = await Conversion.init({
 	output,
 
 	// Function gets invoked for each video track:
-	video: (videoTrack, n) => {
-		if (n > 1) {
+	video: (videoTrack) => {
+		if (videoTrack.number > 1) {
 			// Keep only the first video track
 			return { discard: true };
 		}
@@ -319,7 +319,7 @@ const conversion = await Conversion.init({
 	},
 
 	// Async functions work too:
-	audio: async (audioTrack, n) => {
+	audio: async (audioTrack) => {
 		if (audioTrack.languageCode !== 'rus') {
 			// Keep only Russian audio tracks
 			return { discard: true };
