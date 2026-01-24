@@ -157,15 +157,25 @@ export class MpegTsMuxer extends Muxer {
 		let streamType: MpegTsStreamType;
 		let streamId: number;
 
-		if (codec === 'aac') {
-			streamType = MpegTsStreamType.AAC;
-			streamId = AUDIO_STREAM_ID_BASE + this.audioTrackIndex++;
-		} else if (codec === 'mp3') {
-			streamType = MpegTsStreamType.MP3_MPEG1;
-			streamId = AUDIO_STREAM_ID_BASE + this.audioTrackIndex++;
-		} else {
-			streamType = MpegTsStreamType.AC3;
-			streamId = 0xbd; // private_stream_1
+		switch (codec) {
+			case 'aac': {
+				streamType = MpegTsStreamType.AAC;
+				streamId = AUDIO_STREAM_ID_BASE + this.audioTrackIndex++;
+			}; break;
+
+			case 'mp3': {
+				streamType = MpegTsStreamType.MP3_MPEG1;
+				streamId = AUDIO_STREAM_ID_BASE + this.audioTrackIndex++;
+			}; break;
+
+			case 'ac3': {
+				streamType = MpegTsStreamType.AC3_SYSTEM_A;
+				streamId = 0xbd;
+			}; break;
+
+			default: {
+				throw new Error(`Unhandled codec: ${codec}`);
+			}
 		}
 
 		const pid = FIRST_TRACK_PID + this.trackDatas.length;
@@ -711,7 +721,7 @@ const buildPmt = (trackDatas: MpegTsTrackData[]) => {
 	let totalEsBytes = 0;
 	for (const trackData of trackDatas) {
 		totalEsBytes += 5;
-		if (trackData.streamType === MpegTsStreamType.AC3) {
+		if (trackData.streamType === MpegTsStreamType.AC3_SYSTEM_A) {
 			totalEsBytes += AC3_REGISTRATION_DESCRIPTOR.length;
 		}
 	}
@@ -736,7 +746,7 @@ const buildPmt = (trackDatas: MpegTsTrackData[]) => {
 		view.setUint16(offset, 0xE000 | (trackData.pid & 0x1FFF), false); // reserved=111, elementary_PID
 		offset += 2;
 
-		if (trackData.streamType === MpegTsStreamType.AC3) {
+		if (trackData.streamType === MpegTsStreamType.AC3_SYSTEM_A) {
 			view.setUint16(offset, 0xF000 | AC3_REGISTRATION_DESCRIPTOR.length, false);
 			offset += 2;
 			section.set(AC3_REGISTRATION_DESCRIPTOR, offset);

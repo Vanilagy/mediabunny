@@ -227,7 +227,17 @@ export class MpegTsDemuxer extends Demuxer {
 						bitstream.skipBits(6);
 						const esInfoLength = bitstream.readBits(10);
 
-						bitstream.skipBits(8 * esInfoLength);
+						// Check ES descriptors to detect AC-3 in System B
+						const esInfoEndPos = bitstream.pos + 8 * esInfoLength;
+						let hasAc3Descriptor = false;
+						while (bitstream.pos < esInfoEndPos) {
+							const descriptorTag = bitstream.readBits(8);
+							const descriptorLength = bitstream.readBits(8);
+							if (descriptorTag === 0x6a) {
+								hasAc3Descriptor = true;
+							}
+							bitstream.skipBits(8 * descriptorLength);
+						}
 
 						let info: ElementaryStream['info'] | null = null;
 
@@ -267,7 +277,7 @@ export class MpegTsDemuxer extends Demuxer {
 								};
 							}; break;
 
-							case MpegTsStreamType.AC3: {
+							case MpegTsStreamType.AC3_SYSTEM_A: {
 								info = {
 									type: 'audio',
 									codec: 'ac3',
@@ -277,8 +287,17 @@ export class MpegTsDemuxer extends Demuxer {
 								};
 							}; break;
 
-							// TODO: Add DVB (System B) AC-3 support by parsing AC-3_descriptor (0x6A)
-							// when stream_type is 0x06
+							case MpegTsStreamType.PRIVATE_DATA: {
+								if (hasAc3Descriptor) {
+									info = {
+										type: 'audio',
+										codec: 'ac3',
+										aacCodecInfo: null,
+										numberOfChannels: -1,
+										sampleRate: -1,
+									};
+								}
+							}; break;
 
 							default: {
 								// If we don't recognize the codec, we don't surface the track at all. This is because

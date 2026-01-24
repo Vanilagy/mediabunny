@@ -9,6 +9,7 @@ import { assert } from '../../src/misc.js';
 import { EncodedPacketSink } from '../../src/media-sink.js';
 import { EncodedPacket } from '../../src/packet.js';
 import { MpegTsTrackBacking } from '../../src/mpeg-ts/mpeg-ts-demuxer.js';
+import { MpegTsStreamType } from '../../src/mpeg-ts/mpeg-ts-misc.js';
 
 const __dirname = new URL('.', import.meta.url).pathname;
 
@@ -574,7 +575,7 @@ test('MPEG-TS with MP3 audio', async () => {
 	expect(count).toBeGreaterThan(0);
 });
 
-test('MPEG-TS with AC-3 audio', async () => {
+test('MPEG-TS with AC-3 audio (System A)', async () => {
 	using input = new Input({
 		source: new FilePathSource(path.join(__dirname, '../public/ac3.ts')),
 		formats: ALL_FORMATS,
@@ -584,7 +585,42 @@ test('MPEG-TS with AC-3 audio', async () => {
 	assert(audioTrack);
 
 	expect(audioTrack.codec).toBe('ac3');
-	expect(audioTrack.internalCodecId).toBe(0x81);
+	expect(audioTrack.internalCodecId).toBe(MpegTsStreamType.AC3_SYSTEM_A);
+
+	const audioDecoderConfig = await audioTrack.getDecoderConfig();
+	expect(audioDecoderConfig).toEqual({
+		codec: 'ac-3',
+		numberOfChannels: 6,
+		sampleRate: 48000,
+	});
+
+	const sink = new EncodedPacketSink(audioTrack);
+
+	const firstPacket = await sink.getFirstPacket();
+	assert(firstPacket);
+
+	let count = 0;
+	for await (const packet of sink.packets()) {
+		expect(packet.data[0]).toBe(0x0b);
+		expect(packet.data[1]).toBe(0x77);
+		expect(packet.type).toBe('key');
+		count++;
+	}
+
+	expect(count).toBeGreaterThan(0);
+});
+
+test('MPEG-TS with AC-3 audio (System B)', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/ac3-system-b.ts')),
+		formats: ALL_FORMATS,
+	});
+
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	expect(audioTrack.codec).toBe('ac3');
+	expect(audioTrack.internalCodecId).toBe(MpegTsStreamType.PRIVATE_DATA);
 
 	const audioDecoderConfig = await audioTrack.getDecoderConfig();
 	expect(audioDecoderConfig).toEqual({
