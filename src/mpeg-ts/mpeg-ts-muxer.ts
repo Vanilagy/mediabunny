@@ -172,10 +172,6 @@ export class MpegTsMuxer extends Muxer {
 				streamType = MpegTsStreamType.AC3_SYSTEM_A;
 				streamId = 0xbd;
 			}; break;
-
-			default: {
-				throw new Error(`Unhandled codec: ${codec}`);
-			}
 		}
 
 		const pid = FIRST_TRACK_PID + this.trackDatas.length;
