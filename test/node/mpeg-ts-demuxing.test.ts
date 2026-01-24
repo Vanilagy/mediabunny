@@ -573,3 +573,38 @@ test('MPEG-TS with MP3 audio', async () => {
 
 	expect(count).toBeGreaterThan(0);
 });
+
+test('MPEG-TS with AC-3 audio', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/ac3.ts')),
+		formats: ALL_FORMATS,
+	});
+
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	expect(audioTrack.codec).toBe('ac3');
+	expect(audioTrack.internalCodecId).toBe(0x81);
+
+	const audioDecoderConfig = await audioTrack.getDecoderConfig();
+	expect(audioDecoderConfig).toEqual({
+		codec: 'ac-3',
+		numberOfChannels: 6,
+		sampleRate: 48000,
+	});
+
+	const sink = new EncodedPacketSink(audioTrack);
+
+	const firstPacket = await sink.getFirstPacket();
+	assert(firstPacket);
+
+	let count = 0;
+	for await (const packet of sink.packets()) {
+		expect(packet.data[0]).toBe(0x0b);
+		expect(packet.data[1]).toBe(0x77);
+		expect(packet.type).toBe('key');
+		count++;
+	}
+
+	expect(count).toBeGreaterThan(0);
+});

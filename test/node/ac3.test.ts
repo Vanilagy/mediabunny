@@ -4,7 +4,7 @@ import { BufferSource, FilePathSource } from '../../src/source.js';
 import path from 'node:path';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { Output } from '../../src/output.js';
-import { Mp4OutputFormat } from '../../src/output-format.js';
+import { Mp4OutputFormat, MpegTsOutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
 import { Conversion } from '../../src/conversion.js';
 import { toUint8Array } from '../../src/misc.js';
@@ -145,4 +145,36 @@ test('creates dec3 box when converting E-AC-3 from MKV to MP4', async () => {
 	const config = parseEAC3Config(toUint8Array(newDecoderConfig.description!))!;
 
 	expect(config).toEqual(expectedEAC3Config);
+});
+
+test('reads and writes AC-3 in MPEG-TS', async () => {
+	using originalInput = new Input({
+		source: new FilePathSource(path.join(__dirname, '..', 'public/ac3.ts')),
+		formats: ALL_FORMATS,
+	});
+
+	const originalAudioTrack = (await originalInput.getPrimaryAudioTrack())!;
+
+	expect(originalAudioTrack.codec).toBe('ac3');
+	expect(originalAudioTrack.internalCodecId).toBe(0x81);
+
+	const output = new Output({
+		format: new MpegTsOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({ input: originalInput, output });
+	await conversion.execute();
+
+	using newInput = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const newAudioTrack = (await newInput.getPrimaryAudioTrack())!;
+
+	expect(newAudioTrack.codec).toBe('ac3');
+	expect(newAudioTrack.internalCodecId).toBe(0x81);
+	expect(newAudioTrack.numberOfChannels).toBe(originalAudioTrack.numberOfChannels);
+	expect(newAudioTrack.sampleRate).toBe(originalAudioTrack.sampleRate);
 });

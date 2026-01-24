@@ -2767,6 +2767,63 @@ export const serializeAC3Config = (info: AC3FrameInfo): Uint8Array => {
 	return bytes;
 };
 
+/**
+ * AC-3 frame sizes in bytes, indexed by [frmsizecod][fscod].
+ * fscod: 0=48kHz, 1=44.1kHz, 2=32kHz
+ * Values are 16-bit words * 2 (to convert to bytes).
+ * Table 4.13 from ETSI TS 102 366
+ */
+export const AC3_FRAME_SIZES = [
+	// frmsizecod, [48kHz, 44.1kHz, 32kHz] in bytes
+	[64 * 2, 69 * 2, 96 * 2],
+	[64 * 2, 70 * 2, 96 * 2],
+	[80 * 2, 87 * 2, 120 * 2],
+	[80 * 2, 88 * 2, 120 * 2],
+	[96 * 2, 104 * 2, 144 * 2],
+	[96 * 2, 105 * 2, 144 * 2],
+	[112 * 2, 121 * 2, 168 * 2],
+	[112 * 2, 122 * 2, 168 * 2],
+	[128 * 2, 139 * 2, 192 * 2],
+	[128 * 2, 140 * 2, 192 * 2],
+	[160 * 2, 174 * 2, 240 * 2],
+	[160 * 2, 175 * 2, 240 * 2],
+	[192 * 2, 208 * 2, 288 * 2],
+	[192 * 2, 209 * 2, 288 * 2],
+	[224 * 2, 243 * 2, 336 * 2],
+	[224 * 2, 244 * 2, 336 * 2],
+	[256 * 2, 278 * 2, 384 * 2],
+	[256 * 2, 279 * 2, 384 * 2],
+	[320 * 2, 348 * 2, 480 * 2],
+	[320 * 2, 349 * 2, 480 * 2],
+	[384 * 2, 417 * 2, 576 * 2],
+	[384 * 2, 418 * 2, 576 * 2],
+	[448 * 2, 487 * 2, 672 * 2],
+	[448 * 2, 488 * 2, 672 * 2],
+	[512 * 2, 557 * 2, 768 * 2],
+	[512 * 2, 558 * 2, 768 * 2],
+	[640 * 2, 696 * 2, 960 * 2],
+	[640 * 2, 697 * 2, 960 * 2],
+	[768 * 2, 835 * 2, 1152 * 2],
+	[768 * 2, 836 * 2, 1152 * 2],
+	[896 * 2, 975 * 2, 1344 * 2],
+	[896 * 2, 976 * 2, 1344 * 2],
+	[1024 * 2, 1114 * 2, 1536 * 2],
+	[1024 * 2, 1115 * 2, 1536 * 2],
+	[1152 * 2, 1253 * 2, 1728 * 2],
+	[1152 * 2, 1254 * 2, 1728 * 2],
+	[1280 * 2, 1393 * 2, 1920 * 2],
+	[1280 * 2, 1394 * 2, 1920 * 2],
+] as const;
+
+/** Number of samples per AC-3 syncframe (always 1536) */
+export const AC3_SAMPLES_PER_FRAME = 1536;
+
+/** Get AC-3 frame size in bytes from fscod and frmsizecod. */
+export const getAC3FrameSize = (fscod: number, frmsizecod: number): number | null => {
+	if (fscod < 0 || fscod > 2 || frmsizecod < 0 || frmsizecod > 37) return null;
+	return AC3_FRAME_SIZES[frmsizecod]![fscod]!;
+};
+
 /** E-AC-3 reduced sample rates for fscod2 per ATSC A/52:2018 */
 const EAC3_REDUCED_SAMPLE_RATES = [24000, 22050, 16000] as const;
 

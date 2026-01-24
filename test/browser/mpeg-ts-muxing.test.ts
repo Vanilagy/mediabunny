@@ -16,7 +16,7 @@ test('MPEG-TS output format', async () => {
 	expect(format.mimeType).toBe('video/MP2T');
 	expect(format.fileExtension).toBe('.ts');
 	expect(format.supportsVideoRotationMetadata).toBe(false);
-	expect(format.getSupportedCodecs()).toEqual(['avc', 'hevc', 'aac', 'mp3']);
+	expect(format.getSupportedCodecs()).toEqual(['avc', 'hevc', 'aac', 'mp3', 'ac3']);
 	expect(format.getSupportedTrackCounts()).toEqual({
 		video: { min: 0, max: 16 },
 		audio: { min: 0, max: 32 },

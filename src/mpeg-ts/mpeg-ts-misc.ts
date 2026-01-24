@@ -15,6 +15,7 @@ export const enum MpegTsStreamType {
 	AAC = 0x0f,
 	AVC = 0x1b,
 	HEVC = 0x24,
+	AC3 = 0x81,
 }
 
 export const buildMpegTsMimeType = (codecStrings: (string | null)[]) => {

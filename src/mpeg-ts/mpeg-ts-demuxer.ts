@@ -19,6 +19,9 @@ import {
 	VideoCodec,
 } from '../codec';
 import {
+	AC3_ACMOD_CHANNEL_COUNTS,
+	AC3_SAMPLE_RATES,
+	AC3_SAMPLES_PER_FRAME,
 	AvcDecoderConfigurationRecord,
 	AvcNalUnitType,
 	determineVideoPacketType,
@@ -26,8 +29,10 @@ import {
 	extractHevcDecoderConfigurationRecord,
 	extractNalUnitTypeForAvc,
 	extractNalUnitTypeForHevc,
+	getAC3FrameSize,
 	HevcDecoderConfigurationRecord,
 	HevcNalUnitType,
+	parseAC3SyncFrame,
 	parseAvcSps,
 	parseHevcSps,
 } from '../codec-data';
@@ -262,6 +267,19 @@ export class MpegTsDemuxer extends Demuxer {
 								};
 							}; break;
 
+							case MpegTsStreamType.AC3: {
+								info = {
+									type: 'audio',
+									codec: 'ac3',
+									aacCodecInfo: null,
+									numberOfChannels: -1,
+									sampleRate: -1,
+								};
+							}; break;
+
+							// TODO: Add DVB (System B) AC-3 support by parsing AC-3_descriptor (0x6A)
+							// when stream_type is 0x06
+
 							default: {
 								// If we don't recognize the codec, we don't surface the track at all. This is because
 								// we can't determine its metadata and also have no idea how to packetize its data.
@@ -389,6 +407,19 @@ export class MpegTsDemuxer extends Demuxer {
 
 								elementaryStream.info.numberOfChannels = result.header.channel === 3 ? 1 : 2;
 								elementaryStream.info.sampleRate = result.header.sampleRate;
+
+								elementaryStream.initialized = true;
+							} else if (elementaryStream.info.codec === 'ac3') {
+								const frameInfo = parseAC3SyncFrame(pesPacket.data);
+								if (!frameInfo) {
+									throw new Error(
+										'Invalid AC-3 audio stream; could not read sync frame from first packet.',
+									);
+								}
+
+								elementaryStream.info.numberOfChannels
+									= AC3_ACMOD_CHANNEL_COUNTS[frameInfo.acmod]! + frameInfo.lfeon;
+								elementaryStream.info.sampleRate = AC3_SAMPLE_RATES[frameInfo.fscod]!;
 
 								elementaryStream.initialized = true;
 							} else {
@@ -1521,6 +1552,54 @@ class MpegTsAudioTrackBacking extends MpegTsTrackBacking implements InputAudioTr
 					} else {
 						context.seekTo(possibleHeaderStartPos + 1);
 					}
+				} else if (codec === 'ac3') {
+					if (byte !== 0x0b) {
+						continue;
+					}
+
+					context.skip(-1);
+					const possibleSyncPos = context.currentPos;
+
+					// Need at least 5 bytes for sync word + CRC + fscod/frmsizecod
+					let remaining = context.ensureBuffered(5);
+					if (remaining instanceof Promise) remaining = await remaining;
+
+					if (remaining < 5) {
+						return;
+					}
+
+					const headerBytes = context.readBytes(5);
+
+					// Verify sync word (0x0B77)
+					if (headerBytes[0] !== 0x0b || headerBytes[1] !== 0x77) {
+						context.seekTo(possibleSyncPos + 1);
+						continue;
+					}
+
+					const fscod = headerBytes[4]! >> 6;
+					const frmsizecod = headerBytes[4]! & 0x3f;
+
+					if (fscod === 3) {
+						// Reserved, invalid
+						context.seekTo(possibleSyncPos + 1);
+						continue;
+					}
+
+					const frameSize = getAC3FrameSize(fscod, frmsizecod);
+					if (!frameSize) {
+						context.seekTo(possibleSyncPos + 1);
+						continue;
+					}
+
+					context.seekTo(possibleSyncPos);
+
+					let remaining2 = context.ensureBuffered(frameSize);
+					if (remaining2 instanceof Promise) remaining2 = await remaining2;
+
+					const duration = Math.round(
+						AC3_SAMPLES_PER_FRAME * TIMESCALE / this.elementaryStream.info.sampleRate,
+					);
+					return context.supplyPacket(remaining2, duration);
 				} else {
 					throw new Error('Unreachable');
 				}

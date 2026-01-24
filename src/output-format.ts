@@ -1032,7 +1032,7 @@ export class MpegTsOutputFormat extends OutputFormat {
 	getSupportedCodecs(): MediaCodec[] {
 		return [
 			...VIDEO_CODECS.filter(codec => ['avc', 'hevc'].includes(codec)),
-			...AUDIO_CODECS.filter(codec => ['aac', 'mp3'].includes(codec)),
+			...AUDIO_CODECS.filter(codec => ['aac', 'mp3', 'ac3'].includes(codec)),
 		];
 	}
 

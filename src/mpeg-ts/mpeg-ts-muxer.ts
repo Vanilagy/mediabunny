@@ -151,11 +151,23 @@ export class MpegTsMuxer extends Muxer {
 		assert(meta?.decoderConfig);
 
 		const codec = track.source._codec;
-		assert(codec === 'aac' || codec === 'mp3');
+		assert(codec === 'aac' || codec === 'mp3' || codec === 'ac3');
 
-		const streamType = codec === 'aac' ? MpegTsStreamType.AAC : MpegTsStreamType.MP3_MPEG1;
+		let streamType: MpegTsStreamType;
+		let streamId: number;
+
+		if (codec === 'aac') {
+			streamType = MpegTsStreamType.AAC;
+			streamId = AUDIO_STREAM_ID_BASE + this.audioTrackIndex++;
+		} else if (codec === 'mp3') {
+			streamType = MpegTsStreamType.MP3_MPEG1;
+			streamId = AUDIO_STREAM_ID_BASE + this.audioTrackIndex++;
+		} else {
+			streamType = MpegTsStreamType.AC3;
+			streamId = 0xbd; // private_stream_1
+		}
+
 		const pid = FIRST_TRACK_PID + this.trackDatas.length;
-		const streamId = AUDIO_STREAM_ID_BASE + this.audioTrackIndex++;
 
 		const newTrackData: MpegTsTrackData = {
 			track,
@@ -373,7 +385,7 @@ export class MpegTsMuxer extends Muxer {
 	): Uint8Array {
 		const codec = (trackData.track as OutputAudioTrack).source._codec;
 
-		if (codec === 'mp3') {
+		if (codec === 'mp3' || codec === 'ac3') {
 			// We're good
 			return packet.data;
 		}
@@ -694,6 +706,8 @@ const PAT_SECTION = new Uint8Array(16);
 	view.setUint32(12, computeMpegTsCrc32(PAT_SECTION.subarray(0, 12)), false); // CRC_32
 }
 
+// TODO: Consider adding registration_descriptor for AC-3 (format_identifier 'AC-3')
+// in the ES_info loop for better compatibility with some players.
 const buildPmt = (trackDatas: MpegTsTrackData[]) => {
 	const sectionLength = 9 + trackDatas.length * 5 + 4;
 	const section = new Uint8Array(3 + sectionLength - 4);
