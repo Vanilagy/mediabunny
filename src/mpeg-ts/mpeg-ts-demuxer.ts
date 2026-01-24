@@ -1757,15 +1757,15 @@ const markNextPacket = async (context: PacketReadingContext) => {
 						continue;
 					}
 
-				context.seekTo(possibleSyncPos);
+					context.seekTo(possibleSyncPos);
 
-				let remaining2 = context.ensureBuffered(frameSize);
-				if (remaining2 instanceof Promise) remaining2 = await remaining2;
+					let remaining2 = context.ensureBuffered(frameSize);
+					if (remaining2 instanceof Promise) remaining2 = await remaining2;
 
-				const duration = Math.round(
-					AC3_SAMPLES_PER_FRAME * TIMESCALE / elementaryStream.info.sampleRate,
-				);
-				return context.supplyPacket(remaining2, duration);
+					const duration = Math.round(
+						AC3_SAMPLES_PER_FRAME * TIMESCALE / elementaryStream.info.sampleRate,
+					);
+					return context.supplyPacket(remaining2, duration);
 				} else {
 					throw new Error('Unhandled.');
 				}
