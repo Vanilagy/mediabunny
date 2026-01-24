@@ -2771,7 +2771,7 @@ export const serializeAC3Config = (info: AC3FrameInfo): Uint8Array => {
  * AC-3 frame sizes in bytes, indexed by [frmsizecod][fscod].
  * fscod: 0=48kHz, 1=44.1kHz, 2=32kHz
  * Values are 16-bit words * 2 (to convert to bytes).
- * Table 4.13 from ETSI TS 102 366
+ * Table 4.13
  */
 export const AC3_FRAME_SIZES = [
 	// frmsizecod, [48kHz, 44.1kHz, 32kHz] in bytes
@@ -2823,6 +2823,12 @@ export const getAC3FrameSize = (fscod: number, frmsizecod: number): number | nul
 	if (fscod < 0 || fscod > 2 || frmsizecod < 0 || frmsizecod > 37) return null;
 	return AC3_FRAME_SIZES[frmsizecod]![fscod]!;
 };
+
+/**
+ * AC-3 registration_descriptor for MPEG-TS.
+ * Section A.2.3
+ */
+export const AC3_REGISTRATION_DESCRIPTOR = new Uint8Array([0x05, 0x04, 0x41, 0x43, 0x2d, 0x33]);
 
 /** E-AC-3 reduced sample rates for fscod2 per ATSC A/52:2018 */
 const EAC3_REDUCED_SAMPLE_RATES = [24000, 22050, 16000] as const;

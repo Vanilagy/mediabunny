@@ -9,6 +9,7 @@
 import { parseAacAudioSpecificConfig, validateAudioChunkMetadata, validateVideoChunkMetadata } from '../codec';
 import { buildAdtsHeaderTemplate, writeAdtsFrameLength } from '../adts/adts-misc';
 import {
+	AC3_REGISTRATION_DESCRIPTOR,
 	AvcDecoderConfigurationRecord,
 	AvcNalUnitType,
 	concatNalUnitsInAnnexB,
@@ -706,10 +707,16 @@ const PAT_SECTION = new Uint8Array(16);
 	view.setUint32(12, computeMpegTsCrc32(PAT_SECTION.subarray(0, 12)), false); // CRC_32
 }
 
-// TODO: Consider adding registration_descriptor for AC-3 (format_identifier 'AC-3')
-// in the ES_info loop for better compatibility with some players.
 const buildPmt = (trackDatas: MpegTsTrackData[]) => {
-	const sectionLength = 9 + trackDatas.length * 5 + 4;
+	let totalEsBytes = 0;
+	for (const trackData of trackDatas) {
+		totalEsBytes += 5;
+		if (trackData.streamType === MpegTsStreamType.AC3) {
+			totalEsBytes += AC3_REGISTRATION_DESCRIPTOR.length;
+		}
+	}
+
+	const sectionLength = 9 + totalEsBytes + 4;
 	const section = new Uint8Array(3 + sectionLength - 4);
 	const view = toDataView(section);
 
@@ -728,8 +735,16 @@ const buildPmt = (trackDatas: MpegTsTrackData[]) => {
 		section[offset++] = trackData.streamType; // stream_type
 		view.setUint16(offset, 0xE000 | (trackData.pid & 0x1FFF), false); // reserved=111, elementary_PID
 		offset += 2;
-		view.setUint16(offset, 0xF000, false); // reserved=1111, ES_info_length=0
-		offset += 2;
+
+		if (trackData.streamType === MpegTsStreamType.AC3) {
+			view.setUint16(offset, 0xF000 | AC3_REGISTRATION_DESCRIPTOR.length, false);
+			offset += 2;
+			section.set(AC3_REGISTRATION_DESCRIPTOR, offset);
+			offset += AC3_REGISTRATION_DESCRIPTOR.length;
+		} else {
+			view.setUint16(offset, 0xF000, false); // reserved=1111, ES_info_length=0
+			offset += 2;
+		}
 	}
 
 	const crc = computeMpegTsCrc32(section);

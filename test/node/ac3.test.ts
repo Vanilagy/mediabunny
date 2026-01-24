@@ -8,7 +8,13 @@ import { Mp4OutputFormat, MpegTsOutputFormat } from '../../src/output-format.js'
 import { BufferTarget } from '../../src/target.js';
 import { Conversion } from '../../src/conversion.js';
 import { toUint8Array } from '../../src/misc.js';
-import { parseAC3Config, parseEAC3Config, type AC3FrameInfo, type EAC3Config } from '../../src/codec-data.js';
+import {
+	AC3_REGISTRATION_DESCRIPTOR,
+	parseAC3Config,
+	parseEAC3Config,
+	type AC3FrameInfo,
+	type EAC3Config,
+} from '../../src/codec-data.js';
 
 const __dirname = new URL('.', import.meta.url).pathname;
 
@@ -177,4 +183,15 @@ test('reads and writes AC-3 in MPEG-TS', async () => {
 	expect(newAudioTrack.internalCodecId).toBe(0x81);
 	expect(newAudioTrack.numberOfChannels).toBe(originalAudioTrack.numberOfChannels);
 	expect(newAudioTrack.sampleRate).toBe(originalAudioTrack.sampleRate);
+
+	// Verify registration_descriptor is present
+	const buffer = new Uint8Array(output.target.buffer!);
+	let found = false;
+	for (let i = 0; i < buffer.length - AC3_REGISTRATION_DESCRIPTOR.length; i++) {
+		if (AC3_REGISTRATION_DESCRIPTOR.every((byte, j) => buffer[i + j] === byte)) {
+			found = true;
+			break;
+		}
+	}
+	expect(found).toBe(true);
 });
