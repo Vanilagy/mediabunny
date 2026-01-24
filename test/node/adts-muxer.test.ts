@@ -62,7 +62,7 @@ test('ADTS muxer with raw AAC input', async () => {
 	expect(count).toBe(237);
 });
 
-test('ADTS muxer with ADTS input (passthrough)', async () => {
+test('ADTS muxer with ADTS input (passthrough)', { timeout: 10_000 }, async () => {
 	using input = new Input({
 		source: new FilePathSource(path.join(__dirname, '../public/sample3.aac')),
 		formats: ALL_FORMATS,

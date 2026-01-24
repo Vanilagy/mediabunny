@@ -2381,6 +2381,25 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		return this.internalTrack.id;
 	}
 
+	getNumber() {
+		const demuxer = this.internalTrack.demuxer;
+		const inputTrack = this.internalTrack.inputTrack!;
+		const trackType = inputTrack.type;
+
+		let number = 0;
+		for (const track of demuxer.tracks) {
+			if (track.inputTrack!.type === trackType) {
+				number++;
+			}
+
+			if (track === this.internalTrack) {
+				break;
+			}
+		}
+
+		return number;
+	}
+
 	getCodec(): MediaCodec | null {
 		throw new Error('Not implemented on base class.');
 	}

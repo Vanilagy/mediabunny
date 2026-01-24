@@ -12,6 +12,17 @@ import type { WorkerCommand, WorkerResponse, WorkerResponseData } from './shared
 // @ts-expect-error An esbuild plugin handles this, TypeScript doesn't need to understand
 import createWorker from './encode.worker';
 
+const MP3_ENCODER_LOADED_SYMBOL = Symbol.for('@mediabunny/mp3-encoder loaded');
+if ((globalThis as Record<symbol, unknown>)[MP3_ENCODER_LOADED_SYMBOL]) {
+	console.error(
+		'[WARNING]\n@mediabunny/mp3-encoder was loaded twice.'
+		+ ' This will likely cause the encoder not to work correctly.'
+		+ ' Check if multiple dependencies are importing different versions of @mediabunny/mp3-encoder,'
+		+ ' or if something is being bundled incorrectly.',
+	);
+}
+(globalThis as Record<symbol, unknown>)[MP3_ENCODER_LOADED_SYMBOL] = true;
+
 class Mp3Encoder extends CustomAudioEncoder {
 	private worker: Worker | null = null;
 	private nextMessageId = 0;

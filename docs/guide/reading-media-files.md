@@ -98,6 +98,10 @@ Once you have an `InputTrack`, you can start extracting metadata from it.
 // Get a unique ID for this track in the input file:
 track.id; // => number
 
+// Get the 1-based index of this track among all tracks of the same type
+// (e.g., first video track is 1, second video track is 2, etc.):
+track.number; // => number
+
 // Check the track's type:
 track.type; // => 'video' | 'audio' | 'subtitle';
 

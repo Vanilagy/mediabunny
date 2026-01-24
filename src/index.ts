@@ -9,6 +9,17 @@
 /// <reference types="dom-mediacapture-transform" preserve="true" />
 /// <reference types="dom-webcodecs" preserve="true" />
 
+const MEDIABUNNY_LOADED_SYMBOL = Symbol.for('mediabunny loaded');
+if ((globalThis as Record<symbol, unknown>)[MEDIABUNNY_LOADED_SYMBOL]) {
+	console.error(
+		'[WARNING]\nMediabunny was loaded twice.'
+		+ ' This will likely cause Mediabunny not to work correctly.'
+		+ ' Check if multiple dependencies are importing different versions of Mediabunny,'
+		+ ' or if something is being bundled incorrectly.',
+	);
+}
+(globalThis as Record<symbol, unknown>)[MEDIABUNNY_LOADED_SYMBOL] = true;
+
 export {
 	Output,
 	OutputOptions,
