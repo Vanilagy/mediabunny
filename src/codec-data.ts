@@ -2822,11 +2822,14 @@ export const getAC3FrameSize = (fscod: number, frmsizecod: number): number | nul
  */
 export const AC3_REGISTRATION_DESCRIPTOR = new Uint8Array([0x05, 0x04, 0x41, 0x43, 0x2d, 0x33]);
 
+/** E-AC-3 registration_descriptor for MPEG-TS/ */
+export const EAC3_REGISTRATION_DESCRIPTOR = new Uint8Array([0x05, 0x04, 0x45, 0x41, 0x43, 0x33]);
+
 /** E-AC-3 reduced sample rates for fscod2 per ATSC A/52:2018 */
 const EAC3_REDUCED_SAMPLE_RATES = [24000, 22050, 16000] as const;
 
 /** Number of audio blocks per syncframe, indexed by numblkscod */
-const EAC3_NUMBLKS_TABLE = [1, 2, 3, 6] as const;
+export const EAC3_NUMBLKS_TABLE = [1, 2, 3, 6] as const;
 
 /**
  * E-AC-3 independent substream info.
@@ -2854,7 +2857,7 @@ export interface EAC3SubstreamInfo {
 /**
  * E-AC-3 decoder configuration (dec3 box contents).
  */
-export interface EAC3Config {
+export interface EAC3FrameInfo {
 	/** Data rate in kbps */
 	dataRate: number;
 	/** Independent substreams */
@@ -2865,7 +2868,7 @@ export interface EAC3Config {
  * Parse an E-AC-3 syncframe to extract BSI fields.
  * Section E.1.2
  */
-export const parseEAC3SyncFrame = (data: Uint8Array): EAC3Config | null => {
+export const parseEAC3SyncFrame = (data: Uint8Array): EAC3FrameInfo | null => {
 	if (data.length < 6) return null;
 
 	// Check sync word (0x0B77)
@@ -2940,7 +2943,7 @@ export const parseEAC3SyncFrame = (data: Uint8Array): EAC3Config | null => {
  * Parse a dec3 box to extract E-AC-3 parameters.
  * Section F.6
  */
-export const parseEAC3Config = (data: Uint8Array): EAC3Config | null => {
+export const parseEAC3Config = (data: Uint8Array): EAC3FrameInfo | null => {
 	if (data.length < 2) return null;
 
 	const bitstream = new Bitstream(data);
@@ -2995,7 +2998,7 @@ export const parseEAC3Config = (data: Uint8Array): EAC3Config | null => {
  * Serialize E-AC-3 config to dec3 box format.
  * Section F.6
  */
-export const serializeEAC3Config = (config: EAC3Config): Uint8Array => {
+export const serializeEAC3Config = (config: EAC3FrameInfo): Uint8Array => {
 	// Calculate size
 	let totalBits = 16; // header: data_rate (13) + num_ind_sub (3)
 	for (const sub of config.substreams) {
@@ -3039,7 +3042,7 @@ export const serializeEAC3Config = (config: EAC3Config): Uint8Array => {
  * Get sample rate from E-AC-3 config.
  * See ATSC A/52:2018 for handling fscod2.
  */
-export const getEAC3SampleRate = (config: EAC3Config): number => {
+export const getEAC3SampleRate = (config: EAC3FrameInfo): number => {
 	const sub = config.substreams[0];
 	if (!sub) return 48000;
 
@@ -3054,7 +3057,7 @@ export const getEAC3SampleRate = (config: EAC3Config): number => {
 /**
  * Get channel count from E-AC-3 config (first independent substream only).
  */
-export const getEAC3ChannelCount = (config: EAC3Config): number => {
+export const getEAC3ChannelCount = (config: EAC3FrameInfo): number => {
 	const sub = config.substreams[0];
 	if (!sub) return 2;
 

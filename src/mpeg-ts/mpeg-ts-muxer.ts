@@ -15,6 +15,7 @@ import {
 	concatNalUnitsInAnnexB,
 	deserializeAvcDecoderConfigurationRecord,
 	deserializeHevcDecoderConfigurationRecord,
+	EAC3_REGISTRATION_DESCRIPTOR,
 	extractNalUnitTypeForAvc,
 	extractNalUnitTypeForHevc,
 	HevcDecoderConfigurationRecord,
@@ -152,7 +153,7 @@ export class MpegTsMuxer extends Muxer {
 		assert(meta?.decoderConfig);
 
 		const codec = track.source._codec;
-		assert(codec === 'aac' || codec === 'mp3' || codec === 'ac3');
+		assert(codec === 'aac' || codec === 'mp3' || codec === 'ac3' || codec === 'eac3');
 
 		let streamType: MpegTsStreamType;
 		let streamId: number;
@@ -168,11 +169,16 @@ export class MpegTsMuxer extends Muxer {
 				streamId = AUDIO_STREAM_ID_BASE + this.audioTrackIndex++;
 			}; break;
 
-			case 'ac3': {
-				streamType = MpegTsStreamType.AC3_SYSTEM_A;
-				streamId = 0xbd;
-			}; break;
-		}
+		case 'ac3': {
+			streamType = MpegTsStreamType.AC3_SYSTEM_A;
+			streamId = 0xbd;
+		}; break;
+
+		case 'eac3': {
+			streamType = MpegTsStreamType.EAC3_SYSTEM_A;
+			streamId = 0xbd;
+		}; break;
+	}
 
 		const pid = FIRST_TRACK_PID + this.trackDatas.length;
 
@@ -392,10 +398,10 @@ export class MpegTsMuxer extends Muxer {
 	): Uint8Array {
 		const codec = (trackData.track as OutputAudioTrack).source._codec;
 
-		if (codec === 'mp3' || codec === 'ac3') {
-			// We're good
-			return packet.data;
-		}
+	if (codec === 'mp3' || codec === 'ac3' || codec === 'eac3') {
+		// We're good
+		return packet.data;
+	}
 
 		if (trackData.inputIsAdts === null) {
 			// It's the first packet
@@ -719,6 +725,8 @@ const buildPmt = (trackDatas: MpegTsTrackData[]) => {
 		totalEsBytes += 5;
 		if (trackData.streamType === MpegTsStreamType.AC3_SYSTEM_A) {
 			totalEsBytes += AC3_REGISTRATION_DESCRIPTOR.length;
+		} else if (trackData.streamType === MpegTsStreamType.EAC3_SYSTEM_A) {
+			totalEsBytes += EAC3_REGISTRATION_DESCRIPTOR.length;
 		}
 	}
 
@@ -747,6 +755,11 @@ const buildPmt = (trackDatas: MpegTsTrackData[]) => {
 			offset += 2;
 			section.set(AC3_REGISTRATION_DESCRIPTOR, offset);
 			offset += AC3_REGISTRATION_DESCRIPTOR.length;
+		} else if (trackData.streamType === MpegTsStreamType.EAC3_SYSTEM_A) {
+			view.setUint16(offset, 0xF000 | EAC3_REGISTRATION_DESCRIPTOR.length, false);
+			offset += 2;
+			section.set(EAC3_REGISTRATION_DESCRIPTOR, offset);
+			offset += EAC3_REGISTRATION_DESCRIPTOR.length;
 		} else {
 			view.setUint16(offset, 0xF000, false); // reserved=1111, ES_info_length=0
 			offset += 2;

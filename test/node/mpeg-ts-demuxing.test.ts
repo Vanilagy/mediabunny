@@ -683,6 +683,76 @@ test('MPEG-TS with AC-3 audio (System B)', async () => {
 	expect(count).toBeGreaterThan(0);
 });
 
+test('MPEG-TS with E-AC-3 audio (System A)', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/eac3.ts')),
+		formats: ALL_FORMATS,
+	});
+
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	expect(audioTrack.codec).toBe('eac3');
+	expect(audioTrack.internalCodecId).toBe(MpegTsStreamType.EAC3_SYSTEM_A);
+
+	const audioDecoderConfig = await audioTrack.getDecoderConfig();
+	expect(audioDecoderConfig).toEqual({
+		codec: 'ec-3',
+		numberOfChannels: 6,
+		sampleRate: 48000,
+	});
+
+	const sink = new EncodedPacketSink(audioTrack);
+
+	const firstPacket = await sink.getFirstPacket();
+	assert(firstPacket);
+
+	let count = 0;
+	for await (const packet of sink.packets()) {
+		expect(packet.data[0]).toBe(0x0b);
+		expect(packet.data[1]).toBe(0x77);
+		expect(packet.type).toBe('key');
+		count++;
+	}
+
+	expect(count).toBeGreaterThan(0);
+});
+
+test('MPEG-TS with E-AC-3 audio (System B)', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/eac3-system-b.ts')),
+		formats: ALL_FORMATS,
+	});
+
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	expect(audioTrack.codec).toBe('eac3');
+	expect(audioTrack.internalCodecId).toBe(MpegTsStreamType.PRIVATE_DATA);
+
+	const audioDecoderConfig = await audioTrack.getDecoderConfig();
+	expect(audioDecoderConfig).toEqual({
+		codec: 'ec-3',
+		numberOfChannels: 6,
+		sampleRate: 48000,
+	});
+
+	const sink = new EncodedPacketSink(audioTrack);
+
+	const firstPacket = await sink.getFirstPacket();
+	assert(firstPacket);
+
+	let count = 0;
+	for await (const packet of sink.packets()) {
+		expect(packet.data[0]).toBe(0x0b);
+		expect(packet.data[1]).toBe(0x77);
+		expect(packet.type).toBe('key');
+		count++;
+	}
+
+	expect(count).toBeGreaterThan(0);
+});
+
 test('MPEG-TS partial reading', async () => {
 	const fullPath = path.join(__dirname, '../public/193039199_mp4_h264_aac_fhd_7.ts');
 	const buffer = await fs.promises.readFile(fullPath);

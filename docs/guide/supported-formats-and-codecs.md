@@ -78,7 +78,7 @@ Not all codecs can be used with all containers. The following table specifies th
 | `'vorbis'`     |    ✓     |   ✓   |   ✓   |     ✓     |   ✓   |       |       |       |       |       |
 | `'flac'`       |    ✓     |   ✓   |   ✓   |           |       |       |       |       |   ✓   |       |
 | `'ac3'`[^2]    |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |   ✓   |
-| `'eac3'`[^2]   |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |       |
+| `'eac3'`[^2]   |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |   ✓   |
 | `'pcm-u8'`     |          |   ✓   |   ✓   |           |       |       |   ✓   |       |       |       |
 | `'pcm-s8'`     |          |   ✓   |       |           |       |       |       |       |       |       |
 | `'pcm-s16'`    |    ✓     |   ✓   |   ✓   |           |       |       |   ✓   |       |       |       |

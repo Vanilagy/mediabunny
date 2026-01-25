@@ -14,6 +14,7 @@ export const enum MpegTsStreamType {
 	MP3_MPEG2 = 0x04,
 	AAC = 0x0f,
 	AC3_SYSTEM_A = 0x81,
+	EAC3_SYSTEM_A = 0x87,
 	PRIVATE_DATA = 0x06,
 	AVC = 0x1b,
 	HEVC = 0x24,
