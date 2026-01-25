@@ -169,16 +169,16 @@ export class MpegTsMuxer extends Muxer {
 				streamId = AUDIO_STREAM_ID_BASE + this.audioTrackIndex++;
 			}; break;
 
-		case 'ac3': {
-			streamType = MpegTsStreamType.AC3_SYSTEM_A;
-			streamId = 0xbd;
-		}; break;
+			case 'ac3': {
+				streamType = MpegTsStreamType.AC3_SYSTEM_A;
+				streamId = 0xbd;
+			}; break;
 
-		case 'eac3': {
-			streamType = MpegTsStreamType.EAC3_SYSTEM_A;
-			streamId = 0xbd;
-		}; break;
-	}
+			case 'eac3': {
+				streamType = MpegTsStreamType.EAC3_SYSTEM_A;
+				streamId = 0xbd;
+			}; break;
+		}
 
 		const pid = FIRST_TRACK_PID + this.trackDatas.length;
 
@@ -398,10 +398,10 @@ export class MpegTsMuxer extends Muxer {
 	): Uint8Array {
 		const codec = (trackData.track as OutputAudioTrack).source._codec;
 
-	if (codec === 'mp3' || codec === 'ac3' || codec === 'eac3') {
-		// We're good
-		return packet.data;
-	}
+		if (codec === 'mp3' || codec === 'ac3' || codec === 'eac3') {
+			// We're good
+			return packet.data;
+		}
 
 		if (trackData.inputIsAdts === null) {
 			// It's the first packet
