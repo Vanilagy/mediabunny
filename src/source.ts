@@ -416,9 +416,7 @@ export class UrlSource extends Source {
 
 		this._orchestrator = new ReadOrchestrator({
 			maxCacheSize: options.maxCacheSize ?? (64 * 2 ** 20 /* 64 MiB */),
-			// Most files in the real-world have a single sequential access pattern, but having two in parallel can
-			// also happen
-			maxWorkerCount: 2,
+			maxWorkerCount: 1, // Chromium has been seen to have problem with more than one worker
 			runWorker: this._runWorker.bind(this),
 			prefetchProfile: PREFETCH_PROFILES.network,
 		});
