@@ -327,15 +327,6 @@ export class WaveDemuxer extends Demuxer {
 		return 'audio/wav';
 	}
 
-	async computeDuration() {
-		await this.readMetadata();
-
-		const track = this.tracks[0];
-		assert(track);
-
-		return track.computeDuration();
-	}
-
 	async getTracks() {
 		await this.readMetadata();
 		return this.tracks;
@@ -383,11 +374,6 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		};
 	}
 
-	async computeDuration() {
-		const lastPacket = await this.getPacket(Infinity, { metadataOnly: true });
-		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
-	}
-
 	getNumberOfChannels() {
 		assert(this.demuxer.audioInfo);
 		return this.demuxer.audioInfo.numberOfChannels;
@@ -419,10 +405,6 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		return {
 			...DEFAULT_TRACK_DISPOSITION,
 		};
-	}
-
-	async getFirstTimestamp() {
-		return 0;
 	}
 
 	private async getPacketAtIndex(

@@ -26,11 +26,6 @@ export class InputAggregateDemuxer extends Demuxer {
 		this.subInputs = subInputs;
 	}
 
-	async computeDuration() {
-		const durations = await Promise.all(this.subInputs.map(x => x.computeDuration()));
-		return Math.max(0, ...durations);
-	}
-
 	async getMetadataTags(): Promise<MetadataTags> {
 		return {}; // todo?
 	}
@@ -110,14 +105,6 @@ class InputAggregateTrackBacking implements InputTrackBacking {
 
 	getVariant(): ManifestInputVariant | null {
 		return this.source.getVariant();
-	}
-
-	getFirstTimestamp() {
-		return this.source.getFirstTimestamp();
-	}
-
-	computeDuration() {
-		return this.source.computeDuration();
 	}
 
 	getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null> {

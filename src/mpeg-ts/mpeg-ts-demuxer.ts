@@ -485,12 +485,6 @@ export class MpegTsDemuxer extends Demuxer {
 		return {}; // Nothing for now
 	}
 
-	async computeDuration() {
-		const tracks = await this.getTracks();
-		const trackDurations = await Promise.all(tracks.map(x => x.computeDuration()));
-		return Math.max(0, ...trackDurations);
-	}
-
 	async getMimeType(): Promise<string> {
 		await this.readMetadata();
 
@@ -844,16 +838,6 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 
 	getVariant() {
 		return null;
-	}
-
-	async computeDuration(): Promise<number> {
-		const lastPacket = await this.getPacket(Infinity, { metadataOnly: true });
-		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
-	}
-
-	async getFirstTimestamp(): Promise<number> {
-		const firstPacket = await this.getFirstPacket({ metadataOnly: true });
-		return firstPacket?.timestamp ?? 0;
 	}
 
 	abstract allPacketsAreKeyPackets(): boolean;

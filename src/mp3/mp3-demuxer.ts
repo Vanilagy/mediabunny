@@ -147,15 +147,6 @@ export class Mp3Demuxer extends Demuxer {
 		return this.tracks;
 	}
 
-	async computeDuration() {
-		await this.readMetadata();
-
-		const track = this.tracks[0];
-		assert(track);
-
-		return track.computeDuration();
-	}
-
 	async getMetadataTags() {
 		const release = await this.readingMutex.acquire();
 
@@ -221,18 +212,9 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 		return 1;
 	}
 
-	async getFirstTimestamp() {
-		return 0;
-	}
-
 	getTimeResolution() {
 		assert(this.demuxer.firstFrameHeader);
 		return this.demuxer.firstFrameHeader.sampleRate / this.demuxer.firstFrameHeader.audioSamplesInFrame;
-	}
-
-	async computeDuration() {
-		const lastPacket = await this.getPacket(Infinity, { metadataOnly: true });
-		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
 	}
 
 	getName() {

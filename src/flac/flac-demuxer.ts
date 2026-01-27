@@ -86,12 +86,6 @@ export class FlacDemuxer extends Demuxer {
 		this.reader = input._reader;
 	}
 
-	override async computeDuration(): Promise<number> {
-		await this.readMetadata();
-		assert(this.track);
-		return this.track.computeDuration();
-	}
-
 	override async getMetadataTags(): Promise<MetadataTags> {
 		await this.readMetadata();
 		return this.metadataTags;
@@ -546,11 +540,6 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		return this.demuxer.audioInfo.numberOfChannels;
 	}
 
-	async computeDuration() {
-		const lastPacket = await this.getPacket(Infinity, { metadataOnly: true });
-		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
-	}
-
 	getSampleRate() {
 		assert(this.demuxer.audioInfo);
 		return this.demuxer.audioInfo.sampleRate;
@@ -577,10 +566,6 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 
 	getVariant() {
 		return null;
-	}
-
-	async getFirstTimestamp() {
-		return 0;
 	}
 
 	async getDecoderConfig(): Promise<AudioDecoderConfig | null> {

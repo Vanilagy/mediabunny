@@ -266,12 +266,6 @@ export class MatroskaDemuxer extends Demuxer {
 		this.reader = input._reader;
 	}
 
-	override async computeDuration() {
-		const tracks = await this.getTracks();
-		const trackDurations = await Promise.all(tracks.map(x => x.computeDuration()));
-		return Math.max(0, ...trackDurations);
-	}
-
 	async getTracks() {
 		await this.readMetadata();
 		return this.segments.flatMap(segment => segment.tracks.map(track => track.inputTrack!));
@@ -1888,22 +1882,12 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		return this.internalTrack.codecId;
 	}
 
-	async computeDuration() {
-		const lastPacket = await this.getPacket(Infinity, { metadataOnly: true });
-		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
-	}
-
 	getName() {
 		return this.internalTrack.name;
 	}
 
 	getLanguageCode() {
 		return this.internalTrack.languageCode;
-	}
-
-	async getFirstTimestamp() {
-		const firstPacket = await this.getFirstPacket({ metadataOnly: true });
-		return firstPacket?.timestamp ?? 0;
 	}
 
 	getVariant() {

@@ -99,12 +99,6 @@ class ManifestInputVariantDemuxer extends Demuxer {
 		this.variant = variant;
 	}
 
-	async computeDuration(): Promise<number> {
-		const tracks = await this.getTracks();
-		const trackDurations = await Promise.all(tracks.map(x => x.computeDuration()));
-		return Math.max(0, ...trackDurations);
-	}
-
 	async getMetadataTags(): Promise<MetadataTags> {
 		return {}; // todo?
 	}
@@ -255,16 +249,6 @@ class ManifestInputVariantInputTrackBacking implements InputTrackBacking {
 
 	getVariant(): ManifestInputVariant | null {
 		return this.demuxer.variant;
-	}
-
-	async getFirstTimestamp(): Promise<number> {
-		const firstPacket = await this.getFirstPacket({ metadataOnly: true });
-		return firstPacket?.timestamp ?? 0;
-	}
-
-	async computeDuration(): Promise<number> {
-		const lastPacket = await this.getPacket(Infinity, { metadataOnly: true });
-		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
 	}
 
 	async createAdjustedPacket(packet: EncodedPacket, segment: ManifestInputSegment, track: InputTrack) {

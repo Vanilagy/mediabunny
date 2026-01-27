@@ -42,9 +42,6 @@ export interface InputTrackBacking {
 	getDisposition(): TrackDisposition;
 	getVariant(): ManifestInputVariant | null;
 
-	getFirstTimestamp(): Promise<number>;
-	computeDuration(): Promise<number>;
-
 	getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
 	getPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
 	getNextPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
@@ -158,13 +155,15 @@ export abstract class InputTrack {
 	 * may be positive or even negative. A negative starting timestamp means the track's timing has been offset. Samples
 	 * with a negative timestamp should not be presented.
 	 */
-	getFirstTimestamp() {
-		return this._backing.getFirstTimestamp();
+	async getFirstTimestamp() {
+		const firstPacket = await this._backing.getFirstPacket({ metadataOnly: true });
+		return firstPacket?.timestamp ?? 0;
 	}
 
 	/** Returns the end timestamp of the last packet of this track, in seconds. */
-	computeDuration() {
-		return this._backing.computeDuration();
+	async computeDuration() {
+		const lastPacket = await this._backing.getPacket(Infinity, { metadataOnly: true });
+		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
 	}
 
 	/**
