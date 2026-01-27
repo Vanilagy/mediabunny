@@ -1,9 +1,11 @@
 import {
 	ALL_FORMATS,
+	ALL_MANIFEST_FORMATS,
 	AudioBufferSink,
 	BlobSource,
 	CanvasSink,
 	Input,
+	ManifestInput,
 	UrlSource,
 	WrappedAudioBuffer,
 	WrappedCanvas,
@@ -89,14 +91,44 @@ const initMediaPlayer = async (resource: File | string) => {
 		errorElement.textContent = '';
 		warningElement.textContent = '';
 
+		let input: Input;
+		if (typeof resource === 'string' && resource.endsWith('.m3u8')) {
+			const manifestInput = new ManifestInput({
+				entryPath: resource,
+				getSource: path => new UrlSource(path),
+				manifestFormats: ALL_MANIFEST_FORMATS,
+				mediaFormats: ALL_FORMATS,
+			});
+			const variant = (await manifestInput.getVariants())[0]!;
+
+			input = variant.toInput();// await manifestInput.toInput();
+
+			// https://test-streams.mux.dev/test_001/stream.m3u8
+			// https://test-streams.mux.dev/test_001/stream_1000k_48k_640x360_050.ts
+		} else {
+			const source = resource instanceof File
+				? new BlobSource(resource)
+				: new UrlSource(resource);
+
+			input = new Input({
+				source,
+				formats: ALL_FORMATS,
+			});
+		}
+
+		/*
 		// Create an Input from the resource
 		const source = resource instanceof File
 			? new BlobSource(resource)
 			: new UrlSource(resource);
+		*/
+
+		/*
 		const input = new Input({
 			source,
 			formats: ALL_FORMATS,
 		});
+		*/
 
 		playbackTimeAtStart = 0;
 		totalDuration = await input.computeDuration();

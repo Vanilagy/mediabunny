@@ -10,6 +10,7 @@ import type { FileHandle } from 'node:fs/promises';
 import {
 	assert,
 	binarySearchLessOrEqual,
+	clamp,
 	closedIntervalsOverlap,
 	isNumber,
 	isWebKit,
@@ -83,6 +84,17 @@ export abstract class Source {
 		}
 
 		return result;
+	}
+
+	slice(offset: number, length?: number) {
+		if (!Number.isInteger(offset) || offset < 0) {
+			throw new TypeError('offset must be a non-negative integer.');
+		}
+		if (length !== undefined && (!Number.isInteger(length) || length < 0)) {
+			throw new TypeError('length, when provided, must be a non-negative integer.');
+		}
+
+		return new RangedSource(this, offset, length);
 	}
 
 	/** Called each time data is retrieved from the source. Will be called with the retrieved range (end exclusive). */
@@ -1695,5 +1707,80 @@ class ReadOrchestrator {
 		this.workers.length = 0;
 		this.cache.length = 0;
 		this.disposed = true;
+	}
+}
+
+/**
+ * A dummy source from which no data can be read. Can be used in conjunction with input formats that get their data
+ * from another source.
+ */
+export class NullSource extends Source {
+	override _retrieveSize(): MaybePromise<number | null> {
+		return null;
+	}
+
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	override _read(start: number, end: number): MaybePromise<ReadResult | null> {
+		return null;
+	}
+
+	override _dispose(): void {
+		// Do nothing
+	}
+}
+
+export class RangedSource extends Source {
+	/** @internal */
+	_baseSource: Source;
+	/** @internal */
+	_offset: number;
+	/** @internal */
+	_length: number | null;
+
+	constructor(baseSource: Source, offset: number, length?: number) {
+		super();
+
+		this._baseSource = baseSource;
+		this._offset = offset;
+		this._length = length ?? null;
+	}
+
+	override async _retrieveSize(): Promise<number | null> {
+		const baseSize = await this._baseSource.getSizeOrNull(); // Call getSizeOrNull for memoization
+		if (baseSize === null) {
+			return null;
+		}
+
+		return clamp(baseSize - this._offset, 0, this._length ?? Infinity);
+	}
+
+	override _read(start: number, end: number): MaybePromise<ReadResult | null> {
+		if (this._length !== null && end > this._length) {
+			return null;
+		}
+
+		const result = this._baseSource._read(this._offset + start, this._offset + end);
+
+		if (result instanceof Promise) {
+			return result.then((result) => {
+				if (!result) {
+					return null;
+				}
+
+				result.offset -= this._offset;
+				return result;
+			});
+		} else {
+			if (!result) {
+				return null;
+			}
+
+			result.offset -= this._offset;
+			return result;
+		}
+	}
+
+	override _dispose(): void {
+		this._baseSource._dispose();
 	}
 }
