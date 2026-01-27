@@ -2,3 +2,5 @@
 - Code style is tab indent with semicolons
 - Mediabunny core code is contained in src/, extensions are in packages/*/, website is in docs/
 - Tests: Prefer fewer, longer test files over many small ones. Test files should be named after the general catergory of thing that is being tested, not after any individual single test.
+- Avoid ifs without a {} block. So no if (cond) return;, always do if (cond) { return; }
+- `type` instead of `interface` for object types

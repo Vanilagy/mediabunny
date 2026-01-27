@@ -8,9 +8,15 @@
 
 import { aacChannelMap, aacFrequencyTable, AudioCodec } from '../codec';
 import { Demuxer } from '../demuxer';
+import {
+	ID3_V2_HEADER_SIZE,
+	parseId3V2Tag,
+	readId3V2Header,
+} from '../id3';
 import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
+import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
 import {
 	assert,
 	AsyncMutex,
@@ -20,7 +26,6 @@ import {
 } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readBytes, Reader } from '../reader';
-import { DEFAULT_TRACK_DISPOSITION } from '../metadata';
 import {
 	AdtsFrameHeader,
 	MIN_ADTS_FRAME_HEADER_SIZE,
@@ -43,6 +48,7 @@ export class AdtsDemuxer extends Demuxer {
 	metadataPromise: Promise<void> | null = null;
 	firstFrameHeader: AdtsFrameHeader | null = null;
 	loadedSamples: Sample[] = [];
+	metadataTags: MetadataTags | null = null;
 
 	tracks: InputAudioTrack[] = [];
 
@@ -73,6 +79,26 @@ export class AdtsDemuxer extends Demuxer {
 	}
 
 	async advanceReader() {
+		if (this.lastLoadedPos === 0) {
+			// Skip all ID3v2 tags at the start of the file
+			while (true) {
+				let slice = this.reader.requestSlice(this.lastLoadedPos, ID3_V2_HEADER_SIZE);
+				if (slice instanceof Promise) slice = await slice;
+
+				if (!slice) {
+					this.lastSampleLoaded = true;
+					return;
+				}
+
+				const id3V2Header = readId3V2Header(slice);
+				if (!id3V2Header) {
+					break;
+				}
+
+				this.lastLoadedPos = slice.filePos + id3V2Header.size;
+			}
+		}
+
 		let slice = this.reader.requestSliceRange(
 			this.lastLoadedPos,
 			MIN_ADTS_FRAME_HEADER_SIZE,
@@ -135,7 +161,41 @@ export class AdtsDemuxer extends Demuxer {
 	}
 
 	async getMetadataTags() {
-		return {}; // No tags in this one
+		const release = await this.readingMutex.acquire();
+
+		try {
+			await this.readMetadata();
+
+			if (this.metadataTags) {
+				return this.metadataTags;
+			}
+
+			this.metadataTags = {};
+			let currentPos = 0;
+
+			while (true) {
+				let headerSlice = this.reader.requestSlice(currentPos, ID3_V2_HEADER_SIZE);
+				if (headerSlice instanceof Promise) headerSlice = await headerSlice;
+				if (!headerSlice) break;
+
+				const id3V2Header = readId3V2Header(headerSlice);
+				if (!id3V2Header) {
+					break;
+				}
+
+				let contentSlice = this.reader.requestSlice(headerSlice.filePos, id3V2Header.size);
+				if (contentSlice instanceof Promise) contentSlice = await contentSlice;
+				if (!contentSlice) break;
+
+				parseId3V2Tag(contentSlice, id3V2Header, this.metadataTags);
+
+				currentPos = headerSlice.filePos + id3V2Header.size;
+			}
+
+			return this.metadataTags;
+		} finally {
+			release();
+		}
 	}
 }
 

@@ -7,6 +7,8 @@
  */
 
 import { parseAacAudioSpecificConfig, validateAudioChunkMetadata } from '../codec';
+import { Id3V2Writer } from '../id3';
+import { metadataTagsAreEmpty } from '../metadata';
 import { assert, Bitstream, toUint8Array } from '../misc';
 import { Muxer } from '../muxer';
 import { Output, OutputAudioTrack } from '../output';
@@ -30,7 +32,10 @@ export class AdtsMuxer extends Muxer {
 	}
 
 	async start() {
-		// Nothing needed here
+		if (!metadataTagsAreEmpty(this.output._metadataTags)) {
+			const id3Writer = new Id3V2Writer(this.writer);
+			id3Writer.writeId3V2Tag(this.output._metadataTags);
+		}
 	}
 
 	async getMimeType() {

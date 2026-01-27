@@ -266,7 +266,6 @@ export class Mp3InputFormat extends InputFormat {
 		if (!slice) return false;
 
 		let currentPos = 0;
-		let id3V2HeaderFound = false;
 
 		while (true) {
 			let slice = input._reader.requestSlice(currentPos, ID3_V2_HEADER_SIZE);
@@ -278,18 +277,12 @@ export class Mp3InputFormat extends InputFormat {
 				break;
 			}
 
-			id3V2HeaderFound = true;
 			currentPos = slice.filePos + id3V2Header.size;
 		}
 
 		const firstResult = await readNextMp3FrameHeader(input._reader, currentPos, currentPos + 4096);
 		if (!firstResult) {
 			return false;
-		}
-
-		if (id3V2HeaderFound) {
-			// If there was an ID3v2 tag at the start, we can be pretty sure this is MP3 by now
-			return true;
 		}
 
 		currentPos = firstResult.startPos + firstResult.header.totalSize;
@@ -441,8 +434,23 @@ export class FlacInputFormat extends InputFormat {
 export class AdtsInputFormat extends InputFormat {
 	/** @internal */
 	async _canReadInput(input: Input) {
+		let currentPos = 0;
+
+		while (true) {
+			let slice = input._reader.requestSlice(currentPos, ID3_V2_HEADER_SIZE);
+			if (slice instanceof Promise) slice = await slice;
+			if (!slice) break;
+
+			const id3V2Header = readId3V2Header(slice);
+			if (!id3V2Header) {
+				break;
+			}
+
+			currentPos = slice.filePos + id3V2Header.size;
+		}
+
 		let slice = input._reader.requestSliceRange(
-			0,
+			currentPos,
 			MIN_ADTS_FRAME_HEADER_SIZE,
 			MAX_ADTS_FRAME_HEADER_SIZE,
 		);
@@ -454,8 +462,10 @@ export class AdtsInputFormat extends InputFormat {
 			return false;
 		}
 
+		currentPos += firstHeader.frameLength;
+
 		slice = input._reader.requestSliceRange(
-			firstHeader.frameLength,
+			currentPos,
 			MIN_ADTS_FRAME_HEADER_SIZE,
 			MAX_ADTS_FRAME_HEADER_SIZE,
 		);

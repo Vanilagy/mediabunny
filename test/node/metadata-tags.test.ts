@@ -1,6 +1,7 @@
 import { expect, test } from 'vitest';
 import { Output } from '../../src/output.js';
 import {
+	AdtsOutputFormat,
 	FlacOutputFormat,
 	MkvOutputFormat,
 	MovOutputFormat,
@@ -476,6 +477,61 @@ test('Read and write metadata, FLAC', async () => {
 
 	expect(readTags.raw!['vendor']).toBe('Mediabunny');
 	expect(readTags.raw!['COMPOSER']).toBe('Hans Zimmer');
+});
+
+test('Read and write metadata, ADTS', async () => {
+	const originalInput = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/sample3.aac')),
+		formats: ALL_FORMATS,
+	});
+
+	const output = new Output({
+		format: new AdtsOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({
+		input: originalInput,
+		output,
+		tags: {
+			...songMetadata,
+			raw: {
+				TXXY: 'ID3v2 goated',
+			},
+		},
+	});
+	await conversion.execute();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const readTags = await input.getMetadataTags();
+
+	// ID3v2 is goated, so pretty much everything was copied:
+	expect(readTags.title).toBe(songMetadata.title);
+	expect(readTags.description).toBe(songMetadata.description);
+	expect(readTags.artist).toBe(songMetadata.artist);
+	expect(readTags.album).toBe(songMetadata.album);
+	expect(readTags.albumArtist).toBe(songMetadata.albumArtist);
+	expect(readTags.comment).toBe(songMetadata.comment);
+	expect(readTags.lyrics).toBe(songMetadata.lyrics);
+	expect(readTags.trackNumber).toBe(songMetadata.trackNumber);
+	expect(readTags.tracksTotal).toBe(songMetadata.tracksTotal);
+	expect(readTags.discNumber).toBe(songMetadata.discNumber);
+	expect(readTags.discsTotal).toBe(songMetadata.discsTotal);
+	expect(readTags.date).toEqual(readTags.date);
+	expect(readTags.images).toHaveLength(1);
+	expect(readTags.images![0]!.data).toEqual(coverArt);
+	expect(readTags.images![0]!.mimeType).toEqual('image/jpeg');
+	expect(readTags.images![0]!.kind).toEqual('coverFront');
+	expect(readTags.images![0]!.description).toEqual(songMetadata.images![0]!.description);
+	expect(readTags.images![0]!.name).toBeUndefined(); // Can't be contained in ID3v2
+
+	expect(readTags.raw!['TIT2']).toBe(songMetadata.title);
+	expect(readTags.raw!['APIC']).instanceOf(Uint8Array);
+	expect(readTags.raw!['TXXY']).toBe('ID3v2 goated');
 });
 
 test('Read and write metadata, WAVE', async () => {

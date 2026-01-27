@@ -17,7 +17,7 @@
  * - For Ogg files, there is no global metadata so instead, the metadata refers to the combined metadata of all tracks,
  * in Vorbis-style comment headers.
  * - For WAVE files, the metadata refers to the chunks within the RIFF INFO chunk.
- * - For ADTS files, there is no metadata.
+ * - For ADTS files, the metadata refers to the ID3v2 tags.
  * - For FLAC files, the metadata lives in Vorbis style in the Vorbis comment block.
  * - For MPEG-TS files, metadata tags are currently not supported.
  *
@@ -70,6 +70,7 @@ export type MetadataTags = {
 	 * values. Additionally, all attached files (such as font files) are included here, where the key corresponds to
 	 * the FileUID and the value is an {@link AttachedFile}.
 	 * - MP3: The ID3v2 tags, or a single `'TAG'` key with the contents of the ID3v1 tag.
+	 * - ADTS: The ID3v2 tags.
 	 * - Ogg: The key-value string pairs from the Vorbis-style comment header (see RFC 7845, Section 5.2).
 	 * Additionally, the `'vendor'` key refers to the vendor string within this header.
 	 * - WAVE: The individual metadata chunks within the RIFF INFO chunk. Values are always ISO 8859-1 strings.

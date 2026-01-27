@@ -63,8 +63,6 @@ import { EncodedPacket, PacketType, PLACEHOLDER_DATA } from '../packet';
 import { FileSlice, readBytes, Reader, readU16Be, readU32Be, readU8 } from '../reader';
 import { buildMpegTsMimeType, MpegTsStreamType, TIMESCALE, TS_PACKET_SIZE } from './mpeg-ts-misc';
 
-const MISSING_PES_PACKET_ERROR = 'No PES packet found where one was expected.';
-
 type ElementaryStream = {
 	demuxer: MpegTsDemuxer;
 	pid: number;
@@ -191,6 +189,26 @@ export class MpegTsDemuxer extends Demuxer {
 				const BYTES_BEFORE_SECTION_LENGTH = 3;
 				const BITS_IN_CRC_32 = 32; // Duh
 
+				// Some streams don't contain a PAT for some reason, so we must do some guesswork to figure out where
+				// the PMT is.
+				let isProbablyProgramMap = false;
+				if (!hasProgramMap && section.pid !== 0) {
+					const isPesPacket
+						= section.payload[0] === 0x00 && section.payload[1] === 0x00 && section.payload[2] === 0x01;
+
+					if (!isPesPacket) {
+						// Assume it's a PSI
+
+						const bitstream = new Bitstream(section.payload);
+						const pointerField = bitstream.readAlignedByte();
+
+						bitstream.skipBits(8 * pointerField);
+
+						const tableId = bitstream.readBits(8);
+						isProbablyProgramMap = tableId === 0x02; // 0x02 == TS_program_map_section
+					}
+				}
+
 				if (section.pid === 0 && !hasProgramAssociationTable) {
 					const bitstream = new Bitstream(section.payload);
 					const pointerField = bitstream.readAlignedByte();
@@ -220,7 +238,7 @@ export class MpegTsDemuxer extends Demuxer {
 					}
 
 					hasProgramAssociationTable = true;
-				} else if (section.pid === programMapPid && !hasProgramMap) {
+				} else if ((section.pid === programMapPid || isProbablyProgramMap) && !hasProgramMap) {
 					const bitstream = new Bitstream(section.payload);
 					const pointerField = bitstream.readAlignedByte();
 
@@ -291,6 +309,7 @@ export class MpegTsDemuxer extends Demuxer {
 							default: {
 								// If we don't recognize the codec, we don't surface the track at all. This is because
 								// we can't determine its metadata and also have no idea how to packetize its data.
+								console.warn(`Unsupported stream_type 0x${streamType.toString(16)}; ignoring stream.`);
 							}
 						}
 
@@ -433,10 +452,11 @@ export class MpegTsDemuxer extends Demuxer {
 				currentPos += this.packetStride;
 			}
 
-			if (!hasProgramAssociationTable) {
-				throw new Error('No Program Association Table found in the file.');
-			}
 			if (!hasProgramMap) {
+				if (!hasProgramAssociationTable) {
+					throw new Error('No Program Association Table found in the file.');
+				}
+
 				throw new Error('No Program Map Table found in the file.');
 			}
 
@@ -674,6 +694,10 @@ type PesPacket = PesPacketHeader & {
 };
 
 const readPesPacketHeader = (section: Section): PesPacketHeader | null => {
+	if (section.payload.byteLength < 3) {
+		return null;
+	}
+
 	const bitstream = new Bitstream(section.payload);
 
 	const startCodePrefix = bitstream.readBits(24);
@@ -994,7 +1018,9 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 					}
 
 					const pesPacketHeader = readPesPacketHeader(section);
-					return pesPacketHeader;
+					if (pesPacketHeader) {
+						return pesPacketHeader;
+					}
 				}
 
 				currentPos += demuxer.packetStride;
@@ -1152,17 +1178,16 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 						const section = await demuxer.readSection(currentPos, false);
 						if (section) {
 							const nextPesHeader = readPesPacketHeader(section);
-							if (!nextPesHeader) {
-								throw new Error(MISSING_PES_PACKET_ERROR);
-							}
-							if (nextPesHeader.pts > searchPts) {
-								break outer;
-							}
+							if (nextPesHeader) {
+								if (nextPesHeader.pts > searchPts) {
+									break outer;
+								}
 
-							currentPesHeader = nextPesHeader;
-							maybeInsertReferencePacket(this.elementaryStream, nextPesHeader);
+								currentPesHeader = nextPesHeader;
+								maybeInsertReferencePacket(this.elementaryStream, nextPesHeader);
 
-							break;
+								break;
+							}
 						}
 					}
 
@@ -1185,12 +1210,10 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 						const section = await demuxer.readSection(pos, false);
 						if (section) {
 							const header = readPesPacketHeader(section);
-							if (!header) {
-								throw new Error(MISSING_PES_PACKET_ERROR);
+							if (header) {
+								currentPesHeader = header;
+								break;
 							}
-
-							currentPesHeader = header;
-							break;
 						}
 					}
 
@@ -1265,13 +1288,10 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 							const section = await demuxer.readSection(currentPos, false);
 							if (section) {
 								pesHeader = readPesPacketHeader(section);
-								if (!pesHeader) {
-									throw new Error(MISSING_PES_PACKET_ERROR);
+								if (pesHeader) {
+									maybeInsertReferencePacket(this.elementaryStream, pesHeader);
+									break;
 								}
-
-								maybeInsertReferencePacket(this.elementaryStream, pesHeader);
-
-								break;
 							}
 						}
 
@@ -1298,12 +1318,10 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 									const section = await demuxer.readSection(pos, false);
 									if (section) {
 										const header = readPesPacketHeader(section);
-										if (!header) {
-											throw new Error(MISSING_PES_PACKET_ERROR);
+										if (header) {
+											startPesHeader = header;
+											break;
 										}
-
-										startPesHeader = header;
-										break;
 									}
 								}
 
@@ -1759,23 +1777,20 @@ class PacketReadingContext {
 					}
 
 					if (packetHeader.pid === this.pid) {
-						break;
+						const nextSection = await this.demuxer.readSection(currentPos, true);
+						if (!nextSection) {
+							return;
+						}
+
+						const nextPesPacket = readPesPacket(nextSection);
+						if (nextPesPacket) {
+							pesPacket = nextPesPacket;
+							break;
+						}
 					}
 
 					currentPos += this.demuxer.packetStride;
 				}
-
-				const nextSection = await this.demuxer.readSection(currentPos, true);
-				if (!nextSection) {
-					return;
-				}
-
-				const nextPesPacket = readPesPacket(nextSection);
-				if (!nextPesPacket) {
-					throw new Error(MISSING_PES_PACKET_ERROR);
-				}
-
-				pesPacket = nextPesPacket;
 			}
 
 			this.pesPackets.push(pesPacket);
