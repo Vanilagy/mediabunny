@@ -2378,6 +2378,10 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		return this.internalTrack.disposition;
 	}
 
+	getVariant() {
+		return null;
+	}
+
 	async computeDuration() {
 		const lastPacket = await this.getPacket(Infinity, { metadataOnly: true });
 		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);

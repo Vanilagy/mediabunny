@@ -575,6 +575,10 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		};
 	}
 
+	getVariant() {
+		return null;
+	}
+
 	async getFirstTimestamp() {
 		return 0;
 	}

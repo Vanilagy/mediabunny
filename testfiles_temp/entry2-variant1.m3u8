@@ -1,0 +1,45 @@
+#EXTM3U
+#EXT-X-VERSION:4
+## Created with Unified Streaming Platform  (version=1.15.1-31309)
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-MEDIA-SEQUENCE:1
+#EXT-X-INDEPENDENT-SEGMENTS
+#EXT-X-TARGETDURATION:4
+#USP-X-TIMESTAMP-MAP:MPEGTS=900000,LOCAL=1970-01-01T00:00:00Z
+#EXTINF:4, no desc
+manifest-audio_0_q7BAv3mA_WbaG9LKN=112000-video_0_q7BAv3mA_Uql258jy=841568-1.ts
+#EXTINF:4, no desc
+manifest-audio_0_q7BAv3mA_WbaG9LKN=112000-video_0_q7BAv3mA_Uql258jy=841568-2.ts
+#EXTINF:4, no desc
+manifest-audio_0_q7BAv3mA_WbaG9LKN=112000-video_0_q7BAv3mA_Uql258jy=841568-3.ts
+#EXTINF:4, no desc
+manifest-audio_0_q7BAv3mA_WbaG9LKN=112000-video_0_q7BAv3mA_Uql258jy=841568-4.ts
+#EXTINF:4, no desc
+manifest-audio_0_q7BAv3mA_WbaG9LKN=112000-video_0_q7BAv3mA_Uql258jy=841568-5.ts
+#EXTINF:4, no desc
+manifest-audio_0_q7BAv3mA_WbaG9LKN=112000-video_0_q7BAv3mA_Uql258jy=841568-6.ts
+#EXTINF:4, no desc
+manifest-audio_0_q7BAv3mA_WbaG9LKN=112000-video_0_q7BAv3mA_Uql258jy=841568-7.ts
+#EXTINF:4, no desc
+manifest-audio_0_q7BAv3mA_WbaG9LKN=112000-video_0_q7BAv3mA_Uql258jy=841568-8.ts
+#EXTINF:4, no desc
+manifest-audio_0_q7BAv3mA_WbaG9LKN=112000-video_0_q7BAv3mA_Uql258jy=841568-9.ts
+#EXTINF:4, no desc
+manifest-audio_0_q7BAv3mA_WbaG9LKN=112000-video_0_q7BAv3mA_Uql258jy=841568-10.ts
+#EXTINF:4, no desc
+manifest-audio_0_q7BAv3mA_WbaG9LKN=112000-video_0_q7BAv3mA_Uql258jy=841568-11.ts
+#EXTINF:4, no desc
+manifest-audio_0_q7BAv3mA_WbaG9LKN=112000-video_0_q7BAv3mA_Uql258jy=841568-12.ts
+#EXTINF:4, no desc
+manifest-audio_0_q7BAv3mA_WbaG9LKN=112000-video_0_q7BAv3mA_Uql258jy=841568-13.ts
+#EXTINF:4, no desc
+manifest-audio_0_q7BAv3mA_WbaG9LKN=112000-video_0_q7BAv3mA_Uql258jy=841568-14.ts
+#EXTINF:4, no desc
+manifest-audio_0_q7BAv3mA_WbaG9LKN=112000-video_0_q7BAv3mA_Uql258jy=841568-15.ts
+#EXTINF:4, no desc
+manifest-audio_0_q7BAv3mA_WbaG9LKN=112000-video_0_q7BAv3mA_Uql258jy=841568-16.ts
+#EXTINF:4, no desc
+manifest-audio_0_q7BAv3mA_WbaG9LKN=112000-video_0_q7BAv3mA_Uql258jy=841568-17.ts
+#EXTINF:2.8333, no desc
+manifest-audio_0_q7BAv3mA_WbaG9LKN=112000-video_0_q7BAv3mA_Uql258jy=841568-18.ts
+#EXT-X-ENDLIST

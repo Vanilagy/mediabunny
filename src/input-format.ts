@@ -542,6 +542,37 @@ export class MpegTsInputFormat extends InputFormat {
 	}
 }
 
+export class VirtualInputFormat extends InputFormat {
+	/** @internal */
+	_createDemuxerFn: (input: Input) => Demuxer;
+
+	/** @internal */
+	constructor(createDemuxer: (input: Input) => Demuxer) {
+		super();
+		this._createDemuxerFn = createDemuxer;
+	}
+
+	/** @internal */
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	async _canReadInput(input: Input) {
+		return true;
+	}
+
+	/** @internal */
+
+	_createDemuxer(input: Input): Demuxer {
+		return this._createDemuxerFn(input);
+	}
+
+	get name() {
+		return 'Virtual input format';
+	}
+
+	get mimeType() {
+		return 'application/magic';
+	}
+}
+
 /**
  * MP4 input format singleton.
  * @group Input formats

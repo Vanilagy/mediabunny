@@ -267,6 +267,10 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 		};
 	}
 
+	getVariant() {
+		return null;
+	}
+
 	async getDecoderConfig(): Promise<AudioDecoderConfig> {
 		assert(this.demuxer.firstFrameHeader);
 

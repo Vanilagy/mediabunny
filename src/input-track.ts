@@ -15,6 +15,7 @@ import { assert, Rotation } from './misc';
 import { TrackType } from './output';
 import { EncodedPacket, PacketType } from './packet';
 import { TrackDisposition } from './metadata';
+import { ManifestInputVariant } from './manifest-input-variant';
 
 /**
  * Contains aggregate statistics about the encoded packets of a track.
@@ -39,6 +40,8 @@ export interface InputTrackBacking {
 	getLanguageCode(): string;
 	getTimeResolution(): number;
 	getDisposition(): TrackDisposition;
+	getVariant(): ManifestInputVariant | null;
+
 	getFirstTimestamp(): Promise<number>;
 	computeDuration(): Promise<number>;
 
@@ -144,6 +147,10 @@ export abstract class InputTrack {
 	/** The track's disposition, i.e. information about its intended usage. */
 	get disposition() {
 		return this._backing.getDisposition();
+	}
+
+	get variant() {
+		return this._backing.getVariant();
 	}
 
 	/**

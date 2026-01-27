@@ -41,7 +41,7 @@ export class Input<S extends Source = Source> implements Disposable {
 	/** @internal */
 	_format: InputFormat | null = null;
 	/** @internal */
-	_reader: Reader;
+	_reader!: Reader;
 	/** @internal */
 	_disposed = false;
 
@@ -65,18 +65,17 @@ export class Input<S extends Source = Source> implements Disposable {
 			throw new TypeError('options.source must be a Source.');
 		}
 		if (options.source._disposed) {
-			throw new Error('options.source must not be disposed.');
+			throw new TypeError('options.source must not be disposed.');
 		}
 
 		this._formats = options.formats;
 		this._source = options.source;
-		this._reader = new Reader(options.source);
 	}
 
 	/** @internal */
 	_getDemuxer() {
 		return this._demuxerPromise ??= (async () => {
-			this._reader.fileSize = await this._source.getSizeOrNull();
+			this._reader = await Reader.fromSource(this._source);
 
 			for (const format of this._formats) {
 				const canRead = await format._canReadInput(this);
@@ -86,6 +85,7 @@ export class Input<S extends Source = Source> implements Disposable {
 				}
 			}
 
+			console.log(this._source);
 			throw new Error('Input has an unsupported or unrecognizable format.');
 		})();
 	}

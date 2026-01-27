@@ -251,6 +251,10 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 		return numberOfChannels;
 	}
 
+	getVariant() {
+		return null;
+	}
+
 	getSampleRate() {
 		assert(this.demuxer.firstFrameHeader);
 

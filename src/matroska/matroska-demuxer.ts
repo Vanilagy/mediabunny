@@ -1906,6 +1906,10 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		return firstPacket?.timestamp ?? 0;
 	}
 
+	getVariant() {
+		return null;
+	}
+
 	getTimeResolution() {
 		return this.internalTrack.segment.timestampFactor;
 	}

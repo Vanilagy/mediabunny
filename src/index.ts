@@ -223,5 +223,13 @@ export {
 	AttachedFile,
 	TrackDisposition,
 } from './metadata';
+export {
+	ManifestInput,
+	ManifestInputOptions,
+} from './manifest-input';
+export {
+	M3U8,
+	ALL_MANIFEST_FORMATS,
+} from './manifest-input-format';
 
 // 🐡🦔

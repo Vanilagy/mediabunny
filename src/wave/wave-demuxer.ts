@@ -407,6 +407,10 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		return null;
 	}
 
+	getVariant() {
+		return null;
+	}
+
 	getLanguageCode() {
 		return UNDETERMINED_LANGUAGE;
 	}

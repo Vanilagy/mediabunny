@@ -842,6 +842,10 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 		return TIMESCALE;
 	}
 
+	getVariant() {
+		return null;
+	}
+
 	async computeDuration(): Promise<number> {
 		const lastPacket = await this.getPacket(Infinity, { metadataOnly: true });
 		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);

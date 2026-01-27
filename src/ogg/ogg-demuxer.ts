@@ -458,6 +458,10 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		return null;
 	}
 
+	getVariant() {
+		return null;
+	}
+
 	async getDecoderConfig(): Promise<AudioDecoderConfig | null> {
 		assert(this.bitstream.codecInfo.codec);
 

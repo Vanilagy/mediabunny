@@ -13,7 +13,14 @@ import { Source } from './source';
 export class Reader {
 	fileSize!: number | null;
 
-	constructor(public source: Source) {}
+	private constructor(public source: Source) {}
+
+	static async fromSource(source: Source) {
+		const reader = new this(source);
+		reader.fileSize = await source.getSizeOrNull();
+
+		return reader;
+	}
 
 	requestSlice(start: number, length: number): MaybePromise<FileSlice | null> {
 		if (this.source._disposed) {
@@ -329,3 +336,78 @@ export const readAscii = (slice: FileSlice, length: number) => {
 
 	return str;
 };
+
+export class LineReader {
+	getReader: () => MaybePromise<Reader>;
+	isComment?: (line: string) => boolean;
+	reader: Reader | null = null;
+	textDecoder = new TextDecoder();
+	readPos = 0;
+	reachedEnd = false;
+	lineBuffer = '';
+
+	constructor(getReader: () => MaybePromise<Reader>, isComment?: (line: string) => boolean) {
+		this.getReader = getReader;
+		this.isComment = isComment;
+	}
+
+	readNextLine(): MaybePromise<string | null> {
+		if (this.reachedEnd) {
+			return null;
+		}
+
+		const line = this.extractLineFromBuffer();
+		if (line !== null) {
+			return line;
+		}
+
+		return (async () => {
+			if (!this.reader) {
+				let reader = this.getReader();
+				if (reader instanceof Promise) reader = await reader;
+
+				this.reader = reader;
+			}
+
+			while (true) {
+				let slice = this.reader.requestSliceRange(this.readPos, 0, 1024);
+				if (slice instanceof Promise) slice = await slice;
+
+				if (!slice || slice.length === 0) {
+					this.reachedEnd = true;
+					return null;
+				}
+
+				const bytes = readBytes(slice, slice.length);
+				this.readPos += bytes.length;
+
+				this.lineBuffer += this.textDecoder.decode(bytes, { stream: true });
+
+				const line = this.extractLineFromBuffer();
+				if (line !== null) {
+					return line;
+				}
+			}
+		})();
+	}
+
+	extractLineFromBuffer() {
+		assert(!this.reachedEnd);
+
+		while (true) {
+			const newlineIndex = this.lineBuffer.indexOf('\n');
+			if (newlineIndex === -1) {
+				return null;
+			}
+
+			const line = this.lineBuffer.slice(0, newlineIndex).trim();
+			this.lineBuffer = this.lineBuffer.slice(newlineIndex + 1);
+
+			if (this.isComment?.(line)) {
+				continue;
+			}
+
+			return line;
+		}
+	}
+}

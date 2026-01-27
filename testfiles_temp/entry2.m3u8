@@ -1,0 +1,15 @@
+#EXTM3U
+#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=960000,RESOLUTION=640x360,CODECS="mp4a.40.2,avc1.4d401e",FRAME-RATE=30.0,CLOSED-CAPTIONS=NONE
+https://videos-cloudfront-usp.jwpsrv.com/697447fb_17168bf482c87a9ca77629506aef91ae741b18d2/sites/MDzvJl71/media/pZxWPRg4/versions/pZxWPRg4/manifest.ism/manifest-audio_0_q7BAv3mA_WbaG9LKN=112000-video_0_q7BAv3mA_Uql258jy=841568.m3u8
+#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=5220000,RESOLUTION=1920x1080,CODECS="mp4a.40.2,avc1.640028",FRAME-RATE=30.0,CLOSED-CAPTIONS=NONE
+https://videos-cloudfront-usp.jwpsrv.com/697447fb_17168bf482c87a9ca77629506aef91ae741b18d2/sites/MDzvJl71/media/pZxWPRg4/versions/pZxWPRg4/manifest.ism/manifest-audio_0_q7BAv3mA_WbaG9LKN=112000-video_0_q7BAv3mA_Uql258jy=5099752.m3u8
+#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=2580000,RESOLUTION=1280x720,CODECS="mp4a.40.2,avc1.4d401f",FRAME-RATE=30.0,CLOSED-CAPTIONS=NONE
+https://videos-cloudfront-usp.jwpsrv.com/697447fb_17168bf482c87a9ca77629506aef91ae741b18d2/sites/MDzvJl71/media/pZxWPRg4/versions/pZxWPRg4/manifest.ism/manifest-audio_0_q7BAv3mA_WbaG9LKN=112000-video_0_q7BAv3mA_Uql258jy=2462768.m3u8
+#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1650000,RESOLUTION=960x540,CODECS="mp4a.40.2,avc1.4d401f",FRAME-RATE=30.0,CLOSED-CAPTIONS=NONE
+https://videos-cloudfront-usp.jwpsrv.com/697447fb_17168bf482c87a9ca77629506aef91ae741b18d2/sites/MDzvJl71/media/pZxWPRg4/versions/pZxWPRg4/manifest.ism/manifest-audio_0_q7BAv3mA_WbaG9LKN=112000-video_0_q7BAv3mA_Uql258jy=1537008.m3u8
+#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=760000,RESOLUTION=480x270,CODECS="mp4a.40.2,avc1.42c015",FRAME-RATE=30.0,CLOSED-CAPTIONS=NONE
+https://videos-cloudfront-usp.jwpsrv.com/697447fb_17168bf482c87a9ca77629506aef91ae741b18d2/sites/MDzvJl71/media/pZxWPRg4/versions/pZxWPRg4/manifest.ism/manifest-audio_0_q7BAv3mA_WbaG9LKN=112000-video_0_q7BAv3mA_Uql258jy=639296.m3u8
+#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=530000,RESOLUTION=320x180,CODECS="mp4a.40.2,avc1.42c00d",FRAME-RATE=30.0,CLOSED-CAPTIONS=NONE
+https://videos-cloudfront-usp.jwpsrv.com/697447fb_17168bf482c87a9ca77629506aef91ae741b18d2/sites/MDzvJl71/media/pZxWPRg4/versions/pZxWPRg4/manifest.ism/manifest-audio_0_q7BAv3mA_WbaG9LKN=112000-video_0_q7BAv3mA_Uql258jy=413600.m3u8
+#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=120000,CODECS="mp4a.40.2"
+https://videos-cloudfront-usp.jwpsrv.com/697447fb_17168bf482c87a9ca77629506aef91ae741b18d2/sites/MDzvJl71/media/pZxWPRg4/versions/pZxWPRg4/manifest.ism/manifest-audio_0_q7BAv3mA_WbaG9LKN=112000.m3u8
