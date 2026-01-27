@@ -101,6 +101,7 @@ const sponsors = {
 		{ image: '/sponsors/ponder.png', name: 'Ponder', url: 'https://ponder.ai/' },
 	],
 	bronze: [
+		{ image: '/sponsors/elevenlabs.png', name: 'ElevenLabs', url: 'https://elevenlabs.io/' },
 		{ image: '/sponsors/rve.png', name: 'React Video Editor', url: 'https://www.reactvideoeditor.com/' },
 		{ image: '/sponsors/mux.jpg', name: 'Mux', url: 'https://www.mux.com/' },
 		{ image: '/sponsors/jellypod.png', name: 'Jellypod', url: 'https://jellypod.ai/' },
