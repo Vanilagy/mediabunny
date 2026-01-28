@@ -181,10 +181,12 @@ export {
 	AudioSample,
 	AudioSampleInit,
 	AudioSampleCopyToOptions,
+	VideoSampleResource,
 	VideoSample,
 	VideoSampleInit,
 	VideoSamplePixelFormat,
 	VideoSampleColorSpace,
+	AudioSampleResource,
 	CropRectangle,
 	VIDEO_SAMPLE_PIXEL_FORMATS,
 } from './sample';
