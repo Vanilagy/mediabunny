@@ -17,6 +17,10 @@ export abstract class Demuxer {
 		this.input = input;
 	}
 
+	async isSupported() {
+		return true;
+	}
+
 	abstract getTracks(): Promise<InputTrack[]>;
 	abstract getMimeType(): Promise<string>;
 	abstract getMetadataTags(): Promise<MetadataTags>;

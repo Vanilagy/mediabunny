@@ -339,16 +339,16 @@ export const readAscii = (slice: FileSlice, length: number) => {
 
 export class LineReader {
 	getReader: () => MaybePromise<Reader>;
-	isComment?: (line: string) => boolean;
+	ignore?: (line: string) => boolean;
 	reader: Reader | null = null;
 	textDecoder = new TextDecoder();
 	readPos = 0;
 	reachedEnd = false;
 	lineBuffer = '';
 
-	constructor(getReader: () => MaybePromise<Reader>, isComment?: (line: string) => boolean) {
+	constructor(getReader: () => MaybePromise<Reader>, ignore?: (line: string) => boolean) {
 		this.getReader = getReader;
-		this.isComment = isComment;
+		this.ignore = ignore;
 	}
 
 	readNextLine(): MaybePromise<string | null> {
@@ -375,7 +375,9 @@ export class LineReader {
 
 				if (!slice || slice.length === 0) {
 					this.reachedEnd = true;
-					return null;
+					const line = this.lineBuffer.trim();
+
+					return line || null;
 				}
 
 				const bytes = readBytes(slice, slice.length);
@@ -403,7 +405,7 @@ export class LineReader {
 			const line = this.lineBuffer.slice(0, newlineIndex).trim();
 			this.lineBuffer = this.lineBuffer.slice(newlineIndex + 1);
 
-			if (this.isComment?.(line)) {
+			if (this.ignore?.(line)) {
 				continue;
 			}
 

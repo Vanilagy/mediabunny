@@ -99,9 +99,9 @@ const initMediaPlayer = async (resource: File | string) => {
 				manifestFormats: ALL_MANIFEST_FORMATS,
 				mediaFormats: ALL_FORMATS,
 			});
-			const variant = (await manifestInput.getVariants())[0]!;
+			// const variant = (await manifestInput.getVariants())[0]!;
 
-			input = variant.toInput();// await manifestInput.toInput();
+			input = await manifestInput.toInput();
 
 			// https://test-streams.mux.dev/test_001/stream.m3u8
 			// https://test-streams.mux.dev/test_001/stream_1000k_48k_640x360_050.ts
