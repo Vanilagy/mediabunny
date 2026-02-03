@@ -343,7 +343,7 @@ export type UrlSourceOptions = {
 	/** The maximum number of bytes the cache is allowed to hold in memory. Defaults to 64 MiB. */
 	maxCacheSize?: number;
 
-	/** The maximum number of parallel workers to use for fetching. Defaults to 2. */
+	/** The maximum number of parallel requests to use for fetching. Defaults to 2. */
 	parallelism?: number;
 
 	/**
@@ -406,7 +406,7 @@ export class UrlSource extends Source {
 		) {
 			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative number.');
 		}
-		if (options.parallelism !== undefined && (!isNumber(options.parallelism) || options.parallelism < 1)) {
+		if (options.parallelism !== undefined && (!Number.isInteger(options.parallelism) || options.parallelism < 1)) {
 			throw new TypeError('options.parallelism, when provided, must be a positive number.');
 		}
 		if (options.fetchFn !== undefined && typeof options.fetchFn !== 'function') {
@@ -420,11 +420,13 @@ export class UrlSource extends Source {
 		this._options = options;
 		this._getRetryDelay = options.getRetryDelay ?? DEFAULT_RETRY_DELAY;
 
+		// Most files in the real-world have a single sequential access pattern, but having two in parallel can
+		// also happen
+		const DEFAULT_PARALLELISM = 2;
+
 		this._orchestrator = new ReadOrchestrator({
 			maxCacheSize: options.maxCacheSize ?? (64 * 2 ** 20 /* 64 MiB */),
-			// Most files in the real-world have a single sequential access pattern, but having two in parallel can
-			// also happen
-			maxWorkerCount: options.parallelism ?? 2,
+			maxWorkerCount: options.parallelism ?? DEFAULT_PARALLELISM,
 			runWorker: this._runWorker.bind(this),
 			prefetchProfile: PREFETCH_PROFILES.network,
 		});
