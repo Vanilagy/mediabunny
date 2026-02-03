@@ -801,9 +801,13 @@ export class Conversion {
 		this._executed = true;
 
 		if (this.onProgress) {
+			// Compute duration using only the utilized tracks
+			const durationPromises = this.utilizedTracks.map(x => x.computeDuration());
+			const duration = Math.max(0, ...await Promise.all(durationPromises));
+
 			this._computeProgress = true;
 			this._totalDuration = Math.min(
-				(await this.input.computeDuration()) - this._startTimestamp,
+				duration - this._startTimestamp,
 				this._endTimestamp - this._startTimestamp,
 			);
 
