@@ -506,6 +506,9 @@ type UrlSourceOptions = {
 	// in memory. Defaults to 8 MiB.
 	maxCacheSize?: number;
 
+	// The maximum number of parallel requests to use for fetching. Defaults to 2.
+	parallelism?: number;
+
 	// Used to provide a custom fetch function
 	fetchFn?: typeof fetch;
 };
