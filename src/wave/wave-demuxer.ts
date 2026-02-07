@@ -425,6 +425,10 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		packetIndex: number,
 		options: PacketRetrievalOptions,
 	): Promise<EncodedPacket | null> {
+		if (packetIndex < 0) {
+			return null;
+		}
+
 		assert(this.demuxer.audioInfo);
 		const startOffset = packetIndex * PACKET_SIZE_IN_FRAMES * this.demuxer.audioInfo.blockSizeInBytes;
 		if (startOffset >= this.demuxer.dataSize) {
@@ -465,7 +469,7 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 
 		this.demuxer.lastKnownPacketIndex = Math.max(
 			packetIndex,
-			timestamp,
+			this.demuxer.lastKnownPacketIndex,
 		);
 
 		return new EncodedPacket(
