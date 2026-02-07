@@ -375,6 +375,8 @@ export class Quality {
 			opus: 64000, // 64kbps base for Opus
 			mp3: 160000, // 160kbps base for MP3
 			vorbis: 64000, // 64kbps base for Vorbis
+			ac3: 384000, // 384kbps base for AC-3 (Dolby Digital)
+			eac3: 384000, // 384kbps base for E-AC-3 (Dolby Digital Plus)
 		};
 
 		const baseBitrate = baseRates[codec as keyof typeof baseRates];
