@@ -20,6 +20,7 @@ const CONTAINER_BOX_TYPES = new Set([
 	'trak',
 	'mdia',
 	'tref',
+	'udta',
 ]);
 
 const boxTypeFrom = (bytes: Uint8Array, offset: number) => {
@@ -119,6 +120,63 @@ const parseTrackSnapshots = (mp4: Uint8Array): TrackSnapshot[] => {
 	});
 };
 
+type ChplEntry = {
+	startTime100Ns: number;
+	title: string;
+};
+
+type ChplSnapshot = {
+	version: number;
+	flags: number;
+	entries: ChplEntry[];
+};
+
+const parseChplSnapshot = (mp4: Uint8Array): ChplSnapshot | null => {
+	const topLevel = parseBoxes(mp4, 0, mp4.byteLength);
+	const moov = topLevel.find((box) => box.type === 'moov');
+	expect(moov).toBeTruthy();
+
+	const udta = moov!.children.find((box) => box.type === 'udta');
+	if (!udta) return null;
+
+	const chpl = udta.children.find((box) => box.type === 'chpl');
+	if (!chpl) return null;
+
+	const version = mp4[chpl.contentStart] ?? 0;
+	const flags
+		= ((mp4[chpl.contentStart + 1] ?? 0) << 16)
+		| ((mp4[chpl.contentStart + 2] ?? 0) << 8)
+		| (mp4[chpl.contentStart + 3] ?? 0);
+
+	const chapterCountOffset = chpl.contentStart + 8;
+	const chapterCount = mp4[chapterCountOffset] ?? 0;
+	const decoder = new TextDecoder();
+	const entries: ChplEntry[] = [];
+	let offset = chapterCountOffset + 1;
+
+	for (let i = 0; i < chapterCount; i++) {
+		if (offset + 9 > chpl.contentEnd) {
+			break;
+		}
+
+		const startTime100Ns = readU64(mp4, offset);
+		offset += 8;
+
+		const titleLength = mp4[offset] ?? 0;
+		offset += 1;
+
+		if (offset + titleLength > chpl.contentEnd) {
+			break;
+		}
+
+		const title = decoder.decode(mp4.subarray(offset, offset + titleLength));
+		offset += titleLength;
+		entries.push({ startTime100Ns, title });
+	}
+
+	return { version, flags, entries };
+};
+
 test('MP4 chapter track references are written as tref/chap', async () => {
 	const output = new Output({
 		format: new Mp4OutputFormat(),
@@ -177,4 +235,99 @@ test('setChapterTrackReference validates that track IDs exist', () => {
 	output.addSubtitleTrack(subtitleSource);
 
 	expect(() => output.setChapterTrackReference(1, 3)).toThrow(/track id/i);
+});
+
+test('MP4 can optionally write a udta/chpl chapter list for compatibility', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat({
+			chapterFormat: 'tref+nero-chpl',
+		}),
+		target: new BufferTarget(),
+	});
+
+	const audioSource = new EncodedAudioPacketSource('aac');
+	const subtitleSource = new TextSubtitleSource('webvtt');
+
+	output.addAudioTrack(audioSource, { name: 'Main Audio' });
+	output.addSubtitleTrack(subtitleSource, {
+		name: 'Chapters',
+		disposition: { default: false },
+	});
+	output.setChapterTrackReference(1, 2);
+
+	await output.start();
+
+	await audioSource.add(new EncodedPacket(new Uint8Array([0x12, 0x10, 0x56]), 'key', 0, 2), {
+		decoderConfig: {
+			codec: 'mp4a.40.2',
+			sampleRate: 24000,
+			numberOfChannels: 1,
+			description: buildAacAudioSpecificConfig({
+				objectType: 2,
+				sampleRate: 24000,
+				numberOfChannels: 1,
+			}),
+		},
+	});
+	await subtitleSource.add(
+		'WEBVTT\n\n'
+		+ '00:00.000 --> 00:01.000\n'
+		+ 'Page 1\n\n'
+		+ '00:01.250 --> 00:02.000\n'
+		+ 'Page 2\n',
+	);
+
+	audioSource.close();
+	subtitleSource.close();
+	await output.finalize();
+
+	const fileBytes = new Uint8Array(output.target.buffer!);
+	const chpl = parseChplSnapshot(fileBytes);
+	expect(chpl).toBeTruthy();
+	expect(chpl!.version).toBe(1);
+	expect(chpl!.flags).toBe(0);
+	expect(chpl!.entries).toEqual([
+		{ startTime100Ns: 0, title: 'Page 1' },
+		{ startTime100Ns: 12_500_000, title: 'Page 2' },
+	]);
+});
+
+test('MP4 chapter format defaults to tref-only (no udta/chpl)', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const audioSource = new EncodedAudioPacketSource('aac');
+	const subtitleSource = new TextSubtitleSource('webvtt');
+
+	output.addAudioTrack(audioSource);
+	output.addSubtitleTrack(subtitleSource, {
+		disposition: { default: false },
+	});
+	output.setChapterTrackReference(1, 2);
+
+	await output.start();
+
+	await audioSource.add(new EncodedPacket(new Uint8Array([0x12, 0x10, 0x56]), 'key', 0, 1), {
+		decoderConfig: {
+			codec: 'mp4a.40.2',
+			sampleRate: 24000,
+			numberOfChannels: 1,
+			description: buildAacAudioSpecificConfig({
+				objectType: 2,
+				sampleRate: 24000,
+				numberOfChannels: 1,
+			}),
+		},
+	});
+	await subtitleSource.add('WEBVTT\n\n00:00.000 --> 00:01.000\nPage 1\n');
+
+	audioSource.close();
+	subtitleSource.close();
+	await output.finalize();
+
+	const fileBytes = new Uint8Array(output.target.buffer!);
+	const chpl = parseChplSnapshot(fileBytes);
+	expect(chpl).toBeNull();
 });
