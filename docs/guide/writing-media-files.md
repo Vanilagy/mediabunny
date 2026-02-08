@@ -107,6 +107,31 @@ output.addAudioTrack(audioSource);
 Adding tracks to an `Output` will throw if the track is not compatible with the output format. Be sure to respect the [properties](./output-formats#format-properties) of the output format when adding tracks.
 :::
 
+## ISOBMFF chapter references
+
+When writing MP4/MOV files, you can mark a subtitle track as the chapter track of an audio track by using
+`setChapterTrackReference(trackId, chapterTrackId)`:
+
+```ts
+const output = new Output({
+	format: new Mp4OutputFormat(),
+	target: new BufferTarget(),
+});
+
+const audioSource = new EncodedAudioPacketSource('aac');
+const chapterSource = new TextSubtitleSource('webvtt');
+
+output.addAudioTrack(audioSource); // track id 1
+output.addSubtitleTrack(chapterSource, {
+	name: 'Chapters',
+	disposition: { default: false }, // Optional: keep chapter track hidden by default
+}); // track id 2
+
+output.setChapterTrackReference(1, 2); // Writes tref/chap
+```
+
+This writes an ISOBMFF `tref/chap` reference from the audio track to the subtitle track.
+
 ## Setting metadata tags
 
 Mediabunny lets you write additional descriptive metadata tags to an output file, such as title, artist, or cover art:
