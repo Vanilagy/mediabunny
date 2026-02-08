@@ -132,6 +132,20 @@ output.setChapterTrackReference(1, 2); // Writes tref/chap
 
 This writes an ISOBMFF `tref/chap` reference from the audio track to the subtitle track.
 
+By default, Mediabunny writes only `tref/chap`. If you need compatibility with players that expect Nero-style chapter
+atoms (for example, some VLC setups), enable `chapterFormat: 'tref+nero-chpl'`:
+
+```ts
+const output = new Output({
+	format: new Mp4OutputFormat({
+		chapterFormat: 'tref+nero-chpl',
+	}),
+	target: new BufferTarget(),
+});
+```
+
+This keeps `tref/chap` and additionally writes a `moov/udta/chpl` chapter list.
+
 ## Setting metadata tags
 
 Mediabunny lets you write additional descriptive metadata tags to an output file, such as title, artist, or cover art:
