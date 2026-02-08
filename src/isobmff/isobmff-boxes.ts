@@ -385,9 +385,11 @@ export const mvhd = (
  */
 export const trak = (trackData: IsobmffTrackData, creationTime: number) => {
 	const trackMetadata = getTrackMetadata(trackData);
+	const chapterTrackReferences = trackData.track.output._isobmffChapterTrackReferences.get(trackData.track.id) ?? [];
 
 	return box('trak', undefined, [
 		tkhd(trackData, creationTime),
+		chapterTrackReferences.length > 0 ? tref('chap', chapterTrackReferences) : null,
 		mdia(trackData, creationTime),
 		trackMetadata.name !== undefined
 			? box('udta', undefined, [
@@ -398,6 +400,11 @@ export const trak = (trackData: IsobmffTrackData, creationTime: number) => {
 			: null,
 	]);
 };
+
+/** Track Reference Box. */
+export const tref = (referenceType: string, trackIds: number[]) => box('tref', undefined, [
+	box(referenceType, trackIds.map(trackId => u32(trackId))),
+]);
 
 /** Track Header Box: Specifies the characteristics of a single track within a movie. */
 export const tkhd = (
