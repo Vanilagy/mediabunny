@@ -120,6 +120,7 @@ export type IsobmffTrackData = {
 	};
 	lastCueEndTimestamp: number;
 	cueQueue: SubtitleCue[];
+	allCues: SubtitleCue[];
 	nextSourceId: number;
 	cueToSourceId: WeakMap<SubtitleCue, number>;
 });
@@ -485,6 +486,7 @@ export class IsobmffMuxer extends Muxer {
 
 			lastCueEndTimestamp: 0,
 			cueQueue: [],
+			allCues: [],
 			nextSourceId: 0,
 			cueToSourceId: new WeakMap(),
 		};
@@ -619,6 +621,7 @@ export class IsobmffMuxer extends Muxer {
 
 		try {
 			const trackData = this.getSubtitleTrackData(track, meta);
+			trackData.allCues.push(cue);
 
 			this.validateAndNormalizeTimestamp(trackData.track, cue.timestamp, true);
 

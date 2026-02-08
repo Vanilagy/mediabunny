@@ -154,6 +154,15 @@ export type IsobmffOutputFormatOptions = {
 	metadataFormat?: 'auto' | 'mdir' | 'mdta' | 'udta';
 
 	/**
+	 * Controls which chapter structures are written when using {@link Output.setChapterTrackReference}.
+	 *
+	 * - `'tref'` (default): Write ISOBMFF `tref/chap` references only.
+	 * - `'tref+nero-chpl'`: Write `tref/chap` references and an additional `udta/chpl` chapter list, improving
+	 * compatibility with players that rely on Nero chapter atoms.
+	 */
+	chapterFormat?: 'tref' | 'tref+nero-chpl';
+
+	/**
 	 * Will be called once the ftyp (File Type) box of the output file has been written.
 	 *
 	 * @param data - The raw bytes.
@@ -235,6 +244,14 @@ export abstract class IsobmffOutputFormat extends OutputFormat {
 		) {
 			throw new TypeError(
 				'options.metadataFormat, when provided, must be either \'auto\', \'mdir\', \'mdta\', or \'udta\'.',
+			);
+		}
+		if (
+			options.chapterFormat !== undefined
+			&& !['tref', 'tref+nero-chpl'].includes(options.chapterFormat)
+		) {
+			throw new TypeError(
+				'options.chapterFormat, when provided, must be either \'tref\' or \'tref+nero-chpl\'.',
 			);
 		}
 

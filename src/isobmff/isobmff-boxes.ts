@@ -30,7 +30,7 @@ import {
 	SubtitleCodec,
 	VideoCodec,
 } from '../codec';
-import { formatSubtitleTimestamp } from '../subtitles';
+import { formatSubtitleTimestamp, SubtitleCue } from '../subtitles';
 import { Writer } from '../writer';
 import {
 	getTrackMetadata,
@@ -1282,6 +1282,90 @@ export const vttc = (
 /** VTT Additional Text Box */
 export const vtta = (notes: string) => box('vtta', [...textEncoder.encode(notes)]);
 
+const CHPL_TIMESCALE = 10_000_000; // 100 ns units
+const CHPL_MAX_CHAPTER_COUNT = 0xff;
+const CHPL_MAX_CHAPTER_TITLE_BYTES = 0xff;
+
+type ChapterListEntry = {
+	startTime100Ns: number;
+	titleBytes: Uint8Array;
+};
+
+const normalizeChapterTitle = (cue: SubtitleCue) => {
+	return cue.text
+		.replaceAll('\r\n', '\n')
+		.replaceAll('\r', '\n')
+		.split('\n')
+		.map(line => line.trim())
+		.filter(line => line.length > 0)
+		.join(' ');
+};
+
+const truncateUtf8 = (text: string, maxBytes: number) => {
+	let result = '';
+	let bytesUsed = 0;
+
+	for (const character of text) {
+		const encodedCharacter = textEncoder.encode(character);
+		if (bytesUsed + encodedCharacter.byteLength > maxBytes) {
+			break;
+		}
+
+		result += character;
+		bytesUsed += encodedCharacter.byteLength;
+	}
+
+	return textEncoder.encode(result);
+};
+
+const collectChapterListEntries = (muxer: IsobmffMuxer) => {
+	const chapterTrackIds = new Set<number>();
+	for (const trackData of muxer.trackDatas) {
+		const chapterTrackReferences = muxer.output._isobmffChapterTrackReferences.get(trackData.track.id) ?? [];
+		for (const chapterTrackId of chapterTrackReferences) {
+			chapterTrackIds.add(chapterTrackId);
+		}
+	}
+
+	const chapterEntries: ChapterListEntry[] = [];
+	for (const chapterTrackId of chapterTrackIds) {
+		const trackData = muxer.trackDatas.find(trackData =>
+			trackData.track.id === chapterTrackId
+			&& trackData.type === 'subtitle',
+		) as IsobmffSubtitleTrackData | undefined;
+		if (!trackData) {
+			continue;
+		}
+
+		for (const cue of trackData.allCues) {
+			const startTime100Ns = Math.round(cue.timestamp * CHPL_TIMESCALE);
+			if (!Number.isFinite(startTime100Ns) || startTime100Ns < 0) {
+				continue;
+			}
+
+			chapterEntries.push({
+				startTime100Ns,
+				titleBytes: truncateUtf8(normalizeChapterTitle(cue), CHPL_MAX_CHAPTER_TITLE_BYTES),
+			});
+		}
+	}
+
+	chapterEntries.sort((a, b) => a.startTime100Ns - b.startTime100Ns);
+	return chapterEntries.slice(0, CHPL_MAX_CHAPTER_COUNT);
+};
+
+const chpl = (entries: ChapterListEntry[]) => {
+	return fullBox('chpl', 1, 0, [
+		u32(0), // Reserved
+		u8(entries.length), // Chapter count
+		entries.map(entry => [
+			u64(entry.startTime100Ns), // Start time in 100 ns units
+			u8(entry.titleBytes.byteLength),
+			Array.from(entry.titleBytes),
+		]),
+	]);
+};
+
 /** User Data Box */
 const udta = (muxer: IsobmffMuxer) => {
 	const boxes: Box[] = [];
@@ -1298,6 +1382,13 @@ const udta = (muxer: IsobmffMuxer) => {
 		if (metaBox) boxes.push(metaBox);
 	} else if (metadataFormat === 'udta' || (metadataFormat === 'auto' && muxer.isQuickTime)) {
 		addQuickTimeMetadataTagBoxes(boxes, muxer.output._metadataTags);
+	}
+
+	if ((muxer.format._options.chapterFormat ?? 'tref') === 'tref+nero-chpl') {
+		const chapterEntries = collectChapterListEntries(muxer);
+		if (chapterEntries.length > 0) {
+			boxes.push(chpl(chapterEntries));
+		}
 	}
 
 	if (boxes.length === 0) {
