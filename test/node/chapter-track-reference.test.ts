@@ -19,6 +19,8 @@ const CONTAINER_BOX_TYPES = new Set([
 	'moov',
 	'trak',
 	'mdia',
+	'minf',
+	'stbl',
 	'tref',
 	'udta',
 ]);
@@ -85,6 +87,7 @@ type TrackSnapshot = {
 	trackId: number;
 	handlerType: string | null;
 	chapterTrackIds: number[];
+	sampleEntryType: string | null;
 };
 
 const parseTrackSnapshots = (mp4: Uint8Array): TrackSnapshot[] => {
@@ -116,7 +119,14 @@ const parseTrackSnapshots = (mp4: Uint8Array): TrackSnapshot[] => {
 			}
 		}
 
-		return { trackId, handlerType, chapterTrackIds };
+		const minf = mdia?.children.find((box) => box.type === 'minf') ?? null;
+		const stbl = minf?.children.find((box) => box.type === 'stbl') ?? null;
+		const stsd = stbl?.children.find((box) => box.type === 'stsd') ?? null;
+		const sampleEntryType = stsd && stsd.contentStart + 16 <= stsd.contentEnd
+			? boxTypeFrom(mp4, stsd.contentStart + 12)
+			: null;
+
+		return { trackId, handlerType, chapterTrackIds, sampleEntryType };
 	});
 };
 
@@ -221,6 +231,7 @@ test('MP4 chapter track references are written as tref/chap', async () => {
 	expect(audioTrack).toBeTruthy();
 	expect(chapterTrack).toBeTruthy();
 	expect(audioTrack!.chapterTrackIds).toEqual([chapterTrack!.trackId]);
+	expect(chapterTrack!.sampleEntryType).toBe('text');
 });
 
 test('setChapterTrackReference validates that track IDs exist', () => {
@@ -290,6 +301,11 @@ test('MP4 can optionally write a udta/chpl chapter list for compatibility', asyn
 		{ startTime100Ns: 0, title: 'Page 1' },
 		{ startTime100Ns: 12_500_000, title: 'Page 2' },
 	]);
+
+	const tracks = parseTrackSnapshots(fileBytes);
+	const chapterTrack = tracks.find((track) => track.handlerType === 'text');
+	expect(chapterTrack).toBeTruthy();
+	expect(chapterTrack!.sampleEntryType).toBe('text');
 });
 
 test('MP4 chapter format defaults to tref-only (no udta/chpl)', async () => {
@@ -330,4 +346,45 @@ test('MP4 chapter format defaults to tref-only (no udta/chpl)', async () => {
 	const fileBytes = new Uint8Array(output.target.buffer!);
 	const chpl = parseChplSnapshot(fileBytes);
 	expect(chpl).toBeNull();
+});
+
+test('non-chapter WebVTT subtitle tracks stay as wvtt', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const audioSource = new EncodedAudioPacketSource('aac');
+	const subtitleSource = new TextSubtitleSource('webvtt');
+
+	output.addAudioTrack(audioSource);
+	output.addSubtitleTrack(subtitleSource, {
+		disposition: { default: true },
+	});
+
+	await output.start();
+
+	await audioSource.add(new EncodedPacket(new Uint8Array([0x12, 0x10, 0x56]), 'key', 0, 1), {
+		decoderConfig: {
+			codec: 'mp4a.40.2',
+			sampleRate: 24000,
+			numberOfChannels: 1,
+			description: buildAacAudioSpecificConfig({
+				objectType: 2,
+				sampleRate: 24000,
+				numberOfChannels: 1,
+			}),
+		},
+	});
+	await subtitleSource.add('WEBVTT\n\n00:00.000 --> 00:01.000\nCaption\n');
+
+	audioSource.close();
+	subtitleSource.close();
+	await output.finalize();
+
+	const fileBytes = new Uint8Array(output.target.buffer!);
+	const tracks = parseTrackSnapshots(fileBytes);
+	const subtitleTrack = tracks.find((track) => track.handlerType === 'text');
+	expect(subtitleTrack).toBeTruthy();
+	expect(subtitleTrack!.sampleEntryType).toBe('wvtt');
 });
