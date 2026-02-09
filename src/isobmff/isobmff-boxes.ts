@@ -45,6 +45,7 @@ import {
 } from './isobmff-muxer';
 import { parseOpusIdentificationHeader } from '../codec-data';
 import { MetadataTags, RichImageData } from '../metadata';
+import { isReferencedTrackId } from './isobmff-misc';
 
 export class IsobmffBoxWriter {
 	private helper = new Uint8Array(8);
@@ -601,10 +602,18 @@ export const stsd = (trackData: IsobmffTrackData) => {
 			trackData,
 		);
 	} else if (trackData.type === 'subtitle') {
-		sampleDescription = subtitleSampleDescription(
-			SUBTITLE_CODEC_TO_BOX_NAME[trackData.track.source._codec],
-			trackData,
+		const chapterTrack = isReferencedTrackId(
+			trackData.track.output._isobmffChapterTrackReferences,
+			trackData.track.id,
 		);
+		if (chapterTrack && trackData.track.source._codec === 'webvtt') {
+			sampleDescription = chapterTextSampleDescription();
+		} else {
+			sampleDescription = subtitleSampleDescription(
+				SUBTITLE_CODEC_TO_BOX_NAME[trackData.track.source._codec],
+				trackData,
+			);
+		}
 	}
 
 	assert(sampleDescription!);
@@ -922,6 +931,26 @@ export const subtitleSampleDescription = (
 	u16(1), // Data reference index
 ], [
 	SUBTITLE_CODEC_TO_CONFIGURATION_BOX[trackData.track.source._codec](trackData),
+]);
+
+const CHAPTER_TEXT_SAMPLE_ENTRY_DEFAULTS = /* #__PURE__ */ new Uint8Array([
+	0x00, 0x00, 0x00, 0x01,
+	0x00, 0x00, 0x00, 0x01,
+	0x00, 0x00, 0x00, 0x01,
+	0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00,
+]);
+
+export const chapterTextSampleDescription = () => box('text', [
+	Array(6).fill(0), // Reserved
+	u16(1), // Data reference index
+	Array.from(CHAPTER_TEXT_SAMPLE_ENTRY_DEFAULTS),
 ]);
 
 export const vttC = (trackData: IsobmffSubtitleTrackData) => box('vttC', [

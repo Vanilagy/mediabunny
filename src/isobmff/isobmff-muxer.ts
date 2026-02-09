@@ -10,7 +10,7 @@ import { Box, free, ftyp, IsobmffBoxWriter, mdat, mfra, moof, moov, vtta, vttc, 
 import { Muxer } from '../muxer';
 import { Output, OutputAudioTrack, OutputSubtitleTrack, OutputTrack, OutputVideoTrack } from '../output';
 import { BufferTargetWriter, Writer } from '../writer';
-import { assert, computeRationalApproximation, last, promiseWithResolvers } from '../misc';
+import { assert, computeRationalApproximation, last, promiseWithResolvers, textEncoder } from '../misc';
 import { IsobmffOutputFormatOptions, IsobmffOutputFormat, MovOutputFormat } from '../output-format';
 import { inlineTimestampRegex, SubtitleConfig, SubtitleCue, SubtitleMetadata } from '../subtitles';
 import {
@@ -37,7 +37,7 @@ import {
 	serializeAvcDecoderConfigurationRecord,
 	serializeHevcDecoderConfigurationRecord,
 } from '../codec-data';
-import { buildIsobmffMimeType } from './isobmff-misc';
+import { buildIsobmffMimeType, isReferencedTrackId } from './isobmff-misc';
 import { MAX_BOX_HEADER_SIZE, MIN_BOX_HEADER_SIZE } from './isobmff-reader';
 
 export const GLOBAL_TIMESCALE = 1000;
@@ -175,6 +175,12 @@ export class IsobmffMuxer extends Muxer {
 	// Only relevant for fragmented files, to make sure new fragments start with the highest timestamp seen so far
 	private maxWrittenTimestamp = -Infinity;
 	private minimumFragmentDuration: number;
+
+	private static CHAPTER_TEXT_MODIFIER_SAMPLE = /* #__PURE__ */ new Uint8Array([
+		0x00, 0x00, 0x00, 0x0c, // box size
+		0x65, 0x6e, 0x63, 0x64, // 'encd'
+		0x00, 0x00, 0x01, 0x00,
+	]);
 
 	constructor(output: Output, format: IsobmffOutputFormat) {
 		super(output);
@@ -627,7 +633,11 @@ export class IsobmffMuxer extends Muxer {
 
 			if (track.source._codec === 'webvtt') {
 				trackData.cueQueue.push(cue);
-				await this.processWebVTTCues(trackData, cue.timestamp);
+				if (this.isChapterTrack(trackData)) {
+					await this.processChapterTextCues(trackData, cue.timestamp);
+				} else {
+					await this.processWebVTTCues(trackData, cue.timestamp);
+				}
 			} else {
 				// TODO
 			}
@@ -726,6 +736,73 @@ export class IsobmffMuxer extends Muxer {
 
 			await this.registerSample(trackData, sample);
 			trackData.lastCueEndTimestamp = sampleEnd;
+		}
+	}
+
+	private isChapterTrack(trackData: IsobmffSubtitleTrackData) {
+		return isReferencedTrackId(
+			trackData.track.output._isobmffChapterTrackReferences,
+			trackData.track.id,
+		);
+	}
+
+	private normalizeChapterCueText(text: string) {
+		return text
+			.replaceAll('\r\n', '\n')
+			.replaceAll('\r', '\n')
+			.split('\n')
+			.map(line => line.trim())
+			.filter(line => line.length > 0)
+			.join(' ');
+	}
+
+	private truncateUtf8(text: string, maxBytes: number) {
+		let result = '';
+		let bytesUsed = 0;
+
+		for (const character of text) {
+			const encodedCharacter = textEncoder.encode(character);
+			if (bytesUsed + encodedCharacter.byteLength > maxBytes) {
+				break;
+			}
+
+			result += character;
+			bytesUsed += encodedCharacter.byteLength;
+		}
+
+		return textEncoder.encode(result);
+	}
+
+	private createChapterTextSample(cue: SubtitleCue) {
+		const normalizedText = this.normalizeChapterCueText(cue.text);
+		const textBytes = this.truncateUtf8(normalizedText, 0xffff);
+		const data = new Uint8Array(
+			2 + textBytes.byteLength + IsobmffMuxer.CHAPTER_TEXT_MODIFIER_SAMPLE.byteLength,
+		);
+
+		data[0] = textBytes.byteLength >> 8;
+		data[1] = textBytes.byteLength & 0xff;
+		data.set(textBytes, 2);
+		data.set(
+			IsobmffMuxer.CHAPTER_TEXT_MODIFIER_SAMPLE,
+			2 + textBytes.byteLength,
+		);
+
+		return data;
+	}
+
+	private async processChapterTextCues(trackData: IsobmffSubtitleTrackData, until: number) {
+		while (trackData.cueQueue.length > 0 && trackData.cueQueue[0]!.timestamp <= until) {
+			const cue = trackData.cueQueue.shift()!;
+			const cueDuration = Math.max(cue.duration, 0.001);
+			const sample = this.createSampleForTrack(
+				trackData,
+				this.createChapterTextSample(cue),
+				cue.timestamp,
+				cueDuration,
+				'key',
+			);
+			await this.registerSample(trackData, sample);
 		}
 	}
 
@@ -1240,7 +1317,11 @@ export class IsobmffMuxer extends Muxer {
 		if (track.type === 'subtitle' && track.source._codec === 'webvtt') {
 			const trackData = this.trackDatas.find(x => x.track === track) as IsobmffSubtitleTrackData;
 			if (trackData) {
-				await this.processWebVTTCues(trackData, Infinity);
+				if (this.isChapterTrack(trackData)) {
+					await this.processChapterTextCues(trackData, Infinity);
+				} else {
+					await this.processWebVTTCues(trackData, Infinity);
+				}
 			}
 		}
 
@@ -1264,7 +1345,11 @@ export class IsobmffMuxer extends Muxer {
 
 		for (const trackData of this.trackDatas) {
 			if (trackData.type === 'subtitle' && trackData.track.source._codec === 'webvtt') {
-				await this.processWebVTTCues(trackData, Infinity);
+				if (this.isChapterTrack(trackData)) {
+					await this.processChapterTextCues(trackData, Infinity);
+				} else {
+					await this.processWebVTTCues(trackData, Infinity);
+				}
 			}
 		}
 
