@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Discord Community
+    url: https://discord.gg/hmpkyYuS4U
+    about: Ask questions and discuss with the community
+  - name: Documentation
+    url: https://mediabunny.dev
+    about: Check the documentation for guides and API reference
+  - name: Sponsor Mediabunny
+    url: https://github.com/sponsors/Vanilagy
+    about: Support Mediabunny's development

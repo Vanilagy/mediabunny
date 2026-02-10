@@ -1,0 +1,127 @@
+name: Feature Request
+description: Suggest a new feature or enhancement
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a feature! Please provide as much detail as possible to help us understand your request.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What problem does this feature solve? What's the use case?
+      placeholder: |
+        I'm trying to...
+        Currently, I have to manually...
+        This is frustrating because...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: How would you like this feature to work?
+      placeholder: |
+        I would like to be able to...
+        The API could look like...
+        This would allow me to...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: feature-area
+    attributes:
+      label: Which area does this feature relate to?
+      description: Select all that apply
+      multiple: true
+      options:
+        - New container format support
+        - New codec support
+        - Demuxer improvements
+        - Muxer improvements
+        - Conversion API
+        - Input/Output
+        - Sources/Targets
+        - Metadata handling
+        - Performance optimization
+        - API improvements
+        - Documentation
+        - Examples
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What other solutions or workarounds have you considered?
+      placeholder: |
+        I tried using...
+        I could work around this by...
+        Other libraries like X do this by...
+
+  - type: textarea
+    id: examples
+    attributes:
+      label: Examples from other tools
+      description: Are there similar features in other tools?
+      placeholder: |
+        FFmpeg has a feature where...
+        Other media libraries allow...
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: How important is this feature to you?
+      options:
+        - Critical - Blocking my work
+        - High - Would significantly improve my workflow
+        - Medium - Nice to have
+        - Low - Minor improvement
+    validations:
+      required: true
+
+  - type: textarea
+    id: api-design
+    attributes:
+      label: API design (if applicable)
+      description: If this is an API change, show how you'd like it to work
+      render: typescript
+      placeholder: |
+        // Proposed API
+        const output = new Output({
+          format: new MyNewFormat(),
+          // ...
+        });
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Any other context, mockups, or examples
+      placeholder: |
+        This would be especially useful for...
+        Related to issue #123
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I'm willing to submit a PR to implement this feature
+          required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I have searched existing issues to avoid duplicates
+          required: true
+        - label: This feature aligns with Mediabunny's goal of being a complete media toolkit for the web
+          required: true

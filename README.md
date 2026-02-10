@@ -177,6 +177,17 @@ Mediabunny is an open-source project released under the <a href="https://choosea
 
 If you have derived considerable value from this project, please consider [sponsoring it](https://github.com/sponsors/Vanilagy) or providing a one-time donation. Thank you! 🩷
 
+## Contributing
+
+We welcome contributions! Whether you're fixing bugs, adding format support, improving performance, or enhancing documentation, your help is appreciated.
+
+Check out our **[Contributing Guide](CONTRIBUTING.md)** to get started.
+
+**Quick links:**
+- [Report a bug](https://github.com/Vanilagy/mediabunny/issues/new?template=bug_report.yml)
+- [Request a feature](https://github.com/Vanilagy/mediabunny/issues/new?template=feature_request.yml)
+- [Join Discord](https://discord.gg/hmpkyYuS4U)
+
 ## License
 
 This project is licensed under the [Mozilla Public License 2.0](https://choosealicense.com/licenses/mpl-2.0/). This is a very permissive weak copyleft license, not much different from the MIT License, allowing you to:

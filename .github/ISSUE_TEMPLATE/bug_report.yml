@@ -1,0 +1,180 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill out the information below to help us resolve the issue.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the bug
+      description: A clear description of what the bug is
+      placeholder: When I do X, Y happens instead of Z
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Detailed steps to reproduce the behavior
+      placeholder: |
+        1. Create an Input with...
+        2. Try to read...
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What you expected to happen
+      placeholder: I expected the file to be read successfully
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened (include error messages if any)
+      placeholder: Got error "Failed to parse header"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Which component is affected?
+      description: Select all that apply
+      multiple: true
+      options:
+        - MP4/MOV (isobmff)
+        - WebM/MKV (matroska)
+        - WAVE
+        - MP3
+        - Ogg
+        - ADTS
+        - FLAC
+        - MPEG-TS
+        - Demuxer
+        - Muxer
+        - Codec (encoding/decoding)
+        - Conversion API
+        - Input/Output
+        - Sources/Targets
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: mediabunny-version
+    attributes:
+      label: Mediabunny version
+      description: Run `npm list mediabunny` or check package.json
+      placeholder: "1.32.2"
+    validations:
+      required: true
+
+  - type: input
+    id: node-version
+    attributes:
+      label: Node.js version (if applicable)
+      description: Run `node --version`
+      placeholder: "v20.10.0"
+
+  - type: dropdown
+    id: browser
+    attributes:
+      label: Browser (if applicable)
+      options:
+        - Chrome
+        - Firefox
+        - Safari
+        - Edge
+        - Other
+        - Not applicable
+
+  - type: input
+    id: browser-version
+    attributes:
+      label: Browser version
+      placeholder: "Chrome 120.0.0"
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - macOS
+        - Windows
+        - Linux
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: code
+    attributes:
+      label: Minimal reproduction code
+      description: Provide the smallest code snippet that reproduces the issue
+      render: typescript
+      placeholder: |
+        import { Input, ALL_FORMATS, BlobSource } from 'mediabunny';
+        
+        const input = new Input({
+          source: new BlobSource(file),
+          formats: ALL_FORMATS,
+        });
+        
+        // Bug happens here
+
+  - type: textarea
+    id: media-file
+    attributes:
+      label: Media file information
+      description: If the bug is related to a specific file, provide details
+      placeholder: |
+        - Format: MP4
+        - Codec: H.264
+        - Duration: 10 seconds
+        - File size: 5 MB
+        - Can you share the file? (upload to file sharing service)
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Console output / Error logs
+      description: Include relevant console output or error messages
+      render: shell
+      placeholder: |
+        Error: Failed to parse MP4 header
+        at Mp4Demuxer.readHeader (isobmff/demuxer.ts:123)
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Any other context, screenshots, or information that might help
+      placeholder: |
+        - This started happening after upgrading to version X
+        - Works fine with other files
+        - Only happens with specific codec
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I have searched existing issues to avoid duplicates
+          required: true
+        - label: I have tested with the latest version of Mediabunny
+          required: true
+        - label: I have included a minimal reproduction
+          required: true
