@@ -124,6 +124,7 @@ const sponsors = {
 		{ image: 'https://avatars.githubusercontent.com/u/1836701', name: 'Bean Deng', url: 'https://github.com/HADB' },
 		{ image: 'https://avatars.githubusercontent.com/u/255616819', name: 'cronischarles-del', url: 'https://github.com/cronischarles-del' },
 		{ image: 'https://avatars.githubusercontent.com/u/37973863', name: 'Gomi', url: 'https://github.com/gxy5202' },
+		{ image: 'https://avatars.githubusercontent.com/u/36898190', name: 'jepcd', url: 'https://github.com/jepcd' },
 		{ image: 'https://avatars.githubusercontent.com/u/63088713', name: 'taf2000', url: 'https://github.com/taf2000' },
 		{ image: 'https://avatars.githubusercontent.com/u/58149663', name: 'H7GhosT', url: 'https://github.com/H7GhosT' },
 		{ image: 'https://avatars.githubusercontent.com/u/91711202', name: 'ihasq', url: 'https://github.com/ihasq' },
