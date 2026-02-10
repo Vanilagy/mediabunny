@@ -291,12 +291,13 @@ export const ftyp = (details: {
 	isQuickTime: boolean;
 	holdsAvc: boolean;
 	fragmented: boolean;
+	appleAudiobook: boolean;
 }) => {
 	// You can find the full logic for this at
 	// https://github.com/FFmpeg/FFmpeg/blob/de2fb43e785773738c660cdafb9309b1ef1bc80d/libavformat/movenc.c#L5518
 	// Obviously, this lib only needs a small subset of that logic.
 
-	const minorVersion = 0x200;
+	const minorVersion = details.appleAudiobook ? 0 : 0x200;
 
 	if (details.isQuickTime) {
 		return box('ftyp', [
@@ -315,6 +316,16 @@ export const ftyp = (details: {
 			ascii('iso5'),
 			ascii('iso6'),
 			ascii('mp41'),
+		]);
+	}
+
+	if (details.appleAudiobook) {
+		return box('ftyp', [
+			ascii('M4B '), // Major brand
+			u32(minorVersion), // Minor version
+			// Compatible brands
+			ascii('M4A '),
+			ascii('isom'),
 		]);
 	}
 
@@ -1401,13 +1412,14 @@ const udta = (muxer: IsobmffMuxer) => {
 
 	const metadataFormat = muxer.format._options.metadataFormat ?? 'auto';
 	const metadataTags = muxer.output._metadataTags;
+	const appleAudiobook = !muxer.isQuickTime && !!muxer.format._options.appleAudiobook;
 
 	// Depending on the format, metadata tags are written differently
 	if (metadataFormat === 'mdir' || (metadataFormat === 'auto' && !muxer.isQuickTime)) {
-		const metaBox = metaMdir(metadataTags);
+		const metaBox = metaMdir(metadataTags, { appleAudiobook });
 		if (metaBox) boxes.push(metaBox);
 	} else if (metadataFormat === 'mdta') {
-		const metaBox = metaMdta(metadataTags);
+		const metaBox = metaMdta(metadataTags, { appleAudiobook });
 		if (metaBox) boxes.push(metaBox);
 	} else if (metadataFormat === 'udta' || (metadataFormat === 'auto' && muxer.isQuickTime)) {
 		addQuickTimeMetadataTagBoxes(boxes, muxer.output._metadataTags);
@@ -1520,7 +1532,13 @@ const DATA_BOX_MIME_TYPE_MAP: Record<string, number> = {
 /**
  * Generates key-value metadata for inclusion in the "meta" box.
  */
-const generateMetadataPairs = (tags: MetadataTags, isMdta: boolean) => {
+const generateMetadataPairs = (
+	tags: MetadataTags,
+	isMdta: boolean,
+	options: {
+		appleAudiobook: boolean;
+	},
+) => {
 	const pairs: {
 		key: string;
 		value: Box;
@@ -1655,12 +1673,24 @@ const generateMetadataPairs = (tags: MetadataTags, isMdta: boolean) => {
 		}
 	}
 
+	if (options.appleAudiobook && !pairs.some(x => x.key === 'stik')) {
+		pairs.push({
+			key: 'stik',
+			value: dataUnsignedIntBoxLong(2),
+		});
+	}
+
 	return pairs;
 };
 
 /** Metadata Box (mdir format) */
-const metaMdir = (tags: MetadataTags) => {
-	const pairs = generateMetadataPairs(tags, false);
+const metaMdir = (
+	tags: MetadataTags,
+	options: {
+		appleAudiobook: boolean;
+	},
+) => {
+	const pairs = generateMetadataPairs(tags, false, options);
 
 	if (pairs.length === 0) {
 		return null;
@@ -1674,8 +1704,13 @@ const metaMdir = (tags: MetadataTags) => {
 };
 
 /** Metadata Box (mdta format with keys box) */
-const metaMdta = (tags: MetadataTags) => {
-	const pairs = generateMetadataPairs(tags, true);
+const metaMdta = (
+	tags: MetadataTags,
+	options: {
+		appleAudiobook: boolean;
+	},
+) => {
+	const pairs = generateMetadataPairs(tags, true, options);
 
 	if (pairs.length === 0) {
 		return null;
@@ -1701,6 +1736,16 @@ const dataStringBoxLong = (value: string) => {
 		u32(1), // Type indicator (UTF-8)
 		u32(0), // Locale indicator
 		...textEncoder.encode(value),
+	]);
+};
+
+const dataUnsignedIntBoxLong = (value: number) => {
+	assert(Number.isInteger(value) && value >= 0 && value <= 0xff);
+
+	return box('data', [
+		u32(21), // Type indicator (unsigned integer)
+		u32(0), // Locale indicator
+		u8(value),
 	]);
 };
 

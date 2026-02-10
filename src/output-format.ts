@@ -163,6 +163,16 @@ export type IsobmffOutputFormatOptions = {
 	chapterFormat?: 'tref' | 'tref+nero-chpl';
 
 	/**
+	 * Enables Apple audiobook compatibility mode for MP4 outputs.
+	 *
+	 * When enabled, MP4 files are branded as audiobook files (`M4B ` major brand with `M4A ` and `isom` compatible
+	 * brands), and the iTunes media type metadata atom (`stik`) is written as audiobook (`2`).
+	 *
+	 * Defaults to `false`.
+	 */
+	appleAudiobook?: boolean;
+
+	/**
 	 * Will be called once the ftyp (File Type) box of the output file has been written.
 	 *
 	 * @param data - The raw bytes.
@@ -253,6 +263,9 @@ export abstract class IsobmffOutputFormat extends OutputFormat {
 			throw new TypeError(
 				'options.chapterFormat, when provided, must be either \'tref\' or \'tref+nero-chpl\'.',
 			);
+		}
+		if (options.appleAudiobook !== undefined && typeof options.appleAudiobook !== 'boolean') {
+			throw new TypeError('options.appleAudiobook, when provided, must be a boolean.');
 		}
 
 		super();

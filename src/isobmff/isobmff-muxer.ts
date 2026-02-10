@@ -219,6 +219,7 @@ export class IsobmffMuxer extends Muxer {
 				isQuickTime: this.isQuickTime,
 				holdsAvc: holdsAvc,
 				fragmented: this.isFragmented,
+				appleAudiobook: !!this.format._options.appleAudiobook,
 			}));
 
 			if (this.format._options.onFtyp) {
