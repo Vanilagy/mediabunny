@@ -146,6 +146,35 @@ const output = new Output({
 
 This keeps `tref/chap` and additionally writes a `moov/udta/chpl` chapter list.
 
+## Apple audiobook profile (M4B)
+
+For Apple Books / iTunes-style audiobook compatibility, enable `appleAudiobook` on `Mp4OutputFormat`:
+
+```ts
+const output = new Output({
+	format: new Mp4OutputFormat({
+		appleAudiobook: true,
+	}),
+	target: new BufferTarget(),
+});
+```
+
+When enabled, Mediabunny writes MP4 branding and metadata commonly expected for audiobooks:
+- `ftyp` major brand `M4B ` with compatible brands `M4A ` and `isom`
+- iTunes media type tag `stik=2` (audiobook)
+
+For chaptered audiobooks, combine this with chapter track references and optional Nero chapter atoms:
+
+```ts
+const output = new Output({
+	format: new Mp4OutputFormat({
+		appleAudiobook: true,
+		chapterFormat: 'tref+nero-chpl',
+	}),
+	target: new BufferTarget(),
+});
+```
+
 ## Setting metadata tags
 
 Mediabunny lets you write additional descriptive metadata tags to an output file, such as title, artist, or cover art:
