@@ -20,6 +20,7 @@ import {
 	UNDETERMINED_LANGUAGE,
 	assertNever,
 	keyValueIterator,
+	Bitstream,
 } from '../misc';
 import {
 	AudioCodec,
@@ -43,7 +44,7 @@ import {
 	IsobmffVideoTrackData,
 	Sample,
 } from './isobmff-muxer';
-import { parseOpusIdentificationHeader } from '../codec-data';
+import { parseAc3SyncFrame, parseEac3SyncFrame, parseOpusIdentificationHeader } from '../codec-data';
 import { MetadataTags, RichImageData } from '../metadata';
 
 export class IsobmffBoxWriter {
@@ -909,13 +910,74 @@ const pcmC = (trackData: IsobmffAudioTrackData) => {
 
 /** AC3SpecificBox */
 const dac3 = (trackData: IsobmffAudioTrackData) => {
-	const bytes = toUint8Array(trackData.info.decoderConfig.description!);
-	return box('dac3', [...bytes.subarray(0, 3)]);
+	const frameInfo = parseAc3SyncFrame(trackData.info.firstPacket.data);
+	if (!frameInfo) {
+		throw new Error(
+			'Couldn\'t extract AC-3 frame info from the audio packet. '
+			+ 'Ensure the packets contain valid AC-3 sync frames (as specified in ETSI TS 102 366).',
+		);
+	}
+
+	const bytes = new Uint8Array(3);
+	const bitstream = new Bitstream(bytes);
+
+	bitstream.writeBits(2, frameInfo.fscod);
+	bitstream.writeBits(5, frameInfo.bsid);
+	bitstream.writeBits(3, frameInfo.bsmod);
+	bitstream.writeBits(3, frameInfo.acmod);
+	bitstream.writeBits(1, frameInfo.lfeon);
+	bitstream.writeBits(5, frameInfo.bitRateCode);
+	bitstream.writeBits(5, 0); // reserved
+
+	return box('dac3', [...bytes]);
 };
 
 /** EC3SpecificBox */
 const dec3 = (trackData: IsobmffAudioTrackData) => {
-	const bytes = toUint8Array(trackData.info.decoderConfig.description!);
+	const frameInfo = parseEac3SyncFrame(trackData.info.firstPacket.data);
+	if (!frameInfo) {
+		throw new Error(
+			'Couldn\'t extract E-AC-3 frame info from the audio packet. '
+			+ 'Ensure the packets contain valid E-AC-3 sync frames (as specified in ETSI TS 102 366).',
+		);
+	}
+
+	// Calculate size
+	let totalBits = 16; // header: data_rate (13) + num_ind_sub (3)
+	for (const sub of frameInfo.substreams) {
+		totalBits += 23; // fixed fields per substream
+		if (sub.numDepSub > 0) {
+			totalBits += 9; // chan_loc
+		} else {
+			totalBits += 1; // reserved
+		}
+	}
+	const size = Math.ceil(totalBits / 8);
+
+	const bytes = new Uint8Array(size);
+	const bitstream = new Bitstream(bytes);
+
+	bitstream.writeBits(13, frameInfo.dataRate);
+	bitstream.writeBits(3, frameInfo.substreams.length - 1); // num_ind_sub
+
+	for (const sub of frameInfo.substreams) {
+		bitstream.writeBits(2, sub.fscod);
+		bitstream.writeBits(5, sub.bsid);
+		bitstream.writeBits(1, 0); // reserved
+		bitstream.writeBits(1, 0); // asvc = 0
+		bitstream.writeBits(3, sub.bsmod);
+		bitstream.writeBits(3, sub.acmod);
+		bitstream.writeBits(1, sub.lfeon);
+		bitstream.writeBits(3, 0); // reserved
+		bitstream.writeBits(4, sub.numDepSub);
+
+		if (sub.numDepSub > 0) {
+			bitstream.writeBits(9, sub.chanLoc);
+		} else {
+			bitstream.writeBits(1, 0); // reserved
+		}
+	}
+
 	return box('dec3', [...bytes]);
 };
 

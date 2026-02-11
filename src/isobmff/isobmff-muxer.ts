@@ -34,10 +34,6 @@ import {
 	extractAvcDecoderConfigurationRecord,
 	extractHevcDecoderConfigurationRecord,
 	iterateNalUnitsInAnnexB,
-	parseAC3SyncFrame,
-	parseEAC3SyncFrame,
-	serializeAC3Config,
-	serializeEAC3Config,
 	serializeAvcDecoderConfigurationRecord,
 	serializeHevcDecoderConfigurationRecord,
 } from '../codec-data';
@@ -115,6 +111,7 @@ export type IsobmffTrackData = {
 		 * ADTS-wrapped data.
 		 */
 		requiresAdtsStripping: boolean;
+		firstPacket: EncodedPacket;
 	};
 } | {
 	track: OutputSubtitleTrack;
@@ -421,30 +418,6 @@ export class IsobmffMuxer extends Muxer {
 			requiresAdtsStripping = true;
 		}
 
-		// Parse AC-3 syncframe if no description provided
-		if (track.source._codec === 'ac3' && !decoderConfig.description) {
-			const frameInfo = parseAC3SyncFrame(packet.data);
-			if (!frameInfo) {
-				throw new Error(
-					'Couldn\'t extract AC-3 frame info from the audio packet. '
-					+ 'Ensure the packets contain valid AC-3 sync frames (as specified in ETSI TS 102 366).',
-				);
-			}
-			decoderConfig.description = serializeAC3Config(frameInfo);
-		}
-
-		// Parse E-AC-3 syncframe if no description provided
-		if (track.source._codec === 'eac3' && !decoderConfig.description) {
-			const config = parseEAC3SyncFrame(packet.data);
-			if (!config) {
-				throw new Error(
-					'Couldn\'t extract E-AC-3 frame info from the audio packet. '
-					+ 'Ensure the packets contain valid E-AC-3 sync frames (as specified in ETSI TS 102 366).',
-				);
-			}
-			decoderConfig.description = serializeEAC3Config(config);
-		}
-
 		const newTrackData: IsobmffAudioTrackData = {
 			muxer: this,
 			track,
@@ -457,6 +430,7 @@ export class IsobmffMuxer extends Muxer {
 					!this.isFragmented
 					&& (PCM_AUDIO_CODECS as readonly string[]).includes(track.source._codec),
 				requiresAdtsStripping,
+				firstPacket: packet,
 			},
 			timescale: decoderConfig.sampleRate,
 			samples: [],

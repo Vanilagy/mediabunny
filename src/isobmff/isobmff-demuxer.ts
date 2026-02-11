@@ -27,10 +27,9 @@ import {
 	FlacBlockType,
 	HevcDecoderConfigurationRecord,
 	Vp9CodecInfo,
-	parseAC3Config,
-	parseEAC3Config,
-	getEAC3SampleRate,
-	getEAC3ChannelCount,
+	parseEac3Config,
+	getEac3SampleRate,
+	getEac3ChannelCount,
 	AC3_SAMPLE_RATES,
 	AC3_ACMOD_CHANNEL_COUNTS,
 } from '../codec-data';
@@ -1481,14 +1480,18 @@ export class IsobmffDemuxer extends Demuxer {
 				assert(track.info?.type === 'audio');
 
 				const bytes = readBytes(slice, 3);
-				const config = parseAC3Config(bytes);
+				const bitstream = new Bitstream(bytes);
 
-				if (config && config.fscod < 3) {
-					track.info.sampleRate = AC3_SAMPLE_RATES[config.fscod]!;
-					track.info.numberOfChannels = AC3_ACMOD_CHANNEL_COUNTS[config.acmod]! + config.lfeon;
+				const fscod = bitstream.readBits(2);
+				bitstream.skipBits(5 + 3); // Skip bsid and bsmod
+				const acmod = bitstream.readBits(3);
+				const lfeon = bitstream.readBits(1);
+
+				if (fscod < 3) {
+					track.info.sampleRate = AC3_SAMPLE_RATES[fscod]!;
 				}
 
-				track.info.codecDescription = bytes;
+				track.info.numberOfChannels = AC3_ACMOD_CHANNEL_COUNTS[acmod]! + lfeon;
 			}; break;
 
 			case 'dec3': { // EC3SpecificBox
@@ -1499,14 +1502,19 @@ export class IsobmffDemuxer extends Demuxer {
 				assert(track.info?.type === 'audio');
 
 				const bytes = readBytes(slice, boxInfo.contentSize);
-				const config = parseEAC3Config(bytes);
+				const config = parseEac3Config(bytes);
 
-				if (config) {
-					track.info.sampleRate = getEAC3SampleRate(config);
-					track.info.numberOfChannels = getEAC3ChannelCount(config);
+				if (!config) {
+					console.warn('Invalid dec3 box contents, ignoring.');
+					break;
 				}
 
-				track.info.codecDescription = bytes;
+				const sampleRate = getEac3SampleRate(config);
+				if (sampleRate !== null) {
+					track.info.sampleRate = sampleRate;
+				}
+
+				track.info.numberOfChannels = getEac3ChannelCount(config);
 			}; break;
 
 			case 'stts': {

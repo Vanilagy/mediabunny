@@ -1073,25 +1073,11 @@ export const validateAudioChunkMetadata = (metadata: EncodedAudioChunkMetadata |
 		if (metadata.decoderConfig.codec !== 'ac-3') {
 			throw new TypeError('Audio chunk metadata decoder configuration codec string for AC-3 must be "ac-3".');
 		}
-
-		if (metadata.decoderConfig.description && metadata.decoderConfig.description.byteLength < 3) {
-			throw new TypeError(
-				'Audio chunk metadata decoder configuration description for AC-3, when provided, must be at least 3'
-				+ ' bytes and is expected to be a dac3 box payload as specified in ETSI TS 102 366.',
-			);
-		}
 	} else if (metadata.decoderConfig.codec.startsWith('ec-3') || metadata.decoderConfig.codec.startsWith('eac3')) {
 		// EAC3-specific validation
 
 		if (metadata.decoderConfig.codec !== 'ec-3') {
 			throw new TypeError('Audio chunk metadata decoder configuration codec string for EC-3 must be "ec-3".');
-		}
-
-		if (metadata.decoderConfig.description && metadata.decoderConfig.description.byteLength < 5) {
-			throw new TypeError(
-				'Audio chunk metadata decoder configuration description for EC-3, when provided, must be at least 5'
-				+ ' bytes and is expected to be a dec3 box payload as specified in ETSI TS 102 366.',
-			);
 		}
 	} else if (
 		metadata.decoderConfig.codec.startsWith('pcm')

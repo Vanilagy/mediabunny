@@ -28,16 +28,16 @@ import {
 	extractHevcDecoderConfigurationRecord,
 	extractNalUnitTypeForAvc,
 	extractNalUnitTypeForHevc,
-	getAC3FrameSize,
 	EAC3_NUMBLKS_TABLE,
-	getEAC3ChannelCount,
-	getEAC3SampleRate,
+	getEac3ChannelCount,
+	getEac3SampleRate,
 	HevcDecoderConfigurationRecord,
 	HevcNalUnitType,
-	parseAC3SyncFrame,
+	parseAc3SyncFrame,
 	parseAvcSps,
-	parseEAC3SyncFrame,
+	parseEac3SyncFrame,
 	parseHevcSps,
+	AC3_FRAME_SIZES,
 } from '../codec-data';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
@@ -481,10 +481,16 @@ export class MpegTsDemuxer extends Demuxer {
 
 								elementaryStream.initialized = true;
 							} else if (elementaryStream.info.codec === 'ac3') {
-								const frameInfo = parseAC3SyncFrame(pesPacket.data);
+								const frameInfo = parseAc3SyncFrame(pesPacket.data);
 								if (!frameInfo) {
 									throw new Error(
 										'Invalid AC-3 audio stream; could not read sync frame from first packet.',
+									);
+								}
+
+								if (frameInfo.fscod === 3) {
+									throw new Error(
+										'Invalid AC-3 audio stream; reserved sample rate code found in first packet.',
 									);
 								}
 
@@ -494,15 +500,22 @@ export class MpegTsDemuxer extends Demuxer {
 
 								elementaryStream.initialized = true;
 							} else if (elementaryStream.info.codec === 'eac3') {
-								const frameInfo = parseEAC3SyncFrame(pesPacket.data);
+								const frameInfo = parseEac3SyncFrame(pesPacket.data);
 								if (!frameInfo) {
 									throw new Error(
 										'Invalid E-AC-3 audio stream; could not read sync frame from first packet.',
 									);
 								}
 
-								elementaryStream.info.numberOfChannels = getEAC3ChannelCount(frameInfo);
-								elementaryStream.info.sampleRate = getEAC3SampleRate(frameInfo);
+								const sampleRate = getEac3SampleRate(frameInfo);
+								if (sampleRate === null) {
+									throw new Error(
+										'Invalid E-AC-3 audio stream; reserved sample rate code found in first packet.',
+									);
+								}
+
+								elementaryStream.info.numberOfChannels = getEac3ChannelCount(frameInfo);
+								elementaryStream.info.sampleRate = sampleRate;
 
 								elementaryStream.initialized = true;
 							} else {
@@ -1755,6 +1768,51 @@ const markNextPacket = async (context: PacketReadingContext) => {
 					} else {
 						context.seekTo(possibleHeaderStartPos + 1);
 					}
+				} else if (codec === 'ac3') {
+					if (byte !== 0x0b) {
+						continue;
+					}
+
+					context.skip(-1);
+					const possibleSyncPos = context.currentPos;
+
+					// Need at least 5 bytes for sync word + CRC + fscod/frmsizecod
+					let remaining = context.ensureBuffered(5);
+					if (remaining instanceof Promise) remaining = await remaining;
+
+					if (remaining < 5) {
+						return;
+					}
+
+					const headerBytes = context.readBytes(5);
+
+					// Verify sync word (0x0B77)
+					if (headerBytes[0] !== 0x0b || headerBytes[1] !== 0x77) {
+						context.seekTo(possibleSyncPos + 1);
+						continue;
+					}
+
+					const fscod = headerBytes[4]! >> 6;
+					const frmsizecod = headerBytes[4]! & 0x3f;
+
+					if (fscod === 3 || frmsizecod > 37) {
+						// Invalid
+						context.seekTo(possibleSyncPos + 1);
+						continue;
+					}
+
+					const frameSize = AC3_FRAME_SIZES[3 * frmsizecod + fscod];
+					assert(frameSize !== undefined);
+
+					context.seekTo(possibleSyncPos);
+
+					remaining = context.ensureBuffered(frameSize);
+					if (remaining instanceof Promise) remaining = await remaining;
+
+					const duration = Math.round(
+						AC3_SAMPLES_PER_FRAME * TIMESCALE / elementaryStream.info.sampleRate,
+					);
+					return context.supplyPacket(remaining, duration);
 				} else if (codec === 'eac3') {
 					if (byte !== 0x0b) {
 						continue;
@@ -1793,54 +1851,6 @@ const markNextPacket = async (context: PacketReadingContext) => {
 					const samplesPerFrame = numblks * 256;
 					const duration = Math.round(
 						samplesPerFrame * TIMESCALE / elementaryStream.info.sampleRate,
-					);
-					return context.supplyPacket(remaining, duration);
-				} else if (codec === 'ac3') {
-					if (byte !== 0x0b) {
-						continue;
-					}
-
-					context.skip(-1);
-					const possibleSyncPos = context.currentPos;
-
-					// Need at least 5 bytes for sync word + CRC + fscod/frmsizecod
-					let remaining = context.ensureBuffered(5);
-					if (remaining instanceof Promise) remaining = await remaining;
-
-					if (remaining < 5) {
-						return;
-					}
-
-					const headerBytes = context.readBytes(5);
-
-					// Verify sync word (0x0B77)
-					if (headerBytes[0] !== 0x0b || headerBytes[1] !== 0x77) {
-						context.seekTo(possibleSyncPos + 1);
-						continue;
-					}
-
-					const fscod = headerBytes[4]! >> 6;
-					const frmsizecod = headerBytes[4]! & 0x3f;
-
-					if (fscod === 3) {
-						// Reserved, invalid
-						context.seekTo(possibleSyncPos + 1);
-						continue;
-					}
-
-					const frameSize = getAC3FrameSize(fscod, frmsizecod);
-					if (!frameSize) {
-						context.seekTo(possibleSyncPos + 1);
-						continue;
-					}
-
-					context.seekTo(possibleSyncPos);
-
-					remaining = context.ensureBuffered(frameSize);
-					if (remaining instanceof Promise) remaining = await remaining;
-
-					const duration = Math.round(
-						AC3_SAMPLES_PER_FRAME * TIMESCALE / elementaryStream.info.sampleRate,
 					);
 					return context.supplyPacket(remaining, duration);
 				} else {

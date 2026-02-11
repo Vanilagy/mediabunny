@@ -723,6 +723,7 @@ const buildPmt = (trackDatas: MpegTsTrackData[]) => {
 	let totalEsBytes = 0;
 	for (const trackData of trackDatas) {
 		totalEsBytes += 5;
+
 		if (trackData.streamType === MpegTsStreamType.AC3_SYSTEM_A) {
 			totalEsBytes += AC3_REGISTRATION_DESCRIPTOR.length;
 		} else if (trackData.streamType === MpegTsStreamType.EAC3_SYSTEM_A) {

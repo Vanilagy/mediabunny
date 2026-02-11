@@ -2658,7 +2658,7 @@ export const AC3_SAMPLE_RATES = [48000, 44100, 32000] as const;
  */
 export const AC3_ACMOD_CHANNEL_COUNTS = [2, 1, 2, 3, 3, 4, 4, 5] as const;
 
-export interface AC3FrameInfo {
+export interface Ac3FrameInfo {
 	/** Sample rate code */
 	fscod: number;
 	/** Bitstream ID */
@@ -2677,24 +2677,32 @@ export interface AC3FrameInfo {
  * Parse an AC-3 syncframe to extract BSI (Bit Stream Information) fields.
  * Section 4.3
  */
-export const parseAC3SyncFrame = (data: Uint8Array): AC3FrameInfo | null => {
-	if (data.length < 7) return null;
+export const parseAc3SyncFrame = (data: Uint8Array): Ac3FrameInfo | null => {
+	if (data.length < 7) {
+		return null;
+	}
 
 	// Check sync word (0x0B77)
-	if (data[0] !== 0x0B || data[1] !== 0x77) return null;
+	if (data[0] !== 0x0B || data[1] !== 0x77) {
+		return null;
+	}
 
 	const bitstream = new Bitstream(data);
 	bitstream.skipBits(16); // sync word
 	bitstream.skipBits(16); // crc1
 
 	const fscod = bitstream.readBits(2);
-	if (fscod === 3) return null; // Reserved, invalid
+	if (fscod === 3) {
+		return null; // Reserved, invalid
+	}
 
 	const frmsizecod = bitstream.readBits(6);
 	const bsid = bitstream.readBits(5);
 
 	// Verify this is AC-3
-	if (bsid > 8) return null;
+	if (bsid > 8) {
+		return null;
+	}
 
 	const bsmod = bitstream.readBits(3);
 	const acmod = bitstream.readBits(3);
@@ -2721,100 +2729,55 @@ export const parseAC3SyncFrame = (data: Uint8Array): AC3FrameInfo | null => {
 };
 
 /**
- * Parse a dac3 box to extract audio parameters.
- * Section F.4
- */
-export const parseAC3Config = (data: Uint8Array): AC3FrameInfo | null => {
-	if (data.length < 3) return null;
-
-	const bitstream = new Bitstream(data);
-
-	const fscod = bitstream.readBits(2);
-	const bsid = bitstream.readBits(5);
-	const bsmod = bitstream.readBits(3);
-	const acmod = bitstream.readBits(3);
-	const lfeon = bitstream.readBits(1);
-	const bitRateCode = bitstream.readBits(5);
-	// 5 bits reserved, not read
-
-	return { fscod, bsid, bsmod, acmod, lfeon, bitRateCode };
-};
-
-/**
- * Serialize AC-3 config to dac3 box format (3 bytes).
- * Section F.4
- */
-export const serializeAC3Config = (info: AC3FrameInfo): Uint8Array => {
-	const bytes = new Uint8Array(3);
-	const bitstream = new Bitstream(bytes);
-
-	bitstream.writeBits(2, info.fscod);
-	bitstream.writeBits(5, info.bsid);
-	bitstream.writeBits(3, info.bsmod);
-	bitstream.writeBits(3, info.acmod);
-	bitstream.writeBits(1, info.lfeon);
-	bitstream.writeBits(5, info.bitRateCode);
-	bitstream.writeBits(5, 0); // reserved
-
-	return bytes;
-};
-
-/**
- * AC-3 frame sizes in bytes, indexed by [frmsizecod][fscod].
+ * AC-3 frame sizes in bytes, indexed by [3 * frmsizecod + fscod].
  * fscod: 0=48kHz, 1=44.1kHz, 2=32kHz
  * Values are 16-bit words * 2 (to convert to bytes).
  * Table 4.13
  */
 export const AC3_FRAME_SIZES = [
 	// frmsizecod, [48kHz, 44.1kHz, 32kHz] in bytes
-	[64 * 2, 69 * 2, 96 * 2],
-	[64 * 2, 70 * 2, 96 * 2],
-	[80 * 2, 87 * 2, 120 * 2],
-	[80 * 2, 88 * 2, 120 * 2],
-	[96 * 2, 104 * 2, 144 * 2],
-	[96 * 2, 105 * 2, 144 * 2],
-	[112 * 2, 121 * 2, 168 * 2],
-	[112 * 2, 122 * 2, 168 * 2],
-	[128 * 2, 139 * 2, 192 * 2],
-	[128 * 2, 140 * 2, 192 * 2],
-	[160 * 2, 174 * 2, 240 * 2],
-	[160 * 2, 175 * 2, 240 * 2],
-	[192 * 2, 208 * 2, 288 * 2],
-	[192 * 2, 209 * 2, 288 * 2],
-	[224 * 2, 243 * 2, 336 * 2],
-	[224 * 2, 244 * 2, 336 * 2],
-	[256 * 2, 278 * 2, 384 * 2],
-	[256 * 2, 279 * 2, 384 * 2],
-	[320 * 2, 348 * 2, 480 * 2],
-	[320 * 2, 349 * 2, 480 * 2],
-	[384 * 2, 417 * 2, 576 * 2],
-	[384 * 2, 418 * 2, 576 * 2],
-	[448 * 2, 487 * 2, 672 * 2],
-	[448 * 2, 488 * 2, 672 * 2],
-	[512 * 2, 557 * 2, 768 * 2],
-	[512 * 2, 558 * 2, 768 * 2],
-	[640 * 2, 696 * 2, 960 * 2],
-	[640 * 2, 697 * 2, 960 * 2],
-	[768 * 2, 835 * 2, 1152 * 2],
-	[768 * 2, 836 * 2, 1152 * 2],
-	[896 * 2, 975 * 2, 1344 * 2],
-	[896 * 2, 976 * 2, 1344 * 2],
-	[1024 * 2, 1114 * 2, 1536 * 2],
-	[1024 * 2, 1115 * 2, 1536 * 2],
-	[1152 * 2, 1253 * 2, 1728 * 2],
-	[1152 * 2, 1254 * 2, 1728 * 2],
-	[1280 * 2, 1393 * 2, 1920 * 2],
-	[1280 * 2, 1394 * 2, 1920 * 2],
-] as const;
+	64 * 2, 69 * 2, 96 * 2,
+	64 * 2, 70 * 2, 96 * 2,
+	80 * 2, 87 * 2, 120 * 2,
+	80 * 2, 88 * 2, 120 * 2,
+	96 * 2, 104 * 2, 144 * 2,
+	96 * 2, 105 * 2, 144 * 2,
+	112 * 2, 121 * 2, 168 * 2,
+	112 * 2, 122 * 2, 168 * 2,
+	128 * 2, 139 * 2, 192 * 2,
+	128 * 2, 140 * 2, 192 * 2,
+	160 * 2, 174 * 2, 240 * 2,
+	160 * 2, 175 * 2, 240 * 2,
+	192 * 2, 208 * 2, 288 * 2,
+	192 * 2, 209 * 2, 288 * 2,
+	224 * 2, 243 * 2, 336 * 2,
+	224 * 2, 244 * 2, 336 * 2,
+	256 * 2, 278 * 2, 384 * 2,
+	256 * 2, 279 * 2, 384 * 2,
+	320 * 2, 348 * 2, 480 * 2,
+	320 * 2, 349 * 2, 480 * 2,
+	384 * 2, 417 * 2, 576 * 2,
+	384 * 2, 418 * 2, 576 * 2,
+	448 * 2, 487 * 2, 672 * 2,
+	448 * 2, 488 * 2, 672 * 2,
+	512 * 2, 557 * 2, 768 * 2,
+	512 * 2, 558 * 2, 768 * 2,
+	640 * 2, 696 * 2, 960 * 2,
+	640 * 2, 697 * 2, 960 * 2,
+	768 * 2, 835 * 2, 1152 * 2,
+	768 * 2, 836 * 2, 1152 * 2,
+	896 * 2, 975 * 2, 1344 * 2,
+	896 * 2, 976 * 2, 1344 * 2,
+	1024 * 2, 1114 * 2, 1536 * 2,
+	1024 * 2, 1115 * 2, 1536 * 2,
+	1152 * 2, 1253 * 2, 1728 * 2,
+	1152 * 2, 1254 * 2, 1728 * 2,
+	1280 * 2, 1393 * 2, 1920 * 2,
+	1280 * 2, 1394 * 2, 1920 * 2,
+];
 
 /** Number of samples per AC-3 syncframe (always 1536) */
 export const AC3_SAMPLES_PER_FRAME = 1536;
-
-/** Get AC-3 frame size in bytes from fscod and frmsizecod. */
-export const getAC3FrameSize = (fscod: number, frmsizecod: number): number | null => {
-	if (fscod < 0 || fscod > 2 || frmsizecod < 0 || frmsizecod > 37) return null;
-	return AC3_FRAME_SIZES[frmsizecod]![fscod]!;
-};
 
 /**
  * AC-3 registration_descriptor for MPEG-TS.
@@ -2835,11 +2798,11 @@ export const EAC3_NUMBLKS_TABLE = [1, 2, 3, 6] as const;
  * E-AC-3 independent substream info.
  * Each independent substream represents a separate audio program.
  */
-export interface EAC3SubstreamInfo {
+export interface Eac3SubstreamInfo {
 	/** Sample rate code */
 	fscod: number;
 	/** Sample rate code 2 (ATSC A/52:2018) */
-	fscod2: number;
+	fscod2: number | null;
 	/** Bitstream ID */
 	bsid: number;
 	/** Bitstream mode */
@@ -2857,22 +2820,26 @@ export interface EAC3SubstreamInfo {
 /**
  * E-AC-3 decoder configuration (dec3 box contents).
  */
-export interface EAC3FrameInfo {
+export interface Eac3FrameInfo {
 	/** Data rate in kbps */
 	dataRate: number;
 	/** Independent substreams */
-	substreams: EAC3SubstreamInfo[];
+	substreams: Eac3SubstreamInfo[];
 }
 
 /**
  * Parse an E-AC-3 syncframe to extract BSI fields.
  * Section E.1.2
  */
-export const parseEAC3SyncFrame = (data: Uint8Array): EAC3FrameInfo | null => {
-	if (data.length < 6) return null;
+export const parseEac3SyncFrame = (data: Uint8Array): Eac3FrameInfo | null => {
+	if (data.length < 6) {
+		return null;
+	}
 
 	// Check sync word (0x0B77)
-	if (data[0] !== 0x0B || data[1] !== 0x77) return null;
+	if (data[0] !== 0x0B || data[1] !== 0x77) {
+		return null;
+	}
 
 	const bitstream = new Bitstream(data);
 	bitstream.skipBits(16); // sync word
@@ -2904,7 +2871,9 @@ export const parseEAC3SyncFrame = (data: Uint8Array): EAC3FrameInfo | null => {
 	const bsid = bitstream.readBits(5);
 
 	// Verify this is E-AC-3
-	if (bsid < 11 || bsid > 16) return null;
+	if (bsid < 11 || bsid > 16) {
+		return null;
+	}
 
 	// Calculate data rate: ((frmsiz + 1) * fs) / (numblks * 16)
 	const numblks = EAC3_NUMBLKS_TABLE[numblkscod]!;
@@ -2922,7 +2891,7 @@ export const parseEAC3SyncFrame = (data: Uint8Array): EAC3FrameInfo | null => {
 	const numDepSub = 0;
 	const chanLoc = 0;
 
-	const substream: EAC3SubstreamInfo = {
+	const substream: Eac3SubstreamInfo = {
 		fscod,
 		fscod2,
 		bsid,
@@ -2943,20 +2912,24 @@ export const parseEAC3SyncFrame = (data: Uint8Array): EAC3FrameInfo | null => {
  * Parse a dec3 box to extract E-AC-3 parameters.
  * Section F.6
  */
-export const parseEAC3Config = (data: Uint8Array): EAC3FrameInfo | null => {
-	if (data.length < 2) return null;
+export const parseEac3Config = (data: Uint8Array): Eac3FrameInfo | null => {
+	if (data.length < 2) {
+		return null;
+	}
 
 	const bitstream = new Bitstream(data);
 
 	const dataRate = bitstream.readBits(13);
 	const numIndSub = bitstream.readBits(3);
 
-	const substreams: EAC3SubstreamInfo[] = [];
+	const substreams: Eac3SubstreamInfo[] = [];
 
 	for (let i = 0; i <= numIndSub; i++) {
 		// Check we have enough data for this substream
 		// Each substream needs at least 24 bits (3 bytes) without dependent subs
-		if (Math.ceil(bitstream.pos / 8) + 3 > data.length) break;
+		if (Math.ceil(bitstream.pos / 8) + 3 > data.length) {
+			break;
+		}
 
 		const fscod = bitstream.readBits(2);
 		const bsid = bitstream.readBits(5);
@@ -2969,7 +2942,6 @@ export const parseEAC3Config = (data: Uint8Array): EAC3FrameInfo | null => {
 		const numDepSub = bitstream.readBits(4);
 
 		let chanLoc = 0;
-		const fscod2 = 0;
 
 		if (numDepSub > 0) {
 			chanLoc = bitstream.readBits(9);
@@ -2979,7 +2951,7 @@ export const parseEAC3Config = (data: Uint8Array): EAC3FrameInfo | null => {
 
 		substreams.push({
 			fscod,
-			fscod2,
+			fscod2: null,
 			bsid,
 			bsmod,
 			acmod,
@@ -2989,83 +2961,43 @@ export const parseEAC3Config = (data: Uint8Array): EAC3FrameInfo | null => {
 		});
 	}
 
-	if (substreams.length === 0) return null;
+	if (substreams.length === 0) {
+		return null;
+	}
 
 	return { dataRate, substreams };
-};
-
-/**
- * Serialize E-AC-3 config to dec3 box format.
- * Section F.6
- */
-export const serializeEAC3Config = (config: EAC3FrameInfo): Uint8Array => {
-	// Calculate size
-	let totalBits = 16; // header: data_rate (13) + num_ind_sub (3)
-	for (const sub of config.substreams) {
-		totalBits += 23; // fixed fields per substream
-		if (sub.numDepSub > 0) {
-			totalBits += 9; // chan_loc
-		} else {
-			totalBits += 1; // reserved
-		}
-	}
-	const size = Math.ceil(totalBits / 8);
-
-	const bytes = new Uint8Array(size);
-	const bitstream = new Bitstream(bytes);
-
-	bitstream.writeBits(13, config.dataRate);
-	bitstream.writeBits(3, config.substreams.length - 1); // num_ind_sub
-
-	for (const sub of config.substreams) {
-		bitstream.writeBits(2, sub.fscod);
-		bitstream.writeBits(5, sub.bsid);
-		bitstream.writeBits(1, 0); // reserved
-		bitstream.writeBits(1, 0); // asvc = 0
-		bitstream.writeBits(3, sub.bsmod);
-		bitstream.writeBits(3, sub.acmod);
-		bitstream.writeBits(1, sub.lfeon);
-		bitstream.writeBits(3, 0); // reserved
-		bitstream.writeBits(4, sub.numDepSub);
-
-		if (sub.numDepSub > 0) {
-			bitstream.writeBits(9, sub.chanLoc);
-		} else {
-			bitstream.writeBits(1, 0); // reserved
-		}
-	}
-
-	return bytes;
 };
 
 /**
  * Get sample rate from E-AC-3 config.
  * See ATSC A/52:2018 for handling fscod2.
  */
-export const getEAC3SampleRate = (config: EAC3FrameInfo): number => {
+export const getEac3SampleRate = (config: Eac3FrameInfo): number | null => {
 	const sub = config.substreams[0];
-	if (!sub) return 48000;
+	assert(sub);
 
 	if (sub.fscod < 3) {
 		return AC3_SAMPLE_RATES[sub.fscod]!;
-	} else if (sub.fscod2 < 3) {
+	} else if (sub.fscod2 !== null && sub.fscod2 < 3) {
 		return EAC3_REDUCED_SAMPLE_RATES[sub.fscod2]!;
 	}
-	return 48000;
+
+	return null;
 };
 
 /**
  * Get channel count from E-AC-3 config (first independent substream only).
  */
-export const getEAC3ChannelCount = (config: EAC3FrameInfo): number => {
+export const getEac3ChannelCount = (config: Eac3FrameInfo): number => {
 	const sub = config.substreams[0];
-	if (!sub) return 2;
+	assert(sub);
 
 	let channels = AC3_ACMOD_CHANNEL_COUNTS[sub.acmod]! + sub.lfeon;
 
 	// Add channels from dependent substreams
 	if (sub.numDepSub > 0) {
 		const CHAN_LOC_COUNTS = [2, 2, 1, 1, 2, 2, 2, 1, 1];
+
 		for (let bit = 0; bit < 9; bit++) {
 			if (sub.chanLoc & (1 << (8 - bit))) {
 				channels += CHAN_LOC_COUNTS[bit]!;
