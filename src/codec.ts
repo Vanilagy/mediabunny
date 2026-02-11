@@ -70,6 +70,8 @@ export const NON_PCM_AUDIO_CODECS = [
 	'mp3',
 	'vorbis',
 	'flac',
+	'ac3',
+	'eac3',
 ] as const;
 /**
  * List of known audio codecs, ordered by encoding preference.
@@ -528,6 +530,10 @@ export const buildAudioCodecString = (codec: AudioCodec, numberOfChannels: numbe
 		return 'vorbis';
 	} else if (codec === 'flac') {
 		return 'flac';
+	} else if (codec === 'ac3') {
+		return 'ac-3';
+	} else if (codec === 'eac3') {
+		return 'ec-3';
 	} else if ((PCM_AUDIO_CODECS as readonly string[]).includes(codec)) {
 		return codec;
 	}
@@ -573,6 +579,10 @@ export const extractAudioCodecString = (trackInfo: {
 		return 'vorbis';
 	} else if (codec === 'flac') {
 		return 'flac';
+	} else if (codec === 'ac3') {
+		return 'ac-3';
+	} else if (codec === 'eac3') {
+		return 'ec-3';
 	} else if (codec && (PCM_AUDIO_CODECS as readonly string[]).includes(codec)) {
 		return codec;
 	}
@@ -742,6 +752,10 @@ export const inferCodecFromCodecString = (codecString: string): MediaCodec | nul
 		return 'vorbis';
 	} else if (codecString === 'flac') {
 		return 'flac';
+	} else if (codecString === 'ac-3' || codecString === 'ac3') {
+		return 'ac3';
+	} else if (codecString === 'ec-3' || codecString === 'eac3') {
+		return 'eac3';
 	} else if (codecString === 'ulaw') {
 		return 'ulaw';
 	} else if (codecString === 'alaw') {
@@ -933,7 +947,9 @@ export const validateVideoChunkMetadata = (metadata: EncodedVideoChunkMetadata |
 	}
 };
 
-const VALID_AUDIO_CODEC_STRING_PREFIXES = ['mp4a', 'mp3', 'opus', 'vorbis', 'flac', 'ulaw', 'alaw', 'pcm'];
+const VALID_AUDIO_CODEC_STRING_PREFIXES = [
+	'mp4a', 'mp3', 'opus', 'vorbis', 'flac', 'ulaw', 'alaw', 'pcm', 'ac-3', 'ec-3',
+];
 
 export const validateAudioChunkMetadata = (metadata: EncodedAudioChunkMetadata | undefined) => {
 	if (!metadata) {
@@ -1050,6 +1066,18 @@ export const validateAudioChunkMetadata = (metadata: EncodedAudioChunkMetadata |
 				'Audio chunk metadata decoder configuration for FLAC must include a description, which is expected to'
 				+ ' adhere to the format described in https://www.w3.org/TR/webcodecs-flac-codec-registration/.',
 			);
+		}
+	} else if (metadata.decoderConfig.codec.startsWith('ac-3') || metadata.decoderConfig.codec.startsWith('ac3')) {
+		// AC3-specific validation
+
+		if (metadata.decoderConfig.codec !== 'ac-3') {
+			throw new TypeError('Audio chunk metadata decoder configuration codec string for AC-3 must be "ac-3".');
+		}
+	} else if (metadata.decoderConfig.codec.startsWith('ec-3') || metadata.decoderConfig.codec.startsWith('eac3')) {
+		// EAC3-specific validation
+
+		if (metadata.decoderConfig.codec !== 'ec-3') {
+			throw new TypeError('Audio chunk metadata decoder configuration codec string for EC-3 must be "ec-3".');
 		}
 	} else if (
 		metadata.decoderConfig.codec.startsWith('pcm')

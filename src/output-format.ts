@@ -292,7 +292,8 @@ export class Mp4OutputFormat extends IsobmffOutputFormat {
 		return [
 			...VIDEO_CODECS,
 			...NON_PCM_AUDIO_CODECS,
-			// These are supported via ISO/IEC 23003-5
+
+			// These are supported via ISO/IEC 23003-5:
 			'pcm-s16',
 			'pcm-s16be',
 			'pcm-s24',
@@ -303,6 +304,7 @@ export class Mp4OutputFormat extends IsobmffOutputFormat {
 			'pcm-f32be',
 			'pcm-f64',
 			'pcm-f64be',
+
 			...SUBTITLE_CODECS,
 		];
 	}
@@ -1032,7 +1034,7 @@ export class MpegTsOutputFormat extends OutputFormat {
 	getSupportedCodecs(): MediaCodec[] {
 		return [
 			...VIDEO_CODECS.filter(codec => ['avc', 'hevc'].includes(codec)),
-			...AUDIO_CODECS.filter(codec => ['aac', 'mp3'].includes(codec)),
+			...AUDIO_CODECS.filter(codec => ['aac', 'mp3', 'ac3', 'eac3'].includes(codec)),
 		];
 	}
 

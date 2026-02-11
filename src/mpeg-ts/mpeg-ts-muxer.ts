@@ -9,11 +9,13 @@
 import { parseAacAudioSpecificConfig, validateAudioChunkMetadata, validateVideoChunkMetadata } from '../codec';
 import { buildAdtsHeaderTemplate, writeAdtsFrameLength } from '../adts/adts-misc';
 import {
+	AC3_REGISTRATION_DESCRIPTOR,
 	AvcDecoderConfigurationRecord,
 	AvcNalUnitType,
 	concatNalUnitsInAnnexB,
 	deserializeAvcDecoderConfigurationRecord,
 	deserializeHevcDecoderConfigurationRecord,
+	EAC3_REGISTRATION_DESCRIPTOR,
 	extractNalUnitTypeForAvc,
 	extractNalUnitTypeForHevc,
 	HevcDecoderConfigurationRecord,
@@ -151,11 +153,34 @@ export class MpegTsMuxer extends Muxer {
 		assert(meta?.decoderConfig);
 
 		const codec = track.source._codec;
-		assert(codec === 'aac' || codec === 'mp3');
+		assert(codec === 'aac' || codec === 'mp3' || codec === 'ac3' || codec === 'eac3');
 
-		const streamType = codec === 'aac' ? MpegTsStreamType.AAC : MpegTsStreamType.MP3_MPEG1;
+		let streamType: MpegTsStreamType;
+		let streamId: number;
+
+		switch (codec) {
+			case 'aac': {
+				streamType = MpegTsStreamType.AAC;
+				streamId = AUDIO_STREAM_ID_BASE + this.audioTrackIndex++;
+			}; break;
+
+			case 'mp3': {
+				streamType = MpegTsStreamType.MP3_MPEG1;
+				streamId = AUDIO_STREAM_ID_BASE + this.audioTrackIndex++;
+			}; break;
+
+			case 'ac3': {
+				streamType = MpegTsStreamType.AC3_SYSTEM_A;
+				streamId = 0xbd;
+			}; break;
+
+			case 'eac3': {
+				streamType = MpegTsStreamType.EAC3_SYSTEM_A;
+				streamId = 0xbd;
+			}; break;
+		}
+
 		const pid = FIRST_TRACK_PID + this.trackDatas.length;
-		const streamId = AUDIO_STREAM_ID_BASE + this.audioTrackIndex++;
 
 		const newTrackData: MpegTsTrackData = {
 			track,
@@ -373,7 +398,7 @@ export class MpegTsMuxer extends Muxer {
 	): Uint8Array {
 		const codec = (trackData.track as OutputAudioTrack).source._codec;
 
-		if (codec === 'mp3') {
+		if (codec === 'mp3' || codec === 'ac3' || codec === 'eac3') {
 			// We're good
 			return packet.data;
 		}
@@ -695,7 +720,18 @@ const PAT_SECTION = new Uint8Array(16);
 }
 
 const buildPmt = (trackDatas: MpegTsTrackData[]) => {
-	const sectionLength = 9 + trackDatas.length * 5 + 4;
+	let totalEsBytes = 0;
+	for (const trackData of trackDatas) {
+		totalEsBytes += 5;
+
+		if (trackData.streamType === MpegTsStreamType.AC3_SYSTEM_A) {
+			totalEsBytes += AC3_REGISTRATION_DESCRIPTOR.length;
+		} else if (trackData.streamType === MpegTsStreamType.EAC3_SYSTEM_A) {
+			totalEsBytes += EAC3_REGISTRATION_DESCRIPTOR.length;
+		}
+	}
+
+	const sectionLength = 9 + totalEsBytes + 4;
 	const section = new Uint8Array(3 + sectionLength - 4);
 	const view = toDataView(section);
 
@@ -714,8 +750,21 @@ const buildPmt = (trackDatas: MpegTsTrackData[]) => {
 		section[offset++] = trackData.streamType; // stream_type
 		view.setUint16(offset, 0xE000 | (trackData.pid & 0x1FFF), false); // reserved=111, elementary_PID
 		offset += 2;
-		view.setUint16(offset, 0xF000, false); // reserved=1111, ES_info_length=0
-		offset += 2;
+
+		if (trackData.streamType === MpegTsStreamType.AC3_SYSTEM_A) {
+			view.setUint16(offset, 0xF000 | AC3_REGISTRATION_DESCRIPTOR.length, false);
+			offset += 2;
+			section.set(AC3_REGISTRATION_DESCRIPTOR, offset);
+			offset += AC3_REGISTRATION_DESCRIPTOR.length;
+		} else if (trackData.streamType === MpegTsStreamType.EAC3_SYSTEM_A) {
+			view.setUint16(offset, 0xF000 | EAC3_REGISTRATION_DESCRIPTOR.length, false);
+			offset += 2;
+			section.set(EAC3_REGISTRATION_DESCRIPTOR, offset);
+			offset += EAC3_REGISTRATION_DESCRIPTOR.length;
+		} else {
+			view.setUint16(offset, 0xF000, false); // reserved=1111, ES_info_length=0
+			offset += 2;
+		}
 	}
 
 	const crc = computeMpegTsCrc32(section);
