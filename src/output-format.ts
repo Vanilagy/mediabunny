@@ -74,6 +74,13 @@ export abstract class OutputFormat {
 	abstract getSupportedTrackCounts(): TrackCountLimits;
 	/** Whether this output format supports video rotation metadata. */
 	abstract get supportsVideoRotationMetadata(): boolean;
+	/**
+	 * Whether this output format's tracks store timestamped media data. When `true`, the timestamps of added packets
+	 * will be respected, allowing things like gaps in media data or non-zero start times. When `false`, the format's
+	 * media data implicitly starts at zero and follows an implicit sequential timing from there, using the intrinsic
+	 * durations of the media data.
+	 */
+	abstract get supportsTimestampedMediaData(): boolean;
 
 	/** Returns a list of video codecs that this output format can contain. */
 	getSupportedVideoCodecs() {
@@ -255,6 +262,10 @@ export abstract class IsobmffOutputFormat extends OutputFormat {
 	}
 
 	get supportsVideoRotationMetadata() {
+		return true;
+	}
+
+	get supportsTimestampedMediaData() {
 		return true;
 	}
 
@@ -490,6 +501,10 @@ export class MkvOutputFormat extends OutputFormat {
 		// While it technically does support it with ProjectionPoseRoll, many players appear to ignore this value
 		return false;
 	}
+
+	get supportsTimestampedMediaData() {
+		return true;
+	}
 }
 
 /**
@@ -626,6 +641,10 @@ export class Mp3OutputFormat extends OutputFormat {
 	get supportsVideoRotationMetadata() {
 		return false;
 	}
+
+	get supportsTimestampedMediaData() {
+		return false;
+	}
 }
 
 /**
@@ -724,6 +743,10 @@ export class WavOutputFormat extends OutputFormat {
 	get supportsVideoRotationMetadata() {
 		return false;
 	}
+
+	get supportsTimestampedMediaData() {
+		return false;
+	}
 }
 
 /**
@@ -815,6 +838,10 @@ export class OggOutputFormat extends OutputFormat {
 	get supportsVideoRotationMetadata() {
 		return false;
 	}
+
+	get supportsTimestampedMediaData() {
+		return false;
+	}
 }
 
 /**
@@ -889,6 +916,10 @@ export class AdtsOutputFormat extends OutputFormat {
 	get supportsVideoRotationMetadata() {
 		return false;
 	}
+
+	get supportsTimestampedMediaData() {
+		return false;
+	}
 }
 
 /**
@@ -958,6 +989,10 @@ export class FlacOutputFormat extends OutputFormat {
 	}
 
 	get supportsVideoRotationMetadata() {
+		return false;
+	}
+
+	get supportsTimestampedMediaData() {
 		return false;
 	}
 }
@@ -1040,5 +1075,9 @@ export class MpegTsOutputFormat extends OutputFormat {
 
 	get supportsVideoRotationMetadata() {
 		return false;
+	}
+
+	get supportsTimestampedMediaData() {
+		return true;
 	}
 }

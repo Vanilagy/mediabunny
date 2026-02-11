@@ -24,7 +24,7 @@
 			chunked: true,
 			chunkSize: 2**20
 		});
-		const outputFormat = new Mediabunny.Mp4OutputFormat({});
+		const outputFormat = new Mediabunny.WavOutputFormat({});
 
 		const button = document.createElement('button');
 		button.textContent = 'Cancel';
@@ -100,8 +100,9 @@
 			},
 			*/
 			video: () => ({
-				forceTranscode: true,
-				allowRotationMetadata: false,
+				width: 320,
+				//forceTranscode: true,
+				//allowRotationMetadata: false,
 				//width: 720,
 				//frameRate: 30,
 				//bitrate: Mediabunny.QUALITY_VERY_LOW,
@@ -181,7 +182,9 @@
 				}
 			},
 			trim: {
-				start: 0,
+				start: -2,
+				end: 5,
+				//start: 0,
 				//end: 4
 			},
 		});
