@@ -100,7 +100,7 @@ type InternalTrack = {
 	internalCodecId: string | null;
 	name: string | null;
 	languageCode: string;
-	sampleTableByteOffset: number;
+	sampleTableByteOffset: number | null; // null when the track's sample table is another file (ominous ik 👀)
 	sampleTable: SampleTable | null;
 	fragmentLookupTable: FragmentLookupTableEntry[];
 	currentFragmentState: FragmentTrackState | null;
@@ -260,12 +260,6 @@ export class IsobmffDemuxer extends Demuxer {
 		this.reader = input._reader;
 	}
 
-	override async computeDuration() {
-		const tracks = await this.getTracks();
-		const trackDurations = await Promise.all(tracks.map(x => x.computeDuration()));
-		return Math.max(0, ...trackDurations);
-	}
-
 	override async getTracks() {
 		await this.readMetadata();
 		return this.tracks.map(track => track.inputTrack!);
@@ -292,6 +286,8 @@ export class IsobmffDemuxer extends Demuxer {
 	readMetadata() {
 		return this.metadataPromise ??= (async () => {
 			let currentPos = 0;
+			let lookForMfraBox = false;
+
 			while (true) {
 				let slice = this.reader.requestSliceRange(currentPos, MIN_BOX_HEADER_SIZE, MAX_BOX_HEADER_SIZE);
 				if (slice instanceof Promise) slice = await slice;
@@ -303,7 +299,7 @@ export class IsobmffDemuxer extends Demuxer {
 					break;
 				}
 
-				if (boxInfo.name === 'ftyp') {
+				if (boxInfo.name === 'ftyp' || boxInfo.name === 'styp') {
 					const majorBrand = readAscii(slice, 4);
 					this.isQuickTime = majorBrand === 'qt  ';
 				} else if (boxInfo.name === 'moov') {
@@ -327,13 +323,88 @@ export class IsobmffDemuxer extends Demuxer {
 						track.editListOffset -= Math.round(previousSegmentDurationsInSeconds * track.timescale);
 					}
 
+					lookForMfraBox = this.isFragmented
+						&& this.reader.fileSize !== null
+						&& this.reader.fileSize > startPos + boxInfo.totalSize; // There's more after the moov box
+
+					break;
+				} else if (boxInfo.name === 'moof') {
+					if (!this.input._initInput) {
+						throw new Error(
+							'"moof" box encountered with no "moov" box present; this file is likely a Segment as'
+							+ ' described in ISO/IEC 14496-12 Section 8.16. A separate init file that contains a "moov"'
+							+ ' box is required to read this file, please provide it using InputOptions.initInput.',
+						);
+					}
+
+					const initDemuxer = (await this.input._initInput._getDemuxer()) as IsobmffDemuxer;
+					if (initDemuxer.constructor !== IsobmffDemuxer) {
+						throw new Error('Init input must match the input\'s format.');
+					}
+
+					await initDemuxer.readMetadata();
+
+					this.movieTimescale = initDemuxer.movieTimescale;
+					this.movieDurationInTimescale = initDemuxer.movieDurationInTimescale;
+					this.metadataTags = initDemuxer.metadataTags;
+					this.isFragmented = true;
+					this.fragmentTrackDefaults = initDemuxer.fragmentTrackDefaults;
+
+					// Create tracks from the init input's tracks
+					for (const foreignTrack of initDemuxer.tracks) {
+						const track: InternalTrack = {
+							id: foreignTrack.id,
+							demuxer: this,
+							inputTrack: null,
+							disposition: foreignTrack.disposition,
+							timescale: foreignTrack.timescale,
+							durationInMediaTimescale: foreignTrack.durationInMediaTimescale,
+							durationInMovieTimescale: foreignTrack.durationInMovieTimescale,
+							rotation: foreignTrack.rotation,
+							internalCodecId: foreignTrack.internalCodecId,
+							name: foreignTrack.name,
+							languageCode: foreignTrack.languageCode,
+							sampleTableByteOffset: null,
+							sampleTable: null,
+							fragmentLookupTable: [],
+							currentFragmentState: null,
+							fragmentPositionCache: [],
+							editListPreviousSegmentDurations: foreignTrack.editListPreviousSegmentDurations,
+							editListOffset: foreignTrack.editListOffset,
+							info: foreignTrack.info,
+						};
+
+						if (foreignTrack.inputTrack) {
+							assert(track.info);
+
+							if (track.info.type === 'video' && track.info.width !== -1) {
+								const videoTrack = track as InternalVideoTrack;
+								track.inputTrack
+									= new InputVideoTrack(this.input, new IsobmffVideoTrackBacking(videoTrack));
+								this.tracks.push(track);
+							} else if (track.info.type === 'audio' && track.info.numberOfChannels !== -1) {
+								const audioTrack = track as InternalAudioTrack;
+								track.inputTrack
+									= new InputAudioTrack(this.input, new IsobmffAudioTrackBacking(audioTrack));
+								this.tracks.push(track);
+							}
+						} else {
+							// The track didn't have enough info to warrant an input track
+						}
+					}
+
+					lookForMfraBox = false; // No point in doing it for segment files
+
 					break;
 				}
 
 				currentPos = startPos + boxInfo.totalSize;
 			}
 
-			if (this.isFragmented && this.reader.fileSize !== null) {
+			if (lookForMfraBox) {
+				assert(this.reader.fileSize !== null);
+
+				console.log('this');
 				// The last 4 bytes may contain the size of the mfra box at the end of the file
 				let lastWordSlice = this.reader.requestSlice(this.reader.fileSize - 4, 4);
 				if (lastWordSlice instanceof Promise) lastWordSlice = await lastWordSlice;
@@ -385,7 +456,13 @@ export class IsobmffDemuxer extends Demuxer {
 		};
 		internalTrack.sampleTable = sampleTable;
 
+		if (internalTrack.sampleTableByteOffset === null) {
+			// There's no sample table to read, it's in another file (happens with segments)
+			return sampleTable;
+		}
+
 		assert(this.moovSlice);
+
 		const stblContainerSlice = this.moovSlice.slice(internalTrack.sampleTableByteOffset);
 
 		this.currentTrack = internalTrack;
@@ -2378,14 +2455,8 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		return this.internalTrack.disposition;
 	}
 
-	async computeDuration() {
-		const lastPacket = await this.getPacket(Infinity, { metadataOnly: true });
-		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
-	}
-
-	async getFirstTimestamp() {
-		const firstPacket = await this.getFirstPacket({ metadataOnly: true });
-		return firstPacket?.timestamp ?? 0;
+	getVariant() {
+		return null;
 	}
 
 	async getFirstPacket(options: PacketRetrievalOptions) {

@@ -66,7 +66,7 @@ export abstract class IsobmffInputFormat extends InputFormat {
 		slice.skip(4);
 		const fourCc = readAscii(slice, 4);
 
-		if (fourCc !== 'ftyp') {
+		if (fourCc !== 'ftyp' && fourCc !== 'styp') {
 			return null;
 		}
 
@@ -549,6 +549,37 @@ export class MpegTsInputFormat extends InputFormat {
 
 	get mimeType() {
 		return 'video/MP2T';
+	}
+}
+
+export class VirtualInputFormat extends InputFormat {
+	/** @internal */
+	_createDemuxerFn: (input: Input) => Demuxer;
+
+	/** @internal */
+	constructor(createDemuxer: (input: Input) => Demuxer) {
+		super();
+		this._createDemuxerFn = createDemuxer;
+	}
+
+	/** @internal */
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	async _canReadInput(input: Input) {
+		return true;
+	}
+
+	/** @internal */
+
+	_createDemuxer(input: Input): Demuxer {
+		return this._createDemuxerFn(input);
+	}
+
+	get name() {
+		return 'Virtual input format';
+	}
+
+	get mimeType() {
+		return 'application/magic';
 	}
 }
 

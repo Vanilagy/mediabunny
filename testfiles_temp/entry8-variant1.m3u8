@@ -1,0 +1,38 @@
+#EXTM3U
+#EXT-X-VERSION:1
+## Created with Unified Streaming Platform(version=1.6.7)
+#EXT-X-MEDIA-SEQUENCE:1
+#EXT-X-ALLOW-CACHE:NO
+#EXT-X-TARGETDURATION:11
+#EXT-X-KEY:METHOD=AES-128,URI="oceans.key"
+#EXTINF:11, no desc
+oceans_aes-audio=65000-video=236000-1.ts
+#EXTINF:7, no desc
+oceans_aes-audio=65000-video=236000-2.ts
+#EXTINF:7, no desc
+oceans_aes-audio=65000-video=236000-3.ts
+#EXTINF:8, no desc
+oceans_aes-audio=65000-video=236000-4.ts
+#EXTINF:10, no desc
+oceans_aes-audio=65000-video=236000-5.ts
+#EXTINF:6, no desc
+oceans_aes-audio=65000-video=236000-6.ts
+#EXTINF:9, no desc
+oceans_aes-audio=65000-video=236000-7.ts
+#EXTINF:7, no desc
+oceans_aes-audio=65000-video=236000-8.ts
+#EXTINF:9, no desc
+oceans_aes-audio=65000-video=236000-9.ts
+#EXTINF:8, no desc
+oceans_aes-audio=65000-video=236000-10.ts
+#EXTINF:8, no desc
+oceans_aes-audio=65000-video=236000-11.ts
+#EXTINF:8, no desc
+oceans_aes-audio=65000-video=236000-12.ts
+#EXTINF:6, no desc
+oceans_aes-audio=65000-video=236000-13.ts
+#EXTINF:9, no desc
+oceans_aes-audio=65000-video=236000-14.ts
+#EXTINF:5, no desc
+oceans_aes-audio=65000-video=236000-15.ts
+#EXT-X-ENDLIST

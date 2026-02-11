@@ -669,3 +669,30 @@ test('MPEG-TS first packet key packet forcing', async () => {
 		expect(firstKeyPacketSeeked.sequenceNumber).toBe(firstPacket.sequenceNumber);
 	}
 });
+
+test('MPEG-TS without initial key packet', async () => {
+	for (let i = 0; i < 2; i++) {
+		using input = new Input({
+			source: new FilePathSource(path.join(__dirname, '../public/no-initial-keyframe.ts')),
+			formats: ALL_FORMATS,
+		});
+
+		const videoTrack = await input.getPrimaryVideoTrack();
+		assert(videoTrack);
+
+		if (i === 1) {
+			const demuxer = (await input._demuxerPromise) as MpegTsDemuxer;
+			demuxer.seekChunkSize = 250_000; // Try it again with a smaller chunk size
+		}
+
+		const sink = new EncodedPacketSink(videoTrack);
+
+		const firstPacket = await sink.getFirstPacket();
+		assert(firstPacket);
+		expect(firstPacket.type).toBe('delta'); // First packet is delta
+
+		const aKeyPacket = await sink.getKeyPacket(Infinity);
+		assert(aKeyPacket);
+		expect(aKeyPacket.type).toBe('key');
+	}
+});

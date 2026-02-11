@@ -132,7 +132,7 @@ export class EncodedPacketSink {
 
 	/**
 	 * Retrieves the track's first packet (in decode order), or null if it has no packets. The first packet is very
-	 * likely to be a key packet.
+	 * likely to be a key packet, but it doesn't have to be.
 	 */
 	getFirstPacket(options: PacketRetrievalOptions = {}) {
 		validatePacketRetrievalOptions(options);
@@ -142,6 +142,23 @@ export class EncodedPacketSink {
 		}
 
 		return maybeFixPacketType(this._track, this._track._backing.getFirstPacket(options), options);
+	}
+
+	/** Retrieves the track's first key packet (in decode order), or null if it has no key packets. */
+	async getFirstKeyPacket(options: PacketRetrievalOptions = {}) {
+		validatePacketRetrievalOptions(options);
+
+		const firstPacket = await this.getFirstPacket(options);
+		if (!firstPacket) {
+			return null;
+		}
+
+		if (firstPacket.type === 'key') {
+			// Great
+			return firstPacket;
+		}
+
+		return this.getNextKeyPacket(firstPacket, options);
 	}
 
 	/**
@@ -476,7 +493,7 @@ export abstract class BaseMediaSampleSink<
 
 			const packetSink = this._createPacketSink();
 			const keyPacket = await packetSink.getKeyPacket(startTimestamp, { verifyKeyPackets: true })
-				?? await packetSink.getFirstPacket();
+				?? await packetSink.getFirstKeyPacket();
 
 			let currentPacket: EncodedPacket | null = keyPacket;
 
