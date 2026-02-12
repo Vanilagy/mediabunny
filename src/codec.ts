@@ -833,7 +833,7 @@ export const validateVideoChunkMetadata = (metadata: EncodedVideoChunkMetadata |
 	if (!VALID_VIDEO_CODEC_STRING_PREFIXES.some(prefix => metadata.decoderConfig!.codec.startsWith(prefix))) {
 		throw new TypeError(
 			'Video chunk metadata decoder configuration codec string must be a valid video codec string as specified in'
-			+ ' the WebCodecs Codec Registry.',
+			+ ' the Mediabunny Codec Registry.',
 		);
 	}
 	if (!Number.isInteger(metadata.decoderConfig.codedWidth) || metadata.decoderConfig.codedWidth! <= 0) {
@@ -970,7 +970,7 @@ export const validateAudioChunkMetadata = (metadata: EncodedAudioChunkMetadata |
 	if (!VALID_AUDIO_CODEC_STRING_PREFIXES.some(prefix => metadata.decoderConfig!.codec.startsWith(prefix))) {
 		throw new TypeError(
 			'Audio chunk metadata decoder configuration codec string must be a valid audio codec string as specified in'
-			+ ' the WebCodecs Codec Registry.',
+			+ ' the Mediabunny Codec Registry.',
 		);
 	}
 	if (!Number.isInteger(metadata.decoderConfig.sampleRate) || metadata.decoderConfig.sampleRate <= 0) {

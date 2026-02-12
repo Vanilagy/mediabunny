@@ -129,7 +129,7 @@ track.codec; // => MediaCodec | null
 ```
 This field is `null` when the track's codec couldn't be recognized or is not supported by Mediabunny. See [Codecs](./supported-formats-and-codecs#codecs) for the full list of supported codecs. When Mediabunny doesn't recognize the format, you can still use the `internalCodecId` field to figure out the codec of the track, although its format depends on the container format used and is not homogenized by Mediabunny.
 
-You can also extract the full codec parameter string from the track, as specified in the [WebCodecs Codec Registry](https://www.w3.org/TR/webcodecs-codec-registry/):
+You can also extract the full codec parameter string from the track, as specified in the [Mediabunny Codec Registry](/codec-registry/overview):
 ```ts
 await track.getCodecParameterString(); // => 'avc1.42001f'
 ```

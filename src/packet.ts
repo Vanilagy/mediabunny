@@ -56,7 +56,10 @@ export class EncodedPacket {
 
 	/** Creates a new {@link EncodedPacket} from raw bytes and timing information. */
 	constructor(
-		/** The encoded data of this packet. */
+		/**
+		 * The encoded data of this packet. For any given codec, this data must adhere to the format specified in the
+		 * Mediabunny Codec Registry.
+		 */
 		public readonly data: Uint8Array,
 		/** The type of this packet. */
 		public readonly type: PacketType,

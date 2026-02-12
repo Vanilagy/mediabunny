@@ -127,7 +127,7 @@ export type VideoEncodingAdditionalOptions = {
 	 */
 	latencyMode?: 'quality' | 'realtime';
 	/**
-	 * The full codec string as specified in the WebCodecs Codec Registry. This string must match the codec
+	 * The full codec string as specified in the Mediabunny Codec Registry. This string must match the codec
 	 * specified in `codec`. When not set, a fitting codec string will be constructed automatically by the library.
 	 */
 	fullCodecString?: string;
@@ -280,7 +280,7 @@ export type AudioEncodingAdditionalOptions = {
 	/** Configures the bitrate mode. */
 	bitrateMode?: 'constant' | 'variable';
 	/**
-	 * The full codec string as specified in the WebCodecs Codec Registry. This string must match the codec
+	 * The full codec string as specified in the Mediabunny Codec Registry. This string must match the codec
 	 * specified in `codec`. When not set, a fitting codec string will be constructed automatically by the library.
 	 */
 	fullCodecString?: string;
