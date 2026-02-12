@@ -805,6 +805,52 @@ export class VideoSample implements Disposable {
 	}
 }
 
+/**
+ * Describes the color space of a video frame.
+ *
+ * Corresponds to the WebCodecs VideoColorSpace API.
+ */
+export class VideoColorSpace {
+	/**
+	 * The color primaries standard used.
+	 */
+	readonly primaries: VideoColorPrimaries | null;
+	/**
+	 * The transfer characteristics used.
+	 */
+	readonly transfer: VideoTransferCharacteristics | null;
+	/**
+	 * The color matrix coefficients used.
+	 */
+	readonly matrix: VideoMatrixCoefficients | null;
+	/**
+	 * Whether the color values use the full range or limited range.
+	 */
+	readonly fullRange: boolean | null;
+
+	/**
+	 * Creates a new VideoColorSpace.
+	 */
+	constructor(init?: VideoColorSpaceInit) {
+		this.primaries = init?.primaries ?? null;
+		this.transfer = init?.transfer ?? null;
+		this.matrix = init?.matrix ?? null;
+		this.fullRange = init?.fullRange ?? null;
+	}
+
+	/**
+	 * Serializes the color space to a JSON object.
+	 */
+	toJSON() {
+		return {
+			primaries: this.primaries,
+			transfer: this.transfer,
+			matrix: this.matrix,
+			fullRange: this.fullRange,
+		};
+	}
+}
+
 const isVideoFrame = (x: unknown): x is VideoFrame => {
 	return typeof VideoFrame !== 'undefined' && x instanceof VideoFrame;
 };

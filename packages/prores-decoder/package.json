@@ -1,0 +1,52 @@
+{
+  "name": "@mediabunny/prores-decoder",
+  "author": "Vanilagy",
+  "version": "1.25.8",
+  "description": "MP3 encoder extension for Mediabunny, based on LAME.",
+  "main": "./dist/bundles/mediabunny-mp3-encoder.mjs",
+  "module": "./dist/bundles/mediabunny-mp3-encoder.mjs",
+  "types": "./dist/modules/src/index.d.ts",
+  "exports": {
+    "types": "./dist/modules/src/index.d.ts",
+    "import": "./dist/bundles/mediabunny-mp3-encoder.mjs",
+    "require": "./dist/bundles/mediabunny-mp3-encoder.mjs"
+  },
+  "files": [
+    "README.md",
+    "package.json",
+    "LICENSE",
+    "dist",
+    "src"
+  ],
+  "sideEffects": false,
+  "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vanilagy/mediabunny.git",
+    "directory": "packages/mp3-encoder"
+  },
+  "bugs": {
+    "url": "https://github.com/Vanilagy/mediabunny/issues"
+  },
+  "homepage": "https://mediabunny.dev/guide/extensions/mp3-encoder",
+  "funding": {
+    "type": "individual",
+    "url": "https://github.com/sponsors/Vanilagy"
+  },
+  "peerDependencies": {
+    "mediabunny": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/emscripten": "^1.40.1"
+  },
+  "keywords": [
+    "mp3",
+    "encoding",
+    "codec",
+    "mediabunny",
+    "lame",
+    "browser",
+    "wasm",
+    "polyfill"
+  ]
+}

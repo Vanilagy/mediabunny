@@ -7,5 +7,5 @@
 		"noEmit": false
 	},
 	"include": ["vitest.config.ts", "./test/**/*"],
-	"references": [{ "path": "./src" }]
+	"references": [{ "path": "./src" }, { "path": "./packages/prores-decoder/src" }]
 }

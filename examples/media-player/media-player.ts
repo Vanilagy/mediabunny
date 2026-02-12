@@ -4,6 +4,7 @@ import {
 	BlobSource,
 	CanvasSink,
 	Input,
+	registerDecoder,
 	UrlSource,
 	WrappedAudioBuffer,
 	WrappedCanvas,
@@ -68,6 +69,9 @@ let draggingVolumeBar = false;
 let volumeMuted = false;
 
 /** === INIT LOGIC === */
+
+import { ProResDecoder } from '../../packages/prores-decoder/src/index.js';
+registerDecoder(ProResDecoder);
 
 const initMediaPlayer = async (resource: File | string) => {
 	try {
@@ -189,7 +193,7 @@ const initMediaPlayer = async (resource: File | string) => {
 
 		if (audioContext.state === 'running') {
 			// Start playback automatically if the audio context permits
-			await play();
+			// await play();
 		}
 
 		loadingElement.style.display = 'none';

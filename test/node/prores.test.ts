@@ -6,6 +6,9 @@ import { Output } from '../../src/output.js';
 import { MkvOutputFormat, MovOutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
 import { Conversion } from '../../src/conversion.js';
+import { VideoSampleSink } from '../../src/media-sink.js';
+import { CustomVideoDecoder, registerDecoder } from '../../src/custom-coder.js';
+import { ProResDecoder } from '../../packages/prores-decoder/src/index.js';
 
 test.concurrent('ProRes MOV file reading', async () => {
 	using input = new Input({
@@ -98,4 +101,19 @@ test.concurrent('ProRes transmuxing into MKV', { timeout: 60_000 }, async () => 
 	const decoderConfig = (await videoTrack.getDecoderConfig())!;
 	expect(decoderConfig.codec).toBe('apch');
 	expect(decoderConfig.description).toBeUndefined();
+});
+
+test.concurrent.only('ProRes sample ahh', async () => {
+	registerDecoder(ProResDecoder);
+
+	using input = new Input({
+		source: new UrlSource('https://pub-cf9fcfcb5c0a44e9b1bb5ff890e041ae.r2.dev/IMG_0158-prores-log.MOV'),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = (await input.getPrimaryVideoTrack())!;
+	const sink = new VideoSampleSink(videoTrack);
+	const sample = await sink.getSample(0);
+
+	console.log(sample);
 });
