@@ -30,7 +30,6 @@ import {
 	parseEac3Config,
 	getEac3SampleRate,
 	getEac3ChannelCount,
-	AC3_SAMPLE_RATES,
 	AC3_ACMOD_CHANNEL_COUNTS,
 } from '../codec-data';
 import { Demuxer } from '../demuxer';
@@ -92,6 +91,7 @@ import {
 	readAscii,
 } from '../reader';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags, RichImageData, TrackDisposition } from '../metadata';
+import { AC3_SAMPLE_RATES } from '../../shared/ac3-misc';
 
 type InternalTrack = {
 	id: number;

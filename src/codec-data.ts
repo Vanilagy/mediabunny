@@ -28,6 +28,7 @@ import {
 } from './misc';
 import { PacketType } from './packet';
 import { MetadataTags } from './metadata';
+import { AC3_SAMPLE_RATES, EAC3_REDUCED_SAMPLE_RATES } from '../shared/ac3-misc';
 
 // References for AVC/HEVC code:
 // ISO 14496-15
@@ -2649,14 +2650,11 @@ export const createVorbisComments = (headerBytes: Uint8Array, tags: MetadataTags
 // Reference: ETSI TS 102 366 V1.4.1
 // ============================================================================
 
-/** Sample rates indexed by fscod (Table 4.1) */
-export const AC3_SAMPLE_RATES = [48000, 44100, 32000] as const;
-
 /**
  * Channel counts indexed by acmod (Table 4.3).
  * Does NOT include LFE - add lfeon to get total channel count.
  */
-export const AC3_ACMOD_CHANNEL_COUNTS = [2, 1, 2, 3, 3, 4, 4, 5] as const;
+export const AC3_ACMOD_CHANNEL_COUNTS = [2, 1, 2, 3, 3, 4, 4, 5];
 
 export interface Ac3FrameInfo {
 	/** Sample rate code */
@@ -2788,11 +2786,8 @@ export const AC3_REGISTRATION_DESCRIPTOR = new Uint8Array([0x05, 0x04, 0x41, 0x4
 /** E-AC-3 registration_descriptor for MPEG-TS/ */
 export const EAC3_REGISTRATION_DESCRIPTOR = new Uint8Array([0x05, 0x04, 0x45, 0x41, 0x43, 0x33]);
 
-/** E-AC-3 reduced sample rates for fscod2 per ATSC A/52:2018 */
-const EAC3_REDUCED_SAMPLE_RATES = [24000, 22050, 16000] as const;
-
 /** Number of audio blocks per syncframe, indexed by numblkscod */
-export const EAC3_NUMBLKS_TABLE = [1, 2, 3, 6] as const;
+export const EAC3_NUMBLKS_TABLE = [1, 2, 3, 6];
 
 /**
  * E-AC-3 independent substream info.

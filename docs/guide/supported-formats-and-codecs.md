@@ -59,7 +59,7 @@ Mediabunny ships with built-in decoders and encoders for all audio PCM codecs, m
 - `'ulaw'` - μ-law PCM
 - `'alaw'` - A-law PCM
 
-[^1]: AC-3 and E-AC-3 are not natively supported by WebCodecs. To encode or decode these codecs, you must provide a [custom coder](#custom-coders).
+[^1]: AC-3 and E-AC-3 are not natively supported by WebCodecs. To encode or decode these codecs, you can use the [`@mediabunny/ac3`](./extensions/ac3) extension package, or provide your own [custom coder](#custom-coders).
 
 ### Subtitle codecs
 
