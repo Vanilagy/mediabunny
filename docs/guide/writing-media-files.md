@@ -107,6 +107,74 @@ output.addAudioTrack(audioSource);
 Adding tracks to an `Output` will throw if the track is not compatible with the output format. Be sure to respect the [properties](./output-formats#format-properties) of the output format when adding tracks.
 :::
 
+## ISOBMFF chapter references
+
+When writing MP4/MOV files, you can mark a subtitle track as the chapter track of an audio track by using
+`setChapterTrackReference(trackId, chapterTrackId)`:
+
+```ts
+const output = new Output({
+	format: new Mp4OutputFormat(),
+	target: new BufferTarget(),
+});
+
+const audioSource = new EncodedAudioPacketSource('aac');
+const chapterSource = new TextSubtitleSource('webvtt');
+
+output.addAudioTrack(audioSource); // track id 1
+output.addSubtitleTrack(chapterSource, {
+	name: 'Chapters',
+	disposition: { default: false }, // Optional: keep chapter track hidden by default
+}); // track id 2
+
+output.setChapterTrackReference(1, 2); // Writes tref/chap
+```
+
+This writes an ISOBMFF `tref/chap` reference from the audio track to the subtitle track.
+
+By default, Mediabunny writes only `tref/chap`. If you need compatibility with players that expect Nero-style chapter
+atoms (for example, some VLC setups), enable `chapterFormat: 'tref+nero-chpl'`:
+
+```ts
+const output = new Output({
+	format: new Mp4OutputFormat({
+		chapterFormat: 'tref+nero-chpl',
+	}),
+	target: new BufferTarget(),
+});
+```
+
+This keeps `tref/chap` and additionally writes a `moov/udta/chpl` chapter list.
+
+## Apple audiobook profile (M4B)
+
+For Apple Books / iTunes-style audiobook compatibility, enable `appleAudiobook` on `Mp4OutputFormat`:
+
+```ts
+const output = new Output({
+	format: new Mp4OutputFormat({
+		appleAudiobook: true,
+	}),
+	target: new BufferTarget(),
+});
+```
+
+When enabled, Mediabunny writes MP4 branding and metadata commonly expected for audiobooks:
+- `ftyp` major brand `M4B ` with compatible brands `M4A ` and `isom`
+- iTunes media type tag `stik=2` (audiobook)
+
+For chaptered audiobooks, combine this with chapter track references and optional Nero chapter atoms:
+
+```ts
+const output = new Output({
+	format: new Mp4OutputFormat({
+		appleAudiobook: true,
+		chapterFormat: 'tref+nero-chpl',
+	}),
+	target: new BufferTarget(),
+});
+```
+
 ## Setting metadata tags
 
 Mediabunny lets you write additional descriptive metadata tags to an output file, such as title, artist, or cover art:
