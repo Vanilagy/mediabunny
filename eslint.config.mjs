@@ -38,6 +38,8 @@ export default tseslint.config(
 			'dist-docs',
 			'packages/mp3-encoder/dist',
 			'packages/mp3-encoder/build',
+			'packages/ac3/dist',
+			'packages/ac3/build',
 			'eslint.config.mjs',
 			'docs/.vitepress/cache',
 			'test/public',
