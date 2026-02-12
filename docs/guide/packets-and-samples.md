@@ -94,6 +94,8 @@ constructor(
 );
 ```
 
+When creating a packet for a given codec, you *must* adhere to the data format specified in the [Mediabunny Codec Registry](/codec-registry/overview).
+
 ::: info
 You probably won't ever need to set `sequenceNumber` or `byteLength` in the constructor.
 :::

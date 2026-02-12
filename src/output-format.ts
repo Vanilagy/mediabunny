@@ -74,6 +74,13 @@ export abstract class OutputFormat {
 	abstract getSupportedTrackCounts(): TrackCountLimits;
 	/** Whether this output format supports video rotation metadata. */
 	abstract get supportsVideoRotationMetadata(): boolean;
+	/**
+	 * Whether this output format's tracks store timestamped media data. When `true`, the timestamps of added packets
+	 * will be respected, allowing things like gaps in media data or non-zero start times. When `false`, the format's
+	 * media data implicitly starts at zero and follows an implicit sequential timing from there, using the intrinsic
+	 * durations of the media data.
+	 */
+	abstract get supportsTimestampedMediaData(): boolean;
 
 	/** Returns a list of video codecs that this output format can contain. */
 	getSupportedVideoCodecs() {
@@ -258,6 +265,10 @@ export abstract class IsobmffOutputFormat extends OutputFormat {
 		return true;
 	}
 
+	get supportsTimestampedMediaData() {
+		return true;
+	}
+
 	/** @internal */
 	_createMuxer(output: Output) {
 		return new IsobmffMuxer(output, this);
@@ -292,7 +303,8 @@ export class Mp4OutputFormat extends IsobmffOutputFormat {
 		return [
 			...VIDEO_CODECS,
 			...NON_PCM_AUDIO_CODECS,
-			// These are supported via ISO/IEC 23003-5
+
+			// These are supported via ISO/IEC 23003-5:
 			'pcm-s16',
 			'pcm-s16be',
 			'pcm-s24',
@@ -303,6 +315,7 @@ export class Mp4OutputFormat extends IsobmffOutputFormat {
 			'pcm-f32be',
 			'pcm-f64',
 			'pcm-f64be',
+
 			...SUBTITLE_CODECS,
 		];
 	}
@@ -488,6 +501,10 @@ export class MkvOutputFormat extends OutputFormat {
 		// While it technically does support it with ProjectionPoseRoll, many players appear to ignore this value
 		return false;
 	}
+
+	get supportsTimestampedMediaData() {
+		return true;
+	}
 }
 
 /**
@@ -624,6 +641,10 @@ export class Mp3OutputFormat extends OutputFormat {
 	get supportsVideoRotationMetadata() {
 		return false;
 	}
+
+	get supportsTimestampedMediaData() {
+		return false;
+	}
 }
 
 /**
@@ -722,6 +743,10 @@ export class WavOutputFormat extends OutputFormat {
 	get supportsVideoRotationMetadata() {
 		return false;
 	}
+
+	get supportsTimestampedMediaData() {
+		return false;
+	}
 }
 
 /**
@@ -813,6 +838,10 @@ export class OggOutputFormat extends OutputFormat {
 	get supportsVideoRotationMetadata() {
 		return false;
 	}
+
+	get supportsTimestampedMediaData() {
+		return false;
+	}
 }
 
 /**
@@ -887,6 +916,10 @@ export class AdtsOutputFormat extends OutputFormat {
 	get supportsVideoRotationMetadata() {
 		return false;
 	}
+
+	get supportsTimestampedMediaData() {
+		return false;
+	}
 }
 
 /**
@@ -956,6 +989,10 @@ export class FlacOutputFormat extends OutputFormat {
 	}
 
 	get supportsVideoRotationMetadata() {
+		return false;
+	}
+
+	get supportsTimestampedMediaData() {
 		return false;
 	}
 }
@@ -1032,11 +1069,15 @@ export class MpegTsOutputFormat extends OutputFormat {
 	getSupportedCodecs(): MediaCodec[] {
 		return [
 			...VIDEO_CODECS.filter(codec => ['avc', 'hevc'].includes(codec)),
-			...AUDIO_CODECS.filter(codec => ['aac', 'mp3'].includes(codec)),
+			...AUDIO_CODECS.filter(codec => ['aac', 'mp3', 'ac3', 'eac3'].includes(codec)),
 		];
 	}
 
 	get supportsVideoRotationMetadata() {
 		return false;
+	}
+
+	get supportsTimestampedMediaData() {
+		return true;
 	}
 }

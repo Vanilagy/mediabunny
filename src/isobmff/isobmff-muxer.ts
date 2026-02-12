@@ -111,6 +111,7 @@ export type IsobmffTrackData = {
 		 * ADTS-wrapped data.
 		 */
 		requiresAdtsStripping: boolean;
+		firstPacket: EncodedPacket;
 	};
 } | {
 	track: OutputSubtitleTrack;
@@ -429,8 +430,9 @@ export class IsobmffMuxer extends Muxer {
 					!this.isFragmented
 					&& (PCM_AUDIO_CODECS as readonly string[]).includes(track.source._codec),
 				requiresAdtsStripping,
+				firstPacket: packet,
 			},
-			timescale: meta.decoderConfig.sampleRate,
+			timescale: decoderConfig.sampleRate,
 			samples: [],
 			sampleQueue: [],
 			timestampProcessingQueue: [],

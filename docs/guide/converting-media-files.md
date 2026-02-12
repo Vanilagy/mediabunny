@@ -367,6 +367,19 @@ If only `start` is set, the clip will run until the end of the input file. If on
 
 Note that when using the trimming defaults, the resulting media file will always begin at timestamp 0. If your input file has a start time offset (like is common with MPEG-TS files) and you want to retain that, use `trim: { start: 0 }` to ensure timestamps don't get shifted.
 
+---
+
+You can even use negative trimming values to offset the start of the media:
+```ts
+const conversion = await Conversion.init({
+	// ...
+	trim: {
+		start: -2, // Two seconds of no media data (freeze frame / silence) at the start
+	},
+	// ...
+});
+```
+
 ## Metadata tags
 
 By default, any [descriptive metadata tags](../api/MetadataTags.md) of the input will be copied to the output. If you want to further control the metadata tags written to the output, you can use the `tags` options:
