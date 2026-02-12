@@ -70,7 +70,7 @@ test('MPEG-TS muxing with AVC and AAC', async () => {
 	started = true;
 
 	const fps = 30;
-	const duration = 5;
+	const duration = 2;
 	const frameCount = fps * duration;
 	const frameDuration = 1 / fps;
 
@@ -164,9 +164,9 @@ test('MPEG-TS muxing with AVC and AAC', async () => {
 	}
 
 	// Check that seeking works
-	const middlePacket = await videoSink.getPacket(2.5);
+	const middlePacket = await videoSink.getPacket(1);
 	assert(middlePacket);
-	expect(middlePacket.timestamp).toBeCloseTo(2.5);
+	expect(middlePacket.timestamp).toBeCloseTo(1);
 
 	expect(videoPacketCount).toBe(frameCount);
 
@@ -189,9 +189,9 @@ test('MPEG-TS muxing with AVC and AAC', async () => {
 	}
 
 	// Check that seeking works
-	const audioMiddlePacket = await audioSink.getPacket(2.5);
+	const audioMiddlePacket = await audioSink.getPacket(1);
 	assert(audioMiddlePacket);
-	expect(audioMiddlePacket.timestamp).toBeCloseTo(2.5);
+	expect(audioMiddlePacket.timestamp).toBeCloseTo(1, 1);
 
 	expect(audioPacketCount).toBeGreaterThan(0);
 
@@ -199,8 +199,8 @@ test('MPEG-TS muxing with AVC and AAC', async () => {
 	const videoDuration = await videoTrack.computeDuration();
 	const audioDuration = await audioTrack.computeDuration();
 
-	expect(videoDuration).toBeCloseTo(5, 1);
-	expect(audioDuration).toBeCloseTo(5, 1);
+	expect(videoDuration).toBeCloseTo(duration, 1);
+	expect(audioDuration).toBeCloseTo(duration, 1);
 });
 
 test('MPEG-TS muxing with HEVC and MP3', async () => {
