@@ -3,6 +3,7 @@
 [![](https://img.shields.io/npm/v/@mediabunny/mp3-encoder)](https://www.npmjs.com/package/@mediabunny/mp3-encoder)
 [![](https://img.shields.io/bundlephobia/minzip/@mediabunny/mp3-encoder)](https://bundlephobia.com/package/@mediabunny/mp3-encoder)
 [![](https://img.shields.io/npm/dm/@mediabunny/mp3-encoder)](https://www.npmjs.com/package/@mediabunny/mp3-encoder)
+[![](https://img.shields.io/discord/1390044844285497344?logo=discord&label=Discord)](https://discord.gg/hmpkyYuS4U)
 
 <div align="center">
     <img src="./logo.svg" width="180" height="180">
