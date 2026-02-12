@@ -2,9 +2,11 @@
 
 <script src="../dist/bundles/mediabunny.cjs"></script>
 <script src="../packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.js"></script>
+<script src="../packages/ac3/dist/bundles/mediabunny-ac3.js"></script>
 
 <script type="module">
 	//MediabunnyMp3Encoder.registerMp3Encoder();
+	MediabunnyAc3.registerAc3Encoder();
 
 	const fileInput = document.createElement('input');
 	fileInput.type = 'file';
@@ -24,7 +26,7 @@
 			chunked: true,
 			chunkSize: 2**20
 		});
-		const outputFormat = new Mediabunny.WavOutputFormat({});
+		const outputFormat = new Mediabunny.Mp4OutputFormat({});
 
 		const button = document.createElement('button');
 		button.textContent = 'Cancel';
@@ -56,7 +58,8 @@
 			}),
 			output,
 			audio: (_, n) => ({
-				discard: n > 1,
+				codec: 'eac3',
+				//discard: n > 1,
 				//codec: 'opus',
 				//codec: 'opus',
 				/*
@@ -182,10 +185,8 @@
 				}
 			},
 			trim: {
-				start: -2,
-				end: 5,
 				//start: 0,
-				//end: 4
+				end: 10
 			},
 		});
 		console.log(conversion);

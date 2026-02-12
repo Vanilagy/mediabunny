@@ -1,7 +1,8 @@
 {
-	"extends": "../../../tsconfig.json",
+	"extends": "../../tsconfig.json",
 	"compilerOptions": {
-		"outDir": "../dist/modules",
+		"composite": true,
+		"outDir": "./dist/modules",
 		"declaration": true,
 		"declarationMap": true,
 		"stripInternal": true,
@@ -10,14 +11,14 @@
 		"module": "nodenext",
 		"allowJs": true,
 		"paths": {
-			"mediabunny": ["../../../src/index.ts"],
+			"mediabunny": ["../../src/index.ts"],
 		},
 	},
 	"include": [
-		"**/*",
-		"../../../shared/**/*"
+		"./src/**/*",
+		"./build/**/*",
 	],
 	"references": [
-        { "path": "../../../src" }
+        { "path": "../../src" }
     ]
 }

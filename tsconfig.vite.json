@@ -7,6 +7,7 @@
 		"noEmit": false,
 		"paths": {
 			"mediabunny": ["./src/index.ts"],
+			"@mediabunny/ac3": ["./packages/ac3/src/index.ts"],
 		},
 		"types": ["vite/client"]
 	},

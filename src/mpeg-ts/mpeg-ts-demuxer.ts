@@ -20,7 +20,6 @@ import {
 } from '../codec';
 import {
 	AC3_ACMOD_CHANNEL_COUNTS,
-	AC3_SAMPLE_RATES,
 	AC3_SAMPLES_PER_FRAME,
 	AvcDecoderConfigurationRecord,
 	AvcNalUnitType,
@@ -71,6 +70,7 @@ import { FRAME_HEADER_SIZE as MP3_FRAME_HEADER_SIZE, readMp3FrameHeader } from '
 import { EncodedPacket, PacketType, PLACEHOLDER_DATA } from '../packet';
 import { FileSlice, readBytes, Reader, readU16Be, readU32Be, readU8 } from '../reader';
 import { buildMpegTsMimeType, MpegTsStreamType, TIMESCALE, TS_PACKET_SIZE } from './mpeg-ts-misc';
+import { AC3_SAMPLE_RATES } from '../../shared/ac3-misc';
 
 type ElementaryStream = {
 	demuxer: MpegTsDemuxer;

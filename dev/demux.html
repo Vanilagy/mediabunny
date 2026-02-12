@@ -1,8 +1,11 @@
 <!DOCTYPE html>
 
 <script src="../dist/bundles/mediabunny.cjs"></script>
+<script src="../packages/ac3/dist/bundles/mediabunny-ac3.js"></script>
 
 <script type="module">
+	MediabunnyAc3.registerAc3Decoder();
+
 	const fileInput = document.createElement('input');
 	fileInput.type = 'file';
 	document.body.append(fileInput);
@@ -14,12 +17,18 @@
 			source: new Mediabunny.BlobSource(file),
 		});
 
-		const track = await input.getPrimaryVideoTrack();
-		const sink = new Mediabunny.EncodedPacketSink(track);
+		for (let i = 0; i < 1000; i++) {
+			const track = await input.getPrimaryAudioTrack();
+			const sink = new Mediabunny.AudioSampleSink(track);
+	
+			for await (const sample of sink.samples()) {
+				sample.close();
+			}
 
-		for await (const packet of sink.packets()) {
-			console.log(packet);
+			console.log(i);
 		}
+
+		console.log("Done")
 
 		/*
 		

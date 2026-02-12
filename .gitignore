@@ -7,3 +7,4 @@ node_modules
 *.tsbuildinfo
 
 packages/mp3-encoder/dist
+packages/ac3/dist

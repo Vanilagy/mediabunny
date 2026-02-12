@@ -59,7 +59,7 @@ jobs:
       - name: Upload build artifacts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload ${{ github.event.release.tag_name }} dist/bundles/mediabunny.cjs dist/bundles/mediabunny.min.cjs dist/bundles/mediabunny.mjs dist/bundles/mediabunny.min.mjs dist/mediabunny.d.ts packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.js packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.min.js packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.mjs packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.min.mjs packages/mp3-encoder/dist/mediabunny-mp3-encoder.d.ts
+        run: gh release upload ${{ github.event.release.tag_name }} dist/bundles/mediabunny.cjs dist/bundles/mediabunny.min.cjs dist/bundles/mediabunny.mjs dist/bundles/mediabunny.min.mjs dist/mediabunny.d.ts packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.js packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.min.js packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.mjs packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.min.mjs packages/mp3-encoder/dist/mediabunny-mp3-encoder.d.ts packages/ac3/dist/bundles/mediabunny-ac3.js packages/ac3/dist/bundles/mediabunny-ac3.min.js packages/ac3/dist/bundles/mediabunny-ac3.mjs packages/ac3/dist/bundles/mediabunny-ac3.min.mjs packages/ac3/dist/mediabunny-ac3.d.ts
 
       - name: Publish Mediabunny to npm
         run: npm publish --access public
