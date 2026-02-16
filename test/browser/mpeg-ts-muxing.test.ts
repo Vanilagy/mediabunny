@@ -703,12 +703,14 @@ test('MPEG-TS muxing with StreamTarget', async () => {
 	const frameDuration = 1 / fps;
 
 	for (let i = 0; i < frameCount; i++) {
-		await videoSource.add(i * frameDuration, frameDuration);
+		await videoSource.add(i * frameDuration, frameDuration, {
+			keyFrame: true, // Otherwise all packets get written at once due to the DTS logic
+		});
 	}
 
 	await output.finalize();
 
-	expect(chunks.length).toBe(frameCount);
+	expect(chunks).toHaveLength(frameCount);
 
 	const buffer = new Uint8Array(nextPos);
 	nextPos = 0;

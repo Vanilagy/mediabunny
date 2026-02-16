@@ -1,1 +1,0 @@
-- Investigate quicktime stuttering with mediabunny-generated .ts file

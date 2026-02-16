@@ -95,9 +95,9 @@ const sponsors = {
 		{ image: '/sponsors/gling.svg', name: 'Gling AI', url: 'https://www.gling.ai/' },
 		{ image: '/sponsors/diffusionstudio.png', name: 'Diffusion Studio', url: 'https://diffusion.studio/' },
 		{ image: '/sponsors/kino.jpg', name: 'Kino', url: 'https://kino.ai/' },
+		{ image: '/sponsors/screen-studio.webp', name: 'Screen Studio', url: 'https://screen.studio/' },
 	],
 	silver: [
-		{ image: '/sponsors/pintura-labs.png', name: 'Pintura Labs', url: 'https://pqina.nl/pintura/' },
 		{ image: '/sponsors/ponder.png', name: 'Ponder', url: 'https://ponder.ai/' },
 	],
 	bronze: [
@@ -107,6 +107,7 @@ const sponsors = {
 		{ image: '/sponsors/jellypod.png', name: 'Jellypod', url: 'https://jellypod.ai/' },
 	],
 	individual: [
+		{ image: '/sponsors/pintura-labs.png', name: 'Pintura Labs', url: 'https://pqina.nl/pintura/' },
 		{ image: 'https://avatars.githubusercontent.com/u/82552321', name: 'Polotno', url: 'https://github.com/polotno-project' },
 		{ image: 'https://avatars.githubusercontent.com/u/489051', name: 'Roman Rädle', url: 'https://github.com/raedle' },
 		{ image: 'https://avatars.githubusercontent.com/u/197597', name: 'Christopher Chedeau', url: 'https://github.com/vjeux' },
