@@ -62,10 +62,7 @@ export class AdtsMuxer extends Muxer {
 
 				const description = meta?.decoderConfig?.description;
 
-				// From the WebCodecs Codec Registry:
-				// "If description is present, it is assumed to a AudioSpecificConfig as defined in [iso14496-3] section
-				// 1.6.2.1, Table 1.15, and the bitstream is assumed to be in aac.
-				// If the description is not present, the bitstream is assumed to be in adts format."
+				// Follows from the Mediabunny Codec Registry:
 				this.inputIsAdts = !description;
 
 				if (!this.inputIsAdts) {

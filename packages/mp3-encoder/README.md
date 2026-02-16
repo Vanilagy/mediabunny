@@ -3,6 +3,7 @@
 [![](https://img.shields.io/npm/v/@mediabunny/mp3-encoder)](https://www.npmjs.com/package/@mediabunny/mp3-encoder)
 [![](https://img.shields.io/bundlephobia/minzip/@mediabunny/mp3-encoder)](https://bundlephobia.com/package/@mediabunny/mp3-encoder)
 [![](https://img.shields.io/npm/dm/@mediabunny/mp3-encoder)](https://www.npmjs.com/package/@mediabunny/mp3-encoder)
+[![](https://img.shields.io/discord/1390044844285497344?logo=discord&label=Discord)](https://discord.gg/hmpkyYuS4U)
 
 <div align="center">
     <img src="./logo.svg" width="180" height="180">
@@ -102,8 +103,6 @@ The WASM build itself is a performance-optimized, SIMD-enabled build of LAME 3.1
 
 ## Building and development
 
-Building this library is done using the build commands in the [Mediabunny root](https://github.com/Vanilagy/mediabunny).
-
 For simplicity, all built WASM artifacts are included in the repo, since these rarely change. However, here are the instructions for building them from scratch:
 
 ### Prerequisites
@@ -148,7 +147,7 @@ emcc src/lame-bridge.c build/libmp3lame.a \
     -o build/lame.js
 ```
 
-This generates `build/lame.js`, which contains both the JavaScript "glue code" as well as the compiled WASM encoded with Base64.
+This generates `build/lame.js`, which contains both the JavaScript "glue code" as well as the compiled WASM inlined.
 
 ### Building the package
 

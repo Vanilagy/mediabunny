@@ -227,7 +227,6 @@ class VideoEncoderWrapper {
 	 * So, we keep track of the encoder error and throw it as soon as we get the chance.
 	 */
 	private error: Error | null = null;
-	private errorNeedsNewStack = true;
 
 	constructor(private source: VideoSource, private encodingConfig: VideoEncodingConfig) {}
 
@@ -413,7 +412,6 @@ class VideoEncoderWrapper {
 	}
 
 	private ensureEncoder(videoSample: VideoSample) {
-		const encoderError = new Error();
 		this.ensureEncoderPromise = (async () => {
 			const encoderConfig = buildVideoEncoderConfig({
 				width: videoSample.codedWidth,
@@ -448,7 +446,6 @@ class VideoEncoderWrapper {
 					void this.muxer!.addEncodedVideoPacket(this.source._connectedTrack!, packet, meta)
 						.catch((error) => {
 							this.error ??= error;
-							this.errorNeedsNewStack = false;
 						});
 				};
 
@@ -520,9 +517,10 @@ class VideoEncoderWrapper {
 					void this.muxer!.addEncodedVideoPacket(this.source._connectedTrack!, packet, meta)
 						.catch((error) => {
 							this.error ??= error;
-							this.errorNeedsNewStack = false;
 						});
 				};
+
+				const stack = new Error('Encoding error').stack;
 
 				this.encoder = new VideoEncoder({
 					output: (chunk, meta) => {
@@ -560,13 +558,15 @@ class VideoEncoderWrapper {
 						}
 					},
 					error: (error) => {
-						error.stack = encoderError.stack; // Provide a more useful stack trace
+						error.stack = stack; // Provide a more useful stack trace, the default one sucks
 						this.error ??= error;
 					},
 				});
 				this.encoder.configure(encoderConfig);
 
 				if (this.encodingConfig.alpha === 'keep') {
+					const stack = new Error('Encoding error').stack;
+
 					// We need to encode alpha as well, which we do with a separate encoder
 					this.alphaEncoder = new VideoEncoder({
 						// We ignore the alpha chunk's metadata
@@ -594,7 +594,7 @@ class VideoEncoderWrapper {
 							}
 						},
 						error: (error) => {
-							error.stack = encoderError.stack; // Provide a more useful stack trace
+							error.stack = stack; // Provide a more useful stack trace
 							this.error ??= error;
 						},
 					});
@@ -652,10 +652,6 @@ class VideoEncoderWrapper {
 
 	checkForEncoderError() {
 		if (this.error) {
-			if (this.errorNeedsNewStack) {
-				this.error.stack = new Error().stack; // Provide an even more useful stack trace
-			}
-
 			throw this.error;
 		}
 	}
@@ -1351,7 +1347,6 @@ class AudioEncoderWrapper {
 	 * So, we keep track of the encoder error and throw it as soon as we get the chance.
 	 */
 	private error: Error | null = null;
-	private errorNeedsNewStack = true;
 
 	constructor(private source: AudioSource, private encodingConfig: AudioEncodingConfig) {}
 
@@ -1546,7 +1541,6 @@ class AudioEncoderWrapper {
 	}
 
 	private ensureEncoder(audioSample: AudioSample) {
-		const encoderError = new Error();
 		this.ensureEncoderPromise = (async () => {
 			const { numberOfChannels, sampleRate } = audioSample;
 
@@ -1582,7 +1576,6 @@ class AudioEncoderWrapper {
 					void this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet, meta)
 						.catch((error) => {
 							this.error ??= error;
-							this.errorNeedsNewStack = false;
 						});
 				};
 
@@ -1602,6 +1595,8 @@ class AudioEncoderWrapper {
 						+ ` supported by this browser. Consider using another codec or changing your audio parameters.`,
 					);
 				}
+
+				const stack = new Error('Encoding error').stack;
 
 				this.encoder = new AudioEncoder({
 					output: (chunk, meta) => {
@@ -1637,11 +1632,10 @@ class AudioEncoderWrapper {
 						void this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet, meta)
 							.catch((error) => {
 								this.error ??= error;
-								this.errorNeedsNewStack = false;
 							});
 					},
 					error: (error) => {
-						error.stack = encoderError.stack; // Provide a more useful stack trace
+						error.stack = stack; // Provide a more useful stack trace
 						this.error ??= error;
 					},
 				});
@@ -1782,10 +1776,6 @@ class AudioEncoderWrapper {
 
 	checkForEncoderError() {
 		if (this.error) {
-			if (this.errorNeedsNewStack) {
-				this.error.stack = new Error().stack; // Provide an even more useful stack trace
-			}
-
 			throw this.error;
 		}
 	}

@@ -564,11 +564,11 @@ export class Conversion {
 		if (options.trim !== undefined && (!options.trim || typeof options.trim !== 'object')) {
 			throw new TypeError('options.trim, when provided, must be an object.');
 		}
-		if (options.trim?.start !== undefined && (!Number.isFinite(options.trim.start) || options.trim.start < 0)) {
-			throw new TypeError('options.trim.start, when provided, must be a non-negative number.');
+		if (options.trim?.start !== undefined && (!Number.isFinite(options.trim.start))) {
+			throw new TypeError('options.trim.start, when provided, must be a finite number.');
 		}
-		if (options.trim?.end !== undefined && (!Number.isFinite(options.trim.end) || options.trim.end < 0)) {
-			throw new TypeError('options.trim.end, when provided, must be a non-negative number.');
+		if (options.trim?.end !== undefined && (!Number.isFinite(options.trim.end))) {
+			throw new TypeError('options.trim.end, when provided, must be a finite number.');
 		}
 		if (
 			options.trim?.start !== undefined
@@ -607,7 +607,7 @@ export class Conversion {
 			// those out by default.
 			0,
 		);
-		this._endTimestamp = this._options.trim?.end ?? Infinity;
+		this._endTimestamp = Math.max(this._options.trim?.end ?? Infinity, this._startTimestamp);
 
 		const inputTracks = await this.input.getTracks();
 		const outputTrackCounts = this.output.format.getSupportedTrackCounts();
@@ -771,6 +771,13 @@ export class Conversion {
 				if (codecs.includes('mp3')) {
 					elements.push(
 						`\nThe @mediabunny/mp3-encoder extension package provides support for encoding MP3.`,
+					);
+				}
+
+				if (codecs.includes('ac3') || codecs.includes('eac3')) {
+					elements.push(
+						'\nThe @mediabunny/ac3 extension package provides support'
+						+ ' for encoding and decoding AC-3/E-AC-3.',
 					);
 				}
 			} else {
@@ -1326,7 +1333,8 @@ export class Conversion {
 		let sampleRate = trackOptions.sampleRate ?? originalSampleRate;
 		let needsResample = numberOfChannels !== originalNumberOfChannels
 			|| sampleRate !== originalSampleRate
-			|| firstTimestamp < this._startTimestamp;
+			|| firstTimestamp < this._startTimestamp
+			|| (firstTimestamp > this._startTimestamp && !this.output.format.supportsTimestampedMediaData);
 
 		let audioCodecs = this.output.format.getSupportedAudioCodecs();
 		if (

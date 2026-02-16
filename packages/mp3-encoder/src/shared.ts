@@ -24,10 +24,13 @@ export type WorkerCommand = {
 };
 
 export type WorkerResponseData = {
+	type: 'init';
 	success: boolean;
 } | {
+	type: 'encode';
 	encodedData: ArrayBuffer;
 } | {
+	type: 'flush';
 	flushedData: ArrayBuffer;
 };
 

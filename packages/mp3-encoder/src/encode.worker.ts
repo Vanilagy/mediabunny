@@ -146,7 +146,10 @@ const onMessage = (data: { id: number; command: WorkerCommand }) => {
 						command.data.sampleRate,
 						command.data.bitrate,
 					);
-					result = { success: true };
+					result = {
+						type: command.type,
+						success: true,
+					};
 				}; break;
 
 				case 'encode': {
@@ -154,13 +157,19 @@ const onMessage = (data: { id: number; command: WorkerCommand }) => {
 						command.data.audioData,
 						command.data.numberOfFrames,
 					);
-					result = { encodedData };
+					result = {
+						type: command.type,
+						encodedData,
+					};
 					transferables.push(encodedData);
 				}; break;
 
 				case 'flush': {
 					const flushedData = flush();
-					result = { flushedData };
+					result = {
+						type: command.type,
+						flushedData,
+					};
 					transferables.push(flushedData);
 				}; break;
 			}

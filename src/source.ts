@@ -355,6 +355,9 @@ export type UrlSourceOptions = {
 	/** The maximum number of bytes the cache is allowed to hold in memory. Defaults to 64 MiB. */
 	maxCacheSize?: number;
 
+	/** The maximum number of parallel requests to use for fetching. Defaults to 2. */
+	parallelism?: number;
+
 	/**
 	 * A WHATWG-compatible fetch function. You can use this field to polyfill the `fetch` function, add missing
 	 * features, or use a custom implementation.
@@ -415,6 +418,9 @@ export class UrlSource extends Source {
 		) {
 			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative number.');
 		}
+		if (options.parallelism !== undefined && (!Number.isInteger(options.parallelism) || options.parallelism < 1)) {
+			throw new TypeError('options.parallelism, when provided, must be a positive number.');
+		}
 		if (options.fetchFn !== undefined && typeof options.fetchFn !== 'function') {
 			throw new TypeError('options.fetchFn, when provided, must be a function.');
 			// Won't bother validating this function beyond this
@@ -426,11 +432,13 @@ export class UrlSource extends Source {
 		this._options = options;
 		this._getRetryDelay = options.getRetryDelay ?? DEFAULT_RETRY_DELAY;
 
+		// Most files in the real-world have a single sequential access pattern, but having two in parallel can
+		// also happen
+		const DEFAULT_PARALLELISM = 2;
+
 		this._orchestrator = new ReadOrchestrator({
 			maxCacheSize: options.maxCacheSize ?? (64 * 2 ** 20 /* 64 MiB */),
-			// Most files in the real-world have a single sequential access pattern, but having two in parallel can
-			// also happen
-			maxWorkerCount: 2,
+			maxWorkerCount: options.parallelism ?? DEFAULT_PARALLELISM,
 			runWorker: this._runWorker.bind(this),
 			prefetchProfile: PREFETCH_PROFILES.network,
 		});

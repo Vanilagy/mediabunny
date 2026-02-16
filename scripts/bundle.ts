@@ -113,9 +113,41 @@ const mp3EncoderVariants = await createVariants(
 	},
 );
 
+const ac3Variants = await createVariants(
+	'packages/ac3/src/index.ts',
+	'MediabunnyAc3',
+	'packages/ac3/dist/bundles/mediabunny-ac3',
+	'js', // The bundles are purely for the browser, not for Node (due to the peer dependecy)
+	{
+		plugins: [
+			PluginExternalGlobal.externalGlobalPlugin({
+				mediabunny: 'Mediabunny',
+			}),
+			inlineWorkerPlugin({
+				define: {
+					'import.meta.url': '""',
+				},
+				legalComments: 'none',
+			}),
+		],
+	},
+	{
+		external: ['mediabunny'],
+		plugins: [
+			inlineWorkerPlugin({
+				define: {
+					'import.meta.url': '""',
+				},
+				legalComments: 'none',
+			}),
+		],
+	},
+);
+
 const contexts = [
 	...mediabunnyVariants,
 	...mp3EncoderVariants,
+	...ac3Variants,
 ];
 
 if (process.argv[2] === '--watch') {

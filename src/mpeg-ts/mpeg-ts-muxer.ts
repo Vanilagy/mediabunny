@@ -9,11 +9,13 @@
 import { parseAacAudioSpecificConfig, validateAudioChunkMetadata, validateVideoChunkMetadata } from '../codec';
 import { buildAdtsHeaderTemplate, writeAdtsFrameLength } from '../adts/adts-misc';
 import {
+	AC3_REGISTRATION_DESCRIPTOR,
 	AvcDecoderConfigurationRecord,
 	AvcNalUnitType,
 	concatNalUnitsInAnnexB,
 	deserializeAvcDecoderConfigurationRecord,
 	deserializeHevcDecoderConfigurationRecord,
+	EAC3_REGISTRATION_DESCRIPTOR,
 	extractNalUnitTypeForAvc,
 	extractNalUnitTypeForHevc,
 	HevcDecoderConfigurationRecord,
@@ -23,11 +25,14 @@ import {
 } from '../codec-data';
 import { assert, Bitstream, promiseWithResolvers, setUint24, toDataView, toUint8Array } from '../misc';
 import { Muxer } from '../muxer';
-import { Output, OutputAudioTrack, OutputVideoTrack } from '../output';
+import { Output, OutputAudioTrack, OutputTrack, OutputVideoTrack } from '../output';
 import { MpegTsOutputFormat } from '../output-format';
 import { EncodedPacket } from '../packet';
 import { Writer } from '../writer';
 import { buildMpegTsMimeType, MpegTsStreamType, TIMESCALE, TS_PACKET_SIZE } from './mpeg-ts-misc';
+
+// Resources:
+// ISO/IEC 13818-1
 
 const PAT_PID = 0x0000;
 const PMT_PID = 0x1000;
@@ -45,6 +50,7 @@ type MpegTsTrackData = {
 	streamType: MpegTsStreamType;
 	streamId: number;
 	codecString: string;
+	timestampProcessingQueue: QueuedPacket[];
 	packetQueue: QueuedPacket[];
 	inputIsAnnexB: boolean | null;
 	inputIsAdts: boolean | null;
@@ -57,7 +63,8 @@ type MpegTsTrackData = {
 
 type QueuedPacket = {
 	data: Uint8Array;
-	timestamp: number;
+	presentationTimestamp: number;
+	decodeTimestamp: number | null;
 	isKeyframe: boolean;
 };
 
@@ -75,9 +82,6 @@ export class MpegTsMuxer extends Muxer {
 	private videoTrackIndex = 0;
 	private audioTrackIndex = 0;
 
-	private pesHeaderBuffer = new Uint8Array(14);
-	private pesHeaderView = toDataView(this.pesHeaderBuffer);
-	private ptsBitstream = new Bitstream(this.pesHeaderBuffer.subarray(9, 14));
 	private adaptationFieldBuffer = new Uint8Array(184);
 	private payloadBuffer = new Uint8Array(184);
 
@@ -122,6 +126,7 @@ export class MpegTsMuxer extends Muxer {
 			streamType,
 			streamId,
 			codecString: meta.decoderConfig.codec,
+			timestampProcessingQueue: [],
 			packetQueue: [],
 			inputIsAnnexB: null,
 			inputIsAdts: null,
@@ -151,11 +156,34 @@ export class MpegTsMuxer extends Muxer {
 		assert(meta?.decoderConfig);
 
 		const codec = track.source._codec;
-		assert(codec === 'aac' || codec === 'mp3');
+		assert(codec === 'aac' || codec === 'mp3' || codec === 'ac3' || codec === 'eac3');
 
-		const streamType = codec === 'aac' ? MpegTsStreamType.AAC : MpegTsStreamType.MP3_MPEG1;
+		let streamType: MpegTsStreamType;
+		let streamId: number;
+
+		switch (codec) {
+			case 'aac': {
+				streamType = MpegTsStreamType.AAC;
+				streamId = AUDIO_STREAM_ID_BASE + this.audioTrackIndex++;
+			}; break;
+
+			case 'mp3': {
+				streamType = MpegTsStreamType.MP3_MPEG1;
+				streamId = AUDIO_STREAM_ID_BASE + this.audioTrackIndex++;
+			}; break;
+
+			case 'ac3': {
+				streamType = MpegTsStreamType.AC3_SYSTEM_A;
+				streamId = 0xbd;
+			}; break;
+
+			case 'eac3': {
+				streamType = MpegTsStreamType.EAC3_SYSTEM_A;
+				streamId = 0xbd;
+			}; break;
+		}
+
 		const pid = FIRST_TRACK_PID + this.trackDatas.length;
-		const streamId = AUDIO_STREAM_ID_BASE + this.audioTrackIndex++;
 
 		const newTrackData: MpegTsTrackData = {
 			track,
@@ -163,6 +191,7 @@ export class MpegTsMuxer extends Muxer {
 			streamType,
 			streamId,
 			codecString: meta.decoderConfig.codec,
+			timestampProcessingQueue: [],
 			packetQueue: [],
 			inputIsAnnexB: null,
 			inputIsAdts: null,
@@ -200,13 +229,16 @@ export class MpegTsMuxer extends Muxer {
 
 			const preparedData = this.prepareVideoPacket(trackData, packet, meta);
 
-			trackData.packetQueue.push({
+			if (packet.type === 'key') {
+				await this.flushTimestampQueue(trackData);
+			}
+
+			trackData.timestampProcessingQueue.push({
 				data: preparedData,
-				timestamp,
+				presentationTimestamp: timestamp,
+				decodeTimestamp: null,
 				isKeyframe: packet.type === 'key',
 			});
-
-			await this.interleavePackets();
 		} finally {
 			release();
 		}
@@ -230,13 +262,16 @@ export class MpegTsMuxer extends Muxer {
 
 			const preparedData = this.prepareAudioPacket(trackData, packet, meta);
 
-			trackData.packetQueue.push({
+			if (packet.type === 'key') {
+				await this.flushTimestampQueue(trackData);
+			}
+
+			trackData.timestampProcessingQueue.push({
 				data: preparedData,
-				timestamp,
+				presentationTimestamp: timestamp,
+				decodeTimestamp: null,
 				isKeyframe: packet.type === 'key',
 			});
-
-			await this.interleavePackets();
 		} finally {
 			release();
 		}
@@ -373,7 +408,7 @@ export class MpegTsMuxer extends Muxer {
 	): Uint8Array {
 		const codec = (trackData.track as OutputAudioTrack).source._codec;
 
-		if (codec === 'mp3') {
+		if (codec === 'mp3' || codec === 'ac3' || codec === 'eac3') {
 			// We're good
 			return packet.data;
 		}
@@ -419,6 +454,28 @@ export class MpegTsMuxer extends Muxer {
 		return true;
 	}
 
+	private async flushTimestampQueue(trackData: MpegTsTrackData, alsoInterleave = true) {
+		if (trackData.timestampProcessingQueue.length === 0) {
+			return;
+		}
+
+		const sortedTimestamps = trackData.timestampProcessingQueue
+			.map(packet => packet.presentationTimestamp)
+			.sort((a, b) => a - b);
+
+		for (let i = 0; i < trackData.timestampProcessingQueue.length; i++) {
+			const queuedPacket = trackData.timestampProcessingQueue[i]!;
+			queuedPacket.decodeTimestamp = sortedTimestamps[i]!;
+			trackData.packetQueue.push(queuedPacket);
+		}
+
+		trackData.timestampProcessingQueue.length = 0;
+
+		if (alsoInterleave) {
+			await this.interleavePackets();
+		}
+	}
+
 	private async interleavePackets(isFinalCall = false) {
 		if (!this.tablesWritten) {
 			if (!this.allTracksAreKnown() && !isFinalCall) {
@@ -444,10 +501,10 @@ export class MpegTsMuxer extends Muxer {
 
 				if (
 					trackData.packetQueue.length > 0
-					&& trackData.packetQueue[0]!.timestamp < minTimestamp
+					&& trackData.packetQueue[0]!.presentationTimestamp < minTimestamp
 				) {
 					trackWithMinTimestamp = trackData;
-					minTimestamp = trackData.packetQueue[0]!.timestamp;
+					minTimestamp = trackData.packetQueue[0]!.presentationTimestamp;
 				}
 			}
 
@@ -501,10 +558,14 @@ export class MpegTsMuxer extends Muxer {
 	}
 
 	private writePesPacket(trackData: MpegTsTrackData, queuedPacket: QueuedPacket) {
-		const pesView = this.pesHeaderView;
+		const includeDts = trackData.track.type === 'video';
+		const headerDataLength = includeDts ? 10 : 5;
+		const pesHeaderBuffer = new Uint8Array(9 + headerDataLength);
+		const pesView = toDataView(pesHeaderBuffer);
+		const ptsDtsBitstream = new Bitstream(pesHeaderBuffer.subarray(9));
 
 		setUint24(pesView, 0, 0x000001, false); // packet_start_code_prefix
-		this.pesHeaderBuffer[3] = trackData.streamId; // stream_id
+		pesHeaderBuffer[3] = trackData.streamId; // stream_id
 
 		const pesPacketLength = trackData.track.type === 'video'
 			? 0 // Unbounded
@@ -514,20 +575,33 @@ export class MpegTsMuxer extends Muxer {
 		// '10' marker, PES_scrambling_control=0, PES_priority=0,
 		// data_alignment_indicator=1, copyright=0, original_or_copy=0
 		pesView.setUint8(6, 0x84);
-		pesView.setUint8(7, 0x80); // PTS_DTS_flags=10 (PTS only), other flags=0
-		pesView.setUint8(8, 5); // PES_header_data_length (5 bytes for PTS)
+		pesView.setUint8(7, includeDts ? 0xC0 : 0x80); // PTS_DTS_flags, other flags=0
+		pesView.setUint8(8, headerDataLength); // PES_header_data_length
 
-		const pts = Math.round(queuedPacket.timestamp * TIMESCALE);
-		this.ptsBitstream.pos = 0;
-		this.ptsBitstream.writeBits(4, 0b0010); // marker
-		this.ptsBitstream.writeBits(3, (pts >>> 30) & 0x7); // PTS[32:30]
-		this.ptsBitstream.writeBits(1, 1); // marker_bit
-		this.ptsBitstream.writeBits(15, (pts >>> 15) & 0x7FFF); // PTS[29:15]
-		this.ptsBitstream.writeBits(1, 1); // marker_bit
-		this.ptsBitstream.writeBits(15, pts & 0x7FFF); // PTS[14:0]
-		this.ptsBitstream.writeBits(1, 1); // marker_bit
+		const pts = Math.round(queuedPacket.presentationTimestamp * TIMESCALE);
+		ptsDtsBitstream.pos = 0;
+		ptsDtsBitstream.writeBits(4, includeDts ? 0b0011 : 0b0010); // marker
+		ptsDtsBitstream.writeBits(3, (pts >>> 30) & 0x7); // PTS[32:30]
+		ptsDtsBitstream.writeBits(1, 1); // marker_bit
+		ptsDtsBitstream.writeBits(15, (pts >>> 15) & 0x7FFF); // PTS[29:15]
+		ptsDtsBitstream.writeBits(1, 1); // marker_bit
+		ptsDtsBitstream.writeBits(15, pts & 0x7FFF); // PTS[14:0]
+		ptsDtsBitstream.writeBits(1, 1); // marker_bit
 
-		const totalLength = this.pesHeaderBuffer.length + queuedPacket.data.length;
+		if (includeDts) {
+			assert(queuedPacket.decodeTimestamp !== null);
+
+			const dts = Math.round(queuedPacket.decodeTimestamp * TIMESCALE);
+			ptsDtsBitstream.writeBits(4, 0b0001);
+			ptsDtsBitstream.writeBits(3, (dts >>> 30) & 0x7); // DTS[32:30]
+			ptsDtsBitstream.writeBits(1, 1); // marker_bit
+			ptsDtsBitstream.writeBits(15, (dts >>> 15) & 0x7FFF); // DTS[29:15]
+			ptsDtsBitstream.writeBits(1, 1); // marker_bit
+			ptsDtsBitstream.writeBits(15, dts & 0x7FFF); // DTS[14:0]
+			ptsDtsBitstream.writeBits(1, 1); // marker_bit
+		}
+
+		const totalLength = pesHeaderBuffer.length + queuedPacket.data.length;
 		let offset = 0;
 		let isFirstTsPacket = true;
 
@@ -568,13 +642,13 @@ export class MpegTsMuxer extends Muxer {
 			const payload = this.payloadBuffer.subarray(0, payloadSize);
 
 			let payloadOffset = 0;
-			if (offset < this.pesHeaderBuffer.length) {
-				const headerBytes = Math.min(this.pesHeaderBuffer.length - offset, payloadSize);
-				payload.set(this.pesHeaderBuffer.subarray(offset, offset + headerBytes), 0);
+			if (offset < pesHeaderBuffer.length) {
+				const headerBytes = Math.min(pesHeaderBuffer.length - offset, payloadSize);
+				payload.set(pesHeaderBuffer.subarray(offset, offset + headerBytes), 0);
 				payloadOffset = headerBytes;
 			}
 
-			const dataStart = Math.max(0, offset - this.pesHeaderBuffer.length);
+			const dataStart = Math.max(0, offset - pesHeaderBuffer.length);
 			const dataEnd = dataStart + (payloadSize - payloadOffset);
 			if (payloadOffset < payloadSize) {
 				payload.set(queuedPacket.data.subarray(dataStart, dataEnd), payloadOffset);
@@ -633,11 +707,16 @@ export class MpegTsMuxer extends Muxer {
 	}
 
 	// eslint-disable-next-line @typescript-eslint/no-misused-promises
-	override async onTrackClose() {
+	override async onTrackClose(track: OutputTrack) {
 		const release = await this.mutex.acquire();
 
 		if (this.allTracksAreKnown()) {
 			this.allTracksKnown.resolve();
+		}
+
+		const trackData = this.trackDatas.find(x => x.track === track);
+		if (trackData) {
+			await this.flushTimestampQueue(trackData, false);
 		}
 
 		await this.interleavePackets();
@@ -649,6 +728,10 @@ export class MpegTsMuxer extends Muxer {
 		const release = await this.mutex.acquire();
 
 		this.allTracksKnown.resolve();
+
+		for (const trackData of this.trackDatas) {
+			await this.flushTimestampQueue(trackData, false);
+		}
 
 		await this.interleavePackets(true);
 
@@ -695,7 +778,18 @@ const PAT_SECTION = new Uint8Array(16);
 }
 
 const buildPmt = (trackDatas: MpegTsTrackData[]) => {
-	const sectionLength = 9 + trackDatas.length * 5 + 4;
+	let totalEsBytes = 0;
+	for (const trackData of trackDatas) {
+		totalEsBytes += 5;
+
+		if (trackData.streamType === MpegTsStreamType.AC3_SYSTEM_A) {
+			totalEsBytes += AC3_REGISTRATION_DESCRIPTOR.length;
+		} else if (trackData.streamType === MpegTsStreamType.EAC3_SYSTEM_A) {
+			totalEsBytes += EAC3_REGISTRATION_DESCRIPTOR.length;
+		}
+	}
+
+	const sectionLength = 9 + totalEsBytes + 4;
 	const section = new Uint8Array(3 + sectionLength - 4);
 	const view = toDataView(section);
 
@@ -714,8 +808,21 @@ const buildPmt = (trackDatas: MpegTsTrackData[]) => {
 		section[offset++] = trackData.streamType; // stream_type
 		view.setUint16(offset, 0xE000 | (trackData.pid & 0x1FFF), false); // reserved=111, elementary_PID
 		offset += 2;
-		view.setUint16(offset, 0xF000, false); // reserved=1111, ES_info_length=0
-		offset += 2;
+
+		if (trackData.streamType === MpegTsStreamType.AC3_SYSTEM_A) {
+			view.setUint16(offset, 0xF000 | AC3_REGISTRATION_DESCRIPTOR.length, false);
+			offset += 2;
+			section.set(AC3_REGISTRATION_DESCRIPTOR, offset);
+			offset += AC3_REGISTRATION_DESCRIPTOR.length;
+		} else if (trackData.streamType === MpegTsStreamType.EAC3_SYSTEM_A) {
+			view.setUint16(offset, 0xF000 | EAC3_REGISTRATION_DESCRIPTOR.length, false);
+			offset += 2;
+			section.set(EAC3_REGISTRATION_DESCRIPTOR, offset);
+			offset += EAC3_REGISTRATION_DESCRIPTOR.length;
+		} else {
+			view.setUint16(offset, 0xF000, false); // reserved=1111, ES_info_length=0
+			offset += 2;
+		}
 	}
 
 	const crc = computeMpegTsCrc32(section);

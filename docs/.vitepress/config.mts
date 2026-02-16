@@ -42,6 +42,12 @@ export default withMermaid({
 			{ text: 'Examples', link: '/examples', activeMatch: '/examples' },
 			{ text: 'Sponsors', link: '/#sponsors', activeMatch: '/#sponsors' },
 			{ text: 'License', link: 'https://github.com/Vanilagy/mediabunny#license' },
+			{
+				text: 'More',
+				items: [
+					{ text: 'Codec Registry', link: '/codec-registry/overview' },
+				],
+			},
 		],
 
 		sidebar: {
@@ -87,12 +93,47 @@ export default withMermaid({
 					text: 'Extensions',
 					items: [
 						{ text: 'mp3-encoder', link: '/guide/extensions/mp3-encoder' },
+						{ text: 'ac3', link: '/guide/extensions/ac3' },
 					],
 				},
 			],
 
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment
 			'/api': apiRoutes as any,
+
+			'/codec-registry': [
+				{
+					text: 'Codec registry',
+					items: [
+						{ text: 'Overview', link: '/codec-registry/overview' },
+					],
+				},
+				{
+					text: 'Video',
+					items: [
+						{ text: 'AVC (H.264)', link: '/codec-registry/avc' },
+						{ text: 'HEVC (H.265)', link: '/codec-registry/hevc' },
+						{ text: 'VP8', link: '/codec-registry/vp8' },
+						{ text: 'VP9', link: '/codec-registry/vp9' },
+						{ text: 'AV1', link: '/codec-registry/av1' },
+					],
+				},
+				{
+					text: 'Audio',
+					items: [
+						{ text: 'AAC', link: '/codec-registry/aac' },
+						{ text: 'Opus', link: '/codec-registry/opus' },
+						{ text: 'MP3', link: '/codec-registry/mp3' },
+						{ text: 'Vorbis', link: '/codec-registry/vorbis' },
+						{ text: 'FLAC', link: '/codec-registry/flac' },
+						{ text: 'AC-3', link: '/codec-registry/ac3' },
+						{ text: 'E-AC-3', link: '/codec-registry/eac3' },
+						{ text: 'Linear PCM', link: '/codec-registry/pcm' },
+						{ text: 'μ-law PCM', link: '/codec-registry/ulaw' },
+						{ text: 'A-law PCM', link: '/codec-registry/alaw' },
+					],
+				},
+			],
 		},
 
 		socialLinks: [

@@ -21,14 +21,14 @@ import {
 } from './matroska/ebml';
 import { MatroskaDemuxer } from './matroska/matroska-demuxer';
 import { Mp3Demuxer } from './mp3/mp3-demuxer';
-import { FRAME_HEADER_SIZE } from '../shared/mp3-misc';
+import { FRAME_HEADER_SIZE, getXingOffset, INFO, XING } from '../shared/mp3-misc';
 import { ID3_V2_HEADER_SIZE, readId3V2Header } from './id3';
 import { readNextMp3FrameHeader } from './mp3/mp3-reader';
 import { OggDemuxer } from './ogg/ogg-demuxer';
 import { WaveDemuxer } from './wave/wave-demuxer';
 import { MAX_ADTS_FRAME_HEADER_SIZE, MIN_ADTS_FRAME_HEADER_SIZE, readAdtsFrameHeader } from './adts/adts-reader';
 import { AdtsDemuxer } from './adts/adts-demuxer';
-import { readAscii, readBytes } from './reader';
+import { readAscii, readBytes, readU32Be } from './reader';
 import { FlacDemuxer } from './flac/flac-demuxer';
 import { MpegTsDemuxer } from './mpeg-ts/mpeg-ts-demuxer';
 import { TS_PACKET_SIZE } from './mpeg-ts/mpeg-ts-misc';
@@ -261,10 +261,6 @@ export class WebMInputFormat extends MatroskaInputFormat {
 export class Mp3InputFormat extends InputFormat {
 	/** @internal */
 	async _canReadInput(input: Input) {
-		let slice = input._reader.requestSlice(0, 10);
-		if (slice instanceof Promise) slice = await slice;
-		if (!slice) return false;
-
 		let currentPos = 0;
 
 		while (true) {
@@ -285,6 +281,21 @@ export class Mp3InputFormat extends InputFormat {
 			return false;
 		}
 
+		const firstHeader = firstResult.header;
+		const xingOffset = getXingOffset(firstHeader.mpegVersionId, firstHeader.channel);
+
+		let slice = input._reader.requestSlice(firstResult.startPos + xingOffset, 4);
+		if (slice instanceof Promise) slice = await slice;
+		if (!slice) return false;
+
+		const word = readU32Be(slice);
+		const isXing = word === XING || word === INFO;
+
+		if (isXing) {
+			// Gotta be MP3
+			return true;
+		}
+
 		currentPos = firstResult.startPos + firstResult.header.totalSize;
 
 		// Fine, we found one frame header, but we're still not entirely sure this is MP3. Let's check if we can find
@@ -294,7 +305,6 @@ export class Mp3InputFormat extends InputFormat {
 			return false;
 		}
 
-		const firstHeader = firstResult.header;
 		const secondHeader = secondResult.header;
 
 		// In a well-formed MP3 file, we'd expect these two frames to share some similarities:

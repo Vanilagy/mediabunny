@@ -1,8 +1,11 @@
 <!DOCTYPE html>
 
 <script src="../dist/bundles/mediabunny.cjs"></script>
+<script src="../packages/ac3/dist/bundles/mediabunny-ac3.js"></script>
 
 <script type="module">
+	MediabunnyAc3.registerAc3Decoder();
+
 	const fileInput = document.createElement('input');
 	fileInput.type = 'file';
 	document.body.append(fileInput);
@@ -50,6 +53,8 @@
 			}
 		}
 		*/
+
+		console.log("Done")
 
 		/*
 		

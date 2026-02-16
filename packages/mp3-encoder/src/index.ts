@@ -80,6 +80,12 @@ class Mp3Encoder extends CustomAudioEncoder {
 			},
 		});
 
+		this.resetInternalState();
+	}
+
+	private resetInternalState() {
+		this.currentBufferOffset = 0;
+		this.currentTimestamp = null;
 		this.chunkMetadata = {
 			decoderConfig: {
 				codec: 'mp3',
@@ -119,15 +125,15 @@ class Mp3Encoder extends CustomAudioEncoder {
 			},
 		}, [audioData]);
 
-		assert('encodedData' in result);
 		this.digestOutput(new Uint8Array(result.encodedData));
 	}
 
 	async flush() {
 		const result = await this.sendCommand({ type: 'flush' });
 
-		assert('flushedData' in result);
 		this.digestOutput(new Uint8Array(result.flushedData));
+
+		this.resetInternalState();
 	}
 
 	close() {
@@ -171,9 +177,7 @@ class Mp3Encoder extends CustomAudioEncoder {
 			const duration = header.audioSamplesInFrame / header.sampleRate;
 			this.onPacket(new EncodedPacket(data, 'key', this.currentTimestamp, duration), this.chunkMetadata);
 
-			if (this.currentTimestamp === 0) {
-				this.chunkMetadata = {}; // Mimic WebCodecs-like behavior
-			}
+			this.chunkMetadata = {}; // Mimic WebCodecs-like behavior
 
 			this.currentTimestamp += duration;
 			pos += header.totalSize;
@@ -186,13 +190,16 @@ class Mp3Encoder extends CustomAudioEncoder {
 		}
 	}
 
-	private sendCommand(
-		command: WorkerCommand,
+	private sendCommand<T extends string>(
+		command: WorkerCommand & { type: T },
 		transferables?: Transferable[],
 	) {
-		return new Promise<WorkerResponseData>((resolve, reject) => {
+		return new Promise<WorkerResponseData & { type: T }>((resolve, reject) => {
 			const id = this.nextMessageId++;
-			this.pendingMessages.set(id, { resolve, reject });
+			this.pendingMessages.set(id, {
+				resolve: resolve as (value: WorkerResponseData) => void,
+				reject,
+			});
 
 			assert(this.worker);
 

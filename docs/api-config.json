@@ -19,5 +19,6 @@
     "Custom coders": "API for adding custom encoders and decoders.",
     "Miscellaneous": "Whatever's left.",
 
-    "@mediabunny/mp3-encoder": "Adds MP3 encoder support to Mediabunny."
+    "@mediabunny/mp3-encoder": "Adds MP3 encoder support to Mediabunny.",
+    "@mediabunny/ac3": "Adds AC-3/E-AC-3 decoder and encoder support to Mediabunny."
 }
