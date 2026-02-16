@@ -72,6 +72,9 @@ import { FileSlice, readBytes, Reader, readU16Be, readU32Be, readU8 } from '../r
 import { buildMpegTsMimeType, MpegTsStreamType, TIMESCALE, TS_PACKET_SIZE } from './mpeg-ts-misc';
 import { AC3_SAMPLE_RATES } from '../../shared/ac3-misc';
 
+// Resources:
+// ISO/IEC 13818-1
+
 type ElementaryStream = {
 	demuxer: MpegTsDemuxer;
 	pid: number;
