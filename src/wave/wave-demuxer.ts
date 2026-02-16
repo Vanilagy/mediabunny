@@ -287,14 +287,14 @@ export class WaveDemuxer extends Demuxer {
 		const id3V2Header = readId3V2Header(slice);
 		if (id3V2Header) {
 			// Clamp to the available data in case the ID3 header claims more than the WAV chunk provides
-			// Test case: https://github.com/Vanilagy/mediabunny/issues/300
+			// https://github.com/Vanilagy/mediabunny/issues/300
 			const availableSize = size - ID3_V2_HEADER_SIZE;
 			id3V2Header.size = Math.min(id3V2Header.size, availableSize);
 
-			// Extract the content portion (skip the 10-byte header)
-			const contentSlice = slice.slice(startPos + ID3_V2_HEADER_SIZE, id3V2Header.size);
-
-			parseId3V2Tag(contentSlice, id3V2Header, this.metadataTags);
+			if (id3V2Header.size > 0) {
+				const contentSlice = slice.slice(startPos + ID3_V2_HEADER_SIZE, id3V2Header.size);
+				parseId3V2Tag(contentSlice, id3V2Header, this.metadataTags);
+			}
 		}
 	}
 
