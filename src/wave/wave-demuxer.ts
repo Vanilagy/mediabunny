@@ -15,7 +15,7 @@ import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
 import { assert, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readAscii, readBytes, Reader, readU16, readU32, readU64 } from '../reader';
-import { parseId3V2Tag, readId3V2Header } from '../id3';
+import { ID3_V2_HEADER_SIZE, parseId3V2Tag, readId3V2Header } from '../id3';
 
 export enum WaveFormat {
 	PCM = 0x0001,
@@ -286,8 +286,13 @@ export class WaveDemuxer extends Demuxer {
 
 		const id3V2Header = readId3V2Header(slice);
 		if (id3V2Header) {
+			// Clamp to the available data in case the ID3 header claims more than the WAV chunk provides
+			// Test case: https://github.com/Vanilagy/mediabunny/issues/300
+			const availableSize = size - ID3_V2_HEADER_SIZE;
+			id3V2Header.size = Math.min(id3V2Header.size, availableSize);
+
 			// Extract the content portion (skip the 10-byte header)
-			const contentSlice = slice.slice(startPos + 10, id3V2Header.size);
+			const contentSlice = slice.slice(startPos + ID3_V2_HEADER_SIZE, id3V2Header.size);
 
 			parseId3V2Tag(contentSlice, id3V2Header, this.metadataTags);
 		}
