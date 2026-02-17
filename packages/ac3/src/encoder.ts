@@ -13,7 +13,7 @@ import {
 	EncodedPacket,
 	registerEncoder,
 } from 'mediabunny';
-import { sendCommand } from './worker-client';
+import { sendCommand, refWorker, unrefWorker } from './worker-client';
 import { assert } from './shared';
 import { AC3_SAMPLE_RATES, EAC3_REDUCED_SAMPLE_RATES } from '../../../shared/ac3-misc';
 
@@ -38,11 +38,14 @@ class Ac3Encoder extends CustomAudioEncoder {
 		return (codec === 'ac3' || codec === 'eac3')
 			&& config.numberOfChannels >= 1
 			&& config.numberOfChannels <= 8
-			&& sampleRates.includes(config.sampleRate);
+			&& sampleRates.includes(config.sampleRate)
+			&& config.bitrate !== undefined;
 	}
 
 	async init() {
-		assert(this.config.bitrate);
+		await refWorker();
+
+		assert(this.config.bitrate !== undefined);
 		this.sampleRate = this.config.sampleRate;
 		this.numberOfChannels = this.config.numberOfChannels;
 
@@ -130,6 +133,7 @@ class Ac3Encoder extends CustomAudioEncoder {
 
 	close() {
 		void sendCommand({ type: 'close-encoder', data: { ctx: this.ctx } });
+		void unrefWorker();
 	}
 
 	private async encodeOneFrame() {
