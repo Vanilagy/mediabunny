@@ -28,7 +28,7 @@ export default function Worker() {
 			const inlineWorkerFunctionCode = `
 export default async function inlineWorker(scriptText) {
 	if (typeof Worker !== 'undefined' && typeof Bun === 'undefined') {
-		// Browser, Deno
+		// Browser, Deno (Deno can't do dynamic import of worker_threads)
 
 		const blob = new Blob([scriptText], { type: "text/javascript" });
 		const url = URL.createObjectURL(blob);
@@ -39,10 +39,10 @@ export default async function inlineWorker(scriptText) {
 		// Node, Bun (Bun's Worker is flaky, worker_threads works much better)
 
 		let Worker;
+		const workerModule = 'node:worker_threads';
 		try {
-			Worker = (await import('worker_threads')).Worker;
+			Worker = (await import(workerModule)).Worker;
 		} catch {
-			const workerModule = 'worker_threads';
 			Worker = require(workerModule).Worker;
 		}
 		

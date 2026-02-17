@@ -13,7 +13,7 @@ import {
 	EncodedPacket,
 	registerDecoder,
 } from 'mediabunny';
-import { sendCommand } from './worker-client';
+import { sendCommand, refWorker, unrefWorker } from './worker-client';
 
 class Ac3Decoder extends CustomAudioDecoder {
 	private ctx = 0;
@@ -23,6 +23,8 @@ class Ac3Decoder extends CustomAudioDecoder {
 	}
 
 	async init() {
+		await refWorker();
+
 		const result = await sendCommand({
 			type: 'init-decoder',
 			data: { codec: this.codec },
@@ -53,8 +55,9 @@ class Ac3Decoder extends CustomAudioDecoder {
 		await sendCommand({ type: 'flush-decoder', data: { ctx: this.ctx } });
 	}
 
-	close() {
+	async close() {
 		void sendCommand({ type: 'close-decoder', data: { ctx: this.ctx } });
+		await unrefWorker();
 	}
 }
 
