@@ -35,7 +35,6 @@ export class AdtsMuxer extends Muxer {
 		if (!metadataTagsAreEmpty(this.output._metadataTags)) {
 			const id3Writer = new Id3V2Writer(this.writer);
 			id3Writer.writeId3V2Tag(this.output._metadataTags);
-			await this.writer.flush();
 		}
 	}
 
