@@ -810,3 +810,68 @@ test('MPEG-TS first packet key packet forcing', async () => {
 		expect(firstKeyPacketSeeked.sequenceNumber).toBe(firstPacket.sequenceNumber);
 	}
 });
+
+test('MPEG-TS without initial key packet', async () => {
+	for (let i = 0; i < 2; i++) {
+		using input = new Input({
+			source: new FilePathSource(path.join(__dirname, '../public/no-initial-keyframe.ts')),
+			formats: ALL_FORMATS,
+		});
+
+		const videoTrack = await input.getPrimaryVideoTrack();
+		assert(videoTrack);
+
+		if (i === 1) {
+			const demuxer = (await input._demuxerPromise) as MpegTsDemuxer;
+			demuxer.seekChunkSize = 250_000; // Try it again with a smaller chunk size
+		}
+
+		const sink = new EncodedPacketSink(videoTrack);
+
+		const firstPacket = await sink.getFirstPacket();
+		assert(firstPacket);
+		expect(firstPacket.type).toBe('delta'); // First packet is delta
+
+		const noPacket = await sink.getKeyPacket(firstPacket.timestamp);
+		expect(noPacket).toBeNull();
+
+		const aKeyPacket = await sink.getKeyPacket(Infinity);
+		assert(aKeyPacket);
+		expect(aKeyPacket.type).toBe('key');
+	}
+});
+
+test('MPEG-TS with "extension" PES packets without PTS', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/entry24-segment3.ts')),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	const packetSizes: number[] = [];
+	const sink = new EncodedPacketSink(videoTrack);
+
+	for await (const packet of sink.packets()) {
+		packetSizes.push(packet.data.byteLength);
+
+		const seeked = await sink.getPacket(packet.timestamp);
+		expect(seeked!.timestamp).toBe(packet.timestamp);
+		expect(seeked!.sequenceNumber).toBe(packet.sequenceNumber);
+	}
+
+	expect(packetSizes).toEqual([
+		// These reference values come from ffprobe
+		30635, 5980, 3452, 2076, 2692, 9559, 5754, 2171, 2989, 13962,
+		4156, 209260, 25698, 152, 2299, 128, 94, 102, 74, 28898,
+		233, 127, 99, 1449, 130, 99, 3988, 202, 130, 139,
+		92, 18652, 200, 146, 98, 8666, 190, 151, 156, 108,
+		9991, 162, 97, 81, 9929, 130, 106, 13362, 133, 117,
+		7606, 274, 109, 106, 12359, 218, 123, 111, 24109, 261,
+		142, 120, 13417, 789, 153, 139, 12490, 549, 192, 135,
+		13191, 428, 159, 150, 30815, 309, 135, 119, 9231, 354,
+		147, 116, 11835, 263, 162, 103, 6693, 202, 100, 101,
+		4693, 223, 144, 174, 118, 9155, 1188, 379, 169, 213,
+	]);
+});

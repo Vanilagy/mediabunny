@@ -22,7 +22,7 @@ import { ManifestInput } from './manifest-input';
 import { ManifestInputSegment } from './manifest-input-segment';
 import { PacketRetrievalOptions } from './media-sink';
 import { MetadataTags, TrackDisposition } from './metadata';
-import { arrayArgmin, arrayCount, assert, Rotation } from './misc';
+import { arrayCount, assert, Rotation } from './misc';
 import { EncodedPacket } from './packet';
 import { NullSource } from './source';
 
@@ -37,9 +37,23 @@ export type ManifestInputVariantMetadata = {
 	isKeyFrameOnly: boolean;
 };
 
+export type AssociatedGroup = {
+	id: string;
+	type: 'video' | 'audio' | 'subtitles' | 'closed-captions';
+};
+
 export abstract class ManifestInputVariant {
 	readonly input: ManifestInput;
 	readonly path: string;
+
+	/** @internal */
+	_nextInputCacheAge = 0;
+	/** @internal */
+	_inputCache: {
+		segment: ManifestInputSegment;
+		inputPromise: Promise<Input>; // We store the promise so it's immediately available in the cache
+		age: number;
+	}[] = [];
 
 	/** @internal */
 	constructor(input: ManifestInput, path: string) {
@@ -49,7 +63,7 @@ export abstract class ManifestInputVariant {
 
 	abstract get metadata(): ManifestInputVariantMetadata;
 	abstract get groupId(): string | null;
-	abstract get associatedGroupId(): string | null;
+	abstract get associatedGroups(): AssociatedGroup[];
 
 	abstract getFirstSegment(): Promise<ManifestInputSegment | null>;
 	abstract getSegmentAt(timestamp: number): Promise<ManifestInputSegment | null>;
@@ -83,20 +97,22 @@ class ManifestInputVariantDemuxer extends Demuxer {
 	variant: ManifestInputVariant;
 	tracksPromise: Promise<InputTrack[]> | null = null;
 	firstSegment: ManifestInputSegment | null = null;
-
-	nextInputCacheAge = 0;
-	inputCache: {
-		segment: ManifestInputSegment;
-		inputPromise: Promise<Input>; // We store the promise so it's immediately available in the cache
-		age: number;
-	}[] = [];
-
-	initSegmentFirstTimestamps = new WeakMap<ManifestInputSegment, number>();
+	firstSegmentFirstTimestamps = new WeakMap<ManifestInputSegment, number>();
 
 	constructor(input: Input, variant: ManifestInputVariant) {
 		super(input);
 
 		this.variant = variant;
+	}
+
+	override async isSupported() {
+		const firstSegment = await this.variant.getFirstSegment();
+		if (!firstSegment) {
+			return true; // There's no data but that's supported
+		}
+
+		const input = await firstSegment.toInput();
+		return input.isSupported();
 	}
 
 	async getMetadataTags(): Promise<MetadataTags> {
@@ -114,7 +130,7 @@ class ManifestInputVariantDemuxer extends Demuxer {
 				return [];
 			}
 
-			const input = await this.retrieveInputForSegment(this.firstSegment);
+			const input = await this.firstSegment.toInput();
 			const inputTracks = await input.getTracks();
 
 			const tracks: InputTrack[] = [];
@@ -140,60 +156,38 @@ class ManifestInputVariantDemuxer extends Demuxer {
 		})();
 	}
 
-	retrieveInputForSegment(segment: ManifestInputSegment) {
-		const cacheEntry = this.inputCache.find(x => x.segment === segment);
-		if (cacheEntry) {
-			cacheEntry.age = this.nextInputCacheAge++;
-			return cacheEntry.inputPromise;
-		}
-
-		const promise = segment.toInput();
-		this.inputCache.push({
-			segment,
-			inputPromise: promise,
-			age: this.nextInputCacheAge++,
-		});
-
-		const MAX_INPUT_CACHE_SIZE = 4;
-		if (this.inputCache.length > MAX_INPUT_CACHE_SIZE) {
-			const minAgeIndex = arrayArgmin(this.inputCache, x => x.age);
-			this.inputCache.splice(minAgeIndex, 1);
-		}
-
-		return promise;
-	}
-
 	async getMediaOffset(segment: ManifestInputSegment, input: Input) {
-		const initSegment = segment.initSegment ?? segment;
+		const firstSegment = segment.firstSegment ?? segment;
 
-		let initSegmentFirstTimestamp: number;
-		if (this.initSegmentFirstTimestamps.has(initSegment)) {
-			initSegmentFirstTimestamp = this.initSegmentFirstTimestamps.get(initSegment)!;
+		let firstSegmentFirstTimestamp: number;
+		if (this.firstSegmentFirstTimestamps.has(firstSegment)) {
+			firstSegmentFirstTimestamp = this.firstSegmentFirstTimestamps.get(firstSegment)!;
 		} else {
-			const initInput = await this.retrieveInputForSegment(initSegment);
-			initSegmentFirstTimestamp = await initInput.getFirstTimestamp();
-			this.initSegmentFirstTimestamps.set(initSegment, initSegmentFirstTimestamp);
+			const firstInput = await firstSegment.toInput();
+			firstSegmentFirstTimestamp = await firstInput.getFirstTimestamp();
+			this.firstSegmentFirstTimestamps.set(firstSegment, firstSegmentFirstTimestamp);
 		}
 
-		let mediaOffset = 0;
-		mediaOffset -= initSegmentFirstTimestamp; // Make the timestamps relative to the init segment first timestamp
-		mediaOffset += initSegment.relativeTimestamp; // And then offset them by init segment's relative timestamp
-
-		if (segment !== initSegment) {
-			const segmentFirstTimestamp = await input.getFirstTimestamp();
-			if (segmentFirstTimestamp === initSegmentFirstTimestamp) {
-				// Normally, we expect segments (belonging to the same init segment / discontinuity) to have the same
-				// timestamp "base", meaning timestamps tick up across segments and don't reset. However, some
-				// containers don't have absolute timestamps and always start at 0 (like ADTS or MP3) or those that do
-				// always start at the same timestamp, we still want to produce sensible results. So, we detect that by
-				// checking if the internal timestamp hasn't risen faster than the segment durations would dictate. And
-				// if so, we offset.
-				const timeSinceInitSegment = segment.relativeTimestamp - initSegment.relativeTimestamp;
-				mediaOffset += timeSinceInitSegment;
-			}
+		if (firstSegment === segment) {
+			return firstSegment.relativeTimestamp - firstSegmentFirstTimestamp;
 		}
 
-		return mediaOffset;
+		const segmentFirstTimestamp = await input.getFirstTimestamp();
+		const segmentElapsed = segment.relativeTimestamp - firstSegment.relativeTimestamp;
+		const inputElapsed = segmentFirstTimestamp - firstSegmentFirstTimestamp;
+		const difference = inputElapsed - segmentElapsed;
+
+		if (Math.abs(difference) <= Math.min(0.25, segmentElapsed)) { // Heuristic
+			// We're close enough
+			return firstSegment.relativeTimestamp - firstSegmentFirstTimestamp;
+		} else {
+			// Ideally, each segment has absolute timestamps that are relative to some outside clock which is
+			// consistent across segments. This is often the case, but not always. Either the container format used is
+			// not timestamped at all (like ADTS), or the segments are just fucky. In this case, use the segment's
+			// relative timestamp to determine where we are, and completely offset out the segment's input start
+			// timestamp.
+			return segment.relativeTimestamp - segmentFirstTimestamp;
+		}
 	}
 }
 
@@ -315,7 +309,7 @@ class ManifestInputVariantInputTrackBacking implements InputTrackBacking {
 				return null;
 			}
 
-			const nextInput = await this.demuxer.retrieveInputForSegment(nextSegment);
+			const nextInput = await nextSegment.toInput();
 			const nextTracks = await nextInput.getTracks();
 			const nextTrack = nextTracks.find(t => t.type === info.track.type && t.number === info.track.number);
 
@@ -352,7 +346,7 @@ class ManifestInputVariantInputTrackBacking implements InputTrackBacking {
 		}
 
 		while (currentSegment) {
-			const input = await this.demuxer.retrieveInputForSegment(currentSegment);
+			const input = await currentSegment.toInput();
 			const tracks = await input.getTracks();
 			const track = tracks.find(t => (
 				t.type === this.firstInputTrack.type && t.number === this.firstInputTrack.number

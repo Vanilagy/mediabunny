@@ -36,7 +36,14 @@ export class InputAggregateDemuxer extends Demuxer {
 
 	getTracks() {
 		return this.tracksPromise ??= (async () => {
-			const subInputTracks = await Promise.all(this.subInputs.map(x => x.getTracks()));
+			const subInputTracks = await Promise.all(this.subInputs.map(async (input) => {
+				const supported = await input.isSupported();
+				if (!supported) {
+					return [];
+				}
+
+				return input.getTracks();
+			}));
 
 			const tracks: InputTrack[] = [];
 			for (const inputTracks of subInputTracks) {

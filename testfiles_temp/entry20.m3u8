@@ -1,0 +1,7 @@
+#EXTM3U
+
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="stereo",LANGUAGE="en",NAME="English"
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="stereo",LANGUAGE="dubbing",NAME="Dubbing",URI="audio/stereo/none/128kbit.m3u8"
+
+#EXT-X-STREAM-INF:BANDWIDTH=831270,CODECS="mp4a.40.2",AUDIO="stereo"
+audio/stereo/en/128kbit.m3u8

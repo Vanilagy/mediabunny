@@ -66,7 +66,11 @@ export abstract class IsobmffInputFormat extends InputFormat {
 		slice.skip(4);
 		const fourCc = readAscii(slice, 4);
 
-		if (fourCc !== 'ftyp') {
+		if (
+			fourCc !== 'ftyp'
+			&& fourCc !== 'styp' // Segment
+			&& fourCc !== 'moof' // Not a legal segment, but seen in practice (sigh)
+		) {
 			return null;
 		}
 

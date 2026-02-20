@@ -92,16 +92,16 @@ const initMediaPlayer = async (resource: File | string) => {
 		warningElement.textContent = '';
 
 		let input: Input;
-		if (typeof resource === 'string' && resource.endsWith('.m3u8')) {
+		if (typeof resource === 'string' && resource.includes('.m3u8')) {
 			const manifestInput = new ManifestInput({
 				entryPath: resource,
 				getSource: path => new UrlSource(path),
 				manifestFormats: ALL_MANIFEST_FORMATS,
 				mediaFormats: ALL_FORMATS,
 			});
-			const variant = (await manifestInput.getVariants())[0]!;
+			// const variant = (await manifestInput.getVariants())[0]!;
 
-			input = variant.toInput();// await manifestInput.toInput();
+			input = await manifestInput.toInput();
 
 			// https://test-streams.mux.dev/test_001/stream.m3u8
 			// https://test-streams.mux.dev/test_001/stream_1000k_48k_640x360_050.ts

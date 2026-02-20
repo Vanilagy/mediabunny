@@ -89,7 +89,7 @@ export class ManifestInput implements Disposable {
 	_getParser() {
 		return this._parserPromise ??= (async () => {
 			const entrySource = await this._getSourceUncached(this._entryPath);
-			this._entryReader = await Reader.fromSource(entrySource);
+			this._entryReader = new Reader(entrySource);
 
 			for (const format of this._manifestFormats) {
 				const canRead = await format._canReadManifestInput(this);
@@ -169,7 +169,7 @@ export class ManifestInput implements Disposable {
 		}
 
 		cachedEntry = Promise.resolve(this._getSourceUncached(path))
-			.then(keySource => Reader.fromSource(keySource));
+			.then(keySource => new Reader(keySource));
 		this._encryptionKeyReaders.set(path, cachedEntry);
 
 		return cachedEntry;

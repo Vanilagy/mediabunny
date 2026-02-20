@@ -8,18 +8,22 @@
 
 import { InputDisposedError } from './input';
 import { assert, clamp, getUint24, MaybePromise, toDataView } from './misc';
-import { Source } from './source';
+import { DEFAULT_MAX_READ_POSITION, DEFAULT_MIN_READ_POSITION, Source } from './source';
 
 export class Reader {
-	fileSize!: number | null;
+	constructor(public source: Source) {}
 
-	private constructor(public source: Source) {}
+	get fileSize(): number | null {
+		const size = this.source._getFileSize();
+		if (size === undefined) {
+			throw new Error('Reading file size too early; read required first.');
+		}
 
-	static async fromSource(source: Source) {
-		const reader = new this(source);
-		reader.fileSize = await source.getSizeOrNull();
+		return size;
+	}
 
-		return reader;
+	get fileSizeNonStrict() {
+		return this.source._getFileSize() ?? null;
 	}
 
 	requestSlice(start: number, length: number): MaybePromise<FileSlice | null> {
@@ -31,12 +35,12 @@ export class Reader {
 			return null;
 		}
 
-		if (this.fileSize !== null && start + length > this.fileSize) {
+		if (this.fileSizeNonStrict != null && start + length > this.fileSizeNonStrict) {
 			return null;
 		}
 
 		const end = start + length;
-		const result = this.source._read(start, end);
+		const result = this.source._read(start, end, DEFAULT_MIN_READ_POSITION, DEFAULT_MAX_READ_POSITION);
 
 		if (result instanceof Promise) {
 			return result.then((x) => {
@@ -64,10 +68,10 @@ export class Reader {
 			return null;
 		}
 
-		if (this.fileSize !== null) {
+		if (this.fileSizeNonStrict != null) {
 			return this.requestSlice(
 				start,
-				clamp(this.fileSize - start, minLength, maxLength),
+				clamp(this.fileSizeNonStrict - start, minLength, maxLength),
 			);
 		} else {
 			const promisedAttempt = this.requestSlice(start, maxLength);
@@ -77,21 +81,13 @@ export class Reader {
 					return attempt;
 				}
 
-				const handleFileSize = (fileSize: number | null) => {
-					assert(fileSize !== null); // The slice couldn't fit, meaning we must know the file size now
+				// The slice couldn't fit, meaning we must know the file size now
+				assert(this.fileSizeNonStrict != null);
 
-					return this.requestSlice(
-						start,
-						clamp(fileSize - start, minLength, maxLength),
-					);
-				};
-
-				const promisedFileSize = this.source._retrieveSize();
-				if (promisedFileSize instanceof Promise) {
-					return promisedFileSize.then(handleFileSize);
-				} else {
-					return handleFileSize(promisedFileSize);
-				}
+				return this.requestSlice(
+					start,
+					clamp(this.fileSizeNonStrict - start, minLength, maxLength),
+				);
 			};
 
 			if (promisedAttempt instanceof Promise) {
@@ -339,16 +335,16 @@ export const readAscii = (slice: FileSlice, length: number) => {
 
 export class LineReader {
 	getReader: () => MaybePromise<Reader>;
-	isComment?: (line: string) => boolean;
+	ignore?: (line: string) => boolean;
 	reader: Reader | null = null;
 	textDecoder = new TextDecoder();
 	readPos = 0;
 	reachedEnd = false;
 	lineBuffer = '';
 
-	constructor(getReader: () => MaybePromise<Reader>, isComment?: (line: string) => boolean) {
+	constructor(getReader: () => MaybePromise<Reader>, ignore?: (line: string) => boolean) {
 		this.getReader = getReader;
-		this.isComment = isComment;
+		this.ignore = ignore;
 	}
 
 	readNextLine(): MaybePromise<string | null> {
@@ -375,7 +371,9 @@ export class LineReader {
 
 				if (!slice || slice.length === 0) {
 					this.reachedEnd = true;
-					return null;
+					const line = this.lineBuffer.trim();
+
+					return line || null;
 				}
 
 				const bytes = readBytes(slice, slice.length);
@@ -403,7 +401,7 @@ export class LineReader {
 			const line = this.lineBuffer.slice(0, newlineIndex).trim();
 			this.lineBuffer = this.lineBuffer.slice(newlineIndex + 1);
 
-			if (this.isComment?.(line)) {
+			if (this.ignore?.(line)) {
 				continue;
 			}
 

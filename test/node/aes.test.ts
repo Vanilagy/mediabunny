@@ -25,7 +25,7 @@ test('createAesDecryptStream', async () => {
 		const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-CBC', iv }, cryptoKey, plaintext));
 
 		const source = new BufferSource(ciphertext);
-		const reader = await Reader.fromSource(source);
+		const reader = new Reader(source);
 
 		const stream = createAesDecryptStream(reader, () => ({ key, iv }));
 		const streamReader = stream.getReader();

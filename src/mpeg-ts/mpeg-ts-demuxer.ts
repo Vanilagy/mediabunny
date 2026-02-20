@@ -23,6 +23,7 @@ import {
 	AC3_SAMPLES_PER_FRAME,
 	AvcDecoderConfigurationRecord,
 	AvcNalUnitType,
+	determineVideoPacketType,
 	extractAvcDecoderConfigurationRecord,
 	extractHevcDecoderConfigurationRecord,
 	extractNalUnitTypeForAvc,
@@ -75,15 +76,24 @@ import { AC3_SAMPLE_RATES } from '../../shared/ac3-misc';
 // Resources:
 // ISO/IEC 13818-1
 
+const MISSING_PTS_ERROR_MESSAGE = 'PES packet is missing PTS where it was expected. PES packets without PTS are not'
+	+ ' currently supported. If you think this file should be supported, please report it.';
+
 type ElementaryStream = {
 	demuxer: MpegTsDemuxer;
 	pid: number;
 	streamType: number;
 	initialized: boolean;
 	firstSection: Section | null;
+	/**
+	 * Some muxers suck ass and don't correctly label key frames, meaning we'll need to use our skill to
+	 * compensate for another programmer's skill issue.
+	 */
+	canBeTrustedWithKeyPackets: boolean;
 	info: {
 		type: 'video';
 		codec: VideoCodec;
+		decoderConfig: VideoDecoderConfig | null;
 		avcCodecInfo: AvcDecoderConfigurationRecord | null;
 		hevcCodecInfo: HevcDecoderConfigurationRecord | null;
 		colorSpace: VideoColorSpaceInit;
@@ -93,6 +103,7 @@ type ElementaryStream = {
 	} | {
 		type: 'audio';
 		codec: AudioCodec;
+		decoderConfig: AudioDecoderConfig | null;
 		aacCodecInfo: AacCodecInfo | null;
 		numberOfChannels: number;
 		sampleRate: number;
@@ -101,7 +112,7 @@ type ElementaryStream = {
 	 * Reference PES packets, spread throughout the file, to be used to speed up repeated random access. Sorted by both
 	 * byte offset and PTS.
 	 */
-	referencePesPackets: PesPacketHeader[];
+	referencePesPackets: TimestampedPesPacketHeader[];
 };
 
 type ElementaryVideoStream = ElementaryStream & { info: { type: 'video' } };
@@ -124,6 +135,9 @@ type Section = {
 	payload: Uint8Array<ArrayBufferLike>;
 	randomAccessIndicator: number;
 };
+
+// Remember them so the warning doesn't get spammed
+const ignoredStreamTypes = new Set<number>();
 
 export class MpegTsDemuxer extends Demuxer {
 	reader: Reader;
@@ -296,27 +310,14 @@ export class MpegTsDemuxer extends Demuxer {
 						let info: ElementaryStream['info'] | null = null;
 
 						switch (streamType) {
-							case MpegTsStreamType.MP3_MPEG1:
-							case MpegTsStreamType.MP3_MPEG2:
-							case MpegTsStreamType.AAC: {
-								const codec = streamType === MpegTsStreamType.AAC ? 'aac' : 'mp3';
-
-								info = {
-									type: 'audio',
-									codec,
-									aacCodecInfo: null,
-									numberOfChannels: -1,
-									sampleRate: -1,
-								};
-							}; break;
-
 							case MpegTsStreamType.AVC:
 							case MpegTsStreamType.HEVC: {
 								const codec = streamType === MpegTsStreamType.AVC ? 'avc' : 'hevc';
 
 								info = {
 									type: 'video',
-									codec: codec,
+									codec,
+									decoderConfig: null,
 									avcCodecInfo: null,
 									hevcCodecInfo: null,
 									colorSpace: {
@@ -331,20 +332,31 @@ export class MpegTsDemuxer extends Demuxer {
 								};
 							}; break;
 
-							case MpegTsStreamType.AC3_SYSTEM_A: {
-								info = {
-									type: 'audio',
-									codec: 'ac3',
-									aacCodecInfo: null,
-									numberOfChannels: -1,
-									sampleRate: -1,
-								};
-							}; break;
-
+							case MpegTsStreamType.MP3_MPEG1:
+							case MpegTsStreamType.MP3_MPEG2:
+							case MpegTsStreamType.AAC:
+							case MpegTsStreamType.AC3_SYSTEM_A:
 							case MpegTsStreamType.EAC3_SYSTEM_A: {
+								let codec: AudioCodec;
+								if (
+									streamType === MpegTsStreamType.MP3_MPEG1
+									|| streamType === MpegTsStreamType.MP3_MPEG2
+								) {
+									codec = 'mp3';
+								} else if (streamType === MpegTsStreamType.AAC) {
+									codec = 'aac';
+								} else if (streamType === MpegTsStreamType.AC3_SYSTEM_A) {
+									codec = 'ac3';
+								} else if (streamType === MpegTsStreamType.EAC3_SYSTEM_A) {
+									codec = 'eac3';
+								} else {
+									throw new Error('Unreachable.');
+								}
+
 								info = {
 									type: 'audio',
-									codec: 'eac3',
+									codec,
+									decoderConfig: null,
 									aacCodecInfo: null,
 									numberOfChannels: -1,
 									sampleRate: -1,
@@ -356,6 +368,7 @@ export class MpegTsDemuxer extends Demuxer {
 									info = {
 										type: 'audio',
 										codec: 'eac3',
+										decoderConfig: null,
 										aacCodecInfo: null,
 										numberOfChannels: -1,
 										sampleRate: -1,
@@ -364,6 +377,7 @@ export class MpegTsDemuxer extends Demuxer {
 									info = {
 										type: 'audio',
 										codec: 'ac3',
+										decoderConfig: null,
 										aacCodecInfo: null,
 										numberOfChannels: -1,
 										sampleRate: -1,
@@ -374,7 +388,14 @@ export class MpegTsDemuxer extends Demuxer {
 							default: {
 								// If we don't recognize the codec, we don't surface the track at all. This is because
 								// we can't determine its metadata and also have no idea how to packetize its data.
-								console.warn(`Unsupported stream_type 0x${streamType.toString(16)}; ignoring stream.`);
+
+								if (!ignoredStreamTypes.has(streamType)) {
+									console.warn(
+										`Note: MPEG-TS streams with stream_type 0x${streamType.toString(16)} are not`
+										+ ` currently supported.`,
+									);
+									ignoredStreamTypes.add(streamType);
+								}
 							}
 						}
 
@@ -385,6 +406,7 @@ export class MpegTsDemuxer extends Demuxer {
 								streamType,
 								initialized: false,
 								firstSection: null,
+								canBeTrustedWithKeyPackets: false,
 								info,
 								referencePesPackets: [],
 							});
@@ -394,8 +416,9 @@ export class MpegTsDemuxer extends Demuxer {
 					hasProgramMap = true;
 				} else {
 					const elementaryStream = this.elementaryStreams.find(x => x.pid === section.pid);
+					outer:
 					if (elementaryStream && !elementaryStream.initialized) {
-						const pesPacket = readPesPacket(section);
+						const pesPacket = readPesPacket(section, true);
 						if (!pesPacket) {
 							throw new Error(
 								`Couldn't read first PES packet for Elementary Stream with PID ${elementaryStream.pid}`,
@@ -403,75 +426,140 @@ export class MpegTsDemuxer extends Demuxer {
 						}
 
 						elementaryStream.firstSection = section;
+						elementaryStream.canBeTrustedWithKeyPackets = section.randomAccessIndicator === 1;
+
+						if (this.input._initInput) {
+							const initDemuxer = (await this.input._initInput._getDemuxer()) as MpegTsDemuxer;
+							const matchingStream = initDemuxer.elementaryStreams.find(x => (
+								x.pid === section.pid && x.info.codec === elementaryStream.info.codec
+							));
+
+							if (matchingStream) {
+								elementaryStream.info = matchingStream.info;
+								elementaryStream.initialized = true;
+
+								break outer; // We have the stream info, we're done
+							}
+						}
+
+						const context = new PacketReadingContext(elementaryStream, pesPacket);
 
 						if (elementaryStream.info.type === 'video') {
-							if (elementaryStream.info.codec === 'avc') {
-								elementaryStream.info.avcCodecInfo
-									= extractAvcDecoderConfigurationRecord(pesPacket.data);
+							// We loop because in some files, the video parameters are not in the first packet
+							while (true) {
+								const contextAlias = context;
+								contextAlias.suppliedPacket = null; // TyyyyypeScript 😩
+								await context.markNextPacket();
 
-								if (!elementaryStream.info.avcCodecInfo) {
-									throw new Error(
-										'Invalid AVC video stream; could not extract AVCDecoderConfigurationRecord'
-										+ ' from first packet.',
-									);
+								if (elementaryStream.info.codec === 'avc') {
+									if (!context.suppliedPacket) {
+										throw new Error(
+											'Invalid AVC video stream; could not extract AVCDecoderConfigurationRecord'
+											+ ' from any packet.',
+										);
+									}
+
+									elementaryStream.info.avcCodecInfo
+										= extractAvcDecoderConfigurationRecord(context.suppliedPacket.data);
+
+									if (!elementaryStream.info.avcCodecInfo) {
+										continue; // Search the next packet for it
+									}
+
+									const spsUnit = elementaryStream.info.avcCodecInfo.sequenceParameterSets[0];
+									assert(spsUnit);
+									const spsInfo = parseAvcSps(spsUnit)!;
+
+									elementaryStream.info.width = spsInfo.displayWidth;
+									elementaryStream.info.height = spsInfo.displayHeight;
+									elementaryStream.info.colorSpace = {
+										primaries:
+											COLOR_PRIMARIES_MAP_INVERSE[spsInfo.colourPrimaries] as
+											VideoColorPrimaries | undefined,
+										transfer:
+											TRANSFER_CHARACTERISTICS_MAP_INVERSE[spsInfo.transferCharacteristics] as
+											VideoTransferCharacteristics | undefined,
+										matrix:
+											MATRIX_COEFFICIENTS_MAP_INVERSE[spsInfo.matrixCoefficients] as
+											VideoMatrixCoefficients | undefined,
+										fullRange: !!spsInfo.fullRangeFlag,
+									};
+									elementaryStream.info.reorderSize = spsInfo.maxDecFrameBuffering;
+
+									break;
+								} else if (elementaryStream.info.codec === 'hevc') {
+									if (!context.suppliedPacket) {
+										throw new Error(
+											'Invalid HEVC video stream; could not extract HVCDecoderConfigurationRecord'
+											+ ' from first packet.',
+										);
+									}
+
+									elementaryStream.info.hevcCodecInfo
+										= extractHevcDecoderConfigurationRecord(context.suppliedPacket.data);
+
+									if (!elementaryStream.info.hevcCodecInfo) {
+										continue; // Search the next packet for it
+									}
+
+									const spsArray = elementaryStream.info.hevcCodecInfo.arrays.find(
+										a => a.nalUnitType === HevcNalUnitType.SPS_NUT,
+									)!;
+									const spsUnit = spsArray.nalUnits[0];
+									assert(spsUnit);
+									const spsInfo = parseHevcSps(spsUnit)!;
+
+									elementaryStream.info.width = spsInfo.displayWidth;
+									elementaryStream.info.height = spsInfo.displayHeight;
+									elementaryStream.info.colorSpace = {
+										primaries:
+											COLOR_PRIMARIES_MAP_INVERSE[spsInfo.colourPrimaries] as
+											VideoColorPrimaries | undefined,
+										transfer:
+											TRANSFER_CHARACTERISTICS_MAP_INVERSE[spsInfo.transferCharacteristics] as
+											VideoTransferCharacteristics | undefined,
+										matrix:
+											MATRIX_COEFFICIENTS_MAP_INVERSE[spsInfo.matrixCoefficients] as
+											VideoMatrixCoefficients | undefined,
+										fullRange: !!spsInfo.fullRangeFlag,
+									};
+									elementaryStream.info.reorderSize = spsInfo.maxDecFrameBuffering;
+
+									break;
+								} else {
+									throw new Error('Unhandled.');
 								}
-
-								const spsUnit = elementaryStream.info.avcCodecInfo.sequenceParameterSets[0];
-								assert(spsUnit);
-								const spsInfo = parseAvcSps(spsUnit)!;
-
-								elementaryStream.info.width = spsInfo.displayWidth;
-								elementaryStream.info.height = spsInfo.displayHeight;
-								elementaryStream.info.colorSpace = {
-									primaries: COLOR_PRIMARIES_MAP_INVERSE[spsInfo.colourPrimaries] as
-										VideoColorPrimaries | undefined,
-									transfer: TRANSFER_CHARACTERISTICS_MAP_INVERSE[spsInfo.transferCharacteristics] as
-										VideoTransferCharacteristics | undefined,
-									matrix: MATRIX_COEFFICIENTS_MAP_INVERSE[spsInfo.matrixCoefficients] as
-										VideoMatrixCoefficients | undefined,
-									fullRange: !!spsInfo.fullRangeFlag,
-								};
-								elementaryStream.info.reorderSize = spsInfo.maxDecFrameBuffering;
-
-								elementaryStream.initialized = true;
-							} else if (elementaryStream.info.codec === 'hevc') {
-								elementaryStream.info.hevcCodecInfo
-									= extractHevcDecoderConfigurationRecord(pesPacket.data);
-
-								if (!elementaryStream.info.hevcCodecInfo) {
-									throw new Error(
-										'Invalid HEVC video stream; could not extract HVCDecoderConfigurationRecord'
-										+ ' from first packet.',
-									);
-								}
-
-								const spsArray = elementaryStream.info.hevcCodecInfo.arrays.find(
-									a => a.nalUnitType === HevcNalUnitType.SPS_NUT,
-								)!;
-								const spsUnit = spsArray.nalUnits[0];
-								assert(spsUnit);
-								const spsInfo = parseHevcSps(spsUnit)!;
-
-								elementaryStream.info.width = spsInfo.displayWidth;
-								elementaryStream.info.height = spsInfo.displayHeight;
-								elementaryStream.info.colorSpace = {
-									primaries: COLOR_PRIMARIES_MAP_INVERSE[spsInfo.colourPrimaries] as
-										VideoColorPrimaries | undefined,
-									transfer: TRANSFER_CHARACTERISTICS_MAP_INVERSE[spsInfo.transferCharacteristics] as
-										VideoTransferCharacteristics | undefined,
-									matrix: MATRIX_COEFFICIENTS_MAP_INVERSE[spsInfo.matrixCoefficients] as
-										VideoMatrixCoefficients | undefined,
-									fullRange: !!spsInfo.fullRangeFlag,
-								};
-								elementaryStream.info.reorderSize = spsInfo.maxDecFrameBuffering;
-
-								elementaryStream.initialized = true;
-							} else {
-								throw new Error('Unhandled.');
 							}
+
+							elementaryStream.info.decoderConfig = {
+								codec: extractVideoCodecString({
+									width: elementaryStream.info.width,
+									height: elementaryStream.info.height,
+									codec: elementaryStream.info.codec,
+									codecDescription: null,
+									colorSpace: elementaryStream.info.colorSpace,
+									avcType: 1,
+									avcCodecInfo: elementaryStream.info.avcCodecInfo,
+									hevcCodecInfo: elementaryStream.info.hevcCodecInfo,
+									vp9CodecInfo: null,
+									av1CodecInfo: null,
+								}),
+								codedWidth: elementaryStream.info.width,
+								codedHeight: elementaryStream.info.height,
+								colorSpace: elementaryStream.info.colorSpace,
+							};
+							elementaryStream.initialized = true;
 						} else {
+							await context.markNextPacket();
+							if (!context.suppliedPacket) {
+								throw new Error(
+									`Couldn't parse first media packet for Elementary Stream with`
+									+ ` PID ${elementaryStream.pid}`,
+								);
+							}
+
 							if (elementaryStream.info.codec === 'aac') {
-								const slice = FileSlice.tempFromBytes(pesPacket.data);
+								const slice = FileSlice.tempFromBytes(context.suppliedPacket.data);
 								const header = readAdtsFrameHeader(slice);
 								if (!header) {
 									throw new Error(
@@ -487,11 +575,9 @@ export class MpegTsDemuxer extends Demuxer {
 									= aacChannelMap[header.channelConfiguration]!;
 								elementaryStream.info.sampleRate
 									= aacFrequencyTable[header.samplingFrequencyIndex]!;
-
-								elementaryStream.initialized = true;
 							} else if (elementaryStream.info.codec === 'mp3') {
-								const word = readU32Be(FileSlice.tempFromBytes(pesPacket.data));
-								const result = readMp3FrameHeader(word, pesPacket.data.byteLength);
+								const word = readU32Be(FileSlice.tempFromBytes(context.suppliedPacket.data));
+								const result = readMp3FrameHeader(word, context.suppliedPacket.data.byteLength);
 								if (!result.header) {
 									throw new Error(
 										'Invalid MP3 audio stream; could not read frame header from first packet.',
@@ -500,10 +586,8 @@ export class MpegTsDemuxer extends Demuxer {
 
 								elementaryStream.info.numberOfChannels = result.header.channel === 3 ? 1 : 2;
 								elementaryStream.info.sampleRate = result.header.sampleRate;
-
-								elementaryStream.initialized = true;
 							} else if (elementaryStream.info.codec === 'ac3') {
-								const frameInfo = parseAc3SyncFrame(pesPacket.data);
+								const frameInfo = parseAc3SyncFrame(context.suppliedPacket.data);
 								if (!frameInfo) {
 									throw new Error(
 										'Invalid AC-3 audio stream; could not read sync frame from first packet.',
@@ -519,10 +603,8 @@ export class MpegTsDemuxer extends Demuxer {
 								elementaryStream.info.numberOfChannels
 									= AC3_ACMOD_CHANNEL_COUNTS[frameInfo.acmod]! + frameInfo.lfeon;
 								elementaryStream.info.sampleRate = AC3_SAMPLE_RATES[frameInfo.fscod]!;
-
-								elementaryStream.initialized = true;
 							} else if (elementaryStream.info.codec === 'eac3') {
-								const frameInfo = parseEac3SyncFrame(pesPacket.data);
+								const frameInfo = parseEac3SyncFrame(context.suppliedPacket.data);
 								if (!frameInfo) {
 									throw new Error(
 										'Invalid E-AC-3 audio stream; could not read sync frame from first packet.',
@@ -538,11 +620,20 @@ export class MpegTsDemuxer extends Demuxer {
 
 								elementaryStream.info.numberOfChannels = getEac3ChannelCount(frameInfo);
 								elementaryStream.info.sampleRate = sampleRate;
-
-								elementaryStream.initialized = true;
 							} else {
 								throw new Error('Unhandled.');
 							}
+
+							elementaryStream.info.decoderConfig = {
+								codec: extractAudioCodecString({
+									codec: elementaryStream.info.codec,
+									codecDescription: null,
+									aacCodecInfo: elementaryStream.info.aacCodecInfo,
+								}),
+								numberOfChannels: elementaryStream.info.numberOfChannels,
+								sampleRate: elementaryStream.info.sampleRate,
+							};
+							elementaryStream.initialized = true;
 						}
 					}
 				}
@@ -782,15 +873,26 @@ export class MpegTsDemuxer extends Demuxer {
 type PesPacketHeader = {
 	sectionStartPos: number;
 	sectionEndPos: number | null; // null if the section wasn't read fully
-	pts: number;
+	pts: number | null;
 	randomAccessIndicator: number;
+};
+
+type TimestampedPesPacketHeader = PesPacketHeader & {
+	pts: number;
 };
 
 type PesPacket = PesPacketHeader & {
 	data: Uint8Array<ArrayBufferLike>;
 };
 
-const readPesPacketHeader = (section: Section): PesPacketHeader | null => {
+type TimestampedPesPacket = PesPacket & {
+	pts: number;
+};
+
+const readPesPacketHeader = <T extends boolean>(
+	section: Section,
+	expectPts: T,
+): (T extends true ? TimestampedPesPacketHeader : PesPacketHeader) | null => {
 	if (section.payload.byteLength < 3) {
 		return null;
 	}
@@ -824,8 +926,10 @@ const readPesPacketHeader = (section: Section): PesPacketHeader | null => {
 
 	bitstream.skipBits(14);
 
-	let pts = 0;
+	let pts: number | null = null;
 	if (ptsDtsFlags === 0b10 || ptsDtsFlags === 0b11) {
+		pts = 0;
+
 		bitstream.skipBits(4);
 		pts += bitstream.readBits(3) * (1 << 30);
 		bitstream.skipBits(1);
@@ -833,10 +937,9 @@ const readPesPacketHeader = (section: Section): PesPacketHeader | null => {
 		bitstream.skipBits(1);
 		pts += bitstream.readBits(15);
 	} else {
-		throw new Error(
-			'PES packets without PTS are not currently supported. If you think this file should be supported,'
-			+ ' please report it.',
-		);
+		if (expectPts) {
+			throw new Error(MISSING_PTS_ERROR_MESSAGE);
+		}
 	}
 
 	return {
@@ -844,13 +947,16 @@ const readPesPacketHeader = (section: Section): PesPacketHeader | null => {
 		sectionEndPos: section.endPos,
 		pts,
 		randomAccessIndicator: section.randomAccessIndicator,
-	};
+	} as T extends true ? TimestampedPesPacketHeader : PesPacketHeader;
 };
 
-const readPesPacket = (section: Section): PesPacket | null => {
+const readPesPacket = <T extends boolean>(
+	section: Section,
+	expectPts: T,
+): (T extends true ? TimestampedPesPacket : PesPacket) | null => {
 	assert(section.endPos !== null); // Can only read full PES packets from fully read sections
 
-	const header = readPesPacketHeader(section);
+	const header = readPesPacketHeader(section, expectPts);
 	if (!header) {
 		return null;
 	}
@@ -882,7 +988,7 @@ const readPesPacket = (section: Section): PesPacket | null => {
 	return {
 		...header,
 		data,
-	};
+	} as T extends true ? TimestampedPesPacket : PesPacket;
 };
 
 export abstract class MpegTsTrackBacking implements InputTrackBacking {
@@ -975,7 +1081,7 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 		const section = this.elementaryStream.firstSection;
 		assert(section);
 
-		const pesPacket = readPesPacket(section);
+		const pesPacket = readPesPacket(section, true);
 		assert(pesPacket);
 
 		const context = new PacketReadingContext(this.elementaryStream, pesPacket);
@@ -985,8 +1091,6 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 		if (!result) {
 			return null;
 		}
-
-		// result.packet.randomAccessIndicator = 1; // Assume the first packet is always a key packet
 
 		const packet = this.createEncodedPacket(result.packet, result.duration, options);
 		this.packetBuffers.set(packet, buffer);
@@ -1025,7 +1129,7 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 		const section = await demuxer.readSection(sectionStartPos, true);
 		assert(section);
 
-		const pesPacket = readPesPacket(section);
+		const pesPacket = readPesPacket(section, true);
 		assert(pesPacket);
 
 		const context = new PacketReadingContext(this.elementaryStream, pesPacket);
@@ -1093,6 +1197,7 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 		const findFirstPesPacketHeaderInChunk = async (
 			startPos: number,
 			endPos: number,
+			readSectionInFull: boolean,
 		) => {
 			let currentPos = startPos;
 
@@ -1103,14 +1208,17 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 				}
 
 				if (packetHeader.pid === pid && packetHeader.payloadUnitStartIndicator === 1) {
-					const section = await demuxer.readSection(currentPos, false);
+					const section = await demuxer.readSection(currentPos, readSectionInFull);
 					if (!section) {
 						return null;
 					}
 
-					const pesPacketHeader = readPesPacketHeader(section);
-					if (pesPacketHeader) {
-						return pesPacketHeader;
+					const pesPacketHeader = readPesPacketHeader(section, false);
+					if (pesPacketHeader && pesPacketHeader.pts !== null) {
+						return {
+							pesPacketHeader: pesPacketHeader as TimestampedPesPacketHeader,
+							section,
+						};
 					}
 				}
 
@@ -1120,10 +1228,10 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 			return null;
 		};
 
-		// Get the first PES packet of the track (always treated as a key frame candidate)
+		// Get the first PES packet of the track
 		const firstSection = this.elementaryStream.firstSection;
 		assert(firstSection);
-		const firstPesPacketHeader = readPesPacketHeader(firstSection);
+		const firstPesPacketHeader = readPesPacketHeader(firstSection, true);
 		assert(firstPesPacketHeader);
 
 		if (searchPts < firstPesPacketHeader.pts) {
@@ -1157,15 +1265,15 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 							+ firstPesPacketHeader.sectionStartPos;
 						const chunkEndPos = chunkStartPos + seekChunkSize;
 
-						const pesHeader = await findFirstPesPacketHeaderInChunk(chunkStartPos, chunkEndPos);
+						const result = await findFirstPesPacketHeaderInChunk(chunkStartPos, chunkEndPos, false);
 
-						if (!pesHeader) {
+						if (!result) {
 							// No PES packet found in this chunk, search left
 							high = mid - 1;
 							continue;
 						}
 
-						if (pesHeader.pts <= searchPts) {
+						if (result.pesPacketHeader.pts <= searchPts) {
 							// This chunk's first PES is <= searchPts, it's a candidate
 							startChunkIndex = mid;
 							low = mid + 1; // Search right
@@ -1184,13 +1292,15 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 		}
 
 		// Find the first PES packet at or after scanStartPos
-		let currentPesHeader = await findFirstPesPacketHeaderInChunk(
+		const result = await findFirstPesPacketHeaderInChunk(
 			scanStartPos,
 			reader.fileSize ?? Infinity,
+			false,
 		);
 
+		let currentPesHeader = result?.pesPacketHeader ?? null;
 		if (!currentPesHeader) {
-			// Fallback to first packet
+			// Fall back to first packet
 			currentPesHeader = firstPesPacketHeader;
 		}
 
@@ -1204,7 +1314,7 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 			const section = await demuxer.readSection(sectionStartPos, true);
 			assert(section);
 
-			const pesPacket = readPesPacket(section);
+			const pesPacket = readPesPacket(section, true);
 			assert(pesPacket);
 
 			const context = new PacketReadingContext(this.elementaryStream, pesPacket);
@@ -1268,14 +1378,14 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 					if (packetHeader.pid === pid && packetHeader.payloadUnitStartIndicator === 1) {
 						const section = await demuxer.readSection(currentPos, false);
 						if (section) {
-							const nextPesHeader = readPesPacketHeader(section);
-							if (nextPesHeader) {
+							const nextPesHeader = readPesPacketHeader(section, false);
+							if (nextPesHeader && nextPesHeader.pts !== null) {
 								if (nextPesHeader.pts > searchPts) {
 									break outer;
 								}
 
-								currentPesHeader = nextPesHeader;
-								maybeInsertReferencePacket(this.elementaryStream, nextPesHeader);
+								currentPesHeader = nextPesHeader as TimestampedPesPacketHeader;
+								maybeInsertReferencePacket(this.elementaryStream, currentPesHeader);
 
 								break;
 							}
@@ -1286,9 +1396,9 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 				}
 			}
 
-			// Rewind by reorderSize PES packets (even for audio! To ensure proper durations)
+			// Rewind by reorderSize + 1 PES packets (even for audio! To ensure proper durations)
 			outer:
-			for (let i = 0; i < reorderSize; i++) {
+			for (let i = 0; i < reorderSize + 1; i++) {
 				let pos = currentPesHeader.sectionStartPos - demuxer.packetStride;
 
 				while (pos >= demuxer.packetOffset) {
@@ -1300,9 +1410,9 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 					if (packetHeader.pid === pid && packetHeader.payloadUnitStartIndicator === 1) {
 						const section = await demuxer.readSection(pos, false);
 						if (section) {
-							const header = readPesPacketHeader(section);
-							if (header) {
-								currentPesHeader = header;
+							const header = readPesPacketHeader(section, false);
+							if (header && header.pts !== null) {
+								currentPesHeader = header as TimestampedPesPacketHeader;
 								break;
 							}
 						}
@@ -1320,22 +1430,28 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 			let currentChunkStartPos = scanStartPos;
 			let nextChunkStartPos: number | null = null; // "next" as in later in the file, even tho we scan backwards
 
+			const readSectionsInFull = !this.elementaryStream.canBeTrustedWithKeyPackets;
+
 			while (true) {
-				let bestKeyPesHeader: PesPacketHeader | null = null;
+				let bestKeyPesHeader: TimestampedPesPacketHeader | null = null;
 
 				const isFirstChunk = currentChunkStartPos <= firstPesPacketHeader.sectionStartPos;
 
-				let pesHeader: PesPacketHeader | null;
+				let pesHeader: TimestampedPesPacketHeader | null;
+				let pesHeaderSection: Section | null = null;
+
 				if (isFirstChunk) {
 					pesHeader = firstPesPacketHeader;
-
-					// Since we force the first packet to be seen as a key frame:
-					bestKeyPesHeader = firstPesPacketHeader;
+					pesHeaderSection = firstSection;
 				} else {
-					pesHeader = await findFirstPesPacketHeaderInChunk(
+					const result = await findFirstPesPacketHeaderInChunk(
 						currentChunkStartPos,
 						reader.fileSize ?? Infinity,
+						readSectionsInFull,
 					);
+
+					pesHeader = result?.pesPacketHeader ?? null;
+					pesHeaderSection = result?.section ?? null;
 				}
 
 				let passedSearchPts = false;
@@ -1348,20 +1464,35 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 						break;
 					}
 
-					const isKeyCandidate = pesHeader.randomAccessIndicator === 1;
-					if (isKeyCandidate && pesHeader.pts <= searchPts) {
-						bestKeyPesHeader = pesHeader;
+					if (pesHeader.pts <= searchPts) {
+						let isKeyPacket: boolean;
+						if (this.elementaryStream.canBeTrustedWithKeyPackets) {
+							isKeyPacket = pesHeader.randomAccessIndicator === 1;
+						} else {
+							assert(pesHeaderSection);
+							const pesPacket = readPesPacket(pesHeaderSection, true);
+							assert(pesPacket);
+
+							const context = new PacketReadingContext(this.elementaryStream, pesPacket);
+							await context.markNextPacket();
+
+							isKeyPacket = context.suppliedPacket?.randomAccessIndicator === 1;
+						}
+
+						if (isKeyPacket) {
+							bestKeyPesHeader = pesHeader;
+						}
 					}
 
 					if (pesHeader.pts > searchPts) {
 						passedSearchPts = true;
 					}
 
-					// If we've passed searchPts, do lookahead for reorderSize-1 more packets just to be sure
+					// If we've passed searchPts, do lookahead for reorderSize more packets just to be sure
 					if (passedSearchPts) {
 						lookaheadCount++;
 
-						if (lookaheadCount >= reorderSize) {
+						if (lookaheadCount > reorderSize) {
 							break;
 						}
 					}
@@ -1376,11 +1507,15 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 						}
 
 						if (packetHeader.pid === pid && packetHeader.payloadUnitStartIndicator === 1) {
-							const section = await demuxer.readSection(currentPos, false);
+							const section = await demuxer.readSection(currentPos, readSectionsInFull);
 							if (section) {
-								pesHeader = readPesPacketHeader(section);
-								if (pesHeader) {
+								const nextPesHeader = readPesPacketHeader(section, false);
+
+								if (nextPesHeader && nextPesHeader.pts !== null) {
+									pesHeader = nextPesHeader as TimestampedPesPacketHeader;
+									pesHeaderSection = section;
 									maybeInsertReferencePacket(this.elementaryStream, pesHeader);
+
 									break;
 								}
 							}
@@ -1396,7 +1531,7 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 					if (lookaheadCount === 0) {
 						// Packet is at the end of stream, let's rewind a little to obtain the correct packet duration
 						outer:
-						for (let i = 0; i < reorderSize - 1; i++) {
+						for (let i = 0; i < reorderSize; i++) {
 							let pos = startPesHeader.sectionStartPos - demuxer.packetStride;
 
 							while (pos >= demuxer.packetOffset) {
@@ -1406,11 +1541,11 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 								}
 
 								if (packetHeader.pid === pid && packetHeader.payloadUnitStartIndicator === 1) {
-									const section = await demuxer.readSection(pos, false);
+									const section = await demuxer.readSection(pos, readSectionsInFull);
 									if (section) {
-										const header = readPesPacketHeader(section);
-										if (header) {
-											startPesHeader = header;
+										const header = readPesPacketHeader(section, false);
+										if (header && header.pts !== null) {
+											startPesHeader = header as TimestampedPesPacketHeader;
 											break;
 										}
 									}
@@ -1430,7 +1565,9 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 					return encodedPacket;
 				}
 
-				assert(!isFirstChunk); // Impossible not to find a key frame in the first chunk
+				if (isFirstChunk) {
+					return null;
+				}
 
 				// No key frame found in this chunk, move one chunk to the left
 				nextChunkStartPos = currentChunkStartPos;
@@ -1447,31 +1584,7 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 }
 
 class MpegTsVideoTrackBacking extends MpegTsTrackBacking implements InputVideoTrackBacking {
-	override elementaryStream: ElementaryVideoStream;
-	decoderConfig: VideoDecoderConfig;
-
-	constructor(elementaryStream: ElementaryVideoStream) {
-		super(elementaryStream);
-		this.elementaryStream = elementaryStream;
-
-		this.decoderConfig = {
-			codec: extractVideoCodecString({
-				width: this.elementaryStream.info.width,
-				height: this.elementaryStream.info.height,
-				codec: this.elementaryStream.info.codec,
-				codecDescription: null,
-				colorSpace: this.elementaryStream.info.colorSpace,
-				avcType: 1,
-				avcCodecInfo: this.elementaryStream.info.avcCodecInfo,
-				hevcCodecInfo: this.elementaryStream.info.hevcCodecInfo,
-				vp9CodecInfo: null,
-				av1CodecInfo: null,
-			}),
-			codedWidth: this.elementaryStream.info.width,
-			codedHeight: this.elementaryStream.info.height,
-			colorSpace: this.elementaryStream.info.colorSpace,
-		};
-	}
+	override elementaryStream!: ElementaryVideoStream;
 
 	override getCodec(): VideoCodec {
 		return this.elementaryStream.info.codec;
@@ -1497,8 +1610,9 @@ class MpegTsVideoTrackBacking extends MpegTsTrackBacking implements InputVideoTr
 		return false;
 	}
 
-	async getDecoderConfig(): Promise<VideoDecoderConfig | null> {
-		return this.decoderConfig;
+	async getDecoderConfig(): Promise<VideoDecoderConfig> {
+		assert(this.elementaryStream.info.decoderConfig);
+		return this.elementaryStream.info.decoderConfig;
 	}
 
 	override allPacketsAreKeyPackets(): boolean {
@@ -1511,12 +1625,7 @@ class MpegTsVideoTrackBacking extends MpegTsTrackBacking implements InputVideoTr
 }
 
 class MpegTsAudioTrackBacking extends MpegTsTrackBacking implements InputAudioTrackBacking {
-	override elementaryStream: ElementaryAudioStream;
-
-	constructor(elementaryStream: ElementaryAudioStream) {
-		super(elementaryStream);
-		this.elementaryStream = elementaryStream;
-	}
+	override elementaryStream!: ElementaryAudioStream;
 
 	override getCodec(): AudioCodec {
 		return this.elementaryStream.info.codec;
@@ -1531,15 +1640,8 @@ class MpegTsAudioTrackBacking extends MpegTsTrackBacking implements InputAudioTr
 	}
 
 	async getDecoderConfig(): Promise<AudioDecoderConfig> {
-		return {
-			codec: extractAudioCodecString({
-				codec: this.elementaryStream.info.codec,
-				codecDescription: null,
-				aacCodecInfo: this.elementaryStream.info.aacCodecInfo,
-			}),
-			numberOfChannels: this.elementaryStream.info.numberOfChannels,
-			sampleRate: this.elementaryStream.info.sampleRate,
-		};
+		assert(this.elementaryStream.info.decoderConfig);
+		return this.elementaryStream.info.decoderConfig;
 	}
 
 	override allPacketsAreKeyPackets(): boolean {
@@ -1547,11 +1649,14 @@ class MpegTsAudioTrackBacking extends MpegTsTrackBacking implements InputAudioTr
 	}
 
 	override getReorderSize(): number {
-		return 1; // No reordering, since no B-frames because goated
+		return 0; // No reordering, since no B-frames because goated
 	}
 }
 
-const maybeInsertReferencePacket = (elementaryStream: ElementaryStream, pesPacketHeader: PesPacketHeader) => {
+const maybeInsertReferencePacket = (
+	elementaryStream: ElementaryStream,
+	pesPacketHeader: TimestampedPesPacketHeader,
+) => {
 	const referencePesPackets = elementaryStream.referencePesPackets;
 
 	const index = binarySearchLessOrEqual(
@@ -1592,288 +1697,6 @@ const maybeInsertReferencePacket = (elementaryStream: ElementaryStream, pesPacke
 	return true;
 };
 
-const markNextPacket = async (context: PacketReadingContext) => {
-	assert(!context.suppliedPacket);
-
-	const elementaryStream = context.elementaryStream;
-
-	if (elementaryStream.info.type === 'video') {
-		const codec = elementaryStream.info.codec;
-		const CHUNK_SIZE = 1024;
-
-		if (codec !== 'avc' && codec !== 'hevc') {
-			throw new Error('Unhandled.');
-		}
-
-		let packetStartPos: number | null = null;
-
-		while (true) {
-			let remaining = context.ensureBuffered(CHUNK_SIZE);
-			if (remaining instanceof Promise) remaining = await remaining;
-
-			if (remaining === 0) {
-				break;
-			}
-
-			const chunkStartPos = context.currentPos;
-			const chunk = context.readBytes(remaining);
-			const length = chunk.byteLength;
-
-			let i = 0;
-			while (i < length) {
-				const zeroIndex = chunk.indexOf(0, i);
-				if (zeroIndex === -1 || zeroIndex >= length) {
-					break;
-				}
-				i = zeroIndex;
-
-				// Check if we have enough bytes to identify a start code
-				const posBeforeZero = chunkStartPos + i;
-
-				// Need at least 4 more bytes after the 0x00 to check for start code + NAL type
-				if (i + 4 >= length) {
-					// Not enough data in current chunk, seek back and let the next iteration handle it
-					context.seekTo(posBeforeZero);
-					break;
-				}
-
-				const b1 = chunk[i + 1]!;
-				const b2 = chunk[i + 2]!;
-				const b3 = chunk[i + 3]!;
-
-				let startCodeLength = 0;
-				let nalUnitTypeByte: number | null = null;
-
-				// Check for 4-byte start code (0x00000001)
-				if (b1 === 0x00 && b2 === 0x00 && b3 === 0x01) {
-					startCodeLength = 4;
-					nalUnitTypeByte = chunk[i + 4]!;
-				} else if (b1 === 0x00 && b2 === 0x01) {
-					// 3-byte start code (0x000001)
-					startCodeLength = 3;
-					nalUnitTypeByte = b3;
-				}
-
-				if (startCodeLength === 0) {
-					// Not a start code, continue
-					i++;
-					continue;
-				}
-
-				const startCodePos = posBeforeZero;
-
-				if (packetStartPos === null) {
-					// This is our first start code, mark packet start
-					packetStartPos = startCodePos;
-					i += startCodeLength;
-					continue;
-				}
-
-				// We have a second start code. Check if it's an AUD.
-				if (nalUnitTypeByte !== null) {
-					const nalUnitType = codec === 'avc'
-						? extractNalUnitTypeForAvc(nalUnitTypeByte)
-						: extractNalUnitTypeForHevc(nalUnitTypeByte);
-					const isAud = codec === 'avc'
-						? nalUnitType === AvcNalUnitType.AUD
-						: nalUnitType === HevcNalUnitType.AUD_NUT;
-
-					if (isAud) {
-						// End the packet at this start code (before the AUD)
-						const packetLength = startCodePos - packetStartPos;
-						context.seekTo(packetStartPos);
-						return context.supplyPacket(packetLength, 0);
-					}
-				}
-
-				// Not an AUD, continue searching
-				i += startCodeLength;
-			}
-
-			if (remaining < CHUNK_SIZE) {
-				// End of stream
-				break;
-			}
-		}
-
-		// End of stream - return remaining data if we have a packet start
-		if (packetStartPos !== null) {
-			const packetLength = context.endPos - packetStartPos;
-			context.seekTo(packetStartPos);
-			return context.supplyPacket(packetLength, 0);
-		}
-	} else {
-		const codec = elementaryStream.info.codec;
-		const CHUNK_SIZE = 128;
-
-		while (true) {
-			let remaining = context.ensureBuffered(CHUNK_SIZE);
-			if (remaining instanceof Promise) remaining = await remaining;
-
-			const startPos = context.currentPos;
-
-			while (context.currentPos - startPos < remaining) {
-				const byte = context.readU8();
-
-				if (codec === 'aac') {
-					if (byte !== 0xff) {
-						continue;
-					}
-
-					context.skip(-1);
-					const possibleHeaderStartPos = context.currentPos;
-
-					let remaining = context.ensureBuffered(MAX_ADTS_FRAME_HEADER_SIZE);
-					if (remaining instanceof Promise) remaining = await remaining;
-
-					if (remaining < MAX_ADTS_FRAME_HEADER_SIZE) {
-						return;
-					}
-
-					const headerBytes = context.readBytes(MAX_ADTS_FRAME_HEADER_SIZE);
-					const header = readAdtsFrameHeader(FileSlice.tempFromBytes(headerBytes));
-
-					if (header) {
-						context.seekTo(possibleHeaderStartPos);
-
-						let remaining = context.ensureBuffered(header.frameLength);
-						if (remaining instanceof Promise) remaining = await remaining;
-
-						return context.supplyPacket(
-							remaining,
-							Math.round(SAMPLES_PER_AAC_FRAME * TIMESCALE / elementaryStream.info.sampleRate),
-						);
-					} else {
-						context.seekTo(possibleHeaderStartPos + 1);
-					}
-				} else if (codec === 'mp3') {
-					if (byte !== 0xff) {
-						continue;
-					}
-
-					context.skip(-1);
-					const possibleHeaderStartPos = context.currentPos;
-
-					let remaining = context.ensureBuffered(MP3_FRAME_HEADER_SIZE);
-					if (remaining instanceof Promise) remaining = await remaining;
-
-					if (remaining < MP3_FRAME_HEADER_SIZE) {
-						return;
-					}
-
-					const headerBytes = context.readBytes(MP3_FRAME_HEADER_SIZE);
-					const word = toDataView(headerBytes).getUint32(0);
-					const result = readMp3FrameHeader(word, null);
-
-					if (result.header) {
-						context.seekTo(possibleHeaderStartPos);
-
-						let remaining = context.ensureBuffered(result.header.totalSize);
-						if (remaining instanceof Promise) remaining = await remaining;
-
-						const duration = result.header.audioSamplesInFrame * TIMESCALE
-							/ elementaryStream.info.sampleRate;
-						return context.supplyPacket(remaining, Math.round(duration));
-					} else {
-						context.seekTo(possibleHeaderStartPos + 1);
-					}
-				} else if (codec === 'ac3') {
-					if (byte !== 0x0b) {
-						continue;
-					}
-
-					context.skip(-1);
-					const possibleSyncPos = context.currentPos;
-
-					// Need at least 5 bytes for sync word + CRC + fscod/frmsizecod
-					let remaining = context.ensureBuffered(5);
-					if (remaining instanceof Promise) remaining = await remaining;
-
-					if (remaining < 5) {
-						return;
-					}
-
-					const headerBytes = context.readBytes(5);
-
-					// Verify sync word (0x0B77)
-					if (headerBytes[0] !== 0x0b || headerBytes[1] !== 0x77) {
-						context.seekTo(possibleSyncPos + 1);
-						continue;
-					}
-
-					const fscod = headerBytes[4]! >> 6;
-					const frmsizecod = headerBytes[4]! & 0x3f;
-
-					if (fscod === 3 || frmsizecod > 37) {
-						// Invalid
-						context.seekTo(possibleSyncPos + 1);
-						continue;
-					}
-
-					const frameSize = AC3_FRAME_SIZES[3 * frmsizecod + fscod];
-					assert(frameSize !== undefined);
-
-					context.seekTo(possibleSyncPos);
-
-					remaining = context.ensureBuffered(frameSize);
-					if (remaining instanceof Promise) remaining = await remaining;
-
-					const duration = Math.round(
-						AC3_SAMPLES_PER_FRAME * TIMESCALE / elementaryStream.info.sampleRate,
-					);
-					return context.supplyPacket(remaining, duration);
-				} else if (codec === 'eac3') {
-					if (byte !== 0x0b) {
-						continue;
-					}
-
-					context.skip(-1);
-					const possibleSyncPos = context.currentPos;
-
-					// Need at least 5 bytes for E-AC-3 header parsing (sync word + frmsiz + fscod/numblkscod)
-					let remaining = context.ensureBuffered(5);
-					if (remaining instanceof Promise) remaining = await remaining;
-
-					if (remaining < 5) {
-						return;
-					}
-
-					const headerBytes = context.readBytes(5);
-
-					if (headerBytes[0] !== 0x0b || headerBytes[1] !== 0x77) {
-						context.seekTo(possibleSyncPos + 1);
-						continue;
-					}
-
-					const frmsiz = ((headerBytes[2]! & 0x07) << 8) | headerBytes[3]!;
-					const frameSize = (frmsiz + 1) * 2;
-					const fscod = headerBytes[4]! >> 6;
-					const numblkscod = fscod === 3 ? 3 : (headerBytes[4]! >> 4) & 0x03;
-					const numblks = EAC3_NUMBLKS_TABLE[numblkscod]!;
-
-					context.seekTo(possibleSyncPos);
-
-					remaining = context.ensureBuffered(frameSize);
-					if (remaining instanceof Promise) remaining = await remaining;
-
-					// Duration = numblks * 256 samples per block
-					const samplesPerFrame = numblks * 256;
-					const duration = Math.round(
-						samplesPerFrame * TIMESCALE / elementaryStream.info.sampleRate,
-					);
-					return context.supplyPacket(remaining, duration);
-				} else {
-					throw new Error('Unhandled.');
-				}
-			}
-
-			if (remaining < CHUNK_SIZE) {
-				break;
-			}
-		}
-	}
-};
-
 type SuppliedPacket = {
 	pts: number;
 	data: Uint8Array;
@@ -1887,34 +1710,23 @@ class PacketReadingContext {
 	elementaryStream: ElementaryStream;
 	pid: number;
 	demuxer: MpegTsDemuxer;
-	startingPesPacket: PesPacket;
+	startingPesPacket: TimestampedPesPacket;
 
 	currentPos = 0; // Relative to the data in startingPesPacket
 	pesPackets: PesPacket[] = [];
 	currentPesPacketIndex = 0;
 	currentPesPacketPos = 0;
 	endPos = 0;
-	nextPts = 0;
+	lastSuppliedPesPacket: PesPacket | null = null;
+	nextPts: number | null = null;
 
 	suppliedPacket: SuppliedPacket | null = null;
 
-	constructor(elementaryStream: ElementaryStream, startingPesPacket: PesPacket) {
+	constructor(elementaryStream: ElementaryStream, startingPesPacket: TimestampedPesPacket) {
 		this.elementaryStream = elementaryStream;
 		this.pid = elementaryStream.pid;
 		this.demuxer = elementaryStream.demuxer;
 		this.startingPesPacket = startingPesPacket;
-	}
-
-	clone() {
-		const clone = new PacketReadingContext(this.elementaryStream, this.startingPesPacket);
-		clone.currentPos = this.currentPos;
-		clone.pesPackets = [...this.pesPackets];
-		clone.currentPesPacketIndex = this.currentPesPacketIndex;
-		clone.currentPesPacketPos = this.currentPesPacketPos;
-		clone.endPos = this.endPos;
-		clone.nextPts = this.nextPts;
-
-		return clone;
 	}
 
 	ensureBuffered(length: number) {
@@ -1958,7 +1770,7 @@ class PacketReadingContext {
 							return;
 						}
 
-						const nextPesPacket = readPesPacket(nextSection);
+						const nextPesPacket = readPesPacket(nextSection, false);
 						if (nextPesPacket) {
 							pesPacket = nextPesPacket;
 							break;
@@ -1971,11 +1783,6 @@ class PacketReadingContext {
 
 			this.pesPackets.push(pesPacket);
 			this.endPos += pesPacket.data.byteLength;
-
-			if (this.pesPackets.length === 1) {
-				// It's the first PES packet, set the PTS
-				this.nextPts = pesPacket.pts;
-			}
 		}
 	}
 
@@ -2041,7 +1848,6 @@ class PacketReadingContext {
 				this.currentPesPacketIndex--;
 				const currentPacket = this.getCurrentPesPacket();
 				this.currentPesPacketPos -= currentPacket.data.byteLength;
-				this.nextPts = currentPacket.pts;
 			}
 		} else {
 			while (true) {
@@ -2055,8 +1861,6 @@ class PacketReadingContext {
 
 				this.currentPesPacketPos += currentPesPacket.data.byteLength;
 				this.currentPesPacketIndex++;
-
-				this.nextPts = this.getCurrentPesPacket().pts;
 			}
 		}
 
@@ -2070,18 +1874,310 @@ class PacketReadingContext {
 	advanceCurrentPacket() {
 		this.currentPesPacketPos += this.getCurrentPesPacket().data.byteLength;
 		this.currentPesPacketIndex++;
+	}
 
-		this.nextPts = this.getCurrentPesPacket().pts;
+	async markNextPacket() {
+		assert(!this.suppliedPacket);
+
+		const elementaryStream = this.elementaryStream;
+
+		if (elementaryStream.info.type === 'video') {
+			const codec = elementaryStream.info.codec;
+			const CHUNK_SIZE = 1024;
+
+			if (codec !== 'avc' && codec !== 'hevc') {
+				throw new Error('Unhandled.');
+			}
+
+			let packetStartPos: number | null = null;
+
+			while (true) {
+				let remaining = this.ensureBuffered(CHUNK_SIZE);
+				if (remaining instanceof Promise) remaining = await remaining;
+
+				if (remaining === 0) {
+					break;
+				}
+
+				const chunkStartPos = this.currentPos;
+				const chunk = this.readBytes(remaining);
+				const length = chunk.byteLength;
+
+				let i = 0;
+				while (i < length) {
+					const zeroIndex = chunk.indexOf(0, i);
+					if (zeroIndex === -1 || zeroIndex >= length) {
+						break;
+					}
+					i = zeroIndex;
+
+					// Check if we have enough bytes to identify a start code
+					const posBeforeZero = chunkStartPos + i;
+
+					// Need at least 4 more bytes after the 0x00 to check for start code + NAL type
+					if (i + 4 >= length) {
+						// Not enough data in current chunk, seek back and let the next iteration handle it
+						this.seekTo(posBeforeZero);
+						break;
+					}
+
+					const b1 = chunk[i + 1]!;
+					const b2 = chunk[i + 2]!;
+					const b3 = chunk[i + 3]!;
+
+					let startCodeLength = 0;
+					let nalUnitTypeByte: number | null = null;
+
+					// Check for 4-byte start code (0x00000001)
+					if (b1 === 0x00 && b2 === 0x00 && b3 === 0x01) {
+						startCodeLength = 4;
+						nalUnitTypeByte = chunk[i + 4]!;
+					} else if (b1 === 0x00 && b2 === 0x01) {
+						// 3-byte start code (0x000001)
+						startCodeLength = 3;
+						nalUnitTypeByte = b3;
+					}
+
+					if (startCodeLength === 0) {
+						// Not a start code, continue
+						i++;
+						continue;
+					}
+
+					const startCodePos = posBeforeZero;
+
+					if (packetStartPos === null) {
+						// This is our first start code, mark packet start
+						packetStartPos = startCodePos;
+						i += startCodeLength;
+						continue;
+					}
+
+					// We have a second start code. Check if it's an AUD.
+					if (nalUnitTypeByte !== null) {
+						const nalUnitType = codec === 'avc'
+							? extractNalUnitTypeForAvc(nalUnitTypeByte)
+							: extractNalUnitTypeForHevc(nalUnitTypeByte);
+						const isAud = codec === 'avc'
+							? nalUnitType === AvcNalUnitType.AUD
+							: nalUnitType === HevcNalUnitType.AUD_NUT;
+
+						if (isAud) {
+							// End the packet at this start code (before the AUD)
+							const packetLength = startCodePos - packetStartPos;
+							this.seekTo(packetStartPos);
+							return this.supplyPacket(packetLength, 0);
+						}
+					}
+
+					// Not an AUD, continue searching
+					i += startCodeLength;
+				}
+
+				if (remaining < CHUNK_SIZE) {
+					// End of stream
+					break;
+				}
+			}
+
+			// End of stream - return remaining data if we have a packet start
+			if (packetStartPos !== null) {
+				const packetLength = this.endPos - packetStartPos;
+				this.seekTo(packetStartPos);
+				return this.supplyPacket(packetLength, 0);
+			}
+		} else {
+			const codec = elementaryStream.info.codec;
+			const CHUNK_SIZE = 128;
+
+			while (true) {
+				let remaining = this.ensureBuffered(CHUNK_SIZE);
+				if (remaining instanceof Promise) remaining = await remaining;
+
+				const startPos = this.currentPos;
+
+				while (this.currentPos - startPos < remaining) {
+					const byte = this.readU8();
+
+					if (codec === 'aac') {
+						if (byte !== 0xff) {
+							continue;
+						}
+
+						this.skip(-1);
+						const possibleHeaderStartPos = this.currentPos;
+
+						let remaining = this.ensureBuffered(MAX_ADTS_FRAME_HEADER_SIZE);
+						if (remaining instanceof Promise) remaining = await remaining;
+
+						if (remaining < MAX_ADTS_FRAME_HEADER_SIZE) {
+							return;
+						}
+
+						const headerBytes = this.readBytes(MAX_ADTS_FRAME_HEADER_SIZE);
+						const header = readAdtsFrameHeader(FileSlice.tempFromBytes(headerBytes));
+
+						if (header) {
+							this.seekTo(possibleHeaderStartPos);
+
+							let remaining = this.ensureBuffered(header.frameLength);
+							if (remaining instanceof Promise) remaining = await remaining;
+
+							return this.supplyPacket(
+								remaining,
+								Math.round(SAMPLES_PER_AAC_FRAME * TIMESCALE / elementaryStream.info.sampleRate),
+							);
+						} else {
+							this.seekTo(possibleHeaderStartPos + 1);
+						}
+					} else if (codec === 'mp3') {
+						if (byte !== 0xff) {
+							continue;
+						}
+
+						this.skip(-1);
+						const possibleHeaderStartPos = this.currentPos;
+
+						let remaining = this.ensureBuffered(MP3_FRAME_HEADER_SIZE);
+						if (remaining instanceof Promise) remaining = await remaining;
+
+						if (remaining < MP3_FRAME_HEADER_SIZE) {
+							return;
+						}
+
+						const headerBytes = this.readBytes(MP3_FRAME_HEADER_SIZE);
+						const word = toDataView(headerBytes).getUint32(0);
+						const result = readMp3FrameHeader(word, null);
+
+						if (result.header) {
+							this.seekTo(possibleHeaderStartPos);
+
+							let remaining = this.ensureBuffered(result.header.totalSize);
+							if (remaining instanceof Promise) remaining = await remaining;
+
+							const duration = result.header.audioSamplesInFrame * TIMESCALE
+								/ elementaryStream.info.sampleRate;
+							return this.supplyPacket(remaining, Math.round(duration));
+						} else {
+							this.seekTo(possibleHeaderStartPos + 1);
+						}
+					} else if (codec === 'ac3') {
+						if (byte !== 0x0b) {
+							continue;
+						}
+
+						this.skip(-1);
+						const possibleSyncPos = this.currentPos;
+
+						// Need at least 5 bytes for sync word + CRC + fscod/frmsizecod
+						let remaining = this.ensureBuffered(5);
+						if (remaining instanceof Promise) remaining = await remaining;
+
+						if (remaining < 5) {
+							return;
+						}
+
+						const headerBytes = this.readBytes(5);
+
+						// Verify sync word (0x0B77)
+						if (headerBytes[0] !== 0x0b || headerBytes[1] !== 0x77) {
+							this.seekTo(possibleSyncPos + 1);
+							continue;
+						}
+
+						const fscod = headerBytes[4]! >> 6;
+						const frmsizecod = headerBytes[4]! & 0x3f;
+
+						if (fscod === 3 || frmsizecod > 37) {
+							// Invalid
+							this.seekTo(possibleSyncPos + 1);
+							continue;
+						}
+
+						const frameSize = AC3_FRAME_SIZES[3 * frmsizecod + fscod];
+						assert(frameSize !== undefined);
+
+						this.seekTo(possibleSyncPos);
+
+						remaining = this.ensureBuffered(frameSize);
+						if (remaining instanceof Promise) remaining = await remaining;
+
+						const duration = Math.round(
+							AC3_SAMPLES_PER_FRAME * TIMESCALE / elementaryStream.info.sampleRate,
+						);
+						return this.supplyPacket(remaining, duration);
+					} else if (codec === 'eac3') {
+						if (byte !== 0x0b) {
+							continue;
+						}
+
+						this.skip(-1);
+						const possibleSyncPos = this.currentPos;
+
+						// Need at least 5 bytes for E-AC-3 header parsing (sync word + frmsiz + fscod/numblkscod)
+						let remaining = this.ensureBuffered(5);
+						if (remaining instanceof Promise) remaining = await remaining;
+
+						if (remaining < 5) {
+							return;
+						}
+
+						const headerBytes = this.readBytes(5);
+
+						if (headerBytes[0] !== 0x0b || headerBytes[1] !== 0x77) {
+							this.seekTo(possibleSyncPos + 1);
+							continue;
+						}
+
+						const frmsiz = ((headerBytes[2]! & 0x07) << 8) | headerBytes[3]!;
+						const frameSize = (frmsiz + 1) * 2;
+						const fscod = headerBytes[4]! >> 6;
+						const numblkscod = fscod === 3 ? 3 : (headerBytes[4]! >> 4) & 0x03;
+						const numblks = EAC3_NUMBLKS_TABLE[numblkscod]!;
+
+						this.seekTo(possibleSyncPos);
+
+						remaining = this.ensureBuffered(frameSize);
+						if (remaining instanceof Promise) remaining = await remaining;
+
+						// Duration = numblks * 256 samples per block
+						const samplesPerFrame = numblks * 256;
+						const duration = Math.round(
+							samplesPerFrame * TIMESCALE / elementaryStream.info.sampleRate,
+						);
+						return this.supplyPacket(remaining, duration);
+					} else {
+						throw new Error('Unhandled.');
+					}
+				}
+
+				if (remaining < CHUNK_SIZE) {
+					break;
+				}
+			}
+		}
 	}
 
 	/** Supplies the context with a new encoded packet, beginning at the current position. */
 	supplyPacket(packetLength: number, intrinsicDuration: number) {
 		const currentPesPacket = this.getCurrentPesPacket();
 
-		maybeInsertReferencePacket(this.elementaryStream, currentPesPacket);
+		let pts: number;
+		if (this.lastSuppliedPesPacket === currentPesPacket) {
+			assert(this.nextPts !== null);
+			pts = this.nextPts;
+		} else {
+			if (currentPesPacket.pts === null) {
+				throw new Error(MISSING_PTS_ERROR_MESSAGE);
+			}
 
-		const pts = this.nextPts;
-		this.nextPts += intrinsicDuration;
+			pts = currentPesPacket.pts;
+
+			maybeInsertReferencePacket(this.elementaryStream, currentPesPacket as TimestampedPesPacket);
+		}
+
+		this.lastSuppliedPesPacket = currentPesPacket;
+		this.nextPts = pts + intrinsicDuration;
 
 		const sectionStartPos = currentPesPacket.sectionStartPos;
 		// The sequence number is the starting position of the section the PES packet is in, PLUS the offset within the
@@ -2091,9 +2187,22 @@ class PacketReadingContext {
 
 		let randomAccessIndicator = currentPesPacket.randomAccessIndicator;
 
-		assert(this.elementaryStream.firstSection);
-		if (currentPesPacket.sectionStartPos === this.elementaryStream.firstSection.startPos) {
-			randomAccessIndicator = 1; // Force the first PES packet to behave like a key packet always
+		if (randomAccessIndicator === 0 && !this.elementaryStream.canBeTrustedWithKeyPackets) {
+			if (this.elementaryStream.info.type === 'audio') {
+				randomAccessIndicator = 1;
+			} else {
+				if (this.elementaryStream.info.decoderConfig) {
+					const isKey = determineVideoPacketType(
+						this.elementaryStream.info.codec,
+						this.elementaryStream.info.decoderConfig,
+						data,
+					) === 'key';
+
+					randomAccessIndicator = Number(isKey);
+				} else {
+					// We're reading packets before the decoder config is determined
+				}
+			}
 		}
 
 		this.suppliedPacket = {
@@ -2183,7 +2292,7 @@ class PacketBuffer {
 			// Small optimization: there was already a supplied packet in the context, so let's first use that one
 			suppliedPacket = this.context.suppliedPacket;
 		} else {
-			await markNextPacket(this.context);
+			await this.context.markNextPacket();
 			suppliedPacket = this.context.suppliedPacket;
 		}
 		this.context.suppliedPacket = null;
@@ -2223,8 +2332,8 @@ class PacketBuffer {
 	processPacketThroughReorderBuffer(packet: SuppliedPacket) {
 		this.reorderBuffer.push(packet);
 
-		// If buffer is full, output the packet with smallest PTS
-		if (this.reorderBuffer.length >= this.reorderSize) {
+		// If buffer is now overfull, output the packet with smallest PTS
+		if (this.reorderBuffer.length > this.reorderSize) {
 			let minIndex = 0;
 			for (let i = 1; i < this.reorderBuffer.length; i++) {
 				if (this.reorderBuffer[i]!.pts < this.reorderBuffer[minIndex]!.pts) {
@@ -2232,8 +2341,9 @@ class PacketBuffer {
 				}
 			}
 
-			const packet = this.reorderBuffer.splice(minIndex, 1)[0]!;
+			const packet = this.reorderBuffer[minIndex]!;
 			this.presentationOrderPackets.push(packet);
+			this.reorderBuffer.splice(minIndex, 1);
 		}
 	}
 

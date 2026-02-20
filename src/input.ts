@@ -14,6 +14,8 @@ import { Source } from './source';
 
 polyfillSymbolDispose();
 
+const UNSUPPORTED_INPUT_FORMAT_MESSAGE = 'Input has an unsupported or unrecognizable format.';
+
 /**
  * The options for creating an Input object.
  * @group Input files & tracks
@@ -24,6 +26,7 @@ export type InputOptions<S extends Source = Source> = {
 	formats: InputFormat[];
 	/** The source from which data will be read. */
 	source: S;
+	initInput?: Input;
 };
 
 /**
@@ -36,6 +39,8 @@ export class Input<S extends Source = Source> implements Disposable {
 	_source: S;
 	/** @internal */
 	_formats: InputFormat[];
+	/** @internal */
+	_initInput: Input | null;
 	/** @internal */
 	_demuxerPromise: Promise<Demuxer> | null = null;
 	/** @internal */
@@ -67,15 +72,19 @@ export class Input<S extends Source = Source> implements Disposable {
 		if (options.source._disposed) {
 			throw new TypeError('options.source must not be disposed.');
 		}
+		if (options.initInput !== undefined && !(options.initInput instanceof Input)) {
+			throw new TypeError('options.initInput, when provided, must be an Input.');
+		}
 
 		this._formats = options.formats;
 		this._source = options.source;
+		this._initInput = options.initInput ?? null;
 	}
 
 	/** @internal */
 	_getDemuxer() {
 		return this._demuxerPromise ??= (async () => {
-			this._reader = await Reader.fromSource(this._source);
+			this._reader = new Reader(this._source);
 
 			for (const format of this._formats) {
 				const canRead = await format._canReadInput(this);
@@ -85,8 +94,7 @@ export class Input<S extends Source = Source> implements Disposable {
 				}
 			}
 
-			console.log(this._source);
-			throw new Error('Input has an unsupported or unrecognizable format.');
+			throw new Error(UNSUPPORTED_INPUT_FORMAT_MESSAGE);
 		})();
 	}
 
@@ -107,6 +115,19 @@ export class Input<S extends Source = Source> implements Disposable {
 		await this._getDemuxer();
 		assert(this._format!);
 		return this._format;
+	}
+
+	async isSupported(): Promise<boolean> {
+		try {
+			const demuxer = await this._getDemuxer();
+			return demuxer.isSupported();
+		} catch (error) {
+			if (error instanceof Error && error.message === UNSUPPORTED_INPUT_FORMAT_MESSAGE) {
+				return false;
+			}
+
+			throw error;
+		}
 	}
 
 	/**
