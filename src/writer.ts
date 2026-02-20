@@ -215,7 +215,8 @@ export class StreamTargetWriter extends Writer {
 	private lastWriteEnd = 0;
 	private lastFlushEnd = 0;
 	private writer: WritableStreamDefaultWriter<StreamTargetChunk> | null = null;
-	private writeChain: Promise<void> = Promise.resolve();
+	private writeError: Error | null = null;
+	private pendingWrites: Promise<void>[] = [];
 
 	// These variables regard chunked mode:
 	private chunked: boolean;
@@ -268,6 +269,10 @@ export class StreamTargetWriter extends Writer {
 	}
 
 	async flush() {
+		if (this.writeError) {
+			throw this.writeError;
+		}
+
 		if (this.pos > this.lastWriteEnd) {
 			// There's a "void" between the last written byte and the next byte we're about to write. Let's pad that
 			// void with zeroes explicitly.
@@ -330,11 +335,14 @@ export class StreamTargetWriter extends Writer {
 					throw new Error('Internal error: Monotonicity violation.');
 				}
 
-				await this.writer.write({
+				const writePromise = this.writer.write({
 					type: 'write',
 					data: chunk.data,
 					position: chunk.start,
+				}).catch((error: Error) => {
+					this.writeError ??= error;
 				});
+				this.pendingWrites.push(writePromise);
 
 				this.lastFlushEnd = chunk.start + chunk.data.byteLength;
 			}
@@ -436,14 +444,14 @@ export class StreamTargetWriter extends Writer {
 					throw new Error('Internal error: Monotonicity violation.');
 				}
 
-				const sectionData = chunk.data.subarray(section.start, section.end);
-				this.writeChain = this.writeChain.then(() =>
-					this.writer!.write({
-						type: 'write',
-						data: sectionData,
-						position,
-					}),
-				);
+				const writePromise = this.writer.write({
+					type: 'write',
+					data: chunk.data.subarray(section.start, section.end),
+					position,
+				}).catch((error: Error) => {
+					this.writeError ??= error;
+				});
+				this.pendingWrites.push(writePromise);
 
 				this.lastFlushEnd = chunk.start + section.end;
 			}
@@ -457,7 +465,10 @@ export class StreamTargetWriter extends Writer {
 			this.tryToFlushChunks(true);
 		}
 
-		await this.writeChain;
+		await Promise.all(this.pendingWrites);
+		if (this.writeError) {
+			throw this.writeError;
+		}
 
 		assert(this.writer);
 		return this.writer.close();

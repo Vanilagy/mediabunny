@@ -9,7 +9,7 @@ import { StreamTarget, type StreamTargetChunk } from '../../src/target.js';
 import { AdtsOutputFormat } from '../../src/output-format.js';
 import { assert } from '../../src/misc.js';
 
-const createAsyncStreamTarget = () => {
+const createBufferingStreamTarget = () => {
 	const written = new Map<number, Uint8Array>();
 
 	const stream = new WritableStream<StreamTargetChunk>({
@@ -33,8 +33,8 @@ const createAsyncStreamTarget = () => {
 	return { stream, toBuffer };
 };
 
-test('ADTS with metadata over StreamTarget', { timeout: 30_000 }, async () => {
-	const target = createAsyncStreamTarget();
+test('ADTS with metadata over StreamTarget', async () => {
+	const target = createBufferingStreamTarget();
 
 	const output = new Output({
 		format: new AdtsOutputFormat(),
@@ -82,8 +82,8 @@ test('ADTS with metadata over StreamTarget', { timeout: 30_000 }, async () => {
 	expect(outputAudioTrack.codec).toBe('aac');
 });
 
-// When the OPFS write handler rejects, the error should surface as-is rather than being
-// swallowed and replaced with "Cannot write to a closing writable stream".
+// Previously, write handler rejections were silently swallowed and surfaced as
+// "Cannot write to a closing writable stream" instead of the actual error.
 test('StreamTarget write errors surface directly', async () => {
 	let writeCount = 0;
 	const stream = new WritableStream<StreamTargetChunk>({
@@ -115,9 +115,8 @@ test('StreamTarget write errors surface directly', async () => {
 
 	const sink = new EncodedPacketSink(audioTrack);
 
-	let isFirst = true;
-	let caughtError: Error | undefined;
-	try {
+	const run = async () => {
+		let isFirst = true;
 		for await (const packet of sink.packets()) {
 			await audioSource.add(packet, {
 				decoderConfig: isFirst ? (await audioTrack.getDecoderConfig())! : undefined,
@@ -125,11 +124,7 @@ test('StreamTarget write errors surface directly', async () => {
 			isFirst = false;
 		}
 		await output.finalize();
-	} catch (e) {
-		caughtError = e as Error;
-	}
+	};
 
-	assert(caughtError);
-	expect(caughtError.message).toContain('OPFS write failed');
-	expect(caughtError.message).not.toContain('closing');
+	await expect(run()).rejects.toThrow('OPFS write failed');
 });
