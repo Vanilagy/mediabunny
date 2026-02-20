@@ -215,6 +215,7 @@ export class StreamTargetWriter extends Writer {
 	private lastWriteEnd = 0;
 	private lastFlushEnd = 0;
 	private writer: WritableStreamDefaultWriter<StreamTargetChunk> | null = null;
+	private writeChain: Promise<void> = Promise.resolve();
 
 	// These variables regard chunked mode:
 	private chunked: boolean;
@@ -329,8 +330,7 @@ export class StreamTargetWriter extends Writer {
 					throw new Error('Internal error: Monotonicity violation.');
 				}
 
-				// Write out the data immediately
-				void this.writer.write({
+				await this.writer.write({
 					type: 'write',
 					data: chunk.data,
 					position: chunk.start,
@@ -436,11 +436,14 @@ export class StreamTargetWriter extends Writer {
 					throw new Error('Internal error: Monotonicity violation.');
 				}
 
-				void this.writer.write({
-					type: 'write',
-					data: chunk.data.subarray(section.start, section.end),
-					position,
-				});
+				const sectionData = chunk.data.subarray(section.start, section.end);
+				this.writeChain = this.writeChain.then(() =>
+					this.writer!.write({
+						type: 'write',
+						data: sectionData,
+						position,
+					}),
+				);
 
 				this.lastFlushEnd = chunk.start + section.end;
 			}
@@ -449,10 +452,12 @@ export class StreamTargetWriter extends Writer {
 		}
 	}
 
-	finalize() {
+	async finalize() {
 		if (this.chunked) {
 			this.tryToFlushChunks(true);
 		}
+
+		await this.writeChain;
 
 		assert(this.writer);
 		return this.writer.close();
