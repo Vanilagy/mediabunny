@@ -23,7 +23,6 @@ import {
 } from './misc';
 import * as nodeAlias from './node';
 import { InputDisposedError } from './input';
-import { Reader } from './reader';
 
 const node = typeof nodeAlias !== 'undefined'
 	? nodeAlias // Aliasing it prevents some bundler warnings
