@@ -18,6 +18,9 @@
     "dist",
     "src"
   ],
+  "browser": {
+    "worker_threads": false
+  },
   "sideEffects": false,
   "license": "MPL-2.0",
   "repository": {
