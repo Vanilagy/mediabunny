@@ -22,6 +22,7 @@ import {
 import {
 	Av1CodecInfo,
 	AvcDecoderConfigurationRecord,
+	deserializeHevcDecoderConfigurationRecord,
 	extractAv1CodecInfoFromPacket,
 	extractVp9CodecInfoFromPacket,
 	FlacBlockType,
@@ -1102,7 +1103,12 @@ export class IsobmffDemuxer extends Demuxer {
 				}
 				assert(track.info);
 
-				track.info.codecDescription = readBytes(slice, boxInfo.contentSize);
+				const hvcCBytes = readBytes(slice, boxInfo.contentSize);
+				track.info.codecDescription = hvcCBytes;
+
+				if (track.info.type === 'video') {
+					track.info.hevcCodecInfo = deserializeHevcDecoderConfigurationRecord(hvcCBytes);
+				}
 			}; break;
 
 			case 'vpcC': {
