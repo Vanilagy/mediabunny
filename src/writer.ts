@@ -215,6 +215,7 @@ export class StreamTargetWriter extends Writer {
 	private lastWriteEnd = 0;
 	private lastFlushEnd = 0;
 	private writer: WritableStreamDefaultWriter<StreamTargetChunk> | null = null;
+	private writeError: unknown = null;
 
 	// These variables regard chunked mode:
 	private chunked: boolean;
@@ -267,6 +268,11 @@ export class StreamTargetWriter extends Writer {
 	}
 
 	async flush() {
+		if (this.writeError !== null) {
+			// eslint-disable-next-line @typescript-eslint/only-throw-error
+			throw this.writeError;
+		}
+
 		if (this.pos > this.lastWriteEnd) {
 			// There's a "void" between the last written byte and the next byte we're about to write. Let's pad that
 			// void with zeroes explicitly.
@@ -329,11 +335,12 @@ export class StreamTargetWriter extends Writer {
 					throw new Error('Internal error: Monotonicity violation.');
 				}
 
-				// Write out the data immediately
 				void this.writer.write({
 					type: 'write',
 					data: chunk.data,
 					position: chunk.start,
+				}).catch((error) => {
+					this.writeError ??= error;
 				});
 
 				this.lastFlushEnd = chunk.start + chunk.data.byteLength;
@@ -440,6 +447,8 @@ export class StreamTargetWriter extends Writer {
 					type: 'write',
 					data: chunk.data.subarray(section.start, section.end),
 					position,
+				}).catch((error) => {
+					this.writeError ??= error;
 				});
 
 				this.lastFlushEnd = chunk.start + section.end;
@@ -449,12 +458,18 @@ export class StreamTargetWriter extends Writer {
 		}
 	}
 
-	finalize() {
+	async finalize() {
 		if (this.chunked) {
 			this.tryToFlushChunks(true);
 		}
 
+		if (this.writeError !== null) {
+			// eslint-disable-next-line @typescript-eslint/only-throw-error
+			throw this.writeError;
+		}
+
 		assert(this.writer);
+		await this.writer.ready;
 		return this.writer.close();
 	}
 
