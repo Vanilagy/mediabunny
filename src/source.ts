@@ -23,6 +23,7 @@ import {
 } from './misc';
 import * as nodeAlias from './node';
 import { InputDisposedError } from './input';
+import { Reader } from './reader';
 
 const node = typeof nodeAlias !== 'undefined'
 	? nodeAlias // Aliasing it prevents some bundler warnings
@@ -565,19 +566,7 @@ export class UrlSource extends Source {
 					worker.strictTarget = false;
 				}
 
-				// IN CASE there are other workers (rare), merge their pending slices into this worker and abort them
-				for (let i = 0; i < this._orchestrator.workers.length; i++) {
-					const otherWorker = this._orchestrator.workers[i]!;
-					if (otherWorker === worker) {
-						continue;
-					}
-
-					worker.pendingSlices.push(...otherWorker.pendingSlices);
-					otherWorker.aborted = true;
-					otherWorker.pendingSlices.length = 0;
-					this._orchestrator.workers.splice(i, 1);
-					i--;
-				}
+				this._orchestrator.consolidateEverythingIntoOneWorker(worker);
 			}
 
 			if (!response.body) {
@@ -1296,12 +1285,14 @@ const PREFETCH_PROFILES = {
 type PendingSlice = {
 	start: number;
 	bytes: Uint8Array;
-	holes: {
-		start: number;
-		end: number;
-	}[];
+	holes: Hole[];
 	resolve: (bytes: Uint8Array | null) => void;
 	reject: (error: unknown) => void;
+};
+
+type Hole = {
+	start: number;
+	end: number;
 };
 
 type CacheEntry = {
@@ -1334,11 +1325,17 @@ type ReadWorker = {
  */
 class ReadOrchestrator {
 	fileSize: number | null = null;
-	nextAge = 0; // Used for LRU eviction of both cache entries and workers
+	nextAge = 0; // Used for multiple things
 	workers: ReadWorker[] = [];
 	cache: CacheEntry[] = [];
 	currentCacheSize = 0;
 	disposed = false;
+	queuedReads: {
+		hole: Hole;
+		strictTarget: boolean;
+		pendingSlices: PendingSlice[];
+		age: number;
+	}[] = [];
 
 	constructor(public options: {
 		maxCacheSize: number;
@@ -1382,10 +1379,7 @@ class ReadOrchestrator {
 
 		let lastEnd = outerStart;
 		// The "holes" in the cache (the parts we need to load)
-		const outerHoles: {
-			start: number;
-			end: number;
-		}[] = [];
+		const outerHoles: Hole[] = [];
 
 		// Loop over the cache and build up the list of holes
 		if (outerCacheStartIndex !== -1) {
@@ -1464,53 +1458,83 @@ class ReadOrchestrator {
 			}
 		}
 
+		const pendingSlice: PendingSlice | null = bytes && {
+			start: innerStart,
+			bytes,
+			holes: innerHoles,
+			resolve,
+			reject,
+		};
+
 		// Fire off workers to take care of patching the holes
+		outer:
 		for (const outerHole of outerHoles) {
-			const pendingSlice: PendingSlice | null = bytes && {
-				start: innerStart,
-				bytes,
-				holes: innerHoles,
-				resolve,
-				reject,
-			};
-
-			let workerFound = false;
 			for (const worker of this.workers) {
-				// A small tolerance in the case that the requested region is *just* after the target position of an
-				// existing worker. In that case, it's probably more efficient to repurpose that worker than to spawn
-				// another one so close to it
-				const gapTolerance = 2 ** 17;
+				const addedToWorker = this.checkHoleAgainstWorker(
+					worker,
+					outerHole,
+					pendingSlice ? [pendingSlice] : [],
+				);
 
-				// This check also implies worker.currentPos <= outerHole.start, a critical condition
-				if (closedIntervalsOverlap(
-					outerHole.start - gapTolerance, outerHole.start,
-					worker.currentPos, worker.targetPos,
-				)) {
-					worker.targetPos = Math.max(worker.targetPos, outerHole.end); // Update the worker's target position
-					workerFound = true;
-
-					if (pendingSlice && !worker.pendingSlices.includes(pendingSlice)) {
-						worker.pendingSlices.push(pendingSlice);
-					}
-
-					if (!worker.running) {
-						// Kick it off if it's idle
-						this.runWorker(worker);
-					}
-
-					break;
+				if (addedToWorker) {
+					this.checkQueuedReadsAgainstWorker(worker);
+					continue outer;
 				}
 			}
 
-			if (!workerFound) {
-				// We need to spawn a new worker
-				const strictTarget = outerHole.end < outerEnd || this.fileSize !== null;
-				const newWorker = this.createWorker(outerHole.start, outerHole.end, strictTarget);
+			// We need to spawn a new worker
+			const strictTarget = outerHole.end < outerEnd || this.fileSize !== null;
+			const newWorker = this.createWorker(outerHole.start, outerHole.end, strictTarget);
+
+			if (newWorker) {
 				if (pendingSlice) {
 					newWorker.pendingSlices = [pendingSlice];
 				}
 
 				this.runWorker(newWorker);
+			} else {
+				// Max worker count has been reached, let's queue a read for later
+
+				let index = binarySearchLessOrEqual(this.queuedReads, outerHole.start, x => x.hole.start);
+				let entry = index !== -1
+					? this.queuedReads[index]!
+					: null;
+
+				if (entry && outerHole.start <= entry.hole.end) {
+					entry.hole.end = Math.max(entry.hole.end, outerHole.end);
+					entry.strictTarget &&= strictTarget;
+
+					if (pendingSlice) {
+						entry.pendingSlices.push(pendingSlice);
+					}
+				} else {
+					index++;
+					entry = {
+						hole: {
+							// Clone the hole because it might be mutated later
+							start: outerHole.start,
+							end: outerHole.end,
+						},
+						strictTarget,
+						pendingSlices: pendingSlice ? [pendingSlice] : [],
+						age: this.nextAge++,
+					};
+					this.queuedReads.splice(index, 0, entry);
+				}
+
+				// Merge with any subsequent entries that overlap
+				while (index + 1 < this.queuedReads.length) {
+					const nextEntry = this.queuedReads[index + 1]!;
+					if (nextEntry.hole.start > entry.hole.end) {
+						break;
+					}
+
+					entry.hole.end = Math.max(entry.hole.end, nextEntry.hole.end);
+					entry.pendingSlices.push(...nextEntry.pendingSlices);
+					entry.strictTarget &&= nextEntry.strictTarget;
+					entry.age = Math.min(entry.age, nextEntry.age);
+					this.queuedReads.splice(index + 1, 1);
+				}
 			}
 		}
 
@@ -1529,7 +1553,79 @@ class ReadOrchestrator {
 		return result;
 	}
 
+	checkHoleAgainstWorker(worker: ReadWorker, hole: Hole, pendingSlices: PendingSlice[]) {
+		// A small tolerance in the case that the requested region is *just* after the target position of an
+		// existing worker. In that case, it's probably more efficient to repurpose that worker than to spawn
+		// another one so close to it
+		const gapTolerance = 2 ** 17;
+
+		// This check also implies worker.currentPos <= hole.start, a critical condition
+		if (closedIntervalsOverlap(
+			hole.start - gapTolerance, hole.start,
+			worker.currentPos, worker.targetPos,
+		)) {
+			worker.targetPos = Math.max(worker.targetPos, hole.end); // Update the worker's target position
+
+			for (let i = 0; i < pendingSlices.length; i++) {
+				const pendingSlice = pendingSlices[i]!;
+				if (!worker.pendingSlices.includes(pendingSlice)) {
+					worker.pendingSlices.push(pendingSlice);
+				}
+			}
+
+			if (!worker.running) {
+				// Kick it off if it's idle
+				this.runWorker(worker);
+			}
+
+			return true;
+		}
+
+		return false;
+	}
+
+	checkQueuedReadsAgainstWorker(worker: ReadWorker) {
+		let wasTrueOnce = false;
+
+		for (let i = 0; i < this.queuedReads.length; i++) {
+			const queuedRead = this.queuedReads[i]!;
+			const result = this.checkHoleAgainstWorker(worker, queuedRead.hole, queuedRead.pendingSlices);
+
+			if (result) {
+				this.queuedReads.splice(i, 1);
+				i--;
+				wasTrueOnce = true;
+			} else if (wasTrueOnce) {
+				// We can stop since the holes are sorted
+				break;
+			}
+		}
+	}
+
 	createWorker(startPos: number, targetPos: number, strictTarget: boolean) {
+		if (this.workers.length >= this.options.maxWorkerCount) {
+			let oldestWorker: ReadWorker | null = null;
+			let oldestIndex: number | null = null;
+
+			for (let i = 0; i < this.workers.length; i++) {
+				const worker = this.workers[i]!;
+
+				if (!worker.running && (!oldestWorker || worker.age < oldestWorker.age)) {
+					oldestIndex = i;
+					oldestWorker = worker;
+				}
+			}
+
+			if (oldestWorker) {
+				// LRU eviction
+				assert(oldestIndex !== null);
+				assert(oldestWorker.pendingSlices.length === 0);
+				this.workers.splice(oldestIndex, 1);
+			} else {
+				return null; // All workers are still running, we can't create a new one
+			}
+		}
+
 		const worker: ReadWorker = {
 			startPos,
 			currentPos: startPos,
@@ -1544,28 +1640,6 @@ class ReadOrchestrator {
 			age: this.nextAge++,
 		};
 		this.workers.push(worker);
-
-		// LRU eviction of the other workers
-		while (this.workers.length > this.options.maxWorkerCount) {
-			let oldestIndex = 0;
-			let oldestWorker = this.workers[0]!;
-
-			for (let i = 1; i < this.workers.length; i++) {
-				const worker = this.workers[i]!;
-
-				if (worker.age < oldestWorker.age) {
-					oldestIndex = i;
-					oldestWorker = worker;
-				}
-			}
-
-			if (oldestWorker.running && oldestWorker.pendingSlices.length > 0) {
-				break;
-			}
-
-			oldestWorker.aborted = true;
-			this.workers.splice(oldestIndex, 1);
-		}
 
 		return worker;
 	}
@@ -1587,7 +1661,58 @@ class ReadOrchestrator {
 				} else {
 					throw error; // So it doesn't get swallowed
 				}
+			})
+			.finally(() => {
+				assert(!worker.running);
+
+				if (this.queuedReads.length > 0) {
+					let oldestIndex = 0;
+					for (let i = 1; i < this.queuedReads.length; i++) {
+						const queuedRead = this.queuedReads[i]!;
+						if (queuedRead.age < this.queuedReads[oldestIndex]!.age) {
+							oldestIndex = i;
+						}
+					}
+
+					const queuedRead = this.queuedReads[oldestIndex]!;
+					this.queuedReads.splice(oldestIndex, 1);
+
+					const newWorker = this.createWorker(
+						queuedRead.hole.start,
+						queuedRead.hole.end,
+						queuedRead.strictTarget,
+					);
+					assert(newWorker); // We just freed up a worker, so this should never fail
+
+					newWorker.pendingSlices = queuedRead.pendingSlices;
+					this.runWorker(newWorker);
+				}
 			});
+	}
+
+	consolidateEverythingIntoOneWorker(worker: ReadWorker) {
+		// Here we merge everything into one "megaworker" that spans the entire file. We assume the passed-in worker
+		// is already configured to be a megaworker.
+
+		for (let i = 0; i < this.workers.length; i++) {
+			const otherWorker = this.workers[i]!;
+			if (otherWorker === worker) {
+				continue;
+			}
+
+			worker.pendingSlices.push(...otherWorker.pendingSlices);
+			otherWorker.aborted = true;
+			otherWorker.pendingSlices.length = 0;
+			this.workers.splice(i, 1);
+			i--;
+		}
+
+		for (let i = 0; i < this.queuedReads.length; i++) {
+			const queuedRead = this.queuedReads[i]!;
+			worker.pendingSlices.push(...queuedRead.pendingSlices);
+		}
+
+		this.queuedReads.length = 0;
 	}
 
 	/** Called by a worker when it has read some data. */
@@ -1605,7 +1730,12 @@ class ReadOrchestrator {
 			age: this.nextAge++,
 		});
 		worker.currentPos += bytes.length;
-		worker.targetPos = Math.max(worker.targetPos, worker.currentPos); // In case it overshoots
+
+		if (worker.currentPos > worker.targetPos) {
+			// In case it overshoots
+			worker.targetPos = worker.currentPos;
+			this.checkQueuedReadsAgainstWorker(worker);
+		}
 
 		// Now, let's see if we can use the read bytes to fill any pending slice
 		for (let i = 0; i < worker.pendingSlices.length; i++) {
@@ -1682,6 +1812,31 @@ class ReadOrchestrator {
 						i--;
 
 						break;
+					}
+				}
+			}
+		}
+
+		// Trim the queued reads as well
+		for (let i = 0; i < this.queuedReads.length; i++) {
+			const queuedRead = this.queuedReads[i]!;
+			if (queuedRead.hole.start >= size) {
+				// Entirely out of bounds
+				for (const slice of queuedRead.pendingSlices) slice.resolve(null);
+				this.queuedReads.splice(i, 1);
+				i--;
+			} else if (queuedRead.hole.end > size) {
+				// Partially out of bounds
+				queuedRead.hole.end = size;
+				queuedRead.strictTarget = true;
+
+				for (let j = 0; j < queuedRead.pendingSlices.length; j++) {
+					const slice = queuedRead.pendingSlices[j]!;
+					// If the slice itself is out of bounds, resolve it
+					if (slice.start >= size) {
+						slice.resolve(null);
+						queuedRead.pendingSlices.splice(j, 1);
+						j--;
 					}
 				}
 			}

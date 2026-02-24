@@ -10,5 +10,3 @@ Also: for robustness, do a different track matching algorithm for hls playback. 
 - getSegments() API? Any point in partially reading the playlist file? Idk
 
 - Add warnings when piping m3u8 or dash shit into Input
-
-reachorchestrator worker count is not really correct, or at least, urlsource parallelism is not really correct I think.
