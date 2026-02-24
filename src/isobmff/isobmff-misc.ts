@@ -27,3 +27,16 @@ export const buildIsobmffMimeType = (info: {
 
 	return string;
 };
+
+export const isReferencedTrackId = (
+	references: ReadonlyMap<number, readonly number[]>,
+	trackId: number,
+) => {
+	for (const referencedTrackIds of references.values()) {
+		if (referencedTrackIds.includes(trackId)) {
+			return true;
+		}
+	}
+
+	return false;
+};

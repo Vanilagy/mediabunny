@@ -31,7 +31,7 @@ import {
 	SubtitleCodec,
 	VideoCodec,
 } from '../codec';
-import { formatSubtitleTimestamp } from '../subtitles';
+import { formatSubtitleTimestamp, SubtitleCue } from '../subtitles';
 import { Writer } from '../writer';
 import {
 	getTrackMetadata,
@@ -46,6 +46,7 @@ import {
 } from './isobmff-muxer';
 import { parseAc3SyncFrame, parseEac3SyncFrame, parseOpusIdentificationHeader } from '../codec-data';
 import { MetadataTags, RichImageData } from '../metadata';
+import { isReferencedTrackId } from './isobmff-misc';
 
 export class IsobmffBoxWriter {
 	private helper = new Uint8Array(8);
@@ -291,12 +292,13 @@ export const ftyp = (details: {
 	isQuickTime: boolean;
 	holdsAvc: boolean;
 	fragmented: boolean;
+	appleAudiobook: boolean;
 }) => {
 	// You can find the full logic for this at
 	// https://github.com/FFmpeg/FFmpeg/blob/de2fb43e785773738c660cdafb9309b1ef1bc80d/libavformat/movenc.c#L5518
 	// Obviously, this lib only needs a small subset of that logic.
 
-	const minorVersion = 0x200;
+	const minorVersion = details.appleAudiobook ? 0 : 0x200;
 
 	if (details.isQuickTime) {
 		return box('ftyp', [
@@ -315,6 +317,16 @@ export const ftyp = (details: {
 			ascii('iso5'),
 			ascii('iso6'),
 			ascii('mp41'),
+		]);
+	}
+
+	if (details.appleAudiobook) {
+		return box('ftyp', [
+			ascii('M4B '), // Major brand
+			u32(minorVersion), // Minor version
+			// Compatible brands
+			ascii('M4A '),
+			ascii('isom'),
 		]);
 	}
 
@@ -386,9 +398,11 @@ export const mvhd = (
  */
 export const trak = (trackData: IsobmffTrackData, creationTime: number) => {
 	const trackMetadata = getTrackMetadata(trackData);
+	const chapterTrackReferences = trackData.track.output._isobmffChapterTrackReferences.get(trackData.track.id) ?? [];
 
 	return box('trak', undefined, [
 		tkhd(trackData, creationTime),
+		chapterTrackReferences.length > 0 ? tref('chap', chapterTrackReferences) : null,
 		mdia(trackData, creationTime),
 		trackMetadata.name !== undefined
 			? box('udta', undefined, [
@@ -399,6 +413,11 @@ export const trak = (trackData: IsobmffTrackData, creationTime: number) => {
 			: null,
 	]);
 };
+
+/** Track Reference Box. */
+export const tref = (referenceType: string, trackIds: number[]) => box('tref', undefined, [
+	box(referenceType, trackIds.map(trackId => u32(trackId))),
+]);
 
 /** Track Header Box: Specifies the characteristics of a single track within a movie. */
 export const tkhd = (
@@ -595,10 +614,18 @@ export const stsd = (trackData: IsobmffTrackData) => {
 			trackData,
 		);
 	} else if (trackData.type === 'subtitle') {
-		sampleDescription = subtitleSampleDescription(
-			SUBTITLE_CODEC_TO_BOX_NAME[trackData.track.source._codec],
-			trackData,
+		const chapterTrack = isReferencedTrackId(
+			trackData.track.output._isobmffChapterTrackReferences,
+			trackData.track.id,
 		);
+		if (chapterTrack && trackData.track.source._codec === 'webvtt') {
+			sampleDescription = chapterTextSampleDescription();
+		} else {
+			sampleDescription = subtitleSampleDescription(
+				SUBTITLE_CODEC_TO_BOX_NAME[trackData.track.source._codec],
+				trackData,
+			);
+		}
 	}
 
 	assert(sampleDescription!);
@@ -991,6 +1018,26 @@ export const subtitleSampleDescription = (
 	SUBTITLE_CODEC_TO_CONFIGURATION_BOX[trackData.track.source._codec](trackData),
 ]);
 
+const CHAPTER_TEXT_SAMPLE_ENTRY_DEFAULTS = /* #__PURE__ */ new Uint8Array([
+	0x00, 0x00, 0x00, 0x01,
+	0x00, 0x00, 0x00, 0x01,
+	0x00, 0x00, 0x00, 0x01,
+	0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00,
+]);
+
+export const chapterTextSampleDescription = () => box('text', [
+	Array(6).fill(0), // Reserved
+	u16(1), // Data reference index
+	Array.from(CHAPTER_TEXT_SAMPLE_ENTRY_DEFAULTS),
+]);
+
 export const vttC = (trackData: IsobmffSubtitleTrackData) => box('vttC', [
 	...textEncoder.encode(trackData.info.config.description),
 ]);
@@ -1349,22 +1396,114 @@ export const vttc = (
 /** VTT Additional Text Box */
 export const vtta = (notes: string) => box('vtta', [...textEncoder.encode(notes)]);
 
+const CHPL_TIMESCALE = 10_000_000; // 100 ns units
+const CHPL_MAX_CHAPTER_COUNT = 0xff;
+const CHPL_MAX_CHAPTER_TITLE_BYTES = 0xff;
+
+type ChapterListEntry = {
+	startTime100Ns: number;
+	titleBytes: Uint8Array;
+};
+
+const normalizeChapterTitle = (cue: SubtitleCue) => {
+	return cue.text
+		.replaceAll('\r\n', '\n')
+		.replaceAll('\r', '\n')
+		.split('\n')
+		.map(line => line.trim())
+		.filter(line => line.length > 0)
+		.join(' ');
+};
+
+const truncateUtf8 = (text: string, maxBytes: number) => {
+	let result = '';
+	let bytesUsed = 0;
+
+	for (const character of text) {
+		const encodedCharacter = textEncoder.encode(character);
+		if (bytesUsed + encodedCharacter.byteLength > maxBytes) {
+			break;
+		}
+
+		result += character;
+		bytesUsed += encodedCharacter.byteLength;
+	}
+
+	return textEncoder.encode(result);
+};
+
+const collectChapterListEntries = (muxer: IsobmffMuxer) => {
+	const chapterTrackIds = new Set<number>();
+	for (const trackData of muxer.trackDatas) {
+		const chapterTrackReferences = muxer.output._isobmffChapterTrackReferences.get(trackData.track.id) ?? [];
+		for (const chapterTrackId of chapterTrackReferences) {
+			chapterTrackIds.add(chapterTrackId);
+		}
+	}
+
+	const chapterEntries: ChapterListEntry[] = [];
+	for (const chapterTrackId of chapterTrackIds) {
+		const trackData = muxer.trackDatas.find(trackData =>
+			trackData.track.id === chapterTrackId
+			&& trackData.type === 'subtitle',
+		) as IsobmffSubtitleTrackData | undefined;
+		if (!trackData) {
+			continue;
+		}
+
+		for (const cue of trackData.allCues) {
+			const startTime100Ns = Math.round(cue.timestamp * CHPL_TIMESCALE);
+			if (!Number.isFinite(startTime100Ns) || startTime100Ns < 0) {
+				continue;
+			}
+
+			chapterEntries.push({
+				startTime100Ns,
+				titleBytes: truncateUtf8(normalizeChapterTitle(cue), CHPL_MAX_CHAPTER_TITLE_BYTES),
+			});
+		}
+	}
+
+	chapterEntries.sort((a, b) => a.startTime100Ns - b.startTime100Ns);
+	return chapterEntries.slice(0, CHPL_MAX_CHAPTER_COUNT);
+};
+
+const chpl = (entries: ChapterListEntry[]) => {
+	return fullBox('chpl', 1, 0, [
+		u32(0), // Reserved
+		u8(entries.length), // Chapter count
+		entries.map(entry => [
+			u64(entry.startTime100Ns), // Start time in 100 ns units
+			u8(entry.titleBytes.byteLength),
+			Array.from(entry.titleBytes),
+		]),
+	]);
+};
+
 /** User Data Box */
 const udta = (muxer: IsobmffMuxer) => {
 	const boxes: Box[] = [];
 
 	const metadataFormat = muxer.format._options.metadataFormat ?? 'auto';
 	const metadataTags = muxer.output._metadataTags;
+	const appleAudiobook = !muxer.isQuickTime && !!muxer.format._options.appleAudiobook;
 
 	// Depending on the format, metadata tags are written differently
 	if (metadataFormat === 'mdir' || (metadataFormat === 'auto' && !muxer.isQuickTime)) {
-		const metaBox = metaMdir(metadataTags);
+		const metaBox = metaMdir(metadataTags, { appleAudiobook });
 		if (metaBox) boxes.push(metaBox);
 	} else if (metadataFormat === 'mdta') {
-		const metaBox = metaMdta(metadataTags);
+		const metaBox = metaMdta(metadataTags, { appleAudiobook });
 		if (metaBox) boxes.push(metaBox);
 	} else if (metadataFormat === 'udta' || (metadataFormat === 'auto' && muxer.isQuickTime)) {
 		addQuickTimeMetadataTagBoxes(boxes, muxer.output._metadataTags);
+	}
+
+	if ((muxer.format._options.chapterFormat ?? 'tref') === 'tref+nero-chpl') {
+		const chapterEntries = collectChapterListEntries(muxer);
+		if (chapterEntries.length > 0) {
+			boxes.push(chpl(chapterEntries));
+		}
 	}
 
 	if (boxes.length === 0) {
@@ -1467,7 +1606,13 @@ const DATA_BOX_MIME_TYPE_MAP: Record<string, number> = {
 /**
  * Generates key-value metadata for inclusion in the "meta" box.
  */
-const generateMetadataPairs = (tags: MetadataTags, isMdta: boolean) => {
+const generateMetadataPairs = (
+	tags: MetadataTags,
+	isMdta: boolean,
+	options: {
+		appleAudiobook: boolean;
+	},
+) => {
 	const pairs: {
 		key: string;
 		value: Box;
@@ -1602,12 +1747,24 @@ const generateMetadataPairs = (tags: MetadataTags, isMdta: boolean) => {
 		}
 	}
 
+	if (options.appleAudiobook && !pairs.some(x => x.key === 'stik')) {
+		pairs.push({
+			key: 'stik',
+			value: dataUnsignedIntBoxLong(2),
+		});
+	}
+
 	return pairs;
 };
 
 /** Metadata Box (mdir format) */
-const metaMdir = (tags: MetadataTags) => {
-	const pairs = generateMetadataPairs(tags, false);
+const metaMdir = (
+	tags: MetadataTags,
+	options: {
+		appleAudiobook: boolean;
+	},
+) => {
+	const pairs = generateMetadataPairs(tags, false, options);
 
 	if (pairs.length === 0) {
 		return null;
@@ -1621,8 +1778,13 @@ const metaMdir = (tags: MetadataTags) => {
 };
 
 /** Metadata Box (mdta format with keys box) */
-const metaMdta = (tags: MetadataTags) => {
-	const pairs = generateMetadataPairs(tags, true);
+const metaMdta = (
+	tags: MetadataTags,
+	options: {
+		appleAudiobook: boolean;
+	},
+) => {
+	const pairs = generateMetadataPairs(tags, true, options);
 
 	if (pairs.length === 0) {
 		return null;
@@ -1648,6 +1810,16 @@ const dataStringBoxLong = (value: string) => {
 		u32(1), // Type indicator (UTF-8)
 		u32(0), // Locale indicator
 		...textEncoder.encode(value),
+	]);
+};
+
+const dataUnsignedIntBoxLong = (value: number) => {
+	assert(Number.isInteger(value) && value >= 0 && value <= 0xff);
+
+	return box('data', [
+		u32(21), // Type indicator (unsigned integer)
+		u32(0), // Locale indicator
+		u8(value),
 	]);
 };
 
