@@ -69,7 +69,6 @@ export abstract class IsobmffInputFormat extends InputFormat {
 		if (
 			fourCc !== 'ftyp'
 			&& fourCc !== 'styp' // Segment
-			&& fourCc !== 'moof' // Not a legal segment, but seen in practice (sigh)
 		) {
 			return null;
 		}
@@ -95,7 +94,15 @@ export class Mp4InputFormat extends IsobmffInputFormat {
 	/** @internal */
 	async _canReadInput(input: Input) {
 		const majorBrand = await this._getMajorBrand(input);
-		return !!majorBrand && majorBrand !== 'qt  ';
+		if (majorBrand !== null) {
+			return majorBrand !== 'qt  ';
+		}
+
+		let slice = input._reader.requestSlice(4, 4);
+		if (slice instanceof Promise) slice = await slice;
+		if (!slice) return false;
+
+		return readAscii(slice, 4) === 'moof'; // Not a legal segment start, but seen in practice (sigh)
 	}
 
 	get name() {
