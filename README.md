@@ -38,6 +38,10 @@ Mediabunny is a JavaScript library for reading, writing, and converting media fi
   <a href="https://screen.studio/" target="_blank" rel="sponsored">
     <img src="./docs/public/sponsors/screen-studio.webp" width="60" height="60" alt="Screen Studio">
   </a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.tella.com/" target="_blank" rel="sponsored">
+    <img src="./docs/public/sponsors/tella.svg" width="60" height="60" alt="Tella">
+  </a>
 </div>
 
 ### Silver sponsors
