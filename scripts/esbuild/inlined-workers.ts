@@ -39,11 +39,10 @@ export default async function inlineWorker(scriptText) {
 		// Node, Bun (Bun's Worker is flaky, worker_threads works much better)
 
 		let Worker;
-		const workerModule = 'node:worker_threads';
 		try {
-			Worker = (await import(workerModule)).Worker;
+			Worker = (await import('worker_threads')).Worker;
 		} catch {
-			Worker = require(workerModule).Worker;
+			Worker = require('worker_threads').Worker;
 		}
 		
 		const worker = new Worker(scriptText, { eval: true });
@@ -55,6 +54,9 @@ export default async function inlineWorker(scriptText) {
 
 			build.onResolve({ filter: /^__inline-worker$/ }, ({ path }) => {
 				return { path, namespace: 'inline-worker' };
+			});
+			build.onResolve({ filter: /^worker_threads$/ }, ({ path }) => {
+				return { path, external: true }; // Keep it in the bundle
 			});
 			build.onLoad({ filter: /.*/, namespace: 'inline-worker' }, () => {
 				return { contents: inlineWorkerFunctionCode, loader: 'js' };

@@ -111,5 +111,8 @@ export class AdtsMuxer extends Muxer {
 		throw new Error('ADTS does not support subtitles.');
 	}
 
-	async finalize() {}
+	async finalize() {
+		const release = await this.mutex.acquire(); // Required so that finalize() can't resolve before other calls
+		release();
+	}
 }
