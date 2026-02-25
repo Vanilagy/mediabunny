@@ -139,6 +139,16 @@ export type VideoSampleInit = {
 	codedHeight?: number;
 	/** The rotation of the frame in degrees, clockwise. */
 	rotation?: Rotation;
+	/**
+	 * The horizontal extent of a pixel, used to define the pixel aspect ratio alongside `vSpacing`.
+	 * The pixel aspect ratio is `hSpacing:vSpacing`. Defaults to 1.
+	 */
+	hSpacing?: number;
+	/**
+	 * The vertical extent of a pixel, used to define the pixel aspect ratio alongside `hSpacing`.
+	 * The pixel aspect ratio is `hSpacing:vSpacing`. Defaults to 1.
+	 */
+	vSpacing?: number;
 	/** The presentation timestamp of the frame in seconds. */
 	timestamp?: number;
 	/** The duration of the frame in seconds. */
@@ -187,15 +197,37 @@ export class VideoSample implements Disposable {
 	readonly duration!: number;
 	/** The color space of the frame. */
 	readonly colorSpace!: VideoSampleColorSpace;
+	/**
+	 * The horizontal extent of a pixel, used to define the pixel aspect ratio alongside `vSpacing`.
+	 * The pixel aspect ratio is `hSpacing:vSpacing`. A value of 1 (together with `vSpacing` of 1)
+	 * indicates square pixels.
+	 */
+	readonly hSpacing!: number;
+	/**
+	 * The vertical extent of a pixel, used to define the pixel aspect ratio alongside `hSpacing`.
+	 * The pixel aspect ratio is `hSpacing:vSpacing`. A value of 1 (together with `hSpacing` of 1)
+	 * indicates square pixels.
+	 */
+	readonly vSpacing!: number;
 
-	/** The width of the frame in pixels after rotation. */
+	/** The width of the frame in pixels after rotation and pixel aspect ratio scaling. */
 	get displayWidth() {
-		return this.rotation % 180 === 0 ? this.codedWidth : this.codedHeight;
+		const hSpacing = this.hSpacing;
+		const vSpacing = this.vSpacing;
+		const normalizer = Math.min(hSpacing, vSpacing);
+		const naturalWidth = Math.round(this.codedWidth * hSpacing / normalizer);
+		const naturalHeight = Math.round(this.codedHeight * vSpacing / normalizer);
+		return this.rotation % 180 === 0 ? naturalWidth : naturalHeight;
 	}
 
-	/** The height of the frame in pixels after rotation. */
+	/** The height of the frame in pixels after rotation and pixel aspect ratio scaling. */
 	get displayHeight() {
-		return this.rotation % 180 === 0 ? this.codedHeight : this.codedWidth;
+		const hSpacing = this.hSpacing;
+		const vSpacing = this.vSpacing;
+		const normalizer = Math.min(hSpacing, vSpacing);
+		const naturalWidth = Math.round(this.codedWidth * hSpacing / normalizer);
+		const naturalHeight = Math.round(this.codedHeight * vSpacing / normalizer);
+		return this.rotation % 180 === 0 ? naturalHeight : naturalWidth;
 	}
 
 	/** The presentation timestamp of the frame in microseconds. */
@@ -262,6 +294,12 @@ export class VideoSample implements Disposable {
 			if (init.rotation !== undefined && ![0, 90, 180, 270].includes(init.rotation)) {
 				throw new TypeError('init.rotation, when provided, must be 0, 90, 180, or 270.');
 			}
+			if (init.hSpacing !== undefined && (!Number.isInteger(init.hSpacing) || init.hSpacing <= 0)) {
+				throw new TypeError('init.hSpacing, when provided, must be a positive integer.');
+			}
+			if (init.vSpacing !== undefined && (!Number.isInteger(init.vSpacing) || init.vSpacing <= 0)) {
+				throw new TypeError('init.vSpacing, when provided, must be a positive integer.');
+			}
 			if (!Number.isFinite(init.timestamp)) {
 				throw new TypeError('init.timestamp must be a number.');
 			}
@@ -276,12 +314,20 @@ export class VideoSample implements Disposable {
 			this.codedWidth = init.codedWidth!;
 			this.codedHeight = init.codedHeight!;
 			this.rotation = init.rotation ?? 0;
+			this.hSpacing = init.hSpacing ?? 1;
+			this.vSpacing = init.vSpacing ?? 1;
 			this.timestamp = init.timestamp!;
 			this.duration = init.duration ?? 0;
 			this.colorSpace = new VideoSampleColorSpace(init.colorSpace);
 		} else if (typeof VideoFrame !== 'undefined' && data instanceof VideoFrame) {
 			if (init?.rotation !== undefined && ![0, 90, 180, 270].includes(init.rotation)) {
 				throw new TypeError('init.rotation, when provided, must be 0, 90, 180, or 270.');
+			}
+			if (init?.hSpacing !== undefined && (!Number.isInteger(init.hSpacing) || init.hSpacing <= 0)) {
+				throw new TypeError('init.hSpacing, when provided, must be a positive integer.');
+			}
+			if (init?.vSpacing !== undefined && (!Number.isInteger(init.vSpacing) || init.vSpacing <= 0)) {
+				throw new TypeError('init.vSpacing, when provided, must be a positive integer.');
 			}
 			if (init?.timestamp !== undefined && !Number.isFinite(init?.timestamp)) {
 				throw new TypeError('init.timestamp, when provided, must be a number.');
@@ -300,6 +346,8 @@ export class VideoSample implements Disposable {
 			// The VideoFrame's rotation is ignored here. It's still a new field, and I'm not sure of any application
 			// where the browser makes use of it. If a case gets found, I'll add it.
 			this.rotation = init?.rotation ?? 0;
+			this.hSpacing = init?.hSpacing ?? 1;
+			this.vSpacing = init?.vSpacing ?? 1;
 			this.timestamp = init?.timestamp ?? data.timestamp / 1e6;
 			this.duration = init?.duration ?? (data.duration ?? 0) / 1e6;
 			this.colorSpace = new VideoSampleColorSpace(data.colorSpace);
@@ -370,6 +418,8 @@ export class VideoSample implements Disposable {
 			this.codedWidth = width;
 			this.codedHeight = height;
 			this.rotation = init.rotation ?? 0;
+			this.hSpacing = init.hSpacing ?? 1;
+			this.vSpacing = init.vSpacing ?? 1;
 			this.timestamp = init.timestamp!;
 			this.duration = init.duration ?? 0;
 			this.colorSpace = new VideoSampleColorSpace({
@@ -398,6 +448,8 @@ export class VideoSample implements Disposable {
 				timestamp: this.timestamp,
 				duration: this.duration,
 				rotation: this.rotation,
+				hSpacing: this.hSpacing,
+				vSpacing: this.vSpacing,
 			});
 		} else if (this._data instanceof Uint8Array) {
 			assert(this._layout);
@@ -411,6 +463,8 @@ export class VideoSample implements Disposable {
 				duration: this.duration,
 				colorSpace: this.colorSpace,
 				rotation: this.rotation,
+				hSpacing: this.hSpacing,
+				vSpacing: this.vSpacing,
 			});
 		} else {
 			return new VideoSample(this._data, {
@@ -421,6 +475,8 @@ export class VideoSample implements Disposable {
 				duration: this.duration,
 				colorSpace: this.colorSpace,
 				rotation: this.rotation,
+				hSpacing: this.hSpacing,
+				vSpacing: this.vSpacing,
 			});
 		}
 	}
@@ -813,8 +869,11 @@ export class VideoSample implements Disposable {
 			newHeight = canvasHeight;
 		} else {
 			const [sampleWidth, sampleHeight] = options.crop
-				? [options.crop.width, options.crop.height]
-				: [rotatedWidth, rotatedHeight];
+				? [
+					Math.round(options.crop.width * this.displayWidth / rotatedWidth),
+					Math.round(options.crop.height * this.displayHeight / rotatedHeight),
+				]
+				: [this.displayWidth, this.displayHeight];
 
 			const scale = options.fit === 'contain'
 				? Math.min(canvasWidth / sampleWidth, canvasHeight / sampleHeight)

@@ -2337,6 +2337,14 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 		return this.internalTrack.info.height;
 	}
 
+	getHSpacing() {
+		return 1;
+	}
+
+	getVSpacing() {
+		return 1;
+	}
+
 	getRotation() {
 		return this.internalTrack.info.rotation;
 	}

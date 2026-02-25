@@ -1588,8 +1588,11 @@ export class CanvasSink {
 		}
 
 		let [width, height] = crop
-			? [crop.width, crop.height]
-			: [rotatedWidth, rotatedHeight];
+			? [
+				Math.round(crop.width * videoTrack.displayWidth / rotatedWidth),
+				Math.round(crop.height * videoTrack.displayHeight / rotatedHeight),
+			]
+			: [videoTrack.displayWidth, videoTrack.displayHeight];
 		const originalAspectRatio = width / height;
 
 		// If width and height aren't defined together, deduce the missing value using the aspect ratio

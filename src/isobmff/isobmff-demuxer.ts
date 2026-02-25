@@ -129,6 +129,8 @@ type InternalTrack = {
 		type: 'video';
 		width: number;
 		height: number;
+		hSpacing: number;
+		vSpacing: number;
 		codec: VideoCodec | null;
 		codecDescription: Uint8Array | null;
 		colorSpace: VideoColorSpaceInit | null;
@@ -846,6 +848,8 @@ export class IsobmffDemuxer extends Demuxer {
 						type: 'video',
 						width: -1,
 						height: -1,
+						hSpacing: 1,
+						vSpacing: 1,
 						codec: null,
 						codecDescription: null,
 						colorSpace: null,
@@ -1196,6 +1200,17 @@ export class IsobmffDemuxer extends Demuxer {
 					matrix: MATRIX_COEFFICIENTS_MAP_INVERSE[matrixCoefficients],
 					fullRange: fullRangeFlag,
 				} as VideoColorSpaceInit;
+			}; break;
+
+			case 'pasp': {
+				const track = this.currentTrack;
+				if (!track) {
+					break;
+				}
+				assert(track.info?.type === 'video');
+
+				track.info.hSpacing = readU32Be(slice);
+				track.info.vSpacing = readU32Be(slice);
 			}; break;
 
 			case 'wave': {
@@ -2883,6 +2898,14 @@ class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideo
 
 	getCodedHeight() {
 		return this.internalTrack.info.height;
+	}
+
+	getHSpacing() {
+		return this.internalTrack.info.hSpacing;
+	}
+
+	getVSpacing() {
+		return this.internalTrack.info.vSpacing;
 	}
 
 	getRotation() {

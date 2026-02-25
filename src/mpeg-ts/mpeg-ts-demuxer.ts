@@ -1497,6 +1497,14 @@ class MpegTsVideoTrackBacking extends MpegTsTrackBacking implements InputVideoTr
 		return this.elementaryStream.info.height;
 	}
 
+	getHSpacing() {
+		return 1;
+	}
+
+	getVSpacing() {
+		return 1;
+	}
+
 	getRotation(): Rotation {
 		return 0;
 	}

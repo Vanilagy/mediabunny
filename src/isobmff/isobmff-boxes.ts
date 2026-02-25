@@ -643,6 +643,12 @@ export const colr = (trackData: IsobmffVideoTrackData) => box('colr', [
 	u8((trackData.info.decoderConfig.colorSpace!.fullRange ? 1 : 0) << 7), // Full range flag
 ]);
 
+/** Pixel Aspect Ratio Box: Specifies the pixel aspect ratio of the video. */
+export const pasp = (hSpacing: number, vSpacing: number) => box('pasp', [
+	u32(hSpacing), // hSpacing: horizontal extent of a pixel
+	u32(vSpacing), // vSpacing: vertical extent of a pixel
+]);
+
 /** AVC Configuration Box: Provides additional information to the decoder. */
 export const avcC = (trackData: IsobmffVideoTrackData) => trackData.info.decoderConfig && box('avcC', [
 	// For AVC, description is an AVCDecoderConfigurationRecord, so nothing else to do here

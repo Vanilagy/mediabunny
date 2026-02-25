@@ -209,6 +209,8 @@ export interface InputVideoTrackBacking extends InputTrackBacking {
 	getCodedWidth(): number;
 	getCodedHeight(): number;
 	getRotation(): Rotation;
+	getHSpacing(): number;
+	getVSpacing(): number;
 	getColorSpace(): Promise<VideoColorSpaceInit>;
 	canBeTransparent(): Promise<boolean>;
 	getDecoderConfig(): Promise<VideoDecoderConfig | null>;
@@ -253,16 +255,44 @@ export class InputVideoTrack extends InputTrack {
 		return this._backing.getRotation();
 	}
 
-	/** The width in pixels of the track's frames after rotation. */
-	get displayWidth() {
-		const rotation = this._backing.getRotation();
-		return rotation % 180 === 0 ? this._backing.getCodedWidth() : this._backing.getCodedHeight();
+	/**
+	 * The horizontal extent of a pixel, used to define the pixel aspect ratio alongside `vSpacing`.
+	 * The pixel aspect ratio is `hSpacing:vSpacing`. A value of 1 (together with `vSpacing` of 1)
+	 * indicates square pixels.
+	 */
+	get hSpacing() {
+		return this._backing.getHSpacing();
 	}
 
-	/** The height in pixels of the track's frames after rotation. */
+	/**
+	 * The vertical extent of a pixel, used to define the pixel aspect ratio alongside `hSpacing`.
+	 * The pixel aspect ratio is `hSpacing:vSpacing`. A value of 1 (together with `hSpacing` of 1)
+	 * indicates square pixels.
+	 */
+	get vSpacing() {
+		return this._backing.getVSpacing();
+	}
+
+	/** The width in pixels of the track's frames after rotation and pixel aspect ratio scaling. */
+	get displayWidth() {
+		const rotation = this._backing.getRotation();
+		const hSpacing = this._backing.getHSpacing();
+		const vSpacing = this._backing.getVSpacing();
+		const normalizer = Math.min(hSpacing, vSpacing);
+		const naturalWidth = Math.round(this._backing.getCodedWidth() * hSpacing / normalizer);
+		const naturalHeight = Math.round(this._backing.getCodedHeight() * vSpacing / normalizer);
+		return rotation % 180 === 0 ? naturalWidth : naturalHeight;
+	}
+
+	/** The height in pixels of the track's frames after rotation and pixel aspect ratio scaling. */
 	get displayHeight() {
 		const rotation = this._backing.getRotation();
-		return rotation % 180 === 0 ? this._backing.getCodedHeight() : this._backing.getCodedWidth();
+		const hSpacing = this._backing.getHSpacing();
+		const vSpacing = this._backing.getVSpacing();
+		const normalizer = Math.min(hSpacing, vSpacing);
+		const naturalWidth = Math.round(this._backing.getCodedWidth() * hSpacing / normalizer);
+		const naturalHeight = Math.round(this._backing.getCodedHeight() * vSpacing / normalizer);
+		return rotation % 180 === 0 ? naturalHeight : naturalWidth;
 	}
 
 	/** Returns the color space of the track's samples. */

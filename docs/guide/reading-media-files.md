@@ -220,13 +220,19 @@ In addition to the [common track metadata](#common-track-metadata), video tracks
 videoTrack.codedWidth; // => number
 videoTrack.codedHeight; // => number
 
-// Get the displayed pixel dimensions of the track's samples, after rotation:
+// Get the displayed pixel dimensions of the track's samples,
+// after rotation and pixel aspect ratio scaling:
 videoTrack.displayWidth; // => number
 videoTrack.displayHeight; // => number
 
 // Get the clockwise rotation in degrees by which the
 // track's frames should be rotated:
 videoTrack.rotation; // => 0 | 90 | 180 | 270
+
+// Get the pixel aspect ratio (hSpacing:vSpacing).
+// For most modern videos this is 1:1 (square pixels):
+videoTrack.hSpacing; // => number
+videoTrack.vSpacing; // => number
 ```
 
 To compute a video track's average frame rate (FPS), use [`computePacketStats`](#packet-statistics):
