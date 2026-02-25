@@ -57,6 +57,9 @@ const extractMetadata = (resource: File | string) => {
 						'Coded width': `${track.codedWidth} pixels`,
 						'Coded height': `${track.codedHeight} pixels`,
 						'Rotation': `${track.rotation}° clockwise`,
+						'Pixel aspect ratio': `${track.pixelAspectRatio.num}:${track.pixelAspectRatio.den}`,
+						'Display width': `${track.displayWidth} pixels`,
+						'Display height': `${track.displayHeight} pixels`,
 						'Transparency': track.canBeTransparent(),
 					}
 				: track.isAudioTrack()

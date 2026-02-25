@@ -216,17 +216,26 @@ This will only look at the first ~50 packets and then return the result. This is
 In addition to the [common track metadata](#common-track-metadata), video tracks have additional metadata you can query:
 
 ```ts
-// Get the raw pixel dimensions of the track's coded samples, before rotation:
+// Get the raw pixel dimensions of the track's coded samples:
 videoTrack.codedWidth; // => number
 videoTrack.codedHeight; // => number
 
-// Get the displayed pixel dimensions of the track's samples, after rotation:
+// Get the pixel dimensions of the track after aspect ratio adjustments,
+// but before rotation:
+videoTrack.squarePixelWidth; // => number
+videoTrack.squarePixelHeight; // => number
+
+// Get the displayed pixel dimensions of the track's samples, after
+// aspect ratio adjustments and rotation:
 videoTrack.displayWidth; // => number
 videoTrack.displayHeight; // => number
 
 // Get the clockwise rotation in degrees by which the
 // track's frames should be rotated:
 videoTrack.rotation; // => 0 | 90 | 180 | 270
+
+// Get the aspect ratio of the track's pixels (usually 1:1):
+videoTrack.pixelAspectRatio; // => { num: number, den: number }
 ```
 
 To compute a video track's average frame rate (FPS), use [`computePacketStats`](#packet-statistics):

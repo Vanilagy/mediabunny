@@ -11,7 +11,7 @@ import { determineVideoPacketType } from './codec-data';
 import { customAudioDecoders, customVideoDecoders } from './custom-coder';
 import { Input } from './input';
 import { EncodedPacketSink, PacketRetrievalOptions } from './media-sink';
-import { assert, Rotation } from './misc';
+import { assert, Rational, Rotation, simplifyRational } from './misc';
 import { TrackType } from './output';
 import { EncodedPacket, PacketType } from './packet';
 import { TrackDisposition } from './metadata';
@@ -208,6 +208,8 @@ export interface InputVideoTrackBacking extends InputTrackBacking {
 	getCodec(): VideoCodec | null;
 	getCodedWidth(): number;
 	getCodedHeight(): number;
+	getSquarePixelWidth(): number;
+	getSquarePixelHeight(): number;
 	getRotation(): Rotation;
 	getColorSpace(): Promise<VideoColorSpaceInit>;
 	canBeTransparent(): Promise<boolean>;
@@ -223,11 +225,21 @@ export class InputVideoTrack extends InputTrack {
 	/** @internal */
 	override _backing: InputVideoTrackBacking;
 
+	/**
+	 * The pixel aspect ratio of the track's frames, as a rational number in its reduced form. Most videos use
+	 * square pixels (1:1).
+	 */
+	readonly pixelAspectRatio: Rational;
+
 	/** @internal */
 	constructor(input: Input, backing: InputVideoTrackBacking) {
 		super(input, backing);
 
 		this._backing = backing;
+		this.pixelAspectRatio = simplifyRational({
+			num: this._backing.getSquarePixelWidth() * this._backing.getCodedHeight(),
+			den: this._backing.getSquarePixelHeight() * this._backing.getCodedWidth(),
+		});
 	}
 
 	get type(): TrackType {
@@ -253,16 +265,26 @@ export class InputVideoTrack extends InputTrack {
 		return this._backing.getRotation();
 	}
 
-	/** The width in pixels of the track's frames after rotation. */
-	get displayWidth() {
-		const rotation = this._backing.getRotation();
-		return rotation % 180 === 0 ? this._backing.getCodedWidth() : this._backing.getCodedHeight();
+	/** The width of the track's frames in square pixels, adjusted for pixel aspect ratio but before rotation. */
+	get squarePixelWidth() {
+		return this._backing.getSquarePixelWidth();
 	}
 
-	/** The height in pixels of the track's frames after rotation. */
+	/** The height of the track's frames in square pixels, adjusted for pixel aspect ratio but before rotation. */
+	get squarePixelHeight() {
+		return this._backing.getSquarePixelHeight();
+	}
+
+	/** The display width of the track's frames in pixels, after aspect ratio adjustment and rotation. */
+	get displayWidth() {
+		const rotation = this._backing.getRotation();
+		return rotation % 180 === 0 ? this.squarePixelWidth : this.squarePixelHeight;
+	}
+
+	/** The display height of the track's frames in pixels, after aspect ratio adjustment and rotation. */
 	get displayHeight() {
 		const rotation = this._backing.getRotation();
-		return rotation % 180 === 0 ? this._backing.getCodedHeight() : this._backing.getCodedWidth();
+		return rotation % 180 === 0 ? this.squarePixelHeight : this.squarePixelWidth;
 	}
 
 	/** Returns the color space of the track's samples. */

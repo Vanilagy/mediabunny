@@ -204,6 +204,11 @@ type InternalTrack = {
 			type: 'video';
 			width: number;
 			height: number;
+			displayWidth: number | null;
+			displayHeight: number | null;
+			displayUnit: number | null;
+			squarePixelWidth: number;
+			squarePixelHeight: number;
 			rotation: Rotation;
 			codec: VideoCodec | null;
 			codecDescription: Uint8Array | null;
@@ -1042,6 +1047,27 @@ export class MatroskaDemuxer extends Demuxer {
 						&& this.currentTrack.info.width !== -1
 						&& this.currentTrack.info.height !== -1
 					) {
+						this.currentTrack.info.squarePixelWidth = this.currentTrack.info.width;
+						this.currentTrack.info.squarePixelHeight = this.currentTrack.info.height;
+
+						if (
+							this.currentTrack.info.displayWidth !== null
+							&& this.currentTrack.info.displayHeight !== null
+						) {
+							const num = this.currentTrack.info.displayWidth * this.currentTrack.info.height;
+							const den = this.currentTrack.info.displayHeight * this.currentTrack.info.width;
+
+							if (num > den) {
+								this.currentTrack.info.squarePixelWidth = Math.round(
+									this.currentTrack.info.width * num / den,
+								);
+							} else {
+								this.currentTrack.info.squarePixelHeight = Math.round(
+									this.currentTrack.info.height * den / num,
+								);
+							}
+						}
+
 						if (this.currentTrack.codecId === CODEC_STRING_MAP.avc) {
 							this.currentTrack.info.codec = 'avc';
 							this.currentTrack.info.codecDescription = this.currentTrack.codecPrivate;
@@ -1143,6 +1169,11 @@ export class MatroskaDemuxer extends Demuxer {
 						type: 'video',
 						width: -1,
 						height: -1,
+						displayWidth: null,
+						displayHeight: null,
+						displayUnit: null,
+						squarePixelWidth: -1,
+						squarePixelHeight: -1,
 						rotation: 0,
 						codec: null,
 						codecDescription: null,
@@ -1277,6 +1308,24 @@ export class MatroskaDemuxer extends Demuxer {
 				if (this.currentTrack?.info?.type !== 'video') break;
 
 				this.currentTrack.info.height = readUnsignedInt(slice, size);
+			}; break;
+
+			case EBMLId.DisplayWidth: {
+				if (this.currentTrack?.info?.type !== 'video') break;
+
+				this.currentTrack.info.displayWidth = readUnsignedInt(slice, size);
+			}; break;
+
+			case EBMLId.DisplayHeight: {
+				if (this.currentTrack?.info?.type !== 'video') break;
+
+				this.currentTrack.info.displayHeight = readUnsignedInt(slice, size);
+			}; break;
+
+			case EBMLId.DisplayUnit: {
+				if (this.currentTrack?.info?.type !== 'video') break;
+
+				this.currentTrack.info.displayUnit = readUnsignedInt(slice, size);
 			}; break;
 
 			case EBMLId.AlphaMode: {
@@ -2337,6 +2386,14 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 		return this.internalTrack.info.height;
 	}
 
+	getSquarePixelWidth() {
+		return this.internalTrack.info.squarePixelWidth;
+	}
+
+	getSquarePixelHeight() {
+		return this.internalTrack.info.squarePixelHeight;
+	}
+
 	getRotation() {
 		return this.internalTrack.info.rotation;
 	}
@@ -2396,6 +2453,8 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 				}),
 				codedWidth: this.internalTrack.info.width,
 				codedHeight: this.internalTrack.info.height,
+				displayAspectWidth: this.internalTrack.info.squarePixelWidth,
+				displayAspectHeight: this.internalTrack.info.squarePixelHeight,
 				description: this.internalTrack.info.codecDescription ?? undefined,
 				colorSpace: this.internalTrack.info.colorSpace ?? undefined,
 			};

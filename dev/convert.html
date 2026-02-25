@@ -26,7 +26,7 @@
 			chunked: true,
 			chunkSize: 2**20
 		});
-		const outputFormat = new Mediabunny.MpegTsOutputFormat({});
+		const outputFormat = new Mediabunny.Mp4OutputFormat({});
 
 		const button = document.createElement('button');
 		button.textContent = 'Cancel';
@@ -104,8 +104,9 @@
 			},
 			*/
 			video: () => ({
-				forceTranscode: true,
-				width: 1280,
+				//forceTranscode: true,
+				//forceTranscode: true,
+				//width: 1280,
 				//forceTranscode: true,
 				//allowRotationMetadata: false,
 				//width: 720,

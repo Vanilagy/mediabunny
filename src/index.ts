@@ -115,6 +115,8 @@ export {
 export {
 	AnyIterable,
 	MaybePromise,
+	Rational,
+	Rectangle,
 	Rotation,
 	SetRequired,
 } from './misc';

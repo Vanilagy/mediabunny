@@ -10,7 +10,7 @@ import { Box, free, ftyp, IsobmffBoxWriter, mdat, mfra, moof, moov, vtta, vttc, 
 import { Muxer } from '../muxer';
 import { Output, OutputAudioTrack, OutputSubtitleTrack, OutputTrack, OutputVideoTrack } from '../output';
 import { BufferTargetWriter, Writer } from '../writer';
-import { assert, computeRationalApproximation, last, promiseWithResolvers } from '../misc';
+import { assert, computeRationalApproximation, last, promiseWithResolvers, Rational, simplifyRational } from '../misc';
 import { IsobmffOutputFormatOptions, IsobmffOutputFormat, MovOutputFormat } from '../output-format';
 import { inlineTimestampRegex, SubtitleConfig, SubtitleCue, SubtitleMetadata } from '../subtitles';
 import {
@@ -86,6 +86,7 @@ export type IsobmffTrackData = {
 	info: {
 		width: number;
 		height: number;
+		pixelAspectRatio: Rational;
 		decoderConfig: VideoDecoderConfig;
 		/**
 		 * The "Annex B transformation" involves converting the raw packet data from Annex B to
@@ -343,6 +344,15 @@ export class IsobmffMuxer extends Muxer {
 		// as the timescale.
 		const timescale = computeRationalApproximation(1 / (track.metadata.frameRate ?? 57600), 1e6).denominator;
 
+		const displayAspectWidth = decoderConfig.displayAspectWidth;
+		const displayAspectHeight = decoderConfig.displayAspectHeight;
+		const pixelAspectRatio = displayAspectWidth === undefined || displayAspectHeight === undefined
+			? { num: 1, den: 1 }
+			: simplifyRational({
+					num: displayAspectWidth * decoderConfig.codedHeight,
+					den: displayAspectHeight * decoderConfig.codedWidth,
+				});
+
 		const newTrackData: IsobmffVideoTrackData = {
 			muxer: this,
 			track,
@@ -350,6 +360,7 @@ export class IsobmffMuxer extends Muxer {
 			info: {
 				width: decoderConfig.codedWidth,
 				height: decoderConfig.codedHeight,
+				pixelAspectRatio,
 				decoderConfig: decoderConfig,
 				requiresAnnexBTransformation,
 			},
