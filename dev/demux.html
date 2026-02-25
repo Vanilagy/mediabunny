@@ -17,18 +17,11 @@
 			source: new Mediabunny.BlobSource(file),
 		});
 
-		for (let i = 0; i < 1000; i++) {
-			const track = await input.getPrimaryAudioTrack();
-			const sink = new Mediabunny.AudioSampleSink(track);
-	
-			for await (const sample of sink.samples()) {
-				sample.close();
-			}
+		const videoTrack = await input.getPrimaryVideoTrack();
+		const sink = new Mediabunny.VideoSampleSink(videoTrack);
 
-			console.log(i);
-		}
-
-		console.log("Done")
+		const sample = await sink.getSample(await videoTrack.getFirstTimestamp());
+		console.log(sample);
 
 		/*
 		

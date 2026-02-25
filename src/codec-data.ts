@@ -18,6 +18,7 @@ import {
 	last,
 	readExpGolomb,
 	readSignedExpGolomb,
+	Rational,
 	textDecoder,
 	textEncoder,
 	toDataView,
@@ -494,12 +495,32 @@ export type AvcSpsInfo = {
 	codedHeight: number;
 	displayWidth: number;
 	displayHeight: number;
+	pixelAspectRatio: Rational;
 	colourPrimaries: number;
 	transferCharacteristics: number;
 	matrixCoefficients: number;
 	fullRangeFlag: number;
 	numReorderFrames: number;
 	maxDecFrameBuffering: number;
+};
+
+const AVC_HEVC_ASPECT_RATIO_IDC_TABLE: Partial<Record<number, Rational>> = {
+	1: { num: 1, den: 1 },
+	2: { num: 12, den: 11 },
+	3: { num: 10, den: 11 },
+	4: { num: 16, den: 11 },
+	5: { num: 40, den: 33 },
+	6: { num: 24, den: 11 },
+	7: { num: 20, den: 11 },
+	8: { num: 32, den: 11 },
+	9: { num: 80, den: 33 },
+	10: { num: 18, den: 11 },
+	11: { num: 15, den: 11 },
+	12: { num: 64, den: 33 },
+	13: { num: 160, den: 99 },
+	14: { num: 4, den: 3 },
+	15: { num: 3, den: 2 },
+	16: { num: 2, den: 1 },
 };
 
 /** Parses an AVC SPS (Sequence Parameter Set) to extract basic information. */
@@ -634,6 +655,7 @@ export const parseAvcSps = (sps: Uint8Array): AvcSpsInfo | null => {
 		let transferCharacteristics = 2;
 		let matrixCoefficients = 2;
 		let fullRangeFlag = 0;
+		let pixelAspectRatio: Rational = { num: 1, den: 1 };
 
 		let numReorderFrames: number | null = null;
 		let maxDecFrameBuffering: number | null = null;
@@ -643,9 +665,17 @@ export const parseAvcSps = (sps: Uint8Array): AvcSpsInfo | null => {
 			const aspectRatioInfoPresentFlag = bitstream.readBits(1);
 			if (aspectRatioInfoPresentFlag) {
 				const aspectRatioIdc = bitstream.readBits(8);
+
 				if (aspectRatioIdc === 255) { // Extended_SAR
-					bitstream.skipBits(16); // sar_width
-					bitstream.skipBits(16); // sar_height
+					pixelAspectRatio = {
+						num: bitstream.readBits(16),
+						den: bitstream.readBits(16),
+					};
+				} else {
+					const aspectRatio = AVC_HEVC_ASPECT_RATIO_IDC_TABLE[aspectRatioIdc];
+					if (aspectRatio) {
+						pixelAspectRatio = aspectRatio;
+					}
 				}
 			}
 
@@ -756,6 +786,7 @@ export const parseAvcSps = (sps: Uint8Array): AvcSpsInfo | null => {
 			codedHeight,
 			displayWidth,
 			displayHeight,
+			pixelAspectRatio,
 			colourPrimaries,
 			matrixCoefficients,
 			transferCharacteristics,
@@ -815,6 +846,7 @@ export type HevcDecoderConfigurationRecord = {
 export type HevcSpsInfo = {
 	displayWidth: number;
 	displayHeight: number;
+	pixelAspectRatio: Rational;
 	colourPrimaries: number;
 	transferCharacteristics: number;
 	matrixCoefficients: number;
@@ -962,9 +994,11 @@ export const parseHevcSps = (sps: Uint8Array): HevcSpsInfo | null => {
 		let matrixCoefficients = 2;
 		let fullRangeFlag = 0;
 		let minSpatialSegmentationIdc = 0;
+		let pixelAspectRatio: Rational = { num: 1, den: 1 };
 
 		if (bitstream.readBits(1)) { // vui_parameters_present_flag
 			const vui = parseHevcVui(bitstream, spsMaxSubLayersMinus1);
+			pixelAspectRatio = vui.pixelAspectRatio;
 			colourPrimaries = vui.colourPrimaries;
 			transferCharacteristics = vui.transferCharacteristics;
 			matrixCoefficients = vui.matrixCoefficients;
@@ -975,6 +1009,7 @@ export const parseHevcSps = (sps: Uint8Array): HevcSpsInfo | null => {
 		return {
 			displayWidth,
 			displayHeight,
+			pixelAspectRatio,
 			colourPrimaries,
 			transferCharacteristics,
 			matrixCoefficients,
@@ -1259,12 +1294,20 @@ const parseHevcVui = (bitstream: Bitstream, sps_max_sub_layers_minus1: number) =
 	let matrixCoefficients = 2;
 	let fullRangeFlag = 0;
 	let minSpatialSegmentationIdc = 0;
+	let pixelAspectRatio: Rational = { num: 1, den: 1 };
 
 	if (bitstream.readBits(1)) { // aspect_ratio_info_present_flag
 		const aspect_ratio_idc = bitstream.readBits(8);
 		if (aspect_ratio_idc === 255) {
-			bitstream.readBits(16); // sar_width
-			bitstream.readBits(16); // sar_height
+			pixelAspectRatio = {
+				num: bitstream.readBits(16),
+				den: bitstream.readBits(16),
+			};
+		} else {
+			const aspectRatio = AVC_HEVC_ASPECT_RATIO_IDC_TABLE[aspect_ratio_idc];
+			if (aspectRatio) {
+				pixelAspectRatio = aspectRatio;
+			}
 		}
 	}
 	if (bitstream.readBits(1)) { // overscan_info_present_flag
@@ -1314,6 +1357,7 @@ const parseHevcVui = (bitstream: Bitstream, sps_max_sub_layers_minus1: number) =
 	}
 
 	return {
+		pixelAspectRatio,
 		colourPrimaries,
 		transferCharacteristics,
 		matrixCoefficients,

@@ -19,7 +19,9 @@ import {
 	keyValueIterator,
 	normalizeRotation,
 	promiseWithResolvers,
+	Rational,
 	roundToMultiple,
+	simplifyRational,
 	textEncoder,
 	toUint8Array,
 	uint8ArraysAreEqual,
@@ -93,6 +95,7 @@ type MatroskaTrackData = {
 	info: {
 		width: number;
 		height: number;
+		aspectRatio: Rational | null;
 		decoderConfig: VideoDecoderConfig;
 		alphaMode: boolean;
 	};
@@ -368,10 +371,19 @@ export class MatroskaMuxer extends Muxer {
 		// Convert from clockwise to counter-clockwise
 		const flippedRotation = rotation ? normalizeRotation(-rotation) : 0;
 
+		const hasNonSquarePixelAspectRatio
+			= !!trackData.info.aspectRatio && (
+				trackData.info.aspectRatio.num * trackData.info.height
+				!== trackData.info.aspectRatio.den * trackData.info.width
+			);
+
 		const colorSpace = trackData.info.decoderConfig.colorSpace;
 		const videoElement: EBMLElement = { id: EBMLId.Video, data: [
 			{ id: EBMLId.PixelWidth, data: trackData.info.width },
 			{ id: EBMLId.PixelHeight, data: trackData.info.height },
+			(hasNonSquarePixelAspectRatio ? { id: EBMLId.DisplayWidth, data: trackData.info.aspectRatio!.num } : null),
+			(hasNonSquarePixelAspectRatio ? { id: EBMLId.DisplayHeight, data: trackData.info.aspectRatio!.den } : null),
+			(hasNonSquarePixelAspectRatio ? { id: EBMLId.DisplayUnit, data: 3 } : null), // 3 = display aspect ratio
 			trackData.info.alphaMode ? { id: EBMLId.AlphaMode, data: 1 } : null,
 			(colorSpaceIsComplete(colorSpace)
 				? {
@@ -738,12 +750,23 @@ export class MatroskaMuxer extends Muxer {
 		assert(meta.decoderConfig.codedWidth !== undefined);
 		assert(meta.decoderConfig.codedHeight !== undefined);
 
+		const displayAspectWidth = meta.decoderConfig.displayAspectWidth;
+		const displayAspectHeight = meta.decoderConfig.displayAspectHeight;
+
+		const aspectRatio = displayAspectWidth === undefined || displayAspectHeight === undefined
+			? null
+			: simplifyRational({
+					num: displayAspectWidth,
+					den: displayAspectHeight,
+				});
+
 		const newTrackData: MatroskaVideoTrackData = {
 			track,
 			type: 'video',
 			info: {
 				width: meta.decoderConfig.codedWidth,
 				height: meta.decoderConfig.codedHeight,
+				aspectRatio,
 				decoderConfig: meta.decoderConfig,
 				alphaMode: !!packet.sideData.alpha, // The first packet determines if this track has alpha or not
 			},

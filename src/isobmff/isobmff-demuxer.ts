@@ -129,6 +129,8 @@ type InternalTrack = {
 		type: 'video';
 		width: number;
 		height: number;
+		squarePixelWidth: number;
+		squarePixelHeight: number;
 		codec: VideoCodec | null;
 		codecDescription: Uint8Array | null;
 		colorSpace: VideoColorSpaceInit | null;
@@ -846,6 +848,8 @@ export class IsobmffDemuxer extends Demuxer {
 						type: 'video',
 						width: -1,
 						height: -1,
+						squarePixelWidth: -1,
+						squarePixelHeight: -1,
 						codec: null,
 						codecDescription: null,
 						colorSpace: null,
@@ -923,6 +927,8 @@ export class IsobmffDemuxer extends Demuxer {
 
 						track.info.width = readU16Be(slice);
 						track.info.height = readU16Be(slice);
+						track.info.squarePixelWidth = track.info.width;
+						track.info.squarePixelHeight = track.info.height;
 
 						slice.skip(4 + 4 + 4 + 2 + 32 + 2 + 2);
 
@@ -1196,6 +1202,23 @@ export class IsobmffDemuxer extends Demuxer {
 					matrix: MATRIX_COEFFICIENTS_MAP_INVERSE[matrixCoefficients],
 					fullRange: fullRangeFlag,
 				} as VideoColorSpaceInit;
+			}; break;
+
+			case 'pasp': {
+				const track = this.currentTrack;
+				if (!track) {
+					break;
+				}
+				assert(track.info?.type === 'video');
+
+				const num = readU32Be(slice);
+				const den = readU32Be(slice);
+
+				if (num > den) {
+					track.info.squarePixelWidth = Math.round(track.info.width * num / den);
+				} else {
+					track.info.squarePixelHeight = Math.round(track.info.height * den / num);
+				}
 			}; break;
 
 			case 'wave': {
@@ -2885,6 +2908,14 @@ class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideo
 		return this.internalTrack.info.height;
 	}
 
+	getSquarePixelWidth() {
+		return this.internalTrack.info.squarePixelWidth;
+	}
+
+	getSquarePixelHeight() {
+		return this.internalTrack.info.squarePixelHeight;
+	}
+
 	getRotation() {
 		return this.internalTrack.rotation;
 	}
@@ -2920,6 +2951,8 @@ class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideo
 				codec: extractVideoCodecString(this.internalTrack.info),
 				codedWidth: this.internalTrack.info.width,
 				codedHeight: this.internalTrack.info.height,
+				displayAspectWidth: this.internalTrack.info.squarePixelWidth,
+				displayAspectHeight: this.internalTrack.info.squarePixelHeight,
 				description: this.internalTrack.info.codecDescription ?? undefined,
 				colorSpace: this.internalTrack.info.colorSpace ?? undefined,
 			};

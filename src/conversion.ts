@@ -882,12 +882,13 @@ export class Conversion {
 		let videoSource: VideoSource;
 
 		const totalRotation = normalizeRotation(track.rotation + (trackOptions.rotate ?? 0));
+		let outputTrackRotation = totalRotation;
 		const canUseRotationMetadata = this.output.format.supportsVideoRotationMetadata
 			&& (trackOptions.allowRotationMetadata ?? true);
 
 		const [rotatedWidth, rotatedHeight] = totalRotation % 180 === 0
-			? [track.codedWidth, track.codedHeight]
-			: [track.codedHeight, track.codedWidth];
+			? [track.squarePixelWidth, track.squarePixelHeight]
+			: [track.squarePixelHeight, track.squarePixelWidth];
 
 		const crop = trackOptions.crop;
 		if (crop) {
@@ -917,29 +918,27 @@ export class Conversion {
 		}
 
 		const firstTimestamp = await track.getFirstTimestamp();
+		let videoCodecs = this.output.format.getSupportedVideoCodecs();
+
 		const needsTranscode = !!trackOptions.forceTranscode
 			|| firstTimestamp < this._startTimestamp
 			|| !!trackOptions.frameRate
 			|| trackOptions.keyFrameInterval !== undefined
-			|| trackOptions.process !== undefined;
-		let needsRerender = width !== originalWidth
+			|| trackOptions.process !== undefined
+			|| trackOptions.bitrate !== undefined
+			|| !videoCodecs.includes(sourceCodec)
+			|| (trackOptions.codec && trackOptions.codec !== sourceCodec)
+			|| width !== originalWidth
 			|| height !== originalHeight
 			// TODO This is suboptimal: Forcing a rerender when both rotation and process are set is not
 			// performance-optimal, but right now there's no other way because we can't change the track rotation
 			// metadata after the output has already started. Should be possible with API changes in v2, though!
-			|| (totalRotation !== 0 && (!canUseRotationMetadata || trackOptions.process !== undefined))
+			|| (totalRotation !== 0 && !canUseRotationMetadata)
 			|| !!crop;
 
 		const alpha = trackOptions.alpha ?? 'discard';
 
-		let videoCodecs = this.output.format.getSupportedVideoCodecs();
-		if (
-			!needsTranscode
-			&& !trackOptions.bitrate
-			&& !needsRerender
-			&& videoCodecs.includes(sourceCodec)
-			&& (!trackOptions.codec || trackOptions.codec === sourceCodec)
-		) {
+		if (!needsTranscode) {
 			// Fast path, we can simply copy over the encoded packets
 
 			const source = new EncodedVideoPacketSource(sourceCodec);
@@ -1026,6 +1025,14 @@ export class Conversion {
 			const source = new VideoSampleSource(encodingConfig);
 			videoSource = source;
 
+			let needsRerender = width !== originalWidth
+				|| height !== originalHeight
+				|| (totalRotation !== 0 && (!canUseRotationMetadata || trackOptions.process !== undefined))
+				|| !!crop
+				// Don't expect encoders to reliably handle non-square pixels:
+				|| track.squarePixelWidth !== track.codedWidth
+				|| track.squarePixelHeight !== track.codedHeight;
+
 			if (!needsRerender) {
 				// If we're directly passing decoded samples back to the encoder, sometimes the encoder may error due
 				// to lack of support of certain video frame formats, like when HDR is at play. To check for this, we
@@ -1078,6 +1085,8 @@ export class Conversion {
 					});
 					const iterator = sink.canvases(this._startTimestamp, this._endTimestamp);
 					const frameRate = trackOptions.frameRate;
+
+					outputTrackRotation = 0; // Since the rotation is baked into the output
 
 					let lastCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
 					let lastCanvasTimestamp: number | null = null;
@@ -1242,7 +1251,7 @@ export class Conversion {
 			languageCode: isIso639Dash2LanguageCode(track.languageCode) ? track.languageCode : undefined,
 			name: track.name ?? undefined,
 			disposition: track.disposition,
-			rotation: needsRerender ? 0 : totalRotation, // Rerendering will bake the rotation into the output
+			rotation: outputTrackRotation,
 		});
 		this._addedCounts.video++;
 		this._totalTrackCount++;

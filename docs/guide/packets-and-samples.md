@@ -281,6 +281,10 @@ videoSample.format; // => VideoPixelFormat | null
 videoSample.codedWidth; // => number
 videoSample.codedHeight; // => number
 
+// Pixel aspect ratio-corrected dimensions of the sample
+videoSample.squarePixelWidth;
+videoSample.squarePixelHeight;
+
 // Transformed display dimensions of the sample (after rotation)
 videoSample.displayWidth; // => number	
 videoSample.displayHeight; // => number	
@@ -288,6 +292,9 @@ videoSample.displayHeight; // => number
 // Rotation of the sample in degrees clockwise. The raw sample should be
 // rotated by this amount when it is presented.
 videoSample.rotation; // => 0 | 90 | 180 | 270
+
+// The sample's pixel aspect ratio
+videoSample.pixelAspectRatio; // => { num: number, den: number }
 
 // Timing information
 videoSample.timestamp; // => Presentation timestamp in seconds
@@ -297,6 +304,8 @@ videoSample.microsecondDuration; // => Duration in microseconds
 
 // Color space of the sample
 videoSample.colorSpace; // => VideoColorSpace
+
+videoSample.visibleRect; // Rectangle
 ```
 
 While all of these properties are read-only, you can use the `setTimestamp`, `setDuration` and `setRotation` methods to modify some of the metadata of the video sample.

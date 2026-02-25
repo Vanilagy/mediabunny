@@ -89,6 +89,8 @@ type ElementaryStream = {
 		colorSpace: VideoColorSpaceInit;
 		width: number;
 		height: number;
+		squarePixelWidth: number;
+		squarePixelHeight: number;
 		reorderSize: number;
 	} | {
 		type: 'audio';
@@ -327,6 +329,8 @@ export class MpegTsDemuxer extends Demuxer {
 									},
 									width: -1,
 									height: -1,
+									squarePixelWidth: -1,
+									squarePixelHeight: -1,
 									reorderSize: -1,
 								};
 							}; break;
@@ -422,6 +426,21 @@ export class MpegTsDemuxer extends Demuxer {
 
 								elementaryStream.info.width = spsInfo.displayWidth;
 								elementaryStream.info.height = spsInfo.displayHeight;
+
+								if (spsInfo.pixelAspectRatio.num > spsInfo.pixelAspectRatio.den) {
+									elementaryStream.info.squarePixelWidth = Math.round(
+										elementaryStream.info.width
+										* spsInfo.pixelAspectRatio.num / spsInfo.pixelAspectRatio.den,
+									);
+									elementaryStream.info.squarePixelHeight = elementaryStream.info.height;
+								} else {
+									elementaryStream.info.squarePixelWidth = elementaryStream.info.width;
+									elementaryStream.info.squarePixelHeight = Math.round(
+										elementaryStream.info.height
+										* spsInfo.pixelAspectRatio.den / spsInfo.pixelAspectRatio.num,
+									);
+								}
+
 								elementaryStream.info.colorSpace = {
 									primaries: COLOR_PRIMARIES_MAP_INVERSE[spsInfo.colourPrimaries] as
 										VideoColorPrimaries | undefined,
@@ -454,6 +473,21 @@ export class MpegTsDemuxer extends Demuxer {
 
 								elementaryStream.info.width = spsInfo.displayWidth;
 								elementaryStream.info.height = spsInfo.displayHeight;
+
+								if (spsInfo.pixelAspectRatio.num > spsInfo.pixelAspectRatio.den) {
+									elementaryStream.info.squarePixelWidth = Math.round(
+										elementaryStream.info.width
+										* spsInfo.pixelAspectRatio.num / spsInfo.pixelAspectRatio.den,
+									);
+									elementaryStream.info.squarePixelHeight = elementaryStream.info.height;
+								} else {
+									elementaryStream.info.squarePixelWidth = elementaryStream.info.width;
+									elementaryStream.info.squarePixelHeight = Math.round(
+										elementaryStream.info.height
+										* spsInfo.pixelAspectRatio.den / spsInfo.pixelAspectRatio.num,
+									);
+								}
+
 								elementaryStream.info.colorSpace = {
 									primaries: COLOR_PRIMARIES_MAP_INVERSE[spsInfo.colourPrimaries] as
 										VideoColorPrimaries | undefined,
@@ -1481,6 +1515,8 @@ class MpegTsVideoTrackBacking extends MpegTsTrackBacking implements InputVideoTr
 			}),
 			codedWidth: this.elementaryStream.info.width,
 			codedHeight: this.elementaryStream.info.height,
+			displayAspectWidth: this.elementaryStream.info.squarePixelWidth,
+			displayAspectHeight: this.elementaryStream.info.squarePixelHeight,
 			colorSpace: this.elementaryStream.info.colorSpace,
 		};
 	}
@@ -1495,6 +1531,14 @@ class MpegTsVideoTrackBacking extends MpegTsTrackBacking implements InputVideoTr
 
 	getCodedHeight() {
 		return this.elementaryStream.info.height;
+	}
+
+	getSquarePixelWidth() {
+		return this.elementaryStream.info.squarePixelWidth;
+	}
+
+	getSquarePixelHeight() {
+		return this.elementaryStream.info.squarePixelHeight;
 	}
 
 	getRotation(): Rotation {
