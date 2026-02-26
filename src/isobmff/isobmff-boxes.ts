@@ -631,8 +631,21 @@ export const videoSampleDescription = (
 	i16(0xffff), // Pre-defined
 ], [
 	VIDEO_CODEC_TO_CONFIGURATION_BOX[trackData.track.source._codec](trackData),
+	pasp(trackData),
 	colorSpaceIsComplete(trackData.info.decoderConfig.colorSpace) ? colr(trackData) : null,
 ]);
+
+/** Pixel Aspect Ratio Box: Specifies pixel width:height spacing for non-square pixels. */
+export const pasp = (trackData: IsobmffVideoTrackData) => {
+	if (trackData.info.pixelAspectRatio.num === trackData.info.pixelAspectRatio.den) {
+		return null;
+	}
+
+	return box('pasp', [
+		u32(trackData.info.pixelAspectRatio.num),
+		u32(trackData.info.pixelAspectRatio.den),
+	]);
+};
 
 /** Colour Information Box: Specifies the color space of the video. */
 export const colr = (trackData: IsobmffVideoTrackData) => box('colr', [

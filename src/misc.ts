@@ -931,3 +931,69 @@ export const arrayArgmin = <T>(array: T[], getValue: (item: T) => number): numbe
 
 	return minIndex;
 };
+
+/**
+ * A rational number; a ratio of two integers.
+ * @group Miscellaneous
+ * @public
+ */
+export type Rational = {
+	/** The numerator of the rational number. */
+	num: number;
+	/** The denominator of the rational number. */
+	den: number;
+};
+
+export const simplifyRational = (rational: Rational): Rational => {
+	assert(rational.den !== 0);
+
+	let a = Math.abs(rational.num);
+	let b = Math.abs(rational.den);
+
+	// Euclidean algorithm
+	while (b !== 0) {
+		const t = a % b;
+		a = b;
+		b = t;
+	}
+
+	const gcd = a || 1;
+	return {
+		num: rational.num / gcd,
+		den: rational.den / gcd,
+	};
+};
+
+/**
+ * Specifies a rectangular region where all quantities must be non-negative integers.
+ * @group Miscellaneous
+ * @public
+ */
+export type Rectangle = {
+	/** The distance in pixels to the left edge of the rectangle . */
+	left: number;
+	/** The distance in pixels to the top edge of the rectangle. */
+	top: number;
+	/** The width in pixels of the rectangle. */
+	width: number;
+	/** The height in pixels of the rectangle. */
+	height: number;
+};
+
+export const validateRectangle = (rect: Rectangle, propertyPath: string) => {
+	if (typeof rect !== 'object' || !rect) {
+		throw new TypeError(`${propertyPath} must be an object.`);
+	}
+	if (!Number.isInteger(rect.left) || rect.left < 0) {
+		throw new TypeError(`${propertyPath}.left must be a non-negative integer.`);
+	}
+	if (!Number.isInteger(rect.top) || rect.top < 0) {
+		throw new TypeError(`${propertyPath}.top must be a non-negative integer.`);
+	}
+	if (!Number.isInteger(rect.width) || rect.width < 0) {
+		throw new TypeError(`${propertyPath}.width must be a non-negative integer.`);
+	}
+	if (!Number.isInteger(rect.height) || rect.height < 0) {
+		throw new TypeError(`${propertyPath}.height must be a non-negative integer.`);
+	}
+};

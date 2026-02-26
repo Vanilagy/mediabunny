@@ -1507,7 +1507,8 @@ export type CanvasSinkOptions = {
 	rotation?: Rotation;
 	/**
 	 * Specifies the rectangular region of the input video to crop to. The crop region will automatically be clamped to
-	 * the dimensions of the input video track. Cropping is performed after rotation but before resizing.
+	 * the dimensions of the input video track. Cropping is performed after rotation but before resizing. The crop
+	 * region is in the _display pixel space_ of the underlying video data.
 	 */
 	crop?: CropRectangle;
 	/**
@@ -1596,8 +1597,8 @@ export class CanvasSink {
 		const rotation = options.rotation ?? videoTrack.rotation;
 
 		const [rotatedWidth, rotatedHeight] = rotation % 180 === 0
-			? [videoTrack.codedWidth, videoTrack.codedHeight]
-			: [videoTrack.codedHeight, videoTrack.codedWidth];
+			? [videoTrack.squarePixelWidth, videoTrack.squarePixelHeight]
+			: [videoTrack.squarePixelHeight, videoTrack.squarePixelWidth];
 
 		const crop = options.crop;
 		if (crop) {

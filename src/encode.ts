@@ -192,6 +192,8 @@ export const buildVideoEncoderConfig = (options: {
 	height: number;
 	bitrate: number | Quality;
 	framerate: number | undefined;
+	squarePixelWidth?: number;
+	squarePixelHeight?: number;
 } & VideoEncodingAdditionalOptions): VideoEncoderConfig => {
 	const resolvedBitrate = options.bitrate instanceof Quality
 		? options.bitrate._toVideoBitrate(options.codec, options.width, options.height)
@@ -206,6 +208,8 @@ export const buildVideoEncoderConfig = (options: {
 		),
 		width: options.width,
 		height: options.height,
+		displayWidth: options.squarePixelWidth,
+		displayHeight: options.squarePixelHeight,
 		bitrate: resolvedBitrate,
 		bitrateMode: options.bitrateMode,
 		alpha: options.alpha ?? 'discard',

@@ -46,6 +46,8 @@ test('MPEG-TS metadata reading', async () => {
 		codec: 'avc1.640020',
 		codedWidth: 720,
 		codedHeight: 720,
+		displayAspectWidth: 720,
+		displayAspectHeight: 720,
 		colorSpace: {
 			primaries: 'bt2020',
 			transfer: 'hlg',
@@ -559,6 +561,8 @@ test('MPEG-TS with HEVC video', async () => {
 		codec: 'hev1.1.6.L120.90',
 		codedWidth: 1920,
 		codedHeight: 1080,
+		displayAspectWidth: 1920,
+		displayAspectHeight: 1080,
 		colorSpace: {
 			primaries: 'bt709',
 			transfer: 'bt709',

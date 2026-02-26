@@ -416,6 +416,8 @@ class VideoEncoderWrapper {
 			const encoderConfig = buildVideoEncoderConfig({
 				width: videoSample.codedWidth,
 				height: videoSample.codedHeight,
+				squarePixelWidth: videoSample.squarePixelWidth,
+				squarePixelHeight: videoSample.squarePixelHeight,
 				...this.encodingConfig,
 				framerate: this.source._connectedTrack?.metadata.frameRate,
 			});
