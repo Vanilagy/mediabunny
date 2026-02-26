@@ -726,6 +726,12 @@ export const soundSampleDescription = (
 ) => {
 	let version = 0;
 	let contents: NestedNumberArray;
+	let children: (Box | null)[] = [
+		audioCodecToConfigurationBox(
+			trackData.track.source._codec,
+			trackData.muxer.isQuickTime,
+		)?.(trackData) ?? null,
+	];
 
 	let sampleSizeInBits = 16;
 	if ((PCM_AUDIO_CODECS as readonly AudioCodec[]).includes(trackData.track.source._codec)) {
@@ -738,7 +744,29 @@ export const soundSampleDescription = (
 		}
 	}
 
-	if (version === 0) {
+	if (trackData.muxer.isQuickTime && trackData.track.source._codec === 'aac') {
+		version = 1;
+
+		contents = [
+			Array(6).fill(0), // Reserved
+			u16(1), // Data reference index
+			u16(version), // Version
+			u16(0), // Revision level
+			u32(0), // Vendor
+			u16(trackData.info.numberOfChannels), // Number of channels
+			u16(16), // Sample size (bits)
+			u16(0xfffe), // Compression ID (-2, redefined sample tables)
+			u16(0), // Packet size
+			u16(trackData.info.sampleRate < 2 ** 16 ? trackData.info.sampleRate : 0), // Sample rate (upper)
+			u16(0), // Sample rate (lower)
+			u32(1024), // Samples per packet
+			u32(0), // Bytes per packet (variable)
+			u32(0), // Bytes per frame (variable)
+			u32(2), // Bytes per sample
+		];
+
+		children = [waveAac(trackData), chan(trackData)];
+	} else if (version === 0) {
 		contents = [
 			Array(6).fill(0), // Reserved
 			u16(1), // Data reference index
@@ -772,9 +800,7 @@ export const soundSampleDescription = (
 		];
 	}
 
-	return box(compressionType, contents, [
-		audioCodecToConfigurationBox(trackData.track.source._codec, trackData.muxer.isQuickTime)?.(trackData) ?? null,
-	]);
+	return box(compressionType, contents, children);
 };
 
 /** MPEG-4 Elementary Stream Descriptor Box. */
@@ -838,6 +864,34 @@ export const wave = (trackData: IsobmffAudioTrackData) => {
 		frma(trackData),
 		enda(trackData),
 		box('\x00\x00\x00\x00'), // NULL tag at the end
+	]);
+};
+
+export const waveAac = (trackData: IsobmffAudioTrackData) => {
+	return box('wave', undefined, [
+		frma(trackData),
+		box('mp4a', [u32(0)]),
+		esds(trackData),
+		box('\x00\x00\x00\x00'), // NULL tag at the end
+	]);
+};
+
+const channelLayoutTag = (numberOfChannels: number): number => {
+	switch (numberOfChannels) {
+		case 1:
+			return 0x00640001; // mono
+		case 2:
+			return 0x00650002; // stereo
+		default:
+			return 0;
+	}
+};
+
+const chan = (trackData: IsobmffAudioTrackData) => {
+	return fullBox('chan', 0, 0, [
+		u32(channelLayoutTag(trackData.info.numberOfChannels)),
+		u32(0), // channel bitmap
+		u32(0), // number of channel descriptions
 	]);
 };
 
