@@ -726,9 +726,10 @@ export const soundSampleDescription = (
 ) => {
 	let version = 0;
 	let contents: NestedNumberArray;
-
 	let sampleSizeInBits = 16;
-	if ((PCM_AUDIO_CODECS as readonly AudioCodec[]).includes(trackData.track.source._codec)) {
+
+	const isPcmCodec = (PCM_AUDIO_CODECS as readonly AudioCodec[]).includes(trackData.track.source._codec);
+	if (isPcmCodec) {
 		const codec = trackData.track.source._codec as PcmAudioCodec;
 		const { sampleSize } = parsePcmCodec(codec);
 		sampleSizeInBits = 8 * sampleSize;
@@ -736,6 +737,10 @@ export const soundSampleDescription = (
 		if (sampleSizeInBits > 16) {
 			version = 1;
 		}
+	}
+
+	if (trackData.muxer.isQuickTime) {
+		version = 1;
 	}
 
 	if (version === 0) {
@@ -753,6 +758,8 @@ export const soundSampleDescription = (
 			u16(0), // Sample rate (lower)
 		];
 	} else {
+		const compressionId = isPcmCodec ? 0 : -2;
+
 		contents = [
 			Array(6).fill(0), // Reserved
 			u16(1), // Data reference index
@@ -761,13 +768,21 @@ export const soundSampleDescription = (
 			u32(0), // Vendor
 			u16(trackData.info.numberOfChannels), // Number of channels
 			u16(Math.min(sampleSizeInBits, 16)), // Sample size (bits)
-			u16(0), // Compression ID
+			i16(compressionId), // Compression ID
 			u16(0), // Packet size
 			u16(trackData.info.sampleRate < 2 ** 16 ? trackData.info.sampleRate : 0), // Sample rate (upper)
 			u16(0), // Sample rate (lower)
-			u32(1), // Samples per packet (must be 1 for uncompressed formats)
-			u32(sampleSizeInBits / 8), // Bytes per packet
-			u32(trackData.info.numberOfChannels * sampleSizeInBits / 8), // Bytes per frame
+			isPcmCodec
+				? [
+						u32(1), // Samples per packet (must be 1 for uncompressed formats)
+						u32(sampleSizeInBits / 8), // Bytes per packet
+						u32(trackData.info.numberOfChannels * sampleSizeInBits / 8), // Bytes per frame
+					]
+				: [
+						u32(0), // Samples per packet (don't bother, still works with 0)
+						u32(0), // Bytes per packet (variable)
+						u32(0), // Bytes per frame (variable)
+					],
 			u32(2), // Bytes per sample (constant in FFmpeg)
 		];
 	}
