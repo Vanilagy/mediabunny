@@ -726,15 +726,10 @@ export const soundSampleDescription = (
 ) => {
 	let version = 0;
 	let contents: NestedNumberArray;
-	let children: (Box | null)[] = [
-		audioCodecToConfigurationBox(
-			trackData.track.source._codec,
-			trackData.muxer.isQuickTime,
-		)?.(trackData) ?? null,
-	];
-
 	let sampleSizeInBits = 16;
-	if ((PCM_AUDIO_CODECS as readonly AudioCodec[]).includes(trackData.track.source._codec)) {
+
+	const isPcmCodec = (PCM_AUDIO_CODECS as readonly AudioCodec[]).includes(trackData.track.source._codec);
+	if (isPcmCodec) {
 		const codec = trackData.track.source._codec as PcmAudioCodec;
 		const { sampleSize } = parsePcmCodec(codec);
 		sampleSizeInBits = 8 * sampleSize;
@@ -744,29 +739,11 @@ export const soundSampleDescription = (
 		}
 	}
 
-	if (trackData.muxer.isQuickTime && trackData.track.source._codec === 'aac') {
+	if (trackData.muxer.isQuickTime) {
 		version = 1;
+	}
 
-		contents = [
-			Array(6).fill(0), // Reserved
-			u16(1), // Data reference index
-			u16(version), // Version
-			u16(0), // Revision level
-			u32(0), // Vendor
-			u16(trackData.info.numberOfChannels), // Number of channels
-			u16(16), // Sample size (bits)
-			u16(0xfffe), // Compression ID (-2, redefined sample tables)
-			u16(0), // Packet size
-			u16(trackData.info.sampleRate < 2 ** 16 ? trackData.info.sampleRate : 0), // Sample rate (upper)
-			u16(0), // Sample rate (lower)
-			u32(1024), // Samples per packet
-			u32(0), // Bytes per packet (variable)
-			u32(0), // Bytes per frame (variable)
-			u32(2), // Bytes per sample
-		];
-
-		children = [waveAac(trackData), chan(trackData)];
-	} else if (version === 0) {
+	if (version === 0) {
 		contents = [
 			Array(6).fill(0), // Reserved
 			u16(1), // Data reference index
@@ -781,6 +758,8 @@ export const soundSampleDescription = (
 			u16(0), // Sample rate (lower)
 		];
 	} else {
+		const compressionId = isPcmCodec ? 0 : -2;
+
 		contents = [
 			Array(6).fill(0), // Reserved
 			u16(1), // Data reference index
@@ -789,18 +768,28 @@ export const soundSampleDescription = (
 			u32(0), // Vendor
 			u16(trackData.info.numberOfChannels), // Number of channels
 			u16(Math.min(sampleSizeInBits, 16)), // Sample size (bits)
-			u16(0), // Compression ID
+			i16(compressionId), // Compression ID
 			u16(0), // Packet size
 			u16(trackData.info.sampleRate < 2 ** 16 ? trackData.info.sampleRate : 0), // Sample rate (upper)
 			u16(0), // Sample rate (lower)
-			u32(1), // Samples per packet (must be 1 for uncompressed formats)
-			u32(sampleSizeInBits / 8), // Bytes per packet
-			u32(trackData.info.numberOfChannels * sampleSizeInBits / 8), // Bytes per frame
+			isPcmCodec
+				? [
+						u32(1), // Samples per packet (must be 1 for uncompressed formats)
+						u32(sampleSizeInBits / 8), // Bytes per packet
+						u32(trackData.info.numberOfChannels * sampleSizeInBits / 8), // Bytes per frame
+					]
+				: [
+						u32(0), // Samples per packet (don't bother, still works with 0)
+						u32(0), // Bytes per packet (variable)
+						u32(0), // Bytes per frame (variable)
+					],
 			u32(2), // Bytes per sample (constant in FFmpeg)
 		];
 	}
 
-	return box(compressionType, contents, children);
+	return box(compressionType, contents, [
+		audioCodecToConfigurationBox(trackData.track.source._codec, trackData.muxer.isQuickTime)?.(trackData) ?? null,
+	]);
 };
 
 /** MPEG-4 Elementary Stream Descriptor Box. */
@@ -864,34 +853,6 @@ export const wave = (trackData: IsobmffAudioTrackData) => {
 		frma(trackData),
 		enda(trackData),
 		box('\x00\x00\x00\x00'), // NULL tag at the end
-	]);
-};
-
-export const waveAac = (trackData: IsobmffAudioTrackData) => {
-	return box('wave', undefined, [
-		frma(trackData),
-		box('mp4a', [u32(0)]),
-		esds(trackData),
-		box('\x00\x00\x00\x00'), // NULL tag at the end
-	]);
-};
-
-const channelLayoutTag = (numberOfChannels: number): number => {
-	switch (numberOfChannels) {
-		case 1:
-			return 0x00640001; // mono
-		case 2:
-			return 0x00650002; // stereo
-		default:
-			return 0;
-	}
-};
-
-const chan = (trackData: IsobmffAudioTrackData) => {
-	return fullBox('chan', 0, 0, [
-		u32(channelLayoutTag(trackData.info.numberOfChannels)),
-		u32(0), // channel bitmap
-		u32(0), // number of channel descriptions
 	]);
 };
 
