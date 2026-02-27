@@ -109,6 +109,12 @@ export class ManifestInput implements Disposable {
 		return this._format;
 	}
 
+	async getTracks() {
+		const parser = await this._getParser();
+		return parser.getTracks();
+	}
+
+	/*
 	async getVariants(): Promise<ManifestInputVariant[]> {
 		const parser = await this._getParser();
 		const variants = await parser.getVariants();
@@ -138,6 +144,7 @@ export class ManifestInput implements Disposable {
 			formats: [new VirtualInputFormat(input => new InputAggregateDemuxer(input, subInputs))],
 		});
 	}
+	*/
 
 	_getSourceCached(path: string) {
 		const cachedEntry = this._sourceCache.find(x => x.path === path);

@@ -7,16 +7,14 @@
  */
 
 import { ManifestInput } from './manifest-input';
-import { ManifestInputVariant } from './manifest-input-variant';
+import { ManifestInputTrack } from './manifest-input-track';
 
-export class ManifestParser {
+export abstract class ManifestParser {
 	_input: ManifestInput;
 
 	constructor(input: ManifestInput) {
 		this._input = input;
 	}
 
-	getVariants(): Promise<ManifestInputVariant[]> {
-		throw new Error('Not implemented.');
-	}
+	abstract getTracks(): Promise<ManifestInputTrack[]>;
 }
