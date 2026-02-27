@@ -66,7 +66,10 @@ export abstract class IsobmffInputFormat extends InputFormat {
 		slice.skip(4);
 		const fourCc = readAscii(slice, 4);
 
-		if (fourCc !== 'ftyp') {
+		if (
+			fourCc !== 'ftyp'
+			&& fourCc !== 'styp' // Segment
+		) {
 			return null;
 		}
 
@@ -91,7 +94,15 @@ export class Mp4InputFormat extends IsobmffInputFormat {
 	/** @internal */
 	async _canReadInput(input: Input) {
 		const majorBrand = await this._getMajorBrand(input);
-		return !!majorBrand && majorBrand !== 'qt  ';
+		if (majorBrand !== null) {
+			return majorBrand !== 'qt  ';
+		}
+
+		let slice = input._reader.requestSlice(4, 4);
+		if (slice instanceof Promise) slice = await slice;
+		if (!slice) return false;
+
+		return readAscii(slice, 4) === 'moof'; // Not a legal segment start, but seen in practice (sigh)
 	}
 
 	get name() {
@@ -549,6 +560,37 @@ export class MpegTsInputFormat extends InputFormat {
 
 	get mimeType() {
 		return 'video/MP2T';
+	}
+}
+
+export class VirtualInputFormat extends InputFormat {
+	/** @internal */
+	_createDemuxerFn: (input: Input) => Demuxer;
+
+	/** @internal */
+	constructor(createDemuxer: (input: Input) => Demuxer) {
+		super();
+		this._createDemuxerFn = createDemuxer;
+	}
+
+	/** @internal */
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	async _canReadInput(input: Input) {
+		return true;
+	}
+
+	/** @internal */
+
+	_createDemuxer(input: Input): Demuxer {
+		return this._createDemuxerFn(input);
+	}
+
+	get name() {
+		return 'Virtual input format';
+	}
+
+	get mimeType() {
+		return 'application/magic';
 	}
 }
 

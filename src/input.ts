@@ -14,6 +14,8 @@ import { Source } from './source';
 
 polyfillSymbolDispose();
 
+const UNSUPPORTED_INPUT_FORMAT_MESSAGE = 'Input has an unsupported or unrecognizable format.';
+
 /**
  * The options for creating an Input object.
  * @group Input files & tracks
@@ -24,6 +26,7 @@ export type InputOptions<S extends Source = Source> = {
 	formats: InputFormat[];
 	/** The source from which data will be read. */
 	source: S;
+	initInput?: Input;
 };
 
 /**
@@ -37,11 +40,13 @@ export class Input<S extends Source = Source> implements Disposable {
 	/** @internal */
 	_formats: InputFormat[];
 	/** @internal */
+	_initInput: Input | null;
+	/** @internal */
 	_demuxerPromise: Promise<Demuxer> | null = null;
 	/** @internal */
 	_format: InputFormat | null = null;
 	/** @internal */
-	_reader: Reader;
+	_reader!: Reader;
 	/** @internal */
 	_disposed = false;
 
@@ -65,18 +70,21 @@ export class Input<S extends Source = Source> implements Disposable {
 			throw new TypeError('options.source must be a Source.');
 		}
 		if (options.source._disposed) {
-			throw new Error('options.source must not be disposed.');
+			throw new TypeError('options.source must not be disposed.');
+		}
+		if (options.initInput !== undefined && !(options.initInput instanceof Input)) {
+			throw new TypeError('options.initInput, when provided, must be an Input.');
 		}
 
 		this._formats = options.formats;
 		this._source = options.source;
-		this._reader = new Reader(options.source);
+		this._initInput = options.initInput ?? null;
 	}
 
 	/** @internal */
 	_getDemuxer() {
 		return this._demuxerPromise ??= (async () => {
-			this._reader.fileSize = await this._source.getSizeOrNull();
+			this._reader = new Reader(this._source);
 
 			for (const format of this._formats) {
 				const canRead = await format._canReadInput(this);
@@ -86,7 +94,7 @@ export class Input<S extends Source = Source> implements Disposable {
 				}
 			}
 
-			throw new Error('Input has an unsupported or unrecognizable format.');
+			throw new Error(UNSUPPORTED_INPUT_FORMAT_MESSAGE);
 		})();
 	}
 
@@ -109,13 +117,31 @@ export class Input<S extends Source = Source> implements Disposable {
 		return this._format;
 	}
 
+	async isSupported(): Promise<boolean> {
+		try {
+			const demuxer = await this._getDemuxer();
+			return demuxer.isSupported();
+		} catch (error) {
+			if (error instanceof Error && error.message === UNSUPPORTED_INPUT_FORMAT_MESSAGE) {
+				return false;
+			}
+
+			throw error;
+		}
+	}
+
 	/**
 	 * Computes the duration of the input file, in seconds. More precisely, returns the largest end timestamp among
 	 * all tracks.
 	 */
 	async computeDuration() {
-		const demuxer = await this._getDemuxer();
-		return demuxer.computeDuration();
+		const tracks = await this.getTracks();
+		if (tracks.length === 0) {
+			return 0;
+		}
+
+		const tracksDurations = await Promise.all(tracks.map(x => x.computeDuration()));
+		return Math.max(...tracksDurations);
 	}
 
 	/**

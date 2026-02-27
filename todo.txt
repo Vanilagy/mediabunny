@@ -1,0 +1,12 @@
+- "manifest" -> "playlist"?
+- Retaining Input instances for segments without clogging up memory indefinitely
+
+idea: discontinuities with extra decoder config on the packet.
+Also, why not just have the packet metadata on the packet? I think that would make things easier overall.
+Also: for robustness, do a different track matching algorithm for hls playback. so not use pid but make it simpler like
+  if theres only 1 video track then its obvious yknow. Need to see if this is actually needed in the case of ext-x-discontinuity
+
+- EXT-X-MEDIA (DONE, but surface more metadata from it, like language and shit) - should it be passed down to the tracks??
+- getSegments() API? Any point in partially reading the playlist file? Idk
+
+- Add warnings when piping m3u8 or dash shit into Input

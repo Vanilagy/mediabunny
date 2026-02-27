@@ -15,6 +15,7 @@ import { assert, Rational, Rotation, simplifyRational } from './misc';
 import { TrackType } from './output';
 import { EncodedPacket, PacketType } from './packet';
 import { TrackDisposition } from './metadata';
+import { ManifestInputVariant } from './manifest-input-variant';
 
 /**
  * Contains aggregate statistics about the encoded packets of a track.
@@ -39,8 +40,7 @@ export interface InputTrackBacking {
 	getLanguageCode(): string;
 	getTimeResolution(): number;
 	getDisposition(): TrackDisposition;
-	getFirstTimestamp(): Promise<number>;
-	computeDuration(): Promise<number>;
+	getVariant(): ManifestInputVariant | null;
 
 	getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
 	getPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
@@ -146,18 +146,24 @@ export abstract class InputTrack {
 		return this._backing.getDisposition();
 	}
 
+	get variant() {
+		return this._backing.getVariant();
+	}
+
 	/**
 	 * Returns the start timestamp of the first packet of this track, in seconds. While often near zero, this value
 	 * may be positive or even negative. A negative starting timestamp means the track's timing has been offset. Samples
 	 * with a negative timestamp should not be presented.
 	 */
-	getFirstTimestamp() {
-		return this._backing.getFirstTimestamp();
+	async getFirstTimestamp() {
+		const firstPacket = await this._backing.getFirstPacket({ metadataOnly: true });
+		return firstPacket?.timestamp ?? 0;
 	}
 
 	/** Returns the end timestamp of the last packet of this track, in seconds. */
-	computeDuration() {
-		return this._backing.computeDuration();
+	async computeDuration() {
+		const lastPacket = await this._backing.getPacket(Infinity, { metadataOnly: true });
+		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
 	}
 
 	/**

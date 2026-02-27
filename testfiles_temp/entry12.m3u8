@@ -1,0 +1,25 @@
+#EXTM3U
+## Generated with https://github.com/google/shaka-packager version v2.3.0-5bf8ad5-release
+
+#EXT-X-MEDIA:TYPE=AUDIO,URI="playlist_a-eng-0128k-aac-2c.mp4.m3u8",GROUP-ID="default-audio-group",LANGUAGE="en",NAME="stream_5",DEFAULT=YES,AUTOSELECT=YES,CHANNELS="2"
+#EXT-X-MEDIA:TYPE=AUDIO,URI="playlist_a-deu-0128k-aac-2c.mp4.m3u8",GROUP-ID="default-audio-group",LANGUAGE="de",NAME="stream_4",AUTOSELECT=YES,CHANNELS="2"
+#EXT-X-MEDIA:TYPE=AUDIO,URI="playlist_a-ita-0128k-aac-2c.mp4.m3u8",GROUP-ID="default-audio-group",LANGUAGE="it",NAME="stream_8",AUTOSELECT=YES,CHANNELS="2"
+#EXT-X-MEDIA:TYPE=AUDIO,URI="playlist_a-fra-0128k-aac-2c.mp4.m3u8",GROUP-ID="default-audio-group",LANGUAGE="fr",NAME="stream_7",AUTOSELECT=YES,CHANNELS="2"
+#EXT-X-MEDIA:TYPE=AUDIO,URI="playlist_a-spa-0128k-aac-2c.mp4.m3u8",GROUP-ID="default-audio-group",LANGUAGE="es",NAME="stream_9",AUTOSELECT=YES,CHANNELS="2"
+#EXT-X-MEDIA:TYPE=AUDIO,URI="playlist_a-eng-0384k-aac-6c.mp4.m3u8",GROUP-ID="default-audio-group",LANGUAGE="en",NAME="stream_6",CHANNELS="6"
+
+#EXT-X-MEDIA:TYPE=SUBTITLES,URI="playlist_s-en.webvtt.m3u8",GROUP-ID="default-text-group",LANGUAGE="en",NAME="stream_0",DEFAULT=YES,AUTOSELECT=YES
+#EXT-X-MEDIA:TYPE=SUBTITLES,URI="playlist_s-el.webvtt.m3u8",GROUP-ID="default-text-group",LANGUAGE="el",NAME="stream_1",AUTOSELECT=YES
+#EXT-X-MEDIA:TYPE=SUBTITLES,URI="playlist_s-fr.webvtt.m3u8",GROUP-ID="default-text-group",LANGUAGE="fr",NAME="stream_2",AUTOSELECT=YES
+#EXT-X-MEDIA:TYPE=SUBTITLES,URI="playlist_s-pt-BR.webvtt.m3u8",GROUP-ID="default-text-group",LANGUAGE="pt-BR",NAME="stream_3",AUTOSELECT=YES
+
+#EXT-X-STREAM-INF:BANDWIDTH=8062646,AVERAGE-BANDWIDTH=1824731,CODECS="avc1.4d401f,mp4a.40.2",RESOLUTION=768x576,AUDIO="default-audio-group",SUBTITLES="default-text-group"
+playlist_v-0576p-1400k-libx264.mp4.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=6096050,AVERAGE-BANDWIDTH=1410993,CODECS="avc1.4d401f,mp4a.40.2",RESOLUTION=640x480,AUDIO="default-audio-group",SUBTITLES="default-text-group"
+playlist_v-0480p-1000k-libx264.mp4.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=4005148,AVERAGE-BANDWIDTH=1146764,CODECS="avc1.4d401f,mp4a.40.2",RESOLUTION=480x360,AUDIO="default-audio-group",SUBTITLES="default-text-group"
+playlist_v-0360p-0750k-libx264.mp4.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=2190444,AVERAGE-BANDWIDTH=784019,CODECS="avc1.4d401f,mp4a.40.2",RESOLUTION=320x240,AUDIO="default-audio-group",SUBTITLES="default-text-group"
+playlist_v-0240p-0400k-libx264.mp4.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=827972,AVERAGE-BANDWIDTH=482170,CODECS="avc1.42c01e,mp4a.40.2",RESOLUTION=192x144,AUDIO="default-audio-group",SUBTITLES="default-text-group"
+playlist_v-0144p-0100k-libx264.mp4.m3u8

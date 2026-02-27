@@ -15,6 +15,8 @@ export const readNextMp3FrameHeader = async (reader: Reader, startPos: number, u
 } | null> => {
 	let currentPos = startPos;
 
+	// todo optimize this shit wtf is this
+
 	while (until === null || currentPos < until) {
 		let slice = reader.requestSlice(currentPos, FRAME_HEADER_SIZE);
 		if (slice instanceof Promise) slice = await slice;

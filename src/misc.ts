@@ -851,6 +851,87 @@ export const isNumber = (x: unknown) => {
 	return typeof x === 'number' && !Number.isNaN(x);
 };
 
+export const joinPaths = (basePath: string, relativePath: string) => {
+	// If relativePath is a full URL with protocol, return it as-is
+	if (relativePath.includes('://')) {
+		return relativePath;
+	}
+
+	let result: string;
+
+	if (relativePath.startsWith('/')) {
+		const protocolIndex = basePath.indexOf('://');
+		if (protocolIndex === -1) {
+			result = relativePath;
+		} else {
+			const pathStart = basePath.indexOf('/', protocolIndex + 3);
+			if (pathStart === -1) {
+				result = basePath + relativePath;
+			} else {
+				result = basePath.slice(0, pathStart) + relativePath;
+			}
+		}
+	} else {
+		const lastSlash = basePath.lastIndexOf('/');
+		if (lastSlash === -1) {
+			result = relativePath;
+		} else {
+			result = basePath.slice(0, lastSlash + 1) + relativePath;
+		}
+	}
+
+	// Normalize ./ and ../
+
+	let prefix = '';
+	const protocolIndex = result.indexOf('://');
+	if (protocolIndex !== -1) {
+		const pathStart = result.indexOf('/', protocolIndex + 3);
+		if (pathStart !== -1) {
+			prefix = result.slice(0, pathStart);
+			result = result.slice(pathStart);
+		}
+	}
+
+	const segments = result.split('/');
+	const normalized: string[] = [];
+	for (const segment of segments) {
+		if (segment === '..') {
+			normalized.pop();
+		} else if (segment !== '.') {
+			normalized.push(segment);
+		}
+	}
+
+	return prefix + normalized.join('/');
+};
+
+export const arrayCount = <T>(array: T[], predicate: (item: T) => boolean) => {
+	let count = 0;
+
+	for (let i = 0; i < array.length; i++) {
+		if (predicate(array[i]!)) {
+			count++;
+		}
+	}
+
+	return count;
+};
+
+export const arrayArgmin = <T>(array: T[], getValue: (item: T) => number): number => {
+	let minIndex = -1;
+	let minValue = Infinity;
+
+	for (let i = 0; i < array.length; i++) {
+		const value = getValue(array[i]!);
+		if (value < minValue) {
+			minValue = value;
+			minIndex = i;
+		}
+	}
+
+	return minIndex;
+};
+
 /**
  * A rational number; a ratio of two integers.
  * @group Miscellaneous
