@@ -172,6 +172,7 @@ export {
 	InputTrack,
 	InputVideoTrack,
 	InputAudioTrack,
+	InputSubtitleTrack,
 	PacketStats,
 } from './input-track';
 export {
@@ -208,6 +209,7 @@ export {
 	ConversionVideoOptions,
 	ConversionAudioOptions,
 	ConversionCanceledError,
+	ConversionSubtitleOptions,
 	DiscardedTrack,
 } from './conversion';
 export {
@@ -225,5 +227,17 @@ export {
 	AttachedFile,
 	TrackDisposition,
 } from './metadata';
+export type { SubtitleMetadata, SubtitleCue, SubtitleConfig } from './subtitles';
+export {
+	parseSrtTimestamp,
+	formatSrtTimestamp,
+	splitSrtIntoCues,
+	formatCuesToSrt,
+	formatCuesToWebVTT,
+	parseAssTimestamp,
+	formatAssTimestamp,
+	splitAssIntoCues,
+	formatCuesToAss,
+} from './subtitles';
 
 // 🐡🦔

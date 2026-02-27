@@ -64,6 +64,11 @@ Mediabunny ships with built-in decoders and encoders for all audio PCM codecs, m
 ### Subtitle codecs
 
 - `'webvtt'` - WebVTT
+- `'tx3g'` - 3GPP Timed Text (MP4 subtitles)
+- `'ttml'` - Timed Text Markup Language
+- `'srt'` - SubRip
+- `'ass'` - Advanced SubStation Alpha
+- `'ssa'` - SubStation Alpha
 
 ## Compatibility table
 
@@ -97,11 +102,15 @@ Not all codecs can be used with all containers. The following table specifies th
 | `'pcm-f64be'`  |    ✓     |   ✓   |       |           |       |       |       |       |       |       |
 | `'ulaw'`       |          |   ✓   |       |           |       |       |   ✓   |       |       |       |
 | `'alaw'`       |          |   ✓   |       |           |       |       |   ✓   |       |       |       |
-| `'webvtt'`[^3] |   (✓)    |       |  (✓)  |    (✓)    |       |       |       |       |       |       |
+| `'webvtt'`     |    ✓     |   ✓   |   ✓   |     ✓     |       |       |       |       |       |       |
+| `'tx3g'`       |    ✓     |   ✓   |       |           |       |       |       |       |       |       |
+| `'ttml'`       |    ✓     |   ✓   |       |           |       |       |       |       |       |       |
+| `'srt'`        |          |       |   ✓   |     ✓     |       |       |       |       |       |       |
+| `'ass'`        |          |       |   ✓   |     ✓     |       |       |       |       |       |       |
+| `'ssa'`        |          |       |   ✓   |     ✓     |       |       |       |       |       |       |
 
 
 [^2]: WebM only supports a small subset of the codecs supported by Matroska. However, this library can technically read all codecs from a WebM that are supported by Matroska.
-[^3]: WebVTT can only be written, not read.
 
 ## Querying codec encodability
 

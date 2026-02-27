@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en" translate="no">
+	<head>
+		<meta charset="UTF-8">
+		<meta http-equiv="X-UA-Compatible" content="IE=edge">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<title>Subtitle extraction example | Mediabunny</title>
+		<script type="module" src="../base.ts"></script>
+		<script type="module" src="./subtitle-extraction.ts"></script>
+		<link rel="stylesheet" href="../base.css">
+		<link rel="icon" href="../../docs/public/mediabunny-logo.svg">
+	</head>
+
+	<body class="flex flex-col items-center py-10 bg-zinc-50 text-zinc-800 dark:bg-zinc-900 dark:text-zinc-200 px-2">
+		<h1 class="text-3xl font-bold text-blue-500 text-center">Subtitle extraction example</h1>
+		<p class="max-w-lg text-center">Extract subtitle tracks from video files with embedded subtitles (MKV, MP4, MOV).</p>
+
+		<div class="flex flex-col items-center gap-1">
+			<div class="flex gap-2 mt-4">
+				<button id="select-file" class="rounded-lg bg-zinc-200 dark:bg-zinc-750 hover:bg-zinc-300 dark:hover:bg-zinc-700 px-5 py-2">
+					Select local file
+				</button>
+
+				<button id="load-url" class="rounded-lg bg-zinc-200 dark:bg-zinc-750 hover:bg-zinc-300 dark:hover:bg-zinc-700 px-5 py-2">
+					Load remote URL
+				</button>
+			</div>
+
+			<a id="sample-file-download" download="sample.mkv" class="hover:underline text-xs opacity-50 hover:opacity-70">
+				Download sample file
+			</a>
+		</div>
+
+		<p class="text-xs opacity-60 mt-2" id="file-name"></p>
+
+		<hr class="w-full max-w-96 my-4 border-zinc-300 dark:border-zinc-700" style="display: none;">
+
+		<div id="content-container" class="flex flex-col items-center gap-4 w-full max-w-4xl"></div>
+
+		<a href="/" class="fixed top-0 left-0 flex gap-2 py-2 px-5 items-center">
+			<img src="../../docs/public/mediabunny-logo.svg" class="size-6">
+			<p class="text-sm font-medium">Mediabunny</p>
+		</a>
+
+		<a
+			href="https://github.com/Vanilagy/mediabunny/tree/main/examples/subtitle-extraction"
+			target="_blank"
+			class="flex items-center gap-2 fixed top-0 right-0 py-2 px-5 bg-zinc-200 dark:bg-zinc-750 hover:bg-zinc-300 dark:hover:bg-zinc-700 rounded-bl-xl"
+		>
+			<img src="../../docs/assets/github-mark.svg" class="size-6 dark:invert">
+			<p>View source code</p>
+		</a>
+	</body>
+
+	<style>
+		@reference "../base.css";
+
+		.subtitle-track {
+			@apply py-4 px-6 bg-zinc-100 dark:bg-zinc-800 rounded-lg w-full;
+		}
+
+		.subtitle-track-header {
+			@apply flex justify-between items-center mb-3;
+		}
+
+		.subtitle-track-title {
+			@apply text-lg font-semibold;
+		}
+
+		.subtitle-track-meta {
+			@apply text-sm opacity-60;
+		}
+
+		.cue-preview {
+			@apply mt-2 p-3 bg-white dark:bg-zinc-900 rounded border border-zinc-200 dark:border-zinc-700 max-h-64 overflow-y-auto;
+		}
+
+		.cue-item {
+			@apply border-b border-zinc-200 dark:border-zinc-700 py-2 text-sm;
+		}
+
+		.cue-item:last-child {
+			@apply border-b-0;
+		}
+
+		.cue-time {
+			@apply text-blue-500 font-mono text-xs mr-2;
+		}
+
+		.download-btn {
+			@apply mt-3 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 text-sm;
+		}
+	</style>
+</html>

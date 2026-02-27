@@ -89,7 +89,12 @@ export const AUDIO_CODECS = [
  */
 export const SUBTITLE_CODECS = [
 	'webvtt',
-] as const; // TODO add the rest
+	'tx3g',
+	'ttml',
+	'srt',
+	'ass',
+	'ssa',
+] as const;
 
 /**
  * Union type of known video codecs.
@@ -767,6 +772,12 @@ export const inferCodecFromCodecString = (codecString: string): MediaCodec | nul
 	// Subtitle codecs
 	if (codecString === 'webvtt') {
 		return 'webvtt';
+	} else if (codecString === 'srt') {
+		return 'srt';
+	} else if (codecString === 'ass') {
+		return 'ass';
+	} else if (codecString === 'ssa') {
+		return 'ssa';
 	}
 
 	return null;

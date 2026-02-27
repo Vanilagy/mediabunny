@@ -48,6 +48,7 @@ import {
 	formatSubtitleTimestamp,
 	inlineTimestampRegex,
 	parseSubtitleTimestamp,
+	convertDialogueLineToMkvFormat,
 } from '../subtitles';
 import {
 	aacChannelMap,
@@ -723,7 +724,12 @@ export class MatroskaMuxer extends Muxer {
 				return trackData.info.decoderConfig.codec;
 			} else {
 				const map: Record<SubtitleCodec, string> = {
-					webvtt: 'wvtt',
+					webvtt: 'S_TEXT/WEBVTT',
+					tx3g: 'S_TEXT/UTF8', // Matroska doesn't have tx3g, convert to SRT
+					ttml: 'S_TEXT/WEBVTT', // Matroska doesn't have TTML, convert to WebVTT
+					srt: 'S_TEXT/UTF8',
+					ass: 'S_TEXT/ASS',
+					ssa: 'S_TEXT/SSA',
 				};
 				return map[trackData.track.source._codec];
 			}
@@ -972,14 +978,17 @@ export class MatroskaMuxer extends Muxer {
 			let bodyText = cue.text;
 			const timestampMs = Math.round(timestamp * 1000);
 
-			// Replace in-body timestamps so that they're relative to the cue start time
-			inlineTimestampRegex.lastIndex = 0;
-			bodyText = bodyText.replace(inlineTimestampRegex, (match) => {
-				const time = parseSubtitleTimestamp(match.slice(1, -1));
-				const offsetTime = time - timestampMs;
+			if (track.source._codec === 'ass' || track.source._codec === 'ssa') {
+				bodyText = convertDialogueLineToMkvFormat(bodyText);
+			} else {
+				inlineTimestampRegex.lastIndex = 0;
+				bodyText = bodyText.replace(inlineTimestampRegex, (match) => {
+					const time = parseSubtitleTimestamp(match.slice(1, -1));
+					const offsetTime = time - timestampMs;
 
-				return `<${formatSubtitleTimestamp(offsetTime)}>`;
-			});
+					return `<${formatSubtitleTimestamp(offsetTime)}>`;
+				});
+			}
 
 			const body = textEncoder.encode(bodyText);
 			const additions = `${cue.settings ?? ''}\n${cue.identifier ?? ''}\n${cue.notes ?? ''}`;

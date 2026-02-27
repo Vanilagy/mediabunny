@@ -595,8 +595,14 @@ export const stsd = (trackData: IsobmffTrackData) => {
 			trackData,
 		);
 	} else if (trackData.type === 'subtitle') {
+		const boxName = SUBTITLE_CODEC_TO_BOX_NAME[trackData.track.source._codec];
+		if (!boxName) {
+			throw new Error(
+				`Subtitle codec '${trackData.track.source._codec}' is not supported in MP4/MOV. Only WebVTT is supported.`,
+			);
+		}
 		sampleDescription = subtitleSampleDescription(
-			SUBTITLE_CODEC_TO_BOX_NAME[trackData.track.source._codec],
+			boxName,
 			trackData,
 		);
 	}
@@ -1012,12 +1018,20 @@ const dec3 = (trackData: IsobmffAudioTrackData) => {
 export const subtitleSampleDescription = (
 	compressionType: string,
 	trackData: IsobmffSubtitleTrackData,
-) => box(compressionType, [
-	Array(6).fill(0), // Reserved
-	u16(1), // Data reference index
-], [
-	SUBTITLE_CODEC_TO_CONFIGURATION_BOX[trackData.track.source._codec](trackData),
-]);
+) => {
+	const configBox = SUBTITLE_CODEC_TO_CONFIGURATION_BOX[trackData.track.source._codec];
+	if (!configBox) {
+		throw new Error(
+			`Subtitle codec '${trackData.track.source._codec}' is not supported in MP4/MOV. Only WebVTT is supported.`,
+		);
+	}
+	return box(compressionType, [
+		Array(6).fill(0), // Reserved
+		u16(1), // Data reference index
+	], [
+		configBox(trackData),
+	]);
+};
 
 export const vttC = (trackData: IsobmffSubtitleTrackData) => box('vttC', [
 	...textEncoder.encode(trackData.info.config.description),
@@ -1783,15 +1797,19 @@ const audioCodecToConfigurationBox = (codec: AudioCodec, isQuickTime: boolean) =
 	return null;
 };
 
-const SUBTITLE_CODEC_TO_BOX_NAME: Record<SubtitleCodec, string> = {
+const SUBTITLE_CODEC_TO_BOX_NAME: Partial<Record<SubtitleCodec, string>> = {
 	webvtt: 'wvtt',
+	tx3g: 'tx3g',
+	ttml: 'stpp',
 };
 
-const SUBTITLE_CODEC_TO_CONFIGURATION_BOX: Record<
+const SUBTITLE_CODEC_TO_CONFIGURATION_BOX: Partial<Record<
 	SubtitleCodec,
 	(trackData: IsobmffSubtitleTrackData) => Box | null
-> = {
+>> = {
 	webvtt: vttC,
+	tx3g: () => null, // tx3g doesn't require a configuration box
+	ttml: () => null, // stpp configuration is optional
 };
 
 const getLanguageCodeInt = (code: string) => {

@@ -310,15 +310,15 @@ export class Mp4OutputFormat extends IsobmffOutputFormat {
 			'pcm-s24',
 			'pcm-s24be',
 			'pcm-s32',
-			'pcm-s32be',
-			'pcm-f32',
-			'pcm-f32be',
-			'pcm-f64',
-			'pcm-f64be',
-
-			...SUBTITLE_CODECS,
-		];
-	}
+				'pcm-s32be',
+				'pcm-f32',
+				'pcm-f32be',
+				'pcm-f64',
+				'pcm-f64be',
+				// Only WebVTT subtitles are supported in MP4
+				'webvtt',
+			];
+		}
 
 	/** @internal */
 	override _codecUnsupportedHint(codec: MediaCodec) {
@@ -358,6 +358,8 @@ export class MovOutputFormat extends IsobmffOutputFormat {
 		return [
 			...VIDEO_CODECS,
 			...AUDIO_CODECS,
+			// Only WebVTT subtitles are supported in MOV
+			'webvtt',
 		];
 	}
 
