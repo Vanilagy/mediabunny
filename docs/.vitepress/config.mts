@@ -89,14 +89,15 @@ export default withMermaid({
 						{ text: 'Supported formats & codecs', link: '/guide/supported-formats-and-codecs' },
 					],
 				},
-				{
-					text: 'Extensions',
-					items: [
-						{ text: 'mp3-encoder', link: '/guide/extensions/mp3-encoder' },
-						{ text: 'ac3', link: '/guide/extensions/ac3' },
-					],
-				},
-			],
+					{
+						text: 'Extensions',
+						items: [
+							{ text: 'mp3-encoder', link: '/guide/extensions/mp3-encoder' },
+							{ text: 'ac3', link: '/guide/extensions/ac3' },
+							{ text: 'mpeg4', link: '/guide/extensions/mpeg4' },
+						],
+					},
+				],
 
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment
 			'/api': apiRoutes as any,
@@ -118,22 +119,22 @@ export default withMermaid({
 						{ text: 'AV1', link: '/codec-registry/av1' },
 					],
 				},
-				{
-					text: 'Audio',
-					items: [
-						{ text: 'AAC', link: '/codec-registry/aac' },
-						{ text: 'Opus', link: '/codec-registry/opus' },
+					{
+						text: 'Audio',
+						items: [
+							{ text: 'AAC', link: '/codec-registry/aac' },
+							{ text: 'Opus', link: '/codec-registry/opus' },
 						{ text: 'MP3', link: '/codec-registry/mp3' },
 						{ text: 'Vorbis', link: '/codec-registry/vorbis' },
 						{ text: 'FLAC', link: '/codec-registry/flac' },
 						{ text: 'AC-3', link: '/codec-registry/ac3' },
 						{ text: 'E-AC-3', link: '/codec-registry/eac3' },
-						{ text: 'Linear PCM', link: '/codec-registry/pcm' },
-						{ text: 'μ-law PCM', link: '/codec-registry/ulaw' },
-						{ text: 'A-law PCM', link: '/codec-registry/alaw' },
-					],
-				},
-			],
+							{ text: 'Linear PCM', link: '/codec-registry/pcm' },
+							{ text: 'μ-law PCM', link: '/codec-registry/ulaw' },
+							{ text: 'A-law PCM', link: '/codec-registry/alaw' },
+						],
+					},
+				],
 		},
 
 		socialLinks: [

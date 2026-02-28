@@ -8,9 +8,10 @@
 		"paths": {
 			"mediabunny": ["./src/index.ts"],
 			"@mediabunny/ac3": ["./packages/ac3/src/index.ts"],
+			"@mediabunny/mpeg4": ["./packages/mpeg4/src/index.ts"],
 		},
 	},
 	"include": ["vitest.config.ts", "./test/**/*"],
 	"exclude": ["./test/public/**/*"],
-	"references": [{ "path": "./src" }, { "path": "./packages/ac3" }]
+	"references": [{ "path": "./src" }, { "path": "./packages/ac3" }, { "path": "./packages/mpeg4/src" }]
 }

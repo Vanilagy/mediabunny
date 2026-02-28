@@ -2343,6 +2343,16 @@ export const determineVideoPacketType = (
 			return null;
 		};
 
+		case 'mpeg4': {
+			for (let i = 0; i < packetData.length - 4; i++) {
+				if (packetData[i] === 0x00 && packetData[i + 1] === 0x00 && packetData[i + 2] === 0x01 && packetData[i + 3] === 0xB6) {
+					const vopCodingType = (packetData[i + 4]! >> 6) & 0x3;
+					return vopCodingType === 0 ? 'key' : 'delta';
+				}
+			}
+			return null;
+		};
+
 		default: {
 			assertNever(codec);
 			assert(false);

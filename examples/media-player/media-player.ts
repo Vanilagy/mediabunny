@@ -8,6 +8,9 @@ import {
 	WrappedAudioBuffer,
 	WrappedCanvas,
 } from 'mediabunny';
+import { registerMpeg4Decoder } from '@mediabunny/mpeg4';
+
+registerMpeg4Decoder();
 
 import SampleFileUrl from '../../docs/assets/big-buck-bunny-trimmed.mp4';
 (document.querySelector('#sample-file-download') as HTMLAnchorElement).href = SampleFileUrl;
@@ -663,7 +666,7 @@ window.addEventListener('resize', () => {
 selectMediaButton.addEventListener('click', () => {
 	const fileInput = document.createElement('input');
 	fileInput.type = 'file';
-	fileInput.accept = 'video/*,video/x-matroska,video/mp2t,.ts,audio/*,audio/aac';
+	fileInput.accept = 'video/*,video/x-matroska,video/x-msvideo,video/mp2t,.ts,audio/*,audio/aac';
 	fileInput.addEventListener('change', () => {
 		const file = fileInput.files?.[0];
 		if (!file) {
