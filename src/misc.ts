@@ -932,6 +932,21 @@ export const arrayArgmin = <T>(array: T[], getValue: (item: T) => number): numbe
 	return minIndex;
 };
 
+export const arrayArgmax = <T>(array: T[], getValue: (item: T) => number): number => {
+	let maxIndex = -1;
+	let maxValue = -Infinity;
+
+	for (let i = 0; i < array.length; i++) {
+		const value = getValue(array[i]!);
+		if (value > maxValue) {
+			maxValue = value;
+			maxIndex = i;
+		}
+	}
+
+	return maxIndex;
+};
+
 /**
  * A rational number; a ratio of two integers.
  * @group Miscellaneous
@@ -997,3 +1012,19 @@ export const validateRectangle = (rect: Rectangle, propertyPath: string) => {
 		throw new TypeError(`${propertyPath}.height must be a non-negative integer.`);
 	}
 };
+
+export const asc = (value: number | null) => {
+	return value ?? Infinity; // nulls last
+};
+
+export const desc = (value: number | null) => {
+	return -(value ?? -Infinity); // nulls last
+};
+
+export const prefer = (value: boolean) => {
+	return -value;
+};
+
+export type NonFunctionKeys<T> = {
+	[K in keyof T]-?: T[K] extends ((...args: never[]) => unknown) ? never : K
+}[keyof T];

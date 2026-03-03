@@ -206,6 +206,22 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 		return sampleRate / SAMPLES_PER_AAC_FRAME;
 	}
 
+	getGroupId() {
+		return this.getId();
+	}
+
+	getPairingMask() {
+		return 1n;
+	}
+
+	getBitrate() {
+		return null;
+	}
+
+	getAverageBitrate() {
+		return null;
+	}
+
 	getName() {
 		return null;
 	}
@@ -231,10 +247,6 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 		assert(numberOfChannels !== undefined);
 
 		return numberOfChannels;
-	}
-
-	getVariant() {
-		return null;
 	}
 
 	getSampleRate() {

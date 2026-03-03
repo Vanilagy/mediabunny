@@ -217,6 +217,22 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 		return this.demuxer.firstFrameHeader.sampleRate / this.demuxer.firstFrameHeader.audioSamplesInFrame;
 	}
 
+	getGroupId() {
+		return this.getId();
+	}
+
+	getPairingMask() {
+		return 1n;
+	}
+
+	getBitrate() {
+		return null;
+	}
+
+	getAverageBitrate() {
+		return null;
+	}
+
 	getName() {
 		return null;
 	}
@@ -247,10 +263,6 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 		return {
 			...DEFAULT_TRACK_DISPOSITION,
 		};
-	}
-
-	getVariant() {
-		return null;
 	}
 
 	async getDecoderConfig(): Promise<AudioDecoderConfig> {

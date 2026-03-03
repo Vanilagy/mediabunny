@@ -9,4 +9,7 @@ Also: for robustness, do a different track matching algorithm for hls playback. 
 - EXT-X-MEDIA (DONE, but surface more metadata from it, like language and shit) - should it be passed down to the tracks??
 - getSegments() API? Any point in partially reading the playlist file? Idk
 
-- Add warnings when piping m3u8 or dash shit into Input
+- Timestamp across variants; i think the date should actually be used. Make the timestamp relative to the date? How does that play with timeResolution?
+
+- add comment that addTracks by default returns in the order in the file. Same with track.number
+- ALL_FORMATS but for HLS only

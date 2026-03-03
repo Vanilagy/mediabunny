@@ -1025,7 +1025,7 @@ const readPesPacket = <T extends boolean>(
 	} as T extends true ? TimestampedPesPacket : PesPacket;
 };
 
-export abstract class MpegTsTrackBacking implements InputTrackBacking {
+abstract class MpegTsTrackBacking implements InputTrackBacking {
 	packetBuffers = new WeakMap<EncodedPacket, PacketBuffer>();
 	/** Used for recreating PacketBuffers if necessary. */
 	packetSectionStarts = new WeakMap<EncodedPacket, number>();
@@ -1079,7 +1079,19 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 		return TIMESCALE;
 	}
 
-	getVariant() {
+	getGroupId() {
+		return this.getId();
+	}
+
+	getPairingMask() {
+		return 1n;
+	}
+
+	getBitrate() {
+		return null;
+	}
+
+	getAverageBitrate() {
 		return null;
 	}
 

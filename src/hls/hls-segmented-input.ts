@@ -1,165 +1,17 @@
-/*!
- * Copyright (c) 2026-present, Vanilagy and contributors
- *
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at https://mozilla.org/MPL/2.0/.
- */
-
 import { AES_128_BLOCK_SIZE } from '../aes';
-import { ManifestInput } from '../manifest-input';
-import { ManifestParser } from '../manifest-parser';
-import { AssociatedGroup, ManifestInputVariant } from '../manifest-input-variant';
-import { AsyncMutex, binarySearchLessOrEqual, joinPaths, last, toDataView } from '../misc';
+import { Segment, SegmentEncryptionInfo, SegmentLocation } from '../segment';
+import { SegmentedInput } from '../segmented-input';
+import { AsyncMutex, binarySearchLessOrEqual, toDataView, joinPaths, last } from '../misc';
 import { LineReader, Reader } from '../reader';
-import { ManifestInputSegment, ManifestInputSegmentLocation, SegmentEncryptionInfo } from '../manifest-input-segment';
-import { inferCodecFromCodecString, MediaCodec } from '../codec';
+import { HlsDemuxer } from './hls-demuxer';
+import { AttributeList, canIgnoreLine } from './hls-misc';
 
 const IV_STRING_REGEX = /^0[xX][0-9a-fA-F]+$/;
 
-export class M3u8Parser extends ManifestParser {
-	metadataPromise: Promise<void> | null = null;
-	variants: M3u8ManifestVariant[] = [];
-	lineReader: LineReader;
-
-	constructor(input: ManifestInput) {
-		super(input);
-		this.lineReader = new LineReader(() => input._entryReader, canIgnoreLine);
-	}
-
-	readMetadata() {
-		return this.metadataPromise ??= (async () => {
-			let line = this.lineReader.readNextLine();
-			if (line instanceof Promise) line = await line;
-
-			if (line !== '#EXTM3U') {
-				throw new Error('Invalid M3U8 file; expected first line to be #EXTM3U.');
-			}
-
-			let iFramesOnlyTagFound = false;
-
-			while (true) {
-				let line = this.lineReader.readNextLine();
-				if (line instanceof Promise) line = await line;
-
-				if (line === null) {
-					break;
-				}
-
-				if (line.startsWith('#EXT-X-STREAM-INF:')) {
-					let playlistPath = this.lineReader.readNextLine();
-					if (playlistPath instanceof Promise) playlistPath = await playlistPath;
-
-					if (playlistPath === null) {
-						throw new Error('Incorrect M3U8 file; a line must follow the #EXT-X-STREAM-INF tag.');
-					}
-
-					const fullPath = joinPaths(this._input._entryPath, playlistPath);
-					const attributes = new AttributeList(line.slice(18));
-
-					this.pushOrMergeVariant(
-						fullPath,
-						null,
-						attributes,
-						false,
-					);
-				} else if (line.startsWith('#EXT-X-I-FRAME-STREAM-INF:')) {
-					const attributes = new AttributeList(line.slice(18));
-					const playlistPath = attributes.get('uri');
-
-					if (playlistPath === null) {
-						throw new Error(
-							'Invalid M3U8 file; #EXT-X-I-FRAME-STREAM-INF tag requires a URI attribute.',
-						);
-					}
-
-					const fullPath = joinPaths(this._input._entryPath, playlistPath);
-
-					this.pushOrMergeVariant(
-						fullPath,
-						null,
-						attributes,
-						true,
-					);
-				} else if (line.startsWith('#EXT-X-MEDIA:')) {
-					const attributes = new AttributeList(line.slice(13));
-
-					const groupId = attributes.get('group-id');
-					if (groupId === null) {
-						throw new Error(
-							'Invalid M3U8 file; #EXT-X-MEDIA tag requires a GROUP-ID attribute.',
-						);
-					}
-
-					const uri = attributes.get('uri');
-					if (uri === null) {
-						continue;
-					}
-
-					const fullPath = joinPaths(this._input._entryPath, uri);
-
-					this.pushOrMergeVariant(
-						fullPath,
-						null,
-						attributes,
-						false,
-					);
-				} else if (line === '#EXT-X-I-FRAMES-ONLY') {
-					iFramesOnlyTagFound = true;
-				} else if (line.startsWith('#EXTINF:')) {
-					// This is a media playlist, not a master playlist
-
-					this.variants = [
-						new M3u8ManifestVariant(
-							this,
-							this._input._entryPath,
-							this.lineReader.reader,
-							new AttributeList(''),
-							iFramesOnlyTagFound,
-						),
-					];
-
-					break;
-				}
-			}
-		})();
-	}
-
-	pushOrMergeVariant(
-		path: string,
-		reader: Reader | null,
-		attributes: AttributeList,
-		isKeyFrameOnly: boolean,
-	) {
-		const existing = this.variants.find(v => v.path === path);
-		if (existing) {
-			// Sometimes the same path exists multiple times, so let's just aggregate the data then
-			// (instead of showing the variant twice)
-			existing._attributes.merge(attributes);
-			existing._isKeyFrameOnly = isKeyFrameOnly;
-		} else {
-			this.variants.push(new M3u8ManifestVariant(
-				this,
-				path,
-				reader,
-				attributes,
-				isKeyFrameOnly,
-			));
-		}
-	}
-
-	override async getVariants() {
-		await this.readMetadata();
-		return this.variants;
-	}
-}
-
-export class M3u8ManifestVariant extends ManifestInputVariant {
-	_attributes: AttributeList;
-	_isKeyFrameOnly: boolean;
-	_parser: M3u8Parser;
+export class HlsSegmentedInput extends SegmentedInput {
+	_demuxer: HlsDemuxer;
 	_lineReader: LineReader;
-	_segments: ManifestInputSegment[] = [];
+	_segments: Segment[] = [];
 	_nextSegmentDuration: number | null = null;
 	_nextSegmentTitle: string | null = null;
 	_accumulatedTime = 0;
@@ -167,105 +19,29 @@ export class M3u8ManifestVariant extends ManifestInputVariant {
 	_mutex = new AsyncMutex();
 	_currentKey: SegmentEncryptionInfo | null = null;
 	_nextSequenceNumber = 0;
-	_currentFirstSegment: ManifestInputSegment | null = null;
-	_currentInitSegment: ManifestInputSegment | null = null;
+	_currentFirstSegment: Segment | null = null;
+	_currentInitSegment: Segment | null = null;
 	_lastByteRangeEnd: number | null = null;
 	_nextByteRange: { offset: number; length: number } | null = null;
 
 	/** @internal */
 	constructor(
-		parser: M3u8Parser,
+		demuxer: HlsDemuxer,
 		path: string,
 		reader: Reader | null,
-		attributes: AttributeList,
-		isKeyFrameOnly: boolean,
 	) {
-		super(parser._input, path);
+		super(demuxer.input, path);
 
-		this._attributes = attributes;
-		this._isKeyFrameOnly = isKeyFrameOnly;
-		this._parser = parser;
+		this._demuxer = demuxer;
 
 		if (reader) {
 			this._lineReader = new LineReader(() => reader, canIgnoreLine);
 		} else {
 			this._lineReader = new LineReader(async () => {
-				const source = await this.input._getSourceUncached(this.path);
+				const source = await this._demuxer.input._getSourceUncached({ path: this.path });
 				return new Reader(source);
 			}, canIgnoreLine);
 		}
-	}
-
-	get metadata() {
-		const codecStrings = this._getCodecStrings();
-		const codecs = codecStrings.map(x => inferCodecFromCodecString(x)).filter(Boolean) as MediaCodec[];
-
-		return {
-			name: this._attributes.get('name'),
-			bitrate: this._attributes.getAsNumber('bandwidth'),
-			averageBitrate: this._attributes.getAsNumber('average-bandwidth'),
-			codecs,
-			codecStrings,
-			resolution: this._getResolution(),
-			frameRate: this._attributes.getAsNumber('frame-rate'),
-			isKeyFrameOnly: this._isKeyFrameOnly,
-		};
-	}
-
-	get groupId() {
-		return this._attributes.get('group-id');
-	}
-
-	get associatedGroups() {
-		const groups: AssociatedGroup[] = [];
-
-		const videoGroupId = this._attributes.get('video');
-		if (videoGroupId) {
-			groups.push({ id: videoGroupId, type: 'video' });
-		}
-
-		const audioGroupId = this._attributes.get('audio');
-		if (audioGroupId) {
-			groups.push({ id: audioGroupId, type: 'audio' });
-		}
-
-		const subtitlesGroupId = this._attributes.get('subtitles');
-		if (subtitlesGroupId) {
-			groups.push({ id: subtitlesGroupId, type: 'subtitles' });
-		}
-
-		const closedCaptionsGroupId = this._attributes.get('closed-captions');
-		if (closedCaptionsGroupId) {
-			groups.push({ id: closedCaptionsGroupId, type: 'closed-captions' });
-		}
-
-		return groups;
-	}
-
-	_getCodecStrings() {
-		const value = this._attributes.get('codecs');
-		if (!value) {
-			return [];
-		}
-
-		return value.split(',').map(x => x.trim()).filter(x => x);
-	}
-
-	_getResolution() {
-		const value = this._attributes.get('resolution');
-		if (!value) {
-			return null;
-		}
-
-		const match = value.match(/^(\d+)x(\d+)$/);
-		if (!match) {
-			return null;
-		}
-
-		return {
-			width: Number(match[1]),
-			height: Number(match[2]),
-		};
 	}
 
 	async getFirstSegment() {
@@ -287,7 +63,7 @@ export class M3u8ManifestVariant extends ManifestInputVariant {
 		return this._segments[index]!;
 	}
 
-	async getNextSegment(segment: ManifestInputSegment) {
+	async getNextSegment(segment: Segment) {
 		const index = this._segments.indexOf(segment);
 		if (index === -1) {
 			throw new Error('Segment was not created by this variant.');
@@ -305,7 +81,7 @@ export class M3u8ManifestVariant extends ManifestInputVariant {
 		return this._segments[index + 1] ?? null;
 	}
 
-	async getPreviousSegment(segment: ManifestInputSegment): Promise<ManifestInputSegment | null> {
+	async getPreviousSegment(segment: Segment): Promise<Segment | null> {
 		const index = this._segments.indexOf(segment);
 		if (index === -1) {
 			throw new Error('Segment was not created by this variant.');
@@ -365,13 +141,13 @@ export class M3u8ManifestVariant extends ManifestInputVariant {
 					}
 
 					const fullPath = joinPaths(this.path, line);
-					const location: ManifestInputSegmentLocation = {
+					const location: SegmentLocation = {
 						path: fullPath,
 						offset: this._nextByteRange?.offset ?? 0,
 						length: this._nextByteRange?.length ?? null,
 					};
 
-					const segment = new ManifestInputSegment(
+					const segment = new Segment(
 						this,
 						location,
 						this._accumulatedTime,
@@ -423,7 +199,7 @@ export class M3u8ManifestVariant extends ManifestInputVariant {
 					}
 
 					const fullPath = joinPaths(this.path, uri);
-					const location: ManifestInputSegmentLocation = {
+					const location: SegmentLocation = {
 						path: fullPath,
 						offset: this._nextByteRange?.offset ?? 0,
 						length: this._nextByteRange?.length ?? null,
@@ -434,7 +210,7 @@ export class M3u8ManifestVariant extends ManifestInputVariant {
 						throw new Error('IV attribute must be set on #EXT-X-KEY tag preceding the #EXT-X-MAP tag.');
 					}
 
-					const segment = new ManifestInputSegment(
+					const segment = new Segment(
 						this,
 						location,
 						this._accumulatedTime,
@@ -551,62 +327,5 @@ export class M3u8ManifestVariant extends ManifestInputVariant {
 
 			await this._readNextSegment();
 		}
-	}
-}
-
-const canIgnoreLine = (line: string) => line.length === 0 || (line.startsWith('#') && !line.startsWith('#EXT'));
-
-class AttributeList {
-	_attributes: Record<string, string> = {};
-
-	constructor(str: string) {
-		let key = '';
-		let value = '';
-		let inValue = false;
-		let inQuotes = false;
-
-		for (let i = 0; i < str.length; i++) {
-			const char = str[i]!;
-
-			if (char === '"') {
-				inQuotes = !inQuotes;
-			} else if (char === '=' && !inValue && !inQuotes) {
-				inValue = true;
-			} else if (char === ',' && !inQuotes) {
-				if (key) {
-					this._attributes[key.toLowerCase()] = value;
-				}
-
-				key = '';
-				value = '';
-				inValue = false;
-			} else if (inValue) {
-				value += char;
-			} else {
-				key += char;
-			}
-		}
-
-		if (key) {
-			this._attributes[key.toLowerCase()] = value;
-		}
-	}
-
-	get(name: string) {
-		return this._attributes[name.toLowerCase()] ?? null;
-	}
-
-	getAsNumber(name: string) {
-		const value = this.get(name);
-		if (value === null) {
-			return null;
-		}
-
-		const num = Number(value);
-		return Number.isFinite(num) ? num : null;
-	}
-
-	merge(other: AttributeList) {
-		Object.assign(this._attributes, other._attributes);
 	}
 }

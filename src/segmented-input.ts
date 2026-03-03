@@ -18,15 +18,14 @@ import {
 	InputVideoTrack,
 	InputVideoTrackBacking,
 } from './input-track';
-import { ManifestInput } from './manifest-input';
-import { ManifestInputSegment } from './manifest-input-segment';
+import { Segment } from './segment';
 import { PacketRetrievalOptions } from './media-sink';
 import { MetadataTags, TrackDisposition } from './metadata';
 import { arrayCount, assert, Rotation } from './misc';
 import { EncodedPacket } from './packet';
 import { NullSource } from './source';
 
-export type ManifestInputVariantMetadata = {
+export type SegmentedInputMetadata = {
 	name: string | null;
 	bitrate: number | null; // doc block: this refers to the _peak_ bitrate
 	averageBitrate: number | null;
@@ -42,36 +41,33 @@ export type AssociatedGroup = {
 	type: 'video' | 'audio' | 'subtitles' | 'closed-captions';
 };
 
-export abstract class ManifestInputVariant {
-	readonly input: ManifestInput;
+export abstract class SegmentedInput {
+	readonly input: Input;
 	readonly path: string;
 
+	otherInputLol: Input | null = null;
 	/** @internal */
 	_nextInputCacheAge = 0;
 	/** @internal */
 	_inputCache: {
-		segment: ManifestInputSegment;
+		segment: Segment;
 		inputPromise: Promise<Input>; // We store the promise so it's immediately available in the cache
 		age: number;
 	}[] = [];
 
 	/** @internal */
-	constructor(input: ManifestInput, path: string) {
+	constructor(input: Input, path: string) {
 		this.input = input;
 		this.path = path;
 	}
 
-	abstract get metadata(): ManifestInputVariantMetadata;
-	abstract get groupId(): string | null;
-	abstract get associatedGroups(): AssociatedGroup[];
-
-	abstract getFirstSegment(): Promise<ManifestInputSegment | null>;
-	abstract getSegmentAt(timestamp: number): Promise<ManifestInputSegment | null>;
-	abstract getNextSegment(segment: ManifestInputSegment): Promise<ManifestInputSegment | null>;
-	abstract getPreviousSegment(segment: ManifestInputSegment): Promise<ManifestInputSegment | null>;
+	abstract getFirstSegment(): Promise<Segment | null>;
+	abstract getSegmentAt(timestamp: number): Promise<Segment | null>;
+	abstract getNextSegment(segment: Segment): Promise<Segment | null>;
+	abstract getPreviousSegment(segment: Segment): Promise<Segment | null>;
 
 	async* segments(startTimestamp?: number) {
-		let currentSegment: ManifestInputSegment | null;
+		let currentSegment: Segment | null;
 
 		if (startTimestamp !== undefined) {
 			currentSegment = await this.getSegmentAt(startTimestamp);
@@ -86,20 +82,20 @@ export abstract class ManifestInputVariant {
 	}
 
 	toInput() {
-		return new Input({
+		return this.otherInputLol ??= new Input({
 			source: new NullSource(),
-			formats: [new VirtualInputFormat(input => new ManifestInputVariantDemuxer(input, this))],
+			formats: [new VirtualInputFormat(() => new SegmentedInputDemuxer(this.input, this))],
 		});
 	}
 }
 
-class ManifestInputVariantDemuxer extends Demuxer {
-	variant: ManifestInputVariant;
+class SegmentedInputDemuxer extends Demuxer {
+	variant: SegmentedInput;
 	tracksPromise: Promise<InputTrack[]> | null = null;
-	firstSegment: ManifestInputSegment | null = null;
-	firstSegmentFirstTimestamps = new WeakMap<ManifestInputSegment, number>();
+	firstSegment: Segment | null = null;
+	firstSegmentFirstTimestamps = new WeakMap<Segment, number>();
 
-	constructor(input: Input, variant: ManifestInputVariant) {
+	constructor(input: Input, variant: SegmentedInput) {
 		super(input);
 
 		this.variant = variant;
@@ -116,11 +112,11 @@ class ManifestInputVariantDemuxer extends Demuxer {
 	}
 
 	async getMetadataTags(): Promise<MetadataTags> {
-		return {}; // todo?
+		throw new Error('Unreachable');
 	}
 
 	async getMimeType(): Promise<string> {
-		return ''; // todo?
+		throw new Error('Unreachable');
 	}
 
 	async getTracks(): Promise<InputTrack[]> {
@@ -140,14 +136,14 @@ class ManifestInputVariantDemuxer extends Demuxer {
 
 					tracks.push(new InputVideoTrack(
 						this.input,
-						new ManifestInputVariantInputVideoTrackBacking(track, this, number),
+						new SegmentedInputInputVideoTrackBacking(track, this, number),
 					));
 				} else if (track.type === 'audio') {
 					const number = arrayCount(tracks, x => x.type === 'audio') + 1;
 
 					tracks.push(new InputAudioTrack(
 						this.input,
-						new ManifestInputVariantInputAudioTrackBacking(track, this, number),
+						new SegmentedInputInputAudioTrackBacking(track, this, number),
 					));
 				}
 			}
@@ -156,7 +152,7 @@ class ManifestInputVariantDemuxer extends Demuxer {
 		})();
 	}
 
-	async getMediaOffset(segment: ManifestInputSegment, input: Input) {
+	async getMediaOffset(segment: Segment, input: Input) {
 		const firstSegment = segment.firstSegment ?? segment;
 
 		let firstSegmentFirstTimestamp: number;
@@ -192,18 +188,18 @@ class ManifestInputVariantDemuxer extends Demuxer {
 }
 
 type PacketInfo = {
-	segment: ManifestInputSegment;
+	segment: Segment;
 	track: InputTrack;
 	sourcePacket: EncodedPacket;
 };
 
-class ManifestInputVariantInputTrackBacking implements InputTrackBacking {
+class SegmentedInputInputTrackBacking implements InputTrackBacking {
 	firstInputTrack: InputTrack;
-	demuxer: ManifestInputVariantDemuxer;
+	demuxer: SegmentedInputDemuxer;
 	packetInfos = new WeakMap<EncodedPacket, PacketInfo>();
 	number: number;
 
-	constructor(firstInputTrack: InputTrack, demuxer: ManifestInputVariantDemuxer, number: number) {
+	constructor(firstInputTrack: InputTrack, demuxer: SegmentedInputDemuxer, number: number) {
 		this.firstInputTrack = firstInputTrack;
 		this.demuxer = demuxer;
 		this.number = number;
@@ -211,6 +207,14 @@ class ManifestInputVariantInputTrackBacking implements InputTrackBacking {
 
 	getId(): number {
 		return this.firstInputTrack._backing.getId();
+	}
+
+	getGroupId(): number {
+		return this.firstInputTrack._backing.getGroupId();
+	}
+
+	getPairingMask(): bigint {
+		return this.firstInputTrack._backing.getPairingMask();
 	}
 
 	getNumber(): number {
@@ -241,11 +245,15 @@ class ManifestInputVariantInputTrackBacking implements InputTrackBacking {
 		return this.firstInputTrack._backing.getTimeResolution();
 	}
 
-	getVariant(): ManifestInputVariant | null {
-		return this.demuxer.variant;
+	getBitrate(): number | null {
+		return this.firstInputTrack._backing.getBitrate();
 	}
 
-	async createAdjustedPacket(packet: EncodedPacket, segment: ManifestInputSegment, track: InputTrack) {
+	getAverageBitrate(): number | null {
+		return this.firstInputTrack._backing.getAverageBitrate();
+	}
+
+	async createAdjustedPacket(packet: EncodedPacket, segment: Segment, track: InputTrack) {
 		const mediaOffset = await this.demuxer.getMediaOffset(segment, track.input);
 
 		const modified = packet.clone({
@@ -302,7 +310,7 @@ class ManifestInputVariantInputTrackBacking implements InputTrackBacking {
 			return this.createAdjustedPacket(nextPacket, info.segment, info.track);
 		}
 
-		let currentSegment: ManifestInputSegment | null = info.segment;
+		let currentSegment: Segment | null = info.segment;
 		while (true) {
 			const nextSegment = await this.demuxer.variant.getNextSegment(currentSegment);
 			if (!nextSegment) {
@@ -378,8 +386,8 @@ class ManifestInputVariantInputTrackBacking implements InputTrackBacking {
 	}
 }
 
-class ManifestInputVariantInputVideoTrackBacking
-	extends ManifestInputVariantInputTrackBacking
+class SegmentedInputInputVideoTrackBacking
+	extends SegmentedInputInputTrackBacking
 	implements InputVideoTrackBacking {
 	override firstInputTrack!: InputVideoTrack;
 
@@ -393,6 +401,14 @@ class ManifestInputVariantInputVideoTrackBacking
 
 	getCodedHeight(): number {
 		return this.firstInputTrack._backing.getCodedHeight();
+	}
+
+	getSquarePixelWidth(): number {
+		return this.firstInputTrack._backing.getSquarePixelWidth();
+	}
+
+	getSquarePixelHeight(): number {
+		return this.firstInputTrack._backing.getSquarePixelHeight();
 	}
 
 	getRotation(): Rotation {
@@ -412,8 +428,8 @@ class ManifestInputVariantInputVideoTrackBacking
 	}
 }
 
-class ManifestInputVariantInputAudioTrackBacking
-	extends ManifestInputVariantInputTrackBacking
+class SegmentedInputInputAudioTrackBacking
+	extends SegmentedInputInputTrackBacking
 	implements InputAudioTrackBacking {
 	override firstInputTrack!: InputAudioTrack;
 

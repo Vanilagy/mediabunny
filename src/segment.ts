@@ -1,8 +1,7 @@
 import { AES_128_BLOCK_SIZE, createAesDecryptStream } from './aes';
-import { Input } from './input';
-import { ManifestInputVariant } from './manifest-input-variant';
+import { ENCRYPTION_KEY_CACHE_GROUP, Input } from './input';
+import { SegmentedInput } from './segmented-input';
 import { arrayArgmin, assert } from './misc';
-import { fs } from './node';
 import { readBytes, Reader } from './reader';
 import { ReadableStreamSource, Source } from './source';
 
@@ -13,31 +12,31 @@ export type SegmentEncryptionInfo = {
 	keyFormat: string;
 };
 
-export type ManifestInputSegmentLocation = {
+export type SegmentLocation = {
 	path: string;
 	offset: number;
 	length: number | null;
 };
 
-export class ManifestInputSegment {
-	readonly variant: ManifestInputVariant;
-	readonly location: ManifestInputSegmentLocation;
+export class Segment {
+	readonly variant: SegmentedInput;
+	readonly location: SegmentLocation;
 	readonly relativeTimestamp: number;
 	readonly duration: number;
 	readonly title: string | null;
 	readonly encryption: SegmentEncryptionInfo | null;
-	readonly firstSegment: ManifestInputSegment | null;
-	readonly initSegment: ManifestInputSegment | null;
+	readonly firstSegment: Segment | null;
+	readonly initSegment: Segment | null;
 
 	constructor(
-		variant: ManifestInputVariant,
-		location: ManifestInputSegmentLocation,
+		variant: SegmentedInput,
+		location: SegmentLocation,
 		relativeTimestamp: number,
 		duration: number,
 		title: string | null,
 		encryption: SegmentEncryptionInfo | null,
-		firstSegment: ManifestInputSegment | null,
-		initSegment: ManifestInputSegment | null,
+		firstSegment: Segment | null,
+		initSegment: Segment | null,
 	) {
 		this.variant = variant;
 		this.location = location;
@@ -67,14 +66,14 @@ export class ManifestInputSegment {
 			const needsSlice = this.location.offset > 0 || this.location.length !== null;
 
 			if (!this.encryption) {
-				source = await this.variant.input._getSourceCached(this.location.path);
+				source = await this.variant.input._getSourceCached({ path: this.location.path });
 				if (needsSlice) {
 					source = source.slice(this.location.offset, this.location.length ?? undefined);
 				}
 			} else {
 				assert(this.encryption.iv);
 
-				let ciphertextSource = await this.variant.input._getSourceCached(this.location.path);
+				let ciphertextSource = await this.variant.input._getSourceCached({ path: this.location.path });
 				if (needsSlice) {
 					// Slice before decrypting
 					ciphertextSource = ciphertextSource.slice(this.location.offset, this.location.length ?? undefined);
@@ -83,7 +82,11 @@ export class ManifestInputSegment {
 				const ciphertextReader = new Reader(ciphertextSource);
 
 				const stream = createAesDecryptStream(ciphertextReader, async () => {
-					const keyReader = await this.variant.input._getEncryptionKeyReader(this.encryption!.keyUri);
+					const keySource = await this.variant.input._getSourceCached(
+						{ path: this.encryption!.keyUri },
+						ENCRYPTION_KEY_CACHE_GROUP,
+					);
+					const keyReader = new Reader(keySource);
 					const keySlice = await keyReader.requestSlice(0, AES_128_BLOCK_SIZE);
 					if (!keySlice) {
 						throw new Error('Invalid AES-128 key; expected at least 16 bytes of data.');
@@ -100,7 +103,7 @@ export class ManifestInputSegment {
 
 			return new Input({
 				source,
-				formats: this.variant.input._mediaFormats,
+				formats: this.variant.input._formats,
 				initInput: initInput ?? undefined,
 			});
 		})();

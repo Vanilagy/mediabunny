@@ -558,14 +558,26 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		return this.demuxer.audioInfo.sampleRate;
 	}
 
+	getGroupId() {
+		return this.getId();
+	}
+
+	getPairingMask() {
+		return 1n;
+	}
+
+	getBitrate() {
+		return null;
+	}
+
+	getAverageBitrate() {
+		return null;
+	}
+
 	getDisposition() {
 		return {
 			...DEFAULT_TRACK_DISPOSITION,
 		};
-	}
-
-	getVariant() {
-		return null;
 	}
 
 	async getDecoderConfig(): Promise<AudioDecoderConfig | null> {

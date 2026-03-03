@@ -394,11 +394,23 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		return this.demuxer.audioInfo.sampleRate;
 	}
 
-	getName() {
+	getGroupId() {
+		return this.getId();
+	}
+
+	getPairingMask() {
+		return 1n;
+	}
+
+	getBitrate() {
 		return null;
 	}
 
-	getVariant() {
+	getAverageBitrate() {
+		return null;
+	}
+
+	getName() {
 		return null;
 	}
 

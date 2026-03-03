@@ -17,22 +17,30 @@
 			source: new Mediabunny.BlobSource(file),
 		});
 
-		/*
-		const manifest = new Mediabunny.ManifestInput({
-			entryPath: /*'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8' ?? 'https://bitmovin-a.akamaihd.net/content/dataset/multi-codec/hevc/v720p_ts.m3u8',
-			getSource: path => new Mediabunny.UrlSource(path),
-			manifestFormats: Mediabunny.ALL_MANIFEST_FORMATS,
-			mediaFormats: Mediabunny.ALL_FORMATS,
+		const manifest = new Mediabunny.Input({
+			entryPath: 'https://playertest.longtailvideo.com/adaptive/elephants_dream_v4/index.m3u8',
+			source: ({ path }) => new Mediabunny.UrlSource(path),
+			formats: Mediabunny.ALL_FORMATS,
 		});
-		const variants = await manifest.getVariants();
-		const variant = variants[0];
-		const input = variant.toInput();
-		*/
 
-		const videoTrack = await input.getPrimaryVideoTrack();
-		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
+		const tracks = await manifest.getTracks();
+		console.log(tracks.map(x => x.languageCode))
 
-		console.log(await sink.getPacket(17.48808888888889));
+		function transform(n) {
+			n = BigInt(n);
+
+			let result = 0n;
+			let place = 1n;
+
+			while (n > 0n) {
+				result += (n & 1n) * place; // extract lowest bit
+				n >>= 1n;                   // shift right
+				place *= 10n;               // next decimal digit
+			}
+
+			return result;
+		}
+
 		/*
 		const manifest = new Mediabunny.ManifestInput({
 			entryPath: 'https://storage.googleapis.com/shaka-demo-assets/angel-one-hls/hls.m3u8'

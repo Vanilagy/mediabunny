@@ -32,6 +32,7 @@ import { readAscii, readBytes, readU32Be } from './reader';
 import { FlacDemuxer } from './flac/flac-demuxer';
 import { MpegTsDemuxer } from './mpeg-ts/mpeg-ts-demuxer';
 import { TS_PACKET_SIZE } from './mpeg-ts/mpeg-ts-misc';
+import { HlsDemuxer } from './hls/hls-demuxer';
 
 /**
  * Base class representing an input media file format.
@@ -563,6 +564,37 @@ export class MpegTsInputFormat extends InputFormat {
 	}
 }
 
+export class HlsInputFormat extends InputFormat {
+	async _canReadInput(input: Input) {
+		let slice = input._reader.requestSlice(0, 7);
+		if (slice instanceof Promise) slice = await slice;
+		if (!slice) return false;
+
+		const isM3u8 = readAscii(slice, 7) === '#EXTM3U';
+		if (!isM3u8) {
+			return false;
+		}
+
+		if (typeof input._source !== 'function') {
+			throw new TypeError('HLS inputs require `InputOptions.source` to be a function.');
+		}
+
+		return true;
+	}
+
+	_createDemuxer(input: Input) {
+		return new HlsDemuxer(input);
+	}
+
+	get name() {
+		return 'HTTP Live Streaming (HLS)';
+	}
+
+	get mimeType() {
+		return 'application/vnd.apple.mpegurl';
+	}
+}
+
 export class VirtualInputFormat extends InputFormat {
 	/** @internal */
 	_createDemuxerFn: (input: Input) => Demuxer;
@@ -658,9 +690,16 @@ export const FLAC = /* #__PURE__ */ new FlacInputFormat();
 export const MPEG_TS = /* #__PURE__ */ new MpegTsInputFormat();
 
 /**
+ * HLS input format singleton.
+ * @group Input formats
+ * @public
+ */
+export const HLS = /* #__PURE__ */ new HlsInputFormat();
+
+/**
  * List of all input format singletons. If you don't need to support all input formats, you should specify the
  * formats individually for better tree shaking.
  * @group Input formats
  * @public
  */
-export const ALL_FORMATS: InputFormat[] = [MP4, QTFF, MATROSKA, WEBM, WAVE, OGG, FLAC, MP3, ADTS, MPEG_TS];
+export const ALL_FORMATS: InputFormat[] = [HLS, MP4, QTFF, MATROSKA, WEBM, WAVE, OGG, FLAC, MP3, ADTS, MPEG_TS];

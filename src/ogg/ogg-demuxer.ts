@@ -444,15 +444,27 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		return this.bitstream.sampleRate;
 	}
 
+	getGroupId() {
+		return this.getId();
+	}
+
+	getPairingMask() {
+		return 1n;
+	}
+
+	getBitrate() {
+		return null;
+	}
+
+	getAverageBitrate() {
+		return null;
+	}
+
 	getCodec() {
 		return this.bitstream.codecInfo.codec;
 	}
 
 	getInternalCodecId() {
-		return null;
-	}
-
-	getVariant() {
 		return null;
 	}
 

@@ -338,6 +338,7 @@ export class LineReader {
 	ignore?: (line: string) => boolean;
 	reader: Reader | null = null;
 	textDecoder = new TextDecoder();
+	currentLineNumber = 0; // 1-based
 	readPos = 0;
 	reachedEnd = false;
 	lineBuffer = '';
@@ -372,8 +373,17 @@ export class LineReader {
 				if (!slice || slice.length === 0) {
 					this.reachedEnd = true;
 					const line = this.lineBuffer.trim();
+					this.lineBuffer = '';
 
-					return line || null;
+					if (line) {
+						this.currentLineNumber++;
+					}
+
+					if (!line || this.ignore?.(line)) {
+						return null;
+					}
+
+					return line;
 				}
 
 				const bytes = readBytes(slice, slice.length);
@@ -400,6 +410,7 @@ export class LineReader {
 
 			const line = this.lineBuffer.slice(0, newlineIndex).trim();
 			this.lineBuffer = this.lineBuffer.slice(newlineIndex + 1);
+			this.currentLineNumber++;
 
 			if (this.ignore?.(line)) {
 				continue;

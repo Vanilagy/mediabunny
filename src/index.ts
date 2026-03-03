@@ -119,6 +119,9 @@ export {
 	Rectangle,
 	Rotation,
 	SetRequired,
+	asc,
+	desc,
+	prefer,
 } from './misc';
 export {
 	TrackType,
@@ -173,6 +176,7 @@ export {
 	InputVideoTrack,
 	InputAudioTrack,
 	PacketStats,
+	TrackNotHydratedError,
 } from './input-track';
 export {
 	EncodedPacket,
@@ -225,13 +229,5 @@ export {
 	AttachedFile,
 	TrackDisposition,
 } from './metadata';
-export {
-	ManifestInput,
-	ManifestInputOptions,
-} from './manifest-input';
-export {
-	M3U8,
-	ALL_MANIFEST_FORMATS,
-} from './manifest-input-format';
 
 // 🐡🦔

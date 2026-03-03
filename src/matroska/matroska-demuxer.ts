@@ -543,9 +543,6 @@ export class MatroskaDemuxer extends Demuxer {
 			}
 		}
 
-		// Put default tracks first
-		this.currentSegment.tracks.sort((a, b) => Number(b.disposition.default) - Number(a.disposition.default));
-
 		// Now, let's distribute the cue points to the tracks
 		const idToTrack = new Map(this.currentSegment.tracks.map(x => [x.id, x]));
 
@@ -1945,16 +1942,28 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		return this.internalTrack.languageCode;
 	}
 
-	getVariant() {
-		return null;
-	}
-
 	getTimeResolution() {
 		return this.internalTrack.segment.timestampFactor;
 	}
 
 	getDisposition() {
 		return this.internalTrack.disposition;
+	}
+
+	getGroupId() {
+		return this.getId();
+	}
+
+	getPairingMask() {
+		return 1n;
+	}
+
+	getBitrate() {
+		return null;
+	}
+
+	getAverageBitrate() {
+		return null;
 	}
 
 	async getFirstPacket(options: PacketRetrievalOptions) {

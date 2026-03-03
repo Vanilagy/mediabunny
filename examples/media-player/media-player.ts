@@ -1,14 +1,17 @@
 import {
 	ALL_FORMATS,
-	ALL_MANIFEST_FORMATS,
 	AudioBufferSink,
 	BlobSource,
 	CanvasSink,
 	Input,
-	ManifestInput,
+	InputAudioTrack,
+	InputVideoTrack,
 	UrlSource,
 	WrappedAudioBuffer,
 	WrappedCanvas,
+	asc,
+	desc,
+	prefer,
 } from 'mediabunny';
 
 import SampleFileUrl from '../../docs/assets/big-buck-bunny-trimmed.mp4';
@@ -91,17 +94,38 @@ const initMediaPlayer = async (resource: File | string) => {
 		errorElement.textContent = '';
 		warningElement.textContent = '';
 
-		let input: Input;
+		let videoTrack: InputVideoTrack | null = null;
+		let audioTrack: InputAudioTrack | null = null;
 		if (typeof resource === 'string' && resource.includes('.m3u8')) {
-			const manifestInput = new ManifestInput({
+			const input = new Input({
 				entryPath: resource,
-				getSource: path => new UrlSource(path),
-				manifestFormats: ALL_MANIFEST_FORMATS,
-				mediaFormats: ALL_FORMATS,
+				source: ({ path }) => new UrlSource(path),
+				formats: ALL_FORMATS,
 			});
 			// const variant = (await manifestInput.getVariants())[0]!;
 
-			input = await manifestInput.toInput();
+			console.log(await input.getFormat(), await input.getTracks());
+			// return;
+
+			await input.getVideoTracks({
+				filter: track => track.hasPairableAudioTrack(),
+				sortBy: track => asc(track.bitrate),
+			});
+
+			videoTrack = await input.getPrimaryVideoTrack({
+				filter: async track => (await track.resolve('displayHeight')) <= 720,
+			});
+			audioTrack = await input.getPrimaryAudioTrack({
+				filter: track => !videoTrack || videoTrack.canBePairedWith(track),
+			});
+
+			await videoTrack?.hydrate();
+			await audioTrack?.hydrate();
+
+			totalDuration = Math.max(
+				await videoTrack?.computeDuration() ?? 0,
+				await audioTrack?.computeDuration() ?? 0,
+			);
 
 			// https://test-streams.mux.dev/test_001/stream.m3u8
 			// https://test-streams.mux.dev/test_001/stream_1000k_48k_640x360_050.ts
@@ -110,10 +134,14 @@ const initMediaPlayer = async (resource: File | string) => {
 				? new BlobSource(resource)
 				: new UrlSource(resource);
 
-			input = new Input({
+			const input = new Input({
 				source,
 				formats: ALL_FORMATS,
 			});
+
+			totalDuration = await input.computeDuration();
+			videoTrack = await input.getPrimaryVideoTrack();
+			audioTrack = await input.getPrimaryAudioTrack();
 		}
 
 		/*
@@ -131,11 +159,8 @@ const initMediaPlayer = async (resource: File | string) => {
 		*/
 
 		playbackTimeAtStart = 0;
-		totalDuration = await input.computeDuration();
-		durationElement.textContent = formatSeconds(totalDuration);
 
-		let videoTrack = await input.getPrimaryVideoTrack();
-		let audioTrack = await input.getPrimaryAudioTrack();
+		durationElement.textContent = formatSeconds(totalDuration);
 
 		let problemMessage = '';
 

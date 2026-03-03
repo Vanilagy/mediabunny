@@ -324,9 +324,6 @@ export class IsobmffDemuxer extends Demuxer {
 					this.moovSlice = moovSlice;
 					this.readContiguousBoxes(this.moovSlice);
 
-					// Put default tracks first
-					this.tracks.sort((a, b) => Number(b.disposition.default) - Number(a.disposition.default));
-
 					for (const track of this.tracks) {
 						// Modify the edit list offset based on the previous segment durations. They are in different
 						// timescales, so we first convert to seconds and then into the track timescale.
@@ -2543,7 +2540,19 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		return this.internalTrack.disposition;
 	}
 
-	getVariant() {
+	getGroupId() {
+		return this.getId();
+	}
+
+	getPairingMask() {
+		return 1n;
+	}
+
+	getBitrate() {
+		return null;
+	}
+
+	getAverageBitrate() {
 		return null;
 	}
 
