@@ -10,7 +10,6 @@ import { validateAudioChunkMetadata } from '../codec';
 import { createVorbisComments, FlacBlockType } from '../codec-data';
 import {
 	assert,
-	Bitstream,
 	textEncoder,
 	toDataView,
 	toUint8Array,
@@ -27,6 +26,7 @@ import {
 	getBlockSizeOrUncommon,
 	readCodedNumber,
 } from './flac-misc';
+import { Bitstream } from '../../shared/bitstream';
 
 const FLAC_HEADER = /* #__PURE__ */ new Uint8Array([0x66, 0x4c, 0x61, 0x43]); // 'fLaC'
 const STREAMINFO_SIZE = 38;

@@ -6,16 +6,17 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { parseAacAudioSpecificConfig, validateAudioChunkMetadata } from '../codec';
+import { buildAdtsHeaderTemplate, parseAacAudioSpecificConfig, writeAdtsFrameLength } from '../../shared/aac-misc';
+import { Bitstream } from '../../shared/bitstream';
+import { validateAudioChunkMetadata } from '../codec';
 import { Id3V2Writer } from '../id3';
 import { metadataTagsAreEmpty } from '../metadata';
-import { assert, Bitstream, toUint8Array } from '../misc';
+import { assert, toUint8Array } from '../misc';
 import { Muxer } from '../muxer';
 import { Output, OutputAudioTrack } from '../output';
 import { AdtsOutputFormat } from '../output-format';
 import { EncodedPacket } from '../packet';
 import { Writer } from '../writer';
-import { buildAdtsHeaderTemplate, writeAdtsFrameLength } from './adts-misc';
 
 export class AdtsMuxer extends Muxer {
 	private format: AdtsOutputFormat;

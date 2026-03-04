@@ -8,6 +8,8 @@ export default defineConfig({
 		alias: {
 			'mediabunny': path.resolve(__dirname, './src/index.ts'),
 			'@mediabunny/ac3': path.resolve(__dirname, './packages/ac3/dist/bundles/mediabunny-ac3.mjs'),
+			'@mediabunny/aac-encoder':
+				path.resolve(__dirname, './packages/aac-encoder/dist/bundles/mediabunny-aac-encoder.mjs'),
 		},
 	},
 	test: {

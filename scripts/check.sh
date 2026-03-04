@@ -4,10 +4,14 @@ set -e
 rm -rf dist/modules
 tsc -p src --stripInternal false
 
-tsc -p packages/mp3-encoder --noEmit
+rm -rf packages/mp3-encoder/dist/modules
+tsc -p packages/mp3-encoder
 
 rm -rf packages/ac3/dist/modules
 tsc -p packages/ac3
+
+rm -rf packages/aac-encoder/dist/modules
+tsc -p packages/aac-encoder
 
 tsc -p tsconfig.vitest.json --noEmit
 
