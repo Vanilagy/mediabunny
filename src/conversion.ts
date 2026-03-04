@@ -786,6 +786,12 @@ export class Conversion {
 						+ ' for encoding and decoding AC-3/E-AC-3.',
 					);
 				}
+
+				if (codecs.includes('flac')) {
+					elements.push(
+						'\nThe @mediabunny/flac-encoder extension package provides support for encoding FLAC.',
+					);
+				}
 			} else {
 				elements.push('\nCheck the discardedTracks field for more info.');
 			}

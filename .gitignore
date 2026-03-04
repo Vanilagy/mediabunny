@@ -9,3 +9,4 @@ node_modules
 packages/mp3-encoder/dist
 packages/ac3/dist
 packages/aac-encoder/dist
+packages/flac-encoder/dist

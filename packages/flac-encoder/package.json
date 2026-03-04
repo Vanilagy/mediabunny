@@ -1,15 +1,15 @@
 {
-  "name": "@mediabunny/aac-encoder",
+  "name": "@mediabunny/flac-encoder",
   "author": "Vanilagy",
   "version": "1.37.0",
-  "description": "AAC encoder extension for Mediabunny, based on FFmpeg.",
-  "main": "./dist/bundles/mediabunny-aac-encoder.mjs",
-  "module": "./dist/bundles/mediabunny-aac-encoder.mjs",
+  "description": "FLAC encoder extension for Mediabunny, based on libFLAC.",
+  "main": "./dist/bundles/mediabunny-flac-encoder.mjs",
+  "module": "./dist/bundles/mediabunny-flac-encoder.mjs",
   "types": "./dist/modules/src/index.d.ts",
   "exports": {
     "types": "./dist/modules/src/index.d.ts",
-    "import": "./dist/bundles/mediabunny-aac-encoder.mjs",
-    "require": "./dist/bundles/mediabunny-aac-encoder.mjs"
+    "import": "./dist/bundles/mediabunny-flac-encoder.mjs",
+    "require": "./dist/bundles/mediabunny-flac-encoder.mjs"
   },
   "files": [
     "README.md",
@@ -26,12 +26,12 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Vanilagy/mediabunny.git",
-    "directory": "packages/aac-encoder"
+    "directory": "packages/flac-encoder"
   },
   "bugs": {
     "url": "https://github.com/Vanilagy/mediabunny/issues"
   },
-  "homepage": "https://mediabunny.dev/guide/extensions/aac-encoder",
+  "homepage": "https://mediabunny.dev/guide/extensions/flac-encoder",
   "funding": {
     "type": "individual",
     "url": "https://github.com/sponsors/Vanilagy"
@@ -43,13 +43,12 @@
     "@types/emscripten": "^1.40.1"
   },
   "keywords": [
-    "aac",
+    "flac",
     "encoding",
     "codec",
     "mediabunny",
-    "ffmpeg",
+    "lossless",
     "browser",
-    "wasm",
-    "polyfill"
+    "wasm"
   ]
 }

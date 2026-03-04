@@ -21,5 +21,6 @@
 
     "@mediabunny/mp3-encoder": "Adds MP3 encoder support to Mediabunny.",
     "@mediabunny/ac3": "Adds AC-3/E-AC-3 decoder and encoder support to Mediabunny.",
-    "@mediabunny/aac-encoder": "Adds AAC encoder support to Mediabunny."
+    "@mediabunny/aac-encoder": "Polyfills AAC encoder support to Mediabunny.",
+    "@mediabunny/flac-encoder": "Adds FLAC encoder support to Mediabunny."
 }
