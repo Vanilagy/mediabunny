@@ -9,6 +9,7 @@
 			"mediabunny": ["./src/index.ts"],
 			"@mediabunny/ac3": ["./packages/ac3/src/index.ts"],
 			"@mediabunny/aac-encoder": ["./packages/aac-encoder/src/index.ts"],
+			"@mediabunny/flac-encoder": ["./packages/flac-encoder/src/index.ts"],
 		},
 		"types": ["vite/client"]
 	},

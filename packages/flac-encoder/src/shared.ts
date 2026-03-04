@@ -6,19 +6,23 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+export type PacketInfo = {
+	encodedData: ArrayBuffer;
+	samples: number;
+};
+
 export type WorkerCommand = {
 	type: 'init';
 	data: {
 		numberOfChannels: number;
 		sampleRate: number;
-		bitrate: number;
 	};
 } | {
 	type: 'encode';
 	data: {
 		ctx: number;
 		audioData: ArrayBuffer;
-		timestamp: number;
+		numSamples: number;
 	};
 } | {
 	type: 'flush';
@@ -27,17 +31,10 @@ export type WorkerCommand = {
 	};
 };
 
-export type PacketInfo = {
-	encodedData: ArrayBuffer;
-	pts: number;
-	duration: number;
-};
-
 export type WorkerResponseData = {
 	type: 'init';
 	ctx: number;
-	frameSize: number;
-	extradata: ArrayBuffer;
+	header: ArrayBuffer;
 } | {
 	type: 'encode';
 	packets: PacketInfo[];

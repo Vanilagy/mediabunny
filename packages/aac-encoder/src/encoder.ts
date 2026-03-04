@@ -19,7 +19,7 @@ import {
 	EncodedPacket,
 	registerEncoder,
 } from 'mediabunny';
-import type { WorkerCommand, WorkerResponse, WorkerResponseData } from './shared';
+import type { PacketInfo, WorkerCommand, WorkerResponse, WorkerResponseData } from './shared';
 // @ts-expect-error An esbuild plugin handles this, TypeScript doesn't need to understand
 import createWorker from './encode.worker';
 
@@ -184,7 +184,6 @@ class AacEncoder extends CustomAudioEncoder {
 	}
 
 	close() {
-		void this.sendCommand({ type: 'close', data: { ctx: this.ctx } });
 		this.worker?.terminate();
 	}
 
@@ -219,7 +218,7 @@ class AacEncoder extends CustomAudioEncoder {
 		this.emitPackets(result.packets);
 	}
 
-	private emitPackets(packets: Array<{ encodedData: ArrayBuffer; pts: number; duration: number }>) {
+	private emitPackets(packets: PacketInfo[]) {
 		assert(this.nextPacketTimestampInSamples !== null);
 
 		for (const p of packets) {

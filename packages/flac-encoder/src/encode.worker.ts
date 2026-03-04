@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import createModule from '../build/aac';
+import createModule from '../build/flac';
 import type { PacketInfo, WorkerCommand, WorkerResponse, WorkerResponseData } from './shared';
 
 type ExtendedEmscriptenModule = EmscriptenModule & {
@@ -16,18 +16,17 @@ type ExtendedEmscriptenModule = EmscriptenModule & {
 let module: ExtendedEmscriptenModule;
 let modulePromise: Promise<ExtendedEmscriptenModule> | null = null;
 
-let initEncoderFn: (channels: number, sampleRate: number, bitrate: number) => number;
-let getEncoderFrameSize: (ctx: number) => number;
-let getEncoderExtradata: (ctx: number) => number;
-let getEncoderExtradataSize: (ctx: number) => number;
+let initEncoderFn: (channels: number, sampleRate: number) => number;
 let getEncodeInputPtr: (ctx: number, size: number) => number;
-let sendFrameFn: (ctx: number, pts: number) => number;
-let receivePacketFn: (ctx: number) => number;
-let flushEncoderStartFn: (ctx: number) => void;
-let resetEncoderFn: (ctx: number) => void;
-let getEncodedData: (ctx: number) => number;
-let getEncodedPts: (ctx: number) => number;
-let getEncodedDuration: (ctx: number) => number;
+let sendSamplesFn: (ctx: number, numSamples: number) => number;
+let getOutputData: (ctx: number) => number;
+let getFrameCount: (ctx: number) => number;
+let getFrameSize: (ctx: number, index: number) => number;
+let getFrameSamples: (ctx: number, index: number) => number;
+let getHeaderData: (ctx: number) => number;
+let getHeaderSize: (ctx: number) => number;
+let finishEncoderFn: (ctx: number) => number;
+
 const ensureModule = async () => {
 	if (!module) {
 		if (modulePromise) {
@@ -38,58 +37,52 @@ const ensureModule = async () => {
 		module = await modulePromise;
 		modulePromise = null;
 
-		initEncoderFn = module.cwrap('init_encoder', 'number', ['number', 'number', 'number']);
-		getEncoderFrameSize = module.cwrap('get_encoder_frame_size', 'number', ['number']);
-		getEncoderExtradata = module.cwrap('get_encoder_extradata', 'number', ['number']);
-		getEncoderExtradataSize = module.cwrap('get_encoder_extradata_size', 'number', ['number']);
+		initEncoderFn = module.cwrap('init_encoder', 'number', ['number', 'number']);
 		getEncodeInputPtr = module.cwrap('get_encode_input_ptr', 'number', ['number', 'number']);
-		sendFrameFn = module.cwrap('send_frame', 'number', ['number', 'number']);
-		receivePacketFn = module.cwrap('receive_packet', 'number', ['number']);
-		flushEncoderStartFn = module.cwrap('flush_encoder_start', null, ['number']);
-		resetEncoderFn = module.cwrap('reset_encoder', null, ['number']);
-		getEncodedData = module.cwrap('get_encoded_data', 'number', ['number']);
-		getEncodedPts = module.cwrap('get_encoded_pts', 'number', ['number']);
-		getEncodedDuration = module.cwrap('get_encoded_duration', 'number', ['number']);
+		sendSamplesFn = module.cwrap('send_samples', 'number', ['number', 'number']);
+		getOutputData = module.cwrap('get_output_data', 'number', ['number']);
+		getFrameCount = module.cwrap('get_frame_count', 'number', ['number']);
+		getFrameSize = module.cwrap('get_frame_size', 'number', ['number', 'number']);
+		getFrameSamples = module.cwrap('get_frame_samples', 'number', ['number', 'number']);
+		getHeaderData = module.cwrap('get_header_data', 'number', ['number']);
+		getHeaderSize = module.cwrap('get_header_size', 'number', ['number']);
+		finishEncoderFn = module.cwrap('finish_encoder', 'number', ['number']);
 	}
 };
 
-const initEncoder = async (
-	numberOfChannels: number,
-	sampleRate: number,
-	bitrate: number,
-) => {
+const initEncoder = async (numberOfChannels: number, sampleRate: number) => {
 	await ensureModule();
 
-	const ctx = initEncoderFn(numberOfChannels, sampleRate, bitrate);
+	const ctx = initEncoderFn(numberOfChannels, sampleRate);
 	if (ctx === 0) {
-		throw new Error('Failed to initialize AAC encoder.');
+		throw new Error('Failed to initialize FLAC encoder.');
 	}
 
-	const frameSize = getEncoderFrameSize(ctx);
+	const headerPtr = getHeaderData(ctx);
+	const headerSize = getHeaderSize(ctx);
+	const header = module.HEAPU8.slice(headerPtr, headerPtr + headerSize).buffer;
 
-	const extradataPtr = getEncoderExtradata(ctx);
-	const extradataSize = getEncoderExtradataSize(ctx);
-	const extradata = module.HEAPU8.slice(extradataPtr, extradataPtr + extradataSize).buffer;
-
-	return { ctx, frameSize, extradata };
+	return { ctx, header };
 };
 
-const drainPackets = (ctx: number) => {
+const readPackets = (ctx: number) => {
 	const packets: PacketInfo[] = [];
+	const frameCount = getFrameCount(ctx);
+	const outputPtr = getOutputData(ctx);
 
-	let size: number;
-	while ((size = receivePacketFn(ctx)) > 0) {
-		const ptr = getEncodedData(ctx);
-		const encodedData = module.HEAPU8.slice(ptr, ptr + size).buffer;
-		const pts = getEncodedPts(ctx);
-		const duration = getEncodedDuration(ctx);
-		packets.push({ encodedData, pts, duration });
+	let offset = 0;
+	for (let i = 0; i < frameCount; i++) {
+		const size = getFrameSize(ctx, i);
+		const samples = getFrameSamples(ctx, i);
+		const encodedData = module.HEAPU8.slice(outputPtr + offset, outputPtr + offset + size).buffer;
+		packets.push({ encodedData, samples });
+		offset += size;
 	}
 
 	return packets;
 };
 
-const encode = (ctx: number, audioData: ArrayBuffer, timestamp: number) => {
+const encode = (ctx: number, audioData: ArrayBuffer, numSamples: number) => {
 	const audioBytes = new Uint8Array(audioData);
 
 	const inputPtr = getEncodeInputPtr(ctx, audioBytes.length);
@@ -98,12 +91,21 @@ const encode = (ctx: number, audioData: ArrayBuffer, timestamp: number) => {
 	}
 	module.HEAPU8.set(audioBytes, inputPtr);
 
-	const ret = sendFrameFn(ctx, timestamp);
+	const ret = sendSamplesFn(ctx, numSamples);
 	if (ret < 0) {
 		throw new Error(`Encode failed with error code ${ret}.`);
 	}
 
-	return drainPackets(ctx);
+	return readPackets(ctx);
+};
+
+const flush = (ctx: number) => {
+	const ret = finishEncoderFn(ctx);
+	if (ret < 0) {
+		throw new Error('Flush failed.');
+	}
+
+	return readPackets(ctx);
 };
 
 const onMessage = (data: { id: number; command: WorkerCommand }) => {
@@ -116,20 +118,19 @@ const onMessage = (data: { id: number; command: WorkerCommand }) => {
 
 			switch (command.type) {
 				case 'init': {
-					const { ctx, frameSize, extradata } = await initEncoder(
+					const { ctx, header } = await initEncoder(
 						command.data.numberOfChannels,
 						command.data.sampleRate,
-						command.data.bitrate,
 					);
-					result = { type: command.type, ctx, frameSize, extradata };
-					transferables.push(extradata);
+					result = { type: command.type, ctx, header };
+					transferables.push(header);
 				}; break;
 
 				case 'encode': {
 					const packets = encode(
 						command.data.ctx,
 						command.data.audioData,
-						command.data.timestamp,
+						command.data.numSamples,
 					);
 					for (const p of packets) {
 						transferables.push(p.encodedData);
@@ -138,12 +139,10 @@ const onMessage = (data: { id: number; command: WorkerCommand }) => {
 				}; break;
 
 				case 'flush': {
-					flushEncoderStartFn(command.data.ctx);
-					const packets = drainPackets(command.data.ctx);
+					const packets = flush(command.data.ctx);
 					for (const p of packets) {
 						transferables.push(p.encodedData);
 					}
-					resetEncoderFn(command.data.ctx);
 					result = { type: command.type, packets };
 				}; break;
 			}
