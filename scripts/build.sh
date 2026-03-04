@@ -7,6 +7,7 @@ set -e
 rm -rf dist
 rm -rf packages/mp3-encoder/dist
 rm -rf packages/ac3/dist
+rm -rf packages/aac-encoder/dist
 
 # Ensure license headers on all source files
 tsx scripts/ensure-license-headers.ts
@@ -15,6 +16,7 @@ tsx scripts/ensure-license-headers.ts
 tsc -p src
 tsc -p packages/mp3-encoder
 tsc -p packages/ac3
+tsc -p packages/aac-encoder
 
 # So that the resulting files use valid ESM imports with file extension. This only runs for the core Mediabunny as only
 # it ships the individual files to npm (for tree shaking, because it's large)
@@ -27,11 +29,13 @@ tsx scripts/bundle.ts
 api-extractor run
 api-extractor run -c packages/mp3-encoder/api-extractor.json
 api-extractor run -c packages/ac3/api-extractor.json
+api-extractor run -c packages/aac-encoder/api-extractor.json
 
 # Checks that all symbols are documented
 tsx scripts/check-docblocks.ts dist/mediabunny.d.ts
 tsx scripts/check-docblocks.ts packages/mp3-encoder/dist/mediabunny-mp3-encoder.d.ts
 tsx scripts/check-docblocks.ts packages/ac3/dist/mediabunny-ac3.d.ts
+tsx scripts/check-docblocks.ts packages/aac-encoder/dist/mediabunny-aac-encoder.d.ts
 
 # Checks that API docs are generatable
 npm run docs:generate -- --dry
@@ -40,3 +44,4 @@ npm run docs:generate -- --dry
 echo 'export as namespace Mediabunny;' >> dist/mediabunny.d.ts
 echo 'export as namespace MediabunnyMp3Encoder;' >> packages/mp3-encoder/dist/mediabunny-mp3-encoder.d.ts
 echo 'export as namespace MediabunnyAc3;' >> packages/ac3/dist/mediabunny-ac3.d.ts
+echo 'export as namespace MediabunnyAacEncoder;' >> packages/aac-encoder/dist/mediabunny-aac-encoder.d.ts

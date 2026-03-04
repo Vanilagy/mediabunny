@@ -774,6 +774,12 @@ export class Conversion {
 					);
 				}
 
+				if (codecs.includes('aac')) {
+					elements.push(
+						'\nThe @mediabunny/aac-encoder extension package provides support for encoding AAC.',
+					);
+				}
+
 				if (codecs.includes('ac3') || codecs.includes('eac3')) {
 					elements.push(
 						'\nThe @mediabunny/ac3 extension package provides support'

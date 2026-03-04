@@ -6,11 +6,10 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { buildAacAudioSpecificConfig, parseAacAudioSpecificConfig } from '../shared/aac-misc';
 import {
 	AUDIO_CODECS,
 	AudioCodec,
-	buildAacAudioSpecificConfig,
-	parseAacAudioSpecificConfig,
 	parsePcmCodec,
 	PCM_AUDIO_CODECS,
 	PcmAudioCodec,

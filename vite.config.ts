@@ -20,7 +20,9 @@ const rollupInput = Object.fromEntries(
 export default defineConfig({
 	resolve: {
 		alias: {
-			mediabunny: path.resolve(__dirname, './dist/bundles/mediabunny.mjs'),
+			'mediabunny': path.resolve(__dirname, './dist/bundles/mediabunny.mjs'),
+			'@mediabunny/aac-encoder':
+				path.resolve(__dirname, './packages/aac-encoder/dist/bundles/mediabunny-aac-encoder.mjs'),
 		},
 	},
 	plugins: [

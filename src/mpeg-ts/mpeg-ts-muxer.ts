@@ -6,8 +6,8 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { parseAacAudioSpecificConfig, validateAudioChunkMetadata, validateVideoChunkMetadata } from '../codec';
-import { buildAdtsHeaderTemplate, writeAdtsFrameLength } from '../adts/adts-misc';
+import { buildAdtsHeaderTemplate, parseAacAudioSpecificConfig, writeAdtsFrameLength } from '../../shared/aac-misc';
+import { validateAudioChunkMetadata, validateVideoChunkMetadata } from '../codec';
 import {
 	AC3_REGISTRATION_DESCRIPTOR,
 	AvcDecoderConfigurationRecord,
@@ -23,7 +23,8 @@ import {
 	iterateNalUnitsInAnnexB,
 	iterateNalUnitsInLengthPrefixed,
 } from '../codec-data';
-import { assert, Bitstream, promiseWithResolvers, setUint24, toDataView, toUint8Array } from '../misc';
+import { Bitstream } from '../../shared/bitstream';
+import { assert, promiseWithResolvers, setUint24, toDataView, toUint8Array } from '../misc';
 import { Muxer } from '../muxer';
 import { Output, OutputAudioTrack, OutputTrack, OutputVideoTrack } from '../output';
 import { MpegTsOutputFormat } from '../output-format';

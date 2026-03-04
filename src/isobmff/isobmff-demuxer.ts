@@ -6,6 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { parseAacAudioSpecificConfig } from '../../shared/aac-misc';
 import {
 	AacCodecInfo,
 	AudioCodec,
@@ -13,7 +14,6 @@ import {
 	extractVideoCodecString,
 	MediaCodec,
 	OPUS_SAMPLE_RATE,
-	parseAacAudioSpecificConfig,
 	parsePcmCodec,
 	PCM_AUDIO_CODECS,
 	PcmAudioCodec,
@@ -47,7 +47,6 @@ import {
 	assert,
 	binarySearchExact,
 	binarySearchLessOrEqual,
-	Bitstream,
 	COLOR_PRIMARIES_MAP_INVERSE,
 	findLastIndex,
 	isIso639Dash2LanguageCode,
@@ -92,6 +91,7 @@ import {
 } from '../reader';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags, RichImageData, TrackDisposition } from '../metadata';
 import { AC3_SAMPLE_RATES } from '../../shared/ac3-misc';
+import { Bitstream } from '../../shared/bitstream';
 
 type InternalTrack = {
 	id: number;

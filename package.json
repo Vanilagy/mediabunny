@@ -41,7 +41,7 @@
     "docs:dev": "vitepress dev docs",
     "docs:build": "npm run build && npm run docs:generate && vitepress build docs && npm run examples:build && cp dist/mediabunny.d.ts dist-docs/",
     "docs:preview": "vitepress preview docs",
-    "docs:generate": "tsx scripts/generate-api-docs.ts src/index.ts packages/mp3-encoder/src/index.ts packages/ac3/src/index.ts docs/api-config.json",
+    "docs:generate": "tsx scripts/generate-api-docs.ts src/index.ts packages/mp3-encoder/src/index.ts packages/ac3/src/index.ts packages/aac-encoder/src/index.ts docs/api-config.json",
     "dev": "vite",
     "examples:build": "vite build",
     "fix-build-import-paths": "tsx scripts/add-import-extensions.ts",

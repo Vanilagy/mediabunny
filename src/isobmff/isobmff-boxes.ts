@@ -20,7 +20,6 @@ import {
 	UNDETERMINED_LANGUAGE,
 	assertNever,
 	keyValueIterator,
-	Bitstream,
 } from '../misc';
 import {
 	AudioCodec,
@@ -46,6 +45,7 @@ import {
 } from './isobmff-muxer';
 import { parseAc3SyncFrame, parseEac3SyncFrame, parseOpusIdentificationHeader } from '../codec-data';
 import { MetadataTags, RichImageData } from '../metadata';
+import { Bitstream } from '../../shared/bitstream';
 
 export class IsobmffBoxWriter {
 	private helper = new Uint8Array(8);

@@ -1,0 +1,55 @@
+{
+  "name": "@mediabunny/aac-encoder",
+  "author": "Vanilagy",
+  "version": "1.35.1",
+  "description": "AAC encoder extension for Mediabunny, based on FFmpeg.",
+  "main": "./dist/bundles/mediabunny-aac-encoder.mjs",
+  "module": "./dist/bundles/mediabunny-aac-encoder.mjs",
+  "types": "./dist/modules/src/index.d.ts",
+  "exports": {
+    "types": "./dist/modules/src/index.d.ts",
+    "import": "./dist/bundles/mediabunny-aac-encoder.mjs",
+    "require": "./dist/bundles/mediabunny-aac-encoder.mjs"
+  },
+  "files": [
+    "README.md",
+    "package.json",
+    "LICENSE",
+    "dist",
+    "src"
+  ],
+  "browser": {
+    "worker_threads": false
+  },
+  "sideEffects": false,
+  "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vanilagy/mediabunny.git",
+    "directory": "packages/aac-encoder"
+  },
+  "bugs": {
+    "url": "https://github.com/Vanilagy/mediabunny/issues"
+  },
+  "homepage": "https://mediabunny.dev/guide/extensions/aac-encoder",
+  "funding": {
+    "type": "individual",
+    "url": "https://github.com/sponsors/Vanilagy"
+  },
+  "peerDependencies": {
+    "mediabunny": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/emscripten": "^1.40.1"
+  },
+  "keywords": [
+    "aac",
+    "encoding",
+    "codec",
+    "mediabunny",
+    "ffmpeg",
+    "browser",
+    "wasm",
+    "polyfill"
+  ]
+}

@@ -8,10 +8,9 @@
 
 import { SAMPLES_PER_AAC_FRAME } from '../adts/adts-demuxer';
 import { MAX_ADTS_FRAME_HEADER_SIZE, readAdtsFrameHeader } from '../adts/adts-reader';
+import { aacChannelMap, aacFrequencyTable } from '../../shared/aac-misc';
 import {
-	aacChannelMap,
 	AacCodecInfo,
-	aacFrequencyTable,
 	AudioCodec,
 	extractAudioCodecString,
 	extractVideoCodecString,
@@ -54,7 +53,6 @@ import {
 	assert,
 	binarySearchExact,
 	binarySearchLessOrEqual,
-	Bitstream,
 	COLOR_PRIMARIES_MAP_INVERSE,
 	findLastIndex,
 	floorToMultiple,
@@ -71,6 +69,7 @@ import { EncodedPacket, PacketType, PLACEHOLDER_DATA } from '../packet';
 import { FileSlice, readBytes, Reader, readU16Be, readU32Be, readU8 } from '../reader';
 import { buildMpegTsMimeType, MpegTsStreamType, TIMESCALE, TS_PACKET_SIZE } from './mpeg-ts-misc';
 import { AC3_SAMPLE_RATES } from '../../shared/ac3-misc';
+import { Bitstream } from '../../shared/bitstream';
 
 // Resources:
 // ISO/IEC 13818-1

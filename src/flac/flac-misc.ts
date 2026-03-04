@@ -6,7 +6,8 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { assert, assertNever, Bitstream } from '../misc';
+import { Bitstream } from '../../shared/bitstream';
+import { assert, assertNever } from '../misc';
 import { FileSlice, readBytes, readU16Be, readU8 } from '../reader';
 
 type BlockSizeOrUncommon = number | 'uncommon-u16' | 'uncommon-u8';

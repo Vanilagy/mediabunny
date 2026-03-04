@@ -6,7 +6,8 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { aacChannelMap, aacFrequencyTable, AudioCodec } from '../codec';
+import { aacChannelMap, aacFrequencyTable } from '../../shared/aac-misc';
+import { AudioCodec } from '../codec';
 import { Demuxer } from '../demuxer';
 import {
 	ID3_V2_HEADER_SIZE,
