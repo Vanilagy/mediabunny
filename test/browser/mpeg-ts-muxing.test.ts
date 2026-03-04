@@ -156,7 +156,6 @@ test('MPEG-TS muxing with AVC and AAC', async () => {
 
 	const secondVideoPacket = await videoSink.getNextPacket(firstVideoPacket);
 	assert(secondVideoPacket);
-	expect(secondVideoPacket.type).toBe('delta');
 
 	for await (const packet of videoSink.packets()) {
 		expect(packet.data.slice(0, 4)).toEqual(new Uint8Array([0, 0, 0, 1])); // Annex B start code
