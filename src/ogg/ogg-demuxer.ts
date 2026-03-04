@@ -444,6 +444,10 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		return this.bitstream.sampleRate;
 	}
 
+	getTimestampsAreRelativeToUnixEpoch() {
+		return false;
+	}
+
 	getGroupId() {
 		return this.getId();
 	}

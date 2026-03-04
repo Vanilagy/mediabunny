@@ -80,6 +80,8 @@ export class HlsDemuxer extends Demuxer {
 				lineNumber: number;
 			}[] = [];
 
+			// Let's first iterate through the entire file, collecting all variant streams and media tags
+
 			while (true) {
 				let line = this.lineReader.readNextLine();
 				if (line instanceof Promise) line = await line;
@@ -170,27 +172,11 @@ export class HlsDemuxer extends Demuxer {
 					.filter(tag => tag.attributes.get('type')!.toLowerCase() === 'audio')
 					.map(tag => tag.attributes.get('group-id')!)),
 			];
-			const internalTracks: InternalTrack[] = [];
 
-			const addInternalTrack = (track: InternalTrack, canMerge: boolean) => {
-				const existingTrack = internalTracks.find(x =>
-					x.fullPath === track.fullPath && x.info.type === track.info.type && x.groupId === track.groupId,
-				);
-				if (existingTrack && canMerge) {
-					existingTrack.pairingMask |= track.pairingMask;
-					existingTrack.default ||= track.default;
-					existingTrack.lineNumber = Math.min(existingTrack.lineNumber, track.lineNumber);
+			// Now, let's process & resolve all variant streams in parallel, mapping each of them to tracks.
 
-					if (existingTrack.languageCode === UNDETERMINED_LANGUAGE) {
-						existingTrack.languageCode = track.languageCode;
-					}
-				} else {
-					internalTracks.push(track);
-				}
-			};
-
-			for (let i = 0; i < variantStreams.length; i++) {
-				const variantStream = variantStreams[i]!;
+			const internalTracksByVariant = await Promise.all(variantStreams.map(async (variantStream, i) => {
+				const result: { track: InternalTrack; canMerge: boolean }[] = [];
 
 				const codecsList = variantStream.attributes.get('codecs');
 				let codecStrings: string[];
@@ -198,6 +184,7 @@ export class HlsDemuxer extends Demuxer {
 				if (codecsList) {
 					codecStrings = codecsList.split(',').map(x => x.trim());
 				} else {
+					// No codecs were specified, we need to read the underlying media data
 					const segmentedInput = this.getSegmentedInputForPath(variantStream.fullPath);
 					const input = segmentedInput.toInput();
 					const tracks = await input.getTracks();
@@ -211,8 +198,16 @@ export class HlsDemuxer extends Demuxer {
 
 				const videoGroupId = variantStream.attributes.get('video');
 				const audioGroupId = variantStream.attributes.get('audio');
+				const containsVideoCodecs = codecStrings.some(x =>
+					VIDEO_CODECS.includes(inferCodecFromCodecString(x) as VideoCodec),
+				);
+				const containsAudioCodecs = codecStrings.some(x =>
+					AUDIO_CODECS.includes(inferCodecFromCodecString(x) as AudioCodec),
+				);
 
-				if (videoGroupId !== null) {
+				if (videoGroupId !== null && !containsVideoCodecs) {
+					// A video group is linked but no video codec is listed, sigh. Let's resolve the video codec.
+
 					if (!videoGroupIds.includes(videoGroupId)) {
 						throw new Error(
 							`Invalid M3U8 file; variant stream references video group "${videoGroupId}" which`
@@ -220,32 +215,40 @@ export class HlsDemuxer extends Demuxer {
 						);
 					}
 
-					for (const mediaTag of mediaTags) {
+					const matchingVideoMediaTags = mediaTags.filter((mediaTag) => {
 						const groupId = mediaTag.attributes.get('group-id')!;
 						const type = mediaTag.attributes.get('type')!;
+						return groupId === videoGroupId && type.toLowerCase() === 'video';
+					});
 
-						if (groupId !== videoGroupId || type.toLowerCase() !== 'video') {
-							continue;
+					const additionalCodecStrings = await Promise.all(matchingVideoMediaTags.map(async (tag) => {
+						const uri = tag.attributes.get('uri');
+						if (uri === null) {
+							return null;
 						}
 
-						const uri = mediaTag.attributes.get('uri');
-						if (uri !== null) {
-							const fullPath = joinPaths(this.input._entryPath, uri);
-							const segmentedInput = this.getSegmentedInputForPath(fullPath);
-							const input = segmentedInput.toInput();
-							const videoTrack = await input.getPrimaryVideoTrack();
+						const fullPath = joinPaths(this.input._entryPath!, uri);
+						const segmentedInput = this.getSegmentedInputForPath(fullPath);
+						const input = segmentedInput.toInput();
+						const videoTrack = await input.getPrimaryVideoTrack();
 
-							if (videoTrack && videoTrack.codec !== null) {
-								const codecParameterString = await videoTrack.getCodecParameterString();
-								assert(codecParameterString !== null);
-
-								codecStrings.push(codecParameterString);
-							}
+						if (!videoTrack || videoTrack.codec === null) {
+							return null;
 						}
-					}
+
+						const codecParameterString = await videoTrack.getCodecParameterString();
+						assert(codecParameterString !== null);
+						return codecParameterString;
+					}));
+
+					codecStrings.push(
+						...additionalCodecStrings.filter((x): x is string => x !== null),
+					);
 				}
 
-				if (audioGroupId !== null) {
+				if (audioGroupId !== null && !containsAudioCodecs) {
+					// An audio group is linked but no audio codec is listed, sigh. Let's resolve the audio codec.
+
 					if (!audioGroupIds.includes(audioGroupId)) {
 						throw new Error(
 							`Invalid M3U8 file; variant stream references audio group "${audioGroupId}" which`
@@ -253,29 +256,35 @@ export class HlsDemuxer extends Demuxer {
 						);
 					}
 
-					for (const mediaTag of mediaTags) {
-						const groupId = mediaTag.attributes.get('group-id')!;
-						const type = mediaTag.attributes.get('type')!;
+					const matchingAudioMediaTags = mediaTags.filter((tag) => {
+						const groupId = tag.attributes.get('group-id')!;
+						const type = tag.attributes.get('type')!;
+						return groupId === audioGroupId && type.toLowerCase() === 'audio';
+					});
 
-						if (groupId !== audioGroupId || type.toLowerCase() !== 'audio') {
-							continue;
+					const additionalCodecStrings = await Promise.all(matchingAudioMediaTags.map(async (tag) => {
+						const uri = tag.attributes.get('uri');
+						if (uri === null) {
+							return null;
 						}
 
-						const uri = mediaTag.attributes.get('uri');
-						if (uri !== null) {
-							const fullPath = joinPaths(this.input._entryPath, uri);
-							const segmentedInput = this.getSegmentedInputForPath(fullPath);
-							const input = segmentedInput.toInput();
-							const audioTrack = await input.getPrimaryAudioTrack();
+						const fullPath = joinPaths(this.input._entryPath!, uri);
+						const segmentedInput = this.getSegmentedInputForPath(fullPath);
+						const input = segmentedInput.toInput();
+						const audioTrack = await input.getPrimaryAudioTrack();
 
-							if (audioTrack && audioTrack.codec !== null) {
-								const codecParameterString = await audioTrack.getCodecParameterString();
-								assert(codecParameterString !== null);
-
-								codecStrings.push(codecParameterString);
-							}
+						if (!audioTrack || audioTrack.codec === null) {
+							return null;
 						}
-					}
+
+						const codecParameterString = await audioTrack.getCodecParameterString();
+						assert(codecParameterString !== null);
+						return codecParameterString;
+					}));
+
+					codecStrings.push(
+						...additionalCodecStrings.filter((x): x is string => x !== null),
+					);
 				}
 
 				// Unique that shit
@@ -290,6 +299,7 @@ export class HlsDemuxer extends Demuxer {
 				const averageBandwidth = variantStream.attributes.getAsNumber('average-bandwidth');
 				const name = variantStream.attributes.get('name');
 
+				// Now, finally, loop over each codec string for the variant and resolve each one to one or more tracks.
 				for (const codecString of codecStrings) {
 					const inferredCodec = inferCodecFromCodecString(codecString);
 					if (inferredCodec === null) {
@@ -321,8 +331,8 @@ export class HlsDemuxer extends Demuxer {
 								}
 							}
 
-							addInternalTrack({
-								id: internalTracks.length + 1,
+							result.push({ track: {
+								id: -1,
 								demuxer: this,
 								inputTrack: null,
 								backingTrack: null,
@@ -341,12 +351,12 @@ export class HlsDemuxer extends Demuxer {
 									width,
 									height,
 								},
-							}, false);
+							}, canMerge: false });
 						} else {
 							if (!videoGroupIds.includes(videoGroupId)) {
 								throw new Error(
-									`Invalid M3U8 file; variant stream references video group "${videoGroupId}" which`
-									+ ` is not defined in any #EXT-X-MEDIA tags.`,
+									`Invalid M3U8 file; variant stream references video group "${videoGroupId}"`
+									+ ` which is not defined in any #EXT-X-MEDIA tags.`,
 								);
 							}
 
@@ -371,8 +381,8 @@ export class HlsDemuxer extends Demuxer {
 									}
 								}
 
-								addInternalTrack({
-									id: internalTracks.length + 1,
+								result.push({ track: {
+									id: -1,
 									demuxer: this,
 									inputTrack: null,
 									backingTrack: null,
@@ -391,7 +401,7 @@ export class HlsDemuxer extends Demuxer {
 										width,
 										height,
 									},
-								}, true);
+								}, canMerge: true });
 							}
 						}
 					} else if (AUDIO_CODECS.includes(inferredCodec as AudioCodec)) {
@@ -412,8 +422,8 @@ export class HlsDemuxer extends Demuxer {
 								? Number(channels)
 								: null;
 
-							addInternalTrack({
-								id: internalTracks.length + 1,
+							result.push({ track: {
+								id: -1,
 								demuxer: this,
 								inputTrack: null,
 								backingTrack: null,
@@ -430,18 +440,18 @@ export class HlsDemuxer extends Demuxer {
 								info: {
 									type: 'audio',
 									numberOfChannels:
-									parsedChannels !== null
-									&& Number.isInteger(parsedChannels)
-									&& parsedChannels > 0
-										? parsedChannels
-										: null,
+											parsedChannels !== null
+											&& Number.isInteger(parsedChannels)
+											&& parsedChannels > 0
+												? parsedChannels
+												: null,
 								},
-							}, false);
+							}, canMerge: false });
 						} else {
 							if (!audioGroupIds.includes(audioGroupId)) {
 								throw new Error(
-									`Invalid M3U8 file; variant stream references audio group "${audioGroupId}" which`
-									+ ` is not defined in any #EXT-X-MEDIA tags.`,
+									`Invalid M3U8 file; variant stream references audio group "${audioGroupId}"`
+									+ ` which is not defined in any #EXT-X-MEDIA tags.`,
 								);
 							}
 
@@ -459,8 +469,8 @@ export class HlsDemuxer extends Demuxer {
 									? Number(channels)
 									: null;
 
-								addInternalTrack({
-									id: internalTracks.length + 1,
+								result.push({ track: {
+									id: -1,
 									demuxer: this,
 									inputTrack: null,
 									backingTrack: null,
@@ -477,16 +487,44 @@ export class HlsDemuxer extends Demuxer {
 									info: {
 										type: 'audio',
 										numberOfChannels:
-										parsedChannels !== null
-										&& Number.isInteger(parsedChannels)
-										&& parsedChannels > 0
-											? parsedChannels
-											: null,
+												parsedChannels !== null
+												&& Number.isInteger(parsedChannels)
+												&& parsedChannels > 0
+													? parsedChannels
+													: null,
 									},
-								}, true);
+								}, canMerge: true });
 							}
 						}
 					}
+				}
+
+				return result;
+			}));
+
+			const internalTracks: InternalTrack[] = [];
+			const addInternalTrack = (track: InternalTrack, canMerge: boolean) => {
+				const existingTrack = internalTracks.find(x =>
+					x.fullPath === track.fullPath && x.info.type === track.info.type && x.groupId === track.groupId,
+				);
+
+				if (existingTrack && canMerge) {
+					existingTrack.pairingMask |= track.pairingMask;
+					existingTrack.default ||= track.default;
+					existingTrack.lineNumber = Math.min(existingTrack.lineNumber, track.lineNumber);
+
+					if (existingTrack.languageCode === UNDETERMINED_LANGUAGE) {
+						existingTrack.languageCode = track.languageCode;
+					}
+				} else {
+					track.id = internalTracks.length + 1;
+					internalTracks.push(track);
+				}
+			};
+
+			for (const variantInternalTracks of internalTracksByVariant) {
+				for (const trackEntry of variantInternalTracks) {
+					addInternalTrack(trackEntry.track, trackEntry.canMerge);
 				}
 			}
 
@@ -626,6 +664,14 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 		}
 
 		return this.internalTrack.backingTrack._backing.getTimeResolution();
+	}
+
+	getTimestampsAreRelativeToUnixEpoch(): boolean {
+		if (!this.internalTrack.backingTrack) {
+			throw new TrackNotHydratedError();
+		}
+
+		return this.internalTrack.backingTrack._backing.getTimestampsAreRelativeToUnixEpoch();
 	}
 
 	getBitrate(): number | null {

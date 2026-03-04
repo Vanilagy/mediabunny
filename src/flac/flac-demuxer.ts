@@ -558,6 +558,10 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		return this.demuxer.audioInfo.sampleRate;
 	}
 
+	getTimestampsAreRelativeToUnixEpoch() {
+		return false;
+	}
+
 	getGroupId() {
 		return this.getId();
 	}

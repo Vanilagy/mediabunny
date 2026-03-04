@@ -21,7 +21,7 @@ import {
 import { Segment } from './segment';
 import { PacketRetrievalOptions } from './media-sink';
 import { MetadataTags, TrackDisposition } from './metadata';
-import { arrayCount, assert, binarySearchLessOrEqual, Rotation } from './misc';
+import { arrayCount, assert, binarySearchLessOrEqual, Rotation, roundToMultiple } from './misc';
 import { EncodedPacket } from './packet';
 import { NullSource } from './source';
 
@@ -255,6 +255,11 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 		return this.firstInputTrack._backing.getTimeResolution();
 	}
 
+	getTimestampsAreRelativeToUnixEpoch(): boolean {
+		assert(this.demuxer.firstSegment);
+		return this.demuxer.firstSegment.relativeToUnixEpoch;
+	}
+
 	getBitrate(): number | null {
 		return this.firstInputTrack._backing.getBitrate();
 	}
@@ -267,7 +272,10 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 		const mediaOffset = await this.demuxer.getMediaOffset(segment, track.input);
 
 		const modified = packet.clone({
-			timestamp: packet.timestamp + mediaOffset,
+			timestamp: roundToMultiple(
+				packet.timestamp + mediaOffset,
+				1 / track.timeResolution,
+			),
 			// The 1e8 assumes a max of 100 MB per second, highly unlikely to be hit, so this should guarantee
 			// monotonically increasing sequence numbers across segments.
 			sequenceNumber: Math.floor(1e8 * segment.relativeTimestamp) + packet.sequenceNumber,

@@ -18,28 +18,13 @@
 		});
 
 		const manifest = new Mediabunny.Input({
-			entryPath: 'https://playertest.longtailvideo.com/adaptive/elephants_dream_v4/index.m3u8',
+			entryPath: 'https://playertest.longtailvideo.com/adaptive/elephants_dream_v4/redundant.m3u8',
 			source: ({ path }) => new Mediabunny.UrlSource(path),
 			formats: Mediabunny.ALL_FORMATS,
 		});
 
 		const tracks = await manifest.getTracks();
-		console.log(tracks.map(x => x.languageCode))
-
-		function transform(n) {
-			n = BigInt(n);
-
-			let result = 0n;
-			let place = 1n;
-
-			while (n > 0n) {
-				result += (n & 1n) * place; // extract lowest bit
-				n >>= 1n;                   // shift right
-				place *= 10n;               // next decimal digit
-			}
-
-			return result;
-		}
+		console.log(tracks)
 
 		/*
 		const manifest = new Mediabunny.ManifestInput({

@@ -38,6 +38,7 @@ export interface InputTrackBacking {
 	getName(): string | null;
 	getLanguageCode(): string;
 	getTimeResolution(): number;
+	getTimestampsAreRelativeToUnixEpoch(): boolean;
 	getDisposition(): TrackDisposition;
 	getGroupId(): number;
 	getPairingMask(): bigint;
@@ -154,6 +155,14 @@ export abstract class InputTrack {
 	 */
 	get timeResolution() {
 		return this._backing.getTimeResolution();
+	}
+
+	/**
+	 * Whether the timestamps of this track are relative to the Unix epoch (January 1, 1970 00:00:00 UTC). When `true`,
+	 * each timestamp maps to a definitive point in time.
+	 */
+	get timestampsAreRelativeToUnixEpoch() {
+		return this._backing.getTimestampsAreRelativeToUnixEpoch();
 	}
 
 	/** The track's disposition, i.e. information about its intended usage. */

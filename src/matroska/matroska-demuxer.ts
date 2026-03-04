@@ -1946,6 +1946,10 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		return this.internalTrack.segment.timestampFactor;
 	}
 
+	getTimestampsAreRelativeToUnixEpoch() {
+		return false;
+	}
+
 	getDisposition() {
 		return this.internalTrack.disposition;
 	}

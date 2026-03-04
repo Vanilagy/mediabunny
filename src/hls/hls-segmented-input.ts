@@ -1,7 +1,7 @@
 import { AES_128_BLOCK_SIZE } from '../aes';
 import { Segment, SegmentEncryptionInfo, SegmentLocation } from '../segment';
 import { SegmentedInput } from '../segmented-input';
-import { toDataView, joinPaths } from '../misc';
+import { toDataView, joinPaths, last } from '../misc';
 import { LineReader, Reader } from '../reader';
 import { HlsDemuxer } from './hls-demuxer';
 import { AttributeList, canIgnoreLine } from './hls-misc';
@@ -10,7 +10,6 @@ const IV_STRING_REGEX = /^0[xX][0-9a-fA-F]+$/;
 
 export class HlsSegmentedInput extends SegmentedInput {
 	demuxer: HlsDemuxer;
-	segments: Segment[] = [];
 	nextSegmentDuration: number | null = null;
 	nextSegmentTitle: string | null = null;
 	accumulatedTime = 0;
@@ -22,6 +21,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 	currentInitSegment: Segment | null = null;
 	lastByteRangeEnd: number | null = null;
 	nextByteRange: { offset: number; length: number } | null = null;
+	lastProgramDateTimeSeconds: number | null = null;
 
 	constructor(
 		demuxer: HlsDemuxer,
@@ -43,6 +43,8 @@ export class HlsSegmentedInput extends SegmentedInput {
 		}
 
 		this.segmentsPromise ??= (async () => {
+			const segments: Segment[] = [];
+
 			while (true) {
 				let line = lineReader.readNextLine();
 				if (line instanceof Promise) line = await line;
@@ -90,13 +92,14 @@ export class HlsSegmentedInput extends SegmentedInput {
 						this,
 						location,
 						this.accumulatedTime,
+						this.lastProgramDateTimeSeconds !== null,
 						this.nextSegmentDuration,
 						this.nextSegmentTitle,
 						key,
 						this.currentFirstSegment,
 						this.currentInitSegment,
 					);
-					this.segments.push(segment);
+					segments.push(segment);
 					this.accumulatedTime += this.nextSegmentDuration;
 					this.nextSequenceNumber++;
 					this.currentFirstSegment ??= segment;
@@ -151,6 +154,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 						this,
 						location,
 						this.accumulatedTime,
+						this.lastProgramDateTimeSeconds !== null,
 						0,
 						null,
 						this.currentKey,
@@ -218,13 +222,51 @@ export class HlsSegmentedInput extends SegmentedInput {
 					this.nextSequenceNumber = number;
 				} else if (line.startsWith('#EXT-X-BYTERANGE:')) {
 					this.parseAndUpdateByteRange(line.slice(17));
+				} else if (line.startsWith('#EXT-X-PROGRAM-DATE-TIME:')) {
+					const dateTime = line.slice(25);
+					const dateTimeMs = Date.parse(dateTime);
+
+					if (!Number.isFinite(dateTimeMs)) {
+						continue;
+					}
+
+					const dateTimeSeconds = dateTimeMs / 1000;
+					if (this.lastProgramDateTimeSeconds === dateTimeSeconds) {
+						continue;
+					}
+
+					if (this.lastProgramDateTimeSeconds === null && segments.length > 0) {
+						// "If the first EXT-X-PROGRAM-DATE-TIME tag in a Playlist appears after
+						// one or more Media Segment URIs, the client SHOULD extrapolate
+						// backward from that tag (using EXTINF durations and/or media
+						// timestamps) to associate dates with those segments."
+						const lastSegment = last(segments)!;
+						const lastSegmentEnd = lastSegment.relativeTimestamp + lastSegment.duration;
+						const offset = dateTimeSeconds - lastSegmentEnd;
+
+						for (const segment of segments) {
+							segment.relativeTimestamp += offset;
+							segment.relativeToUnixEpoch = true;
+						}
+
+						this.accumulatedTime += offset;
+					}
+
+					this.lastProgramDateTimeSeconds = dateTimeSeconds;
+
+					if (Math.abs(this.accumulatedTime - dateTimeSeconds) >= 1) {
+						// Only snap to the datetime if the current time is sufficiently far away from it. If we always
+						// snapped, we'd lose the sub-second accuracy that's often provided by precise
+						// segment durations.
+						this.accumulatedTime = dateTimeSeconds;
+					}
 				} else if (line.startsWith('#EXT-X-DISCONTINUITY')) {
 					this.currentFirstSegment = null;
 					this.currentInitSegment = null;
 				}
 			}
 
-			return this.segments;
+			return segments;
 		})();
 	}
 

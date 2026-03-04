@@ -22,6 +22,7 @@ export class Segment {
 	input: SegmentedInput;
 	location: SegmentLocation;
 	relativeTimestamp: number;
+	relativeToUnixEpoch: boolean;
 	duration: number;
 	title: string | null;
 	encryption: SegmentEncryptionInfo | null;
@@ -32,6 +33,7 @@ export class Segment {
 		input: SegmentedInput,
 		location: SegmentLocation,
 		relativeTimestamp: number,
+		relativeToUnixEpoch: boolean,
 		duration: number,
 		title: string | null,
 		encryption: SegmentEncryptionInfo | null,
@@ -41,6 +43,7 @@ export class Segment {
 		this.input = input;
 		this.location = location;
 		this.relativeTimestamp = relativeTimestamp;
+		this.relativeToUnixEpoch = relativeToUnixEpoch;
 		this.duration = duration;
 		this.title = title;
 		this.encryption = encryption;

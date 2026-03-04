@@ -1079,6 +1079,10 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 		return TIMESCALE;
 	}
 
+	getTimestampsAreRelativeToUnixEpoch() {
+		return false;
+	}
+
 	getGroupId() {
 		return this.getId();
 	}

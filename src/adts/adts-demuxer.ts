@@ -206,6 +206,10 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 		return sampleRate / SAMPLES_PER_AAC_FRAME;
 	}
 
+	getTimestampsAreRelativeToUnixEpoch() {
+		return false;
+	}
+
 	getGroupId() {
 		return this.getId();
 	}
