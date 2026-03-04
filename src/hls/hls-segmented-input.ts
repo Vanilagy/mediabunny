@@ -1,7 +1,7 @@
 import { AES_128_BLOCK_SIZE } from '../aes';
 import { Segment, SegmentEncryptionInfo, SegmentLocation } from '../segment';
 import { SegmentedInput } from '../segmented-input';
-import { AsyncMutex, binarySearchLessOrEqual, toDataView, joinPaths, last } from '../misc';
+import { toDataView, joinPaths } from '../misc';
 import { LineReader, Reader } from '../reader';
 import { HlsDemuxer } from './hls-demuxer';
 import { AttributeList, canIgnoreLine } from './hls-misc';
@@ -9,22 +9,20 @@ import { AttributeList, canIgnoreLine } from './hls-misc';
 const IV_STRING_REGEX = /^0[xX][0-9a-fA-F]+$/;
 
 export class HlsSegmentedInput extends SegmentedInput {
-	_demuxer: HlsDemuxer;
-	_lineReader: LineReader;
-	_segments: Segment[] = [];
-	_nextSegmentDuration: number | null = null;
-	_nextSegmentTitle: string | null = null;
-	_accumulatedTime = 0;
-	_headerRead = false;
-	_mutex = new AsyncMutex();
-	_currentKey: SegmentEncryptionInfo | null = null;
-	_nextSequenceNumber = 0;
-	_currentFirstSegment: Segment | null = null;
-	_currentInitSegment: Segment | null = null;
-	_lastByteRangeEnd: number | null = null;
-	_nextByteRange: { offset: number; length: number } | null = null;
+	demuxer: HlsDemuxer;
+	segments: Segment[] = [];
+	nextSegmentDuration: number | null = null;
+	nextSegmentTitle: string | null = null;
+	accumulatedTime = 0;
+	headerRead = false;
+	segmentsPromise: Promise<Segment[]>;
+	currentKey: SegmentEncryptionInfo | null = null;
+	nextSequenceNumber = 0;
+	currentFirstSegment: Segment | null = null;
+	currentInitSegment: Segment | null = null;
+	lastByteRangeEnd: number | null = null;
+	nextByteRange: { offset: number; length: number } | null = null;
 
-	/** @internal */
 	constructor(
 		demuxer: HlsDemuxer,
 		path: string,
@@ -32,101 +30,42 @@ export class HlsSegmentedInput extends SegmentedInput {
 	) {
 		super(demuxer.input, path);
 
-		this._demuxer = demuxer;
+		this.demuxer = demuxer;
 
+		let lineReader: LineReader;
 		if (reader) {
-			this._lineReader = new LineReader(() => reader, canIgnoreLine);
+			lineReader = new LineReader(() => reader, canIgnoreLine);
 		} else {
-			this._lineReader = new LineReader(async () => {
-				const source = await this._demuxer.input._getSourceUncached({ path: this.path });
+			lineReader = new LineReader(async () => {
+				const source = await this.demuxer.input._getSourceUncached({ path: this.path });
 				return new Reader(source);
 			}, canIgnoreLine);
 		}
-	}
 
-	async getFirstSegment() {
-		if (this._segments.length === 0) {
-			await this._readNextSegment();
-		}
-
-		return this._segments[0] ?? null;
-	}
-
-	async getSegmentAt(relativeTimestamp: number) {
-		await this._readUntilSegmentAt(relativeTimestamp);
-
-		const index = binarySearchLessOrEqual(this._segments, relativeTimestamp, x => x.relativeTimestamp);
-		if (index === -1) {
-			return null;
-		}
-
-		return this._segments[index]!;
-	}
-
-	async getNextSegment(segment: Segment) {
-		const index = this._segments.indexOf(segment);
-		if (index === -1) {
-			throw new Error('Segment was not created by this variant.');
-		}
-
-		if (index + 1 < this._segments.length) {
-			return this._segments[index + 1]!;
-		}
-
-		if (this._lineReader.reachedEnd) {
-			return null;
-		}
-
-		await this._readNextSegment();
-		return this._segments[index + 1] ?? null;
-	}
-
-	async getPreviousSegment(segment: Segment): Promise<Segment | null> {
-		const index = this._segments.indexOf(segment);
-		if (index === -1) {
-			throw new Error('Segment was not created by this variant.');
-		}
-
-		if (index - 1 >= 0) {
-			return this._segments[index - 1]!;
-		}
-
-		return null;
-	}
-
-	async _readNextSegment() {
-		const segmentCount = this._segments.length;
-		const release = await this._mutex.acquire();
-
-		try {
-			if (segmentCount < this._segments.length) {
-				// The next segment has already been read by someone else, great
-				return;
-			}
-
+		this.segmentsPromise ??= (async () => {
 			while (true) {
-				let line = this._lineReader.readNextLine();
+				let line = lineReader.readNextLine();
 				if (line instanceof Promise) line = await line;
 
 				if (line === null) {
-					return;
+					break;
 				}
 
-				if (!this._headerRead) {
+				if (!this.headerRead) {
 					if (line !== '#EXTM3U') {
 						throw new Error('Invalid M3U8 file; expected first line to be #EXTM3U.');
 					}
 
-					this._headerRead = true;
+					this.headerRead = true;
 					continue;
 				}
 
 				if (!line.startsWith('#')) {
-					if (this._nextSegmentDuration === null) {
+					if (this.nextSegmentDuration === null) {
 						throw new Error('Invalid M3U8 file; a segment must be preceeded by a #EXTINF tag.');
 					}
 
-					let key = this._currentKey;
+					let key = this.currentKey;
 					if (key && !key.iv) {
 						// "the Media Sequence Number is to be used as the IV when decrypting a Media Segment, by
 						// putting its big-endian binary representation into a 16-octet (128-bit) buffer and padding
@@ -134,8 +73,8 @@ export class HlsSegmentedInput extends SegmentedInput {
 
 						const iv = new Uint8Array(AES_128_BLOCK_SIZE);
 						const view = toDataView(iv);
-						view.setUint32(8, Math.floor(this._nextSequenceNumber / (2 ** 32)));
-						view.setUint32(12, this._nextSequenceNumber);
+						view.setUint32(8, Math.floor(this.nextSequenceNumber / (2 ** 32)));
+						view.setUint32(12, this.nextSequenceNumber);
 
 						key = { ...key, iv };
 					}
@@ -143,35 +82,33 @@ export class HlsSegmentedInput extends SegmentedInput {
 					const fullPath = joinPaths(this.path, line);
 					const location: SegmentLocation = {
 						path: fullPath,
-						offset: this._nextByteRange?.offset ?? 0,
-						length: this._nextByteRange?.length ?? null,
+						offset: this.nextByteRange?.offset ?? 0,
+						length: this.nextByteRange?.length ?? null,
 					};
 
 					const segment = new Segment(
 						this,
 						location,
-						this._accumulatedTime,
-						this._nextSegmentDuration,
-						this._nextSegmentTitle,
+						this.accumulatedTime,
+						this.nextSegmentDuration,
+						this.nextSegmentTitle,
 						key,
-						this._currentFirstSegment,
-						this._currentInitSegment,
+						this.currentFirstSegment,
+						this.currentInitSegment,
 					);
-					this._segments.push(segment);
-					this._accumulatedTime += this._nextSegmentDuration;
-					this._nextSequenceNumber++;
-					this._currentFirstSegment ??= segment;
+					this.segments.push(segment);
+					this.accumulatedTime += this.nextSegmentDuration;
+					this.nextSequenceNumber++;
+					this.currentFirstSegment ??= segment;
 
-					this._nextSegmentDuration = null;
-					this._nextSegmentTitle = null;
+					this.nextSegmentDuration = null;
+					this.nextSegmentTitle = null;
 
-					if (this._nextByteRange === null) {
-						this._lastByteRangeEnd = null;
+					if (this.nextByteRange === null) {
+						this.lastByteRangeEnd = null;
 					} else {
-						this._nextByteRange = null;
+						this.nextByteRange = null;
 					}
-
-					return;
 				}
 
 				if (line.startsWith('#EXTINF:')) {
@@ -184,8 +121,8 @@ export class HlsSegmentedInput extends SegmentedInput {
 					}
 					const title = commaIndex === -1 ? null : extinfContent.slice(commaIndex + 1).trim() || null;
 
-					this._nextSegmentDuration = duration;
-					this._nextSegmentTitle = title;
+					this.nextSegmentDuration = duration;
+					this.nextSegmentTitle = title;
 				} else if (line.startsWith('#EXT-X-MAP:')) {
 					const attributes = new AttributeList(line.slice(11));
 					const uri = attributes.get('uri');
@@ -195,17 +132,17 @@ export class HlsSegmentedInput extends SegmentedInput {
 
 					const byteRange = attributes.get('byterange');
 					if (byteRange !== null) {
-						this._parseAndUpdateByteRange(byteRange);
+						this.parseAndUpdateByteRange(byteRange);
 					}
 
 					const fullPath = joinPaths(this.path, uri);
 					const location: SegmentLocation = {
 						path: fullPath,
-						offset: this._nextByteRange?.offset ?? 0,
-						length: this._nextByteRange?.length ?? null,
+						offset: this.nextByteRange?.offset ?? 0,
+						length: this.nextByteRange?.length ?? null,
 					};
 
-					if (this._currentKey?.method === 'AES-128' && !this._currentKey.iv) {
+					if (this.currentKey?.method === 'AES-128' && !this.currentKey.iv) {
 						// Required by the spec
 						throw new Error('IV attribute must be set on #EXT-X-KEY tag preceding the #EXT-X-MAP tag.');
 					}
@@ -213,31 +150,31 @@ export class HlsSegmentedInput extends SegmentedInput {
 					const segment = new Segment(
 						this,
 						location,
-						this._accumulatedTime,
+						this.accumulatedTime,
 						0,
 						null,
-						this._currentKey,
+						this.currentKey,
 						null,
 						null,
 					);
 
 					// Accumulated time and sequence number are not updated in this case
-					this._currentInitSegment = segment;
+					this.currentInitSegment = segment;
 
-					this._nextSegmentDuration = null;
-					this._nextSegmentTitle = null;
+					this.nextSegmentDuration = null;
+					this.nextSegmentTitle = null;
 
-					if (this._nextByteRange === null) {
-						this._lastByteRangeEnd = null;
+					if (this.nextByteRange === null) {
+						this.lastByteRangeEnd = null;
 					} else {
-						this._nextByteRange = null;
+						this.nextByteRange = null;
 					}
 				} else if (line.startsWith('#EXT-X-KEY:')) {
 					const attributes = new AttributeList(line.slice(11));
 					const method = attributes.get('method');
 
 					if (method === 'NONE') {
-						this._currentKey = null;
+						this.currentKey = null;
 					} else if (method === 'AES-128') {
 						const uri = attributes.get('uri');
 						if (!uri) {
@@ -261,7 +198,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 							}
 						}
 
-						this._currentKey = {
+						this.currentKey = {
 							method: 'AES-128',
 							keyUri: joinPaths(this.path, uri),
 							iv,
@@ -278,20 +215,20 @@ export class HlsSegmentedInput extends SegmentedInput {
 						throw new Error(`Invalid EXT-X-MEDIA-SEQUENCE value '${value}'.`);
 					}
 
-					this._nextSequenceNumber = number;
+					this.nextSequenceNumber = number;
 				} else if (line.startsWith('#EXT-X-BYTERANGE:')) {
-					this._parseAndUpdateByteRange(line.slice(17));
+					this.parseAndUpdateByteRange(line.slice(17));
 				} else if (line.startsWith('#EXT-X-DISCONTINUITY')) {
-					this._currentFirstSegment = null;
-					this._currentInitSegment = null;
+					this.currentFirstSegment = null;
+					this.currentInitSegment = null;
 				}
 			}
-		} finally {
-			release();
-		}
+
+			return this.segments;
+		})();
 	}
 
-	_parseAndUpdateByteRange(content: string) {
+	parseAndUpdateByteRange(content: string) {
 		const atIndex = content.indexOf('@');
 
 		const length = Number(atIndex === -1 ? content : content.slice(0, atIndex));
@@ -306,26 +243,19 @@ export class HlsSegmentedInput extends SegmentedInput {
 				throw new Error(`Invalid #EXT-X-BYTERANGE offset '${content}'.`);
 			}
 		} else {
-			if (this._lastByteRangeEnd === null) {
+			if (this.lastByteRangeEnd === null) {
 				throw new Error(
 					'Invalid M3U8 file; #EXT-X-BYTERANGE without offset requires a previous byte range.',
 				);
 			}
-			offset = this._lastByteRangeEnd;
+			offset = this.lastByteRangeEnd;
 		}
 
-		this._nextByteRange = { offset, length };
-		this._lastByteRangeEnd = offset + length;
+		this.nextByteRange = { offset, length };
+		this.lastByteRangeEnd = offset + length;
 	}
 
-	async _readUntilSegmentAt(relativeTimestamp: number) {
-		while (!this._lineReader.reachedEnd) {
-			const lastSegment = last(this._segments);
-			if (lastSegment && lastSegment.relativeTimestamp > relativeTimestamp) {
-				break;
-			}
-
-			await this._readNextSegment();
-		}
+	async getSegments() {
+		return this.segmentsPromise;
 	}
 }

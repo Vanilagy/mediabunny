@@ -19,17 +19,17 @@ export type SegmentLocation = {
 };
 
 export class Segment {
-	readonly variant: SegmentedInput;
-	readonly location: SegmentLocation;
-	readonly relativeTimestamp: number;
-	readonly duration: number;
-	readonly title: string | null;
-	readonly encryption: SegmentEncryptionInfo | null;
-	readonly firstSegment: Segment | null;
-	readonly initSegment: Segment | null;
+	input: SegmentedInput;
+	location: SegmentLocation;
+	relativeTimestamp: number;
+	duration: number;
+	title: string | null;
+	encryption: SegmentEncryptionInfo | null;
+	firstSegment: Segment | null;
+	initSegment: Segment | null;
 
 	constructor(
-		variant: SegmentedInput,
+		input: SegmentedInput,
 		location: SegmentLocation,
 		relativeTimestamp: number,
 		duration: number,
@@ -38,7 +38,7 @@ export class Segment {
 		firstSegment: Segment | null,
 		initSegment: Segment | null,
 	) {
-		this.variant = variant;
+		this.input = input;
 		this.location = location;
 		this.relativeTimestamp = relativeTimestamp;
 		this.duration = duration;
@@ -48,78 +48,85 @@ export class Segment {
 		this.initSegment = initSegment;
 	}
 
-	toInput(): Promise<Input> {
-		const cacheEntry = this.variant._inputCache.find(x => x.segment === this);
+	toInput(): Input {
+		const cacheEntry = this.input.inputCache.find(x => x.segment === this);
 		if (cacheEntry) {
-			cacheEntry.age = this.variant._nextInputCacheAge++;
-			return cacheEntry.inputPromise;
+			cacheEntry.age = this.input.nextInputCacheAge++;
+			return cacheEntry.input;
 		}
 
-		const inputPromise = (async () => {
-			let initInputPromise: Promise<Input> | null = null;
-			if (this.initSegment || this.firstSegment) {
-				initInputPromise = (this.initSegment ?? this.firstSegment)!.toInput();
-			}
+		let initInput: Input | null = null;
+		if (this.initSegment || this.firstSegment) {
+			initInput = (this.initSegment ?? this.firstSegment)!.toInput();
+		}
 
-			let source: Source;
-
-			const needsSlice = this.location.offset > 0 || this.location.length !== null;
-
-			if (!this.encryption) {
-				source = await this.variant.input._getSourceCached({ path: this.location.path });
-				if (needsSlice) {
-					source = source.slice(this.location.offset, this.location.length ?? undefined);
-				}
-			} else {
-				assert(this.encryption.iv);
-
-				let ciphertextSource = await this.variant.input._getSourceCached({ path: this.location.path });
-				if (needsSlice) {
-					// Slice before decrypting
-					ciphertextSource = ciphertextSource.slice(this.location.offset, this.location.length ?? undefined);
+		const input = new Input({
+			entryPath: this.location.path,
+			source: async (request) => {
+				if (request.path !== this.location.path) {
+					// This code technically allows for recursive .m3u8 files for example. Uncached because the added
+					// input adds its own layer of caching, so here we just do a passthrough.
+					return this.input.input._getSourceUncached(request);
 				}
 
-				const ciphertextReader = new Reader(ciphertextSource);
+				let source: Source;
+				const needsSlice = this.location.offset > 0 || this.location.length !== null;
 
-				const stream = createAesDecryptStream(ciphertextReader, async () => {
-					const keySource = await this.variant.input._getSourceCached(
-						{ path: this.encryption!.keyUri },
-						ENCRYPTION_KEY_CACHE_GROUP,
-					);
-					const keyReader = new Reader(keySource);
-					const keySlice = await keyReader.requestSlice(0, AES_128_BLOCK_SIZE);
-					if (!keySlice) {
-						throw new Error('Invalid AES-128 key; expected at least 16 bytes of data.');
+				if (!this.encryption) {
+					source = await this.input.input._getSourceCached(request);
+					if (needsSlice) {
+						source = source.slice(this.location.offset, this.location.length ?? undefined);
 					}
-					const key = readBytes(keySlice, AES_128_BLOCK_SIZE);
+				} else {
+					assert(this.encryption.iv);
 
-					return { key, iv: this.encryption!.iv! };
-				});
+					let ciphertextSource = await this.input.input._getSourceCached(request);
+					if (needsSlice) {
+						// Slice before decrypting
+						ciphertextSource = ciphertextSource.slice(
+							this.location.offset,
+							this.location.length ?? undefined,
+						);
+					}
 
-				source = new ReadableStreamSource(stream);
-			}
+					const ciphertextReader = new Reader(ciphertextSource);
 
-			const initInput = await initInputPromise;
+					const stream = createAesDecryptStream(ciphertextReader, async () => {
+						const keySource = await this.input.input._getSourceCached(
+							{ path: this.encryption!.keyUri },
+							ENCRYPTION_KEY_CACHE_GROUP,
+						);
+						const keyReader = new Reader(keySource);
+						const keySlice = await keyReader.requestSlice(0, AES_128_BLOCK_SIZE);
+						if (!keySlice) {
+							throw new Error('Invalid AES-128 key; expected at least 16 bytes of data.');
+						}
+						const key = readBytes(keySlice, AES_128_BLOCK_SIZE);
 
-			return new Input({
-				source,
-				formats: this.variant.input._formats,
-				initInput: initInput ?? undefined,
-			});
-		})();
+						return { key, iv: this.encryption!.iv! };
+					});
 
-		this.variant._inputCache.push({
+					source = new ReadableStreamSource(stream);
+				}
+
+				return source;
+			},
+			formats: this.input.input._formats,
+			initInput: initInput ?? undefined,
+		});
+
+		this.input.inputCache.push({
 			segment: this,
-			inputPromise,
-			age: this.variant._nextInputCacheAge++,
+			input,
+			age: this.input.nextInputCacheAge++,
 		});
 
 		const MAX_INPUT_CACHE_SIZE = 4;
-		if (this.variant._inputCache.length > MAX_INPUT_CACHE_SIZE) {
-			const minAgeIndex = arrayArgmin(this.variant._inputCache, x => x.age);
-			this.variant._inputCache.splice(minAgeIndex, 1);
+		if (this.input.inputCache.length > MAX_INPUT_CACHE_SIZE) {
+			const minAgeIndex = arrayArgmin(this.input.inputCache, x => x.age);
+			this.input.inputCache.splice(minAgeIndex, 1);
 		}
 
-		return inputPromise;
+		return input;
 	}
 }

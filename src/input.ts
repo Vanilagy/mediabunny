@@ -43,7 +43,7 @@ export type InputOptions<S extends Source = Source> = {
 	/** A list of supported formats. If the source file is not of one of these formats, then it cannot be read. */
 	formats: InputFormat[];
 	/** The source from which data will be read. */
-	source: S | ((request: SourceRequest) => MaybePromise<Source>);
+	source: S | ((request: SourceRequest) => MaybePromise<S>);
 	entryPath?: string;
 	initInput?: Input;
 };
@@ -77,10 +77,15 @@ export class Input<S extends Source = Source> implements Disposable {
 	/** @internal */
 	_sourceCache: {
 		request: SourceRequest;
-		sourcePromise: Promise<Source>;
+		sourcePromise: Promise<S>;
 		age: number;
 		cacheGroup: number;
 	}[] = [];
+
+	/**
+	 * Called whenever a source is resolved for internal operations.
+	 */
+	onSource?: (source: Source, request: SourceRequest | null) => unknown;
 
 	/** True if the input has been disposed. */
 	get disposed() {
@@ -131,6 +136,8 @@ export class Input<S extends Source = Source> implements Disposable {
 			throw new TypeError('The returned Source must not be disposed.');
 		}
 
+		this.onSource?.(source, request);
+
 		return source;
 	}
 
@@ -168,6 +175,7 @@ export class Input<S extends Source = Source> implements Disposable {
 			let source: Source;
 			if (this._source instanceof Source) {
 				source = this._source;
+				this.onSource?.(source, null);
 			} else {
 				assert(this._entryPath !== null);
 				source = await this._getSourceUncached({ path: this._entryPath });
@@ -188,12 +196,42 @@ export class Input<S extends Source = Source> implements Disposable {
 	}
 
 	/**
-	 * Returns the source from which this input file reads its data. This is the same source that was passed to the
-	 * constructor.
+	 * Returns a source for the given request.
+	 *
+	 * If this input was created with a direct {@link Source}, that source is always returned. If this input was created
+	 * with a source function, this method resolves it using the provided request or the entry path.
+	 */
+	getSource(request?: SourceRequest): MaybePromise<S> {
+		if (this._source instanceof Source) {
+			return this._source;
+		}
+
+		assert(this._entryPath !== null);
+		return this._getSourceCached(request ?? { path: this._entryPath });
+	}
+
+	/**
+	 * @deprecated Use {@link getSource} instead.
+	 *
+	 * Returns the source from which this input file reads data for the entry path. Throws if the source-resolving
+	 * function returns a Promise.
 	 */
 	get source() {
-		// TODO throw if function or some shit?
-		return this._source;
+		if (this._source instanceof Source) {
+			return this._source;
+		}
+
+		assert(this._entryPath !== null);
+
+		const source = this._source({ path: this._entryPath });
+		if (source instanceof Promise) {
+			throw new TypeError(
+				'Input.source cannot be used when the source function resolves asynchronously.'
+				+ ' Use getSource() instead.',
+			);
+		}
+
+		return source;
 	}
 
 	/**
@@ -248,7 +286,7 @@ export class Input<S extends Source = Source> implements Disposable {
 		return Math.min(...firstTimestamps);
 	}
 
-	/** Returns the list of all tracks of this input file. */
+	/** Returns the list of all tracks of this input file in the order in which they appear in the file. */
 	async getTracks(query?: TrackQuery<InputTrack>) {
 		const demuxer = await this._getDemuxer();
 		const tracks = this._tracksCache ??= await demuxer.getTracks();
@@ -316,6 +354,16 @@ export class Input<S extends Source = Source> implements Disposable {
 	async getMetadataTags() {
 		const demuxer = await this._getDemuxer();
 		return demuxer.getMetadataTags();
+	}
+
+	async allTracksAreHydrated() {
+		const tracks = await this.getTracks();
+		return tracks.every(x => x.isHydrated);
+	}
+
+	async hydrateAllTracks() {
+		const tracks = await this.getTracks();
+		await Promise.all(tracks.map(x => x.hydrate()));
 	}
 
 	/**

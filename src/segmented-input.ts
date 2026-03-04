@@ -21,7 +21,7 @@ import {
 import { Segment } from './segment';
 import { PacketRetrievalOptions } from './media-sink';
 import { MetadataTags, TrackDisposition } from './metadata';
-import { arrayCount, assert, Rotation } from './misc';
+import { arrayCount, assert, binarySearchLessOrEqual, Rotation } from './misc';
 import { EncodedPacket } from './packet';
 import { NullSource } from './source';
 
@@ -42,47 +42,57 @@ export type AssociatedGroup = {
 };
 
 export abstract class SegmentedInput {
-	readonly input: Input;
-	readonly path: string;
+	input: Input;
+	path: string;
 
-	otherInputLol: Input | null = null;
-	/** @internal */
-	_nextInputCacheAge = 0;
-	/** @internal */
-	_inputCache: {
+	virtualInput: Input | null = null;
+	nextInputCacheAge = 0;
+	inputCache: {
 		segment: Segment;
-		inputPromise: Promise<Input>; // We store the promise so it's immediately available in the cache
+		input: Input;
 		age: number;
 	}[] = [];
 
-	/** @internal */
 	constructor(input: Input, path: string) {
 		this.input = input;
 		this.path = path;
 	}
 
-	abstract getFirstSegment(): Promise<Segment | null>;
-	abstract getSegmentAt(timestamp: number): Promise<Segment | null>;
-	abstract getNextSegment(segment: Segment): Promise<Segment | null>;
-	abstract getPreviousSegment(segment: Segment): Promise<Segment | null>;
+	abstract getSegments(): Promise<Segment[]>;
 
-	async* segments(startTimestamp?: number) {
-		let currentSegment: Segment | null;
+	async getFirstSegment() {
+		const segments = await this.getSegments();
+		return segments[0] ?? null;
+	}
 
-		if (startTimestamp !== undefined) {
-			currentSegment = await this.getSegmentAt(startTimestamp);
-		} else {
-			currentSegment = await this.getFirstSegment();
+	async getSegmentAt(timestamp: number) {
+		const segments = await this.getSegments();
+		const index = binarySearchLessOrEqual(segments, timestamp, x => x.relativeTimestamp);
+		if (index === -1) {
+			return null;
 		}
 
-		while (currentSegment !== null) {
-			yield currentSegment;
-			currentSegment = await this.getNextSegment(currentSegment);
-		}
+		return segments[index]!;
+	}
+
+	async getNextSegment(segment: Segment): Promise<Segment | null> {
+		const segments = await this.getSegments();
+		const index = segments.indexOf(segment);
+		assert(index !== -1);
+
+		return segments[index + 1] ?? null;
+	}
+
+	async getPreviousSegment(segment: Segment): Promise<Segment | null> {
+		const segments = await this.getSegments();
+		const index = segments.indexOf(segment);
+		assert(index !== -1);
+
+		return segments[index - 1] ?? null;
 	}
 
 	toInput() {
-		return this.otherInputLol ??= new Input({
+		return this.virtualInput ??= new Input({
 			source: new NullSource(),
 			formats: [new VirtualInputFormat(() => new SegmentedInputDemuxer(this.input, this))],
 		});
@@ -90,24 +100,24 @@ export abstract class SegmentedInput {
 }
 
 class SegmentedInputDemuxer extends Demuxer {
-	variant: SegmentedInput;
+	segmentedInput: SegmentedInput;
 	tracksPromise: Promise<InputTrack[]> | null = null;
 	firstSegment: Segment | null = null;
 	firstSegmentFirstTimestamps = new WeakMap<Segment, number>();
 
-	constructor(input: Input, variant: SegmentedInput) {
+	constructor(input: Input, segmentedInput: SegmentedInput) {
 		super(input);
 
-		this.variant = variant;
+		this.segmentedInput = segmentedInput;
 	}
 
 	override async isSupported() {
-		const firstSegment = await this.variant.getFirstSegment();
+		const firstSegment = await this.segmentedInput.getFirstSegment();
 		if (!firstSegment) {
 			return true; // There's no data but that's supported
 		}
 
-		const input = await firstSegment.toInput();
+		const input = firstSegment.toInput();
 		return input.isSupported();
 	}
 
@@ -121,12 +131,12 @@ class SegmentedInputDemuxer extends Demuxer {
 
 	async getTracks(): Promise<InputTrack[]> {
 		return this.tracksPromise ??= (async () => {
-			this.firstSegment = await this.variant.getFirstSegment();
+			this.firstSegment = await this.segmentedInput.getFirstSegment();
 			if (!this.firstSegment) {
 				return [];
 			}
 
-			const input = await this.firstSegment.toInput();
+			const input = this.firstSegment.toInput();
 			const inputTracks = await input.getTracks();
 
 			const tracks: InputTrack[] = [];
@@ -159,7 +169,7 @@ class SegmentedInputDemuxer extends Demuxer {
 		if (this.firstSegmentFirstTimestamps.has(firstSegment)) {
 			firstSegmentFirstTimestamp = this.firstSegmentFirstTimestamps.get(firstSegment)!;
 		} else {
-			const firstInput = await firstSegment.toInput();
+			const firstInput = firstSegment.toInput();
 			firstSegmentFirstTimestamp = await firstInput.getFirstTimestamp();
 			this.firstSegmentFirstTimestamps.set(firstSegment, firstSegmentFirstTimestamp);
 		}
@@ -312,12 +322,12 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 
 		let currentSegment: Segment | null = info.segment;
 		while (true) {
-			const nextSegment = await this.demuxer.variant.getNextSegment(currentSegment);
+			const nextSegment = await this.demuxer.segmentedInput.getNextSegment(currentSegment);
 			if (!nextSegment) {
 				return null;
 			}
 
-			const nextInput = await nextSegment.toInput();
+			const nextInput = nextSegment.toInput();
 			const nextTracks = await nextInput.getTracks();
 			const nextTrack = nextTracks.find(t => t.type === info.track.type && t.number === info.track.number);
 
@@ -348,13 +358,13 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 		options: PacketRetrievalOptions,
 		keyframesOnly: boolean,
 	): Promise<EncodedPacket | null> {
-		let currentSegment = await this.demuxer.variant.getSegmentAt(timestamp);
+		let currentSegment = await this.demuxer.segmentedInput.getSegmentAt(timestamp);
 		if (!currentSegment) {
 			return null;
 		}
 
 		while (currentSegment) {
-			const input = await currentSegment.toInput();
+			const input = currentSegment.toInput();
 			const tracks = await input.getTracks();
 			const track = tracks.find(t => (
 				t.type === this.firstInputTrack.type && t.number === this.firstInputTrack.number
@@ -362,7 +372,7 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 
 			if (!track) {
 				// Search the previous segment
-				currentSegment = await this.demuxer.variant.getPreviousSegment(currentSegment);
+				currentSegment = await this.demuxer.segmentedInput.getPreviousSegment(currentSegment);
 				continue;
 			}
 
@@ -375,7 +385,7 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 
 			if (!packet) {
 				// Search the previous segment
-				currentSegment = await this.demuxer.variant.getPreviousSegment(currentSegment);
+				currentSegment = await this.demuxer.segmentedInput.getPreviousSegment(currentSegment);
 				continue;
 			}
 

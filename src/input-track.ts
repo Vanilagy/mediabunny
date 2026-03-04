@@ -175,12 +175,20 @@ export abstract class InputTrack {
 	 * with a negative timestamp should not be presented.
 	 */
 	async getFirstTimestamp() {
+		if (!this.isHydrated) {
+			await this.hydrate();
+		}
+
 		const firstPacket = await this._backing.getFirstPacket({ metadataOnly: true });
 		return firstPacket?.timestamp ?? 0;
 	}
 
 	/** Returns the end timestamp of the last packet of this track, in seconds. */
 	async computeDuration() {
+		if (!this.isHydrated) {
+			await this.hydrate();
+		}
+
 		const lastPacket = await this._backing.getPacket(Infinity, { metadataOnly: true });
 		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
 	}
@@ -310,7 +318,7 @@ export abstract class InputTrack {
 		);
 	}
 
-	getUnhydrated<K extends NonFunctionKeys<this>>(key: K): this[K] | null {
+	get<K extends NonFunctionKeys<this>>(key: K): this[K] | null {
 		try {
 			return this[key];
 		} catch (error) {
@@ -322,13 +330,13 @@ export abstract class InputTrack {
 		}
 	}
 
-	resolve<K extends NonFunctionKeys<this>>(key: K): MaybePromise<this[K]> {
+	async resolve<K extends NonFunctionKeys<this>>(key: K): Promise<this[K]> {
 		try {
 			return this[key];
 		} catch (error) {
 			if (error instanceof TrackNotHydratedError) {
-				return this.hydrate()
-					.then(() => this[key]);
+				await this.hydrate();
+				return this[key];
 			}
 
 			throw error;
@@ -435,7 +443,11 @@ export class InputVideoTrack extends InputTrack {
 	}
 
 	/** Returns the color space of the track's samples. */
-	getColorSpace() {
+	async getColorSpace() {
+		if (!this.isHydrated) {
+			await this.hydrate();
+		}
+
 		return this._backing.getColorSpace();
 	}
 
@@ -449,7 +461,11 @@ export class InputVideoTrack extends InputTrack {
 	}
 
 	/** Checks if this track may contain transparent samples with alpha data. */
-	canBeTransparent() {
+	async canBeTransparent() {
+		if (!this.isHydrated) {
+			await this.hydrate();
+		}
+
 		return this._backing.canBeTransparent();
 	}
 
@@ -458,17 +474,29 @@ export class InputVideoTrack extends InputTrack {
 	 * track's packets using a [`VideoDecoder`](https://developer.mozilla.org/en-US/docs/Web/API/VideoDecoder). Returns
 	 * null if the track's codec is unknown.
 	 */
-	getDecoderConfig() {
+	async getDecoderConfig() {
+		if (!this.isHydrated) {
+			await this.hydrate();
+		}
+
 		return this._backing.getDecoderConfig();
 	}
 
 	async getCodecParameterString() {
+		if (!this.isHydrated) {
+			await this.hydrate();
+		}
+
 		const decoderConfig = await this._backing.getDecoderConfig();
 		return decoderConfig?.codec ?? null;
 	}
 
 	async canDecode() {
 		try {
+			if (!this.isHydrated) {
+				await this.hydrate();
+			}
+
 			const decoderConfig = await this._backing.getDecoderConfig();
 			if (!decoderConfig) {
 				return false;
@@ -558,17 +586,29 @@ export class InputAudioTrack extends InputTrack {
 	 * track's packets using an [`AudioDecoder`](https://developer.mozilla.org/en-US/docs/Web/API/AudioDecoder). Returns
 	 * null if the track's codec is unknown.
 	 */
-	getDecoderConfig() {
+	async getDecoderConfig() {
+		if (!this.isHydrated) {
+			await this.hydrate();
+		}
+
 		return this._backing.getDecoderConfig();
 	}
 
 	async getCodecParameterString() {
+		if (!this.isHydrated) {
+			await this.hydrate();
+		}
+
 		const decoderConfig = await this._backing.getDecoderConfig();
 		return decoderConfig?.codec ?? null;
 	}
 
 	async canDecode() {
 		try {
+			if (!this.isHydrated) {
+				await this.hydrate();
+			}
+
 			const decoderConfig = await this._backing.getDecoderConfig();
 			if (!decoderConfig) {
 				return false;
@@ -613,8 +653,7 @@ export class InputAudioTrack extends InputTrack {
 export class TrackNotHydratedError extends Error {
 	/** Creates a new {@link InputDisposedError}. */
 	constructor(
-		message = 'InputTrack is not hydrated; please call hydrate() first, or use the resolve() or getUnhydrated()'
-			+ ' method.',
+		message = 'InputTrack is not hydrated; please call hydrate() first, or use the resolve() or get() methods.',
 	) {
 		super(message);
 		this.name = 'TrackNotHydratedError';

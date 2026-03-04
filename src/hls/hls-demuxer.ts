@@ -60,7 +60,6 @@ export class HlsDemuxer extends Demuxer {
 
 	readMetadata() {
 		return this.metadataPromise ??= (async () => {
-			assert(typeof this.input._source === 'function');
 			assert(this.input._entryPath !== null);
 
 			let line = this.lineReader.readNextLine();
@@ -285,6 +284,12 @@ export class HlsDemuxer extends Demuxer {
 				let videoCodecString: string | null = null;
 				let audioCodecString: string | null = null;
 
+				const bandwidth = variantStream.attributes.getAsNumber('bandwidth');
+				assert(bandwidth !== null);
+
+				const averageBandwidth = variantStream.attributes.getAsNumber('average-bandwidth');
+				const name = variantStream.attributes.get('name');
+
 				for (const codecString of codecStrings) {
 					const inferredCodec = inferCodecFromCodecString(codecString);
 					if (inferredCodec === null) {
@@ -300,79 +305,11 @@ export class HlsDemuxer extends Demuxer {
 						}
 
 						videoCodecString = codecString;
-					} else if (AUDIO_CODECS.includes(inferredCodec as AudioCodec)) {
-						if (audioCodecString !== null) {
-							throw new Error(
-								'Unsupported M3U8 file; multiple audio codecs found in the CODECS attribute of a'
-								+ ' variant stream.',
-							);
-						}
 
-						audioCodecString = codecString;
-					}
-				}
+						const videoGroupId = variantStream.attributes.get('video');
 
-				const bandwidth = variantStream.attributes.getAsNumber('bandwidth');
-				assert(bandwidth !== null);
-
-				const averageBandwidth = variantStream.attributes.getAsNumber('average-bandwidth');
-				const name = variantStream.attributes.get('name');
-
-				if (videoCodecString !== null) {
-					const videoGroupId = variantStream.attributes.get('video');
-
-					if (videoGroupId === null) {
-						const resolution = variantStream.attributes.get('resolution');
-						let width: number | null = null;
-						let height: number | null = null;
-
-						if (resolution) {
-							const match = resolution.match(/^(\d+)x(\d+)$/);
-							if (match) {
-								width = Number(match[1]);
-								height = Number(match[2]);
-							}
-						}
-
-						addInternalTrack({
-							id: internalTracks.length + 1,
-							demuxer: this,
-							inputTrack: null,
-							backingTrack: null,
-							default: true,
-							languageCode: UNDETERMINED_LANGUAGE,
-							lineNumber: variantStream.lineNumber,
-							fullPath: variantStream.fullPath,
-							fullCodecString: videoCodecString,
-							groupId: 1,
-							pairingMask: 1n << BigInt(i),
-							peakBitrate: bandwidth,
-							averageBitrate: averageBandwidth,
-							name,
-							info: {
-								type: 'video',
-								width,
-								height,
-							},
-						}, false);
-					} else {
-						if (!videoGroupIds.includes(videoGroupId)) {
-							throw new Error(
-								`Invalid M3U8 file; variant stream references video group "${videoGroupId}" which`
-								+ ` is not defined in any #EXT-X-MEDIA tags.`,
-							);
-						}
-
-						for (const mediaTag of mediaTags) {
-							const groupId = mediaTag.attributes.get('group-id')!;
-							const type = mediaTag.attributes.get('type')!;
-
-							if (groupId !== videoGroupId || type.toLowerCase() !== 'video') {
-								continue;
-							}
-
-							const resolution = mediaTag.attributes.get('resolution')
-								?? variantStream.attributes.get('resolution');
+						if (videoGroupId === null) {
+							const resolution = variantStream.attributes.get('resolution');
 							let width: number | null = null;
 							let height: number | null = null;
 
@@ -389,78 +326,88 @@ export class HlsDemuxer extends Demuxer {
 								demuxer: this,
 								inputTrack: null,
 								backingTrack: null,
-								default: getMediaTagDefault(mediaTag.attributes),
-								languageCode: preprocessLanguageCode(mediaTag.attributes.get('language')),
-								lineNumber: mediaTag.lineNumber,
-								fullPath: mediaTag.fullPath ?? variantStream.fullPath,
+								default: true,
+								languageCode: UNDETERMINED_LANGUAGE,
+								lineNumber: variantStream.lineNumber,
+								fullPath: variantStream.fullPath,
 								fullCodecString: videoCodecString,
-								groupId: 3 + videoGroupIds.indexOf(groupId),
+								groupId: 1,
 								pairingMask: 1n << BigInt(i),
-								peakBitrate: null,
-								averageBitrate: null,
-								name: mediaTag.attributes.get('name'),
+								peakBitrate: bandwidth,
+								averageBitrate: averageBandwidth,
+								name,
 								info: {
 									type: 'video',
 									width,
 									height,
 								},
-							}, true);
+							}, false);
+						} else {
+							if (!videoGroupIds.includes(videoGroupId)) {
+								throw new Error(
+									`Invalid M3U8 file; variant stream references video group "${videoGroupId}" which`
+									+ ` is not defined in any #EXT-X-MEDIA tags.`,
+								);
+							}
+
+							for (const mediaTag of mediaTags) {
+								const groupId = mediaTag.attributes.get('group-id')!;
+								const type = mediaTag.attributes.get('type')!;
+
+								if (groupId !== videoGroupId || type.toLowerCase() !== 'video') {
+									continue;
+								}
+
+								const resolution = mediaTag.attributes.get('resolution')
+									?? variantStream.attributes.get('resolution');
+								let width: number | null = null;
+								let height: number | null = null;
+
+								if (resolution) {
+									const match = resolution.match(/^(\d+)x(\d+)$/);
+									if (match) {
+										width = Number(match[1]);
+										height = Number(match[2]);
+									}
+								}
+
+								addInternalTrack({
+									id: internalTracks.length + 1,
+									demuxer: this,
+									inputTrack: null,
+									backingTrack: null,
+									default: getMediaTagDefault(mediaTag.attributes),
+									languageCode: preprocessLanguageCode(mediaTag.attributes.get('language')),
+									lineNumber: mediaTag.lineNumber,
+									fullPath: mediaTag.fullPath ?? variantStream.fullPath,
+									fullCodecString: videoCodecString,
+									groupId: 3 + videoGroupIds.indexOf(groupId),
+									pairingMask: 1n << BigInt(i),
+									peakBitrate: null,
+									averageBitrate: null,
+									name: mediaTag.attributes.get('name'),
+									info: {
+										type: 'video',
+										width,
+										height,
+									},
+								}, true);
+							}
 						}
-					}
-				}
-
-				if (audioCodecString !== null) {
-					const audioGroupId = variantStream.attributes.get('audio');
-
-					if (audioGroupId === null) {
-						const channels = variantStream.attributes.get('channels');
-						const parsedChannels = channels !== null
-							? Number(channels)
-							: null;
-
-						addInternalTrack({
-							id: internalTracks.length + 1,
-							demuxer: this,
-							inputTrack: null,
-							backingTrack: null,
-							default: true,
-							languageCode: UNDETERMINED_LANGUAGE,
-							lineNumber: variantStream.lineNumber,
-							fullPath: variantStream.fullPath,
-							fullCodecString: audioCodecString,
-							groupId: 2,
-							pairingMask: 1n << BigInt(i),
-							peakBitrate: bandwidth,
-							averageBitrate: averageBandwidth,
-							name,
-							info: {
-								type: 'audio',
-								numberOfChannels:
-									parsedChannels !== null
-									&& Number.isInteger(parsedChannels)
-									&& parsedChannels > 0
-										? parsedChannels
-										: null,
-							},
-						}, false);
-					} else {
-						if (!audioGroupIds.includes(audioGroupId)) {
+					} else if (AUDIO_CODECS.includes(inferredCodec as AudioCodec)) {
+						if (audioCodecString !== null) {
 							throw new Error(
-								`Invalid M3U8 file; variant stream references audio group "${audioGroupId}" which`
-								+ ` is not defined in any #EXT-X-MEDIA tags.`,
+								'Unsupported M3U8 file; multiple audio codecs found in the CODECS attribute of a'
+								+ ' variant stream.',
 							);
 						}
 
-						for (const mediaTag of mediaTags) {
-							const groupId = mediaTag.attributes.get('group-id')!;
-							const type = mediaTag.attributes.get('type')!;
+						audioCodecString = codecString;
 
-							if (groupId !== audioGroupId || type.toLowerCase() !== 'audio') {
-								continue;
-							}
+						const audioGroupId = variantStream.attributes.get('audio');
 
-							const channels = mediaTag.attributes.get('channels')
-								?? variantStream.attributes.get('channels');
+						if (audioGroupId === null) {
+							const channels = variantStream.attributes.get('channels');
 							const parsedChannels = channels !== null
 								? Number(channels)
 								: null;
@@ -470,26 +417,74 @@ export class HlsDemuxer extends Demuxer {
 								demuxer: this,
 								inputTrack: null,
 								backingTrack: null,
-								default: getMediaTagDefault(mediaTag.attributes),
-								languageCode: preprocessLanguageCode(mediaTag.attributes.get('language')),
-								lineNumber: mediaTag.lineNumber,
-								fullPath: mediaTag.fullPath ?? variantStream.fullPath,
+								default: true,
+								languageCode: UNDETERMINED_LANGUAGE,
+								lineNumber: variantStream.lineNumber,
+								fullPath: variantStream.fullPath,
 								fullCodecString: audioCodecString,
-								groupId: 3 + videoGroupIds.length + audioGroupIds.indexOf(groupId),
+								groupId: 2,
 								pairingMask: 1n << BigInt(i),
-								peakBitrate: null,
-								averageBitrate: null,
-								name: mediaTag.attributes.get('name'),
+								peakBitrate: bandwidth,
+								averageBitrate: averageBandwidth,
+								name,
 								info: {
 									type: 'audio',
 									numberOfChannels:
+									parsedChannels !== null
+									&& Number.isInteger(parsedChannels)
+									&& parsedChannels > 0
+										? parsedChannels
+										: null,
+								},
+							}, false);
+						} else {
+							if (!audioGroupIds.includes(audioGroupId)) {
+								throw new Error(
+									`Invalid M3U8 file; variant stream references audio group "${audioGroupId}" which`
+									+ ` is not defined in any #EXT-X-MEDIA tags.`,
+								);
+							}
+
+							for (const mediaTag of mediaTags) {
+								const groupId = mediaTag.attributes.get('group-id')!;
+								const type = mediaTag.attributes.get('type')!;
+
+								if (groupId !== audioGroupId || type.toLowerCase() !== 'audio') {
+									continue;
+								}
+
+								const channels = mediaTag.attributes.get('channels')
+									?? variantStream.attributes.get('channels');
+								const parsedChannels = channels !== null
+									? Number(channels)
+									: null;
+
+								addInternalTrack({
+									id: internalTracks.length + 1,
+									demuxer: this,
+									inputTrack: null,
+									backingTrack: null,
+									default: getMediaTagDefault(mediaTag.attributes),
+									languageCode: preprocessLanguageCode(mediaTag.attributes.get('language')),
+									lineNumber: mediaTag.lineNumber,
+									fullPath: mediaTag.fullPath ?? variantStream.fullPath,
+									fullCodecString: audioCodecString,
+									groupId: 3 + videoGroupIds.length + audioGroupIds.indexOf(groupId),
+									pairingMask: 1n << BigInt(i),
+									peakBitrate: null,
+									averageBitrate: null,
+									name: mediaTag.attributes.get('name'),
+									info: {
+										type: 'audio',
+										numberOfChannels:
 										parsedChannels !== null
 										&& Number.isInteger(parsedChannels)
 										&& parsedChannels > 0
 											? parsedChannels
 											: null,
-								},
-							}, true);
+									},
+								}, true);
+							}
 						}
 					}
 				}
@@ -566,6 +561,10 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 
 		if (!track) {
 			throw new Error('Could not find matching track in underlying media data.');
+		}
+
+		if (!track.isHydrated) {
+			await track.hydrate(); // Just in case, typically not needed except for cursed shit like recursive .m3u8
 		}
 
 		this.internalTrack.backingTrack = track;
