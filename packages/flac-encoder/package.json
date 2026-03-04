@@ -1,0 +1,54 @@
+{
+  "name": "@mediabunny/flac-encoder",
+  "author": "Vanilagy",
+  "version": "1.36.0",
+  "description": "FLAC encoder extension for Mediabunny, based on libFLAC.",
+  "main": "./dist/bundles/mediabunny-flac-encoder.mjs",
+  "module": "./dist/bundles/mediabunny-flac-encoder.mjs",
+  "types": "./dist/modules/src/index.d.ts",
+  "exports": {
+    "types": "./dist/modules/src/index.d.ts",
+    "import": "./dist/bundles/mediabunny-flac-encoder.mjs",
+    "require": "./dist/bundles/mediabunny-flac-encoder.mjs"
+  },
+  "files": [
+    "README.md",
+    "package.json",
+    "LICENSE",
+    "dist",
+    "src"
+  ],
+  "browser": {
+    "worker_threads": false
+  },
+  "sideEffects": false,
+  "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vanilagy/mediabunny.git",
+    "directory": "packages/flac-encoder"
+  },
+  "bugs": {
+    "url": "https://github.com/Vanilagy/mediabunny/issues"
+  },
+  "homepage": "https://mediabunny.dev/guide/extensions/flac-encoder",
+  "funding": {
+    "type": "individual",
+    "url": "https://github.com/sponsors/Vanilagy"
+  },
+  "peerDependencies": {
+    "mediabunny": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/emscripten": "^1.40.1"
+  },
+  "keywords": [
+    "flac",
+    "encoding",
+    "codec",
+    "mediabunny",
+    "lossless",
+    "browser",
+    "wasm"
+  ]
+}

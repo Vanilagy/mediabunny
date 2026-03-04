@@ -175,11 +175,43 @@ const aacEncoderVariants = await createVariants(
 	},
 );
 
+const flacEncoderVariants = await createVariants(
+	'packages/flac-encoder/src/index.ts',
+	'MediabunnyFlacEncoder',
+	'packages/flac-encoder/dist/bundles/mediabunny-flac-encoder',
+	'js', // The bundles are purely for the browser, not for Node (due to the peer dependecy)
+	{
+		plugins: [
+			PluginExternalGlobal.externalGlobalPlugin({
+				mediabunny: 'Mediabunny',
+			}),
+			inlineWorkerPlugin({
+				define: {
+					'import.meta.url': '""',
+				},
+				legalComments: 'none',
+			}),
+		],
+	},
+	{
+		external: ['mediabunny'],
+		plugins: [
+			inlineWorkerPlugin({
+				define: {
+					'import.meta.url': '""',
+				},
+				legalComments: 'none',
+			}),
+		],
+	},
+);
+
 const contexts = [
 	...mediabunnyVariants,
 	...mp3EncoderVariants,
 	...ac3Variants,
 	...aacEncoderVariants,
+	...flacEncoderVariants,
 ];
 
 if (process.argv[2] === '--watch') {
