@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { Bitstream } from '../misc';
+import { Bitstream } from '../../shared/bitstream';
 import { FileSlice, readBytes } from '../reader';
 
 export const MIN_ADTS_FRAME_HEADER_SIZE = 7;

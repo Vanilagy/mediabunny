@@ -6,8 +6,8 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { Bitstream } from '../../shared/bitstream';
 import {
-	Bitstream,
 	COLOR_PRIMARIES_MAP,
 	MATRIX_COEFFICIENTS_MAP,
 	TRANSFER_CHARACTERISTICS_MAP,
@@ -49,10 +49,8 @@ import {
 	inlineTimestampRegex,
 	parseSubtitleTimestamp,
 } from '../subtitles';
+import { aacChannelMap, aacFrequencyTable, buildAacAudioSpecificConfig } from '../../shared/aac-misc';
 import {
-	aacChannelMap,
-	aacFrequencyTable,
-	buildAacAudioSpecificConfig,
 	OPUS_SAMPLE_RATE,
 	PCM_AUDIO_CODECS,
 	PcmAudioCodec,

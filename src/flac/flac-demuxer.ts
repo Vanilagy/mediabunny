@@ -15,7 +15,6 @@ import {
 	assert,
 	AsyncMutex,
 	binarySearchLessOrEqual,
-	Bitstream,
 	textDecoder,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
@@ -37,6 +36,7 @@ import {
 	readSampleRate,
 	getSampleRateOrUncommon,
 } from './flac-misc';
+import { Bitstream } from '../../shared/bitstream';
 
 type FlacAudioInfo = {
 	numberOfChannels: number;

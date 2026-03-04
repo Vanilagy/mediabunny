@@ -1,15 +1,15 @@
 {
-  "name": "@mediabunny/ac3",
+  "name": "@mediabunny/aac-encoder",
   "author": "Vanilagy",
   "version": "1.36.0",
-  "description": "AC-3 and E-AC-3 (Dolby Digital) decoder and encoder extension for Mediabunny, based on FFmpeg.",
-  "main": "./dist/bundles/mediabunny-ac3.mjs",
-  "module": "./dist/bundles/mediabunny-ac3.mjs",
+  "description": "AAC encoder extension for Mediabunny, based on FFmpeg.",
+  "main": "./dist/bundles/mediabunny-aac-encoder.mjs",
+  "module": "./dist/bundles/mediabunny-aac-encoder.mjs",
   "types": "./dist/modules/src/index.d.ts",
   "exports": {
     "types": "./dist/modules/src/index.d.ts",
-    "import": "./dist/bundles/mediabunny-ac3.mjs",
-    "require": "./dist/bundles/mediabunny-ac3.mjs"
+    "import": "./dist/bundles/mediabunny-aac-encoder.mjs",
+    "require": "./dist/bundles/mediabunny-aac-encoder.mjs"
   },
   "files": [
     "README.md",
@@ -26,12 +26,12 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Vanilagy/mediabunny.git",
-    "directory": "packages/ac3"
+    "directory": "packages/aac-encoder"
   },
   "bugs": {
     "url": "https://github.com/Vanilagy/mediabunny/issues"
   },
-  "homepage": "https://mediabunny.dev/guide/extensions/ac3",
+  "homepage": "https://mediabunny.dev/guide/extensions/aac-encoder",
   "funding": {
     "type": "individual",
     "url": "https://github.com/sponsors/Vanilagy"
@@ -43,12 +43,8 @@
     "@types/emscripten": "^1.40.1"
   },
   "keywords": [
-    "ac3",
-    "eac3",
-    "dolby",
-    "dolby-digital",
+    "aac",
     "encoding",
-    "decoding",
     "codec",
     "mediabunny",
     "ffmpeg",

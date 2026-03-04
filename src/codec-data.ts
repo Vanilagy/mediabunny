@@ -11,7 +11,6 @@ import {
 	assert,
 	assertNever,
 	base64ToBytes,
-	Bitstream,
 	bytesToBase64,
 	keyValueIterator,
 	getUint24,
@@ -30,6 +29,7 @@ import {
 import { PacketType } from './packet';
 import { MetadataTags } from './metadata';
 import { AC3_SAMPLE_RATES, EAC3_REDUCED_SAMPLE_RATES } from '../shared/ac3-misc';
+import { Bitstream } from '../shared/bitstream';
 
 // References for AVC/HEVC code:
 // ISO 14496-15
