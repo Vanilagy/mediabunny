@@ -81,6 +81,11 @@ jobs:
           packages/aac-encoder/dist/bundles/mediabunny-aac-encoder.mjs
           packages/aac-encoder/dist/bundles/mediabunny-aac-encoder.min.mjs
           packages/aac-encoder/dist/mediabunny-aac-encoder.d.ts
+          packages/flac-encoder/dist/bundles/mediabunny-flac-encoder.js
+          packages/flac-encoder/dist/bundles/mediabunny-flac-encoder.min.js
+          packages/flac-encoder/dist/bundles/mediabunny-flac-encoder.mjs
+          packages/flac-encoder/dist/bundles/mediabunny-flac-encoder.min.mjs
+          packages/flac-encoder/dist/mediabunny-flac-encoder.d.ts
 
       - name: Publish Mediabunny to npm
         run: npm publish --access public

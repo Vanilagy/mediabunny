@@ -1,6 +1,6 @@
 # @mediabunny/flac-encoder
 
-No browser currently supports FLAC encoding in their WebCodecs implementations. This extension package provides a reliable FLAC encoder for use with Mediabunny. It is implemented using Mediabunny's [custom coder API](../supported-formats-and-codecs#custom-coders) and uses a fast, size-optimized WASM build of [libFLAC](https://github.com/xiph/flac) (the reference FLAC encoder) under the hood.
+No browser currently supports FLAC encoding in their WebCodecs implementations. This extension package provides a reliable FLAC encoder for use with Mediabunny. It is implemented using Mediabunny's [custom coder API](../supported-formats-and-codecs#custom-coders) and uses a fast, size-optimized WASM build of [libFLAC](https://github.com/xiph/flac) under the hood.
 
 <a class="!no-underline inline-flex items-center gap-1.5" :no-icon="true" href="https://github.com/Vanilagy/mediabunny/blob/main/packages/flac-encoder/README.md">
 	GitHub page

@@ -17,9 +17,9 @@
 
     const button = document.querySelector('button');
     button.addEventListener('click', async () => {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
         const videoTrack = stream.getVideoTracks()[0];
-        const audioTrack = stream.getAudioTracks()[0];
+        const audioTrack = null;//stream.getAudioTracks()[0];
 
         const output = new Mediabunny.Output({
             target: new Mediabunny.BufferTarget(),
@@ -30,7 +30,8 @@
         if (videoTrack) {
             videoSource = new Mediabunny.MediaStreamVideoTrackSource(videoTrack, {
                 codec: 'avc',
-                bitrate: Mediabunny.QUALITY_MEDIUM
+                bitrate: Mediabunny.QUALITY_MEDIUM,
+				sizeChangeBehavior: 'passThrough',
             });
 
             videoSource.errorPromise.catch((d) => console.log("Hello?????", d));
@@ -45,12 +46,13 @@
 
             audioSource.errorPromise.catch((d) => console.log("Hello!!???", d));
 
-            output.addAudioTrack(audioSource);
+            //output.addAudioTrack(audioSource);
         }
 
         await output.start();
 
 		setTimeout(() => {
+			return;
 			videoSource?.pause();
 			audioSource?.pause();
 
