@@ -1247,11 +1247,11 @@ export class IsobmffMuxer extends Muxer {
 
 		const trackData = this.trackDatas.find(x => x.track === track);
 		if (trackData) {
-			this.processTimestamps(trackData);
-
 			if (trackData.type === 'subtitle' && track.source._codec === 'webvtt') {
 				await this.processWebVTTCues(trackData, Infinity);
 			}
+
+			this.processTimestamps(trackData);
 		}
 
 		if (this.allTracksAreKnown()) {
@@ -1273,11 +1273,11 @@ export class IsobmffMuxer extends Muxer {
 		this.allTracksKnown.resolve();
 
 		for (const trackData of this.trackDatas) {
-			this.processTimestamps(trackData);
-
 			if (trackData.type === 'subtitle' && trackData.track.source._codec === 'webvtt') {
 				await this.processWebVTTCues(trackData, Infinity);
 			}
+
+			this.processTimestamps(trackData);
 		}
 
 		if (this.isFragmented) {
