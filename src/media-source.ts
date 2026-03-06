@@ -1322,7 +1322,7 @@ export class MediaStreamVideoTrackSource extends VideoSource {
 						return;
 					}
 
-					// Generate an initial frame from the video element
+					// This will be the first frame
 					const frame = new VideoFrame(video, {
 						timestamp: 1000 * performance.now(),
 					});
