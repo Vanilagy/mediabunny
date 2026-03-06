@@ -18,7 +18,7 @@ export class AttributeList {
 				inValue = true;
 			} else if (char === ',' && !inQuotes) {
 				if (key) {
-					this._attributes[key.toLowerCase()] = value;
+					this._attributes[key.trim().toLowerCase()] = value;
 				}
 
 				key = '';

@@ -25,6 +25,9 @@ import { customAudioEncoders, customVideoEncoders } from './custom-coder';
 import { isFirefox } from './misc';
 import { EncodedPacket } from './packet';
 
+const canEncodeVideoMemo = new Map<string, Promise<boolean>>();
+const canEncodeAudioMemo = new Map<string, Promise<boolean>>();
+
 /**
  * Configuration object that controls video encoding. Can be used to set codec, quality, and more.
  * @group Encoding
@@ -494,38 +497,7 @@ export const canEncodeVideo = async (
 	}
 	validateVideoEncodingAdditionalOptions(codec, restOptions);
 
-	let encoderConfig: VideoEncoderConfig | null = null;
-
-	if (customVideoEncoders.length > 0) {
-		encoderConfig ??= buildVideoEncoderConfig({
-			codec,
-			width,
-			height,
-			bitrate,
-			framerate: undefined,
-			...restOptions,
-		});
-
-		if (customVideoEncoders.some(x => x.supports(codec, encoderConfig!))) {
-			// There's a custom encoder
-			return true;
-		}
-	}
-
-	if (typeof VideoEncoder === 'undefined') {
-		return false;
-	}
-
-	const hasOddDimension = width % 2 === 1 || height % 2 === 1;
-	if (
-		hasOddDimension
-		&& (codec === 'avc' || codec === 'hevc')
-	) {
-		// Disallow odd dimensions for certain codecs
-		return false;
-	}
-
-	encoderConfig ??= buildVideoEncoderConfig({
+	const encoderConfig = buildVideoEncoderConfig({
 		codec,
 		width,
 		height,
@@ -535,46 +507,74 @@ export const canEncodeVideo = async (
 		alpha: 'discard', // Since we handle alpha ourselves
 	});
 
-	const support = await VideoEncoder.isConfigSupported(encoderConfig);
-	if (!support.supported) {
-		return false;
+	const key = JSON.stringify(encoderConfig);
+	const memoized = canEncodeVideoMemo.get(key);
+	if (memoized) {
+		return memoized;
 	}
 
-	if (isFirefox()) {
-		// isConfigSupported on Firefox appears to unreliably indicate if encoding will actually succeed. Therefore, we
-		// just try encoding a frame to see if it actually works.
-		// https://github.com/Vanilagy/mediabunny/issues/222
+	const promise = (async () => {
+		if (customVideoEncoders.some(x => x.supports(codec, encoderConfig))) {
+			// There's a custom encoder
+			return true;
+		}
+		if (typeof VideoEncoder === 'undefined') {
+			return false;
+		}
 
-		// eslint-disable-next-line @typescript-eslint/no-misused-promises, no-async-promise-executor
-		return new Promise<boolean>(async (resolve) => {
-			try {
-				const encoder = new VideoEncoder({
-					output: () => {},
-					error: () => resolve(false),
-				});
-				encoder.configure(encoderConfig);
+		const hasOddDimension = width % 2 === 1 || height % 2 === 1;
+		if (
+			hasOddDimension
+			&& (codec === 'avc' || codec === 'hevc')
+		) {
+			// Disallow odd dimensions for certain codecs
+			return false;
+		}
 
-				const frameData = new Uint8Array(width * height * 4);
-				const frame = new VideoFrame(frameData, {
-					format: 'RGBA',
-					codedWidth: width,
-					codedHeight: height,
-					timestamp: 0,
-				});
+		const support = await VideoEncoder.isConfigSupported(encoderConfig);
+		if (!support.supported) {
+			return false;
+		}
 
-				encoder.encode(frame);
-				frame.close();
+		if (isFirefox()) {
+			// isConfigSupported on Firefox appears to unreliably indicate if encoding will actually succeed. Therefore,
+			// we just try encoding a frame to see if it actually works.
+			// https://github.com/Vanilagy/mediabunny/issues/222
 
-				await encoder.flush();
+			// eslint-disable-next-line @typescript-eslint/no-misused-promises, no-async-promise-executor
+			return new Promise<boolean>(async (resolve) => {
+				try {
+					const encoder = new VideoEncoder({
+						output: () => {},
+						error: () => resolve(false),
+					});
+					encoder.configure(encoderConfig);
 
-				resolve(true);
-			} catch {
-				resolve(false);
-			}
-		});
-	} else {
+					const frameData = new Uint8Array(width * height * 4);
+					const frame = new VideoFrame(frameData, {
+						format: 'RGBA',
+						codedWidth: width,
+						codedHeight: height,
+						timestamp: 0,
+					});
+
+					encoder.encode(frame);
+					frame.close();
+
+					await encoder.flush();
+
+					resolve(true);
+				} catch {
+					resolve(false);
+				}
+			});
+		}
+
 		return true;
-	}
+	})();
+	canEncodeVideoMemo.set(key, promise);
+
+	return promise;
 };
 
 /**
@@ -611,32 +611,7 @@ export const canEncodeAudio = async (
 	}
 	validateAudioEncodingAdditionalOptions(codec, restOptions);
 
-	let encoderConfig: AudioEncoderConfig | null = null;
-
-	if (customAudioEncoders.length > 0) {
-		encoderConfig ??= buildAudioEncoderConfig({
-			codec,
-			numberOfChannels,
-			sampleRate,
-			bitrate,
-			...restOptions,
-		});
-
-		if (customAudioEncoders.some(x => x.supports(codec, encoderConfig!))) {
-			// There's a custom encoder
-			return true;
-		}
-	}
-
-	if ((PCM_AUDIO_CODECS as readonly string[]).includes(codec)) {
-		return true; // Because we encode these ourselves
-	}
-
-	if (typeof AudioEncoder === 'undefined') {
-		return false;
-	}
-
-	encoderConfig ??= buildAudioEncoderConfig({
+	const encoderConfig = buildAudioEncoderConfig({
 		codec,
 		numberOfChannels,
 		sampleRate,
@@ -644,8 +619,30 @@ export const canEncodeAudio = async (
 		...restOptions,
 	});
 
-	const support = await AudioEncoder.isConfigSupported(encoderConfig);
-	return support.supported === true;
+	const key = JSON.stringify(encoderConfig);
+	const memoized = canEncodeAudioMemo.get(key);
+	if (memoized) {
+		return memoized;
+	}
+
+	const promise = (async () => {
+		if (customAudioEncoders.some(x => x.supports(codec, encoderConfig))) {
+			// There's a custom encoder
+			return true;
+		}
+		if ((PCM_AUDIO_CODECS as readonly string[]).includes(codec)) {
+			return true; // Because we encode these ourselves
+		}
+		if (typeof AudioEncoder === 'undefined') {
+			return false;
+		}
+
+		const support = await AudioEncoder.isConfigSupported(encoderConfig);
+		return support.supported === true;
+	})();
+	canEncodeAudioMemo.set(key, promise);
+
+	return promise;
 };
 
 /**

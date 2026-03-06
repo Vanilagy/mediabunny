@@ -642,27 +642,6 @@ export class UrlSource extends Source {
 	}
 
 	/** @internal */
-	private _getTotalLengthFromRangeResponse(response: Response) {
-		const contentRange = response.headers.get('Content-Range');
-		if (contentRange) {
-			const match = /\/(\d+)/.exec(contentRange);
-			if (match) {
-				return Number(match[1]);
-			}
-		}
-
-		const contentLength = response.headers.get('Content-Length');
-		if (contentLength) {
-			return Number(contentLength);
-		} else {
-			throw new Error(
-				'Partial HTTP response (status 206) must surface either Content-Range or'
-				+ ' Content-Length header.',
-			);
-		}
-	}
-
-	/** @internal */
 	_dispose() {
 		this._orchestrator.dispose();
 	}
@@ -1847,6 +1826,7 @@ class ReadOrchestrator {
 		const index = this.workers.indexOf(worker);
 		assert(index !== -1);
 
+		worker.running = false;
 		this.workers.splice(index, 1);
 
 		if (this.fileSize === null) {

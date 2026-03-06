@@ -209,7 +209,10 @@ export class HlsSegmentedInput extends SegmentedInput {
 							keyFormat: attributes.get('keyformat') ?? 'identity',
 						};
 					} else {
-						throw new Error(`Unsupported encryption method '${method}'.`);
+						throw new Error(
+							`Unsupported encryption method '${method}'. If you think this method should be supported,`
+							+ ` please raise an issue.`,
+						);
 					}
 				} else if (line.startsWith('#EXT-X-MEDIA-SEQUENCE:')) {
 					const value = line.slice(22);
@@ -241,11 +244,11 @@ export class HlsSegmentedInput extends SegmentedInput {
 						// backward from that tag (using EXTINF durations and/or media
 						// timestamps) to associate dates with those segments."
 						const lastSegment = last(segments)!;
-						const lastSegmentEnd = lastSegment.relativeTimestamp + lastSegment.duration;
+						const lastSegmentEnd = lastSegment.timestamp + lastSegment.duration;
 						const offset = dateTimeSeconds - lastSegmentEnd;
 
 						for (const segment of segments) {
-							segment.relativeTimestamp += offset;
+							segment.timestamp += offset;
 							segment.relativeToUnixEpoch = true;
 						}
 

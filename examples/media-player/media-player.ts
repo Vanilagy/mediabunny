@@ -10,6 +10,7 @@ import {
 	WrappedAudioBuffer,
 	WrappedCanvas,
 	asc,
+	canDecodeAudio,
 	desc,
 	prefer,
 } from 'mediabunny';
@@ -113,10 +114,10 @@ const initMediaPlayer = async (resource: File | string) => {
 			});
 
 			videoTrack = await input.getPrimaryVideoTrack({
-				filter: async track => (await track.resolve('displayHeight')) <= 720,
+				filter: async track => (await track.resolve('displayHeight')) < 1080,
 			});
 			audioTrack = await input.getPrimaryAudioTrack({
-				filter: track => !videoTrack || videoTrack.canBePairedWith(track),
+				sortBy: track => prefer(track.canBePairedWith(videoTrack)),
 			});
 
 			await videoTrack?.hydrate();
@@ -126,6 +127,8 @@ const initMediaPlayer = async (resource: File | string) => {
 				await videoTrack?.computeDuration() ?? 0,
 				await audioTrack?.computeDuration() ?? 0,
 			);
+
+			console.log(videoTrack, audioTrack, totalDuration);
 
 			// https://test-streams.mux.dev/test_001/stream.m3u8
 			// https://test-streams.mux.dev/test_001/stream_1000k_48k_640x360_050.ts

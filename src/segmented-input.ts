@@ -67,7 +67,7 @@ export abstract class SegmentedInput {
 
 	async getSegmentAt(timestamp: number) {
 		const segments = await this.getSegments();
-		const index = binarySearchLessOrEqual(segments, timestamp, x => x.relativeTimestamp);
+		const index = binarySearchLessOrEqual(segments, timestamp, x => x.timestamp);
 		if (index === -1) {
 			return null;
 		}
@@ -175,24 +175,24 @@ class SegmentedInputDemuxer extends Demuxer {
 		}
 
 		if (firstSegment === segment) {
-			return firstSegment.relativeTimestamp - firstSegmentFirstTimestamp;
+			return firstSegment.timestamp - firstSegmentFirstTimestamp;
 		}
 
 		const segmentFirstTimestamp = await input.getFirstTimestamp();
-		const segmentElapsed = segment.relativeTimestamp - firstSegment.relativeTimestamp;
+		const segmentElapsed = segment.timestamp - firstSegment.timestamp;
 		const inputElapsed = segmentFirstTimestamp - firstSegmentFirstTimestamp;
 		const difference = inputElapsed - segmentElapsed;
 
 		if (Math.abs(difference) <= Math.min(0.25, segmentElapsed)) { // Heuristic
 			// We're close enough
-			return firstSegment.relativeTimestamp - firstSegmentFirstTimestamp;
+			return firstSegment.timestamp - firstSegmentFirstTimestamp;
 		} else {
 			// Ideally, each segment has absolute timestamps that are relative to some outside clock which is
 			// consistent across segments. This is often the case, but not always. Either the container format used is
 			// not timestamped at all (like ADTS), or the segments are just fucky. In this case, use the segment's
 			// relative timestamp to determine where we are, and completely offset out the segment's input start
 			// timestamp.
-			return segment.relativeTimestamp - segmentFirstTimestamp;
+			return segment.timestamp - segmentFirstTimestamp;
 		}
 	}
 }
@@ -278,7 +278,7 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 			),
 			// The 1e8 assumes a max of 100 MB per second, highly unlikely to be hit, so this should guarantee
 			// monotonically increasing sequence numbers across segments.
-			sequenceNumber: Math.floor(1e8 * segment.relativeTimestamp) + packet.sequenceNumber,
+			sequenceNumber: Math.floor(1e8 * segment.timestamp) + packet.sequenceNumber,
 		});
 
 		this.packetInfos.set(modified, {

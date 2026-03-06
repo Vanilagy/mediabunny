@@ -17,14 +17,33 @@
 			source: new Mediabunny.BlobSource(file),
 		});
 
+		const audTrack = await input.getPrimaryAudioTrack();
+		console.log((await audTrack.getDecoderConfig()).description.join(','));
+		return;
+
 		const manifest = new Mediabunny.Input({
-			entryPath: 'https://playertest.longtailvideo.com/adaptive/elephants_dream_v4/redundant.m3u8',
+			entryPath: 'https://s3.amazonaws.com/qa.jwplayer.com/hlsjs/muxed-fmp4/hls.m3u8',
 			source: ({ path }) => new Mediabunny.UrlSource(path),
 			formats: Mediabunny.ALL_FORMATS,
 		});
 
+		/*
 		const tracks = await manifest.getTracks();
-		console.log(tracks)
+		//await input.hydrateAllTracks();
+		console.log(tracks, tracks.map(x => [x.getFirstTimestamp(), x.computeDuration()]));
+
+		return;
+		*/
+
+		const videoTrack = await manifest.getPrimaryVideoTrack();
+		const audioTrack = await manifest.getPrimaryAudioTrack();
+
+		console.log(await videoTrack.getFirstTimestamp(), await audioTrack.getFirstTimestamp());
+		/*
+		for await (using sample of sink.samples()) {
+			console.log(sample.timestamp);
+		}
+		*/
 
 		/*
 		const manifest = new Mediabunny.ManifestInput({

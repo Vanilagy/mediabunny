@@ -464,6 +464,13 @@ export const SECOND_TO_MICROSECOND_FACTOR = 1e6 * (1 + Number.EPSILON);
 export type SetRequired<T, K extends keyof T> = T & Required<Pick<T, K>>;
 
 /**
+ * Sets all keys K of T to be optional.
+ * @group Miscellaneous
+ * @public
+ */
+export type SetOptional<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;
+
+/**
  * Merges two RequestInit objects with special handling for headers.
  * Headers are merged case-insensitively, but original casing is preserved.
  * init2 headers take precedence and will override case-insensitive matches from init1.

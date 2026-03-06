@@ -21,7 +21,7 @@ export type SegmentLocation = {
 export class Segment {
 	input: SegmentedInput;
 	location: SegmentLocation;
-	relativeTimestamp: number;
+	timestamp: number;
 	relativeToUnixEpoch: boolean;
 	duration: number;
 	title: string | null;
@@ -32,7 +32,7 @@ export class Segment {
 	constructor(
 		input: SegmentedInput,
 		location: SegmentLocation,
-		relativeTimestamp: number,
+		timestamp: number,
 		relativeToUnixEpoch: boolean,
 		duration: number,
 		title: string | null,
@@ -42,7 +42,7 @@ export class Segment {
 	) {
 		this.input = input;
 		this.location = location;
-		this.relativeTimestamp = relativeTimestamp;
+		this.timestamp = timestamp;
 		this.relativeToUnixEpoch = relativeToUnixEpoch;
 		this.duration = duration;
 		this.title = title;
