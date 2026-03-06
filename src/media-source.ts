@@ -1076,6 +1076,8 @@ export class MediaStreamVideoTrackSource extends VideoSource {
 	private _lastVideoFrame: VideoFrame | null = null;
 	/** @internal */
 	private _timerHandle: UnthrottledTimerHandle | null = null;
+	/** @internal */
+	private _videoElement: HTMLVideoElement | null = null;
 
 	/** A promise that rejects upon any error within this source. This promise never resolves. */
 	get errorPromise() {
@@ -1160,12 +1162,13 @@ export class MediaStreamVideoTrackSource extends VideoSource {
 			while (now - lastFrameTime > 1000 / frameRate) {
 				lastFrameTime += 1000 / frameRate;
 				const timestamp = firstVideoFrameTimestamp + frameCount / frameRate;
-				const clone = new VideoFrame(this._lastVideoFrame, {
+
+				const frame = new VideoFrame(this._videoElement ?? this._lastVideoFrame, {
 					timestamp: 1e6 * timestamp,
 					duration: 1e6 / frameRate,
 				});
 
-				addVideoFrame(clone, now);
+				addVideoFrame(frame, now);
 			}
 		};
 
@@ -1298,8 +1301,44 @@ export class MediaStreamVideoTrackSource extends VideoSource {
 				};
 
 				mediaStreamTrackProcessorWorker!.addEventListener('message', this._workerListener);
+			} else if (frameRate !== null) {
+				// No MediaStreamTrackProcessor support at all (e.g. Firefox), but we have a frame rate, so we can
+				// manually sample from a hidden <video> element instead.
+				const video = document.createElement('video');
+				video.style.position = 'fixed';
+				video.style.left = '-10000px';
+				video.style.top = '-10000px';
+				video.style.width = '1px';
+				video.style.height = '1px';
+				video.style.opacity = '0';
+				video.style.pointerEvents = 'none';
+				video.muted = true;
+				video.srcObject = new MediaStream([this._track]);
+				document.body.appendChild(video);
+				this._videoElement = video;
+
+				video.addEventListener('loadeddata', () => {
+					if (errored || !this._videoElement) {
+						return;
+					}
+
+					// Generate an initial frame from the video element
+					const frame = new VideoFrame(video, {
+						timestamp: 1000 * performance.now(),
+					});
+					onVideoFrame(frame);
+					frame.close();
+				}, { once: true });
+
+				void video.play().catch((error) => {
+					errored = true;
+					this._promiseWithResolvers.reject(error);
+				});
 			} else {
-				throw new Error('MediaStreamTrackProcessor is required but not supported by this browser.');
+				throw new Error(
+					'When no explicit frame rate is set, MediaStreamTrackProcessor is required; but it\'s not supported'
+					+ ' by this browser.',
+				);
 			}
 		}
 	}
@@ -1328,6 +1367,12 @@ export class MediaStreamVideoTrackSource extends VideoSource {
 			clearIntervalUnthrottled(this._timerHandle);
 		}
 		this._lastVideoFrame?.close();
+
+		if (this._videoElement) {
+			this._videoElement.srcObject = null;
+			this._videoElement.remove();
+			this._videoElement = null;
+		}
 
 		if (this._workerTrackId !== null) {
 			assert(this._workerListener);
