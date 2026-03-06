@@ -18,10 +18,11 @@
 		});
 
 		const videoTrack = await input.getPrimaryVideoTrack();
-		const sink = new Mediabunny.VideoSampleSink(videoTrack);
+		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
 
-		const sample = await sink.getSample(await videoTrack.getFirstTimestamp());
-		console.log(sample);
+		for await (const packet of sink.packets()) {
+			console.log(packet.timestamp);
+		}
 
 		/*
 		

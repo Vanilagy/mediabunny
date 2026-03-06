@@ -1078,14 +1078,6 @@ export class IsobmffMuxer extends Muxer {
 	private async finalizeFragment(flushWriter = true) {
 		assert(this.isFragmented);
 
-		// Process timestamps for all tracks before writing the moof/trun boxes.
-		// This ensures decodeTimestamp (and thus CTS = PTS - DTS) is correctly
-		// computed even when finalizeFragment is triggered by interleaveSamples
-		// during finalize(), which otherwise writes trun with CTS=0.
-		for (const trackData of this.trackDatas) {
-			this.processTimestamps(trackData);
-		}
-
 		const fragmentNumber = this.nextFragmentNumber++;
 
 		if (fragmentNumber === 1) {
@@ -1253,9 +1245,11 @@ export class IsobmffMuxer extends Muxer {
 	override async onTrackClose(track: OutputTrack) {
 		const release = await this.mutex.acquire();
 
-		if (track.type === 'subtitle' && track.source._codec === 'webvtt') {
-			const trackData = this.trackDatas.find(x => x.track === track) as IsobmffSubtitleTrackData;
-			if (trackData) {
+		const trackData = this.trackDatas.find(x => x.track === track);
+		if (trackData) {
+			this.processTimestamps(trackData);
+
+			if (trackData.type === 'subtitle' && track.source._codec === 'webvtt') {
 				await this.processWebVTTCues(trackData, Infinity);
 			}
 		}
@@ -1279,6 +1273,8 @@ export class IsobmffMuxer extends Muxer {
 		this.allTracksKnown.resolve();
 
 		for (const trackData of this.trackDatas) {
+			this.processTimestamps(trackData);
+
 			if (trackData.type === 'subtitle' && trackData.track.source._codec === 'webvtt') {
 				await this.processWebVTTCues(trackData, Infinity);
 			}
@@ -1286,15 +1282,9 @@ export class IsobmffMuxer extends Muxer {
 
 		if (this.isFragmented) {
 			await this.interleaveSamples(true);
-
-			for (const trackData of this.trackDatas) {
-				this.processTimestamps(trackData);
-			}
-
 			await this.finalizeFragment(false); // Don't flush the last fragment as we will flush it with the mfra box
 		} else {
 			for (const trackData of this.trackDatas) {
-				this.processTimestamps(trackData);
 				await this.finalizeCurrentChunk(trackData);
 			}
 		}
