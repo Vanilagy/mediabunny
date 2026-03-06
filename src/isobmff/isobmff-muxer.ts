@@ -1245,11 +1245,13 @@ export class IsobmffMuxer extends Muxer {
 	override async onTrackClose(track: OutputTrack) {
 		const release = await this.mutex.acquire();
 
-		if (track.type === 'subtitle' && track.source._codec === 'webvtt') {
-			const trackData = this.trackDatas.find(x => x.track === track) as IsobmffSubtitleTrackData;
-			if (trackData) {
+		const trackData = this.trackDatas.find(x => x.track === track);
+		if (trackData) {
+			if (trackData.type === 'subtitle' && track.source._codec === 'webvtt') {
 				await this.processWebVTTCues(trackData, Infinity);
 			}
+
+			this.processTimestamps(trackData);
 		}
 
 		if (this.allTracksAreKnown()) {
@@ -1274,19 +1276,15 @@ export class IsobmffMuxer extends Muxer {
 			if (trackData.type === 'subtitle' && trackData.track.source._codec === 'webvtt') {
 				await this.processWebVTTCues(trackData, Infinity);
 			}
+
+			this.processTimestamps(trackData);
 		}
 
 		if (this.isFragmented) {
 			await this.interleaveSamples(true);
-
-			for (const trackData of this.trackDatas) {
-				this.processTimestamps(trackData);
-			}
-
 			await this.finalizeFragment(false); // Don't flush the last fragment as we will flush it with the mfra box
 		} else {
 			for (const trackData of this.trackDatas) {
-				this.processTimestamps(trackData);
 				await this.finalizeCurrentChunk(trackData);
 			}
 		}
