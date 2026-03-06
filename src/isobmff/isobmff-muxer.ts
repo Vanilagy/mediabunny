@@ -1078,6 +1078,14 @@ export class IsobmffMuxer extends Muxer {
 	private async finalizeFragment(flushWriter = true) {
 		assert(this.isFragmented);
 
+		// Process timestamps for all tracks before writing the moof/trun boxes.
+		// This ensures decodeTimestamp (and thus CTS = PTS - DTS) is correctly
+		// computed even when finalizeFragment is triggered by interleaveSamples
+		// during finalize(), which otherwise writes trun with CTS=0.
+		for (const trackData of this.trackDatas) {
+			this.processTimestamps(trackData);
+		}
+
 		const fragmentNumber = this.nextFragmentNumber++;
 
 		if (fragmentNumber === 1) {
