@@ -951,3 +951,173 @@ export const prefer = (value: boolean) => {
 export type NonFunctionKeys<T> = {
 	[K in keyof T]-?: T[K] extends ((...args: never[]) => unknown) ? never : K
 }[keyof T];
+
+export type UnthrottledTimerHandle = {
+	id: ReturnType<typeof setTimeout> | number;
+};
+
+type UnthrottledTimerMessage =
+	| { type: 'set-timeout'; timerId: number; delay: number }
+	| { type: 'set-interval'; timerId: number; delay: number }
+	| { type: 'clear-timeout'; timerId: number }
+	| { type: 'clear-interval'; timerId: number };
+
+type UnthrottledTimerEvent = { type: 'fire'; timerId: number };
+
+let unthrottledTimerWorker: Worker | undefined;
+let nextUnthrottledTimerId = 1;
+const unthrottledTimeoutCallbacks = new Map<number, () => void>();
+const unthrottledIntervalCallbacks = new Map<number, () => void>();
+
+const shouldUseNativeTimers = () => {
+	return typeof window === 'undefined';
+};
+
+const unthrottledTimerWorkerMain = () => {
+	const timeoutHandles = new Map<number, ReturnType<typeof setTimeout>>();
+	const intervalHandles = new Map<number, ReturnType<typeof setInterval>>();
+
+	self.onmessage = (event: MessageEvent<UnthrottledTimerMessage>) => {
+		const message = event.data;
+
+		switch (message.type) {
+			case 'set-timeout': {
+				const handle = setTimeout(() => {
+					timeoutHandles.delete(message.timerId);
+					self.postMessage({ type: 'fire', timerId: message.timerId });
+				}, message.delay);
+
+				timeoutHandles.set(message.timerId, handle);
+			}; break;
+
+			case 'set-interval': {
+				const handle = setInterval(() => {
+					self.postMessage({ type: 'fire', timerId: message.timerId });
+				}, message.delay);
+
+				intervalHandles.set(message.timerId, handle);
+			}; break;
+
+			case 'clear-timeout': {
+				const handle = timeoutHandles.get(message.timerId);
+				if (handle !== undefined) {
+					clearTimeout(handle);
+					timeoutHandles.delete(message.timerId);
+				}
+			}; break;
+
+			case 'clear-interval': {
+				const handle = intervalHandles.get(message.timerId);
+				if (handle !== undefined) {
+					clearInterval(handle);
+					intervalHandles.delete(message.timerId);
+				}
+			}; break;
+		}
+	};
+};
+
+const getUnthrottledTimerWorker = () => {
+	if (unthrottledTimerWorker) {
+		return unthrottledTimerWorker;
+	}
+
+	const workerSource = `(${unthrottledTimerWorkerMain.toString()})();`;
+	const workerURL = URL.createObjectURL(new Blob([workerSource], { type: 'text/javascript' }));
+	unthrottledTimerWorker = new Worker(workerURL);
+	URL.revokeObjectURL(workerURL);
+
+	unthrottledTimerWorker.onmessage = (event: MessageEvent<UnthrottledTimerEvent>) => {
+		const message = event.data;
+
+		const timeoutCallback = unthrottledTimeoutCallbacks.get(message.timerId);
+		if (timeoutCallback) {
+			unthrottledTimeoutCallbacks.delete(message.timerId);
+			timeoutCallback();
+			return;
+		}
+
+		const intervalCallback = unthrottledIntervalCallbacks.get(message.timerId);
+		if (intervalCallback) {
+			intervalCallback();
+		}
+	};
+
+	return unthrottledTimerWorker;
+};
+
+export const setTimeoutUnthrottled = (
+	// eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
+	callback: Function,
+	delay: number,
+): UnthrottledTimerHandle => {
+	if (shouldUseNativeTimers()) {
+		return { id: setTimeout(callback, delay) };
+	}
+
+	const timerId = nextUnthrottledTimerId++;
+	unthrottledTimeoutCallbacks.set(timerId, () => {
+		(callback as () => void)();
+	});
+
+	getUnthrottledTimerWorker().postMessage({
+		type: 'set-timeout',
+		timerId,
+		delay,
+	} satisfies UnthrottledTimerMessage);
+
+	return { id: timerId };
+};
+
+export const clearTimeoutUnthrottled = (timer: UnthrottledTimerHandle) => {
+	if (shouldUseNativeTimers()) {
+		clearTimeout(timer.id);
+		return;
+	}
+
+	assert(typeof timer.id === 'number');
+	unthrottledTimeoutCallbacks.delete(timer.id);
+
+	getUnthrottledTimerWorker().postMessage({
+		type: 'clear-timeout',
+		timerId: timer.id,
+	} satisfies UnthrottledTimerMessage);
+};
+
+export const setIntervalUnthrottled = (
+	// eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
+	callback: Function,
+	delay: number,
+): UnthrottledTimerHandle => {
+	if (shouldUseNativeTimers()) {
+		return { id: setInterval(callback, delay) };
+	}
+
+	const timerId = nextUnthrottledTimerId++;
+	unthrottledIntervalCallbacks.set(timerId, () => {
+		(callback as () => void)();
+	});
+
+	getUnthrottledTimerWorker().postMessage({
+		type: 'set-interval',
+		timerId,
+		delay,
+	} satisfies UnthrottledTimerMessage);
+
+	return { id: timerId };
+};
+
+export const clearIntervalUnthrottled = (timer: UnthrottledTimerHandle) => {
+	if (shouldUseNativeTimers()) {
+		clearInterval(timer.id);
+		return;
+	}
+
+	assert(typeof timer.id === 'number');
+	unthrottledIntervalCallbacks.delete(timer.id);
+
+	getUnthrottledTimerWorker().postMessage({
+		type: 'clear-interval',
+		timerId: timer.id,
+	} satisfies UnthrottledTimerMessage);
+};

@@ -64,6 +64,7 @@ export {
 	EncodedAudioPacketSource,
 	EncodedVideoPacketSource,
 	MediaStreamAudioTrackSource,
+	MediaStreamVideoTrackSourceOptions,
 	MediaStreamVideoTrackSource,
 	TextSubtitleSource,
 	VideoSampleSource,
