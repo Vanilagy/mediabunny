@@ -2067,6 +2067,19 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 	}
 
 	async getKeyPacket(timestamp: number, options: PacketRetrievalOptions) {
+		// Fast path: when metadataOnly and cue points exist, use them directly instead of reading clusters
+		if (options.metadataOnly && this.internalTrack.cuePoints.length > 0) {
+			const timestampInTimescale = this.intoTimescale(timestamp);
+			const cueIdx = binarySearchLessOrEqual(
+				this.internalTrack.cuePoints,
+				timestampInTimescale,
+				x => x.time,
+			);
+			if (cueIdx !== -1) {
+				return this.createCuePacket(cueIdx);
+			}
+		}
+
 		const timestampInTimescale = this.intoTimescale(timestamp);
 
 		return this.performClusterLookup(
@@ -2094,6 +2107,16 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 	}
 
 	async getNextKeyPacket(packet: EncodedPacket, options: PacketRetrievalOptions) {
+		// Fast path: if the packet was created from a cue point, use the next cue directly
+		const cueIdx = this.packetToCueIndex.get(packet);
+		if (cueIdx !== undefined && options.metadataOnly) {
+			const nextIdx = cueIdx + 1;
+			if (nextIdx >= this.internalTrack.cuePoints.length) {
+				return null;
+			}
+			return this.createCuePacket(nextIdx);
+		}
+
 		const locationInCluster = this.packetToClusterLocation.get(packet);
 		if (locationInCluster === undefined) {
 			throw new Error('Packet was not created from this track.');
@@ -2138,6 +2161,25 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 			options,
 		);
 	}
+
+	/** Creates a lightweight EncodedPacket from a cue point without reading any cluster data. */
+	private createCuePacket(cueIdx: number): EncodedPacket {
+		const cue = this.internalTrack.cuePoints[cueIdx]!;
+		const timestamp = cue.time / this.internalTrack.segment.timestampFactor;
+		const packet = new EncodedPacket(
+			PLACEHOLDER_DATA,
+			'key',
+			timestamp,
+			0, // duration unknown from cue points alone
+			cue.clusterPosition, // unique per cue point, used as sequenceNumber
+			0,
+			{},
+		);
+		this.packetToCueIndex.set(packet, cueIdx);
+		return packet;
+	}
+
+	private packetToCueIndex = new WeakMap<EncodedPacket, number>();
 
 	private async fetchPacketInCluster(cluster: Cluster, blockIndex: number, options: PacketRetrievalOptions) {
 		if (blockIndex === -1) {
