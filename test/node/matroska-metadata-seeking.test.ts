@@ -20,7 +20,9 @@ function createTrackingSource(buffer: Uint8Array) {
 		},
 	});
 
-	return { source, reads, clearReads: () => { reads.length = 0; } };
+	return { source, reads, clearReads: () => {
+		reads.length = 0;
+	} };
 }
 
 async function collectKeyframeTimestamps(
