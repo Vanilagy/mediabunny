@@ -52,7 +52,8 @@ test('MKV metadataOnly keyframe iteration should not read cluster data', async (
 
 	// Phase 1: parse container metadata (reads Segment header, Tracks, Cues, etc.)
 	const videoTrack = await input.getPrimaryVideoTrack();
-	const sink = new EncodedPacketSink(videoTrack);
+	expect(videoTrack).not.toBeNull();
+	const sink = new EncodedPacketSink(videoTrack!);
 
 	// Clear reads from the initial parse phase
 	clearReads();
@@ -83,11 +84,13 @@ test('MKV metadataOnly keyframe timestamps match regular iteration', async () =>
 	using input2 = new Input({ source: source2, formats: ALL_FORMATS });
 
 	const videoTrack1 = await input1.getPrimaryVideoTrack();
-	const sink1 = new EncodedPacketSink(videoTrack1);
+	expect(videoTrack1).not.toBeNull();
+	const sink1 = new EncodedPacketSink(videoTrack1!);
 	const metadataTimestamps = await collectKeyframeTimestamps(sink1, { metadataOnly: true });
 
 	const videoTrack2 = await input2.getPrimaryVideoTrack();
-	const sink2 = new EncodedPacketSink(videoTrack2);
+	expect(videoTrack2).not.toBeNull();
+	const sink2 = new EncodedPacketSink(videoTrack2!);
 	const regularTimestamps = await collectKeyframeTimestamps(sink2);
 
 	expect(metadataTimestamps.length).toBeGreaterThan(0);
