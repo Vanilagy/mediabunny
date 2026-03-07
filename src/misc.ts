@@ -464,6 +464,13 @@ export const SECOND_TO_MICROSECOND_FACTOR = 1e6 * (1 + Number.EPSILON);
 export type SetRequired<T, K extends keyof T> = T & Required<Pick<T, K>>;
 
 /**
+ * Sets all keys K of T to be optional.
+ * @group Miscellaneous
+ * @public
+ */
+export type SetOptional<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;
+
+/**
  * Merges two RequestInit objects with special handling for headers.
  * Headers are merged case-insensitively, but original casing is preserved.
  * init2 headers take precedence and will override case-insensitive matches from init1.
@@ -774,6 +781,102 @@ export const isNumber = (x: unknown) => {
 	return typeof x === 'number' && !Number.isNaN(x);
 };
 
+export const joinPaths = (basePath: string, relativePath: string) => {
+	// If relativePath is a full URL with protocol, return it as-is
+	if (relativePath.includes('://')) {
+		return relativePath;
+	}
+
+	let result: string;
+
+	if (relativePath.startsWith('/')) {
+		const protocolIndex = basePath.indexOf('://');
+		if (protocolIndex === -1) {
+			result = relativePath;
+		} else {
+			const pathStart = basePath.indexOf('/', protocolIndex + 3);
+			if (pathStart === -1) {
+				result = basePath + relativePath;
+			} else {
+				result = basePath.slice(0, pathStart) + relativePath;
+			}
+		}
+	} else {
+		const lastSlash = basePath.lastIndexOf('/');
+		if (lastSlash === -1) {
+			result = relativePath;
+		} else {
+			result = basePath.slice(0, lastSlash + 1) + relativePath;
+		}
+	}
+
+	// Normalize ./ and ../
+
+	let prefix = '';
+	const protocolIndex = result.indexOf('://');
+	if (protocolIndex !== -1) {
+		const pathStart = result.indexOf('/', protocolIndex + 3);
+		if (pathStart !== -1) {
+			prefix = result.slice(0, pathStart);
+			result = result.slice(pathStart);
+		}
+	}
+
+	const segments = result.split('/');
+	const normalized: string[] = [];
+	for (const segment of segments) {
+		if (segment === '..') {
+			normalized.pop();
+		} else if (segment !== '.') {
+			normalized.push(segment);
+		}
+	}
+
+	return prefix + normalized.join('/');
+};
+
+export const arrayCount = <T>(array: T[], predicate: (item: T) => boolean) => {
+	let count = 0;
+
+	for (let i = 0; i < array.length; i++) {
+		if (predicate(array[i]!)) {
+			count++;
+		}
+	}
+
+	return count;
+};
+
+export const arrayArgmin = <T>(array: T[], getValue: (item: T) => number): number => {
+	let minIndex = -1;
+	let minValue = Infinity;
+
+	for (let i = 0; i < array.length; i++) {
+		const value = getValue(array[i]!);
+		if (value < minValue) {
+			minValue = value;
+			minIndex = i;
+		}
+	}
+
+	return minIndex;
+};
+
+export const arrayArgmax = <T>(array: T[], getValue: (item: T) => number): number => {
+	let maxIndex = -1;
+	let maxValue = -Infinity;
+
+	for (let i = 0; i < array.length; i++) {
+		const value = getValue(array[i]!);
+		if (value > maxValue) {
+			maxValue = value;
+			maxIndex = i;
+		}
+	}
+
+	return maxIndex;
+};
+
 /**
  * A rational number; a ratio of two integers.
  * @group Miscellaneous
@@ -839,6 +942,22 @@ export const validateRectangle = (rect: Rectangle, propertyPath: string) => {
 		throw new TypeError(`${propertyPath}.height must be a non-negative integer.`);
 	}
 };
+
+export const asc = (value: number | null) => {
+	return value ?? Infinity; // nulls last
+};
+
+export const desc = (value: number | null) => {
+	return -(value ?? -Infinity); // nulls last
+};
+
+export const prefer = (value: boolean) => {
+	return -value;
+};
+
+export type NonFunctionKeys<T> = {
+	[K in keyof T]-?: T[K] extends ((...args: never[]) => unknown) ? never : K
+}[keyof T];
 
 export type UnthrottledTimerHandle = {
 	id: ReturnType<typeof setTimeout> | number;

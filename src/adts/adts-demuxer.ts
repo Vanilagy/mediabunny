@@ -152,15 +152,6 @@ export class AdtsDemuxer extends Demuxer {
 		return this.tracks;
 	}
 
-	async computeDuration() {
-		await this.readMetadata();
-
-		const track = this.tracks[0];
-		assert(track);
-
-		return track.computeDuration();
-	}
-
 	async getMetadataTags() {
 		const release = await this.readingMutex.acquire();
 
@@ -211,18 +202,29 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 		return 1;
 	}
 
-	async getFirstTimestamp() {
-		return 0;
-	}
-
 	getTimeResolution() {
 		const sampleRate = this.getSampleRate();
 		return sampleRate / SAMPLES_PER_AAC_FRAME;
 	}
 
-	async computeDuration() {
-		const lastPacket = await this.getPacket(Infinity, { metadataOnly: true });
-		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
+	getTimestampsAreRelativeToUnixEpoch() {
+		return false;
+	}
+
+	getGroupId() {
+		return this.getId();
+	}
+
+	getPairingMask() {
+		return 1n;
+	}
+
+	getBitrate() {
+		return null;
+	}
+
+	getAverageBitrate() {
+		return null;
 	}
 
 	getName() {

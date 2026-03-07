@@ -132,16 +132,37 @@ export class EncodedPacketSink {
 
 	/**
 	 * Retrieves the track's first packet (in decode order), or null if it has no packets. The first packet is very
-	 * likely to be a key packet.
+	 * likely to be a key packet, but it doesn't have to be.
 	 */
-	getFirstPacket(options: PacketRetrievalOptions = {}) {
+	async getFirstPacket(options: PacketRetrievalOptions = {}) {
 		validatePacketRetrievalOptions(options);
 
 		if (this._track.input._disposed) {
 			throw new InputDisposedError();
 		}
 
+		if (!this._track.isHydrated) {
+			await this._track.hydrate();
+		}
+
 		return maybeFixPacketType(this._track, this._track._backing.getFirstPacket(options), options);
+	}
+
+	/** Retrieves the track's first key packet (in decode order), or null if it has no key packets. */
+	async getFirstKeyPacket(options: PacketRetrievalOptions = {}) {
+		validatePacketRetrievalOptions(options);
+
+		const firstPacket = await this.getFirstPacket(options);
+		if (!firstPacket) {
+			return null;
+		}
+
+		if (firstPacket.type === 'key') {
+			// Great
+			return firstPacket;
+		}
+
+		return this.getNextKeyPacket(firstPacket, options);
 	}
 
 	/**
@@ -152,12 +173,16 @@ export class EncodedPacketSink {
 	 *
 	 * @param timestamp - The timestamp used for retrieval, in seconds.
 	 */
-	getPacket(timestamp: number, options: PacketRetrievalOptions = {}) {
+	async getPacket(timestamp: number, options: PacketRetrievalOptions = {}) {
 		validateTimestamp(timestamp);
 		validatePacketRetrievalOptions(options);
 
 		if (this._track.input._disposed) {
 			throw new InputDisposedError();
+		}
+
+		if (!this._track.isHydrated) {
+			await this._track.hydrate();
 		}
 
 		return maybeFixPacketType(this._track, this._track._backing.getPacket(timestamp, options), options);
@@ -167,7 +192,7 @@ export class EncodedPacketSink {
 	 * Retrieves the packet following the given packet (in decode order), or null if the given packet is the
 	 * last packet.
 	 */
-	getNextPacket(packet: EncodedPacket, options: PacketRetrievalOptions = {}) {
+	async getNextPacket(packet: EncodedPacket, options: PacketRetrievalOptions = {}) {
 		if (!(packet instanceof EncodedPacket)) {
 			throw new TypeError('packet must be an EncodedPacket.');
 		}
@@ -175,6 +200,10 @@ export class EncodedPacketSink {
 
 		if (this._track.input._disposed) {
 			throw new InputDisposedError();
+		}
+
+		if (!this._track.isHydrated) {
+			await this._track.hydrate();
 		}
 
 		return maybeFixPacketType(this._track, this._track._backing.getNextPacket(packet, options), options);
@@ -197,6 +226,10 @@ export class EncodedPacketSink {
 
 		if (this._track.input._disposed) {
 			throw new InputDisposedError();
+		}
+
+		if (!this._track.isHydrated) {
+			await this._track.hydrate();
 		}
 
 		if (!options.verifyKeyPackets) {
@@ -232,6 +265,10 @@ export class EncodedPacketSink {
 
 		if (this._track.input._disposed) {
 			throw new InputDisposedError();
+		}
+
+		if (!this._track.isHydrated) {
+			await this._track.hydrate();
 		}
 
 		if (!options.verifyKeyPackets) {
@@ -476,7 +513,7 @@ export abstract class BaseMediaSampleSink<
 
 			const packetSink = this._createPacketSink();
 			const keyPacket = await packetSink.getKeyPacket(startTimestamp, { verifyKeyPackets: true })
-				?? await packetSink.getFirstPacket();
+				?? await packetSink.getFirstKeyPacket();
 
 			let currentPacket: EncodedPacket | null = keyPacket;
 

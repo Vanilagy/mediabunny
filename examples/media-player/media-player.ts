@@ -4,9 +4,15 @@ import {
 	BlobSource,
 	CanvasSink,
 	Input,
+	InputAudioTrack,
+	InputVideoTrack,
 	UrlSource,
 	WrappedAudioBuffer,
 	WrappedCanvas,
+	asc,
+	canDecodeAudio,
+	desc,
+	prefer,
 } from 'mediabunny';
 
 import SampleFileUrl from '../../docs/assets/big-buck-bunny-trimmed.mp4';
@@ -89,21 +95,75 @@ const initMediaPlayer = async (resource: File | string) => {
 		errorElement.textContent = '';
 		warningElement.textContent = '';
 
+		let videoTrack: InputVideoTrack | null = null;
+		let audioTrack: InputAudioTrack | null = null;
+		if (typeof resource === 'string' && resource.includes('.m3u8')) {
+			const input = new Input({
+				entryPath: resource,
+				source: ({ path }) => new UrlSource(path),
+				formats: ALL_FORMATS,
+			});
+			// const variant = (await manifestInput.getVariants())[0]!;
+
+			console.log(await input.getFormat(), await input.getTracks());
+			// return;
+
+			await input.getVideoTracks({
+				filter: track => track.hasPairableAudioTrack(),
+				sortBy: track => asc(track.bitrate),
+			});
+
+			videoTrack = await input.getPrimaryVideoTrack({
+				filter: async track => (await track.resolve('displayHeight')) < 1080,
+			});
+			audioTrack = await input.getPrimaryAudioTrack({
+				sortBy: track => prefer(track.canBePairedWith(videoTrack)),
+			});
+
+			await videoTrack?.hydrate();
+			await audioTrack?.hydrate();
+
+			totalDuration = Math.max(
+				await videoTrack?.computeDuration() ?? 0,
+				await audioTrack?.computeDuration() ?? 0,
+			);
+
+			console.log(videoTrack, audioTrack, totalDuration);
+
+			// https://test-streams.mux.dev/test_001/stream.m3u8
+			// https://test-streams.mux.dev/test_001/stream_1000k_48k_640x360_050.ts
+		} else {
+			const source = resource instanceof File
+				? new BlobSource(resource)
+				: new UrlSource(resource);
+
+			const input = new Input({
+				source,
+				formats: ALL_FORMATS,
+			});
+
+			totalDuration = await input.computeDuration();
+			videoTrack = await input.getPrimaryVideoTrack();
+			audioTrack = await input.getPrimaryAudioTrack();
+		}
+
+		/*
 		// Create an Input from the resource
 		const source = resource instanceof File
 			? new BlobSource(resource)
 			: new UrlSource(resource);
+		*/
+
+		/*
 		const input = new Input({
 			source,
 			formats: ALL_FORMATS,
 		});
+		*/
 
 		playbackTimeAtStart = 0;
-		totalDuration = await input.computeDuration();
-		durationElement.textContent = formatSeconds(totalDuration);
 
-		let videoTrack = await input.getPrimaryVideoTrack();
-		let audioTrack = await input.getPrimaryAudioTrack();
+		durationElement.textContent = formatSeconds(totalDuration);
 
 		let problemMessage = '';
 

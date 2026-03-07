@@ -81,6 +81,14 @@ export {
 	SUBTITLE_CODECS,
 } from './codec';
 export {
+	canDecode,
+	canDecodeVideo,
+	canDecodeAudio,
+	getDecodableCodecs,
+	getDecodableVideoCodecs,
+	getDecodableAudioCodecs,
+} from './decode';
+export {
 	VideoEncodingConfig,
 	VideoEncodingAdditionalOptions,
 	AudioEncodingConfig,
@@ -119,7 +127,11 @@ export {
 	Rational,
 	Rectangle,
 	Rotation,
+	SetOptional,
 	SetRequired,
+	asc,
+	desc,
+	prefer,
 } from './misc';
 export {
 	TrackType,
@@ -174,6 +186,7 @@ export {
 	InputVideoTrack,
 	InputAudioTrack,
 	PacketStats,
+	TrackNotHydratedError,
 } from './input-track';
 export {
 	EncodedPacket,

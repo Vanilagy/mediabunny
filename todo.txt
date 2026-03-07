@@ -1,0 +1,9 @@
+- Retaining Input instances for segments without clogging up memory indefinitely
+
+idea: discontinuities with extra decoder config on the packet.
+Also, why not just have the packet metadata on the packet? I think that would make things easier overall.
+
+- ALL_FORMATS but for HLS only
+
+- computeDuration and getFirstTimestamp are dangerous with HLS
+- keep input/demuxer.isSupported()?
