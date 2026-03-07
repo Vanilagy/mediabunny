@@ -1,7 +1,7 @@
 {
   "name": "@mediabunny/flac-encoder",
   "author": "Vanilagy",
-  "version": "1.38.0",
+  "version": "1.38.1",
   "description": "FLAC encoder extension for Mediabunny, based on libFLAC.",
   "main": "./dist/bundles/mediabunny-flac-encoder.mjs",
   "module": "./dist/bundles/mediabunny-flac-encoder.mjs",
