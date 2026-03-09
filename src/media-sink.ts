@@ -144,6 +144,23 @@ export class EncodedPacketSink {
 		return maybeFixPacketType(this._track, this._track._backing.getFirstPacket(options), options);
 	}
 
+	/** Retrieves the track's first key packet (in decode order), or null if it has no key packets. */
+	async getFirstKeyPacket(options: PacketRetrievalOptions = {}) {
+		validatePacketRetrievalOptions(options);
+
+		const firstPacket = await this.getFirstPacket(options);
+		if (!firstPacket) {
+			return null;
+		}
+
+		if (firstPacket.type === 'key') {
+			// Great
+			return firstPacket;
+		}
+
+		return this.getNextKeyPacket(firstPacket, options);
+	}
+
 	/**
 	 * Retrieves the packet corresponding to the given timestamp, in seconds. More specifically, returns the last packet
 	 * (in presentation order) with a start timestamp less than or equal to the given timestamp. This method can be
@@ -476,7 +493,7 @@ export abstract class BaseMediaSampleSink<
 
 			const packetSink = this._createPacketSink();
 			const keyPacket = await packetSink.getKeyPacket(startTimestamp, { verifyKeyPackets: true })
-				?? await packetSink.getFirstPacket();
+				?? await packetSink.getFirstKeyPacket({ verifyKeyPackets: true });
 
 			let currentPacket: EncodedPacket | null = keyPacket;
 
