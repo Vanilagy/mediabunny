@@ -24,7 +24,6 @@ export class Segment {
 	timestamp: number;
 	relativeToUnixEpoch: boolean;
 	duration: number;
-	title: string | null;
 	encryption: SegmentEncryptionInfo | null;
 	firstSegment: Segment | null;
 	initSegment: Segment | null;
@@ -35,7 +34,6 @@ export class Segment {
 		timestamp: number,
 		relativeToUnixEpoch: boolean,
 		duration: number,
-		title: string | null,
 		encryption: SegmentEncryptionInfo | null,
 		firstSegment: Segment | null,
 		initSegment: Segment | null,
@@ -45,7 +43,6 @@ export class Segment {
 		this.timestamp = timestamp;
 		this.relativeToUnixEpoch = relativeToUnixEpoch;
 		this.duration = duration;
-		this.title = title;
 		this.encryption = encryption;
 		this.firstSegment = firstSegment;
 		this.initSegment = initSegment;

@@ -22,7 +22,6 @@ import { Source } from './source';
 
 polyfillSymbolDispose();
 
-const UNSUPPORTED_INPUT_FORMAT_MESSAGE = 'Input has an unsupported or unrecognizable format.';
 export const DEFAULT_SOURCE_CACHE_GROUP = 1;
 export const ENCRYPTION_KEY_CACHE_GROUP = 2;
 
@@ -150,7 +149,7 @@ export class Input<S extends Source = Source> implements Disposable {
 			return cachedEntry.sourcePromise;
 		}
 
-		const sourcePromise = Promise.resolve(this._getSourceUncached(request));
+		const sourcePromise = this._getSourceUncached(request);
 		this._sourceCache.push({
 			request,
 			sourcePromise,
@@ -163,7 +162,13 @@ export class Input<S extends Source = Source> implements Disposable {
 
 		if (count > MAX_SOURCE_CACHE_SIZE) {
 			const minAgeIndex = arrayArgmin(this._sourceCache, x => x.cacheGroup === cacheGroup ? x.age : Infinity);
+			const entry = this._sourceCache[minAgeIndex]!;
 			this._sourceCache.splice(minAgeIndex, 1);
+
+			/*
+			void entry.sourcePromise
+				.then(source => source._dispose());
+			*/
 		}
 
 		return sourcePromise;
@@ -191,7 +196,7 @@ export class Input<S extends Source = Source> implements Disposable {
 				}
 			}
 
-			throw new Error(UNSUPPORTED_INPUT_FORMAT_MESSAGE);
+			throw new UnsupportedInputFormatError();
 		})();
 	}
 
@@ -247,10 +252,10 @@ export class Input<S extends Source = Source> implements Disposable {
 
 	async isSupported(): Promise<boolean> {
 		try {
-			const demuxer = await this._getDemuxer();
-			return demuxer.isSupported();
+			await this._getDemuxer();
+			return true;
 		} catch (error) {
-			if (error instanceof Error && error.message === UNSUPPORTED_INPUT_FORMAT_MESSAGE) {
+			if (error instanceof UnsupportedInputFormatError) {
 				return false;
 			}
 
@@ -323,6 +328,7 @@ export class Input<S extends Source = Source> implements Disposable {
 			sortBy: track => [
 				prefer(track.disposition.default),
 				prefer(track.hasPairableAudioTrack()),
+				prefer(!track.hasOnlyKeyPackets),
 				desc(track.bitrate),
 			],
 		}));
@@ -387,7 +393,7 @@ export class Input<S extends Source = Source> implements Disposable {
 		} else {
 			// TODO
 			// TODO
-			throw new Error('TODO');
+			// throw new Error('TODO');
 		}
 	}
 
@@ -397,6 +403,19 @@ export class Input<S extends Source = Source> implements Disposable {
 	 */
 	[Symbol.dispose]() {
 		this.dispose();
+	}
+}
+
+/**
+ * Thrown when trying to operate on an input that has an unsupported or unrecognizable format.
+ * @group Input files & tracks
+ * @public
+ */
+export class UnsupportedInputFormatError extends Error {
+	/** Creates a new {@link UnsupportedInputFormatError}. */
+	constructor(message = 'Input has an unsupported or unrecognizable format.') {
+		super(message);
+		this.name = 'UnsupportedInputFormatError';
 	}
 }
 

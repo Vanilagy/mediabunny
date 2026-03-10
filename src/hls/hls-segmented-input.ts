@@ -1,8 +1,8 @@
 import { AES_128_BLOCK_SIZE } from '../aes';
 import { Segment, SegmentEncryptionInfo, SegmentLocation } from '../segment';
 import { SegmentedInput } from '../segmented-input';
-import { toDataView, joinPaths, last } from '../misc';
-import { LineReader, Reader } from '../reader';
+import { toDataView, joinPaths, last, assert } from '../misc';
+import { readAllLines, Reader } from '../reader';
 import { HlsDemuxer } from './hls-demuxer';
 import { AttributeList, canIgnoreLine } from './hls-misc';
 
@@ -11,7 +11,6 @@ const IV_STRING_REGEX = /^0[xX][0-9a-fA-F]+$/;
 export class HlsSegmentedInput extends SegmentedInput {
 	demuxer: HlsDemuxer;
 	nextSegmentDuration: number | null = null;
-	nextSegmentTitle: string | null = null;
 	accumulatedTime = 0;
 	headerRead = false;
 	segmentsPromise: Promise<Segment[]>;
@@ -26,32 +25,26 @@ export class HlsSegmentedInput extends SegmentedInput {
 	constructor(
 		demuxer: HlsDemuxer,
 		path: string,
-		reader: Reader | null,
+		lines: string[] | null,
 	) {
 		super(demuxer.input, path);
 
 		this.demuxer = demuxer;
 
-		let lineReader: LineReader;
-		if (reader) {
-			lineReader = new LineReader(() => reader, canIgnoreLine);
-		} else {
-			lineReader = new LineReader(async () => {
-				const source = await this.demuxer.input._getSourceUncached({ path: this.path });
-				return new Reader(source);
-			}, canIgnoreLine);
-		}
-
 		this.segmentsPromise ??= (async () => {
+			if (!lines) {
+				const source = await demuxer.input._getSourceUncached({ path: this.path });
+				const reader = new Reader(source);
+
+				const slice = await reader.requestEntireFile();
+				assert(slice);
+				lines = readAllLines(slice, slice.length, { ignore: canIgnoreLine });
+			}
+
 			const segments: Segment[] = [];
 
-			while (true) {
-				let line = lineReader.readNextLine();
-				if (line instanceof Promise) line = await line;
-
-				if (line === null) {
-					break;
-				}
+			for (let i = 0; i < lines.length; i++) {
+				const line = lines[i]!;
 
 				if (!this.headerRead) {
 					if (line !== '#EXTM3U') {
@@ -94,7 +87,6 @@ export class HlsSegmentedInput extends SegmentedInput {
 						this.accumulatedTime,
 						this.lastProgramDateTimeSeconds !== null,
 						this.nextSegmentDuration,
-						this.nextSegmentTitle,
 						key,
 						this.currentFirstSegment,
 						this.currentInitSegment,
@@ -105,7 +97,6 @@ export class HlsSegmentedInput extends SegmentedInput {
 					this.currentFirstSegment ??= segment;
 
 					this.nextSegmentDuration = null;
-					this.nextSegmentTitle = null;
 
 					if (this.nextByteRange === null) {
 						this.lastByteRangeEnd = null;
@@ -122,10 +113,8 @@ export class HlsSegmentedInput extends SegmentedInput {
 					if (!Number.isFinite(duration) || duration < 0) {
 						throw new Error(`Invalid #EXTINF tag duration '${durationStr}'.`);
 					}
-					const title = commaIndex === -1 ? null : extinfContent.slice(commaIndex + 1).trim() || null;
 
 					this.nextSegmentDuration = duration;
-					this.nextSegmentTitle = title;
 				} else if (line.startsWith('#EXT-X-MAP:')) {
 					const attributes = new AttributeList(line.slice(11));
 					const uri = attributes.get('uri');
@@ -156,7 +145,6 @@ export class HlsSegmentedInput extends SegmentedInput {
 						this.accumulatedTime,
 						this.lastProgramDateTimeSeconds !== null,
 						0,
-						null,
 						this.currentKey,
 						null,
 						null,
@@ -166,7 +154,6 @@ export class HlsSegmentedInput extends SegmentedInput {
 					this.currentInitSegment = segment;
 
 					this.nextSegmentDuration = null;
-					this.nextSegmentTitle = null;
 
 					if (this.nextByteRange === null) {
 						this.lastByteRangeEnd = null;

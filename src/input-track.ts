@@ -44,6 +44,7 @@ export interface InputTrackBacking {
 	getPairingMask(): bigint;
 	getBitrate(): number | null;
 	getAverageBitrate(): number | null;
+	getHasOnlyKeyPackets?(): boolean | null;
 
 	getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
 	getPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
@@ -87,6 +88,8 @@ export abstract class InputTrack {
 	 * into its bitstream. Returns null if the type couldn't be determined.
 	 */
 	abstract determinePacketType(packet: EncodedPacket): Promise<PacketType | null>;
+	/** Whether the track metadata says that this track only contains key packets. The actual packets may differ. */
+	abstract get hasOnlyKeyPackets(): boolean;
 
 	/** Returns true if and only if this track is a video track. */
 	isVideoTrack(): this is InputVideoTrack {
@@ -365,6 +368,7 @@ export interface InputVideoTrackBacking extends InputTrackBacking {
 	getColorSpace(): Promise<VideoColorSpaceInit>;
 	canBeTransparent(): Promise<boolean>;
 	getDecoderConfig(): Promise<VideoDecoderConfig | null>;
+	getCodecParameterString?(): Promise<string | null>;
 }
 
 /**
@@ -391,6 +395,10 @@ export class InputVideoTrack extends InputTrack {
 
 	get codec(): VideoCodec | null {
 		return this._backing.getCodec();
+	}
+
+	get hasOnlyKeyPackets() {
+		return this._backing.getHasOnlyKeyPackets?.() ?? false;
 	}
 
 	/** The width in pixels of the track's coded samples, before any transformations or rotations. */
@@ -492,6 +500,10 @@ export class InputVideoTrack extends InputTrack {
 	}
 
 	async getCodecParameterString() {
+		if (this._backing.getCodecParameterString) {
+			return this._backing.getCodecParameterString();
+		}
+
 		if (!this.isHydrated) {
 			await this.hydrate();
 		}
@@ -554,6 +566,7 @@ export interface InputAudioTrackBacking extends InputTrackBacking {
 	getNumberOfChannels(): number;
 	getSampleRate(): number;
 	getDecoderConfig(): Promise<AudioDecoderConfig | null>;
+	getCodecParameterString?(): Promise<string | null>;
 }
 
 /**
@@ -580,6 +593,10 @@ export class InputAudioTrack extends InputTrack {
 		return this._backing.getCodec();
 	}
 
+	get hasOnlyKeyPackets() {
+		return this._backing.getHasOnlyKeyPackets?.() ?? true;
+	}
+
 	/** The number of audio channels in the track. */
 	get numberOfChannels() {
 		return this._backing.getNumberOfChannels();
@@ -604,6 +621,10 @@ export class InputAudioTrack extends InputTrack {
 	}
 
 	async getCodecParameterString() {
+		if (this._backing.getCodecParameterString) {
+			return this._backing.getCodecParameterString();
+		}
+
 		if (!this.isHydrated) {
 			await this.hydrate();
 		}

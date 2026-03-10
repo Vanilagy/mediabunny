@@ -20,12 +20,12 @@ import {
 	normalizeRotation,
 	promiseWithResolvers,
 	Rational,
-	roundToMultiple,
 	simplifyRational,
 	textEncoder,
 	toUint8Array,
 	uint8ArraysAreEqual,
 	writeBits,
+	roundToDivisor,
 } from '../misc';
 import {
 	CODEC_STRING_MAP,
@@ -911,8 +911,8 @@ export class MatroskaMuxer extends Muxer {
 
 			if (track.metadata.frameRate !== undefined) {
 				// Constrain the time values to the frame rate
-				timestamp = roundToMultiple(timestamp, 1 / track.metadata.frameRate);
-				duration = roundToMultiple(duration, 1 / track.metadata.frameRate);
+				timestamp = roundToDivisor(timestamp, track.metadata.frameRate);
+				duration = roundToDivisor(duration, track.metadata.frameRate);
 			}
 
 			const additions = trackData.info.alphaMode

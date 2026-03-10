@@ -7,7 +7,7 @@
  */
 
 import { InputDisposedError } from './input';
-import { assert, clamp, getUint24, MaybePromise, toDataView } from './misc';
+import { assert, clamp, getUint24, MaybePromise, textDecoder, toDataView } from './misc';
 import { DEFAULT_MAX_READ_POSITION, DEFAULT_MIN_READ_POSITION, Source } from './source';
 
 export class Reader {
@@ -35,8 +35,13 @@ export class Reader {
 			return null;
 		}
 
-		if (this.fileSizeNonStrict != null && start + length > this.fileSizeNonStrict) {
+		if (this.fileSizeNonStrict !== null && start + length > this.fileSizeNonStrict) {
 			return null;
+		}
+
+		if (length === 0) {
+			const buffer = new Uint8Array(0);
+			return new FileSlice(buffer, toDataView(buffer), 0, start, start);
 		}
 
 		const end = start + length;
@@ -68,7 +73,7 @@ export class Reader {
 			return null;
 		}
 
-		if (this.fileSizeNonStrict != null) {
+		if (this.fileSizeNonStrict !== null) {
 			return this.requestSlice(
 				start,
 				clamp(this.fileSizeNonStrict - start, minLength, maxLength),
@@ -82,7 +87,7 @@ export class Reader {
 				}
 
 				// The slice couldn't fit, meaning we must know the file size now
-				assert(this.fileSizeNonStrict != null);
+				assert(this.fileSizeNonStrict !== null);
 
 				return this.requestSlice(
 					start,
@@ -96,6 +101,46 @@ export class Reader {
 				return handleAttempt(promisedAttempt);
 			}
 		}
+	}
+
+	requestEntireFile(): MaybePromise<FileSlice | null> {
+		if (this.fileSizeNonStrict !== null) {
+			return this.requestSlice(0, this.fileSizeNonStrict);
+		}
+
+		const CHUNK_SIZE = 1024;
+
+		return (async () => {
+			const chunks: Uint8Array[] = [];
+			let currentSize = 0;
+
+			while (true) {
+				if (chunks.length === 1 && this.fileSizeNonStrict !== null) {
+					// It only took one read to get to know the whole file size
+					return this.requestSlice(0, this.fileSizeNonStrict);
+				}
+
+				const startOffset = chunks.length * CHUNK_SIZE;
+				let slice = this.requestSliceRange(startOffset, 0, CHUNK_SIZE);
+				if (slice instanceof Promise) slice = await slice;
+
+				if (!slice) {
+					break;
+				}
+
+				chunks.push(readBytes(slice, slice.length));
+				currentSize += slice.length;
+			}
+
+			const joined = new Uint8Array(currentSize);
+			let offset = 0;
+			for (const chunk of chunks) {
+				joined.set(chunk, offset);
+				offset += chunk.length;
+			}
+
+			return new FileSlice(joined, toDataView(joined), 0, 0, currentSize);
+		})();
 	}
 }
 
@@ -331,6 +376,17 @@ export const readAscii = (slice: FileSlice, length: number) => {
 	}
 
 	return str;
+};
+
+export const readAllLines = (slice: FileSlice, length: number, options?: {
+	ignore?: (line: string) => boolean;
+}) => {
+	const text = textDecoder.decode(readBytes(slice, length));
+	const lines = text.split('\n')
+		.map(x => x.trim())
+		.filter(x => x.length > 0 && !options?.ignore?.(x));
+
+	return lines;
 };
 
 export class LineReader {

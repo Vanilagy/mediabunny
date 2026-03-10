@@ -21,7 +21,7 @@ import {
 import { Segment } from './segment';
 import { PacketRetrievalOptions } from './media-sink';
 import { MetadataTags, TrackDisposition } from './metadata';
-import { arrayCount, assert, binarySearchLessOrEqual, Rotation, roundToMultiple } from './misc';
+import { arrayCount, assert, binarySearchLessOrEqual, Rotation, roundToDivisor } from './misc';
 import { EncodedPacket } from './packet';
 import { NullSource } from './source';
 
@@ -109,16 +109,6 @@ class SegmentedInputDemuxer extends Demuxer {
 		super(input);
 
 		this.segmentedInput = segmentedInput;
-	}
-
-	override async isSupported() {
-		const firstSegment = await this.segmentedInput.getFirstSegment();
-		if (!firstSegment) {
-			return true; // There's no data but that's supported
-		}
-
-		const input = firstSegment.toInput();
-		return input.isSupported();
 	}
 
 	async getMetadataTags(): Promise<MetadataTags> {
@@ -215,6 +205,10 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 		this.number = number;
 	}
 
+	getHasOnlyKeyPackets() {
+		return this.firstInputTrack.hasOnlyKeyPackets;
+	}
+
 	getId(): number {
 		return this.firstInputTrack._backing.getId();
 	}
@@ -269,16 +263,21 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 	}
 
 	async createAdjustedPacket(packet: EncodedPacket, segment: Segment, track: InputTrack) {
+		assert(packet.sequenceNumber >= 0);
+		assert(this.demuxer.firstSegment);
+
 		const mediaOffset = await this.demuxer.getMediaOffset(segment, track.input);
+		// If we didn't do this then sequence numbers would exceed Number.MAX_SAFE_INTEGER for Unix-timestamped segments
+		const segmentTimestampRelativeToFirst = segment.timestamp - this.demuxer.firstSegment.timestamp;
 
 		const modified = packet.clone({
-			timestamp: roundToMultiple(
+			timestamp: roundToDivisor(
 				packet.timestamp + mediaOffset,
-				1 / track.timeResolution,
+				track.timeResolution,
 			),
 			// The 1e8 assumes a max of 100 MB per second, highly unlikely to be hit, so this should guarantee
 			// monotonically increasing sequence numbers across segments.
-			sequenceNumber: Math.floor(1e8 * segment.timestamp) + packet.sequenceNumber,
+			sequenceNumber: Math.floor(1e8 * segmentTimestampRelativeToFirst) + packet.sequenceNumber,
 		});
 
 		this.packetInfos.set(modified, {

@@ -435,6 +435,10 @@ export const roundToMultiple = (value: number, multiple: number) => {
 	return Math.round(value / multiple) * multiple;
 };
 
+export const roundToDivisor = (value: number, multiple: number) => {
+	return Math.round(value * multiple) / multiple;
+};
+
 export const floorToMultiple = (value: number, multiple: number) => {
 	return Math.floor(value / multiple) * multiple;
 };

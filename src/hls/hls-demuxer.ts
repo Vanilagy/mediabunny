@@ -14,7 +14,7 @@ import { PacketRetrievalOptions } from '../media-sink';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags, TrackDisposition } from '../metadata';
 import { assert, joinPaths, Rotation, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket } from '../packet';
-import { LineReader } from '../reader';
+import { readAllLines } from '../reader';
 import { AttributeList, canIgnoreLine } from './hls-misc';
 import { HlsSegmentedInput } from './hls-segmented-input';
 
@@ -34,6 +34,7 @@ type InternalTrack = {
 	peakBitrate: number | null;
 	averageBitrate: number | null;
 	name: string | null;
+	hasOnlyKeyPackets: boolean;
 
 	info: {
 		type: 'video';
@@ -49,30 +50,26 @@ type InternalAudioTrack = InternalTrack & { info: { type: 'audio' } };
 
 export class HlsDemuxer extends Demuxer {
 	metadataPromise: Promise<void> | null = null;
-	lineReader: LineReader;
 	tracks: InputTrack[] = [];
 	segmentedInputs: HlsSegmentedInput[] = [];
 
 	constructor(input: Input) {
 		super(input);
-		this.lineReader = new LineReader(() => input._reader, canIgnoreLine);
 	}
 
 	readMetadata() {
 		return this.metadataPromise ??= (async () => {
 			assert(this.input._entryPath !== null);
 
-			let line = this.lineReader.readNextLine();
-			if (line instanceof Promise) line = await line;
-
-			if (line !== '#EXTM3U') {
-				throw new Error('Invalid M3U8 file; expected first line to be #EXTM3U.');
-			}
+			const slice = await this.input._reader.requestEntireFile();
+			assert(slice);
+			const lines = readAllLines(slice, slice.length, { ignore: canIgnoreLine });
 
 			const variantStreams: {
 				fullPath: string;
 				attributes: AttributeList;
 				lineNumber: number;
+				hasOnlyKeyPackets: boolean;
 			}[] = [];
 			const mediaTags: {
 				fullPath: string | null;
@@ -82,20 +79,13 @@ export class HlsDemuxer extends Demuxer {
 
 			// Let's first iterate through the entire file, collecting all variant streams and media tags
 
-			while (true) {
-				let line = this.lineReader.readNextLine();
-				if (line instanceof Promise) line = await line;
-
-				if (line === null) {
-					break;
-				}
+			for (let i = 1; i < lines.length; i++) {
+				const line = lines[i]!;
 
 				if (line.startsWith('#EXT-X-STREAM-INF:')) {
-					const streamInfLineNumber = this.lineReader.currentLineNumber;
-					let playlistPath = this.lineReader.readNextLine();
-					if (playlistPath instanceof Promise) playlistPath = await playlistPath;
-
-					if (playlistPath === null) {
+					const streamInfLineNumber = i;
+					const playlistPath = lines[++i];
+					if (playlistPath === undefined) {
 						throw new Error('Incorrect M3U8 file; a line must follow the #EXT-X-STREAM-INF tag.');
 					}
 
@@ -110,7 +100,12 @@ export class HlsDemuxer extends Demuxer {
 						);
 					}
 
-					variantStreams.push({ fullPath: fullPath, attributes, lineNumber: streamInfLineNumber });
+					variantStreams.push({
+						fullPath,
+						attributes,
+						lineNumber: streamInfLineNumber,
+						hasOnlyKeyPackets: false,
+					});
 				} else if (line.startsWith('#EXT-X-I-FRAME-STREAM-INF:')) {
 					const attributes = new AttributeList(line.slice(18));
 					const playlistPath = attributes.get('uri');
@@ -123,7 +118,12 @@ export class HlsDemuxer extends Demuxer {
 
 					const fullPath = joinPaths(this.input._entryPath, playlistPath);
 
-					variantStreams.push({ fullPath, attributes, lineNumber: this.lineReader.currentLineNumber });
+					variantStreams.push({
+						fullPath,
+						attributes,
+						lineNumber: i,
+						hasOnlyKeyPackets: true,
+					});
 				} else if (line.startsWith('#EXT-X-MEDIA:')) {
 					const attributes = new AttributeList(line.slice(13));
 
@@ -147,12 +147,12 @@ export class HlsDemuxer extends Demuxer {
 						fullPath = joinPaths(this.input._entryPath, uri);
 					}
 
-					mediaTags.push({ fullPath, attributes, lineNumber: this.lineReader.currentLineNumber });
+					mediaTags.push({ fullPath, attributes, lineNumber: i });
 				} else if (line === '#EXT-X-I-FRAMES-ONLY') {
 					// iFramesOnlyTagFound = true;
 				} else if (line.startsWith('#EXTINF:')) {
 					// This is a media playlist, not a master playlist
-					const segmentedInput = new HlsSegmentedInput(this, this.input._entryPath, this.input._reader);
+					const segmentedInput = new HlsSegmentedInput(this, this.input._entryPath, lines);
 					this.segmentedInputs.push(segmentedInput);
 
 					const input = segmentedInput.toInput();
@@ -346,6 +346,7 @@ export class HlsDemuxer extends Demuxer {
 								peakBitrate: bandwidth,
 								averageBitrate: averageBandwidth,
 								name,
+								hasOnlyKeyPackets: variantStream.hasOnlyKeyPackets,
 								info: {
 									type: 'video',
 									width,
@@ -396,6 +397,7 @@ export class HlsDemuxer extends Demuxer {
 									peakBitrate: null,
 									averageBitrate: null,
 									name: mediaTag.attributes.get('name'),
+									hasOnlyKeyPackets: variantStream.hasOnlyKeyPackets,
 									info: {
 										type: 'video',
 										width,
@@ -437,6 +439,7 @@ export class HlsDemuxer extends Demuxer {
 								peakBitrate: bandwidth,
 								averageBitrate: averageBandwidth,
 								name,
+								hasOnlyKeyPackets: variantStream.hasOnlyKeyPackets,
 								info: {
 									type: 'audio',
 									numberOfChannels:
@@ -484,6 +487,7 @@ export class HlsDemuxer extends Demuxer {
 									peakBitrate: null,
 									averageBitrate: null,
 									name: mediaTag.attributes.get('name'),
+									hasOnlyKeyPackets: variantStream.hasOnlyKeyPackets,
 									info: {
 										type: 'audio',
 										numberOfChannels:
@@ -682,6 +686,10 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 		return this.internalTrack.averageBitrate;
 	}
 
+	getHasOnlyKeyPackets() {
+		return this.internalTrack.hasOnlyKeyPackets || null;
+	}
+
 	getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
 		if (!this.internalTrack.backingTrack) {
 			throw new TrackNotHydratedError();
@@ -774,10 +782,18 @@ class HlsInputVideoTrackBacking
 	}
 
 	getDisplayWidth(): number | null {
+		if (this.backingTrack) {
+			return null;
+		}
+
 		return this.internalTrack.info.width;
 	}
 
 	getDisplayHeight(): number | null {
+		if (this.backingTrack) {
+			return null;
+		}
+
 		return this.internalTrack.info.height;
 	}
 
@@ -803,6 +819,14 @@ class HlsInputVideoTrackBacking
 		}
 
 		return this.backingTrack._backing.canBeTransparent();
+	}
+
+	getCodecParameterString(): Promise<string | null> {
+		if (!this.backingTrack) {
+			return Promise.resolve(this.internalTrack.fullCodecString);
+		}
+
+		return this.backingTrack.getCodecParameterString();
 	}
 
 	getDecoderConfig(): Promise<VideoDecoderConfig | null> {
@@ -850,6 +874,14 @@ class HlsInputAudioTrackBacking
 		}
 
 		return this.backingTrack._backing.getSampleRate();
+	}
+
+	getCodecParameterString(): Promise<string | null> {
+		if (!this.backingTrack) {
+			return Promise.resolve(this.internalTrack.fullCodecString);
+		}
+
+		return this.backingTrack.getCodecParameterString();
 	}
 
 	getDecoderConfig(): Promise<AudioDecoderConfig | null> {
