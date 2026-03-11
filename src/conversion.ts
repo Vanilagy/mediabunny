@@ -515,6 +515,9 @@ export class Conversion {
 	/**
 	 * Whether this conversion, as it has been configured, is valid and can be executed. If this field is `false`, check
 	 * the `discardedTracks` field for reasons.
+	 *
+	 * Note: a conversion having discarded tracks does not automatically mean it is invalid; if the remaining, utilized
+	 * tracks make for a valid output file, the conversion is still allowed.
 	 */
 	isValid = false;
 	/** The list of tracks that are included in the output file. */
