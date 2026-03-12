@@ -81,6 +81,13 @@ export abstract class SegmentedInput {
 			formats: [new VirtualInputFormat(() => new SegmentedInputDemuxer(this.input, this))],
 		});
 	}
+
+	dispose() {
+		for (const entry of this.inputCache) {
+			entry.input.dispose();
+		}
+		this.inputCache.length = 0;
+	}
 }
 
 class SegmentedInputDemuxer extends Demuxer {

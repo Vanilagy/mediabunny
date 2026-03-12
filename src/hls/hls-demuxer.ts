@@ -576,6 +576,13 @@ export class HlsDemuxer extends Demuxer {
 	async getMimeType(): Promise<string> {
 		return 'application/vnd.apple.mpegurl';
 	}
+
+	override dispose(): void {
+		for (const segInput of this.segmentedInputs) {
+			segInput.dispose();
+		}
+		this.segmentedInputs.length = 0;
+	}
 }
 
 abstract class HlsInputTrackBacking implements InputTrackBacking {

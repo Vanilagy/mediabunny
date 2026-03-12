@@ -17,7 +17,7 @@ import {
 	TrackQuery,
 } from './input-track';
 import { PacketRetrievalOptions } from './media-sink';
-import { arrayArgmin, arrayCount, assert, desc, MaybePromise, polyfillSymbolDispose, prefer } from './misc';
+import { arrayArgmin, arrayCount, assert, desc, MaybePromise, polyfillSymbolDispose, prefer, removeItem } from './misc';
 import { Reader } from './reader';
 import { Source } from './source';
 
@@ -33,6 +33,15 @@ export type SourceRequest = {
 const sourceRequestsAreEqual = (a: SourceRequest, b: SourceRequest) => {
 	return a.path === b.path;
 };
+
+let inputFinalizationRegistry: FinalizationRegistry<Source[]> | null = null;
+if (typeof FinalizationRegistry !== 'undefined') {
+	inputFinalizationRegistry = new FinalizationRegistry((sources) => {
+		for (const source of sources) {
+			source.unref();
+		}
+	});
+}
 
 /**
  * The options for creating an Input object.
@@ -74,6 +83,10 @@ export class Input<S extends Source = Source> implements Disposable {
 	_disposed = false;
 	/** @internal */
 	_nextSourceCacheAge = 0;
+	/** @internal */
+	// This is an array, not a set, because the same source may be reffed multiple times and therefore also needs to be
+	// unreffed multiple times.
+	_reffedSources: Source[] = [];
 	/** @internal */
 	_sourceCache: {
 		request: SourceRequest;
@@ -123,6 +136,8 @@ export class Input<S extends Source = Source> implements Disposable {
 		this._source = options.source;
 		this._initInput = options.initInput ?? null;
 		this._entryPath = options.entryPath ?? null;
+
+		inputFinalizationRegistry?.register(this, this._reffedSources, this);
 	}
 
 	async _getSourceUncached(request: SourceRequest) {
@@ -166,11 +181,18 @@ export class Input<S extends Source = Source> implements Disposable {
 			const entry = this._sourceCache[minAgeIndex]!;
 			this._sourceCache.splice(minAgeIndex, 1);
 
-			/*
 			void entry.sourcePromise
-				.then(source => source._dispose());
-			*/
+				.then((source) => {
+					source.unref();
+					removeItem(this._reffedSources, source);
+				});
 		}
+
+		void sourcePromise
+			.then((source) => {
+				source.ref();
+				this._reffedSources.push(source);
+			});
 
 		return sourcePromise;
 	}
@@ -186,6 +208,9 @@ export class Input<S extends Source = Source> implements Disposable {
 				assert(this._entryPath !== null);
 				source = await this._getSourceUncached({ path: this._entryPath });
 			}
+
+			source.ref();
+			this._reffedSources.push(source);
 
 			this._reader = new Reader(source);
 
@@ -392,14 +417,15 @@ export class Input<S extends Source = Source> implements Disposable {
 
 		this._disposed = true;
 
-		if (this._source instanceof Source) {
-			this._source._disposed = true;
-			this._source._dispose();
-		} else {
-			// TODO
-			// TODO
-			// throw new Error('TODO');
+		for (const source of this._reffedSources) {
+			source.unref();
 		}
+		this._reffedSources.length = 0;
+
+		inputFinalizationRegistry?.unregister(this);
+
+		void this._demuxerPromise
+			?.then(demuxer => demuxer.dispose());
 	}
 
 	/**

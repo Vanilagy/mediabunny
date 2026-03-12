@@ -54,14 +54,17 @@ export class HlsSegmentedInput extends SegmentedInput {
 
 	runUpdateSegments() {
 		return this.currentUpdateSegmentsPromise ??= (async () => {
-			const remainingWaitTimeMs = this.getRemainingWaitTimeMs();
-			if (remainingWaitTimeMs > 0) {
-				await wait(remainingWaitTimeMs);
-			}
+			try {
+				const remainingWaitTimeMs = this.getRemainingWaitTimeMs();
+				if (remainingWaitTimeMs > 0) {
+					await wait(remainingWaitTimeMs);
+				}
 
-			this.lastSegmentUpdateTime = performance.now();
-			await this.updateSegments();
-			this.currentUpdateSegmentsPromise = null;
+				this.lastSegmentUpdateTime = performance.now();
+				await this.updateSegments();
+			} finally {
+				this.currentUpdateSegmentsPromise = null;
+			}
 		})();
 	}
 
@@ -88,11 +91,17 @@ export class HlsSegmentedInput extends SegmentedInput {
 
 		if (!lines) {
 			const source = await this.demuxer.input._getSourceUncached({ path: this.path });
-			const reader = new Reader(source);
+			source.ref();
 
-			const slice = await reader.requestEntireFile();
-			assert(slice);
-			lines = readAllLines(slice, slice.length, { ignore: canIgnoreLine });
+			try {
+				const reader = new Reader(source);
+
+				const slice = await reader.requestEntireFile();
+				assert(slice);
+				lines = readAllLines(slice, slice.length, { ignore: canIgnoreLine });
+			} finally {
+				source.unref();
+			}
 		}
 
 		let headerRead = false;
@@ -106,16 +115,10 @@ export class HlsSegmentedInput extends SegmentedInput {
 		let nextByteRange: { offset: number; length: number } | null = null;
 		let lastProgramDateTimeSeconds: number | null = null;
 
+		// Used for repeated parses where our job it is to only add the new segments
 		let prevLastSegment = last(this.segments) ?? null;
 
-		if (Math.PI === 3) {
-			// Stupid hack needed to prevent TypeScript from incorrectly narrowing the local variables; not sure if
-			// there is a better workaround
-			nextByteRange = { offset: 6, length: 7 };
-			lastByteRangeEnd = 1337;
-		}
-
-		const parseAndUpdateByteRange = (content: string) => {
+		const parseByteRange = (content: string) => {
 			const atIndex = content.indexOf('@');
 
 			const length = Number(atIndex === -1 ? content : content.slice(0, atIndex));
@@ -123,23 +126,15 @@ export class HlsSegmentedInput extends SegmentedInput {
 				throw new Error(`Invalid #EXT-X-BYTERANGE length '${content}'.`);
 			}
 
-			let offset: number;
+			let offset: number | null = null;
 			if (atIndex !== -1) {
 				offset = Number(content.slice(atIndex + 1));
 				if (!Number.isInteger(offset) || offset < 0) {
 					throw new Error(`Invalid #EXT-X-BYTERANGE offset '${content}'.`);
 				}
-			} else {
-				if (lastByteRangeEnd === null) {
-					throw new Error(
-						'Invalid M3U8 file; #EXT-X-BYTERANGE without offset requires a previous byte range.',
-					);
-				}
-				offset = lastByteRangeEnd;
 			}
 
-			nextByteRange = { offset, length };
-			lastByteRangeEnd = offset + length;
+			return { length, offset };
 		};
 
 		const setNextSequenceNumber = (number: number) => {
@@ -252,16 +247,21 @@ export class HlsSegmentedInput extends SegmentedInput {
 				}
 
 				const byteRange = attributes.get('byterange');
+				let parsedByteRange: ReturnType<typeof parseByteRange> | null = null;
 				if (byteRange !== null) {
-					parseAndUpdateByteRange(byteRange);
+					parsedByteRange = parseByteRange(byteRange);
+				}
+
+				if (parsedByteRange && parsedByteRange.offset === null) {
+					throw new Error('Invalid #EXT-X-MAP tag; BYTERANGE attribute must have a specified offset.');
 				}
 
 				if (!prevLastSegment) {
 					const fullPath = joinPaths(this.path, uri);
 					const location: HlsSegmentLocation = {
 						path: fullPath,
-						offset: nextByteRange?.offset ?? 0,
-						length: nextByteRange?.length ?? null,
+						offset: parsedByteRange?.offset ?? 0,
+						length: parsedByteRange?.length ?? null,
 					};
 
 					if (currentKey?.method === 'AES-128' && !currentKey.iv) {
@@ -345,10 +345,23 @@ export class HlsSegmentedInput extends SegmentedInput {
 
 				setNextSequenceNumber(number);
 			} else if (line.startsWith('#EXT-X-BYTERANGE:')) {
-				parseAndUpdateByteRange(line.slice(17));
+				const parsed = parseByteRange(line.slice(17));
+				if (parsed.offset === null) {
+					if (lastByteRangeEnd === null) {
+						throw new Error(
+							'Invalid M3U8 file; #EXT-X-BYTERANGE without offset requires a previous byte range.',
+						);
+					}
+					parsed.offset = lastByteRangeEnd;
+				}
+
+				nextByteRange = parsed as { length: number; offset: number };
+				lastByteRangeEnd = parsed.offset + parsed.length;
 			} else if (line.startsWith('#EXT-X-PROGRAM-DATE-TIME:')) {
 				if (prevLastSegment) {
-					continue; // No need to spend effort parsing dates if we're gonna discard it anyway
+					// No need to spend effort parsing dates if we're gonna discard it anyway. Also would be wrong to do
+					// the segment shifting!
+					continue;
 				}
 
 				const dateTime = line.slice(25);

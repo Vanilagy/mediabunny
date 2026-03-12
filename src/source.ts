@@ -58,6 +58,8 @@ export abstract class Source {
 	abstract _dispose(): void;
 	/** @internal */
 	_disposed = false;
+	/** @internal */
+	_refCount = 0;
 
 	/** @internal */
 	private _sizePromise: Promise<number | null> | null = null;
@@ -119,6 +121,33 @@ export abstract class Source {
 
 	/** Called each time data is retrieved from the source. Will be called with the retrieved range (end exclusive). */
 	onread: ((start: number, end: number) => unknown) | null = null;
+
+	/**
+	 * Increases the internal reference count of this source. Call this method when you don't want the source to be
+	 * disposed.
+	 */
+	ref() {
+		if (this._disposed) {
+			throw new Error('Cannot ref a disposed source.');
+		}
+
+		this._refCount++;
+	}
+
+	/**
+	 * Decreases the internal reference count of this source, signalling a lost of interest in this source. If the
+	 * internal count reaches zero, meaning nobody is interested in the source anymore, its resources get disposed.
+	 */
+	unref() {
+		if (this._refCount > 0) {
+			this._refCount--;
+
+			if (this._refCount === 0) {
+				this._dispose();
+				this._disposed = true;
+			}
+		}
+	}
 }
 
 /**
@@ -2033,6 +2062,16 @@ export class RangedSource extends Source {
 	}
 
 	override _dispose(): void {
-		this._baseSource._dispose();
+		// Nada
+	}
+
+	override ref() {
+		super.ref();
+		this._baseSource.ref();
+	}
+
+	override unref() {
+		super.unref();
+		this._baseSource.unref();
 	}
 }

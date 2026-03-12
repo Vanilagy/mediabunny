@@ -35,8 +35,11 @@
 		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
 		const firstTimestamp = await videoTrack.getFirstTimestamp();
 
-		console.log("FIRST", firstTimestamp)
+		console.log(await videoTrack.computeDuration({ skipLiveWait: true }));
 
+		manifest.dispose()
+
+		/*
 		let last = -Infinity;
 		for await (const packet of sink.packets()) {
 			const rel = packet.timestamp - firstTimestamp;
@@ -48,6 +51,7 @@
 				break;
 			}
 		}
+		*/
 
 		/*
 		console.log("here")
