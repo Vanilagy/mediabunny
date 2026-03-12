@@ -464,6 +464,10 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		return null;
 	}
 
+	async getLiveRefreshInterval() {
+		return null;
+	}
+
 	getCodec() {
 		return this.bitstream.codecInfo.codec;
 	}

@@ -578,6 +578,10 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		return null;
 	}
 
+	async getLiveRefreshInterval() {
+		return null;
+	}
+
 	getDisposition() {
 		return {
 			...DEFAULT_TRACK_DISPOSITION,

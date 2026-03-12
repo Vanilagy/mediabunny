@@ -65,6 +65,19 @@ export type PacketRetrievalOptions = {
 	 * its data, this option cannot be enabled together with `metadataOnly`.
 	 */
 	verifyKeyPackets?: boolean;
+
+	/**
+	 * When querying packets in live media that are in the future relative to the current live edge, Mediabunny will,
+	 * by default, wait for the stream to advance until the query can be satisfied. In a sense, Mediabunny simply treats
+	 * live streams as media files that are still being written, and any read that depends on future information will
+	 * wait until it can be fulfilled.
+	 *
+	 * If you want to query packets based only on the currently known information, set this field to `true` - this way,
+	 * Mediabunny will never wait for the live stream to catch up.
+	 *
+	 * For non-live media, this field has no effect.
+	 */
+	skipLiveWait?: boolean;
 };
 
 const validatePacketRetrievalOptions = (options: PacketRetrievalOptions) => {
@@ -79,6 +92,9 @@ const validatePacketRetrievalOptions = (options: PacketRetrievalOptions) => {
 	}
 	if (options.verifyKeyPackets && options.metadataOnly) {
 		throw new TypeError('options.verifyKeyPackets and options.metadataOnly cannot be enabled together.');
+	}
+	if (options.skipLiveWait !== undefined && typeof options.skipLiveWait !== 'boolean') {
+		throw new TypeError('options.skipLiveWait, when defined, must be a boolean.');
 	}
 };
 

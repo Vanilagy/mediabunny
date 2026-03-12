@@ -95,6 +95,8 @@ const initMediaPlayer = async (resource: File | string) => {
 		errorElement.textContent = '';
 		warningElement.textContent = '';
 
+		let start = 0;
+
 		let videoTrack: InputVideoTrack | null = null;
 		let audioTrack: InputAudioTrack | null = null;
 		if (typeof resource === 'string' && resource.includes('.m3u8')) {
@@ -124,11 +126,15 @@ const initMediaPlayer = async (resource: File | string) => {
 			await audioTrack?.hydrate();
 
 			totalDuration = Math.max(
-				await videoTrack?.computeDuration() ?? 0,
-				await audioTrack?.computeDuration() ?? 0,
+				await videoTrack?.computeDuration({ skipLiveWait: true }) ?? 0,
+				await audioTrack?.computeDuration({ skipLiveWait: true }) ?? 0,
 			);
 
 			console.log(videoTrack, audioTrack, totalDuration);
+
+			start = totalDuration - 2;
+
+			totalDuration += 3600;
 
 			// https://test-streams.mux.dev/test_001/stream.m3u8
 			// https://test-streams.mux.dev/test_001/stream_1000k_48k_640x360_050.ts
@@ -248,6 +254,8 @@ const initMediaPlayer = async (resource: File | string) => {
 		await startVideoIterator();
 
 		if (audioContext.state === 'running') {
+			await seekToTime(start);
+
 			// Start playback automatically if the audio context permits
 			await play();
 		}
@@ -375,7 +383,9 @@ const runAudioIterator = async () => {
 		node.buffer = buffer;
 		node.connect(gainNode!);
 
-		const startTimestamp = audioContextStartTime! + timestamp - playbackTimeAtStart;
+		let startTimestamp = audioContextStartTime! + timestamp - playbackTimeAtStart;
+		// Round timestamp to the context's sample boundaries to prevent subsample audio glitches
+		startTimestamp = Math.round(audioContext!.sampleRate * startTimestamp) / audioContext!.sampleRate;
 
 		// Two cases: Either, the audio starts in the future or in the past
 		if (startTimestamp >= audioContext!.currentTime) {

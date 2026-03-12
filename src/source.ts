@@ -20,6 +20,7 @@ import {
 	retriedFetch,
 	toDataView,
 	toUint8Array,
+	wait,
 } from './misc';
 import * as nodeAlias from './node';
 import { InputDisposedError } from './input';
@@ -598,7 +599,7 @@ export class UrlSource extends Source {
 					const retryDelayInSeconds = this._getRetryDelay(1, error, this._url);
 					if (retryDelayInSeconds !== null) {
 						console.error('Error while reading response stream. Attempting to resume.', error);
-						await new Promise(resolve => setTimeout(resolve, 1000 * retryDelayInSeconds));
+						await wait(1000 * retryDelayInSeconds);
 
 						break;
 					} else {

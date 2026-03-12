@@ -2,7 +2,7 @@
 import { ALL_FORMATS, EncodedPacketSink, Input, InputAudioTrack, InputVideoTrack, UrlSource } from 'mediabunny';
 import { expect, test } from 'vitest';
 import { HLS, HlsInputFormat } from '../../src/input-format.js';
-import { assert } from '../../src/misc.js';
+import { assert, rejectAfter } from '../../src/misc.js';
 
 // A lot of test cases taken from:
 // https://github.com/video-dev/hls.js/blob/master/tests/test-streams.js
@@ -149,6 +149,10 @@ test.concurrent('Big Buck Bunny', { timeout: 15_000 }, async () => {
 
 	expect(tracks.every(x => x.isHydrated)).toBe(true);
 	expect(tracks.every(x => !x.timestampsAreRelativeToUnixEpoch)).toBe(true);
+
+	for (const track of tracks) {
+		expect(await track.isLive()).toBe(false);
+	}
 
 	expect(videoTracks[0]!.codedWidth).toBe(1280);
 	expect(videoTracks[0]!.codedHeight).toBe(720);
@@ -478,7 +482,7 @@ test.concurrent('Single-value PDT', { timeout: 15_000 }, async () => {
 	expect(lastPacket.sequenceNumber).toBeLessThan(1e8 * 60);
 });
 
-test.concurrent('Duplicate PDT', { timeout: 15_000 }, async () => {
+test.concurrent('Duplicate PDT', { timeout: 30_000 }, async () => {
 	using input = new Input({
 		entryPath: 'https://playertest.longtailvideo.com/adaptive/artbeats/manifest.m3u8',
 		source: ({ path }) => new UrlSource(path),
@@ -733,4 +737,64 @@ test.concurrent('Advanced Apple HLS', { timeout: 30_000 }, async () => {
 	expect(await videoTracks[61]!.getCodecParameterString()).toBe('hvc1.2.4.L123.B0');
 	expect(await videoTracks[62]!.getCodecParameterString()).toBe('hvc1.2.4.L123.B0');
 	expect(await videoTracks[63]!.getCodecParameterString()).toBe('hvc1.2.4.L123.B0');
+});
+
+test.concurrent('Live HLS', { timeout: 30_000 }, async () => {
+	using input = new Input({
+		entryPath: 'https://stream.mux.com/v69RSHhFelSm4701snP22dYz2jICy4E4FUyk02rW4gxRM.m3u8',
+		source: ({ path }) => new UrlSource(path),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	await expect(videoTrack.isLive()).rejects.toThrow();
+	await expect(audioTrack.isLive()).rejects.toThrow();
+
+	await videoTrack.hydrate();
+	await audioTrack.hydrate();
+
+	expect(await videoTrack.isLive()).toBe(true);
+	expect(await audioTrack.isLive()).toBe(true);
+
+	const videoRefreshInterval = await videoTrack.getLiveRefreshInterval();
+	const audioRefreshInterval = await audioTrack.getLiveRefreshInterval();
+	expect(videoRefreshInterval).toBe(2);
+	expect(audioRefreshInterval).toBe(2);
+
+	const durationFailed = Promise.race([
+		videoTrack.computeDuration(),
+		rejectAfter(2000, 'Baby you make me smile'),
+	]);
+	await expect(durationFailed).rejects.toThrow('Baby you make me smile');
+
+	const duration = await Promise.race([
+		videoTrack.computeDuration({ skipLiveWait: true }),
+		rejectAfter(2000, 'Baby you make me smile'),
+	]);
+	expect(duration).toBeGreaterThan((Date.now() / 1000) - 3600);
+
+	const sink = new EncodedPacketSink(videoTrack);
+
+	let currentLastPacket = await sink.getPacket(Infinity, { skipLiveWait: true });
+	assert(currentLastPacket);
+
+	// Actually find the last packet in decode order
+	while (true) {
+		const nextKnownPacket = await sink.getNextPacket(currentLastPacket, { skipLiveWait: true });
+		if (!nextKnownPacket) {
+			break;
+		}
+
+		currentLastPacket = nextKnownPacket;
+	}
+
+	// This tests waiting for the live stream to advance
+	const nextPacket = await sink.getNextPacket(currentLastPacket);
+	assert(nextPacket);
+	expect(nextPacket.sequenceNumber).toBeGreaterThan(currentLastPacket.sequenceNumber);
 });

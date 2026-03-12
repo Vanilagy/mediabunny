@@ -560,7 +560,7 @@ export const retriedFetch = async (
 			}
 
 			if (retryDelayInSeconds > 0) {
-				await new Promise(resolve => setTimeout(resolve, 1000 * retryDelayInSeconds));
+				await wait(1000 * retryDelayInSeconds);
 			}
 
 			if (shouldStop()) {
@@ -1131,4 +1131,14 @@ export const clearIntervalUnthrottled = (timer: UnthrottledTimerHandle) => {
 		type: 'clear-interval',
 		timerId: timer.id,
 	} satisfies UnthrottledTimerMessage);
+};
+
+export const wait = (ms: number) => {
+	return new Promise(resolve => setTimeout(resolve, ms));
+};
+
+export const rejectAfter = (ms: number, message = 'Promise rejected') => {
+	return new Promise((_, reject) => {
+		setTimeout(() => reject(new Error(message)), ms);
+	});
 };

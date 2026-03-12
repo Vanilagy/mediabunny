@@ -16,6 +16,7 @@ import {
 	queryTracks,
 	TrackQuery,
 } from './input-track';
+import { PacketRetrievalOptions } from './media-sink';
 import { arrayArgmin, arrayCount, assert, desc, MaybePromise, polyfillSymbolDispose, prefer } from './misc';
 import { Reader } from './reader';
 import { Source } from './source';
@@ -266,14 +267,18 @@ export class Input<S extends Source = Source> implements Disposable {
 	/**
 	 * Computes the duration of the input file, in seconds. More precisely, returns the largest end timestamp among
 	 * all tracks.
+	 *
+	 * By default, when any track in the underlying media is live, this method will only resolve once the live stream
+	 * ends. If you want to query the current duration of the media, set {@link PacketRetrievalOptions.skipLiveWait}
+	 * to `true` in the options.
 	 */
-	async computeDuration() {
+	async computeDuration(options?: PacketRetrievalOptions) {
 		const tracks = await this.getTracks();
 		if (tracks.length === 0) {
 			return 0;
 		}
 
-		const tracksDurations = await Promise.all(tracks.map(x => x.computeDuration()));
+		const tracksDurations = await Promise.all(tracks.map(x => x.computeDuration(options)));
 		return Math.max(...tracksDurations);
 	}
 

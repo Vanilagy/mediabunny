@@ -1970,6 +1970,10 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		return null;
 	}
 
+	async getLiveRefreshInterval() {
+		return null;
+	}
+
 	async getFirstPacket(options: PacketRetrievalOptions) {
 		return this.performClusterLookup(
 			null,

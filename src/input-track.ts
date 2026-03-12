@@ -44,6 +44,7 @@ export interface InputTrackBacking {
 	getPairingMask(): bigint;
 	getBitrate(): number | null;
 	getAverageBitrate(): number | null;
+	getLiveRefreshInterval(): Promise<number | null>;
 	getHasOnlyKeyPackets?(): boolean | null;
 
 	getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
@@ -195,13 +196,19 @@ export abstract class InputTrack {
 		return firstPacket?.timestamp ?? 0;
 	}
 
-	/** Returns the end timestamp of the last packet of this track, in seconds. */
-	async computeDuration() {
+	/**
+	 * Returns the end timestamp of the last packet of this track, in seconds.
+	 *
+	 * By default, when the underlying media is live, this method will only resolve once the live stream ends. If you
+	 * want to query the current end timestamp of the stream, set {@link PacketRetrievalOptions.skipLiveWait} to `true`
+	 * in the options.
+	 */
+	async computeDuration(options?: PacketRetrievalOptions) {
 		if (!this.isHydrated) {
 			await this.hydrate();
 		}
 
-		const lastPacket = await this._backing.getPacket(Infinity, { metadataOnly: true });
+		const lastPacket = await this._backing.getPacket(Infinity, { metadataOnly: true, ...options });
 		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
 	}
 
@@ -212,8 +219,12 @@ export abstract class InputTrack {
 	 * looked at before it can return early; this means, you can use it to aggregate only a subset (prefix) of all
 	 * packets. This is very useful for getting a great estimate of video frame rate without having to scan through the
 	 * entire file.
+	 *
+	 * By default, when the underlying media is live and `targetPacketCount` is not set, this method will only resolve
+	 * once the live stream ends. If you want to query the current packet statistics of the stream, set
+	 * {@link PacketRetrievalOptions.skipLiveWait} to `true` in the options.
 	 */
-	async computePacketStats(targetPacketCount = Infinity): Promise<PacketStats> {
+	async computePacketStats(targetPacketCount = Infinity, options?: PacketRetrievalOptions): Promise<PacketStats> {
 		const sink = new EncodedPacketSink(this);
 
 		let startTimestamp = Infinity;
@@ -221,7 +232,7 @@ export abstract class InputTrack {
 		let packetCount = 0;
 		let totalPacketBytes = 0;
 
-		for await (const packet of sink.packets(undefined, undefined, { metadataOnly: true })) {
+		for await (const packet of sink.packets(undefined, undefined, { metadataOnly: true, ...options })) {
 			if (
 				packetCount >= targetPacketCount
 				// This additional condition is needed to produce correct results with out-of-presentation-order packets
@@ -246,6 +257,14 @@ export abstract class InputTrack {
 				? Number((8 * totalPacketBytes / (endTimestamp - startTimestamp)).toPrecision(16))
 				: 0,
 		};
+	}
+
+	async isLive() {
+		return (await this._backing.getLiveRefreshInterval()) !== null;
+	}
+
+	getLiveRefreshInterval() {
+		return this._backing.getLiveRefreshInterval();
 	}
 
 	get isHydrated() {

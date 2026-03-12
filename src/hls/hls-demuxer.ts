@@ -686,6 +686,14 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 		return this.internalTrack.averageBitrate;
 	}
 
+	async getLiveRefreshInterval(): Promise<number | null> {
+		if (!this.internalTrack.backingTrack) {
+			throw new TrackNotHydratedError();
+		}
+
+		return this.internalTrack.backingTrack._backing.getLiveRefreshInterval();
+	}
+
 	getHasOnlyKeyPackets() {
 		return this.internalTrack.hasOnlyKeyPackets || null;
 	}

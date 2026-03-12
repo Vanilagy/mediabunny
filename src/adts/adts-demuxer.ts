@@ -227,6 +227,10 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 		return null;
 	}
 
+	async getLiveRefreshInterval() {
+		return null;
+	}
+
 	getName() {
 		return null;
 	}

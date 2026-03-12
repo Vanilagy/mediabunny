@@ -11,6 +11,7 @@
 	document.body.append(fileInput);
 
 	fileInput.addEventListener('change', async () => {
+		/*
 		const file = fileInput.files[0];
 		const input = new Mediabunny.Input({
 			formats: Mediabunny.ALL_FORMATS,
@@ -20,12 +21,46 @@
 		const audTrack = await input.getPrimaryAudioTrack();
 		console.log((await audTrack.getDecoderConfig()).description.join(','));
 		return;
+		*/
 
 		const manifest = new Mediabunny.Input({
-			entryPath: 'https://s3.amazonaws.com/qa.jwplayer.com/hlsjs/muxed-fmp4/hls.m3u8',
+			entryPath: 'https://zdf-hls-15.akamaized.net/hls/live/2016498/de/high/master.m3u8',
 			source: ({ path }) => new Mediabunny.UrlSource(path),
 			formats: Mediabunny.ALL_FORMATS,
 		});
+
+		const videoTrack = await manifest.getPrimaryVideoTrack();
+		await videoTrack.hydrate();
+
+		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
+		const firstTimestamp = await videoTrack.getFirstTimestamp();
+
+		console.log("FIRST", firstTimestamp)
+
+		let last = -Infinity;
+		for await (const packet of sink.packets()) {
+			const rel = packet.timestamp - firstTimestamp;
+			console.log(rel, rel - last);
+
+			last = rel;
+
+			if (rel >= 10) {
+				break;
+			}
+		}
+
+		/*
+		console.log("here")
+		const lastPacket = await sink.getPacket(Infinity, { skipLiveWait: true });
+		const other = await sink.getPacket(lastPacket.timestamp - 5);
+
+		for await (const packet of sink.packets(other)) {
+			console.log(packet.timestamp);
+		}
+
+		console.log("Done")
+		*/
+		
 
 		/*
 		const tracks = await manifest.getTracks();
@@ -34,11 +69,6 @@
 
 		return;
 		*/
-
-		const videoTrack = await manifest.getPrimaryVideoTrack();
-		const audioTrack = await manifest.getPrimaryAudioTrack();
-
-		console.log(await videoTrack.getFirstTimestamp(), await audioTrack.getFirstTimestamp());
 		/*
 		for await (using sample of sink.samples()) {
 			console.log(sample.timestamp);
@@ -104,8 +134,6 @@
 			}
 		}
 		*/
-
-		console.log("Done")
 
 		/*
 		

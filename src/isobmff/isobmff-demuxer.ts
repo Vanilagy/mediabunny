@@ -2560,6 +2560,10 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		return null;
 	}
 
+	async getLiveRefreshInterval() {
+		return null;
+	}
+
 	async getFirstPacket(options: PacketRetrievalOptions) {
 		const regularPacket = await this.fetchPacketForSampleIndex(0, options);
 		if (regularPacket || !this.internalTrack.demuxer.isFragmented) {

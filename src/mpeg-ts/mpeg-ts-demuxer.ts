@@ -1098,6 +1098,10 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 		return null;
 	}
 
+	async getLiveRefreshInterval() {
+		return null;
+	}
+
 	abstract allPacketsAreKeyPackets(): boolean;
 	abstract getReorderSize(): number;
 
