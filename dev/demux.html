@@ -21,7 +21,11 @@
 		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
 
 		for await (const packet of sink.packets()) {
-			console.log(packet.timestamp);
+			console.log(packet.type, packet.timestamp);
+
+			if (packet.timestamp >= 5) {
+				break;
+			}
 		}
 
 		/*
