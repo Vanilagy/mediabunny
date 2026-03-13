@@ -175,10 +175,10 @@ export class MpegTsDemuxer extends Demuxer {
 				// MPEG-TS with Forward Error Correction
 				this.packetOffset = 0;
 				this.packetStride = TS_PACKET_SIZE + 16;
-			} else if (startingBytes[4] === 0x47 && startingBytes[4 + TS_PACKET_SIZE] === 0x47) {
+			} else if (startingBytes[4] === 0x47 && startingBytes[4 + TS_PACKET_SIZE + 4] === 0x47) {
 				// MPEG-2-TS (DVHS)
 				this.packetOffset = 4;
-				this.packetStride = TS_PACKET_SIZE;
+				this.packetStride = TS_PACKET_SIZE + 4;
 			} else {
 				throw new Error('Unreachable.');
 			}

@@ -542,7 +542,7 @@ export class MpegTsInputFormat extends InputFormat {
 		} else if (bytes[0] === 0x47 && bytes[TS_PACKET_SIZE + 16] === 0x47) {
 			// MPEG-TS with Forward Error Correction
 			return true;
-		} else if (bytes[4] === 0x47 && bytes[4 + TS_PACKET_SIZE] === 0x47) {
+		} else if (bytes[4] === 0x47 && bytes[4 + TS_PACKET_SIZE + 4] === 0x47) {
 			// MPEG-2-TS (DVHS)
 			return true;
 		}

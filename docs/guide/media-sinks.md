@@ -97,9 +97,13 @@ await sink.getKeyPacket(5); // => EncodedPacket | null
 
 When retrieving a packet using a timestamp, the last packet (in [presentation order](#decode-vs-presentation-order)) with a timestamp less than or equal to the search timestamp will be returned. The methods return `null` if there exists no such packet.
 
-There is a special method for retrieving the first packet (in [decode order](#decode-vs-presentation-order)):
+There are special methods for retrieving the first packet (in [decode order](#decode-vs-presentation-order)):
 ```ts
 await sink.getFirstPacket(); // => EncodedPacket | null
+
+// The first packet is typically a key frame, but this is not required.
+// This method returns the first key frame:
+await sink.getFirstKeyPacket(); // => EncodedPacket | null
 ```
 The last packet (in [presentation order](#decode-vs-presentation-order)) can be retrieved like so:
 ```ts

@@ -529,7 +529,7 @@ export abstract class BaseMediaSampleSink<
 
 			const packetSink = this._createPacketSink();
 			const keyPacket = await packetSink.getKeyPacket(startTimestamp, { verifyKeyPackets: true })
-				?? await packetSink.getFirstKeyPacket();
+				?? await packetSink.getFirstKeyPacket({ verifyKeyPackets: true });
 
 			let currentPacket: EncodedPacket | null = keyPacket;
 
