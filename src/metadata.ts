@@ -6,6 +6,8 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { isUint8Array } from './misc';
+
 /**
  * Represents descriptive (non-technical) metadata about a media file, such as title, author, date, cover art, or other
  * attached files. Common tags are normalized by Mediabunny into a uniform format, while the `raw` field can be used to
@@ -114,7 +116,7 @@ export class RichImageData {
 		/** An RFC 6838 MIME type (e.g. image/jpeg, image/png, etc.) */
 		public mimeType: string,
 	) {
-		if (!(data instanceof Uint8Array)) {
+		if (!isUint8Array(data)) {
 			throw new TypeError('data must be a Uint8Array.');
 		}
 		if (typeof mimeType !== 'string') {
@@ -141,7 +143,7 @@ export class AttachedFile {
 		/** A description of the file. */
 		public description?: string,
 	) {
-		if (!(data instanceof Uint8Array)) {
+		if (!isUint8Array(data)) {
 			throw new TypeError('data must be a Uint8Array.');
 		}
 		if (mimeType !== undefined && typeof mimeType !== 'string') {
@@ -210,7 +212,7 @@ export const validateMetadataTags = (tags: MetadataTags) => {
 			if (!image || typeof image !== 'object') {
 				throw new TypeError('Each image in tags.images must be an object.');
 			}
-			if (!(image.data instanceof Uint8Array)) {
+			if (!isUint8Array(image.data)) {
 				throw new TypeError('Each image.data must be a Uint8Array.');
 			}
 			if (typeof image.mimeType !== 'string') {
@@ -233,7 +235,7 @@ export const validateMetadataTags = (tags: MetadataTags) => {
 			if (
 				value !== null
 				&& typeof value !== 'string'
-				&& !(value instanceof Uint8Array)
+				&& !isUint8Array(value)
 				&& !(value instanceof RichImageData)
 				&& !(value instanceof AttachedFile)
 			) {

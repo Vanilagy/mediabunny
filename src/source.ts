@@ -9,10 +9,16 @@
 import type { FileHandle } from 'node:fs/promises';
 import {
 	assert,
+	awaitPromiseLike,
 	binarySearchLessOrEqual,
 	closedIntervalsOverlap,
 	isAllowSharedBufferSource,
+	isBlob,
+	isFirefox,
 	isNumber,
+	isPromiseLike,
+	isReadableStream,
+	isUint8Array,
 	isWebKit,
 	MaybePromise,
 	mergeRequestInit,
@@ -64,7 +70,8 @@ export abstract class Source {
 			throw new InputDisposedError();
 		}
 
-		return this._sizePromise ??= Promise.resolve(this._retrieveSize());
+		const size = this._retrieveSize();
+		return this._sizePromise ??= isPromiseLike(size) ? awaitPromiseLike(size) : Promise.resolve(size);
 	}
 
 	/**
@@ -170,7 +177,7 @@ export class BlobSource extends Source {
 	 * [`Blob`](https://developer.mozilla.org/en-US/docs/Web/API/Blob).
 	 */
 	constructor(blob: Blob, options: BlobSourceOptions = {}) {
-		if (!(blob instanceof Blob)) {
+		if (!isBlob(blob)) {
 			throw new TypeError('blob must be a Blob.');
 		}
 		if (!options || typeof options !== 'object') {
@@ -221,7 +228,7 @@ export class BlobSource extends Source {
 			// - ReadableStream stalls under backpressure (especially video)
 			// Affects Safari and all iOS browsers (Chrome, Firefox, etc.).
 			// Use arrayBuffer() fallback for WebKit browsers.
-			if ('stream' in this._blob && !isWebKit()) {
+			if ('stream' in this._blob && !isWebKit() && !isFirefox()) {
 				// Get a reader of the blob starting at the required offset, and then keep it around
 				const slice = this._blob.slice(worker.currentPos);
 				reader = slice.stream().getReader();
@@ -248,14 +255,17 @@ export class BlobSource extends Source {
 				this.onread?.(worker.currentPos, worker.currentPos + value.length);
 				this._orchestrator.supplyWorkerData(worker, value);
 			} else {
-				const data = await this._blob.slice(worker.currentPos, worker.targetPos).arrayBuffer();
+				const data = await awaitPromiseLike(
+					this._blob.slice(worker.currentPos, worker.targetPos).arrayBuffer(),
+				);
+				const normalizedBytes = new Uint8Array(data).slice();
 
 				if (worker.aborted) {
 					break;
 				}
 
 				this.onread?.(worker.currentPos, worker.currentPos + data.byteLength);
-				this._orchestrator.supplyWorkerData(worker, new Uint8Array(data));
+				this._orchestrator.supplyWorkerData(worker, normalizedBytes);
 			}
 		}
 
@@ -803,7 +813,7 @@ export class StreamSource extends Source {
 	_retrieveSize(): MaybePromise<number> {
 		const result = this._options.getSize();
 
-		if (result instanceof Promise) {
+		if (isPromiseLike(result)) {
 			return result.then((size) => {
 				if (!Number.isInteger(size) || size < 0) {
 					throw new TypeError('options.getSize must return or resolve to a non-negative integer.');
@@ -834,13 +844,13 @@ export class StreamSource extends Source {
 			const originalTargetPos = worker.targetPos;
 
 			let data = this._options.read(worker.currentPos, originalTargetPos);
-			if (data instanceof Promise) data = await data;
+			if (isPromiseLike(data)) data = await data;
 
 			if (worker.aborted) {
 				break;
 			}
 
-			if (data instanceof Uint8Array) {
+			if (isUint8Array(data)) {
 				data = toUint8Array(data); // Normalize things like Node.js Buffer to Uint8Array
 
 				if (data.length !== originalTargetPos - worker.currentPos) {
@@ -854,7 +864,7 @@ export class StreamSource extends Source {
 
 				this.onread?.(worker.currentPos, worker.currentPos + data.length);
 				this._orchestrator.supplyWorkerData(worker, data);
-			} else if (data instanceof ReadableStream) {
+			} else if (isReadableStream(data)) {
 				const reader = data.getReader();
 
 				while (worker.currentPos < originalTargetPos && !worker.aborted) {
@@ -873,7 +883,7 @@ export class StreamSource extends Source {
 						break;
 					}
 
-					if (!(value instanceof Uint8Array)) {
+					if (!isUint8Array(value)) {
 						throw new TypeError('ReadableStream returned by options.read must yield Uint8Array chunks.');
 					}
 
@@ -957,7 +967,7 @@ export class ReadableStreamSource extends Source {
 
 	/** Creates a new {@link ReadableStreamSource} backed by the specified `ReadableStream<Uint8Array>`. */
 	constructor(stream: ReadableStream<Uint8Array>, options: ReadableStreamSourceOptions = {}) {
-		if (!(stream instanceof ReadableStream)) {
+		if (!isReadableStream(stream)) {
 			throw new TypeError('stream must be a ReadableStream.');
 		}
 		if (!options || typeof options !== 'object') {

@@ -39,6 +39,7 @@ import {
 	COLOR_PRIMARIES_MAP_INVERSE,
 	findLastIndex,
 	isIso639Dash2LanguageCode,
+	isPromiseLike,
 	last,
 	MATRIX_COEFFICIENTS_MAP_INVERSE,
 	normalizeRotation,
@@ -329,7 +330,7 @@ export class MatroskaDemuxer extends Demuxer {
 			// Loop over all top-level elements in the file
 			while (true) {
 				let slice = this.reader.requestSliceRange(currentPos, MIN_HEADER_SIZE, MAX_HEADER_SIZE);
-				if (slice instanceof Promise) slice = await slice;
+				if (isPromiseLike(slice)) slice = await slice;
 				if (!slice) break;
 
 				const header = readElementHeader(slice);
@@ -345,7 +346,7 @@ export class MatroskaDemuxer extends Demuxer {
 					assertDefinedSize(size);
 
 					let slice = this.reader.requestSlice(dataStartPos, size);
-					if (slice instanceof Promise) slice = await slice;
+					if (isPromiseLike(slice)) slice = await slice;
 					if (!slice) break;
 
 					this.readContiguousElements(slice);
@@ -428,7 +429,7 @@ export class MatroskaDemuxer extends Demuxer {
 
 		while (this.currentSegment.elementEndPos === null || currentPos < this.currentSegment.elementEndPos) {
 			let slice = this.reader.requestSliceRange(currentPos, MIN_HEADER_SIZE, MAX_HEADER_SIZE);
-			if (slice instanceof Promise) slice = await slice;
+			if (isPromiseLike(slice)) slice = await slice;
 			if (!slice) break;
 
 			const elementStartPos = currentPos;
@@ -463,7 +464,7 @@ export class MatroskaDemuxer extends Demuxer {
 				assertDefinedSize(size);
 
 				let slice = this.reader.requestSlice(dataStartPos, size);
-				if (slice instanceof Promise) slice = await slice;
+				if (isPromiseLike(slice)) slice = await slice;
 
 				if (slice) {
 					this.readContiguousElements(slice);
@@ -479,7 +480,7 @@ export class MatroskaDemuxer extends Demuxer {
 				assertDefinedSize(size);
 
 				let slice = this.reader.requestSlice(dataStartPos, size);
-				if (slice instanceof Promise) slice = await slice;
+				if (isPromiseLike(slice)) slice = await slice;
 
 				if (slice) {
 					this.readContiguousElements(slice);
@@ -514,7 +515,7 @@ export class MatroskaDemuxer extends Demuxer {
 					MIN_HEADER_SIZE,
 					MAX_HEADER_SIZE,
 				);
-				if (slice instanceof Promise) slice = await slice;
+				if (isPromiseLike(slice)) slice = await slice;
 				if (!slice) continue;
 
 				const header = readElementHeader(slice);
@@ -528,7 +529,7 @@ export class MatroskaDemuxer extends Demuxer {
 				this.currentSegment[target.flag] = true;
 
 				let dataSlice = this.reader.requestSlice(slice.filePos, size);
-				if (dataSlice instanceof Promise) dataSlice = await dataSlice;
+				if (isPromiseLike(dataSlice)) dataSlice = await dataSlice;
 				if (!dataSlice) continue;
 
 				this.readContiguousElements(dataSlice);
@@ -606,7 +607,7 @@ export class MatroskaDemuxer extends Demuxer {
 		}
 
 		let headerSlice = this.reader.requestSliceRange(startPos, MIN_HEADER_SIZE, MAX_HEADER_SIZE);
-		if (headerSlice instanceof Promise) headerSlice = await headerSlice;
+		if (isPromiseLike(headerSlice)) headerSlice = await headerSlice;
 		assert(headerSlice);
 
 		const elementStartPos = startPos;
@@ -635,7 +636,7 @@ export class MatroskaDemuxer extends Demuxer {
 
 		// Load the entire cluster
 		let dataSlice = this.reader.requestSlice(dataStartPos, size);
-		if (dataSlice instanceof Promise) dataSlice = await dataSlice;
+		if (isPromiseLike(dataSlice)) dataSlice = await dataSlice;
 
 		const cluster: Cluster = {
 			segment,
@@ -891,7 +892,7 @@ export class MatroskaDemuxer extends Demuxer {
 				MIN_HEADER_SIZE,
 				MAX_HEADER_SIZE,
 			);
-			if (slice instanceof Promise) slice = await slice;
+			if (isPromiseLike(slice)) slice = await slice;
 			if (!slice) continue;
 
 			const header = readElementHeader(slice);
@@ -904,7 +905,7 @@ export class MatroskaDemuxer extends Demuxer {
 			this.currentSegment = segment;
 
 			let dataSlice = this.reader.requestSlice(slice.filePos, size);
-			if (dataSlice instanceof Promise) dataSlice = await dataSlice;
+			if (isPromiseLike(dataSlice)) dataSlice = await dataSlice;
 			if (dataSlice) {
 				this.readContiguousElements(dataSlice);
 			}
@@ -2261,7 +2262,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 
 			// Load the header
 			let slice = demuxer.reader.requestSliceRange(currentPos, MIN_HEADER_SIZE, MAX_HEADER_SIZE);
-			if (slice instanceof Promise) slice = await slice;
+			if (isPromiseLike(slice)) slice = await slice;
 			if (!slice) break;
 
 			const elementStartPos = currentPos;
@@ -2332,7 +2333,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 				// the first segment.
 
 				let slice = demuxer.reader.requestSliceRange(endPos, MIN_HEADER_SIZE, MAX_HEADER_SIZE);
-				if (slice instanceof Promise) slice = await slice;
+				if (isPromiseLike(slice)) slice = await slice;
 				if (!slice) break;
 
 				const elementId = readElementId(slice);

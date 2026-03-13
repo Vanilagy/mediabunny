@@ -7,6 +7,7 @@
  */
 
 import { FRAME_HEADER_SIZE, Mp3FrameHeader, readMp3FrameHeader } from '../../shared/mp3-misc';
+import { isPromiseLike } from '../misc';
 import { Reader, readU32Be } from '../reader';
 
 export const readNextMp3FrameHeader = async (reader: Reader, startPos: number, until: number | null): Promise<{
@@ -17,7 +18,7 @@ export const readNextMp3FrameHeader = async (reader: Reader, startPos: number, u
 
 	while (until === null || currentPos < until) {
 		let slice = reader.requestSlice(currentPos, FRAME_HEADER_SIZE);
-		if (slice instanceof Promise) slice = await slice;
+		if (isPromiseLike(slice)) slice = await slice;
 		if (!slice) break;
 
 		const word = readU32Be(slice);

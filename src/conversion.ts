@@ -40,6 +40,7 @@ import {
 	assert,
 	clamp,
 	isIso639Dash2LanguageCode,
+	isPromiseLike,
 	MaybePromise,
 	normalizeRotation,
 	promiseWithResolvers,
@@ -1292,7 +1293,7 @@ export class Conversion {
 			finalSamples = [sample];
 		} else {
 			let processed = trackOptions.process(sample);
-			if (processed instanceof Promise) processed = await processed;
+			if (isPromiseLike(processed)) processed = await processed;
 
 			if (!Array.isArray(processed)) {
 				processed = processed === null ? [] : [processed];
@@ -1540,7 +1541,7 @@ export class Conversion {
 			finalSamples = [sample];
 		} else {
 			let processed = trackOptions.process(sample);
-			if (processed instanceof Promise) processed = await processed;
+			if (isPromiseLike(processed)) processed = await processed;
 
 			if (!Array.isArray(processed)) {
 				processed = processed === null ? [] : [processed];

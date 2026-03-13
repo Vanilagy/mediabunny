@@ -12,7 +12,7 @@ import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
-import { assert, UNDETERMINED_LANGUAGE } from '../misc';
+import { assert, isPromiseLike, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readAscii, readBytes, Reader, readU16, readU32, readU64 } from '../reader';
 import { ID3_V2_HEADER_SIZE, parseId3V2Tag, readId3V2Header } from '../id3';
@@ -52,7 +52,7 @@ export class WaveDemuxer extends Demuxer {
 	async readMetadata() {
 		return this.metadataPromise ??= (async () => {
 			let slice = this.reader.requestSlice(0, 12);
-			if (slice instanceof Promise) slice = await slice;
+			if (isPromiseLike(slice)) slice = await slice;
 			assert(slice);
 
 			const riffType = readAscii(slice, 4);
@@ -77,7 +77,7 @@ export class WaveDemuxer extends Demuxer {
 
 			while (totalFileSize === null || currentPos < totalFileSize) {
 				let slice = this.reader.requestSlice(currentPos, 8);
-				if (slice instanceof Promise) slice = await slice;
+				if (isPromiseLike(slice)) slice = await slice;
 				if (!slice) break;
 
 				const chunkId = readAscii(slice, 4);
@@ -103,7 +103,7 @@ export class WaveDemuxer extends Demuxer {
 					// File and data chunk sizes are defined in here instead
 
 					let ds64Slice = this.reader.requestSlice(startPos, chunkSize);
-					if (ds64Slice instanceof Promise) ds64Slice = await ds64Slice;
+					if (isPromiseLike(ds64Slice)) ds64Slice = await ds64Slice;
 					if (!ds64Slice) break;
 
 					const riffChunkSize = readU64(ds64Slice, littleEndian);
@@ -136,7 +136,7 @@ export class WaveDemuxer extends Demuxer {
 
 	private async parseFmtChunk(startPos: number, size: number, littleEndian: boolean) {
 		let slice = this.reader.requestSlice(startPos, size);
-		if (slice instanceof Promise) slice = await slice;
+		if (isPromiseLike(slice)) slice = await slice;
 		if (!slice) return; // File too short
 
 		let formatTag = readU16(slice, littleEndian);
@@ -184,7 +184,7 @@ export class WaveDemuxer extends Demuxer {
 
 	private async parseListChunk(startPos: number, size: number, littleEndian: boolean) {
 		let slice = this.reader.requestSlice(startPos, size);
-		if (slice instanceof Promise) slice = await slice;
+		if (isPromiseLike(slice)) slice = await slice;
 		if (!slice) return; // File too short
 
 		const infoType = readAscii(slice, 4);
@@ -281,7 +281,7 @@ export class WaveDemuxer extends Demuxer {
 	private async parseId3Chunk(startPos: number, size: number) {
 		// Parse ID3 tag embedded in WAV file (non-default, but used a lot in practice anyway)
 		let slice = this.reader.requestSlice(startPos, size);
-		if (slice instanceof Promise) slice = await slice;
+		if (isPromiseLike(slice)) slice = await slice;
 		if (!slice) return; // File too short
 
 		const id3V2Header = readId3V2Header(slice);
@@ -449,7 +449,7 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 			// requested slice actually exists.
 
 			let slice = this.demuxer.reader.requestSlice(this.demuxer.dataStart + startOffset, sizeInBytes);
-			if (slice instanceof Promise) slice = await slice;
+			if (isPromiseLike(slice)) slice = await slice;
 
 			if (!slice) {
 				return null;
@@ -461,7 +461,7 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 			data = PLACEHOLDER_DATA;
 		} else {
 			let slice = this.demuxer.reader.requestSlice(this.demuxer.dataStart + startOffset, sizeInBytes);
-			if (slice instanceof Promise) slice = await slice;
+			if (isPromiseLike(slice)) slice = await slice;
 			assert(slice);
 
 			data = readBytes(slice, sizeInBytes);

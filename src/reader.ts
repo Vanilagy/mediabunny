@@ -7,7 +7,7 @@
  */
 
 import { InputDisposedError } from './input';
-import { assert, clamp, getUint24, MaybePromise, toDataView } from './misc';
+import { assert, awaitPromiseLike, clamp, getUint24, isPromiseLike, MaybePromise, toDataView } from './misc';
 import { Source } from './source';
 
 export class Reader {
@@ -31,8 +31,8 @@ export class Reader {
 		const end = start + length;
 		const result = this.source._read(start, end);
 
-		if (result instanceof Promise) {
-			return result.then((x) => {
+		if (isPromiseLike(result)) {
+			return awaitPromiseLike(result).then((x) => {
 				if (!x) {
 					return null;
 				}
@@ -80,15 +80,15 @@ export class Reader {
 				};
 
 				const promisedFileSize = this.source._retrieveSize();
-				if (promisedFileSize instanceof Promise) {
-					return promisedFileSize.then(handleFileSize);
+				if (isPromiseLike(promisedFileSize)) {
+					return awaitPromiseLike(promisedFileSize).then(handleFileSize);
 				} else {
 					return handleFileSize(promisedFileSize);
 				}
 			};
 
-			if (promisedAttempt instanceof Promise) {
-				return promisedAttempt.then(handleAttempt);
+			if (isPromiseLike(promisedAttempt)) {
+				return awaitPromiseLike(promisedAttempt).then(handleAttempt);
 			} else {
 				return handleAttempt(promisedAttempt);
 			}

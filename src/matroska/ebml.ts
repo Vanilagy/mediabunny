@@ -7,7 +7,7 @@
  */
 
 import { MediaCodec } from '../codec';
-import { assert, assertNever, textDecoder, textEncoder } from '../misc';
+import { assert, assertNever, isPromiseLike, textDecoder, textEncoder } from '../misc';
 import { FileSlice, readBytes, Reader, readF32Be, readF64Be, readU8 } from '../reader';
 import { Writer } from '../writer';
 
@@ -688,7 +688,7 @@ export const searchForNextElementId = async (
 
 	while (until === null || currentPos < until) {
 		let slice = reader.requestSliceRange(currentPos, MIN_HEADER_SIZE, MAX_HEADER_SIZE);
-		if (slice instanceof Promise) slice = await slice;
+		if (isPromiseLike(slice)) slice = await slice;
 		if (!slice) break;
 
 		const elementHeader = readElementHeader(slice);
@@ -716,7 +716,7 @@ export const resync = async (reader: Reader, startPos: number, ids: EBMLId[], un
 
 	while (currentPos < until) {
 		let slice = reader.requestSliceRange(currentPos, 0, Math.min(CHUNK_SIZE, until - currentPos));
-		if (slice instanceof Promise) slice = await slice;
+		if (isPromiseLike(slice)) slice = await slice;
 		if (!slice) break;
 		if (slice.length < MAX_VAR_INT_SIZE) break;
 

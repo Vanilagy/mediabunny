@@ -50,6 +50,7 @@ import {
 	COLOR_PRIMARIES_MAP_INVERSE,
 	findLastIndex,
 	isIso639Dash2LanguageCode,
+	isPromiseLike,
 	last,
 	MATRIX_COEFFICIENTS_MAP_INVERSE,
 	normalizeRotation,
@@ -301,7 +302,7 @@ export class IsobmffDemuxer extends Demuxer {
 			let currentPos = 0;
 			while (true) {
 				let slice = this.reader.requestSliceRange(currentPos, MIN_BOX_HEADER_SIZE, MAX_BOX_HEADER_SIZE);
-				if (slice instanceof Promise) slice = await slice;
+				if (isPromiseLike(slice)) slice = await slice;
 				if (!slice) break;
 
 				const startPos = currentPos;
@@ -317,7 +318,7 @@ export class IsobmffDemuxer extends Demuxer {
 					// Found moov, load it
 
 					let moovSlice = this.reader.requestSlice(slice.filePos, boxInfo.contentSize);
-					if (moovSlice instanceof Promise) moovSlice = await moovSlice;
+					if (isPromiseLike(moovSlice)) moovSlice = await moovSlice;
 					if (!moovSlice) break;
 
 					this.moovSlice = moovSlice;
@@ -343,7 +344,7 @@ export class IsobmffDemuxer extends Demuxer {
 			if (this.isFragmented && this.reader.fileSize !== null) {
 				// The last 4 bytes may contain the size of the mfra box at the end of the file
 				let lastWordSlice = this.reader.requestSlice(this.reader.fileSize - 4, 4);
-				if (lastWordSlice instanceof Promise) lastWordSlice = await lastWordSlice;
+				if (isPromiseLike(lastWordSlice)) lastWordSlice = await lastWordSlice;
 				assert(lastWordSlice);
 
 				const lastWord = readU32Be(lastWordSlice);
@@ -355,7 +356,7 @@ export class IsobmffDemuxer extends Demuxer {
 						MIN_BOX_HEADER_SIZE,
 						MAX_BOX_HEADER_SIZE,
 					);
-					if (mfraHeaderSlice instanceof Promise) mfraHeaderSlice = await mfraHeaderSlice;
+					if (isPromiseLike(mfraHeaderSlice)) mfraHeaderSlice = await mfraHeaderSlice;
 
 					if (mfraHeaderSlice) {
 						const boxInfo = readBoxHeader(mfraHeaderSlice);
@@ -363,7 +364,7 @@ export class IsobmffDemuxer extends Demuxer {
 						if (boxInfo && boxInfo.name === 'mfra') {
 							// We found the mfra box, allowing for much better random access. Let's parse it.
 							let mfraSlice = this.reader.requestSlice(mfraHeaderSlice.filePos, boxInfo.contentSize);
-							if (mfraSlice instanceof Promise) mfraSlice = await mfraSlice;
+							if (isPromiseLike(mfraSlice)) mfraSlice = await mfraSlice;
 
 							if (mfraSlice) {
 								this.readContiguousBoxes(mfraSlice);
@@ -524,14 +525,14 @@ export class IsobmffDemuxer extends Demuxer {
 		}
 
 		let headerSlice = this.reader.requestSliceRange(startPos, MIN_BOX_HEADER_SIZE, MAX_BOX_HEADER_SIZE);
-		if (headerSlice instanceof Promise) headerSlice = await headerSlice;
+		if (isPromiseLike(headerSlice)) headerSlice = await headerSlice;
 		assert(headerSlice);
 
 		const moofBoxInfo = readBoxHeader(headerSlice);
 		assert(moofBoxInfo?.name === 'moof');
 
 		let entireSlice = this.reader.requestSlice(startPos, moofBoxInfo.totalSize);
-		if (entireSlice instanceof Promise) entireSlice = await entireSlice;
+		if (isPromiseLike(entireSlice)) entireSlice = await entireSlice;
 		assert(entireSlice);
 
 		this.traverseBox(entireSlice);
@@ -2693,7 +2694,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 				sampleInfo.sampleOffset,
 				sampleInfo.sampleSize,
 			);
-			if (slice instanceof Promise) slice = await slice;
+			if (isPromiseLike(slice)) slice = await slice;
 			assert(slice);
 
 			data = readBytes(slice, sampleInfo.sampleSize);
@@ -2733,7 +2734,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 				fragmentSample.byteOffset,
 				fragmentSample.byteSize,
 			);
-			if (slice instanceof Promise) slice = await slice;
+			if (isPromiseLike(slice)) slice = await slice;
 			assert(slice);
 
 			data = readBytes(slice, fragmentSample.byteSize);
@@ -2837,7 +2838,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 
 			// Load the header
 			let slice = demuxer.reader.requestSliceRange(currentPos, MIN_BOX_HEADER_SIZE, MAX_BOX_HEADER_SIZE);
-			if (slice instanceof Promise) slice = await slice;
+			if (isPromiseLike(slice)) slice = await slice;
 			if (!slice) break;
 
 			const boxStartPos = currentPos;

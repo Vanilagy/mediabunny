@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { SECOND_TO_MICROSECOND_FACTOR } from './misc';
+import { isUint8Array, SECOND_TO_MICROSECOND_FACTOR } from './misc';
 
 export const PLACEHOLDER_DATA = /* #__PURE__ */ new Uint8Array(0);
 
@@ -90,7 +90,7 @@ export class EncodedPacket {
 			byteLength = data.byteLength;
 		}
 
-		if (!(data instanceof Uint8Array)) {
+		if (!isUint8Array(data)) {
 			throw new TypeError('data must be a Uint8Array.');
 		}
 		if (type !== 'key' && type !== 'delta') {
@@ -111,7 +111,7 @@ export class EncodedPacket {
 		if (sideData !== undefined && (typeof sideData !== 'object' || !sideData)) {
 			throw new TypeError('sideData, when provided, must be an object.');
 		}
-		if (sideData?.alpha !== undefined && !(sideData.alpha instanceof Uint8Array)) {
+		if (sideData?.alpha !== undefined && !isUint8Array(sideData.alpha)) {
 			throw new TypeError('sideData.alpha, when provided, must be a Uint8Array.');
 		}
 		if (
@@ -255,7 +255,7 @@ export class EncodedPacket {
 		if (options !== undefined && (typeof options !== 'object' || options === null)) {
 			throw new TypeError('options, when provided, must be an object.');
 		}
-		if (options?.data !== undefined && !(options.data instanceof Uint8Array)) {
+		if (options?.data !== undefined && !isUint8Array(options.data)) {
 			throw new TypeError('options.data, when provided, must be a Uint8Array.');
 		}
 		if (options?.type !== undefined && options.type !== 'key' && options.type !== 'delta') {

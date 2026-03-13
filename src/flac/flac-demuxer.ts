@@ -15,6 +15,7 @@ import {
 	assert,
 	AsyncMutex,
 	binarySearchLessOrEqual,
+	isPromiseLike,
 	textDecoder,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
@@ -116,7 +117,7 @@ export class FlacDemuxer extends Demuxer {
 				|| currentPos < this.reader.fileSize
 			) {
 				let sizeSlice = this.reader.requestSlice(currentPos, 4);
-				if (sizeSlice instanceof Promise) sizeSlice = await sizeSlice;
+				if (isPromiseLike(sizeSlice)) sizeSlice = await sizeSlice;
 				currentPos += 4;
 
 				if (sizeSlice === null) {
@@ -140,7 +141,7 @@ export class FlacDemuxer extends Demuxer {
 							currentPos,
 							size,
 						);
-						if (streamInfoBlock instanceof Promise) streamInfoBlock = await streamInfoBlock;
+						if (isPromiseLike(streamInfoBlock)) streamInfoBlock = await streamInfoBlock;
 
 						assert(streamInfoBlock);
 						if (streamInfoBlock === null) {
@@ -199,7 +200,7 @@ export class FlacDemuxer extends Demuxer {
 							currentPos,
 							size,
 						);
-						if (vorbisCommentBlock instanceof Promise) vorbisCommentBlock = await vorbisCommentBlock;
+						if (isPromiseLike(vorbisCommentBlock)) vorbisCommentBlock = await vorbisCommentBlock;
 
 						assert(vorbisCommentBlock);
 
@@ -217,7 +218,7 @@ export class FlacDemuxer extends Demuxer {
 							currentPos,
 							size,
 						);
-						if (pictureBlock instanceof Promise) pictureBlock = await pictureBlock;
+						if (isPromiseLike(pictureBlock)) pictureBlock = await pictureBlock;
 
 						assert(pictureBlock);
 						const pictureType = readU32Be(pictureBlock);
@@ -696,7 +697,7 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 				rawSample.byteOffset,
 				rawSample.byteSize,
 			);
-			if (slice instanceof Promise) slice = await slice;
+			if (isPromiseLike(slice)) slice = await slice;
 
 			if (!slice) {
 				return null; // Data didn't fit into the rest of the file

@@ -78,9 +78,10 @@ export const writeBits = (bytes: Uint8Array, start: number, end: number, value: 
 };
 
 export const toUint8Array = (source: AllowSharedBufferSource): Uint8Array => {
-	if (source.constructor === Uint8Array) { // We want a true Uint8Array, not something that extends it like Buffer
-		return source;
-	} else if (ArrayBuffer.isView(source)) {
+	if (ArrayBuffer.isView(source)) {
+		if (isUint8Array(source)) {
+			return source;
+		}
 		return new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
 	} else {
 		return new Uint8Array(source);
@@ -88,9 +89,10 @@ export const toUint8Array = (source: AllowSharedBufferSource): Uint8Array => {
 };
 
 export const toDataView = (source: AllowSharedBufferSource): DataView => {
-	if (source.constructor === DataView) {
-		return source;
-	} else if (ArrayBuffer.isView(source)) {
+	if (ArrayBuffer.isView(source)) {
+		if (isDataView(source)) {
+			return source;
+		}
 		return new DataView(source.buffer, source.byteOffset, source.byteLength);
 	} else {
 		return new DataView(source);
@@ -161,15 +163,82 @@ export const colorSpaceIsComplete = (
 	);
 };
 
-const getObjectTypeTag = (x: unknown) => Object.prototype.toString.call(x);
+const getObjectTypeTag = (x: unknown) => {
+	try {
+		return Object.prototype.toString.call(x);
+	} catch {
+		return '';
+	}
+};
+
+const safeInstanceOf = <T extends abstract new (...args: never[]) => unknown>(
+	x: unknown,
+	constructor: T | undefined,
+) => {
+	if (!constructor) {
+		return false;
+	}
+
+	try {
+		return x instanceof constructor;
+	} catch {
+		return false;
+	}
+};
 
 export const isArrayBuffer = (x: unknown): x is ArrayBuffer => {
-	return x instanceof ArrayBuffer || getObjectTypeTag(x) === '[object ArrayBuffer]';
+	return safeInstanceOf(x, ArrayBuffer) || getObjectTypeTag(x) === '[object ArrayBuffer]';
 };
 
 export const isSharedArrayBuffer = (x: unknown): x is SharedArrayBuffer => {
-	return typeof SharedArrayBuffer !== 'undefined'
-		&& (x instanceof SharedArrayBuffer || getObjectTypeTag(x) === '[object SharedArrayBuffer]');
+	return safeInstanceOf(x, typeof SharedArrayBuffer !== 'undefined' ? SharedArrayBuffer : undefined)
+		|| getObjectTypeTag(x) === '[object SharedArrayBuffer]';
+};
+
+export const isUint8Array = (x: unknown): x is Uint8Array => {
+	return safeInstanceOf(x, Uint8Array) || getObjectTypeTag(x) === '[object Uint8Array]';
+};
+
+export const isDataView = (x: unknown): x is DataView => {
+	return safeInstanceOf(x, DataView) || getObjectTypeTag(x) === '[object DataView]';
+};
+
+export const isBlob = (x: unknown): x is Blob => {
+	const objectTypeTag = getObjectTypeTag(x);
+	return safeInstanceOf(x, typeof Blob !== 'undefined' ? Blob : undefined)
+		|| objectTypeTag === '[object Blob]'
+		|| objectTypeTag === '[object File]';
+};
+
+export const isPromiseLike = <T = unknown>(x: unknown): x is PromiseLike<T> => {
+	if ((typeof x !== 'object' && typeof x !== 'function') || x === null) {
+		return false;
+	}
+
+	if (getObjectTypeTag(x) === '[object Promise]') {
+		return true;
+	}
+
+	try {
+		return 'then' in x && typeof x.then === 'function';
+	} catch {
+		return false;
+	}
+};
+
+export const isReadableStream = (x: unknown): x is ReadableStream<Uint8Array> => {
+	return safeInstanceOf(x, typeof ReadableStream !== 'undefined' ? ReadableStream : undefined)
+		|| getObjectTypeTag(x) === '[object ReadableStream]';
+};
+
+export const awaitPromiseLike = <T>(x: PromiseLike<T>) => {
+	return new Promise<T>((resolve, reject) => {
+		try {
+			x.then(resolve, reject);
+		} catch (error) {
+			reject(error instanceof Error ? error : new Error(String(error)));
+		}
+	});
 };
 
 export const isAllowSharedBufferSource = (x: unknown) => {

@@ -56,6 +56,7 @@ import {
 	COLOR_PRIMARIES_MAP_INVERSE,
 	findLastIndex,
 	floorToMultiple,
+	isPromiseLike,
 	last,
 	MATRIX_COEFFICIENTS_MAP_INVERSE,
 	Rotation,
@@ -148,7 +149,7 @@ export class MpegTsDemuxer extends Demuxer {
 		return this.metadataPromise ??= (async () => {
 			const lengthToCheck = TS_PACKET_SIZE + 16 + 1;
 			let startingSlice = this.reader.requestSlice(0, lengthToCheck);
-			if (startingSlice instanceof Promise) startingSlice = await startingSlice;
+			if (isPromiseLike(startingSlice)) startingSlice = await startingSlice;
 			assert(startingSlice);
 
 			const startingBytes = readBytes(startingSlice, lengthToCheck);
@@ -745,7 +746,7 @@ export class MpegTsDemuxer extends Demuxer {
 
 	async readPacketHeader(pos: number): Promise<TsPacketHeader | null> {
 		let slice = this.reader.requestSlice(pos, 4);
-		if (slice instanceof Promise) slice = await slice;
+		if (isPromiseLike(slice)) slice = await slice;
 
 		if (!slice) {
 			return null;
@@ -781,7 +782,7 @@ export class MpegTsDemuxer extends Demuxer {
 	async readPacket(pos: number): Promise<TsPacket | null> {
 		// Code in here is duplicated from readPacketHeader for performance reasons
 		let slice = this.reader.requestSlice(pos, TS_PACKET_SIZE);
-		if (slice instanceof Promise) slice = await slice;
+		if (isPromiseLike(slice)) slice = await slice;
 
 		if (!slice) {
 			return null;
@@ -1664,7 +1665,7 @@ const markNextPacket = async (context: PacketReadingContext) => {
 
 		while (true) {
 			let remaining = context.ensureBuffered(CHUNK_SIZE);
-			if (remaining instanceof Promise) remaining = await remaining;
+			if (isPromiseLike(remaining)) remaining = await remaining;
 
 			if (remaining === 0) {
 				break;
@@ -1763,7 +1764,7 @@ const markNextPacket = async (context: PacketReadingContext) => {
 
 		while (true) {
 			let remaining = context.ensureBuffered(CHUNK_SIZE);
-			if (remaining instanceof Promise) remaining = await remaining;
+			if (isPromiseLike(remaining)) remaining = await remaining;
 
 			const startPos = context.currentPos;
 
@@ -1779,7 +1780,7 @@ const markNextPacket = async (context: PacketReadingContext) => {
 					const possibleHeaderStartPos = context.currentPos;
 
 					let remaining = context.ensureBuffered(MAX_ADTS_FRAME_HEADER_SIZE);
-					if (remaining instanceof Promise) remaining = await remaining;
+					if (isPromiseLike(remaining)) remaining = await remaining;
 
 					if (remaining < MAX_ADTS_FRAME_HEADER_SIZE) {
 						return;
@@ -1792,7 +1793,7 @@ const markNextPacket = async (context: PacketReadingContext) => {
 						context.seekTo(possibleHeaderStartPos);
 
 						let remaining = context.ensureBuffered(header.frameLength);
-						if (remaining instanceof Promise) remaining = await remaining;
+						if (isPromiseLike(remaining)) remaining = await remaining;
 
 						return context.supplyPacket(
 							remaining,
@@ -1810,7 +1811,7 @@ const markNextPacket = async (context: PacketReadingContext) => {
 					const possibleHeaderStartPos = context.currentPos;
 
 					let remaining = context.ensureBuffered(MP3_FRAME_HEADER_SIZE);
-					if (remaining instanceof Promise) remaining = await remaining;
+					if (isPromiseLike(remaining)) remaining = await remaining;
 
 					if (remaining < MP3_FRAME_HEADER_SIZE) {
 						return;
@@ -1824,7 +1825,7 @@ const markNextPacket = async (context: PacketReadingContext) => {
 						context.seekTo(possibleHeaderStartPos);
 
 						let remaining = context.ensureBuffered(result.header.totalSize);
-						if (remaining instanceof Promise) remaining = await remaining;
+						if (isPromiseLike(remaining)) remaining = await remaining;
 
 						const duration = result.header.audioSamplesInFrame * TIMESCALE
 							/ elementaryStream.info.sampleRate;
@@ -1842,7 +1843,7 @@ const markNextPacket = async (context: PacketReadingContext) => {
 
 					// Need at least 5 bytes for sync word + CRC + fscod/frmsizecod
 					let remaining = context.ensureBuffered(5);
-					if (remaining instanceof Promise) remaining = await remaining;
+					if (isPromiseLike(remaining)) remaining = await remaining;
 
 					if (remaining < 5) {
 						return;
@@ -1871,7 +1872,7 @@ const markNextPacket = async (context: PacketReadingContext) => {
 					context.seekTo(possibleSyncPos);
 
 					remaining = context.ensureBuffered(frameSize);
-					if (remaining instanceof Promise) remaining = await remaining;
+					if (isPromiseLike(remaining)) remaining = await remaining;
 
 					const duration = Math.round(
 						AC3_SAMPLES_PER_FRAME * TIMESCALE / elementaryStream.info.sampleRate,
@@ -1887,7 +1888,7 @@ const markNextPacket = async (context: PacketReadingContext) => {
 
 					// Need at least 5 bytes for E-AC-3 header parsing (sync word + frmsiz + fscod/numblkscod)
 					let remaining = context.ensureBuffered(5);
-					if (remaining instanceof Promise) remaining = await remaining;
+					if (isPromiseLike(remaining)) remaining = await remaining;
 
 					if (remaining < 5) {
 						return;
@@ -1909,7 +1910,7 @@ const markNextPacket = async (context: PacketReadingContext) => {
 					context.seekTo(possibleSyncPos);
 
 					remaining = context.ensureBuffered(frameSize);
-					if (remaining instanceof Promise) remaining = await remaining;
+					if (isPromiseLike(remaining)) remaining = await remaining;
 
 					// Duration = numblks * 256 samples per block
 					const samplesPerFrame = numblks * 256;
