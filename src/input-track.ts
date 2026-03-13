@@ -11,10 +11,11 @@ import { determineVideoPacketType } from './codec-data';
 import { customAudioDecoders, customVideoDecoders } from './custom-coder';
 import { Input } from './input';
 import { EncodedPacketSink, PacketRetrievalOptions } from './media-sink';
-import { assert, MaybePromise, NonFunctionKeys, Rational, Rotation, simplifyRational } from './misc';
+import { assert, MaybePromise, NonFunctionKeys, Rational, Rotation, roundToDivisor, simplifyRational } from './misc';
 import { TrackType } from './output';
 import { EncodedPacket, PacketType } from './packet';
 import { TrackDisposition } from './metadata';
+import { DurationMetadataRequestOptions } from './demuxer';
 
 /**
  * Contains aggregate statistics about the encoded packets of a track.
@@ -44,6 +45,7 @@ export interface InputTrackBacking {
 	getPairingMask(): bigint;
 	getBitrate(): number | null;
 	getAverageBitrate(): number | null;
+	getDurationFromMetadata(options: DurationMetadataRequestOptions): Promise<number | null>;
 	getLiveRefreshInterval(): Promise<number | null>;
 	getHasOnlyKeyPackets?(): boolean | null;
 
@@ -209,7 +211,27 @@ export abstract class InputTrack {
 		}
 
 		const lastPacket = await this._backing.getPacket(Infinity, { metadataOnly: true, ...options });
-		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
+		const result = (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
+
+		return roundToDivisor(result, this.timeResolution);
+	}
+
+	/**
+	 * Gets the duration (end timestamp) of this track from metadata stored in the file. This value may be
+	 * approximate or diverge from the actual, precise duration returned by `.computeDuration()`, but compared to that
+	 * method, this method is very cheap. When the duration cannot be determined from the file metadata, `null`
+	 * is returned.
+	 *
+	 * By default, when the underlying media is live, this method will only resolve once the live stream
+	 * ends. If you want to query the current duration of the media, set
+	 * {@link DurationMetadataRequestOptions.skipLiveWait} to `true` in the options.
+	 */
+	async getDurationFromMetadata(options: DurationMetadataRequestOptions = {}) {
+		if (!this.isHydrated) {
+			await this.hydrate();
+		}
+
+		return this._backing.getDurationFromMetadata(options);
 	}
 
 	/**
@@ -263,7 +285,11 @@ export abstract class InputTrack {
 		return (await this._backing.getLiveRefreshInterval()) !== null;
 	}
 
-	getLiveRefreshInterval() {
+	async getLiveRefreshInterval() {
+		if (!this.isHydrated) {
+			await this.hydrate();
+		}
+
 		return this._backing.getLiveRefreshInterval();
 	}
 

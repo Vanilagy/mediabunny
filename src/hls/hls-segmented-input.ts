@@ -12,7 +12,6 @@ const IV_STRING_REGEX = /^0[xX][0-9a-fA-F]+$/;
 export type HlsSegment = Segment & {
 	sequenceNumber: number | null;
 	location: HlsSegmentLocation;
-	duration: number;
 	encryption: HlsEncryptionInfo | null;
 	firstSegment: HlsSegment | null;
 	initSegment: HlsSegment | null;

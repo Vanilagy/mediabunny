@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { assert, toDataView } from '../misc';
+import { toDataView } from '../misc';
 import { metadataTagsAreEmpty } from '../metadata';
 import { Muxer } from '../muxer';
 import { Output, OutputAudioTrack } from '../output';
@@ -107,14 +107,14 @@ export class Mp3Muxer extends Muxer {
 
 			this.validateAndNormalizeTimestamp(track, packet.timestamp, packet.type === 'key');
 
+			if (writeXingHeader) {
+				this.framePositions.push(this.writer.getPos());
+			}
+
 			this.writer.write(packet.data);
 			this.frameCount++;
 
 			await this.writer.flush();
-
-			if (writeXingHeader) {
-				this.framePositions.push(this.writer.getPos());
-			}
 		} finally {
 			release();
 		}
@@ -132,20 +132,20 @@ export class Mp3Muxer extends Muxer {
 		const release = await this.mutex.acquire();
 
 		const endPos = this.writer.getPos();
+		const audioDataEndPos = endPos - this.xingFramePos;
 
 		this.writer.seek(this.xingFramePos);
 
 		const toc = new Uint8Array(100);
 		for (let i = 0; i < 100; i++) {
 			const index = Math.floor(this.framePositions.length * (i / 100));
-			assert(index !== -1 && index < this.framePositions.length);
 
-			const byteOffset = this.framePositions[index]!;
-			toc[i] = 256 * (byteOffset / endPos);
+			const byteOffset = this.framePositions[index]! - this.xingFramePos;
+			toc[i] = 256 * (byteOffset / audioDataEndPos);
 		}
 
 		this.xingFrameData.frameCount = this.frameCount;
-		this.xingFrameData.fileSize = endPos;
+		this.xingFrameData.fileSize = audioDataEndPos;
 		this.xingFrameData.toc = toc;
 
 		if (this.format._options.onXingFrame) {

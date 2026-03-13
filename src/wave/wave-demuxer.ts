@@ -328,6 +328,13 @@ export class WaveDemuxer extends Demuxer {
 		return null;
 	}
 
+	async getDurationFromMetadata(): Promise<number | null> {
+		await this.readMetadata();
+		assert(this.dataSize !== -1);
+
+		return this.dataSize / this.audioInfo!.blockSizeInBytes / this.audioInfo!.sampleRate;
+	}
+
 	async getMimeType() {
 		return 'audio/wav';
 	}
@@ -412,6 +419,10 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 
 	getAverageBitrate() {
 		return null;
+	}
+
+	getDurationFromMetadata() {
+		return this.demuxer.getDurationFromMetadata();
 	}
 
 	async getLiveRefreshInterval() {

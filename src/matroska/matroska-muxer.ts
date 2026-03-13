@@ -152,7 +152,8 @@ export class MatroskaMuxer extends Muxer {
 		firstMsTimestamp: number;
 	}>();
 
-	private duration = 0;
+	private startTimestamp = Infinity;
+	private endTimestamp = -Infinity;
 
 	constructor(output: Output, format: MkvOutputFormat) {
 		super(output);
@@ -1197,7 +1198,8 @@ export class MatroskaMuxer extends Muxer {
 			this.ebmlWriter.writeEBML(blockGroup);
 		}
 
-		this.duration = Math.max(this.duration, msTimestamp + msDuration);
+		this.startTimestamp = Math.min(this.startTimestamp, msTimestamp);
+		this.endTimestamp = Math.max(this.endTimestamp, msTimestamp + msDuration);
 		trackData.lastWrittenMsTimestamp = msTimestamp;
 
 		if (!this.trackDatasInCurrentCluster.has(trackData)) {
@@ -1325,7 +1327,10 @@ export class MatroskaMuxer extends Muxer {
 			this.ebmlWriter.writeVarInt(segmentSize, SEGMENT_SIZE_BYTES);
 
 			// Write the duration of the media to the Segment
-			this.segmentDuration!.data = new EBMLFloat64(this.duration);
+			const duration = this.startTimestamp === Infinity
+				? 0
+				: this.endTimestamp - this.startTimestamp;
+			this.segmentDuration!.data = new EBMLFloat64(duration);
 			this.writer.seek(this.ebmlWriter.offsets.get(this.segmentDuration!)!);
 			this.ebmlWriter.writeEBML(this.segmentDuration);
 

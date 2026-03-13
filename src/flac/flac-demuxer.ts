@@ -97,6 +97,17 @@ export class FlacDemuxer extends Demuxer {
 		return [this.track];
 	}
 
+	async getDurationFromMetadata(): Promise<number | null> {
+		await this.readMetadata();
+		assert(this.audioInfo);
+
+		if (this.audioInfo.totalSamples === 0) {
+			return null;
+		}
+
+		return this.audioInfo.totalSamples / this.audioInfo.sampleRate;
+	}
+
 	async getMimeType() {
 		return 'audio/flac';
 	}
@@ -251,6 +262,10 @@ export class FlacDemuxer extends Demuxer {
 					this.lastLoadedPos = currentPos;
 					break;
 				}
+			}
+
+			if (!this.audioInfo) {
+				throw new Error('Missing STREAMINFO metadata block! Corrupted FLAC file.');
 			}
 		})());
 	}
@@ -576,6 +591,10 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 
 	getAverageBitrate() {
 		return null;
+	}
+
+	getDurationFromMetadata() {
+		return this.demuxer.getDurationFromMetadata();
 	}
 
 	async getLiveRefreshInterval() {

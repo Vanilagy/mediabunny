@@ -1,5 +1,5 @@
 import { AUDIO_CODECS, AudioCodec, inferCodecFromCodecString, MediaCodec, VIDEO_CODECS, VideoCodec } from '../codec';
-import { Demuxer } from '../demuxer';
+import { Demuxer, DurationMetadataRequestOptions } from '../demuxer';
 import { Input } from '../input';
 import {
 	InputAudioTrack,
@@ -52,6 +52,7 @@ export class HlsDemuxer extends Demuxer {
 	metadataPromise: Promise<void> | null = null;
 	tracks: InputTrack[] = [];
 	segmentedInputs: HlsSegmentedInput[] = [];
+	hasMasterPlaylist = true;
 
 	constructor(input: Input) {
 		super(input);
@@ -153,7 +154,8 @@ export class HlsDemuxer extends Demuxer {
 				} else if (line.startsWith('#EXTINF:')) {
 					// This is a media playlist, not a master playlist
 					const segmentedInput = new HlsSegmentedInput(this, this.input._entryPath, lines);
-					this.segmentedInputs.push(segmentedInput);
+					this.segmentedInputs = [segmentedInput];
+					this.hasMasterPlaylist = false;
 
 					const input = segmentedInput.toInput();
 					this.tracks = await input.getTracks();
@@ -569,6 +571,12 @@ export class HlsDemuxer extends Demuxer {
 		return segmentedInput;
 	}
 
+	async getDurationFromMetadata(options: DurationMetadataRequestOptions): Promise<number | null> {
+		return this.hasMasterPlaylist
+			? null
+			: this.segmentedInputs[0]!.getDurationFromMetadata(options);
+	}
+
 	async getMetadataTags(): Promise<MetadataTags> {
 		return {};
 	}
@@ -691,6 +699,14 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 
 	getAverageBitrate(): number | null {
 		return this.internalTrack.averageBitrate;
+	}
+
+	async getDurationFromMetadata(options: DurationMetadataRequestOptions): Promise<number | null> {
+		if (!this.internalTrack.backingTrack) {
+			throw new TrackNotHydratedError();
+		}
+
+		return this.internalTrack.backingTrack._backing.getDurationFromMetadata(options);
 	}
 
 	async getLiveRefreshInterval(): Promise<number | null> {

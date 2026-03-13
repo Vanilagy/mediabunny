@@ -19,6 +19,7 @@ test.concurrent('Big Buck Bunny', { timeout: 15_000 }, async () => {
 
 	expect(await input.getFormat()).toBeInstanceOf(HlsInputFormat);
 	expect(await input.getFormat()).toBe(HLS);
+	expect(await input.getDurationFromMetadata()).toBe(null); // Since it's a master playlist!
 
 	expect(sourceCount).toBe(1);
 
@@ -153,6 +154,9 @@ test.concurrent('Big Buck Bunny', { timeout: 15_000 }, async () => {
 	for (const track of tracks) {
 		expect(await track.isLive()).toBe(false);
 	}
+
+	expect(await videoTracks[0]!.getDurationFromMetadata()).toBe(634.584);
+	expect(await audioTracks[0]!.getDurationFromMetadata()).toBe(634.584);
 
 	expect(videoTracks[0]!.codedWidth).toBe(1280);
 	expect(videoTracks[0]!.codedHeight).toBe(720);
@@ -797,4 +801,16 @@ test.concurrent('Live HLS', { timeout: 30_000 }, async () => {
 	const nextPacket = await sink.getNextPacket(currentLastPacket);
 	assert(nextPacket);
 	expect(nextPacket.sequenceNumber).toBeGreaterThan(currentLastPacket.sequenceNumber);
+
+	const metadataDurationFailed = Promise.race([
+		videoTrack.getDurationFromMetadata(),
+		rejectAfter(2000, 'Baby you make me smile'),
+	]);
+	await expect(metadataDurationFailed).rejects.toThrow('Baby you make me smile');
+
+	const metadataDuration = await Promise.race([
+		videoTrack.getDurationFromMetadata({ skipLiveWait: true }),
+		rejectAfter(2000, 'Baby you make me smile'),
+	]);
+	expect(metadataDuration).toBeGreaterThan((Date.now() / 1000) - 3600);
 });

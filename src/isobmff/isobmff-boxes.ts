@@ -220,18 +220,6 @@ const ascii = (text: string, nullTerminated = false) => {
 	return bytes;
 };
 
-const lastPresentedSample = (samples: Sample[]) => {
-	let result: Sample | null = null;
-
-	for (const sample of samples) {
-		if (!result || sample.timestamp > result.timestamp) {
-			result = sample;
-		}
-	}
-
-	return result;
-};
-
 const rotationMatrix = (rotationInDegrees: number): TransformationMatrix => {
 	const theta = rotationInDegrees * (Math.PI / 180);
 	const cosTheta = Math.round(Math.cos(theta));
@@ -353,11 +341,7 @@ export const mvhd = (
 	const duration = intoTimescale(Math.max(
 		0,
 		...trackDatas
-			.filter(x => x.samples.length > 0)
-			.map((x) => {
-				const lastSample = lastPresentedSample(x.samples)!;
-				return lastSample.timestamp + lastSample.duration;
-			}),
+			.map(x => presentationSpan(x)),
 	), GLOBAL_TIMESCALE);
 	const nextTrackId = Math.max(0, ...trackDatas.map(x => x.track.id)) + 1;
 
@@ -377,6 +361,30 @@ export const mvhd = (
 		Array(24).fill(0), // Pre-defined
 		u32(nextTrackId), // Next track ID
 	]);
+};
+
+const presentationSpan = (trackData: IsobmffTrackData) => {
+	if (trackData.samples.length === 0) {
+		return 0;
+	}
+
+	let minTimestamp = Infinity;
+	let maxEndTimestamp = -Infinity;
+
+	for (const sample of trackData.samples) {
+		if (sample.timestamp < minTimestamp) {
+			minTimestamp = sample.timestamp;
+		}
+		if (sample.timestamp + sample.duration > maxEndTimestamp) {
+			maxEndTimestamp = sample.timestamp + sample.duration;
+		}
+	}
+
+	if (minTimestamp === Infinity) {
+		return 0;
+	}
+
+	return maxEndTimestamp - minTimestamp;
 };
 
 /**
@@ -405,9 +413,8 @@ export const tkhd = (
 	trackData: IsobmffTrackData,
 	creationTime: number,
 ) => {
-	const lastSample = lastPresentedSample(trackData.samples);
 	const durationInGlobalTimescale = intoTimescale(
-		lastSample ? lastSample.timestamp + lastSample.duration : 0,
+		presentationSpan(trackData),
 		GLOBAL_TIMESCALE,
 	);
 
@@ -456,9 +463,8 @@ export const mdhd = (
 	trackData: IsobmffTrackData,
 	creationTime: number,
 ) => {
-	const lastSample = lastPresentedSample(trackData.samples);
 	const localDuration = intoTimescale(
-		lastSample ? lastSample.timestamp + lastSample.duration : 0,
+		presentationSpan(trackData),
 		trackData.timescale,
 	);
 

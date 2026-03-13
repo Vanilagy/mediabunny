@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { Demuxer } from './demuxer';
+import { Demuxer, DurationMetadataRequestOptions } from './demuxer';
 import { InputFormat } from './input-format';
 import {
 	InputAudioTrack,
@@ -319,6 +319,21 @@ export class Input<S extends Source = Source> implements Disposable {
 
 		const firstTimestamps = await Promise.all(tracks.map(x => x.getFirstTimestamp()));
 		return Math.min(...firstTimestamps);
+	}
+
+	/**
+	 * Gets the duration (end timestamp) of the input file from metadata stored in the file. This value may be
+	 * approximate or diverge from the actual, precise duration returned by `.computeDuration()`, but compared to that
+	 * method, this method is very cheap. When the duration cannot be determined from the file metadata, `null`
+	 * is returned.
+	 *
+	 * By default, when the underlying media is live, this method will only resolve once the live stream
+	 * ends. If you want to query the current duration of the media, set
+	 * {@link DurationMetadataRequestOptions.skipLiveWait} to `true` in the options.
+	 */
+	async getDurationFromMetadata(options: DurationMetadataRequestOptions = {}) {
+		const demuxer = await this._getDemuxer();
+		return demuxer.getDurationFromMetadata(options);
 	}
 
 	/** Returns the list of all tracks of this input file in the order in which they appear in the file. */

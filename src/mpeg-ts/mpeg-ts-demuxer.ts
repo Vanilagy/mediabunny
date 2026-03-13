@@ -708,6 +708,10 @@ export class MpegTsDemuxer extends Demuxer {
 		return this.tracks;
 	}
 
+	async getDurationFromMetadata(): Promise<number | null> {
+		return null;
+	}
+
 	async getMetadataTags(): Promise<MetadataTags> {
 		return {}; // Nothing for now
 	}
@@ -1095,6 +1099,10 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 	}
 
 	getAverageBitrate() {
+		return null;
+	}
+
+	async getDurationFromMetadata() {
 		return null;
 	}
 

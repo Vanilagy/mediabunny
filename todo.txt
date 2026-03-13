@@ -5,6 +5,5 @@ Also, why not just have the packet metadata on the packet? I think that would ma
 
 - ALL_FORMATS but for HLS only
 
-- computeDuration and getFirstTimestamp are dangerous with HLS
 - keep input/demuxer.isSupported()?
 - getCodecParamterString() hack feels dirty; idk. well its not really a hack but, surface it over a different field?

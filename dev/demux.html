@@ -18,8 +18,10 @@
 			source: new Mediabunny.BlobSource(file),
 		});
 
-		const audTrack = await input.getPrimaryAudioTrack();
-		console.log((await audTrack.getDecoderConfig()).description.join(','));
+		const track = await input.getPrimaryAudioTrack();
+		console.log(await track.getDurationFromMetadata(), await track.computeDuration());
+
+		//console.log(await input.getDurationFromMetadata(), await input.computeDuration());
 		return;
 		*/
 
@@ -31,6 +33,10 @@
 
 		const videoTrack = await manifest.getPrimaryVideoTrack();
 		await videoTrack.hydrate();
+
+		console.log("Doing...")
+		console.log(await videoTrack.getDurationFromMetadata({skipLiveWait: true}));
+		return;
 
 		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
 		const firstTimestamp = await videoTrack.getFirstTimestamp();

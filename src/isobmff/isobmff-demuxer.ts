@@ -447,6 +447,26 @@ export class IsobmffDemuxer extends Demuxer {
 		})();
 	}
 
+	async getDurationFromMetadata(): Promise<number | null> {
+		await this.readMetadata();
+
+		if (this.movieDurationInTimescale <= 0) {
+			// The duration is often zero for fragmented files for example; return `null` to signal that the duration
+			// must be computed instead.
+			return null;
+		}
+
+		let endTimestamp = this.movieDurationInTimescale / this.movieTimescale;
+		if (this.tracks.length > 0) {
+			const minFirstTimestamp = Math.min(
+				...(await Promise.all(this.tracks.map(x => x.inputTrack!.getFirstTimestamp()))),
+			);
+			endTimestamp += minFirstTimestamp;
+		}
+
+		return endTimestamp;
+	}
+
 	getSampleTableForTrack(internalTrack: InternalTrack) {
 		if (internalTrack.sampleTable) {
 			return internalTrack.sampleTable;
@@ -2558,6 +2578,17 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 
 	getAverageBitrate() {
 		return null;
+	}
+
+	async getDurationFromMetadata() {
+		const track = this.internalTrack;
+		if (track.durationInMediaTimescale <= 0) {
+			return null;
+		}
+
+		assert(track.inputTrack);
+
+		return (await track.inputTrack.getFirstTimestamp()) + track.durationInMediaTimescale / track.timescale;
 	}
 
 	async getLiveRefreshInterval() {

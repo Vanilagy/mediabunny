@@ -7,7 +7,7 @@
  */
 
 import { AudioCodec, MediaCodec, VideoCodec } from './codec';
-import { Demuxer } from './demuxer';
+import { Demuxer, DurationMetadataRequestOptions } from './demuxer';
 import { Input } from './input';
 import { VirtualInputFormat } from './input-format';
 import {
@@ -42,6 +42,7 @@ export type AssociatedGroup = {
 
 export type Segment = {
 	timestamp: number;
+	duration: number;
 	relativeToUnixEpoch: boolean;
 	firstSegment: Segment | null;
 };
@@ -75,6 +76,17 @@ export abstract class SegmentedInput {
 
 	abstract getLiveRefreshInterval(): Promise<number | null>;
 
+	async getDurationFromMetadata(options: DurationMetadataRequestOptions) {
+		const lastSegment = await this.getSegmentAt(Infinity, {
+			skipLiveWait: options.skipLiveWait,
+		});
+		if (!lastSegment) {
+			return null;
+		}
+
+		return lastSegment.timestamp + lastSegment.duration;
+	}
+
 	toInput() {
 		return this.virtualInput ??= new Input({
 			source: new NullSource(),
@@ -100,6 +112,10 @@ class SegmentedInputDemuxer extends Demuxer {
 		super(input);
 
 		this.segmentedInput = segmentedInput;
+	}
+
+	async getDurationFromMetadata(): Promise<number | null> {
+		throw new Error('Unreachable');
 	}
 
 	async getMetadataTags(): Promise<MetadataTags> {
@@ -251,6 +267,10 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 
 	getAverageBitrate(): number | null {
 		return this.firstInputTrack._backing.getAverageBitrate();
+	}
+
+	getDurationFromMetadata(options: DurationMetadataRequestOptions): Promise<number | null> {
+		return this.demuxer.segmentedInput.getDurationFromMetadata(options);
 	}
 
 	getLiveRefreshInterval(): Promise<number | null> {
