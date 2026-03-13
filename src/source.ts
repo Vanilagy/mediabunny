@@ -11,6 +11,7 @@ import {
 	assert,
 	binarySearchLessOrEqual,
 	closedIntervalsOverlap,
+	isAllowSharedBufferSource,
 	isNumber,
 	isWebKit,
 	MaybePromise,
@@ -107,11 +108,7 @@ export class BufferSource extends Source {
 	 * or `ArrayBufferView`.
 	 */
 	constructor(buffer: AllowSharedBufferSource) {
-		if (
-			!(buffer instanceof ArrayBuffer)
-			&& !(typeof SharedArrayBuffer !== 'undefined' && buffer instanceof SharedArrayBuffer)
-			&& !ArrayBuffer.isView(buffer)
-		) {
+		if (!isAllowSharedBufferSource(buffer)) {
 			throw new TypeError('buffer must be an ArrayBuffer, SharedArrayBuffer, or ArrayBufferView.');
 		}
 

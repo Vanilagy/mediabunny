@@ -161,10 +161,21 @@ export const colorSpaceIsComplete = (
 	);
 };
 
+const getObjectTypeTag = (x: unknown) => Object.prototype.toString.call(x);
+
+export const isArrayBuffer = (x: unknown): x is ArrayBuffer => {
+	return x instanceof ArrayBuffer || getObjectTypeTag(x) === '[object ArrayBuffer]';
+};
+
+export const isSharedArrayBuffer = (x: unknown): x is SharedArrayBuffer => {
+	return typeof SharedArrayBuffer !== 'undefined'
+		&& (x instanceof SharedArrayBuffer || getObjectTypeTag(x) === '[object SharedArrayBuffer]');
+};
+
 export const isAllowSharedBufferSource = (x: unknown) => {
 	return (
-		x instanceof ArrayBuffer
-		|| (typeof SharedArrayBuffer !== 'undefined' && x instanceof SharedArrayBuffer)
+		isArrayBuffer(x)
+		|| isSharedArrayBuffer(x)
 		|| ArrayBuffer.isView(x)
 	);
 };

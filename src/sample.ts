@@ -11,6 +11,7 @@ import {
 	clamp,
 	COLOR_PRIMARIES_MAP,
 	isAllowSharedBufferSource,
+	isArrayBuffer,
 	MATRIX_COEFFICIENTS_MAP,
 	Rotation,
 	SECOND_TO_MICROSECOND_FACTOR,
@@ -274,11 +275,7 @@ export class VideoSample implements Disposable {
 		data: VideoFrame | CanvasImageSource | AllowSharedBufferSource,
 		init?: VideoSampleInit,
 	) {
-		if (
-			data instanceof ArrayBuffer
-			|| (typeof SharedArrayBuffer !== 'undefined' && data instanceof SharedArrayBuffer)
-			|| ArrayBuffer.isView(data)
-		) {
+		if (isAllowSharedBufferSource(data)) {
 			if (!init || typeof init !== 'object') {
 				throw new TypeError('init must be an object.');
 			}
@@ -1450,14 +1447,10 @@ export class AudioSample implements Disposable {
 			this.timestamp = init.timestamp;
 			this.duration = numberOfFrames / init.sampleRate;
 
-			let dataBuffer: Uint8Array;
-			if (init.data instanceof ArrayBuffer) {
-				dataBuffer = new Uint8Array(init.data);
-			} else if (ArrayBuffer.isView(init.data)) {
-				dataBuffer = new Uint8Array(init.data.buffer, init.data.byteOffset, init.data.byteLength);
-			} else {
+			if (!isAllowSharedBufferSource(init.data)) {
 				throw new TypeError('Invalid AudioDataInit: data is not a BufferSource.');
 			}
+			const dataBuffer = toUint8Array(init.data);
 
 			const expectedSize
                 = this.numberOfFrames * this.numberOfChannels * getBytesPerSample(this.format);
@@ -1739,7 +1732,7 @@ export class AudioSample implements Disposable {
 				numberOfFrames: this.numberOfFrames,
 				numberOfChannels: this.numberOfChannels,
 				timestamp: this.microsecondTimestamp,
-				data: this._data.buffer instanceof ArrayBuffer
+				data: isArrayBuffer(this._data.buffer)
 					? this._data.buffer
 					: this._data.slice(), // In the case of SharedArrayBuffer, convert to ArrayBuffer
 			});
