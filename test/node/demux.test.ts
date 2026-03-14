@@ -3,7 +3,7 @@ import { Input } from '../../src/input.js';
 import { BufferSource, FilePathSource } from '../../src/source.js';
 import path from 'node:path';
 import fs from 'node:fs';
-import { ADTS, ALL_FORMATS, FLAC, MP3, MP4, OGG, QTFF, WAVE, WEBM } from '../../src/input-format.js';
+import { ADTS, ALL_FORMATS, FLAC, MPEG_TS, MP3, MP4, OGG, QTFF, WAVE, WEBM } from '../../src/input-format.js';
 import { InputAudioTrack, InputTrack } from '../../src/input-track.js';
 import { assert } from '../../src/misc.js';
 import { EncodedPacket, PacketReader } from '../../src/packet.js';
@@ -351,4 +351,58 @@ test('FLAC sync reading', async () => {
 
 	const count = testSyncPacketReading(audioTrack);
 	expect(count).toBe(213);
+});
+
+test('MPEG-TS demuxing', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/0.ts')),
+		formats: ALL_FORMATS,
+	});
+
+	expect(await input.getFormat()).toBe(MPEG_TS);
+	expect(await input.getMimeType()).toBe('video/MP2T; codecs="avc1.640020, mp4a.40.2"');
+
+	const tracks = await input.getTracks();
+	expect(tracks).toHaveLength(2);
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	expect(videoTrack.codec).toBe('avc');
+
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	expect(audioTrack.codec).toBe('aac');
+	expect(audioTrack.numberOfChannels).toBe(2);
+	expect(audioTrack.sampleRate).toBe(48000);
+
+	const audioDecoderConfig = await audioTrack.getDecoderConfig();
+	expect(audioDecoderConfig!.codec).toBe('mp4a.40.2');
+	expect(audioDecoderConfig!.numberOfChannels).toBe(2);
+	expect(audioDecoderConfig!.sampleRate).toBe(48000);
+
+	const reader = new PacketReader(audioTrack);
+	const first = await reader.getFirst();
+	expect(first).not.toBe(null);
+	expect(first!.timestamp).toBe(10.012);
+
+	const next = await reader.getNext(first!);
+	expect(next).not.toBe(null);
+	expect(next!.sequenceNumber).toBeGreaterThan(first!.sequenceNumber);
+
+	const seeked = await reader.getAt(11);
+	expect(seeked).not.toBe(null);
+	expect(seeked!.timestamp).toBeGreaterThan(10.9);
+	expect(seeked!.timestamp).toBeLessThanOrEqual(11);
+
+	const last = await reader.getAt(Infinity);
+	expect(last).not.toBe(null);
+	expect(last!.sequenceNumber).toBeGreaterThan(seeked!.sequenceNumber);
+
+	const afterLast = await reader.getNext(last!);
+	expect(afterLast).toBe(null);
+
+	const duration = await input.computeDuration();
+	expect(duration).toBeGreaterThan(0);
 });

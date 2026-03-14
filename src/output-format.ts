@@ -7,6 +7,7 @@
  */
 
 import { AdtsMuxer } from './adts/adts-muxer';
+import { MpegTsMuxer } from './mpeg-ts/mpeg-ts-muxer';
 import {
 	AUDIO_CODECS,
 	AudioCodec,
@@ -934,6 +935,70 @@ export class FlacOutputFormat extends OutputFormat {
 
 	getSupportedCodecs(): MediaCodec[] {
 		return ['flac'];
+	}
+
+	get supportsVideoRotationMetadata() {
+		return false;
+	}
+}
+
+export type MpegTsOutputFormatOptions = {
+	onPacket?: (data: Uint8Array, position: number) => unknown;
+};
+
+export class MpegTsOutputFormat extends OutputFormat {
+	/** @internal */
+	_options: MpegTsOutputFormatOptions;
+
+	constructor(options: MpegTsOutputFormatOptions = {}) {
+		if (!options || typeof options !== 'object') {
+			throw new TypeError('options must be an object.');
+		}
+		if (options.onPacket !== undefined && typeof options.onPacket !== 'function') {
+			throw new TypeError('options.onPacket, when provided, must be a function.');
+		}
+
+		super();
+
+		this._options = options;
+	}
+
+	/** @internal */
+	_createMuxer(output: Output) {
+		return new MpegTsMuxer(output, this);
+	}
+
+	/** @internal */
+	get _name() {
+		return 'MPEG-TS';
+	}
+
+	getSupportedTrackCounts(): TrackCountLimits {
+		const maxVideo = 16;
+		const maxAudio = 32;
+		const maxTotal = maxVideo + maxAudio;
+
+		return {
+			video: { min: 0, max: maxVideo },
+			audio: { min: 0, max: maxAudio },
+			subtitle: { min: 0, max: 0 },
+			total: { min: 1, max: maxTotal },
+		};
+	}
+
+	get fileExtension() {
+		return '.ts';
+	}
+
+	get mimeType() {
+		return 'video/MP2T';
+	}
+
+	getSupportedCodecs(): MediaCodec[] {
+		return [
+			...VIDEO_CODECS.filter(codec => ['avc', 'hevc'].includes(codec)),
+			...AUDIO_CODECS.filter(codec => ['aac', 'mp3', 'ac3', 'eac3'].includes(codec)),
+		];
 	}
 
 	get supportsVideoRotationMetadata() {
