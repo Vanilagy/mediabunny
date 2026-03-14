@@ -70,6 +70,7 @@ export const NON_PCM_AUDIO_CODECS = [
 	'mp3',
 	'vorbis',
 	'flac',
+	'ac3',
 ] as const;
 /**
  * List of known audio codecs, ordered by encoding preference.
@@ -565,6 +566,8 @@ export const extractAudioCodecString = (trackInfo: {
 		return 'vorbis';
 	} else if (codec === 'flac') {
 		return 'flac';
+	} else if (codec === 'ac3') {
+		return 'ac-3';
 	} else if (codec && (PCM_AUDIO_CODECS as readonly string[]).includes(codec)) {
 		return codec;
 	}
