@@ -46,6 +46,7 @@ import { Output, TrackType } from './output';
 import { Mp4OutputFormat } from './output-format';
 import { AudioSample, clampCropRectangle, validateCropRectangle, VideoSample } from './sample';
 import { MetadataTags, validateMetadataTags } from './metadata';
+import { formatSubtitleTimestamp } from './subtitles';
 import { NullTarget } from './target';
 import { AudioSampleCursor, canvasTransformer, PacketCursor, VideoSampleCursor, WrappedCanvas } from './cursors';
 
@@ -1604,13 +1605,43 @@ export class Conversion {
 			}
 		}
 
-		const subtitleSource = new TextSubtitleSource(targetCodec);
+		const subtitleSource = new TextSubtitleSource('webvtt');
 
 		this._trackPromises.push((async () => {
 			await this._started;
 
-			const subtitleText = await track.exportToText(targetCodec);
-			await subtitleSource.add(subtitleText);
+			await subtitleSource.add('WEBVTT\n\n');
+
+			const cursor = new PacketCursor(track);
+			await cursor.seekTo(this._startTimestamp);
+
+			for await (const packet of cursor) {
+				if (this._canceled) return;
+				if (packet.timestamp >= this._endTimestamp) break;
+				if (packet.timestamp + packet.duration < this._startTimestamp) {
+					continue;
+				}
+
+				const text = new TextDecoder().decode(packet.data);
+				if (!text) continue;
+
+				const timestamp = Math.max(
+					packet.timestamp - this._startTimestamp, 0,
+				);
+				const duration = Math.min(
+					packet.duration,
+					this._endTimestamp - this._startTimestamp - timestamp,
+				);
+
+				const start = formatSubtitleTimestamp(timestamp * 1000);
+				const end = formatSubtitleTimestamp(
+					(timestamp + duration) * 1000,
+				);
+				await subtitleSource.add(
+					`${start} --> ${end}\n${text}\n\n`,
+				);
+			}
+
 			subtitleSource.close();
 		})());
 

@@ -341,6 +341,12 @@ export type UrlSourceOptions = {
 	maxCacheSize?: number;
 
 	/**
+	 * The maximum number of concurrent HTTP connections (read workers). Defaults to 2. Set to 1 to force
+	 * sequential reading, which avoids issues with servers that reject concurrent range requests.
+	 */
+	maxWorkerCount?: number;
+
+	/**
 	 * A WHATWG-compatible fetch function. You can use this field to polyfill the `fetch` function, add missing
 	 * features, or use a custom implementation.
 	 */
@@ -395,6 +401,12 @@ export class UrlSource extends Source {
 		) {
 			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative number.');
 		}
+		if (
+			options.maxWorkerCount !== undefined
+			&& (!isNumber(options.maxWorkerCount) || options.maxWorkerCount < 1)
+		) {
+			throw new TypeError('options.maxWorkerCount, when provided, must be a number >= 1.');
+		}
 		if (options.fetchFn !== undefined && typeof options.fetchFn !== 'function') {
 			throw new TypeError('options.fetchFn, when provided, must be a function.');
 			// Won't bother validating this function beyond this
@@ -408,9 +420,7 @@ export class UrlSource extends Source {
 
 		this._orchestrator = new ReadOrchestrator({
 			maxCacheSize: options.maxCacheSize ?? (64 * 2 ** 20 /* 64 MiB */),
-			// Most files in the real-world have a single sequential access pattern, but having two in parallel can
-			// also happen
-			maxWorkerCount: 2,
+			maxWorkerCount: options.maxWorkerCount ?? 2,
 			runWorker: this._runWorker.bind(this),
 			prefetchProfile: PREFETCH_PROFILES.network,
 		});
