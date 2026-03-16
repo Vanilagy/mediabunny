@@ -20,4 +20,8 @@ export abstract class Demuxer {
 	abstract getTracks(): Promise<InputTrack[]>;
 	abstract getMimeType(): Promise<string>;
 	abstract getMetadataTags(): Promise<MetadataTags>;
+
+	async computeDuration(): Promise<number | null> {
+		return null;
+	}
 }

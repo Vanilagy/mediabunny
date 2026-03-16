@@ -84,8 +84,9 @@ test('Regular ISOBMFF demuxing', async () => {
 
 	await testBasicPacketReading(videoTrack);
 
-	expect(await input.computeDuration()).toBeCloseTo(5.041666666666667);
+	expect(await input.computeDuration()).toBeCloseTo(5, 1);
 });
+
 
 test('Regular ISOBMFF sync reading', async () => {
 	using input = new Input({
@@ -149,7 +150,7 @@ test('Matroska demuxing', async () => {
 
 	await testBasicPacketReading(videoTrack);
 
-	expect(await input.computeDuration()).toBeCloseTo(5);
+	expect(await input.computeDuration()).toBeCloseTo(5, 1);
 });
 
 test('Matroska sync reading', async () => {

@@ -118,6 +118,12 @@ export class Input<S extends Source = Source> implements Disposable {
 	 * all tracks.
 	 */
 	async computeDuration() {
+		const demuxer = await this._getDemuxer();
+		const containerDuration = await demuxer.computeDuration();
+		if (containerDuration !== null && containerDuration > 0) {
+			return containerDuration;
+		}
+
 		const tracks = await this.getTracks();
 		if (tracks.length === 0) {
 			return 0;

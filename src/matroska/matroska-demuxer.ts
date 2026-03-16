@@ -271,6 +271,18 @@ export class MatroskaDemuxer extends Demuxer {
 		return this.segments.flatMap(segment => segment.tracks.map(track => track.inputTrack!));
 	}
 
+	override async computeDuration(): Promise<number | null> {
+		await this.readMetadata();
+
+		for (const segment of this.segments) {
+			if (segment.duration > 0) {
+				return segment.duration / segment.timestampFactor;
+			}
+		}
+
+		return null;
+	}
+
 	override async getMimeType() {
 		await this.readMetadata();
 

@@ -741,7 +741,7 @@ export class MpegTsDemuxer extends Demuxer {
 		return {}; // Nothing for now
 	}
 
-	async computeDuration() {
+	override async computeDuration() {
 		const tracks = await this.getTracks();
 		const trackDurations = await Promise.all(tracks.map(x => x.computeDuration()));
 		return Math.max(0, ...trackDurations);
