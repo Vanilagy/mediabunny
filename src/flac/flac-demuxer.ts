@@ -305,7 +305,7 @@ export class FlacDemuxer extends Demuxer {
 
 		const slice = await this.reader.requestSliceRange(
 			startPos,
-			effectiveMinFrameSize,
+			maximumHeaderSize,
 			maximumSliceLength,
 		);
 
