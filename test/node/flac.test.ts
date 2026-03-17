@@ -6,7 +6,7 @@ import { BufferSource, FilePathSource } from '../../src/source.js';
 import { ALL_FORMATS, FLAC } from '../../src/input-format.js';
 import { EncodedPacketSink } from '../../src/media-sink.js';
 import { Output } from '../../src/output.js';
-import { BufferTarget, StreamTarget } from '../../src/target.js';
+import { BufferTarget } from '../../src/target.js';
 import { FlacOutputFormat } from '../../src/output-format.js';
 import { Conversion } from '../../src/conversion.js';
 
