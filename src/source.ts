@@ -561,11 +561,12 @@ export class UrlSource extends Source {
 
 					const retryDelayInSeconds = this._getRetryDelay(1, error, this._url);
 					if (retryDelayInSeconds !== null) {
-						console.error('Error while reading response stream. Attempting to resume.', error);
+						console.debug('Error while reading response stream. Attempting to resume.', error);
 						await new Promise(resolve => setTimeout(resolve, 1000 * retryDelayInSeconds));
 
 						break;
 					} else {
+						console.error('Error while reading response stream. Failed to resume.', error);
 						throw error;
 					}
 				}
