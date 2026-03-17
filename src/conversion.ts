@@ -1425,17 +1425,20 @@ export class Conversion {
 
 					await using cursor = new AudioSampleCursor(track);
 
-					for await (const sample of cursor) {
-						if (this._canceled) {
-							return;
-						}
-
-						if (sample.timestamp >= this._endTimestamp) {
-							break;
-						}
-
-						await this._registerAudioSample(track, trackOptions, source, sample);
+				for await (const sample of cursor) {
+					if (this._canceled) {
+						sample.close();
+						return;
 					}
+
+					if (sample.timestamp >= this._endTimestamp) {
+						sample.close();
+						break;
+					}
+
+					await this._registerAudioSample(track, trackOptions, source, sample);
+					sample.close();
+				}
 
 					source.close();
 					this._closeTrack(track.id);
@@ -1540,14 +1543,17 @@ export class Conversion {
 
 			for await (const sample of cursor) {
 				if (this._canceled) {
+					sample.close();
 					return;
 				}
 
 				if (sample.timestamp >= this._endTimestamp) {
+					sample.close();
 					break;
 				}
 
 				await resampler.add(sample);
+				sample.close();
 			}
 
 			await resampler.finalize();
