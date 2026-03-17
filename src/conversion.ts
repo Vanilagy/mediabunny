@@ -10,6 +10,8 @@ import {
 	AUDIO_CODECS,
 	AudioCodec,
 	NON_PCM_AUDIO_CODECS,
+	SUBTITLE_CODECS,
+	SubtitleCodec,
 	VIDEO_CODECS,
 	VideoCodec,
 } from './codec';
@@ -21,7 +23,7 @@ import {
 	VideoEncodingConfig,
 } from './encode';
 import { Input } from './input';
-import { InputAudioTrack, InputTrack, InputVideoTrack } from './input-track';
+import { InputAudioTrack, InputSubtitleTrack, InputTrack, InputVideoTrack } from './input-track';
 import {
 	AudioSource,
 	EncodedVideoPacketSource,
@@ -29,6 +31,7 @@ import {
 	VideoSource,
 	VideoSampleSource,
 	AudioSampleSource,
+	TextSubtitleSource,
 } from './media-source';
 import {
 	assert,
@@ -74,6 +77,14 @@ export type ConversionOptions = {
 	 */
 	audio?: ConversionAudioOptions
 		| ((track: InputAudioTrack, n: number) => MaybePromise<ConversionAudioOptions | undefined>);
+
+	/**
+	 * Subtitle-specific options. When passing an object, the same options are applied to all subtitle
+	 * tracks. When passing a function, it will be invoked for each subtitle track and is expected to
+	 * return or resolve to the options for that specific track.
+	 */
+	subtitle?: ConversionSubtitleOptions
+		| ((track: InputSubtitleTrack, n: number) => MaybePromise<ConversionSubtitleOptions | undefined>);
 
 	/** Options to trim the input file. */
 	trim?: {
@@ -259,6 +270,32 @@ export type ConversionAudioOptions = {
 	 * encoder configuration.
 	 */
 	processedSampleRate?: number;
+};
+
+/**
+ * Subtitle-specific options.
+ * @group Conversion
+ * @public
+ */
+export type ConversionSubtitleOptions = {
+	/** If `true`, all subtitle tracks will be discarded and will not be present in the output. */
+	discard?: boolean;
+	/** The desired output subtitle codec. */
+	codec?: SubtitleCodec;
+};
+
+const validateSubtitleOptions = (subtitleOptions: ConversionSubtitleOptions | undefined) => {
+	if (subtitleOptions !== undefined && (!subtitleOptions || typeof subtitleOptions !== 'object')) {
+		throw new TypeError('options.subtitle, when provided, must be an object.');
+	}
+	if (subtitleOptions?.discard !== undefined && typeof subtitleOptions.discard !== 'boolean') {
+		throw new TypeError('options.subtitle.discard, when provided, must be a boolean.');
+	}
+	if (subtitleOptions?.codec !== undefined && !SUBTITLE_CODECS.includes(subtitleOptions.codec)) {
+		throw new TypeError(
+			`options.subtitle.codec, when provided, must be one of: ${SUBTITLE_CODECS.join(', ')}.`,
+		);
+	}
 };
 
 const validateVideoOptions = (videoOptions: ConversionVideoOptions | undefined) => {
@@ -603,9 +640,15 @@ export class Conversion {
 
 		let nVideo = 1;
 		let nAudio = 1;
+		let nSubtitle = 1;
 
 		for (const track of inputTracks) {
-			let trackOptions: ConversionVideoOptions | ConversionAudioOptions | undefined = undefined;
+			let trackOptions:
+				| ConversionVideoOptions
+				| ConversionAudioOptions
+				| ConversionSubtitleOptions
+				| undefined = undefined;
+
 			if (track.isVideoTrack()) {
 				if (this._options.video) {
 					if (typeof this._options.video === 'function') {
@@ -626,8 +669,16 @@ export class Conversion {
 						trackOptions = this._options.audio;
 					}
 				}
-			} else {
-				assert(false);
+			} else if (track.isSubtitleTrack()) {
+				if (this._options.subtitle) {
+					if (typeof this._options.subtitle === 'function') {
+						trackOptions = await this._options.subtitle(track, nSubtitle);
+						validateSubtitleOptions(trackOptions);
+						nSubtitle++;
+					} else {
+						trackOptions = this._options.subtitle;
+					}
+				}
 			}
 
 			if (trackOptions?.discard) {
@@ -658,6 +709,8 @@ export class Conversion {
 				await this._processVideoTrack(track, (trackOptions ?? {}) as ConversionVideoOptions);
 			} else if (track.isAudioTrack()) {
 				await this._processAudioTrack(track, (trackOptions ?? {}) as ConversionAudioOptions);
+			} else if (track.isSubtitleTrack()) {
+				await this._processSubtitleTrack(track, (trackOptions ?? {}) as ConversionSubtitleOptions);
 			}
 		}
 
@@ -1521,6 +1574,56 @@ export class Conversion {
 			this._lastProgress = newProgress;
 			this.onProgress?.(newProgress);
 		}
+	}
+
+	async _processSubtitleTrack(
+		track: InputSubtitleTrack,
+		trackOptions: ConversionSubtitleOptions,
+	) {
+		const sourceCodec = track.codec;
+		if (!sourceCodec) {
+			this.discardedTracks.push({
+				track,
+				reason: 'unknown_source_codec',
+			});
+			return;
+		}
+
+		let targetCodec = trackOptions.codec ?? sourceCodec;
+		const supportedCodecs = this.output.format.getSupportedSubtitleCodecs();
+
+		if (!supportedCodecs.includes(targetCodec)) {
+			if (!trackOptions.codec && supportedCodecs.includes(sourceCodec)) {
+				targetCodec = sourceCodec;
+			} else {
+				this.discardedTracks.push({
+					track,
+					reason: 'no_encodable_target_codec',
+				});
+				return;
+			}
+		}
+
+		const subtitleSource = new TextSubtitleSource(targetCodec);
+
+		this._trackPromises.push((async () => {
+			await this._started;
+
+			const subtitleText = await track.exportToText(targetCodec);
+			await subtitleSource.add(subtitleText);
+			subtitleSource.close();
+		})());
+
+		this.output.addSubtitleTrack(subtitleSource, {
+			languageCode: isIso639Dash2LanguageCode(track.languageCode)
+				? track.languageCode
+				: undefined,
+			name: track.name ?? undefined,
+		});
+		this._addedCounts.subtitle++;
+		this._totalTrackCount++;
+
+		this.utilizedTracks.push(track);
 	}
 }
 

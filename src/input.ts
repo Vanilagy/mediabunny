@@ -9,6 +9,7 @@
 import { SampleCursor } from './cursors';
 import { Demuxer } from './demuxer';
 import { InputFormat } from './input-format';
+import type { InputSubtitleTrack } from './input-track';
 import { assert, polyfillSymbolDispose } from './misc';
 import { Reader } from './reader';
 import { Source } from './source';
@@ -161,6 +162,18 @@ export class Input<S extends Source = Source> implements Disposable {
 	async getPrimaryAudioTrack() {
 		const tracks = await this.getTracks();
 		return tracks.find(x => x.isAudioTrack()) ?? null;
+	}
+
+	/** Returns the list of all subtitle tracks of this input file. */
+	async getSubtitleTracks() {
+		const tracks = await this.getTracks();
+		return tracks.filter(x => x.isSubtitleTrack());
+	}
+
+	/** Returns the primary subtitle track of this input file, or null if there are no subtitle tracks. */
+	async getPrimarySubtitleTrack() {
+		const tracks = await this.getTracks();
+		return tracks.find(x => x.isSubtitleTrack()) ?? null;
 	}
 
 	/** Returns the full MIME type of this input file, including track codecs. */

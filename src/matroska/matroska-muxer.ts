@@ -700,7 +700,12 @@ export class MatroskaMuxer extends Muxer {
 				return trackData.info.decoderConfig.codec;
 			} else {
 				const map: Record<SubtitleCodec, string> = {
-					webvtt: 'wvtt',
+					webvtt: 'S_TEXT/WEBVTT',
+					srt: 'S_TEXT/UTF8',
+					ass: 'S_TEXT/ASS',
+					ssa: 'S_TEXT/SSA',
+					tx3g: 'S_TEXT/UTF8',
+					ttml: 'S_TEXT/WEBVTT',
 				};
 				return map[trackData.track.source._codec];
 			}

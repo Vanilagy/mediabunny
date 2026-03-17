@@ -159,6 +159,7 @@ export {
 	InputTrack,
 	InputVideoTrack,
 	InputAudioTrack,
+	InputSubtitleTrack,
 	PacketStats,
 } from './input-track';
 export {
@@ -189,6 +190,7 @@ export {
 	ConversionOptions,
 	ConversionVideoOptions,
 	ConversionAudioOptions,
+	ConversionSubtitleOptions,
 	DiscardedTrack,
 } from './conversion';
 export {

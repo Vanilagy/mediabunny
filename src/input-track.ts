@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { AudioCodec, MediaCodec, VideoCodec } from './codec';
+import { AudioCodec, MediaCodec, SubtitleCodec, VideoCodec } from './codec';
 import { determineVideoPacketType } from './codec-data';
 import { customAudioDecoders, customVideoDecoders } from './custom-coder';
 import { Input } from './input';
@@ -15,6 +15,7 @@ import { TrackType } from './output';
 import { EncodedPacket, PacketRetrievalOptions, PacketType } from './packet';
 import { TrackDisposition } from './metadata';
 import { PacketCursor } from './cursors';
+import { SubtitleCue } from './subtitles';
 
 /**
  * Contains aggregate statistics about the encoded packets of a track.
@@ -104,6 +105,10 @@ export abstract class InputTrack {
 	/** Returns true if and only if this track is an audio track. */
 	isAudioTrack(): this is InputAudioTrack {
 		return this instanceof InputAudioTrack;
+	}
+
+	isSubtitleTrack(): this is InputSubtitleTrack {
+		return this instanceof InputSubtitleTrack;
 	}
 
 	/** The unique ID of this track in the input file. */
@@ -452,5 +457,60 @@ export class InputAudioTrack extends InputTrack {
 		}
 
 		return 'key'; // No audio codec with delta packets
+	}
+}
+
+export interface InputSubtitleTrackBacking extends InputTrackBacking {
+	getCodec(): SubtitleCodec | null;
+	getCodecPrivate(): string | null;
+	getCues(): AsyncGenerator<SubtitleCue>;
+}
+
+export class InputSubtitleTrack extends InputTrack {
+	/** @internal */
+	override _backing: InputSubtitleTrackBacking;
+
+	/** @internal */
+	constructor(input: Input, backing: InputSubtitleTrackBacking) {
+		super(input, backing);
+		this._backing = backing;
+	}
+
+	get type(): TrackType {
+		return 'subtitle';
+	}
+
+	get codec(): SubtitleCodec | null {
+		return this._backing.getCodec();
+	}
+
+	getCues(): AsyncGenerator<SubtitleCue> {
+		return this._backing.getCues();
+	}
+
+	async exportToText(targetFormat?: SubtitleCodec): Promise<string> {
+		const cues: SubtitleCue[] = [];
+		for await (const cue of this.getCues()) {
+			cues.push(cue);
+		}
+
+		const codec = targetFormat || this.codec;
+		const codecPrivate = this._backing.getCodecPrivate();
+
+		const { getSubtitleFormat } = await import('./subtitles');
+		const format = getSubtitleFormat(codec ?? 'webvtt');
+		return format.format(cues, codecPrivate || undefined);
+	}
+
+	async getCodecParameterString(): Promise<string | null> {
+		return this.codec;
+	}
+
+	async canDecode(): Promise<boolean> {
+		return this.codec !== null;
+	}
+
+	async determinePacketType(_packet: EncodedPacket): Promise<PacketType | null> {
+		return 'key';
 	}
 }

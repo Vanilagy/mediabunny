@@ -17,6 +17,7 @@ import {
 	parsePcmCodec,
 	PCM_AUDIO_CODECS,
 	PcmAudioCodec,
+	SubtitleCodec,
 	VideoCodec,
 } from '../codec';
 import {
@@ -33,6 +34,8 @@ import { Input } from '../input';
 import {
 	InputAudioTrack,
 	InputAudioTrackBacking,
+	InputSubtitleTrack,
+	InputSubtitleTrackBacking,
 	InputTrack,
 	InputTrackBacking,
 	InputVideoTrack,
@@ -61,6 +64,7 @@ import {
 	MaybeRelevantPromise,
 } from '../misc';
 import { EncodedPacket, PacketRetrievalOptions, PLACEHOLDER_DATA } from '../packet';
+import { SubtitleCue } from '../subtitles';
 import { buildIsobmffMimeType } from './isobmff-misc';
 import {
 	MAX_BOX_HEADER_SIZE,
@@ -143,10 +147,17 @@ type InternalTrack = {
 		codecDescription: Uint8Array | null;
 		aacCodecInfo: AacCodecInfo | null;
 	};
+} | {
+	info: {
+		type: 'subtitle';
+		codec: SubtitleCodec | null;
+		codecPrivateText: string | null;
+	};
 });
 
 type InternalVideoTrack = InternalTrack & {	info: { type: 'video' } };
 type InternalAudioTrack = InternalTrack & {	info: { type: 'audio' } };
+type InternalSubtitleTrack = InternalTrack & {	info: { type: 'subtitle' } };
 
 type SampleTable = {
 	sampleTimingEntries: SampleTimingEntry[];
@@ -682,6 +693,13 @@ export class IsobmffDemuxer extends Demuxer {
 						const audioTrack = track as InternalAudioTrack;
 						track.inputTrack = new InputAudioTrack(this.input, new IsobmffAudioTrackBacking(audioTrack));
 						this.tracks.push(track);
+					} else if (track.info.type === 'subtitle') {
+						const subtitleTrack = track as InternalSubtitleTrack;
+						track.inputTrack = new InputSubtitleTrack(
+							this.input,
+							new IsobmffSubtitleTrackBacking(subtitleTrack),
+						);
+						this.tracks.push(track);
 					}
 				}
 
@@ -854,6 +872,12 @@ export class IsobmffDemuxer extends Demuxer {
 						codecDescription: null,
 						aacCodecInfo: null,
 					};
+				} else if (handlerType === 'text' || handlerType === 'subt' || handlerType === 'sbtl') {
+					track.info = {
+						type: 'subtitle',
+						codec: null,
+						codecPrivateText: null,
+					};
 				}
 			}; break;
 
@@ -915,6 +939,23 @@ export class IsobmffDemuxer extends Demuxer {
 						track.info.height = readU16Be(slice);
 
 						slice.skip(4 + 4 + 4 + 2 + 32 + 2 + 2);
+
+						this.readContiguousBoxes(
+							slice.slice(
+								slice.filePos,
+								(sampleBoxStartPos + sampleBoxInfo.totalSize) - slice.filePos,
+							),
+						);
+					} else if (track.info.type === 'subtitle') {
+						slice.skip(6 + 2);
+
+						if (lowercaseBoxName === 'wvtt') {
+							track.info.codec = 'webvtt';
+						} else if (lowercaseBoxName === 'tx3g' || lowercaseBoxName === 'text') {
+							track.info.codec = 'tx3g';
+						} else if (lowercaseBoxName === 'stpp') {
+							track.info.codec = 'ttml';
+						}
 
 						this.readContiguousBoxes(
 							slice.slice(
@@ -1078,7 +1119,9 @@ export class IsobmffDemuxer extends Demuxer {
 				}
 				assert(track.info);
 
-				track.info.codecDescription = readBytes(slice, boxInfo.contentSize);
+				if (track.info.type === 'video' || track.info.type === 'audio') {
+					track.info.codecDescription = readBytes(slice, boxInfo.contentSize);
+				}
 			}; break;
 
 			case 'hvcC': {
@@ -1088,7 +1131,9 @@ export class IsobmffDemuxer extends Demuxer {
 				}
 				assert(track.info);
 
-				track.info.codecDescription = readBytes(slice, boxInfo.contentSize);
+				if (track.info.type === 'video' || track.info.type === 'audio') {
+					track.info.codecDescription = readBytes(slice, boxInfo.contentSize);
+				}
 			}; break;
 
 			case 'vpcC': {
@@ -2922,6 +2967,92 @@ class IsobmffAudioTrackBacking extends IsobmffTrackBacking implements InputAudio
 			sampleRate: this.internalTrack.info.sampleRate,
 			description: this.internalTrack.info.codecDescription ?? undefined,
 		};
+	}
+}
+
+class IsobmffSubtitleTrackBacking extends IsobmffTrackBacking implements InputSubtitleTrackBacking {
+	override internalTrack: InternalSubtitleTrack;
+
+	constructor(internalTrack: InternalSubtitleTrack) {
+		super(internalTrack);
+		this.internalTrack = internalTrack;
+	}
+
+	override getCodec(): SubtitleCodec | null {
+		return this.internalTrack.info.codec;
+	}
+
+	getCodecPrivate(): string | null {
+		return this.internalTrack.info.codecPrivateText;
+	}
+
+	async* getCues(): AsyncGenerator<SubtitleCue> {
+		const res = new ResultValue<EncodedPacket | null>();
+		await this.getFirstPacket(res, {});
+		let packet = res.value;
+
+		while (packet) {
+			let text = '';
+
+			if (this.internalTrack.info.codec === 'webvtt') {
+				const data = new Uint8Array(packet.data);
+				const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+				let offset = 0;
+				while (offset + 8 <= data.length) {
+					const boxSize = view.getUint32(offset, false);
+					const boxType = String.fromCharCode(
+						view.getUint8(offset + 4),
+						view.getUint8(offset + 5),
+						view.getUint8(offset + 6),
+						view.getUint8(offset + 7),
+					);
+
+					if (boxSize < 8 || offset + boxSize > data.length) {
+						break;
+					}
+
+					if (boxType === 'vttc') {
+						let innerOffset = offset + 8;
+						while (innerOffset + 8 <= offset + boxSize) {
+							const innerBoxSize = view.getUint32(innerOffset, false);
+							const innerBoxType = String.fromCharCode(
+								view.getUint8(innerOffset + 4),
+								view.getUint8(innerOffset + 5),
+								view.getUint8(innerOffset + 6),
+								view.getUint8(innerOffset + 7),
+							);
+
+							if (innerBoxSize < 8 || innerOffset + innerBoxSize > offset + boxSize) {
+								break;
+							}
+
+							if (innerBoxType === 'payl') {
+								const textBytes = data.subarray(innerOffset + 8, innerOffset + innerBoxSize);
+								text += textDecoder.decode(textBytes);
+							}
+
+							innerOffset += innerBoxSize;
+						}
+					}
+
+					offset += boxSize;
+				}
+			} else {
+				text = textDecoder.decode(packet.data);
+			}
+
+			if (text) {
+				yield {
+					timestamp: packet.timestamp,
+					duration: packet.duration,
+					text,
+				};
+			}
+
+			const nextRes = new ResultValue<EncodedPacket | null>();
+			await this.getNextPacket(nextRes, packet, {});
+			packet = nextRes.value;
+		}
 	}
 }
 
