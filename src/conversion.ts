@@ -46,6 +46,7 @@ import { Output, TrackType } from './output';
 import { Mp4OutputFormat } from './output-format';
 import { AudioSample, clampCropRectangle, validateCropRectangle, VideoSample } from './sample';
 import { MetadataTags, validateMetadataTags } from './metadata';
+
 import { formatSubtitleTimestamp } from './subtitles';
 import { NullTarget } from './target';
 import { AudioSampleCursor, canvasTransformer, PacketCursor, VideoSampleCursor, WrappedCanvas } from './cursors';
@@ -278,11 +279,22 @@ export type ConversionAudioOptions = {
  * @group Conversion
  * @public
  */
+export type SubtitleCueEvent = {
+	startTime: number;
+	endTime: number;
+	text: string;
+};
+
 export type ConversionSubtitleOptions = {
 	/** If `true`, all subtitle tracks will be discarded and will not be present in the output. */
 	discard?: boolean;
 	/** The desired output subtitle codec. */
 	codec?: SubtitleCodec;
+	/**
+	 * Called during execution for each subtitle cue as it is read from the input. When provided, subtitle cues are
+	 * not written to the output — they are only delivered through this callback.
+	 */
+	onCue?: (cue: SubtitleCueEvent) => void;
 };
 
 const validateSubtitleOptions = (subtitleOptions: ConversionSubtitleOptions | undefined) => {
@@ -296,6 +308,9 @@ const validateSubtitleOptions = (subtitleOptions: ConversionSubtitleOptions | un
 		throw new TypeError(
 			`options.subtitle.codec, when provided, must be one of: ${SUBTITLE_CODECS.join(', ')}.`,
 		);
+	}
+	if (subtitleOptions?.onCue !== undefined && typeof subtitleOptions.onCue !== 'function') {
+		throw new TypeError('options.subtitle.onCue, when provided, must be a function.');
 	}
 };
 
@@ -1581,36 +1596,44 @@ export class Conversion {
 		track: InputSubtitleTrack,
 		trackOptions: ConversionSubtitleOptions,
 	) {
-		const sourceCodec = track.codec;
-		if (!sourceCodec) {
-			this.discardedTracks.push({
-				track,
-				reason: 'unknown_source_codec',
-			});
-			return;
-		}
+		const { onCue } = trackOptions;
 
-		let targetCodec = trackOptions.codec ?? sourceCodec;
-		const supportedCodecs = this.output.format.getSupportedSubtitleCodecs();
+		let subtitleSource: TextSubtitleSource | null = null;
 
-		if (!supportedCodecs.includes(targetCodec)) {
-			if (!trackOptions.codec && supportedCodecs.includes(sourceCodec)) {
-				targetCodec = sourceCodec;
-			} else {
-				this.discardedTracks.push({
-					track,
-					reason: 'no_encodable_target_codec',
-				});
+		if (!onCue) {
+			const sourceCodec = track.codec;
+			if (!sourceCodec) {
+				this.discardedTracks.push({ track, reason: 'unknown_source_codec' });
 				return;
 			}
+
+			let targetCodec = trackOptions.codec ?? sourceCodec;
+			const supportedCodecs = this.output.format.getSupportedSubtitleCodecs();
+
+			if (!supportedCodecs.includes(targetCodec)) {
+				if (!trackOptions.codec && supportedCodecs.includes(sourceCodec)) {
+					targetCodec = sourceCodec;
+				} else {
+					this.discardedTracks.push({ track, reason: 'no_encodable_target_codec' });
+					return;
+				}
+			}
+
+			subtitleSource = new TextSubtitleSource(targetCodec);
+			this.output.addSubtitleTrack(subtitleSource, {
+				languageCode: isIso639Dash2LanguageCode(track.languageCode)
+					? track.languageCode
+					: undefined,
+				name: track.name ?? undefined,
+			});
 		}
 
-		const subtitleSource = new TextSubtitleSource('webvtt');
-
-		this._trackPromises.push((async () => {
+		const subtitlePromise = (async () => {
 			await this._started;
 
-			await subtitleSource.add('WEBVTT\n\n');
+			if (subtitleSource) {
+				await subtitleSource.add('WEBVTT\n\n');
+			}
 
 			const cursor = new PacketCursor(track);
 			await cursor.seekTo(this._startTimestamp);
@@ -1618,42 +1641,47 @@ export class Conversion {
 			for await (const packet of cursor) {
 				if (this._canceled) return;
 				if (packet.timestamp >= this._endTimestamp) break;
-				if (packet.timestamp + packet.duration < this._startTimestamp) {
-					continue;
-				}
 
 				const text = new TextDecoder().decode(packet.data);
 				if (!text) continue;
 
-				const timestamp = Math.max(
+				const startTime = Math.max(
 					packet.timestamp - this._startTimestamp, 0,
 				);
+
+				if (this._synchronizer.shouldWait(track.id, startTime)) {
+					await this._synchronizer.wait(startTime);
+				}
 				const duration = Math.min(
 					packet.duration,
-					this._endTimestamp - this._startTimestamp - timestamp,
+					this._endTimestamp - this._startTimestamp - startTime,
 				);
+				const endTime = startTime + duration;
 
-				const start = formatSubtitleTimestamp(timestamp * 1000);
-				const end = formatSubtitleTimestamp(
-					(timestamp + duration) * 1000,
-				);
-				await subtitleSource.add(
-					`${start} --> ${end}\n${text}\n\n`,
-				);
+				if (onCue) {
+					onCue({ startTime, endTime, text });
+				} else if (subtitleSource) {
+					const start = formatSubtitleTimestamp(startTime * 1000);
+					const end = formatSubtitleTimestamp(endTime * 1000);
+					await subtitleSource.add(
+						`${start} --> ${end}\n${text}\n\n`,
+					);
+				}
 			}
 
-			subtitleSource.close();
-		})());
+			subtitleSource?.close();
+			if (!onCue) {
+				this._closeTrack(track.id);
+			}
+		})();
 
-		this.output.addSubtitleTrack(subtitleSource, {
-			languageCode: isIso639Dash2LanguageCode(track.languageCode)
-				? track.languageCode
-				: undefined,
-			name: track.name ?? undefined,
-		});
-		this._addedCounts.subtitle++;
-		this._totalTrackCount++;
-
+		if (onCue) {
+			void subtitlePromise;
+		} else {
+			this._trackPromises.push(subtitlePromise);
+			this._addedCounts.subtitle++;
+			this._totalTrackCount++;
+		}
 		this.utilizedTracks.push(track);
 	}
 }

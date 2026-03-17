@@ -191,6 +191,7 @@ export {
 	ConversionVideoOptions,
 	ConversionAudioOptions,
 	ConversionSubtitleOptions,
+	SubtitleCueEvent,
 	DiscardedTrack,
 } from './conversion';
 export {

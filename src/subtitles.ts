@@ -29,8 +29,6 @@ export interface SubtitleFormat {
 	readonly codec: SubtitleCodec;
 	parse(text: string): SubtitleCue[];
 	format(cues: SubtitleCue[], config?: string): string;
-	parseTimestamp(timeString: string): number;
-	formatTimestamp(seconds: number): string;
 }
 
 // ---------------------------------------------------------------------------
