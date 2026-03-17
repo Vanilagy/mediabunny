@@ -283,29 +283,38 @@ export class FlacDemuxer extends Demuxer {
 		// --> 6 bytes
 		const minimumHeaderLength = 6;
 		// If we read everything in readFlacFrameHeader, we read 16 bytes
-		const maximumHeaderSize = 16;
+		const maximumHeaderLength = 16;
+
+		// The shortest valid FLAC frame per RFC 9639:
+		// 6 bytes header (see minimumHeaderLength above)
+		// 2 bytes subframe (constant subframe with minimum bit depth,
+		//   padded to byte boundary)
+		// 2 bytes footer (CRC-16)
+		// --> 10 bytes
+		const minimumFrameLength = 10;
+
+		// The longest valid FLAC frame per RFC 9639:
+		// https://www.rfc-editor.org/rfc/rfc9639.html#name-prediction
+		// https://www.rfc-editor.org/rfc/rfc9639.html#name-frame-structure
+		// maximumBlockSize * numberOfChannels * 4 bytes (max 32 bps verbatim)
+		// + 16 bytes header (see maximumHeaderSize above)
+		// + 2 bytes footer (CRC-16)
+		const maximumFrameLength = this.audioInfo.maximumBlockSize
+			* this.audioInfo.numberOfChannels
+			* 4
+			+ maximumHeaderLength
+			+ 2;
 
 		// Per RFC 9639, a value of 0 means "unknown" for frame sizes.
-		const effectiveMinFrameSize = this.audioInfo.minimumFrameSize
-			// As a fallback for the minimum, use the minimum header length
-			|| minimumHeaderLength;
+		const effectiveMinFrameSize = this.audioInfo.minimumFrameSize || minimumFrameLength;
+		const effectiveMaxFrameSize = this.audioInfo.maximumFrameSize || maximumFrameLength;
 
-		const effectiveMaxFrameSize = this.audioInfo.maximumFrameSize
-			// As a fallback for the maximum, let's construct the biggest
-			// possible frame size.
-			// https://www.rfc-editor.org/rfc/rfc9639.html#name-prediction
-			// https://www.rfc-editor.org/rfc/rfc9639.html#name-frame-structure
-			|| (this.audioInfo.maximumBlockSize // samples per block
-				* this.audioInfo.numberOfChannels // channels
-				* 4 // max 32 bps = 4 bytes per sample, as in 4.3 Prediction
-				+ maximumHeaderSize // 9.1 Frame header
-				+ 2); // 9.3 Frame Footer (16-bit CRC)
 		const maximumSliceLength
-			= effectiveMaxFrameSize + maximumHeaderSize;
+			= effectiveMaxFrameSize + maximumHeaderLength;
 
 		const slice = await this.reader.requestSliceRange(
 			startPos,
-			maximumHeaderSize,
+			maximumHeaderLength,
 			maximumSliceLength,
 		);
 
