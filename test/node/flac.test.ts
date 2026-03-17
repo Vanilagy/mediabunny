@@ -6,7 +6,7 @@ import { BufferSource, FilePathSource } from '../../src/source.js';
 import { ALL_FORMATS, FLAC } from '../../src/input-format.js';
 import { EncodedPacketSink } from '../../src/media-sink.js';
 import { Output } from '../../src/output.js';
-import { BufferTarget } from '../../src/target.js';
+import { BufferTarget, StreamTarget } from '../../src/target.js';
 import { FlacOutputFormat } from '../../src/output-format.js';
 import { Conversion } from '../../src/conversion.js';
 
@@ -253,4 +253,34 @@ test('can re-mux a .flac', async () => {
 	expect(inputWithoutCrc).toEqual(outputWithoutCrc);
 
 	expect(otherInputDecoderConfig).toEqual(otherOutputDecoderConfig);
+});
+
+test('appendOnly writes correct STREAMINFO header', async () => {
+	const filePath = path.join(__dirname, '..', 'public/sample.flac');
+	using input = new Input({
+		source: new FilePathSource(filePath),
+		formats: ALL_FORMATS,
+	});
+
+	const target = new BufferTarget();
+	const output = new Output({
+		format: new FlacOutputFormat({ appendOnly: true }),
+		target,
+	});
+
+	const conversion = await Conversion.init({ input, output });
+	await conversion.execute();
+
+	assert(target.buffer);
+	const bytes = new Uint8Array(target.buffer);
+
+	// STREAMINFO: min_block=16, max_block=65535, min_frame=0, max_frame=0
+	expect(bytes.slice(8, 18)).toEqual(new Uint8Array([
+		// minimum_block_size=16
+		0x00, 0x10,
+		// maximum_block_size=65535
+		0xFF, 0xFF,
+		// minimum_frame_size=0
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	]));
 });
