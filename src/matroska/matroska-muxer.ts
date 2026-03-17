@@ -129,8 +129,8 @@ const TRACK_TYPE_MAP: Record<OutputTrack['type'], number> = {
 };
 
 export class MatroskaMuxer extends Muxer {
-	private writer: Writer;
-	private ebmlWriter: EBMLWriter;
+	private writer!: Writer;
+	private ebmlWriter!: EBMLWriter;
 	private format: WebMOutputFormat | MkvOutputFormat;
 
 	private trackDatas: MatroskaTrackData[] = [];
@@ -158,18 +158,18 @@ export class MatroskaMuxer extends Muxer {
 	constructor(output: Output, format: MkvOutputFormat) {
 		super(output);
 
-		this.writer = output._writer;
 		this.format = format;
+	}
 
+	async start() {
+		const release = await this.mutex.acquire();
+
+		this.writer = await this.output._getRootWriter();
 		this.ebmlWriter = new EBMLWriter(this.writer);
 
 		if (this.format._options.appendOnly) {
 			this.writer.ensureMonotonicity = true;
 		}
-	}
-
-	async start() {
-		const release = await this.mutex.acquire();
 
 		this.writeEBMLHeader();
 

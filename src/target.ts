@@ -35,6 +35,8 @@ export abstract class Target {
 	 * gets called *extremely* often.
 	 */
 	onwrite: ((start: number, end: number) => unknown) | null = null;
+
+	onfinalized: (() => unknown) | null = null;
 }
 
 /**

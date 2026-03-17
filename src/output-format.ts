@@ -28,6 +28,7 @@ import { OggMuxer } from './ogg/ogg-muxer';
 import { Output, TrackType } from './output';
 import { MpegTsMuxer } from './mpeg-ts/mpeg-ts-muxer';
 import { WaveMuxer } from './wave/wave-muxer';
+import { HlsMuxer } from './hls/hls-muxer';
 
 /**
  * Specifies an inclusive range of integers.
@@ -1079,5 +1080,48 @@ export class MpegTsOutputFormat extends OutputFormat {
 
 	get supportsTimestampedMediaData() {
 		return true;
+	}
+}
+
+export class HlsOutputFormat extends OutputFormat {
+	_createMuxer(output: Output): Muxer {
+		return new HlsMuxer(output);
+	}
+
+	get _name() {
+		return 'HTTP Live Streaming (HLS)';
+	}
+
+	get fileExtension() {
+		return '.m3u8';
+	}
+
+	get mimeType() {
+		return 'application/vnd.apple.mpegurl';
+	}
+
+	getSupportedCodecs(): MediaCodec[] {
+		// TODO this should vary based on the HLS "variant"
+		return [
+			...VIDEO_CODECS.filter(codec => ['avc', 'hevc'].includes(codec)),
+			...AUDIO_CODECS.filter(codec => ['aac', 'mp3', 'ac3', 'eac3'].includes(codec)),
+		];
+	}
+
+	getSupportedTrackCounts(): TrackCountLimits {
+		return {
+			video: { min: 0, max: Infinity },
+			audio: { min: 0, max: Infinity },
+			subtitle: { min: 0, max: Infinity },
+			total: { min: 1, max: Infinity },
+		};
+	}
+
+	get supportsVideoRotationMetadata(): boolean {
+		return false; // TODO this is not true with fmp4
+	}
+
+	get supportsTimestampedMediaData(): boolean {
+		return true; // I guess??
 	}
 }

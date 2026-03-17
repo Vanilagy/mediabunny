@@ -83,26 +83,32 @@ const initMediaPlayer = async (resource: File | string) => {
 			pause();
 		}
 
+		const dirHandle = await showDirectoryPicker({ mode: 'read' });
+
 		void videoFrameIterator?.return();
 		void audioBufferIterator?.return();
 		asyncId++;
 
 		fileLoaded = false;
-		fileNameElement.textContent = resource instanceof File ? resource.name : resource;
+		fileNameElement.textContent = 'pish'; // resource instanceof File ? resource.name : resource;
 		horizontalRule.style.display = '';
 		loadingElement.style.display = '';
 		playerContainer.style.display = 'none';
 		errorElement.textContent = '';
 		warningElement.textContent = '';
 
-		let start = 0;
+		const start = 0;
 
 		let videoTrack: InputVideoTrack | null = null;
 		let audioTrack: InputAudioTrack | null = null;
-		if (typeof resource === 'string' && resource.includes('.m3u8')) {
+		if (true || typeof resource === 'string' && resource.includes('.m3u8')) {
 			const input = new Input({
-				entryPath: resource,
-				source: ({ path }) => new UrlSource(path),
+				entryPath: 'playlist.m3u8',
+				source: async ({ path }) => {
+					const fileHandle = await dirHandle.getFileHandle(path);
+					const file = await fileHandle.getFile();
+					return new BlobSource(file);
+				},
 				formats: ALL_FORMATS,
 			});
 			// const variant = (await manifestInput.getVariants())[0]!;
@@ -132,9 +138,9 @@ const initMediaPlayer = async (resource: File | string) => {
 
 			console.log(videoTrack, audioTrack, totalDuration);
 
-			start = totalDuration - 2;
+			// start = totalDuration - 2;
 
-			totalDuration += 3600;
+			// totalDuration += 3600;
 
 			// https://test-streams.mux.dev/test_001/stream.m3u8
 			// https://test-streams.mux.dev/test_001/stream_1000k_48k_640x360_050.ts
@@ -763,6 +769,10 @@ document.addEventListener('dragover', (event) => {
 	event.preventDefault();
 	event.dataTransfer!.dropEffect = 'copy';
 });
+
+document.addEventListener('click', () => {
+	void initMediaPlayer();
+}, { once: true });
 
 document.addEventListener('drop', (event) => {
 	event.preventDefault();

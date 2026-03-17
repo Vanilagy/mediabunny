@@ -19,8 +19,8 @@ import { Id3V2Writer } from '../id3';
 
 export class Mp3Muxer extends Muxer {
 	private format: Mp3OutputFormat;
-	private writer: Writer;
-	private mp3Writer: Mp3Writer;
+	private writer!: Writer;
+	private mp3Writer!: Mp3Writer;
 	private xingFrameData: XingFrameData | null = null;
 	private frameCount = 0;
 	private framePositions: number[] = [];
@@ -30,15 +30,20 @@ export class Mp3Muxer extends Muxer {
 		super(output);
 
 		this.format = format;
-		this.writer = output._writer;
-		this.mp3Writer = new Mp3Writer(output._writer);
 	}
 
 	async start() {
+		const release = await this.mutex.acquire();
+
+		this.writer = await this.output._getRootWriter();
+		this.mp3Writer = new Mp3Writer(this.writer);
+
 		if (!metadataTagsAreEmpty(this.output._metadataTags)) {
 			const id3Writer = new Id3V2Writer(this.writer);
 			id3Writer.writeId3V2Tag(this.output._metadataTags);
 		}
+
+		release();
 	}
 
 	async getMimeType() {

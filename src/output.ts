@@ -6,13 +6,17 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { AsyncMutex, isIso639Dash2LanguageCode, Rotation } from './misc';
+import { assert, AsyncMutex, isIso639Dash2LanguageCode, MaybePromise, Rotation } from './misc';
 import { MetadataTags, TrackDisposition, validateMetadataTags, validateTrackDisposition } from './metadata';
 import { Muxer } from './muxer';
 import { OutputFormat } from './output-format';
 import { AudioSource, MediaSource, SubtitleSource, VideoSource } from './media-source';
 import { Target } from './target';
 import { Writer } from './writer';
+
+export type TargetRequest = {
+	path: string;
+};
 
 /**
  * The options for creating an Output object.
@@ -26,7 +30,8 @@ export type OutputOptions<
 	/** The format of the output file. */
 	format: F;
 	/** The target to which the file will be written. */
-	target: T;
+	target: T | ((request: TargetRequest) => MaybePromise<T>);
+	rootPath?: string;
 };
 
 /**
@@ -154,14 +159,16 @@ export class Output<
 	/** The format of the output file. */
 	format: F;
 	/** The target to which the file will be written. */
-	target: T;
+	target: T | ((request: TargetRequest) => MaybePromise<T>);
 	/** The current state of the output. */
 	state: 'pending' | 'started' | 'canceled' | 'finalizing' | 'finalized' = 'pending';
 
 	/** @internal */
+	_rootPath: string | null;
+	/** @internal */
 	_muxer: Muxer;
 	/** @internal */
-	_writer: Writer;
+	_rootWriterPromise: Promise<Writer> | null = null;
 	/** @internal */
 	_tracks: OutputTrack[] = [];
 	/** @internal */
@@ -186,20 +193,50 @@ export class Output<
 		if (!(options.format instanceof OutputFormat)) {
 			throw new TypeError('options.format must be an OutputFormat.');
 		}
-		if (!(options.target instanceof Target)) {
+		if (!(options.target instanceof Target) && typeof options.target !== 'function') {
 			throw new TypeError('options.target must be a Target.');
 		}
-
-		if (options.target._output) {
-			throw new Error('Target is already used for another output.');
+		if (options.target instanceof Target) {
+			if (options.target._output) {
+				throw new Error('Target is already used for another output.');
+			}
+			options.target._output = this;
 		}
-		options.target._output = this;
+		if (options.rootPath !== undefined && typeof options.rootPath !== 'string') {
+			throw new TypeError('options.rootPath, when provided, must be a string.');
+		}
+		if (typeof options.target === 'function' && options.rootPath === undefined) {
+			throw new Error('options.rootPath must be provided when options.target is a function.');
+		}
 
 		this.format = options.format;
 		this.target = options.target;
 
-		this._writer = options.target._createWriter();
+		this._rootPath = options.rootPath ?? null;
 		this._muxer = options.format._createMuxer(this);
+	}
+
+	_getTarget(request: TargetRequest) {
+		assert(typeof this.target === 'function');
+
+		return this.target(request);
+	}
+
+	_getRootWriter() {
+		return this._rootWriterPromise ??= (async () => {
+			let writer: Writer;
+
+			if (typeof this.target === 'function') {
+				assert(this._rootPath !== null);
+				const rootTarget = await this._getTarget({ path: this._rootPath });
+				writer = rootTarget._createWriter();
+			} else {
+				writer = this.target._createWriter();
+			}
+
+			writer.start();
+			return writer;
+		})();
 	}
 
 	/** Adds a video track to the output with the given source. Can only be called before the output is started. */
@@ -400,7 +437,6 @@ export class Output<
 
 		return this._startPromise = (async () => {
 			this.state = 'started';
-			this._writer.start();
 
 			const release = await this._mutex.acquire();
 
@@ -445,7 +481,9 @@ export class Output<
 			const promises = this._tracks.map(x => x.source._flushOrWaitForOngoingClose(true)); // Force close
 			await Promise.all(promises);
 
-			await this._writer.close();
+			if (this._rootWriterPromise) {
+				await (await this._rootWriterPromise).close();
+			}
 
 			release();
 		})();
@@ -477,8 +515,12 @@ export class Output<
 
 			await this._muxer.finalize();
 
-			await this._writer.flush();
-			await this._writer.finalize();
+			if (this._rootWriterPromise) {
+				console.log('HERE HERE');
+				const rootWriter = await this._rootWriterPromise;
+				await rootWriter.flush();
+				await rootWriter.finalize();
+			}
 
 			this.state = 'finalized';
 

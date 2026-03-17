@@ -409,6 +409,12 @@ export class HlsSegmentedInput extends SegmentedInput {
 			} else if (line === '#EXT-X-ENDLIST') {
 				this.streamHasEnded = true;
 				break; // No need to keep reading after this
+			} else if (line.startsWith('#EXT-X-PLAYLIST-TYPE')) {
+				const type = line.slice(21);
+				if (type.toLowerCase() === 'vod') {
+					// A VOD playlist cannot be updated per spec so we can be sure the stream has ended
+					this.streamHasEnded = true;
+				}
 			}
 		}
 	}
