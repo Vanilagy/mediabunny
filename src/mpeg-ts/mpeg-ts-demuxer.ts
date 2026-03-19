@@ -250,12 +250,13 @@ export class MpegTsDemuxer extends Demuxer {
 					while (8 * (sectionLength + BYTES_BEFORE_SECTION_LENGTH) - bitstream.pos > BITS_IN_CRC_32) {
 						const programNumber = bitstream.readBits(16);
 						bitstream.skipBits(3); // Reserved
+						const id = bitstream.readBits(13);
 
 						if (programNumber !== 0) {
 							if (programMapPid !== null) {
 								throw new Error('Only files with a single program are supported.');
 							} else {
-								programMapPid = bitstream.readBits(13);
+								programMapPid = id;
 							}
 						}
 					}
@@ -577,10 +578,19 @@ export class MpegTsDemuxer extends Demuxer {
 								}),
 								codedWidth: elementaryStream.info.width,
 								codedHeight: elementaryStream.info.height,
-								displayAspectWidth: elementaryStream.info.squarePixelWidth,
-								displayAspectHeight: elementaryStream.info.squarePixelHeight,
 								colorSpace: elementaryStream.info.colorSpace,
 							};
+
+							if (
+								elementaryStream.info.width !== elementaryStream.info.squarePixelWidth
+								|| elementaryStream.info.height !== elementaryStream.info.squarePixelHeight
+							) {
+								elementaryStream.info.decoderConfig.displayAspectWidth
+									= elementaryStream.info.squarePixelWidth;
+								elementaryStream.info.decoderConfig.displayAspectHeight
+									= elementaryStream.info.squarePixelHeight;
+							}
+
 							elementaryStream.initialized = true;
 						} else {
 							await context.markNextPacket();

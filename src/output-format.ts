@@ -930,6 +930,13 @@ export class AdtsOutputFormat extends OutputFormat {
  */
 export type FlacOutputFormatOptions = {
 	/**
+	 * Configures the output to only append new data at the end, useful for live-streaming the file as it's being
+	 * created. When enabled, the STREAMINFO block will not be finalized with accurate min/max block sizes, frame sizes,
+	 * or total sample count, so don't use this option when you want to write out a clean file for later use.
+	 */
+	appendOnly?: boolean;
+
+	/**
 	 * Will be called for each FLAC frame that is written.
 	 *
 	 * @param data - The raw bytes.
@@ -951,6 +958,9 @@ export class FlacOutputFormat extends OutputFormat {
 	constructor(options: FlacOutputFormatOptions = {}) {
 		if (!options || typeof options !== 'object') {
 			throw new TypeError('options must be an object.');
+		}
+		if (options.appendOnly !== undefined && typeof options.appendOnly !== 'boolean') {
+			throw new TypeError('options.appendOnly, when provided, must be a boolean.');
 		}
 
 		super();

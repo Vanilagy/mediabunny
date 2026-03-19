@@ -292,13 +292,38 @@ export class FlacDemuxer extends Demuxer {
 		// --> 6 bytes
 		const minimumHeaderLength = 6;
 		// If we read everything in readFlacFrameHeader, we read 16 bytes
-		const maximumHeaderSize = 16;
+		const maximumHeaderLength = 16;
+
+		// The shortest valid FLAC frame per RFC 9639:
+		// 6 bytes header (see minimumHeaderLength above)
+		// 2 bytes subframe (constant subframe with minimum bit depth,
+		//   padded to byte boundary)
+		// 2 bytes footer (CRC-16)
+		// --> 10 bytes
+		const minimumFrameLength = 10;
+
+		// The longest valid FLAC frame per RFC 9639:
+		// https://www.rfc-editor.org/rfc/rfc9639.html#name-prediction
+		// https://www.rfc-editor.org/rfc/rfc9639.html#name-frame-structure
+		// maximumBlockSize * numberOfChannels * 4 bytes (max 32 bps verbatim)
+		// + 16 bytes header (see maximumHeaderSize above)
+		// + 2 bytes footer (CRC-16)
+		const maximumFrameLength = this.audioInfo.maximumBlockSize
+			* this.audioInfo.numberOfChannels
+			* 4
+			+ maximumHeaderLength
+			+ 2;
+
+		// Per RFC 9639, a value of 0 means "unknown" for frame sizes.
+		const effectiveMinFrameSize = this.audioInfo.minimumFrameSize || minimumFrameLength;
+		const effectiveMaxFrameSize = this.audioInfo.maximumFrameSize || maximumFrameLength;
+
 		const maximumSliceLength
-			= this.audioInfo.maximumFrameSize + maximumHeaderSize;
+			= effectiveMaxFrameSize + maximumHeaderLength;
 
 		const slice = await this.reader.requestSliceRange(
 			startPos,
-			this.audioInfo.minimumFrameSize,
+			maximumHeaderLength,
 			maximumSliceLength,
 		);
 
@@ -321,7 +346,7 @@ export class FlacDemuxer extends Demuxer {
 
 		// The next sync word is expected at earliest when `minimumFrameSize` is reached,
 		// we can skip over anything before that
-		slice.filePos = startPos + this.audioInfo.minimumFrameSize;
+		slice.filePos = startPos + effectiveMinFrameSize;
 
 		while (true) {
 			// Reached end of the file, packet is over

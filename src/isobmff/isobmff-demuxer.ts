@@ -3077,15 +3077,23 @@ class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideo
 				this.internalTrack.info.av1CodecInfo = firstPacket && extractAv1CodecInfoFromPacket(firstPacket.data);
 			}
 
-			return {
+			const config: VideoDecoderConfig = {
 				codec: extractVideoCodecString(this.internalTrack.info),
 				codedWidth: this.internalTrack.info.width,
 				codedHeight: this.internalTrack.info.height,
-				displayAspectWidth: this.internalTrack.info.squarePixelWidth,
-				displayAspectHeight: this.internalTrack.info.squarePixelHeight,
 				description: this.internalTrack.info.codecDescription ?? undefined,
 				colorSpace: this.internalTrack.info.colorSpace ?? undefined,
 			};
+
+			if (
+				this.internalTrack.info.width !== this.internalTrack.info.squarePixelWidth
+				|| this.internalTrack.info.height !== this.internalTrack.info.squarePixelHeight
+			) {
+				config.displayAspectWidth = this.internalTrack.info.squarePixelWidth;
+				config.displayAspectHeight = this.internalTrack.info.squarePixelHeight;
+			}
+
+			return config;
 		})();
 	}
 }
@@ -3299,22 +3307,16 @@ const offsetFragmentTrackDataByTimestamp = (trackData: FragmentTrackData, timest
 
 /** Extracts the rotation component from a transformation matrix, in degrees. */
 const extractRotationFromMatrix = (matrix: TransformationMatrix) => {
-	const [m11, , , m21] = matrix;
+	const [a, b] = matrix; // (1, 0) projects onto (a, b), so that's all we need
 
-	const scaleX = Math.hypot(m11, m21);
+	const radians = Math.atan2(b, a);
 
-	const cosTheta = m11 / scaleX;
-	const sinTheta = m21 / scaleX;
-
-	// Invert the rotation because matrices are post-multiplied in ISOBMFF
-	const result = -Math.atan2(sinTheta, cosTheta) * (180 / Math.PI);
-
-	if (!Number.isFinite(result)) {
+	if (!Number.isFinite(radians)) {
 		// Can happen if the entire matrix is 0, for example
 		return 0;
 	}
 
-	return result;
+	return radians * (180 / Math.PI);
 };
 
 const sampleTableIsEmpty = (sampleTable: SampleTable) => {
