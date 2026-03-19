@@ -3169,12 +3169,18 @@ const offsetFragmentTrackDataByTimestamp = (trackData: FragmentTrackData, timest
 
 /** Extracts the rotation component from a transformation matrix, in degrees. */
 const extractRotationFromMatrix = (matrix: TransformationMatrix) => {
-	const [m11, , , m21] = matrix;
+	const [m11, m12, , m21, m22] = matrix;
 
-	const scaleX = Math.hypot(m11, m21);
+	// When determinant < 0, the matrix includes a reflection (flip). Negate the first column to get
+	// a proper rotation matrix before extracting the angle.
+	const det = m11 * m22 - m12 * m21;
+	const col1X = det < 0 ? -m11 : m11;
+	const col1Y = det < 0 ? -m21 : m21;
 
-	const cosTheta = m11 / scaleX;
-	const sinTheta = m21 / scaleX;
+	const scaleX = Math.hypot(col1X, col1Y);
+
+	const cosTheta = col1X / scaleX;
+	const sinTheta = col1Y / scaleX;
 
 	// Invert the rotation because matrices are post-multiplied in ISOBMFF
 	const result = -Math.atan2(sinTheta, cosTheta) * (180 / Math.PI);
