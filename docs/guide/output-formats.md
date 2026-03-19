@@ -303,9 +303,16 @@ const output = new Output({
 The following options are available:
 ```ts
 type FlacOutputFormatOptions = {
+	appendOnly?: boolean;
+
 	onFrame?: (data: Uint8Array, position: number) => unknown;
 };
 ```
+- `appendOnly`\
+	Configures the output to only append new data at the end, useful for live-streaming the file as it's being created. When enabled, the STREAMINFO block will not be finalized with accurate min/max block sizes, frame sizes, or total sample count, so don't use this option when you want to write out a clean file for later use.
+	::: info
+	This option ensures [append-only writing](#append-only-writing).
+	:::
 - `onFrame`\
 	Will be called for each FLAC frame that is written.
 

@@ -1086,6 +1086,8 @@ export class Conversion {
 			}
 
 			if (needsRerender) {
+				outputTrackRotation = 0; // Since the rotation is baked into the output
+
 				this._trackPromises.push((async () => {
 					await this._started;
 
@@ -1100,8 +1102,6 @@ export class Conversion {
 					});
 					const iterator = sink.canvases(this._startTimestamp, this._endTimestamp);
 					const frameRate = trackOptions.frameRate;
-
-					outputTrackRotation = 0; // Since the rotation is baked into the output
 
 					let lastCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
 					let lastCanvasTimestamp: number | null = null;

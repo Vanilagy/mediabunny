@@ -236,12 +236,13 @@ export class MpegTsDemuxer extends Demuxer {
 					while (8 * (sectionLength + BYTES_BEFORE_SECTION_LENGTH) - bitstream.pos > BITS_IN_CRC_32) {
 						const programNumber = bitstream.readBits(16);
 						bitstream.skipBits(3); // Reserved
+						const id = bitstream.readBits(13);
 
 						if (programNumber !== 0) {
 							if (programMapPid !== null) {
 								throw new Error('Only files with a single program are supported.');
 							} else {
-								programMapPid = bitstream.readBits(13);
+								programMapPid = id;
 							}
 						}
 					}
@@ -1031,8 +1032,6 @@ export abstract class MpegTsTrackBacking implements InputTrackBacking {
 			return null;
 		}
 
-		// result.packet.randomAccessIndicator = 1; // Assume the first packet is always a key packet
-
 		const packet = this.createEncodedPacket(result.packet, result.duration, options);
 		this.packetBuffers.set(packet, buffer);
 		this.packetSectionStarts.set(packet, result.packet.sectionStartPos);
@@ -1514,10 +1513,16 @@ class MpegTsVideoTrackBacking extends MpegTsTrackBacking implements InputVideoTr
 			}),
 			codedWidth: this.elementaryStream.info.width,
 			codedHeight: this.elementaryStream.info.height,
-			displayAspectWidth: this.elementaryStream.info.squarePixelWidth,
-			displayAspectHeight: this.elementaryStream.info.squarePixelHeight,
 			colorSpace: this.elementaryStream.info.colorSpace,
 		};
+
+		if (
+			this.elementaryStream.info.width !== this.elementaryStream.info.squarePixelWidth
+			|| this.elementaryStream.info.height !== this.elementaryStream.info.squarePixelHeight
+		) {
+			this.decoderConfig.displayAspectWidth = this.elementaryStream.info.squarePixelWidth;
+			this.decoderConfig.displayAspectHeight = this.elementaryStream.info.squarePixelHeight;
+		}
 	}
 
 	override getCodec(): VideoCodec {
