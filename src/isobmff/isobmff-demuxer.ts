@@ -2947,15 +2947,23 @@ class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideo
 				this.internalTrack.info.av1CodecInfo = firstPacket && extractAv1CodecInfoFromPacket(firstPacket.data);
 			}
 
-			return {
+			const config: VideoDecoderConfig = {
 				codec: extractVideoCodecString(this.internalTrack.info),
 				codedWidth: this.internalTrack.info.width,
 				codedHeight: this.internalTrack.info.height,
-				displayAspectWidth: this.internalTrack.info.squarePixelWidth,
-				displayAspectHeight: this.internalTrack.info.squarePixelHeight,
 				description: this.internalTrack.info.codecDescription ?? undefined,
 				colorSpace: this.internalTrack.info.colorSpace ?? undefined,
 			};
+
+			if (
+				this.internalTrack.info.width !== this.internalTrack.info.squarePixelWidth
+				|| this.internalTrack.info.height !== this.internalTrack.info.squarePixelHeight
+			) {
+				config.displayAspectWidth = this.internalTrack.info.squarePixelWidth;
+				config.displayAspectHeight = this.internalTrack.info.squarePixelHeight;
+			}
+
+			return config;
 		})();
 	}
 }

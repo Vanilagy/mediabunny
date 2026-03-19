@@ -87,8 +87,8 @@ test('Pixel aspect ratio transcode conversion', async () => {
 	expect(mp4.snapshot.squarePixelHeight).toBe(mp4.snapshot.codedHeight);
 	expect(mp4.snapshot.displayWidth).toBe(mp4.snapshot.codedWidth);
 	expect(mp4.snapshot.displayHeight).toBe(mp4.snapshot.codedHeight);
-	expect(mp4.snapshot.decoderDisplayAspectWidth).toBe(mp4.snapshot.codedWidth);
-	expect(mp4.snapshot.decoderDisplayAspectHeight).toBe(mp4.snapshot.codedHeight);
+	expect(mp4.snapshot.decoderDisplayAspectWidth).toBeUndefined();
+	expect(mp4.snapshot.decoderDisplayAspectHeight).toBeUndefined();
 
 	expect(mp4.snapshot.codedWidth).toBe(source.squarePixelWidth);
 	expect(mp4.snapshot.codedHeight).toBe(source.squarePixelHeight);

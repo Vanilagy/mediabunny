@@ -1514,10 +1514,16 @@ class MpegTsVideoTrackBacking extends MpegTsTrackBacking implements InputVideoTr
 			}),
 			codedWidth: this.elementaryStream.info.width,
 			codedHeight: this.elementaryStream.info.height,
-			displayAspectWidth: this.elementaryStream.info.squarePixelWidth,
-			displayAspectHeight: this.elementaryStream.info.squarePixelHeight,
 			colorSpace: this.elementaryStream.info.colorSpace,
 		};
+
+		if (
+			this.elementaryStream.info.width !== this.elementaryStream.info.squarePixelWidth
+			|| this.elementaryStream.info.height !== this.elementaryStream.info.squarePixelHeight
+		) {
+			this.decoderConfig.displayAspectWidth = this.elementaryStream.info.squarePixelWidth;
+			this.decoderConfig.displayAspectHeight = this.elementaryStream.info.squarePixelHeight;
+		}
 	}
 
 	override getCodec(): VideoCodec {
