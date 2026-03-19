@@ -254,3 +254,33 @@ test('can re-mux a .flac', async () => {
 
 	expect(otherInputDecoderConfig).toEqual(otherOutputDecoderConfig);
 });
+
+test('appendOnly writes correct STREAMINFO header', async () => {
+	const filePath = path.join(__dirname, '..', 'public/sample.flac');
+	using input = new Input({
+		source: new FilePathSource(filePath),
+		formats: ALL_FORMATS,
+	});
+
+	const target = new BufferTarget();
+	const output = new Output({
+		format: new FlacOutputFormat({ appendOnly: true }),
+		target,
+	});
+
+	const conversion = await Conversion.init({ input, output });
+	await conversion.execute();
+
+	assert(target.buffer);
+	const bytes = new Uint8Array(target.buffer);
+
+	// STREAMINFO: min_block=16, max_block=65535, min_frame=0, max_frame=0
+	expect(bytes.slice(8, 18)).toEqual(new Uint8Array([
+		// minimum_block_size=16
+		0x00, 0x10,
+		// maximum_block_size=65535
+		0xFF, 0xFF,
+		// minimum_frame_size=0
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	]));
+});
