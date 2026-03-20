@@ -16,6 +16,7 @@ import {
 	isWebKit,
 	MaybePromise,
 	mergeRequestInit,
+	polyfillSymbolDispose,
 	promiseWithResolvers,
 	retriedFetch,
 	toDataView,
@@ -24,6 +25,8 @@ import {
 } from './misc';
 import * as nodeAlias from './node';
 import { InputDisposedError } from './input';
+
+polyfillSymbolDispose();
 
 const node = typeof nodeAlias !== 'undefined'
 	? nodeAlias // Aliasing it prevents some bundler warnings
@@ -123,30 +126,56 @@ export abstract class Source {
 	onread: ((start: number, end: number) => unknown) | null = null;
 
 	/**
-	 * Increases the internal reference count of this source. Call this method when you don't want the source to be
-	 * disposed.
+	 * Creates a new `SourceRef` pointing to this source. You are expected to call `.free()` on said `SourceRef` when
+	 * you're done with it.
 	 */
 	ref() {
-		if (this._disposed) {
+		return new SourceRef(this);
+	}
+}
+
+export class SourceRef<S extends Source = Source> implements Disposable {
+	private _source: S | null;
+	freed = false;
+
+	constructor(source: S) {
+		if (source._disposed) {
 			throw new Error('Cannot ref a disposed source.');
 		}
 
-		this._refCount++;
+		source._refCount++;
+		this._source = source;
 	}
 
-	/**
-	 * Decreases the internal reference count of this source, signalling a lost of interest in this source. If the
-	 * internal count reaches zero, meaning nobody is interested in the source anymore, its resources get disposed.
-	 */
-	unref() {
-		if (this._refCount > 0) {
-			this._refCount--;
-
-			if (this._refCount === 0) {
-				this._dispose();
-				this._disposed = true;
-			}
+	get source() {
+		if (!this._source) {
+			throw new Error('Can\'t get source; ref has already been freed.');
 		}
+
+		return this._source;
+	}
+
+	free() {
+		if (this.freed) {
+			return;
+		}
+
+		const source = this.source;
+		assert(source._refCount > 0);
+
+		source._refCount--;
+
+		if (source._refCount === 0) {
+			source._dispose();
+			source._disposed = true;
+		}
+
+		this.freed = true;
+		this._source = null;
+	}
+
+	[Symbol.dispose]() {
+		this.free();
 	}
 }
 
@@ -1224,6 +1253,7 @@ export class ReadableStreamSource extends Source {
 	_dispose() {
 		this._pendingSlices.length = 0;
 		this._cache.length = 0;
+		void this._reader?.cancel();
 	}
 }
 
@@ -1994,12 +2024,18 @@ export class RangedSource extends Source {
 	/** @internal */
 	_baseSource: Source;
 	/** @internal */
+	_ref: SourceRef | null = null;
+	/** @internal */
 	_offset: number;
 	/** @internal */
 	_length: number | null;
 
 	constructor(baseSource: Source, offset: number, length?: number) {
 		super();
+
+		if (baseSource._disposed) {
+			throw new Error('Cannot create a slice of a disposed source.');
+		}
 
 		this._baseSource = baseSource;
 		this._offset = offset;
@@ -2062,16 +2098,11 @@ export class RangedSource extends Source {
 	}
 
 	override _dispose(): void {
-		// Nada
+		this._ref?.free();
 	}
 
 	override ref() {
-		super.ref();
-		this._baseSource.ref();
-	}
-
-	override unref() {
-		super.unref();
-		this._baseSource.unref();
+		this._ref ??= this._baseSource.ref();
+		return super.ref();
 	}
 }

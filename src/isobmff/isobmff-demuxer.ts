@@ -2824,7 +2824,9 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 				sampleInfo.sampleSize,
 			);
 			if (slice instanceof Promise) slice = await slice;
-			assert(slice);
+			if (!slice) {
+				return null; // Data is outside
+			}
 
 			data = readBytes(slice, sampleInfo.sampleSize);
 		}
@@ -2864,7 +2866,9 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 				fragmentSample.byteSize,
 			);
 			if (slice instanceof Promise) slice = await slice;
-			assert(slice);
+			if (!slice) {
+				return null; // Data is outside
+			}
 
 			data = readBytes(slice, fragmentSample.byteSize);
 		}

@@ -99,6 +99,8 @@ export abstract class SegmentedInput {
 			entry.input.dispose();
 		}
 		this.inputCache.length = 0;
+
+		this.virtualInput?.dispose();
 	}
 }
 

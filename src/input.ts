@@ -19,7 +19,7 @@ import {
 import { PacketRetrievalOptions } from './media-sink';
 import { arrayArgmin, arrayCount, assert, desc, MaybePromise, polyfillSymbolDispose, prefer, removeItem } from './misc';
 import { Reader } from './reader';
-import { Source } from './source';
+import { Source, SourceRef } from './source';
 
 polyfillSymbolDispose();
 
@@ -34,11 +34,11 @@ const sourceRequestsAreEqual = (a: SourceRequest, b: SourceRequest) => {
 	return a.path === b.path;
 };
 
-let inputFinalizationRegistry: FinalizationRegistry<Source[]> | null = null;
+let inputFinalizationRegistry: FinalizationRegistry<SourceRef[]> | null = null;
 if (typeof FinalizationRegistry !== 'undefined') {
-	inputFinalizationRegistry = new FinalizationRegistry((sources) => {
-		for (const source of sources) {
-			source.unref();
+	inputFinalizationRegistry = new FinalizationRegistry((refs) => {
+		for (const ref of refs) {
+			ref.free();
 		}
 	});
 }
@@ -52,9 +52,16 @@ export type InputOptions<S extends Source = Source> = {
 	/** A list of supported formats. If the source file is not of one of these formats, then it cannot be read. */
 	formats: InputFormat[];
 	/** The source from which data will be read. */
-	source: S | ((request: SourceRequest) => MaybePromise<S>);
+	source: S | SourceRef<S> | ((request: SourceRequest) => MaybePromise<S | SourceRef<S>>);
 	entryPath?: string;
 	initInput?: Input;
+};
+
+type SourceCacheEntry<S extends Source> = {
+	request: SourceRequest;
+	sourceRef: SourceRef<S>;
+	age: number;
+	cacheGroup: number;
 };
 
 /**
@@ -64,7 +71,7 @@ export type InputOptions<S extends Source = Source> = {
  */
 export class Input<S extends Source = Source> implements Disposable {
 	/** @internal */
-	_source: InputOptions<S>['source'];
+	_source: SourceRef<S> | ((request: SourceRequest) => MaybePromise<S | SourceRef<S>>);
 	/** @internal */
 	_formats: InputFormat[];
 	/** @internal */
@@ -84,15 +91,14 @@ export class Input<S extends Source = Source> implements Disposable {
 	/** @internal */
 	_nextSourceCacheAge = 0;
 	/** @internal */
-	// This is an array, not a set, because the same source may be reffed multiple times and therefore also needs to be
-	// unreffed multiple times.
-	_reffedSources: Source[] = [];
+	_sourceRefs: SourceRef[] = [];
 	/** @internal */
-	_sourceCache: {
+	_sourceCache: SourceCacheEntry<S>[] = [];
+	/** @internal */
+	_sourceCachePromises: {
 		request: SourceRequest;
-		sourcePromise: Promise<S>;
-		age: number;
 		cacheGroup: number;
+		promise: Promise<SourceCacheEntry<S>>;
 	}[] = [];
 
 	/**
@@ -119,9 +125,6 @@ export class Input<S extends Source = Source> implements Disposable {
 		if (!(options.source instanceof Source) && typeof options.source !== 'function') {
 			throw new TypeError('options.source must be a Source or a function that returns a Source.');
 		}
-		if (options.source instanceof Source && options.source._disposed) {
-			throw new TypeError('options.source must not be disposed.');
-		}
 		if (typeof options.source === 'function' && options.entryPath === undefined) {
 			throw new TypeError('options.entryPath must be provided when options.source is a function.');
 		}
@@ -133,86 +136,123 @@ export class Input<S extends Source = Source> implements Disposable {
 		}
 
 		this._formats = options.formats;
-		this._source = options.source;
 		this._initInput = options.initInput ?? null;
 		this._entryPath = options.entryPath ?? null;
 
-		inputFinalizationRegistry?.register(this, this._reffedSources, this);
+		if (options.source instanceof Source) {
+			this._source = options.source.ref();
+		} else {
+			this._source = options.source;
+		}
+
+		if (this._source instanceof SourceRef) {
+			this._sourceRefs.push(this._source);
+		}
+
+		inputFinalizationRegistry?.register(this, this._sourceRefs, this);
 	}
 
 	async _getSourceUncached(request: SourceRequest) {
 		assert(typeof this._source === 'function');
 
 		const source = await this._source(request);
-		if (!(source instanceof Source)) {
-			throw new TypeError('The source function must return a Source.');
+		if (!(source instanceof Source || source instanceof SourceRef)) {
+			throw new TypeError('The source function must return a Source or a SourceRef.');
 		}
-		if (source._disposed) {
+		if (source instanceof Source && source._disposed) {
 			throw new TypeError('The returned Source must not be disposed.');
 		}
 
-		this.onSource?.(source, request);
+		let ref: SourceRef<S>;
+		if (source instanceof Source) {
+			ref = source.ref();
+		} else {
+			ref = source;
+		}
 
-		return source;
+		this.onSource?.(ref.source, request);
+		return ref;
 	}
 
-	_getSourceCached(request: SourceRequest, cacheGroup = DEFAULT_SOURCE_CACHE_GROUP) {
+	_getSourceCached(request: SourceRequest, cacheGroup = DEFAULT_SOURCE_CACHE_GROUP): Promise<SourceRef<S>> {
 		const cachedEntry = this._sourceCache.find(x =>
 			x.cacheGroup === cacheGroup && sourceRequestsAreEqual(x.request, request),
 		);
 		if (cachedEntry) {
 			cachedEntry.age++;
-			return cachedEntry.sourcePromise;
+			return Promise.resolve(cachedEntry.sourceRef.source.ref());
 		}
 
-		const sourcePromise = this._getSourceUncached(request);
-		this._sourceCache.push({
+		const cachedPromiseEntry = this._sourceCachePromises.find(x =>
+			x.cacheGroup === cacheGroup && sourceRequestsAreEqual(x.request, request),
+		);
+		if (cachedPromiseEntry) {
+			return cachedPromiseEntry.promise.then(x => x.sourceRef.source.ref());
+		}
+
+		const promise = (async () => {
+			const sourceRef = await this._getSourceUncached(request);
+
+			const cacheEntry: SourceCacheEntry<S> = {
+				request,
+				sourceRef,
+				age: this._nextSourceCacheAge++,
+				cacheGroup,
+			};
+
+			this._sourceCache.push(cacheEntry);
+
+			const MAX_SOURCE_CACHE_SIZE = 4;
+			const count = arrayCount(
+				this._sourceCache,
+				x => x.cacheGroup === cacheGroup && x.sourceRef.source._refCount === 1,
+			);
+
+			if (count > MAX_SOURCE_CACHE_SIZE) {
+				const minAgeIndex = arrayArgmin(
+					this._sourceCache,
+					x => x.cacheGroup === cacheGroup && x.sourceRef.source._refCount === 1 ? x.age : Infinity,
+				);
+				assert(minAgeIndex !== -1);
+				const entry = this._sourceCache[minAgeIndex]!;
+				this._sourceCache.splice(minAgeIndex, 1);
+
+				entry.sourceRef.free();
+				removeItem(this._sourceRefs, sourceRef);
+			}
+
+			this._sourceRefs.push(sourceRef);
+
+			const promiseIndex = this._sourceCachePromises.findIndex(x => x.request === request);
+			assert(promiseIndex !== -1);
+			this._sourceCachePromises.splice(promiseIndex, 1);
+
+			return cacheEntry;
+		})();
+
+		this._sourceCachePromises.push({
 			request,
-			sourcePromise,
-			age: this._nextSourceCacheAge++,
 			cacheGroup,
+			promise,
 		});
 
-		const MAX_SOURCE_CACHE_SIZE = 4;
-		const count = arrayCount(this._sourceCache, x => x.cacheGroup === cacheGroup);
-
-		if (count > MAX_SOURCE_CACHE_SIZE) {
-			const minAgeIndex = arrayArgmin(this._sourceCache, x => x.cacheGroup === cacheGroup ? x.age : Infinity);
-			const entry = this._sourceCache[minAgeIndex]!;
-			this._sourceCache.splice(minAgeIndex, 1);
-
-			void entry.sourcePromise
-				.then((source) => {
-					source.unref();
-					removeItem(this._reffedSources, source);
-				});
-		}
-
-		void sourcePromise
-			.then((source) => {
-				source.ref();
-				this._reffedSources.push(source);
-			});
-
-		return sourcePromise;
+		return promise.then(x => x.sourceRef.source.ref());
 	}
 
 	/** @internal */
 	_getDemuxer() {
 		return this._demuxerPromise ??= (async () => {
-			let source: Source;
-			if (this._source instanceof Source) {
-				source = this._source;
-				this.onSource?.(source, null);
+			let ref: SourceRef;
+			if (this._source instanceof SourceRef) {
+				ref = this._source;
+				this.onSource?.(ref.source, null);
 			} else {
 				assert(this._entryPath !== null);
-				source = await this._getSourceUncached({ path: this._entryPath });
+				ref = await this._getSourceUncached({ path: this._entryPath });
+				this._sourceRefs.push(ref);
 			}
 
-			source.ref();
-			this._reffedSources.push(source);
-
-			this._reader = new Reader(source);
+			this._reader = new Reader(ref.source);
 
 			for (const format of this._formats) {
 				const canRead = await format._canReadInput(this);
@@ -227,29 +267,15 @@ export class Input<S extends Source = Source> implements Disposable {
 	}
 
 	/**
-	 * Returns a source for the given request.
-	 *
-	 * If this input was created with a direct {@link Source}, that source is always returned. If this input was created
-	 * with a source function, this method resolves it using the provided request or the entry path.
-	 */
-	getSource(request?: SourceRequest): MaybePromise<S> {
-		if (this._source instanceof Source) {
-			return this._source;
-		}
-
-		assert(this._entryPath !== null);
-		return this._getSourceCached(request ?? { path: this._entryPath });
-	}
-
-	/**
-	 * @deprecated Use {@link getSource} instead.
+	 * @deprecated Prefer not using this getter since it is ill-defined for files driven by multiple sources. The
+	 * {@link Input.onSource} callback provides an alternative.
 	 *
 	 * Returns the source from which this input file reads data for the entry path. Throws if the source-resolving
 	 * function returns a Promise.
 	 */
-	get source() {
-		if (this._source instanceof Source) {
-			return this._source;
+	get source(): S {
+		if (this._source instanceof SourceRef) {
+			return this._source.source;
 		}
 
 		assert(this._entryPath !== null);
@@ -262,7 +288,11 @@ export class Input<S extends Source = Source> implements Disposable {
 			);
 		}
 
-		return source;
+		if (source instanceof Source) {
+			return source;
+		} else {
+			return source.source;
+		}
 	}
 
 	/**
@@ -432,10 +462,10 @@ export class Input<S extends Source = Source> implements Disposable {
 
 		this._disposed = true;
 
-		for (const source of this._reffedSources) {
-			source.unref();
+		for (const ref of this._sourceRefs) {
+			ref.free();
 		}
-		this._reffedSources.length = 0;
+		this._sourceRefs.length = 0;
 
 		inputFinalizationRegistry?.unregister(this);
 

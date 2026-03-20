@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { Reader } from '../../src/reader.js';
 import { BufferSource } from '../../src/source.js';
-import { createAesDecryptStream } from '../../src/aes.js';
+import { createAes128CbcDecryptStream } from '../../src/aes.js';
 
 // getRandomValues is length-limited, so let's just do this
 export const fillRandom = <T extends Uint8Array>(buffer: T) => {
@@ -27,7 +27,7 @@ test('createAesDecryptStream', async () => {
 		const source = new BufferSource(ciphertext);
 		const reader = new Reader(source);
 
-		const stream = createAesDecryptStream(reader, () => ({ key, iv }));
+		const stream = createAes128CbcDecryptStream(reader, () => ({ key, iv }));
 		const streamReader = stream.getReader();
 
 		const chunks: Uint8Array[] = [];

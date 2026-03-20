@@ -1,9 +1,9 @@
-import { AES_128_BLOCK_SIZE, createAesDecryptStream } from '../aes';
+import { AES_128_BLOCK_SIZE, createAes128CbcDecryptStream } from '../aes';
 import { ENCRYPTION_KEY_CACHE_GROUP, Input } from '../input';
 import { Segment, SegmentedInput, SegmentRetrievalOptions } from '../segmented-input';
 import { toDataView, joinPaths, last, assert, binarySearchLessOrEqual, arrayArgmin, wait } from '../misc';
 import { readAllLines, readBytes, Reader } from '../reader';
-import { ReadableStreamSource, Source } from '../source';
+import { ReadableStreamSource, SourceRef } from '../source';
 import { HlsDemuxer } from './hls-demuxer';
 import { AttributeList, canIgnoreLine } from './hls-misc';
 
@@ -89,18 +89,12 @@ export class HlsSegmentedInput extends SegmentedInput {
 		this.nextLines = null;
 
 		if (!lines) {
-			const source = await this.demuxer.input._getSourceUncached({ path: this.path });
-			source.ref();
+			using ref = await this.demuxer.input._getSourceUncached({ path: this.path });
+			const reader = new Reader(ref.source);
 
-			try {
-				const reader = new Reader(source);
-
-				const slice = await reader.requestEntireFile();
-				assert(slice);
-				lines = readAllLines(slice, slice.length, { ignore: canIgnoreLine });
-			} finally {
-				source.unref();
-			}
+			const slice = await reader.requestEntireFile();
+			assert(slice);
+			lines = readAllLines(slice, slice.length, { ignore: canIgnoreLine });
 		}
 
 		let headerRead = false;
@@ -514,34 +508,44 @@ export class HlsSegmentedInput extends SegmentedInput {
 					return this.input._getSourceUncached(request);
 				}
 
-				let source: Source;
+				let ref: SourceRef;
 				const needsSlice = hlsSegment.location.offset > 0 || hlsSegment.location.length !== null;
 
 				if (!hlsSegment.encryption) {
-					source = await this.input._getSourceCached(request);
+					ref = await this.input._getSourceCached(request);
+
 					if (needsSlice) {
-						source = source.slice(hlsSegment.location.offset, hlsSegment.location.length ?? undefined);
+						const slice = ref.source.slice(
+							hlsSegment.location.offset,
+							hlsSegment.location.length ?? undefined,
+						);
+						const sliceRef = slice.ref();
+						ref.free();
+						ref = sliceRef;
 					}
 				} else {
 					assert(hlsSegment.encryption.iv);
 
-					let ciphertextSource = await this.input._getSourceCached(request);
+					let ciphertextRef = await this.input._getSourceCached(request);
 					if (needsSlice) {
 						// Slice before decrypting
-						ciphertextSource = ciphertextSource.slice(
+						const slice = ciphertextRef.source.slice(
 							hlsSegment.location.offset,
 							hlsSegment.location.length ?? undefined,
 						);
+						const sliceRef = slice.ref();
+						ciphertextRef.free();
+						ciphertextRef = sliceRef;
 					}
 
-					const ciphertextReader = new Reader(ciphertextSource);
+					const ciphertextReader = new Reader(ciphertextRef.source);
 
-					const stream = createAesDecryptStream(ciphertextReader, async () => {
-						const keySource = await this.input._getSourceCached(
+					const stream = createAes128CbcDecryptStream(ciphertextReader, async () => {
+						using keyRef = await this.input._getSourceCached(
 							{ path: hlsSegment.encryption!.keyUri },
 							ENCRYPTION_KEY_CACHE_GROUP,
 						);
-						const keyReader = new Reader(keySource);
+						const keyReader = new Reader(keyRef.source);
 						const keySlice = await keyReader.requestSlice(0, AES_128_BLOCK_SIZE);
 						if (!keySlice) {
 							throw new Error('Invalid AES-128 key; expected at least 16 bytes of data.');
@@ -549,12 +553,14 @@ export class HlsSegmentedInput extends SegmentedInput {
 						const key = readBytes(keySlice, AES_128_BLOCK_SIZE);
 
 						return { key, iv: hlsSegment.encryption!.iv! };
+					}, () => {
+						ciphertextRef.free();
 					});
 
-					source = new ReadableStreamSource(stream);
+					ref = new ReadableStreamSource(stream).ref();
 				}
 
-				return source;
+				return ref!;
 			},
 			formats: this.input._formats,
 			initInput: initInput ?? undefined,
@@ -569,7 +575,10 @@ export class HlsSegmentedInput extends SegmentedInput {
 		const MAX_INPUT_CACHE_SIZE = 4;
 		if (this.inputCache.length > MAX_INPUT_CACHE_SIZE) {
 			const minAgeIndex = arrayArgmin(this.inputCache, x => x.age);
+			assert(minAgeIndex !== -1);
 			this.inputCache.splice(minAgeIndex, 1);
+
+			// DON'T dispose here; the Input might still be used! The source disposal will happen with GC logic
 		}
 
 		return input;

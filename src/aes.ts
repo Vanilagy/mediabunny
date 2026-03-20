@@ -236,7 +236,11 @@ export class Aes128CbcContext {
 	}
 }
 
-export const createAesDecryptStream = (reader: Reader, getInit: () => MaybePromise<Aes128CbcContextInit>) => {
+export const createAes128CbcDecryptStream = (
+	reader: Reader,
+	getInit: () => MaybePromise<Aes128CbcContextInit>,
+	close: () => unknown,
+) => {
 	let initted = false;
 	let pos = 0;
 	const CHUNK_SIZE = 2 ** 16;
@@ -288,7 +292,12 @@ export const createAesDecryptStream = (reader: Reader, getInit: () => MaybePromi
 
 				controller.enqueue(trimmedOutput);
 				controller.close();
+
+				close();
 			}
+		},
+		cancel: () => {
+			close();
 		},
 	});
 };
