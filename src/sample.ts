@@ -45,7 +45,7 @@ let lastAudioGcErrorLog = -Infinity;
 let finalizationRegistry: FinalizationRegistry<FinalizationRegistryValue> | null = null;
 if (typeof FinalizationRegistry !== 'undefined') {
 	finalizationRegistry = new FinalizationRegistry<FinalizationRegistryValue>((value) => {
-		const now = Date.now();
+		const now = performance.now();
 
 		if (value.type === 'video') {
 			if (now - lastVideoGcErrorLog >= 1000) {

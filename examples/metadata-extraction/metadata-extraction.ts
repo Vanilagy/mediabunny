@@ -10,15 +10,21 @@ const horizontalRule = document.querySelector('hr') as HTMLHRElement;
 const bytesReadElement = document.querySelector('#bytes-read') as HTMLParagraphElement;
 const metadataContainer = document.querySelector('#metadata-container') as HTMLDivElement;
 
-const extractMetadata = (resource: File | string) => {
+const extractMetadata = async (resource: File | string) => {
 	// Create a new input from the resource
-	const source = resource instanceof File
-		? new BlobSource(resource)
-		: new UrlSource(resource);
-	const input = new Input({
-		source,
-		formats: ALL_FORMATS, // Accept all formats
-	});
+	let input: Input;
+	if (resource instanceof File) {
+		input = new Input({
+			source: new BlobSource(resource),
+			formats: ALL_FORMATS, // Accept all formats
+		});
+	} else {
+		input = new Input({
+			entryPath: resource,
+			source: ({ path }) => new UrlSource(path),
+			formats: ALL_FORMATS, // Accept all formats
+		});
+	}
 
 	let bytesRead = 0;
 	let fileSize: number | null = null;
@@ -31,13 +37,18 @@ const extractMetadata = (resource: File | string) => {
 		}
 	};
 
-	input.source.onread = (start, end) => {
+	const source = await input.getSource();
+
+	source.onread = (start, end) => {
 		bytesRead += end - start;
 		updateBytesRead();
 	};
 
 	// Get the input's size
-	void input.source.getSize().then(size => fileSize = size);
+	void source.getSize().then((size) => {
+		fileSize = size;
+		updateBytesRead();
+	});
 
 	// This object contains all the data that gets displayed:
 	const object = {
@@ -46,26 +57,28 @@ const extractMetadata = (resource: File | string) => {
 		'Starts at': input.getFirstTimestamp().then(start => `${start} seconds`),
 		'Ends at': input.computeDuration().then(duration => `${duration} seconds`),
 		'Tracks': input.getTracks().then(tracks => tracks.map(track => ({
-			'Type': track.type,
-			'Codec': track.codec,
+			'Type': track.resolve('type').then(type => type),
+			'Codec': track.resolve('codec').then(codec => codec),
 			'Full codec string': track.getCodecParameterString(),
 			'Starts at': track.getFirstTimestamp().then(start => `${start} seconds`),
 			'Ends at': track.computeDuration().then(duration => `${duration} seconds`),
-			'Language code': track.languageCode,
+			'Language code': track.resolve('languageCode').then(languageCode => languageCode),
 			...(track.isVideoTrack()
 				? {
-						'Coded width': `${track.codedWidth} pixels`,
-						'Coded height': `${track.codedHeight} pixels`,
-						'Rotation': `${track.rotation}° clockwise`,
-						'Pixel aspect ratio': `${track.pixelAspectRatio.num}:${track.pixelAspectRatio.den}`,
-						'Display width': `${track.displayWidth} pixels`,
-						'Display height': `${track.displayHeight} pixels`,
+						'Coded width': track.resolve('codedWidth').then(codedWidth => `${codedWidth} pixels`),
+						'Coded height': track.resolve('codedHeight').then(codedHeight => `${codedHeight} pixels`),
+						'Rotation': track.resolve('rotation').then(rotation => `${rotation}° clockwise`),
+						'Pixel aspect ratio': track.resolve('pixelAspectRatio').then(pixelAspectRatio =>
+							`${pixelAspectRatio.num}:${pixelAspectRatio.den}`,
+						),
+						'Display width': track.resolve('displayWidth').then(displayWidth => `${displayWidth} pixels`),
+						'Display height': track.resolve('displayHeight').then(displayHeight => `${displayHeight} pixels`),
 						'Transparency': track.canBeTransparent(),
 					}
 				: track.isAudioTrack()
 					? {
-							'Number of channels': track.numberOfChannels,
-							'Sample rate': `${track.sampleRate} Hz`,
+							'Number of channels': track.resolve('numberOfChannels').then(numberOfChannels => numberOfChannels),
+							'Sample rate': track.resolve('sampleRate').then(sampleRate => `${sampleRate} Hz`),
 						}
 					: {}),
 			'Packet statistics': shortDelay().then(() => track.computePacketStats()).then(stats => ({

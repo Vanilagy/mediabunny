@@ -20,12 +20,12 @@ import {
 	normalizeRotation,
 	promiseWithResolvers,
 	Rational,
-	roundToMultiple,
 	simplifyRational,
 	textEncoder,
 	toUint8Array,
 	uint8ArraysAreEqual,
 	writeBits,
+	roundToDivisor,
 } from '../misc';
 import {
 	CODEC_STRING_MAP,
@@ -129,8 +129,8 @@ const TRACK_TYPE_MAP: Record<OutputTrack['type'], number> = {
 };
 
 export class MatroskaMuxer extends Muxer {
-	private writer: Writer;
-	private ebmlWriter: EBMLWriter;
+	private writer!: Writer;
+	private ebmlWriter!: EBMLWriter;
 	private format: WebMOutputFormat | MkvOutputFormat;
 
 	private trackDatas: MatroskaTrackData[] = [];
@@ -152,23 +152,24 @@ export class MatroskaMuxer extends Muxer {
 		firstMsTimestamp: number;
 	}>();
 
-	private duration = 0;
+	private startTimestamp = Infinity;
+	private endTimestamp = -Infinity;
 
 	constructor(output: Output, format: MkvOutputFormat) {
 		super(output);
 
-		this.writer = output._writer;
 		this.format = format;
+	}
 
+	async start() {
+		const release = await this.mutex.acquire();
+
+		this.writer = await this.output._getRootWriter();
 		this.ebmlWriter = new EBMLWriter(this.writer);
 
 		if (this.format._options.appendOnly) {
 			this.writer.ensureMonotonicity = true;
 		}
-	}
-
-	async start() {
-		const release = await this.mutex.acquire();
 
 		this.writeEBMLHeader();
 
@@ -911,8 +912,8 @@ export class MatroskaMuxer extends Muxer {
 
 			if (track.metadata.frameRate !== undefined) {
 				// Constrain the time values to the frame rate
-				timestamp = roundToMultiple(timestamp, 1 / track.metadata.frameRate);
-				duration = roundToMultiple(duration, 1 / track.metadata.frameRate);
+				timestamp = roundToDivisor(timestamp, track.metadata.frameRate);
+				duration = roundToDivisor(duration, track.metadata.frameRate);
 			}
 
 			const additions = trackData.info.alphaMode
@@ -1197,7 +1198,8 @@ export class MatroskaMuxer extends Muxer {
 			this.ebmlWriter.writeEBML(blockGroup);
 		}
 
-		this.duration = Math.max(this.duration, msTimestamp + msDuration);
+		this.startTimestamp = Math.min(this.startTimestamp, msTimestamp);
+		this.endTimestamp = Math.max(this.endTimestamp, msTimestamp + msDuration);
 		trackData.lastWrittenMsTimestamp = msTimestamp;
 
 		if (!this.trackDatasInCurrentCluster.has(trackData)) {
@@ -1325,7 +1327,10 @@ export class MatroskaMuxer extends Muxer {
 			this.ebmlWriter.writeVarInt(segmentSize, SEGMENT_SIZE_BYTES);
 
 			// Write the duration of the media to the Segment
-			this.segmentDuration!.data = new EBMLFloat64(this.duration);
+			const duration = this.startTimestamp === Infinity
+				? 0
+				: this.endTimestamp - this.startTimestamp;
+			this.segmentDuration!.data = new EBMLFloat64(duration);
 			this.writer.seek(this.ebmlWriter.offsets.get(this.segmentDuration!)!);
 			this.ebmlWriter.writeEBML(this.segmentDuration);
 

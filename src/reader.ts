@@ -7,13 +7,24 @@
  */
 
 import { InputDisposedError } from './input';
-import { assert, clamp, getUint24, MaybePromise, toDataView } from './misc';
-import { Source } from './source';
+import { assert, clamp, getUint24, MaybePromise, textDecoder, toDataView } from './misc';
+import { DEFAULT_MAX_READ_POSITION, DEFAULT_MIN_READ_POSITION, Source } from './source';
 
 export class Reader {
-	fileSize!: number | null;
-
 	constructor(public source: Source) {}
+
+	get fileSize(): number | null {
+		const size = this.source._getFileSize();
+		if (size === undefined) {
+			throw new Error('Reading file size too early; read required first.');
+		}
+
+		return size;
+	}
+
+	get fileSizeNonStrict() {
+		return this.source._getFileSize() ?? null;
+	}
 
 	requestSlice(start: number, length: number): MaybePromise<FileSlice | null> {
 		if (this.source._disposed) {
@@ -24,12 +35,17 @@ export class Reader {
 			return null;
 		}
 
-		if (this.fileSize !== null && start + length > this.fileSize) {
+		if (this.fileSizeNonStrict !== null && start + length > this.fileSizeNonStrict) {
 			return null;
 		}
 
+		if (length === 0) {
+			const buffer = new Uint8Array(0);
+			return new FileSlice(buffer, toDataView(buffer), 0, start, start);
+		}
+
 		const end = start + length;
-		const result = this.source._read(start, end);
+		const result = this.source._read(start, end, DEFAULT_MIN_READ_POSITION, DEFAULT_MAX_READ_POSITION);
 
 		if (result instanceof Promise) {
 			return result.then((x) => {
@@ -57,10 +73,10 @@ export class Reader {
 			return null;
 		}
 
-		if (this.fileSize !== null) {
+		if (this.fileSizeNonStrict !== null) {
 			return this.requestSlice(
 				start,
-				clamp(this.fileSize - start, minLength, maxLength),
+				clamp(this.fileSizeNonStrict - start, minLength, maxLength),
 			);
 		} else {
 			const promisedAttempt = this.requestSlice(start, maxLength);
@@ -70,21 +86,13 @@ export class Reader {
 					return attempt;
 				}
 
-				const handleFileSize = (fileSize: number | null) => {
-					assert(fileSize !== null); // The slice couldn't fit, meaning we must know the file size now
+				// The slice couldn't fit, meaning we must know the file size now
+				assert(this.fileSizeNonStrict !== null);
 
-					return this.requestSlice(
-						start,
-						clamp(fileSize - start, minLength, maxLength),
-					);
-				};
-
-				const promisedFileSize = this.source._retrieveSize();
-				if (promisedFileSize instanceof Promise) {
-					return promisedFileSize.then(handleFileSize);
-				} else {
-					return handleFileSize(promisedFileSize);
-				}
+				return this.requestSlice(
+					start,
+					clamp(this.fileSizeNonStrict - start, minLength, maxLength),
+				);
 			};
 
 			if (promisedAttempt instanceof Promise) {
@@ -93,6 +101,46 @@ export class Reader {
 				return handleAttempt(promisedAttempt);
 			}
 		}
+	}
+
+	requestEntireFile(): MaybePromise<FileSlice | null> {
+		if (this.fileSizeNonStrict !== null) {
+			return this.requestSlice(0, this.fileSizeNonStrict);
+		}
+
+		const CHUNK_SIZE = 1024;
+
+		return (async () => {
+			const chunks: Uint8Array[] = [];
+			let currentSize = 0;
+
+			while (true) {
+				if (chunks.length === 1 && this.fileSizeNonStrict !== null) {
+					// It only took one read to get to know the whole file size
+					return this.requestSlice(0, this.fileSizeNonStrict);
+				}
+
+				const startOffset = chunks.length * CHUNK_SIZE;
+				let slice = this.requestSliceRange(startOffset, 0, CHUNK_SIZE);
+				if (slice instanceof Promise) slice = await slice;
+
+				if (!slice) {
+					break;
+				}
+
+				chunks.push(readBytes(slice, slice.length));
+				currentSize += slice.length;
+			}
+
+			const joined = new Uint8Array(currentSize);
+			let offset = 0;
+			for (const chunk of chunks) {
+				joined.set(chunk, offset);
+				offset += chunk.length;
+			}
+
+			return new FileSlice(joined, toDataView(joined), 0, 0, currentSize);
+		})();
 	}
 }
 
@@ -329,3 +377,102 @@ export const readAscii = (slice: FileSlice, length: number) => {
 
 	return str;
 };
+
+export const readAllLines = (slice: FileSlice, length: number, options?: {
+	ignore?: (line: string) => boolean;
+}) => {
+	const text = textDecoder.decode(readBytes(slice, length));
+	const lines = text.split('\n')
+		.map(x => x.trim())
+		.filter(x => x.length > 0 && !options?.ignore?.(x));
+
+	return lines;
+};
+
+export class LineReader {
+	getReader: () => MaybePromise<Reader>;
+	ignore?: (line: string) => boolean;
+	reader: Reader | null = null;
+	textDecoder = new TextDecoder();
+	currentLineNumber = 0; // 1-based
+	readPos = 0;
+	reachedEnd = false;
+	lineBuffer = '';
+
+	constructor(getReader: () => MaybePromise<Reader>, ignore?: (line: string) => boolean) {
+		this.getReader = getReader;
+		this.ignore = ignore;
+	}
+
+	readNextLine(): MaybePromise<string | null> {
+		if (this.reachedEnd) {
+			return null;
+		}
+
+		const line = this.extractLineFromBuffer();
+		if (line !== null) {
+			return line;
+		}
+
+		return (async () => {
+			if (!this.reader) {
+				let reader = this.getReader();
+				if (reader instanceof Promise) reader = await reader;
+
+				this.reader = reader;
+			}
+
+			while (true) {
+				let slice = this.reader.requestSliceRange(this.readPos, 0, 1024);
+				if (slice instanceof Promise) slice = await slice;
+
+				if (!slice || slice.length === 0) {
+					this.reachedEnd = true;
+					const line = this.lineBuffer.trim();
+					this.lineBuffer = '';
+
+					if (line) {
+						this.currentLineNumber++;
+					}
+
+					if (!line || this.ignore?.(line)) {
+						return null;
+					}
+
+					return line;
+				}
+
+				const bytes = readBytes(slice, slice.length);
+				this.readPos += bytes.length;
+
+				this.lineBuffer += this.textDecoder.decode(bytes, { stream: true });
+
+				const line = this.extractLineFromBuffer();
+				if (line !== null) {
+					return line;
+				}
+			}
+		})();
+	}
+
+	extractLineFromBuffer() {
+		assert(!this.reachedEnd);
+
+		while (true) {
+			const newlineIndex = this.lineBuffer.indexOf('\n');
+			if (newlineIndex === -1) {
+				return null;
+			}
+
+			const line = this.lineBuffer.slice(0, newlineIndex).trim();
+			this.lineBuffer = this.lineBuffer.slice(newlineIndex + 1);
+			this.currentLineNumber++;
+
+			if (this.ignore?.(line)) {
+				continue;
+			}
+
+			return line;
+		}
+	}
+}

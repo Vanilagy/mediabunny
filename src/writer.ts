@@ -175,6 +175,7 @@ export class BufferTargetWriter extends Writer {
 	async finalize() {
 		this.ensureSize(this.pos);
 		this.target.buffer = this.buffer.slice(0, Math.max(this.maxPos, this.pos));
+		this.target.onfinalized?.();
 	}
 
 	async close() {}
@@ -470,7 +471,9 @@ export class StreamTargetWriter extends Writer {
 
 		assert(this.writer);
 		await this.writer.ready;
-		return this.writer.close();
+		await this.writer.close();
+
+		this.target.onfinalized?.();
 	}
 
 	async close() {
@@ -500,6 +503,10 @@ export class NullTargetWriter extends Writer {
 	}
 
 	async flush() {}
-	async finalize() {}
+
+	async finalize() {
+		this.target.onfinalized?.();
+	}
+
 	async close() {}
 }

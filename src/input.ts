@@ -6,13 +6,42 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { Demuxer } from './demuxer';
+import { Demuxer, DurationMetadataRequestOptions } from './demuxer';
 import { InputFormat } from './input-format';
-import { assert, polyfillSymbolDispose } from './misc';
+import {
+	InputAudioTrack,
+	InputTrack,
+	InputVideoTrack,
+	mergeTrackQueries,
+	queryTracks,
+	TrackQuery,
+} from './input-track';
+import { PacketRetrievalOptions } from './media-sink';
+import { arrayArgmin, arrayCount, assert, desc, MaybePromise, polyfillSymbolDispose, prefer, removeItem } from './misc';
 import { Reader } from './reader';
-import { Source } from './source';
+import { Source, SourceRef } from './source';
 
 polyfillSymbolDispose();
+
+export const DEFAULT_SOURCE_CACHE_GROUP = 1;
+export const ENCRYPTION_KEY_CACHE_GROUP = 2;
+
+export type SourceRequest = {
+	path: string;
+};
+
+const sourceRequestsAreEqual = (a: SourceRequest, b: SourceRequest) => {
+	return a.path === b.path;
+};
+
+let inputFinalizationRegistry: FinalizationRegistry<SourceRef[]> | null = null;
+if (typeof FinalizationRegistry !== 'undefined') {
+	inputFinalizationRegistry = new FinalizationRegistry((refs) => {
+		for (const ref of refs) {
+			ref.free();
+		}
+	});
+}
 
 /**
  * The options for creating an Input object.
@@ -23,7 +52,16 @@ export type InputOptions<S extends Source = Source> = {
 	/** A list of supported formats. If the source file is not of one of these formats, then it cannot be read. */
 	formats: InputFormat[];
 	/** The source from which data will be read. */
-	source: S;
+	source: S | SourceRef<S> | ((request: SourceRequest) => MaybePromise<S | SourceRef<S>>);
+	entryPath?: string;
+	initInput?: Input;
+};
+
+type SourceCacheEntry<S extends Source> = {
+	request: SourceRequest;
+	sourceRef: SourceRef<S>;
+	age: number;
+	cacheGroup: number;
 };
 
 /**
@@ -33,17 +71,40 @@ export type InputOptions<S extends Source = Source> = {
  */
 export class Input<S extends Source = Source> implements Disposable {
 	/** @internal */
-	_source: S;
+	_source: SourceRef<S> | ((request: SourceRequest) => MaybePromise<S | SourceRef<S>>);
 	/** @internal */
 	_formats: InputFormat[];
+	/** @internal */
+	_initInput: Input | null;
+	/** @internal */
+	_entryPath: string | null;
 	/** @internal */
 	_demuxerPromise: Promise<Demuxer> | null = null;
 	/** @internal */
 	_format: InputFormat | null = null;
 	/** @internal */
-	_reader: Reader;
+	_reader!: Reader;
+	/** @internal */
+	_tracksCache: InputTrack[] | null = null;
 	/** @internal */
 	_disposed = false;
+	/** @internal */
+	_nextSourceCacheAge = 0;
+	/** @internal */
+	_sourceRefs: SourceRef[] = [];
+	/** @internal */
+	_sourceCache: SourceCacheEntry<S>[] = [];
+	/** @internal */
+	_sourceCachePromises: {
+		request: SourceRequest;
+		cacheGroup: number;
+		promise: Promise<SourceCacheEntry<S>>;
+	}[] = [];
+
+	/**
+	 * Called whenever a source is resolved for internal operations.
+	 */
+	onSource?: (source: Source, request: SourceRequest | null) => unknown;
 
 	/** True if the input has been disposed. */
 	get disposed() {
@@ -61,22 +122,137 @@ export class Input<S extends Source = Source> implements Disposable {
 		if (!Array.isArray(options.formats) || options.formats.some(x => !(x instanceof InputFormat))) {
 			throw new TypeError('options.formats must be an array of InputFormat.');
 		}
-		if (!(options.source instanceof Source)) {
-			throw new TypeError('options.source must be a Source.');
+		if (!(options.source instanceof Source) && typeof options.source !== 'function') {
+			throw new TypeError('options.source must be a Source or a function that returns a Source.');
 		}
-		if (options.source._disposed) {
-			throw new Error('options.source must not be disposed.');
+		if (typeof options.source === 'function' && options.entryPath === undefined) {
+			throw new TypeError('options.entryPath must be provided when options.source is a function.');
+		}
+		if (options.initInput !== undefined && !(options.initInput instanceof Input)) {
+			throw new TypeError('options.initInput, when provided, must be an Input.');
+		}
+		if (options.entryPath !== undefined && typeof options.entryPath !== 'string') {
+			throw new TypeError('options.entryPath, when provided, must be a string.');
 		}
 
 		this._formats = options.formats;
-		this._source = options.source;
-		this._reader = new Reader(options.source);
+		this._initInput = options.initInput ?? null;
+		this._entryPath = options.entryPath ?? null;
+
+		if (options.source instanceof Source) {
+			this._source = options.source.ref();
+		} else {
+			this._source = options.source;
+		}
+
+		if (this._source instanceof SourceRef) {
+			this._sourceRefs.push(this._source);
+		}
+
+		inputFinalizationRegistry?.register(this, this._sourceRefs, this);
+	}
+
+	async _getSourceUncached(request: SourceRequest) {
+		assert(typeof this._source === 'function');
+
+		const source = await this._source(request);
+		if (!(source instanceof Source || source instanceof SourceRef)) {
+			throw new TypeError('The source function must return a Source or a SourceRef.');
+		}
+		if (source instanceof Source && source._disposed) {
+			throw new TypeError('The returned Source must not be disposed.');
+		}
+
+		let ref: SourceRef<S>;
+		if (source instanceof Source) {
+			ref = source.ref();
+		} else {
+			ref = source;
+		}
+
+		this.onSource?.(ref.source, request);
+		return ref;
+	}
+
+	_getSourceCached(request: SourceRequest, cacheGroup = DEFAULT_SOURCE_CACHE_GROUP): Promise<SourceRef<S>> {
+		const cachedEntry = this._sourceCache.find(x =>
+			x.cacheGroup === cacheGroup && sourceRequestsAreEqual(x.request, request),
+		);
+		if (cachedEntry) {
+			cachedEntry.age++;
+			return Promise.resolve(cachedEntry.sourceRef.source.ref());
+		}
+
+		const cachedPromiseEntry = this._sourceCachePromises.find(x =>
+			x.cacheGroup === cacheGroup && sourceRequestsAreEqual(x.request, request),
+		);
+		if (cachedPromiseEntry) {
+			return cachedPromiseEntry.promise.then(x => x.sourceRef.source.ref());
+		}
+
+		const promise = (async () => {
+			const sourceRef = await this._getSourceUncached(request);
+
+			const cacheEntry: SourceCacheEntry<S> = {
+				request,
+				sourceRef,
+				age: this._nextSourceCacheAge++,
+				cacheGroup,
+			};
+
+			this._sourceCache.push(cacheEntry);
+
+			const MAX_SOURCE_CACHE_SIZE = 4;
+			const count = arrayCount(
+				this._sourceCache,
+				x => x.cacheGroup === cacheGroup && x.sourceRef.source._refCount === 1,
+			);
+
+			if (count > MAX_SOURCE_CACHE_SIZE) {
+				const minAgeIndex = arrayArgmin(
+					this._sourceCache,
+					x => x.cacheGroup === cacheGroup && x.sourceRef.source._refCount === 1 ? x.age : Infinity,
+				);
+				assert(minAgeIndex !== -1);
+				const entry = this._sourceCache[minAgeIndex]!;
+				this._sourceCache.splice(minAgeIndex, 1);
+
+				entry.sourceRef.free();
+				removeItem(this._sourceRefs, sourceRef);
+			}
+
+			this._sourceRefs.push(sourceRef);
+
+			const promiseIndex = this._sourceCachePromises.findIndex(x => x.request === request);
+			assert(promiseIndex !== -1);
+			this._sourceCachePromises.splice(promiseIndex, 1);
+
+			return cacheEntry;
+		})();
+
+		this._sourceCachePromises.push({
+			request,
+			cacheGroup,
+			promise,
+		});
+
+		return promise.then(x => x.sourceRef.source.ref());
 	}
 
 	/** @internal */
 	_getDemuxer() {
 		return this._demuxerPromise ??= (async () => {
-			this._reader.fileSize = await this._source.getSizeOrNull();
+			let ref: SourceRef;
+			if (this._source instanceof SourceRef) {
+				ref = this._source;
+				this.onSource?.(ref.source, null);
+			} else {
+				assert(this._entryPath !== null);
+				ref = await this._getSourceUncached({ path: this._entryPath });
+				this._sourceRefs.push(ref);
+			}
+
+			this._reader = new Reader(ref.source);
 
 			for (const format of this._formats) {
 				const canRead = await format._canReadInput(this);
@@ -86,16 +262,37 @@ export class Input<S extends Source = Source> implements Disposable {
 				}
 			}
 
-			throw new Error('Input has an unsupported or unrecognizable format.');
+			throw new UnsupportedInputFormatError();
 		})();
 	}
 
 	/**
-	 * Returns the source from which this input file reads its data. This is the same source that was passed to the
-	 * constructor.
+	 * @deprecated Prefer not using this getter since it is ill-defined for files driven by multiple sources. The
+	 * {@link Input.onSource} callback provides an alternative.
+	 *
+	 * Returns the source from which this input file reads data for the entry path. Throws if the source-resolving
+	 * function returns a Promise.
 	 */
-	get source() {
-		return this._source;
+	get source(): S {
+		if (this._source instanceof SourceRef) {
+			return this._source.source;
+		}
+
+		assert(this._entryPath !== null);
+
+		const source = this._source({ path: this._entryPath });
+		if (source instanceof Promise) {
+			throw new TypeError(
+				'Input.source cannot be used when the source function resolves asynchronously.'
+				+ ' Use getSource() instead.',
+			);
+		}
+
+		if (source instanceof Source) {
+			return source;
+		} else {
+			return source.source;
+		}
 	}
 
 	/**
@@ -109,13 +306,35 @@ export class Input<S extends Source = Source> implements Disposable {
 		return this._format;
 	}
 
+	async isSupported(): Promise<boolean> {
+		try {
+			await this._getDemuxer();
+			return true;
+		} catch (error) {
+			if (error instanceof UnsupportedInputFormatError) {
+				return false;
+			}
+
+			throw error;
+		}
+	}
+
 	/**
 	 * Computes the duration of the input file, in seconds. More precisely, returns the largest end timestamp among
 	 * all tracks.
+	 *
+	 * By default, when any track in the underlying media is live, this method will only resolve once the live stream
+	 * ends. If you want to query the current duration of the media, set {@link PacketRetrievalOptions.skipLiveWait}
+	 * to `true` in the options.
 	 */
-	async computeDuration() {
-		const demuxer = await this._getDemuxer();
-		return demuxer.computeDuration();
+	async computeDuration(options?: PacketRetrievalOptions) {
+		const tracks = await this.getTracks();
+		if (tracks.length === 0) {
+			return 0;
+		}
+
+		const tracksDurations = await Promise.all(tracks.map(x => x.computeDuration(options)));
+		return Math.max(...tracksDurations);
 	}
 
 	/**
@@ -132,34 +351,75 @@ export class Input<S extends Source = Source> implements Disposable {
 		return Math.min(...firstTimestamps);
 	}
 
-	/** Returns the list of all tracks of this input file. */
-	async getTracks() {
+	/**
+	 * Gets the duration (end timestamp) of the input file from metadata stored in the file. This value may be
+	 * approximate or diverge from the actual, precise duration returned by `.computeDuration()`, but compared to that
+	 * method, this method is very cheap. When the duration cannot be determined from the file metadata, `null`
+	 * is returned.
+	 *
+	 * By default, when the underlying media is live, this method will only resolve once the live stream
+	 * ends. If you want to query the current duration of the media, set
+	 * {@link DurationMetadataRequestOptions.skipLiveWait} to `true` in the options.
+	 */
+	async getDurationFromMetadata(options: DurationMetadataRequestOptions = {}) {
 		const demuxer = await this._getDemuxer();
-		return demuxer.getTracks();
+		return demuxer.getDurationFromMetadata(options);
+	}
+
+	/** Returns the list of all tracks of this input file in the order in which they appear in the file. */
+	async getTracks(query?: TrackQuery<InputTrack>) {
+		const demuxer = await this._getDemuxer();
+		const tracks = this._tracksCache ??= await demuxer.getTracks();
+		return queryTracks(tracks, query);
+	}
+
+	async pluckTrack(query?: TrackQuery<InputTrack>) {
+		return (await this.getTracks(query))[0];
 	}
 
 	/** Returns the list of all video tracks of this input file. */
-	async getVideoTracks() {
+	async getVideoTracks(query?: TrackQuery<InputVideoTrack>) {
 		const tracks = await this.getTracks();
-		return tracks.filter(x => x.isVideoTrack());
+		return queryTracks(tracks.filter(x => x.isVideoTrack()) as InputVideoTrack[], query);
+	}
+
+	async pluckVideoTrack(query?: TrackQuery<InputVideoTrack>) {
+		return (await this.getVideoTracks(query))[0] ?? null;
 	}
 
 	/** Returns the list of all audio tracks of this input file. */
-	async getAudioTracks() {
+	async getAudioTracks(query?: TrackQuery<InputAudioTrack>) {
 		const tracks = await this.getTracks();
-		return tracks.filter(x => x.isAudioTrack());
+		return queryTracks(tracks.filter(x => x.isAudioTrack()) as InputAudioTrack[], query);
+	}
+
+	async pluckAudioTrack(query?: TrackQuery<InputAudioTrack>) {
+		return (await this.getAudioTracks(query))[0] ?? null;
 	}
 
 	/** Returns the primary video track of this input file, or null if there are no video tracks. */
-	async getPrimaryVideoTrack() {
-		const tracks = await this.getTracks();
-		return tracks.find(x => x.isVideoTrack()) ?? null;
+	getPrimaryVideoTrack(query?: TrackQuery<InputVideoTrack>) {
+		return this.pluckVideoTrack(mergeTrackQueries(query, {
+			sortBy: track => [
+				prefer(track.disposition.default),
+				prefer(track.hasPairableAudioTrack()),
+				prefer(!track.hasOnlyKeyPackets),
+				desc(track.bitrate),
+			],
+		}));
 	}
 
 	/** Returns the primary audio track of this input file, or null if there are no audio tracks. */
-	async getPrimaryAudioTrack() {
-		const tracks = await this.getTracks();
-		return tracks.find(x => x.isAudioTrack()) ?? null;
+	async getPrimaryAudioTrack(query?: TrackQuery<InputAudioTrack>) {
+		const videoTrack = await this.getPrimaryVideoTrack();
+
+		return this.pluckAudioTrack(mergeTrackQueries(query, {
+			sortBy: track => [
+				prefer(track.canBePairedWith(videoTrack)),
+				prefer(track.disposition.default),
+				desc(track.bitrate),
+			],
+		}));
 	}
 
 	/** Returns the full MIME type of this input file, including track codecs. */
@@ -177,6 +437,16 @@ export class Input<S extends Source = Source> implements Disposable {
 		return demuxer.getMetadataTags();
 	}
 
+	async allTracksAreHydrated() {
+		const tracks = await this.getTracks();
+		return tracks.every(x => x.isHydrated);
+	}
+
+	async hydrateAllTracks() {
+		const tracks = await this.getTracks();
+		await Promise.all(tracks.map(x => x.hydrate()));
+	}
+
 	/**
 	 * Disposes this input and frees connected resources. When an input is disposed, ongoing read operations will be
 	 * canceled, all future read operations will fail, any open decoders will be closed, and all ongoing media sink
@@ -192,8 +462,15 @@ export class Input<S extends Source = Source> implements Disposable {
 
 		this._disposed = true;
 
-		this._source._disposed = true;
-		this._source._dispose();
+		for (const ref of this._sourceRefs) {
+			ref.free();
+		}
+		this._sourceRefs.length = 0;
+
+		inputFinalizationRegistry?.unregister(this);
+
+		void this._demuxerPromise
+			?.then(demuxer => demuxer.dispose());
 	}
 
 	/**
@@ -202,6 +479,19 @@ export class Input<S extends Source = Source> implements Disposable {
 	 */
 	[Symbol.dispose]() {
 		this.dispose();
+	}
+}
+
+/**
+ * Thrown when trying to operate on an input that has an unsupported or unrecognizable format.
+ * @group Input files & tracks
+ * @public
+ */
+export class UnsupportedInputFormatError extends Error {
+	/** Creates a new {@link UnsupportedInputFormatError}. */
+	constructor(message = 'Input has an unsupported or unrecognizable format.') {
+		super(message);
+		this.name = 'UnsupportedInputFormatError';
 	}
 }
 

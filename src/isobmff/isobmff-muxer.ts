@@ -150,10 +150,10 @@ export const intoTimescale = (timeInSeconds: number, timescale: number, round = 
 
 export class IsobmffMuxer extends Muxer {
 	format: IsobmffOutputFormat;
-	private writer: Writer;
-	private boxWriter: IsobmffBoxWriter;
-	private fastStart: NonNullable<IsobmffOutputFormatOptions['fastStart']>;
-	isFragmented: boolean;
+	private writer!: Writer;
+	private boxWriter!: IsobmffBoxWriter;
+	private fastStart!: NonNullable<IsobmffOutputFormatOptions['fastStart']>;
+	isFragmented!: boolean;
 
 	isQuickTime: boolean;
 
@@ -179,26 +179,25 @@ export class IsobmffMuxer extends Muxer {
 		super(output);
 
 		this.format = format;
-		this.writer = output._writer;
-		this.boxWriter = new IsobmffBoxWriter(this.writer);
-
 		this.isQuickTime = format instanceof MovOutputFormat;
-
-		// If the fastStart option isn't defined, enable in-memory fast start if the target is an ArrayBuffer, as the
-		// memory usage remains identical
-		const fastStartDefault = this.writer instanceof BufferTargetWriter ? 'in-memory' : false;
-		this.fastStart = format._options.fastStart ?? fastStartDefault;
-		this.isFragmented = this.fastStart === 'fragmented';
-
-		if (this.fastStart === 'in-memory' || this.isFragmented) {
-			this.writer.ensureMonotonicity = true;
-		}
-
 		this.minimumFragmentDuration = format._options.minimumFragmentDuration ?? 1;
 	}
 
 	async start() {
 		const release = await this.mutex.acquire();
+
+		this.writer = await this.output._getRootWriter();
+		this.boxWriter = new IsobmffBoxWriter(this.writer);
+
+		// If the fastStart option isn't defined, enable in-memory fast start if the target is an ArrayBuffer, as the
+		// memory usage remains identical
+		const fastStartDefault = this.writer instanceof BufferTargetWriter ? 'in-memory' : false;
+		this.fastStart = this.format._options.fastStart ?? fastStartDefault;
+		this.isFragmented = this.fastStart === 'fragmented';
+
+		if (this.fastStart === 'in-memory' || this.isFragmented) {
+			this.writer.ensureMonotonicity = true;
+		}
 
 		const holdsAvc = this.output._tracks.some(x => x.type === 'video' && x.source._codec === 'avc');
 

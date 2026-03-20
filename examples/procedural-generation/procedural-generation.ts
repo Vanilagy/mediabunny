@@ -8,6 +8,7 @@ import {
 	getFirstEncodableAudioCodec,
 	getFirstEncodableVideoCodec,
 	OutputFormat,
+	HlsOutputFormat,
 } from 'mediabunny';
 
 const durationSlider = document.querySelector('#duration-slider') as HTMLInputElement;
@@ -66,6 +67,11 @@ const generateVideo = async () => {
 	let progressInterval = -1;
 
 	try {
+		const dirHandle = await showDirectoryPicker({ mode: 'readwrite' });
+		for await (const [name, handle] of dirHandle) {
+			await dirHandle.removeEntry(name, { recursive: true });
+		}
+
 		// Let's set some DOM state
 		renderButton.disabled = true;
 		renderButton.textContent = 'Generating...';
@@ -86,8 +92,19 @@ const generateVideo = async () => {
 
 		// Create a new output file
 		output = new Output({
-			target: new BufferTarget(), // Stored in memory
-			format: new Mp4OutputFormat(),
+			rootPath: 'playlist.m3u8',
+			target: ({ path }) => {
+				const target = new BufferTarget();
+				target.onfinalized = async () => {
+					const fileHandle = await dirHandle.getFileHandle(path, { create: true });
+					const writable = await fileHandle.createWritable();
+					await writable.write(target.buffer!);
+					await writable.close();
+				};
+
+				return target;
+			}, // Stored in memory
+			format: new HlsOutputFormat(),
 		});
 
 		// Retrieve the first video codec supported by this browser that can be contained in the output format
@@ -103,6 +120,7 @@ const generateVideo = async () => {
 		const canvasSource = new CanvasSource(renderCanvas, {
 			codec: videoCodec,
 			bitrate: QUALITY_HIGH,
+			keyFrameInterval: 2,
 		});
 		output.addVideoTrack(canvasSource, { frameRate });
 

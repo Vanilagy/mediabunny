@@ -11,10 +11,11 @@ import { determineVideoPacketType } from './codec-data';
 import { customAudioDecoders, customVideoDecoders } from './custom-coder';
 import { Input } from './input';
 import { EncodedPacketSink, PacketRetrievalOptions } from './media-sink';
-import { assert, Rational, Rotation, simplifyRational } from './misc';
+import { assert, MaybePromise, NonFunctionKeys, Rational, Rotation, roundToDivisor, simplifyRational } from './misc';
 import { TrackType } from './output';
 import { EncodedPacket, PacketType } from './packet';
 import { TrackDisposition } from './metadata';
+import { DurationMetadataRequestOptions } from './demuxer';
 
 /**
  * Contains aggregate statistics about the encoded packets of a track.
@@ -38,15 +39,24 @@ export interface InputTrackBacking {
 	getName(): string | null;
 	getLanguageCode(): string;
 	getTimeResolution(): number;
+	getTimestampsAreRelativeToUnixEpoch(): boolean;
 	getDisposition(): TrackDisposition;
-	getFirstTimestamp(): Promise<number>;
-	computeDuration(): Promise<number>;
+	getGroupId(): number;
+	getPairingMask(): bigint;
+	getBitrate(): number | null;
+	getAverageBitrate(): number | null;
+	getDurationFromMetadata(options: DurationMetadataRequestOptions): Promise<number | null>;
+	getLiveRefreshInterval(): Promise<number | null>;
+	getHasOnlyKeyPackets?(): boolean | null;
 
 	getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
 	getPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
 	getNextPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
 	getKeyPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
 	getNextKeyPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
+
+	isHydrated?(): boolean;
+	hydrate?(): Promise<void>;
 }
 
 /**
@@ -59,6 +69,8 @@ export abstract class InputTrack {
 	readonly input: Input;
 	/** @internal */
 	_backing: InputTrackBacking;
+	/** @internal */
+	_hydrationPromise: Promise<void> | null = null;
 
 	/** @internal */
 	constructor(input: Input, backing: InputTrackBacking) {
@@ -79,6 +91,8 @@ export abstract class InputTrack {
 	 * into its bitstream. Returns null if the type couldn't be determined.
 	 */
 	abstract determinePacketType(packet: EncodedPacket): Promise<PacketType | null>;
+	/** Whether the track metadata says that this track only contains key packets. The actual packets may differ. */
+	abstract get hasOnlyKeyPackets(): boolean;
 
 	/** Returns true if and only if this track is a video track. */
 	isVideoTrack(): this is InputVideoTrack {
@@ -102,6 +116,14 @@ export abstract class InputTrack {
 	 */
 	get number() {
 		return this._backing.getNumber();
+	}
+
+	get groupId() {
+		return this._backing.getGroupId();
+	}
+
+	get pairingMask() {
+		return this._backing.getPairingMask();
 	}
 
 	/**
@@ -141,9 +163,25 @@ export abstract class InputTrack {
 		return this._backing.getTimeResolution();
 	}
 
+	/**
+	 * Whether the timestamps of this track are relative to the Unix epoch (January 1, 1970 00:00:00 UTC). When `true`,
+	 * each timestamp maps to a definitive point in time.
+	 */
+	get timestampsAreRelativeToUnixEpoch() {
+		return this._backing.getTimestampsAreRelativeToUnixEpoch();
+	}
+
 	/** The track's disposition, i.e. information about its intended usage. */
 	get disposition() {
 		return this._backing.getDisposition();
+	}
+
+	get bitrate() {
+		return this._backing.getBitrate();
+	}
+
+	get averageBitrate() {
+		return this._backing.getAverageBitrate();
 	}
 
 	/**
@@ -151,13 +189,49 @@ export abstract class InputTrack {
 	 * may be positive or even negative. A negative starting timestamp means the track's timing has been offset. Samples
 	 * with a negative timestamp should not be presented.
 	 */
-	getFirstTimestamp() {
-		return this._backing.getFirstTimestamp();
+	async getFirstTimestamp() {
+		if (!this.isHydrated) {
+			await this.hydrate();
+		}
+
+		const firstPacket = await this._backing.getFirstPacket({ metadataOnly: true });
+		return firstPacket?.timestamp ?? 0;
 	}
 
-	/** Returns the end timestamp of the last packet of this track, in seconds. */
-	computeDuration() {
-		return this._backing.computeDuration();
+	/**
+	 * Returns the end timestamp of the last packet of this track, in seconds.
+	 *
+	 * By default, when the underlying media is live, this method will only resolve once the live stream ends. If you
+	 * want to query the current end timestamp of the stream, set {@link PacketRetrievalOptions.skipLiveWait} to `true`
+	 * in the options.
+	 */
+	async computeDuration(options?: PacketRetrievalOptions) {
+		if (!this.isHydrated) {
+			await this.hydrate();
+		}
+
+		const lastPacket = await this._backing.getPacket(Infinity, { metadataOnly: true, ...options });
+		const result = (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
+
+		return roundToDivisor(result, this.timeResolution);
+	}
+
+	/**
+	 * Gets the duration (end timestamp) of this track from metadata stored in the file. This value may be
+	 * approximate or diverge from the actual, precise duration returned by `.computeDuration()`, but compared to that
+	 * method, this method is very cheap. When the duration cannot be determined from the file metadata, `null`
+	 * is returned.
+	 *
+	 * By default, when the underlying media is live, this method will only resolve once the live stream
+	 * ends. If you want to query the current duration of the media, set
+	 * {@link DurationMetadataRequestOptions.skipLiveWait} to `true` in the options.
+	 */
+	async getDurationFromMetadata(options: DurationMetadataRequestOptions = {}) {
+		if (!this.isHydrated) {
+			await this.hydrate();
+		}
+
+		return this._backing.getDurationFromMetadata(options);
 	}
 
 	/**
@@ -167,8 +241,12 @@ export abstract class InputTrack {
 	 * looked at before it can return early; this means, you can use it to aggregate only a subset (prefix) of all
 	 * packets. This is very useful for getting a great estimate of video frame rate without having to scan through the
 	 * entire file.
+	 *
+	 * By default, when the underlying media is live and `targetPacketCount` is not set, this method will only resolve
+	 * once the live stream ends. If you want to query the current packet statistics of the stream, set
+	 * {@link PacketRetrievalOptions.skipLiveWait} to `true` in the options.
 	 */
-	async computePacketStats(targetPacketCount = Infinity): Promise<PacketStats> {
+	async computePacketStats(targetPacketCount = Infinity, options?: PacketRetrievalOptions): Promise<PacketStats> {
 		const sink = new EncodedPacketSink(this);
 
 		let startTimestamp = Infinity;
@@ -176,7 +254,7 @@ export abstract class InputTrack {
 		let packetCount = 0;
 		let totalPacketBytes = 0;
 
-		for await (const packet of sink.packets(undefined, undefined, { metadataOnly: true })) {
+		for await (const packet of sink.packets(undefined, undefined, { metadataOnly: true, ...options })) {
 			if (
 				packetCount >= targetPacketCount
 				// This additional condition is needed to produce correct results with out-of-presentation-order packets
@@ -202,6 +280,125 @@ export abstract class InputTrack {
 				: 0,
 		};
 	}
+
+	async isLive() {
+		return (await this._backing.getLiveRefreshInterval()) !== null;
+	}
+
+	async getLiveRefreshInterval() {
+		if (!this.isHydrated) {
+			await this.hydrate();
+		}
+
+		return this._backing.getLiveRefreshInterval();
+	}
+
+	get isHydrated() {
+		return this._backing.isHydrated?.() ?? true;
+	}
+
+	hydrate(): Promise<void> {
+		if (this.isHydrated || !this._backing.hydrate) {
+			return Promise.resolve();
+		}
+
+		return this._hydrationPromise ??= this._backing.hydrate();
+	}
+
+	canBePairedWith(otherTrack: InputTrack | null) {
+		if (!otherTrack) {
+			return true;
+		}
+
+		return this.input === otherTrack.input
+			&& this.groupId !== otherTrack.groupId // This also prevents the track from being paired with itself
+			&& (this.pairingMask & otherTrack.pairingMask) !== 0n;
+	}
+
+	async getPairableTracks(query?: TrackQuery<InputTrack>) {
+		const tracks = await this.input.getTracks();
+		return queryTracks(tracks.filter(x => this.canBePairedWith(x)), query);
+	}
+
+	async pluckPairableTrack(query?: TrackQuery<InputTrack>) {
+		return (await this.getPairableTracks(query))[0];
+	}
+
+	async getPairableVideoTracks(query?: TrackQuery<InputVideoTrack>) {
+		const tracks = await this.getPairableTracks({
+			filter: track => track.isVideoTrack(),
+		});
+		return queryTracks(tracks as InputVideoTrack[], query);
+	}
+
+	async pluckPairableVideoTrack(query?: TrackQuery<InputVideoTrack>) {
+		return (await this.getPairableVideoTracks(query))[0] ?? null;
+	}
+
+	async getPairableAudioTracks(query?: TrackQuery<InputAudioTrack>) {
+		const tracks = await this.getPairableTracks({
+			filter: track => track.isAudioTrack(),
+		});
+		return queryTracks(tracks as InputAudioTrack[], query);
+	}
+
+	async pluckPairableAudioTrack(query?: TrackQuery<InputAudioTrack>) {
+		return (await this.getPairableAudioTracks(query))[0] ?? null;
+	}
+
+	async getPrimaryPairableVideoTrack(query?: TrackQuery<InputVideoTrack>) {
+		return this.input.getPrimaryVideoTrack(mergeTrackQueries({
+			filter: track => track.canBePairedWith(this),
+		}, query));
+	}
+
+	async getPrimaryPairableAudioTrack(query?: TrackQuery<InputAudioTrack>) {
+		return this.input.getPrimaryAudioTrack(mergeTrackQueries({
+			filter: track => track.canBePairedWith(this),
+		}, query));
+	}
+
+	hasPairableTrack(predicate?: (track: InputTrack) => boolean) {
+		assert(this.input._tracksCache);
+		return this.input._tracksCache.some(x => this.canBePairedWith(x) && (!predicate || predicate(x)));
+	}
+
+	hasPairableVideoTrack(predictate?: (track: InputVideoTrack) => boolean): boolean {
+		return this.hasPairableTrack(x =>
+			x.isVideoTrack() && (!predictate || predictate(x)),
+		);
+	}
+
+	hasPairableAudioTrack(predictate?: (track: InputAudioTrack) => boolean): boolean {
+		return this.hasPairableTrack(x =>
+			x.isAudioTrack() && (!predictate || predictate(x)),
+		);
+	}
+
+	get<K extends NonFunctionKeys<this>>(key: K): this[K] | null {
+		try {
+			return this[key];
+		} catch (error) {
+			if (error instanceof TrackNotHydratedError) {
+				return null;
+			}
+
+			throw error;
+		}
+	}
+
+	async resolve<K extends NonFunctionKeys<this>>(key: K): Promise<this[K]> {
+		try {
+			return this[key];
+		} catch (error) {
+			if (error instanceof TrackNotHydratedError) {
+				await this.hydrate();
+				return this[key];
+			}
+
+			throw error;
+		}
+	}
 }
 
 export interface InputVideoTrackBacking extends InputTrackBacking {
@@ -210,10 +407,13 @@ export interface InputVideoTrackBacking extends InputTrackBacking {
 	getCodedHeight(): number;
 	getSquarePixelWidth(): number;
 	getSquarePixelHeight(): number;
+	getDisplayWidth?(): number | null;
+	getDisplayHeight?(): number | null;
 	getRotation(): Rotation;
 	getColorSpace(): Promise<VideoColorSpaceInit>;
 	canBeTransparent(): Promise<boolean>;
 	getDecoderConfig(): Promise<VideoDecoderConfig | null>;
+	getCodecParameterString?(): Promise<string | null>;
 }
 
 /**
@@ -224,22 +424,14 @@ export interface InputVideoTrackBacking extends InputTrackBacking {
 export class InputVideoTrack extends InputTrack {
 	/** @internal */
 	override _backing: InputVideoTrackBacking;
-
-	/**
-	 * The pixel aspect ratio of the track's frames, as a rational number in its reduced form. Most videos use
-	 * square pixels (1:1).
-	 */
-	readonly pixelAspectRatio: Rational;
+	/** @internal */
+	_pixelAspectRatioCache: Rational | null = null;
 
 	/** @internal */
 	constructor(input: Input, backing: InputVideoTrackBacking) {
 		super(input, backing);
 
 		this._backing = backing;
-		this.pixelAspectRatio = simplifyRational({
-			num: this._backing.getSquarePixelWidth() * this._backing.getCodedHeight(),
-			den: this._backing.getSquarePixelHeight() * this._backing.getCodedWidth(),
-		});
 	}
 
 	get type(): TrackType {
@@ -248,6 +440,10 @@ export class InputVideoTrack extends InputTrack {
 
 	get codec(): VideoCodec | null {
 		return this._backing.getCodec();
+	}
+
+	get hasOnlyKeyPackets() {
+		return this._backing.getHasOnlyKeyPackets?.() ?? false;
 	}
 
 	/** The width in pixels of the track's coded samples, before any transformations or rotations. */
@@ -275,20 +471,45 @@ export class InputVideoTrack extends InputTrack {
 		return this._backing.getSquarePixelHeight();
 	}
 
+	/**
+	 * The pixel aspect ratio of the track's frames, as a rational number in its reduced form. Most videos use
+	 * square pixels (1:1).
+	 */
+	get pixelAspectRatio() {
+		return this._pixelAspectRatioCache ??= simplifyRational({
+			num: this._backing.getSquarePixelWidth() * this._backing.getCodedHeight(),
+			den: this._backing.getSquarePixelHeight() * this._backing.getCodedWidth(),
+		});
+	}
+
 	/** The display width of the track's frames in pixels, after aspect ratio adjustment and rotation. */
 	get displayWidth() {
+		const customValue = this._backing.getDisplayWidth?.() ?? null;
+		if (customValue !== null) {
+			return customValue;
+		}
+
 		const rotation = this._backing.getRotation();
 		return rotation % 180 === 0 ? this.squarePixelWidth : this.squarePixelHeight;
 	}
 
 	/** The display height of the track's frames in pixels, after aspect ratio adjustment and rotation. */
 	get displayHeight() {
+		const customValue = this._backing.getDisplayHeight?.() ?? null;
+		if (customValue !== null) {
+			return customValue;
+		}
+
 		const rotation = this._backing.getRotation();
 		return rotation % 180 === 0 ? this.squarePixelHeight : this.squarePixelWidth;
 	}
 
 	/** Returns the color space of the track's samples. */
-	getColorSpace() {
+	async getColorSpace() {
+		if (!this.isHydrated) {
+			await this.hydrate();
+		}
+
 		return this._backing.getColorSpace();
 	}
 
@@ -302,7 +523,11 @@ export class InputVideoTrack extends InputTrack {
 	}
 
 	/** Checks if this track may contain transparent samples with alpha data. */
-	canBeTransparent() {
+	async canBeTransparent() {
+		if (!this.isHydrated) {
+			await this.hydrate();
+		}
+
 		return this._backing.canBeTransparent();
 	}
 
@@ -311,17 +536,33 @@ export class InputVideoTrack extends InputTrack {
 	 * track's packets using a [`VideoDecoder`](https://developer.mozilla.org/en-US/docs/Web/API/VideoDecoder). Returns
 	 * null if the track's codec is unknown.
 	 */
-	getDecoderConfig() {
+	async getDecoderConfig() {
+		if (!this.isHydrated) {
+			await this.hydrate();
+		}
+
 		return this._backing.getDecoderConfig();
 	}
 
 	async getCodecParameterString() {
+		if (this._backing.getCodecParameterString) {
+			return this._backing.getCodecParameterString();
+		}
+
+		if (!this.isHydrated) {
+			await this.hydrate();
+		}
+
 		const decoderConfig = await this._backing.getDecoderConfig();
 		return decoderConfig?.codec ?? null;
 	}
 
 	async canDecode() {
 		try {
+			if (!this.isHydrated) {
+				await this.hydrate();
+			}
+
 			const decoderConfig = await this._backing.getDecoderConfig();
 			if (!decoderConfig) {
 				return false;
@@ -370,6 +611,7 @@ export interface InputAudioTrackBacking extends InputTrackBacking {
 	getNumberOfChannels(): number;
 	getSampleRate(): number;
 	getDecoderConfig(): Promise<AudioDecoderConfig | null>;
+	getCodecParameterString?(): Promise<string | null>;
 }
 
 /**
@@ -396,6 +638,10 @@ export class InputAudioTrack extends InputTrack {
 		return this._backing.getCodec();
 	}
 
+	get hasOnlyKeyPackets() {
+		return this._backing.getHasOnlyKeyPackets?.() ?? true;
+	}
+
 	/** The number of audio channels in the track. */
 	get numberOfChannels() {
 		return this._backing.getNumberOfChannels();
@@ -411,17 +657,33 @@ export class InputAudioTrack extends InputTrack {
 	 * track's packets using an [`AudioDecoder`](https://developer.mozilla.org/en-US/docs/Web/API/AudioDecoder). Returns
 	 * null if the track's codec is unknown.
 	 */
-	getDecoderConfig() {
+	async getDecoderConfig() {
+		if (!this.isHydrated) {
+			await this.hydrate();
+		}
+
 		return this._backing.getDecoderConfig();
 	}
 
 	async getCodecParameterString() {
+		if (this._backing.getCodecParameterString) {
+			return this._backing.getCodecParameterString();
+		}
+
+		if (!this.isHydrated) {
+			await this.hydrate();
+		}
+
 		const decoderConfig = await this._backing.getDecoderConfig();
 		return decoderConfig?.codec ?? null;
 	}
 
 	async canDecode() {
 		try {
+			if (!this.isHydrated) {
+				await this.hydrate();
+			}
+
 			const decoderConfig = await this._backing.getDecoderConfig();
 			if (!decoderConfig) {
 				return false;
@@ -462,3 +724,112 @@ export class InputAudioTrack extends InputTrack {
 		return 'key'; // No audio codec with delta packets
 	}
 }
+
+export class TrackNotHydratedError extends Error {
+	/** Creates a new {@link InputDisposedError}. */
+	constructor(
+		message = 'InputTrack is not hydrated; please call hydrate() first, or use the resolve() or get() methods.',
+	) {
+		super(message);
+		this.name = 'TrackNotHydratedError';
+	}
+}
+
+export type TrackQuery<T extends InputTrack> = {
+	filter?: (track: T) => MaybePromise<boolean>;
+	sortBy?: (track: T) => MaybePromise<number | number[]>;
+};
+
+export const mergeTrackQueries = <T extends InputTrack>(
+	queryA: TrackQuery<T> | undefined,
+	queryB: TrackQuery<T> | undefined,
+): TrackQuery<T> => {
+	return {
+		filter: queryA?.filter || queryB?.filter
+			? (track) => {
+					const resultA = queryA?.filter?.(track) ?? true;
+					const handleResultA = (resultA: boolean) => {
+						if (resultA === false) {
+							return false;
+						}
+
+						return queryB?.filter?.(track) ?? true;
+					};
+
+					if (resultA instanceof Promise) {
+						return resultA.then(handleResultA);
+					} else {
+						return handleResultA(resultA);
+					}
+				}
+			: undefined,
+		sortBy: queryA?.sortBy || queryB?.sortBy
+			? (track) => {
+					const resultA = queryA?.sortBy?.(track) ?? [];
+					const resultB = queryB?.sortBy?.(track) ?? [];
+
+					type Result = Awaited<typeof resultA>;
+					const join = (resultA: Result, resultB: Result) => {
+						return [
+							...(Array.isArray(resultA) ? resultA : [resultA]),
+							...(Array.isArray(resultB) ? resultB : [resultB]),
+						];
+					};
+
+					if (resultA instanceof Promise || resultB instanceof Promise) {
+						return Promise.all([resultA, resultB]).then(([resultA, resultB]) => {
+							return join(resultA, resultB);
+						});
+					} else {
+						return join(resultA, resultB);
+					}
+				}
+			: undefined,
+	};
+};
+
+export const queryTracks = async <T extends InputTrack>(tracks: T[], query?: TrackQuery<T>): Promise<T[]> => {
+	let matchedTracks = tracks;
+	if (query?.filter) {
+		const filterMatches = tracks.map(track => query.filter!(track));
+		const hasAsyncFilter = filterMatches.some(x => x instanceof Promise);
+		if (hasAsyncFilter) {
+			// eslint-disable-next-line @typescript-eslint/await-thenable
+			const resolvedFilterMatches = await Promise.all(filterMatches);
+			matchedTracks = tracks.filter((_, i) => resolvedFilterMatches[i]);
+		} else {
+			matchedTracks = tracks.filter((_, i) => filterMatches[i] as boolean);
+		}
+	}
+
+	if (!query?.sortBy) {
+		return matchedTracks;
+	}
+
+	const sortValues = matchedTracks.map(track => query.sortBy!(track));
+	const hasAsyncSort = sortValues.some(x => x instanceof Promise);
+	const resolvedSortValues = hasAsyncSort
+		// eslint-disable-next-line @typescript-eslint/await-thenable
+		? await Promise.all(sortValues)
+		: sortValues as (number | number[])[];
+
+	return matchedTracks
+		.map((track, i) => ({ track, sortValue: resolvedSortValues[i] }))
+		.sort((a, b) => {
+			const aValues = Array.isArray(a.sortValue) ? a.sortValue : [a.sortValue];
+			const bValues = Array.isArray(b.sortValue) ? b.sortValue : [b.sortValue];
+			const maxLength = Math.max(aValues.length, bValues.length);
+
+			for (let i = 0; i < maxLength; i++) {
+				const aValue = aValues[i] ?? 0;
+				const bValue = bValues[i] ?? 0;
+				if (aValue === bValue) {
+					continue;
+				}
+				return aValue - bValue;
+			}
+
+			return 0;
+		})
+		.map(x => x.track);
+};

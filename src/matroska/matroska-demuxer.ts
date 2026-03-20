@@ -271,12 +271,6 @@ export class MatroskaDemuxer extends Demuxer {
 		this.reader = input._reader;
 	}
 
-	override async computeDuration() {
-		const tracks = await this.getTracks();
-		const trackDurations = await Promise.all(tracks.map(x => x.computeDuration()));
-		return Math.max(0, ...trackDurations);
-	}
-
 	async getTracks() {
 		await this.readMetadata();
 		return this.segments.flatMap(segment => segment.tracks.map(track => track.inputTrack!));
@@ -320,6 +314,29 @@ export class MatroskaDemuxer extends Demuxer {
 		}
 
 		return metadataTags;
+	}
+
+	async getDurationFromMetadata(): Promise<number | null> {
+		await this.readMetadata();
+
+		let maxEndTimestamp: number | null = null;
+		for (const segment of this.segments) {
+			if (segment.duration > 0) {
+				let endTimestamp = segment.duration / segment.timestampFactor;
+
+				if (segment.tracks.length > 0) {
+					const minFirstTimestamp = Math.min(
+						...await Promise.all(segment.tracks.map(x => x.inputTrack!.getFirstTimestamp())),
+					);
+
+					endTimestamp += minFirstTimestamp;
+				}
+
+				maxEndTimestamp = Math.max(maxEndTimestamp ?? -Infinity, endTimestamp);
+			}
+		}
+
+		return maxEndTimestamp;
 	}
 
 	readMetadata() {
@@ -548,9 +565,6 @@ export class MatroskaDemuxer extends Demuxer {
 				track.defaultDuration = (this.currentSegment.timestampFactor * track.defaultDurationNs) / 1e9;
 			}
 		}
-
-		// Put default tracks first
-		this.currentSegment.tracks.sort((a, b) => Number(b.disposition.default) - Number(a.disposition.default));
 
 		// Now, let's distribute the cue points to the tracks
 		const idToTrack = new Map(this.currentSegment.tracks.map(x => [x.id, x]));
@@ -1943,11 +1957,6 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		return this.internalTrack.codecId;
 	}
 
-	async computeDuration() {
-		const lastPacket = await this.getPacket(Infinity, { metadataOnly: true });
-		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
-	}
-
 	getName() {
 		return this.internalTrack.name;
 	}
@@ -1956,17 +1965,45 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		return this.internalTrack.languageCode;
 	}
 
-	async getFirstTimestamp() {
-		const firstPacket = await this.getFirstPacket({ metadataOnly: true });
-		return firstPacket?.timestamp ?? 0;
-	}
-
 	getTimeResolution() {
 		return this.internalTrack.segment.timestampFactor;
 	}
 
+	getTimestampsAreRelativeToUnixEpoch() {
+		return false;
+	}
+
 	getDisposition() {
 		return this.internalTrack.disposition;
+	}
+
+	getGroupId() {
+		return this.getId();
+	}
+
+	getPairingMask() {
+		return 1n;
+	}
+
+	getBitrate() {
+		return null;
+	}
+
+	getAverageBitrate() {
+		return null;
+	}
+
+	async getDurationFromMetadata() {
+		const segment = this.internalTrack.segment;
+		if (segment.tracks.length > 1) {
+			return null;
+		}
+
+		return this.internalTrack.demuxer.getDurationFromMetadata();
+	}
+
+	async getLiveRefreshInterval() {
+		return null;
 	}
 
 	async getFirstPacket(options: PacketRetrievalOptions) {

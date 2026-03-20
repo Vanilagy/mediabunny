@@ -65,6 +65,19 @@ export type PacketRetrievalOptions = {
 	 * its data, this option cannot be enabled together with `metadataOnly`.
 	 */
 	verifyKeyPackets?: boolean;
+
+	/**
+	 * When querying packets in live media that are in the future relative to the current live edge, Mediabunny will,
+	 * by default, wait for the stream to advance until the query can be satisfied. In a sense, Mediabunny simply treats
+	 * live streams as media files that are still being written, and any read that depends on future information will
+	 * wait until it can be fulfilled.
+	 *
+	 * If you want to query packets based only on the currently known information, set this field to `true` - this way,
+	 * Mediabunny will never wait for the live stream to catch up.
+	 *
+	 * For non-live media, this field has no effect.
+	 */
+	skipLiveWait?: boolean;
 };
 
 const validatePacketRetrievalOptions = (options: PacketRetrievalOptions) => {
@@ -79,6 +92,9 @@ const validatePacketRetrievalOptions = (options: PacketRetrievalOptions) => {
 	}
 	if (options.verifyKeyPackets && options.metadataOnly) {
 		throw new TypeError('options.verifyKeyPackets and options.metadataOnly cannot be enabled together.');
+	}
+	if (options.skipLiveWait !== undefined && typeof options.skipLiveWait !== 'boolean') {
+		throw new TypeError('options.skipLiveWait, when defined, must be a boolean.');
 	}
 };
 
@@ -132,13 +148,17 @@ export class EncodedPacketSink {
 
 	/**
 	 * Retrieves the track's first packet (in decode order), or null if it has no packets. The first packet is very
-	 * likely to be a key packet.
+	 * likely to be a key packet, but it doesn't have to be.
 	 */
-	getFirstPacket(options: PacketRetrievalOptions = {}) {
+	async getFirstPacket(options: PacketRetrievalOptions = {}) {
 		validatePacketRetrievalOptions(options);
 
 		if (this._track.input._disposed) {
 			throw new InputDisposedError();
+		}
+
+		if (!this._track.isHydrated) {
+			await this._track.hydrate();
 		}
 
 		return maybeFixPacketType(this._track, this._track._backing.getFirstPacket(options), options);
@@ -169,12 +189,16 @@ export class EncodedPacketSink {
 	 *
 	 * @param timestamp - The timestamp used for retrieval, in seconds.
 	 */
-	getPacket(timestamp: number, options: PacketRetrievalOptions = {}) {
+	async getPacket(timestamp: number, options: PacketRetrievalOptions = {}) {
 		validateTimestamp(timestamp);
 		validatePacketRetrievalOptions(options);
 
 		if (this._track.input._disposed) {
 			throw new InputDisposedError();
+		}
+
+		if (!this._track.isHydrated) {
+			await this._track.hydrate();
 		}
 
 		return maybeFixPacketType(this._track, this._track._backing.getPacket(timestamp, options), options);
@@ -184,7 +208,7 @@ export class EncodedPacketSink {
 	 * Retrieves the packet following the given packet (in decode order), or null if the given packet is the
 	 * last packet.
 	 */
-	getNextPacket(packet: EncodedPacket, options: PacketRetrievalOptions = {}) {
+	async getNextPacket(packet: EncodedPacket, options: PacketRetrievalOptions = {}) {
 		if (!(packet instanceof EncodedPacket)) {
 			throw new TypeError('packet must be an EncodedPacket.');
 		}
@@ -192,6 +216,10 @@ export class EncodedPacketSink {
 
 		if (this._track.input._disposed) {
 			throw new InputDisposedError();
+		}
+
+		if (!this._track.isHydrated) {
+			await this._track.hydrate();
 		}
 
 		return maybeFixPacketType(this._track, this._track._backing.getNextPacket(packet, options), options);
@@ -214,6 +242,10 @@ export class EncodedPacketSink {
 
 		if (this._track.input._disposed) {
 			throw new InputDisposedError();
+		}
+
+		if (!this._track.isHydrated) {
+			await this._track.hydrate();
 		}
 
 		if (!options.verifyKeyPackets) {
@@ -249,6 +281,10 @@ export class EncodedPacketSink {
 
 		if (this._track.input._disposed) {
 			throw new InputDisposedError();
+		}
+
+		if (!this._track.isHydrated) {
+			await this._track.hydrate();
 		}
 
 		if (!options.verifyKeyPackets) {

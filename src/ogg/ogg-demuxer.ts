@@ -386,15 +386,13 @@ export class OggDemuxer extends Demuxer {
 		});
 	}
 
+	async getDurationFromMetadata(): Promise<number | null> {
+		return null; // Not stored anywhere
+	}
+
 	async getTracks() {
 		await this.readMetadata();
 		return this.tracks;
-	}
-
-	async computeDuration() {
-		const tracks = await this.getTracks();
-		const trackDurations = await Promise.all(tracks.map(x => x.computeDuration()));
-		return Math.max(0, ...trackDurations);
 	}
 
 	async getMetadataTags() {
@@ -450,6 +448,34 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		return this.bitstream.sampleRate;
 	}
 
+	getTimestampsAreRelativeToUnixEpoch() {
+		return false;
+	}
+
+	getGroupId() {
+		return this.getId();
+	}
+
+	getPairingMask() {
+		return 1n;
+	}
+
+	getBitrate() {
+		return null;
+	}
+
+	getAverageBitrate() {
+		return null;
+	}
+
+	async getDurationFromMetadata() {
+		return null;
+	}
+
+	async getLiveRefreshInterval() {
+		return null;
+	}
+
 	getCodec() {
 		return this.bitstream.codecInfo.codec;
 	}
@@ -481,15 +507,6 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		return {
 			...DEFAULT_TRACK_DISPOSITION,
 		};
-	}
-
-	async getFirstTimestamp() {
-		return 0;
-	}
-
-	async computeDuration() {
-		const lastPacket = await this.getPacket(Infinity, { metadataOnly: true });
-		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
 	}
 
 	granulePositionToTimestampInSamples(granulePosition: number) {

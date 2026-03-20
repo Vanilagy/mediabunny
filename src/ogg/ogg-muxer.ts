@@ -59,7 +59,7 @@ type Packet = {
 
 export class OggMuxer extends Muxer {
 	private format: OggOutputFormat;
-	private writer: Writer;
+	private writer!: Writer;
 
 	private trackDatas: OggTrackData[] = [];
 	private bosPagesWritten = false;
@@ -72,13 +72,15 @@ export class OggMuxer extends Muxer {
 		super(output);
 
 		this.format = format;
-		this.writer = output._writer;
-
-		this.writer.ensureMonotonicity = true; // Ogg is always monotonically written!
 	}
 
 	async start() {
-		// Nothin'
+		const release = await this.mutex.acquire();
+
+		this.writer = await this.output._getRootWriter();
+		this.writer.ensureMonotonicity = true; // Ogg is always monotonically written!
+
+		release();
 	}
 
 	async getMimeType() {

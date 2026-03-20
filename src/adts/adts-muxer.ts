@@ -20,7 +20,7 @@ import { Writer } from '../writer';
 
 export class AdtsMuxer extends Muxer {
 	private format: AdtsOutputFormat;
-	private writer: Writer;
+	private writer!: Writer;
 	private header: Uint8Array | null = null;
 	private headerBitstream: Bitstream | null = null;
 	private inputIsAdts: boolean | null = null;
@@ -29,14 +29,19 @@ export class AdtsMuxer extends Muxer {
 		super(output);
 
 		this.format = format;
-		this.writer = output._writer;
 	}
 
 	async start() {
+		const release = await this.mutex.acquire();
+
+		this.writer = await this.output._getRootWriter();
+
 		if (!metadataTagsAreEmpty(this.output._metadataTags)) {
 			const id3Writer = new Id3V2Writer(this.writer);
 			id3Writer.writeId3V2Tag(this.output._metadataTags);
 		}
+
+		release();
 	}
 
 	async getMimeType() {

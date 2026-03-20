@@ -30,6 +30,7 @@ export const INFO = 0x496e666f;
 export type Mp3FrameHeader = {
 	totalSize: number;
 	mpegVersionId: number;
+	lowSamplingFrequency: number;
 	layer: number;
 	bitrate: number;
 	frequencyIndex: number;
@@ -57,6 +58,23 @@ export const computeMp3FrameSize = (
 		return Math.floor(144 * bitrate / sampleRate) + padding;
 	} else { // layer === 3
 		return (Math.floor(12 * bitrate / sampleRate) + padding) * 4;
+	}
+};
+
+export const computeAverageMp3FrameSize = (
+	lowSamplingFrequency: number,
+	layer: number,
+	bitrate: number,
+	sampleRate: number,
+) => {
+	if (layer === 0) {
+		return 0; // Not expected that this is hit
+	} else if (layer === 1) {
+		return 144 * bitrate / (sampleRate << lowSamplingFrequency);
+	} else if (layer === 2) {
+		return 144 * bitrate / sampleRate;
+	} else { // layer === 3
+		return (12 * bitrate / sampleRate) * 4;
 	}
 };
 
@@ -144,6 +162,7 @@ export const readMp3FrameHeader = (word: number, remainingBytes: number | null):
 		header: {
 			totalSize: frameLength,
 			mpegVersionId,
+			lowSamplingFrequency,
 			layer,
 			bitrate,
 			frequencyIndex,
@@ -187,3 +206,9 @@ export const decodeSynchsafe = (synchsafed: number) => {
 
 	return unsynchsafed;
 };
+
+export enum XingFlags {
+	FrameCount = 1 << 0,
+	FileSize = 1 << 1,
+	Toc = 1 << 2,
+}

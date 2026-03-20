@@ -824,7 +824,13 @@ export class Conversion {
 
 		if (this.onProgress) {
 			// Compute duration using only the utilized tracks
-			const durationPromises = this.utilizedTracks.map(x => x.computeDuration());
+			const durationPromises = this.utilizedTracks.map(async (track) => {
+				if (await track.isLive()) {
+					return Infinity; // Upper bound (assuming no universe heat death)
+				}
+
+				return track.computeDuration();
+			});
 			const duration = Math.max(0, ...await Promise.all(durationPromises));
 
 			this._computeProgress = true;
@@ -885,6 +891,10 @@ export class Conversion {
 
 	/** @internal */
 	async _processVideoTrack(track: InputVideoTrack, trackOptions: ConversionVideoOptions) {
+		if (!track.isHydrated) {
+			await track.hydrate();
+		}
+
 		const sourceCodec = track.codec;
 		if (!sourceCodec) {
 			this.discardedTracks.push({
@@ -1337,6 +1347,10 @@ export class Conversion {
 
 	/** @internal */
 	async _processAudioTrack(track: InputAudioTrack, trackOptions: ConversionAudioOptions) {
+		if (!track.isHydrated) {
+			await track.hydrate();
+		}
+
 		const sourceCodec = track.codec;
 		if (!sourceCodec) {
 			this.discardedTracks.push({
