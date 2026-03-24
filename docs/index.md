@@ -109,9 +109,11 @@ const sponsors = {
 	],
 	individual: [
 		{ image: '/sponsors/pintura-labs.png', name: 'Pintura Labs', url: 'https://pqina.nl/pintura/' },
+		{ image: 'https://avatars.githubusercontent.com/u/11537072', name: 'Threema', url: 'https://threema.com/en' },
 		{ image: 'https://avatars.githubusercontent.com/u/82552321', name: 'Polotno', url: 'https://github.com/polotno-project' },
 		{ image: 'https://avatars.githubusercontent.com/u/489051', name: 'Roman Rädle', url: 'https://github.com/raedle' },
 		{ image: 'https://avatars.githubusercontent.com/u/197597', name: 'Christopher Chedeau', url: 'https://github.com/vjeux' },
+		{ image: 'https://avatars.githubusercontent.com/u/18653821', name: 'ZerGo0', url: 'https://github.com/ZerGo0' },
 		{ image: 'https://avatars.githubusercontent.com/u/5913254', name: 'Brandon McConnell', url: 'https://github.com/brandonmcconnell' },
 		{ image: 'https://avatars.githubusercontent.com/u/9549394', name: 'studnitz', url: 'https://github.com/studnitz' },
 		{ image: 'https://avatars.githubusercontent.com/u/4714175', name: 'Phoomparin Mano', url: 'https://github.com/heypoom' },
@@ -119,6 +121,7 @@ const sponsors = {
 		{ image: 'https://avatars.githubusercontent.com/u/2698271', name: 'Matthew Gardner', url: 'https://github.com/spheric' },
 		{ image: 'https://avatars.githubusercontent.com/u/5475819', name: 'AJ Funk', url: 'https://github.com/AJFunk' },
 		{ image: 'https://avatars.githubusercontent.com/u/30229596', name: 'Pablo Bonilla', url: 'https://github.com/devPablo' },
+		{ image: 'https://avatars.githubusercontent.com/u/536008', name: 'Satish Goda', url: 'https://github.com/satishgoda' },
 		{ image: 'https://avatars.githubusercontent.com/u/139718', name: 'Anton Kosiakin', url: 'https://github.com/deil' },
 		{ image: 'https://avatars.githubusercontent.com/u/56988069', name: 'SyhabouthAlex', url: 'https://github.com/SyhabouthAlex' },
 		{ image: 'https://avatars.githubusercontent.com/u/38181164', name: 'wcw', url: 'https://github.com/asd55667' },
@@ -135,6 +138,7 @@ const sponsors = {
 		{ image: 'https://avatars.githubusercontent.com/u/31102694', name: 'Aiden Liu', url: 'https://github.com/aidenlx' },
 		{ image: 'https://avatars.githubusercontent.com/u/41021374', name: 'arthco', url: 'https://github.com/arthtyagi' },
 		{ image: 'https://avatars.githubusercontent.com/u/5907357', name: 'Harvey Zhao', url: 'https://github.com/zhw2590582' },
+		{ image: 'https://avatars.githubusercontent.com/u/13042781?v=4', name: 'Anshul Bansal', url: 'https://github.com/akbansa' },
 	],
 };
 </script>

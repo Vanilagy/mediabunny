@@ -196,6 +196,7 @@ type InternalTrack = {
 	defaultDurationNs: number | null;
 	name: string | null;
 	languageCode: string;
+	hasLanguageBcp47: boolean;
 	decodingInstructions: DecodingInstruction[];
 
 	info:
@@ -1009,7 +1010,8 @@ export class MatroskaDemuxer extends Demuxer {
 					defaultDuration: null,
 					defaultDurationNs: null,
 					name: null,
-					languageCode: UNDETERMINED_LANGUAGE,
+					languageCode: 'eng', // The default in Matroska
+					hasLanguageBcp47: false,
 					decodingInstructions: [],
 
 					info: null,
@@ -1086,11 +1088,7 @@ export class MatroskaDemuxer extends Demuxer {
 						const inputTrack = new InputVideoTrack(this.input, new MatroskaVideoTrackBacking(videoTrack));
 						this.currentTrack.inputTrack = inputTrack;
 						this.currentSegment.tracks.push(this.currentTrack);
-					} else if (
-						this.currentTrack.info.type === 'audio'
-						&& this.currentTrack.info.numberOfChannels !== -1
-						&& this.currentTrack.info.sampleRate !== -1
-					) {
+					} else if (this.currentTrack.info.type === 'audio') {
 						if (codecIdWithoutSuffix === CODEC_STRING_MAP.aac) {
 							this.currentTrack.info.codec = 'aac';
 							this.currentTrack.info.aacCodecInfo = {
@@ -1183,8 +1181,8 @@ export class MatroskaDemuxer extends Demuxer {
 				} else if (type === 2) {
 					this.currentTrack.info = {
 						type: 'audio',
-						numberOfChannels: -1,
-						sampleRate: -1,
+						numberOfChannels: 1, // Default value
+						sampleRate: 8000, // Default value
 						bitDepth: -1,
 						codec: null,
 						codecDescription: null,
@@ -1263,7 +1261,7 @@ export class MatroskaDemuxer extends Demuxer {
 
 			case EBMLId.Language: {
 				if (!this.currentTrack) break;
-				if (this.currentTrack.languageCode !== UNDETERMINED_LANGUAGE) {
+				if (this.currentTrack.hasLanguageBcp47) {
 					// LanguageBCP47 was present, which takes precedence
 					break;
 				}
@@ -1290,6 +1288,8 @@ export class MatroskaDemuxer extends Demuxer {
 				} else {
 					this.currentTrack.languageCode = UNDETERMINED_LANGUAGE;
 				}
+
+				this.currentTrack.hasLanguageBcp47 = true;
 			}; break;
 
 			case EBMLId.Video: {
