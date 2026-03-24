@@ -39,6 +39,7 @@ import {
 	InputAudioTrackBacking,
 	InputTrack,
 	InputTrackBacking,
+
 	InputVideoTrack,
 	InputVideoTrackBacking,
 } from '../input-track';
@@ -2563,10 +2564,6 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 
 	getDisposition() {
 		return this.internalTrack.disposition;
-	}
-
-	getGroupId() {
-		return this.getId();
 	}
 
 	getPairingMask() {

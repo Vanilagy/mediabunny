@@ -293,10 +293,6 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 		return false;
 	}
 
-	getGroupId() {
-		return this.getId();
-	}
-
 	getPairingMask() {
 		return 1n;
 	}

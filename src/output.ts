@@ -83,6 +83,36 @@ export class OutputTrackGroup {
 	}
 }
 
+export const outputTracksArePairable = (a: OutputTrack, b: OutputTrack) => {
+	if (a === b) {
+		return false;
+	}
+
+	const aGroups = Array.isArray(a.metadata.group)
+		? a.metadata.group
+		: [a.metadata.group!];
+	const bGroups = Array.isArray(b.metadata.group)
+		? b.metadata.group
+		: [b.metadata.group!];
+
+	for (const aGroup of aGroups) {
+		const pairableInSameGroup = a.type !== b.type
+			&& bGroups.some(bGroup => aGroup === bGroup);
+		if (pairableInSameGroup) {
+			return true;
+		}
+
+		const pairableAcrossGroups = bGroups.some(
+			bGroup => aGroup._pairedGroups.has(bGroup),
+		);
+		if (pairableAcrossGroups) {
+			return true;
+		}
+	}
+
+	return false;
+};
+
 /**
  * Base track metadata, applicable to all tracks.
  * @group Output files

@@ -2,7 +2,15 @@ import { MediaCodec, validateAudioChunkMetadata, validateVideoChunkMetadata } fr
 import { EncodedAudioPacketSource, EncodedVideoPacketSource, MediaSource } from '../media-source';
 import { assert, joinPaths, textEncoder, UNDETERMINED_LANGUAGE } from '../misc';
 import { Muxer } from '../muxer';
-import { Output, OutputAudioTrack, OutputSubtitleTrack, OutputTrack, OutputVideoTrack, TrackType } from '../output';
+import {
+	Output,
+	OutputAudioTrack,
+	OutputSubtitleTrack,
+	OutputTrack,
+	outputTracksArePairable,
+	OutputVideoTrack,
+	TrackType,
+} from '../output';
 import { HlsOutputFormat, HlsOutputFormatOptions, OutputFormat } from '../output-format';
 import { EncodedPacket } from '../packet';
 import { SubtitleCue, SubtitleMetadata } from '../subtitles';
@@ -101,38 +109,13 @@ export class HlsMuxer extends Muxer {
 			}
 
 			const pairableGroups = new Map<MediaCodec, OutputTrack[]>();
-			const trackGroups = Array.isArray(track.metadata.group)
-				? track.metadata.group
-				: [track.metadata.group!];
 
 			for (const otherTrack of this.output._tracks) {
 				if (track === otherTrack) {
 					continue;
 				}
 
-				let pairable = false;
-				const otherTrackGroups = Array.isArray(otherTrack.metadata.group)
-					? otherTrack.metadata.group
-					: [otherTrack.metadata.group!];
-
-				for (const group of trackGroups) {
-					const pairableInSameGroup = track.type !== otherTrack.type
-						&& otherTrackGroups.some(otherGroup => group === otherGroup);
-					if (pairableInSameGroup) {
-						pairable = true;
-						break;
-					}
-
-					const pairableAcrossGroups = otherTrackGroups.some(
-						otherGroup => group._pairedGroups.has(otherGroup),
-					);
-					if (pairableAcrossGroups) {
-						pairable = true;
-						break;
-					}
-				}
-
-				if (!pairable) {
+				if (!outputTracksArePairable(track, otherTrack)) {
 					continue;
 				}
 
@@ -828,6 +811,7 @@ export class HlsMuxer extends Muxer {
 			}
 		}
 
+		// Write all playlists in parallel
 		const playlistPromises = this.playlists.map(async (playlist) => {
 			let targetDuration = this.targetSegmentDuration;
 			for (const segment of playlist.writtenSegments) {

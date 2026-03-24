@@ -15,6 +15,7 @@ import {
 	InputAudioTrackBacking,
 	InputTrack,
 	InputTrackBacking,
+
 	InputVideoTrack,
 	InputVideoTrackBacking,
 } from './input-track';
@@ -222,11 +223,7 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 		return this.firstInputTrack._backing.getId();
 	}
 
-	getGroupId(): number {
-		return this.firstInputTrack._backing.getGroupId();
-	}
-
-	getPairingMask(): bigint {
+	getPairingMask() {
 		return this.firstInputTrack._backing.getPairingMask();
 	}
 

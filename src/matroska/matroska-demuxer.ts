@@ -28,6 +28,7 @@ import {
 	InputAudioTrackBacking,
 	InputTrack,
 	InputTrackBacking,
+
 	InputVideoTrack,
 	InputVideoTrackBacking,
 } from '../input-track';
@@ -1976,10 +1977,6 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 
 	getDisposition() {
 		return this.internalTrack.disposition;
-	}
-
-	getGroupId() {
-		return this.getId();
 	}
 
 	getPairingMask() {

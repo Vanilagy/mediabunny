@@ -405,10 +405,6 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		return false;
 	}
 
-	getGroupId() {
-		return this.getId();
-	}
-
 	getPairingMask() {
 		return 1n;
 	}

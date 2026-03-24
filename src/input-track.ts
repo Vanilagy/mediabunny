@@ -41,7 +41,6 @@ export interface InputTrackBacking {
 	getTimeResolution(): number;
 	getTimestampsAreRelativeToUnixEpoch(): boolean;
 	getDisposition(): TrackDisposition;
-	getGroupId(): number;
 	getPairingMask(): bigint;
 	getBitrate(): number | null;
 	getAverageBitrate(): number | null;
@@ -116,14 +115,6 @@ export abstract class InputTrack {
 	 */
 	get number() {
 		return this._backing.getNumber();
-	}
-
-	get groupId() {
-		return this._backing.getGroupId();
-	}
-
-	get pairingMask() {
-		return this._backing.getPairingMask();
 	}
 
 	/**
@@ -310,9 +301,11 @@ export abstract class InputTrack {
 			return true;
 		}
 
-		return this.input === otherTrack.input
-			&& this.groupId !== otherTrack.groupId // This also prevents the track from being paired with itself
-			&& (this.pairingMask & otherTrack.pairingMask) !== 0n;
+		if (this.input !== otherTrack.input || this === otherTrack) {
+			return false;
+		}
+
+		return (this._backing.getPairingMask() & otherTrack._backing.getPairingMask()) !== 0n;
 	}
 
 	async getPairableTracks(query?: TrackQuery<InputTrack>) {

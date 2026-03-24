@@ -30,7 +30,6 @@ type InternalTrack = {
 
 	fullPath: string;
 	fullCodecString: string;
-	groupId: number;
 	pairingMask: bigint;
 	peakBitrate: number | null;
 	averageBitrate: number | null;
@@ -179,7 +178,7 @@ export class HlsDemuxer extends Demuxer {
 			// Now, let's process & resolve all variant streams in parallel, mapping each of them to tracks.
 
 			const internalTracksByVariant = await Promise.all(variantStreams.map(async (variantStream, i) => {
-				const result: { track: InternalTrack; canMerge: boolean }[] = [];
+				const result: InternalTrack[] = [];
 
 				const codecsList = variantStream.attributes.get('codecs');
 				let codecStrings: string[];
@@ -334,7 +333,7 @@ export class HlsDemuxer extends Demuxer {
 								}
 							}
 
-							result.push({ track: {
+							result.push({
 								id: -1,
 								demuxer: this,
 								inputTrack: null,
@@ -345,7 +344,6 @@ export class HlsDemuxer extends Demuxer {
 								lineNumber: variantStream.lineNumber,
 								fullPath: variantStream.fullPath,
 								fullCodecString: videoCodecString,
-								groupId: 1,
 								pairingMask: 1n << BigInt(i),
 								peakBitrate: bandwidth,
 								averageBitrate: averageBandwidth,
@@ -356,7 +354,7 @@ export class HlsDemuxer extends Demuxer {
 									width,
 									height,
 								},
-							}, canMerge: false });
+							});
 						} else {
 							if (!videoGroupIds.includes(videoGroupId)) {
 								throw new Error(
@@ -386,7 +384,7 @@ export class HlsDemuxer extends Demuxer {
 									}
 								}
 
-								result.push({ track: {
+								result.push({
 									id: -1,
 									demuxer: this,
 									inputTrack: null,
@@ -399,7 +397,6 @@ export class HlsDemuxer extends Demuxer {
 									lineNumber: mediaTag.lineNumber,
 									fullPath: mediaTag.fullPath ?? variantStream.fullPath,
 									fullCodecString: videoCodecString,
-									groupId: 3 + videoGroupIds.indexOf(groupId),
 									pairingMask: 1n << BigInt(i),
 									peakBitrate: null,
 									averageBitrate: null,
@@ -410,7 +407,7 @@ export class HlsDemuxer extends Demuxer {
 										width,
 										height,
 									},
-								}, canMerge: true });
+								});
 							}
 						}
 					} else if (AUDIO_CODECS.includes(inferredCodec as AudioCodec)) {
@@ -431,7 +428,7 @@ export class HlsDemuxer extends Demuxer {
 								? Number(channels)
 								: null;
 
-							result.push({ track: {
+							result.push({
 								id: -1,
 								demuxer: this,
 								inputTrack: null,
@@ -442,7 +439,6 @@ export class HlsDemuxer extends Demuxer {
 								lineNumber: variantStream.lineNumber,
 								fullPath: variantStream.fullPath,
 								fullCodecString: audioCodecString,
-								groupId: 2,
 								pairingMask: 1n << BigInt(i),
 								peakBitrate: bandwidth,
 								averageBitrate: averageBandwidth,
@@ -457,7 +453,7 @@ export class HlsDemuxer extends Demuxer {
 												? parsedChannels
 												: null,
 								},
-							}, canMerge: false });
+							});
 						} else {
 							if (!audioGroupIds.includes(audioGroupId)) {
 								throw new Error(
@@ -480,7 +476,7 @@ export class HlsDemuxer extends Demuxer {
 									? Number(channels)
 									: null;
 
-								result.push({ track: {
+								result.push({
 									id: -1,
 									demuxer: this,
 									inputTrack: null,
@@ -493,7 +489,6 @@ export class HlsDemuxer extends Demuxer {
 									lineNumber: mediaTag.lineNumber,
 									fullPath: mediaTag.fullPath ?? variantStream.fullPath,
 									fullCodecString: audioCodecString,
-									groupId: 3 + videoGroupIds.length + audioGroupIds.indexOf(groupId),
 									pairingMask: 1n << BigInt(i),
 									peakBitrate: null,
 									averageBitrate: null,
@@ -508,7 +503,7 @@ export class HlsDemuxer extends Demuxer {
 													? parsedChannels
 													: null,
 									},
-								}, canMerge: true });
+								});
 							}
 						}
 					}
@@ -518,15 +513,29 @@ export class HlsDemuxer extends Demuxer {
 			}));
 
 			const internalTracks: InternalTrack[] = [];
-			const addInternalTrack = (track: InternalTrack, canMerge: boolean) => {
+			const addInternalTrack = (track: InternalTrack) => {
 				const existingTrack = internalTracks.find(x =>
-					x.fullPath === track.fullPath && x.info.type === track.info.type && x.groupId === track.groupId,
+					x.fullPath === track.fullPath && x.info.type === track.info.type,
 				);
 
-				if (existingTrack && canMerge) {
+				if (existingTrack) {
 					existingTrack.pairingMask |= track.pairingMask;
 					existingTrack.default ||= track.default;
+					existingTrack.autoselect ||= track.autoselect;
 					existingTrack.lineNumber = Math.min(existingTrack.lineNumber, track.lineNumber);
+
+					if (track.peakBitrate !== null) {
+						existingTrack.peakBitrate = Math.max(
+							existingTrack.peakBitrate ?? -Infinity,
+							track.peakBitrate,
+						);
+					}
+					if (track.averageBitrate !== null) {
+						existingTrack.averageBitrate = Math.max(
+							existingTrack.averageBitrate ?? -Infinity,
+							track.averageBitrate,
+						);
+					}
 
 					if (existingTrack.languageCode === UNDETERMINED_LANGUAGE) {
 						existingTrack.languageCode = track.languageCode;
@@ -539,7 +548,7 @@ export class HlsDemuxer extends Demuxer {
 
 			for (const variantInternalTracks of internalTracksByVariant) {
 				for (const trackEntry of variantInternalTracks) {
-					addInternalTrack(trackEntry.track, trackEntry.canMerge);
+					addInternalTrack(trackEntry);
 				}
 			}
 
@@ -651,10 +660,6 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 
 	getId(): number {
 		return this.internalTrack.id;
-	}
-
-	getGroupId(): number {
-		return this.internalTrack.groupId;
 	}
 
 	getPairingMask(): bigint {

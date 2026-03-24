@@ -45,6 +45,7 @@ import {
 	InputAudioTrackBacking,
 	InputTrack,
 	InputTrackBacking,
+
 	InputVideoTrack,
 	InputVideoTrackBacking,
 } from '../input-track';
@@ -1097,10 +1098,6 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 
 	getTimestampsAreRelativeToUnixEpoch() {
 		return false;
-	}
-
-	getGroupId() {
-		return this.getId();
 	}
 
 	getPairingMask() {
