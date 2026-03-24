@@ -267,11 +267,8 @@ export class Input<S extends Source = Source> implements Disposable {
 	}
 
 	/**
-	 * @deprecated Prefer not using this getter since it is ill-defined for files driven by multiple sources. The
-	 * {@link Input.onSource} callback provides an alternative.
-	 *
 	 * Returns the source from which this input file reads data for the entry path. Throws if the source-resolving
-	 * function returns a Promise.
+	 * function returns a promise; prefer the {@link Input.onSource} callback for those cases.
 	 */
 	get source(): S {
 		if (this._source instanceof SourceRef) {
@@ -284,7 +281,7 @@ export class Input<S extends Source = Source> implements Disposable {
 		if (source instanceof Promise) {
 			throw new TypeError(
 				'Input.source cannot be used when the source function resolves asynchronously.'
-				+ ' Use getSource() instead.',
+				+ ' Use the onSource event instead.',
 			);
 		}
 

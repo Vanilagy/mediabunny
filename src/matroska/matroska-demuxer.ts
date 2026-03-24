@@ -1016,6 +1016,7 @@ export class MatroskaDemuxer extends Demuxer {
 
 					disposition: {
 						...DEFAULT_TRACK_DISPOSITION,
+						primary: false,
 					},
 					inputTrack: null,
 					codecId: null,

@@ -30,10 +30,12 @@
 		p.textContent = 'Capturing...';
 		document.body.append(p);
 
+		/*
 		const button = document.createElement('button');
 		button.textContent = 'Cancel';
 		button.onclick = () => conversion.cancel();
 		document.body.append(button);
+		*/
 
 		const yo = document.createElement('canvas');
 		yo.width = 512;
@@ -58,7 +60,7 @@
 
 		if (true) {
 			input = new Mediabunny.Input({
-				entryPath: 'https://zdf-hls-15.akamaized.net/hls/live/2016498/de/high/master.m3u8',
+				entryPath: 'https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8',
 				source: ({ path }) => new Mediabunny.UrlSource(path),
 				formats: Mediabunny.ALL_FORMATS,
 			});
@@ -84,7 +86,7 @@
 		}
 
 		let ctx = null;
-		const conversion = await Mediabunny.Conversion.init({
+		let conversion = await Mediabunny.Conversion.init({
 			input,
 			output,
 			audio: (track, n) => ({
@@ -220,13 +222,13 @@
 				}
 			},
 			trim: {
-				start,
-				end: start + 5,
-				//start: 0,
-				end: 2
+				//start,
+				//end: start + 5,
+				////start: 0,
+				//end: 2
 			},
 		});
-		console.log(conversion);
+		//console.log(conversion);
 
 		let progress = 0;
 		conversion.onProgress = newProgress => progress = newProgress;
@@ -247,6 +249,7 @@
 		console.timeEnd()
 
 		console.log("Done", target.buffer);
+		input.dispose()
 
 		const video = document.createElement('video');
 		video.src = URL.createObjectURL(new Blob([target.buffer], { type: outputFormat.mimeType }));	
@@ -264,5 +267,9 @@
 			a.click();
 			URL.revokeObjectURL(url);
 		}
+
+		conversion.onProgress = null;
+		conversion = null;
+		input = null;
 	}, { once: true });
 </script>

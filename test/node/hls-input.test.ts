@@ -414,6 +414,46 @@ test.concurrent('fMP4', { timeout: 15_000 }, async () => {
 	expect(sourceCount).toBe(1 + 2 * (1 + 1 + 1 + 1));
 });
 
+test.concurrent('Track disposition & metadata', { timeout: 15_000 }, async () => {
+	using input = new Input({
+		entryPath: 'https://storage.googleapis.com/shaka-demo-assets/angel-one-hls/hls.m3u8',
+		source: ({ path }) => new UrlSource(path),
+		formats: ALL_FORMATS,
+	});
+
+	const audioTracks = await input.getAudioTracks();
+
+	expect(audioTracks).toHaveLength(6);
+
+	expect(audioTracks[0]!.languageCode).toBe('en');
+	expect(audioTracks[1]!.languageCode).toBe('de');
+	expect(audioTracks[2]!.languageCode).toBe('it');
+	expect(audioTracks[3]!.languageCode).toBe('fr');
+	expect(audioTracks[4]!.languageCode).toBe('es');
+	expect(audioTracks[5]!.languageCode).toBe('en');
+
+	expect(audioTracks[0]!.disposition.primary).toBe(true);
+	expect(audioTracks[1]!.disposition.primary).toBe(false);
+	expect(audioTracks[2]!.disposition.primary).toBe(false);
+	expect(audioTracks[3]!.disposition.primary).toBe(false);
+	expect(audioTracks[4]!.disposition.primary).toBe(false);
+	expect(audioTracks[5]!.disposition.primary).toBe(false);
+
+	expect(audioTracks[0]!.disposition.default).toBe(true);
+	expect(audioTracks[1]!.disposition.default).toBe(true);
+	expect(audioTracks[2]!.disposition.default).toBe(true);
+	expect(audioTracks[3]!.disposition.default).toBe(true);
+	expect(audioTracks[4]!.disposition.default).toBe(true);
+	expect(audioTracks[5]!.disposition.default).toBe(false);
+
+	expect(audioTracks[0]!.name).toBe('stream_5');
+	expect(audioTracks[1]!.name).toBe('stream_4');
+	expect(audioTracks[2]!.name).toBe('stream_8');
+	expect(audioTracks[3]!.name).toBe('stream_7');
+	expect(audioTracks[4]!.name).toBe('stream_9');
+	expect(audioTracks[5]!.name).toBe('stream_6');
+});
+
 test.concurrent('fMP4 Bitmovin', { timeout: 15_000 }, async () => {
 	using input = new Input({
 		entryPath: 'https://bitdash-a.akamaihd.net/content/MI201109210084_1/m3u8s-fmp4/f08e80da-bf1d-4e3d-8899-f0f6155f6efa.m3u8',

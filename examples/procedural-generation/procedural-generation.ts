@@ -9,6 +9,9 @@ import {
 	getFirstEncodableVideoCodec,
 	OutputFormat,
 	HlsOutputFormat,
+	OutputTrackGroup,
+	MpegTsOutputFormat,
+	AdtsOutputFormat,
 } from 'mediabunny';
 
 const durationSlider = document.querySelector('#duration-slider') as HTMLInputElement;
@@ -92,7 +95,7 @@ const generateVideo = async () => {
 
 		// Create a new output file
 		output = new Output({
-			rootPath: 'playlist.m3u8',
+			rootPath: 'master.m3u8',
 			target: ({ path }) => {
 				const target = new BufferTarget();
 				target.onfinalized = async () => {
@@ -103,8 +106,11 @@ const generateVideo = async () => {
 				};
 
 				return target;
-			}, // Stored in memory
-			format: new HlsOutputFormat(),
+			},
+			format: new HlsOutputFormat({
+				segmentFormats: [new AdtsOutputFormat(), new MpegTsOutputFormat()],
+				getPlaylistPath: info => `sussex-${info.n}.m3u8`,
+			}),
 		});
 
 		// Retrieve the first video codec supported by this browser that can be contained in the output format
@@ -124,8 +130,11 @@ const generateVideo = async () => {
 		});
 		output.addVideoTrack(canvasSource, { frameRate });
 
+		// output._defaultTrackGroup.pair(otherGroup);
+
 		// For audio, we use ArrayBufferSource, because we'll be creating an ArrayBuffer with OfflineAudioContext
 		let audioBufferSource: AudioBufferSource | null = null;
+		let audioBufferSource2: AudioBufferSource | null = null;
 
 		// Retrieve the first audio codec supported by this browser that can be contained in the output format
 		const audioCodec = await getFirstEncodableAudioCodec(output.format.getSupportedAudioCodecs(), {
@@ -138,6 +147,12 @@ const generateVideo = async () => {
 				bitrate: QUALITY_HIGH,
 			});
 			output.addAudioTrack(audioBufferSource);
+
+			audioBufferSource2 = new AudioBufferSource({
+				codec: audioCodec,
+				bitrate: QUALITY_HIGH,
+			});
+			output.addAudioTrack(audioBufferSource2, { languageCode: 'esp' });
 		} else {
 			alert('Your browser doesn\'t support audio encoding, so we won\'t include audio in the output file.');
 		}
@@ -180,6 +195,9 @@ const generateVideo = async () => {
 			const audioBuffer = await audioContext.startRendering();
 			await audioBufferSource.add(audioBuffer);
 			audioBufferSource.close();
+
+			await audioBufferSource2!.add(audioBuffer);
+			audioBufferSource2!.close();
 		}
 
 		clearInterval(progressInterval);

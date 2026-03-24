@@ -24,6 +24,7 @@ type InternalTrack = {
 	inputTrack: InputTrack | null;
 	backingTrack: InputTrack | null;
 	default: boolean;
+	autoselect: boolean;
 	languageCode: string;
 	lineNumber: number;
 
@@ -339,6 +340,7 @@ export class HlsDemuxer extends Demuxer {
 								inputTrack: null,
 								backingTrack: null,
 								default: true,
+								autoselect: true,
 								languageCode: UNDETERMINED_LANGUAGE,
 								lineNumber: variantStream.lineNumber,
 								fullPath: variantStream.fullPath,
@@ -390,6 +392,9 @@ export class HlsDemuxer extends Demuxer {
 									inputTrack: null,
 									backingTrack: null,
 									default: getMediaTagDefault(mediaTag.attributes),
+									// Autoselect is inferred to be true if the default is true
+									autoselect: getMediaTagDefault(mediaTag.attributes)
+										|| getMediaTagAutoselect(mediaTag.attributes),
 									languageCode: preprocessLanguageCode(mediaTag.attributes.get('language')),
 									lineNumber: mediaTag.lineNumber,
 									fullPath: mediaTag.fullPath ?? variantStream.fullPath,
@@ -432,6 +437,7 @@ export class HlsDemuxer extends Demuxer {
 								inputTrack: null,
 								backingTrack: null,
 								default: true,
+								autoselect: true,
 								languageCode: UNDETERMINED_LANGUAGE,
 								lineNumber: variantStream.lineNumber,
 								fullPath: variantStream.fullPath,
@@ -480,6 +486,9 @@ export class HlsDemuxer extends Demuxer {
 									inputTrack: null,
 									backingTrack: null,
 									default: getMediaTagDefault(mediaTag.attributes),
+									// Autoselect is inferred to be true if the default is true
+									autoselect: getMediaTagDefault(mediaTag.attributes)
+										|| getMediaTagAutoselect(mediaTag.attributes),
 									languageCode: preprocessLanguageCode(mediaTag.attributes.get('language')),
 									lineNumber: mediaTag.lineNumber,
 									fullPath: mediaTag.fullPath ?? variantStream.fullPath,
@@ -634,7 +643,9 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 	getDisposition(): TrackDisposition {
 		return {
 			...DEFAULT_TRACK_DISPOSITION,
-			default: this.internalTrack.default,
+			// Meanings are swapped in HLS: "Default" means that a track is the primary track.
+			default: this.internalTrack.autoselect,
+			primary: this.internalTrack.default,
 		};
 	}
 
@@ -940,6 +951,25 @@ const getMediaTagDefault = (attributes: AttributeList) => {
 
 	throw new Error(
 		`Invalid M3U8 file; #EXT-X-MEDIA DEFAULT attribute must be YES or NO, got "${value}".`,
+	);
+};
+
+const getMediaTagAutoselect = (attributes: AttributeList) => {
+	const value = attributes.get('autoselect');
+	if (value === null) {
+		return false;
+	}
+
+	const normalized = value.toUpperCase();
+	if (normalized === 'YES') {
+		return true;
+	}
+	if (normalized === 'NO') {
+		return false;
+	}
+
+	throw new Error(
+		`Invalid M3U8 file; #EXT-X-MEDIA AUTOSELECT attribute must be YES or NO, got "${value}".`,
 	);
 };
 

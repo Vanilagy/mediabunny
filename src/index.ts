@@ -135,6 +135,7 @@ export {
 	prefer,
 } from './misc';
 export {
+	OutputTrackGroup,
 	TrackType,
 	ALL_TRACK_TYPES,
 } from './output';

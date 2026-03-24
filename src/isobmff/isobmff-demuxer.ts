@@ -762,6 +762,7 @@ export class IsobmffDemuxer extends Demuxer {
 					inputTrack: null,
 					disposition: {
 						...DEFAULT_TRACK_DISPOSITION,
+						primary: false,
 					},
 					info: null,
 					timescale: -1,

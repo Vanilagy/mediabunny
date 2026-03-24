@@ -103,7 +103,7 @@ const initMediaPlayer = async (resource: File | string) => {
 		let audioTrack: InputAudioTrack | null = null;
 		if (true || typeof resource === 'string' && resource.includes('.m3u8')) {
 			const input = new Input({
-				entryPath: 'playlist.m3u8',
+				entryPath: 'master.m3u8',
 				source: async ({ path }) => {
 					const fileHandle = await dirHandle.getFileHandle(path);
 					const file = await fileHandle.getFile();

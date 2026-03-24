@@ -12,7 +12,7 @@ import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
-import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
+import { DEFAULT_TRACK_DISPOSITION, MetadataTags, TrackDisposition } from '../metadata';
 import {
 	assert,
 	AsyncMutex,
@@ -503,9 +503,10 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		return UNDETERMINED_LANGUAGE;
 	}
 
-	getDisposition() {
+	getDisposition(): TrackDisposition {
 		return {
 			...DEFAULT_TRACK_DISPOSITION,
+			primary: false,
 		};
 	}
 

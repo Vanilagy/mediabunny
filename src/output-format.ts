@@ -25,10 +25,11 @@ import { MediaSource } from './media-source';
 import { Mp3Muxer } from './mp3/mp3-muxer';
 import { Muxer } from './muxer';
 import { OggMuxer } from './ogg/ogg-muxer';
-import { Output, TrackType } from './output';
+import { Output, OutputTrack, TrackType } from './output';
 import { MpegTsMuxer } from './mpeg-ts/mpeg-ts-muxer';
 import { WaveMuxer } from './wave/wave-muxer';
 import { HlsMuxer } from './hls/hls-muxer';
+import { MaybePromise } from './misc';
 
 /**
  * Specifies an inclusive range of integers.
@@ -1093,11 +1094,57 @@ export class MpegTsOutputFormat extends OutputFormat {
 	}
 }
 
+export type HlsOutputPlaylistInfo = {
+	n: number;
+	tracks: OutputTrack[];
+};
+
+type HlsOutputSegmentInfo = {
+	n: number;
+	format: OutputFormat;
+	playlist: HlsOutputPlaylistInfo;
+};
+
+export type HlsOutputFormatOptions = {
+	segmentFormats: OutputFormat[];
+	getPlaylistPath?: (info: HlsOutputPlaylistInfo) => MaybePromise<string>;
+	getSegmentPath?: (info: HlsOutputSegmentInfo) => MaybePromise<string>;
+};
+
 export class HlsOutputFormat extends OutputFormat {
-	_createMuxer(output: Output): Muxer {
-		return new HlsMuxer(output);
+	/** @internal */
+	_options: HlsOutputFormatOptions;
+
+	/** Creates a new {@link HlsOutputFormat} configured with the specified `options`. */
+	constructor(options: HlsOutputFormatOptions) {
+		if (!options || typeof options !== 'object') {
+			throw new TypeError('options must be an object.');
+		}
+		if (
+			!Array.isArray(options.segmentFormats)
+			|| options.segmentFormats.length === 0
+			|| !options.segmentFormats.every(format => format instanceof OutputFormat)
+		) {
+			throw new TypeError('options.segmentFormats must be a non-empty array of OutputFormat instances.');
+		}
+		if (options.getPlaylistPath !== undefined && typeof options.getPlaylistPath !== 'function') {
+			throw new TypeError('options.getPlaylistPath, when provided, must be a function.');
+		}
+		if (options.getSegmentPath !== undefined && typeof options.getSegmentPath !== 'function') {
+			throw new TypeError('options.getSegmentPath, when provided, must be a function.');
+		}
+
+		super();
+
+		this._options = options;
 	}
 
+	/** @internal */
+	_createMuxer(output: Output): Muxer {
+		return new HlsMuxer(output, this);
+	}
+
+	/** @internal */
 	get _name() {
 		return 'HTTP Live Streaming (HLS)';
 	}
@@ -1111,27 +1158,37 @@ export class HlsOutputFormat extends OutputFormat {
 	}
 
 	getSupportedCodecs(): MediaCodec[] {
-		// TODO this should vary based on the HLS "variant"
-		return [
-			...VIDEO_CODECS.filter(codec => ['avc', 'hevc'].includes(codec)),
-			...AUDIO_CODECS.filter(codec => ['aac', 'mp3', 'ac3', 'eac3'].includes(codec)),
-		];
+		const uniqueCodecs = new Set(this._options.segmentFormats.flatMap(x => x.getSupportedCodecs()));
+		return [...uniqueCodecs];
 	}
 
 	getSupportedTrackCounts(): TrackCountLimits {
+		let supportsVideo = false;
+		let supportsAudio = false;
+		let supportsSubtitle = false;
+
+		for (const format of this._options.segmentFormats) {
+			const trackCounts = format.getSupportedTrackCounts();
+			supportsVideo ||= trackCounts.video.max > 0;
+			supportsAudio ||= trackCounts.audio.max > 0;
+			supportsSubtitle ||= trackCounts.subtitle.max > 0;
+		}
+
 		return {
-			video: { min: 0, max: Infinity },
-			audio: { min: 0, max: Infinity },
-			subtitle: { min: 0, max: Infinity },
+			video: { min: 0, max: supportsVideo ? Infinity : 0 },
+			audio: { min: 0, max: supportsAudio ? Infinity : 0 },
+			subtitle: { min: 0, max: 0 }, // Currently disabled
 			total: { min: 1, max: Infinity },
 		};
 	}
 
 	get supportsVideoRotationMetadata(): boolean {
-		return false; // TODO this is not true with fmp4
+		return this._options.segmentFormats.some(format => format.supportsVideoRotationMetadata);
 	}
 
 	get supportsTimestampedMediaData(): boolean {
 		return true; // I guess??
 	}
 }
+
+export const HLS_OUTPUT_FORMATS_DEFAULT = [new AdtsOutputFormat(), new MpegTsOutputFormat()];

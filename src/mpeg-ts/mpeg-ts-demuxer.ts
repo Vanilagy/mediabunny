@@ -49,7 +49,7 @@ import {
 	InputVideoTrackBacking,
 } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
-import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
+import { DEFAULT_TRACK_DISPOSITION, MetadataTags, TrackDisposition } from '../metadata';
 import {
 	assert,
 	binarySearchExact,
@@ -1084,8 +1084,11 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 		return UNDETERMINED_LANGUAGE;
 	}
 
-	getDisposition() {
-		return DEFAULT_TRACK_DISPOSITION;
+	getDisposition(): TrackDisposition {
+		return {
+			...DEFAULT_TRACK_DISPOSITION,
+			primary: false,
+		};
 	}
 
 	getTimeResolution() {

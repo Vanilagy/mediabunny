@@ -69,6 +69,20 @@ export type OutputVideoTrack = OutputTrack & { type: 'video' };
 export type OutputAudioTrack = OutputTrack & { type: 'audio' };
 export type OutputSubtitleTrack = OutputTrack & { type: 'subtitle' };
 
+export class OutputTrackGroup {
+	/** @internal */
+	_pairedGroups = new Set<OutputTrackGroup>();
+
+	pairWith(other: OutputTrackGroup) {
+		if (!(other instanceof OutputTrackGroup)) {
+			throw new TypeError('other must be an OutputTrackGroup.');
+		}
+
+		this._pairedGroups.add(other);
+		other._pairedGroups.add(this);
+	}
+}
+
 /**
  * Base track metadata, applicable to all tracks.
  * @group Output files
@@ -96,6 +110,7 @@ export type BaseTrackMetadata = {
 	 * If you're not fully sure, make sure to add a buffer of around 33% to make sure you stay below the maximum.
 	 */
 	maximumPacketCount?: number;
+	group?: OutputTrackGroup | OutputTrackGroup[];
 };
 
 /**
@@ -145,6 +160,16 @@ const validateBaseTrackMetadata = (metadata: BaseTrackMetadata) => {
 	) {
 		throw new TypeError('metadata.maximumPacketCount, when provided, must be a non-negative integer.');
 	}
+	if (
+		metadata.group !== undefined
+		&& !(metadata.group instanceof OutputTrackGroup)
+		&& (!Array.isArray(metadata.group) || metadata.group.some(group => !(group instanceof OutputTrackGroup)))
+	) {
+		throw new TypeError(
+			'metadata.group, when provided, must be an OutputTrackGroup instance or an array of'
+			+ ' OutputTrackGroup instances.',
+		);
+	}
 };
 
 /**
@@ -157,9 +182,9 @@ export class Output<
 	T extends Target = Target,
 > {
 	/** The format of the output file. */
-	format: F;
-	/** The target to which the file will be written. */
-	target: T | ((request: TargetRequest) => MaybePromise<T>);
+	readonly format: F;
+	/** @internal */
+	_target: T | ((request: TargetRequest) => MaybePromise<T>);
 	/** The current state of the output. */
 	state: 'pending' | 'started' | 'canceled' | 'finalizing' | 'finalized' = 'pending';
 
@@ -181,6 +206,30 @@ export class Output<
 	_mutex = new AsyncMutex();
 	/** @internal */
 	_metadataTags: MetadataTags = {};
+	/** @internal */
+	_defaultTrackGroup = new OutputTrackGroup();
+
+	/** The target to which the root file will be written. Throws if the target-resolving function returns a Promise. */
+	get target(): T {
+		if (this._target instanceof Target) {
+			return this._target;
+		}
+
+		assert(this._rootPath !== null);
+		const returnValue = this._target({ path: this._rootPath });
+		if (returnValue instanceof Promise) {
+			throw new TypeError(
+				'Output.target cannot be used when the target function resolves asynchronously.',
+			);
+		}
+
+		return returnValue;
+	}
+
+	/**
+	 * Called whenever a target is resolved for internal operations.
+	 */
+	onTarget?: (target: Target, request: TargetRequest | null) => unknown;
 
 	/**
 	 * Creates a new instance of {@link Output} which can then be used to create a new media file according to the
@@ -210,28 +259,32 @@ export class Output<
 		}
 
 		this.format = options.format;
-		this.target = options.target;
+		this._target = options.target;
 
 		this._rootPath = options.rootPath ?? null;
 		this._muxer = options.format._createMuxer(this);
 	}
 
-	_getTarget(request: TargetRequest) {
-		assert(typeof this.target === 'function');
+	async _getTarget(request: TargetRequest) {
+		assert(typeof this._target === 'function');
 
-		return this.target(request);
+		const target = await this._target(request);
+		this.onTarget?.(target, request);
+
+		return target;
 	}
 
 	_getRootWriter() {
 		return this._rootWriterPromise ??= (async () => {
 			let writer: Writer;
 
-			if (typeof this.target === 'function') {
+			if (typeof this._target === 'function') {
 				assert(this._rootPath !== null);
 				const rootTarget = await this._getTarget({ path: this._rootPath });
 				writer = rootTarget._createWriter();
 			} else {
-				writer = this.target._createWriter();
+				writer = this._target._createWriter();
+				this.onTarget?.(this._target, null);
 			}
 
 			writer.start();
@@ -260,7 +313,10 @@ export class Output<
 			);
 		}
 
-		this._addTrack('video', source, metadata);
+		const metadataCopy = { ...metadata };
+		metadataCopy.group ??= this._defaultTrackGroup;
+
+		this._addTrack('video', source, metadataCopy);
 	}
 
 	/** Adds an audio track to the output with the given source. Can only be called before the output is started. */
@@ -270,7 +326,10 @@ export class Output<
 		}
 		validateBaseTrackMetadata(metadata);
 
-		this._addTrack('audio', source, metadata);
+		const metadataCopy = { ...metadata };
+		metadataCopy.group ??= this._defaultTrackGroup;
+
+		this._addTrack('audio', source, metadataCopy);
 	}
 
 	/** Adds a subtitle track to the output with the given source. Can only be called before the output is started. */
@@ -280,7 +339,10 @@ export class Output<
 		}
 		validateBaseTrackMetadata(metadata);
 
-		this._addTrack('subtitle', source, metadata);
+		const metadataCopy = { ...metadata };
+		metadataCopy.group ??= this._defaultTrackGroup;
+
+		this._addTrack('subtitle', source, metadataCopy);
 	}
 
 	/**
@@ -300,7 +362,7 @@ export class Output<
 	}
 
 	/** @internal */
-	private _addTrack(type: OutputTrack['type'], source: MediaSource, metadata: object) {
+	private _addTrack(type: OutputTrack['type'], source: MediaSource, metadata: BaseTrackMetadata) {
 		if (this.state !== 'pending') {
 			throw new Error('Cannot add track after output has been started or canceled.');
 		}
@@ -516,7 +578,6 @@ export class Output<
 			await this._muxer.finalize();
 
 			if (this._rootWriterPromise) {
-				console.log('HERE HERE');
 				const rootWriter = await this._rootWriterPromise;
 				await rootWriter.flush();
 				await rootWriter.finalize();

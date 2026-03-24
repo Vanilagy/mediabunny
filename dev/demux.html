@@ -26,10 +26,13 @@
 		*/
 
 		const manifest = new Mediabunny.Input({
-			entryPath: 'https://zdf-hls-15.akamaized.net/hls/live/2016498/de/high/master.m3u8',
+			entryPath: 'https://playertest.longtailvideo.com/adaptive/alt-audio-no-video/sintel/playlist.m3u8',
 			source: ({ path }) => new Mediabunny.UrlSource(path),
 			formats: Mediabunny.ALL_FORMATS,
 		});
+
+		console.log(await manifest.getTracks());
+		return;
 
 		const videoTrack = await manifest.getPrimaryVideoTrack();
 		await videoTrack.hydrate();
