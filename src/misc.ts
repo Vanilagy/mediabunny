@@ -791,6 +791,14 @@ export const joinPaths = (basePath: string, relativePath: string) => {
 		return relativePath;
 	}
 
+	// Strip query parameters from URL base paths so their contents don't mess up the join
+	if (basePath.includes('://')) {
+		const queryIndex = basePath.indexOf('?');
+		if (queryIndex !== -1) {
+			basePath = basePath.slice(0, queryIndex);
+		}
+	}
+
 	let result: string;
 
 	if (relativePath.startsWith('/')) {

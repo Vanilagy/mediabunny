@@ -11,7 +11,6 @@
 	document.body.append(fileInput);
 
 	fileInput.addEventListener('change', async () => {
-		/*
 		const file = fileInput.files[0];
 		const input = new Mediabunny.Input({
 			formats: Mediabunny.ALL_FORMATS,
@@ -19,11 +18,13 @@
 		});
 
 		const track = await input.getPrimaryAudioTrack();
+		const sink3 = new Mediabunny.EncodedPacketSink(track);
+		console.log((await sink3.getFirstPacket()).data.join(', '));
+		return;
 		console.log(await track.getDurationFromMetadata(), await track.computeDuration());
 
 		//console.log(await input.getDurationFromMetadata(), await input.computeDuration());
 		return;
-		*/
 
 		const manifest = new Mediabunny.Input({
 			entryPath: 'https://playertest.longtailvideo.com/adaptive/alt-audio-no-video/sintel/playlist.m3u8',

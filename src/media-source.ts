@@ -22,12 +22,14 @@ import { OutputAudioTrack, OutputSubtitleTrack, OutputTrack, OutputVideoTrack } 
 import {
 	assert,
 	assertNever,
+	binarySearchLessOrEqual,
 	CallSerializer,
 	clamp,
 	clearIntervalUnthrottled,
 	isFirefox,
 	last,
 	promiseWithResolvers,
+	roundToDivisor,
 	setInt24,
 	setIntervalUnthrottled,
 	setUint24,
@@ -213,6 +215,16 @@ class VideoEncoderWrapper {
 	private codedHeight: number | null = null;
 	private resizeCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
 
+	// VideoEncoder converts everything to microseconds, so we need to do some bookkeeping to restore the original
+	// timing information
+	private preciseTimings: {
+		microsecondTimestamp: number;
+		timestamp: number;
+		duration: number;
+		timestampIsValid: boolean;
+		durationIsValid: boolean;
+	}[] = [];
+
 	private customEncoder: CustomVideoEncoder | null = null;
 	private customEncoderCallSerializer = new CallSerializer();
 	private customEncoderQueueSize = 0;
@@ -352,6 +364,38 @@ class VideoEncoderWrapper {
 				assert(this.encoder);
 
 				const videoFrame = videoSample.toVideoFrame();
+
+				const preciseTimingIndex = binarySearchLessOrEqual(
+					this.preciseTimings,
+					videoFrame.timestamp,
+					x => x.microsecondTimestamp,
+				);
+				const existingEntry = preciseTimingIndex !== -1
+					? this.preciseTimings[preciseTimingIndex]
+					: null;
+				if (existingEntry && existingEntry.microsecondTimestamp === videoFrame.timestamp) {
+					if (existingEntry.timestamp !== videoSample.timestamp) {
+						// Mapping isn't unique, can't use the timestamp
+						existingEntry.timestampIsValid = false;
+					}
+					if (existingEntry.duration !== videoSample.duration) {
+						// Mapping isn't unique, can't use the duration
+						existingEntry.durationIsValid = false;
+					}
+				} else {
+					this.preciseTimings.splice(preciseTimingIndex + 1, 0, {
+						microsecondTimestamp: videoFrame.timestamp,
+						timestamp: videoSample.timestamp,
+						duration: videoSample.duration,
+						timestampIsValid: true,
+						durationIsValid: true,
+					});
+
+					// Make sure it doesn't grow indefinitely
+					if (this.preciseTimings.length > 128) {
+						this.preciseTimings.shift();
+					}
+				}
 
 				if (!this.alphaEncoder) {
 					// No alpha encoder, simple case
@@ -515,7 +559,25 @@ class VideoEncoderWrapper {
 						sideData.alpha = alphaData;
 					}
 
-					const packet = EncodedPacket.fromEncodedChunk(colorChunk, sideData);
+					let packet = EncodedPacket.fromEncodedChunk(colorChunk, sideData);
+
+					const preciseTimingIndex = binarySearchLessOrEqual(
+						this.preciseTimings,
+						colorChunk.timestamp,
+						x => x.microsecondTimestamp,
+					);
+					const entry = preciseTimingIndex !== -1
+						? this.preciseTimings[preciseTimingIndex]
+						: null;
+
+					// If there's a relevant timing entry, refine the packet's timing data to get better accuracy than
+					// microseconds
+					if (entry && entry.microsecondTimestamp === colorChunk.timestamp) {
+						packet = packet.clone({
+							timestamp: entry.timestampIsValid ? entry.timestamp : undefined,
+							duration: entry.durationIsValid ? entry.duration : undefined,
+						});
+					}
 
 					this.encodingConfig.onEncodedPacket?.(packet, meta);
 					void this.muxer!.addEncodedVideoPacket(this.source._connectedTrack!, packet, meta)
@@ -1766,7 +1828,16 @@ class AudioEncoderWrapper {
 							}
 						}
 
-						const packet = EncodedPacket.fromEncodedChunk(chunk);
+						let packet = EncodedPacket.fromEncodedChunk(chunk);
+
+						// Snap the timing information to the sample rate to recover information lost in microsecond
+						// conversion
+						packet = packet.clone({
+							timestamp: roundToDivisor(packet.timestamp, encoderConfig.sampleRate),
+							duration: chunk.duration != null
+								? roundToDivisor(packet.duration, encoderConfig.sampleRate)
+								: undefined,
+						});
 
 						this.encodingConfig.onEncodedPacket?.(packet, meta);
 						void this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet, meta)

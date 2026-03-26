@@ -1189,6 +1189,11 @@ export class HlsOutputFormat extends OutputFormat {
 	get supportsTimestampedMediaData(): boolean {
 		return true; // I guess??
 	}
+
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	override _codecUnsupportedHint(codec: MediaCodec): string {
+		return ` Using different segment formats may grant support for this codec.`;
+	}
 }
 
 export const HLS_OUTPUT_FORMATS_DEFAULT = [new AdtsOutputFormat(), new MpegTsOutputFormat()];

@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { joinPaths } from '../../src/misc.js';
 
-test('joinPaths handles all path combinations correctly', () => {
+test('joinPaths', () => {
 	// Simple relative paths
 	expect(joinPaths('path/to/entry.m3u8', 'other.m3u8')).toBe('path/to/other.m3u8');
 	expect(joinPaths('entry.m3u8', 'other.m3u8')).toBe('other.m3u8');
@@ -35,6 +35,19 @@ test('joinPaths handles all path combinations correctly', () => {
 	// Mixed ./ and ../
 	expect(joinPaths('path/to/entry.m3u8', './../other.m3u8')).toBe('path/other.m3u8');
 	expect(joinPaths('path/to/entry.m3u8', '../foo/../other.m3u8')).toBe('path/other.m3u8');
+
+	// URL base path with query parameters
+	expect(joinPaths('https://example.com/path/to/entry.m3u8?token=abc', 'other.m3u8'))
+		.toBe('https://example.com/path/to/other.m3u8');
+	expect(joinPaths('https://example.com/path/to/entry.m3u8?redirect=/foo/bar', 'other.m3u8'))
+		.toBe('https://example.com/path/to/other.m3u8');
+	expect(joinPaths('https://example.com/path/to/entry.m3u8?token=abc', '/other.m3u8'))
+		.toBe('https://example.com/other.m3u8');
+	expect(joinPaths('https://example.com/path/to/entry.m3u8?token=abc', '../other.m3u8'))
+		.toBe('https://example.com/path/other.m3u8');
+
+	// Filesystem paths with ? in the name are preserved
+	expect(joinPaths('path/to/sus?directory/file.m3u8', 'other.m3u8')).toBe('path/to/sus?directory/other.m3u8');
 
 	// Second argument is a full URL with protocol
 	expect(joinPaths('path/to/entry.m3u8', 'https://example.com/other.m3u8'))

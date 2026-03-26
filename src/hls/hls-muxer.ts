@@ -1,6 +1,6 @@
 import { MediaCodec, validateAudioChunkMetadata, validateVideoChunkMetadata } from '../codec';
-import { EncodedAudioPacketSource, EncodedVideoPacketSource, MediaSource } from '../media-source';
-import { assert, joinPaths, textEncoder, UNDETERMINED_LANGUAGE } from '../misc';
+import { EncodedAudioPacketSource, EncodedVideoPacketSource } from '../media-source';
+import { arrayArgmax, assert, findLastIndex, joinPaths, textEncoder, UNDETERMINED_LANGUAGE } from '../misc';
 import { Muxer } from '../muxer';
 import {
 	Output,
@@ -32,7 +32,6 @@ type HlsAudioTrackData = HlsTrackData & { info: { type: 'audio' } };
 
 type Playlist = {
 	id: number;
-	key: string;
 	path: string;
 	tracks: OutputTrack[];
 	segmentFormat: OutputFormat;
@@ -349,6 +348,10 @@ export class HlsMuxer extends Muxer {
 		};
 
 		const registerPlaylist = async (tracks: OutputTrack[]) => {
+			if (tracks.some(track => this.playlists.some(playlist => playlist.tracks.includes(track)))) {
+				throw new Error('Internal error: track is already registered in a playlist.'); // Should be unreachable
+			}
+
 			const id = this.playlists.length + 1;
 			const path = await this.getPlaylistPath({
 				n: id,
@@ -363,12 +366,10 @@ export class HlsMuxer extends Muxer {
 				);
 			}
 
-			const key = tracks.map(x => x.id).join('-');
 			const format = deduceSegmentFormat(tracks);
 
 			const playlist: Playlist = {
 				id: this.playlists.length + 1,
-				key,
 				path,
 				tracks,
 				segmentFormat: format,
@@ -393,8 +394,7 @@ export class HlsMuxer extends Muxer {
 			for (let i = 0; i < group.tracks.length; i++) {
 				const track = group.tracks[i]!;
 
-				const key = track.id.toString();
-				let playlist = this.playlists.find(x => x.key === key);
+				let playlist = this.playlists.find(x => x.tracks[0]!.id === track.id);
 				playlist ??= await registerPlaylist([track]);
 
 				this.playlistDeclarations.push({
@@ -407,8 +407,8 @@ export class HlsMuxer extends Muxer {
 		}
 
 		for (const variant of variantStreams) {
-			const key = variant.tracks.map(x => x.id).join('-');
-			let playlist = this.playlists.find(x => x.key === key);
+			// Since tracks can only be assigned to one playlist, the first track's ID acts as a "playlist key"
+			let playlist = this.playlists.find(x => x.tracks[0]!.id === variant.tracks[0]!.id);
 			playlist ??= await registerPlaylist(variant.tracks);
 
 			this.playlistDeclarations.push({
@@ -423,7 +423,7 @@ export class HlsMuxer extends Muxer {
 	}
 
 	async getMimeType(): Promise<string> {
-		throw new Error('TODO');
+		return 'application/vnd.apple.mpegurl';
 	}
 
 	private allTracksAreKnown(playlist: Playlist) {
@@ -590,85 +590,131 @@ export class HlsMuxer extends Muxer {
 			return;
 		}
 
+		const trackDatas = this.trackDatas.filter(x => playlist.tracks.includes(x.track));
+		const videoTrack = trackDatas.find(x => x.info.type === 'video') as HlsVideoTrackData | undefined;
+		const audioTrack = trackDatas.find(x => x.info.type === 'audio') as HlsAudioTrackData | undefined;
+
+		const videoClosed = videoTrack
+			? videoTrack.track.source._closed || isFinalCall
+			: true;
+		const audioClosed = audioTrack
+			? audioTrack.track.source._closed || isFinalCall
+			: true;
+
+		// Loop in case we can finalize multiple segments
 		while (true) {
 			const currentSegmentEndTimestamp = playlist.currentSegmentStartTimestamp + this.targetSegmentDuration;
 
-			let videoKeyEndTimestamp: number | null = null;
-			let videoEndTimestamp: number | null = null;
-			let audioEndTimestamp: number | null = null;
-			let flushAllVideo = false;
-			let flushAllAudio = false;
+			// These store the index (exclusive) until when packets can be added to the next segment
+			let videoEndIndex = 0;
+			let audioEndIndex = 0;
 
-			const trackDatas = this.trackDatas.filter(x => playlist.tracks.includes(x.track));
+			if (videoTrack && (!videoClosed || videoTrack.packets.length > 0)) {
+				const allBelow = videoTrack.packets.every(x => x.timestamp < currentSegmentEndTimestamp);
 
-			for (const trackData of trackDatas) {
-				for (let i = 0; i < trackData.packets.length; i++) {
-					const packet = trackData.packets[i]!;
-					const endTimestamp = packet.timestamp + packet.duration;
+				let bestKeyPacket: EncodedPacket | null = null;
+				let bestKeyPacketIndex: number | null = null;
 
-					if (trackData.info.type === 'video') {
-						videoEndTimestamp = Math.max(videoEndTimestamp ?? -Infinity, endTimestamp);
+				if (allBelow) {
+					if (!videoClosed) {
+						// Not enough data yet
+						return;
+					}
+				} else {
+					// Find the best key packet timestamp
+					for (let i = 0; i < videoTrack.packets.length; i++) {
+						const packet = videoTrack.packets[i]!;
 
-						if (i > 0 && packet.type === 'key') {
-							if (
-								videoKeyEndTimestamp !== null
-								&& packet.timestamp > currentSegmentEndTimestamp
-							) {
-								break;
-							}
-
-							videoKeyEndTimestamp = packet.timestamp;
-						}
-					} else if (trackData.info.type === 'audio') {
-						if (
-							audioEndTimestamp !== null
-							&& packet.timestamp > currentSegmentEndTimestamp
-						) {
+						if (bestKeyPacket !== null && packet.timestamp > currentSegmentEndTimestamp) {
 							break;
 						}
 
-						audioEndTimestamp = packet.timestamp;
+						if (i > 0 && packet.type === 'key') {
+							bestKeyPacket = packet;
+							bestKeyPacketIndex = i;
+						}
+					}
+				}
 
-						const endTimestamp = packet.timestamp + packet.duration;
-						if (endTimestamp <= currentSegmentEndTimestamp) {
-							audioEndTimestamp = Math.max(audioEndTimestamp ?? -Infinity, endTimestamp);
-							if (i === trackData.packets.length - 1) {
-								flushAllAudio = true;
+				if (bestKeyPacketIndex !== null) {
+					videoEndIndex = bestKeyPacketIndex;
+
+					if (audioTrack) {
+						// The audio track must go at least until the video key frame
+						const index = audioTrack.packets.findIndex(x => x.timestamp >= bestKeyPacket!.timestamp);
+						if (index !== -1) {
+							audioEndIndex = index;
+						} else {
+							if (audioClosed) {
+								audioEndIndex = audioTrack.packets.length;
+							} else {
+								return;
+							}
+						}
+					}
+				} else {
+					if (!videoClosed) {
+						return;
+					}
+
+					// Include the entire rest of the video (since there's no key frame to split it on)
+					videoEndIndex = videoTrack.packets.length;
+					const maxIndex = arrayArgmax(videoTrack.packets, x => x.timestamp);
+					const maxPacket = videoTrack.packets[maxIndex];
+					assert(maxPacket);
+
+					if (audioTrack) {
+						if (maxPacket.timestamp < currentSegmentEndTimestamp) {
+							// The audio must go until at least the start of the next segment
+							const index = audioTrack.packets.findIndex(x => x.timestamp >= currentSegmentEndTimestamp);
+							if (index !== -1) {
+								audioEndIndex = index;
+							} else {
+								if (audioClosed) {
+									audioEndIndex = audioTrack.packets.length;
+								} else {
+									return;
+								}
+							}
+						} else {
+							// The audio must go beyond the last video packet
+							const index = audioTrack.packets.findIndex(x => x.timestamp > maxPacket.timestamp);
+							if (index !== -1) {
+								audioEndIndex = index;
+							} else {
+								if (audioClosed) {
+									audioEndIndex = audioTrack.packets.length;
+								} else {
+									return;
+								}
 							}
 						}
 					}
 				}
-			}
+			} else if (audioTrack && (!audioClosed || audioTrack.packets.length > 0)) {
+				const allBelow = audioTrack.packets.every(x => x.timestamp < currentSegmentEndTimestamp);
 
-			let endTimestamp: number | null = null;
-			if (videoKeyEndTimestamp !== null && videoEndTimestamp! > currentSegmentEndTimestamp) {
-				endTimestamp = videoKeyEndTimestamp;
-			} else {
-				if (isFinalCall) {
-					endTimestamp = videoEndTimestamp;
-					flushAllVideo = true;
-				}
-
-				if (audioEndTimestamp !== null) {
-					endTimestamp = Math.max(endTimestamp ?? -Infinity, audioEndTimestamp);
-				}
-			}
-
-			if (endTimestamp === null) {
-				return;
-			} else {
-				if (!isFinalCall && endTimestamp < currentSegmentEndTimestamp) {
-					return;
-				}
-
-				for (const trackData of trackDatas) {
-					const closed = trackData.track.source._closed || isFinalCall;
-					if (!closed && !trackData.packets.some(x => x.timestamp >= endTimestamp)) {
+				if (allBelow) {
+					if (audioClosed) {
+						audioEndIndex = audioTrack.packets.length;
+					} else {
 						return;
+					}
+				} else {
+					const index = findLastIndex(audioTrack.packets, x => x.timestamp <= currentSegmentEndTimestamp);
+					if (index !== -1) {
+						audioEndIndex = index;
+					} else {
+						audioEndIndex = 1;
 					}
 				}
 			}
 
+			if (videoEndIndex === 0 && audioEndIndex === 0) {
+				return;
+			}
+
+			// We can finalize a new segment! Let's first get the path
 			const relativeSegmentPath = await this.getSegmentPath({
 				n: playlist.nextSegmentId,
 				format: playlist.segmentFormat,
@@ -705,67 +751,49 @@ export class HlsMuxer extends Muxer {
 				},
 			});
 
+			let maxEndTimestamp = -Infinity;
+
 			try {
-				const packetSources = new Map<HlsTrackData, MediaSource>();
+				let videoSource: EncodedVideoPacketSource | null = null;
+				let audioSource: EncodedAudioPacketSource | null = null;
 
-				for (const trackData of trackDatas) {
-					if (trackData.packets.length === 0) {
-						continue;
-					}
+				if (videoTrack) {
+					// Always add the track, no matter if it has packets or not (maintains underlying IDs)
+					videoSource = new EncodedVideoPacketSource((videoTrack.track as OutputVideoTrack).source._codec);
+					output.addVideoTrack(videoSource, videoTrack.track.metadata);
+				}
 
-					if (trackData.info.type === 'video') {
-						const outputTrack = trackData.track as OutputVideoTrack;
-						const source = new EncodedVideoPacketSource(outputTrack.source._codec);
-						output.addVideoTrack(source, outputTrack.metadata);
-
-						packetSources.set(trackData, source);
-					} else if (trackData.info.type === 'audio') {
-						const outputTrack = trackData.track as OutputAudioTrack;
-						const source = new EncodedAudioPacketSource(outputTrack.source._codec);
-						output.addAudioTrack(source, outputTrack.metadata);
-
-						packetSources.set(trackData, source);
-					}
+				if (audioTrack) {
+					// Always add the track, no matter if it has packets or not (maintains underlying IDs)
+					audioSource = new EncodedAudioPacketSource((audioTrack.track as OutputAudioTrack).source._codec);
+					output.addAudioTrack(audioSource, audioTrack.track.metadata);
 				}
 
 				await output.start();
 
-				for (const trackData of trackDatas) {
-					const source = packetSources.get(trackData);
-					if (!source) {
-						continue;
+				// Add all of the packets
+
+				if (videoTrack) {
+					assert(videoSource);
+					const meta = { decoderConfig: videoTrack.info.decoderConfig };
+
+					for (let i = 0; i < videoEndIndex; i++) {
+						const packet = videoTrack.packets[i]!;
+
+						await videoSource.add(packet, meta);
+						maxEndTimestamp = Math.max(maxEndTimestamp, packet.timestamp + packet.duration);
 					}
+				}
 
-					if (trackData.info.type === 'video') {
-						const videoPacketSource = source as EncodedVideoPacketSource;
-						const meta = { decoderConfig: trackData.info.decoderConfig };
+				if (audioTrack) {
+					assert(audioSource);
+					const meta = { decoderConfig: audioTrack.info.decoderConfig };
 
-						while (trackData.packets.length > 0) {
-							const nextPacket = trackData.packets[0]!;
-							if (!flushAllVideo && nextPacket.timestamp >= endTimestamp) {
-								break;
-							}
+					for (let i = 0; i < audioEndIndex; i++) {
+						const packet = audioTrack.packets[i]!;
 
-							trackData.packets.shift();
-							await videoPacketSource.add(nextPacket, meta);
-						}
-
-						videoPacketSource.close();
-					} else if (trackData.info.type === 'audio') {
-						const audioPacketSource = source as EncodedAudioPacketSource;
-						const meta = { decoderConfig: trackData.info.decoderConfig };
-
-						while (trackData.packets.length > 0) {
-							const nextPacket = trackData.packets[0]!;
-							if (!flushAllAudio && nextPacket.timestamp >= endTimestamp) {
-								break;
-							}
-
-							trackData.packets.shift();
-							await audioPacketSource.add(nextPacket, meta);
-						}
-
-						audioPacketSource.close();
+						await audioSource.add(packet, meta);
+						maxEndTimestamp = Math.max(maxEndTimestamp, packet.timestamp + packet.duration);
 					}
 				}
 
@@ -775,13 +803,35 @@ export class HlsMuxer extends Muxer {
 				throw e;
 			}
 
+			if (videoEndIndex > 0) {
+				assert(videoTrack);
+				videoTrack.packets.splice(0, videoEndIndex);
+			}
+			if (audioEndIndex > 0) {
+				assert(audioTrack);
+				audioTrack.packets.splice(0, audioEndIndex);
+			}
+
+			let minNextTimestamp = Infinity;
+			if (videoTrack && videoTrack.packets.length > 0) {
+				minNextTimestamp = videoTrack.packets[0]!.timestamp;
+			}
+			if (audioTrack && audioTrack.packets.length > 0) {
+				minNextTimestamp = Math.min(minNextTimestamp, audioTrack.packets[0]!.timestamp);
+			}
+
+			const nextSegmentStartTimestamp = minNextTimestamp < Infinity
+				? minNextTimestamp
+				: maxEndTimestamp; // Happens for the last segment for example
+			assert(Number.isFinite(nextSegmentStartTimestamp));
+
 			playlist.writtenSegments.push({
 				path: relativeSegmentPath,
-				duration: endTimestamp - playlist.currentSegmentStartTimestamp,
+				duration: nextSegmentStartTimestamp - playlist.currentSegmentStartTimestamp,
 				byteSize: segmentSize,
 			});
 
-			playlist.currentSegmentStartTimestamp = endTimestamp;
+			playlist.currentSegmentStartTimestamp = nextSegmentStartTimestamp;
 		}
 	}
 
@@ -822,11 +872,11 @@ export class HlsMuxer extends Muxer {
 			const playlistText = '#EXTM3U\n'
 				+ '#EXT-X-VERSION:3\n'
 				+ '#EXT-X-PLAYLIST-TYPE:VOD\n'
-				+ `#EXT-X-TARGETDURATION:${+targetDuration.toPrecision(13)}\n`
+				+ `#EXT-X-TARGETDURATION:${Math.ceil(targetDuration)}\n` // Must be a "decimal-integer"
 				+ '\n'
 				+ (playlist.writtenSegments
 					.map(segment => (
-						`#EXTINF:${+segment.duration.toPrecision(13)}\n`
+						`#EXTINF:${+segment.duration.toFixed(12)},\n` // Trailing comma mandated by spec
 						+ `${segment.path}\n`
 					))
 					.join(''))
@@ -914,7 +964,7 @@ export class HlsMuxer extends Muxer {
 						}
 
 						if (videoTrack.metadata.frameRate !== undefined) {
-							masterPlaylistText += `,FRAME-RATE=${videoTrack.metadata.frameRate}`;
+							masterPlaylistText += `,FRAME-RATE=${+videoTrack.metadata.frameRate.toFixed(16)}`;
 						}
 					}
 
