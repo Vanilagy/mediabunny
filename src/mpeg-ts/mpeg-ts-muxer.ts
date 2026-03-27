@@ -96,7 +96,7 @@ export class MpegTsMuxer extends Muxer {
 		const release = await this.mutex.acquire();
 
 		this.writer = await this.output._getRootWriter();
-		this.writer.ensureMonotonicity = true;
+		this.writer.ensureMonotonicity();
 
 		release();
 	}

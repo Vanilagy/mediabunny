@@ -9,7 +9,8 @@
 import { Box, free, ftyp, IsobmffBoxWriter, mdat, mfra, moof, moov, vtta, vttc, vtte } from './isobmff-boxes';
 import { Muxer } from '../muxer';
 import { Output, OutputAudioTrack, OutputSubtitleTrack, OutputTrack, OutputVideoTrack } from '../output';
-import { BufferTargetWriter, Writer } from '../writer';
+import { Writer } from '../writer';
+import { BufferTarget } from '../target';
 import { assert, computeRationalApproximation, last, promiseWithResolvers, Rational, simplifyRational } from '../misc';
 import { IsobmffOutputFormatOptions, IsobmffOutputFormat, MovOutputFormat } from '../output-format';
 import { inlineTimestampRegex, SubtitleConfig, SubtitleCue, SubtitleMetadata } from '../subtitles';
@@ -25,7 +26,6 @@ import {
 } from '../codec';
 import { MAX_ADTS_FRAME_HEADER_SIZE, MIN_ADTS_FRAME_HEADER_SIZE, readAdtsFrameHeader } from '../adts/adts-reader';
 import { FileSlice } from '../reader';
-import { BufferTarget } from '../target';
 import { EncodedPacket, PacketType } from '../packet';
 import {
 	concatNalUnitsInLengthPrefixed,
@@ -158,7 +158,7 @@ export class IsobmffMuxer extends Muxer {
 	isQuickTime: boolean;
 
 	private auxTarget = new BufferTarget();
-	private auxWriter = this.auxTarget._createWriter();
+	private auxWriter = new Writer(this.auxTarget);
 	private auxBoxWriter = new IsobmffBoxWriter(this.auxWriter);
 
 	private mdat: Box | null = null;
@@ -191,12 +191,12 @@ export class IsobmffMuxer extends Muxer {
 
 		// If the fastStart option isn't defined, enable in-memory fast start if the target is an ArrayBuffer, as the
 		// memory usage remains identical
-		const fastStartDefault = this.writer instanceof BufferTargetWriter ? 'in-memory' : false;
+		const fastStartDefault = this.writer.target instanceof BufferTarget ? 'in-memory' : false;
 		this.fastStart = this.format._options.fastStart ?? fastStartDefault;
 		this.isFragmented = this.fastStart === 'fragmented';
 
 		if (this.fastStart === 'in-memory' || this.isFragmented) {
-			this.writer.ensureMonotonicity = true;
+			this.writer.ensureMonotonicity();
 		}
 
 		const holdsAvc = this.output._tracks.some(x => x.isVideoTrack() && x.source._codec === 'avc');
@@ -673,7 +673,7 @@ export class IsobmffMuxer extends Muxer {
 				const box = vtte();
 				this.auxBoxWriter.writeBox(box);
 
-				const body = this.auxWriter.getSlice(0, this.auxWriter.getPos());
+				const body = this.auxTarget._getSlice(0, this.auxWriter.getPos());
 				const sample = this.createSampleForTrack(
 					trackData,
 					body,
@@ -728,7 +728,7 @@ export class IsobmffMuxer extends Muxer {
 				}
 			}
 
-			const body = this.auxWriter.getSlice(0, this.auxWriter.getPos());
+			const body = this.auxTarget._getSlice(0, this.auxWriter.getPos());
 			const sample = this.createSampleForTrack(trackData, body, sampleStart, sampleEnd - sampleStart, 'key');
 
 			await this.registerSample(trackData, sample);

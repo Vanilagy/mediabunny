@@ -381,17 +381,17 @@ export class Output<
 
 	_getRootWriter() {
 		return this._rootWriterPromise ??= (async () => {
-			let writer: Writer;
+			let target: Target;
 
 			if (typeof this._target === 'function') {
 				assert(this._rootPath !== null);
-				const rootTarget = await this._getTarget({ path: this._rootPath, isRoot: true });
-				writer = rootTarget._createWriter();
+				target = await this._getTarget({ path: this._rootPath, isRoot: true });
 			} else {
-				writer = this._target._createWriter();
+				target = this._target;
 				this.onTarget?.(this._target, null);
 			}
 
+			const writer = new Writer(target);
 			writer.start();
 			return writer;
 		})();

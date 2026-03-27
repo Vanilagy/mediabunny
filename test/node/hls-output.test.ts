@@ -1,7 +1,7 @@
 import { expect, test, vi } from 'vitest';
 import { Output, OutputTrackGroup } from '../../src/output.js';
-import { HLS_OUTPUT_FORMATS_DEFAULT, HlsOutputFormat, MpegTsOutputFormat } from '../../src/output-format.js';
-import { BufferTarget, NullTarget } from '../../src/target.js';
+import { HlsOutputFormat, MpegTsOutputFormat } from '../../src/output-format.js';
+import { BufferTarget, NullTarget, StreamTarget, StreamTargetChunk } from '../../src/target.js';
 import { EncodedAudioPacketSource, EncodedVideoPacketSource } from '../../src/media-source.js';
 import { HlsMuxer } from '../../src/hls/hls-muxer.js';
 import { AudioCodec, VideoCodec } from '../../src/codec.js';
@@ -19,7 +19,7 @@ const audioSource = (codec: AudioCodec = 'aac') => new EncodedAudioPacketSource(
 test('Playlist assignment, single video', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: HLS_OUTPUT_FORMATS_DEFAULT,
+			segmentFormats: [new MpegTsOutputFormat()],
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -41,7 +41,7 @@ test('Playlist assignment, single video', async () => {
 test('Playlist assignment, single audio', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: HLS_OUTPUT_FORMATS_DEFAULT,
+			segmentFormats: [new MpegTsOutputFormat()],
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -63,7 +63,7 @@ test('Playlist assignment, single audio', async () => {
 test('Playlist assignment, multiple video', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: HLS_OUTPUT_FORMATS_DEFAULT,
+			segmentFormats: [new MpegTsOutputFormat()],
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -91,7 +91,7 @@ test('Playlist assignment, multiple video', async () => {
 test('Playlist assignment, multiple audio', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: HLS_OUTPUT_FORMATS_DEFAULT,
+			segmentFormats: [new MpegTsOutputFormat()],
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -119,7 +119,7 @@ test('Playlist assignment, multiple audio', async () => {
 test('Playlist assignment, multiple video with different metadata #1', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: HLS_OUTPUT_FORMATS_DEFAULT,
+			segmentFormats: [new MpegTsOutputFormat()],
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -155,7 +155,7 @@ test('Playlist assignment, multiple video with different metadata #1', async () 
 test('Playlist assignment, multiple video with different metadata #2', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: HLS_OUTPUT_FORMATS_DEFAULT,
+			segmentFormats: [new MpegTsOutputFormat()],
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -191,7 +191,7 @@ test('Playlist assignment, multiple video with different metadata #2', async () 
 test('Playlist assignment, multiple audio with different metadata', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: HLS_OUTPUT_FORMATS_DEFAULT,
+			segmentFormats: [new MpegTsOutputFormat()],
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -227,7 +227,7 @@ test('Playlist assignment, multiple audio with different metadata', async () => 
 test('Playlist assignment, video and audio', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: HLS_OUTPUT_FORMATS_DEFAULT,
+			segmentFormats: [new MpegTsOutputFormat()],
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -250,7 +250,7 @@ test('Playlist assignment, video and audio', async () => {
 test('Playlist assignment, one video and multiple audio', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: HLS_OUTPUT_FORMATS_DEFAULT,
+			segmentFormats: [new MpegTsOutputFormat()],
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -292,7 +292,7 @@ test('Playlist assignment, one video and multiple audio', async () => {
 test('Playlist assignment, multiple video and one audio', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: HLS_OUTPUT_FORMATS_DEFAULT,
+			segmentFormats: [new MpegTsOutputFormat()],
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -334,7 +334,7 @@ test('Playlist assignment, multiple video and one audio', async () => {
 test('Playlist assignment, multiple video and audio', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: HLS_OUTPUT_FORMATS_DEFAULT,
+			segmentFormats: [new MpegTsOutputFormat()],
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -388,7 +388,7 @@ test('Playlist assignment, multiple video and audio', async () => {
 test('Playlist assignment, video and audio in different groups', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: HLS_OUTPUT_FORMATS_DEFAULT,
+			segmentFormats: [new MpegTsOutputFormat()],
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -421,7 +421,7 @@ test('Playlist assignment, video and audio in different groups', async () => {
 test('Playlist assignment, multiple video and audio in pairs', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: HLS_OUTPUT_FORMATS_DEFAULT,
+			segmentFormats: [new MpegTsOutputFormat()],
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -467,7 +467,7 @@ test('Playlist assignment, multiple video and audio in pairs', async () => {
 test('Playlist assignment, multiple video and audio with some unpaired', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: HLS_OUTPUT_FORMATS_DEFAULT,
+			segmentFormats: [new MpegTsOutputFormat()],
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -525,7 +525,7 @@ test('Playlist assignment, multiple video and audio with some unpaired', async (
 test('Playlist assignment, multiple video and audio with multiple groups', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: HLS_OUTPUT_FORMATS_DEFAULT,
+			segmentFormats: [new MpegTsOutputFormat()],
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -594,7 +594,7 @@ test('Playlist assignment, multiple video and audio with multiple groups', async
 test('Playlist assignment, video with multiple audio codecs', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: HLS_OUTPUT_FORMATS_DEFAULT,
+			segmentFormats: [new MpegTsOutputFormat()],
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -639,7 +639,7 @@ test('Playlist assignment, video with multiple audio codecs', async () => {
 test('Playlist assignment, audio with multiple video codecs', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: HLS_OUTPUT_FORMATS_DEFAULT,
+			segmentFormats: [new MpegTsOutputFormat()],
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -677,7 +677,7 @@ test('Playlist assignment, audio with multiple video codecs', async () => {
 test('Playlist assignment, multiple video with conflicting audio interests', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: HLS_OUTPUT_FORMATS_DEFAULT,
+			segmentFormats: [new MpegTsOutputFormat()],
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -730,7 +730,7 @@ test('Playlist assignment, video paired with video', async () => {
 
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: HLS_OUTPUT_FORMATS_DEFAULT,
+			segmentFormats: [new MpegTsOutputFormat()],
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -767,7 +767,7 @@ test('Playlist assignment, audio paired with audio', async () => {
 
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: HLS_OUTPUT_FORMATS_DEFAULT,
+			segmentFormats: [new MpegTsOutputFormat()],
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -831,7 +831,6 @@ const setUpSegmentationEnvironment = async (options: {
 	const output = new Output({
 		format: new HlsOutputFormat({
 			segmentFormats: [new MpegTsOutputFormat()], // No ADTS for simplicity
-			targetDuration: 2,
 		}),
 		target: (request) => {
 			const target = new BufferTarget();
@@ -1826,7 +1825,6 @@ test('onSegment, onPlaylist, onMaster events', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
 			segmentFormats: [new MpegTsOutputFormat()],
-			targetDuration: 2,
 			onSegment,
 			onPlaylist,
 			onMaster,
@@ -1878,4 +1876,95 @@ test('onSegment, onPlaylist, onMaster events', async () => {
 	expect(onMaster).toHaveBeenCalledTimes(1);
 	expect(typeof onMaster.mock.calls[0]![0]).toBe('string');
 	expect(onMaster.mock.calls[0]![0]).toContain('#EXTM3U');
+});
+
+test('Single-file mode', async () => {
+	let playlistText: string | null = null;
+	const segmentPaths = new Set<string>();
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormats: [new MpegTsOutputFormat()],
+			singleFilePerPlaylist: true,
+		}),
+		target: (request) => {
+			const target = new BufferTarget();
+
+			if (request.path.includes('playlist')) {
+				target.onfinalized = () => {
+					playlistText = new TextDecoder().decode(target.buffer!);
+				};
+			} else if (request.path.includes('segment')) {
+				segmentPaths.add(request.path);
+			}
+
+			return target;
+		},
+		rootPath: '',
+	});
+
+	const source = videoSource();
+	output.addVideoTrack(source);
+
+	await output.start();
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0), avcMetadata);
+
+	await output.finalize();
+
+	// Only one segment file should have been created
+	expect(segmentPaths.size).toBe(1);
+
+	expect(playlistText).not.toBeNull();
+	expect(playlistText!.match(/#EXT-X-BYTERANGE/g)).toHaveLength(2);
+});
+
+test('StreamTarget, write is called for each target', async () => {
+	const writeCounts = new Map<string, number>();
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormats: [new MpegTsOutputFormat()],
+		}),
+		target: (request) => {
+			writeCounts.set(request.path, 0);
+
+			const writable = new WritableStream<StreamTargetChunk>({
+				write() {
+					writeCounts.set(request.path, writeCounts.get(request.path)! + 1);
+				},
+			});
+
+			return new StreamTarget(writable);
+		},
+		rootPath: '',
+	});
+
+	const source = videoSource();
+	output.addVideoTrack(source);
+
+	await output.start();
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0), avcMetadata);
+
+	await output.finalize();
+
+	// Every StreamTarget should have been written to at least once
+	for (const [path, count] of writeCounts) {
+		expect(count, `Expected writes for ${path}`).toBeGreaterThanOrEqual(1);
+	}
 });

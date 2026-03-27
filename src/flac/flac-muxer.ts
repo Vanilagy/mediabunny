@@ -51,7 +51,7 @@ export class FlacMuxer extends Muxer {
 		this.format = format;
 
 		if (this.format._options.appendOnly) {
-			this.writer.ensureMonotonicity = true;
+			this.writer.ensureMonotonicity();
 		}
 	}
 

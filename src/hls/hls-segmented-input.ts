@@ -107,6 +107,8 @@ export class HlsSegmentedInput extends SegmentedInput {
 		let lastByteRangeEnd: number | null = null;
 		let nextByteRange: { offset: number; length: number } | null = null;
 		let lastProgramDateTimeSeconds: number | null = null;
+		let targetDuration: number | null = null;
+		let segmentSeen = false;
 
 		// Used for repeated parses where our job it is to only add the new segments
 		let prevLastSegment = last(this.segments) ?? null;
@@ -220,7 +222,17 @@ export class HlsSegmentedInput extends SegmentedInput {
 
 			if (line.startsWith('#EXTINF:')) {
 				if (prevLastSegment) {
+					segmentSeen = true;
 					continue;
+				}
+
+				if (!segmentSeen) {
+					if (lastProgramDateTimeSeconds === null && nextSequenceNumber > 0 && targetDuration !== null) {
+						// Offset the first segment's start timestamp by the following:
+						accumulatedTime = nextSequenceNumber * targetDuration;
+					}
+
+					segmentSeen = true;
 				}
 
 				const extinfContent = line.slice(8);
@@ -400,6 +412,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 				}
 
 				this.refreshInterval = duration;
+				targetDuration = duration;
 			} else if (line === '#EXT-X-ENDLIST') {
 				this.streamHasEnded = true;
 				break; // No need to keep reading after this
@@ -410,6 +423,10 @@ export class HlsSegmentedInput extends SegmentedInput {
 					this.streamHasEnded = true;
 				}
 			}
+		}
+
+		if (!headerRead) {
+			throw new Error('Invalid M3U8 file; no #EXTM3U header.');
 		}
 	}
 

@@ -12,6 +12,7 @@ import {
 	OutputTrackGroup,
 	MpegTsOutputFormat,
 	AdtsOutputFormat,
+	StreamTarget,
 } from 'mediabunny';
 
 const durationSlider = document.querySelector('#duration-slider') as HTMLInputElement;
@@ -96,19 +97,30 @@ const generateVideo = async () => {
 		// Create a new output file
 		output = new Output({
 			rootPath: 'master.m3u8',
-			target: ({ path }) => {
+			target: async ({ path }) => {
+				const fileHandle = await dirHandle.getFileHandle(path, { create: true });
+				const writable = await fileHandle.createWritable();
+
+				const target = new StreamTarget(writable);
+				target.onfinalized = () => console.log('Finalizado', path);
+
+				return target;
+
+				/*
 				const target = new BufferTarget();
 				target.onfinalized = async () => {
 					const fileHandle = await dirHandle.getFileHandle(path, { create: true });
 					const writable = await fileHandle.createWritable();
-					await writable.write(target.buffer!);
+					await writable.write(target.buffer);
 					await writable.close();
 				};
 
 				return target;
+				*/
 			},
 			format: new HlsOutputFormat({
 				segmentFormats: [new AdtsOutputFormat(), new MpegTsOutputFormat()],
+				// singleFilePerPlaylist: true,
 				getPlaylistPath: info => `sussex-${info.n}.m3u8`,
 			}),
 		});
@@ -216,12 +228,14 @@ const generateVideo = async () => {
 		videoInfo.style.display = '';
 
 		// Display and play the resulting media file
+		/*
 		const videoBlob = new Blob([output.target.buffer!], { type: output.format.mimeType });
 		resultVideo.src = URL.createObjectURL(videoBlob);
 		void resultVideo.play();
 
 		const fileSizeMiB = (videoBlob.size / (1024 * 1024)).toPrecision(3);
 		videoInfo.textContent = `File size: ${fileSizeMiB} MiB`;
+		*/
 	} catch (error) {
 		console.error(error);
 

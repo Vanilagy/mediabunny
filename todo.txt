@@ -6,6 +6,5 @@ Also, why not just have the packet metadata on the packet? I think that would ma
 
 - Add an HLS "live mode". Challenge, where does bitrate come from?
 
-- hls muxer starting offset
-- hls demuxer offset by segment number * targetduration
 - fmp4 muxing (CMAF??)
+- ext-x-i-frames-only writing

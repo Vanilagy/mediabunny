@@ -476,8 +476,8 @@ test.concurrent('fMP4 Bitmovin', { timeout: 15_000 }, async () => {
 	const videoTrack = await input.pluckVideoTrack();
 	assert(videoTrack);
 
-	expect(await videoTrack.getFirstTimestamp()).toBe(0);
-	expect(await videoTrack.computeDuration()).toBe(210.28);
+	expect(await videoTrack.getFirstTimestamp()).toBe(4);
+	expect(await videoTrack.computeDuration()).toBe(214.28);
 
 	expect(sourceCount).toBe(5);
 });

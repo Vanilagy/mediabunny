@@ -1102,6 +1102,7 @@ export type HlsOutputPlaylistInfo = {
 
 export type HlsOutputSegmentInfo = {
 	n: number;
+	isSingleFile: boolean;
 	format: OutputFormat;
 	playlist: HlsOutputPlaylistInfo;
 };
@@ -1109,11 +1110,13 @@ export type HlsOutputSegmentInfo = {
 export type HlsOutputFormatOptions = {
 	segmentFormats: OutputFormat[];
 	targetDuration?: number;
+	singleFilePerPlaylist?: boolean;
 	getPlaylistPath?: (info: HlsOutputPlaylistInfo) => MaybePromise<string>;
 	getSegmentPath?: (info: HlsOutputSegmentInfo) => MaybePromise<string>;
 
 	onMaster?: (content: string) => unknown;
 	onPlaylist?: (content: string, info: HlsOutputPlaylistInfo) => unknown;
+	// Document how this is called for the single-file mode
 	onSegment?: (target: Target, info: HlsOutputSegmentInfo) => unknown;
 };
 
@@ -1138,6 +1141,9 @@ export class HlsOutputFormat extends OutputFormat {
 			&& (typeof options.targetDuration !== 'number' || options.targetDuration <= 0)
 		) {
 			throw new TypeError('options.targetDuration, when provided, must be a positive number.');
+		}
+		if (options.singleFilePerPlaylist !== undefined && typeof options.singleFilePerPlaylist !== 'boolean') {
+			throw new TypeError('options.singleFilePerPlaylist, when provided, must be a boolean.');
 		}
 		if (options.getPlaylistPath !== undefined && typeof options.getPlaylistPath !== 'function') {
 			throw new TypeError('options.getPlaylistPath, when provided, must be a function.');
@@ -1216,5 +1222,3 @@ export class HlsOutputFormat extends OutputFormat {
 		return ` Using different segment formats may grant support for this codec.`;
 	}
 }
-
-export const HLS_OUTPUT_FORMATS_DEFAULT = [new AdtsOutputFormat(), new MpegTsOutputFormat()];

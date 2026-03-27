@@ -168,7 +168,7 @@ export class MatroskaMuxer extends Muxer {
 		this.ebmlWriter = new EBMLWriter(this.writer);
 
 		if (this.format._options.appendOnly) {
-			this.writer.ensureMonotonicity = true;
+			this.writer.ensureMonotonicity();
 		}
 
 		this.writeEBMLHeader();
