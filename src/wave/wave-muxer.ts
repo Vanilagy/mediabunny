@@ -369,8 +369,6 @@ export class WaveMuxer extends Muxer {
 			this.riffWriter.writeU32(this.dataSize);
 		}
 
-		this.writer.seek(endPos);
-
 		release();
 	}
 }

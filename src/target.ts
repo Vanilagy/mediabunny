@@ -49,7 +49,7 @@ export abstract class Target {
 	onfinalized: (() => unknown) | null = null;
 
 	slice(offset: number) {
-		if (!Number.isInteger(offset) && offset < 0) {
+		if (!Number.isInteger(offset) || offset < 0) {
 			throw new TypeError('offset must be a non-negative integer.');
 		}
 

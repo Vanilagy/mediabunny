@@ -1332,8 +1332,6 @@ export class MatroskaMuxer extends Muxer {
 		this.ebmlWriter.writeEBML(this.cues);
 
 		if (!this.format._options.appendOnly) {
-			const endPos = this.writer.getPos();
-
 			// Write the Segment size
 			const segmentSize = this.writer.getPos() - this.segmentDataOffset;
 			this.writer.seek(this.ebmlWriter.offsets.get(this.segment!)! + 4);
@@ -1352,8 +1350,6 @@ export class MatroskaMuxer extends Muxer {
 			this.writer.seek(this.ebmlWriter.offsets.get(this.seekHead)!);
 			this.maybeCreateSeekHead(true);
 			this.ebmlWriter.writeEBML(this.seekHead);
-
-			this.writer.seek(endPos);
 		}
 
 		release();

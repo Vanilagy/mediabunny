@@ -164,8 +164,6 @@ export class Mp3Muxer extends Muxer {
 			this.format._options.onXingFrame(data, start);
 		}
 
-		this.writer.seek(endPos);
-
 		release();
 	}
 }
