@@ -1924,6 +1924,7 @@ test('Single-file mode', async () => {
 
 	expect(playlistText).not.toBeNull();
 	expect(playlistText!.match(/#EXT-X-BYTERANGE/g)).toHaveLength(2);
+	expect(playlistText).toContain('#EXT-X-VERSION:4');
 });
 
 test('StreamTarget, write is called for each target', async () => {
@@ -1967,4 +1968,72 @@ test('StreamTarget, write is called for each target', async () => {
 	for (const [path, count] of writeCounts) {
 		expect(count, `Expected writes for ${path}`).toBeGreaterThanOrEqual(1);
 	}
+});
+
+test('I-frame stream', async () => {
+	let masterText = '';
+	let playlistText = '';
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormats: [new MpegTsOutputFormat()],
+			onMaster: (text) => { masterText = text; },
+			onPlaylist: (text) => { playlistText = text; },
+		}),
+		target: () => new BufferTarget(),
+		rootPath: '',
+	});
+
+	const source = videoSource();
+	output.addVideoTrack(source, { hasOnlyKeyPackets: true });
+
+	await output.start();
+
+	const muxer = output._muxer as HlsMuxer;
+	expect(muxer.playlistDeclarations).toHaveLength(1);
+	expect(muxer.playlistDeclarations[0]!.playlist.tracks).toHaveLength(1);
+	expect(muxer.playlistDeclarations[0]!.groupId).toBeNull();
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 1), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'key', 1, 1), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 1), avcMetadata);
+
+	await output.finalize();
+
+	expect(playlistText).toContain('#EXT-X-I-FRAMES-ONLY');
+	expect(playlistText).toContain('#EXT-X-VERSION:4');
+
+	expect(masterText).toContain('#EXT-X-I-FRAME-STREAM-INF:');
+	expect(masterText).toMatch(/#EXT-X-I-FRAME-STREAM-INF:[^\n]*URI="/);
+	expect(masterText).not.toContain('#EXT-X-STREAM-INF:');
+});
+
+test('I-frame stream, pairing warning', async () => {
+	const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormats: [new MpegTsOutputFormat()],
+		}),
+		target: () => new NullTarget(),
+		rootPath: '',
+	});
+
+	const group = new OutputTrackGroup();
+	output.addVideoTrack(videoSource(), { hasOnlyKeyPackets: true, group });
+	output.addAudioTrack(audioSource(), { group });
+
+	await output.start();
+
+	const muxer = output._muxer as HlsMuxer;
+	// Despite being pairable, they must end up as separate unpaired declarations
+	expect(muxer.playlistDeclarations).toHaveLength(2);
+	expect(muxer.playlistDeclarations[0]!.playlist.tracks).toHaveLength(1);
+	expect(muxer.playlistDeclarations[1]!.playlist.tracks).toHaveLength(1);
+	expect(muxer.playlistDeclarations[0]!.groupId).toBeNull();
+	expect(muxer.playlistDeclarations[1]!.groupId).toBeNull();
+
+	expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('key-packets-only'));
+
+	warnSpy.mockRestore();
 });

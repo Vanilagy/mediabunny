@@ -87,6 +87,7 @@ type InternalMediaChunk = {
 type MatroskaTrackData = {
 	chunkQueue: InternalMediaChunk[];
 	lastWrittenMsTimestamp: number | null;
+	closed: boolean;
 } & ({
 	track: OutputVideoTrack;
 	type: 'video';
@@ -771,6 +772,7 @@ export class MatroskaMuxer extends Muxer {
 			},
 			chunkQueue: [],
 			lastWrittenMsTimestamp: null,
+			closed: false,
 		};
 
 		if (track.source._codec === 'vp9') {
@@ -857,6 +859,7 @@ export class MatroskaMuxer extends Muxer {
 			},
 			chunkQueue: [],
 			lastWrittenMsTimestamp: null,
+			closed: false,
 		};
 
 		this.trackDatas.push(newTrackData);
@@ -888,6 +891,7 @@ export class MatroskaMuxer extends Muxer {
 			},
 			chunkQueue: [],
 			lastWrittenMsTimestamp: null,
+			closed: false,
 		};
 
 		this.trackDatas.push(newTrackData);
@@ -1009,7 +1013,7 @@ export class MatroskaMuxer extends Muxer {
 			let minTimestamp = Infinity;
 
 			for (const trackData of this.trackDatas) {
-				if (!isFinalCall && trackData.chunkQueue.length === 0 && !trackData.track.source._closed) {
+				if (!isFinalCall && trackData.chunkQueue.length === 0 && !trackData.closed) {
 					break outer;
 				}
 
@@ -1120,7 +1124,7 @@ export class MatroskaMuxer extends Muxer {
 				return firstQueuedSample.type === 'key';
 			}
 
-			return otherTrackData.track.source._closed;
+			return otherTrackData.closed;
 		});
 
 		let shouldCreateNewCluster = false;
@@ -1285,8 +1289,13 @@ export class MatroskaMuxer extends Muxer {
 	}
 
 	// eslint-disable-next-line @typescript-eslint/no-misused-promises
-	override async onTrackClose() {
+	override async onTrackClose(track: OutputTrack) {
 		const release = await this.mutex.acquire();
+
+		const trackData = this.trackDatas.find(x => x.track === track);
+		if (trackData) {
+			trackData.closed = true;
+		}
 
 		if (this.allTracksAreKnown()) {
 			this.allTracksKnown.resolve();
@@ -1303,6 +1312,10 @@ export class MatroskaMuxer extends Muxer {
 		const release = await this.mutex.acquire();
 
 		this.allTracksKnown.resolve();
+
+		for (const trackData of this.trackDatas) {
+			trackData.closed = true;
+		}
 
 		if (!this.segment) {
 			this.createSegment();

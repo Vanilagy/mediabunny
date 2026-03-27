@@ -118,6 +118,7 @@ export class HlsMuxer extends Muxer {
 
 		let hasVideo = false;
 		let illegalPairingDetected = false;
+		let keyPacketsOnlyPairingWarned = false;
 
 		// First, let's build the "sibling" groups induced by track pairability
 		for (const track of this.output._tracks) {
@@ -143,6 +144,22 @@ export class HlsMuxer extends Muxer {
 							+ ` treating them as unpaired.`,
 						);
 						illegalPairingDetected = true;
+					}
+
+					continue;
+				}
+
+				// Key-packets-only tracks can neither pair with nor be paired with other tracks
+				if (
+					(track.isVideoTrack() && track.metadata.hasOnlyKeyPackets)
+					|| (otherTrack.isVideoTrack() && otherTrack.metadata.hasOnlyKeyPackets)
+				) {
+					if (!keyPacketsOnlyPairingWarned) {
+						console.warn(
+							`A key-packets-only video track is pairable with another track, which is not`
+							+ ` possible in HLS; treating them as unpaired.`,
+						);
+						keyPacketsOnlyPairingWarned = true;
 					}
 
 					continue;
@@ -462,12 +479,13 @@ export class HlsMuxer extends Muxer {
 
 		try {
 			const trackData = this.trackDatas.find(x => x.track === track);
-			if (!trackData) {
-				return;
+			if (trackData) {
+				trackData.closed = true;
 			}
 
-			trackData.closed = true;
-			await this.advancePlaylist(trackData.playlist);
+			const playlist = this.playlists.find(x => x.tracks.includes(track));
+			assert(playlist); // If there isn't one then the assignment algo failed innit
+			await this.advancePlaylist(playlist);
 		} finally {
 			release();
 		}
@@ -956,15 +974,26 @@ export class HlsMuxer extends Muxer {
 			}
 
 			let targetDuration = this.targetSegmentDuration;
+			let hasByteOffsets = false;
 			for (const segment of playlist.writtenSegments) {
 				targetDuration = Math.max(targetDuration, segment.duration);
+				hasByteOffsets ||= segment.byteOffset !== null;
+			}
+
+			const isKeyPacketsOnly = playlist.tracks[0]!.isVideoTrack()
+				&& playlist.tracks[0].metadata.hasOnlyKeyPackets;
+
+			let version = 3;
+			if (isKeyPacketsOnly || hasByteOffsets) {
+				version = 4;
 			}
 
 			const playlistPath = joinPaths(this.output._rootPath!, playlist.path);
 			const playlistText = '#EXTM3U\n'
-				+ '#EXT-X-VERSION:3\n'
+				+ `#EXT-X-VERSION:${version}\n`
 				+ '#EXT-X-PLAYLIST-TYPE:VOD\n'
 				+ `#EXT-X-TARGETDURATION:${Math.ceil(targetDuration)}\n` // Must be a "decimal-integer"
+				+ (isKeyPacketsOnly ? '#EXT-X-I-FRAMES-ONLY\n' : '')
 				+ '\n'
 				+ (playlist.writtenSegments
 					.map(segment => (
@@ -999,6 +1028,9 @@ export class HlsMuxer extends Muxer {
 
 			for (const decl of this.playlistDeclarations) {
 				if (decl.groupId === null) {
+					const isKeyPacketsOnly = decl.playlist.tracks[0]!.isVideoTrack()
+						&& decl.playlist.tracks[0].metadata.hasOnlyKeyPackets;
+
 					const codecs: string[] = [];
 					for (const track of decl.playlist.tracks) {
 						const trackData = this.trackDatas.find(x => x.track === track);
@@ -1036,7 +1068,12 @@ export class HlsMuxer extends Muxer {
 						firstVariantWritten = true;
 					}
 
-					masterPlaylistText += `#EXT-X-STREAM-INF:`;
+					if (isKeyPacketsOnly) {
+						masterPlaylistText += `#EXT-X-I-FRAME-STREAM-INF:`;
+					} else {
+						masterPlaylistText += `#EXT-X-STREAM-INF:`;
+					}
+
 					masterPlaylistText += `BANDWIDTH=${Math.ceil(totalPeakBitrate)}`;
 
 					if (totalAverageBitrate > 0) {
@@ -1066,7 +1103,8 @@ export class HlsMuxer extends Muxer {
 							}
 						}
 
-						if (videoTrack.metadata.frameRate !== undefined) {
+						// FRAME-RATE is not defined for EXT-X-I-FRAME-STREAM-INF
+						if (!isKeyPacketsOnly && videoTrack.metadata.frameRate !== undefined) {
 							masterPlaylistText += `,FRAME-RATE=${+videoTrack.metadata.frameRate.toFixed(16)}`;
 						}
 					}
@@ -1083,19 +1121,27 @@ export class HlsMuxer extends Muxer {
 						}
 					}
 
-					const groupIdForType = new Map<string, string>();
-					for (const ref of decl.references) {
-						assert(ref.groupId !== null);
-						const type = ref.playlist.tracks[0]!.type;
-						groupIdForType.set(type, ref.groupId);
+					if (!isKeyPacketsOnly) {
+						const groupIdForType = new Map<string, string>();
+						for (const ref of decl.references) {
+							assert(ref.groupId !== null);
+							const type = ref.playlist.tracks[0]!.type;
+							groupIdForType.set(type, ref.groupId);
+						}
+
+						for (const [type, id] of groupIdForType) {
+							masterPlaylistText += `,${type.toUpperCase()}="${id}"`;
+						}
 					}
 
-					for (const [type, id] of groupIdForType) {
-						masterPlaylistText += `,${type.toUpperCase()}="${id}"`;
+					if (isKeyPacketsOnly) {
+						// EXT-X-I-FRAME-STREAM-INF is standalone with a URI attribute
+						masterPlaylistText += `,URI="${decl.playlist.path}"`;
+						masterPlaylistText += '\n';
+					} else {
+						masterPlaylistText += '\n';
+						masterPlaylistText += `${decl.playlist.path}\n`;
 					}
-
-					masterPlaylistText += '\n';
-					masterPlaylistText += `${decl.playlist.path}\n`;
 				} else {
 					assert(decl.playlist.tracks.length === 1);
 

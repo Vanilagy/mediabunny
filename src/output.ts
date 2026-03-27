@@ -232,6 +232,11 @@ export type VideoTrackMetadata = BaseTrackMetadata & {
 	 * with the same timestamp.
 	 */
 	frameRate?: number;
+	/**
+	 * When true, this track is marked as being made only out of key frames (I-frames). It is an error to add a non-key
+	 * frame to this track.
+	 */
+	hasOnlyKeyPackets?: boolean;
 };
 /**
  * Additional metadata for audio tracks.

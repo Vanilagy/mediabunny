@@ -60,6 +60,7 @@ type MpegTsTrackData = {
 	adtsHeader: Uint8Array | null;
 	adtsHeaderBitstream: Bitstream | null;
 	firstPacketWritten: boolean;
+	closed: boolean;
 };
 
 type QueuedPacket = {
@@ -139,6 +140,7 @@ export class MpegTsMuxer extends Muxer {
 			adtsHeader: null,
 			adtsHeaderBitstream: null,
 			firstPacketWritten: false,
+			closed: false,
 		};
 
 		this.trackDatas.push(newTrackData);
@@ -204,6 +206,7 @@ export class MpegTsMuxer extends Muxer {
 			adtsHeader: null,
 			adtsHeaderBitstream: null,
 			firstPacketWritten: false,
+			closed: false,
 		};
 
 		this.trackDatas.push(newTrackData);
@@ -498,7 +501,7 @@ export class MpegTsMuxer extends Muxer {
 				if (
 					!isFinalCall
 					&& trackData.packetQueue.length === 0
-					&& !trackData.track.source._closed
+					&& !trackData.closed
 				) {
 					break outer;
 				}
@@ -714,13 +717,14 @@ export class MpegTsMuxer extends Muxer {
 	override async onTrackClose(track: OutputTrack) {
 		const release = await this.mutex.acquire();
 
-		if (this.allTracksAreKnown()) {
-			this.allTracksKnown.resolve();
-		}
-
 		const trackData = this.trackDatas.find(x => x.track === track);
 		if (trackData) {
+			trackData.closed = true;
 			await this.flushTimestampQueue(trackData, false);
+		}
+
+		if (this.allTracksAreKnown()) {
+			this.allTracksKnown.resolve();
 		}
 
 		await this.interleavePackets();
@@ -734,6 +738,7 @@ export class MpegTsMuxer extends Muxer {
 		this.allTracksKnown.resolve();
 
 		for (const trackData of this.trackDatas) {
+			trackData.closed = true;
 			await this.flushTimestampQueue(trackData, false);
 		}
 

@@ -171,6 +171,12 @@ export abstract class VideoSource extends MediaSource {
 	}
 }
 
+const maybeEnsureIsKeyPacket = (track: OutputVideoTrack, packet: EncodedPacket) => {
+	if (track.metadata.hasOnlyKeyPackets && packet.type !== 'key') {
+		throw new Error('Cannot add non-key packets to a hasOnlyKeyPackets video track.');
+	}
+};
+
 /**
  * The most basic video source; can be used to directly pipe encoded packets into the output file.
  * @group Media sources
@@ -204,6 +210,8 @@ export class EncodedVideoPacketSource extends VideoSource {
 		}
 
 		this._ensureValidAdd();
+
+		maybeEnsureIsKeyPacket(this._connectedTrack!, packet);
 		return this._connectedTrack!.output._muxer.addEncodedVideoPacket(this._connectedTrack!, packet, meta);
 	}
 }
@@ -493,6 +501,8 @@ class VideoEncoderWrapper {
 						throw new TypeError('The second argument passed to onPacket must be an object or undefined.');
 					}
 
+					maybeEnsureIsKeyPacket(this.source._connectedTrack!, packet);
+
 					this.encodingConfig.onEncodedPacket?.(packet, meta);
 					void this.muxer!.addEncodedVideoPacket(this.source._connectedTrack!, packet, meta)
 						.catch((error) => {
@@ -581,6 +591,8 @@ class VideoEncoderWrapper {
 							duration: entry.durationIsValid ? entry.duration : undefined,
 						});
 					}
+
+					maybeEnsureIsKeyPacket(this.source._connectedTrack!, packet);
 
 					this.encodingConfig.onEncodedPacket?.(packet, meta);
 					void this.muxer!.addEncodedVideoPacket(this.source._connectedTrack!, packet, meta)

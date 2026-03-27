@@ -78,6 +78,7 @@ export type IsobmffTrackData = {
 		firstChunk: number;
 		samplesPerChunk: number;
 	}[];
+	closed: boolean;
 } & ({
 	track: OutputVideoTrack;
 	type: 'video';
@@ -372,6 +373,7 @@ export class IsobmffMuxer extends Muxer {
 			finalizedChunks: [],
 			currentChunk: null,
 			compactlyCodedChunkTable: [],
+			closed: false,
 		};
 
 		this.trackDatas.push(newTrackData);
@@ -451,6 +453,7 @@ export class IsobmffMuxer extends Muxer {
 			finalizedChunks: [],
 			currentChunk: null,
 			compactlyCodedChunkTable: [],
+			closed: false,
 		};
 
 		this.trackDatas.push(newTrackData);
@@ -492,6 +495,7 @@ export class IsobmffMuxer extends Muxer {
 			finalizedChunks: [],
 			currentChunk: null,
 			compactlyCodedChunkTable: [],
+			closed: false,
 
 			lastCueEndTimestamp: 0,
 			cueQueue: [],
@@ -965,7 +969,7 @@ export class IsobmffMuxer extends Muxer {
 						return firstQueuedSample.type === 'key';
 					}
 
-					return otherTrackData.track.source._closed;
+					return otherTrackData.closed;
 				});
 
 				if (
@@ -1055,7 +1059,7 @@ export class IsobmffMuxer extends Muxer {
 			let minTimestamp = Infinity;
 
 			for (const trackData of this.trackDatas) {
-				if (!isFinalCall && trackData.sampleQueue.length === 0 && !trackData.track.source._closed) {
+				if (!isFinalCall && trackData.sampleQueue.length === 0 && !trackData.closed) {
 					break outer;
 				}
 
@@ -1246,6 +1250,8 @@ export class IsobmffMuxer extends Muxer {
 
 		const trackData = this.trackDatas.find(x => x.track === track);
 		if (trackData) {
+			trackData.closed = true;
+
 			if (trackData.type === 'subtitle' && track.source._codec === 'webvtt') {
 				await this.processWebVTTCues(trackData, Infinity);
 			}
@@ -1272,6 +1278,8 @@ export class IsobmffMuxer extends Muxer {
 		this.allTracksKnown.resolve();
 
 		for (const trackData of this.trackDatas) {
+			trackData.closed = true;
+
 			if (trackData.type === 'subtitle' && trackData.track.source._codec === 'webvtt') {
 				await this.processWebVTTCues(trackData, Infinity);
 			}
