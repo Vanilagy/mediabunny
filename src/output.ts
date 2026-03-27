@@ -16,6 +16,7 @@ import { Writer } from './writer';
 
 export type TargetRequest = {
 	path: string;
+	isRoot: boolean;
 };
 
 /**
@@ -47,27 +48,101 @@ export const ALL_TRACK_TYPES = ['video', 'audio', 'subtitle'] as const;
  */
 export type TrackType = typeof ALL_TRACK_TYPES[number];
 
-export type OutputTrack = {
-	id: number;
-	output: Output;
-	type: TrackType;
-} & ({
-	type: 'video';
-	source: VideoSource;
-	metadata: VideoTrackMetadata;
-} | {
-	type: 'audio';
-	source: AudioSource;
-	metadata: AudioTrackMetadata;
-} | {
-	type: 'subtitle';
-	source: SubtitleSource;
-	metadata: SubtitleTrackMetadata;
-});
+/**
+ * Represents a track added to an {@link Output}.
+ * @group Output files
+ * @public
+ */
+export abstract class OutputTrack {
+	/** @internal */
+	readonly id: number;
+	/** The {@link Output} this track belongs to. */
+	readonly output: Output;
+	/** The type of this track. */
+	readonly type: TrackType;
+	/** The media source providing data for this track. */
+	readonly source: MediaSource;
+	/** The metadata associated with this track. */
+	readonly metadata: BaseTrackMetadata;
 
-export type OutputVideoTrack = OutputTrack & { type: 'video' };
-export type OutputAudioTrack = OutputTrack & { type: 'audio' };
-export type OutputSubtitleTrack = OutputTrack & { type: 'subtitle' };
+	/** @internal */
+	protected constructor(
+		id: number,
+		output: Output,
+		type: TrackType,
+		source: MediaSource,
+		metadata: BaseTrackMetadata,
+	) {
+		this.id = id;
+		this.output = output;
+		this.type = type;
+		this.source = source;
+		this.metadata = metadata;
+	}
+
+	/** Returns true if and only if this track is a video track. */
+	isVideoTrack(): this is OutputVideoTrack {
+		return this.type === 'video';
+	}
+
+	/** Returns true if and only if this track is an audio track. */
+	isAudioTrack(): this is OutputAudioTrack {
+		return this.type === 'audio';
+	}
+
+	/** Returns true if and only if this track is a subtitle track. */
+	isSubtitleTrack(): this is OutputSubtitleTrack {
+		return this.type === 'subtitle';
+	}
+}
+
+/**
+ * An {@link OutputTrack} containing video data.
+ * @group Output files
+ * @public
+ */
+export class OutputVideoTrack extends OutputTrack {
+	declare readonly type: 'video';
+	declare readonly source: VideoSource;
+	declare readonly metadata: VideoTrackMetadata;
+
+	/** @internal */
+	constructor(id: number, output: Output, source: VideoSource, metadata: VideoTrackMetadata) {
+		super(id, output, 'video', source, metadata);
+	}
+}
+
+/**
+ * An {@link OutputTrack} containing audio data.
+ * @group Output files
+ * @public
+ */
+export class OutputAudioTrack extends OutputTrack {
+	declare readonly type: 'audio';
+	declare readonly source: AudioSource;
+	declare readonly metadata: AudioTrackMetadata;
+
+	/** @internal */
+	constructor(id: number, output: Output, source: AudioSource, metadata: AudioTrackMetadata) {
+		super(id, output, 'audio', source, metadata);
+	}
+}
+
+/**
+ * An {@link OutputTrack} containing subtitle data.
+ * @group Output files
+ * @public
+ */
+export class OutputSubtitleTrack extends OutputTrack {
+	declare readonly type: 'subtitle';
+	declare readonly source: SubtitleSource;
+	declare readonly metadata: SubtitleTrackMetadata;
+
+	/** @internal */
+	constructor(id: number, output: Output, source: SubtitleSource, metadata: SubtitleTrackMetadata) {
+		super(id, output, 'subtitle', source, metadata);
+	}
+}
 
 export class OutputTrackGroup {
 	/** @internal */
@@ -246,7 +321,7 @@ export class Output<
 		}
 
 		assert(this._rootPath !== null);
-		const returnValue = this._target({ path: this._rootPath });
+		const returnValue = this._target({ path: this._rootPath, isRoot: true });
 		if (returnValue instanceof Promise) {
 			throw new TypeError(
 				'Output.target cannot be used when the target function resolves asynchronously.',
@@ -310,7 +385,7 @@ export class Output<
 
 			if (typeof this._target === 'function') {
 				assert(this._rootPath !== null);
-				const rootTarget = await this._getTarget({ path: this._rootPath });
+				const rootTarget = await this._getTarget({ path: this._rootPath, isRoot: true });
 				writer = rootTarget._createWriter();
 			} else {
 				writer = this._target._createWriter();
@@ -346,7 +421,9 @@ export class Output<
 		const metadataCopy = { ...metadata };
 		metadataCopy.group ??= this._defaultTrackGroup;
 
-		this._addTrack('video', source, metadataCopy);
+		return this._addTrack(new OutputVideoTrack(
+			this._tracks.length + 1, this, source, metadataCopy,
+		));
 	}
 
 	/** Adds an audio track to the output with the given source. Can only be called before the output is started. */
@@ -359,7 +436,9 @@ export class Output<
 		const metadataCopy = { ...metadata };
 		metadataCopy.group ??= this._defaultTrackGroup;
 
-		this._addTrack('audio', source, metadataCopy);
+		return this._addTrack(new OutputAudioTrack(
+			this._tracks.length + 1, this, source, metadataCopy,
+		));
 	}
 
 	/** Adds a subtitle track to the output with the given source. Can only be called before the output is started. */
@@ -372,7 +451,9 @@ export class Output<
 		const metadataCopy = { ...metadata };
 		metadataCopy.group ??= this._defaultTrackGroup;
 
-		this._addTrack('subtitle', source, metadataCopy);
+		return this._addTrack(new OutputSubtitleTrack(
+			this._tracks.length + 1, this, source, metadataCopy,
+		));
 	}
 
 	/**
@@ -392,26 +473,26 @@ export class Output<
 	}
 
 	/** @internal */
-	private _addTrack(type: OutputTrack['type'], source: MediaSource, metadata: BaseTrackMetadata) {
+	private _addTrack<T extends OutputTrack>(track: T) {
 		if (this.state !== 'pending') {
 			throw new Error('Cannot add track after output has been started or canceled.');
 		}
-		if (source._connectedTrack) {
+		if (track.source._connectedTrack) {
 			throw new Error('Source is already used for a track.');
 		}
 
 		// Verify maximum track count constraints
 		const supportedTrackCounts = this.format.getSupportedTrackCounts();
 		const presentTracksOfThisType = this._tracks.reduce(
-			(count, track) => count + (track.type === type ? 1 : 0),
+			(count, t) => count + (t.type === track.type ? 1 : 0),
 			0,
 		);
-		const maxCount = supportedTrackCounts[type].max;
+		const maxCount = supportedTrackCounts[track.type].max;
 		if (presentTracksOfThisType === maxCount) {
 			throw new Error(
 				maxCount === 0
-					? `${this.format._name} does not support ${type} tracks.`
-					: (`${this.format._name} does not support more than ${maxCount} ${type} track`
+					? `${this.format._name} does not support ${track.type} tracks.`
+					: (`${this.format._name} does not support more than ${maxCount} ${track.type} track`
 						+ `${maxCount === 1 ? '' : 's'}.`),
 			);
 		}
@@ -423,15 +504,7 @@ export class Output<
 			);
 		}
 
-		const track = {
-			id: this._tracks.length + 1,
-			output: this,
-			type,
-			source: source as unknown,
-			metadata,
-		} as OutputTrack;
-
-		if (track.type === 'video') {
+		if (track.isVideoTrack()) {
 			const supportedVideoCodecs = this.format.getSupportedVideoCodecs();
 
 			if (supportedVideoCodecs.length === 0) {
@@ -446,7 +519,7 @@ export class Output<
 					+ this.format._codecUnsupportedHint(track.source._codec),
 				);
 			}
-		} else if (track.type === 'audio') {
+		} else if (track.isAudioTrack()) {
 			const supportedAudioCodecs = this.format.getSupportedAudioCodecs();
 
 			if (supportedAudioCodecs.length === 0) {
@@ -461,7 +534,7 @@ export class Output<
 					+ this.format._codecUnsupportedHint(track.source._codec),
 				);
 			}
-		} else if (track.type === 'subtitle') {
+		} else if (track.isSubtitleTrack()) {
 			const supportedSubtitleCodecs = this.format.getSupportedSubtitleCodecs();
 
 			if (supportedSubtitleCodecs.length === 0) {
@@ -479,7 +552,9 @@ export class Output<
 		}
 
 		this._tracks.push(track);
-		source._connectedTrack = track;
+		track.source._connectedTrack = track;
+
+		return track;
 	}
 
 	/**

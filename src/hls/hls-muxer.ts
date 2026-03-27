@@ -11,9 +11,10 @@ import {
 	OutputVideoTrack,
 	TrackType,
 } from '../output';
-import { HlsOutputFormat, HlsOutputFormatOptions, OutputFormat } from '../output-format';
+import { HlsOutputFormat, HlsOutputFormatOptions, HlsOutputSegmentInfo, OutputFormat } from '../output-format';
 import { EncodedPacket } from '../packet';
 import { SubtitleCue, SubtitleMetadata } from '../subtitles';
+import { Target } from '../target';
 
 type HlsTrackData = {
 	track: OutputTrack;
@@ -59,7 +60,7 @@ export class HlsMuxer extends Muxer {
 	getPlaylistPath: NonNullable<HlsOutputFormatOptions['getPlaylistPath']>;
 	getSegmentPath: NonNullable<HlsOutputFormatOptions['getSegmentPath']>;
 
-	targetSegmentDuration = 2;
+	targetSegmentDuration: number;
 	trackDatas: HlsTrackData[] = [];
 
 	playlists: Playlist[] = [];
@@ -73,6 +74,7 @@ export class HlsMuxer extends Muxer {
 		super(output);
 
 		this.format = format;
+		this.targetSegmentDuration = format._options.targetDuration ?? 5;
 
 		this.getPlaylistPath = format._options.getPlaylistPath
 			?? (({ n }) => `playlist-${n}.m3u8`);
@@ -303,10 +305,10 @@ export class HlsMuxer extends Muxer {
 			let candidateScore = -Infinity;
 
 			for (const track of tracks) {
-				if (track.type === 'video') {
+				if (track.isVideoTrack()) {
 					videoCount++;
 					requiresRotationMetadata ||= (track.metadata.rotation ?? 0) !== 0;
-				} else if (track.type === 'audio') {
+				} else if (track.isAudioTrack()) {
 					audioCount++;
 				}
 
@@ -715,14 +717,16 @@ export class HlsMuxer extends Muxer {
 			}
 
 			// We can finalize a new segment! Let's first get the path
-			const relativeSegmentPath = await this.getSegmentPath({
+			const segmentInfo: HlsOutputSegmentInfo = {
 				n: playlist.nextSegmentId,
 				format: playlist.segmentFormat,
 				playlist: {
 					n: playlist.id,
 					tracks: playlist.tracks,
 				},
-			});
+			};
+
+			const relativeSegmentPath = await this.getSegmentPath(segmentInfo);
 			if (typeof relativeSegmentPath !== 'string') {
 				throw new TypeError('options.getSegmentPath must return or resolve to a string');
 			}
@@ -737,6 +741,8 @@ export class HlsMuxer extends Muxer {
 			playlist.nextSegmentId++;
 
 			let segmentSize = 0;
+			let outputTarget: Target | null = null;
+
 			const output = new Output({
 				format: playlist.segmentFormat,
 				rootPath: fullSegmentPath,
@@ -744,6 +750,7 @@ export class HlsMuxer extends Muxer {
 					const target = await this.output._getTarget(request);
 
 					if (request.path === fullSegmentPath) {
+						outputTarget = target;
 						target.onwrite = (_, end) => segmentSize = Math.max(segmentSize, end);
 					}
 
@@ -802,6 +809,9 @@ export class HlsMuxer extends Muxer {
 				await output.cancel();
 				throw e;
 			}
+
+			assert(outputTarget);
+			this.format._options.onSegment?.(outputTarget, segmentInfo);
 
 			if (videoEndIndex > 0) {
 				assert(videoTrack);
@@ -883,7 +893,12 @@ export class HlsMuxer extends Muxer {
 				+ '\n'
 				+ '#EXT-X-ENDLIST\n';
 
-			const target = await this.output._getTarget({ path: playlistPath });
+			this.format._options.onPlaylist?.(playlistText, {
+				n: playlist.id,
+				tracks: playlist.tracks,
+			});
+
+			const target = await this.output._getTarget({ path: playlistPath, isRoot: false });
 			const writer = target._createWriter();
 			writer.write(textEncoder.encode(playlistText));
 			await writer.finalize();
@@ -942,8 +957,8 @@ export class HlsMuxer extends Muxer {
 
 					masterPlaylistText += `,CODECS="${codecs.join(',')}"`;
 
-					const videoTrack = decl.playlist.tracks.find(x => x.type === 'video');
-					if (videoTrack) {
+					const videoTrack = decl.playlist.tracks.find(x => x.isVideoTrack());
+					if (videoTrack?.isVideoTrack()) {
 						const trackData = this.trackDatas.find(x => x.track === videoTrack) as
 							HlsVideoTrackData | undefined;
 						const decoderConfig = trackData?.info.decoderConfig;
@@ -1058,6 +1073,8 @@ export class HlsMuxer extends Muxer {
 					masterPlaylistText += '\n';
 				}
 			}
+
+			this.format._options.onMaster?.(masterPlaylistText);
 
 			const rootWriter = await this.output._getRootWriter();
 			rootWriter.write(textEncoder.encode(masterPlaylistText));

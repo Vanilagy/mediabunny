@@ -30,6 +30,7 @@ import { MpegTsMuxer } from './mpeg-ts/mpeg-ts-muxer';
 import { WaveMuxer } from './wave/wave-muxer';
 import { HlsMuxer } from './hls/hls-muxer';
 import { MaybePromise } from './misc';
+import { Target } from './target';
 
 /**
  * Specifies an inclusive range of integers.
@@ -1099,7 +1100,7 @@ export type HlsOutputPlaylistInfo = {
 	tracks: OutputTrack[];
 };
 
-type HlsOutputSegmentInfo = {
+export type HlsOutputSegmentInfo = {
 	n: number;
 	format: OutputFormat;
 	playlist: HlsOutputPlaylistInfo;
@@ -1107,8 +1108,13 @@ type HlsOutputSegmentInfo = {
 
 export type HlsOutputFormatOptions = {
 	segmentFormats: OutputFormat[];
+	targetDuration?: number;
 	getPlaylistPath?: (info: HlsOutputPlaylistInfo) => MaybePromise<string>;
 	getSegmentPath?: (info: HlsOutputSegmentInfo) => MaybePromise<string>;
+
+	onMaster?: (content: string) => unknown;
+	onPlaylist?: (content: string, info: HlsOutputPlaylistInfo) => unknown;
+	onSegment?: (target: Target, info: HlsOutputSegmentInfo) => unknown;
 };
 
 export class HlsOutputFormat extends OutputFormat {
@@ -1127,11 +1133,26 @@ export class HlsOutputFormat extends OutputFormat {
 		) {
 			throw new TypeError('options.segmentFormats must be a non-empty array of OutputFormat instances.');
 		}
+		if (
+			options.targetDuration !== undefined
+			&& (typeof options.targetDuration !== 'number' || options.targetDuration <= 0)
+		) {
+			throw new TypeError('options.targetDuration, when provided, must be a positive number.');
+		}
 		if (options.getPlaylistPath !== undefined && typeof options.getPlaylistPath !== 'function') {
 			throw new TypeError('options.getPlaylistPath, when provided, must be a function.');
 		}
 		if (options.getSegmentPath !== undefined && typeof options.getSegmentPath !== 'function') {
 			throw new TypeError('options.getSegmentPath, when provided, must be a function.');
+		}
+		if (options.onMaster !== undefined && typeof options.onMaster !== 'function') {
+			throw new TypeError('options.onMaster, when provided, must be a function.');
+		}
+		if (options.onPlaylist !== undefined && typeof options.onPlaylist !== 'function') {
+			throw new TypeError('options.onPlaylist, when provided, must be a function.');
+		}
+		if (options.onSegment !== undefined && typeof options.onSegment !== 'function') {
+			throw new TypeError('options.onSegment, when provided, must be a function.');
 		}
 
 		super();

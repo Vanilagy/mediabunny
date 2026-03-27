@@ -23,6 +23,11 @@ if ((globalThis as Record<symbol, unknown>)[MEDIABUNNY_LOADED_SYMBOL]) {
 export {
 	Output,
 	OutputOptions,
+	OutputTrack,
+	OutputVideoTrack,
+	OutputAudioTrack,
+	OutputSubtitleTrack,
+	OutputTrackGroup,
 	BaseTrackMetadata,
 	VideoTrackMetadata,
 	AudioTrackMetadata,
@@ -136,7 +141,6 @@ export {
 	prefer,
 } from './misc';
 export {
-	OutputTrackGroup,
 	TrackType,
 	ALL_TRACK_TYPES,
 } from './output';

@@ -199,7 +199,7 @@ export class IsobmffMuxer extends Muxer {
 			this.writer.ensureMonotonicity = true;
 		}
 
-		const holdsAvc = this.output._tracks.some(x => x.type === 'video' && x.source._codec === 'avc');
+		const holdsAvc = this.output._tracks.some(x => x.isVideoTrack() && x.source._codec === 'avc');
 
 		// Write the header
 		{

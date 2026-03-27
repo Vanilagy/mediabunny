@@ -831,6 +831,7 @@ const setUpSegmentationEnvironment = async (options: {
 	const output = new Output({
 		format: new HlsOutputFormat({
 			segmentFormats: [new MpegTsOutputFormat()], // No ADTS for simplicity
+			targetDuration: 2,
 		}),
 		target: (request) => {
 			const target = new BufferTarget();
@@ -1730,4 +1731,66 @@ segment-1-1.ts
 #EXT-X-ENDLIST
 `,
 	);
+});
+
+test('onSegment, onPlaylist, onMaster events', async () => {
+	const onSegment = vi.fn();
+	const onPlaylist = vi.fn();
+	const onMaster = vi.fn();
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormats: [new MpegTsOutputFormat()],
+			targetDuration: 2,
+			onSegment,
+			onPlaylist,
+			onMaster,
+		}),
+		target: () => new BufferTarget(),
+		rootPath: '',
+	});
+
+	const source = videoSource();
+	output.addVideoTrack(source);
+
+	await output.start();
+
+	// First segment
+	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
+	expect(onSegment).toHaveBeenCalledTimes(0);
+
+	// Second segment starts, first one is finalized
+	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0), avcMetadata);
+	expect(onSegment).toHaveBeenCalledTimes(1);
+	expect(onSegment.mock.calls[0]![1]).toEqual(expect.objectContaining({ n: 1 }));
+
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0), avcMetadata);
+
+	expect(onPlaylist).not.toHaveBeenCalled();
+	expect(onMaster).not.toHaveBeenCalled();
+
+	await output.finalize();
+
+	// Second segment finalized on close
+	expect(onSegment).toHaveBeenCalledTimes(2);
+	expect(onSegment.mock.calls[1]![1]).toEqual(expect.objectContaining({ n: 2 }));
+
+	// Both segment calls should have a Target as the first argument
+	expect(onSegment.mock.calls[0]![0]).toBeDefined();
+	expect(onSegment.mock.calls[1]![0]).toBeDefined();
+
+	// Playlist and master should have been called once each
+	expect(onPlaylist).toHaveBeenCalledTimes(1);
+	expect(typeof onPlaylist.mock.calls[0]![0]).toBe('string');
+	expect(onPlaylist.mock.calls[0]![0]).toContain('#EXTM3U');
+	expect(onPlaylist.mock.calls[0]![1]).toEqual(expect.objectContaining({ n: 1 }));
+
+	expect(onMaster).toHaveBeenCalledTimes(1);
+	expect(typeof onMaster.mock.calls[0]![0]).toBe('string');
+	expect(onMaster.mock.calls[0]![0]).toContain('#EXTM3U');
 });

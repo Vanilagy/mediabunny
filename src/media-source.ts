@@ -10,6 +10,7 @@ import { buildAacAudioSpecificConfig, parseAacAudioSpecificConfig } from '../sha
 import {
 	AUDIO_CODECS,
 	AudioCodec,
+	MediaCodec,
 	parsePcmCodec,
 	PCM_AUDIO_CODECS,
 	PcmAudioCodec,
@@ -62,6 +63,8 @@ import {
  * @public
  */
 export abstract class MediaSource {
+	/** @internal */
+	abstract readonly _codec: MediaCodec;
 	/** @internal */
 	_connectedTrack: OutputTrack | null = null;
 	/** @internal */
@@ -154,7 +157,7 @@ export abstract class VideoSource extends MediaSource {
 	/** @internal */
 	override _connectedTrack: OutputVideoTrack | null = null;
 	/** @internal */
-	_codec: VideoCodec;
+	override readonly _codec: VideoCodec;
 
 	/** Internal constructor. */
 	constructor(codec: VideoCodec) {
@@ -1475,7 +1478,7 @@ export abstract class AudioSource extends MediaSource {
 	/** @internal */
 	override _connectedTrack: OutputAudioTrack | null = null;
 	/** @internal */
-	_codec: AudioCodec;
+	override readonly _codec: AudioCodec;
 
 	/** Internal constructor. */
 	constructor(codec: AudioCodec) {
@@ -2459,7 +2462,7 @@ export abstract class SubtitleSource extends MediaSource {
 	/** @internal */
 	override _connectedTrack: OutputSubtitleTrack | null = null;
 	/** @internal */
-	_codec: SubtitleCodec;
+	override readonly _codec: SubtitleCodec;
 
 	/** Internal constructor. */
 	constructor(codec: SubtitleCodec) {
