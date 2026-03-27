@@ -6,7 +6,7 @@ import { EncodedAudioPacketSource, EncodedVideoPacketSource } from '../../src/me
 import { HlsMuxer } from '../../src/hls/hls-muxer.js';
 import { AudioCodec, VideoCodec } from '../../src/codec.js';
 import { EncodedPacket, PacketType } from '../../src/packet.js';
-import { promiseWithResolvers } from '../../src/misc.js';
+import { assert, promiseWithResolvers } from '../../src/misc.js';
 import { Input } from '../../src/input.js';
 import { BufferSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
@@ -901,23 +901,23 @@ const setUpSegmentationEnvironment = async (options: {
 
 	await output.start();
 
-	const addVideoPacket = _videoSource
-		? (timestamp: number, type: PacketType, duration = 0) => {
-				return _videoSource.add(
-					new EncodedPacket(avcPacketData, type, timestamp, duration),
-					avcMetadata,
-				);
-			}
-		: null;
+	const addVideoPacket = (timestamp: number, type: PacketType, duration = 0) => {
+		assert(_videoSource);
 
-	const addAudioPacket = _audioSource
-		? (timestamp: number, duration = 0) => {
-				return _audioSource.add(
-					new EncodedPacket(aacPacketData, 'key', timestamp, duration),
-					aacMetadata,
-				);
-			}
-		: null;
+		return _videoSource.add(
+			new EncodedPacket(avcPacketData, type, timestamp, duration),
+			avcMetadata,
+		);
+	};
+
+	const addAudioPacket = (timestamp: number, duration = 0) => {
+		assert(_audioSource);
+
+		return _audioSource.add(
+			new EncodedPacket(aacPacketData, 'key', timestamp, duration),
+			aacMetadata,
+		);
+	};
 
 	return {
 		output,
@@ -932,20 +932,35 @@ const setUpSegmentationEnvironment = async (options: {
 	};
 };
 
+test('Segmentation, empty', async () => {
+	const env = await setUpSegmentationEnvironment({ video: true });
+
+	await env.output.finalize();
+
+	expect(env.result).toBe(`#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-TARGETDURATION:2
+
+#EXT-X-ENDLIST
+`,
+	);
+});
+
 test('Segmentation, simple', async () => {
 	const env = await setUpSegmentationEnvironment({ video: true });
 
-	await env.addVideoPacket!(0, 'key');
-	await env.addVideoPacket!(0.5, 'delta');
-	await env.addVideoPacket!(1, 'delta');
-	await env.addVideoPacket!(1.5, 'delta');
+	await env.addVideoPacket(0, 'key');
+	await env.addVideoPacket(0.5, 'delta');
+	await env.addVideoPacket(1, 'delta');
+	await env.addVideoPacket(1.5, 'delta');
 	expect(env.segmentCount).toBe(0);
-	await env.addVideoPacket!(2, 'key');
+	await env.addVideoPacket(2, 'key');
 	expect(env.segmentCount).toBe(1);
 	expect(await env.lastSegmentVideoTimestamps).toEqual([0, 0.5, 1, 1.5]);
-	await env.addVideoPacket!(2.5, 'delta');
-	await env.addVideoPacket!(3, 'delta');
-	await env.addVideoPacket!(3.5, 'delta');
+	await env.addVideoPacket(2.5, 'delta');
+	await env.addVideoPacket(3, 'delta');
+	await env.addVideoPacket(3.5, 'delta');
 
 	await env.output.finalize();
 	expect(env.segmentCount).toBe(2);
@@ -969,18 +984,18 @@ segment-1-2.ts
 test('Segmentation, reaching until end of second segment', async () => {
 	const env = await setUpSegmentationEnvironment({ video: true });
 
-	await env.addVideoPacket!(0, 'key');
-	await env.addVideoPacket!(0.5, 'delta');
-	await env.addVideoPacket!(1, 'delta');
-	await env.addVideoPacket!(1.5, 'delta');
+	await env.addVideoPacket(0, 'key');
+	await env.addVideoPacket(0.5, 'delta');
+	await env.addVideoPacket(1, 'delta');
+	await env.addVideoPacket(1.5, 'delta');
 	expect(env.segmentCount).toBe(0);
-	await env.addVideoPacket!(2, 'key');
+	await env.addVideoPacket(2, 'key');
 	expect(env.segmentCount).toBe(1);
 	expect(await env.lastSegmentVideoTimestamps).toEqual([0, 0.5, 1, 1.5]);
-	await env.addVideoPacket!(2.5, 'delta');
-	await env.addVideoPacket!(3, 'delta');
-	await env.addVideoPacket!(3.5, 'delta');
-	await env.addVideoPacket!(4, 'delta');
+	await env.addVideoPacket(2.5, 'delta');
+	await env.addVideoPacket(3, 'delta');
+	await env.addVideoPacket(3.5, 'delta');
+	await env.addVideoPacket(4, 'delta');
 	expect(env.segmentCount).toBe(1);
 
 	await env.output.finalize();
@@ -1005,19 +1020,19 @@ segment-1-2.ts
 test('Segmentation, reaching until end of second segment with a final key packet', async () => {
 	const env = await setUpSegmentationEnvironment({ video: true });
 
-	await env.addVideoPacket!(0, 'key');
-	await env.addVideoPacket!(0.5, 'delta');
-	await env.addVideoPacket!(1, 'delta');
-	await env.addVideoPacket!(1.5, 'delta');
+	await env.addVideoPacket(0, 'key');
+	await env.addVideoPacket(0.5, 'delta');
+	await env.addVideoPacket(1, 'delta');
+	await env.addVideoPacket(1.5, 'delta');
 	expect(env.segmentCount).toBe(0);
-	await env.addVideoPacket!(2, 'key');
+	await env.addVideoPacket(2, 'key');
 	expect(env.segmentCount).toBe(1);
 	expect(await env.lastSegmentVideoTimestamps).toEqual([0, 0.5, 1, 1.5]);
-	await env.addVideoPacket!(2.5, 'delta');
-	await env.addVideoPacket!(3, 'delta');
-	await env.addVideoPacket!(3.5, 'delta');
+	await env.addVideoPacket(2.5, 'delta');
+	await env.addVideoPacket(3, 'delta');
+	await env.addVideoPacket(3.5, 'delta');
 	expect(env.segmentCount).toBe(1);
-	await env.addVideoPacket!(4, 'key');
+	await env.addVideoPacket(4, 'key');
 	expect(env.segmentCount).toBe(2);
 	expect(await env.lastSegmentVideoTimestamps).toEqual([2, 2.5, 3, 3.5]);
 
@@ -1045,12 +1060,12 @@ segment-1-3.ts
 test('Segmentation, reaching until end of second segment with a final key packet (audio)', async () => {
 	const env = await setUpSegmentationEnvironment({ audio: true });
 
-	await env.addAudioPacket!(0);
-	await env.addAudioPacket!(0.5);
-	await env.addAudioPacket!(1);
-	await env.addAudioPacket!(1.5);
+	await env.addAudioPacket(0);
+	await env.addAudioPacket(0.5);
+	await env.addAudioPacket(1);
+	await env.addAudioPacket(1.5);
 	expect(env.segmentCount).toBe(0);
-	await env.addAudioPacket!(2);
+	await env.addAudioPacket(2);
 	expect(env.segmentCount).toBe(1);
 	expect(await env.lastSegmentAudioTimestamps).toEqual([0, 0.5, 1, 1.5]);
 
@@ -1076,19 +1091,19 @@ segment-1-2.ts
 test('Segmentation, reaching until end of second segment with packet durations', async () => {
 	const env = await setUpSegmentationEnvironment({ video: true });
 
-	await env.addVideoPacket!(0, 'key', 0.5);
-	await env.addVideoPacket!(0.5, 'delta', 0.5);
-	await env.addVideoPacket!(1, 'delta', 0.5);
-	await env.addVideoPacket!(1.5, 'delta', 0.5);
+	await env.addVideoPacket(0, 'key', 0.5);
+	await env.addVideoPacket(0.5, 'delta', 0.5);
+	await env.addVideoPacket(1, 'delta', 0.5);
+	await env.addVideoPacket(1.5, 'delta', 0.5);
 	expect(env.segmentCount).toBe(0);
-	await env.addVideoPacket!(2, 'key', 0.5);
+	await env.addVideoPacket(2, 'key', 0.5);
 	expect(env.segmentCount).toBe(1);
 	expect(await env.lastSegmentVideoTimestamps).toEqual([0, 0.5, 1, 1.5]);
-	await env.addVideoPacket!(2.5, 'delta', 0.5);
-	await env.addVideoPacket!(3, 'delta', 0.5);
-	await env.addVideoPacket!(3.5, 'delta', 0.5);
+	await env.addVideoPacket(2.5, 'delta', 0.5);
+	await env.addVideoPacket(3, 'delta', 0.5);
+	await env.addVideoPacket(3.5, 'delta', 0.5);
 	expect(env.segmentCount).toBe(1);
-	await env.addVideoPacket!(4, 'key', 0.5);
+	await env.addVideoPacket(4, 'key', 0.5);
 	expect(env.segmentCount).toBe(2);
 	expect(await env.lastSegmentVideoTimestamps).toEqual([2, 2.5, 3, 3.5]);
 
@@ -1116,19 +1131,19 @@ segment-1-3.ts
 test('Segmentation, reaching until end of second segment with packet durations (audio)', async () => {
 	const env = await setUpSegmentationEnvironment({ audio: true });
 
-	await env.addAudioPacket!(0, 0.5);
-	await env.addAudioPacket!(0.5, 0.5);
-	await env.addAudioPacket!(1, 0.5);
-	await env.addAudioPacket!(1.5, 0.5);
+	await env.addAudioPacket(0, 0.5);
+	await env.addAudioPacket(0.5, 0.5);
+	await env.addAudioPacket(1, 0.5);
+	await env.addAudioPacket(1.5, 0.5);
 	expect(env.segmentCount).toBe(0);
-	await env.addAudioPacket!(2, 0.5);
+	await env.addAudioPacket(2, 0.5);
 	expect(env.segmentCount).toBe(1);
 	expect(await env.lastSegmentAudioTimestamps).toEqual([0, 0.5, 1, 1.5]);
-	await env.addAudioPacket!(2.5, 0.5);
-	await env.addAudioPacket!(3, 0.5);
-	await env.addAudioPacket!(3.5, 0.5);
+	await env.addAudioPacket(2.5, 0.5);
+	await env.addAudioPacket(3, 0.5);
+	await env.addAudioPacket(3.5, 0.5);
 	expect(env.segmentCount).toBe(1);
-	await env.addAudioPacket!(4, 0.5);
+	await env.addAudioPacket(4, 0.5);
 	expect(env.segmentCount).toBe(2);
 	expect(await env.lastSegmentAudioTimestamps).toEqual([2, 2.5, 3, 3.5]);
 
@@ -1156,13 +1171,13 @@ segment-1-3.ts
 test('Segmentation, only one key packet', async () => {
 	const env = await setUpSegmentationEnvironment({ video: true });
 
-	await env.addVideoPacket!(0, 'key', 0.5);
-	await env.addVideoPacket!(0.5, 'delta', 0.5);
-	await env.addVideoPacket!(1, 'delta', 0.5);
-	await env.addVideoPacket!(1.5, 'delta', 0.5);
-	await env.addVideoPacket!(2, 'delta', 0.5);
-	await env.addVideoPacket!(2.5, 'delta', 0.5);
-	await env.addVideoPacket!(3, 'delta', 0.5);
+	await env.addVideoPacket(0, 'key', 0.5);
+	await env.addVideoPacket(0.5, 'delta', 0.5);
+	await env.addVideoPacket(1, 'delta', 0.5);
+	await env.addVideoPacket(1.5, 'delta', 0.5);
+	await env.addVideoPacket(2, 'delta', 0.5);
+	await env.addVideoPacket(2.5, 'delta', 0.5);
+	await env.addVideoPacket(3, 'delta', 0.5);
 	expect(env.segmentCount).toBe(0);
 
 	await env.output.finalize();
@@ -1185,24 +1200,24 @@ segment-1-1.ts
 test('Segmentation, key packets before the end of a segment (maximized segment duration test)', async () => {
 	const env = await setUpSegmentationEnvironment({ video: true });
 
-	await env.addVideoPacket!(0, 'key', 0.5);
-	await env.addVideoPacket!(0.5, 'delta', 0.5);
-	await env.addVideoPacket!(1, 'delta', 0.5);
-	await env.addVideoPacket!(1.5, 'key', 0.5);
+	await env.addVideoPacket(0, 'key', 0.5);
+	await env.addVideoPacket(0.5, 'delta', 0.5);
+	await env.addVideoPacket(1, 'delta', 0.5);
+	await env.addVideoPacket(1.5, 'key', 0.5);
 	expect(env.segmentCount).toBe(0);
-	await env.addVideoPacket!(2, 'delta', 0.5);
+	await env.addVideoPacket(2, 'delta', 0.5);
 	expect(env.segmentCount).toBe(1);
 	expect(await env.lastSegmentVideoTimestamps).toEqual([0, 0.5, 1]);
-	await env.addVideoPacket!(2.5, 'delta', 0.5);
-	await env.addVideoPacket!(3, 'key', 0.5);
+	await env.addVideoPacket(2.5, 'delta', 0.5);
+	await env.addVideoPacket(3, 'key', 0.5);
 	expect(env.segmentCount).toBe(1);
-	await env.addVideoPacket!(3.5, 'delta', 0.5);
+	await env.addVideoPacket(3.5, 'delta', 0.5);
 	expect(env.segmentCount).toBe(2);
 	expect(await env.lastSegmentVideoTimestamps).toEqual([1.5, 2, 2.5]);
-	await env.addVideoPacket!(4, 'delta', 0.5);
-	await env.addVideoPacket!(4.5, 'key', 0.5);
+	await env.addVideoPacket(4, 'delta', 0.5);
+	await env.addVideoPacket(4.5, 'key', 0.5);
 	expect(env.segmentCount).toBe(2);
-	await env.addVideoPacket!(5, 'key', 0.5);
+	await env.addVideoPacket(5, 'key', 0.5);
 	expect(env.segmentCount).toBe(3);
 	expect(await env.lastSegmentVideoTimestamps).toEqual([3, 3.5, 4, 4.5]);
 
@@ -1232,21 +1247,21 @@ segment-1-4.ts
 test('Segmentation, full segment duration recovery after shorter segment', async () => {
 	const env = await setUpSegmentationEnvironment({ video: true });
 
-	await env.addVideoPacket!(0, 'key', 0.5);
-	await env.addVideoPacket!(0.5, 'delta', 0.5);
-	await env.addVideoPacket!(1, 'delta', 0.5);
-	await env.addVideoPacket!(1.5, 'key', 0.5);
+	await env.addVideoPacket(0, 'key', 0.5);
+	await env.addVideoPacket(0.5, 'delta', 0.5);
+	await env.addVideoPacket(1, 'delta', 0.5);
+	await env.addVideoPacket(1.5, 'key', 0.5);
 	expect(env.segmentCount).toBe(0);
-	await env.addVideoPacket!(2, 'delta', 0.5);
+	await env.addVideoPacket(2, 'delta', 0.5);
 	expect(env.segmentCount).toBe(1);
 	expect(await env.lastSegmentVideoTimestamps).toEqual([0, 0.5, 1]);
-	await env.addVideoPacket!(2.5, 'delta', 0.5);
-	await env.addVideoPacket!(3, 'delta', 0.5);
+	await env.addVideoPacket(2.5, 'delta', 0.5);
+	await env.addVideoPacket(3, 'delta', 0.5);
 	expect(env.segmentCount).toBe(1);
-	await env.addVideoPacket!(3.5, 'key', 0.5);
+	await env.addVideoPacket(3.5, 'key', 0.5);
 	expect(env.segmentCount).toBe(2);
 	expect(await env.lastSegmentVideoTimestamps).toEqual([1.5, 2, 2.5, 3]);
-	await env.addVideoPacket!(4, 'delta', 0.5);
+	await env.addVideoPacket(4, 'delta', 0.5);
 
 	await env.output.finalize();
 	expect(env.segmentCount).toBe(3);
@@ -1272,12 +1287,12 @@ segment-1-3.ts
 test('Segmentation, packet start timestamp intersecting with end timestamp of previous packet', async () => {
 	const env = await setUpSegmentationEnvironment({ video: true });
 
-	await env.addVideoPacket!(0, 'key', 0.5);
-	await env.addVideoPacket!(0.5, 'delta', 0.5);
-	await env.addVideoPacket!(1, 'delta', 0.5);
-	await env.addVideoPacket!(1.5, 'delta', 0.75); // This!
+	await env.addVideoPacket(0, 'key', 0.5);
+	await env.addVideoPacket(0.5, 'delta', 0.5);
+	await env.addVideoPacket(1, 'delta', 0.5);
+	await env.addVideoPacket(1.5, 'delta', 0.75); // This!
 	expect(env.segmentCount).toBe(0);
-	await env.addVideoPacket!(2, 'key', 0.5);
+	await env.addVideoPacket(2, 'key', 0.5);
 	expect(env.segmentCount).toBe(1);
 	expect(await env.lastSegmentVideoTimestamps).toEqual([0, 0.5, 1, 1.5]);
 
@@ -1303,10 +1318,10 @@ segment-1-2.ts
 test('Segmentation, last video packet is included', async () => {
 	const env = await setUpSegmentationEnvironment({ video: true });
 
-	await env.addVideoPacket!(0, 'key');
-	await env.addVideoPacket!(0.5, 'delta');
-	await env.addVideoPacket!(1, 'delta');
-	await env.addVideoPacket!(1.5, 'delta');
+	await env.addVideoPacket(0, 'key');
+	await env.addVideoPacket(0.5, 'delta');
+	await env.addVideoPacket(1, 'delta');
+	await env.addVideoPacket(1.5, 'delta');
 	expect(env.segmentCount).toBe(0);
 
 	await env.output.finalize();
@@ -1329,20 +1344,20 @@ segment-1-1.ts
 test('Segmentation, video not lining up with segment boundaries', async () => {
 	const env = await setUpSegmentationEnvironment({ video: true });
 
-	await env.addVideoPacket!(0, 'key');
-	await env.addVideoPacket!(0.45, 'key');
-	await env.addVideoPacket!(0.9, 'key');
-	await env.addVideoPacket!(1.35, 'key');
-	await env.addVideoPacket!(1.8, 'key');
+	await env.addVideoPacket(0, 'key');
+	await env.addVideoPacket(0.45, 'key');
+	await env.addVideoPacket(0.9, 'key');
+	await env.addVideoPacket(1.35, 'key');
+	await env.addVideoPacket(1.8, 'key');
 	expect(env.segmentCount).toBe(0);
-	await env.addVideoPacket!(2.25, 'key');
+	await env.addVideoPacket(2.25, 'key');
 	expect(env.segmentCount).toBe(1);
 	expect(await env.lastSegmentVideoTimestamps).toEqual([0, 0.45, 0.9, 1.35]);
-	await env.addVideoPacket!(2.7, 'key');
-	await env.addVideoPacket!(3.15, 'key');
-	await env.addVideoPacket!(3.6, 'key');
+	await env.addVideoPacket(2.7, 'key');
+	await env.addVideoPacket(3.15, 'key');
+	await env.addVideoPacket(3.6, 'key');
 	expect(env.segmentCount).toBe(1);
-	await env.addVideoPacket!(4.05, 'key');
+	await env.addVideoPacket(4.05, 'key');
 	expect(env.segmentCount).toBe(2);
 	expect(await env.lastSegmentVideoTimestamps).toEqual([1.8, 2.25, 2.7, 3.15]);
 
@@ -1371,20 +1386,20 @@ segment-1-3.ts
 test('Segmentation, audio not lining up with segment boundaries', async () => {
 	const env = await setUpSegmentationEnvironment({ audio: true });
 
-	await env.addAudioPacket!(0);
-	await env.addAudioPacket!(0.45);
-	await env.addAudioPacket!(0.9);
-	await env.addAudioPacket!(1.35);
-	await env.addAudioPacket!(1.8);
+	await env.addAudioPacket(0);
+	await env.addAudioPacket(0.45);
+	await env.addAudioPacket(0.9);
+	await env.addAudioPacket(1.35);
+	await env.addAudioPacket(1.8);
 	expect(env.segmentCount).toBe(0);
-	await env.addAudioPacket!(2.25);
+	await env.addAudioPacket(2.25);
 	expect(env.segmentCount).toBe(1);
 	expect(await env.lastSegmentAudioTimestamps).toEqual([0, 0.45, 0.9, 1.35]);
-	await env.addAudioPacket!(2.7);
-	await env.addAudioPacket!(3.15);
-	await env.addAudioPacket!(3.6);
+	await env.addAudioPacket(2.7);
+	await env.addAudioPacket(3.15);
+	await env.addAudioPacket(3.6);
 	expect(env.segmentCount).toBe(1);
-	await env.addAudioPacket!(4.05);
+	await env.addAudioPacket(4.05);
 	expect(env.segmentCount).toBe(2);
 	expect(await env.lastSegmentAudioTimestamps).toEqual([1.8, 2.25, 2.7, 3.15]);
 
@@ -1410,21 +1425,91 @@ segment-1-3.ts
 	);
 });
 
+test('Segmentation, non-zero start time', async () => {
+	const env = await setUpSegmentationEnvironment({ video: true, audio: true });
+
+	// The minimum packet timestamp becomes the first packet's start time
+	await env.addVideoPacket(1, 'key');
+	await env.addAudioPacket(0.5);
+	env.audioSource!.close();
+	await env.addVideoPacket(1.5, 'key');
+	await env.addVideoPacket(2, 'key');
+	await env.addVideoPacket(2.5, 'key');
+	expect(env.segmentCount).toBe(1);
+	expect(await env.lastSegmentVideoTimestamps).toEqual([1, 1.5, 2]);
+	expect(await env.lastSegmentAudioTimestamps).toEqual([0.5]);
+
+	await env.output.finalize();
+	expect(await env.lastSegmentVideoTimestamps).toEqual([2.5]);
+	expect(await env.lastSegmentAudioTimestamps).toEqual([]);
+
+	expect(env.result).toBe(`#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-TARGETDURATION:2
+
+#EXTINF:2,
+segment-1-1.ts
+#EXTINF:0,
+segment-1-2.ts
+
+#EXT-X-ENDLIST
+`,
+	);
+});
+
+test('Segmentation, B-frames before key frame', async () => {
+	const env = await setUpSegmentationEnvironment({ video: true });
+
+	await env.addVideoPacket(0, 'key');
+	await env.addVideoPacket(0.5, 'delta');
+	await env.addVideoPacket(1, 'delta');
+	await env.addVideoPacket(1.5, 'delta');
+	await env.addVideoPacket(2, 'key');
+	expect(await env.lastSegmentVideoTimestamps).toEqual([0, 0.5, 1, 1.5]);
+	await env.addVideoPacket(1.75, 'delta');
+	await env.addVideoPacket(2.5, 'delta');
+	await env.addVideoPacket(3, 'delta');
+	await env.addVideoPacket(3.5, 'delta');
+	await env.addVideoPacket(4, 'key');
+	expect(await env.lastSegmentVideoTimestamps).toEqual([2, 1.75, 2.5, 3, 3.5]);
+	await env.addVideoPacket(4.5, 'delta');
+
+	await env.output.finalize();
+	expect(await env.lastSegmentVideoTimestamps).toEqual([4, 4.5]);
+
+	expect(env.result).toBe(`#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-TARGETDURATION:2
+
+#EXTINF:2,
+segment-1-1.ts
+#EXTINF:2,
+segment-1-2.ts
+#EXTINF:0.5,
+segment-1-3.ts
+
+#EXT-X-ENDLIST
+`,
+	);
+});
+
 test('Segmentation, dual-track, single segment', async () => {
 	const env = await setUpSegmentationEnvironment({ video: true, audio: true });
 
-	await env.addVideoPacket!(0, 'key');
-	await env.addVideoPacket!(0.5, 'delta');
-	await env.addVideoPacket!(1, 'delta');
-	await env.addVideoPacket!(1.5, 'delta');
-	await env.addVideoPacket!(2, 'key');
+	await env.addVideoPacket(0, 'key');
+	await env.addVideoPacket(0.5, 'delta');
+	await env.addVideoPacket(1, 'delta');
+	await env.addVideoPacket(1.5, 'delta');
+	await env.addVideoPacket(2, 'key');
 
-	await env.addAudioPacket!(0);
-	await env.addAudioPacket!(0.5);
-	await env.addAudioPacket!(1);
-	await env.addAudioPacket!(1.5);
+	await env.addAudioPacket(0);
+	await env.addAudioPacket(0.5);
+	await env.addAudioPacket(1);
+	await env.addAudioPacket(1.5);
 	expect(env.segmentCount).toBe(0);
-	await env.addAudioPacket!(2);
+	await env.addAudioPacket(2);
 	expect(env.segmentCount).toBe(1);
 	expect(await env.lastSegmentVideoTimestamps).toEqual([0, 0.5, 1, 1.5]);
 	expect(await env.lastSegmentAudioTimestamps).toEqual([0, 0.5, 1, 1.5]);
@@ -1452,32 +1537,32 @@ segment-1-2.ts
 test('Segmentation, dual-track, video dictates the segmentation', async () => {
 	const env = await setUpSegmentationEnvironment({ video: true, audio: true });
 
-	await env.addVideoPacket!(0, 'key');
-	await env.addVideoPacket!(0.5, 'delta');
-	await env.addVideoPacket!(1, 'delta');
-	await env.addVideoPacket!(1.5, 'key');
-	await env.addVideoPacket!(2, 'delta');
-	await env.addVideoPacket!(2.5, 'delta');
-	await env.addVideoPacket!(3, 'delta');
-	await env.addVideoPacket!(3.5, 'delta');
-	await env.addVideoPacket!(4, 'delta');
-	await env.addVideoPacket!(4.5, 'key');
+	await env.addVideoPacket(0, 'key');
+	await env.addVideoPacket(0.5, 'delta');
+	await env.addVideoPacket(1, 'delta');
+	await env.addVideoPacket(1.5, 'key');
+	await env.addVideoPacket(2, 'delta');
+	await env.addVideoPacket(2.5, 'delta');
+	await env.addVideoPacket(3, 'delta');
+	await env.addVideoPacket(3.5, 'delta');
+	await env.addVideoPacket(4, 'delta');
+	await env.addVideoPacket(4.5, 'key');
 
-	await env.addAudioPacket!(0);
-	await env.addAudioPacket!(0.5);
-	await env.addAudioPacket!(1);
+	await env.addAudioPacket(0);
+	await env.addAudioPacket(0.5);
+	await env.addAudioPacket(1);
 	expect(env.segmentCount).toBe(0);
-	await env.addAudioPacket!(1.5);
+	await env.addAudioPacket(1.5);
 	expect(env.segmentCount).toBe(1);
 	expect(await env.lastSegmentVideoTimestamps).toEqual([0, 0.5, 1]);
 	expect(await env.lastSegmentAudioTimestamps).toEqual([0, 0.5, 1]);
-	await env.addAudioPacket!(2);
-	await env.addAudioPacket!(2.5);
-	await env.addAudioPacket!(3);
-	await env.addAudioPacket!(3.5);
-	await env.addAudioPacket!(4);
+	await env.addAudioPacket(2);
+	await env.addAudioPacket(2.5);
+	await env.addAudioPacket(3);
+	await env.addAudioPacket(3.5);
+	await env.addAudioPacket(4);
 	expect(env.segmentCount).toBe(1);
-	await env.addAudioPacket!(4.5);
+	await env.addAudioPacket(4.5);
 	expect(env.segmentCount).toBe(2);
 	expect(await env.lastSegmentVideoTimestamps).toEqual([1.5, 2, 2.5, 3, 3.5, 4]);
 	expect(await env.lastSegmentAudioTimestamps).toEqual([1.5, 2, 2.5, 3, 3.5, 4]);
@@ -1507,32 +1592,32 @@ segment-1-3.ts
 test('Segmentation, dual-track, video dictates the segmentation, inverted', async () => {
 	const env = await setUpSegmentationEnvironment({ video: true, audio: true });
 
-	await env.addAudioPacket!(0);
-	await env.addAudioPacket!(0.5);
-	await env.addAudioPacket!(1);
-	await env.addAudioPacket!(1.5);
-	await env.addAudioPacket!(2);
-	await env.addAudioPacket!(2.5);
-	await env.addAudioPacket!(3);
-	await env.addAudioPacket!(3.5);
-	await env.addAudioPacket!(4);
-	await env.addAudioPacket!(4.5);
+	await env.addAudioPacket(0);
+	await env.addAudioPacket(0.5);
+	await env.addAudioPacket(1);
+	await env.addAudioPacket(1.5);
+	await env.addAudioPacket(2);
+	await env.addAudioPacket(2.5);
+	await env.addAudioPacket(3);
+	await env.addAudioPacket(3.5);
+	await env.addAudioPacket(4);
+	await env.addAudioPacket(4.5);
 
-	await env.addVideoPacket!(0, 'key');
-	await env.addVideoPacket!(0.5, 'delta');
-	await env.addVideoPacket!(1, 'delta');
-	await env.addVideoPacket!(1.5, 'key');
+	await env.addVideoPacket(0, 'key');
+	await env.addVideoPacket(0.5, 'delta');
+	await env.addVideoPacket(1, 'delta');
+	await env.addVideoPacket(1.5, 'key');
 	expect(env.segmentCount).toBe(0);
-	await env.addVideoPacket!(2, 'delta');
+	await env.addVideoPacket(2, 'delta');
 	expect(env.segmentCount).toBe(1);
 	expect(await env.lastSegmentVideoTimestamps).toEqual([0, 0.5, 1]);
 	expect(await env.lastSegmentAudioTimestamps).toEqual([0, 0.5, 1]);
-	await env.addVideoPacket!(2.5, 'delta');
-	await env.addVideoPacket!(3, 'delta');
-	await env.addVideoPacket!(3.5, 'delta');
-	await env.addVideoPacket!(4, 'delta');
+	await env.addVideoPacket(2.5, 'delta');
+	await env.addVideoPacket(3, 'delta');
+	await env.addVideoPacket(3.5, 'delta');
+	await env.addVideoPacket(4, 'delta');
 	expect(env.segmentCount).toBe(1);
-	await env.addVideoPacket!(4.5, 'key');
+	await env.addVideoPacket(4.5, 'key');
 	expect(env.segmentCount).toBe(2);
 	expect(await env.lastSegmentVideoTimestamps).toEqual([1.5, 2, 2.5, 3, 3.5, 4]);
 	expect(await env.lastSegmentAudioTimestamps).toEqual([1.5, 2, 2.5, 3, 3.5, 4]);
@@ -1562,25 +1647,25 @@ segment-1-3.ts
 test('Segmentation, dual-track, audio ending after video', async () => {
 	const env = await setUpSegmentationEnvironment({ video: true, audio: true });
 
-	await env.addVideoPacket!(0, 'key');
-	await env.addVideoPacket!(0.5, 'delta');
-	await env.addVideoPacket!(1, 'delta');
-	await env.addVideoPacket!(1.5, 'delta');
-	await env.addVideoPacket!(2, 'key');
-	await env.addVideoPacket!(2.5, 'delta');
+	await env.addVideoPacket(0, 'key');
+	await env.addVideoPacket(0.5, 'delta');
+	await env.addVideoPacket(1, 'delta');
+	await env.addVideoPacket(1.5, 'delta');
+	await env.addVideoPacket(2, 'key');
+	await env.addVideoPacket(2.5, 'delta');
 
-	await env.addAudioPacket!(0);
-	await env.addAudioPacket!(0.5);
-	await env.addAudioPacket!(1);
-	await env.addAudioPacket!(1.5);
+	await env.addAudioPacket(0);
+	await env.addAudioPacket(0.5);
+	await env.addAudioPacket(1);
+	await env.addAudioPacket(1.5);
 	expect(env.segmentCount).toBe(0);
-	await env.addAudioPacket!(2);
+	await env.addAudioPacket(2);
 	expect(env.segmentCount).toBe(1);
 	expect(await env.lastSegmentVideoTimestamps).toEqual([0, 0.5, 1, 1.5]);
 	expect(await env.lastSegmentAudioTimestamps).toEqual([0, 0.5, 1, 1.5]);
-	await env.addAudioPacket!(2.5);
-	await env.addAudioPacket!(3);
-	await env.addAudioPacket!(3.5);
+	await env.addAudioPacket(2.5);
+	await env.addAudioPacket(3);
+	await env.addAudioPacket(3.5);
 	expect(env.segmentCount).toBe(1);
 
 	await env.output.finalize();
@@ -1606,38 +1691,38 @@ segment-1-2.ts
 test('Segmentation, dual-track, audio ending after video in separate segment', async () => {
 	const env = await setUpSegmentationEnvironment({ video: true, audio: true });
 
-	await env.addVideoPacket!(0, 'key');
-	await env.addVideoPacket!(0.5, 'delta');
-	await env.addVideoPacket!(1, 'delta');
-	await env.addVideoPacket!(1.5, 'delta');
-	await env.addVideoPacket!(2, 'key');
-	await env.addVideoPacket!(2.5, 'delta');
-	await env.addVideoPacket!(3, 'delta');
-	await env.addVideoPacket!(3.5, 'delta');
-	await env.addVideoPacket!(4, 'delta');
-	await env.addVideoPacket!(4.5, 'delta');
+	await env.addVideoPacket(0, 'key');
+	await env.addVideoPacket(0.5, 'delta');
+	await env.addVideoPacket(1, 'delta');
+	await env.addVideoPacket(1.5, 'delta');
+	await env.addVideoPacket(2, 'key');
+	await env.addVideoPacket(2.5, 'delta');
+	await env.addVideoPacket(3, 'delta');
+	await env.addVideoPacket(3.5, 'delta');
+	await env.addVideoPacket(4, 'delta');
+	await env.addVideoPacket(4.5, 'delta');
 	env.videoSource!.close();
 
-	await env.addAudioPacket!(0);
-	await env.addAudioPacket!(0.5);
-	await env.addAudioPacket!(1);
-	await env.addAudioPacket!(1.5);
+	await env.addAudioPacket(0);
+	await env.addAudioPacket(0.5);
+	await env.addAudioPacket(1);
+	await env.addAudioPacket(1.5);
 	expect(env.segmentCount).toBe(0);
-	await env.addAudioPacket!(2);
+	await env.addAudioPacket(2);
 	expect(env.segmentCount).toBe(1);
 	expect(await env.lastSegmentVideoTimestamps).toEqual([0, 0.5, 1, 1.5]);
 	expect(await env.lastSegmentAudioTimestamps).toEqual([0, 0.5, 1, 1.5]);
-	await env.addAudioPacket!(2.5);
-	await env.addAudioPacket!(3);
-	await env.addAudioPacket!(3.5);
-	await env.addAudioPacket!(4);
-	await env.addAudioPacket!(4.5);
+	await env.addAudioPacket(2.5);
+	await env.addAudioPacket(3);
+	await env.addAudioPacket(3.5);
+	await env.addAudioPacket(4);
+	await env.addAudioPacket(4.5);
 	expect(env.segmentCount).toBe(1);
-	await env.addAudioPacket!(5);
+	await env.addAudioPacket(5);
 	expect(env.segmentCount).toBe(2);
 	expect(await env.lastSegmentVideoTimestamps).toEqual([2, 2.5, 3, 3.5, 4, 4.5]);
 	expect(await env.lastSegmentAudioTimestamps).toEqual([2, 2.5, 3, 3.5, 4, 4.5]);
-	await env.addAudioPacket!(5.5);
+	await env.addAudioPacket(5.5);
 
 	await env.output.finalize();
 	expect(env.segmentCount).toBe(3);
@@ -1664,15 +1749,15 @@ segment-1-3.ts
 test('Segmentation, dual-track, end timestamp with duration', async () => {
 	const env = await setUpSegmentationEnvironment({ video: true, audio: true });
 
-	await env.addVideoPacket!(0, 'key');
-	await env.addVideoPacket!(0.5, 'delta');
-	await env.addVideoPacket!(1, 'delta');
-	await env.addVideoPacket!(1.5, 'delta', 0.25);
+	await env.addVideoPacket(0, 'key');
+	await env.addVideoPacket(0.5, 'delta');
+	await env.addVideoPacket(1, 'delta');
+	await env.addVideoPacket(1.5, 'delta', 0.25);
 
-	await env.addAudioPacket!(0);
-	await env.addAudioPacket!(0.5);
-	await env.addAudioPacket!(1);
-	await env.addAudioPacket!(1.5, 0.3);
+	await env.addAudioPacket(0);
+	await env.addAudioPacket(0.5);
+	await env.addAudioPacket(1);
+	await env.addAudioPacket(1.5, 0.3);
 	expect(env.segmentCount).toBe(0);
 
 	await env.output.finalize();
@@ -1696,15 +1781,15 @@ segment-1-1.ts
 test('Segmentation, dual-track, closing writes segment', async () => {
 	const env = await setUpSegmentationEnvironment({ video: true, audio: true });
 
-	await env.addVideoPacket!(0, 'key');
-	await env.addVideoPacket!(0.5, 'delta');
-	await env.addVideoPacket!(1, 'delta');
-	await env.addVideoPacket!(1.5, 'delta');
+	await env.addVideoPacket(0, 'key');
+	await env.addVideoPacket(0.5, 'delta');
+	await env.addVideoPacket(1, 'delta');
+	await env.addVideoPacket(1.5, 'delta');
 
-	await env.addAudioPacket!(0);
-	await env.addAudioPacket!(0.5);
-	await env.addAudioPacket!(1);
-	await env.addAudioPacket!(1.5);
+	await env.addAudioPacket(0);
+	await env.addAudioPacket(0.5);
+	await env.addAudioPacket(1);
+	await env.addAudioPacket(1.5);
 
 	expect(env.segmentCount).toBe(0);
 

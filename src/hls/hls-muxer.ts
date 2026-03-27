@@ -38,6 +38,7 @@ type Playlist = {
 	segmentFormat: OutputFormat;
 
 	currentSegmentStartTimestamp: number | null;
+	currentSegmentStartTimestampIsFixed: boolean;
 	nextSegmentId: number;
 	writtenSegments: {
 		path: string;
@@ -376,6 +377,7 @@ export class HlsMuxer extends Muxer {
 				tracks,
 				segmentFormat: format,
 				currentSegmentStartTimestamp: null,
+				currentSegmentStartTimestampIsFixed: false,
 				nextSegmentId: 1,
 				writtenSegments: [],
 				peakBitrate: null,
@@ -529,7 +531,7 @@ export class HlsMuxer extends Muxer {
 
 			if (playlist.currentSegmentStartTimestamp === null) {
 				playlist.currentSegmentStartTimestamp = adjustedPacket.timestamp;
-			} else {
+			} else if (!playlist.currentSegmentStartTimestampIsFixed) {
 				playlist.currentSegmentStartTimestamp = Math.min(
 					playlist.currentSegmentStartTimestamp,
 					adjustedPacket.timestamp,
@@ -561,7 +563,7 @@ export class HlsMuxer extends Muxer {
 
 			if (playlist.currentSegmentStartTimestamp === null) {
 				playlist.currentSegmentStartTimestamp = adjustedPacket.timestamp;
-			} else {
+			} else if (!playlist.currentSegmentStartTimestampIsFixed) {
 				playlist.currentSegmentStartTimestamp = Math.min(
 					playlist.currentSegmentStartTimestamp,
 					adjustedPacket.timestamp,
@@ -842,6 +844,7 @@ export class HlsMuxer extends Muxer {
 			});
 
 			playlist.currentSegmentStartTimestamp = nextSegmentStartTimestamp;
+			playlist.currentSegmentStartTimestampIsFixed = true; // After the first segment, the timestamp is now fixed
 		}
 	}
 
@@ -890,7 +893,7 @@ export class HlsMuxer extends Muxer {
 						+ `${segment.path}\n`
 					))
 					.join(''))
-				+ '\n'
+				+ (playlist.writtenSegments.length > 0 ? '\n' : '')
 				+ '#EXT-X-ENDLIST\n';
 
 			this.format._options.onPlaylist?.(playlistText, {
