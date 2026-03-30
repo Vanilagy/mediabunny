@@ -27,7 +27,7 @@ test('createAesDecryptStream', async () => {
 		const source = new BufferSource(ciphertext);
 		const reader = new Reader(source);
 
-		const stream = createAes128CbcDecryptStream(reader, () => ({ key, iv }));
+		const stream = createAes128CbcDecryptStream(reader, () => ({ key, iv }), () => {});
 		const streamReader = stream.getReader();
 
 		const chunks: Uint8Array[] = [];

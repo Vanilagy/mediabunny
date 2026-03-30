@@ -29,7 +29,7 @@ import { Output, OutputTrack, TrackType } from './output';
 import { MpegTsMuxer } from './mpeg-ts/mpeg-ts-muxer';
 import { WaveMuxer } from './wave/wave-muxer';
 import { HlsMuxer } from './hls/hls-muxer';
-import { MaybePromise } from './misc';
+import { MaybePromise, toArray } from './misc';
 import { Target } from './target';
 
 /**
@@ -330,6 +330,66 @@ export class Mp4OutputFormat extends IsobmffOutputFormat {
 		}
 
 		return '';
+	}
+}
+
+/**
+ * CMAF-specific output options.
+ * @group Output formats
+ * @public
+ */
+export type CmafOutputFormatOptions = Omit<IsobmffOutputFormatOptions, 'fastStart'> & {
+	/**
+	 * Controls the minimum duration of each fragment, in seconds. New fragments will only be created when the current
+	 * fragment is longer than this value. Defaults to `Infinity`, meaning the file will contain only one fragment.
+	 */
+	minimumFragmentDuration?: number;
+};
+
+/**
+ * Creates a single Common Media Application Format (CMAF) segment. An init segment will be written to the
+ * {@link Target} specified in {@link OutputOptions.initTarget}. Supports most codecs.
+ * @group Output formats
+ * @public
+ */
+export class CmafOutputFormat extends IsobmffOutputFormat {
+	/** Creates a new {@link CmafOutputFormat} configured with the specified `options`. */
+	constructor(options?: CmafOutputFormatOptions) {
+		super(options);
+	}
+
+	/** @internal */
+	get _name() {
+		return 'CMAF';
+	}
+
+	get fileExtension() {
+		return '.m4s';
+	}
+
+	get mimeType() {
+		return 'video/mp4';
+	}
+
+	getSupportedCodecs(): MediaCodec[] {
+		return [
+			...VIDEO_CODECS,
+			...NON_PCM_AUDIO_CODECS,
+
+			// These are supported via ISO/IEC 23003-5:
+			'pcm-s16',
+			'pcm-s16be',
+			'pcm-s24',
+			'pcm-s24be',
+			'pcm-s32',
+			'pcm-s32be',
+			'pcm-f32',
+			'pcm-f32be',
+			'pcm-f64',
+			'pcm-f64be',
+
+			...SUBTITLE_CODECS,
+		];
 	}
 }
 
@@ -1098,6 +1158,7 @@ export class MpegTsOutputFormat extends OutputFormat {
 export type HlsOutputPlaylistInfo = {
 	n: number;
 	tracks: OutputTrack[];
+	segmentFormat: OutputFormat;
 };
 
 export type HlsOutputSegmentInfo = {
@@ -1108,16 +1169,18 @@ export type HlsOutputSegmentInfo = {
 };
 
 export type HlsOutputFormatOptions = {
-	segmentFormats: OutputFormat[];
+	segmentFormat: OutputFormat | OutputFormat[];
 	targetDuration?: number;
 	singleFilePerPlaylist?: boolean;
 	getPlaylistPath?: (info: HlsOutputPlaylistInfo) => MaybePromise<string>;
 	getSegmentPath?: (info: HlsOutputSegmentInfo) => MaybePromise<string>;
+	getInitPath?: (info: HlsOutputPlaylistInfo) => MaybePromise<string>;
 
 	onMaster?: (content: string) => unknown;
 	onPlaylist?: (content: string, info: HlsOutputPlaylistInfo) => unknown;
 	// Document how this is called for the single-file mode
 	onSegment?: (target: Target, info: HlsOutputSegmentInfo) => unknown;
+	onInit?: (target: Target, info: HlsOutputPlaylistInfo) => unknown;
 };
 
 export class HlsOutputFormat extends OutputFormat {
@@ -1130,11 +1193,16 @@ export class HlsOutputFormat extends OutputFormat {
 			throw new TypeError('options must be an object.');
 		}
 		if (
-			!Array.isArray(options.segmentFormats)
-			|| options.segmentFormats.length === 0
-			|| !options.segmentFormats.every(format => format instanceof OutputFormat)
+			!(options.segmentFormat instanceof OutputFormat)
+			&& (
+				!Array.isArray(options.segmentFormat)
+				|| options.segmentFormat.length === 0
+				|| !options.segmentFormat.every(format => format instanceof OutputFormat)
+			)
 		) {
-			throw new TypeError('options.segmentFormats must be a non-empty array of OutputFormat instances.');
+			throw new TypeError(
+				'options.segmentFormat must be an OutputFormat or a non-empty array of OutputFormat instances.',
+			);
 		}
 		if (
 			options.targetDuration !== undefined
@@ -1159,6 +1227,9 @@ export class HlsOutputFormat extends OutputFormat {
 		}
 		if (options.onSegment !== undefined && typeof options.onSegment !== 'function') {
 			throw new TypeError('options.onSegment, when provided, must be a function.');
+		}
+		if (options.onInit !== undefined && typeof options.onInit !== 'function') {
+			throw new TypeError('options.onInit, when provided, must be a function.');
 		}
 
 		super();
@@ -1185,7 +1256,7 @@ export class HlsOutputFormat extends OutputFormat {
 	}
 
 	getSupportedCodecs(): MediaCodec[] {
-		const uniqueCodecs = new Set(this._options.segmentFormats.flatMap(x => x.getSupportedCodecs()));
+		const uniqueCodecs = new Set(toArray(this._options.segmentFormat).flatMap(x => x.getSupportedCodecs()));
 		return [...uniqueCodecs];
 	}
 
@@ -1194,7 +1265,7 @@ export class HlsOutputFormat extends OutputFormat {
 		let supportsAudio = false;
 		let supportsSubtitle = false;
 
-		for (const format of this._options.segmentFormats) {
+		for (const format of toArray(this._options.segmentFormat)) {
 			const trackCounts = format.getSupportedTrackCounts();
 			supportsVideo ||= trackCounts.video.max > 0;
 			supportsAudio ||= trackCounts.audio.max > 0;
@@ -1210,7 +1281,7 @@ export class HlsOutputFormat extends OutputFormat {
 	}
 
 	get supportsVideoRotationMetadata(): boolean {
-		return this._options.segmentFormats.some(format => format.supportsVideoRotationMetadata);
+		return toArray(this._options.segmentFormat).some(format => format.supportsVideoRotationMetadata);
 	}
 
 	get supportsTimestampedMediaData(): boolean {

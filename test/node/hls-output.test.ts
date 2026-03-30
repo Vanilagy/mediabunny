@@ -1,6 +1,6 @@
 import { expect, test, vi } from 'vitest';
 import { Output, OutputTrackGroup } from '../../src/output.js';
-import { HlsOutputFormat, MpegTsOutputFormat } from '../../src/output-format.js';
+import { CmafOutputFormat, HlsOutputFormat, MpegTsOutputFormat } from '../../src/output-format.js';
 import { BufferTarget, NullTarget, StreamTarget, StreamTargetChunk } from '../../src/target.js';
 import { EncodedAudioPacketSource, EncodedVideoPacketSource } from '../../src/media-source.js';
 import { HlsMuxer } from '../../src/hls/hls-muxer.js';
@@ -19,7 +19,7 @@ const audioSource = (codec: AudioCodec = 'aac') => new EncodedAudioPacketSource(
 test('Playlist assignment, single video', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: [new MpegTsOutputFormat()],
+			segmentFormat: new MpegTsOutputFormat(),
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -41,7 +41,7 @@ test('Playlist assignment, single video', async () => {
 test('Playlist assignment, single audio', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: [new MpegTsOutputFormat()],
+			segmentFormat: new MpegTsOutputFormat(),
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -63,7 +63,7 @@ test('Playlist assignment, single audio', async () => {
 test('Playlist assignment, multiple video', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: [new MpegTsOutputFormat()],
+			segmentFormat: new MpegTsOutputFormat(),
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -91,7 +91,7 @@ test('Playlist assignment, multiple video', async () => {
 test('Playlist assignment, multiple audio', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: [new MpegTsOutputFormat()],
+			segmentFormat: new MpegTsOutputFormat(),
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -119,7 +119,7 @@ test('Playlist assignment, multiple audio', async () => {
 test('Playlist assignment, multiple video with different metadata #1', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: [new MpegTsOutputFormat()],
+			segmentFormat: new MpegTsOutputFormat(),
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -155,7 +155,7 @@ test('Playlist assignment, multiple video with different metadata #1', async () 
 test('Playlist assignment, multiple video with different metadata #2', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: [new MpegTsOutputFormat()],
+			segmentFormat: new MpegTsOutputFormat(),
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -191,7 +191,7 @@ test('Playlist assignment, multiple video with different metadata #2', async () 
 test('Playlist assignment, multiple audio with different metadata', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: [new MpegTsOutputFormat()],
+			segmentFormat: new MpegTsOutputFormat(),
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -227,7 +227,7 @@ test('Playlist assignment, multiple audio with different metadata', async () => 
 test('Playlist assignment, video and audio', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: [new MpegTsOutputFormat()],
+			segmentFormat: new MpegTsOutputFormat(),
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -250,7 +250,7 @@ test('Playlist assignment, video and audio', async () => {
 test('Playlist assignment, one video and multiple audio', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: [new MpegTsOutputFormat()],
+			segmentFormat: new MpegTsOutputFormat(),
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -292,7 +292,7 @@ test('Playlist assignment, one video and multiple audio', async () => {
 test('Playlist assignment, multiple video and one audio', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: [new MpegTsOutputFormat()],
+			segmentFormat: new MpegTsOutputFormat(),
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -334,7 +334,7 @@ test('Playlist assignment, multiple video and one audio', async () => {
 test('Playlist assignment, multiple video and audio', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: [new MpegTsOutputFormat()],
+			segmentFormat: new MpegTsOutputFormat(),
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -388,7 +388,7 @@ test('Playlist assignment, multiple video and audio', async () => {
 test('Playlist assignment, video and audio in different groups', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: [new MpegTsOutputFormat()],
+			segmentFormat: new MpegTsOutputFormat(),
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -421,7 +421,7 @@ test('Playlist assignment, video and audio in different groups', async () => {
 test('Playlist assignment, multiple video and audio in pairs', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: [new MpegTsOutputFormat()],
+			segmentFormat: new MpegTsOutputFormat(),
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -467,7 +467,7 @@ test('Playlist assignment, multiple video and audio in pairs', async () => {
 test('Playlist assignment, multiple video and audio with some unpaired', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: [new MpegTsOutputFormat()],
+			segmentFormat: new MpegTsOutputFormat(),
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -525,7 +525,7 @@ test('Playlist assignment, multiple video and audio with some unpaired', async (
 test('Playlist assignment, multiple video and audio with multiple groups', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: [new MpegTsOutputFormat()],
+			segmentFormat: new MpegTsOutputFormat(),
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -594,7 +594,7 @@ test('Playlist assignment, multiple video and audio with multiple groups', async
 test('Playlist assignment, video with multiple audio codecs', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: [new MpegTsOutputFormat()],
+			segmentFormat: new MpegTsOutputFormat(),
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -639,7 +639,7 @@ test('Playlist assignment, video with multiple audio codecs', async () => {
 test('Playlist assignment, audio with multiple video codecs', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: [new MpegTsOutputFormat()],
+			segmentFormat: new MpegTsOutputFormat(),
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -677,7 +677,7 @@ test('Playlist assignment, audio with multiple video codecs', async () => {
 test('Playlist assignment, multiple video with conflicting audio interests', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: [new MpegTsOutputFormat()],
+			segmentFormat: new MpegTsOutputFormat(),
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -730,7 +730,7 @@ test('Playlist assignment, video paired with video', async () => {
 
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: [new MpegTsOutputFormat()],
+			segmentFormat: new MpegTsOutputFormat(),
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -767,7 +767,7 @@ test('Playlist assignment, audio paired with audio', async () => {
 
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: [new MpegTsOutputFormat()],
+			segmentFormat: new MpegTsOutputFormat(),
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -830,7 +830,7 @@ const setUpSegmentationEnvironment = async (options: {
 
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: [new MpegTsOutputFormat()], // No ADTS for simplicity
+			segmentFormat: new MpegTsOutputFormat(), // No ADTS for simplicity
 		}),
 		target: (request) => {
 			const target = new BufferTarget();
@@ -940,6 +940,7 @@ test('Segmentation, empty', async () => {
 #EXT-X-VERSION:3
 #EXT-X-PLAYLIST-TYPE:VOD
 #EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
 
 #EXT-X-ENDLIST
 `,
@@ -969,6 +970,7 @@ test('Segmentation, simple', async () => {
 #EXT-X-VERSION:3
 #EXT-X-PLAYLIST-TYPE:VOD
 #EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
 
 #EXTINF:2,
 segment-1-1.ts
@@ -1005,6 +1007,7 @@ test('Segmentation, reaching until end of second segment', async () => {
 #EXT-X-VERSION:3
 #EXT-X-PLAYLIST-TYPE:VOD
 #EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
 
 #EXTINF:2,
 segment-1-1.ts
@@ -1043,6 +1046,7 @@ test('Segmentation, reaching until end of second segment with a final key packet
 #EXT-X-VERSION:3
 #EXT-X-PLAYLIST-TYPE:VOD
 #EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
 
 #EXTINF:2,
 segment-1-1.ts
@@ -1076,6 +1080,7 @@ test('Segmentation, reaching until end of second segment with a final key packet
 #EXT-X-VERSION:3
 #EXT-X-PLAYLIST-TYPE:VOD
 #EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
 
 #EXTINF:2,
 segment-1-1.ts
@@ -1114,6 +1119,7 @@ test('Segmentation, reaching until end of second segment with packet durations',
 #EXT-X-VERSION:3
 #EXT-X-PLAYLIST-TYPE:VOD
 #EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
 
 #EXTINF:2,
 segment-1-1.ts
@@ -1154,6 +1160,7 @@ test('Segmentation, reaching until end of second segment with packet durations (
 #EXT-X-VERSION:3
 #EXT-X-PLAYLIST-TYPE:VOD
 #EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
 
 #EXTINF:2,
 segment-1-1.ts
@@ -1187,6 +1194,7 @@ test('Segmentation, only one key packet', async () => {
 #EXT-X-VERSION:3
 #EXT-X-PLAYLIST-TYPE:VOD
 #EXT-X-TARGETDURATION:4
+#EXT-X-INDEPENDENT-SEGMENTS
 
 #EXTINF:3.5,
 segment-1-1.ts
@@ -1228,6 +1236,7 @@ test('Segmentation, key packets before the end of a segment (maximized segment d
 #EXT-X-VERSION:3
 #EXT-X-PLAYLIST-TYPE:VOD
 #EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
 
 #EXTINF:1.5,
 segment-1-1.ts
@@ -1270,6 +1279,7 @@ test('Segmentation, full segment duration recovery after shorter segment', async
 #EXT-X-VERSION:3
 #EXT-X-PLAYLIST-TYPE:VOD
 #EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
 
 #EXTINF:1.5,
 segment-1-1.ts
@@ -1303,6 +1313,7 @@ test('Segmentation, packet start timestamp intersecting with end timestamp of pr
 #EXT-X-VERSION:3
 #EXT-X-PLAYLIST-TYPE:VOD
 #EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
 
 #EXTINF:2,
 segment-1-1.ts
@@ -1331,6 +1342,7 @@ test('Segmentation, last video packet is included', async () => {
 #EXT-X-VERSION:3
 #EXT-X-PLAYLIST-TYPE:VOD
 #EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
 
 #EXTINF:1.5,
 segment-1-1.ts
@@ -1362,13 +1374,13 @@ test('Segmentation, video not lining up with segment boundaries', async () => {
 
 	await env.output.finalize();
 	expect(env.segmentCount).toBe(3);
-	console.log(await env.lastSegmentVideoTimestamps);
 	expect(await env.lastSegmentVideoTimestamps).toEqual([3.6, 4.05]);
 
 	expect(env.result).toBe(`#EXTM3U
 #EXT-X-VERSION:3
 #EXT-X-PLAYLIST-TYPE:VOD
 #EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
 
 #EXTINF:1.8,
 segment-1-1.ts
@@ -1404,13 +1416,13 @@ test('Segmentation, audio not lining up with segment boundaries', async () => {
 
 	await env.output.finalize();
 	expect(env.segmentCount).toBe(3);
-	console.log(await env.lastSegmentAudioTimestamps);
 	expect(await env.lastSegmentAudioTimestamps).toEqual([3.6, 4.05]);
 
 	expect(env.result).toBe(`#EXTM3U
 #EXT-X-VERSION:3
 #EXT-X-PLAYLIST-TYPE:VOD
 #EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
 
 #EXTINF:1.8,
 segment-1-1.ts
@@ -1446,6 +1458,7 @@ test('Segmentation, non-zero start time', async () => {
 #EXT-X-VERSION:3
 #EXT-X-PLAYLIST-TYPE:VOD
 #EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
 
 #EXTINF:2,
 segment-1-1.ts
@@ -1481,6 +1494,7 @@ test('Segmentation, B-frames before key frame', async () => {
 #EXT-X-VERSION:3
 #EXT-X-PLAYLIST-TYPE:VOD
 #EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
 
 #EXTINF:2,
 segment-1-1.ts
@@ -1522,6 +1536,7 @@ test('Segmentation, dual-track, single segment', async () => {
 #EXT-X-VERSION:3
 #EXT-X-PLAYLIST-TYPE:VOD
 #EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
 
 #EXTINF:2,
 segment-1-1.ts
@@ -1575,6 +1590,7 @@ test('Segmentation, dual-track, video dictates the segmentation', async () => {
 #EXT-X-VERSION:3
 #EXT-X-PLAYLIST-TYPE:VOD
 #EXT-X-TARGETDURATION:3
+#EXT-X-INDEPENDENT-SEGMENTS
 
 #EXTINF:1.5,
 segment-1-1.ts
@@ -1630,6 +1646,7 @@ test('Segmentation, dual-track, video dictates the segmentation, inverted', asyn
 #EXT-X-VERSION:3
 #EXT-X-PLAYLIST-TYPE:VOD
 #EXT-X-TARGETDURATION:3
+#EXT-X-INDEPENDENT-SEGMENTS
 
 #EXTINF:1.5,
 segment-1-1.ts
@@ -1676,6 +1693,7 @@ test('Segmentation, dual-track, audio ending after video', async () => {
 #EXT-X-VERSION:3
 #EXT-X-PLAYLIST-TYPE:VOD
 #EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
 
 #EXTINF:2,
 segment-1-1.ts
@@ -1732,6 +1750,7 @@ test('Segmentation, dual-track, audio ending after video in separate segment', a
 #EXT-X-VERSION:3
 #EXT-X-PLAYLIST-TYPE:VOD
 #EXT-X-TARGETDURATION:3
+#EXT-X-INDEPENDENT-SEGMENTS
 
 #EXTINF:2,
 segment-1-1.ts
@@ -1768,6 +1787,7 @@ test('Segmentation, dual-track, end timestamp with duration', async () => {
 #EXT-X-VERSION:3
 #EXT-X-PLAYLIST-TYPE:VOD
 #EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
 
 #EXTINF:1.8,
 segment-1-1.ts
@@ -1808,6 +1828,7 @@ test('Segmentation, dual-track, closing writes segment', async () => {
 #EXT-X-VERSION:3
 #EXT-X-PLAYLIST-TYPE:VOD
 #EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
 
 #EXTINF:1.5,
 segment-1-1.ts
@@ -1824,7 +1845,7 @@ test('onSegment, onPlaylist, onMaster events', async () => {
 
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: [new MpegTsOutputFormat()],
+			segmentFormat: new MpegTsOutputFormat(),
 			onSegment,
 			onPlaylist,
 			onMaster,
@@ -1884,7 +1905,7 @@ test('Single-file mode', async () => {
 
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: [new MpegTsOutputFormat()],
+			segmentFormat: new MpegTsOutputFormat(),
 			singleFilePerPlaylist: true,
 		}),
 		target: (request) => {
@@ -1932,7 +1953,7 @@ test('StreamTarget, write is called for each target', async () => {
 
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: [new MpegTsOutputFormat()],
+			segmentFormat: new MpegTsOutputFormat(),
 		}),
 		target: (request) => {
 			writeCounts.set(request.path, 0);
@@ -1976,7 +1997,7 @@ test('I-frame stream', async () => {
 
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: [new MpegTsOutputFormat()],
+			segmentFormat: new MpegTsOutputFormat(),
 			onMaster: (text) => { masterText = text; },
 			onPlaylist: (text) => { playlistText = text; },
 		}),
@@ -2013,7 +2034,7 @@ test('I-frame stream, pairing warning', async () => {
 
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormats: [new MpegTsOutputFormat()],
+			segmentFormat: new MpegTsOutputFormat(),
 		}),
 		target: () => new NullTarget(),
 		rootPath: '',
@@ -2036,4 +2057,114 @@ test('I-frame stream, pairing warning', async () => {
 	expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('key-packets-only'));
 
 	warnSpy.mockRestore();
+});
+
+test('CMAF segmentation', async () => {
+	let playlistText: string | null = null;
+	const writtenPaths = new Set<string>();
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new CmafOutputFormat(),
+		}),
+		target: (request) => {
+			writtenPaths.add(request.path);
+			const target = new BufferTarget();
+
+			if (request.path.includes('playlist')) {
+				target.onfinalized = () => {
+					playlistText = new TextDecoder().decode(target.buffer!);
+				};
+			}
+
+			return target;
+		},
+		rootPath: '',
+	});
+
+	const source = videoSource();
+	output.addVideoTrack(source);
+
+	await output.start();
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0), avcMetadata);
+
+	await output.finalize();
+
+	expect(writtenPaths).toContain('init-1.m4s');
+	expect(writtenPaths).toContain('segment-1-1.m4s');
+	expect(writtenPaths).toContain('segment-1-2.m4s');
+
+	expect(playlistText).toBe(`#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
+#EXT-X-MAP:URI="init-1.m4s"
+
+#EXTINF:2,
+segment-1-1.m4s
+#EXTINF:1.5,
+segment-1-2.m4s
+
+#EXT-X-ENDLIST
+`,
+	);
+});
+
+test('CMAF segmentation, single file per playlist', async () => {
+	let playlistText: string | null = null;
+	const writtenPaths = new Set<string>();
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new CmafOutputFormat(),
+			singleFilePerPlaylist: true,
+		}),
+		target: (request) => {
+			writtenPaths.add(request.path);
+			const target = new BufferTarget();
+
+			if (request.path.includes('playlist')) {
+				target.onfinalized = () => {
+					playlistText = new TextDecoder().decode(target.buffer!);
+				};
+			}
+
+			return target;
+		},
+		rootPath: '',
+	});
+
+	const source = videoSource();
+	output.addVideoTrack(source);
+
+	await output.start();
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0), avcMetadata);
+
+	await output.finalize();
+
+	// Init and segment files should have been written
+	expect(writtenPaths).toContain('segments-1.m4s');
+	expect(writtenPaths).not.toContain('init-1.m4s');
+
+	expect(playlistText).not.toBeNull();
+	expect(playlistText!.match(/#EXT-X-BYTERANGE/g)).toHaveLength(2);
+	expect(playlistText).toContain('#EXT-X-VERSION:6');
+	expect(playlistText).toContain('#EXT-X-MAP:URI=');
 });

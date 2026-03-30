@@ -6,13 +6,27 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { Box, free, ftyp, IsobmffBoxWriter, mdat, mfra, moof, moov, vtta, vttc, vtte } from './isobmff-boxes';
+import {
+	Box,
+	free,
+	ftyp,
+	IsobmffBoxWriter,
+	mdat,
+	mfra,
+	moof,
+	moov,
+	sidx,
+	styp,
+	vtta,
+	vttc,
+	vtte,
+} from './isobmff-boxes';
 import { Muxer } from '../muxer';
 import { Output, OutputAudioTrack, OutputSubtitleTrack, OutputTrack, OutputVideoTrack } from '../output';
 import { Writer } from '../writer';
-import { BufferTarget } from '../target';
+import { BufferTarget, Target } from '../target';
 import { assert, computeRationalApproximation, last, promiseWithResolvers, Rational, simplifyRational } from '../misc';
-import { IsobmffOutputFormatOptions, IsobmffOutputFormat, MovOutputFormat } from '../output-format';
+import { IsobmffOutputFormatOptions, IsobmffOutputFormat, MovOutputFormat, CmafOutputFormat } from '../output-format';
 import { inlineTimestampRegex, SubtitleConfig, SubtitleCue, SubtitleMetadata } from '../subtitles';
 import { aacChannelMap, aacFrequencyTable, buildAacAudioSpecificConfig } from '../../shared/aac-misc';
 import {
@@ -151,12 +165,15 @@ export const intoTimescale = (timeInSeconds: number, timescale: number, round = 
 
 export class IsobmffMuxer extends Muxer {
 	format: IsobmffOutputFormat;
-	private writer!: Writer;
-	private boxWriter!: IsobmffBoxWriter;
+	private writer: Writer | null = null;
+	private boxWriter: IsobmffBoxWriter | null = null;
+	private initWriter: Writer | null = null;
+	private initBoxWriter: IsobmffBoxWriter | null = null;
 	private fastStart!: NonNullable<IsobmffOutputFormatOptions['fastStart']>;
 	isFragmented!: boolean;
 
 	isQuickTime: boolean;
+	isCmaf: boolean;
 
 	private auxTarget = new BufferTarget();
 	private auxWriter = new Writer(this.auxTarget);
@@ -174,53 +191,90 @@ export class IsobmffMuxer extends Muxer {
 	private nextFragmentNumber = 1;
 	// Only relevant for fragmented files, to make sure new fragments start with the highest timestamp seen so far
 	private maxWrittenTimestamp = -Infinity;
+	minWrittenTimestamp = Infinity;
+	maxWrittenEndTimestamp = -Infinity;
 	private minimumFragmentDuration: number;
+	private segmentHeaderSize: number | null = null;
 
 	constructor(output: Output, format: IsobmffOutputFormat) {
 		super(output);
 
 		this.format = format;
 		this.isQuickTime = format instanceof MovOutputFormat;
-		this.minimumFragmentDuration = format._options.minimumFragmentDuration ?? 1;
+		this.isCmaf = format instanceof CmafOutputFormat;
+		this.minimumFragmentDuration = format._options.minimumFragmentDuration
+			?? (format instanceof CmafOutputFormat ? Infinity : 1);
 	}
 
 	async start() {
 		const release = await this.mutex.acquire();
 
-		this.writer = await this.output._getRootWriter();
-		this.boxWriter = new IsobmffBoxWriter(this.writer);
+		if (!this.isCmaf) {
+			this.writer = await this.output._getRootWriter();
+			this.boxWriter = new IsobmffBoxWriter(this.writer);
 
-		// If the fastStart option isn't defined, enable in-memory fast start if the target is an ArrayBuffer, as the
-		// memory usage remains identical
-		const fastStartDefault = this.writer.target instanceof BufferTarget ? 'in-memory' : false;
-		this.fastStart = this.format._options.fastStart ?? fastStartDefault;
-		this.isFragmented = this.fastStart === 'fragmented';
+			// If the fastStart option isn't defined, enable in-memory fast start if the target is an ArrayBuffer, as
+			// the memory usage remains identical
+			this.fastStart = this.format._options.fastStart
+				?? (this.writer.target instanceof BufferTarget ? 'in-memory' : false);
+			this.isFragmented = this.fastStart === 'fragmented';
+		} else {
+			this.fastStart = 'fragmented';
+			this.isFragmented = true;
+		}
 
 		if (this.fastStart === 'in-memory' || this.isFragmented) {
-			this.writer.ensureMonotonicity();
+			this.writer?.ensureMonotonicity();
+		}
+
+		if (this.isCmaf) {
+			if (this.output._initTarget === null) {
+				throw new Error(
+					`CMAF outputs require the initTarget field in OutputOptions to be set; the init segment`
+					+ ` will be written to it.`,
+				);
+			}
+
+			// Set up the init writer to which we'll write the init segment
+			const initTarget = this.output._initTarget instanceof Target
+				? this.output._initTarget
+				: await this.output._initTarget();
+			const initWriter = new Writer(initTarget);
+			initWriter.start();
+
+			this.initWriter = initWriter;
+			this.initBoxWriter = new IsobmffBoxWriter(initWriter);
 		}
 
 		const holdsAvc = this.output._tracks.some(x => x.isVideoTrack() && x.source._codec === 'avc');
 
 		// Write the header
 		{
+			const boxWriter = this.initBoxWriter ?? this.boxWriter;
+			assert(boxWriter);
+
 			if (this.format._options.onFtyp) {
-				this.writer.startTrackingWrites();
+				boxWriter.writer.startTrackingWrites();
 			}
 
-			this.boxWriter.writeBox(ftyp({
+			boxWriter.writeBox(ftyp({
 				isQuickTime: this.isQuickTime,
 				holdsAvc: holdsAvc,
 				fragmented: this.isFragmented,
+				cmaf: this.isCmaf,
 			}));
 
 			if (this.format._options.onFtyp) {
-				const { data, start } = this.writer.stopTrackingWrites();
+				const { data, start } = boxWriter.writer.stopTrackingWrites();
 				this.format._options.onFtyp(data, start);
 			}
-		}
 
-		this.ftypSize = this.writer.getPos();
+			this.ftypSize = boxWriter.writer.getPos();
+
+			if (this.isCmaf) {
+				await this.initWriter!.flush();
+			}
+		}
 
 		if (this.fastStart === 'in-memory') {
 			// We're write at finalization
@@ -239,6 +293,9 @@ export class IsobmffMuxer extends Muxer {
 		} else if (this.isFragmented) {
 			// We write the moov box once we write out the first fragment to make sure we get the decoder configs
 		} else {
+			assert(this.writer);
+			assert(this.boxWriter);
+
 			if (this.format._options.onMdat) {
 				this.writer.startTrackingWrites();
 			}
@@ -247,7 +304,7 @@ export class IsobmffMuxer extends Muxer {
 			this.boxWriter.writeBox(this.mdat);
 		}
 
-		await this.writer.flush();
+		await this.writer?.flush();
 
 		release();
 	}
@@ -1003,11 +1060,14 @@ export class IsobmffMuxer extends Muxer {
 
 		if (this.isFragmented) {
 			this.maxWrittenTimestamp = Math.max(this.maxWrittenTimestamp, sample.timestamp);
+			this.maxWrittenEndTimestamp = Math.max(this.maxWrittenEndTimestamp, sample.timestamp + sample.duration);
+			this.minWrittenTimestamp = Math.min(this.minWrittenTimestamp, sample.timestamp);
 		}
 	}
 
 	private async finalizeCurrentChunk(trackData: IsobmffTrackData) {
 		assert(!this.isFragmented);
+		assert(this.writer);
 
 		if (!trackData.currentChunk) return;
 
@@ -1078,25 +1138,50 @@ export class IsobmffMuxer extends Muxer {
 		}
 	}
 
-	private async finalizeFragment(flushWriter = true) {
+	private async finalizeFragment(flushWriter = !this.isCmaf) {
 		assert(this.isFragmented);
 
 		const fragmentNumber = this.nextFragmentNumber++;
 
 		if (fragmentNumber === 1) {
+			const boxWriter = this.initBoxWriter ?? this.boxWriter;
+			assert(boxWriter);
+
 			if (this.format._options.onMoov) {
-				this.writer.startTrackingWrites();
+				boxWriter.writer.startTrackingWrites();
 			}
 
 			// Write the moov box now that we have all decoder configs
 			const movieBox = moov(this);
-			this.boxWriter.writeBox(movieBox);
+			boxWriter.writeBox(movieBox);
 
 			if (this.format._options.onMoov) {
-				const { data, start } = this.writer.stopTrackingWrites();
+				const { data, start } = boxWriter.writer.stopTrackingWrites();
 				this.format._options.onMoov(data, start);
 			}
+
+			if (this.isCmaf) {
+				assert(this.initWriter);
+				await this.initWriter.flush();
+				await this.initWriter.finalize(); // Init segment is done
+
+				// Only now, init the main writer; this way the init writer is fully done before the main writer is
+				// even acquired
+				this.writer = await this.output._getRootWriter();
+				this.boxWriter = new IsobmffBoxWriter(this.writer);
+
+				this.writer.ensureMonotonicity();
+
+				const stypSize = this.boxWriter.measureBox(styp());
+				const sidxSize = this.boxWriter.measureBox(sidx(this, 0));
+				this.segmentHeaderSize = stypSize + sidxSize;
+
+				this.writer.seek(this.segmentHeaderSize); // Make room for the header to be written later
+			}
 		}
+
+		assert(this.writer);
+		assert(this.boxWriter);
 
 		// Not all tracks need to be present in every fragment
 		const tracksInFragment = this.trackDatas.filter(x => x.currentChunk);
@@ -1179,6 +1264,9 @@ export class IsobmffMuxer extends Muxer {
 	}
 
 	private async registerSampleFastStartReserve(trackData: IsobmffTrackData, sample: Sample) {
+		assert(this.writer);
+		assert(this.boxWriter);
+
 		if (this.allTracksAreKnown()) {
 			if (!this.mdat) {
 				// We finally know all tracks, let's reserve space for the moov box
@@ -1296,6 +1384,9 @@ export class IsobmffMuxer extends Muxer {
 			}
 		}
 
+		assert(this.writer);
+		assert(this.boxWriter);
+
 		if (this.fastStart === 'in-memory') {
 			this.mdat = mdat(false);
 			let mdatSize: number;
@@ -1359,15 +1450,27 @@ export class IsobmffMuxer extends Muxer {
 				this.format._options.onMdat(data, start);
 			}
 		} else if (this.isFragmented) {
-			// Append the mfra box to the end of the file for better random access
-			const startPos = this.writer.getPos();
-			const mfraBox = mfra(this.trackDatas);
-			this.boxWriter.writeBox(mfraBox);
+			if (this.isCmaf) {
+				const contentSize = this.segmentHeaderSize !== null
+					? this.writer.getPos() - this.segmentHeaderSize
+					: 0;
 
-			// Patch the 'size' field of the mfro box at the end of the mfra box now that we know its actual size
-			const mfraBoxSize = this.writer.getPos() - startPos;
-			this.writer.seek(this.writer.getPos() - 4);
-			this.boxWriter.writeU32(mfraBoxSize);
+				this.writer.seek(0);
+
+				// Write styp and sidx to the start; we recently made space for these
+				this.boxWriter.writeBox(styp());
+				this.boxWriter.writeBox(sidx(this, contentSize));
+			} else {
+				// Append the mfra box to the end of the file for better random access
+				const startPos = this.writer.getPos();
+				const mfraBox = mfra(this.trackDatas);
+				this.boxWriter.writeBox(mfraBox);
+
+				// Patch the 'size' field of the mfro box at the end of the mfra box now that we know its actual size
+				const mfraBoxSize = this.writer.getPos() - startPos;
+				this.writer.seek(this.writer.getPos() - 4);
+				this.boxWriter.writeU32(mfraBoxSize);
+			}
 		} else {
 			assert(this.mdat);
 

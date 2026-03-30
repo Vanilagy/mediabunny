@@ -1,6 +1,6 @@
 import { MediaCodec, validateAudioChunkMetadata, validateVideoChunkMetadata } from '../codec';
 import { EncodedAudioPacketSource, EncodedVideoPacketSource } from '../media-source';
-import { arrayArgmax, assert, findLastIndex, joinPaths, textEncoder, UNDETERMINED_LANGUAGE } from '../misc';
+import { arrayArgmax, assert, findLastIndex, joinPaths, textEncoder, toArray, UNDETERMINED_LANGUAGE } from '../misc';
 import { Muxer } from '../muxer';
 import {
 	Output,
@@ -11,11 +11,17 @@ import {
 	OutputVideoTrack,
 	TrackType,
 } from '../output';
-import { HlsOutputFormat, HlsOutputFormatOptions, HlsOutputSegmentInfo, OutputFormat } from '../output-format';
+import {
+	HlsOutputFormat,
+	HlsOutputFormatOptions,
+	HlsOutputPlaylistInfo,
+	HlsOutputSegmentInfo,
+	OutputFormat,
+} from '../output-format';
 import { Writer } from '../writer';
 import { EncodedPacket } from '../packet';
 import { SubtitleCue, SubtitleMetadata } from '../subtitles';
-import { Target } from '../target';
+import { NullTarget, Target } from '../target';
 
 type HlsTrackData = {
 	track: OutputTrack;
@@ -34,6 +40,13 @@ type HlsTrackData = {
 type HlsVideoTrackData = HlsTrackData & { info: { type: 'video' } };
 type HlsAudioTrackData = HlsTrackData & { info: { type: 'audio' } };
 
+type PlaylistSegment = {
+	path: string;
+	duration: number;
+	byteSize: number;
+	byteOffset: number | null;
+};
+
 type Playlist = {
 	id: number;
 	path: string;
@@ -43,12 +56,8 @@ type Playlist = {
 	currentSegmentStartTimestamp: number | null;
 	currentSegmentStartTimestampIsFixed: boolean;
 	nextSegmentId: number;
-	writtenSegments: {
-		path: string;
-		duration: number;
-		byteSize: number;
-		byteOffset: number | null;
-	}[];
+	initSegment: PlaylistSegment | null;
+	writtenSegments: PlaylistSegment[];
 	peakBitrate: number | null;
 	averageBitrate: number | null;
 
@@ -71,6 +80,7 @@ export class HlsMuxer extends Muxer {
 	format: HlsOutputFormat;
 	getPlaylistPath: NonNullable<HlsOutputFormatOptions['getPlaylistPath']>;
 	getSegmentPath: NonNullable<HlsOutputFormatOptions['getSegmentPath']>;
+	getInitPath: NonNullable<HlsOutputFormatOptions['getInitPath']>;
 
 	targetSegmentDuration: number;
 	trackDatas: HlsTrackData[] = [];
@@ -96,6 +106,8 @@ export class HlsMuxer extends Muxer {
 			?? (info => info.isSingleFile
 				? `segments-${info.playlist.n}${info.format.fileExtension}`
 				: `segment-${info.playlist.n}-${info.n}${info.format.fileExtension}`);
+		this.getInitPath = format._options.getInitPath
+			?? (playlist => `init-${playlist.n}${playlist.segmentFormat.fileExtension}`);
 	}
 
 	async start(): Promise<void> {
@@ -348,7 +360,7 @@ export class HlsMuxer extends Muxer {
 				codecs.push(track.source._codec);
 			}
 
-			for (const format of this.format._options.segmentFormats) {
+			for (const format of toArray(this.format._options.segmentFormat)) {
 				const supportedCodecs = format.getSupportedCodecs();
 				const trackCounts = format.getSupportedTrackCounts();
 
@@ -387,21 +399,15 @@ export class HlsMuxer extends Muxer {
 				throw new Error('Internal error: track is already registered in a playlist.'); // Should be unreachable
 			}
 
+			const format = deduceSegmentFormat(tracks);
+
 			const id = this.playlists.length + 1;
 			const path = await this.getPlaylistPath({
 				n: id,
 				tracks,
+				segmentFormat: format,
 			});
-			if (typeof path !== 'string') {
-				throw new TypeError('options.getPlaylistPath must return or resolve to a string');
-			}
-			if (/[\n\r"]/.test(path)) {
-				throw new TypeError(
-					'Playlist paths cannot contain line feed, carriage return, or double quote characters.',
-				);
-			}
-
-			const format = deduceSegmentFormat(tracks);
+			validatePlaylistPath(path);
 
 			const playlist: Playlist = {
 				id: this.playlists.length + 1,
@@ -411,6 +417,7 @@ export class HlsMuxer extends Muxer {
 				currentSegmentStartTimestamp: null,
 				currentSegmentStartTimestampIsFixed: false,
 				nextSegmentId: 1,
+				initSegment: null,
 				writtenSegments: [],
 				peakBitrate: null,
 				averageBitrate: null,
@@ -762,10 +769,7 @@ export class HlsMuxer extends Muxer {
 						n: playlist.nextSegmentId,
 						format: playlist.segmentFormat,
 						isSingleFile: true,
-						playlist: {
-							n: playlist.id,
-							tracks: playlist.tracks,
-						},
+						playlist: toPlaylistInfo(playlist),
 					};
 
 					relativeSegmentPath = await this.getSegmentPath(segmentInfo);
@@ -797,10 +801,7 @@ export class HlsMuxer extends Muxer {
 					n: playlist.nextSegmentId,
 					format: playlist.segmentFormat,
 					isSingleFile: false,
-					playlist: {
-						n: playlist.id,
-						tracks: playlist.tracks,
-					},
+					playlist: toPlaylistInfo(playlist),
 				};
 
 				relativeSegmentPath = await this.getSegmentPath(segmentInfo);
@@ -818,7 +819,7 @@ export class HlsMuxer extends Muxer {
 				format: playlist.segmentFormat,
 				rootPath: fullSegmentPath,
 				target: async (request) => {
-					if (request.path === fullSegmentPath) {
+					if (request.isRoot) {
 						if (playlist.singleFile) {
 							const slice = playlist.singleFile.target.slice(playlist.singleFile.nextOffset);
 							slice.onwrite = (_, end) => segmentSize = Math.max(segmentSize, end);
@@ -834,6 +835,55 @@ export class HlsMuxer extends Muxer {
 					}
 
 					return this.output._getTarget(request);
+				},
+				initTarget: async () => {
+					if (playlist.initSegment) {
+						// We already have an init segment from a previous segment
+						return new NullTarget();
+					}
+
+					if (playlist.singleFile) {
+						playlist.initSegment = {
+							path: playlist.singleFile.path,
+							duration: 0,
+							byteSize: 0,
+							byteOffset: 0,
+						};
+
+						const slice = playlist.singleFile.target.slice(playlist.singleFile.nextOffset);
+						slice.onwrite = (_, end) => {
+							playlist.initSegment!.byteSize = Math.max(playlist.initSegment!.byteSize, end);
+						};
+						slice.onfinalized = () => {
+							playlist.singleFile!.nextOffset = playlist.initSegment!.byteSize;
+						};
+
+						return slice;
+					} else {
+						const playlistInfo = toPlaylistInfo(playlist);
+						const path = await this.getInitPath(playlistInfo);
+						validateInitPath(path);
+
+						playlist.initSegment = {
+							path,
+							duration: 0,
+							byteSize: 0,
+							byteOffset: null,
+						};
+
+						const target = await this.output._getTarget({
+							path,
+							isRoot: false,
+						});
+						target.onwrite = (_, end) => {
+							playlist.initSegment!.byteSize = Math.max(playlist.initSegment!.byteSize, end);
+						};
+						target.onfinalized = () => {
+							this.format._options.onInit?.(target, playlistInfo);
+						};
+
+						return target;
+					}
 				},
 			});
 
@@ -987,13 +1037,28 @@ export class HlsMuxer extends Muxer {
 			if (isKeyPacketsOnly || hasByteOffsets) {
 				version = 4;
 			}
+			if (playlist.initSegment) {
+				version = 5;
+			}
+			if (playlist.initSegment && !isKeyPacketsOnly) {
+				// "if it contains the EXT-X-MAP tag in a Media Playlist that does not contain EXT-X-I-FRAMES-ONLY"
+				version = 6;
+			}
 
 			const playlistPath = joinPaths(this.output._rootPath!, playlist.path);
 			const playlistText = '#EXTM3U\n'
 				+ `#EXT-X-VERSION:${version}\n`
 				+ '#EXT-X-PLAYLIST-TYPE:VOD\n'
 				+ `#EXT-X-TARGETDURATION:${Math.ceil(targetDuration)}\n` // Must be a "decimal-integer"
+				+ '#EXT-X-INDEPENDENT-SEGMENTS\n' // TODO not when live
 				+ (isKeyPacketsOnly ? '#EXT-X-I-FRAMES-ONLY\n' : '')
+				+ (playlist.initSegment
+					? (`#EXT-X-MAP:URI="${playlist.initSegment.path}"`
+						+ (playlist.initSegment.byteOffset !== null
+							? `,BYTERANGE="${playlist.initSegment.byteSize}@${playlist.initSegment.byteOffset}"`
+							: '')
+						+ '\n')
+					: '')
 				+ '\n'
 				+ (playlist.writtenSegments
 					.map(segment => (
@@ -1007,10 +1072,7 @@ export class HlsMuxer extends Muxer {
 				+ (playlist.writtenSegments.length > 0 ? '\n' : '')
 				+ '#EXT-X-ENDLIST\n';
 
-			this.format._options.onPlaylist?.(playlistText, {
-				n: playlist.id,
-				tracks: playlist.tracks,
-			});
+			this.format._options.onPlaylist?.(playlistText, toPlaylistInfo(playlist));
 
 			const target = await this.output._getTarget({ path: playlistPath, isRoot: false });
 			const writer = new Writer(target);
@@ -1220,6 +1282,17 @@ export class HlsMuxer extends Muxer {
 	}
 }
 
+const validatePlaylistPath = (path: string) => {
+	if (typeof path !== 'string') {
+		throw new TypeError('options.getPlaylistPath must return or resolve to a string');
+	}
+	if (/[\n\r"]/.test(path)) {
+		throw new TypeError(
+			'Playlist paths cannot contain line feed, carriage return, or double quote characters.',
+		);
+	}
+};
+
 const validateSegmentPath = (path: string) => {
 	if (typeof path !== 'string') {
 		throw new TypeError('options.getSegmentPath must return or resolve to a string');
@@ -1229,4 +1302,23 @@ const validateSegmentPath = (path: string) => {
 			'Segment paths cannot contain line feed or carriage return characters.',
 		);
 	}
+};
+
+const validateInitPath = (path: string) => {
+	if (typeof path !== 'string') {
+		throw new TypeError('options.getInitPath must return or resolve to a string');
+	}
+	if (/[\n\r"]/.test(path)) {
+		throw new TypeError(
+			'Init paths cannot contain line feed, carriage return, or double quote characters.',
+		);
+	}
+};
+
+const toPlaylistInfo = (playlist: Playlist): HlsOutputPlaylistInfo => {
+	return {
+		n: playlist.id,
+		tracks: playlist.tracks,
+		segmentFormat: playlist.segmentFormat,
+	};
 };

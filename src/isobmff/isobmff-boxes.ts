@@ -57,7 +57,7 @@ export class IsobmffBoxWriter {
 	 */
 	offsets = new WeakMap<Box, number>();
 
-	constructor(private writer: Writer) {}
+	constructor(public writer: Writer) {}
 
 	writeU32(value: number) {
 		this.helperView.setUint32(0, value, false);
@@ -279,6 +279,7 @@ export const ftyp = (details: {
 	isQuickTime: boolean;
 	holdsAvc: boolean;
 	fragmented: boolean;
+	cmaf: boolean;
 }) => {
 	// You can find the full logic for this at
 	// https://github.com/FFmpeg/FFmpeg/blob/de2fb43e785773738c660cdafb9309b1ef1bc80d/libavformat/movenc.c#L5518
@@ -296,14 +297,27 @@ export const ftyp = (details: {
 	}
 
 	if (details.fragmented) {
-		return box('ftyp', [
-			ascii('iso5'), // Major brand
-			u32(minorVersion), // Minor version
-			// Compatible brands
-			ascii('iso5'),
-			ascii('iso6'),
-			ascii('mp41'),
-		]);
+		if (details.cmaf) {
+			return box('ftyp', [
+				ascii('iso5'), // Major brand
+				u32(minorVersion), // Minor version
+				// Compatible brands
+				ascii('iso5'),
+				ascii('iso6'),
+				ascii('mp41'),
+				ascii('cmfc'),
+				ascii('dash'),
+			]);
+		} else {
+			return box('ftyp', [
+				ascii('iso5'), // Major brand
+				u32(minorVersion), // Minor version
+				// Compatible brands
+				ascii('iso5'),
+				ascii('iso6'),
+				ascii('mp41'),
+			]);
+		}
 	}
 
 	return box('ftyp', [
@@ -313,6 +327,38 @@ export const ftyp = (details: {
 		ascii('isom'),
 		details.holdsAvc ? ascii('avc1') : [],
 		ascii('mp41'),
+	]);
+};
+
+/** Segment Type Box */
+export const styp = () => box('styp', [
+	ascii('iso5'), // Major brand
+	u32(0), // Minor version
+	// Compatible brands
+	ascii('iso5'),
+	ascii('iso6'),
+	ascii('mp41'),
+	ascii('cmfc'),
+	ascii('dash'),
+]);
+
+/** Segment Index Box */
+export const sidx = (muxer: IsobmffMuxer, referencedSize: number) => {
+	let duration = muxer.maxWrittenEndTimestamp - muxer.minWrittenTimestamp;
+	if (!Number.isFinite(duration)) {
+		duration = 0;
+	}
+
+	return fullBox('sidx', 1, 0, [
+		u32(1), // Reference ID
+		u32(GLOBAL_TIMESCALE), // Timescale
+		u64(intoTimescale(muxer.minWrittenTimestamp, GLOBAL_TIMESCALE)), // Earliest presentation time
+		u64(0), // First offset
+		u16(0), // Reserved
+		u16(1), // Reference count
+		u32(referencedSize & 0x7fffffff), // Reference type (0) + referenced size
+		u32(intoTimescale(duration, GLOBAL_TIMESCALE)), // Subsegment duration
+		u32(0), // Starts with SAP + SAP type + SAP delta time (no information provided)
 	]);
 };
 

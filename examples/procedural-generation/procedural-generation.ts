@@ -13,6 +13,7 @@ import {
 	MpegTsOutputFormat,
 	AdtsOutputFormat,
 	StreamTarget,
+	CmafOutputFormat,
 } from 'mediabunny';
 
 const durationSlider = document.querySelector('#duration-slider') as HTMLInputElement;
@@ -119,8 +120,8 @@ const generateVideo = async () => {
 				*/
 			},
 			format: new HlsOutputFormat({
-				segmentFormats: [new AdtsOutputFormat(), new MpegTsOutputFormat()],
-				// singleFilePerPlaylist: true,
+				segmentFormat: new CmafOutputFormat(),
+				singleFilePerPlaylist: true,
 				getPlaylistPath: info => `sussex-${info.n}.m3u8`,
 			}),
 		});
@@ -146,7 +147,7 @@ const generateVideo = async () => {
 
 		// For audio, we use ArrayBufferSource, because we'll be creating an ArrayBuffer with OfflineAudioContext
 		let audioBufferSource: AudioBufferSource | null = null;
-		let audioBufferSource2: AudioBufferSource | null = null;
+		const audioBufferSource2: AudioBufferSource | null = null;
 
 		// Retrieve the first audio codec supported by this browser that can be contained in the output format
 		const audioCodec = await getFirstEncodableAudioCodec(output.format.getSupportedAudioCodecs(), {
@@ -160,11 +161,13 @@ const generateVideo = async () => {
 			});
 			output.addAudioTrack(audioBufferSource);
 
+			/*
 			audioBufferSource2 = new AudioBufferSource({
 				codec: audioCodec,
 				bitrate: QUALITY_HIGH,
 			});
 			output.addAudioTrack(audioBufferSource2, { languageCode: 'esp' });
+			*/
 		} else {
 			alert('Your browser doesn\'t support audio encoding, so we won\'t include audio in the output file.');
 		}
@@ -208,8 +211,8 @@ const generateVideo = async () => {
 			await audioBufferSource.add(audioBuffer);
 			audioBufferSource.close();
 
-			await audioBufferSource2!.add(audioBuffer);
-			audioBufferSource2!.close();
+			// await audioBufferSource2!.add(audioBuffer);
+			// audioBufferSource2!.close();
 		}
 
 		clearInterval(progressInterval);

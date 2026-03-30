@@ -28,6 +28,7 @@ export const ENCRYPTION_KEY_CACHE_GROUP = 2;
 
 export type SourceRequest = {
 	path: string;
+	isRoot: boolean;
 };
 
 const sourceRequestsAreEqual = (a: SourceRequest, b: SourceRequest) => {
@@ -248,7 +249,7 @@ export class Input<S extends Source = Source> implements Disposable {
 				this.onSource?.(ref.source, null);
 			} else {
 				assert(this._entryPath !== null);
-				ref = await this._getSourceUncached({ path: this._entryPath });
+				ref = await this._getSourceUncached({ path: this._entryPath, isRoot: true });
 				this._sourceRefs.push(ref);
 			}
 
@@ -277,7 +278,7 @@ export class Input<S extends Source = Source> implements Disposable {
 
 		assert(this._entryPath !== null);
 
-		const source = this._source({ path: this._entryPath });
+		const source = this._source({ path: this._entryPath, isRoot: true });
 		if (source instanceof Promise) {
 			throw new TypeError(
 				'Input.source cannot be used when the source function resolves asynchronously.'

@@ -6,34 +6,13 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { assert, AsyncMutex, isIso639Dash2LanguageCode, MaybePromise, Rotation } from './misc';
+import { assert, AsyncMutex, isIso639Dash2LanguageCode, MaybePromise, Rotation, toArray } from './misc';
 import { MetadataTags, TrackDisposition, validateMetadataTags, validateTrackDisposition } from './metadata';
 import { Muxer } from './muxer';
 import { OutputFormat } from './output-format';
 import { AudioSource, MediaSource, SubtitleSource, VideoSource } from './media-source';
 import { Target } from './target';
 import { Writer } from './writer';
-
-export type TargetRequest = {
-	path: string;
-	isRoot: boolean;
-};
-
-/**
- * The options for creating an Output object.
- * @group Output files
- * @public
- */
-export type OutputOptions<
-	F extends OutputFormat = OutputFormat,
-	T extends Target = Target,
-> = {
-	/** The format of the output file. */
-	format: F;
-	/** The target to which the file will be written. */
-	target: T | ((request: TargetRequest) => MaybePromise<T>);
-	rootPath?: string;
-};
 
 /**
  * List of all track types.
@@ -163,12 +142,8 @@ export const outputTracksArePairable = (a: OutputTrack, b: OutputTrack) => {
 		return false;
 	}
 
-	const aGroups = Array.isArray(a.metadata.group)
-		? a.metadata.group
-		: [a.metadata.group!];
-	const bGroups = Array.isArray(b.metadata.group)
-		? b.metadata.group
-		: [b.metadata.group!];
+	const aGroups = toArray(a.metadata.group!);
+	const bGroups = toArray(b.metadata.group!);
 
 	for (const aGroup of aGroups) {
 		const pairableInSameGroup = a.type !== b.type
@@ -282,6 +257,28 @@ const validateBaseTrackMetadata = (metadata: BaseTrackMetadata) => {
 	}
 };
 
+export type TargetRequest = {
+	path: string;
+	isRoot: boolean;
+};
+
+/**
+ * The options for creating an Output object.
+ * @group Output files
+ * @public
+ */
+export type OutputOptions<
+	F extends OutputFormat = OutputFormat,
+	T extends Target = Target,
+> = {
+	/** The format of the output file. */
+	format: F;
+	/** The target to which the file will be written. */
+	target: T | ((request: TargetRequest) => MaybePromise<T>);
+	rootPath?: string;
+	initTarget?: T | (() => MaybePromise<T>);
+};
+
 /**
  * Main class orchestrating the creation of a new media file.
  * @group Output files
@@ -300,6 +297,8 @@ export class Output<
 
 	/** @internal */
 	_rootPath: string | null;
+	/** @internal */
+	_initTarget: T | (() => MaybePromise<T>) | null;
 	/** @internal */
 	_muxer: Muxer;
 	/** @internal */
@@ -353,7 +352,7 @@ export class Output<
 			throw new TypeError('options.format must be an OutputFormat.');
 		}
 		if (!(options.target instanceof Target) && typeof options.target !== 'function') {
-			throw new TypeError('options.target must be a Target.');
+			throw new TypeError('options.target must be a Target or a function that returns or resolves to a Target.');
 		}
 		if (options.target instanceof Target) {
 			if (options.target._output) {
@@ -367,11 +366,22 @@ export class Output<
 		if (typeof options.target === 'function' && options.rootPath === undefined) {
 			throw new Error('options.rootPath must be provided when options.target is a function.');
 		}
+		if (
+			options.initTarget !== undefined
+			&& !(options.initTarget instanceof Target)
+			&& typeof options.initTarget !== 'function'
+		) {
+			throw new Error(
+				'options.getInitTarget, when provided, must be a Target or a function that returns or resolves to'
+				+ ' a Target.',
+			);
+		}
 
 		this.format = options.format;
 		this._target = options.target;
 
 		this._rootPath = options.rootPath ?? null;
+		this._initTarget = options.initTarget ?? null;
 		this._muxer = options.format._createMuxer(this);
 	}
 
@@ -612,12 +622,14 @@ export class Output<
 
 			const release = await this._mutex.acquire();
 
-			await this._muxer.start();
+			try {
+				await this._muxer.start();
 
-			const promises = this._tracks.map(track => track.source._start());
-			await Promise.all(promises);
-
-			release();
+				const promises = this._tracks.map(track => track.source._start());
+				await Promise.all(promises);
+			} finally {
+				release();
+			}
 		})();
 	}
 
@@ -641,7 +653,12 @@ export class Output<
 			console.warn('Output has already been canceled.');
 			return this._cancelPromise;
 		} else if (this.state === 'finalizing' || this.state === 'finalized') {
-			console.warn('Output has already been finalized.');
+			// Don't wanna warn when finalizing since that shows a warning when finalization fails and then cancel
+			// is called
+			if (this.state === 'finalized') {
+				console.warn('Output has already been finalized.');
+			}
+
 			return;
 		}
 
@@ -650,14 +667,16 @@ export class Output<
 
 			const release = await this._mutex.acquire();
 
-			const promises = this._tracks.map(x => x.source._flushOrWaitForOngoingClose(true)); // Force close
-			await Promise.all(promises);
+			try {
+				const promises = this._tracks.map(x => x.source._flushOrWaitForOngoingClose(true)); // Force close
+				await Promise.all(promises);
 
-			if (this._rootWriterPromise) {
-				await (await this._rootWriterPromise).close();
+				if (this._rootWriterPromise) {
+					await (await this._rootWriterPromise).close();
+				}
+			} finally {
+				release();
 			}
-
-			release();
 		})();
 	}
 
@@ -682,20 +701,22 @@ export class Output<
 
 			const release = await this._mutex.acquire();
 
-			const promises = this._tracks.map(x => x.source._flushOrWaitForOngoingClose(false));
-			await Promise.all(promises);
+			try {
+				const promises = this._tracks.map(x => x.source._flushOrWaitForOngoingClose(false));
+				await Promise.all(promises);
 
-			await this._muxer.finalize();
+				await this._muxer.finalize();
 
-			if (this._rootWriterPromise) {
-				const rootWriter = await this._rootWriterPromise;
-				await rootWriter.flush();
-				await rootWriter.finalize();
+				if (this._rootWriterPromise) {
+					const rootWriter = await this._rootWriterPromise;
+					await rootWriter.flush();
+					await rootWriter.finalize();
+				}
+
+				this.state = 'finalized';
+			} finally {
+				release();
 			}
-
-			this.state = 'finalized';
-
-			release();
 		})();
 	}
 }

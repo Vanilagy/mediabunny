@@ -304,7 +304,10 @@ export class StreamTarget extends Target {
 		}
 
 		assert(this._streamWriter);
-		if (this._sections.length === 0) return;
+
+		if (this._sections.length === 0) {
+			return;
+		}
 
 		const chunks: {
 			start: number;

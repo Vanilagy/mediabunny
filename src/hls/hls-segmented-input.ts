@@ -89,7 +89,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 		this.nextLines = null;
 
 		if (!lines) {
-			using ref = await this.demuxer.input._getSourceUncached({ path: this.path });
+			using ref = await this.demuxer.input._getSourceUncached({ path: this.path, isRoot: false });
 			const reader = new Reader(ref.source);
 
 			const slice = await reader.requestEntireFile();
@@ -559,7 +559,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 
 					const stream = createAes128CbcDecryptStream(ciphertextReader, async () => {
 						using keyRef = await this.input._getSourceCached(
-							{ path: hlsSegment.encryption!.keyUri },
+							{ path: hlsSegment.encryption!.keyUri, isRoot: false },
 							ENCRYPTION_KEY_CACHE_GROUP,
 						);
 						const keyReader = new Reader(keyRef.source);

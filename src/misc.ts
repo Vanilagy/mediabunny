@@ -1150,3 +1150,11 @@ export const rejectAfter = (ms: number, message = 'Promise rejected') => {
 		setTimeout(() => reject(new Error(message)), ms);
 	});
 };
+
+export const toArray = <T>(x: T | T[]) => {
+	if (Array.isArray(x)) {
+		return x;
+	} else {
+		return [x];
+	}
+};

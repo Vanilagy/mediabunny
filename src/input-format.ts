@@ -103,7 +103,7 @@ export class Mp4InputFormat extends IsobmffInputFormat {
 		if (slice instanceof Promise) slice = await slice;
 		if (!slice) return false;
 
-		return readAscii(slice, 4) === 'moof'; // Not a legal segment start, but seen in practice (sigh)
+		return readAscii(slice, 4) === 'moof'; // Seen in HLS for example
 	}
 
 	get name() {

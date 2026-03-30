@@ -37,6 +37,8 @@ export {
 	OutputFormat,
 	AdtsOutputFormat,
 	AdtsOutputFormatOptions,
+	CmafOutputFormat,
+	CmafOutputFormatOptions,
 	FlacOutputFormat,
 	FlacOutputFormatOptions,
 	HlsOutputFormat,
