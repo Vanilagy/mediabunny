@@ -270,6 +270,7 @@ export class HlsMuxer extends Muxer {
 			const uniqueMetadata = new Set(unpairedVideoTracks.map(({ metadata }) => {
 				let key = '';
 				key += `${metadata.languageCode ?? UNDETERMINED_LANGUAGE}-`;
+				key += `${metadata.name ?? ''}-`;
 				key += `${metadata.disposition?.default ?? true}-`;
 				key += `${metadata.disposition?.primary ?? false}-`;
 				key += `${metadata.disposition?.forced ?? false}-`;
@@ -308,6 +309,7 @@ export class HlsMuxer extends Muxer {
 			const uniqueMetadata = new Set(unpairedAudioTracks.map(({ metadata }) => {
 				let key = '';
 				key += `${metadata.languageCode ?? UNDETERMINED_LANGUAGE}-`;
+				key += `${metadata.name ?? ''}-`;
 				key += `${metadata.disposition?.default ?? true}-`;
 				key += `${metadata.disposition?.primary ?? false}-`;
 				key += `${metadata.disposition?.forced ?? false}-`;
@@ -992,6 +994,14 @@ export class HlsMuxer extends Muxer {
 			trackData.closed = true;
 		}
 
+		// Compute a single target duration across all playlists, as the spec mandates they match
+		let globalTargetDuration = this.targetSegmentDuration;
+		for (const playlist of this.playlists) {
+			for (const segment of playlist.writtenSegments) {
+				globalTargetDuration = Math.max(globalTargetDuration, segment.duration);
+			}
+		}
+
 		for (const playlist of this.playlists) {
 			if (playlist.currentSegmentStartTimestamp !== null) {
 				await this.advancePlaylist(playlist);
@@ -1001,17 +1011,45 @@ export class HlsMuxer extends Muxer {
 
 			let peakBitrate = 0;
 			let totalBits = 0;
+			let totalDuration = 0;
 
-			for (const segment of playlist.writtenSegments) {
-				peakBitrate = Math.max(peakBitrate, 8 * segment.byteSize / segment.duration);
+			// Per spec, peak bitrate is the largest bit rate of any contiguous set of segments whose total duration is
+			// between 0.5 and 1.5 times the target duration
+			const segments = playlist.writtenSegments;
+
+			for (let i = 0; i < segments.length; i++) {
+				totalDuration += segments[i]!.duration;
+
+				let windowBytes = 0;
+				let windowDuration = 0;
+
+				for (let j = i; j < segments.length; j++) {
+					windowBytes += segments[j]!.byteSize;
+					windowDuration += segments[j]!.duration;
+
+					if (windowDuration >= 0.5 * globalTargetDuration && windowDuration <= 1.5 * globalTargetDuration) {
+						peakBitrate = Math.max(peakBitrate, 8 * windowBytes / windowDuration);
+					}
+
+					if (windowDuration > 1.5 * globalTargetDuration) {
+						break;
+					}
+				}
+			}
+
+			// Fallback: if no contiguous set falls within the range, use per-segment max
+			if (peakBitrate === 0) {
+				for (const segment of segments) {
+					peakBitrate = Math.max(peakBitrate, 8 * segment.byteSize / segment.duration);
+				}
+			}
+
+			for (const segment of segments) {
 				totalBits += 8 * segment.byteSize;
 			}
 
 			playlist.peakBitrate = peakBitrate;
-
-			if (playlist.currentSegmentStartTimestamp !== null) {
-				playlist.averageBitrate = totalBits / playlist.currentSegmentStartTimestamp;
-			}
+			playlist.averageBitrate = totalBits / (totalDuration || 1);
 		}
 
 		// Write all playlists in parallel
@@ -1023,10 +1061,8 @@ export class HlsMuxer extends Muxer {
 				this.format._options.onSegment?.(playlist.singleFile.target, playlist.singleFile.info);
 			}
 
-			let targetDuration = this.targetSegmentDuration;
 			let hasByteOffsets = false;
 			for (const segment of playlist.writtenSegments) {
-				targetDuration = Math.max(targetDuration, segment.duration);
 				hasByteOffsets ||= segment.byteOffset !== null;
 			}
 
@@ -1049,7 +1085,7 @@ export class HlsMuxer extends Muxer {
 			const playlistText = '#EXTM3U\n'
 				+ `#EXT-X-VERSION:${version}\n`
 				+ '#EXT-X-PLAYLIST-TYPE:VOD\n'
-				+ `#EXT-X-TARGETDURATION:${Math.ceil(targetDuration)}\n` // Must be a "decimal-integer"
+				+ `#EXT-X-TARGETDURATION:${Math.ceil(globalTargetDuration)}\n` // Must be a "decimal-integer"
 				+ '#EXT-X-INDEPENDENT-SEGMENTS\n' // TODO not when live
 				+ (isKeyPacketsOnly ? '#EXT-X-I-FRAMES-ONLY\n' : '')
 				+ (playlist.initSegment
@@ -1085,8 +1121,11 @@ export class HlsMuxer extends Muxer {
 
 		const masterPlaylistPromise = (async () => {
 			let masterPlaylistText = '#EXTM3U\n';
-			let lastGroupId: string | null = null;
 			let firstVariantWritten = false;
+
+			let lastGroupId: string | null = null;
+			let groupIdTrackCount = 0;
+			let hasHadDefaultTrackInGroup = false;
 
 			for (const decl of this.playlistDeclarations) {
 				if (decl.groupId === null) {
@@ -1101,7 +1140,7 @@ export class HlsMuxer extends Muxer {
 					}
 
 					let peakDeclBitrate = 0;
-					let totalDeclAverageBitrate = 0;
+					let maxRefAverageBitrate = 0;
 
 					if (decl.references.length > 0) {
 						const firstRef = decl.references[0]!;
@@ -1113,17 +1152,13 @@ export class HlsMuxer extends Muxer {
 						for (const ref of decl.references) {
 							assert(ref.playlist.peakBitrate !== null);
 							peakDeclBitrate = Math.max(peakDeclBitrate, ref.playlist.peakBitrate);
-
-							if (ref.playlist.averageBitrate !== null) {
-								totalDeclAverageBitrate += ref.playlist.averageBitrate;
-							}
+							maxRefAverageBitrate = Math.max(maxRefAverageBitrate, ref.playlist.averageBitrate ?? 0);
 						}
 					}
 
 					assert(decl.playlist.peakBitrate !== null);
 					const totalPeakBitrate = decl.playlist.peakBitrate + peakDeclBitrate;
-					const totalAverageBitrate = (decl.playlist.averageBitrate ?? 0)
-						+ totalDeclAverageBitrate / (decl.references.length || 1);
+					const totalAverageBitrate = (decl.playlist.averageBitrate ?? 0) + maxRefAverageBitrate;
 
 					if (!firstVariantWritten) {
 						masterPlaylistText += '\n';
@@ -1167,19 +1202,8 @@ export class HlsMuxer extends Muxer {
 
 						// FRAME-RATE is not defined for EXT-X-I-FRAME-STREAM-INF
 						if (!isKeyPacketsOnly && videoTrack.metadata.frameRate !== undefined) {
-							masterPlaylistText += `,FRAME-RATE=${+videoTrack.metadata.frameRate.toFixed(16)}`;
-						}
-					}
-
-					const name = decl.playlist.tracks.find(x => x.metadata.name !== undefined)?.metadata.name;
-					if (name !== undefined) {
-						if (/[\n\r"]/.test(name)) {
-							console.warn(
-								'Dropping track name since it includes a line feed, carriage return, or double quote'
-								+ ' character, which are not allowed in HLS playlist attributes.',
-							);
-						} else {
-							masterPlaylistText += `,NAME="${name}"`;
+							// Spec requires that frame rate be rounded to 3 decimal places
+							masterPlaylistText += `,FRAME-RATE=${+videoTrack.metadata.frameRate.toFixed(3)}`;
 						}
 					}
 
@@ -1209,27 +1233,32 @@ export class HlsMuxer extends Muxer {
 
 					const track = decl.playlist.tracks[0]!;
 					const type = track.type;
-					const name = track.metadata.name;
+					let name = track.metadata.name ?? null;
 					const languageCode = track.metadata.languageCode;
 					const disposition = track.metadata.disposition;
 
 					if (lastGroupId === null || decl.groupId !== lastGroupId) {
+						groupIdTrackCount = 0;
 						masterPlaylistText += '\n';
+						hasHadDefaultTrackInGroup = false;
 					}
 					lastGroupId = decl.groupId;
+					groupIdTrackCount++;
 
 					masterPlaylistText += `#EXT-X-MEDIA:TYPE=${type.toUpperCase()},GROUP-ID="${decl.groupId}"`;
 
-					if (name !== undefined) {
-						if (/[\n\r"]/.test(name)) {
-							console.warn(
-								'Dropping track name since it includes a line feed, carriage return, or double quote'
-								+ ' character, which are not allowed in HLS playlist attributes.',
-							);
-						} else {
-							masterPlaylistText += `,NAME="${name}"`;
-						}
+					if (name !== null && /[\n\r"]/.test(name)) {
+						console.warn(
+							'Dropping track name since it includes a line feed, carriage return, or double quote'
+							+ ' character, which are not allowed in HLS playlist attributes.',
+						);
+						name = null;
 					}
+
+					// Name is required, so we have to set it to SOMETHING
+					name ??= `${languageCode ?? decl.groupId}-${groupIdTrackCount}`;
+
+					masterPlaylistText += `,NAME="${name}"`;
 
 					if (languageCode !== undefined) {
 						masterPlaylistText += `,LANGUAGE="${languageCode}"`;
@@ -1239,9 +1268,10 @@ export class HlsMuxer extends Muxer {
 					const dispositionDefault = disposition?.default ?? true;
 					const dispositionForced = disposition?.forced ?? false;
 
-					if (dispositionPrimary) {
+					if (dispositionPrimary && !hasHadDefaultTrackInGroup) {
 						// HLS's "DEFAULT" behaves like our "primary"
 						masterPlaylistText += ',DEFAULT=YES';
+						hasHadDefaultTrackInGroup = true; // Only one DEFAULT label per group allowed
 					}
 
 					if (dispositionPrimary || dispositionDefault) {
@@ -1258,7 +1288,7 @@ export class HlsMuxer extends Muxer {
 						const decoderConfig = trackData?.info.decoderConfig;
 
 						if (decoderConfig) {
-							masterPlaylistText += `,CHANNELS=${decoderConfig.numberOfChannels}`;
+							masterPlaylistText += `,CHANNELS="${decoderConfig.numberOfChannels}"`;
 						}
 					}
 
