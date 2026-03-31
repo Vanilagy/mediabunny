@@ -122,6 +122,8 @@ type InternalTrack = {
 	editListPreviousSegmentDurations: number;
 	/** The media time offset of the main edit list entry (with media time !== -1) */
 	editListOffset: number;
+	/** The segment duration of the main edit list entry, converted to media timescale. null if no edit list. */
+	editListSegmentDuration: number | null;
 } & ({
 	info: null;
 } | {
@@ -332,6 +334,10 @@ export class IsobmffDemuxer extends Demuxer {
 						const previousSegmentDurationsInSeconds
 							= track.editListPreviousSegmentDurations / this.movieTimescale;
 						track.editListOffset -= Math.round(previousSegmentDurationsInSeconds * track.timescale);
+						if (track.editListSegmentDuration !== null) {
+							const segmentDurationInSeconds = track.editListSegmentDuration / this.movieTimescale;
+							track.editListSegmentDuration = Math.round(segmentDurationInSeconds * track.timescale);
+						}
 					}
 
 					break;
@@ -680,6 +686,7 @@ export class IsobmffDemuxer extends Demuxer {
 					fragmentPositionCache: [],
 					editListPreviousSegmentDurations: 0,
 					editListOffset: 0,
+					editListSegmentDuration: null,
 				} satisfies InternalTrack as InternalTrack;
 				this.currentTrack = track;
 
@@ -794,6 +801,7 @@ export class IsobmffDemuxer extends Demuxer {
 
 					track.editListPreviousSegmentDurations = previousSegmentDurations;
 					track.editListOffset = mediaTime;
+					track.editListSegmentDuration = segmentDuration; // in movie timescale, converted later
 					relevantEntryFound = true;
 				}
 			}; break;
@@ -2685,6 +2693,15 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			return null;
 		}
 
+		let shouldDiscard = false;
+		if (this.internalTrack.editListSegmentDuration !== null) {
+			const editStart = this.internalTrack.editListOffset;
+			const editEnd = editStart + this.internalTrack.editListSegmentDuration;
+			if (sampleInfo.presentationTimestamp < editStart || sampleInfo.presentationTimestamp >= editEnd) {
+				shouldDiscard = true;
+			}
+		}
+
 		let data: Uint8Array;
 		if (options.metadataOnly) {
 			data = PLACEHOLDER_DATA;
@@ -2709,6 +2726,8 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			duration,
 			sampleIndex,
 			sampleInfo.sampleSize,
+			undefined,
+			shouldDiscard,
 		);
 
 		this.packetToSampleIndex.set(packet, sampleIndex);
@@ -2724,6 +2743,15 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		const trackData = fragment.trackData.get(this.internalTrack.id)!;
 		const fragmentSample = trackData.samples[sampleIndex];
 		assert(fragmentSample);
+
+		let shouldDiscard = false;
+		if (this.internalTrack.editListSegmentDuration !== null) {
+			const editStart = this.internalTrack.editListOffset;
+			const editEnd = editStart + this.internalTrack.editListSegmentDuration;
+			if (fragmentSample.presentationTimestamp < editStart || fragmentSample.presentationTimestamp >= editEnd) {
+				shouldDiscard = true;
+			}
+		}
 
 		let data: Uint8Array;
 		if (options.metadataOnly) {
@@ -2749,6 +2777,8 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			duration,
 			fragment.moofOffset + sampleIndex,
 			fragmentSample.byteSize,
+			undefined,
+			shouldDiscard,
 		);
 
 		this.packetToFragmentLocation.set(packet, { fragment, sampleIndex });
