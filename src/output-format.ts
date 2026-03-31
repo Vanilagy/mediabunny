@@ -1173,6 +1173,7 @@ export type HlsOutputFormatOptions = {
 	targetDuration?: number;
 	singleFilePerPlaylist?: boolean;
 	live?: boolean;
+	maxLiveSegmentCount?: number;
 	getPlaylistPath?: (info: HlsOutputPlaylistInfo) => MaybePromise<string>;
 	getSegmentPath?: (info: HlsOutputSegmentInfo) => MaybePromise<string>;
 	getInitPath?: (info: HlsOutputPlaylistInfo) => MaybePromise<string>;
@@ -1216,6 +1217,13 @@ export class HlsOutputFormat extends OutputFormat {
 		}
 		if (options.live !== undefined && typeof options.live !== 'boolean') {
 			throw new TypeError('options.live, when provided, must be a boolean.');
+		}
+		if (
+			options.maxLiveSegmentCount !== undefined
+			&& (typeof options.maxLiveSegmentCount !== 'number' || options.maxLiveSegmentCount < 1
+				|| (Number.isFinite(options.maxLiveSegmentCount) && !Number.isInteger(options.maxLiveSegmentCount)))
+		) {
+			throw new TypeError('options.maxLiveSegmentCount, when provided, must be a positive integer or Infinity.');
 		}
 		if (options.getPlaylistPath !== undefined && typeof options.getPlaylistPath !== 'function') {
 			throw new TypeError('options.getPlaylistPath, when provided, must be a function.');

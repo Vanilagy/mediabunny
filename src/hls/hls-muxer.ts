@@ -61,6 +61,7 @@ type Playlist = {
 	writtenSegments: PlaylistSegment[];
 	peakBitrate: number | null;
 	averageBitrate: number | null;
+	mediaSequence: number;
 	done: boolean;
 
 	singleFile: {
@@ -88,6 +89,7 @@ export class HlsMuxer extends Muxer {
 	trackDatas: HlsTrackData[] = [];
 	singleFilePerPlaylist: boolean;
 	isLive: boolean;
+	maxLiveSegmentCount: number;
 	isRelativeToUnixEpoch = false;
 	globalTargetDuration: number;
 
@@ -105,6 +107,7 @@ export class HlsMuxer extends Muxer {
 		this.targetSegmentDuration = format._options.targetDuration ?? 2;
 		this.singleFilePerPlaylist = format._options.singleFilePerPlaylist ?? false;
 		this.isLive = format._options.live ?? false;
+		this.maxLiveSegmentCount = format._options.maxLiveSegmentCount ?? Infinity;
 		this.globalTargetDuration = this.targetSegmentDuration;
 
 		this.getPlaylistPath = format._options.getPlaylistPath
@@ -440,6 +443,7 @@ export class HlsMuxer extends Muxer {
 				writtenSegments: [],
 				peakBitrate: null,
 				averageBitrate: null,
+				mediaSequence: 0,
 				done: false,
 				singleFile: null,
 			};
@@ -1024,6 +1028,11 @@ export class HlsMuxer extends Muxer {
 			}
 
 			if (this.isLive) {
+				while (playlist.writtenSegments.length > this.maxLiveSegmentCount) {
+					playlist.writtenSegments.shift();
+					playlist.mediaSequence++;
+				}
+
 				await this.writePlaylist(playlist);
 				await this.tryWriteMasterPlaylist();
 			}
@@ -1128,6 +1137,7 @@ export class HlsMuxer extends Muxer {
 			+ `#EXT-X-VERSION:${version}\n`
 			+ (!this.isLive ? '#EXT-X-PLAYLIST-TYPE:VOD\n' : '')
 			+ `#EXT-X-TARGETDURATION:${Math.ceil(targetDuration)}\n` // Must be a "decimal-integer"
+			+ (Number.isFinite(this.maxLiveSegmentCount) ? `#EXT-X-MEDIA-SEQUENCE:${playlist.mediaSequence}\n` : '')
 			+ '#EXT-X-INDEPENDENT-SEGMENTS\n' // Todo not for live?
 			+ (isKeyPacketsOnly ? '#EXT-X-I-FRAMES-ONLY\n' : '')
 			+ (playlist.initSegment

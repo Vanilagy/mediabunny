@@ -2523,3 +2523,103 @@ test('Throws if some tracks are relativeToUnixEpoch and some are not', async () 
 
 	await expect(output.start()).rejects.toThrow('relativeToUnixEpoch');
 });
+
+test('Live mode, maxLiveSegmentCount', async () => {
+	const writtenTexts = new Map<string, string>();
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new MpegTsOutputFormat(),
+			live: true,
+			maxLiveSegmentCount: 2,
+		}),
+		target: (request) => {
+			const target = new BufferTarget();
+			target.on('finalized', () => {
+				if (request.path.endsWith('.m3u8')) {
+					writtenTexts.set(request.path, new TextDecoder().decode(target.buffer!));
+				}
+			});
+			return target;
+		},
+		rootPath: 'master.m3u8',
+	});
+
+	const source = videoSource();
+	output.addVideoTrack(source);
+
+	await output.start();
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0.5), avcMetadata);
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0.5), avcMetadata);
+
+	expect(writtenTexts.get('playlist-1.m3u8')).toBe(`#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:2
+#EXT-X-MEDIA-SEQUENCE:0
+#EXT-X-INDEPENDENT-SEGMENTS
+
+#EXTINF:2,
+segment-1-1.ts
+`);
+
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0.5), avcMetadata);
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 4, 0.5), avcMetadata);
+
+	expect(writtenTexts.get('playlist-1.m3u8')).toBe(`#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:2
+#EXT-X-MEDIA-SEQUENCE:0
+#EXT-X-INDEPENDENT-SEGMENTS
+
+#EXTINF:2,
+segment-1-1.ts
+#EXTINF:2,
+segment-1-2.ts
+`);
+
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 4.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 5.5, 0.5), avcMetadata);
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 6, 0.5), avcMetadata);
+
+	expect(writtenTexts.get('playlist-1.m3u8')).toBe(`#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:2
+#EXT-X-MEDIA-SEQUENCE:1
+#EXT-X-INDEPENDENT-SEGMENTS
+
+#EXTINF:2,
+segment-1-2.ts
+#EXTINF:2,
+segment-1-3.ts
+`);
+
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 6.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 7, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 7.5, 0.5), avcMetadata);
+
+	await output.finalize();
+
+	expect(writtenTexts.get('playlist-1.m3u8')).toBe(`#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:2
+#EXT-X-MEDIA-SEQUENCE:2
+#EXT-X-INDEPENDENT-SEGMENTS
+
+#EXTINF:2,
+segment-1-3.ts
+#EXTINF:2,
+segment-1-4.ts
+
+#EXT-X-ENDLIST
+`);
+});
