@@ -190,6 +190,11 @@ export type BaseTrackMetadata = {
 	 * If you're not fully sure, make sure to add a buffer of around 33% to make sure you stay below the maximum.
 	 */
 	maximumPacketCount?: number;
+	/**
+	 * Whether the timestamps of this track are relative to the Unix epoch (January 1, 1970 00:00:00 UTC). When `true`,
+	 * each timestamp maps to a definitive point in time.
+	 */
+	isRelativeToUnixEpoch?: boolean;
 	group?: OutputTrackGroup | OutputTrackGroup[];
 };
 
@@ -295,16 +300,18 @@ export class Output<
 	/** The format of the output file. */
 	readonly format: F;
 	/** @internal */
-	_target: T | ((request: TargetRequest) => MaybePromise<T>);
+	private _target: T | ((request: TargetRequest) => MaybePromise<T>);
 	/** The current state of the output. */
 	state: 'pending' | 'started' | 'canceled' | 'finalizing' | 'finalized' = 'pending';
 
 	/** @internal */
 	_rootPath: string | null;
 	/** @internal */
-	_initTarget: T | (() => MaybePromise<T>) | null;
+	private _initTarget: T | (() => MaybePromise<T>) | null;
 	/** @internal */
 	_muxer: Muxer;
+	/** @internal */
+	_targets = new Set<Target>();
 	/** @internal */
 	_rootWriterPromise: Promise<Writer> | null = null;
 	/** @internal */
@@ -359,7 +366,9 @@ export class Output<
 			if (options.target._output) {
 				throw new Error('Target is already used for another output.');
 			}
+
 			options.target._output = this;
+			this._targets.add(options.target);
 		}
 		if (options.rootPath !== undefined && typeof options.rootPath !== 'string') {
 			throw new TypeError('options.rootPath, when provided, must be a string.');
@@ -381,8 +390,13 @@ export class Output<
 		this.format = options.format;
 		this._target = options.target;
 
-		this._rootPath = options.rootPath ?? null;
 		this._initTarget = options.initTarget ?? null;
+		if (this._initTarget instanceof Target) {
+			this._initTarget._output = this;
+			this._targets.add(this._initTarget);
+		}
+
+		this._rootPath = options.rootPath ?? null;
 		this._muxer = options.format._createMuxer(this);
 	}
 
@@ -390,11 +404,48 @@ export class Output<
 		assert(typeof this._target === 'function');
 
 		const target = await this._target(request);
+		target._output = this;
 		this.emit('target', { target, request });
+
+		if (this.state === 'canceled') {
+			await target._close();
+		} else {
+			this._targets.add(target);
+		}
 
 		return target;
 	}
 
+	async _getInitTarget(): Promise<T> {
+		assert(this._initTarget !== null);
+
+		if (this._initTarget instanceof Target) {
+			return this._initTarget;
+		}
+
+		const target = await this._initTarget();
+		target._output = this;
+
+		if (this.state === 'canceled') {
+			await target._close();
+		} else {
+			this._targets.add(target);
+		}
+
+		return target;
+	}
+
+	/** @internal */
+	_targetIsFunction() {
+		return typeof this._target === 'function';
+	}
+
+	/** @internal */
+	_hasInitTarget() {
+		return this._initTarget !== null;
+	}
+
+	/** @internal */
 	_getRootWriter() {
 		return this._rootWriterPromise ??= (async () => {
 			let target: Target;
@@ -672,9 +723,8 @@ export class Output<
 				const promises = this._tracks.map(x => x.source._flushOrWaitForOngoingClose(true)); // Force close
 				await Promise.all(promises);
 
-				if (this._rootWriterPromise) {
-					await (await this._rootWriterPromise).close();
-				}
+				await Promise.all([...this._targets].map(target => target._close()));
+				this._targets.clear();
 			} finally {
 				release();
 			}

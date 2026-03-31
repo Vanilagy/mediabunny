@@ -2558,7 +2558,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		return this.internalTrack.timescale;
 	}
 
-	getTimestampsAreRelativeToUnixEpoch() {
+	isRelativeToUnixEpoch() {
 		return false;
 	}
 

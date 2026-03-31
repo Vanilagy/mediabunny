@@ -401,7 +401,7 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		return this.demuxer.audioInfo.sampleRate;
 	}
 
-	getTimestampsAreRelativeToUnixEpoch() {
+	isRelativeToUnixEpoch() {
 		return false;
 	}
 

@@ -2426,3 +2426,100 @@ segment-1-1.ts
 #EXT-X-ENDLIST
 `);
 });
+
+test('Live mode, empty', async () => {
+	const writtenTexts = new Map<string, string>();
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new MpegTsOutputFormat(),
+			live: true,
+		}),
+		target: (request) => {
+			const target = new BufferTarget();
+			target.on('finalized', () => {
+				if (request.path.endsWith('.m3u8')) {
+					writtenTexts.set(request.path, new TextDecoder().decode(target.buffer!));
+				}
+			});
+			return target;
+		},
+		rootPath: 'master.m3u8',
+	});
+
+	const source = videoSource();
+	output.addVideoTrack(source);
+
+	await output.start();
+	await output.finalize();
+
+	expect(writtenTexts.get('playlist-1.m3u8')).toBe(`#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
+
+#EXT-X-ENDLIST
+`);
+});
+
+test('EXT-X-PROGRAM-DATE-TIME writing', async () => {
+	let result: string | null = null;
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new MpegTsOutputFormat(),
+			onPlaylist: (text) => { result = text; },
+		}),
+		target: () => new BufferTarget(),
+		rootPath: '',
+	});
+
+	const source = videoSource();
+	output.addVideoTrack(source, { isRelativeToUnixEpoch: true });
+
+	await output.start();
+
+	const base = Date.parse('2026-01-01T00:00:00.250Z') / 1000;
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', base + 0, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', base + 0.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', base + 1, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', base + 1.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'key', base + 2, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', base + 2.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', base + 3, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', base + 3.5, 0), avcMetadata);
+
+	await output.finalize();
+
+	expect(result).toBe(`#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
+
+#EXTINF:2,
+#EXT-X-PROGRAM-DATE-TIME:2026-01-01T00:00:00.250Z
+segment-1-1.ts
+#EXTINF:1.5,
+#EXT-X-PROGRAM-DATE-TIME:2026-01-01T00:00:02.250Z
+segment-1-2.ts
+
+#EXT-X-ENDLIST
+`);
+});
+
+test('Throws if some tracks are relativeToUnixEpoch and some are not', async () => {
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new MpegTsOutputFormat(),
+		}),
+		target: () => new NullTarget(),
+		rootPath: '',
+	});
+
+	output.addVideoTrack(videoSource(), { isRelativeToUnixEpoch: true });
+	output.addAudioTrack(audioSource(), { isRelativeToUnixEpoch: false });
+
+	await expect(output.start()).rejects.toThrow('relativeToUnixEpoch');
+});

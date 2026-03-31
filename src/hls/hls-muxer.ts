@@ -43,6 +43,7 @@ type HlsAudioTrackData = HlsTrackData & { info: { type: 'audio' } };
 type PlaylistSegment = {
 	path: string;
 	duration: number;
+	timestamp: number;
 	byteSize: number;
 	byteOffset: number | null;
 };
@@ -87,13 +88,14 @@ export class HlsMuxer extends Muxer {
 	trackDatas: HlsTrackData[] = [];
 	singleFilePerPlaylist: boolean;
 	isLive: boolean;
+	isRelativeToUnixEpoch = false;
 	globalTargetDuration: number;
 
 	playlists: Playlist[] = [];
 	playlistDeclarations: PlaylistDeclaration[] = [];
 
 	constructor(output: Output, format: HlsOutputFormat) {
-		if (typeof output._target !== 'function') {
+		if (!output._targetIsFunction()) {
 			throw new TypeError('HLS outputs require `OutputOptions.target` to be a function.');
 		}
 
@@ -116,6 +118,16 @@ export class HlsMuxer extends Muxer {
 	}
 
 	async start(): Promise<void> {
+		const someRelative = this.output._tracks.some(t => t.metadata.isRelativeToUnixEpoch);
+		const someNotRelative = this.output._tracks.some(t => !t.metadata.isRelativeToUnixEpoch);
+		if (someRelative && someNotRelative) {
+			throw new Error(
+				'All tracks must agree on `relativeToUnixEpoch`: some tracks are relative to the Unix epoch and some'
+				+ ' are not.',
+			);
+		}
+		this.isRelativeToUnixEpoch = someRelative;
+
 		// Upon starting, we now need to assign the tracks to separate playlists. This assignment will make use of the
 		// track pairability information provided by the user as well as other metadata specified on the tracks. The
 		// resulting master playlist should preserve track pairability; meaning that all tracks that are pairable
@@ -868,6 +880,7 @@ export class HlsMuxer extends Muxer {
 						playlist.initSegment = {
 							path: playlist.singleFile.path,
 							duration: 0,
+							timestamp: 0,
 							byteSize: 0,
 							byteOffset: 0,
 						};
@@ -889,6 +902,7 @@ export class HlsMuxer extends Muxer {
 						playlist.initSegment = {
 							path,
 							duration: 0,
+							timestamp: 0,
 							byteSize: 0,
 							byteOffset: null,
 						};
@@ -993,6 +1007,7 @@ export class HlsMuxer extends Muxer {
 			playlist.writtenSegments.push({
 				path: relativeSegmentPath,
 				duration: segmentDuration,
+				timestamp: playlist.currentSegmentStartTimestamp,
 				byteSize: segmentSize,
 				byteOffset: playlist.singleFile
 					? playlist.singleFile.nextOffset
@@ -1126,6 +1141,9 @@ export class HlsMuxer extends Muxer {
 			+ (playlist.writtenSegments
 				.map(segment => (
 					`#EXTINF:${+segment.duration.toFixed(12)},\n` // Trailing comma mandated by spec
+					+ (this.isRelativeToUnixEpoch
+						? `#EXT-X-PROGRAM-DATE-TIME:${new Date(1000 * segment.timestamp).toISOString()}\n`
+						: '')
 					+ (segment.byteOffset !== null
 						? `#EXT-X-BYTERANGE:${segment.byteSize}@${segment.byteOffset}\n`
 						: '')

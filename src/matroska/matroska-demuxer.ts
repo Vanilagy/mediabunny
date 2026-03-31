@@ -1971,7 +1971,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		return this.internalTrack.segment.timestampFactor;
 	}
 
-	getTimestampsAreRelativeToUnixEpoch() {
+	isRelativeToUnixEpoch() {
 		return false;
 	}
 

@@ -255,7 +255,7 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 		return this.firstInputTrack._backing.getTimeResolution();
 	}
 
-	getTimestampsAreRelativeToUnixEpoch(): boolean {
+	isRelativeToUnixEpoch(): boolean {
 		assert(this.demuxer.firstSegment);
 		return this.demuxer.firstSegment.relativeToUnixEpoch;
 	}

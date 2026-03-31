@@ -137,7 +137,7 @@ test.concurrent('Big Buck Bunny', { timeout: 15_000 }, async () => {
 	expect(sourceCount).toBe(1 + 5 + 5);
 
 	expect(tracks.every(x => x.isHydrated)).toBe(true);
-	expect(tracks.every(x => !x.timestampsAreRelativeToUnixEpoch)).toBe(true);
+	expect(tracks.every(x => !x.isRelativeToUnixEpoch)).toBe(true);
 
 	for (const track of tracks) {
 		expect(await track.isLive()).toBe(false);
@@ -490,7 +490,7 @@ test.concurrent('Single-value PDT', { timeout: 15_000 }, async () => {
 	});
 
 	const tracks = await input.getTracks();
-	expect(tracks.every(x => x.isHydrated && x.timestampsAreRelativeToUnixEpoch)).toBe(true);
+	expect(tracks.every(x => x.isHydrated && x.isRelativeToUnixEpoch)).toBe(true);
 
 	const track = tracks[0]!;
 	const firstTimestamp = await track.getFirstTimestamp();
@@ -567,7 +567,7 @@ test.concurrent('PDT with bad values', { timeout: 15_000 }, async () => {
 
 	await audioTrack.hydrate();
 
-	expect(audioTrack.timestampsAreRelativeToUnixEpoch).toBe(false);
+	expect(audioTrack.isRelativeToUnixEpoch).toBe(false);
 });
 
 test.concurrent('Alternative audio only', { timeout: 15_000 }, async () => {

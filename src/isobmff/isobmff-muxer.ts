@@ -24,7 +24,7 @@ import {
 import { Muxer } from '../muxer';
 import { Output, OutputAudioTrack, OutputSubtitleTrack, OutputTrack, OutputVideoTrack } from '../output';
 import { Writer } from '../writer';
-import { BufferTarget, Target } from '../target';
+import { BufferTarget } from '../target';
 import { assert, computeRationalApproximation, last, promiseWithResolvers, Rational, simplifyRational } from '../misc';
 import { IsobmffOutputFormatOptions, IsobmffOutputFormat, MovOutputFormat, CmafOutputFormat } from '../output-format';
 import { inlineTimestampRegex, SubtitleConfig, SubtitleCue, SubtitleMetadata } from '../subtitles';
@@ -228,7 +228,7 @@ export class IsobmffMuxer extends Muxer {
 		}
 
 		if (this.isCmaf) {
-			if (this.output._initTarget === null) {
+			if (!this.output._hasInitTarget()) {
 				throw new Error(
 					`CMAF outputs require the initTarget field in OutputOptions to be set; the init segment`
 					+ ` will be written to it.`,
@@ -236,9 +236,7 @@ export class IsobmffMuxer extends Muxer {
 			}
 
 			// Set up the init writer to which we'll write the init segment
-			const initTarget = this.output._initTarget instanceof Target
-				? this.output._initTarget
-				: await this.output._initTarget();
+			const initTarget = await this.output._getInitTarget();
 			const initWriter = new Writer(initTarget);
 			initWriter.start();
 

@@ -659,6 +659,7 @@ export class RangedTarget extends Target {
 
 		this._baseTarget = baseTarget;
 		this._offset = offset;
+		this._output = baseTarget._output;
 	}
 
 	/** @internal */

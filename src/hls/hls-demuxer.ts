@@ -701,12 +701,12 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 		return this.internalTrack.backingTrack._backing.getTimeResolution();
 	}
 
-	getTimestampsAreRelativeToUnixEpoch(): boolean {
+	isRelativeToUnixEpoch(): boolean {
 		if (!this.internalTrack.backingTrack) {
 			throw new TrackNotHydratedError();
 		}
 
-		return this.internalTrack.backingTrack._backing.getTimestampsAreRelativeToUnixEpoch();
+		return this.internalTrack.backingTrack._backing.isRelativeToUnixEpoch();
 	}
 
 	getBitrate(): number | null {

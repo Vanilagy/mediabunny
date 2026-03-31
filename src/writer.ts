@@ -6,6 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { assert } from './misc';
 import { Target } from './target';
 
 export class Writer {
@@ -50,12 +51,10 @@ export class Writer {
 
 	/** Called after muxing has finished. */
 	async finalize() {
-		await this.target._finalize();
-	}
+		assert(this.target._output);
 
-	/** Closes the writer. */
-	async close() {
-		return this.target._close();
+		await this.target._finalize();
+		this.target._output._targets.delete(this.target);
 	}
 
 	private trackedWrites: Uint8Array | null = null;
