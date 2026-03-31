@@ -835,9 +835,9 @@ const setUpSegmentationEnvironment = async (options: {
 		target: (request) => {
 			const target = new BufferTarget();
 			if (request.path.includes('playlist')) {
-				target.onfinalized = () => {
+				target.on('finalized', () => {
 					result = new TextDecoder().decode(target.buffer!);
-				};
+				});
 			} else if (request.path.includes('segment')) {
 				segmentCount++;
 
@@ -846,7 +846,7 @@ const setUpSegmentationEnvironment = async (options: {
 				const audioBundle = promiseWithResolvers<number[]>();
 				lastSegmentAudioTimestamps = audioBundle.promise;
 
-				target.onfinalized = async () => {
+				target.on('finalized', async () => {
 					try {
 						using input = new Input({
 							source: new BufferSource(target.buffer!),
@@ -880,7 +880,7 @@ const setUpSegmentationEnvironment = async (options: {
 						videoBundle.resolve([]);
 						audioBundle.resolve([]);
 					}
-				};
+				});
 			}
 
 			return target;
@@ -1912,9 +1912,9 @@ test('Single-file mode', async () => {
 			const target = new BufferTarget();
 
 			if (request.path.includes('playlist')) {
-				target.onfinalized = () => {
+				target.on('finalized', () => {
 					playlistText = new TextDecoder().decode(target.buffer!);
-				};
+				});
 			} else if (request.path.includes('segment')) {
 				segmentPaths.add(request.path);
 			}
@@ -2061,20 +2061,20 @@ test('I-frame stream, pairing warning', async () => {
 
 test('CMAF segmentation', async () => {
 	let playlistText: string | null = null;
-	const writtenPaths = new Set<string>();
+	const targets = new Map<string, BufferTarget>();
 
 	const output = new Output({
 		format: new HlsOutputFormat({
 			segmentFormat: new CmafOutputFormat(),
 		}),
 		target: (request) => {
-			writtenPaths.add(request.path);
 			const target = new BufferTarget();
+			targets.set(request.path, target);
 
 			if (request.path.includes('playlist')) {
-				target.onfinalized = () => {
+				target.on('finalized', () => {
 					playlistText = new TextDecoder().decode(target.buffer!);
-				};
+				});
 			}
 
 			return target;
@@ -2098,9 +2098,9 @@ test('CMAF segmentation', async () => {
 
 	await output.finalize();
 
-	expect(writtenPaths).toContain('init-1.m4s');
-	expect(writtenPaths).toContain('segment-1-1.m4s');
-	expect(writtenPaths).toContain('segment-1-2.m4s');
+	expect(targets.has('init-1.m4s')).toBe(true);
+	expect(targets.has('segment-1-1.m4s')).toBe(true);
+	expect(targets.has('segment-1-2.m4s')).toBe(true);
 
 	expect(playlistText).toBe(`#EXTM3U
 #EXT-X-VERSION:6
@@ -2117,6 +2117,34 @@ segment-1-2.m4s
 #EXT-X-ENDLIST
 `,
 	);
+
+	// Verify that each segment contains exactly 4 video packets
+	const initTarget = targets.get('init-1.m4s')!;
+	using initInput = new Input({
+		source: new BufferSource(initTarget.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	for (const segmentPath of ['segment-1-1.m4s', 'segment-1-2.m4s']) {
+		const segmentTarget = targets.get(segmentPath)!;
+
+		using segmentInput = new Input({
+			source: new BufferSource(segmentTarget.buffer!),
+			formats: ALL_FORMATS,
+			initInput,
+		});
+
+		const videoTrack = await segmentInput.getPrimaryVideoTrack() as InputVideoTrack;
+		expect(videoTrack).toBeTruthy();
+
+		const sink = new EncodedPacketSink(videoTrack);
+		let packetCount = 0;
+		// eslint-disable-next-line @typescript-eslint/no-unused-vars
+		for await (const packet of sink.packets()) {
+			packetCount++;
+		}
+		expect(packetCount).toBe(4);
+	}
 });
 
 test('CMAF segmentation, single file per playlist', async () => {
@@ -2133,9 +2161,9 @@ test('CMAF segmentation, single file per playlist', async () => {
 			const target = new BufferTarget();
 
 			if (request.path.includes('playlist')) {
-				target.onfinalized = () => {
+				target.on('finalized', () => {
 					playlistText = new TextDecoder().decode(target.buffer!);
-				};
+				});
 			}
 
 			return target;
@@ -2167,4 +2195,234 @@ test('CMAF segmentation, single file per playlist', async () => {
 	expect(playlistText!.match(/#EXT-X-BYTERANGE/g)).toHaveLength(2);
 	expect(playlistText).toContain('#EXT-X-VERSION:6');
 	expect(playlistText).toContain('#EXT-X-MAP:URI=');
+});
+
+test('Live mode', async () => {
+	const writtenTexts = new Map<string, string>();
+	const writeCounts = new Map<string, number>();
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new MpegTsOutputFormat(),
+			live: true,
+		}),
+		target: (request) => {
+			const target = new BufferTarget();
+			target.on('finalized', () => {
+				if (request.path.endsWith('.m3u8')) {
+					writtenTexts.set(request.path, new TextDecoder().decode(target.buffer!));
+					writeCounts.set(request.path, (writeCounts.get(request.path) ?? 0) + 1);
+				}
+			});
+			return target;
+		},
+		rootPath: 'master.m3u8',
+	});
+
+	const source = videoSource();
+	output.addVideoTrack(source);
+
+	await output.start();
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0.5), avcMetadata);
+
+	expect(writtenTexts.size).toBe(0);
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0.5), avcMetadata);
+
+	expect(writtenTexts.has('playlist-1.m3u8')).toBe(true);
+	expect(writtenTexts.has('master.m3u8')).toBe(true);
+
+	expect(writtenTexts.get('playlist-1.m3u8')).toBe(`#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
+
+#EXTINF:2,
+segment-1-1.ts
+`);
+
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0.5), avcMetadata);
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 4, 0.5), avcMetadata);
+
+	expect(writtenTexts.get('playlist-1.m3u8')).toBe(`#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
+
+#EXTINF:2,
+segment-1-1.ts
+#EXTINF:2,
+segment-1-2.ts
+`);
+
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 4.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 5.5, 0.5), avcMetadata);
+
+	await output.finalize();
+
+	expect(writeCounts.get('master.m3u8')).toBe(3);
+	expect(writtenTexts.get('playlist-1.m3u8')).toBe(`#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
+
+#EXTINF:2,
+segment-1-1.ts
+#EXTINF:2,
+segment-1-2.ts
+#EXTINF:2,
+segment-1-3.ts
+
+#EXT-X-ENDLIST
+`);
+});
+
+test('Live mode, CMAF', async () => {
+	const writtenTexts = new Map<string, string>();
+	const writeCounts = new Map<string, number>();
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new CmafOutputFormat(),
+			live: true,
+		}),
+		target: (request) => {
+			const target = new BufferTarget();
+			target.on('finalized', () => {
+				if (request.path.endsWith('.m3u8')) {
+					writtenTexts.set(request.path, new TextDecoder().decode(target.buffer!));
+					writeCounts.set(request.path, (writeCounts.get(request.path) ?? 0) + 1);
+				}
+			});
+			return target;
+		},
+		rootPath: 'master.m3u8',
+	});
+
+	const source = videoSource();
+	output.addVideoTrack(source);
+
+	await output.start();
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0.5), avcMetadata);
+
+	expect(writtenTexts.size).toBe(0);
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0.5), avcMetadata);
+
+	expect(writtenTexts.has('playlist-1.m3u8')).toBe(true);
+	expect(writtenTexts.has('master.m3u8')).toBe(true);
+
+	expect(writtenTexts.get('playlist-1.m3u8')).toBe(`#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
+#EXT-X-MAP:URI="init-1.m4s"
+
+#EXTINF:2,
+segment-1-1.m4s
+`);
+
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0.5), avcMetadata);
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 4, 0.5), avcMetadata);
+
+	expect(writtenTexts.get('playlist-1.m3u8')).toBe(`#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
+#EXT-X-MAP:URI="init-1.m4s"
+
+#EXTINF:2,
+segment-1-1.m4s
+#EXTINF:2,
+segment-1-2.m4s
+`);
+
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 4.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 5.5, 0.5), avcMetadata);
+
+	await output.finalize();
+
+	expect(writeCounts.get('master.m3u8')).toBe(3);
+	expect(writtenTexts.get('playlist-1.m3u8')).toBe(`#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
+#EXT-X-MAP:URI="init-1.m4s"
+
+#EXTINF:2,
+segment-1-1.m4s
+#EXTINF:2,
+segment-1-2.m4s
+#EXTINF:2,
+segment-1-3.m4s
+
+#EXT-X-ENDLIST
+`);
+});
+
+test('Live mode, fixed target duration', async () => {
+	const writtenTexts = new Map<string, string>();
+	const writeCounts = new Map<string, number>();
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new MpegTsOutputFormat(),
+			live: true,
+		}),
+		target: (request) => {
+			const target = new BufferTarget();
+			target.on('finalized', () => {
+				if (request.path.endsWith('.m3u8')) {
+					writtenTexts.set(request.path, new TextDecoder().decode(target.buffer!));
+					writeCounts.set(request.path, (writeCounts.get(request.path) ?? 0) + 1);
+				}
+			});
+			return target;
+		},
+		rootPath: 'master.m3u8',
+	});
+
+	const source = videoSource();
+	output.addVideoTrack(source);
+
+	await output.start();
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 2, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0.5), avcMetadata);
+
+	await output.finalize();
+
+	// The TARGETDURATION remains 2 even tho there are segments longer than that; this is because the spec disallows the
+	// target duration to change, and it must be the same across all playlists
+	expect(writeCounts.get('master.m3u8')).toBe(1);
+	expect(writtenTexts.get('playlist-1.m3u8')).toBe(`#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
+
+#EXTINF:3,
+segment-1-1.ts
+
+#EXT-X-ENDLIST
+`);
 });

@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { assert, AsyncMutex, isIso639Dash2LanguageCode, MaybePromise, Rotation, toArray } from './misc';
+import { assert, AsyncMutex, EventEmitter, isIso639Dash2LanguageCode, MaybePromise, Rotation, toArray } from './misc';
 import { MetadataTags, TrackDisposition, validateMetadataTags, validateTrackDisposition } from './metadata';
 import { Muxer } from './muxer';
 import { OutputFormat } from './output-format';
@@ -284,10 +284,14 @@ export type OutputOptions<
  * @group Output files
  * @public
  */
+export type OutputEvents = {
+	target: { target: Target; request: TargetRequest | null };
+};
+
 export class Output<
 	F extends OutputFormat = OutputFormat,
 	T extends Target = Target,
-> {
+> extends EventEmitter<OutputEvents> {
 	/** The format of the output file. */
 	readonly format: F;
 	/** @internal */
@@ -336,15 +340,12 @@ export class Output<
 	}
 
 	/**
-	 * Called whenever a target is resolved for internal operations.
-	 */
-	onTarget?: (target: Target, request: TargetRequest | null) => unknown;
-
-	/**
 	 * Creates a new instance of {@link Output} which can then be used to create a new media file according to the
 	 * specified {@link OutputOptions}.
 	 */
 	constructor(options: OutputOptions<F, T>) {
+		super();
+
 		if (!options || typeof options !== 'object') {
 			throw new TypeError('options must be an object.');
 		}
@@ -389,7 +390,7 @@ export class Output<
 		assert(typeof this._target === 'function');
 
 		const target = await this._target(request);
-		this.onTarget?.(target, request);
+		this.emit('target', { target, request });
 
 		return target;
 	}
@@ -403,7 +404,7 @@ export class Output<
 				target = await this._getTarget({ path: this._rootPath, isRoot: true });
 			} else {
 				target = this._target;
-				this.onTarget?.(this._target, null);
+				this.emit('target', { target: this._target, request: null });
 			}
 
 			const writer = new Writer(target);

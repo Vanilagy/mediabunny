@@ -15,7 +15,7 @@ test.concurrent('Big Buck Bunny', { timeout: 15_000 }, async () => {
 	});
 
 	let sourceCount = 0;
-	input.onSource = () => sourceCount++;
+	input.on('source', () => sourceCount++);
 
 	expect(await input.getFormat()).toBeInstanceOf(HlsInputFormat);
 	expect(await input.getFormat()).toBe(HLS);
@@ -253,7 +253,7 @@ test.concurrent('AES and discontinuities', { timeout: 15_000 }, async () => {
 	});
 
 	let sourceCount = 0;
-	input.onSource = () => sourceCount++;
+	input.on('source', () => sourceCount++);
 
 	const videoTrack = await input.getPrimaryVideoTrack();
 	assert(videoTrack);
@@ -287,7 +287,7 @@ test.concurrent('Range requests', { timeout: 15_000 }, async () => {
 	});
 
 	let sourceCount = 0;
-	input.onSource = () => sourceCount++;
+	input.on('source', () => sourceCount++);
 
 	const tracks = await input.getTracks();
 	expect(tracks).toHaveLength(2);
@@ -316,7 +316,7 @@ test.concurrent('Custom IV', { timeout: 15_000 }, async () => {
 	});
 
 	let sourceCount = 0;
-	input.onSource = () => sourceCount++;
+	input.on('source', () => sourceCount++);
 
 	const tracks = await input.getTracks();
 	expect(tracks).toHaveLength(2);
@@ -377,7 +377,7 @@ test.concurrent('fMP4', { timeout: 15_000 }, async () => {
 	});
 
 	let sourceCount = 0;
-	input.onSource = () => sourceCount++;
+	input.on('source', () => sourceCount++);
 
 	const videoTrack = await input.getPrimaryVideoTrack();
 	const audioTrack = await input.getPrimaryAudioTrack();
@@ -460,7 +460,7 @@ test.concurrent('fMP4 Bitmovin', { timeout: 15_000 }, async () => {
 	});
 
 	let sourceCount = 0;
-	input.onSource = () => sourceCount++;
+	input.on('source', () => sourceCount++);
 
 	const tracks = await input.getTracks();
 	expect(tracks.filter(x => x.isVideoTrack())).toHaveLength(6);

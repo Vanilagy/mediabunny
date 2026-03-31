@@ -1158,3 +1158,43 @@ export const toArray = <T>(x: T | T[]) => {
 		return [x];
 	}
 };
+
+type ListenerOptions = {
+	once?: boolean;
+};
+
+export class EventEmitter<TEvents extends Record<string, unknown>> {
+	private _listeners = new Map<keyof TEvents, Set<{ fn: (data: never) => unknown; once: boolean }>>();
+
+	on<K extends keyof TEvents>(
+		event: K,
+		listener: (data: TEvents[K]) => unknown,
+		options?: ListenerOptions,
+	): () => void {
+		if (!this._listeners.has(event)) {
+			this._listeners.set(event, new Set());
+		}
+		const entry = { fn: listener as (data: never) => void, once: options?.once ?? false };
+		this._listeners.get(event)!.add(entry);
+
+		return () => {
+			this._listeners.get(event)?.delete(entry);
+		};
+	}
+
+	emit<K extends keyof TEvents>(
+		...args: TEvents[K] extends void ? [event: K] : [event: K, data: TEvents[K]]
+	): void {
+		const [event, data] = args;
+		const listeners = this._listeners.get(event);
+		if (!listeners) {
+			return;
+		}
+		for (const entry of listeners) {
+			(entry.fn as (data: unknown) => void)(data);
+			if (entry.once) {
+				listeners.delete(entry);
+			}
+		}
+	}
+}

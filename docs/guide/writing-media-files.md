@@ -223,14 +223,14 @@ The _output target_ determines where the data created by the `Output` will be wr
 
 ---
 
-All targets have an optional `onwrite` callback you can set to monitor which byte regions are being written to:
+All targets emit a `write` event you can listen to in order to monitor which byte regions are being written to:
 ```ts
-target.onwrite = (start, end) => {
+const stopListening = target.on('write', ({ start, end }) => {
 	// ...
-};
+});
 ```
 
-You can use this to track the size of the output file as it grows. But be warned, this function is chatty and gets called *extremely* frequently.
+You can use this to track the size of the output file as it grows. But be warned, this event is chatty and gets fired *extremely* frequently.
 
 ### `BufferTarget`
 

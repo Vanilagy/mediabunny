@@ -9,18 +9,28 @@
 import type { FileHandle } from 'node:fs/promises';
 import { Output } from './output';
 import * as nodeAlias from './node';
-import { assert } from './misc';
+import { assert, EventEmitter } from './misc';
 
 const node = typeof nodeAlias !== 'undefined'
 	? nodeAlias // Aliasing it prevents some bundler warnings
 	: undefined!;
 
 /**
+ * The events emitted by a {@link Target}.
+ * @group Output targets
+ * @public
+ */
+export type TargetEvents = {
+	write: { start: number; end: number };
+	finalized: void;
+};
+
+/**
  * Base class for targets, specifying where output files are written.
  * @group Output targets
  * @public
  */
-export abstract class Target {
+export abstract class Target extends EventEmitter<TargetEvents> {
 	/** @internal */
 	_output: Output | null = null;
 
@@ -43,10 +53,24 @@ export abstract class Target {
 	 *
 	 * Use this callback to track the size of the output file as it grows. But be warned, this function is chatty and
 	 * gets called *extremely* often.
+	 * @deprecated Use `target.on('write', ({ start, end }) => ...)` instead.
 	 */
 	onwrite: ((start: number, end: number) => unknown) | null = null;
 
+	/** @deprecated Use `target.on('finalized', () => ...)` instead. */
 	onfinalized: (() => unknown) | null = null;
+
+	/** @internal */
+	_dispatchWrite(start: number, end: number) {
+		this.onwrite?.(start, end);
+		this.emit('write', { start, end });
+	}
+
+	/** @internal */
+	_dispatchFinalized() {
+		this.onfinalized?.();
+		this.emit('finalized');
+	}
 
 	slice(offset: number) {
 		if (!Number.isInteger(offset) || offset < 0) {
@@ -139,7 +163,7 @@ export class BufferTarget extends Target {
 
 		this._maxPos = Math.max(this._maxPos, pos + data.byteLength);
 
-		this.onwrite?.(pos, pos + data.byteLength);
+		this._dispatchWrite(pos, pos + data.byteLength);
 	}
 
 	/** @internal */
@@ -148,7 +172,7 @@ export class BufferTarget extends Target {
 	/** @internal */
 	async _finalize() {
 		this.buffer = this._buffer.slice(0, this._maxPos);
-		this.onfinalized?.();
+		this._dispatchFinalized();
 	}
 
 	/** @internal */
@@ -293,7 +317,7 @@ export class StreamTarget extends Target {
 
 		this._lastWriteEnd = Math.max(this._lastWriteEnd, pos + data.byteLength);
 
-		this.onwrite?.(pos, pos + data.byteLength);
+		this._dispatchWrite(pos, pos + data.byteLength);
 	}
 
 	/** @internal */
@@ -502,7 +526,7 @@ export class StreamTarget extends Target {
 		await this._streamWriter.ready;
 		await this._streamWriter.close();
 
-		this.onfinalized?.();
+		this._dispatchFinalized();
 	}
 
 	/** @internal */
@@ -575,7 +599,7 @@ export class FilePathTarget extends Target {
 	/** @internal */
 	_write(data: Uint8Array, pos: number) {
 		this._streamTarget._write(data, pos);
-		this.onwrite?.(pos, pos + data.byteLength);
+		this._dispatchWrite(pos, pos + data.byteLength);
 	}
 
 	/** @internal */
@@ -586,7 +610,7 @@ export class FilePathTarget extends Target {
 	/** @internal */
 	async _finalize() {
 		await this._streamTarget._finalize();
-		this.onfinalized?.();
+		this._dispatchFinalized();
 	}
 
 	/** @internal */
@@ -608,7 +632,7 @@ export class NullTarget extends Target {
 	/** @internal */
 
 	_write(data: Uint8Array, pos: number) {
-		this.onwrite?.(pos, pos + data.byteLength);
+		this._dispatchWrite(pos, pos + data.byteLength);
 	}
 
 	/** @internal */
@@ -616,7 +640,7 @@ export class NullTarget extends Target {
 
 	/** @internal */
 	async _finalize() {
-		this.onfinalized?.();
+		this._dispatchFinalized();
 	}
 
 	/** @internal */
@@ -643,7 +667,7 @@ export class RangedTarget extends Target {
 	/** @internal */
 	_write(data: Uint8Array, pos: number): void {
 		this._baseTarget._write(data, this._offset + pos);
-		this.onwrite?.(pos, pos + data.byteLength);
+		this._dispatchWrite(pos, pos + data.byteLength);
 	}
 
 	/** @internal */
@@ -653,7 +677,7 @@ export class RangedTarget extends Target {
 
 	/** @internal */
 	async _finalize() {
-		this.onfinalized?.();
+		this._dispatchFinalized();
 	}
 
 	/** @internal */

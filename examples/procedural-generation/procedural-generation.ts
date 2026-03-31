@@ -99,29 +99,35 @@ const generateVideo = async () => {
 		output = new Output({
 			rootPath: 'master.m3u8',
 			target: async ({ path }) => {
+				/*
 				const fileHandle = await dirHandle.getFileHandle(path, { create: true });
 				const writable = await fileHandle.createWritable();
 
 				const target = new StreamTarget(writable);
-				target.onfinalized = () => console.log('Finalizado', path);
-
-				return target;
-
-				/*
-				const target = new BufferTarget();
-				target.onfinalized = async () => {
-					const fileHandle = await dirHandle.getFileHandle(path, { create: true });
-					const writable = await fileHandle.createWritable();
-					await writable.write(target.buffer);
-					await writable.close();
-				};
+				target.on('finalized', () => console.log('Finalizado', path));
 
 				return target;
 				*/
+
+				const target = new BufferTarget();
+				target.on('finalized', async () => {
+					if (path.includes('m3u8')) {
+						console.log(new TextDecoder().decode(target.buffer!));
+					}
+				});
+
+				if (path.includes('m4s')) {
+					console.log('here');
+					target.on('write', ({ start, end }) => console.log(start, end));
+					target.on('finalized', () => console.log('yippie'));
+				}
+
+				return target;
 			},
 			format: new HlsOutputFormat({
 				segmentFormat: new CmafOutputFormat(),
-				singleFilePerPlaylist: true,
+				// singleFilePerPlaylist: true,
+				live: true,
 				getPlaylistPath: info => `sussex-${info.n}.m3u8`,
 			}),
 		});
@@ -159,7 +165,7 @@ const generateVideo = async () => {
 				codec: audioCodec,
 				bitrate: QUALITY_HIGH,
 			});
-			output.addAudioTrack(audioBufferSource);
+			// output.addAudioTrack(audioBufferSource);
 
 			/*
 			audioBufferSource2 = new AudioBufferSource({
@@ -199,6 +205,8 @@ const generateVideo = async () => {
 			// Add the current state of the canvas as a frame to the video. Using `await` here is crucial to
 			// automatically slow down the rendering loop when the encoder can't keep up.
 			await canvasSource.add(currentTime, 1 / frameRate);
+
+			await new Promise(resolve => setTimeout(resolve, 1000 / frameRate));
 		}
 
 		// Signal to the output that no more video frames are coming (not necessary, but recommended)
@@ -208,8 +216,8 @@ const generateVideo = async () => {
 			// Let's render the audio. Ideally, the audio is rendered before the video (or concurrently to it), but for
 			// simplicity, we're rendering it after we've cranked through all frames.
 			const audioBuffer = await audioContext.startRendering();
-			await audioBufferSource.add(audioBuffer);
-			audioBufferSource.close();
+			// await audioBufferSource.add(audioBuffer);
+			// audioBufferSource.close();
 
 			// await audioBufferSource2!.add(audioBuffer);
 			// audioBufferSource2!.close();

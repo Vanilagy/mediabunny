@@ -17,7 +17,17 @@ import {
 	TrackQuery,
 } from './input-track';
 import { PacketRetrievalOptions } from './media-sink';
-import { arrayArgmin, arrayCount, assert, desc, MaybePromise, polyfillSymbolDispose, prefer, removeItem } from './misc';
+import {
+	arrayArgmin,
+	arrayCount,
+	assert,
+	desc,
+	EventEmitter,
+	MaybePromise,
+	polyfillSymbolDispose,
+	prefer,
+	removeItem,
+} from './misc';
 import { Reader } from './reader';
 import { Source, SourceRef } from './source';
 
@@ -70,7 +80,11 @@ type SourceCacheEntry<S extends Source> = {
  * @group Input files & tracks
  * @public
  */
-export class Input<S extends Source = Source> implements Disposable {
+export type InputEvents = {
+	source: { source: Source; request: SourceRequest | null };
+};
+
+export class Input<S extends Source = Source> extends EventEmitter<InputEvents> implements Disposable {
 	/** @internal */
 	_source: SourceRef<S> | ((request: SourceRequest) => MaybePromise<S | SourceRef<S>>);
 	/** @internal */
@@ -102,11 +116,6 @@ export class Input<S extends Source = Source> implements Disposable {
 		promise: Promise<SourceCacheEntry<S>>;
 	}[] = [];
 
-	/**
-	 * Called whenever a source is resolved for internal operations.
-	 */
-	onSource?: (source: Source, request: SourceRequest | null) => unknown;
-
 	/** True if the input has been disposed. */
 	get disposed() {
 		return this._disposed;
@@ -117,6 +126,8 @@ export class Input<S extends Source = Source> implements Disposable {
 	 * called on this instance.
 	 */
 	constructor(options: InputOptions<S>) {
+		super();
+
 		if (!options || typeof options !== 'object') {
 			throw new TypeError('options must be an object.');
 		}
@@ -171,7 +182,7 @@ export class Input<S extends Source = Source> implements Disposable {
 			ref = source;
 		}
 
-		this.onSource?.(ref.source, request);
+		this.emit('source', { source: ref.source, request });
 		return ref;
 	}
 
@@ -246,7 +257,7 @@ export class Input<S extends Source = Source> implements Disposable {
 			let ref: SourceRef;
 			if (this._source instanceof SourceRef) {
 				ref = this._source;
-				this.onSource?.(ref.source, null);
+				this.emit('source', { source: ref.source, request: null });
 			} else {
 				assert(this._entryPath !== null);
 				ref = await this._getSourceUncached({ path: this._entryPath, isRoot: true });
@@ -269,7 +280,7 @@ export class Input<S extends Source = Source> implements Disposable {
 
 	/**
 	 * Returns the source from which this input file reads data for the entry path. Throws if the source-resolving
-	 * function returns a promise; prefer the {@link Input.onSource} callback for those cases.
+	 * function returns a promise; prefer the `'source'` event for those cases.
 	 */
 	get source(): S {
 		if (this._source instanceof SourceRef) {
@@ -282,7 +293,7 @@ export class Input<S extends Source = Source> implements Disposable {
 		if (source instanceof Promise) {
 			throw new TypeError(
 				'Input.source cannot be used when the source function resolves asynchronously.'
-				+ ' Use the onSource event instead.',
+				+ ' Use the \'source\' event instead.',
 			);
 		}
 

@@ -32,6 +32,7 @@ export {
 	VideoTrackMetadata,
 	AudioTrackMetadata,
 	SubtitleTrackMetadata,
+	OutputEvents,
 } from './output';
 export {
 	OutputFormat,
@@ -129,6 +130,7 @@ export {
 	StreamTarget,
 	StreamTargetOptions,
 	StreamTargetChunk,
+	TargetEvents,
 } from './target';
 export {
 	AnyIterable,
@@ -141,6 +143,7 @@ export {
 	asc,
 	desc,
 	prefer,
+	EventEmitter,
 } from './misc';
 export {
 	TrackType,
@@ -191,6 +194,7 @@ export {
 export {
 	Input,
 	InputOptions,
+	InputEvents,
 	InputDisposedError,
 } from './input';
 export {
