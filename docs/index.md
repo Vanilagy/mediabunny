@@ -138,7 +138,9 @@ const sponsors = {
 		{ image: 'https://avatars.githubusercontent.com/u/31102694', name: 'Aiden Liu', url: 'https://github.com/aidenlx' },
 		{ image: 'https://avatars.githubusercontent.com/u/41021374', name: 'arthco', url: 'https://github.com/arthtyagi' },
 		{ image: 'https://avatars.githubusercontent.com/u/5907357', name: 'Harvey Zhao', url: 'https://github.com/zhw2590582' },
-		{ image: 'https://avatars.githubusercontent.com/u/13042781?v=4', name: 'Anshul Bansal', url: 'https://github.com/akbansa' },
+		{ image: 'https://avatars.githubusercontent.com/u/13042781', name: 'Anshul Bansal', url: 'https://github.com/akbansa' },
+		{ image: 'https://avatars.githubusercontent.com/u/43105172', name: 'zhmou', url: 'https://github.com/zhmou' },
+		{ image: 'https://avatars.githubusercontent.com/u/695166', name: 'Takenori Nakagawa', url: 'https://github.com/ww24' },
 	],
 };
 </script>
