@@ -22,8 +22,8 @@ import {
 import { customAudioDecoders, customVideoDecoders } from './custom-coder';
 import { isAllowSharedBufferSource, SetOptional } from './misc';
 
-const canDecodeVideoMemo = new Map<string, Promise<boolean>>();
-const canDecodeAudioMemo = new Map<string, Promise<boolean>>();
+export const canDecodeVideoMemo = new Map<string, Promise<boolean>>();
+export const canDecodeAudioMemo = new Map<string, Promise<boolean>>();
 
 const validateVideoDecodingConfig = (codec: VideoCodec, options: SetOptional<VideoDecoderConfig, 'codec'>) => {
 	if (!options || typeof options !== 'object') {

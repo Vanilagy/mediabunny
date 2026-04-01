@@ -52,7 +52,7 @@ test('can convert a .flac to .wav', async () => {
 	assert(outputTrack);
 
 	const duration = await outputTrack.computeDuration();
-	expect(duration).toBe(19.71428571428571);
+	expect(duration).toBe(19.714285714285715);
 	const tags = await outputAsInput.getMetadataTags();
 	expect(tags.raw).toEqual({
 		IART: 'Samples Files',

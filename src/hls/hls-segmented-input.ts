@@ -1,3 +1,11 @@
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
 import { AES_128_BLOCK_SIZE, createAes128CbcDecryptStream } from '../aes';
 import { ENCRYPTION_KEY_CACHE_GROUP, Input } from '../input';
 import { Segment, SegmentedInput, SegmentRetrievalOptions } from '../segmented-input';

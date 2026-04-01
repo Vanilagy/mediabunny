@@ -26,8 +26,8 @@ import { isFirefox, MaybePromise, Rotation } from './misc';
 import { EncodedPacket } from './packet';
 import { AudioSample, CropRectangle, validateCropRectangle, VideoSample } from './sample';
 
-const canEncodeVideoMemo = new Map<string, Promise<boolean>>();
-const canEncodeAudioMemo = new Map<string, Promise<boolean>>();
+export const canEncodeVideoMemo = new Map<string, Promise<boolean>>();
+export const canEncodeAudioMemo = new Map<string, Promise<boolean>>();
 
 /**
  * Configuration object that controls video encoding. Can be used to set codec, quality, and more.

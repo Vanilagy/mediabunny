@@ -49,16 +49,16 @@ export class FlacMuxer extends Muxer {
 		super(output);
 
 		this.format = format;
-
-		if (this.format._options.appendOnly) {
-			this.writer.ensureMonotonicity();
-		}
 	}
 
 	async start() {
 		const release = await this.mutex.acquire();
 
 		this.writer = await this.output._getRootWriter();
+		if (this.format._options.appendOnly) {
+			this.writer.ensureMonotonicity();
+		}
+
 		this.writer.write(FLAC_HEADER);
 
 		release();
