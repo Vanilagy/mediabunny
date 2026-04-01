@@ -12,9 +12,23 @@ import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
 import { PacketRetrievalOptions } from '../media-sink';
-import { assert, AsyncMutex, binarySearchExact, binarySearchLessOrEqual, UNDETERMINED_LANGUAGE } from '../misc';
+import {
+	assert,
+	AsyncMutex,
+	binarySearchExact,
+	binarySearchLessOrEqual,
+	toDataView,
+	UNDETERMINED_LANGUAGE,
+} from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
-import { Mp3FrameHeader, getXingOffset, INFO, XING } from '../../shared/mp3-misc';
+import {
+	Mp3FrameHeader,
+	getXingOffset,
+	INFO,
+	XING,
+	XingFlags,
+	computeAverageMp3FrameSize,
+} from '../../shared/mp3-misc';
 import {
 	ID3_V1_TAG_SIZE,
 	ID3_V2_HEADER_SIZE,
@@ -37,8 +51,13 @@ export class Mp3Demuxer extends Demuxer {
 
 	metadataPromise: Promise<void> | null = null;
 	firstFrameHeader: Mp3FrameHeader | null = null;
+	firstFrameHeaderPos: number | null = null;
 	loadedSamples: Sample[] = []; // All samples from the start of the file to lastLoadedPos
 	metadataTags: MetadataTags | null = null;
+	xingData: {
+		frameCount: number | null;
+		fileSize: number | null;
+	} | null = null;
 
 	tracks: InputAudioTrack[] = [];
 
@@ -109,12 +128,33 @@ export class Mp3Demuxer extends Demuxer {
 
 			if (isXing) {
 				// There's no actual audio data in this frame, so let's skip it
+
+				if (!this.xingData) {
+					let xingDataSlice = this.reader.requestSlice(result.startPos + xingOffset + 4, 12);
+					if (xingDataSlice instanceof Promise) xingDataSlice = await xingDataSlice;
+					if (xingDataSlice) {
+						const xingData = readBytes(xingDataSlice, 12);
+						const view = toDataView(xingData);
+						const flags = view.getUint32(0, false);
+
+						this.xingData = {
+							frameCount: (flags & XingFlags.FrameCount)
+								? view.getUint32(4, false)
+								: null,
+							fileSize: (flags & XingFlags.FileSize)
+								? view.getUint32(8, false)
+								: null,
+						};
+					}
+				}
+
 				return;
 			}
 		}
 
 		if (!this.firstFrameHeader) {
 			this.firstFrameHeader = header;
+			this.firstFrameHeaderPos = result.startPos;
 		}
 
 		if (header.sampleRate !== this.firstFrameHeader.sampleRate) {
@@ -138,6 +178,38 @@ export class Mp3Demuxer extends Demuxer {
 		return;
 	}
 
+	async getDurationFromMetadata(): Promise<number | null> {
+		await this.readMetadata();
+		assert(this.firstFrameHeader !== null);
+		assert(this.firstFrameHeaderPos !== null);
+
+		if (this.xingData) {
+			if (this.xingData.frameCount !== null) {
+				return this.xingData.frameCount
+					* this.firstFrameHeader.audioSamplesInFrame
+					/ this.firstFrameHeader.sampleRate;
+			}
+		} else {
+			// No Xing, assuming CBR
+
+			if (this.reader.fileSize !== null) {
+				const averageFrameSize = computeAverageMp3FrameSize(
+					this.firstFrameHeader.lowSamplingFrequency,
+					this.firstFrameHeader.layer,
+					this.firstFrameHeader.bitrate,
+					this.firstFrameHeader.sampleRate,
+				);
+				const frameCount = (this.reader.fileSize - this.firstFrameHeaderPos) / averageFrameSize;
+
+				return Math.round(frameCount)
+					* this.firstFrameHeader.audioSamplesInFrame
+					/ this.firstFrameHeader.sampleRate;
+			}
+		}
+
+		return null;
+	}
+
 	async getMimeType() {
 		return 'audio/mpeg';
 	}
@@ -145,15 +217,6 @@ export class Mp3Demuxer extends Demuxer {
 	async getTracks() {
 		await this.readMetadata();
 		return this.tracks;
-	}
-
-	async computeDuration() {
-		await this.readMetadata();
-
-		const track = this.tracks[0];
-		assert(track);
-
-		return track.computeDuration();
 	}
 
 	async getMetadataTags() {
@@ -221,18 +284,33 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 		return 1;
 	}
 
-	async getFirstTimestamp() {
-		return 0;
-	}
-
 	getTimeResolution() {
 		assert(this.demuxer.firstFrameHeader);
 		return this.demuxer.firstFrameHeader.sampleRate / this.demuxer.firstFrameHeader.audioSamplesInFrame;
 	}
 
-	async computeDuration() {
-		const lastPacket = await this.getPacket(Infinity, { metadataOnly: true });
-		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
+	isRelativeToUnixEpoch() {
+		return false;
+	}
+
+	getPairingMask() {
+		return 1n;
+	}
+
+	getBitrate() {
+		return null;
+	}
+
+	getAverageBitrate() {
+		return null;
+	}
+
+	getDurationFromMetadata() {
+		return this.demuxer.getDurationFromMetadata();
+	}
+
+	async getLiveRefreshInterval() {
+		return null;
 	}
 
 	getName() {

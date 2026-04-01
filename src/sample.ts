@@ -45,7 +45,7 @@ let lastAudioGcErrorLog = -Infinity;
 let finalizationRegistry: FinalizationRegistry<FinalizationRegistryValue> | null = null;
 if (typeof FinalizationRegistry !== 'undefined') {
 	finalizationRegistry = new FinalizationRegistry<FinalizationRegistryValue>((value) => {
-		const now = Date.now();
+		const now = performance.now();
 
 		if (value.type === 'video') {
 			if (now - lastVideoGcErrorLog >= 1000) {
@@ -1120,14 +1120,16 @@ export type CropRectangle = {
 	height: number;
 };
 
-export const clampCropRectangle = (crop: CropRectangle, outerWidth: number, outerHeight: number) => {
-	crop.left = Math.min(crop.left, outerWidth);
-	crop.top = Math.min(crop.top, outerHeight);
-	crop.width = Math.min(crop.width, outerWidth - crop.left);
-	crop.height = Math.min(crop.height, outerHeight - crop.top);
+export const clampCropRectangle = (crop: CropRectangle, outerWidth: number, outerHeight: number): CropRectangle => {
+	const left = Math.min(crop.left, outerWidth);
+	const top = Math.min(crop.top, outerHeight);
+	const width = Math.min(crop.width, outerWidth - left);
+	const height = Math.min(crop.height, outerHeight - top);
 
-	assert(crop.width >= 0);
-	assert(crop.height >= 0);
+	assert(width >= 0);
+	assert(height >= 0);
+
+	return { left, top, width, height };
 };
 
 export const validateCropRectangle = (crop: CropRectangle, prefix: string) => {

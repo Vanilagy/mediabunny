@@ -270,10 +270,11 @@ export const metadataTagsAreEmpty = (tags: MetadataTags) => {
  */
 export type TrackDisposition = {
 	/**
-	 * Indicates that this track is eligible for automatic selection by a player; that it is the main track among other,
-	 * non-default tracks of the same type.
+	 * Indicates that this track is eligible for automatic selection by a player. Multiple tracks can be default tracks.
 	 */
 	default: boolean;
+	/** Indicates that the track is the primary track among other tracks of its type. */
+	primary: boolean;
 	/**
 	 * Indicates that players should always display this track by default, even if it goes against the user's default
 	 * preferences. For example, a subtitle track only containing translations of foreign-language audio.
@@ -291,6 +292,7 @@ export type TrackDisposition = {
 
 export const DEFAULT_TRACK_DISPOSITION: TrackDisposition = {
 	default: true,
+	primary: true,
 	forced: false,
 	original: false,
 	commentary: false,
@@ -304,6 +306,9 @@ export const validateTrackDisposition = (disposition: Partial<TrackDisposition>)
 	}
 	if (disposition.default !== undefined && typeof disposition.default !== 'boolean') {
 		throw new TypeError('disposition.default must be a boolean.');
+	}
+	if (disposition.primary !== undefined && typeof disposition.primary !== 'boolean') {
+		throw new TypeError('disposition.primary must be a boolean.');
 	}
 	if (disposition.forced !== undefined && typeof disposition.forced !== 'boolean') {
 		throw new TypeError('disposition.forced must be a boolean.');

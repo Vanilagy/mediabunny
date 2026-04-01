@@ -7,6 +7,8 @@
  */
 
 import { AudioCodec, VideoCodec } from './codec';
+import { canDecodeAudioMemo, canDecodeVideoMemo } from './decode';
+import { canEncodeAudioMemo, canEncodeVideoMemo } from './encode';
 import { MaybePromise } from './misc';
 import { EncodedPacket } from './packet';
 import { AudioSample, VideoSample } from './sample';
@@ -152,6 +154,7 @@ export const registerDecoder = (decoder: typeof CustomVideoDecoder | typeof Cust
 		}
 
 		customVideoDecoders.push(casted);
+		canDecodeVideoMemo.clear();
 	} else if (decoder.prototype instanceof CustomAudioDecoder) {
 		const casted = decoder as typeof CustomAudioDecoder;
 
@@ -161,6 +164,7 @@ export const registerDecoder = (decoder: typeof CustomVideoDecoder | typeof Cust
 		}
 
 		customAudioDecoders.push(casted);
+		canDecodeAudioMemo.clear();
 	} else {
 		throw new TypeError('Decoder must be a CustomVideoDecoder or CustomAudioDecoder.');
 	}
@@ -182,6 +186,7 @@ export const registerEncoder = (encoder: typeof CustomVideoEncoder | typeof Cust
 		}
 
 		customVideoEncoders.push(casted);
+		canEncodeVideoMemo.clear();
 	} else if (encoder.prototype instanceof CustomAudioEncoder) {
 		const casted = encoder as typeof CustomAudioEncoder;
 
@@ -191,6 +196,7 @@ export const registerEncoder = (encoder: typeof CustomVideoEncoder | typeof Cust
 		}
 
 		customAudioEncoders.push(casted);
+		canEncodeAudioMemo.clear();
 	} else {
 		throw new TypeError('Encoder must be a CustomVideoEncoder or CustomAudioEncoder.');
 	}

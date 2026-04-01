@@ -4,9 +4,15 @@ import {
 	BlobSource,
 	CanvasSink,
 	Input,
+	InputAudioTrack,
+	InputVideoTrack,
 	UrlSource,
 	WrappedAudioBuffer,
 	WrappedCanvas,
+	asc,
+	canDecodeAudio,
+	desc,
+	prefer,
 } from 'mediabunny';
 
 import SampleFileUrl from '../../docs/assets/big-buck-bunny-trimmed.mp4';
@@ -77,33 +83,99 @@ const initMediaPlayer = async (resource: File | string) => {
 			pause();
 		}
 
+		const dirHandle = await showDirectoryPicker({ mode: 'read' });
+
 		void videoFrameIterator?.return();
 		void audioBufferIterator?.return();
 		asyncId++;
 
 		fileLoaded = false;
-		fileNameElement.textContent = resource instanceof File ? resource.name : resource;
+		fileNameElement.textContent = 'pish'; // resource instanceof File ? resource.name : resource;
 		horizontalRule.style.display = '';
 		loadingElement.style.display = '';
 		playerContainer.style.display = 'none';
 		errorElement.textContent = '';
 		warningElement.textContent = '';
 
+		const start = 0;
+
+		let videoTrack: InputVideoTrack | null = null;
+		let audioTrack: InputAudioTrack | null = null;
+		if (true || typeof resource === 'string' && resource.includes('.m3u8')) {
+			const input = new Input({
+				entryPath: 'master.m3u8',
+				source: async ({ path }) => {
+					const fileHandle = await dirHandle.getFileHandle(path);
+					const file = await fileHandle.getFile();
+					return new BlobSource(file);
+				},
+				formats: ALL_FORMATS,
+			});
+			// const variant = (await manifestInput.getVariants())[0]!;
+
+			console.log(await input.getFormat(), await input.getTracks());
+			// return;
+
+			await input.getVideoTracks({
+				filter: track => track.hasPairableAudioTrack(),
+				sortBy: track => asc(track.bitrate),
+			});
+
+			videoTrack = await input.getPrimaryVideoTrack({
+				filter: async track => (await track.resolve('displayHeight')) < 1080,
+			});
+			audioTrack = await input.getPrimaryAudioTrack({
+				sortBy: track => prefer(track.canBePairedWith(videoTrack)),
+			});
+
+			await videoTrack?.hydrate();
+			await audioTrack?.hydrate();
+
+			totalDuration = Math.max(
+				await videoTrack?.computeDuration({ skipLiveWait: true }) ?? 0,
+				await audioTrack?.computeDuration({ skipLiveWait: true }) ?? 0,
+			);
+
+			console.log(videoTrack, audioTrack, totalDuration);
+
+			// start = totalDuration - 2;
+
+			// totalDuration += 3600;
+
+			// https://test-streams.mux.dev/test_001/stream.m3u8
+			// https://test-streams.mux.dev/test_001/stream_1000k_48k_640x360_050.ts
+		} else {
+			const source = resource instanceof File
+				? new BlobSource(resource)
+				: new UrlSource(resource);
+
+			const input = new Input({
+				source,
+				formats: ALL_FORMATS,
+			});
+
+			totalDuration = await input.computeDuration();
+			videoTrack = await input.getPrimaryVideoTrack();
+			audioTrack = await input.getPrimaryAudioTrack();
+		}
+
+		/*
 		// Create an Input from the resource
 		const source = resource instanceof File
 			? new BlobSource(resource)
 			: new UrlSource(resource);
+		*/
+
+		/*
 		const input = new Input({
 			source,
 			formats: ALL_FORMATS,
 		});
+		*/
 
 		playbackTimeAtStart = 0;
-		totalDuration = await input.computeDuration();
-		durationElement.textContent = formatSeconds(totalDuration);
 
-		let videoTrack = await input.getPrimaryVideoTrack();
-		let audioTrack = await input.getPrimaryAudioTrack();
+		durationElement.textContent = formatSeconds(totalDuration);
 
 		let problemMessage = '';
 
@@ -188,6 +260,8 @@ const initMediaPlayer = async (resource: File | string) => {
 		await startVideoIterator();
 
 		if (audioContext.state === 'running') {
+			await seekToTime(start);
+
 			// Start playback automatically if the audio context permits
 			await play();
 		}
@@ -315,7 +389,9 @@ const runAudioIterator = async () => {
 		node.buffer = buffer;
 		node.connect(gainNode!);
 
-		const startTimestamp = audioContextStartTime! + timestamp - playbackTimeAtStart;
+		let startTimestamp = audioContextStartTime! + timestamp - playbackTimeAtStart;
+		// Round timestamp to the context's sample boundaries to prevent subsample audio glitches
+		startTimestamp = Math.round(audioContext!.sampleRate * startTimestamp) / audioContext!.sampleRate;
 
 		// Two cases: Either, the audio starts in the future or in the past
 		if (startTimestamp >= audioContext!.currentTime) {
@@ -693,6 +769,10 @@ document.addEventListener('dragover', (event) => {
 	event.preventDefault();
 	event.dataTransfer!.dropEffect = 'copy';
 });
+
+document.addEventListener('click', () => {
+	void initMediaPlayer();
+}, { once: true });
 
 document.addEventListener('drop', (event) => {
 	event.preventDefault();

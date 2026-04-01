@@ -25,9 +25,12 @@ import { MediaSource } from './media-source';
 import { Mp3Muxer } from './mp3/mp3-muxer';
 import { Muxer } from './muxer';
 import { OggMuxer } from './ogg/ogg-muxer';
-import { Output, TrackType } from './output';
+import { Output, OutputTrack, TrackType } from './output';
 import { MpegTsMuxer } from './mpeg-ts/mpeg-ts-muxer';
 import { WaveMuxer } from './wave/wave-muxer';
+import { HlsMuxer } from './hls/hls-muxer';
+import { MaybePromise, toArray } from './misc';
+import { Target } from './target';
 
 /**
  * Specifies an inclusive range of integers.
@@ -327,6 +330,66 @@ export class Mp4OutputFormat extends IsobmffOutputFormat {
 		}
 
 		return '';
+	}
+}
+
+/**
+ * CMAF-specific output options.
+ * @group Output formats
+ * @public
+ */
+export type CmafOutputFormatOptions = Omit<IsobmffOutputFormatOptions, 'fastStart'> & {
+	/**
+	 * Controls the minimum duration of each fragment, in seconds. New fragments will only be created when the current
+	 * fragment is longer than this value. Defaults to `Infinity`, meaning the file will contain only one fragment.
+	 */
+	minimumFragmentDuration?: number;
+};
+
+/**
+ * Creates a single Common Media Application Format (CMAF) segment. An init segment will be written to the
+ * {@link Target} specified in {@link OutputOptions.initTarget}. Supports most codecs.
+ * @group Output formats
+ * @public
+ */
+export class CmafOutputFormat extends IsobmffOutputFormat {
+	/** Creates a new {@link CmafOutputFormat} configured with the specified `options`. */
+	constructor(options?: CmafOutputFormatOptions) {
+		super(options);
+	}
+
+	/** @internal */
+	get _name() {
+		return 'CMAF';
+	}
+
+	get fileExtension() {
+		return '.m4s';
+	}
+
+	get mimeType() {
+		return 'video/mp4';
+	}
+
+	getSupportedCodecs(): MediaCodec[] {
+		return [
+			...VIDEO_CODECS,
+			...NON_PCM_AUDIO_CODECS,
+
+			// These are supported via ISO/IEC 23003-5:
+			'pcm-s16',
+			'pcm-s16be',
+			'pcm-s24',
+			'pcm-s24be',
+			'pcm-s32',
+			'pcm-s32be',
+			'pcm-f32',
+			'pcm-f32be',
+			'pcm-f64',
+			'pcm-f64be',
+
+			...SUBTITLE_CODECS,
+		];
 	}
 }
 
@@ -1089,5 +1152,156 @@ export class MpegTsOutputFormat extends OutputFormat {
 
 	get supportsTimestampedMediaData() {
 		return true;
+	}
+}
+
+export type HlsOutputPlaylistInfo = {
+	n: number;
+	tracks: OutputTrack[];
+	segmentFormat: OutputFormat;
+};
+
+export type HlsOutputSegmentInfo = {
+	n: number;
+	isSingleFile: boolean;
+	format: OutputFormat;
+	playlist: HlsOutputPlaylistInfo;
+};
+
+export type HlsOutputFormatOptions = {
+	segmentFormat: OutputFormat | OutputFormat[];
+	targetDuration?: number;
+	singleFilePerPlaylist?: boolean;
+	live?: boolean;
+	maxLiveSegmentCount?: number;
+	getPlaylistPath?: (info: HlsOutputPlaylistInfo) => MaybePromise<string>;
+	getSegmentPath?: (info: HlsOutputSegmentInfo) => MaybePromise<string>;
+	getInitPath?: (info: HlsOutputPlaylistInfo) => MaybePromise<string>;
+
+	onMaster?: (content: string) => unknown;
+	onPlaylist?: (content: string, info: HlsOutputPlaylistInfo) => unknown;
+	// Document how this is called for the single-file mode
+	onSegment?: (target: Target, info: HlsOutputSegmentInfo) => unknown;
+	onInit?: (target: Target, info: HlsOutputPlaylistInfo) => unknown;
+};
+
+export class HlsOutputFormat extends OutputFormat {
+	/** @internal */
+	_options: HlsOutputFormatOptions;
+
+	/** Creates a new {@link HlsOutputFormat} configured with the specified `options`. */
+	constructor(options: HlsOutputFormatOptions) {
+		if (!options || typeof options !== 'object') {
+			throw new TypeError('options must be an object.');
+		}
+		if (
+			!(options.segmentFormat instanceof OutputFormat)
+			&& (
+				!Array.isArray(options.segmentFormat)
+				|| options.segmentFormat.length === 0
+				|| !options.segmentFormat.every(format => format instanceof OutputFormat)
+			)
+		) {
+			throw new TypeError(
+				'options.segmentFormat must be an OutputFormat or a non-empty array of OutputFormat instances.',
+			);
+		}
+		if (
+			options.targetDuration !== undefined
+			&& (typeof options.targetDuration !== 'number' || options.targetDuration <= 0)
+		) {
+			throw new TypeError('options.targetDuration, when provided, must be a positive number.');
+		}
+		if (options.singleFilePerPlaylist !== undefined && typeof options.singleFilePerPlaylist !== 'boolean') {
+			throw new TypeError('options.singleFilePerPlaylist, when provided, must be a boolean.');
+		}
+		if (options.live !== undefined && typeof options.live !== 'boolean') {
+			throw new TypeError('options.live, when provided, must be a boolean.');
+		}
+		if (
+			options.maxLiveSegmentCount !== undefined
+			&& (typeof options.maxLiveSegmentCount !== 'number' || options.maxLiveSegmentCount < 1
+				|| (Number.isFinite(options.maxLiveSegmentCount) && !Number.isInteger(options.maxLiveSegmentCount)))
+		) {
+			throw new TypeError('options.maxLiveSegmentCount, when provided, must be a positive integer or Infinity.');
+		}
+		if (options.getPlaylistPath !== undefined && typeof options.getPlaylistPath !== 'function') {
+			throw new TypeError('options.getPlaylistPath, when provided, must be a function.');
+		}
+		if (options.getSegmentPath !== undefined && typeof options.getSegmentPath !== 'function') {
+			throw new TypeError('options.getSegmentPath, when provided, must be a function.');
+		}
+		if (options.onMaster !== undefined && typeof options.onMaster !== 'function') {
+			throw new TypeError('options.onMaster, when provided, must be a function.');
+		}
+		if (options.onPlaylist !== undefined && typeof options.onPlaylist !== 'function') {
+			throw new TypeError('options.onPlaylist, when provided, must be a function.');
+		}
+		if (options.onSegment !== undefined && typeof options.onSegment !== 'function') {
+			throw new TypeError('options.onSegment, when provided, must be a function.');
+		}
+		if (options.onInit !== undefined && typeof options.onInit !== 'function') {
+			throw new TypeError('options.onInit, when provided, must be a function.');
+		}
+
+		super();
+
+		this._options = options;
+	}
+
+	/** @internal */
+	_createMuxer(output: Output): Muxer {
+		return new HlsMuxer(output, this);
+	}
+
+	/** @internal */
+	get _name() {
+		return 'HTTP Live Streaming (HLS)';
+	}
+
+	get fileExtension() {
+		return '.m3u8';
+	}
+
+	get mimeType() {
+		return 'application/vnd.apple.mpegurl';
+	}
+
+	getSupportedCodecs(): MediaCodec[] {
+		const uniqueCodecs = new Set(toArray(this._options.segmentFormat).flatMap(x => x.getSupportedCodecs()));
+		return [...uniqueCodecs];
+	}
+
+	getSupportedTrackCounts(): TrackCountLimits {
+		let supportsVideo = false;
+		let supportsAudio = false;
+		let supportsSubtitle = false;
+
+		for (const format of toArray(this._options.segmentFormat)) {
+			const trackCounts = format.getSupportedTrackCounts();
+			supportsVideo ||= trackCounts.video.max > 0;
+			supportsAudio ||= trackCounts.audio.max > 0;
+			supportsSubtitle ||= trackCounts.subtitle.max > 0;
+		}
+
+		return {
+			video: { min: 0, max: supportsVideo ? Infinity : 0 },
+			audio: { min: 0, max: supportsAudio ? Infinity : 0 },
+			subtitle: { min: 0, max: 0 }, // Currently disabled
+			total: { min: 1, max: Infinity },
+		};
+	}
+
+	get supportsVideoRotationMetadata(): boolean {
+		return toArray(this._options.segmentFormat).some(format => format.supportsVideoRotationMetadata);
+	}
+
+	get supportsTimestampedMediaData(): boolean {
+		return true; // I guess??
+	}
+
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	override _codecUnsupportedHint(codec: MediaCodec): string {
+		return ` Using different segment formats may grant support for this codec.`;
 	}
 }

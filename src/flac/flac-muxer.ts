@@ -33,7 +33,7 @@ const STREAMINFO_SIZE = 38;
 const STREAMINFO_BLOCK_SIZE = 34;
 
 export class FlacMuxer extends Muxer {
-	private writer: Writer;
+	private writer!: Writer;
 	private metadataWritten = false;
 
 	private blockSizes: number[] = [];
@@ -48,16 +48,20 @@ export class FlacMuxer extends Muxer {
 	constructor(output: Output, format: FlacOutputFormat) {
 		super(output);
 
-		this.writer = output._writer;
 		this.format = format;
-
-		if (this.format._options.appendOnly) {
-			this.writer.ensureMonotonicity = true;
-		}
 	}
 
 	async start() {
+		const release = await this.mutex.acquire();
+
+		this.writer = await this.output._getRootWriter();
+		if (this.format._options.appendOnly) {
+			this.writer.ensureMonotonicity();
+		}
+
 		this.writer.write(FLAC_HEADER);
+
+		release();
 	}
 
 	writeHeader({

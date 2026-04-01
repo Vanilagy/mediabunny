@@ -60,6 +60,7 @@ type MpegTsTrackData = {
 	adtsHeader: Uint8Array | null;
 	adtsHeaderBitstream: Bitstream | null;
 	firstPacketWritten: boolean;
+	closed: boolean;
 };
 
 type QueuedPacket = {
@@ -71,7 +72,7 @@ type QueuedPacket = {
 
 export class MpegTsMuxer extends Muxer {
 	private format: MpegTsOutputFormat;
-	private writer: Writer;
+	private writer!: Writer;
 
 	private trackDatas: MpegTsTrackData[] = [];
 	private tablesWritten = false;
@@ -90,12 +91,15 @@ export class MpegTsMuxer extends Muxer {
 		super(output);
 
 		this.format = format;
-		this.writer = output._writer;
-		this.writer.ensureMonotonicity = true;
 	}
 
 	async start() {
-		// Nothing to do here
+		const release = await this.mutex.acquire();
+
+		this.writer = await this.output._getRootWriter();
+		this.writer.ensureMonotonicity();
+
+		release();
 	}
 
 	async getMimeType() {
@@ -136,6 +140,7 @@ export class MpegTsMuxer extends Muxer {
 			adtsHeader: null,
 			adtsHeaderBitstream: null,
 			firstPacketWritten: false,
+			closed: false,
 		};
 
 		this.trackDatas.push(newTrackData);
@@ -201,6 +206,7 @@ export class MpegTsMuxer extends Muxer {
 			adtsHeader: null,
 			adtsHeaderBitstream: null,
 			firstPacketWritten: false,
+			closed: false,
 		};
 
 		this.trackDatas.push(newTrackData);
@@ -495,7 +501,7 @@ export class MpegTsMuxer extends Muxer {
 				if (
 					!isFinalCall
 					&& trackData.packetQueue.length === 0
-					&& !trackData.track.source._closed
+					&& !trackData.closed
 				) {
 					break outer;
 				}
@@ -711,13 +717,14 @@ export class MpegTsMuxer extends Muxer {
 	override async onTrackClose(track: OutputTrack) {
 		const release = await this.mutex.acquire();
 
-		if (this.allTracksAreKnown()) {
-			this.allTracksKnown.resolve();
-		}
-
 		const trackData = this.trackDatas.find(x => x.track === track);
 		if (trackData) {
+			trackData.closed = true;
 			await this.flushTimestampQueue(trackData, false);
+		}
+
+		if (this.allTracksAreKnown()) {
+			this.allTracksKnown.resolve();
 		}
 
 		await this.interleavePackets();
@@ -731,6 +738,7 @@ export class MpegTsMuxer extends Muxer {
 		this.allTracksKnown.resolve();
 
 		for (const trackData of this.trackDatas) {
+			trackData.closed = true;
 			await this.flushTimestampQueue(trackData, false);
 		}
 

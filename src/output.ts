@@ -6,28 +6,13 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { AsyncMutex, isIso639Dash2LanguageCode, Rotation } from './misc';
+import { assert, AsyncMutex, EventEmitter, isIso639Dash2LanguageCode, MaybePromise, Rotation, toArray } from './misc';
 import { MetadataTags, TrackDisposition, validateMetadataTags, validateTrackDisposition } from './metadata';
 import { Muxer } from './muxer';
 import { OutputFormat } from './output-format';
 import { AudioSource, MediaSource, SubtitleSource, VideoSource } from './media-source';
 import { Target } from './target';
 import { Writer } from './writer';
-
-/**
- * The options for creating an Output object.
- * @group Output files
- * @public
- */
-export type OutputOptions<
-	F extends OutputFormat = OutputFormat,
-	T extends Target = Target,
-> = {
-	/** The format of the output file. */
-	format: F;
-	/** The target to which the file will be written. */
-	target: T;
-};
 
 /**
  * List of all track types.
@@ -42,27 +27,141 @@ export const ALL_TRACK_TYPES = ['video', 'audio', 'subtitle'] as const;
  */
 export type TrackType = typeof ALL_TRACK_TYPES[number];
 
-export type OutputTrack = {
-	id: number;
-	output: Output;
-	type: TrackType;
-} & ({
-	type: 'video';
-	source: VideoSource;
-	metadata: VideoTrackMetadata;
-} | {
-	type: 'audio';
-	source: AudioSource;
-	metadata: AudioTrackMetadata;
-} | {
-	type: 'subtitle';
-	source: SubtitleSource;
-	metadata: SubtitleTrackMetadata;
-});
+/**
+ * Represents a track added to an {@link Output}.
+ * @group Output files
+ * @public
+ */
+export abstract class OutputTrack {
+	/** @internal */
+	readonly id: number;
+	/** The {@link Output} this track belongs to. */
+	readonly output: Output;
+	/** The type of this track. */
+	readonly type: TrackType;
+	/** The media source providing data for this track. */
+	readonly source: MediaSource;
+	/** The metadata associated with this track. */
+	readonly metadata: BaseTrackMetadata;
 
-export type OutputVideoTrack = OutputTrack & { type: 'video' };
-export type OutputAudioTrack = OutputTrack & { type: 'audio' };
-export type OutputSubtitleTrack = OutputTrack & { type: 'subtitle' };
+	/** @internal */
+	protected constructor(
+		id: number,
+		output: Output,
+		type: TrackType,
+		source: MediaSource,
+		metadata: BaseTrackMetadata,
+	) {
+		this.id = id;
+		this.output = output;
+		this.type = type;
+		this.source = source;
+		this.metadata = metadata;
+	}
+
+	/** Returns true if and only if this track is a video track. */
+	isVideoTrack(): this is OutputVideoTrack {
+		return this.type === 'video';
+	}
+
+	/** Returns true if and only if this track is an audio track. */
+	isAudioTrack(): this is OutputAudioTrack {
+		return this.type === 'audio';
+	}
+
+	/** Returns true if and only if this track is a subtitle track. */
+	isSubtitleTrack(): this is OutputSubtitleTrack {
+		return this.type === 'subtitle';
+	}
+}
+
+/**
+ * An {@link OutputTrack} containing video data.
+ * @group Output files
+ * @public
+ */
+export class OutputVideoTrack extends OutputTrack {
+	declare readonly type: 'video';
+	declare readonly source: VideoSource;
+	declare readonly metadata: VideoTrackMetadata;
+
+	/** @internal */
+	constructor(id: number, output: Output, source: VideoSource, metadata: VideoTrackMetadata) {
+		super(id, output, 'video', source, metadata);
+	}
+}
+
+/**
+ * An {@link OutputTrack} containing audio data.
+ * @group Output files
+ * @public
+ */
+export class OutputAudioTrack extends OutputTrack {
+	declare readonly type: 'audio';
+	declare readonly source: AudioSource;
+	declare readonly metadata: AudioTrackMetadata;
+
+	/** @internal */
+	constructor(id: number, output: Output, source: AudioSource, metadata: AudioTrackMetadata) {
+		super(id, output, 'audio', source, metadata);
+	}
+}
+
+/**
+ * An {@link OutputTrack} containing subtitle data.
+ * @group Output files
+ * @public
+ */
+export class OutputSubtitleTrack extends OutputTrack {
+	declare readonly type: 'subtitle';
+	declare readonly source: SubtitleSource;
+	declare readonly metadata: SubtitleTrackMetadata;
+
+	/** @internal */
+	constructor(id: number, output: Output, source: SubtitleSource, metadata: SubtitleTrackMetadata) {
+		super(id, output, 'subtitle', source, metadata);
+	}
+}
+
+export class OutputTrackGroup {
+	/** @internal */
+	_pairedGroups = new Set<OutputTrackGroup>();
+
+	pairWith(other: OutputTrackGroup) {
+		if (!(other instanceof OutputTrackGroup)) {
+			throw new TypeError('other must be an OutputTrackGroup.');
+		}
+
+		this._pairedGroups.add(other);
+		other._pairedGroups.add(this);
+	}
+}
+
+export const outputTracksArePairable = (a: OutputTrack, b: OutputTrack) => {
+	if (a === b) {
+		return false;
+	}
+
+	const aGroups = toArray(a.metadata.group!);
+	const bGroups = toArray(b.metadata.group!);
+
+	for (const aGroup of aGroups) {
+		const pairableInSameGroup = a.type !== b.type
+			&& bGroups.some(bGroup => aGroup === bGroup);
+		if (pairableInSameGroup) {
+			return true;
+		}
+
+		const pairableAcrossGroups = bGroups.some(
+			bGroup => aGroup._pairedGroups.has(bGroup),
+		);
+		if (pairableAcrossGroups) {
+			return true;
+		}
+	}
+
+	return false;
+};
 
 /**
  * Base track metadata, applicable to all tracks.
@@ -91,6 +190,12 @@ export type BaseTrackMetadata = {
 	 * If you're not fully sure, make sure to add a buffer of around 33% to make sure you stay below the maximum.
 	 */
 	maximumPacketCount?: number;
+	/**
+	 * Whether the timestamps of this track are relative to the Unix epoch (January 1, 1970 00:00:00 UTC). When `true`,
+	 * each timestamp maps to a definitive point in time.
+	 */
+	isRelativeToUnixEpoch?: boolean;
+	group?: OutputTrackGroup | OutputTrackGroup[];
 };
 
 /**
@@ -107,6 +212,11 @@ export type VideoTrackMetadata = BaseTrackMetadata & {
 	 * with the same timestamp.
 	 */
 	frameRate?: number;
+	/**
+	 * When true, this track is marked as being made only out of key frames (I-frames). It is an error to add a non-key
+	 * frame to this track.
+	 */
+	hasOnlyKeyPackets?: boolean;
 };
 /**
  * Additional metadata for audio tracks.
@@ -140,6 +250,38 @@ const validateBaseTrackMetadata = (metadata: BaseTrackMetadata) => {
 	) {
 		throw new TypeError('metadata.maximumPacketCount, when provided, must be a non-negative integer.');
 	}
+	if (
+		metadata.group !== undefined
+		&& !(metadata.group instanceof OutputTrackGroup)
+		&& (!Array.isArray(metadata.group) || metadata.group.some(group => !(group instanceof OutputTrackGroup)))
+	) {
+		throw new TypeError(
+			'metadata.group, when provided, must be an OutputTrackGroup instance or an array of'
+			+ ' OutputTrackGroup instances.',
+		);
+	}
+};
+
+export type TargetRequest = {
+	path: string;
+	isRoot: boolean;
+};
+
+/**
+ * The options for creating an Output object.
+ * @group Output files
+ * @public
+ */
+export type OutputOptions<
+	F extends OutputFormat = OutputFormat,
+	T extends Target = Target,
+> = {
+	/** The format of the output file. */
+	format: F;
+	/** The target to which the file will be written. */
+	target: T | ((request: TargetRequest) => MaybePromise<T>);
+	rootPath?: string;
+	initTarget?: T | (() => MaybePromise<T>);
 };
 
 /**
@@ -147,21 +289,31 @@ const validateBaseTrackMetadata = (metadata: BaseTrackMetadata) => {
  * @group Output files
  * @public
  */
+export type OutputEvents = {
+	target: { target: Target; request: TargetRequest | null };
+};
+
 export class Output<
 	F extends OutputFormat = OutputFormat,
 	T extends Target = Target,
-> {
+> extends EventEmitter<OutputEvents> {
 	/** The format of the output file. */
-	format: F;
-	/** The target to which the file will be written. */
-	target: T;
+	readonly format: F;
+	/** @internal */
+	private _target: T | ((request: TargetRequest) => MaybePromise<T>);
 	/** The current state of the output. */
 	state: 'pending' | 'started' | 'canceled' | 'finalizing' | 'finalized' = 'pending';
 
 	/** @internal */
+	_rootPath: string | null;
+	/** @internal */
+	private _initTarget: T | (() => MaybePromise<T>) | null;
+	/** @internal */
 	_muxer: Muxer;
 	/** @internal */
-	_writer: Writer;
+	_targets = new Set<Target>();
+	/** @internal */
+	_rootWriterPromise: Promise<Writer> | null = null;
 	/** @internal */
 	_tracks: OutputTrack[] = [];
 	/** @internal */
@@ -174,32 +326,142 @@ export class Output<
 	_mutex = new AsyncMutex();
 	/** @internal */
 	_metadataTags: MetadataTags = {};
+	/** @internal */
+	_defaultTrackGroup = new OutputTrackGroup();
+
+	/** The target to which the root file will be written. Throws if the target-resolving function returns a Promise. */
+	get target(): T {
+		if (this._target instanceof Target) {
+			return this._target;
+		}
+
+		assert(this._rootPath !== null);
+		const returnValue = this._target({ path: this._rootPath, isRoot: true });
+		if (returnValue instanceof Promise) {
+			throw new TypeError(
+				'Output.target cannot be used when the target function resolves asynchronously.',
+			);
+		}
+
+		return returnValue;
+	}
 
 	/**
 	 * Creates a new instance of {@link Output} which can then be used to create a new media file according to the
 	 * specified {@link OutputOptions}.
 	 */
 	constructor(options: OutputOptions<F, T>) {
+		super();
+
 		if (!options || typeof options !== 'object') {
 			throw new TypeError('options must be an object.');
 		}
 		if (!(options.format instanceof OutputFormat)) {
 			throw new TypeError('options.format must be an OutputFormat.');
 		}
-		if (!(options.target instanceof Target)) {
-			throw new TypeError('options.target must be a Target.');
+		if (!(options.target instanceof Target) && typeof options.target !== 'function') {
+			throw new TypeError('options.target must be a Target or a function that returns or resolves to a Target.');
 		}
+		if (options.target instanceof Target) {
+			if (options.target._output) {
+				throw new Error('Target is already used for another output.');
+			}
 
-		if (options.target._output) {
-			throw new Error('Target is already used for another output.');
+			options.target._output = this;
+			this._targets.add(options.target);
 		}
-		options.target._output = this;
+		if (options.rootPath !== undefined && typeof options.rootPath !== 'string') {
+			throw new TypeError('options.rootPath, when provided, must be a string.');
+		}
+		if (typeof options.target === 'function' && options.rootPath === undefined) {
+			throw new Error('options.rootPath must be provided when options.target is a function.');
+		}
+		if (
+			options.initTarget !== undefined
+			&& !(options.initTarget instanceof Target)
+			&& typeof options.initTarget !== 'function'
+		) {
+			throw new Error(
+				'options.getInitTarget, when provided, must be a Target or a function that returns or resolves to'
+				+ ' a Target.',
+			);
+		}
 
 		this.format = options.format;
-		this.target = options.target;
+		this._target = options.target;
 
-		this._writer = options.target._createWriter();
+		this._initTarget = options.initTarget ?? null;
+		if (this._initTarget instanceof Target) {
+			this._initTarget._output = this;
+			this._targets.add(this._initTarget);
+		}
+
+		this._rootPath = options.rootPath ?? null;
 		this._muxer = options.format._createMuxer(this);
+	}
+
+	async _getTarget(request: TargetRequest) {
+		assert(typeof this._target === 'function');
+
+		const target = await this._target(request);
+		target._output = this;
+		this.emit('target', { target, request });
+
+		if (this.state === 'canceled') {
+			await target._close();
+		} else {
+			this._targets.add(target);
+		}
+
+		return target;
+	}
+
+	async _getInitTarget(): Promise<T> {
+		assert(this._initTarget !== null);
+
+		if (this._initTarget instanceof Target) {
+			return this._initTarget;
+		}
+
+		const target = await this._initTarget();
+		target._output = this;
+
+		if (this.state === 'canceled') {
+			await target._close();
+		} else {
+			this._targets.add(target);
+		}
+
+		return target;
+	}
+
+	/** @internal */
+	_targetIsFunction() {
+		return typeof this._target === 'function';
+	}
+
+	/** @internal */
+	_hasInitTarget() {
+		return this._initTarget !== null;
+	}
+
+	/** @internal */
+	_getRootWriter() {
+		return this._rootWriterPromise ??= (async () => {
+			let target: Target;
+
+			if (typeof this._target === 'function') {
+				assert(this._rootPath !== null);
+				target = await this._getTarget({ path: this._rootPath, isRoot: true });
+			} else {
+				target = this._target;
+				this.emit('target', { target: this._target, request: null });
+			}
+
+			const writer = new Writer(target);
+			writer.start();
+			return writer;
+		})();
 	}
 
 	/** Adds a video track to the output with the given source. Can only be called before the output is started. */
@@ -223,7 +485,12 @@ export class Output<
 			);
 		}
 
-		this._addTrack('video', source, metadata);
+		const metadataCopy = { ...metadata };
+		metadataCopy.group ??= this._defaultTrackGroup;
+
+		return this._addTrack(new OutputVideoTrack(
+			this._tracks.length + 1, this, source, metadataCopy,
+		));
 	}
 
 	/** Adds an audio track to the output with the given source. Can only be called before the output is started. */
@@ -233,7 +500,12 @@ export class Output<
 		}
 		validateBaseTrackMetadata(metadata);
 
-		this._addTrack('audio', source, metadata);
+		const metadataCopy = { ...metadata };
+		metadataCopy.group ??= this._defaultTrackGroup;
+
+		return this._addTrack(new OutputAudioTrack(
+			this._tracks.length + 1, this, source, metadataCopy,
+		));
 	}
 
 	/** Adds a subtitle track to the output with the given source. Can only be called before the output is started. */
@@ -243,7 +515,12 @@ export class Output<
 		}
 		validateBaseTrackMetadata(metadata);
 
-		this._addTrack('subtitle', source, metadata);
+		const metadataCopy = { ...metadata };
+		metadataCopy.group ??= this._defaultTrackGroup;
+
+		return this._addTrack(new OutputSubtitleTrack(
+			this._tracks.length + 1, this, source, metadataCopy,
+		));
 	}
 
 	/**
@@ -263,26 +540,26 @@ export class Output<
 	}
 
 	/** @internal */
-	private _addTrack(type: OutputTrack['type'], source: MediaSource, metadata: object) {
+	private _addTrack<T extends OutputTrack>(track: T) {
 		if (this.state !== 'pending') {
 			throw new Error('Cannot add track after output has been started or canceled.');
 		}
-		if (source._connectedTrack) {
+		if (track.source._connectedTrack) {
 			throw new Error('Source is already used for a track.');
 		}
 
 		// Verify maximum track count constraints
 		const supportedTrackCounts = this.format.getSupportedTrackCounts();
 		const presentTracksOfThisType = this._tracks.reduce(
-			(count, track) => count + (track.type === type ? 1 : 0),
+			(count, t) => count + (t.type === track.type ? 1 : 0),
 			0,
 		);
-		const maxCount = supportedTrackCounts[type].max;
+		const maxCount = supportedTrackCounts[track.type].max;
 		if (presentTracksOfThisType === maxCount) {
 			throw new Error(
 				maxCount === 0
-					? `${this.format._name} does not support ${type} tracks.`
-					: (`${this.format._name} does not support more than ${maxCount} ${type} track`
+					? `${this.format._name} does not support ${track.type} tracks.`
+					: (`${this.format._name} does not support more than ${maxCount} ${track.type} track`
 						+ `${maxCount === 1 ? '' : 's'}.`),
 			);
 		}
@@ -294,15 +571,7 @@ export class Output<
 			);
 		}
 
-		const track = {
-			id: this._tracks.length + 1,
-			output: this,
-			type,
-			source: source as unknown,
-			metadata,
-		} as OutputTrack;
-
-		if (track.type === 'video') {
+		if (track.isVideoTrack()) {
 			const supportedVideoCodecs = this.format.getSupportedVideoCodecs();
 
 			if (supportedVideoCodecs.length === 0) {
@@ -317,7 +586,7 @@ export class Output<
 					+ this.format._codecUnsupportedHint(track.source._codec),
 				);
 			}
-		} else if (track.type === 'audio') {
+		} else if (track.isAudioTrack()) {
 			const supportedAudioCodecs = this.format.getSupportedAudioCodecs();
 
 			if (supportedAudioCodecs.length === 0) {
@@ -332,7 +601,7 @@ export class Output<
 					+ this.format._codecUnsupportedHint(track.source._codec),
 				);
 			}
-		} else if (track.type === 'subtitle') {
+		} else if (track.isSubtitleTrack()) {
 			const supportedSubtitleCodecs = this.format.getSupportedSubtitleCodecs();
 
 			if (supportedSubtitleCodecs.length === 0) {
@@ -350,7 +619,9 @@ export class Output<
 		}
 
 		this._tracks.push(track);
-		source._connectedTrack = track;
+		track.source._connectedTrack = track;
+
+		return track;
 	}
 
 	/**
@@ -400,16 +671,17 @@ export class Output<
 
 		return this._startPromise = (async () => {
 			this.state = 'started';
-			this._writer.start();
 
 			const release = await this._mutex.acquire();
 
-			await this._muxer.start();
+			try {
+				await this._muxer.start();
 
-			const promises = this._tracks.map(track => track.source._start());
-			await Promise.all(promises);
-
-			release();
+				const promises = this._tracks.map(track => track.source._start());
+				await Promise.all(promises);
+			} finally {
+				release();
+			}
 		})();
 	}
 
@@ -433,7 +705,12 @@ export class Output<
 			console.warn('Output has already been canceled.');
 			return this._cancelPromise;
 		} else if (this.state === 'finalizing' || this.state === 'finalized') {
-			console.warn('Output has already been finalized.');
+			// Don't wanna warn when finalizing since that shows a warning when finalization fails and then cancel
+			// is called
+			if (this.state === 'finalized') {
+				console.warn('Output has already been finalized.');
+			}
+
 			return;
 		}
 
@@ -442,12 +719,15 @@ export class Output<
 
 			const release = await this._mutex.acquire();
 
-			const promises = this._tracks.map(x => x.source._flushOrWaitForOngoingClose(true)); // Force close
-			await Promise.all(promises);
+			try {
+				const promises = this._tracks.map(x => x.source._flushOrWaitForOngoingClose(true)); // Force close
+				await Promise.all(promises);
 
-			await this._writer.close();
-
-			release();
+				await Promise.all([...this._targets].map(target => target._close()));
+				this._targets.clear();
+			} finally {
+				release();
+			}
 		})();
 	}
 
@@ -472,17 +752,22 @@ export class Output<
 
 			const release = await this._mutex.acquire();
 
-			const promises = this._tracks.map(x => x.source._flushOrWaitForOngoingClose(false));
-			await Promise.all(promises);
+			try {
+				const promises = this._tracks.map(x => x.source._flushOrWaitForOngoingClose(false));
+				await Promise.all(promises);
 
-			await this._muxer.finalize();
+				await this._muxer.finalize();
 
-			await this._writer.flush();
-			await this._writer.finalize();
+				if (this._rootWriterPromise) {
+					const rootWriter = await this._rootWriterPromise;
+					await rootWriter.flush();
+					await rootWriter.finalize();
+				}
 
-			this.state = 'finalized';
-
-			release();
+				this.state = 'finalized';
+			} finally {
+				release();
+			}
 		})();
 	}
 }

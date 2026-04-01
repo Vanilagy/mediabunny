@@ -328,17 +328,15 @@ export class WaveDemuxer extends Demuxer {
 		return null;
 	}
 
-	async getMimeType() {
-		return 'audio/wav';
+	async getDurationFromMetadata(): Promise<number | null> {
+		await this.readMetadata();
+		assert(this.dataSize !== -1);
+
+		return this.dataSize / this.audioInfo!.blockSizeInBytes / this.audioInfo!.sampleRate;
 	}
 
-	async computeDuration() {
-		await this.readMetadata();
-
-		const track = this.tracks[0];
-		assert(track);
-
-		return track.computeDuration();
+	async getMimeType() {
+		return 'audio/wav';
 	}
 
 	async getTracks() {
@@ -388,11 +386,6 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		};
 	}
 
-	async computeDuration() {
-		const lastPacket = await this.getPacket(Infinity, { metadataOnly: true });
-		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
-	}
-
 	getNumberOfChannels() {
 		assert(this.demuxer.audioInfo);
 		return this.demuxer.audioInfo.numberOfChannels;
@@ -408,6 +401,30 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		return this.demuxer.audioInfo.sampleRate;
 	}
 
+	isRelativeToUnixEpoch() {
+		return false;
+	}
+
+	getPairingMask() {
+		return 1n;
+	}
+
+	getBitrate() {
+		return null;
+	}
+
+	getAverageBitrate() {
+		return null;
+	}
+
+	getDurationFromMetadata() {
+		return this.demuxer.getDurationFromMetadata();
+	}
+
+	async getLiveRefreshInterval() {
+		return null;
+	}
+
 	getName() {
 		return null;
 	}
@@ -420,10 +437,6 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		return {
 			...DEFAULT_TRACK_DISPOSITION,
 		};
-	}
-
-	async getFirstTimestamp() {
-		return 0;
 	}
 
 	private async getPacketAtIndex(

@@ -23,17 +23,27 @@ if ((globalThis as Record<symbol, unknown>)[MEDIABUNNY_LOADED_SYMBOL]) {
 export {
 	Output,
 	OutputOptions,
+	OutputTrack,
+	OutputVideoTrack,
+	OutputAudioTrack,
+	OutputSubtitleTrack,
+	OutputTrackGroup,
 	BaseTrackMetadata,
 	VideoTrackMetadata,
 	AudioTrackMetadata,
 	SubtitleTrackMetadata,
+	OutputEvents,
 } from './output';
 export {
 	OutputFormat,
 	AdtsOutputFormat,
 	AdtsOutputFormatOptions,
+	CmafOutputFormat,
+	CmafOutputFormatOptions,
 	FlacOutputFormat,
 	FlacOutputFormatOptions,
+	HlsOutputFormat,
+	HlsOutputFormatOptions,
 	IsobmffOutputFormat,
 	IsobmffOutputFormatOptions,
 	MkvOutputFormat,
@@ -81,6 +91,14 @@ export {
 	SUBTITLE_CODECS,
 } from './codec';
 export {
+	canDecode,
+	canDecodeVideo,
+	canDecodeAudio,
+	getDecodableCodecs,
+	getDecodableVideoCodecs,
+	getDecodableAudioCodecs,
+} from './decode';
+export {
 	VideoEncodingConfig,
 	VideoEncodingAdditionalOptions,
 	AudioEncodingConfig,
@@ -112,6 +130,7 @@ export {
 	StreamTarget,
 	StreamTargetOptions,
 	StreamTargetChunk,
+	TargetEvents,
 } from './target';
 export {
 	AnyIterable,
@@ -119,7 +138,12 @@ export {
 	Rational,
 	Rectangle,
 	Rotation,
+	SetOptional,
 	SetRequired,
+	asc,
+	desc,
+	prefer,
+	EventEmitter,
 } from './misc';
 export {
 	TrackType,
@@ -144,6 +168,7 @@ export {
 	AdtsInputFormat,
 	FlacInputFormat,
 	IsobmffInputFormat,
+	HlsInputFormat,
 	MatroskaInputFormat,
 	Mp3InputFormat,
 	Mp4InputFormat,
@@ -153,8 +178,10 @@ export {
 	WaveInputFormat,
 	WebMInputFormat,
 	ALL_FORMATS,
+	HLS_FORMATS,
 	ADTS,
 	FLAC,
+	HLS,
 	MATROSKA,
 	MP3,
 	MP4,
@@ -167,6 +194,7 @@ export {
 export {
 	Input,
 	InputOptions,
+	InputEvents,
 	InputDisposedError,
 } from './input';
 export {
@@ -174,6 +202,7 @@ export {
 	InputVideoTrack,
 	InputAudioTrack,
 	PacketStats,
+	TrackNotHydratedError,
 } from './input-track';
 export {
 	EncodedPacket,

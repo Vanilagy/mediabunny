@@ -12,6 +12,7 @@ import {
 	getXingOffset,
 	KILOBIT_RATES,
 	XING,
+	XingFlags,
 } from '../../shared/mp3-misc';
 
 export type XingFrameData = {
@@ -96,13 +97,13 @@ export class Mp3Writer {
 
 		let flags = 0;
 		if (data.frameCount !== null) {
-			flags |= 1;
+			flags |= XingFlags.FrameCount;
 		}
 		if (data.fileSize !== null) {
-			flags |= 2;
+			flags |= XingFlags.FileSize;
 		}
 		if (data.toc !== null) {
-			flags |= 4;
+			flags |= XingFlags.Toc;
 		}
 
 		this.writeU32(flags);

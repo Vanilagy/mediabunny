@@ -435,8 +435,16 @@ export const roundToMultiple = (value: number, multiple: number) => {
 	return Math.round(value / multiple) * multiple;
 };
 
+export const roundToDivisor = (value: number, multiple: number) => {
+	return Math.round(value * multiple) / multiple;
+};
+
 export const floorToMultiple = (value: number, multiple: number) => {
 	return Math.floor(value / multiple) * multiple;
+};
+
+export const floorToDivisor = (value: number, multiple: number) => {
+	return Math.floor(value * multiple) / multiple;
 };
 
 export const ilog = (x: number) => {
@@ -462,6 +470,13 @@ export const SECOND_TO_MICROSECOND_FACTOR = 1e6 * (1 + Number.EPSILON);
  * @public
  */
 export type SetRequired<T, K extends keyof T> = T & Required<Pick<T, K>>;
+
+/**
+ * Sets all keys K of T to be optional.
+ * @group Miscellaneous
+ * @public
+ */
+export type SetOptional<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;
 
 /**
  * Merges two RequestInit objects with special handling for headers.
@@ -549,7 +564,7 @@ export const retriedFetch = async (
 			}
 
 			if (retryDelayInSeconds > 0) {
-				await new Promise(resolve => setTimeout(resolve, 1000 * retryDelayInSeconds));
+				await wait(1000 * retryDelayInSeconds);
 			}
 
 			if (shouldStop()) {
@@ -774,6 +789,110 @@ export const isNumber = (x: unknown) => {
 	return typeof x === 'number' && !Number.isNaN(x);
 };
 
+export const joinPaths = (basePath: string, relativePath: string) => {
+	// If relativePath is a full URL with protocol, return it as-is
+	if (relativePath.includes('://')) {
+		return relativePath;
+	}
+
+	// Strip query parameters from URL base paths so their contents don't mess up the join
+	if (basePath.includes('://')) {
+		const queryIndex = basePath.indexOf('?');
+		if (queryIndex !== -1) {
+			basePath = basePath.slice(0, queryIndex);
+		}
+	}
+
+	let result: string;
+
+	if (relativePath.startsWith('/')) {
+		const protocolIndex = basePath.indexOf('://');
+		if (protocolIndex === -1) {
+			result = relativePath;
+		} else {
+			const pathStart = basePath.indexOf('/', protocolIndex + 3);
+			if (pathStart === -1) {
+				result = basePath + relativePath;
+			} else {
+				result = basePath.slice(0, pathStart) + relativePath;
+			}
+		}
+	} else {
+		const lastSlash = basePath.lastIndexOf('/');
+		if (lastSlash === -1) {
+			result = relativePath;
+		} else {
+			result = basePath.slice(0, lastSlash + 1) + relativePath;
+		}
+	}
+
+	// Normalize ./ and ../
+
+	let prefix = '';
+	const protocolIndex = result.indexOf('://');
+	if (protocolIndex !== -1) {
+		const pathStart = result.indexOf('/', protocolIndex + 3);
+		if (pathStart !== -1) {
+			prefix = result.slice(0, pathStart);
+			result = result.slice(pathStart);
+		}
+	}
+
+	const segments = result.split('/');
+	const normalized: string[] = [];
+	for (const segment of segments) {
+		if (segment === '..') {
+			normalized.pop();
+		} else if (segment !== '.') {
+			normalized.push(segment);
+		}
+	}
+
+	return prefix + normalized.join('/');
+};
+
+export const arrayCount = <T>(array: T[], predicate: (item: T) => boolean) => {
+	let count = 0;
+
+	for (let i = 0; i < array.length; i++) {
+		if (predicate(array[i]!)) {
+			count++;
+		}
+	}
+
+	return count;
+};
+
+export const arrayArgmin = <T>(array: T[], getValue: (item: T) => number): number => {
+	let minIndex = -1;
+	let minValue = Infinity;
+
+	for (let i = 0; i < array.length; i++) {
+		const value = getValue(array[i]!);
+		if (value < minValue) {
+			minValue = value;
+			minIndex = i;
+		}
+	}
+
+	return minIndex;
+};
+
+export const arrayArgmax = <T>(array: T[], getValue: (item: T) => number): number => {
+	let maxIndex = -1;
+	let maxValue = -Infinity;
+
+	for (let i = 0; i < array.length; i++) {
+		const value = getValue(array[i]!);
+		if (value > maxValue) {
+			maxValue = value;
+			maxIndex = i;
+		}
+	}
+
+	return maxIndex;
+};
+
 /**
  * A rational number; a ratio of two integers.
  * @group Miscellaneous
@@ -839,6 +958,22 @@ export const validateRectangle = (rect: Rectangle, propertyPath: string) => {
 		throw new TypeError(`${propertyPath}.height must be a non-negative integer.`);
 	}
 };
+
+export const asc = (value: number | null) => {
+	return value ?? Infinity; // nulls last
+};
+
+export const desc = (value: number | null) => {
+	return -(value ?? -Infinity); // nulls last
+};
+
+export const prefer = (value: boolean) => {
+	return -value;
+};
+
+export type NonFunctionKeys<T> = {
+	[K in keyof T]-?: T[K] extends ((...args: never[]) => unknown) ? never : K
+}[keyof T];
 
 export type UnthrottledTimerHandle = {
 	id: ReturnType<typeof setTimeout> | number;
@@ -1009,3 +1144,63 @@ export const clearIntervalUnthrottled = (timer: UnthrottledTimerHandle) => {
 		timerId: timer.id,
 	} satisfies UnthrottledTimerMessage);
 };
+
+export const wait = (ms: number) => {
+	return new Promise(resolve => setTimeout(resolve, ms));
+};
+
+export const rejectAfter = (ms: number, message = 'Promise rejected') => {
+	return new Promise((_, reject) => {
+		setTimeout(() => reject(new Error(message)), ms);
+	});
+};
+
+export const toArray = <T>(x: T | T[]) => {
+	if (Array.isArray(x)) {
+		return x;
+	} else {
+		return [x];
+	}
+};
+
+type ListenerOptions = {
+	once?: boolean;
+};
+
+export class EventEmitter<TEvents extends Record<string, unknown>> {
+	private _listeners = new Map<keyof TEvents, Set<{ fn: (data: never) => unknown; once: boolean }>>();
+
+	on<K extends keyof TEvents>(
+		event: K,
+		listener: (data: TEvents[K]) => unknown,
+		options?: ListenerOptions,
+	): () => void {
+		if (!this._listeners.has(event)) {
+			this._listeners.set(event, new Set());
+		}
+		const entry = { fn: listener as (data: never) => void, once: options?.once ?? false };
+		this._listeners.get(event)!.add(entry);
+
+		return () => {
+			this._listeners.get(event)?.delete(entry);
+		};
+	}
+
+	emit<K extends keyof TEvents>(
+		...args: TEvents[K] extends void ? [event: K] : [event: K, data: TEvents[K]]
+	): void {
+		const [event, data] = args;
+		const listeners = this._listeners.get(event);
+		if (!listeners) {
+			return;
+		}
+		for (const entry of listeners) {
+			(entry.fn as (data: unknown) => void)(data);
+			if (entry.once) {
+				listeners.delete(entry);
+			}
+		}
+	}
+}
+
+export const ceilToMultipleOfTwo = (value: number) => Math.ceil(value / 2) * 2;

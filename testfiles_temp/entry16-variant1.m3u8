@@ -1,0 +1,44 @@
+#EXTM3U
+#EXT-X-VERSION:1
+## Created with Unified Streaming Platform(version=1.6.6)
+#EXT-X-MEDIA-SEQUENCE:176505193
+#EXT-X-ALLOW-CACHE:NO
+#EXT-X-TARGETDURATION:10
+#EXT-X-PROGRAM-DATE-TIME:TEST1
+#EXTINF:8, no desc
+interpretation-audio=64000-video=500000-176505193.ts
+#EXTINF:8, no desc
+interpretation-audio=64000-video=500000-176505194.ts
+#EXTINF:8, no desc
+interpretation-audio=64000-video=500000-176505195.ts
+#EXTINF:8, no desc
+interpretation-audio=64000-video=500000-176505196.ts
+#EXTINF:10, no desc
+interpretation-audio=64000-video=500000-176505197.ts
+#EXT-X-PROGRAM-DATE-TIME:TEST3
+#EXTINF:8, no desc
+interpretation-audio=64000-video=500000-176505198.ts
+#EXTINF:8, no desc
+interpretation-audio=64000-video=500000-176505199.ts
+#EXTINF:8, no desc
+interpretation-audio=64000-video=500000-176505200.ts
+#EXTINF:8, no desc
+interpretation-audio=64000-video=500000-176505201.ts
+#EXTINF:8, no desc
+interpretation-audio=64000-video=500000-176505202.ts
+#EXTINF:10, no desc
+interpretation-audio=64000-video=500000-176505203.ts
+#EXTINF:8, no desc
+interpretation-audio=64000-video=500000-176505204.ts
+#EXT-X-PROGRAM-DATE-TIME:TEST4
+#EXTINF:8, no desc
+interpretation-audio=64000-video=500000-176505205.ts
+#EXTINF:8, no desc
+interpretation-audio=64000-video=500000-176505206.ts
+#EXTINF:8, no desc
+interpretation-audio=64000-video=500000-176505207.ts
+#EXTINF:8, no desc
+interpretation-audio=64000-video=500000-176505208.ts
+#EXTINF:10, no desc
+interpretation-audio=64000-video=500000-176505209.ts
+#EXT-X-ENDLIST

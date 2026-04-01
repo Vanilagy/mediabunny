@@ -30,6 +30,7 @@ export default tseslint.config(
 			'@typescript-eslint/require-await': 'off',
 			'@stylistic/yield-star-spacing': ['error', { before: false, after: true }],
 			'@typescript-eslint/no-unsafe-enum-comparison': 'off',
+			'@typescript-eslint/no-unsafe-unary-minus': 'off',
 		},
 	},
 	{
@@ -47,6 +48,7 @@ export default tseslint.config(
 			'eslint.config.mjs',
 			'docs/.vitepress/cache',
 			'test/public',
+			'testfiles_temp'
 		]
 	}
 );

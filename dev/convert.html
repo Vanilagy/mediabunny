@@ -16,22 +16,26 @@
 	progressElement.max = 1;
 	document.body.append(progressElement);
 
-	fileInput.addEventListener('change', async () => {
-		const file = fileInput.files[0];
-
-		const source = new Mediabunny.BlobSource(file);
+	window.addEventListener('click', async () => {
+		
 		const target = new Mediabunny.BufferTarget() ?? new Mediabunny.StreamTarget(new WritableStream({
 			write: console.log
 		}), {
 			chunked: true,
 			chunkSize: 2**20
 		});
-		const outputFormat = new Mediabunny.Mp4OutputFormat({fastStart: 'fragmented'});
+		const outputFormat = new Mediabunny.Mp4OutputFormat();
 
+		const p = document.createElement('p');
+		p.textContent = 'Capturing...';
+		document.body.append(p);
+
+		/*
 		const button = document.createElement('button');
 		button.textContent = 'Cancel';
 		button.onclick = () => conversion.cancel();
 		document.body.append(button);
+		*/
 
 		const yo = document.createElement('canvas');
 		yo.width = 512;
@@ -50,14 +54,43 @@
 			target
 		});
 
-		let ctx = null;
-		const conversion = await Mediabunny.Conversion.init({
-			input: new Mediabunny.Input({
+		let input;
+		const tracks = [];
+		let start = 0;
+
+		if (true) {
+			input = new Mediabunny.Input({
+				entryPath: 'https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8',
+				source: ({ path }) => new Mediabunny.UrlSource(path),
+				formats: Mediabunny.ALL_FORMATS,
+			});
+
+			const videoTrack = await input.getPrimaryVideoTrack();
+			const audioTrack = await input.getPrimaryAudioTrack();
+
+			if (videoTrack) tracks.push(videoTrack);
+			if (audioTrack) tracks.push(audioTrack);
+
+			start = Math.min(...await Promise.all([
+				videoTrack.computeDuration({ skipLiveWait: true }),
+				audioTrack.computeDuration({ skipLiveWait: true }),
+			]));
+		} else {
+			const file = fileInput.files[0];
+			const source = new Mediabunny.BlobSource(file);
+		
+			input = new Mediabunny.Input({
 				formats: Mediabunny.ALL_FORMATS,	
 				source
-			}),
+			});
+		}
+
+		let ctx = null;
+		let conversion = await Mediabunny.Conversion.init({
+			input,
 			output,
-			audio: (_, n) => ({
+			audio: (track, n) => ({
+				discard: !tracks.includes(track),
 				//codec: 'eac3',
 				//discard: true,
 				//discard: n > 1,
@@ -103,9 +136,8 @@
 				bitrate: 320000
 			},
 			*/
-			video: () => ({
-				//width: 640,
-				//rotate: 90,
+			video: (track) => ({
+				discard: !tracks.includes(track),
 				//forceTranscode: true,
 				//forceTranscode: true,
 				//width: 1280,
@@ -190,11 +222,13 @@
 				}
 			},
 			trim: {
-				//start: 0,
-				end: 2
+				//start,
+				//end: start + 5,
+				////start: 0,
+				//end: 2
 			},
 		});
-		console.log(conversion);
+		//console.log(conversion);
 
 		let progress = 0;
 		conversion.onProgress = newProgress => progress = newProgress;
@@ -215,6 +249,7 @@
 		console.timeEnd()
 
 		console.log("Done", target.buffer);
+		input.dispose()
 
 		const video = document.createElement('video');
 		video.src = URL.createObjectURL(new Blob([target.buffer], { type: outputFormat.mimeType }));	
@@ -232,5 +267,9 @@
 			a.click();
 			URL.revokeObjectURL(url);
 		}
-	});
+
+		conversion.onProgress = null;
+		conversion = null;
+		input = null;
+	}, { once: true });
 </script>
