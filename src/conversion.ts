@@ -38,7 +38,9 @@ import {
 } from './media-source';
 import {
 	assert,
+	ceilToMultipleOfTwo,
 	clamp,
+	floorToDivisor,
 	isIso639Dash2LanguageCode,
 	MaybePromise,
 	normalizeRotation,
@@ -915,9 +917,9 @@ export class Conversion {
 			? [track.squarePixelWidth, track.squarePixelHeight]
 			: [track.squarePixelHeight, track.squarePixelWidth];
 
-		const crop = trackOptions.crop;
+		let crop = trackOptions.crop;
 		if (crop) {
-			clampCropRectangle(crop, rotatedWidth, rotatedHeight);
+			crop = clampCropRectangle(crop, rotatedWidth, rotatedHeight);
 		}
 
 		const [originalWidth, originalHeight] = crop
@@ -929,8 +931,6 @@ export class Conversion {
 		const aspectRatio = width / height;
 
 		// A lot of video encoders require that the dimensions be multiples of 2
-		const ceilToMultipleOfTwo = (value: number) => Math.ceil(value / 2) * 2;
-
 		if (trackOptions.width !== undefined && trackOptions.height === undefined) {
 			width = ceilToMultipleOfTwo(trackOptions.width);
 			height = ceilToMultipleOfTwo(Math.round(width / aspectRatio));
@@ -1144,7 +1144,7 @@ export class Conversion {
 
 						if (frameRate !== undefined) {
 							// Logic for skipping/repeating frames when a frame rate is set
-							const alignedTimestamp = Math.floor(adjustedSampleTimestamp * frameRate) / frameRate;
+							const alignedTimestamp = floorToDivisor(adjustedSampleTimestamp, frameRate);
 
 							if (lastCanvas !== null) {
 								if (alignedTimestamp <= lastCanvasTimestamp!) {
@@ -1180,7 +1180,7 @@ export class Conversion {
 						assert(frameRate !== undefined);
 
 						// If necessary, pad until the end timestamp of the last sample
-						await padFrames(Math.floor(lastCanvasEndTimestamp * frameRate) / frameRate);
+						await padFrames(floorToDivisor(lastCanvasEndTimestamp, frameRate));
 					}
 
 					source.close();
@@ -1225,7 +1225,7 @@ export class Conversion {
 
 						if (frameRate !== undefined) {
 							// Logic for skipping/repeating frames when a frame rate is set
-							const alignedTimestamp = Math.floor(adjustedSampleTimestamp * frameRate) / frameRate;
+							const alignedTimestamp = floorToDivisor(adjustedSampleTimestamp, frameRate);
 
 							if (lastSample !== null) {
 								if (alignedTimestamp <= lastSampleTimestamp!) {
@@ -1261,7 +1261,7 @@ export class Conversion {
 						assert(frameRate !== undefined);
 
 						// If necessary, pad until the end timestamp of the last sample
-						await padFrames(Math.floor(lastSampleEndTimestamp * frameRate) / frameRate);
+						await padFrames(floorToDivisor(lastSampleEndTimestamp, frameRate));
 					}
 
 					source.close();

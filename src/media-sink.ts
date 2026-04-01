@@ -1636,9 +1636,9 @@ export class CanvasSink {
 			? [videoTrack.squarePixelWidth, videoTrack.squarePixelHeight]
 			: [videoTrack.squarePixelHeight, videoTrack.squarePixelWidth];
 
-		const crop = options.crop;
+		let crop = options.crop;
 		if (crop) {
-			clampCropRectangle(crop, rotatedWidth, rotatedHeight);
+			crop = clampCropRectangle(crop, rotatedWidth, rotatedHeight);
 		}
 
 		let [width, height] = crop

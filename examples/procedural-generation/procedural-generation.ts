@@ -99,7 +99,6 @@ const generateVideo = async () => {
 		output = new Output({
 			rootPath: 'master.m3u8',
 			target: async ({ path }) => {
-				/*
 				const fileHandle = await dirHandle.getFileHandle(path, { create: true });
 				const writable = await fileHandle.createWritable();
 
@@ -107,8 +106,8 @@ const generateVideo = async () => {
 				target.on('finalized', () => console.log('Finalizado', path));
 
 				return target;
-				*/
 
+				/*
 				const target = new BufferTarget();
 				target.on('finalized', async () => {
 					if (path.includes('m3u8')) {
@@ -123,11 +122,12 @@ const generateVideo = async () => {
 				}
 
 				return target;
+				*/
 			},
 			format: new HlsOutputFormat({
 				segmentFormat: new CmafOutputFormat(),
 				// singleFilePerPlaylist: true,
-				live: true,
+				// live: true,
 				getPlaylistPath: info => `sussex-${info.n}.m3u8`,
 			}),
 		});
@@ -146,6 +146,9 @@ const generateVideo = async () => {
 			codec: videoCodec,
 			bitrate: QUALITY_HIGH,
 			keyFrameInterval: 2,
+			transform: {
+				frameRate: 5,
+			},
 		});
 		output.addVideoTrack(canvasSource, { frameRate });
 
@@ -206,7 +209,7 @@ const generateVideo = async () => {
 			// automatically slow down the rendering loop when the encoder can't keep up.
 			await canvasSource.add(currentTime, 1 / frameRate);
 
-			await new Promise(resolve => setTimeout(resolve, 1000 / frameRate));
+			// await new Promise(resolve => setTimeout(resolve, 1000 / frameRate));
 		}
 
 		// Signal to the output that no more video frames are coming (not necessary, but recommended)

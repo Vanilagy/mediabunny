@@ -25,10 +25,13 @@ import {
 	assertNever,
 	binarySearchLessOrEqual,
 	CallSerializer,
+	ceilToMultipleOfTwo,
 	clamp,
 	clearIntervalUnthrottled,
+	floorToDivisor,
 	isFirefox,
 	last,
+	normalizeRotation,
 	promiseWithResolvers,
 	roundToDivisor,
 	setInt24,
@@ -47,7 +50,7 @@ import {
 	customAudioEncoders,
 } from './custom-coder';
 import { EncodedPacket, EncodedPacketSideData } from './packet';
-import { AudioSample, VideoSample } from './sample';
+import { AudioSample, clampCropRectangle, VideoSample } from './sample';
 import {
 	AudioEncodingConfig,
 	buildAudioEncoderConfig,
@@ -222,9 +225,19 @@ class VideoEncoderWrapper {
 	private encoder: VideoEncoder | null = null;
 	private muxer: Muxer | null = null;
 	private lastMultipleOfKeyFrameInterval = -1;
+
+	private resizeCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
+	// Tracks the input dimensions of the first frame
 	private codedWidth: number | null = null;
 	private codedHeight: number | null = null;
-	private resizeCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
+	// Tracks the output dimensions of the first frame (used to lock dimensions for fill/contain/cover)
+	private outputWidth: number | null = null;
+	private outputHeight: number | null = null;
+
+	// Frame rate normalization state
+	private frameRateLastSample: VideoSample | null = null;
+	private frameRateLastTimestamp: number | null = null;
+	private frameRateLastEndTimestamp: number | null = null;
 
 	// VideoEncoder converts everything to microseconds, so we need to do some bookkeeping to restore the original
 	// timing information
@@ -253,69 +266,38 @@ class VideoEncoderWrapper {
 	 */
 	private error: Error | null = null;
 
-	constructor(private source: VideoSource, private encodingConfig: VideoEncodingConfig) {}
+	constructor(private source: VideoSource, private encodingConfig: VideoEncodingConfig) {
+		const sizeChangeBehavior = encodingConfig.sizeChangeBehavior ?? 'deny';
+		if (['fill', 'contain', 'cover'].includes(sizeChangeBehavior) && encodingConfig.transform?.fit !== undefined) {
+			throw new TypeError(
+				`Cannot set 'fit' when 'sizeChangeBehavior' is '${sizeChangeBehavior}'. `
+				+ `The size change behavior determines the fit in this case.`,
+			);
+		}
+	}
 
 	async add(videoSample: VideoSample, shouldClose: boolean, encodeOptions?: VideoEncoderEncodeOptions) {
+		const originalSample = videoSample;
+
 		try {
 			this.checkForEncoderError();
 			this.source._ensureValidAdd();
 
-			// Ensure video sample size remains constant
+			const config = this.encodingConfig;
+			const sizeChangeBehavior = config.sizeChangeBehavior ?? 'deny';
+			let isSizeChange = false;
+
+			// Ensure video sample size remains constant or handle the change
 			if (this.codedWidth !== null && this.codedHeight !== null) {
 				if (videoSample.codedWidth !== this.codedWidth || videoSample.codedHeight !== this.codedHeight) {
-					const sizeChangeBehavior = this.encodingConfig.sizeChangeBehavior ?? 'deny';
-
-					if (sizeChangeBehavior === 'passThrough') {
-						// Do nada
-					} else if (sizeChangeBehavior === 'deny') {
+					isSizeChange = true;
+					if (sizeChangeBehavior === 'deny') {
 						throw new Error(
 							`Video sample size must remain constant. Expected ${this.codedWidth}x${this.codedHeight},`
 							+ ` got ${videoSample.codedWidth}x${videoSample.codedHeight}. To allow the sample size to`
-							+ ` change over time, set \`sizeChangeBehavior\` to a value other than 'strict' in the`
+							+ ` change over time, set \`sizeChangeBehavior\` to a value other than 'deny' in the`
 							+ ` encoding options.`,
 						);
-					} else {
-						let canvasIsNew = false;
-
-						if (!this.resizeCanvas) {
-							if (typeof document !== 'undefined') {
-								// Prefer an HTMLCanvasElement
-								this.resizeCanvas = document.createElement('canvas');
-								this.resizeCanvas.width = this.codedWidth;
-								this.resizeCanvas.height = this.codedHeight;
-							} else {
-								this.resizeCanvas = new OffscreenCanvas(this.codedWidth, this.codedHeight);
-							}
-
-							canvasIsNew = true;
-						}
-
-						const context = this.resizeCanvas.getContext('2d', {
-							alpha: isFirefox(), // Firefox has VideoFrame glitches with opaque canvases
-						}) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
-						assert(context);
-
-						if (!canvasIsNew) {
-							if (isFirefox()) {
-								context.fillStyle = 'black';
-								context.fillRect(0, 0, this.codedWidth, this.codedHeight);
-							} else {
-								context.clearRect(0, 0, this.codedWidth, this.codedHeight);
-							}
-						}
-
-						videoSample.drawWithFit(context, { fit: sizeChangeBehavior });
-
-						if (shouldClose) {
-							videoSample.close();
-						}
-
-						videoSample = new VideoSample(this.resizeCanvas, {
-							timestamp: videoSample.timestamp,
-							duration: videoSample.duration,
-							rotation: videoSample.rotation,
-						});
-						shouldClose = true;
 					}
 				}
 			} else {
@@ -323,159 +305,382 @@ class VideoEncoderWrapper {
 				this.codedHeight = videoSample.codedHeight;
 			}
 
-			if (!this.encoderInitialized) {
-				if (!this.ensureEncoderPromise) {
-					this.ensureEncoder(videoSample);
+			// Determine if we need to apply transformations via canvas
+			const hasTransformConfig = config.transform?.width !== undefined
+				|| config.transform?.height !== undefined
+				|| config.transform?.rotate !== undefined
+				|| config.transform?.crop !== undefined;
+			const needsTransform = hasTransformConfig || (isSizeChange && sizeChangeBehavior !== 'passThrough');
+
+			if (needsTransform) {
+				const rotation = normalizeRotation(videoSample.rotation + (config.transform?.rotate ?? 0));
+				const [rotatedWidth, rotatedHeight] = rotation % 180 === 0
+					? [videoSample.codedWidth, videoSample.codedHeight]
+					: [videoSample.codedHeight, videoSample.codedWidth];
+
+				// Clamp crop rectangle to the rotated video dimensions
+				let finalCrop = config.transform?.crop;
+				if (finalCrop) {
+					finalCrop = clampCropRectangle(finalCrop, rotatedWidth, rotatedHeight);
 				}
 
-				// No, this "if" statement is not useless. Sometimes, the above call to `ensureEncoder` might have
-				// synchronously completed and the encoder is already initialized. In this case, we don't need to await
-				// the promise anymore. This also fixes nasty async race condition bugs when multiple code paths are
-				// calling this method: It's important that the call that initialized the encoder go through this
-				// code first.
-				if (!this.encoderInitialized) {
-					await this.ensureEncoderPromise;
-				}
-			}
-			assert(this.encoderInitialized);
+				const cropWidth = finalCrop ? finalCrop.width : rotatedWidth;
+				const cropHeight = finalCrop ? finalCrop.height : rotatedHeight;
+				const originalAspectRatio = cropWidth / cropHeight;
 
-			const keyFrameInterval = this.encodingConfig.keyFrameInterval ?? 5;
-			const multipleOfKeyFrameInterval = Math.floor(videoSample.timestamp / keyFrameInterval);
+				let targetWidth: number;
+				let targetHeight: number;
+				let appliedFit: 'fill' | 'contain' | 'cover' = config.transform?.fit ?? 'fill';
 
-			// Ensure a key frame every keyFrameInterval seconds. It is important that all video tracks follow the same
-			// "key frame" rhythm, because aligned key frames are required to start new fragments in ISOBMFF or clusters
-			// in Matroska (or at least desirable).
-			const finalEncodeOptions = {
-				...encodeOptions,
-				keyFrame: encodeOptions?.keyFrame
-					|| keyFrameInterval === 0
-					|| multipleOfKeyFrameInterval !== this.lastMultipleOfKeyFrameInterval,
-			};
-			this.lastMultipleOfKeyFrameInterval = multipleOfKeyFrameInterval;
+				// If the size changed and behavior is fill/contain/cover, lock to the original output dimensions
+				if (isSizeChange && sizeChangeBehavior !== 'passThrough') {
+					assert(this.outputWidth);
+					assert(this.outputHeight);
+					assert(sizeChangeBehavior !== 'deny');
 
-			if (this.customEncoder) {
-				this.customEncoderQueueSize++;
-
-				// We clone the sample so it cannot be closed on us from the outside before it reaches the encoder
-				const clonedSample = videoSample.clone();
-
-				const promise = this.customEncoderCallSerializer
-					.call(() => this.customEncoder!.encode(clonedSample, finalEncodeOptions))
-					.then(() => this.customEncoderQueueSize--)
-					.catch((error: Error) => this.error ??= error)
-					.finally(() => {
-						clonedSample.close();
-						// `videoSample` gets closed in the finally block at the end of the method
-					});
-
-				if (this.customEncoderQueueSize >= 4) {
-					await promise;
-				}
-			} else {
-				assert(this.encoder);
-
-				const videoFrame = videoSample.toVideoFrame();
-
-				const preciseTimingIndex = binarySearchLessOrEqual(
-					this.preciseTimings,
-					videoFrame.timestamp,
-					x => x.microsecondTimestamp,
-				);
-				const existingEntry = preciseTimingIndex !== -1
-					? this.preciseTimings[preciseTimingIndex]
-					: null;
-				if (existingEntry && existingEntry.microsecondTimestamp === videoFrame.timestamp) {
-					if (existingEntry.timestamp !== videoSample.timestamp) {
-						// Mapping isn't unique, can't use the timestamp
-						existingEntry.timestampIsValid = false;
-					}
-					if (existingEntry.duration !== videoSample.duration) {
-						// Mapping isn't unique, can't use the duration
-						existingEntry.durationIsValid = false;
-					}
+					targetWidth = this.outputWidth!;
+					targetHeight = this.outputHeight!;
+					appliedFit = sizeChangeBehavior;
 				} else {
-					this.preciseTimings.splice(preciseTimingIndex + 1, 0, {
-						microsecondTimestamp: videoFrame.timestamp,
-						timestamp: videoSample.timestamp,
-						duration: videoSample.duration,
-						timestampIsValid: true,
-						durationIsValid: true,
-					});
-
-					// Make sure it doesn't grow indefinitely
-					if (this.preciseTimings.length > 128) {
-						this.preciseTimings.shift();
-					}
-				}
-
-				if (!this.alphaEncoder) {
-					// No alpha encoder, simple case
-					this.encoder.encode(videoFrame, finalEncodeOptions);
-					videoFrame.close();
-				} else {
-					// We're expected to encode alpha as well
-					const frameDefinitelyHasNoAlpha = !!videoFrame.format && !videoFrame.format.includes('A');
-
-					if (frameDefinitelyHasNoAlpha || this.splitterCreationFailed) {
-						this.alphaFrameQueue.push(null);
-						this.encoder.encode(videoFrame, finalEncodeOptions);
-						videoFrame.close();
+					// Otherwise, dynamically calculate the target dimensions based on config and aspect ratio
+					if (config.transform?.width !== undefined && config.transform?.height === undefined) {
+						targetWidth = config.transform.width;
+						targetHeight = ceilToMultipleOfTwo(Math.round(targetWidth / originalAspectRatio));
+					} else if (config.transform?.width === undefined && config.transform?.height !== undefined) {
+						targetHeight = config.transform.height;
+						targetWidth = ceilToMultipleOfTwo(Math.round(targetHeight * originalAspectRatio));
+					} else if (config.transform?.width !== undefined && config.transform?.height !== undefined) {
+						targetWidth = config.transform?.width;
+						targetHeight = config.transform?.height;
 					} else {
-						const width = videoFrame.displayWidth;
-						const height = videoFrame.displayHeight;
-
-						if (!this.splitter) {
-							try {
-								this.splitter = new ColorAlphaSplitter(width, height);
-							} catch (error) {
-								console.error('Due to an error, only color data will be encoded.', error);
-
-								this.splitterCreationFailed = true;
-								this.alphaFrameQueue.push(null);
-								this.encoder.encode(videoFrame, finalEncodeOptions);
-								videoFrame.close();
-							}
-						}
-
-						if (this.splitter) {
-							const colorFrame = this.splitter.extractColor(videoFrame);
-							const alphaFrame = this.splitter.extractAlpha(videoFrame);
-
-							this.alphaFrameQueue.push(alphaFrame);
-							this.encoder.encode(colorFrame, finalEncodeOptions);
-							colorFrame.close();
-							videoFrame.close();
-						}
+						targetWidth = cropWidth;
+						targetHeight = cropHeight;
 					}
 				}
+
+				// Save the output dimensions of the first frame
+				if (this.outputWidth === null || this.outputHeight === null) {
+					this.outputWidth = targetWidth;
+					this.outputHeight = targetHeight;
+				}
+
+				let canvasIsNew = false;
+
+				if (!this.resizeCanvas) {
+					if (typeof document !== 'undefined') {
+						// Prefer an HTMLCanvasElement
+						this.resizeCanvas = document.createElement('canvas');
+						this.resizeCanvas.width = targetWidth;
+						this.resizeCanvas.height = targetHeight;
+					} else {
+						this.resizeCanvas = new OffscreenCanvas(targetWidth, targetHeight);
+					}
+					canvasIsNew = true;
+				} else if (this.resizeCanvas.width !== targetWidth || this.resizeCanvas.height !== targetHeight) {
+					// Dynamically resize the canvas if the target dimensions have changed
+					this.resizeCanvas.width = targetWidth;
+					this.resizeCanvas.height = targetHeight;
+				}
+
+				const context = this.resizeCanvas.getContext('2d', {
+					// Firefox has VideoFrame glitches with opaque canvases
+					alpha: this.encodingConfig.alpha === 'keep' || isFirefox(),
+				}) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+				assert(context);
+
+				if (typeof context.resetTransform === 'function') {
+					context.resetTransform();
+				}
+
+				if (!canvasIsNew) {
+					if (isFirefox()) {
+						context.fillStyle = 'black';
+						context.fillRect(0, 0, targetWidth, targetHeight);
+					} else {
+						context.clearRect(0, 0, targetWidth, targetHeight);
+					}
+				}
+
+				videoSample.drawWithFit(context, {
+					fit: appliedFit,
+					rotation: rotation,
+					crop: finalCrop,
+				});
 
 				if (shouldClose) {
 					videoSample.close();
 				}
 
-				// We need to do this after sending the frame to the encoder as the frame otherwise might be closed
-				if (this.encoder.encodeQueueSize >= 4) {
-					await new Promise(resolve => this.encoder!.addEventListener('dequeue', resolve, { once: true }));
+				videoSample = new VideoSample(this.resizeCanvas, {
+					timestamp: videoSample.timestamp,
+					duration: videoSample.duration,
+					rotation: 0, // Rotation is now baked into the canvas
+				});
+				shouldClose = true;
+			} else {
+				// If no canvas is needed, we still need to record the output dimensions for the first frame
+				if (this.outputWidth === null || this.outputHeight === null) {
+					this.outputWidth = videoSample.codedWidth;
+					this.outputHeight = videoSample.codedHeight;
 				}
 			}
 
-			await this.muxer!.mutex.currentPromise; // Allow the writer to apply backpressure
+			const frameRate = config.transform?.frameRate;
+			if (frameRate !== undefined) {
+				// Apply frame rate normalization
+				const originalEndTimestamp = videoSample.timestamp + videoSample.duration;
+				const alignedTimestamp = floorToDivisor(videoSample.timestamp, frameRate);
+
+				if (this.frameRateLastSample !== null) {
+					if (alignedTimestamp <= this.frameRateLastTimestamp!) {
+						// Same frame rate slot, replace stored sample with the newer one
+						this.frameRateLastSample.close();
+						this.frameRateLastSample = videoSample.clone();
+						this.frameRateLastEndTimestamp = originalEndTimestamp;
+						return;
+					} else {
+						// Pad the gap by repeating the previous frame
+						await this.padFrameRate(alignedTimestamp, encodeOptions);
+					}
+				}
+
+				// Clone if the sample is still the user's, to avoid mutating externally-owned data
+				if (videoSample === originalSample) {
+					videoSample = videoSample.clone();
+					shouldClose = true;
+				}
+
+				videoSample.setTimestamp(alignedTimestamp);
+				videoSample.setDuration(1 / frameRate);
+
+				this.frameRateLastSample?.close();
+				this.frameRateLastSample = videoSample.clone();
+				this.frameRateLastTimestamp = alignedTimestamp;
+				this.frameRateLastEndTimestamp = originalEndTimestamp;
+			}
+
+			await this.processAndEncode(videoSample, encodeOptions);
 		} finally {
 			if (shouldClose) {
-				// Make sure it's always closed, even if there was an error
 				videoSample.close();
 			}
+		}
+	}
+
+	/**
+	 * Runs the process function (if any) and encodes the resulting samples.
+	 */
+	private async processAndEncode(
+		videoSample: VideoSample,
+		encodeOptions?: VideoEncoderEncodeOptions,
+	) {
+		const config = this.encodingConfig;
+		let samplesToEncode: VideoSample[];
+
+		// Apply the user-defined process function, if any
+		if (config.transform?.process) {
+			let processed = config.transform.process(videoSample);
+			if (processed instanceof Promise) {
+				processed = await processed;
+			}
+
+			if (processed === null) {
+				return;
+			}
+
+			if (!Array.isArray(processed)) {
+				processed = [processed];
+			}
+
+			samplesToEncode = processed.map((x) => {
+				if (x instanceof VideoSample) {
+					return x;
+				}
+
+				if (typeof VideoFrame !== 'undefined' && x instanceof VideoFrame) {
+					return new VideoSample(x);
+				}
+
+				return new VideoSample(x, {
+					timestamp: videoSample.timestamp,
+					duration: videoSample.duration,
+				});
+			});
+		} else {
+			samplesToEncode = [videoSample];
+		}
+
+		try {
+			for (const sampleToEncode of samplesToEncode) {
+				if (!this.encoderInitialized) {
+					if (!this.ensureEncoderPromise) {
+						this.ensureEncoder(sampleToEncode);
+					}
+
+					// No, this "if" statement is not useless. Sometimes, the above call to
+					// `ensureEncoder` might have synchronously completed and the encoder is
+					// already initialized. In this case, we don't need to await the promise
+					// anymore. This also fixes nasty async race condition bugs when multiple
+					// code paths are calling this method: It's important that the call that
+					// initialized the encoder go through this code first.
+					if (!this.encoderInitialized) {
+						await this.ensureEncoderPromise;
+					}
+				}
+				assert(this.encoderInitialized);
+
+				const keyFrameInterval = this.encodingConfig.keyFrameInterval ?? 5;
+				const multipleOfKeyFrameInterval = Math.floor(sampleToEncode.timestamp / keyFrameInterval);
+
+				// Ensure a key frame every keyFrameInterval seconds. It is important that all video tracks
+				// follow the same "key frame" rhythm, because aligned key frames are required to start new
+				// fragments in ISOBMFF or clusters in Matroska (or at least desirable).
+				const finalEncodeOptions = {
+					...encodeOptions,
+					keyFrame: encodeOptions?.keyFrame
+						|| keyFrameInterval === 0
+						|| multipleOfKeyFrameInterval !== this.lastMultipleOfKeyFrameInterval,
+				};
+				this.lastMultipleOfKeyFrameInterval = multipleOfKeyFrameInterval;
+
+				if (this.customEncoder) {
+					this.customEncoderQueueSize++;
+
+					// We clone the sample so it cannot be closed on us from the outside before it reaches the encoder
+					const clonedSample = sampleToEncode.clone();
+
+					const promise = this.customEncoderCallSerializer
+						.call(() => this.customEncoder!.encode(clonedSample, finalEncodeOptions))
+						.then(() => this.customEncoderQueueSize--)
+						.catch((error: Error) => this.error ??= error)
+						.finally(() => {
+							clonedSample.close();
+						});
+
+					if (this.customEncoderQueueSize >= 4) {
+						await promise;
+					}
+				} else {
+					assert(this.encoder);
+
+					const videoFrame = sampleToEncode.toVideoFrame();
+
+					const preciseTimingIndex = binarySearchLessOrEqual(
+						this.preciseTimings,
+						videoFrame.timestamp,
+						x => x.microsecondTimestamp,
+					);
+					const existingEntry = preciseTimingIndex !== -1
+						? this.preciseTimings[preciseTimingIndex]
+						: null;
+					if (existingEntry && existingEntry.microsecondTimestamp === videoFrame.timestamp) {
+						if (existingEntry.timestamp !== sampleToEncode.timestamp) {
+							// Mapping isn't unique, can't use the timestamp
+							existingEntry.timestampIsValid = false;
+						}
+						if (existingEntry.duration !== sampleToEncode.duration) {
+							// Mapping isn't unique, can't use the duration
+							existingEntry.durationIsValid = false;
+						}
+					} else {
+						this.preciseTimings.splice(preciseTimingIndex + 1, 0, {
+							microsecondTimestamp: videoFrame.timestamp,
+							timestamp: sampleToEncode.timestamp,
+							duration: sampleToEncode.duration,
+							timestampIsValid: true,
+							durationIsValid: true,
+						});
+
+						// Make sure it doesn't grow indefinitely
+						if (this.preciseTimings.length > 128) {
+							this.preciseTimings.shift();
+						}
+					}
+
+					if (!this.alphaEncoder) {
+						// No alpha encoder, simple case
+						this.encoder.encode(videoFrame, finalEncodeOptions);
+						videoFrame.close();
+					} else {
+						// We're expected to encode alpha as well
+						const frameDefinitelyHasNoAlpha = !!videoFrame.format && !videoFrame.format.includes('A');
+
+						if (frameDefinitelyHasNoAlpha || this.splitterCreationFailed) {
+							this.alphaFrameQueue.push(null);
+							this.encoder.encode(videoFrame, finalEncodeOptions);
+							videoFrame.close();
+						} else {
+							const width = videoFrame.displayWidth;
+							const height = videoFrame.displayHeight;
+
+							if (!this.splitter) {
+								try {
+									this.splitter = new ColorAlphaSplitter(width, height);
+								} catch (error) {
+									console.error('Due to an error, only color data will be encoded.', error);
+
+									this.splitterCreationFailed = true;
+									this.alphaFrameQueue.push(null);
+									this.encoder.encode(videoFrame, finalEncodeOptions);
+									videoFrame.close();
+								}
+							}
+
+							if (this.splitter) {
+								const colorFrame = this.splitter.extractColor(videoFrame);
+								const alphaFrame = this.splitter.extractAlpha(videoFrame);
+
+								this.alphaFrameQueue.push(alphaFrame);
+								this.encoder.encode(colorFrame, finalEncodeOptions);
+								colorFrame.close();
+								videoFrame.close();
+							}
+						}
+					}
+
+					// We need to do this after sending the frame to the encoder as the frame otherwise might be closed
+					if (this.encoder.encodeQueueSize >= 4) {
+						await new Promise(resolve =>
+							this.encoder!.addEventListener('dequeue', resolve, { once: true }),
+						);
+					}
+				}
+
+				await this.muxer!.mutex.currentPromise; // Allow the writer to apply backpressure
+			}
+		} finally {
+			for (const sample of samplesToEncode) {
+				if (sample !== videoSample) {
+					sample.close();
+				}
+			}
+		}
+	}
+
+	/** Repeats the last frame rate sample to fill the gap up to the given timestamp. */
+	private async padFrameRate(until: number, encodeOptions?: VideoEncoderEncodeOptions) {
+		const frameRate = this.encodingConfig.transform!.frameRate!;
+		assert(this.frameRateLastSample);
+
+		const frameDifference = Math.round((until - this.frameRateLastTimestamp!) * frameRate);
+
+		for (let i = 1; i < frameDifference; i++) {
+			const sample = this.frameRateLastSample.clone();
+			sample.setTimestamp(this.frameRateLastTimestamp! + i / frameRate);
+			sample.setDuration(1 / frameRate);
+			await this.processAndEncode(sample, encodeOptions);
+			sample.close();
 		}
 	}
 
 	private ensureEncoder(videoSample: VideoSample) {
 		this.ensureEncoderPromise = (async () => {
 			const encoderConfig = buildVideoEncoderConfig({
+				...this.encodingConfig,
 				width: videoSample.codedWidth,
 				height: videoSample.codedHeight,
 				squarePixelWidth: videoSample.squarePixelWidth,
 				squarePixelHeight: videoSample.squarePixelHeight,
-				...this.encodingConfig,
 				framerate: this.source._connectedTrack?.metadata.frameRate,
 			});
 			this.encodingConfig.onEncoderConfig?.(encoderConfig);
@@ -691,7 +896,19 @@ class VideoEncoderWrapper {
 	}
 
 	async flushAndClose(forceClose: boolean) {
-		if (!forceClose) this.checkForEncoderError();
+		if (!forceClose) {
+			this.checkForEncoderError();
+		}
+
+		// Final frame rate padding: fill remaining frames up to the last sample's original end timestamp
+		if (!forceClose && this.frameRateLastSample) {
+			const frameRate = this.encodingConfig.transform!.frameRate!;
+			const alignedEnd = floorToDivisor(this.frameRateLastEndTimestamp!, frameRate);
+			await this.padFrameRate(alignedEnd);
+		}
+
+		this.frameRateLastSample?.close();
+		this.frameRateLastSample = null;
 
 		if (this.customEncoder) {
 			if (!forceClose) {
@@ -718,7 +935,9 @@ class VideoEncoderWrapper {
 			this.splitter?.close();
 		}
 
-		if (!forceClose) this.checkForEncoderError();
+		if (!forceClose) {
+			this.checkForEncoderError();
+		}
 	}
 
 	getQueueSize() {

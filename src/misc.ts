@@ -443,6 +443,10 @@ export const floorToMultiple = (value: number, multiple: number) => {
 	return Math.floor(value / multiple) * multiple;
 };
 
+export const floorToDivisor = (value: number, multiple: number) => {
+	return Math.floor(value * multiple) / multiple;
+};
+
 export const ilog = (x: number) => {
 	let ret = 0;
 	while (x) {
@@ -1198,3 +1202,5 @@ export class EventEmitter<TEvents extends Record<string, unknown>> {
 		}
 	}
 }
+
+export const ceilToMultipleOfTwo = (value: number) => Math.ceil(value / 2) * 2;

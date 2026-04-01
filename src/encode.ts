@@ -22,8 +22,9 @@ import {
 	VideoCodec,
 } from './codec';
 import { customAudioEncoders, customVideoEncoders } from './custom-coder';
-import { isFirefox } from './misc';
+import { isFirefox, MaybePromise, Rotation } from './misc';
 import { EncodedPacket } from './packet';
+import { CropRectangle, validateCropRectangle, VideoSample } from './sample';
 
 const canEncodeVideoMemo = new Map<string, Promise<boolean>>();
 const canEncodeAudioMemo = new Map<string, Promise<boolean>>();
@@ -61,6 +62,58 @@ export type VideoEncodingConfig = {
 	 */
 	sizeChangeBehavior?: 'deny' | 'passThrough' | 'fill' | 'contain' | 'cover';
 
+	/**
+	 * Optional transformations to apply to the video frames before they are passed to the encoder.
+	 */
+	transform?: {
+		/**
+		 * The width in pixels to resize the frames to. If height is not set, it will be deduced
+		 * automatically based on aspect ratio.
+		 */
+		width?: number;
+		/**
+		 * The height in pixels to resize the frames to. If width is not set, it will be deduced
+		 * automatically based on aspect ratio.
+		 */
+		height?: number;
+		/**
+		 * The fitting algorithm in case both width and height are set.
+		 *
+		 * - `'fill'` will stretch the image to fill the entire box, potentially altering aspect ratio.
+		 * - `'contain'` will contain the entire image within the box while preserving aspect ratio. This may lead to
+		 * letterboxing.
+		 * - `'cover'` will scale the image until the entire box is filled, while preserving aspect ratio.
+		 *
+		 * To avoid ambiguity, this field must not be set when `sizeChangeBehavior` is `'fill'`, `'contain'` or
+		 * `'deny'`, since `sizeChangeBehavior` already determines the fitting algorithm.
+		 */
+		fit?: 'fill' | 'contain' | 'cover';
+		/**
+		 * The clockwise rotation by which to rotate the frames. Rotation is applied before resizing.
+		 */
+		rotate?: Rotation;
+		/**
+		 * Specifies the rectangular region of the frames to crop to. The crop region will automatically be
+		 * clamped to the dimensions of the frame. Cropping is performed after rotation but before resizing.
+		 */
+		crop?: CropRectangle;
+		/**
+		 * The frame rate in hertz to normalize the video frame stream to.
+		 */
+		frameRate?: number;
+		/**
+		 * Allows for custom user-defined processing of video frames, e.g. for applying overlays, color transformations,
+		 * or timestamp modifications. Will be called for each video frame after transformations and frame rate
+		 * corrections.
+		 *
+		 * Must return a {@link VideoSample} or a `CanvasImageSource`, an array of them, or `null` for dropping the
+		 * frame. When non-timestamped data is returned, the timestamp and duration from the input sample will be used.
+		 */
+		process?: (sample: VideoSample) => MaybePromise<
+			CanvasImageSource | VideoSample | (CanvasImageSource | VideoSample)[] | null
+		>;
+	};
+
 	/** Called for each successfully encoded packet. Both the packet and the encoding metadata are passed. */
 	onEncodedPacket?: (packet: EncodedPacket, meta: EncodedVideoChunkMetadata | undefined) => unknown;
 	/**
@@ -95,6 +148,61 @@ export const validateVideoEncodingConfig = (config: VideoEncodingConfig) => {
 			+ ' or \'cover\'.',
 		);
 	}
+	if (config.transform !== undefined) {
+		if (typeof config.transform !== 'object' || !config.transform) {
+			throw new TypeError('config.transform, when provided, must be an object.');
+		}
+		if (
+			config.transform.width !== undefined
+			&& (!Number.isInteger(config.transform.width) || config.transform.width <= 0)
+		) {
+			throw new TypeError('config.transform.width, when provided, must be a positive integer.');
+		}
+		if (
+			config.transform.height !== undefined
+			&& (!Number.isInteger(config.transform.height) || config.transform.height <= 0)
+		) {
+			throw new TypeError('config.transform.height, when provided, must be a positive integer.');
+		}
+		if (config.transform.fit !== undefined && !['fill', 'contain', 'cover'].includes(config.transform.fit)) {
+			throw new TypeError('config.transform.fit, when provided, must be one of "fill", "contain", or "cover".');
+		}
+		if (
+			config.transform.width !== undefined
+			&& config.transform.height !== undefined
+			&& config.transform.fit === undefined
+			&& !['fill', 'contain', 'cover'].includes(config.sizeChangeBehavior!)
+		) {
+			throw new TypeError(
+				'When both config.transform.width and config.transform.height are provided, config.transform.fit'
+				+ ' must also be provided.',
+			);
+		}
+		if (
+			config.transform.fit !== undefined
+			&& ['fill', 'contain', 'cover'].includes(config.sizeChangeBehavior!)
+		) {
+			throw new TypeError(
+				'config.transform.fit cannot be used when config.sizeChangeBehavior is \'fill\', \'contain\' or'
+				+ ' \'cover\', as sizeChangeBehavior already determines the fitting algorithm.',
+			);
+		}
+		if (config.transform.rotate !== undefined && ![0, 90, 180, 270].includes(config.transform.rotate)) {
+			throw new TypeError('config.transform.rotate, when provided, must be 0, 90, 180 or 270.');
+		}
+		if (config.transform.crop !== undefined) {
+			validateCropRectangle(config.transform.crop, 'config.');
+		}
+		if (config.transform.process !== undefined && typeof config.transform.process !== 'function') {
+			throw new TypeError('config.transform.process, when provided, must be a function.');
+		}
+		if (
+			config.transform.frameRate !== undefined
+			&& (!Number.isFinite(config.transform.frameRate) || config.transform.frameRate <= 0)
+		) {
+			throw new TypeError('config.transform.frameRate, when provided, must be a finite positive number.');
+		}
+	}
 	if (config.onEncodedPacket !== undefined && typeof config.onEncodedPacket !== 'function') {
 		throw new TypeError('config.onEncodedChunk, when provided, must be a function.');
 	}
@@ -106,7 +214,7 @@ export const validateVideoEncodingConfig = (config: VideoEncodingConfig) => {
 };
 
 /**
- * Additional options that control audio encoding.
+ * Additional options that control video encoding.
  * @group Encoding
  * @public
  */
