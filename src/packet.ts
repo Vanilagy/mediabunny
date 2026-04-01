@@ -54,6 +54,12 @@ export class EncodedPacket {
 	/** Additional data carried with this packet. */
 	readonly sideData: EncodedPacketSideData;
 
+	/**
+	 * Whether this packet should be decoded but its output discarded from presentation. This is set for packets whose
+	 * presentation timestamp falls outside the edit list range but which are still needed as decoder reference frames.
+	 */
+	readonly discard: boolean;
+
 	/** Creates a new {@link EncodedPacket} from raw bytes and timing information. */
 	constructor(
 		/**
@@ -79,6 +85,7 @@ export class EncodedPacket {
 		public readonly sequenceNumber = -1,
 		byteLength?: number,
 		sideData?: EncodedPacketSideData,
+		discard = false,
 	) {
 		if (data === PLACEHOLDER_DATA && byteLength === undefined) {
 			throw new Error(
@@ -123,6 +130,7 @@ export class EncodedPacket {
 
 		this.byteLength = byteLength;
 		this.sideData = sideData ?? {};
+		this.discard = discard;
 
 		if (this.sideData.alpha && this.sideData.alphaByteLength === undefined) {
 			this.sideData.alphaByteLength = this.sideData.alpha.byteLength;
