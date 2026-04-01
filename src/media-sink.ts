@@ -465,6 +465,7 @@ export abstract class BaseMediaSampleSink<
 	protected mediaSamplesInRange(
 		startTimestamp = 0,
 		endTimestamp = Infinity,
+		options: PacketRetrievalOptions,
 	): AsyncGenerator<MediaSample, void, unknown> {
 		validateTimestamp(startTimestamp);
 		validateTimestamp(endTimestamp);
@@ -482,6 +483,12 @@ export abstract class BaseMediaSampleSink<
 		// method but instead in a different context. This error should not go unnoticed and must be bubbled up to
 		// the consumer.
 		let outOfBandError = null as Error | null;
+
+		const packetRetrievalOptions: PacketRetrievalOptions = {
+			...options,
+			verifyKeyPackets: true,
+			metadataOnly: false,
+		};
 
 		// The following is the "pump" process that keeps pumping packets into the decoder
 		(async () => {
@@ -528,8 +535,8 @@ export abstract class BaseMediaSampleSink<
 			});
 
 			const packetSink = this._createPacketSink();
-			const keyPacket = await packetSink.getKeyPacket(startTimestamp, { verifyKeyPackets: true })
-				?? await packetSink.getFirstKeyPacket({ verifyKeyPackets: true });
+			const keyPacket = await packetSink.getKeyPacket(startTimestamp, packetRetrievalOptions)
+				?? await packetSink.getFirstKeyPacket(packetRetrievalOptions);
 
 			let currentPacket: EncodedPacket | null = keyPacket;
 
@@ -541,7 +548,7 @@ export abstract class BaseMediaSampleSink<
 			// it.
 			const endPacket = undefined;
 
-			const packets = packetSink.packets(keyPacket ?? undefined, endPacket);
+			const packets = packetSink.packets(keyPacket ?? undefined, endPacket, packetRetrievalOptions);
 			await packets.next(); // Skip the start packet as we already have it
 
 			while (currentPacket && !ended && !this._track.input._disposed) {
@@ -633,6 +640,7 @@ export abstract class BaseMediaSampleSink<
 	/** @internal */
 	protected mediaSamplesAtTimestamps(
 		timestamps: AnyIterable<number>,
+		options: PacketRetrievalOptions,
 	): AsyncGenerator<MediaSample | null, void, unknown> {
 		validateAnyIterable(timestamps);
 		const timestampIterator = toAsyncIterator(timestamps);
@@ -653,6 +661,12 @@ export abstract class BaseMediaSampleSink<
 			sampleQueue.push(sample);
 			onQueueNotEmpty();
 			({ promise: queueNotEmpty, resolve: onQueueNotEmpty } = promiseWithResolvers());
+		};
+
+		const retrievalOptions: PacketRetrievalOptions = {
+			...options,
+			verifyKeyPackets: true,
+			metadataOnly: false,
 		};
 
 		// The following is the "pump" process that keeps pumping packets into the decoder
@@ -715,7 +729,7 @@ export abstract class BaseMediaSampleSink<
 						break;
 					}
 
-					const nextPacket = await packetSink.getNextPacket(currentPacket);
+					const nextPacket = await packetSink.getNextPacket(currentPacket, retrievalOptions);
 					assert(nextPacket);
 
 					decoder.decode(nextPacket);
@@ -743,8 +757,8 @@ export abstract class BaseMediaSampleSink<
 					break;
 				}
 
-				const targetPacket = await packetSink.getPacket(timestamp);
-				const keyPacket = targetPacket && await packetSink.getKeyPacket(timestamp, { verifyKeyPackets: true });
+				const targetPacket = await packetSink.getPacket(timestamp, retrievalOptions);
+				const keyPacket = targetPacket && await packetSink.getKeyPacket(timestamp, retrievalOptions);
 
 				if (!keyPacket) {
 					if (maxSequenceNumber !== -1) {
@@ -1458,11 +1472,12 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 	 * Returns null if the timestamp is before the track's first timestamp.
 	 *
 	 * @param timestamp - The timestamp used for retrieval, in seconds.
+	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	async getSample(timestamp: number) {
+	async getSample(timestamp: number, options: PacketRetrievalOptions = {}) {
 		validateTimestamp(timestamp);
 
-		for await (const sample of this.mediaSamplesAtTimestamps([timestamp])) {
+		for await (const sample of this.mediaSamplesAtTimestamps([timestamp], options)) {
 			return sample;
 		}
 		throw new Error('Internal error: Iterator returned nothing.');
@@ -1474,9 +1489,10 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 	 *
 	 * @param startTimestamp - The timestamp in seconds at which to start yielding samples (inclusive).
 	 * @param endTimestamp - The timestamp in seconds at which to stop yielding samples (exclusive).
+	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	samples(startTimestamp = 0, endTimestamp = Infinity) {
-		return this.mediaSamplesInRange(startTimestamp, endTimestamp);
+	samples(startTimestamp = 0, endTimestamp = Infinity, options: PacketRetrievalOptions = {}) {
+		return this.mediaSamplesInRange(startTimestamp, endTimestamp, options);
 	}
 
 	/**
@@ -1486,9 +1502,10 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 	 * yield null if no frame is available for a given timestamp.
 	 *
 	 * @param timestamps - An iterable or async iterable of timestamps in seconds.
+	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	samplesAtTimestamps(timestamps: AnyIterable<number>) {
-		return this.mediaSamplesAtTimestamps(timestamps);
+	samplesAtTimestamps(timestamps: AnyIterable<number>, options: PacketRetrievalOptions = {}) {
+		return this.mediaSamplesAtTimestamps(timestamps, options);
 	}
 }
 
@@ -1733,11 +1750,12 @@ export class CanvasSink {
 	 * timestamp. Returns null if the timestamp is before the track's first timestamp.
 	 *
 	 * @param timestamp - The timestamp used for retrieval, in seconds.
+	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	async getCanvas(timestamp: number) {
+	async getCanvas(timestamp: number, options?: PacketRetrievalOptions) {
 		validateTimestamp(timestamp);
 
-		const sample = await this._videoSampleSink.getSample(timestamp);
+		const sample = await this._videoSampleSink.getSample(timestamp, options);
 		return sample && this._videoSampleToWrappedCanvas(sample);
 	}
 
@@ -1747,10 +1765,11 @@ export class CanvasSink {
 	 *
 	 * @param startTimestamp - The timestamp in seconds at which to start yielding canvases (inclusive).
 	 * @param endTimestamp - The timestamp in seconds at which to stop yielding canvases (exclusive).
+	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	canvases(startTimestamp = 0, endTimestamp = Infinity) {
+	canvases(startTimestamp = 0, endTimestamp = Infinity, options?: PacketRetrievalOptions) {
 		return mapAsyncGenerator(
-			this._videoSampleSink.samples(startTimestamp, endTimestamp),
+			this._videoSampleSink.samples(startTimestamp, endTimestamp, options),
 			sample => this._videoSampleToWrappedCanvas(sample),
 		);
 	}
@@ -1762,10 +1781,11 @@ export class CanvasSink {
 	 * no frame is available for a given timestamp.
 	 *
 	 * @param timestamps - An iterable or async iterable of timestamps in seconds.
+	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	canvasesAtTimestamps(timestamps: AnyIterable<number>) {
+	canvasesAtTimestamps(timestamps: AnyIterable<number>, options?: PacketRetrievalOptions) {
 		return mapAsyncGenerator(
-			this._videoSampleSink.samplesAtTimestamps(timestamps),
+			this._videoSampleSink.samplesAtTimestamps(timestamps, options),
 			sample => sample && this._videoSampleToWrappedCanvas(sample),
 		);
 	}
@@ -2133,11 +2153,12 @@ export class AudioSampleSink extends BaseMediaSampleSink<AudioSample> {
 	 * Returns null if the timestamp is before the track's first timestamp.
 	 *
 	 * @param timestamp - The timestamp used for retrieval, in seconds.
+	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	async getSample(timestamp: number) {
+	async getSample(timestamp: number, options: PacketRetrievalOptions = {}) {
 		validateTimestamp(timestamp);
 
-		for await (const sample of this.mediaSamplesAtTimestamps([timestamp])) {
+		for await (const sample of this.mediaSamplesAtTimestamps([timestamp], options)) {
 			return sample;
 		}
 		throw new Error('Internal error: Iterator returned nothing.');
@@ -2149,9 +2170,10 @@ export class AudioSampleSink extends BaseMediaSampleSink<AudioSample> {
 	 *
 	 * @param startTimestamp - The timestamp in seconds at which to start yielding samples (inclusive).
 	 * @param endTimestamp - The timestamp in seconds at which to stop yielding samples (exclusive).
+	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	samples(startTimestamp = 0, endTimestamp = Infinity) {
-		return this.mediaSamplesInRange(startTimestamp, endTimestamp);
+	samples(startTimestamp = 0, endTimestamp = Infinity, options: PacketRetrievalOptions = {}) {
+		return this.mediaSamplesInRange(startTimestamp, endTimestamp, options);
 	}
 
 	/**
@@ -2161,9 +2183,10 @@ export class AudioSampleSink extends BaseMediaSampleSink<AudioSample> {
 	 * yield null if no sample is available for a given timestamp.
 	 *
 	 * @param timestamps - An iterable or async iterable of timestamps in seconds.
+	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	samplesAtTimestamps(timestamps: AnyIterable<number>) {
-		return this.mediaSamplesAtTimestamps(timestamps);
+	samplesAtTimestamps(timestamps: AnyIterable<number>, options: PacketRetrievalOptions = {}) {
+		return this.mediaSamplesAtTimestamps(timestamps, options);
 	}
 }
 
@@ -2219,11 +2242,12 @@ export class AudioBufferSink {
 	 * Returns null if the timestamp is before the track's first timestamp.
 	 *
 	 * @param timestamp - The timestamp used for retrieval, in seconds.
+	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	async getBuffer(timestamp: number) {
+	async getBuffer(timestamp: number, options?: PacketRetrievalOptions) {
 		validateTimestamp(timestamp);
 
-		const data = await this._audioSampleSink.getSample(timestamp);
+		const data = await this._audioSampleSink.getSample(timestamp, options);
 		return data && this._audioSampleToWrappedArrayBuffer(data);
 	}
 
@@ -2233,10 +2257,11 @@ export class AudioBufferSink {
 	 *
 	 * @param startTimestamp - The timestamp in seconds at which to start yielding buffers (inclusive).
 	 * @param endTimestamp - The timestamp in seconds at which to stop yielding buffers (exclusive).
+	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	buffers(startTimestamp = 0, endTimestamp = Infinity) {
+	buffers(startTimestamp = 0, endTimestamp = Infinity, options?: PacketRetrievalOptions) {
 		return mapAsyncGenerator(
-			this._audioSampleSink.samples(startTimestamp, endTimestamp),
+			this._audioSampleSink.samples(startTimestamp, endTimestamp, options),
 			data => this._audioSampleToWrappedArrayBuffer(data),
 		);
 	}
@@ -2248,10 +2273,11 @@ export class AudioBufferSink {
 	 * yield null if no buffer is available for a given timestamp.
 	 *
 	 * @param timestamps - An iterable or async iterable of timestamps in seconds.
+	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	buffersAtTimestamps(timestamps: AnyIterable<number>) {
+	buffersAtTimestamps(timestamps: AnyIterable<number>, options?: PacketRetrievalOptions) {
 		return mapAsyncGenerator(
-			this._audioSampleSink.samplesAtTimestamps(timestamps),
+			this._audioSampleSink.samplesAtTimestamps(timestamps, options),
 			data => data && this._audioSampleToWrappedArrayBuffer(data),
 		);
 	}
