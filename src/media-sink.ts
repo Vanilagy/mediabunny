@@ -65,6 +65,13 @@ export type PacketRetrievalOptions = {
 	 * its data, this option cannot be enabled together with `metadataOnly`.
 	 */
 	verifyKeyPackets?: boolean;
+
+	/**
+	 * When querying packets in live media that are in the future relative to the current live edge, Mediabunny will,
+	 * by default, wait for the stream to advance until the query can be satisfied. Set this to `true` to only use the
+	 * currently known packets and never wait for the live edge to catch up.
+	 */
+	skipLiveWait?: boolean;
 };
 
 const validatePacketRetrievalOptions = (options: PacketRetrievalOptions) => {
@@ -79,6 +86,9 @@ const validatePacketRetrievalOptions = (options: PacketRetrievalOptions) => {
 	}
 	if (options.verifyKeyPackets && options.metadataOnly) {
 		throw new TypeError('options.verifyKeyPackets and options.metadataOnly cannot be enabled together.');
+	}
+	if (options.skipLiveWait !== undefined && typeof options.skipLiveWait !== 'boolean') {
+		throw new TypeError('options.skipLiveWait, when defined, must be a boolean.');
 	}
 };
 
@@ -399,6 +409,8 @@ export abstract class BaseMediaSampleSink<
 > {
 	/** @internal */
 	abstract _track: InputTrack;
+	/** @internal */
+	_packetRetrievalOptions: PacketRetrievalOptions = {};
 
 	/** @internal */
 	abstract _createDecoder(
@@ -475,8 +487,10 @@ export abstract class BaseMediaSampleSink<
 			});
 
 			const packetSink = this._createPacketSink();
-			const keyPacket = await packetSink.getKeyPacket(startTimestamp, { verifyKeyPackets: true })
-				?? await packetSink.getFirstPacket();
+			const keyPacket = await packetSink.getKeyPacket(startTimestamp, {
+				...this._packetRetrievalOptions,
+				verifyKeyPackets: true,
+			}) ?? await packetSink.getFirstPacket(this._packetRetrievalOptions);
 
 			let currentPacket: EncodedPacket | null = keyPacket;
 
@@ -488,7 +502,7 @@ export abstract class BaseMediaSampleSink<
 			// it.
 			const endPacket = undefined;
 
-			const packets = packetSink.packets(keyPacket ?? undefined, endPacket);
+			const packets = packetSink.packets(keyPacket ?? undefined, endPacket, this._packetRetrievalOptions);
 			await packets.next(); // Skip the start packet as we already have it
 
 			while (currentPacket && !ended && !this._track.input._disposed) {
@@ -662,7 +676,7 @@ export abstract class BaseMediaSampleSink<
 						break;
 					}
 
-					const nextPacket = await packetSink.getNextPacket(currentPacket);
+					const nextPacket = await packetSink.getNextPacket(currentPacket, this._packetRetrievalOptions);
 					assert(nextPacket);
 
 					decoder.decode(nextPacket);
@@ -690,8 +704,11 @@ export abstract class BaseMediaSampleSink<
 					break;
 				}
 
-				const targetPacket = await packetSink.getPacket(timestamp);
-				const keyPacket = targetPacket && await packetSink.getKeyPacket(timestamp, { verifyKeyPackets: true });
+				const targetPacket = await packetSink.getPacket(timestamp, this._packetRetrievalOptions);
+				const keyPacket = targetPacket && await packetSink.getKeyPacket(timestamp, {
+					...this._packetRetrievalOptions,
+					verifyKeyPackets: true,
+				});
 
 				if (!keyPacket) {
 					if (maxSequenceNumber !== -1) {
@@ -1363,14 +1380,18 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 	_track: InputVideoTrack;
 
 	/** Creates a new {@link VideoSampleSink} for the given {@link InputVideoTrack}. */
-	constructor(videoTrack: InputVideoTrack) {
+	constructor(videoTrack: InputVideoTrack, options: PacketRetrievalOptions = {}) {
 		if (!(videoTrack instanceof InputVideoTrack)) {
 			throw new TypeError('videoTrack must be an InputVideoTrack.');
 		}
+		validatePacketRetrievalOptions(options);
 
 		super();
 
 		this._track = videoTrack;
+		this._packetRetrievalOptions = {
+			skipLiveWait: options.skipLiveWait,
+		};
 	}
 
 	/** @internal */
@@ -1500,6 +1521,11 @@ export type CanvasSinkOptions = {
 	 * canvas is created each time.
 	 */
 	poolSize?: number;
+	/**
+	 * When set to `true`, random-access frame queries on live media will never wait for the live edge to advance and
+	 * will instead use only the currently known packets.
+	 */
+	skipLiveWait?: boolean;
 };
 
 /**
@@ -1575,6 +1601,9 @@ export class CanvasSink {
 		) {
 			throw new TypeError('poolSize must be a non-negative integer.');
 		}
+		if (options.skipLiveWait !== undefined && typeof options.skipLiveWait !== 'boolean') {
+			throw new TypeError('options.skipLiveWait, when defined, must be a boolean.');
+		}
 
 		const rotation = options.rotation ?? videoTrack.rotation;
 
@@ -1611,7 +1640,7 @@ export class CanvasSink {
 		this._rotation = rotation;
 		this._crop = crop;
 		this._fit = options.fit ?? 'fill';
-		this._videoSampleSink = new VideoSampleSink(videoTrack);
+		this._videoSampleSink = new VideoSampleSink(videoTrack, { skipLiveWait: options.skipLiveWait });
 		this._canvasPool = Array.from({ length: options.poolSize ?? 0 }, () => null);
 	}
 
