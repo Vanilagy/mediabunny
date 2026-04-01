@@ -2,17 +2,32 @@ import { expect, test } from 'vitest';
 import { Output } from '../../src/output.js';
 import { Mp4OutputFormat, WebMOutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
-import { VideoSampleSource } from '../../src/media-source.js';
-import { VideoSample } from '../../src/sample.js';
+import { AudioSampleSource, VideoSampleSource } from '../../src/media-source.js';
+import { AudioSample, VideoSample } from '../../src/sample.js';
 import { QUALITY_MEDIUM } from '../../src/encode.js';
 import { Input } from '../../src/input.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { BufferSource } from '../../src/source.js';
 import { VideoSampleSink } from '../../src/media-sink.js';
 import { assert, Rotation } from '../../src/misc.js';
-import { InputVideoTrack } from '../../src/input-track.js';
+import { InputAudioTrack, InputVideoTrack } from '../../src/input-track.js';
 
-test('VideoSampleSource.close() should be idempotent after finalize()', async () => {
+test('VideoSampleSource, normal usage', async () => {
+	const buffer = await encodeFrames(
+		{ codec: 'vp8', bitrate: QUALITY_MEDIUM },
+		[{ width: 100, height: 100 }, { width: 100, height: 100 }, { width: 100, height: 100 }],
+	);
+
+	const samples = await readBackSamples(buffer);
+	expect(samples).toHaveLength(3);
+
+	for (const sample of samples) {
+		expect(sample.codedWidth).toBe(100);
+		expect(sample.codedHeight).toBe(100);
+	}
+});
+
+test('VideoSampleSource, .close() should be idempotent after finalize()', async () => {
 	const output = new Output({
 		format: new WebMOutputFormat(),
 		target: new BufferTarget(),
@@ -40,7 +55,7 @@ test('VideoSampleSource.close() should be idempotent after finalize()', async ()
 	videoSource.close(); // This previously threw
 });
 
-test('Changing input dimensions throws with deny (default)', async () => {
+test('VideoSampleSource, changing input dimensions throws with deny (default)', async () => {
 	const output = new Output({
 		format: new Mp4OutputFormat(),
 		target: new BufferTarget(),
@@ -65,7 +80,7 @@ test('Changing input dimensions throws with deny (default)', async () => {
 	videoSource.close();
 });
 
-test('Changing input dimensions with passThrough preserves per-frame dimensions', async () => {
+test('VideoSampleSource, changing input dimensions with passThrough preserves per-frame dimensions', async () => {
 	const buffer = await encodeFrames(
 		{ codec: 'vp8', bitrate: QUALITY_MEDIUM, sizeChangeBehavior: 'passThrough' },
 		[{ width: 100, height: 100 }, { width: 200, height: 150 }],
@@ -81,21 +96,24 @@ test('Changing input dimensions with passThrough preserves per-frame dimensions'
 	).toBe(true);
 });
 
-test('Changing input dimensions with fill/contain/cover locks output to first frame dimensions', async () => {
-	for (const behavior of ['fill', 'contain', 'cover'] as const) {
-		const buffer = await encodeFrames(
-			{ codec: 'vp8', bitrate: QUALITY_MEDIUM, sizeChangeBehavior: behavior },
-			[{ width: 100, height: 100 }, { width: 200, height: 150 }],
-		);
+test(
+	'VideoSampleSource, changing input dimensions with fill/contain/cover locks output to first frame dimensions',
+	async () => {
+		for (const behavior of ['fill', 'contain', 'cover'] as const) {
+			const buffer = await encodeFrames(
+				{ codec: 'vp8', bitrate: QUALITY_MEDIUM, sizeChangeBehavior: behavior },
+				[{ width: 100, height: 100 }, { width: 200, height: 150 }],
+			);
 
-		const { input, track } = await readBackTrack(buffer);
-		expect(track.codedWidth).toBe(100);
-		expect(track.codedHeight).toBe(100);
-		input.dispose();
-	}
-});
+			const { input, track } = await readBackTrack(buffer);
+			expect(track.codedWidth).toBe(100);
+			expect(track.codedHeight).toBe(100);
+			input.dispose();
+		}
+	},
+);
 
-test('Same-sized frames with width and height set', async () => {
+test('VideoSampleSource, same-sized frames with width and height set', async () => {
 	const buffer = await encodeFrames(
 		{ codec: 'vp8', bitrate: QUALITY_MEDIUM, transform: { width: 50, height: 80, fit: 'fill' } },
 		[{ width: 100, height: 100 }, { width: 100, height: 100 }],
@@ -107,7 +125,7 @@ test('Same-sized frames with width and height set', async () => {
 	input.dispose();
 });
 
-test('Same-sized frames with rotation set to 90', async () => {
+test('VideoSampleSource, same-sized frames with rotation set to 90', async () => {
 	const buffer = await encodeFrames(
 		{ codec: 'vp8', bitrate: QUALITY_MEDIUM, transform: { rotate: 90 } },
 		[{ width: 200, height: 100 }, { width: 200, height: 100 }],
@@ -119,7 +137,7 @@ test('Same-sized frames with rotation set to 90', async () => {
 	input.dispose();
 });
 
-test('Same-sized frames with rotation, width and height', async () => {
+test('VideoSampleSource, same-sized frames with rotation, width and height', async () => {
 	const buffer = await encodeFrames(
 		{ codec: 'vp8', bitrate: QUALITY_MEDIUM, transform: { rotate: 90, width: 50, height: 80, fit: 'contain' } },
 		[{ width: 200, height: 100 }, { width: 200, height: 100 }],
@@ -131,7 +149,7 @@ test('Same-sized frames with rotation, width and height', async () => {
 	input.dispose();
 });
 
-test('Changing dimensions with passThrough and rotation 90', async () => {
+test('VideoSampleSource, changing dimensions with passThrough and rotation 90', async () => {
 	const buffer = await encodeFrames(
 		{ codec: 'vp8', bitrate: QUALITY_MEDIUM, sizeChangeBehavior: 'passThrough', transform: { rotate: 90 } },
 		[{ width: 200, height: 100 }, { width: 300, height: 150 }],
@@ -147,7 +165,7 @@ test('Changing dimensions with passThrough and rotation 90', async () => {
 	).toBe(true);
 });
 
-test('Changing dimensions with passThrough, width and height set', async () => {
+test('VideoSampleSource, changing dimensions with passThrough, width and height set', async () => {
 	const buffer = await encodeFrames(
 		{
 			codec: 'vp8',
@@ -169,7 +187,7 @@ test('Changing dimensions with passThrough, width and height set', async () => {
 	expect(samples[1]).toMatchObject({ codedWidth: 50, codedHeight: 80 });
 });
 
-test('Encoding rotated video frames', async () => {
+test('VideoSampleSource, encoding rotated video frames', async () => {
 	const buffer = await encodeFrames(
 		{ codec: 'vp8', bitrate: QUALITY_MEDIUM },
 		[{ width: 200, height: 100, rotation: 90 }, { width: 200, height: 100, rotation: 90 }],
@@ -184,7 +202,7 @@ test('Encoding rotated video frames', async () => {
 	}
 });
 
-test('Encoding rotated video frames with forced transform', async () => {
+test('VideoSampleSource, encoding rotated video frames with forced transform', async () => {
 	const buffer = await encodeFrames(
 		{ codec: 'vp8', bitrate: QUALITY_MEDIUM, transform: { force: true } },
 		[{ width: 200, height: 100, rotation: 90 }, { width: 200, height: 100, rotation: 90 }],
@@ -199,7 +217,7 @@ test('Encoding rotated video frames with forced transform', async () => {
 	}
 });
 
-test('transform.process identity function', async () => {
+test('VideoSampleSource, transform.process identity function', async () => {
 	const buffer = await encodeFrames(
 		{ codec: 'vp8', bitrate: QUALITY_MEDIUM, transform: { process: sample => sample } },
 		[{ width: 100, height: 100 }, { width: 100, height: 100 }, { width: 100, height: 100 }],
@@ -213,7 +231,7 @@ test('transform.process identity function', async () => {
 	}
 });
 
-test('transform.process manual resize', async () => {
+test('VideoSampleSource, transform.process manual resize', async () => {
 	const buffer = await encodeFrames(
 		{
 			codec: 'vp8',
@@ -241,7 +259,7 @@ test('transform.process manual resize', async () => {
 	input.dispose();
 });
 
-test('transform.process receives pre-transformed frames', async () => {
+test('VideoSampleSource, transform.process receives pre-transformed frames', async () => {
 	const receivedDimensions: { width: number; height: number }[] = [];
 
 	const buffer = await encodeFrames(
@@ -276,7 +294,7 @@ test('transform.process receives pre-transformed frames', async () => {
 	input.dispose();
 });
 
-test('transform.process drops all frames after the first', async () => {
+test('VideoSampleSource, transform.process drops all frames after the first', async () => {
 	let frameIndex = 0;
 
 	const buffer = await encodeFrames(
@@ -299,7 +317,7 @@ test('transform.process drops all frames after the first', async () => {
 	expect(samples).toHaveLength(1);
 });
 
-test('transform.process expands every frame into two', async () => {
+test('VideoSampleSource, transform.process expands every frame into two', async () => {
 	const buffer = await encodeFrames(
 		{
 			codec: 'vp8',
@@ -331,7 +349,7 @@ test('transform.process expands every frame into two', async () => {
 	}
 });
 
-test('transform.frameRate normalizes variable-rate input to fixed rate', async () => {
+test('VideoSampleSource, transform.frameRate normalizes variable-rate input to fixed rate', async () => {
 	const buffer = await encodeFrames(
 		{ codec: 'vp8', bitrate: QUALITY_MEDIUM, transform: { frameRate: 10 } },
 		[
@@ -349,7 +367,7 @@ test('transform.frameRate normalizes variable-rate input to fixed rate', async (
 	}
 });
 
-test('transform.frameRate pads gaps by repeating last frame', async () => {
+test('VideoSampleSource, transform.frameRate pads gaps by repeating last frame', async () => {
 	const buffer = await encodeFrames(
 		{ codec: 'vp8', bitrate: QUALITY_MEDIUM, transform: { frameRate: 10 } },
 		[
@@ -366,7 +384,7 @@ test('transform.frameRate pads gaps by repeating last frame', async () => {
 	}
 });
 
-test('transform.frameRate deduplicates frames in the same slot', async () => {
+test('VideoSampleSource, transform.frameRate deduplicates frames in the same slot', async () => {
 	const buffer = await encodeFrames(
 		{ codec: 'vp8', bitrate: QUALITY_MEDIUM, transform: { frameRate: 10 } },
 		[
@@ -383,7 +401,7 @@ test('transform.frameRate deduplicates frames in the same slot', async () => {
 	expect(samples[1]!.timestamp).toBeCloseTo(0.1);
 });
 
-test('transform.frameRate final padding fills remaining duration', async () => {
+test('VideoSampleSource, transform.frameRate final padding fills remaining duration', async () => {
 	const buffer = await encodeFrames(
 		{ codec: 'vp8', bitrate: QUALITY_MEDIUM, transform: { frameRate: 10 } },
 		[
@@ -398,7 +416,7 @@ test('transform.frameRate final padding fills remaining duration', async () => {
 	}
 });
 
-test('transform.frameRate skipping and padding combined', async () => {
+test('VideoSampleSource, transform.frameRate skipping and padding combined', async () => {
 	const buffer = await encodeFrames(
 		{ codec: 'vp8', bitrate: QUALITY_MEDIUM, transform: { frameRate: 10 } },
 		[
@@ -418,7 +436,7 @@ test('transform.frameRate skipping and padding combined', async () => {
 	}
 });
 
-test('transform.frameRate works with transform', async () => {
+test('VideoSampleSource, transform.frameRate works with transform', async () => {
 	const buffer = await encodeFrames(
 		{
 			codec: 'vp8',
@@ -440,7 +458,7 @@ test('transform.frameRate works with transform', async () => {
 	}
 });
 
-test('transform.frameRate works with process', async () => {
+test('VideoSampleSource, transform.frameRate works with process', async () => {
 	const processedTimestamps: number[] = [];
 
 	const buffer = await encodeFrames(
@@ -551,4 +569,117 @@ const readBackSamples = async (buffer: ArrayBuffer) => {
 
 	input.dispose();
 	return samples;
+};
+
+test('AudioSampleSource, normal usage', async () => {
+	const sample = makeSineWave(48000, 2, 1);
+	const buffer = await encodeAudio({ codec: 'pcm-s16' }, sample);
+
+	const { input, track } = await readBackAudioTrack(buffer);
+	expect(track.numberOfChannels).toBe(2);
+	expect(track.sampleRate).toBe(48000);
+	expect(await track.computeDuration()).toBe(1);
+	input.dispose();
+});
+
+test('AudioSampleSource, remixed to mono', async () => {
+	const sample = makeSineWave(48000, 2, 1);
+	const buffer = await encodeAudio(
+		{ codec: 'pcm-s16', transform: { numberOfChannels: 1 } },
+		sample,
+	);
+
+	const { input, track } = await readBackAudioTrack(buffer);
+	expect(track.numberOfChannels).toBe(1);
+	expect(track.sampleRate).toBe(48000);
+	expect(await track.computeDuration()).toBe(1);
+	input.dispose();
+});
+
+test('AudioSampleSource, resampled to 44100 Hz', async () => {
+	const sample = makeSineWave(48000, 2, 1);
+	const buffer = await encodeAudio(
+		{ codec: 'pcm-s16', transform: { sampleRate: 44100 } },
+		sample,
+	);
+
+	const { input, track } = await readBackAudioTrack(buffer);
+	expect(track.numberOfChannels).toBe(2);
+	expect(track.sampleRate).toBe(44100);
+	expect(await track.computeDuration()).toBe(1);
+	input.dispose();
+});
+
+test('AudioSampleSource, resampled stereo with non-zero start timestamp', async () => {
+	const sample = makeSineWave(48000, 2, 1, 1);
+	const buffer = await encodeAudio(
+		{ codec: 'pcm-s16', transform: { numberOfChannels: 2 } },
+		sample,
+	);
+
+	const { input, track } = await readBackAudioTrack(buffer);
+	expect(track.numberOfChannels).toBe(2);
+	expect(track.sampleRate).toBe(48000);
+
+	expect(await track.getFirstTimestamp()).toBe(1);
+	expect(await track.computeDuration()).toBe(2);
+	input.dispose();
+});
+
+const makeSineWave = (
+	sampleRate: number,
+	numberOfChannels: number,
+	durationSeconds: number,
+	timestamp = 0,
+) => {
+	const numberOfFrames = Math.round(sampleRate * durationSeconds);
+	const data = new Float32Array(numberOfFrames * numberOfChannels);
+
+	for (let frame = 0; frame < numberOfFrames; frame++) {
+		const value = Math.sin(2 * Math.PI * 440 * frame / sampleRate);
+		for (let ch = 0; ch < numberOfChannels; ch++) {
+			data[frame * numberOfChannels + ch] = value;
+		}
+	}
+
+	return new AudioSample({
+		data,
+		format: 'f32-planar',
+		sampleRate,
+		numberOfChannels,
+		numberOfFrames,
+		timestamp,
+	});
+};
+
+const encodeAudio = async (
+	encodingConfig: ConstructorParameters<typeof AudioSampleSource>[0],
+	sample: AudioSample,
+) => {
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart: 'fragmented' }), // Fragmented to avoid the PCM transformation
+		target: new BufferTarget(),
+	});
+
+	const audioSource = new AudioSampleSource(encodingConfig);
+	output.addAudioTrack(audioSource);
+	await output.start();
+
+	await audioSource.add(sample);
+	sample.close();
+
+	await output.finalize();
+	return output.target.buffer!;
+};
+
+const readBackAudioTrack = async (buffer: ArrayBuffer) => {
+	const input = new Input({
+		source: new BufferSource(buffer),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryAudioTrack() as InputAudioTrack;
+	assert(track);
+
+	return { input, track };
 };

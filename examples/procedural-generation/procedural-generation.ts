@@ -147,7 +147,7 @@ const generateVideo = async () => {
 			bitrate: QUALITY_HIGH,
 			keyFrameInterval: 2,
 			transform: {
-				frameRate: 5,
+				// frameRate: 5,
 			},
 		});
 		output.addVideoTrack(canvasSource, { frameRate });
@@ -167,8 +167,11 @@ const generateVideo = async () => {
 			audioBufferSource = new AudioBufferSource({
 				codec: audioCodec,
 				bitrate: QUALITY_HIGH,
+				transform: {
+
+				},
 			});
-			// output.addAudioTrack(audioBufferSource);
+			output.addAudioTrack(audioBufferSource);
 
 			/*
 			audioBufferSource2 = new AudioBufferSource({
@@ -219,8 +222,8 @@ const generateVideo = async () => {
 			// Let's render the audio. Ideally, the audio is rendered before the video (or concurrently to it), but for
 			// simplicity, we're rendering it after we've cranked through all frames.
 			const audioBuffer = await audioContext.startRendering();
-			// await audioBufferSource.add(audioBuffer);
-			// audioBufferSource.close();
+			await audioBufferSource.add(audioBuffer);
+			audioBufferSource.close();
 
 			// await audioBufferSource2!.add(audioBuffer);
 			// audioBufferSource2!.close();

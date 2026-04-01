@@ -59,6 +59,7 @@ import {
 	validateVideoEncodingConfig,
 	VideoEncodingConfig,
 } from './encode';
+import { AudioResampler } from './resample';
 
 /**
  * Base class for media sources. Media sources are used to add media samples to an output file.
@@ -1778,6 +1779,8 @@ class AudioEncoderWrapper {
 
 	private lastEndSampleIndex: number | null = null;
 
+	private resampler: AudioResampler | null = null;
+
 	/**
 	 * Encoders typically throw their errors "out of band", meaning asynchronously in some other execution context.
 	 * However, we want to surface these errors to the user within the normal control flow, so they don't go uncaught.
@@ -1809,6 +1812,75 @@ class AudioEncoderWrapper {
 				this.lastSampleRate = audioSample.sampleRate;
 			}
 
+			const config = this.encodingConfig;
+			const needsResample = config.transform?.numberOfChannels !== undefined
+				|| config.transform?.sampleRate !== undefined;
+
+			if (needsResample) {
+				if (!this.resampler) {
+					// Initialize the resampler on first sample
+					this.resampler = new AudioResampler({
+						targetNumberOfChannels: config.transform!.numberOfChannels
+							?? audioSample.numberOfChannels,
+						targetSampleRate: config.transform!.sampleRate
+							?? audioSample.sampleRate,
+						startTime: audioSample.timestamp,
+						endTime: Infinity,
+						onSample: async (sample) => {
+							await this.processAndEncode(sample, true);
+						},
+					});
+				}
+
+				await this.resampler.add(audioSample);
+			} else {
+				await this.processAndEncode(audioSample, shouldClose);
+			}
+		} finally {
+			if (shouldClose) {
+				audioSample.close();
+			}
+		}
+	}
+
+	/**
+	 * Runs the process function (if any) and encodes the resulting samples.
+	 */
+	private async processAndEncode(audioSample: AudioSample, shouldClose: boolean) {
+		const config = this.encodingConfig;
+
+		if (config.transform?.process) {
+			let processed = config.transform.process(audioSample);
+			if (processed instanceof Promise) {
+				processed = await processed;
+			}
+
+			if (processed === null) {
+				return;
+			}
+
+			if (!Array.isArray(processed)) {
+				processed = [processed];
+			}
+
+			for (const sample of processed) {
+				if (!(sample instanceof AudioSample)) {
+					throw new TypeError(
+						'The audio process function must return an AudioSample, null, or an array of AudioSamples.',
+					);
+				}
+				await this.encodeSample(sample, true);
+			}
+		} else {
+			await this.encodeSample(audioSample, shouldClose);
+		}
+	}
+
+	/**
+	 * Encodes a single audio sample, handling encoder init, gap padding, and backpressure.
+	 */
+	private async encodeSample(audioSample: AudioSample, shouldClose: boolean) {
+		try {
 			if (!this.encoderInitialized) {
 				if (!this.ensureEncoderPromise) {
 					this.ensureEncoder(audioSample);
@@ -1853,7 +1925,7 @@ class AudioEncoderWrapper {
 							timestamp: this.lastEndSampleIndex / audioSample.sampleRate,
 						});
 
-						await this.add(fillSample, true); // Recursive call
+						await this.encodeSample(fillSample, true); // Recursive call
 					}
 
 					this.lastEndSampleIndex += audioSample.numberOfFrames;
@@ -1872,7 +1944,6 @@ class AudioEncoderWrapper {
 					.catch((error: Error) => this.error ??= error)
 					.finally(() => {
 						clonedSample.close();
-						// `audioSample` gets closed in the finally block at the end of the method
 					});
 
 				if (this.customEncoderQueueSize >= 4) {
@@ -1900,7 +1971,6 @@ class AudioEncoderWrapper {
 			}
 		} finally {
 			if (shouldClose) {
-				// Make sure it's always closed, even if there was an error
 				audioSample.close();
 			}
 		}
@@ -2189,7 +2259,15 @@ class AudioEncoderWrapper {
 	}
 
 	async flushAndClose(forceClose: boolean) {
-		if (!forceClose) this.checkForEncoderError();
+		if (!forceClose) {
+			this.checkForEncoderError();
+		}
+
+		// Finalize the resampler to flush any buffered audio
+		if (!forceClose && this.resampler) {
+			await this.resampler.finalize();
+		}
+		this.resampler = null;
 
 		if (this.customEncoder) {
 			if (!forceClose) {
@@ -2207,7 +2285,9 @@ class AudioEncoderWrapper {
 			}
 		}
 
-		if (!forceClose) this.checkForEncoderError();
+		if (!forceClose) {
+			this.checkForEncoderError();
+		}
 	}
 
 	getQueueSize() {

@@ -24,7 +24,7 @@ import {
 import { customAudioEncoders, customVideoEncoders } from './custom-coder';
 import { isFirefox, MaybePromise, Rotation } from './misc';
 import { EncodedPacket } from './packet';
-import { CropRectangle, validateCropRectangle, VideoSample } from './sample';
+import { AudioSample, CropRectangle, validateCropRectangle, VideoSample } from './sample';
 
 const canEncodeVideoMemo = new Map<string, Promise<boolean>>();
 const canEncodeAudioMemo = new Map<string, Promise<boolean>>();
@@ -355,6 +355,25 @@ export type AudioEncodingConfig = {
 	 */
 	bitrate?: number | Quality;
 
+	/**
+	 * Optional transformations to apply to the audio samples before they are passed to the encoder.
+	 */
+	transform?: {
+		/** The desired number of output channels to up/downmix to. */
+		numberOfChannels?: number;
+		/** The desired output sample rate in hertz to resample to. */
+		sampleRate?: number;
+		/**
+		 * Allows for custom user-defined processing of audio samples, e.g. for applying audio effects or timestamp
+		 * modifications. Called for each audio sample after resampling and remixing.
+		 *
+		 * Must return an {@link AudioSample}, an array of them, or `null` for dropping the sample.
+		 */
+		process?: (sample: AudioSample) => MaybePromise<
+			AudioSample | AudioSample[] | null
+		>;
+	};
+
 	/** Called for each successfully encoded packet. Both the packet and the encoding metadata are passed. */
 	onEncodedPacket?: (packet: EncodedPacket, meta: EncodedAudioChunkMetadata | undefined) => unknown;
 	/**
@@ -383,6 +402,26 @@ export const validateAudioEncodingConfig = (config: AudioEncodingConfig) => {
 		&& (!Number.isInteger(config.bitrate) || config.bitrate <= 0)
 	) {
 		throw new TypeError('config.bitrate, when provided, must be a positive integer or a quality.');
+	}
+	if (config.transform !== undefined) {
+		if (typeof config.transform !== 'object' || !config.transform) {
+			throw new TypeError('config.transform, when provided, must be an object.');
+		}
+		if (
+			config.transform.numberOfChannels !== undefined
+			&& (!Number.isInteger(config.transform.numberOfChannels) || config.transform.numberOfChannels <= 0)
+		) {
+			throw new TypeError('config.transform.numberOfChannels, when provided, must be a positive integer.');
+		}
+		if (
+			config.transform.sampleRate !== undefined
+			&& (!Number.isInteger(config.transform.sampleRate) || config.transform.sampleRate <= 0)
+		) {
+			throw new TypeError('config.transform.sampleRate, when provided, must be a positive integer.');
+		}
+		if (config.transform.process !== undefined && typeof config.transform.process !== 'function') {
+			throw new TypeError('config.transform.process, when provided, must be a function.');
+		}
 	}
 	if (config.onEncodedPacket !== undefined && typeof config.onEncodedPacket !== 'function') {
 		throw new TypeError('config.onEncodedChunk, when provided, must be a function.');
