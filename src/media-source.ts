@@ -309,7 +309,8 @@ class VideoEncoderWrapper {
 			const hasTransformConfig = config.transform?.width !== undefined
 				|| config.transform?.height !== undefined
 				|| config.transform?.rotate !== undefined
-				|| config.transform?.crop !== undefined;
+				|| config.transform?.crop !== undefined
+				|| config.transform?.force === true;
 			const needsTransform = hasTransformConfig || (isSizeChange && sizeChangeBehavior !== 'passThrough');
 
 			if (needsTransform) {

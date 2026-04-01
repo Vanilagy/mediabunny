@@ -112,6 +112,11 @@ export type VideoEncodingConfig = {
 		process?: (sample: VideoSample) => MaybePromise<
 			CanvasImageSource | VideoSample | (CanvasImageSource | VideoSample)[] | null
 		>;
+		/**
+		 * Forces every video frame through the transformation step even if no transformation properties are defined.
+		 * This can be used, for example, to bake rotation into the encoded video frames.
+		 */
+		force?: boolean;
 	};
 
 	/** Called for each successfully encoded packet. Both the packet and the encoding metadata are passed. */
@@ -201,6 +206,9 @@ export const validateVideoEncodingConfig = (config: VideoEncodingConfig) => {
 			&& (!Number.isFinite(config.transform.frameRate) || config.transform.frameRate <= 0)
 		) {
 			throw new TypeError('config.transform.frameRate, when provided, must be a finite positive number.');
+		}
+		if (config.transform.force !== undefined && typeof config.transform.force !== 'boolean') {
+			throw new TypeError('config.transform.force, when provided, must be a boolean.');
 		}
 	}
 	if (config.onEncodedPacket !== undefined && typeof config.onEncodedPacket !== 'function') {

@@ -9,7 +9,7 @@ import { Input } from '../../src/input.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { BufferSource } from '../../src/source.js';
 import { VideoSampleSink } from '../../src/media-sink.js';
-import { assert } from '../../src/misc.js';
+import { assert, Rotation } from '../../src/misc.js';
 import { InputVideoTrack } from '../../src/input-track.js';
 
 test('VideoSampleSource.close() should be idempotent after finalize()', async () => {
@@ -167,6 +167,36 @@ test('Changing dimensions with passThrough, width and height set', async () => {
 	// Both frames should be resized to the fixed width/height
 	expect(samples[0]).toMatchObject({ codedWidth: 50, codedHeight: 80 });
 	expect(samples[1]).toMatchObject({ codedWidth: 50, codedHeight: 80 });
+});
+
+test('Encoding rotated video frames', async () => {
+	const buffer = await encodeFrames(
+		{ codec: 'vp8', bitrate: QUALITY_MEDIUM },
+		[{ width: 200, height: 100, rotation: 90 }, { width: 200, height: 100, rotation: 90 }],
+	);
+
+	const samples = await readBackSamples(buffer);
+
+	// They were encoded with no regard for the rotation metadata
+	for (const sample of samples) {
+		expect(sample.codedWidth).toBe(200);
+		expect(sample.codedHeight).toBe(100);
+	}
+});
+
+test('Encoding rotated video frames with forced transform', async () => {
+	const buffer = await encodeFrames(
+		{ codec: 'vp8', bitrate: QUALITY_MEDIUM, transform: { force: true } },
+		[{ width: 200, height: 100, rotation: 90 }, { width: 200, height: 100, rotation: 90 }],
+	);
+
+	const samples = await readBackSamples(buffer);
+
+	// The rotation has been baked into the samples
+	for (const sample of samples) {
+		expect(sample.codedWidth).toBe(100);
+		expect(sample.codedHeight).toBe(200);
+	}
 });
 
 test('transform.process identity function', async () => {
@@ -460,7 +490,13 @@ const makeCanvas = (width: number, height: number) => {
 
 const encodeFrames = async (
 	encodingConfig: ConstructorParameters<typeof VideoSampleSource>[0],
-	frames: { width: number; height: number; timestamp?: number; duration?: number }[],
+	frames: {
+		width: number;
+		height: number;
+		timestamp?: number;
+		duration?: number;
+		rotation?: Rotation;
+	}[],
 ) => {
 	const output = new Output({
 		format: new Mp4OutputFormat(),
@@ -477,6 +513,7 @@ const encodeFrames = async (
 		const sample = new VideoSample(canvas, {
 			timestamp: f.timestamp ?? i / 30,
 			duration: f.duration ?? 1 / 30,
+			rotation: f.rotation,
 		});
 		await videoSource.add(sample);
 		sample.close();
