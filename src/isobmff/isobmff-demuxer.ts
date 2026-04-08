@@ -35,6 +35,7 @@ import {
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import {
+	BufferedTimeRange,
 	InputAudioTrack,
 	InputAudioTrackBacking,
 	InputTrack,
@@ -2465,6 +2466,29 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		return firstPacket?.timestamp ?? 0;
 	}
 
+	async getBufferedTimeRanges(): Promise<BufferedTimeRange[]> {
+		const bufferedByteRanges = this.internalTrack.demuxer.reader.source.getBufferedByteRanges();
+		if (bufferedByteRanges.length === 0) {
+			return [];
+		}
+
+		const sampleTable = this.internalTrack.demuxer.getSampleTableForTrack(this.internalTrack);
+		if (sampleTableIsEmpty(sampleTable)) {
+			return [];
+		}
+
+		const ranges: BufferedTimeRange[] = [];
+		appendSampleTableBufferedTimeRanges(
+			ranges,
+			sampleTable,
+			bufferedByteRanges,
+			this.internalTrack.timescale,
+			this.internalTrack.editListOffset,
+		);
+
+		return mergeBufferedTimeRanges(ranges, 1 / this.internalTrack.timescale);
+	}
+
 	async getFirstPacket(options: PacketRetrievalOptions) {
 		const regularPacket = await this.fetchPacketForSampleIndex(0, options);
 		if (regularPacket || !this.internalTrack.demuxer.isFragmented) {
@@ -3152,6 +3176,61 @@ const getSampleInfo = (sampleTable: SampleTable, sampleIndex: number): SampleInf
 			? binarySearchExact(sampleTable.keySampleIndices, sampleIndex, x => x) !== -1
 			: true,
 	};
+};
+
+const appendSampleTableBufferedTimeRanges = (
+	ranges: BufferedTimeRange[],
+	sampleTable: SampleTable,
+	bufferedByteRanges: { start: number; end: number }[],
+	timescale: number,
+	editListOffset: number,
+) => {
+	for (let sampleIndex = 0; sampleIndex < sampleTable.sampleSizes.length; sampleIndex++) {
+		const sampleInfo = getSampleInfo(sampleTable, sampleIndex);
+		if (!sampleInfo) {
+			continue;
+		}
+
+		const sampleStart = sampleInfo.sampleOffset;
+		const sampleEnd = sampleInfo.sampleOffset + sampleInfo.sampleSize;
+		const isBuffered = bufferedByteRanges.some(
+			range => range.start <= sampleStart && sampleEnd <= range.end,
+		);
+		if (!isBuffered) {
+			continue;
+		}
+
+		ranges.push({
+			start: (sampleInfo.presentationTimestamp - editListOffset) / timescale,
+			end: (sampleInfo.presentationTimestamp - editListOffset + sampleInfo.duration) / timescale,
+		});
+	}
+};
+
+const mergeBufferedTimeRanges = (
+	ranges: BufferedTimeRange[],
+	epsilon: number,
+) => {
+	if (ranges.length <= 1) {
+		return ranges;
+	}
+
+	ranges.sort((a, b) => a.start - b.start);
+	const merged: BufferedTimeRange[] = [ranges[0]!];
+
+	for (let i = 1; i < ranges.length; i++) {
+		const current = ranges[i]!;
+		const previous = merged[merged.length - 1]!;
+
+		if (current.start <= previous.end + epsilon) {
+			previous.end = Math.max(previous.end, current.end);
+			continue;
+		}
+
+		merged.push({ ...current });
+	}
+
+	return merged;
 };
 
 const getNextKeyframeIndexForSample = (sampleTable: SampleTable, sampleIndex: number) => {
