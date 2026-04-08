@@ -2,6 +2,7 @@ idea: discontinuities with extra decoder config on the packet.
 Also, why not just have the packet metadata on the packet? I think that would make things easier overall.
 
 - keep input/demuxer.isSupported()?
-- getCodecParamterString() hack feels dirty; idk. well its not really a hack but, surface it over a different field?
 
 - conversion behavior for HLS; only take primary tracks by default?
+
+easier way to create input

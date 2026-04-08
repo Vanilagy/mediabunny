@@ -959,12 +959,12 @@ export const validateRectangle = (rect: Rectangle, propertyPath: string) => {
 	}
 };
 
-export const asc = (value: number | null) => {
-	return value ?? Infinity; // nulls last
+export const asc = (value: number | null | undefined) => {
+	return value ?? Infinity; // nulls and undefined last
 };
 
-export const desc = (value: number | null) => {
-	return -(value ?? -Infinity); // nulls last
+export const desc = (value: number | null | undefined) => {
+	return -(value ?? -Infinity); // nulls and undefined last
 };
 
 export const prefer = (value: boolean) => {

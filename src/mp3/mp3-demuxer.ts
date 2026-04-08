@@ -9,7 +9,7 @@
 import { AudioCodec } from '../codec';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
-import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
+import { InputAudioTrackBacking } from '../input-track';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
 import { PacketRetrievalOptions } from '../media-sink';
 import {
@@ -59,7 +59,7 @@ export class Mp3Demuxer extends Demuxer {
 		fileSize: number | null;
 	} | null = null;
 
-	tracks: InputAudioTrack[] = [];
+	trackBackings: Mp3AudioTrackBacking[] = [];
 
 	readingMutex = new AsyncMutex();
 	lastSampleLoaded = false;
@@ -83,7 +83,7 @@ export class Mp3Demuxer extends Demuxer {
 				throw new Error('No valid MP3 frame found.');
 			}
 
-			this.tracks = [new InputAudioTrack(this.input, new Mp3AudioTrackBacking(this))];
+			this.trackBackings = [new Mp3AudioTrackBacking(this)];
 		})();
 	}
 
@@ -214,9 +214,9 @@ export class Mp3Demuxer extends Demuxer {
 		return 'audio/mpeg';
 	}
 
-	async getTracks() {
+	async getTrackBackings() {
 		await this.readMetadata();
-		return this.tracks;
+		return this.trackBackings;
 	}
 
 	async getMetadataTags() {
@@ -275,6 +275,10 @@ export class Mp3Demuxer extends Demuxer {
 
 class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 	constructor(public demuxer: Mp3Demuxer) {}
+
+	getType() {
+		return 'audio' as const;
+	}
 
 	getId() {
 		return 1;

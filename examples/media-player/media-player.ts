@@ -83,7 +83,7 @@ const initMediaPlayer = async (resource: File | string) => {
 			pause();
 		}
 
-		const dirHandle = await showDirectoryPicker({ mode: 'read' });
+		// const dirHandle = await showDirectoryPicker({ mode: 'read' });
 
 		void videoFrameIterator?.return();
 		void audioBufferIterator?.return();
@@ -103,8 +103,9 @@ const initMediaPlayer = async (resource: File | string) => {
 		let audioTrack: InputAudioTrack | null = null;
 		if (true || typeof resource === 'string' && resource.includes('.m3u8')) {
 			const input = new Input({
-				entryPath: 'master.m3u8',
+				entryPath: resource, // 'master.m3u8',
 				source: async ({ path }) => {
+					return new UrlSource(path);
 					const fileHandle = await dirHandle.getFileHandle(path);
 					const file = await fileHandle.getFile();
 					return new BlobSource(file);
@@ -113,23 +114,24 @@ const initMediaPlayer = async (resource: File | string) => {
 			});
 			// const variant = (await manifestInput.getVariants())[0]!;
 
-			console.log(await input.getFormat(), await input.getTracks());
+			// console.log(await input.getFormat(), await input.getTracks());
 			// return;
 
 			await input.getVideoTracks({
-				filter: track => track.hasPairableAudioTrack(),
-				sortBy: track => asc(track.bitrate),
+				filter: desc => desc.hasPairableAudioTrack(),
+				sortBy: desc => asc(desc.bitrate),
 			});
 
 			videoTrack = await input.getPrimaryVideoTrack({
-				filter: async track => (await track.resolve('displayHeight')) < 1080,
+				filter: async desc => (desc.displayHeight ?? (await desc.getTrack()).displayHeight) < 720,
+				// filter: async track => (await track.resolve('displayHeight')) < 1080,
 			});
 			audioTrack = await input.getPrimaryAudioTrack({
-				sortBy: track => prefer(track.canBePairedWith(videoTrack)),
+				sortBy: desc => prefer(desc.canBePairedWith(videoTrack)),
 			});
 
-			await videoTrack?.hydrate();
-			await audioTrack?.hydrate();
+			// await videoTrack?.hydrate();
+			// await audioTrack?.hydrate();
 
 			totalDuration = Math.max(
 				await videoTrack?.computeDuration({ skipLiveWait: true }) ?? 0,
@@ -770,9 +772,11 @@ document.addEventListener('dragover', (event) => {
 	event.dataTransfer!.dropEffect = 'copy';
 });
 
+/*
 document.addEventListener('click', () => {
 	void initMediaPlayer();
 }, { once: true });
+*/
 
 document.addEventListener('drop', (event) => {
 	event.preventDefault();

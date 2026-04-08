@@ -6,6 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { TrackType } from '../output';
 import { parseAacAudioSpecificConfig } from '../../shared/aac-misc';
 import {
 	AacCodecInfo,
@@ -35,12 +36,8 @@ import {
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import {
-	InputAudioTrack,
 	InputAudioTrackBacking,
-	InputTrack,
 	InputTrackBacking,
-
-	InputVideoTrack,
 	InputVideoTrackBacking,
 } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
@@ -97,7 +94,7 @@ import { Bitstream } from '../../shared/bitstream';
 type InternalTrack = {
 	id: number;
 	demuxer: IsobmffDemuxer;
-	inputTrack: InputTrack | null;
+	trackBacking: InputTrackBacking | null;
 	disposition: TrackDisposition;
 	timescale: number;
 	durationInMovieTimescale: number;
@@ -273,15 +270,18 @@ export class IsobmffDemuxer extends Demuxer {
 		this.reader = input._reader;
 	}
 
-	override async getTracks() {
+	override async getTrackBackings() {
 		await this.readMetadata();
-		return this.tracks.map(track => track.inputTrack!);
+		return this.tracks.map(track => track.trackBacking!);
 	}
 
 	override async getMimeType() {
 		await this.readMetadata();
 
-		const codecStrings = await Promise.all(this.tracks.map(x => x.inputTrack!.getCodecParameterString()));
+		const backings = await this.getTrackBackings();
+		const codecStrings = await Promise.all(backings.map(
+			x => x.getDecoderConfig().then(c => c?.codec ?? null),
+		));
 
 		return buildIsobmffMimeType({
 			isQuickTime: this.isQuickTime,
@@ -365,7 +365,7 @@ export class IsobmffDemuxer extends Demuxer {
 						const track: InternalTrack = {
 							id: foreignTrack.id,
 							demuxer: this,
-							inputTrack: null,
+							trackBacking: null,
 							disposition: foreignTrack.disposition,
 							timescale: foreignTrack.timescale,
 							durationInMediaTimescale: foreignTrack.durationInMediaTimescale,
@@ -384,22 +384,20 @@ export class IsobmffDemuxer extends Demuxer {
 							info: foreignTrack.info,
 						};
 
-						if (foreignTrack.inputTrack) {
+						if (foreignTrack.trackBacking) {
 							assert(track.info);
 
 							if (track.info.type === 'video' && track.info.width !== -1) {
 								const videoTrack = track as InternalVideoTrack;
-								track.inputTrack
-									= new InputVideoTrack(this.input, new IsobmffVideoTrackBacking(videoTrack));
+								track.trackBacking = new IsobmffVideoTrackBacking(videoTrack);
 								this.tracks.push(track);
 							} else if (track.info.type === 'audio' && track.info.numberOfChannels !== -1) {
 								const audioTrack = track as InternalAudioTrack;
-								track.inputTrack
-									= new InputAudioTrack(this.input, new IsobmffAudioTrackBacking(audioTrack));
+								track.trackBacking = new IsobmffAudioTrackBacking(audioTrack);
 								this.tracks.push(track);
 							}
 						} else {
-							// The track didn't have enough info to warrant an input track
+							// The track didn't have enough info to warrant a backing
 						}
 					}
 
@@ -460,7 +458,10 @@ export class IsobmffDemuxer extends Demuxer {
 		let endTimestamp = this.movieDurationInTimescale / this.movieTimescale;
 		if (this.tracks.length > 0) {
 			const minFirstTimestamp = Math.min(
-				...(await Promise.all(this.tracks.map(x => x.inputTrack!.getFirstTimestamp()))),
+				...(await Promise.all(this.tracks.map(async (x) => {
+					const p = await x.trackBacking!.getFirstPacket({ metadataOnly: true });
+					return p?.timestamp ?? 0;
+				}))),
 			);
 			endTimestamp += minFirstTimestamp;
 		}
@@ -760,7 +761,7 @@ export class IsobmffDemuxer extends Demuxer {
 				const track = {
 					id: -1,
 					demuxer: this,
-					inputTrack: null,
+					trackBacking: null,
 					disposition: {
 						...DEFAULT_TRACK_DISPOSITION,
 						primary: false,
@@ -788,11 +789,11 @@ export class IsobmffDemuxer extends Demuxer {
 				if (track.id !== -1 && track.timescale !== -1 && track.info !== null) {
 					if (track.info.type === 'video' && track.info.width !== -1) {
 						const videoTrack = track as InternalVideoTrack;
-						track.inputTrack = new InputVideoTrack(this.input, new IsobmffVideoTrackBacking(videoTrack));
+						track.trackBacking = new IsobmffVideoTrackBacking(videoTrack);
 						this.tracks.push(track);
 					} else if (track.info.type === 'audio' && track.info.numberOfChannels !== -1) {
 						const audioTrack = track as InternalAudioTrack;
-						track.inputTrack = new InputAudioTrack(this.input, new IsobmffAudioTrackBacking(audioTrack));
+						track.trackBacking = new IsobmffAudioTrackBacking(audioTrack);
 						this.tracks.push(track);
 					}
 				}
@@ -2515,18 +2516,20 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 
 	constructor(public internalTrack: InternalTrack) {}
 
+	abstract getType(): TrackType;
+	abstract getDecoderConfig(): Promise<VideoDecoderConfig | AudioDecoderConfig | null>;
+
 	getId() {
 		return this.internalTrack.id;
 	}
 
 	getNumber() {
 		const demuxer = this.internalTrack.demuxer;
-		const inputTrack = this.internalTrack.inputTrack!;
-		const trackType = inputTrack.type;
+		const trackType = this.internalTrack.trackBacking!.getType();
 
 		let number = 0;
 		for (const track of demuxer.tracks) {
-			if (track.inputTrack!.type === trackType) {
+			if (track.trackBacking!.getType() === trackType) {
 				number++;
 			}
 
@@ -2584,9 +2587,10 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			return null;
 		}
 
-		assert(track.inputTrack);
+		assert(track.trackBacking);
 
-		return (await track.inputTrack.getFirstTimestamp()) + track.durationInMediaTimescale / track.timescale;
+		const firstPacket = await track.trackBacking.getFirstPacket({ metadataOnly: true });
+		return (firstPacket?.timestamp ?? 0) + track.durationInMediaTimescale / track.timescale;
 	}
 
 	async getLiveRefreshInterval() {
@@ -3028,6 +3032,10 @@ class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideo
 		this.internalTrack = internalTrack;
 	}
 
+	getType() {
+		return 'video' as const;
+	}
+
 	override getCodec(): VideoCodec | null {
 		return this.internalTrack.info.codec;
 	}
@@ -3107,6 +3115,10 @@ class IsobmffAudioTrackBacking extends IsobmffTrackBacking implements InputAudio
 	constructor(internalTrack: InternalAudioTrack) {
 		super(internalTrack);
 		this.internalTrack = internalTrack;
+	}
+
+	getType() {
+		return 'audio' as const;
 	}
 
 	override getCodec(): AudioCodec | null {

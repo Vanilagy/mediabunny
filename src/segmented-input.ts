@@ -6,6 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { TrackType } from './output';
 import { AudioCodec, MediaCodec, VideoCodec } from './codec';
 import { Demuxer, DurationMetadataRequestOptions } from './demuxer';
 import { Input } from './input';
@@ -15,7 +16,6 @@ import {
 	InputAudioTrackBacking,
 	InputTrack,
 	InputTrackBacking,
-
 	InputVideoTrack,
 	InputVideoTrackBacking,
 } from './input-track';
@@ -107,7 +107,7 @@ export abstract class SegmentedInput {
 
 class SegmentedInputDemuxer extends Demuxer {
 	segmentedInput: SegmentedInput;
-	tracksPromise: Promise<InputTrack[]> | null = null;
+	trackBackingsPromise: Promise<InputTrackBacking[]> | null = null;
 	firstSegment: Segment | null = null;
 	firstSegmentFirstTimestamps = new WeakMap<Segment, number>();
 
@@ -129,8 +129,8 @@ class SegmentedInputDemuxer extends Demuxer {
 		throw new Error('Unreachable');
 	}
 
-	async getTracks(): Promise<InputTrack[]> {
-		return this.tracksPromise ??= (async () => {
+	async getTrackBackings(): Promise<InputTrackBacking[]> {
+		return this.trackBackingsPromise ??= (async () => {
 			this.firstSegment = await this.segmentedInput.getFirstSegment({});
 			if (!this.firstSegment) {
 				return [];
@@ -139,26 +139,24 @@ class SegmentedInputDemuxer extends Demuxer {
 			const input = this.segmentedInput.getInputForSegment(this.firstSegment);
 			const inputTracks = await input.getTracks();
 
-			const tracks: InputTrack[] = [];
+			const backings: InputTrackBacking[] = [];
 			for (const track of inputTracks) {
 				if (track.type === 'video') {
-					const number = arrayCount(tracks, x => x.type === 'video') + 1;
+					const number = arrayCount(backings, x => x.getType() === 'video') + 1;
 
-					tracks.push(new InputVideoTrack(
-						this.input,
+					backings.push(
 						new SegmentedInputInputVideoTrackBacking(track, this, number),
-					));
+					);
 				} else if (track.type === 'audio') {
-					const number = arrayCount(tracks, x => x.type === 'audio') + 1;
+					const number = arrayCount(backings, x => x.getType() === 'audio') + 1;
 
-					tracks.push(new InputAudioTrack(
-						this.input,
+					backings.push(
 						new SegmentedInputInputAudioTrackBacking(track, this, number),
-					));
+					);
 				}
 			}
 
-			return tracks;
+			return backings;
 		})();
 	}
 
@@ -215,6 +213,14 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 		this.number = number;
 	}
 
+	getType(): TrackType {
+		return this.firstInputTrack._backing.getType();
+	}
+
+	getDecoderConfig() {
+		return this.firstInputTrack._backing.getDecoderConfig();
+	}
+
 	getHasOnlyKeyPackets() {
 		return this.firstInputTrack.hasOnlyKeyPackets;
 	}
@@ -252,7 +258,7 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 	}
 
 	getTimeResolution(): number {
-		return this.firstInputTrack._backing.getTimeResolution();
+		return this.firstInputTrack._backing.getTimeResolution()!;
 	}
 
 	isRelativeToUnixEpoch(): boolean {
@@ -428,28 +434,32 @@ class SegmentedInputInputVideoTrackBacking
 	implements InputVideoTrackBacking {
 	override firstInputTrack!: InputVideoTrack;
 
+	override getType() {
+		return 'video' as const;
+	}
+
 	override getCodec(): VideoCodec | null {
 		return this.firstInputTrack._backing.getCodec();
 	}
 
 	getCodedWidth(): number {
-		return this.firstInputTrack._backing.getCodedWidth();
+		return this.firstInputTrack._backing.getCodedWidth()!;
 	}
 
 	getCodedHeight(): number {
-		return this.firstInputTrack._backing.getCodedHeight();
+		return this.firstInputTrack._backing.getCodedHeight()!;
 	}
 
 	getSquarePixelWidth(): number {
-		return this.firstInputTrack._backing.getSquarePixelWidth();
+		return this.firstInputTrack._backing.getSquarePixelWidth()!;
 	}
 
 	getSquarePixelHeight(): number {
-		return this.firstInputTrack._backing.getSquarePixelHeight();
+		return this.firstInputTrack._backing.getSquarePixelHeight()!;
 	}
 
 	getRotation(): Rotation {
-		return this.firstInputTrack._backing.getRotation();
+		return this.firstInputTrack._backing.getRotation()!;
 	}
 
 	getColorSpace(): Promise<VideoColorSpaceInit> {
@@ -460,7 +470,7 @@ class SegmentedInputInputVideoTrackBacking
 		return this.firstInputTrack._backing.canBeTransparent();
 	}
 
-	getDecoderConfig(): Promise<VideoDecoderConfig | null> {
+	override getDecoderConfig(): Promise<VideoDecoderConfig | null> {
 		return this.firstInputTrack._backing.getDecoderConfig();
 	}
 }
@@ -470,19 +480,23 @@ class SegmentedInputInputAudioTrackBacking
 	implements InputAudioTrackBacking {
 	override firstInputTrack!: InputAudioTrack;
 
+	override getType() {
+		return 'audio' as const;
+	}
+
 	override getCodec(): AudioCodec | null {
 		return this.firstInputTrack._backing.getCodec();
 	}
 
 	getNumberOfChannels(): number {
-		return this.firstInputTrack._backing.getNumberOfChannels();
+		return this.firstInputTrack._backing.getNumberOfChannels()!;
 	}
 
 	getSampleRate(): number {
-		return this.firstInputTrack._backing.getSampleRate();
+		return this.firstInputTrack._backing.getSampleRate()!;
 	}
 
-	getDecoderConfig(): Promise<AudioDecoderConfig | null> {
+	override getDecoderConfig(): Promise<AudioDecoderConfig | null> {
 		return this.firstInputTrack._backing.getDecoderConfig();
 	}
 }

@@ -9,7 +9,7 @@
 import { FlacBlockType, readVorbisComments } from '../codec-data';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
-import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
+import { InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
 import {
 	assert,
@@ -70,7 +70,7 @@ export class FlacDemuxer extends Demuxer {
 	loadedSamples: Sample[] = []; // All samples from the start of the file to lastLoadedPos
 
 	metadataPromise: Promise<void> | null = null;
-	track: InputAudioTrack | null = null;
+	trackBacking: FlacAudioTrackBacking | null = null;
 	metadataTags: MetadataTags = {};
 
 	audioInfo: FlacAudioInfo | null = null;
@@ -91,10 +91,10 @@ export class FlacDemuxer extends Demuxer {
 		return this.metadataTags;
 	}
 
-	async getTracks() {
+	async getTrackBackings() {
 		await this.readMetadata();
-		assert(this.track);
-		return [this.track];
+		assert(this.trackBacking);
+		return [this.trackBacking];
 	}
 
 	async getDurationFromMetadata(): Promise<number | null> {
@@ -194,7 +194,7 @@ export class FlacDemuxer extends Demuxer {
 							description,
 						};
 
-						this.track = new InputAudioTrack(this.input, new FlacAudioTrackBacking(this));
+						this.trackBacking = new FlacAudioTrackBacking(this);
 						break;
 					}
 					case FlacBlockType.VORBIS_COMMENT: {
@@ -558,6 +558,10 @@ export class FlacDemuxer extends Demuxer {
 
 class FlacAudioTrackBacking implements InputAudioTrackBacking {
 	constructor(public demuxer: FlacDemuxer) {}
+
+	getType() {
+		return 'audio' as const;
+	}
 
 	getId() {
 		return 1;

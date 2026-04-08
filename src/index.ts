@@ -202,8 +202,12 @@ export {
 	InputVideoTrack,
 	InputAudioTrack,
 	PacketStats,
-	TrackNotHydratedError,
 } from './input-track';
+export {
+	InputTrackDescriptor,
+	InputVideoTrackDescriptor,
+	InputAudioTrackDescriptor,
+} from './input-track-descriptor';
 export {
 	EncodedPacket,
 	EncodedPacketSideData,

@@ -9,7 +9,7 @@
 import { AudioCodec } from '../codec';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
-import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
+import { InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
 import { assert, UNDETERMINED_LANGUAGE } from '../misc';
@@ -39,7 +39,7 @@ export class WaveDemuxer extends Demuxer {
 		blockSizeInBytes: number;
 	} | null = null;
 
-	tracks: InputAudioTrack[] = [];
+	trackBackings: WaveAudioTrackBacking[] = [];
 	lastKnownPacketIndex = 0;
 	metadataTags: MetadataTags = {};
 
@@ -130,7 +130,7 @@ export class WaveDemuxer extends Demuxer {
 			const blockSize = this.audioInfo.blockSizeInBytes;
 			this.dataSize = Math.floor(this.dataSize / blockSize) * blockSize;
 
-			this.tracks.push(new InputAudioTrack(this.input, new WaveAudioTrackBacking(this)));
+			this.trackBackings.push(new WaveAudioTrackBacking(this));
 		})();
 	}
 
@@ -339,9 +339,9 @@ export class WaveDemuxer extends Demuxer {
 		return 'audio/wav';
 	}
 
-	async getTracks() {
+	async getTrackBackings() {
 		await this.readMetadata();
-		return this.tracks;
+		return this.trackBackings;
 	}
 
 	async getMetadataTags() {
@@ -354,6 +354,10 @@ const PACKET_SIZE_IN_FRAMES = 2048;
 
 class WaveAudioTrackBacking implements InputAudioTrackBacking {
 	constructor(public demuxer: WaveDemuxer) {}
+
+	getType() {
+		return 'audio' as const;
+	}
 
 	getId() {
 		return 1;

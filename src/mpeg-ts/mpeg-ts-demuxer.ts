@@ -6,6 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { TrackType } from '../output';
 import { SAMPLES_PER_AAC_FRAME } from '../adts/adts-demuxer';
 import { MAX_ADTS_FRAME_HEADER_SIZE, readAdtsFrameHeader } from '../adts/adts-reader';
 import { aacChannelMap, aacFrequencyTable } from '../../shared/aac-misc';
@@ -41,12 +42,8 @@ import {
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import {
-	InputAudioTrack,
 	InputAudioTrackBacking,
-	InputTrack,
 	InputTrackBacking,
-
-	InputVideoTrack,
 	InputVideoTrackBacking,
 } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
@@ -146,7 +143,7 @@ export class MpegTsDemuxer extends Demuxer {
 
 	metadataPromise: Promise<void> | null = null;
 	elementaryStreams: ElementaryStream[] = [];
-	tracks: InputTrack[] = [];
+	trackBackingEntries: InputTrackBacking[] = [];
 	packetOffset = 0;
 	packetStride = -1;
 	sectionEndPositions: number[] = [];
@@ -700,23 +697,21 @@ export class MpegTsDemuxer extends Demuxer {
 
 			for (const stream of this.elementaryStreams) {
 				if (stream.info.type === 'video') {
-					this.tracks.push(new InputVideoTrack(
-						this.input,
-						new MpegTsVideoTrackBacking(stream as ElementaryVideoStream)),
+					this.trackBackingEntries.push(
+						new MpegTsVideoTrackBacking(stream as ElementaryVideoStream),
 					);
 				} else {
-					this.tracks.push(new InputAudioTrack(
-						this.input,
-						new MpegTsAudioTrackBacking(stream as ElementaryAudioStream)),
+					this.trackBackingEntries.push(
+						new MpegTsAudioTrackBacking(stream as ElementaryAudioStream),
 					);
 				}
 			}
 		})();
 	}
 
-	async getTracks(): Promise<InputTrack[]> {
+	async getTrackBackings() {
 		await this.readMetadata();
-		return this.tracks;
+		return this.trackBackingEntries;
 	}
 
 	async getDurationFromMetadata(): Promise<number | null> {
@@ -730,8 +725,9 @@ export class MpegTsDemuxer extends Demuxer {
 	async getMimeType(): Promise<string> {
 		await this.readMetadata();
 
-		const tracks = await this.getTracks();
-		const codecStrings = await Promise.all(tracks.map(x => x.getCodecParameterString()));
+		const codecStrings = await Promise.all(this.trackBackingEntries.map(
+			x => x.getDecoderConfig().then(c => c?.codec ?? null),
+		));
 
 		return buildMpegTsMimeType(codecStrings);
 	}
@@ -1046,6 +1042,9 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 
 	constructor(public elementaryStream: ElementaryStream) {}
 
+	abstract getType(): TrackType;
+	abstract getDecoderConfig(): Promise<VideoDecoderConfig | AudioDecoderConfig | null>;
+
 	getId() {
 		return this.elementaryStream.pid;
 	}
@@ -1055,13 +1054,13 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 		const trackType = this.elementaryStream.info.type;
 
 		let number = 0;
-		for (const track of demuxer.tracks) {
-			if (track.type === trackType) {
+		for (const backing of demuxer.trackBackingEntries) {
+			if (backing.getType() === trackType) {
 				number++;
 			}
 
-			assert(track._backing instanceof MpegTsTrackBacking);
-			if (track._backing.elementaryStream === this.elementaryStream) {
+			assert(backing instanceof MpegTsTrackBacking);
+			if (backing.elementaryStream === this.elementaryStream) {
 				break;
 			}
 		}
@@ -1657,6 +1656,10 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 class MpegTsVideoTrackBacking extends MpegTsTrackBacking implements InputVideoTrackBacking {
 	override elementaryStream!: ElementaryVideoStream;
 
+	getType() {
+		return 'video' as const;
+	}
+
 	override getCodec(): VideoCodec {
 		return this.elementaryStream.info.codec;
 	}
@@ -1705,6 +1708,10 @@ class MpegTsVideoTrackBacking extends MpegTsTrackBacking implements InputVideoTr
 
 class MpegTsAudioTrackBacking extends MpegTsTrackBacking implements InputAudioTrackBacking {
 	override elementaryStream!: ElementaryAudioStream;
+
+	getType() {
+		return 'audio' as const;
+	}
 
 	override getCodec(): AudioCodec {
 		return this.elementaryStream.info.codec;

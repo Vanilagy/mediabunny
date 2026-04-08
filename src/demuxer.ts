@@ -7,7 +7,7 @@
  */
 
 import { Input } from './input';
-import { InputTrack } from './input-track';
+import { InputTrackBacking } from './input-track';
 import { MetadataTags } from './metadata';
 
 /**
@@ -33,7 +33,7 @@ export abstract class Demuxer {
 		this.input = input;
 	}
 
-	abstract getTracks(): Promise<InputTrack[]>;
+	abstract getTrackBackings(): Promise<InputTrackBacking[]>;
 	abstract getMimeType(): Promise<string>;
 	abstract getMetadataTags(): Promise<MetadataTags>;
 	abstract getDurationFromMetadata(options: DurationMetadataRequestOptions): Promise<number | null>;

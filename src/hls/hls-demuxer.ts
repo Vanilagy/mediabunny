@@ -10,16 +10,14 @@ import { AUDIO_CODECS, AudioCodec, inferCodecFromCodecString, MediaCodec, VIDEO_
 import { Demuxer, DurationMetadataRequestOptions } from '../demuxer';
 import { Input } from '../input';
 import {
-	InputAudioTrack,
 	InputAudioTrackBacking,
 	InputTrack,
 	InputTrackBacking,
-	InputVideoTrack,
 	InputVideoTrackBacking,
-	TrackNotHydratedError,
 } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags, TrackDisposition } from '../metadata';
+import { TrackType } from '../output';
 import { assert, joinPaths, Rotation, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket } from '../packet';
 import { readAllLines } from '../reader';
@@ -29,7 +27,6 @@ import { HlsSegmentedInput } from './hls-segmented-input';
 type InternalTrack = {
 	id: number;
 	demuxer: HlsDemuxer;
-	inputTrack: InputTrack | null;
 	backingTrack: InputTrack | null;
 	default: boolean;
 	autoselect: boolean;
@@ -58,7 +55,8 @@ type InternalAudioTrack = InternalTrack & { info: { type: 'audio' } };
 
 export class HlsDemuxer extends Demuxer {
 	metadataPromise: Promise<void> | null = null;
-	tracks: InputTrack[] = [];
+	trackBackings: InputTrackBacking[] = [];
+	internalTracks: InternalTrack[] = [];
 	segmentedInputs: HlsSegmentedInput[] = [];
 	hasMasterPlaylist = true;
 
@@ -166,7 +164,8 @@ export class HlsDemuxer extends Demuxer {
 					this.hasMasterPlaylist = false;
 
 					const input = segmentedInput.toInput();
-					this.tracks = await input.getTracks();
+					const demuxer = await input._getDemuxer();
+					this.trackBackings = await demuxer.getTrackBackings();
 
 					return;
 				}
@@ -344,7 +343,6 @@ export class HlsDemuxer extends Demuxer {
 							result.push({
 								id: -1,
 								demuxer: this,
-								inputTrack: null,
 								backingTrack: null,
 								default: true,
 								autoselect: true,
@@ -395,7 +393,6 @@ export class HlsDemuxer extends Demuxer {
 								result.push({
 									id: -1,
 									demuxer: this,
-									inputTrack: null,
 									backingTrack: null,
 									default: getMediaTagDefault(mediaTag.attributes),
 									// Autoselect is inferred to be true if the default is true
@@ -439,7 +436,6 @@ export class HlsDemuxer extends Demuxer {
 							result.push({
 								id: -1,
 								demuxer: this,
-								inputTrack: null,
 								backingTrack: null,
 								default: true,
 								autoselect: true,
@@ -487,7 +483,6 @@ export class HlsDemuxer extends Demuxer {
 								result.push({
 									id: -1,
 									demuxer: this,
-									inputTrack: null,
 									backingTrack: null,
 									default: getMediaTagDefault(mediaTag.attributes),
 									// Autoselect is inferred to be true if the default is true
@@ -564,25 +559,24 @@ export class HlsDemuxer extends Demuxer {
 			internalTracks.sort((a, b) => a.lineNumber - b.lineNumber);
 
 			for (const internalTrack of internalTracks) {
-				const inputTrack = internalTrack.info.type === 'video'
-					? new InputVideoTrack(
-						this.input,
+				if (internalTrack.info.type === 'video') {
+					this.trackBackings.push(
 						new HlsInputVideoTrackBacking(internalTrack as InternalVideoTrack),
-					)
-					: new InputAudioTrack(
-						this.input,
+					);
+				} else {
+					this.trackBackings.push(
 						new HlsInputAudioTrackBacking(internalTrack as InternalAudioTrack),
 					);
-
-				internalTrack.inputTrack = inputTrack;
-				this.tracks.push(inputTrack);
+				}
 			}
+
+			this.internalTracks = internalTracks;
 		})();
 	}
 
-	async getTracks(): Promise<InputTrack[]> {
+	async getTrackBackings() {
 		await this.readMetadata();
-		return this.tracks;
+		return this.trackBackings;
 	}
 
 	getSegmentedInputForPath(path: string) {
@@ -622,6 +616,9 @@ export class HlsDemuxer extends Demuxer {
 abstract class HlsInputTrackBacking implements InputTrackBacking {
 	constructor(public internalTrack: InternalTrack) {}
 
+	abstract getType(): TrackType;
+	abstract getDecoderConfig(): Promise<VideoDecoderConfig | AudioDecoderConfig | null>;
+
 	isHydrated(): boolean {
 		return !!this.internalTrack.backingTrack;
 	}
@@ -646,8 +643,9 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 			throw new Error('Could not find matching track in underlying media data.');
 		}
 
-		if (!track.isHydrated) {
-			await track.hydrate(); // Just in case, typically not needed except for cursed shit like recursive .m3u8
+		if (!(track._backing.isHydrated?.() ?? true)) {
+			// Just in case, typically not needed except for cursed shit like recursive .m3u8
+			await track.input._hydrateBacking(track._backing);
 		}
 
 		this.internalTrack.backingTrack = track;
@@ -687,13 +685,14 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 	}
 
 	getNumber(): number {
+		const trackType = this.internalTrack.info.type;
 		let number = 0;
-		for (const track of this.internalTrack.demuxer.tracks) {
-			if (track.type === this.internalTrack.inputTrack!.type) {
+		for (const track of this.internalTrack.demuxer.internalTracks) {
+			if (track.info.type === trackType) {
 				number++;
 			}
 
-			if (track === this.internalTrack.inputTrack) {
+			if (track === this.internalTrack) {
 				break;
 			}
 		}
@@ -701,20 +700,12 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 		return number;
 	}
 
-	getTimeResolution(): number {
-		if (!this.internalTrack.backingTrack) {
-			throw new TrackNotHydratedError();
-		}
-
-		return this.internalTrack.backingTrack._backing.getTimeResolution();
+	getTimeResolution(): number | undefined {
+		return this.internalTrack.backingTrack?._backing.getTimeResolution();
 	}
 
-	isRelativeToUnixEpoch(): boolean {
-		if (!this.internalTrack.backingTrack) {
-			throw new TrackNotHydratedError();
-		}
-
-		return this.internalTrack.backingTrack._backing.isRelativeToUnixEpoch();
+	isRelativeToUnixEpoch(): boolean | undefined {
+		return this.internalTrack.backingTrack?._backing.isRelativeToUnixEpoch();
 	}
 
 	getBitrate(): number | null {
@@ -726,18 +717,12 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 	}
 
 	async getDurationFromMetadata(options: DurationMetadataRequestOptions): Promise<number | null> {
-		if (!this.internalTrack.backingTrack) {
-			throw new TrackNotHydratedError();
-		}
-
+		assert(this.internalTrack.backingTrack);
 		return this.internalTrack.backingTrack._backing.getDurationFromMetadata(options);
 	}
 
 	async getLiveRefreshInterval(): Promise<number | null> {
-		if (!this.internalTrack.backingTrack) {
-			throw new TrackNotHydratedError();
-		}
-
+		assert(this.internalTrack.backingTrack);
 		return this.internalTrack.backingTrack._backing.getLiveRefreshInterval();
 	}
 
@@ -746,42 +731,27 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 	}
 
 	getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
-		if (!this.internalTrack.backingTrack) {
-			throw new TrackNotHydratedError();
-		}
-
+		assert(this.internalTrack.backingTrack);
 		return this.internalTrack.backingTrack._backing.getFirstPacket(options);
 	}
 
 	getPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
-		if (!this.internalTrack.backingTrack) {
-			throw new TrackNotHydratedError();
-		}
-
+		assert(this.internalTrack.backingTrack);
 		return this.internalTrack.backingTrack._backing.getPacket(timestamp, options);
 	}
 
 	getKeyPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
-		if (!this.internalTrack.backingTrack) {
-			throw new TrackNotHydratedError();
-		}
-
+		assert(this.internalTrack.backingTrack);
 		return this.internalTrack.backingTrack._backing.getKeyPacket(timestamp, options);
 	}
 
 	getNextPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
-		if (!this.internalTrack.backingTrack) {
-			throw new TrackNotHydratedError();
-		}
-
+		assert(this.internalTrack.backingTrack);
 		return this.internalTrack.backingTrack._backing.getNextPacket(packet, options);
 	}
 
 	getNextKeyPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
-		if (!this.internalTrack.backingTrack) {
-			throw new TrackNotHydratedError();
-		}
-
+		assert(this.internalTrack.backingTrack);
 		return this.internalTrack.backingTrack._backing.getNextKeyPacket(packet, options);
 	}
 }
@@ -795,8 +765,13 @@ class HlsInputVideoTrackBacking
 		super(internalTrack);
 	}
 
-	get backingTrack() {
-		return this.internalTrack.backingTrack as InputVideoTrack | null;
+	getType() {
+		return 'video' as const;
+	}
+
+	get backingVideoTrack() {
+		const bt = this.internalTrack.backingTrack;
+		return bt?.isVideoTrack() ? bt : null;
 	}
 
 	override getCodec(): VideoCodec | null {
@@ -804,92 +779,59 @@ class HlsInputVideoTrackBacking
 		return inferredCodec as VideoCodec;
 	}
 
-	getCodedWidth(): number {
-		if (!this.backingTrack) {
-			throw new TrackNotHydratedError();
-		}
-
-		return this.backingTrack._backing.getCodedWidth();
+	getCodedWidth(): number | undefined {
+		return this.backingVideoTrack?._backing.getCodedWidth();
 	}
 
-	getCodedHeight(): number {
-		if (!this.backingTrack) {
-			throw new TrackNotHydratedError();
-		}
-
-		return this.backingTrack._backing.getCodedHeight();
+	getCodedHeight(): number | undefined {
+		return this.backingVideoTrack?._backing.getCodedHeight();
 	}
 
-	getSquarePixelWidth(): number {
-		if (!this.backingTrack) {
-			throw new TrackNotHydratedError();
-		}
-
-		return this.backingTrack._backing.getSquarePixelWidth();
+	getSquarePixelWidth(): number | undefined {
+		return this.backingVideoTrack?._backing.getSquarePixelWidth();
 	}
 
-	getSquarePixelHeight(): number {
-		if (!this.backingTrack) {
-			throw new TrackNotHydratedError();
-		}
-
-		return this.backingTrack._backing.getSquarePixelHeight();
+	getSquarePixelHeight(): number | undefined {
+		return this.backingVideoTrack?._backing.getSquarePixelHeight();
 	}
 
-	getDisplayWidth(): number | null {
-		if (this.backingTrack) {
+	getMetadataDisplayWidth(): number | null {
+		if (this.backingVideoTrack) {
 			return null;
 		}
 
 		return this.internalTrack.info.width;
 	}
 
-	getDisplayHeight(): number | null {
-		if (this.backingTrack) {
+	getMetadataDisplayHeight(): number | null {
+		if (this.backingVideoTrack) {
 			return null;
 		}
 
 		return this.internalTrack.info.height;
 	}
 
-	getRotation(): Rotation {
-		if (!this.backingTrack) {
-			throw new TrackNotHydratedError();
-		}
-
-		return this.backingTrack._backing.getRotation();
+	getRotation(): Rotation | undefined {
+		return this.backingVideoTrack?._backing.getRotation();
 	}
 
 	getColorSpace(): Promise<VideoColorSpaceInit> {
-		if (!this.backingTrack) {
-			throw new TrackNotHydratedError();
-		}
-
-		return this.backingTrack._backing.getColorSpace();
+		assert(this.backingVideoTrack);
+		return this.backingVideoTrack._backing.getColorSpace();
 	}
 
 	canBeTransparent(): Promise<boolean> {
-		if (!this.backingTrack) {
-			throw new TrackNotHydratedError();
-		}
-
-		return this.backingTrack._backing.canBeTransparent();
+		assert(this.backingVideoTrack);
+		return this.backingVideoTrack._backing.canBeTransparent();
 	}
 
-	getCodecParameterString(): Promise<string | null> {
-		if (!this.backingTrack) {
-			return Promise.resolve(this.internalTrack.fullCodecString);
-		}
-
-		return this.backingTrack.getCodecParameterString();
+	getCodecParameterString(): string {
+		return this.internalTrack.fullCodecString;
 	}
 
 	getDecoderConfig(): Promise<VideoDecoderConfig | null> {
-		if (!this.backingTrack) {
-			throw new TrackNotHydratedError();
-		}
-
-		return this.backingTrack._backing.getDecoderConfig();
+		assert(this.backingVideoTrack);
+		return this.backingVideoTrack._backing.getDecoderConfig();
 	}
 }
 
@@ -902,8 +844,13 @@ class HlsInputAudioTrackBacking
 		super(internalTrack);
 	}
 
-	get backingTrack() {
-		return this.internalTrack.backingTrack as InputAudioTrack | null;
+	getType() {
+		return 'audio' as const;
+	}
+
+	get backingAudioTrack() {
+		const bt = this.internalTrack.backingTrack;
+		return bt?.isAudioTrack() ? bt : null;
 	}
 
 	override getCodec(): AudioCodec | null {
@@ -911,40 +858,25 @@ class HlsInputAudioTrackBacking
 		return inferredCodec as AudioCodec;
 	}
 
-	getNumberOfChannels(): number {
+	getNumberOfChannels(): number | undefined {
 		if (this.internalTrack.info.numberOfChannels !== null) {
 			return this.internalTrack.info.numberOfChannels;
 		}
 
-		if (!this.backingTrack) {
-			throw new TrackNotHydratedError();
-		}
-
-		return this.backingTrack._backing.getNumberOfChannels();
+		return this.backingAudioTrack?._backing.getNumberOfChannels();
 	}
 
-	getSampleRate(): number {
-		if (!this.backingTrack) {
-			throw new TrackNotHydratedError();
-		}
-
-		return this.backingTrack._backing.getSampleRate();
+	getSampleRate(): number | undefined {
+		return this.backingAudioTrack?._backing.getSampleRate();
 	}
 
-	getCodecParameterString(): Promise<string | null> {
-		if (!this.backingTrack) {
-			return Promise.resolve(this.internalTrack.fullCodecString);
-		}
-
-		return this.backingTrack.getCodecParameterString();
+	getCodecParameterString(): string {
+		return this.internalTrack.fullCodecString;
 	}
 
 	getDecoderConfig(): Promise<AudioDecoderConfig | null> {
-		if (!this.backingTrack) {
-			throw new TrackNotHydratedError();
-		}
-
-		return this.backingTrack._backing.getDecoderConfig();
+		assert(this.backingAudioTrack);
+		return this.backingAudioTrack._backing.getDecoderConfig();
 	}
 }
 

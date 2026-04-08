@@ -157,10 +157,6 @@ export class EncodedPacketSink {
 			throw new InputDisposedError();
 		}
 
-		if (!this._track.isHydrated) {
-			await this._track.hydrate();
-		}
-
 		return maybeFixPacketType(this._track, this._track._backing.getFirstPacket(options), options);
 	}
 
@@ -197,10 +193,6 @@ export class EncodedPacketSink {
 			throw new InputDisposedError();
 		}
 
-		if (!this._track.isHydrated) {
-			await this._track.hydrate();
-		}
-
 		return maybeFixPacketType(this._track, this._track._backing.getPacket(timestamp, options), options);
 	}
 
@@ -216,10 +208,6 @@ export class EncodedPacketSink {
 
 		if (this._track.input._disposed) {
 			throw new InputDisposedError();
-		}
-
-		if (!this._track.isHydrated) {
-			await this._track.hydrate();
 		}
 
 		return maybeFixPacketType(this._track, this._track._backing.getNextPacket(packet, options), options);
@@ -242,10 +230,6 @@ export class EncodedPacketSink {
 
 		if (this._track.input._disposed) {
 			throw new InputDisposedError();
-		}
-
-		if (!this._track.isHydrated) {
-			await this._track.hydrate();
 		}
 
 		if (!options.verifyKeyPackets) {
@@ -281,10 +265,6 @@ export class EncodedPacketSink {
 
 		if (this._track.input._disposed) {
 			throw new InputDisposedError();
-		}
-
-		if (!this._track.isHydrated) {
-			await this._track.hydrate();
 		}
 
 		if (!options.verifyKeyPackets) {

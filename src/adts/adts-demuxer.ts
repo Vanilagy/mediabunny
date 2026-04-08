@@ -15,7 +15,7 @@ import {
 	readId3V2Header,
 } from '../id3';
 import { Input } from '../input';
-import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
+import { InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
 import {
@@ -51,7 +51,7 @@ export class AdtsDemuxer extends Demuxer {
 	loadedSamples: Sample[] = [];
 	metadataTags: MetadataTags | null = null;
 
-	tracks: InputAudioTrack[] = [];
+	trackBackings: AdtsAudioTrackBacking[] = [];
 
 	readingMutex = new AsyncMutex();
 	lastSampleLoaded = false;
@@ -75,7 +75,7 @@ export class AdtsDemuxer extends Demuxer {
 			assert(this.firstFrameHeader);
 
 			// Create the single audio track
-			this.tracks = [new InputAudioTrack(this.input, new AdtsAudioTrackBacking(this))];
+			this.trackBackings = [new AdtsAudioTrackBacking(this)];
 		})();
 	}
 
@@ -151,9 +151,9 @@ export class AdtsDemuxer extends Demuxer {
 		return 'audio/aac';
 	}
 
-	async getTracks() {
+	async getTrackBackings() {
 		await this.readMetadata();
-		return this.tracks;
+		return this.trackBackings;
 	}
 
 	async getMetadataTags() {
@@ -197,6 +197,10 @@ export class AdtsDemuxer extends Demuxer {
 
 class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 	constructor(public demuxer: AdtsDemuxer) {}
+
+	getType() {
+		return 'audio' as const;
+	}
 
 	getId() {
 		return 1;
