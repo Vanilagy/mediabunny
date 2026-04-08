@@ -745,6 +745,12 @@ export class FilePathSource extends Source {
 			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative number.');
 		}
 
+		if (!node.fs) {
+			throw new Error(
+				'FilePathSource is only available in server-side environments (Node.js, Bun, Deno).',
+			);
+		}
+
 		super();
 
 		// Let's back this source with a StreamSource, makes the implementation very simple

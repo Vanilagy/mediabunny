@@ -1,5 +1,5 @@
 /* eslint-disable @stylistic/max-len */
-import { ALL_FORMATS, EncodedPacketSink, Input, InputAudioTrack, InputVideoTrack, UrlSource } from 'mediabunny';
+import { ALL_FORMATS, createInputFrom, EncodedPacketSink, InputAudioTrack, InputVideoTrack } from 'mediabunny';
 import { expect, test } from 'vitest';
 import { HLS, HlsInputFormat } from '../../src/input-format.js';
 import { assert, rejectAfter } from '../../src/misc.js';
@@ -8,11 +8,7 @@ import { assert, rejectAfter } from '../../src/misc.js';
 // https://github.com/video-dev/hls.js/blob/master/tests/test-streams.js
 
 test.concurrent('Big Buck Bunny', { timeout: 15_000 }, async () => {
-	using input = new Input({
-		entryPath: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
-		source: ({ path }) => new UrlSource(path),
-		formats: ALL_FORMATS,
-	});
+	using input = createInputFrom('https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8', ALL_FORMATS);
 
 	let sourceCount = 0;
 	input.on('source', () => sourceCount++);
@@ -218,11 +214,7 @@ test.concurrent('Big Buck Bunny', { timeout: 15_000 }, async () => {
 });
 
 test.concurrent('Single-variant Big Buck Bunny', { timeout: 15_000 }, async () => {
-	using input = new Input({
-		entryPath: 'https://test-streams.mux.dev/x36xhzz/url_6/193039199_mp4_h264_aac_hq_7.m3u8',
-		source: ({ path }) => new UrlSource(path),
-		formats: ALL_FORMATS,
-	});
+	using input = createInputFrom('https://test-streams.mux.dev/x36xhzz/url_6/193039199_mp4_h264_aac_hq_7.m3u8', ALL_FORMATS);
 
 	const tracks = await input.getTracks();
 	expect(tracks).toHaveLength(2);
@@ -237,11 +229,7 @@ test.concurrent('Single-variant Big Buck Bunny', { timeout: 15_000 }, async () =
 });
 
 test.concurrent('Codec-less (underspecified) master playlist', { timeout: 15_000 }, async () => {
-	using input = new Input({
-		entryPath: 'https://test-streams.mux.dev/test_001/stream.m3u8',
-		source: ({ path }) => new UrlSource(path),
-		formats: ALL_FORMATS,
-	});
+	using input = createInputFrom('https://test-streams.mux.dev/test_001/stream.m3u8', ALL_FORMATS);
 
 	const descriptors = await input.getTrackDescriptors();
 	expect(descriptors).toHaveLength(12);
@@ -253,11 +241,7 @@ test.concurrent('Codec-less (underspecified) master playlist', { timeout: 15_000
 });
 
 test.concurrent('AES and discontinuities', { timeout: 15_000 }, async () => {
-	using input = new Input({
-		entryPath: 'https://test-streams.mux.dev/dai-discontinuity-deltatre/manifest.m3u8',
-		source: ({ path }) => new UrlSource(path),
-		formats: ALL_FORMATS,
-	});
+	using input = createInputFrom('https://test-streams.mux.dev/dai-discontinuity-deltatre/manifest.m3u8', ALL_FORMATS);
 
 	let sourceCount = 0;
 	input.on('source', () => sourceCount++);
@@ -286,11 +270,7 @@ test.concurrent('AES and discontinuities', { timeout: 15_000 }, async () => {
 });
 
 test.concurrent('Range requests', { timeout: 15_000 }, async () => {
-	using input = new Input({
-		entryPath: 'https://playertest.longtailvideo.com/adaptive/issue666/playlists/cisq0gim60007xzvi505emlxx.m3u8',
-		source: ({ path }) => new UrlSource(path),
-		formats: ALL_FORMATS,
-	});
+	using input = createInputFrom('https://playertest.longtailvideo.com/adaptive/issue666/playlists/cisq0gim60007xzvi505emlxx.m3u8', ALL_FORMATS);
 
 	let sourceCount = 0;
 	input.on('source', () => sourceCount++);
@@ -314,11 +294,7 @@ test.concurrent('Range requests', { timeout: 15_000 }, async () => {
 });
 
 test.concurrent('Custom IV', { timeout: 15_000 }, async () => {
-	using input = new Input({
-		entryPath: 'https://playertest.longtailvideo.com/adaptive/customIV/prog_index.m3u8',
-		source: ({ path }) => new UrlSource(path),
-		formats: ALL_FORMATS,
-	});
+	using input = createInputFrom('https://playertest.longtailvideo.com/adaptive/customIV/prog_index.m3u8', ALL_FORMATS);
 
 	let sourceCount = 0;
 	input.on('source', () => sourceCount++);
@@ -330,11 +306,7 @@ test.concurrent('Custom IV', { timeout: 15_000 }, async () => {
 });
 
 test.concurrent('Out-of-band audio track via ADTS', { timeout: 15_000 }, async () => {
-	using input = new Input({
-		entryPath: 'https://playertest.longtailvideo.com/adaptive/aes-with-tracks/master.m3u8',
-		source: ({ path }) => new UrlSource(path),
-		formats: ALL_FORMATS,
-	});
+	using input = createInputFrom('https://playertest.longtailvideo.com/adaptive/aes-with-tracks/master.m3u8', ALL_FORMATS);
 
 	const descriptors = await input.getTrackDescriptors();
 	expect(descriptors.some(x => x.isVideoTrackDescriptor() && x.hasOnlyKeyPackets)).toBe(true);
@@ -362,11 +334,7 @@ test.concurrent('Out-of-band audio track via ADTS', { timeout: 15_000 }, async (
 });
 
 test.concurrent('MP3 audio only', { timeout: 15_000 }, async () => {
-	using input = new Input({
-		entryPath: 'https://pl.streamingvideoprovider.com/mp3-playlist/playlist.m3u8',
-		source: ({ path }) => new UrlSource(path),
-		formats: ALL_FORMATS,
-	});
+	using input = createInputFrom('https://pl.streamingvideoprovider.com/mp3-playlist/playlist.m3u8', ALL_FORMATS);
 
 	const audioDescriptor = (await input.getAudioTrackDescriptors())[0];
 	assert(audioDescriptor);
@@ -374,11 +342,7 @@ test.concurrent('MP3 audio only', { timeout: 15_000 }, async () => {
 });
 
 test.concurrent('fMP4', { timeout: 15_000 }, async () => {
-	using input = new Input({
-		entryPath: 'https://storage.googleapis.com/shaka-demo-assets/angel-one-hls/hls.m3u8',
-		source: ({ path }) => new UrlSource(path),
-		formats: ALL_FORMATS,
-	});
+	using input = createInputFrom('https://storage.googleapis.com/shaka-demo-assets/angel-one-hls/hls.m3u8', ALL_FORMATS);
 
 	let sourceCount = 0;
 	input.on('source', () => sourceCount++);
@@ -404,11 +368,7 @@ test.concurrent('fMP4', { timeout: 15_000 }, async () => {
 });
 
 test.concurrent('Track disposition & metadata', { timeout: 15_000 }, async () => {
-	using input = new Input({
-		entryPath: 'https://storage.googleapis.com/shaka-demo-assets/angel-one-hls/hls.m3u8',
-		source: ({ path }) => new UrlSource(path),
-		formats: ALL_FORMATS,
-	});
+	using input = createInputFrom('https://storage.googleapis.com/shaka-demo-assets/angel-one-hls/hls.m3u8', ALL_FORMATS);
 
 	const audioDescriptors = await input.getAudioTrackDescriptors();
 
@@ -444,20 +404,16 @@ test.concurrent('Track disposition & metadata', { timeout: 15_000 }, async () =>
 });
 
 test.concurrent('fMP4 Bitmovin', { timeout: 15_000 }, async () => {
-	using input = new Input({
-		entryPath: 'https://bitdash-a.akamaihd.net/content/MI201109210084_1/m3u8s-fmp4/f08e80da-bf1d-4e3d-8899-f0f6155f6efa.m3u8',
-		source: ({ path }) => new UrlSource(path, {
-			requestInit: {
-				headers: {
-					'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-					'Accept': '*/*',
-					'Accept-Language': 'en-US,en;q=0.9',
-					'Origin': 'https://bitmovin.com',
-					'Referer': 'https://bitmovin.com/',
-				},
+	using input = createInputFrom('https://bitdash-a.akamaihd.net/content/MI201109210084_1/m3u8s-fmp4/f08e80da-bf1d-4e3d-8899-f0f6155f6efa.m3u8', ALL_FORMATS, {
+		requestInit: {
+			headers: {
+				'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+				'Accept': '*/*',
+				'Accept-Language': 'en-US,en;q=0.9',
+				'Origin': 'https://bitmovin.com',
+				'Referer': 'https://bitmovin.com/',
 			},
-		}),
-		formats: ALL_FORMATS,
+		},
 	});
 
 	let sourceCount = 0;
@@ -484,11 +440,7 @@ test.concurrent('fMP4 Bitmovin', { timeout: 15_000 }, async () => {
 });
 
 test.concurrent('Single-value PDT', { timeout: 15_000 }, async () => {
-	using input = new Input({
-		entryPath: 'https://playertest.longtailvideo.com/adaptive/aviion/manifest.m3u8',
-		source: ({ path }) => new UrlSource(path),
-		formats: ALL_FORMATS,
-	});
+	using input = createInputFrom('https://playertest.longtailvideo.com/adaptive/aviion/manifest.m3u8', ALL_FORMATS);
 
 	const tracks = await input.getTracks();
 	expect(tracks.every(x => x.isRelativeToUnixEpoch)).toBe(true);
@@ -516,11 +468,7 @@ test.concurrent('Single-value PDT', { timeout: 15_000 }, async () => {
 });
 
 test.concurrent('Duplicate PDT', { timeout: 30_000 }, async () => {
-	using input = new Input({
-		entryPath: 'https://playertest.longtailvideo.com/adaptive/artbeats/manifest.m3u8',
-		source: ({ path }) => new UrlSource(path),
-		formats: ALL_FORMATS,
-	});
+	using input = createInputFrom('https://playertest.longtailvideo.com/adaptive/artbeats/manifest.m3u8', ALL_FORMATS);
 
 	const audioTrack = await input.getPrimaryAudioTrack();
 	assert(audioTrack);
@@ -537,11 +485,7 @@ test.concurrent('Duplicate PDT', { timeout: 30_000 }, async () => {
 });
 
 test.concurrent('PDT with large gaps', { timeout: 15_000 }, async () => {
-	using input = new Input({
-		entryPath: 'https://playertest.longtailvideo.com/adaptive/boxee/playlist.m3u8',
-		source: ({ path }) => new UrlSource(path),
-		formats: ALL_FORMATS,
-	});
+	using input = createInputFrom('https://playertest.longtailvideo.com/adaptive/boxee/playlist.m3u8', ALL_FORMATS);
 
 	const audioTrack = await input.getPrimaryAudioTrack();
 	assert(audioTrack);
@@ -557,11 +501,7 @@ test.concurrent('PDT with large gaps', { timeout: 15_000 }, async () => {
 });
 
 test.concurrent('PDT with bad values', { timeout: 15_000 }, async () => {
-	using input = new Input({
-		entryPath: 'https://playertest.longtailvideo.com/adaptive/progdatime/playlist2.m3u8',
-		source: ({ path }) => new UrlSource(path),
-		formats: ALL_FORMATS,
-	});
+	using input = createInputFrom('https://playertest.longtailvideo.com/adaptive/progdatime/playlist2.m3u8', ALL_FORMATS);
 
 	const audioTrack = await input.getPrimaryAudioTrack();
 	assert(audioTrack);
@@ -570,11 +510,7 @@ test.concurrent('PDT with bad values', { timeout: 15_000 }, async () => {
 });
 
 test.concurrent('Alternative audio only', { timeout: 15_000 }, async () => {
-	using input = new Input({
-		entryPath: 'https://playertest.longtailvideo.com/adaptive/alt-audio-no-video/sintel/playlist.m3u8',
-		source: ({ path }) => new UrlSource(path),
-		formats: ALL_FORMATS,
-	});
+	using input = createInputFrom('https://playertest.longtailvideo.com/adaptive/alt-audio-no-video/sintel/playlist.m3u8', ALL_FORMATS);
 
 	const descriptors = await input.getTrackDescriptors();
 	expect(descriptors).toHaveLength(2);
@@ -584,11 +520,7 @@ test.concurrent('Alternative audio only', { timeout: 15_000 }, async () => {
 });
 
 test.concurrent('Advanced Apple HLS', { timeout: 30_000 }, async () => {
-	using input = new Input({
-		entryPath: 'https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_adv_example_hevc/master.m3u8',
-		source: ({ path }) => new UrlSource(path),
-		formats: ALL_FORMATS,
-	});
+	using input = createInputFrom('https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_adv_example_hevc/master.m3u8', ALL_FORMATS);
 
 	const descriptors = await input.getTrackDescriptors();
 	const videoDescriptors = descriptors.filter(x => x.isVideoTrackDescriptor());
@@ -703,11 +635,7 @@ test.concurrent('Advanced Apple HLS', { timeout: 30_000 }, async () => {
 });
 
 test.concurrent('Live HLS', { timeout: 30_000 }, async () => {
-	using input = new Input({
-		entryPath: 'https://stream.mux.com/v69RSHhFelSm4701snP22dYz2jICy4E4FUyk02rW4gxRM.m3u8',
-		source: ({ path }) => new UrlSource(path),
-		formats: ALL_FORMATS,
-	});
+	using input = createInputFrom('https://stream.mux.com/v69RSHhFelSm4701snP22dYz2jICy4E4FUyk02rW4gxRM.m3u8', ALL_FORMATS);
 
 	const videoTrack = await input.getPrimaryVideoTrack();
 	assert(videoTrack);

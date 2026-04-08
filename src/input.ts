@@ -38,7 +38,19 @@ import {
 	removeItem,
 } from './misc';
 import { Reader } from './reader';
-import { Source, SourceRef } from './source';
+import {
+	BlobSource,
+	BlobSourceOptions,
+	BufferSource,
+	FilePathSource,
+	FilePathSourceOptions,
+	ReadableStreamSource,
+	ReadableStreamSourceOptions,
+	Source,
+	SourceRef,
+	UrlSource,
+	UrlSourceOptions,
+} from './source';
 
 polyfillSymbolDispose();
 
@@ -654,3 +666,124 @@ export class InputDisposedError extends Error {
 		this.name = 'InputDisposedError';
 	}
 }
+
+/**
+ * Options for {@link Input.from}. Combines the options of all source types, plus `initInput`.
+ * @group Input files & tracks
+ * @public
+ */
+export type InputFromOptions =
+	& Partial<UrlSourceOptions>
+	& Partial<BlobSourceOptions>
+	& Partial<FilePathSourceOptions>
+	& Partial<ReadableStreamSourceOptions>
+	& {
+		initInput?: Input;
+	};
+
+/**
+ * Creates an {@link Input} backed by the passed-in data. An alternative to {@link Input}'s constructor, this helper
+ * function automatically chooses the correct underlying {@link Source} based on the type of the data passed in.
+ *
+ * Legal data types are `ArrayBuffer`, `SharedArrayBuffer`, `ArrayBufferView`, `Blob` (and, by extension, `File`),
+ * `ReadableStream<Uint8Array`, `string` (representing either a URL or a local file path), `URL`, and `Request`.
+ *
+ * The available options are the union of the options for each {@link Source}. Check the sources to see which field
+ * applies to which source.
+ */
+export const createInputFrom = (
+	data: AllowSharedBufferSource | Blob | ReadableStream<Uint8Array> | string | URL | Request,
+	formats: InputFormat[],
+	options: InputFromOptions = {},
+): Input => {
+	if (!Array.isArray(formats) || !formats.every(x => x instanceof InputFormat)) {
+		throw new TypeError('formats must be an array of InputFormat.');
+	}
+	if (typeof options !== 'object' || !options) {
+		throw new TypeError('options must be an object.');
+	}
+
+	const { initInput, ...sourceOptions } = options;
+
+	if (
+		data instanceof ArrayBuffer
+		|| (typeof SharedArrayBuffer !== 'undefined' && data instanceof SharedArrayBuffer)
+		|| ArrayBuffer.isView(data)
+	) {
+		return new Input({
+			formats,
+			source: new BufferSource(data),
+			initInput,
+		});
+	}
+
+	if (typeof Blob !== 'undefined' && data instanceof Blob) {
+		return new Input({
+			formats,
+			source: new BlobSource(data, sourceOptions),
+			initInput,
+		});
+	}
+
+	if (typeof ReadableStream !== 'undefined' && data instanceof ReadableStream) {
+		return new Input({
+			formats,
+			source: new ReadableStreamSource(data, sourceOptions),
+			initInput,
+		});
+	}
+
+	if (typeof URL !== 'undefined' && data instanceof URL) {
+		const url = data.href;
+
+		return new Input({
+			formats,
+			source: (request: SourceRequest) => new UrlSource(request.path, sourceOptions),
+			entryPath: url,
+			initInput,
+		});
+	}
+
+	if (typeof Request !== 'undefined' && data instanceof Request) {
+		const url = data.url;
+
+		return new Input({
+			formats,
+			source: (request: SourceRequest) => {
+				const reqInit = (sourceOptions as UrlSourceOptions).requestInit;
+				return new UrlSource(
+					new Request(request.path, { ...reqInit, method: data.method, headers: data.headers }),
+					sourceOptions,
+				);
+			},
+			entryPath: url,
+			initInput,
+		});
+	}
+
+	if (typeof data === 'string') {
+		const isUrl = data.includes('://');
+
+		if (isUrl) {
+			return new Input({
+				formats,
+				source: (request: SourceRequest) => new UrlSource(request.path, sourceOptions),
+				entryPath: data,
+				initInput,
+			});
+		}
+
+		// File path, throws automatically if this isn't server-side
+		return new Input({
+			formats,
+			source: (request: SourceRequest) => new FilePathSource(request.path, sourceOptions),
+			entryPath: data,
+			initInput,
+		});
+	}
+
+	throw new TypeError(
+		'Input.from: first argument must be an ArrayBuffer, SharedArrayBuffer, ArrayBufferView, Blob,'
+		+ ' ReadableStream, string, URL, or Request.',
+	);
+};

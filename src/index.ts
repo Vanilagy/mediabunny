@@ -192,6 +192,7 @@ export {
 	WEBM,
 } from './input-format';
 export {
+	createInputFrom,
 	Input,
 	InputOptions,
 	InputEvents,

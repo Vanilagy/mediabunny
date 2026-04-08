@@ -11,6 +11,7 @@ import {
 	WrappedCanvas,
 	asc,
 	canDecodeAudio,
+	createInputFrom,
 	desc,
 	prefer,
 } from 'mediabunny';
@@ -102,6 +103,9 @@ const initMediaPlayer = async (resource: File | string) => {
 		let videoTrack: InputVideoTrack | null = null;
 		let audioTrack: InputAudioTrack | null = null;
 		if (true || typeof resource === 'string' && resource.includes('.m3u8')) {
+			const input = createInputFrom(resource, ALL_FORMATS);
+
+			/*
 			const input = new Input({
 				entryPath: resource, // 'master.m3u8',
 				source: async ({ path }) => {
@@ -112,15 +116,18 @@ const initMediaPlayer = async (resource: File | string) => {
 				},
 				formats: ALL_FORMATS,
 			});
+			*/
 			// const variant = (await manifestInput.getVariants())[0]!;
 
 			// console.log(await input.getFormat(), await input.getTracks());
 			// return;
 
+			/*
 			await input.getVideoTracks({
 				filter: desc => desc.hasPairableAudioTrack(),
 				sortBy: desc => asc(desc.bitrate),
 			});
+			*/
 
 			videoTrack = await input.getPrimaryVideoTrack({
 				filter: async desc => (desc.displayHeight ?? (await desc.getTrack()).displayHeight) < 720,
