@@ -342,7 +342,7 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 		return this._format;
 	}
 
-	async isSupported(): Promise<boolean> {
+	async canRead(): Promise<boolean> {
 		try {
 			await this._getDemuxer();
 			return true;
@@ -376,6 +376,9 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 	/**
 	 * Returns the timestamp at which the input file starts. More precisely, returns the smallest starting timestamp
 	 * among all tracks.
+	 *
+	 * Note that this method is potentially expensive for inputs with many tracks (such as HLS manifests), since it
+	 * probes every track.
 	 */
 	async getFirstTimestamp() {
 		const tracks = await this.getTracks();

@@ -1,6 +1,0 @@
-idea: discontinuities with extra decoder config on the packet.
-Also, why not just have the packet metadata on the packet? I think that would make things easier overall.
-
-- keep input/demuxer.isSupported()?
-
-- conversion behavior for HLS; only take primary tracks by default?

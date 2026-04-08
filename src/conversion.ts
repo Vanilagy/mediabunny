@@ -38,6 +38,7 @@ import {
 } from './media-source';
 import {
 	assert,
+	assertNever,
 	ceilToMultipleOfTwo,
 	clamp,
 	floorToDivisor,
@@ -64,6 +65,17 @@ export type ConversionOptions = {
 	input: Input;
 	/** The output file. */
 	output: Output;
+
+	/**
+	 * Defines which input tracks are used for conversion. Defaults to `'all'` unless the input is an HLS input, in
+	 * which case it defaults to `'primary'`.
+	 *
+	 * - `'all'`: All input tracks are eligible for conversion.
+	 * - `'primary'`: Only the primary video and audio track from the input are eligible for conversion.
+	 * - Array: A user-specified list of tracks that are eligible for conversion. These must all belong to the
+	 * {@link Input} specified in {@link ConversionOptions.input}.
+	 */
+	tracks?: 'all' | 'primary' | InputTrack[];
 
 	/**
 	 * Video-specific options. When passing an object, the same options are applied to all video tracks. When passing a
@@ -548,6 +560,21 @@ export class Conversion {
 			throw new TypeError('options.output must be an Output.');
 		}
 		if (
+			options.tracks !== undefined
+			&& !(
+				options.tracks === 'all'
+				|| options.tracks === 'primary'
+				|| (Array.isArray(options.tracks) && options.tracks.every(x => x instanceof InputTrack))
+			)
+		) {
+			throw new TypeError(
+				'options.tracks, when provded, must be either \'all\', \'primary\', or an array of InputTrack.',
+			);
+		}
+		if (Array.isArray(options.tracks) && !options.tracks.every(x => x.input === options.input)) {
+			throw new TypeError('Currently, all tracks in options.tracks must belong to options.input.');
+		}
+		if (
 			options.output._tracks.length > 0
 			|| Object.keys(options.output._metadataTags).length > 0
 			|| options.output.state !== 'pending'
@@ -607,21 +634,45 @@ export class Conversion {
 
 	/** @internal */
 	async _init() {
-		this._startTimestamp = this._options.trim?.start ?? Math.max(
-			await this.input.getFirstTimestamp(),
-			// Samples can also have negative timestamps, but the meaning typically is "don't present me", so let's cut
-			// those out by default.
-			0,
-		);
-		this._endTimestamp = Math.max(this._options.trim?.end ?? Infinity, this._startTimestamp);
+		const inputFormat = await this.input.getFormat();
 
-		const inputTracks = await this.input.getTracks();
+		let tracks: InputTrack[];
+
+		if (Array.isArray(this._options.tracks)) {
+			tracks = this._options.tracks;
+		} else {
+			let trackMode = this._options.tracks;
+			if (trackMode === undefined) {
+				// HACK to keep bundle size low, temp for now
+				const defaultTrackMode = inputFormat.name.includes('(HLS)')
+					? 'primary'
+					: 'all';
+
+				trackMode = defaultTrackMode;
+			}
+
+			if (trackMode === 'all') {
+				tracks = await this.input.getTracks();
+			} else if (trackMode === 'primary') {
+				const primaryVideoTrack = await this.input.getPrimaryVideoTrack();
+				const primaryAudioTrack = await this.input.getPrimaryAudioTrack();
+
+				tracks = [primaryVideoTrack, primaryAudioTrack].filter(x => x !== null);
+			} else {
+				assertNever(trackMode);
+				assert(false);
+			}
+		}
+
 		const outputTrackCounts = this.output.format.getSupportedTrackCounts();
 
 		let nVideo = 1;
 		let nAudio = 1;
 
-		for (const track of inputTracks) {
+		const filteredTracks: InputTrack[] = [];
+		const filteredTrackOptions: (ConversionVideoOptions | ConversionAudioOptions)[] = [];
+
+		for (const track of tracks) {
 			let trackOptions: ConversionVideoOptions | ConversionAudioOptions | undefined = undefined;
 			if (track.isVideoTrack()) {
 				if (this._options.video) {
@@ -671,10 +722,39 @@ export class Conversion {
 				continue;
 			}
 
+			filteredTracks.push(track);
+			filteredTrackOptions.push(trackOptions ?? {});
+		}
+
+		if (this._options.trim?.start !== undefined) {
+			this._startTimestamp = this._options.trim.start;
+		} else {
+			// Compute the start timestamp from the set of filtered tracks. Techncially these can still be narrowed
+			// down later due to discarded tracks, but we need to fix the start timestamp now due to track processing
+			// depending on it.
+			this._startTimestamp = Math.max(
+				Math.min(
+					...await Promise.all(filteredTracks.map(x => x.getFirstTimestamp())),
+				),
+				// Samples can also have negative timestamps, but the meaning typically is "don't present me", so let's
+				// cut those out by default.
+				0,
+			);
+		}
+
+		this._endTimestamp = Math.max(this._options.trim?.end ?? Infinity, this._startTimestamp);
+
+		// Run these sequentially so that output tracks have a deterministic order
+		for (let i = 0; i < filteredTracks.length; i++) {
+			const track = filteredTracks[i]!;
+			const options = filteredTrackOptions[i]!;
+
 			if (track.isVideoTrack()) {
-				await this._processVideoTrack(track, (trackOptions ?? {}) as ConversionVideoOptions);
+				await this._processVideoTrack(track, options as ConversionVideoOptions);
 			} else if (track.isAudioTrack()) {
-				await this._processAudioTrack(track, (trackOptions ?? {}) as ConversionAudioOptions);
+				await this._processAudioTrack(track, options as ConversionAudioOptions);
+			} else {
+				assert(false);
 			}
 		}
 
@@ -695,7 +775,7 @@ export class Conversion {
 		}
 
 		// Somewhat dirty but pragmatic
-		const inputAndOutputFormatMatch = (await this.input.getFormat()).mimeType === this.output.format.mimeType;
+		const inputAndOutputFormatMatch = inputFormat.mimeType === this.output.format.mimeType;
 		const rawTagsAreUnchanged = inputTags.raw === outputTags.raw;
 
 		if (inputTags.raw && rawTagsAreUnchanged && !inputAndOutputFormatMatch) {
@@ -832,7 +912,7 @@ export class Conversion {
 					return Infinity; // Upper bound (assuming no universe heat death)
 				}
 
-				return track.computeDuration();
+				return (await track.getDurationFromMetadata()) ?? (await track.computeDuration());
 			});
 			const duration = Math.max(0, ...await Promise.all(durationPromises));
 
@@ -972,13 +1052,14 @@ export class Conversion {
 				const sink = new EncodedPacketSink(track);
 				const decoderConfig = await track.getDecoderConfig();
 				const meta: EncodedVideoChunkMetadata = { decoderConfig: decoderConfig ?? undefined };
-				const endPacket = Number.isFinite(this._endTimestamp)
-					? await sink.getPacket(this._endTimestamp, { metadataOnly: true }) ?? undefined
-					: undefined;
 
-				for await (const packet of sink.packets(undefined, endPacket, { verifyKeyPackets: true })) {
+				for await (const packet of sink.packets(undefined, undefined, { verifyKeyPackets: true })) {
 					if (this._canceled) {
 						return;
+					}
+
+					if (packet.timestamp >= this._endTimestamp) {
+						break;
 					}
 
 					const modifiedPacket = packet.clone({
@@ -989,7 +1070,7 @@ export class Conversion {
 					});
 					assert(modifiedPacket.timestamp >= 0);
 
-					this._reportProgress(track.id, modifiedPacket.timestamp);
+					this._reportProgress(track.id, modifiedPacket.timestamp + modifiedPacket.duration);
 					await source.add(modifiedPacket, meta);
 
 					if (this._synchronizer.shouldWait(track.id, modifiedPacket.timestamp)) {
@@ -1292,7 +1373,7 @@ export class Conversion {
 			return;
 		}
 
-		this._reportProgress(track.id, sample.timestamp);
+		this._reportProgress(track.id, sample.timestamp + sample.duration);
 
 		let finalSamples: VideoSample[];
 		if (!trackOptions.process) {
@@ -1387,13 +1468,14 @@ export class Conversion {
 				const sink = new EncodedPacketSink(track);
 				const decoderConfig = await track.getDecoderConfig();
 				const meta: EncodedAudioChunkMetadata = { decoderConfig: decoderConfig ?? undefined };
-				const endPacket = Number.isFinite(this._endTimestamp)
-					? await sink.getPacket(this._endTimestamp, { metadataOnly: true }) ?? undefined
-					: undefined;
 
-				for await (const packet of sink.packets(undefined, endPacket)) {
+				for await (const packet of sink.packets()) {
 					if (this._canceled) {
 						return;
+					}
+
+					if (packet.timestamp >= this._endTimestamp) {
+						break;
 					}
 
 					const modifiedPacket = packet.clone({
@@ -1401,7 +1483,7 @@ export class Conversion {
 					});
 					assert(modifiedPacket.timestamp >= 0);
 
-					this._reportProgress(track.id, modifiedPacket.timestamp);
+					this._reportProgress(track.id, modifiedPacket.timestamp + modifiedPacket.duration);
 					await source.add(modifiedPacket, meta);
 
 					if (this._synchronizer.shouldWait(track.id, modifiedPacket.timestamp)) {
@@ -1540,7 +1622,7 @@ export class Conversion {
 			return;
 		}
 
-		this._reportProgress(track.id, sample.timestamp);
+		this._reportProgress(track.id, sample.timestamp + sample.duration);
 
 		let finalSamples: AudioSample[];
 		if (!trackOptions.process) {

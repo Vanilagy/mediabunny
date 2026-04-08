@@ -60,11 +60,12 @@
 
 		if (true) {
 			input = new Mediabunny.Input({
-				entryPath: 'https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8',
+				entryPath: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
 				source: ({ path }) => new Mediabunny.UrlSource(path),
 				formats: Mediabunny.ALL_FORMATS,
 			});
 
+			/*
 			const videoTrack = await input.getPrimaryVideoTrack();
 			const audioTrack = await input.getPrimaryAudioTrack();
 
@@ -75,6 +76,7 @@
 				videoTrack.computeDuration({ skipLiveWait: true }),
 				audioTrack.computeDuration({ skipLiveWait: true }),
 			]));
+			*/
 		} else {
 			const file = fileInput.files[0];
 			const source = new Mediabunny.BlobSource(file);
@@ -90,7 +92,8 @@
 			input,
 			output,
 			audio: (track, n) => ({
-				discard: !tracks.includes(track),
+				//discard: true,
+				//discard: !tracks.includes(track),
 				//codec: 'eac3',
 				//discard: true,
 				//discard: n > 1,
@@ -137,7 +140,8 @@
 			},
 			*/
 			video: (track) => ({
-				discard: !tracks.includes(track),
+				//discard: true,
+				//discard: !tracks.includes(track),
 				//forceTranscode: true,
 				//forceTranscode: true,
 				//width: 1280,
@@ -222,6 +226,7 @@
 				}
 			},
 			trim: {
+				end: 10,
 				//start,
 				//end: start + 5,
 				////start: 0,

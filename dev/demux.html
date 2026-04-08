@@ -11,6 +11,7 @@
 	document.body.append(fileInput);
 
 	fileInput.addEventListener('change', async () => {
+		/*
 		const file = fileInput.files[0];
 		const input = new Mediabunny.Input({
 			formats: Mediabunny.ALL_FORMATS,
@@ -25,14 +26,22 @@
 
 		//console.log(await input.getDurationFromMetadata(), await input.computeDuration());
 		return;
+		*/
 
 		const manifest = new Mediabunny.Input({
-			entryPath: 'https://playertest.longtailvideo.com/adaptive/alt-audio-no-video/sintel/playlist.m3u8',
+			entryPath: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
 			source: ({ path }) => new Mediabunny.UrlSource(path),
 			formats: Mediabunny.ALL_FORMATS,
 		});
+		
+		const audioTrack = await manifest.getPrimaryAudioTrack();
+		const ugh = new Mediabunny.EncodedPacketSink(audioTrack);
 
-		console.log(await manifest.getTracks());
+		for await (const packet of ugh.packets()) {
+			console.log(packet);
+		}
+
+		//console.log(await manifest.getTracks());
 		return;
 
 		const videoTrack = await manifest.getPrimaryVideoTrack();
