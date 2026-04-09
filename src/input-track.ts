@@ -21,7 +21,7 @@ import {
 	mergeTrackDescriptorQueries,
 	type InputVideoTrackDescriptor,
 	type InputAudioTrackDescriptor,
-	type TrackDescriptorQuery,
+	type InputTrackDescriptorQuery,
 } from './input-track-descriptor';
 
 /**
@@ -178,10 +178,18 @@ export abstract class InputTrack {
 		return this._backing.getDisposition();
 	}
 
+	/**
+	 * The peak bitrate of the track as specified in the track's metadata. This might not match the actual
+	 * media data's bitrate.
+	 */
 	get bitrate() {
 		return this._backing.getBitrate();
 	}
 
+	/**
+	 * The average bitrate of the track as specified in the track's metadata. This might not match the actual
+	 * media data's bitrate.
+	 */
 	get averageBitrate() {
 		return this._backing.getAverageBitrate();
 	}
@@ -271,21 +279,34 @@ export abstract class InputTrack {
 		};
 	}
 
+	/**
+	 * Whether or not this track is currently live, meaning the media's end is still unknown.
+	 *
+	 * The value returned by this method may change over time as the track stops being live. To keep track of the
+	 * track's live status, poll this method at the track's refresh interval
+	 * via {@link InputTrack.getLiveRefreshInterval}.
+	 */
 	async isLive() {
 		return (await this._backing.getLiveRefreshInterval()) !== null;
 	}
 
+	/**
+	 * Returns the track's live refresh interval in seconds, or `null` if the track is not live. This interval describes
+	 * the time it takes, on average, for new live media data to become available.
+	 */
 	async getLiveRefreshInterval() {
 		return this._backing.getLiveRefreshInterval();
 	}
 
-	canBePairedWith(other: InputTrack | InputTrackDescriptor | null) {
-		if (!(other instanceof InputTrack || other instanceof InputTrackDescriptor || other === null)) {
-			throw new TypeError('other must be an InputTrack, InputTrackDescriptor, or null.');
-		}
-
-		if (!other) {
-			return true;
+	/**
+	 * Returns `true` if this track can be paired with the given track. Two tracks being pairable means they can be
+	 * presented (displayed) together.
+	 *
+	 * Returns `false` if `other` equals `this`.
+	 */
+	canBePairedWith(other: InputTrack | InputTrackDescriptor) {
+		if (!(other instanceof InputTrack || other instanceof InputTrackDescriptor)) {
+			throw new TypeError('other must be an InputTrack or InputTrackDescriptor.');
 		}
 
 		if (this.input !== other.input || this === other) {
@@ -295,7 +316,11 @@ export abstract class InputTrack {
 		return (this._backing.getPairingMask() & other._backing.getPairingMask()) !== 0n;
 	}
 
-	async getPairableTracks(query?: TrackDescriptorQuery<InputTrackDescriptor>) {
+	/**
+	 * Gets the list of other tracks that can be paired with this track. An optional query can be provided to narrow
+	 * down the results.
+	 */
+	async getPairableTracks(query?: InputTrackDescriptorQuery<InputTrackDescriptor>) {
 		const descriptors = await this.input.getTrackDescriptors(mergeTrackDescriptorQueries({
 			filter: d => d.canBePairedWith(this),
 		}, query));
@@ -303,11 +328,16 @@ export abstract class InputTrack {
 		return Promise.all(descriptors.map(d => d.getTrack()));
 	}
 
-	async pluckPairableTrack(query?: TrackDescriptorQuery<InputTrackDescriptor>) {
+	/** Returns the first track that can be paired with this track, optionally steered by the provided query. */
+	async pluckPairableTrack(query?: InputTrackDescriptorQuery<InputTrackDescriptor>) {
 		return (await this.getPairableTracks(query))[0] ?? null;
 	}
 
-	async getPairableVideoTracks(query?: TrackDescriptorQuery<InputVideoTrackDescriptor>) {
+	/**
+	 * Gets the list of other video tracks that can be paired with this track. An optional query can be provided to
+	 * narrow down the results.
+	 */
+	async getPairableVideoTracks(query?: InputTrackDescriptorQuery<InputVideoTrackDescriptor>) {
 		const descriptors = await this.input.getVideoTrackDescriptors(mergeTrackDescriptorQueries({
 			filter: d => d.canBePairedWith(this),
 		}, query));
@@ -315,11 +345,16 @@ export abstract class InputTrack {
 		return Promise.all(descriptors.map(d => d.getTrack()));
 	}
 
-	async pluckPairableVideoTrack(query?: TrackDescriptorQuery<InputVideoTrackDescriptor>) {
+	/** Returns the first video track that can be paired with this track, optionally steered by the provided query. */
+	async pluckPairableVideoTrack(query?: InputTrackDescriptorQuery<InputVideoTrackDescriptor>) {
 		return (await this.getPairableVideoTracks(query))[0] ?? null;
 	}
 
-	async getPairableAudioTracks(query?: TrackDescriptorQuery<InputAudioTrackDescriptor>) {
+	/**
+	 * Gets the list of other audio tracks that can be paired with this track. An optional query can be provided to
+	 * narrow down the results.
+	 */
+	async getPairableAudioTracks(query?: InputTrackDescriptorQuery<InputAudioTrackDescriptor>) {
 		const descriptors = await this.input.getAudioTrackDescriptors(mergeTrackDescriptorQueries({
 			filter: d => d.canBePairedWith(this),
 		}, query));
@@ -327,22 +362,26 @@ export abstract class InputTrack {
 		return Promise.all(descriptors.map(d => d.getTrack()));
 	}
 
-	async pluckPairableAudioTrack(query?: TrackDescriptorQuery<InputAudioTrackDescriptor>) {
+	/** Returns the first audio track that can be paired with this track, optionally steered by the provided query. */
+	async pluckPairableAudioTrack(query?: InputTrackDescriptorQuery<InputAudioTrackDescriptor>) {
 		return (await this.getPairableAudioTracks(query))[0] ?? null;
 	}
 
-	async getPrimaryPairableVideoTrack(query?: TrackDescriptorQuery<InputVideoTrackDescriptor>) {
+	/** Returns the primary track that can be paired with this track, optionally steered by the provided query. */
+	async getPrimaryPairableVideoTrack(query?: InputTrackDescriptorQuery<InputVideoTrackDescriptor>) {
 		return this.input.getPrimaryVideoTrack(mergeTrackDescriptorQueries({
 			filter: d => d.canBePairedWith(this),
 		}, query));
 	}
 
-	async getPrimaryPairableAudioTrack(query?: TrackDescriptorQuery<InputAudioTrackDescriptor>) {
+	/** Returns the primary track that can be paired with this track, optionally steered by the provided query. */
+	async getPrimaryPairableAudioTrack(query?: InputTrackDescriptorQuery<InputAudioTrackDescriptor>) {
 		return this.input.getPrimaryAudioTrack(mergeTrackDescriptorQueries({
 			filter: d => d.canBePairedWith(this),
 		}, query));
 	}
 
+	/** Returns `true` if there is another track that can be paired with this track. */
 	hasPairableTrack(predicate?: (descriptor: InputTrackDescriptor) => boolean) {
 		predicate &&= toValidatedPredicate(predicate);
 
@@ -352,6 +391,7 @@ export abstract class InputTrack {
 		);
 	}
 
+	/** Returns `true` if there is a video track that can be paired with this track. */
 	hasPairableVideoTrack(predicate?: (descriptor: InputVideoTrackDescriptor) => boolean) {
 		predicate &&= toValidatedPredicate(predicate);
 
@@ -360,6 +400,7 @@ export abstract class InputTrack {
 		);
 	}
 
+	/** Returns `true` if there is an audio track that can be paired with this track. */
 	hasPairableAudioTrack(predicate?: (descriptor: InputAudioTrackDescriptor) => boolean) {
 		predicate &&= toValidatedPredicate(predicate);
 

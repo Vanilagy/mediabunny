@@ -23,18 +23,17 @@ import {
 	mergeTrackDescriptorQueries,
 	queryTrackDescriptors,
 	toValidatedTrackDescriptorQuery,
-	TrackDescriptorQuery,
+	InputTrackDescriptorQuery,
+	prefer,
+	desc,
 } from './input-track-descriptor';
 import { PacketRetrievalOptions } from './media-sink';
 import {
 	arrayArgmin,
 	arrayCount,
 	assert,
-	desc,
 	EventEmitter,
-	MaybePromise,
 	polyfillSymbolDispose,
-	prefer,
 	removeItem,
 } from './misc';
 import { Reader } from './reader';
@@ -44,10 +43,13 @@ import {
 	BufferSource,
 	FilePathSource,
 	FilePathSourceOptions,
+	PathedSource,
 	ReadableStreamSource,
 	ReadableStreamSourceOptions,
 	Source,
 	SourceRef,
+	SourceRequest,
+	sourceRequestsAreEqual,
 	UrlSource,
 	UrlSourceOptions,
 } from './source';
@@ -56,15 +58,6 @@ polyfillSymbolDispose();
 
 export const DEFAULT_SOURCE_CACHE_GROUP = 1;
 export const ENCRYPTION_KEY_CACHE_GROUP = 2;
-
-export type SourceRequest = {
-	path: string;
-	isRoot: boolean;
-};
-
-const sourceRequestsAreEqual = (a: SourceRequest, b: SourceRequest) => {
-	return a.path === b.path;
-};
 
 let inputFinalizationRegistry: FinalizationRegistry<SourceRef[]> | null = null;
 if (typeof FinalizationRegistry !== 'undefined') {
@@ -84,8 +77,14 @@ export type InputOptions<S extends Source = Source> = {
 	/** A list of supported formats. If the source file is not of one of these formats, then it cannot be read. */
 	formats: InputFormat[];
 	/** The source from which data will be read. */
-	source: S | SourceRef<S> | ((request: SourceRequest) => MaybePromise<S | SourceRef<S>>);
-	entryPath?: string;
+	source: S | SourceRef<S> | PathedSource<S>;
+	/**
+	 * An optional, second {@link Input} instance that contains the necessary metadata to initialize the tracks of
+	 * this input. This is necessary in cases where track initialization info and media data are carried in separate
+	 * files, like is the case with segmented MP4 (CMAF) files.
+	 *
+	 * The use of this field depends on the input format.
+	 */
 	initInput?: Input;
 };
 
@@ -97,23 +96,36 @@ type SourceCacheEntry<S extends Source> = {
 };
 
 /**
- * Represents an input media file. This is the root object from which all media read operations start.
+ * Describes the events that an {@link Input} emits, with each key being an event name and its value being the
+ * event data.
+ *
  * @group Input files & tracks
  * @public
  */
 export type InputEvents = {
-	source: { source: Source; request: SourceRequest | null };
+	/** Emitted whenever a {@link Source} is loaded by the input. Useful to track reads. */
+	source: {
+		/** The loaded source. */
+		source: Source;
+		/** The request that led to loading this source, or `null` if the input is not pathed. */
+		request: SourceRequest | null;
+	};
 };
 
+/**
+ * Represents input media, backed by a single file or multiple files depending on the format.
+ *
+ * This is the root object from which all media read operations start.
+ * @group Input files & tracks
+ * @public
+ */
 export class Input<S extends Source = Source> extends EventEmitter<InputEvents> implements Disposable {
 	/** @internal */
-	_source: SourceRef<S> | ((request: SourceRequest) => MaybePromise<S | SourceRef<S>>);
+	_source: SourceRef<S> | PathedSource<S>;
 	/** @internal */
 	_formats: InputFormat[];
 	/** @internal */
 	_initInput: Input | null;
-	/** @internal */
-	_entryPath: string | null;
 	/** @internal */
 	_demuxerPromise: Promise<Demuxer> | null = null;
 	/** @internal */
@@ -161,22 +173,19 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 		if (!Array.isArray(options.formats) || options.formats.some(x => !(x instanceof InputFormat))) {
 			throw new TypeError('options.formats must be an array of InputFormat.');
 		}
-		if (!(options.source instanceof Source) && typeof options.source !== 'function') {
-			throw new TypeError('options.source must be a Source or a function that returns a Source.');
-		}
-		if (typeof options.source === 'function' && options.entryPath === undefined) {
-			throw new TypeError('options.entryPath must be provided when options.source is a function.');
+		if (!(
+			options.source instanceof Source
+			|| options.source instanceof SourceRef
+			|| options.source instanceof PathedSource
+		)) {
+			throw new TypeError('options.source must be a Source, SourceRef, or PathedSource.');
 		}
 		if (options.initInput !== undefined && !(options.initInput instanceof Input)) {
 			throw new TypeError('options.initInput, when provided, must be an Input.');
 		}
-		if (options.entryPath !== undefined && typeof options.entryPath !== 'string') {
-			throw new TypeError('options.entryPath, when provided, must be a string.');
-		}
 
 		this._formats = options.formats;
 		this._initInput = options.initInput ?? null;
-		this._entryPath = options.entryPath ?? null;
 
 		if (options.source instanceof Source) {
 			this._source = options.source.ref();
@@ -191,10 +200,11 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 		inputFinalizationRegistry?.register(this, this._sourceRefs, this);
 	}
 
+	/** @internal */
 	async _getSourceUncached(request: SourceRequest) {
-		assert(typeof this._source === 'function');
+		assert(this._source instanceof PathedSource);
 
-		const source = await this._source(request);
+		const source = await this._source.getSource(request);
 		if (!(source instanceof Source || source instanceof SourceRef)) {
 			throw new TypeError('The source function must return a Source or a SourceRef.');
 		}
@@ -209,10 +219,11 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 			ref = source;
 		}
 
-		this.emit('source', { source: ref.source, request });
+		this._emit('source', { source: ref.source, request });
 		return ref;
 	}
 
+	/** @internal */
 	_getSourceCached(request: SourceRequest, cacheGroup = DEFAULT_SOURCE_CACHE_GROUP): Promise<SourceRef<S>> {
 		const cachedEntry = this._sourceCache.find(x =>
 			x.cacheGroup === cacheGroup && sourceRequestsAreEqual(x.request, request),
@@ -284,10 +295,9 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 			let ref: SourceRef;
 			if (this._source instanceof SourceRef) {
 				ref = this._source;
-				this.emit('source', { source: ref.source, request: null });
+				this._emit('source', { source: ref.source, request: null });
 			} else {
-				assert(this._entryPath !== null);
-				ref = await this._getSourceUncached({ path: this._entryPath, isRoot: true });
+				ref = await this._getSourceUncached({ path: this._source.rootPath, isRoot: true });
 				this._sourceRefs.push(ref);
 			}
 
@@ -314,9 +324,7 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 			return this._source.source;
 		}
 
-		assert(this._entryPath !== null);
-
-		const source = this._source({ path: this._entryPath, isRoot: true });
+		const source = this._source.getSource({ path: this._source.rootPath, isRoot: true });
 		if (source instanceof Promise) {
 			throw new TypeError(
 				'Input.source cannot be used when the source function resolves asynchronously.'
@@ -342,6 +350,7 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 		return this._format;
 	}
 
+	/** Returns `true` if the format of the input file is known and the file can be read, `false` otherwise. */
 	async canRead(): Promise<boolean> {
 		try {
 			await this._getDemuxer();
@@ -406,45 +415,64 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 	}
 
 	/**
-	 * Returns the list of all tracks of this input file in the order in which they appear in the file.
-	 * A query can be provided to filter/sort tracks; the query operates on lightweight descriptors and only
-	 * the matching tracks are fully loaded.
+	 * Returns the list of all tracks of this input file in the order in which they appear in the file. An optional
+	 * query can be provided.
 	 */
-	async getTracks(query?: TrackDescriptorQuery<InputTrackDescriptor>): Promise<InputTrack[]> {
+	async getTracks(
+		query?: InputTrackDescriptorQuery<InputTrackDescriptor>,
+	): Promise<InputTrack[]> {
 		const descriptors = await this.getTrackDescriptors(query);
 		return Promise.all(descriptors.map(x => x.getTrack()));
 	}
 
-	async pluckTrack(query?: TrackDescriptorQuery<InputTrackDescriptor>): Promise<InputTrack | null> {
+	/** Returns the first track in this input file, optionally steered by the provided query. */
+	async pluckTrack(
+		query?: InputTrackDescriptorQuery<InputTrackDescriptor>,
+	): Promise<InputTrack | null> {
 		const descriptors = await this.getTrackDescriptors(query);
 		return descriptors[0]?.getTrack() ?? null;
 	}
 
-	/** Returns the list of all video tracks of this input file. */
-	async getVideoTracks(query?: TrackDescriptorQuery<InputVideoTrackDescriptor>): Promise<InputVideoTrack[]> {
+	/** Returns the list of all video tracks of this input file. An optional query can be provided. */
+	async getVideoTracks(
+		query?: InputTrackDescriptorQuery<InputVideoTrackDescriptor>,
+	): Promise<InputVideoTrack[]> {
 		const descriptors = await this.getVideoTrackDescriptors(query);
 		return Promise.all(descriptors.map(x => x.getTrack()));
 	}
 
-	async pluckVideoTrack(query?: TrackDescriptorQuery<InputVideoTrackDescriptor>): Promise<InputVideoTrack | null> {
+	/** Returns the first video track in this input file, optionally steered by the provided query. */
+	async pluckVideoTrack(
+		query?: InputTrackDescriptorQuery<InputVideoTrackDescriptor>,
+	): Promise<InputVideoTrack | null> {
 		const descriptors = await this.getVideoTrackDescriptors(query);
 		return descriptors[0]?.getTrack() ?? null;
 	}
 
-	/** Returns the list of all audio tracks of this input file. */
-	async getAudioTracks(query?: TrackDescriptorQuery<InputAudioTrackDescriptor>): Promise<InputAudioTrack[]> {
+	/** Returns the list of all audio tracks of this input file. An optional query can be provided. */
+	async getAudioTracks(
+		query?: InputTrackDescriptorQuery<InputAudioTrackDescriptor>,
+	): Promise<InputAudioTrack[]> {
 		const descriptors = await this.getAudioTrackDescriptors(query);
 		return Promise.all(descriptors.map(x => x.getTrack()));
 	}
 
-	async pluckAudioTrack(query?: TrackDescriptorQuery<InputAudioTrackDescriptor>): Promise<InputAudioTrack | null> {
+	/** Returns the first audio track in this input file, optionally steered by the provided query. */
+	async pluckAudioTrack(
+		query?: InputTrackDescriptorQuery<InputAudioTrackDescriptor>,
+	): Promise<InputAudioTrack | null> {
 		const descriptors = await this.getAudioTrackDescriptors(query);
 		return descriptors[0]?.getTrack() ?? null;
 	}
 
-	/** Returns the primary video track of this input file, or null if there are no video tracks. */
+	/**
+	 * Returns the primary video track of this input file, or null if there are no video tracks.
+	 *
+	 * Multiple factors determine which track is considered primary, including its position in the file, disposition,
+	 * bitrate (higher bitrate is preferred), and if it can be paired with an audio track.
+	 */
 	async getPrimaryVideoTrack(
-		query?: TrackDescriptorQuery<InputVideoTrackDescriptor>,
+		query?: InputTrackDescriptorQuery<InputVideoTrackDescriptor>,
 	): Promise<InputVideoTrack | null> {
 		query &&= toValidatedTrackDescriptorQuery(query);
 
@@ -452,9 +480,14 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 		return descriptor?.getTrack() ?? null;
 	}
 
-	/** Returns the primary audio track of this input file, or null if there are no audio tracks. */
+	/**
+	 * Returns the primary audio track of this input file, or null if there are no audio tracks.
+	 *
+	 * Multiple factors determine which track is considered primary, including its position in the file, disposition,
+	 * bitrate (higher bitrate is preferred), and if it can be paired with the primary video track.
+	 */
 	async getPrimaryAudioTrack(
-		query?: TrackDescriptorQuery<InputAudioTrackDescriptor>,
+		query?: InputTrackDescriptorQuery<InputAudioTrackDescriptor>,
 	): Promise<InputAudioTrack | null> {
 		query &&= toValidatedTrackDescriptorQuery(query);
 
@@ -466,7 +499,7 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 	 * Returns lightweight track descriptors without loading full media data. Useful for querying and filtering
 	 * tracks (e.g. from an HLS master playlist) before committing to loading any specific track.
 	 */
-	async getTrackDescriptors(query?: TrackDescriptorQuery<InputTrackDescriptor>) {
+	async getTrackDescriptors(query?: InputTrackDescriptorQuery<InputTrackDescriptor>) {
 		query &&= toValidatedTrackDescriptorQuery(query);
 
 		const backings = await this._getTrackBackings();
@@ -474,8 +507,12 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 		return queryTrackDescriptors(descriptors, query);
 	}
 
+	/**
+	 * Returns lightweight video track descriptors without loading full media data. Useful for querying and filtering
+	 * video tracks (e.g. from an HLS master playlist) before committing to loading any specific track.
+	 */
 	async getVideoTrackDescriptors(
-		query?: TrackDescriptorQuery<InputVideoTrackDescriptor>,
+		query?: InputTrackDescriptorQuery<InputVideoTrackDescriptor>,
 	): Promise<InputVideoTrackDescriptor[]> {
 		query &&= toValidatedTrackDescriptorQuery(query);
 
@@ -486,8 +523,12 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 		return queryTrackDescriptors(videoDescriptors, query);
 	}
 
+	/**
+	 * Returns lightweight audio track descriptors without loading full media data. Useful for querying and filtering
+	 * audio tracks (e.g. from an HLS master playlist) before committing to loading any specific track.
+	 */
 	async getAudioTrackDescriptors(
-		query?: TrackDescriptorQuery<InputAudioTrackDescriptor>,
+		query?: InputTrackDescriptorQuery<InputAudioTrackDescriptor>,
 	): Promise<InputAudioTrackDescriptor[]> {
 		query &&= toValidatedTrackDescriptorQuery(query);
 
@@ -498,8 +539,9 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 		return queryTrackDescriptors(audioDescriptors, query);
 	}
 
+	/** Returns the primary video track descriptor of this input file, or null if there are no video tracks. */
 	async getPrimaryVideoDescriptor(
-		query?: TrackDescriptorQuery<InputVideoTrackDescriptor>,
+		query?: InputTrackDescriptorQuery<InputVideoTrackDescriptor>,
 	): Promise<InputVideoTrackDescriptor | null> {
 		query &&= toValidatedTrackDescriptorQuery(query);
 
@@ -516,8 +558,9 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 		return sorted[0] ?? null;
 	}
 
+	/** Returns the primary audio track descriptor of this input file, or null if there are no audio tracks. */
 	async getPrimaryAudioDescriptor(
-		query?: TrackDescriptorQuery<InputAudioTrackDescriptor>,
+		query?: InputTrackDescriptorQuery<InputAudioTrackDescriptor>,
 	): Promise<InputAudioTrackDescriptor | null> {
 		query &&= toValidatedTrackDescriptorQuery(query);
 
@@ -525,7 +568,7 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 
 		const merged = mergeTrackDescriptorQueries(query, {
 			sortBy: d => [
-				prefer(d.canBePairedWith(primaryVideoDescriptor)),
+				prefer(!primaryVideoDescriptor || d.canBePairedWith(primaryVideoDescriptor)),
 				prefer(d.disposition?.default ?? false),
 				desc(d.bitrate ?? null),
 			],
@@ -671,33 +714,36 @@ export class InputDisposedError extends Error {
 }
 
 /**
- * Options for {@link Input.from}. Combines the options of all source types, plus `initInput`.
+ * Options for {@link createInputFrom}. Combines the options of all source types, plus `initInput`.
+ *
  * @group Input files & tracks
  * @public
  */
-export type InputFromOptions =
-	& Partial<UrlSourceOptions>
-	& Partial<BlobSourceOptions>
-	& Partial<FilePathSourceOptions>
-	& Partial<ReadableStreamSourceOptions>
-	& {
-		initInput?: Input;
-	};
+export type CreateInputFromOptions =
+	& UrlSourceOptions
+	& BlobSourceOptions
+	& FilePathSourceOptions
+	& ReadableStreamSourceOptions
+	& Pick<InputOptions, 'initInput'>;
 
 /**
  * Creates an {@link Input} backed by the passed-in data. An alternative to {@link Input}'s constructor, this helper
  * function automatically chooses the correct underlying {@link Source} based on the type of the data passed in.
  *
  * Legal data types are `ArrayBuffer`, `SharedArrayBuffer`, `ArrayBufferView`, `Blob` (and, by extension, `File`),
- * `ReadableStream<Uint8Array`, `string` (representing either a URL or a local file path), `URL`, and `Request`.
+ * `ReadableStream<Uint8Array>`, `string` (representing either a URL or a local file path), `URL`, and `Request`. Local
+ * file paths require a Node-like server-side environment with access to the file system.
  *
  * The available options are the union of the options for each {@link Source}. Check the sources to see which field
  * applies to which source.
+ *
+ * @group Input files & tracks
+ * @public
  */
 export const createInputFrom = (
 	data: AllowSharedBufferSource | Blob | ReadableStream<Uint8Array> | string | URL | Request,
 	formats: InputFormat[],
-	options: InputFromOptions = {},
+	options: CreateInputFromOptions = {},
 ): Input => {
 	if (!Array.isArray(formats) || !formats.every(x => x instanceof InputFormat)) {
 		throw new TypeError('formats must be an array of InputFormat.');
@@ -741,8 +787,10 @@ export const createInputFrom = (
 
 		return new Input({
 			formats,
-			source: (request: SourceRequest) => new UrlSource(request.path, sourceOptions),
-			entryPath: url,
+			source: new PathedSource(
+				url,
+				request => new UrlSource(request.path, sourceOptions),
+			),
 			initInput,
 		});
 	}
@@ -752,14 +800,13 @@ export const createInputFrom = (
 
 		return new Input({
 			formats,
-			source: (request: SourceRequest) => {
-				const reqInit = (sourceOptions as UrlSourceOptions).requestInit;
-				return new UrlSource(
-					new Request(request.path, { ...reqInit, method: data.method, headers: data.headers }),
+			source: new PathedSource(
+				url,
+				request => new UrlSource(
+					new Request(request.path, data),
 					sourceOptions,
-				);
-			},
-			entryPath: url,
+				),
+			),
 			initInput,
 		});
 	}
@@ -770,17 +817,21 @@ export const createInputFrom = (
 		if (isUrl) {
 			return new Input({
 				formats,
-				source: (request: SourceRequest) => new UrlSource(request.path, sourceOptions),
-				entryPath: data,
+				source: new PathedSource(
+					data,
+					request => new UrlSource(request.path, sourceOptions),
+				),
 				initInput,
 			});
 		}
 
-		// File path, throws automatically if this isn't server-side
+		// It's a file path; this throws automatically if this isn't server-side
 		return new Input({
 			formats,
-			source: (request: SourceRequest) => new FilePathSource(request.path, sourceOptions),
-			entryPath: data,
+			source: new PathedSource(
+				data,
+				request => new FilePathSource(request.path, sourceOptions),
+			),
 			initInput,
 		});
 	}

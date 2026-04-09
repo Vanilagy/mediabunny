@@ -1,7 +1,7 @@
 import { expect, test, vi } from 'vitest';
 import { Output, OutputTrackGroup } from '../../src/output.js';
 import { CmafOutputFormat, HlsOutputFormat, MpegTsOutputFormat } from '../../src/output-format.js';
-import { BufferTarget, NullTarget, StreamTarget, StreamTargetChunk } from '../../src/target.js';
+import { BufferTarget, NullTarget, PathedTarget, StreamTarget, StreamTargetChunk } from '../../src/target.js';
 import { EncodedAudioPacketSource, EncodedVideoPacketSource } from '../../src/media-source.js';
 import { HlsMuxer } from '../../src/hls/hls-muxer.js';
 import { AudioCodec, VideoCodec } from '../../src/codec.js';
@@ -21,8 +21,7 @@ test('Playlist assignment, single video', async () => {
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(),
 		}),
-		target: () => new NullTarget(),
-		rootPath: '',
+		target: new PathedTarget('', () => new NullTarget()),
 	});
 
 	output.addVideoTrack(videoSource());
@@ -43,8 +42,7 @@ test('Playlist assignment, single audio', async () => {
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(),
 		}),
-		target: () => new NullTarget(),
-		rootPath: '',
+		target: new PathedTarget('', () => new NullTarget()),
 	});
 
 	output.addAudioTrack(audioSource());
@@ -65,8 +63,7 @@ test('Playlist assignment, multiple video', async () => {
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(),
 		}),
-		target: () => new NullTarget(),
-		rootPath: '',
+		target: new PathedTarget('', () => new NullTarget()),
 	});
 
 	output.addVideoTrack(videoSource());
@@ -93,8 +90,7 @@ test('Playlist assignment, multiple audio', async () => {
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(),
 		}),
-		target: () => new NullTarget(),
-		rootPath: '',
+		target: new PathedTarget('', () => new NullTarget()),
 	});
 
 	output.addAudioTrack(audioSource());
@@ -121,8 +117,7 @@ test('Playlist assignment, multiple video with different metadata #1', async () 
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(),
 		}),
-		target: () => new NullTarget(),
-		rootPath: '',
+		target: new PathedTarget('', () => new NullTarget()),
 	});
 
 	output.addVideoTrack(videoSource(), { languageCode: 'eng' });
@@ -157,8 +152,7 @@ test('Playlist assignment, multiple video with different metadata #2', async () 
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(),
 		}),
-		target: () => new NullTarget(),
-		rootPath: '',
+		target: new PathedTarget('', () => new NullTarget()),
 	});
 
 	output.addVideoTrack(videoSource(), { disposition: { primary: true } });
@@ -193,8 +187,7 @@ test('Playlist assignment, multiple audio with different metadata', async () => 
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(),
 		}),
-		target: () => new NullTarget(),
-		rootPath: '',
+		target: new PathedTarget('', () => new NullTarget()),
 	});
 
 	output.addAudioTrack(audioSource(), { languageCode: 'eng' });
@@ -229,8 +222,7 @@ test('Playlist assignment, video and audio', async () => {
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(),
 		}),
-		target: () => new NullTarget(),
-		rootPath: '',
+		target: new PathedTarget('', () => new NullTarget()),
 	});
 
 	output.addVideoTrack(videoSource());
@@ -252,8 +244,7 @@ test('Playlist assignment, one video and multiple audio', async () => {
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(),
 		}),
-		target: () => new NullTarget(),
-		rootPath: '',
+		target: new PathedTarget('', () => new NullTarget()),
 	});
 
 	output.addVideoTrack(videoSource());
@@ -294,8 +285,7 @@ test('Playlist assignment, multiple video and one audio', async () => {
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(),
 		}),
-		target: () => new NullTarget(),
-		rootPath: '',
+		target: new PathedTarget('', () => new NullTarget()),
 	});
 
 	output.addVideoTrack(videoSource());
@@ -336,8 +326,7 @@ test('Playlist assignment, multiple video and audio', async () => {
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(),
 		}),
-		target: () => new NullTarget(),
-		rootPath: '',
+		target: new PathedTarget('', () => new NullTarget()),
 	});
 
 	output.addVideoTrack(videoSource());
@@ -390,8 +379,7 @@ test('Playlist assignment, video and audio in different groups', async () => {
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(),
 		}),
-		target: () => new NullTarget(),
-		rootPath: '',
+		target: new PathedTarget('', () => new NullTarget()),
 	});
 
 	const a = new OutputTrackGroup();
@@ -423,8 +411,7 @@ test('Playlist assignment, multiple video and audio in pairs', async () => {
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(),
 		}),
-		target: () => new NullTarget(),
-		rootPath: '',
+		target: new PathedTarget('', () => new NullTarget()),
 	});
 
 	const a = new OutputTrackGroup();
@@ -469,8 +456,7 @@ test('Playlist assignment, multiple video and audio with some unpaired', async (
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(),
 		}),
-		target: () => new NullTarget(),
-		rootPath: '',
+		target: new PathedTarget('', () => new NullTarget()),
 	});
 
 	const a = new OutputTrackGroup();
@@ -527,8 +513,7 @@ test('Playlist assignment, multiple video and audio with multiple groups', async
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(),
 		}),
-		target: () => new NullTarget(),
-		rootPath: '',
+		target: new PathedTarget('', () => new NullTarget()),
 	});
 
 	const a = new OutputTrackGroup();
@@ -596,8 +581,7 @@ test('Playlist assignment, video with multiple audio codecs', async () => {
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(),
 		}),
-		target: () => new NullTarget(),
-		rootPath: '',
+		target: new PathedTarget('', () => new NullTarget()),
 	});
 
 	output.addVideoTrack(videoSource());
@@ -641,8 +625,7 @@ test('Playlist assignment, audio with multiple video codecs', async () => {
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(),
 		}),
-		target: () => new NullTarget(),
-		rootPath: '',
+		target: new PathedTarget('', () => new NullTarget()),
 	});
 
 	output.addVideoTrack(videoSource('avc'));
@@ -679,8 +662,7 @@ test('Playlist assignment, multiple video with conflicting audio interests', asy
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(),
 		}),
-		target: () => new NullTarget(),
-		rootPath: '',
+		target: new PathedTarget('', () => new NullTarget()),
 	});
 
 	const a = new OutputTrackGroup();
@@ -732,8 +714,7 @@ test('Playlist assignment, video paired with video', async () => {
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(),
 		}),
-		target: () => new NullTarget(),
-		rootPath: '',
+		target: new PathedTarget('', () => new NullTarget()),
 	});
 
 	const a = new OutputTrackGroup();
@@ -769,8 +750,7 @@ test('Playlist assignment, audio paired with audio', async () => {
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(),
 		}),
-		target: () => new NullTarget(),
-		rootPath: '',
+		target: new PathedTarget('', () => new NullTarget()),
 	});
 
 	const a = new OutputTrackGroup();
@@ -832,7 +812,7 @@ const setUpSegmentationEnvironment = async (options: {
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(), // No ADTS for simplicity
 		}),
-		target: (request) => {
+		target: new PathedTarget('', (request) => {
 			const target = new BufferTarget();
 			if (request.path.includes('playlist')) {
 				target.on('finalized', () => {
@@ -884,8 +864,7 @@ const setUpSegmentationEnvironment = async (options: {
 			}
 
 			return target;
-		},
-		rootPath: '',
+		}),
 	});
 
 	const _videoSource = options.video ? new EncodedVideoPacketSource('avc') : null;
@@ -1850,8 +1829,7 @@ test('onSegment, onPlaylist, onMaster events', async () => {
 			onPlaylist,
 			onMaster,
 		}),
-		target: () => new BufferTarget(),
-		rootPath: '',
+		target: new PathedTarget('', () => new BufferTarget()),
 	});
 
 	const source = videoSource();
@@ -1908,7 +1886,7 @@ test('Single-file mode', async () => {
 			segmentFormat: new MpegTsOutputFormat(),
 			singleFilePerPlaylist: true,
 		}),
-		target: (request) => {
+		target: new PathedTarget('', (request) => {
 			const target = new BufferTarget();
 
 			if (request.path.includes('playlist')) {
@@ -1920,8 +1898,7 @@ test('Single-file mode', async () => {
 			}
 
 			return target;
-		},
-		rootPath: '',
+		}),
 	});
 
 	const source = videoSource();
@@ -1955,7 +1932,7 @@ test('StreamTarget, write is called for each target', async () => {
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(),
 		}),
-		target: (request) => {
+		target: new PathedTarget('', (request) => {
 			writeCounts.set(request.path, 0);
 
 			const writable = new WritableStream<StreamTargetChunk>({
@@ -1965,8 +1942,7 @@ test('StreamTarget, write is called for each target', async () => {
 			});
 
 			return new StreamTarget(writable);
-		},
-		rootPath: '',
+		}),
 	});
 
 	const source = videoSource();
@@ -2001,8 +1977,7 @@ test('I-frame stream', async () => {
 			onMaster: (text) => { masterText = text; },
 			onPlaylist: (text) => { playlistText = text; },
 		}),
-		target: () => new BufferTarget(),
-		rootPath: '',
+		target: new PathedTarget('', () => new BufferTarget()),
 	});
 
 	const source = videoSource();
@@ -2036,8 +2011,7 @@ test('I-frame stream, pairing warning', async () => {
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(),
 		}),
-		target: () => new NullTarget(),
-		rootPath: '',
+		target: new PathedTarget('', () => new NullTarget()),
 	});
 
 	const group = new OutputTrackGroup();
@@ -2067,7 +2041,7 @@ test('CMAF segmentation', async () => {
 		format: new HlsOutputFormat({
 			segmentFormat: new CmafOutputFormat(),
 		}),
-		target: (request) => {
+		target: new PathedTarget('', (request) => {
 			const target = new BufferTarget();
 			targets.set(request.path, target);
 
@@ -2078,8 +2052,7 @@ test('CMAF segmentation', async () => {
 			}
 
 			return target;
-		},
-		rootPath: '',
+		}),
 	});
 
 	const source = videoSource();
@@ -2156,7 +2129,7 @@ test('CMAF segmentation, single file per playlist', async () => {
 			segmentFormat: new CmafOutputFormat(),
 			singleFilePerPlaylist: true,
 		}),
-		target: (request) => {
+		target: new PathedTarget('', (request) => {
 			writtenPaths.add(request.path);
 			const target = new BufferTarget();
 
@@ -2167,8 +2140,7 @@ test('CMAF segmentation, single file per playlist', async () => {
 			}
 
 			return target;
-		},
-		rootPath: '',
+		}),
 	});
 
 	const source = videoSource();
@@ -2206,7 +2178,7 @@ test('Live mode', async () => {
 			segmentFormat: new MpegTsOutputFormat(),
 			live: true,
 		}),
-		target: (request) => {
+		target: new PathedTarget('master.m3u8', (request) => {
 			const target = new BufferTarget();
 			target.on('finalized', () => {
 				if (request.path.endsWith('.m3u8')) {
@@ -2215,8 +2187,7 @@ test('Live mode', async () => {
 				}
 			});
 			return target;
-		},
-		rootPath: 'master.m3u8',
+		}),
 	});
 
 	const source = videoSource();
@@ -2294,7 +2265,7 @@ test('Live mode, CMAF', async () => {
 			segmentFormat: new CmafOutputFormat(),
 			live: true,
 		}),
-		target: (request) => {
+		target: new PathedTarget('master.m3u8', (request) => {
 			const target = new BufferTarget();
 			target.on('finalized', () => {
 				if (request.path.endsWith('.m3u8')) {
@@ -2303,8 +2274,7 @@ test('Live mode, CMAF', async () => {
 				}
 			});
 			return target;
-		},
-		rootPath: 'master.m3u8',
+		}),
 	});
 
 	const source = videoSource();
@@ -2385,7 +2355,7 @@ test('Live mode, fixed target duration', async () => {
 			segmentFormat: new MpegTsOutputFormat(),
 			live: true,
 		}),
-		target: (request) => {
+		target: new PathedTarget('master.m3u8', (request) => {
 			const target = new BufferTarget();
 			target.on('finalized', () => {
 				if (request.path.endsWith('.m3u8')) {
@@ -2394,8 +2364,7 @@ test('Live mode, fixed target duration', async () => {
 				}
 			});
 			return target;
-		},
-		rootPath: 'master.m3u8',
+		}),
 	});
 
 	const source = videoSource();
@@ -2435,7 +2404,7 @@ test('Live mode, empty', async () => {
 			segmentFormat: new MpegTsOutputFormat(),
 			live: true,
 		}),
-		target: (request) => {
+		target: new PathedTarget('master.m3u8', (request) => {
 			const target = new BufferTarget();
 			target.on('finalized', () => {
 				if (request.path.endsWith('.m3u8')) {
@@ -2443,8 +2412,7 @@ test('Live mode, empty', async () => {
 				}
 			});
 			return target;
-		},
-		rootPath: 'master.m3u8',
+		}),
 	});
 
 	const source = videoSource();
@@ -2470,8 +2438,7 @@ test('EXT-X-PROGRAM-DATE-TIME writing', async () => {
 			segmentFormat: new MpegTsOutputFormat(),
 			onPlaylist: (text) => { result = text; },
 		}),
-		target: () => new BufferTarget(),
-		rootPath: '',
+		target: new PathedTarget('', () => new BufferTarget()),
 	});
 
 	const source = videoSource();
@@ -2514,8 +2481,7 @@ test('Throws if some tracks are relativeToUnixEpoch and some are not', async () 
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(),
 		}),
-		target: () => new NullTarget(),
-		rootPath: '',
+		target: new PathedTarget('', () => new NullTarget()),
 	});
 
 	output.addVideoTrack(videoSource(), { isRelativeToUnixEpoch: true });
@@ -2533,7 +2499,7 @@ test('Live mode, maxLiveSegmentCount', async () => {
 			live: true,
 			maxLiveSegmentCount: 2,
 		}),
-		target: (request) => {
+		target: new PathedTarget('master.m3u8', (request) => {
 			const target = new BufferTarget();
 			target.on('finalized', () => {
 				if (request.path.endsWith('.m3u8')) {
@@ -2541,8 +2507,7 @@ test('Live mode, maxLiveSegmentCount', async () => {
 				}
 			});
 			return target;
-		},
-		rootPath: 'master.m3u8',
+		}),
 	});
 
 	const source = videoSource();

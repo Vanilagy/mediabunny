@@ -44,6 +44,8 @@ export {
 	FlacOutputFormatOptions,
 	HlsOutputFormat,
 	HlsOutputFormatOptions,
+	HlsOutputPlaylistInfo,
+	HlsOutputSegmentInfo,
 	IsobmffOutputFormat,
 	IsobmffOutputFormatOptions,
 	MkvOutputFormat,
@@ -123,27 +125,29 @@ export {
 } from './encode';
 export {
 	Target,
+	TargetEvents,
+	TargetRequest,
 	BufferTarget,
 	FilePathTarget,
 	FilePathTargetOptions,
 	NullTarget,
+	RangedTarget,
 	StreamTarget,
 	StreamTargetOptions,
 	StreamTargetChunk,
-	TargetEvents,
+	PathedTarget,
 } from './target';
 export {
 	AnyIterable,
+	EventEmitter,
+	EventListenerOptions,
+	FilePath,
 	MaybePromise,
 	Rational,
 	Rectangle,
 	Rotation,
 	SetOptional,
 	SetRequired,
-	asc,
-	desc,
-	prefer,
-	EventEmitter,
 } from './misc';
 export {
 	TrackType,
@@ -151,13 +155,18 @@ export {
 } from './output';
 export {
 	Source,
+	SourceEvents,
+	SourceRef,
+	SourceRequest,
 	BlobSource,
 	BlobSourceOptions,
 	BufferSource,
 	FilePathSource,
 	FilePathSourceOptions,
+	PathedSource,
 	StreamSource,
 	StreamSourceOptions,
+	RangedSource,
 	ReadableStreamSource,
 	ReadableStreamSourceOptions,
 	UrlSource,
@@ -192,12 +201,17 @@ export {
 	WEBM,
 } from './input-format';
 export {
-	createInputFrom,
 	Input,
 	InputOptions,
 	InputEvents,
 	InputDisposedError,
+	createInputFrom,
+	CreateInputFromOptions,
+	UnsupportedInputFormatError,
 } from './input';
+export {
+	DurationMetadataRequestOptions,
+} from './demuxer';
 export {
 	InputTrack,
 	InputVideoTrack,
@@ -208,6 +222,10 @@ export {
 	InputTrackDescriptor,
 	InputVideoTrackDescriptor,
 	InputAudioTrackDescriptor,
+	InputTrackDescriptorQuery,
+	asc,
+	desc,
+	prefer,
 } from './input-track-descriptor';
 export {
 	EncodedPacket,

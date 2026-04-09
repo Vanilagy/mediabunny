@@ -23,6 +23,7 @@ import { EncodedPacket } from '../packet';
 import { readAllLines } from '../reader';
 import { AttributeList, canIgnoreLine } from './hls-misc';
 import { HlsSegmentedInput } from './hls-segmented-input';
+import { PathedSource } from '../source';
 
 type InternalTrack = {
 	id: number;
@@ -66,7 +67,8 @@ export class HlsDemuxer extends Demuxer {
 
 	readMetadata() {
 		return this.metadataPromise ??= (async () => {
-			assert(this.input._entryPath !== null);
+			assert(this.input._source instanceof PathedSource);
+			const source = this.input._source;
 
 			const slice = await this.input._reader.requestEntireFile();
 			assert(slice);
@@ -96,7 +98,7 @@ export class HlsDemuxer extends Demuxer {
 						throw new Error('Incorrect M3U8 file; a line must follow the #EXT-X-STREAM-INF tag.');
 					}
 
-					const fullPath = joinPaths(this.input._entryPath, playlistPath);
+					const fullPath = joinPaths(source.rootPath, playlistPath);
 					const attributes = new AttributeList(line.slice(18));
 
 					const bandwidth = attributes.getAsNumber('bandwidth');
@@ -123,7 +125,7 @@ export class HlsDemuxer extends Demuxer {
 						);
 					}
 
-					const fullPath = joinPaths(this.input._entryPath, playlistPath);
+					const fullPath = joinPaths(source.rootPath, playlistPath);
 
 					variantStreams.push({
 						fullPath,
@@ -151,7 +153,7 @@ export class HlsDemuxer extends Demuxer {
 					let fullPath: string | null = null;
 					const uri = attributes.get('uri');
 					if (uri !== null) {
-						fullPath = joinPaths(this.input._entryPath, uri);
+						fullPath = joinPaths(source.rootPath, uri);
 					}
 
 					mediaTags.push({ fullPath, attributes, lineNumber: i });
@@ -159,7 +161,7 @@ export class HlsDemuxer extends Demuxer {
 					// iFramesOnlyTagFound = true;
 				} else if (line.startsWith('#EXTINF:')) {
 					// This is a media playlist, not a master playlist
-					const segmentedInput = new HlsSegmentedInput(this, this.input._entryPath, lines);
+					const segmentedInput = new HlsSegmentedInput(this, source.rootPath, lines);
 					this.segmentedInputs = [segmentedInput];
 					this.hasMasterPlaylist = false;
 
@@ -236,7 +238,7 @@ export class HlsDemuxer extends Demuxer {
 							return null;
 						}
 
-						const fullPath = joinPaths(this.input._entryPath!, uri);
+						const fullPath = joinPaths(source.rootPath, uri);
 						const segmentedInput = this.getSegmentedInputForPath(fullPath);
 						const input = segmentedInput.toInput();
 						const videoTrack = await input.getPrimaryVideoTrack();
@@ -277,7 +279,7 @@ export class HlsDemuxer extends Demuxer {
 							return null;
 						}
 
-						const fullPath = joinPaths(this.input._entryPath!, uri);
+						const fullPath = joinPaths(source.rootPath, uri);
 						const segmentedInput = this.getSegmentedInputForPath(fullPath);
 						const input = segmentedInput.toInput();
 						const audioTrack = await input.getPrimaryAudioTrack();

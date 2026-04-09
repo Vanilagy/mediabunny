@@ -9,7 +9,7 @@
 import type { FileHandle } from 'node:fs/promises';
 import { Output } from './output';
 import * as nodeAlias from './node';
-import { assert, EventEmitter } from './misc';
+import { assert, EventEmitter, FilePath, MaybePromise } from './misc';
 
 const node = typeof nodeAlias !== 'undefined'
 	? nodeAlias // Aliasing it prevents some bundler warnings
@@ -21,7 +21,14 @@ const node = typeof nodeAlias !== 'undefined'
  * @public
  */
 export type TargetEvents = {
-	write: { start: number; end: number };
+	/** Emitted each time data is written to the target. */
+	write: {
+		/** The start of the written range, inclusive. */
+		start: number;
+		/** The end of the written range, exclusive. */
+		end: number;
+	};
+	/** Emitted when the target is finalized. */
 	finalized: void;
 };
 
@@ -53,25 +60,35 @@ export abstract class Target extends EventEmitter<TargetEvents> {
 	 *
 	 * Use this callback to track the size of the output file as it grows. But be warned, this function is chatty and
 	 * gets called *extremely* often.
+	 *
 	 * @deprecated Use `target.on('write', ({ start, end }) => ...)` instead.
 	 */
 	onwrite: ((start: number, end: number) => unknown) | null = null;
 
-	/** @deprecated Use `target.on('finalized', () => ...)` instead. */
+	/**
+	 * Called when the target is finalized.
+	 *
+	 * @deprecated Use `target.on('finalized', () => ...)` instead.
+	 */
 	onfinalized: (() => unknown) | null = null;
 
 	/** @internal */
 	_dispatchWrite(start: number, end: number) {
 		this.onwrite?.(start, end);
-		this.emit('write', { start, end });
+		this._emit('write', { start, end });
 	}
 
 	/** @internal */
 	_dispatchFinalized() {
 		this.onfinalized?.();
-		this.emit('finalized');
+		this._emit('finalized');
 	}
 
+	/**
+	 * Returns a new {@link RangedTarget} that writes data to this target using the given offset.
+	 *
+	 * Useful for writing a file into a section of a larger file.
+	 */
 	slice(offset: number) {
 		if (!Number.isInteger(offset) || offset < 0) {
 			throw new TypeError('offset must be a non-negative integer.');
@@ -103,6 +120,7 @@ export class BufferTarget extends Target {
 	/** @internal */
 	_supportsResize: boolean;
 
+	/** Creates a new {@link BufferTarget}. The buffer holding the data will be created and managed internally. */
 	constructor() {
 		super();
 
@@ -647,6 +665,12 @@ export class NullTarget extends Target {
 	async _close() {}
 }
 
+/**
+ * A target that writes to a subrange (defined by an offset) of another, underlying target. Useful for writing a file
+ * into a section of a larger file.
+ * @group Output targets
+ * @public
+ */
 export class RangedTarget extends Target {
 	/** @internal */
 	_baseTarget: Target;
@@ -684,3 +708,37 @@ export class RangedTarget extends Target {
 	/** @internal */
 	async _close() {}
 }
+
+/**
+ * A special target for writing multi-file media where each file is uniquely identified by a path.
+ * @group Output targets
+ * @public
+ */
+export class PathedTarget<T extends Target> {
+	/** Creates a new {@link PathedTarget} from a root path and a callback. */
+	constructor(
+		/** The path that points to the root file; the entry file of the media. */
+		public readonly rootPath: FilePath,
+		/** The callback that is called for each file that needs to be written; must return a {@link Target}. */
+		public readonly getTarget: (request: TargetRequest) => MaybePromise<T>,
+	) {
+		if (typeof rootPath !== 'string') {
+			throw new TypeError('rootPath must be a string.');
+		}
+		if (typeof getTarget !== 'function') {
+			throw new TypeError('getTarget must be a function.');
+		}
+	}
+}
+
+/**
+ * A request for a {@link Target} at the given path.
+ * @group Output targets
+ * @public
+ */
+export type TargetRequest = {
+	/** The requested file path. */
+	path: FilePath;
+	/** Whether the requested file is the root file. */
+	isRoot: boolean;
+};

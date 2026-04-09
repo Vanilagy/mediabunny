@@ -789,7 +789,26 @@ export const isNumber = (x: unknown) => {
 	return typeof x === 'number' && !Number.isNaN(x);
 };
 
-export const joinPaths = (basePath: string, relativePath: string) => {
+/**
+ * A path to a file. File paths can be relative or absolute, and be local paths or full URLs. Paths must be POSIX-like,
+ * using `/` as the separator.
+ *
+ * Examples of valid paths:
+ * - `'video.mp4'`
+ * - `'path/to/video.mp4'`
+ * - `'./video.mp4'`
+ * - `'../video.mp4'`
+ * - `'/path/to/video.mp4'`
+ * - `'https://example.com/video.mp4'`
+ * - `'file:///home/user/video.mp4'`
+ * - `'video.mp4?key=foo'`
+ *
+ * @group Miscellaneous
+ * @public
+ */
+export type FilePath = string;
+
+export const joinPaths = (basePath: FilePath, relativePath: FilePath) => {
 	// If relativePath is a full URL with protocol, return it as-is
 	if (relativePath.includes('://')) {
 		return relativePath;
@@ -957,18 +976,6 @@ export const validateRectangle = (rect: Rectangle, propertyPath: string) => {
 	if (!Number.isInteger(rect.height) || rect.height < 0) {
 		throw new TypeError(`${propertyPath}.height must be a non-negative integer.`);
 	}
-};
-
-export const asc = (value: number | null | undefined) => {
-	return value ?? Infinity; // nulls and undefined last
-};
-
-export const desc = (value: number | null | undefined) => {
-	return -(value ?? -Infinity); // nulls and undefined last
-};
-
-export const prefer = (value: boolean) => {
-	return -value;
 };
 
 export type NonFunctionKeys<T> = {
@@ -1163,17 +1170,32 @@ export const toArray = <T>(x: T | T[]) => {
 	}
 };
 
-type ListenerOptions = {
+/**
+ * Options for {@link EventEmitter.on}.
+ *
+ * @group Miscellaneous
+ * @public
+ */
+export type EventListenerOptions = {
+	/** If `true`, the listener will be automatically removed after being called once. Defaults to `false`. */
 	once?: boolean;
 };
 
+/**
+ * A class that manages event listeners and dispatches events to them.
+ *
+ * @group Miscellaneous
+ * @public
+ */
 export class EventEmitter<TEvents extends Record<string, unknown>> {
-	private _listeners = new Map<keyof TEvents, Set<{ fn: (data: never) => unknown; once: boolean }>>();
+	/** @internal */
+	_listeners = new Map<keyof TEvents, Set<{ fn: (data: never) => unknown; once: boolean }>>();
 
+	/** Registers a listener for the given event. */
 	on<K extends keyof TEvents>(
 		event: K,
 		listener: (data: TEvents[K]) => unknown,
-		options?: ListenerOptions,
+		options?: EventListenerOptions,
 	): () => void {
 		if (!this._listeners.has(event)) {
 			this._listeners.set(event, new Set());
@@ -1186,7 +1208,8 @@ export class EventEmitter<TEvents extends Record<string, unknown>> {
 		};
 	}
 
-	emit<K extends keyof TEvents>(
+	/** @internal */
+	_emit<K extends keyof TEvents>(
 		...args: TEvents[K] extends void ? [event: K] : [event: K, data: TEvents[K]]
 	): void {
 		const [event, data] = args;

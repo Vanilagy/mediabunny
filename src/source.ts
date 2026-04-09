@@ -12,6 +12,7 @@ import {
 	binarySearchLessOrEqual,
 	clamp,
 	closedIntervalsOverlap,
+	FilePath,
 	isNumber,
 	isWebKit,
 	MaybePromise,
@@ -22,6 +23,7 @@ import {
 	toDataView,
 	toUint8Array,
 	wait,
+	EventEmitter,
 } from './misc';
 import * as nodeAlias from './node';
 import { InputDisposedError } from './input';
@@ -43,11 +45,26 @@ export const DEFAULT_MIN_READ_POSITION = 0;
 export const DEFAULT_MAX_READ_POSITION = Infinity;
 
 /**
+ * The events emitted by a {@link Source}, with each key being an event name and its value being the event data.
+ * @group Input sources
+ * @public
+ */
+export type SourceEvents = {
+	/** Emitted each time data is retrieved from the source. */
+	read: {
+		/** The start of the retrieved range, inclusive. */
+		start: number;
+		/** The end of the retrieved range, exclusive. */
+		end: number;
+	};
+};
+
+/**
  * The source base class, representing a resource from which bytes can be read.
  * @group Input sources
  * @public
  */
-export abstract class Source {
+export abstract class Source extends EventEmitter<SourceEvents> {
 	/** @internal */
 	abstract _getFileSize(): number | null | undefined;
 	/** @internal */
@@ -111,6 +128,12 @@ export abstract class Source {
 		return result;
 	}
 
+	/**
+	 * Returns a new {@link RangedSource} that maps data onto this source using the given offset and length. If a length
+	 * is not provided, the ranged source spans until the end of this source's data.
+	 *
+	 * Useful for reading files that are embedded within larger files.
+	 */
 	slice(offset: number, length?: number) {
 		if (!Number.isInteger(offset) || offset < 0) {
 			throw new TypeError('offset must be a non-negative integer.');
@@ -122,8 +145,18 @@ export abstract class Source {
 		return new RangedSource(this, offset, length);
 	}
 
-	/** Called each time data is retrieved from the source. Will be called with the retrieved range (end exclusive). */
+	/**
+	 * Called each time data is retrieved from the source. Will be called with the retrieved range (end exclusive).
+	 *
+	 * @deprecated Use `source.on('read', ({ start, end }) => ...)` instead.
+	 */
 	onread: ((start: number, end: number) => unknown) | null = null;
+
+	/** @internal */
+	_dispatchRead(start: number, end: number) {
+		this.onread?.(start, end);
+		this._emit('read', { start, end });
+	}
 
 	/**
 	 * Creates a new `SourceRef` pointing to this source. You are expected to call `.free()` on said `SourceRef` when
@@ -134,10 +167,21 @@ export abstract class Source {
 	}
 }
 
+/**
+ * A reference to a {@link Source}, used to manage a source's lifecycle. Creating a `SourceRef` via {@link Source.ref}
+ * increases that source's internal reference count. As long as a source has a non-zero reference count, it is assumed
+ * to still be in use. Once all references are freed via {@link SourceRef.free}, the source gets disposed.
+ *
+ * @group Input sources
+ * @public
+ */
 export class SourceRef<S extends Source = Source> implements Disposable {
+	/** @internal */
 	private _source: S | null;
-	freed = false;
+	/** @internal */
+	private _freed = false;
 
+	/** @internal */
 	constructor(source: S) {
 		if (source._disposed) {
 			throw new Error('Cannot ref a disposed source.');
@@ -147,6 +191,7 @@ export class SourceRef<S extends Source = Source> implements Disposable {
 		this._source = source;
 	}
 
+	/** The {@link Source} this ref references. Accessing this field throws an error after having freed the ref. */
 	get source() {
 		if (!this._source) {
 			throw new Error('Can\'t get source; ref has already been freed.');
@@ -155,8 +200,17 @@ export class SourceRef<S extends Source = Source> implements Disposable {
 		return this._source;
 	}
 
+	/** Whether or not this reference has been freed via {@link SourceRef.free}. */
+	get freed() {
+		return this._freed;
+	}
+
+	/**
+	 * Frees the ref, decrementing the source's internal reference count. If the source's internal reference count
+	 * reaches zero, it gets disposed. This method is idempotent.
+	 */
 	free() {
-		if (this.freed) {
+		if (this._freed) {
 			return;
 		}
 
@@ -170,10 +224,13 @@ export class SourceRef<S extends Source = Source> implements Disposable {
 			source._disposed = true;
 		}
 
-		this.freed = true;
+		this._freed = true;
 		this._source = null;
 	}
 
+	/**
+	 * Calls {@link SourceRef.free}.
+	 */
 	[Symbol.dispose]() {
 		this.free();
 	}
@@ -219,8 +276,8 @@ export class BufferSource extends Source {
 	/** @internal */
 	_read(): ReadResult {
 		if (!this._onreadCalled) {
-			// We just say the first read retrives all bytes from the source (which, I mean, it does)
-			this.onread?.(0, this._bytes.byteLength);
+			// We just say the first read retrieves all bytes from the source (which, I mean, it does)
+			this._dispatchRead(0, this._bytes.byteLength);
 			this._onreadCalled = true;
 		}
 
@@ -344,7 +401,7 @@ export class BlobSource extends Source {
 					break;
 				}
 
-				this.onread?.(worker.currentPos, worker.currentPos + value.length);
+				this._dispatchRead(worker.currentPos, worker.currentPos + value.length);
 				this._orchestrator.supplyWorkerData(worker, value);
 			} else {
 				const data = await this._blob.slice(worker.currentPos, worker.targetPos).arrayBuffer();
@@ -353,7 +410,7 @@ export class BlobSource extends Source {
 					break;
 				}
 
-				this.onread?.(worker.currentPos, worker.currentPos + data.byteLength);
+				this._dispatchRead(worker.currentPos, worker.currentPos + data.byteLength);
 				this._orchestrator.supplyWorkerData(worker, new Uint8Array(data));
 			}
 		}
@@ -690,7 +747,7 @@ export class UrlSource extends Source {
 					}
 				}
 
-				this.onread?.(worker.currentPos, worker.currentPos + value.length);
+				this._dispatchRead(worker.currentPos, worker.currentPos + value.length);
 				this._orchestrator.supplyWorkerData(worker, value);
 			}
 		}
@@ -948,7 +1005,7 @@ export class StreamSource extends Source {
 					);
 				}
 
-				this.onread?.(worker.currentPos, worker.currentPos + data.length);
+				this._dispatchRead(worker.currentPos, worker.currentPos + data.length);
 				this._orchestrator.supplyWorkerData(worker, data);
 			} else if (data instanceof ReadableStream) {
 				const reader = data.getReader();
@@ -979,7 +1036,7 @@ export class StreamSource extends Source {
 
 					const data = toUint8Array(value); // Normalize things like Node.js Buffer to Uint8Array
 
-					this.onread?.(worker.currentPos, worker.currentPos + data.length);
+					this._dispatchRead(worker.currentPos, worker.currentPos + data.length);
 					this._orchestrator.supplyWorkerData(worker, data);
 				}
 			} else {
@@ -2026,6 +2083,13 @@ export class NullSource extends Source {
 	}
 }
 
+/**
+ * A source that covers a range (offset + length) of another source. Useful for reading files that are embedded within
+ * larger files.
+ *
+ * @group Input sources
+ * @public
+ */
 export class RangedSource extends Source {
 	/** @internal */
 	_baseSource: Source;
@@ -2036,6 +2100,7 @@ export class RangedSource extends Source {
 	/** @internal */
 	_length: number | null;
 
+	/** @internal */
 	constructor(baseSource: Source, offset: number, length?: number) {
 		super();
 
@@ -2048,6 +2113,7 @@ export class RangedSource extends Source {
 		this._length = length ?? null;
 	}
 
+	/** @internal */
 	override _getFileSize(): number | null | undefined {
 		const baseSize = this._baseSource._getFileSize();
 		if (baseSize === undefined) {
@@ -2067,6 +2133,7 @@ export class RangedSource extends Source {
 		return clamp(baseSize - this._offset, 0, this._length ?? Infinity);
 	}
 
+	/** @internal */
 	override _read(
 		start: number,
 		end: number,
@@ -2103,6 +2170,7 @@ export class RangedSource extends Source {
 		}
 	}
 
+	/** @internal */
 	override _dispose(): void {
 		this._ref?.free();
 	}
@@ -2112,3 +2180,41 @@ export class RangedSource extends Source {
 		return super.ref();
 	}
 }
+
+/**
+ * A special source for reading multi-file media where each file is uniquely identified by a path.
+ * @group Input sources
+ * @public
+ */
+export class PathedSource<S extends Source> {
+	/** Creates a new {@link PathedSource} from a root path and a callback. */
+	constructor(
+		/** The path that points to the root file; the entry file of the media. */
+		public readonly rootPath: FilePath,
+		/** The callback that is called for each requested file; must return a {@link Source} or {@link SourceRef}. */
+		public readonly getSource: (request: SourceRequest) => MaybePromise<S | SourceRef<S>>,
+	) {
+		if (typeof rootPath !== 'string') {
+			throw new TypeError('rootPath must be a string.');
+		}
+		if (typeof getSource !== 'function') {
+			throw new TypeError('getSource must be a function.');
+		}
+	}
+}
+
+/**
+ * A request for a {@link Source} at the given path.
+ * @group Input sources
+ * @public
+ */
+export type SourceRequest = {
+	/** The requested file path. */
+	path: FilePath;
+	/** Whether the requested file is the root file. */
+	isRoot: boolean;
+};
+
+export const sourceRequestsAreEqual = (a: SourceRequest, b: SourceRequest) => {
+	return a.path === b.path;
+};

@@ -11,7 +11,7 @@ import { ENCRYPTION_KEY_CACHE_GROUP, Input } from '../input';
 import { Segment, SegmentedInput, SegmentRetrievalOptions } from '../segmented-input';
 import { toDataView, joinPaths, last, assert, binarySearchLessOrEqual, arrayArgmin, wait } from '../misc';
 import { readAllLines, readBytes, Reader } from '../reader';
-import { ReadableStreamSource, SourceRef } from '../source';
+import { PathedSource, ReadableStreamSource, SourceRef } from '../source';
 import { HlsDemuxer } from './hls-demuxer';
 import { AttributeList, canIgnoreLine } from './hls-misc';
 
@@ -525,68 +525,70 @@ export class HlsSegmentedInput extends SegmentedInput {
 		}
 
 		const input = new Input({
-			entryPath: hlsSegment.location.path,
-			source: async (request) => {
-				if (request.path !== hlsSegment.location.path) {
-					// This code technically allows for recursive .m3u8 files for example. Uncached because the added
-					// input adds its own layer of caching, so here we just do a passthrough.
-					return this.input._getSourceUncached(request);
-				}
-
-				let ref: SourceRef;
-				const needsSlice = hlsSegment.location.offset > 0 || hlsSegment.location.length !== null;
-
-				if (!hlsSegment.encryption) {
-					ref = await this.input._getSourceCached(request);
-
-					if (needsSlice) {
-						const slice = ref.source.slice(
-							hlsSegment.location.offset,
-							hlsSegment.location.length ?? undefined,
-						);
-						const sliceRef = slice.ref();
-						ref.free();
-						ref = sliceRef;
-					}
-				} else {
-					assert(hlsSegment.encryption.iv);
-
-					let ciphertextRef = await this.input._getSourceCached(request);
-					if (needsSlice) {
-						// Slice before decrypting
-						const slice = ciphertextRef.source.slice(
-							hlsSegment.location.offset,
-							hlsSegment.location.length ?? undefined,
-						);
-						const sliceRef = slice.ref();
-						ciphertextRef.free();
-						ciphertextRef = sliceRef;
+			source: new PathedSource(
+				hlsSegment.location.path,
+				async (request) => {
+					if (request.path !== hlsSegment.location.path) {
+						// This code technically allows for recursive .m3u8 files for example. Uncached because the
+						// added input adds its own layer of caching, so here we just do a passthrough.
+						return this.input._getSourceUncached(request);
 					}
 
-					const ciphertextReader = new Reader(ciphertextRef.source);
+					let ref: SourceRef;
+					const needsSlice = hlsSegment.location.offset > 0 || hlsSegment.location.length !== null;
 
-					const stream = createAes128CbcDecryptStream(ciphertextReader, async () => {
-						using keyRef = await this.input._getSourceCached(
-							{ path: hlsSegment.encryption!.keyUri, isRoot: false },
-							ENCRYPTION_KEY_CACHE_GROUP,
-						);
-						const keyReader = new Reader(keyRef.source);
-						const keySlice = await keyReader.requestSlice(0, AES_128_BLOCK_SIZE);
-						if (!keySlice) {
-							throw new Error('Invalid AES-128 key; expected at least 16 bytes of data.');
+					if (!hlsSegment.encryption) {
+						ref = await this.input._getSourceCached(request);
+
+						if (needsSlice) {
+							const slice = ref.source.slice(
+								hlsSegment.location.offset,
+								hlsSegment.location.length ?? undefined,
+							);
+							const sliceRef = slice.ref();
+							ref.free();
+							ref = sliceRef;
 						}
-						const key = readBytes(keySlice, AES_128_BLOCK_SIZE);
+					} else {
+						assert(hlsSegment.encryption.iv);
 
-						return { key, iv: hlsSegment.encryption!.iv! };
-					}, () => {
-						ciphertextRef.free();
-					});
+						let ciphertextRef = await this.input._getSourceCached(request);
+						if (needsSlice) {
+							// Slice before decrypting
+							const slice = ciphertextRef.source.slice(
+								hlsSegment.location.offset,
+								hlsSegment.location.length ?? undefined,
+							);
+							const sliceRef = slice.ref();
+							ciphertextRef.free();
+							ciphertextRef = sliceRef;
+						}
 
-					ref = new ReadableStreamSource(stream).ref();
-				}
+						const ciphertextReader = new Reader(ciphertextRef.source);
 
-				return ref!;
-			},
+						const stream = createAes128CbcDecryptStream(ciphertextReader, async () => {
+							using keyRef = await this.input._getSourceCached(
+								{ path: hlsSegment.encryption!.keyUri, isRoot: false },
+								ENCRYPTION_KEY_CACHE_GROUP,
+							);
+							const keyReader = new Reader(keyRef.source);
+							const keySlice = await keyReader.requestSlice(0, AES_128_BLOCK_SIZE);
+							if (!keySlice) {
+								throw new Error('Invalid AES-128 key; expected at least 16 bytes of data.');
+							}
+							const key = readBytes(keySlice, AES_128_BLOCK_SIZE);
+
+							return { key, iv: hlsSegment.encryption!.iv! };
+						}, () => {
+							ciphertextRef.free();
+						});
+
+						ref = new ReadableStreamSource(stream).ref();
+					}
+
+					return ref!;
+				},
+			),
 			formats: this.input._formats,
 			initInput: initInput ?? undefined,
 		});

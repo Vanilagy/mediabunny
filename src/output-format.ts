@@ -29,7 +29,7 @@ import { Output, OutputTrack, TrackType } from './output';
 import { MpegTsMuxer } from './mpeg-ts/mpeg-ts-muxer';
 import { WaveMuxer } from './wave/wave-muxer';
 import { HlsMuxer } from './hls/hls-muxer';
-import { MaybePromise, toArray } from './misc';
+import { MaybePromise, FilePath, toArray } from './misc';
 import { Target } from './target';
 
 /**
@@ -1155,36 +1155,136 @@ export class MpegTsOutputFormat extends OutputFormat {
 	}
 }
 
+/**
+ * Info about an HLS media playlist.
+ * @group Output formats
+ * @public
+ */
 export type HlsOutputPlaylistInfo = {
+	/** The 1-based index of the media playlist in the master playlist. */
 	n: number;
+	/** The output tracks contained in this playlist. */
 	tracks: OutputTrack[];
+	/** The format of the media segments in this playlist. */
 	segmentFormat: OutputFormat;
 };
 
+/**
+ * Info about an HLS media segment.
+ * @group Output formats
+ * @public
+ */
 export type HlsOutputSegmentInfo = {
+	/** The 1-based index of the segment in the containing media playlist. */
 	n: number;
+	/** If the segment is a single file, meaning it is a single segment file that covers the entire playlist. */
 	isSingleFile: boolean;
+	/** The format of the media segment. */
 	format: OutputFormat;
+	/** The media playlist to which this segment belongs. */
 	playlist: HlsOutputPlaylistInfo;
 };
 
+/**
+ * HLS-specific output options.
+ * @group Output formats
+ * @public
+ */
 export type HlsOutputFormatOptions = {
+	/**
+	 * Specifies the file format of each media segment. Not all formats are supported by all players; prefer sticking
+	 * to the most commonly used ones: {@link MpegTsOutputFormat}, {@link CmafOutputFormat}, {@link AdtsOutputFormat},
+	 * and {@link Mp3OutputFormat}.
+	 *
+	 * When an array of formats is specified, for each playlist, the first format that can contain all of the playlist's
+	 * tracks is chosen. This allows you to, for example, package audio into .aac files and video into .ts files.
+	 */
 	segmentFormat: OutputFormat | OutputFormat[];
+	/**
+	 * Specifies the target (max) duration in seconds for each media segment, defaulting to 2 seconds.
+	 *
+	 * Mediabunny will try not to emit media segments longer than the target duration, but it is forced to if key frames
+	 * are provided with a longer period than the target duration. Therefore, make sure to encode a key frame at least
+	 * every `targetDuration` seconds to guarantee segment length.
+	 */
 	targetDuration?: number;
+	/**
+	 * Whether to bundle all media segments for a playlist into a single file. Individual segments are then extracted
+	 * via range requests.
+	 */
 	singleFilePerPlaylist?: boolean;
+	/**
+	 * If `true`, the muxer will be in "live mode", continuously emitting updated playlists as new segments are created.
+	 * The master playlist will be emitted as soon as all playlists have been emitted at least once, and will continue
+	 * to be emitted each time a segment is finalized to further refine the accuracy of the `BANDWIDTH` attribute.
+	 *
+	 * When `false` (the default), all playlists will only be emitted once, upon output finalization.
+	 */
 	live?: boolean;
+	/**
+	 * When in live mode, this controls the maximum number of segments contained in each playlist. Defaults to
+	 * `Infinity`, meaning playlists continually grow in size.
+	 */
 	maxLiveSegmentCount?: number;
-	getPlaylistPath?: (info: HlsOutputPlaylistInfo) => MaybePromise<string>;
-	getSegmentPath?: (info: HlsOutputSegmentInfo) => MaybePromise<string>;
-	getInitPath?: (info: HlsOutputPlaylistInfo) => MaybePromise<string>;
+	/**
+	 * Returns the file path for a given media playlist. If the returned path is relative, it is relative to the root
+	 * path.
+	 *
+	 * Defaults to `'playlist-{n}.m3u8'`, where `n` is the 1-based index of the media playlist in the master playlist.
+	 */
+	getPlaylistPath?: (info: HlsOutputPlaylistInfo) => MaybePromise<FilePath>;
+	/**
+	 * Returns the file path for a given media segment. If the returned path is relative, it is relative to the path
+	 * of the containing playlist.
+	 *
+	 * Defaults to `'segment-{n}-{k}{ext}'`, where `n` is the 1-based index of the containing media playlist in the
+	 * master playlist, `k` is the 1-based index of the segment in its playlist, and `ext` is the file extension of the
+	 * segment format (including the leading dot).
+	 *
+	 * If {@link HlsOutputFormatOptions.singleFilePerPlaylist} is true, it defaults to `'segments-{n}{ext}'` instead.
+	 */
+	getSegmentPath?: (info: HlsOutputSegmentInfo) => MaybePromise<FilePath>;
+	/**
+	 * Returns the file path for a given media init segment. If the returned path is relative, it is relative to the
+	 * path of the containing playlist.
+	 *
+	 * Only necessary for segment formats that require an init file, such as {@link CmafOutputFormat}.
+	 *
+	 * Defaults to `'init-{n}{ext}'`, where `n` is the 1-based index of the containing media playlist in the master
+	 * playlist and `ext` is the file extension of the segment format (including the leading dot).
+	 */
+	getInitPath?: (info: HlsOutputPlaylistInfo) => MaybePromise<FilePath>;
 
+	/** Called whenever the master playlist is written. */
 	onMaster?: (content: string) => unknown;
+	/** Called whenever a media playlist is written. */
 	onPlaylist?: (content: string, info: HlsOutputPlaylistInfo) => unknown;
-	// Document how this is called for the single-file mode
+	/**
+	 * Called whenever a media segment has been fully written. In single-file mode, this function will only be called
+	 * once when the playlist is finalized.
+	 */
 	onSegment?: (target: Target, info: HlsOutputSegmentInfo) => unknown;
+	/**
+	 * Called when a media playlist is initialized, before any segments have been written. In single-file mode, this
+	 * function is never called.
+	 */
 	onInit?: (target: Target, info: HlsOutputPlaylistInfo) => unknown;
 };
 
+/**
+ * HTTP Live Streaming (HLS) output format. HLS media is represented by a set of .m3u8 playlist files and media segment
+ * files, meaning this format writes out multiple files, requiring the use of a _pathed Output_
+ * ({@link OutputOptions.target} must be a {@link PathedTarget}).
+ *
+ * This output format creates the following files:
+ * - A master playlist .m3u8 file, containing the list of available playlists. A master playlist is always emitted,
+ * written to the root path.
+ * - One .m3u8 file for each playlist, each containing a list of media segments.
+ * - Many media segments, containing the actual media data.
+ *
+ * @group Output formats
+ * @public
+ */
 export class HlsOutputFormat extends OutputFormat {
 	/** @internal */
 	_options: HlsOutputFormatOptions;
@@ -1300,6 +1400,7 @@ export class HlsOutputFormat extends OutputFormat {
 		return true; // I guess??
 	}
 
+	/** @internal */
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	override _codecUnsupportedHint(codec: MediaCodec): string {
 		return ` Using different segment formats may grant support for this codec.`;

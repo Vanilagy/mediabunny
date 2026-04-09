@@ -20,6 +20,17 @@ import { TrackDisposition } from './metadata';
 import { MaybePromise } from './misc';
 import { TrackType } from './output';
 
+/**
+ * A lightweight descriptor for an {@link InputTrack}. Contains a subset of the track's properties, and can be
+ * converted/upgraded to the full track via the {@link InputTrackDescriptor.getTrack} method.
+ *
+ * For some formats, such as HLS with master playlists, obtaining track descriptors is much cheaper than obtaining the
+ * input track. These descriptors therefore can be used for efficient track selection and filtering without having to
+ * expensively hydrate all input tracks.
+ *
+ * @group Input files & tracks
+ * @public
+ */
 export abstract class InputTrackDescriptor {
 	/** The input file this descriptor belongs to. */
 	readonly input: Input;
@@ -81,10 +92,18 @@ export abstract class InputTrackDescriptor {
 		return this._backing.getDisposition();
 	}
 
+	/**
+	 * The peak bitrate of the track as specified in the track's metadata. This might not match the actual
+	 * media data's bitrate.
+	 */
 	get bitrate(): number | null | undefined {
 		return this._backing.getBitrate();
 	}
 
+	/**
+	 * The average bitrate of the track as specified in the track's metadata. This might not match the actual
+	 * media data's bitrate.
+	 */
 	get averageBitrate(): number | null | undefined {
 		return this._backing.getAverageBitrate();
 	}
@@ -92,13 +111,15 @@ export abstract class InputTrackDescriptor {
 	/** Whether the track metadata says that this track only contains key packets, `undefined` if not yet known. */
 	abstract get hasOnlyKeyPackets(): boolean | undefined;
 
-	canBePairedWith(other: InputTrackDescriptor | InputTrack | null) {
-		if (!(other instanceof InputTrack || other instanceof InputTrackDescriptor || other === null)) {
-			throw new TypeError('other must be an InputTrack, InputTrackDescriptor, or null.');
-		}
-
-		if (!other) {
-			return true;
+	/**
+	 * Returns `true` if this descriptor can be paired with the given track or descriptor. Two tracks being pairable
+	 * means they can be presented (displayed) together.
+	 *
+	 * Returns `false` if `other` equals `this`.
+	 */
+	canBePairedWith(other: InputTrackDescriptor | InputTrack) {
+		if (!(other instanceof InputTrack || other instanceof InputTrackDescriptor)) {
+			throw new TypeError('other must be an InputTrack or InputTrackDescriptor.');
 		}
 
 		if (this.input !== other.input || this === other) {
@@ -108,7 +129,11 @@ export abstract class InputTrackDescriptor {
 		return (this._backing.getPairingMask() & other._backing.getPairingMask()) !== 0n;
 	}
 
-	async getPairableDescriptors(query?: TrackDescriptorQuery<InputTrackDescriptor>) {
+	/**
+	 * Gets the list of other descriptors that can be paired with this descriptor. An optional query can be provided
+	 * to narrow down the results.
+	 */
+	async getPairableDescriptors(query?: InputTrackDescriptorQuery<InputTrackDescriptor>) {
 		query &&= toValidatedTrackDescriptorQuery(query);
 
 		const descriptors = await this.input.getTrackDescriptors();
@@ -118,7 +143,11 @@ export abstract class InputTrackDescriptor {
 		);
 	}
 
-	async getPairableVideoTrackDescriptors(query?: TrackDescriptorQuery<InputVideoTrackDescriptor>) {
+	/**
+	 * Gets the list of other video track descriptors that can be paired with this descriptor. An optional query can
+	 * be provided to narrow down the results.
+	 */
+	async getPairableVideoTrackDescriptors(query?: InputTrackDescriptorQuery<InputVideoTrackDescriptor>) {
 		query &&= toValidatedTrackDescriptorQuery(query);
 
 		const descriptors = await this.getPairableDescriptors();
@@ -128,7 +157,11 @@ export abstract class InputTrackDescriptor {
 		);
 	}
 
-	async getPairableAudioTrackDescriptors(query?: TrackDescriptorQuery<InputAudioTrackDescriptor>) {
+	/**
+	 * Gets the list of other audio track descriptors that can be paired with this descriptor. An optional query can
+	 * be provided to narrow down the results.
+	 */
+	async getPairableAudioTrackDescriptors(query?: InputTrackDescriptorQuery<InputAudioTrackDescriptor>) {
 		query &&= toValidatedTrackDescriptorQuery(query);
 
 		const descriptors = await this.getPairableDescriptors();
@@ -138,17 +171,20 @@ export abstract class InputTrackDescriptor {
 		);
 	}
 
+	/** Returns `true` if there is another descriptor that can be paired with this descriptor. */
 	hasPairableDescriptor(predicate?: (descriptor: InputTrackDescriptor) => boolean) {
 		const descriptors = [...this.input._backingToDescriptor.values()];
 		return descriptors.some(x => this.canBePairedWith(x) && (!predicate || predicate(x)));
 	}
 
+	/** Returns `true` if there is a video track that can be paired with this descriptor. */
 	hasPairableVideoTrack(predicate?: (descriptor: InputVideoTrackDescriptor) => boolean) {
 		return this.hasPairableDescriptor(x =>
 			x.isVideoTrackDescriptor() && (!predicate || predicate(x)),
 		);
 	}
 
+	/** Returns `true` if there is an audio track that can be paired with this descriptor. */
 	hasPairableAudioTrack(predicate?: (descriptor: InputAudioTrackDescriptor) => boolean) {
 		return this.hasPairableDescriptor(x =>
 			x.isAudioTrackDescriptor() && (!predicate || predicate(x)),
@@ -165,7 +201,7 @@ export abstract class InputTrackDescriptor {
 }
 
 /**
- * A lightweight descriptor for a video track.
+ * A lightweight descriptor for an {@link InputVideoTrack}. See {@link InputTrackDescriptor} for details.
  *
  * @group Input files & tracks
  * @public
@@ -234,7 +270,7 @@ export class InputVideoTrackDescriptor extends InputTrackDescriptor {
 }
 
 /**
- * A lightweight descriptor for an audio track.
+ * A lightweight descriptor for an {@link InputAudioTrack}. See {@link InputTrackDescriptor} for details.
  *
  * @group Input files & tracks
  * @public
@@ -276,14 +312,69 @@ export class InputAudioTrackDescriptor extends InputTrackDescriptor {
 	}
 }
 
-export type TrackDescriptorQuery<T extends InputTrackDescriptor> = {
+/**
+ * Defines a query for track descriptors and, by extension, for tracks. Can be used to query tracks tersely and
+ * expressively, which is especially useful for media inputs with many tracks, such as HLS manifests.
+ *
+ * @group Input files & tracks
+ * @public
+ */
+export type InputTrackDescriptorQuery<T extends InputTrackDescriptor> = {
+	/**
+	 * A filter predicate function called for every track descriptor. Returning or resolving to `false` excludes the
+	 * track from the result.
+	 */
 	filter?: (descriptor: T) => MaybePromise<boolean>;
+	/**
+	 * A function called for every track descriptor, used to define a track ordering. Tracks are ordered in ascending
+	 * order using the value returned by this function. When the function returns an array of numbers `arr`, tracks will
+	 * be sorted by `arr[0]` unless they have the same value, in which case they will be sorted by `arr[1]`, and so on.
+	 * This allows you to construct a list of ordering criteria, sorted by importance.
+	 *
+	 * To help construct complex ordering criteria, the {@link asc}, {@link desc}, and {@link prefer} helper functions
+	 * can be used.
+	 */
 	sortBy?: (descriptor: T) => MaybePromise<number | number[]>;
 };
 
+/**
+ * Helper function for use in {@link InputTrackDescriptorQuery.sortBy}, used to describe sorting tracks by a numeric
+ * property in ascending order. `null` and `undefined` are accepted too and are last in the order (sorted to the end).
+ *
+ * @group Input files & tracks
+ * @public
+ */
+export const asc = (value: number | null | undefined) => {
+	return value ?? Infinity; // nulls and undefined last
+};
+
+/**
+ * Helper function for use in {@link InputTrackDescriptorQuery.sortBy}, used to describe sorting tracks by a numeric
+ * property in descending order. `null` and `undefined` are accepted too and are last in the order (sorted to the end).
+ *
+ * @group Input files & tracks
+ * @public
+ */
+export const desc = (value: number | null | undefined) => {
+	return -(value ?? -Infinity); // nulls and undefined last
+};
+
+/**
+ * Helper function for use in {@link InputTrackDescriptorQuery.sortBy}, used to sort tracks by boolean properties.
+ * `true` is sorted to the start, `false` to the end. Useful for expressing soft preferences (e.g., "I'd prefer 1080p,
+ * but other resolutions are fine too") as opposed to {@link InputTrackDescriptorQuery.filter} which expresses hard
+ * requirements for tracks.
+ *
+ * @group Input files & tracks
+ * @public
+ */
+export const prefer = (value: boolean) => {
+	return -value;
+};
+
 export const toValidatedTrackDescriptorQuery = <T extends InputTrackDescriptor>(
-	query: TrackDescriptorQuery<T>,
-): TrackDescriptorQuery<T> => {
+	query: InputTrackDescriptorQuery<T>,
+): InputTrackDescriptorQuery<T> => {
 	if (typeof query !== 'object' || !query) {
 		throw new TypeError('query must be an object.');
 	}
@@ -342,9 +433,9 @@ export const toValidatedTrackDescriptorQuery = <T extends InputTrackDescriptor>(
 };
 
 export const mergeTrackDescriptorQueries = <T extends InputTrackDescriptor>(
-	queryA: TrackDescriptorQuery<T> | undefined,
-	queryB: TrackDescriptorQuery<T> | undefined,
-): TrackDescriptorQuery<T> => {
+	queryA: InputTrackDescriptorQuery<T> | undefined,
+	queryB: InputTrackDescriptorQuery<T> | undefined,
+): InputTrackDescriptorQuery<T> => {
 	return {
 		filter: queryA?.filter || queryB?.filter
 			? (descriptor) => {
@@ -391,7 +482,7 @@ export const mergeTrackDescriptorQueries = <T extends InputTrackDescriptor>(
 
 export const queryTrackDescriptors = async <T extends InputTrackDescriptor>(
 	descriptors: T[],
-	query?: TrackDescriptorQuery<T>,
+	query?: InputTrackDescriptorQuery<T>,
 ): Promise<T[]> => {
 	let matched = descriptors;
 	if (query?.filter) {

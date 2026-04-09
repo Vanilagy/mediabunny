@@ -15,7 +15,6 @@ import {
 	OutputAudioTrack,
 	OutputSubtitleTrack,
 	OutputTrack,
-	outputTracksArePairable,
 	OutputVideoTrack,
 	TrackType,
 } from '../output';
@@ -29,7 +28,7 @@ import {
 import { Writer } from '../writer';
 import { EncodedPacket } from '../packet';
 import { SubtitleCue, SubtitleMetadata } from '../subtitles';
-import { NullTarget, Target } from '../target';
+import { NullTarget, PathedTarget, Target, TargetRequest } from '../target';
 
 type HlsTrackData = {
 	track: OutputTrack;
@@ -105,8 +104,8 @@ export class HlsMuxer extends Muxer {
 	playlistDeclarations: PlaylistDeclaration[] = [];
 
 	constructor(output: Output, format: HlsOutputFormat) {
-		if (!output._targetIsFunction()) {
-			throw new TypeError('HLS outputs require `OutputOptions.target` to be a function.');
+		if (!(output._target instanceof PathedTarget)) {
+			throw new TypeError('HLS outputs require `OutputOptions.target` to be a PathedTarget.');
 		}
 
 		super(output);
@@ -173,7 +172,7 @@ export class HlsMuxer extends Muxer {
 					continue;
 				}
 
-				if (!outputTracksArePairable(track, otherTrack)) {
+				if (!track.canBePairedWith(otherTrack)) {
 					continue;
 				}
 
@@ -807,7 +806,8 @@ export class HlsMuxer extends Muxer {
 			let relativeSegmentPath: string;
 			let fullSegmentPath: string;
 
-			assert(this.output._rootPath !== null);
+			assert(this.output._target instanceof PathedTarget);
+			const pathedTarget = this.output._target;
 
 			if (this.singleFilePerPlaylist) {
 				if (playlist.singleFile === null) {
@@ -822,7 +822,7 @@ export class HlsMuxer extends Muxer {
 					validateSegmentPath(relativeSegmentPath);
 
 					fullSegmentPath = joinPaths(
-						joinPaths(this.output._rootPath, playlist.path),
+						joinPaths(pathedTarget.rootPath, playlist.path),
 						relativeSegmentPath,
 					);
 
@@ -838,7 +838,7 @@ export class HlsMuxer extends Muxer {
 				} else {
 					relativeSegmentPath = playlist.singleFile.path;
 					fullSegmentPath = joinPaths(
-						joinPaths(this.output._rootPath, playlist.path),
+						joinPaths(pathedTarget.rootPath, playlist.path),
 						relativeSegmentPath,
 					);
 				}
@@ -853,8 +853,7 @@ export class HlsMuxer extends Muxer {
 				relativeSegmentPath = await this.getSegmentPath(segmentInfo);
 				validateSegmentPath(relativeSegmentPath);
 
-				assert(this.output._rootPath !== null);
-				fullSegmentPath = joinPaths(joinPaths(this.output._rootPath, playlist.path), relativeSegmentPath);
+				fullSegmentPath = joinPaths(joinPaths(pathedTarget.rootPath, playlist.path), relativeSegmentPath);
 				playlist.nextSegmentId++;
 			}
 
@@ -863,25 +862,27 @@ export class HlsMuxer extends Muxer {
 
 			const output = new Output({
 				format: playlist.segmentFormat,
-				rootPath: fullSegmentPath,
-				target: async (request) => {
-					if (request.isRoot) {
-						if (playlist.singleFile) {
-							const slice = playlist.singleFile.target.slice(playlist.singleFile.nextOffset);
-							slice.on('write', ({ end }) => segmentSize = Math.max(segmentSize, end));
+				target: new PathedTarget(
+					fullSegmentPath,
+					async (request: TargetRequest) => {
+						if (request.isRoot) {
+							if (playlist.singleFile) {
+								const slice = playlist.singleFile.target.slice(playlist.singleFile.nextOffset);
+								slice.on('write', ({ end }) => segmentSize = Math.max(segmentSize, end));
 
-							return slice;
-						} else {
-							const target = await this.output._getTarget(request);
-							outputTarget = target;
-							target.on('write', ({ end }) => segmentSize = Math.max(segmentSize, end));
+								return slice;
+							} else {
+								const target = await this.output._getTarget(request);
+								outputTarget = target;
+								target.on('write', ({ end }) => segmentSize = Math.max(segmentSize, end));
 
-							return target;
+								return target;
+							}
 						}
-					}
 
-					return this.output._getTarget(request);
-				},
+						return this.output._getTarget(request);
+					},
+				),
 				initTarget: async () => {
 					if (playlist.initSegment) {
 						// We already have an init segment from a previous segment
@@ -1113,7 +1114,8 @@ export class HlsMuxer extends Muxer {
 	}
 
 	private async writePlaylist(playlist: Playlist) {
-		assert(this.output._rootPath !== null);
+		assert(this.output._target instanceof PathedTarget);
+		const pathedTarget = this.output._target;
 
 		this.updatePlaylistBitrates(playlist);
 
@@ -1140,7 +1142,7 @@ export class HlsMuxer extends Muxer {
 		// In live mode, target duration is not allowed to change, so we use the nominal value
 		const targetDuration = this.isLive ? this.targetSegmentDuration : this.globalTargetDuration;
 
-		const playlistPath = joinPaths(this.output._rootPath, playlist.path);
+		const playlistPath = joinPaths(pathedTarget.rootPath, playlist.path);
 		const playlistText = '#EXTM3U\n'
 			+ `#EXT-X-VERSION:${version}\n`
 			+ (!this.isLive ? '#EXT-X-PLAYLIST-TYPE:VOD\n' : '')
@@ -1184,6 +1186,9 @@ export class HlsMuxer extends Muxer {
 	}
 
 	private async writeMasterPlaylist() {
+		assert(this.output._target instanceof PathedTarget);
+		const pathedTarget = this.output._target;
+
 		let masterPlaylistText = '#EXTM3U\n';
 		let firstVariantWritten = false;
 
@@ -1366,7 +1371,7 @@ export class HlsMuxer extends Muxer {
 
 		this.format._options.onMaster?.(masterPlaylistText);
 
-		const target = await this.output._getTarget({ path: this.output._rootPath!, isRoot: true });
+		const target = await this.output._getTarget({ path: pathedTarget.rootPath, isRoot: true });
 		const writer = new Writer(target);
 
 		writer.start();
@@ -1390,7 +1395,7 @@ export class HlsMuxer extends Muxer {
 	}
 
 	async finalize() {
-		assert(this.output._rootPath !== null);
+		assert(this.output._target instanceof PathedTarget);
 		const release = await this.mutex.acquire();
 
 		for (const trackData of this.trackDatas) {
