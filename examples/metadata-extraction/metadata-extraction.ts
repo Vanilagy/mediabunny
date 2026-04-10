@@ -1,4 +1,4 @@
-import { Input, ALL_FORMATS, BlobSource, UrlSource } from 'mediabunny';
+import { ALL_FORMATS, createInputFrom } from 'mediabunny';
 
 import SampleFileUrl from '../../docs/assets/big-buck-bunny-trimmed.mp4';
 (document.querySelector('#sample-file-download') as HTMLAnchorElement).href = SampleFileUrl;
@@ -10,44 +10,42 @@ const horizontalRule = document.querySelector('hr') as HTMLHRElement;
 const bytesReadElement = document.querySelector('#bytes-read') as HTMLParagraphElement;
 const metadataContainer = document.querySelector('#metadata-container') as HTMLDivElement;
 
-const extractMetadata = async (resource: File | string) => {
+const extractMetadata = (resource: File | string) => {
 	// Create a new input from the resource
-	let input: Input;
-	if (resource instanceof File) {
-		input = new Input({
-			source: new BlobSource(resource),
-			formats: ALL_FORMATS, // Accept all formats
-		});
-	} else {
-		input = new Input({
-			entryPath: resource,
-			source: ({ path }) => new UrlSource(path),
-			formats: ALL_FORMATS, // Accept all formats
-		});
-	}
+	const input = createInputFrom(resource, ALL_FORMATS); // Accept all formats
 
 	let bytesRead = 0;
 	let fileSize: number | null = null;
+	let obtainedSources = 0;
 
 	const updateBytesRead = () => {
-		bytesReadElement.textContent = `Bytes read: ${bytesRead} / ${fileSize === null ? '?' : fileSize}`;
+		if (obtainedSources > 1) {
+			bytesReadElement.textContent = `Bytes read: ${bytesRead} across ${obtainedSources} files`;
+		} else {
+			bytesReadElement.textContent = `Bytes read: ${bytesRead} / ${fileSize === null ? '?' : fileSize}`;
 
-		if (fileSize !== null) {
-			bytesReadElement.textContent += ` (${(100 * bytesRead / fileSize).toPrecision(3)}% of entire file)`;
+			if (fileSize !== null) {
+				bytesReadElement.textContent += ` (${(100 * bytesRead / fileSize).toPrecision(3)}% of entire file)`;
+			}
 		}
 	};
 
-	const source = await input.getSource();
+	input.on('source', ({ source, isRoot }) => {
+		if (isRoot) {
+			// Get the input's size
+			void source.getSize().then((size) => {
+				fileSize = size;
+				updateBytesRead();
+			});
+		}
 
-	source.onread = (start, end) => {
-		bytesRead += end - start;
+		obtainedSources++;
 		updateBytesRead();
-	};
 
-	// Get the input's size
-	void source.getSize().then((size) => {
-		fileSize = size;
-		updateBytesRead();
+		source.on('read', ({ start, end }) => {
+			bytesRead += end - start;
+			updateBytesRead();
+		});
 	});
 
 	// This object contains all the data that gets displayed:
@@ -57,28 +55,26 @@ const extractMetadata = async (resource: File | string) => {
 		'Starts at': input.getFirstTimestamp().then(start => `${start} seconds`),
 		'Ends at': input.computeDuration().then(duration => `${duration} seconds`),
 		'Tracks': input.getTracks().then(tracks => tracks.map(track => ({
-			'Type': track.resolve('type').then(type => type),
-			'Codec': track.resolve('codec').then(codec => codec),
+			'Type': track.type,
+			'Codec': track.codec,
 			'Full codec string': track.getCodecParameterString(),
 			'Starts at': track.getFirstTimestamp().then(start => `${start} seconds`),
 			'Ends at': track.computeDuration().then(duration => `${duration} seconds`),
-			'Language code': track.resolve('languageCode').then(languageCode => languageCode),
+			'Language code': track.languageCode,
 			...(track.isVideoTrack()
 				? {
-						'Coded width': track.resolve('codedWidth').then(codedWidth => `${codedWidth} pixels`),
-						'Coded height': track.resolve('codedHeight').then(codedHeight => `${codedHeight} pixels`),
-						'Rotation': track.resolve('rotation').then(rotation => `${rotation}° clockwise`),
-						'Pixel aspect ratio': track.resolve('pixelAspectRatio').then(pixelAspectRatio =>
-							`${pixelAspectRatio.num}:${pixelAspectRatio.den}`,
-						),
-						'Display width': track.resolve('displayWidth').then(displayWidth => `${displayWidth} pixels`),
-						'Display height': track.resolve('displayHeight').then(displayHeight => `${displayHeight} pixels`),
+						'Coded width': `${track.codedWidth} pixels`,
+						'Coded height': `${track.codedHeight} pixels`,
+						'Rotation': `${track.rotation}° clockwise`,
+						'Pixel aspect ratio': `${track.pixelAspectRatio.num}:${track.pixelAspectRatio.den}`,
+						'Display width': `${track.displayWidth} pixels`,
+						'Display height': `${track.displayHeight} pixels`,
 						'Transparency': track.canBeTransparent(),
 					}
 				: track.isAudioTrack()
 					? {
-							'Number of channels': track.resolve('numberOfChannels').then(numberOfChannels => numberOfChannels),
-							'Sample rate': track.resolve('sampleRate').then(sampleRate => `${sampleRate} Hz`),
+							'Number of channels': track.numberOfChannels,
+							'Sample rate': `${track.sampleRate} Hz`,
 						}
 					: {}),
 			'Packet statistics': shortDelay().then(() => track.computePacketStats()).then(stats => ({

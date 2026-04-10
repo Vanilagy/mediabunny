@@ -388,10 +388,6 @@ export class OggDemuxer extends Demuxer {
 		});
 	}
 
-	async getDurationFromMetadata(): Promise<number | null> {
-		return null; // Not stored anywhere
-	}
-
 	async getTrackBackings() {
 		await this.readMetadata();
 		return this.trackBackings;
@@ -471,7 +467,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 	}
 
 	async getDurationFromMetadata() {
-		return null;
+		return null; // Not stored anywhere
 	}
 
 	async getLiveRefreshInterval() {

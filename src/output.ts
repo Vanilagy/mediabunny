@@ -335,6 +335,8 @@ export type OutputEvents = {
 		target: Target;
 		/** The request that led to the target being obtained, or `null` if the output is not pathed. */
 		request: TargetRequest | null;
+		/** Whether the target is the root file of the media. */
+		isRoot: boolean;
 	};
 };
 
@@ -379,21 +381,33 @@ export class Output<
 	_mutex = new AsyncMutex();
 	/** @internal */
 	_metadataTags: MetadataTags = {};
+	/** @internal */
+	_rootTarget: T | null = null;
+	/** @internal */
+	_rootTargetPromise: Promise<T> | null = null;
 
-	/** The target to which the root file will be written. Throws if the target-resolving function returns a Promise. */
+	/**
+	 * The target to which the root file will be written. Throws when using {@link PathedTarget} with an async callback;
+	 * prefer the `'target'` event for those cases.
+	 */
 	get target(): T {
-		if (this._target instanceof Target) {
-			return this._target;
+		const errorMessage = 'Output.target cannot be used when using PathedTarget with an async callback.'
+			+ ' Use the \'target\' event instead.';
+
+		// We use this field to make sure we can reliably throw in the `target` getter whenever retrieving the target
+		// requires awaiting a promise. We do this so there is no different behavior based on order: if the target has
+		// already been retrieved via the normal internal operations, and then somebody calls the `target` getter, even
+		// if the target is now available, the getter should still throw to be consistent in behavior and in definition.
+		if (this._rootTargetPromise) {
+			throw new TypeError(errorMessage);
 		}
 
-		const target = this._target.getTarget({ path: this._target.rootPath, isRoot: true });
-		if (target instanceof Promise) {
-			throw new TypeError(
-				'Output.target cannot be used when the target function resolves asynchronously.',
-			);
+		const rootTargetResult = this._getRootTarget();
+		if (rootTargetResult instanceof Promise) {
+			throw new TypeError(errorMessage);
 		}
 
-		return target;
+		return rootTargetResult;
 	}
 
 	/**
@@ -444,12 +458,32 @@ export class Output<
 	}
 
 	/** @internal */
+	_getTargetValidated(request: TargetRequest): MaybePromise<T> {
+		assert(this._target instanceof PathedTarget);
+
+		const result = this._target.getTarget(request);
+		const handleResult = (result: T) => {
+			if (!(result instanceof Target)) {
+				throw new TypeError('getTarget must return a Target.');
+			}
+
+			return result;
+		};
+
+		if (result instanceof Promise) {
+			return result.then(handleResult);
+		} else {
+			return handleResult(result);
+		}
+	}
+
+	/** @internal */
 	async _getTarget(request: TargetRequest) {
 		assert(this._target instanceof PathedTarget);
 
-		const target = await this._target.getTarget(request);
+		const target = await this._getTargetValidated(request);
 		target._output = this;
-		this._emit('target', { target, request });
+		this._emit('target', { target, request, isRoot: request.isRoot });
 
 		if (this.state === 'canceled') {
 			await target._close();
@@ -486,16 +520,48 @@ export class Output<
 	}
 
 	/** @internal */
+	_getRootTarget(): MaybePromise<T> {
+		if (this._rootTarget) {
+			return this._rootTarget;
+		}
+		if (this._rootTargetPromise) {
+			return this._rootTargetPromise;
+		}
+
+		if (this._target instanceof Target) {
+			this._emit('target', { target: this._target, request: null, isRoot: true });
+			this._rootTarget = this._target;
+			return this._target;
+		}
+
+		const request: TargetRequest = { path: this._target.rootPath, isRoot: true };
+		const result = this._getTargetValidated(request);
+
+		const handleResult = (target: T) => {
+			target._output = this;
+
+			if (this.state === 'canceled') {
+				void target._close();
+			} else {
+				this._targets.add(target);
+			}
+
+			this._emit('target', { target, request, isRoot: true });
+			this._rootTarget = target;
+			return target;
+		};
+
+		if (result instanceof Promise) {
+			return this._rootTargetPromise = result.then(handleResult);
+		} else {
+			return handleResult(result);
+		}
+	}
+
+	/** @internal */
 	_getRootWriter() {
 		return this._rootWriterPromise ??= (async () => {
-			let target: Target;
-
-			if (this._target instanceof PathedTarget) {
-				target = await this._getTarget({ path: this._target.rootPath, isRoot: true });
-			} else {
-				target = this._target;
-				this._emit('target', { target: this._target, request: null });
-			}
+			const target = await this._getRootTarget();
 
 			const writer = new Writer(target);
 			writer.start();
@@ -799,8 +865,10 @@ export class Output<
 
 				if (this._rootWriterPromise) {
 					const rootWriter = await this._rootWriterPromise;
-					await rootWriter.flush();
-					await rootWriter.finalize();
+					if (!rootWriter.finalized) {
+						await rootWriter.flush();
+						await rootWriter.finalize();
+					}
 				}
 
 				this.state = 'finalized';

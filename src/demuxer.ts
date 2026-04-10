@@ -36,7 +36,6 @@ export abstract class Demuxer {
 	abstract getTrackBackings(): Promise<InputTrackBacking[]>;
 	abstract getMimeType(): Promise<string>;
 	abstract getMetadataTags(): Promise<MetadataTags>;
-	abstract getDurationFromMetadata(options: DurationMetadataRequestOptions): Promise<number | null>;
 
 	dispose() {
 		// Can be overridden

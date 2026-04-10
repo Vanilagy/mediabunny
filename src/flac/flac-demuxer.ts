@@ -97,17 +97,6 @@ export class FlacDemuxer extends Demuxer {
 		return [this.trackBacking];
 	}
 
-	async getDurationFromMetadata(): Promise<number | null> {
-		await this.readMetadata();
-		assert(this.audioInfo);
-
-		if (this.audioInfo.totalSamples === 0) {
-			return null;
-		}
-
-		return this.audioInfo.totalSamples / this.audioInfo.sampleRate;
-	}
-
 	async getMimeType() {
 		return 'audio/flac';
 	}
@@ -618,8 +607,14 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		return null;
 	}
 
-	getDurationFromMetadata() {
-		return this.demuxer.getDurationFromMetadata();
+	async getDurationFromMetadata() {
+		assert(this.demuxer.audioInfo);
+
+		if (this.demuxer.audioInfo.totalSamples === 0) {
+			return null;
+		}
+
+		return this.demuxer.audioInfo.totalSamples / this.demuxer.audioInfo.sampleRate;
 	}
 
 	async getLiveRefreshInterval() {

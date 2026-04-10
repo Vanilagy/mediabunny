@@ -33,6 +33,7 @@ import {
 	arrayCount,
 	assert,
 	EventEmitter,
+	MaybePromise,
 	polyfillSymbolDispose,
 	removeItem,
 } from './misc';
@@ -53,8 +54,13 @@ import {
 	UrlSource,
 	UrlSourceOptions,
 } from './source';
+import * as nodeAlias from './node';
 
 polyfillSymbolDispose();
+
+const node = typeof nodeAlias !== 'undefined'
+	? nodeAlias // Aliasing it prevents some bundler warnings
+	: undefined!;
 
 export const DEFAULT_SOURCE_CACHE_GROUP = 1;
 export const ENCRYPTION_KEY_CACHE_GROUP = 2;
@@ -109,6 +115,8 @@ export type InputEvents = {
 		source: Source;
 		/** The request that led to loading this source, or `null` if the input is not pathed. */
 		request: SourceRequest | null;
+		/** Whether the source is the root file of the media. */
+		isRoot: boolean;
 	};
 };
 
@@ -149,6 +157,10 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 	/** @internal */
 	_sourceCache: SourceCacheEntry<S>[] = [];
 	/** @internal */
+	_rootRef: SourceRef<S> | null = null;
+	/** @internal */
+	_rootRefPromise: Promise<SourceRef<S>> | null = null;
+	/** @internal */
 	_sourceCachePromises: {
 		request: SourceRequest;
 		cacheGroup: number;
@@ -180,6 +192,9 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 		)) {
 			throw new TypeError('options.source must be a Source, SourceRef, or PathedSource.');
 		}
+		if (options.source instanceof Source && options.source._disposed) {
+			throw new TypeError('options.source must not be a disposed Source.');
+		}
 		if (options.initInput !== undefined && !(options.initInput instanceof Input)) {
 			throw new TypeError('options.initInput, when provided, must be an Input.');
 		}
@@ -201,16 +216,33 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 	}
 
 	/** @internal */
+	_getSourceValidated(request: SourceRequest): MaybePromise<S | SourceRef<S>> {
+		assert(this._source instanceof PathedSource);
+
+		const result = this._source.getSource(request);
+		const handleResult = (result: S | SourceRef<S>) => {
+			if (!(result instanceof Source || result instanceof SourceRef)) {
+				throw new TypeError('getSource must return a Source or a SourceRef.');
+			}
+			if (result instanceof Source && result._disposed) {
+				throw new TypeError('The returned Source must not be disposed.');
+			}
+
+			return result;
+		};
+
+		if (result instanceof Promise) {
+			return result.then(handleResult);
+		} else {
+			return handleResult(result);
+		}
+	}
+
+	/** @internal */
 	async _getSourceUncached(request: SourceRequest) {
 		assert(this._source instanceof PathedSource);
 
-		const source = await this._source.getSource(request);
-		if (!(source instanceof Source || source instanceof SourceRef)) {
-			throw new TypeError('The source function must return a Source or a SourceRef.');
-		}
-		if (source instanceof Source && source._disposed) {
-			throw new TypeError('The returned Source must not be disposed.');
-		}
+		const source = await this._getSourceValidated(request);
 
 		let ref: SourceRef<S>;
 		if (source instanceof Source) {
@@ -219,7 +251,7 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 			ref = source;
 		}
 
-		this._emit('source', { source: ref.source, request });
+		this._emit('source', { source: ref.source, request, isRoot: request.isRoot });
 		return ref;
 	}
 
@@ -243,22 +275,13 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 		const promise = (async () => {
 			const sourceRef = await this._getSourceUncached(request);
 
-			const cacheEntry: SourceCacheEntry<S> = {
-				request,
-				sourceRef,
-				age: this._nextSourceCacheAge++,
-				cacheGroup,
-			};
-
-			this._sourceCache.push(cacheEntry);
-
 			const MAX_SOURCE_CACHE_SIZE = 4;
 			const count = arrayCount(
 				this._sourceCache,
 				x => x.cacheGroup === cacheGroup && x.sourceRef.source._refCount === 1,
 			);
 
-			if (count > MAX_SOURCE_CACHE_SIZE) {
+			if (count >= MAX_SOURCE_CACHE_SIZE) {
 				const minAgeIndex = arrayArgmin(
 					this._sourceCache,
 					x => x.cacheGroup === cacheGroup && x.sourceRef.source._refCount === 1 ? x.age : Infinity,
@@ -268,7 +291,7 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 				this._sourceCache.splice(minAgeIndex, 1);
 
 				entry.sourceRef.free();
-				removeItem(this._sourceRefs, sourceRef);
+				removeItem(this._sourceRefs, entry.sourceRef);
 			}
 
 			this._sourceRefs.push(sourceRef);
@@ -277,6 +300,12 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 			assert(promiseIndex !== -1);
 			this._sourceCachePromises.splice(promiseIndex, 1);
 
+			const cacheEntry: SourceCacheEntry<S> = {
+				request,
+				sourceRef,
+				age: this._nextSourceCacheAge++,
+				cacheGroup,
+			};
 			return cacheEntry;
 		})();
 
@@ -286,22 +315,64 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 			promise,
 		});
 
-		return promise.then(x => x.sourceRef.source.ref());
+		return promise.then((entry) => {
+			const ref = entry.sourceRef.source.ref();
+
+			// We need to add it to the cache this late to avoid the ref being freed prematurely due to race conditions
+			this._sourceCache.push(entry);
+
+			return ref;
+		});
+	}
+
+	/** @internal */
+	_getRootSourceRef(): MaybePromise<SourceRef<S>> {
+		if (this._rootRef) {
+			return this._rootRef;
+		}
+		if (this._rootRefPromise) {
+			return this._rootRefPromise;
+		}
+
+		if (this._source instanceof SourceRef) {
+			this._emit('source', { source: this._source.source, request: null, isRoot: true });
+			this._rootRef = this._source;
+
+			assert(this._sourceRefs.includes(this._source)); // Assert that it's already been added
+
+			return this._source;
+		}
+
+		const request: SourceRequest = { path: this._source.rootPath, isRoot: true };
+		const result = this._getSourceValidated(request);
+
+		const handleResult = (result: S | SourceRef<S>) => {
+			let ref: SourceRef<S>;
+			if (result instanceof Source) {
+				ref = result.ref();
+			} else {
+				ref = result;
+			}
+
+			this._sourceRefs.push(ref);
+			this._emit('source', { source: ref.source, request, isRoot: true });
+			this._rootRef = ref;
+
+			return ref;
+		};
+
+		if (result instanceof Promise) {
+			return this._rootRefPromise = result.then(handleResult);
+		} else {
+			return handleResult(result);
+		}
 	}
 
 	/** @internal */
 	_getDemuxer() {
 		return this._demuxerPromise ??= (async () => {
-			let ref: SourceRef;
-			if (this._source instanceof SourceRef) {
-				ref = this._source;
-				this._emit('source', { source: ref.source, request: null });
-			} else {
-				ref = await this._getSourceUncached({ path: this._source.rootPath, isRoot: true });
-				this._sourceRefs.push(ref);
-			}
-
-			this._reader = new Reader(ref.source);
+			const rootRef = await this._getRootSourceRef();
+			this._reader = new Reader(rootRef.source);
 
 			for (const format of this._formats) {
 				const canRead = await format._canReadInput(this);
@@ -316,27 +387,27 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 	}
 
 	/**
-	 * Returns the source from which this input file reads data for the entry path. Throws if the source-resolving
-	 * function returns a promise; prefer the `'source'` event for those cases.
+	 * Returns the source from which this input file reads data for the root path. Throws when using
+	 * {@link PathedSource} with an async callback; prefer the `'source'` event for those cases.
 	 */
 	get source(): S {
-		if (this._source instanceof SourceRef) {
-			return this._source.source;
+		const errorMessage = 'Input.source cannot be used when using PathedSource with an async callback.'
+			+ ' Use the \'source\' event instead.';
+
+		// We use this field to make sure we can reliably throw in the `source` getter whenever retrieving the source
+		// requiring awaiting a promise. We do this so there is no different behavior based on order: if the source has
+		// already been retrieved via the normal internal operations, and then somebody calls the `source` getter, even
+		// if the source is now available, the getter should still throw to be consistent in behavior and in definition.
+		if (this._rootRefPromise) {
+			throw new TypeError(errorMessage);
 		}
 
-		const source = this._source.getSource({ path: this._source.rootPath, isRoot: true });
-		if (source instanceof Promise) {
-			throw new TypeError(
-				'Input.source cannot be used when the source function resolves asynchronously.'
-				+ ' Use the \'source\' event instead.',
-			);
+		const rootRefResult = this._getRootSourceRef();
+		if (rootRefResult instanceof Promise) {
+			throw new TypeError(errorMessage);
 		}
 
-		if (source instanceof Source) {
-			return source;
-		} else {
-			return source.source;
-		}
+		return rootRefResult.source;
 	}
 
 	/**
@@ -365,53 +436,75 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 	}
 
 	/**
+	 * Returns the timestamp at which the input file starts. More precisely, returns the smallest starting timestamp
+	 * among all tracks.
+	 *
+	 * Optionally, you can pass in the list of tracks for which you want to compute the starting timestamp.
+	 *
+	 * Note that this method is potentially expensive for inputs with many tracks (such as HLS manifests), since it
+	 * probes every track.
+	 */
+	async getFirstTimestamp(tracks?: InputTrack[]) {
+		tracks ??= await this.getTracks();
+
+		const filtered = tracks.filter(x => x !== null);
+		if (filtered.length === 0) {
+			return 0;
+		}
+
+		const firstTimestamps = await Promise.all(filtered.map(x => x.getFirstTimestamp()));
+		return Math.min(...firstTimestamps);
+	}
+
+	/**
 	 * Computes the duration of the input file, in seconds. More precisely, returns the largest end timestamp among
 	 * all tracks.
+	 *
+	 * Optionally, you can pass in the list of tracks for which you want to compute the duration.
+	 *
+	 * This method can be potentially expensive depending on the underlying file format, because it returns the most
+	 * accurate duration possible and must check all tracks. Use {@link Input.getDurationFromMetadata} for a faster but
+	 * less accurate estimate of duration.
 	 *
 	 * By default, when any track in the underlying media is live, this method will only resolve once the live stream
 	 * ends. If you want to query the current duration of the media, set {@link PacketRetrievalOptions.skipLiveWait}
 	 * to `true` in the options.
 	 */
-	async computeDuration(options?: PacketRetrievalOptions) {
-		const tracks = await this.getTracks();
-		if (tracks.length === 0) {
+	async computeDuration(tracks?: InputTrack[], options?: PacketRetrievalOptions) {
+		tracks ??= await this.getTracks();
+
+		const filtered = tracks.filter(x => x !== null);
+		if (filtered.length === 0) {
 			return 0;
 		}
 
-		const tracksDurations = await Promise.all(tracks.map(x => x.computeDuration(options)));
+		const tracksDurations = await Promise.all(filtered.map(x => x.computeDuration(options)));
 		return Math.max(...tracksDurations);
 	}
 
 	/**
-	 * Returns the timestamp at which the input file starts. More precisely, returns the smallest starting timestamp
-	 * among all tracks.
-	 *
-	 * Note that this method is potentially expensive for inputs with many tracks (such as HLS manifests), since it
-	 * probes every track.
-	 */
-	async getFirstTimestamp() {
-		const tracks = await this.getTracks();
-		if (tracks.length === 0) {
-			return 0;
-		}
-
-		const firstTimestamps = await Promise.all(tracks.map(x => x.getFirstTimestamp()));
-		return Math.min(...firstTimestamps);
-	}
-
-	/**
-	 * Gets the duration (end timestamp) of the input file from metadata stored in the file. This value may be
-	 * approximate or diverge from the actual, precise duration returned by `.computeDuration()`, but compared to that
-	 * method, this method is very cheap. When the duration cannot be determined from the file metadata, `null`
+	 * Gets the duration (end timestamp) in seconds of the input file from metadata stored in the file. This value may
+	 * be approximate or diverge from the actual, precise duration returned by `.computeDuration()`, but compared to
+	 * that method, this method is cheaper. When the duration cannot be determined from the file metadata, `null`
 	 * is returned.
+	 *
+	 * Optionally, you can pass in the list of tracks for which you want to get the duration from metadata.
 	 *
 	 * By default, when the underlying media is live, this method will only resolve once the live stream
 	 * ends. If you want to query the current duration of the media, set
 	 * {@link DurationMetadataRequestOptions.skipLiveWait} to `true` in the options.
 	 */
-	async getDurationFromMetadata(options: DurationMetadataRequestOptions = {}) {
-		const demuxer = await this._getDemuxer();
-		return demuxer.getDurationFromMetadata(options);
+	async getDurationFromMetadata(tracks?: InputTrack[], options?: DurationMetadataRequestOptions) {
+		tracks ??= await this.getTracks();
+
+		const filtered = tracks.filter(x => x !== null);
+		const tracksDurations = await Promise.all(filtered.map(x => x.getDurationFromMetadata(options)));
+		const nonNullDurations = tracksDurations.filter(x => x !== null);
+		if (nonNullDurations.length === 0) {
+			return null;
+		}
+
+		return Math.max(...nonNullDurations);
 	}
 
 	/**
@@ -737,6 +830,9 @@ export type CreateInputFromOptions =
  * The available options are the union of the options for each {@link Source}. Check the sources to see which field
  * applies to which source.
  *
+ * **Note:** In server-side environments, it is critical that you validate the input to this function if it is a string.
+ * If you're expecting a user-defined URL, you must validate that it's actually a URL and not a local file path.
+ *
  * @group Input files & tracks
  * @public
  */
@@ -812,9 +908,8 @@ export const createInputFrom = (
 	}
 
 	if (typeof data === 'string') {
-		const isUrl = data.includes('://');
-
-		if (isUrl) {
+		const isTreatedAsUrl = !node.fs || data.includes('://');
+		if (isTreatedAsUrl) {
 			return new Input({
 				formats,
 				source: new PathedSource(
@@ -825,7 +920,7 @@ export const createInputFrom = (
 			});
 		}
 
-		// It's a file path; this throws automatically if this isn't server-side
+		// Treat it as a local file path
 		return new Input({
 			formats,
 			source: new PathedSource(

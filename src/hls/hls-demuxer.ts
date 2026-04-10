@@ -593,12 +593,6 @@ export class HlsDemuxer extends Demuxer {
 		return segmentedInput;
 	}
 
-	async getDurationFromMetadata(options: DurationMetadataRequestOptions): Promise<number | null> {
-		return this.hasMasterPlaylist
-			? null
-			: this.segmentedInputs[0]!.getDurationFromMetadata(options);
-	}
-
 	async getMetadataTags(): Promise<MetadataTags> {
 		return {};
 	}

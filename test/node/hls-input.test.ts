@@ -13,11 +13,14 @@ test.concurrent('Big Buck Bunny', { timeout: 15_000 }, async () => {
 	let sourceCount = 0;
 	input.on('source', () => sourceCount++);
 
+	let rootReadCount = 0;
+	input.source.on('read', () => rootReadCount++);
+
 	expect(await input.getFormat()).toBeInstanceOf(HlsInputFormat);
 	expect(await input.getFormat()).toBe(HLS);
-	expect(await input.getDurationFromMetadata()).toBe(null); // Since it's a master playlist!
 
 	expect(sourceCount).toBe(1);
+	expect(rootReadCount).toBeGreaterThan(0);
 
 	// Test descriptors (unhydrated metadata from master playlist)
 	const descriptors = await input.getTrackDescriptors();
@@ -211,6 +214,8 @@ test.concurrent('Big Buck Bunny', { timeout: 15_000 }, async () => {
 	// Since they're the highest-bitrate option
 	expect(primaryVideoTrack).toBe(videoTracks[4]);
 	expect(primaryAudioTrack).toBe(audioTracks[4]);
+
+	expect(await input.getDurationFromMetadata()).not.toBe(null);
 });
 
 test.concurrent('Single-variant Big Buck Bunny', { timeout: 15_000 }, async () => {

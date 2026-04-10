@@ -117,10 +117,6 @@ class SegmentedInputDemuxer extends Demuxer {
 		this.segmentedInput = segmentedInput;
 	}
 
-	async getDurationFromMetadata(): Promise<number | null> {
-		throw new Error('Unreachable');
-	}
-
 	async getMetadataTags(): Promise<MetadataTags> {
 		throw new Error('Unreachable');
 	}

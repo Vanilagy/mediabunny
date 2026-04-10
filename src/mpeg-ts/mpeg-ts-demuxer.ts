@@ -714,10 +714,6 @@ export class MpegTsDemuxer extends Demuxer {
 		return this.trackBackingEntries;
 	}
 
-	async getDurationFromMetadata(): Promise<number | null> {
-		return null;
-	}
-
 	async getMetadataTags(): Promise<MetadataTags> {
 		return {}; // Nothing for now
 	}

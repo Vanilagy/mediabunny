@@ -179,16 +179,16 @@ export abstract class InputTrack {
 	}
 
 	/**
-	 * The peak bitrate of the track as specified in the track's metadata. This might not match the actual
-	 * media data's bitrate.
+	 * The peak bitrate of the track, in bits per second, as specified in the track's metadata. This might not match the
+	 * actual media data's bitrate.
 	 */
 	get bitrate() {
 		return this._backing.getBitrate();
 	}
 
 	/**
-	 * The average bitrate of the track as specified in the track's metadata. This might not match the actual
-	 * media data's bitrate.
+	 * The average bitrate of the track, in bits per second, as specified in the track's metadata. This might not match
+	 * the actual media data's bitrate.
 	 */
 	get averageBitrate() {
 		return this._backing.getAverageBitrate();
@@ -219,9 +219,9 @@ export abstract class InputTrack {
 	}
 
 	/**
-	 * Gets the duration (end timestamp) of this track from metadata stored in the file. This value may be
+	 * Gets the duration (end timestamp) in seconds of this track from metadata stored in the file. This value may be
 	 * approximate or diverge from the actual, precise duration returned by `.computeDuration()`, but compared to that
-	 * method, this method is very cheap. When the duration cannot be determined from the file metadata, `null`
+	 * method, this method is cheaper. When the duration cannot be determined from the file metadata, `null`
 	 * is returned.
 	 *
 	 * By default, when the underlying media is live, this method will only resolve once the live stream

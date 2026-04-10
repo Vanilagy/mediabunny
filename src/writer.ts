@@ -11,6 +11,8 @@ import { Target } from './target';
 
 export class Writer {
 	target: Target;
+	finalized = false;
+	started = false;
 
 	private pos = 0;
 
@@ -19,7 +21,9 @@ export class Writer {
 	}
 
 	start() {
+		assert(!this.started);
 		this.target._start();
+		this.started = true;
 	}
 
 	ensureMonotonicity() {
@@ -29,6 +33,8 @@ export class Writer {
 
 	/** Writes the given data to the target, at the current position. */
 	write(data: Uint8Array) {
+		assert(this.started && !this.finalized);
+
 		this.maybeTrackWrites(data);
 		this.target._write(data, this.pos);
 		this.pos += data.byteLength;
@@ -46,15 +52,19 @@ export class Writer {
 
 	/** Signals to the writer that it may be time to flush. */
 	async flush() {
+		assert(this.started && !this.finalized);
 		return this.target._flush();
 	}
 
 	/** Called after muxing has finished. */
 	async finalize() {
+		assert(this.started && !this.finalized);
 		assert(this.target._output);
 
 		await this.target._finalize();
 		this.target._output._targets.delete(this.target);
+
+		this.finalized = true;
 	}
 
 	private trackedWrites: Uint8Array | null = null;

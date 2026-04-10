@@ -8,12 +8,6 @@ import {
 	getFirstEncodableAudioCodec,
 	getFirstEncodableVideoCodec,
 	OutputFormat,
-	HlsOutputFormat,
-	OutputTrackGroup,
-	MpegTsOutputFormat,
-	AdtsOutputFormat,
-	StreamTarget,
-	CmafOutputFormat,
 } from 'mediabunny';
 
 const durationSlider = document.querySelector('#duration-slider') as HTMLInputElement;
@@ -72,11 +66,6 @@ const generateVideo = async () => {
 	let progressInterval = -1;
 
 	try {
-		const dirHandle = await showDirectoryPicker({ mode: 'readwrite' });
-		for await (const [name, handle] of dirHandle) {
-			await dirHandle.removeEntry(name, { recursive: true });
-		}
-
 		// Let's set some DOM state
 		renderButton.disabled = true;
 		renderButton.textContent = 'Generating...';
@@ -97,39 +86,8 @@ const generateVideo = async () => {
 
 		// Create a new output file
 		output = new Output({
-			rootPath: 'master.m3u8',
-			target: async ({ path }) => {
-				const fileHandle = await dirHandle.getFileHandle(path, { create: true });
-				const writable = await fileHandle.createWritable();
-
-				const target = new StreamTarget(writable);
-				target.on('finalized', () => console.log('Finalizado', path));
-
-				return target;
-
-				/*
-				const target = new BufferTarget();
-				target.on('finalized', async () => {
-					if (path.includes('m3u8')) {
-						console.log(new TextDecoder().decode(target.buffer!));
-					}
-				});
-
-				if (path.includes('m4s')) {
-					console.log('here');
-					target.on('write', ({ start, end }) => console.log(start, end));
-					target.on('finalized', () => console.log('yippie'));
-				}
-
-				return target;
-				*/
-			},
-			format: new HlsOutputFormat({
-				segmentFormat: new CmafOutputFormat(),
-				// singleFilePerPlaylist: true,
-				// live: true,
-				getPlaylistPath: info => `sussex-${info.n}.m3u8`,
-			}),
+			target: new BufferTarget(), // Stored in memory
+			format: new Mp4OutputFormat(),
 		});
 
 		// Retrieve the first video codec supported by this browser that can be contained in the output format
@@ -145,18 +103,11 @@ const generateVideo = async () => {
 		const canvasSource = new CanvasSource(renderCanvas, {
 			codec: videoCodec,
 			bitrate: QUALITY_HIGH,
-			keyFrameInterval: 2,
-			transform: {
-				// frameRate: 5,
-			},
 		});
 		output.addVideoTrack(canvasSource, { frameRate });
 
-		// output._defaultTrackGroup.pair(otherGroup);
-
 		// For audio, we use ArrayBufferSource, because we'll be creating an ArrayBuffer with OfflineAudioContext
 		let audioBufferSource: AudioBufferSource | null = null;
-		const audioBufferSource2: AudioBufferSource | null = null;
 
 		// Retrieve the first audio codec supported by this browser that can be contained in the output format
 		const audioCodec = await getFirstEncodableAudioCodec(output.format.getSupportedAudioCodecs(), {
@@ -167,19 +118,8 @@ const generateVideo = async () => {
 			audioBufferSource = new AudioBufferSource({
 				codec: audioCodec,
 				bitrate: QUALITY_HIGH,
-				transform: {
-
-				},
 			});
 			output.addAudioTrack(audioBufferSource);
-
-			/*
-			audioBufferSource2 = new AudioBufferSource({
-				codec: audioCodec,
-				bitrate: QUALITY_HIGH,
-			});
-			output.addAudioTrack(audioBufferSource2, { languageCode: 'esp' });
-			*/
 		} else {
 			alert('Your browser doesn\'t support audio encoding, so we won\'t include audio in the output file.');
 		}
@@ -211,8 +151,6 @@ const generateVideo = async () => {
 			// Add the current state of the canvas as a frame to the video. Using `await` here is crucial to
 			// automatically slow down the rendering loop when the encoder can't keep up.
 			await canvasSource.add(currentTime, 1 / frameRate);
-
-			// await new Promise(resolve => setTimeout(resolve, 1000 / frameRate));
 		}
 
 		// Signal to the output that no more video frames are coming (not necessary, but recommended)
@@ -224,9 +162,6 @@ const generateVideo = async () => {
 			const audioBuffer = await audioContext.startRendering();
 			await audioBufferSource.add(audioBuffer);
 			audioBufferSource.close();
-
-			// await audioBufferSource2!.add(audioBuffer);
-			// audioBufferSource2!.close();
 		}
 
 		clearInterval(progressInterval);
@@ -245,14 +180,12 @@ const generateVideo = async () => {
 		videoInfo.style.display = '';
 
 		// Display and play the resulting media file
-		/*
 		const videoBlob = new Blob([output.target.buffer!], { type: output.format.mimeType });
 		resultVideo.src = URL.createObjectURL(videoBlob);
 		void resultVideo.play();
 
 		const fileSizeMiB = (videoBlob.size / (1024 * 1024)).toPrecision(3);
 		videoInfo.textContent = `File size: ${fileSizeMiB} MiB`;
-		*/
 	} catch (error) {
 		console.error(error);
 

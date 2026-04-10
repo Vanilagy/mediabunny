@@ -1,19 +1,10 @@
 import {
 	ALL_FORMATS,
 	AudioBufferSink,
-	BlobSource,
 	CanvasSink,
-	Input,
-	InputAudioTrack,
-	InputVideoTrack,
-	UrlSource,
+	createInputFrom,
 	WrappedAudioBuffer,
 	WrappedCanvas,
-	asc,
-	canDecodeAudio,
-	createInputFrom,
-	desc,
-	prefer,
 } from 'mediabunny';
 
 import SampleFileUrl from '../../docs/assets/big-buck-bunny-trimmed.mp4';
@@ -38,6 +29,7 @@ const volumeBarContainer = document.querySelector('#volume-bar-container') as HT
 const volumeBar = document.querySelector('#volume-bar') as HTMLDivElement;
 const volumeIconWrapper = document.querySelector('#volume-icon-wrapper') as HTMLDivElement;
 const volumeButton = document.querySelector('#volume-button') as HTMLButtonElement;
+const liveDot = document.querySelector('#live-dot') as HTMLButtonElement;
 const fullscreenButton = document.querySelector('#fullscreen-button') as HTMLButtonElement;
 const errorElement = document.querySelector('#error-element') as HTMLDivElement;
 const warningElement = document.querySelector('#warning-element') as HTMLDivElement;
@@ -51,7 +43,9 @@ let fileLoaded = false;
 let videoSink: CanvasSink | null = null;
 let audioSink: AudioBufferSink | null = null;
 
-let totalDuration = 0;
+let firstTimestamp = 0;
+let endTimestamp = 0;
+let isRelativeToUnixEpoch = false;
 /** The value of the audio context's currentTime the moment the playback was started. */
 let audioContextStartTime: number | null = null;
 let playing = false;
@@ -69,6 +63,8 @@ const queuedAudioNodes: Set<AudioBufferSourceNode> = new Set();
  */
 let asyncId = 0;
 
+let liveRefreshIntervalId = -1;
+
 let draggingProgressBar = false;
 let volume = 0.7;
 let draggingVolumeBar = false;
@@ -84,107 +80,49 @@ const initMediaPlayer = async (resource: File | string) => {
 			pause();
 		}
 
-		// const dirHandle = await showDirectoryPicker({ mode: 'read' });
-
 		void videoFrameIterator?.return();
 		void audioBufferIterator?.return();
+
 		asyncId++;
 
 		fileLoaded = false;
-		fileNameElement.textContent = 'pish'; // resource instanceof File ? resource.name : resource;
+		fileNameElement.textContent = resource instanceof File ? resource.name : resource;
 		horizontalRule.style.display = '';
 		loadingElement.style.display = '';
 		playerContainer.style.display = 'none';
 		errorElement.textContent = '';
 		warningElement.textContent = '';
+		liveDot.style.display = 'none';
+		clearTimeout(liveRefreshIntervalId);
 
-		const start = 0;
-
-		let videoTrack: InputVideoTrack | null = null;
-		let audioTrack: InputAudioTrack | null = null;
-		if (true || typeof resource === 'string' && resource.includes('.m3u8')) {
-			const input = createInputFrom(resource, ALL_FORMATS);
-
-			/*
-			const input = new Input({
-				entryPath: resource, // 'master.m3u8',
-				source: async ({ path }) => {
-					return new UrlSource(path);
-					const fileHandle = await dirHandle.getFileHandle(path);
-					const file = await fileHandle.getFile();
-					return new BlobSource(file);
-				},
-				formats: ALL_FORMATS,
-			});
-			*/
-			// const variant = (await manifestInput.getVariants())[0]!;
-
-			// console.log(await input.getFormat(), await input.getTracks());
-			// return;
-
-			/*
-			await input.getVideoTracks({
-				filter: desc => desc.hasPairableAudioTrack(),
-				sortBy: desc => asc(desc.bitrate),
-			});
-			*/
-
-			videoTrack = await input.getPrimaryVideoTrack({
-				filter: async desc => (desc.displayHeight ?? (await desc.getTrack()).displayHeight) < 720,
-				// filter: async track => (await track.resolve('displayHeight')) < 1080,
-			});
-			audioTrack = await input.getPrimaryAudioTrack({
-				sortBy: desc => prefer(desc.canBePairedWith(videoTrack)),
-			});
-
-			// await videoTrack?.hydrate();
-			// await audioTrack?.hydrate();
-
-			totalDuration = Math.max(
-				await videoTrack?.computeDuration({ skipLiveWait: true }) ?? 0,
-				await audioTrack?.computeDuration({ skipLiveWait: true }) ?? 0,
-			);
-
-			console.log(videoTrack, audioTrack, totalDuration);
-
-			// start = totalDuration - 2;
-
-			// totalDuration += 3600;
-
-			// https://test-streams.mux.dev/test_001/stream.m3u8
-			// https://test-streams.mux.dev/test_001/stream_1000k_48k_640x360_050.ts
-		} else {
-			const source = resource instanceof File
-				? new BlobSource(resource)
-				: new UrlSource(resource);
-
-			const input = new Input({
-				source,
-				formats: ALL_FORMATS,
-			});
-
-			totalDuration = await input.computeDuration();
-			videoTrack = await input.getPrimaryVideoTrack();
-			audioTrack = await input.getPrimaryAudioTrack();
-		}
-
-		/*
 		// Create an Input from the resource
-		const source = resource instanceof File
-			? new BlobSource(resource)
-			: new UrlSource(resource);
-		*/
+		const input = createInputFrom(resource, ALL_FORMATS);
 
-		/*
-		const input = new Input({
-			source,
-			formats: ALL_FORMATS,
-		});
-		*/
+		let videoTrack = await input.getPrimaryVideoTrack();
+		let audioTrack = await input.getPrimaryAudioTrack();
 
-		playbackTimeAtStart = 0;
+		const tracks = [videoTrack, audioTrack].filter(t => t !== null);
 
-		durationElement.textContent = formatSeconds(totalDuration);
+		firstTimestamp = Math.max(
+			await input.getFirstTimestamp(tracks),
+			0,
+		);
+		endTimestamp = await input.getDurationFromMetadata(tracks, { skipLiveWait: true })
+			?? await input.computeDuration(tracks, { skipLiveWait: true });
+		isRelativeToUnixEpoch = tracks.some(t => t?.isRelativeToUnixEpoch);
+		playbackTimeAtStart = firstTimestamp;
+
+		// Configure the time display elements accordingly
+		const timestampFontSize = isRelativeToUnixEpoch ? '12px' : '';
+		const timestampWhiteSpace = isRelativeToUnixEpoch ? 'pre' : '';
+		const timestampTextAlign = isRelativeToUnixEpoch ? 'center' : '';
+		currentTimeElement.style.fontSize = timestampFontSize;
+		currentTimeElement.style.whiteSpace = timestampWhiteSpace;
+		currentTimeElement.style.textAlign = timestampTextAlign;
+		durationElement.style.fontSize = timestampFontSize;
+		durationElement.style.whiteSpace = timestampWhiteSpace;
+		durationElement.style.textAlign = timestampTextAlign;
+		durationElement.textContent = formatTimestamp(endTimestamp);
 
 		let problemMessage = '';
 
@@ -269,8 +207,6 @@ const initMediaPlayer = async (resource: File | string) => {
 		await startVideoIterator();
 
 		if (audioContext.state === 'running') {
-			await seekToTime(start);
-
 			// Start playback automatically if the audio context permits
 			await play();
 		}
@@ -283,6 +219,38 @@ const initMediaPlayer = async (resource: File | string) => {
 			controlsElement.style.opacity = '1';
 			controlsElement.style.pointerEvents = '';
 			playerContainer.style.cursor = '';
+		}
+
+		const refreshIntervals = await Promise.all(tracks.map(t => t.getLiveRefreshInterval()));
+		const nonNullIntervals = refreshIntervals.filter(x => x !== null);
+
+		if (nonNullIntervals.length > 0) {
+			// At least one track is live! This means that we'll need to continually refresh the end timestamp of the
+			// media to allow continuous live playback.
+
+			const interval = Math.min(...nonNullIntervals);
+			liveDot.style.display = '';
+			liveDot.onclick = () => {
+				void seekToTime(endTimestamp - interval * 1.5);
+			};
+
+			const scheduleLiveRefresh = () => {
+				// eslint-disable-next-line @typescript-eslint/no-misused-promises
+				liveRefreshIntervalId = window.setTimeout(async () => {
+					endTimestamp = await input.getDurationFromMetadata(tracks, { skipLiveWait: true })
+						?? await input.computeDuration(tracks, { skipLiveWait: true });
+					durationElement.textContent = formatTimestamp(endTimestamp);
+
+					// Check if we're still live
+					const stillLive = await Promise.all(tracks.map(t => t.isLive()));
+					if (stillLive.every(live => !live)) {
+						liveDot.style.display = 'none';
+					} else {
+						scheduleLiveRefresh();
+					}
+				}, interval * 1000);
+			};
+			scheduleLiveRefresh();
 		}
 	} catch (error) {
 		console.error(error);
@@ -325,10 +293,10 @@ const startVideoIterator = async () => {
 const render = (requestFrame = true) => {
 	if (fileLoaded) {
 		const playbackTime = getPlaybackTime();
-		if (playbackTime >= totalDuration) {
+		if (playbackTime >= endTimestamp) {
 			// Pause playback once the end is reached
 			pause();
-			playbackTimeAtStart = totalDuration;
+			playbackTimeAtStart = endTimestamp;
 		}
 
 		// Check if the current playback time has caught up to the next frame
@@ -449,9 +417,9 @@ const play = async () => {
 		await audioContext!.resume();
 	}
 
-	if (getPlaybackTime() === totalDuration) {
+	if (getPlaybackTime() === endTimestamp) {
 		// If we're at the end, let's snap back to the start
-		playbackTimeAtStart = 0;
+		playbackTimeAtStart = firstTimestamp;
 		await startVideoIterator();
 	}
 
@@ -506,7 +474,7 @@ const seekToTime = async (seconds: number) => {
 
 	await startVideoIterator();
 
-	if (wasPlaying && playbackTimeAtStart < totalDuration) {
+	if (wasPlaying && playbackTimeAtStart < endTimestamp) {
 		void play();
 	}
 };
@@ -514,8 +482,8 @@ const seekToTime = async (seconds: number) => {
 /** === PROGRESS BAR LOGIC === */
 
 const updateProgressBarTime = (seconds: number) => {
-	currentTimeElement.textContent = formatSeconds(seconds);
-	progressBar.style.width = `${(seconds / totalDuration) * 100}%`;
+	currentTimeElement.textContent = formatTimestamp(seconds);
+	progressBar.style.width = `${((seconds - firstTimestamp) / (endTimestamp - firstTimestamp)) * 100}%`;
 };
 
 progressBarContainer.addEventListener('pointerdown', (event) => {
@@ -524,7 +492,7 @@ progressBarContainer.addEventListener('pointerdown', (event) => {
 
 	const rect = progressBarContainer.getBoundingClientRect();
 	const completion = Math.max(Math.min((event.clientX - rect.left) / rect.width, 1), 0);
-	updateProgressBarTime(completion * totalDuration);
+	updateProgressBarTime(firstTimestamp + completion * (endTimestamp - firstTimestamp));
 
 	clearTimeout(hideControlsTimeout);
 
@@ -534,7 +502,7 @@ progressBarContainer.addEventListener('pointerdown', (event) => {
 
 		const rect = progressBarContainer.getBoundingClientRect();
 		const completion = Math.max(Math.min((event.clientX - rect.left) / rect.width, 1), 0);
-		const newTime = completion * totalDuration;
+		const newTime = firstTimestamp + completion * (endTimestamp - firstTimestamp);
 
 		void seekToTime(newTime);
 		showControlsTemporarily();
@@ -545,7 +513,7 @@ progressBarContainer.addEventListener('pointermove', (event) => {
 	if (draggingProgressBar) {
 		const rect = progressBarContainer.getBoundingClientRect();
 		const completion = Math.max(Math.min((event.clientX - rect.left) / rect.width, 1), 0);
-		updateProgressBarTime(completion * totalDuration);
+		updateProgressBarTime(firstTimestamp + completion * (endTimestamp - firstTimestamp));
 	}
 });
 
@@ -662,10 +630,10 @@ window.addEventListener('keydown', (e) => {
 	} else if (e.code === 'KeyF') {
 		fullscreenButton.click();
 	} else if (e.code === 'ArrowLeft') {
-		const newTime = Math.max(getPlaybackTime() - 5, 0);
+		const newTime = Math.max(getPlaybackTime() - 5, firstTimestamp);
 		void seekToTime(newTime);
 	} else if (e.code === 'ArrowRight') {
-		const newTime = Math.min(getPlaybackTime() + 5, totalDuration);
+		const newTime = Math.min(getPlaybackTime() + 5, endTimestamp);
 		void seekToTime(newTime);
 	} else if (e.code === 'KeyM') {
 		volumeButton.click();
@@ -711,6 +679,15 @@ controlsElement.addEventListener('click', (event) => {
 
 /** === UTILS === */
 
+const formatTimestamp = (seconds: number) => {
+	if (isRelativeToUnixEpoch) {
+		const iso = new Date(seconds * 1000).toISOString();
+		return iso.replace('T', '\n');
+	}
+
+	return formatSeconds(seconds);
+};
+
 const formatSeconds = (seconds: number) => {
 	const showMilliseconds = window.innerWidth >= 640;
 
@@ -737,9 +714,9 @@ const formatSeconds = (seconds: number) => {
 };
 
 window.addEventListener('resize', () => {
-	if (totalDuration) {
+	if (endTimestamp) {
 		updateProgressBarTime(getPlaybackTime());
-		durationElement.textContent = formatSeconds(totalDuration);
+		durationElement.textContent = formatTimestamp(endTimestamp);
 	}
 });
 
@@ -778,12 +755,6 @@ document.addEventListener('dragover', (event) => {
 	event.preventDefault();
 	event.dataTransfer!.dropEffect = 'copy';
 });
-
-/*
-document.addEventListener('click', () => {
-	void initMediaPlayer();
-}, { once: true });
-*/
 
 document.addEventListener('drop', (event) => {
 	event.preventDefault();

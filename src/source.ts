@@ -207,11 +207,11 @@ export class SourceRef<S extends Source = Source> implements Disposable {
 
 	/**
 	 * Frees the ref, decrementing the source's internal reference count. If the source's internal reference count
-	 * reaches zero, it gets disposed. This method is idempotent.
+	 * reaches zero, it gets disposed. To catch bugs, this method throws if the ref is already freed.
 	 */
 	free() {
 		if (this._freed) {
-			return;
+			throw new Error('Illegal operation: double free on SourceRef.');
 		}
 
 		const source = this.source;

@@ -1817,7 +1817,7 @@ segment-1-1.ts
 	);
 });
 
-test('onSegment, onPlaylist, onMaster events', async () => {
+test('write, onSegment, onPlaylist, onMaster events', async () => {
 	const onSegment = vi.fn();
 	const onPlaylist = vi.fn();
 	const onMaster = vi.fn();
@@ -1831,6 +1831,9 @@ test('onSegment, onPlaylist, onMaster events', async () => {
 		}),
 		target: new PathedTarget('', () => new BufferTarget()),
 	});
+
+	let targetWrites = 0;
+	output.target.on('write', () => targetWrites++);
 
 	const source = videoSource();
 	output.addVideoTrack(source);
@@ -1857,6 +1860,8 @@ test('onSegment, onPlaylist, onMaster events', async () => {
 	expect(onMaster).not.toHaveBeenCalled();
 
 	await output.finalize();
+
+	expect(targetWrites).toBeGreaterThan(0);
 
 	// Second segment finalized on close
 	expect(onSegment).toHaveBeenCalledTimes(2);

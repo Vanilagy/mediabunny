@@ -733,9 +733,7 @@ export class Conversion {
 			// down later due to discarded tracks, but we need to fix the start timestamp now due to track processing
 			// depending on it.
 			this._startTimestamp = Math.max(
-				Math.min(
-					...await Promise.all(filteredTracks.map(x => x.getFirstTimestamp())),
-				),
+				await this.input.getFirstTimestamp(filteredTracks),
 				// Samples can also have negative timestamps, but the meaning typically is "don't present me", so let's
 				// cut those out by default.
 				0,

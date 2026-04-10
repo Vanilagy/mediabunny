@@ -99,6 +99,7 @@ export class HlsMuxer extends Muxer {
 	maxLiveSegmentCount: number;
 	isRelativeToUnixEpoch = false;
 	globalTargetDuration: number;
+	numWrittenMasterPlaylists = 0;
 
 	playlists: Playlist[] = [];
 	playlistDeclarations: PlaylistDeclaration[] = [];
@@ -909,11 +910,11 @@ export class HlsMuxer extends Muxer {
 						return slice;
 					} else {
 						const playlistInfo = toPlaylistInfo(playlist);
-						const path = await this.getInitPath(playlistInfo);
-						validateInitPath(path);
+						const initPath = await this.getInitPath(playlistInfo);
+						validateInitPath(initPath);
 
 						playlist.initSegment = {
-							path,
+							path: initPath,
 							duration: 0,
 							timestamp: 0,
 							byteSize: 0,
@@ -921,7 +922,7 @@ export class HlsMuxer extends Muxer {
 						};
 
 						const target = await this.output._getTarget({
-							path,
+							path: initPath,
 							isRoot: false,
 						});
 						target.on('write', ({ end }) => {
@@ -1371,14 +1372,25 @@ export class HlsMuxer extends Muxer {
 
 		this.format._options.onMaster?.(masterPlaylistText);
 
-		const target = await this.output._getTarget({ path: pathedTarget.rootPath, isRoot: true });
-		const writer = new Writer(target);
+		let writer: Writer;
+		if (this.numWrittenMasterPlaylists === 0) {
+			// For the first master playlist write, we use the normal root writer getter, so that the target returned by
+			// Output.target emits valid write events.
+			writer = await this.output._getRootWriter();
+		} else {
+			// For subsequent master playlist writes, we *must* obtain a different target in order to overwrite
+			// the file.
+			const target = await this.output._getTarget({ path: pathedTarget.rootPath, isRoot: true });
+			writer = new Writer(target);
+			writer.start();
+		}
 
-		writer.start();
 		writer.write(textEncoder.encode(masterPlaylistText));
 
 		await writer.flush();
 		await writer.finalize();
+
+		this.numWrittenMasterPlaylists++;
 	}
 
 	private async tryWriteMasterPlaylist() {

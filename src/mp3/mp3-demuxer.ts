@@ -178,38 +178,6 @@ export class Mp3Demuxer extends Demuxer {
 		return;
 	}
 
-	async getDurationFromMetadata(): Promise<number | null> {
-		await this.readMetadata();
-		assert(this.firstFrameHeader !== null);
-		assert(this.firstFrameHeaderPos !== null);
-
-		if (this.xingData) {
-			if (this.xingData.frameCount !== null) {
-				return this.xingData.frameCount
-					* this.firstFrameHeader.audioSamplesInFrame
-					/ this.firstFrameHeader.sampleRate;
-			}
-		} else {
-			// No Xing, assuming CBR
-
-			if (this.reader.fileSize !== null) {
-				const averageFrameSize = computeAverageMp3FrameSize(
-					this.firstFrameHeader.lowSamplingFrequency,
-					this.firstFrameHeader.layer,
-					this.firstFrameHeader.bitrate,
-					this.firstFrameHeader.sampleRate,
-				);
-				const frameCount = (this.reader.fileSize - this.firstFrameHeaderPos) / averageFrameSize;
-
-				return Math.round(frameCount)
-					* this.firstFrameHeader.audioSamplesInFrame
-					/ this.firstFrameHeader.sampleRate;
-			}
-		}
-
-		return null;
-	}
-
 	async getMimeType() {
 		return 'audio/mpeg';
 	}
@@ -309,8 +277,37 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 		return null;
 	}
 
-	getDurationFromMetadata() {
-		return this.demuxer.getDurationFromMetadata();
+	async getDurationFromMetadata() {
+		const demuxer = this.demuxer;
+
+		assert(demuxer.firstFrameHeader !== null);
+		assert(demuxer.firstFrameHeaderPos !== null);
+
+		if (demuxer.xingData) {
+			if (demuxer.xingData.frameCount !== null) {
+				return demuxer.xingData.frameCount
+					* demuxer.firstFrameHeader.audioSamplesInFrame
+					/ demuxer.firstFrameHeader.sampleRate;
+			}
+		} else {
+			// No Xing, assuming CBR
+
+			if (demuxer.reader.fileSize !== null) {
+				const averageFrameSize = computeAverageMp3FrameSize(
+					demuxer.firstFrameHeader.lowSamplingFrequency,
+					demuxer.firstFrameHeader.layer,
+					demuxer.firstFrameHeader.bitrate,
+					demuxer.firstFrameHeader.sampleRate,
+				);
+				const frameCount = (demuxer.reader.fileSize - demuxer.firstFrameHeaderPos) / averageFrameSize;
+
+				return Math.round(frameCount)
+					* demuxer.firstFrameHeader.audioSamplesInFrame
+					/ demuxer.firstFrameHeader.sampleRate;
+			}
+		}
+
+		return null;
 	}
 
 	async getLiveRefreshInterval() {

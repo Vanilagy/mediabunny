@@ -317,32 +317,6 @@ export class MatroskaDemuxer extends Demuxer {
 		return metadataTags;
 	}
 
-	async getDurationFromMetadata(): Promise<number | null> {
-		await this.readMetadata();
-
-		let maxEndTimestamp: number | null = null;
-		for (const segment of this.segments) {
-			if (segment.duration > 0) {
-				let endTimestamp = segment.duration / segment.timestampFactor;
-
-				if (segment.tracks.length > 0) {
-					const minFirstTimestamp = Math.min(
-						...await Promise.all(segment.tracks.map(x =>
-							x.trackBacking!.getFirstPacket({ metadataOnly: true })
-								.then(p => p?.timestamp ?? 0),
-						)),
-					);
-
-					endTimestamp += minFirstTimestamp;
-				}
-
-				maxEndTimestamp = Math.max(maxEndTimestamp ?? -Infinity, endTimestamp);
-			}
-		}
-
-		return maxEndTimestamp;
-	}
-
 	readMetadata() {
 		return this.readMetadataPromise ??= (async () => {
 			let currentPos = 0;
@@ -1995,11 +1969,16 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 
 	async getDurationFromMetadata() {
 		const segment = this.internalTrack.segment;
-		if (segment.tracks.length > 1) {
+		if (segment.duration <= 0) {
 			return null;
 		}
 
-		return this.internalTrack.demuxer.getDurationFromMetadata();
+		let endTimestamp = segment.duration / segment.timestampFactor;
+
+		const firstPacket = await this.getFirstPacket({ metadataOnly: true });
+		endTimestamp += firstPacket?.timestamp ?? 0;
+
+		return endTimestamp;
 	}
 
 	async getLiveRefreshInterval() {

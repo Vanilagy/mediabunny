@@ -143,10 +143,6 @@ export class AdtsDemuxer extends Demuxer {
 		this.lastLoadedPos = header.startPos + header.frameLength;
 	}
 
-	async getDurationFromMetadata(): Promise<number | null> {
-		return null; // No way
-	}
-
 	async getMimeType() {
 		return 'audio/aac';
 	}
@@ -232,7 +228,7 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 	}
 
 	async getDurationFromMetadata() {
-		return null;
+		return null; // No way
 	}
 
 	async getLiveRefreshInterval() {
