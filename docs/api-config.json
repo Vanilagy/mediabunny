@@ -16,6 +16,7 @@
 	"Metadata tags": "Descriptive metadata tags attached to media files.",
     "Codecs": "Codecs understood by Mediabunny.",
     "Encoding": "Encoder configuration and encodability checks.",
+	"Decoding": "Decoder configuration and decodability checks.",
     "Custom coders": "API for adding custom encoders and decoders.",
     "Miscellaneous": "Whatever's left.",
 

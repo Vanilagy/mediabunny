@@ -21,7 +21,7 @@ test('can loop over all samples', async () => {
 
 	const track = await input.getPrimaryAudioTrack();
 	assert(track);
-	expect(await track.computeDuration()).toEqual(19.71428571428571);
+	expect(await track.computeDuration()).toEqual(19.714285714285715);
 	expect(await track.getDecoderConfig()).toEqual({
 		codec: 'flac',
 		numberOfChannels: 2,
@@ -33,7 +33,7 @@ test('can loop over all samples', async () => {
 		]),
 	});
 	expect(await track.getCodecParameterString()).toEqual('flac');
-	expect(track.timeResolution).toEqual(44100);
+	expect(await track.getTimeResolution()).toEqual(44100);
 	expect(await input.getMimeType()).toEqual('audio/flac');
 
 	const sink = new EncodedPacketSink(track);
@@ -179,9 +179,9 @@ test('can re-mux a .flac', async () => {
 
 	const inputTrack = await input.getPrimaryAudioTrack();
 	assert(inputTrack);
-	expect(inputTrack.sampleRate).toBe(outputTrack.sampleRate);
-	expect(inputTrack.numberOfChannels).toBe(outputTrack.numberOfChannels);
-	expect(inputTrack.timeResolution).toBe(outputTrack.timeResolution);
+	expect(await inputTrack.getSampleRate()).toBe(await outputTrack.getSampleRate());
+	expect(await inputTrack.getNumberOfChannels()).toBe(await outputTrack.getNumberOfChannels());
+	expect(await inputTrack.getTimeResolution()).toBe(await outputTrack.getTimeResolution());
 
 	const outputMetadataTags = await outputAsInput.getMetadataTags();
 

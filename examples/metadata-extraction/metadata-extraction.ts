@@ -1,4 +1,4 @@
-import { Input, ALL_FORMATS, BlobSource, UrlSource } from 'mediabunny';
+import { ALL_FORMATS, createInputFrom } from 'mediabunny';
 
 import SampleFileUrl from '../../docs/assets/big-buck-bunny-trimmed.mp4';
 (document.querySelector('#sample-file-download') as HTMLAnchorElement).href = SampleFileUrl;
@@ -12,32 +12,41 @@ const metadataContainer = document.querySelector('#metadata-container') as HTMLD
 
 const extractMetadata = (resource: File | string) => {
 	// Create a new input from the resource
-	const source = resource instanceof File
-		? new BlobSource(resource)
-		: new UrlSource(resource);
-	const input = new Input({
-		source,
-		formats: ALL_FORMATS, // Accept all formats
-	});
+	const input = createInputFrom(resource, ALL_FORMATS); // Accept all formats
 
 	let bytesRead = 0;
 	let fileSize: number | null = null;
+	let obtainedSources = 0;
 
 	const updateBytesRead = () => {
-		bytesReadElement.textContent = `Bytes read: ${bytesRead} / ${fileSize === null ? '?' : fileSize}`;
+		if (obtainedSources > 1) {
+			bytesReadElement.textContent = `Bytes read: ${bytesRead} across ${obtainedSources} files`;
+		} else {
+			bytesReadElement.textContent = `Bytes read: ${bytesRead} / ${fileSize === null ? '?' : fileSize}`;
 
-		if (fileSize !== null) {
-			bytesReadElement.textContent += ` (${(100 * bytesRead / fileSize).toPrecision(3)}% of entire file)`;
+			if (fileSize !== null) {
+				bytesReadElement.textContent += ` (${(100 * bytesRead / fileSize).toPrecision(3)}% of entire file)`;
+			}
 		}
 	};
 
-	input.source.onread = (start, end) => {
-		bytesRead += end - start;
-		updateBytesRead();
-	};
+	input.on('source', ({ source, isRoot }) => {
+		if (isRoot) {
+			// Get the input's size
+			void source.getSize().then((size) => {
+				fileSize = size;
+				updateBytesRead();
+			});
+		}
 
-	// Get the input's size
-	void input.source.getSize().then(size => fileSize = size);
+		obtainedSources++;
+		updateBytesRead();
+
+		source.on('read', ({ start, end }) => {
+			bytesRead += end - start;
+			updateBytesRead();
+		});
+	});
 
 	// This object contains all the data that gets displayed:
 	const object = {
@@ -47,25 +56,25 @@ const extractMetadata = (resource: File | string) => {
 		'Ends at': input.computeDuration().then(duration => `${duration} seconds`),
 		'Tracks': input.getTracks().then(tracks => tracks.map(track => ({
 			'Type': track.type,
-			'Codec': track.codec,
+			'Codec': track.getCodec(),
 			'Full codec string': track.getCodecParameterString(),
 			'Starts at': track.getFirstTimestamp().then(start => `${start} seconds`),
 			'Ends at': track.computeDuration().then(duration => `${duration} seconds`),
-			'Language code': track.languageCode,
+			'Language code': track.getLanguageCode(),
 			...(track.isVideoTrack()
 				? {
-						'Coded width': `${track.codedWidth} pixels`,
-						'Coded height': `${track.codedHeight} pixels`,
-						'Rotation': `${track.rotation}° clockwise`,
-						'Pixel aspect ratio': `${track.pixelAspectRatio.num}:${track.pixelAspectRatio.den}`,
-						'Display width': `${track.displayWidth} pixels`,
-						'Display height': `${track.displayHeight} pixels`,
+						'Coded width': track.getCodedWidth().then(w => `${w} pixels`),
+						'Coded height': track.getCodedHeight().then(h => `${h} pixels`),
+						'Rotation': track.getRotation().then(rot => `${rot}° clockwise`),
+						'Pixel aspect ratio': track.getPixelAspectRatio().then(par => `${par.num}:${par.den}`),
+						'Display width': track.getDisplayWidth().then(w => `${w} pixels`),
+						'Display height': track.getDisplayHeight().then(h => `${h} pixels`),
 						'Transparency': track.canBeTransparent(),
 					}
 				: track.isAudioTrack()
 					? {
-							'Number of channels': track.numberOfChannels,
-							'Sample rate': `${track.sampleRate} Hz`,
+							'Number of channels': track.getNumberOfChannels(),
+							'Sample rate': track.getSampleRate().then(rate => `${rate} Hz`),
 						}
 					: {}),
 			'Packet statistics': shortDelay().then(() => track.computePacketStats()).then(stats => ({

@@ -92,13 +92,13 @@ A progress of `1` doesn't indicate the conversion has finished; the conversion i
 Tracking conversion progress can slightly affect performance as it requires knowledge of the input file's total duration. This is usually negligible but should be avoided when using append-only input sources such as [`ReadableStreamSource`](./reading-media-files#readablestreamsource).
 :::
 
-If you want to monitor the output size of the conversion (in bytes), simply use the `onwrite` callback on your `Target`:
+If you want to monitor the output size of the conversion (in bytes), simply use the `write` event on your `Target`:
 ```ts
 let currentFileSize = 0;
 
-output.target.onwrite = (start, end) => {
+const stopListening = output.target.on('write', ({ start, end }) => {
 	currentFileSize = Math.max(currentFileSize, end);
-};
+});
 ```
 
 ### Canceling a conversion
@@ -306,7 +306,7 @@ const conversion = await Conversion.init({
 	output,
 
 	// Function gets invoked for each video track:
-	video: (videoTrack) => {
+	video: async (videoTrack) => {
 		if (videoTrack.number > 1) {
 			// Keep only the first video track
 			return { discard: true };
@@ -314,13 +314,13 @@ const conversion = await Conversion.init({
 
 		return {
 			// Shrink width to 640 only if the track is wider
-			width: Math.min(videoTrack.displayWidth, 640),
+			width: Math.min(await videoTrack.getDisplayWidth(), 640),
 		};
 	},
 
 	// Async functions work too:
 	audio: async (audioTrack) => {
-		if (audioTrack.languageCode !== 'rus') {
+		if (await audioTrack.getLanguageCode() !== 'rus') {
 			// Keep only Russian audio tracks
 			return { discard: true };
 		}

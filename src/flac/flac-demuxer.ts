@@ -9,7 +9,7 @@
 import { FlacBlockType, readVorbisComments } from '../codec-data';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
-import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
+import { InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
 import {
 	assert,
@@ -70,7 +70,7 @@ export class FlacDemuxer extends Demuxer {
 	loadedSamples: Sample[] = []; // All samples from the start of the file to lastLoadedPos
 
 	metadataPromise: Promise<void> | null = null;
-	track: InputAudioTrack | null = null;
+	trackBacking: FlacAudioTrackBacking | null = null;
 	metadataTags: MetadataTags = {};
 
 	audioInfo: FlacAudioInfo | null = null;
@@ -86,21 +86,15 @@ export class FlacDemuxer extends Demuxer {
 		this.reader = input._reader;
 	}
 
-	override async computeDuration(): Promise<number> {
-		await this.readMetadata();
-		assert(this.track);
-		return this.track.computeDuration();
-	}
-
 	override async getMetadataTags(): Promise<MetadataTags> {
 		await this.readMetadata();
 		return this.metadataTags;
 	}
 
-	async getTracks() {
+	async getTrackBackings() {
 		await this.readMetadata();
-		assert(this.track);
-		return [this.track];
+		assert(this.trackBacking);
+		return [this.trackBacking];
 	}
 
 	async getMimeType() {
@@ -189,7 +183,7 @@ export class FlacDemuxer extends Demuxer {
 							description,
 						};
 
-						this.track = new InputAudioTrack(this.input, new FlacAudioTrackBacking(this));
+						this.trackBacking = new FlacAudioTrackBacking(this);
 						break;
 					}
 					case FlacBlockType.VORBIS_COMMENT: {
@@ -257,6 +251,10 @@ export class FlacDemuxer extends Demuxer {
 					this.lastLoadedPos = currentPos;
 					break;
 				}
+			}
+
+			if (!this.audioInfo) {
+				throw new Error('Missing STREAMINFO metadata block! Corrupted FLAC file.');
 			}
 		})());
 	}
@@ -550,6 +548,10 @@ export class FlacDemuxer extends Demuxer {
 class FlacAudioTrackBacking implements InputAudioTrackBacking {
 	constructor(public demuxer: FlacDemuxer) {}
 
+	getType() {
+		return 'audio' as const;
+	}
+
 	getId() {
 		return 1;
 	}
@@ -571,11 +573,6 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		return this.demuxer.audioInfo.numberOfChannels;
 	}
 
-	async computeDuration() {
-		const lastPacket = await this.getPacket(Infinity, { metadataOnly: true });
-		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
-	}
-
 	getSampleRate() {
 		assert(this.demuxer.audioInfo);
 		return this.demuxer.audioInfo.sampleRate;
@@ -594,14 +591,40 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		return this.demuxer.audioInfo.sampleRate;
 	}
 
+	isRelativeToUnixEpoch() {
+		return false;
+	}
+
+	getPairingMask() {
+		return 1n;
+	}
+
+	getBitrate() {
+		return null;
+	}
+
+	getAverageBitrate() {
+		return null;
+	}
+
+	async getDurationFromMetadata() {
+		assert(this.demuxer.audioInfo);
+
+		if (this.demuxer.audioInfo.totalSamples === 0) {
+			return null;
+		}
+
+		return this.demuxer.audioInfo.totalSamples / this.demuxer.audioInfo.sampleRate;
+	}
+
+	async getLiveRefreshInterval() {
+		return null;
+	}
+
 	getDisposition() {
 		return {
 			...DEFAULT_TRACK_DISPOSITION,
 		};
-	}
-
-	async getFirstTimestamp() {
-		return 0;
 	}
 
 	async getDecoderConfig(): Promise<AudioDecoderConfig | null> {

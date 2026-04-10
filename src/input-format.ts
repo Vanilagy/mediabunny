@@ -32,6 +32,8 @@ import { readAscii, readBytes, readU32Be } from './reader';
 import { FlacDemuxer } from './flac/flac-demuxer';
 import { MpegTsDemuxer } from './mpeg-ts/mpeg-ts-demuxer';
 import { TS_PACKET_SIZE } from './mpeg-ts/mpeg-ts-misc';
+import { HlsDemuxer } from './hls/hls-demuxer';
+import { PathedSource } from './source';
 
 /**
  * Base class representing an input media file format.
@@ -53,6 +55,10 @@ export abstract class InputFormat {
 
 /**
  * Format representing files compatible with the ISO base media file format (ISOBMFF), like MP4 or MOV files.
+ *
+ * This format can make use of {@link InputOptions.initInput}. When the file contents are fragmented but no track
+ * initialization info is provided (no `moov` atom), then it must be provided via `initInput`.
+ *
  * @group Input formats
  * @public
  */
@@ -66,7 +72,10 @@ export abstract class IsobmffInputFormat extends InputFormat {
 		slice.skip(4);
 		const fourCc = readAscii(slice, 4);
 
-		if (fourCc !== 'ftyp') {
+		if (
+			fourCc !== 'ftyp'
+			&& fourCc !== 'styp' // Segment
+		) {
 			return null;
 		}
 
@@ -91,7 +100,15 @@ export class Mp4InputFormat extends IsobmffInputFormat {
 	/** @internal */
 	async _canReadInput(input: Input) {
 		const majorBrand = await this._getMajorBrand(input);
-		return !!majorBrand && majorBrand !== 'qt  ';
+		if (majorBrand !== null) {
+			return majorBrand !== 'qt  ';
+		}
+
+		let slice = input._reader.requestSlice(4, 4);
+		if (slice instanceof Promise) slice = await slice;
+		if (!slice) return false;
+
+		return readAscii(slice, 4) === 'moof'; // Seen in HLS for example
 	}
 
 	get name() {
@@ -509,6 +526,10 @@ export class AdtsInputFormat extends InputFormat {
 /**
  * MPEG Transport Stream (MPEG-TS) file format.
  *
+ * This format can make use of {@link InputOptions.initInput} to initialize track information even when no
+ * initialization information is provided for the track, for example because it has no key frames. In this case, tracks
+ * are matched to each other based on their PID.
+ *
  * Do not instantiate this class; use the {@link MPEG_TS} singleton instead.
  *
  * @group Input formats
@@ -549,6 +570,78 @@ export class MpegTsInputFormat extends InputFormat {
 
 	get mimeType() {
 		return 'video/MP2T';
+	}
+}
+
+/**
+ * Media described using the HTTP Live Streaming (HLS) protocol, with playlists in the M3U8 format.
+ *
+ * Do not instantiate this class; use the {@link HLS} singleton instead.
+ *
+ * @group Input formats
+ * @public
+ */
+export class HlsInputFormat extends InputFormat {
+	/** @internal */
+	async _canReadInput(input: Input) {
+		let slice = input._reader.requestSlice(0, 7);
+		if (slice instanceof Promise) slice = await slice;
+		if (!slice) return false;
+
+		const isM3u8 = readAscii(slice, 7) === '#EXTM3U';
+		if (!isM3u8) {
+			return false;
+		}
+
+		if (!(input._source instanceof PathedSource)) {
+			throw new TypeError('HLS inputs require `InputOptions.source` to be a PathedSource.');
+		}
+
+		return true;
+	}
+
+	/** @internal */
+	_createDemuxer(input: Input) {
+		return new HlsDemuxer(input);
+	}
+
+	get name() {
+		return 'HTTP Live Streaming (HLS)';
+	}
+
+	get mimeType() {
+		return 'application/vnd.apple.mpegurl';
+	}
+}
+
+export class VirtualInputFormat extends InputFormat {
+	/** @internal */
+	_createDemuxerFn: (input: Input) => Demuxer;
+
+	/** @internal */
+	constructor(createDemuxer: (input: Input) => Demuxer) {
+		super();
+		this._createDemuxerFn = createDemuxer;
+	}
+
+	/** @internal */
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	async _canReadInput(input: Input) {
+		return true;
+	}
+
+	/** @internal */
+
+	_createDemuxer(input: Input): Demuxer {
+		return this._createDemuxerFn(input);
+	}
+
+	get name() {
+		return 'Virtual input format';
+	}
+
+	get mimeType() {
+		return 'application/magic';
 	}
 }
 
@@ -616,9 +709,24 @@ export const FLAC = /* #__PURE__ */ new FlacInputFormat();
 export const MPEG_TS = /* #__PURE__ */ new MpegTsInputFormat();
 
 /**
+ * HLS input format singleton.
+ * @group Input formats
+ * @public
+ */
+export const HLS = /* #__PURE__ */ new HlsInputFormat();
+
+/**
  * List of all input format singletons. If you don't need to support all input formats, you should specify the
  * formats individually for better tree shaking.
  * @group Input formats
  * @public
  */
-export const ALL_FORMATS: InputFormat[] = [MP4, QTFF, MATROSKA, WEBM, WAVE, OGG, FLAC, MP3, ADTS, MPEG_TS];
+export const ALL_FORMATS: InputFormat[] = [HLS, MP4, QTFF, MATROSKA, WEBM, WAVE, OGG, FLAC, MP3, ADTS, MPEG_TS];
+
+/**
+ * List of input formats required for playback of typical HLS manifests. Includes HLS itself as well as the typical
+ * segment formats: MPEG Transport Stream (.ts), MP4 (CMAF), ADTS (.aac) and MP3.
+ * @group Input formats
+ * @public
+ */
+export const HLS_FORMATS: InputFormat[] = [HLS, MP4, QTFF, MP3, ADTS, MPEG_TS];

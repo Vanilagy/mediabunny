@@ -38,7 +38,10 @@ import {
 } from './media-source';
 import {
 	assert,
+	assertNever,
+	ceilToMultipleOfTwo,
 	clamp,
+	floorToDivisor,
 	isIso639Dash2LanguageCode,
 	MaybePromise,
 	normalizeRotation,
@@ -50,6 +53,7 @@ import { Mp4OutputFormat } from './output-format';
 import { AudioSample, clampCropRectangle, validateCropRectangle, VideoSample } from './sample';
 import { MetadataTags, validateMetadataTags } from './metadata';
 import { NullTarget } from './target';
+import { AudioResampler } from './resample';
 
 /**
  * The options for media file conversion.
@@ -61,6 +65,17 @@ export type ConversionOptions = {
 	input: Input;
 	/** The output file. */
 	output: Output;
+
+	/**
+	 * Defines which input tracks are used for conversion. Defaults to `'all'` unless the input is an HLS input, in
+	 * which case it defaults to `'primary'`.
+	 *
+	 * - `'all'`: All input tracks are eligible for conversion.
+	 * - `'primary'`: Only the primary video and audio track from the input are eligible for conversion.
+	 * - Array: A user-specified list of tracks that are eligible for conversion. These must all belong to the
+	 * {@link Input} specified in {@link ConversionOptions.input}.
+	 */
+	tracks?: 'all' | 'primary' | InputTrack[];
 
 	/**
 	 * Video-specific options. When passing an object, the same options are applied to all video tracks. When passing a
@@ -545,6 +560,21 @@ export class Conversion {
 			throw new TypeError('options.output must be an Output.');
 		}
 		if (
+			options.tracks !== undefined
+			&& !(
+				options.tracks === 'all'
+				|| options.tracks === 'primary'
+				|| (Array.isArray(options.tracks) && options.tracks.every(x => x instanceof InputTrack))
+			)
+		) {
+			throw new TypeError(
+				'options.tracks, when provded, must be either \'all\', \'primary\', or an array of InputTrack.',
+			);
+		}
+		if (Array.isArray(options.tracks) && !options.tracks.every(x => x.input === options.input)) {
+			throw new TypeError('Currently, all tracks in options.tracks must belong to options.input.');
+		}
+		if (
 			options.output._tracks.length > 0
 			|| Object.keys(options.output._metadataTags).length > 0
 			|| options.output.state !== 'pending'
@@ -604,21 +634,45 @@ export class Conversion {
 
 	/** @internal */
 	async _init() {
-		this._startTimestamp = this._options.trim?.start ?? Math.max(
-			await this.input.getFirstTimestamp(),
-			// Samples can also have negative timestamps, but the meaning typically is "don't present me", so let's cut
-			// those out by default.
-			0,
-		);
-		this._endTimestamp = Math.max(this._options.trim?.end ?? Infinity, this._startTimestamp);
+		const inputFormat = await this.input.getFormat();
 
-		const inputTracks = await this.input.getTracks();
+		let tracks: InputTrack[];
+
+		if (Array.isArray(this._options.tracks)) {
+			tracks = this._options.tracks;
+		} else {
+			let trackMode = this._options.tracks;
+			if (trackMode === undefined) {
+				// HACK to keep bundle size low, temp for now
+				const defaultTrackMode = inputFormat.name.includes('(HLS)')
+					? 'primary'
+					: 'all';
+
+				trackMode = defaultTrackMode;
+			}
+
+			if (trackMode === 'all') {
+				tracks = await this.input.getTracks();
+			} else if (trackMode === 'primary') {
+				const primaryVideoTrack = await this.input.getPrimaryVideoTrack();
+				const primaryAudioTrack = await this.input.getPrimaryAudioTrack();
+
+				tracks = [primaryVideoTrack, primaryAudioTrack].filter(x => x !== null);
+			} else {
+				assertNever(trackMode);
+				assert(false);
+			}
+		}
+
 		const outputTrackCounts = this.output.format.getSupportedTrackCounts();
 
 		let nVideo = 1;
 		let nAudio = 1;
 
-		for (const track of inputTracks) {
+		const filteredTracks: InputTrack[] = [];
+		const filteredTrackOptions: (ConversionVideoOptions | ConversionAudioOptions)[] = [];
+
+		for (const track of tracks) {
 			let trackOptions: ConversionVideoOptions | ConversionAudioOptions | undefined = undefined;
 			if (track.isVideoTrack()) {
 				if (this._options.video) {
@@ -668,10 +722,37 @@ export class Conversion {
 				continue;
 			}
 
+			filteredTracks.push(track);
+			filteredTrackOptions.push(trackOptions ?? {});
+		}
+
+		if (this._options.trim?.start !== undefined) {
+			this._startTimestamp = this._options.trim.start;
+		} else {
+			// Compute the start timestamp from the set of filtered tracks. Techncially these can still be narrowed
+			// down later due to discarded tracks, but we need to fix the start timestamp now due to track processing
+			// depending on it.
+			this._startTimestamp = Math.max(
+				await this.input.getFirstTimestamp(filteredTracks),
+				// Samples can also have negative timestamps, but the meaning typically is "don't present me", so let's
+				// cut those out by default.
+				0,
+			);
+		}
+
+		this._endTimestamp = Math.max(this._options.trim?.end ?? Infinity, this._startTimestamp);
+
+		// Run these sequentially so that output tracks have a deterministic order
+		for (let i = 0; i < filteredTracks.length; i++) {
+			const track = filteredTracks[i]!;
+			const options = filteredTrackOptions[i]!;
+
 			if (track.isVideoTrack()) {
-				await this._processVideoTrack(track, (trackOptions ?? {}) as ConversionVideoOptions);
+				await this._processVideoTrack(track, options as ConversionVideoOptions);
 			} else if (track.isAudioTrack()) {
-				await this._processAudioTrack(track, (trackOptions ?? {}) as ConversionAudioOptions);
+				await this._processAudioTrack(track, options as ConversionAudioOptions);
+			} else {
+				assert(false);
 			}
 		}
 
@@ -692,7 +773,7 @@ export class Conversion {
 		}
 
 		// Somewhat dirty but pragmatic
-		const inputAndOutputFormatMatch = (await this.input.getFormat()).mimeType === this.output.format.mimeType;
+		const inputAndOutputFormatMatch = inputFormat.mimeType === this.output.format.mimeType;
 		const rawTagsAreUnchanged = inputTags.raw === outputTags.raw;
 
 		if (inputTags.raw && rawTagsAreUnchanged && !inputAndOutputFormatMatch) {
@@ -824,7 +905,13 @@ export class Conversion {
 
 		if (this.onProgress) {
 			// Compute duration using only the utilized tracks
-			const durationPromises = this.utilizedTracks.map(x => x.computeDuration());
+			const durationPromises = this.utilizedTracks.map(async (track) => {
+				if (await track.isLive()) {
+					return Infinity; // Upper bound (assuming no universe heat death)
+				}
+
+				return (await track.getDurationFromMetadata()) ?? (await track.computeDuration());
+			});
 			const duration = Math.max(0, ...await Promise.all(durationPromises));
 
 			this._computeProgress = true;
@@ -885,7 +972,7 @@ export class Conversion {
 
 	/** @internal */
 	async _processVideoTrack(track: InputVideoTrack, trackOptions: ConversionVideoOptions) {
-		const sourceCodec = track.codec;
+		const sourceCodec = await track.getCodec();
 		if (!sourceCodec) {
 			this.discardedTracks.push({
 				track,
@@ -896,18 +983,20 @@ export class Conversion {
 
 		let videoSource: VideoSource;
 
-		const totalRotation = normalizeRotation(track.rotation + (trackOptions.rotate ?? 0));
+		const totalRotation = normalizeRotation(await track.getRotation() + (trackOptions.rotate ?? 0));
 		let outputTrackRotation = totalRotation;
 		const canUseRotationMetadata = this.output.format.supportsVideoRotationMetadata
 			&& (trackOptions.allowRotationMetadata ?? true);
 
+		const squarePixelWidth = await track.getSquarePixelWidth();
+		const squarePixelHeight = await track.getSquarePixelHeight();
 		const [rotatedWidth, rotatedHeight] = totalRotation % 180 === 0
-			? [track.squarePixelWidth, track.squarePixelHeight]
-			: [track.squarePixelHeight, track.squarePixelWidth];
+			? [squarePixelWidth, squarePixelHeight]
+			: [squarePixelHeight, squarePixelWidth];
 
-		const crop = trackOptions.crop;
+		let crop = trackOptions.crop;
 		if (crop) {
-			clampCropRectangle(crop, rotatedWidth, rotatedHeight);
+			crop = clampCropRectangle(crop, rotatedWidth, rotatedHeight);
 		}
 
 		const [originalWidth, originalHeight] = crop
@@ -919,8 +1008,6 @@ export class Conversion {
 		const aspectRatio = width / height;
 
 		// A lot of video encoders require that the dimensions be multiples of 2
-		const ceilToMultipleOfTwo = (value: number) => Math.ceil(value / 2) * 2;
-
 		if (trackOptions.width !== undefined && trackOptions.height === undefined) {
 			width = ceilToMultipleOfTwo(trackOptions.width);
 			height = ceilToMultipleOfTwo(Math.round(width / aspectRatio));
@@ -965,13 +1052,14 @@ export class Conversion {
 				const sink = new EncodedPacketSink(track);
 				const decoderConfig = await track.getDecoderConfig();
 				const meta: EncodedVideoChunkMetadata = { decoderConfig: decoderConfig ?? undefined };
-				const endPacket = Number.isFinite(this._endTimestamp)
-					? await sink.getPacket(this._endTimestamp, { metadataOnly: true }) ?? undefined
-					: undefined;
 
-				for await (const packet of sink.packets(undefined, endPacket, { verifyKeyPackets: true })) {
+				for await (const packet of sink.packets(undefined, undefined, { verifyKeyPackets: true })) {
 					if (this._canceled) {
 						return;
+					}
+
+					if (packet.timestamp >= this._endTimestamp) {
+						break;
 					}
 
 					const modifiedPacket = packet.clone({
@@ -982,7 +1070,7 @@ export class Conversion {
 					});
 					assert(modifiedPacket.timestamp >= 0);
 
-					this._reportProgress(track.id, modifiedPacket.timestamp);
+					this._reportProgress(track.id, modifiedPacket.timestamp + modifiedPacket.duration);
 					await source.add(modifiedPacket, meta);
 
 					if (this._synchronizer.shouldWait(track.id, modifiedPacket.timestamp)) {
@@ -1045,8 +1133,8 @@ export class Conversion {
 				|| (totalRotation !== 0 && (!canUseRotationMetadata || trackOptions.process !== undefined))
 				|| !!crop
 				// Don't expect encoders to reliably handle non-square pixels:
-				|| track.squarePixelWidth !== track.codedWidth
-				|| track.squarePixelHeight !== track.codedHeight;
+				|| squarePixelWidth !== await track.getCodedWidth()
+				|| squarePixelHeight !== await track.getCodedHeight();
 
 			if (!needsRerender) {
 				// If we're directly passing decoded samples back to the encoder, sometimes the encoder may error due
@@ -1134,7 +1222,7 @@ export class Conversion {
 
 						if (frameRate !== undefined) {
 							// Logic for skipping/repeating frames when a frame rate is set
-							const alignedTimestamp = Math.floor(adjustedSampleTimestamp * frameRate) / frameRate;
+							const alignedTimestamp = floorToDivisor(adjustedSampleTimestamp, frameRate);
 
 							if (lastCanvas !== null) {
 								if (alignedTimestamp <= lastCanvasTimestamp!) {
@@ -1170,7 +1258,7 @@ export class Conversion {
 						assert(frameRate !== undefined);
 
 						// If necessary, pad until the end timestamp of the last sample
-						await padFrames(Math.floor(lastCanvasEndTimestamp * frameRate) / frameRate);
+						await padFrames(floorToDivisor(lastCanvasEndTimestamp, frameRate));
 					}
 
 					source.close();
@@ -1215,7 +1303,7 @@ export class Conversion {
 
 						if (frameRate !== undefined) {
 							// Logic for skipping/repeating frames when a frame rate is set
-							const alignedTimestamp = Math.floor(adjustedSampleTimestamp * frameRate) / frameRate;
+							const alignedTimestamp = floorToDivisor(adjustedSampleTimestamp, frameRate);
 
 							if (lastSample !== null) {
 								if (alignedTimestamp <= lastSampleTimestamp!) {
@@ -1251,7 +1339,7 @@ export class Conversion {
 						assert(frameRate !== undefined);
 
 						// If necessary, pad until the end timestamp of the last sample
-						await padFrames(Math.floor(lastSampleEndTimestamp * frameRate) / frameRate);
+						await padFrames(floorToDivisor(lastSampleEndTimestamp, frameRate));
 					}
 
 					source.close();
@@ -1260,12 +1348,13 @@ export class Conversion {
 			}
 		}
 
+		const videoTrackLanguageCode = await track.getLanguageCode();
 		this.output.addVideoTrack(videoSource, {
 			frameRate: trackOptions.frameRate,
 			// TODO: This condition can be removed when all demuxers properly homogenize to BCP47 in v2
-			languageCode: isIso639Dash2LanguageCode(track.languageCode) ? track.languageCode : undefined,
-			name: track.name ?? undefined,
-			disposition: track.disposition,
+			languageCode: isIso639Dash2LanguageCode(videoTrackLanguageCode) ? videoTrackLanguageCode : undefined,
+			name: await track.getName() ?? undefined,
+			disposition: await track.getDisposition(),
 			rotation: outputTrackRotation,
 		});
 		this._addedCounts.video++;
@@ -1285,7 +1374,7 @@ export class Conversion {
 			return;
 		}
 
-		this._reportProgress(track.id, sample.timestamp);
+		this._reportProgress(track.id, sample.timestamp + sample.duration);
 
 		let finalSamples: VideoSample[];
 		if (!trackOptions.process) {
@@ -1337,7 +1426,7 @@ export class Conversion {
 
 	/** @internal */
 	async _processAudioTrack(track: InputAudioTrack, trackOptions: ConversionAudioOptions) {
-		const sourceCodec = track.codec;
+		const sourceCodec = await track.getCodec();
 		if (!sourceCodec) {
 			this.discardedTracks.push({
 				track,
@@ -1348,8 +1437,8 @@ export class Conversion {
 
 		let audioSource: AudioSource;
 
-		const originalNumberOfChannels = track.numberOfChannels;
-		const originalSampleRate = track.sampleRate;
+		const originalNumberOfChannels = await track.getNumberOfChannels();
+		const originalSampleRate = await track.getSampleRate();
 
 		const firstTimestamp = await track.getFirstTimestamp();
 
@@ -1380,13 +1469,14 @@ export class Conversion {
 				const sink = new EncodedPacketSink(track);
 				const decoderConfig = await track.getDecoderConfig();
 				const meta: EncodedAudioChunkMetadata = { decoderConfig: decoderConfig ?? undefined };
-				const endPacket = Number.isFinite(this._endTimestamp)
-					? await sink.getPacket(this._endTimestamp, { metadataOnly: true }) ?? undefined
-					: undefined;
 
-				for await (const packet of sink.packets(undefined, endPacket)) {
+				for await (const packet of sink.packets()) {
 					if (this._canceled) {
 						return;
+					}
+
+					if (packet.timestamp >= this._endTimestamp) {
+						break;
 					}
 
 					const modifiedPacket = packet.clone({
@@ -1394,7 +1484,7 @@ export class Conversion {
 					});
 					assert(modifiedPacket.timestamp >= 0);
 
-					this._reportProgress(track.id, modifiedPacket.timestamp);
+					this._reportProgress(track.id, modifiedPacket.timestamp + modifiedPacket.duration);
 					await source.add(modifiedPacket, meta);
 
 					if (this._synchronizer.shouldWait(track.id, modifiedPacket.timestamp)) {
@@ -1510,11 +1600,12 @@ export class Conversion {
 			}
 		}
 
+		const audioTrackLanguageCode = await track.getLanguageCode();
 		this.output.addAudioTrack(audioSource, {
 			// TODO: This condition can be removed when all demuxers properly homogenize to BCP47 in v2
-			languageCode: isIso639Dash2LanguageCode(track.languageCode) ? track.languageCode : undefined,
-			name: track.name ?? undefined,
-			disposition: track.disposition,
+			languageCode: isIso639Dash2LanguageCode(audioTrackLanguageCode) ? audioTrackLanguageCode : undefined,
+			name: await track.getName() ?? undefined,
+			disposition: await track.getDisposition(),
 		});
 		this._addedCounts.audio++;
 		this._totalTrackCount++;
@@ -1533,7 +1624,7 @@ export class Conversion {
 			return;
 		}
 
-		this._reportProgress(track.id, sample.timestamp);
+		this._reportProgress(track.id, sample.timestamp + sample.duration);
 
 		let finalSamples: AudioSample[];
 		if (!trackOptions.process) {
@@ -1597,6 +1688,8 @@ export class Conversion {
 				startTime: this._startTimestamp,
 				endTime: this._endTimestamp,
 				onSample: async (sample) => {
+					sample.setTimestamp(sample.timestamp - this._startTimestamp);
+
 					await this._registerAudioSample(track, trackOptions, source, sample);
 					sample.close();
 				},
@@ -1715,282 +1808,5 @@ class TrackSynchronizer {
 	closeTrack(trackId: number) {
 		this.maxTimestamps.delete(trackId);
 		this.computeMinAndMaybeResolve();
-	}
-}
-
-/**
- * Utility class to handle audio resampling, handling both sample rate resampling as well as channel up/downmixing.
- * The advantage over doing this manually rather than using OfflineAudioContext to do it for us is the artifact-free
- * handling of putting multiple resampled audio samples back to back, which produces flaky results using
- * OfflineAudioContext.
- */
-export class AudioResampler {
-	sourceSampleRate: number | null = null;
-	targetSampleRate: number;
-	sourceNumberOfChannels: number | null = null;
-	targetNumberOfChannels: number;
-	startTime: number;
-	endTime: number;
-	onSample: (sample: AudioSample) => Promise<void>;
-
-	bufferSizeInFrames: number;
-	bufferSizeInSamples: number;
-	outputBuffer: Float32Array;
-	/** Start frame of current buffer */
-	bufferStartFrame: number;
-	/** The highest index written to in the current buffer */
-	maxWrittenFrame: number;
-	channelMixer!: (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => number;
-	tempSourceBuffer!: Float32Array;
-
-	constructor(options: {
-		targetSampleRate: number;
-		targetNumberOfChannels: number;
-		startTime: number;
-		endTime: number;
-		onSample: (sample: AudioSample) => Promise<void>;
-	}) {
-		this.targetSampleRate = options.targetSampleRate;
-		this.targetNumberOfChannels = options.targetNumberOfChannels;
-		this.startTime = options.startTime;
-		this.endTime = options.endTime;
-		this.onSample = options.onSample;
-
-		this.bufferSizeInFrames = Math.floor(this.targetSampleRate * 5.0); // 5 seconds
-		this.bufferSizeInSamples = this.bufferSizeInFrames * this.targetNumberOfChannels;
-
-		this.outputBuffer = new Float32Array(this.bufferSizeInSamples);
-		this.bufferStartFrame = 0;
-		this.maxWrittenFrame = -1;
-	}
-
-	/**
-	 * Sets up the channel mixer to handle up/downmixing in the case where input and output channel counts don't match.
-	 */
-	doChannelMixerSetup(): void {
-		assert(this.sourceNumberOfChannels !== null);
-
-		const sourceNum = this.sourceNumberOfChannels;
-		const targetNum = this.targetNumberOfChannels;
-
-		// Logic taken from
-		// https://developer.mozilla.org/en-US/docs/Web/API/Web_Audio_API/Basic_concepts_behind_Web_Audio_API
-		// Most of the mapping functions are branchless.
-
-		if (sourceNum === 1 && targetNum === 2) {
-			// Mono to Stereo: M -> L, M -> R
-			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number) => {
-				return sourceData[sourceFrameIndex * sourceNum]!;
-			};
-		} else if (sourceNum === 1 && targetNum === 4) {
-			// Mono to Quad: M -> L, M -> R, 0 -> SL, 0 -> SR
-			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => {
-				return sourceData[sourceFrameIndex * sourceNum]! * +(targetChannelIndex < 2);
-			};
-		} else if (sourceNum === 1 && targetNum === 6) {
-			// Mono to 5.1: 0 -> L, 0 -> R, M -> C, 0 -> LFE, 0 -> SL, 0 -> SR
-			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => {
-				return sourceData[sourceFrameIndex * sourceNum]! * +(targetChannelIndex === 2);
-			};
-		} else if (sourceNum === 2 && targetNum === 1) {
-			// Stereo to Mono: 0.5 * (L + R)
-			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number) => {
-				const baseIdx = sourceFrameIndex * sourceNum;
-				return 0.5 * (sourceData[baseIdx]! + sourceData[baseIdx + 1]!);
-			};
-		} else if (sourceNum === 2 && targetNum === 4) {
-			// Stereo to Quad: L -> L, R -> R, 0 -> SL, 0 -> SR
-			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => {
-				return sourceData[sourceFrameIndex * sourceNum + targetChannelIndex]! * +(targetChannelIndex < 2);
-			};
-		} else if (sourceNum === 2 && targetNum === 6) {
-			// Stereo to 5.1: L -> L, R -> R, 0 -> C, 0 -> LFE, 0 -> SL, 0 -> SR
-			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => {
-				return sourceData[sourceFrameIndex * sourceNum + targetChannelIndex]! * +(targetChannelIndex < 2);
-			};
-		} else if (sourceNum === 4 && targetNum === 1) {
-			// Quad to Mono: 0.25 * (L + R + SL + SR)
-			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number) => {
-				const baseIdx = sourceFrameIndex * sourceNum;
-				return 0.25 * (
-					sourceData[baseIdx]! + sourceData[baseIdx + 1]!
-					+ sourceData[baseIdx + 2]! + sourceData[baseIdx + 3]!
-				);
-			};
-		} else if (sourceNum === 4 && targetNum === 2) {
-			// Quad to Stereo: 0.5 * (L + SL), 0.5 * (R + SR)
-			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => {
-				const baseIdx = sourceFrameIndex * sourceNum;
-				return 0.5 * (
-					sourceData[baseIdx + targetChannelIndex]!
-					+ sourceData[baseIdx + targetChannelIndex + 2]!
-				);
-			};
-		} else if (sourceNum === 4 && targetNum === 6) {
-			// Quad to 5.1: L -> L, R -> R, 0 -> C, 0 -> LFE, SL -> SL, SR -> SR
-			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => {
-				const baseIdx = sourceFrameIndex * sourceNum;
-
-				// It's a bit harder to do this one branchlessly
-				if (targetChannelIndex < 2) return sourceData[baseIdx + targetChannelIndex]!; // L, R
-				if (targetChannelIndex === 2 || targetChannelIndex === 3) return 0; // C, LFE
-				return sourceData[baseIdx + targetChannelIndex - 2]!; // SL, SR
-			};
-		} else if (sourceNum === 6 && targetNum === 1) {
-			// 5.1 to Mono: sqrt(1/2) * (L + R) + C + 0.5 * (SL + SR)
-			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number) => {
-				const baseIdx = sourceFrameIndex * sourceNum;
-				return Math.SQRT1_2 * (sourceData[baseIdx]! + sourceData[baseIdx + 1]!)
-					+ sourceData[baseIdx + 2]!
-					+ 0.5 * (sourceData[baseIdx + 4]! + sourceData[baseIdx + 5]!);
-			};
-		} else if (sourceNum === 6 && targetNum === 2) {
-			// 5.1 to Stereo: L + sqrt(1/2) * (C + SL), R + sqrt(1/2) * (C + SR)
-			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => {
-				const baseIdx = sourceFrameIndex * sourceNum;
-				return sourceData[baseIdx + targetChannelIndex]!
-					+ Math.SQRT1_2 * (sourceData[baseIdx + 2]! + sourceData[baseIdx + targetChannelIndex + 4]!);
-			};
-		} else if (sourceNum === 6 && targetNum === 4) {
-			// 5.1 to Quad: L + sqrt(1/2) * C, R + sqrt(1/2) * C, SL, SR
-			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => {
-				const baseIdx = sourceFrameIndex * sourceNum;
-
-				// It's a bit harder to do this one branchlessly
-				if (targetChannelIndex < 2) {
-					return sourceData[baseIdx + targetChannelIndex]! + Math.SQRT1_2 * sourceData[baseIdx + 2]!;
-				}
-				return sourceData[baseIdx + targetChannelIndex + 2]!; // SL, SR
-			};
-		} else {
-			// Discrete fallback: direct mapping with zero-fill or drop
-			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => {
-				return targetChannelIndex < sourceNum
-					? sourceData[sourceFrameIndex * sourceNum + targetChannelIndex]!
-					: 0;
-			};
-		}
-	}
-
-	ensureTempBufferSize(requiredSamples: number): void {
-		let length = this.tempSourceBuffer.length;
-
-		while (length < requiredSamples) {
-			length *= 2;
-		}
-
-		if (length !== this.tempSourceBuffer.length) {
-			const newBuffer = new Float32Array(length);
-			newBuffer.set(this.tempSourceBuffer);
-			this.tempSourceBuffer = newBuffer;
-		}
-	}
-
-	async add(audioSample: AudioSample) {
-		if (this.sourceSampleRate === null) {
-			// This is the first sample, so let's init the missing data. Initting the sample rate from the decoded
-			// sample is more reliable than using the file's metadata, because decoders are free to emit any sample rate
-			// they see fit.
-			this.sourceSampleRate = audioSample.sampleRate;
-			this.sourceNumberOfChannels = audioSample.numberOfChannels;
-
-			// Pre-allocate temporary buffer for source data
-			this.tempSourceBuffer = new Float32Array(this.sourceSampleRate * this.sourceNumberOfChannels);
-
-			this.doChannelMixerSetup();
-		}
-
-		const requiredSamples = audioSample.numberOfFrames * audioSample.numberOfChannels;
-		this.ensureTempBufferSize(requiredSamples);
-
-		// Copy the audio data to the temp buffer
-		const sourceDataSize = audioSample.allocationSize({ planeIndex: 0, format: 'f32' });
-		const sourceView = new Float32Array(this.tempSourceBuffer.buffer, 0, sourceDataSize / 4);
-		audioSample.copyTo(sourceView, { planeIndex: 0, format: 'f32' });
-
-		const inputStartTime = audioSample.timestamp - this.startTime;
-		const inputDuration = audioSample.numberOfFrames / this.sourceSampleRate;
-		const inputEndTime = Math.min(inputStartTime + inputDuration, this.endTime - this.startTime);
-
-		// Compute which output frames are affected by this sample
-		const outputStartFrame = Math.floor(inputStartTime * this.targetSampleRate);
-		const outputEndFrame = Math.ceil(inputEndTime * this.targetSampleRate);
-
-		for (let outputFrame = outputStartFrame; outputFrame < outputEndFrame; outputFrame++) {
-			if (outputFrame < this.bufferStartFrame) {
-				continue; // Skip writes to the past
-			}
-
-			while (outputFrame >= this.bufferStartFrame + this.bufferSizeInFrames) {
-				// The write is after the current buffer, so finalize it
-				await this.finalizeCurrentBuffer();
-				this.bufferStartFrame += this.bufferSizeInFrames;
-			}
-
-			const bufferFrameIndex = outputFrame - this.bufferStartFrame;
-			assert(bufferFrameIndex < this.bufferSizeInFrames);
-
-			const outputTime = outputFrame / this.targetSampleRate;
-			const inputTime = outputTime - inputStartTime;
-			const sourcePosition = inputTime * this.sourceSampleRate;
-
-			const sourceLowerFrame = Math.floor(sourcePosition);
-			const sourceUpperFrame = Math.ceil(sourcePosition);
-			const fraction = sourcePosition - sourceLowerFrame;
-
-			// Process each output channel
-			for (let targetChannel = 0; targetChannel < this.targetNumberOfChannels; targetChannel++) {
-				let lowerSample = 0;
-				let upperSample = 0;
-
-				if (sourceLowerFrame >= 0 && sourceLowerFrame < audioSample.numberOfFrames) {
-					lowerSample = this.channelMixer(sourceView, sourceLowerFrame, targetChannel);
-				}
-
-				if (sourceUpperFrame >= 0 && sourceUpperFrame < audioSample.numberOfFrames) {
-					upperSample = this.channelMixer(sourceView, sourceUpperFrame, targetChannel);
-				}
-
-				// For resampling, we do naive linear interpolation to find the in-between sample. This produces
-				// suboptimal results especially for downsampling (for which a low-pass filter would first need to be
-				// applied), but AudioContext doesn't do this either, so, whatever, for now.
-				const outputSample = lowerSample + fraction * (upperSample - lowerSample);
-
-				// Write to output buffer (interleaved)
-				const outputIndex = bufferFrameIndex * this.targetNumberOfChannels + targetChannel;
-				this.outputBuffer[outputIndex]! += outputSample; // Add in case of overlapping samples
-			}
-
-			this.maxWrittenFrame = Math.max(this.maxWrittenFrame, bufferFrameIndex);
-		}
-	}
-
-	async finalizeCurrentBuffer() {
-		if (this.maxWrittenFrame < 0) {
-			return; // Nothing to finalize
-		}
-
-		const samplesWritten = (this.maxWrittenFrame + 1) * this.targetNumberOfChannels;
-
-		const outputData = new Float32Array(samplesWritten);
-		outputData.set(this.outputBuffer.subarray(0, samplesWritten));
-
-		const timestampSeconds = this.bufferStartFrame / this.targetSampleRate;
-		const audioSample = new AudioSample({
-			format: 'f32',
-			sampleRate: this.targetSampleRate,
-			numberOfChannels: this.targetNumberOfChannels,
-			timestamp: timestampSeconds,
-			data: outputData,
-		});
-
-		await this.onSample(audioSample);
-
-		this.outputBuffer.fill(0);
-		this.maxWrittenFrame = -1;
-	}
-
-	finalize() {
-		return this.finalizeCurrentBuffer();
 	}
 }

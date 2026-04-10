@@ -34,7 +34,7 @@ const generateThumbnails = async (resource: File | string) => {
 			throw new Error('File has no video track.');
 		}
 
-		if (videoTrack.codec === null) {
+		if (await videoTrack.getCodec() === null) {
 			throw new Error('Unsupported video codec.');
 		}
 
@@ -43,12 +43,14 @@ const generateThumbnails = async (resource: File | string) => {
 		}
 
 		// Compute width and height of the thumbnails such that the larger dimension is equal to THUMBNAIL_SIZE
-		const width = videoTrack.displayWidth > videoTrack.displayHeight
+		const displayWidth = await videoTrack.getDisplayWidth();
+		const displayHeight = await videoTrack.getDisplayHeight();
+		const width = displayWidth > displayHeight
 			? THUMBNAIL_SIZE
-			: Math.floor(THUMBNAIL_SIZE * videoTrack.displayWidth / videoTrack.displayHeight);
-		const height = videoTrack.displayHeight > videoTrack.displayWidth
+			: Math.floor(THUMBNAIL_SIZE * displayWidth / displayHeight);
+		const height = displayHeight > displayWidth
 			? THUMBNAIL_SIZE
-			: Math.floor(THUMBNAIL_SIZE * videoTrack.displayHeight / videoTrack.displayWidth);
+			: Math.floor(THUMBNAIL_SIZE * displayHeight / displayWidth);
 
 		// Create thumbnail elements
 		const thumbnailElements = [];

@@ -42,9 +42,9 @@ test('Matroska muxer internally converts ADTS to AAC', async () => {
 	const outputTrack = await outputAsInput.getPrimaryAudioTrack();
 	assert(outputTrack);
 
-	expect(outputTrack.codec).toBe('aac');
-	expect(outputTrack.sampleRate).toBe(inputTrack.sampleRate);
-	expect(outputTrack.numberOfChannels).toBe(inputTrack.numberOfChannels);
+	expect(await outputTrack.getCodec()).toBe('aac');
+	expect(await outputTrack.getSampleRate()).toBe(await inputTrack.getSampleRate());
+	expect(await outputTrack.getNumberOfChannels()).toBe(await inputTrack.getNumberOfChannels());
 
 	const outputDecoderConfig = await outputTrack.getDecoderConfig();
 	expect(outputDecoderConfig!.description).toBeDefined();

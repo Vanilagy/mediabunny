@@ -23,17 +23,29 @@ if ((globalThis as Record<symbol, unknown>)[MEDIABUNNY_LOADED_SYMBOL]) {
 export {
 	Output,
 	OutputOptions,
+	OutputTrack,
+	OutputVideoTrack,
+	OutputAudioTrack,
+	OutputSubtitleTrack,
+	OutputTrackGroup,
 	BaseTrackMetadata,
 	VideoTrackMetadata,
 	AudioTrackMetadata,
 	SubtitleTrackMetadata,
+	OutputEvents,
 } from './output';
 export {
 	OutputFormat,
 	AdtsOutputFormat,
 	AdtsOutputFormatOptions,
+	CmafOutputFormat,
+	CmafOutputFormatOptions,
 	FlacOutputFormat,
 	FlacOutputFormatOptions,
+	HlsOutputFormat,
+	HlsOutputFormatOptions,
+	HlsOutputPlaylistInfo,
+	HlsOutputSegmentInfo,
 	IsobmffOutputFormat,
 	IsobmffOutputFormatOptions,
 	MkvOutputFormat,
@@ -81,6 +93,14 @@ export {
 	SUBTITLE_CODECS,
 } from './codec';
 export {
+	canDecode,
+	canDecodeVideo,
+	canDecodeAudio,
+	getDecodableCodecs,
+	getDecodableVideoCodecs,
+	getDecodableAudioCodecs,
+} from './decode';
+export {
 	VideoEncodingConfig,
 	VideoEncodingAdditionalOptions,
 	AudioEncodingConfig,
@@ -105,20 +125,28 @@ export {
 } from './encode';
 export {
 	Target,
+	TargetEvents,
+	TargetRequest,
 	BufferTarget,
 	FilePathTarget,
 	FilePathTargetOptions,
 	NullTarget,
+	RangedTarget,
 	StreamTarget,
 	StreamTargetOptions,
 	StreamTargetChunk,
+	PathedTarget,
 } from './target';
 export {
 	AnyIterable,
+	EventEmitter,
+	EventListenerOptions,
+	FilePath,
 	MaybePromise,
 	Rational,
 	Rectangle,
 	Rotation,
+	SetOptional,
 	SetRequired,
 } from './misc';
 export {
@@ -127,13 +155,18 @@ export {
 } from './output';
 export {
 	Source,
+	SourceEvents,
+	SourceRef,
+	SourceRequest,
 	BlobSource,
 	BlobSourceOptions,
 	BufferSource,
 	FilePathSource,
 	FilePathSourceOptions,
+	PathedSource,
 	StreamSource,
 	StreamSourceOptions,
+	RangedSource,
 	ReadableStreamSource,
 	ReadableStreamSourceOptions,
 	UrlSource,
@@ -144,6 +177,7 @@ export {
 	AdtsInputFormat,
 	FlacInputFormat,
 	IsobmffInputFormat,
+	HlsInputFormat,
 	MatroskaInputFormat,
 	Mp3InputFormat,
 	Mp4InputFormat,
@@ -153,8 +187,10 @@ export {
 	WaveInputFormat,
 	WebMInputFormat,
 	ALL_FORMATS,
+	HLS_FORMATS,
 	ADTS,
 	FLAC,
+	HLS,
 	MATROSKA,
 	MP3,
 	MP4,
@@ -167,13 +203,24 @@ export {
 export {
 	Input,
 	InputOptions,
+	InputEvents,
 	InputDisposedError,
+	createInputFrom,
+	CreateInputFromOptions,
+	UnsupportedInputFormatError,
 } from './input';
+export {
+	DurationMetadataRequestOptions,
+} from './demuxer';
 export {
 	InputTrack,
 	InputVideoTrack,
 	InputAudioTrack,
+	InputTrackQuery,
 	PacketStats,
+	asc,
+	desc,
+	prefer,
 } from './input-track';
 export {
 	EncodedPacket,

@@ -66,9 +66,9 @@ test('AAC encoding', async () => {
 	});
 
 	const track = (await input.getPrimaryAudioTrack())!;
-	expect(track.codec).toBe('aac');
-	expect(track.sampleRate).toBe(sampleRate);
-	expect(track.numberOfChannels).toBe(channels);
+	expect(await track.getCodec()).toBe('aac');
+	expect(await track.getSampleRate()).toBe(sampleRate);
+	expect(await track.getNumberOfChannels()).toBe(channels);
 
 	const sink = new EncodedPacketSink(track);
 	let packetCount = 0;

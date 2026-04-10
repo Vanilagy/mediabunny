@@ -1,0 +1,2 @@
+clash between target duration and default keyframe interval which is 5. This is easy to miss. Also messes up in
+conversion api.

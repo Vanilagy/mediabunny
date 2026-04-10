@@ -18,9 +18,9 @@ const allTracks = await input.getTracks(); // List of all tracks
 // Extract video metadata
 const videoTrack = await input.getPrimaryVideoTrack();
 if (videoTrack) {
-	videoTrack.displayWidth; // in pixels
-	videoTrack.displayHeight; // in pixels
-	videoTrack.rotation; // in degrees clockwise
+	await videoTrack.getDisplayWidth(); // in pixels
+	await videoTrack.getDisplayHeight(); // in pixels
+	await videoTrack.getRotation(); // in degrees clockwise
 
 	// Estimate frame rate (FPS)
 	const packetStats = await videoTrack.computePacketStats(100);
@@ -30,8 +30,8 @@ if (videoTrack) {
 // Extract audio metadata
 const audioTrack = await input.getPrimaryAudioTrack();
 if (audioTrack) {
-	audioTrack.numberOfChannels;
-	audioTrack.sampleRate; // in Hz
+	await audioTrack.getNumberOfChannels();
+	await audioTrack.getSampleRate(); // in Hz
 }
 
 // Extract metadata tags
