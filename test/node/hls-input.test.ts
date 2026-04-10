@@ -22,108 +22,94 @@ test.concurrent('Big Buck Bunny', { timeout: 15_000 }, async () => {
 	expect(sourceCount).toBe(1);
 	expect(rootReadCount).toBeGreaterThan(0);
 
-	// Test descriptors (unhydrated metadata from master playlist)
-	const descriptors = await input.getTrackDescriptors();
-	const videoDescriptors = descriptors.filter(x => x.isVideoTrackDescriptor());
-	const audioDescriptors = descriptors.filter(x => x.isAudioTrackDescriptor());
+	// Test tracks directly (metadata comes from the master playlist before segments are read)
+	const tracks = await input.getTracks();
+	const videoTracks = tracks.filter((x): x is InputVideoTrack => x.isVideoTrack());
+	const audioTracks = tracks.filter((x): x is InputAudioTrack => x.isAudioTrack());
 
-	expect(videoDescriptors).toHaveLength(5);
-	expect(audioDescriptors).toHaveLength(5);
+	expect(videoTracks).toHaveLength(5);
+	expect(audioTracks).toHaveLength(5);
 
-	expect(videoDescriptors[0]!.codec).toBe('avc');
-	expect(videoDescriptors[0]!.codecParameterString).toBe('avc1.64001f');
-	expect(videoDescriptors[0]!.displayWidth).toBe(1280);
-	expect(videoDescriptors[0]!.displayHeight).toBe(720);
-	expect(videoDescriptors[0]!.bitrate).toBe(2149280);
-	expect(videoDescriptors[0]!.name).toBe('720');
-	expect(videoDescriptors[0]!.id).toBe(2);
+	expect(await videoTracks[0]!.getCodec()).toBe('avc');
+	expect(await videoTracks[0]!.getDisplayWidth()).toBe(1280);
+	expect(await videoTracks[0]!.getDisplayHeight()).toBe(720);
+	expect(await videoTracks[0]!.getBitrate()).toBe(2149280);
+	expect(await videoTracks[0]!.getName()).toBe('720');
+	expect(videoTracks[0]!.id).toBe(2);
 
-	expect(videoDescriptors[1]!.codec).toBe('avc');
-	expect(videoDescriptors[1]!.codecParameterString).toBe('avc1.42000d');
-	expect(videoDescriptors[1]!.displayWidth).toBe(320);
-	expect(videoDescriptors[1]!.displayHeight).toBe(184);
-	expect(videoDescriptors[1]!.bitrate).toBe(246440);
-	expect(videoDescriptors[1]!.name).toBe('240');
-	expect(videoDescriptors[1]!.id).toBe(4);
+	expect(await videoTracks[1]!.getCodec()).toBe('avc');
+	expect(await videoTracks[1]!.getDisplayWidth()).toBe(320);
+	expect(await videoTracks[1]!.getDisplayHeight()).toBe(184);
+	expect(await videoTracks[1]!.getBitrate()).toBe(246440);
+	expect(await videoTracks[1]!.getName()).toBe('240');
+	expect(videoTracks[1]!.id).toBe(4);
 
-	expect(videoDescriptors[2]!.codec).toBe('avc');
-	expect(videoDescriptors[2]!.codecParameterString).toBe('avc1.420016');
-	expect(videoDescriptors[2]!.displayWidth).toBe(512);
-	expect(videoDescriptors[2]!.displayHeight).toBe(288);
-	expect(videoDescriptors[2]!.bitrate).toBe(460560);
-	expect(videoDescriptors[2]!.name).toBe('380');
-	expect(videoDescriptors[2]!.id).toBe(6);
+	expect(await videoTracks[2]!.getCodec()).toBe('avc');
+	expect(await videoTracks[2]!.getDisplayWidth()).toBe(512);
+	expect(await videoTracks[2]!.getDisplayHeight()).toBe(288);
+	expect(await videoTracks[2]!.getBitrate()).toBe(460560);
+	expect(await videoTracks[2]!.getName()).toBe('380');
+	expect(videoTracks[2]!.id).toBe(6);
 
-	expect(videoDescriptors[3]!.codec).toBe('avc');
-	expect(videoDescriptors[3]!.codecParameterString).toBe('avc1.64001f');
-	expect(videoDescriptors[3]!.displayWidth).toBe(848);
-	expect(videoDescriptors[3]!.displayHeight).toBe(480);
-	expect(videoDescriptors[3]!.bitrate).toBe(836280);
-	expect(videoDescriptors[3]!.name).toBe('480');
-	expect(videoDescriptors[3]!.id).toBe(8);
+	expect(await videoTracks[3]!.getCodec()).toBe('avc');
+	expect(await videoTracks[3]!.getDisplayWidth()).toBe(848);
+	expect(await videoTracks[3]!.getDisplayHeight()).toBe(480);
+	expect(await videoTracks[3]!.getBitrate()).toBe(836280);
+	expect(await videoTracks[3]!.getName()).toBe('480');
+	expect(videoTracks[3]!.id).toBe(8);
 
-	expect(videoDescriptors[4]!.codec).toBe('avc');
-	expect(videoDescriptors[4]!.codecParameterString).toBe('avc1.640028');
-	expect(videoDescriptors[4]!.displayWidth).toBe(1920);
-	expect(videoDescriptors[4]!.displayHeight).toBe(1080);
-	expect(videoDescriptors[4]!.bitrate).toBe(6221600);
-	expect(videoDescriptors[4]!.name).toBe('1080');
-	expect(videoDescriptors[4]!.id).toBe(10);
+	expect(await videoTracks[4]!.getCodec()).toBe('avc');
+	expect(await videoTracks[4]!.getDisplayWidth()).toBe(1920);
+	expect(await videoTracks[4]!.getDisplayHeight()).toBe(1080);
+	expect(await videoTracks[4]!.getBitrate()).toBe(6221600);
+	expect(await videoTracks[4]!.getName()).toBe('1080');
+	expect(videoTracks[4]!.id).toBe(10);
 
-	expect(audioDescriptors[0]!.codec).toBe('aac');
-	expect(audioDescriptors[0]!.codecParameterString).toBe('mp4a.40.2');
-	expect(audioDescriptors[0]!.bitrate).toBe(2149280);
-	expect(audioDescriptors[0]!.name).toBe('720');
-	expect(audioDescriptors[0]!.id).toBe(1);
-	expect(audioDescriptors[0]!.numberOfChannels).toBeUndefined();
-	expect(audioDescriptors[0]!.sampleRate).toBeUndefined();
+	expect(await audioTracks[0]!.getCodec()).toBe('aac');
+	expect(await audioTracks[0]!.getBitrate()).toBe(2149280);
+	expect(await audioTracks[0]!.getName()).toBe('720');
+	expect(audioTracks[0]!.id).toBe(1);
 
-	expect(audioDescriptors[1]!.codec).toBe('aac');
-	expect(audioDescriptors[1]!.codecParameterString).toBe('mp4a.40.5');
-	expect(audioDescriptors[1]!.bitrate).toBe(246440);
-	expect(audioDescriptors[1]!.name).toBe('240');
-	expect(audioDescriptors[1]!.id).toBe(3);
+	expect(await audioTracks[1]!.getCodec()).toBe('aac');
+	expect(await audioTracks[1]!.getBitrate()).toBe(246440);
+	expect(await audioTracks[1]!.getName()).toBe('240');
+	expect(audioTracks[1]!.id).toBe(3);
 
-	expect(audioDescriptors[2]!.codec).toBe('aac');
-	expect(audioDescriptors[2]!.codecParameterString).toBe('mp4a.40.5');
-	expect(audioDescriptors[2]!.bitrate).toBe(460560);
-	expect(audioDescriptors[2]!.name).toBe('380');
-	expect(audioDescriptors[2]!.id).toBe(5);
+	expect(await audioTracks[2]!.getCodec()).toBe('aac');
+	expect(await audioTracks[2]!.getBitrate()).toBe(460560);
+	expect(await audioTracks[2]!.getName()).toBe('380');
+	expect(audioTracks[2]!.id).toBe(5);
 
-	expect(audioDescriptors[3]!.codec).toBe('aac');
-	expect(audioDescriptors[3]!.codecParameterString).toBe('mp4a.40.2');
-	expect(audioDescriptors[3]!.bitrate).toBe(836280);
-	expect(audioDescriptors[3]!.name).toBe('480');
-	expect(audioDescriptors[3]!.id).toBe(7);
+	expect(await audioTracks[3]!.getCodec()).toBe('aac');
+	expect(await audioTracks[3]!.getBitrate()).toBe(836280);
+	expect(await audioTracks[3]!.getName()).toBe('480');
+	expect(audioTracks[3]!.id).toBe(7);
 
-	expect(audioDescriptors[4]!.codec).toBe('aac');
-	expect(audioDescriptors[4]!.codecParameterString).toBe('mp4a.40.2');
-	expect(audioDescriptors[4]!.bitrate).toBe(6221600);
-	expect(audioDescriptors[4]!.name).toBe('1080');
-	expect(audioDescriptors[4]!.id).toBe(9);
+	expect(await audioTracks[4]!.getCodec()).toBe('aac');
+	expect(await audioTracks[4]!.getBitrate()).toBe(6221600);
+	expect(await audioTracks[4]!.getName()).toBe('1080');
+	expect(audioTracks[4]!.id).toBe(9);
 
-	for (let i = 0; i < videoDescriptors.length - 1; i++) {
-		for (let j = i + 1; j < videoDescriptors.length; j++) {
-			expect(videoDescriptors[i]!.canBePairedWith(videoDescriptors[j]!)).toBe(false);
+	for (let i = 0; i < videoTracks.length - 1; i++) {
+		for (let j = i + 1; j < videoTracks.length; j++) {
+			expect(videoTracks[i]!.canBePairedWith(videoTracks[j]!)).toBe(false);
 		}
 	}
 
-	for (let i = 0; i < videoDescriptors.length; i++) {
-		for (let j = 0; j < audioDescriptors.length; j++) {
-			expect(videoDescriptors[i]!.canBePairedWith(audioDescriptors[j]!)).toBe(i === j);
+	for (let i = 0; i < videoTracks.length; i++) {
+		for (let j = 0; j < audioTracks.length; j++) {
+			expect(videoTracks[i]!.canBePairedWith(audioTracks[j]!)).toBe(i === j);
 		}
 	}
 
 	expect(sourceCount).toBe(1);
 
-	// Hydrate all tracks
-	const tracks = await input.getTracks();
-	const videoTracks = tracks.filter(x => x.isVideoTrack());
-	const audioTracks = tracks.filter(x => x.isAudioTrack());
+	// Force hydration of all tracks by loading actual media data
+	for (const track of tracks) {
+		expect(await track.getIsRelativeToUnixEpoch()).toBe(false);
+	}
 
 	expect(sourceCount).toBe(1 + 5 + 5);
-
-	expect(tracks.every(x => !x.isRelativeToUnixEpoch)).toBe(true);
 
 	for (const track of tracks) {
 		expect(await track.isLive()).toBe(false);
@@ -132,28 +118,28 @@ test.concurrent('Big Buck Bunny', { timeout: 15_000 }, async () => {
 	expect(await videoTracks[0]!.getDurationFromMetadata()).toBe(634.584);
 	expect(await audioTracks[0]!.getDurationFromMetadata()).toBe(634.584);
 
-	expect(videoTracks[0]!.codedWidth).toBe(1280);
-	expect(videoTracks[0]!.codedHeight).toBe(720);
-	expect(videoTracks[1]!.codedWidth).toBe(320);
-	expect(videoTracks[1]!.codedHeight).toBe(184);
-	expect(videoTracks[2]!.codedWidth).toBe(512);
-	expect(videoTracks[2]!.codedHeight).toBe(288);
-	expect(videoTracks[3]!.codedWidth).toBe(848);
-	expect(videoTracks[3]!.codedHeight).toBe(480);
-	expect(videoTracks[4]!.codedWidth).toBe(1920);
-	expect(videoTracks[4]!.codedHeight).toBe(1080);
+	expect(await videoTracks[0]!.getCodedWidth()).toBe(1280);
+	expect(await videoTracks[0]!.getCodedHeight()).toBe(720);
+	expect(await videoTracks[1]!.getCodedWidth()).toBe(320);
+	expect(await videoTracks[1]!.getCodedHeight()).toBe(184);
+	expect(await videoTracks[2]!.getCodedWidth()).toBe(512);
+	expect(await videoTracks[2]!.getCodedHeight()).toBe(288);
+	expect(await videoTracks[3]!.getCodedWidth()).toBe(848);
+	expect(await videoTracks[3]!.getCodedHeight()).toBe(480);
+	expect(await videoTracks[4]!.getCodedWidth()).toBe(1920);
+	expect(await videoTracks[4]!.getCodedHeight()).toBe(1080);
 
-	// Ensure that these are still avaiable even after track backing hydration
-	expect(videoDescriptors[0]!.displayWidth).toBe(1280);
-	expect(videoDescriptors[0]!.displayHeight).toBe(720);
-	expect(videoDescriptors[1]!.displayWidth).toBe(320);
-	expect(videoDescriptors[1]!.displayHeight).toBe(184);
-	expect(videoDescriptors[2]!.displayWidth).toBe(512);
-	expect(videoDescriptors[2]!.displayHeight).toBe(288);
-	expect(videoDescriptors[3]!.displayWidth).toBe(848);
-	expect(videoDescriptors[3]!.displayHeight).toBe(480);
-	expect(videoDescriptors[4]!.displayWidth).toBe(1920);
-	expect(videoDescriptors[4]!.displayHeight).toBe(1080);
+	// Ensure metadata display dimensions still match even after hydration (they come from the manifest hint)
+	expect(await videoTracks[0]!.getDisplayWidth()).toBe(1280);
+	expect(await videoTracks[0]!.getDisplayHeight()).toBe(720);
+	expect(await videoTracks[1]!.getDisplayWidth()).toBe(320);
+	expect(await videoTracks[1]!.getDisplayHeight()).toBe(184);
+	expect(await videoTracks[2]!.getDisplayWidth()).toBe(512);
+	expect(await videoTracks[2]!.getDisplayHeight()).toBe(288);
+	expect(await videoTracks[3]!.getDisplayWidth()).toBe(848);
+	expect(await videoTracks[3]!.getDisplayHeight()).toBe(480);
+	expect(await videoTracks[4]!.getDisplayWidth()).toBe(1920);
+	expect(await videoTracks[4]!.getDisplayHeight()).toBe(1080);
 
 	expect(await videoTracks[0]!.getCodecParameterString()).toEqual('avc1.64001f');
 	expect(await videoTracks[1]!.getCodecParameterString()).toEqual('avc1.42c00d'); // Slightly altered
@@ -161,16 +147,16 @@ test.concurrent('Big Buck Bunny', { timeout: 15_000 }, async () => {
 	expect(await videoTracks[3]!.getCodecParameterString()).toEqual('avc1.64001f');
 	expect(await videoTracks[4]!.getCodecParameterString()).toEqual('avc1.640028');
 
-	expect(audioTracks[0]!.numberOfChannels).toBe(2);
-	expect(audioTracks[0]!.sampleRate).toBe(44100);
-	expect(audioTracks[1]!.numberOfChannels).toBe(2);
-	expect(audioTracks[1]!.sampleRate).toBe(22050);
-	expect(audioTracks[2]!.numberOfChannels).toBe(2);
-	expect(audioTracks[2]!.sampleRate).toBe(22050);
-	expect(audioTracks[3]!.numberOfChannels).toBe(2);
-	expect(audioTracks[3]!.sampleRate).toBe(44100);
-	expect(audioTracks[4]!.numberOfChannels).toBe(2);
-	expect(audioTracks[4]!.sampleRate).toBe(44100);
+	expect(await audioTracks[0]!.getNumberOfChannels()).toBe(2);
+	expect(await audioTracks[0]!.getSampleRate()).toBe(44100);
+	expect(await audioTracks[1]!.getNumberOfChannels()).toBe(2);
+	expect(await audioTracks[1]!.getSampleRate()).toBe(22050);
+	expect(await audioTracks[2]!.getNumberOfChannels()).toBe(2);
+	expect(await audioTracks[2]!.getSampleRate()).toBe(22050);
+	expect(await audioTracks[3]!.getNumberOfChannels()).toBe(2);
+	expect(await audioTracks[3]!.getSampleRate()).toBe(44100);
+	expect(await audioTracks[4]!.getNumberOfChannels()).toBe(2);
+	expect(await audioTracks[4]!.getSampleRate()).toBe(44100);
 
 	for (const audioTrack of audioTracks) {
 		// Actual data always contains object type 2
@@ -218,6 +204,30 @@ test.concurrent('Big Buck Bunny', { timeout: 15_000 }, async () => {
 	expect(await input.getDurationFromMetadata()).not.toBe(null);
 });
 
+test.concurrent('Big Buck Bunny codec parameter strings from master playlist', { timeout: 15_000 }, async () => {
+	using input = createInputFrom('https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8', ALL_FORMATS);
+
+	let sourceCount = 0;
+	input.on('source', () => sourceCount++);
+
+	const tracks = await input.getTracks();
+	expect(tracks).toHaveLength(10);
+
+	// Every CODECS attribute lives in the master playlist, so reading the codec parameter string should never force us
+	// to fetch any segment source
+	const codecParameterStrings = await Promise.all(tracks.map(t => t.getCodecParameterString()));
+	expect(codecParameterStrings).toEqual(expect.arrayContaining([
+		'mp4a.40.2',
+		'mp4a.40.5',
+		'avc1.64001f',
+		'avc1.42000d',
+		'avc1.420016',
+		'avc1.640028',
+	]));
+
+	expect(sourceCount).toBe(1);
+});
+
 test.concurrent('Single-variant Big Buck Bunny', { timeout: 15_000 }, async () => {
 	using input = createInputFrom('https://test-streams.mux.dev/x36xhzz/url_6/193039199_mp4_h264_aac_hq_7.m3u8', ALL_FORMATS);
 
@@ -226,20 +236,20 @@ test.concurrent('Single-variant Big Buck Bunny', { timeout: 15_000 }, async () =
 
 	const audioTrack = tracks[0]! as InputAudioTrack;
 	expect(audioTrack.isAudioTrack()).toBe(true);
-	expect(audioTrack.codec).toBe('aac');
+	expect(await audioTrack.getCodec()).toBe('aac');
 
 	const videoTrack = tracks[1] as InputVideoTrack;
 	expect(videoTrack.isVideoTrack()).toBe(true);
-	expect(videoTrack.codec).toBe('avc');
+	expect(await videoTrack.getCodec()).toBe('avc');
 });
 
 test.concurrent('Codec-less (underspecified) master playlist', { timeout: 15_000 }, async () => {
 	using input = createInputFrom('https://test-streams.mux.dev/test_001/stream.m3u8', ALL_FORMATS);
 
-	const descriptors = await input.getTrackDescriptors();
-	expect(descriptors).toHaveLength(12);
+	const tracks = await input.getTracks();
+	expect(tracks).toHaveLength(12);
 
-	const codecs = new Set(descriptors.map(x => x.codec));
+	const codecs = new Set(await Promise.all(tracks.map(x => x.getCodec())));
 	expect(codecs.size).toBe(2);
 	expect(codecs.has('avc')).toBe(true);
 	expect(codecs.has('aac')).toBe(true);
@@ -313,19 +323,21 @@ test.concurrent('Custom IV', { timeout: 15_000 }, async () => {
 test.concurrent('Out-of-band audio track via ADTS', { timeout: 15_000 }, async () => {
 	using input = createInputFrom('https://playertest.longtailvideo.com/adaptive/aes-with-tracks/master.m3u8', ALL_FORMATS);
 
-	const descriptors = await input.getTrackDescriptors();
-	expect(descriptors.some(x => x.isVideoTrackDescriptor() && x.hasOnlyKeyPackets)).toBe(true);
+	const tracks = await input.getTracks();
+	const videoOnlyKeyPacketsFlags = await Promise.all(
+		tracks.filter((x): x is InputVideoTrack => x.isVideoTrack()).map(x => x.getHasOnlyKeyPackets()),
+	);
+	expect(videoOnlyKeyPacketsFlags.some(x => x)).toBe(true);
 
-	const audioDescriptor = descriptors.find(x => x.isAudioTrackDescriptor());
-	assert(audioDescriptor);
-	expect(audioDescriptor.hasOnlyKeyPackets).toBe(true);
+	const audioTrack = tracks.find((x): x is InputAudioTrack => x.isAudioTrack());
+	assert(audioTrack);
+	expect(await audioTrack.getHasOnlyKeyPackets()).toBe(true);
 
-	expect(await audioDescriptor.getPairableVideoTrackDescriptors()).toHaveLength(1); // Since the I-frame one isn't pairable
-	const videoTrack = await (await audioDescriptor.getPairableVideoTrackDescriptors())[0]!.getTrack();
+	expect(await audioTrack.getPairableVideoTracks()).toHaveLength(1); // Since the I-frame one isn't pairable
+	const videoTrack = (await audioTrack.getPairableVideoTracks())[0]!;
 	assert(videoTrack);
-	expect(videoTrack.hasOnlyKeyPackets).toBe(false);
+	expect(await videoTrack.getHasOnlyKeyPackets()).toBe(false);
 
-	const audioTrack = await audioDescriptor.getTrack();
 	let lastTimestamp = -Infinity;
 	const sink = new EncodedPacketSink(audioTrack);
 	for await (const packet of sink.packets()) {
@@ -341,9 +353,9 @@ test.concurrent('Out-of-band audio track via ADTS', { timeout: 15_000 }, async (
 test.concurrent('MP3 audio only', { timeout: 15_000 }, async () => {
 	using input = createInputFrom('https://pl.streamingvideoprovider.com/mp3-playlist/playlist.m3u8', ALL_FORMATS);
 
-	const audioDescriptor = (await input.getAudioTrackDescriptors())[0];
-	assert(audioDescriptor);
-	expect(audioDescriptor.codec).toBe('mp3');
+	const audioTrack = (await input.getAudioTracks())[0];
+	assert(audioTrack);
+	expect(await audioTrack.getCodec()).toBe('mp3');
 });
 
 test.concurrent('fMP4', { timeout: 15_000 }, async () => {
@@ -358,10 +370,10 @@ test.concurrent('fMP4', { timeout: 15_000 }, async () => {
 	assert(videoTrack);
 	assert(audioTrack);
 
-	expect(videoTrack.codedWidth).toBe(768);
-	expect(videoTrack.codedHeight).toBe(576);
-	expect(audioTrack.numberOfChannels).toBe(2);
-	expect(audioTrack.sampleRate).toBe(48000);
+	expect(await videoTrack.getCodedWidth()).toBe(768);
+	expect(await videoTrack.getCodedHeight()).toBe(576);
+	expect(await audioTrack.getNumberOfChannels()).toBe(2);
+	expect(await audioTrack.getSampleRate()).toBe(48000);
 
 	expect(await videoTrack.getFirstTimestamp()).toBe(0);
 	expect(await videoTrack.computeDuration()).toBe(60);
@@ -375,37 +387,37 @@ test.concurrent('fMP4', { timeout: 15_000 }, async () => {
 test.concurrent('Track disposition & metadata', { timeout: 15_000 }, async () => {
 	using input = createInputFrom('https://storage.googleapis.com/shaka-demo-assets/angel-one-hls/hls.m3u8', ALL_FORMATS);
 
-	const audioDescriptors = await input.getAudioTrackDescriptors();
+	const audioTracks = await input.getAudioTracks();
 
-	expect(audioDescriptors).toHaveLength(6);
+	expect(audioTracks).toHaveLength(6);
 
-	expect(audioDescriptors[0]!.languageCode).toBe('en');
-	expect(audioDescriptors[1]!.languageCode).toBe('de');
-	expect(audioDescriptors[2]!.languageCode).toBe('it');
-	expect(audioDescriptors[3]!.languageCode).toBe('fr');
-	expect(audioDescriptors[4]!.languageCode).toBe('es');
-	expect(audioDescriptors[5]!.languageCode).toBe('en');
+	expect(await audioTracks[0]!.getLanguageCode()).toBe('en');
+	expect(await audioTracks[1]!.getLanguageCode()).toBe('de');
+	expect(await audioTracks[2]!.getLanguageCode()).toBe('it');
+	expect(await audioTracks[3]!.getLanguageCode()).toBe('fr');
+	expect(await audioTracks[4]!.getLanguageCode()).toBe('es');
+	expect(await audioTracks[5]!.getLanguageCode()).toBe('en');
 
-	expect(audioDescriptors[0]!.disposition!.primary).toBe(true);
-	expect(audioDescriptors[1]!.disposition!.primary).toBe(false);
-	expect(audioDescriptors[2]!.disposition!.primary).toBe(false);
-	expect(audioDescriptors[3]!.disposition!.primary).toBe(false);
-	expect(audioDescriptors[4]!.disposition!.primary).toBe(false);
-	expect(audioDescriptors[5]!.disposition!.primary).toBe(false);
+	expect((await audioTracks[0]!.getDisposition()).primary).toBe(true);
+	expect((await audioTracks[1]!.getDisposition()).primary).toBe(false);
+	expect((await audioTracks[2]!.getDisposition()).primary).toBe(false);
+	expect((await audioTracks[3]!.getDisposition()).primary).toBe(false);
+	expect((await audioTracks[4]!.getDisposition()).primary).toBe(false);
+	expect((await audioTracks[5]!.getDisposition()).primary).toBe(false);
 
-	expect(audioDescriptors[0]!.disposition!.default).toBe(true);
-	expect(audioDescriptors[1]!.disposition!.default).toBe(true);
-	expect(audioDescriptors[2]!.disposition!.default).toBe(true);
-	expect(audioDescriptors[3]!.disposition!.default).toBe(true);
-	expect(audioDescriptors[4]!.disposition!.default).toBe(true);
-	expect(audioDescriptors[5]!.disposition!.default).toBe(false);
+	expect((await audioTracks[0]!.getDisposition()).default).toBe(true);
+	expect((await audioTracks[1]!.getDisposition()).default).toBe(true);
+	expect((await audioTracks[2]!.getDisposition()).default).toBe(true);
+	expect((await audioTracks[3]!.getDisposition()).default).toBe(true);
+	expect((await audioTracks[4]!.getDisposition()).default).toBe(true);
+	expect((await audioTracks[5]!.getDisposition()).default).toBe(false);
 
-	expect(audioDescriptors[0]!.name).toBe('stream_5');
-	expect(audioDescriptors[1]!.name).toBe('stream_4');
-	expect(audioDescriptors[2]!.name).toBe('stream_8');
-	expect(audioDescriptors[3]!.name).toBe('stream_7');
-	expect(audioDescriptors[4]!.name).toBe('stream_9');
-	expect(audioDescriptors[5]!.name).toBe('stream_6');
+	expect(await audioTracks[0]!.getName()).toBe('stream_5');
+	expect(await audioTracks[1]!.getName()).toBe('stream_4');
+	expect(await audioTracks[2]!.getName()).toBe('stream_8');
+	expect(await audioTracks[3]!.getName()).toBe('stream_7');
+	expect(await audioTracks[4]!.getName()).toBe('stream_9');
+	expect(await audioTracks[5]!.getName()).toBe('stream_6');
 });
 
 test.concurrent('fMP4 Bitmovin', { timeout: 15_000 }, async () => {
@@ -424,18 +436,23 @@ test.concurrent('fMP4 Bitmovin', { timeout: 15_000 }, async () => {
 	let sourceCount = 0;
 	input.on('source', () => sourceCount++);
 
-	const descriptors = await input.getTrackDescriptors();
-	expect(descriptors.filter(x => x.isVideoTrackDescriptor())).toHaveLength(6);
-	expect(descriptors.filter(x => x.isAudioTrackDescriptor())).toHaveLength(1);
+	const tracks = await input.getTracks();
+	const videoTracks = tracks.filter((x): x is InputVideoTrack => x.isVideoTrack());
+	const audioTracks = tracks.filter((x): x is InputAudioTrack => x.isAudioTrack());
+	expect(videoTracks).toHaveLength(6);
+	expect(audioTracks).toHaveLength(1);
 
-	expect(descriptors.some(x => x.isVideoTrackDescriptor() && x.displayWidth === 320 && x.displayHeight === 180)).toBe(true);
-	expect(descriptors.some(x => x.isVideoTrackDescriptor() && x.displayWidth === 480 && x.displayHeight === 270)).toBe(true);
-	expect(descriptors.some(x => x.isVideoTrackDescriptor() && x.displayWidth === 640 && x.displayHeight === 360)).toBe(true);
-	expect(descriptors.some(x => x.isVideoTrackDescriptor() && x.displayWidth === 960 && x.displayHeight === 540)).toBe(true);
-	expect(descriptors.some(x => x.isVideoTrackDescriptor() && x.displayWidth === 1280 && x.displayHeight === 720)).toBe(true);
-	expect(descriptors.some(x => x.isVideoTrackDescriptor() && x.displayWidth === 1920 && x.displayHeight === 1080)).toBe(true);
+	const videoDisplayDims = await Promise.all(
+		videoTracks.map(async t => ({ w: await t.getDisplayWidth(), h: await t.getDisplayHeight() })),
+	);
+	expect(videoDisplayDims.some(d => d.w === 320 && d.h === 180)).toBe(true);
+	expect(videoDisplayDims.some(d => d.w === 480 && d.h === 270)).toBe(true);
+	expect(videoDisplayDims.some(d => d.w === 640 && d.h === 360)).toBe(true);
+	expect(videoDisplayDims.some(d => d.w === 960 && d.h === 540)).toBe(true);
+	expect(videoDisplayDims.some(d => d.w === 1280 && d.h === 720)).toBe(true);
+	expect(videoDisplayDims.some(d => d.w === 1920 && d.h === 1080)).toBe(true);
 
-	const videoTrack = await input.pluckVideoTrack();
+	const videoTrack = (await input.getVideoTracks())[0];
 	assert(videoTrack);
 
 	expect(await videoTrack.getFirstTimestamp()).toBe(4);
@@ -448,7 +465,7 @@ test.concurrent('Single-value PDT', { timeout: 15_000 }, async () => {
 	using input = createInputFrom('https://playertest.longtailvideo.com/adaptive/aviion/manifest.m3u8', ALL_FORMATS);
 
 	const tracks = await input.getTracks();
-	expect(tracks.every(x => x.isRelativeToUnixEpoch)).toBe(true);
+	expect((await Promise.all(tracks.map(x => x.getIsRelativeToUnixEpoch()))).every(x => x)).toBe(true);
 
 	const track = tracks[0]!;
 	const firstTimestamp = await track.getFirstTimestamp();
@@ -511,131 +528,118 @@ test.concurrent('PDT with bad values', { timeout: 15_000 }, async () => {
 	const audioTrack = await input.getPrimaryAudioTrack();
 	assert(audioTrack);
 
-	expect(audioTrack.isRelativeToUnixEpoch).toBe(false);
+	expect(await audioTrack.getIsRelativeToUnixEpoch()).toBe(false);
 });
 
 test.concurrent('Alternative audio only', { timeout: 15_000 }, async () => {
 	using input = createInputFrom('https://playertest.longtailvideo.com/adaptive/alt-audio-no-video/sintel/playlist.m3u8', ALL_FORMATS);
 
-	const descriptors = await input.getTrackDescriptors();
-	expect(descriptors).toHaveLength(2);
+	const tracks = await input.getTracks();
+	expect(tracks).toHaveLength(2);
 
-	expect(descriptors[0]).toMatchObject({ type: 'audio', languageCode: 'en', name: 'English' });
-	expect(descriptors[1]).toMatchObject({ type: 'audio', languageCode: 'dubbing', name: 'Dubbing' });
+	expect(tracks[0]!.type).toBe('audio');
+	expect(await tracks[0]!.getLanguageCode()).toBe('en');
+	expect(await tracks[0]!.getName()).toBe('English');
+
+	expect(tracks[1]!.type).toBe('audio');
+	expect(await tracks[1]!.getLanguageCode()).toBe('dubbing');
+	expect(await tracks[1]!.getName()).toBe('Dubbing');
 });
 
 test.concurrent('Advanced Apple HLS', { timeout: 30_000 }, async () => {
 	using input = createInputFrom('https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_adv_example_hevc/master.m3u8', ALL_FORMATS);
 
-	const descriptors = await input.getTrackDescriptors();
-	const videoDescriptors = descriptors.filter(x => x.isVideoTrackDescriptor());
-	const audioDescriptors = descriptors.filter(x => x.isAudioTrackDescriptor());
+	const tracks = await input.getTracks();
+	const videoTracks = tracks.filter((x): x is InputVideoTrack => x.isVideoTrack());
+	const audioTracks = tracks.filter((x): x is InputAudioTrack => x.isAudioTrack());
 
-	expect(audioDescriptors).toHaveLength(3);
-	expect(videoDescriptors).toHaveLength(28);
+	expect(audioTracks).toHaveLength(3);
+	expect(videoTracks).toHaveLength(28);
 
-	expect(audioDescriptors[0]).toMatchObject({ codec: 'aac', name: 'English', languageCode: 'en' });
-	expect(audioDescriptors[1]).toMatchObject({ codec: 'ac3', name: 'English', languageCode: 'en' });
-	expect(audioDescriptors[2]).toMatchObject({ codec: 'eac3', name: 'English', languageCode: 'en' });
+	const snapshotVideoTrack = async (t: InputVideoTrack) => ({
+		codec: await t.getCodec(),
+		displayWidth: await t.getDisplayWidth(),
+		displayHeight: await t.getDisplayHeight(),
+		bitrate: await t.getBitrate(),
+		hasOnlyKeyPackets: await t.getHasOnlyKeyPackets(),
+		codecParameterString: await t.getCodecParameterString(),
+	});
+	const snapshotAudioTrack = async (t: InputAudioTrack) => ({
+		codec: await t.getCodec(),
+		name: await t.getName(),
+		languageCode: await t.getLanguageCode(),
+		codecParameterString: await t.getCodecParameterString(),
+	});
 
-	expect(audioDescriptors[0]!.codecParameterString).toBe('mp4a.40.2');
-	expect(audioDescriptors[1]!.codecParameterString).toBe('ac-3');
-	expect(audioDescriptors[2]!.codecParameterString).toBe('ec-3');
+	const audioSnapshots = await Promise.all(audioTracks.map(snapshotAudioTrack));
+	const videoSnapshots = await Promise.all(videoTracks.map(snapshotVideoTrack));
 
-	expect(await audioDescriptors[0]!.getPairableVideoTrackDescriptors()).toHaveLength(18);
-	expect(await audioDescriptors[1]!.getPairableVideoTrackDescriptors()).toHaveLength(18);
-	expect(await audioDescriptors[2]!.getPairableVideoTrackDescriptors()).toHaveLength(18);
+	expect(audioSnapshots[0]).toMatchObject({ codec: 'aac', name: 'English', languageCode: 'en', codecParameterString: 'mp4a.40.2' });
+	expect(audioSnapshots[1]).toMatchObject({ codec: 'ac3', name: 'English', languageCode: 'en', codecParameterString: 'ac-3' });
+	expect(audioSnapshots[2]).toMatchObject({ codec: 'eac3', name: 'English', languageCode: 'en', codecParameterString: 'ec-3' });
+
+	expect(await audioTracks[0]!.getPairableVideoTracks()).toHaveLength(18);
+	expect(await audioTracks[1]!.getPairableVideoTracks()).toHaveLength(18);
+	expect(await audioTracks[2]!.getPairableVideoTracks()).toHaveLength(18);
 
 	// I-FRAME AVC
 
-	expect(videoDescriptors[0]).toMatchObject({ codec: 'avc', displayWidth: 1920, displayHeight: 1080, bitrate: 1015727, hasOnlyKeyPackets: true });
-	expect(videoDescriptors[1]).toMatchObject({ codec: 'avc', displayWidth: 1280, displayHeight: 720, bitrate: 760174, hasOnlyKeyPackets: true });
-	expect(videoDescriptors[2]).toMatchObject({ codec: 'avc', displayWidth: 960, displayHeight: 540, bitrate: 520162, hasOnlyKeyPackets: true });
-	expect(videoDescriptors[3]).toMatchObject({ codec: 'avc', displayWidth: 640, displayHeight: 360, bitrate: 186651, hasOnlyKeyPackets: true });
-	expect(videoDescriptors[4]).toMatchObject({ codec: 'avc', displayWidth: 480, displayHeight: 270, bitrate: 95410, hasOnlyKeyPackets: true });
-
-	expect(videoDescriptors[0]!.codecParameterString).toBe('avc1.640028');
-	expect(videoDescriptors[1]!.codecParameterString).toBe('avc1.64001f');
-	expect(videoDescriptors[2]!.codecParameterString).toBe('avc1.64001f');
-	expect(videoDescriptors[3]!.codecParameterString).toBe('avc1.64001f');
-	expect(videoDescriptors[4]!.codecParameterString).toBe('avc1.64001f');
+	expect(videoSnapshots[0]).toMatchObject({ codec: 'avc', displayWidth: 1920, displayHeight: 1080, bitrate: 1015727, hasOnlyKeyPackets: true, codecParameterString: 'avc1.640028' });
+	expect(videoSnapshots[1]).toMatchObject({ codec: 'avc', displayWidth: 1280, displayHeight: 720, bitrate: 760174, hasOnlyKeyPackets: true, codecParameterString: 'avc1.64001f' });
+	expect(videoSnapshots[2]).toMatchObject({ codec: 'avc', displayWidth: 960, displayHeight: 540, bitrate: 520162, hasOnlyKeyPackets: true, codecParameterString: 'avc1.64001f' });
+	expect(videoSnapshots[3]).toMatchObject({ codec: 'avc', displayWidth: 640, displayHeight: 360, bitrate: 186651, hasOnlyKeyPackets: true, codecParameterString: 'avc1.64001f' });
+	expect(videoSnapshots[4]).toMatchObject({ codec: 'avc', displayWidth: 480, displayHeight: 270, bitrate: 95410, hasOnlyKeyPackets: true, codecParameterString: 'avc1.64001f' });
 
 	for (let i = 0; i <= 4; i++) {
-		const videoDescriptor = videoDescriptors[i]!;
-		expect(audioDescriptors.some(x => x.canBePairedWith(videoDescriptor))).toBe(false);
+		const videoTrack = videoTracks[i]!;
+		expect(audioTracks.some(x => x.canBePairedWith(videoTrack))).toBe(false);
 	}
 
 	// AVC
 
-	expect(videoDescriptors[5]).toMatchObject({ codec: 'avc', displayWidth: 960, displayHeight: 540, bitrate: 2746096, hasOnlyKeyPackets: false });
-	expect(videoDescriptors[6]).toMatchObject({ codec: 'avc', displayWidth: 1920, displayHeight: 1080, bitrate: 10095767, hasOnlyKeyPackets: false });
-	expect(videoDescriptors[7]).toMatchObject({ codec: 'avc', displayWidth: 1920, displayHeight: 1080, bitrate: 7540836, hasOnlyKeyPackets: false });
-	expect(videoDescriptors[8]).toMatchObject({ codec: 'avc', displayWidth: 1920, displayHeight: 1080, bitrate: 5644219, hasOnlyKeyPackets: false });
-	expect(videoDescriptors[9]).toMatchObject({ codec: 'avc', displayWidth: 1280, displayHeight: 720, bitrate: 3833756, hasOnlyKeyPackets: false });
-	expect(videoDescriptors[10]).toMatchObject({ codec: 'avc', displayWidth: 768, displayHeight: 432, bitrate: 1698402, hasOnlyKeyPackets: false });
-	expect(videoDescriptors[11]).toMatchObject({ codec: 'avc', displayWidth: 640, displayHeight: 360, bitrate: 1240204, hasOnlyKeyPackets: false });
-	expect(videoDescriptors[12]).toMatchObject({ codec: 'avc', displayWidth: 480, displayHeight: 270, bitrate: 805319, hasOnlyKeyPackets: false });
-	expect(videoDescriptors[13]).toMatchObject({ codec: 'avc', displayWidth: 416, displayHeight: 234, bitrate: 561903, hasOnlyKeyPackets: false });
-
-	expect(videoDescriptors[5]!.codecParameterString).toBe('avc1.640020');
-	expect(videoDescriptors[6]!.codecParameterString).toBe('avc1.64002a');
-	expect(videoDescriptors[7]!.codecParameterString).toBe('avc1.64002a');
-	expect(videoDescriptors[8]!.codecParameterString).toBe('avc1.64002a');
-	expect(videoDescriptors[9]!.codecParameterString).toBe('avc1.640020');
-	expect(videoDescriptors[10]!.codecParameterString).toBe('avc1.64001f');
-	expect(videoDescriptors[11]!.codecParameterString).toBe('avc1.64001f');
-	expect(videoDescriptors[12]!.codecParameterString).toBe('avc1.64001f');
-	expect(videoDescriptors[13]!.codecParameterString).toBe('avc1.64001f');
+	expect(videoSnapshots[5]).toMatchObject({ codec: 'avc', displayWidth: 960, displayHeight: 540, bitrate: 2746096, hasOnlyKeyPackets: false, codecParameterString: 'avc1.640020' });
+	expect(videoSnapshots[6]).toMatchObject({ codec: 'avc', displayWidth: 1920, displayHeight: 1080, bitrate: 10095767, hasOnlyKeyPackets: false, codecParameterString: 'avc1.64002a' });
+	expect(videoSnapshots[7]).toMatchObject({ codec: 'avc', displayWidth: 1920, displayHeight: 1080, bitrate: 7540836, hasOnlyKeyPackets: false, codecParameterString: 'avc1.64002a' });
+	expect(videoSnapshots[8]).toMatchObject({ codec: 'avc', displayWidth: 1920, displayHeight: 1080, bitrate: 5644219, hasOnlyKeyPackets: false, codecParameterString: 'avc1.64002a' });
+	expect(videoSnapshots[9]).toMatchObject({ codec: 'avc', displayWidth: 1280, displayHeight: 720, bitrate: 3833756, hasOnlyKeyPackets: false, codecParameterString: 'avc1.640020' });
+	expect(videoSnapshots[10]).toMatchObject({ codec: 'avc', displayWidth: 768, displayHeight: 432, bitrate: 1698402, hasOnlyKeyPackets: false, codecParameterString: 'avc1.64001f' });
+	expect(videoSnapshots[11]).toMatchObject({ codec: 'avc', displayWidth: 640, displayHeight: 360, bitrate: 1240204, hasOnlyKeyPackets: false, codecParameterString: 'avc1.64001f' });
+	expect(videoSnapshots[12]).toMatchObject({ codec: 'avc', displayWidth: 480, displayHeight: 270, bitrate: 805319, hasOnlyKeyPackets: false, codecParameterString: 'avc1.64001f' });
+	expect(videoSnapshots[13]).toMatchObject({ codec: 'avc', displayWidth: 416, displayHeight: 234, bitrate: 561903, hasOnlyKeyPackets: false, codecParameterString: 'avc1.64001f' });
 
 	for (let i = 5; i <= 13; i++) {
-		const videoDescriptor = videoDescriptors[i]!;
-		expect(audioDescriptors.every(x => x.canBePairedWith(videoDescriptor))).toBe(true);
+		const videoTrack = videoTracks[i]!;
+		expect(audioTracks.every(x => x.canBePairedWith(videoTrack))).toBe(true);
 	}
 
 	// I-FRAME HEVC
 
-	expect(videoDescriptors[14]).toMatchObject({ codec: 'hevc', displayWidth: 1920, displayHeight: 1080, bitrate: 328352, hasOnlyKeyPackets: true });
-	expect(videoDescriptors[15]).toMatchObject({ codec: 'hevc', displayWidth: 1280, displayHeight: 720, bitrate: 226274, hasOnlyKeyPackets: true });
-	expect(videoDescriptors[16]).toMatchObject({ codec: 'hevc', displayWidth: 960, displayHeight: 540, bitrate: 159037, hasOnlyKeyPackets: true });
-	expect(videoDescriptors[17]).toMatchObject({ codec: 'hevc', displayWidth: 640, displayHeight: 360, bitrate: 92800, hasOnlyKeyPackets: true });
-	expect(videoDescriptors[18]).toMatchObject({ codec: 'hevc', displayWidth: 480, displayHeight: 270, bitrate: 51760, hasOnlyKeyPackets: true });
-
-	expect(videoDescriptors[14]!.codecParameterString).toBe('hvc1.2.4.L123.B0');
-	expect(videoDescriptors[15]!.codecParameterString).toBe('hvc1.2.4.L123.B0');
-	expect(videoDescriptors[16]!.codecParameterString).toBe('hvc1.2.4.L123.B0');
-	expect(videoDescriptors[17]!.codecParameterString).toBe('hvc1.2.4.L123.B0');
-	expect(videoDescriptors[18]!.codecParameterString).toBe('hvc1.2.4.L123.B0');
+	expect(videoSnapshots[14]).toMatchObject({ codec: 'hevc', displayWidth: 1920, displayHeight: 1080, bitrate: 328352, hasOnlyKeyPackets: true, codecParameterString: 'hvc1.2.4.L123.B0' });
+	expect(videoSnapshots[15]).toMatchObject({ codec: 'hevc', displayWidth: 1280, displayHeight: 720, bitrate: 226274, hasOnlyKeyPackets: true, codecParameterString: 'hvc1.2.4.L123.B0' });
+	expect(videoSnapshots[16]).toMatchObject({ codec: 'hevc', displayWidth: 960, displayHeight: 540, bitrate: 159037, hasOnlyKeyPackets: true, codecParameterString: 'hvc1.2.4.L123.B0' });
+	expect(videoSnapshots[17]).toMatchObject({ codec: 'hevc', displayWidth: 640, displayHeight: 360, bitrate: 92800, hasOnlyKeyPackets: true, codecParameterString: 'hvc1.2.4.L123.B0' });
+	expect(videoSnapshots[18]).toMatchObject({ codec: 'hevc', displayWidth: 480, displayHeight: 270, bitrate: 51760, hasOnlyKeyPackets: true, codecParameterString: 'hvc1.2.4.L123.B0' });
 
 	for (let i = 14; i <= 18; i++) {
-		const videoDescriptor = videoDescriptors[i]!;
-		expect(audioDescriptors.some(x => x.canBePairedWith(videoDescriptor))).toBe(false);
+		const videoTrack = videoTracks[i]!;
+		expect(audioTracks.some(x => x.canBePairedWith(videoTrack))).toBe(false);
 	}
 
 	// HEVC
 
-	expect(videoDescriptors[19]).toMatchObject({ codec: 'hevc', displayWidth: 960, displayHeight: 540, bitrate: 2386827, hasOnlyKeyPackets: false });
-	expect(videoDescriptors[20]).toMatchObject({ codec: 'hevc', displayWidth: 1920, displayHeight: 1080, bitrate: 6886727, hasOnlyKeyPackets: false });
-	expect(videoDescriptors[21]).toMatchObject({ codec: 'hevc', displayWidth: 1920, displayHeight: 1080, bitrate: 5650398, hasOnlyKeyPackets: false });
-	expect(videoDescriptors[22]).toMatchObject({ codec: 'hevc', displayWidth: 1920, displayHeight: 1080, bitrate: 4302269, hasOnlyKeyPackets: false });
-	expect(videoDescriptors[23]).toMatchObject({ codec: 'hevc', displayWidth: 1280, displayHeight: 720, bitrate: 2987200, hasOnlyKeyPackets: false });
-	expect(videoDescriptors[24]).toMatchObject({ codec: 'hevc', displayWidth: 768, displayHeight: 432, bitrate: 1448754, hasOnlyKeyPackets: false });
-	expect(videoDescriptors[25]).toMatchObject({ codec: 'hevc', displayWidth: 640, displayHeight: 360, bitrate: 1124269, hasOnlyKeyPackets: false });
-	expect(videoDescriptors[26]).toMatchObject({ codec: 'hevc', displayWidth: 480, displayHeight: 270, bitrate: 771426, hasOnlyKeyPackets: false });
-	expect(videoDescriptors[27]).toMatchObject({ codec: 'hevc', displayWidth: 416, displayHeight: 234, bitrate: 563212, hasOnlyKeyPackets: false });
-
-	expect(videoDescriptors[19]!.codecParameterString).toBe('hvc1.2.4.L123.B0');
-	expect(videoDescriptors[20]!.codecParameterString).toBe('hvc1.2.4.L123.B0');
-	expect(videoDescriptors[21]!.codecParameterString).toBe('hvc1.2.4.L123.B0');
-	expect(videoDescriptors[22]!.codecParameterString).toBe('hvc1.2.4.L123.B0');
-	expect(videoDescriptors[23]!.codecParameterString).toBe('hvc1.2.4.L123.B0');
-	expect(videoDescriptors[24]!.codecParameterString).toBe('hvc1.2.4.L123.B0');
-	expect(videoDescriptors[25]!.codecParameterString).toBe('hvc1.2.4.L123.B0');
-	expect(videoDescriptors[26]!.codecParameterString).toBe('hvc1.2.4.L123.B0');
-	expect(videoDescriptors[27]!.codecParameterString).toBe('hvc1.2.4.L123.B0');
+	expect(videoSnapshots[19]).toMatchObject({ codec: 'hevc', displayWidth: 960, displayHeight: 540, bitrate: 2386827, hasOnlyKeyPackets: false, codecParameterString: 'hvc1.2.4.L123.B0' });
+	expect(videoSnapshots[20]).toMatchObject({ codec: 'hevc', displayWidth: 1920, displayHeight: 1080, bitrate: 6886727, hasOnlyKeyPackets: false, codecParameterString: 'hvc1.2.4.L123.B0' });
+	expect(videoSnapshots[21]).toMatchObject({ codec: 'hevc', displayWidth: 1920, displayHeight: 1080, bitrate: 5650398, hasOnlyKeyPackets: false, codecParameterString: 'hvc1.2.4.L123.B0' });
+	expect(videoSnapshots[22]).toMatchObject({ codec: 'hevc', displayWidth: 1920, displayHeight: 1080, bitrate: 4302269, hasOnlyKeyPackets: false, codecParameterString: 'hvc1.2.4.L123.B0' });
+	expect(videoSnapshots[23]).toMatchObject({ codec: 'hevc', displayWidth: 1280, displayHeight: 720, bitrate: 2987200, hasOnlyKeyPackets: false, codecParameterString: 'hvc1.2.4.L123.B0' });
+	expect(videoSnapshots[24]).toMatchObject({ codec: 'hevc', displayWidth: 768, displayHeight: 432, bitrate: 1448754, hasOnlyKeyPackets: false, codecParameterString: 'hvc1.2.4.L123.B0' });
+	expect(videoSnapshots[25]).toMatchObject({ codec: 'hevc', displayWidth: 640, displayHeight: 360, bitrate: 1124269, hasOnlyKeyPackets: false, codecParameterString: 'hvc1.2.4.L123.B0' });
+	expect(videoSnapshots[26]).toMatchObject({ codec: 'hevc', displayWidth: 480, displayHeight: 270, bitrate: 771426, hasOnlyKeyPackets: false, codecParameterString: 'hvc1.2.4.L123.B0' });
+	expect(videoSnapshots[27]).toMatchObject({ codec: 'hevc', displayWidth: 416, displayHeight: 234, bitrate: 563212, hasOnlyKeyPackets: false, codecParameterString: 'hvc1.2.4.L123.B0' });
 
 	for (let i = 19; i <= 27; i++) {
-		const videoDescriptor = videoDescriptors[i]!;
-		expect(audioDescriptors.every(x => x.canBePairedWith(videoDescriptor))).toBe(true);
+		const videoTrack = videoTracks[i]!;
+		expect(audioTracks.every(x => x.canBePairedWith(videoTrack))).toBe(true);
 	}
 });
 

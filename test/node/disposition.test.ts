@@ -35,7 +35,7 @@ test('Default track disposition', async () => {
 
 	const track = (await input.getPrimaryVideoTrack())!;
 
-	expect(track.disposition).toEqual({
+	expect(await track.getDisposition()).toEqual({
 		default: true,
 		forced: false,
 		original: false,
@@ -82,7 +82,7 @@ test('Customized track disposition', async () => {
 
 	const track = (await input.getPrimaryVideoTrack())!;
 
-	expect(track.disposition).toEqual({
+	expect(await track.getDisposition()).toEqual({
 		default: false,
 		forced: true,
 		original: true,

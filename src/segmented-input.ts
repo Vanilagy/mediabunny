@@ -7,7 +7,7 @@
  */
 
 import { TrackType } from './output';
-import { AudioCodec, MediaCodec, VideoCodec } from './codec';
+import { MediaCodec } from './codec';
 import { Demuxer, DurationMetadataRequestOptions } from './demuxer';
 import { Input } from './input';
 import { VirtualInputFormat } from './input-format';
@@ -20,8 +20,8 @@ import {
 	InputVideoTrackBacking,
 } from './input-track';
 import { PacketRetrievalOptions } from './media-sink';
-import { MetadataTags, TrackDisposition } from './metadata';
-import { arrayCount, assert, Rotation, roundToDivisor } from './misc';
+import { MetadataTags } from './metadata';
+import { arrayCount, assert, roundToDivisor } from './misc';
 import { EncodedPacket } from './packet';
 import { NullSource } from './source';
 
@@ -218,7 +218,7 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 	}
 
 	getHasOnlyKeyPackets() {
-		return this.firstInputTrack.hasOnlyKeyPackets;
+		return this.firstInputTrack.getHasOnlyKeyPackets();
 	}
 
 	getId(): number {
@@ -233,40 +233,40 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 		return this.number;
 	}
 
-	getCodec(): MediaCodec | null {
+	getCodec() {
 		return this.firstInputTrack._backing.getCodec();
 	}
 
-	getInternalCodecId(): string | number | Uint8Array | null {
+	getInternalCodecId() {
 		return this.firstInputTrack._backing.getInternalCodecId();
 	}
 
-	getDisposition(): TrackDisposition {
+	getDisposition() {
 		return this.firstInputTrack._backing.getDisposition();
 	}
 
-	getLanguageCode(): string {
+	getLanguageCode() {
 		return this.firstInputTrack._backing.getLanguageCode();
 	}
 
-	getName(): string | null {
+	getName() {
 		return this.firstInputTrack._backing.getName();
 	}
 
-	getTimeResolution(): number {
-		return this.firstInputTrack._backing.getTimeResolution()!;
+	getTimeResolution() {
+		return this.firstInputTrack._backing.getTimeResolution();
 	}
 
-	isRelativeToUnixEpoch(): boolean {
+	isRelativeToUnixEpoch() {
 		assert(this.demuxer.firstSegment);
 		return this.demuxer.firstSegment.relativeToUnixEpoch;
 	}
 
-	getBitrate(): number | null {
+	getBitrate() {
 		return this.firstInputTrack._backing.getBitrate();
 	}
 
-	getAverageBitrate(): number | null {
+	getAverageBitrate() {
 		return this.firstInputTrack._backing.getAverageBitrate();
 	}
 
@@ -289,7 +289,7 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 		const modified = packet.clone({
 			timestamp: roundToDivisor(
 				packet.timestamp + mediaOffset,
-				track.timeResolution,
+				await track.getTimeResolution(),
 			),
 			// The 1e8 assumes a max of 100 MB per second, highly unlikely to be hit, so this should guarantee
 			// monotonically increasing sequence numbers across segments.
@@ -434,28 +434,28 @@ class SegmentedInputInputVideoTrackBacking
 		return 'video' as const;
 	}
 
-	override getCodec(): VideoCodec | null {
+	override getCodec() {
 		return this.firstInputTrack._backing.getCodec();
 	}
 
-	getCodedWidth(): number {
-		return this.firstInputTrack._backing.getCodedWidth()!;
+	getCodedWidth() {
+		return this.firstInputTrack._backing.getCodedWidth();
 	}
 
-	getCodedHeight(): number {
-		return this.firstInputTrack._backing.getCodedHeight()!;
+	getCodedHeight() {
+		return this.firstInputTrack._backing.getCodedHeight();
 	}
 
-	getSquarePixelWidth(): number {
-		return this.firstInputTrack._backing.getSquarePixelWidth()!;
+	getSquarePixelWidth() {
+		return this.firstInputTrack._backing.getSquarePixelWidth();
 	}
 
-	getSquarePixelHeight(): number {
-		return this.firstInputTrack._backing.getSquarePixelHeight()!;
+	getSquarePixelHeight() {
+		return this.firstInputTrack._backing.getSquarePixelHeight();
 	}
 
-	getRotation(): Rotation {
-		return this.firstInputTrack._backing.getRotation()!;
+	getRotation() {
+		return this.firstInputTrack._backing.getRotation();
 	}
 
 	getColorSpace(): Promise<VideoColorSpaceInit> {
@@ -480,16 +480,16 @@ class SegmentedInputInputAudioTrackBacking
 		return 'audio' as const;
 	}
 
-	override getCodec(): AudioCodec | null {
+	override getCodec() {
 		return this.firstInputTrack._backing.getCodec();
 	}
 
-	getNumberOfChannels(): number {
-		return this.firstInputTrack._backing.getNumberOfChannels()!;
+	getNumberOfChannels() {
+		return this.firstInputTrack._backing.getNumberOfChannels();
 	}
 
-	getSampleRate(): number {
-		return this.firstInputTrack._backing.getSampleRate()!;
+	getSampleRate() {
+		return this.firstInputTrack._backing.getSampleRate();
 	}
 
 	override getDecoderConfig(): Promise<AudioDecoderConfig | null> {

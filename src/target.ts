@@ -74,12 +74,14 @@ export abstract class Target extends EventEmitter<TargetEvents> {
 
 	/** @internal */
 	_dispatchWrite(start: number, end: number) {
+		// eslint-disable-next-line @typescript-eslint/no-deprecated
 		this.onwrite?.(start, end);
 		this._emit('write', { start, end });
 	}
 
 	/** @internal */
 	_dispatchFinalized() {
+		// eslint-disable-next-line @typescript-eslint/no-deprecated
 		this.onfinalized?.();
 		this._emit('finalized');
 	}

@@ -306,7 +306,7 @@ const conversion = await Conversion.init({
 	output,
 
 	// Function gets invoked for each video track:
-	video: (videoTrack) => {
+	video: async (videoTrack) => {
 		if (videoTrack.number > 1) {
 			// Keep only the first video track
 			return { discard: true };
@@ -314,13 +314,13 @@ const conversion = await Conversion.init({
 
 		return {
 			// Shrink width to 640 only if the track is wider
-			width: Math.min(videoTrack.displayWidth, 640),
+			width: Math.min(await videoTrack.getDisplayWidth(), 640),
 		};
 	},
 
 	// Async functions work too:
 	audio: async (audioTrack) => {
-		if (audioTrack.languageCode !== 'rus') {
+		if (await audioTrack.getLanguageCode() !== 'rus') {
 			// Keep only Russian audio tracks
 			return { discard: true };
 		}

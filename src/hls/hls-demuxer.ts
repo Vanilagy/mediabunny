@@ -18,7 +18,7 @@ import {
 import { PacketRetrievalOptions } from '../media-sink';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags, TrackDisposition } from '../metadata';
 import { TrackType } from '../output';
-import { assert, joinPaths, Rotation, UNDETERMINED_LANGUAGE } from '../misc';
+import { assert, joinPaths, MaybePromise, Rotation, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket } from '../packet';
 import { readAllLines } from '../reader';
 import { AttributeList, canIgnoreLine } from './hls-misc';
@@ -200,10 +200,13 @@ export class HlsDemuxer extends Demuxer {
 					const input = segmentedInput.toInput();
 					const tracks = await input.getTracks();
 
+					const tracksWithCodec = await Promise.all(
+						tracks.map(async t => ({ track: t, codec: await t.getCodec() })),
+					);
 					codecStrings = await Promise.all(
-						tracks
+						tracksWithCodec
 							.filter(x => x.codec !== null)
-							.map(x => x.getCodecParameterString()),
+							.map(x => x.track.getCodecParameterString()),
 					) as string[];
 				}
 
@@ -243,7 +246,7 @@ export class HlsDemuxer extends Demuxer {
 						const input = segmentedInput.toInput();
 						const videoTrack = await input.getPrimaryVideoTrack();
 
-						if (!videoTrack || videoTrack.codec === null) {
+						if (!videoTrack || (await videoTrack.getCodec()) === null) {
 							return null;
 						}
 
@@ -284,7 +287,7 @@ export class HlsDemuxer extends Demuxer {
 						const input = segmentedInput.toInput();
 						const audioTrack = await input.getPrimaryAudioTrack();
 
-						if (!audioTrack || audioTrack.codec === null) {
+						if (!audioTrack || (await audioTrack.getCodec()) === null) {
 							return null;
 						}
 
@@ -610,41 +613,45 @@ export class HlsDemuxer extends Demuxer {
 }
 
 abstract class HlsInputTrackBacking implements InputTrackBacking {
+	hydrationPromise: Promise<void> | null = null;
+
 	constructor(public internalTrack: InternalTrack) {}
 
 	abstract getType(): TrackType;
 	abstract getDecoderConfig(): Promise<VideoDecoderConfig | AudioDecoderConfig | null>;
 
-	isHydrated(): boolean {
-		return !!this.internalTrack.backingTrack;
+	hydrate() {
+		return this.hydrationPromise ??= (async () => {
+			const segmentedInput = this.internalTrack.demuxer.getSegmentedInputForPath(this.internalTrack.fullPath);
+			const input = segmentedInput.toInput();
+
+			let track: InputTrack | null;
+			if (this instanceof HlsInputVideoTrackBacking) {
+				track = await input.getPrimaryVideoTrack({
+					filter: async t => (await t.getCodec()) === this.getCodec(),
+				});
+			} else {
+				assert(this instanceof HlsInputAudioTrackBacking);
+				track = await input.getPrimaryAudioTrack({
+					filter: async t => (await t.getCodec()) === this.getCodec(),
+				});
+			}
+
+			if (!track) {
+				throw new Error('Could not find matching track in underlying media data.');
+			}
+
+			this.internalTrack.backingTrack = track;
+		})();
 	}
 
-	async hydrate() {
-		const segmentedInput = this.internalTrack.demuxer.getSegmentedInputForPath(this.internalTrack.fullPath);
-		const input = segmentedInput.toInput();
-
-		let track: InputTrack | null;
-		if (this instanceof HlsInputVideoTrackBacking) {
-			track = await input.getPrimaryVideoTrack({
-				filter: track => track.codec === this.getCodec(),
-			});
-		} else {
-			assert(this instanceof HlsInputAudioTrackBacking);
-			track = await input.getPrimaryAudioTrack({
-				filter: track => track.codec === this.getCodec(),
-			});
+	/** If the backing track is already present, delegate synchronously; otherwise, hydrate first. */
+	delegate<T>(fn: () => MaybePromise<T>): MaybePromise<T> {
+		if (this.internalTrack.backingTrack) {
+			return fn();
 		}
 
-		if (!track) {
-			throw new Error('Could not find matching track in underlying media data.');
-		}
-
-		if (!(track._backing.isHydrated?.() ?? true)) {
-			// Just in case, typically not needed except for cursed shit like recursive .m3u8
-			await track.input._hydrateBacking(track._backing);
-		}
-
-		this.internalTrack.backingTrack = track;
+		return this.hydrate().then(fn);
 	}
 
 	getCodec(): MediaCodec | null {
@@ -696,12 +703,12 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 		return number;
 	}
 
-	getTimeResolution(): number | undefined {
-		return this.internalTrack.backingTrack?._backing.getTimeResolution();
+	getTimeResolution(): MaybePromise<number> {
+		return this.delegate(() => this.internalTrack.backingTrack!._backing.getTimeResolution());
 	}
 
-	isRelativeToUnixEpoch(): boolean | undefined {
-		return this.internalTrack.backingTrack?._backing.isRelativeToUnixEpoch();
+	isRelativeToUnixEpoch(): MaybePromise<boolean> {
+		return this.delegate(() => this.internalTrack.backingTrack!._backing.isRelativeToUnixEpoch());
 	}
 
 	getBitrate(): number | null {
@@ -713,42 +720,42 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 	}
 
 	async getDurationFromMetadata(options: DurationMetadataRequestOptions): Promise<number | null> {
-		assert(this.internalTrack.backingTrack);
-		return this.internalTrack.backingTrack._backing.getDurationFromMetadata(options);
+		await this.hydrate();
+		return this.internalTrack.backingTrack!._backing.getDurationFromMetadata(options);
 	}
 
 	async getLiveRefreshInterval(): Promise<number | null> {
-		assert(this.internalTrack.backingTrack);
-		return this.internalTrack.backingTrack._backing.getLiveRefreshInterval();
+		await this.hydrate();
+		return this.internalTrack.backingTrack!._backing.getLiveRefreshInterval();
 	}
 
 	getHasOnlyKeyPackets() {
 		return this.internalTrack.hasOnlyKeyPackets || null;
 	}
 
-	getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
-		assert(this.internalTrack.backingTrack);
-		return this.internalTrack.backingTrack._backing.getFirstPacket(options);
+	async getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
+		await this.hydrate();
+		return this.internalTrack.backingTrack!._backing.getFirstPacket(options);
 	}
 
-	getPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
-		assert(this.internalTrack.backingTrack);
-		return this.internalTrack.backingTrack._backing.getPacket(timestamp, options);
+	async getPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
+		await this.hydrate();
+		return this.internalTrack.backingTrack!._backing.getPacket(timestamp, options);
 	}
 
-	getKeyPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
-		assert(this.internalTrack.backingTrack);
-		return this.internalTrack.backingTrack._backing.getKeyPacket(timestamp, options);
+	async getKeyPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
+		await this.hydrate();
+		return this.internalTrack.backingTrack!._backing.getKeyPacket(timestamp, options);
 	}
 
-	getNextPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
-		assert(this.internalTrack.backingTrack);
-		return this.internalTrack.backingTrack._backing.getNextPacket(packet, options);
+	async getNextPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
+		await this.hydrate();
+		return this.internalTrack.backingTrack!._backing.getNextPacket(packet, options);
 	}
 
-	getNextKeyPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
-		assert(this.internalTrack.backingTrack);
-		return this.internalTrack.backingTrack._backing.getNextKeyPacket(packet, options);
+	async getNextKeyPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
+		await this.hydrate();
+		return this.internalTrack.backingTrack!._backing.getNextKeyPacket(packet, options);
 	}
 }
 
@@ -775,20 +782,20 @@ class HlsInputVideoTrackBacking
 		return inferredCodec as VideoCodec;
 	}
 
-	getCodedWidth(): number | undefined {
-		return this.backingVideoTrack?._backing.getCodedWidth();
+	getCodedWidth(): MaybePromise<number> {
+		return this.delegate(() => this.backingVideoTrack!._backing.getCodedWidth());
 	}
 
-	getCodedHeight(): number | undefined {
-		return this.backingVideoTrack?._backing.getCodedHeight();
+	getCodedHeight(): MaybePromise<number> {
+		return this.delegate(() => this.backingVideoTrack!._backing.getCodedHeight());
 	}
 
-	getSquarePixelWidth(): number | undefined {
-		return this.backingVideoTrack?._backing.getSquarePixelWidth();
+	getSquarePixelWidth(): MaybePromise<number> {
+		return this.delegate(() => this.backingVideoTrack!._backing.getSquarePixelWidth());
 	}
 
-	getSquarePixelHeight(): number | undefined {
-		return this.backingVideoTrack?._backing.getSquarePixelHeight();
+	getSquarePixelHeight(): MaybePromise<number> {
+		return this.delegate(() => this.backingVideoTrack!._backing.getSquarePixelHeight());
 	}
 
 	getMetadataDisplayWidth(): number | null {
@@ -807,27 +814,30 @@ class HlsInputVideoTrackBacking
 		return this.internalTrack.info.height;
 	}
 
-	getRotation(): Rotation | undefined {
-		return this.backingVideoTrack?._backing.getRotation();
+	getRotation(): MaybePromise<Rotation> {
+		return this.delegate(() => this.backingVideoTrack!._backing.getRotation());
 	}
 
-	getColorSpace(): Promise<VideoColorSpaceInit> {
-		assert(this.backingVideoTrack);
-		return this.backingVideoTrack._backing.getColorSpace();
+	async getColorSpace(): Promise<VideoColorSpaceInit> {
+		await this.hydrate();
+		return this.backingVideoTrack!._backing.getColorSpace();
 	}
 
-	canBeTransparent(): Promise<boolean> {
-		assert(this.backingVideoTrack);
-		return this.backingVideoTrack._backing.canBeTransparent();
+	async canBeTransparent(): Promise<boolean> {
+		await this.hydrate();
+		return this.backingVideoTrack!._backing.canBeTransparent();
 	}
 
-	getCodecParameterString(): string {
+	getMetadataCodecParameterString(): string | null {
+		if (this.backingVideoTrack) {
+			return null;
+		}
 		return this.internalTrack.fullCodecString;
 	}
 
-	getDecoderConfig(): Promise<VideoDecoderConfig | null> {
-		assert(this.backingVideoTrack);
-		return this.backingVideoTrack._backing.getDecoderConfig();
+	async getDecoderConfig(): Promise<VideoDecoderConfig | null> {
+		await this.hydrate();
+		return this.backingVideoTrack!._backing.getDecoderConfig();
 	}
 }
 
@@ -854,25 +864,28 @@ class HlsInputAudioTrackBacking
 		return inferredCodec as AudioCodec;
 	}
 
-	getNumberOfChannels(): number | undefined {
+	getNumberOfChannels(): MaybePromise<number> {
 		if (this.internalTrack.info.numberOfChannels !== null) {
 			return this.internalTrack.info.numberOfChannels;
 		}
 
-		return this.backingAudioTrack?._backing.getNumberOfChannels();
+		return this.delegate(() => this.backingAudioTrack!._backing.getNumberOfChannels());
 	}
 
-	getSampleRate(): number | undefined {
-		return this.backingAudioTrack?._backing.getSampleRate();
+	getSampleRate(): MaybePromise<number> {
+		return this.delegate(() => this.backingAudioTrack!._backing.getSampleRate());
 	}
 
-	getCodecParameterString(): string {
+	getMetadataCodecParameterString(): string | null {
+		if (this.backingAudioTrack) {
+			return null;
+		}
 		return this.internalTrack.fullCodecString;
 	}
 
-	getDecoderConfig(): Promise<AudioDecoderConfig | null> {
-		assert(this.backingAudioTrack);
-		return this.backingAudioTrack._backing.getDecoderConfig();
+	async getDecoderConfig(): Promise<AudioDecoderConfig | null> {
+		await this.hydrate();
+		return this.backingAudioTrack!._backing.getDecoderConfig();
 	}
 }
 

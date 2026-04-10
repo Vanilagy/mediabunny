@@ -109,7 +109,7 @@ const initMediaPlayer = async (resource: File | string) => {
 		);
 		endTimestamp = await input.getDurationFromMetadata(tracks, { skipLiveWait: true })
 			?? await input.computeDuration(tracks, { skipLiveWait: true });
-		isRelativeToUnixEpoch = tracks.some(t => t?.isRelativeToUnixEpoch);
+		isRelativeToUnixEpoch = (await Promise.all(tracks.map(t => t.getIsRelativeToUnixEpoch()))).some(Boolean);
 		playbackTimeAtStart = firstTimestamp;
 
 		// Configure the time display elements accordingly
@@ -127,7 +127,7 @@ const initMediaPlayer = async (resource: File | string) => {
 		let problemMessage = '';
 
 		if (videoTrack) {
-			if (videoTrack.codec === null) {
+			if (await videoTrack.getCodec() === null) {
 				problemMessage += 'Unsupported video codec. ';
 				videoTrack = null;
 			} else if (!(await videoTrack.canDecode())) {
@@ -137,7 +137,7 @@ const initMediaPlayer = async (resource: File | string) => {
 		}
 
 		if (audioTrack) {
-			if (audioTrack.codec === null) {
+			if (await audioTrack.getCodec() === null) {
 				problemMessage += 'Unsupported audio codec. ';
 				audioTrack = null;
 			} else if (!(await audioTrack.canDecode())) {
@@ -163,7 +163,7 @@ const initMediaPlayer = async (resource: File | string) => {
 
 		// We must create the audio context with the matching sample rate for correct acoustic results
 		// (especially for low-sample rate files)
-		audioContext = new AudioContext({ sampleRate: audioTrack?.sampleRate });
+		audioContext = new AudioContext({ sampleRate: await audioTrack?.getSampleRate() });
 		gainNode = audioContext.createGain();
 		gainNode.connect(audioContext.destination);
 		updateVolume();
@@ -187,8 +187,8 @@ const initMediaPlayer = async (resource: File | string) => {
 		// Show the canvas if there's a video track, otherwise hide it
 		if (videoTrack) {
 			canvas.style.display = '';
-			canvas.width = videoTrack.displayWidth;
-			canvas.height = videoTrack.displayHeight;
+			canvas.width = await videoTrack.getDisplayWidth();
+			canvas.height = await videoTrack.getDisplayHeight();
 		} else {
 			canvas.style.display = 'none';
 		}

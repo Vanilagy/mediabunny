@@ -119,8 +119,11 @@ const input = new Input({
 const duration = await input.computeDuration(); // in seconds
 const videoTrack = await input.getPrimaryVideoTrack();
 const audioTrack = await input.getPrimaryAudioTrack();
-const { displayWidth, displayHeight, rotation } = videoTrack;
-const { sampleRate, numberOfChannels } = audioTrack;
+const displayWidth = await videoTrack.getDisplayWidth();
+const displayHeight = await videoTrack.getDisplayHeight();
+const { rotation } = videoTrack;
+const sampleRate = await audioTrack.getSampleRate();
+const numberOfChannels = await audioTrack.getNumberOfChannels();
 const { title, artist, album } = await input.getMetadataTags();
 ```
 

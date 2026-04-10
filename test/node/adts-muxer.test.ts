@@ -42,9 +42,9 @@ test('ADTS muxer with raw AAC input', async () => {
 	const outputTrack = await outputAsInput.getPrimaryAudioTrack();
 	assert(outputTrack);
 
-	expect(outputTrack.codec).toBe('aac');
-	expect(outputTrack.sampleRate).toBe(audioTrack.sampleRate);
-	expect(outputTrack.numberOfChannels).toBe(audioTrack.numberOfChannels);
+	expect(await outputTrack.getCodec()).toBe('aac');
+	expect(await outputTrack.getSampleRate()).toBe(await audioTrack.getSampleRate());
+	expect(await outputTrack.getNumberOfChannels()).toBe(await audioTrack.getNumberOfChannels());
 
 	const outputDecoderConfig = await outputTrack.getDecoderConfig();
 	expect(outputDecoderConfig!.description).toBeUndefined(); // ADTS has no description

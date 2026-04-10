@@ -245,7 +245,7 @@ export class EncodedPacketSink {
 		const determinedType = await this._track.determinePacketType(packet);
 		if (determinedType === 'delta') {
 			// Try returning the previous key packet (in hopes that it's actually a key packet)
-			return this.getKeyPacket(packet.timestamp - 1 / this._track.timeResolution, options);
+			return this.getKeyPacket(packet.timestamp - 1 / await this._track.getTimeResolution(), options);
 		}
 
 		return packet;
@@ -1432,10 +1432,10 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 			);
 		}
 
-		const codec = this._track.codec;
-		const rotation = this._track.rotation;
+		const codec = await this._track.getCodec();
+		const rotation = await this._track.getRotation();
 		const decoderConfig = await this._track.getDecoderConfig();
-		const timeResolution = this._track.timeResolution;
+		const timeResolution = await this._track.getTimeResolution();
 		assert(codec && decoderConfig);
 
 		return new VideoDecoderWrapper(onSample, onError, codec, decoderConfig, rotation, timeResolution);
@@ -1569,15 +1569,19 @@ export class CanvasSink {
 	/** @internal */
 	_alpha: boolean;
 	/** @internal */
-	_width: number;
+	_width!: number;
 	/** @internal */
-	_height: number;
+	_height!: number;
+	/** @internal */
+	_options: CanvasSinkOptions;
 	/** @internal */
 	_fit: 'fill' | 'contain' | 'cover';
 	/** @internal */
-	_rotation: Rotation;
+	_rotation: Rotation = 0;
 	/** @internal */
 	_crop?: { left: number; top: number; width: number; height: number };
+	/** @internal */
+	_initPromise: Promise<void> | null = null;
 	/** @internal */
 	_videoSampleSink: VideoSampleSink;
 	/** @internal */
@@ -1627,47 +1631,61 @@ export class CanvasSink {
 			throw new TypeError('poolSize must be a non-negative integer.');
 		}
 
-		const rotation = options.rotation ?? videoTrack.rotation;
-
-		const [rotatedWidth, rotatedHeight] = rotation % 180 === 0
-			? [videoTrack.squarePixelWidth, videoTrack.squarePixelHeight]
-			: [videoTrack.squarePixelHeight, videoTrack.squarePixelWidth];
-
-		let crop = options.crop;
-		if (crop) {
-			crop = clampCropRectangle(crop, rotatedWidth, rotatedHeight);
-		}
-
-		let [width, height] = crop
-			? [crop.width, crop.height]
-			: [rotatedWidth, rotatedHeight];
-		const originalAspectRatio = width / height;
-
-		// If width and height aren't defined together, deduce the missing value using the aspect ratio
-		if (options.width !== undefined && options.height === undefined) {
-			width = options.width;
-			height = Math.round(width / originalAspectRatio);
-		} else if (options.width === undefined && options.height !== undefined) {
-			height = options.height;
-			width = Math.round(height * originalAspectRatio);
-		} else if (options.width !== undefined && options.height !== undefined) {
-			width = options.width;
-			height = options.height;
-		}
-
 		this._videoTrack = videoTrack;
 		this._alpha = options.alpha ?? false;
-		this._width = width;
-		this._height = height;
-		this._rotation = rotation;
-		this._crop = crop;
+		this._options = options;
 		this._fit = options.fit ?? 'fill';
 		this._videoSampleSink = new VideoSampleSink(videoTrack);
 		this._canvasPool = Array.from({ length: options.poolSize ?? 0 }, () => null);
 	}
 
 	/** @internal */
+	_ensureInit() {
+		return this._initPromise ??= (async () => {
+			const options = this._options;
+			const videoTrack = this._videoTrack;
+
+			const rotation = options.rotation ?? await videoTrack.getRotation();
+			const squarePixelWidth = await videoTrack.getSquarePixelWidth();
+			const squarePixelHeight = await videoTrack.getSquarePixelHeight();
+
+			const [rotatedWidth, rotatedHeight] = rotation % 180 === 0
+				? [squarePixelWidth, squarePixelHeight]
+				: [squarePixelHeight, squarePixelWidth];
+
+			let crop = options.crop;
+			if (crop) {
+				crop = clampCropRectangle(crop, rotatedWidth, rotatedHeight);
+			}
+
+			let [width, height] = crop
+				? [crop.width, crop.height]
+				: [rotatedWidth, rotatedHeight];
+			const originalAspectRatio = width / height;
+
+			// If width and height aren't defined together, deduce the missing value using the aspect ratio
+			if (options.width !== undefined && options.height === undefined) {
+				width = options.width;
+				height = Math.round(width / originalAspectRatio);
+			} else if (options.width === undefined && options.height !== undefined) {
+				height = options.height;
+				width = Math.round(height * originalAspectRatio);
+			} else if (options.width !== undefined && options.height !== undefined) {
+				width = options.width;
+				height = options.height;
+			}
+
+			this._width = width;
+			this._height = height;
+			this._rotation = rotation;
+			this._crop = crop;
+		})();
+	}
+
+	/** @internal */
 	_videoSampleToWrappedCanvas(sample: VideoSample): WrappedCanvas {
+		const width = this._width;
+		const height = this._height;
 		let canvas = this._canvasPool[this._nextCanvasIndex];
 		let canvasIsNew = false;
 
@@ -1675,10 +1693,10 @@ export class CanvasSink {
 			if (typeof document !== 'undefined') {
 				// Prefer an HTMLCanvasElement
 				canvas = document.createElement('canvas');
-				canvas.width = this._width;
-				canvas.height = this._height;
+				canvas.width = width;
+				canvas.height = height;
 			} else {
-				canvas = new OffscreenCanvas(this._width, this._height);
+				canvas = new OffscreenCanvas(width, height);
 			}
 
 			if (this._canvasPool.length > 0) {
@@ -1702,9 +1720,9 @@ export class CanvasSink {
 		if (!canvasIsNew) {
 			if (!this._alpha && isFirefox()) {
 				context.fillStyle = 'black';
-				context.fillRect(0, 0, this._width, this._height);
+				context.fillRect(0, 0, width, height);
 			} else {
-				context.clearRect(0, 0, this._width, this._height);
+				context.clearRect(0, 0, width, height);
 			}
 		}
 
@@ -1734,6 +1752,7 @@ export class CanvasSink {
 	 */
 	async getCanvas(timestamp: number, options?: PacketRetrievalOptions) {
 		validateTimestamp(timestamp);
+		await this._ensureInit();
 
 		const sample = await this._videoSampleSink.getSample(timestamp, options);
 		return sample && this._videoSampleToWrappedCanvas(sample);
@@ -1747,8 +1766,9 @@ export class CanvasSink {
 	 * @param endTimestamp - The timestamp in seconds at which to stop yielding canvases (exclusive).
 	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	canvases(startTimestamp = 0, endTimestamp = Infinity, options?: PacketRetrievalOptions) {
-		return mapAsyncGenerator(
+	async* canvases(startTimestamp = 0, endTimestamp = Infinity, options?: PacketRetrievalOptions) {
+		await this._ensureInit();
+		yield* mapAsyncGenerator(
 			this._videoSampleSink.samples(startTimestamp, endTimestamp, options),
 			sample => this._videoSampleToWrappedCanvas(sample),
 		);
@@ -1763,8 +1783,9 @@ export class CanvasSink {
 	 * @param timestamps - An iterable or async iterable of timestamps in seconds.
 	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	canvasesAtTimestamps(timestamps: AnyIterable<number>, options?: PacketRetrievalOptions) {
-		return mapAsyncGenerator(
+	async* canvasesAtTimestamps(timestamps: AnyIterable<number>, options?: PacketRetrievalOptions) {
+		await this._ensureInit();
+		yield* mapAsyncGenerator(
 			this._videoSampleSink.samplesAtTimestamps(timestamps, options),
 			sample => sample && this._videoSampleToWrappedCanvas(sample),
 		);
@@ -2111,7 +2132,7 @@ export class AudioSampleSink extends BaseMediaSampleSink<AudioSample> {
 			);
 		}
 
-		const codec = this._track.codec;
+		const codec = await this._track.getCodec();
 		const decoderConfig = await this._track.getDecoderConfig();
 		assert(codec && decoderConfig);
 

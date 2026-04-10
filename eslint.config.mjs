@@ -31,6 +31,7 @@ export default tseslint.config(
 			'@stylistic/yield-star-spacing': ['error', { before: false, after: true }],
 			'@typescript-eslint/no-unsafe-enum-comparison': 'off',
 			'@typescript-eslint/no-unsafe-unary-minus': 'off',
+			'@typescript-eslint/no-deprecated': 'error',
 		},
 	},
 	{

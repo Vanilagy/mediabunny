@@ -636,6 +636,7 @@ export const isWebKit = () => {
 	return isWebKitCache = !!(
 		typeof navigator !== 'undefined'
 		&& (
+			// eslint-disable-next-line @typescript-eslint/no-deprecated
 			navigator.vendor?.match(/apple/i)
 			// Or, in workers:
 			|| (/AppleWebKit/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent))
@@ -661,6 +662,7 @@ export const isChromium = () => {
 
 	return isChromiumCache = !!(
 		typeof navigator !== 'undefined'
+		// eslint-disable-next-line @typescript-eslint/no-deprecated
 		&& (navigator.vendor?.includes('Google Inc') || /Chrome/.test(navigator.userAgent))
 	);
 };

@@ -216,17 +216,12 @@ export {
 	InputTrack,
 	InputVideoTrack,
 	InputAudioTrack,
+	InputTrackQuery,
 	PacketStats,
-} from './input-track';
-export {
-	InputTrackDescriptor,
-	InputVideoTrackDescriptor,
-	InputAudioTrackDescriptor,
-	InputTrackDescriptorQuery,
 	asc,
 	desc,
 	prefer,
-} from './input-track-descriptor';
+} from './input-track';
 export {
 	EncodedPacket,
 	EncodedPacketSideData,

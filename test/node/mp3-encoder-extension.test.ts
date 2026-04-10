@@ -66,9 +66,9 @@ test('MP3 encoding', async () => {
 	});
 
 	const track = (await input.getPrimaryAudioTrack())!;
-	expect(track.codec).toBe('mp3');
-	expect(track.sampleRate).toBe(sampleRate);
-	expect(track.numberOfChannels).toBe(channels);
+	expect(await track.getCodec()).toBe('mp3');
+	expect(await track.getSampleRate()).toBe(sampleRate);
+	expect(await track.getNumberOfChannels()).toBe(channels);
 
 	const sink = new EncodedPacketSink(track);
 	let packetCount = 0;

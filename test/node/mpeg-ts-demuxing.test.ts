@@ -35,11 +35,11 @@ test('MPEG-TS metadata reading', async () => {
 	assert(videoTrack);
 
 	expect(videoTrack.id).toBe(0x100);
-	expect(videoTrack.codec).toBe('avc');
-	expect(videoTrack.internalCodecId).toBe(0x1b);
-	expect(videoTrack.displayWidth).toEqual(720);
-	expect(videoTrack.displayHeight).toEqual(720);
-	expect(videoTrack.timeResolution).toBe(90_000);
+	expect(await videoTrack.getCodec()).toBe('avc');
+	expect(await videoTrack.getInternalCodecId()).toBe(0x1b);
+	expect(await videoTrack.getDisplayWidth()).toEqual(720);
+	expect(await videoTrack.getDisplayHeight()).toEqual(720);
+	expect(await videoTrack.getTimeResolution()).toBe(90_000);
 
 	const videoDecoderConfig = await videoTrack.getDecoderConfig();
 	expect(videoDecoderConfig).toEqual({
@@ -61,9 +61,9 @@ test('MPEG-TS metadata reading', async () => {
 	assert(audioTrack);
 
 	expect(audioTrack.id).toBe(0x101);
-	expect(audioTrack.codec).toBe('aac');
-	expect(audioTrack.numberOfChannels).toBe(2);
-	expect(audioTrack.sampleRate).toBe(48000);
+	expect(await audioTrack.getCodec()).toBe('aac');
+	expect(await audioTrack.getNumberOfChannels()).toBe(2);
+	expect(await audioTrack.getSampleRate()).toBe(48000);
 
 	const audioDecoderConfig = await audioTrack.getDecoderConfig();
 	expect(audioDecoderConfig).toEqual({
@@ -549,10 +549,10 @@ test('MPEG-TS with HEVC video', async () => {
 	const videoTrack = await input.getPrimaryVideoTrack();
 	assert(videoTrack);
 
-	expect(videoTrack.codec).toBe('hevc');
-	expect(videoTrack.internalCodecId).toBe(0x24);
-	expect(videoTrack.displayWidth).toBe(1920);
-	expect(videoTrack.displayHeight).toBe(1080);
+	expect(await videoTrack.getCodec()).toBe('hevc');
+	expect(await videoTrack.getInternalCodecId()).toBe(0x24);
+	expect(await videoTrack.getDisplayWidth()).toBe(1920);
+	expect(await videoTrack.getDisplayHeight()).toBe(1080);
 
 	const videoDecoderConfig = await videoTrack.getDecoderConfig();
 	expect(videoDecoderConfig).toEqual({
@@ -588,8 +588,8 @@ test('MPEG-TS with MP3 audio', async () => {
 	const audioTrack = await input.getPrimaryAudioTrack();
 	assert(audioTrack);
 
-	expect(audioTrack.codec).toBe('mp3');
-	expect(audioTrack.internalCodecId).toBe(0x03);
+	expect(await audioTrack.getCodec()).toBe('mp3');
+	expect(await audioTrack.getInternalCodecId()).toBe(0x03);
 
 	const audioDecoderConfig = await audioTrack.getDecoderConfig();
 	expect(audioDecoderConfig).toEqual({
@@ -622,8 +622,8 @@ test('MPEG-TS with AC-3 audio (System A)', async () => {
 	const audioTrack = await input.getPrimaryAudioTrack();
 	assert(audioTrack);
 
-	expect(audioTrack.codec).toBe('ac3');
-	expect(audioTrack.internalCodecId).toBe(MpegTsStreamType.AC3_SYSTEM_A);
+	expect(await audioTrack.getCodec()).toBe('ac3');
+	expect(await audioTrack.getInternalCodecId()).toBe(MpegTsStreamType.AC3_SYSTEM_A);
 
 	const audioDecoderConfig = await audioTrack.getDecoderConfig();
 	expect(audioDecoderConfig).toEqual({
@@ -657,8 +657,8 @@ test('MPEG-TS with AC-3 audio (System B)', async () => {
 	const audioTrack = await input.getPrimaryAudioTrack();
 	assert(audioTrack);
 
-	expect(audioTrack.codec).toBe('ac3');
-	expect(audioTrack.internalCodecId).toBe(MpegTsStreamType.PRIVATE_DATA);
+	expect(await audioTrack.getCodec()).toBe('ac3');
+	expect(await audioTrack.getInternalCodecId()).toBe(MpegTsStreamType.PRIVATE_DATA);
 
 	const audioDecoderConfig = await audioTrack.getDecoderConfig();
 	expect(audioDecoderConfig).toEqual({
@@ -692,8 +692,8 @@ test('MPEG-TS with E-AC-3 audio (System A)', async () => {
 	const audioTrack = await input.getPrimaryAudioTrack();
 	assert(audioTrack);
 
-	expect(audioTrack.codec).toBe('eac3');
-	expect(audioTrack.internalCodecId).toBe(MpegTsStreamType.EAC3_SYSTEM_A);
+	expect(await audioTrack.getCodec()).toBe('eac3');
+	expect(await audioTrack.getInternalCodecId()).toBe(MpegTsStreamType.EAC3_SYSTEM_A);
 
 	const audioDecoderConfig = await audioTrack.getDecoderConfig();
 	expect(audioDecoderConfig).toEqual({
@@ -727,8 +727,8 @@ test('MPEG-TS with E-AC-3 audio (System B)', async () => {
 	const audioTrack = await input.getPrimaryAudioTrack();
 	assert(audioTrack);
 
-	expect(audioTrack.codec).toBe('eac3');
-	expect(audioTrack.internalCodecId).toBe(MpegTsStreamType.PRIVATE_DATA);
+	expect(await audioTrack.getCodec()).toBe('eac3');
+	expect(await audioTrack.getInternalCodecId()).toBe(MpegTsStreamType.PRIVATE_DATA);
 
 	const audioDecoderConfig = await audioTrack.getDecoderConfig();
 	expect(audioDecoderConfig).toEqual({

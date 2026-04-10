@@ -972,7 +972,7 @@ export class Conversion {
 
 	/** @internal */
 	async _processVideoTrack(track: InputVideoTrack, trackOptions: ConversionVideoOptions) {
-		const sourceCodec = track.codec;
+		const sourceCodec = await track.getCodec();
 		if (!sourceCodec) {
 			this.discardedTracks.push({
 				track,
@@ -983,14 +983,16 @@ export class Conversion {
 
 		let videoSource: VideoSource;
 
-		const totalRotation = normalizeRotation(track.rotation + (trackOptions.rotate ?? 0));
+		const totalRotation = normalizeRotation(await track.getRotation() + (trackOptions.rotate ?? 0));
 		let outputTrackRotation = totalRotation;
 		const canUseRotationMetadata = this.output.format.supportsVideoRotationMetadata
 			&& (trackOptions.allowRotationMetadata ?? true);
 
+		const squarePixelWidth = await track.getSquarePixelWidth();
+		const squarePixelHeight = await track.getSquarePixelHeight();
 		const [rotatedWidth, rotatedHeight] = totalRotation % 180 === 0
-			? [track.squarePixelWidth, track.squarePixelHeight]
-			: [track.squarePixelHeight, track.squarePixelWidth];
+			? [squarePixelWidth, squarePixelHeight]
+			: [squarePixelHeight, squarePixelWidth];
 
 		let crop = trackOptions.crop;
 		if (crop) {
@@ -1131,8 +1133,8 @@ export class Conversion {
 				|| (totalRotation !== 0 && (!canUseRotationMetadata || trackOptions.process !== undefined))
 				|| !!crop
 				// Don't expect encoders to reliably handle non-square pixels:
-				|| track.squarePixelWidth !== track.codedWidth
-				|| track.squarePixelHeight !== track.codedHeight;
+				|| squarePixelWidth !== await track.getCodedWidth()
+				|| squarePixelHeight !== await track.getCodedHeight();
 
 			if (!needsRerender) {
 				// If we're directly passing decoded samples back to the encoder, sometimes the encoder may error due
@@ -1346,12 +1348,13 @@ export class Conversion {
 			}
 		}
 
+		const videoTrackLanguageCode = await track.getLanguageCode();
 		this.output.addVideoTrack(videoSource, {
 			frameRate: trackOptions.frameRate,
 			// TODO: This condition can be removed when all demuxers properly homogenize to BCP47 in v2
-			languageCode: isIso639Dash2LanguageCode(track.languageCode) ? track.languageCode : undefined,
-			name: track.name ?? undefined,
-			disposition: track.disposition,
+			languageCode: isIso639Dash2LanguageCode(videoTrackLanguageCode) ? videoTrackLanguageCode : undefined,
+			name: await track.getName() ?? undefined,
+			disposition: await track.getDisposition(),
 			rotation: outputTrackRotation,
 		});
 		this._addedCounts.video++;
@@ -1423,7 +1426,7 @@ export class Conversion {
 
 	/** @internal */
 	async _processAudioTrack(track: InputAudioTrack, trackOptions: ConversionAudioOptions) {
-		const sourceCodec = track.codec;
+		const sourceCodec = await track.getCodec();
 		if (!sourceCodec) {
 			this.discardedTracks.push({
 				track,
@@ -1434,8 +1437,8 @@ export class Conversion {
 
 		let audioSource: AudioSource;
 
-		const originalNumberOfChannels = track.numberOfChannels;
-		const originalSampleRate = track.sampleRate;
+		const originalNumberOfChannels = await track.getNumberOfChannels();
+		const originalSampleRate = await track.getSampleRate();
 
 		const firstTimestamp = await track.getFirstTimestamp();
 
@@ -1597,11 +1600,12 @@ export class Conversion {
 			}
 		}
 
+		const audioTrackLanguageCode = await track.getLanguageCode();
 		this.output.addAudioTrack(audioSource, {
 			// TODO: This condition can be removed when all demuxers properly homogenize to BCP47 in v2
-			languageCode: isIso639Dash2LanguageCode(track.languageCode) ? track.languageCode : undefined,
-			name: track.name ?? undefined,
-			disposition: track.disposition,
+			languageCode: isIso639Dash2LanguageCode(audioTrackLanguageCode) ? audioTrackLanguageCode : undefined,
+			name: await track.getName() ?? undefined,
+			disposition: await track.getDisposition(),
 		});
 		this._addedCounts.audio++;
 		this._totalTrackCount++;

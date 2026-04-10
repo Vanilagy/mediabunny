@@ -106,8 +106,8 @@ test(
 			);
 
 			const { input, track } = await readBackTrack(buffer);
-			expect(track.codedWidth).toBe(100);
-			expect(track.codedHeight).toBe(100);
+			expect(await track.getCodedWidth()).toBe(100);
+			expect(await track.getCodedHeight()).toBe(100);
 			input.dispose();
 		}
 	},
@@ -120,8 +120,8 @@ test('VideoSampleSource, same-sized frames with width and height set', async () 
 	);
 
 	const { input, track } = await readBackTrack(buffer);
-	expect(track.codedWidth).toBe(50);
-	expect(track.codedHeight).toBe(80);
+	expect(await track.getCodedWidth()).toBe(50);
+	expect(await track.getCodedHeight()).toBe(80);
 	input.dispose();
 });
 
@@ -132,8 +132,8 @@ test('VideoSampleSource, same-sized frames with rotation set to 90', async () =>
 	);
 
 	const { input, track } = await readBackTrack(buffer);
-	expect(track.codedWidth).toBe(100);
-	expect(track.codedHeight).toBe(200);
+	expect(await track.getCodedWidth()).toBe(100);
+	expect(await track.getCodedHeight()).toBe(200);
 	input.dispose();
 });
 
@@ -144,8 +144,8 @@ test('VideoSampleSource, same-sized frames with rotation, width and height', asy
 	);
 
 	const { input, track } = await readBackTrack(buffer);
-	expect(track.codedWidth).toBe(50);
-	expect(track.codedHeight).toBe(80);
+	expect(await track.getCodedWidth()).toBe(50);
+	expect(await track.getCodedHeight()).toBe(80);
 	input.dispose();
 });
 
@@ -254,8 +254,8 @@ test('VideoSampleSource, transform.process manual resize', async () => {
 	);
 
 	const { input, track } = await readBackTrack(buffer);
-	expect(track.codedWidth).toBe(60);
-	expect(track.codedHeight).toBe(40);
+	expect(await track.getCodedWidth()).toBe(60);
+	expect(await track.getCodedHeight()).toBe(40);
 	input.dispose();
 });
 
@@ -289,8 +289,8 @@ test('VideoSampleSource, transform.process receives pre-transformed frames', asy
 	}
 
 	const { input, track } = await readBackTrack(buffer);
-	expect(track.codedWidth).toBe(50);
-	expect(track.codedHeight).toBe(80);
+	expect(await track.getCodedWidth()).toBe(50);
+	expect(await track.getCodedHeight()).toBe(80);
 	input.dispose();
 });
 
@@ -492,8 +492,8 @@ test('VideoSampleSource, transform.frameRate works with process', async () => {
 	}
 
 	const { input, track } = await readBackTrack(buffer);
-	expect(track.codedWidth).toBe(60);
-	expect(track.codedHeight).toBe(40);
+	expect(await track.getCodedWidth()).toBe(60);
+	expect(await track.getCodedHeight()).toBe(40);
 
 	input.dispose();
 });
@@ -576,8 +576,8 @@ test('AudioSampleSource, normal usage', async () => {
 	const buffer = await encodeAudio({ codec: 'pcm-s16' }, sample);
 
 	const { input, track } = await readBackAudioTrack(buffer);
-	expect(track.numberOfChannels).toBe(2);
-	expect(track.sampleRate).toBe(48000);
+	expect(await track.getNumberOfChannels()).toBe(2);
+	expect(await track.getSampleRate()).toBe(48000);
 	expect(await track.computeDuration()).toBe(1);
 	input.dispose();
 });
@@ -590,8 +590,8 @@ test('AudioSampleSource, remixed to mono', async () => {
 	);
 
 	const { input, track } = await readBackAudioTrack(buffer);
-	expect(track.numberOfChannels).toBe(1);
-	expect(track.sampleRate).toBe(48000);
+	expect(await track.getNumberOfChannels()).toBe(1);
+	expect(await track.getSampleRate()).toBe(48000);
 	expect(await track.computeDuration()).toBe(1);
 	input.dispose();
 });
@@ -604,8 +604,8 @@ test('AudioSampleSource, resampled to 44100 Hz', async () => {
 	);
 
 	const { input, track } = await readBackAudioTrack(buffer);
-	expect(track.numberOfChannels).toBe(2);
-	expect(track.sampleRate).toBe(44100);
+	expect(await track.getNumberOfChannels()).toBe(2);
+	expect(await track.getSampleRate()).toBe(44100);
 	expect(await track.computeDuration()).toBe(1);
 	input.dispose();
 });
@@ -618,8 +618,8 @@ test('AudioSampleSource, resampled stereo with non-zero start timestamp', async 
 	);
 
 	const { input, track } = await readBackAudioTrack(buffer);
-	expect(track.numberOfChannels).toBe(2);
-	expect(track.sampleRate).toBe(48000);
+	expect(await track.getNumberOfChannels()).toBe(2);
+	expect(await track.getSampleRate()).toBe(48000);
 
 	expect(await track.getFirstTimestamp()).toBe(1);
 	expect(await track.computeDuration()).toBe(2);

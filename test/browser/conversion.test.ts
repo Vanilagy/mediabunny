@@ -17,11 +17,11 @@ test('Rotation is baked-in when rerendering', async () => {
 	const ogTrack = await input.getPrimaryVideoTrack();
 	assert(ogTrack);
 
-	expect(ogTrack.rotation).toBe(90);
-	expect(ogTrack.codedWidth).toBe(1920);
-	expect(ogTrack.codedHeight).toBe(1080);
-	expect(ogTrack.displayWidth).toBe(1080);
-	expect(ogTrack.displayHeight).toBe(1920);
+	expect(await ogTrack.getRotation()).toBe(90);
+	expect(await ogTrack.getCodedWidth()).toBe(1920);
+	expect(await ogTrack.getCodedHeight()).toBe(1080);
+	expect(await ogTrack.getDisplayWidth()).toBe(1080);
+	expect(await ogTrack.getDisplayHeight()).toBe(1920);
 
 	const output = new Output({
 		format: new Mp4OutputFormat(),
@@ -41,9 +41,9 @@ test('Rotation is baked-in when rerendering', async () => {
 	const track = await newInput.getPrimaryVideoTrack();
 	assert(track);
 
-	expect(track.codedWidth).toBe(320);
-	expect(track.codedHeight).toBe(570);
-	expect(track.displayWidth).toBe(320);
-	expect(track.displayHeight).toBe(570);
-	expect(track.rotation).toBe(0);
+	expect(await track.getCodedWidth()).toBe(320);
+	expect(await track.getCodedHeight()).toBe(570);
+	expect(await track.getDisplayWidth()).toBe(320);
+	expect(await track.getDisplayHeight()).toBe(570);
+	expect(await track.getRotation()).toBe(0);
 });

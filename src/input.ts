@@ -15,18 +15,13 @@ import {
 	InputTrackBacking,
 	InputVideoTrack,
 	InputVideoTrackBacking,
-} from './input-track';
-import {
-	InputAudioTrackDescriptor,
-	InputTrackDescriptor,
-	InputVideoTrackDescriptor,
-	mergeTrackDescriptorQueries,
-	queryTrackDescriptors,
-	toValidatedTrackDescriptorQuery,
-	InputTrackDescriptorQuery,
+	InputTrackQuery,
+	mergeInputTrackQueries,
+	queryInputTracks,
+	toValidatedInputTrackQuery,
 	prefer,
 	desc,
-} from './input-track-descriptor';
+} from './input-track';
 import { PacketRetrievalOptions } from './media-sink';
 import {
 	arrayArgmin,
@@ -144,10 +139,6 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 	_trackBackingsCache: InputTrackBacking[] | null = null;
 	/** @internal */
 	_backingToTrack = new Map<InputTrackBacking, InputTrack>();
-	/** @internal */
-	_backingToDescriptor = new Map<InputTrackBacking, InputTrackDescriptor>();
-	/** @internal */
-	_hydrationPromises = new Map<InputTrackBacking, Promise<void>>();
 	/** @internal */
 	_disposed = false;
 	/** @internal */
@@ -511,51 +502,30 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 	 * Returns the list of all tracks of this input file in the order in which they appear in the file. An optional
 	 * query can be provided.
 	 */
-	async getTracks(
-		query?: InputTrackDescriptorQuery<InputTrackDescriptor>,
-	): Promise<InputTrack[]> {
-		const descriptors = await this.getTrackDescriptors(query);
-		return Promise.all(descriptors.map(x => x.getTrack()));
-	}
+	async getTracks(query?: InputTrackQuery<InputTrack>): Promise<InputTrack[]> {
+		query &&= toValidatedInputTrackQuery(query);
 
-	/** Returns the first track in this input file, optionally steered by the provided query. */
-	async pluckTrack(
-		query?: InputTrackDescriptorQuery<InputTrackDescriptor>,
-	): Promise<InputTrack | null> {
-		const descriptors = await this.getTrackDescriptors(query);
-		return descriptors[0]?.getTrack() ?? null;
+		const backings = await this._getTrackBackings();
+		const tracks = backings.map(backing => this._wrapBackingAsTrack(backing));
+		return queryInputTracks(tracks, query);
 	}
 
 	/** Returns the list of all video tracks of this input file. An optional query can be provided. */
-	async getVideoTracks(
-		query?: InputTrackDescriptorQuery<InputVideoTrackDescriptor>,
-	): Promise<InputVideoTrack[]> {
-		const descriptors = await this.getVideoTrackDescriptors(query);
-		return Promise.all(descriptors.map(x => x.getTrack()));
-	}
+	async getVideoTracks(query?: InputTrackQuery<InputVideoTrack>): Promise<InputVideoTrack[]> {
+		query &&= toValidatedInputTrackQuery(query);
 
-	/** Returns the first video track in this input file, optionally steered by the provided query. */
-	async pluckVideoTrack(
-		query?: InputTrackDescriptorQuery<InputVideoTrackDescriptor>,
-	): Promise<InputVideoTrack | null> {
-		const descriptors = await this.getVideoTrackDescriptors(query);
-		return descriptors[0]?.getTrack() ?? null;
+		const tracks = await this.getTracks();
+		const videoTracks = tracks.filter((x): x is InputVideoTrack => x.isVideoTrack());
+		return queryInputTracks(videoTracks, query);
 	}
 
 	/** Returns the list of all audio tracks of this input file. An optional query can be provided. */
-	async getAudioTracks(
-		query?: InputTrackDescriptorQuery<InputAudioTrackDescriptor>,
-	): Promise<InputAudioTrack[]> {
-		const descriptors = await this.getAudioTrackDescriptors(query);
-		return Promise.all(descriptors.map(x => x.getTrack()));
-	}
+	async getAudioTracks(query?: InputTrackQuery<InputAudioTrack>): Promise<InputAudioTrack[]> {
+		query &&= toValidatedInputTrackQuery(query);
 
-	/** Returns the first audio track in this input file, optionally steered by the provided query. */
-	async pluckAudioTrack(
-		query?: InputTrackDescriptorQuery<InputAudioTrackDescriptor>,
-	): Promise<InputAudioTrack | null> {
-		const descriptors = await this.getAudioTrackDescriptors(query);
-		return descriptors[0]?.getTrack() ?? null;
+		const tracks = await this.getTracks();
+		const audioTracks = tracks.filter((x): x is InputAudioTrack => x.isAudioTrack());
+		return queryInputTracks(audioTracks, query);
 	}
 
 	/**
@@ -565,12 +535,21 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 	 * bitrate (higher bitrate is preferred), and if it can be paired with an audio track.
 	 */
 	async getPrimaryVideoTrack(
-		query?: InputTrackDescriptorQuery<InputVideoTrackDescriptor>,
+		query?: InputTrackQuery<InputVideoTrack>,
 	): Promise<InputVideoTrack | null> {
-		query &&= toValidatedTrackDescriptorQuery(query);
+		query &&= toValidatedInputTrackQuery(query);
 
-		const descriptor = await this.getPrimaryVideoDescriptor(query);
-		return descriptor?.getTrack() ?? null;
+		const merged = mergeInputTrackQueries(query, {
+			sortBy: async t => [
+				prefer((await t.getDisposition()).default),
+				prefer(await t.hasPairableAudioTrack()),
+				prefer(!(await t.getHasOnlyKeyPackets())),
+				desc(await t.getBitrate()),
+			],
+		});
+
+		const sorted = await this.getVideoTracks(merged);
+		return sorted[0] ?? null;
 	}
 
 	/**
@@ -580,94 +559,21 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 	 * bitrate (higher bitrate is preferred), and if it can be paired with the primary video track.
 	 */
 	async getPrimaryAudioTrack(
-		query?: InputTrackDescriptorQuery<InputAudioTrackDescriptor>,
+		query?: InputTrackQuery<InputAudioTrack>,
 	): Promise<InputAudioTrack | null> {
-		query &&= toValidatedTrackDescriptorQuery(query);
+		query &&= toValidatedInputTrackQuery(query);
 
-		const descriptor = await this.getPrimaryAudioDescriptor(query);
-		return descriptor?.getTrack() ?? null;
-	}
+		const primaryVideoTrack = await this.getPrimaryVideoTrack();
 
-	/**
-	 * Returns lightweight track descriptors without loading full media data. Useful for querying and filtering
-	 * tracks (e.g. from an HLS master playlist) before committing to loading any specific track.
-	 */
-	async getTrackDescriptors(query?: InputTrackDescriptorQuery<InputTrackDescriptor>) {
-		query &&= toValidatedTrackDescriptorQuery(query);
-
-		const backings = await this._getTrackBackings();
-		const descriptors = backings.map(backing => this._wrapBackingAsDescriptor(backing));
-		return queryTrackDescriptors(descriptors, query);
-	}
-
-	/**
-	 * Returns lightweight video track descriptors without loading full media data. Useful for querying and filtering
-	 * video tracks (e.g. from an HLS master playlist) before committing to loading any specific track.
-	 */
-	async getVideoTrackDescriptors(
-		query?: InputTrackDescriptorQuery<InputVideoTrackDescriptor>,
-	): Promise<InputVideoTrackDescriptor[]> {
-		query &&= toValidatedTrackDescriptorQuery(query);
-
-		const descriptors = await this.getTrackDescriptors();
-		const videoDescriptors = descriptors.filter(
-			(x): x is InputVideoTrackDescriptor => x.isVideoTrackDescriptor(),
-		);
-		return queryTrackDescriptors(videoDescriptors, query);
-	}
-
-	/**
-	 * Returns lightweight audio track descriptors without loading full media data. Useful for querying and filtering
-	 * audio tracks (e.g. from an HLS master playlist) before committing to loading any specific track.
-	 */
-	async getAudioTrackDescriptors(
-		query?: InputTrackDescriptorQuery<InputAudioTrackDescriptor>,
-	): Promise<InputAudioTrackDescriptor[]> {
-		query &&= toValidatedTrackDescriptorQuery(query);
-
-		const descriptors = await this.getTrackDescriptors();
-		const audioDescriptors = descriptors.filter(
-			(x): x is InputAudioTrackDescriptor => x.isAudioTrackDescriptor(),
-		);
-		return queryTrackDescriptors(audioDescriptors, query);
-	}
-
-	/** Returns the primary video track descriptor of this input file, or null if there are no video tracks. */
-	async getPrimaryVideoDescriptor(
-		query?: InputTrackDescriptorQuery<InputVideoTrackDescriptor>,
-	): Promise<InputVideoTrackDescriptor | null> {
-		query &&= toValidatedTrackDescriptorQuery(query);
-
-		const merged = mergeTrackDescriptorQueries(query, {
-			sortBy: d => [
-				prefer(d.disposition?.default ?? false),
-				prefer(d.hasPairableAudioTrack()),
-				prefer(!d.hasOnlyKeyPackets),
-				desc(d.bitrate ?? null),
+		const merged = mergeInputTrackQueries(query, {
+			sortBy: async t => [
+				prefer(!primaryVideoTrack || t.canBePairedWith(primaryVideoTrack)),
+				prefer((await t.getDisposition()).default),
+				desc(await t.getBitrate()),
 			],
 		});
 
-		const sorted = await this.getVideoTrackDescriptors(merged);
-		return sorted[0] ?? null;
-	}
-
-	/** Returns the primary audio track descriptor of this input file, or null if there are no audio tracks. */
-	async getPrimaryAudioDescriptor(
-		query?: InputTrackDescriptorQuery<InputAudioTrackDescriptor>,
-	): Promise<InputAudioTrackDescriptor | null> {
-		query &&= toValidatedTrackDescriptorQuery(query);
-
-		const primaryVideoDescriptor = await this.getPrimaryVideoDescriptor();
-
-		const merged = mergeTrackDescriptorQueries(query, {
-			sortBy: d => [
-				prefer(!primaryVideoDescriptor || d.canBePairedWith(primaryVideoDescriptor)),
-				prefer(d.disposition?.default ?? false),
-				desc(d.bitrate ?? null),
-			],
-		});
-
-		const sorted = await this.getAudioTrackDescriptors(merged);
+		const sorted = await this.getAudioTracks(merged);
 		return sorted[0] ?? null;
 	}
 
@@ -691,43 +597,6 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 
 		this._backingToTrack.set(backing, track);
 		return track;
-	}
-
-	/** @internal */
-	_wrapBackingAsDescriptor(backing: InputTrackBacking): InputTrackDescriptor {
-		const existing = this._backingToDescriptor.get(backing);
-		if (existing) {
-			return existing;
-		}
-
-		const type = backing.getType();
-		const descriptor = type === 'video'
-			? new InputVideoTrackDescriptor(this, backing as InputVideoTrackBacking)
-			: new InputAudioTrackDescriptor(this, backing as InputAudioTrackBacking);
-
-		this._backingToDescriptor.set(backing, descriptor);
-		return descriptor;
-	}
-
-	/** @internal */
-	_hydrateBacking(backing: InputTrackBacking): Promise<void> {
-		if (!backing.hydrate || (backing.isHydrated?.() ?? true)) {
-			return Promise.resolve();
-		}
-
-		let promise = this._hydrationPromises.get(backing);
-		if (!promise) {
-			promise = backing.hydrate();
-			this._hydrationPromises.set(backing, promise);
-		}
-
-		return promise;
-	}
-
-	/** @internal */
-	async _getTrackForBacking(backing: InputTrackBacking): Promise<InputTrack> {
-		await this._hydrateBacking(backing);
-		return this._wrapBackingAsTrack(backing);
 	}
 
 	/** Returns the full MIME type of this input file, including track codecs. */

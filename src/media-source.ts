@@ -2417,6 +2417,7 @@ export class MediaStreamAudioTrackSource extends AudioSource {
 	/** @internal */
 	private _audioContext: AudioContext | null = null;
 	/** @internal */
+	// eslint-disable-next-line @typescript-eslint/no-deprecated
 	private _scriptProcessorNode: ScriptProcessorNode | null = null; // Deprecated but goated
 	/** @internal */
 	private _promiseWithResolvers = promiseWithResolvers();
@@ -2550,6 +2551,7 @@ export class MediaStreamAudioTrackSource extends AudioSource {
 
 			this._audioContext = new AudioContext({ sampleRate: this._track.getSettings().sampleRate });
 			const sourceNode = this._audioContext.createMediaStreamSource(new MediaStream([this._track]));
+			// eslint-disable-next-line @typescript-eslint/no-deprecated
 			this._scriptProcessorNode = this._audioContext.createScriptProcessor(4096);
 
 			if (this._audioContext.state === 'suspended') {
@@ -2561,8 +2563,11 @@ export class MediaStreamAudioTrackSource extends AudioSource {
 
 			let totalDuration = 0;
 
+			// eslint-disable-next-line @typescript-eslint/no-deprecated
 			this._scriptProcessorNode.onaudioprocess = (event) => {
+				// eslint-disable-next-line @typescript-eslint/no-deprecated
 				const iterator = AudioSample._fromAudioBuffer(event.inputBuffer, totalDuration);
+				// eslint-disable-next-line @typescript-eslint/no-deprecated
 				totalDuration += event.inputBuffer.duration;
 
 				for (const audioSample of iterator) {

@@ -56,25 +56,25 @@ const extractMetadata = (resource: File | string) => {
 		'Ends at': input.computeDuration().then(duration => `${duration} seconds`),
 		'Tracks': input.getTracks().then(tracks => tracks.map(track => ({
 			'Type': track.type,
-			'Codec': track.codec,
+			'Codec': track.getCodec(),
 			'Full codec string': track.getCodecParameterString(),
 			'Starts at': track.getFirstTimestamp().then(start => `${start} seconds`),
 			'Ends at': track.computeDuration().then(duration => `${duration} seconds`),
-			'Language code': track.languageCode,
+			'Language code': track.getLanguageCode(),
 			...(track.isVideoTrack()
 				? {
-						'Coded width': `${track.codedWidth} pixels`,
-						'Coded height': `${track.codedHeight} pixels`,
-						'Rotation': `${track.rotation}° clockwise`,
-						'Pixel aspect ratio': `${track.pixelAspectRatio.num}:${track.pixelAspectRatio.den}`,
-						'Display width': `${track.displayWidth} pixels`,
-						'Display height': `${track.displayHeight} pixels`,
+						'Coded width': track.getCodedWidth().then(w => `${w} pixels`),
+						'Coded height': track.getCodedHeight().then(h => `${h} pixels`),
+						'Rotation': track.getRotation().then(rot => `${rot}° clockwise`),
+						'Pixel aspect ratio': track.getPixelAspectRatio().then(par => `${par.num}:${par.den}`),
+						'Display width': track.getDisplayWidth().then(w => `${w} pixels`),
+						'Display height': track.getDisplayHeight().then(h => `${h} pixels`),
 						'Transparency': track.canBeTransparent(),
 					}
 				: track.isAudioTrack()
 					? {
-							'Number of channels': track.numberOfChannels,
-							'Sample rate': `${track.sampleRate} Hz`,
+							'Number of channels': track.getNumberOfChannels(),
+							'Sample rate': track.getSampleRate().then(rate => `${rate} Hz`),
 						}
 					: {}),
 			'Packet statistics': shortDelay().then(() => track.computePacketStats()).then(stats => ({

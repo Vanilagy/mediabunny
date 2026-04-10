@@ -62,7 +62,7 @@ test('can convert a .flac to .wav', async () => {
 		IPRD: 'Samples files',
 		ITRK: '4',
 	});
-	expect(inputTrack.sampleRate).toBe(outputTrack.sampleRate);
-	expect(inputTrack.numberOfChannels).toBe(outputTrack.numberOfChannels);
-	expect(inputTrack.timeResolution).toBe(outputTrack.timeResolution);
+	expect(await inputTrack.getSampleRate()).toBe(await outputTrack.getSampleRate());
+	expect(await inputTrack.getNumberOfChannels()).toBe(await outputTrack.getNumberOfChannels());
+	expect(await inputTrack.getTimeResolution()).toBe(await outputTrack.getTimeResolution());
 });

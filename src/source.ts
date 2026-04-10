@@ -154,6 +154,7 @@ export abstract class Source extends EventEmitter<SourceEvents> {
 
 	/** @internal */
 	_dispatchRead(start: number, end: number) {
+		// eslint-disable-next-line @typescript-eslint/no-deprecated
 		this.onread?.(start, end);
 		this._emit('read', { start, end });
 	}

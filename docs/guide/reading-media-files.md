@@ -111,21 +111,21 @@ track.isAudioTrack(); // => boolean
 
 // Retrieve the track's language as an ISO 639-2/T language code.
 // Resolves to 'und' (undetermined) if the language isn't known.
-track.languageCode; // => string
+await track.getLanguageCode(); // => string
 
 // A user-defined name for this track.
-track.name; // => string
+await track.getName(); // => string | null
 
 // Information about the intended usage of the track
 // (default, commentary, hearing-impaired, visually-impaired, etc.)
-track.disposition; // TrackDisposition
+await track.getDisposition(); // TrackDisposition
 ```
 
 #### Codec information
 
 You can query metadata related to the track's codec:
 ```ts
-track.codec; // => MediaCodec | null
+await track.getCodec(); // => MediaCodec | null
 ```
 This field is `null` when the track's codec couldn't be recognized or is not supported by Mediabunny. See [Codecs](./supported-formats-and-codecs#codecs) for the full list of supported codecs. When Mediabunny doesn't recognize the format, you can still use the `internalCodecId` field to figure out the codec of the track, although its format depends on the container format used and is not homogenized by Mediabunny.
 
@@ -167,7 +167,7 @@ A _negative start timestamp_ means the track begins *before* the composition doe
 
 Another metric related to track timing info is its *time resolution*, which is given in hertz:
 ```ts
-track.timeResolution; // => 24
+await track.getTimeResolution(); // => 24
 ```
 Intuitively, this is the maximum possible "frame rate" of the track (assuming that no two samples have the same timestamp). Mathematically, if $x$ is equal to a track's time resolution, then all timestamps and durations of that track can be expressed as:
 
@@ -217,25 +217,25 @@ In addition to the [common track metadata](#common-track-metadata), video tracks
 
 ```ts
 // Get the raw pixel dimensions of the track's coded samples:
-videoTrack.codedWidth; // => number
-videoTrack.codedHeight; // => number
+await videoTrack.getCodedWidth(); // => number
+await videoTrack.getCodedHeight(); // => number
 
 // Get the pixel dimensions of the track after aspect ratio adjustments,
 // but before rotation:
-videoTrack.squarePixelWidth; // => number
-videoTrack.squarePixelHeight; // => number
+await videoTrack.getSquarePixelWidth(); // => number
+await videoTrack.getSquarePixelHeight(); // => number
 
 // Get the displayed pixel dimensions of the track's samples, after
 // aspect ratio adjustments and rotation:
-videoTrack.displayWidth; // => number
-videoTrack.displayHeight; // => number
+await videoTrack.getDisplayWidth(); // => number
+await videoTrack.getDisplayHeight(); // => number
 
 // Get the clockwise rotation in degrees by which the
 // track's frames should be rotated:
-videoTrack.rotation; // => 0 | 90 | 180 | 270
+await videoTrack.getRotation(); // => 0 | 90 | 180 | 270
 
 // Get the aspect ratio of the track's pixels (usually 1:1):
-videoTrack.pixelAspectRatio; // => { num: number, den: number }
+await videoTrack.getPixelAspectRatio(); // => { num: number, den: number }
 ```
 
 To compute a video track's average frame rate (FPS), use [`computePacketStats`](#packet-statistics):
@@ -284,10 +284,10 @@ In addition to the [common track metadata](#common-track-metadata), audio tracks
 
 ```ts
 // Get the number of audio channels:
-audioTrack.numberOfChannels; // => number
+await audioTrack.getNumberOfChannels(); // => number
 
 // Get the audio sample rate in hertz:
-audioTrack.sampleRate; // => number
+await audioTrack.getSampleRate(); // => number
 ```
 
 You can retrieve the track's decoder configuration, which is an `AudioDecoderConfig` from the WebCodecs API for usage within `AudioDecoder`:
