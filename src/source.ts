@@ -35,6 +35,16 @@ export type ReadResult = {
 };
 
 /**
+ * A cached byte range in a source. The end offset is exclusive.
+ * @group Input sources
+ * @public
+ */
+export type BufferedByteRange = {
+	start: number;
+	end: number;
+};
+
+/**
  * The source base class, representing a resource from which bytes can be read.
  * @group Input sources
  * @public
@@ -87,6 +97,17 @@ export abstract class Source {
 
 	/** Called each time data is retrieved from the source. Will be called with the retrieved range (end exclusive). */
 	onread: ((start: number, end: number) => unknown) | null = null;
+
+	/**
+	 * Returns the byte ranges that are currently retained by this source's internal cache.
+	 * The returned ranges are end-exclusive and sorted by `start`.
+	 *
+	 * Sources that keep the entire resource in memory return the full range. Sources without
+	 * an inspectable cache return an empty array.
+	 */
+	getBufferedByteRanges(): BufferedByteRange[] {
+		return [];
+	}
 }
 
 /**
@@ -143,6 +164,10 @@ export class BufferSource extends Source {
 
 	/** @internal */
 	_dispose() {}
+
+	override getBufferedByteRanges(): BufferedByteRange[] {
+		return [{ start: 0, end: this._bytes.byteLength }];
+	}
 }
 
 /**
@@ -273,6 +298,10 @@ export class BlobSource extends Source {
 	/** @internal */
 	_dispose() {
 		this._orchestrator.dispose();
+	}
+
+	override getBufferedByteRanges(): BufferedByteRange[] {
+		return this._orchestrator.getBufferedByteRanges();
 	}
 }
 
@@ -631,6 +660,10 @@ export class UrlSource extends Source {
 	_dispose() {
 		this._orchestrator.dispose();
 	}
+
+	override getBufferedByteRanges(): BufferedByteRange[] {
+		return this._orchestrator.getBufferedByteRanges();
+	}
 }
 
 /**
@@ -710,6 +743,10 @@ export class FilePathSource extends Source {
 		this._streamSource._dispose();
 		void this._fileHandle?.close();
 		this._fileHandle = null;
+	}
+
+	override getBufferedByteRanges(): BufferedByteRange[] {
+		return this._streamSource.getBufferedByteRanges();
 	}
 }
 
@@ -901,6 +938,10 @@ export class StreamSource extends Source {
 	_dispose() {
 		this._orchestrator.dispose();
 		this._options.dispose?.();
+	}
+
+	override getBufferedByteRanges(): BufferedByteRange[] {
+		return this._orchestrator.getBufferedByteRanges();
 	}
 }
 
@@ -1166,6 +1207,10 @@ export class ReadableStreamSource extends Source {
 	_dispose() {
 		this._pendingSlices.length = 0;
 		this._cache.length = 0;
+	}
+
+	override getBufferedByteRanges(): BufferedByteRange[] {
+		return this._cache.map(entry => ({ start: entry.start, end: entry.end }));
 	}
 }
 
@@ -1703,5 +1748,9 @@ class ReadOrchestrator {
 		this.workers.length = 0;
 		this.cache.length = 0;
 		this.disposed = true;
+	}
+
+	getBufferedByteRanges(): BufferedByteRange[] {
+		return this.cache.map(entry => ({ start: entry.start, end: entry.end }));
 	}
 }

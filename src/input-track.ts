@@ -30,6 +30,16 @@ export type PacketStats = {
 	averageBitrate: number;
 };
 
+/**
+ * A buffered media time range in seconds. The end timestamp is exclusive.
+ * @group Input files & tracks
+ * @public
+ */
+export type BufferedTimeRange = {
+	start: number;
+	end: number;
+};
+
 export interface InputTrackBacking {
 	getId(): number;
 	getNumber(): number;
@@ -41,6 +51,7 @@ export interface InputTrackBacking {
 	getDisposition(): TrackDisposition;
 	getFirstTimestamp(): Promise<number>;
 	computeDuration(): Promise<number>;
+	getBufferedTimeRanges?(): Promise<BufferedTimeRange[]>;
 
 	getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
 	getPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
@@ -158,6 +169,10 @@ export abstract class InputTrack {
 	/** Returns the end timestamp of the last packet of this track, in seconds. */
 	computeDuration() {
 		return this._backing.computeDuration();
+	}
+
+	async getBufferedTimeRanges() {
+		return this._backing.getBufferedTimeRanges?.() ?? [];
 	}
 
 	/**

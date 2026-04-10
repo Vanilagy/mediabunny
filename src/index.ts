@@ -127,6 +127,7 @@ export {
 } from './output';
 export {
 	Source,
+	BufferedByteRange,
 	BlobSource,
 	BlobSourceOptions,
 	BufferSource,
@@ -173,6 +174,7 @@ export {
 	InputTrack,
 	InputVideoTrack,
 	InputAudioTrack,
+	BufferedTimeRange,
 	PacketStats,
 } from './input-track';
 export {
