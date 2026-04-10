@@ -81,6 +81,9 @@ const output = new Output({
 const conversion = await Conversion.init({
     input,
     output,
+    audio: {
+        codec: 'aac',
+    },
 });
 await conversion.execute();
 
