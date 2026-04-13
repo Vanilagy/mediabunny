@@ -8,7 +8,7 @@
 
 import { AES_128_BLOCK_SIZE, createAes128CbcDecryptStream } from '../aes';
 import { ENCRYPTION_KEY_CACHE_GROUP, Input } from '../input';
-import { Segment, SegmentedInput, SegmentRetrievalOptions } from '../segmented-input';
+import { Segment, SegmentedInput, SegmentedInputTrackDeclaration, SegmentRetrievalOptions } from '../segmented-input';
 import { toDataView, joinPaths, last, assert, binarySearchLessOrEqual, arrayArgmin, wait } from '../misc';
 import { readAllLines, readBytes, Reader } from '../reader';
 import { PathedSource, ReadableStreamSource, SourceRef } from '../source';
@@ -51,9 +51,10 @@ export class HlsSegmentedInput extends SegmentedInput {
 	constructor(
 		demuxer: HlsDemuxer,
 		path: string,
+		trackDeclarations: SegmentedInputTrackDeclaration[] | null,
 		lines: string[] | null,
 	) {
-		super(demuxer.input, path);
+		super(demuxer.input, path, trackDeclarations);
 
 		this.demuxer = demuxer;
 		this.nextLines = lines;

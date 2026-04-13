@@ -8,9 +8,8 @@
 
 import { TrackType } from './output';
 import { MediaCodec } from './codec';
-import { Demuxer, DurationMetadataRequestOptions } from './demuxer';
+import { DurationMetadataRequestOptions } from './demuxer';
 import { Input } from './input';
-import { VirtualInputFormat } from './input-format';
 import {
 	InputAudioTrack,
 	InputAudioTrackBacking,
@@ -20,10 +19,8 @@ import {
 	InputVideoTrackBacking,
 } from './input-track';
 import { PacketRetrievalOptions } from './media-sink';
-import { MetadataTags } from './metadata';
-import { arrayCount, assert, roundToDivisor } from './misc';
+import { arrayCount, assert, MaybePromise, roundToDivisor } from './misc';
 import { EncodedPacket } from './packet';
-import { NullSource } from './source';
 
 export type SegmentedInputMetadata = {
 	name: string | null;
@@ -52,11 +49,16 @@ export type SegmentRetrievalOptions = {
 	skipLiveWait?: boolean;
 };
 
+export type SegmentedInputTrackDeclaration = {
+	id: number;
+	type: TrackType;
+};
+
 export abstract class SegmentedInput {
 	input: Input;
 	path: string;
+	trackDeclarations: SegmentedInputTrackDeclaration[] | null;
 
-	virtualInput: Input | null = null;
 	nextInputCacheAge = 0;
 	inputCache: {
 		segment: Segment;
@@ -64,9 +66,14 @@ export abstract class SegmentedInput {
 		age: number;
 	}[] = [];
 
-	constructor(input: Input, path: string) {
+	trackBackingsPromise: Promise<InputTrackBacking[]> | null = null;
+	firstSegment: Segment | null = null;
+	firstSegmentFirstTimestamps = new WeakMap<Segment, number>();
+
+	constructor(input: Input, path: string, trackDeclarations: SegmentedInputTrackDeclaration[] | null) {
 		this.input = input;
 		this.path = path;
+		this.trackDeclarations = trackDeclarations;
 	}
 
 	abstract getFirstSegment(options: SegmentRetrievalOptions): Promise<Segment | null>;
@@ -88,67 +95,56 @@ export abstract class SegmentedInput {
 		return lastSegment.timestamp + lastSegment.duration;
 	}
 
-	toInput() {
-		return this.virtualInput ??= new Input({
-			source: new NullSource(),
-			formats: [new VirtualInputFormat(() => new SegmentedInputDemuxer(this.input, this))],
-		});
-	}
-
-	dispose() {
-		for (const entry of this.inputCache) {
-			entry.input.dispose();
-		}
-		this.inputCache.length = 0;
-
-		this.virtualInput?.dispose();
-	}
-}
-
-class SegmentedInputDemuxer extends Demuxer {
-	segmentedInput: SegmentedInput;
-	trackBackingsPromise: Promise<InputTrackBacking[]> | null = null;
-	firstSegment: Segment | null = null;
-	firstSegmentFirstTimestamps = new WeakMap<Segment, number>();
-
-	constructor(input: Input, segmentedInput: SegmentedInput) {
-		super(input);
-
-		this.segmentedInput = segmentedInput;
-	}
-
-	async getMetadataTags(): Promise<MetadataTags> {
-		throw new Error('Unreachable');
-	}
-
-	async getMimeType(): Promise<string> {
-		throw new Error('Unreachable');
-	}
-
 	async getTrackBackings(): Promise<InputTrackBacking[]> {
 		return this.trackBackingsPromise ??= (async () => {
-			this.firstSegment = await this.segmentedInput.getFirstSegment({});
-			if (!this.firstSegment) {
-				return [];
-			}
-
-			const input = this.segmentedInput.getInputForSegment(this.firstSegment);
-			const inputTracks = await input.getTracks();
-
 			const backings: InputTrackBacking[] = [];
-			for (const track of inputTracks) {
-				if (track.type === 'video') {
-					const number = arrayCount(backings, x => x.getType() === 'video') + 1;
 
-					backings.push(
-						new SegmentedInputInputVideoTrackBacking(track, this, number),
-					);
-				} else if (track.type === 'audio') {
-					const number = arrayCount(backings, x => x.getType() === 'audio') + 1;
+			if (this.trackDeclarations) {
+				for (const decl of this.trackDeclarations) {
+					if (decl.type === 'video') {
+						const number = arrayCount(backings, x => x.getType() === 'video') + 1;
 
-					backings.push(
-						new SegmentedInputInputAudioTrackBacking(track, this, number),
-					);
+						backings.push(
+							new SegmentedInputInputVideoTrackBacking(this, decl, number),
+						);
+					} else if (decl.type === 'audio') {
+						const number = arrayCount(backings, x => x.getType() === 'audio') + 1;
+
+						backings.push(
+							new SegmentedInputInputAudioTrackBacking(this, decl, number),
+						);
+					}
+				}
+			} else {
+				// There are no declarations, we must determine the tracks from the first segment
+				this.firstSegment = await this.getFirstSegment({});
+				if (!this.firstSegment) {
+					return [];
+				}
+
+				const input = this.getInputForSegment(this.firstSegment);
+				const inputTracks = await input.getTracks();
+
+				for (const track of inputTracks) {
+					if (track.type === 'video') {
+						const number = arrayCount(backings, x => x.getType() === 'video') + 1;
+
+						backings.push(
+							new SegmentedInputInputVideoTrackBacking(this, {
+								id: backings.length + 1,
+								type: 'video',
+							}, number),
+						);
+					} else if (track.type === 'audio') {
+						const number = arrayCount(backings, x => x.getType() === 'audio') + 1;
+
+						backings.push(
+							new SegmentedInputInputAudioTrackBacking(this, {
+								id: backings.length + 1,
+								type: 'audio',
+							}, number),
+						);
+					}
 				}
 			}
 
@@ -163,7 +159,7 @@ class SegmentedInputDemuxer extends Demuxer {
 		if (this.firstSegmentFirstTimestamps.has(firstSegment)) {
 			firstSegmentFirstTimestamp = this.firstSegmentFirstTimestamps.get(firstSegment)!;
 		} else {
-			const firstInput = this.segmentedInput.getInputForSegment(firstSegment);
+			const firstInput = this.getInputForSegment(firstSegment);
 			firstSegmentFirstTimestamp = await firstInput.getFirstTimestamp();
 			this.firstSegmentFirstTimestamps.set(firstSegment, firstSegmentFirstTimestamp);
 		}
@@ -189,6 +185,13 @@ class SegmentedInputDemuxer extends Demuxer {
 			return segment.timestamp - segmentFirstTimestamp;
 		}
 	}
+
+	dispose() {
+		for (const entry of this.inputCache) {
+			entry.input.dispose();
+		}
+		this.inputCache.length = 0;
+	}
 }
 
 type PacketInfo = {
@@ -198,93 +201,126 @@ type PacketInfo = {
 };
 
 class SegmentedInputInputTrackBacking implements InputTrackBacking {
-	firstInputTrack: InputTrack;
-	demuxer: SegmentedInputDemuxer;
-	packetInfos = new WeakMap<EncodedPacket, PacketInfo>();
+	segmentedInput: SegmentedInput;
+	decl: SegmentedInputTrackDeclaration;
 	number: number;
+	packetInfos = new WeakMap<EncodedPacket, PacketInfo>();
 
-	constructor(firstInputTrack: InputTrack, demuxer: SegmentedInputDemuxer, number: number) {
-		this.firstInputTrack = firstInputTrack;
-		this.demuxer = demuxer;
+	hydrationPromise: Promise<void> | null = null;
+	firstInputTrack: InputTrack | null = null;
+
+	constructor(segmentedInput: SegmentedInput, decl: SegmentedInputTrackDeclaration, number: number) {
+		this.segmentedInput = segmentedInput;
+		this.decl = decl;
 		this.number = number;
 	}
 
-	getType(): TrackType {
-		return this.firstInputTrack._backing.getType();
-	}
+	hydrate() {
+		return this.hydrationPromise ??= (async () => {
+			this.segmentedInput.firstSegment ??= await this.segmentedInput.getFirstSegment({});
+			if (!this.segmentedInput.firstSegment) {
+				throw new Error('Missing first segment, can\'t retrieve track.');
+			}
 
-	getDecoderConfig() {
-		return this.firstInputTrack._backing.getDecoderConfig();
-	}
+			const input = this.segmentedInput.getInputForSegment(this.segmentedInput.firstSegment);
+			const inputTracks = await input.getTracks();
 
-	getHasOnlyKeyPackets() {
-		return this.firstInputTrack.getHasOnlyKeyPackets();
+			const track = inputTracks.find(x => x.type === this.decl.type && x.number === this.number);
+			if (!track) {
+				throw new Error('No matching track found in underlying media data.');
+			}
+
+			this.firstInputTrack = track;
+		})();
 	}
 
 	getId(): number {
-		return this.firstInputTrack._backing.getId();
+		return this.decl.id;
 	}
 
-	getPairingMask() {
-		return this.firstInputTrack._backing.getPairingMask();
+	getType(): TrackType {
+		return this.decl.type;
 	}
 
 	getNumber(): number {
 		return this.number;
 	}
 
+	/** If the backing track is already present, delegate synchronously; otherwise, hydrate first. */
+	delegate<T>(fn: () => MaybePromise<T>): MaybePromise<T> {
+		if (this.firstInputTrack) {
+			return fn();
+		}
+
+		return this.hydrate().then(fn);
+	}
+
+	async getDecoderConfig() {
+		return this.delegate(() => this.firstInputTrack!._backing.getDecoderConfig());
+	}
+
+	getHasOnlyKeyPackets() {
+		return this.delegate(() => this.firstInputTrack!._backing.getHasOnlyKeyPackets?.() ?? null);
+	}
+
+	getPairingMask() {
+		return 1n;
+	}
+
 	getCodec() {
-		return this.firstInputTrack._backing.getCodec();
+		return this.delegate(() => this.firstInputTrack!._backing.getCodec());
 	}
 
 	getInternalCodecId() {
-		return this.firstInputTrack._backing.getInternalCodecId();
+		return this.delegate(() => this.firstInputTrack!._backing.getInternalCodecId());
 	}
 
 	getDisposition() {
-		return this.firstInputTrack._backing.getDisposition();
+		return this.delegate(() => this.firstInputTrack!._backing.getDisposition());
 	}
 
 	getLanguageCode() {
-		return this.firstInputTrack._backing.getLanguageCode();
+		return this.delegate(() => this.firstInputTrack!._backing.getLanguageCode());
 	}
 
 	getName() {
-		return this.firstInputTrack._backing.getName();
+		return this.delegate(() => this.firstInputTrack!._backing.getName());
 	}
 
 	getTimeResolution() {
-		return this.firstInputTrack._backing.getTimeResolution();
+		return this.delegate(() => this.firstInputTrack!._backing.getTimeResolution());
 	}
 
-	isRelativeToUnixEpoch() {
-		assert(this.demuxer.firstSegment);
-		return this.demuxer.firstSegment.relativeToUnixEpoch;
+	async isRelativeToUnixEpoch() {
+		await this.hydrate();
+
+		assert(this.segmentedInput.firstSegment);
+		return this.segmentedInput.firstSegment.relativeToUnixEpoch;
 	}
 
 	getBitrate() {
-		return this.firstInputTrack._backing.getBitrate();
+		return this.delegate(() => this.firstInputTrack!._backing.getBitrate());
 	}
 
 	getAverageBitrate() {
-		return this.firstInputTrack._backing.getAverageBitrate();
+		return this.delegate(() => this.firstInputTrack!._backing.getAverageBitrate());
 	}
 
 	getDurationFromMetadata(options: DurationMetadataRequestOptions): Promise<number | null> {
-		return this.demuxer.segmentedInput.getDurationFromMetadata(options);
+		return this.segmentedInput.getDurationFromMetadata(options);
 	}
 
 	getLiveRefreshInterval(): Promise<number | null> {
-		return this.demuxer.segmentedInput.getLiveRefreshInterval();
+		return this.segmentedInput.getLiveRefreshInterval();
 	}
 
 	async createAdjustedPacket(packet: EncodedPacket, segment: Segment, track: InputTrack) {
 		assert(packet.sequenceNumber >= 0);
-		assert(this.demuxer.firstSegment);
+		assert(this.segmentedInput.firstSegment);
 
-		const mediaOffset = await this.demuxer.getMediaOffset(segment, track.input);
+		const mediaOffset = await this.segmentedInput.getMediaOffset(segment, track.input);
 		// If we didn't do this then sequence numbers would exceed Number.MAX_SAFE_INTEGER for Unix-timestamped segments
-		const segmentTimestampRelativeToFirst = segment.timestamp - this.demuxer.firstSegment.timestamp;
+		const segmentTimestampRelativeToFirst = segment.timestamp - this.segmentedInput.firstSegment.timestamp;
 
 		const modified = packet.clone({
 			timestamp: roundToDivisor(
@@ -306,14 +342,17 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 	}
 
 	async getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
-		assert(this.demuxer.firstSegment);
+		await this.hydrate();
+
+		assert(this.segmentedInput.firstSegment);
+		assert(this.firstInputTrack);
 
 		const packet = await this.firstInputTrack._backing.getFirstPacket(options);
 		if (!packet) {
 			return null;
 		}
 
-		return this.createAdjustedPacket(packet, this.demuxer.firstSegment, this.firstInputTrack);
+		return this.createAdjustedPacket(packet, this.segmentedInput.firstSegment, this.firstInputTrack);
 	}
 
 	getNextPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
@@ -343,14 +382,14 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 
 		let currentSegment: Segment | null = info.segment;
 		while (true) {
-			const nextSegment = await this.demuxer.segmentedInput.getNextSegment(currentSegment, {
+			const nextSegment = await this.segmentedInput.getNextSegment(currentSegment, {
 				skipLiveWait: options.skipLiveWait,
 			});
 			if (!nextSegment) {
 				return null;
 			}
 
-			const nextInput = this.demuxer.segmentedInput.getInputForSegment(nextSegment);
+			const nextInput = this.segmentedInput.getInputForSegment(nextSegment);
 			const nextTracks = await nextInput.getTracks();
 			const nextTrack = nextTracks.find(t => t.type === info.track.type && t.number === info.track.number);
 
@@ -381,29 +420,31 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 		options: PacketRetrievalOptions,
 		keyframesOnly: boolean,
 	): Promise<EncodedPacket | null> {
-		let currentSegment = await this.demuxer.segmentedInput.getSegmentAt(timestamp, {
+		let currentSegment = await this.segmentedInput.getSegmentAt(timestamp, {
 			skipLiveWait: options.skipLiveWait,
 		});
 		if (!currentSegment) {
 			return null;
 		}
 
+		await this.hydrate();
+
 		while (currentSegment) {
-			const input = this.demuxer.segmentedInput.getInputForSegment(currentSegment);
+			const input = this.segmentedInput.getInputForSegment(currentSegment);
 			const tracks = await input.getTracks();
 			const track = tracks.find(t => (
-				t.type === this.firstInputTrack.type && t.number === this.firstInputTrack.number
+				t.type === this.firstInputTrack!.type && t.number === this.firstInputTrack!.number
 			));
 
 			if (!track) {
 				// Search the previous segment
-				currentSegment = await this.demuxer.segmentedInput.getPreviousSegment(currentSegment, {
+				currentSegment = await this.segmentedInput.getPreviousSegment(currentSegment, {
 					skipLiveWait: options.skipLiveWait,
 				});
 				continue;
 			}
 
-			const mediaOffset = await this.demuxer.getMediaOffset(currentSegment, input);
+			const mediaOffset = await this.segmentedInput.getMediaOffset(currentSegment, input);
 
 			const offsetTimestamp = timestamp - mediaOffset;
 			const packet = keyframesOnly
@@ -412,7 +453,7 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 
 			if (!packet) {
 				// Search the previous segment
-				currentSegment = await this.demuxer.segmentedInput.getPreviousSegment(currentSegment, {
+				currentSegment = await this.segmentedInput.getPreviousSegment(currentSegment, {
 					skipLiveWait: options.skipLiveWait,
 				});
 				continue;
@@ -428,46 +469,46 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 class SegmentedInputInputVideoTrackBacking
 	extends SegmentedInputInputTrackBacking
 	implements InputVideoTrackBacking {
-	override firstInputTrack!: InputVideoTrack;
+	override firstInputTrack!: InputVideoTrack | null;
 
 	override getType() {
 		return 'video' as const;
 	}
 
 	override getCodec() {
-		return this.firstInputTrack._backing.getCodec();
+		return this.delegate(() => this.firstInputTrack!._backing.getCodec());
 	}
 
 	getCodedWidth() {
-		return this.firstInputTrack._backing.getCodedWidth();
+		return this.delegate(() => this.firstInputTrack!._backing.getCodedWidth());
 	}
 
 	getCodedHeight() {
-		return this.firstInputTrack._backing.getCodedHeight();
+		return this.delegate(() => this.firstInputTrack!._backing.getCodedHeight());
 	}
 
 	getSquarePixelWidth() {
-		return this.firstInputTrack._backing.getSquarePixelWidth();
+		return this.delegate(() => this.firstInputTrack!._backing.getSquarePixelWidth());
 	}
 
 	getSquarePixelHeight() {
-		return this.firstInputTrack._backing.getSquarePixelHeight();
+		return this.delegate(() => this.firstInputTrack!._backing.getSquarePixelHeight());
 	}
 
 	getRotation() {
-		return this.firstInputTrack._backing.getRotation();
+		return this.delegate(() => this.firstInputTrack!._backing.getRotation());
 	}
 
-	getColorSpace(): Promise<VideoColorSpaceInit> {
-		return this.firstInputTrack._backing.getColorSpace();
+	async getColorSpace(): Promise<VideoColorSpaceInit> {
+		return this.delegate(() => this.firstInputTrack!._backing.getColorSpace());
 	}
 
-	canBeTransparent(): Promise<boolean> {
-		return this.firstInputTrack._backing.canBeTransparent();
+	async canBeTransparent(): Promise<boolean> {
+		return this.delegate(() => this.firstInputTrack!._backing.canBeTransparent());
 	}
 
-	override getDecoderConfig(): Promise<VideoDecoderConfig | null> {
-		return this.firstInputTrack._backing.getDecoderConfig();
+	override async getDecoderConfig(): Promise<VideoDecoderConfig | null> {
+		return this.delegate(() => this.firstInputTrack!._backing.getDecoderConfig());
 	}
 }
 
@@ -481,18 +522,18 @@ class SegmentedInputInputAudioTrackBacking
 	}
 
 	override getCodec() {
-		return this.firstInputTrack._backing.getCodec();
+		return this.delegate(() => this.firstInputTrack._backing.getCodec());
 	}
 
 	getNumberOfChannels() {
-		return this.firstInputTrack._backing.getNumberOfChannels();
+		return this.delegate(() => this.firstInputTrack._backing.getNumberOfChannels());
 	}
 
 	getSampleRate() {
-		return this.firstInputTrack._backing.getSampleRate();
+		return this.delegate(() => this.firstInputTrack._backing.getSampleRate());
 	}
 
-	override getDecoderConfig(): Promise<AudioDecoderConfig | null> {
-		return this.firstInputTrack._backing.getDecoderConfig();
+	override async getDecoderConfig(): Promise<AudioDecoderConfig | null> {
+		return this.delegate(() => this.firstInputTrack._backing.getDecoderConfig());
 	}
 }

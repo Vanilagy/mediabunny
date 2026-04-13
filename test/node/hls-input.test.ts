@@ -204,7 +204,7 @@ test.concurrent('Big Buck Bunny', { timeout: 15_000 }, async () => {
 	expect(await input.getDurationFromMetadata()).not.toBe(null);
 });
 
-test.concurrent('Big Buck Bunny codec parameter strings from master playlist', { timeout: 15_000 }, async () => {
+test.concurrent('Big Buck Bunny, codec parameter strings from master playlist', { timeout: 15_000 }, async () => {
 	using input = createInputFrom('https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8', ALL_FORMATS);
 
 	let sourceCount = 0;
@@ -226,6 +226,23 @@ test.concurrent('Big Buck Bunny codec parameter strings from master playlist', {
 	]));
 
 	expect(sourceCount).toBe(1);
+});
+
+test.concurrent('Big Buck Bunny, determining duration from metadata', { timeout: 15_000 }, async () => {
+	using input = createInputFrom('https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8', ALL_FORMATS);
+
+	let sourceCount = 0;
+	input.on('source', () => sourceCount++);
+
+	const track = await input.getPrimaryVideoTrack();
+	assert(track);
+
+	expect(sourceCount).toBe(1);
+
+	const approxDuration = await track.getDurationFromMetadata();
+	expect(approxDuration).toBe(634.567);
+
+	expect(sourceCount).toBe(2); // We needed to read the playlist, but not any segment
 });
 
 test.concurrent('Single-variant Big Buck Bunny', { timeout: 15_000 }, async () => {

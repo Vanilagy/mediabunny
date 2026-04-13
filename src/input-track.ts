@@ -77,7 +77,7 @@ export abstract class InputTrack {
 
 	/** The type of the track. */
 	abstract get type(): TrackType;
-	/** The codec of the track's packets. */
+	/** Returns the codec of the track's packets. */
 	abstract getCodec(): Promise<MediaCodec | null>;
 	/**
 	 * The codec of the track's packets.
@@ -94,7 +94,10 @@ export abstract class InputTrack {
 	 * into its bitstream. Returns null if the type couldn't be determined.
 	 */
 	abstract determinePacketType(packet: EncodedPacket): Promise<PacketType | null>;
-	/** Whether the track metadata says that this track only contains key packets. The actual packets may differ. */
+	/**
+	 * Returns whether the track metadata says that this track only contains key packets. The actual packets may
+	 * differ.
+	 */
 	abstract getHasOnlyKeyPackets(): Promise<boolean>;
 	/**
 	 * Whether the track metadata says that this track only contains key packets. The actual packets may differ.
@@ -128,7 +131,7 @@ export abstract class InputTrack {
 	}
 
 	/**
-	 * The identifier of the codec used internally by the container. It is not homogenized by Mediabunny
+	 * Returns the identifier of the codec used internally by the container. It is not homogenized by Mediabunny
 	 * and depends entirely on the container format.
 	 *
 	 * This method can be used to determine the codec of a track in case Mediabunny doesn't know that codec.
@@ -153,7 +156,7 @@ export abstract class InputTrack {
 	}
 
 	/**
-	 * The ISO 639-2/T language code for this track. If the language is unknown, this resolves to `'und'`
+	 * Returns the ISO 639-2/T language code for this track. If the language is unknown, this resolves to `'und'`
 	 * (undetermined).
 	 */
 	async getLanguageCode() {
@@ -168,7 +171,7 @@ export abstract class InputTrack {
 		return requireSync(this._backing.getLanguageCode(), 'languageCode', 'getLanguageCode');
 	}
 
-	/** A user-defined name for this track. */
+	/** Returns the user-defined name for this track. */
 	async getName() {
 		return this._backing.getName();
 	}
@@ -182,7 +185,7 @@ export abstract class InputTrack {
 	}
 
 	/**
-	 * A positive number x such that all timestamps and durations of all packets of this track are
+	 * Returns a positive number x such that all timestamps and durations of all packets of this track are
 	 * integer multiples of 1/x.
 	 */
 	async getTimeResolution() {
@@ -199,8 +202,8 @@ export abstract class InputTrack {
 	}
 
 	/**
-	 * Whether the timestamps of this track are relative to the Unix epoch (January 1, 1970 00:00:00 UTC). When `true`,
-	 * each timestamp maps to a definitive point in time.
+	 * Returns whether the timestamps of this track are relative to the Unix epoch (January 1, 1970 00:00:00 UTC).
+	 * When `true`, each timestamp maps to a definitive point in time.
 	 */
 	async getIsRelativeToUnixEpoch() {
 		return this._backing.isRelativeToUnixEpoch();
@@ -219,7 +222,7 @@ export abstract class InputTrack {
 		);
 	}
 
-	/** The track's disposition, i.e. information about its intended usage. */
+	/** Returns the track's disposition, i.e. information about its intended usage. */
 	async getDisposition() {
 		return this._backing.getDisposition();
 	}
@@ -233,8 +236,8 @@ export abstract class InputTrack {
 	}
 
 	/**
-	 * The peak bitrate of the track, in bits per second, as specified in the track's metadata. This might not match the
-	 * actual media data's bitrate.
+	 * Returns the peak bitrate of the track in bits per second, as specified in the track's metadata. This might not
+	 * match the actual media data's bitrate.
 	 */
 	async getBitrate() {
 		return this._backing.getBitrate();
@@ -250,8 +253,8 @@ export abstract class InputTrack {
 	}
 
 	/**
-	 * The average bitrate of the track, in bits per second, as specified in the track's metadata. This might not match
-	 * the actual media data's bitrate.
+	 * Returns the average bitrate of the track in bits per second, as specified in the track's metadata. This might
+	 * not match the actual media data's bitrate.
 	 */
 	async getAverageBitrate() {
 		return this._backing.getAverageBitrate();
@@ -552,7 +555,10 @@ export class InputVideoTrack extends InputTrack {
 		return requireSync(this._backing.getCodec(), 'codec', 'getCodec');
 	}
 
-	/** Whether the track metadata says that this track only contains key packets. The actual packets may differ. */
+	/**
+	 * Returns whether the track metadata says that this track only contains key packets. The actual packets may
+	 * differ.
+	 */
 	async getHasOnlyKeyPackets() {
 		return (await this._backing.getHasOnlyKeyPackets?.()) ?? false;
 	}
@@ -569,7 +575,7 @@ export class InputVideoTrack extends InputTrack {
 		return requireSync(raw, 'hasOnlyKeyPackets', 'getHasOnlyKeyPackets') ?? false;
 	}
 
-	/** The width in pixels of the track's coded samples, before any transformations or rotations. */
+	/** Returns the width in pixels of the track's coded samples, before any transformations or rotations. */
 	async getCodedWidth() {
 		return this._backing.getCodedWidth();
 	}
@@ -582,7 +588,7 @@ export class InputVideoTrack extends InputTrack {
 		return requireSync(this._backing.getCodedWidth(), 'codedWidth', 'getCodedWidth');
 	}
 
-	/** The height in pixels of the track's coded samples, before any transformations or rotations. */
+	/** Returns the height in pixels of the track's coded samples, before any transformations or rotations. */
 	async getCodedHeight() {
 		return this._backing.getCodedHeight();
 	}
@@ -595,7 +601,7 @@ export class InputVideoTrack extends InputTrack {
 		return requireSync(this._backing.getCodedHeight(), 'codedHeight', 'getCodedHeight');
 	}
 
-	/** The angle in degrees by which the track's frames should be rotated (clockwise). */
+	/** Returns the angle in degrees by which the track's frames should be rotated (clockwise). */
 	async getRotation() {
 		return this._backing.getRotation();
 	}
@@ -608,7 +614,9 @@ export class InputVideoTrack extends InputTrack {
 		return requireSync(this._backing.getRotation(), 'rotation', 'getRotation');
 	}
 
-	/** The width of the track's frames in square pixels, adjusted for pixel aspect ratio but before rotation. */
+	/**
+	 * Returns the width of the track's frames in square pixels, adjusted for pixel aspect ratio but before rotation.
+	 */
 	async getSquarePixelWidth() {
 		return this._backing.getSquarePixelWidth();
 	}
@@ -621,7 +629,9 @@ export class InputVideoTrack extends InputTrack {
 		return requireSync(this._backing.getSquarePixelWidth(), 'squarePixelWidth', 'getSquarePixelWidth');
 	}
 
-	/** The height of the track's frames in square pixels, adjusted for pixel aspect ratio but before rotation. */
+	/**
+	 * Returns the height of the track's frames in square pixels, adjusted for pixel aspect ratio but before rotation.
+	 */
 	async getSquarePixelHeight() {
 		return this._backing.getSquarePixelHeight();
 	}
@@ -635,7 +645,7 @@ export class InputVideoTrack extends InputTrack {
 	}
 
 	/**
-	 * The pixel aspect ratio of the track's frames, as a rational number in its reduced form. Most videos use
+	 * Returns the pixel aspect ratio of the track's frames as a rational number in its reduced form. Most videos use
 	 * square pixels (1:1).
 	 */
 	async getPixelAspectRatio() {
@@ -661,7 +671,7 @@ export class InputVideoTrack extends InputTrack {
 		});
 	}
 
-	/** The display width of the track's frames in pixels, after aspect ratio adjustment and rotation. */
+	/** Returns the display width of the track's frames in pixels, after aspect ratio adjustment and rotation. */
 	async getDisplayWidth() {
 		const metadata = await this._backing.getMetadataDisplayWidth?.();
 		if (metadata != null) {
@@ -692,7 +702,7 @@ export class InputVideoTrack extends InputTrack {
 		return requireSync(value, 'displayWidth', 'getDisplayWidth');
 	}
 
-	/** The display height of the track's frames in pixels, after aspect ratio adjustment and rotation. */
+	/** Returns the display height of the track's frames in pixels, after aspect ratio adjustment and rotation. */
 	async getDisplayHeight() {
 		const metadata = await this._backing.getMetadataDisplayHeight?.();
 		if (metadata != null) {
@@ -848,7 +858,10 @@ export class InputAudioTrack extends InputTrack {
 		return requireSync(this._backing.getCodec(), 'codec', 'getCodec');
 	}
 
-	/** Whether the track metadata says that this track only contains key packets. The actual packets may differ. */
+	/**
+	 * Returns whether the track metadata says that this track only contains key packets. The actual packets may
+	 * differ.
+	 */
 	async getHasOnlyKeyPackets() {
 		return (await this._backing.getHasOnlyKeyPackets?.()) ?? true;
 	}
@@ -865,7 +878,7 @@ export class InputAudioTrack extends InputTrack {
 		return requireSync(raw, 'hasOnlyKeyPackets', 'getHasOnlyKeyPackets') ?? true;
 	}
 
-	/** The number of audio channels in the track. */
+	/** Returns the number of audio channels in the track. */
 	async getNumberOfChannels() {
 		return this._backing.getNumberOfChannels();
 	}
@@ -878,7 +891,7 @@ export class InputAudioTrack extends InputTrack {
 		return requireSync(this._backing.getNumberOfChannels(), 'numberOfChannels', 'getNumberOfChannels');
 	}
 
-	/** The track's audio sample rate in hertz. */
+	/** Returns the track's audio sample rate in hertz. */
 	async getSampleRate() {
 		return this._backing.getSampleRate();
 	}

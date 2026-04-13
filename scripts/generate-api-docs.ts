@@ -68,6 +68,10 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 	const classHierarchy = new Map<string, string[]>(); // Maps parent class to array of subclasses
 	const classInstances = new Map<string, string[]>(); // Maps class name to array of instance variable names
 
+	const hasDeprecatedTag = (node: ts.Node): boolean => {
+		return ts.getJSDocTags(node).some(tag => tag.tagName.text === 'deprecated');
+	};
+
 	const collectExportedTypes = (module: ts.Symbol, visited = new Set<ts.Symbol>()): void => {
 		if (visited.has(module)) return;
 		visited.add(module);
@@ -77,12 +81,12 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 			const declaration = exportSymbol.valueDeclaration || exportSymbol.declarations?.[0];
 			if (!declaration) return;
 
-			// Collect classes, interfaces, types, enums, variables (only if @public)
+			// Collect classes, interfaces, types, enums, variables (only if @public and not @deprecated)
 			if (ts.isClassDeclaration(declaration) || ts.isInterfaceDeclaration(declaration)
 				|| ts.isTypeAliasDeclaration(declaration) || ts.isEnumDeclaration(declaration)
 				|| ts.isVariableDeclaration(declaration)) {
 				const hasPublicTag = ts.getJSDocTags(declaration).some(tag => tag.tagName.text === 'public');
-				if (hasPublicTag) {
+				if (hasPublicTag && !hasDeprecatedTag(declaration)) {
 					exportedTypes.add(exportSymbol.getName());
 				}
 			}
@@ -92,9 +96,9 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 				const aliasedSymbol = typeChecker.getAliasedSymbol(exportSymbol);
 				const aliasedDeclaration = aliasedSymbol.valueDeclaration || aliasedSymbol.declarations?.[0];
 				if (aliasedDeclaration) {
-					// Check if the aliased symbol has @public tag
+					// Check if the aliased symbol has @public tag and is not deprecated
 					const hasPublicTag = ts.getJSDocTags(aliasedDeclaration).some(tag => tag.tagName.text === 'public');
-					if (hasPublicTag) {
+					if (hasPublicTag && !hasDeprecatedTag(aliasedDeclaration)) {
 						exportedTypes.add(exportSymbol.getName());
 					}
 
@@ -133,10 +137,10 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 					}
 				}
 			}
-			// Otherwise, add any symbol with @public tag (we'll filter by type later)
+			// Otherwise, add any symbol with @public tag and not @deprecated (we'll filter by type later)
 			else {
 				const hasPublicTag = ts.getJSDocTags(declaration).some(tag => tag.tagName.text === 'public');
-				if (hasPublicTag) {
+				if (hasPublicTag && !hasDeprecatedTag(declaration)) {
 					symbols.push(exportSymbol);
 				}
 			}
@@ -621,9 +625,10 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 		const nodeKind = ts.SyntaxKind[declaration.kind];
 		const symbolName = (declaration as any).name?.getText() || exportSymbol.getName();
 
-		// Only process symbols with @public tag
+		// Only process symbols with @public tag, and skip deprecated ones entirely
 		const hasPublicTag = ts.getJSDocTags(declaration).some(tag => tag.tagName.text === 'public');
 		if (!hasPublicTag) return;
+		if (hasDeprecatedTag(declaration)) return;
 
 		// Check for @group tag (handle re-exports by looking at the original declaration)
 		let targetDeclaration = declaration;
@@ -766,6 +771,8 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 			const events: string[] = [];
 			const methods: string[] = [];
 			const staticMethods: string[] = [];
+			const deprecatedProperties: string[] = [];
+			const deprecatedMethods: string[] = [];
 			let constructor: string | null = null;
 			let extendsClause = '';
 			let implementsClause = '';
@@ -1021,6 +1028,53 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 				const hasInternalTag = ts.getJSDocTags(member).some(tag => tag.tagName.text === 'internal');
 				if (hasInternalTag) return;
 
+				const isDeprecatedMember = hasDeprecatedTag(member);
+
+				const getDeprecationNotice = () => {
+					const tag = ts.getJSDocTags(member).find(t => t.tagName.text === 'deprecated');
+					let text = '';
+					if (tag?.comment) {
+						if (typeof tag.comment === 'string') {
+							text = processLinkTags(tag.comment.trim(), className);
+						} else {
+							// comment is a NodeArray of JSDocComment elements (text + inline tags)
+							const raw = tag.comment.map((part) => {
+								if (ts.isJSDocLinkLike(part)) {
+									const linkName = part.name?.getText() ?? '';
+									const linkText = part.text?.trim() ?? '';
+									// Reconstruct as {@link Name text}
+									return `{@link ${linkName}${linkText ? ' ' + linkText : ''}}`;
+								}
+								return part.text ?? '';
+							}).join('');
+							text = processLinkTags(raw.trim(), className);
+						}
+					}
+					return text ? `> **Deprecated.** ${text}\n\n` : '> **Deprecated.**\n\n';
+				};
+
+				const addDeprecationNotice = (content: string) => {
+					// Insert the deprecation notice right after the heading line
+					const headingEnd = content.indexOf('\n');
+					return content.slice(0, headingEnd) + '\n\n' + getDeprecationNotice() + content.slice(headingEnd + 1);
+				};
+
+				const pushProperty = (content: string) => {
+					if (isDeprecatedMember) {
+						deprecatedProperties.push(addDeprecationNotice(content));
+					} else {
+						properties.push(content);
+					}
+				};
+
+				const pushMethod = (content: string) => {
+					if (isDeprecatedMember) {
+						deprecatedMethods.push(addDeprecationNotice(content));
+					} else {
+						methods.push(content);
+					}
+				};
+
 				if (ts.isConstructorDeclaration(member) && !isAbstract) {
 					// Skip private constructors
 					const isPrivate = member.modifiers?.some(mod => mod.kind === ts.SyntaxKind.PrivateKeyword);
@@ -1231,7 +1285,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 					if (isEventHandler) {
 						events.push(propertyContent);
 					} else {
-						properties.push(propertyContent);
+						pushProperty(propertyContent);
 					}
 				} else if (ts.isGetAccessorDeclaration(member) && member.name) {
 					const name = member.name.getText();
@@ -1264,7 +1318,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 					references.forEach(ref => addUsage(ref, className, name, 'property'));
 
 					const inheritedBadge = '';
-					properties.push(`### \`${name}\`${inheritedBadge}\n\n\`\`\`ts\n${accessorDef}\n\`\`\`${desc ? `\n\n${desc}` : ''}${referencesText}`);
+					pushProperty(`### \`${name}\`${inheritedBadge}\n\n\`\`\`ts\n${accessorDef}\n\`\`\`${desc ? `\n\n${desc}` : ''}${referencesText}`);
 				} else if (ts.isSetAccessorDeclaration(member) && member.name) {
 					const name = member.name.getText();
 					const param = member.parameters[0];
@@ -1287,7 +1341,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 					references.forEach(ref => addUsage(ref, className, name, 'property'));
 
 					const inheritedBadge = '';
-					properties.push(`### \`${name}\`${inheritedBadge}\n\n\`\`\`ts\n${accessorDef}\n\`\`\`${desc ? `\n\n${desc}` : ''}${referencesText}`);
+					pushProperty(`### \`${name}\`${inheritedBadge}\n\n\`\`\`ts\n${accessorDef}\n\`\`\`${desc ? `\n\n${desc}` : ''}${referencesText}`);
 				} else if ((ts.isMethodDeclaration(member) || ts.isMethodSignature(member)) && member.name) {
 					const name = member.name.getText();
 					const isStatic = member.modifiers?.some(mod => mod.kind === ts.SyntaxKind.StaticKeyword);
@@ -1385,7 +1439,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 					if (isStatic) {
 						staticMethods.push(methodContent);
 					} else {
-						methods.push(methodContent);
+						pushMethod(methodContent);
 					}
 				}
 			};
@@ -1497,20 +1551,27 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 				}
 			}
 
-			// Sort properties and methods alphabetically (but not for type aliases - keep source order)
+			// Sort properties and methods alphabetically, but with bracketed names like
+			// `[Symbol.dispose]()` always at the bottom. Type aliases keep source order.
+			const compareMemberNames = (a: string, b: string) => {
+				const nameA = a.match(/### `([^`]+)`/)?.[1] ?? '';
+				const nameB = b.match(/### `([^`]+)`/)?.[1] ?? '';
+				const aIsBracket = nameA.startsWith('[');
+				const bIsBracket = nameB.startsWith('[');
+				if (aIsBracket !== bIsBracket) {
+					return aIsBracket ? 1 : -1;
+				}
+				return nameA.localeCompare(nameB);
+			};
+
 			if (!ts.isTypeAliasDeclaration(declaration)) {
-				properties.sort((a, b) => {
-					const nameA = a.match(/### (.+)/)?.[1] || '';
-					const nameB = b.match(/### (.+)/)?.[1] || '';
-					return nameA.localeCompare(nameB);
-				});
+				properties.sort(compareMemberNames);
+				methods.sort(compareMemberNames);
 			}
 
-			staticMethods.sort((a, b) => {
-				const nameA = a.match(/### (.+)/)?.[1] || '';
-				const nameB = b.match(/### (.+)/)?.[1] || '';
-				return nameA.localeCompare(nameB);
-			});
+			staticMethods.sort(compareMemberNames);
+			deprecatedProperties.sort(compareMemberNames);
+			deprecatedMethods.sort(compareMemberNames);
 
 			let markdown = '';
 
@@ -1683,6 +1744,11 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 
 			if (methods.length > 0) {
 				markdown += `\n## Methods\n\n${methods.join('\n\n')}\n`;
+			}
+
+			const deprecated = [...deprecatedProperties, ...deprecatedMethods];
+			if (deprecated.length > 0) {
+				markdown += `\n## Deprecated\n\n${deprecated.join('\n\n')}\n`;
 			}
 
 			generatedDocs.set(className, markdown);

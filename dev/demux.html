@@ -33,11 +33,12 @@
 			Mediabunny.ALL_FORMATS,
 		);
 		
-		const [track] = await manifest.getTracks();
-		console.log(track);
+		const tracks = await manifest.getTracks();
+		console.log(tracks);
+		const [track] = tracks;
 		
 		window.kekw = () => {
-			console.log(track.getFirstTimestamp())
+			console.log(track.getDurationFromMetadata())
 		};
 
 		return;
