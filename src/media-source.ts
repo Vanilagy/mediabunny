@@ -531,7 +531,7 @@ class VideoEncoderWrapper {
 				}
 				assert(this.encoderInitialized);
 
-				const keyFrameInterval = this.encodingConfig.keyFrameInterval ?? 5;
+				const keyFrameInterval = this.encodingConfig.keyFrameInterval ?? 2;
 				const multipleOfKeyFrameInterval = Math.floor(sampleToEncode.timestamp / keyFrameInterval);
 
 				// Ensure a key frame every keyFrameInterval seconds. It is important that all video tracks

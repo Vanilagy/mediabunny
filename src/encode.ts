@@ -43,7 +43,7 @@ export type VideoEncodingConfig = {
 	 */
 	bitrate: number | Quality;
 	/**
-	 * The interval, in seconds, of how often frames are encoded as a key frame. The default is 5 seconds. Frequent key
+	 * The interval, in seconds, of how often frames are encoded as a key frame. The default is 2 seconds. Frequent key
 	 * frames improve seeking behavior but increase file size. When using multiple video tracks, you should give them
 	 * all the same key frame interval.
 	 */

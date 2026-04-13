@@ -1205,7 +1205,8 @@ export type HlsOutputFormatOptions = {
 	 *
 	 * Mediabunny will try not to emit media segments longer than the target duration, but it is forced to if key frames
 	 * are provided with a longer period than the target duration. Therefore, make sure to encode a key frame at least
-	 * every `targetDuration` seconds to guarantee segment length.
+	 * every `targetDuration` seconds to guarantee segment length, controllable via
+	 * {@link VideoEncodingConfig.keyFrameInterval}.
 	 */
 	targetDuration?: number;
 	/**
