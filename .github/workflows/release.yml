@@ -19,7 +19,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Enforce stable releases target main
+        if: ${{ !github.event.release.prerelease && github.event.release.target_commitish != 'main' }}
+        uses: actions/github-script@ffc2c79a5b2490bd33e0a41c1de74b877714d736 # v3.2.0
+        with:
+          script: core.setFailed('Non-prerelease releases must target the main branch (got: ${{ github.event.release.target_commitish }}).')
+
       - name: Merge main into release branch
+        if: ${{ !github.event.release.prerelease }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -88,7 +95,7 @@ jobs:
           packages/flac-encoder/dist/mediabunny-flac-encoder.d.ts
 
       - name: Publish Mediabunny to npm
-        run: npm publish --access public
+        run: npm publish --access public ${{ github.event.release.prerelease && '--tag beta' || '' }}
 
       - name: Publish workspace packages to npm
-        run: npm publish --access public --workspaces 
+        run: npm publish --access public --workspaces ${{ github.event.release.prerelease && '--tag beta' || '' }}
