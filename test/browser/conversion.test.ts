@@ -8,10 +8,11 @@ import { BufferTarget, PathedTarget } from '../../src/target.js';
 import { Conversion } from '../../src/conversion.js';
 import { assert } from '../../src/misc.js';
 import { InputVideoTrack } from '../../src/input-track.js';
-import { AudioBufferSource, CanvasSource } from '../../src/media-source.js';
+import { CanvasSource, EncodedAudioPacketSource } from '../../src/media-source.js';
 import { QUALITY_HIGH } from '../../src/encode.js';
+import { EncodedPacket } from '../../src/packet.js';
 
-test('Rotation is baked-in when rerendering', async () => {
+test('Rotation is baked in when rerendering', async () => {
 	using input = new Input({
 		source: new UrlSource('/rotate-buck-bunny.mp4'),
 		formats: ALL_FORMATS,
@@ -62,7 +63,7 @@ test('Exceeding max allowed track count', async () => {
 		target: new BufferTarget(),
 	});
 
-	const conversion = await Conversion.init({ input, output });
+	const conversion = await Conversion.init({ input, output, showWarnings: false });
 	expect(conversion.utilizedTracks).toHaveLength(1);
 	expect(conversion.discardedTracks).toHaveLength(1);
 	expect(conversion.discardedTracks[0]!.reason).toBe('max_track_count_reached');
@@ -84,6 +85,7 @@ test('Fan-out', async () => {
 		output,
 		video: [{ height: 480 }, { height: 360 }],
 		audio: [], // Identical to discarding it
+		showWarnings: false,
 	});
 	expect(conversion.utilizedTracks).toHaveLength(2);
 	expect(conversion.discardedTracks).toHaveLength(1);
@@ -103,21 +105,25 @@ test('Fan-out', async () => {
 	expect(await tracks[1]!.getDisplayHeight()).toBe(360);
 });
 
-const createSineWave = (sampleRate: number, channels: number, durationSeconds: number) => {
-	const buffer = new AudioBuffer({
-		sampleRate,
-		numberOfChannels: channels,
-		length: sampleRate * durationSeconds,
-	});
+// eslint-disable-next-line @stylistic/max-len
+const aacPacketData = new Uint8Array([255, 241, 77, 128, 3, 159, 252, 0, 208, 0, 1, 3, 64, 0, 13, 0, 0, 17, 52, 0, 0, 208, 0, 3, 6, 128, 0, 56]);
+const aacMetadata: EncodedAudioChunkMetadata = {
+	decoderConfig: {
+		codec: 'mp4a.40.2',
+		numberOfChannels: 2,
+		sampleRate: 48000,
+	},
+};
 
-	for (let ch = 0; ch < channels; ch++) {
-		const data = buffer.getChannelData(ch);
-		for (let i = 0; i < data.length; i++) {
-			data[i] = Math.sin(2 * Math.PI * 440 * i / sampleRate);
-		}
+const addAacPackets = async (source: EncodedAudioPacketSource, durationSeconds: number) => {
+	const packetDuration = 1024 / 48000;
+	const count = Math.ceil(durationSeconds / packetDuration);
+	for (let i = 0; i < count; i++) {
+		await source.add(
+			new EncodedPacket(aacPacketData, 'key', i * packetDuration, packetDuration),
+			i === 0 ? aacMetadata : undefined,
+		);
 	}
-
-	return buffer;
 };
 
 test('HLS track assignability is kept #1', async () => {
@@ -148,7 +154,7 @@ test('HLS track assignability is kept #1', async () => {
 	const videoSource = new CanvasSource(canvas, { codec: 'avc', bitrate: QUALITY_HIGH });
 	output.addVideoTrack(videoSource);
 
-	const audioSource = new AudioBufferSource({ codec: 'aac', bitrate: QUALITY_HIGH });
+	const audioSource = new EncodedAudioPacketSource('aac');
 	output.addAudioTrack(audioSource);
 
 	await output.start();
@@ -157,7 +163,7 @@ test('HLS track assignability is kept #1', async () => {
 		await videoSource.add(i / 2, 1 / 2);
 	}
 
-	await audioSource.add(createSineWave(48000, 2, 2));
+	await addAacPackets(audioSource, 2);
 
 	await output.finalize();
 
@@ -227,7 +233,7 @@ test('HLS track assignability is kept #2', async () => {
 	const videoSource = new CanvasSource(canvas, { codec: 'avc', bitrate: QUALITY_HIGH });
 	output.addVideoTrack(videoSource, { group: a });
 
-	const audioSource = new AudioBufferSource({ codec: 'aac', bitrate: QUALITY_HIGH });
+	const audioSource = new EncodedAudioPacketSource('aac');
 	output.addAudioTrack(audioSource, { group: b });
 
 	await output.start();
@@ -236,7 +242,7 @@ test('HLS track assignability is kept #2', async () => {
 		await videoSource.add(i / 2, 1 / 2);
 	}
 
-	await audioSource.add(createSineWave(48000, 2, 2));
+	await addAacPackets(audioSource, 2);
 
 	await output.finalize();
 
@@ -306,7 +312,7 @@ test('HLS track assignability can be overridden', async () => {
 	const videoSource = new CanvasSource(canvas, { codec: 'avc', bitrate: QUALITY_HIGH });
 	output.addVideoTrack(videoSource, { group: a });
 
-	const audioSource = new AudioBufferSource({ codec: 'aac', bitrate: QUALITY_HIGH });
+	const audioSource = new EncodedAudioPacketSource('aac');
 	output.addAudioTrack(audioSource, { group: b });
 
 	await output.start();
@@ -315,7 +321,7 @@ test('HLS track assignability can be overridden', async () => {
 		await videoSource.add(i / 2, 1 / 2);
 	}
 
-	await audioSource.add(createSineWave(48000, 2, 2));
+	await addAacPackets(audioSource, 2);
 
 	await output.finalize();
 

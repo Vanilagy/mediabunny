@@ -691,6 +691,7 @@ export class HlsMuxer extends Muxer {
 			let audioEndIndex = 0;
 
 			if (videoTrack && (!videoTrack.closed || videoTrack.packets.length > 0)) {
+				// A video track is active (and maybe an audio track too)
 				const allBelow = videoTrack.packets.every(x => x.timestamp < currentSegmentEndTimestamp);
 
 				let bestKeyPacket: EncodedPacket | null = null;
@@ -773,21 +774,22 @@ export class HlsMuxer extends Muxer {
 					}
 				}
 			} else if (audioTrack && (!audioTrack.closed || audioTrack.packets.length > 0)) {
+				// There's only an audio track active
+
 				const allBelow = audioTrack.packets.every(x => x.timestamp < currentSegmentEndTimestamp);
 
 				if (allBelow) {
 					if (audioTrack.closed) {
+						// We can write all packets since they're all below
 						audioEndIndex = audioTrack.packets.length;
 					} else {
+						// We don't know enough packets yet
 						return;
 					}
 				} else {
+					// Aim to make the segment at most as long as desired
 					const index = findLastIndex(audioTrack.packets, x => x.timestamp <= currentSegmentEndTimestamp);
-					if (index !== -1) {
-						audioEndIndex = index;
-					} else {
-						audioEndIndex = 1;
-					}
+					audioEndIndex = Math.max(index, 1); // Always include at least the first packet
 				}
 			}
 

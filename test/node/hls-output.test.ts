@@ -1487,6 +1487,60 @@ segment-1-3.ts
 	);
 });
 
+test('Segmentation, one video packet per segment', async () => {
+	const env = await setUpSegmentationEnvironment({ video: true });
+
+	await env.addVideoPacket(0, 'key', 3);
+	expect(env.segmentCount).toBe(0);
+	await env.addVideoPacket(3, 'key', 3);
+	expect(env.segmentCount).toBe(1);
+
+	await env.output.finalize();
+	expect(env.segmentCount).toBe(2);
+
+	expect(env.result).toBe(`#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-TARGETDURATION:3
+#EXT-X-INDEPENDENT-SEGMENTS
+
+#EXTINF:3,
+segment-1-1.ts
+#EXTINF:3,
+segment-1-2.ts
+
+#EXT-X-ENDLIST
+`,
+	);
+});
+
+test('Segmentation, one audio packet per segment', async () => {
+	const env = await setUpSegmentationEnvironment({ audio: true });
+
+	await env.addAudioPacket(0, 3);
+	expect(env.segmentCount).toBe(0);
+	await env.addAudioPacket(3, 3);
+	expect(env.segmentCount).toBe(1);
+
+	await env.output.finalize();
+	expect(env.segmentCount).toBe(2);
+
+	expect(env.result).toBe(`#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-TARGETDURATION:3
+#EXT-X-INDEPENDENT-SEGMENTS
+
+#EXTINF:3,
+segment-1-1.ts
+#EXTINF:3,
+segment-1-2.ts
+
+#EXT-X-ENDLIST
+`,
+	);
+});
+
 test('Segmentation, dual-track, single segment', async () => {
 	const env = await setUpSegmentationEnvironment({ video: true, audio: true });
 

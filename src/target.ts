@@ -72,7 +72,7 @@ export abstract class Target extends EventEmitter<TargetEvents> {
 		this._emit('write', { start, end });
 	}
 
-/**
+	/**
 	 * Returns a new {@link RangedTarget} that writes data to this target using the given offset.
 	 *
 	 * Useful for writing a file into a section of a larger file.
