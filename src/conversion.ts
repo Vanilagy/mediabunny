@@ -251,7 +251,12 @@ export type ConversionVideoOptions = {
 	 * encoder configuration.
 	 */
 	processedHeight?: number;
-	/** Defines the group(s) the output track is a part of. Same semantics as {@link BaseTrackMetadata.group}. */
+	/**
+	 * Defines the group(s) the output track is a part of. For more, see {@link BaseTrackMetadata.group}.
+	 *
+	 * If left blank, tracks will internally be assigned to groups such that the output track pairability graph exactly
+	 * matches the input track pairability graph.
+	 */
 	group?: OutputTrackGroup | OutputTrackGroup[];
 };
 
@@ -297,7 +302,12 @@ export type ConversionAudioOptions = {
 	 * encoder configuration.
 	 */
 	processedSampleRate?: number;
-	/** Defines the group(s) the output track is a part of. Same semantics as {@link BaseTrackMetadata.group}. */
+	/**
+	 * Defines the group(s) the output track is a part of. For more, see {@link BaseTrackMetadata.group}.
+	 *
+	 * If left blank, tracks will internally be assigned to groups such that the output track pairability graph exactly
+	 * matches the input track pairability graph.
+	 */
 	group?: OutputTrackGroup | OutputTrackGroup[];
 };
 
@@ -535,6 +545,8 @@ export class Conversion {
 	_nextOutputTrackId = 0;
 	/** @internal */
 	_outputTrackIds: number[] = [];
+	/** @internal */
+	_outputOwnTrackGroups: (OutputTrackGroup | null)[] = [];
 
 	/** @internal */
 	_trackPromises: Promise<void>[] = [];
@@ -865,6 +877,25 @@ export class Conversion {
 					await this._processAudioTrack(track, option as ConversionAudioOptions, outputTrackId);
 				} else {
 					assert(false);
+				}
+			}
+		}
+
+		// When no track groups are set by the user, then the output track pairability should be *identical* to the
+		// input's. We do the naive algorithm to achieve this: assign each track to its own group, and pair groups with
+		// each other based on input track pairability.
+		for (let i = 0; i < this.utilizedTracks.length - 1; i++) {
+			for (let j = i + 1; j < this.utilizedTracks.length; j++) {
+				const trackA = this.utilizedTracks[i]!;
+				const trackB = this.utilizedTracks[j]!;
+				const ownGroupA = this._outputOwnTrackGroups[i];
+				const ownGroupB = this._outputOwnTrackGroups[j];
+
+				assert(ownGroupA !== undefined);
+				assert(ownGroupB !== undefined);
+
+				if (ownGroupA && ownGroupB && trackA.canBePairedWith(trackB)) {
+					ownGroupA.pairWith(ownGroupB);
 				}
 			}
 		}
@@ -1467,6 +1498,11 @@ export class Conversion {
 			}
 		}
 
+		let ownGroup: OutputTrackGroup | null = null;
+		if (!trackOptions.group) {
+			ownGroup = new OutputTrackGroup();
+		}
+
 		const videoTrackLanguageCode = await track.getLanguageCode();
 		this.output.addVideoTrack(videoSource, {
 			frameRate: trackOptions.frameRate,
@@ -1475,13 +1511,14 @@ export class Conversion {
 			name: await track.getName() ?? undefined,
 			disposition: await track.getDisposition(),
 			rotation: outputTrackRotation,
-			group: trackOptions.group,
+			group: ownGroup ?? trackOptions.group,
 		});
 		this._addedCounts.video++;
 		this._totalTrackCount++;
 
 		this.utilizedTracks.push(track);
 		this._outputTrackIds.push(outputTrackId);
+		this._outputOwnTrackGroups.push(ownGroup);
 	}
 
 	/** @internal */
@@ -1726,19 +1763,25 @@ export class Conversion {
 			}
 		}
 
+		let ownGroup: OutputTrackGroup | null = null;
+		if (!trackOptions.group) {
+			ownGroup = new OutputTrackGroup();
+		}
+
 		const audioTrackLanguageCode = await track.getLanguageCode();
 		this.output.addAudioTrack(audioSource, {
 			// TODO: This condition can be removed when all demuxers properly homogenize to BCP47 in v2
 			languageCode: isIso639Dash2LanguageCode(audioTrackLanguageCode) ? audioTrackLanguageCode : undefined,
 			name: await track.getName() ?? undefined,
 			disposition: await track.getDisposition(),
-			group: trackOptions.group,
+			group: ownGroup ?? trackOptions.group,
 		});
 		this._addedCounts.audio++;
 		this._totalTrackCount++;
 
 		this.utilizedTracks.push(track);
 		this._outputTrackIds.push(outputTrackId);
+		this._outputOwnTrackGroups.push(ownGroup);
 	}
 
 	/** @internal */

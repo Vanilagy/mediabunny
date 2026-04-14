@@ -1261,7 +1261,7 @@ export class HlsMuxer extends Muxer {
 						if (width !== undefined && height !== undefined) {
 							if (
 								videoTrack.metadata.rotation !== undefined
-								&& videoTrack.metadata.rotation % 180 !== 90
+								&& videoTrack.metadata.rotation % 180 === 90
 							) {
 								[width, height] = [height, width];
 							}

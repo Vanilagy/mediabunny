@@ -65,13 +65,6 @@ export abstract class Target extends EventEmitter<TargetEvents> {
 	 */
 	onwrite: ((start: number, end: number) => unknown) | null = null;
 
-	/**
-	 * Called when the target is finalized.
-	 *
-	 * @deprecated Use `target.on('finalized', () => ...)` instead.
-	 */
-	onfinalized: (() => unknown) | null = null;
-
 	/** @internal */
 	_dispatchWrite(start: number, end: number) {
 		// eslint-disable-next-line @typescript-eslint/no-deprecated
@@ -79,14 +72,7 @@ export abstract class Target extends EventEmitter<TargetEvents> {
 		this._emit('write', { start, end });
 	}
 
-	/** @internal */
-	_dispatchFinalized() {
-		// eslint-disable-next-line @typescript-eslint/no-deprecated
-		this.onfinalized?.();
-		this._emit('finalized');
-	}
-
-	/**
+/**
 	 * Returns a new {@link RangedTarget} that writes data to this target using the given offset.
 	 *
 	 * Useful for writing a file into a section of a larger file.
@@ -192,7 +178,7 @@ export class BufferTarget extends Target {
 	/** @internal */
 	async _finalize() {
 		this.buffer = this._buffer.slice(0, this._maxPos);
-		this._dispatchFinalized();
+		this._emit('finalized');
 	}
 
 	/** @internal */
@@ -546,7 +532,7 @@ export class StreamTarget extends Target {
 		await this._streamWriter.ready;
 		await this._streamWriter.close();
 
-		this._dispatchFinalized();
+		this._emit('finalized');
 	}
 
 	/** @internal */
@@ -630,7 +616,7 @@ export class FilePathTarget extends Target {
 	/** @internal */
 	async _finalize() {
 		await this._streamTarget._finalize();
-		this._dispatchFinalized();
+		this._emit('finalized');
 	}
 
 	/** @internal */
@@ -660,7 +646,7 @@ export class NullTarget extends Target {
 
 	/** @internal */
 	async _finalize() {
-		this._dispatchFinalized();
+		this._emit('finalized');
 	}
 
 	/** @internal */
@@ -704,7 +690,7 @@ export class RangedTarget extends Target {
 
 	/** @internal */
 	async _finalize() {
-		this._dispatchFinalized();
+		this._emit('finalized');
 	}
 
 	/** @internal */
