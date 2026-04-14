@@ -66,7 +66,7 @@ test('Exceeding max allowed track count', async () => {
 	expect(conversion.discardedTracks[0]!.reason).toBe('max_track_count_reached');
 });
 
-test.only('Fan-out', async () => {
+test('Fan-out', async () => {
 	using input = new Input({
 		source: new UrlSource('/video.mp4'),
 		formats: ALL_FORMATS,
