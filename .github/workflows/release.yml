@@ -23,7 +23,7 @@ jobs:
         if: ${{ !github.event.release.prerelease && github.event.release.target_commitish != 'main' }}
         uses: actions/github-script@ffc2c79a5b2490bd33e0a41c1de74b877714d736 # v3.2.0
         with:
-          script: core.setFailed('Non-prerelease releases must target the main branch (got: ${{ github.event.release.target_commitish }}).')
+          script: "core.setFailed('Non-prerelease releases must target the main branch (got: ${{ github.event.release.target_commitish }}).')"
 
       - name: Merge main into release branch
         if: ${{ !github.event.release.prerelease }}
