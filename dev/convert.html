@@ -16,8 +16,7 @@
 	progressElement.max = 1;
 	document.body.append(progressElement);
 
-	window.addEventListener('click', async () => {
-		
+	fileInput.addEventListener('change', async () => {
 		const target = new Mediabunny.BufferTarget() ?? new Mediabunny.StreamTarget(new WritableStream({
 			write: console.log
 		}), {
@@ -58,7 +57,7 @@
 		const tracks = [];
 		let start = 0;
 
-		if (true) {
+		if (false) {
 			input = new Mediabunny.Input({
 				entryPath: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
 				source: ({ path }) => new Mediabunny.UrlSource(path),
@@ -91,30 +90,11 @@
 		let conversion = await Mediabunny.Conversion.init({
 			input,
 			output,
-			audio: (track, n) => ({
-				//discard: true,
-				//discard: !tracks.includes(track),
-				//codec: 'eac3',
-				//discard: true,
-				//discard: n > 1,
-				//codec: 'opus',
-				//codec: 'opus',
-				/*
-				process: (sample) => {
-					return sample;
-				},
-				*/
-				//codec: 'pcm-s16',
-				//sampleRate: 16000,
-				//numberOfChannels: 1,
-				//discard: true,
-				//codec: 'opus',
-				//bitrate: 128000,
-				//numberOfChannels: 1,
-				//sampleRate: 4000
-				//discard: true
-				//forceTranscode: true,
-			}),
+			audio: (track, n) => [{
+				codec: 'aac',
+			}, {
+				codec: 'aac',
+			}],
 			/*
 			video: {
 				discard: true,
@@ -140,6 +120,7 @@
 			},
 			*/
 			video: (track) => ({
+				discard: true,
 				//discard: true,
 				//discard: !tracks.includes(track),
 				//forceTranscode: true,
@@ -226,7 +207,7 @@
 				}
 			},
 			trim: {
-				end: 10,
+				end: 5,
 				//start,
 				//end: start + 5,
 				////start: 0,

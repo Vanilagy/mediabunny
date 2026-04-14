@@ -83,9 +83,16 @@ export type ConversionOptions = {
 	 * for that specific track. The function is passed an instance of {@link InputVideoTrack} as well as a number `n`,
 	 * which is the 1-based index of the track in the list of all video tracks. Using `n` is deprecated, prefer the
 	 * identical `track.number` instead.
+	 *
+	 * When passing an array of a function that returns an array, one output track per array element will be created,
+	 * allowing for "fan-out". Useful for creating multiple variants from a single track, for example with different
+	 * resolutions.
 	 */
 	video?: ConversionVideoOptions
-		| ((track: InputVideoTrack, n: number) => MaybePromise<ConversionVideoOptions | undefined>);
+		| ConversionVideoOptions[]
+		| ((track: InputVideoTrack, n: number) => MaybePromise<
+			ConversionVideoOptions | ConversionVideoOptions[] | undefined
+		>);
 
 	/**
 	 * Audio-specific options. When passing an object, the same options are applied to all audio tracks. When passing a
@@ -93,15 +100,23 @@ export type ConversionOptions = {
 	 * for that specific track. The function is passed an instance of {@link InputAudioTrack} as well as a number `n`,
 	 * which is the 1-based index of the track in the list of all audio tracks. Using `n` is deprecated, prefer the
 	 * identical `track.number` instead.
+	 *
+	 * When passing an array of a function that returns an array, one output track per array element will be created,
+	 * allowing for "fan-out". Useful for creating multiple variants from a single track, for example with different
+	 * bitrates.
 	 */
 	audio?: ConversionAudioOptions
-		| ((track: InputAudioTrack, n: number) => MaybePromise<ConversionAudioOptions | undefined>);
+		| ConversionAudioOptions[]
+		| ((track: InputAudioTrack, n: number) => MaybePromise<
+			ConversionAudioOptions | ConversionAudioOptions[] | undefined
+		>);
 
 	/** Options to trim the input file. */
 	trim?: {
 		/**
 		 * The time in the input file in seconds at which the output file should start. Must be less than `end`.
-		 * When omitted, defaults to the start timestamp of the input or to 0, whichever is higher.
+		 * When omitted, defaults to the earliest start timestamp of the non-discarded tracks, or to 0, whichever
+		 * is higher.
 		 */
 		start?: number;
 		/**
@@ -282,8 +297,8 @@ export type ConversionAudioOptions = {
 	processedSampleRate?: number;
 };
 
-const validateVideoOptions = (videoOptions: ConversionVideoOptions | undefined) => {
-	if (videoOptions !== undefined && (!videoOptions || typeof videoOptions !== 'object')) {
+const validateVideoOptions = (videoOptions: ConversionVideoOptions) => {
+	if (!videoOptions || typeof videoOptions !== 'object') {
 		throw new TypeError('options.video, when provided, must be an object.');
 	}
 	if (videoOptions?.discard !== undefined && typeof videoOptions.discard !== 'boolean') {
@@ -379,8 +394,8 @@ const validateVideoOptions = (videoOptions: ConversionVideoOptions | undefined) 
 	}
 };
 
-const validateAudioOptions = (audioOptions: ConversionAudioOptions | undefined) => {
-	if (audioOptions !== undefined && (!audioOptions || typeof audioOptions !== 'object')) {
+const validateAudioOptions = (audioOptions: ConversionAudioOptions) => {
+	if (!audioOptions || typeof audioOptions !== 'object') {
 		throw new TypeError('options.audio, when provided, must be an object.');
 	}
 	if (audioOptions?.discard !== undefined && typeof audioOptions.discard !== 'boolean') {
@@ -462,6 +477,8 @@ export type DiscardedTrack = {
 		| 'unknown_source_codec'
 		| 'undecodable_source_codec'
 		| 'no_encodable_target_codec';
+	/** The options that were provided for this track, or `{}` if none were provided. */
+	trackOptions: ConversionVideoOptions | ConversionAudioOptions;
 };
 
 /**
@@ -492,6 +509,10 @@ export class Conversion {
 
 	/** @internal */
 	_totalTrackCount = 0;
+	/** @internal */
+	_nextOutputTrackId = 0;
+	/** @internal */
+	_outputTrackIds: number[] = [];
 
 	/** @internal */
 	_trackPromises: Promise<void>[] = [];
@@ -535,7 +556,10 @@ export class Conversion {
 	 * tracks make for a valid output file, the conversion is still allowed.
 	 */
 	isValid = false;
-	/** The list of tracks that are included in the output file. */
+	/**
+	 * The list of tracks that are included in the output file. When fan-out is used, the same track appears in this
+	 * array multiple times.
+	 */
 	readonly utilizedTracks: InputTrack[] = [];
 	/** The list of tracks from the input file that have been discarded, alongside the discard reason. */
 	readonly discardedTracks: DiscardedTrack[] = [];
@@ -582,14 +606,26 @@ export class Conversion {
 			throw new TypeError('options.output must be fresh: no tracks or metadata tags added and not started.');
 		}
 
-		if (typeof options.video !== 'function') {
-			validateVideoOptions(options.video);
+		if (options.video !== undefined && typeof options.video !== 'function') {
+			if (Array.isArray(options.video)) {
+				for (const obj of options.video) {
+					validateVideoOptions(obj);
+				}
+			} else {
+				validateVideoOptions(options.video);
+			}
 		} else {
 			// We'll validate the return value later
 		}
 
-		if (typeof options.audio !== 'function') {
-			validateAudioOptions(options.audio);
+		if (options.audio !== undefined && typeof options.audio !== 'function') {
+			if (Array.isArray(options.audio)) {
+				for (const obj of options.audio) {
+					validateAudioOptions(obj);
+				}
+			} else {
+				validateAudioOptions(options.audio);
+			}
 		} else {
 			// We'll validate the return value later
 		}
@@ -666,64 +702,97 @@ export class Conversion {
 
 		const outputTrackCounts = this.output.format.getSupportedTrackCounts();
 
+		// Input track counters
 		let nVideo = 1;
 		let nAudio = 1;
 
+		// All tracks that aren't discarded by the user
 		const filteredTracks: InputTrack[] = [];
-		const filteredTrackOptions: (ConversionVideoOptions | ConversionAudioOptions)[] = [];
+		const filteredTrackOptions: (ConversionVideoOptions | ConversionAudioOptions)[][] = [];
 
 		for (const track of tracks) {
-			let trackOptions: ConversionVideoOptions | ConversionAudioOptions | undefined = undefined;
+			let trackOptions: (ConversionVideoOptions | ConversionAudioOptions)[];
+
 			if (track.isVideoTrack()) {
 				if (this._options.video) {
 					if (typeof this._options.video === 'function') {
-						trackOptions = await this._options.video(track, nVideo);
-						validateVideoOptions(trackOptions);
+						const returnedTrackOptions = await this._options.video(track, nVideo) ?? {};
+						if (Array.isArray(returnedTrackOptions)) {
+							for (const obj of returnedTrackOptions) {
+								validateVideoOptions(obj);
+							}
+						} else {
+							validateVideoOptions(returnedTrackOptions);
+						}
+
+						trackOptions = Array.isArray(returnedTrackOptions)
+							? returnedTrackOptions
+							: [returnedTrackOptions];
+
 						nVideo++;
 					} else {
-						trackOptions = this._options.video;
+						// Already validated
+						trackOptions = Array.isArray(this._options.video)
+							? this._options.video
+							: [this._options.video];
 					}
+				} else {
+					trackOptions = [{}];
 				}
 			} else if (track.isAudioTrack()) {
 				if (this._options.audio) {
 					if (typeof this._options.audio === 'function') {
-						trackOptions = await this._options.audio(track, nAudio);
-						validateAudioOptions(trackOptions);
+						const returnedTrackOptions = await this._options.audio(track, nAudio) ?? {};
+						if (Array.isArray(returnedTrackOptions)) {
+							for (const obj of returnedTrackOptions) {
+								validateAudioOptions(obj);
+							}
+						} else {
+							validateAudioOptions(returnedTrackOptions);
+						}
+
+						trackOptions = Array.isArray(returnedTrackOptions)
+							? returnedTrackOptions
+							: [returnedTrackOptions];
+
 						nAudio++;
 					} else {
-						trackOptions = this._options.audio;
+						// Already validated
+						trackOptions = Array.isArray(this._options.audio)
+							? this._options.audio
+							: [this._options.audio];
 					}
+				} else {
+					trackOptions = [{}];
 				}
 			} else {
 				assert(false);
 			}
 
-			if (trackOptions?.discard) {
+			const discardOptions = trackOptions.filter(x => x.discard);
+			for (const discardOption of discardOptions) {
 				this.discardedTracks.push({
 					track,
 					reason: 'discarded_by_user',
+					trackOptions: discardOption,
 				});
+			}
+
+			if (trackOptions.length === discardOptions.length) {
+				if (trackOptions.length === 0) {
+					this.discardedTracks.push({
+						track,
+						reason: 'discarded_by_user',
+						trackOptions: {},
+					});
+				}
+
 				continue;
 			}
 
-			if (this._totalTrackCount === outputTrackCounts.total.max) {
-				this.discardedTracks.push({
-					track,
-					reason: 'max_track_count_reached',
-				});
-				continue;
-			}
-
-			if (this._addedCounts[track.type] === outputTrackCounts[track.type].max) {
-				this.discardedTracks.push({
-					track,
-					reason: 'max_track_count_of_type_reached',
-				});
-				continue;
-			}
-
+			const nonDiscardOptions = trackOptions.filter(x => !x.discard);
 			filteredTracks.push(track);
-			filteredTrackOptions.push(trackOptions ?? {});
+			filteredTrackOptions.push(nonDiscardOptions);
 		}
 
 		if (this._options.trim?.start !== undefined) {
@@ -747,12 +816,34 @@ export class Conversion {
 			const track = filteredTracks[i]!;
 			const options = filteredTrackOptions[i]!;
 
-			if (track.isVideoTrack()) {
-				await this._processVideoTrack(track, options as ConversionVideoOptions);
-			} else if (track.isAudioTrack()) {
-				await this._processAudioTrack(track, options as ConversionAudioOptions);
-			} else {
-				assert(false);
+			for (const option of options) {
+				if (this._totalTrackCount === outputTrackCounts.total.max) {
+					this.discardedTracks.push({
+						track,
+						reason: 'max_track_count_reached',
+						trackOptions: option,
+					});
+					continue;
+				}
+
+				if (this._addedCounts[track.type] === outputTrackCounts[track.type].max) {
+					this.discardedTracks.push({
+						track,
+						reason: 'max_track_count_of_type_reached',
+						trackOptions: option,
+					});
+					continue;
+				}
+
+				const outputTrackId = this._nextOutputTrackId++;
+
+				if (track.isVideoTrack()) {
+					await this._processVideoTrack(track, option as ConversionVideoOptions, outputTrackId);
+				} else if (track.isAudioTrack()) {
+					await this._processAudioTrack(track, option as ConversionAudioOptions, outputTrackId);
+				} else {
+					assert(false);
+				}
 			}
 		}
 
@@ -841,37 +932,39 @@ export class Conversion {
 					}
 				});
 
-				if (codecs.length === 1) {
+				const uniqueCodecs = [...new Set(codecs)];
+
+				if (uniqueCodecs.length === 1) {
 					elements.push(
-						`\nTracks were discarded because your environment is not able to encode '${codecs[0]}'.`,
+						`\nTracks were discarded because your environment is not able to encode '${uniqueCodecs[0]}'.`,
 					);
 				} else {
 					elements.push(
 						'\nTracks were discarded because your environment is not able to encode any of the following'
-						+ ` codecs: ${codecs.map(x => `'${x}'`).join(', ')}.`,
+						+ ` codecs: ${uniqueCodecs.map(x => `'${x}'`).join(', ')}.`,
 					);
 				}
 
-				if (codecs.includes('mp3')) {
+				if (uniqueCodecs.includes('mp3')) {
 					elements.push(
 						`\nThe @mediabunny/mp3-encoder extension package provides support for encoding MP3.`,
 					);
 				}
 
-				if (codecs.includes('aac')) {
+				if (uniqueCodecs.includes('aac')) {
 					elements.push(
 						'\nThe @mediabunny/aac-encoder extension package provides support for encoding AAC.',
 					);
 				}
 
-				if (codecs.includes('ac3') || codecs.includes('eac3')) {
+				if (uniqueCodecs.includes('ac3') || uniqueCodecs.includes('eac3')) {
 					elements.push(
 						'\nThe @mediabunny/ac3 extension package provides support'
 						+ ' for encoding and decoding AC-3/E-AC-3.',
 					);
 				}
 
-				if (codecs.includes('flac')) {
+				if (uniqueCodecs.includes('flac')) {
 					elements.push(
 						'\nThe @mediabunny/flac-encoder extension package provides support for encoding FLAC.',
 					);
@@ -905,7 +998,8 @@ export class Conversion {
 
 		if (this.onProgress) {
 			// Compute duration using only the utilized tracks
-			const durationPromises = this.utilizedTracks.map(async (track) => {
+			const uniqueUtilizedTracks = new Set(this.utilizedTracks);
+			const durationPromises = [...uniqueUtilizedTracks].map(async (track) => {
 				if (await track.isLive()) {
 					return Infinity; // Upper bound (assuming no universe heat death)
 				}
@@ -920,8 +1014,8 @@ export class Conversion {
 				this._endTimestamp - this._startTimestamp,
 			);
 
-			for (const track of this.utilizedTracks) {
-				this._maxTimestamps.set(track.id, 0);
+			for (const id of this._outputTrackIds) {
+				this._maxTimestamps.set(id, 0);
 			}
 
 			this.onProgress?.(0);
@@ -971,12 +1065,13 @@ export class Conversion {
 	}
 
 	/** @internal */
-	async _processVideoTrack(track: InputVideoTrack, trackOptions: ConversionVideoOptions) {
+	async _processVideoTrack(track: InputVideoTrack, trackOptions: ConversionVideoOptions, outputTrackId: number) {
 		const sourceCodec = await track.getCodec();
 		if (!sourceCodec) {
 			this.discardedTracks.push({
 				track,
 				reason: 'unknown_source_codec',
+				trackOptions,
 			});
 			return;
 		}
@@ -1070,16 +1165,16 @@ export class Conversion {
 					});
 					assert(modifiedPacket.timestamp >= 0);
 
-					this._reportProgress(track.id, modifiedPacket.timestamp + modifiedPacket.duration);
+					this._reportProgress(outputTrackId, modifiedPacket.timestamp + modifiedPacket.duration);
 					await source.add(modifiedPacket, meta);
 
-					if (this._synchronizer.shouldWait(track.id, modifiedPacket.timestamp)) {
+					if (this._synchronizer.shouldWait(outputTrackId, modifiedPacket.timestamp)) {
 						await this._synchronizer.wait(modifiedPacket.timestamp);
 					}
 				}
 
 				source.close();
-				this._synchronizer.closeTrack(track.id);
+				this._synchronizer.closeTrack(outputTrackId);
 			})());
 		} else {
 			// We need to decode & reencode the video
@@ -1089,6 +1184,7 @@ export class Conversion {
 				this.discardedTracks.push({
 					track,
 					reason: 'undecodable_source_codec',
+					trackOptions,
 				});
 				return;
 			}
@@ -1112,6 +1208,7 @@ export class Conversion {
 				this.discardedTracks.push({
 					track,
 					reason: 'no_encodable_target_codec',
+					trackOptions,
 				});
 				return;
 			}
@@ -1207,7 +1304,7 @@ export class Conversion {
 								timestamp: lastCanvasTimestamp! + i / frameRate,
 								duration: 1 / frameRate,
 							});
-							await this._registerVideoSample(track, trackOptions, source, sample);
+							await this._registerVideoSample(track, trackOptions, outputTrackId, source, sample);
 							sample.close();
 						}
 					};
@@ -1244,7 +1341,7 @@ export class Conversion {
 							timestamp: adjustedSampleTimestamp,
 							duration: frameRate !== undefined ? 1 / frameRate : duration,
 						});
-						await this._registerVideoSample(track, trackOptions, source, sample);
+						await this._registerVideoSample(track, trackOptions, outputTrackId, source, sample);
 						sample.close();
 
 						if (frameRate !== undefined) {
@@ -1262,7 +1359,7 @@ export class Conversion {
 					}
 
 					source.close();
-					this._synchronizer.closeTrack(track.id);
+					this._synchronizer.closeTrack(outputTrackId);
 				})());
 			} else {
 				this._trackPromises.push((async () => {
@@ -1285,7 +1382,7 @@ export class Conversion {
 						for (let i = 1; i < frameDifference; i++) {
 							lastSample.setTimestamp(lastSampleTimestamp! + i / frameRate);
 							lastSample.setDuration(1 / frameRate);
-							await this._registerVideoSample(track, trackOptions, source, lastSample);
+							await this._registerVideoSample(track, trackOptions, outputTrackId, source, lastSample);
 						}
 
 						lastSample.close();
@@ -1324,7 +1421,7 @@ export class Conversion {
 						}
 
 						sample.setTimestamp(adjustedSampleTimestamp);
-						await this._registerVideoSample(track, trackOptions, source, sample);
+						await this._registerVideoSample(track, trackOptions, outputTrackId, source, sample);
 
 						if (frameRate !== undefined) {
 							lastSample = sample;
@@ -1343,7 +1440,7 @@ export class Conversion {
 					}
 
 					source.close();
-					this._synchronizer.closeTrack(track.id);
+					this._synchronizer.closeTrack(outputTrackId);
 				})());
 			}
 		}
@@ -1361,12 +1458,14 @@ export class Conversion {
 		this._totalTrackCount++;
 
 		this.utilizedTracks.push(track);
+		this._outputTrackIds.push(outputTrackId);
 	}
 
 	/** @internal */
 	async _registerVideoSample(
 		track: InputVideoTrack,
 		trackOptions: ConversionVideoOptions,
+		outputTrackId: number,
 		source: VideoSampleSource,
 		sample: VideoSample,
 	) {
@@ -1374,7 +1473,7 @@ export class Conversion {
 			return;
 		}
 
-		this._reportProgress(track.id, sample.timestamp + sample.duration);
+		this._reportProgress(outputTrackId, sample.timestamp + sample.duration);
 
 		let finalSamples: VideoSample[];
 		if (!trackOptions.process) {
@@ -1412,7 +1511,7 @@ export class Conversion {
 
 			await source.add(finalSample);
 
-			if (this._synchronizer.shouldWait(track.id, finalSample.timestamp)) {
+			if (this._synchronizer.shouldWait(outputTrackId, finalSample.timestamp)) {
 				await this._synchronizer.wait(finalSample.timestamp);
 			}
 		}
@@ -1425,12 +1524,13 @@ export class Conversion {
 	}
 
 	/** @internal */
-	async _processAudioTrack(track: InputAudioTrack, trackOptions: ConversionAudioOptions) {
+	async _processAudioTrack(track: InputAudioTrack, trackOptions: ConversionAudioOptions, outputTrackId: number) {
 		const sourceCodec = await track.getCodec();
 		if (!sourceCodec) {
 			this.discardedTracks.push({
 				track,
 				reason: 'unknown_source_codec',
+				trackOptions,
 			});
 			return;
 		}
@@ -1484,16 +1584,16 @@ export class Conversion {
 					});
 					assert(modifiedPacket.timestamp >= 0);
 
-					this._reportProgress(track.id, modifiedPacket.timestamp + modifiedPacket.duration);
+					this._reportProgress(outputTrackId, modifiedPacket.timestamp + modifiedPacket.duration);
 					await source.add(modifiedPacket, meta);
 
-					if (this._synchronizer.shouldWait(track.id, modifiedPacket.timestamp)) {
+					if (this._synchronizer.shouldWait(outputTrackId, modifiedPacket.timestamp)) {
 						await this._synchronizer.wait(modifiedPacket.timestamp);
 					}
 				}
 
 				source.close();
-				this._synchronizer.closeTrack(track.id);
+				this._synchronizer.closeTrack(outputTrackId);
 			})());
 		} else {
 			// We need to decode & reencode the audio
@@ -1503,6 +1603,7 @@ export class Conversion {
 				this.discardedTracks.push({
 					track,
 					reason: 'undecodable_source_codec',
+					trackOptions,
 				});
 				return;
 			}
@@ -1557,6 +1658,7 @@ export class Conversion {
 				this.discardedTracks.push({
 					track,
 					reason: 'no_encodable_target_codec',
+					trackOptions,
 				});
 				return;
 			}
@@ -1565,6 +1667,7 @@ export class Conversion {
 				audioSource = this._resampleAudio(
 					track,
 					trackOptions,
+					outputTrackId,
 					codecOfChoice,
 					numberOfChannels,
 					sampleRate,
@@ -1590,12 +1693,12 @@ export class Conversion {
 						// Offset the timestamp as needed
 						sample.setTimestamp(sample.timestamp - this._startTimestamp);
 
-						await this._registerAudioSample(track, trackOptions, source, sample);
+						await this._registerAudioSample(track, trackOptions, outputTrackId, source, sample);
 						sample.close();
 					}
 
 					source.close();
-					this._synchronizer.closeTrack(track.id);
+					this._synchronizer.closeTrack(outputTrackId);
 				})());
 			}
 		}
@@ -1611,12 +1714,14 @@ export class Conversion {
 		this._totalTrackCount++;
 
 		this.utilizedTracks.push(track);
+		this._outputTrackIds.push(outputTrackId);
 	}
 
 	/** @internal */
 	async _registerAudioSample(
 		track: InputAudioTrack,
 		trackOptions: ConversionAudioOptions,
+		outputTrackId: number,
 		source: AudioSampleSource,
 		sample: AudioSample,
 	) {
@@ -1624,7 +1729,7 @@ export class Conversion {
 			return;
 		}
 
-		this._reportProgress(track.id, sample.timestamp + sample.duration);
+		this._reportProgress(outputTrackId, sample.timestamp + sample.duration);
 
 		let finalSamples: AudioSample[];
 		if (!trackOptions.process) {
@@ -1653,7 +1758,7 @@ export class Conversion {
 
 			await source.add(finalSample);
 
-			if (this._synchronizer.shouldWait(track.id, finalSample.timestamp)) {
+			if (this._synchronizer.shouldWait(outputTrackId, finalSample.timestamp)) {
 				await this._synchronizer.wait(finalSample.timestamp);
 			}
 		}
@@ -1669,6 +1774,7 @@ export class Conversion {
 	_resampleAudio(
 		track: InputAudioTrack,
 		trackOptions: ConversionAudioOptions,
+		outputTrackId: number,
 		codec: AudioCodec,
 		targetNumberOfChannels: number,
 		targetSampleRate: number,
@@ -1690,7 +1796,7 @@ export class Conversion {
 				onSample: async (sample) => {
 					sample.setTimestamp(sample.timestamp - this._startTimestamp);
 
-					await this._registerAudioSample(track, trackOptions, source, sample);
+					await this._registerAudioSample(track, trackOptions, outputTrackId, source, sample);
 					sample.close();
 				},
 			});
@@ -1711,7 +1817,7 @@ export class Conversion {
 			await resampler.finalize();
 
 			source.close();
-			this._synchronizer.closeTrack(track.id);
+			this._synchronizer.closeTrack(outputTrackId);
 		})());
 
 		return source;
