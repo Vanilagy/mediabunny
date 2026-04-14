@@ -48,7 +48,7 @@ import {
 	promiseWithResolvers,
 	Rotation,
 } from './misc';
-import { Output, TrackType } from './output';
+import { Output, OutputTrackGroup, TrackType } from './output';
 import { Mp4OutputFormat } from './output-format';
 import { AudioSample, clampCropRectangle, validateCropRectangle, VideoSample } from './sample';
 import { MetadataTags, validateMetadataTags } from './metadata';
@@ -251,6 +251,8 @@ export type ConversionVideoOptions = {
 	 * encoder configuration.
 	 */
 	processedHeight?: number;
+	/** Defines the group(s) the output track is a part of. Same semantics as {@link BaseTrackMetadata.group}. */
+	group?: OutputTrackGroup | OutputTrackGroup[];
 };
 
 /**
@@ -295,6 +297,8 @@ export type ConversionAudioOptions = {
 	 * encoder configuration.
 	 */
 	processedSampleRate?: number;
+	/** Defines the group(s) the output track is a part of. Same semantics as {@link BaseTrackMetadata.group}. */
+	group?: OutputTrackGroup | OutputTrackGroup[];
 };
 
 const validateVideoOptions = (videoOptions: ConversionVideoOptions) => {
@@ -392,6 +396,15 @@ const validateVideoOptions = (videoOptions: ConversionVideoOptions) => {
 			+ ' \'prefer-software\'.',
 		);
 	}
+	if (
+		videoOptions?.group !== undefined
+		&& !(
+			videoOptions.group instanceof OutputTrackGroup
+			|| (Array.isArray(videoOptions.group) && videoOptions.group.every(x => x instanceof OutputTrackGroup))
+		)
+	) {
+		throw new TypeError('options.video.group, when provided, must be a string or an array of strings.');
+	}
 };
 
 const validateAudioOptions = (audioOptions: ConversionAudioOptions) => {
@@ -442,6 +455,15 @@ const validateAudioOptions = (audioOptions: ConversionAudioOptions) => {
 		&& (!Number.isInteger(audioOptions.processedSampleRate) || audioOptions.processedSampleRate <= 0)
 	) {
 		throw new TypeError('options.audio.processedSampleRate, when provided, must be a positive integer.');
+	}
+	if (
+		audioOptions?.group !== undefined
+		&& !(
+			audioOptions.group instanceof OutputTrackGroup
+			|| (Array.isArray(audioOptions.group) && audioOptions.group.every(x => x instanceof OutputTrackGroup))
+		)
+	) {
+		throw new TypeError('options.audio.group, when provided, must be a string or an array of strings.');
 	}
 };
 
@@ -1453,6 +1475,7 @@ export class Conversion {
 			name: await track.getName() ?? undefined,
 			disposition: await track.getDisposition(),
 			rotation: outputTrackRotation,
+			group: trackOptions.group,
 		});
 		this._addedCounts.video++;
 		this._totalTrackCount++;
@@ -1709,6 +1732,7 @@ export class Conversion {
 			languageCode: isIso639Dash2LanguageCode(audioTrackLanguageCode) ? audioTrackLanguageCode : undefined,
 			name: await track.getName() ?? undefined,
 			disposition: await track.getDisposition(),
+			group: trackOptions.group,
 		});
 		this._addedCounts.audio++;
 		this._totalTrackCount++;
