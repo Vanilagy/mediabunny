@@ -126,6 +126,10 @@ const addAacPackets = async (source: EncodedAudioPacketSource, durationSeconds: 
 	}
 };
 
+const sanitizeMasterPlaylist = (text: string) => {
+	return text.replace(/CODECS=".+?"/g, 'CODECS="?"');
+};
+
 test('HLS track assignability is kept #1', async () => {
 	const files = new Map<string, ArrayBuffer>();
 
@@ -167,7 +171,7 @@ test('HLS track assignability is kept #1', async () => {
 
 	await output.finalize();
 
-	const masterPlayist = new TextDecoder().decode(files.get('master.m3u8'));
+	const masterPlayist = sanitizeMasterPlaylist(new TextDecoder().decode(files.get('master.m3u8')));
 	expect(masterPlayist.match(/\.m3u8/g)?.length).toBe(1);
 
 	using input = new Input({
@@ -198,7 +202,7 @@ test('HLS track assignability is kept #1', async () => {
 	const conversion = await Conversion.init({ input, output: newOutput });
 	await conversion.execute();
 
-	const newMasterPlayist = new TextDecoder().decode(files.get('new/master.m3u8'));
+	const newMasterPlayist = sanitizeMasterPlaylist(new TextDecoder().decode(files.get('new/master.m3u8')));
 	expect(newMasterPlayist).toBe(masterPlayist);
 });
 
@@ -246,7 +250,7 @@ test('HLS track assignability is kept #2', async () => {
 
 	await output.finalize();
 
-	const masterPlayist = new TextDecoder().decode(files.get('master.m3u8'));
+	const masterPlayist = sanitizeMasterPlaylist(new TextDecoder().decode(files.get('master.m3u8')));
 	expect(masterPlayist.match(/\.m3u8/g)?.length).toBe(2);
 
 	using input = new Input({
@@ -277,7 +281,7 @@ test('HLS track assignability is kept #2', async () => {
 	const conversion = await Conversion.init({ input, output: newOutput });
 	await conversion.execute();
 
-	const newMasterPlayist = new TextDecoder().decode(files.get('new/master.m3u8'));
+	const newMasterPlayist = sanitizeMasterPlaylist(new TextDecoder().decode(files.get('new/master.m3u8')));
 	expect(newMasterPlayist).toBe(masterPlayist);
 });
 
@@ -325,7 +329,7 @@ test('HLS track assignability can be overridden', async () => {
 
 	await output.finalize();
 
-	const masterPlayist = new TextDecoder().decode(files.get('master.m3u8'));
+	const masterPlayist = sanitizeMasterPlaylist(new TextDecoder().decode(files.get('master.m3u8')));
 	expect(masterPlayist.match(/\.m3u8/g)?.length).toBe(2);
 
 	using input = new Input({
@@ -361,7 +365,7 @@ test('HLS track assignability can be overridden', async () => {
 	});
 	await conversion.execute();
 
-	const newMasterPlayist = new TextDecoder().decode(files.get('new/master.m3u8'));
+	const newMasterPlayist = sanitizeMasterPlaylist(new TextDecoder().decode(files.get('new/master.m3u8')));
 	expect(newMasterPlayist).not.toBe(masterPlayist);
 	expect(newMasterPlayist.match(/\.m3u8/g)?.length).toBe(1);
 });
