@@ -492,7 +492,7 @@ export type UrlSourceOptions = {
 	 * failed. If the function returns `null`, no more retries will be made.
 	 *
 	 * By default, it uses an exponential backoff algorithm that never gives up unless
-	 * a CORS error is suspected (`fetch()` did reject, `navigator.onLine` is true and origin is different)
+	 * a CORS error is suspected (`fetch()` did reject, `navigator.onLine` is true and origin is different).
 	 */
 	getRetryDelay?: (previousAttempts: number, error: unknown, url: string | URL | Request) => number | null;
 
@@ -2187,7 +2187,7 @@ export class RangedSource extends Source {
  * @group Input sources
  * @public
  */
-export class PathedSource<S extends Source> {
+export class PathedSource<S extends Source = Source> {
 	/** Creates a new {@link PathedSource} from a root path and a callback. */
 	constructor(
 		/** The path that points to the root file; the entry file of the media. */

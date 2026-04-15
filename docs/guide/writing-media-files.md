@@ -40,6 +40,8 @@ output.addSubtitleTrack(subtitleSource);
 
 For each track you want to add, you'll need to create a unique [media source](./media-sources) for it. You'll be able to add media data to the output via these media sources. A media source can only ever be used for one output track.
 
+These methods return the newly created `OutputTrack` instance.
+
 Optionally, you can specify additional track metadata when adding tracks:
 ```ts
 // This specifies that the video track should be rotated by 90 degrees
@@ -106,6 +108,40 @@ output.addAudioTrack(audioSource);
 ::: warning
 Adding tracks to an `Output` will throw if the track is not compatible with the output format. Be sure to respect the [properties](./output-formats#format-properties) of the output format when adding tracks.
 :::
+
+### Track groups & pairability
+
+To control output track pairability (which tracks can be presented with which tracks), Mediabunny uses a concept called "track groups". Tracks are assigned to zero or more groups, and their group membership determines with which other tracks they can be paired. This system allows for the common pairability patterns to be described easily.
+
+For typical file formats, configuring track groups is not necessary and does nothing. It is relevant for configuring many-track formats such as HLS, where track groups affect the structure of the master playlist.
+
+Two output tracks are considered pairable if at least one of these is true:
+- They are part of the same group but have a different type (video, audio, subtitle)
+- They are in two different groups that have been paired with each other
+
+Create track groups like this:
+```ts
+import { OutputTrackGroup } from 'mediabunny';
+
+const groupA = new OutputTrackGroup();
+const groupB = new OutputTrackGroup();
+```
+
+You can optionally pair groups like this:
+```ts
+// After this, any track in group A can be paired with any track in group B
+groupA.pairWith(groupB); // Automatically pairs B with A as well (symmetric operation)
+```
+
+Assign tracks to groups during track registration:
+```ts
+output.addVideoTrack(videoSource, { group: groupA });
+output.addAudioTrack(audioSource, { group: [groupA, groupB] });
+```
+
+By default, when not specified, every track will be assigned to `Output.defaultTrackGroup`. This in turn means that the default track pairing rules are:
+- Tracks of different type (video, audio, subtitle) can always be paired with each other
+- No two tracks of the same type (e.g. two audio tracks) can be paired with each other
 
 ## Setting metadata tags
 
@@ -395,6 +431,33 @@ const output = new Output({
 	}),
 });
 ```
+
+## Pathed (multi-file) targets
+
+Some output formats write more than one file. For example, an [HLS](./output-formats#hls) output produces a master playlist alongside one or more media playlists and many media segment files. To write this kind of multi-file output, Mediabunny needs a way to resolve the paths it wants to write into [output targets](#output-targets). You can use `PathedTarget` for that.
+
+A `PathedTarget` wraps a *root path* (the entry file of the media) together with a callback that produces a `Target` for each requested file path:
+```ts
+import { Output, PathedTarget, FilePathTarget, HlsOutputFormat } from 'mediabunny';
+
+const output = new Output({
+	format: new HlsOutputFormat({ /* ... */ }),
+	target: new PathedTarget(
+		'master.m3u8',
+		({ path, isRoot }) => new FilePathTarget(`/output/${path}`),
+	),
+});
+```
+
+The callback is called once per file the format wants to write and receives a `TargetRequest`:
+```ts
+type TargetRequest = {
+	path: FilePath; // The requested file path
+	isRoot: boolean; // Whether the requested file is the root file
+};
+```
+
+The kind of `Target` you create inside the callback is up to you - use `FilePathTarget` for files on disk, `StreamTarget` to upload chunks to a server, or any other target type that fits.
 
 ## Packet buffering
 

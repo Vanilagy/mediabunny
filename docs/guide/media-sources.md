@@ -57,6 +57,19 @@ type VideoEncodingConfig = {
 	contentHint?: string;
 	sizeChangeBehavior?: 'deny' | 'passThrough' | 'fill' | 'contain' | 'cover';
 
+	transform?: {
+		width?: number;
+		height?: number;
+		fit?: 'fill' | 'contain' | 'cover';
+		rotate?: 0 | 90 | 180 | 270;
+		crop?: { left: number; top: number; width: number; height: number };
+		frameRate?: number;
+		process?: (sample: VideoSample) => MaybePromise<
+			CanvasImageSource | VideoSample | (CanvasImageSource | VideoSample)[] | null
+		>;
+		force?: boolean;
+	};
+
 	onEncodedPacket?: (
 		packet: EncodedPacket,
 		meta: EncodedVideoChunkMetadata | undefined
@@ -78,7 +91,19 @@ type VideoEncodingConfig = {
 - `hardwareAcceleration`: A hint that configures the hardware acceleration method of this codec. This is best left on `'no-preference'`.
 - `scalabilityMode`: An encoding scalability mode identifier as defined by [WebRTC-SVC](https://w3c.github.io/webrtc-svc/#scalabilitymodes*).
 - `contentHint`: An encoding video content hint as defined by [mst-content-hint](https://w3c.github.io/mst-content-hint/#video-content-hints).
-- `sizeChangeBehavior`: Video frames may change size overtime. This field controls the behavior in case this happens. Defaults to `'deny'`. 
+- `sizeChangeBehavior`: Video frames may change size over time. This field controls the behavior in case this happens. Defaults to `'deny'`. 
+- `transform`: Optional transformations to apply to the video frames before they are passed to the encoder.
+	- `width`: The width in pixels to resize the frames to. If `height` is not set, it will be deduced automatically based on aspect ratio.
+	- `height`: The height in pixels to resize the frames to. If `width` is not set, it will be deduced automatically based on aspect ratio.
+	- `fit`: The fitting algorithm in case both `width` and `height` are set. To avoid ambiguity, this field must not be set when `sizeChangeBehavior` is `'fill'`, `'contain'` or `'deny'`, since `sizeChangeBehavior` already determines the fitting algorithm.
+		- `'fill'` will stretch the image to fill the entire box, potentially altering aspect ratio.
+		- `'contain'` will contain the entire image within the box while preserving aspect ratio. This may lead to letterboxing.
+		- `'cover'` will scale the image until the entire box is filled, while preserving aspect ratio.
+	- `rotate`: The clockwise rotation by which to rotate the frames. Rotation is applied before resizing.
+	- `crop`: Specifies the rectangular region of the frames to crop to. The crop region will automatically be clamped to the dimensions of the frame. Cropping is performed after rotation but before resizing.
+	- `frameRate`: The frame rate in hertz to normalize the video frame stream to.
+	- `process`: Allows for custom user-defined processing of video frames, e.g. for applying overlays, color transformations, or timestamp modifications. Will be called for each video frame after transformations and frame rate corrections. Must return a `VideoSample` or a `CanvasImageSource`, an array of them, or `null` for dropping the frame. When non-timestamped data is returned, the timestamp and duration from the input sample will be used.
+	- `force`: Forces every video frame through the transformation step even if no transformation properties are defined. This can be used, for example, to bake rotation into the encoded video frames.
 - `onEncodedPacket`: Called for each successfully encoded packet. Useful for determining encoding progress.
 - `onEncoderConfig`: Called when the internal encoder config, as used by the WebCodecs API, is created. You can use this to introspect the full codec string.
 
@@ -91,6 +116,14 @@ type AudioEncodingConfig = {
 	bitrate?: number | Quality;
 	bitrateMode?: 'constant' | 'variable';
 	fullCodecString?: string;
+
+	transform?: {
+		numberOfChannels?: number;
+		sampleRate?: number;
+		process?: (sample: AudioSample) => MaybePromise<
+			AudioSample | AudioSample[] | null
+		>;
+	};
 
 	onEncodedPacket?: (
 		packet: EncodedPacket,
@@ -105,6 +138,10 @@ type AudioEncodingConfig = {
 - `bitrate`: The target number of bits per second. Alternatively, this can be a [subjective quality](#subjective-qualities).
 - `bitrateMode`: Can be used to control constant vs. variable bitrate.
 - `fullCodecString`: Allows you to optionally specify the full codec string used by the audio encoder, as specified in the [Mediabunny Codec Registry](/codec-registry/overview). For example, you may set it to `'mp4a.40.2'` when using AAC. Keep in mind that the codec string must still match the codec specified in `codec`. If you don't set this field, a codec string will be generated automatically.
+- `transform`: Optional transformations to apply to the audio samples before they are passed to the encoder.
+	- `numberOfChannels`: The desired number of output channels to up/downmix to.
+	- `sampleRate`: The desired output sample rate in hertz to resample to.
+	- `process`: Allows for custom user-defined processing of audio samples, e.g. for applying audio effects or timestamp modifications. Called for each audio sample after resampling and remixing. Must return an `AudioSample`, an array of them, or `null` for dropping the sample.
 - `onEncodedPacket`: Called for each successfully encoded packet. Useful for determining encoding progress.	
 - `onEncoderConfig`: Called when the internal encoder config, as used by the WebCodecs API, is created. You can use this to introspect the full codec string.
 

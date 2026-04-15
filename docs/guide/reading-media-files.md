@@ -40,9 +40,25 @@ Reading operations will throw an error if the file format could not be recognize
 Simply creating an instance of `Input` will perform zero reads and is practically free. The file will only be read once data is requested.
 :::
 
+For convenience, `createInputFrom` automatically constructs an `Input` along with the matching source for a given value:
+
+```ts
+import { createInputFrom, ALL_FORMATS } from 'mediabunny';
+
+const input = createInputFrom(file, ALL_FORMATS);
+const input = createInputFrom(arrayBuffer, ALL_FORMATS);
+const input = createInputFrom('https://example.com/video.mp4', ALL_FORMATS);
+const input = createInputFrom('./video.mp4', ALL_FORMATS); // Uses the file system server-side, fetch client-side
+```
+
 ## Reading file metadata
 
 With our instance of `Input` created, you can now start reading file-level metadata.
+
+You can check if Mediabunny can read the file:
+```ts
+await input.canRead();
+```
 
 You can query the concrete format of the file like this:
 ```ts
@@ -60,6 +76,18 @@ await input.computeDuration(); // => 1905.4615
 ```
 More specifically, the duration is defined as the maximum end timestamp across all tracks.
 
+If you only need an approximate duration and want to avoid expensive scanning operations, you can read it directly from file metadata (where available):
+```ts
+await input.getDurationFromMetadata(); // => number | null
+```
+This resolves to `null` if the file doesn't expose its duration as metadata.
+
+Both `computeDuration` and `getDurationFromMetadata` will not resolve if the underlying media is live (because the duration is not yet known!). To get the duration *up to the known point* (the live edge), do this:
+```ts
+await input.computeDuration(undefined, { skipLiveWait: true });
+await input.getDurationFromMetadata(undefined, { skipLiveWait: true });
+```
+
 Since not all media files begin at time zero, you can also retrieve the *starting timestamp* of the media file in seconds:
 ```ts
 await input.getFirstTimestamp(); // => 0.0
@@ -72,6 +100,8 @@ await input.getMetadataTags(); // => MetadataTags
 For more info, see [`MetadataTags`](../api/MetadataTags).
 
 ## Reading track metadata
+
+### Extracting tracks
 
 You can extract the list of all media tracks in the file like so:
 ```ts
@@ -90,6 +120,30 @@ await input.getPrimaryAudioTrack(); // => InputAudioTrack | null
 ::: info
 Subtitle tracks are currently not supported for reading.
 :::
+
+These methods accept an optional [`InputTrackQuery`](../api/InputTrackQuery) parameter for filtering and sorting tracks. This query system is especially useful for inputs with many tracks such as HLS playlists. The helpers `asc`, `desc`, and `prefer` make it easy to express sorting logic.
+
+```ts
+import { desc, prefer } from 'mediabunny';
+
+// Get the highest-resolution video track:
+await input.getPrimaryVideoTrack({
+	sortBy: async track => [
+		desc(await track.getDisplayWidth()),
+		desc(await track.getBitrate()), // If resolution matches, prefer the highest bitrate
+	],
+});
+
+// Get only English audio tracks:
+await input.getAudioTracks({
+	filter: async track => await track.getLanguageCode() === 'eng',
+});
+
+// Get an English track but only if one exists:
+await input.getAudioTracks({
+	sortBy: async track => prefer(await track.getLanguageCode() === 'eng'),
+});
+```
 
 ### Common track metadata
 
@@ -119,6 +173,21 @@ await track.getName(); // => string | null
 // Information about the intended usage of the track
 // (default, commentary, hearing-impaired, visually-impaired, etc.)
 await track.getDisposition(); // TrackDisposition
+
+// The track's peak bitrate, if exposed by the file metadata:
+await track.getBitrate(); // => number | null
+
+// The track's average bitrate, if exposed by the file metadata:
+await track.getAverageBitrate(); // => number | null
+
+// Whether all packets in the track are key packets:
+await track.hasOnlyKeyPackets(); // => boolean
+
+// Whether the track is currently live (meaning new media data is still being added):
+await track.isLive(); // => boolean
+
+// If the track is live, returns the interval in seconds at which new data is expected:
+await track.getLiveRefreshInterval(); // => number | null
 ```
 
 #### Codec information
@@ -151,6 +220,11 @@ await track.computeDuration(); // => 1902.4615
 ```
 Analogous to the `Input`'s duration, this is identical to the end timestamp of the last sample. A track's duration may be shorter than the `Input`'s total duration if the `Input` has multiple tracks which differ in length.
 
+You can also retrieve the approximate duration based on metadata in the file:
+```ts
+await track.getDurationFromMetadata(); // => number | null
+```
+
 You can also retrieve the track's *start timestamp* in seconds:
 ```ts
 await track.getFirstTimestamp(); // => 0.041666666666666664
@@ -176,6 +250,11 @@ $$ \frac{k}{x},\quad k \in \mathbb{Z} $$
 ::: info
 This field only gives an upper bound on a track's frame rate. To get a track's actual frame rate based on its samples, compute its [packet statistics](#packet-statistics).
 :::
+
+Some tracks (especially live tracks) have timestamps which are relative to the Unix epoch (Jan 1 1970, midnight UTC). In other words, their timestamps *are* Unix timestamps. This allows you to map the media data to a definitive point in wall-clock time. To see if this is the case, use:
+```ts
+await track.isRelativeToUnixEpoch(); // => boolean
+```
 
 #### Packet statistics
 
@@ -307,6 +386,34 @@ For example, here's the decoder configuration for an AAC audio track:
 		17, 144,
 	]),
 }
+```
+
+### Track pairability
+
+Mediabunny has a concept of "track pairability". Two different tracks are considered _pairable_ if they are compatible with each other, meaning they can be presented together. For example, in a normal file, the video track can be paired with the audio track. If it has multiple audio tracks, the video track can be paired with each one of them, but the audio tracks cannot be paired with each other; they're not intended to be played at the same time.
+
+This concept is needed to model the more complex track configurations found in many-track formats such as HLS. Here, an audio track may be pairable with all video tracks or just one; it depends on the master playlist. These inter-track relations are exactly what track pairability describes.
+
+To see if two tracks are pairable, do:
+```ts
+const canPair = trackA.canBePairedWith(trackB);
+```
+
+Each track also provides utilities that let you find its pairable tracks easily:
+```ts
+// These return an array of tracks
+await track.getPairableTracks();
+await track.getPairableVideoTracks();
+await track.getPairableAudioTracks();
+
+// These return one track or null
+await track.getPrimaryPairableVideoTrack();
+await track.getPrimaryPairableAudioTrack();
+
+// These resolve to booleans:
+await track.hasPairableTrack();
+await track.hasPairableVideoTrack();
+await track.hasPairableAudioTrack();
 ```
 
 ## Reading media data
@@ -443,11 +550,20 @@ Using `using` is recommended over `const` if you only need the `Input` momentari
 
 The _input source_ determines where the `Input` reads data from.
 
-All sources have an `onread` callback property you can set to inspect which areas of the file are being read:
+All sources have a `read` event you can use to inspect which areas of the file are being read:
 ```ts
-source.onread = (start, end) => {
+source.on('read', ({ start, end }) => {
 	console.log(`Reading byte range [${start}, ${end})`);
-};
+});
+```
+
+You can derive a `RangedSource` representing only a sub-section of an existing source via `slice`:
+```ts
+// A source over only the first 1024 bytes:
+const sliced = source.slice(0, 1024);
+
+// A source that starts 8192 bytes into the original source:
+const sliced2 = source.slice(8192);
 ```
 
 ---
@@ -714,4 +830,39 @@ recorder.onstop = async () => {
 
 recorder.start(1000);
 setTimeout(() => recorder.stop(), 10_000); // Stop recording after 10s
+```
+
+## Pathed (multi-file) sources
+
+Some media formats reference more than one file. For example, an [HLS](./input-formats) stream consists of a master playlist that points to one or more media playlists, each of which in turn references many media segment files. To read this kind of multi-file media, Mediabunny needs a way to resolve those file paths into [input sources](#input-sources). You can do this using `PathedSource`.
+
+A `PathedSource` wraps a *root path* (the entry file of the media) together with a callback that produces a `Source` for each requested file path:
+```ts
+import { Input, HLS, PathedSource, UrlSource } from 'mediabunny';
+
+const input = new Input({
+	formats: [HLS],
+	source: new PathedSource(
+		'https://example.com/stream/master.m3u8',
+		({ path, isRoot }) => new UrlSource(path),
+	),
+});
+```
+
+The callback is called once per requested file (lazily, only when needed) and receives a `SourceRequest`:
+```ts
+type SourceRequest = {
+	path: FilePath; // The requested file path
+	isRoot: boolean; // Whether the requested file is the root file
+};
+```
+
+You can return either a `Source` or a [`SourceRef`](../api/SourceRef). The kind of `Source` you create inside the callback is up to you - use `UrlSource` for streams served over HTTP, `FilePathSource` for files on disk, `BufferSource` for files in memory, or any other source type (or mix of them) that fits.
+
+## Init inputs
+
+Some file formats contain track initialization info in a *separate* file; CMAF is one example. To supply these to Mediabunny, load the initialization file as a separate `Input` and then pass it as an `initInput`:
+```ts
+const initInput = createInputFrom('init.mp4', ALL_FORMATS);
+const input = createInputFrom('data.mp4', ALL_FORMATS, { initInput });
 ```

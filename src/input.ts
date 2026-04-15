@@ -693,8 +693,8 @@ export type CreateInputFromOptions =
  * function automatically chooses the correct underlying {@link Source} based on the type of the data passed in.
  *
  * Legal data types are `ArrayBuffer`, `SharedArrayBuffer`, `ArrayBufferView`, `Blob` (and, by extension, `File`),
- * `ReadableStream<Uint8Array>`, `string` (representing either a URL or a local file path), `URL`, and `Request`. Local
- * file paths require a Node-like server-side environment with access to the file system.
+ * `ReadableStream<Uint8Array>`, `string` (representing either a URL or a local file path), `URL`, `Request`, `Source`
+ * and `PathedSource`. Local file paths require a Node-like server-side environment with access to the file system.
  *
  * The available options are the union of the options for each {@link Source}. Check the sources to see which field
  * applies to which source.
@@ -706,7 +706,7 @@ export type CreateInputFromOptions =
  * @public
  */
 export const createInputFrom = (
-	data: AllowSharedBufferSource | Blob | ReadableStream<Uint8Array> | string | URL | Request,
+	data: AllowSharedBufferSource | Blob | ReadableStream<Uint8Array> | string | URL | Request | Source | PathedSource,
 	formats: InputFormat[],
 	options: CreateInputFromOptions = {},
 ): Input => {
@@ -718,6 +718,14 @@ export const createInputFrom = (
 	}
 
 	const { initInput, ...sourceOptions } = options;
+
+	if (data instanceof Source || data instanceof PathedSource) {
+		return new Input({
+			formats,
+			source: data,
+			initInput,
+		});
+	}
 
 	if (
 		data instanceof ArrayBuffer

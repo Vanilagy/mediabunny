@@ -666,14 +666,10 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 			const variableName = declaration.name.getText();
 
 			// Get variable description from JSDoc
-			const jsDocComment = ts.getJSDocCommentsAndTags(declaration)[0];
-			let description = '';
-			if (jsDocComment && ts.isJSDoc(jsDocComment)) {
-				const commentText = jsDocComment.comment;
-				if (typeof commentText === 'string') {
-					description = processLinkTags(commentText.trim(), variableName);
-				}
-			}
+			const description = extractJsDocDescription(declaration, {
+				tagHandling: 'filterAll',
+				transform: text => processLinkTags(text, variableName),
+			});
 
 			// Check if it's a function type
 			const variableType = typeChecker.getTypeAtLocation(declaration);
@@ -779,42 +775,10 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 			let typeParameters: string | null = null;
 
 			// Get class description from JSDoc (or from superclass if none)
-			let description = '';
-			const jsDocComment = ts.getJSDocCommentsAndTags(declaration)[0];
-
-			if (jsDocComment && ts.isJSDoc(jsDocComment)) {
-				// First try to get the comment from the parsed JSDoc
-				const commentText = jsDocComment.comment;
-				if (typeof commentText === 'string' && commentText.trim()) {
-					description = processLinkTags(commentText.trim(), className);
-				} else {
-					// If no comment text, extract from raw source text
-					const sourceFile = declaration.getSourceFile();
-					const sourceText = sourceFile.getFullText();
-					const start = jsDocComment.getStart();
-					const end = jsDocComment.getEnd();
-					const rawJsDoc = sourceText.substring(start, end);
-
-					// Extract the content between /** and */
-					const match = rawJsDoc.match(/\/\*\*(.*?)\*\//s);
-					if (match && match[1]) {
-						const content = match[1]
-							.split('\n')
-							.map(line => line.replace(/^\s*\*\s?/, '')) // Remove leading * and spaces
-							.join('\n')
-							.trim();
-
-						// Filter out @tags but keep the description
-						const lines = content.split('\n');
-						const descLines = lines.filter(line => !line.trim().startsWith('@'));
-						const rawDesc = descLines.join('\n').trim();
-
-						if (rawDesc) {
-							description = processLinkTags(rawDesc, className);
-						}
-					}
-				}
-			}
+			let description = extractJsDocDescription(declaration, {
+				tagHandling: 'filterAll',
+				transform: text => processLinkTags(text, className),
+			});
 
 			// If no description, check superclass (only for classes/interfaces)
 			if (!description && (ts.isClassDeclaration(declaration) || ts.isInterfaceDeclaration(declaration)) && declaration.heritageClauses) {
@@ -923,37 +887,12 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 
 			// Helper to get JSDoc description with superclass fallback (recursive)
 			const getDescriptionWithFallback = (member: ts.ClassElement | ts.TypeElement, memberName: string): string => {
-				const jsDoc = ts.getJSDocCommentsAndTags(member)[0];
-				if (jsDoc && ts.isJSDoc(jsDoc)) {
-					// First try the parsed comment
-					if (typeof jsDoc.comment === 'string' && jsDoc.comment.trim()) {
-						return processLinkTags(jsDoc.comment.trim(), className);
-					} else {
-						// If no parsed comment, extract from raw source (same logic as class descriptions)
-						const sourceFile = member.getSourceFile();
-						const sourceText = sourceFile.getFullText();
-						const start = jsDoc.getStart();
-						const end = jsDoc.getEnd();
-						const rawJsDoc = sourceText.substring(start, end);
-
-						const match = rawJsDoc.match(/\/\*\*(.*?)\*\//s);
-						if (match && match[1]) {
-							const content = match[1]
-								.split('\n')
-								.map(line => line.replace(/^\s*\*\s?/, '')) // Remove leading * and spaces
-								.join('\n')
-								.trim();
-
-							// Filter out @tags but keep the description
-							const lines = content.split('\n');
-							const descLines = lines.filter(line => !line.trim().startsWith('@'));
-							const rawDesc = descLines.join('\n').trim();
-
-							if (rawDesc) {
-								return processLinkTags(rawDesc, className);
-							}
-						}
-					}
+				const ownDescription = extractJsDocDescription(member, {
+					tagHandling: 'filterAll',
+					transform: text => processLinkTags(text, className),
+				});
+				if (ownDescription) {
+					return ownDescription;
 				}
 
 				// Recursively check superclass hierarchy for this member's documentation
@@ -1907,43 +1846,71 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 	}
 };
 
-// Helper to get the full description text from a JSDoc comment, handling inline tags.
-const getFullJSDocDescription = (node: ts.Node): string => {
+// Shared helper for extracting a JSDoc description, handling inline tags via raw-source fallback.
+// - `tagHandling: 'stopAtFirst'` matches the behavior used by property-level descriptions: if any
+//   @-tag line is encountered, all subsequent lines are dropped (including any trailing description).
+// - `tagHandling: 'filterAll'` matches the behavior used by class/variable top-level descriptions:
+//   every @-tag line is filtered out individually, preserving interleaved description lines.
+// - `transform` is applied to the final non-empty description (e.g. to process {@link} tags).
+const extractJsDocDescription = (
+	node: ts.Node,
+	opts: { tagHandling: 'stopAtFirst' | 'filterAll'; transform?: (text: string) => string },
+): string => {
 	const jsDoc = ts.getJSDocCommentsAndTags(node)[0];
-	if (!jsDoc || !ts.isJSDoc(jsDoc)) return '';
-
-	// If it's a simple string, just return it.
-	if (typeof jsDoc.comment === 'string') {
-		return jsDoc.comment.trim();
+	if (!jsDoc || !ts.isJSDoc(jsDoc)) {
+		return '';
 	}
 
-	// If it's a structured comment (with inline tags), get the raw text.
+	const transform = opts.transform ?? ((t: string) => t);
+
+	// If the parsed comment is a non-empty string (no inline tags), use it directly.
+	// When the parsed comment is an empty string or a structured NodeArray (inline tags like
+	// {@link}), fall through to raw-source extraction. For empty-string comments this is safe:
+	// the raw block can only contain @-tags, so raw extraction also yields empty.
+	if (typeof jsDoc.comment === 'string' && jsDoc.comment.trim()) {
+		return transform(jsDoc.comment.trim());
+	}
+
+	// Structured comment (contains inline tags like {@link}); extract description from raw source.
 	const sourceFile = node.getSourceFile();
 	const sourceText = sourceFile.getFullText();
-	const start = jsDoc.getStart();
-	const end = jsDoc.getEnd();
-	const rawJsDoc = sourceText.substring(start, end);
+	const rawJsDoc = sourceText.substring(jsDoc.getStart(), jsDoc.getEnd());
 
-	// Extract the content between /** and */
 	const match = rawJsDoc.match(/\/\*\*(.*?)\*\//s);
-	if (match && match[1]) {
-		const content = match[1]
-			.split('\n')
-			.map(line => line.replace(/^\s*\*\s?/, '')) // Remove leading * and spaces
-			.join('\n')
-			.trim();
-
-		// Filter out @-tags (like @param, @returns) to keep only the main description
-		const lines = content.split('\n');
-		const descLines = [];
-		for (const line of lines) {
-			if (line.trim().startsWith('@')) break; // Stop at the first @-tag
-			descLines.push(line);
-		}
-		return descLines.join('\n').trim();
+	if (!match || !match[1]) {
+		return '';
 	}
 
-	return '';
+	const content = match[1]
+		.split('\n')
+		.map(line => line.replace(/^\s*\*\s?/, '')) // Remove leading * and spaces
+		.join('\n')
+		.trim();
+
+	const lines = content.split('\n');
+	let descLines: string[];
+	if (opts.tagHandling === 'stopAtFirst') {
+		descLines = [];
+		for (const line of lines) {
+			if (line.trim().startsWith('@')) {
+				break;
+			}
+			descLines.push(line);
+		}
+	} else {
+		descLines = lines.filter(line => !line.trim().startsWith('@'));
+	}
+
+	const rawDesc = descLines.join('\n').trim();
+	if (!rawDesc) {
+		return '';
+	}
+	return transform(rawDesc);
+};
+
+// Helper to get the full description text from a JSDoc comment, handling inline tags.
+const getFullJSDocDescription = (node: ts.Node): string => {
+	return extractJsDocDescription(node, { tagHandling: 'stopAtFirst' });
 };
 
 const main = () => {

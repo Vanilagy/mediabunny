@@ -1283,6 +1283,9 @@ export type HlsOutputFormatOptions = {
  * - One .m3u8 file for each playlist, each containing a list of media segments.
  * - Many media segments, containing the actual media data.
  *
+ * To emit media playlists that use the `#EXT-X-PROGRAM-DATE-TIME` tag to map segment timestamps to real-world time,
+ * set {@link BaseTrackMetadata.isRelativeToUnixEpoch} to `true` for all tracks.
+ *
  * @group Output formats
  * @public
  */

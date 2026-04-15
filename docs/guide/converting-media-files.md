@@ -134,6 +134,7 @@ type ConversionVideoOptions = {
 	>;
 	processedWidth?: number;
 	processedHeight?: number;
+	group?: OutputTrackGroup | OutputTrackGroup[];
 };
 
 type MaybePromise<T> = T | Promise<T>;
@@ -334,6 +335,23 @@ const conversion = await Conversion.init({
 
 For documentation about the properties of video and audio tracks, refer to [Reading track metadata](./reading-media-files#reading-track-metadata).
 
+## Track fan-out
+
+You can also set (or return) an array of options for a single input track, which causes Mediabunny to create one output track per entry, or, in other words, multiple output tracks from one input track (fan-out).
+
+This is useful for producing multiple renditions at different qualities, e.g. for [HLS](./output-formats#hls):
+```ts
+const conversion = await Conversion.init({
+	input,
+	output,
+	video: [
+		{ height: 1080, bitrate: QUALITY_HIGH },
+		{ height: 720, bitrate: QUALITY_MEDIUM },
+		{ height: 480, bitrate: QUALITY_LOW },
+	],
+});
+```
+
 ## Trimming
 
 Use the `trim` property in the conversion options to extract only a section of the input file into the output file:
@@ -418,6 +436,21 @@ const conversion = await Conversion.init({
 });
 ```
 
+## Selecting tracks
+
+Use the `tracks` option to control which input tracks are considered for conversion:
+```ts
+const conversion = await Conversion.init({
+	input,
+	output,
+	tracks: 'primary', // Only the primary video and audio tracks
+});
+```
+
+Accepted values are `'all'` or `'primary'`. The default is `'all'`, unless the input format is HLS, then it is `'primary'`. This is because HLS typically has multiple renditions of a track, and converting all of them is (usually) not desired.
+
+For a more granular selection, use the `discard` field on the tracks.
+
 ## Discarded tracks
 
 If an input track is excluded from the output file, it is considered *discarded*. The list of discarded tracks can be accessed after initializing a `Conversion`:
@@ -466,3 +499,4 @@ On the flip side, you can always query which input tracks made it into the outpu
 const conversion = await Conversion.init({ input, output });
 conversion.utilizedTracks; // => InputTrack[]
 ```
+A track may appear multiple times in this list when [fan-out](#fan-out) produces multiple output tracks from it.

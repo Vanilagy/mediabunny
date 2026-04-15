@@ -952,7 +952,7 @@ export const simplifyRational = (rational: Rational): Rational => {
  * @public
  */
 export type Rectangle = {
-	/** The distance in pixels to the left edge of the rectangle . */
+	/** The distance in pixels to the left edge of the rectangle. */
 	left: number;
 	/** The distance in pixels to the top edge of the rectangle. */
 	top: number;

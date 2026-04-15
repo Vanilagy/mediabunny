@@ -174,7 +174,7 @@ export type ConversionVideoOptions = {
 	 */
 	rotate?: Rotation;
 	/**
-	 * Defaults to `true`. When enabaled, Mediabunny will use the rotation metadata in the output file to perform video
+	 * Defaults to `true`. When enabled, Mediabunny will use the rotation metadata in the output file to perform video
 	 * rotation whenever possible. Set this field to `false` if you want to ensure the output file does not make use of
 	 * rotation metadata and that any rotation is baked into the video frames directly.
 	 */

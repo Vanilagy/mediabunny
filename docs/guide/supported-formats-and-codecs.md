@@ -6,6 +6,7 @@ Mediabunny supports many commonly used media container formats, all of which are
 
 - ISOBMFF-based formats (.mp4, .m4v, .m4a, ...)
 - QuickTime File Format (.mov)
+- Segmented MP4 (CMAF) (.m4s)
 - Matroska (.mkv)
 - WebM (.webm)
 - Ogg (.ogg)
@@ -14,6 +15,7 @@ Mediabunny supports many commonly used media container formats, all of which are
 - ADTS (.aac)
 - FLAC (.flac)
 - MPEG Transport Stream (.ts)
+- HLS (.m3u8)
 
 ## Codecs
 
