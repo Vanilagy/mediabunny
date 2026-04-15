@@ -72,10 +72,8 @@ export type ConversionOptions = {
 	 *
 	 * - `'all'`: All input tracks are eligible for conversion.
 	 * - `'primary'`: Only the primary video and audio track from the input are eligible for conversion.
-	 * - Array: A user-specified list of tracks that are eligible for conversion. These must all belong to the
-	 * {@link Input} specified in {@link ConversionOptions.input}.
 	 */
-	tracks?: 'all' | 'primary' | InputTrack[];
+	tracks?: 'all' | 'primary';
 
 	/**
 	 * Video-specific options. When passing an object, the same options are applied to all video tracks. When passing a
@@ -619,18 +617,12 @@ export class Conversion {
 		}
 		if (
 			options.tracks !== undefined
-			&& !(
-				options.tracks === 'all'
-				|| options.tracks === 'primary'
-				|| (Array.isArray(options.tracks) && options.tracks.every(x => x instanceof InputTrack))
-			)
+			&& options.tracks !== 'all'
+			&& options.tracks !== 'primary'
 		) {
 			throw new TypeError(
-				'options.tracks, when provded, must be either \'all\', \'primary\', or an array of InputTrack.',
+				'options.tracks, when provded, must be either \'all\' or \'primary\'.',
 			);
-		}
-		if (Array.isArray(options.tracks) && !options.tracks.every(x => x.input === options.input)) {
-			throw new TypeError('Currently, all tracks in options.tracks must belong to options.input.');
 		}
 		if (
 			options.output._tracks.length > 0
@@ -708,30 +700,26 @@ export class Conversion {
 
 		let tracks: InputTrack[];
 
-		if (Array.isArray(this._options.tracks)) {
-			tracks = this._options.tracks;
+		let trackMode = this._options.tracks;
+		if (trackMode === undefined) {
+			// HACK to keep bundle size low, temp for now
+			const defaultTrackMode = inputFormat.name.includes('(HLS)')
+				? 'primary'
+				: 'all';
+
+			trackMode = defaultTrackMode;
+		}
+
+		if (trackMode === 'all') {
+			tracks = await this.input.getTracks();
+		} else if (trackMode === 'primary') {
+			const primaryVideoTrack = await this.input.getPrimaryVideoTrack();
+			const primaryAudioTrack = await this.input.getPrimaryAudioTrack();
+
+			tracks = [primaryVideoTrack, primaryAudioTrack].filter(x => x !== null);
 		} else {
-			let trackMode = this._options.tracks;
-			if (trackMode === undefined) {
-				// HACK to keep bundle size low, temp for now
-				const defaultTrackMode = inputFormat.name.includes('(HLS)')
-					? 'primary'
-					: 'all';
-
-				trackMode = defaultTrackMode;
-			}
-
-			if (trackMode === 'all') {
-				tracks = await this.input.getTracks();
-			} else if (trackMode === 'primary') {
-				const primaryVideoTrack = await this.input.getPrimaryVideoTrack();
-				const primaryAudioTrack = await this.input.getPrimaryAudioTrack();
-
-				tracks = [primaryVideoTrack, primaryAudioTrack].filter(x => x !== null);
-			} else {
-				assertNever(trackMode);
-				assert(false);
-			}
+			assertNever(trackMode);
+			assert(false);
 		}
 
 		const outputTrackCounts = this.output.format.getSupportedTrackCounts();
