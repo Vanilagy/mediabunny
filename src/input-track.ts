@@ -474,7 +474,8 @@ export abstract class InputTrack {
 const requireSync = <T>(value: MaybePromise<T>, getterName: string, asyncName: string): T => {
 	if (value instanceof Promise) {
 		throw new Error(
-			`'${getterName}' is not available synchronously for this track. Use '${asyncName}()' instead.`,
+			`'${getterName}' is deprecated and not available synchronously for this track. Use the preferred`
+			+ ` '${asyncName}()' instead.`,
 		);
 	}
 	return value;
