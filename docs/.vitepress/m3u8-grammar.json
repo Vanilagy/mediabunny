@@ -1,0 +1,106 @@
+{
+	"name": "m3u8",
+	"scopeName": "source.m3u8",
+	"fileTypes": ["m3u8"],
+	"patterns": [
+		{
+			"match": "^#EXTM3U$",
+			"name": "keyword.control.m3u8"
+		},
+		{
+			"begin": "^(#)(EXTINF)(:)",
+			"beginCaptures": {
+				"1": { "name": "punctuation.definition.comment.m3u8" },
+				"2": { "name": "keyword.control.extinf.m3u8" },
+				"3": { "name": "punctuation.separator.key-value.m3u8" }
+			},
+			"end": "$",
+			"patterns": [
+				{
+					"match": "\\b\\d+(?:\\.\\d+)?\\b",
+					"name": "string.unquoted.m3u8"
+				},
+				{
+					"match": ",",
+					"name": "punctuation.separator.sequence.m3u8"
+				},
+				{
+					"match": "[^,\\n]+",
+					"name": "string.unquoted.title.m3u8"
+				}
+			]
+		},
+		{
+			"begin": "^(#)(EXT-X-[A-Z0-9-]+|EXT-[A-Z0-9-]+)(:)",
+			"beginCaptures": {
+				"1": { "name": "punctuation.definition.comment.m3u8" },
+				"2": { "name": "keyword.control.tag.m3u8" },
+				"3": { "name": "punctuation.separator.key-value.m3u8" }
+			},
+			"end": "$",
+			"patterns": [
+				{
+					"include": "#attribute-list"
+				},
+				{
+					"match": "\\b(?:YES|NO)\\b",
+					"name": "string.unquoted.m3u8"
+				},
+				{
+					"match": "\\b\\d+(?:\\.\\d+)?\\b",
+					"name": "string.unquoted.m3u8"
+				},
+				{
+					"match": "[^,\\n]+",
+					"name": "string.unquoted.m3u8"
+				}
+			]
+		},
+		{
+			"match": "^[^#\\s][^\\n]*$",
+			"name": "source.m3u8.uri"
+		},
+		{
+			"match": "#.*$",
+			"name": "comment.line.number-sign.m3u8"
+		}
+	],
+	"repository": {
+		"attribute-list": {
+			"patterns": [
+				{
+					"match": "\\b[A-Z0-9-]+(?==)",
+					"name": "variable.parameter.m3u8"
+				},
+				{
+					"match": "=",
+					"name": "keyword.operator.assignment.m3u8"
+				},
+				{
+					"match": ",",
+					"name": "punctuation.separator.sequence.m3u8"
+				},
+				{
+					"match": "\"[^\"]*\"",
+					"name": "string.quoted.double.m3u8"
+				},
+				{
+					"match": "\\b\\d+x\\d+\\b",
+					"name": "string.unquoted.m3u8"
+				},
+				{
+					"match": "\\b\\d+(?:\\.\\d+)?\\b",
+					"name": "string.unquoted.m3u8"
+				},
+				{
+					"match": "\\b(?:YES|NO)\\b",
+					"name": "string.unquoted.m3u8"
+				},
+				{
+					"match": "\\b[A-Z0-9_-]+\\b",
+					"name": "string.unquoted.m3u8"
+				}
+			]
+		}
+	}
+}

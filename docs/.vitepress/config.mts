@@ -5,6 +5,7 @@ import llmstxt from 'vitepress-plugin-llms';
 import { HeadConfig } from 'vitepress';
 // @ts-expect-error This file gets generated once docs:generate is run
 import apiRoutes from '../api/index.json';
+import m3u8Grammar from './m3u8-grammar.json' with { type: 'json' };
 
 const DESCRIPTION = 'A JavaScript library for reading, writing, and converting media files. Directly in the browser,'
 	+ ' and faster than anybunny else.';
@@ -168,6 +169,9 @@ export default withMermaid({
 	markdown: {
 		math: true,
 		theme: { light: 'github-light', dark: 'github-dark-dimmed' },
+		shikiSetup: (shiki) => {
+			shiki.loadLanguageSync(m3u8Grammar);
+		},
 		config(md) {
 			md.use(footnote);
 		},
