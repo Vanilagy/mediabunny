@@ -84,6 +84,12 @@ export default withMermaid({
 					],
 				},
 				{
+					text: 'HLS',
+					items: [
+						{ text: 'Reading HLS', link: '/guide/reading-hls' },
+					],
+				},
+				{
 					text: 'Miscellaneous',
 					items: [
 						{ text: 'Packets & samples', link: '/guide/packets-and-samples' },
