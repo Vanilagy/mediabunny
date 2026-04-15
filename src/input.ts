@@ -543,7 +543,7 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 			sortBy: async t => [
 				prefer((await t.getDisposition()).default),
 				prefer(await t.hasPairableAudioTrack()),
-				prefer(!(await t.getHasOnlyKeyPackets())),
+				prefer(!(await t.hasOnlyKeyPackets())),
 				desc(await t.getBitrate()),
 			],
 		});

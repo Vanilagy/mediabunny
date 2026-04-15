@@ -109,7 +109,7 @@ const initMediaPlayer = async (resource: File | string) => {
 		);
 		endTimestamp = await input.getDurationFromMetadata(tracks, { skipLiveWait: true })
 			?? await input.computeDuration(tracks, { skipLiveWait: true });
-		isRelativeToUnixEpoch = (await Promise.all(tracks.map(t => t.getIsRelativeToUnixEpoch()))).some(Boolean);
+		isRelativeToUnixEpoch = (await Promise.all(tracks.map(t => t.isRelativeToUnixEpoch()))).some(Boolean);
 		playbackTimeAtStart = firstTimestamp;
 
 		// Configure the time display elements accordingly

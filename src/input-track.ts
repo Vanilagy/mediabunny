@@ -98,13 +98,7 @@ export abstract class InputTrack {
 	 * Returns whether the track metadata says that this track only contains key packets. The actual packets may
 	 * differ.
 	 */
-	abstract getHasOnlyKeyPackets(): Promise<boolean>;
-	/**
-	 * Whether the track metadata says that this track only contains key packets. The actual packets may differ.
-	 * @deprecated Use {@link InputTrack.getHasOnlyKeyPackets} instead.
-	 */
-	// eslint-disable-next-line @typescript-eslint/no-deprecated
-	abstract get hasOnlyKeyPackets(): boolean;
+	abstract hasOnlyKeyPackets(): Promise<boolean>;
 
 	/** Returns true if and only if this track is a video track. */
 	isVideoTrack(): this is InputVideoTrack {
@@ -205,21 +199,8 @@ export abstract class InputTrack {
 	 * Returns whether the timestamps of this track are relative to the Unix epoch (January 1, 1970 00:00:00 UTC).
 	 * When `true`, each timestamp maps to a definitive point in time.
 	 */
-	async getIsRelativeToUnixEpoch() {
+	async isRelativeToUnixEpoch() {
 		return this._backing.isRelativeToUnixEpoch();
-	}
-
-	/**
-	 * Whether the timestamps of this track are relative to the Unix epoch (January 1, 1970 00:00:00 UTC). When `true`,
-	 * each timestamp maps to a definitive point in time.
-	 * @deprecated Use {@link InputTrack.getIsRelativeToUnixEpoch} instead.
-	 */
-	get isRelativeToUnixEpoch() {
-		return requireSync(
-			this._backing.isRelativeToUnixEpoch(),
-			'isRelativeToUnixEpoch',
-			'getIsRelativeToUnixEpoch',
-		);
 	}
 
 	/** Returns the track's disposition, i.e. information about its intended usage. */
@@ -244,29 +225,11 @@ export abstract class InputTrack {
 	}
 
 	/**
-	 * The peak bitrate of the track, in bits per second, as specified in the track's metadata. This might not match the
-	 * actual media data's bitrate.
-	 * @deprecated Use {@link InputTrack.getBitrate} instead.
-	 */
-	get bitrate() {
-		return requireSync(this._backing.getBitrate(), 'bitrate', 'getBitrate');
-	}
-
-	/**
 	 * Returns the average bitrate of the track in bits per second, as specified in the track's metadata. This might
 	 * not match the actual media data's bitrate.
 	 */
 	async getAverageBitrate() {
 		return this._backing.getAverageBitrate();
-	}
-
-	/**
-	 * The average bitrate of the track, in bits per second, as specified in the track's metadata. This might not match
-	 * the actual media data's bitrate.
-	 * @deprecated Use {@link InputTrack.getAverageBitrate} instead.
-	 */
-	get averageBitrate() {
-		return requireSync(this._backing.getAverageBitrate(), 'averageBitrate', 'getAverageBitrate');
 	}
 
 	/**
@@ -556,24 +519,8 @@ export class InputVideoTrack extends InputTrack {
 		return requireSync(this._backing.getCodec(), 'codec', 'getCodec');
 	}
 
-	/**
-	 * Returns whether the track metadata says that this track only contains key packets. The actual packets may
-	 * differ.
-	 */
-	async getHasOnlyKeyPackets() {
+	async hasOnlyKeyPackets() {
 		return (await this._backing.getHasOnlyKeyPackets?.()) ?? false;
-	}
-
-	/**
-	 * Whether the track metadata says that this track only contains key packets. The actual packets may differ.
-	 * @deprecated Use {@link InputVideoTrack.getHasOnlyKeyPackets} instead.
-	 */
-	get hasOnlyKeyPackets() {
-		const raw = this._backing.getHasOnlyKeyPackets?.();
-		if (raw === undefined) {
-			return false;
-		}
-		return requireSync(raw, 'hasOnlyKeyPackets', 'getHasOnlyKeyPackets') ?? false;
 	}
 
 	/** Returns the width in pixels of the track's coded samples, before any transformations or rotations. */
@@ -859,24 +806,8 @@ export class InputAudioTrack extends InputTrack {
 		return requireSync(this._backing.getCodec(), 'codec', 'getCodec');
 	}
 
-	/**
-	 * Returns whether the track metadata says that this track only contains key packets. The actual packets may
-	 * differ.
-	 */
-	async getHasOnlyKeyPackets() {
+	async hasOnlyKeyPackets() {
 		return (await this._backing.getHasOnlyKeyPackets?.()) ?? true;
-	}
-
-	/**
-	 * Whether the track metadata says that this track only contains key packets. The actual packets may differ.
-	 * @deprecated Use {@link InputAudioTrack.getHasOnlyKeyPackets} instead.
-	 */
-	get hasOnlyKeyPackets() {
-		const raw = this._backing.getHasOnlyKeyPackets?.();
-		if (raw === undefined) {
-			return true;
-		}
-		return requireSync(raw, 'hasOnlyKeyPackets', 'getHasOnlyKeyPackets') ?? true;
 	}
 
 	/** Returns the number of audio channels in the track. */

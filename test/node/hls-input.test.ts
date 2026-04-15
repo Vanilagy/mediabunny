@@ -106,7 +106,7 @@ test.concurrent('Big Buck Bunny', { timeout: 15_000 }, async () => {
 
 	// Force hydration of all tracks by loading actual media data
 	for (const track of tracks) {
-		expect(await track.getIsRelativeToUnixEpoch()).toBe(false);
+		expect(await track.isRelativeToUnixEpoch()).toBe(false);
 	}
 
 	expect(sourceCount).toBe(1 + 5 + 5);
@@ -342,18 +342,18 @@ test.concurrent('Out-of-band audio track via ADTS', { timeout: 15_000 }, async (
 
 	const tracks = await input.getTracks();
 	const videoOnlyKeyPacketsFlags = await Promise.all(
-		tracks.filter((x): x is InputVideoTrack => x.isVideoTrack()).map(x => x.getHasOnlyKeyPackets()),
+		tracks.filter((x): x is InputVideoTrack => x.isVideoTrack()).map(x => x.hasOnlyKeyPackets()),
 	);
 	expect(videoOnlyKeyPacketsFlags.some(x => x)).toBe(true);
 
 	const audioTrack = tracks.find((x): x is InputAudioTrack => x.isAudioTrack());
 	assert(audioTrack);
-	expect(await audioTrack.getHasOnlyKeyPackets()).toBe(true);
+	expect(await audioTrack.hasOnlyKeyPackets()).toBe(true);
 
 	expect(await audioTrack.getPairableVideoTracks()).toHaveLength(1); // Since the I-frame one isn't pairable
 	const videoTrack = (await audioTrack.getPairableVideoTracks())[0]!;
 	assert(videoTrack);
-	expect(await videoTrack.getHasOnlyKeyPackets()).toBe(false);
+	expect(await videoTrack.hasOnlyKeyPackets()).toBe(false);
 
 	let lastTimestamp = -Infinity;
 	const sink = new EncodedPacketSink(audioTrack);
@@ -482,7 +482,7 @@ test.concurrent('Single-value PDT', { timeout: 15_000 }, async () => {
 	using input = createInputFrom('https://playertest.longtailvideo.com/adaptive/aviion/manifest.m3u8', ALL_FORMATS);
 
 	const tracks = await input.getTracks();
-	expect((await Promise.all(tracks.map(x => x.getIsRelativeToUnixEpoch()))).every(x => x)).toBe(true);
+	expect((await Promise.all(tracks.map(x => x.isRelativeToUnixEpoch()))).every(x => x)).toBe(true);
 
 	const track = tracks[0]!;
 	const firstTimestamp = await track.getFirstTimestamp();
@@ -545,7 +545,7 @@ test.concurrent('PDT with bad values', { timeout: 15_000 }, async () => {
 	const audioTrack = await input.getPrimaryAudioTrack();
 	assert(audioTrack);
 
-	expect(await audioTrack.getIsRelativeToUnixEpoch()).toBe(false);
+	expect(await audioTrack.isRelativeToUnixEpoch()).toBe(false);
 });
 
 test.concurrent('Alternative audio only', { timeout: 15_000 }, async () => {
@@ -578,7 +578,7 @@ test.concurrent('Advanced Apple HLS', { timeout: 30_000 }, async () => {
 		displayWidth: await t.getDisplayWidth(),
 		displayHeight: await t.getDisplayHeight(),
 		bitrate: await t.getBitrate(),
-		hasOnlyKeyPackets: await t.getHasOnlyKeyPackets(),
+		hasOnlyKeyPackets: await t.hasOnlyKeyPackets(),
 		codecParameterString: await t.getCodecParameterString(),
 	});
 	const snapshotAudioTrack = async (t: InputAudioTrack) => ({
