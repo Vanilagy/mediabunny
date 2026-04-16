@@ -288,6 +288,26 @@ output.target.buffer; // => ArrayBuffer
 
 This target is a great choice for small-ish files (< 100 MB), but since all data will be kept in memory, using it for large files is suboptimal. If the output gets very large, the page might crash due to memory exhaustion. For these cases, using `StreamTarget` is recommended.
 
+#### `onFinalize` callback
+
+`BufferTarget` accepts an `onFinalize` option, which is called with the complete buffer once the target has been finalized. The muxer awaits this callback, providing proper backpressure — useful for uploading the final buffer to a server or object store (e.g. S3 `PutObject`, which requires a known `Content-Length`):
+
+```ts
+const output = new Output({
+	target: new BufferTarget({
+		onFinalize: async (buffer) => {
+			await fetch('/upload', { method: 'PUT', body: buffer });
+		},
+	}),
+	// ...
+});
+
+await output.finalize();
+// The upload has completed by the time finalize resolves.
+```
+
+Unlike the `finalized` [event](#events), the `onFinalize` callback is awaited by the muxer. When used with [`PathedTarget`](./writing-hls#upload-to-a-server), this ensures the next file is not produced until the current one has been uploaded, keeping memory usage bounded.
+
 ### `StreamTarget`
 
 This target passes you the data written by the `Output` in small chunks, requiring you to pipe that data elsewhere to manually assemble the final file. Example use cases include writing the file directly to disk, or uploading it to a server over the network.

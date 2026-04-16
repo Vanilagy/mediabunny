@@ -90,6 +90,22 @@ const ARRAY_BUFFER_INITIAL_SIZE = 2 ** 16;
 const ARRAY_BUFFER_MAX_SIZE = 2 ** 32;
 
 /**
+ * Options for {@link BufferTarget}.
+ * @group Output targets
+ * @public
+ */
+export type BufferTargetOptions = {
+	/**
+	 * Called once the target has been finalized, with the complete output buffer.
+	 *
+	 * The muxer awaits this callback before proceeding, enabling proper backpressure for upload scenarios
+	 * where the full buffer must be known before sending (e.g. S3 PutObject, R2, B2 via signed URLs).
+	 * Use this over the {@link TargetEvents} `finalized` event when you need the muxer to wait.
+	 */
+	onFinalize?: (buffer: ArrayBuffer) => Promise<void> | void;
+};
+
+/**
  * A target that writes data directly into an ArrayBuffer in memory. Great for performance, but not suitable for very
  * large files. The buffer will be available once the output has been finalized.
  * @group Output targets
@@ -107,10 +123,21 @@ export class BufferTarget extends Target {
 	_maxPos = 0;
 	/** @internal */
 	_supportsResize: boolean;
+	/** @internal */
+	_options: BufferTargetOptions;
 
 	/** Creates a new {@link BufferTarget}. The buffer holding the data will be created and managed internally. */
-	constructor() {
+	constructor(options: BufferTargetOptions = {}) {
 		super();
+
+		if (options !== null && typeof options !== 'object') {
+			throw new TypeError('BufferTarget options, when provided, must be an object.');
+		}
+		if (options.onFinalize !== undefined && typeof options.onFinalize !== 'function') {
+			throw new TypeError('options.onFinalize, when provided, must be a function.');
+		}
+
+		this._options = options;
 
 		this._supportsResize = 'resize' in new ArrayBuffer(0);
 		if (this._supportsResize) {
@@ -178,6 +205,9 @@ export class BufferTarget extends Target {
 	/** @internal */
 	async _finalize() {
 		this.buffer = this._buffer.slice(0, this._maxPos);
+		if (this._options.onFinalize) {
+			await this._options.onFinalize(this.buffer);
+		}
 		this._emit('finalized');
 	}
 

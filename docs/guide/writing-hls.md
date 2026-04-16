@@ -156,7 +156,29 @@ await Promise.all(promises);
 // All files have been uploaded to the server
 ```
 
-If this is too fancy, you can always use `BufferTarget` instead and upload its contents to a server in a non-streaming way after the `finalized` event.
+If streaming is not possible (e.g. when uploading to S3 via signed `PutObject`, which requires a known `Content-Length`), use [`BufferTarget`](../api/BufferTarget) with the [`onFinalize`](../api/BufferTargetOptions#onfinalize) option instead. The muxer awaits this callback, providing proper backpressure that ensures the next segment is not produced until this one has been uploaded:
+
+```ts
+const output = new Output({
+	target: new PathedTarget(
+		'master.m3u8',
+		({ path, mimeType }) =>
+			new BufferTarget({
+				onFinalize: async (buffer) => {
+					await fetch(`/upload?file=${encodeURIComponent(path)}`, {
+						method: 'PUT',
+						body: buffer,
+						headers: { 'Content-Type': mimeType },
+					});
+				},
+			}),
+	),
+	// ...
+});
+
+// All files are fully uploaded by the time finalize resolves:
+await output.finalize();
+```
 
 ## Adding tracks & media
 

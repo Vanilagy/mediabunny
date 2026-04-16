@@ -130,6 +130,7 @@ export {
 	TargetEvents,
 	TargetRequest,
 	BufferTarget,
+	BufferTargetOptions,
 	FilePathTarget,
 	FilePathTargetOptions,
 	NullTarget,
