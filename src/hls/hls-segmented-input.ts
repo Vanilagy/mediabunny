@@ -187,7 +187,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 			if (!line.startsWith('#')) {
 				if (!prevLastSegment) {
 					if (nextSegmentDuration === null) {
-						throw new Error('Invalid M3U8 file; a segment must be preceeded by a #EXTINF tag.');
+						throw new Error('Invalid M3U8 file; a segment must be preceded by an #EXTINF tag.');
 					}
 
 					let key = currentKey;

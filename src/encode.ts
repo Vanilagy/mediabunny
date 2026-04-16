@@ -203,7 +203,7 @@ export const validateVideoEncodingConfig = (config: VideoEncodingConfig) => {
 			throw new TypeError('config.transform.rotate, when provided, must be 0, 90, 180 or 270.');
 		}
 		if (config.transform.crop !== undefined) {
-			validateCropRectangle(config.transform.crop, 'config.');
+			validateCropRectangle(config.transform.crop, 'config.transform.');
 		}
 		if (config.transform.process !== undefined && typeof config.transform.process !== 'function') {
 			throw new TypeError('config.transform.process, when provided, must be a function.');
@@ -219,7 +219,7 @@ export const validateVideoEncodingConfig = (config: VideoEncodingConfig) => {
 		}
 	}
 	if (config.onEncodedPacket !== undefined && typeof config.onEncodedPacket !== 'function') {
-		throw new TypeError('config.onEncodedChunk, when provided, must be a function.');
+		throw new TypeError('config.onEncodedPacket, when provided, must be a function.');
 	}
 	if (config.onEncoderConfig !== undefined && typeof config.onEncoderConfig !== 'function') {
 		throw new TypeError('config.onEncoderConfig, when provided, must be a function.');
@@ -438,7 +438,7 @@ export const validateAudioEncodingConfig = (config: AudioEncodingConfig) => {
 		}
 	}
 	if (config.onEncodedPacket !== undefined && typeof config.onEncodedPacket !== 'function') {
-		throw new TypeError('config.onEncodedChunk, when provided, must be a function.');
+		throw new TypeError('config.onEncodedPacket, when provided, must be a function.');
 	}
 	if (config.onEncoderConfig !== undefined && typeof config.onEncoderConfig !== 'function') {
 		throw new TypeError('config.onEncoderConfig, when provided, must be a function.');

@@ -496,7 +496,7 @@ export class HlsDemuxer extends Demuxer {
 								const channels = mediaTag.attributes.get('channels')
 									?? variantStream.attributes.get('channels');
 								const parsedChannels = channels !== null
-									? Number(channels)
+									? Number(channels.split('/')[0]!)
 									: null;
 
 								result.push({

@@ -294,19 +294,21 @@ export class HlsMuxer extends Muxer {
 			}
 		}
 
+		const getMetadataKeyForTrack = ({ metadata }: OutputTrack) => {
+			let key = '';
+			key += `${metadata.languageCode ?? UNDETERMINED_LANGUAGE}-`;
+			key += `${metadata.name ?? ''}-`;
+			key += `${metadata.disposition?.default ?? true}-`;
+			key += `${metadata.disposition?.primary ?? false}-`;
+			key += `${metadata.disposition?.forced ?? false}-`;
+
+			return key;
+		};
+
 		// Video tracks that can't be paired with any other track always live on the top-level, the question is just if
 		// they need to be separated into #EXT-X-MEDIA tags or not
 		if (unpairedVideoTracks.length > 0) {
-			const uniqueMetadata = new Set(unpairedVideoTracks.map(({ metadata }) => {
-				let key = '';
-				key += `${metadata.languageCode ?? UNDETERMINED_LANGUAGE}-`;
-				key += `${metadata.name ?? ''}-`;
-				key += `${metadata.disposition?.default ?? true}-`;
-				key += `${metadata.disposition?.primary ?? false}-`;
-				key += `${metadata.disposition?.forced ?? false}-`;
-
-				return key;
-			}));
+			const uniqueMetadata = new Set(unpairedVideoTracks.map(getMetadataKeyForTrack));
 
 			if (uniqueMetadata.size > 1) {
 				// They differ in metadata, emit as group
@@ -336,16 +338,7 @@ export class HlsMuxer extends Muxer {
 		// Audio tracks that can't be paired with any other track always live on the top-level, the question is just if
 		// they need to be separated into #EXT-X-MEDIA tags or not
 		if (unpairedAudioTracks.length > 0) {
-			const uniqueMetadata = new Set(unpairedAudioTracks.map(({ metadata }) => {
-				let key = '';
-				key += `${metadata.languageCode ?? UNDETERMINED_LANGUAGE}-`;
-				key += `${metadata.name ?? ''}-`;
-				key += `${metadata.disposition?.default ?? true}-`;
-				key += `${metadata.disposition?.primary ?? false}-`;
-				key += `${metadata.disposition?.forced ?? false}-`;
-
-				return key;
-			}));
+			const uniqueMetadata = new Set(unpairedAudioTracks.map(getMetadataKeyForTrack));
 
 			if (uniqueMetadata.size > 1) {
 				// They differ in metadata, emit as group
@@ -686,6 +679,17 @@ export class HlsMuxer extends Muxer {
 
 		// Loop in case we can finalize multiple segments
 		while (true) {
+			// This here is the core segmentation logic. The segmentation logic figures out which packets are to be
+			// written into the next segment, and if we can write a segment at all. If tracks are still open and have
+			// not provided sufficient media data, no segment will be written. The packets will be added to the segment
+			// to maximize its duration AND keep it from exceeding the target duration. This condition is extended with
+			// a key frame rule for video, meaning the algorithm must guarantee that every segment with video data
+			// begins with a video key frame.
+			//
+			// The logic is quite complex but is solved in a straight-forward way: all possible permutations of the
+			// problem are checked in a nested if-else structure, making sure all cases behave correctly. This was the
+			// easiest, least error-prone way I found to express this behavior.
+
 			const currentSegmentEndTimestamp = playlist.currentSegmentStartTimestamp + this.targetSegmentDuration;
 
 			// These store the index (exclusive) until when packets can be added to the next segment
@@ -816,6 +820,9 @@ export class HlsMuxer extends Muxer {
 
 			if (this.singleFilePerPlaylist) {
 				if (playlist.singleFile === null) {
+					// INTENTIONALLY shadow the outside `segmentInfo` because we don't want to set it.
+					// In single-file mode, onSegment is called once in onPlaylistDone instead of per-segment,
+					// so the outer `segmentInfo` intentionally stays null in this case.
 					const segmentInfo: HlsOutputSegmentInfo = {
 						n: playlist.nextSegmentId,
 						format: playlist.segmentFormat,
@@ -1028,6 +1035,7 @@ export class HlsMuxer extends Muxer {
 			assert(Number.isFinite(nextSegmentStartTimestamp));
 
 			const segmentDuration = nextSegmentStartTimestamp - playlist.currentSegmentStartTimestamp;
+			assert(segmentDuration >= 0);
 
 			playlist.writtenSegments.push({
 				path: relativeSegmentPath,
@@ -1119,7 +1127,8 @@ export class HlsMuxer extends Muxer {
 		// Fallback: if no contiguous set falls within the range, use per-segment max
 		if (peakBitrate === 0) {
 			for (const segment of segments) {
-				peakBitrate = Math.max(peakBitrate, 8 * segment.byteSize / segment.duration);
+				const segmentDuration = segment.duration || 1; // To catch 0-duration segments which can happen
+				peakBitrate = Math.max(peakBitrate, 8 * segment.byteSize / segmentDuration);
 			}
 		}
 
@@ -1166,7 +1175,7 @@ export class HlsMuxer extends Muxer {
 			+ (!this.isLive ? '#EXT-X-PLAYLIST-TYPE:VOD\n' : '')
 			+ `#EXT-X-TARGETDURATION:${Math.ceil(targetDuration)}\n` // Must be a "decimal-integer"
 			+ (Number.isFinite(this.maxLiveSegmentCount) ? `#EXT-X-MEDIA-SEQUENCE:${playlist.mediaSequence}\n` : '')
-			+ '#EXT-X-INDEPENDENT-SEGMENTS\n' // Todo not for live?
+			+ '#EXT-X-INDEPENDENT-SEGMENTS\n'
 			+ (isKeyPacketsOnly ? '#EXT-X-I-FRAMES-ONLY\n' : '')
 			+ (playlist.initSegment
 				? (`#EXT-X-MAP:URI="${playlist.initSegment.path}"`

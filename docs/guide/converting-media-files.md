@@ -499,4 +499,4 @@ On the flip side, you can always query which input tracks made it into the outpu
 const conversion = await Conversion.init({ input, output });
 conversion.utilizedTracks; // => InputTrack[]
 ```
-A track may appear multiple times in this list when [fan-out](#fan-out) produces multiple output tracks from it.
+A track may appear multiple times in this list when [fan-out](#track-fan-out) produces multiple output tracks from it.

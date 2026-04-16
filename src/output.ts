@@ -445,7 +445,7 @@ export class Output<
 			&& typeof options.initTarget !== 'function'
 		) {
 			throw new Error(
-				'options.getInitTarget, when provided, must be a Target or a function that returns or resolves to'
+				'options.initTarget, when provided, must be a Target or a function that returns or resolves to'
 				+ ' a Target.',
 			);
 		}
@@ -550,6 +550,7 @@ export class Output<
 			target._output = this;
 
 			if (this.state === 'canceled') {
+				// Promise thrown away here, but no way to surface it to the user really
 				void target._close();
 			} else {
 				this._targets.add(target);

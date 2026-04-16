@@ -1342,6 +1342,9 @@ export class HlsOutputFormat extends OutputFormat {
 		if (options.getSegmentPath !== undefined && typeof options.getSegmentPath !== 'function') {
 			throw new TypeError('options.getSegmentPath, when provided, must be a function.');
 		}
+		if (options.getInitPath !== undefined && typeof options.getInitPath !== 'function') {
+			throw new TypeError('options.getInitPath, when provided, must be a function.');
+		}
 		if (options.onMaster !== undefined && typeof options.onMaster !== 'function') {
 			throw new TypeError('options.onMaster, when provided, must be a function.');
 		}

@@ -594,7 +594,6 @@ export class FilePathTarget extends Target {
 			chunked: true,
 			...options,
 		});
-		this._streamTarget._output = this._output;
 	}
 
 	/** @internal */

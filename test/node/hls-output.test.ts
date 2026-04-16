@@ -1945,10 +1945,13 @@ test('Single-file mode', async () => {
 	let playlistText: string | null = null;
 	const segmentPaths = new Set<string>();
 
+	const onSegment = vi.fn();
+
 	const output = new Output({
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(),
 			singleFilePerPlaylist: true,
+			onSegment,
 		}),
 		target: new PathedTarget('', (request) => {
 			const target = new BufferTarget();
@@ -1979,6 +1982,8 @@ test('Single-file mode', async () => {
 	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0), avcMetadata);
 	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0), avcMetadata);
 
+	expect(onSegment).toHaveBeenCalledTimes(0);
+
 	await output.finalize();
 
 	// Only one segment file should have been created
@@ -1987,6 +1992,8 @@ test('Single-file mode', async () => {
 	expect(playlistText).not.toBeNull();
 	expect(playlistText!.match(/#EXT-X-BYTERANGE/g)).toHaveLength(2);
 	expect(playlistText).toContain('#EXT-X-VERSION:4');
+
+	expect(onSegment).toHaveBeenCalledTimes(1);
 });
 
 test('StreamTarget, write is called for each target', async () => {

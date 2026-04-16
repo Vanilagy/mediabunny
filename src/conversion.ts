@@ -402,7 +402,9 @@ const validateVideoOptions = (videoOptions: ConversionVideoOptions) => {
 			|| (Array.isArray(videoOptions.group) && videoOptions.group.every(x => x instanceof OutputTrackGroup))
 		)
 	) {
-		throw new TypeError('options.video.group, when provided, must be a string or an array of strings.');
+		throw new TypeError(
+			'options.video.group, when provided, must be an OutputTrackGroup or an array of OutputTrackGroups.',
+		);
 	}
 };
 
@@ -462,7 +464,9 @@ const validateAudioOptions = (audioOptions: ConversionAudioOptions) => {
 			|| (Array.isArray(audioOptions.group) && audioOptions.group.every(x => x instanceof OutputTrackGroup))
 		)
 	) {
-		throw new TypeError('options.audio.group, when provided, must be a string or an array of strings.');
+		throw new TypeError(
+			'options.audio.group, when provided, must be an OutputTrackGroup or an array of OutputTrackGroups.',
+		);
 	}
 };
 
@@ -612,7 +616,7 @@ export class Conversion {
 			&& options.tracks !== 'primary'
 		) {
 			throw new TypeError(
-				'options.tracks, when provded, must be either \'all\' or \'primary\'.',
+				'options.tracks, when provided, must be either \'all\' or \'primary\'.',
 			);
 		}
 		if (
