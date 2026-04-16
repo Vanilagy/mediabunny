@@ -85,16 +85,17 @@ export default withMermaid({
 					],
 				},
 				{
-					text: 'HLS',
-					items: [
-						{ text: 'Reading HLS', link: '/guide/reading-hls' },
-					],
-				},
-				{
 					text: 'Miscellaneous',
 					items: [
 						{ text: 'Packets & samples', link: '/guide/packets-and-samples' },
 						{ text: 'Supported formats & codecs', link: '/guide/supported-formats-and-codecs' },
+					],
+				},
+				{
+					text: 'HLS',
+					items: [
+						{ text: 'Reading HLS', link: '/guide/reading-hls' },
+						{ text: 'Writing HLS', link: '/guide/writing-hls' },
 					],
 				},
 				{

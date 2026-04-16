@@ -56,20 +56,20 @@ output.addVideoTrack(videoSource, {
 
 // This adds two audio tracks; one in English and one in German.
 output.addAudioTrack(audioSourceEng, {
-	language: 'eng', // ISO 639-2/T language code
+	languageCode: 'eng', // ISO 639-2/T language code
 	name: 'Developer Commentary', // Sets a user-defined track name
 	disposition: { commentary: true }, // Sets additional flags in the file
 });
 output.addAudioTrack(audioSourceGer, {
-	language: 'ger',
+	languageCode: 'ger',
 });
 
 // This adds multiple subtitle tracks, all for different languages.
-output.addSubtitleTrack(subtitleSourceEng, { language: 'eng' });
-output.addSubtitleTrack(subtitleSourceGer, { language: 'ger' });
-output.addSubtitleTrack(subtitleSourceSpa, { language: 'spa' });
-output.addSubtitleTrack(subtitleSourceFre, { language: 'fre' });
-output.addSubtitleTrack(subtitleSourceIta, { language: 'ita' });
+output.addSubtitleTrack(subtitleSourceEng, { languageCode: 'eng' });
+output.addSubtitleTrack(subtitleSourceGer, { languageCode: 'ger' });
+output.addSubtitleTrack(subtitleSourceSpa, { languageCode: 'spa' });
+output.addSubtitleTrack(subtitleSourceFre, { languageCode: 'fre' });
+output.addSubtitleTrack(subtitleSourceIta, { languageCode: 'ita' });
 ```
 
 ::: info
@@ -454,6 +454,7 @@ The callback is called once per file the format wants to write and receives a `T
 type TargetRequest = {
 	path: FilePath; // The requested file path
 	isRoot: boolean; // Whether the requested file is the root file
+	mimeType: string; // The MIME type of the file being requested
 };
 ```
 

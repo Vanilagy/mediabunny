@@ -1,10 +1,10 @@
 # Reading HLS
 
-Mediabunny has full support for reading HLS (.m3u8) playlists. This page will go into HLS-specific behavior and advice. For general information about how to read any media file (including HLS) in Mediabunny, refer to [Reading media files](./reading-media-files).
+Mediabunny has full support for reading HLS (.m3u8) playlists, both VOD and live. This page will go into HLS-specific behavior and advice. For general information about how to read any media file (including HLS) in Mediabunny, refer to [Reading media files](./reading-media-files).
 
 ## Mental model
 
-Mediabunny exposes HLS playlists as if they were a single giant input file. Like with any other format, it does not ever expose the underlying structure (playlists, segments), but instead exposes an abstract, media data-centric view. Any code written to handle other Mediabunny inputs will automatically work on HLS inputs; HLS inputs are also just a collection of tracks, and each track contains a linear sequence of media data. The multi-file, multi-playlist and multi-segment nature of HLS is abstracted away and completely hidden from the user.
+Mediabunny exposes HLS playlists as if they were a single giant input file. Like with any other format, it does not ever expose the underlying structure (playlists, segments, decryption keys), but instead exposes an abstract, media data-centric view. Any code written to handle other Mediabunny inputs will automatically work on HLS inputs: they are also just a collection of tracks, and each track contains a linear sequence of media data. The multi-file, multi-playlist and multi-segment nature of HLS is abstracted away and completely hidden from the user.
 
 ## HLS inputs
 
@@ -20,6 +20,8 @@ const input = new Input({
 	formats: HLS_FORMATS, // HLS_FORMATS includes HLS as well as the commonly-used segment formats
 });
 ```
+
+The `PathedSource` requires that you return a [`Source`](../api/Source) for every file (identified by a [path](../api/FilePath)) that Mediabunny wants to read.
 
 Since this pattern is common and kind of cumbersome to write, there exists a shortcut:
 ```ts
@@ -44,7 +46,33 @@ Since Mediabunny lazy-loads all information, retrieving the list of all tracks i
 
 If you point Mediabunny directly at a media playlist, then the list of tracks is deduced by the tracks present in the first segment of the playlist.
 
-## Track pairability
+### Reading track metadata
+
+For general reading of track metadata, see [Reading media files](./reading-media-files). Some notable metadata mappings for HLS are:
+```ts
+// Returns the value of the BANDWIDTH attribute (peak bitrate).
+// If the track is used in multiple variants, this returns the
+// max of those bitrates.
+await track.getBitrate();
+
+// Same as above, but AVERAGE-BANDWIDTH
+await track.getAverageBitrate();
+
+// LANGUAGE attribute
+await track.getLanguageCode();
+
+// NAME attribute
+await track.getName();
+
+const disposition = await track.getDisposition();
+disposition.primary; // => DEFAULT attribute (= primary in Mediabunny)
+disposition.default; // => AUTOSELECT attribute
+
+// Indicates an #EXT-X-I-FRAME-STREAM-INF track
+await track.hasOnlyKeyPackets();
+```
+
+## Track pairings
 
 In Mediabunny, two tracks are considered _pairable_ if they can be presented together. HLS master playlists explicitly model pairability via variant streams and media renditions. Even though Mediabunny does not expose these structures and flattens out all tracks, the pairability graph implied by the master playlist is still available via:
 ```ts
@@ -62,9 +90,9 @@ Consider the following two master playlists:
 #EXTM3U
 
 #EXT-X-STREAM-INF:CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=1280x720
-variant-1.m3u8
+video-and-audio-1.m3u8
 #EXT-X-STREAM-INF:CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=640x480
-variant-2.m3u8
+video-and-audio-2.m3u8
 ```
 
 **Playlist #2:**
@@ -75,9 +103,9 @@ variant-2.m3u8
 #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="audio",URI="audio-2.m3u8"
 
 #EXT-X-STREAM-INF:CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=1280x720,AUDIO="audio"
-variant-1.m3u8
+video-1.m3u8
 #EXT-X-STREAM-INF:CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=640x480,AUDIO="audio"
-variant-2.m3u8
+video-2.m3u8
 ```
 
 Both of these playlists define exactly four tracks: two video tracks, two audio tracks. _They differ only in their pairability:_
