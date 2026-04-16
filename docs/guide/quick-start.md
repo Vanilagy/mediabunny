@@ -626,3 +626,50 @@ const conversion = await Conversion.init({
 await conversion.execute();
 // Conversion is complete
 ```
+
+## Reading HLS playlists
+
+```ts
+import { createInputFrom, HLS_FORMATS, desc } from 'mediabunny';
+
+const input = createInputFrom('https://example.com/master.m3u8', HLS_FORMATS);
+
+// Get all tracks
+const tracks = await input.getTracks();
+
+// Get video tracks by quality
+const sortedVideoTracks = await input.getVideoTracks({
+	sortBy: async track => desc(await track.getDisplayHeight()),
+});
+
+// Select a quality
+const bestVideoTrack = sortedVideoTracks[0]!;
+// Get a matching audio track
+const matchingAudioTrack = await bestVideoTrack.getPrimaryPairableAudioTrack();
+
+// HLS tracks can be read like any other Mediabunny InputTrack
+// ...
+
+const isLive = await bestVideoTrack.isLive();
+if (isLive) {
+	// Poll some data using the refresh interval, for example duration
+	let currentDuration: number | null = null;
+	const poll = async () => {
+		currentDuration = await bestVideoTrack.getDurationFromMetadata({
+			skipLiveWait: true,
+		});
+
+		const refreshInterval = await bestVideoTrack.getLiveRefreshInterval();
+		if (refreshInterval === null) {
+			return; // No longer live
+		}
+
+		setTimeout(poll, 1000 * refreshInterval);
+	};
+	await poll();
+}
+```
+
+::: info
+See [Reading HLS](./reading-hls) for an in-depth guide.
+:::

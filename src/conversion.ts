@@ -50,7 +50,7 @@ import {
 } from './misc';
 import { Output, OutputTrackGroup, TrackType } from './output';
 import { Mp4OutputFormat } from './output-format';
-import { AudioSample, clampCropRectangle, validateCropRectangle, VideoSample } from './sample';
+import { AudioSample, clampCropRectangle, CropRectangle, validateCropRectangle, VideoSample } from './sample';
 import { MetadataTags, validateMetadataTags } from './metadata';
 import { NullTarget } from './target';
 import { AudioResampler } from './resample';
@@ -183,16 +183,7 @@ export type ConversionVideoOptions = {
 	 * Specifies the rectangular region of the input video to crop to. The crop region will automatically be clamped to
 	 * the dimensions of the input video track. Cropping is performed after rotation but before resizing.
 	 */
-	crop?: {
-		/** The distance in pixels from the left edge of the source frame to the left edge of the crop rectangle. */
-		left: number;
-		/** The distance in pixels from the top edge of the source frame to the top edge of the crop rectangle. */
-		top: number;
-		/** The width in pixels of the crop rectangle. */
-		width: number;
-		/** The height in pixels of the crop rectangle. */
-		height: number;
-	};
+	crop?: CropRectangle;
 	/**
 	 * The desired frame rate of the output video, in hertz. If not specified, the original input frame rate will
 	 * be used (which may be variable).

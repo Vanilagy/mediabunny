@@ -103,8 +103,10 @@ export {
 export {
 	VideoEncodingConfig,
 	VideoEncodingAdditionalOptions,
+	VideoTransformOptions,
 	AudioEncodingConfig,
 	AudioEncodingAdditionalOptions,
+	AudioTransformOptions,
 	canEncode,
 	canEncodeVideo,
 	canEncodeAudio,

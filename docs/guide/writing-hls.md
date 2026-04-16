@@ -173,6 +173,57 @@ await output.start();
 
 Then, add media data like normal. Since Mediabunny takes care of segmentation automatically, it is required to perform [Packet buffering](./writing-media-files#packet-buffering) internally. Therefore, try writing media data in a quasi-interleaved fashion to keep memory usage bounded.
 
+### Multiple resolutions
+
+A common pattern is to offer the same content in multiple resolutions and bitrates. This requires encoding the content multiple times, sometimes with additional downscaling. Mediabunny's [media sources](./media-sources) make this pattern a breeze.
+
+Let's suppose we have a 1080p main video stream. We want to provide a 1080p, 720p, 480p, and 360p variant in the HLS playlist. For that, use this pattern:
+```ts
+const source1080p = new VideoSampleSource({
+	codec: 'avc',
+	bitrate: QUALITY_VERY_HIGH,
+});
+const source720p = new VideoSampleSource({
+	codec: 'avc',
+	bitrate: QUALITY_HIGH,
+	transform: {
+		// Frames will be automatically resized to 720p before being encoded
+		height: 720,
+	},
+});
+const source480p = new VideoSampleSource({
+	codec: 'avc',
+	bitrate: QUALITY_MEDIUM,
+	transform: {
+		height: 480,
+	},
+});
+const source360p = new VideoSampleSource({
+	codec: 'avc',
+	bitrate: QUALITY_LOW,
+	transform: {
+		height: 360,
+	},
+});
+
+const sources = [source1080p, source720p, source480p, source360p];
+for (const source of sources) {
+	output.addVideoTrack(source);
+}
+
+await output.start();
+
+// Then, when adding a new frame:
+const sample = // ...
+for (const source of sources) {
+	await source.add(sample);
+}
+```
+
+You can extend this pattern to offer content in multiple codecs as well.
+
+For the full list of transformation options, see [`VideoTransformOptions`](../api/VideoTransformOptions) and [`AudioTransformOptions`](../api/AudioTransformOptions).
+
 ### Track metadata
 
 Often you'll want to provide additional [track metadata](../api/BaseTrackMetadata) when dealing with multiple tracks. For example:
@@ -578,3 +629,7 @@ Whenever a segment is popped off the playlist in this fashion, the `onSegmentPop
 ::: info
 `onSegmentPopped` is not called when `singleFilePerPlaylist` is enabled.
 :::
+
+## Subtitles
+
+Writing subtitles to HLS playlists is not currently supported. Sorry!

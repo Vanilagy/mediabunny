@@ -46,6 +46,50 @@ Since Mediabunny lazy-loads all information, retrieving the list of all tracks i
 
 If you point Mediabunny directly at a media playlist, then the list of tracks is deduced by the tracks present in the first segment of the playlist.
 
+### Track queries
+
+Mediabunny offers an [`InputTrackQuery`](../api/InputTrackQuery) system to aid with finding tracks in complex many-track inputs such as the ones common with HLS.
+
+Here's a holistic example that constructs an HLS quality ladder and then selects audio tracks based on language:
+
+```ts
+import { desc, prefer } from 'mediabunny';
+
+// Get video tracks sorted by their resolution (highest first)
+const videoTracks = await input.getVideoTracks({
+	sortBy: async track => [
+		desc(await track.getDisplayHeight()),
+		// Tracks with matching resolution are sorted by bitrate
+		desc(await track.getBitrate()),
+	],
+	// Filter out #EXT-X-I-FRAME-STREAM-INF tracks
+	filter: async track => !(await track.hasOnlyKeyPackets()),
+});
+const availableQualities = videoTracks.length;
+
+// Get the best quality video track
+const video = videoTracks[0];
+
+// Get the audio track that accompanies this video track
+const matchingAudioTrack = await video.getPrimaryPairableAudioTrack();
+
+// Get all audio tracks
+const availableAudioTracks = await video.getPairableAudioTracks();
+const availableLanguages = await Promise.all(
+	availableAudioTracks.map(track => track.getLanguageCode()),
+);
+
+// Get the Spanish audio track
+const matchingSpanishAudio = await video.getPrimaryPairableAudioTrack({
+	filter: async track => await track.getLanguageCode() === 'es',
+});
+// Get the Spanish audio track if one exists, otherwise get
+// the next best thing
+const matchingAudioPreferSpanish = await video.getPrimaryPairableAudioTrack({
+	sortBy: async track => prefer(await track.getLanguageCode() === 'es'),
+});
+```
+
 ### Reading track metadata
 
 For general reading of track metadata, see [Reading media files](./reading-media-files). Some notable metadata mappings for HLS are:
@@ -291,3 +335,7 @@ const playbackStartTime = currentDuration! - fac * refreshInterval!;
 You can lower `fac` to move playback closer to the live edge (1.5 works fine too), although you should not lower it below 1.
 
 You can make `fac` larger to increase resilience against flaky internet or an unreliable media producer.
+
+## Subtitles
+
+Reading subtitles from HLS playlists is not currently supported. Sorry!

@@ -65,59 +65,7 @@ export type VideoEncodingConfig = {
 	/**
 	 * Optional transformations to apply to the video frames before they are passed to the encoder.
 	 */
-	transform?: {
-		/**
-		 * The width in pixels to resize the frames to. If height is not set, it will be deduced
-		 * automatically based on aspect ratio.
-		 */
-		width?: number;
-		/**
-		 * The height in pixels to resize the frames to. If width is not set, it will be deduced
-		 * automatically based on aspect ratio.
-		 */
-		height?: number;
-		/**
-		 * The fitting algorithm in case both width and height are set.
-		 *
-		 * - `'fill'` will stretch the image to fill the entire box, potentially altering aspect ratio.
-		 * - `'contain'` will contain the entire image within the box while preserving aspect ratio. This may lead to
-		 * letterboxing.
-		 * - `'cover'` will scale the image until the entire box is filled, while preserving aspect ratio.
-		 *
-		 * To avoid ambiguity, this field must not be set when `sizeChangeBehavior` is `'fill'`, `'contain'` or
-		 * `'deny'`, since `sizeChangeBehavior` already determines the fitting algorithm.
-		 */
-		fit?: 'fill' | 'contain' | 'cover';
-		/**
-		 * The clockwise rotation by which to rotate the frames. Rotation is applied before resizing.
-		 */
-		rotate?: Rotation;
-		/**
-		 * Specifies the rectangular region of the frames to crop to. The crop region will automatically be
-		 * clamped to the dimensions of the frame. Cropping is performed after rotation but before resizing.
-		 */
-		crop?: CropRectangle;
-		/**
-		 * The frame rate in hertz to normalize the video frame stream to.
-		 */
-		frameRate?: number;
-		/**
-		 * Allows for custom user-defined processing of video frames, e.g. for applying overlays, color transformations,
-		 * or timestamp modifications. Will be called for each video frame after transformations and frame rate
-		 * corrections.
-		 *
-		 * Must return a {@link VideoSample} or a `CanvasImageSource`, an array of them, or `null` for dropping the
-		 * frame. When non-timestamped data is returned, the timestamp and duration from the input sample will be used.
-		 */
-		process?: (sample: VideoSample) => MaybePromise<
-			CanvasImageSource | VideoSample | (CanvasImageSource | VideoSample)[] | null
-		>;
-		/**
-		 * Forces every video frame through the transformation step even if no transformation properties are defined.
-		 * This can be used, for example, to bake rotation into the encoded video frames.
-		 */
-		force?: boolean;
-	};
+	transform?: VideoTransformOptions;
 
 	/** Called for each successfully encoded packet. Both the packet and the encoding metadata are passed. */
 	onEncodedPacket?: (packet: EncodedPacket, meta: EncodedVideoChunkMetadata | undefined) => unknown;
@@ -127,6 +75,65 @@ export type VideoEncodingConfig = {
 	 */
 	onEncoderConfig?: (config: VideoEncoderConfig) => unknown;
 } & VideoEncodingAdditionalOptions;
+
+/**
+ * Options for transforming video frames before encoding.
+ * @group Encoding
+ * @public
+ */
+export type VideoTransformOptions = {
+	/**
+	 * The width in pixels to resize the frames to. If height is not set, it will be deduced
+	 * automatically based on aspect ratio.
+	 */
+	width?: number;
+	/**
+	 * The height in pixels to resize the frames to. If width is not set, it will be deduced
+	 * automatically based on aspect ratio.
+	 */
+	height?: number;
+	/**
+	 * The fitting algorithm in case both width and height are set.
+	 *
+	 * - `'fill'` will stretch the image to fill the entire box, potentially altering aspect ratio.
+	 * - `'contain'` will contain the entire image within the box while preserving aspect ratio. This may lead to
+	 * letterboxing.
+	 * - `'cover'` will scale the image until the entire box is filled, while preserving aspect ratio.
+	 *
+	 * To avoid ambiguity, this field must not be set when `sizeChangeBehavior` is `'fill'`, `'contain'` or
+	 * `'deny'`, since `sizeChangeBehavior` already determines the fitting algorithm.
+	 */
+	fit?: 'fill' | 'contain' | 'cover';
+	/**
+	 * The clockwise rotation by which to rotate the frames. Rotation is applied before resizing.
+	 */
+	rotate?: Rotation;
+	/**
+	 * Specifies the rectangular region of the frames to crop to. The crop region will automatically be
+	 * clamped to the dimensions of the frame. Cropping is performed after rotation but before resizing.
+	 */
+	crop?: CropRectangle;
+	/**
+	 * The frame rate in hertz to normalize the video frame stream to.
+	 */
+	frameRate?: number;
+	/**
+	 * Allows for custom user-defined processing of video frames, e.g. for applying overlays, color transformations,
+	 * or timestamp modifications. Will be called for each video frame after transformations and frame rate
+	 * corrections.
+	 *
+	 * Must return a {@link VideoSample} or a `CanvasImageSource`, an array of them, or `null` for dropping the
+	 * frame. When non-timestamped data is returned, the timestamp and duration from the input sample will be used.
+	 */
+	process?: (sample: VideoSample) => MaybePromise<
+		CanvasImageSource | VideoSample | (CanvasImageSource | VideoSample)[] | null
+	>;
+	/**
+	 * Forces every video frame through the transformation step even if no transformation properties are defined.
+	 * This can be used, for example, to bake rotation into the encoded video frames.
+	 */
+	force?: boolean;
+};
 
 export const validateVideoEncodingConfig = (config: VideoEncodingConfig) => {
 	if (!config || typeof config !== 'object') {
@@ -358,21 +365,7 @@ export type AudioEncodingConfig = {
 	/**
 	 * Optional transformations to apply to the audio samples before they are passed to the encoder.
 	 */
-	transform?: {
-		/** The desired number of output channels to up/downmix to. */
-		numberOfChannels?: number;
-		/** The desired output sample rate in hertz to resample to. */
-		sampleRate?: number;
-		/**
-		 * Allows for custom user-defined processing of audio samples, e.g. for applying audio effects or timestamp
-		 * modifications. Called for each audio sample after resampling and remixing.
-		 *
-		 * Must return an {@link AudioSample}, an array of them, or `null` for dropping the sample.
-		 */
-		process?: (sample: AudioSample) => MaybePromise<
-			AudioSample | AudioSample[] | null
-		>;
-	};
+	transform?: AudioTransformOptions;
 
 	/** Called for each successfully encoded packet. Both the packet and the encoding metadata are passed. */
 	onEncodedPacket?: (packet: EncodedPacket, meta: EncodedAudioChunkMetadata | undefined) => unknown;
@@ -382,6 +375,27 @@ export type AudioEncodingConfig = {
 	 */
 	onEncoderConfig?: (config: AudioEncoderConfig) => unknown;
 } & AudioEncodingAdditionalOptions;
+
+/**
+ * Options for transforming audio samples before encoding.
+ * @group Encoding
+ * @public
+ */
+export type AudioTransformOptions = {
+	/** The desired number of output channels to up/downmix to. */
+	numberOfChannels?: number;
+	/** The desired output sample rate in hertz to resample to. */
+	sampleRate?: number;
+	/**
+	 * Allows for custom user-defined processing of audio samples, e.g. for applying audio effects or timestamp
+	 * modifications. Called for each audio sample after resampling and remixing.
+	 *
+	 * Must return an {@link AudioSample}, an array of them, or `null` for dropping the sample.
+	 */
+	process?: (sample: AudioSample) => MaybePromise<
+		AudioSample | AudioSample[] | null
+	>;
+};
 
 export const validateAudioEncodingConfig = (config: AudioEncodingConfig) => {
 	if (!config || typeof config !== 'object') {
