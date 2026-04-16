@@ -179,10 +179,15 @@ export class OutputTrackGroup {
 	/**
 	 * Marks this group as being pairable with another group, symmetrically. Output tracks where each track is assigned
 	 * to one half of a group pairing are then considered pairable.
+	 *
+	 * You cannot pair a group with itself.
 	 */
 	pairWith(other: OutputTrackGroup) {
 		if (!(other instanceof OutputTrackGroup)) {
 			throw new TypeError('other must be an OutputTrackGroup.');
+		}
+		if (this === other) {
+			throw new TypeError('Cannot pair a group with itself.');
 		}
 
 		this._pairedGroups.add(other);

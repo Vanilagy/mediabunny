@@ -54,6 +54,7 @@ type PlaylistSegment = {
 	timestamp: number;
 	byteSize: number;
 	byteOffset: number | null;
+	info?: HlsOutputSegmentInfo;
 };
 
 type Playlist = {
@@ -1034,6 +1035,7 @@ export class HlsMuxer extends Muxer {
 				byteOffset: playlist.singleFile
 					? playlist.singleFile.nextOffset
 					: null,
+				info: segmentInfo ?? undefined,
 			});
 
 			this.globalTargetDuration = Math.max(this.globalTargetDuration, segmentDuration);
@@ -1047,8 +1049,13 @@ export class HlsMuxer extends Muxer {
 
 			if (this.isLive) {
 				while (playlist.writtenSegments.length > this.maxLiveSegmentCount) {
-					playlist.writtenSegments.shift();
+					const popped = playlist.writtenSegments.shift()!;
 					playlist.mediaSequence++;
+
+					if (!this.singleFilePerPlaylist) {
+						assert(popped.info);
+						this.format._options.onSegmentPopped?.(popped.path, popped.info);
+					}
 				}
 
 				await this.writePlaylist(playlist);

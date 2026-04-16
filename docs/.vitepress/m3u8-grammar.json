@@ -57,6 +57,13 @@
 			]
 		},
 		{
+			"match": "^(#)(EXT-X-[A-Z0-9-]+|EXT-[A-Z0-9-]+)$",
+			"captures": {
+				"1": { "name": "punctuation.definition.comment.m3u8" },
+				"2": { "name": "keyword.control.tag.m3u8" }
+			}
+		},
+		{
 			"match": "^[^#\\s][^\\n]*$",
 			"name": "source.m3u8.uri"
 		},

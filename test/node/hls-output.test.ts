@@ -1,6 +1,11 @@
 import { expect, test, vi } from 'vitest';
 import { Output, OutputTrackGroup } from '../../src/output.js';
-import { CmafOutputFormat, HlsOutputFormat, MpegTsOutputFormat } from '../../src/output-format.js';
+import {
+	CmafOutputFormat,
+	HlsOutputFormat,
+	HlsOutputSegmentInfo,
+	MpegTsOutputFormat,
+} from '../../src/output-format.js';
 import { BufferTarget, NullTarget, PathedTarget, StreamTarget, StreamTargetChunk } from '../../src/target.js';
 import { EncodedAudioPacketSource, EncodedVideoPacketSource } from '../../src/media-source.js';
 import { HlsMuxer } from '../../src/hls/hls-muxer.js';
@@ -2551,12 +2556,16 @@ test('Throws if some tracks are relativeToUnixEpoch and some are not', async () 
 
 test('Live mode, maxLiveSegmentCount', async () => {
 	const writtenTexts = new Map<string, string>();
+	const poppedSegments: { path: string; info: HlsOutputSegmentInfo }[] = [];
 
 	const output = new Output({
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(),
 			live: true,
 			maxLiveSegmentCount: 2,
+			onSegmentPopped: (path, info) => {
+				poppedSegments.push({ path, info });
+			},
 		}),
 		target: new PathedTarget('master.m3u8', (request) => {
 			const target = new BufferTarget();
@@ -2627,6 +2636,11 @@ segment-1-2.ts
 segment-1-3.ts
 `);
 
+	expect(poppedSegments).toHaveLength(1);
+	expect(poppedSegments[0]!.path).toBe('segment-1-1.ts');
+	expect(poppedSegments[0]!.info.n).toBe(1);
+	expect(poppedSegments[0]!.info.isSingleFile).toBe(false);
+
 	await source.add(new EncodedPacket(avcPacketData, 'delta', 6.5, 0.5), avcMetadata);
 	await source.add(new EncodedPacket(avcPacketData, 'delta', 7, 0.5), avcMetadata);
 	await source.add(new EncodedPacket(avcPacketData, 'delta', 7.5, 0.5), avcMetadata);
@@ -2646,4 +2660,62 @@ segment-1-4.ts
 
 #EXT-X-ENDLIST
 `);
+
+	expect(poppedSegments).toHaveLength(2);
+	expect(poppedSegments[1]!.path).toBe('segment-1-2.ts');
+	expect(poppedSegments[1]!.info.n).toBe(2);
+});
+
+test('Live mode, maxLiveSegmentCount with singleFilePerPlaylist', async () => {
+	const onSegmentPopped = vi.fn();
+	let lastPlaylistText = '';
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new MpegTsOutputFormat(),
+			live: true,
+			maxLiveSegmentCount: 2,
+			singleFilePerPlaylist: true,
+			onSegmentPopped,
+			onPlaylist: (content) => {
+				lastPlaylistText = content;
+			},
+		}),
+		target: new PathedTarget('master.m3u8', () => {
+			return new BufferTarget();
+		}),
+	});
+
+	const source = videoSource();
+	output.addVideoTrack(source);
+
+	await output.start();
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0.5), avcMetadata);
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0.5), avcMetadata);
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 4, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 4.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 5.5, 0.5), avcMetadata);
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 6, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 6.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 7, 0.5), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 7.5, 0.5), avcMetadata);
+
+	await output.finalize();
+
+	expect(onSegmentPopped).not.toHaveBeenCalled();
+
+	// Popping still happened
+	const extinfCount = (lastPlaylistText.match(/#EXTINF:/g) ?? []).length;
+	expect(extinfCount).toBe(2);
 });

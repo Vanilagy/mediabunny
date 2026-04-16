@@ -1271,6 +1271,12 @@ export type HlsOutputFormatOptions = {
 	 * function is never called.
 	 */
 	onInit?: (target: Target, info: HlsOutputPlaylistInfo) => unknown;
+	/**
+	 * Called when a media segment is removed from the start of a media playlist due to
+	 * {@link HlsOutputFormatOptions.maxLiveSegmentCount}. Will not be called when
+	 * {@link HlsOutputFormatOptions.singleFilePerPlaylist} is `true`.
+	 */
+	onSegmentPopped?: (path: string, info: HlsOutputSegmentInfo) => unknown;
 };
 
 /**
@@ -1347,6 +1353,9 @@ export class HlsOutputFormat extends OutputFormat {
 		}
 		if (options.onInit !== undefined && typeof options.onInit !== 'function') {
 			throw new TypeError('options.onInit, when provided, must be a function.');
+		}
+		if (options.onSegmentPopped !== undefined && typeof options.onSegmentPopped !== 'function') {
+			throw new TypeError('options.onSegmentPopped, when provided, must be a function.');
 		}
 
 		super();
