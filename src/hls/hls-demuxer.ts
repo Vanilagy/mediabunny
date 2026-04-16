@@ -20,7 +20,16 @@ import { TrackType } from '../output';
 import { assert, joinPaths, MaybePromise, Rotation, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket } from '../packet';
 import { readAllLines } from '../reader';
-import { AttributeList, canIgnoreLine, HLS_MIME_TYPE } from './hls-misc';
+import {
+	AttributeList,
+	canIgnoreLine,
+	HLS_MIME_TYPE,
+	TAG_EXTINF,
+	TAG_I_FRAME_STREAM_INF,
+	TAG_I_FRAMES_ONLY,
+	TAG_MEDIA,
+	TAG_STREAM_INF,
+} from './hls-misc';
 import { HlsSegmentedInput } from './hls-segmented-input';
 import { PathedSource } from '../source';
 import { SegmentedInputTrackDeclaration } from '../segmented-input';
@@ -91,7 +100,7 @@ export class HlsDemuxer extends Demuxer {
 			for (let i = 1; i < lines.length; i++) {
 				const line = lines[i]!;
 
-				if (line.startsWith('#EXT-X-STREAM-INF:')) {
+				if (line.startsWith(TAG_STREAM_INF)) {
 					const streamInfLineNumber = i;
 					const playlistPath = lines[++i];
 					if (playlistPath === undefined) {
@@ -99,7 +108,7 @@ export class HlsDemuxer extends Demuxer {
 					}
 
 					const fullPath = joinPaths(source.rootPath, playlistPath);
-					const attributes = new AttributeList(line.slice(18));
+					const attributes = new AttributeList(line.slice(TAG_STREAM_INF.length));
 
 					const bandwidth = attributes.getAsNumber('bandwidth');
 					if (bandwidth === null) {
@@ -115,8 +124,8 @@ export class HlsDemuxer extends Demuxer {
 						lineNumber: streamInfLineNumber,
 						hasOnlyKeyPackets: false,
 					});
-				} else if (line.startsWith('#EXT-X-I-FRAME-STREAM-INF:')) {
-					const attributes = new AttributeList(line.slice(26));
+				} else if (line.startsWith(TAG_I_FRAME_STREAM_INF)) {
+					const attributes = new AttributeList(line.slice(TAG_I_FRAME_STREAM_INF.length));
 					const playlistPath = attributes.get('uri');
 
 					if (playlistPath === null) {
@@ -141,8 +150,8 @@ export class HlsDemuxer extends Demuxer {
 						lineNumber: i,
 						hasOnlyKeyPackets: true,
 					});
-				} else if (line.startsWith('#EXT-X-MEDIA:')) {
-					const attributes = new AttributeList(line.slice(13));
+				} else if (line.startsWith(TAG_MEDIA)) {
+					const attributes = new AttributeList(line.slice(TAG_MEDIA.length));
 
 					const type = attributes.get('type');
 					if (type === null) {
@@ -165,9 +174,9 @@ export class HlsDemuxer extends Demuxer {
 					}
 
 					mediaTags.push({ fullPath, attributes, lineNumber: i });
-				} else if (line === '#EXT-X-I-FRAMES-ONLY') {
+				} else if (line === TAG_I_FRAMES_ONLY) {
 					// iFramesOnlyTagFound = true;
-				} else if (line.startsWith('#EXTINF:')) {
+				} else if (line.startsWith(TAG_EXTINF)) {
 					// This is a media playlist, not a master playlist
 					const segmentedInput = new HlsSegmentedInput(this, source.rootPath, null, lines);
 
@@ -234,16 +243,19 @@ export class HlsDemuxer extends Demuxer {
 						);
 					}
 
-					const matchingVideoMediaTags = mediaTags.filter((mediaTag) => {
+					// We only need to look at the first matching tag, since all tags are required to have the same
+					// codec anyway
+					const matchingVideoMediaTag = mediaTags.find((mediaTag) => {
 						const groupId = mediaTag.attributes.get('group-id')!;
 						const type = mediaTag.attributes.get('type')!;
 						return groupId === videoGroupId && type.toLowerCase() === 'video';
 					});
 
-					const additionalCodecStrings = await Promise.all(matchingVideoMediaTags.map(async (tag) => {
-						const uri = tag.attributes.get('uri');
+					outer:
+					if (matchingVideoMediaTag) {
+						const uri = matchingVideoMediaTag.attributes.get('uri');
 						if (uri === null) {
-							return null;
+							break outer;
 						}
 
 						const fullPath = joinPaths(source.rootPath, uri);
@@ -252,17 +264,14 @@ export class HlsDemuxer extends Demuxer {
 						const videoTrack = trackBackings.find(x => x.getType() === 'video');
 
 						if (!videoTrack || (await videoTrack.getCodec()) === null) {
-							return null;
+							break outer;
 						}
 
-						const codecParameterString = await videoTrack.getDecoderConfig().then(x => x?.codec ?? null);
-						assert(codecParameterString !== null);
-						return codecParameterString;
-					}));
+						const additionalCodecString = await videoTrack.getDecoderConfig().then(x => x?.codec ?? null);
+						assert(additionalCodecString !== null);
 
-					codecStrings.push(
-						...additionalCodecStrings.filter((x): x is string => x !== null),
-					);
+						codecStrings.push(additionalCodecString);
+					}
 				}
 
 				if (audioGroupId !== null && !containsAudioCodecs) {
@@ -275,16 +284,19 @@ export class HlsDemuxer extends Demuxer {
 						);
 					}
 
-					const matchingAudioMediaTags = mediaTags.filter((tag) => {
+					// We only need to look at the first matching tag, since all tags are required to have the same
+					// codec anyway
+					const matchingAudioMediaTag = mediaTags.find((tag) => {
 						const groupId = tag.attributes.get('group-id')!;
 						const type = tag.attributes.get('type')!;
 						return groupId === audioGroupId && type.toLowerCase() === 'audio';
 					});
 
-					const additionalCodecStrings = await Promise.all(matchingAudioMediaTags.map(async (tag) => {
-						const uri = tag.attributes.get('uri');
+					outer:
+					if (matchingAudioMediaTag) {
+						const uri = matchingAudioMediaTag.attributes.get('uri');
 						if (uri === null) {
-							return null;
+							break outer;
 						}
 
 						const fullPath = joinPaths(source.rootPath, uri);
@@ -293,17 +305,14 @@ export class HlsDemuxer extends Demuxer {
 						const audioTrack = trackBackings.find(x => x.getType() === 'audio');
 
 						if (!audioTrack || (await audioTrack.getCodec()) === null) {
-							return null;
+							break outer;
 						}
 
-						const codecParameterString = await audioTrack.getDecoderConfig().then(x => x?.codec ?? null);
-						assert(codecParameterString !== null);
-						return codecParameterString;
-					}));
+						const additionalCodecString = await audioTrack.getDecoderConfig().then(x => x?.codec ?? null);
+						assert(additionalCodecString !== null);
 
-					codecStrings.push(
-						...additionalCodecStrings.filter((x): x is string => x !== null),
-					);
+						codecStrings.push(additionalCodecString);
+					}
 				}
 
 				// Unique that shit
@@ -440,7 +449,7 @@ export class HlsDemuxer extends Demuxer {
 						if (audioGroupId === null) {
 							const channels = variantStream.attributes.get('channels');
 							const parsedChannels = channels !== null
-								? Number(channels)
+								? Number(channels.split('/')[0]!)
 								: null;
 
 							result.push({

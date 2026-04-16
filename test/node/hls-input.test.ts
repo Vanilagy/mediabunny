@@ -763,3 +763,15 @@ test.concurrent('#EXT-X-STREAM-INF tags without BANDWIDTH attribute are rejected
 
 	await expect(input.getTracks()).rejects.toThrow('BANDWIDTH');
 });
+
+test.concurrent('Missing media tag codec', async () => {
+	using input = createInputFrom('https://playertest.longtailvideo.com/adaptive/elephants_dream_v4/index.m3u8', ALL_FORMATS);
+
+	const tracks = await input.getTracks();
+	expect(tracks).toHaveLength(7);
+
+	expect(tracks.filter(x => x.type === 'video')).toHaveLength(4);
+	expect(tracks.filter(x => x.type === 'audio')).toHaveLength(3);
+
+	expect([...new Set(await Promise.all(tracks.map(x => x.getCodec())))]).toEqual(['aac', 'avc']);
+});

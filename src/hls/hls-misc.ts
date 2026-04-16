@@ -8,6 +8,21 @@
 
 export const HLS_MIME_TYPE = 'application/vnd.apple.mpegurl';
 
+export const TAG_STREAM_INF = '#EXT-X-STREAM-INF:';
+export const TAG_I_FRAME_STREAM_INF = '#EXT-X-I-FRAME-STREAM-INF:';
+export const TAG_MEDIA = '#EXT-X-MEDIA:';
+export const TAG_EXTINF = '#EXTINF:';
+export const TAG_MAP = '#EXT-X-MAP:';
+export const TAG_KEY = '#EXT-X-KEY:';
+export const TAG_MEDIA_SEQUENCE = '#EXT-X-MEDIA-SEQUENCE:';
+export const TAG_BYTERANGE = '#EXT-X-BYTERANGE:';
+export const TAG_PROGRAM_DATE_TIME = '#EXT-X-PROGRAM-DATE-TIME:';
+export const TAG_DISCONTINUITY = '#EXT-X-DISCONTINUITY';
+export const TAG_TARGETDURATION = '#EXT-X-TARGETDURATION:';
+export const TAG_ENDLIST = '#EXT-X-ENDLIST';
+export const TAG_PLAYLIST_TYPE = '#EXT-X-PLAYLIST-TYPE:';
+export const TAG_I_FRAMES_ONLY = '#EXT-X-I-FRAMES-ONLY';
+
 export const canIgnoreLine = (line: string) => line.length === 0 || (line.startsWith('#') && !line.startsWith('#EXT'));
 
 export class AttributeList {

@@ -13,7 +13,20 @@ import { toDataView, joinPaths, last, assert, binarySearchLessOrEqual, arrayArgm
 import { readAllLines, readBytes, Reader } from '../reader';
 import { PathedSource, ReadableStreamSource, SourceRef } from '../source';
 import { HlsDemuxer } from './hls-demuxer';
-import { AttributeList, canIgnoreLine } from './hls-misc';
+import {
+	AttributeList,
+	canIgnoreLine,
+	TAG_BYTERANGE,
+	TAG_DISCONTINUITY,
+	TAG_ENDLIST,
+	TAG_EXTINF,
+	TAG_KEY,
+	TAG_MAP,
+	TAG_MEDIA_SEQUENCE,
+	TAG_PLAYLIST_TYPE,
+	TAG_PROGRAM_DATE_TIME,
+	TAG_TARGETDURATION,
+} from './hls-misc';
 
 const IV_STRING_REGEX = /^0[xX][0-9a-fA-F]+$/;
 
@@ -229,7 +242,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 				setNextSequenceNumber(nextSequenceNumber + 1);
 			}
 
-			if (line.startsWith('#EXTINF:')) {
+			if (line.startsWith(TAG_EXTINF)) {
 				if (prevLastSegment) {
 					segmentSeen = true;
 					continue;
@@ -244,7 +257,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 					segmentSeen = true;
 				}
 
-				const extinfContent = line.slice(8);
+				const extinfContent = line.slice(TAG_EXTINF.length);
 				const commaIndex = extinfContent.indexOf(',');
 				const durationStr = commaIndex === -1 ? extinfContent : extinfContent.slice(0, commaIndex);
 				const duration = Number(durationStr);
@@ -253,8 +266,8 @@ export class HlsSegmentedInput extends SegmentedInput {
 				}
 
 				nextSegmentDuration = duration;
-			} else if (line.startsWith('#EXT-X-MAP:')) {
-				const attributes = new AttributeList(line.slice(11));
+			} else if (line.startsWith(TAG_MAP)) {
+				const attributes = new AttributeList(line.slice(TAG_MAP.length));
 				const uri = attributes.get('uri');
 				if (!uri) {
 					throw new Error('Invalid #EXT-X-MAP tag; missing URI attribute.');
@@ -308,8 +321,8 @@ export class HlsSegmentedInput extends SegmentedInput {
 				} else {
 					nextByteRange = null;
 				}
-			} else if (line.startsWith('#EXT-X-KEY:')) {
-				const attributes = new AttributeList(line.slice(11));
+			} else if (line.startsWith(TAG_KEY)) {
+				const attributes = new AttributeList(line.slice(TAG_KEY.length));
 				const method = attributes.get('method');
 
 				if (method === 'NONE') {
@@ -349,8 +362,8 @@ export class HlsSegmentedInput extends SegmentedInput {
 						+ ` please raise an issue.`,
 					);
 				}
-			} else if (line.startsWith('#EXT-X-MEDIA-SEQUENCE:')) {
-				const value = line.slice(22);
+			} else if (line.startsWith(TAG_MEDIA_SEQUENCE)) {
+				const value = line.slice(TAG_MEDIA_SEQUENCE.length);
 				const number = Number(value);
 
 				if (!Number.isInteger(number) || number < 0) {
@@ -358,8 +371,8 @@ export class HlsSegmentedInput extends SegmentedInput {
 				}
 
 				setNextSequenceNumber(number);
-			} else if (line.startsWith('#EXT-X-BYTERANGE:')) {
-				const parsed = parseByteRange(line.slice(17));
+			} else if (line.startsWith(TAG_BYTERANGE)) {
+				const parsed = parseByteRange(line.slice(TAG_BYTERANGE.length));
 				if (parsed.offset === null) {
 					if (lastByteRangeEnd === null) {
 						throw new Error(
@@ -371,14 +384,14 @@ export class HlsSegmentedInput extends SegmentedInput {
 
 				nextByteRange = parsed as { length: number; offset: number };
 				lastByteRangeEnd = parsed.offset + parsed.length;
-			} else if (line.startsWith('#EXT-X-PROGRAM-DATE-TIME:')) {
+			} else if (line.startsWith(TAG_PROGRAM_DATE_TIME)) {
 				if (prevLastSegment) {
 					// No need to spend effort parsing dates if we're gonna discard it anyway. Also would be wrong to do
 					// the segment shifting!
 					continue;
 				}
 
-				const dateTime = line.slice(25);
+				const dateTime = line.slice(TAG_PROGRAM_DATE_TIME.length);
 				const dateTimeMs = Date.parse(dateTime);
 
 				if (!Number.isFinite(dateTimeMs)) {
@@ -409,11 +422,11 @@ export class HlsSegmentedInput extends SegmentedInput {
 
 				lastProgramDateTimeSeconds = dateTimeSeconds;
 				accumulatedTime = dateTimeSeconds; // Snap the accumulated time to the datetime
-			} else if (line === '#EXT-X-DISCONTINUITY') {
+			} else if (line === TAG_DISCONTINUITY) {
 				currentFirstSegment = null;
 				currentInitSegment = null;
-			} else if (line.startsWith('#EXT-X-TARGETDURATION:')) {
-				const value = line.slice(22);
+			} else if (line.startsWith(TAG_TARGETDURATION)) {
+				const value = line.slice(TAG_TARGETDURATION.length);
 				const duration = Number(value);
 
 				if (!Number.isFinite(duration) || duration < 0) {
@@ -422,11 +435,11 @@ export class HlsSegmentedInput extends SegmentedInput {
 
 				this.refreshInterval = duration;
 				targetDuration = duration;
-			} else if (line === '#EXT-X-ENDLIST') {
+			} else if (line === TAG_ENDLIST) {
 				this.streamHasEnded = true;
 				break; // No need to keep reading after this
-			} else if (line.startsWith('#EXT-X-PLAYLIST-TYPE')) {
-				const type = line.slice(21);
+			} else if (line.startsWith(TAG_PLAYLIST_TYPE)) {
+				const type = line.slice(TAG_PLAYLIST_TYPE.length);
 				if (type.toLowerCase() === 'vod') {
 					// A VOD playlist cannot be updated per spec so we can be sure the stream has ended
 					this.streamHasEnded = true;
