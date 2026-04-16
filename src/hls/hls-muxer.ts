@@ -29,6 +29,7 @@ import { Writer } from '../writer';
 import { EncodedPacket } from '../packet';
 import { SubtitleCue, SubtitleMetadata } from '../subtitles';
 import { NullTarget, PathedTarget, Target, TargetRequest } from '../target';
+import { HLS_MIME_TYPE } from './hls-misc';
 
 type HlsTrackData = {
 	track: OutputTrack;
@@ -499,7 +500,7 @@ export class HlsMuxer extends Muxer {
 	}
 
 	async getMimeType(): Promise<string> {
-		return 'application/vnd.apple.mpegurl';
+		return HLS_MIME_TYPE;
 	}
 
 	private allTracksAreKnown(playlist: Playlist) {
@@ -829,7 +830,11 @@ export class HlsMuxer extends Muxer {
 						relativeSegmentPath,
 					);
 
-					const target = await this.output._getTarget({ path: fullSegmentPath, isRoot: false });
+					const target = await this.output._getTarget({
+						path: fullSegmentPath,
+						isRoot: false,
+						mimeType: playlist.segmentFormat.mimeType,
+					});
 					target._start();
 
 					playlist.singleFile = {
@@ -926,6 +931,7 @@ export class HlsMuxer extends Muxer {
 						const target = await this.output._getTarget({
 							path: initPath,
 							isRoot: false,
+							mimeType: playlist.segmentFormat.mimeType,
 						});
 						target.on('write', ({ end }) => {
 							playlist.initSegment!.byteSize = Math.max(playlist.initSegment!.byteSize, end);
@@ -1179,7 +1185,11 @@ export class HlsMuxer extends Muxer {
 
 		this.format._options.onPlaylist?.(playlistText, toPlaylistInfo(playlist));
 
-		const target = await this.output._getTarget({ path: playlistPath, isRoot: false });
+		const target = await this.output._getTarget({
+			path: playlistPath,
+			isRoot: false,
+			mimeType: HLS_MIME_TYPE,
+		});
 		const writer = new Writer(target);
 		writer.start();
 		writer.write(textEncoder.encode(playlistText));
@@ -1382,7 +1392,11 @@ export class HlsMuxer extends Muxer {
 		} else {
 			// For subsequent master playlist writes, we *must* obtain a different target in order to overwrite
 			// the file.
-			const target = await this.output._getTarget({ path: pathedTarget.rootPath, isRoot: true });
+			const target = await this.output._getTarget({
+				path: pathedTarget.rootPath,
+				isRoot: true,
+				mimeType: HLS_MIME_TYPE,
+			});
 			writer = new Writer(target);
 			writer.start();
 		}

@@ -33,6 +33,7 @@ import { FlacDemuxer } from './flac/flac-demuxer';
 import { MpegTsDemuxer } from './mpeg-ts/mpeg-ts-demuxer';
 import { TS_PACKET_SIZE } from './mpeg-ts/mpeg-ts-misc';
 import { HlsDemuxer } from './hls/hls-demuxer';
+import { HLS_MIME_TYPE } from './hls/hls-misc';
 import { PathedSource } from './source';
 
 /**
@@ -610,7 +611,7 @@ export class HlsInputFormat extends InputFormat {
 	}
 
 	get mimeType() {
-		return 'application/vnd.apple.mpegurl';
+		return HLS_MIME_TYPE;
 	}
 }
 

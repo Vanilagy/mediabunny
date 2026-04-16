@@ -20,7 +20,7 @@ import { TrackType } from '../output';
 import { assert, joinPaths, MaybePromise, Rotation, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket } from '../packet';
 import { readAllLines } from '../reader';
-import { AttributeList, canIgnoreLine } from './hls-misc';
+import { AttributeList, canIgnoreLine, HLS_MIME_TYPE } from './hls-misc';
 import { HlsSegmentedInput } from './hls-segmented-input';
 import { PathedSource } from '../source';
 import { SegmentedInputTrackDeclaration } from '../segmented-input';
@@ -105,7 +105,7 @@ export class HlsDemuxer extends Demuxer {
 					if (bandwidth === null) {
 						throw new Error(
 							'Invalid M3U8 file; #EXT-X-STREAM-INF tag requires a BANDWIDTH attribute with a valid'
-							+ ' number value.',
+							+ ' numerical value.',
 						);
 					}
 
@@ -116,12 +116,20 @@ export class HlsDemuxer extends Demuxer {
 						hasOnlyKeyPackets: false,
 					});
 				} else if (line.startsWith('#EXT-X-I-FRAME-STREAM-INF:')) {
-					const attributes = new AttributeList(line.slice(18));
+					const attributes = new AttributeList(line.slice(26));
 					const playlistPath = attributes.get('uri');
 
 					if (playlistPath === null) {
 						throw new Error(
 							'Invalid M3U8 file; #EXT-X-I-FRAME-STREAM-INF tag requires a URI attribute.',
+						);
+					}
+
+					const bandwidth = attributes.getAsNumber('bandwidth');
+					if (bandwidth === null) {
+						throw new Error(
+							'Invalid M3U8 file; #EXT-X-I-FRAME-STREAM-INF tag requires a BANDWIDTH attribute with a'
+							+ ' valid numerical value.',
 						);
 					}
 
@@ -610,7 +618,7 @@ export class HlsDemuxer extends Demuxer {
 	}
 
 	async getMimeType(): Promise<string> {
-		return 'application/vnd.apple.mpegurl';
+		return HLS_MIME_TYPE;
 	}
 
 	override dispose(): void {

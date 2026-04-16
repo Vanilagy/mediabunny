@@ -727,6 +727,8 @@ export class PathedTarget<T extends Target> {
 export type TargetRequest = {
 	/** The requested file path. */
 	path: FilePath;
-	/** Whether the requested file is the root file. */
+	/** Whether the to-be-written file will be the root file. */
 	isRoot: boolean;
+	/** The MIME type of the to-be-written file. */
+	mimeType: string;
 };

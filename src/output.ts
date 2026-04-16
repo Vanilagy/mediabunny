@@ -534,7 +534,11 @@ export class Output<
 			return this._target;
 		}
 
-		const request: TargetRequest = { path: this._target.rootPath, isRoot: true };
+		const request: TargetRequest = {
+			path: this._target.rootPath,
+			isRoot: true,
+			mimeType: this.format.mimeType,
+		};
 		const result = this._getTargetValidated(request);
 
 		const handleResult = (target: T) => {

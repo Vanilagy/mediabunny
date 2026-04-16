@@ -1,5 +1,5 @@
 /* eslint-disable @stylistic/max-len */
-import { ALL_FORMATS, createInputFrom, EncodedPacketSink, InputAudioTrack, InputVideoTrack } from 'mediabunny';
+import { ALL_FORMATS, BufferSource, createInputFrom, EncodedPacketSink, Input, InputAudioTrack, InputVideoTrack, PathedSource } from 'mediabunny';
 import { expect, test } from 'vitest';
 import { HLS, HlsInputFormat } from '../../src/input-format.js';
 import { assert, rejectAfter } from '../../src/misc.js';
@@ -720,4 +720,46 @@ test.concurrent('Live HLS', { timeout: 30_000 }, async () => {
 		rejectAfter(2000, 'Baby you make me smile'),
 	]);
 	expect(metadataDuration).toBeGreaterThan((Date.now() / 1000) - 3600);
+});
+
+test.concurrent('#EXT-X-I-FRAME-STREAM-INF tags are parsed properly', async () => {
+	const text = `#EXTM3U
+#EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=256000,CODECS="avc1.4D401E",RESOLUTION=480x270,URI="7f2459cb12854fdbbc7ec1e7279da179/f74fb10563564130a4702743d64112a3/index_11.m3u8"
+`;
+
+	const input = new Input({
+		formats: ALL_FORMATS,
+		source: new PathedSource('master.m3u8', () => new BufferSource(new TextEncoder().encode(text))),
+	});
+
+	const tracks = await input.getTracks();
+	expect(tracks).toHaveLength(1);
+	expect(await tracks[0]!.hasOnlyKeyPackets()).toBe(true);
+});
+
+test.concurrent('#EXT-X-I-FRAME-STREAM-INF tags without BANDWIDTH attribute are rejected', async () => {
+	const text = `#EXTM3U
+#EXT-X-I-FRAME-STREAM-INF:CODECS="avc1.4D401E",RESOLUTION=480x270,URI="7f2459cb12854fdbbc7ec1e7279da179/f74fb10563564130a4702743d64112a3/index_11.m3u8"
+`;
+
+	const input = new Input({
+		formats: ALL_FORMATS,
+		source: new PathedSource('master.m3u8', () => new BufferSource(new TextEncoder().encode(text))),
+	});
+
+	await expect(input.getTracks()).rejects.toThrow('BANDWIDTH');
+});
+
+test.concurrent('#EXT-X-STREAM-INF tags without BANDWIDTH attribute are rejected', async () => {
+	const text = `#EXTM3U
+#EXT-X-STREAM-INF:CODECS="avc1.4D401E",RESOLUTION=480x270
+7f2459cb12854fdbbc7ec1e7279da179/f74fb10563564130a4702743d64112a3/index_11.m3u8
+`;
+
+	const input = new Input({
+		formats: ALL_FORMATS,
+		source: new PathedSource('master.m3u8', () => new BufferSource(new TextEncoder().encode(text))),
+	});
+
+	await expect(input.getTracks()).rejects.toThrow('BANDWIDTH');
 });

@@ -29,6 +29,7 @@ import { Output, OutputTrack, TrackType } from './output';
 import { MpegTsMuxer } from './mpeg-ts/mpeg-ts-muxer';
 import { WaveMuxer } from './wave/wave-muxer';
 import { HlsMuxer } from './hls/hls-muxer';
+import { HLS_MIME_TYPE } from './hls/hls-misc';
 import { MaybePromise, FilePath, toArray } from './misc';
 import { Target } from './target';
 
@@ -1368,7 +1369,7 @@ export class HlsOutputFormat extends OutputFormat {
 	}
 
 	get mimeType() {
-		return 'application/vnd.apple.mpegurl';
+		return HLS_MIME_TYPE;
 	}
 
 	getSupportedCodecs(): MediaCodec[] {

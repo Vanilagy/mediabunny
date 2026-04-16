@@ -6,6 +6,8 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+export const HLS_MIME_TYPE = 'application/vnd.apple.mpegurl';
+
 export const canIgnoreLine = (line: string) => line.length === 0 || (line.startsWith('#') && !line.startsWith('#EXT'));
 
 export class AttributeList {
