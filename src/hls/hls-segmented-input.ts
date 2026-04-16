@@ -27,6 +27,7 @@ import {
 	TAG_PROGRAM_DATE_TIME,
 	TAG_TARGETDURATION,
 } from './hls-misc';
+import { HlsInputFormat } from '../input-format';
 
 const IV_STRING_REGEX = /^0[xX][0-9a-fA-F]+$/;
 
@@ -603,7 +604,8 @@ export class HlsSegmentedInput extends SegmentedInput {
 					return ref!;
 				},
 			),
-			formats: this.input._formats,
+			// Do not allow recursive HLS. Cool on paper, but allows for nasty infinite-depth request trees.
+			formats: this.input._formats.filter(x => !(x instanceof HlsInputFormat)),
 			initInput: initInput ?? undefined,
 		});
 

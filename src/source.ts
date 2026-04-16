@@ -233,7 +233,9 @@ export class SourceRef<S extends Source = Source> implements Disposable {
 	 * Calls {@link SourceRef.free}.
 	 */
 	[Symbol.dispose]() {
-		this.free();
+		if (!this.freed) {
+			this.free();
+		}
 	}
 }
 

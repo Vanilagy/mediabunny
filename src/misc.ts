@@ -1219,8 +1219,14 @@ export class EventEmitter<TEvents extends Record<string, unknown>> {
 		if (!listeners) {
 			return;
 		}
+
 		for (const entry of listeners) {
-			(entry.fn as (data: unknown) => void)(data);
+			try {
+				(entry.fn as (data: unknown) => void)(data);
+			} catch (error) {
+				console.error(error);
+			}
+
 			if (entry.once) {
 				listeners.delete(entry);
 			}

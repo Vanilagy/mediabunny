@@ -64,7 +64,9 @@ let inputFinalizationRegistry: FinalizationRegistry<SourceRef[]> | null = null;
 if (typeof FinalizationRegistry !== 'undefined') {
 	inputFinalizationRegistry = new FinalizationRegistry((refs) => {
 		for (const ref of refs) {
-			ref.free();
+			if (!ref.freed) {
+				ref.free();
+			}
 		}
 	});
 }

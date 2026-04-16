@@ -112,6 +112,31 @@ BEHAVIOR CHANGES
    Previously would have matched the aac prefix check. MP3 check now
    runs first and includes this codec string.
 
+8. UrlSource: servers without Content-Length now supported
+   Previously, if the server returned 200 without a Content-Length header,
+   UrlSource threw an error. Now it gracefully handles this by downloading
+   the entire resource with an unbounded worker (targetPos = Infinity,
+   strictTarget = false), determining file size once the stream ends.
+
+9. UrlSource: file size probing request removed
+   The old UrlSource always made a dedicated initial `Range: bytes=0-`
+   request solely to probe file size and range request support. File size
+   is now determined lazily from the response headers of the first actual
+   read, removing the extra round-trip.
+
+10. UrlSource: non-range-request server warnings deduplicated per origin
+    The "server did not respond with 206 Partial Content" warning is now
+    emitted at most once per origin instead of on every request.
+
+11. ReadableStreamSource: reader now canceled on dispose
+    ReadableStreamSource._dispose() now calls `this._reader?.cancel()`,
+    properly releasing the underlying stream resource.
+
+12. ReadOrchestrator: worker queue system
+    When the maximum worker count is reached, reads are now queued and
+    dispatched when a worker becomes free, instead of evicting running
+    workers which could abort in-flight fetches.
+
 
 ============================================================
 DEPRECATIONS

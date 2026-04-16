@@ -1,7 +1,7 @@
 /* eslint-disable @stylistic/max-len */
 import { ALL_FORMATS, BufferSource, createInputFrom, EncodedPacketSink, Input, InputAudioTrack, InputVideoTrack, PathedSource } from 'mediabunny';
 import { expect, test } from 'vitest';
-import { HLS, HlsInputFormat } from '../../src/input-format.js';
+import { HLS, HLS_FORMATS, HlsInputFormat } from '../../src/input-format.js';
 import { assert, rejectAfter } from '../../src/misc.js';
 
 // A lot of test cases taken from:
@@ -774,4 +774,30 @@ test.concurrent('Missing media tag codec', async () => {
 	expect(tracks.filter(x => x.type === 'audio')).toHaveLength(3);
 
 	expect([...new Set(await Promise.all(tracks.map(x => x.getCodec())))]).toEqual(['aac', 'avc']);
+});
+
+test.concurrent('Circular/recursive HLS is forbidden', async () => {
+	const text = `#EXTM3U
+#EXT-X-VERSION=3
+#EXT-X-TARGETDURATION=10
+
+#EXTINF:5,
+root.m3u8
+
+#EXT-X-ENDLIST
+`;
+
+	const input = new Input({
+		source: new PathedSource(
+			'root.m3u8',
+			({ path }) => {
+				console.log(1, path);
+				assert(path === 'root.m3u8');
+				return new BufferSource(new TextEncoder().encode(text));
+			},
+		),
+		formats: HLS_FORMATS,
+	});
+
+	await expect(input.getTracks()).rejects.toThrow('unsupported');
 });

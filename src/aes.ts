@@ -288,6 +288,10 @@ export const createAes128CbcDecryptStream = (
 			} else {
 				// This is the last chunk
 				const paddingLength = output[bytesToRead - 1]!;
+				if (paddingLength === 0 || paddingLength > 16) {
+					throw new Error('Invalid PKCS#7 padding. Incorrect key or corrupted data.');
+				}
+
 				const trimmedOutput = output.subarray(0, bytesToRead - paddingLength); // PKCS#7 padding
 
 				controller.enqueue(trimmedOutput);
