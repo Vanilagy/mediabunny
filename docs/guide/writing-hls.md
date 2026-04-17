@@ -195,8 +195,6 @@ await output.finalize();
 // All files have been uploaded to the server
 ```
 
-You can also set [`runner.parallelism`](../api/ConcurrentRunner#parallelism) at any time to adjust the concurrency dynamically, and use [`runner.inFlightCount`](../api/ConcurrentRunner#inflightcount) to inspect the current number of running tasks.
-
 ## Adding tracks & media
 
 Output tracks can be registered using the usual approach by using [media sources](./media-sources):
