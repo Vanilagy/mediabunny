@@ -1,0 +1,4 @@
+MENTION APPEND-ONLY IN UPLOAD EXAMPLE IN WRITING HLS
+
+also I wish there was a more explicit way this was enforced and would error at runtime.
+writablestream target?

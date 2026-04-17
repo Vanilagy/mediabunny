@@ -224,6 +224,22 @@ You can extend this pattern to offer content in multiple codecs as well.
 
 For the full list of transformation options, see [`VideoTransformOptions`](../api/VideoTransformOptions) and [`AudioTransformOptions`](../api/AudioTransformOptions).
 
+---
+
+If you're using the [Conversion API](./converting-media-files), you achieve the same thing using [output track fan-out](./converting-media-files#track-fan-out):
+```ts
+const conversion = await Conversion.init({
+	input,
+	output,
+	video: [
+		{ height: 1080, bitrate: QUALITY_VERY_HIGH },
+		{ height: 720, bitrate: QUALITY_HIGH },
+		{ height: 480, bitrate: QUALITY_MEDIUM },
+		{ height: 360, bitrate: QUALITY_LOW },
+	],
+});
+```
+
 ### Track metadata
 
 Often you'll want to provide additional [track metadata](../api/BaseTrackMetadata) when dealing with multiple tracks. For example:
