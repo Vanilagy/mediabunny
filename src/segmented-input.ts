@@ -70,6 +70,8 @@ export abstract class SegmentedInput {
 	firstSegment: Segment | null = null;
 	firstSegmentFirstTimestamps = new WeakMap<Segment, number>();
 
+	firstTimestampCache = new WeakMap<Input, number>();
+
 	constructor(input: Input, path: string, trackDeclarations: SegmentedInputTrackDeclaration[] | null) {
 		this.input = input;
 		this.path = path;
@@ -152,6 +154,19 @@ export abstract class SegmentedInput {
 		})();
 	}
 
+	// This operation is done a lot and can be semi-expensive, so it's good to have a cache for it
+	async getFirstTimestampForInput(input: Input) {
+		const existing = this.firstTimestampCache.get(input);
+		if (existing !== undefined) {
+			return existing;
+		}
+
+		const firstTimestamp = await input.getFirstTimestamp();
+		this.firstTimestampCache.set(input, firstTimestamp);
+
+		return firstTimestamp;
+	}
+
 	async getMediaOffset(segment: Segment, input: Input) {
 		const firstSegment = segment.firstSegment ?? segment;
 
@@ -160,7 +175,7 @@ export abstract class SegmentedInput {
 			firstSegmentFirstTimestamp = this.firstSegmentFirstTimestamps.get(firstSegment)!;
 		} else {
 			const firstInput = this.getInputForSegment(firstSegment);
-			firstSegmentFirstTimestamp = await firstInput.getFirstTimestamp();
+			firstSegmentFirstTimestamp = await this.getFirstTimestampForInput(firstInput);
 			this.firstSegmentFirstTimestamps.set(firstSegment, firstSegmentFirstTimestamp);
 		}
 
@@ -168,7 +183,7 @@ export abstract class SegmentedInput {
 			return firstSegment.timestamp - firstSegmentFirstTimestamp;
 		}
 
-		const segmentFirstTimestamp = await input.getFirstTimestamp();
+		const segmentFirstTimestamp = await this.getFirstTimestampForInput(input);
 		const segmentElapsed = segment.timestamp - firstSegment.timestamp;
 		const inputElapsed = segmentFirstTimestamp - firstSegmentFirstTimestamp;
 		const difference = inputElapsed - segmentElapsed;
@@ -401,6 +416,14 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 			const firstPacket = await nextTrack._backing.getFirstPacket(options);
 			if (!firstPacket) {
 				return null;
+			}
+
+			const segmentAfterThat = await this.segmentedInput.getNextSegment(nextSegment, {
+				skipLiveWait: options.skipLiveWait,
+			});
+			if (segmentAfterThat) {
+				const input = this.segmentedInput.getInputForSegment(segmentAfterThat);
+				void input.getTracks();
 			}
 
 			return this.createAdjustedPacket(firstPacket, nextSegment, nextTrack);
