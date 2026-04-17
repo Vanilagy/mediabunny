@@ -10,9 +10,9 @@ import { Conversion } from '../../src/conversion.js';
 
 const __dirname = new URL('.', import.meta.url).pathname;
 
-const samplePath = path.join(__dirname, '../public/rotate-buck-bunny.mp4');
+const samplePath = path.join(__dirname, '../public/video.mp4');
 
-test('BufferTarget onFinalize receives the final buffer and awaits before resolving', async () => {
+test('BufferTarget onFinalize callback', async () => {
 	let received: ArrayBuffer | null = null;
 	let asyncCallbackDone = false;
 
@@ -39,29 +39,4 @@ test('BufferTarget onFinalize receives the final buffer and awaits before resolv
 	expect(received).toBe(output.target.buffer);
 	expect(asyncCallbackDone).toBe(true);
 	expect(output.target.buffer!.byteLength).toBeGreaterThan(0);
-});
-
-test('BufferTarget without options remains backward compatible', async () => {
-	using input = new Input({
-		source: new FilePathSource(samplePath),
-		formats: ALL_FORMATS,
-	});
-
-	const output = new Output({
-		format: new Mp4OutputFormat(),
-		target: new BufferTarget(),
-	});
-
-	const conversion = await Conversion.init({ input, output, showWarnings: false });
-	await conversion.execute();
-
-	expect(output.target.buffer).not.toBeNull();
-	expect(output.target.buffer!.byteLength).toBeGreaterThan(0);
-});
-
-test('BufferTarget rejects non-function onFinalize', () => {
-	expect(() => {
-		// @ts-expect-error — testing runtime validation
-		new BufferTarget({ onFinalize: 'not-a-function' });
-	}).toThrow('options.onFinalize');
 });

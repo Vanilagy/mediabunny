@@ -115,7 +115,9 @@ await output.finalize();
 
 ### Upload to a server
 
-This models a stream upload, where files are being uploaded *while* they are being created.
+#### Stream upload
+
+This code models a stream upload, where files are being uploaded *while* they are being created:
 
 ```ts
 const promises: Promise<Response>[] = [];
@@ -146,38 +148,51 @@ const output = new Output({
 			return new StreamTarget(writable);
 		},
 	),
+	onFinalize: () => Promise.all(promises),
 	// ...
 });
 
 // ...
 await output.finalize();
-
-await Promise.all(promises);
 // All files have been uploaded to the server
 ```
 
-If streaming is not possible (e.g. when uploading to S3 via signed `PutObject`, which requires a known `Content-Length`), use [`BufferTarget`](../api/BufferTarget) with the [`onFinalize`](../api/BufferTargetOptions#onfinalize) option instead. The muxer awaits this callback, providing proper backpressure that ensures the next segment is not produced until this one has been uploaded:
+#### Monolithic upload
+
+If streaming is not possible (e.g. when uploading to S3 via signed `PutObject`, which requires a known `Content-Length`), you can use [`BufferTarget`](../api/BufferTarget) with the [`onFinalize`](../api/BufferTargetOptions#onfinalize) option instead.
+
+You could call `fetch` directly but this would halt Mediabunny's internals until the upload has completed. Instead, using a [`ConcurrentRunner`](../api/ConcurrentRunner) allows Mediabunny to keep producing data internally while the upload is in flight, while also allowing multiple concurrent uploads:
 
 ```ts
+import { ConcurrentRunner, ... } from 'mediabunny';
+
+// This Mediabunny utility class is used to allow up to two requests
+// to run concurrently. When this number is exceeded, backpressure is
+// automatically applied internally.
+const runner = new ConcurrentRunner(2);
+
 const output = new Output({
 	target: new PathedTarget(
 		'master.m3u8',
 		({ path, mimeType }) =>
 			new BufferTarget({
-				onFinalize: async (buffer) => {
-					await fetch(`/upload?file=${encodeURIComponent(path)}`, {
+				onFinalize: buffer => runner.run(() =>
+					fetch(`/upload?file=${encodeURIComponent(path)}`, {
 						method: 'PUT',
 						body: buffer,
-						headers: { 'Content-Type': mimeType },
-					});
-				},
+						headers: {
+							'Content-Type': mimeType,
+						},
+					})
+				),
 			}),
 	),
+	onFinalize: () => runner.flush(),
 	// ...
 });
 
-// All files are fully uploaded by the time finalize resolves:
 await output.finalize();
+// All files have been uploaded to the server
 ```
 
 ## Adding tracks & media

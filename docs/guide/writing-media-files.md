@@ -216,6 +216,10 @@ await output.finalize();
 const file = output.target.buffer; // => Uint8Array
 ```
 
+---
+
+An optional [`onFinalize`](../api/OutputOptions#onfinalize) callback can be provided in the output options. This function will be called at the end of `.finalize()` and can be used to do work once the output has been completed. If it returns a promise, it will be awaited by the output.
+
 ## Canceling an output
 
 Sometimes, you may want to cancel the ongoing creation of an output file. For this, use the `cancel` method:
@@ -290,7 +294,7 @@ This target is a great choice for small-ish files (< 100 MB), but since all data
 
 #### `onFinalize` callback
 
-`BufferTarget` accepts an `onFinalize` option, which is called with the complete buffer once the target has been finalized. The muxer awaits this callback, providing proper backpressure — useful for uploading the final buffer to a server or object store (e.g. S3 `PutObject`, which requires a known `Content-Length`):
+`BufferTarget` accepts an `onFinalize` option, which is called with the complete buffer once the target has been finalized. Useful for uploading the final buffer to a server or object store (e.g. S3 `PutObject`, which requires a known `Content-Length`):
 
 ```ts
 const output = new Output({
@@ -305,8 +309,6 @@ const output = new Output({
 await output.finalize();
 // The upload has completed by the time finalize resolves.
 ```
-
-Unlike the `finalized` [event](#events), the `onFinalize` callback is awaited by the muxer. When used with [`PathedTarget`](./writing-hls#upload-to-a-server), this ensures the next file is not produced until the current one has been uploaded, keeping memory usage bounded.
 
 ### `StreamTarget`
 

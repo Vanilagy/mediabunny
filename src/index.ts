@@ -142,6 +142,7 @@ export {
 } from './target';
 export {
 	AnyIterable,
+	ConcurrentRunner,
 	EventEmitter,
 	EventListenerOptions,
 	FilePath,

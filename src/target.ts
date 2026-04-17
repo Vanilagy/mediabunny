@@ -96,13 +96,13 @@ const ARRAY_BUFFER_MAX_SIZE = 2 ** 32;
  */
 export type BufferTargetOptions = {
 	/**
-	 * Called once the target has been finalized, with the complete output buffer.
+	 * Called once the target has been finalized, with the complete output buffer. If you return a promise, it will be
+	 * used to apply backpressure internally.
 	 *
-	 * The muxer awaits this callback before proceeding, enabling proper backpressure for upload scenarios
-	 * where the full buffer must be known before sending (e.g. S3 PutObject, R2, B2 via signed URLs).
-	 * Use this over the {@link TargetEvents} `finalized` event when you need the muxer to wait.
+	 * One use for this callback is for uploading to a server where the full buffer must be known before
+	 * sending (e.g. S3 PutObject) and stream-uploading is not an option.
 	 */
-	onFinalize?: (buffer: ArrayBuffer) => Promise<void> | void;
+	onFinalize?: (buffer: ArrayBuffer) => MaybePromise<unknown>;
 };
 
 /**
@@ -130,7 +130,7 @@ export class BufferTarget extends Target {
 	constructor(options: BufferTargetOptions = {}) {
 		super();
 
-		if (options !== null && typeof options !== 'object') {
+		if (!options || typeof options !== 'object') {
 			throw new TypeError('BufferTarget options, when provided, must be an object.');
 		}
 		if (options.onFinalize !== undefined && typeof options.onFinalize !== 'function') {
@@ -205,9 +205,11 @@ export class BufferTarget extends Target {
 	/** @internal */
 	async _finalize() {
 		this.buffer = this._buffer.slice(0, this._maxPos);
+
 		if (this._options.onFinalize) {
 			await this._options.onFinalize(this.buffer);
 		}
+
 		this._emit('finalized');
 	}
 
