@@ -418,14 +418,6 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 				return null;
 			}
 
-			const segmentAfterThat = await this.segmentedInput.getNextSegment(nextSegment, {
-				skipLiveWait: options.skipLiveWait,
-			});
-			if (segmentAfterThat) {
-				const input = this.segmentedInput.getInputForSegment(segmentAfterThat);
-				void input.getTracks();
-			}
-
 			return this.createAdjustedPacket(firstPacket, nextSegment, nextTrack);
 		}
 	}
