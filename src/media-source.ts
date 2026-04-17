@@ -267,6 +267,8 @@ class VideoEncoderWrapper {
 	 */
 	private error: Error | null = null;
 
+	private lastMuxerPromise: Promise<void> = Promise.resolve();
+
 	constructor(private source: VideoSource, private encodingConfig: VideoEncodingConfig) {
 		const sizeChangeBehavior = encodingConfig.sizeChangeBehavior ?? 'deny';
 		if (['fill', 'contain', 'cover'].includes(sizeChangeBehavior) && encodingConfig.transform?.fit !== undefined) {
@@ -648,7 +650,7 @@ class VideoEncoderWrapper {
 					}
 				}
 
-				await this.muxer!.mutex.currentPromise; // Allow the writer to apply backpressure
+				await this.lastMuxerPromise; // Allow the writer to apply backpressure
 			}
 		} finally {
 			for (const sample of samplesToEncode) {
@@ -711,10 +713,11 @@ class VideoEncoderWrapper {
 					maybeEnsureIsKeyPacket(this.source._connectedTrack!, packet);
 
 					this.encodingConfig.onEncodedPacket?.(packet, meta);
-					void this.muxer!.addEncodedVideoPacket(this.source._connectedTrack!, packet, meta)
-						.catch((error) => {
-							this.error ??= error;
-						});
+					this.lastMuxerPromise
+						= this.muxer!.addEncodedVideoPacket(this.source._connectedTrack!, packet, meta)
+							.catch((error) => {
+								this.error ??= error;
+							});
 				};
 
 				await this.customEncoder.init();
@@ -802,10 +805,11 @@ class VideoEncoderWrapper {
 					maybeEnsureIsKeyPacket(this.source._connectedTrack!, packet);
 
 					this.encodingConfig.onEncodedPacket?.(packet, meta);
-					void this.muxer!.addEncodedVideoPacket(this.source._connectedTrack!, packet, meta)
-						.catch((error) => {
-							this.error ??= error;
-						});
+					this.lastMuxerPromise
+						= this.muxer!.addEncodedVideoPacket(this.source._connectedTrack!, packet, meta)
+							.catch((error) => {
+								this.error ??= error;
+							});
 				};
 
 				const stack = new Error('Encoding error').stack;
@@ -1787,6 +1791,7 @@ class AudioEncoderWrapper {
 	 * So, we keep track of the encoder error and throw it as soon as we get the chance.
 	 */
 	private error: Error | null = null;
+	private lastMuxerPromise: Promise<void> = Promise.resolve();
 
 	constructor(private source: AudioSource, private encodingConfig: AudioEncodingConfig) {}
 
@@ -1950,7 +1955,7 @@ class AudioEncoderWrapper {
 					await promise;
 				}
 
-				await this.muxer!.mutex.currentPromise; // Allow the writer to apply backpressure
+				await this.lastMuxerPromise; // Allow the writer to apply backpressure
 			} else if (this.isPcmEncoder) {
 				await this.doPcmEncoding(audioSample, shouldClose);
 			} else {
@@ -1967,7 +1972,7 @@ class AudioEncoderWrapper {
 					await new Promise(resolve => this.encoder!.addEventListener('dequeue', resolve, { once: true }));
 				}
 
-				await this.muxer!.mutex.currentPromise; // Allow the writer to apply backpressure
+				await this.lastMuxerPromise; // Allow the writer to apply backpressure
 			}
 		} finally {
 			if (shouldClose) {
@@ -2080,10 +2085,11 @@ class AudioEncoderWrapper {
 					}
 
 					this.encodingConfig.onEncodedPacket?.(packet, meta);
-					void this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet, meta)
-						.catch((error) => {
-							this.error ??= error;
-						});
+					this.lastMuxerPromise
+						= this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet, meta)
+							.catch((error) => {
+								this.error ??= error;
+							});
 				};
 
 				await this.customEncoder.init();
@@ -2145,10 +2151,11 @@ class AudioEncoderWrapper {
 						});
 
 						this.encodingConfig.onEncodedPacket?.(packet, meta);
-						void this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet, meta)
-							.catch((error) => {
-								this.error ??= error;
-							});
+						this.lastMuxerPromise
+							= this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet, meta)
+								.catch((error) => {
+									this.error ??= error;
+								});
 					},
 					error: (error) => {
 						error.stack = stack; // Provide a more useful stack trace
@@ -2803,6 +2810,8 @@ export class TextSubtitleSource extends SubtitleSource {
 	private _parser: SubtitleParser;
 	/** @internal */
 	private _error: Error | null = null;
+	/** @internal */
+	private _lastMuxerPromise: Promise<void> = Promise.resolve();
 
 	/** Creates a new {@link TextSubtitleSource} where added text chunks are in the specified `codec`. */
 	constructor(codec: SubtitleCodec) {
@@ -2811,10 +2820,11 @@ export class TextSubtitleSource extends SubtitleSource {
 		this._parser = new SubtitleParser({
 			codec,
 			output: (cue, metadata) => {
-				void this._connectedTrack?.output._muxer.addSubtitleCue(this._connectedTrack, cue, metadata)
-					.catch((error) => {
-						this._error ??= error;
-					});
+				this._lastMuxerPromise
+					= this._connectedTrack!.output._muxer.addSubtitleCue(this._connectedTrack!, cue, metadata)
+						.catch((error) => {
+							this._error ??= error;
+						});
 			},
 		});
 	}
@@ -2836,7 +2846,7 @@ export class TextSubtitleSource extends SubtitleSource {
 		this._ensureValidAdd();
 		this._parser.parse(text);
 
-		return this._connectedTrack!.output._muxer.mutex.currentPromise;
+		return this._lastMuxerPromise; // Allow the writer to apply backpressure
 	}
 
 	/** @internal */

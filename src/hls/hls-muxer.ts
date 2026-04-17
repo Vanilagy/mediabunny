@@ -8,7 +8,16 @@
 
 import { MediaCodec, validateAudioChunkMetadata, validateVideoChunkMetadata } from '../codec';
 import { EncodedAudioPacketSource, EncodedVideoPacketSource } from '../media-source';
-import { arrayArgmax, assert, findLastIndex, joinPaths, textEncoder, toArray, UNDETERMINED_LANGUAGE } from '../misc';
+import {
+	arrayArgmax,
+	assert,
+	AsyncMutex,
+	findLastIndex,
+	joinPaths,
+	textEncoder,
+	toArray,
+	UNDETERMINED_LANGUAGE,
+} from '../misc';
 import { Muxer } from '../muxer';
 import {
 	Output,
@@ -79,6 +88,11 @@ type Playlist = {
 		nextOffset: number;
 		info: HlsOutputSegmentInfo;
 	} | null;
+
+	// For HLS, having a single mutex is too coarse. Every playlist is basically independent and therefore we can have
+	// a per-playlist mutex instead of a per-muxer one. This means two packets from different playlists coming in don't
+	// block each other.
+	mutex: AsyncMutex;
 };
 
 type PlaylistDeclaration = {
@@ -131,6 +145,8 @@ export class HlsMuxer extends Muxer {
 	}
 
 	async start(): Promise<void> {
+		const release = await this.mutex.acquire();
+
 		const someRelative = this.output._tracks.some(t => t.metadata.isRelativeToUnixEpoch);
 		const someNotRelative = this.output._tracks.some(t => !t.metadata.isRelativeToUnixEpoch);
 		if (someRelative && someNotRelative) {
@@ -449,6 +465,7 @@ export class HlsMuxer extends Muxer {
 				mediaSequence: 0,
 				done: false,
 				singleFile: null,
+				mutex: new AsyncMutex(),
 			};
 			this.playlists.push(playlist);
 
@@ -491,6 +508,8 @@ export class HlsMuxer extends Muxer {
 					: [],
 			});
 		}
+
+		release();
 	}
 
 	async getMimeType(): Promise<string> {
@@ -509,17 +528,17 @@ export class HlsMuxer extends Muxer {
 
 	// eslint-disable-next-line @typescript-eslint/no-misused-promises
 	override async onTrackClose(track: OutputTrack) {
-		const release = await this.mutex.acquire();
+		const trackData = this.trackDatas.find(x => x.track === track);
+		if (trackData) {
+			trackData.closed = true;
+		}
+
+		const playlist = this.playlists.find(x => x.tracks.includes(track));
+		assert(playlist); // If there isn't one then the assignment algo failed innit
+
+		const release = await playlist.mutex.acquire();
 
 		try {
-			const trackData = this.trackDatas.find(x => x.track === track);
-			if (trackData) {
-				trackData.closed = true;
-			}
-
-			const playlist = this.playlists.find(x => x.tracks.includes(track));
-			assert(playlist); // If there isn't one then the assignment algo failed innit
-
 			await this.advancePlaylist(playlist);
 		} finally {
 			release();
@@ -589,17 +608,16 @@ export class HlsMuxer extends Muxer {
 		packet: EncodedPacket,
 		meta?: EncodedVideoChunkMetadata,
 	) {
-		const release = await this.mutex.acquire();
+		const trackData = this.getVideoTrackData(track, meta);
+		const playlist = trackData.playlist;
+
+		const release = await playlist.mutex.acquire();
 
 		try {
-			const trackData = this.getVideoTrackData(track, meta);
-
 			const timestamp = this.validateAndNormalizeTimestamp(track, packet.timestamp, packet.type === 'key');
 			const adjustedPacket = packet.clone({ timestamp });
 
 			trackData.packets.push(adjustedPacket);
-
-			const playlist = trackData.playlist;
 
 			if (playlist.currentSegmentStartTimestamp === null) {
 				playlist.currentSegmentStartTimestamp = adjustedPacket.timestamp;
@@ -621,17 +639,16 @@ export class HlsMuxer extends Muxer {
 		packet: EncodedPacket,
 		meta?: EncodedAudioChunkMetadata,
 	) {
-		const release = await this.mutex.acquire();
+		const trackData = this.getAudioTrackData(track, meta);
+		const playlist = trackData.playlist;
+
+		const release = await playlist.mutex.acquire();
 
 		try {
-			const trackData = this.getAudioTrackData(track, meta);
-
 			const timestamp = this.validateAndNormalizeTimestamp(track, packet.timestamp, packet.type === 'key');
 			const adjustedPacket = packet.clone({ timestamp });
 
 			trackData.packets.push(adjustedPacket);
-
-			const playlist = trackData.playlist;
 
 			if (playlist.currentSegmentStartTimestamp === null) {
 				playlist.currentSegmentStartTimestamp = adjustedPacket.timestamp;
@@ -1402,29 +1419,35 @@ export class HlsMuxer extends Muxer {
 
 		this.format._options.onMaster?.(masterPlaylistText);
 
-		let writer: Writer;
-		if (this.numWrittenMasterPlaylists === 0) {
-			// For the first master playlist write, we use the normal root writer getter, so that the target returned by
-			// Output.target emits valid write events.
-			writer = await this.output._getRootWriter();
-		} else {
-			// For subsequent master playlist writes, we *must* obtain a different target in order to overwrite
-			// the file.
-			const target = await this.output._getTarget({
-				path: pathedTarget.rootPath,
-				isRoot: true,
-				mimeType: HLS_MIME_TYPE,
-			});
-			writer = new Writer(target);
-			writer.start();
+		const release = await this.mutex.acquire();
+
+		try {
+			let writer: Writer;
+			if (this.numWrittenMasterPlaylists === 0) {
+				// For the first master playlist write, we use the normal root writer getter, so that the target
+				// returned by Output.target emits valid write events.
+				writer = await this.output._getRootWriter();
+			} else {
+				// For subsequent master playlist writes, we *must* obtain a different target in order to overwrite
+				// the file.
+				const target = await this.output._getTarget({
+					path: pathedTarget.rootPath,
+					isRoot: true,
+					mimeType: HLS_MIME_TYPE,
+				});
+				writer = new Writer(target);
+				writer.start();
+			}
+
+			writer.write(textEncoder.encode(masterPlaylistText));
+
+			await writer.flush();
+			await writer.finalize();
+
+			this.numWrittenMasterPlaylists++;
+		} finally {
+			release();
 		}
-
-		writer.write(textEncoder.encode(masterPlaylistText));
-
-		await writer.flush();
-		await writer.finalize();
-
-		this.numWrittenMasterPlaylists++;
 	}
 
 	private async tryWriteMasterPlaylist() {
@@ -1441,8 +1464,8 @@ export class HlsMuxer extends Muxer {
 	}
 
 	async finalize() {
-		assert(this.output._target instanceof PathedTarget);
-		const release = await this.mutex.acquire();
+		const releases = await Promise.all(this.playlists.map(p => p.mutex.acquire()));
+		releases.forEach(release => release());
 
 		for (const trackData of this.trackDatas) {
 			trackData.closed = true;
@@ -1455,8 +1478,6 @@ export class HlsMuxer extends Muxer {
 		if (!this.isLive) {
 			await this.writeMasterPlaylist();
 		}
-
-		release();
 	}
 }
 
