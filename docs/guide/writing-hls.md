@@ -195,14 +195,7 @@ await output.finalize();
 // All files have been uploaded to the server
 ```
 
-[`runner.parallelism`](../api/ConcurrentRunner#parallelism) is mutable if the optimal concurrency changes over time — for example, to back off on server errors or probe higher when latency is stable:
-
-```ts
-runner.parallelism = 1; // Back off after a 5xx or 429
-runner.parallelism = 8; // Probe up when latency is low
-```
-
-Lowering it never cancels in-flight work; new tasks simply wait until the queue drains below the new limit. Use [`runner.inFlightCount`](../api/ConcurrentRunner#inflightcount) to inspect the current queue depth.
+You can also set [`runner.parallelism`](../api/ConcurrentRunner#parallelism) at any time to adjust the concurrency dynamically, and use [`runner.inFlightCount`](../api/ConcurrentRunner#inflightcount) to inspect the current number of running tasks.
 
 ## Adding tracks & media
 

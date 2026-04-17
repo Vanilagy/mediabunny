@@ -1251,10 +1251,7 @@ export class ConcurrentRunner {
 
 	/**
 	 * The maximum number of in-flight promises. You can also think of it as the "high water mark".
-	 *
-	 * This value is read on every `run()` iteration, so it can be mutated at runtime to apply adaptive
-	 * backpressure: raising it lets the next waiter in immediately, and lowering it drains naturally as
-	 * tasks finish (no task is ever cancelled mid-flight).
+	 * You can set this value to dynamically change the level of parallelism.
 	 */
 	parallelism: number;
 
@@ -1267,7 +1264,7 @@ export class ConcurrentRunner {
 		return this._errored;
 	}
 
-	/** The number of tasks currently running (scheduled but not yet settled). */
+	/** The number of tasks currently running. */
 	get inFlightCount() {
 		return this._queue.length;
 	}
