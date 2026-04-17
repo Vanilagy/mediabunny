@@ -5,3 +5,6 @@ writablestream target?
 
 Thoughts:
 So, a certain "lookahead" logic is definitely needed. The question is if this is a per-demuxer thing or a general thing instead. The demuxer could get in a "packet query" that specifies things like "I am interested in the next 20 seconds guaranteed", allowing the demuxer to pre-fetch more intelligently. The alternative would be some sort of demuxer-agnostic approach where there is a magical "packet requester" that has to be segment-aware. I'm actually not sure if that's good.
+
+
+- Remove createInputFrom. Much more elegant solution now that PathedSource is a thing!!
