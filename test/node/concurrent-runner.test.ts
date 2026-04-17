@@ -184,6 +184,72 @@ test('error from a slow task surfaces on subsequent run even after other tasks c
 	await expect(runner.run(async () => {})).rejects.toBe(error);
 });
 
+test('parallelism can be mutated at runtime to grow or shrink the in-flight limit', async () => {
+	const runner = new ConcurrentRunner(1);
+	const d1 = promiseWithResolvers();
+	const d2 = promiseWithResolvers();
+	const d3 = promiseWithResolvers();
+
+	let startedSecond = false;
+	let startedThird = false;
+
+	await runner.run(() => d1.promise);
+	expect(runner.inFlightCount).toBe(1);
+
+	// Grow to 2 before scheduling the next task — second run sees the new value and starts immediately.
+	runner.parallelism = 2;
+	await runner.run(async () => {
+		startedSecond = true;
+		await d2.promise;
+	});
+	expect(startedSecond).toBe(true);
+	expect(runner.inFlightCount).toBe(2);
+
+	// Shrink to 1 while 2 are in flight. No task is cancelled; a new run() must wait until queue < 1.
+	runner.parallelism = 1;
+	const third = runner.run(async () => {
+		startedThird = true;
+		await d3.promise;
+	});
+	await flushMicrotasks();
+	expect(startedThird).toBe(false);
+
+	// Draining one frees a slot but queue is still at 1 (>= new parallelism), third stays blocked.
+	d1.resolve();
+	await flushMicrotasks();
+	expect(startedThird).toBe(false);
+
+	// Draining the second lets third in.
+	d2.resolve();
+	await third;
+	expect(startedThird).toBe(true);
+
+	d3.resolve();
+	await runner.flush();
+});
+
+test('inFlightCount tracks currently running tasks', async () => {
+	const runner = new ConcurrentRunner(3);
+	const d1 = promiseWithResolvers();
+	const d2 = promiseWithResolvers();
+
+	expect(runner.inFlightCount).toBe(0);
+
+	await runner.run(() => d1.promise);
+	expect(runner.inFlightCount).toBe(1);
+
+	await runner.run(() => d2.promise);
+	expect(runner.inFlightCount).toBe(2);
+
+	d1.resolve();
+	await flushMicrotasks();
+	expect(runner.inFlightCount).toBe(1);
+
+	d2.resolve();
+	await runner.flush();
+	expect(runner.inFlightCount).toBe(0);
+});
+
 test('flush waits for all in-flight tasks', async () => {
 	const runner = new ConcurrentRunner(3);
 	const deferreds = [promiseWithResolvers(), promiseWithResolvers(), promiseWithResolvers()];

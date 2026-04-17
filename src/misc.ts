@@ -1249,14 +1249,27 @@ export class ConcurrentRunner {
 	/** @internal */
 	_errored = false;
 
-	constructor(
-		/** The maximum number of in-flight promises. You can also think of it as the "high water mark". */
-		public readonly parallelism: number,
-	) {}
+	/**
+	 * The maximum number of in-flight promises. You can also think of it as the "high water mark".
+	 *
+	 * This value is read on every `run()` iteration, so it can be mutated at runtime to apply adaptive
+	 * backpressure: raising it lets the next waiter in immediately, and lowering it drains naturally as
+	 * tasks finish (no task is ever cancelled mid-flight).
+	 */
+	parallelism: number;
+
+	constructor(parallelism: number) {
+		this.parallelism = parallelism;
+	}
 
 	/** Whether any function has errored. The runner is effectively bricked if this is `true`, by design. */
 	get errored() {
 		return this._errored;
+	}
+
+	/** The number of tasks currently running (scheduled but not yet settled). */
+	get inFlightCount() {
+		return this._queue.length;
 	}
 
 	/**
