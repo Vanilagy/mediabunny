@@ -324,6 +324,11 @@ export type OutputOptions<
 	 * When this is a function, it will only be called if an init target is needed.
 	 */
 	initTarget?: T | (() => MaybePromise<T>);
+	/**
+	 * Optional; a callback to be called at the end of {@link Output.finalize}. Can be used to run logic once the
+	 * output has completed. If a promise is returned, it will be awaited internally by {@link Output.finalize}.
+	 */
+	onFinalize?: () => MaybePromise<unknown>;
 };
 
 /**
@@ -368,6 +373,8 @@ export class Output<
 
 	/** @internal */
 	private _initTarget: T | (() => MaybePromise<T>) | null;
+	/** @internal */
+	_onFinalize: (() => MaybePromise<unknown>) | null = null;
 	/** @internal */
 	_muxer: Muxer;
 	/** @internal */
@@ -449,9 +456,13 @@ export class Output<
 				+ ' a Target.',
 			);
 		}
+		if (options.onFinalize !== undefined && typeof options.onFinalize !== 'function') {
+			throw new TypeError('options.onFinalize, when provided, must be a function.');
+		}
 
 		this.format = options.format;
 		this._target = options.target;
+		this._onFinalize = options.onFinalize ?? null;
 
 		this._initTarget = options.initTarget ?? null;
 		if (this._initTarget instanceof Target) {
@@ -879,6 +890,10 @@ export class Output<
 						await rootWriter.flush();
 						await rootWriter.finalize();
 					}
+				}
+
+				if (this._onFinalize) {
+					await this._onFinalize();
 				}
 
 				this.state = 'finalized';

@@ -1235,3 +1235,66 @@ export class EventEmitter<TEvents extends Record<string, unknown>> {
 }
 
 export const ceilToMultipleOfTwo = (value: number) => Math.ceil(value / 2) * 2;
+
+/**
+ * Utility class for running async functions in parallel up to a certain level of parallelism. Can be used to apply
+ * backpressure only if the concurrency level would be exceeded.
+ *
+ * @group Miscellaneous
+ * @public
+*/
+export class ConcurrentRunner {
+	/** @internal */
+	_queue: Promise<unknown>[] = [];
+	/** @internal */
+	_errored = false;
+
+	/**
+	 * The maximum number of in-flight promises. You can also think of it as the "high water mark".
+	 * You can set this value to dynamically change the level of parallelism.
+	 */
+	parallelism: number;
+
+	constructor(parallelism: number) {
+		this.parallelism = parallelism;
+	}
+
+	/** Whether any function has errored. The runner is effectively bricked if this is `true`, by design. */
+	get errored() {
+		return this._errored;
+	}
+
+	/** The number of tasks currently running. */
+	get inFlightCount() {
+		return this._queue.length;
+	}
+
+	/**
+	 * Schedules an async function to be run. If the maximum allowed level of parallelism has not yet been reached,
+	 * the function will be executed immediately and `run()` will resolve immediately. Otherwise, the function will be
+	 * called as soon as any currently-running function finishes, and `run()` will only resolve then.
+	 *
+	 * Throws if the runner is errored.
+	 */
+	async run(fn: () => Promise<unknown>) {
+		if (this._errored) {
+			await Promise.race(this._queue); // Will surface the error
+		}
+
+		while (this._queue.length >= this.parallelism) {
+			await Promise.race(this._queue);
+		}
+
+		const promise = fn();
+		this._queue.push(promise);
+
+		void promise
+			.then(() => removeItem(this._queue, promise))
+			.catch(() => this._errored = true);
+	}
+
+	/** Waits for all currently running functions to finish. Throws if the runner is errored. */
+	async flush() {
+		await Promise.all(this._queue);
+	}
+}

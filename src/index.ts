@@ -130,6 +130,7 @@ export {
 	TargetEvents,
 	TargetRequest,
 	BufferTarget,
+	BufferTargetOptions,
 	FilePathTarget,
 	FilePathTargetOptions,
 	NullTarget,
@@ -141,6 +142,7 @@ export {
 } from './target';
 export {
 	AnyIterable,
+	ConcurrentRunner,
 	EventEmitter,
 	EventListenerOptions,
 	FilePath,
