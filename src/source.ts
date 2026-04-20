@@ -533,8 +533,9 @@ export class UrlSource extends Source {
 
 			if (worker.currentPos > 0 && response.status !== 206) {
 				throw new Error(
-					'HTTP server did not respond with 206 Partial Content to a range request. To enable efficient media'
-					+ ' file streaming across a network, please make sure your server supports range requests.',
+					'HTTP server did not respond with 206 Partial Content to a range request (received '
+					+ `${response.status} ${response.statusText}). To enable efficient media file streaming`
+					+ ' across a network, please make sure your server supports range requests.',
 				);
 			}
 
