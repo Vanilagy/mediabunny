@@ -27,6 +27,7 @@ import {
 	Rectangle,
 	validateRectangle,
 } from './misc';
+import { maybeRewriteVideoFrameForCanvas2d } from './chromium-video-frame-canvas-fallback';
 
 polyfillSymbolDispose();
 
@@ -993,7 +994,9 @@ export class VideoSample implements Disposable {
 			const videoFrame = this.toVideoFrame();
 			queueMicrotask(() => videoFrame.close()); // Let's automatically close the frame in the next microtask
 
-			return videoFrame;
+			return maybeRewriteVideoFrameForCanvas2d(videoFrame);
+		} else if (typeof VideoFrame !== 'undefined' && this._data instanceof VideoFrame) {
+			return maybeRewriteVideoFrameForCanvas2d(this._data);
 		} else {
 			return this._data;
 		}
