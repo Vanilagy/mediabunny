@@ -80,6 +80,11 @@ export abstract class Source extends EventEmitter<SourceEvents> {
 	_disposed = false;
 	/** @internal */
 	_refCount = 0;
+	/**
+	 * Used internally to mark if a source stems from an HLS reading operation. Used to suppress certain warnings.
+	 * @internal
+	 */
+	_usedForHls = false;
 
 	/** @internal */
 	private _sizePromise: Promise<number | null> | null = null;
@@ -270,9 +275,13 @@ export abstract class PathedSource extends Source {
 				throw new TypeError('requestHandler must return or resolve to a Source or SourceRef.');
 			}
 
-			return result instanceof Source
+			const ref = result instanceof Source
 				? result.ref()
 				: result;
+
+			ref.source._usedForHls ||= this._usedForHls;
+
+			return ref;
 		};
 
 		if (result instanceof Promise) {
@@ -794,19 +803,27 @@ export class UrlSource extends PathedSource {
 			this._fileSizeDetermined = true; // Yes, this is correct even if file size is still null
 
 			if (response.status !== 206) {
-				const origin = new URL(
-					this._url instanceof Request ? this._url.url : this._url,
-					typeof window !== 'undefined' ? window.location.href : undefined,
-				).origin;
+				if (!this._usedForHls) {
+					const url = new URL(
+						this._url instanceof Request ? this._url.url : this._url,
+						typeof window !== 'undefined' ? window.location.href : undefined,
+					);
 
-				if (origin !== 'null') {
-					if (!warnedOrigins.has(origin)) {
-						console.warn(
-							`HTTP server (origin ${origin}) did not respond to a range request with 206 Partial`
-							+ ' Content, meaning the entire resource will now be downloaded. To enable efficient media'
-							+ ' file streaming across a network, please make sure your server supports range requests.',
-						);
-						warnedOrigins.add(origin);
+					if (
+						url.origin !== 'null'
+						// Don't show the warning for M3U8 playlist files, it's irrelevant for those
+						&& !(url.pathname.endsWith('.m3u8') || url.pathname.endsWith('.m3u'))
+					) {
+						if (!warnedOrigins.has(url.origin)) {
+							console.log(this._usedForHls, this._url, url.pathname);
+							console.warn(
+								`HTTP server (origin ${url.origin}) did not respond to a range request with 206 Partial`
+								+ ' Content, meaning the entire resource will now be downloaded. To enable efficient'
+								+ ' media file streaming across a network, please make sure your server supports'
+								+ ' range requests.',
+							);
+							warnedOrigins.add(url.origin);
+						}
 					}
 				}
 

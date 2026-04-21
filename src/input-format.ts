@@ -598,6 +598,8 @@ export class HlsInputFormat extends InputFormat {
 			throw new TypeError('HLS inputs require `InputOptions.source` to be a PathedSource or a ref to one.');
 		}
 
+		input._rootSource._usedForHls = true;
+
 		return true;
 	}
 

@@ -1,6 +1,6 @@
 /* eslint-disable @stylistic/max-len */
 import { ALL_FORMATS, BufferSource, EncodedPacketSink, Input, InputAudioTrack, InputVideoTrack, UrlSource } from 'mediabunny';
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 import { HLS, HLS_FORMATS, HlsInputFormat } from '../../src/input-format.js';
 import { assert, rejectAfter } from '../../src/misc.js';
 import { CustomPathedSource } from '../../src/source.js';
@@ -718,7 +718,9 @@ test.concurrent('Advanced Apple HLS', { timeout: 30_000 }, async () => {
 	}
 });
 
-test.concurrent('Live HLS', { timeout: 30_000 }, async () => {
+test.concurrent.only('Live HLS', { timeout: 30_000 }, async () => {
+	const consoleSpy = vi.spyOn(console, 'warn');
+
 	using input = new Input({
 		source: new UrlSource('https://stream.mux.com/v69RSHhFelSm4701snP22dYz2jICy4E4FUyk02rW4gxRM.m3u8'),
 		formats: ALL_FORMATS,
@@ -781,6 +783,9 @@ test.concurrent('Live HLS', { timeout: 30_000 }, async () => {
 		rejectAfter(2000, 'Baby you make me smile'),
 	]);
 	expect(metadataDuration).toBeGreaterThan((Date.now() / 1000) - 3600);
+
+	// The server doesn't answer with range requests but since it's HLS we suppress that warning
+	expect(consoleSpy).not.toHaveBeenCalled();
 });
 
 test.concurrent('#EXT-X-I-FRAME-STREAM-INF tags are parsed properly', async () => {
