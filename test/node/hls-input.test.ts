@@ -718,7 +718,7 @@ test.concurrent('Advanced Apple HLS', { timeout: 30_000 }, async () => {
 	}
 });
 
-test.concurrent.only('Live HLS', { timeout: 30_000 }, async () => {
+test.concurrent('Live HLS', { timeout: 30_000 }, async () => {
 	const consoleSpy = vi.spyOn(console, 'warn');
 
 	using input = new Input({
