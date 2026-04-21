@@ -8,30 +8,17 @@ Mediabunny exposes HLS playlists as if they were a single giant input file. Like
 
 ## HLS inputs
 
-HLS playlists (master & media) are read through the same `Input` interface as all other media files in Mediabunny. The difference is that HLS uses multiple files, meaning a `PathedSource` is required:
+HLS playlists (master & media) are read through the same `Input` interface as all other media files in Mediabunny. HLS must read multiple files, meaning any [`PathedSource`](../api/PathedSource) is required:
 ```ts
-import { Input, PathedSource, HLS_FORMATS } from 'mediabunny';
+import { Input, UrlSource, HLS_FORMATS } from 'mediabunny';
 
 const input = new Input({
-	source: new PathedSource(
-		'https://example.com/master.m3u8', // The path to the entry file
-		({ path }) => new UrlSource(path),
-	),
+	source: new UrlSource('https://example.com/master.m3u8'),
 	formats: HLS_FORMATS, // HLS_FORMATS includes HLS as well as the commonly-used segment formats
 });
 ```
 
-The `PathedSource` requires that you return a [`Source`](../api/Source) for every file (identified by a [path](../api/FilePath)) that Mediabunny wants to read.
-
-Since this pattern is common and kind of cumbersome to write, there exists a shortcut:
-```ts
-// From a URL:
-const input = createInputFrom('https://example.com/master.m3u8', HLS_FORMATS);
-// From a file (server-side environment):
-const input = createInputFrom('/path/to/master.m3u8', HLS_FORMATS);
-```
-
-However, the `PathedSource` variant is still useful for custom sources; maybe your HLS files don't reside behind a URL but you have them in memory, or in IndexedDB. In this case, there's no way around `PathedSource`, since you'll need to supply your own "path to data" function.
+You can supply any custom "path to data" resolution logic by using [`CustomPathedSource`](../api/CustomPathedSource).
 
 ## Reading tracks
 

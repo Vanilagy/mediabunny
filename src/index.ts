@@ -165,6 +165,7 @@ export {
 	BlobSource,
 	BlobSourceOptions,
 	BufferSource,
+	CustomPathedSource,
 	FilePathSource,
 	FilePathSourceOptions,
 	PathedSource,
@@ -209,8 +210,6 @@ export {
 	InputOptions,
 	InputEvents,
 	InputDisposedError,
-	createInputFrom,
-	CreateInputFromOptions,
 	UnsupportedInputFormatError,
 } from './input';
 export {

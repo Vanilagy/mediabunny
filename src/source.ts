@@ -240,6 +240,137 @@ export class SourceRef<S extends Source = Source> implements Disposable {
 }
 
 /**
+ * A source which can create new sources from file paths. Required for multi-file inputs such as HLS playlists.
+ * @public
+ * @group Input sources
+ */
+export abstract class PathedSource extends Source {
+	constructor(
+		/** The path that points to the root file; the entry file of the media. */
+		public rootPath: FilePath,
+		/** The callback that is called for each requested file; must return a {@link Source} or {@link SourceRef}. */
+		public requestHandler: (request: SourceRequest) => MaybePromise<Source | SourceRef>,
+	) {
+		if (typeof rootPath !== 'string') {
+			throw new TypeError('rootPath must be a string.');
+		}
+		if (typeof requestHandler !== 'function') {
+			throw new TypeError('requestHandler must be a function.');
+		}
+
+		super();
+	}
+
+	/** @internal */
+	_resolveRequest(request: SourceRequest): MaybePromise<SourceRef> {
+		const result = this.requestHandler(request);
+
+		const handle = (result: Source | SourceRef) => {
+			if (!(result instanceof Source || result instanceof SourceRef)) {
+				throw new TypeError('requestHandler must return or resolve to a Source or SourceRef.');
+			}
+
+			return result instanceof Source
+				? result.ref()
+				: result;
+		};
+
+		if (result instanceof Promise) {
+			return result.then(handle);
+		} else {
+			return handle(result);
+		}
+	}
+}
+
+/**
+ * A request for a {@link Source} at the given path.
+ * @group Input sources
+ * @public
+ */
+export type SourceRequest = {
+	/** The requested file path. */
+	path: FilePath;
+	/** Whether the requested file is the root file. */
+	isRoot: boolean;
+};
+
+export const sourceRequestsAreEqual = (a: SourceRequest, b: SourceRequest) => {
+	return a.path === b.path;
+};
+
+/**
+ * A custom multi-file source where each file is uniquely identified by a {@link FilePath} and can be resolved to
+ * an arbitrary {@link Source}.
+ *
+ * @public
+ * @group Input sources
+ */
+export class CustomPathedSource extends PathedSource {
+	/** @internal */
+	_root: SourceRef | null = null;
+	/** @internal */
+	_rootRequest: Promise<SourceRef> | null = null;
+
+	/** @internal */
+	override _read(
+		start: number,
+		end: number,
+		minReadPosition: number,
+		maxReadPosition: number,
+	): MaybePromise<ReadResult | null> {
+		if (!this._root) {
+			if (!this._rootRequest) {
+				const result = this._resolveRequest({ path: this.rootPath, isRoot: true });
+
+				const handle = (result: Source | SourceRef) => {
+					const ref = result instanceof Source
+						? result.ref()
+						: result;
+
+					this._root = ref;
+					this._rootRequest = null;
+
+					return ref;
+				};
+
+				if (result instanceof Promise) {
+					this._rootRequest = result.then(handle);
+				} else {
+					handle(result);
+					assert(this._root);
+				}
+			}
+
+			if (this._rootRequest) {
+				return this._rootRequest.then(ref => ref.source._read(start, end, minReadPosition, maxReadPosition));
+			}
+		}
+
+		return this._root!.source._read(start, end, minReadPosition, maxReadPosition);
+	}
+
+	/** @internal */
+	override _getFileSize(): number | null | undefined {
+		if (this._root) {
+			return this._root.source._getFileSize();
+		}
+
+		return undefined;
+	}
+
+	/** @internal */
+	override _dispose(): void {
+		if (this._root) {
+			this._root.free();
+		} else if (this._rootRequest) {
+			void this._rootRequest
+				.then(ref => ref.free());
+		}
+	}
+}
+
+/**
  * A source backed by an ArrayBuffer or ArrayBufferView, with the entire file held in memory.
  * @group Input sources
  * @public
@@ -517,7 +648,7 @@ export type UrlSourceOptions = {
  * @group Input sources
  * @public
  */
-export class UrlSource extends Source {
+export class UrlSource extends PathedSource {
 	/** @internal */
 	_url: string | URL | Request;
 	/** @internal */
@@ -573,7 +704,13 @@ export class UrlSource extends Source {
 			// Won't bother validating this function beyond this
 		}
 
-		super();
+		const urlString = url instanceof Request
+			? url.url
+			: url instanceof URL
+				? url.href
+				: url;
+
+		super(urlString, request => new UrlSource(request.path, this._options));
 
 		this._url = url;
 		this._options = options;
@@ -784,7 +921,7 @@ export type FilePathSourceOptions = {
  * @group Input sources
  * @public
  */
-export class FilePathSource extends Source {
+export class FilePathSource extends PathedSource {
 	/** @internal */
 	_streamSource: StreamSource;
 	/** @internal */
@@ -811,7 +948,7 @@ export class FilePathSource extends Source {
 			);
 		}
 
-		super();
+		super(filePath, request => new FilePathSource(request.path, options));
 
 		// Let's back this source with a StreamSource, makes the implementation very simple
 		this._streamSource = new StreamSource({
@@ -2183,41 +2320,3 @@ export class RangedSource extends Source {
 		return super.ref();
 	}
 }
-
-/**
- * A special source for reading multi-file media where each file is uniquely identified by a path.
- * @group Input sources
- * @public
- */
-export class PathedSource<S extends Source = Source> {
-	/** Creates a new {@link PathedSource} from a root path and a callback. */
-	constructor(
-		/** The path that points to the root file; the entry file of the media. */
-		public readonly rootPath: FilePath,
-		/** The callback that is called for each requested file; must return a {@link Source} or {@link SourceRef}. */
-		public readonly getSource: (request: SourceRequest) => MaybePromise<S | SourceRef<S>>,
-	) {
-		if (typeof rootPath !== 'string') {
-			throw new TypeError('rootPath must be a string.');
-		}
-		if (typeof getSource !== 'function') {
-			throw new TypeError('getSource must be a function.');
-		}
-	}
-}
-
-/**
- * A request for a {@link Source} at the given path.
- * @group Input sources
- * @public
- */
-export type SourceRequest = {
-	/** The requested file path. */
-	path: FilePath;
-	/** Whether the requested file is the root file. */
-	isRoot: boolean;
-};
-
-export const sourceRequestsAreEqual = (a: SourceRequest, b: SourceRequest) => {
-	return a.path === b.path;
-};

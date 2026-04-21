@@ -40,17 +40,6 @@ Reading operations will throw an error if the file format could not be recognize
 Simply creating an instance of `Input` will perform zero reads and is practically free. The file will only be read once data is requested.
 :::
 
-For convenience, `createInputFrom` automatically constructs an `Input` along with the matching source for a given value:
-
-```ts
-import { createInputFrom, ALL_FORMATS } from 'mediabunny';
-
-const input = createInputFrom(file, ALL_FORMATS);
-const input = createInputFrom(arrayBuffer, ALL_FORMATS);
-const input = createInputFrom('https://example.com/video.mp4', ALL_FORMATS);
-const input = createInputFrom('./video.mp4', ALL_FORMATS); // Uses the file system server-side, fetch client-side
-```
-
 ## Reading file metadata
 
 With our instance of `Input` created, you can now start reading file-level metadata.
@@ -832,20 +821,34 @@ recorder.start(1000);
 setTimeout(() => recorder.stop(), 10_000); // Stop recording after 10s
 ```
 
-## Pathed (multi-file) sources
+### `PathedSource`
 
-Some media formats reference more than one file. For example, an [HLS](./input-formats) stream consists of a master playlist that points to one or more media playlists, each of which in turn references many media segment files. To read this kind of multi-file media, Mediabunny needs a way to resolve those file paths into [input sources](#input-sources). You can do this using `PathedSource`.
+Some media formats reference more than one file. For example, an HLS stream consists of a master playlist that points to one or more media playlists, each of which in turn references many media segment files. To read this kind of multi-file media, Mediabunny needs a way to resolve a source for each file path. 
 
-A `PathedSource` wraps a *root path* (the entry file of the media) together with a callback that produces a `Source` for each requested file path:
+This can be done with `PathedSource`. A `PathedSource` wraps a *root path* (the entry file of the media) together with a callback that produces a `Source` for each requested file path. It is an abstract class, so you can't use it directly, but it provides the necessary interface to read multi-file media. It is implemented by:
+- [`UrlSource`](#urlsource)
+- [`FilePathSource`](#filepathsource)
+- [`CustomPathedSource`](#custompathedsource)
+
+### `CustomPathedSource`
+
+Allows you to implement a user-defined [`PathedSource`](#pathedsource) to provide an arbitrary "file path to data" mapping function. Useful when your data is stored in a custom structure, for example OPFS:
+
 ```ts
-import { Input, HLS, PathedSource, UrlSource } from 'mediabunny';
+import { Input, CustomPathedSource, BlobSource } from 'mediabunny';
+
+const root = await navigator.storage.getDirectory();
 
 const input = new Input({
-	formats: [HLS],
-	source: new PathedSource(
-		'https://example.com/stream/master.m3u8',
-		({ path, isRoot }) => new UrlSource(path),
+	source: new CustomPathedSource(
+		'master.m3u8',
+		async ({ path }) => {
+			const handle = await root.getFileHandle(path);
+			const file = await handle.getFile();
+			return new BlobSource(file);
+		},
 	),
+	// ...
 });
 ```
 
@@ -857,12 +860,17 @@ type SourceRequest = {
 };
 ```
 
-You can return either a `Source` or a [`SourceRef`](../api/SourceRef). The kind of `Source` you create inside the callback is up to you - use `UrlSource` for streams served over HTTP, `FilePathSource` for files on disk, `BufferSource` for files in memory, or any other source type (or mix of them) that fits.
-
 ## Init inputs
 
 Some file formats contain track initialization info in a *separate* file; CMAF is one example. To supply these to Mediabunny, load the initialization file as a separate `Input` and then pass it as an `initInput`:
 ```ts
-const initInput = createInputFrom('init.mp4', ALL_FORMATS);
-const input = createInputFrom('data.mp4', ALL_FORMATS, { initInput });
+const initInput = new Input({
+	source: new FilePathSource('init.mp4'),
+	formats: ALL_FORMATS,
+});
+const input = new Input({
+	source: new FilePathSource('data.mp4'),
+	formats: ALL_FORMATS,
+	initInput,
+});
 ```

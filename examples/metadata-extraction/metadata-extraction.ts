@@ -1,4 +1,4 @@
-import { ALL_FORMATS, createInputFrom } from 'mediabunny';
+import { ALL_FORMATS, BlobSource, Input, UrlSource } from 'mediabunny';
 
 import SampleFileUrl from '../../docs/assets/big-buck-bunny-trimmed.mp4';
 (document.querySelector('#sample-file-download') as HTMLAnchorElement).href = SampleFileUrl;
@@ -12,7 +12,12 @@ const metadataContainer = document.querySelector('#metadata-container') as HTMLD
 
 const extractMetadata = (resource: File | string) => {
 	// Create a new input from the resource
-	const input = createInputFrom(resource, ALL_FORMATS); // Accept all formats
+	const input = new Input({
+		source: typeof resource === 'string'
+			? new UrlSource(resource)
+			: new BlobSource(resource),
+		formats: ALL_FORMATS, // Accept all formats
+	});
 
 	let bytesRead = 0;
 	let fileSize: number | null = null;

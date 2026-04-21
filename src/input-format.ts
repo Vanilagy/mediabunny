@@ -594,8 +594,8 @@ export class HlsInputFormat extends InputFormat {
 			return false;
 		}
 
-		if (!(input._source instanceof PathedSource)) {
-			throw new TypeError('HLS inputs require `InputOptions.source` to be a PathedSource.');
+		if (!(input._rootSource instanceof PathedSource)) {
+			throw new TypeError('HLS inputs require `InputOptions.source` to be a PathedSource or a ref to one.');
 		}
 
 		return true;

@@ -2,7 +2,7 @@ import { ALL_FORMATS } from '../../src/input-format.js';
 import { Input } from '../../src/input.js';
 import { AdtsOutputFormat, HlsOutputFormat, Mp4OutputFormat, MpegTsOutputFormat } from '../../src/output-format.js';
 import { Output, OutputTrackGroup } from '../../src/output.js';
-import { BufferSource, PathedSource, UrlSource } from '../../src/source.js';
+import { BufferSource, CustomPathedSource, UrlSource } from '../../src/source.js';
 import { expect, test } from 'vitest';
 import { BufferTarget, PathedTarget } from '../../src/target.js';
 import { Conversion } from '../../src/conversion.js';
@@ -176,7 +176,7 @@ test('HLS track assignability is kept #1', async () => {
 
 	using input = new Input({
 		formats: ALL_FORMATS,
-		source: new PathedSource(
+		source: new CustomPathedSource(
 			'master.m3u8',
 			({ path }) => new BufferSource(files.get(path)!),
 		),
@@ -255,7 +255,7 @@ test('HLS track assignability is kept #2', async () => {
 
 	using input = new Input({
 		formats: ALL_FORMATS,
-		source: new PathedSource(
+		source: new CustomPathedSource(
 			'master.m3u8',
 			({ path }) => new BufferSource(files.get(path)!),
 		),
@@ -334,7 +334,7 @@ test('HLS track assignability can be overridden', async () => {
 
 	using input = new Input({
 		formats: ALL_FORMATS,
-		source: new PathedSource(
+		source: new CustomPathedSource(
 			'master.m3u8',
 			({ path }) => new BufferSource(files.get(path)!),
 		),

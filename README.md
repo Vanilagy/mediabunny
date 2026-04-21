@@ -109,10 +109,13 @@ Requires any JavaScript environment that can run ECMAScript 2021 or later. Media
 ### Read file metadata
 
 ```js
-import { createInputFrom, ALL_FORMATS, BlobSource } from 'mediabunny';
+import { Input, ALL_FORMATS, BlobSource } from 'mediabunny';
 
 // Reading from disk
-const input = createInputFrom(file, ALL_FORMATS);
+const input = new Input({
+    source: new BlobSource(file),
+    formats: ALL_FORMATS,
+});
 
 const duration = await input.computeDuration(); // in seconds
 const videoTrack = await input.getPrimaryVideoTrack();
@@ -155,9 +158,12 @@ const buffer = output.target.buffer; // Final MP4 file
 ### Convert files
 
 ```js
-import { createInputFrom, Output, Conversion, ALL_FORMATS, BlobSource, WebMOutputFormat } from 'mediabunny';
+import { Input, Output, Conversion, ALL_FORMATS, BlobSource, WebMOutputFormat } from 'mediabunny';
 
-const input = createInputFrom(file, ALL_FORMATS);
+const input = new Input({
+    source: new BlobSource(file),
+    formats: ALL_FORMATS,
+});
 
 const output = new Output({
     format: new WebMOutputFormat(), // Convert to WebM

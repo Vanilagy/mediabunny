@@ -630,9 +630,12 @@ await conversion.execute();
 ## Reading HLS playlists
 
 ```ts
-import { createInputFrom, HLS_FORMATS, desc } from 'mediabunny';
+import { Input, UrlSource, HLS_FORMATS, desc } from 'mediabunny';
 
-const input = createInputFrom('https://example.com/master.m3u8', HLS_FORMATS);
+const input = new Input({
+	source: new UrlSource('https://example.com/master.m3u8'),
+	formats: HLS_FORMATS,
+});
 
 // Get all tracks
 const tracks = await input.getTracks();

@@ -1,8 +1,10 @@
 import {
 	ALL_FORMATS,
 	AudioBufferSink,
+	BlobSource,
 	CanvasSink,
-	createInputFrom,
+	Input,
+	UrlSource,
 	WrappedAudioBuffer,
 	WrappedCanvas,
 } from 'mediabunny';
@@ -96,7 +98,12 @@ const initMediaPlayer = async (resource: File | string) => {
 		clearTimeout(liveRefreshIntervalId);
 
 		// Create an Input from the resource
-		const input = createInputFrom(resource, ALL_FORMATS);
+		const input = new Input({
+			source: typeof resource === 'string'
+				? new UrlSource(resource)
+				: new BlobSource(resource),
+			formats: ALL_FORMATS, // Accept all formats
+		});
 
 		let videoTrack = await input.getPrimaryVideoTrack();
 		let audioTrack = await input.getPrimaryAudioTrack();

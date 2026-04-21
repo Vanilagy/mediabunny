@@ -28,34 +28,19 @@ import {
 	arrayCount,
 	assert,
 	EventEmitter,
-	MaybePromise,
 	polyfillSymbolDispose,
 	removeItem,
 } from './misc';
 import { Reader } from './reader';
 import {
-	BlobSource,
-	BlobSourceOptions,
-	BufferSource,
-	FilePathSource,
-	FilePathSourceOptions,
 	PathedSource,
-	ReadableStreamSource,
-	ReadableStreamSourceOptions,
 	Source,
 	SourceRef,
 	SourceRequest,
 	sourceRequestsAreEqual,
-	UrlSource,
-	UrlSourceOptions,
 } from './source';
-import * as nodeAlias from './node';
 
 polyfillSymbolDispose();
-
-const node = typeof nodeAlias !== 'undefined'
-	? nodeAlias // Aliasing it prevents some bundler warnings
-	: undefined!;
 
 export const DEFAULT_SOURCE_CACHE_GROUP = 1;
 export const ENCRYPTION_KEY_CACHE_GROUP = 2;
@@ -80,7 +65,7 @@ export type InputOptions<S extends Source = Source> = {
 	/** A list of supported formats. If the source file is not of one of these formats, then it cannot be read. */
 	formats: InputFormat[];
 	/** The source from which data will be read. */
-	source: S | SourceRef<S> | PathedSource<S>;
+	source: S | SourceRef<S>;
 	/**
 	 * An optional, second {@link Input} instance that contains the necessary metadata to initialize the tracks of
 	 * this input. This is necessary in cases where track initialization info and media data are carried in separate
@@ -91,9 +76,9 @@ export type InputOptions<S extends Source = Source> = {
 	initInput?: Input;
 };
 
-type SourceCacheEntry<S extends Source> = {
+type SourceCacheEntry = {
 	request: SourceRequest;
-	sourceRef: SourceRef<S>;
+	sourceRef: SourceRef;
 	age: number;
 	cacheGroup: number;
 };
@@ -126,7 +111,7 @@ export type InputEvents = {
  */
 export class Input<S extends Source = Source> extends EventEmitter<InputEvents> implements Disposable {
 	/** @internal */
-	_source: SourceRef<S> | PathedSource<S>;
+	_rootRef: SourceRef<S>;
 	/** @internal */
 	_formats: InputFormat[];
 	/** @internal */
@@ -148,16 +133,12 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 	/** @internal */
 	_sourceRefs: SourceRef[] = [];
 	/** @internal */
-	_sourceCache: SourceCacheEntry<S>[] = [];
-	/** @internal */
-	_rootRef: SourceRef<S> | null = null;
-	/** @internal */
-	_rootRefPromise: Promise<SourceRef<S>> | null = null;
+	_sourceCache: SourceCacheEntry[] = [];
 	/** @internal */
 	_sourceCachePromises: {
 		request: SourceRequest;
 		cacheGroup: number;
-		promise: Promise<SourceCacheEntry<S>>;
+		promise: Promise<SourceCacheEntry>;
 	}[] = [];
 
 	/** True if the input has been disposed. */
@@ -178,12 +159,8 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 		if (!Array.isArray(options.formats) || options.formats.some(x => !(x instanceof InputFormat))) {
 			throw new TypeError('options.formats must be an array of InputFormat.');
 		}
-		if (!(
-			options.source instanceof Source
-			|| options.source instanceof SourceRef
-			|| options.source instanceof PathedSource
-		)) {
-			throw new TypeError('options.source must be a Source, SourceRef, or PathedSource.');
+		if (!(options.source instanceof Source || options.source instanceof SourceRef)) {
+			throw new TypeError('options.source must be a Source or SourceRef.');
 		}
 		if (options.source instanceof Source && options.source._disposed) {
 			throw new TypeError('options.source must not be a disposed Source.');
@@ -196,60 +173,32 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 		this._initInput = options.initInput ?? null;
 
 		if (options.source instanceof Source) {
-			this._source = options.source.ref();
+			this._rootRef = options.source.ref();
 		} else {
-			this._source = options.source;
+			this._rootRef = options.source;
 		}
 
-		if (this._source instanceof SourceRef) {
-			this._sourceRefs.push(this._source);
-		}
-
+		this._sourceRefs.push(this._rootRef);
 		inputFinalizationRegistry?.register(this, this._sourceRefs, this);
 	}
 
 	/** @internal */
-	_getSourceValidated(request: SourceRequest): MaybePromise<S | SourceRef<S>> {
-		assert(this._source instanceof PathedSource);
-
-		const result = this._source.getSource(request);
-		const handleResult = (result: S | SourceRef<S>) => {
-			if (!(result instanceof Source || result instanceof SourceRef)) {
-				throw new TypeError('getSource must return a Source or a SourceRef.');
-			}
-			if (result instanceof Source && result._disposed) {
-				throw new TypeError('The returned Source must not be disposed.');
-			}
-
-			return result;
-		};
-
-		if (result instanceof Promise) {
-			return result.then(handleResult);
-		} else {
-			return handleResult(result);
-		}
+	get _rootSource() {
+		return this._rootRef.source;
 	}
 
 	/** @internal */
 	async _getSourceUncached(request: SourceRequest) {
-		assert(this._source instanceof PathedSource);
+		assert(this._rootSource instanceof PathedSource);
 
-		const source = await this._getSourceValidated(request);
-
-		let ref: SourceRef<S>;
-		if (source instanceof Source) {
-			ref = source.ref();
-		} else {
-			ref = source;
-		}
+		const ref = await this._rootSource._resolveRequest(request);
 
 		this._emit('source', { source: ref.source, request, isRoot: request.isRoot });
 		return ref;
 	}
 
 	/** @internal */
-	_getSourceCached(request: SourceRequest, cacheGroup = DEFAULT_SOURCE_CACHE_GROUP): Promise<SourceRef<S>> {
+	_getSourceCached(request: SourceRequest, cacheGroup = DEFAULT_SOURCE_CACHE_GROUP): Promise<SourceRef> {
 		const cachedEntry = this._sourceCache.find(x =>
 			x.cacheGroup === cacheGroup && sourceRequestsAreEqual(x.request, request),
 		);
@@ -293,7 +242,7 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 			assert(promiseIndex !== -1);
 			this._sourceCachePromises.splice(promiseIndex, 1);
 
-			const cacheEntry: SourceCacheEntry<S> = {
+			const cacheEntry: SourceCacheEntry = {
 				request,
 				sourceRef,
 				age: this._nextSourceCacheAge++,
@@ -319,53 +268,10 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 	}
 
 	/** @internal */
-	_getRootSourceRef(): MaybePromise<SourceRef<S>> {
-		if (this._rootRef) {
-			return this._rootRef;
-		}
-		if (this._rootRefPromise) {
-			return this._rootRefPromise;
-		}
-
-		if (this._source instanceof SourceRef) {
-			this._emit('source', { source: this._source.source, request: null, isRoot: true });
-			this._rootRef = this._source;
-
-			assert(this._sourceRefs.includes(this._source)); // Assert that it's already been added
-
-			return this._source;
-		}
-
-		const request: SourceRequest = { path: this._source.rootPath, isRoot: true };
-		const result = this._getSourceValidated(request);
-
-		const handleResult = (result: S | SourceRef<S>) => {
-			let ref: SourceRef<S>;
-			if (result instanceof Source) {
-				ref = result.ref();
-			} else {
-				ref = result;
-			}
-
-			this._sourceRefs.push(ref);
-			this._emit('source', { source: ref.source, request, isRoot: true });
-			this._rootRef = ref;
-
-			return ref;
-		};
-
-		if (result instanceof Promise) {
-			return this._rootRefPromise = result.then(handleResult);
-		} else {
-			return handleResult(result);
-		}
-	}
-
-	/** @internal */
 	_getDemuxer() {
 		return this._demuxerPromise ??= (async () => {
-			const rootRef = await this._getRootSourceRef();
-			this._reader = new Reader(rootRef.source);
+			this._reader = new Reader(this._rootSource);
+			this._emit('source', { source: this._rootSource, request: null, isRoot: true });
 
 			for (const format of this._formats) {
 				const canRead = await format._canReadInput(this);
@@ -380,27 +286,10 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 	}
 
 	/**
-	 * Returns the source from which this input file reads data for the root path. Throws when using
-	 * {@link PathedSource} with an async callback; prefer the `'source'` event for those cases.
+	 * Returns the source from which this input file reads data for the root path.
 	 */
 	get source(): S {
-		const errorMessage = 'Input.source cannot be used when using PathedSource with an async callback.'
-			+ ' Use the \'source\' event instead.';
-
-		// We use this field to make sure we can reliably throw in the `source` getter whenever retrieving the source
-		// requiring awaiting a promise. We do this so there is no different behavior based on order: if the source has
-		// already been retrieved via the normal internal operations, and then somebody calls the `source` getter, even
-		// if the source is now available, the getter should still throw to be consistent in behavior and in definition.
-		if (this._rootRefPromise) {
-			throw new TypeError(errorMessage);
-		}
-
-		const rootRefResult = this._getRootSourceRef();
-		if (rootRefResult instanceof Promise) {
-			throw new TypeError(errorMessage);
-		}
-
-		return rootRefResult.source;
+		return this._rootSource;
 	}
 
 	/**
@@ -676,142 +565,3 @@ export class InputDisposedError extends Error {
 		this.name = 'InputDisposedError';
 	}
 }
-
-/**
- * Options for {@link createInputFrom}. Combines the options of all source types, plus `initInput`.
- *
- * @group Input files & tracks
- * @public
- */
-export type CreateInputFromOptions =
-	& UrlSourceOptions
-	& BlobSourceOptions
-	& FilePathSourceOptions
-	& ReadableStreamSourceOptions
-	& Pick<InputOptions, 'initInput'>;
-
-/**
- * Creates an {@link Input} backed by the passed-in data. An alternative to {@link Input}'s constructor, this helper
- * function automatically chooses the correct underlying {@link Source} based on the type of the data passed in.
- *
- * Legal data types are `ArrayBuffer`, `SharedArrayBuffer`, `ArrayBufferView`, `Blob` (and, by extension, `File`),
- * `ReadableStream<Uint8Array>`, `string` (representing either a URL or a local file path), `URL`, `Request`, `Source`
- * and `PathedSource`. Local file paths require a Node-like server-side environment with access to the file system.
- *
- * The available options are the union of the options for each {@link Source}. Check the sources to see which field
- * applies to which source.
- *
- * **Note:** In server-side environments, it is critical that you validate the input to this function if it is a string.
- * If you're expecting a user-defined URL, you must validate that it's actually a URL and not a local file path.
- *
- * @group Input files & tracks
- * @public
- */
-export const createInputFrom = (
-	data: AllowSharedBufferSource | Blob | ReadableStream<Uint8Array> | string | URL | Request | Source | PathedSource,
-	formats: InputFormat[],
-	options: CreateInputFromOptions = {},
-): Input => {
-	if (!Array.isArray(formats) || !formats.every(x => x instanceof InputFormat)) {
-		throw new TypeError('formats must be an array of InputFormat.');
-	}
-	if (typeof options !== 'object' || !options) {
-		throw new TypeError('options must be an object.');
-	}
-
-	const { initInput, ...sourceOptions } = options;
-
-	if (data instanceof Source || data instanceof PathedSource) {
-		return new Input({
-			formats,
-			source: data,
-			initInput,
-		});
-	}
-
-	if (
-		data instanceof ArrayBuffer
-		|| (typeof SharedArrayBuffer !== 'undefined' && data instanceof SharedArrayBuffer)
-		|| ArrayBuffer.isView(data)
-	) {
-		return new Input({
-			formats,
-			source: new BufferSource(data),
-			initInput,
-		});
-	}
-
-	if (typeof Blob !== 'undefined' && data instanceof Blob) {
-		return new Input({
-			formats,
-			source: new BlobSource(data, sourceOptions),
-			initInput,
-		});
-	}
-
-	if (typeof ReadableStream !== 'undefined' && data instanceof ReadableStream) {
-		return new Input({
-			formats,
-			source: new ReadableStreamSource(data, sourceOptions),
-			initInput,
-		});
-	}
-
-	if (typeof URL !== 'undefined' && data instanceof URL) {
-		const url = data.href;
-
-		return new Input({
-			formats,
-			source: new PathedSource(
-				url,
-				request => new UrlSource(request.path, sourceOptions),
-			),
-			initInput,
-		});
-	}
-
-	if (typeof Request !== 'undefined' && data instanceof Request) {
-		const url = data.url;
-
-		return new Input({
-			formats,
-			source: new PathedSource(
-				url,
-				request => new UrlSource(
-					new Request(request.path, data),
-					sourceOptions,
-				),
-			),
-			initInput,
-		});
-	}
-
-	if (typeof data === 'string') {
-		const isTreatedAsUrl = !node.fs || data.includes('://');
-		if (isTreatedAsUrl) {
-			return new Input({
-				formats,
-				source: new PathedSource(
-					data,
-					request => new UrlSource(request.path, sourceOptions),
-				),
-				initInput,
-			});
-		}
-
-		// Treat it as a local file path
-		return new Input({
-			formats,
-			source: new PathedSource(
-				data,
-				request => new FilePathSource(request.path, sourceOptions),
-			),
-			initInput,
-		});
-	}
-
-	throw new TypeError(
-		'Input.from: first argument must be an ArrayBuffer, SharedArrayBuffer, ArrayBufferView, Blob,'
-		+ ' ReadableStream, string, URL, or Request.',
-	);
-};

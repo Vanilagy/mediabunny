@@ -11,7 +11,7 @@ import { ENCRYPTION_KEY_CACHE_GROUP, Input } from '../input';
 import { Segment, SegmentedInput, SegmentedInputTrackDeclaration, SegmentRetrievalOptions } from '../segmented-input';
 import { toDataView, joinPaths, last, assert, binarySearchLessOrEqual, arrayArgmin, wait } from '../misc';
 import { readAllLines, readBytes, Reader } from '../reader';
-import { PathedSource, ReadableStreamSource, SourceRef } from '../source';
+import { CustomPathedSource, ReadableStreamSource, SourceRef } from '../source';
 import { HlsDemuxer } from './hls-demuxer';
 import {
 	AttributeList,
@@ -540,14 +540,10 @@ export class HlsSegmentedInput extends SegmentedInput {
 		}
 
 		const input = new Input({
-			source: new PathedSource(
+			source: new CustomPathedSource(
 				hlsSegment.location.path,
 				async (request) => {
-					if (request.path !== hlsSegment.location.path) {
-						// This code technically allows for recursive .m3u8 files for example. Uncached because the
-						// added input adds its own layer of caching, so here we just do a passthrough.
-						return this.input._getSourceUncached(request);
-					}
+					assert(request.isRoot); // Shouldn't fail since we don't allow recursive HLS
 
 					let ref: SourceRef;
 					const needsSlice = hlsSegment.location.offset > 0 || hlsSegment.location.length !== null;
