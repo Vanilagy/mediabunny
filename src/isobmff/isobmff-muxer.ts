@@ -176,7 +176,7 @@ export class IsobmffMuxer extends Muxer {
 	isCmaf: boolean;
 
 	private auxTarget = new BufferTarget();
-	private auxWriter = new Writer(this.auxTarget);
+	private auxWriter = new Writer(this.auxTarget, false);
 	private auxBoxWriter = new IsobmffBoxWriter(this.auxWriter);
 
 	private mdat: Box | null = null;
@@ -210,7 +210,11 @@ export class IsobmffMuxer extends Muxer {
 		const release = await this.mutex.acquire();
 
 		if (!this.isCmaf) {
-			this.writer = await this.output._getRootWriter();
+			this.writer = await this.output._getRootWriter(target => (
+				this.format._options.fastStart !== undefined
+					? this.format._options.fastStart === 'fragmented'
+					: target instanceof BufferTarget // Since if this is the case we'll use 'in-memory'
+			));
 			this.boxWriter = new IsobmffBoxWriter(this.writer);
 
 			// If the fastStart option isn't defined, enable in-memory fast start if the target is an ArrayBuffer, as
@@ -223,10 +227,6 @@ export class IsobmffMuxer extends Muxer {
 			this.isFragmented = true;
 		}
 
-		if (this.fastStart === 'in-memory' || this.isFragmented) {
-			this.writer?.ensureMonotonicity();
-		}
-
 		if (this.isCmaf) {
 			if (!this.output._hasInitTarget()) {
 				throw new Error(
@@ -237,7 +237,7 @@ export class IsobmffMuxer extends Muxer {
 
 			// Set up the init writer to which we'll write the init segment
 			const initTarget = await this.output._getInitTarget();
-			const initWriter = new Writer(initTarget);
+			const initWriter = new Writer(initTarget, true);
 			initWriter.start();
 
 			this.initWriter = initWriter;
@@ -1165,10 +1165,8 @@ export class IsobmffMuxer extends Muxer {
 
 				// Only now, init the main writer; this way the init writer is fully done before the main writer is
 				// even acquired
-				this.writer = await this.output._getRootWriter();
+				this.writer = await this.output._getRootWriter(true);
 				this.boxWriter = new IsobmffBoxWriter(this.writer);
-
-				this.writer.ensureMonotonicity();
 
 				const stypSize = this.boxWriter.measureBox(styp());
 				const sidxSize = this.boxWriter.measureBox(sidx(this, 0));

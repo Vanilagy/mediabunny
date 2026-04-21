@@ -16,19 +16,15 @@ export class Writer {
 
 	private pos = 0;
 
-	constructor(target: Target) {
+	constructor(target: Target, isMonotonic: boolean) {
 		this.target = target;
+		target._setMonotonicity(isMonotonic);
 	}
 
 	start() {
 		assert(!this.started);
 		this.target._start();
 		this.started = true;
-	}
-
-	ensureMonotonicity() {
-		this.target._ensureMonotonicity = true;
-		// Note that this currently is without effect for RangedTarget. But, should be fine since its use is rare
 	}
 
 	/** Writes the given data to the target, at the current position. */

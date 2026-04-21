@@ -71,14 +71,9 @@ const writtenFiles = new Map<string, ArrayBuffer>();
 const output = new Output({
 	target: new PathedTarget(
 		'master.m3u8',
-		({ path }) => {
-			const target = new BufferTarget();
-			target.on('finalized', () => {
-				writtenFiles.set(path, target.buffer!);
-			});
-
-			return target;
-		},
+		({ path }) => new BufferTarget({
+			onFinalized: buffer => writtenFiles.set(path, buffer),
+		}),
 	),
 	// ...
 });
@@ -127,12 +122,8 @@ const output = new Output({
 		'master.m3u8',
 		async ({ path, mimeType }) => {
 			const { writable, readable } = new TransformStream<
-				StreamTargetChunk,
-				Uint8Array
-			>({
-				transform: (chunk, controller) =>
-					controller.enqueue(chunk.data),
-			});
+				Uint8Array, Uint8Array,
+			>();
 
 			const url = `/upload?file=${encodeURIComponent(path)}`;
 			const promise = fetch(url, {
@@ -145,7 +136,8 @@ const output = new Output({
 			});
 			promises.push(promise);
 
-			return new StreamTarget(writable);
+			// Requires that all segments use an append-only format
+			return new AppendOnlyStreamTarget(writable);
 		},
 	),
 	onFinalize: () => Promise.all(promises),

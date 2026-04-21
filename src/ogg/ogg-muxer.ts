@@ -79,8 +79,7 @@ export class OggMuxer extends Muxer {
 	async start() {
 		const release = await this.mutex.acquire();
 
-		this.writer = await this.output._getRootWriter();
-		this.writer.ensureMonotonicity(); // Ogg is always monotonically written!
+		this.writer = await this.output._getRootWriter(true); // Ogg is always monotonically written!
 
 		release();
 	}

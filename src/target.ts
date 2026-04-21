@@ -42,7 +42,7 @@ export abstract class Target extends EventEmitter<TargetEvents> {
 	_output: Output | null = null;
 
 	/** @internal */
-	_ensureMonotonicity = false;
+	_monotonicity: boolean | null = null; // null = unknown
 
 	/** @internal */
 	abstract _start(): void;
@@ -64,6 +64,15 @@ export abstract class Target extends EventEmitter<TargetEvents> {
 	 * @deprecated Use `target.on('write', ({ start, end }) => ...)` instead.
 	 */
 	onwrite: ((start: number, end: number) => unknown) | null = null;
+
+	/** @internal */
+	_setMonotonicity(monotonicity: boolean) {
+		if (this._monotonicity !== false) {
+			this._monotonicity = monotonicity;
+		} else {
+			// Once false, it's locked
+		}
+	}
 
 	/** @internal */
 	_dispatchWrite(start: number, end: number) {
@@ -418,7 +427,7 @@ export class StreamTarget extends Target {
 				this._writeDataIntoChunks(chunk.data, chunk.start);
 				this._tryToFlushChunks();
 			} else {
-				if (this._ensureMonotonicity && chunk.start !== this._lastFlushEnd) {
+				if (this._monotonicity === true && chunk.start !== this._lastFlushEnd) {
 					throw new Error('Internal error: Monotonicity violation.');
 				}
 
@@ -530,7 +539,7 @@ export class StreamTarget extends Target {
 
 			for (const section of chunk.written) {
 				const position = chunk.start + section.start;
-				if (this._ensureMonotonicity && position !== this._lastFlushEnd) {
+				if (this._monotonicity === true && position !== this._lastFlushEnd) {
 					throw new Error('Internal error: Monotonicity violation.');
 				}
 
@@ -570,6 +579,76 @@ export class StreamTarget extends Target {
 	/** @internal */
 	async _close() {
 		return this._streamWriter?.close();
+	}
+}
+
+export class AppendOnlyStreamTarget extends Target {
+	/** @internal */
+	_writable: WritableStream<Uint8Array>;
+	/** @internal */
+	_streamTarget: StreamTarget;
+	/** @internal */
+	_writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
+	/** @internal */
+	_nextWritePos = 0;
+
+	constructor(writable: WritableStream<Uint8Array>) {
+		super();
+
+		this._writable = writable;
+		this._streamTarget = new StreamTarget(new WritableStream({
+			start: () => {
+				this._writer = this._writable.getWriter();
+			},
+			write: (chunk) => {
+				if (this._monotonicity !== true) {
+					throw new Error(
+						'AppendOnlyStreamTarget requires that data be written monotonically (always appended to the'
+						+ ' end). You must use a format that guarantees this behavior.',
+					);
+				}
+
+				assert(chunk.position === this._nextWritePos);
+				this._nextWritePos += chunk.data.byteLength;
+
+				assert(this._writer);
+				return this._writer.write(chunk.data);
+			},
+			close: () => {
+				return this._writer?.close();
+			},
+		}));
+	}
+
+	/** @internal */
+	_start(): void {
+		this._streamTarget._start();
+	}
+
+	/** @internal */
+	_write(data: Uint8Array, pos: number): void {
+		this._streamTarget._write(data, pos);
+	}
+
+	/** @internal */
+	_flush(): Promise<void> {
+		return this._streamTarget._flush();
+	}
+
+	/** @internal */
+	_finalize(): Promise<void> {
+		return this._streamTarget._finalize();
+	}
+
+	/** @internal */
+	_close(): Promise<void> {
+		return this._streamTarget._close();
+	}
+
+	/** @internal */
+	override _setMonotonicity(monotonicity: boolean): void {
+		super._setMonotonicity(monotonicity);
+		this._streamTarget._setMonotonicity(monotonicity);
 	}
 }
 
@@ -654,6 +733,12 @@ export class FilePathTarget extends Target {
 	async _close() {
 		return this._streamTarget._close();
 	}
+
+	/** @internal */
+	override _setMonotonicity(monotonicity: boolean): void {
+		super._setMonotonicity(monotonicity);
+		this._streamTarget._setMonotonicity(monotonicity);
+	}
 }
 
 /**
@@ -726,6 +811,12 @@ export class RangedTarget extends Target {
 
 	/** @internal */
 	async _close() {}
+
+	/** @internal */
+	override _setMonotonicity(monotonicity: boolean): void {
+		super._setMonotonicity(monotonicity);
+		this._baseTarget._setMonotonicity(monotonicity);
+	}
 }
 
 /**

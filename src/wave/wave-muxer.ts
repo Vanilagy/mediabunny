@@ -44,7 +44,7 @@ export class WaveMuxer extends Muxer {
 	async start() {
 		const release = await this.mutex.acquire();
 
-		this.writer = await this.output._getRootWriter();
+		this.writer = await this.output._getRootWriter(false);
 		this.riffWriter = new RiffWriter(this.writer);
 
 		// No writing needed here - we'll write the header with the first sample

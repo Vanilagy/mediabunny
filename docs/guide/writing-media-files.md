@@ -388,6 +388,30 @@ const output = new Output({
 await output.finalize(); // Will automatically close the writable stream
 ```
 
+### `AppendOnlyStreamTarget`
+
+Similar to a `StreamTarget` but for writing files in a purely append-only way:
+```ts
+import { Output, AppendOnlyStreamTarget } from 'mediabunny';
+
+const writable = new WritableStream({
+	write(data: Uint8Array) {
+		// Do something with the data...
+	},
+});
+
+const output = new Output({
+	target: new AppendOnlyStreamTarget(writable),
+	// ...
+});
+```
+
+Useful for consumers that can only read sequentially, like an HTTP server processing an incoming upload.
+
+::: warning
+The underlying data source doesn't magically become append-only just because you use this source. Instead, you can only use this source when the underlying format is *append-only*. See [Output formats](./output-formats) to see which formats are append-only.
+:::
+
 ### `FilePathTarget`
 
 This target writes to a file at the specified path. It is intended for server-side usage in Node, Bun, or Deno, and offers a simpler API than `StreamTarget` when you just want to write directly to a file path.

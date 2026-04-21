@@ -34,7 +34,7 @@ export class AdtsMuxer extends Muxer {
 	async start() {
 		const release = await this.mutex.acquire();
 
-		this.writer = await this.output._getRootWriter();
+		this.writer = await this.output._getRootWriter(true);
 
 		if (!metadataTagsAreEmpty(this.output._metadataTags)) {
 			const id3Writer = new Id3V2Writer(this.writer);

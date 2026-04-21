@@ -165,12 +165,8 @@ export class MatroskaMuxer extends Muxer {
 	async start() {
 		const release = await this.mutex.acquire();
 
-		this.writer = await this.output._getRootWriter();
+		this.writer = await this.output._getRootWriter(!!this.format._options.appendOnly);
 		this.ebmlWriter = new EBMLWriter(this.writer);
-
-		if (this.format._options.appendOnly) {
-			this.writer.ensureMonotonicity();
-		}
 
 		this.writeEBMLHeader();
 

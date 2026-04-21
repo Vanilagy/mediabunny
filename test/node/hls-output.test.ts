@@ -4,9 +4,17 @@ import {
 	CmafOutputFormat,
 	HlsOutputFormat,
 	HlsOutputSegmentInfo,
+	Mp4OutputFormat,
 	MpegTsOutputFormat,
 } from '../../src/output-format.js';
-import { BufferTarget, NullTarget, PathedTarget, StreamTarget, StreamTargetChunk } from '../../src/target.js';
+import {
+	AppendOnlyStreamTarget,
+	BufferTarget,
+	NullTarget,
+	PathedTarget,
+	StreamTarget,
+	StreamTargetChunk,
+} from '../../src/target.js';
 import { EncodedAudioPacketSource, EncodedVideoPacketSource } from '../../src/media-source.js';
 import { HlsMuxer } from '../../src/hls/hls-muxer.js';
 import { AudioCodec, VideoCodec } from '../../src/codec.js';
@@ -2725,4 +2733,173 @@ test('Live mode, maxLiveSegmentCount with singleFilePerPlaylist', async () => {
 	// Popping still happened
 	const extinfCount = (lastPlaylistText.match(/#EXTINF:/g) ?? []).length;
 	expect(extinfCount).toBe(2);
+});
+
+test('Append-only stream', async () => {
+	const writes = new Map<string, number>();
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new MpegTsOutputFormat(),
+		}),
+		target: new PathedTarget('master.m3u8', (request) => {
+			writes.set(request.path, 0);
+
+			const writable = new WritableStream<Uint8Array>({
+				write: () => {
+					writes.set(request.path, writes.get(request.path)! + 1);
+				},
+			});
+			const target = new AppendOnlyStreamTarget(writable);
+			return target;
+		}),
+	});
+
+	const source = videoSource();
+	output.addVideoTrack(source);
+
+	await output.start();
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0), avcMetadata);
+
+	await output.finalize();
+
+	// Each segment file should have been written to at least once
+	for (const [, count] of writes) {
+		expect(count).toBeGreaterThanOrEqual(1);
+	}
+
+	expect(writes.size).toBe(1 + 1 + 2); // Master playlist + media playlist + 2 segments
+});
+
+test('Append-only stream, single file', async () => {
+	const writes = new Map<string, number>();
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new MpegTsOutputFormat(),
+			singleFilePerPlaylist: true,
+		}),
+		target: new PathedTarget('master.m3u8', (request) => {
+			writes.set(request.path, 0);
+
+			const writable = new WritableStream<Uint8Array>({
+				write: () => {
+					writes.set(request.path, writes.get(request.path)! + 1);
+				},
+			});
+			const target = new AppendOnlyStreamTarget(writable);
+			return target;
+		}),
+	});
+
+	const source = videoSource();
+	output.addVideoTrack(source);
+
+	await output.start();
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0), avcMetadata);
+
+	await output.finalize();
+
+	// Each segment file should have been written to at least once
+	for (const [, count] of writes) {
+		expect(count).toBeGreaterThanOrEqual(1);
+	}
+
+	expect(writes.size).toBe(1 + 1 + 1); // Master playlist + media playlist + 1 segments file
+});
+
+test('Append-only stream, single file with CMAF', async () => {
+	const writes = new Map<string, number>();
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new CmafOutputFormat(),
+			singleFilePerPlaylist: true,
+		}),
+		target: new PathedTarget('master.m3u8', (request) => {
+			writes.set(request.path, 0);
+
+			const writable = new WritableStream<Uint8Array>({
+				write: () => {
+					writes.set(request.path, writes.get(request.path)! + 1);
+				},
+			});
+			const target = new AppendOnlyStreamTarget(writable);
+			return target;
+		}),
+	});
+
+	const source = videoSource();
+	output.addVideoTrack(source);
+
+	await output.start();
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0), avcMetadata);
+
+	await output.finalize();
+
+	// Each segment file should have been written to at least once
+	for (const [, count] of writes) {
+		expect(count).toBeGreaterThanOrEqual(1);
+	}
+
+	expect(writes.size).toBe(1 + 1 + 1); // Master playlist + media playlist + 1 segments file
+});
+
+test('Append-only stream with monotonicity violation', async () => {
+	const writes = new Map<string, number>();
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new Mp4OutputFormat(),
+			singleFilePerPlaylist: true,
+		}),
+		target: new PathedTarget('master.m3u8', (request) => {
+			writes.set(request.path, 0);
+
+			const writable = new WritableStream<Uint8Array>({
+				write: () => {
+					writes.set(request.path, writes.get(request.path)! + 1);
+				},
+			});
+			const target = new AppendOnlyStreamTarget(writable);
+			return target;
+		}),
+	});
+
+	const source = videoSource();
+	output.addVideoTrack(source);
+
+	await output.start();
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
+
+	await expect(source.add(new EncodedPacket(avcPacketData, 'key', 2, 0), avcMetadata))
+		.rejects.toThrow('AppendOnlyStreamTarget');
 });

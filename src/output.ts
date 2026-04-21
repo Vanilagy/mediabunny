@@ -580,11 +580,11 @@ export class Output<
 	}
 
 	/** @internal */
-	_getRootWriter() {
+	_getRootWriter(isMonotonic: boolean | ((target: Target) => boolean)) {
 		return this._rootWriterPromise ??= (async () => {
 			const target = await this._getRootTarget();
 
-			const writer = new Writer(target);
+			const writer = new Writer(target, typeof isMonotonic === 'boolean' ? isMonotonic : isMonotonic(target));
 			writer.start();
 			return writer;
 		})();

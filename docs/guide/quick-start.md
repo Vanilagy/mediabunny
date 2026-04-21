@@ -308,17 +308,14 @@ await output.finalize();
 ```ts
 import {
 	Output,
-	StreamTarget,
-	StreamTargetChunk,
+	AppendOnlyStreamTarget,
 	Mp4OutputFormat,
 } from 'mediabunny';
 
-const { writable, readable } = new TransformStream<StreamTargetChunk, Uint8Array>({
-	transform: (chunk, controller) => controller.enqueue(chunk.data),
-});
+const { writable, readable } = new TransformStream<Uint8Array, Uint8Array>();
 
 const output = new Output({
-	target: new StreamTarget(writable),
+	target: new AppendOnlyStreamTarget(writable),
 	// We must use an append-only format here, such as fragmented MP4
 	format: new Mp4OutputFormat({ fastStart: 'fragmented' }),
 });

@@ -35,7 +35,7 @@ export class Mp3Muxer extends Muxer {
 	async start() {
 		const release = await this.mutex.acquire();
 
-		this.writer = await this.output._getRootWriter();
+		this.writer = await this.output._getRootWriter(this.format._options.xingHeader === false);
 		this.mp3Writer = new Mp3Writer(this.writer);
 
 		if (!metadataTagsAreEmpty(this.output._metadataTags)) {

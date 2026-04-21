@@ -1225,7 +1225,7 @@ export class HlsMuxer extends Muxer {
 			isRoot: false,
 			mimeType: HLS_MIME_TYPE,
 		});
-		const writer = new Writer(target);
+		const writer = new Writer(target, true);
 		writer.start();
 		writer.write(textEncoder.encode(playlistText));
 
@@ -1426,7 +1426,7 @@ export class HlsMuxer extends Muxer {
 			if (this.numWrittenMasterPlaylists === 0) {
 				// For the first master playlist write, we use the normal root writer getter, so that the target
 				// returned by Output.target emits valid write events.
-				writer = await this.output._getRootWriter();
+				writer = await this.output._getRootWriter(true);
 			} else {
 				// For subsequent master playlist writes, we *must* obtain a different target in order to overwrite
 				// the file.
@@ -1435,7 +1435,7 @@ export class HlsMuxer extends Muxer {
 					isRoot: true,
 					mimeType: HLS_MIME_TYPE,
 				});
-				writer = new Writer(target);
+				writer = new Writer(target, true);
 				writer.start();
 			}
 
