@@ -1868,7 +1868,11 @@ class ReadOrchestrator {
 			for (let i = 0; i < this.workers.length; i++) {
 				const worker = this.workers[i]!;
 
-				if (!worker.running && (!oldestWorker || worker.age < oldestWorker.age)) {
+				if (
+					!worker.running
+					&& worker.pendingSlices.length === 0
+					&& (!oldestWorker || worker.age < oldestWorker.age)
+				) {
 					oldestIndex = i;
 					oldestWorker = worker;
 				}
