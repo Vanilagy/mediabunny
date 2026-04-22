@@ -45,6 +45,7 @@ import {
 	assert,
 	binarySearchExact,
 	binarySearchLessOrEqual,
+	bytesToHexString,
 	COLOR_PRIMARIES_MAP_INVERSE,
 	findLastIndex,
 	isIso639Dash2LanguageCode,
@@ -59,6 +60,8 @@ import {
 	UNDETERMINED_LANGUAGE,
 	toDataView,
 	roundIfAlmostInteger,
+	hexStringToBytes,
+	HEX_STRING_REGEX,
 } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { buildIsobmffMimeType } from './isobmff-misc';
@@ -90,6 +93,7 @@ import {
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags, RichImageData, TrackDisposition } from '../metadata';
 import { AC3_SAMPLE_RATES } from '../../shared/ac3-misc';
 import { Bitstream } from '../../shared/bitstream';
+import { Aes128CbcContext } from '../aes';
 
 type InternalTrack = {
 	id: number;
@@ -120,6 +124,11 @@ type InternalTrack = {
 	editListPreviousSegmentDurations: number;
 	/** The media time offset of the main edit list entry (with media time !== -1) */
 	editListOffset: number;
+	/** Set when the track's samples are encrypted using a supported scheme (cenc/cens/cbcs), parsed from sinf/tenc. */
+	encryptionInfo: TrackEncryptionInfo | null;
+	/** For non-fragmented encrypted tracks: parsed saiz+saio from stbl; aux info is fetched lazily on first use. */
+	encryptionAuxInfo: SampleEncryptionAuxInfo | null;
+	frmaCodecString: string | null;
 } & ({
 	info: null;
 } | {
@@ -146,6 +155,8 @@ type InternalTrack = {
 		codec: AudioCodec | null;
 		codecDescription: Uint8Array | null;
 		aacCodecInfo: AacCodecInfo | null;
+		pcmLittleEndian: boolean;
+		pcmSampleSize: number | null;
 	};
 });
 
@@ -207,6 +218,7 @@ type FragmentTrackState = {
 	defaultSampleSize: number | null;
 	defaultSampleFlags: number | null;
 	startTimestamp: number | null;
+	encryptionAuxInfo: SampleEncryptionAuxInfo | null;
 };
 
 type FragmentTrackData = {
@@ -225,6 +237,7 @@ type FragmentTrackData = {
 		sampleIndex: number;
 	}[];
 	startTimestampIsFinal: boolean;
+	encryptionAuxInfo: SampleEncryptionAuxInfo | null;
 };
 
 type FragmentTrackSample = {
@@ -233,6 +246,7 @@ type FragmentTrackSample = {
 	byteOffset: number;
 	byteSize: number;
 	isKeyFrame: boolean;
+	encryption: SampleEncryptionInfo | null;
 };
 
 type Fragment = {
@@ -240,6 +254,36 @@ type Fragment = {
 	moofSize: number;
 	implicitBaseDataOffset: number;
 	trackData: Map<InternalTrack['id'], FragmentTrackData>;
+};
+
+type TrackEncryptionInfo = {
+	scheme: 'cenc' | 'cens' | 'cbcs';
+	defaultKid: string | null;
+	defaultIsProtected: boolean | null;
+	defaultPerSampleIvSize: number | null;
+	defaultConstantIv: Uint8Array | null;
+	defaultCryptByteBlock: number | null;
+	defaultSkipByteBlock: number | null;
+};
+
+type SampleEncryptionInfo = {
+	iv: Uint8Array;
+	subsamples: {
+		clearLen: number;
+		protectedLen: number;
+	}[] | null;
+};
+
+/**
+ * Holds parsed saiz+saio state. The encryption info itself lives at a file offset and is fetched lazily.
+ * For fragmented files this state is per-traf; for non-fragmented files it's per-track (on stbl).
+ */
+type SampleEncryptionAuxInfo = {
+	defaultSampleInfoSize: number;
+	sampleSizes: Uint8Array | null;
+	sampleCount: number;
+	offset: number | null; // Absolute file offset of the first sample's aux info
+	resolved: SampleEncryptionInfo[] | null;
 };
 
 export class IsobmffDemuxer extends Demuxer {
@@ -263,6 +307,8 @@ export class IsobmffDemuxer extends Demuxer {
 	 * same fragment in quick succession.
 	 */
 	lastReadFragment: Fragment | null = null;
+
+	decryptionKeyCache = new Map<string, Promise<Uint8Array>>();
 
 	constructor(input: Input) {
 		super(input);
@@ -381,6 +427,9 @@ export class IsobmffDemuxer extends Demuxer {
 							fragmentPositionCache: [],
 							editListPreviousSegmentDurations: foreignTrack.editListPreviousSegmentDurations,
 							editListOffset: foreignTrack.editListOffset,
+							encryptionInfo: foreignTrack.encryptionInfo,
+							encryptionAuxInfo: null,
+							frmaCodecString: null,
 							info: foreignTrack.info,
 						};
 
@@ -667,6 +716,20 @@ export class IsobmffDemuxer extends Demuxer {
 					endTimestamp: trackData.endTimestamp,
 				});
 			}
+
+			// If senc wasn't parsed but saiz+saio were, fetch the aux info now and stamp each sample with it
+			if (trackData.encryptionAuxInfo && track.encryptionInfo) {
+				const entries = await resolveEncryptionAuxInfo(
+					this.reader,
+					track.encryptionInfo,
+					trackData.encryptionAuxInfo,
+				);
+
+				for (let i = 0; i < Math.min(trackData.samples.length, entries.length); i++) {
+					const entry = entries[i]!;
+					trackData.samples[i]!.encryption = entry;
+				}
+			}
 		}
 
 		return fragment;
@@ -715,7 +778,9 @@ export class IsobmffDemuxer extends Demuxer {
 			case 'minf':
 			case 'dinf':
 			case 'mfra':
-			case 'edts': {
+			case 'edts':
+			case 'sinf':
+			case 'schi': {
 				this.readContiguousBoxes(slice.slice(contentStartPos, boxInfo.contentSize));
 			}; break;
 
@@ -758,6 +823,9 @@ export class IsobmffDemuxer extends Demuxer {
 					fragmentPositionCache: [],
 					editListPreviousSegmentDurations: 0,
 					editListOffset: 0,
+					encryptionInfo: null,
+					encryptionAuxInfo: null,
+					frmaCodecString: null,
 				} satisfies InternalTrack as InternalTrack;
 				this.currentTrack = track;
 
@@ -945,6 +1013,8 @@ export class IsobmffDemuxer extends Demuxer {
 						codec: null,
 						codecDescription: null,
 						aacCodecInfo: null,
+						pcmLittleEndian: false,
+						pcmSampleSize: null,
 					};
 				}
 			}; break;
@@ -986,21 +1056,6 @@ export class IsobmffDemuxer extends Demuxer {
 					const lowercaseBoxName = sampleBoxInfo.name.toLowerCase();
 
 					if (track.info.type === 'video') {
-						if (lowercaseBoxName === 'avc1' || lowercaseBoxName === 'avc3') {
-							track.info.codec = 'avc';
-							track.info.avcType = lowercaseBoxName === 'avc1' ? 1 : 3;
-						} else if (lowercaseBoxName === 'hvc1' || lowercaseBoxName === 'hev1') {
-							track.info.codec = 'hevc';
-						} else if (lowercaseBoxName === 'vp08') {
-							track.info.codec = 'vp8';
-						} else if (lowercaseBoxName === 'vp09') {
-							track.info.codec = 'vp9';
-						} else if (lowercaseBoxName === 'av01') {
-							track.info.codec = 'av1';
-						} else {
-							console.warn(`Unsupported video codec (sample entry type '${sampleBoxInfo.name}').`);
-						}
-
 						slice.skip(6 * 1 + 2 + 2 + 2 + 3 * 4);
 
 						track.info.width = readU16Be(slice);
@@ -1010,45 +1065,36 @@ export class IsobmffDemuxer extends Demuxer {
 
 						slice.skip(4 + 4 + 4 + 2 + 32 + 2 + 2);
 
+						track.frmaCodecString = null;
 						this.readContiguousBoxes(
 							slice.slice(
 								slice.filePos,
 								(sampleBoxStartPos + sampleBoxInfo.totalSize) - slice.filePos,
 							),
 						);
-					} else {
-						if (lowercaseBoxName === 'mp4a') {
-							// We don't know the codec yet (might be AAC, might be MP3), need to read the esds box
-						} else if (lowercaseBoxName === 'opus') {
-							track.info.codec = 'opus';
-						} else if (lowercaseBoxName === 'flac') {
-							track.info.codec = 'flac';
-						} else if (
-							lowercaseBoxName === 'twos'
-							|| lowercaseBoxName === 'sowt'
-							|| lowercaseBoxName === 'raw '
-							|| lowercaseBoxName === 'in24'
-							|| lowercaseBoxName === 'in32'
-							|| lowercaseBoxName === 'fl32'
-							|| lowercaseBoxName === 'fl64'
-							|| lowercaseBoxName === 'lpcm'
-							|| lowercaseBoxName === 'ipcm' // ISO/IEC 23003-5
-							|| lowercaseBoxName === 'fpcm' // "
-						) {
-							// It's PCM
-							// developer.apple.com/documentation/quicktime-file-format/sound_sample_descriptions/
-						} else if (lowercaseBoxName === 'ulaw') {
-							track.info.codec = 'ulaw';
-						} else if (lowercaseBoxName === 'alaw') {
-							track.info.codec = 'alaw';
-						} else if (lowercaseBoxName === 'ac-3') {
-							track.info.codec = 'ac3';
-						} else if (lowercaseBoxName === 'ec-3') {
-							track.info.codec = 'eac3';
-						} else {
-							console.warn(`Unsupported audio codec (sample entry type '${sampleBoxInfo.name}').`);
-						}
 
+						const codecName = lowercaseBoxName === 'encv'
+							? track.frmaCodecString
+							: lowercaseBoxName;
+						track.frmaCodecString = null;
+
+						if (codecName === 'avc1' || codecName === 'avc3') {
+							track.info.codec = 'avc';
+							track.info.avcType = codecName === 'avc1' ? 1 : 3;
+						} else if (codecName === 'hvc1' || codecName === 'hev1') {
+							track.info.codec = 'hevc';
+						} else if (codecName === 'vp08') {
+							track.info.codec = 'vp8';
+						} else if (codecName === 'vp09') {
+							track.info.codec = 'vp9';
+						} else if (codecName === 'av01') {
+							track.info.codec = 'av1';
+						} else if (codecName === null) {
+							console.warn(`Unknown encrypted video codec due to missing frma box.`);
+						} else {
+							console.warn(`Unsupported video codec (sample entry type '${sampleBoxInfo.name}').`);
+						}
+					} else {
 						slice.skip(6 * 1 + 2);
 
 						const version = readU16Be(slice);
@@ -1061,6 +1107,7 @@ export class IsobmffDemuxer extends Demuxer {
 
 						// Can't use fixed16_16 as that's signed
 						let sampleRate = readU32Be(slice) / 0x10000;
+						let lpcmFlags: number | null = null;
 
 						if (stsdVersion === 0 && version > 0) {
 							// Additional QuickTime fields
@@ -1076,65 +1123,54 @@ export class IsobmffDemuxer extends Demuxer {
 
 								sampleSize = readU32Be(slice);
 
-								const flags = readU32Be(slice);
+								lpcmFlags = readU32Be(slice);
 
 								slice.skip(2 * 4);
-
-								if (lowercaseBoxName === 'lpcm') {
-									const bytesPerSample = (sampleSize + 7) >> 3;
-									const isFloat = Boolean(flags & 1);
-									const isBigEndian = Boolean(flags & 2);
-									const sFlags = flags & 4 ? -1 : 0; // I guess it means "signed flags" or something?
-
-									if (sampleSize > 0 && sampleSize <= 64) {
-										if (isFloat) {
-											if (sampleSize === 32) {
-												track.info.codec = isBigEndian ? 'pcm-f32be' : 'pcm-f32';
-											}
-										} else {
-											if (sFlags & (1 << (bytesPerSample - 1))) {
-												if (bytesPerSample === 1) {
-													track.info.codec = 'pcm-s8';
-												} else if (bytesPerSample === 2) {
-													track.info.codec = isBigEndian ? 'pcm-s16be' : 'pcm-s16';
-												} else if (bytesPerSample === 3) {
-													track.info.codec = isBigEndian ? 'pcm-s24be' : 'pcm-s24';
-												} else if (bytesPerSample === 4) {
-													track.info.codec = isBigEndian ? 'pcm-s32be' : 'pcm-s32';
-												}
-											} else {
-												if (bytesPerSample === 1) {
-													track.info.codec = 'pcm-u8';
-												}
-											}
-										}
-									}
-
-									if (track.info.codec === null) {
-										console.warn('Unsupported PCM format.');
-									}
-								}
 							}
-						}
-
-						if (track.info.codec === 'opus') {
-							sampleRate = OPUS_SAMPLE_RATE; // Always the same
 						}
 
 						track.info.numberOfChannels = channelCount;
 						track.info.sampleRate = sampleRate;
 
-						// PCM codec assignments
-						if (lowercaseBoxName === 'twos') {
+						track.frmaCodecString = null;
+						this.readContiguousBoxes(
+							slice.slice(
+								slice.filePos,
+								(sampleBoxStartPos + sampleBoxInfo.totalSize) - slice.filePos,
+							),
+						);
+
+						const codecName = lowercaseBoxName === 'enca'
+							? track.frmaCodecString
+							: lowercaseBoxName;
+						track.frmaCodecString = null;
+
+						// developer.apple.com/documentation/quicktime-file-format/sound_sample_descriptions/
+						if (codecName === 'mp4a') {
+							// The codec is set by the esds box
+						} else if (codecName === 'opus') {
+							track.info.codec = 'opus';
+							track.info.sampleRate = OPUS_SAMPLE_RATE; // Always the same
+						} else if (codecName === 'flac') {
+							track.info.codec = 'flac';
+						} else if (codecName === 'ulaw') {
+							track.info.codec = 'ulaw';
+						} else if (codecName === 'alaw') {
+							track.info.codec = 'alaw';
+						} else if (codecName === 'ac-3') {
+							track.info.codec = 'ac3';
+						} else if (codecName === 'ec-3') {
+							track.info.codec = 'eac3';
+						} else if (codecName === 'twos') {
 							if (sampleSize === 8) {
 								track.info.codec = 'pcm-s8';
 							} else if (sampleSize === 16) {
-								track.info.codec = 'pcm-s16be';
+								track.info.codec = track.info.pcmLittleEndian ? 'pcm-s16' : 'pcm-s16be';
 							} else {
 								console.warn(`Unsupported sample size ${sampleSize} for codec 'twos'.`);
 								track.info.codec = null;
 							}
-						} else if (lowercaseBoxName === 'sowt') {
+						} else if (codecName === 'sowt') {
 							if (sampleSize === 8) {
 								track.info.codec = 'pcm-s8';
 							} else if (sampleSize === 16) {
@@ -1143,29 +1179,173 @@ export class IsobmffDemuxer extends Demuxer {
 								console.warn(`Unsupported sample size ${sampleSize} for codec 'sowt'.`);
 								track.info.codec = null;
 							}
-						} else if (lowercaseBoxName === 'raw ') {
+						} else if (codecName === 'raw ') {
 							track.info.codec = 'pcm-u8';
-						} else if (lowercaseBoxName === 'in24') {
-							track.info.codec = 'pcm-s24be';
-						} else if (lowercaseBoxName === 'in32') {
-							track.info.codec = 'pcm-s32be';
-						} else if (lowercaseBoxName === 'fl32') {
-							track.info.codec = 'pcm-f32be';
-						} else if (lowercaseBoxName === 'fl64') {
-							track.info.codec = 'pcm-f64be';
-						} else if (lowercaseBoxName === 'ipcm') {
-							track.info.codec = 'pcm-s16be'; // Placeholder, will be adjusted by the pcmC box
-						} else if (lowercaseBoxName === 'fpcm') {
-							track.info.codec = 'pcm-f32be'; // Placeholder, will be adjusted by the pcmC box
-						}
+						} else if (codecName === 'in24') {
+							track.info.codec = track.info.pcmLittleEndian ? 'pcm-s24' : 'pcm-s24be';
+						} else if (codecName === 'in32') {
+							track.info.codec = track.info.pcmLittleEndian ? 'pcm-s32' : 'pcm-s32be';
+						} else if (codecName === 'fl32') {
+							track.info.codec = track.info.pcmLittleEndian ? 'pcm-f32' : 'pcm-f32be';
+						} else if (codecName === 'fl64') {
+							track.info.codec = track.info.pcmLittleEndian ? 'pcm-f64' : 'pcm-f64be';
+						} else if (codecName === 'ipcm') {
+							const pcmSampleSize = track.info.pcmSampleSize;
 
-						this.readContiguousBoxes(
-							slice.slice(
-								slice.filePos,
-								(sampleBoxStartPos + sampleBoxInfo.totalSize) - slice.filePos,
-							),
-						);
+							if (track.info.pcmLittleEndian) {
+								if (pcmSampleSize === 16) {
+									track.info.codec = 'pcm-s16';
+								} else if (pcmSampleSize === 24) {
+									track.info.codec = 'pcm-s24';
+								} else if (pcmSampleSize === 32) {
+									track.info.codec = 'pcm-s32';
+								} else {
+									console.warn(`Invalid ipcm sample size ${pcmSampleSize}.`);
+									track.info.codec = null;
+								}
+							} else {
+								if (pcmSampleSize === 16) {
+									track.info.codec = 'pcm-s16be';
+								} else if (pcmSampleSize === 24) {
+									track.info.codec = 'pcm-s24be';
+								} else if (pcmSampleSize === 32) {
+									track.info.codec = 'pcm-s32be';
+								} else {
+									console.warn(`Invalid ipcm sample size ${pcmSampleSize}.`);
+									track.info.codec = null;
+								}
+							}
+						} else if (codecName === 'fpcm') {
+							const pcmSampleSize = track.info.pcmSampleSize;
+
+							if (track.info.pcmLittleEndian) {
+								if (pcmSampleSize === 32) {
+									track.info.codec = 'pcm-f32';
+								} else if (pcmSampleSize === 64) {
+									track.info.codec = 'pcm-f64';
+								} else {
+									console.warn(`Invalid fpcm sample size ${pcmSampleSize}.`);
+									track.info.codec = null;
+								}
+							} else {
+								if (pcmSampleSize === 32) {
+									track.info.codec = 'pcm-f32be';
+								} else if (pcmSampleSize === 64) {
+									track.info.codec = 'pcm-f64be';
+								} else {
+									console.warn(`Invalid fpcm sample size ${pcmSampleSize}.`);
+									track.info.codec = null;
+								}
+							}
+						} else if (codecName === 'lpcm' && lpcmFlags !== null) {
+							const bytesPerSample = (sampleSize + 7) >> 3;
+							const isFloat = Boolean(lpcmFlags & 1);
+							const isBigEndian = Boolean(lpcmFlags & 2);
+							const sFlags = lpcmFlags & 4 ? -1 : 0; // I guess it means "signed flags" or something?
+
+							if (sampleSize > 0 && sampleSize <= 64) {
+								if (isFloat) {
+									if (sampleSize === 32) {
+										track.info.codec = isBigEndian ? 'pcm-f32be' : 'pcm-f32';
+									}
+								} else {
+									if (sFlags & (1 << (bytesPerSample - 1))) {
+										if (bytesPerSample === 1) {
+											track.info.codec = 'pcm-s8';
+										} else if (bytesPerSample === 2) {
+											track.info.codec = isBigEndian ? 'pcm-s16be' : 'pcm-s16';
+										} else if (bytesPerSample === 3) {
+											track.info.codec = isBigEndian ? 'pcm-s24be' : 'pcm-s24';
+										} else if (bytesPerSample === 4) {
+											track.info.codec = isBigEndian ? 'pcm-s32be' : 'pcm-s32';
+										}
+									} else {
+										if (bytesPerSample === 1) {
+											track.info.codec = 'pcm-u8';
+										}
+									}
+								}
+							}
+
+							if (track.info.codec === null) {
+								console.warn('Unsupported PCM format.');
+							}
+						} else if (codecName === null) {
+							console.warn(`Unknown encrypted audio codec due to missing frma box.`);
+						} else {
+							console.warn(`Unsupported audio codec (sample entry type '${sampleBoxInfo.name}').`);
+						}
 					}
+
+					slice.filePos = sampleBoxStartPos + sampleBoxInfo.totalSize;
+				}
+			}; break;
+
+			case 'frma': {
+				const track = this.currentTrack;
+				if (!track) {
+					break;
+				}
+
+				const format = readAscii(slice, 4);
+				const lowercase = format.toLowerCase();
+
+				// Tells us what codec the encrypted track actually uses
+				track.frmaCodecString = lowercase;
+			}; break;
+
+			case 'schm': {
+				const track = this.currentTrack;
+				if (!track) {
+					break;
+				}
+
+				slice.skip(4); // Version + flags
+
+				const schemeType = readAscii(slice, 4);
+				if (schemeType === 'cenc' || schemeType === 'cens' || schemeType === 'cbcs') {
+					track.encryptionInfo = {
+						scheme: schemeType,
+						defaultKid: null,
+						defaultIsProtected: null,
+						defaultPerSampleIvSize: null,
+						defaultConstantIv: null,
+						defaultCryptByteBlock: null,
+						defaultSkipByteBlock: null,
+					};
+				} else {
+					console.warn(`Unsupported encryption scheme '${schemeType}'.`);
+				}
+			}; break;
+
+			case 'tenc': {
+				const track = this.currentTrack;
+				if (!track || !track.encryptionInfo) {
+					break;
+				}
+
+				const version = readU8(slice);
+				slice.skip(3); // Flags
+				slice.skip(1); // Reserved
+
+				const patternByte = readU8(slice);
+				if (version > 0) {
+					track.encryptionInfo.defaultCryptByteBlock = patternByte >> 4;
+					track.encryptionInfo.defaultSkipByteBlock = patternByte & 0xf;
+				} else {
+					track.encryptionInfo.defaultCryptByteBlock = 0;
+					track.encryptionInfo.defaultSkipByteBlock = 0;
+				}
+
+				track.encryptionInfo.defaultIsProtected = readU8(slice) !== 0;
+				track.encryptionInfo.defaultPerSampleIvSize = readU8(slice);
+				track.encryptionInfo.defaultKid = bytesToHexString(readBytes(slice, 16));
+
+				if (track.encryptionInfo.defaultIsProtected && track.encryptionInfo.defaultPerSampleIvSize === 0) {
+					const constantIvSize = readU8(slice);
+					const constantIv = new Uint8Array(16);
+					constantIv.set(readBytes(slice, constantIvSize), 0);
+					track.encryptionInfo.defaultConstantIv = constantIv;
 				}
 			}; break;
 
@@ -1390,21 +1570,7 @@ export class IsobmffDemuxer extends Demuxer {
 				}
 				assert(track.info?.type === 'audio');
 
-				const littleEndian = readU16Be(slice) & 0xff; // 0xff is from FFmpeg
-
-				if (littleEndian) {
-					if (track.info.codec === 'pcm-s16be') {
-						track.info.codec = 'pcm-s16';
-					} else if (track.info.codec === 'pcm-s24be') {
-						track.info.codec = 'pcm-s24';
-					} else if (track.info.codec === 'pcm-s32be') {
-						track.info.codec = 'pcm-s32';
-					} else if (track.info.codec === 'pcm-f32be') {
-						track.info.codec = 'pcm-f32';
-					} else if (track.info.codec === 'pcm-f64be') {
-						track.info.codec = 'pcm-f64';
-					}
-				}
+				track.info.pcmLittleEndian = !!(readU16Be(slice) & 0xff); // 0xff is from FFmpeg
 			}; break;
 
 			case 'pcmC': {
@@ -1419,61 +1585,9 @@ export class IsobmffDemuxer extends Demuxer {
 				// ISO/IEC 23003-5
 
 				const formatFlags = readU8(slice);
-				const isLittleEndian = Boolean(formatFlags & 0x01);
-				const pcmSampleSize = readU8(slice);
-
-				if (track.info.codec === 'pcm-s16be') {
-					// ipcm
-
-					if (isLittleEndian) {
-						if (pcmSampleSize === 16) {
-							track.info.codec = 'pcm-s16';
-						} else if (pcmSampleSize === 24) {
-							track.info.codec = 'pcm-s24';
-						} else if (pcmSampleSize === 32) {
-							track.info.codec = 'pcm-s32';
-						} else {
-							console.warn(`Invalid ipcm sample size ${pcmSampleSize}.`);
-							track.info.codec = null;
-						}
-					} else {
-						if (pcmSampleSize === 16) {
-							track.info.codec = 'pcm-s16be';
-						} else if (pcmSampleSize === 24) {
-							track.info.codec = 'pcm-s24be';
-						} else if (pcmSampleSize === 32) {
-							track.info.codec = 'pcm-s32be';
-						} else {
-							console.warn(`Invalid ipcm sample size ${pcmSampleSize}.`);
-							track.info.codec = null;
-						}
-					}
-				} else if (track.info.codec === 'pcm-f32be') {
-					// fpcm
-
-					if (isLittleEndian) {
-						if (pcmSampleSize === 32) {
-							track.info.codec = 'pcm-f32';
-						} else if (pcmSampleSize === 64) {
-							track.info.codec = 'pcm-f64';
-						} else {
-							console.warn(`Invalid fpcm sample size ${pcmSampleSize}.`);
-							track.info.codec = null;
-						}
-					} else {
-						if (pcmSampleSize === 32) {
-							track.info.codec = 'pcm-f32be';
-						} else if (pcmSampleSize === 64) {
-							track.info.codec = 'pcm-f64be';
-						} else {
-							console.warn(`Invalid fpcm sample size ${pcmSampleSize}.`);
-							track.info.codec = null;
-						}
-					}
-				}
-
-				break;
-			};
+				track.info.pcmLittleEndian = Boolean(formatFlags & 0x01);
+				track.info.pcmSampleSize = readU8(slice);
+			}; break;
 
 			case 'dOps': { // Used for Opus audio
 				const track = this.currentTrack;
@@ -1981,6 +2095,12 @@ export class IsobmffDemuxer extends Demuxer {
 							offsetFragmentTrackDataByTimestamp(trackData, currentFragmentState.startTimestamp);
 							trackData.startTimestampIsFinal = true;
 						}
+
+						// Transfer the buffered saiz+saio state onto the track data, so readFragment can resolve it
+						// once all boxes are parsed. Only relevant if senc wasn't already used to populate samples.
+						if (currentFragmentState.encryptionAuxInfo && !trackData.samples[0]!.encryption) {
+							trackData.encryptionAuxInfo = currentFragmentState.encryptionAuxInfo;
+						}
 					}
 
 					this.currentTrack.currentFragmentState = null;
@@ -2019,6 +2139,7 @@ export class IsobmffDemuxer extends Demuxer {
 					defaultSampleSize: defaults?.defaultSampleSize ?? null,
 					defaultSampleFlags: defaults?.defaultSampleFlags ?? null,
 					startTimestamp: null,
+					encryptionAuxInfo: null,
 				};
 
 				if (baseDataOffsetPresent) {
@@ -2109,6 +2230,7 @@ export class IsobmffDemuxer extends Demuxer {
 						samples: [],
 						presentationTimestamps: [],
 						startTimestampIsFinal: false,
+						encryptionAuxInfo: null,
 					};
 					this.currentFragment.trackData.set(track.id, trackData);
 				}
@@ -2164,10 +2286,130 @@ export class IsobmffDemuxer extends Demuxer {
 						byteOffset: trackData.currentOffset,
 						byteSize: sampleSize,
 						isKeyFrame,
+						encryption: null,
 					});
 
 					trackData.currentOffset += sampleSize;
 					trackData.currentTimestamp += sampleDuration;
+				}
+			}; break;
+
+			case 'saiz': {
+				// Sample Auxiliary Information Sizes - per-sample sizes of (typically) the encryption aux info.
+				const track = this.currentTrack;
+				if (!track || !track.encryptionInfo) {
+					break;
+				}
+
+				slice.skip(1); // Version
+				const flags = readU24Be(slice);
+
+				if (flags & 0x01) {
+					const auxInfoType = readAscii(slice, 4);
+					const auxInfoTypeParam = readU32Be(slice);
+					if (auxInfoType !== track.encryptionInfo.scheme || auxInfoTypeParam !== 0) {
+						// Not the encryption aux info
+						break;
+					}
+				}
+
+				const defaultSampleInfoSize = readU8(slice);
+				const sampleCount = readU32Be(slice);
+
+				let sampleSizes: Uint8Array | null = null;
+				if (defaultSampleInfoSize === 0 && sampleCount > 0) {
+					sampleSizes = readBytes(slice, sampleCount);
+				}
+
+				const aux = getOrCreateEncryptionAuxInfo(track);
+				aux.defaultSampleInfoSize = defaultSampleInfoSize;
+				aux.sampleSizes = sampleSizes;
+				aux.sampleCount = sampleCount;
+			}; break;
+
+			case 'saio': {
+				// Sample Auxiliary Information Offsets - file offset(s) where the aux info lives.
+				const track = this.currentTrack;
+				if (!track || !track.encryptionInfo) {
+					break;
+				}
+
+				const version = readU8(slice);
+				const flags = readU24Be(slice);
+
+				if (flags & 0x01) {
+					const auxInfoType = readAscii(slice, 4);
+					const auxInfoTypeParam = readU32Be(slice);
+					if (auxInfoType !== track.encryptionInfo.scheme || auxInfoTypeParam !== 0) {
+						break;
+					}
+				}
+
+				const entryCount = readU32Be(slice);
+				if (entryCount === 0) {
+					break;
+				}
+				if (entryCount > 1) {
+					console.warn('Multiple saio entries are not supported; using the first offset only.');
+				}
+
+				let offset = version === 0 ? readU32Be(slice) : Number(readU64Be(slice));
+
+				// Per ISO/IEC 23001-7: when saio is inside a moof, offsets are relative to the start of the moof box.
+				if (this.currentFragment) {
+					offset += this.currentFragment.moofOffset;
+				}
+
+				const aux = getOrCreateEncryptionAuxInfo(track);
+				aux.offset = offset;
+			}; break;
+
+			case 'senc': {
+				// Per-sample encryption info inside a 'traf'. Holds per-sample IV and optional subsample breakdown
+				// for CENC-protected samples
+				const track = this.currentTrack;
+				if (!track || !track.encryptionInfo) {
+					break;
+				}
+
+				assert(this.currentFragment);
+				const trackData = this.currentFragment.trackData.get(track.id);
+				if (!trackData) {
+					break;
+				}
+
+				slice.skip(1); // Version
+				const flags = readU24Be(slice);
+				const useSubsamples = Boolean(flags & 0x000002);
+
+				const sampleCount = readU32Be(slice);
+				const ivSize = track.encryptionInfo.defaultPerSampleIvSize;
+				assert(ivSize !== null);
+
+				for (let i = 0; i < Math.min(sampleCount, trackData.samples.length); i++) {
+					// Normalize the IV to 16 bytes so downstream code can assume a full-length buffer. For CTR with
+					// an 8-byte per-sample IV the lower 8 bytes are zero (that's the CENC spec's block counter start);
+					// for CBC/cbcs the IV is always 16 bytes by spec.
+					const iv = new Uint8Array(16);
+					if (ivSize > 0) {
+						iv.set(readBytes(slice, ivSize), 0);
+					} else {
+						iv.set(track.encryptionInfo.defaultConstantIv!, 0);
+					}
+
+					let subsamples: SampleEncryptionInfo['subsamples'] = null;
+					if (useSubsamples) {
+						const subsampleCount = readU16Be(slice);
+						subsamples = [];
+						for (let j = 0; j < subsampleCount; j++) {
+							const clearLen = readU16Be(slice);
+							const protectedLen = readU32Be(slice);
+							subsamples.push({ clearLen, protectedLen });
+						}
+					}
+
+					const sample = trackData.samples[i]!;
+					sample.encryption = { iv, subsamples };
 				}
 			}; break;
 
@@ -2810,6 +3052,20 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			}
 
 			data = readBytes(slice, sampleInfo.sampleSize);
+
+			if (this.internalTrack.encryptionAuxInfo) {
+				assert(this.internalTrack.encryptionInfo);
+
+				const entries = await resolveEncryptionAuxInfo(
+					this.internalTrack.demuxer.reader,
+					this.internalTrack.encryptionInfo,
+					this.internalTrack.encryptionAuxInfo,
+				);
+
+				if (sampleIndex < entries.length) {
+					data = await decryptSample(this.internalTrack, entries[sampleIndex]!, data);
+				}
+			}
 		}
 
 		const timestamp = (sampleInfo.presentationTimestamp - this.internalTrack.editListOffset)
@@ -2852,6 +3108,10 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			}
 
 			data = readBytes(slice, fragmentSample.byteSize);
+
+			if (fragmentSample.encryption) {
+				data = await decryptSample(this.internalTrack, fragmentSample.encryption, data);
+			}
 		}
 
 		const timestamp = (fragmentSample.presentationTimestamp - this.internalTrack.editListOffset)
@@ -3314,4 +3574,319 @@ const extractRotationFromMatrix = (matrix: TransformationMatrix) => {
 
 const sampleTableIsEmpty = (sampleTable: SampleTable) => {
 	return sampleTable.sampleSizes.length === 0;
+};
+
+const getOrCreateEncryptionAuxInfo = (track: InternalTrack) => {
+	if (track.currentFragmentState) {
+		return track.currentFragmentState.encryptionAuxInfo ??= {
+			defaultSampleInfoSize: 0,
+			sampleSizes: null,
+			sampleCount: 0,
+			offset: null,
+			resolved: null,
+		};
+	} else {
+		return track.encryptionAuxInfo ??= {
+			defaultSampleInfoSize: 0,
+			sampleSizes: null,
+			sampleCount: 0,
+			offset: null,
+			resolved: null,
+		};
+	}
+};
+
+const resolveEncryptionAuxInfo = async (
+	reader: Reader,
+	encryptionInfo: TrackEncryptionInfo,
+	aux: SampleEncryptionAuxInfo,
+) => {
+	if (aux.resolved) {
+		return aux.resolved;
+	}
+
+	if (aux.offset === null || aux.sampleCount === 0) {
+		throw new Error('Incomplete saiz/saio info; cannot resolve encryption data.');
+	}
+
+	let totalSize = 0;
+	if (aux.defaultSampleInfoSize > 0) {
+		totalSize = aux.defaultSampleInfoSize * aux.sampleCount;
+	} else {
+		assert(aux.sampleSizes);
+		for (let i = 0; i < aux.sampleCount; i++) {
+			totalSize += aux.sampleSizes[i]!;
+		}
+	}
+
+	let slice = reader.requestSlice(aux.offset, totalSize);
+	if (slice instanceof Promise) slice = await slice;
+	if (!slice) {
+		throw new Error('Failed to read auxiliary encryption info.');
+	}
+
+	const ivSize = encryptionInfo.defaultPerSampleIvSize;
+	assert(ivSize !== null);
+
+	// Each aux entry has the same byte layout as a senc entry: IV (of size ivSize, or the constant IV from tenc
+	// when ivSize is 0), then optionally subsample count + [clearLen, protectedLen] pairs. Subsamples are present
+	// iff the entry is larger than the IV.
+	const entries: SampleEncryptionInfo[] = [];
+	for (let i = 0; i < aux.sampleCount; i++) {
+		const entrySize = aux.defaultSampleInfoSize > 0
+			? aux.defaultSampleInfoSize
+			: aux.sampleSizes![i]!;
+
+		const iv = new Uint8Array(16);
+		if (ivSize > 0) {
+			iv.set(readBytes(slice, ivSize), 0);
+		} else {
+			iv.set(encryptionInfo.defaultConstantIv!, 0);
+		}
+
+		let subsamples: { clearLen: number; protectedLen: number }[] | null = null;
+		if (entrySize > ivSize) {
+			const subsampleCount = readU16Be(slice);
+			subsamples = [];
+			for (let j = 0; j < subsampleCount; j++) {
+				const clearLen = readU16Be(slice);
+				const protectedLen = readU32Be(slice);
+				subsamples.push({ clearLen, protectedLen });
+			}
+		}
+
+		entries.push({ iv, subsamples });
+	}
+
+	aux.resolved = entries;
+	return entries;
+};
+
+const decryptSample = async (
+	track: InternalTrack,
+	sampleEncryption: SampleEncryptionInfo,
+	data: Uint8Array,
+): Promise<Uint8Array> => {
+	assert(track.encryptionInfo);
+	const encryptionInfo = track.encryptionInfo;
+	assert(encryptionInfo.defaultKid !== null);
+
+	const keyId = encryptionInfo.defaultKid;
+	let keyBytes: Uint8Array;
+
+	const cacheEntry = track.demuxer.decryptionKeyCache.get(keyId);
+	if (cacheEntry) {
+		keyBytes = await cacheEntry;
+	} else {
+		if (!track.demuxer.input._formatOptions.isobmff?.resolveKeyId) {
+			throw new Error(
+				'Encrypted media samples encountered. To decrypt them, please provide a callback for'
+				+ ' InputOptions.formatOptions.isobmff.resolveKeyId.',
+			);
+		}
+
+		const promise = (async () => {
+			const keyResult = await track.demuxer.input._formatOptions.isobmff!.resolveKeyId!({ keyId });
+
+			if (!(
+				(typeof keyResult === 'string' && keyResult.length === 32 && HEX_STRING_REGEX.test(keyResult))
+				|| (keyResult instanceof Uint8Array && keyResult.byteLength === 16)
+			)) {
+				throw new TypeError(
+					'resolveKeyId must return a 32-character hex string or a 16-byte Uint8Array containing the'
+					+ ' decryption key.',
+				);
+			}
+
+			return keyResult instanceof Uint8Array
+				? keyResult
+				: hexStringToBytes(keyResult);
+		})();
+
+		track.demuxer.decryptionKeyCache.set(keyId, promise);
+		keyBytes = await promise;
+	}
+
+	if (encryptionInfo.scheme === 'cenc' || encryptionInfo.scheme === 'cens') {
+		return decryptCtr(keyBytes, encryptionInfo, sampleEncryption, data);
+	} else {
+		return decryptCbcs(keyBytes, encryptionInfo, sampleEncryption, data);
+	}
+};
+
+const decryptCtr = async (
+	key: Uint8Array,
+	encryptionInfo: TrackEncryptionInfo,
+	sampleEncryption: SampleEncryptionInfo,
+	data: Uint8Array,
+) => {
+	const counter = new Uint8Array(16);
+	counter.set(sampleEncryption.iv, 0);
+
+	const cryptoKey = await crypto.subtle.importKey(
+		'raw',
+		key as BufferSource,
+		{ name: 'AES-CTR' },
+		false,
+		['decrypt'],
+	);
+
+	const cryptApply = async (input: Uint8Array) => {
+		const plaintext = await crypto.subtle.decrypt(
+			{ name: 'AES-CTR', counter, length: 64 },
+			cryptoKey,
+			input as BufferSource,
+		);
+
+		return new Uint8Array(plaintext);
+	};
+
+	if (!sampleEncryption.subsamples) {
+		// Whole sample is protected, no pattern
+		return cryptApply(data);
+	}
+
+	assert(encryptionInfo.defaultCryptByteBlock !== null && encryptionInfo.defaultSkipByteBlock !== null);
+	const cryptRanges = collectCryptRanges(
+		sampleEncryption.subsamples,
+		encryptionInfo.defaultCryptByteBlock,
+		encryptionInfo.defaultSkipByteBlock,
+	);
+
+	// Concatenate all crypt ranges into a single buffer so the continuous CTR counter behavior is preserved
+	let totalCryptLen = 0;
+	for (const range of cryptRanges) {
+		for (const seg of range.perSubsample) {
+			totalCryptLen += seg.length;
+		}
+	}
+	const cryptBuffer = new Uint8Array(totalCryptLen);
+	let writePos = 0;
+	for (const range of cryptRanges) {
+		for (const seg of range.perSubsample) {
+			cryptBuffer.set(data.subarray(seg.offset, seg.offset + seg.length), writePos);
+			writePos += seg.length;
+		}
+	}
+
+	const plain = await cryptApply(cryptBuffer);
+
+	// Now let's build the output
+	const output = new Uint8Array(data);
+	let readPos = 0;
+	for (const range of cryptRanges) {
+		for (const seg of range.perSubsample) {
+			output.set(plain.subarray(readPos, readPos + seg.length), seg.offset);
+			readPos += seg.length;
+		}
+	}
+
+	return output;
+};
+
+const decryptCbcs = (
+	key: Uint8Array,
+	encryptionInfo: TrackEncryptionInfo,
+	sampleEncryption: SampleEncryptionInfo,
+	data: Uint8Array,
+) => {
+	const ctx = new Aes128CbcContext();
+	ctx.init({ key, iv: sampleEncryption.iv });
+
+	const cryptByteBlock = encryptionInfo.defaultCryptByteBlock;
+	const skipByteBlock = encryptionInfo.defaultSkipByteBlock;
+	assert(cryptByteBlock !== null && skipByteBlock !== null);
+
+	if (!sampleEncryption.subsamples) {
+		// Whole-sample encryption: straightforward CBC over floor(size / 16) blocks, any trailing bytes stay clear
+		const output = new Uint8Array(data);
+		const numBlocks = Math.floor(data.length / 16);
+
+		for (let b = 0; b < numBlocks; b++) {
+			const off = b * 16;
+			ctx.in.set(data.subarray(off, off + 16));
+			ctx.decrypt();
+			output.set(ctx.out, off);
+		}
+
+		return output;
+	}
+
+	if (cryptByteBlock === 0 && skipByteBlock === 0) {
+		throw new Error('cbcs with subsamples requires pattern encryption.');
+	}
+
+	const output = new Uint8Array(data);
+
+	// Pattern decryption: IV is reset at the start of each subsample. Within a subsample, the CBC chain continues
+	// across skipped blocks (the IV after a crypt group carries over to the next crypt group's first block).
+	const cryptRanges = collectCryptRanges(sampleEncryption.subsamples, cryptByteBlock, skipByteBlock);
+	const ivView = new DataView(sampleEncryption.iv.buffer, sampleEncryption.iv.byteOffset, 16);
+
+	for (const range of cryptRanges) {
+		// Reset IV per subsample
+		ctx.iv[0] = ivView.getUint32(0, false);
+		ctx.iv[1] = ivView.getUint32(4, false);
+		ctx.iv[2] = ivView.getUint32(8, false);
+		ctx.iv[3] = ivView.getUint32(12, false);
+
+		for (const seg of range.perSubsample) {
+			// Decrypt length / 16 blocks at this offset
+			const numBlocks = seg.length / 16;
+
+			for (let b = 0; b < numBlocks; b++) {
+				const offset = seg.offset + b * 16;
+				ctx.in.set(data.subarray(offset, offset + 16));
+				ctx.decrypt();
+				output.set(ctx.out, offset);
+			}
+		}
+	}
+
+	return output;
+};
+
+const collectCryptRanges = (
+	subsamples: { clearLen: number; protectedLen: number }[],
+	cryptByteBlock: number,
+	skipByteBlock: number,
+) => {
+	const ranges: { perSubsample: { offset: number; length: number }[] }[] = [];
+	const hasPattern = cryptByteBlock !== 0 || skipByteBlock !== 0;
+
+	let cursor = 0;
+	for (const subsample of subsamples) {
+		cursor += subsample.clearLen;
+
+		const perSubsample: { offset: number; length: number }[] = [];
+
+		if (!hasPattern) {
+			if (subsample.protectedLen > 0) {
+				perSubsample.push({ offset: cursor, length: subsample.protectedLen });
+			}
+			cursor += subsample.protectedLen;
+		} else {
+			let remaining = subsample.protectedLen;
+			let pos = cursor;
+			while (remaining > 0) {
+				if (remaining < 16 * cryptByteBlock) {
+					break; // Partial final crypt group stays clear
+				}
+
+				const cryptBytes = 16 * cryptByteBlock;
+				perSubsample.push({ offset: pos, length: cryptBytes });
+				pos += cryptBytes;
+				remaining -= cryptBytes;
+
+				const skipBytes = Math.min(16 * skipByteBlock, remaining);
+				pos += skipBytes;
+				remaining -= skipBytes;
+			}
+			cursor += subsample.protectedLen;
+		}
+
+		ranges.push({ perSubsample });
+	}
+
+	return ranges;
 };

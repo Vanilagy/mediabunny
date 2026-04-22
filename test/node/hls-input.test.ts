@@ -2,7 +2,7 @@
 import { ALL_FORMATS, BufferSource, EncodedPacketSink, Input, InputAudioTrack, InputVideoTrack, UrlSource } from 'mediabunny';
 import { expect, test, vi } from 'vitest';
 import { HLS, HLS_FORMATS, HlsInputFormat } from '../../src/input-format.js';
-import { assert, rejectAfter } from '../../src/misc.js';
+import { assert, hexStringToBytes, rejectAfter } from '../../src/misc.js';
 import { CustomPathedSource } from '../../src/source.js';
 
 // A lot of test cases taken from:
@@ -868,4 +868,83 @@ root.m3u8
 	});
 
 	await expect(input.getTracks()).rejects.toThrow('unsupported');
+});
+
+test.concurrent.only('Widevine encryption (SAMPLE-AES-CTR) fails without keys', async () => {
+	using input = new Input({
+		source: new UrlSource('https://storage.googleapis.com/shaka-demo-assets/angel-one-widevine-hls/hls.m3u8'),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	const sink = new EncodedPacketSink(videoTrack);
+	await expect(sink.getPacket(Infinity)).rejects.toThrow();
+});
+
+test.concurrent.only('Widevine encryption (SAMPLE-AES-CTR) succeeds with string keys', async () => {
+	const keyMap = new Map([
+		['4d97930a3d7b55fa81d0028653f5e499', '429ec76475e7a952d224d8ef867f12b6'],
+		['d21373c0b8ab5ba9954742bcdfb5f48b', '150a6c7d7dee6a91b74dccfce5b31928'],
+		['6f1729072b4a5cd288c916e11846b89e', 'a84b4bd66901874556093454c075e2c6'],
+		['800aacaa522958ae888062b5695db6bf', '775dbf7289c4cc5847becd571f536ff2'],
+		['67b30c86756f57c5a0a38a23ac8c9178', 'efa2878c2ccf6dd47ab349fcf90e6259'],
+	]);
+
+	using input = new Input({
+		source: new UrlSource('https://storage.googleapis.com/shaka-demo-assets/angel-one-widevine-hls/hls.m3u8'),
+		formats: ALL_FORMATS,
+		formatOptions: {
+			isobmff: {
+				resolveKeyId: ({ keyId }) => {
+					const key = keyMap.get(keyId);
+					assert(key);
+
+					return key;
+				},
+			},
+		},
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	const sink = new EncodedPacketSink(videoTrack);
+	const lastPacket = await sink.getPacket(Infinity);
+	assert(lastPacket);
+	expect(lastPacket.timestamp + lastPacket.duration).toBe(60);
+});
+
+test.concurrent.only('Widevine encryption (SAMPLE-AES-CTR) succeeds with buffer keys', async () => {
+	const keyMap = new Map([
+		['4d97930a3d7b55fa81d0028653f5e499', hexStringToBytes('429ec76475e7a952d224d8ef867f12b6')],
+		['d21373c0b8ab5ba9954742bcdfb5f48b', hexStringToBytes('150a6c7d7dee6a91b74dccfce5b31928')],
+		['6f1729072b4a5cd288c916e11846b89e', hexStringToBytes('a84b4bd66901874556093454c075e2c6')],
+		['800aacaa522958ae888062b5695db6bf', hexStringToBytes('775dbf7289c4cc5847becd571f536ff2')],
+		['67b30c86756f57c5a0a38a23ac8c9178', hexStringToBytes('efa2878c2ccf6dd47ab349fcf90e6259')],
+	]);
+
+	using input = new Input({
+		source: new UrlSource('https://storage.googleapis.com/shaka-demo-assets/angel-one-widevine-hls/hls.m3u8'),
+		formats: ALL_FORMATS,
+		formatOptions: {
+			isobmff: {
+				resolveKeyId: ({ keyId }) => {
+					const key = keyMap.get(keyId);
+					assert(key);
+
+					return key;
+				},
+			},
+		},
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	const sink = new EncodedPacketSink(videoTrack);
+	const lastPacket = await sink.getPacket(Infinity);
+	assert(lastPacket);
+	expect(lastPacket.timestamp + lastPacket.duration).toBe(60);
 });

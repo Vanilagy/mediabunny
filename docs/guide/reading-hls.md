@@ -323,6 +323,48 @@ You can lower `fac` to move playback closer to the live edge (1.5 works fine too
 
 You can make `fac` larger to increase resilience against flaky internet or an unreliable media producer.
 
+## Encrypted content
+
+Some HLS playlists carry encrypted media data. Mediabunny can read data that has been encoded with the following encryption schemes:
+- `'AES-128'`
+- `'SAMPLE-AES'`
+- `'SAMPLE-AES-CTR'`
+
+---
+
+`'SAMPLE-AES'` and `'SAMPLE-AES-CTR'` are currently only supported for ISOBMFF media files. They are most commonly seen in DRM-encrypted content (Widevine, FairPlay, etc.) for which Mediabunny has no way of obtaining the decryption keys by itself, since commercial CDMs don't expose keys to userland (that's the whole point of DRM).
+
+Mediabunny is still able to decrypt the data if you provide it with the decryption keys directly using [`InputOptions.formatOptions.isobmff.resolveKeyId`](../api/IsobmffInputFormatOptions#resolvekeyid). An example:
+```ts
+// Maps each key ID to a concrete decryption key
+const keyMap = new Map([
+	['4d97930a3d7b55fa81d0028653f5e499', '429ec76475e7a952d224d8ef867f12b6'],
+	['d21373c0b8ab5ba9954742bcdfb5f48b', '150a6c7d7dee6a91b74dccfce5b31928'],
+	['6f1729072b4a5cd288c916e11846b89e', 'a84b4bd66901874556093454c075e2c6'],
+	['800aacaa522958ae888062b5695db6bf', '775dbf7289c4cc5847becd571f536ff2'],
+	['67b30c86756f57c5a0a38a23ac8c9178', 'efa2878c2ccf6dd47ab349fcf90e6259'],
+]);
+
+using input = new Input({
+	source: new UrlSource(
+		'https://storage.googleapis.com/shaka-demo-assets/angel-one-widevine-hls/hls.m3u8',
+	),
+	formats: ALL_FORMATS,
+	formatOptions: {
+		isobmff: {
+			resolveKeyId: ({ keyId }) => {
+				const key = keyMap.get(keyId);
+				if (!key) {
+					throw new Error('Unknown key ID.');
+				}
+
+				return key;
+			},
+		},
+	},
+});
+```
+
 ## Subtitles
 
 Reading subtitles from HLS playlists is not currently supported. Sorry!

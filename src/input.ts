@@ -7,7 +7,7 @@
  */
 
 import { Demuxer, DurationMetadataRequestOptions } from './demuxer';
-import { InputFormat } from './input-format';
+import { InputFormat, InputFormatOptions, validateInputFormatOptions } from './input-format';
 import {
 	InputAudioTrack,
 	InputAudioTrackBacking,
@@ -74,6 +74,9 @@ export type InputOptions<S extends Source = Source> = {
 	 * The use of this field depends on the input format.
 	 */
 	initInput?: Input;
+
+	/** Can be used to specify additional per-format configuration. */
+	formatOptions?: InputFormatOptions;
 };
 
 type SourceCacheEntry = {
@@ -141,6 +144,11 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 		promise: Promise<SourceCacheEntry>;
 	}[] = [];
 
+	/** @internal */
+	_formatOptions: InputFormatOptions;
+	/** @internal */
+	_onFormatDetermined: ((format: InputFormat) => void) | null = null;
+
 	/** True if the input has been disposed. */
 	get disposed() {
 		return this._disposed;
@@ -168,9 +176,13 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 		if (options.initInput !== undefined && !(options.initInput instanceof Input)) {
 			throw new TypeError('options.initInput, when provided, must be an Input.');
 		}
+		if (options.formatOptions !== undefined) {
+			validateInputFormatOptions(options.formatOptions, 'formatOptions');
+		}
 
 		this._formats = options.formats;
 		this._initInput = options.initInput ?? null;
+		this._formatOptions = options.formatOptions ?? {};
 
 		if (options.source instanceof Source) {
 			this._rootRef = options.source.ref();
@@ -277,6 +289,8 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 				const canRead = await format._canReadInput(this);
 				if (canRead) {
 					this._format = format;
+					this._onFormatDetermined?.(format);
+
 					return format._createDemuxer(this);
 				}
 			}

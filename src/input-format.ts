@@ -35,6 +35,7 @@ import { TS_PACKET_SIZE } from './mpeg-ts/mpeg-ts-misc';
 import { HlsDemuxer } from './hls/hls-demuxer';
 import { HLS_MIME_TYPE } from './hls/hls-misc';
 import { PathedSource } from './source';
+import { MaybePromise } from './misc';
 
 /**
  * Base class representing an input media file format.
@@ -52,6 +53,12 @@ export abstract class InputFormat {
 	abstract get name(): string;
 	/** Returns the typical base MIME type of the input format. */
 	abstract get mimeType(): string;
+
+	/**
+	 * Provided for tree-shakable checking.
+	 * @internal
+	 */
+	_isIsobmff = false;
 }
 
 /**
@@ -87,6 +94,9 @@ export abstract class IsobmffInputFormat extends InputFormat {
 	_createDemuxer(input: Input) {
 		return new IsobmffDemuxer(input);
 	}
+
+	/** @internal */
+	override _isIsobmff = true;
 }
 
 /**
@@ -702,3 +712,45 @@ export const ALL_FORMATS: InputFormat[] = [HLS, MP4, QTFF, MATROSKA, WEBM, WAVE,
  * @public
  */
 export const HLS_FORMATS: InputFormat[] = [HLS, MP4, QTFF, MP3, ADTS, MPEG_TS];
+
+/**
+ * Additional per-format configuration.
+ * @group Input formats
+ * @public
+ */
+export type InputFormatOptions = {
+	/** ISOBMFF-specific configuration. */
+	isobmff?: IsobmffInputFormatOptions;
+};
+
+/**
+ * Additional ISOBMFF input configuration.
+ * @group Input formats
+ * @public
+ */
+export type IsobmffInputFormatOptions = {
+	/**
+	 * A callback that gets invoked for each key ID required for sample content decryption. The key ID is provided as a
+	 * 32-character lowercase hexadecimal string.
+	 *
+	 * Must return or resolve to a 32-character hexadecimal string or a 16-byte `Uint8Array`.
+	 */
+	resolveKeyId?: (options: {
+		/** The key ID that is to be resolved to a key. This is a 32-character lowercase hexadecimal string. */
+		keyId: string;
+	}) => MaybePromise<Uint8Array | string>;
+};
+
+export const validateInputFormatOptions = (options: InputFormatOptions, prefix: string) => {
+	if (!options || typeof options !== 'object') {
+		throw new TypeError(`${prefix}, when provided, must be an object.`);
+	}
+	if (options.isobmff !== undefined) {
+		if (!options.isobmff || typeof options.isobmff !== 'object') {
+			throw new TypeError(`${prefix}.isobmff, when provided, must be an object.`);
+		}
+		if (options.isobmff.resolveKeyId !== undefined && typeof options.isobmff.resolveKeyId !== 'function') {
+			throw new TypeError(`${prefix}.isobmff.resolveKeyId, when provided, must be a function.`);
+		}
+	}
+};

@@ -199,8 +199,19 @@ export class AsyncMutex {
 	}
 }
 
+export const HEX_STRING_REGEX = /^[0-9a-fA-F]+$/;
+
 export const bytesToHexString = (bytes: Uint8Array) => {
 	return [...bytes].map(x => x.toString(16).padStart(2, '0')).join('');
+};
+
+export const hexStringToBytes = (hexString: string) => {
+	assert(hexString.length % 2 === 0);
+	const bytes = new Uint8Array(hexString.length / 2);
+	for (let i = 0; i < hexString.length; i += 2) {
+		bytes[i / 2] = parseInt(hexString.slice(i, i + 2), 16);
+	}
+	return bytes;
 };
 
 export const reverseBitsU32 = (x: number): number => {

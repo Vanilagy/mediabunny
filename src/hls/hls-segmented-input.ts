@@ -45,6 +45,8 @@ export type HlsEncryptionInfo = {
 	keyUri: string;
 	iv: Uint8Array | null;
 	keyFormat: string;
+} | {
+	method: 'SAMPLE-AES' | 'SAMPLE-AES-CTR';
 };
 
 export type HlsSegmentLocation = {
@@ -192,7 +194,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 					}
 
 					let key = currentKey;
-					if (key && !key.iv) {
+					if (key && key.method === 'AES-128' && !key.iv) {
 						// "the Media Sequence Number is to be used as the IV when decrypting a Media Segment, by
 						// putting its big-endian binary representation into a 16-octet (128-bit) buffer and padding
 						// (on the left) with zeros"
@@ -351,11 +353,31 @@ export class HlsSegmentedInput extends SegmentedInput {
 						}
 					}
 
+					const keyFormat = attributes.get('keyformat') ?? 'identity';
+					if (keyFormat !== 'identity') {
+						throw new Error(
+							'For AES-128 encryption, only the \'identity\' KEYFORMAT is currently supported. If you'
+							+ ' think other formats should be supported, please raise an issue.',
+						);
+					}
+
 					currentKey = {
 						method: 'AES-128',
 						keyUri: joinPaths(this.path, uri),
 						iv,
-						keyFormat: attributes.get('keyformat') ?? 'identity',
+						keyFormat,
+					};
+				} else if (method === 'SAMPLE-AES' || method === 'SAMPLE-AES-CTR') {
+					const keyFormat = attributes.get('keyformat') ?? 'identity';
+					if (keyFormat === 'identity') {
+						throw new Error(
+							'For SAMPLE-AES and SAMPLE-AES-CTR encryption, the \'identity\' KEYFORMAT is not'
+							+ ' supported. If you think this format should be supported, please raise an issue.',
+						);
+					}
+
+					currentKey = {
+						method,
 					};
 				} else {
 					throw new Error(
@@ -425,7 +447,8 @@ export class HlsSegmentedInput extends SegmentedInput {
 				accumulatedTime = dateTimeSeconds; // Snap the accumulated time to the datetime
 			} else if (line === TAG_DISCONTINUITY) {
 				currentFirstSegment = null;
-				currentInitSegment = null;
+				// Note: the init segment is not reset; the #EXT-X-MAP statement simply lasts until the next
+				// #EXT-X-MAP statement.
 			} else if (line.startsWith(TAG_TARGETDURATION)) {
 				const value = line.slice(TAG_TARGETDURATION.length);
 				const duration = Number(value);
@@ -548,7 +571,11 @@ export class HlsSegmentedInput extends SegmentedInput {
 					let ref: SourceRef;
 					const needsSlice = hlsSegment.location.offset > 0 || hlsSegment.location.length !== null;
 
-					if (!hlsSegment.encryption) {
+					if (
+						!hlsSegment.encryption
+						|| hlsSegment.encryption.method === 'SAMPLE-AES'
+						|| hlsSegment.encryption.method === 'SAMPLE-AES-CTR'
+					) {
 						ref = await this.input._getSourceCached(request);
 
 						if (needsSlice) {
@@ -560,8 +587,9 @@ export class HlsSegmentedInput extends SegmentedInput {
 							ref.free();
 							ref = sliceRef;
 						}
-					} else {
-						assert(hlsSegment.encryption.iv);
+					} else if (hlsSegment.encryption.method === 'AES-128') {
+						const encryption = hlsSegment.encryption;
+						assert(encryption.iv);
 
 						let ciphertextRef = await this.input._getSourceCached(request);
 						if (needsSlice) {
@@ -579,7 +607,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 
 						const stream = createAes128CbcDecryptStream(ciphertextReader, async () => {
 							using keyRef = await this.input._getSourceCached(
-								{ path: hlsSegment.encryption!.keyUri, isRoot: false },
+								{ path: encryption.keyUri, isRoot: false },
 								ENCRYPTION_KEY_CACHE_GROUP,
 							);
 							const keyReader = new Reader(keyRef.source);
@@ -589,21 +617,40 @@ export class HlsSegmentedInput extends SegmentedInput {
 							}
 							const key = readBytes(keySlice, AES_128_BLOCK_SIZE);
 
-							return { key, iv: hlsSegment.encryption!.iv! };
+							return { key, iv: encryption.iv! };
 						}, () => {
 							ciphertextRef.free();
 						});
 
 						ref = new ReadableStreamSource(stream).ref();
+					} else {
+						assert(false);
 					}
 
-					return ref!;
+					return ref;
 				},
 			),
 			// Do not allow recursive HLS. Cool on paper, but allows for nasty infinite-depth request trees.
 			formats: this.input._formats.filter(x => !(x instanceof HlsInputFormat)),
 			initInput: initInput ?? undefined,
+			formatOptions: this.input._formatOptions,
 		});
+
+		input._onFormatDetermined = (format) => {
+			if (
+				(hlsSegment.encryption?.method === 'SAMPLE-AES' || hlsSegment.encryption?.method === 'SAMPLE-AES-CTR')
+				&& !format._isIsobmff
+			) {
+				// These methods can also be used for formats such as MPEG-TS
+				// eslint-disable-next-line @stylistic/max-len
+				// (see https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/HLS_Sample_Encryption/Encryption/Encryption.html)
+				// but we don't support them there yet, so instead of silently decrypting nothing, we throw an error.
+				throw new Error(
+					'The SAMPLE-AES and SAMPLE-AES-CTR encryption methods are currently only supported for'
+					+ ' ISOBMFF files.',
+				);
+			}
+		};
 
 		this.inputCache.push({
 			segment: hlsSegment,

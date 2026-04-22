@@ -179,9 +179,11 @@ export {
 } from './source';
 export {
 	InputFormat,
+	InputFormatOptions,
 	AdtsInputFormat,
 	FlacInputFormat,
 	IsobmffInputFormat,
+	IsobmffInputFormatOptions,
 	HlsInputFormat,
 	MatroskaInputFormat,
 	Mp3InputFormat,
