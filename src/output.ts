@@ -505,6 +505,11 @@ export class Output<
 			await target._close();
 		} else {
 			this._targets.add(target);
+			// Release on finalize so long-running PathedTarget outputs don't
+			// retain every produced target's buffer until the outer Output closes.
+			target.on('finalized', () => {
+				this._targets.delete(target);
+			}, { once: true });
 		}
 
 		return target;
@@ -525,6 +530,9 @@ export class Output<
 			await target._close();
 		} else {
 			this._targets.add(target);
+			target.on('finalized', () => {
+				this._targets.delete(target);
+			}, { once: true });
 		}
 
 		return target;
@@ -565,6 +573,9 @@ export class Output<
 				void target._close();
 			} else {
 				this._targets.add(target);
+				target.on('finalized', () => {
+					this._targets.delete(target);
+				}, { once: true });
 			}
 
 			this._emit('target', { target, request, isRoot: true });
