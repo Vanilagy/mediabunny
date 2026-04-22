@@ -870,7 +870,7 @@ root.m3u8
 	await expect(input.getTracks()).rejects.toThrow('unsupported');
 });
 
-test.concurrent.only('Widevine encryption (SAMPLE-AES-CTR) fails without keys', async () => {
+test.concurrent('Widevine encryption (SAMPLE-AES-CTR) fails without keys', async () => {
 	using input = new Input({
 		source: new UrlSource('https://storage.googleapis.com/shaka-demo-assets/angel-one-widevine-hls/hls.m3u8'),
 		formats: ALL_FORMATS,
@@ -883,7 +883,7 @@ test.concurrent.only('Widevine encryption (SAMPLE-AES-CTR) fails without keys', 
 	await expect(sink.getPacket(Infinity)).rejects.toThrow();
 });
 
-test.concurrent.only('Widevine encryption (SAMPLE-AES-CTR) succeeds with string keys', async () => {
+test.concurrent('Widevine encryption (SAMPLE-AES-CTR) succeeds with string keys', async () => {
 	const keyMap = new Map([
 		['4d97930a3d7b55fa81d0028653f5e499', '429ec76475e7a952d224d8ef867f12b6'],
 		['d21373c0b8ab5ba9954742bcdfb5f48b', '150a6c7d7dee6a91b74dccfce5b31928'],
@@ -916,7 +916,7 @@ test.concurrent.only('Widevine encryption (SAMPLE-AES-CTR) succeeds with string 
 	expect(lastPacket.timestamp + lastPacket.duration).toBe(60);
 });
 
-test.concurrent.only('Widevine encryption (SAMPLE-AES-CTR) succeeds with buffer keys', async () => {
+test.concurrent('Widevine encryption (SAMPLE-AES-CTR) succeeds with buffer keys', async () => {
 	const keyMap = new Map([
 		['4d97930a3d7b55fa81d0028653f5e499', hexStringToBytes('429ec76475e7a952d224d8ef867f12b6')],
 		['d21373c0b8ab5ba9954742bcdfb5f48b', hexStringToBytes('150a6c7d7dee6a91b74dccfce5b31928')],
