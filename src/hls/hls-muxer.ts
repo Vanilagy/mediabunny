@@ -955,8 +955,12 @@ export class HlsMuxer extends Muxer {
 							info: null,
 						};
 
+						const fullInitPath = joinPaths(
+							joinPaths(pathedTarget.rootPath, playlist.path),
+							initPath,
+						);
 						const target = await this.output._getTarget({
-							path: initPath,
+							path: fullInitPath,
 							isRoot: false,
 							mimeType: playlist.segmentFormat.mimeType,
 						});
