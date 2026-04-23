@@ -138,6 +138,7 @@ export {
 	StreamTarget,
 	StreamTargetOptions,
 	StreamTargetChunk,
+	AppendOnlyStreamTarget,
 	PathedTarget,
 } from './target';
 export {

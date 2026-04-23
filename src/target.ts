@@ -582,6 +582,12 @@ export class StreamTarget extends Target {
 	}
 }
 
+/**
+ * Like {@link StreamTarget} but append-only — the underlying `WritableStream` receives raw `Uint8Array` chunks in
+ * order, without position metadata. Requires a format that writes data monotonically; throws at write time otherwise.
+ * @group Output targets
+ * @public
+ */
 export class AppendOnlyStreamTarget extends Target {
 	/** @internal */
 	_writable: WritableStream<Uint8Array>;
