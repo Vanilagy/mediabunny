@@ -378,7 +378,7 @@ export class Output<
 	/** @internal */
 	_muxer: Muxer;
 	/** @internal */
-	_targets = new Set<Target>();
+	_unfinalizedTargets = new Set<Target>();
 	/** @internal */
 	_rootWriterPromise: Promise<Writer> | null = null;
 	/** @internal */
@@ -439,12 +439,7 @@ export class Output<
 			throw new TypeError('options.target must be a Target or a PathedTarget.');
 		}
 		if (options.target instanceof Target) {
-			if (options.target._output) {
-				throw new Error('Target is already used for another output.');
-			}
-
-			options.target._output = this;
-			this._targets.add(options.target);
+			this._rememberTarget(options.target);
 		}
 		if (
 			options.initTarget !== undefined
@@ -466,8 +461,7 @@ export class Output<
 
 		this._initTarget = options.initTarget ?? null;
 		if (this._initTarget instanceof Target) {
-			this._initTarget._output = this;
-			this._targets.add(this._initTarget);
+			this._rememberTarget(this._initTarget);
 		}
 
 		this._muxer = options.format._createMuxer(this);
@@ -498,16 +492,21 @@ export class Output<
 		assert(this._target instanceof PathedTarget);
 
 		const target = await this._getTargetValidated(request);
-		target._output = this;
 		this._emit('target', { target, request, isRoot: request.isRoot });
 
 		if (this.state === 'canceled') {
 			await target._close();
 		} else {
-			this._targets.add(target);
+			this._rememberTarget(target);
 		}
 
 		return target;
+	}
+
+	/** @internal */
+	_rememberTarget(target: Target) {
+		this._unfinalizedTargets.add(target);
+		target.on('finalized', () => this._unfinalizedTargets.delete(target), { once: true });
 	}
 
 	/** @internal */
@@ -519,12 +518,11 @@ export class Output<
 		}
 
 		const target = await this._initTarget();
-		target._output = this;
 
 		if (this.state === 'canceled') {
 			await target._close();
 		} else {
-			this._targets.add(target);
+			this._rememberTarget(target);
 		}
 
 		return target;
@@ -558,13 +556,11 @@ export class Output<
 		const result = this._getTargetValidated(request);
 
 		const handleResult = (target: T) => {
-			target._output = this;
-
 			if (this.state === 'canceled') {
 				// Promise thrown away here, but no way to surface it to the user really
 				void target._close();
 			} else {
-				this._targets.add(target);
+				this._rememberTarget(target);
 			}
 
 			this._emit('target', { target, request, isRoot: true });
@@ -849,8 +845,8 @@ export class Output<
 				const promises = this._tracks.map(x => x.source._flushOrWaitForOngoingClose(true)); // Force close
 				await Promise.all(promises);
 
-				await Promise.all([...this._targets].map(target => target._close()));
-				this._targets.clear();
+				await Promise.all([...this._unfinalizedTargets].map(target => target._close()));
+				this._unfinalizedTargets.clear();
 			} finally {
 				release();
 			}

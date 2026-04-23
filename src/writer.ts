@@ -17,8 +17,13 @@ export class Writer {
 	private pos = 0;
 
 	constructor(target: Target, isMonotonic: boolean) {
+		if (target._writerAcquired) {
+			throw new Error('Can\'t have multiple Writers for the same Target.');
+		}
+
 		this.target = target;
 		target._setMonotonicity(isMonotonic);
+		target._writerAcquired = true;
 	}
 
 	start() {
@@ -55,10 +60,8 @@ export class Writer {
 	/** Called after muxing has finished. */
 	async finalize() {
 		assert(this.started && !this.finalized);
-		assert(this.target._output);
 
 		await this.target._finalize();
-		this.target._output._targets.delete(this.target);
 
 		this.finalized = true;
 	}

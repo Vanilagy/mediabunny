@@ -23,7 +23,9 @@
 			chunked: true,
 			chunkSize: 2**20
 		});
-		const outputFormat = new Mediabunny.Mp4OutputFormat();
+		const outputFormat = new Mediabunny.HlsOutputFormat({
+			segmentFormat: new Mediabunny.MpegTsOutputFormat(),
+		});
 
 		const p = document.createElement('p');
 		p.textContent = 'Capturing...';
@@ -50,7 +52,7 @@
 
 		const output = new Mediabunny.Output({
 			format: outputFormat,
-			target
+			target: new Mediabunny.PathedTarget('master.m3u8', ({ path }) => new Mediabunny.BufferTarget()),
 		});
 
 		let input;
@@ -119,76 +121,13 @@
 				bitrate: 320000
 			},
 			*/
-			video: (track) => ({
-				discard: true,
-				//discard: true,
-				//discard: !tracks.includes(track),
-				//forceTranscode: true,
-				//forceTranscode: true,
-				//width: 1280,
-				//forceTranscode: true,
-				//allowRotationMetadata: false,
-				//width: 720,
-				//frameRate: 30,
-				//bitrate: Mediabunny.QUALITY_VERY_LOW,
-				//discard: true,
-				/*
-				process: (sample) => {
-					if (!ctx) {
-						// Create a canvas for image compositing
-						const canvas = new OffscreenCanvas(
-							sample.displayWidth,
-							sample.displayHeight,
-						);
-						ctx = canvas.getContext('2d');
-					}
-
-					console.log(ctx.canvas.width, ctx.canvas.height);
-
-					ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-					sample.drawWithFit(ctx, { fit: 'fill' });
-					//ctx.drawImage(watermark, 32, 32);
-
-					return ctx.canvas;
-				},
-				*/
-				//width: 300,
-				//alpha: 'keep',
-				//width: 320,
-				//discard: true,
-				//discard: true,
-				//crop: {
-				//	left: 0,
-				//	top: 0,
-				//	width: 500,
-				//	height: 500,
-				//},
-				//rotate: 90,
-				//width: 200,
-				//height: 500,
-				//fit: 'contain',
-				//forceTranscode: true,
-				//codec: 'avc',
-				//fit: 'contain',
-				//frameRate: 27.123,
-				//width: 320,
-				//forceTranscode: true,
-				//codec: 'av1',
-				//discard: true,
-				//width: 1280,
-				//discard: true,
-				//width: 640
-				//forceTranscode: true,
-				//rotate: 90
-				//width: 720 ?? 2160,
-				//height: 1280 ?? 3840,
-				//fit: 'contain',
-				//rotate: 90,
-				//width: 512,
-				//height: 512,
-				//width: 200,
-				//height: 100,
-			}),
+			video: [
+				{ height: 1080 },
+				{ height: 720 },
+				{ height: 480 },
+				{ height: 360 },
+				{ height: 240 },
+			],
 			tags: {} ?? {
 				title: 'Bigggy',
 				artist: 'Buck Bunny',
@@ -207,7 +146,7 @@
 				}
 			},
 			trim: {
-				end: 5,
+				//end: 5,
 				//start,
 				//end: start + 5,
 				////start: 0,

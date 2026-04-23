@@ -129,16 +129,17 @@ export {
 	Target,
 	TargetEvents,
 	TargetRequest,
+	AppendOnlyStreamTarget,
 	BufferTarget,
 	BufferTargetOptions,
 	FilePathTarget,
 	FilePathTargetOptions,
 	NullTarget,
+	PathedTarget,
 	RangedTarget,
 	StreamTarget,
 	StreamTargetOptions,
 	StreamTargetChunk,
-	PathedTarget,
 } from './target';
 export {
 	AnyIterable,

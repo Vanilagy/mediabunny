@@ -558,7 +558,7 @@ export class BlobSource extends Source {
 			}
 		}
 
-		worker.running = false;
+		this._orchestrator.signalWorkerStoppedRunning(worker);
 
 		if (worker.aborted) {
 			// MDN: "Calling this method signals a loss of interest in the stream by a consumer."
@@ -853,7 +853,7 @@ export class UrlSource extends PathedSource {
 			while (true) {
 				if (worker.currentPos >= worker.targetPos || worker.aborted) {
 					abortController.abort();
-					worker.running = false;
+					this._orchestrator.signalWorkerStoppedRunning(worker);
 
 					return;
 				}
@@ -1201,7 +1201,7 @@ export class StreamSource extends Source {
 			}
 		}
 
-		worker.running = false;
+		this._orchestrator.signalWorkerStoppedRunning(worker);
 	}
 
 	/** @internal */
@@ -1608,6 +1608,8 @@ class ReadOrchestrator {
 		minReadPosition: number,
 		maxReadPosition: number,
 	): MaybePromise<ReadResult | null> {
+		assert(!this.disposed);
+
 		const prefetchRange = this.options.prefetchProfile(innerStart, innerEnd, this.workers);
 		const outerStart = Math.max(prefetchRange.start, minReadPosition);
 		const outerEnd = Math.min(prefetchRange.end, this.fileSize ?? Infinity, maxReadPosition);
@@ -1868,7 +1870,11 @@ class ReadOrchestrator {
 			for (let i = 0; i < this.workers.length; i++) {
 				const worker = this.workers[i]!;
 
-				if (!worker.running && (!oldestWorker || worker.age < oldestWorker.age)) {
+				if (
+					!worker.running
+					&& worker.pendingSlices.length === 0
+					&& (!oldestWorker || worker.age < oldestWorker.age)
+				) {
 					oldestIndex = i;
 					oldestWorker = worker;
 				}
@@ -1952,13 +1958,18 @@ class ReadOrchestrator {
 		// Here we merge everything into one "megaworker" that spans the entire file. We assume the passed-in worker
 		// is already configured to be a megaworker.
 
+		const uniqueSlices = new Set(worker.pendingSlices);
+
 		for (let i = 0; i < this.workers.length; i++) {
 			const otherWorker = this.workers[i]!;
 			if (otherWorker === worker) {
 				continue;
 			}
 
-			worker.pendingSlices.push(...otherWorker.pendingSlices);
+			for (const slice of otherWorker.pendingSlices) {
+				uniqueSlices.add(slice);
+			}
+
 			otherWorker.aborted = true;
 			otherWorker.pendingSlices.length = 0;
 			this.workers.splice(i, 1);
@@ -1967,9 +1978,13 @@ class ReadOrchestrator {
 
 		for (let i = 0; i < this.queuedReads.length; i++) {
 			const queuedRead = this.queuedReads[i]!;
-			worker.pendingSlices.push(...queuedRead.pendingSlices);
+
+			for (const slice of queuedRead.pendingSlices) {
+				uniqueSlices.add(slice);
+			}
 		}
 
+		worker.pendingSlices = [...uniqueSlices];
 		this.queuedReads.length = 0;
 	}
 
@@ -2099,6 +2114,16 @@ class ReadOrchestrator {
 				}
 			}
 		}
+	}
+
+	signalWorkerStoppedRunning(worker: ReadWorker) {
+		worker.running = false;
+
+		// When a worker stops running, that means it has hit its targetPos. It might still have pendingSlices assigned,
+		// but this is because those pending slices cover data that other workers are assigned to fill. Since targetPos
+		// has been reached, we can confidently say that this worker has completed its share of work on the pending
+		// slices and must no longer care about them.
+		worker.pendingSlices.length = 0;
 	}
 
 	/** Called when a worker reaches the end of the underlying data and must be cleaned up. */
