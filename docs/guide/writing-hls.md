@@ -279,6 +279,29 @@ output.addAudioTrack(audioSourceDe, { languageCode: 'de', name: 'German' });
 output.addAudioTrack(audioSourceEs, { languageCode: 'es', name: 'Spanish' });
 ```
 
+### Track disposition
+
+You can control how a track is selected by players using the `disposition` option. The following fields map to HLS attributes on `#EXT-X-MEDIA`:
+- `disposition.primary` → `DEFAULT=YES` (only one per media rendition group is allowed; subsequent `primary` tracks in the same group are ignored)
+- `disposition.default` → `AUTOSELECT=YES` (also implied when `primary` is `true`)
+- `disposition.forced` → `FORCED=YES`
+
+For example:
+```ts
+output.addAudioTrack(audioSourceEn, {
+	languageCode: 'en',
+	name: 'English',
+	disposition: { primary: true },
+});
+output.addAudioTrack(audioSourceDe, {
+	languageCode: 'es',
+	name: 'Spanish',
+	disposition: { default: false },
+});
+```
+
+When unspecified, `default` is `true` and `primary` and `forced` are `false`.
+
 ### I-frame only tracks
 
 A track registered like this will be emitted via `#EXT-X-I-FRAME-STREAM-INF`:
