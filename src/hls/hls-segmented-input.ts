@@ -11,7 +11,7 @@ import { ENCRYPTION_KEY_CACHE_GROUP, Input } from '../input';
 import { Segment, SegmentedInput, SegmentedInputTrackDeclaration, SegmentRetrievalOptions } from '../segmented-input';
 import { toDataView, joinPaths, last, assert, binarySearchLessOrEqual, arrayArgmin, wait } from '../misc';
 import { readAllLines, readBytes, Reader } from '../reader';
-import { CustomPathedSource, ReadableStreamSource, SourceRef } from '../source';
+import { CustomPathedSource, ReadableStreamSource, SourceRef, SourceRequest } from '../source';
 import { HlsDemuxer } from './hls-demuxer';
 import {
 	AttributeList,
@@ -568,6 +568,11 @@ export class HlsSegmentedInput extends SegmentedInput {
 				async (request) => {
 					assert(request.isRoot); // Shouldn't fail since we don't allow recursive HLS
 
+					const proxiedRequest: SourceRequest = {
+						...request,
+						isRoot: false,
+					};
+
 					let ref: SourceRef;
 					const needsSlice = hlsSegment.location.offset > 0 || hlsSegment.location.length !== null;
 
@@ -576,7 +581,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 						|| hlsSegment.encryption.method === 'SAMPLE-AES'
 						|| hlsSegment.encryption.method === 'SAMPLE-AES-CTR'
 					) {
-						ref = await this.input._getSourceCached(request);
+						ref = await this.input._getSourceCached(proxiedRequest);
 
 						if (needsSlice) {
 							const slice = ref.source.slice(
@@ -591,7 +596,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 						const encryption = hlsSegment.encryption;
 						assert(encryption.iv);
 
-						let ciphertextRef = await this.input._getSourceCached(request);
+						let ciphertextRef = await this.input._getSourceCached(proxiedRequest);
 						if (needsSlice) {
 							// Slice before decrypting
 							const slice = ciphertextRef.source.slice(

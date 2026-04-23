@@ -2903,3 +2903,37 @@ test('Append-only stream with monotonicity violation', async () => {
 	await expect(source.add(new EncodedPacket(avcPacketData, 'key', 2, 0), avcMetadata))
 		.rejects.toThrow('AppendOnlyStreamTarget');
 });
+
+test('Relative paths & isRoot', async () => {
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new CmafOutputFormat(),
+			getPlaylistPath: () => `a/folder/playlist.m3u8`,
+		}),
+		target: new PathedTarget('path/to/master.m3u8', (request) => {
+			if (request.isRoot) {
+				expect(request.path).toBe('path/to/master.m3u8');
+			} else {
+				expect(request.path.startsWith('path/to/a/folder/')).toBe(true);
+			}
+
+			return new BufferTarget();
+		}),
+	});
+
+	const source = videoSource();
+	output.addVideoTrack(source);
+
+	await output.start();
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0), avcMetadata);
+
+	await output.finalize();
+});

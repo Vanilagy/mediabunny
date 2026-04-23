@@ -7,7 +7,6 @@
  */
 
 import type { FileHandle } from 'node:fs/promises';
-import { Output } from './output';
 import * as nodeAlias from './node';
 import { assert, EventEmitter, FilePath, MaybePromise } from './misc';
 
@@ -39,7 +38,7 @@ export type TargetEvents = {
  */
 export abstract class Target extends EventEmitter<TargetEvents> {
 	/** @internal */
-	_output: Output | null = null;
+	_writerAcquired = false;
 
 	/** @internal */
 	_monotonicity: boolean | null = null; // null = unknown
@@ -583,8 +582,13 @@ export class StreamTarget extends Target {
 }
 
 /**
- * Like {@link StreamTarget} but append-only — the underlying `WritableStream` receives raw `Uint8Array` chunks in
- * order, without position metadata. Requires a format that writes data monotonically; throws at write time otherwise.
+ * This target writes to a `WritableStream<Uint8Array>`, meaning all writes are necessarily append-only and involve no
+ * seeking. Great for streaming data to a source that can only accept sequential data, like an HTTP server processing
+ * an incoming upload.
+ *
+ * Note that using this target *requires* that the underlying format write data sequentially. Not all formats do this,
+ * and this target will throw for the formats that don't. Check the guide for more.
+ *
  * @group Output targets
  * @public
  */
@@ -793,7 +797,6 @@ export class RangedTarget extends Target {
 
 		this._baseTarget = baseTarget;
 		this._offset = offset;
-		this._output = baseTarget._output;
 	}
 
 	/** @internal */

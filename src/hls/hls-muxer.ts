@@ -898,6 +898,11 @@ export class HlsMuxer extends Muxer {
 				target: new PathedTarget(
 					fullSegmentPath,
 					async (request: TargetRequest) => {
+						const proxiedRequest: TargetRequest = {
+							...request,
+							isRoot: false,
+						};
+
 						if (request.isRoot) {
 							if (playlist.singleFile) {
 								const slice = playlist.singleFile.target.slice(playlist.singleFile.nextOffset);
@@ -905,7 +910,7 @@ export class HlsMuxer extends Muxer {
 
 								return slice;
 							} else {
-								const target = await this.output._getTarget(request);
+								const target = await this.output._getTarget(proxiedRequest);
 								outputTarget = target;
 								target.on('write', ({ end }) => segmentSize = Math.max(segmentSize, end));
 
@@ -913,7 +918,7 @@ export class HlsMuxer extends Muxer {
 							}
 						}
 
-						return this.output._getTarget(request);
+						return this.output._getTarget(proxiedRequest);
 					},
 				),
 				initTarget: async () => {

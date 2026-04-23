@@ -948,3 +948,24 @@ test.concurrent('Widevine encryption (SAMPLE-AES-CTR) succeeds with buffer keys'
 	assert(lastPacket);
 	expect(lastPacket.timestamp + lastPacket.duration).toBe(60);
 });
+
+test.concurrent('SourceRequest.isRoot', async () => {
+	using input = new Input({
+		source: new CustomPathedSource(
+			'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
+			({ path, isRoot }) => {
+				if (isRoot) {
+					expect(path).toBe('https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8');
+				}
+
+				return new UrlSource(path);
+			},
+		),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	await videoTrack.computeDuration();
+});
