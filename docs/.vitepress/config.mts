@@ -3,7 +3,8 @@ import footnote from 'markdown-it-footnote';
 import tailwindcss from '@tailwindcss/vite';
 import llmstxt from 'vitepress-plugin-llms';
 import { HeadConfig } from 'vitepress';
-// @ts-expect-error This file gets generated once docs:generate is run
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore This file gets generated once docs:generate is run
 import apiRoutes from '../api/index.json';
 
 const DESCRIPTION = 'A JavaScript library for reading, writing, and converting media files. Directly in the browser,'
@@ -38,9 +39,11 @@ export default withMermaid({
 		// https://vitepress.dev/reference/default-theme-config
 		nav: [
 			{ text: 'Guide', link: '/guide/introduction', activeMatch: '/guide' },
-			{ text: 'API', link: '/api/', activeMatch: '/api' },
+			{ text: 'API', link: '/api', activeMatch: '/api' },
 			{ text: 'LLMs', link: '/llms', activeMatch: '/llms' },
 			{ text: 'Examples', link: '/examples', activeMatch: '/examples' },
+			{ text: 'Blog', link: '/blog', activeMatch: '/blog' },
+			{ text: 'LLMs', link: '/llms', activeMatch: '/llms' },
 			{ text: 'Sponsors', link: '/#sponsors', activeMatch: '/#sponsors' },
 			{ text: 'License', link: 'https://github.com/Vanilagy/mediabunny#license' },
 			{
