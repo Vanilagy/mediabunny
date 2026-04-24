@@ -148,7 +148,11 @@ export {
 	EventListenerOptions,
 	FilePath,
 	MaybePromise,
+} from './misc';
+export {
 	PsshBox,
+} from './isobmff/isobmff-misc';
+export {
 	Rational,
 	Rectangle,
 	Rotation,

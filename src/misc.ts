@@ -1309,6 +1309,3 @@ export class ConcurrentRunner {
 		await Promise.all(this._queue);
 	}
 }
-
-// Reexported so it can be sorted alphabetically in index.ts lmfao
-export { PsshBox } from './isobmff/isobmff-misc';
