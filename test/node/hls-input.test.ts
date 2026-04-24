@@ -897,7 +897,17 @@ test.concurrent('Widevine encryption (SAMPLE-AES-CTR) succeeds with string keys'
 		formats: ALL_FORMATS,
 		formatOptions: {
 			isobmff: {
-				resolveKeyId: ({ keyId }) => {
+				resolveKeyId: ({ keyId, psshBoxes }) => {
+					expect(psshBoxes).toHaveLength(1);
+					expect(psshBoxes[0]!.systemId).toBe('edef8ba979d64acea3c827dcd51d21ed');
+					expect(psshBoxes[0]!.keyIds).toBeNull();
+					expect(psshBoxes[0]!.data).toEqual(new Uint8Array([
+						34, 22, 115, 104, 97, 107, 97, 95,
+						99, 101, 99, 50, 102, 54, 52, 97,
+						97, 55, 56, 57, 48, 97, 49, 49,
+						72, 227, 220, 149, 155, 6,
+					]));
+
 					const key = keyMap.get(keyId);
 					assert(key);
 
@@ -931,6 +941,50 @@ test.concurrent('Widevine encryption (SAMPLE-AES-CTR) succeeds with buffer keys'
 		formatOptions: {
 			isobmff: {
 				resolveKeyId: ({ keyId }) => {
+					const key = keyMap.get(keyId);
+					assert(key);
+
+					return key;
+				},
+			},
+		},
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	const sink = new EncodedPacketSink(videoTrack);
+	const lastPacket = await sink.getPacket(Infinity);
+	assert(lastPacket);
+	expect(lastPacket.timestamp + lastPacket.duration).toBe(60);
+});
+
+test.concurrent('Widevine HLS passes #EXT-X-KEY PSSH boxes to key resolver', async () => {
+	const keyMap = new Map([
+		['4d97930a3d7b55fa81d0028653f5e499', '429ec76475e7a952d224d8ef867f12b6'],
+		['d21373c0b8ab5ba9954742bcdfb5f48b', '150a6c7d7dee6a91b74dccfce5b31928'],
+		['6f1729072b4a5cd288c916e11846b89e', 'a84b4bd66901874556093454c075e2c6'],
+		['800aacaa522958ae888062b5695db6bf', '775dbf7289c4cc5847becd571f536ff2'],
+		['67b30c86756f57c5a0a38a23ac8c9178', 'efa2878c2ccf6dd47ab349fcf90e6259'],
+	]);
+
+	using input = new Input({
+		source: new UrlSource('https://storage.googleapis.com/shaka-demo-assets/angel-one-widevine-hls/hls.m3u8'),
+		formats: ALL_FORMATS,
+		formatOptions: {
+			isobmff: {
+				_suppressPsshParsing: true,
+				resolveKeyId: ({ keyId, psshBoxes }) => {
+					expect(psshBoxes).toHaveLength(1);
+					expect(psshBoxes[0]!.systemId).toBe('edef8ba979d64acea3c827dcd51d21ed');
+					expect(psshBoxes[0]!.keyIds).toBeNull();
+					expect(psshBoxes[0]!.data).toEqual(new Uint8Array([
+						34, 22, 115, 104, 97, 107, 97, 95,
+						99, 101, 99, 50, 102, 54, 52, 97,
+						97, 55, 56, 57, 48, 97, 49, 49,
+						72, 227, 220, 149, 155, 6,
+					]));
+
 					const key = keyMap.get(keyId);
 					assert(key);
 

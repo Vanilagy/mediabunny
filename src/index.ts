@@ -148,6 +148,7 @@ export {
 	EventListenerOptions,
 	FilePath,
 	MaybePromise,
+	PsshBox,
 	Rational,
 	Rectangle,
 	Rotation,

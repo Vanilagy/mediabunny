@@ -1309,3 +1309,5 @@ export class ConcurrentRunner {
 		await Promise.all(this._queue);
 	}
 }
+
+export { PsshBox } from './isobmff/isobmff-misc';

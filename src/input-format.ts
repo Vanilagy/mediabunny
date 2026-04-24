@@ -9,6 +9,7 @@
 import { Demuxer } from './demuxer';
 import { Input } from './input';
 import { IsobmffDemuxer } from './isobmff/isobmff-demuxer';
+import type { PsshBox } from './isobmff/isobmff-misc';
 import {
 	EBMLId,
 	MAX_HEADER_SIZE,
@@ -738,7 +739,15 @@ export type IsobmffInputFormatOptions = {
 	resolveKeyId?: (options: {
 		/** The key ID that is to be resolved to a key. This is a 32-character lowercase hexadecimal string. */
 		keyId: string;
+		/**
+		 * Protection System Specific Header (pssh) boxes that apply to this key ID. Can be used to obtain a
+		 * description key from a DRM license server.
+		 */
+		psshBoxes: PsshBox[];
 	}) => MaybePromise<Uint8Array | string>;
+
+	/** @internal */
+	_suppressPsshParsing?: boolean;
 };
 
 export const validateInputFormatOptions = (options: InputFormatOptions, prefix: string) => {

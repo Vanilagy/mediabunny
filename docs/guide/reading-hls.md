@@ -352,7 +352,10 @@ using input = new Input({
 	formats: ALL_FORMATS,
 	formatOptions: {
 		isobmff: {
-			resolveKeyId: ({ keyId }) => {
+			resolveKeyId: ({ keyId, psshBoxes }) => {
+				// psshBoxes contains Protection System Specific Header boxes
+				// relevant to this key ID. They can be used to obtain a
+				// decryption key from a DRM license server.
 				const key = keyMap.get(keyId);
 				if (!key) {
 					throw new Error('Unknown key ID.');

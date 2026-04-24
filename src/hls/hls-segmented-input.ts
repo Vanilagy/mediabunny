@@ -9,7 +9,16 @@
 import { AES_128_BLOCK_SIZE, createAes128CbcDecryptStream } from '../aes';
 import { ENCRYPTION_KEY_CACHE_GROUP, Input } from '../input';
 import { Segment, SegmentedInput, SegmentedInputTrackDeclaration, SegmentRetrievalOptions } from '../segmented-input';
-import { toDataView, joinPaths, last, assert, binarySearchLessOrEqual, arrayArgmin, wait } from '../misc';
+import {
+	toDataView,
+	joinPaths,
+	last,
+	assert,
+	binarySearchLessOrEqual,
+	arrayArgmin,
+	wait,
+	base64ToBytes,
+} from '../misc';
 import { readAllLines, readBytes, Reader } from '../reader';
 import { CustomPathedSource, ReadableStreamSource, SourceRef, SourceRequest } from '../source';
 import { HlsDemuxer } from './hls-demuxer';
@@ -27,9 +36,11 @@ import {
 	TAG_PROGRAM_DATE_TIME,
 	TAG_TARGETDURATION,
 } from './hls-misc';
-import { HlsInputFormat } from '../input-format';
+import { HlsInputFormat, type InputFormatOptions } from '../input-format';
+import { parsePsshBoxContents, psshBoxesAreEqual, type PsshBox } from '../isobmff/isobmff-misc';
 
 const IV_STRING_REGEX = /^0[xX][0-9a-fA-F]+$/;
+const BASE64_DATA_URI_REGEX = /^data:.*;base64,/i;
 
 export type HlsSegment = Segment & {
 	sequenceNumber: number | null;
@@ -47,6 +58,7 @@ export type HlsEncryptionInfo = {
 	keyFormat: string;
 } | {
 	method: 'SAMPLE-AES' | 'SAMPLE-AES-CTR';
+	psshBox: PsshBox | null;
 };
 
 export type HlsSegmentLocation = {
@@ -368,6 +380,11 @@ export class HlsSegmentedInput extends SegmentedInput {
 						keyFormat,
 					};
 				} else if (method === 'SAMPLE-AES' || method === 'SAMPLE-AES-CTR') {
+					const uri = attributes.get('uri');
+					if (!uri) {
+						throw new Error(`Invalid #EXT-X-KEY: ${method} requires a URI attribute.`);
+					}
+
 					const keyFormat = attributes.get('keyformat') ?? 'identity';
 					if (keyFormat === 'identity') {
 						throw new Error(
@@ -376,8 +393,26 @@ export class HlsSegmentedInput extends SegmentedInput {
 						);
 					}
 
+					let psshBox: PsshBox | null = null;
+					if (BASE64_DATA_URI_REGEX.test(uri)) {
+						const commaIndex = uri.indexOf(',');
+						const bytes = base64ToBytes(uri.slice(commaIndex + 1));
+
+						if (
+							bytes.length >= 8
+							&& bytes[4] === 0x70
+							&& bytes[5] === 0x73
+							&& bytes[6] === 0x73
+							&& bytes[7] === 0x68
+						) {
+							const size = toDataView(bytes).getUint32(0);
+							psshBox = parsePsshBoxContents(bytes.subarray(8, Math.min(size, bytes.length)));
+						}
+					}
+
 					currentKey = {
 						method,
+						psshBox,
 					};
 				} else {
 					throw new Error(
@@ -562,6 +597,38 @@ export class HlsSegmentedInput extends SegmentedInput {
 			initInput = this.getInputForSegment((hlsSegment.initSegment ?? hlsSegment.firstSegment)!);
 		}
 
+		const formatOptions: InputFormatOptions = {
+			...this.input._formatOptions,
+			isobmff: {
+				...this.input._formatOptions.isobmff,
+				// Intercept calls to resolveKeyId to inject our psshBox knowledge into it
+				resolveKeyId: this.input._formatOptions.isobmff?.resolveKeyId && ((options) => {
+					if (
+						!hlsSegment.encryption
+						|| !(
+							hlsSegment.encryption.method === 'SAMPLE-AES'
+							|| hlsSegment.encryption.method === 'SAMPLE-AES-CTR'
+						)
+						|| !hlsSegment.encryption.psshBox
+					) {
+						return this.input._formatOptions.isobmff!.resolveKeyId!(options);
+					}
+
+					let psshBoxes = options.psshBoxes;
+					const { psshBox } = hlsSegment.encryption;
+
+					if (
+						(psshBox.keyIds === null || psshBox.keyIds.includes(options.keyId))
+						&& !psshBoxes.some(x => psshBoxesAreEqual(x, psshBox))
+					) {
+						psshBoxes = [...psshBoxes, psshBox];
+					}
+
+					return this.input._formatOptions.isobmff!.resolveKeyId!({ ...options, psshBoxes });
+				}),
+			},
+		};
+
 		const input = new Input({
 			source: new CustomPathedSource(
 				hlsSegment.location.path,
@@ -638,7 +705,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 			// Do not allow recursive HLS. Cool on paper, but allows for nasty infinite-depth request trees.
 			formats: this.input._formats.filter(x => !(x instanceof HlsInputFormat)),
 			initInput: initInput ?? undefined,
-			formatOptions: this.input._formatOptions,
+			formatOptions,
 		});
 
 		input._onFormatDetermined = (format) => {

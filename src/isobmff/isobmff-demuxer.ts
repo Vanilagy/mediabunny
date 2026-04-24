@@ -64,7 +64,7 @@ import {
 	HEX_STRING_REGEX,
 } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
-import { buildIsobmffMimeType } from './isobmff-misc';
+import { buildIsobmffMimeType, parsePsshBoxContents, psshBoxesAreEqual, PsshBox } from './isobmff-misc';
 import {
 	MAX_BOX_HEADER_SIZE,
 	MIN_BOX_HEADER_SIZE,
@@ -254,6 +254,7 @@ type Fragment = {
 	moofSize: number;
 	implicitBaseDataOffset: number;
 	trackData: Map<InternalTrack['id'], FragmentTrackData>;
+	psshBoxes: PsshBox[];
 };
 
 type TrackEncryptionInfo = {
@@ -301,6 +302,7 @@ export class IsobmffDemuxer extends Demuxer {
 
 	isFragmented = false;
 	fragmentTrackDefaults: FragmentTrackDefaults[] = [];
+	psshBoxes: PsshBox[] = [];
 	currentFragment: Fragment | null = null;
 	/**
 	 * Caches the last fragment that was read. Based on the assumption that there will be multiple reads to the
@@ -405,6 +407,7 @@ export class IsobmffDemuxer extends Demuxer {
 					this.metadataTags = initDemuxer.metadataTags;
 					this.isFragmented = true;
 					this.fragmentTrackDefaults = initDemuxer.fragmentTrackDefaults;
+					this.psshBoxes = initDemuxer.psshBoxes;
 
 					// Create tracks from the init input's tracks
 					for (const foreignTrack of initDemuxer.tracks) {
@@ -2041,6 +2044,7 @@ export class IsobmffDemuxer extends Demuxer {
 					moofSize: boxInfo.totalSize,
 					implicitBaseDataOffset: startPos,
 					trackData: new Map(),
+					psshBoxes: [],
 				};
 
 				this.readContiguousBoxes(slice.slice(contentStartPos, boxInfo.contentSize));
@@ -2105,6 +2109,20 @@ export class IsobmffDemuxer extends Demuxer {
 
 					this.currentTrack.currentFragmentState = null;
 					this.currentTrack = null;
+				}
+			}; break;
+
+			case 'pssh': {
+				if (this.input._formatOptions.isobmff?._suppressPsshParsing) {
+					break;
+				}
+
+				const psshBox = parsePsshBoxContents(readBytes(slice, boxInfo.contentSize));
+
+				if (this.currentFragment) {
+					this.currentFragment.psshBoxes.push(psshBox);
+				} else if (!this.currentTrack) {
+					this.psshBoxes.push(psshBox);
 				}
 			}; break;
 
@@ -3063,7 +3081,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 				);
 
 				if (sampleIndex < entries.length) {
-					data = await decryptSample(this.internalTrack, entries[sampleIndex]!, data);
+					data = await decryptSample(this.internalTrack, entries[sampleIndex]!, data, null);
 				}
 			}
 		}
@@ -3110,7 +3128,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			data = readBytes(slice, fragmentSample.byteSize);
 
 			if (fragmentSample.encryption) {
-				data = await decryptSample(this.internalTrack, fragmentSample.encryption, data);
+				data = await decryptSample(this.internalTrack, fragmentSample.encryption, data, fragment);
 			}
 		}
 
@@ -3666,6 +3684,7 @@ const decryptSample = async (
 	track: InternalTrack,
 	sampleEncryption: SampleEncryptionInfo,
 	data: Uint8Array,
+	fragment: Fragment | null,
 ): Promise<Uint8Array> => {
 	assert(track.encryptionInfo);
 	const encryptionInfo = track.encryptionInfo;
@@ -3686,7 +3705,25 @@ const decryptSample = async (
 		}
 
 		const promise = (async () => {
-			const keyResult = await track.demuxer.input._formatOptions.isobmff!.resolveKeyId!({ keyId });
+			let psshBoxes = track.demuxer.psshBoxes;
+			if (fragment) {
+				psshBoxes = [
+					...psshBoxes,
+					...fragment.psshBoxes,
+				].filter(x => x.keyIds === null || x.keyIds.includes(keyId));
+
+				// Filter out duplicates
+				for (let i = 0; i < psshBoxes.length - 1; i++) {
+					for (let j = i + 1; j < psshBoxes.length; j++) {
+						if (psshBoxesAreEqual(psshBoxes[i]!, psshBoxes[j]!)) {
+							psshBoxes.splice(j, 1);
+							j--;
+						}
+					}
+				}
+			}
+
+			const keyResult = await track.demuxer.input._formatOptions.isobmff!.resolveKeyId!({ keyId, psshBoxes });
 
 			if (!(
 				(typeof keyResult === 'string' && keyResult.length === 32 && HEX_STRING_REGEX.test(keyResult))
