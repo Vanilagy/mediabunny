@@ -563,13 +563,15 @@ export class Conversion {
 	_canceled = false;
 
 	/**
-	 * A callback that is fired whenever the conversion progresses. Returns a number between 0 and 1, indicating the
-	 * completion of the conversion. Note that a progress of 1 doesn't necessarily mean the conversion is complete;
-	 * the conversion is complete once `execute()` resolves.
+	 * A callback that is fired whenever the conversion progresses. Gets passed as first argument a number between
+	 * 0 and 1, indicating the completion of the conversion. Note that a progress of 1 doesn't necessarily mean the
+	 * conversion is complete; the conversion is complete once `execute()` resolves.
+	 *
+	 * As second argument, this callback receives the input time in seconds that has been processed.
 	 *
 	 * In order for progress to be computed, this property must be set before `execute` is called.
 	 */
-	onProgress?: (progress: number) => unknown = undefined;
+	onProgress?: (progress: number, processedTime: number) => unknown = undefined;
 	/** @internal */
 	_computeProgress = false;
 	/** @internal */
@@ -929,7 +931,11 @@ export class Conversion {
 			}
 
 			if (!this.isValid) {
-				warnElements.push('\n\n' + this._getInvalidityExplanation().join(''));
+				if (warnElements.length > 0) {
+					warnElements.push('\n\n');
+				}
+
+				warnElements.push(this._getInvalidityExplanation().join(''));
 			}
 
 			if (warnElements.length > 0) {
@@ -949,7 +955,7 @@ export class Conversion {
 		} else {
 			const encodabilityIsTheProblem = this.discardedTracks.every(x =>
 				x.reason === 'discarded_by_user' || x.reason === 'no_encodable_target_codec',
-			);
+			) && this.discardedTracks.some(x => x.reason === 'no_encodable_target_codec');
 
 			elements.push(
 				'Due to discarded tracks, this conversion cannot be executed.',
@@ -1054,7 +1060,7 @@ export class Conversion {
 				this._maxTimestamps.set(id, 0);
 			}
 
-			this.onProgress?.(0);
+			this.onProgress?.(0, 0);
 		}
 
 		await this.output.start();
@@ -1078,7 +1084,8 @@ export class Conversion {
 		await this.output.finalize();
 
 		if (this._computeProgress) {
-			this.onProgress?.(1);
+			const minTimestamp = Math.min(...this._maxTimestamps.values());
+			this.onProgress?.(1, minTimestamp);
 		}
 	}
 
@@ -1547,21 +1554,23 @@ export class Conversion {
 			});
 		}
 
-		for (const finalSample of finalSamples) {
-			if (this._canceled) {
-				break;
+		try {
+			for (const finalSample of finalSamples) {
+				if (this._canceled) {
+					break;
+				}
+
+				await source.add(finalSample);
+
+				if (this._synchronizer.shouldWait(outputTrackId, finalSample.timestamp)) {
+					await this._synchronizer.wait(finalSample.timestamp);
+				}
 			}
-
-			await source.add(finalSample);
-
-			if (this._synchronizer.shouldWait(outputTrackId, finalSample.timestamp)) {
-				await this._synchronizer.wait(finalSample.timestamp);
-			}
-		}
-
-		for (const finalSample of finalSamples) {
-			if (finalSample !== sample) {
-				finalSample.close();
+		} finally {
+			for (const finalSample of finalSamples) {
+				if (finalSample !== sample) {
+					finalSample.close();
+				}
 			}
 		}
 	}
@@ -1801,21 +1810,23 @@ export class Conversion {
 			finalSamples = processed;
 		}
 
-		for (const finalSample of finalSamples) {
-			if (this._canceled) {
-				break;
+		try {
+			for (const finalSample of finalSamples) {
+				if (this._canceled) {
+					break;
+				}
+
+				await source.add(finalSample);
+
+				if (this._synchronizer.shouldWait(outputTrackId, finalSample.timestamp)) {
+					await this._synchronizer.wait(finalSample.timestamp);
+				}
 			}
-
-			await source.add(finalSample);
-
-			if (this._synchronizer.shouldWait(outputTrackId, finalSample.timestamp)) {
-				await this._synchronizer.wait(finalSample.timestamp);
-			}
-		}
-
-		for (const finalSample of finalSamples) {
-			if (finalSample !== sample) {
-				finalSample.close();
+		} finally {
+			for (const finalSample of finalSamples) {
+				if (finalSample !== sample) {
+					finalSample.close();
+				}
 			}
 		}
 	}
@@ -1890,7 +1901,7 @@ export class Conversion {
 
 		if (newProgress !== this._lastProgress) {
 			this._lastProgress = newProgress;
-			this.onProgress?.(newProgress);
+			this.onProgress?.(newProgress, minTimestamp);
 		}
 	}
 }
