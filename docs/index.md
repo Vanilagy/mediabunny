@@ -21,6 +21,9 @@ hero:
       text: Examples
       link: /examples
     - theme: alt
+      text: Blog
+      link: /blog
+    - theme: alt
       text: Sponsors
       link: "#sponsors"
     - theme: alt

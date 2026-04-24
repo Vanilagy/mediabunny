@@ -553,16 +553,15 @@ const output = new Output(...);
 const conversion = await Conversion.init({
 	input,
 	output,
-	video: track => ({
-		width: 480,
+	tracks: 'primary', // Keep only the first track of each type
+	video: {
+		width: 480, // Resize to 480p
 		bitrate: QUALITY_LOW,
-		discard: track.number > 1, // Keep only the first video track
-	}),
-	audio: track => ({
-		numberOfChannels: 1,
+	},
+	audio: {
+		numberOfChannels: 1, // Resample to mono
 		bitrate: QUALITY_LOW,
-		discard: track.number > 1, // Keep only the first audio track
-	}),
+	},
 	trim: {
 		// Let's keep only the first 60 seconds
 		start: 0,
