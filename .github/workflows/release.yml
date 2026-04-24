@@ -35,7 +35,7 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Update npm
-        run: npm install -g npm@latest
+        run: npm install -g npm@11.11.0
 
       - name: Get package.json version
         id: package-json-version
