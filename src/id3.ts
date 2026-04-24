@@ -790,13 +790,13 @@ export class Id3V2Writer {
 					for (const description in value) {
 						const frameValue = value[description]!;
 						const useIso88591 = isIso88591Compatible(description) && isIso88591Compatible(frameValue);
-						const descriptionDataLength = useIso88591
-							? description.length
-							: textEncoder.encode(description).byteLength;
 
-						const valueData = useIso88591 ? null : textEncoder.encode(frameValue);
-						const valueDataLength = useIso88591 ? frameValue.length : valueData!.byteLength;
-						const frameSize = 1 + descriptionDataLength + 1 + valueDataLength;
+						const encodedDescription = useIso88591 ? null : textEncoder.encode(description);
+						const encodedValue = useIso88591 ? null : textEncoder.encode(frameValue);
+						const descriptionDataLength = useIso88591 ? description.length : encodedDescription!.byteLength;
+						const valueDataLength = useIso88591 ? frameValue.length : encodedValue!.byteLength;
+
+						const frameSize = 1 + descriptionDataLength + 1 + valueDataLength + 1;
 
 						this.writeAscii('TXXX');
 						this.writeSynchsafeU32(frameSize);
@@ -805,12 +805,12 @@ export class Id3V2Writer {
 						this.writeU8(useIso88591 ? Id3V2TextEncoding.ISO_8859_1 : Id3V2TextEncoding.UTF_8);
 						if (useIso88591) {
 							this.writeIsoString(description);
-							for (let i = 0; i < frameValue.length; i++) {
-								this.writeU8(frameValue.charCodeAt(i));
-							}
+							this.writeIsoString(frameValue);
 						} else {
-							this.writeUtf8String(description);
-							this.writer.write(valueData!);
+							this.writer.write(encodedDescription!);
+							this.writeU8(0x00);
+							this.writer.write(encodedValue!);
+							this.writeU8(0x00);
 						}
 					}
 					continue;
