@@ -338,6 +338,12 @@ test('Read and write metadata, MP3', async () => {
 		...songMetadata,
 		raw: {
 			TXXY: 'ID3v2 goated',
+			TXXZ: '鱼',
+			TXXX: {
+				foo: 'bar',
+				baz: 'qux',
+				你: '好',
+			},
 		},
 	});
 
@@ -377,6 +383,12 @@ test('Read and write metadata, MP3', async () => {
 	expect(readTags.raw!['TIT2']).toBe(songMetadata.title);
 	expect(readTags.raw!['APIC']).instanceOf(Uint8Array);
 	expect(readTags.raw!['TXXY']).toBe('ID3v2 goated');
+	expect(readTags.raw!['TXXZ']).toBe('鱼');
+	expect(readTags.raw!['TXXX']).toEqual({
+		foo: 'bar',
+		baz: 'qux',
+		你: '好',
+	});
 });
 
 test('Read and write metadata, Ogg', async () => {
