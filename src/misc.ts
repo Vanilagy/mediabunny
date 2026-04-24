@@ -1309,3 +1309,10 @@ export class ConcurrentRunner {
 		await Promise.all(this._queue);
 	}
 }
+
+export const isRecordStringString = (value: unknown): value is Record<string, string> => {
+	return value !== null
+		&& typeof value === 'object'
+		&& Object.getPrototypeOf(value) === Object.prototype
+		&& Object.values(value).every(x => typeof x === 'string');
+};

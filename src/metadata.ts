@@ -6,6 +6,8 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { isRecordStringString } from './misc';
+
 /**
  * Represents descriptive (non-technical) metadata about a media file, such as title, author, date, cover art, or other
  * attached files. Common tags are normalized by Mediabunny into a uniform format, while the `raw` field can be used to
@@ -69,8 +71,9 @@ export type MetadataTags = {
 	 * - WebM/Matroska: `SimpleTag` elements whose target is 50 (MOVIE), either containing string or `Uint8Array`
 	 * values. Additionally, all attached files (such as font files) are included here, where the key corresponds to
 	 * the FileUID and the value is an {@link AttachedFile}.
-	 * - MP3: The ID3v2 tags, or a single `'TAG'` key with the contents of the ID3v1 tag.
-	 * - ADTS: The ID3v2 tags.
+	 * - MP3: The ID3v2 tags, or a single `'TAG'` key with the contents of the ID3v1 tag. The ID3v2 `'TXXX'`
+	 * user-defined text frames are exposed as a `Record<string, string>`.
+	 * - ADTS: The ID3v2 tags, just like in MP3.
 	 * - Ogg: The key-value string pairs from the Vorbis-style comment header (see RFC 7845, Section 5.2).
 	 * Additionally, the `'vendor'` key refers to the vendor string within this header.
 	 * - WAVE: The individual metadata chunks within the RIFF INFO chunk. Values are always ISO 8859-1 strings.
@@ -78,7 +81,7 @@ export type MetadataTags = {
 	 * Additionally, the `'vendor'` key refers to the vendor string within this header.
 	 * - MPEG-TS: Not supported.
 	*/
-	raw?: Record<string, string | Uint8Array | RichImageData | AttachedFile | null>;
+	raw?: Record<string, string | Uint8Array | RichImageData | AttachedFile | Record<string, string> | null>;
 };
 
 /**
@@ -236,9 +239,11 @@ export const validateMetadataTags = (tags: MetadataTags) => {
 				&& !(value instanceof Uint8Array)
 				&& !(value instanceof RichImageData)
 				&& !(value instanceof AttachedFile)
+				&& !isRecordStringString(value)
 			) {
 				throw new TypeError(
-					'Each value in tags.raw must be a string, Uint8Array, RichImageData, AttachedFile, or null.',
+					'Each value in tags.raw must be a string, Uint8Array, RichImageData, AttachedFile, '
+					+ 'Record<string, string>, or null.',
 				);
 			}
 		}
