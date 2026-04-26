@@ -520,6 +520,16 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 	}
 
 	/**
+	 * Returns parsed `sidx` (Segment Index) boxes from the file, if any. Multiple boxes are valid (typically
+	 * one per track, distinguished by their `referenceID`). Returns an empty array for formats without a
+	 * `sidx` equivalent.
+	 */
+	async getSegmentIndex() {
+		const demuxer = await this._getDemuxer();
+		return demuxer.getSegmentIndex();
+	}
+
+	/**
 	 * Disposes this input and frees connected resources. When an input is disposed, ongoing read operations will be
 	 * canceled, all future read operations will fail, any open decoders will be closed, and all ongoing media sink
 	 * operations will be canceled. Disallowed and canceled operations will throw an {@link InputDisposedError}.

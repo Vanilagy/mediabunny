@@ -8,6 +8,7 @@
 
 import { Input } from './input';
 import { InputTrackBacking } from './input-track';
+import { SidxBox } from './isobmff/isobmff-misc';
 import { MetadataTags } from './metadata';
 
 /**
@@ -36,6 +37,10 @@ export abstract class Demuxer {
 	abstract getTrackBackings(): Promise<InputTrackBacking[]>;
 	abstract getMimeType(): Promise<string>;
 	abstract getMetadataTags(): Promise<MetadataTags>;
+
+	async getSegmentIndex(): Promise<SidxBox[]> {
+		return [];
+	}
 
 	dispose() {
 		// Can be overridden

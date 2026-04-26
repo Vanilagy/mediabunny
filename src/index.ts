@@ -151,6 +151,8 @@ export {
 } from './misc';
 export {
 	PsshBox,
+	SidxBox,
+	SidxReference,
 } from './isobmff/isobmff-misc';
 export {
 	Rational,
