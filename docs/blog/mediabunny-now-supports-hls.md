@@ -207,6 +207,7 @@ const audioSource = new MediaStreamAudioTrackSource(micTrack, {
 	bitrate: QUALITY_HIGH,
 }, { timestampBase: 'unix' });
 
+// The "unix" stuff ensures that #EXT-X-PROGRAM-DATE-TIME gets generated
 output.addVideoTrack(videoSourceFull, { isRelativeToUnixEpoch: true });
 output.addVideoTrack(videoSource480p, { isRelativeToUnixEpoch: true });
 output.addAudioTrack(audioSource, { isRelativeToUnixEpoch: true });
