@@ -85,9 +85,8 @@ test('CMAF with video track', async () => {
 	expect(tracks[0]!.isVideoTrack()).toBe(true);
 });
 
-test('Input.getSegmentIndex parses sidx from a CMAF segment file', async () => {
+async function buildCmafFile(numFrames = 60) {
 	const initTarget = new BufferTarget();
-
 	const output = new Output({
 		format: new CmafOutputFormat(),
 		target: new BufferTarget(),
@@ -103,35 +102,50 @@ test('Input.getSegmentIndex parses sidx from a CMAF segment file', async () => {
 	output.addVideoTrack(videoSource);
 
 	await output.start();
-
 	const fps = 30;
 	const frameDuration = 1 / fps;
-	for (let i = 0; i < fps * 2; i++) {
+	for (let i = 0; i < numFrames; i++) {
 		ctx.fillStyle = i % 2 === 0 ? '#ff0000' : '#00ff00';
 		ctx.fillRect(0, 0, canvas.width, canvas.height);
 		await videoSource.add(i * frameDuration, frameDuration);
 	}
-
 	await output.finalize();
 
+	return {
+		initBytes: new Uint8Array(initTarget.buffer!),
+		segmentBytes: new Uint8Array(output.target.buffer!),
+	};
+}
+
+test('Input.getSegmentIndex parses sidx from a CMAF segment file', async () => {
+	const numFrames = 60;
+	const fps = 30;
+	const expectedDuration = numFrames / fps;
+	const { initBytes, segmentBytes } = await buildCmafFile(numFrames);
+
 	using initInput = new Input({
-		source: new BufferSource(initTarget.buffer!),
+		source: new BufferSource(initBytes.buffer),
 		formats: ALL_FORMATS,
 	});
 	using segmentInput = new Input({
-		source: new BufferSource(output.target.buffer!),
+		source: new BufferSource(segmentBytes.buffer),
 		formats: ALL_FORMATS,
 		initInput,
 	});
+
+	const tracks = await segmentInput.getVideoTracks();
+	const videoTrack = tracks[0]!;
+	const trackId = videoTrack.id;
 
 	const sidxBoxes = await segmentInput.getSegmentIndex();
 	expect(sidxBoxes.length).toBeGreaterThan(0);
 
 	for (const sidx of sidxBoxes) {
-		expect(sidx.timescale).toBeGreaterThan(0);
 		expect(sidx.references.length).toBeGreaterThan(0);
 		expect(sidx.boxStart).toBeGreaterThanOrEqual(0);
 		expect(sidx.boxSize).toBeGreaterThan(0);
+		expect(sidx.referenceID).toBe(trackId);
+		expect(sidx.earliestPresentationTime).toBe(0);
 
 		for (const ref of sidx.references) {
 			expect(ref.referencedSize).toBeGreaterThan(0);
@@ -139,6 +153,53 @@ test('Input.getSegmentIndex parses sidx from a CMAF segment file', async () => {
 			expect(ref.referenceType === 0 || ref.referenceType === 1).toBe(true);
 			expect(ref.startsWithSAP === 0 || ref.startsWithSAP === 1).toBe(true);
 		}
+
+		const totalReferencedBytes = sidx.references.reduce((sum, r) => sum + r.referencedSize, 0);
+		const dataAfterIndex = segmentBytes.byteLength - sidx.boxStart - sidx.boxSize - sidx.firstOffset;
+		expect(totalReferencedBytes).toBe(dataAfterIndex);
+
+		const totalDurationSec = sidx.references.reduce((s, r) => s + r.subsegmentDuration, 0)
+			/ sidx.timescale;
+		expect(totalDurationSec).toBeCloseTo(expectedDuration, 1);
+	}
+});
+
+test('Input.getSegmentIndex parses sidx from a self-contained fragmented MP4', async () => {
+	const numFrames = 60;
+	const fps = 30;
+	const expectedDuration = numFrames / fps;
+	const { initBytes, segmentBytes } = await buildCmafFile(numFrames);
+	const combined = new Uint8Array(initBytes.byteLength + segmentBytes.byteLength);
+	combined.set(initBytes, 0);
+	combined.set(segmentBytes, initBytes.byteLength);
+
+	using input = new Input({
+		source: new BufferSource(combined.buffer),
+		formats: ALL_FORMATS,
+	});
+
+	const tracks = await input.getVideoTracks();
+	expect(tracks).toHaveLength(1);
+	const videoTrack = tracks[0]!;
+	const trackId = videoTrack.id;
+
+	const sidxBoxes = await input.getSegmentIndex();
+	expect(sidxBoxes.length).toBeGreaterThan(0);
+
+	for (const sidx of sidxBoxes) {
+		expect(sidx.references.length).toBeGreaterThan(0);
+		expect(sidx.referenceID).toBe(trackId);
+		expect(sidx.earliestPresentationTime).toBe(0);
+		expect(sidx.boxStart).toBeGreaterThan(initBytes.byteLength);
+		expect(sidx.boxStart + sidx.boxSize).toBeLessThanOrEqual(combined.byteLength);
+
+		const totalReferencedBytes = sidx.references.reduce((sum, r) => sum + r.referencedSize, 0);
+		const dataAfterIndex = combined.byteLength - sidx.boxStart - sidx.boxSize - sidx.firstOffset;
+		expect(totalReferencedBytes).toBe(dataAfterIndex);
+
+		const totalDurationSec = sidx.references.reduce((s, r) => s + r.subsegmentDuration, 0)
+			/ sidx.timescale;
+		expect(totalDurationSec).toBeCloseTo(expectedDuration, 1);
 	}
 });
 

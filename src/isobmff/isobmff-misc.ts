@@ -173,6 +173,14 @@ export const parseSidxBoxContents = (
 	const referenceCount = view.getUint16(pos);
 	pos += 2;
 
+	const requiredBytes = referenceCount * 12;
+	if (pos + requiredBytes > view.byteLength) {
+		throw new Error(
+			`Incomplete sidx reference table; ${referenceCount} references need ${requiredBytes} bytes,`
+			+ ` only ${view.byteLength - pos} available.`,
+		);
+	}
+
 	const references: SidxReference[] = [];
 	for (let i = 0; i < referenceCount; i++) {
 		const sizeWord = view.getUint32(pos);
