@@ -57,7 +57,7 @@ export class AttributeList {
 		}
 
 		if (key) {
-			this._attributes[key.toLowerCase()] = value;
+			this._attributes[key.trim().toLowerCase()] = value;
 		}
 	}
 
