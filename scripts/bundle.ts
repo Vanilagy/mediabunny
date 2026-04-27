@@ -30,6 +30,7 @@ const createVariants = async (
  */`,
 		},
 		legalComments: 'none',
+		platform: 'node',
 	};
 
 	const umdConfig: esbuild.BuildOptions = {
