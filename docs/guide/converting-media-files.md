@@ -500,3 +500,26 @@ const conversion = await Conversion.init({ input, output });
 conversion.utilizedTracks; // => InputTrack[]
 ```
 A track may appear multiple times in this list when [fan-out](#track-fan-out) produces multiple output tracks from it.
+
+## Converting live streams
+
+Live inputs, like HLS live streams, can also be used with the Conversion API. In this case, by default, the conversion will run until the live stream has ended.
+
+If you only want to convert a part of the live stream instead of waiting until it has ended, you can [trim](#trimming) the conversion. For example, here we're capturing the next 60 seconds of the live stream:
+```ts
+// Get the live edge
+const currentDuration = await input.getDurationFromMetadata(undefined, {
+	skipLiveWait: true,
+});
+
+const conversion = await Conversion.init({
+	input,
+	output,
+	trim: {
+		// Start at the current live edge
+		start: currentDuration,
+		// End at most 60 seconds later
+		end: currentDuration + 60,
+	},
+});
+```

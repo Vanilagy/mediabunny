@@ -21,12 +21,12 @@ let getEncoderFrameSize: (ctx: number) => number;
 let getEncoderExtradata: (ctx: number) => number;
 let getEncoderExtradataSize: (ctx: number) => number;
 let getEncodeInputPtr: (ctx: number, size: number) => number;
-let sendFrameFn: (ctx: number, pts: number) => number;
+let sendFrameFn: (ctx: number, pts: bigint) => number;
 let receivePacketFn: (ctx: number) => number;
 let flushEncoderStartFn: (ctx: number) => void;
 let resetEncoderFn: (ctx: number) => void;
 let getEncodedData: (ctx: number) => number;
-let getEncodedPts: (ctx: number) => number;
+let getEncodedPts: (ctx: number) => bigint;
 let getEncodedDuration: (ctx: number) => number;
 const ensureModule = async () => {
 	if (!module) {
@@ -43,12 +43,12 @@ const ensureModule = async () => {
 		getEncoderExtradata = module.cwrap('get_encoder_extradata', 'number', ['number']);
 		getEncoderExtradataSize = module.cwrap('get_encoder_extradata_size', 'number', ['number']);
 		getEncodeInputPtr = module.cwrap('get_encode_input_ptr', 'number', ['number', 'number']);
-		sendFrameFn = module.cwrap('send_frame', 'number', ['number', 'number']);
+		sendFrameFn = module.cwrap('send_frame', 'number', ['number', 'number']) as unknown as typeof sendFrameFn;
 		receivePacketFn = module.cwrap('receive_packet', 'number', ['number']);
 		flushEncoderStartFn = module.cwrap('flush_encoder_start', null, ['number']);
 		resetEncoderFn = module.cwrap('reset_encoder', null, ['number']);
 		getEncodedData = module.cwrap('get_encoded_data', 'number', ['number']);
-		getEncodedPts = module.cwrap('get_encoded_pts', 'number', ['number']);
+		getEncodedPts = module.cwrap('get_encoded_pts', 'number', ['number']) as unknown as typeof getEncodedPts;
 		getEncodedDuration = module.cwrap('get_encoded_duration', 'number', ['number']);
 	}
 };
@@ -81,7 +81,7 @@ const drainPackets = (ctx: number) => {
 	while ((size = receivePacketFn(ctx)) > 0) {
 		const ptr = getEncodedData(ctx);
 		const encodedData = module.HEAPU8.slice(ptr, ptr + size).buffer;
-		const pts = getEncodedPts(ctx);
+		const pts = Number(getEncodedPts(ctx));
 		const duration = getEncodedDuration(ctx);
 		packets.push({ encodedData, pts, duration });
 	}
@@ -98,7 +98,7 @@ const encode = (ctx: number, audioData: ArrayBuffer, timestamp: number) => {
 	}
 	module.HEAPU8.set(audioBytes, inputPtr);
 
-	const ret = sendFrameFn(ctx, timestamp);
+	const ret = sendFrameFn(ctx, BigInt(timestamp));
 	if (ret < 0) {
 		throw new Error(`Encode failed with error code ${ret}.`);
 	}

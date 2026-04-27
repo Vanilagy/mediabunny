@@ -14,6 +14,7 @@ import { AudioSampleSource } from '../../src/media-source.js';
 import { Mp4OutputFormat } from '../../src/output-format.js';
 import { AudioSample } from '../../src/sample.js';
 import { registerAc3Decoder, registerAc3Encoder } from '@mediabunny/ac3';
+import { assert } from '../../src/misc.js';
 
 const __dirname = new URL('.', import.meta.url).pathname;
 
@@ -328,4 +329,102 @@ test('E-AC-3 encoding', async () => {
 	expect(packetCount).toBeGreaterThan(0);
 
 	expect(await track.computeDuration()).toBeCloseTo(2, 1);
+});
+
+test('AC-3 with huge timestamps', async () => {
+	registerAc3Decoder();
+	registerAc3Encoder();
+
+	const sampleRate = 48000;
+	const channels = 2;
+	const timestamp = 1e9;
+	const durationSeconds = 2;
+	const data = createSineWave(sampleRate, channels, durationSeconds);
+
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart: 'fragmented' }),
+		target: new BufferTarget(),
+	});
+
+	const audioSource = new AudioSampleSource({ codec: 'ac3', bitrate: 192000 });
+	output.addAudioTrack(audioSource);
+
+	await output.start();
+	await audioSource.add(new AudioSample({
+		data,
+		format: 'f32',
+		numberOfChannels: channels,
+		sampleRate,
+		timestamp,
+	}));
+	audioSource.close();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const track = (await input.getPrimaryAudioTrack())!;
+	const packetSink = new EncodedPacketSink(track);
+	const firstPacket = await packetSink.getFirstPacket();
+	assert(firstPacket);
+
+	expect(firstPacket.timestamp).toBe(timestamp);
+
+	const sampleSink = new AudioSampleSink(track);
+	const iterator = sampleSink.samples(timestamp);
+	const firstSample = (await iterator.next()).value;
+	assert(firstSample);
+
+	expect(firstSample.timestamp).toBe(timestamp);
+});
+
+test('E-AC-3 with huge timestamps', async () => {
+	registerAc3Decoder();
+	registerAc3Encoder();
+
+	const sampleRate = 48000;
+	const channels = 2;
+	const timestamp = 1e9;
+	const durationSeconds = 2;
+	const data = createSineWave(sampleRate, channels, durationSeconds);
+
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart: 'fragmented' }),
+		target: new BufferTarget(),
+	});
+
+	const audioSource = new AudioSampleSource({ codec: 'eac3', bitrate: 192000 });
+	output.addAudioTrack(audioSource);
+
+	await output.start();
+	await audioSource.add(new AudioSample({
+		data,
+		format: 'f32',
+		numberOfChannels: channels,
+		sampleRate,
+		timestamp,
+	}));
+	audioSource.close();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const track = (await input.getPrimaryAudioTrack())!;
+	const packetSink = new EncodedPacketSink(track);
+	const firstPacket = await packetSink.getFirstPacket();
+	assert(firstPacket);
+
+	expect(firstPacket.timestamp).toBe(timestamp);
+
+	const sampleSink = new AudioSampleSink(track);
+	const iterator = sampleSink.samples(timestamp);
+	const firstSample = (await iterator.next()).value;
+	assert(firstSample);
+
+	expect(firstSample.timestamp).toBe(timestamp);
 });
