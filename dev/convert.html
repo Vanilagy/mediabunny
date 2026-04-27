@@ -23,9 +23,7 @@
 			chunked: true,
 			chunkSize: 2**20
 		});
-		const outputFormat = new Mediabunny.HlsOutputFormat({
-			segmentFormat: new Mediabunny.MpegTsOutputFormat(),
-		});
+		const outputFormat = new Mediabunny.WavOutputFormat();
 
 		const p = document.createElement('p');
 		p.textContent = 'Capturing...';
@@ -52,17 +50,16 @@
 
 		const output = new Mediabunny.Output({
 			format: outputFormat,
-			target: new Mediabunny.PathedTarget('master.m3u8', ({ path }) => new Mediabunny.BufferTarget()),
+			target,
 		});
 
 		let input;
 		const tracks = [];
 		let start = 0;
 
-		if (false) {
+		if (true) {
 			input = new Mediabunny.Input({
-				entryPath: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
-				source: ({ path }) => new Mediabunny.UrlSource(path),
+				source: new Mediabunny.UrlSource('https://stream.mux.com/v69RSHhFelSm4701snP22dYz2jICy4E4FUyk02rW4gxRM.m3u8'),
 				formats: Mediabunny.ALL_FORMATS,
 			});
 
@@ -88,15 +85,14 @@
 			});
 		}
 
+		const primaryTrack = await input.getPrimaryAudioTrack();
+		const startTime = await primaryTrack.getFirstTimestamp();
+
 		let ctx = null;
 		let conversion = await Mediabunny.Conversion.init({
 			input,
 			output,
-			audio: (track, n) => [{
-				codec: 'aac',
-			}, {
-				codec: 'aac',
-			}],
+			audio: (track) => ({ discard: track.number !== primaryTrack.number }),
 			/*
 			video: {
 				discard: true,
@@ -121,13 +117,9 @@
 				bitrate: 320000
 			},
 			*/
-			video: [
-				{ height: 1080 },
-				{ height: 720 },
-				{ height: 480 },
-				{ height: 360 },
-				{ height: 240 },
-			],
+			video: {
+				discard: true,
+			},
 			tags: {} ?? {
 				title: 'Bigggy',
 				artist: 'Buck Bunny',
@@ -146,11 +138,8 @@
 				}
 			},
 			trim: {
-				//end: 5,
-				//start,
-				//end: start + 5,
-				////start: 0,
-				//end: 2
+				start: startTime,
+				end: startTime + 2,
 			},
 		});
 		//console.log(conversion);
