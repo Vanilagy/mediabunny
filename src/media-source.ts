@@ -1332,7 +1332,7 @@ export class CanvasSource extends VideoSource {
 }
 
 /**
- * Options for MediaStreamVideoTrackSource.
+ * Options for {@link MediaStreamVideoTrackSource}.
  * @group Media sources
  * @public
  */
@@ -1344,6 +1344,21 @@ export type MediaStreamVideoTrackSourceOptions = {
 	 * lead to wildly irregular FPS.
 	 */
 	frameRate?: number | null;
+	/**
+	 * Controls the basis (zero point) for video frame timestamps.
+	 *
+	 * When set to `'synced-zero'`, timestamps will be relative to the first chunk of media from a `MediaStreamTrack`
+	 * added to the {@link Output}.
+	 *
+	 * When set to `'zero'`, timestamps will be relative to the first video frame emitted by this source.
+	 *
+	 * When set to `'unix'`, timestamps will be relative to the Unix epoch, so clearly associated with a distinct point
+	 * in time. Here, pausing via {@link MediaStreamVideoTrackSource.pause} will also create gaps in timestamps. Be sure
+	 * to pair this mode with {@link BaseTrackMetadata.isRelativeToUnixEpoch}.
+	 *
+	 * Defaults to `'synced-zero'`.
+	 */
+	timestampBase?: 'synced-zero' | 'zero' | 'unix';
 };
 
 /**
@@ -1411,6 +1426,16 @@ export class MediaStreamVideoTrackSource extends VideoSource {
 		}
 		if (options.frameRate != null && (typeof options.frameRate !== 'number' || options.frameRate <= 0)) {
 			throw new TypeError('options.frameRate, when provided, must be either a positive number or null.');
+		}
+		if (
+			options.timestampBase !== undefined
+			&& options.timestampBase !== 'synced-zero'
+			&& options.timestampBase !== 'zero'
+			&& options.timestampBase !== 'unix'
+		) {
+			throw new TypeError(
+				'options.timestampBase, when provided, must be one of \'synced-zero\', \'zero\', or \'unix\'.',
+			);
 		}
 
 		encodingConfig = {
@@ -1508,7 +1533,7 @@ export class MediaStreamVideoTrackSource extends VideoSource {
 			if (this._paused) {
 				const frameSeen = firstVideoFrameTimestamp !== null;
 				if (frameSeen) {
-					if (lastSampleTimestamp !== null) {
+					if (lastSampleTimestamp !== null && this._options.timestampBase !== 'unix') {
 						// In addition to dropping this frame, let's also keep track of the time we have lost due to the
 						// pause. Doing it like this instead of simply keeping track of the paused time is better since
 						// it retains the frame rate of the underlying source.
@@ -1527,14 +1552,23 @@ export class MediaStreamVideoTrackSource extends VideoSource {
 			if (firstVideoFrameTimestamp === null) {
 				firstVideoFrameTimestamp = currentTimestamp;
 
-				const muxer = this._connectedTrack!.output._muxer;
-				if (muxer.firstMediaStreamTimestamp === null) {
-					muxer.firstMediaStreamTimestamp = now / 1000;
-					this._timestampOffset = -firstVideoFrameTimestamp;
+				let target: number;
+				const timestampBase = this._options.timestampBase ?? 'synced-zero';
+				if (timestampBase === 'unix') {
+					target = Date.now() / 1000;
+				} else if (timestampBase === 'zero') {
+					target = 0;
 				} else {
-					this._timestampOffset = (now / 1000 - muxer.firstMediaStreamTimestamp)
-						- firstVideoFrameTimestamp;
+					const output = this._connectedTrack!.output;
+					if (output._firstMediaStreamTimestamp === null) {
+						output._firstMediaStreamTimestamp = now / 1000;
+						target = 0;
+					} else {
+						target = now / 1000 - output._firstMediaStreamTimestamp;
+					}
 				}
+
+				this._timestampOffset = target - firstVideoFrameTimestamp;
 			}
 
 			lastSampleTimestamp = currentTimestamp;
@@ -2406,6 +2440,29 @@ export class AudioBufferSource extends AudioSource {
 }
 
 /**
+ * Options for {@link MediaStreamAudioTrackSource}.
+ * @group Media sources
+ * @public
+ */
+export type MediaStreamAudioTrackSourceOptions = {
+	/**
+	 * Controls the basis (zero point) for audio sample timestamps.
+	 *
+	 * When set to `'synced-zero'`, timestamps will be relative to the first chunk of media from a `MediaStreamTrack`
+	 * added to the {@link Output}.
+	 *
+	 * When set to `'zero'`, timestamps will be relative to the first audio sample emitted by this source.
+	 *
+	 * When set to `'unix'`, timestamps will be relative to the Unix epoch, so clearly associated with a distinct point
+	 * in time. Here, pausing via {@link MediaStreamAudioTrackSource.pause} will also create gaps in timestamps. Be sure
+	 * to pair this mode with {@link BaseTrackMetadata.isRelativeToUnixEpoch}.
+	 *
+	 * Defaults to `'synced-zero'`.
+	 */
+	timestampBase?: 'synced-zero' | 'zero' | 'unix';
+};
+
+/**
  * Audio source that encodes the data of a
  * [`MediaStreamAudioTrack`](https://developer.mozilla.org/en-US/docs/Web/API/MediaStreamTrack) and pipes it into the
  * output. This is useful for capturing live or real-time audio such as microphones or audio from other media elements.
@@ -2415,6 +2472,8 @@ export class AudioBufferSource extends AudioSource {
  * @public
  */
 export class MediaStreamAudioTrackSource extends AudioSource {
+	/** @internal */
+	private _options: MediaStreamAudioTrackSourceOptions;
 	/** @internal */
 	private _encoder: AudioEncoderWrapper;
 	/** @internal */
@@ -2448,13 +2507,31 @@ export class MediaStreamAudioTrackSource extends AudioSource {
 	 * Creates a new {@link MediaStreamAudioTrackSource} from a `MediaStreamAudioTrack`, which will pull audio samples
 	 * from the stream in real time and encode them according to {@link AudioEncodingConfig}.
 	 */
-	constructor(track: MediaStreamAudioTrack, encodingConfig: AudioEncodingConfig) {
+	constructor(
+		track: MediaStreamAudioTrack,
+		encodingConfig: AudioEncodingConfig,
+		options: MediaStreamAudioTrackSourceOptions = {},
+	) {
 		if (!(track instanceof MediaStreamTrack) || track.kind !== 'audio') {
 			throw new TypeError('track must be an audio MediaStreamTrack.');
 		}
 		validateAudioEncodingConfig(encodingConfig);
+		if (typeof options !== 'object' || !options) {
+			throw new TypeError('options must be an object.');
+		}
+		if (
+			options.timestampBase !== undefined
+			&& options.timestampBase !== 'synced-zero'
+			&& options.timestampBase !== 'zero'
+			&& options.timestampBase !== 'unix'
+		) {
+			throw new TypeError(
+				'options.timestampBase, when provided, must be one of \'synced-zero\', \'zero\', or \'unix\'.',
+			);
+		}
 
 		super(encodingConfig.codec);
+		this._options = options;
 		this._encoder = new AudioEncoderWrapper(this, encodingConfig);
 		this._track = track;
 	}
@@ -2486,7 +2563,7 @@ export class MediaStreamAudioTrackSource extends AudioSource {
 			if (this._paused) {
 				const dataSeen = firstAudioDataTimestamp !== null;
 				if (dataSeen) {
-					if (lastSampleTimestamp !== null) {
+					if (lastSampleTimestamp !== null && this._options.timestampBase !== 'unix') {
 						// In addition to dropping this sample, let's also keep track of the time we have lost due to
 						// the pause. Doing it like this instead of simply keeping track of the paused time is better
 						// since it retains the sample rate of the underlying source.
@@ -2505,14 +2582,23 @@ export class MediaStreamAudioTrackSource extends AudioSource {
 			if (firstAudioDataTimestamp === null) {
 				firstAudioDataTimestamp = audioSample.timestamp;
 
-				const muxer = this._connectedTrack!.output._muxer;
-				if (muxer.firstMediaStreamTimestamp === null) {
-					muxer.firstMediaStreamTimestamp = performance.now() / 1000;
-					this._timestampOffset = -firstAudioDataTimestamp;
+				let target: number;
+				const timestampBase = this._options.timestampBase ?? 'synced-zero';
+				if (timestampBase === 'unix') {
+					target = Date.now() / 1000;
+				} else if (timestampBase === 'zero') {
+					target = 0;
 				} else {
-					this._timestampOffset = (performance.now() / 1000 - muxer.firstMediaStreamTimestamp)
-						- firstAudioDataTimestamp;
+					const output = this._connectedTrack!.output;
+					if (output._firstMediaStreamTimestamp === null) {
+						output._firstMediaStreamTimestamp = performance.now() / 1000;
+						target = 0;
+					} else {
+						target = performance.now() / 1000 - output._firstMediaStreamTimestamp;
+					}
 				}
+
+				this._timestampOffset = target - firstAudioDataTimestamp;
 			}
 
 			lastSampleTimestamp = currentTimestamp;

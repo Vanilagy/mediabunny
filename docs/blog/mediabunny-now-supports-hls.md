@@ -194,22 +194,22 @@ const output = new Output({
 const videoSourceFull = new MediaStreamVideoTrackSource(displayTrack, {
 	codec: 'avc',
 	bitrate: QUALITY_HIGH,
-});
+}, { timestampBase: 'unix' });
 // 480p video
 const videoSource480p = new MediaStreamVideoTrackSource(displayTrack, {
 	codec: 'avc',
 	bitrate: QUALITY_MEDIUM,
 	transform: { height: 480 },
-});
+}, { timestampBase: 'unix' });
 // Audio
 const audioSource = new MediaStreamAudioTrackSource(micTrack, {
 	codec: 'aac',
 	bitrate: QUALITY_HIGH,
-});
+}, { timestampBase: 'unix' });
 
-output.addVideoTrack(videoSourceFull);
-output.addVideoTrack(videoSource480p);
-output.addAudioTrack(audioSource);
+output.addVideoTrack(videoSourceFull, { isRelativeToUnixEpoch: true });
+output.addVideoTrack(videoSource480p, { isRelativeToUnixEpoch: true });
+output.addAudioTrack(audioSource, { isRelativeToUnixEpoch: true });
 
 await output.start();
 

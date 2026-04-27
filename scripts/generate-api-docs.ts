@@ -338,11 +338,11 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 			if (linkText) {
 				// If custom link text is provided, always use it.
 				displayText = linkText.trim();
-			} else if (memberName) {
-				// If it's a member link, default the text to just the member name.
+			} else if (memberName && typeName === currentTypeName) {
+				// Member link on the current type: just the member name.
 				displayText = `\`${memberName}\``;
 			} else {
-				// Otherwise, it's a type link, so use the full type name.
+				// Type link, or member link on another type: use the full target.
 				displayText = `\`${cleanTarget}\``;
 			}
 

@@ -397,6 +397,13 @@ export class Output<
 	_rootTarget: T | null = null;
 	/** @internal */
 	_rootTargetPromise: Promise<T> | null = null;
+	/**
+	 * This field is used to synchronize multiple MediaStreamTracks. They use the same time coordinate system across
+	 * tracks, and to ensure correct audio-video sync, we must use the same offset for all of them. The reason an offset
+	 * is needed at all is because the timestamps typically don't start at zero.
+	 * @internal
+	 */
+	_firstMediaStreamTimestamp: number | null = null;
 
 	/**
 	 * The target to which the root file will be written. Throws when using {@link PathedTarget} with an async callback;
