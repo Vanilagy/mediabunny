@@ -3,8 +3,10 @@ import footnote from 'markdown-it-footnote';
 import tailwindcss from '@tailwindcss/vite';
 import llmstxt from 'vitepress-plugin-llms';
 import { HeadConfig } from 'vitepress';
-// @ts-expect-error This file gets generated once docs:generate is run
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore This file gets generated once docs:generate is run
 import apiRoutes from '../api/index.json';
+import m3u8Grammar from './m3u8-grammar.json' with { type: 'json' };
 
 const DESCRIPTION = 'A JavaScript library for reading, writing, and converting media files. Directly in the browser,'
 	+ ' and faster than anybunny else.';
@@ -38,9 +40,10 @@ export default withMermaid({
 		// https://vitepress.dev/reference/default-theme-config
 		nav: [
 			{ text: 'Guide', link: '/guide/introduction', activeMatch: '/guide' },
-			{ text: 'API', link: '/api/', activeMatch: '/api' },
+			{ text: 'API', link: '/api', activeMatch: '/api' },
 			{ text: 'LLMs', link: '/llms', activeMatch: '/llms' },
 			{ text: 'Examples', link: '/examples', activeMatch: '/examples' },
+			{ text: 'Blog', link: '/blog', activeMatch: '/blog' },
 			{ text: 'Sponsors', link: '/#sponsors', activeMatch: '/#sponsors' },
 			{ text: 'License', link: 'https://github.com/Vanilagy/mediabunny#license' },
 			{
@@ -88,6 +91,13 @@ export default withMermaid({
 					items: [
 						{ text: 'Packets & samples', link: '/guide/packets-and-samples' },
 						{ text: 'Supported formats & codecs', link: '/guide/supported-formats-and-codecs' },
+					],
+				},
+				{
+					text: 'HLS',
+					items: [
+						{ text: 'Reading HLS', link: '/guide/reading-hls' },
+						{ text: 'Writing HLS', link: '/guide/writing-hls' },
 					],
 				},
 				{
@@ -156,12 +166,15 @@ export default withMermaid({
 
 		footer: {
 			message: 'Released under the Mozilla Public License 2.0.',
-			copyright: 'Copyright © 2026-present Vanilagy',
+			copyright: `Copyright © ${new Date().getFullYear()}-present Vanilagy`,
 		},
 	},
 	markdown: {
 		math: true,
 		theme: { light: 'github-light', dark: 'github-dark-dimmed' },
+		shikiSetup: (shiki) => {
+			shiki.loadLanguageSync(m3u8Grammar);
+		},
 		config(md) {
 			md.use(footnote);
 		},

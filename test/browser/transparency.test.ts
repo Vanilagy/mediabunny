@@ -367,7 +367,7 @@ test.skip('Can reencode transparent video, keeping alpha', async () => {
 
 	const videoTrack = (await outputInput.getPrimaryVideoTrack())!;
 	expect(await videoTrack.canBeTransparent()).toBe(true);
-	expect(videoTrack.displayWidth).toBe(320);
+	expect(await videoTrack.getDisplayWidth()).toBe(320);
 
 	const sink = new VideoSampleSink(videoTrack);
 	using sample = (await sink.getSample(await videoTrack.getFirstTimestamp()))!;

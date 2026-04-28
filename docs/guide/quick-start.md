@@ -18,9 +18,9 @@ const allTracks = await input.getTracks(); // List of all tracks
 // Extract video metadata
 const videoTrack = await input.getPrimaryVideoTrack();
 if (videoTrack) {
-	videoTrack.displayWidth; // in pixels
-	videoTrack.displayHeight; // in pixels
-	videoTrack.rotation; // in degrees clockwise
+	await videoTrack.getDisplayWidth(); // in pixels
+	await videoTrack.getDisplayHeight(); // in pixels
+	await videoTrack.getRotation(); // in degrees clockwise
 
 	// Estimate frame rate (FPS)
 	const packetStats = await videoTrack.computePacketStats(100);
@@ -30,8 +30,8 @@ if (videoTrack) {
 // Extract audio metadata
 const audioTrack = await input.getPrimaryAudioTrack();
 if (audioTrack) {
-	audioTrack.numberOfChannels;
-	audioTrack.sampleRate; // in Hz
+	await audioTrack.getNumberOfChannels();
+	await audioTrack.getSampleRate(); // in Hz
 }
 
 // Extract metadata tags
@@ -308,17 +308,14 @@ await output.finalize();
 ```ts
 import {
 	Output,
-	StreamTarget,
-	StreamTargetChunk,
+	AppendOnlyStreamTarget,
 	Mp4OutputFormat,
 } from 'mediabunny';
 
-const { writable, readable } = new TransformStream<StreamTargetChunk, Uint8Array>({
-	transform: (chunk, controller) => controller.enqueue(chunk.data),
-});
+const { writable, readable } = new TransformStream<Uint8Array, Uint8Array>();
 
 const output = new Output({
-	target: new StreamTarget(writable),
+	target: new AppendOnlyStreamTarget(writable),
 	// We must use an append-only format here, such as fragmented MP4
 	format: new Mp4OutputFormat({ fastStart: 'fragmented' }),
 });
@@ -556,16 +553,15 @@ const output = new Output(...);
 const conversion = await Conversion.init({
 	input,
 	output,
-	video: track => ({
-		width: 480,
+	tracks: 'primary', // Keep only the first track of each type
+	video: {
+		width: 480, // Resize to 480p
 		bitrate: QUALITY_LOW,
-		discard: track.number > 1, // Keep only the first video track
-	}),
-	audio: track => ({
-		numberOfChannels: 1,
+	},
+	audio: {
+		numberOfChannels: 1, // Resample to mono
 		bitrate: QUALITY_LOW,
-		discard: track.number > 1, // Keep only the first audio track
-	}),
+	},
 	trim: {
 		// Let's keep only the first 60 seconds
 		start: 0,
@@ -626,3 +622,53 @@ const conversion = await Conversion.init({
 await conversion.execute();
 // Conversion is complete
 ```
+
+## Reading HLS playlists
+
+```ts
+import { Input, UrlSource, HLS_FORMATS, desc } from 'mediabunny';
+
+const input = new Input({
+	source: new UrlSource('https://example.com/master.m3u8'),
+	formats: HLS_FORMATS,
+});
+
+// Get all tracks
+const tracks = await input.getTracks();
+
+// Get video tracks by quality
+const sortedVideoTracks = await input.getVideoTracks({
+	sortBy: async track => desc(await track.getDisplayHeight()),
+});
+
+// Select a quality
+const bestVideoTrack = sortedVideoTracks[0]!;
+// Get a matching audio track
+const matchingAudioTrack = await bestVideoTrack.getPrimaryPairableAudioTrack();
+
+// HLS tracks can be read like any other Mediabunny InputTrack
+// ...
+
+const isLive = await bestVideoTrack.isLive();
+if (isLive) {
+	// Poll some data using the refresh interval, for example duration
+	let currentDuration: number | null = null;
+	const poll = async () => {
+		currentDuration = await bestVideoTrack.getDurationFromMetadata({
+			skipLiveWait: true,
+		});
+
+		const refreshInterval = await bestVideoTrack.getLiveRefreshInterval();
+		if (refreshInterval === null) {
+			return; // No longer live
+		}
+
+		setTimeout(poll, 1000 * refreshInterval);
+	};
+	await poll();
+}
+```
+
+::: info
+See [Reading HLS](./reading-hls) for an in-depth guide.
+:::

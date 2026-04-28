@@ -92,13 +92,13 @@ A progress of `1` doesn't indicate the conversion has finished; the conversion i
 Tracking conversion progress can slightly affect performance as it requires knowledge of the input file's total duration. This is usually negligible but should be avoided when using append-only input sources such as [`ReadableStreamSource`](./reading-media-files#readablestreamsource).
 :::
 
-If you want to monitor the output size of the conversion (in bytes), simply use the `onwrite` callback on your `Target`:
+If you want to monitor the output size of the conversion (in bytes), simply use the `write` event on your `Target`:
 ```ts
 let currentFileSize = 0;
 
-output.target.onwrite = (start, end) => {
+const stopListening = output.target.on('write', ({ start, end }) => {
 	currentFileSize = Math.max(currentFileSize, end);
-};
+});
 ```
 
 ### Canceling a conversion
@@ -134,6 +134,7 @@ type ConversionVideoOptions = {
 	>;
 	processedWidth?: number;
 	processedHeight?: number;
+	group?: OutputTrackGroup | OutputTrackGroup[];
 };
 
 type MaybePromise<T> = T | Promise<T>;
@@ -306,7 +307,7 @@ const conversion = await Conversion.init({
 	output,
 
 	// Function gets invoked for each video track:
-	video: (videoTrack) => {
+	video: async (videoTrack) => {
 		if (videoTrack.number > 1) {
 			// Keep only the first video track
 			return { discard: true };
@@ -314,13 +315,13 @@ const conversion = await Conversion.init({
 
 		return {
 			// Shrink width to 640 only if the track is wider
-			width: Math.min(videoTrack.displayWidth, 640),
+			width: Math.min(await videoTrack.getDisplayWidth(), 640),
 		};
 	},
 
 	// Async functions work too:
 	audio: async (audioTrack) => {
-		if (audioTrack.languageCode !== 'rus') {
+		if (await audioTrack.getLanguageCode() !== 'rus') {
 			// Keep only Russian audio tracks
 			return { discard: true };
 		}
@@ -333,6 +334,23 @@ const conversion = await Conversion.init({
 ```
 
 For documentation about the properties of video and audio tracks, refer to [Reading track metadata](./reading-media-files#reading-track-metadata).
+
+## Track fan-out
+
+You can also set (or return) an array of options for a single input track, which causes Mediabunny to create one output track per entry, or, in other words, multiple output tracks from one input track (fan-out).
+
+This is useful for producing multiple renditions at different qualities, e.g. for [HLS](./output-formats#hls):
+```ts
+const conversion = await Conversion.init({
+	input,
+	output,
+	video: [
+		{ height: 1080, bitrate: QUALITY_HIGH },
+		{ height: 720, bitrate: QUALITY_MEDIUM },
+		{ height: 480, bitrate: QUALITY_LOW },
+	],
+});
+```
 
 ## Trimming
 
@@ -418,6 +436,21 @@ const conversion = await Conversion.init({
 });
 ```
 
+## Selecting tracks
+
+Use the `tracks` option to control which input tracks are considered for conversion:
+```ts
+const conversion = await Conversion.init({
+	input,
+	output,
+	tracks: 'primary', // Only the primary video and audio tracks
+});
+```
+
+Accepted values are `'all'` or `'primary'`. The default is `'all'`, unless the input format is HLS, then it is `'primary'`. This is because HLS typically has multiple renditions of a track, and converting all of them is (usually) not desired.
+
+For a more granular selection, use the `discard` field on the tracks.
+
 ## Discarded tracks
 
 If an input track is excluded from the output file, it is considered *discarded*. The list of discarded tracks can be accessed after initializing a `Conversion`:
@@ -465,4 +498,28 @@ On the flip side, you can always query which input tracks made it into the outpu
 ```ts
 const conversion = await Conversion.init({ input, output });
 conversion.utilizedTracks; // => InputTrack[]
+```
+A track may appear multiple times in this list when [fan-out](#track-fan-out) produces multiple output tracks from it.
+
+## Converting live streams
+
+Live inputs, like HLS live streams, can also be used with the Conversion API. In this case, by default, the conversion will run until the live stream has ended.
+
+If you only want to convert a part of the live stream instead of waiting until it has ended, you can [trim](#trimming) the conversion. For example, here we're capturing the next 60 seconds of the live stream:
+```ts
+// Get the live edge
+const currentDuration = await input.getDurationFromMetadata(undefined, {
+	skipLiveWait: true,
+});
+
+const conversion = await Conversion.init({
+	input,
+	output,
+	trim: {
+		// Start at the current live edge
+		start: currentDuration,
+		// End at most 60 seconds later
+		end: currentDuration + 60,
+	},
+});
 ```

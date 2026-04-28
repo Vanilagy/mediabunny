@@ -16,9 +16,9 @@ test('ADTS demuxing', async () => {
 	const audioTrack = await input.getPrimaryAudioTrack();
 	assert(audioTrack);
 
-	expect(audioTrack.codec).toBe('aac');
-	expect(audioTrack.sampleRate).toBe(44100);
-	expect(audioTrack.numberOfChannels).toBe(2);
+	expect(await audioTrack.getCodec()).toBe('aac');
+	expect(await audioTrack.getSampleRate()).toBe(44100);
+	expect(await audioTrack.getNumberOfChannels()).toBe(2);
 
 	const decoderConfig = await audioTrack.getDecoderConfig();
 	assert(decoderConfig);

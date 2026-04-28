@@ -57,7 +57,7 @@ export class IsobmffBoxWriter {
 	 */
 	offsets = new WeakMap<Box, number>();
 
-	constructor(private writer: Writer) {}
+	constructor(public writer: Writer) {}
 
 	writeU32(value: number) {
 		this.helperView.setUint32(0, value, false);
@@ -220,18 +220,6 @@ const ascii = (text: string, nullTerminated = false) => {
 	return bytes;
 };
 
-const lastPresentedSample = (samples: Sample[]) => {
-	let result: Sample | null = null;
-
-	for (const sample of samples) {
-		if (!result || sample.timestamp > result.timestamp) {
-			result = sample;
-		}
-	}
-
-	return result;
-};
-
 const rotationMatrix = (rotationInDegrees: number): TransformationMatrix => {
 	const theta = rotationInDegrees * (Math.PI / 180);
 	const cosTheta = Math.round(Math.cos(theta));
@@ -291,6 +279,7 @@ export const ftyp = (details: {
 	isQuickTime: boolean;
 	holdsAvc: boolean;
 	fragmented: boolean;
+	cmaf: boolean;
 }) => {
 	// You can find the full logic for this at
 	// https://github.com/FFmpeg/FFmpeg/blob/de2fb43e785773738c660cdafb9309b1ef1bc80d/libavformat/movenc.c#L5518
@@ -308,14 +297,27 @@ export const ftyp = (details: {
 	}
 
 	if (details.fragmented) {
-		return box('ftyp', [
-			ascii('iso5'), // Major brand
-			u32(minorVersion), // Minor version
-			// Compatible brands
-			ascii('iso5'),
-			ascii('iso6'),
-			ascii('mp41'),
-		]);
+		if (details.cmaf) {
+			return box('ftyp', [
+				ascii('iso5'), // Major brand
+				u32(minorVersion), // Minor version
+				// Compatible brands
+				ascii('iso5'),
+				ascii('iso6'),
+				ascii('mp41'),
+				ascii('cmfc'),
+				ascii('dash'),
+			]);
+		} else {
+			return box('ftyp', [
+				ascii('iso5'), // Major brand
+				u32(minorVersion), // Minor version
+				// Compatible brands
+				ascii('iso5'),
+				ascii('iso6'),
+				ascii('mp41'),
+			]);
+		}
 	}
 
 	return box('ftyp', [
@@ -325,6 +327,38 @@ export const ftyp = (details: {
 		ascii('isom'),
 		details.holdsAvc ? ascii('avc1') : [],
 		ascii('mp41'),
+	]);
+};
+
+/** Segment Type Box */
+export const styp = () => box('styp', [
+	ascii('iso5'), // Major brand
+	u32(0), // Minor version
+	// Compatible brands
+	ascii('iso5'),
+	ascii('iso6'),
+	ascii('mp41'),
+	ascii('cmfc'),
+	ascii('dash'),
+]);
+
+/** Segment Index Box */
+export const sidx = (muxer: IsobmffMuxer, referencedSize: number) => {
+	let duration = muxer.maxWrittenEndTimestamp - muxer.minWrittenTimestamp;
+	if (!Number.isFinite(duration)) {
+		duration = 0;
+	}
+
+	return fullBox('sidx', 1, 0, [
+		u32(1), // Reference ID
+		u32(GLOBAL_TIMESCALE), // Timescale
+		u64(intoTimescale(muxer.minWrittenTimestamp, GLOBAL_TIMESCALE)), // Earliest presentation time
+		u64(0), // First offset
+		u16(0), // Reserved
+		u16(1), // Reference count
+		u32(referencedSize & 0x7fffffff), // Reference type (0) + referenced size
+		u32(intoTimescale(duration, GLOBAL_TIMESCALE)), // Subsegment duration
+		u32(0), // Starts with SAP + SAP type + SAP delta time (no information provided)
 	]);
 };
 
@@ -353,11 +387,7 @@ export const mvhd = (
 	const duration = intoTimescale(Math.max(
 		0,
 		...trackDatas
-			.filter(x => x.samples.length > 0)
-			.map((x) => {
-				const lastSample = lastPresentedSample(x.samples)!;
-				return lastSample.timestamp + lastSample.duration;
-			}),
+			.map(x => presentationSpan(x)),
 	), GLOBAL_TIMESCALE);
 	const nextTrackId = Math.max(0, ...trackDatas.map(x => x.track.id)) + 1;
 
@@ -377,6 +407,30 @@ export const mvhd = (
 		Array(24).fill(0), // Pre-defined
 		u32(nextTrackId), // Next track ID
 	]);
+};
+
+const presentationSpan = (trackData: IsobmffTrackData) => {
+	if (trackData.samples.length === 0) {
+		return 0;
+	}
+
+	let minTimestamp = Infinity;
+	let maxEndTimestamp = -Infinity;
+
+	for (const sample of trackData.samples) {
+		if (sample.timestamp < minTimestamp) {
+			minTimestamp = sample.timestamp;
+		}
+		if (sample.timestamp + sample.duration > maxEndTimestamp) {
+			maxEndTimestamp = sample.timestamp + sample.duration;
+		}
+	}
+
+	if (minTimestamp === Infinity) {
+		return 0;
+	}
+
+	return maxEndTimestamp - minTimestamp;
 };
 
 /**
@@ -405,9 +459,8 @@ export const tkhd = (
 	trackData: IsobmffTrackData,
 	creationTime: number,
 ) => {
-	const lastSample = lastPresentedSample(trackData.samples);
 	const durationInGlobalTimescale = intoTimescale(
-		lastSample ? lastSample.timestamp + lastSample.duration : 0,
+		presentationSpan(trackData),
 		GLOBAL_TIMESCALE,
 	);
 
@@ -456,9 +509,8 @@ export const mdhd = (
 	trackData: IsobmffTrackData,
 	creationTime: number,
 ) => {
-	const lastSample = lastPresentedSample(trackData.samples);
 	const localDuration = intoTimescale(
-		lastSample ? lastSample.timestamp + lastSample.duration : 0,
+		presentationSpan(trackData),
 		trackData.timescale,
 	);
 

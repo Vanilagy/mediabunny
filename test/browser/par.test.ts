@@ -3,7 +3,7 @@ import { Conversion } from '../../src/conversion.js';
 import { ALL_FORMATS, MATROSKA, MP4, MPEG_TS } from '../../src/input-format.js';
 import { Input } from '../../src/input.js';
 import { VideoSampleSink } from '../../src/media-sink.js';
-import { assert } from '../../src/misc.js';
+import { assert, Rational } from '../../src/misc.js';
 import { Output } from '../../src/output.js';
 import { MkvOutputFormat, Mp4OutputFormat, MpegTsOutputFormat } from '../../src/output-format.js';
 import { BufferSource, UrlSource } from '../../src/source.js';
@@ -22,13 +22,13 @@ test('Pixel aspect ratio reading', async () => {
 	const videoTrack = await input.getPrimaryVideoTrack();
 	assert(videoTrack);
 
-	expect(videoTrack.rotation).toBe(0);
-	expectPar2x1Geometry(videoTrack);
+	expect(await videoTrack.getRotation()).toBe(0);
+	expectPar2x1Geometry(await snapshotTrack(videoTrack));
 
 	const decoderConfig = await videoTrack.getDecoderConfig();
 	assert(decoderConfig);
-	expect(decoderConfig.displayAspectWidth).toBe(videoTrack.squarePixelWidth);
-	expect(decoderConfig.displayAspectHeight).toBe(videoTrack.squarePixelHeight);
+	expect(decoderConfig.displayAspectWidth).toBe(await videoTrack.getSquarePixelWidth());
+	expect(decoderConfig.displayAspectHeight).toBe(await videoTrack.getSquarePixelHeight());
 
 	const sink = new VideoSampleSink(videoTrack);
 	using sample = (await sink.getSample(await videoTrack.getFirstTimestamp()))!;
@@ -36,11 +36,11 @@ test('Pixel aspect ratio reading', async () => {
 	expect(sample.rotation).toBe(0);
 	expect(sample.visibleRect.width).toBe(sample.codedWidth);
 	expect(sample.visibleRect.height).toBe(sample.codedHeight);
-	expect(sample.codedWidth).toBe(videoTrack.codedWidth);
-	expect(sample.codedHeight).toBe(videoTrack.codedHeight);
+	expect(sample.codedWidth).toBe(await videoTrack.getCodedWidth());
+	expect(sample.codedHeight).toBe(await videoTrack.getCodedHeight());
 	expectPar2x1Geometry(sample);
-	expect(sample.squarePixelWidth).toBe(videoTrack.squarePixelWidth);
-	expect(sample.squarePixelHeight).toBe(videoTrack.squarePixelHeight);
+	expect(sample.squarePixelWidth).toBe(await videoTrack.getSquarePixelWidth());
+	expect(sample.squarePixelHeight).toBe(await videoTrack.getSquarePixelHeight());
 });
 
 test('Pixel aspect ratio copy conversion', async () => {
@@ -103,7 +103,7 @@ const expectPar2x1Geometry = (value: {
 	squarePixelHeight: number;
 	displayWidth: number;
 	displayHeight: number;
-	pixelAspectRatio: { num: number; den: number };
+	pixelAspectRatio: Rational;
 }) => {
 	expect(value.pixelAspectRatio).toEqual({ num: 2, den: 1 });
 	expect(value.squarePixelWidth).toBe(value.codedWidth * 2);
@@ -113,28 +113,48 @@ const expectPar2x1Geometry = (value: {
 };
 
 const snapshotTrack = async (track: {
-	codedWidth: number;
-	codedHeight: number;
-	squarePixelWidth: number;
-	squarePixelHeight: number;
-	displayWidth: number;
-	displayHeight: number;
-	rotation: number;
-	pixelAspectRatio: { num: number; den: number };
+	getCodedWidth(): Promise<number>;
+	getCodedHeight(): Promise<number>;
+	getSquarePixelWidth(): Promise<number>;
+	getSquarePixelHeight(): Promise<number>;
+	getDisplayWidth(): Promise<number>;
+	getDisplayHeight(): Promise<number>;
+	getRotation(): Promise<number>;
+	getPixelAspectRatio(): Promise<Rational>;
 	getDecoderConfig(): Promise<VideoDecoderConfig | null>;
 }) => {
-	const decoderConfig = await track.getDecoderConfig();
+	const [
+		decoderConfig,
+		pixelAspectRatio,
+		codedWidth,
+		codedHeight,
+		squarePixelWidth,
+		squarePixelHeight,
+		displayWidth,
+		displayHeight,
+		rotation,
+	] = await Promise.all([
+		track.getDecoderConfig(),
+		track.getPixelAspectRatio(),
+		track.getCodedWidth(),
+		track.getCodedHeight(),
+		track.getSquarePixelWidth(),
+		track.getSquarePixelHeight(),
+		track.getDisplayWidth(),
+		track.getDisplayHeight(),
+		track.getRotation(),
+	]);
 	assert(decoderConfig);
 
 	return {
-		codedWidth: track.codedWidth,
-		codedHeight: track.codedHeight,
-		squarePixelWidth: track.squarePixelWidth,
-		squarePixelHeight: track.squarePixelHeight,
-		displayWidth: track.displayWidth,
-		displayHeight: track.displayHeight,
-		rotation: track.rotation,
-		pixelAspectRatio: track.pixelAspectRatio,
+		codedWidth,
+		codedHeight,
+		squarePixelWidth,
+		squarePixelHeight,
+		displayWidth,
+		displayHeight,
+		rotation,
+		pixelAspectRatio,
 		decoderDisplayAspectWidth: decoderConfig.displayAspectWidth,
 		decoderDisplayAspectHeight: decoderConfig.displayAspectHeight,
 	};

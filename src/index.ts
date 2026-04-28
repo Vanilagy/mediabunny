@@ -23,17 +23,29 @@ if ((globalThis as Record<symbol, unknown>)[MEDIABUNNY_LOADED_SYMBOL]) {
 export {
 	Output,
 	OutputOptions,
+	OutputTrack,
+	OutputVideoTrack,
+	OutputAudioTrack,
+	OutputSubtitleTrack,
+	OutputTrackGroup,
 	BaseTrackMetadata,
 	VideoTrackMetadata,
 	AudioTrackMetadata,
 	SubtitleTrackMetadata,
+	OutputEvents,
 } from './output';
 export {
 	OutputFormat,
 	AdtsOutputFormat,
 	AdtsOutputFormatOptions,
+	CmafOutputFormat,
+	CmafOutputFormatOptions,
 	FlacOutputFormat,
 	FlacOutputFormatOptions,
+	HlsOutputFormat,
+	HlsOutputFormatOptions,
+	HlsOutputPlaylistInfo,
+	HlsOutputSegmentInfo,
 	IsobmffOutputFormat,
 	IsobmffOutputFormatOptions,
 	MkvOutputFormat,
@@ -64,8 +76,9 @@ export {
 	EncodedAudioPacketSource,
 	EncodedVideoPacketSource,
 	MediaStreamAudioTrackSource,
-	MediaStreamVideoTrackSourceOptions,
+	MediaStreamAudioTrackSourceOptions,
 	MediaStreamVideoTrackSource,
+	MediaStreamVideoTrackSourceOptions,
 	TextSubtitleSource,
 	VideoSampleSource,
 } from './media-source';
@@ -81,10 +94,20 @@ export {
 	SUBTITLE_CODECS,
 } from './codec';
 export {
+	canDecode,
+	canDecodeVideo,
+	canDecodeAudio,
+	getDecodableCodecs,
+	getDecodableVideoCodecs,
+	getDecodableAudioCodecs,
+} from './decode';
+export {
 	VideoEncodingConfig,
 	VideoEncodingAdditionalOptions,
+	VideoTransformOptions,
 	AudioEncodingConfig,
 	AudioEncodingAdditionalOptions,
+	AudioTransformOptions,
 	canEncode,
 	canEncodeVideo,
 	canEncodeAudio,
@@ -105,20 +128,36 @@ export {
 } from './encode';
 export {
 	Target,
+	TargetEvents,
+	TargetRequest,
+	AppendOnlyStreamTarget,
 	BufferTarget,
+	BufferTargetOptions,
 	FilePathTarget,
 	FilePathTargetOptions,
 	NullTarget,
+	PathedTarget,
+	RangedTarget,
 	StreamTarget,
 	StreamTargetOptions,
 	StreamTargetChunk,
 } from './target';
 export {
 	AnyIterable,
+	ConcurrentRunner,
+	EventEmitter,
+	EventListenerOptions,
+	FilePath,
 	MaybePromise,
+} from './misc';
+export {
+	PsshBox,
+} from './isobmff/isobmff-misc';
+export {
 	Rational,
 	Rectangle,
 	Rotation,
+	SetOptional,
 	SetRequired,
 } from './misc';
 export {
@@ -127,13 +166,19 @@ export {
 } from './output';
 export {
 	Source,
+	SourceEvents,
+	SourceRef,
+	SourceRequest,
 	BlobSource,
 	BlobSourceOptions,
 	BufferSource,
+	CustomPathedSource,
 	FilePathSource,
 	FilePathSourceOptions,
+	PathedSource,
 	StreamSource,
 	StreamSourceOptions,
+	RangedSource,
 	ReadableStreamSource,
 	ReadableStreamSourceOptions,
 	UrlSource,
@@ -141,9 +186,12 @@ export {
 } from './source';
 export {
 	InputFormat,
+	InputFormatOptions,
 	AdtsInputFormat,
 	FlacInputFormat,
 	IsobmffInputFormat,
+	IsobmffInputFormatOptions,
+	HlsInputFormat,
 	MatroskaInputFormat,
 	Mp3InputFormat,
 	Mp4InputFormat,
@@ -153,8 +201,10 @@ export {
 	WaveInputFormat,
 	WebMInputFormat,
 	ALL_FORMATS,
+	HLS_FORMATS,
 	ADTS,
 	FLAC,
+	HLS,
 	MATROSKA,
 	MP3,
 	MP4,
@@ -167,13 +217,22 @@ export {
 export {
 	Input,
 	InputOptions,
+	InputEvents,
 	InputDisposedError,
+	UnsupportedInputFormatError,
 } from './input';
+export {
+	DurationMetadataRequestOptions,
+} from './demuxer';
 export {
 	InputTrack,
 	InputVideoTrack,
 	InputAudioTrack,
+	InputTrackQuery,
 	PacketStats,
+	asc,
+	desc,
+	prefer,
 } from './input-track';
 export {
 	EncodedPacket,

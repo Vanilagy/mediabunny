@@ -1,7 +1,7 @@
 {
   "name": "mediabunny",
   "author": "Vanilagy",
-  "version": "1.41.0",
+  "version": "1.42.0-beta.8",
   "description": "Pure TypeScript media toolkit for reading, writing, and converting media files, directly in the browser.",
   "type": "module",
   "workspaces": [
@@ -48,7 +48,8 @@
     "append-namespace": "echo 'export as namespace Mediabunny;' >> dist/mediabunny.d.ts",
     "bump-patch": "npm version patch --no-git-tag-version --workspaces --include-workspace-root",
     "bump-minor": "npm version minor --no-git-tag-version --workspaces --include-workspace-root",
-    "bump-major": "npm version major --no-git-tag-version --workspaces --include-workspace-root"
+    "bump-major": "npm version major --no-git-tag-version --workspaces --include-workspace-root",
+    "set-version": "npm version --no-git-tag-version --workspaces --include-workspace-root"
   },
   "license": "MPL-2.0",
   "repository": {

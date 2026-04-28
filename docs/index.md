@@ -21,6 +21,9 @@ hero:
       text: Examples
       link: /examples
     - theme: alt
+      text: Blog
+      link: /blog
+    - theme: alt
       text: Sponsors
       link: "#sponsors"
     - theme: alt
@@ -189,10 +192,13 @@ const input = new Input({
 const duration = await input.computeDuration();
 
 const videoTrack = await input.getPrimaryVideoTrack();
-const { displayWidth, displayHeight, rotation } = videoTrack;
+const displayWidth = await videoTrack.getDisplayWidth();
+const displayHeight = await videoTrack.getDisplayHeight();
+const rotation = await videoTrack.getRotation();
 
 const audioTrack = await input.getPrimaryAudioTrack();
-const { sampleRate, numberOfChannels } = audioTrack;
+const sampleRate = await audioTrack.getSampleRate();
+const numberOfChannels = await audioTrack.getNumberOfChannels();
 
 // Get the frame halfway through the video
 const sink = new VideoSampleSink(videoTrack);

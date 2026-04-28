@@ -79,7 +79,7 @@ test('ADTS with metadata over StreamTarget', async () => {
 
 	const outputAudioTrack = await outputAsInput.getPrimaryAudioTrack();
 	assert(outputAudioTrack);
-	expect(outputAudioTrack.codec).toBe('aac');
+	expect(await outputAudioTrack.getCodec()).toBe('aac');
 });
 
 // Previously, write handler rejections were silently swallowed and surfaced as

@@ -59,12 +59,25 @@ export type PacketRetrievalOptions = {
 	metadataOnly?: boolean;
 
 	/**
-	 * When set to true, key packets will be verified upon retrieval by looking into the packet's bitstream.
+	 * When set to `true`, key packets will be verified upon retrieval by looking into the packet's bitstream.
 	 * If not enabled, the packet types will be determined solely by what's stored in the containing file and may be
 	 * incorrect, potentially leading to decoder errors. Since determining a packet's actual type requires looking into
 	 * its data, this option cannot be enabled together with `metadataOnly`.
 	 */
 	verifyKeyPackets?: boolean;
+
+	/**
+	 * When querying packets in live media that are in the future relative to the current live edge, Mediabunny will,
+	 * by default, wait for the stream to advance until the query can be satisfied. In a sense, Mediabunny simply treats
+	 * live streams as media files that are still being written, and any read that depends on future information will
+	 * wait until it can be fulfilled.
+	 *
+	 * If you want to query packets based only on the currently known information, set this field to `true` - this way,
+	 * Mediabunny will never wait for the live stream to catch up.
+	 *
+	 * For non-live media, this field has no effect.
+	 */
+	skipLiveWait?: boolean;
 };
 
 const validatePacketRetrievalOptions = (options: PacketRetrievalOptions) => {
@@ -79,6 +92,9 @@ const validatePacketRetrievalOptions = (options: PacketRetrievalOptions) => {
 	}
 	if (options.verifyKeyPackets && options.metadataOnly) {
 		throw new TypeError('options.verifyKeyPackets and options.metadataOnly cannot be enabled together.');
+	}
+	if (options.skipLiveWait !== undefined && typeof options.skipLiveWait !== 'boolean') {
+		throw new TypeError('options.skipLiveWait, when defined, must be a boolean.');
 	}
 };
 
@@ -132,9 +148,9 @@ export class EncodedPacketSink {
 
 	/**
 	 * Retrieves the track's first packet (in decode order), or null if it has no packets. The first packet is very
-	 * likely to be a key packet.
+	 * likely to be a key packet, but it doesn't have to be.
 	 */
-	getFirstPacket(options: PacketRetrievalOptions = {}) {
+	async getFirstPacket(options: PacketRetrievalOptions = {}) {
 		validatePacketRetrievalOptions(options);
 
 		if (this._track.input._disposed) {
@@ -169,7 +185,7 @@ export class EncodedPacketSink {
 	 *
 	 * @param timestamp - The timestamp used for retrieval, in seconds.
 	 */
-	getPacket(timestamp: number, options: PacketRetrievalOptions = {}) {
+	async getPacket(timestamp: number, options: PacketRetrievalOptions = {}) {
 		validateTimestamp(timestamp);
 		validatePacketRetrievalOptions(options);
 
@@ -184,7 +200,7 @@ export class EncodedPacketSink {
 	 * Retrieves the packet following the given packet (in decode order), or null if the given packet is the
 	 * last packet.
 	 */
-	getNextPacket(packet: EncodedPacket, options: PacketRetrievalOptions = {}) {
+	async getNextPacket(packet: EncodedPacket, options: PacketRetrievalOptions = {}) {
 		if (!(packet instanceof EncodedPacket)) {
 			throw new TypeError('packet must be an EncodedPacket.');
 		}
@@ -229,7 +245,7 @@ export class EncodedPacketSink {
 		const determinedType = await this._track.determinePacketType(packet);
 		if (determinedType === 'delta') {
 			// Try returning the previous key packet (in hopes that it's actually a key packet)
-			return this.getKeyPacket(packet.timestamp - 1 / this._track.timeResolution, options);
+			return this.getKeyPacket(packet.timestamp - 1 / await this._track.getTimeResolution(), options);
 		}
 
 		return packet;
@@ -275,7 +291,7 @@ export class EncodedPacketSink {
 	 * method will intelligently preload packets based on the speed of the consumer.
 	 *
 	 * @param startPacket - (optional) The packet from which iteration should begin. This packet will also be yielded.
-	 * @param endTimestamp - (optional) The timestamp at which iteration should end. This packet will _not_ be yielded.
+	 * @param endPacket - (optional) The packet at which iteration should end. This packet will _not_ be yielded.
 	 */
 	packets(
 		startPacket?: EncodedPacket,
@@ -429,6 +445,7 @@ export abstract class BaseMediaSampleSink<
 	protected mediaSamplesInRange(
 		startTimestamp = 0,
 		endTimestamp = Infinity,
+		options: PacketRetrievalOptions,
 	): AsyncGenerator<MediaSample, void, unknown> {
 		validateTimestamp(startTimestamp);
 		validateTimestamp(endTimestamp);
@@ -446,6 +463,12 @@ export abstract class BaseMediaSampleSink<
 		// method but instead in a different context. This error should not go unnoticed and must be bubbled up to
 		// the consumer.
 		let outOfBandError = null as Error | null;
+
+		const packetRetrievalOptions: PacketRetrievalOptions = {
+			...options,
+			verifyKeyPackets: true,
+			metadataOnly: false,
+		};
 
 		// The following is the "pump" process that keeps pumping packets into the decoder
 		(async () => {
@@ -492,8 +515,8 @@ export abstract class BaseMediaSampleSink<
 			});
 
 			const packetSink = this._createPacketSink();
-			const keyPacket = await packetSink.getKeyPacket(startTimestamp, { verifyKeyPackets: true })
-				?? await packetSink.getFirstKeyPacket({ verifyKeyPackets: true });
+			const keyPacket = await packetSink.getKeyPacket(startTimestamp, packetRetrievalOptions)
+				?? await packetSink.getFirstKeyPacket(packetRetrievalOptions);
 
 			let currentPacket: EncodedPacket | null = keyPacket;
 
@@ -505,7 +528,7 @@ export abstract class BaseMediaSampleSink<
 			// it.
 			const endPacket = undefined;
 
-			const packets = packetSink.packets(keyPacket ?? undefined, endPacket);
+			const packets = packetSink.packets(keyPacket ?? undefined, endPacket, packetRetrievalOptions);
 			await packets.next(); // Skip the start packet as we already have it
 
 			while (currentPacket && !ended && !this._track.input._disposed) {
@@ -597,6 +620,7 @@ export abstract class BaseMediaSampleSink<
 	/** @internal */
 	protected mediaSamplesAtTimestamps(
 		timestamps: AnyIterable<number>,
+		options: PacketRetrievalOptions,
 	): AsyncGenerator<MediaSample | null, void, unknown> {
 		validateAnyIterable(timestamps);
 		const timestampIterator = toAsyncIterator(timestamps);
@@ -617,6 +641,12 @@ export abstract class BaseMediaSampleSink<
 			sampleQueue.push(sample);
 			onQueueNotEmpty();
 			({ promise: queueNotEmpty, resolve: onQueueNotEmpty } = promiseWithResolvers());
+		};
+
+		const retrievalOptions: PacketRetrievalOptions = {
+			...options,
+			verifyKeyPackets: true,
+			metadataOnly: false,
 		};
 
 		// The following is the "pump" process that keeps pumping packets into the decoder
@@ -679,7 +709,7 @@ export abstract class BaseMediaSampleSink<
 						break;
 					}
 
-					const nextPacket = await packetSink.getNextPacket(currentPacket);
+					const nextPacket = await packetSink.getNextPacket(currentPacket, retrievalOptions);
 					assert(nextPacket);
 
 					decoder.decode(nextPacket);
@@ -707,8 +737,8 @@ export abstract class BaseMediaSampleSink<
 					break;
 				}
 
-				const targetPacket = await packetSink.getPacket(timestamp);
-				const keyPacket = targetPacket && await packetSink.getKeyPacket(timestamp, { verifyKeyPackets: true });
+				const targetPacket = await packetSink.getPacket(timestamp, retrievalOptions);
+				const keyPacket = targetPacket && await packetSink.getKeyPacket(timestamp, retrievalOptions);
 
 				if (!keyPacket) {
 					if (maxSequenceNumber !== -1) {
@@ -1402,10 +1432,10 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 			);
 		}
 
-		const codec = this._track.codec;
-		const rotation = this._track.rotation;
+		const codec = await this._track.getCodec();
+		const rotation = await this._track.getRotation();
 		const decoderConfig = await this._track.getDecoderConfig();
-		const timeResolution = this._track.timeResolution;
+		const timeResolution = await this._track.getTimeResolution();
 		assert(codec && decoderConfig);
 
 		return new VideoDecoderWrapper(onSample, onError, codec, decoderConfig, rotation, timeResolution);
@@ -1422,11 +1452,12 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 	 * Returns null if the timestamp is before the track's first timestamp.
 	 *
 	 * @param timestamp - The timestamp used for retrieval, in seconds.
+	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	async getSample(timestamp: number) {
+	async getSample(timestamp: number, options: PacketRetrievalOptions = {}) {
 		validateTimestamp(timestamp);
 
-		for await (const sample of this.mediaSamplesAtTimestamps([timestamp])) {
+		for await (const sample of this.mediaSamplesAtTimestamps([timestamp], options)) {
 			return sample;
 		}
 		throw new Error('Internal error: Iterator returned nothing.');
@@ -1438,9 +1469,10 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 	 *
 	 * @param startTimestamp - The timestamp in seconds at which to start yielding samples (inclusive).
 	 * @param endTimestamp - The timestamp in seconds at which to stop yielding samples (exclusive).
+	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	samples(startTimestamp = 0, endTimestamp = Infinity) {
-		return this.mediaSamplesInRange(startTimestamp, endTimestamp);
+	samples(startTimestamp = 0, endTimestamp = Infinity, options: PacketRetrievalOptions = {}) {
+		return this.mediaSamplesInRange(startTimestamp, endTimestamp, options);
 	}
 
 	/**
@@ -1450,9 +1482,10 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 	 * yield null if no frame is available for a given timestamp.
 	 *
 	 * @param timestamps - An iterable or async iterable of timestamps in seconds.
+	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	samplesAtTimestamps(timestamps: AnyIterable<number>) {
-		return this.mediaSamplesAtTimestamps(timestamps);
+	samplesAtTimestamps(timestamps: AnyIterable<number>, options: PacketRetrievalOptions = {}) {
+		return this.mediaSamplesAtTimestamps(timestamps, options);
 	}
 }
 
@@ -1536,15 +1569,19 @@ export class CanvasSink {
 	/** @internal */
 	_alpha: boolean;
 	/** @internal */
-	_width: number;
+	_width!: number;
 	/** @internal */
-	_height: number;
+	_height!: number;
+	/** @internal */
+	_options: CanvasSinkOptions;
 	/** @internal */
 	_fit: 'fill' | 'contain' | 'cover';
 	/** @internal */
-	_rotation: Rotation;
+	_rotation: Rotation = 0;
 	/** @internal */
 	_crop?: { left: number; top: number; width: number; height: number };
+	/** @internal */
+	_initPromise: Promise<void> | null = null;
 	/** @internal */
 	_videoSampleSink: VideoSampleSink;
 	/** @internal */
@@ -1594,47 +1631,61 @@ export class CanvasSink {
 			throw new TypeError('poolSize must be a non-negative integer.');
 		}
 
-		const rotation = options.rotation ?? videoTrack.rotation;
-
-		const [rotatedWidth, rotatedHeight] = rotation % 180 === 0
-			? [videoTrack.squarePixelWidth, videoTrack.squarePixelHeight]
-			: [videoTrack.squarePixelHeight, videoTrack.squarePixelWidth];
-
-		const crop = options.crop;
-		if (crop) {
-			clampCropRectangle(crop, rotatedWidth, rotatedHeight);
-		}
-
-		let [width, height] = crop
-			? [crop.width, crop.height]
-			: [rotatedWidth, rotatedHeight];
-		const originalAspectRatio = width / height;
-
-		// If width and height aren't defined together, deduce the missing value using the aspect ratio
-		if (options.width !== undefined && options.height === undefined) {
-			width = options.width;
-			height = Math.round(width / originalAspectRatio);
-		} else if (options.width === undefined && options.height !== undefined) {
-			height = options.height;
-			width = Math.round(height * originalAspectRatio);
-		} else if (options.width !== undefined && options.height !== undefined) {
-			width = options.width;
-			height = options.height;
-		}
-
 		this._videoTrack = videoTrack;
 		this._alpha = options.alpha ?? false;
-		this._width = width;
-		this._height = height;
-		this._rotation = rotation;
-		this._crop = crop;
+		this._options = options;
 		this._fit = options.fit ?? 'fill';
 		this._videoSampleSink = new VideoSampleSink(videoTrack);
 		this._canvasPool = Array.from({ length: options.poolSize ?? 0 }, () => null);
 	}
 
 	/** @internal */
+	_ensureInit() {
+		return this._initPromise ??= (async () => {
+			const options = this._options;
+			const videoTrack = this._videoTrack;
+
+			const rotation = options.rotation ?? await videoTrack.getRotation();
+			const squarePixelWidth = await videoTrack.getSquarePixelWidth();
+			const squarePixelHeight = await videoTrack.getSquarePixelHeight();
+
+			const [rotatedWidth, rotatedHeight] = rotation % 180 === 0
+				? [squarePixelWidth, squarePixelHeight]
+				: [squarePixelHeight, squarePixelWidth];
+
+			let crop = options.crop;
+			if (crop) {
+				crop = clampCropRectangle(crop, rotatedWidth, rotatedHeight);
+			}
+
+			let [width, height] = crop
+				? [crop.width, crop.height]
+				: [rotatedWidth, rotatedHeight];
+			const originalAspectRatio = width / height;
+
+			// If width and height aren't defined together, deduce the missing value using the aspect ratio
+			if (options.width !== undefined && options.height === undefined) {
+				width = options.width;
+				height = Math.round(width / originalAspectRatio);
+			} else if (options.width === undefined && options.height !== undefined) {
+				height = options.height;
+				width = Math.round(height * originalAspectRatio);
+			} else if (options.width !== undefined && options.height !== undefined) {
+				width = options.width;
+				height = options.height;
+			}
+
+			this._width = width;
+			this._height = height;
+			this._rotation = rotation;
+			this._crop = crop;
+		})();
+	}
+
+	/** @internal */
 	_videoSampleToWrappedCanvas(sample: VideoSample): WrappedCanvas {
+		const width = this._width;
+		const height = this._height;
 		let canvas = this._canvasPool[this._nextCanvasIndex];
 		let canvasIsNew = false;
 
@@ -1642,10 +1693,10 @@ export class CanvasSink {
 			if (typeof document !== 'undefined') {
 				// Prefer an HTMLCanvasElement
 				canvas = document.createElement('canvas');
-				canvas.width = this._width;
-				canvas.height = this._height;
+				canvas.width = width;
+				canvas.height = height;
 			} else {
-				canvas = new OffscreenCanvas(this._width, this._height);
+				canvas = new OffscreenCanvas(width, height);
 			}
 
 			if (this._canvasPool.length > 0) {
@@ -1669,9 +1720,9 @@ export class CanvasSink {
 		if (!canvasIsNew) {
 			if (!this._alpha && isFirefox()) {
 				context.fillStyle = 'black';
-				context.fillRect(0, 0, this._width, this._height);
+				context.fillRect(0, 0, width, height);
 			} else {
-				context.clearRect(0, 0, this._width, this._height);
+				context.clearRect(0, 0, width, height);
 			}
 		}
 
@@ -1697,11 +1748,13 @@ export class CanvasSink {
 	 * timestamp. Returns null if the timestamp is before the track's first timestamp.
 	 *
 	 * @param timestamp - The timestamp used for retrieval, in seconds.
+	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	async getCanvas(timestamp: number) {
+	async getCanvas(timestamp: number, options?: PacketRetrievalOptions) {
 		validateTimestamp(timestamp);
+		await this._ensureInit();
 
-		const sample = await this._videoSampleSink.getSample(timestamp);
+		const sample = await this._videoSampleSink.getSample(timestamp, options);
 		return sample && this._videoSampleToWrappedCanvas(sample);
 	}
 
@@ -1711,10 +1764,12 @@ export class CanvasSink {
 	 *
 	 * @param startTimestamp - The timestamp in seconds at which to start yielding canvases (inclusive).
 	 * @param endTimestamp - The timestamp in seconds at which to stop yielding canvases (exclusive).
+	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	canvases(startTimestamp = 0, endTimestamp = Infinity) {
-		return mapAsyncGenerator(
-			this._videoSampleSink.samples(startTimestamp, endTimestamp),
+	async* canvases(startTimestamp = 0, endTimestamp = Infinity, options?: PacketRetrievalOptions) {
+		await this._ensureInit();
+		yield* mapAsyncGenerator(
+			this._videoSampleSink.samples(startTimestamp, endTimestamp, options),
 			sample => this._videoSampleToWrappedCanvas(sample),
 		);
 	}
@@ -1726,10 +1781,12 @@ export class CanvasSink {
 	 * no frame is available for a given timestamp.
 	 *
 	 * @param timestamps - An iterable or async iterable of timestamps in seconds.
+	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	canvasesAtTimestamps(timestamps: AnyIterable<number>) {
-		return mapAsyncGenerator(
-			this._videoSampleSink.samplesAtTimestamps(timestamps),
+	async* canvasesAtTimestamps(timestamps: AnyIterable<number>, options?: PacketRetrievalOptions) {
+		await this._ensureInit();
+		yield* mapAsyncGenerator(
+			this._videoSampleSink.samplesAtTimestamps(timestamps, options),
 			sample => sample && this._videoSampleToWrappedCanvas(sample),
 		);
 	}
@@ -2075,7 +2132,7 @@ export class AudioSampleSink extends BaseMediaSampleSink<AudioSample> {
 			);
 		}
 
-		const codec = this._track.codec;
+		const codec = await this._track.getCodec();
 		const decoderConfig = await this._track.getDecoderConfig();
 		assert(codec && decoderConfig);
 
@@ -2097,11 +2154,12 @@ export class AudioSampleSink extends BaseMediaSampleSink<AudioSample> {
 	 * Returns null if the timestamp is before the track's first timestamp.
 	 *
 	 * @param timestamp - The timestamp used for retrieval, in seconds.
+	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	async getSample(timestamp: number) {
+	async getSample(timestamp: number, options: PacketRetrievalOptions = {}) {
 		validateTimestamp(timestamp);
 
-		for await (const sample of this.mediaSamplesAtTimestamps([timestamp])) {
+		for await (const sample of this.mediaSamplesAtTimestamps([timestamp], options)) {
 			return sample;
 		}
 		throw new Error('Internal error: Iterator returned nothing.');
@@ -2113,9 +2171,10 @@ export class AudioSampleSink extends BaseMediaSampleSink<AudioSample> {
 	 *
 	 * @param startTimestamp - The timestamp in seconds at which to start yielding samples (inclusive).
 	 * @param endTimestamp - The timestamp in seconds at which to stop yielding samples (exclusive).
+	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	samples(startTimestamp = 0, endTimestamp = Infinity) {
-		return this.mediaSamplesInRange(startTimestamp, endTimestamp);
+	samples(startTimestamp = 0, endTimestamp = Infinity, options: PacketRetrievalOptions = {}) {
+		return this.mediaSamplesInRange(startTimestamp, endTimestamp, options);
 	}
 
 	/**
@@ -2125,9 +2184,10 @@ export class AudioSampleSink extends BaseMediaSampleSink<AudioSample> {
 	 * yield null if no sample is available for a given timestamp.
 	 *
 	 * @param timestamps - An iterable or async iterable of timestamps in seconds.
+	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	samplesAtTimestamps(timestamps: AnyIterable<number>) {
-		return this.mediaSamplesAtTimestamps(timestamps);
+	samplesAtTimestamps(timestamps: AnyIterable<number>, options: PacketRetrievalOptions = {}) {
+		return this.mediaSamplesAtTimestamps(timestamps, options);
 	}
 }
 
@@ -2183,11 +2243,12 @@ export class AudioBufferSink {
 	 * Returns null if the timestamp is before the track's first timestamp.
 	 *
 	 * @param timestamp - The timestamp used for retrieval, in seconds.
+	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	async getBuffer(timestamp: number) {
+	async getBuffer(timestamp: number, options?: PacketRetrievalOptions) {
 		validateTimestamp(timestamp);
 
-		const data = await this._audioSampleSink.getSample(timestamp);
+		const data = await this._audioSampleSink.getSample(timestamp, options);
 		return data && this._audioSampleToWrappedArrayBuffer(data);
 	}
 
@@ -2197,10 +2258,11 @@ export class AudioBufferSink {
 	 *
 	 * @param startTimestamp - The timestamp in seconds at which to start yielding buffers (inclusive).
 	 * @param endTimestamp - The timestamp in seconds at which to stop yielding buffers (exclusive).
+	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	buffers(startTimestamp = 0, endTimestamp = Infinity) {
+	buffers(startTimestamp = 0, endTimestamp = Infinity, options?: PacketRetrievalOptions) {
 		return mapAsyncGenerator(
-			this._audioSampleSink.samples(startTimestamp, endTimestamp),
+			this._audioSampleSink.samples(startTimestamp, endTimestamp, options),
 			data => this._audioSampleToWrappedArrayBuffer(data),
 		);
 	}
@@ -2212,10 +2274,11 @@ export class AudioBufferSink {
 	 * yield null if no buffer is available for a given timestamp.
 	 *
 	 * @param timestamps - An iterable or async iterable of timestamps in seconds.
+	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	buffersAtTimestamps(timestamps: AnyIterable<number>) {
+	buffersAtTimestamps(timestamps: AnyIterable<number>, options?: PacketRetrievalOptions) {
 		return mapAsyncGenerator(
-			this._audioSampleSink.samplesAtTimestamps(timestamps),
+			this._audioSampleSink.samplesAtTimestamps(timestamps, options),
 			data => data && this._audioSampleToWrappedArrayBuffer(data),
 		);
 	}

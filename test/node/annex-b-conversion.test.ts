@@ -20,7 +20,7 @@ test('Annex B to length-prefixed conversion, MP4', async () => {
 	const originalVideoTrack = (await originalInput.getPrimaryVideoTrack())!;
 	const originalDecoderConfig = (await originalVideoTrack.getDecoderConfig())!;
 	expect(originalDecoderConfig.description).toBeUndefined();
-	expect(originalVideoTrack.codec).toBe('avc');
+	expect(await originalVideoTrack.getCodec()).toBe('avc');
 
 	const originalSink = new EncodedPacketSink(originalVideoTrack);
 	const originalFirstPacket = await originalSink.getFirstPacket();
@@ -44,7 +44,7 @@ test('Annex B to length-prefixed conversion, MP4', async () => {
 	const newVideoTrack = (await newInput.getPrimaryVideoTrack())!;
 	const newDecoderConfig = (await newVideoTrack.getDecoderConfig())!;
 	expect(newDecoderConfig.description).toBeDefined();
-	expect(newVideoTrack.codec).toBe('avc');
+	expect(await newVideoTrack.getCodec()).toBe('avc');
 
 	const newSink = new EncodedPacketSink(newVideoTrack);
 	const newFirstPacket = await newSink.getFirstPacket();

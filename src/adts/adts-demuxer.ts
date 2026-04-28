@@ -15,7 +15,7 @@ import {
 	readId3V2Header,
 } from '../id3';
 import { Input } from '../input';
-import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
+import { InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
 import {
@@ -51,7 +51,7 @@ export class AdtsDemuxer extends Demuxer {
 	loadedSamples: Sample[] = [];
 	metadataTags: MetadataTags | null = null;
 
-	tracks: InputAudioTrack[] = [];
+	trackBackings: AdtsAudioTrackBacking[] = [];
 
 	readingMutex = new AsyncMutex();
 	lastSampleLoaded = false;
@@ -75,7 +75,7 @@ export class AdtsDemuxer extends Demuxer {
 			assert(this.firstFrameHeader);
 
 			// Create the single audio track
-			this.tracks = [new InputAudioTrack(this.input, new AdtsAudioTrackBacking(this))];
+			this.trackBackings = [new AdtsAudioTrackBacking(this)];
 		})();
 	}
 
@@ -147,18 +147,9 @@ export class AdtsDemuxer extends Demuxer {
 		return 'audio/aac';
 	}
 
-	async getTracks() {
+	async getTrackBackings() {
 		await this.readMetadata();
-		return this.tracks;
-	}
-
-	async computeDuration() {
-		await this.readMetadata();
-
-		const track = this.tracks[0];
-		assert(track);
-
-		return track.computeDuration();
+		return this.trackBackings;
 	}
 
 	async getMetadataTags() {
@@ -203,6 +194,10 @@ export class AdtsDemuxer extends Demuxer {
 class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 	constructor(public demuxer: AdtsDemuxer) {}
 
+	getType() {
+		return 'audio' as const;
+	}
+
 	getId() {
 		return 1;
 	}
@@ -211,18 +206,33 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 		return 1;
 	}
 
-	async getFirstTimestamp() {
-		return 0;
-	}
-
 	getTimeResolution() {
 		const sampleRate = this.getSampleRate();
 		return sampleRate / SAMPLES_PER_AAC_FRAME;
 	}
 
-	async computeDuration() {
-		const lastPacket = await this.getPacket(Infinity, { metadataOnly: true });
-		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
+	isRelativeToUnixEpoch() {
+		return false;
+	}
+
+	getPairingMask() {
+		return 1n;
+	}
+
+	getBitrate() {
+		return null;
+	}
+
+	getAverageBitrate() {
+		return null;
+	}
+
+	async getDurationFromMetadata() {
+		return null; // No way
+	}
+
+	async getLiveRefreshInterval() {
+		return null;
 	}
 
 	getName() {

@@ -17,7 +17,8 @@ import {
 } from '../misc';
 import { Muxer } from '../muxer';
 import { Output,
-	OutputAudioTrack } from '../output';
+	OutputAudioTrack,
+	OutputTrack } from '../output';
 import { OggOutputFormat } from '../output-format';
 import { EncodedPacket } from '../packet';
 import { Writer } from '../writer';
@@ -48,6 +49,7 @@ type OggTrackData = {
 	currentPageSize: number;
 	currentPageStartsWithFreshPacket: boolean;
 	currentPageStartTimestampInSamples: number;
+	closed: boolean;
 };
 
 type Packet = {
@@ -59,7 +61,7 @@ type Packet = {
 
 export class OggMuxer extends Muxer {
 	private format: OggOutputFormat;
-	private writer: Writer;
+	private writer!: Writer;
 
 	private trackDatas: OggTrackData[] = [];
 	private bosPagesWritten = false;
@@ -72,13 +74,14 @@ export class OggMuxer extends Muxer {
 		super(output);
 
 		this.format = format;
-		this.writer = output._writer;
-
-		this.writer.ensureMonotonicity = true; // Ogg is always monotonically written!
 	}
 
 	async start() {
-		// Nothin'
+		const release = await this.mutex.acquire();
+
+		this.writer = await this.output._getRootWriter(true); // Ogg is always monotonically written!
+
+		release();
 	}
 
 	async getMimeType() {
@@ -134,6 +137,7 @@ export class OggMuxer extends Muxer {
 			currentPageSize: 27,
 			currentPageStartsWithFreshPacket: true,
 			currentPageStartTimestampInSamples: 0,
+			closed: false,
 		};
 
 		this.queueHeaderPackets(newTrackData, meta);
@@ -333,7 +337,7 @@ export class OggMuxer extends Muxer {
 				if (
 					!isFinalCall
 					&& trackData.packetQueue.length <= 1 // Limit is 1, not 0, for correct EOS flag logic
-					&& !trackData.track.source._closed
+					&& !trackData.closed
 				) {
 					break outer;
 				}
@@ -483,8 +487,13 @@ export class OggMuxer extends Muxer {
 	}
 
 	// eslint-disable-next-line @typescript-eslint/no-misused-promises
-	override async onTrackClose() {
+	override async onTrackClose(track: OutputTrack) {
 		const release = await this.mutex.acquire();
+
+		const trackData = this.trackDatas.find(x => x.track === track);
+		if (trackData) {
+			trackData.closed = true;
+		}
 
 		if (this.allTracksAreKnown()) {
 			this.allTracksKnown.resolve();
@@ -500,6 +509,10 @@ export class OggMuxer extends Muxer {
 		const release = await this.mutex.acquire();
 
 		this.allTracksKnown.resolve();
+
+		for (const trackData of this.trackDatas) {
+			trackData.closed = true;
+		}
 
 		await this.interleavePages(true);
 

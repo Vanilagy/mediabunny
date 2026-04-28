@@ -31,6 +31,7 @@ const volumeBarContainer = document.querySelector('#volume-bar-container') as HT
 const volumeBar = document.querySelector('#volume-bar') as HTMLDivElement;
 const volumeIconWrapper = document.querySelector('#volume-icon-wrapper') as HTMLDivElement;
 const volumeButton = document.querySelector('#volume-button') as HTMLButtonElement;
+const liveDot = document.querySelector('#live-dot') as HTMLButtonElement;
 const fullscreenButton = document.querySelector('#fullscreen-button') as HTMLButtonElement;
 const errorElement = document.querySelector('#error-element') as HTMLDivElement;
 const warningElement = document.querySelector('#warning-element') as HTMLDivElement;
@@ -44,7 +45,9 @@ let fileLoaded = false;
 let videoSink: CanvasSink | null = null;
 let audioSink: AudioBufferSink | null = null;
 
-let totalDuration = 0;
+let firstTimestamp = 0;
+let endTimestamp = 0;
+let isRelativeToUnixEpoch = false;
 /** The value of the audio context's currentTime the moment the playback was started. */
 let audioContextStartTime: number | null = null;
 let playing = false;
@@ -61,6 +64,8 @@ const queuedAudioNodes: Set<AudioBufferSourceNode> = new Set();
  * from having an effect.
  */
 let asyncId = 0;
+
+let liveRefreshIntervalId = -1;
 
 let draggingProgressBar = false;
 let volume = 0.7;
@@ -79,6 +84,7 @@ const initMediaPlayer = async (resource: File | string) => {
 
 		void videoFrameIterator?.return();
 		void audioBufferIterator?.return();
+
 		asyncId++;
 
 		fileLoaded = false;
@@ -88,27 +94,47 @@ const initMediaPlayer = async (resource: File | string) => {
 		playerContainer.style.display = 'none';
 		errorElement.textContent = '';
 		warningElement.textContent = '';
+		liveDot.style.display = 'none';
+		clearTimeout(liveRefreshIntervalId);
 
 		// Create an Input from the resource
-		const source = resource instanceof File
-			? new BlobSource(resource)
-			: new UrlSource(resource);
 		const input = new Input({
-			source,
-			formats: ALL_FORMATS,
+			source: typeof resource === 'string'
+				? new UrlSource(resource)
+				: new BlobSource(resource),
+			formats: ALL_FORMATS, // Accept all formats
 		});
-
-		playbackTimeAtStart = 0;
-		totalDuration = await input.computeDuration();
-		durationElement.textContent = formatSeconds(totalDuration);
 
 		let videoTrack = await input.getPrimaryVideoTrack();
 		let audioTrack = await input.getPrimaryAudioTrack();
 
+		const tracks = [videoTrack, audioTrack].filter(t => t !== null);
+
+		firstTimestamp = Math.max(
+			await input.getFirstTimestamp(tracks),
+			0,
+		);
+		endTimestamp = await input.getDurationFromMetadata(tracks, { skipLiveWait: true })
+			?? await input.computeDuration(tracks, { skipLiveWait: true });
+		isRelativeToUnixEpoch = (await Promise.all(tracks.map(t => t.isRelativeToUnixEpoch()))).some(Boolean);
+		playbackTimeAtStart = firstTimestamp;
+
+		// Configure the time display elements accordingly
+		const timestampFontSize = isRelativeToUnixEpoch ? '12px' : '';
+		const timestampWhiteSpace = isRelativeToUnixEpoch ? 'pre' : '';
+		const timestampTextAlign = isRelativeToUnixEpoch ? 'center' : '';
+		currentTimeElement.style.fontSize = timestampFontSize;
+		currentTimeElement.style.whiteSpace = timestampWhiteSpace;
+		currentTimeElement.style.textAlign = timestampTextAlign;
+		durationElement.style.fontSize = timestampFontSize;
+		durationElement.style.whiteSpace = timestampWhiteSpace;
+		durationElement.style.textAlign = timestampTextAlign;
+		durationElement.textContent = formatTimestamp(endTimestamp);
+
 		let problemMessage = '';
 
 		if (videoTrack) {
-			if (videoTrack.codec === null) {
+			if (await videoTrack.getCodec() === null) {
 				problemMessage += 'Unsupported video codec. ';
 				videoTrack = null;
 			} else if (!(await videoTrack.canDecode())) {
@@ -118,7 +144,7 @@ const initMediaPlayer = async (resource: File | string) => {
 		}
 
 		if (audioTrack) {
-			if (audioTrack.codec === null) {
+			if (await audioTrack.getCodec() === null) {
 				problemMessage += 'Unsupported audio codec. ';
 				audioTrack = null;
 			} else if (!(await audioTrack.canDecode())) {
@@ -144,7 +170,7 @@ const initMediaPlayer = async (resource: File | string) => {
 
 		// We must create the audio context with the matching sample rate for correct acoustic results
 		// (especially for low-sample rate files)
-		audioContext = new AudioContext({ sampleRate: audioTrack?.sampleRate });
+		audioContext = new AudioContext({ sampleRate: await audioTrack?.getSampleRate() });
 		gainNode = audioContext.createGain();
 		gainNode.connect(audioContext.destination);
 		updateVolume();
@@ -168,8 +194,8 @@ const initMediaPlayer = async (resource: File | string) => {
 		// Show the canvas if there's a video track, otherwise hide it
 		if (videoTrack) {
 			canvas.style.display = '';
-			canvas.width = videoTrack.displayWidth;
-			canvas.height = videoTrack.displayHeight;
+			canvas.width = await videoTrack.getDisplayWidth();
+			canvas.height = await videoTrack.getDisplayHeight();
 		} else {
 			canvas.style.display = 'none';
 		}
@@ -200,6 +226,38 @@ const initMediaPlayer = async (resource: File | string) => {
 			controlsElement.style.opacity = '1';
 			controlsElement.style.pointerEvents = '';
 			playerContainer.style.cursor = '';
+		}
+
+		const refreshIntervals = await Promise.all(tracks.map(t => t.getLiveRefreshInterval()));
+		const nonNullIntervals = refreshIntervals.filter(x => x !== null);
+
+		if (nonNullIntervals.length > 0) {
+			// At least one track is live! This means that we'll need to continually refresh the end timestamp of the
+			// media to allow continuous live playback.
+
+			const interval = Math.min(...nonNullIntervals);
+			liveDot.style.display = '';
+			liveDot.onclick = () => {
+				void seekToTime(endTimestamp - interval * 1.5);
+			};
+
+			const scheduleLiveRefresh = () => {
+				// eslint-disable-next-line @typescript-eslint/no-misused-promises
+				liveRefreshIntervalId = window.setTimeout(async () => {
+					endTimestamp = await input.getDurationFromMetadata(tracks, { skipLiveWait: true })
+						?? await input.computeDuration(tracks, { skipLiveWait: true });
+					durationElement.textContent = formatTimestamp(endTimestamp);
+
+					// Check if we're still live
+					const stillLive = await Promise.all(tracks.map(t => t.isLive()));
+					if (stillLive.every(live => !live)) {
+						liveDot.style.display = 'none';
+					} else {
+						scheduleLiveRefresh();
+					}
+				}, interval * 1000);
+			};
+			scheduleLiveRefresh();
 		}
 	} catch (error) {
 		console.error(error);
@@ -242,10 +300,10 @@ const startVideoIterator = async () => {
 const render = (requestFrame = true) => {
 	if (fileLoaded) {
 		const playbackTime = getPlaybackTime();
-		if (playbackTime >= totalDuration) {
+		if (playbackTime >= endTimestamp) {
 			// Pause playback once the end is reached
 			pause();
-			playbackTimeAtStart = totalDuration;
+			playbackTimeAtStart = endTimestamp;
 		}
 
 		// Check if the current playback time has caught up to the next frame
@@ -315,7 +373,9 @@ const runAudioIterator = async () => {
 		node.buffer = buffer;
 		node.connect(gainNode!);
 
-		const startTimestamp = audioContextStartTime! + timestamp - playbackTimeAtStart;
+		let startTimestamp = audioContextStartTime! + timestamp - playbackTimeAtStart;
+		// Round timestamp to the context's sample boundaries to prevent subsample audio glitches
+		startTimestamp = Math.round(audioContext!.sampleRate * startTimestamp) / audioContext!.sampleRate;
 
 		// Two cases: Either, the audio starts in the future or in the past
 		if (startTimestamp >= audioContext!.currentTime) {
@@ -364,9 +424,9 @@ const play = async () => {
 		await audioContext!.resume();
 	}
 
-	if (getPlaybackTime() === totalDuration) {
+	if (getPlaybackTime() === endTimestamp) {
 		// If we're at the end, let's snap back to the start
-		playbackTimeAtStart = 0;
+		playbackTimeAtStart = firstTimestamp;
 		await startVideoIterator();
 	}
 
@@ -421,7 +481,7 @@ const seekToTime = async (seconds: number) => {
 
 	await startVideoIterator();
 
-	if (wasPlaying && playbackTimeAtStart < totalDuration) {
+	if (wasPlaying && playbackTimeAtStart < endTimestamp) {
 		void play();
 	}
 };
@@ -429,8 +489,8 @@ const seekToTime = async (seconds: number) => {
 /** === PROGRESS BAR LOGIC === */
 
 const updateProgressBarTime = (seconds: number) => {
-	currentTimeElement.textContent = formatSeconds(seconds);
-	progressBar.style.width = `${(seconds / totalDuration) * 100}%`;
+	currentTimeElement.textContent = formatTimestamp(seconds);
+	progressBar.style.width = `${((seconds - firstTimestamp) / (endTimestamp - firstTimestamp)) * 100}%`;
 };
 
 progressBarContainer.addEventListener('pointerdown', (event) => {
@@ -439,7 +499,7 @@ progressBarContainer.addEventListener('pointerdown', (event) => {
 
 	const rect = progressBarContainer.getBoundingClientRect();
 	const completion = Math.max(Math.min((event.clientX - rect.left) / rect.width, 1), 0);
-	updateProgressBarTime(completion * totalDuration);
+	updateProgressBarTime(firstTimestamp + completion * (endTimestamp - firstTimestamp));
 
 	clearTimeout(hideControlsTimeout);
 
@@ -449,7 +509,7 @@ progressBarContainer.addEventListener('pointerdown', (event) => {
 
 		const rect = progressBarContainer.getBoundingClientRect();
 		const completion = Math.max(Math.min((event.clientX - rect.left) / rect.width, 1), 0);
-		const newTime = completion * totalDuration;
+		const newTime = firstTimestamp + completion * (endTimestamp - firstTimestamp);
 
 		void seekToTime(newTime);
 		showControlsTemporarily();
@@ -460,7 +520,7 @@ progressBarContainer.addEventListener('pointermove', (event) => {
 	if (draggingProgressBar) {
 		const rect = progressBarContainer.getBoundingClientRect();
 		const completion = Math.max(Math.min((event.clientX - rect.left) / rect.width, 1), 0);
-		updateProgressBarTime(completion * totalDuration);
+		updateProgressBarTime(firstTimestamp + completion * (endTimestamp - firstTimestamp));
 	}
 });
 
@@ -577,10 +637,10 @@ window.addEventListener('keydown', (e) => {
 	} else if (e.code === 'KeyF') {
 		fullscreenButton.click();
 	} else if (e.code === 'ArrowLeft') {
-		const newTime = Math.max(getPlaybackTime() - 5, 0);
+		const newTime = Math.max(getPlaybackTime() - 5, firstTimestamp);
 		void seekToTime(newTime);
 	} else if (e.code === 'ArrowRight') {
-		const newTime = Math.min(getPlaybackTime() + 5, totalDuration);
+		const newTime = Math.min(getPlaybackTime() + 5, endTimestamp);
 		void seekToTime(newTime);
 	} else if (e.code === 'KeyM') {
 		volumeButton.click();
@@ -626,6 +686,15 @@ controlsElement.addEventListener('click', (event) => {
 
 /** === UTILS === */
 
+const formatTimestamp = (seconds: number) => {
+	if (isRelativeToUnixEpoch) {
+		const iso = new Date(seconds * 1000).toISOString();
+		return iso.replace('T', '\n');
+	}
+
+	return formatSeconds(seconds);
+};
+
 const formatSeconds = (seconds: number) => {
 	const showMilliseconds = window.innerWidth >= 640;
 
@@ -652,9 +721,9 @@ const formatSeconds = (seconds: number) => {
 };
 
 window.addEventListener('resize', () => {
-	if (totalDuration) {
+	if (endTimestamp) {
 		updateProgressBarTime(getPlaybackTime());
-		durationElement.textContent = formatSeconds(totalDuration);
+		durationElement.textContent = formatTimestamp(endTimestamp);
 	}
 });
 

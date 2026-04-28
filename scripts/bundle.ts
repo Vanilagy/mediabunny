@@ -16,6 +16,7 @@ const createVariants = async (
 		entryPoints: [entryPoint],
 		bundle: true,
 		logLevel: 'info',
+		target: 'es2021',
 		logOverride: {
 			'import-is-undefined': 'silent', // Warning caused by the disabled "node.ts" import
 		},
@@ -29,6 +30,7 @@ const createVariants = async (
  */`,
 		},
 		legalComments: 'none',
+		platform: 'node',
 	};
 
 	const umdConfig: esbuild.BuildOptions = {

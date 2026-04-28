@@ -62,31 +62,41 @@ const compressFile = async (resource: File | string) => {
 		currentConversion = await Conversion.init({
 			input,
 			output,
-			video: track => ({
+			tracks: 'primary', // Keep only one track per type
+			video: {
 				width: 320, // Height will be deduced automatically to retain aspect ratio
 				bitrate: QUALITY_VERY_LOW,
-				discard: track.number > 1, // Keep only the first video track
-			}),
-			audio: track => ({
-				bitrate: 32e3,
-				discard: track.number > 1, // Keep only the first audio track
-			}),
+			},
+			audio: {
+				bitrate: QUALITY_VERY_LOW,
+			},
 		});
+
+		if (!currentConversion.isValid) {
+			console.info(currentConversion.discardedTracks);
+			throw new Error('Conversion is invalid and cannot be executed; see the console for more.');
+		}
 
 		// Keep track of progress
 		let progress = 0;
-		currentConversion.onProgress = newProgress => progress = newProgress;
+		let processedTime = 0;
+		let startTime: number | null = null;
 
-		const fileDuration = (await input.computeDuration()) - (await input.getFirstTimestamp());
-		const startTime = performance.now();
+		currentConversion.onProgress = (newProgress, newProcessedTime) => {
+			progress = newProgress;
+			processedTime = newProcessedTime;
+			startTime ??= performance.now();
+		};
 
 		const updateProgress = () => {
 			progressBar.style.width = `${progress * 100}%`;
 
-			const now = performance.now();
-			const elapsedSeconds = (now - startTime) / 1000;
-			const factor = fileDuration / (elapsedSeconds / progress);
-			speedometer.textContent = `Speed: ~${factor.toPrecision(3)}x real time`;
+			if (startTime !== null) {
+				const now = performance.now();
+				const elapsedSeconds = (now - startTime) / 1000;
+				const factor = processedTime / elapsedSeconds;
+				speedometer.textContent = `Speed: ~${factor.toPrecision(3)}x real time`;
+			}
 		};
 
 		// Update the progress indicator regularly

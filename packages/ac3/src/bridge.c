@@ -7,6 +7,7 @@
  */
 
 #include <emscripten.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include "libavcodec/avcodec.h"
@@ -72,7 +73,7 @@ uint8_t *configure_decode_packet(DecoderContext *ctx, int size) {
 }
 
 EMSCRIPTEN_KEEPALIVE
-int decode_packet(DecoderContext *ctx, int pts) {
+int decode_packet(DecoderContext *ctx, int64_t pts) {
 	ctx->packet->pts = pts;
 	int ret = avcodec_send_packet(ctx->codec_ctx, ctx->packet);
 	av_packet_unref(ctx->packet);
@@ -110,8 +111,8 @@ int get_decoded_sample_count(DecoderContext *ctx) {
 }
 
 EMSCRIPTEN_KEEPALIVE
-int get_decoded_pts(DecoderContext *ctx) {
-	return (int)ctx->frame->pts;
+int64_t get_decoded_pts(DecoderContext *ctx) {
+	return ctx->frame->pts;
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -135,7 +136,7 @@ typedef struct {
 	AVFrame *frame;
 	float *input_buffer;
 	int input_buffer_size;
-	int encoded_pts;
+	int64_t encoded_pts;
 	int encoded_duration;
 } EncoderContext;
 
@@ -229,7 +230,7 @@ float *get_encode_input_ptr(EncoderContext *ctx, int size) {
 }
 
 EMSCRIPTEN_KEEPALIVE
-int encode_frame(EncoderContext *ctx, int pts) {
+int encode_frame(EncoderContext *ctx, int64_t pts) {
 	int channels = ctx->codec_ctx->ch_layout.nb_channels;
 	int frame_size = ctx->frame->nb_samples;
 
@@ -270,7 +271,7 @@ uint8_t *get_encoded_data(EncoderContext *ctx) {
 }
 
 EMSCRIPTEN_KEEPALIVE
-int get_encoded_pts(EncoderContext *ctx) {
+int64_t get_encoded_pts(EncoderContext *ctx) {
 	return ctx->encoded_pts;
 }
 
