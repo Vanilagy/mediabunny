@@ -21,6 +21,9 @@ hero:
       text: Examples
       link: /examples
     - theme: alt
+      text: Blog
+      link: /blog
+    - theme: alt
       text: Sponsors
       link: "#sponsors"
     - theme: alt
@@ -116,6 +119,7 @@ const sponsors = {
 		{ image: 'https://avatars.githubusercontent.com/u/18653821', name: 'ZerGo0', url: 'https://github.com/ZerGo0' },
 		{ image: 'https://avatars.githubusercontent.com/u/5913254', name: 'Brandon McConnell', url: 'https://github.com/brandonmcconnell' },
 		{ image: 'https://avatars.githubusercontent.com/u/9549394', name: 'studnitz', url: 'https://github.com/studnitz' },
+		{ image: 'https://avatars.githubusercontent.com/u/67356781', name: 'Ahmed Rowaihi', url: 'https://github.com/ahmedrowaihi' },
 		{ image: 'https://avatars.githubusercontent.com/u/4714175', name: 'Phoomparin Mano', url: 'https://github.com/heypoom' },
 		{ image: 'https://avatars.githubusercontent.com/u/504909', name: 'Hirbod', url: 'https://github.com/hirbod' },
 		{ image: 'https://avatars.githubusercontent.com/u/2698271', name: 'Matthew Gardner', url: 'https://github.com/spheric' },
@@ -183,16 +187,19 @@ npm install mediabunny
 ```ts
 const input = new Input({
 	source: new UrlSource('./bigbuckbunny.mp4'),
-	formats: ALL_FORMATS, // .mp4, .webm, .wav, ...
+	formats: ALL_FORMATS, // .mp4, .webm, .wav, .m3u8, ...
 });
 
 const duration = await input.computeDuration();
 
 const videoTrack = await input.getPrimaryVideoTrack();
-const { displayWidth, displayHeight, rotation } = videoTrack;
+const displayWidth = await videoTrack.getDisplayWidth();
+const displayHeight = await videoTrack.getDisplayHeight();
+const rotation = await videoTrack.getRotation();
 
 const audioTrack = await input.getPrimaryAudioTrack();
-const { sampleRate, numberOfChannels } = audioTrack;
+const sampleRate = await audioTrack.getSampleRate();
+const numberOfChannels = await audioTrack.getNumberOfChannels();
 
 // Get the frame halfway through the video
 const sink = new VideoSampleSink(videoTrack);

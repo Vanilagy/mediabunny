@@ -119,9 +119,9 @@ test('MPEG-TS muxing with AVC and AAC', async () => {
 	assert(videoTrack);
 
 	expect(videoTrack.id).toBe(0x100);
-	expect(videoTrack.codec).toBe('avc');
-	expect(videoTrack.displayWidth).toBe(640);
-	expect(videoTrack.displayHeight).toBe(480);
+	expect(await videoTrack.getCodec()).toBe('avc');
+	expect(await videoTrack.getDisplayWidth()).toBe(640);
+	expect(await videoTrack.getDisplayHeight()).toBe(480);
 
 	const videoDecoderConfig = await videoTrack.getDecoderConfig();
 	assert(videoDecoderConfig);
@@ -135,9 +135,9 @@ test('MPEG-TS muxing with AVC and AAC', async () => {
 	assert(audioTrack);
 
 	expect(audioTrack.id).toBe(0x101);
-	expect(audioTrack.codec).toBe('aac');
-	expect(audioTrack.numberOfChannels).toBe(2);
-	expect(audioTrack.sampleRate).toBe(48000);
+	expect(await audioTrack.getCodec()).toBe('aac');
+	expect(await audioTrack.getNumberOfChannels()).toBe(2);
+	expect(await audioTrack.getSampleRate()).toBe(48000);
 
 	const audioDecoderConfig = await audioTrack.getDecoderConfig();
 	assert(audioDecoderConfig);
@@ -289,7 +289,7 @@ test('MPEG-TS muxing with HEVC and MP3', async () => {
 	assert(videoTrack);
 
 	expect(videoTrack.id).toBe(0x100);
-	expect(videoTrack.codec).toBe('hevc');
+	expect(await videoTrack.getCodec()).toBe('hevc');
 
 	const videoDecoderConfig = await videoTrack.getDecoderConfig();
 	assert(videoDecoderConfig);
@@ -301,9 +301,9 @@ test('MPEG-TS muxing with HEVC and MP3', async () => {
 	assert(audioTrack);
 
 	expect(audioTrack.id).toBe(0x101);
-	expect(audioTrack.codec).toBe('mp3');
-	expect(audioTrack.numberOfChannels).toBe(2);
-	expect(audioTrack.sampleRate).toBe(24000);
+	expect(await audioTrack.getCodec()).toBe('mp3');
+	expect(await audioTrack.getNumberOfChannels()).toBe(2);
+	expect(await audioTrack.getSampleRate()).toBe(24000);
 
 	const audioDecoderConfig = await audioTrack.getDecoderConfig();
 	assert(audioDecoderConfig);
@@ -407,7 +407,7 @@ test('MPEG-TS muxing with video only', async () => {
 
 	const videoTrack = await input.getPrimaryVideoTrack();
 	assert(videoTrack);
-	expect(videoTrack.codec).toBe('avc');
+	expect(await videoTrack.getCodec()).toBe('avc');
 
 	const audioTrack = await input.getPrimaryAudioTrack();
 	expect(audioTrack).toBeNull();
@@ -470,7 +470,7 @@ test('MPEG-TS muxing with audio only', async () => {
 
 	const audioTrack = await input.getPrimaryAudioTrack();
 	assert(audioTrack);
-	expect(audioTrack.codec).toBe('aac');
+	expect(await audioTrack.getCodec()).toBe('aac');
 
 	const audioSink = new EncodedPacketSink(audioTrack);
 	let audioPacketCount = 0;
@@ -531,8 +531,8 @@ test('MPEG-TS muxing with two video tracks', async () => {
 	const videoTracks = tracks.filter(t => t.type === 'video');
 	expect(videoTracks.length).toBe(2);
 
-	expect(videoTracks[0]!.codec).toBe('hevc');
-	expect(videoTracks[1]!.codec).toBe('hevc');
+	expect(await videoTracks[0]!.getCodec()).toBe('hevc');
+	expect(await videoTracks[1]!.getCodec()).toBe('hevc');
 	expect(videoTracks[0]!.id).toBe(0x100);
 	expect(videoTracks[1]!.id).toBe(0x101);
 });
@@ -599,8 +599,8 @@ test('MPEG-TS muxing with two audio tracks', async () => {
 	const audioTracks = tracks.filter(t => t.type === 'audio');
 	expect(audioTracks.length).toBe(2);
 
-	expect(audioTracks[0]!.codec).toBe('aac');
-	expect(audioTracks[1]!.codec).toBe('aac');
+	expect(await audioTracks[0]!.getCodec()).toBe('aac');
+	expect(await audioTracks[1]!.getCodec()).toBe('aac');
 	expect(audioTracks[0]!.id).toBe(0x100);
 	expect(audioTracks[1]!.id).toBe(0x101);
 });
@@ -646,8 +646,8 @@ test('MPEG-TS transmux (Annex B and ADTS passthrough)', async () => {
 	assert(outputAudioTrack);
 
 	// Codecs should match
-	expect(outputVideoTrack.codec).toBe(inputVideoTrack.codec);
-	expect(outputAudioTrack.codec).toBe(inputAudioTrack.codec);
+	expect(await outputVideoTrack.getCodec()).toBe(await inputVideoTrack.getCodec());
+	expect(await outputAudioTrack.getCodec()).toBe(await inputAudioTrack.getCodec());
 
 	// Verify video packets are Annex B
 	const videoSink = new EncodedPacketSink(outputVideoTrack);
@@ -728,7 +728,7 @@ test('MPEG-TS muxing with StreamTarget', async () => {
 
 	const videoTrack = await input.getPrimaryVideoTrack();
 	assert(videoTrack);
-	expect(videoTrack.codec).toBe('avc');
+	expect(await videoTrack.getCodec()).toBe('avc');
 
 	const videoSink = new EncodedPacketSink(videoTrack);
 	let videoPacketCount = 0;

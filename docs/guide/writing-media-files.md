@@ -40,6 +40,8 @@ output.addSubtitleTrack(subtitleSource);
 
 For each track you want to add, you'll need to create a unique [media source](./media-sources) for it. You'll be able to add media data to the output via these media sources. A media source can only ever be used for one output track.
 
+These methods return the newly created `OutputTrack` instance.
+
 Optionally, you can specify additional track metadata when adding tracks:
 ```ts
 // This specifies that the video track should be rotated by 90 degrees
@@ -54,20 +56,20 @@ output.addVideoTrack(videoSource, {
 
 // This adds two audio tracks; one in English and one in German.
 output.addAudioTrack(audioSourceEng, {
-	language: 'eng', // ISO 639-2/T language code
+	languageCode: 'eng', // ISO 639-2/T language code
 	name: 'Developer Commentary', // Sets a user-defined track name
 	disposition: { commentary: true }, // Sets additional flags in the file
 });
 output.addAudioTrack(audioSourceGer, {
-	language: 'ger',
+	languageCode: 'ger',
 });
 
 // This adds multiple subtitle tracks, all for different languages.
-output.addSubtitleTrack(subtitleSourceEng, { language: 'eng' });
-output.addSubtitleTrack(subtitleSourceGer, { language: 'ger' });
-output.addSubtitleTrack(subtitleSourceSpa, { language: 'spa' });
-output.addSubtitleTrack(subtitleSourceFre, { language: 'fre' });
-output.addSubtitleTrack(subtitleSourceIta, { language: 'ita' });
+output.addSubtitleTrack(subtitleSourceEng, { languageCode: 'eng' });
+output.addSubtitleTrack(subtitleSourceGer, { languageCode: 'ger' });
+output.addSubtitleTrack(subtitleSourceSpa, { languageCode: 'spa' });
+output.addSubtitleTrack(subtitleSourceFre, { languageCode: 'fre' });
+output.addSubtitleTrack(subtitleSourceIta, { languageCode: 'ita' });
 ```
 
 ::: info
@@ -106,6 +108,40 @@ output.addAudioTrack(audioSource);
 ::: warning
 Adding tracks to an `Output` will throw if the track is not compatible with the output format. Be sure to respect the [properties](./output-formats#format-properties) of the output format when adding tracks.
 :::
+
+### Track groups & pairability
+
+To control output track pairability (which tracks can be presented with which tracks), Mediabunny uses a concept called "track groups". Tracks are assigned to zero or more groups, and their group membership determines with which other tracks they can be paired. This system allows for the common pairability patterns to be described easily.
+
+For typical file formats, configuring track groups is not necessary and does nothing. It is relevant for configuring many-track formats such as HLS, where track groups affect the structure of the master playlist.
+
+Two output tracks are considered pairable if at least one of these is true:
+- They are part of the same group but have a different type (video, audio, subtitle)
+- They are in two different groups that have been paired with each other
+
+Create track groups like this:
+```ts
+import { OutputTrackGroup } from 'mediabunny';
+
+const groupA = new OutputTrackGroup();
+const groupB = new OutputTrackGroup();
+```
+
+You can optionally pair groups like this:
+```ts
+// After this, any track in group A can be paired with any track in group B
+groupA.pairWith(groupB); // Automatically pairs B with A as well (symmetric operation)
+```
+
+Assign tracks to groups during track registration:
+```ts
+output.addVideoTrack(videoSource, { group: groupA });
+output.addAudioTrack(audioSource, { group: [groupA, groupB] });
+```
+
+By default, when not specified, every track will be assigned to `Output.defaultTrackGroup`. This in turn means that the default track pairing rules are:
+- Tracks of different type (video, audio, subtitle) can always be paired with each other
+- No two tracks of the same type (e.g. two audio tracks) can be paired with each other
 
 ## Setting metadata tags
 
@@ -180,6 +216,10 @@ await output.finalize();
 const file = output.target.buffer; // => Uint8Array
 ```
 
+---
+
+An optional [`onFinalize`](../api/OutputOptions#onfinalize) callback can be provided in the output options. This function will be called at the end of `.finalize()` and can be used to do work once the output has been completed. If it returns a promise, it will be awaited by the output.
+
 ## Canceling an output
 
 Sometimes, you may want to cancel the ongoing creation of an output file. For this, use the `cancel` method:
@@ -223,14 +263,14 @@ The _output target_ determines where the data created by the `Output` will be wr
 
 ---
 
-All targets have an optional `onwrite` callback you can set to monitor which byte regions are being written to:
+All targets emit a `write` event you can listen to in order to monitor which byte regions are being written to:
 ```ts
-target.onwrite = (start, end) => {
+const stopListening = target.on('write', ({ start, end }) => {
 	// ...
-};
+});
 ```
 
-You can use this to track the size of the output file as it grows. But be warned, this function is chatty and gets called *extremely* frequently.
+You can use this to track the size of the output file as it grows. But be warned, this event is chatty and gets fired *extremely* frequently.
 
 ### `BufferTarget`
 
@@ -251,6 +291,24 @@ output.target.buffer; // => ArrayBuffer
 ```
 
 This target is a great choice for small-ish files (< 100 MB), but since all data will be kept in memory, using it for large files is suboptimal. If the output gets very large, the page might crash due to memory exhaustion. For these cases, using `StreamTarget` is recommended.
+
+#### `onFinalize` callback
+
+`BufferTarget` accepts an `onFinalize` option, which is called with the complete buffer once the target has been finalized. Useful for uploading the final buffer to a server or object store (e.g. S3 `PutObject`, which requires a known `Content-Length`):
+
+```ts
+const output = new Output({
+	target: new BufferTarget({
+		onFinalize: async (buffer) => {
+			await fetch('/upload', { method: 'PUT', body: buffer });
+		},
+	}),
+	// ...
+});
+
+await output.finalize();
+// The upload has completed by the time finalize resolves.
+```
 
 ### `StreamTarget`
 
@@ -330,6 +388,30 @@ const output = new Output({
 await output.finalize(); // Will automatically close the writable stream
 ```
 
+### `AppendOnlyStreamTarget`
+
+Similar to a `StreamTarget` but for writing files in a purely append-only way:
+```ts
+import { Output, AppendOnlyStreamTarget } from 'mediabunny';
+
+const writable = new WritableStream({
+	write(data: Uint8Array) {
+		// Do something with the data...
+	},
+});
+
+const output = new Output({
+	target: new AppendOnlyStreamTarget(writable),
+	// ...
+});
+```
+
+Useful for consumers that can only read sequentially, like an HTTP server processing an incoming upload.
+
+::: warning
+The underlying data source doesn't magically become append-only just because you use this source. Instead, you can only use this source when the underlying format is *append-only*. See [Output formats](./output-formats) to see which formats are append-only.
+:::
+
 ### `FilePathTarget`
 
 This target writes to a file at the specified path. It is intended for server-side usage in Node, Bun, or Deno, and offers a simpler API than `StreamTarget` when you just want to write directly to a file path.
@@ -395,6 +477,34 @@ const output = new Output({
 	}),
 });
 ```
+
+## Pathed (multi-file) targets
+
+Some output formats write more than one file. For example, an [HLS](./output-formats#hls) output produces a master playlist alongside one or more media playlists and many media segment files. To write this kind of multi-file output, Mediabunny needs a way to resolve the paths it wants to write into [output targets](#output-targets). You can use `PathedTarget` for that.
+
+A `PathedTarget` wraps a *root path* (the entry file of the media) together with a callback that produces a `Target` for each requested file path:
+```ts
+import { Output, PathedTarget, FilePathTarget, HlsOutputFormat } from 'mediabunny';
+
+const output = new Output({
+	format: new HlsOutputFormat({ /* ... */ }),
+	target: new PathedTarget(
+		'master.m3u8',
+		({ path, isRoot }) => new FilePathTarget(`/output/${path}`),
+	),
+});
+```
+
+The callback is called once per file the format wants to write and receives a `TargetRequest`:
+```ts
+type TargetRequest = {
+	path: FilePath; // The requested file path
+	isRoot: boolean; // Whether the requested file is the root file
+	mimeType: string; // The MIME type of the file being requested
+};
+```
+
+The kind of `Target` you create inside the callback is up to you - use `FilePathTarget` for files on disk, `StreamTarget` to upload chunks to a server, or any other target type that fits.
 
 ## Packet buffering
 

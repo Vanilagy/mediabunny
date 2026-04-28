@@ -9,7 +9,7 @@
     <img src="./docs/public/mediabunny-logo.svg" width="180" height="180">
 </div>
 
-Mediabunny is a JavaScript library for reading, writing, and converting media files (like MP4, WebM, MP3), directly in the browser. It aims to be a complete toolkit for high-performance media operations on the web. It's written from scratch in pure TypeScript, has zero dependencies, is very performant, and is extremely tree-shakable, meaning you only include what you use. You can think of it a bit like [FFmpeg](https://ffmpeg.org/), but built from the ground up for the web.
+Mediabunny is a JavaScript library for reading, writing, and converting media (like MP4, WebM, MP3, HLS), directly in the browser. It aims to be a complete toolkit for high-performance media operations on the web. It's written from scratch in pure TypeScript, has zero dependencies, is very performant, and is extremely tree-shakable, meaning you only include what you use. You can think of it a bit like [FFmpeg](https://ffmpeg.org/), but built from the ground up for the web.
 
 [Documentation](https://mediabunny.dev) | [Examples](https://mediabunny.dev/examples) | [Sponsoring](#sponsoring) | [License](#license) | [Discord](https://discord.gg/hmpkyYuS4U)
 
@@ -78,7 +78,7 @@ Mediabunny is a JavaScript library for reading, writing, and converting media fi
 
 Core features include:
 
-- **Wide format support**: Read and write MP4, MOV, WebM, MKV, WAVE, MP3, Ogg, ADTS, FLAC, MPEG-TS
+- **Wide format support**: Read **and** write MP4, MOV, WebM, MKV, HLS, WAVE, MP3, Ogg, ADTS, FLAC, MPEG-TS
 - **Built-in encoding & decoding**: Supports 25+ video, audio, and subtitle codecs, hardware-accelerated using the WebCodecs API
 - **High precision**: Fine-grained, microsecond-accurate reading and writing operations
 - **Conversion API**: Easy-to-use API with features such as transmuxing, transcoding, resizing, rotation, cropping, resampling, trimming, and more
@@ -111,16 +111,23 @@ Requires any JavaScript environment that can run ECMAScript 2021 or later. Media
 ```js
 import { Input, ALL_FORMATS, BlobSource } from 'mediabunny';
 
+// Reading from disk
 const input = new Input({
-    source: new BlobSource(file), // Reading from disk
+    source: new BlobSource(file),
     formats: ALL_FORMATS,
 });
 
 const duration = await input.computeDuration(); // in seconds
 const videoTrack = await input.getPrimaryVideoTrack();
 const audioTrack = await input.getPrimaryAudioTrack();
-const { displayWidth, displayHeight, rotation } = videoTrack;
-const { sampleRate, numberOfChannels } = audioTrack;
+
+const displayWidth = await videoTrack.getDisplayWidth();
+const displayHeight = await videoTrack.getDisplayHeight();
+const rotation = await videoTrack.getRotation();
+
+const sampleRate = await audioTrack.getSampleRate();
+const numberOfChannels = await audioTrack.getNumberOfChannels();
+
 const { title, artist, album } = await input.getMetadataTags();
 ```
 

@@ -6,6 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { TrackType } from '../output';
 import {
 	extractAv1CodecInfoFromPacket,
 	extractAvcDecoderConfigurationRecord,
@@ -24,11 +25,8 @@ import {
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import {
-	InputAudioTrack,
 	InputAudioTrackBacking,
-	InputTrack,
 	InputTrackBacking,
-	InputVideoTrack,
 	InputVideoTrackBacking,
 } from '../input-track';
 import { AttachedFile, DEFAULT_TRACK_DISPOSITION, MetadataTags, TrackDisposition } from '../metadata';
@@ -189,7 +187,7 @@ type InternalTrack = {
 	cuePoints: CuePoint[];
 
 	disposition: TrackDisposition;
-	inputTrack: InputTrack | null;
+	trackBacking: InputTrackBacking | null;
 	codecId: string | null;
 	codecPrivate: Uint8Array | null;
 	defaultDuration: number | null;
@@ -272,22 +270,18 @@ export class MatroskaDemuxer extends Demuxer {
 		this.reader = input._reader;
 	}
 
-	override async computeDuration() {
-		const tracks = await this.getTracks();
-		const trackDurations = await Promise.all(tracks.map(x => x.computeDuration()));
-		return Math.max(0, ...trackDurations);
-	}
-
-	async getTracks() {
+	async getTrackBackings() {
 		await this.readMetadata();
-		return this.segments.flatMap(segment => segment.tracks.map(track => track.inputTrack!));
+		return this.segments.flatMap(segment => segment.tracks.map(track => track.trackBacking!));
 	}
 
 	override async getMimeType() {
 		await this.readMetadata();
 
-		const tracks = await this.getTracks();
-		const codecStrings = await Promise.all(tracks.map(x => x.getCodecParameterString()));
+		const backings = await this.getTrackBackings();
+		const codecStrings = await Promise.all(backings.map(
+			x => x.getDecoderConfig().then(c => c?.codec ?? null),
+		));
 
 		return buildMatroskaMimeType({
 			isWebM: this.isWebM,
@@ -549,9 +543,6 @@ export class MatroskaDemuxer extends Demuxer {
 				track.defaultDuration = (this.currentSegment.timestampFactor * track.defaultDurationNs) / 1e9;
 			}
 		}
-
-		// Put default tracks first
-		this.currentSegment.tracks.sort((a, b) => Number(b.disposition.default) - Number(a.disposition.default));
 
 		// Now, let's distribute the cue points to the tracks
 		const idToTrack = new Map(this.currentSegment.tracks.map(x => [x.id, x]));
@@ -1003,8 +994,9 @@ export class MatroskaDemuxer extends Demuxer {
 
 					disposition: {
 						...DEFAULT_TRACK_DISPOSITION,
+						primary: false,
 					},
-					inputTrack: null,
+					trackBacking: null,
 					codecId: null,
 					codecPrivate: null,
 					defaultDuration: null,
@@ -1085,8 +1077,7 @@ export class MatroskaDemuxer extends Demuxer {
 						}
 
 						const videoTrack = this.currentTrack as InternalVideoTrack;
-						const inputTrack = new InputVideoTrack(this.input, new MatroskaVideoTrackBacking(videoTrack));
-						this.currentTrack.inputTrack = inputTrack;
+						this.currentTrack.trackBacking = new MatroskaVideoTrackBacking(videoTrack);
 						this.currentSegment.tracks.push(this.currentTrack);
 					} else if (this.currentTrack.info.type === 'audio') {
 						if (codecIdWithoutSuffix === CODEC_STRING_MAP.aac) {
@@ -1143,8 +1134,7 @@ export class MatroskaDemuxer extends Demuxer {
 						}
 
 						const audioTrack = this.currentTrack as InternalAudioTrack;
-						const inputTrack = new InputAudioTrack(this.input, new MatroskaAudioTrackBacking(audioTrack));
-						this.currentTrack.inputTrack = inputTrack;
+						this.currentTrack.trackBacking = new MatroskaAudioTrackBacking(audioTrack);
 						this.currentSegment.tracks.push(this.currentTrack);
 					}
 				}
@@ -1910,19 +1900,21 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 
 	constructor(public internalTrack: InternalTrack) {}
 
+	abstract getType(): TrackType;
+	abstract getDecoderConfig(): Promise<VideoDecoderConfig | AudioDecoderConfig | null>;
+
 	getId() {
 		return this.internalTrack.id;
 	}
 
 	getNumber() {
 		const demuxer = this.internalTrack.demuxer;
-		const inputTrack = this.internalTrack.inputTrack!;
-		const trackType = inputTrack.type;
+		const trackType = this.internalTrack.trackBacking!.getType();
 
 		let number = 0;
 		for (const segment of demuxer.segments) {
 			for (const track of segment.tracks) {
-				if (track.inputTrack!.type === trackType) {
+				if (track.trackBacking!.getType() === trackType) {
 					number++;
 				}
 
@@ -1943,11 +1935,6 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		return this.internalTrack.codecId;
 	}
 
-	async computeDuration() {
-		const lastPacket = await this.getPacket(Infinity, { metadataOnly: true });
-		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
-	}
-
 	getName() {
 		return this.internalTrack.name;
 	}
@@ -1956,17 +1943,46 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		return this.internalTrack.languageCode;
 	}
 
-	async getFirstTimestamp() {
-		const firstPacket = await this.getFirstPacket({ metadataOnly: true });
-		return firstPacket?.timestamp ?? 0;
-	}
-
 	getTimeResolution() {
 		return this.internalTrack.segment.timestampFactor;
 	}
 
+	isRelativeToUnixEpoch() {
+		return false;
+	}
+
 	getDisposition() {
 		return this.internalTrack.disposition;
+	}
+
+	getPairingMask() {
+		return 1n;
+	}
+
+	getBitrate() {
+		return null;
+	}
+
+	getAverageBitrate() {
+		return null;
+	}
+
+	async getDurationFromMetadata() {
+		const segment = this.internalTrack.segment;
+		if (segment.duration <= 0) {
+			return null;
+		}
+
+		let endTimestamp = segment.duration / segment.timestampFactor;
+
+		const firstPacket = await this.getFirstPacket({ metadataOnly: true });
+		endTimestamp += firstPacket?.timestamp ?? 0;
+
+		return endTimestamp;
+	}
+
+	async getLiveRefreshInterval() {
+		return null;
 	}
 
 	async getFirstPacket(options: PacketRetrievalOptions) {
@@ -2374,6 +2390,10 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 		this.internalTrack = internalTrack;
 	}
 
+	getType() {
+		return 'video' as const;
+	}
+
 	override getCodec(): VideoCodec | null {
 		return this.internalTrack.info.codec;
 	}
@@ -2477,6 +2497,10 @@ class MatroskaAudioTrackBacking extends MatroskaTrackBacking implements InputAud
 	constructor(internalTrack: InternalAudioTrack) {
 		super(internalTrack);
 		this.internalTrack = internalTrack;
+	}
+
+	getType() {
+		return 'audio' as const;
 	}
 
 	override getCodec(): AudioCodec | null {

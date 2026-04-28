@@ -20,12 +20,12 @@ import {
 	normalizeRotation,
 	promiseWithResolvers,
 	Rational,
-	roundToMultiple,
 	simplifyRational,
 	textEncoder,
 	toUint8Array,
 	uint8ArraysAreEqual,
 	writeBits,
+	roundToDivisor,
 } from '../misc';
 import {
 	CODEC_STRING_MAP,
@@ -87,6 +87,7 @@ type InternalMediaChunk = {
 type MatroskaTrackData = {
 	chunkQueue: InternalMediaChunk[];
 	lastWrittenMsTimestamp: number | null;
+	closed: boolean;
 } & ({
 	track: OutputVideoTrack;
 	type: 'video';
@@ -129,8 +130,8 @@ const TRACK_TYPE_MAP: Record<OutputTrack['type'], number> = {
 };
 
 export class MatroskaMuxer extends Muxer {
-	private writer: Writer;
-	private ebmlWriter: EBMLWriter;
+	private writer!: Writer;
+	private ebmlWriter!: EBMLWriter;
 	private format: WebMOutputFormat | MkvOutputFormat;
 
 	private trackDatas: MatroskaTrackData[] = [];
@@ -152,23 +153,20 @@ export class MatroskaMuxer extends Muxer {
 		firstMsTimestamp: number;
 	}>();
 
-	private duration = 0;
+	private startTimestamp = Infinity;
+	private endTimestamp = -Infinity;
 
 	constructor(output: Output, format: MkvOutputFormat) {
 		super(output);
 
-		this.writer = output._writer;
 		this.format = format;
-
-		this.ebmlWriter = new EBMLWriter(this.writer);
-
-		if (this.format._options.appendOnly) {
-			this.writer.ensureMonotonicity = true;
-		}
 	}
 
 	async start() {
 		const release = await this.mutex.acquire();
+
+		this.writer = await this.output._getRootWriter(!!this.format._options.appendOnly);
+		this.ebmlWriter = new EBMLWriter(this.writer);
 
 		this.writeEBMLHeader();
 
@@ -770,6 +768,7 @@ export class MatroskaMuxer extends Muxer {
 			},
 			chunkQueue: [],
 			lastWrittenMsTimestamp: null,
+			closed: false,
 		};
 
 		if (track.source._codec === 'vp9') {
@@ -856,6 +855,7 @@ export class MatroskaMuxer extends Muxer {
 			},
 			chunkQueue: [],
 			lastWrittenMsTimestamp: null,
+			closed: false,
 		};
 
 		this.trackDatas.push(newTrackData);
@@ -887,6 +887,7 @@ export class MatroskaMuxer extends Muxer {
 			},
 			chunkQueue: [],
 			lastWrittenMsTimestamp: null,
+			closed: false,
 		};
 
 		this.trackDatas.push(newTrackData);
@@ -911,8 +912,8 @@ export class MatroskaMuxer extends Muxer {
 
 			if (track.metadata.frameRate !== undefined) {
 				// Constrain the time values to the frame rate
-				timestamp = roundToMultiple(timestamp, 1 / track.metadata.frameRate);
-				duration = roundToMultiple(duration, 1 / track.metadata.frameRate);
+				timestamp = roundToDivisor(timestamp, track.metadata.frameRate);
+				duration = roundToDivisor(duration, track.metadata.frameRate);
 			}
 
 			const additions = trackData.info.alphaMode
@@ -1008,7 +1009,7 @@ export class MatroskaMuxer extends Muxer {
 			let minTimestamp = Infinity;
 
 			for (const trackData of this.trackDatas) {
-				if (!isFinalCall && trackData.chunkQueue.length === 0 && !trackData.track.source._closed) {
+				if (!isFinalCall && trackData.chunkQueue.length === 0 && !trackData.closed) {
 					break outer;
 				}
 
@@ -1119,7 +1120,7 @@ export class MatroskaMuxer extends Muxer {
 				return firstQueuedSample.type === 'key';
 			}
 
-			return otherTrackData.track.source._closed;
+			return otherTrackData.closed;
 		});
 
 		let shouldCreateNewCluster = false;
@@ -1197,7 +1198,8 @@ export class MatroskaMuxer extends Muxer {
 			this.ebmlWriter.writeEBML(blockGroup);
 		}
 
-		this.duration = Math.max(this.duration, msTimestamp + msDuration);
+		this.startTimestamp = Math.min(this.startTimestamp, msTimestamp);
+		this.endTimestamp = Math.max(this.endTimestamp, msTimestamp + msDuration);
 		trackData.lastWrittenMsTimestamp = msTimestamp;
 
 		if (!this.trackDatasInCurrentCluster.has(trackData)) {
@@ -1283,8 +1285,13 @@ export class MatroskaMuxer extends Muxer {
 	}
 
 	// eslint-disable-next-line @typescript-eslint/no-misused-promises
-	override async onTrackClose() {
+	override async onTrackClose(track: OutputTrack) {
 		const release = await this.mutex.acquire();
+
+		const trackData = this.trackDatas.find(x => x.track === track);
+		if (trackData) {
+			trackData.closed = true;
+		}
 
 		if (this.allTracksAreKnown()) {
 			this.allTracksKnown.resolve();
@@ -1302,6 +1309,10 @@ export class MatroskaMuxer extends Muxer {
 
 		this.allTracksKnown.resolve();
 
+		for (const trackData of this.trackDatas) {
+			trackData.closed = true;
+		}
+
 		if (!this.segment) {
 			this.createSegment();
 		}
@@ -1317,15 +1328,16 @@ export class MatroskaMuxer extends Muxer {
 		this.ebmlWriter.writeEBML(this.cues);
 
 		if (!this.format._options.appendOnly) {
-			const endPos = this.writer.getPos();
-
 			// Write the Segment size
 			const segmentSize = this.writer.getPos() - this.segmentDataOffset;
 			this.writer.seek(this.ebmlWriter.offsets.get(this.segment!)! + 4);
 			this.ebmlWriter.writeVarInt(segmentSize, SEGMENT_SIZE_BYTES);
 
 			// Write the duration of the media to the Segment
-			this.segmentDuration!.data = new EBMLFloat64(this.duration);
+			const duration = this.startTimestamp === Infinity
+				? 0
+				: this.endTimestamp - this.startTimestamp;
+			this.segmentDuration!.data = new EBMLFloat64(duration);
 			this.writer.seek(this.ebmlWriter.offsets.get(this.segmentDuration!)!);
 			this.ebmlWriter.writeEBML(this.segmentDuration);
 
@@ -1334,8 +1346,6 @@ export class MatroskaMuxer extends Muxer {
 			this.writer.seek(this.ebmlWriter.offsets.get(this.seekHead)!);
 			this.maybeCreateSeekHead(true);
 			this.ebmlWriter.writeEBML(this.seekHead);
-
-			this.writer.seek(endPos);
 		}
 
 		release();

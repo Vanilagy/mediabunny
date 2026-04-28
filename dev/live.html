@@ -19,7 +19,7 @@
     button.addEventListener('click', async () => {
         const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
         const videoTrack = stream.getVideoTracks()[0];
-        const audioTrack = stream.getAudioTracks()[0];
+        const audioTrack = null && stream.getAudioTracks()[0];
 
         const output = new Mediabunny.Output({
             target: new Mediabunny.BufferTarget(),
@@ -32,7 +32,7 @@
                 codec: 'vp9',
                 bitrate: Mediabunny.QUALITY_MEDIUM,
 				sizeChangeBehavior: 'passThrough',
-            });
+            }, { timestampBase: 'unix' });
 
             videoSource.errorPromise.catch((d) => console.log("Hello?????", d));
 
@@ -67,7 +67,7 @@
         await output.finalize();
 
         console.log(output.target.buffer);
-        download(new Blob([output.target.buffer]), 'livetest' + output.format.fileExtension);
+        //download(new Blob([output.target.buffer]), 'livetest' + output.format.fileExtension);
 
         videoTrack?.stop();
         audioTrack?.stop();

@@ -6,6 +6,7 @@ Mediabunny supports many commonly used media container formats, all of which are
 
 - ISOBMFF-based formats (.mp4, .m4v, .m4a, ...)
 - QuickTime File Format (.mov)
+- Segmented MP4 (CMAF) (.m4s)
 - Matroska (.mkv)
 - WebM (.webm)
 - Ogg (.ogg)
@@ -14,6 +15,7 @@ Mediabunny supports many commonly used media container formats, all of which are
 - ADTS (.aac)
 - FLAC (.flac)
 - MPEG Transport Stream (.ts)
+- HLS (.m3u8)
 
 ## Codecs
 
@@ -96,6 +98,8 @@ Not all codecs can be used with all containers. The following table specifies th
 | `'ulaw'`       |          |   ✓   |       |           |       |       |   ✓   |       |       |       |
 | `'alaw'`       |          |   ✓   |       |           |       |       |   ✓   |       |       |       |
 | `'webvtt'`[^webvtt] |   (✓)    |       |  (✓)  |    (✓)    |       |       |       |       |       |       |
+
+For HLS, the supported codecs depend on the segment format chosen.
 
 [^aac]: In some browsers, AAC encoding is not supported by WebCodecs. You can polyfill it with the [`@mediabunny/aac-encoder`](./extensions/aac-encoder) extension package.
 [^mp3]: MP3 encoding is not supported by WebCodecs. You can polyfill it with the [`@mediabunny/mp3-encoder`](./extensions/mp3-encoder) extension package.
@@ -196,7 +200,60 @@ Codec encodability checks take [custom encoders](#custom-encoders) into account.
 
 ## Querying codec decodability
 
-Whether a codec can be decoded depends on the specific codec configuration of an `InputTrack`; you can use its [`canDecode`](./reading-media-files#codec-information) method to check.
+If you already have an `InputTrack`, you can check its decodability using its [`canDecode`](./reading-media-files#codec-information) method, which uses the track's actual codec configuration:
+```ts
+const canDecodeTrack = await inputTrack.canDecode(); // => boolean
+```
+
+However, you can also gauge decodability even in the absence of any concrete track. `canDecode` tests whether a codec can be decoded using typical settings:
+```ts
+import { canDecode } from 'mediabunny';
+
+canDecode('avc'); // => Promise<boolean>
+canDecode('opus'); // => Promise<boolean>
+```
+Video codecs are checked using 1280x720, while audio codecs are checked using 2 channels, 48 kHz.
+
+You can also check decodability using specific configurations:
+```ts
+import { canDecodeVideo, canDecodeAudio } from 'mediabunny';
+
+canDecodeVideo('hevc', {
+	codedWidth: 1920, codedHeight: 1080
+}); // => Promise<boolean>
+
+canDecodeAudio('aac', {
+	numberOfChannels: 1, sampleRate: 44100
+}); // => Promise<boolean>
+```
+
+All additional properties of [`VideoDecoderConfig`](https://developer.mozilla.org/en-US/docs/Web/API/VideoDecoder/configure#config) and [`AudioDecoderConfig`](https://developer.mozilla.org/en-US/docs/Web/API/AudioDecoder/configure#config) can be used here as well.
+
+---
+
+In addition, you can use the following functions to check decodability for multiple codecs at once, getting back a list of supported codecs:
+```ts
+import {
+	getDecodableCodecs,
+	getDecodableVideoCodecs,
+	getDecodableAudioCodecs,
+} from 'mediabunny';
+
+getDecodableCodecs(); // => Promise<MediaCodec[]>
+getDecodableVideoCodecs(); // => Promise<VideoCodec[]>
+getDecodableAudioCodecs(); // => Promise<AudioCodec[]>
+
+// These functions also accept optional configuration options.
+// Here, we check which of AVC, HEVC and VP8 can be decoded at 1920x1080:
+getDecodableVideoCodecs(
+	['avc', 'hevc', 'vp8'],
+	{ codedWidth: 1920, codedHeight: 1080 },
+); // => Promise<VideoCodec[]>
+```
+
+::: info
+Codec decodability checks take [custom decoders](#custom-decoders) into account.
+:::
 
 ## Custom coders
 

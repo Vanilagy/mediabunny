@@ -7,6 +7,7 @@
  */
 
 #include <emscripten.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include "libavcodec/avcodec.h"
@@ -20,7 +21,7 @@ typedef struct {
 	AVFrame *frame;
 	float *input_buffer;
 	int input_buffer_size;
-	int encoded_pts;
+	int64_t encoded_pts;
 	int encoded_duration;
 } EncoderContext;
 
@@ -123,7 +124,7 @@ float *get_encode_input_ptr(EncoderContext *ctx, int size) {
 }
 
 EMSCRIPTEN_KEEPALIVE
-int send_frame(EncoderContext *ctx, int pts) {
+int send_frame(EncoderContext *ctx, int64_t pts) {
 	int channels = ctx->codec_ctx->ch_layout.nb_channels;
 	int frame_size = ctx->frame->nb_samples;
 
@@ -171,7 +172,7 @@ uint8_t *get_encoded_data(EncoderContext *ctx) {
 }
 
 EMSCRIPTEN_KEEPALIVE
-int get_encoded_pts(EncoderContext *ctx) {
+int64_t get_encoded_pts(EncoderContext *ctx) {
 	return ctx->encoded_pts;
 }
 

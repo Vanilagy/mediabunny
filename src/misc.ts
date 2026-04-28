@@ -199,8 +199,19 @@ export class AsyncMutex {
 	}
 }
 
+export const HEX_STRING_REGEX = /^[0-9a-fA-F]+$/;
+
 export const bytesToHexString = (bytes: Uint8Array) => {
 	return [...bytes].map(x => x.toString(16).padStart(2, '0')).join('');
+};
+
+export const hexStringToBytes = (hexString: string) => {
+	assert(hexString.length % 2 === 0);
+	const bytes = new Uint8Array(hexString.length / 2);
+	for (let i = 0; i < hexString.length; i += 2) {
+		bytes[i / 2] = parseInt(hexString.slice(i, i + 2), 16);
+	}
+	return bytes;
 };
 
 export const reverseBitsU32 = (x: number): number => {
@@ -435,8 +446,16 @@ export const roundToMultiple = (value: number, multiple: number) => {
 	return Math.round(value / multiple) * multiple;
 };
 
+export const roundToDivisor = (value: number, multiple: number) => {
+	return Math.round(value * multiple) / multiple;
+};
+
 export const floorToMultiple = (value: number, multiple: number) => {
 	return Math.floor(value / multiple) * multiple;
+};
+
+export const floorToDivisor = (value: number, multiple: number) => {
+	return Math.floor(value * multiple) / multiple;
 };
 
 export const ilog = (x: number) => {
@@ -462,6 +481,13 @@ export const SECOND_TO_MICROSECOND_FACTOR = 1e6 * (1 + Number.EPSILON);
  * @public
  */
 export type SetRequired<T, K extends keyof T> = T & Required<Pick<T, K>>;
+
+/**
+ * Sets all keys K of T to be optional.
+ * @group Miscellaneous
+ * @public
+ */
+export type SetOptional<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;
 
 /**
  * Merges two RequestInit objects with special handling for headers.
@@ -549,7 +575,7 @@ export const retriedFetch = async (
 			}
 
 			if (retryDelayInSeconds > 0) {
-				await new Promise(resolve => setTimeout(resolve, 1000 * retryDelayInSeconds));
+				await wait(1000 * retryDelayInSeconds);
 			}
 
 			if (shouldStop()) {
@@ -621,6 +647,7 @@ export const isWebKit = () => {
 	return isWebKitCache = !!(
 		typeof navigator !== 'undefined'
 		&& (
+			// eslint-disable-next-line @typescript-eslint/no-deprecated
 			navigator.vendor?.match(/apple/i)
 			// Or, in workers:
 			|| (/AppleWebKit/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent))
@@ -646,6 +673,7 @@ export const isChromium = () => {
 
 	return isChromiumCache = !!(
 		typeof navigator !== 'undefined'
+		// eslint-disable-next-line @typescript-eslint/no-deprecated
 		&& (navigator.vendor?.includes('Google Inc') || /Chrome/.test(navigator.userAgent))
 	);
 };
@@ -775,6 +803,129 @@ export const isNumber = (x: unknown) => {
 };
 
 /**
+ * A path to a file. File paths can be relative or absolute, and be local paths or full URLs. Paths must be POSIX-like,
+ * using `/` as the separator.
+ *
+ * Examples of valid paths:
+ * - `'video.mp4'`
+ * - `'path/to/video.mp4'`
+ * - `'./video.mp4'`
+ * - `'../video.mp4'`
+ * - `'/path/to/video.mp4'`
+ * - `'https://example.com/video.mp4'`
+ * - `'file:///home/user/video.mp4'`
+ * - `'video.mp4?key=foo'`
+ *
+ * @group Miscellaneous
+ * @public
+ */
+export type FilePath = string;
+
+export const joinPaths = (basePath: FilePath, relativePath: FilePath) => {
+	// If relativePath is a full URL with protocol, return it as-is
+	if (relativePath.includes('://')) {
+		return relativePath;
+	}
+
+	// Strip query parameters from URL base paths so their contents don't mess up the join
+	if (basePath.includes('://')) {
+		const queryIndex = basePath.indexOf('?');
+		if (queryIndex !== -1) {
+			basePath = basePath.slice(0, queryIndex);
+		}
+	}
+
+	let result: string;
+
+	if (relativePath.startsWith('/')) {
+		const protocolIndex = basePath.indexOf('://');
+		if (protocolIndex === -1) {
+			result = relativePath;
+		} else {
+			const pathStart = basePath.indexOf('/', protocolIndex + 3);
+			if (pathStart === -1) {
+				result = basePath + relativePath;
+			} else {
+				result = basePath.slice(0, pathStart) + relativePath;
+			}
+		}
+	} else {
+		const lastSlash = basePath.lastIndexOf('/');
+		if (lastSlash === -1) {
+			result = relativePath;
+		} else {
+			result = basePath.slice(0, lastSlash + 1) + relativePath;
+		}
+	}
+
+	// Normalize ./ and ../
+
+	let prefix = '';
+	const protocolIndex = result.indexOf('://');
+	if (protocolIndex !== -1) {
+		const pathStart = result.indexOf('/', protocolIndex + 3);
+		if (pathStart !== -1) {
+			prefix = result.slice(0, pathStart);
+			result = result.slice(pathStart);
+		}
+	}
+
+	const segments = result.split('/');
+	const normalized: string[] = [];
+	for (const segment of segments) {
+		if (segment === '..') {
+			normalized.pop();
+		} else if (segment !== '.') {
+			normalized.push(segment);
+		}
+	}
+
+	return prefix + normalized.join('/');
+};
+
+export const arrayCount = <T>(array: T[], predicate: (item: T) => boolean) => {
+	let count = 0;
+
+	for (let i = 0; i < array.length; i++) {
+		if (predicate(array[i]!)) {
+			count++;
+		}
+	}
+
+	return count;
+};
+
+export const arrayArgmin = <T>(array: T[], getValue: (item: T) => number): number => {
+	let minIndex = -1;
+	let minValue = Infinity;
+
+	for (let i = 0; i < array.length; i++) {
+		const value = getValue(array[i]!);
+		if (value < minValue) {
+			minValue = value;
+			minIndex = i;
+		}
+	}
+
+	return minIndex;
+};
+
+export const arrayArgmax = <T>(array: T[], getValue: (item: T) => number): number => {
+	let maxIndex = -1;
+	let maxValue = -Infinity;
+
+	for (let i = 0; i < array.length; i++) {
+		const value = getValue(array[i]!);
+		if (value > maxValue) {
+			maxValue = value;
+			maxIndex = i;
+		}
+	}
+
+	return maxIndex;
+};
+
+/**
  * A rational number; a ratio of two integers.
  * @group Miscellaneous
  * @public
@@ -812,7 +963,7 @@ export const simplifyRational = (rational: Rational): Rational => {
  * @public
  */
 export type Rectangle = {
-	/** The distance in pixels to the left edge of the rectangle . */
+	/** The distance in pixels to the left edge of the rectangle. */
 	left: number;
 	/** The distance in pixels to the top edge of the rectangle. */
 	top: number;
@@ -839,6 +990,10 @@ export const validateRectangle = (rect: Rectangle, propertyPath: string) => {
 		throw new TypeError(`${propertyPath}.height must be a non-negative integer.`);
 	}
 };
+
+export type NonFunctionKeys<T> = {
+	[K in keyof T]-?: T[K] extends ((...args: never[]) => unknown) ? never : K
+}[keyof T];
 
 export type UnthrottledTimerHandle = {
 	id: ReturnType<typeof setTimeout> | number;
@@ -1009,6 +1164,151 @@ export const clearIntervalUnthrottled = (timer: UnthrottledTimerHandle) => {
 		timerId: timer.id,
 	} satisfies UnthrottledTimerMessage);
 };
+
+export const wait = (ms: number) => {
+	return new Promise(resolve => setTimeout(resolve, ms));
+};
+
+export const rejectAfter = (ms: number, message = 'Promise rejected') => {
+	return new Promise((_, reject) => {
+		setTimeout(() => reject(new Error(message)), ms);
+	});
+};
+
+export const toArray = <T>(x: T | T[]) => {
+	if (Array.isArray(x)) {
+		return x;
+	} else {
+		return [x];
+	}
+};
+
+/**
+ * Options for {@link EventEmitter.on}.
+ *
+ * @group Miscellaneous
+ * @public
+ */
+export type EventListenerOptions = {
+	/** If `true`, the listener will be automatically removed after being called once. Defaults to `false`. */
+	once?: boolean;
+};
+
+/**
+ * A class that manages event listeners and dispatches events to them.
+ *
+ * @group Miscellaneous
+ * @public
+ */
+export class EventEmitter<TEvents extends Record<string, unknown>> {
+	/** @internal */
+	_listeners = new Map<keyof TEvents, Set<{ fn: (data: never) => unknown; once: boolean }>>();
+
+	/** Registers a listener for the given event. */
+	on<K extends keyof TEvents>(
+		event: K,
+		listener: (data: TEvents[K]) => unknown,
+		options?: EventListenerOptions,
+	): () => void {
+		if (!this._listeners.has(event)) {
+			this._listeners.set(event, new Set());
+		}
+		const entry = { fn: listener as (data: never) => void, once: options?.once ?? false };
+		this._listeners.get(event)!.add(entry);
+
+		return () => {
+			this._listeners.get(event)?.delete(entry);
+		};
+	}
+
+	/** @internal */
+	_emit<K extends keyof TEvents>(
+		...args: TEvents[K] extends void ? [event: K] : [event: K, data: TEvents[K]]
+	): void {
+		const [event, data] = args;
+		const listeners = this._listeners.get(event);
+		if (!listeners) {
+			return;
+		}
+
+		for (const entry of listeners) {
+			try {
+				(entry.fn as (data: unknown) => void)(data);
+			} catch (error) {
+				console.error(error);
+			}
+
+			if (entry.once) {
+				listeners.delete(entry);
+			}
+		}
+	}
+}
+
+export const ceilToMultipleOfTwo = (value: number) => Math.ceil(value / 2) * 2;
+
+/**
+ * Utility class for running async functions in parallel up to a certain level of parallelism. Can be used to apply
+ * backpressure only if the concurrency level would be exceeded.
+ *
+ * @group Miscellaneous
+ * @public
+*/
+export class ConcurrentRunner {
+	/** @internal */
+	_queue: Promise<unknown>[] = [];
+	/** @internal */
+	_errored = false;
+
+	/**
+	 * The maximum number of in-flight promises. You can also think of it as the "high water mark".
+	 * You can set this value to dynamically change the level of parallelism.
+	 */
+	parallelism: number;
+
+	constructor(parallelism: number) {
+		this.parallelism = parallelism;
+	}
+
+	/** Whether any function has errored. The runner is effectively bricked if this is `true`, by design. */
+	get errored() {
+		return this._errored;
+	}
+
+	/** The number of tasks currently running. */
+	get inFlightCount() {
+		return this._queue.length;
+	}
+
+	/**
+	 * Schedules an async function to be run. If the maximum allowed level of parallelism has not yet been reached,
+	 * the function will be executed immediately and `run()` will resolve immediately. Otherwise, the function will be
+	 * called as soon as any currently-running function finishes, and `run()` will only resolve then.
+	 *
+	 * Throws if the runner is errored.
+	 */
+	async run(fn: () => Promise<unknown>) {
+		if (this._errored) {
+			await Promise.race(this._queue); // Will surface the error
+		}
+
+		while (this._queue.length >= this.parallelism) {
+			await Promise.race(this._queue);
+		}
+
+		const promise = fn();
+		this._queue.push(promise);
+
+		void promise
+			.then(() => removeItem(this._queue, promise))
+			.catch(() => this._errored = true);
+	}
+
+	/** Waits for all currently running functions to finish. Throws if the runner is errored. */
+	async flush() {
+		await Promise.all(this._queue);
+	}
+}
 
 export const isRecordStringString = (value: unknown): value is Record<string, string> => {
 	return value !== null

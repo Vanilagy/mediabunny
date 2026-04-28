@@ -72,6 +72,25 @@ Packets may appear out-of-order in the file, meaning the order in which they are
 - **Presentation order:** The order in which the data is to be presented; sorted by timestamp.
 - **Decode order:** The order in which packets must be decoded; not always sorted by timestamp.
 
+### Live tracks
+
+Some tracks (like in HLS) may be *live*, meaning new media data is still being produced. Check it like this:
+```ts
+await track.isLive();
+```
+
+Mediabunny's mental model for live tracks is simple: it treats them like any other track, just one where the media data at the end is not available yet.
+
+This means that any reading operation that attempts to read media data from the "unavailable" section at the end will wait until the media data becomes available or the live stream ends. Mediabunny calls this the "live wait".
+
+Sometimes, you may want to *skip* the live wait and pretend like the media data ends at the currently-known latest point. For this, you can pass the `skipLiveWait: true` option to all media sinks. For example:
+```ts
+import { EncodedPacketSink } from 'mediabunny';
+
+const packetSink = new EncodedPacketSink(track);
+const lastPacket = await packetSink.getPacket(Infinity, { skipLiveWait: true });
+```
+
 ## General sinks
 
 There is one media sink which can be used with any `InputTrack`:

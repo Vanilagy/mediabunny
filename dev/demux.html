@@ -11,22 +11,167 @@
 	document.body.append(fileInput);
 
 	fileInput.addEventListener('change', async () => {
+		/*
 		const file = fileInput.files[0];
 		const input = new Mediabunny.Input({
 			formats: Mediabunny.ALL_FORMATS,
 			source: new Mediabunny.BlobSource(file),
 		});
 
+		const track = await input.getPrimaryAudioTrack();
+		const sink3 = new Mediabunny.EncodedPacketSink(track);
+		console.log((await sink3.getFirstPacket()).data.join(', '));
+		return;
+		console.log(await track.getDurationFromMetadata(), await track.computeDuration());
+
+		//console.log(await input.getDurationFromMetadata(), await input.computeDuration());
+		return;
+		*/
+
+		const input = new Mediabunny.Input({
+			source: new Mediabunny.UrlSource('https://storage.googleapis.com/shaka-demo-assets/angel-one-widevine-hls/hls.m3u8'),
+			formats: Mediabunny.ALL_FORMATS,
+		});
+
+		const videoTrack = await input.getPrimaryVideoTrack();
+		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
+		console.log(await sink.getFirstPacket());
+
+		/*
+		return
+		
+		const tracks = await manifest.getTracks();
+		console.log(tracks);
+		const [track] = tracks;
+		
+		window.kekw = () => {
+			console.log(track.getDurationFromMetadata())
+		};
+
+		return;
+		const ugh = new Mediabunny.EncodedPacketSink(audioTrack);
+
+		for await (const packet of ugh.packets()) {
+			console.log(packet);
+		}
+
+		//console.log(await manifest.getTracks());
+		return;
+
+		const videoTrack = await manifest.getPrimaryVideoTrack();
+		await videoTrack.hydrate();
+
+		console.log("Doing...")
+		console.log(await videoTrack.getDurationFromMetadata({skipLiveWait: true}));
+		return;
+
+		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
+		const firstTimestamp = await videoTrack.getFirstTimestamp();
+
+		console.log(await videoTrack.computeDuration({ skipLiveWait: true }));
+
+		manifest.dispose()
+		*/
+
+		/*
+		let last = -Infinity;
+		for await (const packet of sink.packets()) {
+			const rel = packet.timestamp - firstTimestamp;
+			console.log(rel, rel - last);
+
+			last = rel;
+
+			if (rel >= 10) {
+				break;
+			}
+		}
+		*/
+
+		/*
+		console.log("here")
+		const lastPacket = await sink.getPacket(Infinity, { skipLiveWait: true });
+		const other = await sink.getPacket(lastPacket.timestamp - 5);
+
+		for await (const packet of sink.packets(other)) {
+			console.log(packet.timestamp);
+		}
+
+		console.log("Done")
+		*/
+		
+
+		/*
+		const tracks = await manifest.getTracks();
+		//await input.hydrateAllTracks();
+		console.log(tracks, tracks.map(x => [x.getFirstTimestamp(), x.computeDuration()]));
+
+		return;
+		*/
+		/*
+		for await (using sample of sink.samples()) {
+			console.log(sample.timestamp);
+		}
+		*/
+
+		/*
+		const manifest = new Mediabunny.ManifestInput({
+			entryPath: 'https://storage.googleapis.com/shaka-demo-assets/angel-one-hls/hls.m3u8'
+			 	?? 'https://playertest.longtailvideo.com/adaptive/vod-with-mp3/manifest.m3u8'
+				?? 'https://playertest.longtailvideo.com/adaptive/aes-with-tracks/master.m3u8'
+				?? 'https://playertest.longtailvideo.com/adaptive/customIV/prog_index.m3u8'
+				?? 'https://playertest.longtailvideo.com/adaptive/issue666/playlists/cisq0gim60007xzvi505emlxx.m3u8'
+				?? 'https://test-streams.mux.dev/dai-discontinuity-deltatre/manifest.m3u8'
+				?? 'https://test-streams.mux.dev/x36xhzz/url_0/193039199_mp4_h264_aac_hd_7.m3u8'
+				?? 'https://test-streams.mux.dev/dai-discontinuity-deltatre/manifest.m3u8'
+				?? 'https://cdn.jwplayer.com/manifests/pZxWPRg4.m3u8'
+				?? 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8'
+				?? 'https://test-streams.mux.dev/x36xhzz/url_0/193039199_mp4_h264_aac_hd_7.m3u8',
+			getSource: path => new Mediabunny.UrlSource(path),
+			manifestFormats: Mediabunny.ALL_MANIFEST_FORMATS,
+			mediaFormats: Mediabunny.ALL_FORMATS,
+		});
+
+		const variants = await manifest.getVariants();
+		const variant = variants[0];
+		const firstSegment = await variant.getFirstSegment();
+		const input = await firstSegment.toInput();
 		const videoTrack = await input.getPrimaryVideoTrack();
 		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
 
 		for await (const packet of sink.packets()) {
-			console.log(packet.type, packet.timestamp);
+			console.log(packet.byteLength, packet.timestamp, packet.duration)
+		}
+		*/
 
-			if (packet.timestamp >= 5) {
-				break;
+		/*
+		return;
+		const variant = variants[2];//variants.find(x => x.path.endsWith('aac/und/stream.m3u8'));
+		const input = variant.toInput();
+		const audioTrack = await input.getPrimaryAudioTrack();
+		const sink = new Mediabunny.EncodedPacketSink(audioTrack);
+
+		for await (const packet of sink.packets()) {
+			console.log(packet.timestamp, packet.duration)
+		}
+		*/
+
+		/*
+		const file = fileInput.files[0];
+		const input = new Mediabunny.Input({
+			formats: Mediabunny.ALL_FORMATS,
+			source: new Mediabunny.UrlSource('https://playertest.longtailvideo.com/adaptive/captions/130130211307_1.ts'),
+		});
+
+		const videoTrack = await input.getPrimaryVideoTrack();
+		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
+
+		for await (const packet of sink.packets()) {
+			console.log("Packet", packet.timestamp)
+			for (const thing of window.iterateNalUnitsInAnnexB(packet.data)) {
+				console.log(thing, "type", window.extractNalUnitTypeForAvc(packet.data[thing.offset]))
 			}
 		}
+		*/
 
 		/*
 		

@@ -18,23 +18,23 @@ let modulePromise: Promise<ExtendedEmscriptenModule> | null = null;
 
 let initDecoderFn: (codecId: number) => number;
 let configureDecodePacket: (ctx: number, size: number) => number;
-let decodePacket: (ctx: number, pts: number) => number;
+let decodePacket: (ctx: number, pts: bigint) => number;
 let getDecodedFormat: (ctx: number) => number;
 let getDecodedPlanePtr: (ctx: number, plane: number) => number;
 let getDecodedChannels: (ctx: number) => number;
 let getDecodedSampleRate: (ctx: number) => number;
 let getDecodedSampleCount: (ctx: number) => number;
-let getDecodedPts: (ctx: number) => number;
+let getDecodedPts: (ctx: number) => bigint;
 let flushDecoderFn: (ctx: number) => void;
 let closeDecoderFn: (ctx: number) => void;
 
 let initEncoderFn: (codecId: number, channels: number, sampleRate: number, bitrate: number) => number;
 let getEncoderFrameSize: (ctx: number) => number;
 let getEncodeInputPtr: (ctx: number, size: number) => number;
-let encodeFrameFn: (ctx: number, pts: number) => number;
+let encodeFrameFn: (ctx: number, pts: bigint) => number;
 let flushEncoderFn: (ctx: number) => void;
 let getEncodedData: (ctx: number) => number;
-let getEncodedPts: (ctx: number) => number;
+let getEncodedPts: (ctx: number) => bigint;
 let getEncodedDuration: (ctx: number) => number;
 let closeEncoderFn: (ctx: number) => void;
 
@@ -53,23 +53,23 @@ const ensureModule = async () => {
 
 		initDecoderFn = module.cwrap('init_decoder', 'number', ['number']);
 		configureDecodePacket = module.cwrap('configure_decode_packet', 'number', ['number', 'number']);
-		decodePacket = module.cwrap('decode_packet', 'number', ['number', 'number']);
+		decodePacket = module.cwrap('decode_packet', 'number', ['number', 'number']) as unknown as typeof decodePacket;
 		getDecodedFormat = module.cwrap('get_decoded_format', 'number', ['number']);
 		getDecodedPlanePtr = module.cwrap('get_decoded_plane_ptr', 'number', ['number', 'number']);
 		getDecodedChannels = module.cwrap('get_decoded_channels', 'number', ['number']);
 		getDecodedSampleRate = module.cwrap('get_decoded_sample_rate', 'number', ['number']);
 		getDecodedSampleCount = module.cwrap('get_decoded_sample_count', 'number', ['number']);
-		getDecodedPts = module.cwrap('get_decoded_pts', 'number', ['number']);
+		getDecodedPts = module.cwrap('get_decoded_pts', 'number', ['number']) as unknown as typeof getDecodedPts;
 		flushDecoderFn = module.cwrap('flush_decoder', null, ['number']);
 		closeDecoderFn = module.cwrap('close_decoder', null, ['number']);
 
 		initEncoderFn = module.cwrap('init_encoder', 'number', ['number', 'number', 'number', 'number']);
 		getEncoderFrameSize = module.cwrap('get_encoder_frame_size', 'number', ['number']);
 		getEncodeInputPtr = module.cwrap('get_encode_input_ptr', 'number', ['number', 'number']);
-		encodeFrameFn = module.cwrap('encode_frame', 'number', ['number', 'number']);
+		encodeFrameFn = module.cwrap('encode_frame', 'number', ['number', 'number']) as unknown as typeof encodeFrameFn;
 		flushEncoderFn = module.cwrap('flush_encoder', null, ['number']);
 		getEncodedData = module.cwrap('get_encoded_data', 'number', ['number']);
-		getEncodedPts = module.cwrap('get_encoded_pts', 'number', ['number']);
+		getEncodedPts = module.cwrap('get_encoded_pts', 'number', ['number']) as unknown as typeof getEncodedPts;
 		getEncodedDuration = module.cwrap('get_encoded_duration', 'number', ['number']);
 		closeEncoderFn = module.cwrap('close_encoder', null, ['number']);
 	}
@@ -108,7 +108,7 @@ const decode = (ctx: number, encodedData: ArrayBuffer, timestamp: number) => {
 
 	module.HEAPU8.set(bytes, dataPtr);
 
-	const ret = decodePacket(ctx, timestamp);
+	const ret = decodePacket(ctx, BigInt(timestamp));
 	if (ret < 0) {
 		throw new Error(`Decode failed with error code ${ret}.`);
 	}
@@ -122,7 +122,7 @@ const decode = (ctx: number, encodedData: ArrayBuffer, timestamp: number) => {
 	const channels = getDecodedChannels(ctx);
 	const sampleRate = getDecodedSampleRate(ctx);
 	const sampleCount = getDecodedSampleCount(ctx);
-	const pts = getDecodedPts(ctx);
+	const pts = Number(getDecodedPts(ctx));
 
 	let pcmData: ArrayBuffer;
 	if (info.planar) {
@@ -169,14 +169,14 @@ const encode = (ctx: number, audioData: ArrayBuffer, timestamp: number) => {
 	}
 	module.HEAPU8.set(audioBytes, inputPtr);
 
-	const bytesWritten = encodeFrameFn(ctx, timestamp);
+	const bytesWritten = encodeFrameFn(ctx, BigInt(timestamp));
 	if (bytesWritten < 0) {
 		throw new Error(`Encode failed with error code ${bytesWritten}.`);
 	}
 
 	const ptr = getEncodedData(ctx);
 	const encodedData = module.HEAPU8.slice(ptr, ptr + bytesWritten).buffer;
-	const pts = getEncodedPts(ctx);
+	const pts = Number(getEncodedPts(ctx));
 	const duration = getEncodedDuration(ctx);
 
 	return { encodedData, pts, duration };

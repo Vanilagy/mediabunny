@@ -10,6 +10,7 @@ import { EncodedPacketSink } from '../../src/media-sink.js';
 import { Mp4OutputFormat } from '../../src/output-format.js';
 import { AudioSample } from '../../src/sample.js';
 import { registerAacEncoder } from '@mediabunny/aac-encoder';
+import { assert } from '../../src/misc.js';
 
 const createSineWave = (sampleRate: number, channels: number, durationSeconds: number) => {
 	const totalFrames = sampleRate * durationSeconds;
@@ -66,9 +67,9 @@ test('AAC encoding', async () => {
 	});
 
 	const track = (await input.getPrimaryAudioTrack())!;
-	expect(track.codec).toBe('aac');
-	expect(track.sampleRate).toBe(sampleRate);
-	expect(track.numberOfChannels).toBe(channels);
+	expect(await track.getCodec()).toBe('aac');
+	expect(await track.getSampleRate()).toBe(sampleRate);
+	expect(await track.getNumberOfChannels()).toBe(channels);
 
 	const sink = new EncodedPacketSink(track);
 	let packetCount = 0;
@@ -79,4 +80,45 @@ test('AAC encoding', async () => {
 	expect(packetCount).toBeGreaterThan(durationSeconds * sampleRate / 1024);
 
 	expect(await track.computeDuration()).toBeCloseTo(2, 1);
+});
+
+test('AAC with huge timestamps', async () => {
+	registerAacEncoder();
+
+	const sampleRate = 48000;
+	const channels = 2;
+	const timestamp = 1e9;
+	const durationSeconds = 2;
+	const data = createSineWave(sampleRate, channels, durationSeconds);
+
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart: 'fragmented' }),
+		target: new BufferTarget(),
+	});
+
+	const audioSource = new AudioSampleSource({ codec: 'aac', bitrate: 128000 });
+	output.addAudioTrack(audioSource);
+
+	await output.start();
+	await audioSource.add(new AudioSample({
+		data,
+		format: 'f32',
+		numberOfChannels: channels,
+		sampleRate,
+		timestamp,
+	}));
+	audioSource.close();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const track = (await input.getPrimaryAudioTrack())!;
+	const sink = new EncodedPacketSink(track);
+	const firstPacket = await sink.getFirstPacket();
+	assert(firstPacket);
+
+	expect(firstPacket.timestamp).toBe(timestamp);
 });

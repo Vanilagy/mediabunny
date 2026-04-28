@@ -5,6 +5,8 @@
 		"module": "NodeNext"
 	},
 	"include": [
+		"**/*.ts",
+		"**/*.vue",
 		".vitepress/config.mts",
 		".vitepress/theme/index.ts",
 	]

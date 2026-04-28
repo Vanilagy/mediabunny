@@ -124,6 +124,25 @@ const output = new Output({
 
 The available options are the same `IsobmffOutputFormatOptions` used by [MP4](#mp4).
 
+## CMAF
+
+This output format creates a single Common Media Application Format (CMAF) segment (.m4s).
+```ts
+import { Output, CmafOutputFormat } from 'mediabunny';
+
+const output = new Output({
+	format: new CmafOutputFormat(options),
+	initTarget: new BufferTarget(), // For example
+	// ...
+});
+```
+
+A CMAF segment requires a separate init segment, which is written to the target specified by [`OutputOptions.initTarget`](../api/OutputOptions#inittarget).
+
+The available options are the same `IsobmffOutputFormatOptions` used by [MP4](#mp4), but with the `fastStart` option removed and with `minimumFragmentDuration` defaulting to `Infinity`.
+
+CMAF is mainly intended for use as the segment format of [HLS](#hls).
+
 ## WebM
 
 This output format creates WebM files.
@@ -340,3 +359,89 @@ type MpegTsOutputFormatOptions = {
 ```
 - `onPacket`\
 	Will be called for each 188-byte Transport Stream packet that is written.
+
+## HLS
+
+This output format creates media files compatible with the HTTP Live Streaming (HLS) protocol. HLS media is represented by a set of .m3u8 playlist files and media segment files, meaning this format writes out multiple files, requiring the use of a _pathed Output_.
+
+This output format creates the following files:
+- A master playlist .m3u8 file, containing the list of available playlists. A master playlist is always emitted, written to the root path.
+- One .m3u8 file for each playlist, each containing a list of media segments.
+- Many media segments, containing the actual media data.
+
+To emit media playlists that use the `#EXT-X-PROGRAM-DATE-TIME` tag to map segment timestamps to real-world time, set `BaseTrackMetadata.isRelativeToUnixEpoch` to `true` for all output tracks.
+
+```ts
+import { Output, PathedTarget, MpegTsOutputFormat } from 'mediabunny';
+
+const output = new Output({
+	format: new HlsOutputFormat(options),
+	target: new PathedTarget('master.m3u8', ({ path }) => {
+		// Return a target
+	}),
+});
+```
+
+::: info
+This format ensures [append-only writing](#append-only-writing) for master and media playlists; for media segments it depends on the media segment format.
+:::
+
+The following options are available:
+```ts
+export type HlsOutputFormatOptions = {
+	segmentFormat: OutputFormat | OutputFormat[];
+
+	targetDuration?: number;
+	singleFilePerPlaylist?: boolean;
+	live?: boolean;
+	maxLiveSegmentCount?: number;
+	getPlaylistPath?: (info: HlsOutputPlaylistInfo) => MaybePromise<FilePath>;
+	getSegmentPath?: (info: HlsOutputSegmentInfo) => MaybePromise<FilePath>;
+	getInitPath?: (info: HlsOutputPlaylistInfo) => MaybePromise<FilePath>;
+
+	onMaster?: (content: string) => unknown;
+	onPlaylist?: (content: string, info: HlsOutputPlaylistInfo) => unknown;
+	onSegment?: (target: Target, info: HlsOutputSegmentInfo) => unknown;
+	onInit?: (target: Target, info: HlsOutputPlaylistInfo) => unknown;
+};
+```
+- `segmentFormat`\
+	**Required.** Specifies the file format of each media segment. Not all formats are supported by all players; prefer sticking to the most commonly used ones: `MpegTsOutputFormat`, `CmafOutputFormat`, `AdtsOutputFormat`, and `Mp3OutputFormat`.
+
+	When an array of formats is specified, for each playlist, the first format that can contain all of the playlist's tracks is chosen. This allows you to, for example, package audio into .aac files and video into .ts files.
+- `targetDuration`\
+	Specifies the target (max) duration in seconds for each media segment, defaulting to 2 seconds.
+
+	Mediabunny will try not to emit media segments longer than the target duration, but it is forced to if key frames are provided with a longer period than the target duration. Therefore, make sure to encode a key frame at least every `targetDuration` seconds to guarantee segment length, controllable via [`VideoEncodingConfig.keyFrameInterval`](../api/VideoEncodingConfig#keyframeinterval).
+- `singleFilePerPlaylist`\
+	Whether to bundle all media segments for a playlist into a single file. Individual segments are then extracted via range requests.
+- `live`\
+	If `true`, the muxer will be in "live mode", continuously emitting updated playlists as new segments are created. The master playlist will be emitted as soon as all playlists have been emitted at least once, and will continue to be emitted each time a segment is finalized to further refine the accuracy of the `BANDWIDTH` attribute.
+
+	When `false` (the default), all playlists will only be emitted once, upon output finalization.
+- `maxLiveSegmentCount`\
+	When in live mode, this controls the maximum number of segments contained in each playlist. Defaults to `Infinity`, meaning playlists continually grow in size.
+- `getPlaylistPath`\
+	Returns the file path for a given media playlist. If the returned path is relative, it is relative to the root path.
+
+	Defaults to `'playlist-{n}.m3u8'`, where `n` is the 1-based index of the media playlist in the master playlist.
+- `getSegmentPath`\
+	Returns the file path for a given media segment. If the returned path is relative, it is relative to the path of the containing playlist.
+
+	Defaults to `'segment-{n}-{k}{ext}'`, where `n` is the 1-based index of the containing media playlist in the master playlist, `k` is the 1-based index of the segment in its playlist, and `ext` is the file extension of the segment format (including the leading dot).
+
+	If `singleFilePerPlaylist` is true, it defaults to `'segments-{n}{ext}'` instead.
+- `getInitPath`\
+	Returns the file path for a given media init segment. If the returned path is relative, it is relative to the path of the containing playlist.
+
+	Only necessary for segment formats that require an init file, such as `CmafOutputFormat`.
+
+	Defaults to `'init-{n}{ext}'`, where `n` is the 1-based index of the containing media playlist in the master playlist and `ext` is the file extension of the segment format (including the leading dot).
+- `onMaster`\
+	Called whenever the master playlist is written.
+- `onPlaylist`\
+	Called whenever a media playlist is written.
+- `onSegment`\
+	Called whenever a media segment has been fully written. In single-file mode, this function will only be called once when the playlist is finalized.
+- `onInit`\
+	Called when a media playlist is initialized, before any segments have been written. In single-file mode, this function is never called.

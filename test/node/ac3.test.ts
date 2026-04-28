@@ -14,6 +14,7 @@ import { AudioSampleSource } from '../../src/media-source.js';
 import { Mp4OutputFormat } from '../../src/output-format.js';
 import { AudioSample } from '../../src/sample.js';
 import { registerAc3Decoder, registerAc3Encoder } from '@mediabunny/ac3';
+import { assert } from '../../src/misc.js';
 
 const __dirname = new URL('.', import.meta.url).pathname;
 
@@ -26,7 +27,7 @@ test('reads AC-3 from MP4', async () => {
 	const audioTrack = (await input.getPrimaryAudioTrack())!;
 	const decoderConfig = (await audioTrack.getDecoderConfig())!;
 
-	expect(audioTrack.codec).toBe('ac3');
+	expect(await audioTrack.getCodec()).toBe('ac3');
 	expect(decoderConfig.description).toBeUndefined();
 });
 
@@ -39,7 +40,7 @@ test('reads E-AC-3 from MP4', async () => {
 	const audioTrack = (await input.getPrimaryAudioTrack())!;
 	const decoderConfig = (await audioTrack.getDecoderConfig())!;
 
-	expect(audioTrack.codec).toBe('eac3');
+	expect(await audioTrack.getCodec()).toBe('eac3');
 	expect(decoderConfig.description).toBeUndefined();
 });
 
@@ -51,8 +52,8 @@ test('reads and writes AC-3 in MPEG-TS', async () => {
 
 	const originalAudioTrack = (await originalInput.getPrimaryAudioTrack())!;
 
-	expect(originalAudioTrack.codec).toBe('ac3');
-	expect(originalAudioTrack.internalCodecId).toBe(0x81);
+	expect(await originalAudioTrack.getCodec()).toBe('ac3');
+	expect(await originalAudioTrack.getInternalCodecId()).toBe(0x81);
 
 	const output = new Output({
 		format: new MpegTsOutputFormat(),
@@ -69,10 +70,10 @@ test('reads and writes AC-3 in MPEG-TS', async () => {
 
 	const newAudioTrack = (await newInput.getPrimaryAudioTrack())!;
 
-	expect(newAudioTrack.codec).toBe('ac3');
-	expect(newAudioTrack.internalCodecId).toBe(0x81);
-	expect(newAudioTrack.numberOfChannels).toBe(originalAudioTrack.numberOfChannels);
-	expect(newAudioTrack.sampleRate).toBe(originalAudioTrack.sampleRate);
+	expect(await newAudioTrack.getCodec()).toBe('ac3');
+	expect(await newAudioTrack.getInternalCodecId()).toBe(0x81);
+	expect(await newAudioTrack.getNumberOfChannels()).toBe(await originalAudioTrack.getNumberOfChannels());
+	expect(await newAudioTrack.getSampleRate()).toBe(await originalAudioTrack.getSampleRate());
 
 	// Verify registration_descriptor is present
 	const buffer = new Uint8Array(output.target.buffer!);
@@ -94,8 +95,8 @@ test('reads and writes E-AC-3 in MPEG-TS', async () => {
 
 	const originalAudioTrack = (await originalInput.getPrimaryAudioTrack())!;
 
-	expect(originalAudioTrack.codec).toBe('eac3');
-	expect(originalAudioTrack.internalCodecId).toBe(0x87);
+	expect(await originalAudioTrack.getCodec()).toBe('eac3');
+	expect(await originalAudioTrack.getInternalCodecId()).toBe(0x87);
 
 	const output = new Output({
 		format: new MpegTsOutputFormat(),
@@ -112,10 +113,10 @@ test('reads and writes E-AC-3 in MPEG-TS', async () => {
 
 	const newAudioTrack = (await newInput.getPrimaryAudioTrack())!;
 
-	expect(newAudioTrack.codec).toBe('eac3');
-	expect(newAudioTrack.internalCodecId).toBe(0x87);
-	expect(newAudioTrack.numberOfChannels).toBe(originalAudioTrack.numberOfChannels);
-	expect(newAudioTrack.sampleRate).toBe(originalAudioTrack.sampleRate);
+	expect(await newAudioTrack.getCodec()).toBe('eac3');
+	expect(await newAudioTrack.getInternalCodecId()).toBe(0x87);
+	expect(await newAudioTrack.getNumberOfChannels()).toBe(await originalAudioTrack.getNumberOfChannels());
+	expect(await newAudioTrack.getSampleRate()).toBe(await originalAudioTrack.getSampleRate());
 
 	// Verify registration_descriptor is present
 	const buffer = new Uint8Array(output.target.buffer!);
@@ -168,6 +169,8 @@ test('AC-3 decoding', async () => {
 
 	const track = (await input.getPrimaryAudioTrack())!;
 	const { packetCount } = await track.computePacketStats();
+	const trackNumberOfChannels = await track.getNumberOfChannels();
+	const trackSampleRate = await track.getSampleRate();
 	const sink = new AudioSampleSink(track);
 
 	let sampleCount = 0;
@@ -177,8 +180,8 @@ test('AC-3 decoding', async () => {
 		expect(sample.timestamp).toBeCloseTo(nextTimestamp);
 		expect(sample.duration).toBe(0.032);
 		expect(sample.format).toBe('f32-planar');
-		expect(sample.numberOfChannels).toBe(track.numberOfChannels);
-		expect(sample.sampleRate).toBe(track.sampleRate);
+		expect(sample.numberOfChannels).toBe(trackNumberOfChannels);
+		expect(sample.sampleRate).toBe(trackSampleRate);
 
 		nextTimestamp += sample.duration;
 		sampleCount++;
@@ -197,6 +200,8 @@ test('E-AC-3 decoding', async () => {
 
 	const track = (await input.getPrimaryAudioTrack())!;
 	const { packetCount } = await track.computePacketStats();
+	const trackNumberOfChannels = await track.getNumberOfChannels();
+	const trackSampleRate = await track.getSampleRate();
 	const sink = new AudioSampleSink(track);
 
 	let sampleCount = 0;
@@ -206,8 +211,8 @@ test('E-AC-3 decoding', async () => {
 		expect(sample.timestamp).toBeCloseTo(nextTimestamp);
 		expect(sample.duration).toBe(0.032);
 		expect(sample.format).toBe('f32-planar');
-		expect(sample.numberOfChannels).toBe(track.numberOfChannels);
-		expect(sample.sampleRate).toBe(track.sampleRate);
+		expect(sample.numberOfChannels).toBe(trackNumberOfChannels);
+		expect(sample.sampleRate).toBe(trackSampleRate);
 
 		nextTimestamp += sample.duration;
 		sampleCount++;
@@ -263,9 +268,9 @@ test('AC-3 encoding', async () => {
 	});
 
 	const track = (await input.getPrimaryAudioTrack())!;
-	expect(track.codec).toBe('ac3');
-	expect(track.sampleRate).toBe(sampleRate);
-	expect(track.numberOfChannels).toBe(channels);
+	expect(await track.getCodec()).toBe('ac3');
+	expect(await track.getSampleRate()).toBe(sampleRate);
+	expect(await track.getNumberOfChannels()).toBe(channels);
 
 	const sink = new EncodedPacketSink(track);
 	let packetCount = 0;
@@ -311,9 +316,9 @@ test('E-AC-3 encoding', async () => {
 	});
 
 	const track = (await input.getPrimaryAudioTrack())!;
-	expect(track.codec).toBe('eac3');
-	expect(track.sampleRate).toBe(sampleRate);
-	expect(track.numberOfChannels).toBe(channels);
+	expect(await track.getCodec()).toBe('eac3');
+	expect(await track.getSampleRate()).toBe(sampleRate);
+	expect(await track.getNumberOfChannels()).toBe(channels);
 
 	const sink = new EncodedPacketSink(track);
 	let packetCount = 0;
@@ -324,4 +329,102 @@ test('E-AC-3 encoding', async () => {
 	expect(packetCount).toBeGreaterThan(0);
 
 	expect(await track.computeDuration()).toBeCloseTo(2, 1);
+});
+
+test('AC-3 with huge timestamps', async () => {
+	registerAc3Decoder();
+	registerAc3Encoder();
+
+	const sampleRate = 48000;
+	const channels = 2;
+	const timestamp = 1e9;
+	const durationSeconds = 2;
+	const data = createSineWave(sampleRate, channels, durationSeconds);
+
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart: 'fragmented' }),
+		target: new BufferTarget(),
+	});
+
+	const audioSource = new AudioSampleSource({ codec: 'ac3', bitrate: 192000 });
+	output.addAudioTrack(audioSource);
+
+	await output.start();
+	await audioSource.add(new AudioSample({
+		data,
+		format: 'f32',
+		numberOfChannels: channels,
+		sampleRate,
+		timestamp,
+	}));
+	audioSource.close();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const track = (await input.getPrimaryAudioTrack())!;
+	const packetSink = new EncodedPacketSink(track);
+	const firstPacket = await packetSink.getFirstPacket();
+	assert(firstPacket);
+
+	expect(firstPacket.timestamp).toBe(timestamp);
+
+	const sampleSink = new AudioSampleSink(track);
+	const iterator = sampleSink.samples(timestamp);
+	const firstSample = (await iterator.next()).value;
+	assert(firstSample);
+
+	expect(firstSample.timestamp).toBe(timestamp);
+});
+
+test('E-AC-3 with huge timestamps', async () => {
+	registerAc3Decoder();
+	registerAc3Encoder();
+
+	const sampleRate = 48000;
+	const channels = 2;
+	const timestamp = 1e9;
+	const durationSeconds = 2;
+	const data = createSineWave(sampleRate, channels, durationSeconds);
+
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart: 'fragmented' }),
+		target: new BufferTarget(),
+	});
+
+	const audioSource = new AudioSampleSource({ codec: 'eac3', bitrate: 192000 });
+	output.addAudioTrack(audioSource);
+
+	await output.start();
+	await audioSource.add(new AudioSample({
+		data,
+		format: 'f32',
+		numberOfChannels: channels,
+		sampleRate,
+		timestamp,
+	}));
+	audioSource.close();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const track = (await input.getPrimaryAudioTrack())!;
+	const packetSink = new EncodedPacketSink(track);
+	const firstPacket = await packetSink.getFirstPacket();
+	assert(firstPacket);
+
+	expect(firstPacket.timestamp).toBe(timestamp);
+
+	const sampleSink = new AudioSampleSink(track);
+	const iterator = sampleSink.samples(timestamp);
+	const firstSample = (await iterator.next()).value;
+	assert(firstSample);
+
+	expect(firstSample.timestamp).toBe(timestamp);
 });

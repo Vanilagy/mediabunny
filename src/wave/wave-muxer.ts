@@ -21,8 +21,8 @@ import { Id3V2Writer } from '../id3';
 export class WaveMuxer extends Muxer {
 	private format: WavOutputFormat;
 	private isRf64: boolean;
-	private writer: Writer;
-	private riffWriter: RiffWriter;
+	private writer!: Writer;
+	private riffWriter!: RiffWriter;
 	private headerWritten = false;
 	private dataSize = 0;
 	private sampleRate: number | null = null;
@@ -38,13 +38,18 @@ export class WaveMuxer extends Muxer {
 		super(output);
 
 		this.format = format;
-		this.writer = output._writer;
-		this.riffWriter = new RiffWriter(output._writer);
 		this.isRf64 = !!format._options.large;
 	}
 
 	async start() {
-		// Nothing needed here - we'll write the header with the first sample
+		const release = await this.mutex.acquire();
+
+		this.writer = await this.output._getRootWriter(false);
+		this.riffWriter = new RiffWriter(this.writer);
+
+		// No writing needed here - we'll write the header with the first sample
+
+		release();
 	}
 
 	async getMimeType() {
@@ -363,8 +368,6 @@ export class WaveMuxer extends Muxer {
 			this.writer.seek(this.dataSizePos);
 			this.riffWriter.writeU32(this.dataSize);
 		}
-
-		this.writer.seek(endPos);
 
 		release();
 	}

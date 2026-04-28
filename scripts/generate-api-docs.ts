@@ -68,6 +68,10 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 	const classHierarchy = new Map<string, string[]>(); // Maps parent class to array of subclasses
 	const classInstances = new Map<string, string[]>(); // Maps class name to array of instance variable names
 
+	const hasDeprecatedTag = (node: ts.Node): boolean => {
+		return ts.getJSDocTags(node).some(tag => tag.tagName.text === 'deprecated');
+	};
+
 	const collectExportedTypes = (module: ts.Symbol, visited = new Set<ts.Symbol>()): void => {
 		if (visited.has(module)) return;
 		visited.add(module);
@@ -77,12 +81,12 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 			const declaration = exportSymbol.valueDeclaration || exportSymbol.declarations?.[0];
 			if (!declaration) return;
 
-			// Collect classes, interfaces, types, enums, variables (only if @public)
+			// Collect classes, interfaces, types, enums, variables (only if @public and not @deprecated)
 			if (ts.isClassDeclaration(declaration) || ts.isInterfaceDeclaration(declaration)
 				|| ts.isTypeAliasDeclaration(declaration) || ts.isEnumDeclaration(declaration)
 				|| ts.isVariableDeclaration(declaration)) {
 				const hasPublicTag = ts.getJSDocTags(declaration).some(tag => tag.tagName.text === 'public');
-				if (hasPublicTag) {
+				if (hasPublicTag && !hasDeprecatedTag(declaration)) {
 					exportedTypes.add(exportSymbol.getName());
 				}
 			}
@@ -92,9 +96,9 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 				const aliasedSymbol = typeChecker.getAliasedSymbol(exportSymbol);
 				const aliasedDeclaration = aliasedSymbol.valueDeclaration || aliasedSymbol.declarations?.[0];
 				if (aliasedDeclaration) {
-					// Check if the aliased symbol has @public tag
+					// Check if the aliased symbol has @public tag and is not deprecated
 					const hasPublicTag = ts.getJSDocTags(aliasedDeclaration).some(tag => tag.tagName.text === 'public');
-					if (hasPublicTag) {
+					if (hasPublicTag && !hasDeprecatedTag(aliasedDeclaration)) {
 						exportedTypes.add(exportSymbol.getName());
 					}
 
@@ -133,10 +137,10 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 					}
 				}
 			}
-			// Otherwise, add any symbol with @public tag (we'll filter by type later)
+			// Otherwise, add any symbol with @public tag and not @deprecated (we'll filter by type later)
 			else {
 				const hasPublicTag = ts.getJSDocTags(declaration).some(tag => tag.tagName.text === 'public');
-				if (hasPublicTag) {
+				if (hasPublicTag && !hasDeprecatedTag(declaration)) {
 					symbols.push(exportSymbol);
 				}
 			}
@@ -334,11 +338,11 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 			if (linkText) {
 				// If custom link text is provided, always use it.
 				displayText = linkText.trim();
-			} else if (memberName) {
-				// If it's a member link, default the text to just the member name.
+			} else if (memberName && typeName === currentTypeName) {
+				// Member link on the current type: just the member name.
 				displayText = `\`${memberName}\``;
 			} else {
-				// Otherwise, it's a type link, so use the full type name.
+				// Type link, or member link on another type: use the full target.
 				displayText = `\`${cleanTarget}\``;
 			}
 
@@ -621,9 +625,10 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 		const nodeKind = ts.SyntaxKind[declaration.kind];
 		const symbolName = (declaration as any).name?.getText() || exportSymbol.getName();
 
-		// Only process symbols with @public tag
+		// Only process symbols with @public tag, and skip deprecated ones entirely
 		const hasPublicTag = ts.getJSDocTags(declaration).some(tag => tag.tagName.text === 'public');
 		if (!hasPublicTag) return;
+		if (hasDeprecatedTag(declaration)) return;
 
 		// Check for @group tag (handle re-exports by looking at the original declaration)
 		let targetDeclaration = declaration;
@@ -661,14 +666,10 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 			const variableName = declaration.name.getText();
 
 			// Get variable description from JSDoc
-			const jsDocComment = ts.getJSDocCommentsAndTags(declaration)[0];
-			let description = '';
-			if (jsDocComment && ts.isJSDoc(jsDocComment)) {
-				const commentText = jsDocComment.comment;
-				if (typeof commentText === 'string') {
-					description = processLinkTags(commentText.trim(), variableName);
-				}
-			}
+			const description = extractJsDocDescription(declaration, {
+				tagHandling: 'filterAll',
+				transform: text => processLinkTags(text, variableName),
+			});
 
 			// Check if it's a function type
 			const variableType = typeChecker.getTypeAtLocation(declaration);
@@ -766,48 +767,18 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 			const events: string[] = [];
 			const methods: string[] = [];
 			const staticMethods: string[] = [];
+			const deprecatedProperties: string[] = [];
+			const deprecatedMethods: string[] = [];
 			let constructor: string | null = null;
 			let extendsClause = '';
 			let implementsClause = '';
 			let typeParameters: string | null = null;
 
 			// Get class description from JSDoc (or from superclass if none)
-			let description = '';
-			const jsDocComment = ts.getJSDocCommentsAndTags(declaration)[0];
-
-			if (jsDocComment && ts.isJSDoc(jsDocComment)) {
-				// First try to get the comment from the parsed JSDoc
-				const commentText = jsDocComment.comment;
-				if (typeof commentText === 'string' && commentText.trim()) {
-					description = processLinkTags(commentText.trim(), className);
-				} else {
-					// If no comment text, extract from raw source text
-					const sourceFile = declaration.getSourceFile();
-					const sourceText = sourceFile.getFullText();
-					const start = jsDocComment.getStart();
-					const end = jsDocComment.getEnd();
-					const rawJsDoc = sourceText.substring(start, end);
-
-					// Extract the content between /** and */
-					const match = rawJsDoc.match(/\/\*\*(.*?)\*\//s);
-					if (match && match[1]) {
-						const content = match[1]
-							.split('\n')
-							.map(line => line.replace(/^\s*\*\s?/, '')) // Remove leading * and spaces
-							.join('\n')
-							.trim();
-
-						// Filter out @tags but keep the description
-						const lines = content.split('\n');
-						const descLines = lines.filter(line => !line.trim().startsWith('@'));
-						const rawDesc = descLines.join('\n').trim();
-
-						if (rawDesc) {
-							description = processLinkTags(rawDesc, className);
-						}
-					}
-				}
-			}
+			let description = extractJsDocDescription(declaration, {
+				tagHandling: 'filterAll',
+				transform: text => processLinkTags(text, className),
+			});
 
 			// If no description, check superclass (only for classes/interfaces)
 			if (!description && (ts.isClassDeclaration(declaration) || ts.isInterfaceDeclaration(declaration)) && declaration.heritageClauses) {
@@ -916,37 +887,12 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 
 			// Helper to get JSDoc description with superclass fallback (recursive)
 			const getDescriptionWithFallback = (member: ts.ClassElement | ts.TypeElement, memberName: string): string => {
-				const jsDoc = ts.getJSDocCommentsAndTags(member)[0];
-				if (jsDoc && ts.isJSDoc(jsDoc)) {
-					// First try the parsed comment
-					if (typeof jsDoc.comment === 'string' && jsDoc.comment.trim()) {
-						return processLinkTags(jsDoc.comment.trim(), className);
-					} else {
-						// If no parsed comment, extract from raw source (same logic as class descriptions)
-						const sourceFile = member.getSourceFile();
-						const sourceText = sourceFile.getFullText();
-						const start = jsDoc.getStart();
-						const end = jsDoc.getEnd();
-						const rawJsDoc = sourceText.substring(start, end);
-
-						const match = rawJsDoc.match(/\/\*\*(.*?)\*\//s);
-						if (match && match[1]) {
-							const content = match[1]
-								.split('\n')
-								.map(line => line.replace(/^\s*\*\s?/, '')) // Remove leading * and spaces
-								.join('\n')
-								.trim();
-
-							// Filter out @tags but keep the description
-							const lines = content.split('\n');
-							const descLines = lines.filter(line => !line.trim().startsWith('@'));
-							const rawDesc = descLines.join('\n').trim();
-
-							if (rawDesc) {
-								return processLinkTags(rawDesc, className);
-							}
-						}
-					}
+				const ownDescription = extractJsDocDescription(member, {
+					tagHandling: 'filterAll',
+					transform: text => processLinkTags(text, className),
+				});
+				if (ownDescription) {
+					return ownDescription;
 				}
 
 				// Recursively check superclass hierarchy for this member's documentation
@@ -1020,6 +966,53 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 				// Check if member has @internal in JSDoc
 				const hasInternalTag = ts.getJSDocTags(member).some(tag => tag.tagName.text === 'internal');
 				if (hasInternalTag) return;
+
+				const isDeprecatedMember = hasDeprecatedTag(member);
+
+				const getDeprecationNotice = () => {
+					const tag = ts.getJSDocTags(member).find(t => t.tagName.text === 'deprecated');
+					let text = '';
+					if (tag?.comment) {
+						if (typeof tag.comment === 'string') {
+							text = processLinkTags(tag.comment.trim(), className);
+						} else {
+							// comment is a NodeArray of JSDocComment elements (text + inline tags)
+							const raw = tag.comment.map((part) => {
+								if (ts.isJSDocLinkLike(part)) {
+									const linkName = part.name?.getText() ?? '';
+									const linkText = part.text?.trim() ?? '';
+									// Reconstruct as {@link Name text}
+									return `{@link ${linkName}${linkText ? ' ' + linkText : ''}}`;
+								}
+								return part.text ?? '';
+							}).join('');
+							text = processLinkTags(raw.trim(), className);
+						}
+					}
+					return text ? `> **Deprecated.** ${text}\n\n` : '> **Deprecated.**\n\n';
+				};
+
+				const addDeprecationNotice = (content: string) => {
+					// Insert the deprecation notice right after the heading line
+					const headingEnd = content.indexOf('\n');
+					return content.slice(0, headingEnd) + '\n\n' + getDeprecationNotice() + content.slice(headingEnd + 1);
+				};
+
+				const pushProperty = (content: string) => {
+					if (isDeprecatedMember) {
+						deprecatedProperties.push(addDeprecationNotice(content));
+					} else {
+						properties.push(content);
+					}
+				};
+
+				const pushMethod = (content: string) => {
+					if (isDeprecatedMember) {
+						deprecatedMethods.push(addDeprecationNotice(content));
+					} else {
+						methods.push(content);
+					}
+				};
 
 				if (ts.isConstructorDeclaration(member) && !isAbstract) {
 					// Skip private constructors
@@ -1231,7 +1224,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 					if (isEventHandler) {
 						events.push(propertyContent);
 					} else {
-						properties.push(propertyContent);
+						pushProperty(propertyContent);
 					}
 				} else if (ts.isGetAccessorDeclaration(member) && member.name) {
 					const name = member.name.getText();
@@ -1264,7 +1257,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 					references.forEach(ref => addUsage(ref, className, name, 'property'));
 
 					const inheritedBadge = '';
-					properties.push(`### \`${name}\`${inheritedBadge}\n\n\`\`\`ts\n${accessorDef}\n\`\`\`${desc ? `\n\n${desc}` : ''}${referencesText}`);
+					pushProperty(`### \`${name}\`${inheritedBadge}\n\n\`\`\`ts\n${accessorDef}\n\`\`\`${desc ? `\n\n${desc}` : ''}${referencesText}`);
 				} else if (ts.isSetAccessorDeclaration(member) && member.name) {
 					const name = member.name.getText();
 					const param = member.parameters[0];
@@ -1287,7 +1280,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 					references.forEach(ref => addUsage(ref, className, name, 'property'));
 
 					const inheritedBadge = '';
-					properties.push(`### \`${name}\`${inheritedBadge}\n\n\`\`\`ts\n${accessorDef}\n\`\`\`${desc ? `\n\n${desc}` : ''}${referencesText}`);
+					pushProperty(`### \`${name}\`${inheritedBadge}\n\n\`\`\`ts\n${accessorDef}\n\`\`\`${desc ? `\n\n${desc}` : ''}${referencesText}`);
 				} else if ((ts.isMethodDeclaration(member) || ts.isMethodSignature(member)) && member.name) {
 					const name = member.name.getText();
 					const isStatic = member.modifiers?.some(mod => mod.kind === ts.SyntaxKind.StaticKeyword);
@@ -1385,7 +1378,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 					if (isStatic) {
 						staticMethods.push(methodContent);
 					} else {
-						methods.push(methodContent);
+						pushMethod(methodContent);
 					}
 				}
 			};
@@ -1497,20 +1490,27 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 				}
 			}
 
-			// Sort properties and methods alphabetically (but not for type aliases - keep source order)
+			// Sort properties and methods alphabetically, but with bracketed names like
+			// `[Symbol.dispose]()` always at the bottom. Type aliases keep source order.
+			const compareMemberNames = (a: string, b: string) => {
+				const nameA = a.match(/### `([^`]+)`/)?.[1] ?? '';
+				const nameB = b.match(/### `([^`]+)`/)?.[1] ?? '';
+				const aIsBracket = nameA.startsWith('[');
+				const bIsBracket = nameB.startsWith('[');
+				if (aIsBracket !== bIsBracket) {
+					return aIsBracket ? 1 : -1;
+				}
+				return nameA.localeCompare(nameB);
+			};
+
 			if (!ts.isTypeAliasDeclaration(declaration)) {
-				properties.sort((a, b) => {
-					const nameA = a.match(/### (.+)/)?.[1] || '';
-					const nameB = b.match(/### (.+)/)?.[1] || '';
-					return nameA.localeCompare(nameB);
-				});
+				properties.sort(compareMemberNames);
+				methods.sort(compareMemberNames);
 			}
 
-			staticMethods.sort((a, b) => {
-				const nameA = a.match(/### (.+)/)?.[1] || '';
-				const nameB = b.match(/### (.+)/)?.[1] || '';
-				return nameA.localeCompare(nameB);
-			});
+			staticMethods.sort(compareMemberNames);
+			deprecatedProperties.sort(compareMemberNames);
+			deprecatedMethods.sort(compareMemberNames);
 
 			let markdown = '';
 
@@ -1685,6 +1685,11 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 				markdown += `\n## Methods\n\n${methods.join('\n\n')}\n`;
 			}
 
+			const deprecated = [...deprecatedProperties, ...deprecatedMethods];
+			if (deprecated.length > 0) {
+				markdown += `\n## Deprecated\n\n${deprecated.join('\n\n')}\n`;
+			}
+
 			generatedDocs.set(className, markdown);
 		}
 	});
@@ -1841,43 +1846,71 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 	}
 };
 
-// Helper to get the full description text from a JSDoc comment, handling inline tags.
-const getFullJSDocDescription = (node: ts.Node): string => {
+// Shared helper for extracting a JSDoc description, handling inline tags via raw-source fallback.
+// - `tagHandling: 'stopAtFirst'` matches the behavior used by property-level descriptions: if any
+//   @-tag line is encountered, all subsequent lines are dropped (including any trailing description).
+// - `tagHandling: 'filterAll'` matches the behavior used by class/variable top-level descriptions:
+//   every @-tag line is filtered out individually, preserving interleaved description lines.
+// - `transform` is applied to the final non-empty description (e.g. to process {@link} tags).
+const extractJsDocDescription = (
+	node: ts.Node,
+	opts: { tagHandling: 'stopAtFirst' | 'filterAll'; transform?: (text: string) => string },
+): string => {
 	const jsDoc = ts.getJSDocCommentsAndTags(node)[0];
-	if (!jsDoc || !ts.isJSDoc(jsDoc)) return '';
-
-	// If it's a simple string, just return it.
-	if (typeof jsDoc.comment === 'string') {
-		return jsDoc.comment.trim();
+	if (!jsDoc || !ts.isJSDoc(jsDoc)) {
+		return '';
 	}
 
-	// If it's a structured comment (with inline tags), get the raw text.
+	const transform = opts.transform ?? ((t: string) => t);
+
+	// If the parsed comment is a non-empty string (no inline tags), use it directly.
+	// When the parsed comment is an empty string or a structured NodeArray (inline tags like
+	// {@link}), fall through to raw-source extraction. For empty-string comments this is safe:
+	// the raw block can only contain @-tags, so raw extraction also yields empty.
+	if (typeof jsDoc.comment === 'string' && jsDoc.comment.trim()) {
+		return transform(jsDoc.comment.trim());
+	}
+
+	// Structured comment (contains inline tags like {@link}); extract description from raw source.
 	const sourceFile = node.getSourceFile();
 	const sourceText = sourceFile.getFullText();
-	const start = jsDoc.getStart();
-	const end = jsDoc.getEnd();
-	const rawJsDoc = sourceText.substring(start, end);
+	const rawJsDoc = sourceText.substring(jsDoc.getStart(), jsDoc.getEnd());
 
-	// Extract the content between /** and */
 	const match = rawJsDoc.match(/\/\*\*(.*?)\*\//s);
-	if (match && match[1]) {
-		const content = match[1]
-			.split('\n')
-			.map(line => line.replace(/^\s*\*\s?/, '')) // Remove leading * and spaces
-			.join('\n')
-			.trim();
-
-		// Filter out @-tags (like @param, @returns) to keep only the main description
-		const lines = content.split('\n');
-		const descLines = [];
-		for (const line of lines) {
-			if (line.trim().startsWith('@')) break; // Stop at the first @-tag
-			descLines.push(line);
-		}
-		return descLines.join('\n').trim();
+	if (!match || !match[1]) {
+		return '';
 	}
 
-	return '';
+	const content = match[1]
+		.split('\n')
+		.map(line => line.replace(/^\s*\*\s?/, '')) // Remove leading * and spaces
+		.join('\n')
+		.trim();
+
+	const lines = content.split('\n');
+	let descLines: string[];
+	if (opts.tagHandling === 'stopAtFirst') {
+		descLines = [];
+		for (const line of lines) {
+			if (line.trim().startsWith('@')) {
+				break;
+			}
+			descLines.push(line);
+		}
+	} else {
+		descLines = lines.filter(line => !line.trim().startsWith('@'));
+	}
+
+	const rawDesc = descLines.join('\n').trim();
+	if (!rawDesc) {
+		return '';
+	}
+	return transform(rawDesc);
+};
+
+// Helper to get the full description text from a JSDoc comment, handling inline tags.
+const getFullJSDocDescription = (node: ts.Node): string => {
+	return extractJsDocDescription(node, { tagHandling: 'stopAtFirst' });
 };
 
 const main = () => {

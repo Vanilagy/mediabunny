@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { assert, toDataView } from '../misc';
+import { toDataView } from '../misc';
 import { metadataTagsAreEmpty } from '../metadata';
 import { Muxer } from '../muxer';
 import { Output, OutputAudioTrack } from '../output';
@@ -19,8 +19,8 @@ import { Id3V2Writer } from '../id3';
 
 export class Mp3Muxer extends Muxer {
 	private format: Mp3OutputFormat;
-	private writer: Writer;
-	private mp3Writer: Mp3Writer;
+	private writer!: Writer;
+	private mp3Writer!: Mp3Writer;
 	private xingFrameData: XingFrameData | null = null;
 	private frameCount = 0;
 	private framePositions: number[] = [];
@@ -30,15 +30,20 @@ export class Mp3Muxer extends Muxer {
 		super(output);
 
 		this.format = format;
-		this.writer = output._writer;
-		this.mp3Writer = new Mp3Writer(output._writer);
 	}
 
 	async start() {
+		const release = await this.mutex.acquire();
+
+		this.writer = await this.output._getRootWriter(this.format._options.xingHeader === false);
+		this.mp3Writer = new Mp3Writer(this.writer);
+
 		if (!metadataTagsAreEmpty(this.output._metadataTags)) {
 			const id3Writer = new Id3V2Writer(this.writer);
 			id3Writer.writeId3V2Tag(this.output._metadataTags);
 		}
+
+		release();
 	}
 
 	async getMimeType() {
@@ -107,14 +112,14 @@ export class Mp3Muxer extends Muxer {
 
 			this.validateAndNormalizeTimestamp(track, packet.timestamp, packet.type === 'key');
 
+			if (writeXingHeader) {
+				this.framePositions.push(this.writer.getPos());
+			}
+
 			this.writer.write(packet.data);
 			this.frameCount++;
 
 			await this.writer.flush();
-
-			if (writeXingHeader) {
-				this.framePositions.push(this.writer.getPos());
-			}
 		} finally {
 			release();
 		}
@@ -132,20 +137,20 @@ export class Mp3Muxer extends Muxer {
 		const release = await this.mutex.acquire();
 
 		const endPos = this.writer.getPos();
+		const audioDataEndPos = endPos - this.xingFramePos;
 
 		this.writer.seek(this.xingFramePos);
 
 		const toc = new Uint8Array(100);
 		for (let i = 0; i < 100; i++) {
 			const index = Math.floor(this.framePositions.length * (i / 100));
-			assert(index !== -1 && index < this.framePositions.length);
 
-			const byteOffset = this.framePositions[index]!;
-			toc[i] = 256 * (byteOffset / endPos);
+			const byteOffset = this.framePositions[index]! - this.xingFramePos;
+			toc[i] = 256 * (byteOffset / audioDataEndPos);
 		}
 
 		this.xingFrameData.frameCount = this.frameCount;
-		this.xingFrameData.fileSize = endPos;
+		this.xingFrameData.fileSize = audioDataEndPos;
 		this.xingFrameData.toc = toc;
 
 		if (this.format._options.onXingFrame) {
@@ -158,8 +163,6 @@ export class Mp3Muxer extends Muxer {
 			const { data, start } = this.writer.stopTrackingWrites();
 			this.format._options.onXingFrame(data, start);
 		}
-
-		this.writer.seek(endPos);
 
 		release();
 	}
