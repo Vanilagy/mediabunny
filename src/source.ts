@@ -959,7 +959,7 @@ export class FilePathSource extends PathedSource {
 			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative number.');
 		}
 
-		if (!node.getFs) {
+		if (!node.fs) {
 			throw new Error(
 				'FilePathSource is only available in server-side environments (Node.js, Bun, Deno).',
 			);
@@ -970,7 +970,7 @@ export class FilePathSource extends PathedSource {
 		// Let's back this source with a StreamSource, makes the implementation very simple
 		this._streamSource = new StreamSource({
 			getSize: async () => {
-				this._fileHandle = await (await node.getFs()).open(filePath, 'r');
+				this._fileHandle = await node.fs.open(filePath, 'r');
 
 				const stats = await this._fileHandle.stat();
 				return stats.size;

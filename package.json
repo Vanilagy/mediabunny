@@ -7,13 +7,13 @@
   "workspaces": [
     "packages/*"
   ],
-  "main": "./dist/modules/src/index.js",
+  "main": "./dist/bundles/mediabunny.node.cjs",
   "module": "./dist/modules/src/index.js",
   "types": "./dist/modules/src/index.d.ts",
   "exports": {
     "types": "./dist/modules/src/index.d.ts",
     "import": "./dist/modules/src/index.js",
-    "require": "./dist/modules/src/index.js"
+    "require": "./dist/bundles/mediabunny.node.cjs"
   },
   "files": [
     "README.md",

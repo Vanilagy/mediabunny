@@ -11,6 +11,7 @@ const createVariants = async (
 	umdExtension: string,
 	specificUmdConfig: esbuild.BuildOptions = {},
 	specificEsmConfig: esbuild.BuildOptions = {},
+	nodeUmdVariant = false,
 ) => {
 	const baseConfig: esbuild.BuildOptions = {
 		entryPoints: [entryPoint],
@@ -30,7 +31,6 @@ const createVariants = async (
  */`,
 		},
 		legalComments: 'none',
-		platform: 'node',
 	};
 
 	const umdConfig: esbuild.BuildOptions = {
@@ -74,7 +74,19 @@ const createVariants = async (
 		minify: true,
 	});
 
-	return [umdVariant, esmVariant, umdMinifiedVariant, esmMinifiedVariant];
+	const variants = [umdVariant, esmVariant, umdMinifiedVariant, esmMinifiedVariant];
+
+	if (nodeUmdVariant) {
+		const nodeVariant = await esbuild.context({
+			...umdConfig,
+			...specificUmdConfig,
+			outfile: `${outfileBase}.node.${umdExtension}`,
+			platform: 'node', // This is different
+		});
+		variants.push(nodeVariant);
+	}
+
+	return variants;
 };
 
 const mediabunnyVariants = await createVariants(
@@ -82,6 +94,9 @@ const mediabunnyVariants = await createVariants(
 	'Mediabunny',
 	'dist/bundles/mediabunny',
 	'cjs',
+	undefined,
+	undefined,
+	true,
 );
 
 const mp3EncoderVariants = await createVariants(
