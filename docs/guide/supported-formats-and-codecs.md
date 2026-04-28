@@ -99,6 +99,8 @@ Not all codecs can be used with all containers. The following table specifies th
 | `'alaw'`       |          |   ✓   |       |           |       |       |   ✓   |       |       |       |
 | `'webvtt'`[^webvtt] |   (✓)    |       |  (✓)  |    (✓)    |       |       |       |       |       |       |
 
+For HLS, the supported codecs depend on the segment format chosen.
+
 [^aac]: In some browsers, AAC encoding is not supported by WebCodecs. You can polyfill it with the [`@mediabunny/aac-encoder`](./extensions/aac-encoder) extension package.
 [^mp3]: MP3 encoding is not supported by WebCodecs. You can polyfill it with the [`@mediabunny/mp3-encoder`](./extensions/mp3-encoder) extension package.
 [^flac]: FLAC encoding is not supported by WebCodecs. You can polyfill it with the [`@mediabunny/flac-encoder`](./extensions/flac-encoder) extension package.

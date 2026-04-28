@@ -186,7 +186,7 @@ npm install mediabunny
 ```ts
 const input = new Input({
 	source: new UrlSource('./bigbuckbunny.mp4'),
-	formats: ALL_FORMATS, // .mp4, .webm, .wav, ...
+	formats: ALL_FORMATS, // .mp4, .webm, .wav, .m3u8, ...
 });
 
 const duration = await input.computeDuration();
