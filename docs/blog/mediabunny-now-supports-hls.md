@@ -241,6 +241,7 @@ The best thing: the player required basically no changes to be adapted for HLS. 
 
 Mediabunny's [`Input`](../guide/reading-media-files) and [`Output`](../guide/writing-media-files) APIs give you fine-grained control over basically everything, meaning you can do any arbitrary media operation on HLS playlists, such as:
 - Converting/compressing them
+- Downloading a section of a live stream
 - Extracting video thumbnails
 - Extracting specific tracks
 - Extracting metadata (duration, dimensions, tracks, ...)
