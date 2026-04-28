@@ -1927,7 +1927,10 @@ class ReadOrchestrator {
 				}
 			})
 			.finally(() => {
-				assert(!worker.running);
+				if (worker.running) {
+					// Rare, but can happen with multiple concurrent reads. In this case, don't do anything.
+					return;
+				}
 
 				if (this.queuedReads.length > 0) {
 					let oldestIndex = 0;
