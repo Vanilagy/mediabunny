@@ -77,7 +77,7 @@ The API surface added by the HLS update is vast and I obviously can't cover it i
 
 By using the Conversion API, you can just do this:
 
-<div class="text-xs">
+<div class="text-[13.7142857143px]">
 
 ```ts
 import { ... } from 'mediabunny';
@@ -107,7 +107,7 @@ That's it. This will stream-download the entire HLS playlist, transcode it if ne
 
 This is basically the inverse of the previous example. Just like we're able to read HLS and turn it into an MP4, we're able to read any input file and turn it into a full HLS playlist including master playlist, media playlists and segments:
 
-<div class="text-xs">
+<div class="text-[13.7142857143px]">
 
 ```ts
 import { ... } from 'mediabunny';
@@ -163,7 +163,7 @@ No transcode server is needed here, it's all handled by the client, and the serv
 
 You could build an OBS-like broadcasting system where a user records their screen, facecam or microphone, encodes multiple variants locally, and then broadcasts finished HLS segments directly to the server, meaning no transcoding is needed.
 
-<div class="text-xs overflow-auto">
+<div class="text-[13.7142857143px] overflow-auto">
 
 ```ts
 // Get the screen and mic
