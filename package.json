@@ -1,19 +1,28 @@
 {
   "name": "mediabunny",
   "author": "Vanilagy",
-  "version": "1.42.0-beta.10",
+  "version": "1.42.0-beta.11",
   "description": "Pure TypeScript media toolkit for reading, writing, and converting media files, directly in the browser.",
   "type": "module",
   "workspaces": [
     "packages/*"
   ],
-  "main": "./dist/bundles/mediabunny.node.cjs",
+  "main": "./dist/bundles/mediabunny.cjs",
   "module": "./dist/modules/src/index.js",
   "types": "./dist/modules/src/index.d.ts",
   "exports": {
-    "types": "./dist/modules/src/index.d.ts",
-    "import": "./dist/modules/src/index.js",
-    "require": "./dist/bundles/mediabunny.node.cjs"
+    ".": {
+      "types": "./dist/modules/src/index.d.ts",
+      "browser": {
+        "import": "./dist/modules/src/index.js",
+        "require": "./dist/bundles/mediabunny.cjs"
+      },
+      "node": {
+        "import": "./dist/modules/src/index.js",
+        "require": "./dist/bundles/mediabunny.node.cjs"
+      },
+      "default": "./dist/modules/src/index.js"
+    }
   },
   "files": [
     "README.md",
