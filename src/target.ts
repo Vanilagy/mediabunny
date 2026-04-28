@@ -692,7 +692,7 @@ export class FilePathTarget extends Target {
 			throw new TypeError('options must be an object.');
 		}
 
-		if (!node.fs) {
+		if (!node.getFs) {
 			throw new Error(
 				'FilePathTarget is only available in server-side environments (Node.js, Bun, Deno).',
 			);
@@ -703,7 +703,7 @@ export class FilePathTarget extends Target {
 		// Let's back this target with a StreamTarget, makes the implementation very simple
 		const writable = new WritableStream<StreamTargetChunk>({
 			start: async () => {
-				this._fileHandle = await node.fs.open(filePath, 'w');
+				this._fileHandle = await (await node.getFs()).open(filePath, 'w');
 			},
 			write: async (chunk) => {
 				assert(this._fileHandle);
