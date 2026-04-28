@@ -89,16 +89,23 @@ console.log(writtenFiles);
 
 ```ts
 const root = await navigator.storage.getDirectory();
+const writePromises: Promise<void>[] = [];
 
 const output = new Output({
 	target: new PathedTarget(
 		'master.m3u8',
-		async ({ path }) => {
-			const handle = await root.getFileHandle(path, { create: true });
-			const writable = await handle.createWritable();
-			return new StreamTarget(writable);
-		},
+		async ({ path }) => new BufferTarget({
+			onFinalize: (buffer) => {
+				writePromises.push((async () => {
+					const handle = await root.getFileHandle(path, { create: true });
+					const writable = await handle.createWritable();
+					await writable.write(buffer);
+					await writable.close();
+				})());
+			},
+		}),
 	),
+	onFinalize: () => Promise.all(writePromises),
 	// ...
 });
 

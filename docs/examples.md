@@ -43,4 +43,10 @@ features:
       target: _self
       icon:
         src: /mingcute--microphone-line.svg
+    - title: HLS transcoding
+      details: Convert one video into a full HLS manifest with five video renditions and one audio track.
+      link: /examples/hls-transcoding/
+      target: _self
+      icon:
+        src: /mingcute--live-line.svg
 ---
