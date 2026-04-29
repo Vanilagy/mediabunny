@@ -16,6 +16,7 @@ export type WorkerCommand = {
 	data: {
 		numberOfChannels: number;
 		sampleRate: number;
+		bitsPerSample: 16 | 24;
 	};
 } | {
 	type: 'encode';

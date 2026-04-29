@@ -32,6 +32,7 @@ export default tseslint.config(
 			'@typescript-eslint/no-unsafe-enum-comparison': 'off',
 			'@typescript-eslint/no-unsafe-unary-minus': 'off',
 			'@typescript-eslint/no-deprecated': 'error',
+			'@typescript-eslint/consistent-type-exports': 'error',
 		},
 	},
 	{

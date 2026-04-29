@@ -47,7 +47,7 @@ test('FLAC encoding', async () => {
 		target: new BufferTarget(),
 	});
 
-	const audioSource = new AudioSampleSource({ codec: 'flac', bitrate: 1 });
+	const audioSource = new AudioSampleSource({ codec: 'flac' });
 	output.addAudioTrack(audioSource);
 
 	await output.start();
@@ -97,7 +97,7 @@ test('FLAC with huge timestamps', async () => {
 		target: new BufferTarget(),
 	});
 
-	const audioSource = new AudioSampleSource({ codec: 'flac', bitrate: 1 });
+	const audioSource = new AudioSampleSource({ codec: 'flac' });
 	output.addAudioTrack(audioSource);
 
 	await output.start();

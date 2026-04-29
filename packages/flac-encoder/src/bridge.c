@@ -12,7 +12,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define BITS_PER_SAMPLE 16
 #define COMPRESSION_LEVEL 5
 
 typedef struct {
@@ -23,13 +22,9 @@ typedef struct {
 typedef struct {
 	FLAC__StreamEncoder *encoder;
 
-	// Input buffer for interleaved int16 samples from JS
-	int16_t *input_buffer;
+	// Input buffer for interleaved int32 samples from JS
+	FLAC__int32 *input_buffer;
 	int input_buffer_size;
-
-	// Widened to int32 for libFLAC
-	FLAC__int32 *int32_buffer;
-	int int32_buffer_size;
 
 	// Contiguous output buffer for encoded frame data
 	uint8_t *output_buffer;
@@ -48,6 +43,7 @@ typedef struct {
 	bool header_done;
 
 	int channels;
+	int bits_per_sample;
 } EncoderContext;
 
 static void ensure_output_capacity(EncoderContext *ctx, int needed) {
@@ -120,13 +116,14 @@ static void reset_output(EncoderContext *ctx) {
 }
 
 EMSCRIPTEN_KEEPALIVE
-int init_encoder(int channels, int sample_rate) {
+int init_encoder(int channels, int sample_rate, int bits_per_sample) {
 	EncoderContext *ctx = calloc(1, sizeof(EncoderContext));
 	if (!ctx) {
 		return 0;
 	}
 
 	ctx->channels = channels;
+	ctx->bits_per_sample = bits_per_sample;
 
 	ctx->encoder = FLAC__stream_encoder_new();
 	if (!ctx->encoder) {
@@ -136,7 +133,7 @@ int init_encoder(int channels, int sample_rate) {
 
 	FLAC__stream_encoder_set_channels(ctx->encoder, channels);
 	FLAC__stream_encoder_set_sample_rate(ctx->encoder, sample_rate);
-	FLAC__stream_encoder_set_bits_per_sample(ctx->encoder, BITS_PER_SAMPLE);
+	FLAC__stream_encoder_set_bits_per_sample(ctx->encoder, bits_per_sample);
 	FLAC__stream_encoder_set_compression_level(ctx->encoder, COMPRESSION_LEVEL);
 	FLAC__stream_encoder_set_verify(ctx->encoder, false);
 
@@ -174,19 +171,15 @@ EMSCRIPTEN_KEEPALIVE
 int send_samples(int ctx_ptr, int num_samples) {
 	EncoderContext *ctx = (EncoderContext *)ctx_ptr;
 
-	// Widen int16 to int32 for libFLAC
 	int total = num_samples * ctx->channels;
-	if (total > ctx->int32_buffer_size) {
-		ctx->int32_buffer = realloc(ctx->int32_buffer, total * sizeof(FLAC__int32));
-		ctx->int32_buffer_size = total;
-	}
+	int shift = 32 - ctx->bits_per_sample;
 	for (int i = 0; i < total; i++) {
-		ctx->int32_buffer[i] = ctx->input_buffer[i];
+		ctx->input_buffer[i] >>= shift;
 	}
 
 	reset_output(ctx);
 
-	FLAC__bool ok = FLAC__stream_encoder_process_interleaved(ctx->encoder, ctx->int32_buffer, num_samples);
+	FLAC__bool ok = FLAC__stream_encoder_process_interleaved(ctx->encoder, ctx->input_buffer, num_samples);
 	return ok ? 0 : -1;
 }
 

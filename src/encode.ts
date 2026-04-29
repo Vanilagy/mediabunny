@@ -387,6 +387,11 @@ export type AudioTransformOptions = {
 	/** The desired output sample rate in hertz to resample to. */
 	sampleRate?: number;
 	/**
+	 * The desired sample format (and therefore bit depth) of the audio samples before they are passed to the encoder.
+	 * Can be used to control bit depth with certain output codecs such as FLAC.
+	 */
+	sampleFormat?: 'u8' | 's16' | 's32' | 'f32';
+	/**
 	 * Allows for custom user-defined processing of audio samples, e.g. for applying audio effects or timestamp
 	 * modifications. Called for each audio sample after resampling and remixing.
 	 *
@@ -406,7 +411,7 @@ export const validateAudioEncodingConfig = (config: AudioEncodingConfig) => {
 	}
 	if (
 		config.bitrate === undefined
-		&& (!(PCM_AUDIO_CODECS as readonly string[]).includes(config.codec) || config.codec === 'flac')
+		&& !((PCM_AUDIO_CODECS as readonly string[]).includes(config.codec) || config.codec === 'flac')
 	) {
 		throw new TypeError('config.bitrate must be provided for compressed audio codecs.');
 	}
@@ -432,6 +437,12 @@ export const validateAudioEncodingConfig = (config: AudioEncodingConfig) => {
 			&& (!Number.isInteger(config.transform.sampleRate) || config.transform.sampleRate <= 0)
 		) {
 			throw new TypeError('config.transform.sampleRate, when provided, must be a positive integer.');
+		}
+		if (
+			config.transform.sampleFormat !== undefined
+			&& !['u8', 's16', 's32', 'f32'].includes(config.transform.sampleFormat)
+		) {
+			throw new TypeError('config.transform.sampleFormat, when provided, must be one of: u8, s16, s32, f32.');
 		}
 		if (config.transform.process !== undefined && typeof config.transform.process !== 'function') {
 			throw new TypeError('config.transform.process, when provided, must be a function.');

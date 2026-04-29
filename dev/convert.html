@@ -3,10 +3,12 @@
 <script src="../dist/bundles/mediabunny.cjs"></script>
 <script src="../packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.js"></script>
 <script src="../packages/ac3/dist/bundles/mediabunny-ac3.js"></script>
+<script src="../packages/flac-encoder/dist/bundles/mediabunny-flac-encoder.js"></script>
 
 <script type="module">
 	//MediabunnyMp3Encoder.registerMp3Encoder();
 	MediabunnyAc3.registerAc3Decoder();
+	MediabunnyFlacEncoder.registerFlacEncoder();
 
 	const fileInput = document.createElement('input');
 	fileInput.type = 'file';
@@ -23,7 +25,7 @@
 			chunked: true,
 			chunkSize: 2**20
 		});
-		const outputFormat = new Mediabunny.WavOutputFormat();
+		const outputFormat = new Mediabunny.FlacOutputFormat();
 
 		const p = document.createElement('p');
 		p.textContent = 'Capturing...';
@@ -57,7 +59,7 @@
 		const tracks = [];
 		let start = 0;
 
-		if (true) {
+		if (false) {
 			input = new Mediabunny.Input({
 				source: new Mediabunny.UrlSource('http://localhost:8000/index.m3u8'),
 				formats: Mediabunny.ALL_FORMATS,
@@ -85,15 +87,18 @@
 			});
 		}
 
-		const primaryTrack = await input.getPrimaryAudioTrack();
-		const startTime = await primaryTrack.getFirstTimestamp();
-		console.log(startTime)
+		//const primaryTrack = await input.getPrimaryAudioTrack();
+		//const startTime = await primaryTrack.getFirstTimestamp();
+		//console.log(startTime)
 
 		let ctx = null;
 		let conversion = await Mediabunny.Conversion.init({
 			input,
 			output,
-			audio: (track) => ({ discard: track.number !== primaryTrack.number }),
+			audio: {
+				//forceTranscode: true,
+				//sampleFormat: 's16',
+			},
 			/*
 			video: {
 				discard: true,
@@ -139,11 +144,12 @@
 				}
 			},
 			trim: {
-				start: startTime,
-				end: startTime + 2,
+				//start: startTime,
+				//end: startTime + 2,
 			},
 		});
 		//console.log(conversion);
+		console.log(conversion.discardedTracks);
 
 		let progress = 0;
 		conversion.onProgress = newProgress => progress = newProgress;

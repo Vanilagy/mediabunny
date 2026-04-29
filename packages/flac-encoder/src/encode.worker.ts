@@ -16,7 +16,7 @@ type ExtendedEmscriptenModule = EmscriptenModule & {
 let module: ExtendedEmscriptenModule;
 let modulePromise: Promise<ExtendedEmscriptenModule> | null = null;
 
-let initEncoderFn: (channels: number, sampleRate: number) => number;
+let initEncoderFn: (channels: number, sampleRate: number, bitsPerSample: number) => number;
 let getEncodeInputPtr: (ctx: number, size: number) => number;
 let sendSamplesFn: (ctx: number, numSamples: number) => number;
 let getOutputData: (ctx: number) => number;
@@ -37,7 +37,7 @@ const ensureModule = async () => {
 		module = await modulePromise;
 		modulePromise = null;
 
-		initEncoderFn = module.cwrap('init_encoder', 'number', ['number', 'number']);
+		initEncoderFn = module.cwrap('init_encoder', 'number', ['number', 'number', 'number']);
 		getEncodeInputPtr = module.cwrap('get_encode_input_ptr', 'number', ['number', 'number']);
 		sendSamplesFn = module.cwrap('send_samples', 'number', ['number', 'number']);
 		getOutputData = module.cwrap('get_output_data', 'number', ['number']);
@@ -50,10 +50,10 @@ const ensureModule = async () => {
 	}
 };
 
-const initEncoder = async (numberOfChannels: number, sampleRate: number) => {
+const initEncoder = async (numberOfChannels: number, sampleRate: number, bitsPerSample: 16 | 24) => {
 	await ensureModule();
 
-	const ctx = initEncoderFn(numberOfChannels, sampleRate);
+	const ctx = initEncoderFn(numberOfChannels, sampleRate, bitsPerSample);
 	if (ctx === 0) {
 		throw new Error('Failed to initialize FLAC encoder.');
 	}
@@ -121,6 +121,7 @@ const onMessage = (data: { id: number; command: WorkerCommand }) => {
 					const { ctx, header } = await initEncoder(
 						command.data.numberOfChannels,
 						command.data.sampleRate,
+						command.data.bitsPerSample,
 					);
 					result = { type: command.type, ctx, header };
 					transferables.push(header);
