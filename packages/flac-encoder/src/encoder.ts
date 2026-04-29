@@ -199,7 +199,8 @@ class FlacEncoder extends CustomAudioEncoder {
 
 /**
  * Registers the FLAC encoder, which Mediabunny will then use automatically when applicable. Make sure to call this
- * function before starting any encoding task.
+ * function before starting any encoding task. The FLAC encoder will automatically determine the output bit depth
+ * (16 or 24) based on the sample format of incoming `AudioSample` instances.
  *
  * Preferably, wrap the call in a condition to avoid overriding any native FLAC encoder:
  *
