@@ -17,6 +17,7 @@ import {
 	iterateAvcNalUnits,
 	iterateHevcNalUnits,
 	parseAvcSps,
+	sanitizeHevcPacketForChromium,
 } from './codec-data';
 import { CustomVideoDecoder, customVideoDecoders, CustomAudioDecoder, customAudioDecoders } from './custom-coder';
 import { InputDisposedError } from './input';
@@ -980,20 +981,28 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 				insertSorted(this.inputTimestamps, packet.timestamp, x => x);
 			}
 
-			// Workaround for https://issues.chromium.org/issues/470109459
-			if (isChromium() && this.currentPacketIndex === 0 && this.codec === 'avc') {
-				const filteredNalUnits: Uint8Array[] = [];
+			if (isChromium() && this.currentPacketIndex === 0) {
+				if (this.codec === 'avc') {
+					// Workaround for https://issues.chromium.org/issues/470109459
+					const filteredNalUnits: Uint8Array[] = [];
 
-				for (const loc of iterateAvcNalUnits(packet.data, this.decoderConfig)) {
-					const type = extractNalUnitTypeForAvc(packet.data[loc.offset]!);
-					// These trip up Chromium's key frame detection, so let's strip them
-					if (!(type >= 20 && type <= 31)) {
-						filteredNalUnits.push(packet.data.subarray(loc.offset, loc.offset + loc.length));
+					for (const loc of iterateAvcNalUnits(packet.data, this.decoderConfig)) {
+						const type = extractNalUnitTypeForAvc(packet.data[loc.offset]!);
+						// These trip up Chromium's key frame detection, so let's strip them
+						if (!(type >= 20 && type <= 31)) {
+							filteredNalUnits.push(packet.data.subarray(loc.offset, loc.offset + loc.length));
+						}
+					}
+
+					const newData = concatAvcNalUnits(filteredNalUnits, this.decoderConfig);
+					packet = new EncodedPacket(newData, packet.type, packet.timestamp, packet.duration);
+				} else if (this.codec === 'hevc') {
+					// Workaround for https://issues.chromium.org/issues/507611247
+					const sanitizedData = sanitizeHevcPacketForChromium(packet.data, this.decoderConfig);
+					if (sanitizedData) {
+						packet = new EncodedPacket(sanitizedData, packet.type, packet.timestamp, packet.duration);
 					}
 				}
-
-				const newData = concatAvcNalUnits(filteredNalUnits, this.decoderConfig);
-				packet = new EncodedPacket(newData, packet.type, packet.timestamp, packet.duration);
 			}
 
 			this.decoder.decode(packet.toEncodedVideoChunk());

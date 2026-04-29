@@ -11,23 +11,22 @@
 	document.body.append(fileInput);
 
 	fileInput.addEventListener('change', async () => {
-		/*
 		const file = fileInput.files[0];
 		const input = new Mediabunny.Input({
 			formats: Mediabunny.ALL_FORMATS,
 			source: new Mediabunny.BlobSource(file),
 		});
 
-		const track = await input.getPrimaryAudioTrack();
-		const sink3 = new Mediabunny.EncodedPacketSink(track);
-		console.log((await sink3.getFirstPacket()).data.join(', '));
-		return;
-		console.log(await track.getDurationFromMetadata(), await track.computeDuration());
+		const track = await input.getPrimaryVideoTrack();
+		const sink = new Mediabunny.EncodedPacketSink(track);
+		const packet = await sink.getFirstKeyPacket();
 
-		//console.log(await input.getDurationFromMetadata(), await input.computeDuration());
-		return;
-		*/
+		console.log(packet.data.join(', '));
 
+		const config = await track.getDecoderConfig();
+		console.log(config.description.join(', '));
+
+		/*
 		const input = new Mediabunny.Input({
 			source: new Mediabunny.UrlSource('https://storage.googleapis.com/shaka-demo-assets/angel-one-widevine-hls/hls.m3u8'),
 			formats: Mediabunny.ALL_FORMATS,
@@ -36,6 +35,7 @@
 		const videoTrack = await input.getPrimaryVideoTrack();
 		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
 		console.log(await sink.getFirstPacket());
+		*/
 
 		/*
 		return
