@@ -1953,6 +1953,21 @@ const isAudioData = (x: unknown): x is AudioData => {
 	return typeof AudioData !== 'undefined' && x instanceof AudioData;
 };
 
+export const toInterleavedAudioFormat = (format: AudioSampleFormat): 'u8' | 's16' | 's32' | 'f32' => {
+	switch (format) {
+		case 'u8-planar':
+			return 'u8';
+		case 's16-planar':
+			return 's16';
+		case 's32-planar':
+			return 's32';
+		case 'f32-planar':
+			return 'f32';
+		default:
+			return format;
+	}
+};
+
 /**
  * WebKit has a bug where calling AudioData.copyTo with a format different from the source format
  * crashes the tab when there are more than 2 channels. This function works around that by always
@@ -2060,4 +2075,19 @@ const doAudioDataCopyToWebKitWorkaround = (
 			}
 		}
 	}
+};
+
+export const audioSampleToInterleavedFormat = (sample: AudioSample, format: 'u8' | 's16' | 's32' | 'f32') => {
+	const size = sample.allocationSize({ format, planeIndex: 0 });
+	const buffer = new ArrayBuffer(size);
+	sample.copyTo(buffer, { format, planeIndex: 0 });
+
+	return new AudioSample({
+		data: buffer,
+		format,
+		numberOfChannels: sample.numberOfChannels,
+		sampleRate: sample.sampleRate,
+		timestamp: sample.timestamp,
+		duration: sample.duration,
+	});
 };

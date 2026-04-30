@@ -50,7 +50,15 @@ import {
 } from './misc';
 import { Output, OutputTrackGroup, TrackType } from './output';
 import { Mp4OutputFormat } from './output-format';
-import { AudioSample, clampCropRectangle, CropRectangle, validateCropRectangle, VideoSample } from './sample';
+import {
+	AudioSample,
+	audioSampleToInterleavedFormat,
+	clampCropRectangle,
+	CropRectangle,
+	toInterleavedAudioFormat,
+	validateCropRectangle,
+	VideoSample,
+} from './sample';
 import { MetadataTags, validateMetadataTags } from './metadata';
 import { NullTarget } from './target';
 import { AudioResampler } from './resample';
@@ -261,6 +269,13 @@ export type ConversionAudioOptions = {
 	numberOfChannels?: number;
 	/** The desired sample rate of the output audio, in hertz. */
 	sampleRate?: number;
+	/**
+	 * The desired sample format (and therefore bit depth) of the audio samples before they are passed to the encoder.
+	 * Can be used to control bit depth with certain output codecs such as FLAC.
+	 *
+	 * Setting this field forces audio transcoding.
+	 */
+	sampleFormat?: 'u8' | 's16' | 's32' | 'f32';
 	/** The desired output audio codec. */
 	codec?: AudioCodec;
 	/** The desired bitrate of the output audio. */
@@ -441,6 +456,12 @@ const validateAudioOptions = (audioOptions: ConversionAudioOptions) => {
 		&& (!Number.isInteger(audioOptions.sampleRate) || audioOptions.sampleRate <= 0)
 	) {
 		throw new TypeError('options.audio.sampleRate, when provided, must be a positive integer.');
+	}
+	if (
+		audioOptions?.sampleFormat !== undefined
+		&& !['u8', 's16', 's32', 'f32'].includes(audioOptions.sampleFormat)
+	) {
+		throw new TypeError('options.audio.sampleFormat, when provided, must be one of: u8, s16, s32, f32.');
 	}
 	if (audioOptions?.process !== undefined && typeof audioOptions.process !== 'function') {
 		throw new TypeError('options.audio.process, when provided, must be a function.');
@@ -1347,7 +1368,7 @@ export class Conversion {
 								timestamp: lastCanvasTimestamp! + i / frameRate,
 								duration: 1 / frameRate,
 							});
-							await this._registerVideoSample(track, trackOptions, outputTrackId, source, sample);
+							await this._registerVideoSample(trackOptions, outputTrackId, source, sample);
 							sample.close();
 						}
 					};
@@ -1384,7 +1405,7 @@ export class Conversion {
 							timestamp: adjustedSampleTimestamp,
 							duration: frameRate !== undefined ? 1 / frameRate : duration,
 						});
-						await this._registerVideoSample(track, trackOptions, outputTrackId, source, sample);
+						await this._registerVideoSample(trackOptions, outputTrackId, source, sample);
 						sample.close();
 
 						if (frameRate !== undefined) {
@@ -1425,7 +1446,7 @@ export class Conversion {
 						for (let i = 1; i < frameDifference; i++) {
 							lastSample.setTimestamp(lastSampleTimestamp! + i / frameRate);
 							lastSample.setDuration(1 / frameRate);
-							await this._registerVideoSample(track, trackOptions, outputTrackId, source, lastSample);
+							await this._registerVideoSample(trackOptions, outputTrackId, source, lastSample);
 						}
 
 						lastSample.close();
@@ -1464,7 +1485,7 @@ export class Conversion {
 						}
 
 						sample.setTimestamp(adjustedSampleTimestamp);
-						await this._registerVideoSample(track, trackOptions, outputTrackId, source, sample);
+						await this._registerVideoSample(trackOptions, outputTrackId, source, sample);
 
 						if (frameRate !== undefined) {
 							lastSample = sample;
@@ -1513,7 +1534,6 @@ export class Conversion {
 
 	/** @internal */
 	async _registerVideoSample(
-		track: InputVideoTrack,
 		trackOptions: ConversionVideoOptions,
 		outputTrackId: number,
 		source: VideoSampleSource,
@@ -1609,6 +1629,7 @@ export class Conversion {
 			&& audioCodecs.includes(sourceCodec)
 			&& (!trackOptions.codec || trackOptions.codec === sourceCodec)
 			&& !trackOptions.process
+			&& trackOptions.sampleFormat === undefined
 		) {
 			// Fast path, we can simply copy over the encoded packets
 
@@ -1745,7 +1766,7 @@ export class Conversion {
 						// Offset the timestamp as needed
 						sample.setTimestamp(sample.timestamp - this._startTimestamp);
 
-						await this._registerAudioSample(track, trackOptions, outputTrackId, source, sample);
+						await this._registerAudioSample(trackOptions, outputTrackId, source, sample);
 						sample.close();
 					}
 
@@ -1778,14 +1799,23 @@ export class Conversion {
 
 	/** @internal */
 	async _registerAudioSample(
-		track: InputAudioTrack,
 		trackOptions: ConversionAudioOptions,
 		outputTrackId: number,
 		source: AudioSampleSource,
-		sample: AudioSample,
+		inputSample: AudioSample,
 	) {
 		if (this._canceled) {
 			return;
+		}
+
+		let sample = inputSample;
+
+		if (
+			trackOptions.sampleFormat !== undefined
+			&& toInterleavedAudioFormat(sample.format) !== trackOptions.sampleFormat
+		) {
+			// Do a sample format conversion
+			sample = audioSampleToInterleavedFormat(sample, trackOptions.sampleFormat);
 		}
 
 		this._reportProgress(outputTrackId, sample.timestamp + sample.duration);
@@ -1823,8 +1853,12 @@ export class Conversion {
 				}
 			}
 		} finally {
+			if (sample !== inputSample) {
+				sample.close();
+			}
+
 			for (const finalSample of finalSamples) {
-				if (finalSample !== sample) {
+				if (finalSample !== inputSample) {
 					finalSample.close();
 				}
 			}
@@ -1857,7 +1891,7 @@ export class Conversion {
 				onSample: async (sample) => {
 					sample.setTimestamp(sample.timestamp - this._startTimestamp);
 
-					await this._registerAudioSample(track, trackOptions, outputTrackId, source, sample);
+					await this._registerAudioSample(trackOptions, outputTrackId, source, sample);
 					sample.close();
 				},
 			});

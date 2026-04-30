@@ -196,10 +196,14 @@ export default withMermaid({
 		if (title !== 'Mediabunny') {
 			title += ' | Mediabunny';
 		}
+		const canonicalUrl = `https://mediabunny.dev/${pageData.relativePath}`
+			.replace(/index\.md$/, '')
+			.replace(/\.md$/, '');
 
 		((pageData.frontmatter['head'] ??= []) as HeadConfig[]).push(
 			['meta', { property: 'og:title', content: title }],
 			['meta', { property: 'twitter:title', content: title }],
+			['link', { rel: 'canonical', href: canonicalUrl }],
 		);
 	},
 });

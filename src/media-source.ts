@@ -50,7 +50,13 @@ import {
 	customAudioEncoders,
 } from './custom-coder';
 import { EncodedPacket, EncodedPacketSideData } from './packet';
-import { AudioSample, clampCropRectangle, VideoSample } from './sample';
+import {
+	AudioSample,
+	audioSampleToInterleavedFormat,
+	clampCropRectangle,
+	toInterleavedAudioFormat,
+	VideoSample,
+} from './sample';
 import {
 	AudioEncodingConfig,
 	buildAudioEncoderConfig,
@@ -1888,6 +1894,21 @@ class AudioEncoderWrapper {
 	private async processAndEncode(audioSample: AudioSample, shouldClose: boolean) {
 		const config = this.encodingConfig;
 
+		if (
+			config.transform?.sampleFormat !== undefined
+			&& toInterleavedAudioFormat(audioSample.format) !== config.transform.sampleFormat
+		) {
+			// Do a sample format conversion
+			const newSample = audioSampleToInterleavedFormat(audioSample, config.transform.sampleFormat);
+
+			if (shouldClose) {
+				audioSample.close();
+			}
+
+			audioSample = newSample;
+			shouldClose = true;
+		}
+
 		if (config.transform?.process) {
 			let processed = config.transform.process(audioSample);
 			if (processed instanceof Promise) {
@@ -1909,6 +1930,10 @@ class AudioEncoderWrapper {
 					);
 				}
 				await this.encodeSample(sample, true);
+			}
+
+			if (shouldClose) {
+				audioSample.close();
 			}
 		} else {
 			await this.encodeSample(audioSample, shouldClose);

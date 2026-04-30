@@ -174,6 +174,12 @@ const u64 = (value: number) => {
 	return [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]] as number[];
 };
 
+const i64 = (value: number) => {
+	view.setInt32(0, Math.floor(value / 2 ** 32), false);
+	view.setUint32(4, value, false);
+	return [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]] as number[];
+};
+
 const fixed_8_8 = (value: number) => {
 	view.setInt16(0, 2 ** 8 * value, false);
 	return [bytes[0], bytes[1]] as number[];
@@ -384,11 +390,14 @@ export const mvhd = (
 	creationTime: number,
 	trackDatas: IsobmffTrackData[],
 ) => {
-	const duration = intoTimescale(Math.max(
+	const duration = Math.max(
 		0,
 		...trackDatas
-			.map(x => presentationSpan(x)),
-	), GLOBAL_TIMESCALE);
+			.map(trackData => (
+				intoTimescale(presentationSpan(trackData), GLOBAL_TIMESCALE)
+				+ intoTimescale(trackData.startTimestampOffset ?? 0, GLOBAL_TIMESCALE)
+			)),
+	);
 	const nextTrackId = Math.max(0, ...trackDatas.map(x => x.track.id)) + 1;
 
 	// Conditionally use u64 if u32 isn't enough
@@ -417,7 +426,9 @@ const presentationSpan = (trackData: IsobmffTrackData) => {
 	let minTimestamp = Infinity;
 	let maxEndTimestamp = -Infinity;
 
-	for (const sample of trackData.samples) {
+	for (let i = 0; i < trackData.samples.length; i++) {
+		const sample = trackData.samples[i]!;
+
 		if (sample.timestamp < minTimestamp) {
 			minTimestamp = sample.timestamp;
 		}
@@ -440,9 +451,11 @@ const presentationSpan = (trackData: IsobmffTrackData) => {
  */
 export const trak = (trackData: IsobmffTrackData, creationTime: number) => {
 	const trackMetadata = getTrackMetadata(trackData);
+	const needsEditList = trackData.startTimestampOffset !== null && trackData.startTimestampOffset > 0;
 
 	return box('trak', undefined, [
 		tkhd(trackData, creationTime),
+		needsEditList ? edts(trackData, trackData.startTimestampOffset!) : null,
 		mdia(trackData, creationTime),
 		trackMetadata.name !== undefined
 			? box('udta', undefined, [
@@ -459,10 +472,8 @@ export const tkhd = (
 	trackData: IsobmffTrackData,
 	creationTime: number,
 ) => {
-	const durationInGlobalTimescale = intoTimescale(
-		presentationSpan(trackData),
-		GLOBAL_TIMESCALE,
-	);
+	const durationInGlobalTimescale = intoTimescale(presentationSpan(trackData), GLOBAL_TIMESCALE)
+		+ intoTimescale(trackData.startTimestampOffset ?? 0, GLOBAL_TIMESCALE);
 
 	const needsU64 = !isU32(creationTime) || !isU32(durationInGlobalTimescale);
 	const u32OrU64 = needsU64 ? u64 : u32;
@@ -497,6 +508,32 @@ export const tkhd = (
 	]);
 };
 
+/** Edit Box: Specifies edits to the track's media. */
+export const edts = (trackData: IsobmffTrackData, offset: number) => {
+	const startOffset = intoTimescale(offset, GLOBAL_TIMESCALE);
+	const mediaDuration = intoTimescale(presentationSpan(trackData), GLOBAL_TIMESCALE);
+
+	const needs64Bits = !isU32(startOffset) || !isU32(mediaDuration);
+	const u32OrU64 = needs64Bits ? u64 : u32;
+	const i32OrI64 = needs64Bits ? i64 : i32;
+
+	return box('edts', undefined, [
+		fullBox('elst', needs64Bits ? 1 : 0, 0, [
+			u32(2), // Entry count
+
+			// #1
+			u32OrU64(startOffset), // Segment duration
+			i32OrI64(-1), // Media time
+			fixed_16_16(1), // Media rate
+
+			// #2
+			u32OrU64(mediaDuration), // Segment duration
+			i32OrI64(0), // Media time
+			fixed_16_16(1), // Media rate
+		]),
+	]);
+};
+
 /** Media Box: Describes and define a track's media type and sample data. */
 export const mdia = (trackData: IsobmffTrackData, creationTime: number) => box('mdia', undefined, [
 	mdhd(trackData, creationTime),
@@ -509,6 +546,7 @@ export const mdhd = (
 	trackData: IsobmffTrackData,
 	creationTime: number,
 ) => {
+	// Since the duration represents the raw media duration, edit list offsets are not taken into account here
 	const localDuration = intoTimescale(
 		presentationSpan(trackData),
 		trackData.timescale,

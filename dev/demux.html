@@ -11,7 +11,6 @@
 	document.body.append(fileInput);
 
 	fileInput.addEventListener('change', async () => {
-		/*
 		const file = fileInput.files[0];
 		const input = new Mediabunny.Input({
 			formats: Mediabunny.ALL_FORMATS,
@@ -19,15 +18,43 @@
 		});
 
 		const track = await input.getPrimaryAudioTrack();
-		const sink3 = new Mediabunny.EncodedPacketSink(track);
-		console.log((await sink3.getFirstPacket()).data.join(', '));
-		return;
-		console.log(await track.getDurationFromMetadata(), await track.computeDuration());
+		const sink = new Mediabunny.EncodedPacketSink(track);
+		
+		for await (const packet of sink.packets()) {
+			console.log(packet);
+		}
 
-		//console.log(await input.getDurationFromMetadata(), await input.computeDuration());
+		const output = new Mediabunny.Output({
+			format: new Mediabunny.Mp4OutputFormat(),
+			target: new Mediabunny.BufferTarget(),
+		});
+
+		const conversion = await Mediabunny.Conversion.init({ input, output });
+		await conversion.execute();
+
 		return;
+
+		// Download it now
+		const blob = new Blob([output.target.buffer]);
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = file.name.replace(/\.\w+$/, '.mp4');
+		a.click();
+		URL.revokeObjectURL(url);
+
+		/*
+		const track = await input.getPrimaryAudioTrack();
+		const sink = new Mediabunny.EncodedPacketSink(track);
+		
+		for await (const packet of sink.packets()) {
+			console.log(packet);
+		}
+
+		console.log("Done")
 		*/
 
+		/*
 		const input = new Mediabunny.Input({
 			source: new Mediabunny.UrlSource('https://storage.googleapis.com/shaka-demo-assets/angel-one-widevine-hls/hls.m3u8'),
 			formats: Mediabunny.ALL_FORMATS,
@@ -36,6 +63,7 @@
 		const videoTrack = await input.getPrimaryVideoTrack();
 		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
 		console.log(await sink.getFirstPacket());
+		*/
 
 		/*
 		return

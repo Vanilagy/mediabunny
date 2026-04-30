@@ -29,7 +29,7 @@ class FlacEncoder extends CustomAudioEncoder {
 		reject: (reason?: unknown) => void;
 	}>();
 
-	private ctx = 0;
+	private ctx: number | null = null;
 	private chunkMetadata: EncodedAudioChunkMetadata = {};
 	private description: Uint8Array | null = null;
 	private nextTimestampInSamples: number | null = null;
@@ -65,19 +65,6 @@ class FlacEncoder extends CustomAudioEncoder {
 			};
 			nodeWorker.on('message', onMessage);
 		}
-
-		const result = await this.sendCommand({
-			type: 'init',
-			data: {
-				numberOfChannels: this.config.numberOfChannels,
-				sampleRate: this.config.sampleRate,
-			},
-		});
-
-		this.ctx = result.ctx;
-
-		this.description = new Uint8Array(result.header);
-		this.resetInternalState();
 	}
 
 	private resetInternalState() {
@@ -94,15 +81,50 @@ class FlacEncoder extends CustomAudioEncoder {
 	}
 
 	async encode(audioSample: AudioSample) {
+		if (this.ctx === null) {
+			// This is the first sample, let's do some init
+
+			let bitsPerSample: 16 | 24;
+			switch (audioSample.format) {
+				case 'u8':
+				case 'u8-planar':
+				case 's16':
+				case 's16-planar':
+					bitsPerSample = 16;
+					break;
+				case 's32':
+				case 's32-planar':
+				case 'f32':
+				case 'f32-planar':
+					bitsPerSample = 24;
+					break;
+				default:
+					assertNever(audioSample.format);
+					assert(false);
+			}
+
+			const result = await this.sendCommand({
+				type: 'init',
+				data: {
+					numberOfChannels: this.config.numberOfChannels,
+					sampleRate: this.config.sampleRate,
+					bitsPerSample,
+				},
+			});
+
+			this.ctx = result.ctx;
+			this.description = new Uint8Array(result.header);
+			this.resetInternalState();
+		}
+
 		if (this.nextTimestampInSamples === null) {
 			this.nextTimestampInSamples = Math.round(audioSample.timestamp * this.config.sampleRate);
 		}
 
-		const totalBytes = audioSample.allocationSize({ format: 's16', planeIndex: 0 });
-		const audioBytes = new Uint8Array(totalBytes);
-		audioSample.copyTo(audioBytes, { format: 's16', planeIndex: 0 });
+		const totalBytes = audioSample.allocationSize({ format: 's32', planeIndex: 0 });
+		const audioData = new ArrayBuffer(totalBytes);
+		audioSample.copyTo(audioData, { format: 's32', planeIndex: 0 });
 
-		const audioData = audioBytes.buffer;
 		const result = await this.sendCommand({
 			type: 'encode',
 			data: {
@@ -116,6 +138,10 @@ class FlacEncoder extends CustomAudioEncoder {
 	}
 
 	async flush() {
+		if (this.ctx === null) {
+			return;
+		}
+
 		const result = await this.sendCommand({ type: 'flush', data: { ctx: this.ctx } });
 		this.emitPackets(result.packets);
 
@@ -173,7 +199,8 @@ class FlacEncoder extends CustomAudioEncoder {
 
 /**
  * Registers the FLAC encoder, which Mediabunny will then use automatically when applicable. Make sure to call this
- * function before starting any encoding task.
+ * function before starting any encoding task. The FLAC encoder will automatically determine the output bit depth
+ * (16 or 24) based on the sample format of incoming `AudioSample` instances.
  *
  * Preferably, wrap the call in a condition to avoid overriding any native FLAC encoder:
  *
@@ -198,3 +225,8 @@ function assert(x: unknown): asserts x {
 		throw new Error('Assertion failed.');
 	}
 }
+
+export const assertNever = (x: never) => {
+	// eslint-disable-next-line @typescript-eslint/restrict-template-expressions
+	throw new Error(`Unexpected value: ${x}`);
+};

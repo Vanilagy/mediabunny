@@ -242,6 +242,7 @@ type ConversionAudioOptions = {
 	bitrate?: number | Quality;
 	numberOfChannels?: number;
 	sampleRate?: number;
+	sampleFormat?: 'u8' | 's16' | 's32' | 'f32';
 	forceTranscode?: boolean;
 	process?: (sample: AudioSample) => MaybePromise<
 		AudioSample | AudioSample[] | null

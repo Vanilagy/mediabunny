@@ -1,7 +1,7 @@
 {
   "name": "@mediabunny/aac-encoder",
   "author": "Vanilagy",
-  "version": "1.42.0",
+  "version": "1.43.0",
   "description": "AAC encoder extension for Mediabunny, based on FFmpeg.",
   "main": "./dist/bundles/mediabunny-aac-encoder.mjs",
   "module": "./dist/bundles/mediabunny-aac-encoder.mjs",
