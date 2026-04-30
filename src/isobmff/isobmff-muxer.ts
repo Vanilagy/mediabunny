@@ -52,7 +52,7 @@ import {
 import { buildIsobmffMimeType } from './isobmff-misc';
 import { MAX_BOX_HEADER_SIZE, MIN_BOX_HEADER_SIZE } from './isobmff-reader';
 
-export const GLOBAL_TIMESCALE = 1000;
+export const GLOBAL_TIMESCALE = 57600; // LCM of a bunch of common frame rates (24, 25, 30, 60, 144, ...)
 const TIMESTAMP_OFFSET = 2_082_844_800; // Seconds between Jan 1 1904 and Jan 1 1970
 
 export type Sample = {
@@ -85,6 +85,7 @@ export type IsobmffTrackData = {
 	compositionTimeOffsetTable: { sampleCount: number; sampleCompositionTimeOffset: number }[];
 	lastTimescaleUnits: number | null;
 	lastSample: Sample | null;
+	startTimestampOffset: number | null;
 
 	finalizedChunks: Chunk[];
 	currentChunk: Chunk | null;
@@ -120,6 +121,7 @@ export type IsobmffTrackData = {
 		 * Some players expect this for PCM audio.
 		 */
 		requiresPcmTransformation: boolean;
+		expectedNextPcmPacketTimestamp: number | null;
 		/**
 		 * The "ADTS stripping" involves removing the ADTS header from each AAC packet. SOBMFF stores raw AAC data, not
 		 * ADTS-wrapped data.
@@ -395,7 +397,10 @@ export class IsobmffMuxer extends Muxer {
 		// The frame rate set by the user may not be an integer. Since timescale is an integer, we'll approximate the
 		// frame time (inverse of frame rate) with a rational number, then use that approximation's denominator
 		// as the timescale.
-		const timescale = computeRationalApproximation(1 / (track.metadata.frameRate ?? 57600), 1e6).denominator;
+		const timescale = computeRationalApproximation(
+			1 / (track.metadata.frameRate ?? GLOBAL_TIMESCALE),
+			1e6,
+		).denominator;
 
 		const displayAspectWidth = decoderConfig.displayAspectWidth;
 		const displayAspectHeight = decoderConfig.displayAspectHeight;
@@ -425,6 +430,7 @@ export class IsobmffMuxer extends Muxer {
 			compositionTimeOffsetTable: [],
 			lastTimescaleUnits: null,
 			lastSample: null,
+			startTimestampOffset: null,
 			finalizedChunks: [],
 			currentChunk: null,
 			compactlyCodedChunkTable: [],
@@ -494,6 +500,7 @@ export class IsobmffMuxer extends Muxer {
 				requiresPcmTransformation:
 					!this.isFragmented
 					&& (PCM_AUDIO_CODECS as readonly string[]).includes(track.source._codec),
+				expectedNextPcmPacketTimestamp: null,
 				requiresAdtsStripping,
 				firstPacket: packet,
 			},
@@ -505,6 +512,7 @@ export class IsobmffMuxer extends Muxer {
 			compositionTimeOffsetTable: [],
 			lastTimescaleUnits: null,
 			lastSample: null,
+			startTimestampOffset: null,
 			finalizedChunks: [],
 			currentChunk: null,
 			compactlyCodedChunkTable: [],
@@ -547,6 +555,7 @@ export class IsobmffMuxer extends Muxer {
 			compositionTimeOffsetTable: [],
 			lastTimescaleUnits: null,
 			lastSample: null,
+			startTimestampOffset: null,
 			finalizedChunks: [],
 			currentChunk: null,
 			compactlyCodedChunkTable: [],
@@ -629,22 +638,49 @@ export class IsobmffMuxer extends Muxer {
 				packetData = packetData.subarray(headerLength);
 			}
 
-			const timestamp = this.validateAndNormalizeTimestamp(
+			let timestamp = this.validateAndNormalizeTimestamp(
 				trackData.track,
 				packet.timestamp,
 				packet.type === 'key',
 			);
+			let duration = packet.duration;
+
+			if (trackData.info.requiresPcmTransformation) {
+				// Packets may have only approximate timestamp/duration information, but for our PCM logic, we need it
+				// to be precise. So here, we refine the values.
+
+				const pcmInfo = parsePcmCodec(
+					trackData.info.decoderConfig.codec as PcmAudioCodec,
+				);
+				const frameSize = pcmInfo.sampleSize * trackData.info.numberOfChannels;
+
+				// Compute the precise duration
+				duration = packetData.byteLength / frameSize / trackData.info.sampleRate;
+
+				if (trackData.info.expectedNextPcmPacketTimestamp !== null) {
+					const diff = timestamp - trackData.info.expectedNextPcmPacketTimestamp;
+					if (diff < 0.01) {
+						timestamp = trackData.info.expectedNextPcmPacketTimestamp;
+					} else {
+						const paddedDuration = await this.padWithSilence(
+							trackData,
+							trackData.info.expectedNextPcmPacketTimestamp,
+							diff,
+						);
+						timestamp = trackData.info.expectedNextPcmPacketTimestamp + paddedDuration;
+					}
+				}
+
+				trackData.info.expectedNextPcmPacketTimestamp = timestamp + duration;
+			}
+
 			const internalSample = this.createSampleForTrack(
 				trackData,
 				packetData,
 				timestamp,
-				packet.duration,
+				duration,
 				packet.type,
 			);
-
-			if (trackData.info.requiresPcmTransformation) {
-				await this.maybePadWithSilence(trackData, timestamp);
-			}
 
 			await this.registerSample(trackData, internalSample);
 		} finally {
@@ -652,18 +688,9 @@ export class IsobmffMuxer extends Muxer {
 		}
 	}
 
-	private async maybePadWithSilence(trackData: IsobmffAudioTrackData, untilTimestamp: number) {
-		// The PCM transformation assumes that all samples are contiguous. This is not something that is enforced, so
-		// we need to pad the "holes" in between samples (and before the first sample) with additional
-		// "silence samples".
-
-		const lastSample = last(trackData.samples);
-		const lastEndTimestamp = lastSample
-			? lastSample.timestamp + lastSample.duration
-			: 0;
-
-		const delta = untilTimestamp - lastEndTimestamp;
-		const deltaInTimescale = intoTimescale(delta, trackData.timescale);
+	private async padWithSilence(trackData: IsobmffAudioTrackData, timestamp: number, duration: number) {
+		const deltaInTimescale = intoTimescale(duration, trackData.timescale);
+		duration = deltaInTimescale / trackData.timescale;
 
 		if (deltaInTimescale > 0) {
 			const { sampleSize, silentValue } = parsePcmCodec(
@@ -675,12 +702,14 @@ export class IsobmffMuxer extends Muxer {
 			const paddingSample = this.createSampleForTrack(
 				trackData,
 				new Uint8Array(data.buffer),
-				lastEndTimestamp,
-				delta,
+				timestamp,
+				duration,
 				'key',
 			);
 			await this.registerSample(trackData, paddingSample);
 		}
+
+		return duration;
 	}
 
 	async addSubtitleCue(track: OutputSubtitleTrack, cue: SubtitleCue, meta?: SubtitleMetadata) {
@@ -821,6 +850,11 @@ export class IsobmffMuxer extends Muxer {
 		}
 
 		if (trackData.type === 'audio' && trackData.info.requiresPcmTransformation) {
+			if (!this.isFragmented) {
+				// The first timestamp is the lowest
+				trackData.startTimestampOffset ??= trackData.timestampProcessingQueue[0]!.timestamp;
+			}
+
 			let totalDuration = 0;
 
 			// Compute the total duration in the track timescale (which is equal to the amount of PCM audio samples)
@@ -848,6 +882,10 @@ export class IsobmffMuxer extends Muxer {
 
 		const sortedTimestamps = trackData.timestampProcessingQueue.map(x => x.timestamp).sort((a, b) => a - b);
 
+		if (!this.isFragmented) {
+			trackData.startTimestampOffset ??= sortedTimestamps[0]!;
+		}
+
 		for (let i = 0; i < trackData.timestampProcessingQueue.length; i++) {
 			const sample = trackData.timestampProcessingQueue[i]!;
 
@@ -856,12 +894,6 @@ export class IsobmffMuxer extends Muxer {
 			// (presentation timestamp & decode order are all you need), but it is a concept in ISOBMFF so we need to
 			// model it.
 			sample.decodeTimestamp = sortedTimestamps[i]!;
-
-			if (!this.isFragmented && trackData.lastTimescaleUnits === null) {
-				// In non-fragmented files, the first decode timestamp is always zero. If the first presentation
-				// timestamp isn't zero, we'll simply use the composition time offset to achieve it.
-				sample.decodeTimestamp = 0;
-			}
 
 			const sampleCompositionTimeOffset
 				= intoTimescale(sample.timestamp - sample.decodeTimestamp, trackData.timescale);
@@ -1377,6 +1409,17 @@ export class IsobmffMuxer extends Muxer {
 		} else {
 			for (const trackData of this.trackDatas) {
 				await this.finalizeCurrentChunk(trackData);
+
+				// Must hold because we will have processed at least one sample
+				assert(trackData.startTimestampOffset !== null);
+
+				// Shift all of the samples by the start offset. We'll then write out an edit list that will shift them
+				// back to their proper spot in the composition.
+				for (let i = 0; i < trackData.samples.length; i++) {
+					const sample = trackData.samples[i]!;
+					sample.timestamp -= trackData.startTimestampOffset;
+					sample.decodeTimestamp -= trackData.startTimestampOffset;
+				}
 			}
 		}
 

@@ -17,14 +17,42 @@
 			source: new Mediabunny.BlobSource(file),
 		});
 
-		const track = await input.getPrimaryVideoTrack();
+		const track = await input.getPrimaryAudioTrack();
 		const sink = new Mediabunny.EncodedPacketSink(track);
-		const packet = await sink.getFirstKeyPacket();
+		
+		for await (const packet of sink.packets()) {
+			console.log(packet);
+		}
 
-		console.log(packet.data.join(', '));
+		const output = new Mediabunny.Output({
+			format: new Mediabunny.Mp4OutputFormat(),
+			target: new Mediabunny.BufferTarget(),
+		});
 
-		const config = await track.getDecoderConfig();
-		console.log(config.description.join(', '));
+		const conversion = await Mediabunny.Conversion.init({ input, output });
+		await conversion.execute();
+
+		return;
+
+		// Download it now
+		const blob = new Blob([output.target.buffer]);
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = file.name.replace(/\.\w+$/, '.mp4');
+		a.click();
+		URL.revokeObjectURL(url);
+
+		/*
+		const track = await input.getPrimaryAudioTrack();
+		const sink = new Mediabunny.EncodedPacketSink(track);
+		
+		for await (const packet of sink.packets()) {
+			console.log(packet);
+		}
+
+		console.log("Done")
+		*/
 
 		/*
 		const input = new Mediabunny.Input({
