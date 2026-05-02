@@ -1475,10 +1475,13 @@ export class IsobmffDemuxer extends Demuxer {
 				const num = readU32Be(slice);
 				const den = readU32Be(slice);
 
-				if (num > den) {
-					track.info.squarePixelWidth = Math.round(track.info.width * num / den);
-				} else {
-					track.info.squarePixelHeight = Math.round(track.info.height * den / num);
+				// https://github.com/Vanilagy/mediabunny/issues/362
+				if (num > 0 && den > 0) {
+					if (num > den) {
+						track.info.squarePixelWidth = Math.round(track.info.width * num / den);
+					} else {
+						track.info.squarePixelHeight = Math.round(track.info.height * den / num);
+					}
 				}
 			}; break;
 

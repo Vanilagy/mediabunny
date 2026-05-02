@@ -1051,14 +1051,16 @@ export class MatroskaDemuxer extends Demuxer {
 							const num = this.currentTrack.info.displayWidth * this.currentTrack.info.height;
 							const den = this.currentTrack.info.displayHeight * this.currentTrack.info.width;
 
-							if (num > den) {
-								this.currentTrack.info.squarePixelWidth = Math.round(
-									this.currentTrack.info.width * num / den,
-								);
-							} else {
-								this.currentTrack.info.squarePixelHeight = Math.round(
-									this.currentTrack.info.height * den / num,
-								);
+							if (num > 0 && den > 0) {
+								if (num > den) {
+									this.currentTrack.info.squarePixelWidth = Math.round(
+										this.currentTrack.info.width * num / den,
+									);
+								} else {
+									this.currentTrack.info.squarePixelHeight = Math.round(
+										this.currentTrack.info.height * den / num,
+									);
+								}
 							}
 						}
 

@@ -474,18 +474,22 @@ export class MpegTsDemuxer extends Demuxer {
 
 									elementaryStream.info.width = spsInfo.displayWidth;
 									elementaryStream.info.height = spsInfo.displayHeight;
-									if (spsInfo.pixelAspectRatio.num > spsInfo.pixelAspectRatio.den) {
-										elementaryStream.info.squarePixelWidth = Math.round(
-											elementaryStream.info.width
-											* spsInfo.pixelAspectRatio.num / spsInfo.pixelAspectRatio.den,
-										);
-										elementaryStream.info.squarePixelHeight = elementaryStream.info.height;
-									} else {
-										elementaryStream.info.squarePixelWidth = elementaryStream.info.width;
-										elementaryStream.info.squarePixelHeight = Math.round(
-											elementaryStream.info.height
-											* spsInfo.pixelAspectRatio.den / spsInfo.pixelAspectRatio.num,
-										);
+
+									const num = spsInfo.pixelAspectRatio.num;
+									const den = spsInfo.pixelAspectRatio.den;
+
+									if (num > 0 && den > 0) {
+										if (num > den) {
+											elementaryStream.info.squarePixelWidth = Math.round(
+												elementaryStream.info.width * num / den,
+											);
+											elementaryStream.info.squarePixelHeight = elementaryStream.info.height;
+										} else {
+											elementaryStream.info.squarePixelWidth = elementaryStream.info.width;
+											elementaryStream.info.squarePixelHeight = Math.round(
+												elementaryStream.info.height * den / num,
+											);
+										}
 									}
 
 									elementaryStream.info.colorSpace = {
