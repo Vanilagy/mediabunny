@@ -938,6 +938,8 @@ export type Rational = {
 };
 
 export const simplifyRational = (rational: Rational): Rational => {
+	assert(Number.isInteger(rational.num));
+	assert(Number.isInteger(rational.den));
 	assert(rational.den !== 0);
 
 	let a = Math.abs(rational.num);

@@ -25,7 +25,7 @@
 			chunked: true,
 			chunkSize: 2**20
 		});
-		const outputFormat = new Mediabunny.FlacOutputFormat();
+		const outputFormat = new Mediabunny.Mp4OutputFormat();
 
 		const p = document.createElement('p');
 		p.textContent = 'Capturing...';
@@ -96,6 +96,7 @@
 			input,
 			output,
 			audio: {
+				discard: true,
 				//forceTranscode: true,
 				//sampleFormat: 's16',
 			},
@@ -124,7 +125,7 @@
 			},
 			*/
 			video: {
-				discard: true,
+				//discard: true,
 			},
 			tags: {} ?? {
 				title: 'Bigggy',
@@ -144,6 +145,7 @@
 				}
 			},
 			trim: {
+				end: 10,
 				//start: startTime,
 				//end: startTime + 2,
 			},

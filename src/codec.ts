@@ -784,6 +784,37 @@ export const validateVideoChunkMetadata = (metadata: EncodedVideoChunkMetadata |
 			'Video chunk metadata decoder configuration must specify a valid codedHeight (positive integer).',
 		);
 	}
+	if (
+		metadata.decoderConfig.displayAspectWidth !== undefined
+		&& (
+			!Number.isInteger(metadata.decoderConfig.displayAspectWidth)
+			|| metadata.decoderConfig.displayAspectWidth <= 0
+		)
+	) {
+		throw new TypeError(
+			'Video chunk metadata decoder configuration displayAspectWidth, when defined, must be a positive integer.',
+		);
+	}
+	if (
+		metadata.decoderConfig.displayAspectHeight !== undefined
+		&& (
+			!Number.isInteger(metadata.decoderConfig.displayAspectHeight)
+			|| metadata.decoderConfig.displayAspectHeight <= 0
+		)
+	) {
+		throw new TypeError(
+			'Video chunk metadata decoder configuration displayAspectHeight, when defined, must be a positive integer.',
+		);
+	}
+	if (
+		(metadata.decoderConfig.displayAspectWidth !== undefined)
+		!== (metadata.decoderConfig.displayAspectHeight !== undefined)
+	) {
+		throw new TypeError(
+			'Video chunk metadata decoder configuration must specify both displayAspectWidth and displayAspectHeight,'
+			+ ' or neither.',
+		);
+	}
 	if (metadata.decoderConfig.description !== undefined) {
 		if (!isAllowSharedBufferSource(metadata.decoderConfig.description)) {
 			throw new TypeError(
