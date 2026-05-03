@@ -1,3 +1,7 @@
+---
+description: Teach Claude Code, Codex, Cursor, Copilot or any other AI coding agent how to make full use of Mediabunny.
+---
+
 # Mediabunny and LLMs
 
 <div class="grid place-items-center my-14">

@@ -1,4 +1,5 @@
 ---
+description: Mediabunny can create new HLS (.m3u8) playlists directly in the browser, both VOD and live. Define tracks, add media data, and upload directly to a server.
 outline: [2, 4]
 ---
 

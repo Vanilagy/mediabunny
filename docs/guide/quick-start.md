@@ -1,3 +1,7 @@
+---
+description: A collection of short code snippets that showcase the most common operations that Mediabunny can do.
+---
+
 # Quick start
 
 This page is a collection of short code snippets that showcase the most common operations you may use this library for.

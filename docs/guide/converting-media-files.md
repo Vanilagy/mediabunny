@@ -1,3 +1,7 @@
+---
+description: Efficiently convert any media file to any format, directly in the browser. Optionally apply trimming, video resizing, rotation, custom overlays, and more.
+---
+
 # Converting media files
 
 The [reading](./reading-media-files) and [writing](./writing-media-files) primitives in Mediabunny provide everything you need to convert media files. However, since this is such a common operation and the details can be tricky, Mediabunny ships with a built-in file conversion abstraction.

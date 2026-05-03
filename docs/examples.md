@@ -1,4 +1,5 @@
 ---
+description: "Demos showcasing the various features of Mediabunny: metadata extraction, thumbnail generation, compression, media playback, live streaming, and more."
 layout: home
 title: Examples
 

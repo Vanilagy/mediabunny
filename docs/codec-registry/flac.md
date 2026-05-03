@@ -1,3 +1,7 @@
+---
+description: Free Lossless Audio Codec (FLAC) audio codec definition, defining legal codec strings, decoder configs, and packet data formats.
+---
+
 <script setup>
 import { VPBadge } from 'vitepress/theme'
 </script>

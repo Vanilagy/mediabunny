@@ -1,3 +1,7 @@
+---
+description: Efficiently extract metadata, video frames, and audio samples from any media file, such as MP4 or WebM.
+---
+
 # Reading media files
 
 Mediabunny allows you to read media files with great control and efficiency. You can use it to extract metadata (such as duration or resolution), as well as to read actual media data from video and audio tracks with frame-accurate timing. Many commonly used [input file formats](./input-formats) are supported. Using [input sources](#input-sources), data can be read from multiple sources, such as directly from memory, from the user's disk, or even over the network.

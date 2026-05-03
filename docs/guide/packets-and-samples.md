@@ -1,3 +1,7 @@
+---
+description: Learn about how packets carry encoded media data, samples carry raw decoded media data, and the operations you can perform on them.
+---
+
 # Packets & samples
 
 ## Introduction

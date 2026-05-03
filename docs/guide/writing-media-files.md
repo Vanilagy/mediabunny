@@ -1,3 +1,7 @@
+---
+description: Use Mediabunny to create new video and audio files of any size directly in the browser, and with full control over frame timing, tracks, and more.
+---
+
 # Writing media files
 
 Mediabunny enables you to create media files with very fine levels of control. You can add an arbitrary number of video, audio and subtitle tracks to a media file, and precisely control the timing of media data. This library supports [many output file formats](./output-formats). Using [output targets](#output-targets), you can decide if you want to build up the entire file in memory or stream it out in chunks as it's being created - allowing you to create very large files.

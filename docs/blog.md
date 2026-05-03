@@ -1,4 +1,6 @@
 ---
+title: Blog posts
+description: Announcements, news, and devblogs about Mediabunny.
 outline: false
 ---
 

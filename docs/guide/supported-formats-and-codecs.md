@@ -1,3 +1,7 @@
+---
+description: Mediabunny supports a wide range of media container formats (.mp4, .webm, .mp3, .wav, .m3u8, ...) and video/audio codecs (H.264, HEVC, VP9, AV1, AAC, Opus, FLAC, ...).
+---
+
 # Supported formats & codecs
  
 ## Container formats
