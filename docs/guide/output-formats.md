@@ -1,3 +1,7 @@
+---
+description: Mediabunny can write a wide range of media output formats, including MP4, WebM, MP3, HLS, and many more.
+---
+
 # Output formats
 
 ## Introduction

@@ -1,3 +1,7 @@
+---
+description: The @mediabunny/aac-encoder extension provides a fast AAC encoder polyfill for use in the browser and on the server.
+---
+
 # @mediabunny/aac-encoder
 
 Some browsers lack support for AAC encoding in their WebCodecs implementations. This extension package provides a reliable AAC-LC encoder for use with Mediabunny. It is implemented using Mediabunny's [custom coder API](../supported-formats-and-codecs#custom-coders) and uses a fast, size-optimized WASM build of [FFmpeg](https://ffmpeg.org/)'s AAC encoder under the hood.

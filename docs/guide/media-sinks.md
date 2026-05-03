@@ -1,3 +1,7 @@
+---
+description: Media sinks enable different ways to extract video and audio data from files, from built-in decoding to manual per-packet control.
+---
+
 # Media sinks
 
 ## Introduction

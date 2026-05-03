@@ -1,3 +1,7 @@
+---
+description: Media sources enable multiple ways to add media data to new media files, from built-in encoding to manual per-packet control.
+---
+
 # Media sources
 
 ## Introduction

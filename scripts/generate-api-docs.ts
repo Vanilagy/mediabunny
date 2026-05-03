@@ -49,11 +49,13 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 	// Extract special fields
 	const headingText = apiConfig['heading'] || 'API Reference';
 	const introText = apiConfig['intro'];
+	const indexDescription = apiConfig['description'];
 
 	// Create a copy without the special fields for group processing
 	const groupConfig = { ...apiConfig };
 	delete groupConfig['heading'];
 	delete groupConfig['intro'];
+	delete groupConfig['description'];
 
 	// Clear and recreate output directory (skip if dry run)
 	if (!dry) {
@@ -712,7 +714,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 						? `${variableName}(\n${params.join(',\n')},\n): ${returnType};`
 						: `${variableName}(): ${returnType};`;
 
-					let markdown = `<script setup>\nimport { VPBadge } from 'vitepress/theme'\n</script>\n\n<VPBadge type="info" text="Function" />\n\n# ${variableName}\n\n\`\`\`ts\n${functionSig}\n\`\`\`${description ? `\n\n${description}` : ''}`;
+					let markdown = `${buildFrontmatter(description)}<script setup>\nimport { VPBadge } from 'vitepress/theme'\n</script>\n\n<VPBadge type="info" text="Function" />\n\n# ${variableName}\n\n\`\`\`ts\n${functionSig}\n\`\`\`${description ? `\n\n${description}` : ''}`;
 
 					// Find referenced types in all parameters and return type
 					const allTypeStrings = params.map(p => p.replace(/\t.*?:\s*/, '')).concat([returnType]);
@@ -726,7 +728,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 				}
 			} else {
 				// Handle regular variables
-				let markdown = `<script setup>\nimport { VPBadge } from 'vitepress/theme'\n</script>\n\n<VPBadge type="info" text="Constant" />\n\n# ${variableName}\n\n${description ? `${description}\n\n` : ''}`;
+				let markdown = `${buildFrontmatter(description)}<script setup>\nimport { VPBadge } from 'vitepress/theme'\n</script>\n\n<VPBadge type="info" text="Constant" />\n\n# ${variableName}\n\n${description ? `${description}\n\n` : ''}`;
 				const variableValue = declaration.initializer ? declaration.initializer.getText() : 'undefined';
 				const variableDefinition = `const ${variableName} = ${variableValue};`;
 				markdown += `\`\`\`ts\n${variableDefinition}\n\`\`\``;
@@ -1512,7 +1514,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 			deprecatedProperties.sort(compareMemberNames);
 			deprecatedMethods.sort(compareMemberNames);
 
-			let markdown = '';
+			let markdown = buildFrontmatter(description);
 
 			// Add VPBadge import and badge for all types
 			markdown += `<script setup>\nimport { VPBadge } from 'vitepress/theme'\n</script>\n\n`;
@@ -1794,7 +1796,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 		throw new Error(`Groups found in code but not in API config: ${missingGroups.join(', ')}`);
 	}
 
-	let indexMarkdown = `# ${headingText}\n\n`;
+	let indexMarkdown = `${buildFrontmatter(indexDescription ?? '')}# ${headingText}\n\n`;
 
 	// Add intro text if provided
 	if (introText) {
@@ -1911,6 +1913,31 @@ const extractJsDocDescription = (
 // Helper to get the full description text from a JSDoc comment, handling inline tags.
 const getFullJSDocDescription = (node: ts.Node): string => {
 	return extractJsDocDescription(node, { tagHandling: 'stopAtFirst' });
+};
+
+// Convert a markdown description (possibly multi-paragraph, with **bold**, `code`,
+// and [text](link) from processed @link tags) into a single-line plain-text string
+// suitable for the `description` field in YAML frontmatter.
+const descriptionToFrontmatter = (description: string): string => {
+	return description
+		.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+		.replace(/\*\*([^*]+)\*\*/g, '$1')
+		.replace(/__([^_]+)__/g, '$1')
+		.replace(/`([^`]+)`/g, '$1')
+		.replace(/\s+/g, ' ')
+		.trim();
+};
+
+const buildFrontmatter = (description: string): string => {
+	if (!description) {
+		return '';
+	}
+	const cleaned = descriptionToFrontmatter(description);
+	if (!cleaned) {
+		return '';
+	}
+	const yamlValue = `"${cleaned.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+	return `---\ndescription: ${yamlValue}\n---\n\n`;
 };
 
 const main = () => {

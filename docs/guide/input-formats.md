@@ -1,3 +1,7 @@
+---
+description: Mediabunny supports a wide range of media input formats, such as MP4, WebM, MP3, HLS, and many more.
+---
+
 # Input formats
 
 Mediabunny supports a wide variety of commonly used container formats for reading input files. These *input formats* are used in two ways:

@@ -1,3 +1,7 @@
+---
+description: The Mediabunny Codec Registry formalizes the precise definitions of all video and audio codecs supported by Mediabunny, like expected codec string and packet data format.
+---
+
 # Mediabunny Codec Registry
 
 The Mediabunny Codec Registry formalizes the precise definitions of all video and audio codecs supported by Mediabunny. More specifically, for any given codec, it describes the format that `EncodedPacket`, `VideoDecoderConfig` and `AudioDecoderConfig` must adhere to. All packets coming out of or going into Mediabunny are expected to adhere to this registry.

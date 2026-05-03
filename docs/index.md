@@ -1,7 +1,8 @@
 ---
 layout: home
 
-title: Mediabunny
+title: Mediabunny — A complete JavaScript media toolkit for the browser
+titleTemplate: false
 
 hero:
     name: Mediabunny
@@ -155,7 +156,7 @@ const sponsors = {
 		<p class="!my-0 flex-1 text-sm !leading-6">{{ quote.quote }}</p>
 		<div class="shrink-0 flex gap-2 items-center mt-1.5">
 			<a :href="quote.url" target="_blank">
-				<img :src="quote.image" class="size-8 rounded-full shrink-0" alt="Author image">
+				<img :src="quote.image" class="size-8 rounded-full shrink-0" :alt="quote.author">
 			</a>
 			<p class="!my-0 flex-1 text-xs font-medium">{{ quote.author }}</p>
 		</div>
@@ -173,7 +174,7 @@ npm install mediabunny
 <div class="space-y-16 mt-18">
 <div class="flex flex-col lg:flex-row lg:gap-20 lg:items-center">
 <div class="flex-1 min-w-0">
-<h1 class="inline-block" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">Read any media file, efficiently</h1>
+<h2 class="inline-block !text-[32px] !border-0 !m-0 !p-0 !leading-[40px]" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">Read any media file, efficiently</h2>
 <p class="text-lg">Mediabunny allows you efficiently read data from any video or audio file, no matter the size: duration, resolution, rotation, tracks, codecs and other metadata, as well as raw or decoded media data from anywhere in the file. Load only what you need.</p>
 <a class="!no-underline inline-flex items-center gap-1.5" :no-icon="true" href="/guide/reading-media-files">
 	Docs
@@ -249,7 +250,7 @@ const { buffer } = output.target; // Contains the final file
 
 </div>
 <div class="flex-1 min-w-0">
-<h1 class="inline-block" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">Create new media files, programmatically</h1>
+<h2 class="inline-block !text-[32px] !border-0 !m-0 !p-0 !leading-[40px]" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">Create new media files, programmatically</h2>
 <p class="text-lg">Generate new media files (such as MP4 or WebM) directly on the client, and as fast as the hardware allows. Add multiple video, audio, or subtitle tracks, and have precise control down to the microsecond.</p>
 <a class="!no-underline inline-flex items-center gap-1.5" :no-icon="true" href="/guide/writing-media-files">
 	Docs
@@ -260,7 +261,7 @@ const { buffer } = output.target; // Contains the final file
 
 <div class="flex flex-col lg:flex-row lg:gap-20 lg:items-center">
 <div class="flex-1 min-w-0">
-<h1 class="inline-block" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">Hopping-fast file conversion</h1>
+<h2 class="inline-block !text-[32px] !border-0 !m-0 !p-0 !leading-[40px]" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">Hopping-fast file conversion</h2>
 <p class="text-lg">Use the Conversion API to transform any media file into any other media file: perform transmuxing, transcoding, resizing, rotation, audio resampling, trimming, and more.</p>
 <a class="!no-underline inline-flex items-center gap-1.5" :no-icon="true" href="/guide/converting-media-files">
 	Docs
@@ -296,14 +297,14 @@ await conversion.execute();
 <img class="relative" src="./assets/inspiring-io.svg">
 </div>
 <div class="flex-1 min-w-0">
-<h1 class="inline-block" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">Universal I/O</h1>
+<h2 class="inline-block !text-[32px] !border-0 !m-0 !p-0 !leading-[40px]" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">Universal I/O</h2>
 <p class="text-lg">Read and write files from and to memory, disk, or the network. Create files for offline use, or live-stream them as they're being created. Inject media data from a canvas, webcam, screen, microphone, audio buffer, your own encoding stack, or whatever. It's all up to you.</p>
 </div>
 </div>
 
 <div class="flex flex-col lg:flex-row gap-4 lg:gap-20 lg:items-center">
 <div class="flex-1 min-w-0">
-<h1 class="inline-block" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">Wide container & codec support</h1>
+<h2 class="inline-block !text-[32px] !border-0 !m-0 !p-0 !leading-[40px]" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">Wide container & codec support</h2>
 <p class="text-lg">Mediabunny supports many commonly used container formats and a wide variety of video and audio codecs. And all of them bidirectionally, too! (that means for reading and writing)</p>
 <a class="!no-underline inline-flex items-center gap-1.5" :no-icon="true" href="/guide/supported-formats-and-codecs">
 	See full list
@@ -329,14 +330,14 @@ await conversion.execute();
 	<p class="!my-0 text-center text-[10px] opacity-50 !leading-4">Reading BigBuckBunny1080pH264.mov (691 MiB) from disk<br>Ryzen 7600X, RTX 4070, NVMe SSD, measured 2025-06-22</p>
 </div>
 <div class="flex-1 min-w-0">
-<h1 class="inline-block" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">High performance</h1>
+<h2 class="inline-block !text-[32px] !border-0 !m-0 !p-0 !leading-[40px]" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">High performance</h2>
 <p class="text-lg">By reading only what you need, writing progressively, utilizing hardware-accelerated encoding and decoding via the WebCodecs API, and using a pipelined design, Mediabunny is able to get the job done fast.</p>
 </div>
 </div>
 
 <div class="flex flex-col lg:flex-row gap-4 lg:gap-20 lg:items-center">
 <div class="flex-1 min-w-0">
-<h1 class="inline-block" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">Built from scratch, for the web</h1>
+<h2 class="inline-block !text-[32px] !border-0 !m-0 !p-0 !leading-[40px]" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">Built from scratch, for the web</h2>
 <p class="text-lg">Mediabunny is 100% implemented in TypeScript and has zero dependencies. Its API was designed to be highly tree-shakable, meaning you only include what you use.</p>
 </div>
 <div class="space-y-2 flex-1 min-w-0">
@@ -369,10 +370,10 @@ await conversion.execute();
 <hr class="!my-16" />
 
 <div class="flex flex-col items-center">
-	<h1 id="sponsors" class="flex items-center gap-4" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">
+	<h2 id="sponsors" class="flex items-center gap-4 !text-[32px] !border-0 !m-0 !p-0 !leading-[40px]" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">
 		Made possible by you
 		<img class="size-8" src="./assets/fluent-emoji--heart-suit.svg">
-	</h1>
+	</h2>
 	<p class="max-w-2xl">Mediabunny is an open-source project released under the <a href="https://choosealicense.com/licenses/mpl-2.0/" target="_blank">MPL-2.0</a> and is therefore free to use for any purpose, including closed-source commercial use. A permissive license is essential for a foundational library like this to truly thrive. That said, this project requires an immense amount of work and care. This is made possible by the generous financial backing of these awesome sponsors:</p>
 	<template v-if="sponsors.gold.length > 0">
 		<h3 class="!text-3xl">Gold sponsors</h3>

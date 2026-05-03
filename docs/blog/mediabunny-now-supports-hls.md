@@ -1,6 +1,8 @@
 ---
 title: Mediabunny now supports HLS!
+description: Mediabunny v1.42.0 adds read/write support for HTTP Live Streaming (HLS), pushing the frontier of fully client-side media processing.
 publishedOn: April 24, 2026
+publishedOnIso: "2026-04-24"
 author: Vanilagy
 authorImage: /vani.png
 authorLink: https://github.com/Vanilagy

@@ -1,3 +1,7 @@
+---
+description: PCM audio codec definitions, defining legal codec strings, decoder configs, and packet data formats.
+---
+
 <script setup>
 import { VPBadge } from 'vitepress/theme'
 </script>

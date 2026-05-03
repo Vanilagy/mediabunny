@@ -1,6 +1,7 @@
 {
     "heading": "Mediabunny API reference",
     "intro": "Here you can find detailed documentation for all classes, functions, constants and types exposed by Mediabunny's public API.",
+	"description": "Detailed documentation for all classes, functions, constants and types exposed by Mediabunny's public API.",
 
     "Samples": "Raw, unencoded chunks of media data, such as video frames or sections of audio.",
     "Packets": "Chunks of encoded media data.",

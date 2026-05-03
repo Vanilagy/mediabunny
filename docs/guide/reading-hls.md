@@ -1,3 +1,7 @@
+---
+description: Use Mediabunny to read HLS (.m3u8) playlists, both VOD and live. Extract tracks, metadata, and media data efficiently and with precise control.
+---
+
 # Reading HLS
 
 Mediabunny has full support for reading HLS (.m3u8) playlists, both VOD and live. This page will go into HLS-specific behavior and advice. For general information about how to read any media file (including HLS) in Mediabunny, refer to [Reading media files](./reading-media-files).
