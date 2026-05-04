@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -12,6 +12,7 @@ import {
 	getXingOffset,
 	KILOBIT_RATES,
 	XING,
+	XingFlags,
 } from '../../shared/mp3-misc';
 
 export type XingFrameData = {
@@ -96,13 +97,13 @@ export class Mp3Writer {
 
 		let flags = 0;
 		if (data.frameCount !== null) {
-			flags |= 1;
+			flags |= XingFlags.FrameCount;
 		}
 		if (data.fileSize !== null) {
-			flags |= 2;
+			flags |= XingFlags.FileSize;
 		}
 		if (data.toc !== null) {
-			flags |= 4;
+			flags |= XingFlags.Toc;
 		}
 
 		this.writeU32(flags);

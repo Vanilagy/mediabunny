@@ -1,13 +1,17 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { AacAudioSpecificConfig, parseAacAudioSpecificConfig, validateAudioChunkMetadata } from '../codec';
-import { assert, Bitstream, toUint8Array } from '../misc';
+import { buildAdtsHeaderTemplate, parseAacAudioSpecificConfig, writeAdtsFrameLength } from '../../shared/aac-misc';
+import { Bitstream } from '../../shared/bitstream';
+import { validateAudioChunkMetadata } from '../codec';
+import { Id3V2Writer } from '../id3';
+import { metadataTagsAreEmpty } from '../metadata';
+import { assert, toUint8Array } from '../misc';
 import { Muxer } from '../muxer';
 import { Output, OutputAudioTrack } from '../output';
 import { AdtsOutputFormat } from '../output-format';
@@ -16,20 +20,28 @@ import { Writer } from '../writer';
 
 export class AdtsMuxer extends Muxer {
 	private format: AdtsOutputFormat;
-	private writer: Writer;
-	private header = new Uint8Array(7);
-	private headerBitstream = new Bitstream(this.header);
-	private audioSpecificConfig: AacAudioSpecificConfig | null = null;
+	private writer!: Writer;
+	private header: Uint8Array | null = null;
+	private headerBitstream: Bitstream | null = null;
+	private inputIsAdts: boolean | null = null;
 
 	constructor(output: Output, format: AdtsOutputFormat) {
 		super(output);
 
 		this.format = format;
-		this.writer = output._writer;
 	}
 
 	async start() {
-		// Nothing needed here
+		const release = await this.mutex.acquire();
+
+		this.writer = await this.output._getRootWriter(true);
+
+		if (!metadataTagsAreEmpty(this.output._metadataTags)) {
+			const id3Writer = new Id3V2Writer(this.writer);
+			id3Writer.writeId3V2Tag(this.output._metadataTags);
+		}
+
+		release();
 	}
 
 	async getMimeType() {
@@ -45,56 +57,54 @@ export class AdtsMuxer extends Muxer {
 		packet: EncodedPacket,
 		meta?: EncodedAudioChunkMetadata,
 	) {
-		// https://wiki.multimedia.cx/index.php/ADTS (last visited: 2025/08/17)
-
 		const release = await this.mutex.acquire();
 
 		try {
 			this.validateAndNormalizeTimestamp(track, packet.timestamp, packet.type === 'key');
 
-			if (!this.audioSpecificConfig) {
+			// First packet - determine input format from metadata
+			if (this.inputIsAdts === null) {
 				validateAudioChunkMetadata(meta);
 
 				const description = meta?.decoderConfig?.description;
-				assert(description);
 
-				this.audioSpecificConfig = parseAacAudioSpecificConfig(toUint8Array(description));
+				// Follows from the Mediabunny Codec Registry:
+				this.inputIsAdts = !description;
 
-				const { objectType, frequencyIndex, channelConfiguration } = this.audioSpecificConfig;
-				const profile = objectType - 1;
-
-				this.headerBitstream.writeBits(12, 0b1111_11111111); // Syncword
-				this.headerBitstream.writeBits(1, 0); // MPEG Version
-				this.headerBitstream.writeBits(2, 0); // Layer
-				this.headerBitstream.writeBits(1, 1); // Protection absence
-				this.headerBitstream.writeBits(2, profile); // Profile
-				this.headerBitstream.writeBits(4, frequencyIndex); // MPEG-4 Sampling Frequency Index
-				this.headerBitstream.writeBits(1, 0); // Private bit
-				this.headerBitstream.writeBits(3, channelConfiguration); // MPEG-4 Channel Configuration
-				this.headerBitstream.writeBits(1, 0); // Originality
-				this.headerBitstream.writeBits(1, 0); // Home
-				this.headerBitstream.writeBits(1, 0); // Copyright ID bit
-				this.headerBitstream.writeBits(1, 0); // Copyright ID start
-				this.headerBitstream.skipBits(13); // Frame length
-				this.headerBitstream.writeBits(11, 0x7ff); // Buffer fullness
-				this.headerBitstream.writeBits(2, 0); // Number of AAC frames minus 1
-				// Omit CRC check
+				if (!this.inputIsAdts) {
+					const config = parseAacAudioSpecificConfig(toUint8Array(description!));
+					const template = buildAdtsHeaderTemplate(config);
+					this.header = template.header;
+					this.headerBitstream = template.bitstream;
+				}
 			}
 
-			const frameLength = packet.data.byteLength + this.header.byteLength;
-			this.headerBitstream.pos = 30;
-			this.headerBitstream.writeBits(13, frameLength);
+			if (this.inputIsAdts) {
+				// Packets are already ADTS frames, write them directly
+				const startPos = this.writer.getPos();
+				this.writer.write(packet.data);
 
-			const startPos = this.writer.getPos();
-			this.writer.write(this.header);
-			this.writer.write(packet.data);
+				if (this.format._options.onFrame) {
+					this.format._options.onFrame(packet.data, startPos);
+				}
+			} else {
+				assert(this.header);
 
-			if (this.format._options.onFrame) {
-				const frameBytes = new Uint8Array(frameLength);
-				frameBytes.set(this.header, 0);
-				frameBytes.set(packet.data, this.header.byteLength);
+				// Packets are raw AAC, we gotta turn it into ADTS
+				const frameLength = packet.data.byteLength + this.header.byteLength;
+				writeAdtsFrameLength(this.headerBitstream!, frameLength);
 
-				this.format._options.onFrame(frameBytes, startPos);
+				const startPos = this.writer.getPos();
+				this.writer.write(this.header);
+				this.writer.write(packet.data);
+
+				if (this.format._options.onFrame) {
+					const frameBytes = new Uint8Array(frameLength);
+					frameBytes.set(this.header, 0);
+					frameBytes.set(packet.data, this.header.byteLength);
+
+					this.format._options.onFrame(frameBytes, startPos);
+				}
 			}
 
 			await this.writer.flush();
@@ -107,5 +117,8 @@ export class AdtsMuxer extends Muxer {
 		throw new Error('ADTS does not support subtitles.');
 	}
 
-	async finalize() {}
+	async finalize() {
+		const release = await this.mutex.acquire(); // Required so that finalize() can't resolve before other calls
+		release();
+	}
 }

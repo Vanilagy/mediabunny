@@ -2,9 +2,13 @@
 
 <script src="../dist/bundles/mediabunny.cjs"></script>
 <script src="../packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.js"></script>
+<script src="../packages/ac3/dist/bundles/mediabunny-ac3.js"></script>
+<script src="../packages/flac-encoder/dist/bundles/mediabunny-flac-encoder.js"></script>
 
 <script type="module">
 	//MediabunnyMp3Encoder.registerMp3Encoder();
+	MediabunnyAc3.registerAc3Decoder();
+	MediabunnyFlacEncoder.registerFlacEncoder();
 
 	const fileInput = document.createElement('input');
 	fileInput.type = 'file';
@@ -15,21 +19,24 @@
 	document.body.append(progressElement);
 
 	fileInput.addEventListener('change', async () => {
-		const file = fileInput.files[0];
-
-		const source = new Mediabunny.BlobSource(file);
 		const target = new Mediabunny.BufferTarget() ?? new Mediabunny.StreamTarget(new WritableStream({
 			write: console.log
 		}), {
 			chunked: true,
 			chunkSize: 2**20
 		});
-		const outputFormat = new Mediabunny.Mp4OutputFormat({});
+		const outputFormat = new Mediabunny.Mp4OutputFormat();
 
+		const p = document.createElement('p');
+		p.textContent = 'Capturing...';
+		document.body.append(p);
+
+		/*
 		const button = document.createElement('button');
 		button.textContent = 'Cancel';
 		button.onclick = () => conversion.cancel();
 		document.body.append(button);
+		*/
 
 		const yo = document.createElement('canvas');
 		yo.width = 512;
@@ -45,36 +52,54 @@
 
 		const output = new Mediabunny.Output({
 			format: outputFormat,
-			target
+			target,
 		});
 
-		let ctx = null;
-		const conversion = await Mediabunny.Conversion.init({
-			input: new Mediabunny.Input({
+		let input;
+		const tracks = [];
+		let start = 0;
+
+		if (false) {
+			input = new Mediabunny.Input({
+				source: new Mediabunny.UrlSource('http://localhost:8000/index.m3u8'),
+				formats: Mediabunny.ALL_FORMATS,
+			});
+
+			/*
+			const videoTrack = await input.getPrimaryVideoTrack();
+			const audioTrack = await input.getPrimaryAudioTrack();
+
+			if (videoTrack) tracks.push(videoTrack);
+			if (audioTrack) tracks.push(audioTrack);
+
+			start = Math.min(...await Promise.all([
+				videoTrack.computeDuration({ skipLiveWait: true }),
+				audioTrack.computeDuration({ skipLiveWait: true }),
+			]));
+			*/
+		} else {
+			const file = fileInput.files[0];
+			const source = new Mediabunny.BlobSource(file);
+		
+			input = new Mediabunny.Input({
 				formats: Mediabunny.ALL_FORMATS,	
 				source
-			}),
+			});
+		}
+
+		//const primaryTrack = await input.getPrimaryAudioTrack();
+		//const startTime = await primaryTrack.getFirstTimestamp();
+		//console.log(startTime)
+
+		let ctx = null;
+		let conversion = await Mediabunny.Conversion.init({
+			input,
 			output,
-			audio: (_, n) => ({
-				discard: n > 1,
-				//codec: 'opus',
-				//codec: 'opus',
-				/*
-				process: (sample) => {
-					return sample;
-				},
-				*/
-				//codec: 'pcm-s16',
-				//sampleRate: 16000,
-				//numberOfChannels: 1,
-				//discard: true,
-				//codec: 'opus',
-				//bitrate: 128000,
-				//numberOfChannels: 1,
-				//sampleRate: 4000
-				//discard: true
+			audio: {
+				discard: true,
 				//forceTranscode: true,
-			}),
+				//sampleFormat: 's16',
+			},
 			/*
 			video: {
 				discard: true,
@@ -99,69 +124,9 @@
 				bitrate: 320000
 			},
 			*/
-			video: () => ({
-				allowRotationMetadata: false,
-				//width: 720,
-				//frameRate: 30,
-				//bitrate: Mediabunny.QUALITY_VERY_LOW,
+			video: {
 				//discard: true,
-				/*
-				process: (sample) => {
-					if (!ctx) {
-						// Create a canvas for image compositing
-						const canvas = new OffscreenCanvas(
-							sample.displayWidth,
-							sample.displayHeight,
-						);
-						ctx = canvas.getContext('2d');
-					}
-
-					console.log(ctx.canvas.width, ctx.canvas.height);
-
-					ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-					sample.drawWithFit(ctx, { fit: 'fill' });
-					//ctx.drawImage(watermark, 32, 32);
-
-					return ctx.canvas;
-				},
-				*/
-				//width: 300,
-				//alpha: 'keep',
-				//width: 320,
-				//discard: true,
-				//discard: true,
-				//crop: {
-				//	left: 0,
-				//	top: 0,
-				//	width: 500,
-				//	height: 500,
-				//},
-				//rotate: 90,
-				//width: 200,
-				//height: 500,
-				//fit: 'contain',
-				//forceTranscode: true,
-				//codec: 'avc',
-				//fit: 'contain',
-				//frameRate: 27.123,
-				//width: 320,
-				//forceTranscode: true,
-				//codec: 'av1',
-				//discard: true,
-				//width: 1280,
-				//discard: true,
-				//width: 640
-				//forceTranscode: true,
-				//rotate: 90
-				//width: 720 ?? 2160,
-				//height: 1280 ?? 3840,
-				//fit: 'contain',
-				//rotate: 90,
-				//width: 512,
-				//height: 512,
-				//width: 200,
-				//height: 100,
-			}),
+			},
 			tags: {} ?? {
 				title: 'Bigggy',
 				artist: 'Buck Bunny',
@@ -180,11 +145,13 @@
 				}
 			},
 			trim: {
-				start: 0,
-				end: 4
+				end: 10,
+				//start: startTime,
+				//end: startTime + 2,
 			},
 		});
-		console.log(conversion);
+		//console.log(conversion);
+		console.log(conversion.discardedTracks);
 
 		let progress = 0;
 		conversion.onProgress = newProgress => progress = newProgress;
@@ -205,6 +172,7 @@
 		console.timeEnd()
 
 		console.log("Done", target.buffer);
+		input.dispose()
 
 		const video = document.createElement('video');
 		video.src = URL.createObjectURL(new Blob([target.buffer], { type: outputFormat.mimeType }));	
@@ -222,5 +190,9 @@
 			a.click();
 			URL.revokeObjectURL(url);
 		}
-	});
+
+		conversion.onProgress = null;
+		conversion = null;
+		input = null;
+	}, { once: true });
 </script>

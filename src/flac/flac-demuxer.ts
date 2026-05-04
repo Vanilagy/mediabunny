@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -9,13 +9,12 @@
 import { FlacBlockType, readVorbisComments } from '../codec-data';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
-import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
+import { InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
 import {
 	assert,
 	AsyncMutex,
 	binarySearchLessOrEqual,
-	Bitstream,
 	textDecoder,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
@@ -37,6 +36,7 @@ import {
 	readSampleRate,
 	getSampleRateOrUncommon,
 } from './flac-misc';
+import { Bitstream } from '../../shared/bitstream';
 
 type FlacAudioInfo = {
 	numberOfChannels: number;
@@ -70,7 +70,7 @@ export class FlacDemuxer extends Demuxer {
 	loadedSamples: Sample[] = []; // All samples from the start of the file to lastLoadedPos
 
 	metadataPromise: Promise<void> | null = null;
-	track: InputAudioTrack | null = null;
+	trackBacking: FlacAudioTrackBacking | null = null;
 	metadataTags: MetadataTags = {};
 
 	audioInfo: FlacAudioInfo | null = null;
@@ -86,21 +86,15 @@ export class FlacDemuxer extends Demuxer {
 		this.reader = input._reader;
 	}
 
-	override async computeDuration(): Promise<number> {
-		await this.readMetadata();
-		assert(this.track);
-		return this.track.computeDuration();
-	}
-
 	override async getMetadataTags(): Promise<MetadataTags> {
 		await this.readMetadata();
 		return this.metadataTags;
 	}
 
-	async getTracks() {
+	async getTrackBackings() {
 		await this.readMetadata();
-		assert(this.track);
-		return [this.track];
+		assert(this.trackBacking);
+		return [this.trackBacking];
 	}
 
 	async getMimeType() {
@@ -189,7 +183,7 @@ export class FlacDemuxer extends Demuxer {
 							description,
 						};
 
-						this.track = new InputAudioTrack(this.input, new FlacAudioTrackBacking(this));
+						this.trackBacking = new FlacAudioTrackBacking(this);
 						break;
 					}
 					case FlacBlockType.VORBIS_COMMENT: {
@@ -258,6 +252,10 @@ export class FlacDemuxer extends Demuxer {
 					break;
 				}
 			}
+
+			if (!this.audioInfo) {
+				throw new Error('Missing STREAMINFO metadata block! Corrupted FLAC file.');
+			}
 		})());
 	}
 
@@ -283,13 +281,38 @@ export class FlacDemuxer extends Demuxer {
 		// --> 6 bytes
 		const minimumHeaderLength = 6;
 		// If we read everything in readFlacFrameHeader, we read 16 bytes
-		const maximumHeaderSize = 16;
+		const maximumHeaderLength = 16;
+
+		// The shortest valid FLAC frame per RFC 9639:
+		// 6 bytes header (see minimumHeaderLength above)
+		// 2 bytes subframe (constant subframe with minimum bit depth,
+		//   padded to byte boundary)
+		// 2 bytes footer (CRC-16)
+		// --> 10 bytes
+		const minimumFrameLength = 10;
+
+		// The longest valid FLAC frame per RFC 9639:
+		// https://www.rfc-editor.org/rfc/rfc9639.html#name-prediction
+		// https://www.rfc-editor.org/rfc/rfc9639.html#name-frame-structure
+		// maximumBlockSize * numberOfChannels * 4 bytes (max 32 bps verbatim)
+		// + 16 bytes header (see maximumHeaderSize above)
+		// + 2 bytes footer (CRC-16)
+		const maximumFrameLength = this.audioInfo.maximumBlockSize
+			* this.audioInfo.numberOfChannels
+			* 4
+			+ maximumHeaderLength
+			+ 2;
+
+		// Per RFC 9639, a value of 0 means "unknown" for frame sizes.
+		const effectiveMinFrameSize = this.audioInfo.minimumFrameSize || minimumFrameLength;
+		const effectiveMaxFrameSize = this.audioInfo.maximumFrameSize || maximumFrameLength;
+
 		const maximumSliceLength
-			= this.audioInfo.maximumFrameSize + maximumHeaderSize;
+			= effectiveMaxFrameSize + maximumHeaderLength;
 
 		const slice = await this.reader.requestSliceRange(
 			startPos,
-			this.audioInfo.minimumFrameSize,
+			maximumHeaderLength,
 			maximumSliceLength,
 		);
 
@@ -312,7 +335,7 @@ export class FlacDemuxer extends Demuxer {
 
 		// The next sync word is expected at earliest when `minimumFrameSize` is reached,
 		// we can skip over anything before that
-		slice.filePos = startPos + this.audioInfo.minimumFrameSize;
+		slice.filePos = startPos + effectiveMinFrameSize;
 
 		while (true) {
 			// Reached end of the file, packet is over
@@ -525,7 +548,15 @@ export class FlacDemuxer extends Demuxer {
 class FlacAudioTrackBacking implements InputAudioTrackBacking {
 	constructor(public demuxer: FlacDemuxer) {}
 
+	getType() {
+		return 'audio' as const;
+	}
+
 	getId() {
+		return 1;
+	}
+
+	getNumber() {
 		return 1;
 	}
 
@@ -540,11 +571,6 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 	getNumberOfChannels() {
 		assert(this.demuxer.audioInfo);
 		return this.demuxer.audioInfo.numberOfChannels;
-	}
-
-	async computeDuration() {
-		const lastPacket = await this.getPacket(Infinity, { metadataOnly: true });
-		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
 	}
 
 	getSampleRate() {
@@ -565,14 +591,40 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		return this.demuxer.audioInfo.sampleRate;
 	}
 
+	isRelativeToUnixEpoch() {
+		return false;
+	}
+
+	getPairingMask() {
+		return 1n;
+	}
+
+	getBitrate() {
+		return null;
+	}
+
+	getAverageBitrate() {
+		return null;
+	}
+
+	async getDurationFromMetadata() {
+		assert(this.demuxer.audioInfo);
+
+		if (this.demuxer.audioInfo.totalSamples === 0) {
+			return null;
+		}
+
+		return this.demuxer.audioInfo.totalSamples / this.demuxer.audioInfo.sampleRate;
+	}
+
+	async getLiveRefreshInterval() {
+		return null;
+	}
+
 	getDisposition() {
 		return {
 			...DEFAULT_TRACK_DISPOSITION,
 		};
-	}
-
-	async getFirstTimestamp() {
-		return 0;
 	}
 
 	async getDecoderConfig(): Promise<AudioDecoderConfig | null> {

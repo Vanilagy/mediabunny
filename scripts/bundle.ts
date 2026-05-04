@@ -11,17 +11,19 @@ const createVariants = async (
 	umdExtension: string,
 	specificUmdConfig: esbuild.BuildOptions = {},
 	specificEsmConfig: esbuild.BuildOptions = {},
+	nodeUmdVariant = false,
 ) => {
 	const baseConfig: esbuild.BuildOptions = {
 		entryPoints: [entryPoint],
 		bundle: true,
 		logLevel: 'info',
+		target: 'es2021',
 		logOverride: {
 			'import-is-undefined': 'silent', // Warning caused by the disabled "node.ts" import
 		},
 		banner: {
 			js: `/*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -72,7 +74,19 @@ const createVariants = async (
 		minify: true,
 	});
 
-	return [umdVariant, esmVariant, umdMinifiedVariant, esmMinifiedVariant];
+	const variants = [umdVariant, esmVariant, umdMinifiedVariant, esmMinifiedVariant];
+
+	if (nodeUmdVariant) {
+		const nodeVariant = await esbuild.context({
+			...umdConfig,
+			...specificUmdConfig,
+			outfile: `${outfileBase}.node.${umdExtension}`,
+			platform: 'node', // This is different
+		});
+		variants.push(nodeVariant);
+	}
+
+	return variants;
 };
 
 const mediabunnyVariants = await createVariants(
@@ -80,6 +94,9 @@ const mediabunnyVariants = await createVariants(
 	'Mediabunny',
 	'dist/bundles/mediabunny',
 	'cjs',
+	undefined,
+	undefined,
+	true,
 );
 
 const mp3EncoderVariants = await createVariants(
@@ -113,9 +130,105 @@ const mp3EncoderVariants = await createVariants(
 	},
 );
 
+const ac3Variants = await createVariants(
+	'packages/ac3/src/index.ts',
+	'MediabunnyAc3',
+	'packages/ac3/dist/bundles/mediabunny-ac3',
+	'js', // The bundles are purely for the browser, not for Node (due to the peer dependecy)
+	{
+		plugins: [
+			PluginExternalGlobal.externalGlobalPlugin({
+				mediabunny: 'Mediabunny',
+			}),
+			inlineWorkerPlugin({
+				define: {
+					'import.meta.url': '""',
+				},
+				legalComments: 'none',
+			}),
+		],
+	},
+	{
+		external: ['mediabunny'],
+		plugins: [
+			inlineWorkerPlugin({
+				define: {
+					'import.meta.url': '""',
+				},
+				legalComments: 'none',
+			}),
+		],
+	},
+);
+
+const aacEncoderVariants = await createVariants(
+	'packages/aac-encoder/src/index.ts',
+	'MediabunnyAacEncoder',
+	'packages/aac-encoder/dist/bundles/mediabunny-aac-encoder',
+	'js', // The bundles are purely for the browser, not for Node (due to the peer dependecy)
+	{
+		plugins: [
+			PluginExternalGlobal.externalGlobalPlugin({
+				mediabunny: 'Mediabunny',
+			}),
+			inlineWorkerPlugin({
+				define: {
+					'import.meta.url': '""',
+				},
+				legalComments: 'none',
+			}),
+		],
+	},
+	{
+		external: ['mediabunny'],
+		plugins: [
+			inlineWorkerPlugin({
+				define: {
+					'import.meta.url': '""',
+				},
+				legalComments: 'none',
+			}),
+		],
+	},
+);
+
+const flacEncoderVariants = await createVariants(
+	'packages/flac-encoder/src/index.ts',
+	'MediabunnyFlacEncoder',
+	'packages/flac-encoder/dist/bundles/mediabunny-flac-encoder',
+	'js', // The bundles are purely for the browser, not for Node (due to the peer dependecy)
+	{
+		plugins: [
+			PluginExternalGlobal.externalGlobalPlugin({
+				mediabunny: 'Mediabunny',
+			}),
+			inlineWorkerPlugin({
+				define: {
+					'import.meta.url': '""',
+				},
+				legalComments: 'none',
+			}),
+		],
+	},
+	{
+		external: ['mediabunny'],
+		plugins: [
+			inlineWorkerPlugin({
+				define: {
+					'import.meta.url': '""',
+				},
+				legalComments: 'none',
+			}),
+		],
+	},
+);
+
 const contexts = [
 	...mediabunnyVariants,
 	...mp3EncoderVariants,
+	...ac3Variants,
+	...aacEncoderVariants,
+	...flacEncoderVariants,
 ];
 
 if (process.argv[2] === '--watch') {

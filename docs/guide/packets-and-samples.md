@@ -1,3 +1,7 @@
+---
+description: Learn about how packets carry encoded media data, samples carry raw decoded media data, and the operations you can perform on them.
+---
+
 # Packets & samples
 
 ## Introduction
@@ -94,6 +98,8 @@ constructor(
 );
 ```
 
+When creating a packet for a given codec, you *must* adhere to the data format specified in the [Mediabunny Codec Registry](/codec-registry/overview).
+
 ::: info
 You probably won't ever need to set `sequenceNumber` or `byteLength` in the constructor.
 :::
@@ -176,7 +182,7 @@ Negative sequence numbers mean the packet's ordering is undefined. When creating
 
 ### Cloning packets
 
-Use the `clone` method to create a new packet from an existing packet. While doing so, you can change its timestamp and duration.
+Use the `clone` method to create a new packet from an existing packet. While doing so, you can partially change its data.
 ```ts
 // Creates a clone identical to the original:
 packet.clone();
@@ -279,6 +285,10 @@ videoSample.format; // => VideoPixelFormat | null
 videoSample.codedWidth; // => number
 videoSample.codedHeight; // => number
 
+// Pixel aspect ratio-corrected dimensions of the sample
+videoSample.squarePixelWidth;
+videoSample.squarePixelHeight;
+
 // Transformed display dimensions of the sample (after rotation)
 videoSample.displayWidth; // => number	
 videoSample.displayHeight; // => number	
@@ -286,6 +296,9 @@ videoSample.displayHeight; // => number
 // Rotation of the sample in degrees clockwise. The raw sample should be
 // rotated by this amount when it is presented.
 videoSample.rotation; // => 0 | 90 | 180 | 270
+
+// The sample's pixel aspect ratio
+videoSample.pixelAspectRatio; // => { num: number, den: number }
 
 // Timing information
 videoSample.timestamp; // => Presentation timestamp in seconds
@@ -295,6 +308,8 @@ videoSample.microsecondDuration; // => Duration in microseconds
 
 // Color space of the sample
 videoSample.colorSpace; // => VideoColorSpace
+
+videoSample.visibleRect; // Rectangle
 ```
 
 While all of these properties are read-only, you can use the `setTimestamp`, `setDuration` and `setRotation` methods to modify some of the metadata of the video sample.

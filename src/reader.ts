@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -7,25 +7,45 @@
  */
 
 import { InputDisposedError } from './input';
-import { assert, clamp, getUint24, MaybePromise, toDataView } from './misc';
-import { Source } from './source';
+import { assert, clamp, getUint24, MaybePromise, textDecoder, toDataView } from './misc';
+import { DEFAULT_MAX_READ_POSITION, DEFAULT_MIN_READ_POSITION, Source } from './source';
 
 export class Reader {
-	fileSize!: number | null;
-
 	constructor(public source: Source) {}
+
+	get fileSize(): number | null {
+		const size = this.source._getFileSize();
+		if (size === undefined) {
+			throw new Error('Reading file size too early; read required first.');
+		}
+
+		return size;
+	}
+
+	get fileSizeNonStrict() {
+		return this.source._getFileSize() ?? null;
+	}
 
 	requestSlice(start: number, length: number): MaybePromise<FileSlice | null> {
 		if (this.source._disposed) {
 			throw new InputDisposedError();
 		}
 
-		if (this.fileSize !== null && start + length > this.fileSize) {
+		if (start < 0) {
 			return null;
 		}
 
+		if (this.fileSizeNonStrict !== null && start + length > this.fileSizeNonStrict) {
+			return null;
+		}
+
+		if (length === 0) {
+			const buffer = new Uint8Array(0);
+			return new FileSlice(buffer, toDataView(buffer), 0, start, start);
+		}
+
 		const end = start + length;
-		const result = this.source._read(start, end);
+		const result = this.source._read(start, end, DEFAULT_MIN_READ_POSITION, DEFAULT_MAX_READ_POSITION);
 
 		if (result instanceof Promise) {
 			return result.then((x) => {
@@ -49,10 +69,14 @@ export class Reader {
 			throw new InputDisposedError();
 		}
 
-		if (this.fileSize !== null) {
+		if (start < 0) {
+			return null;
+		}
+
+		if (this.fileSizeNonStrict !== null) {
 			return this.requestSlice(
 				start,
-				clamp(this.fileSize - start, minLength, maxLength),
+				clamp(this.fileSizeNonStrict - start, minLength, maxLength),
 			);
 		} else {
 			const promisedAttempt = this.requestSlice(start, maxLength);
@@ -62,21 +86,13 @@ export class Reader {
 					return attempt;
 				}
 
-				const handleFileSize = (fileSize: number | null) => {
-					assert(fileSize !== null); // The slice couldn't fit, meaning we must know the file size now
+				// The slice couldn't fit, meaning we must know the file size now
+				assert(this.fileSizeNonStrict !== null);
 
-					return this.requestSlice(
-						start,
-						clamp(fileSize - start, minLength, maxLength),
-					);
-				};
-
-				const promisedFileSize = this.source._retrieveSize();
-				if (promisedFileSize instanceof Promise) {
-					return promisedFileSize.then(handleFileSize);
-				} else {
-					return handleFileSize(promisedFileSize);
-				}
+				return this.requestSlice(
+					start,
+					clamp(this.fileSizeNonStrict - start, minLength, maxLength),
+				);
 			};
 
 			if (promisedAttempt instanceof Promise) {
@@ -85,6 +101,46 @@ export class Reader {
 				return handleAttempt(promisedAttempt);
 			}
 		}
+	}
+
+	requestEntireFile(): MaybePromise<FileSlice | null> {
+		if (this.fileSizeNonStrict !== null) {
+			return this.requestSlice(0, this.fileSizeNonStrict);
+		}
+
+		const CHUNK_SIZE = 1024;
+
+		return (async () => {
+			const chunks: Uint8Array[] = [];
+			let currentSize = 0;
+
+			while (true) {
+				if (chunks.length === 1 && this.fileSizeNonStrict !== null) {
+					// It only took one read to get to know the whole file size
+					return this.requestSlice(0, this.fileSizeNonStrict);
+				}
+
+				const startOffset = chunks.length * CHUNK_SIZE;
+				let slice = this.requestSliceRange(startOffset, 0, CHUNK_SIZE);
+				if (slice instanceof Promise) slice = await slice;
+
+				if (!slice) {
+					break;
+				}
+
+				chunks.push(readBytes(slice, slice.length));
+				currentSize += slice.length;
+			}
+
+			const joined = new Uint8Array(currentSize);
+			let offset = 0;
+			for (const chunk of chunks) {
+				joined.set(chunk, offset);
+				offset += chunk.length;
+			}
+
+			return new FileSlice(joined, toDataView(joined), 0, 0, currentSize);
+		})();
 	}
 }
 
@@ -320,4 +376,15 @@ export const readAscii = (slice: FileSlice, length: number) => {
 	}
 
 	return str;
+};
+
+export const readAllLines = (slice: FileSlice, length: number, options?: {
+	ignore?: (line: string) => boolean;
+}) => {
+	const text = textDecoder.decode(readBytes(slice, length));
+	const lines = text.split('\n')
+		.map(x => x.trim())
+		.filter(x => x.length > 0 && !options?.ignore?.(x));
+
+	return lines;
 };

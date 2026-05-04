@@ -1,3 +1,7 @@
+---
+description: The @mediabunny/mp3-encoder extension provides a highly-performant MP3 encoder polyfill for use in the browser and on the server.
+---
+
 # @mediabunny/mp3-encoder
 
 Browsers typically have no support for MP3 encoding in their WebCodecs implementations. Given the ubiquity of the format, this extension package provides an MP3 encoder for use with Mediabunny. It is implemented using Mediabunny's [custom coder API](../supported-formats-and-codecs#custom-coders) and uses a highly-performant WASM build of the [LAME MP3 Encoder](https://lame.sourceforge.io/) under the hood.

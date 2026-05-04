@@ -34,7 +34,7 @@ const generateThumbnails = async (resource: File | string) => {
 			throw new Error('File has no video track.');
 		}
 
-		if (videoTrack.codec === null) {
+		if (await videoTrack.getCodec() === null) {
 			throw new Error('Unsupported video codec.');
 		}
 
@@ -43,12 +43,14 @@ const generateThumbnails = async (resource: File | string) => {
 		}
 
 		// Compute width and height of the thumbnails such that the larger dimension is equal to THUMBNAIL_SIZE
-		const width = videoTrack.displayWidth > videoTrack.displayHeight
+		const displayWidth = await videoTrack.getDisplayWidth();
+		const displayHeight = await videoTrack.getDisplayHeight();
+		const width = displayWidth > displayHeight
 			? THUMBNAIL_SIZE
-			: Math.floor(THUMBNAIL_SIZE * videoTrack.displayWidth / videoTrack.displayHeight);
-		const height = videoTrack.displayHeight > videoTrack.displayWidth
+			: Math.floor(THUMBNAIL_SIZE * displayWidth / displayHeight);
+		const height = displayHeight > displayWidth
 			? THUMBNAIL_SIZE
-			: Math.floor(THUMBNAIL_SIZE * videoTrack.displayHeight / videoTrack.displayWidth);
+			: Math.floor(THUMBNAIL_SIZE * displayHeight / displayWidth);
 
 		// Create thumbnail elements
 		const thumbnailElements = [];
@@ -120,7 +122,7 @@ const generateThumbnails = async (resource: File | string) => {
 selectMediaButton.addEventListener('click', () => {
 	const fileInput = document.createElement('input');
 	fileInput.type = 'file';
-	fileInput.accept = 'video/*,video/x-matroska,audio/*,audio/aac';
+	fileInput.accept = 'video/*,video/x-matroska,video/mp2t,.ts,audio/*,audio/aac';
 	fileInput.addEventListener('change', () => {
 		const file = fileInput.files?.[0];
 		if (!file) {
@@ -137,7 +139,7 @@ loadUrlButton.addEventListener('click', () => {
 	const url = prompt(
 		'Please enter a URL of a media file. Note that it must be HTTPS and support cross-origin requests, so have the'
 		+ ' right CORS headers set.',
-		'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+		'https://mediabunny.dev/big-buck-bunny.mp4',
 	);
 	if (!url) {
 		return;

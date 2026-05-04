@@ -1,3 +1,7 @@
+---
+description: Mediabunny supports a wide range of media input formats, such as MP4, WebM, MP3, HLS, and many more.
+---
+
 # Input formats
 
 Mediabunny supports a wide variety of commonly used container formats for reading input files. These *input formats* are used in two ways:
@@ -32,6 +36,8 @@ import {
 	OGG, // Ogg input format singleton
 	ADTS, // ADTS input format singleton
 	FLAC, // FLAC input format singleton
+	MPEG_TS, // MPEG-TS input format singleton
+	HLS, // HLS input format singleton
 } from 'mediabunny';
 ```
 
@@ -80,6 +86,8 @@ In addition to singletons, input format classes are structured hierarchically:
 	- `OggInputFormat`
 	- `AdtsInputFormat`
 	- `FlacInputFormat`
+	- `MpegTsInputFormat`
+	- `HlsInputFormat`
 
 This means you can also perform input format checks using `instanceof` instead of `===` comparisons. For example:
 ```ts

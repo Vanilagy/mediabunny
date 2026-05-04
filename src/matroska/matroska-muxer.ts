@@ -1,13 +1,13 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { Bitstream } from '../../shared/bitstream';
 import {
-	Bitstream,
 	COLOR_PRIMARIES_MAP,
 	MATRIX_COEFFICIENTS_MAP,
 	TRANSFER_CHARACTERISTICS_MAP,
@@ -19,11 +19,13 @@ import {
 	keyValueIterator,
 	normalizeRotation,
 	promiseWithResolvers,
-	roundToMultiple,
+	Rational,
+	simplifyRational,
 	textEncoder,
 	toUint8Array,
 	uint8ArraysAreEqual,
 	writeBits,
+	roundToDivisor,
 } from '../misc';
 import {
 	CODEC_STRING_MAP,
@@ -47,6 +49,7 @@ import {
 	inlineTimestampRegex,
 	parseSubtitleTimestamp,
 } from '../subtitles';
+import { aacChannelMap, aacFrequencyTable, buildAacAudioSpecificConfig } from '../../shared/aac-misc';
 import {
 	OPUS_SAMPLE_RATE,
 	PCM_AUDIO_CODECS,
@@ -59,6 +62,8 @@ import {
 	validateSubtitleMetadata,
 	validateVideoChunkMetadata,
 } from '../codec';
+import { MAX_ADTS_FRAME_HEADER_SIZE, MIN_ADTS_FRAME_HEADER_SIZE, readAdtsFrameHeader } from '../adts/adts-reader';
+import { FileSlice } from '../reader';
 import { Muxer } from '../muxer';
 import { Writer } from '../writer';
 import { EncodedPacket } from '../packet';
@@ -82,12 +87,14 @@ type InternalMediaChunk = {
 type MatroskaTrackData = {
 	chunkQueue: InternalMediaChunk[];
 	lastWrittenMsTimestamp: number | null;
+	closed: boolean;
 } & ({
 	track: OutputVideoTrack;
 	type: 'video';
 	info: {
 		width: number;
 		height: number;
+		aspectRatio: Rational | null;
 		decoderConfig: VideoDecoderConfig;
 		alphaMode: boolean;
 	};
@@ -98,6 +105,11 @@ type MatroskaTrackData = {
 		numberOfChannels: number;
 		sampleRate: number;
 		decoderConfig: AudioDecoderConfig;
+		/**
+		 * The "ADTS stripping" involves removing the ADTS header from each AAC packet. SOBMFF stores raw AAC data, not
+		 * ADTS-wrapped data.
+		 */
+		requiresAdtsStripping: boolean;
 	};
 } | {
 	track: OutputSubtitleTrack;
@@ -118,8 +130,8 @@ const TRACK_TYPE_MAP: Record<OutputTrack['type'], number> = {
 };
 
 export class MatroskaMuxer extends Muxer {
-	private writer: Writer;
-	private ebmlWriter: EBMLWriter;
+	private writer!: Writer;
+	private ebmlWriter!: EBMLWriter;
 	private format: WebMOutputFormat | MkvOutputFormat;
 
 	private trackDatas: MatroskaTrackData[] = [];
@@ -141,23 +153,20 @@ export class MatroskaMuxer extends Muxer {
 		firstMsTimestamp: number;
 	}>();
 
-	private duration = 0;
+	private startTimestamp = Infinity;
+	private endTimestamp = -Infinity;
 
 	constructor(output: Output, format: MkvOutputFormat) {
 		super(output);
 
-		this.writer = output._writer;
 		this.format = format;
-
-		this.ebmlWriter = new EBMLWriter(this.writer);
-
-		if (this.format._options.appendOnly) {
-			this.writer.ensureMonotonicity = true;
-		}
 	}
 
 	async start() {
 		const release = await this.mutex.acquire();
+
+		this.writer = await this.output._getRootWriter(!!this.format._options.appendOnly);
+		this.ebmlWriter = new EBMLWriter(this.writer);
 
 		this.writeEBMLHeader();
 
@@ -358,10 +367,19 @@ export class MatroskaMuxer extends Muxer {
 		// Convert from clockwise to counter-clockwise
 		const flippedRotation = rotation ? normalizeRotation(-rotation) : 0;
 
+		const hasNonSquarePixelAspectRatio
+			= !!trackData.info.aspectRatio && (
+				trackData.info.aspectRatio.num * trackData.info.height
+				!== trackData.info.aspectRatio.den * trackData.info.width
+			);
+
 		const colorSpace = trackData.info.decoderConfig.colorSpace;
 		const videoElement: EBMLElement = { id: EBMLId.Video, data: [
 			{ id: EBMLId.PixelWidth, data: trackData.info.width },
 			{ id: EBMLId.PixelHeight, data: trackData.info.height },
+			(hasNonSquarePixelAspectRatio ? { id: EBMLId.DisplayWidth, data: trackData.info.aspectRatio!.num } : null),
+			(hasNonSquarePixelAspectRatio ? { id: EBMLId.DisplayHeight, data: trackData.info.aspectRatio!.den } : null),
+			(hasNonSquarePixelAspectRatio ? { id: EBMLId.DisplayUnit, data: 3 } : null), // 3 = display aspect ratio
 			trackData.info.alphaMode ? { id: EBMLId.AlphaMode, data: 1 } : null,
 			(colorSpaceIsComplete(colorSpace)
 				? {
@@ -728,17 +746,29 @@ export class MatroskaMuxer extends Muxer {
 		assert(meta.decoderConfig.codedWidth !== undefined);
 		assert(meta.decoderConfig.codedHeight !== undefined);
 
+		const displayAspectWidth = meta.decoderConfig.displayAspectWidth;
+		const displayAspectHeight = meta.decoderConfig.displayAspectHeight;
+
+		const aspectRatio = displayAspectWidth === undefined || displayAspectHeight === undefined
+			? null
+			: simplifyRational({
+					num: displayAspectWidth,
+					den: displayAspectHeight,
+				});
+
 		const newTrackData: MatroskaVideoTrackData = {
 			track,
 			type: 'video',
 			info: {
 				width: meta.decoderConfig.codedWidth,
 				height: meta.decoderConfig.codedHeight,
+				aspectRatio,
 				decoderConfig: meta.decoderConfig,
 				alphaMode: !!packet.sideData.alpha, // The first packet determines if this track has alpha or not
 			},
 			chunkQueue: [],
 			lastWrittenMsTimestamp: null,
+			closed: false,
 		};
 
 		if (track.source._codec === 'vp9') {
@@ -772,7 +802,7 @@ export class MatroskaMuxer extends Muxer {
 		return newTrackData;
 	}
 
-	private getAudioTrackData(track: OutputAudioTrack, meta?: EncodedAudioChunkMetadata) {
+	private getAudioTrackData(track: OutputAudioTrack, packet: EncodedPacket, meta?: EncodedAudioChunkMetadata) {
 		const existingTrackData = this.trackDatas.find(x => x.track === track);
 		if (existingTrackData) {
 			return existingTrackData as MatroskaAudioTrackData;
@@ -783,16 +813,49 @@ export class MatroskaMuxer extends Muxer {
 		assert(meta);
 		assert(meta.decoderConfig);
 
+		const decoderConfig = { ...meta.decoderConfig };
+		let requiresAdtsStripping = false;
+
+		if (track.source._codec === 'aac' && !decoderConfig.description) {
+			// Matroska stores raw AAC with AudioSpecificConfig in CodecPrivate, not ADTS-wrapped data.
+			// Parse the first packet to extract the AudioSpecificConfig.
+			const adtsFrame = readAdtsFrameHeader(FileSlice.tempFromBytes(packet.data));
+			if (!adtsFrame) {
+				throw new Error(
+					'Couldn\'t parse ADTS header from the AAC packet. Make sure the packets are in ADTS format'
+					+ ' (as specified in ISO 13818-7) when not providing a description, or provide a description'
+					+ ' (must be an AudioSpecificConfig as specified in ISO 14496-3) and ensure the packets'
+					+ ' are raw AAC data.',
+				);
+			}
+
+			const sampleRate = aacFrequencyTable[adtsFrame.samplingFrequencyIndex];
+			const numberOfChannels = aacChannelMap[adtsFrame.channelConfiguration];
+
+			if (sampleRate === undefined || numberOfChannels === undefined) {
+				throw new Error('Invalid ADTS frame header.');
+			}
+
+			decoderConfig.description = buildAacAudioSpecificConfig({
+				objectType: adtsFrame.objectType,
+				sampleRate,
+				numberOfChannels,
+			});
+			requiresAdtsStripping = true;
+		}
+
 		const newTrackData: MatroskaAudioTrackData = {
 			track,
 			type: 'audio',
 			info: {
 				numberOfChannels: meta.decoderConfig.numberOfChannels,
 				sampleRate: meta.decoderConfig.sampleRate,
-				decoderConfig: meta.decoderConfig,
+				decoderConfig,
+				requiresAdtsStripping,
 			},
 			chunkQueue: [],
 			lastWrittenMsTimestamp: null,
+			closed: false,
 		};
 
 		this.trackDatas.push(newTrackData);
@@ -824,6 +887,7 @@ export class MatroskaMuxer extends Muxer {
 			},
 			chunkQueue: [],
 			lastWrittenMsTimestamp: null,
+			closed: false,
 		};
 
 		this.trackDatas.push(newTrackData);
@@ -848,8 +912,8 @@ export class MatroskaMuxer extends Muxer {
 
 			if (track.metadata.frameRate !== undefined) {
 				// Constrain the time values to the frame rate
-				timestamp = roundToMultiple(timestamp, 1 / track.metadata.frameRate);
-				duration = roundToMultiple(duration, 1 / track.metadata.frameRate);
+				timestamp = roundToDivisor(timestamp, track.metadata.frameRate);
+				duration = roundToDivisor(duration, track.metadata.frameRate);
 			}
 
 			const additions = trackData.info.alphaMode
@@ -870,11 +934,24 @@ export class MatroskaMuxer extends Muxer {
 		const release = await this.mutex.acquire();
 
 		try {
-			const trackData = this.getAudioTrackData(track, meta);
+			const trackData = this.getAudioTrackData(track, packet, meta);
+
+			let packetData = packet.data;
+			if (trackData.info.requiresAdtsStripping) {
+				const adtsFrame = readAdtsFrameHeader(FileSlice.tempFromBytes(packetData));
+				if (!adtsFrame) {
+					throw new Error('Expected ADTS frame, didn\'t get one.');
+				}
+
+				const headerLength = adtsFrame.crcCheck === null
+					? MIN_ADTS_FRAME_HEADER_SIZE
+					: MAX_ADTS_FRAME_HEADER_SIZE;
+				packetData = packetData.subarray(headerLength);
+			}
 
 			const isKeyFrame = packet.type === 'key';
 			const timestamp = this.validateAndNormalizeTimestamp(trackData.track, packet.timestamp, isKeyFrame);
-			const audioChunk = this.createInternalChunk(packet.data, timestamp, packet.duration, packet.type);
+			const audioChunk = this.createInternalChunk(packetData, timestamp, packet.duration, packet.type);
 
 			trackData.chunkQueue.push(audioChunk);
 			await this.interleaveChunks();
@@ -932,7 +1009,7 @@ export class MatroskaMuxer extends Muxer {
 			let minTimestamp = Infinity;
 
 			for (const trackData of this.trackDatas) {
-				if (!isFinalCall && trackData.chunkQueue.length === 0 && !trackData.track.source._closed) {
+				if (!isFinalCall && trackData.chunkQueue.length === 0 && !trackData.closed) {
 					break outer;
 				}
 
@@ -1043,7 +1120,7 @@ export class MatroskaMuxer extends Muxer {
 				return firstQueuedSample.type === 'key';
 			}
 
-			return otherTrackData.track.source._closed;
+			return otherTrackData.closed;
 		});
 
 		let shouldCreateNewCluster = false;
@@ -1121,7 +1198,8 @@ export class MatroskaMuxer extends Muxer {
 			this.ebmlWriter.writeEBML(blockGroup);
 		}
 
-		this.duration = Math.max(this.duration, msTimestamp + msDuration);
+		this.startTimestamp = Math.min(this.startTimestamp, msTimestamp);
+		this.endTimestamp = Math.max(this.endTimestamp, msTimestamp + msDuration);
 		trackData.lastWrittenMsTimestamp = msTimestamp;
 
 		if (!this.trackDatasInCurrentCluster.has(trackData)) {
@@ -1207,8 +1285,13 @@ export class MatroskaMuxer extends Muxer {
 	}
 
 	// eslint-disable-next-line @typescript-eslint/no-misused-promises
-	override async onTrackClose() {
+	override async onTrackClose(track: OutputTrack) {
 		const release = await this.mutex.acquire();
+
+		const trackData = this.trackDatas.find(x => x.track === track);
+		if (trackData) {
+			trackData.closed = true;
+		}
 
 		if (this.allTracksAreKnown()) {
 			this.allTracksKnown.resolve();
@@ -1226,6 +1309,10 @@ export class MatroskaMuxer extends Muxer {
 
 		this.allTracksKnown.resolve();
 
+		for (const trackData of this.trackDatas) {
+			trackData.closed = true;
+		}
+
 		if (!this.segment) {
 			this.createSegment();
 		}
@@ -1241,15 +1328,16 @@ export class MatroskaMuxer extends Muxer {
 		this.ebmlWriter.writeEBML(this.cues);
 
 		if (!this.format._options.appendOnly) {
-			const endPos = this.writer.getPos();
-
 			// Write the Segment size
 			const segmentSize = this.writer.getPos() - this.segmentDataOffset;
 			this.writer.seek(this.ebmlWriter.offsets.get(this.segment!)! + 4);
 			this.ebmlWriter.writeVarInt(segmentSize, SEGMENT_SIZE_BYTES);
 
 			// Write the duration of the media to the Segment
-			this.segmentDuration!.data = new EBMLFloat64(this.duration);
+			const duration = this.startTimestamp === Infinity
+				? 0
+				: this.endTimestamp - this.startTimestamp;
+			this.segmentDuration!.data = new EBMLFloat64(duration);
 			this.writer.seek(this.ebmlWriter.offsets.get(this.segmentDuration!)!);
 			this.ebmlWriter.writeEBML(this.segmentDuration);
 
@@ -1258,8 +1346,6 @@ export class MatroskaMuxer extends Muxer {
 			this.writer.seek(this.ebmlWriter.offsets.get(this.seekHead)!);
 			this.maybeCreateSeekHead(true);
 			this.ebmlWriter.writeEBML(this.seekHead);
-
-			this.writer.seek(endPos);
 		}
 
 		release();

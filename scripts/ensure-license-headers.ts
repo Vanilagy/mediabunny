@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const LICENSE_HEADER = `/*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -36,6 +36,7 @@ const checkDirectory = (dirPath: string) => {
 
 checkDirectory(path.join(__dirname, '..', 'src'));
 checkDirectory(path.join(__dirname, '..', 'packages', 'mp3-encoder', 'src'));
+checkDirectory(path.join(__dirname, '..', 'packages', 'ac3', 'src'));
 checkDirectory(path.join(__dirname, '..', 'shared'));
 
 if (missingFiles.length > 0) {

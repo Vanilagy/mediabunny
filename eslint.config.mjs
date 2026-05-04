@@ -30,6 +30,9 @@ export default tseslint.config(
 			'@typescript-eslint/require-await': 'off',
 			'@stylistic/yield-star-spacing': ['error', { before: false, after: true }],
 			'@typescript-eslint/no-unsafe-enum-comparison': 'off',
+			'@typescript-eslint/no-unsafe-unary-minus': 'off',
+			'@typescript-eslint/no-deprecated': 'error',
+			'@typescript-eslint/consistent-type-exports': 'error',
 		},
 	},
 	{
@@ -38,8 +41,16 @@ export default tseslint.config(
 			'dist-docs',
 			'packages/mp3-encoder/dist',
 			'packages/mp3-encoder/build',
+			'packages/ac3/dist',
+			'packages/ac3/build',
+			'packages/aac-encoder/dist',
+			'packages/aac-encoder/build',
+			'packages/flac-encoder/dist',
+			'packages/flac-encoder/build',
 			'eslint.config.mjs',
 			'docs/.vitepress/cache',
+			'test/public',
+			'testfiles_temp'
 		]
 	}
 );

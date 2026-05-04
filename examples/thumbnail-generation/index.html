@@ -1,14 +1,29 @@
 <!DOCTYPE html>
-<html lang="en" translate="no">
+<html lang="en-US" translate="no">
 	<head>
-		<meta charset="UTF-8">
+		<meta charset="utf-8">
 		<meta http-equiv="X-UA-Compatible" content="IE=edge">
 		<meta name="viewport" content="width=device-width, initial-scale=1.0">
 		<title>Thumbnail generation example | Mediabunny</title>
+		<meta name="description" content="Select or drop a media file, and Mediabunny will extract video thumbnails for it.">
 		<script type="module" src="./../base.ts"></script>
 		<script type="module" src="./thumbnail-generation.ts"></script>
 		<link rel="stylesheet" href="../base.css">
 		<link rel="icon" href="../../docs/public/mediabunny-logo.svg">
+		<link rel="canonical" href="https://mediabunny.dev/examples/thumbnail-generation/">
+		<meta property="og:site_name" content="Mediabunny">
+		<meta property="og:type" content="website">
+		<meta property="og:title" content="Thumbnail generation example | Mediabunny">
+		<meta property="og:description" content="Select or drop a media file, and Mediabunny will extract video thumbnails for it.">
+		<meta property="og:url" content="https://mediabunny.dev/examples/thumbnail-generation/">
+		<meta property="og:image" content="https://mediabunny.dev/mediabunny-og-image.png">
+		<meta property="og:locale" content="en-US">
+		<meta name="twitter:card" content="summary_large_image">
+		<meta name="twitter:site" content="@vanilagy">
+		<meta name="twitter:title" content="Thumbnail generation example | Mediabunny">
+		<meta name="twitter:description" content="Select or drop a media file, and Mediabunny will extract video thumbnails for it.">
+		<meta name="twitter:image" content="https://mediabunny.dev/mediabunny-og-image.png">
+		<script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Examples","item":"https://mediabunny.dev/examples"},{"@type":"ListItem","position":2,"name":"Thumbnail generation"}]}</script>
 	</head>
 
 	<body class="flex flex-col items-center py-10 bg-gray-50 text-gray-800 dark:bg-zinc-900 dark:text-zinc-200 px-2">
@@ -31,11 +46,11 @@
 			</a>
 		</div>
 
-		<p class="text-xs opacity-60 mt-2" id="file-name"></p>
+		<p class="text-xs opacity-60 mt-2 mx-auto text-center max-w-[36rem]" id="file-name"></p>
 
 		<hr class="w-full max-w-96 my-4 border-gray-300 dark:border-zinc-700" style="display: none;">
 
-		<p id="error-element" class="text-red-500"></p>
+		<p id="error-element" class="text-red-500 mx-auto text-center max-w-[36rem]"></p>
 		<div id="thumbnail-container" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4"></div>
 
 		<a href="/" class="fixed top-0 left-0 flex gap-2 py-2 px-5 items-center">

@@ -1,3 +1,7 @@
+---
+description: Mediabunny supports a wide range of media container formats (.mp4, .webm, .mp3, .wav, .m3u8, ...) and video/audio codecs (H.264, HEVC, VP9, AV1, AAC, Opus, FLAC, ...).
+---
+
 # Supported formats & codecs
  
 ## Container formats
@@ -6,6 +10,7 @@ Mediabunny supports many commonly used media container formats, all of which are
 
 - ISOBMFF-based formats (.mp4, .m4v, .m4a, ...)
 - QuickTime File Format (.mov)
+- Segmented MP4 (CMAF) (.m4s)
 - Matroska (.mkv)
 - WebM (.webm)
 - Ogg (.ogg)
@@ -13,12 +18,16 @@ Mediabunny supports many commonly used media container formats, all of which are
 - WAVE (.wav)
 - ADTS (.aac)
 - FLAC (.flac)
+- MPEG Transport Stream (.ts)
+- HLS (.m3u8)
 
 ## Codecs
 
 Mediabunny supports a wide range of video, audio, and subtitle codecs. More specifically, it supports all codecs specified by the WebCodecs API and a few additional PCM codecs out of the box.
 
 The availability of the codecs provided by the WebCodecs API depends on the browser and thus cannot be guaranteed by this library. Mediabunny provides [special utility functions](#querying-codec-encodability) to check which codecs are able to be encoded. You can also specify [custom coders](#custom-coders) to provide your own encoder/decoder implementation if the browser doesn't support the codec natively.
+
+For precise definitions of each codec including the corresponding packet format, please refer to the [Mediabunny Codec Registry](/codec-registry/overview).
 
 ::: info
 Mediabunny ships with built-in decoders and encoders for all audio PCM codecs, meaning they are always supported.
@@ -34,11 +43,13 @@ Mediabunny ships with built-in decoders and encoders for all audio PCM codecs, m
 
 ### Audio codecs
 
-- `'aac'` - Advanced Audio Coding (AAC)
+- `'aac'` - Advanced Audio Coding (AAC) [^aac]
 - `'opus'` - Opus
-- `'mp3'` - MP3
+- `'mp3'` - MP3 [^mp3]
 - `'vorbis'` - Vorbis
-- `'flac'` - Free Lossless Audio Codec (FLAC)
+- `'flac'` - Free Lossless Audio Codec (FLAC) [^flac]
+- `'ac3'` - Dolby Digital (AC-3) [^ac3]
+- `'eac3'` - Dolby Digital Plus (E-AC-3) [^ac3]
 - `'pcm-u8'` - 8-bit unsigned PCM
 - `'pcm-s8'` - 8-bit signed PCM
 - `'pcm-s16'` - 16-bit little-endian signed PCM
@@ -62,37 +73,44 @@ Mediabunny ships with built-in decoders and encoders for all audio PCM codecs, m
 
 Not all codecs can be used with all containers. The following table specifies the supported codec-container combinations:
 
-|                |   .mp4   | .mov  | .mkv  | .webm[^1] | .ogg  | .mp3  | .wav  | .aac  | .flac |
-|:--------------:|:--------:|:-----:|:-----:|:---------:|:-----:|:-----:|:-----:|:-----:|:-----:|
-| `'avc'`        |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |
-| `'hevc'`       |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |
-| `'vp8'`        |    ✓     |   ✓   |   ✓   |     ✓     |       |       |       |       |       |
-| `'vp9'`        |    ✓     |   ✓   |   ✓   |     ✓     |       |       |       |       |       |
-| `'av1'`        |    ✓     |   ✓   |   ✓   |     ✓     |       |       |       |       |       |
-| `'aac'`        |    ✓     |   ✓   |   ✓   |           |       |       |       |   ✓   |       |
-| `'opus'`       |    ✓     |   ✓   |   ✓   |     ✓     |   ✓   |       |       |       |       |
-| `'mp3'`        |    ✓     |   ✓   |   ✓   |           |       |   ✓   |       |       |       |
-| `'vorbis'`     |    ✓     |   ✓   |   ✓   |     ✓     |   ✓   |       |       |       |       |
-| `'flac'`       |    ✓     |   ✓   |   ✓   |           |       |       |       |       |   ✓   |
-| `'pcm-u8'`     |          |   ✓   |   ✓   |           |       |       |   ✓   |       |       |
-| `'pcm-s8'`     |          |   ✓   |       |           |       |       |       |       |       |
-| `'pcm-s16'`    |    ✓     |   ✓   |   ✓   |           |       |       |   ✓   |       |       |
-| `'pcm-s16be'`  |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |
-| `'pcm-s24'`    |    ✓     |   ✓   |   ✓   |           |       |       |   ✓   |       |       |
-| `'pcm-s24be'`  |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |
-| `'pcm-s32'`    |    ✓     |   ✓   |   ✓   |           |       |       |   ✓   |       |       |
-| `'pcm-s32be'`  |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |
-| `'pcm-f32'`    |    ✓     |   ✓   |   ✓   |           |       |       |   ✓   |       |       |
-| `'pcm-f32be'`  |    ✓     |   ✓   |       |           |       |       |       |       |       |
-| `'pcm-f64'`    |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |
-| `'pcm-f64be'`  |    ✓     |   ✓   |       |           |       |       |       |       |       |
-| `'ulaw'`       |          |   ✓   |       |           |       |       |   ✓   |       |       |
-| `'alaw'`       |          |   ✓   |       |           |       |       |   ✓   |       |       |
-| `'webvtt'`[^2] |   (✓)    |       |  (✓)  |    (✓)    |       |       |       |       |       |
+|                |   .mp4   | .mov  | .mkv  | .webm[^webm] | .ogg  | .mp3  | .wav  | .aac  | .flac |  .ts  |
+|:--------------:|:--------:|:-----:|:-----:|:---------:|:-----:|:-----:|:-----:|:-----:|:-----:|:-----:|
+| `'avc'`        |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |   ✓   |
+| `'hevc'`       |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |   ✓   |
+| `'vp8'`        |    ✓     |   ✓   |   ✓   |     ✓     |       |       |       |       |       |       |
+| `'vp9'`        |    ✓     |   ✓   |   ✓   |     ✓     |       |       |       |       |       |       |
+| `'av1'`        |    ✓     |   ✓   |   ✓   |     ✓     |       |       |       |       |       |       |
+| `'aac'`        |    ✓     |   ✓   |   ✓   |           |       |       |       |   ✓   |       |   ✓   |
+| `'opus'`       |    ✓     |   ✓   |   ✓   |     ✓     |   ✓   |       |       |       |       |       |
+| `'mp3'`        |    ✓     |   ✓   |   ✓   |           |       |   ✓   |       |       |       |   ✓   |
+| `'vorbis'`     |    ✓     |   ✓   |   ✓   |     ✓     |   ✓   |       |       |       |       |       |
+| `'flac'`       |    ✓     |   ✓   |   ✓   |           |       |       |       |       |   ✓   |       |
+| `'ac3'`        |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |   ✓   |
+| `'eac3'`       |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |   ✓   |
+| `'pcm-u8'`     |          |   ✓   |   ✓   |           |       |       |   ✓   |       |       |       |
+| `'pcm-s8'`     |          |   ✓   |       |           |       |       |       |       |       |       |
+| `'pcm-s16'`    |    ✓     |   ✓   |   ✓   |           |       |       |   ✓   |       |       |       |
+| `'pcm-s16be'`  |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |       |
+| `'pcm-s24'`    |    ✓     |   ✓   |   ✓   |           |       |       |   ✓   |       |       |       |
+| `'pcm-s24be'`  |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |       |
+| `'pcm-s32'`    |    ✓     |   ✓   |   ✓   |           |       |       |   ✓   |       |       |       |
+| `'pcm-s32be'`  |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |       |
+| `'pcm-f32'`    |    ✓     |   ✓   |   ✓   |           |       |       |   ✓   |       |       |       |
+| `'pcm-f32be'`  |    ✓     |   ✓   |       |           |       |       |       |       |       |       |
+| `'pcm-f64'`    |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |       |
+| `'pcm-f64be'`  |    ✓     |   ✓   |       |           |       |       |       |       |       |       |
+| `'ulaw'`       |          |   ✓   |       |           |       |       |   ✓   |       |       |       |
+| `'alaw'`       |          |   ✓   |       |           |       |       |   ✓   |       |       |       |
+| `'webvtt'`[^webvtt] |   (✓)    |       |  (✓)  |    (✓)    |       |       |       |       |       |       |
 
+For HLS, the supported codecs depend on the segment format chosen.
 
-[^1]: WebM only supports a small subset of the codecs supported by Matroska. However, this library can technically read all codecs from a WebM that are supported by Matroska.
-[^2]: WebVTT can only be written, not read.
+[^aac]: In some browsers, AAC encoding is not supported by WebCodecs. You can polyfill it with the [`@mediabunny/aac-encoder`](./extensions/aac-encoder) extension package.
+[^mp3]: MP3 encoding is not supported by WebCodecs. You can polyfill it with the [`@mediabunny/mp3-encoder`](./extensions/mp3-encoder) extension package.
+[^flac]: FLAC encoding is not supported by WebCodecs. You can polyfill it with the [`@mediabunny/flac-encoder`](./extensions/flac-encoder) extension package.
+[^ac3]: AC-3 and E-AC-3 are not natively supported by WebCodecs. To encode or decode these codecs, you can use the [`@mediabunny/ac3`](./extensions/ac3) extension package.
+[^webm]: WebM only supports a small subset of the codecs supported by Matroska. However, this library can technically read all codecs from a WebM that are supported by Matroska.
+[^webvtt]: WebVTT can only be written, not read.
 
 ## Querying codec encodability
 
@@ -186,7 +204,60 @@ Codec encodability checks take [custom encoders](#custom-encoders) into account.
 
 ## Querying codec decodability
 
-Whether a codec can be decoded depends on the specific codec configuration of an `InputTrack`; you can use its [`canDecode`](./reading-media-files#codec-information) method to check.
+If you already have an `InputTrack`, you can check its decodability using its [`canDecode`](./reading-media-files#codec-information) method, which uses the track's actual codec configuration:
+```ts
+const canDecodeTrack = await inputTrack.canDecode(); // => boolean
+```
+
+However, you can also gauge decodability even in the absence of any concrete track. `canDecode` tests whether a codec can be decoded using typical settings:
+```ts
+import { canDecode } from 'mediabunny';
+
+canDecode('avc'); // => Promise<boolean>
+canDecode('opus'); // => Promise<boolean>
+```
+Video codecs are checked using 1280x720, while audio codecs are checked using 2 channels, 48 kHz.
+
+You can also check decodability using specific configurations:
+```ts
+import { canDecodeVideo, canDecodeAudio } from 'mediabunny';
+
+canDecodeVideo('hevc', {
+	codedWidth: 1920, codedHeight: 1080
+}); // => Promise<boolean>
+
+canDecodeAudio('aac', {
+	numberOfChannels: 1, sampleRate: 44100
+}); // => Promise<boolean>
+```
+
+All additional properties of [`VideoDecoderConfig`](https://developer.mozilla.org/en-US/docs/Web/API/VideoDecoder/configure#config) and [`AudioDecoderConfig`](https://developer.mozilla.org/en-US/docs/Web/API/AudioDecoder/configure#config) can be used here as well.
+
+---
+
+In addition, you can use the following functions to check decodability for multiple codecs at once, getting back a list of supported codecs:
+```ts
+import {
+	getDecodableCodecs,
+	getDecodableVideoCodecs,
+	getDecodableAudioCodecs,
+} from 'mediabunny';
+
+getDecodableCodecs(); // => Promise<MediaCodec[]>
+getDecodableVideoCodecs(); // => Promise<VideoCodec[]>
+getDecodableAudioCodecs(); // => Promise<AudioCodec[]>
+
+// These functions also accept optional configuration options.
+// Here, we check which of AVC, HEVC and VP8 can be decoded at 1920x1080:
+getDecodableVideoCodecs(
+	['avc', 'hevc', 'vp8'],
+	{ codedWidth: 1920, codedHeight: 1080 },
+); // => Promise<VideoCodec[]>
+```
+
+::: info
+Codec decodability checks take [custom decoders](#custom-decoders) into account.
+:::
 
 ## Custom coders
 
