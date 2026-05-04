@@ -443,6 +443,12 @@ export class BufferSource extends Source {
 export type BlobSourceOptions = {
 	/** The maximum number of bytes the cache is allowed to hold in memory. Defaults to 8 MiB. */
 	maxCacheSize?: number;
+	/**
+	 * Defaults to `true`. When `true`, Mediabunny will acquire a `ReadableStream` reader internally to efficiently read
+	 * data from the blob. Since this can lead to errors in some (very) rare cases due to browser bugs, you can set this
+	 * field to `false` to try a slower but more stable reading method.
+	 */
+	useStreamReader?: boolean;
 };
 
 /**
@@ -455,6 +461,8 @@ export type BlobSourceOptions = {
 export class BlobSource extends Source {
 	/** @internal */
 	_blob: Blob;
+	/** @internal */
+	_options: BlobSourceOptions;
 	/** @internal */
 	_orchestrator: ReadOrchestrator;
 
@@ -475,10 +483,15 @@ export class BlobSource extends Source {
 		) {
 			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative number.');
 		}
+		if (options.useStreamReader !== undefined && typeof options.useStreamReader !== 'boolean') {
+			throw new TypeError('options.useStreamReader, when provided, must be a boolean.');
+		}
 
 		super();
 
 		this._blob = blob;
+		this._options = options;
+
 		this._orchestrator = new ReadOrchestrator({
 			maxCacheSize: options.maxCacheSize ?? (8 * 2 ** 20 /* 8 MiB */),
 			maxWorkerCount: 4,
@@ -520,7 +533,7 @@ export class BlobSource extends Source {
 			// - ReadableStream stalls under backpressure (especially video)
 			// Affects Safari and all iOS browsers (Chrome, Firefox, etc.).
 			// Use arrayBuffer() fallback for WebKit browsers.
-			if ('stream' in this._blob && !isWebKit()) {
+			if ('stream' in this._blob && !isWebKit() && this._options.useStreamReader !== false) {
 				// Get a reader of the blob starting at the required offset, and then keep it around
 				const slice = this._blob.slice(worker.currentPos);
 				reader = slice.stream().getReader();
