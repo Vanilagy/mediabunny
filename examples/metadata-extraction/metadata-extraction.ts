@@ -238,7 +238,7 @@ loadUrlButton.addEventListener('click', () => {
 	const url = prompt(
 		'Please enter a URL of a media file. Note that it must be HTTPS and support cross-origin requests, so have the'
 		+ ' right CORS headers set.',
-		'https://remotion.media/BigBuckBunny.mp4',
+		'https://mediabunny.dev/big-buck-bunny.mp4',
 	);
 	if (!url) {
 		return;
