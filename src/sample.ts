@@ -102,6 +102,10 @@ export abstract class VideoSampleResource {
 	/** Returns the height of the frame in pixels. */
 	abstract getCodedHeight(): number;
 
+	abstract getSquarePixelWidth(): number;
+
+	abstract getSquarePixelHeight(): number;
+
 	/** Returns the color space of the frame. */
 	abstract getColorSpace(): VideoSampleColorSpace;
 
@@ -401,8 +405,8 @@ export class VideoSample implements Disposable {
 				this.squarePixelWidth = this.rotation % 180 === 0 ? init.displayWidth : init.displayHeight!;
 				this.squarePixelHeight = this.rotation % 180 === 0 ? init.displayHeight! : init.displayWidth;
 			} else {
-				this.squarePixelWidth = this.codedWidth;
-				this.squarePixelHeight = this.codedHeight;
+				this.squarePixelWidth = this.visibleRect.width;
+				this.squarePixelHeight = this.visibleRect.height;
 			}
 		} else if (typeof VideoFrame !== 'undefined' && data instanceof VideoFrame) {
 			if (init?.rotation !== undefined && ![0, 90, 180, 270].includes(init.rotation)) {
@@ -533,8 +537,9 @@ export class VideoSample implements Disposable {
 			data._referenceCount++;
 
 			this.format = data.getFormat();
-			this.codedWidth = data.getCodedWidth();
-			this.codedHeight = data.getCodedHeight();
+			this.visibleRect = { left: 0, top: 0, width: data.getCodedWidth(), height: data.getCodedHeight() };
+			this.squarePixelWidth = data.getSquarePixelWidth();
+			this.squarePixelHeight = data.getSquarePixelHeight();
 			this.rotation = init.rotation ?? 0;
 			this.timestamp = init.timestamp!;
 			this.duration = init.duration ?? 0;

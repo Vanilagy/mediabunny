@@ -25,6 +25,14 @@ class ImageVideoSampleResource extends VideoSampleResource {
 		return this.image!.height;
 	}
 
+	getSquarePixelWidth() {
+		return this.image!.width;
+	}
+
+	getSquarePixelHeight() {
+		return this.image!.height;
+	}
+
 	getColorSpace() {
 		return new VideoSampleColorSpace({
 			matrix: 'rgb',
