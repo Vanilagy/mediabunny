@@ -26,6 +26,7 @@ import {
 	simplifyRational,
 	Rectangle,
 	validateRectangle,
+	MaybePromise,
 } from './misc';
 
 polyfillSymbolDispose();
@@ -94,7 +95,7 @@ export abstract class VideoSampleResource {
 	 * Returns the internal pixel format in which the frame is stored.
 	 * [See pixel formats](https://developer.mozilla.org/en-US/docs/Web/API/VideoFrame/format)
 	 */
-	abstract getFormat(): VideoPixelFormat | null;
+	abstract getFormat(): VideoSamplePixelFormat | null;
 
 	/** Returns the width of the frame in pixels. */
 	abstract getCodedWidth(): number;
@@ -119,7 +120,10 @@ export abstract class VideoSampleResource {
 	abstract allocationSize(options: VideoFrameCopyToOptions): number;
 
 	/** Copies this video sample's pixel data to an ArrayBuffer or ArrayBufferView. */
-	abstract copyTo(destination: AllowSharedBufferSource, options: VideoFrameCopyToOptions): PlaneLayout[];
+	abstract copyTo(
+		destination: AllowSharedBufferSource,
+		options: VideoFrameCopyToOptions
+	): MaybePromise<PlaneLayout[]>;
 }
 
 /**
@@ -225,7 +229,7 @@ export class VideoSample implements Disposable {
 
 	/**
 	 * The internal pixel format in which the frame is stored. Will be `null` if it's using an arbitrary internal
-	 * format not representable by `VideoPixelFormat`.
+	 * format not representable by `VideoSamplePixelFormat`.
 	 * [See pixel formats](https://www.w3.org/TR/webcodecs/#pixel-format)
 	 */
 	readonly format!: VideoSamplePixelFormat | null;
@@ -393,7 +397,33 @@ export class VideoSample implements Disposable {
 			this.rotation = init.rotation ?? 0;
 			this.timestamp = init.timestamp!;
 			this.duration = init.duration ?? 0;
-			this.colorSpace = new VideoSampleColorSpace(init.colorSpace);
+
+			let colorSpaceInit = init.colorSpace ?? null;
+			if (colorSpaceInit === null) {
+				if (
+					this.format === 'RGBA' || this.format === 'RGBX'
+					|| this.format === 'BGRA' || this.format === 'BGRX'
+				) {
+					// sRGB Color Space
+					colorSpaceInit = {
+						primaries: 'bt709',
+						transfer: 'iec61966-2-1',
+						matrix: 'rgb',
+						fullRange: true,
+					};
+				} else {
+					// REC709 Color Space
+					colorSpaceInit = {
+						primaries: 'bt709',
+						transfer: 'bt709',
+						matrix: 'bt709',
+						fullRange: false,
+					};
+				}
+			}
+
+			this.colorSpace = new VideoSampleColorSpace(colorSpaceInit);
+
 			this.visibleRect = {
 				left: init.visibleRect?.left ?? 0,
 				top: init.visibleRect?.top ?? 0,
@@ -555,6 +585,15 @@ export class VideoSample implements Disposable {
 			den: this.squarePixelHeight * this.codedWidth,
 		});
 		finalizationRegistry?.register(this, { type: 'video', data: this._data }, this);
+	}
+
+	getUnderlyingData() {
+		if (this._closed) {
+			throw new Error('VideoSample is closed.');
+		}
+
+		assert(this._data !== null);
+		return this._data;
 	}
 
 	/** Clones this video sample. */
@@ -759,7 +798,7 @@ export class VideoSample implements Disposable {
 
 		if (this._data instanceof VideoSampleResource) {
 			const format = this._data.getFormat() ?? 'RGBA';
-			const allocationSize = this._data.allocationSize({ format });
+			const allocationSize = this._data.allocationSize({ format: format as VideoPixelFormat });
 
 			let data: ArrayBuffer;
 			if (this._data._lastAllocationBuffer?.byteLength === allocationSize) {
@@ -767,10 +806,19 @@ export class VideoSample implements Disposable {
 			} else {
 				data = this._data._lastAllocationBuffer = new ArrayBuffer(allocationSize);
 			}
-			const layout = this._data.copyTo(data, { format });
+			const layoutResult = this._data.copyTo(data, { format: format as VideoPixelFormat });
+
+			if (layoutResult instanceof Promise) {
+				throw new Error(
+					'Cannot create a VideoFrame from a VideoSampleResource if copyTo returns a Promise. To work'
+					+ ' around this, copy the data into a buffer and then create a VideoFrame from it.',
+				);
+			}
+
+			const layout = layoutResult;
 
 			return new VideoFrame(data, {
-				format,
+				format: format as VideoPixelFormat,
 				codedWidth: this._data.getCodedWidth(),
 				codedHeight: this._data.getCodedHeight(),
 				colorSpace: this._data.getColorSpace(),
@@ -1349,7 +1397,7 @@ type PlaneConfig = {
 };
 
 /** Helper to retrieve plane configurations based on WebCodecs § 9.8 Pixel Format definitions. */
-const getPlaneConfigs = (format: VideoSamplePixelFormat): PlaneConfig[] => {
+export const getPlaneConfigs = (format: VideoSamplePixelFormat): PlaneConfig[] => {
 	// Helper for standard YUV planes
 	const yuv = (
 		yBytes: number,

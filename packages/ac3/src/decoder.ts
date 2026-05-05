@@ -61,6 +61,8 @@ class Ac3Decoder extends CustomAudioDecoder {
 	}
 }
 
+let registered = false;
+
 /**
  * Registers AC-3 and E-AC-3 decoders, which Mediabunny will then use automatically when applicable. Make sure to call
  * this function before starting any decoding task.
@@ -69,5 +71,10 @@ class Ac3Decoder extends CustomAudioDecoder {
  * @public
  */
 export const registerAc3Decoder = () => {
+	if (registered) {
+		return;
+	}
+	registered = true;
+
 	registerDecoder(Ac3Decoder);
 };
