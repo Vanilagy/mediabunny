@@ -267,7 +267,7 @@ export class OggMuxer extends Muxer {
 		try {
 			const trackData = this.getTrackData(track, meta);
 
-			this.validateAndNormalizeTimestamp(trackData.track, packet.timestamp, packet.type === 'key');
+			this.validateTimestamp(trackData.track, packet.timestamp, packet.type === 'key');
 
 			const currentTimestampInSamples = trackData.currentTimestampInSamples;
 

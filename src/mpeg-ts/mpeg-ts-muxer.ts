@@ -227,7 +227,7 @@ export class MpegTsMuxer extends Muxer {
 		try {
 			const trackData = this.getVideoTrackData(track, meta);
 
-			const timestamp = this.validateAndNormalizeTimestamp(
+			this.validateTimestamp(
 				trackData.track,
 				packet.timestamp,
 				packet.type === 'key',
@@ -241,7 +241,7 @@ export class MpegTsMuxer extends Muxer {
 
 			trackData.timestampProcessingQueue.push({
 				data: preparedData,
-				presentationTimestamp: timestamp,
+				presentationTimestamp: packet.timestamp,
 				decodeTimestamp: null,
 				isKeyframe: packet.type === 'key',
 			});
@@ -260,7 +260,7 @@ export class MpegTsMuxer extends Muxer {
 		try {
 			const trackData = this.getAudioTrackData(track, meta);
 
-			const timestamp = this.validateAndNormalizeTimestamp(
+			this.validateTimestamp(
 				trackData.track,
 				packet.timestamp,
 				packet.type === 'key',
@@ -274,7 +274,7 @@ export class MpegTsMuxer extends Muxer {
 
 			trackData.timestampProcessingQueue.push({
 				data: preparedData,
-				presentationTimestamp: timestamp,
+				presentationTimestamp: packet.timestamp,
 				decodeTimestamp: null,
 				isKeyframe: packet.type === 'key',
 			});

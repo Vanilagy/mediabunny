@@ -214,7 +214,7 @@ export class FlacMuxer extends Muxer {
 		const release = await this.mutex.acquire();
 
 		try {
-			this.validateAndNormalizeTimestamp(
+			this.validateTimestamp(
 				track,
 				packet.timestamp,
 				packet.type === 'key',

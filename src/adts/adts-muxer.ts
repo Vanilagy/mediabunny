@@ -60,7 +60,7 @@ export class AdtsMuxer extends Muxer {
 		const release = await this.mutex.acquire();
 
 		try {
-			this.validateAndNormalizeTimestamp(track, packet.timestamp, packet.type === 'key');
+			this.validateTimestamp(track, packet.timestamp, packet.type === 'key');
 
 			// First packet - determine input format from metadata
 			if (this.inputIsAdts === null) {

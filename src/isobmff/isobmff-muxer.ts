@@ -600,7 +600,7 @@ export class IsobmffMuxer extends Muxer {
 				packetData = concatNalUnitsInLengthPrefixed(nalUnits, 4);
 			}
 
-			const timestamp = this.validateAndNormalizeTimestamp(
+			this.validateTimestamp(
 				trackData.track,
 				packet.timestamp,
 				packet.type === 'key',
@@ -608,7 +608,7 @@ export class IsobmffMuxer extends Muxer {
 			const internalSample = this.createSampleForTrack(
 				trackData,
 				packetData,
-				timestamp,
+				packet.timestamp,
 				packet.duration,
 				packet.type,
 			);
@@ -638,11 +638,13 @@ export class IsobmffMuxer extends Muxer {
 				packetData = packetData.subarray(headerLength);
 			}
 
-			let timestamp = this.validateAndNormalizeTimestamp(
+			this.validateTimestamp(
 				trackData.track,
 				packet.timestamp,
 				packet.type === 'key',
 			);
+
+			let timestamp = packet.timestamp;
 			let duration = packet.duration;
 
 			if (trackData.info.requiresPcmTransformation) {
@@ -718,7 +720,7 @@ export class IsobmffMuxer extends Muxer {
 		try {
 			const trackData = this.getSubtitleTrackData(track, meta);
 
-			this.validateAndNormalizeTimestamp(trackData.track, cue.timestamp, true);
+			this.validateTimestamp(trackData.track, cue.timestamp, true);
 
 			if (track.source._codec === 'webvtt') {
 				trackData.cueQueue.push(cue);

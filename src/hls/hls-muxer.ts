@@ -614,17 +614,15 @@ export class HlsMuxer extends Muxer {
 		const release = await playlist.mutex.acquire();
 
 		try {
-			const timestamp = this.validateAndNormalizeTimestamp(track, packet.timestamp, packet.type === 'key');
-			const adjustedPacket = packet.clone({ timestamp });
-
-			trackData.packets.push(adjustedPacket);
+			this.validateTimestamp(track, packet.timestamp, packet.type === 'key');
+			trackData.packets.push(packet);
 
 			if (playlist.currentSegmentStartTimestamp === null) {
-				playlist.currentSegmentStartTimestamp = adjustedPacket.timestamp;
+				playlist.currentSegmentStartTimestamp = packet.timestamp;
 			} else if (!playlist.currentSegmentStartTimestampIsFixed) {
 				playlist.currentSegmentStartTimestamp = Math.min(
 					playlist.currentSegmentStartTimestamp,
-					adjustedPacket.timestamp,
+					packet.timestamp,
 				);
 			}
 
@@ -645,17 +643,15 @@ export class HlsMuxer extends Muxer {
 		const release = await playlist.mutex.acquire();
 
 		try {
-			const timestamp = this.validateAndNormalizeTimestamp(track, packet.timestamp, packet.type === 'key');
-			const adjustedPacket = packet.clone({ timestamp });
-
-			trackData.packets.push(adjustedPacket);
+			this.validateTimestamp(track, packet.timestamp, packet.type === 'key');
+			trackData.packets.push(packet);
 
 			if (playlist.currentSegmentStartTimestamp === null) {
-				playlist.currentSegmentStartTimestamp = adjustedPacket.timestamp;
+				playlist.currentSegmentStartTimestamp = packet.timestamp;
 			} else if (!playlist.currentSegmentStartTimestampIsFixed) {
 				playlist.currentSegmentStartTimestamp = Math.min(
 					playlist.currentSegmentStartTimestamp,
-					adjustedPacket.timestamp,
+					packet.timestamp,
 				);
 			}
 
