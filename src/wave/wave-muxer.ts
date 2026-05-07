@@ -79,7 +79,7 @@ export class WaveMuxer extends Muxer {
 				this.headerWritten = true;
 			}
 
-			this.validateAndNormalizeTimestamp(track, packet.timestamp, packet.type === 'key');
+			this.validateTimestamp(track, packet.timestamp, packet.type === 'key');
 
 			if (!this.isRf64 && this.writer.getPos() + packet.data.byteLength >= 2 ** 32) {
 				throw new Error(

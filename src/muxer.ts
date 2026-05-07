@@ -42,9 +42,7 @@ export abstract class Muxer {
 		maxTimestampBeforeLastKeyPacket: number | null;
 	}>();
 
-	protected validateAndNormalizeTimestamp(track: OutputTrack, timestampInSeconds: number, isKeyPacket: boolean) {
-		timestampInSeconds += track.source._timestampOffset;
-
+	protected validateTimestamp(track: OutputTrack, timestampInSeconds: number, isKeyPacket: boolean) {
 		if (timestampInSeconds < 0) {
 			throw new Error(`Timestamps must be non-negative (got ${timestampInSeconds}s).`);
 		}
@@ -78,7 +76,5 @@ export abstract class Muxer {
 
 			timestampInfo.maxTimestamp = Math.max(timestampInfo.maxTimestamp, timestampInSeconds);
 		}
-
-		return timestampInSeconds;
 	}
 }

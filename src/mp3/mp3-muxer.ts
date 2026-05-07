@@ -110,7 +110,7 @@ export class Mp3Muxer extends Muxer {
 				this.frameCount++;
 			}
 
-			this.validateAndNormalizeTimestamp(track, packet.timestamp, packet.type === 'key');
+			this.validateTimestamp(track, packet.timestamp, packet.type === 'key');
 
 			if (writeXingHeader) {
 				this.framePositions.push(this.writer.getPos());
