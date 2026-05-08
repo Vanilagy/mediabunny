@@ -1,6 +1,6 @@
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { Input } from '../../src/input.js';
-import { AdtsOutputFormat, HlsOutputFormat, Mp4OutputFormat, MpegTsOutputFormat } from '../../src/output-format.js';
+import { AdtsOutputFormat, HlsOutputFormat, Mp4OutputFormat, MpegTsOutputFormat, WavOutputFormat } from '../../src/output-format.js';
 import { Output, OutputTrackGroup } from '../../src/output.js';
 import { BufferSource, CustomPathedSource, UrlSource } from '../../src/source.js';
 import { expect, test } from 'vitest';
@@ -368,4 +368,31 @@ test('HLS track assignability can be overridden', async () => {
 	const newMasterPlayist = sanitizeMasterPlaylist(new TextDecoder().decode(files.get('new/master.m3u8')));
 	expect(newMasterPlayist).not.toBe(masterPlayist);
 	expect(newMasterPlayist.match(/\.m3u8/g)?.length).toBe(1);
+});
+
+test('Fractional audio sample boundary', async () => {
+	using input = new Input({
+		source: new UrlSource('/trim-buck-bunny-ffmpeg.ts'),
+		formats: ALL_FORMATS,
+	});
+
+	const output = new Output({
+		format: new WavOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({
+		input,
+		output,
+		video: {
+			discard: true,
+		},
+		audio: {
+			forceTranscode: true,
+		},
+		trim: {
+			start: 0.4 / 48000,
+		},
+	});
+	await conversion.execute();
 });
