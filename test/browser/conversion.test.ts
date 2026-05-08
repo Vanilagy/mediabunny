@@ -1,6 +1,12 @@
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { Input } from '../../src/input.js';
-import { AdtsOutputFormat, HlsOutputFormat, Mp4OutputFormat, MpegTsOutputFormat, WavOutputFormat } from '../../src/output-format.js';
+import {
+	AdtsOutputFormat,
+	HlsOutputFormat,
+	Mp4OutputFormat,
+	MpegTsOutputFormat,
+	WavOutputFormat,
+} from '../../src/output-format.js';
 import { Output, OutputTrackGroup } from '../../src/output.js';
 import { BufferSource, CustomPathedSource, UrlSource } from '../../src/source.js';
 import { expect, test } from 'vitest';
