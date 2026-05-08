@@ -1,13 +1,7 @@
 import { CustomVideoDecoder, VideoCodec, EncodedPacket, VideoSample, MaybePromise, Rational } from 'mediabunny';
 import * as NodeAv from 'node-av';
-import {
-	CODEC_TO_CODEC_ID,
-	getHardwareDecoderCodec,
-	mapColorPrimaries,
-	mapMatrixCoefficients,
-	mapTransferCharacteristics,
-} from './misc';
-import { binarySearchLessOrEqual, simplifyRational, toUint8Array } from '../../../src/misc';
+import { CODEC_TO_CODEC_ID, getHardwareDecoderCodec } from './misc';
+import { assert, binarySearchLessOrEqual, simplifyRational, toUint8Array } from '../../../src/misc';
 import { NodeAvFrameVideoSampleResource } from './video-sample';
 
 export class NodeAvVideoDecoder extends CustomVideoDecoder {
@@ -37,6 +31,7 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 		this.packet.alloc();
 
 		const codecId = CODEC_TO_CODEC_ID[this.codec];
+		assert(codecId !== undefined);
 
 		let codec: NodeAv.Codec | null;
 		if (this.config.hardwareAcceleration !== 'prefer-hardware' || this.codec === 'av1') {
@@ -66,30 +61,6 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 			? Buffer.from(toUint8Array(this.config.description))
 			: null;
 		codecContext.sampleAspectRatio = new NodeAv.Rational(this.pixelAspectRatio.num, this.pixelAspectRatio.den);
-
-		if (this.config.colorSpace?.primaries) {
-			const mapped = mapColorPrimaries(this.config.colorSpace.primaries);
-			if (mapped !== null) {
-				codecContext.colorPrimaries = mapped;
-			}
-		}
-		if (this.config.colorSpace?.transfer) {
-			const mapped = mapTransferCharacteristics(this.config.colorSpace.transfer);
-			if (mapped !== null) {
-				codecContext.colorTrc = mapped;
-			}
-		}
-		if (this.config.colorSpace?.matrix) {
-			const mapped = mapMatrixCoefficients(this.config.colorSpace.matrix);
-			if (mapped !== null) {
-				codecContext.colorSpace = mapped;
-			}
-		}
-		if (this.config.colorSpace?.fullRange != null) {
-			codecContext.colorRange = this.config.colorSpace.fullRange
-				? NodeAv.AVCOL_RANGE_JPEG
-				: NodeAv.AVCOL_RANGE_MPEG;
-		}
 
 		const ret = await codecContext.open2();
 		NodeAv.FFmpegError.throwIfError(ret, 'Open codec context');
@@ -178,7 +149,12 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 			}
 		}
 
-		this.onSample(new VideoSample(new NodeAvFrameVideoSampleResource(this.frame), {
+		const clone = this.frame.clone();
+		if (!clone) {
+			throw new Error('Frame clone allocation failed.');
+		}
+
+		this.onSample(new VideoSample(new NodeAvFrameVideoSampleResource(clone), {
 			timestamp,
 			duration,
 		}));

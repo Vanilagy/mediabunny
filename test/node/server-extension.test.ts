@@ -7,7 +7,8 @@ import { assert, toUint8Array } from '../../src/misc.js';
 import { EncodedPacketSink, VideoSampleSink } from '../../src/media-sink.js';
 import { NodeAvVideoDecoder } from '../../packages/server/src/video-decoder.js';
 import { NodeAvVideoEncoder } from '../../packages/server/src/video-encoder.js';
-import { VideoSample } from '../../src/sample.js';
+import { NodeAvAudioDecoder } from '../../packages/server/src/audio-decoder.js';
+import { AudioSample, VideoSample } from '../../src/sample.js';
 import { buildVideoCodecString, VideoCodec } from '../../src/codec.js';
 import { EncodedPacket } from '../../src/packet.js';
 import {
@@ -122,12 +123,6 @@ describe('Video', async () => {
 				expect(meta.decoderConfig!.codec.startsWith('avc1.')).toBe(true);
 				expect(meta.decoderConfig!.codedWidth).toBe(1280);
 				expect(meta.decoderConfig!.codedHeight).toBe(720);
-				expect(meta.decoderConfig!.colorSpace).toEqual({
-					primaries: 'bt709',
-					transfer: 'iec61966-2-1',
-					matrix: 'rgb',
-					fullRange: true,
-				});
 				expect(meta.decoderConfig!.description).toBeDefined();
 			}
 
@@ -208,12 +203,6 @@ describe('Video', async () => {
 			expect(sample.codedHeight).toBe(720);
 			expect(sample.timestamp).toBe(i / 30);
 			expect(sample.duration).toBe(1 / 30);
-			expect(sample.colorSpace).toEqual({
-				primaries: 'bt709',
-				transfer: 'iec61966-2-1',
-				matrix: 'rgb',
-				fullRange: true,
-			});
 
 			const buf = new Uint8Array(sample.allocationSize({ format: 'RGBX' }));
 			await sample.copyTo(buf, { format: 'RGBX' });
@@ -248,12 +237,6 @@ describe('Video', async () => {
 			expect(sample.codedHeight).toBe(720);
 			expect(sample.timestamp).toBe(i / 30);
 			expect(sample.duration).toBe(1 / 30);
-			expect(sample.colorSpace).toEqual({
-				primaries: 'bt709',
-				transfer: 'iec61966-2-1',
-				matrix: 'rgb',
-				fullRange: true,
-			});
 
 			const buf = new Uint8Array(sample.allocationSize({ format: 'RGBX' }));
 			await sample.copyTo(buf, { format: 'RGBX' });
@@ -292,14 +275,6 @@ describe('Video', async () => {
 			expect(sample.timestamp).toBe(i / 30);
 			expect(sample.duration).toBe(1 / 30);
 
-			// Undefined, for some reason:
-			expect(sample.colorSpace).toEqual({
-				primaries: null,
-				transfer: null,
-				matrix: null,
-				fullRange: false,
-			});
-
 			const buf = new Uint8Array(sample.allocationSize({ format: 'RGBX' }));
 			await sample.copyTo(buf, { format: 'RGBX' });
 
@@ -336,14 +311,6 @@ describe('Video', async () => {
 			expect(sample.timestamp).toBe(i / 30);
 			expect(sample.duration).toBe(1 / 30);
 
-			// Undefined, for some reason:
-			expect(sample.colorSpace).toEqual({
-				primaries: null,
-				transfer: null,
-				matrix: null,
-				fullRange: false,
-			});
-
 			const buf = new Uint8Array(sample.allocationSize({ format: 'RGBX' }));
 			await sample.copyTo(buf, { format: 'RGBX' });
 
@@ -368,12 +335,6 @@ describe('Video', async () => {
 			expect(sample.codedHeight).toBe(720);
 			expect(sample.timestamp).toBe(i / 30);
 			expect(sample.duration).toBe(1 / 30);
-			expect(sample.colorSpace).toEqual({
-				primaries: 'bt709',
-				transfer: 'iec61966-2-1',
-				matrix: 'bt470bg',
-				fullRange: false,
-			});
 
 			const buf = new Uint8Array(sample.allocationSize({ format: 'RGBX' }));
 			await sample.copyTo(buf, { format: 'RGBX' });
@@ -399,12 +360,6 @@ describe('Video', async () => {
 			expect(sample.codedHeight).toBe(720);
 			expect(sample.timestamp).toBe(i / 30);
 			expect(sample.duration).toBe(1 / 30);
-			expect(sample.colorSpace).toEqual({
-				primaries: 'bt709',
-				transfer: 'iec61966-2-1',
-				matrix: null,
-				fullRange: false,
-			});
 
 			const buf = new Uint8Array(sample.allocationSize({ format: 'RGBX' }));
 			await sample.copyTo(buf, { format: 'RGBX' });
@@ -430,12 +385,6 @@ describe('Video', async () => {
 			expect(sample.codedHeight).toBe(720);
 			expect(sample.timestamp).toBe(i / 30);
 			expect(sample.duration).toBe(1 / 30);
-			expect(sample.colorSpace).toEqual({
-				primaries: 'bt709',
-				transfer: 'iec61966-2-1',
-				matrix: 'rgb',
-				fullRange: false,
-			});
 
 			const buf = new Uint8Array(sample.allocationSize({ format: 'RGBX' }));
 			await sample.copyTo(buf, { format: 'RGBX' });
@@ -668,12 +617,6 @@ describe('Video', async () => {
 		expect(sample.rotation).toBe(0);
 		expect(sample.timestamp).toBe(0);
 		expect(sample.duration).toBe(1 / 25);
-		expect(sample.colorSpace).toEqual({
-			primaries: null,
-			transfer: null,
-			matrix: 'bt470bg',
-			fullRange: true,
-		});
 
 		// Default expected YUV size
 		expect(sample.allocationSize()).toBe(1920 * 1080 * 1.5);
@@ -792,3 +735,77 @@ describe('Video', async () => {
 		]);
 	});
 });
+
+/*
+describe('Audio', async () => {
+	test('Decoder lifecycle', async () => {
+		using input = new Input({
+			source: new FilePathSource('./test/public/trim-buck-bunny-ffmpeg.ts'),
+			formats: ALL_FORMATS,
+		});
+
+		const audioTrack = await input.getPrimaryAudioTrack();
+		assert(audioTrack);
+
+		const decoder = new NodeAvAudioDecoder();
+		// @ts-expect-error Readonly
+		decoder.codec = await audioTrack.getCodec();
+		// @ts-expect-error Readonly
+		decoder.config = await audioTrack.getDecoderConfig();
+
+		let sampleCount = 0;
+		const packetTimestamps: number[] = [];
+
+		// @ts-expect-error Readonly
+		decoder.onSample = (sample: AudioSample) => {
+			expect(sample.timestamp).toBe(packetTimestamps[sampleCount]);
+
+			if (sampleCount > 0) {
+				expect(sample.duration).toBeCloseTo(
+					packetTimestamps[sampleCount]! - packetTimestamps[sampleCount - 1]!,
+				);
+			}
+
+			sampleCount++;
+			sample.close();
+		};
+
+		await decoder.init();
+
+		const sink = new EncodedPacketSink(audioTrack);
+		let packetCount = 0;
+		for await (const packet of sink.packets()) {
+			packetTimestamps.push(packet.timestamp);
+			await decoder.decode(packet);
+
+			if (++packetCount === 10) {
+				break;
+			}
+		}
+
+		await decoder.flush();
+
+		expect(sampleCount).toBe(10);
+
+		// And, go again
+		sampleCount = 0;
+		packetTimestamps.length = 0;
+
+		packetCount = 0;
+		for await (const packet of sink.packets((await sink.getKeyPacket(5))!)) {
+			packetTimestamps.push(packet.timestamp);
+			await decoder.decode(packet);
+
+			if (++packetCount === 10) {
+				break;
+			}
+		}
+
+		await decoder.flush();
+
+		expect(sampleCount).toBe(10);
+
+		await decoder.close();
+	});
+});
+*/

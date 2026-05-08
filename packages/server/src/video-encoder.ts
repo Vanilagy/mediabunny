@@ -35,7 +35,6 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 	avCodec!: NodeAv.Codec;
 	codecContext: NodeAv.CodecContext | null = null;
 	lastBuffer: Buffer | null = null;
-	colorSpaceSet = false;
 	packetEmitted = false;
 
 	scaler: NodeAv.SoftwareScaleContext | null = null;
@@ -65,6 +64,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 		this.packet.alloc();
 
 		const codecId = CODEC_TO_CODEC_ID[this.codec];
+		assert(codecId !== undefined);
 
 		let codec: NodeAv.Codec | null = null;
 		if (this.config.hardwareAcceleration === 'prefer-software') {
@@ -201,15 +201,6 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 
 			await videoSample.copyTo(this.lastBuffer);
 			this.frame.fromBuffer(this.lastBuffer);
-		}
-
-		if (!this.colorSpaceSet) {
-			this.codecContext.colorPrimaries = this.frame.colorPrimaries;
-			this.codecContext.colorTrc = this.frame.colorTrc;
-			this.codecContext.colorSpace = this.frame.colorSpace;
-			this.codecContext.colorRange = this.frame.colorRange;
-
-			this.colorSpaceSet = true;
 		}
 
 		let frameToEncode = this.frame;
@@ -550,7 +541,6 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 		}
 
 		this.packetEmitted = false;
-		this.colorSpaceSet = false;
 	}
 
 	close(): MaybePromise<void> {

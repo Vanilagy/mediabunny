@@ -1,12 +1,14 @@
-import { VideoSamplePixelFormat, VideoCodec } from 'mediabunny';
+import { VideoSamplePixelFormat, MediaCodec } from 'mediabunny';
 import * as NodeAv from 'node-av';
 
-export const CODEC_TO_CODEC_ID: Record<VideoCodec, NodeAv.AVCodecID> = {
+export const CODEC_TO_CODEC_ID: Partial<Record<MediaCodec, NodeAv.AVCodecID>> = {
 	avc: NodeAv.AV_CODEC_ID_H264,
 	hevc: NodeAv.AV_CODEC_ID_HEVC,
 	vp8: NodeAv.AV_CODEC_ID_VP8,
 	vp9: NodeAv.AV_CODEC_ID_VP9,
 	av1: NodeAv.AV_CODEC_ID_AV1,
+
+	aac: NodeAv.AV_CODEC_ID_AAC,
 };
 
 let cachedHardwareContext: NodeAv.HardwareContext | null | undefined = undefined;
@@ -178,5 +180,46 @@ export const fromPixelFormat = (pixelFormat: VideoSamplePixelFormat) => {
 		case 'BGRX': return NodeAv.AV_PIX_FMT_BGR0;
 
 		default: return NodeAv.AV_PIX_FMT_NONE;
+	}
+};
+
+export const toAudioSampleFormat = (ffmpegSampleFormat: NodeAv.AVSampleFormat): AudioSampleFormat | null => {
+	switch (ffmpegSampleFormat) {
+		case NodeAv.AV_SAMPLE_FMT_U8: return 'u8';
+		case NodeAv.AV_SAMPLE_FMT_S16: return 's16';
+		case NodeAv.AV_SAMPLE_FMT_S32: return 's32';
+		case NodeAv.AV_SAMPLE_FMT_FLT: return 'f32';
+		case NodeAv.AV_SAMPLE_FMT_U8P: return 'u8-planar';
+		case NodeAv.AV_SAMPLE_FMT_S16P: return 's16-planar';
+		case NodeAv.AV_SAMPLE_FMT_S32P: return 's32-planar';
+		case NodeAv.AV_SAMPLE_FMT_FLTP: return 'f32-planar';
+
+		default: return null;
+	}
+};
+
+export const fromAudioSampleFormat = (sampleFormat: AudioSampleFormat): NodeAv.AVSampleFormat => {
+	switch (sampleFormat) {
+		case 'u8': return NodeAv.AV_SAMPLE_FMT_U8;
+		case 's16': return NodeAv.AV_SAMPLE_FMT_S16;
+		case 's32': return NodeAv.AV_SAMPLE_FMT_S32;
+		case 'f32': return NodeAv.AV_SAMPLE_FMT_FLT;
+		case 'u8-planar': return NodeAv.AV_SAMPLE_FMT_U8P;
+		case 's16-planar': return NodeAv.AV_SAMPLE_FMT_S16P;
+		case 's32-planar': return NodeAv.AV_SAMPLE_FMT_S32P;
+		case 'f32-planar': return NodeAv.AV_SAMPLE_FMT_FLTP;
+
+		default: return NodeAv.AV_SAMPLE_FMT_NONE;
+	}
+};
+
+export const getChannelLayout = (numChannels: number): NodeAv.ChannelLayout => {
+	switch (numChannels) {
+		case 1: return NodeAv.AV_CHANNEL_LAYOUT_MONO;
+		case 2: return NodeAv.AV_CHANNEL_LAYOUT_STEREO;
+		case 4: return NodeAv.AV_CHANNEL_LAYOUT_QUAD;
+		case 6: return NodeAv.AV_CHANNEL_LAYOUT_5POINT1;
+		case 8: return NodeAv.AV_CHANNEL_LAYOUT_7POINT1;
+		default: return { nbChannels: numChannels, order: NodeAv.AV_CHANNEL_ORDER_UNSPEC, mask: 0n };
 	}
 };

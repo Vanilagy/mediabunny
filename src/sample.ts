@@ -116,15 +116,19 @@ export abstract class VideoSampleResource {
 	 */
 	abstract close(): void;
 
-	/** Returns the number of bytes required to hold this video sample's pixel data. */
-	abstract allocationSize(options: VideoFrameCopyToOptions): number;
+	abstract getDataPlanes(): MaybePromise<VideoDataPlane[]>;
 
-	/** Copies this video sample's pixel data to an ArrayBuffer or ArrayBufferView. */
-	abstract copyTo(
-		destination: AllowSharedBufferSource,
-		options: VideoFrameCopyToOptions
-	): MaybePromise<PlaneLayout[]>;
+	abstract toRgbSample(
+		init: SetRequired<VideoSampleInit, 'timestamp'>,
+		format: 'RGBA' | 'RGBX' | 'BGRA' | 'BGRX',
+		colorSpace: PredefinedColorSpace,
+	): MaybePromise<VideoSample>;
 }
+
+export type VideoDataPlane = {
+	data: Uint8Array;
+	stride: number;
+};
 
 /**
  * The list of {@link VideoSample} pixel formats.
@@ -567,9 +571,33 @@ export class VideoSample implements Disposable {
 			data._referenceCount++;
 
 			this.format = data.getFormat();
-			this.visibleRect = { left: 0, top: 0, width: data.getCodedWidth(), height: data.getCodedHeight() };
+			if (this.format !== null && !VIDEO_SAMPLE_PIXEL_FORMATS.includes(this.format)) {
+				throw new TypeError('getFormat() must return a VideoSamplePixelFormat or null.');
+			}
+
+			this.visibleRect = {
+				left: 0,
+				top: 0,
+				width: data.getCodedWidth(),
+				height: data.getCodedHeight(),
+			};
+			if (!Number.isInteger(this.visibleRect.width) || this.visibleRect.width <= 0) {
+				throw new TypeError('getCodedWidth() must return a positive integer.');
+			}
+			if (!Number.isInteger(this.visibleRect.height) || this.visibleRect.height <= 0) {
+				throw new TypeError('getCodedHeight() must return a positive integer.');
+			}
+
 			this.squarePixelWidth = data.getSquarePixelWidth();
+			if (!Number.isInteger(this.squarePixelWidth) || this.squarePixelWidth <= 0) {
+				throw new TypeError('getSquarePixelWidth() must return a positive integer.');
+			}
+
 			this.squarePixelHeight = data.getSquarePixelHeight();
+			if (!Number.isInteger(this.squarePixelHeight) || this.squarePixelHeight <= 0) {
+				throw new TypeError('getSquarePixelHeight() must return a positive integer.');
+			}
+
 			this.rotation = init.rotation ?? 0;
 			this.timestamp = init.timestamp!;
 			this.duration = init.duration ?? 0;
@@ -682,42 +710,20 @@ export class VideoSample implements Disposable {
 		if (this._closed) {
 			throw new Error('VideoSample is closed.');
 		}
-		if (this.format === null) {
+
+		if ((options.format ?? this.format) == null) {
 			// https://github.com/Vanilagy/mediabunny/issues/267
 			// https://github.com/w3c/webcodecs/issues/920
-			throw new Error('Cannot get allocation size when format is null. Sorry!');
-		}
-
-		assert(this._data !== null);
-
-		if (this._data instanceof VideoSampleResource) {
-			return this._data.allocationSize(options);
-		}
-
-		if (!isVideoFrame(this._data)) {
-			if (
-				options.colorSpace
-				|| (options.format && options.format !== this.format)
-				|| options.layout
-				|| options.rect
-			) {
-				// Temporarily convert to VideoFrame to get it done
-				// TODO: Compute this directly without needing to go through VideoFrame
-				const videoFrame = this.toVideoFrame();
-				const size = videoFrame.allocationSize(options);
-				videoFrame.close();
-
-				return size;
-			}
+			throw new Error('Cannot get allocation size when format is null.');
 		}
 
 		if (isVideoFrame(this._data)) {
+			// Call the native method purely for performance
 			return this._data.allocationSize(options);
-		} else if (this._data instanceof Uint8Array) {
-			return this._data.byteLength;
-		} else {
-			return this.codedWidth * this.codedHeight * 4; // RGBX
 		}
+
+		const combinedLayout = ParseVideoFrameCopyToOptions(this, options);
+		return combinedLayout.allocationSize;
 	}
 
 	/**
@@ -733,56 +739,200 @@ export class VideoSample implements Disposable {
 		if (this._closed) {
 			throw new Error('VideoSample is closed.');
 		}
-		if (this.format === null) {
+		if ((options.format ?? this.format) == null) {
 			throw new Error('Cannot copy video sample data when format is null. Sorry!');
 		}
 
 		assert(this._data !== null);
 
-		if (this._data instanceof VideoSampleResource) {
+		if (isVideoFrame(this._data)) {
 			return this._data.copyTo(destination, options);
 		}
 
-		if (!isVideoFrame(this._data)) {
-			if (
-				options.colorSpace
-				|| (options.format && options.format !== this.format)
-				|| options.layout
-				|| options.rect
-			) {
-				// Temporarily convert to VideoFrame to get it done
-				// TODO: Do this directly without needing to go through VideoFrame
-				const videoFrame = this.toVideoFrame();
-				const layout = await videoFrame.copyTo(destination, options);
-				videoFrame.close();
+		if (
+			options.format
+			&& this.format !== options.format
+			&& ['RGBA', 'RGBX', 'BGRA', 'BGRX'].includes(options.format)
+		) {
+			// RGB conversion for custom VideoSampleResource
+			if (this._data instanceof VideoSampleResource) {
+				using rgbSample = await this._data.toRgbSample(
+					{
+						timestamp: this.timestamp,
+						duration: this.duration,
+						rotation: this.rotation,
+					},
+					options.format as 'RGBA' | 'RGBX' | 'BGRA' | 'BGRX',
+					options.colorSpace ?? 'srgb',
+				);
+				if (!(rgbSample instanceof VideoSample)) {
+					throw new TypeError('toRgbSample() must return a VideoSample.');
+				}
+				if (rgbSample.format !== options.format) {
+					throw new Error(
+						`Sample returned by toRgbSample was expected to have format '${options.format}', got`
+						+ ` '${rgbSample.format}' instead.`,
+					);
+				}
 
-				return layout;
+				return await rgbSample.copyTo(destination, options); // 'await' is intentional here cuz of using
+			} else if (!['RGBA', 'RGBX', 'BGRA', 'BGRX'].includes(this.format!)) {
+				if (typeof VideoFrame === 'undefined') {
+					throw new Error(
+						'For this sample, converting from a non-RGB to an RGB format requires VideoFrame to'
+						+ ' be defined.',
+					);
+				}
+
+				const tempFrame = this.toVideoFrame();
+				const result = await tempFrame.copyTo(destination, options);
+				tempFrame.close();
+
+				return result;
 			}
 		}
 
-		if (isVideoFrame(this._data)) {
-			return this._data.copyTo(destination, options);
+		const combinedLayout = ParseVideoFrameCopyToOptions(this, options);
+		assert(this.format);
+
+		// 4. If destination.byteLength is less than combinedLayout’s allocationSize, return a promise rejected with
+		const destBytes = toUint8Array(destination);
+		if (destBytes.byteLength < combinedLayout.allocationSize) {
+			throw new TypeError(
+				`Destination buffer too small. Required: ${combinedLayout.allocationSize},`
+				+ ` Available: ${destBytes.byteLength}`,
+			);
+		}
+
+		const planeConfigs = getPlaneConfigs(this.format);
+		let dataPlanes: VideoDataPlane[];
+
+		if (this._data instanceof VideoSampleResource) {
+			let result = this._data.getDataPlanes();
+			if (result instanceof Promise) result = await result;
+
+			if (
+				!Array.isArray(result)
+				|| result.some(x => !(x.data instanceof Uint8Array) || !Number.isInteger(x.stride) || x.stride < 0)
+			) {
+				throw new TypeError(
+					'getDataPlanes() must return an array of objects with a Uint8Array "data" property and a'
+					+ ' non-negative integer "stride" property.',
+				);
+			}
+
+			dataPlanes = result;
 		} else if (this._data instanceof Uint8Array) {
 			assert(this._layout);
+			assert(this._layout.length === planeConfigs.length);
 
-			const dest = toUint8Array(destination);
-			dest.set(this._data);
+			dataPlanes = this._layout.map((planeLayout, i) => {
+				const height = Math.ceil(this.codedHeight / planeConfigs[i]!.heightDivisor);
 
-			return this._layout;
+				return {
+					data: (this._data as Uint8Array).subarray(
+						planeLayout.offset,
+						planeLayout.offset + planeLayout.stride * height,
+					),
+					stride: planeLayout.stride,
+				};
+			});
 		} else {
 			const canvas = this._data;
 			const context = canvas.getContext('2d');
 			assert(context);
 
 			const imageData = context.getImageData(0, 0, this.codedWidth, this.codedHeight);
-			const dest = toUint8Array(destination);
-			dest.set(imageData.data);
 
-			return [{
-				offset: 0,
+			dataPlanes = [{
+				data: toUint8Array(imageData.data),
 				stride: 4 * this.codedWidth,
 			}];
 		}
+
+		// 6. Let p be a new Promise. (Implicit)
+		// 7. Let copyStepsQueue be the result of starting a new parallel queue. (Implicit)
+		// 8. Let planeLayouts be a new list.
+		const planeLayouts: PlaneLayout[] = [];
+
+		// Enqueue the following steps to copyStepsQueue: (fuck the queuing part)
+
+		// Let resource be the media resource referenced by [[resource reference]].
+		// (this.data)
+
+		// Let numPlanes be the number of planes as defined by [[format]].
+		const numPlanes = planeConfigs.length;
+
+		// Let planeIndex be 0.
+		// While planeIndex is less than combinedLayout’s numPlanes:
+		for (let planeIndex = 0; planeIndex < numPlanes; planeIndex++) {
+			const computedLayout = combinedLayout.computedLayouts[planeIndex]!;
+
+			// Let sourceStride be the stride of the plane in resource as identified by planeIndex.
+			const sourceStride = dataPlanes[planeIndex]!.stride;
+			const sourceData = dataPlanes[planeIndex]!.data;
+
+			// Let sourceOffset be the product of multiplying computedLayout’s sourceTop by sourceStride
+			let sourceOffset = computedLayout.sourceTop * sourceStride;
+
+			// Add computedLayout’s sourceLeftBytes to sourceOffset.
+			sourceOffset += computedLayout.sourceLeftBytes;
+
+			// Let destinationOffset be computedLayout’s destinationOffset.
+			let destinationOffset = computedLayout.destinationOffset;
+
+			// Let rowBytes be computedLayout’s sourceWidthBytes.
+			const rowBytes = computedLayout.sourceWidthBytes;
+
+			// Let layout be a new PlaneLayout, with offset set to destinationOffset and stride set to rowBytes.
+			// This is a spec error actually (https://github.com/w3c/webcodecs/issues/918)
+			const layout: PlaneLayout = {
+				offset: destinationOffset,
+				stride: computedLayout.destinationStride,
+			};
+
+			// Let row be 0.
+			// While row is less than computedLayout’s sourceHeight:
+			for (let row = 0; row < computedLayout.sourceHeight; row++) {
+				// Copy rowBytes bytes from resource starting at sourceOffset to destination starting
+				// at destinationOffset.
+				if (sourceOffset + rowBytes > sourceData.byteLength) {
+					throw new Error(`Source buffer OOB read.`);
+				}
+				if (destinationOffset + rowBytes > destBytes.byteLength) {
+					throw new Error(`Destination buffer OOB write.`);
+				}
+
+				const srcSub = sourceData.subarray(sourceOffset, sourceOffset + rowBytes);
+				destBytes.set(srcSub, destinationOffset);
+
+				// Increment sourceOffset by sourceStride.
+				sourceOffset += sourceStride;
+
+				// Increment destinationOffset by computedLayout’s destinationStride.
+				destinationOffset += computedLayout.destinationStride;
+			}
+
+			// Append layout to planeLayouts.
+			planeLayouts.push(layout);
+		}
+
+		// RGB conversion for ArrayBuffer and canvas-backed samples
+		if (options.format !== undefined && !(this._data instanceof VideoSampleResource)) {
+			const needsRgbConversion = this.format.startsWith('RGB') !== options.format.startsWith('RGB');
+			if (needsRgbConversion) {
+				// Loop over the destination bytes, swapping R and B
+				for (let i = 0; i < combinedLayout.allocationSize; i += 4) {
+					const r = destBytes[i]!;
+					const b = destBytes[i + 2]!;
+					destBytes[i] = b;
+					destBytes[i + 2] = r;
+				}
+			}
+		}
+
+		// Queue a task to resolve p with planeLayouts.
+		return planeLayouts;
 	}
 
 	/**
@@ -797,35 +947,10 @@ export class VideoSample implements Disposable {
 		assert(this._data !== null);
 
 		if (this._data instanceof VideoSampleResource) {
-			const format = this._data.getFormat() ?? 'RGBA';
-			const allocationSize = this._data.allocationSize({ format: format as VideoPixelFormat });
-
-			let data: ArrayBuffer;
-			if (this._data._lastAllocationBuffer?.byteLength === allocationSize) {
-				data = this._data._lastAllocationBuffer;
-			} else {
-				data = this._data._lastAllocationBuffer = new ArrayBuffer(allocationSize);
-			}
-			const layoutResult = this._data.copyTo(data, { format: format as VideoPixelFormat });
-
-			if (layoutResult instanceof Promise) {
-				throw new Error(
-					'Cannot create a VideoFrame from a VideoSampleResource if copyTo returns a Promise. To work'
-					+ ' around this, copy the data into a buffer and then create a VideoFrame from it.',
-				);
-			}
-
-			const layout = layoutResult;
-
-			return new VideoFrame(data, {
-				format: format as VideoPixelFormat,
-				codedWidth: this._data.getCodedWidth(),
-				codedHeight: this._data.getCodedHeight(),
-				colorSpace: this._data.getColorSpace(),
-				layout,
-				timestamp: this.microsecondTimestamp,
-				duration: this.microsecondDuration,
-			});
+			throw new Error(
+				'Creating a VideoFrame from a VideoSampleResource is currently not supported. To work around this,'
+				+ ' copy the data into a buffer and then create a VideoFrame from it.',
+			);
 		} else if (isVideoFrame(this._data)) {
 			return new VideoFrame(this._data, {
 				timestamp: this.microsecondTimestamp,
@@ -1472,6 +1597,250 @@ export const getPlaneConfigs = (format: VideoSamplePixelFormat): PlaneConfig[] =
 			assertNever(format);
 			assert(false);
 	}
+};
+
+type CombinedBufferLayout = {
+	allocationSize: number;
+	computedLayouts: ComputedPlaneLayout[];
+};
+
+type ComputedPlaneLayout = {
+	destinationOffset: number;
+	destinationStride: number;
+	sourceTop: number;
+	sourceHeight: number;
+	sourceLeftBytes: number;
+	sourceWidthBytes: number;
+};
+
+/** Taken from the WebCodecs spec. */
+const ParseVideoFrameCopyToOptions = (
+	sample: VideoSample,
+	options: VideoFrameCopyToOptions,
+): CombinedBufferLayout => {
+	// 1. Let defaultRect be the result of performing the getter steps for visibleRect.
+	const defaultRect: Rectangle = {
+		left: 0,
+		top: 0,
+		width: sample.codedWidth,
+		height: sample.codedHeight,
+	};
+
+	// 2. Let overrideRect be undefined.
+	// 3. If options.rect exists, assign the value of options.rect to overrideRect.
+	const overrideRect = options.rect;
+
+	// 4. Let parsedRect be the result of running the Parse Visible Rect algorithm...
+	const parsedRect = ParseVisibleRect(
+		defaultRect,
+		overrideRect,
+		sample.codedWidth,
+		sample.codedHeight,
+		sample.format,
+	);
+
+	// 5. If parsedRect is an exception, return parsedRect. (Handled by throw)
+
+	// 6. Let optLayout be undefined.
+	// 7. If options.layout exists, assign its value to optLayout.
+	const optLayout = options.layout;
+
+	// 8. Let format be undefined.
+	let format: VideoSamplePixelFormat | undefined;
+
+	// 9. If options.format does not exist, assign [[format]] to format.
+	if (!options.format || options.format === sample.format) {
+		format = sample.format!;
+	} else if (['RGBA', 'RGBX', 'BGRA', 'BGRX'].includes(options.format)) {
+		// 10. Otherwise, if options.format is equal to one of RGBA, RGBX, BGRA, BGRX, then assign options.format
+		//  to format...
+		format = options.format;
+	} else {
+		throw new Error('NotSupportedError: Invalid destination format.');
+	}
+
+	// 11. Let combinedLayout be the result of running the Compute Layout and Allocation Size algorithm...
+	return ComputeLayoutAndAllocationSize(parsedRect, format, optLayout);
+};
+
+/** Taken from the WebCodecs spec. */
+const ParseVisibleRect = (
+	defaultRect: DOMRectInit,
+	overrideRect: DOMRectInit | undefined,
+	codedWidth: number,
+	codedHeight: number,
+	format: VideoSamplePixelFormat | null,
+): DOMRectInit => {
+	// 1. Let sourceRect be defaultRect
+	const sourceRect = { ...defaultRect };
+
+	// 2. If overrideRect is not undefined:
+	if (overrideRect !== undefined) {
+		// If either of overrideRect.width or height is 0, return a TypeError.
+		if (overrideRect.width === 0 || overrideRect.height === 0) {
+			throw new TypeError('visibleRect dimensions cannot be zero.');
+		}
+		// If the sum of overrideRect.x and overrideRect.width is greater than codedWidth, return a TypeError.
+		if ((overrideRect.x || 0) + (overrideRect.width || 0) > codedWidth) {
+			throw new TypeError('visibleRect exceeds codedWidth.');
+		}
+		// If the sum of overrideRect.y and overrideRect.height is greater than codedHeight, return a TypeError.
+		if ((overrideRect.y || 0) + (overrideRect.height || 0) > codedHeight) {
+			throw new TypeError('visibleRect exceeds codedHeight.');
+		}
+		// Assign overrideRect to sourceRect.
+		sourceRect.x = overrideRect.x || 0;
+		sourceRect.y = overrideRect.y || 0;
+		sourceRect.width = overrideRect.width || 0;
+		sourceRect.height = overrideRect.height || 0;
+	}
+
+	// 3. Let validAlignment be the result of running the Verify Rect Offset Alignment algorithm.
+	const validAlignment = VerifyRectOffsetAlignment(format, sourceRect);
+
+	// 4. If validAlignment is false, throw a TypeError.
+	if (!validAlignment) {
+		throw new TypeError('visibleRect alignment is invalid for the format.');
+	}
+
+	// 5. Return sourceRect.
+	return sourceRect;
+};
+
+/** Taken from the WebCodecs spec. */
+const VerifyRectOffsetAlignment = (format: VideoSamplePixelFormat | null, rect: DOMRectInit): boolean => {
+	// 1. If format is null, return true.
+	if (format === null) return true;
+
+	const planes = getPlaneConfigs(format);
+
+	// 2. Let planeIndex be 0.
+	// 3. Let numPlanes be the number of planes as defined by format.
+	// 4. While planeIndex is less than numPlanes:
+	for (let planeIndex = 0; planeIndex < planes.length; planeIndex++) {
+		const plane = planes[planeIndex]!;
+		const sampleWidth = plane.widthDivisor;
+		const sampleHeight = plane.heightDivisor;
+
+		// If rect.x is not a multiple of sampleWidth, return false.
+		if ((rect.x || 0) % sampleWidth !== 0) return false;
+		// If rect.y is not a multiple of sampleHeight, return false.
+		if ((rect.y || 0) % sampleHeight !== 0) return false;
+	}
+
+	return true;
+};
+
+/** Taken from the WebCodecs spec. */
+const ComputeLayoutAndAllocationSize = (
+	parsedRect: DOMRectInit,
+	format: VideoSamplePixelFormat,
+	layout?: PlaneLayout[],
+): CombinedBufferLayout => {
+	const planes = getPlaneConfigs(format);
+
+	// 1. Let numPlanes be the number of planes as defined by format.
+	const numPlanes = planes.length;
+
+	// 2. If layout is not undefined and its length does not equal numPlanes, throw a TypeError.
+	if (layout !== undefined && layout.length !== numPlanes) {
+		throw new TypeError(`Layout must have ${numPlanes} planes.`);
+	}
+
+	// 3. Let minAllocationSize be 0.
+	let minAllocationSize = 0;
+
+	// 4. Let computedLayouts be a new list.
+	const computedLayouts: ComputedPlaneLayout[] = [];
+
+	// 5. Let endOffsets be a new list.
+	const endOffsets: number[] = [];
+
+	// 6. Let planeIndex be 0.
+	// 7. While planeIndex < numPlanes:
+	for (let planeIndex = 0; planeIndex < numPlanes; planeIndex++) {
+		const plane = planes[planeIndex]!;
+		const sampleBytes = plane.sampleBytes;
+		const sampleWidth = plane.widthDivisor;
+		const sampleHeight = plane.heightDivisor;
+
+		// Let computedLayout be a new computed plane layout.
+		const computedLayout: ComputedPlaneLayout = {
+			destinationOffset: 0,
+			destinationStride: 0,
+			sourceTop: 0,
+			sourceHeight: 0,
+			sourceLeftBytes: 0,
+			sourceWidthBytes: 0,
+		};
+
+		// Set computedLayout’s sourceTop...
+		computedLayout.sourceTop = Math.ceil(Math.trunc(parsedRect.y || 0) / sampleHeight);
+		// Set computedLayout’s sourceHeight...
+		computedLayout.sourceHeight = Math.ceil(Math.trunc(parsedRect.height || 0) / sampleHeight);
+		// Set computedLayout’s sourceLeftBytes...
+		computedLayout.sourceLeftBytes = Math.floor(Math.trunc(parsedRect.x || 0) / sampleWidth) * sampleBytes;
+		// Set computedLayout’s sourceWidthBytes...
+		computedLayout.sourceWidthBytes = Math.floor(Math.trunc(parsedRect.width || 0) / sampleWidth) * sampleBytes;
+
+		// If layout is not undefined:
+		if (layout !== undefined) {
+			const planeLayout = layout[planeIndex]!;
+			// If planeLayout.stride is less than computedLayout’s sourceWidthBytes, return a TypeError.
+			if (planeLayout.stride < computedLayout.sourceWidthBytes) {
+				throw new TypeError(`Stride for plane ${planeIndex} is too small.`);
+			}
+			// Assign planeLayout.offset to computedLayout’s destinationOffset.
+			computedLayout.destinationOffset = planeLayout.offset;
+			// Assign planeLayout.stride to computedLayout’s destinationStride.
+			computedLayout.destinationStride = planeLayout.stride;
+		} else {
+			// Otherwise:
+			// Assign minAllocationSize to computedLayout’s destinationOffset.
+			computedLayout.destinationOffset = minAllocationSize;
+			// Assign computedLayout’s sourceWidthBytes to computedLayout’s destinationStride.
+			computedLayout.destinationStride = computedLayout.sourceWidthBytes;
+		}
+
+		// Let planeSize be the product of multiplying computedLayout’s destinationStride and sourceHeight.
+		const planeSize = computedLayout.destinationStride * computedLayout.sourceHeight;
+
+		// Let planeEnd be the sum of planeSize and computedLayout’s destinationOffset.
+		const planeEnd = planeSize + computedLayout.destinationOffset;
+
+		// If planeSize or planeEnd is greater than maximum range of unsigned long, return a TypeError.
+		if (planeEnd > 4294967295) {
+			throw new TypeError('Allocation size exceeds limit.');
+		}
+
+		// Append planeEnd to endOffsets.
+		endOffsets.push(planeEnd);
+
+		// Assign the maximum of minAllocationSize and planeEnd to minAllocationSize.
+		minAllocationSize = Math.max(minAllocationSize, planeEnd);
+
+		// Check for overlap
+		for (let earlierPlaneIndex = 0; earlierPlaneIndex < planeIndex; earlierPlaneIndex++) {
+			const earlierLayout = computedLayouts[earlierPlaneIndex]!;
+			// If plane A ends before plane B starts, they do not overlap.
+			if (
+				endOffsets[planeIndex]! <= earlierLayout.destinationOffset
+				|| endOffsets[earlierPlaneIndex]! <= computedLayout.destinationOffset
+			) {
+				continue;
+			}
+
+			throw new TypeError('Planes overlap.');
+		}
+
+		computedLayouts.push(computedLayout);
+	}
+
+	// 12. Return combinedLayout.
+	return {
+		allocationSize: minAllocationSize,
+		computedLayouts: computedLayouts,
+	};
 };
 
 const AUDIO_SAMPLE_FORMATS = new Set<AudioSampleFormat>(
