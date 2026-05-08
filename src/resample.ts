@@ -20,7 +20,6 @@ export class AudioResampler {
 	targetSampleRate: number;
 	sourceNumberOfChannels: number | null = null;
 	targetNumberOfChannels: number;
-	startTime: number;
 	endTime: number;
 	onSample: (sample: AudioSample) => Promise<void>;
 
@@ -33,6 +32,7 @@ export class AudioResampler {
 	maxWrittenFrame: number | null = null;
 	channelMixer!: (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => number;
 	tempSourceBuffer!: Float32Array;
+	timestampOffset: number;
 
 	constructor(options: {
 		targetSampleRate: number;
@@ -43,7 +43,6 @@ export class AudioResampler {
 	}) {
 		this.targetSampleRate = options.targetSampleRate;
 		this.targetNumberOfChannels = options.targetNumberOfChannels;
-		this.startTime = options.startTime;
 		this.endTime = options.endTime;
 		this.onSample = options.onSample;
 
@@ -51,7 +50,11 @@ export class AudioResampler {
 		this.bufferSizeInSamples = this.bufferSizeInFrames * this.targetNumberOfChannels;
 
 		this.outputBuffer = new Float32Array(this.bufferSizeInSamples);
-		this.bufferStartFrame = Math.floor(this.startTime * this.targetSampleRate);
+
+		this.bufferStartFrame = Math.floor(options.startTime * this.targetSampleRate);
+		// Set to ensure that if the buffer start frame lands on a fractional sample, that the first timestamp still
+		// comes out as exactly startTime
+		this.timestampOffset = options.startTime - this.bufferStartFrame / this.targetSampleRate;
 	}
 
 	/**
@@ -273,7 +276,7 @@ export class AudioResampler {
 			format: 'f32',
 			sampleRate: this.targetSampleRate,
 			numberOfChannels: this.targetNumberOfChannels,
-			timestamp: timestampSeconds,
+			timestamp: timestampSeconds + this.timestampOffset,
 			data: outputData,
 		});
 

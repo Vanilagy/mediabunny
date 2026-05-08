@@ -96,7 +96,8 @@
 			input,
 			output,
 			audio: {
-				discard: true,
+				codec: 'aac',
+				forceTranscode: true,
 				//forceTranscode: true,
 				//sampleFormat: 's16',
 			},
@@ -125,7 +126,7 @@
 			},
 			*/
 			video: {
-				//discard: true,
+				discard: true,
 			},
 			tags: {} ?? {
 				title: 'Bigggy',
@@ -145,7 +146,9 @@
 				}
 			},
 			trim: {
-				end: 10,
+				start: 300.14984567374756 - 100,
+				end: 310.1548298151939 - 100,
+				//end: 10,
 				//start: startTime,
 				//end: startTime + 2,
 			},
