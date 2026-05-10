@@ -287,6 +287,52 @@ test('RGB conversion for ArrayBuffer-backed data', async () => {
 
 		expect(Array.from(dest)).toEqual(Array.from(src));
 	}
+
+	{
+		// RGBX -> RGBA: X (whatever it is) becomes 255 to mean A
+		const xSrc = new Uint8Array([
+			10, 20, 30, 0, 40, 50, 60, 77,
+			70, 80, 90, 128, 100, 110, 120, 200,
+		]);
+
+		using sample = new VideoSample(xSrc.slice(), {
+			timestamp: 0,
+			codedWidth: 2,
+			codedHeight: 2,
+			format: 'RGBX',
+		});
+
+		const dest = new Uint8Array(2 * 2 * 4);
+		await sample.copyTo(dest, { format: 'RGBA' });
+
+		expect(Array.from(dest)).toEqual([
+			10, 20, 30, 255, 40, 50, 60, 255,
+			70, 80, 90, 255, 100, 110, 120, 255,
+		]);
+	}
+
+	{
+		// RGBX -> BGRA: R and B swap, X becomes 255 to mean A
+		const xSrc = new Uint8Array([
+			10, 20, 30, 0, 40, 50, 60, 77,
+			70, 80, 90, 128, 100, 110, 120, 200,
+		]);
+
+		using sample = new VideoSample(xSrc.slice(), {
+			timestamp: 0,
+			codedWidth: 2,
+			codedHeight: 2,
+			format: 'RGBX',
+		});
+
+		const dest = new Uint8Array(2 * 2 * 4);
+		await sample.copyTo(dest, { format: 'BGRA' });
+
+		expect(Array.from(dest)).toEqual([
+			30, 20, 10, 255, 60, 50, 40, 255,
+			90, 80, 70, 255, 120, 110, 100, 255,
+		]);
+	}
 });
 
 test('crop (rect option) for ArrayBuffer-backed data', async () => {

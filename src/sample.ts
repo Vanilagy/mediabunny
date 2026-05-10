@@ -693,7 +693,7 @@ export class VideoSample implements Disposable {
 	}
 
 	/**
-	 * Returns the number of bytes required to hold this video sample's pixel data. Throws if `format` is `null`.
+	 * Returns the number of bytes required to hold this video sample's pixel data.
 	 */
 	allocationSize(options: VideoFrameCopyToOptions = {}): number {
 		validateVideoFrameCopyToOptions(options);
@@ -718,7 +718,7 @@ export class VideoSample implements Disposable {
 	}
 
 	/**
-	 * Copies this video sample's pixel data to an ArrayBuffer or ArrayBufferView. Throws if `format` is `null`.
+	 * Copies this video sample's pixel data to an ArrayBuffer or ArrayBufferView.
 	 * @returns The byte layout of the planes of the copied data.
 	 */
 	async copyTo(destination: AllowSharedBufferSource, options: VideoFrameCopyToOptions = {}): Promise<PlaneLayout[]> {
@@ -731,7 +731,7 @@ export class VideoSample implements Disposable {
 			throw new Error('VideoSample is closed.');
 		}
 		if ((options.format ?? this.format) == null) {
-			throw new Error('Cannot copy video sample data when format is null. Sorry!');
+			throw new Error('Cannot copy video sample data when format is null.');
 		}
 
 		assert(this._data !== null);
@@ -740,9 +740,10 @@ export class VideoSample implements Disposable {
 			return this._data.copyTo(destination, options);
 		}
 
+		// Detect non-RGB to RGB conversion
 		if (
 			options.format
-			&& this.format !== options.format
+			&& !['RGBA', 'RGBX', 'BGRA', 'BGRX'].includes(this.format!)
 			&& ['RGBA', 'RGBX', 'BGRA', 'BGRX'].includes(options.format)
 		) {
 			// RGB conversion for custom VideoSampleResource
@@ -759,15 +760,16 @@ export class VideoSample implements Disposable {
 				if (!(rgbSample instanceof VideoSample)) {
 					throw new TypeError('toRgbSample() must return a VideoSample.');
 				}
-				if (rgbSample.format !== options.format) {
+				if (!['RGBA', 'RGBX', 'BGRA', 'BGRX'].includes(rgbSample.format!)) {
 					throw new Error(
-						`Sample returned by toRgbSample was expected to have format '${options.format}', got`
+						`Sample returned by toRgbSample was expected to have an RGB format, got`
 						+ ` '${rgbSample.format}' instead.`,
 					);
 				}
+				// Note that we DON'T force the RGB format to be exactly what was requested; any RGB format will do
 
 				return await rgbSample.copyTo(destination, options); // 'await' is intentional here cuz of using
-			} else if (!['RGBA', 'RGBX', 'BGRA', 'BGRX'].includes(this.format!)) {
+			} else {
 				if (typeof VideoFrame === 'undefined') {
 					throw new Error(
 						'For this sample, converting from a non-RGB to an RGB format requires VideoFrame to'
@@ -841,6 +843,8 @@ export class VideoSample implements Disposable {
 			}];
 		}
 
+		// Algo taken from WebCodecs spec:
+
 		// 6. Let p be a new Promise. (Implicit)
 		// 7. Let copyStepsQueue be the result of starting a new parallel queue. (Implicit)
 		// 8. Let planeLayouts be a new list.
@@ -908,16 +912,27 @@ export class VideoSample implements Disposable {
 			planeLayouts.push(layout);
 		}
 
-		// RGB conversion for ArrayBuffer and canvas-backed samples
-		if (options.format !== undefined && !(this._data instanceof VideoSampleResource)) {
+		// Now, handle converting between different RGB formats
+		if (options.format !== undefined) {
 			const needsRgbConversion = this.format.startsWith('RGB') !== options.format.startsWith('RGB');
-			if (needsRgbConversion) {
-				// Loop over the destination bytes, swapping R and B
+
+			// Going X->A requires setting the alpha to 255, going the other way doesn't since the value of X is w/e
+			const needsAlphaConversion = this.format.includes('X') && options.format.includes('A');
+
+			if (needsRgbConversion || needsAlphaConversion) {
+				// Loop over the destination bytes
 				for (let i = 0; i < combinedLayout.allocationSize; i += 4) {
-					const r = destBytes[i]!;
-					const b = destBytes[i + 2]!;
-					destBytes[i] = b;
-					destBytes[i + 2] = r;
+					if (needsRgbConversion) {
+						// Swap R with B
+						const r = destBytes[i]!;
+						const b = destBytes[i + 2]!;
+						destBytes[i] = b;
+						destBytes[i + 2] = r;
+					}
+
+					if (needsAlphaConversion) {
+						destBytes[i + 3] = 255;
+					}
 				}
 			}
 		}
@@ -938,10 +953,48 @@ export class VideoSample implements Disposable {
 		assert(this._data !== null);
 
 		if (this._data instanceof VideoSampleResource) {
-			throw new Error(
-				'Creating a VideoFrame from a VideoSampleResource is currently not supported. To work around this,'
-				+ ' copy the data into a buffer and then create a VideoFrame from it.',
-			);
+			if (this.format === null) {
+				throw new Error(
+					'Cannot convert a VideoSampleResource-backed VideoSample to VideoFrame if format is null.',
+				);
+			}
+
+			const planes = this._data.getDataPlanes();
+			if (planes instanceof Promise) {
+				throw new Error(
+					'Cannot convert a VideoSampleResource-backed VideoSample to VideoFrame if getDataPlanes() returns'
+					+ ' a promise.',
+				);
+			}
+
+			// We can't use allocationSize since that method assumes a tight packing
+			const size = planes.reduce((a, b) => a + b.data.byteLength, 0);
+			const buffer = new Uint8Array(size);
+
+			let offset = 0;
+			const offsets: number[] = [];
+
+			for (const plane of planes) {
+				buffer.set(plane.data, offset);
+				offsets.push(offset);
+
+				offset += plane.data.byteLength;
+			}
+
+			return new VideoFrame(buffer, {
+				format: this.format as VideoPixelFormat,
+				layout: planes.map((x, i) => ({
+					offset: offsets[i]!,
+					stride: x.stride,
+				})),
+				codedWidth: this.codedWidth,
+				codedHeight: this.codedHeight,
+				timestamp: this.microsecondTimestamp,
+				duration: this.microsecondDuration,
+				colorSpace: this.colorSpace,
+				displayWidth: this.squarePixelWidth, // Not display* since we're not passing rotation
+				displayHeight: this.squarePixelHeight,
+			});
 		} else if (isVideoFrame(this._data)) {
 			return new VideoFrame(this._data, {
 				timestamp: this.microsecondTimestamp,
@@ -955,6 +1008,8 @@ export class VideoSample implements Disposable {
 				timestamp: this.microsecondTimestamp,
 				duration: this.microsecondDuration || undefined,
 				colorSpace: this.colorSpace,
+				displayWidth: this.squarePixelWidth, // Not display* since we're not passing rotation
+				displayHeight: this.squarePixelHeight,
 			});
 		} else {
 			return new VideoFrame(this._data, {

@@ -5,8 +5,10 @@ import {
 	VideoSample,
 	AudioSampleResource,
 	AudioSample,
+	VideoDataPlane,
+	VideoSampleInit,
 } from '../../src/sample.js';
-import { toUint8Array } from '../../src/misc.js';
+import { MaybePromise, SetRequired, toUint8Array } from '../../src/misc.js';
 
 class ImageVideoSampleResource extends VideoSampleResource {
 	constructor(public image: HTMLImageElement | null) {
@@ -42,23 +44,28 @@ class ImageVideoSampleResource extends VideoSampleResource {
 		});
 	}
 
-	allocationSize() {
-		return this.image!.width * this.image!.height * 4;
-	}
-
-	copyTo(destination: AllowSharedBufferSource): PlaneLayout[] {
+	getDataPlanes(): MaybePromise<VideoDataPlane[]> {
 		const canvas = new OffscreenCanvas(this.image!.width, this.image!.height);
 		const ctx = canvas.getContext('2d')!;
 
 		ctx.drawImage(this.image!, 0, 0);
 
 		const imageData = ctx.getImageData(0, 0, this.image!.width, this.image!.height);
-		toUint8Array(destination).set(imageData.data);
 
 		return [{
-			offset: 0,
+			data: toUint8Array(imageData.data),
 			stride: this.image!.width * 4,
 		}];
+	}
+
+	toRgbSample(
+		init: SetRequired<VideoSampleInit, 'timestamp'>,
+		// eslint-disable-next-line @typescript-eslint/no-unused-vars
+		format: 'RGBA' | 'RGBX' | 'BGRA' | 'BGRX',
+		// eslint-disable-next-line @typescript-eslint/no-unused-vars
+		colorSpace: PredefinedColorSpace,
+	): MaybePromise<VideoSample> {
+		return new VideoSample(this, init);
 	}
 
 	close() {
@@ -91,6 +98,15 @@ test('Custom VideoSample resource usage', async () => {
 	expect([...imageData.data.slice(0, 4)]).toEqual([255, 0, 0, 255]);
 
 	videoFrame.close();
+
+	const size = sample.allocationSize();
+	expect(size).toBe(2048 * 2048 * 4);
+
+	const buf = new ArrayBuffer(size);
+	await sample.copyTo(buf);
+	await sample.copyTo(buf, { format: 'RGBX' });
+	await sample.copyTo(buf, { format: 'BGRA' });
+	await sample.copyTo(buf, { format: 'BGRX' });
 
 	const clone = sample.clone();
 	sample.close();
@@ -140,32 +156,9 @@ class AudioBufferAudioSampleResource extends AudioSampleResource {
 		return this.timestamp;
 	}
 
-	allocationSize() {
-		const frameCount = this.audioBuffer!.length;
-		return frameCount * Float32Array.BYTES_PER_ELEMENT;
-	}
-
-	copyTo(destination: AllowSharedBufferSource, options: AudioDataCopyToOptions): void {
-		const frameCount = this.audioBuffer!.length;
-		const planeIndex = options.planeIndex;
-
-		const channel = this.audioBuffer!.getChannelData(planeIndex);
-
-		let destView: Float32Array;
-		if (destination instanceof ArrayBuffer) {
-			destView = new Float32Array(destination);
-		} else if (destination instanceof SharedArrayBuffer) {
-			destView = new Float32Array(destination);
-		} else {
-			destView = new Float32Array(destination.buffer, destination.byteOffset, destination.byteLength / 4);
-		}
-
-		const frameOffset = options.frameOffset ?? 0;
-		const copyFrameCount = options.frameCount !== undefined ? options.frameCount : (frameCount - frameOffset);
-
-		for (let i = 0; i < copyFrameCount; i++) {
-			destView[i] = channel[i + frameOffset]!;
-		}
+	getDataPlane(planeIndex: number): Uint8Array {
+		const data = this.audioBuffer!.getChannelData(planeIndex);
+		return toUint8Array(data);
 	}
 
 	close() {
@@ -194,6 +187,11 @@ test('Custom AudioSample resource usage', async () => {
 	expect(sample.numberOfChannels).toBe(2);
 	expect(sample.timestamp).toBe(0);
 	expect(sample.duration).toBeCloseTo(1);
+
+	const size1 = sample.allocationSize({ planeIndex: 0 });
+	const size2 = sample.allocationSize({ planeIndex: 1 });
+	expect(size1).toBe(48000 * 4);
+	expect(size2).toBe(48000 * 4);
 
 	const buffer = new ArrayBuffer(48000 * 4);
 	sample.copyTo(buffer, { planeIndex: 0 });
