@@ -615,15 +615,6 @@ export class VideoSample implements Disposable {
 		finalizationRegistry?.register(this, { type: 'video', data: this._data }, this);
 	}
 
-	getUnderlyingData() {
-		if (this._closed) {
-			throw new Error('VideoSample is closed.');
-		}
-
-		assert(this._data !== null);
-		return this._data;
-	}
-
 	/** Clones this video sample. */
 	clone() {
 		if (this._closed) {
@@ -1881,15 +1872,7 @@ export abstract class AudioSampleResource {
 	 */
 	abstract close(): void;
 
-	/**
-	 * Returns the number of bytes required to hold the underlying audio data as specified by the given options.
-	 */
-	abstract allocationSize(options: AudioSampleCopyToOptions): number;
-
-	/**
-	 * Copies the underlying audio data to an ArrayBuffer or ArrayBufferView as specified by the given options.
-	 */
-	abstract copyTo(destination: AllowSharedBufferSource, options: AudioSampleCopyToOptions): void;
+	abstract getDataPlane(planeIndex: number): Uint8Array;
 }
 
 /**
@@ -2004,10 +1987,30 @@ export class AudioSample implements Disposable {
 			init._referenceCount++;
 
 			this.format = init.getFormat();
+			if (!AUDIO_SAMPLE_FORMATS.has(this.format)) {
+				throw new TypeError('getFormat() must return an AudioSampleFormat.');
+			}
+
 			this.sampleRate = init.getSampleRate();
+			if (!Number.isInteger(this.sampleRate) || this.sampleRate <= 0) {
+				throw new TypeError('getSampleRate() must return a positive integer.');
+			}
+
 			this.numberOfFrames = init.getNumberOfFrames();
+			if (!Number.isInteger(this.numberOfFrames) || this.numberOfFrames < 0) {
+				throw new TypeError('getNumberOfFrames() must return a non-negative integer.');
+			}
+
 			this.numberOfChannels = init.getNumberOfChannels();
+			if (!Number.isInteger(this.numberOfChannels) || this.numberOfChannels <= 0) {
+				throw new TypeError('getNumberOfChannels() must return a positive integer.');
+			}
+
 			this.timestamp = init.getTimestamp();
+			if (!Number.isFinite(this.timestamp)) {
+				throw new TypeError('getTimestamp() must return a finite number.');
+			}
+
 			this.duration = this.numberOfFrames / this.sampleRate;
 		} else {
 			if (!init || typeof init !== 'object') {
@@ -2084,10 +2087,6 @@ export class AudioSample implements Disposable {
 			throw new Error('AudioSample is closed.');
 		}
 
-		if (this._data instanceof AudioSampleResource) {
-			return this._data.allocationSize(options);
-		}
-
 		const destFormat = options.format ?? this.format;
 
 		const frameOffset = options.frameOffset ?? 0;
@@ -2140,11 +2139,8 @@ export class AudioSample implements Disposable {
 			throw new Error('AudioSample is closed.');
 		}
 
-		if (this._data instanceof AudioSampleResource) {
-			return this._data.copyTo(destination, options);
-		}
-
-		const { planeIndex, format, frameCount: optFrameCount, frameOffset: optFrameOffset } = options;
+		const { format, frameCount: optFrameCount, frameOffset: optFrameOffset } = options;
+		let { planeIndex } = options;
 
 		const srcFormat = this.format;
 		const destFormat = format ?? this.format;
@@ -2204,11 +2200,50 @@ export class AudioSample implements Disposable {
 				});
 			}
 		} else {
-			const uint8Data = this._data;
-			const srcView = toDataView(uint8Data);
 			const readFn = getReadFunction(srcFormat);
 			const srcBytesPerSample = getBytesPerSample(srcFormat);
 			const srcIsPlanar = formatIsPlanar(srcFormat);
+
+			let uint8Data: Uint8Array;
+			if (this._data instanceof AudioSampleResource) {
+				const getDataPlaneValidated = (index: number) => {
+					const result = (this._data as AudioSampleResource).getDataPlane(index);
+					if (!(result instanceof Uint8Array)) {
+						throw new TypeError('getDataPlane() must return a Uint8Array.');
+					}
+
+					const expectedSize = numFrames * srcBytesPerSample * (srcIsPlanar ? 1 : numChannels);
+					if (result.byteLength !== expectedSize) {
+						throw new TypeError(
+							`Data plane ${index} has invalid size. Expected exactly ${expectedSize} bytes, got`
+							+ ` ${result.byteLength} bytes.`,
+						);
+					}
+
+					return result;
+				};
+
+				if (srcIsPlanar) {
+					if (destIsPlanar) {
+						// Only one source plane will be extracted, so let's fetch only that one
+						uint8Data = getDataPlaneValidated(planeIndex);
+						planeIndex = 0; // To fix the subsequent access
+					} else {
+						// Pack all planes tightly together
+						uint8Data = new Uint8Array(numFrames * srcBytesPerSample * numChannels);
+						for (let ch = 0; ch < numChannels; ch++) {
+							const planeData = getDataPlaneValidated(ch);
+							uint8Data.set(planeData, ch * numFrames * srcBytesPerSample);
+						}
+					}
+				} else {
+					uint8Data = getDataPlaneValidated(0); // That's the only plane there is
+				}
+			} else {
+				uint8Data = this._data;
+			}
+
+			const srcView = toDataView(uint8Data);
 
 			for (let i = 0; i < copyFrameCount; i++) {
 				if (destIsPlanar) {

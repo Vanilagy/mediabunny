@@ -165,10 +165,8 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			assert(this.codecContext);
 		}
 
-		const underlyingData = videoSample.getUnderlyingData();
-
-		if (underlyingData instanceof NodeAvFrameVideoSampleResource) {
-			this.frame.ref(underlyingData.frame);
+		if (videoSample._data instanceof NodeAvFrameVideoSampleResource) {
+			this.frame.ref(videoSample._data.frame);
 		} else {
 			if (videoSample.format === null) {
 				throw new Error('Cannot encode foreign VideoSample with unknown (null) format.');

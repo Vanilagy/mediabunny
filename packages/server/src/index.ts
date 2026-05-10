@@ -1,7 +1,9 @@
 import { registerDecoder, registerEncoder } from 'mediabunny';
-import { NodeAvVideoDecoder } from './video-decoder';
 import * as NodeAv from 'node-av';
+import { NodeAvVideoDecoder } from './video-decoder';
 import { NodeAvVideoEncoder } from './video-encoder';
+import { NodeAvAudioDecoder } from './audio-decoder';
+import { NodeAvAudioEncoder } from './audio-encoder';
 
 const SERVER_LOADED_SYMBOL = Symbol.for('@mediabunny/server loaded');
 if ((globalThis as Record<symbol, unknown>)[SERVER_LOADED_SYMBOL]) {
@@ -23,6 +25,11 @@ export const registerMediabunnyServer = () => {
 
 	NodeAv.Log.setLevel(NodeAv.AV_LOG_ERROR);
 
+	// Video
 	registerDecoder(NodeAvVideoDecoder);
 	registerEncoder(NodeAvVideoEncoder);
+
+	// Audio
+	registerDecoder(NodeAvAudioDecoder);
+	registerEncoder(NodeAvAudioEncoder);
 };

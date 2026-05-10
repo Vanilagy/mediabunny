@@ -9,6 +9,12 @@ export const CODEC_TO_CODEC_ID: Partial<Record<MediaCodec, NodeAv.AVCodecID>> = 
 	av1: NodeAv.AV_CODEC_ID_AV1,
 
 	aac: NodeAv.AV_CODEC_ID_AAC,
+	opus: NodeAv.AV_CODEC_ID_OPUS,
+	mp3: NodeAv.AV_CODEC_ID_MP3,
+	vorbis: NodeAv.AV_CODEC_ID_VORBIS,
+	flac: NodeAv.AV_CODEC_ID_FLAC,
+	ac3: NodeAv.AV_CODEC_ID_AC3,
+	eac3: NodeAv.AV_CODEC_ID_EAC3,
 };
 
 let cachedHardwareContext: NodeAv.HardwareContext | null | undefined = undefined;

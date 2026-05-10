@@ -3,13 +3,14 @@ import { registerMediabunnyServer } from '@mediabunny/server';
 import { Input } from '../../src/input.js';
 import { BufferSource, FilePathSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
-import { assert, toUint8Array } from '../../src/misc.js';
-import { EncodedPacketSink, VideoSampleSink } from '../../src/media-sink.js';
+import { assert, last, toUint8Array } from '../../src/misc.js';
+import { AudioSampleSink, EncodedPacketSink, VideoSampleSink } from '../../src/media-sink.js';
 import { NodeAvVideoDecoder } from '../../packages/server/src/video-decoder.js';
 import { NodeAvVideoEncoder } from '../../packages/server/src/video-encoder.js';
 import { NodeAvAudioDecoder } from '../../packages/server/src/audio-decoder.js';
+import { NodeAvAudioEncoder } from '../../packages/server/src/audio-encoder.js';
 import { AudioSample, VideoSample } from '../../src/sample.js';
-import { buildVideoCodecString, VideoCodec } from '../../src/codec.js';
+import { AudioCodec, buildAudioCodecString, buildVideoCodecString, VideoCodec } from '../../src/codec.js';
 import { EncodedPacket } from '../../src/packet.js';
 import {
 	AvcNalUnitType,
@@ -24,6 +25,7 @@ import { Mp4OutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
 import { Conversion } from '../../src/conversion.js';
 import { NodeAvFrameVideoSampleResource } from '../../packages/server/src/video-sample.js';
+import { NodeAvFrameAudioSampleResource } from '../../packages/server/src/audio-sample.js';
 
 beforeAll(() => {
 	registerMediabunnyServer();
@@ -600,7 +602,7 @@ describe('Video', async () => {
 		using sample = await sink.getSample(0);
 		assert(sample);
 
-		expect(sample.getUnderlyingData()).toBeInstanceOf(NodeAvFrameVideoSampleResource);
+		expect(sample._data).toBeInstanceOf(NodeAvFrameVideoSampleResource);
 		expect(sample.format).toBe('I420');
 		expect(sample.codedWidth).toBe(1920);
 		expect(sample.codedHeight).toBe(1080);
@@ -736,7 +738,6 @@ describe('Video', async () => {
 	});
 });
 
-/*
 describe('Audio', async () => {
 	test('Decoder lifecycle', async () => {
 		using input = new Input({
@@ -807,5 +808,515 @@ describe('Audio', async () => {
 
 		await decoder.close();
 	});
+
+	test('Encoder lifecycle', async () => {
+		const encoder = new NodeAvAudioEncoder();
+		// @ts-expect-error Readonly
+		encoder.codec = 'aac';
+		// @ts-expect-error Readonly
+		encoder.config = {
+			codec: buildAudioCodecString('aac', 2, 48000),
+			numberOfChannels: 2,
+			sampleRate: 48000,
+			bitrate: 128000,
+		} satisfies AudioEncoderConfig;
+
+		let packetCount = 0;
+
+		// @ts-expect-error Readonly
+		encoder.onPacket = (packet: EncodedPacket, meta: EncodedAudioChunkMetadata) => {
+			expect(packet.duration).toBe(1024 / 48000);
+			expect(packet.type).toBe('key');
+
+			if (packetCount === 0) {
+				expect(packet.timestamp).toBe(0);
+
+				expect(meta.decoderConfig).toBeDefined();
+				expect(meta.decoderConfig!.codec).toBe('mp4a.40.2');
+				expect(meta.decoderConfig!.numberOfChannels).toBe(2);
+				expect(meta.decoderConfig!.sampleRate).toBe(48000);
+				expect(meta.decoderConfig?.description).toBeDefined();
+			}
+
+			packetCount++;
+		};
+
+		await encoder.init();
+
+		const data = createF32SineWave(48000, 2, 2);
+		using sample1 = new AudioSample({
+			data,
+			format: 'f32',
+			timestamp: 0,
+			numberOfChannels: 2,
+			sampleRate: 48000,
+		});
+		await encoder.encode(sample1);
+
+		await encoder.flush();
+
+		const minPacketCount = 2 * 48000 / 1024;
+		expect(packetCount).toBeGreaterThan(minPacketCount);
+
+		packetCount = 0;
+
+		using sample2 = new AudioSample({
+			data,
+			format: 'f32',
+			timestamp: 0,
+			numberOfChannels: 2,
+			sampleRate: 48000,
+		});
+		await encoder.encode(sample2);
+
+		await encoder.flush();
+
+		expect(packetCount).toBeGreaterThan(minPacketCount);
+
+		await encoder.close();
+	});
+
+	const createF32SineWave = (sampleRate: number, channels: number, durationSeconds: number) => {
+		const totalFrames = sampleRate * durationSeconds;
+		const data = new Float32Array(totalFrames * channels);
+
+		for (let i = 0; i < totalFrames; i++) {
+			const value = Math.sin(2 * Math.PI * 440 * i / sampleRate);
+			for (let ch = 0; ch < channels; ch++) {
+				data[i * channels + ch] = value;
+			}
+		}
+
+		return data;
+	};
+
+	test('AAC encode & decode, AAC format', async () => {
+		await encodeDecodeTest('aac', {
+			// @ts-expect-error Fucky type
+			aac: { format: 'aac' },
+		}, async (packet, meta, i) => {
+			expect(packet.type).toBe('key');
+			expect(packet.duration).toBe(1024 / 48000);
+
+			if (i === 0) {
+				expect(meta.decoderConfig).toBeDefined();
+				expect(meta.decoderConfig!.codec).toBe('mp4a.40.2');
+				expect(meta.decoderConfig!.numberOfChannels).toBe(2);
+				expect(meta.decoderConfig!.sampleRate).toBe(48000);
+				expect(meta.decoderConfig!.description).toBeDefined();
+			}
+		}, async (sample) => {
+			expect(sample.duration).toBe(1024 / 48000);
+			expect(sample.numberOfChannels).toBe(2);
+			expect(sample.sampleRate).toBe(48000);
+		});
+	});
+
+	test('AAC encode & decode, ADTS format', async () => {
+		await encodeDecodeTest('aac', {
+			// @ts-expect-error Fucky type
+			aac: { format: 'adts' },
+		}, async (packet, meta, i) => {
+			expect(packet.type).toBe('key');
+			expect(packet.duration).toBe(1024 / 48000);
+			expect(packet.data[0]).toBe(0xff);
+
+			if (i === 0) {
+				expect(meta.decoderConfig).toBeDefined();
+				expect(meta.decoderConfig!.codec).toBe('mp4a.40.2');
+				expect(meta.decoderConfig!.numberOfChannels).toBe(2);
+				expect(meta.decoderConfig!.sampleRate).toBe(48000);
+				expect(meta.decoderConfig!.description).toBeUndefined();
+			}
+		}, async (sample) => {
+			expect(sample.duration).toBe(1024 / 48000);
+			expect(sample.numberOfChannels).toBe(2);
+			expect(sample.sampleRate).toBe(48000);
+		});
+	});
+
+	test('Opus encode & decode', async () => {
+		await encodeDecodeTest('opus', {}, async (packet, meta, i, n) => {
+			expect(packet.type).toBe('key');
+
+			if (i < n - 1) {
+				expect(packet.duration).toBe(0.02);
+			}
+
+			if (i === 0) {
+				expect(meta.decoderConfig).toBeDefined();
+				expect(meta.decoderConfig!.codec).toBe('opus');
+				expect(meta.decoderConfig!.numberOfChannels).toBe(2);
+				expect(meta.decoderConfig!.sampleRate).toBe(48000);
+				expect(meta.decoderConfig!.description).toBeDefined();
+				expect([...toUint8Array(meta.decoderConfig!.description!).slice(0, 8)]).toEqual([
+					// OpusHead
+					0x4f, 0x70, 0x75, 0x73, 0x48, 0x65, 0x61, 0x64,
+				]);
+			}
+		}, async (sample, i, n) => {
+			expect(sample.numberOfChannels).toBe(2);
+			expect(sample.sampleRate).toBe(48000);
+
+			if (i > 0 && i < n - 1) {
+				expect(sample.duration).toBe(0.02);
+			}
+		});
+	});
+
+	test('MP3 encode & decode', async () => {
+		await encodeDecodeTest('mp3', {}, async (packet, meta, i, n) => {
+			expect(packet.type).toBe('key');
+
+			if (i < n - 1) {
+				expect(packet.duration).toBe(1152 / 48000);
+			}
+
+			if (i === 0) {
+				expect(meta.decoderConfig).toBeDefined();
+				expect(meta.decoderConfig!.codec).toBe('mp3');
+				expect(meta.decoderConfig!.numberOfChannels).toBe(2);
+				expect(meta.decoderConfig!.sampleRate).toBe(48000);
+				expect(meta.decoderConfig!.description).toBeUndefined();
+			}
+		}, async (sample) => {
+			expect(sample.numberOfChannels).toBe(2);
+			expect(sample.sampleRate).toBe(48000);
+			expect(sample.duration).toBe(1152 / 48000);
+		});
+	});
+
+	test('Vorbis encode & decode', async () => {
+		await encodeDecodeTest('vorbis', {}, async (packet, meta, i) => {
+			expect(packet.type).toBe('key');
+
+			if (i === 0) {
+				expect(meta.decoderConfig).toBeDefined();
+				expect(meta.decoderConfig!.codec).toBe('vorbis');
+				expect(meta.decoderConfig!.numberOfChannels).toBe(2);
+				expect(meta.decoderConfig!.sampleRate).toBe(48000);
+				expect(meta.decoderConfig!.description).toBeDefined();
+				expect(toUint8Array(meta.decoderConfig!.description!)[0]).toBe(2); // "Xiph extradata format"
+			}
+		}, async (sample) => {
+			expect(sample.numberOfChannels).toBe(2);
+			expect(sample.sampleRate).toBe(48000);
+		});
+	});
+
+	test('FLAC encode & decode', async () => {
+		await encodeDecodeTest('flac', {}, async (packet, meta, i) => {
+			expect(packet.type).toBe('key');
+			expect(packet.duration).toBe(0.096);
+
+			if (i === 0) {
+				expect(meta.decoderConfig).toBeDefined();
+				expect(meta.decoderConfig!.codec).toBe('flac');
+				expect(meta.decoderConfig!.numberOfChannels).toBe(2);
+				expect(meta.decoderConfig!.sampleRate).toBe(48000);
+				expect(meta.decoderConfig!.description).toBeDefined();
+				expect([...toUint8Array(meta.decoderConfig!.description!).slice(0, 4)]).toEqual([
+					// fLaC
+					0x66, 0x4c, 0x61, 0x43,
+				]);
+			}
+		}, async (sample) => {
+			expect(sample.numberOfChannels).toBe(2);
+			expect(sample.sampleRate).toBe(48000);
+			expect(sample.duration).toBe(0.096);
+		});
+	});
+
+	test('AC-3 encode & decode', async () => {
+		await encodeDecodeTest('ac3', {}, async (packet, meta, i) => {
+			expect(packet.type).toBe('key');
+			expect(packet.duration).toBe(0.032);
+
+			if (i === 0) {
+				expect(meta.decoderConfig).toBeDefined();
+				expect(meta.decoderConfig!.codec).toBe('ac-3');
+				expect(meta.decoderConfig!.numberOfChannels).toBe(2);
+				expect(meta.decoderConfig!.sampleRate).toBe(48000);
+				expect(meta.decoderConfig!.description).toBeUndefined();
+			}
+		}, async (sample) => {
+			expect(sample.numberOfChannels).toBe(2);
+			expect(sample.sampleRate).toBe(48000);
+			expect(sample.duration).toBe(0.032);
+		});
+	});
+
+	test('E-AC-3 encode & decode', async () => {
+		await encodeDecodeTest('eac3', {}, async (packet, meta, i) => {
+			expect(packet.type).toBe('key');
+			expect(packet.duration).toBe(0.032);
+
+			if (i === 0) {
+				expect(meta.decoderConfig).toBeDefined();
+				expect(meta.decoderConfig!.codec).toBe('ec-3');
+				expect(meta.decoderConfig!.numberOfChannels).toBe(2);
+				expect(meta.decoderConfig!.sampleRate).toBe(48000);
+				expect(meta.decoderConfig!.description).toBeUndefined();
+			}
+		}, async (sample) => {
+			expect(sample.numberOfChannels).toBe(2);
+			expect(sample.sampleRate).toBe(48000);
+			expect(sample.duration).toBe(0.032);
+		});
+	});
+
+	const encodeDecodeTest = async (
+		codec: AudioCodec,
+		extraConfig: Partial<AudioEncoderConfig>,
+		onPacket: (packet: EncodedPacket, meta: EncodedAudioChunkMetadata, i: number, n: number) => Promise<void>,
+		onSample: (sample: AudioSample, i: number, n: number) => Promise<void>,
+	) => {
+		const sampleRate = 48000;
+		const numberOfChannels = 2;
+
+		const encoder = new NodeAvAudioEncoder();
+		// @ts-expect-error Readonly
+		encoder.codec = codec;
+		// @ts-expect-error Readonly
+		encoder.config = {
+			codec: buildAudioCodecString(codec, numberOfChannels, sampleRate),
+			numberOfChannels,
+			sampleRate,
+			bitrate: 128000,
+			...extraConfig,
+		} satisfies AudioEncoderConfig;
+
+		const packets: EncodedPacket[] = [];
+		const metas: EncodedAudioChunkMetadata[] = [];
+
+		// @ts-expect-error Readonly
+		encoder.onPacket = (packet: EncodedPacket, meta: EncodedAudioChunkMetadata) => {
+			packets.push(packet);
+			metas.push(meta);
+		};
+
+		await encoder.init();
+
+		const data = createF32SineWave(sampleRate, numberOfChannels, 2);
+		using inputSample = new AudioSample({
+			data,
+			format: 'f32',
+			timestamp: 0,
+			numberOfChannels,
+			sampleRate,
+		});
+		await encoder.encode(inputSample);
+
+		await encoder.flush();
+
+		for (let i = 0; i < packets.length; i++) {
+			await onPacket(packets[i]!, metas[i]!, i, packets.length);
+		}
+
+		const decoder = new NodeAvAudioDecoder();
+		// @ts-expect-error Readonly
+		decoder.codec = codec;
+		// @ts-expect-error Readonly
+		decoder.config = metas[0]!.decoderConfig!;
+
+		const decodedSamples: AudioSample[] = [];
+
+		// @ts-expect-error Readonly
+		decoder.onSample = (sample: AudioSample) => {
+			decodedSamples.push(sample);
+		};
+
+		await decoder.init();
+
+		for (const packet of packets) {
+			await decoder.decode(packet);
+		}
+
+		await decoder.flush();
+
+		expect(decodedSamples.length).toBeGreaterThan(0);
+		expect(last(decodedSamples)!.timestamp + last(decodedSamples)!.duration).toBeGreaterThanOrEqual(2);
+
+		for (let i = 0; i < decodedSamples.length; i++) {
+			await onSample(decodedSamples[i]!, i, decodedSamples.length);
+		}
+
+		const signalChunks: Float32Array[] = [];
+
+		for (const sample of decodedSamples) {
+			const buf = new Float32Array(new ArrayBuffer(sample.allocationSize({
+				format: 'f32-planar', planeIndex: 0,
+			})));
+			sample.copyTo(buf, { format: 'f32-planar', planeIndex: 0 });
+			signalChunks.push(buf);
+
+			sample.close();
+		}
+
+		const totalSize = signalChunks.reduce((sum, chunk) => sum + chunk.length, 0);
+		const signal = new Float32Array(totalSize);
+		let offset = 0;
+		for (const chunk of signalChunks) {
+			signal.set(chunk, offset);
+			offset += chunk.length;
+		}
+
+		const score = sine440Score(signal, sampleRate, 440);
+		expect(score).toBeGreaterThan(0.98);
+
+		await encoder.close();
+		await decoder.close();
+	};
+
+	const sine440Score = (x: Float32Array, sampleRate: number, freq: number) => {
+		const w = 2 * Math.PI * freq / sampleRate;
+
+		let ss = 0, cc = 0, sc = 0;
+		let xs = 0, xc = 0;
+		let xx = 0;
+
+		for (let n = 0; n < x.length; n++) {
+			const s = Math.sin(w * n);
+			const c = Math.cos(w * n);
+
+			ss += s * s;
+			cc += c * c;
+			sc += s * c;
+
+			xs += x[n]! * s;
+			xc += x[n]! * c;
+			xx += x[n]! * x[n]!;
+		}
+
+		const det = ss * cc - sc * sc;
+
+		const a = (xs * cc - xc * sc) / det;
+		const b = (xc * ss - xs * sc) / det;
+
+		let fitEnergy = 0;
+
+		for (let n = 0; n < x.length; n++) {
+			const y = a * Math.sin(w * n) + b * Math.cos(w * n);
+			fitEnergy += y * y;
+		}
+
+		const score = fitEnergy / xx;
+		return score;
+	};
+
+	test('AAC conversion roundtrip', { timeout: 10_000 }, async () => {
+		await conversionRoundtrip('aac');
+	});
+
+	test('Opus conversion roundtrip', { timeout: 10_000 }, async () => {
+		await conversionRoundtrip('opus');
+	});
+
+	test('MP3 conversion roundtrip', { timeout: 10_000 }, async () => {
+		await conversionRoundtrip('mp3');
+	});
+
+	test('Vorbis conversion roundtrip', { timeout: 10_000 }, async () => {
+		await conversionRoundtrip('vorbis');
+	});
+
+	test('FLAC conversion roundtrip', { timeout: 10_000 }, async () => {
+		await conversionRoundtrip('flac');
+	});
+
+	test('AC-3 conversion roundtrip', { timeout: 10_000 }, async () => {
+		await conversionRoundtrip('ac3');
+	});
+
+	test('E-AC-3 conversion roundtrip', { timeout: 10_000 }, async () => {
+		await conversionRoundtrip('eac3');
+	});
+
+	const conversionRoundtrip = async (codec: AudioCodec) => {
+		using input = new Input({
+			source: new FilePathSource('./test/public/trim-buck-bunny-ffmpeg.ts'),
+			formats: ALL_FORMATS,
+		});
+
+		const output = new Output({
+			format: new Mp4OutputFormat(),
+			target: new BufferTarget(),
+		});
+
+		const inputTrack = await input.getPrimaryAudioTrack();
+		assert(inputTrack);
+
+		const conversion = await Conversion.init({
+			input,
+			output,
+			video: {
+				discard: true,
+			}, audio: {
+				codec,
+				forceTranscode: true,
+			},
+			trim: {
+				start: 0,
+			},
+		});
+		await conversion.execute();
+
+		using newInput = new Input({
+			source: new BufferSource(output.target.buffer!),
+			formats: ALL_FORMATS,
+		});
+
+		const newInputTrack = await newInput.getPrimaryAudioTrack();
+		assert(newInputTrack);
+
+		expect(await newInputTrack.getCodec()).toBe(codec);
+		expect(await newInputTrack.computeDuration()).toBeCloseTo(await inputTrack.computeDuration(), 0);
+
+		const sink = new AudioSampleSink(newInputTrack);
+
+		let sampleCount = 0;
+		for await (using sample of sink.samples()) {
+			expect([await inputTrack.getNumberOfChannels(), 2].includes(sample.numberOfChannels)).toBe(true);
+			expect(sample.sampleRate).toBe(await inputTrack.getSampleRate());
+
+			sampleCount++;
+		}
+
+		expect(sampleCount).toBeGreaterThan(0);
+	};
+
+	test('Custom AudioSample resource', async () => {
+		using input = new Input({
+			source: new FilePathSource('./test/public/trim-buck-bunny-ffmpeg.ts'),
+			formats: ALL_FORMATS,
+		});
+
+		const audioTrack = await input.getPrimaryAudioTrack();
+		assert(audioTrack);
+
+		const sink = new AudioSampleSink(audioTrack);
+		using sample = await sink.getSample(await audioTrack.getFirstTimestamp());
+		assert(sample);
+
+		expect(sample._data).toBeInstanceOf(NodeAvFrameAudioSampleResource);
+		expect(sample.format).toBe('f32-planar');
+		expect(sample.numberOfChannels).toBe(6);
+		expect(sample.sampleRate).toBe(48000);
+		expect(sample.timestamp).toBe(await audioTrack.getFirstTimestamp());
+		expect(sample.duration).toBe(1024 / 48000);
+		expect(sample.numberOfFrames).toBe(1024);
+
+		const size = sample.allocationSize({ planeIndex: 0 });
+		expect(size).toBe(1024 * Float32Array.BYTES_PER_ELEMENT);
+
+		// Test a bunch of copyTo()s:
+		const buf = new ArrayBuffer(1e6);
+		sample.copyTo(buf, { planeIndex: 0 });
+		sample.copyTo(buf, { planeIndex: 1 });
+		sample.copyTo(buf, { planeIndex: 2 });
+		sample.copyTo(buf, { planeIndex: 3 });
+		sample.copyTo(buf, { planeIndex: 4 });
+		sample.copyTo(buf, { planeIndex: 5 });
+		sample.copyTo(buf, { format: 'f32', planeIndex: 0 });
+	});
 });
-*/
