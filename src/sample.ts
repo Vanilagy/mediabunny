@@ -26,6 +26,9 @@ import {
 	simplifyRational,
 	Rectangle,
 	validateRectangle,
+	normalizeRotation,
+	roundToMultiple,
+	arrayArgmin,
 	MaybePromise,
 } from './misc';
 
@@ -103,8 +106,10 @@ export abstract class VideoSampleResource {
 	/** Returns the height of the frame in pixels. */
 	abstract getCodedHeight(): number;
 
+	/** Returns the width of the frame in square pixels, respecting pixel aspect ratio. */
 	abstract getSquarePixelWidth(): number;
 
+	/** Returns the height of the frame in square pixels, respecting pixel aspect ratio. */
 	abstract getSquarePixelHeight(): number;
 
 	/** Returns the color space of the frame. */
@@ -116,17 +121,32 @@ export abstract class VideoSampleResource {
 	 */
 	abstract close(): void;
 
+	/**
+	 * Returns the data planes that hold the video data for this sample. The returned planes and data must be in the
+	 * format returned by `getFormat()`.
+	 */
 	abstract getDataPlanes(): MaybePromise<VideoDataPlane[]>;
 
+	/**
+	 * Returns a new RGB {@link VideoSample} that contains the same content as this sample. The provided `init` object
+	 * must be used to set the metadata of this new video sample. When converting from a non-RGB format to RGB, the
+	 * conversion must respect `colorSpace`.
+	 */
 	abstract toRgbSample(
 		init: SetRequired<VideoSampleInit, 'timestamp'>,
-		format: 'RGBA' | 'RGBX' | 'BGRA' | 'BGRX',
 		colorSpace: PredefinedColorSpace,
 	): MaybePromise<VideoSample>;
 }
 
+/**
+ * Describes a single data plane of a video frame.
+ * @group Samples
+ * @public
+ */
 export type VideoDataPlane = {
+	/** The data of the plane. */
 	data: Uint8Array;
+	/** The stride of the plane, in bytes. This is the distance in bytes between the start of each row of pixels. */
 	stride: number;
 };
 
@@ -239,9 +259,9 @@ export class VideoSample implements Disposable {
 	readonly format!: VideoSamplePixelFormat | null;
 	/** The visible region of the frame in the coded pixel grid. */
 	readonly visibleRect!: Rectangle;
-	/** The width of the frame in square pixels, before rotation is applied. */
+	/** The width of the frame in square pixels (respecting pixel aspect ratio), before rotation is applied. */
 	readonly squarePixelWidth!: number;
-	/** The height of the frame in square pixels, before rotation is applied. */
+	/** The height of the frame in square pixels (respecting pixel aspect ratio), before rotation is applied. */
 	readonly squarePixelHeight!: number;
 	/** The rotation of the frame in degrees, clockwise. */
 	readonly rotation!: Rotation;
@@ -754,7 +774,6 @@ export class VideoSample implements Disposable {
 						duration: this.duration,
 						rotation: this.rotation,
 					},
-					options.format as 'RGBA' | 'RGBX' | 'BGRA' | 'BGRX',
 					options.colorSpace ?? 'srgb',
 				);
 				if (!(rgbSample instanceof VideoSample)) {
@@ -1333,6 +1352,179 @@ export class VideoSample implements Disposable {
 		}
 	}
 
+	/**
+	 * Transform this video sample to a new video sample given the options. Can be used to resize, rotate, and crop
+	 * the sample.
+	 *
+	 * In non-browser environments, this method will not work by default. To make it work, register a custom
+	 * transformer function via {@link registerVideoSampleTransformer}.
+	 */
+	async transform(options: VideoSampleTransformOptions) {
+		if (!options || typeof options !== 'object') {
+			throw new TypeError('options must be an object.');
+		}
+		if (options.width !== undefined && (!Number.isInteger(options.width) || options.width <= 0)) {
+			throw new TypeError('options.width, when provided, must be a positive integer.');
+		}
+		if (options.height !== undefined && (!Number.isInteger(options.height) || options.height <= 0)) {
+			throw new TypeError('options.height, when provided, must be a positive integer.');
+		}
+		if (
+			options.roundDimensionsTo !== undefined
+			&& (!Number.isInteger(options.roundDimensionsTo) || options.roundDimensionsTo <= 0)
+		) {
+			throw new TypeError('options.roundDimensionsTo, when provided, must be a positive integer.');
+		}
+		if (options.fit !== undefined && !['fill', 'contain', 'cover'].includes(options.fit)) {
+			throw new TypeError('options.fit, when provided, must be one of "fill", "contain", or "cover".');
+		}
+		if (
+			options.width !== undefined
+			&& options.height !== undefined
+			&& options.fit === undefined
+		) {
+			throw new TypeError(
+				'When both options.width and options.height are provided, options.fit must also be provided.',
+			);
+		}
+		if (options.rotate !== undefined && ![0, 90, 180, 270].includes(options.rotate)) {
+			throw new TypeError('options.rotate, when provided, must be 0, 90, 180 or 270.');
+		}
+		if (options.crop !== undefined) {
+			validateCropRectangle(options.crop, 'options.');
+		}
+		if (options.alpha !== undefined && !['keep', 'discard'].includes(options.alpha)) {
+			throw new TypeError('options.alpha, when provided, must be \'keep\' or \'discard\'.');
+		}
+
+		const rotation = normalizeRotation(this.rotation + (options.rotate ?? 0));
+		const [rotatedWidth, rotatedHeight] = rotation % 180 === 0
+			? [this.squarePixelWidth, this.squarePixelHeight]
+			: [this.squarePixelHeight, this.squarePixelWidth];
+
+		// Clamp crop rectangle to the rotated video dimensions
+		let finalCrop = options.crop;
+		if (finalCrop) {
+			finalCrop = clampCropRectangle(finalCrop, rotatedWidth, rotatedHeight);
+		}
+
+		const cropWidth = finalCrop ? finalCrop.width : rotatedWidth;
+		const cropHeight = finalCrop ? finalCrop.height : rotatedHeight;
+		const originalAspectRatio = cropWidth / cropHeight;
+
+		let targetWidth: number;
+		let targetHeight: number;
+
+		if (options.width !== undefined && options.height === undefined) {
+			targetWidth = options.width;
+			targetHeight = targetWidth / originalAspectRatio;
+		} else if (options.width === undefined && options.height !== undefined) {
+			targetHeight = options.height;
+			targetWidth = targetHeight * originalAspectRatio;
+		} else if (options.width !== undefined && options.height !== undefined) {
+			targetWidth = options.width;
+			targetHeight = options.height;
+		} else {
+			targetWidth = cropWidth;
+			targetHeight = cropHeight;
+		}
+
+		targetWidth = roundToMultiple(targetWidth, options.roundDimensionsTo ?? 1);
+		targetHeight = roundToMultiple(targetHeight, options.roundDimensionsTo ?? 1);
+
+		const description: VideoSampleTransformationDescription = {
+			width: targetWidth,
+			height: targetHeight,
+			fit: options.fit ?? 'fill',
+			rotation,
+			crop: finalCrop ?? {
+				left: 0,
+				top: 0,
+				width: rotatedWidth,
+				height: rotatedHeight,
+			},
+			alpha: options.alpha ?? 'keep',
+		};
+
+		// Description's finalized; let's see if a registered transformer wants to handle it
+		for (const transformer of registeredVideoSampleTransformers) {
+			let result = transformer(this, description);
+			if (result instanceof Promise) result = await result;
+
+			if (result !== null) {
+				return result;
+			}
+		}
+
+		// We need to handle it ourselves, and we use canvases to do it
+
+		let canvas: HTMLCanvasElement | OffscreenCanvas | null = null;
+		let canvasIsNew = false;
+
+		for (const entry of transformationCanvasCache) {
+			if (entry.canvas.width === description.width && entry.canvas.height === description.height) {
+				canvas = entry.canvas;
+				entry.age = transformationCanvasCacheNextAge++;
+
+				break;
+			}
+		}
+
+		if (canvas === null) {
+			if (typeof OffscreenCanvas !== 'undefined') {
+				canvas = new OffscreenCanvas(description.width, description.height);
+			} else {
+				if (typeof window === 'undefined' || typeof document === 'undefined') {
+					throw new Error(
+						'Cannot transform VideoSamples in this environment. Either run in an environment with'
+						+ ' OffscreenCanvas or HTMLCanvasElement, or supply a custom VideoSample transformer using'
+						+ ' registerVideoSampleTransformer().',
+					);
+				}
+
+				canvas = document.createElement('canvas');
+				canvas.width = description.width;
+				canvas.height = description.height;
+			}
+
+			canvasIsNew = true;
+
+			if (transformationCanvasCache.length >= TRANSFORMATION_CANVAS_CACHE_MAX_SIZE) {
+				transformationCanvasCache.splice(arrayArgmin(transformationCanvasCache, x => x.age), 1);
+			}
+
+			transformationCanvasCache.push({
+				canvas,
+				age: transformationCanvasCacheNextAge++,
+			});
+		}
+
+		const context = canvas.getContext('2d', {
+			alpha: true,
+		}) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+		assert(context);
+
+		if (description.alpha === 'discard') {
+			context.fillStyle = 'black';
+			context.fillRect(0, 0, description.width, description.height);
+		} else if (!canvasIsNew) {
+			// Cached canvases carry stale pixels from a prior draw
+			context.clearRect(0, 0, description.width, description.height);
+		}
+
+		this.drawWithFit(context, {
+			fit: description.fit,
+			rotation: description.rotation,
+			crop: description.crop,
+		});
+
+		return new VideoSample(canvas, {
+			timestamp: this.timestamp,
+			duration: this.duration,
+			rotation: 0, // Any previous rotation is now baked in
+		});
+	}
+
 	/** Sets the rotation metadata of this video sample. */
 	setRotation(newRotation: Rotation) {
 		if (![0, 90, 180, 270].includes(newRotation)) {
@@ -1368,6 +1560,123 @@ export class VideoSample implements Disposable {
 		this.close();
 	}
 }
+
+/**
+ * Options for transforming a {@link VideoSample}. The order of operations are:
+ *
+ * 1. Pixel aspect ratio normalization (always applied)
+ * 2. Rotation
+ * 3. Crop
+ * 4. Resize using fit
+ * @group Samples
+ * @public
+ */
+export type VideoSampleTransformOptions = {
+	/**
+	 * The width in pixels to resize the frames to. If height is not set, it will be deduced
+	 * automatically based on aspect ratio.
+	 */
+	width?: number;
+	/**
+	 * The height in pixels to resize the frames to. If width is not set, it will be deduced
+	 * automatically based on aspect ratio.
+	 */
+	height?: number;
+	/**
+	 * A positive integer. When provided, both the width and height will be rounded to the nearest multiple of
+	 * this number.
+	 */
+	roundDimensionsTo?: number;
+	/**
+	 * The fitting algorithm in case both width and height are set.
+	 *
+	 * - `'fill'` will stretch the image to fill the entire box, potentially altering aspect ratio.
+	 * - `'contain'` will contain the entire image within the box while preserving aspect ratio. This may lead to
+	 * letterboxing.
+	 * - `'cover'` will scale the image until the entire box is filled, while preserving aspect ratio.
+	 */
+	fit?: 'fill' | 'contain' | 'cover';
+	/**
+	 * The clockwise rotation by which to rotate the frames. Rotation is applied before resizing.
+	 */
+	rotate?: Rotation;
+	/**
+	 * Specifies the rectangular region of the frames to crop to. The crop region will automatically be
+	 * clamped to the dimensions of the frame. Cropping is performed after rotation but before resizing.
+	 */
+	crop?: CropRectangle;
+	/**
+	 * Whether to discard or keep the transparency information of the video sample. The default is `'keep'`.
+	 */
+	alpha?: 'keep' | 'discard';
+};
+
+/**
+ * A fully-resolved description of a video sample transformation, with all defaults and constraints baked in.
+ *
+ * The order of operations must be:
+ * 1. Pixel aspect ratio normalization (always applied)
+ * 2. Rotation
+ * 3. Crop
+ * 4. Resize using fit
+ * @group Samples
+ * @public
+ */
+export type VideoSampleTransformationDescription = {
+	/** The width in pixels to resize the frames to. */
+	width: number;
+	/** The height in pixels to resize the frames to. */
+	height: number;
+	/**
+	 * The fitting algorithm.
+	 *
+	 * - `'fill'` will stretch the image to fill the entire box, potentially altering aspect ratio.
+	 * - `'contain'` will contain the entire image within the box while preserving aspect ratio. This may lead to
+	 * letterboxing.
+	 * - `'cover'` will scale the image until the entire box is filled, while preserving aspect ratio.
+	 */
+	fit: 'fill' | 'contain' | 'cover';
+	/** The clockwise rotation by which to rotate the frames. Rotation is applied before resizing. */
+	rotation: Rotation;
+	/**
+	 * The rectangular region of the frames to crop to, clamped to the dimensions of the frame. Cropping is
+	 * performed after rotation but before resizing.
+	 */
+	crop: CropRectangle;
+	/** Whether to discard or keep the transparency information of the video sample. */
+	alpha: 'keep' | 'discard';
+};
+
+const registeredVideoSampleTransformers: ((
+	sample: VideoSample,
+	description: VideoSampleTransformationDescription,
+) => MaybePromise<VideoSample | null>)[] = [];
+
+/**
+ * Registers a callback to handle the transformation of {@link VideoSample} instances. The callback can either return
+ * the transformed sample, or `null` to indicate that it doesn't want to handle the given transformation task.
+ * @group Samples
+ * @public
+ */
+export const registerVideoSampleTransformer = (
+	transformer: (
+		sample: VideoSample,
+		description: VideoSampleTransformationDescription,
+	) => MaybePromise<VideoSample | null>,
+) => {
+	if (registeredVideoSampleTransformers.includes(transformer)) {
+		return; // Already in there
+	}
+
+	registeredVideoSampleTransformers.push(transformer);
+};
+
+const TRANSFORMATION_CANVAS_CACHE_MAX_SIZE = 3;
+const transformationCanvasCache: {
+	canvas: HTMLCanvasElement | OffscreenCanvas;
+	age: number;
+}[] = [];
+let transformationCanvasCacheNextAge = 0;
 
 /**
  * Describes the color space of a {@link VideoSample}. Corresponds to the WebCodecs API's VideoColorSpace.
@@ -1927,6 +2236,10 @@ export abstract class AudioSampleResource {
 	 */
 	abstract close(): void;
 
+	/**
+	 * Returns the audio sample data for the plane given by `planeIndex`. The audio data must be in the format returned
+	 * by `getFormat()`. For interleaved formats, there is only one plane.
+	 */
 	abstract getDataPlane(planeIndex: number): Uint8Array;
 }
 

@@ -1,9 +1,10 @@
-import { registerDecoder, registerEncoder } from 'mediabunny';
+import { registerDecoder, registerEncoder, registerVideoSampleTransformer } from 'mediabunny';
 import * as NodeAv from 'node-av';
 import { NodeAvVideoDecoder } from './video-decoder';
 import { NodeAvVideoEncoder } from './video-encoder';
 import { NodeAvAudioDecoder } from './audio-decoder';
 import { NodeAvAudioEncoder } from './audio-encoder';
+import { transformSample } from './video-sample';
 
 const SERVER_LOADED_SYMBOL = Symbol.for('@mediabunny/server loaded');
 if ((globalThis as Record<symbol, unknown>)[SERVER_LOADED_SYMBOL]) {
@@ -32,4 +33,6 @@ export const registerMediabunnyServer = () => {
 	// Audio
 	registerDecoder(NodeAvAudioDecoder);
 	registerEncoder(NodeAvAudioEncoder);
+
+	registerVideoSampleTransformer(transformSample);
 };

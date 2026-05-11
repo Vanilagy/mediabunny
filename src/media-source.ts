@@ -25,13 +25,10 @@ import {
 	assertNever,
 	binarySearchLessOrEqual,
 	CallSerializer,
-	ceilToMultipleOfTwo,
 	clamp,
 	clearIntervalUnthrottled,
 	floorToDivisor,
-	isFirefox,
 	last,
-	normalizeRotation,
 	promiseWithResolvers,
 	roundToDivisor,
 	setInt24,
@@ -53,7 +50,6 @@ import { EncodedPacket, EncodedPacketSideData } from './packet';
 import {
 	AudioSample,
 	audioSampleToInterleavedFormat,
-	clampCropRectangle,
 	toInterleavedAudioFormat,
 	VideoSample,
 } from './sample';
@@ -233,7 +229,6 @@ class VideoEncoderWrapper {
 	private muxer: Muxer | null = null;
 	private lastMultipleOfKeyFrameInterval = -1;
 
-	private resizeCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
 	// Tracks the input dimensions of the first frame
 	private codedWidth: number | null = null;
 	private codedHeight: number | null = null;
@@ -275,15 +270,7 @@ class VideoEncoderWrapper {
 
 	private lastMuxerPromise: Promise<void> = Promise.resolve();
 
-	constructor(private source: VideoSource, private encodingConfig: VideoEncodingConfig) {
-		const sizeChangeBehavior = encodingConfig.sizeChangeBehavior ?? 'deny';
-		if (['fill', 'contain', 'cover'].includes(sizeChangeBehavior) && encodingConfig.transform?.fit !== undefined) {
-			throw new TypeError(
-				`Cannot set 'fit' when 'sizeChangeBehavior' is '${sizeChangeBehavior}'. `
-				+ `The size change behavior determines the fit in this case.`,
-			);
-		}
-	}
+	constructor(private source: VideoSource, private encodingConfig: VideoEncodingConfig) {}
 
 	async add(videoSample: VideoSample, shouldClose: boolean, encodeOptions?: VideoEncoderEncodeOptions) {
 		const originalSample = videoSample;
@@ -323,23 +310,8 @@ class VideoEncoderWrapper {
 			const needsTransform = hasTransformConfig || (isSizeChange && sizeChangeBehavior !== 'passThrough');
 
 			if (needsTransform) {
-				const rotation = normalizeRotation(videoSample.rotation + (config.transform?.rotate ?? 0));
-				const [rotatedWidth, rotatedHeight] = rotation % 180 === 0
-					? [videoSample.codedWidth, videoSample.codedHeight]
-					: [videoSample.codedHeight, videoSample.codedWidth];
-
-				// Clamp crop rectangle to the rotated video dimensions
-				let finalCrop = config.transform?.crop;
-				if (finalCrop) {
-					finalCrop = clampCropRectangle(finalCrop, rotatedWidth, rotatedHeight);
-				}
-
-				const cropWidth = finalCrop ? finalCrop.width : rotatedWidth;
-				const cropHeight = finalCrop ? finalCrop.height : rotatedHeight;
-				const originalAspectRatio = cropWidth / cropHeight;
-
-				let targetWidth: number;
-				let targetHeight: number;
+				let targetWidth = config.transform?.width;
+				let targetHeight = config.transform?.height;
 				let appliedFit: 'fill' | 'contain' | 'cover' = config.transform?.fit ?? 'fill';
 
 				// If the size changed and behavior is fill/contain/cover, lock to the original output dimensions
@@ -351,81 +323,29 @@ class VideoEncoderWrapper {
 					targetWidth = this.outputWidth!;
 					targetHeight = this.outputHeight!;
 					appliedFit = sizeChangeBehavior;
-				} else {
-					// Otherwise, dynamically calculate the target dimensions based on config and aspect ratio
-					if (config.transform?.width !== undefined && config.transform?.height === undefined) {
-						targetWidth = config.transform.width;
-						targetHeight = ceilToMultipleOfTwo(Math.round(targetWidth / originalAspectRatio));
-					} else if (config.transform?.width === undefined && config.transform?.height !== undefined) {
-						targetHeight = config.transform.height;
-						targetWidth = ceilToMultipleOfTwo(Math.round(targetHeight * originalAspectRatio));
-					} else if (config.transform?.width !== undefined && config.transform?.height !== undefined) {
-						targetWidth = config.transform?.width;
-						targetHeight = config.transform?.height;
-					} else {
-						targetWidth = cropWidth;
-						targetHeight = cropHeight;
-					}
 				}
+
+				const transformed = await videoSample.transform({
+					width: targetWidth,
+					height: targetHeight,
+					roundDimensionsTo: 2,
+					crop: config.transform?.crop,
+					rotate: config.transform?.rotate,
+					fit: appliedFit,
+					alpha: config.alpha,
+				});
 
 				// Save the output dimensions of the first frame
 				if (this.outputWidth === null || this.outputHeight === null) {
-					this.outputWidth = targetWidth;
-					this.outputHeight = targetHeight;
+					this.outputWidth = transformed.displayWidth;
+					this.outputHeight = transformed.displayHeight;
 				}
-
-				let canvasIsNew = false;
-
-				if (!this.resizeCanvas) {
-					if (typeof document !== 'undefined') {
-						// Prefer an HTMLCanvasElement
-						this.resizeCanvas = document.createElement('canvas');
-						this.resizeCanvas.width = targetWidth;
-						this.resizeCanvas.height = targetHeight;
-					} else {
-						this.resizeCanvas = new OffscreenCanvas(targetWidth, targetHeight);
-					}
-					canvasIsNew = true;
-				} else if (this.resizeCanvas.width !== targetWidth || this.resizeCanvas.height !== targetHeight) {
-					// Dynamically resize the canvas if the target dimensions have changed
-					this.resizeCanvas.width = targetWidth;
-					this.resizeCanvas.height = targetHeight;
-				}
-
-				const context = this.resizeCanvas.getContext('2d', {
-					// Firefox has VideoFrame glitches with opaque canvases
-					alpha: this.encodingConfig.alpha === 'keep' || isFirefox(),
-				}) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
-				assert(context);
-
-				if (typeof context.resetTransform === 'function') {
-					context.resetTransform();
-				}
-
-				if (!canvasIsNew) {
-					if (isFirefox()) {
-						context.fillStyle = 'black';
-						context.fillRect(0, 0, targetWidth, targetHeight);
-					} else {
-						context.clearRect(0, 0, targetWidth, targetHeight);
-					}
-				}
-
-				videoSample.drawWithFit(context, {
-					fit: appliedFit,
-					rotation: rotation,
-					crop: finalCrop,
-				});
 
 				if (shouldClose) {
 					videoSample.close();
 				}
 
-				videoSample = new VideoSample(this.resizeCanvas, {
-					timestamp: videoSample.timestamp,
-					duration: videoSample.duration,
-					rotation: 0, // Rotation is now baked into the canvas
-				});
+				videoSample = transformed;
 				shouldClose = true;
 			} else {
 				// If no canvas is needed, we still need to record the output dimensions for the first frame

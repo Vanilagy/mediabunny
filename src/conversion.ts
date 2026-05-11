@@ -24,7 +24,6 @@ import { Input } from './input';
 import { InputAudioTrack, InputTrack, InputVideoTrack } from './input-track';
 import {
 	AudioSampleSink,
-	CanvasSink,
 	EncodedPacketSink,
 	VideoSampleSink,
 } from './media-sink';
@@ -41,7 +40,6 @@ import {
 	assertNever,
 	ceilToMultipleOfTwo,
 	clamp,
-	floorToDivisor,
 	isIso639Dash2LanguageCode,
 	MaybePromise,
 	normalizeRotation,
@@ -1142,7 +1140,8 @@ export class Conversion {
 
 		let videoSource: VideoSource;
 
-		const totalRotation = normalizeRotation(await track.getRotation() + (trackOptions.rotate ?? 0));
+		const innateRotation = await track.getRotation();
+		const totalRotation = normalizeRotation(innateRotation + (trackOptions.rotate ?? 0));
 		let outputTrackRotation = totalRotation;
 		const canUseRotationMetadata = this.output.format.supportsVideoRotationMetadata
 			&& (trackOptions.allowRotationMetadata ?? true);
@@ -1284,10 +1283,9 @@ export class Conversion {
 				sizeChangeBehavior: trackOptions.fit ?? 'passThrough',
 				alpha,
 				hardwareAcceleration: trackOptions.hardwareAcceleration,
+				transform: {},
 			};
-
-			const source = new VideoSampleSource(encodingConfig);
-			videoSource = source;
+			assert(encodingConfig.transform);
 
 			let needsRerender = width !== originalWidth
 				|| height !== originalHeight
@@ -1334,179 +1332,46 @@ export class Conversion {
 				}
 			}
 
+			if (trackOptions.frameRate) {
+				encodingConfig.transform.frameRate = trackOptions.frameRate;
+			}
+
 			if (needsRerender) {
 				outputTrackRotation = 0; // Since the rotation is baked into the output
 
-				this._trackPromises.push((async () => {
-					await this._started;
-
-					const sink = new CanvasSink(track, {
-						width,
-						height,
-						fit: trackOptions.fit ?? 'fill',
-						rotation: totalRotation, // Bake the rotation into the output
-						crop: trackOptions.crop,
-						poolSize: 1,
-						alpha: alpha === 'keep',
-					});
-					const iterator = sink.canvases(this._startTimestamp, this._endTimestamp);
-					const frameRate = trackOptions.frameRate;
-
-					let lastCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
-					let lastCanvasTimestamp: number | null = null;
-					let lastCanvasEndTimestamp: number | null = null;
-
-					/** Repeats the last sample to pad out the time until the specified timestamp. */
-					const padFrames = async (until: number) => {
-						assert(lastCanvas);
-						assert(frameRate !== undefined);
-
-						const frameDifference = Math.round((until - lastCanvasTimestamp!) * frameRate);
-
-						for (let i = 1; i < frameDifference; i++) {
-							const sample = new VideoSample(lastCanvas, {
-								timestamp: lastCanvasTimestamp! + i / frameRate,
-								duration: 1 / frameRate,
-							});
-							await this._registerVideoSample(trackOptions, outputTrackId, source, sample);
-							sample.close();
-						}
-					};
-
-					for await (const { canvas, timestamp, duration } of iterator) {
-						if (this._canceled) {
-							return;
-						}
-
-						let adjustedSampleTimestamp = Math.max(timestamp - this._startTimestamp, 0);
-						lastCanvasEndTimestamp = adjustedSampleTimestamp + duration;
-
-						if (frameRate !== undefined) {
-							// Logic for skipping/repeating frames when a frame rate is set
-							const alignedTimestamp = floorToDivisor(adjustedSampleTimestamp, frameRate);
-
-							if (lastCanvas !== null) {
-								if (alignedTimestamp <= lastCanvasTimestamp!) {
-									lastCanvas = canvas;
-									lastCanvasTimestamp = alignedTimestamp;
-
-									// Skip this sample, since we already added one for this frame
-									continue;
-								} else {
-									// Check if we may need to repeat the previous frame
-									await padFrames(alignedTimestamp);
-								}
-							}
-
-							adjustedSampleTimestamp = alignedTimestamp;
-						}
-
-						const sample = new VideoSample(canvas, {
-							timestamp: adjustedSampleTimestamp,
-							duration: frameRate !== undefined ? 1 / frameRate : duration,
-						});
-						await this._registerVideoSample(trackOptions, outputTrackId, source, sample);
-						sample.close();
-
-						if (frameRate !== undefined) {
-							lastCanvas = canvas;
-							lastCanvasTimestamp = adjustedSampleTimestamp;
-						}
-					}
-
-					if (lastCanvas) {
-						assert(lastCanvasEndTimestamp !== null);
-						assert(frameRate !== undefined);
-
-						// If necessary, pad until the end timestamp of the last sample
-						await padFrames(floorToDivisor(lastCanvasEndTimestamp, frameRate));
-					}
-
-					source.close();
-					this._synchronizer.closeTrack(outputTrackId);
-				})());
-			} else {
-				this._trackPromises.push((async () => {
-					await this._started;
-
-					const sink = new VideoSampleSink(track);
-					const frameRate = trackOptions.frameRate;
-
-					let lastSample: VideoSample | null = null;
-					let lastSampleTimestamp: number | null = null;
-					let lastSampleEndTimestamp: number | null = null;
-
-					/** Repeats the last sample to pad out the time until the specified timestamp. */
-					const padFrames = async (until: number) => {
-						assert(lastSample);
-						assert(frameRate !== undefined);
-
-						const frameDifference = Math.round((until - lastSampleTimestamp!) * frameRate);
-
-						for (let i = 1; i < frameDifference; i++) {
-							lastSample.setTimestamp(lastSampleTimestamp! + i / frameRate);
-							lastSample.setDuration(1 / frameRate);
-							await this._registerVideoSample(trackOptions, outputTrackId, source, lastSample);
-						}
-
-						lastSample.close();
-					};
-
-					for await (const sample of sink.samples(this._startTimestamp, this._endTimestamp)) {
-						if (this._canceled) {
-							sample.close();
-							lastSample?.close();
-							return;
-						}
-
-						let adjustedSampleTimestamp = Math.max(sample.timestamp - this._startTimestamp, 0);
-						lastSampleEndTimestamp = adjustedSampleTimestamp + sample.duration;
-
-						if (frameRate !== undefined) {
-							// Logic for skipping/repeating frames when a frame rate is set
-							const alignedTimestamp = floorToDivisor(adjustedSampleTimestamp, frameRate);
-
-							if (lastSample !== null) {
-								if (alignedTimestamp <= lastSampleTimestamp!) {
-									lastSample.close();
-									lastSample = sample;
-									lastSampleTimestamp = alignedTimestamp;
-
-									// Skip this sample, since we already added one for this frame
-									continue;
-								} else {
-									// Check if we may need to repeat the previous frame
-									await padFrames(alignedTimestamp);
-								}
-							}
-
-							adjustedSampleTimestamp = alignedTimestamp;
-							sample.setDuration(1 / frameRate);
-						}
-
-						sample.setTimestamp(adjustedSampleTimestamp);
-						await this._registerVideoSample(trackOptions, outputTrackId, source, sample);
-
-						if (frameRate !== undefined) {
-							lastSample = sample;
-							lastSampleTimestamp = adjustedSampleTimestamp;
-						} else {
-							sample.close();
-						}
-					}
-
-					if (lastSample) {
-						assert(lastSampleEndTimestamp !== null);
-						assert(frameRate !== undefined);
-
-						// If necessary, pad until the end timestamp of the last sample
-						await padFrames(floorToDivisor(lastSampleEndTimestamp, frameRate));
-					}
-
-					source.close();
-					this._synchronizer.closeTrack(outputTrackId);
-				})());
+				encodingConfig.transform.width = width;
+				encodingConfig.transform.height = height;
+				encodingConfig.transform.fit = trackOptions.fit ?? 'fill';
+				encodingConfig.transform.rotate = normalizeRotation(totalRotation - innateRotation);
+				encodingConfig.transform.crop = crop;
+				encodingConfig.transform.alpha = alpha;
 			}
+
+			const source = new VideoSampleSource(encodingConfig);
+			videoSource = source;
+
+			this._trackPromises.push((async () => {
+				await this._started;
+
+				const sink = new VideoSampleSink(track);
+
+				for await (const sample of sink.samples(this._startTimestamp, this._endTimestamp)) {
+					if (this._canceled) {
+						sample.close();
+						return;
+					}
+
+					const adjustedSampleTimestamp = Math.max(sample.timestamp - this._startTimestamp, 0);
+					sample.setTimestamp(adjustedSampleTimestamp);
+
+					await this._registerVideoSample(trackOptions, outputTrackId, source, sample);
+
+					sample.close();
+				}
+
+				source.close();
+				this._synchronizer.closeTrack(outputTrackId);
+			})());
 		}
 
 		let ownGroup: OutputTrackGroup | null = null;

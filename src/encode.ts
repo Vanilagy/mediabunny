@@ -114,6 +114,10 @@ export type VideoTransformOptions = {
 	 */
 	crop?: CropRectangle;
 	/**
+	 * Whether to discard or keep the transparency information of the video samples. The default is `'keep'`.
+	 */
+	alpha?: 'keep' | 'discard';
+	/**
 	 * The frame rate in hertz to normalize the video frame stream to.
 	 */
 	frameRate?: number;
@@ -193,10 +197,12 @@ export const validateVideoEncodingConfig = (config: VideoEncodingConfig) => {
 		if (
 			config.transform.fit !== undefined
 			&& ['fill', 'contain', 'cover'].includes(config.sizeChangeBehavior!)
+			&& config.transform.fit !== config.sizeChangeBehavior
 		) {
 			throw new TypeError(
-				'config.transform.fit cannot be used when config.sizeChangeBehavior is \'fill\', \'contain\' or'
-				+ ' \'cover\', as sizeChangeBehavior already determines the fitting algorithm.',
+				'config.transform.fit, when provided, cannot differ from config.sizeChangeBehavior when'
+				+ ' config.sizeChangeBehavior is \'fill\', \'contain\' or \'cover\', as sizeChangeBehavior already'
+				+ ' determines the fitting algorithm.',
 			);
 		}
 		if (config.transform.rotate !== undefined && ![0, 90, 180, 270].includes(config.transform.rotate)) {

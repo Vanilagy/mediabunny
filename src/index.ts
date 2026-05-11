@@ -249,8 +249,12 @@ export {
 	type VideoSamplePixelFormat,
 	VideoSampleColorSpace,
 	VideoSampleResource,
+	type VideoSampleTransformOptions,
+	type VideoSampleTransformationDescription,
 	type CropRectangle,
 	VIDEO_SAMPLE_PIXEL_FORMATS,
+	type VideoDataPlane,
+	registerVideoSampleTransformer,
 } from './sample';
 export {
 	AudioBufferSink,

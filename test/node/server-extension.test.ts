@@ -736,6 +736,181 @@ describe('Video', async () => {
 			{ offset: 0, stride: 400 * 4 },
 		]);
 	});
+
+	describe('VideoSample transformation', () => {
+		// 400x400 image: red everywhere, with a 200x200 blue square filling the bottom-left quadrant.
+		const TEST_IMAGE = (() => {
+			const buf = new Uint8Array(400 * 400 * 4);
+			for (let i = 0; i < 400 * 400; i++) {
+				buf[i * 4] = 255;
+				buf[i * 4 + 1] = 0;
+				buf[i * 4 + 2] = 0;
+				buf[i * 4 + 3] = 255;
+			}
+			for (let y = 200; y < 400; y++) {
+				for (let x = 0; x < 200; x++) {
+					const i = y * 400 + x;
+					buf[i * 4] = 0;
+					buf[i * 4 + 1] = 0;
+					buf[i * 4 + 2] = 255;
+					buf[i * 4 + 3] = 255;
+				}
+			}
+			return buf;
+		})();
+
+		const makeSample = () => new VideoSample(TEST_IMAGE, {
+			format: 'RGBA',
+			codedWidth: 400,
+			codedHeight: 400,
+			timestamp: 0,
+		});
+
+		const readRgba = async (sample: VideoSample) => {
+			const buffer = new Uint8Array(sample.codedWidth * sample.codedHeight * 4);
+			await sample.copyTo(buffer, { format: 'RGBA' });
+			return buffer;
+		};
+
+		const getColorAt = (rgba: Uint8Array, width: number, x: number, y: number) => {
+			const i = (y * width + x) * 4;
+			return [rgba[i]!, rgba[i + 1]!, rgba[i + 2]!];
+		};
+
+		const expectColor = (actual: number[], expected: number[], tolerance = 4) => {
+			for (let i = 0; i < 3; i++) {
+				expect(
+					Math.abs(actual[i]! - expected[i]!),
+					`channel ${i}: got ${actual[i]}, expected ${expected[i]} (+/-${tolerance})`,
+				).toBeLessThanOrEqual(tolerance);
+			}
+		};
+
+		test('resize to 200x200', async () => {
+			using sample = makeSample();
+			using result = await sample.transform({ width: 200, height: 200, fit: 'fill' });
+
+			expect(result.codedWidth).toBe(200);
+			expect(result.codedHeight).toBe(200);
+
+			const rgba = await readRgba(result);
+			expectColor(getColorAt(rgba, 200, 50, 50), [255, 0, 0]); // top-left
+			expectColor(getColorAt(rgba, 200, 150, 50), [255, 0, 0]); // top-right
+			expectColor(getColorAt(rgba, 200, 50, 150), [0, 0, 255]); // bottom-left (blue)
+			expectColor(getColorAt(rgba, 200, 150, 150), [255, 0, 0]); // bottom-right
+		});
+
+		test('rotate 90 deg clockwise', async () => {
+			using sample = makeSample();
+			using result = await sample.transform({ rotate: 90 });
+
+			expect(result.codedWidth).toBe(400);
+			expect(result.codedHeight).toBe(400);
+
+			const rgba = await readRgba(result);
+			expectColor(getColorAt(rgba, 400, 50, 50), [0, 0, 255]); // top-left (blue)
+			expectColor(getColorAt(rgba, 400, 350, 50), [255, 0, 0]);
+			expectColor(getColorAt(rgba, 400, 50, 350), [255, 0, 0]);
+			expectColor(getColorAt(rgba, 400, 350, 350), [255, 0, 0]);
+		});
+
+		test('crop top-left, no rotation', async () => {
+			using sample = makeSample();
+			using result = await sample.transform({ crop: { left: 0, top: 0, width: 200, height: 200 } });
+
+			expect(result.codedWidth).toBe(200);
+			expect(result.codedHeight).toBe(200);
+
+			const rgba = await readRgba(result);
+			expectColor(getColorAt(rgba, 200, 50, 50), [255, 0, 0]);
+			expectColor(getColorAt(rgba, 200, 150, 50), [255, 0, 0]);
+			expectColor(getColorAt(rgba, 200, 50, 150), [255, 0, 0]);
+			expectColor(getColorAt(rgba, 200, 150, 150), [255, 0, 0]);
+		});
+
+		test('rotate 90 deg then crop top-left, crop applies after rotation', async () => {
+			using sample = makeSample();
+			using result = await sample.transform({
+				rotate: 90,
+				crop: { left: 0, top: 0, width: 200, height: 200 },
+			});
+
+			expect(result.codedWidth).toBe(200);
+			expect(result.codedHeight).toBe(200);
+
+			const rgba = await readRgba(result);
+			expectColor(getColorAt(rgba, 200, 50, 50), [0, 0, 255]);
+			expectColor(getColorAt(rgba, 200, 150, 50), [0, 0, 255]);
+			expectColor(getColorAt(rgba, 200, 50, 150), [0, 0, 255]);
+			expectColor(getColorAt(rgba, 200, 150, 150), [0, 0, 255]);
+		});
+
+		test('resize to 400x200 with fill, vertically squished', async () => {
+			using sample = makeSample();
+			using result = await sample.transform({ width: 400, height: 200, fit: 'fill' });
+
+			expect(result.codedWidth).toBe(400);
+			expect(result.codedHeight).toBe(200);
+
+			const rgba = await readRgba(result);
+			expectColor(getColorAt(rgba, 400, 50, 50), [255, 0, 0]); // top-left
+			expectColor(getColorAt(rgba, 400, 300, 50), [255, 0, 0]); // top-right
+			expectColor(getColorAt(rgba, 400, 50, 175), [0, 0, 255]); // bottom-left (blue)
+			expectColor(getColorAt(rgba, 400, 300, 175), [255, 0, 0]); // bottom-right
+		});
+
+		test('resize to 400x200 with contain, letterboxed', async () => {
+			using sample = makeSample();
+			using result = await sample.transform({ width: 400, height: 200, fit: 'contain' });
+
+			expect(result.codedWidth).toBe(400);
+			expect(result.codedHeight).toBe(200);
+
+			const rgba = await readRgba(result);
+			expectColor(getColorAt(rgba, 400, 50, 100), [0, 0, 0]); // left letterbox
+			expectColor(getColorAt(rgba, 400, 350, 100), [0, 0, 0]); // right letterbox
+			expectColor(getColorAt(rgba, 400, 150, 50), [255, 0, 0]); // top-left of image (red)
+			expectColor(getColorAt(rgba, 400, 150, 150), [0, 0, 255]); // bottom-left of image (blue)
+			expectColor(getColorAt(rgba, 400, 250, 150), [255, 0, 0]); // bottom-right of image (red)
+		});
+
+		test('resize to 400x200 with cover, vertical center crop', async () => {
+			using sample = makeSample();
+			using result = await sample.transform({ width: 400, height: 200, fit: 'cover' });
+
+			expect(result.codedWidth).toBe(400);
+			expect(result.codedHeight).toBe(200);
+
+			const rgba = await readRgba(result);
+			expectColor(getColorAt(rgba, 400, 50, 50), [255, 0, 0]); // top-left (red)
+			expectColor(getColorAt(rgba, 400, 350, 50), [255, 0, 0]); // top-right (red)
+			expectColor(getColorAt(rgba, 400, 50, 150), [0, 0, 255]); // bottom-left (blue)
+			expectColor(getColorAt(rgba, 400, 350, 150), [255, 0, 0]); // bottom-right (red)
+		});
+
+		test('VideoSample transformation via Conversion API', async () => {
+			using input = new Input({
+				source: new FilePathSource('./test/public/video.mp4'),
+				formats: ALL_FORMATS,
+			});
+
+			const output = new Output({
+				format: new Mp4OutputFormat(),
+				target: new BufferTarget(),
+			});
+
+			const conversion = await Conversion.init({
+				input,
+				output,
+				video: {
+					width: 300,
+					height: 300,
+					fit: 'contain',
+				},
+			});
+			await conversion.execute();
+		});
+	});
 });
 
 describe('Audio', async () => {

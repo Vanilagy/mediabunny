@@ -2,16 +2,12 @@ import { CustomVideoEncoder, MaybePromise, QUALITY_MEDIUM, VideoCodec, VideoSamp
 import * as NodeAv from 'node-av';
 import {
 	CODEC_TO_CODEC_ID,
-	fromPixelFormat,
 	getHardwareEncoderCodec,
-	mapColorPrimaries,
-	mapMatrixCoefficients,
-	mapTransferCharacteristics,
 	unmapColorPrimaries,
 	unmapMatrixCoefficients,
 	unmapTransferCharacteristics,
 } from './misc';
-import { NodeAvFrameVideoSampleResource } from './video-sample';
+import { copyVideoSampleToAvFrame, NodeAvFrameVideoSampleResource } from './video-sample';
 import {
 	AvcNalUnitType,
 	extractAv1CodecInfoFromPacket,
@@ -172,33 +168,8 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 				throw new Error('Cannot encode foreign VideoSample with unknown (null) format.');
 			}
 
-			// Copy frame data from VideoSample to FFmpeg Frame
-			this.frame.format = fromPixelFormat(videoSample.format);
-			this.frame.width = videoSample.codedWidth;
-			this.frame.height = videoSample.codedHeight;
-			this.frame.pts = BigInt(videoSample.microsecondTimestamp);
-			this.frame.duration = BigInt(videoSample.microsecondDuration);
-			this.frame.colorPrimaries = mapColorPrimaries(videoSample.colorSpace.primaries ?? 'unknown')
-				?? NodeAv.AVCOL_PRI_UNSPECIFIED;
-			this.frame.colorSpace = mapMatrixCoefficients(videoSample.colorSpace.matrix ?? 'unknown')
-				?? NodeAv.AVCOL_SPC_UNSPECIFIED;
-			this.frame.colorTrc = mapTransferCharacteristics(videoSample.colorSpace.transfer ?? 'unknown')
-				?? NodeAv.AVCOL_TRC_UNSPECIFIED;
-			this.frame.colorRange = videoSample.colorSpace.fullRange === false
-				? NodeAv.AVCOL_RANGE_MPEG
-				: videoSample.colorSpace.fullRange === true
-					? NodeAv.AVCOL_RANGE_JPEG
-					: NodeAv.AVCOL_RANGE_UNSPECIFIED;
-
+			this.lastBuffer = await copyVideoSampleToAvFrame(videoSample, this.frame, this.lastBuffer);
 			this.frame.keyFrame = options?.keyFrame ? 1 : 0;
-
-			const size = videoSample.allocationSize();
-			if (!this.lastBuffer || this.lastBuffer.byteLength !== size) {
-				this.lastBuffer = Buffer.from({ length: size });
-			}
-
-			await videoSample.copyTo(this.lastBuffer);
-			this.frame.fromBuffer(this.lastBuffer);
 		}
 
 		let frameToEncode = this.frame;

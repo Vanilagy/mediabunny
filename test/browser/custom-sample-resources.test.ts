@@ -61,8 +61,6 @@ class ImageVideoSampleResource extends VideoSampleResource {
 	toRgbSample(
 		init: SetRequired<VideoSampleInit, 'timestamp'>,
 		// eslint-disable-next-line @typescript-eslint/no-unused-vars
-		format: 'RGBA' | 'RGBX' | 'BGRA' | 'BGRX',
-		// eslint-disable-next-line @typescript-eslint/no-unused-vars
 		colorSpace: PredefinedColorSpace,
 	): MaybePromise<VideoSample> {
 		return new VideoSample(this, init);
