@@ -1036,8 +1036,6 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 		if (!this.alphaDecoder) {
 			const alphaHandler = (frame: VideoFrame) => {
 				this.frameHandlerSerializer.call(async () => {
-					this.alphaDecoderQueueSize--;
-
 					if (this.colorQueue.length > 0) {
 						const colorFrame = this.colorQueue.shift();
 						assert(colorFrame !== undefined);
@@ -1064,6 +1062,8 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 							this.alphaQueue.push(null);
 						}
 					}
+
+					this.alphaDecoderQueueSize--;
 				}).catch((error: Error) => this.onError(error));
 			};
 
@@ -1266,7 +1266,7 @@ let mergerGpuUnavailable = false;
 
 /** Utility class that merges together color and alpha information using simple WebGL 2 shaders. */
 export class ColorAlphaMerger {
-	static forceCpu = false;
+	static forceCpu = true;
 
 	canvas: OffscreenCanvas | HTMLCanvasElement | null = null;
 	private gl: WebGL2RenderingContext | null = null;

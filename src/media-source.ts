@@ -877,7 +877,7 @@ let splitterGpuUnavailable = false;
 
 /** Utility class for splitting a composite frame into separate color and alpha components. */
 export class ColorAlphaSplitter {
-	static forceCpu = false;
+	static forceCpu = true;
 
 	canvas: OffscreenCanvas | HTMLCanvasElement | null = null;
 

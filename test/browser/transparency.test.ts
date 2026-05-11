@@ -202,73 +202,76 @@ test('Can encode transparent video, forced CPU path', async () => {
 });
 
 test('Can encode video with alternating transparency', async () => {
-	const output = new Output({
-		format: new WebMOutputFormat(),
-		target: new BufferTarget(),
-	});
-
-	const canvas1 = new OffscreenCanvas(640, 480);
-	const context1 = canvas1.getContext('2d', { alpha: true })!;
-	context1.fillStyle = '#ff000080';
-	context1.fillRect(0, 0, canvas1.width, canvas1.height);
-
-	const canvas2 = new OffscreenCanvas(640, 480);
-	const context2 = canvas2.getContext('2d', { alpha: false })!;
-	context2.fillStyle = '#0000ff';
-	context2.fillRect(0, 0, canvas2.width, canvas2.height);
-
-	const source = new VideoSampleSource({
-		codec: 'vp9',
-		bitrate: QUALITY_HIGH,
-		alpha: 'keep',
-	});
-	output.addVideoTrack(source);
-
-	await output.start();
-
-	for (let i = 0; i < 64; i++) {
-		using sample = new VideoSample(new Uint8Array(640 * 480 * 4), {
-			format: i % 2 ? 'RGBX' : 'RGBA',
-			codedWidth: 640,
-			codedHeight: 480,
-			timestamp: i,
-			duration: 1,
+	// This test is already brutal when it comes to finding async race conditions, so run it thrice to be MORE brutal
+	for (let j = 0; j < 3; j++) {
+		const output = new Output({
+			format: new WebMOutputFormat(),
+			target: new BufferTarget(),
 		});
-		await source.add(sample);
-	}
 
-	await output.finalize();
+		const canvas1 = new OffscreenCanvas(640, 480);
+		const context1 = canvas1.getContext('2d', { alpha: true })!;
+		context1.fillStyle = '#ff000080';
+		context1.fillRect(0, 0, canvas1.width, canvas1.height);
 
-	using input = new Input({
-		source: new BufferSource(output.target.buffer!),
-		formats: ALL_FORMATS,
-	});
+		const canvas2 = new OffscreenCanvas(640, 480);
+		const context2 = canvas2.getContext('2d', { alpha: false })!;
+		context2.fillStyle = '#0000ff';
+		context2.fillRect(0, 0, canvas2.width, canvas2.height);
 
-	const videoTrack = (await input.getPrimaryVideoTrack())!;
-	const packetSink = new EncodedPacketSink(videoTrack);
+		const source = new VideoSampleSource({
+			codec: 'vp9',
+			bitrate: QUALITY_HIGH,
+			alpha: 'keep',
+		});
+		output.addVideoTrack(source);
 
-	let i = 0;
-	for await (const packet of packetSink.packets()) {
-		if (i % 2) {
-			expect(packet.sideData.alpha).toBeUndefined();
-		} else {
-			expect(packet.sideData.alpha).toBeDefined();
+		await output.start();
+
+		for (let i = 0; i < 64; i++) {
+			using sample = new VideoSample(new Uint8Array(640 * 480 * 4), {
+				format: i % 2 ? 'RGBX' : 'RGBA',
+				codedWidth: 640,
+				codedHeight: 480,
+				timestamp: i,
+				duration: 1,
+			});
+			await source.add(sample);
 		}
 
-		i++;
-	}
+		await output.finalize();
 
-	const sampleSink = new VideoSampleSink(videoTrack);
+		using input = new Input({
+			source: new BufferSource(output.target.buffer!),
+			formats: ALL_FORMATS,
+		});
 
-	i = 0;
-	for await (using sample of sampleSink.samples()) {
-		if (i % 2) {
-			expect(sample.format).not.toContain('A');
-		} else {
-			expect(sample.format).toContain('A');
+		const videoTrack = (await input.getPrimaryVideoTrack())!;
+		const packetSink = new EncodedPacketSink(videoTrack);
+
+		let i = 0;
+		for await (const packet of packetSink.packets()) {
+			if (i % 2) {
+				expect(packet.sideData.alpha).toBeUndefined();
+			} else {
+				expect(packet.sideData.alpha).toBeDefined();
+			}
+
+			i++;
 		}
 
-		i++;
+		const sampleSink = new VideoSampleSink(videoTrack);
+
+		i = 0;
+		for await (using sample of sampleSink.samples()) {
+			if (i % 2) {
+				expect(sample.format).not.toContain('A');
+			} else {
+				expect(sample.format).toContain('A');
+			}
+
+			i++;
+		}
 	}
 });
 

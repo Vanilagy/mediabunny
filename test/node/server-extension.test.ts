@@ -593,7 +593,7 @@ describe('Video', async () => {
 	});
 
 	test('HEVC conversion roundtrip', { timeout: 20_000 }, async () => {
-		await conversionRoundtrip('hevc');
+		await conversionRoundtrip('hevc', 1); // GitHub is extremely slow on this one
 	});
 
 	test('VP8 conversion roundtrip', { timeout: 20_000 }, async () => {
@@ -608,7 +608,7 @@ describe('Video', async () => {
 		await conversionRoundtrip('av1');
 	});
 
-	const conversionRoundtrip = async (codec: VideoCodec) => {
+	const conversionRoundtrip = async (codec: VideoCodec, duration?: number) => {
 		using input = new Input({
 			source: new FilePathSource('./test/public/video.mp4'),
 			formats: ALL_FORMATS,
@@ -639,6 +639,9 @@ describe('Video', async () => {
 				forceTranscode: true,
 			}, audio: {
 				discard: true,
+			},
+			trim: {
+				end: duration,
 			},
 		});
 		await conversion.execute();
