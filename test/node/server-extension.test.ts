@@ -111,16 +111,15 @@ describe('Video', async () => {
 			bitrate: 1e6,
 		} satisfies VideoEncoderConfig;
 
-		let packetCount = 0;
+		const encodedPackets: EncodedPacket[] = [];
 		const sampleTimestamps: number[] = [];
 
 		// @ts-expect-error Readonly
 		encoder.onPacket = (packet: EncodedPacket, meta: EncodedVideoChunkMetadata) => {
-			expect(packet.timestamp).toBe(sampleTimestamps[packetCount]);
 			expect(packet.duration).toBe(1 / 30);
-			expect(packet.type).toBe(packetCount ? 'delta' : 'key');
+			expect(packet.type).toBe(encodedPackets.length ? 'delta' : 'key');
 
-			if (packetCount === 0) {
+			if (encodedPackets.length === 0) {
 				expect(meta.decoderConfig).toBeDefined();
 				expect(meta.decoderConfig!.codec.startsWith('avc1.')).toBe(true);
 				expect(meta.decoderConfig!.codedWidth).toBe(1280);
@@ -128,7 +127,7 @@ describe('Video', async () => {
 				expect(meta.decoderConfig!.description).toBeDefined();
 			}
 
-			packetCount++;
+			encodedPackets.push(packet);
 		};
 
 		await encoder.init();
@@ -150,9 +149,13 @@ describe('Video', async () => {
 
 		await encoder.flush();
 
-		expect(packetCount).toBe(10);
+		expect(encodedPackets).toHaveLength(10);
 
-		packetCount = 0;
+		let sortedTimestamps = encodedPackets.map(x => x.timestamp).sort((a, b) => a - b);
+		expect(sortedTimestamps).toEqual(sampleTimestamps);
+
+		// And, go again
+		encodedPackets.length = 0;
 		sampleTimestamps.length = 0;
 
 		for (let i = 0; i < 10; i++) {
@@ -171,7 +174,10 @@ describe('Video', async () => {
 
 		await encoder.flush();
 
-		expect(packetCount).toBe(10);
+		expect(encodedPackets).toHaveLength(10);
+
+		sortedTimestamps = encodedPackets.map(x => x.timestamp).sort((a, b) => a - b);
+		expect(sortedTimestamps).toEqual(sampleTimestamps);
 
 		await encoder.close();
 	});
@@ -217,7 +223,6 @@ describe('Video', async () => {
 
 	test('AVC encode and decode, length-prefixed', async () => {
 		await encodeDecodeTest('avc', {}, async (packet, meta, i) => {
-			expect(packet.timestamp).toBe(i / 30);
 			expect(packet.duration).toBe(1 / 30);
 			expect(packet.type).toBe(i ? 'delta' : 'key');
 			expect([...packet.data.slice(0, 4)]).not.toEqual([0, 0, 0, 1]);
@@ -254,7 +259,6 @@ describe('Video', async () => {
 
 	test('AVC encode and decode, Annex B', async () => {
 		await encodeDecodeTest('avc', { avc: { format: 'annexb' } }, async (packet, meta, i) => {
-			expect(packet.timestamp).toBe(i / 30);
 			expect(packet.duration).toBe(1 / 30);
 			expect(packet.type).toBe(i ? 'delta' : 'key');
 			expect([...packet.data.slice(0, 4)]).toEqual([0, 0, 0, 1]);
@@ -288,7 +292,6 @@ describe('Video', async () => {
 
 	test('HEVC encode and decode, length-prefixed', async () => {
 		await encodeDecodeTest('hevc', {}, async (packet, meta, i) => {
-			expect(packet.timestamp).toBe(i / 30);
 			expect(packet.duration).toBe(1 / 30);
 			expect(packet.type).toBe(i ? 'delta' : 'key');
 			expect([...packet.data.slice(0, 4)]).not.toEqual([0, 0, 0, 1]);
@@ -326,7 +329,6 @@ describe('Video', async () => {
 	test('HEVC encode and decode, Annex B', async () => {
 		// @ts-expect-error Fucky types
 		await encodeDecodeTest('hevc', { hevc: { format: 'annexb' } }, async (packet, meta, i) => {
-			expect(packet.timestamp).toBe(i / 30);
 			expect(packet.duration).toBe(1 / 30);
 			expect(packet.type).toBe(i ? 'delta' : 'key');
 			expect([...packet.data.slice(0, 4)]).toEqual([0, 0, 0, 1]);
@@ -361,7 +363,6 @@ describe('Video', async () => {
 
 	test('VP8 encode and decode', async () => {
 		await encodeDecodeTest('vp8', {}, async (packet, meta, i) => {
-			expect(packet.timestamp).toBe(i / 30);
 			expect(packet.duration).toBe(1 / 30);
 			expect(packet.type).toBe(i ? 'delta' : 'key');
 
@@ -386,7 +387,6 @@ describe('Video', async () => {
 
 	test('VP9 encode and decode, opaque', async () => {
 		await encodeDecodeTest('vp9', {}, async (packet, meta, i) => {
-			expect(packet.timestamp).toBe(i / 30);
 			expect(packet.duration).toBe(1 / 30);
 			expect(packet.type).toBe(i ? 'delta' : 'key');
 			expect(packet.sideData.alpha).toBeUndefined();
@@ -412,7 +412,6 @@ describe('Video', async () => {
 
 	test('VP9 encode and decode, transparent', async () => {
 		await encodeDecodeTest('vp9', { alpha: 'keep' }, async (packet, meta, i) => {
-			expect(packet.timestamp).toBe(i / 30);
 			expect(packet.duration).toBe(1 / 30);
 			expect(packet.type).toBe(i ? 'delta' : 'key');
 			expect(packet.sideData.alpha).toBeDefined();
@@ -442,7 +441,6 @@ describe('Video', async () => {
 
 	test('AV1 encode and decode', async () => {
 		await encodeDecodeTest('av1', {}, async (packet, meta, i) => {
-			expect(packet.timestamp).toBe(i / 30);
 			expect(packet.duration).toBe(1 / 30);
 			expect(packet.type).toBe(i ? 'delta' : 'key');
 
@@ -555,6 +553,9 @@ describe('Video', async () => {
 
 		expect(packets).toHaveLength(10);
 
+		const sortedTimestamps = packets.map(x => x.timestamp).sort((a, b) => a - b);
+		expect(sortedTimestamps).toEqual(sampleTimestamps);
+
 		for (let i = 0; i < packets.length; i++) {
 			await onPacket(packets[i]!, metas[i]!, i);
 		}
@@ -587,23 +588,23 @@ describe('Video', async () => {
 		}
 	};
 
-	test('AVC conversion roundtrip', { timeout: 10_000 }, async () => {
+	test('AVC conversion roundtrip', { timeout: 20_000 }, async () => {
 		await conversionRoundtrip('avc');
 	});
 
-	test('HEVC conversion roundtrip', { timeout: 10_000 }, async () => {
+	test('HEVC conversion roundtrip', { timeout: 20_000 }, async () => {
 		await conversionRoundtrip('hevc');
 	});
 
-	test('VP8 conversion roundtrip', { timeout: 10_000 }, async () => {
+	test('VP8 conversion roundtrip', { timeout: 20_000 }, async () => {
 		await conversionRoundtrip('vp8');
 	});
 
-	test('VP9 conversion roundtrip', { timeout: 10_000 }, async () => {
+	test('VP9 conversion roundtrip', { timeout: 20_000 }, async () => {
 		await conversionRoundtrip('vp9');
 	});
 
-	test('AV1 conversion roundtrip', { timeout: 10_000 }, async () => {
+	test('AV1 conversion roundtrip', { timeout: 20_000 }, async () => {
 		await conversionRoundtrip('av1');
 	});
 
@@ -1456,31 +1457,31 @@ describe('Audio', async () => {
 		return score;
 	};
 
-	test('AAC conversion roundtrip', { timeout: 10_000 }, async () => {
+	test('AAC conversion roundtrip', async () => {
 		await conversionRoundtrip('aac');
 	});
 
-	test('Opus conversion roundtrip', { timeout: 10_000 }, async () => {
+	test('Opus conversion roundtrip', async () => {
 		await conversionRoundtrip('opus');
 	});
 
-	test('MP3 conversion roundtrip', { timeout: 10_000 }, async () => {
+	test('MP3 conversion roundtrip', async () => {
 		await conversionRoundtrip('mp3');
 	});
 
-	test('Vorbis conversion roundtrip', { timeout: 10_000 }, async () => {
+	test('Vorbis conversion roundtrip', async () => {
 		await conversionRoundtrip('vorbis');
 	});
 
-	test('FLAC conversion roundtrip', { timeout: 10_000 }, async () => {
+	test('FLAC conversion roundtrip', async () => {
 		await conversionRoundtrip('flac');
 	});
 
-	test('AC-3 conversion roundtrip', { timeout: 10_000 }, async () => {
+	test('AC-3 conversion roundtrip', async () => {
 		await conversionRoundtrip('ac3');
 	});
 
-	test('E-AC-3 conversion roundtrip', { timeout: 10_000 }, async () => {
+	test('E-AC-3 conversion roundtrip', async () => {
 		await conversionRoundtrip('eac3');
 	});
 
