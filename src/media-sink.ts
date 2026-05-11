@@ -475,6 +475,8 @@ export abstract class BaseMediaSampleSink<
 		(async () => {
 			const decoder = await this._createDecoder((sample) => {
 				onQueueDequeue();
+				sample = trimAudioSampleStart(sample);
+
 				if (sample.timestamp >= endTimestamp) {
 					ended = true;
 				}
@@ -516,8 +518,11 @@ export abstract class BaseMediaSampleSink<
 			});
 
 			const packetSink = this._createPacketSink();
-			const keyPacket = await packetSink.getKeyPacket(startTimestamp, packetRetrievalOptions)
+			let keyPacket = await packetSink.getKeyPacket(startTimestamp, packetRetrievalOptions)
 				?? await packetSink.getFirstKeyPacket(packetRetrievalOptions);
+			if (this._track instanceof InputAudioTrack && keyPacket && keyPacket.timestamp < 0) {
+				keyPacket = await packetSink.getFirstKeyPacket(packetRetrievalOptions);
+			}
 
 			let currentPacket: EncodedPacket | null = keyPacket;
 
@@ -654,6 +659,7 @@ export abstract class BaseMediaSampleSink<
 		(async () => {
 			const decoder = await this._createDecoder((sample) => {
 				onQueueDequeue();
+				sample = trimAudioSampleStart(sample);
 
 				if (terminated) {
 					sample.close();
@@ -739,7 +745,10 @@ export abstract class BaseMediaSampleSink<
 				}
 
 				const targetPacket = await packetSink.getPacket(timestamp, retrievalOptions);
-				const keyPacket = targetPacket && await packetSink.getKeyPacket(timestamp, retrievalOptions);
+				let keyPacket = targetPacket && await packetSink.getKeyPacket(timestamp, retrievalOptions);
+				if (this._track instanceof InputAudioTrack && keyPacket && keyPacket.timestamp < 0) {
+					keyPacket = await packetSink.getFirstKeyPacket(retrievalOptions);
+				}
 
 				if (!keyPacket) {
 					if (maxSequenceNumber !== -1) {
@@ -843,6 +852,55 @@ const computeMaxQueueSize = (decodedSampleQueueSize: number) => {
 	// a lot of memory). If not, we're fine with a much bigger queue of encoded packets waiting to be decoded. In fact,
 	// some decoders only start flushing out decoded chunks when the packet queue is large enough.
 	return decodedSampleQueueSize === 0 ? 40 : 8;
+};
+
+const trimAudioSampleStart = <MediaSample extends VideoSample | AudioSample>(sample: MediaSample): MediaSample => {
+	if (!(sample instanceof AudioSample) || sample.timestamp >= 0 || sample.timestamp + sample.duration <= 0) {
+		return sample;
+	}
+
+	const frameOffset = Math.round(-sample.timestamp * sample.sampleRate);
+	const framesToCopy = sample.numberOfFrames - frameOffset;
+	if (framesToCopy <= 0) {
+		return sample;
+	}
+
+	const isPlanar = sample.format.endsWith('-planar');
+	const planeSize = sample.allocationSize({
+		planeIndex: 0,
+		format: sample.format,
+		frameCount: framesToCopy,
+	});
+	const data = new Uint8Array(planeSize * (isPlanar ? sample.numberOfChannels : 1));
+
+	if (isPlanar) {
+		for (let i = 0; i < sample.numberOfChannels; i++) {
+			sample.copyTo(data.subarray(i * planeSize, (i + 1) * planeSize), {
+				planeIndex: i,
+				format: sample.format,
+				frameOffset,
+				frameCount: framesToCopy,
+			});
+		}
+	} else {
+		sample.copyTo(data, {
+			planeIndex: 0,
+			format: sample.format,
+			frameOffset,
+			frameCount: framesToCopy,
+		});
+	}
+
+	const trimmedSample = new AudioSample({
+		format: sample.format,
+		sampleRate: sample.sampleRate,
+		numberOfChannels: sample.numberOfChannels,
+		timestamp: 0,
+		data,
+	});
+
+	sample.close();
+	return trimmedSample as MediaSample;
 };
 
 class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
