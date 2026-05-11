@@ -626,6 +626,10 @@ describe('Video', async () => {
 		const packetSink = new EncodedPacketSink(inputTrack);
 
 		for await (const packet of packetSink.packets()) {
+			if (duration !== undefined && packet.timestamp >= duration) {
+				break;
+			}
+
 			packetTimestamps.push(packet.timestamp);
 		}
 
