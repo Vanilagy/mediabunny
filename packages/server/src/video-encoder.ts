@@ -57,7 +57,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 
 	static override supports(codec: VideoCodec, config: VideoEncoderConfig): boolean {
 		return (codec === 'avc' || codec === 'hevc' || codec === 'vp8' || codec === 'vp9' || codec === 'av1')
-			&& !(config.alpha === 'keep' || config.bitrateMode === 'quantizer');
+			&& config.bitrateMode !== 'quantizer';
 	}
 
 	async init(): Promise<void> {
@@ -285,7 +285,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 				break;
 			}
 
-			this.receivePacket(ret);
+			this.receivePacket(receiveRet);
 		}
 	}
 
