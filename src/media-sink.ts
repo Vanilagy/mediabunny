@@ -1811,6 +1811,7 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 	// Internal state to accumulate a precise current timestamp based on audio durations, not the (potentially
 	// inaccurate) packet timestamps.
 	currentTimestamp: number | null = null;
+	expectedTimestamps: number[] = [];
 
 	constructor(
 		onSample: (sample: AudioSample) => unknown,
@@ -1821,12 +1822,15 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 		super(onSample, onError);
 
 		const sampleHandler = (sample: AudioSample) => {
+			const expectedTimestamp = this.expectedTimestamps.shift();
+			const sampleTimestamp = expectedTimestamp ?? sample.timestamp;
+
 			if (
 				this.currentTimestamp === null
-				|| Math.abs(sample.timestamp - this.currentTimestamp) >= sample.duration
+				|| Math.abs(sampleTimestamp - this.currentTimestamp) >= sample.duration
 			) {
 				// We need to sync with the sample timestamp again
-				this.currentTimestamp = sample.timestamp;
+				this.currentTimestamp = sampleTimestamp;
 			}
 
 			const preciseTimestamp = this.currentTimestamp;
@@ -1894,6 +1898,8 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 	}
 
 	decode(packet: EncodedPacket) {
+		this.expectedTimestamps.push(packet.timestamp);
+
 		if (this.customDecoder) {
 			this.customDecoderQueueSize++;
 			void this.customDecoderCallSerializer
