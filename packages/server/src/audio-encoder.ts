@@ -1,10 +1,9 @@
-import { AudioCodec, AudioSample, CustomAudioEncoder, MaybePromise, QUALITY_MEDIUM } from 'mediabunny';
+import { AudioCodec, AudioSample, CustomAudioEncoder, MaybePromise, QUALITY_MEDIUM, EncodedPacket } from 'mediabunny';
 import * as NodeAv from 'node-av';
 import { CODEC_TO_CODEC_ID, fromAudioSampleFormat, getChannelLayout } from './misc';
 import { assert, toUint8Array } from '../../../src/misc';
 import { NodeAvFrameAudioSampleResource } from './audio-sample';
 import { AdtsHeaderTemplate, buildAdtsHeaderTemplate, parseAacAudioSpecificConfig } from '../../../shared/aac-misc';
-import { EncodedPacket } from 'mediabunny';
 
 const AAC_SAMPLE_RATES
 	= [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];

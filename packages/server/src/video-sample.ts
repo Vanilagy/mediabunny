@@ -5,10 +5,12 @@ import {
 	VideoSampleColorSpace,
 	SetRequired,
 	VideoSampleInit,
+	VideoSample,
+	VideoDataPlane,
+	VideoSampleTransformationDescription,
 } from 'mediabunny';
 import * as NodeAv from 'node-av';
 import { MaybePromise, toUint8Array } from '../../../src/misc';
-import { VideoSampleTransformationDescription, VideoDataPlane, VideoSample } from '../../../src/sample';
 import {
 	toPixelFormat,
 	unmapColorPrimaries,
@@ -165,7 +167,7 @@ export const copyVideoSampleToAvFrame = async (sample: VideoSample, frame: NodeA
 	return lastBuffer;
 };
 
-export const transformSample = async (
+export const transformVideoSample = async (
 	sample: VideoSample,
 	description: VideoSampleTransformationDescription,
 ): Promise<VideoSample | null> => {
