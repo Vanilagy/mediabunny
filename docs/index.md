@@ -113,6 +113,7 @@ const sponsors = {
 	],
 	individual: [
 		{ image: '/sponsors/pintura-labs.png', name: 'Pintura Labs', url: 'https://pqina.nl/pintura/' },
+		{ image: 'https://avatars.githubusercontent.com/u/189556080', name: 'Cursorful', url: 'https://github.com/cursorful' },
 		{ image: 'https://avatars.githubusercontent.com/u/11537072', name: 'Threema', url: 'https://threema.com/en' },
 		{ image: 'https://avatars.githubusercontent.com/u/82552321', name: 'Polotno', url: 'https://github.com/polotno-project' },
 		{ image: 'https://avatars.githubusercontent.com/u/489051', name: 'Roman Rädle', url: 'https://github.com/raedle' },
@@ -134,6 +135,7 @@ const sponsors = {
 		{ image: 'https://avatars.githubusercontent.com/u/255616819', name: 'cronischarles-del', url: 'https://github.com/cronischarles-del' },
 		{ image: 'https://avatars.githubusercontent.com/u/37973863', name: 'Gomi', url: 'https://github.com/gxy5202' },
 		{ image: 'https://avatars.githubusercontent.com/u/36898190', name: 'jepcd', url: 'https://github.com/jepcd' },
+		{ image: 'https://avatars.githubusercontent.com/u/695166', name: 'Takenori Nakagawa', url: 'https://github.com/ww24' },
 		{ image: 'https://avatars.githubusercontent.com/u/63088713', name: 'taf2000', url: 'https://github.com/taf2000' },
 		{ image: 'https://avatars.githubusercontent.com/u/58149663', name: 'H7GhosT', url: 'https://github.com/H7GhosT' },
 		{ image: 'https://avatars.githubusercontent.com/u/91711202', name: 'ihasq', url: 'https://github.com/ihasq' },

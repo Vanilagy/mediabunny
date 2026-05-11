@@ -907,7 +907,9 @@ export class MatroskaMuxer extends Muxer {
 			const trackData = this.getVideoTrackData(track, packet, meta);
 
 			const isKeyFrame = packet.type === 'key';
-			let timestamp = this.validateAndNormalizeTimestamp(trackData.track, packet.timestamp, isKeyFrame);
+			this.validateTimestamp(trackData.track, packet.timestamp, isKeyFrame);
+
+			let timestamp = packet.timestamp;
 			let duration = packet.duration;
 
 			if (track.metadata.frameRate !== undefined) {
@@ -950,9 +952,9 @@ export class MatroskaMuxer extends Muxer {
 			}
 
 			const isKeyFrame = packet.type === 'key';
-			const timestamp = this.validateAndNormalizeTimestamp(trackData.track, packet.timestamp, isKeyFrame);
-			const audioChunk = this.createInternalChunk(packetData, timestamp, packet.duration, packet.type);
+			this.validateTimestamp(trackData.track, packet.timestamp, isKeyFrame);
 
+			const audioChunk = this.createInternalChunk(packetData, packet.timestamp, packet.duration, packet.type);
 			trackData.chunkQueue.push(audioChunk);
 			await this.interleaveChunks();
 		} finally {
@@ -966,10 +968,10 @@ export class MatroskaMuxer extends Muxer {
 		try {
 			const trackData = this.getSubtitleTrackData(track, meta);
 
-			const timestamp = this.validateAndNormalizeTimestamp(trackData.track, cue.timestamp, true);
+			this.validateTimestamp(trackData.track, cue.timestamp, true);
 
 			let bodyText = cue.text;
-			const timestampMs = Math.round(timestamp * 1000);
+			const timestampMs = Math.round(cue.timestamp * 1000);
 
 			// Replace in-body timestamps so that they're relative to the cue start time
 			inlineTimestampRegex.lastIndex = 0;
@@ -985,7 +987,7 @@ export class MatroskaMuxer extends Muxer {
 
 			const subtitleChunk = this.createInternalChunk(
 				body,
-				timestamp,
+				cue.timestamp,
 				cue.duration,
 				'key',
 				additions.trim() ? textEncoder.encode(additions) : null,

@@ -1754,6 +1754,7 @@ export class Conversion {
 				startTime: this._startTimestamp,
 				endTime: this._endTimestamp,
 				onSample: async (sample) => {
+					assert(sample.timestamp >= this._startTimestamp);
 					sample.setTimestamp(sample.timestamp - this._startTimestamp);
 
 					await this._registerAudioSample(trackOptions, outputTrackId, source, sample);
