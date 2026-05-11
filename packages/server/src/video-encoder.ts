@@ -1,4 +1,12 @@
-import { CustomVideoEncoder, MaybePromise, QUALITY_MEDIUM, VideoCodec, VideoSample, EncodedPacket } from 'mediabunny';
+import {
+	CustomVideoEncoder,
+	MaybePromise,
+	QUALITY_MEDIUM,
+	VideoCodec,
+	VideoSample,
+	EncodedPacket,
+	EncodedPacketSideData,
+} from 'mediabunny';
 import * as NodeAv from 'node-av';
 import {
 	CODEC_TO_CODEC_ID,
@@ -25,7 +33,6 @@ import {
 } from '../../../src/codec-data';
 import { extractVideoCodecString } from '../../../src/codec';
 import { assert, binarySearchLessOrEqual, simplifyRational, toUint8Array } from '../../../src/misc';
-import { EncodedPacketSideData } from 'mediabunny';
 
 export class NodeAvVideoEncoder extends CustomVideoEncoder {
 	frame!: NodeAv.Frame;
@@ -180,7 +187,6 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			}
 
 			this.lastBuffer = await copyVideoSampleToAvFrame(videoSample, this.frame, this.lastBuffer);
-			this.frame.keyFrame = options?.keyFrame ? 1 : 0;
 		}
 
 		let frameToEncode = this.frame;
@@ -224,6 +230,18 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			this.dstFrame.copyProps(this.frame);
 			frameToEncode = this.dstFrame;
 		}
+
+		frameToEncode.pts = BigInt(videoSample.microsecondTimestamp);
+		frameToEncode.duration = BigInt(videoSample.microsecondDuration);
+		frameToEncode.timeBase = new NodeAv.Rational(1, 1e6);
+
+		// Let's just set both for good measure
+		frameToEncode.pictType = options?.keyFrame
+			? NodeAv.AV_PICTURE_TYPE_I
+			: NodeAv.AV_PICTURE_TYPE_NONE;
+		frameToEncode.keyFrame = options?.keyFrame
+			? 1
+			: 0;
 
 		const preciseTimingIndex = binarySearchLessOrEqual(
 			this.preciseTimings,
@@ -503,8 +521,8 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			};
 		}
 
-		this.onPacket(packet, metadata);
 		this.packetEmitted = true;
+		this.onPacket(packet, metadata);
 	}
 
 	async flush(): Promise<void> {
@@ -525,7 +543,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 
 			this.codecContext.freeContext();
 			this.codecContext = null;
-			// The codec is done now and can't be reused. Any subsequence encode call will first need to recreate a
+			// The codec is done now and can't be reused. Any subsequent encode call will first need to recreate a
 			// codec context.
 		}
 

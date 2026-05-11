@@ -591,11 +591,13 @@ const DEFAULT_RETRY_DELAY
 		// Check if this could be a CORS error. If so, we cannot recover from it and
 		// should not attempt to retry.
 		// CORS errors are intentionally not opaque, so we need to rely on heuristics.
-		const couldBeCorsError = error instanceof Error && (
-			error.message.includes('Failed to fetch') // Chrome
-			|| error.message.includes('Load failed') // Safari
-			|| error.message.includes('NetworkError when attempting to fetch resource') // Firefox
-		);
+		const couldBeCorsError = error instanceof Error
+			&& (
+				error.message.includes('Failed to fetch') // Chrome
+				|| error.message.includes('Load failed') // Safari
+				|| error.message.includes('NetworkError when attempting to fetch resource') // Firefox
+			)
+			&& typeof window !== 'undefined'; // CORS only happens in browser environments
 
 		if (couldBeCorsError) {
 			let originOfSrc: string | null = null;

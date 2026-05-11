@@ -1726,7 +1726,7 @@ const colorAlphaMergerWorkerCode = () => {
 
 		const format = alpha.format;
 		if (format === 'RGBA' || format === 'BGRA' || format === 'RGBX' || format === 'BGRX') {
-			// Pack alpha data tightly
+			// Pack alpha data tightly. Assume alpha is stored in RGB, so sample just from R for simplicity.
 			const rOffset = (format === 'RGBA' || format === 'RGBX') ? 0 : 2;
 			const pixelCount = width * height;
 			for (let i = 0; i < pixelCount; i++) {

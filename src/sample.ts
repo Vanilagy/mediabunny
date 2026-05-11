@@ -1245,8 +1245,9 @@ export class VideoSample implements Disposable {
 			? [this.squarePixelWidth, this.squarePixelHeight]
 			: [this.squarePixelHeight, this.squarePixelWidth];
 
-		if (options.crop) {
-			clampCropRectangle(options.crop, rotatedWidth, rotatedHeight);
+		let finalCrop = options.crop;
+		if (finalCrop) {
+			finalCrop = clampCropRectangle(finalCrop, rotatedWidth, rotatedHeight);
 		}
 
 		// These variables specify where the final sample will be drawn on the canvas

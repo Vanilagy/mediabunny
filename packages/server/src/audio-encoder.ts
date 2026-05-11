@@ -124,8 +124,7 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 			this.frame.nbSamples = audioSample.numberOfFrames;
 			this.frame.sampleRate = audioSample.sampleRate;
 			this.frame.channelLayout = getChannelLayout(audioSample.numberOfChannels);
-			this.frame.pts = BigInt(Math.round(audioSample.timestamp * audioSample.sampleRate));
-			this.frame.duration = BigInt(audioSample.numberOfFrames);
+			this.frame.duration = BigInt(Math.round(audioSample.duration * this.config.sampleRate));
 
 			this.frame.allocBuffer();
 			assert(this.frame.data);
@@ -134,6 +133,9 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 				audioSample.copyTo(this.frame.data[i]!, { planeIndex: i });
 			}
 		}
+
+		this.frame.pts = BigInt(Math.round(audioSample.timestamp * this.config.sampleRate));
+		this.frame.timeBase = new NodeAv.Rational(1, this.config.sampleRate);
 
 		const key = `${this.frame.sampleRate}:${this.frame.channels}:${this.frame.format}`;
 		if (this.inputParametersKey !== null && this.inputParametersKey !== key) {
@@ -314,8 +316,8 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 			duration,
 		);
 
-		this.onPacket(packet, metadata);
 		this.packetEmitted = true;
+		this.onPacket(packet, metadata);
 	}
 
 	async flush(): Promise<void> {
@@ -350,6 +352,7 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 		this.packetEmitted = false;
 		this.firstExpectedTimestamp = null;
 		this.outputTimestampOffset = 0;
+		this.adtsHeaderTemplate = null;
 
 		this.resampler?.free();
 		this.resampler = null;

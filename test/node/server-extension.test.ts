@@ -176,6 +176,45 @@ describe('Video', async () => {
 		await encoder.close();
 	});
 
+	test('Forced key frame encode', async () => {
+		const encoder = new NodeAvVideoEncoder();
+		// @ts-expect-error Readonly
+		encoder.codec = 'avc';
+		// @ts-expect-error Readonly
+		encoder.config = {
+			codec: buildVideoCodecString('avc', 1280, 720, 1e6),
+			width: 1280,
+			height: 720,
+			bitrate: 1e6,
+		} satisfies VideoEncoderConfig;
+
+		let packetCount = 0;
+
+		// @ts-expect-error Readonly
+		encoder.onPacket = (packet: EncodedPacket) => {
+			expect(packet.type).toBe(packetCount % 2 ? 'delta' : 'key');
+			packetCount++;
+		};
+
+		await encoder.init();
+
+		const data = new Uint8Array(1280 * 720 * 4).fill(0xff); // White
+		for (let i = 0; i < 10; i++) {
+			using sample = new VideoSample(data, {
+				format: 'RGBX',
+				codedWidth: 1280,
+				codedHeight: 720,
+				timestamp: i / 30,
+				duration: 1 / 30,
+			});
+
+			await encoder.encode(sample, { keyFrame: i % 2 === 0 });
+		}
+
+		await encoder.flush();
+		await encoder.close();
+	});
+
 	test('AVC encode and decode, length-prefixed', async () => {
 		await encodeDecodeTest('avc', {}, async (packet, meta, i) => {
 			expect(packet.timestamp).toBe(i / 30);

@@ -1,7 +1,11 @@
 import assert from 'assert';
-import { VideoSamplePixelFormat } from 'mediabunny';
-import { VideoSampleColorSpace } from 'mediabunny';
-import { VideoSampleResource } from 'mediabunny';
+import {
+	VideoSamplePixelFormat,
+	VideoSampleResource,
+	VideoSampleColorSpace,
+	SetRequired,
+	VideoSampleInit,
+} from 'mediabunny';
 import * as NodeAv from 'node-av';
 import { MaybePromise, toUint8Array } from '../../../src/misc';
 import { VideoSampleTransformationDescription, VideoDataPlane, VideoSample } from '../../../src/sample';
@@ -15,8 +19,6 @@ import {
 	mapMatrixCoefficients,
 	mapTransferCharacteristics,
 } from './misc';
-import { SetRequired } from 'mediabunny';
-import { VideoSampleInit } from 'mediabunny';
 
 const JPEG_RANGE_PIX_FORMATS = new Set([
 	NodeAv.AV_PIX_FMT_YUVJ411P,
@@ -140,8 +142,6 @@ export const copyVideoSampleToAvFrame = async (sample: VideoSample, frame: NodeA
 		sample.pixelAspectRatio.num,
 		sample.pixelAspectRatio.den,
 	);
-	frame.pts = BigInt(sample.microsecondTimestamp);
-	frame.duration = BigInt(sample.microsecondDuration);
 	frame.colorPrimaries = mapColorPrimaries(sample.colorSpace.primaries ?? 'unknown')
 		?? NodeAv.AVCOL_PRI_UNSPECIFIED;
 	frame.colorSpace = mapMatrixCoefficients(sample.colorSpace.matrix ?? 'unknown')

@@ -1,7 +1,7 @@
 import { AudioCodec, AudioSample, CustomAudioDecoder, EncodedPacket, MaybePromise } from 'mediabunny';
 import * as NodeAv from 'node-av';
 import { CODEC_TO_CODEC_ID, getChannelLayout } from './misc';
-import { assert, roundToDivisor, toUint8Array } from '../../../src/misc';
+import { assert, toUint8Array } from '../../../src/misc';
 import { NodeAvFrameAudioSampleResource } from './audio-sample';
 
 export class NodeAvAudioDecoder extends CustomAudioDecoder {
@@ -39,6 +39,7 @@ export class NodeAvAudioDecoder extends CustomAudioDecoder {
 
 		codecContext.sampleRate = this.config.sampleRate;
 		codecContext.channelLayout = getChannelLayout(this.config.numberOfChannels);
+		codecContext.timeBase = new NodeAv.Rational(1, this.config.sampleRate);
 		codecContext.codecType = NodeAv.AVMEDIA_TYPE_AUDIO;
 		codecContext.codecId = codecId;
 		codecContext.extraData = this.config.description
@@ -54,10 +55,10 @@ export class NodeAvAudioDecoder extends CustomAudioDecoder {
 	async decode(packet: EncodedPacket): Promise<void> {
 		this.packet.isKeyframe = packet.type === 'key';
 		this.packet.data = Buffer.from(packet.data);
-		this.packet.timeBase = { num: 1, den: 1e6 };
-		this.packet.pts = BigInt(packet.microsecondTimestamp);
+		this.packet.timeBase = { num: 1, den: this.config.sampleRate };
+		this.packet.pts = BigInt(Math.round(packet.timestamp * this.config.sampleRate));
 		this.packet.dts = NodeAv.AV_NOPTS_VALUE;
-		this.packet.duration = BigInt(packet.microsecondDuration);
+		this.packet.duration = BigInt(Math.round(packet.duration * this.config.sampleRate));
 
 		const ret = await this.codecContext.sendPacket(this.packet);
 		NodeAv.FFmpegError.throwIfError(ret, 'Send packet');
@@ -75,7 +76,7 @@ export class NodeAvAudioDecoder extends CustomAudioDecoder {
 	receiveFrame(ret: number) {
 		NodeAv.FFmpegError.throwIfError(ret, 'Receive frame');
 
-		const timestamp = roundToDivisor(Number(this.frame.pts) / 1e6, this.config.sampleRate);
+		const timestamp = Number(this.frame.pts) / this.config.sampleRate;
 		this.onSample(new AudioSample(new NodeAvFrameAudioSampleResource(this.frame, timestamp)));
 	}
 
