@@ -120,7 +120,8 @@ export class Mp4InputFormat extends IsobmffInputFormat {
 		if (slice instanceof Promise) slice = await slice;
 		if (!slice) return false;
 
-		return readAscii(slice, 4) === 'moof'; // Seen in HLS for example
+		const fourCc = readAscii(slice, 4);
+		return fourCc === 'moof' || fourCc === 'sidx'; // Seen in HLS for example
 	}
 
 	get name() {
