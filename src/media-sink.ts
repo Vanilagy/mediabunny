@@ -745,17 +745,22 @@ export abstract class BaseMediaSampleSink<
 				}
 
 				const targetPacket = await packetSink.getPacket(timestamp, retrievalOptions);
-				let keyPacket = targetPacket && await packetSink.getKeyPacket(timestamp, retrievalOptions);
-				if (this._track instanceof InputAudioTrack && keyPacket && keyPacket.timestamp < 0) {
-					keyPacket = await packetSink.getFirstKeyPacket(retrievalOptions);
-				}
-
-				if (!keyPacket) {
+				if (!targetPacket) {
 					if (maxSequenceNumber !== -1) {
 						await decodePackets();
 						await flushDecoder();
 					}
 
+					pushToQueue(null);
+					lastPacket = null;
+					continue;
+				}
+
+				let keyPacket = await packetSink.getKeyPacket(timestamp, retrievalOptions);
+				if (this._track instanceof InputAudioTrack && keyPacket && keyPacket.timestamp < 0) {
+					keyPacket = await packetSink.getFirstKeyPacket(retrievalOptions);
+				}
+				if (!keyPacket) {
 					pushToQueue(null);
 					lastPacket = null;
 					continue;
