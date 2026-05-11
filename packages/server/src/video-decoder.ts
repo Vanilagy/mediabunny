@@ -1,13 +1,13 @@
 import { CustomVideoDecoder, VideoCodec, EncodedPacket, VideoSample, MaybePromise, Rational } from 'mediabunny';
 import * as NodeAv from 'node-av';
-import { CODEC_TO_CODEC_ID, getHardwareDecoderCodec } from './misc';
+import { CODEC_TO_CODEC_ID, getHardwareDecoderCodec, LIBVPX_VP9 } from './misc';
 import { assert, binarySearchLessOrEqual, simplifyRational, toUint8Array } from '../../../src/misc';
 import { NodeAvFrameVideoSampleResource } from './video-sample';
 
 export class NodeAvVideoDecoder extends CustomVideoDecoder {
 	frame!: NodeAv.Frame;
 	packet!: NodeAv.Packet;
-	codecContext!: NodeAv.CodecContext;
+	codecContext: NodeAv.CodecContext | null = null;
 	pixelAspectRatio!: Rational;
 
 	// Bookkeeping to restore the original timing information
@@ -29,12 +29,18 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 		this.frame.alloc();
 		this.packet = new NodeAv.Packet();
 		this.packet.alloc();
+	}
+
+	async initCodecContext(packet: EncodedPacket) {
+		assert(this.codecContext === null);
 
 		const codecId = CODEC_TO_CODEC_ID[this.codec];
 		assert(codecId !== undefined);
 
 		let codec: NodeAv.Codec | null;
-		if (this.config.hardwareAcceleration !== 'prefer-hardware' || this.codec === 'av1') {
+		if (this.codec === 'vp9' && packet.sideData.alpha) {
+			codec = NodeAv.Codec.findDecoderByName(LIBVPX_VP9) ?? NodeAv.Codec.findDecoder(codecId);
+		} else if (this.config.hardwareAcceleration !== 'prefer-hardware' || this.codec === 'av1') {
 			// https://github.com/opencv/opencv/issues/24430
 			codec = NodeAv.Codec.findDecoder(codecId);
 		} else {
@@ -69,12 +75,25 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 	}
 
 	async decode(packet: EncodedPacket) {
+		if (this.codecContext === null) {
+			await this.initCodecContext(packet);
+			assert(this.codecContext);
+		}
+
 		this.packet.isKeyframe = packet.type === 'key';
 		this.packet.data = Buffer.from(packet.data);
 		this.packet.timeBase = { num: 1, den: 1e6 };
 		this.packet.pts = BigInt(packet.microsecondTimestamp);
 		this.packet.dts = NodeAv.AV_NOPTS_VALUE;
 		this.packet.duration = BigInt(packet.microsecondDuration);
+
+		if (packet.sideData.alpha) {
+			const matroskaBlockAdditional = Buffer.alloc(8 + packet.sideData.alpha.byteLength);
+			matroskaBlockAdditional[7] = 1; // BlockAddId
+			matroskaBlockAdditional.set(packet.sideData.alpha, 8);
+
+			this.packet.addSideData(NodeAv.AV_PKT_DATA_MATROSKA_BLOCKADDITIONAL, matroskaBlockAdditional);
+		}
 
 		const preciseTimingIndex = binarySearchLessOrEqual(
 			this.preciseTimings,
@@ -161,6 +180,10 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 	}
 
 	async flush() {
+		if (!this.codecContext) {
+			return;
+		}
+
 		// Send null packet to signal flush
 		const ret = await this.codecContext.sendPacket(null);
 		NodeAv.FFmpegError.throwIfError(ret, 'Flush decoder');
@@ -180,7 +203,7 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 	}
 
 	close(): MaybePromise<void> {
-		this.codecContext.freeContext();
+		this.codecContext?.freeContext();
 		this.frame.free();
 		this.packet.free();
 	}

@@ -52,6 +52,7 @@ import {
 	audioSampleToInterleavedFormat,
 	toInterleavedAudioFormat,
 	VideoSample,
+	VideoSamplePixelFormat,
 } from './sample';
 import {
 	AudioEncodingConfig,
@@ -544,27 +545,15 @@ class VideoEncoderWrapper {
 							const height = videoFrame.displayHeight;
 
 							if (!this.splitter) {
-								try {
-									this.splitter = new ColorAlphaSplitter(width, height);
-								} catch (error) {
-									console.error('Due to an error, only color data will be encoded.', error);
-
-									this.splitterCreationFailed = true;
-									this.alphaFrameQueue.push(null);
-									this.encoder.encode(videoFrame, finalEncodeOptions);
-									videoFrame.close();
-								}
+								this.splitter = new ColorAlphaSplitter(width, height);
 							}
 
-							if (this.splitter) {
-								const colorFrame = this.splitter.extractColor(videoFrame);
-								const alphaFrame = this.splitter.extractAlpha(videoFrame);
+							// The splitter takes ownership, so no need to close the frames ourselves
+							const { colorFrame, alphaFrame } = await this.splitter.update(videoFrame);
 
-								this.alphaFrameQueue.push(alphaFrame);
-								this.encoder.encode(colorFrame, finalEncodeOptions);
-								colorFrame.close();
-								videoFrame.close();
-							}
+							this.alphaFrameQueue.push(alphaFrame);
+							this.encoder.encode(colorFrame, finalEncodeOptions);
+							colorFrame.close();
 						}
 					}
 
@@ -889,51 +878,107 @@ class VideoEncoderWrapper {
 	}
 }
 
-/** Utility class for splitting a composite frame into separate color and alpha components. */
-class ColorAlphaSplitter {
-	canvas: OffscreenCanvas | HTMLCanvasElement;
+let splitterGpuUnavailable = false;
 
-	private gl: WebGL2RenderingContext;
-	private colorProgram: WebGLProgram;
-	private alphaProgram: WebGLProgram;
-	private vao: WebGLVertexArrayObject;
-	private sourceTexture: WebGLTexture;
-	private lastFrame: VideoFrame | null = null;
-	private alphaResolutionLocation: WebGLUniformLocation;
+/** Utility class for splitting a composite frame into separate color and alpha components. */
+export class ColorAlphaSplitter {
+	static forceCpu = false;
+
+	canvas: OffscreenCanvas | HTMLCanvasElement | null = null;
+
+	private gl: WebGL2RenderingContext | null = null;
+	private colorProgram: WebGLProgram | null = null;
+	private alphaProgram: WebGLProgram | null = null;
+	private vao: WebGLVertexArrayObject | null = null;
+	private sourceTexture: WebGLTexture | null = null;
+	private alphaResolutionLocation: WebGLUniformLocation | null = null;
+
+	private worker: Worker | null = null;
+	private pendingRequests = new Map<
+		number,
+		ReturnType<typeof promiseWithResolvers<{ colorFrame: VideoFrame; alphaFrame: VideoFrame }>>
+	>();
+
+	private nextRequestId = 0;
 
 	constructor(initialWidth: number, initialHeight: number) {
-		if (typeof OffscreenCanvas !== 'undefined') {
-			this.canvas = new OffscreenCanvas(initialWidth, initialHeight);
+		const canMakeCanvas = typeof OffscreenCanvas !== 'undefined'
+			// eslint-disable-next-line @typescript-eslint/no-deprecated
+			|| (typeof document !== 'undefined' && typeof document.createElement === 'function');
+
+		if (!ColorAlphaSplitter.forceCpu && canMakeCanvas && !splitterGpuUnavailable) {
+			// Try the GPU path. If anything goes wrong, we silently fall back to the CPU path.
+			try {
+				if (typeof OffscreenCanvas !== 'undefined') {
+					this.canvas = new OffscreenCanvas(initialWidth, initialHeight);
+				} else {
+					this.canvas = document.createElement('canvas');
+					this.canvas.width = initialWidth;
+					this.canvas.height = initialHeight;
+				}
+
+				const gl = this.canvas.getContext('webgl2', {
+					alpha: true, // Needed due to the YUV thing we do for alpha
+				}) as unknown as WebGL2RenderingContext | null; // Casting because of some TypeScript weirdness
+				if (!gl) {
+					throw new Error('Couldn\'t acquire WebGL 2 context.');
+				}
+
+				this.gl = gl;
+
+				this.colorProgram = this.createColorProgram();
+				this.alphaProgram = this.createAlphaProgram();
+				this.vao = this.createVAO();
+				this.sourceTexture = this.createTexture();
+
+				this.alphaResolutionLocation = this.gl.getUniformLocation(this.alphaProgram, 'u_resolution')!;
+
+				this.gl.useProgram(this.colorProgram);
+				this.gl.uniform1i(this.gl.getUniformLocation(this.colorProgram, 'u_sourceTexture'), 0);
+
+				this.gl.useProgram(this.alphaProgram);
+				this.gl.uniform1i(this.gl.getUniformLocation(this.alphaProgram, 'u_sourceTexture'), 0);
+			} catch (error) {
+				this.gl = null;
+				this.canvas = null;
+				splitterGpuUnavailable = true;
+				console.warn('Falling back to CPU for color/alpha splitting.', error);
+			}
+		}
+	}
+
+	async update(sourceFrame: VideoFrame) {
+		if (this.gl) {
+			return this.updateGpu(sourceFrame);
 		} else {
-			this.canvas = document.createElement('canvas');
-			this.canvas.width = initialWidth;
-			this.canvas.height = initialHeight;
+			return this.updateCpu(sourceFrame);
+		}
+	}
+
+	private updateGpu(sourceFrame: VideoFrame) {
+		assert(this.gl);
+		assert(this.canvas);
+
+		if (sourceFrame.displayWidth !== this.canvas.width || sourceFrame.displayHeight !== this.canvas.height) {
+			this.canvas.width = sourceFrame.displayWidth;
+			this.canvas.height = sourceFrame.displayHeight;
 		}
 
-		const gl = this.canvas.getContext('webgl2', {
-			alpha: true, // Needed due to the YUV thing we do for alpha
-		}) as unknown as WebGL2RenderingContext | null; // Casting because of some TypeScript weirdness
-		if (!gl) {
-			throw new Error('Couldn\'t acquire WebGL 2 context.');
-		}
+		this.gl.activeTexture(this.gl.TEXTURE0);
+		this.gl.bindTexture(this.gl.TEXTURE_2D, this.sourceTexture);
+		this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, sourceFrame);
 
-		this.gl = gl;
+		const colorFrame = this.runColorProgram(sourceFrame);
+		const alphaFrame = this.runAlphaProgram(sourceFrame);
 
-		this.colorProgram = this.createColorProgram();
-		this.alphaProgram = this.createAlphaProgram();
-		this.vao = this.createVAO();
-		this.sourceTexture = this.createTexture();
+		sourceFrame.close();
 
-		this.alphaResolutionLocation = this.gl.getUniformLocation(this.alphaProgram, 'u_resolution')!;
-
-		this.gl.useProgram(this.colorProgram);
-		this.gl.uniform1i(this.gl.getUniformLocation(this.colorProgram, 'u_sourceTexture'), 0);
-
-		this.gl.useProgram(this.alphaProgram);
-		this.gl.uniform1i(this.gl.getUniformLocation(this.alphaProgram, 'u_sourceTexture'), 0);
+		return { colorFrame, alphaFrame };
 	}
 
 	private createVertexShader(): WebGLShader {
+		assert(this.gl);
+
 		return this.createShader(this.gl.VERTEX_SHADER, `#version 300 es
 			in vec2 a_position;
 			in vec2 a_texCoord;
@@ -947,6 +992,8 @@ class ColorAlphaSplitter {
 	}
 
 	private createColorProgram(): WebGLProgram {
+		assert(this.gl);
+
 		const vertexShader = this.createVertexShader();
 
 		// This shader is simple, simply copy the color information while setting alpha to 1
@@ -972,6 +1019,8 @@ class ColorAlphaSplitter {
 	}
 
 	private createAlphaProgram(): WebGLProgram {
+		assert(this.gl);
+
 		const vertexShader = this.createVertexShader();
 
 		// This shader's more complex. The main reason is that this shader writes data in I420 (yuv420) pixel format
@@ -1035,6 +1084,8 @@ class ColorAlphaSplitter {
 	}
 
 	private createShader(type: number, source: string): WebGLShader {
+		assert(this.gl);
+
 		const shader = this.gl.createShader(type)!;
 		this.gl.shaderSource(shader, source);
 		this.gl.compileShader(shader);
@@ -1045,6 +1096,9 @@ class ColorAlphaSplitter {
 	}
 
 	private createVAO(): WebGLVertexArrayObject {
+		assert(this.gl);
+		assert(this.colorProgram);
+
 		const vao = this.gl.createVertexArray();
 		this.gl.bindVertexArray(vao);
 
@@ -1072,6 +1126,8 @@ class ColorAlphaSplitter {
 	}
 
 	private createTexture(): WebGLTexture {
+		assert(this.gl);
+
 		const texture = this.gl.createTexture();
 
 		this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
@@ -1083,25 +1139,9 @@ class ColorAlphaSplitter {
 		return texture;
 	}
 
-	private updateTexture(sourceFrame: VideoFrame): void {
-		if (this.lastFrame === sourceFrame) {
-			return;
-		}
-
-		if (sourceFrame.displayWidth !== this.canvas.width || sourceFrame.displayHeight !== this.canvas.height) {
-			this.canvas.width = sourceFrame.displayWidth;
-			this.canvas.height = sourceFrame.displayHeight;
-		}
-
-		this.gl.activeTexture(this.gl.TEXTURE0);
-		this.gl.bindTexture(this.gl.TEXTURE_2D, this.sourceTexture);
-		this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, sourceFrame);
-
-		this.lastFrame = sourceFrame;
-	}
-
-	extractColor(sourceFrame: VideoFrame) {
-		this.updateTexture(sourceFrame);
+	private runColorProgram(sourceFrame: VideoFrame) {
+		assert(this.gl);
+		assert(this.canvas);
 
 		this.gl.useProgram(this.colorProgram);
 		this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
@@ -1116,8 +1156,9 @@ class ColorAlphaSplitter {
 		});
 	}
 
-	extractAlpha(sourceFrame: VideoFrame) {
-		this.updateTexture(sourceFrame);
+	private runAlphaProgram(sourceFrame: VideoFrame) {
+		assert(this.gl);
+		assert(this.canvas);
 
 		this.gl.useProgram(this.alphaProgram);
 		this.gl.uniform2f(this.alphaResolutionLocation, this.canvas.width, this.canvas.height);
@@ -1153,11 +1194,238 @@ class ColorAlphaSplitter {
 		return new VideoFrame(yuv, init);
 	}
 
+	private updateCpu(sourceFrame: VideoFrame): Promise<{ colorFrame: VideoFrame; alphaFrame: VideoFrame }> {
+		if (!this.worker) {
+			const blob = new Blob(
+				[`(${colorAlphaSplitterWorkerCode.toString()})()`],
+				{ type: 'application/javascript' },
+			);
+			const url = URL.createObjectURL(blob);
+			this.worker = new Worker(url);
+			URL.revokeObjectURL(url);
+
+			this.worker.addEventListener('message', (event: MessageEvent<ColorAlphaSplitterWorkerResponse>) => {
+				const data = event.data;
+				const pending = this.pendingRequests.get(data.id);
+				if (!pending) {
+					return;
+				}
+				this.pendingRequests.delete(data.id);
+
+				if ('error' in data) {
+					pending.reject(new Error(data.error));
+				} else {
+					pending.resolve({ colorFrame: data.colorFrame, alphaFrame: data.alphaFrame });
+				}
+			});
+
+			this.worker.addEventListener('error', (event) => {
+				const error = new Error(event.message || 'Color/alpha splitter worker error.');
+				for (const pending of this.pendingRequests.values()) {
+					pending.reject(error);
+				}
+				this.pendingRequests.clear();
+			});
+		}
+
+		const id = this.nextRequestId++;
+		const pending = promiseWithResolvers<{ colorFrame: VideoFrame; alphaFrame: VideoFrame }>();
+		this.pendingRequests.set(id, pending);
+		this.worker.postMessage({ id, sourceFrame }, { transfer: [sourceFrame] });
+		return pending.promise;
+	}
+
 	close() {
-		this.gl.getExtension('WEBGL_lose_context')?.loseContext();
-		this.gl = null as unknown as WebGL2RenderingContext;
+		this.gl?.getExtension('WEBGL_lose_context')?.loseContext();
+		this.gl = null;
+		this.canvas = null;
+
+		this.worker?.terminate();
+		this.worker = null;
+		const error = new Error('Color/alpha splitter closed.');
+		for (const pending of this.pendingRequests.values()) {
+			pending.reject(error);
+		}
+		this.pendingRequests.clear();
 	}
 }
+
+type ColorAlphaSplitterWorkerRequest = {
+	id: number;
+	sourceFrame: VideoFrame;
+};
+
+type ColorAlphaSplitterWorkerResponse =
+	| { id: number; colorFrame: VideoFrame; alphaFrame: VideoFrame }
+	| { id: number; error: string };
+
+const colorAlphaSplitterWorkerCode = () => {
+	// Reused across frames as long as the size matches, since consecutive frames usually share dimensions.
+	let cpuSourceBuffer: Uint8Array | null = null;
+
+	// Serialize execution internally so concurrent requests don't race on the shared cpuSourceBuffer.
+	let chain: Promise<void> = Promise.resolve();
+	self.addEventListener('message', (event: MessageEvent<ColorAlphaSplitterWorkerRequest>) => {
+		const { id, sourceFrame } = event.data;
+		chain = chain.then(async () => {
+			try {
+				const { colorFrame, alphaFrame } = await split(sourceFrame);
+				self.postMessage({ id, colorFrame, alphaFrame }, { transfer: [colorFrame, alphaFrame] });
+			} catch (error) {
+				self.postMessage({ id, error: (error as Error).message });
+			} finally {
+				sourceFrame.close();
+			}
+		});
+	});
+
+	const split = async (sourceFrame: VideoFrame) => {
+		const format = sourceFrame.format as VideoSamplePixelFormat | null;
+		if (!format) {
+			throw new Error('CPU color/alpha splitting requires a known VideoFrame format.');
+		}
+
+		const width = sourceFrame.codedWidth;
+		const height = sourceFrame.codedHeight;
+		const sourceSize = sourceFrame.allocationSize();
+
+		if (!cpuSourceBuffer || cpuSourceBuffer.byteLength !== sourceSize) {
+			cpuSourceBuffer = new Uint8Array(sourceSize);
+		}
+		await sourceFrame.copyTo(cpuSourceBuffer);
+
+		if (format === 'RGBA' || format === 'BGRA') {
+			return splitInterleavedRgba(cpuSourceBuffer, width, height, format, sourceFrame);
+		} else if (
+			format === 'I420A' || format === 'I420AP10' || format === 'I420AP12'
+			|| format === 'I422A' || format === 'I422AP10' || format === 'I422AP12'
+			|| format === 'I444A' || format === 'I444AP10' || format === 'I444AP12'
+		) {
+			return splitPlanarYuvA(cpuSourceBuffer, width, height, format, sourceFrame);
+		}
+
+		throw new Error(`CPU color/alpha splitting does not support format '${format}'.`);
+	};
+
+	const splitInterleavedRgba = (
+		source: Uint8Array,
+		width: number,
+		height: number,
+		format: 'RGBA' | 'BGRA',
+		sourceFrame: VideoFrame,
+	) => {
+		const pixelCount = width * height;
+		const chromaW = Math.ceil(width / 2);
+		const chromaH = Math.ceil(height / 2);
+		const alphaSize = pixelCount + chromaW * chromaH * 2;
+
+		// Encode alpha as I420: Y = source A bytes, UV = 128
+		const alphaBuffer = new Uint8Array(alphaSize);
+		for (let i = 0, j = 3; i < pixelCount; i++, j += 4) {
+			alphaBuffer[i] = source[j]!;
+		}
+		alphaBuffer.fill(128, pixelCount);
+
+		// Hand the source buffer straight to VideoFrame as RGBX/BGRX so the A bytes are ignored
+		const colorFrame = new VideoFrame(source, {
+			format: format === 'RGBA' ? 'RGBX' : 'BGRX',
+			codedWidth: width,
+			codedHeight: height,
+			timestamp: sourceFrame.timestamp,
+			duration: sourceFrame.duration ?? undefined,
+			// No transfer!
+		});
+		const alphaInit = {
+			format: 'I420' as const,
+			codedWidth: width,
+			codedHeight: height,
+			timestamp: sourceFrame.timestamp,
+			duration: sourceFrame.duration ?? undefined,
+			transfer: [alphaBuffer.buffer],
+		};
+		const alphaFrame = new VideoFrame(alphaBuffer, alphaInit);
+		return { colorFrame, alphaFrame };
+	};
+
+	const splitPlanarYuvA = (
+		source: Uint8Array,
+		width: number,
+		height: number,
+		format:
+			| 'I420A' | 'I420AP10' | 'I420AP12'
+			| 'I422A' | 'I422AP10' | 'I422AP12'
+			| 'I444A' | 'I444AP10' | 'I444AP12',
+		sourceFrame: VideoFrame,
+	) => {
+		const is10 = format.includes('P10');
+		const is12 = format.includes('P12');
+		const bytesPerSample = (is10 || is12) ? 2 : 1;
+
+		let chromaW: number;
+		let chromaH: number;
+		if (format.startsWith('I420')) {
+			chromaW = Math.ceil(width / 2);
+			chromaH = Math.ceil(height / 2);
+		} else if (format.startsWith('I422')) {
+			chromaW = Math.ceil(width / 2);
+			chromaH = height;
+		} else {
+			chromaW = width;
+			chromaH = height;
+		}
+
+		const ySamples = width * height;
+		const uvSamples = chromaW * chromaH;
+		const yBytes = ySamples * bytesPerSample;
+		const uvBytes = uvSamples * bytesPerSample;
+		const aBytes = ySamples * bytesPerSample;
+
+		const colorBytes = yBytes + uvBytes * 2;
+		const colorFormat = format.replace('A', '') as VideoPixelFormat;
+
+		const alphaChromaW = Math.ceil(width / 2);
+		const alphaChromaH = Math.ceil(height / 2);
+		const alphaUvSamples = alphaChromaW * alphaChromaH;
+		const alphaUvBytes = alphaUvSamples * bytesPerSample;
+		const alphaSize = aBytes + 2 * alphaUvBytes;
+		const alphaBuffer = new Uint8Array(alphaSize);
+
+		const aPlaneStart = colorBytes;
+		alphaBuffer.set(source.subarray(aPlaneStart, aPlaneStart + aBytes), 0);
+
+		// Fill UV planes with the neutral chroma value
+		const uvOffset = aBytes;
+		const neutralChroma = is10 ? 512 : (is12 ? 2048 : 128);
+
+		if (bytesPerSample === 1) {
+			alphaBuffer.fill(neutralChroma, uvOffset);
+		} else {
+			const uvView = new Uint16Array(alphaBuffer.buffer, uvOffset, 2 * alphaUvSamples);
+			uvView.fill(neutralChroma);
+		}
+
+		const alphaFormat = (is10 ? 'I420P10' : (is12 ? 'I420P12' : 'I420')) as VideoPixelFormat;
+
+		// Color frame is simply a prefix of the combined bytes
+		const colorFrame = new VideoFrame(source.subarray(0, colorBytes), {
+			format: colorFormat,
+			codedWidth: width,
+			codedHeight: height,
+			timestamp: sourceFrame.timestamp,
+			duration: sourceFrame.duration ?? undefined,
+		});
+		const alphaInit = {
+			format: alphaFormat,
+			codedWidth: width,
+			codedHeight: height,
+			timestamp: sourceFrame.timestamp,
+			duration: sourceFrame.duration ?? undefined,
+			transfer: [alphaBuffer.buffer],
+		};
+		const alphaFrame = new VideoFrame(alphaBuffer, alphaInit);
+		return { colorFrame, alphaFrame };
+	};
+};
 
 /**
  * This source can be used to add raw, unencoded video samples (frames) to an output video track. These frames will

@@ -3,6 +3,7 @@ import * as NodeAv from 'node-av';
 import {
 	CODEC_TO_CODEC_ID,
 	getHardwareEncoderCodec,
+	LIBVPX_VP9,
 	unmapColorPrimaries,
 	unmapMatrixCoefficients,
 	unmapTransferCharacteristics,
@@ -24,6 +25,7 @@ import {
 } from '../../../src/codec-data';
 import { extractVideoCodecString } from '../../../src/codec';
 import { assert, binarySearchLessOrEqual, simplifyRational, toUint8Array } from '../../../src/misc';
+import { EncodedPacketSideData } from 'mediabunny';
 
 export class NodeAvVideoEncoder extends CustomVideoEncoder {
 	frame!: NodeAv.Frame;
@@ -63,7 +65,9 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 		assert(codecId !== undefined);
 
 		let codec: NodeAv.Codec | null = null;
-		if (this.config.hardwareAcceleration === 'prefer-software') {
+		if (this.codec === 'vp9' && this.config.alpha === 'keep') {
+			codec = NodeAv.Codec.findEncoderByName(LIBVPX_VP9) ?? NodeAv.Codec.findEncoder(codecId);
+		} else if (this.config.hardwareAcceleration === 'prefer-software') {
 			codec = NodeAv.Codec.findEncoder(codecId);
 		} else {
 			codec = getHardwareEncoderCodec(codecId) ?? NodeAv.Codec.findEncoder(codecId);
@@ -85,8 +89,15 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 		codecContext.allocContext3(this.avCodec);
 
 		let pixelFormat = NodeAv.AV_PIX_FMT_YUV420P;
-		if (this.avCodec.pixelFormats && !this.avCodec.pixelFormats.includes(NodeAv.AV_PIX_FMT_YUV420P)) {
-			pixelFormat = this.avCodec.pixelFormats[0]!;
+
+		if (this.avCodec.pixelFormats) {
+			if (!this.avCodec.pixelFormats.includes(NodeAv.AV_PIX_FMT_YUV420P)) {
+				pixelFormat = this.avCodec.pixelFormats[0]!;
+			}
+
+			if (this.config.alpha === 'keep' && this.avCodec.pixelFormats.includes(NodeAv.AV_PIX_FMT_YUVA420P)) {
+				pixelFormat = NodeAv.AV_PIX_FMT_YUVA420P;
+			}
 		}
 
 		const pixelAspectRatio = simplifyRational({
@@ -451,11 +462,20 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			throw new Error('Unreachable.');
 		}
 
+		const sideData: EncodedPacketSideData = {};
+		const matroskaBlockAdditional = this.packet.getSideData(NodeAv.AV_PKT_DATA_MATROSKA_BLOCKADDITIONAL);
+		if (matroskaBlockAdditional) {
+			sideData.alpha = toUint8Array(matroskaBlockAdditional).subarray(8); // Skip the BlockAddId
+		}
+
 		const packet = new EncodedPacket(
 			packetData,
 			this.packet.isKeyframe ? 'key' : 'delta',
 			timestamp,
 			duration,
+			undefined,
+			undefined,
+			sideData,
 		);
 
 		if (decoderConfigCodecString !== null) {

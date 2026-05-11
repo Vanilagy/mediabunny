@@ -345,11 +345,12 @@ describe('Video', async () => {
 		});
 	});
 
-	test('VP9 encode and decode', async () => {
+	test('VP9 encode and decode, opaque', async () => {
 		await encodeDecodeTest('vp9', {}, async (packet, meta, i) => {
 			expect(packet.timestamp).toBe(i / 30);
 			expect(packet.duration).toBe(1 / 30);
 			expect(packet.type).toBe(i ? 'delta' : 'key');
+			expect(packet.sideData.alpha).toBeUndefined();
 
 			if (i === 0) {
 				expect(meta.decoderConfig).toBeDefined();
@@ -368,6 +369,36 @@ describe('Video', async () => {
 
 			expect(buf[0]).toBeGreaterThan(250); // Quasi-white
 		});
+	});
+
+	test('VP9 encode and decode, transparent', async () => {
+		await encodeDecodeTest('vp9', { alpha: 'keep' }, async (packet, meta, i) => {
+			expect(packet.timestamp).toBe(i / 30);
+			expect(packet.duration).toBe(1 / 30);
+			expect(packet.type).toBe(i ? 'delta' : 'key');
+			expect(packet.sideData.alpha).toBeDefined();
+			expect(packet.sideData.alpha!.byteLength).toBeGreaterThan(0);
+
+			if (i === 0) {
+				expect(meta.decoderConfig).toBeDefined();
+				expect(meta.decoderConfig!.codec.startsWith('vp09.')).toBe(true);
+				expect(meta.decoderConfig!.description).toBeUndefined();
+			}
+		}, async (sample, i) => {
+			expect(sample.format).toBe('I420A');
+			expect(sample.codedWidth).toBe(1280);
+			expect(sample.codedHeight).toBe(720);
+			expect(sample.timestamp).toBe(i / 30);
+			expect(sample.duration).toBe(1 / 30);
+
+			const buf = new Uint8Array(sample.allocationSize({ format: 'RGBA' }));
+			await sample.copyTo(buf, { format: 'RGBA' });
+
+			expect(buf[0]).toBeGreaterThan(250); // Quasi-white
+
+			// Check transparency
+			expect(Math.abs(buf[3]! - 0x80)).toBeLessThan(3);
+		}, true);
 	});
 
 	test('AV1 encode and decode', async () => {
@@ -434,6 +465,7 @@ describe('Video', async () => {
 		extraConfig: Partial<VideoEncoderConfig>,
 		onPacket: (packet: EncodedPacket, meta: EncodedVideoChunkMetadata, i: number) => Promise<void>,
 		onSample: (sample: VideoSample, i: number) => Promise<void>,
+		transparent = false,
 	) => {
 		const encoder = new NodeAvVideoEncoder();
 		// @ts-expect-error Readonly
@@ -460,9 +492,15 @@ describe('Video', async () => {
 		await encoder.init();
 
 		const data = new Uint8Array(1280 * 720 * 4).fill(0xff); // White
+		if (transparent) {
+			for (let i = 0; i < data.byteLength; i += 4) {
+				data[i + 3] = 0x80;
+			}
+		}
+
 		for (let i = 0; i < 10; i++) {
 			using sample = new VideoSample(data, {
-				format: 'RGBX',
+				format: transparent ? 'RGBA' : 'RGBX',
 				codedWidth: 1280,
 				codedHeight: 720,
 				timestamp: i / 30,
