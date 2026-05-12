@@ -3,7 +3,11 @@ import * as NodeAv from 'node-av';
 import { CODEC_TO_CODEC_ID, fromAudioSampleFormat, getChannelLayout } from './misc';
 import { assert, toUint8Array } from '../../../src/misc';
 import { NodeAvFrameAudioSampleResource } from './audio-sample';
-import { AdtsHeaderTemplate, buildAdtsHeaderTemplate, parseAacAudioSpecificConfig } from '../../../shared/aac-misc';
+import {
+	AdtsHeaderTemplate,
+	buildAdtsHeaderTemplate,
+	parseAacAudioSpecificConfig,
+} from '../../../shared/aac-misc';
 
 const AAC_SAMPLE_RATES
 	= [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
@@ -261,18 +265,34 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 				? toUint8Array(this.codecContext.extraData)
 				: undefined;
 
-			if (
-				description
+			if (this.codec === 'aac') {
+				if (!description) {
+					throw new Error('Extradata expected for AAC.');
+				}
+
 				// eslint-disable-next-line @stylistic/max-len
 				// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
-				&& this.codec === 'aac' && (this.config as any).aac?.format === 'adts'
-			) {
-				const config = parseAacAudioSpecificConfig(description);
-				this.adtsHeaderTemplate = buildAdtsHeaderTemplate(config);
-				description = undefined; // Not used with 'adts' format
-			}
+				const isAdts = (this.config as any).aac?.format === 'adts';
 
-			if (description && this.codec === 'flac') {
+				if (isAdts) {
+					const parsedConfig = parseAacAudioSpecificConfig(description);
+					this.adtsHeaderTemplate = buildAdtsHeaderTemplate(parsedConfig);
+					description = undefined; // Not used with 'adts' format
+				}
+			} else if (this.codec === 'opus') {
+				if (!description) {
+					// Technically not required by the WebCodecs/Mediabunny Codec Registry, but we strive to be better
+					throw new Error('Extradata expected for Opus.');
+				}
+			} else if (this.codec === 'vorbis') {
+				if (!description) {
+					throw new Error('Extradata expected for Vorbis.');
+				}
+			} else if (this.codec === 'flac') {
+				if (!description) {
+					throw new Error('Extradata expected for FLAC.');
+				}
+
 				// FFmpeg uses the STREAMINFO block as the extradata, but WebCodecs wants a different format:
 				// 1. The bytes 0x66 0x4C 0x61 0x43 ("fLaC" in ASCII)
 				// 2. A metadata block (called the STREAMINFO block) as described in section 7 of [FLAC]

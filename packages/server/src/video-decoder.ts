@@ -40,8 +40,14 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 		let codec: NodeAv.Codec | null;
 		if (this.codec === 'vp9' && packet.sideData.alpha) {
 			codec = NodeAv.Codec.findDecoderByName(LIBVPX_VP9) ?? NodeAv.Codec.findDecoder(codecId);
-		} else if (this.config.hardwareAcceleration !== 'prefer-hardware' || this.codec === 'av1') {
-			// https://github.com/opencv/opencv/issues/24430
+		} else if (
+			// This check used to be "is not prefer-hardware", meaning it would default to using software decode. I
+			// didn't leave a comment for that back then so I actually don't know what it was for. I'm sure it was to
+			// work around an issue but, I don't know. Not using hardware decode at all by defaults feels wrong to me,
+			// so I changed it to what it is right now. If an issue is encountered, I can always change it.
+			this.config.hardwareAcceleration === 'prefer-software'
+			|| this.codec === 'av1' // https://github.com/opencv/opencv/issues/24430
+		) {
 			codec = NodeAv.Codec.findDecoder(codecId);
 		} else {
 			codec = getHardwareDecoderCodec(codecId) ?? NodeAv.Codec.findDecoder(codecId);

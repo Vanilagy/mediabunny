@@ -1,4 +1,3 @@
-import assert from 'assert';
 import {
 	VideoSamplePixelFormat,
 	VideoSampleResource,
@@ -10,7 +9,7 @@ import {
 	VideoSampleTransformationDescription,
 } from 'mediabunny';
 import * as NodeAv from 'node-av';
-import { MaybePromise, toUint8Array } from '../../../src/misc';
+import { assert, MaybePromise, toUint8Array } from '../../../src/misc';
 import {
 	toPixelFormat,
 	unmapColorPrimaries,

@@ -224,7 +224,7 @@ export const getChannelLayout = (numChannels: number): NodeAv.ChannelLayout => {
 		case 1: return NodeAv.AV_CHANNEL_LAYOUT_MONO;
 		case 2: return NodeAv.AV_CHANNEL_LAYOUT_STEREO;
 		case 4: return NodeAv.AV_CHANNEL_LAYOUT_QUAD;
-		case 6: return NodeAv.AV_CHANNEL_LAYOUT_5POINT1;
+		case 6: return NodeAv.AV_CHANNEL_LAYOUT_5POINT1_BACK;
 		case 8: return NodeAv.AV_CHANNEL_LAYOUT_7POINT1;
 		default: return { nbChannels: numChannels, order: NodeAv.AV_CHANNEL_ORDER_UNSPEC, mask: 0n };
 	}
