@@ -1,4 +1,12 @@
-import { AudioCodec, AudioSample, CustomAudioDecoder, EncodedPacket, MaybePromise } from 'mediabunny';
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
+import { AudioCodec, AudioSample, CustomAudioDecoder, EncodedPacket, type MaybePromise } from 'mediabunny';
 import * as NodeAv from 'node-av';
 import { CODEC_TO_CODEC_ID, getChannelLayout } from './misc';
 import { assert, toUint8Array } from '../../../src/misc';
@@ -76,8 +84,13 @@ export class NodeAvAudioDecoder extends CustomAudioDecoder {
 	receiveFrame(ret: number) {
 		NodeAv.FFmpegError.throwIfError(ret, 'Receive frame');
 
-		const timestamp = Number(this.frame.pts) / this.config.sampleRate;
-		this.onSample(new AudioSample(new NodeAvFrameAudioSampleResource(this.frame, timestamp)));
+		const clone = this.frame.clone();
+		if (!clone) {
+			throw new Error('Allocation failure during frame clone.');
+		}
+
+		clone.timeBase = new NodeAv.Rational(1, this.config.sampleRate);
+		this.onSample(new AudioSample(new NodeAvFrameAudioSampleResource(clone)));
 	}
 
 	async flush(): Promise<void> {

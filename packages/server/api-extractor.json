@@ -2,7 +2,9 @@
   "$schema": "https://developer.microsoft.com/json-schemas/api-extractor/v7/api-extractor.schema.json",
   "mainEntryPointFilePath": "dist/modules/src/index.d.ts",
   "bundledPackages": [],
-  "compiler": {},
+  "compiler": {
+    "tsconfigFilePath": "<projectFolder>/tsconfig.api-extractor.json"
+  },
   "apiReport": {
     "enabled": false
   },
@@ -11,7 +13,7 @@
   },
   "dtsRollup": {
     "enabled": true,
-	"untrimmedFilePath": "dist/mediabunny-flac-encoder.d.ts"
+	"untrimmedFilePath": "dist/mediabunny-server.d.ts"
   },
   "tsdocMetadata": {
 	"enabled": false

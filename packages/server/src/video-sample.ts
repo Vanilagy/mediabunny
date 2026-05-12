@@ -1,4 +1,13 @@
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
 import {
+	type MaybePromise,
 	VideoSamplePixelFormat,
 	VideoSampleResource,
 	VideoSampleColorSpace,
@@ -9,7 +18,7 @@ import {
 	VideoSampleTransformationDescription,
 } from 'mediabunny';
 import * as NodeAv from 'node-av';
-import { assert, MaybePromise, toUint8Array } from '../../../src/misc';
+import { assert, toUint8Array } from '../../../src/misc';
 import {
 	toPixelFormat,
 	unmapColorPrimaries,
@@ -29,13 +38,43 @@ const JPEG_RANGE_PIX_FORMATS = new Set([
 	NodeAv.AV_PIX_FMT_YUVJ444P,
 ]);
 
+/**
+ * A custom `VideoSampleResource` backed by NodeAV's
+ * [`Frame`](https://seydx.github.io/node-av/api/lib/classes/Frame.html), which in turn is backed by FFmpeg's
+ * [`AVFrame`](https://ffmpeg.org/doxygen/2.7/structAVFrame.html). You can use this resource to create `VideoSample`
+ * instances that are directly backed by FFmpeg's `AVFrame` without data having to be copied. Since `AVFrame`s can
+ * themselves be backed by data on the GPU, this enables zero-copy hardware-accelerated decode and encode paths.
+ *
+ * When using Electron, you can directly create `Frame` instances without the data having to leave the GPU. For more,
+ * see [NodeAV's docs](https://seydx.github.io/node-av/api/lib/classes/Frame.html).
+ *
+ * @group \@mediabunny/server
+ * @public
+ */
 export class NodeAvFrameVideoSampleResource extends VideoSampleResource {
-	frame: NodeAv.Frame;
+	/** @internal */
+	_frame: NodeAv.Frame | null;
+
+	/**
+	 * The NodeAV [`Frame`](https://seydx.github.io/node-av/api/lib/classes/Frame.html) instance backing this resource.
+	 * Access throws if the resource has already been closed.
+	 */
+	get frame() {
+		if (!this._frame) {
+			throw new Error('NodeAvFrameVideoSampleResource has been closed.');
+		}
+
+		return this._frame;
+	}
 
 	constructor(frame: NodeAv.Frame) {
 		super();
 
-		this.frame = frame;
+		if (frame.getMediaType() !== NodeAv.AVMEDIA_TYPE_VIDEO) {
+			throw new Error('NodeAvFrameVideoSampleResource must be initialized with a video frame.');
+		}
+
+		this._frame = frame;
 	}
 
 	getFormat(): VideoSamplePixelFormat | null {
@@ -82,6 +121,7 @@ export class NodeAvFrameVideoSampleResource extends VideoSampleResource {
 
 	close(): void {
 		this.frame.free();
+		this._frame = null;
 	}
 
 	getDataPlanes(): MaybePromise<VideoDataPlane[]> {

@@ -1,4 +1,12 @@
-import { CustomVideoDecoder, VideoCodec, EncodedPacket, VideoSample, MaybePromise, Rational } from 'mediabunny';
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
+import { CustomVideoDecoder, VideoCodec, EncodedPacket, VideoSample, type MaybePromise, Rational } from 'mediabunny';
 import * as NodeAv from 'node-av';
 import { CODEC_TO_CODEC_ID, getHardwareDecoderCodec, LIBVPX_VP9 } from './misc';
 import { assert, binarySearchLessOrEqual, simplifyRational, toUint8Array } from '../../../src/misc';
