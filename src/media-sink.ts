@@ -2124,7 +2124,7 @@ export class CanvasSink {
 	 * no frame is available for a given timestamp.
 	 *
 	 * This method is good for sparse access of media data. If you want primarily sequential media access, prefer
-	 * {@link CanvasSink.samples} instead.
+	 * {@link CanvasSink.canvases} instead.
 	 *
 	 * @param timestamps - An iterable or async iterable of timestamps in seconds.
 	 * @param options - Options used for the underlying packet retrieval.
