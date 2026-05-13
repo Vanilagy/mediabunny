@@ -15,9 +15,9 @@ import {
 	EncodedPacket,
 } from 'mediabunny';
 import * as NodeAv from 'node-av';
-import { CODEC_TO_CODEC_ID, fromAudioSampleFormat, getChannelLayout } from './misc';
+import { CODEC_TO_CODEC_ID, getChannelLayout } from './misc';
 import { assert, toUint8Array } from '../../../src/misc';
-import { NodeAvFrameAudioSampleResource } from './audio-sample';
+import { copyAudioSampleToAvFrame, AvFrameAudioSampleResource } from './audio-sample';
 import {
 	AdtsHeaderTemplate,
 	buildAdtsHeaderTemplate,
@@ -133,26 +133,14 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 
 		this.firstExpectedTimestamp ??= audioSample.timestamp;
 
-		if (audioSample._data instanceof NodeAvFrameAudioSampleResource) {
+		if (audioSample._data instanceof AvFrameAudioSampleResource) {
 			this.frame.ref(audioSample._data.frame);
 		} else {
-			// Copy audio data from AudioData to FFmpeg Frame
-			const format = fromAudioSampleFormat(audioSample.format);
-			this.frame.format = format;
-			this.frame.nbSamples = audioSample.numberOfFrames;
-			this.frame.sampleRate = audioSample.sampleRate;
-			this.frame.channelLayout = getChannelLayout(audioSample.numberOfChannels);
-			this.frame.duration = BigInt(Math.round(audioSample.duration * this.config.sampleRate));
-
-			this.frame.allocBuffer();
-			assert(this.frame.data);
-
-			for (let i = 0; i < this.frame.data.length; i++) {
-				audioSample.copyTo(this.frame.data[i]!, { planeIndex: i });
-			}
+			copyAudioSampleToAvFrame(audioSample, this.frame);
 		}
 
 		this.frame.pts = BigInt(Math.round(audioSample.timestamp * this.config.sampleRate));
+		this.frame.duration = BigInt(Math.round(audioSample.duration * this.config.sampleRate));
 		this.frame.timeBase = new NodeAv.Rational(1, this.config.sampleRate);
 
 		const key = `${this.frame.sampleRate}:${this.frame.channels}:${this.frame.format}`;

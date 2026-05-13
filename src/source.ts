@@ -1240,7 +1240,7 @@ type ReadableStreamSourcePendingSlice = {
  * @public
  */
 export type ReadableStreamSourceOptions = {
-	/** The maximum number of bytes the cache is allowed to hold in memory. Defaults to 16 MiB. */
+	/** The maximum number of bytes the cache is allowed to hold in memory. Defaults to 32 MiB. */
 	maxCacheSize?: number;
 };
 
@@ -1298,7 +1298,7 @@ export class ReadableStreamSource extends Source {
 		super();
 
 		this._stream = stream;
-		this._maxCacheSize = options.maxCacheSize ?? (16 * 2 ** 20 /* 16 MiB */);
+		this._maxCacheSize = options.maxCacheSize ?? (32 * 2 ** 20 /* 32 MiB */);
 	}
 
 	/** @internal */
@@ -1430,6 +1430,8 @@ export class ReadableStreamSource extends Source {
 
 			const startIndex = this._currentIndex;
 			const endIndex = this._currentIndex + value.byteLength;
+
+			this._dispatchRead(startIndex, endIndex);
 
 			// Fill the pending slices with the data
 			for (let i = 0; i < this._pendingSlices.length; i++) {

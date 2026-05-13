@@ -56,6 +56,7 @@ import {
 	toInterleavedAudioFormat,
 	validateCropRectangle,
 	VideoSample,
+	VideoSampleResource,
 } from './sample';
 import { MetadataTags, validateMetadataTags } from './metadata';
 import { NullTarget } from './target';
@@ -225,16 +226,17 @@ export type ConversionVideoOptions = {
 	 * timestamp modifications. Will be called for each input video sample after transformations and frame rate
 	 * corrections.
 	 *
-	 * Must return a {@link VideoSample} or a `CanvasImageSource`, an array of them, or `null` for dropping the frame.
-	 * When non-timestamped data is returned, the timestamp and duration from the source sample will be used. Rotation
-	 * metadata of the returned sample will be ignored.
+	 * Must return a {@link VideoSample}, a {@link VideoSampleResource} or a `CanvasImageSource`, an array of them, or
+	 * `null` for dropping the frame. When non-timestamped data is returned, the timestamp and duration from the source
+	 * sample will be used. Rotation metadata of the returned sample will be ignored.
 	 *
 	 * This function can also be used to manually resize frames. When doing so, you should signal the post-process
 	 * dimensions using the `processedWidth` and `processedHeight` fields, which enables the encoder to better know what
 	 * to expect. If these fields aren't set, Mediabunny will assume you won't perform any resizing.
 	 */
 	process?: (sample: VideoSample) => MaybePromise<
-		CanvasImageSource | VideoSample | (CanvasImageSource | VideoSample)[] | null
+		CanvasImageSource | VideoSample | VideoSampleResource
+		| (CanvasImageSource | VideoSample | VideoSampleResource)[] | null
 	>;
 	/**
 	 * An optional hint specifying the width of video samples returned by the `process` function, for better
@@ -1057,6 +1059,10 @@ export class Conversion {
 		}
 		this._executed = true;
 
+		for (const id of this._outputTrackIds) {
+			this._synchronizer.declareTrack(id);
+		}
+
 		if (this.onProgress) {
 			// Compute duration using only the utilized tracks
 			const uniqueUtilizedTracks = new Set(this.utilizedTracks);
@@ -1432,7 +1438,7 @@ export class Conversion {
 
 				// Calling the VideoSample constructor here will automatically handle input validation for us
 				// (it throws for any non-legal argument).
-				return new VideoSample(x, {
+				return new VideoSample(x as CanvasImageSource, {
 					timestamp: sample.timestamp,
 					duration: sample.duration,
 				});
@@ -1819,7 +1825,7 @@ export class ConversionCanceledError extends Error {
 	}
 }
 
-const MAX_TIMESTAMP_GAP = 5;
+const MAX_TIMESTAMP_GAP = 1; // in seconds
 
 /**
  * Utility class for synchronizing multiple track packet consumers with one another. We don't want one consumer to get
@@ -1833,6 +1839,36 @@ class TrackSynchronizer {
 		timestamp: number;
 		resolve: () => void;
 	}[] = [];
+
+	declareTrack(trackId: number) {
+		this.maxTimestamps.set(trackId, 0);
+	}
+
+	shouldWait(trackId: number, timestamp: number) {
+		const currentValue = this.maxTimestamps.get(trackId);
+		assert(currentValue !== undefined);
+
+		this.maxTimestamps.set(trackId, Math.max(timestamp, currentValue));
+
+		const newMin = this.computeMinAndMaybeResolve();
+		return timestamp - newMin > MAX_TIMESTAMP_GAP; // Should wait if it is too far ahead of the slowest consumer
+	}
+
+	wait(timestamp: number) {
+		const { promise, resolve } = promiseWithResolvers();
+
+		this.resolvers.push({
+			timestamp,
+			resolve,
+		});
+
+		return promise;
+	}
+
+	closeTrack(trackId: number) {
+		this.maxTimestamps.delete(trackId);
+		this.computeMinAndMaybeResolve();
+	}
 
 	computeMinAndMaybeResolve() {
 		let newMin = Infinity;
@@ -1852,28 +1888,5 @@ class TrackSynchronizer {
 		}
 
 		return newMin;
-	}
-
-	shouldWait(trackId: number, timestamp: number) {
-		this.maxTimestamps.set(trackId, Math.max(timestamp, this.maxTimestamps.get(trackId) ?? -Infinity));
-
-		const newMin = this.computeMinAndMaybeResolve();
-		return timestamp - newMin >= MAX_TIMESTAMP_GAP; // Should wait if it is too far ahead of the slowest consumer
-	}
-
-	wait(timestamp: number) {
-		const { promise, resolve } = promiseWithResolvers();
-
-		this.resolvers.push({
-			timestamp,
-			resolve,
-		});
-
-		return promise;
-	}
-
-	closeTrack(trackId: number) {
-		this.maxTimestamps.delete(trackId);
-		this.computeMinAndMaybeResolve();
 	}
 }

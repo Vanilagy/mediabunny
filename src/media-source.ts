@@ -427,7 +427,7 @@ class VideoEncoderWrapper {
 					return new VideoSample(x);
 				}
 
-				return new VideoSample(x, {
+				return new VideoSample(x as CanvasImageSource, {
 					timestamp: videoSample.timestamp,
 					duration: videoSample.duration,
 				});

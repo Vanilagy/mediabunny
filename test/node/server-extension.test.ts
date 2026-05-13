@@ -24,8 +24,10 @@ import { Output } from '../../src/output.js';
 import { Mp4OutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
 import { Conversion } from '../../src/conversion.js';
-import { NodeAvFrameVideoSampleResource } from '../../packages/server/src/video-sample.js';
-import { NodeAvFrameAudioSampleResource } from '../../packages/server/src/audio-sample.js';
+import { AvFrameVideoSampleResource } from '../../packages/server/src/video-sample.js';
+import { AvFrameAudioSampleResource } from '../../packages/server/src/audio-sample.js';
+import { toAvFrame } from '../../packages/server/src/index.js';
+import * as NodeAv from 'node-av';
 
 beforeAll(() => {
 	registerMediabunnyServer();
@@ -687,7 +689,7 @@ describe('Video', async () => {
 		using sample = await sink.getSample(0);
 		assert(sample);
 
-		expect(sample._data).toBeInstanceOf(NodeAvFrameVideoSampleResource);
+		expect(sample._data).toBeInstanceOf(AvFrameVideoSampleResource);
 		expect(sample.format).toBe('I420');
 		expect(sample.codedWidth).toBe(1920);
 		expect(sample.codedHeight).toBe(1080);
@@ -820,6 +822,47 @@ describe('Video', async () => {
 		} })).toEqual([
 			{ offset: 0, stride: 400 * 4 },
 		]);
+	});
+
+	test('toAvFrame with RGBA VideoSample', async () => {
+		const width = 16;
+		const height = 8;
+		const data = new Uint8Array(width * height * 4);
+		for (let i = 0; i < width * height; i++) {
+			data[i * 4] = 0x12;
+			data[i * 4 + 1] = 0x34;
+			data[i * 4 + 2] = 0x56;
+			data[i * 4 + 3] = 0xff;
+		}
+
+		using sample = new VideoSample(data, {
+			format: 'RGBA',
+			codedWidth: width,
+			codedHeight: height,
+			timestamp: 0.5,
+			duration: 1 / 30,
+		});
+
+		using frame = new NodeAv.Frame();
+		frame.alloc();
+
+		await toAvFrame(sample, frame);
+
+		expect(frame.getMediaType()).toBe(NodeAv.AVMEDIA_TYPE_VIDEO);
+		expect(frame.format).toBe(NodeAv.AV_PIX_FMT_RGBA);
+		expect(frame.width).toBe(width);
+		expect(frame.height).toBe(height);
+		expect(Number(frame.pts)).toBe(Math.round(0.5 * 1e6));
+		expect(Number(frame.duration)).toBe(Math.round((1 / 30) * 1e6));
+		expect(frame.timeBase.num).toBe(1);
+		expect(frame.timeBase.den).toBe(1e6);
+
+		assert(frame.data);
+		const plane = toUint8Array(frame.data[0]!);
+		expect(plane[0]).toBe(0x12);
+		expect(plane[1]).toBe(0x34);
+		expect(plane[2]).toBe(0x56);
+		expect(plane[3]).toBe(0xff);
 	});
 
 	describe('VideoSample transformation', () => {
@@ -1558,7 +1601,7 @@ describe('Audio', async () => {
 		using sample = await sink.getSample(await audioTrack.getFirstTimestamp());
 		assert(sample);
 
-		expect(sample._data).toBeInstanceOf(NodeAvFrameAudioSampleResource);
+		expect(sample._data).toBeInstanceOf(AvFrameAudioSampleResource);
 		expect(sample.format).toBe('f32-planar');
 		expect(sample.numberOfChannels).toBe(6);
 		expect(sample.sampleRate).toBe(48000);
@@ -1578,5 +1621,41 @@ describe('Audio', async () => {
 		sample.copyTo(buf, { planeIndex: 4 });
 		sample.copyTo(buf, { planeIndex: 5 });
 		sample.copyTo(buf, { format: 'f32', planeIndex: 0 });
+	});
+
+	test('toAvFrame with f32 AudioSample', async () => {
+		const sampleRate = 48000;
+		const numberOfChannels = 2;
+		const numberOfFrames = 1024;
+		const data = createF32SineWave(sampleRate, numberOfChannels, numberOfFrames / sampleRate);
+
+		using sample = new AudioSample({
+			data,
+			format: 'f32',
+			timestamp: 0.25,
+			numberOfChannels,
+			sampleRate,
+		});
+
+		using frame = new NodeAv.Frame();
+		frame.alloc();
+
+		await toAvFrame(sample, frame);
+
+		expect(frame.getMediaType()).toBe(NodeAv.AVMEDIA_TYPE_AUDIO);
+		expect(frame.format).toBe(NodeAv.AV_SAMPLE_FMT_FLT);
+		expect(frame.sampleRate).toBe(sampleRate);
+		expect(frame.channels).toBe(numberOfChannels);
+		expect(frame.nbSamples).toBe(numberOfFrames);
+		expect(Number(frame.pts)).toBe(Math.round(0.25 * sampleRate));
+		expect(Number(frame.duration)).toBe(numberOfFrames);
+		expect(frame.timeBase.num).toBe(1);
+		expect(frame.timeBase.den).toBe(sampleRate);
+
+		assert(frame.data);
+		const u8 = toUint8Array(frame.data[0]!);
+		const plane = new Float32Array(u8.buffer, u8.byteOffset, numberOfFrames * numberOfChannels);
+		expect(plane[0]).toBe(data[0]);
+		expect(plane[1]).toBe(data[1]);
 	});
 });

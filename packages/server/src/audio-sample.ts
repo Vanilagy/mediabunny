@@ -6,9 +6,9 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { AudioSampleResource } from 'mediabunny';
+import { AudioSample, AudioSampleResource } from 'mediabunny';
 import * as NodeAv from 'node-av';
-import { toAudioSampleFormat } from './misc';
+import { fromAudioSampleFormat, getChannelLayout, toAudioSampleFormat } from './misc';
 import { assert, toUint8Array } from '../../../src/misc';
 
 /**
@@ -17,10 +17,13 @@ import { assert, toUint8Array } from '../../../src/misc';
  * [`AVFrame`](https://ffmpeg.org/doxygen/2.7/structAVFrame.html). You can use this resource to create `AudioSample`
  * instances that are directly backed by FFmpeg's `AVFrame` without data having to be copied.
  *
+ * When passed, the `Frame` is now owned by resource, meaning it takes care of closing the frame later. If you want to
+ * keep a copy for your own use, clone the frame first.
+ *
  * @group \@mediabunny/server
  * @public
  */
-export class NodeAvFrameAudioSampleResource extends AudioSampleResource {
+export class AvFrameAudioSampleResource extends AudioSampleResource {
 	/** @internal */
 	_frame: NodeAv.Frame | null;
 
@@ -30,7 +33,7 @@ export class NodeAvFrameAudioSampleResource extends AudioSampleResource {
 	 */
 	get frame() {
 		if (!this._frame) {
-			throw new Error('NodeAvFrameAudioSampleResource has been closed.');
+			throw new Error('AvFrameAudioSampleResource has been closed.');
 		}
 
 		return this._frame;
@@ -40,7 +43,7 @@ export class NodeAvFrameAudioSampleResource extends AudioSampleResource {
 		super();
 
 		if (frame.getMediaType() !== NodeAv.AVMEDIA_TYPE_AUDIO) {
-			throw new Error('NodeAvFrameAudioSampleResource must be initialized with an audio frame.');
+			throw new Error('AvFrameAudioSampleResource must be initialized with an audio frame.');
 		}
 
 		this._frame = frame;
@@ -49,7 +52,8 @@ export class NodeAvFrameAudioSampleResource extends AudioSampleResource {
 	getFormat(): AudioSampleFormat {
 		const result = toAudioSampleFormat(this.frame.format as NodeAv.AVSampleFormat);
 		if (result === null) {
-			throw new TypeError('Unsupported audio sample format: ' + this.frame.format);
+			const name = NodeAv.avGetSampleFmtName(this.frame.format as NodeAv.AVSampleFormat);
+			throw new TypeError(`Unsupported audio sample format: ${name} (${this.frame.format})`);
 		}
 
 		return result;
@@ -81,3 +85,17 @@ export class NodeAvFrameAudioSampleResource extends AudioSampleResource {
 		return toUint8Array(this.frame.data[planeIndex]!);
 	}
 }
+
+export const copyAudioSampleToAvFrame = (sample: AudioSample, frame: NodeAv.Frame) => {
+	frame.format = fromAudioSampleFormat(sample.format);
+	frame.nbSamples = sample.numberOfFrames;
+	frame.sampleRate = sample.sampleRate;
+	frame.channelLayout = getChannelLayout(sample.numberOfChannels);
+
+	frame.allocBuffer();
+	assert(frame.data);
+
+	for (let i = 0; i < frame.data.length; i++) {
+		sample.copyTo(frame.data[i]!, { planeIndex: i });
+	}
+};

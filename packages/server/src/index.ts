@@ -6,13 +6,14 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { registerDecoder, registerEncoder, registerVideoSampleTransformer } from 'mediabunny';
+import { AudioSample, registerDecoder, registerEncoder, registerVideoSampleTransformer, VideoSample } from 'mediabunny';
 import * as NodeAv from 'node-av';
 import { NodeAvVideoDecoder } from './video-decoder';
 import { NodeAvVideoEncoder } from './video-encoder';
 import { NodeAvAudioDecoder } from './audio-decoder';
 import { NodeAvAudioEncoder } from './audio-encoder';
-import { transformVideoSample } from './video-sample';
+import { copyVideoSampleToAvFrame, AvFrameVideoSampleResource, transformVideoSample } from './video-sample';
+import { copyAudioSampleToAvFrame, AvFrameAudioSampleResource } from './audio-sample';
 
 const SERVER_LOADED_SYMBOL = Symbol.for('@mediabunny/server loaded');
 if ((globalThis as Record<symbol, unknown>)[SERVER_LOADED_SYMBOL]) {
@@ -59,5 +60,45 @@ export const registerMediabunnyServer = () => {
 	registerVideoSampleTransformer(transformVideoSample);
 };
 
-export { NodeAvFrameVideoSampleResource } from './video-sample';
-export { NodeAvFrameAudioSampleResource } from './audio-sample';
+export { AvFrameVideoSampleResource } from './video-sample';
+export { AvFrameAudioSampleResource } from './audio-sample';
+
+/**
+ * Copies a `VideoSample` or `AudioSample` into the given NodeAV
+ * [`Frame`](https://seydx.github.io/node-av/api/lib/classes/Frame.html), setting up the frame's format, media type,
+ * timing and data. When the sample is already backed by an `AVFrame` (via `AvFrameVideoSampleResource` or
+ * `AvFrameAudioSampleResource`), the frame is ref'd instead of copied for zero-copy reuse.
+ *
+ * For video samples, the frame's time base is always set to 1/1000000 (microsecond accuracy). For audio samples, the
+ * frame's time base is always set to 1/sampleRate.
+ *
+ * @group \@mediabunny/server
+ * @public
+ */
+export const toAvFrame = async (sample: VideoSample | AudioSample, frame: NodeAv.Frame) => {
+	if (sample instanceof VideoSample) {
+		if (sample._data instanceof AvFrameVideoSampleResource) {
+			frame.ref(sample._data.frame);
+		} else {
+			if (sample.format === null) {
+				throw new Error('Cannot convert foreign VideoSample with unknown (null) format.');
+			}
+
+			await copyVideoSampleToAvFrame(sample, frame, null);
+		}
+
+		frame.pts = BigInt(sample.microsecondTimestamp);
+		frame.duration = BigInt(sample.microsecondDuration);
+		frame.timeBase = new NodeAv.Rational(1, 1e6);
+	} else {
+		if (sample._data instanceof AvFrameAudioSampleResource) {
+			frame.ref(sample._data.frame);
+		} else {
+			copyAudioSampleToAvFrame(sample, frame);
+		}
+
+		frame.timeBase = new NodeAv.Rational(1, sample.sampleRate);
+		frame.pts = BigInt(Math.round(sample.timestamp * sample.sampleRate));
+		frame.duration = BigInt(sample.numberOfFrames);
+	}
+};

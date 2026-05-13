@@ -24,7 +24,7 @@ import {
 	unmapMatrixCoefficients,
 	unmapTransferCharacteristics,
 } from './misc';
-import { copyVideoSampleToAvFrame, NodeAvFrameVideoSampleResource } from './video-sample';
+import { copyVideoSampleToAvFrame, AvFrameVideoSampleResource } from './video-sample';
 import {
 	AvcNalUnitType,
 	extractAv1CodecInfoFromPacket,
@@ -187,7 +187,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			assert(this.codecContext);
 		}
 
-		if (videoSample._data instanceof NodeAvFrameVideoSampleResource) {
+		if (videoSample._data instanceof AvFrameVideoSampleResource) {
 			this.frame.ref(videoSample._data.frame);
 		} else {
 			if (videoSample.format === null) {

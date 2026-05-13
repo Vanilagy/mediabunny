@@ -10,7 +10,7 @@ import { CustomVideoDecoder, VideoCodec, EncodedPacket, VideoSample, type MaybeP
 import * as NodeAv from 'node-av';
 import { CODEC_TO_CODEC_ID, getHardwareDecoderCodec, LIBVPX_VP9 } from './misc';
 import { assert, binarySearchLessOrEqual, simplifyRational, toUint8Array } from '../../../src/misc';
-import { NodeAvFrameVideoSampleResource } from './video-sample';
+import { AvFrameVideoSampleResource } from './video-sample';
 
 export class NodeAvVideoDecoder extends CustomVideoDecoder {
 	frame!: NodeAv.Frame;
@@ -187,7 +187,7 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 			throw new Error('Frame clone allocation failed.');
 		}
 
-		this.onSample(new VideoSample(new NodeAvFrameVideoSampleResource(clone), {
+		this.onSample(new VideoSample(new AvFrameVideoSampleResource(clone), {
 			timestamp,
 			duration,
 		}));

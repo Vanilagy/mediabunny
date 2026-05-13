@@ -10,7 +10,7 @@ import { AudioCodec, AudioSample, CustomAudioDecoder, EncodedPacket, type MaybeP
 import * as NodeAv from 'node-av';
 import { CODEC_TO_CODEC_ID, getChannelLayout } from './misc';
 import { assert, toUint8Array } from '../../../src/misc';
-import { NodeAvFrameAudioSampleResource } from './audio-sample';
+import { AvFrameAudioSampleResource } from './audio-sample';
 
 export class NodeAvAudioDecoder extends CustomAudioDecoder {
 	frame!: NodeAv.Frame;
@@ -90,7 +90,7 @@ export class NodeAvAudioDecoder extends CustomAudioDecoder {
 		}
 
 		clone.timeBase = new NodeAv.Rational(1, this.config.sampleRate);
-		this.onSample(new AudioSample(new NodeAvFrameAudioSampleResource(clone)));
+		this.onSample(new AudioSample(new AvFrameAudioSampleResource(clone)));
 	}
 
 	async flush(): Promise<void> {

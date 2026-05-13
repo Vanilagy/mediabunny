@@ -48,10 +48,13 @@ const JPEG_RANGE_PIX_FORMATS = new Set([
  * When using Electron, you can directly create `Frame` instances without the data having to leave the GPU. For more,
  * see [NodeAV's docs](https://seydx.github.io/node-av/api/lib/classes/Frame.html).
  *
+ * When passed, the `Frame` is now owned by resource, meaning it takes care of closing the frame later. If you want to
+ * keep a copy for your own use, clone the frame first.
+ *
  * @group \@mediabunny/server
  * @public
  */
-export class NodeAvFrameVideoSampleResource extends VideoSampleResource {
+export class AvFrameVideoSampleResource extends VideoSampleResource {
 	/** @internal */
 	_frame: NodeAv.Frame | null;
 
@@ -61,7 +64,7 @@ export class NodeAvFrameVideoSampleResource extends VideoSampleResource {
 	 */
 	get frame() {
 		if (!this._frame) {
-			throw new Error('NodeAvFrameVideoSampleResource has been closed.');
+			throw new Error('AvFrameVideoSampleResource has been closed.');
 		}
 
 		return this._frame;
@@ -71,7 +74,7 @@ export class NodeAvFrameVideoSampleResource extends VideoSampleResource {
 		super();
 
 		if (frame.getMediaType() !== NodeAv.AVMEDIA_TYPE_VIDEO) {
-			throw new Error('NodeAvFrameVideoSampleResource must be initialized with a video frame.');
+			throw new Error('AvFrameVideoSampleResource must be initialized with a video frame.');
 		}
 
 		this._frame = frame;
@@ -169,7 +172,7 @@ export class NodeAvFrameVideoSampleResource extends VideoSampleResource {
 
 		dstFrame.sampleAspectRatio = srcFrame.sampleAspectRatio;
 
-		return new VideoSample(new NodeAvFrameVideoSampleResource(dstFrame), init);
+		return new VideoSample(new AvFrameVideoSampleResource(dstFrame), init);
 	}
 }
 
@@ -213,7 +216,7 @@ export const transformVideoSample = async (
 	let srcFrame: NodeAv.Frame;
 	let srcFrameOwned = false;
 
-	if (sample._data instanceof NodeAvFrameVideoSampleResource) {
+	if (sample._data instanceof AvFrameVideoSampleResource) {
 		srcFrame = sample._data.frame;
 	} else {
 		if (sample.format === null) {
@@ -295,7 +298,7 @@ export const transformVideoSample = async (
 		const getRet = await bufferSink.buffersinkGetFrame(dstFrame);
 		NodeAv.FFmpegError.throwIfError(getRet, 'buffersinkGetFrame');
 
-		return new VideoSample(new NodeAvFrameVideoSampleResource(dstFrame), {
+		return new VideoSample(new AvFrameVideoSampleResource(dstFrame), {
 			timestamp: sample.timestamp,
 			duration: sample.duration,
 			rotation: 0, // baked in by the filter graph
