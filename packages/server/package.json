@@ -37,7 +37,7 @@
     "node-av": "^5.2.3"
   },
   "peerDependencies": {
-    "mediabunny": "^1.0.0"
+    "mediabunny": "^1.45.0"
   },
   "keywords": [
     "server",
