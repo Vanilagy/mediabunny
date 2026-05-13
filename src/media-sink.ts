@@ -1821,6 +1821,9 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 	 * once, and is therefore more efficient than manually getting the sample for every timestamp. The iterator may
 	 * yield null if no frame is available for a given timestamp.
 	 *
+	 * This method is good for sparse access of media data. If you want primarily sequential media access, prefer
+	 * {@link VideoSampleSink.samples} instead.
+	 *
 	 * @param timestamps - An iterable or async iterable of timestamps in seconds.
 	 * @param options - Options used for the underlying packet retrieval.
 	 */
@@ -2119,6 +2122,9 @@ export class CanvasSink {
 	 * decoding pipeline if these timestamps are monotonically sorted, decoding each packet at most once, and is
 	 * therefore more efficient than manually getting the canvas for every timestamp. The iterator may yield null if
 	 * no frame is available for a given timestamp.
+	 *
+	 * This method is good for sparse access of media data. If you want primarily sequential media access, prefer
+	 * {@link CanvasSink.samples} instead.
 	 *
 	 * @param timestamps - An iterable or async iterable of timestamps in seconds.
 	 * @param options - Options used for the underlying packet retrieval.
@@ -2522,6 +2528,9 @@ export class AudioSampleSink extends BaseMediaSampleSink<AudioSample> {
 	 * uses an optimized decoding pipeline if these timestamps are monotonically sorted, decoding each packet at most
 	 * once, and is therefore more efficient than manually getting the sample for every timestamp. The iterator may
 	 * yield null if no sample is available for a given timestamp.
+	 *
+	 * This method is good for sparse access of media data. If you want primarily sequential media access, prefer
+	 * {@link AudioSampleSink.samples} instead.
 	 *
 	 * @param timestamps - An iterable or async iterable of timestamps in seconds.
 	 * @param options - Options used for the underlying packet retrieval.
