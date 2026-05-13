@@ -789,13 +789,6 @@ test.concurrent('Live HLS', { timeout: 30_000 }, async () => {
 });
 
 test.concurrent('Mp4InputFormat recognises a CMAF segment that starts with sidx', async () => {
-	// Sibling of the moof case fixed in #308: CMAF segments using the DASH
-	// on-demand profile (and HLS playlists derived from it) place a sidx
-	// before the moof. Without ftyp/styp at the file start the existing
-	// format probe used to bail out, producing UnsupportedInputFormatError.
-	//
-	// Repro shape (real Vimeo segment): 32 60 73 69 64 78 ...
-	// (size 0x32 60-byte sidx box header, four-cc 'sidx').
 	const bytes = new Uint8Array(12);
 	new DataView(bytes.buffer).setUint32(0, 60); // box size
 	bytes.set([0x73, 0x69, 0x64, 0x78], 4); // 'sidx'
