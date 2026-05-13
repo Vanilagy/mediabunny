@@ -53,38 +53,38 @@ registerMediabunnyServer();
 
 const server = http.createServer(async (req, res) => {
     // Read the request body as a stream
-	const stream = Readable.toWeb(req) as ReadableStream<Uint8Array>;
-	const input = new Input({
-		source: new ReadableStreamSource(stream),
-		formats: ALL_FORMATS,
-	});
+    const stream = Readable.toWeb(req) as ReadableStream<Uint8Array>;
+    const input = new Input({
+        source: new ReadableStreamSource(stream),
+        formats: ALL_FORMATS,
+    });
 
     // Stream the output directly to the disk, could also stream to S3 etc.
-	const output = new Output({
-		format: new Mp4OutputFormat(),
-		target: new FilePathTarget(`./converted-${crypto.randomUUID()}.mp4`),
-	});
+    const output = new Output({
+        format: new Mp4OutputFormat(),
+        target: new FilePathTarget(`./converted-${crypto.randomUUID()}.mp4`),
+    });
 
-	try {
-		const conversion = await Conversion.init({
-			input,
-			output,
-			video: async track => ({
-				codec: 'avc',
-				height: Math.min(720, await track.getDisplayHeight()),
-				bitrate: QUALITY_MEDIUM,
-			}),
-		});
-		await conversion.execute();
-	
-		res.statusCode = 204;
-		res.end();
-	} catch (error) {
-		res.statusCode = 500;
-		res.end();
+    try {
+        const conversion = await Conversion.init({
+            input,
+            output,
+            video: async track => ({
+                codec: 'avc',
+                height: Math.min(720, await track.getDisplayHeight()),
+                bitrate: QUALITY_MEDIUM,
+            }),
+        });
+        await conversion.execute();
+    
+        res.statusCode = 204;
+        res.end();
+    } catch (error) {
+        res.statusCode = 500;
+        res.end();
 
-		console.error("Error processing media:", error);
-	}
+        console.error("Error processing media:", error);
+    }
 });
 
 server.listen(3000);
