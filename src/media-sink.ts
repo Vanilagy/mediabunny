@@ -45,7 +45,14 @@ import {
 } from './misc';
 import { EncodedPacket } from './packet';
 import { fromAlaw, fromUlaw } from './pcm';
-import { AudioSample, clampCropRectangle, CropRectangle, validateCropRectangle, VideoSample } from './sample';
+import {
+	AudioSample,
+	clampCropRectangle,
+	CropRectangle,
+	validateCropRectangle,
+	VideoSample,
+	VideoSamplePixelFormat,
+} from './sample';
 
 /**
  * Additional options for controlling packet retrieval.
@@ -863,13 +870,13 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	colorQueue: VideoFrame[] = [];
 	alphaQueue: (VideoFrame | null)[] = [];
 	merger: ColorAlphaMerger | null = null;
-	mergerCreationFailed = false;
 	decodedAlphaChunkCount = 0;
 	alphaDecoderQueueSize = 0;
 	/** Each value is the number of decoded alpha chunks at which a null alpha frame should be added. */
 	nullAlphaFrameQueue: number[] = [];
 	currentAlphaPacketIndex = 0;
 	alphaRaslSkipped = false; // For HEVC stuff
+	frameHandlerSerializer = new CallSerializer();
 
 	constructor(
 		onSample: (sample: VideoSample) => unknown,
@@ -901,15 +908,17 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			void this.customDecoderCallSerializer.call(() => this.customDecoder!.init());
 		} else {
 			const colorHandler = (frame: VideoFrame) => {
-				if (this.alphaQueue.length > 0) {
-					// Even when no alpha data is present (most of the time), there will be nulls in this queue
-					const alphaFrame = this.alphaQueue.shift();
-					assert(alphaFrame !== undefined);
+				this.frameHandlerSerializer.call(async () => {
+					if (this.alphaQueue.length > 0) {
+						// Even when no alpha data is present (most of the time), there will be nulls in this queue
+						const alphaFrame = this.alphaQueue.shift();
+						assert(alphaFrame !== undefined);
 
-					this.mergeAlpha(frame, alphaFrame);
-				} else {
-					this.colorQueue.push(frame);
-				}
+						await this.mergeAlpha(frame, alphaFrame);
+					} else {
+						this.colorQueue.push(frame);
+					}
+				}).catch((error: Error) => this.onError(error));
 			};
 
 			if (codec === 'avc' && this.decoderConfig.description && isChromium()) {
@@ -1013,56 +1022,49 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	}
 
 	decodeAlphaData(packet: EncodedPacket) {
-		if (!packet.sideData.alpha || this.mergerCreationFailed) {
+		if (!packet.sideData.alpha) {
 			// No alpha side data in the packet, most common case
 			this.pushNullAlphaFrame();
 			return;
 		}
 
 		if (!this.merger) {
-			try {
-				this.merger = new ColorAlphaMerger();
-			} catch (error) {
-				console.error('Due to an error, only color data will be decoded.', error);
-
-				this.mergerCreationFailed = true;
-				this.decodeAlphaData(packet); // Go again
-
-				return;
-			}
+			this.merger = new ColorAlphaMerger();
 		}
 
 		// Check if we need to set up the alpha decoder
 		if (!this.alphaDecoder) {
 			const alphaHandler = (frame: VideoFrame) => {
-				this.alphaDecoderQueueSize--;
-
-				if (this.colorQueue.length > 0) {
-					const colorFrame = this.colorQueue.shift();
-					assert(colorFrame !== undefined);
-
-					this.mergeAlpha(colorFrame, frame);
-				} else {
-					this.alphaQueue.push(frame);
-				}
-
-				// Check if any null frames have been queued for this point
-				this.decodedAlphaChunkCount++;
-				while (
-					this.nullAlphaFrameQueue.length > 0
-					&& this.nullAlphaFrameQueue[0] === this.decodedAlphaChunkCount
-				) {
-					this.nullAlphaFrameQueue.shift();
-
+				this.frameHandlerSerializer.call(async () => {
 					if (this.colorQueue.length > 0) {
 						const colorFrame = this.colorQueue.shift();
 						assert(colorFrame !== undefined);
 
-						this.mergeAlpha(colorFrame, null);
+						await this.mergeAlpha(colorFrame, frame);
 					} else {
-						this.alphaQueue.push(null);
+						this.alphaQueue.push(frame);
 					}
-				}
+
+					// Check if any null frames have been queued for this point
+					this.decodedAlphaChunkCount++;
+					while (
+						this.nullAlphaFrameQueue.length > 0
+						&& this.nullAlphaFrameQueue[0] === this.decodedAlphaChunkCount
+					) {
+						this.nullAlphaFrameQueue.shift();
+
+						if (this.colorQueue.length > 0) {
+							const colorFrame = this.colorQueue.shift();
+							assert(colorFrame !== undefined);
+
+							await this.mergeAlpha(colorFrame, null);
+						} else {
+							this.alphaQueue.push(null);
+						}
+					}
+
+					this.alphaDecoderQueueSize--;
+				}).catch((error: Error) => this.onError(error));
 			};
 
 			const stack = new Error('Decoding error').stack;
@@ -1183,7 +1185,7 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 		this.onSample(sample);
 	}
 
-	mergeAlpha(color: VideoFrame, alpha: VideoFrame | null) {
+	async mergeAlpha(color: VideoFrame, alpha: VideoFrame | null) {
 		if (!alpha) {
 			// Nothing needs to be merged
 			const finalSample = new VideoSample(color);
@@ -1194,14 +1196,8 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 
 		assert(this.merger);
 
-		this.merger.update(color, alpha);
-		color.close();
-		alpha.close();
-
-		const finalFrame = new VideoFrame(this.merger.canvas, {
-			timestamp: color.timestamp,
-			duration: color.duration ?? undefined,
-		});
+		// The merger takes ownership of the frames, so no need to close them ourselves
+		const finalFrame = await this.merger.update(color, alpha);
 
 		const finalSample = new VideoSample(finalFrame);
 		this.sampleHandler(finalSample);
@@ -1216,6 +1212,7 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 				this.decoder.flush(),
 				this.alphaDecoder?.flush(),
 			]);
+			await this.frameHandlerSerializer.currentPromise;
 
 			this.colorQueue.forEach(x => x.close());
 			this.colorQueue.length = 0;
@@ -1265,43 +1262,75 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	}
 }
 
+let mergerGpuUnavailable = false;
+
 /** Utility class that merges together color and alpha information using simple WebGL 2 shaders. */
-class ColorAlphaMerger {
-	canvas: OffscreenCanvas | HTMLCanvasElement;
-	private gl: WebGL2RenderingContext;
-	private program: WebGLProgram;
-	private vao: WebGLVertexArrayObject;
-	private colorTexture: WebGLTexture;
-	private alphaTexture: WebGLTexture;
+export class ColorAlphaMerger {
+	static forceCpu = true;
+
+	canvas: OffscreenCanvas | HTMLCanvasElement | null = null;
+	private gl: WebGL2RenderingContext | null = null;
+	private program: WebGLProgram | null = null;
+	private vao: WebGLVertexArrayObject | null = null;
+	private colorTexture: WebGLTexture | null = null;
+	private alphaTexture: WebGLTexture | null = null;
+
+	private worker: Worker | null = null;
+	private pendingRequests = new Map<number, ReturnType<typeof promiseWithResolvers<VideoFrame>>>();
+	private nextRequestId = 0;
 
 	constructor() {
-		// Canvas will be resized later
-		if (typeof OffscreenCanvas !== 'undefined') {
-			// Prefer OffscreenCanvas for Worker environments
-			this.canvas = new OffscreenCanvas(300, 150);
+		const canMakeCanvas = typeof OffscreenCanvas !== 'undefined'
+			// eslint-disable-next-line @typescript-eslint/no-deprecated
+			|| (typeof document !== 'undefined' && typeof document.createElement === 'function');
+
+		if (!ColorAlphaMerger.forceCpu && canMakeCanvas && !mergerGpuUnavailable) {
+			// Try the GPU path. If anything goes wrong, we silently fall back to the CPU path.
+			try {
+				// Canvas will be resized later
+				if (typeof OffscreenCanvas !== 'undefined') {
+					// Prefer OffscreenCanvas for Worker environments
+					this.canvas = new OffscreenCanvas(300, 150);
+				} else {
+					this.canvas = document.createElement('canvas');
+				}
+
+				const gl = this.canvas.getContext('webgl2', {
+					premultipliedAlpha: false,
+				}) as unknown as WebGL2RenderingContext | null; // Casting because of some TypeScript weirdness
+				if (!gl) {
+					throw new Error('Couldn\'t acquire WebGL 2 context.');
+				}
+
+				this.gl = gl;
+				this.program = this.createProgram();
+				this.vao = this.createVAO();
+				this.colorTexture = this.createTexture();
+				this.alphaTexture = this.createTexture();
+
+				this.gl.useProgram(this.program);
+				this.gl.uniform1i(this.gl.getUniformLocation(this.program, 'u_colorTexture'), 0);
+				this.gl.uniform1i(this.gl.getUniformLocation(this.program, 'u_alphaTexture'), 1);
+			} catch (error) {
+				this.gl = null;
+				this.canvas = null;
+				mergerGpuUnavailable = true;
+				console.warn('Falling back to CPU for color/alpha merging.', error);
+			}
+		}
+	}
+
+	async update(color: VideoFrame, alpha: VideoFrame): Promise<VideoFrame> {
+		if (this.gl) {
+			return this.updateGpu(color, alpha);
 		} else {
-			this.canvas = document.createElement('canvas');
+			return this.updateCpu(color, alpha);
 		}
-
-		const gl = this.canvas.getContext('webgl2', {
-			premultipliedAlpha: false,
-		}) as unknown as WebGL2RenderingContext | null; // Casting because of some TypeScript weirdness
-		if (!gl) {
-			throw new Error('Couldn\'t acquire WebGL 2 context.');
-		}
-
-		this.gl = gl;
-		this.program = this.createProgram();
-		this.vao = this.createVAO();
-		this.colorTexture = this.createTexture();
-		this.alphaTexture = this.createTexture();
-
-		this.gl.useProgram(this.program);
-		this.gl.uniform1i(this.gl.getUniformLocation(this.program, 'u_colorTexture'), 0);
-		this.gl.uniform1i(this.gl.getUniformLocation(this.program, 'u_alphaTexture'), 1);
 	}
 
 	private createProgram(): WebGLProgram {
+		assert(this.gl);
+
 		const vertexShader = this.createShader(this.gl.VERTEX_SHADER, `#version 300 es
 			in vec2 a_position;
 			in vec2 a_texCoord;
@@ -1337,6 +1366,8 @@ class ColorAlphaMerger {
 	}
 
 	private createShader(type: number, source: string): WebGLShader {
+		assert(this.gl);
+
 		const shader = this.gl.createShader(type)!;
 		this.gl.shaderSource(shader, source);
 		this.gl.compileShader(shader);
@@ -1344,6 +1375,9 @@ class ColorAlphaMerger {
 	}
 
 	private createVAO(): WebGLVertexArrayObject {
+		assert(this.gl);
+		assert(this.program);
+
 		const vao = this.gl.createVertexArray();
 		this.gl.bindVertexArray(vao);
 
@@ -1371,6 +1405,8 @@ class ColorAlphaMerger {
 	}
 
 	private createTexture(): WebGLTexture {
+		assert(this.gl);
+
 		const texture = this.gl.createTexture();
 
 		this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
@@ -1382,7 +1418,10 @@ class ColorAlphaMerger {
 		return texture;
 	}
 
-	update(color: VideoFrame, alpha: VideoFrame): void {
+	private updateGpu(color: VideoFrame, alpha: VideoFrame): VideoFrame {
+		assert(this.gl);
+		assert(this.canvas);
+
 		if (color.displayWidth !== this.canvas.width || color.displayHeight !== this.canvas.height) {
 			this.canvas.width = color.displayWidth;
 			this.canvas.height = color.displayHeight;
@@ -1401,13 +1440,305 @@ class ColorAlphaMerger {
 
 		this.gl.bindVertexArray(this.vao);
 		this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
+
+		const finalFrame = new VideoFrame(this.canvas, {
+			timestamp: color.timestamp,
+			duration: color.duration ?? undefined,
+		});
+
+		color.close();
+		alpha.close();
+
+		return finalFrame;
+	}
+
+	private updateCpu(color: VideoFrame, alpha: VideoFrame): Promise<VideoFrame> {
+		if (!this.worker) {
+			const blob = new Blob(
+				[`(${colorAlphaMergerWorkerCode.toString()})()`],
+				{ type: 'application/javascript' },
+			);
+			const url = URL.createObjectURL(blob);
+			this.worker = new Worker(url);
+			URL.revokeObjectURL(url);
+
+			this.worker.addEventListener('message', (event: MessageEvent<ColorAlphaMergerWorkerResponse>) => {
+				const data = event.data;
+				const pending = this.pendingRequests.get(data.id);
+				if (!pending) {
+					return;
+				}
+				this.pendingRequests.delete(data.id);
+
+				if ('error' in data) {
+					pending.reject(new Error(data.error));
+				} else {
+					pending.resolve(data.frame);
+				}
+			});
+
+			this.worker.addEventListener('error', (event) => {
+				const error = new Error(event.message || 'Color/alpha merge worker error.');
+				for (const pending of this.pendingRequests.values()) {
+					pending.reject(error);
+				}
+				this.pendingRequests.clear();
+			});
+		}
+
+		const id = this.nextRequestId++;
+		const pending = promiseWithResolvers<VideoFrame>();
+		this.pendingRequests.set(id, pending);
+
+		this.worker.postMessage({ id, color, alpha }, { transfer: [color, alpha] });
+
+		return pending.promise;
 	}
 
 	close() {
-		this.gl.getExtension('WEBGL_lose_context')?.loseContext();
-		this.gl = null as unknown as WebGL2RenderingContext;
+		this.gl?.getExtension('WEBGL_lose_context')?.loseContext();
+		this.gl = null;
+		this.canvas = null;
+
+		this.worker?.terminate();
+		this.worker = null;
+
+		const error = new Error('Color/alpha merger closed.');
+		for (const pending of this.pendingRequests.values()) {
+			pending.reject(error);
+		}
+		this.pendingRequests.clear();
 	}
 }
+
+type ColorAlphaMergerWorkerRequest = {
+	id: number;
+	color: VideoFrame;
+	alpha: VideoFrame;
+};
+
+type ColorAlphaMergerWorkerResponse =
+	| { id: number; frame: VideoFrame }
+	| { id: number; error: string };
+
+const colorAlphaMergerWorkerCode = () => {
+	// These buffers are reused across frames as long as the size matches, since consecutive frames usually share
+	// dimensions
+	let cpuAlphaBuffer: Uint8Array | null = null;
+	let cpuColorBuffer: Uint8Array | null = null;
+
+	// Serialize execution internally so concurrent requests don't race on the shared cpu*Buffer state.
+	let chain: Promise<void> = Promise.resolve();
+	self.addEventListener('message', (event: MessageEvent<ColorAlphaMergerWorkerRequest>) => {
+		const { id, color, alpha } = event.data;
+		chain = chain.then(async () => {
+			try {
+				const frame = await merge(color, alpha);
+				self.postMessage({ id, frame }, { transfer: [frame] });
+			} catch (error) {
+				self.postMessage({ id, error: (error as Error).message });
+			} finally {
+				// We took ownership of the inputs via transfer; close them now that the merge (or its error) is done.
+				color.close();
+				alpha.close();
+			}
+		});
+	});
+
+	const merge = async (color: VideoFrame, alpha: VideoFrame): Promise<VideoFrame> => {
+		const format = color.format as VideoSamplePixelFormat | null;
+		const alphaFormat = alpha.format as VideoSamplePixelFormat | null;
+		if (!format || !alphaFormat) {
+			throw new Error('CPU color/alpha merging requires a known VideoFrame format.');
+		}
+
+		// The alpha frame must have the same bit depth as the color frame
+		const colorIs10 = format.includes('P10');
+		const colorIs12 = format.includes('P12');
+		const alphaIs10 = alphaFormat.includes('P10');
+		const alphaIs12 = alphaFormat.includes('P12');
+		if (alphaIs10 !== colorIs10 || alphaIs12 !== colorIs12) {
+			throw new Error(
+				`CPU color/alpha merging requires the alpha frame to have the same bit depth as the color frame`
+				+ ` (color: '${format}', alpha: '${alphaFormat}').`,
+			);
+		}
+
+		const width = color.codedWidth;
+		const height = color.codedHeight;
+
+		if (format === 'RGBX' || format === 'RGBA' || format === 'BGRX' || format === 'BGRA') {
+			return await mergeInterleavedRgba(color, alpha, width, height, format);
+		} else if (
+			format === 'I420' || format === 'I420P10' || format === 'I420P12'
+			|| format === 'I422' || format === 'I422P10' || format === 'I422P12'
+			|| format === 'I444' || format === 'I444P10' || format === 'I444P12'
+		) {
+			return await mergePlanarYuv(color, alpha, width, height, format);
+		} else if (format === 'NV12') {
+			return await mergeNv12(color, alpha, width, height);
+		}
+
+		throw new Error(`CPU color/alpha merging does not support format '${format}'.`);
+	};
+
+	const mergeInterleavedRgba = async (
+		color: VideoFrame,
+		alpha: VideoFrame,
+		width: number,
+		height: number,
+		format: 'RGBX' | 'RGBA' | 'BGRX' | 'BGRA',
+	): Promise<VideoFrame> => {
+		const pixelCount = width * height;
+		const output = new Uint8Array(pixelCount * 4);
+
+		// Color goes straight into the output buffer via copyTo, no intermediate copy needed
+		await color.copyTo(output);
+
+		// And now add the alpha data
+		const alphaY = await readAlpha(alpha, width, height, 1);
+		for (let i = 0, j = 3; i < pixelCount; i++, j += 4) {
+			output[j] = alphaY[i]!;
+		}
+
+		const outputFormat = (format === 'RGBX' || format === 'RGBA') ? 'RGBA' : 'BGRA';
+		const init = {
+			format: outputFormat,
+			codedWidth: width,
+			codedHeight: height,
+			timestamp: color.timestamp,
+			duration: color.duration ?? undefined,
+			transfer: [output.buffer],
+		} as const;
+
+		return new VideoFrame(output, init);
+	};
+
+	const mergePlanarYuv = async (
+		color: VideoFrame,
+		alpha: VideoFrame,
+		width: number,
+		height: number,
+		format:
+			| 'I420' | 'I420P10' | 'I420P12'
+			| 'I422' | 'I422P10' | 'I422P12'
+			| 'I444' | 'I444P10' | 'I444P12',
+	): Promise<VideoFrame> => {
+		const is10 = format.includes('P10');
+		const is12 = format.includes('P12');
+		const bytesPerSample = (is10 || is12) ? 2 : 1;
+
+		let chromaW: number;
+		let chromaH: number;
+		if (format.startsWith('I420')) {
+			chromaW = Math.ceil(width / 2);
+			chromaH = Math.ceil(height / 2);
+		} else if (format.startsWith('I422')) {
+			chromaW = Math.ceil(width / 2);
+			chromaH = height;
+		} else {
+			chromaW = width;
+			chromaH = height;
+		}
+
+		const ySamples = width * height;
+		const uvSamples = chromaW * chromaH;
+		const yBytes = ySamples * bytesPerSample;
+		const uvBytes = uvSamples * bytesPerSample;
+		const aBytes = ySamples * bytesPerSample;
+
+		const outputBytes = yBytes + 2 * uvBytes + aBytes;
+		const output = new Uint8Array(outputBytes);
+
+		// Write color planes directly into the output buffer via copyTo, no intermediate copy
+		await color.copyTo(output);
+
+		const alphaY = await readAlpha(alpha, width, height, bytesPerSample);
+		const aOffset = yBytes + 2 * uvBytes;
+		output.set(alphaY, aOffset);
+
+		const outputFormat = (format.slice(0, 4) + 'A' + format.slice(4)) as VideoPixelFormat;
+
+		const init = {
+			format: outputFormat,
+			codedWidth: width,
+			codedHeight: height,
+			timestamp: color.timestamp,
+			duration: color.duration ?? undefined,
+			transfer: [output.buffer],
+		};
+
+		return new VideoFrame(output, init);
+	};
+
+	const mergeNv12 = async (
+		color: VideoFrame,
+		alpha: VideoFrame,
+		width: number,
+		height: number,
+	): Promise<VideoFrame> => {
+		const ySize = width * height;
+		const chromaW = Math.ceil(width / 2);
+		const chromaH = Math.ceil(height / 2);
+		const uvSize = chromaW * chromaH;
+
+		const sourceSize = color.allocationSize();
+		if (!cpuColorBuffer || cpuColorBuffer.byteLength !== sourceSize) {
+			cpuColorBuffer = new Uint8Array(sourceSize);
+		}
+		await color.copyTo(cpuColorBuffer);
+
+		const output = new Uint8Array(ySize + 2 * uvSize + ySize);
+
+		// Y plane copies straight over
+		output.set(cpuColorBuffer.subarray(0, ySize), 0);
+
+		// Deinterleave the UV plane into separate U and V planes
+		const uOffset = ySize;
+		const vOffset = ySize + uvSize;
+		const uvStart = ySize;
+		for (let i = 0; i < uvSize; i++) {
+			output[uOffset + i] = cpuColorBuffer[uvStart + i * 2]!;
+			output[vOffset + i] = cpuColorBuffer[uvStart + i * 2 + 1]!;
+		}
+
+		const alphaY = await readAlpha(alpha, width, height, 1);
+		output.set(alphaY, ySize + 2 * uvSize);
+
+		const init = {
+			format: 'I420A',
+			codedWidth: width,
+			codedHeight: height,
+			timestamp: color.timestamp,
+			duration: color.duration ?? undefined,
+			transfer: [output.buffer],
+		} as const;
+
+		return new VideoFrame(output, init);
+	};
+
+	const readAlpha = async (alpha: VideoFrame, width: number, height: number, bytesPerSample: number) => {
+		const size = alpha.allocationSize();
+		if (!cpuAlphaBuffer || cpuAlphaBuffer.byteLength !== size) {
+			cpuAlphaBuffer = new Uint8Array(size);
+		}
+		await alpha.copyTo(cpuAlphaBuffer);
+
+		const format = alpha.format;
+		if (format === 'RGBA' || format === 'BGRA' || format === 'RGBX' || format === 'BGRX') {
+			// Pack alpha data tightly. Assume alpha is stored in RGB, so sample just from R for simplicity.
+			const rOffset = (format === 'RGBA' || format === 'RGBX') ? 0 : 2;
+			const pixelCount = width * height;
+			for (let i = 0; i < pixelCount; i++) {
+				cpuAlphaBuffer[i] = cpuAlphaBuffer[i * 4 + rOffset]!;
+			}
+			return cpuAlphaBuffer.subarray(0, pixelCount);
+		} else {
+			// For Y-plane-first formats (I*** and NV12), the leading width*height samples are the Y plane
+			return cpuAlphaBuffer.subarray(0, width * height * bytesPerSample);
+		}
+	};
+};
 
 /**
  * A sink that retrieves decoded video samples (video frames) from a video track.

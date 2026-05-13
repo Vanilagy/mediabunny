@@ -252,13 +252,15 @@ test('AC-3 encoding', async () => {
 	output.addAudioTrack(audioSource);
 
 	await output.start();
-	await audioSource.add(new AudioSample({
+	const sample = new AudioSample({
 		data,
 		format: 'f32',
 		numberOfChannels: channels,
 		sampleRate,
 		timestamp: 0,
-	}));
+	});
+	await audioSource.add(sample);
+	sample.close();
 	audioSource.close();
 	await output.finalize();
 
@@ -300,13 +302,15 @@ test('E-AC-3 encoding', async () => {
 	output.addAudioTrack(audioSource);
 
 	await output.start();
-	await audioSource.add(new AudioSample({
+	const sample = new AudioSample({
 		data,
 		format: 'f32',
 		numberOfChannels: channels,
 		sampleRate,
 		timestamp: 0,
-	}));
+	});
+	await audioSource.add(sample);
+	sample.close();
 	audioSource.close();
 	await output.finalize();
 
@@ -350,13 +354,15 @@ test('AC-3 with huge timestamps', async () => {
 	output.addAudioTrack(audioSource);
 
 	await output.start();
-	await audioSource.add(new AudioSample({
+	const sample = new AudioSample({
 		data,
 		format: 'f32',
 		numberOfChannels: channels,
 		sampleRate,
 		timestamp,
-	}));
+	});
+	await audioSource.add(sample);
+	sample.close();
 	audioSource.close();
 	await output.finalize();
 
@@ -399,13 +405,15 @@ test('E-AC-3 with huge timestamps', async () => {
 	output.addAudioTrack(audioSource);
 
 	await output.start();
-	await audioSource.add(new AudioSample({
+	const sample = new AudioSample({
 		data,
 		format: 'f32',
 		numberOfChannels: channels,
 		sampleRate,
 		timestamp,
-	}));
+	});
+	await audioSource.add(sample);
+	sample.close();
 	audioSource.close();
 	await output.finalize();
 

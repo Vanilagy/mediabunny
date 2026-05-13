@@ -276,6 +276,8 @@ class AacEncoder extends CustomAudioEncoder {
 	}
 }
 
+let registered = false;
+
 /**
  * Registers the AAC encoder, which Mediabunny will then use automatically when applicable. Make sure to call this
  * function before starting any encoding task.
@@ -295,6 +297,11 @@ class AacEncoder extends CustomAudioEncoder {
  * @public
  */
 export const registerAacEncoder = () => {
+	if (registered) {
+		return;
+	}
+	registered = true;
+
 	registerEncoder(AacEncoder);
 };
 

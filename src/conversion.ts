@@ -24,7 +24,6 @@ import { Input } from './input';
 import { InputAudioTrack, InputTrack, InputVideoTrack } from './input-track';
 import {
 	AudioSampleSink,
-	CanvasSink,
 	EncodedPacketSink,
 	VideoSampleSink,
 } from './media-sink';
@@ -41,7 +40,6 @@ import {
 	assertNever,
 	ceilToMultipleOfTwo,
 	clamp,
-	floorToDivisor,
 	isIso639Dash2LanguageCode,
 	MaybePromise,
 	normalizeRotation,
@@ -58,6 +56,7 @@ import {
 	toInterleavedAudioFormat,
 	validateCropRectangle,
 	VideoSample,
+	VideoSampleResource,
 } from './sample';
 import { MetadataTags, validateMetadataTags } from './metadata';
 import { NullTarget } from './target';
@@ -227,16 +226,17 @@ export type ConversionVideoOptions = {
 	 * timestamp modifications. Will be called for each input video sample after transformations and frame rate
 	 * corrections.
 	 *
-	 * Must return a {@link VideoSample} or a `CanvasImageSource`, an array of them, or `null` for dropping the frame.
-	 * When non-timestamped data is returned, the timestamp and duration from the source sample will be used. Rotation
-	 * metadata of the returned sample will be ignored.
+	 * Must return a {@link VideoSample}, a {@link VideoSampleResource} or a `CanvasImageSource`, an array of them, or
+	 * `null` for dropping the frame. When non-timestamped data is returned, the timestamp and duration from the source
+	 * sample will be used. Rotation metadata of the returned sample will be ignored.
 	 *
 	 * This function can also be used to manually resize frames. When doing so, you should signal the post-process
 	 * dimensions using the `processedWidth` and `processedHeight` fields, which enables the encoder to better know what
 	 * to expect. If these fields aren't set, Mediabunny will assume you won't perform any resizing.
 	 */
 	process?: (sample: VideoSample) => MaybePromise<
-		CanvasImageSource | VideoSample | (CanvasImageSource | VideoSample)[] | null
+		CanvasImageSource | VideoSample | VideoSampleResource
+		| (CanvasImageSource | VideoSample | VideoSampleResource)[] | null
 	>;
 	/**
 	 * An optional hint specifying the width of video samples returned by the `process` function, for better
@@ -1059,6 +1059,10 @@ export class Conversion {
 		}
 		this._executed = true;
 
+		for (const id of this._outputTrackIds) {
+			this._synchronizer.declareTrack(id);
+		}
+
 		if (this.onProgress) {
 			// Compute duration using only the utilized tracks
 			const uniqueUtilizedTracks = new Set(this.utilizedTracks);
@@ -1142,7 +1146,8 @@ export class Conversion {
 
 		let videoSource: VideoSource;
 
-		const totalRotation = normalizeRotation(await track.getRotation() + (trackOptions.rotate ?? 0));
+		const innateRotation = await track.getRotation();
+		const totalRotation = normalizeRotation(innateRotation + (trackOptions.rotate ?? 0));
 		let outputTrackRotation = totalRotation;
 		const canUseRotationMetadata = this.output.format.supportsVideoRotationMetadata
 			&& (trackOptions.allowRotationMetadata ?? true);
@@ -1284,10 +1289,9 @@ export class Conversion {
 				sizeChangeBehavior: trackOptions.fit ?? 'passThrough',
 				alpha,
 				hardwareAcceleration: trackOptions.hardwareAcceleration,
+				transform: {},
 			};
-
-			const source = new VideoSampleSource(encodingConfig);
-			videoSource = source;
+			assert(encodingConfig.transform);
 
 			let needsRerender = width !== originalWidth
 				|| height !== originalHeight
@@ -1334,179 +1338,46 @@ export class Conversion {
 				}
 			}
 
+			if (trackOptions.frameRate) {
+				encodingConfig.transform.frameRate = trackOptions.frameRate;
+			}
+
 			if (needsRerender) {
 				outputTrackRotation = 0; // Since the rotation is baked into the output
 
-				this._trackPromises.push((async () => {
-					await this._started;
-
-					const sink = new CanvasSink(track, {
-						width,
-						height,
-						fit: trackOptions.fit ?? 'fill',
-						rotation: totalRotation, // Bake the rotation into the output
-						crop: trackOptions.crop,
-						poolSize: 1,
-						alpha: alpha === 'keep',
-					});
-					const iterator = sink.canvases(this._startTimestamp, this._endTimestamp);
-					const frameRate = trackOptions.frameRate;
-
-					let lastCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
-					let lastCanvasTimestamp: number | null = null;
-					let lastCanvasEndTimestamp: number | null = null;
-
-					/** Repeats the last sample to pad out the time until the specified timestamp. */
-					const padFrames = async (until: number) => {
-						assert(lastCanvas);
-						assert(frameRate !== undefined);
-
-						const frameDifference = Math.round((until - lastCanvasTimestamp!) * frameRate);
-
-						for (let i = 1; i < frameDifference; i++) {
-							const sample = new VideoSample(lastCanvas, {
-								timestamp: lastCanvasTimestamp! + i / frameRate,
-								duration: 1 / frameRate,
-							});
-							await this._registerVideoSample(trackOptions, outputTrackId, source, sample);
-							sample.close();
-						}
-					};
-
-					for await (const { canvas, timestamp, duration } of iterator) {
-						if (this._canceled) {
-							return;
-						}
-
-						let adjustedSampleTimestamp = Math.max(timestamp - this._startTimestamp, 0);
-						lastCanvasEndTimestamp = adjustedSampleTimestamp + duration;
-
-						if (frameRate !== undefined) {
-							// Logic for skipping/repeating frames when a frame rate is set
-							const alignedTimestamp = floorToDivisor(adjustedSampleTimestamp, frameRate);
-
-							if (lastCanvas !== null) {
-								if (alignedTimestamp <= lastCanvasTimestamp!) {
-									lastCanvas = canvas;
-									lastCanvasTimestamp = alignedTimestamp;
-
-									// Skip this sample, since we already added one for this frame
-									continue;
-								} else {
-									// Check if we may need to repeat the previous frame
-									await padFrames(alignedTimestamp);
-								}
-							}
-
-							adjustedSampleTimestamp = alignedTimestamp;
-						}
-
-						const sample = new VideoSample(canvas, {
-							timestamp: adjustedSampleTimestamp,
-							duration: frameRate !== undefined ? 1 / frameRate : duration,
-						});
-						await this._registerVideoSample(trackOptions, outputTrackId, source, sample);
-						sample.close();
-
-						if (frameRate !== undefined) {
-							lastCanvas = canvas;
-							lastCanvasTimestamp = adjustedSampleTimestamp;
-						}
-					}
-
-					if (lastCanvas) {
-						assert(lastCanvasEndTimestamp !== null);
-						assert(frameRate !== undefined);
-
-						// If necessary, pad until the end timestamp of the last sample
-						await padFrames(floorToDivisor(lastCanvasEndTimestamp, frameRate));
-					}
-
-					source.close();
-					this._synchronizer.closeTrack(outputTrackId);
-				})());
-			} else {
-				this._trackPromises.push((async () => {
-					await this._started;
-
-					const sink = new VideoSampleSink(track);
-					const frameRate = trackOptions.frameRate;
-
-					let lastSample: VideoSample | null = null;
-					let lastSampleTimestamp: number | null = null;
-					let lastSampleEndTimestamp: number | null = null;
-
-					/** Repeats the last sample to pad out the time until the specified timestamp. */
-					const padFrames = async (until: number) => {
-						assert(lastSample);
-						assert(frameRate !== undefined);
-
-						const frameDifference = Math.round((until - lastSampleTimestamp!) * frameRate);
-
-						for (let i = 1; i < frameDifference; i++) {
-							lastSample.setTimestamp(lastSampleTimestamp! + i / frameRate);
-							lastSample.setDuration(1 / frameRate);
-							await this._registerVideoSample(trackOptions, outputTrackId, source, lastSample);
-						}
-
-						lastSample.close();
-					};
-
-					for await (const sample of sink.samples(this._startTimestamp, this._endTimestamp)) {
-						if (this._canceled) {
-							sample.close();
-							lastSample?.close();
-							return;
-						}
-
-						let adjustedSampleTimestamp = Math.max(sample.timestamp - this._startTimestamp, 0);
-						lastSampleEndTimestamp = adjustedSampleTimestamp + sample.duration;
-
-						if (frameRate !== undefined) {
-							// Logic for skipping/repeating frames when a frame rate is set
-							const alignedTimestamp = floorToDivisor(adjustedSampleTimestamp, frameRate);
-
-							if (lastSample !== null) {
-								if (alignedTimestamp <= lastSampleTimestamp!) {
-									lastSample.close();
-									lastSample = sample;
-									lastSampleTimestamp = alignedTimestamp;
-
-									// Skip this sample, since we already added one for this frame
-									continue;
-								} else {
-									// Check if we may need to repeat the previous frame
-									await padFrames(alignedTimestamp);
-								}
-							}
-
-							adjustedSampleTimestamp = alignedTimestamp;
-							sample.setDuration(1 / frameRate);
-						}
-
-						sample.setTimestamp(adjustedSampleTimestamp);
-						await this._registerVideoSample(trackOptions, outputTrackId, source, sample);
-
-						if (frameRate !== undefined) {
-							lastSample = sample;
-							lastSampleTimestamp = adjustedSampleTimestamp;
-						} else {
-							sample.close();
-						}
-					}
-
-					if (lastSample) {
-						assert(lastSampleEndTimestamp !== null);
-						assert(frameRate !== undefined);
-
-						// If necessary, pad until the end timestamp of the last sample
-						await padFrames(floorToDivisor(lastSampleEndTimestamp, frameRate));
-					}
-
-					source.close();
-					this._synchronizer.closeTrack(outputTrackId);
-				})());
+				encodingConfig.transform.width = width;
+				encodingConfig.transform.height = height;
+				encodingConfig.transform.fit = trackOptions.fit ?? 'fill';
+				encodingConfig.transform.rotate = normalizeRotation(totalRotation - innateRotation);
+				encodingConfig.transform.crop = crop;
+				encodingConfig.transform.alpha = alpha;
 			}
+
+			const source = new VideoSampleSource(encodingConfig);
+			videoSource = source;
+
+			this._trackPromises.push((async () => {
+				await this._started;
+
+				const sink = new VideoSampleSink(track);
+
+				for await (const sample of sink.samples(this._startTimestamp, this._endTimestamp)) {
+					if (this._canceled) {
+						sample.close();
+						return;
+					}
+
+					const adjustedSampleTimestamp = Math.max(sample.timestamp - this._startTimestamp, 0);
+					sample.setTimestamp(adjustedSampleTimestamp);
+
+					await this._registerVideoSample(trackOptions, outputTrackId, source, sample);
+
+					sample.close();
+				}
+
+				source.close();
+				this._synchronizer.closeTrack(outputTrackId);
+			})());
 		}
 
 		let ownGroup: OutputTrackGroup | null = null;
@@ -1567,7 +1438,7 @@ export class Conversion {
 
 				// Calling the VideoSample constructor here will automatically handle input validation for us
 				// (it throws for any non-legal argument).
-				return new VideoSample(x, {
+				return new VideoSample(x as CanvasImageSource, {
 					timestamp: sample.timestamp,
 					duration: sample.duration,
 				});
@@ -1954,7 +1825,7 @@ export class ConversionCanceledError extends Error {
 	}
 }
 
-const MAX_TIMESTAMP_GAP = 5;
+const MAX_TIMESTAMP_GAP = 1; // in seconds
 
 /**
  * Utility class for synchronizing multiple track packet consumers with one another. We don't want one consumer to get
@@ -1968,6 +1839,36 @@ class TrackSynchronizer {
 		timestamp: number;
 		resolve: () => void;
 	}[] = [];
+
+	declareTrack(trackId: number) {
+		this.maxTimestamps.set(trackId, 0);
+	}
+
+	shouldWait(trackId: number, timestamp: number) {
+		const currentValue = this.maxTimestamps.get(trackId);
+		assert(currentValue !== undefined);
+
+		this.maxTimestamps.set(trackId, Math.max(timestamp, currentValue));
+
+		const newMin = this.computeMinAndMaybeResolve();
+		return timestamp - newMin > MAX_TIMESTAMP_GAP; // Should wait if it is too far ahead of the slowest consumer
+	}
+
+	wait(timestamp: number) {
+		const { promise, resolve } = promiseWithResolvers();
+
+		this.resolvers.push({
+			timestamp,
+			resolve,
+		});
+
+		return promise;
+	}
+
+	closeTrack(trackId: number) {
+		this.maxTimestamps.delete(trackId);
+		this.computeMinAndMaybeResolve();
+	}
 
 	computeMinAndMaybeResolve() {
 		let newMin = Infinity;
@@ -1987,28 +1888,5 @@ class TrackSynchronizer {
 		}
 
 		return newMin;
-	}
-
-	shouldWait(trackId: number, timestamp: number) {
-		this.maxTimestamps.set(trackId, Math.max(timestamp, this.maxTimestamps.get(trackId) ?? -Infinity));
-
-		const newMin = this.computeMinAndMaybeResolve();
-		return timestamp - newMin >= MAX_TIMESTAMP_GAP; // Should wait if it is too far ahead of the slowest consumer
-	}
-
-	wait(timestamp: number) {
-		const { promise, resolve } = promiseWithResolvers();
-
-		this.resolvers.push({
-			timestamp,
-			resolve,
-		});
-
-		return promise;
-	}
-
-	closeTrack(trackId: number) {
-		this.maxTimestamps.delete(trackId);
-		this.computeMinAndMaybeResolve();
 	}
 }

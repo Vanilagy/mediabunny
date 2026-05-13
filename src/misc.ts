@@ -585,7 +585,7 @@ export const retriedFetch = async (
 	}
 };
 
-export const computeRationalApproximation = (x: number, maxDenominator: number) => {
+export const computeRationalApproximation = (x: number, maxDenominator: number): Rational => {
 	// Handle negative numbers
 	const sign = x < 0 ? -1 : 1;
 	x = Math.abs(x);
@@ -605,8 +605,8 @@ export const computeRationalApproximation = (x: number, maxDenominator: number) 
 
 		if (nextDenominator > maxDenominator) {
 			return {
-				numerator: sign * currNumerator,
-				denominator: currDenominator,
+				num: sign * currNumerator,
+				den: currDenominator,
 			};
 		}
 
@@ -624,8 +624,8 @@ export const computeRationalApproximation = (x: number, maxDenominator: number) 
 	}
 
 	return {
-		numerator: sign * currNumerator,
-		denominator: currDenominator,
+		num: sign * currNumerator,
+		den: currDenominator,
 	};
 };
 

@@ -223,12 +223,30 @@ const flacEncoderVariants = await createVariants(
 	},
 );
 
+const serverVariants = await createVariants(
+	'packages/server/src/index.ts',
+	'MediabunnyServer',
+	'packages/server/dist/bundles/mediabunny-server',
+	'cjs',
+	{
+		platform: 'node',
+		packages: 'external',
+		external: ['mediabunny'],
+	},
+	{
+		platform: 'node',
+		packages: 'external',
+		external: ['mediabunny'],
+	},
+);
+
 const contexts = [
 	...mediabunnyVariants,
 	...mp3EncoderVariants,
 	...ac3Variants,
 	...aacEncoderVariants,
 	...flacEncoderVariants,
+	...serverVariants,
 ];
 
 if (process.argv[2] === '--watch') {

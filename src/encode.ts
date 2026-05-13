@@ -24,7 +24,7 @@ import {
 import { customAudioEncoders, customVideoEncoders } from './custom-coder';
 import { isFirefox, MaybePromise, Rotation } from './misc';
 import { EncodedPacket } from './packet';
-import { AudioSample, CropRectangle, validateCropRectangle, VideoSample } from './sample';
+import { AudioSample, CropRectangle, validateCropRectangle, VideoSample, VideoSampleResource } from './sample';
 
 export const canEncodeVideoMemo = new Map<string, Promise<boolean>>();
 export const canEncodeAudioMemo = new Map<string, Promise<boolean>>();
@@ -114,6 +114,10 @@ export type VideoTransformOptions = {
 	 */
 	crop?: CropRectangle;
 	/**
+	 * Whether to discard or keep the transparency information of the video samples. The default is `'keep'`.
+	 */
+	alpha?: 'keep' | 'discard';
+	/**
 	 * The frame rate in hertz to normalize the video frame stream to.
 	 */
 	frameRate?: number;
@@ -122,11 +126,13 @@ export type VideoTransformOptions = {
 	 * or timestamp modifications. Will be called for each video frame after transformations and frame rate
 	 * corrections.
 	 *
-	 * Must return a {@link VideoSample} or a `CanvasImageSource`, an array of them, or `null` for dropping the
-	 * frame. When non-timestamped data is returned, the timestamp and duration from the input sample will be used.
+	 * Must return a {@link VideoSample}, a {@link VideoSampleResource} or a `CanvasImageSource`, an array of them, or
+	 * `null` for dropping the frame. When non-timestamped data is returned, the timestamp and duration from the input
+	 * sample will be used.
 	 */
 	process?: (sample: VideoSample) => MaybePromise<
-		CanvasImageSource | VideoSample | (CanvasImageSource | VideoSample)[] | null
+		CanvasImageSource | VideoSample | VideoSampleResource
+		| (CanvasImageSource | VideoSample | VideoSampleResource)[] | null
 	>;
 	/**
 	 * Forces every video frame through the transformation step even if no transformation properties are defined.
@@ -193,10 +199,12 @@ export const validateVideoEncodingConfig = (config: VideoEncodingConfig) => {
 		if (
 			config.transform.fit !== undefined
 			&& ['fill', 'contain', 'cover'].includes(config.sizeChangeBehavior!)
+			&& config.transform.fit !== config.sizeChangeBehavior
 		) {
 			throw new TypeError(
-				'config.transform.fit cannot be used when config.sizeChangeBehavior is \'fill\', \'contain\' or'
-				+ ' \'cover\', as sizeChangeBehavior already determines the fitting algorithm.',
+				'config.transform.fit, when provided, cannot differ from config.sizeChangeBehavior when'
+				+ ' config.sizeChangeBehavior is \'fill\', \'contain\' or \'cover\', as sizeChangeBehavior already'
+				+ ' determines the fitting algorithm.',
 			);
 		}
 		if (config.transform.rotate !== undefined && ![0, 90, 180, 270].includes(config.transform.rotate)) {

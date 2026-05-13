@@ -1,0 +1,59 @@
+{
+  "name": "@mediabunny/server",
+  "author": "Vanilagy",
+  "version": "1.44.2",
+  "description": "Adds full video and audio decoder and encoder support to Mediabunny for use in server-side environments (Node, Bun, Deno). Based on NodeAV.",
+  "main": "./dist/bundles/mediabunny-server.cjs",
+  "module": "./dist/bundles/mediabunny-server.mjs",
+  "types": "./dist/modules/src/index.d.ts",
+  "exports": {
+    "types": "./dist/modules/src/index.d.ts",
+    "import": "./dist/bundles/mediabunny-server.mjs",
+    "require": "./dist/bundles/mediabunny-server.cjs"
+  },
+  "files": [
+    "README.md",
+    "package.json",
+    "LICENSE",
+    "dist",
+    "src"
+  ],
+  "sideEffects": false,
+  "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vanilagy/mediabunny.git",
+    "directory": "packages/server"
+  },
+  "bugs": {
+    "url": "https://github.com/Vanilagy/mediabunny/issues"
+  },
+  "homepage": "https://mediabunny.dev/guide/extensions/server",
+  "funding": {
+    "type": "individual",
+    "url": "https://github.com/sponsors/Vanilagy"
+  },
+  "dependencies": {
+    "node-av": "^5.2.3"
+  },
+  "peerDependencies": {
+    "mediabunny": "^1.0.0"
+  },
+  "keywords": [
+    "server",
+    "node",
+    "bun",
+    "deno",
+    "decode",
+    "decoding",
+    "encode",
+    "encoding",
+    "codec",
+    "ffmpeg",
+    "libav",
+    "libavcodec",
+    "nodeav",
+    "mediabunny",
+    "polyfill"
+  ]
+}

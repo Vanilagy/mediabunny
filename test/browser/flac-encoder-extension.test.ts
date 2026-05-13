@@ -88,6 +88,7 @@ const encodeAndDecodeFirstSample = async (audioSample: AudioSample) => {
 
 	await output.start();
 	await audioSource.add(audioSample);
+	audioSample.close();
 	audioSource.close();
 	await output.finalize();
 

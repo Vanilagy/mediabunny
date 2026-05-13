@@ -31,7 +31,7 @@ Here's a long list of stuff this library does:
 - Custom encoder & decoder support for polyfilling
 - Low- & high-level abstractions for different use cases
 - Performant everything
-- Node.js support
+- Server-side support (Node, Bun, Deno) via `@mediabunny/server`
 
 ...and there's probably more.
 
@@ -57,6 +57,20 @@ To get going with Mediabunny, here are some starting points:
 - Start with [Writing media files](./writing-media-files) if you want to do write operations.
 - Start with [Converting media files](./converting-media-files) if you care about file conversions.
 - Dive into [Packets & samples](./packets-and-samples) for a deeper understanding of the concepts underlying this library.
+
+## Server-side usage
+
+Mediabunny's simple yet flexible API provides a modern alternative to traditional server-side media processing pipelines which may involve calling out to FFmpeg's CLI manually. Mediabunny was primary built for client-side environments, but when combined with the [`@mediabunny/server`](./extensions/server) extension, the full Mediabunny feature set is available in server-side environments such as Node, Bun, and Deno.
+
+The extension enables:
+- Video decoders and encoders for AVC (H.264), HEVC (H.265), VP8, VP9, and AV1. Supports both length-prefixed and Annex B AVC/HEVC as well as transparent video via VP9.
+- Audio decoders and encoders for AAC, MP3, Vorbis, Opus, FLAC, AC-3 and E-AC-3. Supports AAC in both AAC and ADTS formats.
+- Video frame transformation support (resize, rotate, crop)
+- Automatic hardware acceleration on all platforms (macOS, Linux, Windows)
+- Built-in multithreading
+- Zero-copy decode and encode paths
+
+For more, see [the corresponding guide](./extensions/server).
 
 ## Motivation
 
