@@ -18,6 +18,30 @@
 		});
 
 		const track = await input.getPrimaryAudioTrack();
+		const packetSink = new Mediabunny.EncodedPacketSink(track);
+
+		for await (const packet of packetSink.packets()) {
+			//console.log(packet);
+			break;
+		}
+
+		const sink = new Mediabunny.AudioSampleSink(track);
+
+		let count = 0;
+		for await (const sample of sink.samples()) {
+			const buf = new Float32Array(new ArrayBuffer(sample.allocationSize({ format: 'f32-planar', planeIndex: 0 })));
+			sample.copyTo(buf, { format: 'f32-planar', planeIndex: 0 });
+			let max = Math.max(...buf.map(x => Math.abs(x)));
+
+			console.log(sample, buf, max)
+			
+			if (++count === 3) {
+				break;
+			}
+		}
+
+		/*
+		const track = await input.getPrimaryAudioTrack();
 		const sink = new Mediabunny.EncodedPacketSink(track);
 		
 		for await (const packet of sink.packets()) {
@@ -31,9 +55,9 @@
 
 		const conversion = await Mediabunny.Conversion.init({ input, output });
 		await conversion.execute();
-
+		
 		return;
-
+		
 		// Download it now
 		const blob = new Blob([output.target.buffer]);
 		const url = URL.createObjectURL(blob);
@@ -42,6 +66,7 @@
 		a.download = file.name.replace(/\.\w+$/, '.mp4');
 		a.click();
 		URL.revokeObjectURL(url);
+		*/
 
 		/*
 		const track = await input.getPrimaryAudioTrack();

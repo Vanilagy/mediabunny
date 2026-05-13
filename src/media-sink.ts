@@ -451,7 +451,7 @@ export abstract class BaseMediaSampleSink<
 
 	/** @internal */
 	protected mediaSamplesInRange(
-		startTimestamp = 0,
+		startTimestamp = -Infinity,
 		endTimestamp = Infinity,
 		options: PacketRetrievalOptions,
 	): AsyncGenerator<MediaSample, void, unknown> {
@@ -1811,7 +1811,7 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 	 * @param endTimestamp - The timestamp in seconds at which to stop yielding samples (exclusive).
 	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	samples(startTimestamp = 0, endTimestamp = Infinity, options: PacketRetrievalOptions = {}) {
+	samples(startTimestamp?: number, endTimestamp?: number, options: PacketRetrievalOptions = {}) {
 		return this.mediaSamplesInRange(startTimestamp, endTimestamp, options);
 	}
 
@@ -2109,7 +2109,7 @@ export class CanvasSink {
 	 * @param endTimestamp - The timestamp in seconds at which to stop yielding canvases (exclusive).
 	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	async* canvases(startTimestamp = 0, endTimestamp = Infinity, options?: PacketRetrievalOptions) {
+	async* canvases(startTimestamp?: number, endTimestamp?: number, options?: PacketRetrievalOptions) {
 		await this._ensureInit();
 		yield* mapAsyncGenerator(
 			this._videoSampleSink.samples(startTimestamp, endTimestamp, options),
@@ -2148,6 +2148,9 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 	// Internal state to accumulate a precise current timestamp based on audio durations, not the (potentially
 	// inaccurate) packet timestamps.
 	currentTimestamp: number | null = null;
+	// Chromium does not respect negative packet timestamps, so we must do the fixin' ourselves
+	expectedFirstTimestamp: number | null = null;
+	timestampOffset = 0;
 
 	constructor(
 		onSample: (sample: AudioSample) => unknown,
@@ -2158,12 +2161,20 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 		super(onSample, onError);
 
 		const sampleHandler = (sample: AudioSample) => {
+			let sampleTimestamp = sample.timestamp;
+
+			if (this.expectedFirstTimestamp && this.currentTimestamp === null) {
+				this.timestampOffset = this.expectedFirstTimestamp - sampleTimestamp; ;
+			}
+
+			sampleTimestamp += this.timestampOffset;
+
 			if (
 				this.currentTimestamp === null
-				|| Math.abs(sample.timestamp - this.currentTimestamp) >= sample.duration
+				|| Math.abs(sampleTimestamp - this.currentTimestamp) >= sample.duration
 			) {
 				// We need to sync with the sample timestamp again
-				this.currentTimestamp = sample.timestamp;
+				this.currentTimestamp = sampleTimestamp;
 			}
 
 			const preciseTimestamp = this.currentTimestamp;
@@ -2238,17 +2249,23 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 				.then(() => this.customDecoderQueueSize--);
 		} else {
 			assert(this.decoder);
+
+			this.expectedFirstTimestamp ??= packet.timestamp;
 			this.decoder.decode(packet.toEncodedAudioChunk());
 		}
 	}
 
-	flush() {
+	async flush() {
 		if (this.customDecoder) {
-			return this.customDecoderCallSerializer.call(() => this.customDecoder!.flush());
+			await this.customDecoderCallSerializer.call(() => this.customDecoder!.flush());
 		} else {
 			assert(this.decoder);
-			return this.decoder.flush();
+			await this.decoder.flush();
 		}
+
+		this.currentTimestamp = null;
+		this.expectedFirstTimestamp = null;
+		this.timestampOffset = 0;
 	}
 
 	close() {
@@ -2519,7 +2536,7 @@ export class AudioSampleSink extends BaseMediaSampleSink<AudioSample> {
 	 * @param endTimestamp - The timestamp in seconds at which to stop yielding samples (exclusive).
 	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	samples(startTimestamp = 0, endTimestamp = Infinity, options: PacketRetrievalOptions = {}) {
+	samples(startTimestamp?: number, endTimestamp?: number, options: PacketRetrievalOptions = {}) {
 		return this.mediaSamplesInRange(startTimestamp, endTimestamp, options);
 	}
 
@@ -2609,7 +2626,7 @@ export class AudioBufferSink {
 	 * @param endTimestamp - The timestamp in seconds at which to stop yielding buffers (exclusive).
 	 * @param options - Options used for the underlying packet retrieval.
 	 */
-	buffers(startTimestamp = 0, endTimestamp = Infinity, options?: PacketRetrievalOptions) {
+	buffers(startTimestamp?: number, endTimestamp?: number, options?: PacketRetrievalOptions) {
 		return mapAsyncGenerator(
 			this._audioSampleSink.samples(startTimestamp, endTimestamp, options),
 			data => this._audioSampleToWrappedArrayBuffer(data),
