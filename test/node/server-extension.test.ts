@@ -10,7 +10,13 @@ import { NodeAvVideoEncoder } from '../../packages/server/src/video-encoder.js';
 import { NodeAvAudioDecoder } from '../../packages/server/src/audio-decoder.js';
 import { NodeAvAudioEncoder } from '../../packages/server/src/audio-encoder.js';
 import { AudioSample, VideoSample } from '../../src/sample.js';
-import { AudioCodec, buildAudioCodecString, buildVideoCodecString, VideoCodec } from '../../src/codec.js';
+import {
+	AudioCodec,
+	buildAudioCodecString,
+	buildVideoCodecString,
+	NON_PCM_AUDIO_CODECS,
+	VideoCodec,
+} from '../../src/codec.js';
 import { EncodedPacket } from '../../src/packet.js';
 import {
 	AvcNalUnitType,
@@ -1368,11 +1374,52 @@ describe('Audio', async () => {
 		});
 	});
 
+	for (const codec of NON_PCM_AUDIO_CODECS) {
+		test(`${codec} encode & decode, negative timestamps`, async () => {
+			await timestampTest(codec, -1);
+		});
+
+		test(`${codec} encode & decode, positive timestamps`, async () => {
+			await timestampTest(codec, 1);
+		});
+
+		test(`${codec} encode & decode, huge timestamps`, async () => {
+			await timestampTest(codec, 1e9);
+		});
+	}
+
+	const timestampTest = async (codec: AudioCodec, startTimestamp: number) => {
+		let previousPacket: EncodedPacket | null = null;
+		let previousSample: AudioSample | null = null;
+
+		const testDuration = codec !== 'opus';
+		const testSampleStart = codec !== 'vorbis';
+
+		await encodeDecodeTest(codec, {}, async (packet, _meta, i) => {
+			if (i === 0) {
+				expect(packet.timestamp).toBe(startTimestamp);
+			} else if (testDuration) {
+				expect(packet.timestamp).toBeCloseTo(previousPacket!.timestamp + previousPacket!.duration);
+			}
+			previousPacket = packet;
+		}, async (sample, i) => {
+			if (i === 0) {
+				if (testSampleStart) {
+					expect(sample.timestamp).toBe(startTimestamp);
+				}
+			} else if (testDuration) {
+				expect(sample.timestamp).toBeCloseTo(previousSample!.timestamp + previousSample!.duration);
+			}
+			previousSample = sample;
+		}, startTimestamp);
+	};
+
 	const encodeDecodeTest = async (
 		codec: AudioCodec,
 		extraConfig: Partial<AudioEncoderConfig>,
 		onPacket: (packet: EncodedPacket, meta: EncodedAudioChunkMetadata, i: number, n: number) => Promise<void>,
 		onSample: (sample: AudioSample, i: number, n: number) => Promise<void>,
+		startTimestamp = 0,
 	) => {
 		const sampleRate = 48000;
 		const numberOfChannels = 2;
@@ -1404,7 +1451,7 @@ describe('Audio', async () => {
 		using inputSample = new AudioSample({
 			data,
 			format: 'f32',
-			timestamp: 0,
+			timestamp: startTimestamp,
 			numberOfChannels,
 			sampleRate,
 		});
@@ -1438,7 +1485,9 @@ describe('Audio', async () => {
 		await decoder.flush();
 
 		expect(decodedSamples.length).toBeGreaterThan(0);
-		expect(last(decodedSamples)!.timestamp + last(decodedSamples)!.duration).toBeGreaterThanOrEqual(2);
+		expect(last(decodedSamples)!.timestamp + last(decodedSamples)!.duration).toBeGreaterThanOrEqual(
+			startTimestamp + 2,
+		);
 
 		for (let i = 0; i < decodedSamples.length; i++) {
 			await onSample(decodedSamples[i]!, i, decodedSamples.length);

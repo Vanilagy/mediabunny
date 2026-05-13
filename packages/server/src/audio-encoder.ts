@@ -260,8 +260,9 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 			metadata = {};
 		} else {
 			// To compensate for any negative timestamp things that FFmpeg might do. It does these for a reason, to
-			// indicate encoder delay, but the notion of this is not yet supported in Mediabunny.
-			this.outputTimestampOffset = this.firstExpectedTimestamp - timestamp;
+			// indicate encoder delay, but the notion of this is not yet supported in Mediabunny. Yes, this technically
+			// introduces audio sync drift.
+			this.outputTimestampOffset = Math.max(this.firstExpectedTimestamp - timestamp, 0);
 
 			const codecString = this.config.codec;
 			let description = this.codecContext.extraData
