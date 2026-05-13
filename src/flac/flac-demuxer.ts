@@ -643,8 +643,9 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		options: PacketRetrievalOptions,
 	): Promise<EncodedPacket | null> {
 		assert(this.demuxer.audioInfo);
+
 		if (timestamp < 0) {
-			throw new Error('Timestamp cannot be negative');
+			return null;
 		}
 
 		const release = await this.demuxer.readingMutex.acquire();
