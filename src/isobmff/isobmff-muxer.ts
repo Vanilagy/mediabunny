@@ -400,7 +400,7 @@ export class IsobmffMuxer extends Muxer {
 		const timescale = computeRationalApproximation(
 			1 / (track.metadata.frameRate ?? GLOBAL_TIMESCALE),
 			1e6,
-		).denominator;
+		).den;
 
 		const displayAspectWidth = decoderConfig.displayAspectWidth;
 		const displayAspectHeight = decoderConfig.displayAspectHeight;

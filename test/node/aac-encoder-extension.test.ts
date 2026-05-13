@@ -51,13 +51,15 @@ test('AAC encoding', async () => {
 	output.addAudioTrack(audioSource);
 
 	await output.start();
-	await audioSource.add(new AudioSample({
+	const sample = new AudioSample({
 		data,
 		format: 'f32',
 		numberOfChannels: channels,
 		sampleRate,
 		timestamp: 0,
-	}));
+	});
+	await audioSource.add(sample);
+	sample.close();
 	audioSource.close();
 	await output.finalize();
 
@@ -100,13 +102,15 @@ test('AAC with huge timestamps', async () => {
 	output.addAudioTrack(audioSource);
 
 	await output.start();
-	await audioSource.add(new AudioSample({
+	const sample = new AudioSample({
 		data,
 		format: 'f32',
 		numberOfChannels: channels,
 		sampleRate,
 		timestamp,
-	}));
+	});
+	await audioSource.add(sample);
+	sample.close();
 	audioSource.close();
 	await output.finalize();
 

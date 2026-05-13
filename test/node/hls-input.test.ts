@@ -1,7 +1,7 @@
 /* eslint-disable @stylistic/max-len */
 import { ALL_FORMATS, BufferSource, EncodedPacketSink, Input, InputAudioTrack, InputVideoTrack, UrlSource } from 'mediabunny';
 import { expect, test, vi } from 'vitest';
-import { HLS, HLS_FORMATS, HlsInputFormat } from '../../src/input-format.js';
+import { HLS, HLS_FORMATS, HlsInputFormat, MP4 } from '../../src/input-format.js';
 import { assert, hexStringToBytes, rejectAfter } from '../../src/misc.js';
 import { CustomPathedSource } from '../../src/source.js';
 
@@ -786,6 +786,20 @@ test.concurrent('Live HLS', { timeout: 30_000 }, async () => {
 
 	// The server doesn't answer with range requests but since it's HLS we suppress that warning
 	expect(consoleSpy).not.toHaveBeenCalled();
+});
+
+test.concurrent('Mp4InputFormat recognises a CMAF segment that starts with sidx', async () => {
+	const bytes = new Uint8Array(12);
+	new DataView(bytes.buffer).setUint32(0, 60); // box size
+	bytes.set([0x73, 0x69, 0x64, 0x78], 4); // 'sidx'
+
+	using input = new Input({
+		source: new BufferSource(bytes),
+		formats: ALL_FORMATS,
+	});
+
+	expect(await input.canRead()).toBe(true);
+	expect(await input.getFormat()).toBe(MP4);
 });
 
 test.concurrent('#EXT-X-I-FRAME-STREAM-INF tags are parsed properly', async () => {

@@ -93,9 +93,11 @@ jobs:
           packages/flac-encoder/dist/bundles/mediabunny-flac-encoder.mjs
           packages/flac-encoder/dist/bundles/mediabunny-flac-encoder.min.mjs
           packages/flac-encoder/dist/mediabunny-flac-encoder.d.ts
-
-      - name: Publish Mediabunny to npm
-        run: npm publish --access public ${{ github.event.release.prerelease && '--tag beta' || '' }}
+          packages/server/dist/bundles/mediabunny-server.cjs
+          packages/server/dist/bundles/mediabunny-server.min.cjs
+          packages/server/dist/bundles/mediabunny-server.mjs
+          packages/server/dist/bundles/mediabunny-server.min.mjs
+          packages/server/dist/mediabunny-server.d.ts
 
       - name: Publish workspace packages to npm
         run: npm publish --access public --workspaces ${{ github.event.release.prerelease && '--tag beta' || '' }}

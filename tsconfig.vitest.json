@@ -11,6 +11,7 @@
 			"@mediabunny/aac-encoder": ["./packages/aac-encoder/src/index.ts"],
 			"@mediabunny/flac-encoder": ["./packages/flac-encoder/src/index.ts"],
 			"@mediabunny/mp3-encoder": ["./packages/mp3-encoder/src/index.ts"],
+			"@mediabunny/server": ["./packages/server/src/index.ts"],
 		},
 	},
 	"include": ["vitest.config.ts", "./test/**/*"],
@@ -21,5 +22,6 @@
 		{ "path": "./packages/aac-encoder" },
 		{ "path": "./packages/flac-encoder" },
 		{ "path": "./packages/mp3-encoder" },
+		{ "path": "./packages/server" },
 	]
 }

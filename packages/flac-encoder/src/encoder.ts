@@ -197,6 +197,8 @@ class FlacEncoder extends CustomAudioEncoder {
 	}
 }
 
+let registered = false;
+
 /**
  * Registers the FLAC encoder, which Mediabunny will then use automatically when applicable. Make sure to call this
  * function before starting any encoding task. The FLAC encoder will automatically determine the output bit depth
@@ -217,6 +219,11 @@ class FlacEncoder extends CustomAudioEncoder {
  * @public
  */
 export const registerFlacEncoder = () => {
+	if (registered) {
+		return;
+	}
+	registered = true;
+
 	registerEncoder(FlacEncoder);
 };
 

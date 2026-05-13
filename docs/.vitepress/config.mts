@@ -116,6 +116,7 @@ export default withMermaid({
 				{
 					text: 'Extensions',
 					items: [
+						{ text: 'server', link: '/guide/extensions/server' },
 						{ text: 'mp3-encoder', link: '/guide/extensions/mp3-encoder' },
 						{ text: 'aac-encoder', link: '/guide/extensions/aac-encoder' },
 						{ text: 'ac3', link: '/guide/extensions/ac3' },

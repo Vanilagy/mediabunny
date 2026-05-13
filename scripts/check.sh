@@ -16,6 +16,9 @@ tsc -p packages/aac-encoder
 rm -rf packages/flac-encoder/dist/modules
 tsc -p packages/flac-encoder
 
+rm -rf packages/server/dist/modules
+tsc -p packages/server
+
 tsc -p tsconfig.vitest.json --noEmit
 
 tsc -p scripts --noEmit

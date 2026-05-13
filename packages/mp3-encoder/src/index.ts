@@ -212,6 +212,8 @@ class Mp3Encoder extends CustomAudioEncoder {
 	}
 }
 
+let registered = false;
+
 /**
  * Registers the LAME MP3 encoder, which Mediabunny will then use automatically when applicable. Make sure to call this
  * function before starting any encoding task.
@@ -231,6 +233,11 @@ class Mp3Encoder extends CustomAudioEncoder {
  * @public
  */
 export const registerMp3Encoder = () => {
+	if (registered) {
+		return;
+	}
+	registered = true;
+
 	registerEncoder(Mp3Encoder);
 };
 

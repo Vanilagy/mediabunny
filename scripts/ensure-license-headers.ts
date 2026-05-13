@@ -35,9 +35,12 @@ const checkDirectory = (dirPath: string) => {
 };
 
 checkDirectory(path.join(__dirname, '..', 'src'));
+checkDirectory(path.join(__dirname, '..', 'shared'));
 checkDirectory(path.join(__dirname, '..', 'packages', 'mp3-encoder', 'src'));
 checkDirectory(path.join(__dirname, '..', 'packages', 'ac3', 'src'));
-checkDirectory(path.join(__dirname, '..', 'shared'));
+checkDirectory(path.join(__dirname, '..', 'packages', 'flac-encoder', 'src'));
+checkDirectory(path.join(__dirname, '..', 'packages', 'aac-encoder', 'src'));
+checkDirectory(path.join(__dirname, '..', 'packages', 'server', 'src'));
 
 if (missingFiles.length > 0) {
 	console.error('Files missing license header:');

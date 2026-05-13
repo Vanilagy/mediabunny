@@ -243,10 +243,7 @@ test('VideoSampleSource, transform.process manual resize', async () => {
 					sample.draw(ctx, 0, 0, 60, 40);
 					sample.close();
 
-					return new VideoSample(canvas, {
-						timestamp: sample.timestamp,
-						duration: sample.duration,
-					});
+					return canvas;
 				},
 			},
 		},
@@ -474,10 +471,7 @@ test('VideoSampleSource, transform.frameRate works with process', async () => {
 					const ctx = canvas.getContext('2d')!;
 					sample.draw(ctx, 0, 0, 60, 40);
 
-					return new VideoSample(canvas, {
-						timestamp: sample.timestamp,
-						duration: sample.duration,
-					});
+					return canvas;
 				},
 			},
 		},

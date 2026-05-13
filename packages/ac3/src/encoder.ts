@@ -183,6 +183,8 @@ class Ac3Encoder extends CustomAudioEncoder {
 	}
 }
 
+let registered = false;
+
 /**
  * Registers AC-3 and E-AC-3 encoders, which Mediabunny will then use automatically when applicable. Make sure to call
  * this function before starting any encoding task.
@@ -191,5 +193,10 @@ class Ac3Encoder extends CustomAudioEncoder {
  * @public
  */
 export const registerAc3Encoder = () => {
+	if (registered) {
+		return;
+	}
+	registered = true;
+
 	registerEncoder(Ac3Encoder);
 };
