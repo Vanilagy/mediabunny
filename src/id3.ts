@@ -488,7 +488,7 @@ export class Id3V2Reader {
 
 	readU24() {
 		const high = this.view.getUint16(this.pos, false);
-		const low = this.view.getUint8(this.pos + 1);
+		const low = this.view.getUint8(this.pos + 2);
 		this.pos += 3;
 		return high * 0x100 + low;
 	}
