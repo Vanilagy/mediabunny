@@ -237,6 +237,3 @@ export const getChannelLayout = (numChannels: number): NodeAv.ChannelLayout => {
 		default: return { nbChannels: numChannels, order: NodeAv.AV_CHANNEL_ORDER_UNSPEC, mask: 0n };
 	}
 };
-
-// The value is incorrect in the node-av source code, so we do:
-export const LIBVPX_VP9 = 'libvpx-vp9' as (NodeAv.FFEncoderCodec & NodeAv.FFDecoderCodec);

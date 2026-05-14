@@ -34,7 +34,7 @@
     "url": "https://github.com/sponsors/Vanilagy"
   },
   "dependencies": {
-    "node-av": "^5.2.3"
+    "node-av": "^5.2.4"
   },
   "peerDependencies": {
     "mediabunny": "^1.45.0"
