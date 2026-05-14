@@ -8,7 +8,7 @@
 
 import { CustomVideoDecoder, VideoCodec, EncodedPacket, VideoSample, type MaybePromise, Rational } from 'mediabunny';
 import * as NodeAv from 'node-av';
-import { CODEC_TO_CODEC_ID, getHardwareDecoderCodec, LIBVPX_VP9 } from './misc';
+import { CODEC_TO_CODEC_ID, getHardwareDecoderCodec } from './misc';
 import { assert, binarySearchLessOrEqual, simplifyRational, toUint8Array } from '../../../src/misc';
 import { AvFrameVideoSampleResource } from './video-sample';
 
@@ -47,7 +47,7 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 
 		let codec: NodeAv.Codec | null;
 		if (this.codec === 'vp9' && packet.sideData.alpha) {
-			codec = NodeAv.Codec.findDecoderByName(LIBVPX_VP9) ?? NodeAv.Codec.findDecoder(codecId);
+			codec = NodeAv.Codec.findDecoderByName(NodeAv.FF_DECODER_LIBVPX_VP9) ?? NodeAv.Codec.findDecoder(codecId);
 		} else if (
 			// This check used to be "is not prefer-hardware", meaning it would default to using software decode. I
 			// didn't leave a comment for that back then so I actually don't know what it was for. I'm sure it was to

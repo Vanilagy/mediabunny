@@ -629,7 +629,7 @@ export const guessDescriptionForAudio = (decoderConfig: AudioDecoderConfig): Uin
 
 export const OPUS_SAMPLE_RATE = 48_000;
 
-const PCM_CODEC_REGEX = /^pcm-([usf])(\d+)+(be)?$/;
+const PCM_CODEC_REGEX = /^pcm-([usf])(\d+)(be)?$/;
 
 export const parsePcmCodec = (codec: PcmAudioCodec) => {
 	assert(PCM_AUDIO_CODECS.includes(codec));

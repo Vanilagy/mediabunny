@@ -19,7 +19,6 @@ import * as NodeAv from 'node-av';
 import {
 	CODEC_TO_CODEC_ID,
 	getHardwareEncoderCodec,
-	LIBVPX_VP9,
 	unmapColorPrimaries,
 	unmapMatrixCoefficients,
 	unmapTransferCharacteristics,
@@ -81,7 +80,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 
 		let codec: NodeAv.Codec | null = null;
 		if (this.codec === 'vp9' && this.config.alpha === 'keep') {
-			codec = NodeAv.Codec.findEncoderByName(LIBVPX_VP9) ?? NodeAv.Codec.findEncoder(codecId);
+			codec = NodeAv.Codec.findEncoderByName(NodeAv.FF_ENCODER_LIBVPX_VP9) ?? NodeAv.Codec.findEncoder(codecId);
 		} else if (this.config.hardwareAcceleration === 'prefer-software') {
 			codec = NodeAv.Codec.findEncoder(codecId);
 		} else {
