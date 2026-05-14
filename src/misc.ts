@@ -38,7 +38,7 @@ export const last = <T>(arr: T[]) => {
 };
 
 export const isU32 = (value: number) => {
-	return value >= 0 && value < 2 ** 32;
+	return Number.isInteger(value) && value >= 0 && value < 2 ** 32;
 };
 
 /** Reads an exponential-Golomb universal code from a Bitstream.  */
