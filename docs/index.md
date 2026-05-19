@@ -148,6 +148,7 @@ const sponsors = {
 		{ image: 'https://avatars.githubusercontent.com/u/13042781', name: 'Anshul Bansal', url: 'https://github.com/akbansa' },
 		{ image: 'https://avatars.githubusercontent.com/u/43105172', name: 'zhmou', url: 'https://github.com/zhmou' },
 		{ image: 'https://avatars.githubusercontent.com/u/695166', name: 'Takenori Nakagawa', url: 'https://github.com/ww24' },
+		{ image: 'https://avatars.githubusercontent.com/u/43607012', name: 'Sturlen', url: 'https://github.com/Sturlen' },
 	],
 };
 </script>

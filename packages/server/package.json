@@ -1,7 +1,7 @@
 {
   "name": "@mediabunny/server",
   "author": "Vanilagy",
-  "version": "1.45.2",
+  "version": "1.45.3",
   "description": "Adds full video and audio decoder and encoder support to Mediabunny for use in server-side environments (Node, Bun, Deno). Based on NodeAV.",
   "main": "./dist/bundles/mediabunny-server.cjs",
   "module": "./dist/bundles/mediabunny-server.mjs",
