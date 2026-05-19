@@ -46,7 +46,7 @@ import {
 	customVideoEncoders,
 	customAudioEncoders,
 } from './custom-coder';
-import { EncodedPacket, EncodedPacketSideData } from './packet';
+import { EncodedPacket, EncodedPacketSideData, PacketType } from './packet';
 import {
 	AudioSample,
 	audioSampleToInterleavedFormat,
@@ -63,6 +63,7 @@ import {
 	VideoEncodingConfig,
 } from './encode';
 import { AudioResampler } from './resample';
+import { determineVideoPacketType } from './codec-data';
 
 /**
  * Base class for media sources. Media sources are used to add media samples to an output file.
@@ -224,6 +225,7 @@ class VideoEncoderWrapper {
 	private encoder: VideoEncoder | null = null;
 	private muxer: Muxer | null = null;
 	private lastMultipleOfKeyFrameInterval = -1;
+	private emittedEncoderPackets = 0;
 
 	// Tracks the input dimensions of the first frame
 	private codedWidth: number | null = null;
@@ -694,6 +696,7 @@ class VideoEncoderWrapper {
 
 					let packet = EncodedPacket.fromEncodedChunk(colorChunk, sideData);
 
+					// See if there's a relevant timing entry to refine the packet's timing data
 					const preciseTimingIndex = binarySearchLessOrEqual(
 						this.preciseTimings,
 						colorChunk.timestamp,
@@ -703,12 +706,24 @@ class VideoEncoderWrapper {
 						? this.preciseTimings[preciseTimingIndex]
 						: null;
 
-					// If there's a relevant timing entry, refine the packet's timing data to get better accuracy than
-					// microseconds
-					if (entry && entry.microsecondTimestamp === colorChunk.timestamp) {
+					let actualType: PacketType | null = null;
+					if (this.emittedEncoderPackets === 0 && packet.type === 'delta' && meta?.decoderConfig) {
+						// https://github.com/Vanilagy/mediabunny/issues/365
+						// We expect the first packet to be a key packet. If it's not, let's actually verify that it's
+						// not by getting the actual type.
+						actualType = determineVideoPacketType(
+							this.encodingConfig.codec,
+							meta.decoderConfig,
+							packet.data,
+						);
+					}
+
+					// Define the packet
+					if ((entry && entry.microsecondTimestamp === colorChunk.timestamp) || actualType !== null) {
 						packet = packet.clone({
-							timestamp: entry.timestampIsValid ? entry.timestamp : undefined,
-							duration: entry.durationIsValid ? entry.duration : undefined,
+							timestamp: entry?.timestampIsValid ? entry.timestamp : undefined,
+							duration: entry?.durationIsValid ? entry.duration : undefined,
+							type: actualType ?? undefined,
 						});
 					}
 
@@ -720,6 +735,8 @@ class VideoEncoderWrapper {
 							.catch((error) => {
 								this.error ??= error;
 							});
+
+					this.emittedEncoderPackets++;
 				};
 
 				const stack = new Error('Encoding error').stack;
