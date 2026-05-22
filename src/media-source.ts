@@ -2941,6 +2941,8 @@ type MediaStreamTrackProcessorWorkerMessage = {
 };
 
 type MediaStreamTrackProcessorControllerMessage = {
+	type: 'support';
+} | {
 	type: 'videoTrack';
 	trackId: number;
 	track: MediaStreamVideoTrack;
@@ -2958,12 +2960,6 @@ const mediaStreamTrackProcessorWorkerCode = () => {
 		}
 	};
 
-	// Immediately send a message to the main thread, letting them know of the support
-	sendMessage({
-		type: 'support',
-		supported: typeof MediaStreamTrackProcessor !== 'undefined',
-	});
-
 	const abortControllers = new Map<number, AbortController>();
 	const activeTracks = new Map<number, MediaStreamVideoTrack>();
 
@@ -2971,6 +2967,13 @@ const mediaStreamTrackProcessorWorkerCode = () => {
 		const message = event.data as MediaStreamTrackProcessorControllerMessage;
 
 		switch (message.type) {
+			case 'support': {
+				sendMessage({
+					type: 'support',
+					supported: typeof MediaStreamTrackProcessor !== 'undefined',
+				});
+			}; break;
+
 			case 'videoTrack': {
 				activeTracks.set(message.trackId, message.track);
 
@@ -3068,6 +3071,7 @@ const mediaStreamTrackProcessorIsSupportedInWorker = async () => {
 		};
 
 		mediaStreamTrackProcessorWorker.addEventListener('message', listener);
+		mediaStreamTrackProcessorWorker.postMessage({ type: 'support' });
 	});
 };
 
