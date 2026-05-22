@@ -28,6 +28,7 @@ import {
 	XING,
 	XingFlags,
 	computeAverageMp3FrameSize,
+	getMp3ChannelCount,
 } from '../../shared/mp3-misc';
 import {
 	ID3_V1_TAG_SIZE,
@@ -108,7 +109,12 @@ export class Mp3Demuxer extends Demuxer {
 			}
 		}
 
-		const result = await readNextMp3FrameHeader(this.reader, this.lastLoadedPos, this.reader.fileSize);
+		const result = await readNextMp3FrameHeader(
+			this.reader,
+			this.lastLoadedPos,
+			this.reader.fileSize,
+			this.firstFrameHeader,
+		);
 		if (!result) {
 			this.lastSampleLoaded = true;
 			return;
@@ -155,13 +161,6 @@ export class Mp3Demuxer extends Demuxer {
 		if (!this.firstFrameHeader) {
 			this.firstFrameHeader = header;
 			this.firstFrameHeaderPos = result.startPos;
-		}
-
-		if (header.sampleRate !== this.firstFrameHeader.sampleRate) {
-			console.warn(
-				`MP3 changed sample rate mid-file: ${this.firstFrameHeader.sampleRate} Hz to ${header.sampleRate} Hz.`
-				+ ` Might be a bug, so please report this file.`,
-			);
 		}
 
 		const sampleDuration = header.audioSamplesInFrame / this.firstFrameHeader.sampleRate;
@@ -332,7 +331,7 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 
 	getNumberOfChannels() {
 		assert(this.demuxer.firstFrameHeader);
-		return this.demuxer.firstFrameHeader.channel === 3 ? 1 : 2;
+		return getMp3ChannelCount(this.demuxer.firstFrameHeader.channel);
 	}
 
 	getSampleRate() {
@@ -351,7 +350,7 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 
 		return {
 			codec: 'mp3',
-			numberOfChannels: this.demuxer.firstFrameHeader.channel === 3 ? 1 : 2,
+			numberOfChannels: getMp3ChannelCount(this.demuxer.firstFrameHeader.channel),
 			sampleRate: this.demuxer.firstFrameHeader.sampleRate,
 		};
 	}

@@ -22,7 +22,7 @@ import {
 } from './matroska/ebml';
 import { MatroskaDemuxer } from './matroska/matroska-demuxer';
 import { Mp3Demuxer } from './mp3/mp3-demuxer';
-import { FRAME_HEADER_SIZE, getXingOffset, INFO, XING } from '../shared/mp3-misc';
+import { MP3_FRAME_HEADER_SIZE, getXingOffset, INFO, XING } from '../shared/mp3-misc';
 import { ID3_V2_HEADER_SIZE, readId3V2Header } from './id3';
 import { readNextMp3FrameHeader } from './mp3/mp3-reader';
 import { OggDemuxer } from './ogg/ogg-demuxer';
@@ -330,7 +330,7 @@ export class Mp3InputFormat extends InputFormat {
 
 		// Fine, we found one frame header, but we're still not entirely sure this is MP3. Let's check if we can find
 		// another header right after it:
-		const secondResult = await readNextMp3FrameHeader(input._reader, currentPos, currentPos + FRAME_HEADER_SIZE);
+		const secondResult = await readNextMp3FrameHeader(input._reader, currentPos, currentPos + MP3_FRAME_HEADER_SIZE);
 		if (!secondResult) {
 			return false;
 		}

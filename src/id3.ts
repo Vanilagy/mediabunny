@@ -93,7 +93,7 @@ export const parseId3V1Tag = (slice: FileSlice, tags: MetadataTags) => {
 	const yearText = readId3V1String(slice, 4);
 	const year = Number.parseInt(yearText, 10);
 	if (Number.isInteger(year) && year > 0) {
-		tags.date ??= new Date(year, 0, 1);
+		tags.date ??= new Date(String(year)); // String so that it parses as UTC
 	}
 
 	const commentBytes = readBytes(slice, 30);
@@ -339,7 +339,7 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 				const year = Number.parseInt(yearText, 10);
 
 				if (Number.isInteger(year)) {
-					tags.date ??= new Date(year, 0, 1);
+					tags.date ??= new Date(String(year)); // String so that it parses as UTC
 				}
 			}; break;
 

@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-export const FRAME_HEADER_SIZE = 4;
+export const MP3_FRAME_HEADER_SIZE = 4;
 export const SAMPLING_RATES = [44100, 48000, 32000];
 export const KILOBIT_RATES = [
 	// lowSamplingFrequency === 0
@@ -122,7 +122,8 @@ export const readMp3FrameHeader = (word: number, remainingBytes: number | null):
 	const layer = (secondByte >> 1) & 0x3;
 
 	const bitrateIndex = (thirdByte >> 4) & 0xf;
-	const frequencyIndex = ((thirdByte >> 2) & 0x3) % 3;
+	const frequencyIndex = ((thirdByte >> 2) & 0x3) % 3; // FFmpeg effectively does % 3 (but in a roundabout way)
+
 	const padding = (thirdByte >> 1) & 0x1;
 
 	const channel = (fourthByte >> 6) & 0x3;
@@ -212,3 +213,7 @@ export enum XingFlags {
 	FileSize = 1 << 1,
 	Toc = 1 << 2,
 }
+
+export const getMp3ChannelCount = (channel: number) => {
+	return channel === 3 ? 1 : 2;
+};
