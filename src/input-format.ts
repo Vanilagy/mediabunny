@@ -330,7 +330,11 @@ export class Mp3InputFormat extends InputFormat {
 
 		// Fine, we found one frame header, but we're still not entirely sure this is MP3. Let's check if we can find
 		// another header right after it:
-		const secondResult = await readNextMp3FrameHeader(input._reader, currentPos, currentPos + MP3_FRAME_HEADER_SIZE);
+		const secondResult = await readNextMp3FrameHeader(
+			input._reader,
+			currentPos,
+			currentPos + MP3_FRAME_HEADER_SIZE,
+		);
 		if (!secondResult) {
 			return false;
 		}
