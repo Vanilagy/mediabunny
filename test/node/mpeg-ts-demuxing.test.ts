@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import { Input } from '../../src/input.js';
-import { FilePathSource, ReadableStreamSource, StreamSource } from '../../src/source.js';
+import { FilePathSource, ReadableStreamSource, CustomSource } from '../../src/source.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import { Readable } from 'node:stream';
@@ -759,7 +759,7 @@ test('MPEG-TS partial reading', async () => {
 	let maxEnd = 0;
 
 	using input = new Input({
-		source: new StreamSource({
+		source: new CustomSource({
 			getSize: () => {
 				return buffer.byteLength;
 			},

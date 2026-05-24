@@ -63,7 +63,11 @@ import {
 	TRANSFER_CHARACTERISTICS_MAP_INVERSE,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
-import { FRAME_HEADER_SIZE as MP3_FRAME_HEADER_SIZE, readMp3FrameHeader } from '../../shared/mp3-misc';
+import {
+	MP3_FRAME_HEADER_SIZE,
+	getMp3ChannelCount,
+	readMp3FrameHeader,
+} from '../../shared/mp3-misc';
 import { EncodedPacket, PacketType, PLACEHOLDER_DATA } from '../packet';
 import { FileSlice, readBytes, Reader, readU16Be, readU32Be, readU8 } from '../reader';
 import { buildMpegTsMimeType, MpegTsStreamType, TIMESCALE, TS_PACKET_SIZE } from './mpeg-ts-misc';
@@ -629,7 +633,7 @@ export class MpegTsDemuxer extends Demuxer {
 									);
 								}
 
-								elementaryStream.info.numberOfChannels = result.header.channel === 3 ? 1 : 2;
+								elementaryStream.info.numberOfChannels = getMp3ChannelCount(result.header.channel);
 								elementaryStream.info.sampleRate = result.header.sampleRate;
 							} else if (elementaryStream.info.codec === 'ac3') {
 								const frameInfo = parseAc3SyncFrame(context.suppliedPacket.data);

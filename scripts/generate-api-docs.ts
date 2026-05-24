@@ -83,12 +83,12 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 			const declaration = exportSymbol.valueDeclaration || exportSymbol.declarations?.[0];
 			if (!declaration) return;
 
-			// Collect classes, interfaces, types, enums, variables (only if @public and not @deprecated)
+			// Collect classes, interfaces, types, enums, variables (only if @public)
 			if (ts.isClassDeclaration(declaration) || ts.isInterfaceDeclaration(declaration)
 				|| ts.isTypeAliasDeclaration(declaration) || ts.isEnumDeclaration(declaration)
 				|| ts.isVariableDeclaration(declaration)) {
 				const hasPublicTag = ts.getJSDocTags(declaration).some(tag => tag.tagName.text === 'public');
-				if (hasPublicTag && !hasDeprecatedTag(declaration)) {
+				if (hasPublicTag) {
 					exportedTypes.add(exportSymbol.getName());
 				}
 			}
@@ -98,9 +98,9 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 				const aliasedSymbol = typeChecker.getAliasedSymbol(exportSymbol);
 				const aliasedDeclaration = aliasedSymbol.valueDeclaration || aliasedSymbol.declarations?.[0];
 				if (aliasedDeclaration) {
-					// Check if the aliased symbol has @public tag and is not deprecated
+					// Check if the aliased symbol has @public tag
 					const hasPublicTag = ts.getJSDocTags(aliasedDeclaration).some(tag => tag.tagName.text === 'public');
-					if (hasPublicTag && !hasDeprecatedTag(aliasedDeclaration)) {
+					if (hasPublicTag) {
 						exportedTypes.add(exportSymbol.getName());
 					}
 
@@ -139,10 +139,10 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 					}
 				}
 			}
-			// Otherwise, add any symbol with @public tag and not @deprecated (we'll filter by type later)
+			// Otherwise, add any symbol with @public tag (we'll filter by type later)
 			else {
 				const hasPublicTag = ts.getJSDocTags(declaration).some(tag => tag.tagName.text === 'public');
-				if (hasPublicTag && !hasDeprecatedTag(declaration)) {
+				if (hasPublicTag) {
 					symbols.push(exportSymbol);
 				}
 			}
@@ -377,6 +377,34 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 			// Fallback for unknown types: just format as code
 			return `\`${cleanTarget}\``;
 		});
+	};
+
+	// Helper to build a "> **Deprecated.** ..." notice from a node's @deprecated JSDoc tag.
+	// Returns an empty string if the node has no @deprecated tag.
+	const getDeprecationNotice = (node: ts.Node, currentTypeName?: string): string => {
+		const tag = ts.getJSDocTags(node).find(t => t.tagName.text === 'deprecated');
+		if (!tag) {
+			return '';
+		}
+		let text = '';
+		if (tag.comment) {
+			if (typeof tag.comment === 'string') {
+				text = processLinkTags(tag.comment.trim(), currentTypeName);
+			} else {
+				// comment is a NodeArray of JSDocComment elements (text + inline tags)
+				const raw = tag.comment.map((part) => {
+					if (ts.isJSDocLinkLike(part)) {
+						const linkName = part.name?.getText() ?? '';
+						const linkText = part.text?.trim() ?? '';
+						// Reconstruct as {@link Name text}
+						return `{@link ${linkName}${linkText ? ' ' + linkText : ''}}`;
+					}
+					return part.text ?? '';
+				}).join('');
+				text = processLinkTags(raw.trim(), currentTypeName);
+			}
+		}
+		return text ? `> **Deprecated.** ${text}\n\n` : '> **Deprecated.**\n\n';
 	};
 
 	// Helper to extract linked types from {@link} tags in text
@@ -627,10 +655,11 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 		const nodeKind = ts.SyntaxKind[declaration.kind];
 		const symbolName = (declaration as any).name?.getText() || exportSymbol.getName();
 
-		// Only process symbols with @public tag, and skip deprecated ones entirely
+		// Only process symbols with @public tag
 		const hasPublicTag = ts.getJSDocTags(declaration).some(tag => tag.tagName.text === 'public');
-		if (!hasPublicTag) return;
-		if (hasDeprecatedTag(declaration)) return;
+		if (!hasPublicTag) {
+			return;
+		}
 
 		// Check for @group tag (handle re-exports by looking at the original declaration)
 		let targetDeclaration = declaration;
@@ -714,7 +743,8 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 						? `${variableName}(\n${params.join(',\n')},\n): ${returnType};`
 						: `${variableName}(): ${returnType};`;
 
-					let markdown = `${buildFrontmatter(description)}<script setup>\nimport { VPBadge } from 'vitepress/theme'\n</script>\n\n<VPBadge type="info" text="Function" />\n\n# ${variableName}\n\n\`\`\`ts\n${functionSig}\n\`\`\`${description ? `\n\n${description}` : ''}`;
+					const deprecationNotice = getDeprecationNotice(declaration, variableName);
+					let markdown = `${buildFrontmatter(description)}<script setup>\nimport { VPBadge } from 'vitepress/theme'\n</script>\n\n<VPBadge type="info" text="Function" />\n\n# ${variableName}\n\n${deprecationNotice}\`\`\`ts\n${functionSig}\n\`\`\`${description ? `\n\n${description}` : ''}`;
 
 					// Find referenced types in all parameters and return type
 					const allTypeStrings = params.map(p => p.replace(/\t.*?:\s*/, '')).concat([returnType]);
@@ -728,7 +758,8 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 				}
 			} else {
 				// Handle regular variables
-				let markdown = `${buildFrontmatter(description)}<script setup>\nimport { VPBadge } from 'vitepress/theme'\n</script>\n\n<VPBadge type="info" text="Constant" />\n\n# ${variableName}\n\n${description ? `${description}\n\n` : ''}`;
+				const deprecationNotice = getDeprecationNotice(declaration, variableName);
+				let markdown = `${buildFrontmatter(description)}<script setup>\nimport { VPBadge } from 'vitepress/theme'\n</script>\n\n<VPBadge type="info" text="Constant" />\n\n# ${variableName}\n\n${deprecationNotice}${description ? `${description}\n\n` : ''}`;
 				const variableValue = declaration.initializer ? declaration.initializer.getText() : 'undefined';
 				const variableDefinition = `const ${variableName} = ${variableValue};`;
 				markdown += `\`\`\`ts\n${variableDefinition}\n\`\`\``;
@@ -971,33 +1002,10 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 
 				const isDeprecatedMember = hasDeprecatedTag(member);
 
-				const getDeprecationNotice = () => {
-					const tag = ts.getJSDocTags(member).find(t => t.tagName.text === 'deprecated');
-					let text = '';
-					if (tag?.comment) {
-						if (typeof tag.comment === 'string') {
-							text = processLinkTags(tag.comment.trim(), className);
-						} else {
-							// comment is a NodeArray of JSDocComment elements (text + inline tags)
-							const raw = tag.comment.map((part) => {
-								if (ts.isJSDocLinkLike(part)) {
-									const linkName = part.name?.getText() ?? '';
-									const linkText = part.text?.trim() ?? '';
-									// Reconstruct as {@link Name text}
-									return `{@link ${linkName}${linkText ? ' ' + linkText : ''}}`;
-								}
-								return part.text ?? '';
-							}).join('');
-							text = processLinkTags(raw.trim(), className);
-						}
-					}
-					return text ? `> **Deprecated.** ${text}\n\n` : '> **Deprecated.**\n\n';
-				};
-
 				const addDeprecationNotice = (content: string) => {
 					// Insert the deprecation notice right after the heading line
 					const headingEnd = content.indexOf('\n');
-					return content.slice(0, headingEnd) + '\n\n' + getDeprecationNotice() + content.slice(headingEnd + 1);
+					return content.slice(0, headingEnd) + '\n\n' + getDeprecationNotice(member, className) + content.slice(headingEnd + 1);
 				};
 
 				const pushProperty = (content: string) => {
@@ -1529,7 +1537,8 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 				markdown += `<VPBadge type="info" text="Interface" />\n\n`;
 			}
 
-			markdown += `# ${className}\n\n${description ? `${description}\n` : ''}${extendsClause}${implementsClause}`;
+			const deprecationNotice = getDeprecationNotice(declaration, className);
+			markdown += `# ${className}\n\n${deprecationNotice}${description ? `${description}\n` : ''}${extendsClause}${implementsClause}`;
 
 			// Add subclasses section for classes that have subclasses
 			if (ts.isClassDeclaration(declaration) && classHierarchy.has(className)) {
@@ -1900,7 +1909,25 @@ const extractJsDocDescription = (
 			descLines.push(line);
 		}
 	} else {
-		descLines = lines.filter(line => !line.trim().startsWith('@'));
+		// Skip @tag lines and their continuation lines (continuation ends at a blank line
+		// or the next @tag). Without this, multi-line tags like @deprecated bleed into the
+		// description.
+		descLines = [];
+		let inTagContinuation = false;
+		for (const line of lines) {
+			const trimmed = line.trim();
+			if (trimmed.startsWith('@')) {
+				inTagContinuation = true;
+				continue;
+			}
+			if (inTagContinuation) {
+				if (trimmed === '') {
+					inTagContinuation = false;
+				}
+				continue;
+			}
+			descLines.push(line);
+		}
 	}
 
 	const rawDesc = descLines.join('\n').trim();
