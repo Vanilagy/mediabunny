@@ -9,11 +9,20 @@ const props = defineProps<{
 
 const data = useData();
 const frontmatter = computed(() => props.frontmatter ?? data.frontmatter.value);
+const imageSize = computed(() => props.small ? 32 : 40);
 </script>
 
 <template>
 	<a :href="frontmatter['authorLink']" class="inline-flex gap-2 items-center !no-underline !text-(--var-c-text-1) py-1">
-		<img :src="frontmatter['authorImage']" class="size-10 rounded-full shadow" :class="{ '!size-8': small }" />
+		<img
+			:src="frontmatter['authorImage']"
+			:alt="`${frontmatter['author']} avatar`"
+			:width="imageSize"
+			:height="imageSize"
+			decoding="async"
+			class="size-10 shrink-0 rounded-full shadow object-cover"
+			:class="{ '!size-8': small }"
+		/>
 		<div class="pl-1">
 			<p class="!m-0 font-semibold" :class="{ 'text-sm': small }">{{ frontmatter['author'] }}</p>
 			<!--

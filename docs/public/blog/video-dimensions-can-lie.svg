@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-labelledby="title desc">
+	<title id="title">Coded video dimensions rotated into display dimensions</title>
+	<desc id="desc">A portrait coded frame turns into a landscape display frame after rotation metadata is applied.</desc>
+	<defs>
+		<linearGradient id="background" x1="0" x2="1" y1="0" y2="1">
+			<stop offset="0%" stop-color="#18181b" />
+			<stop offset="58%" stop-color="#27272a" />
+			<stop offset="100%" stop-color="#0f766e" />
+		</linearGradient>
+		<linearGradient id="screenA" x1="0" x2="1" y1="0" y2="1">
+			<stop offset="0%" stop-color="#475569" />
+			<stop offset="100%" stop-color="#1e293b" />
+		</linearGradient>
+		<linearGradient id="screenB" x1="0" x2="1" y1="0" y2="1">
+			<stop offset="0%" stop-color="#0f172a" />
+			<stop offset="100%" stop-color="#111827" />
+		</linearGradient>
+		<filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+			<feDropShadow dx="0" dy="14" stdDeviation="13" flood-color="#000" flood-opacity="0.34" />
+		</filter>
+	</defs>
+
+	<rect width="640" height="360" rx="32" fill="url(#background)" />
+	<path d="M0 287 C120 226 218 300 342 244 C472 185 523 226 640 168 L640 360 L0 360 Z" fill="#14b8a6" opacity="0.15" />
+	<g stroke="#a1a1aa" stroke-width="2" stroke-linecap="round" opacity="0.2">
+		<path d="M72 92 H568" />
+		<path d="M72 264 H568" />
+	</g>
+
+	<text x="320" y="58" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="30" font-weight="800" fill="#ffffff">Coded vs display size</text>
+
+	<g filter="url(#shadow)">
+		<rect x="134" y="116" width="100" height="126" rx="20" fill="#f4f4f5" />
+		<rect x="144" y="126" width="80" height="106" rx="15" fill="#111827" />
+		<rect x="158" y="142" width="52" height="74" rx="10" fill="url(#screenA)" />
+		<path d="M166 200 L183 177 L195 193 L207 174 L216 200 Z" fill="#67e8f9" />
+		<circle cx="201" cy="155" r="9" fill="#facc15" />
+	</g>
+
+	<text x="184" y="297" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" font-weight="700" fill="#fafafa">1080 x 1920</text>
+	<text x="184" y="320" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="15" fill="#cbd5e1">coded frame</text>
+
+	<g filter="url(#shadow)">
+		<rect x="402" y="143" width="154" height="90" rx="22" fill="#f4f4f5" />
+		<rect x="416" y="156" width="126" height="64" rx="13" fill="url(#screenB)" />
+		<path d="M429 204 L464 178 L491 197 L512 176 L542 204 Z" fill="#5eead4" />
+		<circle cx="512" cy="172" r="10" fill="#facc15" />
+	</g>
+
+	<path d="M286 180 C302 146 333 146 348 164" fill="none" stroke="#facc15" stroke-width="8" stroke-linecap="round" />
+	<path d="M362 178 L340 168 L354 154 Z" fill="#facc15" />
+	<rect x="288" y="199" width="68" height="28" rx="14" fill="#18181b" opacity="0.82" />
+	<text x="322" y="219" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16" font-weight="800" fill="#facc15">90deg</text>
+
+	<text x="479" y="297" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" font-weight="700" fill="#fafafa">1920 x 1080</text>
+	<text x="479" y="320" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="15" fill="#cbd5e1">display frame</text>
+</svg>

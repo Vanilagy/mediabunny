@@ -14,7 +14,22 @@ import BlogAuthor from './components/BlogAuthor.vue';
 <template v-for="(post, i) in data">
 	<a :href="post.url" class="flex flex-col sm:flex-row items-start sm:gap-8 !text-inherit !no-underline ![font-weight:inherit] group">
 		<div>
-			<img src="./assets/on-air.png" class="shrink-0 sm:w-40 rounded" />
+			<img
+				v-if="post.frontmatter.thumbnail"
+				:src="post.frontmatter.thumbnail"
+				:alt="post.frontmatter.title"
+				width="160"
+				height="90"
+				class="shrink-0 sm:w-40 rounded"
+			/>
+			<img
+				v-else
+				src="./assets/on-air.png"
+				:alt="post.frontmatter.title"
+				width="160"
+				height="80"
+				class="shrink-0 sm:w-40 rounded"
+			/>
 			<div v-if="false" class="p-1">
 				<BlogAuthor :frontmatter="post.frontmatter" small />
 			</div>
