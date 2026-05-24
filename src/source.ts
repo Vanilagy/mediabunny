@@ -95,7 +95,7 @@ export abstract class Source extends EventEmitter<SourceEvents> {
 	/**
 	 * FinalizationRegistry for rogue refs to this source that didn't get freed. It lives on the Source itself so that
 	 * in case the Source transitively points back to itself and forms a cycle (for example through a custom
-	 * StreamSource callback) that we're not leaking memory.
+	 * CustomSource callback) that we're not leaking memory.
 	 * @internal
 	 */
 	_refFinalizationRegistry: FinalizationRegistry<Source> | null = null;
@@ -196,10 +196,12 @@ export abstract class Source extends EventEmitter<SourceEvents> {
 		return new SourceRef(this);
 	}
 
+	/** @internal */
 	_incrementRefCount() {
 		this._refCount++;
 	}
 
+	/** @internal */
 	_decrementRefCount() {
 		this._refCount--;
 
@@ -990,7 +992,7 @@ export type FilePathSourceOptions = {
  */
 export class FilePathSource extends PathedSource {
 	/** @internal */
-	_streamSource: StreamSource;
+	_customSource: CustomSource;
 	/** @internal */
 	_fileHandle: FileHandle | null = null;
 
@@ -1017,8 +1019,8 @@ export class FilePathSource extends PathedSource {
 
 		super(filePath, request => new FilePathSource(request.path, options));
 
-		// Let's back this source with a StreamSource, makes the implementation very simple
-		this._streamSource = new StreamSource({
+		// Let's back this source with a CustomSource, makes the implementation very simple
+		this._customSource = new CustomSource({
 			getSize: async () => {
 				const fileHandle = await node.fs.open(filePath, 'r');
 				this._fileHandle = fileHandle;
@@ -1051,17 +1053,17 @@ export class FilePathSource extends PathedSource {
 		minReadPosition: number,
 		maxReadPosition: number,
 	): MaybePromise<ReadResult | null> {
-		return this._streamSource._read(start, end, minReadPosition, maxReadPosition);
+		return this._customSource._read(start, end, minReadPosition, maxReadPosition);
 	}
 
 	/** @internal */
 	_getFileSize(): number | null | undefined {
-		return this._streamSource._getFileSize();
+		return this._customSource._getFileSize();
 	}
 
 	/** @internal */
 	_dispose() {
-		this._streamSource._dispose();
+		this._customSource._dispose();
 
 		if (this._fileHandle) {
 			void this._fileHandle.close();
@@ -1072,11 +1074,11 @@ export class FilePathSource extends PathedSource {
 }
 
 /**
- * Options for defining a {@link StreamSource}.
+ * Options for defining a {@link CustomSource}.
  * @group Input sources
  * @public
  */
-export type StreamSourceOptions = {
+export type CustomSourceOptions = {
 	/**
 	 * Called when the size of the entire file is requested. Must return or resolve to the size in bytes. This function
 	 * is guaranteed to be called before `read`.
@@ -1086,6 +1088,8 @@ export type StreamSourceOptions = {
 	/**
 	 * Called when data is requested. Must return or resolve to the bytes from the specified byte range, or a stream
 	 * that yields these bytes.
+	 *
+	 * You are guaranteed that `0 <= start < end < fileSize`.
 	 */
 	read: (start: number, end: number) => MaybePromise<Uint8Array | ReadableStream<Uint8Array>>;
 
@@ -1112,18 +1116,19 @@ export type StreamSourceOptions = {
 };
 
 /**
- * A general-purpose, callback-driven source that can get its data from anywhere.
+ * A general-purpose, callback-driven source that can get its data from anywhere. Use this source to implement your own
+ * custom source if the other sources don't cover your case.
  * @group Input sources
  * @public
  */
-export class StreamSource extends Source {
+export class CustomSource extends Source {
 	/** @internal */
-	_options: StreamSourceOptions;
+	_options: CustomSourceOptions;
 	/** @internal */
 	_orchestrator: ReadOrchestrator;
 
-	/** Creates a new {@link StreamSource} whose behavior is specified by `options`.  */
-	constructor(options: StreamSourceOptions) {
+	/** Creates a new {@link CustomSource} whose behavior is specified by `options`.  */
+	constructor(options: CustomSourceOptions) {
 		if (!options || typeof options !== 'object') {
 			throw new TypeError('options must be an object.');
 		}
@@ -1270,6 +1275,25 @@ export class StreamSource extends Source {
 		this._options.dispose?.();
 	}
 }
+
+/**
+ * An alias for {@link CustomSource}.
+ * @deprecated This name is misleading and will be removed in a future release. Please use {@link CustomSource} instead.
+ *
+ * @group Input sources
+ * @public
+ */
+export const StreamSource = CustomSource;
+
+/**
+ * An alias for {@link CustomSourceOptions}.
+ * @deprecated This name is misleading and will be removed in a future release. Please use
+ * {@link CustomSourceOptions} instead.
+ *
+ * @group Input sources
+ * @public
+ */
+export type StreamSourceOptions = CustomSourceOptions;
 
 type ReadableStreamSourcePendingSlice = {
 	start: number;

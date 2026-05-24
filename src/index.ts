@@ -173,10 +173,14 @@ export {
 	type BlobSourceOptions,
 	BufferSource,
 	CustomPathedSource,
+	CustomSource,
+	type CustomSourceOptions,
 	FilePathSource,
 	type FilePathSourceOptions,
 	PathedSource,
+	// eslint-disable-next-line @typescript-eslint/no-deprecated
 	StreamSource,
+	// eslint-disable-next-line @typescript-eslint/no-deprecated
 	type StreamSourceOptions,
 	RangedSource,
 	ReadableStreamSource,

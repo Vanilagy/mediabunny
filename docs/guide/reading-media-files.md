@@ -696,18 +696,18 @@ type FilePathSourceOptions = {
 When using this source, make sure to manually [dispose of the Input](#disposing-inputs) when you are done with it to properly close the internal file handle held by this source.
 :::
 
-### `StreamSource`
+### `CustomSource`
 
 This is a general-purpose input source you can use to read data from anywhere.
 
-For example, here we're reading a file from disk using the Node.js file system (although you should use [`FilePathSource`](#filepathsource) for that):
+For example, here we're reading a file from disk using the Node.js file system (although you should use the existing [`FilePathSource`](#filepathsource) for that):
 ```ts
-import { StreamSource } from 'mediabunny';
+import { CustomSource } from 'mediabunny';
 import { open } from 'node:fs/promises';
 
 const fileHandle = await open('bigbuckbunny.mp4', 'r');
 
-const source = new StreamSource({
+const source = new CustomSource({
 	read: async (start, end) => {
 		const buffer = Buffer.alloc(end - start);
 		await fileHandle.read(buffer, 0, end - start, start);
@@ -720,9 +720,9 @@ const source = new StreamSource({
 });
 ```
 
-The options of `StreamSource` have the following type:
+The options of `CustomSource` have the following type:
 ```ts
-type StreamSourceOptions = {
+type CustomSourceOptions = {
 	getSize: () => MaybePromise<number>;
 	read: (start: number, end: number) => MaybePromise<Uint8Array | ReadableStream<Uint8Array>>;
 	dispose?: () => unknown;
@@ -736,7 +736,7 @@ type MaybePromise<T> = T | Promise<T>;
 - `getSize`\
 	Called when the size of the entire file is requested. Must return or resolve to the size in bytes. This function is guaranteed to be called before `read`.
 - `read`\
-	Called when data is requested. Must return or resolve to the bytes from the specified byte range, or a stream that yields these bytes.
+	Called when data is requested. Must return or resolve to the bytes from the specified byte range, or a stream that yields these bytes. You are guaranteed that `0 <= start < end < fileSize`.
 - `dispose`\
 	Called when the `Input` driven by this source is disposed.
 - `maxCacheSize`\
@@ -746,6 +746,10 @@ type MaybePromise<T> = T | Promise<T>;
 	- `'none'` (default): No prefetching; only the data needed in the moment is requested.
 	- `'fileSystem'`: File system-optimized prefetching: a small amount of data is prefetched bidirectionally, aligned with page boundaries.
 	- `'network'`: Network-optimized prefetching, or more generally, prefetching optimized for any high-latency environment: tries to minimize the amount of read calls and aggressively prefetches data when sequential access patterns are detected.
+
+::: info
+`CustomSource` was previously known as `StreamSource` and is still available under that alias, but usage of `StreamSource` is deprecated.
+:::
 
 ### `ReadableStreamSource`
 
