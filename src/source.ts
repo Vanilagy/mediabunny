@@ -59,6 +59,13 @@ export type SourceEvents = {
 	};
 };
 
+let sourceFinalizationRegistry: FinalizationRegistry<() => unknown> | null = null;
+if (typeof FinalizationRegistry !== 'undefined') {
+	sourceFinalizationRegistry = new FinalizationRegistry((cleanup) => {
+		cleanup();
+	});
+}
+
 /**
  * The source base class, representing a resource from which bytes can be read.
  * @group Input sources
@@ -85,9 +92,26 @@ export abstract class Source extends EventEmitter<SourceEvents> {
 	 * @internal
 	 */
 	_usedForHls = false;
+	/**
+	 * FinalizationRegistry for rogue refs to this source that didn't get freed. It lives on the Source itself so that
+	 * in case the Source transitively points back to itself and forms a cycle (for example through a custom
+	 * StreamSource callback) that we're not leaking memory.
+	 * @internal
+	 */
+	_refFinalizationRegistry: FinalizationRegistry<Source> | null = null;
 
 	/** @internal */
 	private _sizePromise: Promise<number | null> | null = null;
+
+	constructor() {
+		super();
+
+		if (typeof FinalizationRegistry !== 'undefined') {
+			this._refFinalizationRegistry = new FinalizationRegistry((source) => {
+				source._decrementRefCount();
+			});
+		}
+	}
 
 	/**
 	 * Resolves with the total size of the file in bytes. This function is memoized, meaning only the first call
@@ -171,6 +195,19 @@ export abstract class Source extends EventEmitter<SourceEvents> {
 	ref() {
 		return new SourceRef(this);
 	}
+
+	_incrementRefCount() {
+		this._refCount++;
+	}
+
+	_decrementRefCount() {
+		this._refCount--;
+
+		if (this._refCount === 0) {
+			this._dispose();
+			this._disposed = true;
+		}
+	}
 }
 
 /**
@@ -193,7 +230,9 @@ export class SourceRef<S extends Source = Source> implements Disposable {
 			throw new Error('Cannot ref a disposed source.');
 		}
 
-		source._refCount++;
+		source._incrementRefCount();
+		source._refFinalizationRegistry?.register(this, source, this);
+
 		this._source = source;
 	}
 
@@ -223,12 +262,8 @@ export class SourceRef<S extends Source = Source> implements Disposable {
 		const source = this.source;
 		assert(source._refCount > 0);
 
-		source._refCount--;
-
-		if (source._refCount === 0) {
-			source._dispose();
-			source._disposed = true;
-		}
+		source._decrementRefCount();
+		source._refFinalizationRegistry?.unregister(this);
 
 		this._freed = true;
 		this._source = null;
@@ -985,9 +1020,15 @@ export class FilePathSource extends PathedSource {
 		// Let's back this source with a StreamSource, makes the implementation very simple
 		this._streamSource = new StreamSource({
 			getSize: async () => {
-				this._fileHandle = await node.fs.open(filePath, 'r');
+				const fileHandle = await node.fs.open(filePath, 'r');
+				this._fileHandle = fileHandle;
 
-				const stats = await this._fileHandle.stat();
+				sourceFinalizationRegistry?.register(this, () => {
+					// If it's not closed, Node prints annoying warnings
+					void fileHandle.close();
+				}, this);
+
+				const stats = await fileHandle.stat();
 				return stats.size;
 			},
 			read: async (start, end) => {
@@ -1021,8 +1062,12 @@ export class FilePathSource extends PathedSource {
 	/** @internal */
 	_dispose() {
 		this._streamSource._dispose();
-		void this._fileHandle?.close();
-		this._fileHandle = null;
+
+		if (this._fileHandle) {
+			void this._fileHandle.close();
+			this._fileHandle = null;
+			sourceFinalizationRegistry?.unregister(this);
+		}
 	}
 }
 

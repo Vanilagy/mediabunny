@@ -45,17 +45,6 @@ polyfillSymbolDispose();
 export const DEFAULT_SOURCE_CACHE_GROUP = 1;
 export const ENCRYPTION_KEY_CACHE_GROUP = 2;
 
-let inputFinalizationRegistry: FinalizationRegistry<SourceRef[]> | null = null;
-if (typeof FinalizationRegistry !== 'undefined') {
-	inputFinalizationRegistry = new FinalizationRegistry((refs) => {
-		for (const ref of refs) {
-			if (!ref.freed) {
-				ref.free();
-			}
-		}
-	});
-}
-
 /**
  * The options for creating an Input object.
  * @group Input files & tracks
@@ -191,7 +180,6 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 		}
 
 		this._sourceRefs.push(this._rootRef);
-		inputFinalizationRegistry?.register(this, this._sourceRefs, this);
 	}
 
 	/** @internal */
@@ -538,8 +526,6 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 			ref.free();
 		}
 		this._sourceRefs.length = 0;
-
-		inputFinalizationRegistry?.unregister(this);
 
 		void this._demuxerPromise
 			?.then(demuxer => demuxer.dispose());
