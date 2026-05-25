@@ -643,6 +643,8 @@ const source = new UrlSource('https://example.com/bigbuckbunny.mp4', {
 });
 ```
 
+All `requestInit` fields are respected except for `signal` and `headers.Range`, which are overridden by Mediabunny. The same applies to the `signal` and `headers.Range` values of a `Request` passed as the first constructor argument. To cancel ongoing requests, [dispose of the input](#disposing-inputs).
+
 `getRetryDelay` can be used to control the retry logic used should a request fail. When a request fails, `getRetryDelay` should return the time to wait in seconds before the request will be retried. Returning `null` prevents further retries.
 ```ts
 // UrlSource using retry logic with exponential backoff:
