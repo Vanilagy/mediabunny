@@ -378,12 +378,26 @@ export const free = (size: number): Box => ({ type: 'free', size });
  * Movie Box: Used to specify the information that defines a movie - that is, the information that allows
  * an application to interpret the sample data that is stored elsewhere.
  */
-export const moov = (muxer: IsobmffMuxer) => box('moov', undefined, [
-	mvhd(muxer.creationTime, muxer.trackDatas),
-	...muxer.trackDatas.map(x => trak(x, muxer.creationTime)),
-	muxer.isFragmented ? mvex(muxer.trackDatas) : null,
-	udta(muxer),
-]);
+export const moov = (muxer: IsobmffMuxer) => {
+	// FFmpeg-aligned fallback: If no track of a given type is enabled, force the first one to be enabled.
+	// This ensures compatibility with strict players like QuickTime.
+	for (const type of ['video', 'audio', 'subtitle'] as const) {
+		const tracks = muxer.trackDatas.filter(t => t.type === type);
+		const hasEnabled = tracks.some(t => t.track.metadata.disposition?.default !== false);
+		if (!hasEnabled && tracks.length > 0) {
+			const firstTrack = tracks[0]!;
+			if (!firstTrack.track.metadata.disposition) firstTrack.track.metadata.disposition = {};
+			firstTrack.track.metadata.disposition.default = true;
+		}
+	}
+
+	return box('moov', undefined, [
+		mvhd(muxer.creationTime, muxer.trackDatas),
+		...muxer.trackDatas.map(x => trak(x, muxer.creationTime)),
+		muxer.isFragmented ? mvex(muxer.trackDatas) : null,
+		udta(muxer),
+	]);
+};
 
 /** Movie Header Box: Used to specify the characteristics of the entire movie, such as timescale and duration. */
 export const mvhd = (
