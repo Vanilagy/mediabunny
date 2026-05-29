@@ -306,7 +306,7 @@ export class Mp4OutputFormat extends IsobmffOutputFormat {
 	getSupportedCodecs(): MediaCodec[] {
 		return [
 			...VIDEO_CODECS,
-			...NON_PCM_AUDIO_CODECS,
+			...NON_PCM_AUDIO_CODECS.filter(codec => codec !== 'dts'),
 
 			// These are supported via ISO/IEC 23003-5:
 			'pcm-s16',
@@ -375,7 +375,7 @@ export class CmafOutputFormat extends IsobmffOutputFormat {
 	getSupportedCodecs(): MediaCodec[] {
 		return [
 			...VIDEO_CODECS,
-			...NON_PCM_AUDIO_CODECS,
+			...NON_PCM_AUDIO_CODECS.filter(codec => codec !== 'dts'),
 
 			// These are supported via ISO/IEC 23003-5:
 			'pcm-s16',
@@ -395,7 +395,7 @@ export class CmafOutputFormat extends IsobmffOutputFormat {
 }
 
 /**
- * QuickTime File Format (QTFF), often called MOV. Supports all video and audio codecs, but not subtitle codecs.
+ * QuickTime File Format (QTFF), often called MOV. Supports most video and audio codecs, but not subtitle codecs.
  * @group Output formats
  * @public
  */
@@ -421,7 +421,7 @@ export class MovOutputFormat extends IsobmffOutputFormat {
 	getSupportedCodecs(): MediaCodec[] {
 		return [
 			...VIDEO_CODECS,
-			...AUDIO_CODECS,
+			...AUDIO_CODECS.filter(codec => codec !== 'dts'),
 		];
 	}
 

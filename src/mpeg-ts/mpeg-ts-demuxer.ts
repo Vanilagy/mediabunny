@@ -24,6 +24,7 @@ import {
 	AvcDecoderConfigurationRecord,
 	AvcNalUnitType,
 	determineVideoPacketType,
+	DTS_CORE_HEADER_SIZE,
 	extractAvcDecoderConfigurationRecord,
 	extractHevcDecoderConfigurationRecord,
 	extractNalUnitTypeForAvc,
@@ -35,6 +36,7 @@ import {
 	HevcNalUnitType,
 	parseAc3SyncFrame,
 	parseAvcSps,
+	parseDtsCoreFrameHeader,
 	parseEac3SyncFrame,
 	parseHevcSps,
 	AC3_FRAME_SIZES,
@@ -296,19 +298,35 @@ export class MpegTsDemuxer extends Demuxer {
 						bitstream.skipBits(6);
 						const esInfoLength = bitstream.readBits(10);
 
-						// Check ES descriptors to detect AC-3/E-AC-3 in System B
+						// Check ES descriptors to detect AC-3/E-AC-3/DTS in System B
 						const esInfoEndPos = bitstream.pos + 8 * esInfoLength;
 						let hasAc3Descriptor = false;
 						let hasEac3Descriptor = false;
+						let hasDtsDescriptor = false;
 						while (bitstream.pos < esInfoEndPos) {
 							const descriptorTag = bitstream.readBits(8);
 							const descriptorLength = bitstream.readBits(8);
-							if (descriptorTag === 0x6a) {
-								hasAc3Descriptor = true;
-							} else if (descriptorTag === 0x7a || descriptorTag === 0xcc) {
-								hasEac3Descriptor = true;
+							if (descriptorTag === 0x05 && descriptorLength >= 4) {
+								const formatIdentifier = bitstream.readBits(32);
+								if (
+									formatIdentifier === 0x44545331 // DTS1
+									|| formatIdentifier === 0x44545332 // DTS2
+									|| formatIdentifier === 0x44545333 // DTS3
+									|| formatIdentifier === 0x44545348 // DTSH
+								) {
+									hasDtsDescriptor = true;
+								}
+								bitstream.skipBits(8 * (descriptorLength - 4));
+							} else {
+								if (descriptorTag === 0x6a) {
+									hasAc3Descriptor = true;
+								} else if (descriptorTag === 0x7a || descriptorTag === 0xcc) {
+									hasEac3Descriptor = true;
+								} else if (descriptorTag === 0x7b) {
+									hasDtsDescriptor = true;
+								}
+								bitstream.skipBits(8 * descriptorLength);
 							}
-							bitstream.skipBits(8 * descriptorLength);
 						}
 
 						let info: ElementaryStream['info'] | null = null;
@@ -342,6 +360,8 @@ export class MpegTsDemuxer extends Demuxer {
 							case MpegTsStreamType.MP3_MPEG2:
 							case MpegTsStreamType.AAC:
 							case MpegTsStreamType.AC3_SYSTEM_A:
+							case MpegTsStreamType.DTS_BLURAY:
+							case MpegTsStreamType.DTS:
 							case MpegTsStreamType.EAC3_SYSTEM_A: {
 								let codec: AudioCodec;
 								if (
@@ -353,6 +373,11 @@ export class MpegTsDemuxer extends Demuxer {
 									codec = 'aac';
 								} else if (streamType === MpegTsStreamType.AC3_SYSTEM_A) {
 									codec = 'ac3';
+								} else if (
+									streamType === MpegTsStreamType.DTS_BLURAY
+									|| streamType === MpegTsStreamType.DTS
+								) {
+									codec = 'dts';
 								} else if (streamType === MpegTsStreamType.EAC3_SYSTEM_A) {
 									codec = 'eac3';
 								} else {
@@ -383,6 +408,15 @@ export class MpegTsDemuxer extends Demuxer {
 									info = {
 										type: 'audio',
 										codec: 'ac3',
+										decoderConfig: null,
+										aacCodecInfo: null,
+										numberOfChannels: -1,
+										sampleRate: -1,
+									};
+								} else if (hasDtsDescriptor) {
+									info = {
+										type: 'audio',
+										codec: 'dts',
 										decoderConfig: null,
 										aacCodecInfo: null,
 										numberOfChannels: -1,
@@ -669,6 +703,16 @@ export class MpegTsDemuxer extends Demuxer {
 
 								elementaryStream.info.numberOfChannels = getEac3ChannelCount(frameInfo);
 								elementaryStream.info.sampleRate = sampleRate;
+							} else if (elementaryStream.info.codec === 'dts') {
+								const frameInfo = parseDtsCoreFrameHeader(context.suppliedPacket.data);
+								if (!frameInfo) {
+									throw new Error(
+										'Invalid DTS audio stream; could not read core frame header from first packet.',
+									);
+								}
+
+								elementaryStream.info.numberOfChannels = frameInfo.channelCount;
+								elementaryStream.info.sampleRate = frameInfo.sampleRate;
 							} else {
 								throw new Error('Unhandled.');
 							}
@@ -2236,6 +2280,37 @@ class PacketReadingContext {
 							samplesPerFrame * TIMESCALE / elementaryStream.info.sampleRate,
 						);
 						return this.supplyPacket(remaining, duration);
+					} else if (codec === 'dts') {
+						if (byte !== 0x7f) {
+							continue;
+						}
+
+						this.skip(-1);
+						const possibleSyncPos = this.currentPos;
+
+						let remaining = this.ensureBuffered(DTS_CORE_HEADER_SIZE);
+						if (remaining instanceof Promise) remaining = await remaining;
+
+						if (remaining < DTS_CORE_HEADER_SIZE) {
+							return;
+						}
+
+						const headerBytes = this.readBytes(DTS_CORE_HEADER_SIZE);
+						const frameInfo = parseDtsCoreFrameHeader(headerBytes);
+
+						if (frameInfo) {
+							this.seekTo(possibleSyncPos);
+
+							remaining = this.ensureBuffered(frameInfo.frameSize);
+							if (remaining instanceof Promise) remaining = await remaining;
+
+							const duration = Math.round(
+								frameInfo.sampleCount * TIMESCALE / elementaryStream.info.sampleRate,
+							);
+							return this.supplyPacket(remaining, duration);
+						} else {
+							this.seekTo(possibleSyncPos + 1);
+						}
 					} else {
 						throw new Error('Unhandled.');
 					}
