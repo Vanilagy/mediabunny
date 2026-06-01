@@ -12,10 +12,28 @@ import { CODEC_TO_CODEC_ID, getHardwareDecoderCodec } from './misc';
 import { assert, binarySearchLessOrEqual, simplifyRational, toUint8Array } from '../../../src/misc';
 import { AvFrameVideoSampleResource } from './video-sample';
 
+type NodeAvState = {
+	frame: NodeAv.Frame;
+	packet: NodeAv.Packet;
+	codecContext: NodeAv.CodecContext | null;
+};
+
+const freeState = (state: NodeAvState) => {
+	state.codecContext?.freeContext();
+	state.frame.free();
+	state.packet.free();
+};
+
+// Needed for proper freeing if close isn't called
+let finalizationRegistry: FinalizationRegistry<NodeAvState> | null = null;
+if (typeof FinalizationRegistry !== 'undefined') {
+	finalizationRegistry = new FinalizationRegistry<NodeAvState>((state) => {
+		freeState(state);
+	});
+}
+
 export class NodeAvVideoDecoder extends CustomVideoDecoder {
-	frame!: NodeAv.Frame;
-	packet!: NodeAv.Packet;
-	codecContext: NodeAv.CodecContext | null = null;
+	state!: NodeAvState;
 	pixelAspectRatio!: Rational;
 
 	// Bookkeeping to restore the original timing information
@@ -33,14 +51,17 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 	}
 
 	async init() {
-		this.frame = new NodeAv.Frame();
-		this.frame.alloc();
-		this.packet = new NodeAv.Packet();
-		this.packet.alloc();
+		const frame = new NodeAv.Frame();
+		frame.alloc();
+		const packet = new NodeAv.Packet();
+		packet.alloc();
+		this.state = { frame, packet, codecContext: null };
+
+		finalizationRegistry?.register(this, this.state, this);
 	}
 
 	async initCodecContext(packet: EncodedPacket) {
-		assert(this.codecContext === null);
+		assert(this.state.codecContext === null);
 
 		const codecId = CODEC_TO_CODEC_ID[this.codec];
 		assert(codecId !== undefined);
@@ -85,28 +106,29 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 		const ret = await codecContext.open2();
 		NodeAv.FFmpegError.throwIfError(ret, 'Open codec context');
 
-		this.codecContext = codecContext;
+		this.state.codecContext = codecContext;
 	}
 
 	async decode(packet: EncodedPacket) {
-		if (this.codecContext === null) {
+		if (this.state.codecContext === null) {
 			await this.initCodecContext(packet);
-			assert(this.codecContext);
 		}
 
-		this.packet.isKeyframe = packet.type === 'key';
-		this.packet.data = Buffer.from(packet.data);
-		this.packet.timeBase = { num: 1, den: 1e6 };
-		this.packet.pts = BigInt(packet.microsecondTimestamp);
-		this.packet.dts = NodeAv.AV_NOPTS_VALUE;
-		this.packet.duration = BigInt(packet.microsecondDuration);
+		assert(this.state.codecContext);
+
+		this.state.packet.isKeyframe = packet.type === 'key';
+		this.state.packet.data = Buffer.from(packet.data);
+		this.state.packet.timeBase = { num: 1, den: 1e6 };
+		this.state.packet.pts = BigInt(packet.microsecondTimestamp);
+		this.state.packet.dts = NodeAv.AV_NOPTS_VALUE;
+		this.state.packet.duration = BigInt(packet.microsecondDuration);
 
 		if (packet.sideData.alpha) {
 			const matroskaBlockAdditional = Buffer.alloc(8 + packet.sideData.alpha.byteLength);
 			matroskaBlockAdditional[7] = 1; // BlockAddId
 			matroskaBlockAdditional.set(packet.sideData.alpha, 8);
 
-			this.packet.addSideData(NodeAv.AV_PKT_DATA_MATROSKA_BLOCKADDITIONAL, matroskaBlockAdditional);
+			this.state.packet.addSideData(NodeAv.AV_PKT_DATA_MATROSKA_BLOCKADDITIONAL, matroskaBlockAdditional);
 		}
 
 		const preciseTimingIndex = binarySearchLessOrEqual(
@@ -141,11 +163,13 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 			}
 		}
 
-		const ret = await this.codecContext.sendPacket(this.packet);
+		const ret = await this.state.codecContext.sendPacket(this.state.packet);
 		NodeAv.FFmpegError.throwIfError(ret, 'Send packet');
 
+		this.state.packet.unref(); // Don't need the data again, so just unref it
+
 		while (true) {
-			const receiveRet = await this.codecContext.receiveFrame(this.frame);
+			const receiveRet = await this.state.codecContext.receiveFrame(this.state.frame);
 			if (receiveRet === NodeAv.AVERROR_EAGAIN || receiveRet === NodeAv.AVERROR_EOF) {
 				break;
 			}
@@ -157,14 +181,14 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 	receiveFrame(ret: number) {
 		NodeAv.FFmpegError.throwIfError(ret, 'Receive frame');
 
-		this.frame.sampleAspectRatio = new NodeAv.Rational(this.pixelAspectRatio.num, this.pixelAspectRatio.den);
+		this.state.frame.sampleAspectRatio = new NodeAv.Rational(this.pixelAspectRatio.num, this.pixelAspectRatio.den);
 
-		let timestamp = Number(this.frame.pts) / 1e6;
-		let duration = Number(this.frame.duration) / 1e6;
+		let timestamp = Number(this.state.frame.pts) / 1e6;
+		let duration = Number(this.state.frame.duration) / 1e6;
 
 		const preciseTimingIndex = binarySearchLessOrEqual(
 			this.preciseTimings,
-			Number(this.frame.pts),
+			Number(this.state.frame.pts),
 			x => x.microsecondTimestamp,
 		);
 		const entry = preciseTimingIndex !== -1
@@ -173,7 +197,7 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 
 		// If there's a relevant timing entry, refine the frame's timing data to get better accuracy than
 		// microseconds
-		if (entry && entry.microsecondTimestamp === Number(this.frame.pts)) {
+		if (entry && entry.microsecondTimestamp === Number(this.state.frame.pts)) {
 			if (entry.timestampIsValid) {
 				timestamp = entry.timestamp;
 			}
@@ -182,7 +206,7 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 			}
 		}
 
-		const clone = this.frame.clone();
+		const clone = this.state.frame.clone();
 		if (!clone) {
 			throw new Error('Frame clone allocation failed.');
 		}
@@ -194,17 +218,17 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 	}
 
 	async flush() {
-		if (!this.codecContext) {
+		if (!this.state.codecContext) {
 			return;
 		}
 
 		// Send null packet to signal flush
-		const ret = await this.codecContext.sendPacket(null);
+		const ret = await this.state.codecContext.sendPacket(null);
 		NodeAv.FFmpegError.throwIfError(ret, 'Flush decoder');
 
 		// Keep receiving frames until no more are available
 		while (true) {
-			const receiveRet = await this.codecContext.receiveFrame(this.frame);
+			const receiveRet = await this.state.codecContext.receiveFrame(this.state.frame);
 			if (receiveRet === NodeAv.AVERROR_EAGAIN || receiveRet === NodeAv.AVERROR_EOF) {
 				// No more frames available
 				break;
@@ -213,12 +237,11 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 			this.receiveFrame(receiveRet);
 		}
 
-		this.codecContext.flushBuffers();
+		this.state.codecContext.flushBuffers();
 	}
 
 	close(): MaybePromise<void> {
-		this.codecContext?.freeContext();
-		this.frame.free();
-		this.packet.free();
+		finalizationRegistry?.unregister(this);
+		freeState(this.state);
 	}
 }

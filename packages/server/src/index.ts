@@ -78,6 +78,8 @@ export { AvFrameAudioSampleResource } from './audio-sample';
 export const toAvFrame = async (sample: VideoSample | AudioSample, frame: NodeAv.Frame) => {
 	if (sample instanceof VideoSample) {
 		if (sample._data instanceof AvFrameVideoSampleResource) {
+			// We're overriding the frame, so release whatever it referenced before, otherwise av_frame_ref leaks it
+			frame.unref();
 			frame.ref(sample._data.frame);
 		} else {
 			if (sample.format === null) {
@@ -92,6 +94,8 @@ export const toAvFrame = async (sample: VideoSample | AudioSample, frame: NodeAv
 		frame.timeBase = new NodeAv.Rational(1, 1e6);
 	} else {
 		if (sample._data instanceof AvFrameAudioSampleResource) {
+			// We're overriding the frame, so release whatever it referenced before, otherwise av_frame_ref leaks it
+			frame.unref();
 			frame.ref(sample._data.frame);
 		} else {
 			copyAudioSampleToAvFrame(sample, frame);
