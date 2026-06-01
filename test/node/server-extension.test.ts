@@ -926,7 +926,7 @@ describe('Video', async () => {
 		};
 		await decoder.init();
 
-		const iterations = 200;
+		const iterations = 300;
 		let baselineRss = 0;
 
 		for (let i = 1; i <= iterations; i++) {
@@ -939,7 +939,7 @@ describe('Video', async () => {
 			decodedFrames.length = 0;
 			pendingPackets.length = 0;
 
-			if (i === 1) {
+			if (i === 100) { // Should have stabilized by then
 				baselineRss = process.memoryUsage().rss;
 			}
 		}
@@ -947,7 +947,7 @@ describe('Video', async () => {
 		const finalRss = process.memoryUsage().rss;
 		const growth = finalRss - baselineRss;
 
-		expect(growth).toBeLessThan(100 * 1024 * 1024);
+		expect(growth).toBeLessThan(10 * 1024 * 1024);
 
 		await encoder.close();
 		await decoder.close();
