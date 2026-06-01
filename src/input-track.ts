@@ -691,7 +691,7 @@ export class InputVideoTrack extends InputTrack {
 		const colorSpace = await this._backing.getColorSpace();
 
 		return (colorSpace.primaries as string) === 'bt2020' || (colorSpace.primaries as string) === 'smpte432'
-			|| (colorSpace.transfer as string) === 'pg' || (colorSpace.transfer as string) === 'hlg'
+			|| (colorSpace.transfer as string) === 'pq' || (colorSpace.transfer as string) === 'hlg'
 			|| (colorSpace.matrix as string) === 'bt2020-ncl';
 	}
 
