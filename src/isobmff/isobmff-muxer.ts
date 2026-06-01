@@ -22,7 +22,7 @@ import {
 	vtte,
 } from './isobmff-boxes';
 import { Muxer } from '../muxer';
-import { Output, OutputAudioTrack, OutputSubtitleTrack, OutputTrack, OutputVideoTrack } from '../output';
+import { Output, OutputAudioTrack, OutputSubtitleTrack, OutputTrack, OutputVideoTrack, TrackType } from '../output';
 import { Writer } from '../writer';
 import { BufferTarget } from '../target';
 import { assert, computeRationalApproximation, last, promiseWithResolvers, Rational, simplifyRational } from '../misc';
@@ -1183,6 +1183,8 @@ export class IsobmffMuxer extends Muxer {
 				boxWriter.writer.startTrackingWrites();
 			}
 
+			this.ensureOneEnabledTrack();
+
 			// Write the moov box now that we have all decoder configs
 			const movieBox = moov(this);
 			boxWriter.writeBox(movieBox);
@@ -1299,6 +1301,8 @@ export class IsobmffMuxer extends Muxer {
 
 		if (this.allTracksAreKnown()) {
 			if (!this.mdat) {
+				this.ensureOneEnabledTrack();
+
 				// We finally know all tracks, let's reserve space for the moov box
 				const moovBox = moov(this);
 				const moovSize = this.boxWriter.measureBox(moovBox);
@@ -1389,11 +1393,34 @@ export class IsobmffMuxer extends Muxer {
 		release();
 	}
 
+	ensureOneEnabledTrack() {
+		// If no track of a given type is enabled, force the first one to be enabled. Otherwise the video won't play in
+		// players like QuickTime.
+		// https://github.com/Vanilagy/mediabunny/pull/391
+		for (const type of ['video', 'audio', 'subtitle'] as TrackType[]) {
+			const tracks = this.trackDatas.filter(t => t.type === type);
+			if (tracks.length === 0) {
+				continue;
+			}
+
+			const hasEnabled = tracks.some(t => t.track.metadata.disposition?.default !== false);
+			if (!hasEnabled) {
+				const firstTrack = tracks[0]!;
+
+				firstTrack.track.metadata.disposition = {
+					...firstTrack.track.metadata.disposition,
+					default: true,
+				};
+			}
+		}
+	}
+
 	/** Finalizes the file, making it ready for use. Must be called after all video and audio chunks have been added. */
 	async finalize() {
 		const release = await this.mutex.acquire();
 
 		this.allTracksKnown.resolve();
+		this.ensureOneEnabledTrack();
 
 		for (const trackData of this.trackDatas) {
 			trackData.closed = true;
