@@ -675,10 +675,13 @@ export type UrlSourceOptions = {
 	 * The [`RequestInit`](https://developer.mozilla.org/en-US/docs/Web/API/RequestInit) used by the Fetch API. Can be
 	 * used to further control the requests, such as setting custom headers.
 	 *
-	 * All fields will work except for `signal` and `headers.Range`; these will be overridden by Mediabunny. If you want
-	 * to cancel ongoing requests, use {@link Input.dispose}.
+	 * The `signal` field is not available, as Mediabunny controls request cancellation internally. If you want to
+	 * cancel ongoing requests, use {@link Input.dispose}.
+	 *
+	 * The `headers.Range` field will also be overridden by Mediabunny. For loading a ranged remote resource, create the
+	 * source, then call {@link Source.slice}.
 	 */
-	requestInit?: RequestInit;
+	requestInit?: Omit<RequestInit, 'signal'>;
 
 	/**
 	 * A function that returns the delay (in seconds) before retrying a failed request. The function is called
