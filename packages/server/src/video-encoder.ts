@@ -41,32 +41,12 @@ import {
 import { extractVideoCodecString } from '../../../src/codec';
 import { assert, binarySearchLessOrEqual, simplifyRational, toUint8Array } from '../../../src/misc';
 
-type NodeAvState = {
-	frame: NodeAv.Frame;
-	packet: NodeAv.Packet;
-	codecContext: NodeAv.CodecContext | null;
-	scaler: NodeAv.SoftwareScaleContext | null;
-	dstFrame: NodeAv.Frame | null;
-};
-
-const freeState = (state: NodeAvState) => {
-	state.codecContext?.freeContext();
-	state.frame.free();
-	state.packet.free();
-	state.scaler?.freeContext();
-	state.dstFrame?.free();
-};
-
-// Needed for proper freeing if close isn't called
-let finalizationRegistry: FinalizationRegistry<NodeAvState> | null = null;
-if (typeof FinalizationRegistry !== 'undefined') {
-	finalizationRegistry = new FinalizationRegistry<NodeAvState>((state) => {
-		freeState(state);
-	});
-}
-
 export class NodeAvVideoEncoder extends CustomVideoEncoder {
-	state!: NodeAvState;
+	frame!: NodeAv.Frame;
+	packet!: NodeAv.Packet;
+	codecContext: NodeAv.CodecContext | null = null;
+	scaler: NodeAv.SoftwareScaleContext | null = null;
+	dstFrame: NodeAv.Frame | null = null;
 	avCodec!: NodeAv.Codec;
 	lastBuffer: Buffer | null = null;
 	packetEmitted = false;
@@ -87,16 +67,12 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 	}
 
 	async init(): Promise<void> {
-		const frame = new NodeAv.Frame();
-		frame.alloc();
-		frame.timeBase = new NodeAv.Rational(1, 1e6);
+		this.frame = new NodeAv.Frame();
+		this.frame.alloc();
+		this.frame.timeBase = new NodeAv.Rational(1, 1e6);
 
-		const packet = new NodeAv.Packet();
-		packet.alloc();
-
-		this.state = { frame, packet, codecContext: null, scaler: null, dstFrame: null };
-
-		finalizationRegistry?.register(this, this.state, this);
+		this.packet = new NodeAv.Packet();
+		this.packet.alloc();
 
 		const codecId = CODEC_TO_CODEC_ID[this.codec];
 		assert(codecId !== undefined);
@@ -120,7 +96,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 	}
 
 	async createCodecContext() {
-		assert(this.state.codecContext === null);
+		assert(this.codecContext === null);
 
 		const codecContext = new NodeAv.CodecContext();
 		codecContext.allocContext3(this.avCodec);
@@ -200,69 +176,69 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 		const ret = await codecContext.open2();
 		NodeAv.FFmpegError.throwIfError(ret, 'Open codec context');
 
-		this.state.codecContext = codecContext;
+		this.codecContext = codecContext;
 	}
 
 	async encode(videoSample: VideoSample, options: VideoEncoderEncodeOptions): Promise<void> {
-		if (this.state.codecContext === null) {
+		if (this.codecContext === null) {
 			await this.createCodecContext();
 		}
-		assert(this.state.codecContext);
+		assert(this.codecContext);
 
 		if (videoSample._data instanceof AvFrameVideoSampleResource) {
 			// Release any buffers still referenced from the previous encode before reffing the new frame, otherwise
 			// av_frame_ref leaks them
 			// https://github.com/Vanilagy/mediabunny/issues/392
-			this.state.frame.unref();
-			this.state.frame.ref(videoSample._data.frame);
+			this.frame.unref();
+			this.frame.ref(videoSample._data.frame);
 		} else {
 			if (videoSample.format === null) {
 				throw new Error('Cannot encode foreign VideoSample with unknown (null) format.');
 			}
 
-			this.lastBuffer = await copyVideoSampleToAvFrame(videoSample, this.state.frame, this.lastBuffer);
+			this.lastBuffer = await copyVideoSampleToAvFrame(videoSample, this.frame, this.lastBuffer);
 		}
 
-		let frameToEncode = this.state.frame;
+		let frameToEncode = this.frame;
 
 		const requiresScaler
-			= this.state.codecContext.pixelFormat !== this.state.frame.format
-				|| this.state.codecContext.width !== this.state.frame.width
-				|| this.state.codecContext.height !== this.state.frame.height;
+			= this.codecContext.pixelFormat !== this.frame.format
+				|| this.codecContext.width !== this.frame.width
+				|| this.codecContext.height !== this.frame.height;
 
 		if (requiresScaler) {
-			if (!this.state.scaler) {
-				this.state.scaler = new NodeAv.SoftwareScaleContext();
+			if (!this.scaler) {
+				this.scaler = new NodeAv.SoftwareScaleContext();
 			}
 
-			const key = `${this.state.frame.width}x${this.state.frame.height}:${this.state.frame.format}`;
+			const key = `${this.frame.width}x${this.frame.height}:${this.frame.format}`;
 			const needsConfigure = key !== this.lastScalerKey;
 
 			if (needsConfigure) {
-				this.state.scaler.getContext(
-					this.state.frame.width, this.state.frame.height, this.state.frame.format as NodeAv.AVPixelFormat,
-					this.state.codecContext.width, this.state.codecContext.height, this.state.codecContext.pixelFormat,
+				this.scaler.getContext(
+					this.frame.width, this.frame.height, this.frame.format as NodeAv.AVPixelFormat,
+					this.codecContext.width, this.codecContext.height, this.codecContext.pixelFormat,
 					NodeAv.SWS_FAST_BILINEAR,
 				);
 
 				this.lastScalerKey = key;
 
-				const ret = this.state.scaler.initContext();
+				const ret = this.scaler.initContext();
 				NodeAv.FFmpegError.throwIfError(ret, 'initContext');
 			}
 
-			if (!this.state.dstFrame) {
-				this.state.dstFrame = new NodeAv.Frame();
-				this.state.dstFrame.alloc();
-				this.state.dstFrame.width = this.state.codecContext.width;
-				this.state.dstFrame.height = this.state.codecContext.height;
-				this.state.dstFrame.format = this.state.codecContext.pixelFormat;
-				this.state.dstFrame.allocBuffer();
+			if (!this.dstFrame) {
+				this.dstFrame = new NodeAv.Frame();
+				this.dstFrame.alloc();
+				this.dstFrame.width = this.codecContext.width;
+				this.dstFrame.height = this.codecContext.height;
+				this.dstFrame.format = this.codecContext.pixelFormat;
+				this.dstFrame.allocBuffer();
 			}
 
-			await this.state.scaler.scaleFrame(this.state.dstFrame, this.state.frame);
-			this.state.dstFrame.copyProps(this.state.frame);
-			frameToEncode = this.state.dstFrame;
+			await this.scaler.scaleFrame(this.dstFrame, this.frame);
+			this.dstFrame.copyProps(this.frame);
+			frameToEncode = this.dstFrame;
 		}
 
 		frameToEncode.pts = BigInt(videoSample.microsecondTimestamp);
@@ -309,12 +285,12 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			}
 		}
 
-		const ret = await this.state.codecContext.sendFrame(frameToEncode);
+		const ret = await this.codecContext.sendFrame(frameToEncode);
 		NodeAv.FFmpegError.throwIfError(ret, 'Send frame');
 
 		// Keep receiving packets until no more are available for this frame
 		while (true) {
-			const receiveRet = await this.state.codecContext.receivePacket(this.state.packet);
+			const receiveRet = await this.codecContext.receivePacket(this.packet);
 			if (receiveRet === NodeAv.AVERROR_EAGAIN || receiveRet === NodeAv.AVERROR_EOF) {
 				break;
 			}
@@ -324,20 +300,20 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 	}
 
 	receivePacket(ret: number) {
-		assert(this.state.codecContext);
+		assert(this.codecContext);
 		NodeAv.FFmpegError.throwIfError(ret, 'Receive packet');
 
-		if (!this.state.packet.data) {
+		if (!this.packet.data) {
 			return;
 		}
-		let packetData = toUint8Array(this.state.packet.data);
+		let packetData = toUint8Array(this.packet.data);
 
-		let timestamp = Number(this.state.packet.pts) / 1e6;
-		let duration = Number(this.state.packet.duration) / 1e6;
+		let timestamp = Number(this.packet.pts) / 1e6;
+		let duration = Number(this.packet.duration) / 1e6;
 
 		const preciseTimingIndex = binarySearchLessOrEqual(
 			this.preciseTimings,
-			Number(this.state.packet.pts),
+			Number(this.packet.pts),
 			x => x.microsecondTimestamp,
 		);
 		const entry = preciseTimingIndex !== -1
@@ -346,7 +322,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 
 		// If there's a relevant timing entry, refine the packet's timing data to get better accuracy than
 		// microseconds
-		if (entry && entry.microsecondTimestamp === Number(this.state.packet.pts)) {
+		if (entry && entry.microsecondTimestamp === Number(this.packet.pts)) {
 			if (entry.timestampIsValid) {
 				timestamp = entry.timestamp;
 			}
@@ -373,14 +349,14 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 				let serializedRecord: Uint8Array;
 
 				if (this.codec === 'avc') {
-					const record = extractAvcDecoderConfigurationRecord(this.state.packet.data);
+					const record = extractAvcDecoderConfigurationRecord(this.packet.data);
 					if (!record) {
 						throw new Error('Invalid AVC data, could not extract decoder configuration record.');
 					}
 
 					serializedRecord = serializeAvcDecoderConfigurationRecord(record);
 				} else {
-					const record = extractHevcDecoderConfigurationRecord(this.state.packet.data);
+					const record = extractHevcDecoderConfigurationRecord(this.packet.data);
 					if (!record) {
 						throw new Error('Invalid HEVC data, could not extract decoder configuration record.');
 					}
@@ -515,14 +491,14 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 		}
 
 		const sideData: EncodedPacketSideData = {};
-		const matroskaBlockAdditional = this.state.packet.getSideData(NodeAv.AV_PKT_DATA_MATROSKA_BLOCKADDITIONAL);
+		const matroskaBlockAdditional = this.packet.getSideData(NodeAv.AV_PKT_DATA_MATROSKA_BLOCKADDITIONAL);
 		if (matroskaBlockAdditional) {
 			sideData.alpha = toUint8Array(matroskaBlockAdditional).subarray(8); // Skip the BlockAddId
 		}
 
 		const packet = new EncodedPacket(
 			packetData,
-			this.state.packet.isKeyframe ? 'key' : 'delta',
+			this.packet.isKeyframe ? 'key' : 'delta',
 			timestamp,
 			duration,
 			undefined,
@@ -534,19 +510,19 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			// Create the decoder config
 			metadata.decoderConfig = {
 				codec: decoderConfigCodecString,
-				codedWidth: this.state.codecContext.width,
-				codedHeight: this.state.codecContext.height,
-				displayAspectWidth: this.config.displayWidth ?? this.state.codecContext.width,
-				displayAspectHeight: this.config.displayHeight ?? this.state.codecContext.height,
+				codedWidth: this.codecContext.width,
+				codedHeight: this.codecContext.height,
+				displayAspectWidth: this.config.displayWidth ?? this.codecContext.width,
+				displayAspectHeight: this.config.displayHeight ?? this.codecContext.height,
 				description: decoderConfigDescription ?? undefined,
 				colorSpace: {
-					primaries: unmapColorPrimaries(this.state.codecContext.colorPrimaries) as VideoColorPrimaries,
-					matrix: unmapMatrixCoefficients(this.state.codecContext.colorSpace) as VideoMatrixCoefficients,
+					primaries: unmapColorPrimaries(this.codecContext.colorPrimaries) as VideoColorPrimaries,
+					matrix: unmapMatrixCoefficients(this.codecContext.colorSpace) as VideoMatrixCoefficients,
 					transfer:
-						unmapTransferCharacteristics(this.state.codecContext.colorTrc) as VideoTransferCharacteristics,
-					fullRange: this.state.codecContext.colorRange === NodeAv.AVCOL_RANGE_JPEG
+						unmapTransferCharacteristics(this.codecContext.colorTrc) as VideoTransferCharacteristics,
+					fullRange: this.codecContext.colorRange === NodeAv.AVCOL_RANGE_JPEG
 						? true
-						: this.state.codecContext.colorRange === NodeAv.AVCOL_RANGE_MPEG
+						: this.codecContext.colorRange === NodeAv.AVCOL_RANGE_MPEG
 							? false
 							: undefined,
 				},
@@ -558,14 +534,14 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 	}
 
 	async flush(): Promise<void> {
-		if (this.state.codecContext) {
+		if (this.codecContext) {
 			// Send null frame to signal flush
-			const ret = await this.state.codecContext.sendFrame(null);
+			const ret = await this.codecContext.sendFrame(null);
 			NodeAv.FFmpegError.throwIfError(ret, 'Send frame');
 
 			// Keep receiving packets until no more are available
 			while (true) {
-				const receiveRet = await this.state.codecContext.receivePacket(this.state.packet);
+				const receiveRet = await this.codecContext.receivePacket(this.packet);
 				if (receiveRet === NodeAv.AVERROR_EAGAIN || receiveRet === NodeAv.AVERROR_EOF) {
 					break;
 				}
@@ -573,8 +549,8 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 				this.receivePacket(receiveRet);
 			}
 
-			this.state.codecContext.freeContext();
-			this.state.codecContext = null;
+			this.codecContext.freeContext();
+			this.codecContext = null;
 			// The codec is done now and can't be reused. Any subsequent encode call will first need to recreate a
 			// codec context.
 		}
@@ -583,7 +559,10 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 	}
 
 	close(): MaybePromise<void> {
-		finalizationRegistry?.unregister(this);
-		freeState(this.state);
+		this.codecContext?.freeContext();
+		this.frame.free();
+		this.packet.free();
+		this.scaler?.freeContext();
+		this.dstFrame?.free();
 	}
 }

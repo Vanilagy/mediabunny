@@ -12,28 +12,10 @@ import { CODEC_TO_CODEC_ID, getChannelLayout } from './misc';
 import { assert, toUint8Array } from '../../../src/misc';
 import { AvFrameAudioSampleResource } from './audio-sample';
 
-type NodeAvState = {
-	frame: NodeAv.Frame;
-	packet: NodeAv.Packet;
-	codecContext: NodeAv.CodecContext | null;
-};
-
-const freeState = (state: NodeAvState) => {
-	state.codecContext?.freeContext();
-	state.frame.free();
-	state.packet.free();
-};
-
-// Needed for proper freeing if close isn't called
-let finalizationRegistry: FinalizationRegistry<NodeAvState> | null = null;
-if (typeof FinalizationRegistry !== 'undefined') {
-	finalizationRegistry = new FinalizationRegistry<NodeAvState>((state) => {
-		freeState(state);
-	});
-}
-
 export class NodeAvAudioDecoder extends CustomAudioDecoder {
-	state!: NodeAvState;
+	frame!: NodeAv.Frame;
+	packet!: NodeAv.Packet;
+	codecContext: NodeAv.CodecContext | null = null;
 
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	static override supports(codec: AudioCodec, config: AudioDecoderConfig): boolean {
@@ -47,13 +29,10 @@ export class NodeAvAudioDecoder extends CustomAudioDecoder {
 	}
 
 	async init(): Promise<void> {
-		const frame = new NodeAv.Frame();
-		frame.alloc();
-		const packet = new NodeAv.Packet();
-		packet.alloc();
-		this.state = { frame, packet, codecContext: null };
-
-		finalizationRegistry?.register(this, this.state, this);
+		this.frame = new NodeAv.Frame();
+		this.frame.alloc();
+		this.packet = new NodeAv.Packet();
+		this.packet.alloc();
 
 		const codecId = CODEC_TO_CODEC_ID[this.codec];
 		assert(codecId !== undefined);
@@ -78,26 +57,26 @@ export class NodeAvAudioDecoder extends CustomAudioDecoder {
 		const ret = await codecContext.open2();
 		NodeAv.FFmpegError.throwIfError(ret, 'Open codec context');
 
-		this.state.codecContext = codecContext;
+		this.codecContext = codecContext;
 	}
 
 	async decode(packet: EncodedPacket): Promise<void> {
-		assert(this.state.codecContext);
+		assert(this.codecContext);
 
-		this.state.packet.isKeyframe = packet.type === 'key';
-		this.state.packet.data = Buffer.from(packet.data);
-		this.state.packet.timeBase = { num: 1, den: this.config.sampleRate };
-		this.state.packet.pts = BigInt(Math.round(packet.timestamp * this.config.sampleRate));
-		this.state.packet.dts = NodeAv.AV_NOPTS_VALUE;
-		this.state.packet.duration = BigInt(Math.round(packet.duration * this.config.sampleRate));
+		this.packet.isKeyframe = packet.type === 'key';
+		this.packet.data = Buffer.from(packet.data);
+		this.packet.timeBase = { num: 1, den: this.config.sampleRate };
+		this.packet.pts = BigInt(Math.round(packet.timestamp * this.config.sampleRate));
+		this.packet.dts = NodeAv.AV_NOPTS_VALUE;
+		this.packet.duration = BigInt(Math.round(packet.duration * this.config.sampleRate));
 
-		const ret = await this.state.codecContext.sendPacket(this.state.packet);
+		const ret = await this.codecContext.sendPacket(this.packet);
 		NodeAv.FFmpegError.throwIfError(ret, 'Send packet');
 
-		this.state.packet.unref(); // Don't need the data again, so just unref it
+		this.packet.unref(); // Don't need the data again, so just unref it
 
 		while (true) {
-			const receiveRet = await this.state.codecContext.receiveFrame(this.state.frame);
+			const receiveRet = await this.codecContext.receiveFrame(this.frame);
 			if (receiveRet === NodeAv.AVERROR_EAGAIN || receiveRet === NodeAv.AVERROR_EOF) {
 				break;
 			}
@@ -109,7 +88,7 @@ export class NodeAvAudioDecoder extends CustomAudioDecoder {
 	receiveFrame(ret: number) {
 		NodeAv.FFmpegError.throwIfError(ret, 'Receive frame');
 
-		const clone = this.state.frame.clone();
+		const clone = this.frame.clone();
 		if (!clone) {
 			throw new Error('Allocation failure during frame clone.');
 		}
@@ -119,15 +98,15 @@ export class NodeAvAudioDecoder extends CustomAudioDecoder {
 	}
 
 	async flush(): Promise<void> {
-		assert(this.state.codecContext);
+		assert(this.codecContext);
 
 		// Send null packet to signal flush
-		const ret = await this.state.codecContext.sendPacket(null);
+		const ret = await this.codecContext.sendPacket(null);
 		NodeAv.FFmpegError.throwIfError(ret, 'Flush decoder');
 
 		// Keep receiving frames until no more are available
 		while (true) {
-			const receiveRet = await this.state.codecContext.receiveFrame(this.state.frame);
+			const receiveRet = await this.codecContext.receiveFrame(this.frame);
 			if (receiveRet === NodeAv.AVERROR_EAGAIN || receiveRet === NodeAv.AVERROR_EOF) {
 				// No more frames available
 				break;
@@ -136,11 +115,12 @@ export class NodeAvAudioDecoder extends CustomAudioDecoder {
 			this.receiveFrame(receiveRet);
 		}
 
-		this.state.codecContext.flushBuffers();
+		this.codecContext.flushBuffers();
 	}
 
 	close(): MaybePromise<void> {
-		finalizationRegistry?.unregister(this);
-		freeState(this.state);
+		this.codecContext?.freeContext();
+		this.frame.free();
+		this.packet.free();
 	}
 }

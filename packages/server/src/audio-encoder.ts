@@ -32,32 +32,12 @@ const AC3_SAMPLE_RATES = [32000, 44100, 48000];
 
 const FRAME_SIZE_FALLBACK = 1024; // Just 'cause
 
-type NodeAvState = {
-	frame: NodeAv.Frame;
-	packet: NodeAv.Packet;
-	codecContext: NodeAv.CodecContext | null;
-	resampler: NodeAv.SoftwareResampleContext | null;
-	dstFrame: NodeAv.Frame | null;
-};
-
-const freeState = (state: NodeAvState) => {
-	state.codecContext?.freeContext();
-	state.frame.free();
-	state.packet.free();
-	state.dstFrame?.free();
-	state.resampler?.free();
-};
-
-// Needed for proper freeing if close isn't called
-let finalizationRegistry: FinalizationRegistry<NodeAvState> | null = null;
-if (typeof FinalizationRegistry !== 'undefined') {
-	finalizationRegistry = new FinalizationRegistry<NodeAvState>((state) => {
-		freeState(state);
-	});
-}
-
 export class NodeAvAudioEncoder extends CustomAudioEncoder {
-	state!: NodeAvState;
+	frame!: NodeAv.Frame;
+	packet!: NodeAv.Packet;
+	codecContext: NodeAv.CodecContext | null = null;
+	resampler: NodeAv.SoftwareResampleContext | null = null;
+	dstFrame: NodeAv.Frame | null = null;
 	avCodec!: NodeAv.Codec;
 	firstExpectedTimestamp: number | null = null;
 	outputTimestampOffset = 0;
@@ -96,13 +76,10 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 	}
 
 	async init(): Promise<void> {
-		const frame = new NodeAv.Frame();
-		frame.alloc();
-		const packet = new NodeAv.Packet();
-		packet.alloc();
-		this.state = { frame, packet, codecContext: null, resampler: null, dstFrame: null };
-
-		finalizationRegistry?.register(this, this.state, this);
+		this.frame = new NodeAv.Frame();
+		this.frame.alloc();
+		this.packet = new NodeAv.Packet();
+		this.packet.alloc();
 
 		const codecId = CODEC_TO_CODEC_ID[this.codec];
 		assert(codecId !== undefined);
@@ -118,7 +95,7 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 	}
 
 	async createCodecContext() {
-		assert(this.state.codecContext === null);
+		assert(this.codecContext === null);
 
 		const codecContext = new NodeAv.CodecContext();
 		codecContext.allocContext3(this.avCodec);
@@ -145,13 +122,13 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 		const ret = await codecContext.open2();
 		NodeAv.FFmpegError.throwIfError(ret, 'Open codec context');
 
-		this.state.codecContext = codecContext;
+		this.codecContext = codecContext;
 	}
 
 	async encode(audioSample: AudioSample): Promise<void> {
-		if (this.state.codecContext === null) {
+		if (this.codecContext === null) {
 			await this.createCodecContext();
-			assert(this.state.codecContext);
+			assert(this.codecContext);
 		}
 
 		this.firstExpectedTimestamp ??= audioSample.timestamp;
@@ -160,17 +137,17 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 			// Release any buffers still referenced from the previous encode before reffing the new frame, otherwise
 			// av_frame_ref leaks them
 			// https://github.com/Vanilagy/mediabunny/issues/392
-			this.state.frame.unref();
-			this.state.frame.ref(audioSample._data.frame);
+			this.frame.unref();
+			this.frame.ref(audioSample._data.frame);
 		} else {
-			copyAudioSampleToAvFrame(audioSample, this.state.frame);
+			copyAudioSampleToAvFrame(audioSample, this.frame);
 		}
 
-		this.state.frame.pts = BigInt(Math.round(audioSample.timestamp * this.config.sampleRate));
-		this.state.frame.duration = BigInt(Math.round(audioSample.duration * this.config.sampleRate));
-		this.state.frame.timeBase = new NodeAv.Rational(1, this.config.sampleRate);
+		this.frame.pts = BigInt(Math.round(audioSample.timestamp * this.config.sampleRate));
+		this.frame.duration = BigInt(Math.round(audioSample.duration * this.config.sampleRate));
+		this.frame.timeBase = new NodeAv.Rational(1, this.config.sampleRate);
 
-		const key = `${this.state.frame.sampleRate}:${this.state.frame.channels}:${this.state.frame.format}`;
+		const key = `${this.frame.sampleRate}:${this.frame.channels}:${this.frame.format}`;
 		if (this.inputParametersKey !== null && this.inputParametersKey !== key) {
 			throw new Error(
 				'Input audio parameters changed. For this audio encoder, you cannot change the input audio'
@@ -183,83 +160,83 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 		// 1. Format conversion is needed (sample format, sample rate, or channel count differs)
 		// 2. The codec requires fixed frame sizes
 		const requiresResampler
-			= this.state.codecContext.frameSize > 0
-				|| this.state.codecContext.sampleFormat !== this.state.frame.format
-				|| this.state.codecContext.sampleRate !== this.state.frame.sampleRate
-				|| this.state.codecContext.channels !== this.state.frame.channels;
+			= this.codecContext.frameSize > 0
+				|| this.codecContext.sampleFormat !== this.frame.format
+				|| this.codecContext.sampleRate !== this.frame.sampleRate
+				|| this.codecContext.channels !== this.frame.channels;
 
 		if (requiresResampler) {
-			if (!this.state.resampler) {
-				this.state.resampler = new NodeAv.SoftwareResampleContext();
-				this.resamplerInputSampleRate = this.state.frame.sampleRate;
+			if (!this.resampler) {
+				this.resampler = new NodeAv.SoftwareResampleContext();
+				this.resamplerInputSampleRate = this.frame.sampleRate;
 
-				const outLayout = getChannelLayout(this.state.codecContext.channels);
-				const inLayout = getChannelLayout(this.state.frame.channels);
+				const outLayout = getChannelLayout(this.codecContext.channels);
+				const inLayout = getChannelLayout(this.frame.channels);
 
-				const ret = this.state.resampler.allocSetOpts2(
-					outLayout, this.state.codecContext.sampleFormat, this.state.codecContext.sampleRate,
-					inLayout, this.state.frame.format as NodeAv.AVSampleFormat, this.state.frame.sampleRate,
+				const ret = this.resampler.allocSetOpts2(
+					outLayout, this.codecContext.sampleFormat, this.codecContext.sampleRate,
+					inLayout, this.frame.format as NodeAv.AVSampleFormat, this.frame.sampleRate,
 				);
 				NodeAv.FFmpegError.throwIfError(ret, 'allocSetOpts2');
 
-				const ret2 = this.state.resampler.init();
+				const ret2 = this.resampler.init();
 				NodeAv.FFmpegError.throwIfError(ret2, 'init');
 
-				this.state.dstFrame = new NodeAv.Frame();
-				this.state.dstFrame.alloc();
-				this.state.dstFrame.channelLayout = outLayout;
-				this.state.dstFrame.sampleRate = this.state.codecContext.sampleRate;
-				this.state.dstFrame.format = this.state.codecContext.sampleFormat;
-				this.state.dstFrame.nbSamples = this.state.codecContext.frameSize || FRAME_SIZE_FALLBACK;
-				this.state.dstFrame.duration = BigInt(this.state.dstFrame.nbSamples);
-				this.state.dstFrame.allocBuffer();
+				this.dstFrame = new NodeAv.Frame();
+				this.dstFrame.alloc();
+				this.dstFrame.channelLayout = outLayout;
+				this.dstFrame.sampleRate = this.codecContext.sampleRate;
+				this.dstFrame.format = this.codecContext.sampleFormat;
+				this.dstFrame.nbSamples = this.codecContext.frameSize || FRAME_SIZE_FALLBACK;
+				this.dstFrame.duration = BigInt(this.dstFrame.nbSamples);
+				this.dstFrame.allocBuffer();
 
-				this.nextResamplerPts = this.state.frame.pts;
+				this.nextResamplerPts = this.frame.pts;
 			}
 
-			const inputBuffers = this.state.frame.data;
+			const inputBuffers = this.frame.data;
 			if (!inputBuffers) {
 				throw new DOMException('Frame has no data', 'EncodingError');
 			}
-			await this.state.resampler.convert(null, 0, inputBuffers, this.state.frame.nbSamples);
+			await this.resampler.convert(null, 0, inputBuffers, this.frame.nbSamples);
 
 			await this.pullResampledFrames();
 		} else {
-			await this.sendFrameAndReceivePackets(this.state.frame);
+			await this.sendFrameAndReceivePackets(this.frame);
 		}
 	}
 
 	async pullResampledFrames() {
-		assert(this.state.codecContext);
-		assert(this.state.resampler);
-		assert(this.state.dstFrame);
+		assert(this.codecContext);
+		assert(this.resampler);
+		assert(this.dstFrame);
 		assert(this.nextResamplerPts !== null);
 
-		const frameSize = this.state.codecContext.frameSize || FRAME_SIZE_FALLBACK;
+		const frameSize = this.codecContext.frameSize || FRAME_SIZE_FALLBACK;
 
 		while (true) {
-			const available = this.state.resampler.getOutSamples(0);
+			const available = this.resampler.getOutSamples(0);
 			if (available < frameSize) {
 				break;
 			}
 
-			await this.state.resampler.convert(this.state.dstFrame.data, frameSize, null, 0);
+			await this.resampler.convert(this.dstFrame.data, frameSize, null, 0);
 
-			this.state.dstFrame.pts = this.nextResamplerPts;
+			this.dstFrame.pts = this.nextResamplerPts;
 
-			await this.sendFrameAndReceivePackets(this.state.dstFrame);
+			await this.sendFrameAndReceivePackets(this.dstFrame);
 			this.nextResamplerPts += BigInt(frameSize);
 		}
 	}
 
 	async sendFrameAndReceivePackets(frame: NodeAv.Frame | null) {
-		assert(this.state.codecContext);
+		assert(this.codecContext);
 
-		const ret = await this.state.codecContext.sendFrame(frame);
+		const ret = await this.codecContext.sendFrame(frame);
 		NodeAv.FFmpegError.throwIfError(ret, 'Send frame');
 
 		while (true) {
-			const receiveRet = await this.state.codecContext.receivePacket(this.state.packet);
+			const receiveRet = await this.codecContext.receivePacket(this.packet);
 			if (receiveRet === NodeAv.AVERROR_EAGAIN || receiveRet === NodeAv.AVERROR_EOF) {
 				break;
 			}
@@ -269,18 +246,18 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 	}
 
 	receivePacket(ret: number) {
-		assert(this.state.codecContext);
+		assert(this.codecContext);
 		assert(this.firstExpectedTimestamp !== null);
 		NodeAv.FFmpegError.throwIfError(ret, 'Receive packet');
 
-		if (!this.state.packet.data) {
+		if (!this.packet.data) {
 			return;
 		}
 
-		let timestamp = Number(this.state.packet.pts) / this.state.codecContext.sampleRate;
-		const duration = Number(this.state.packet.duration) / this.state.codecContext.sampleRate;
+		let timestamp = Number(this.packet.pts) / this.codecContext.sampleRate;
+		const duration = Number(this.packet.duration) / this.codecContext.sampleRate;
 
-		let data: Uint8Array = this.state.packet.data;
+		let data: Uint8Array = this.packet.data;
 
 		let metadata: EncodedAudioChunkMetadata | undefined;
 		if (this.packetEmitted) {
@@ -292,8 +269,8 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 			this.outputTimestampOffset = Math.max(this.firstExpectedTimestamp - timestamp, 0);
 
 			const codecString = this.config.codec;
-			let description = this.state.codecContext.extraData
-				? toUint8Array(this.state.codecContext.extraData)
+			let description = this.codecContext.extraData
+				? toUint8Array(this.codecContext.extraData)
 				: undefined;
 
 			if (this.codec === 'aac') {
@@ -338,8 +315,8 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 			metadata = {
 				decoderConfig: {
 					codec: codecString,
-					sampleRate: this.state.codecContext.sampleRate,
-					numberOfChannels: this.state.codecContext.channels,
+					sampleRate: this.codecContext.sampleRate,
+					numberOfChannels: this.codecContext.channels,
 					description,
 				},
 			};
@@ -371,50 +348,53 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 	}
 
 	async flush(): Promise<void> {
-		if (!this.state.codecContext) {
+		if (!this.codecContext) {
 			return;
 		}
 
 		outer:
-		if (this.state.resampler) {
+		if (this.resampler) {
 			assert(this.resamplerInputSampleRate !== null);
 
-			const currentOutSamples = this.state.resampler.getOutSamples(0);
+			const currentOutSamples = this.resampler.getOutSamples(0);
 			if (currentOutSamples === 0) {
 				break outer; // Clean cut-off point
 			}
 
-			const frameSize = this.state.codecContext.frameSize || FRAME_SIZE_FALLBACK;
+			const frameSize = this.codecContext.frameSize || FRAME_SIZE_FALLBACK;
 			assert(currentOutSamples < frameSize); // Because if it's more, it would've already been retrieved
 
 			const inputSamplesNeeded = Math.ceil(
-				((frameSize - currentOutSamples) / this.state.codecContext.sampleRate) * this.resamplerInputSampleRate,
+				((frameSize - currentOutSamples) / this.codecContext.sampleRate) * this.resamplerInputSampleRate,
 			);
-			this.state.resampler.injectSilence(inputSamplesNeeded);
+			this.resampler.injectSilence(inputSamplesNeeded);
 
 			await this.pullResampledFrames();
 		}
 
 		await this.sendFrameAndReceivePackets(null);
 
-		this.state.codecContext.freeContext();
-		this.state.codecContext = null;
+		this.codecContext.freeContext();
+		this.codecContext = null;
 		this.packetEmitted = false;
 		this.firstExpectedTimestamp = null;
 		this.outputTimestampOffset = 0;
 		this.adtsHeaderTemplate = null;
 
-		this.state.resampler?.free();
-		this.state.resampler = null;
+		this.resampler?.free();
+		this.resampler = null;
 		this.inputParametersKey = null;
 		this.resamplerInputSampleRate = null;
 		this.nextResamplerPts = null;
-		this.state.dstFrame?.free();
-		this.state.dstFrame = null;
+		this.dstFrame?.free();
+		this.dstFrame = null;
 	}
 
 	close(): MaybePromise<void> {
-		finalizationRegistry?.unregister(this);
-		freeState(this.state);
+		this.codecContext?.freeContext();
+		this.frame.free();
+		this.packet.free();
+		this.dstFrame?.free();
+		this.resampler?.free();
 	}
 }
