@@ -46,22 +46,26 @@ test('Should be able to get packets from a .MP4 file', async () => {
 	]);
 });
 
-const replaceFirstAscii = (buffer: ArrayBuffer, from: string, to: string) => {
+const replaceColorInformationType = (buffer: ArrayBuffer, from: string, to: string) => {
 	const bytes = new Uint8Array(buffer.slice(0));
 	const needle = new TextEncoder().encode(from);
 	const replacement = new TextEncoder().encode(to);
+	const colorInformationBox = new TextEncoder().encode('colr');
 
 	expect(replacement.byteLength).toBe(needle.byteLength);
+	expect(replacement.byteLength).toBe(4);
 
-	for (let i = 0; i <= bytes.byteLength - needle.byteLength; i++) {
-		const matches = needle.every((value, j) => bytes[i + j] === value);
+	for (let i = 0; i <= bytes.byteLength - colorInformationBox.byteLength - needle.byteLength; i++) {
+		const matches = colorInformationBox.every((value, j) => bytes[i + j] === value);
 		if (matches) {
-			bytes.set(replacement, i);
+			const colorTypeOffset = i + colorInformationBox.byteLength;
+			expect(bytes.slice(colorTypeOffset, colorTypeOffset + needle.byteLength)).toEqual(needle);
+			bytes.set(replacement, colorTypeOffset);
 			return bytes;
 		}
 	}
 
-	throw new Error(`Could not find ${from}`);
+	throw new Error('Could not find color information box');
 };
 
 test('Should read QuickTime nclc color information', async () => {
@@ -91,7 +95,7 @@ test('Should read QuickTime nclc color information', async () => {
 	);
 	await output.finalize();
 
-	const nclcFile = replaceFirstAscii(output.target.buffer!, 'nclx', 'nclc');
+	const nclcFile = replaceColorInformationType(output.target.buffer!, 'nclx', 'nclc');
 	using input = new Input({
 		source: new BufferSource(nclcFile),
 		formats: ALL_FORMATS,
