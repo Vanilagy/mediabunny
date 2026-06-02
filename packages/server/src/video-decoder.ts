@@ -58,7 +58,7 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 		) {
 			codec = NodeAv.Codec.findDecoder(codecId);
 		} else {
-			codec = getHardwareDecoderCodec(codecId) ?? NodeAv.Codec.findDecoder(codecId);
+			codec = (await getHardwareDecoderCodec(codecId)) ?? NodeAv.Codec.findDecoder(codecId);
 		}
 
 		if (!codec) {
