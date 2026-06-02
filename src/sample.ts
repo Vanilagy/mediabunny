@@ -30,6 +30,7 @@ import {
 	roundToMultiple,
 	arrayArgmin,
 	MaybePromise,
+	DeepReadonly,
 } from './misc';
 
 polyfillSymbolDispose();
@@ -232,6 +233,11 @@ export type VideoSampleInit = {
 	displayWidth?: number | undefined;
 	/** Height of the frame in pixels after applying aspect ratio adjustments and rotation. */
 	displayHeight?: number | undefined;
+	/** The encode options to use when this sample is passed to an encoder. */
+	encodeOptions?: DeepReadonly<VideoEncoderEncodeOptions>;
+
+	/** @internal */
+	_doNotCopy?: boolean;
 };
 
 /**
@@ -279,6 +285,8 @@ export class VideoSample implements Disposable {
 	readonly duration!: number;
 	/** The color space of the frame. */
 	readonly colorSpace!: VideoSampleColorSpace;
+	/** The encode options to use when this sample is passed to an encoder. */
+	readonly encodeOptions!: DeepReadonly<VideoEncoderEncodeOptions>;
 
 	/** The width of the frame in pixels. */
 	get codedWidth() {
@@ -414,7 +422,9 @@ export class VideoSample implements Disposable {
 				);
 			}
 
-			this._data = toUint8Array(data).slice(); // Copy it
+			this._data = init._doNotCopy
+				? toUint8Array(data)
+				: toUint8Array(data).slice(); // Copy it
 			this._layout = init.layout ?? createDefaultPlaneLayout(init.format, init.codedWidth!, init.codedHeight!);
 
 			this.format = init.format;
@@ -633,6 +643,8 @@ export class VideoSample implements Disposable {
 			);
 		}
 
+		this.encodeOptions = init?.encodeOptions ?? {};
+
 		this.pixelAspectRatio = simplifyRational({
 			num: this.squarePixelWidth * this.codedHeight,
 			den: this.squarePixelHeight * this.codedWidth,
@@ -653,12 +665,14 @@ export class VideoSample implements Disposable {
 				timestamp: this.timestamp,
 				duration: this.duration,
 				rotation: this.rotation,
+				encodeOptions: this.encodeOptions,
 			});
 		} else if (isVideoFrame(this._data)) {
 			return new VideoSample(this._data.clone(), {
 				timestamp: this.timestamp,
 				duration: this.duration,
 				rotation: this.rotation,
+				encodeOptions: this.encodeOptions,
 			});
 		} else if (this._data instanceof Uint8Array) {
 			assert(this._layout);
@@ -675,6 +689,10 @@ export class VideoSample implements Disposable {
 				visibleRect: this.visibleRect,
 				displayWidth: this.displayWidth,
 				displayHeight: this.displayHeight,
+				encodeOptions: this.encodeOptions,
+
+				// It's already been copied, if we copy it again we make the clone unnecessarily expensive
+				_doNotCopy: true,
 			});
 		} else {
 			return new VideoSample(this._data, {
@@ -688,6 +706,7 @@ export class VideoSample implements Disposable {
 				visibleRect: this.visibleRect,
 				displayWidth: this.displayWidth,
 				displayHeight: this.displayHeight,
+				encodeOptions: this.encodeOptions,
 			});
 		}
 	}
@@ -1564,6 +1583,16 @@ export class VideoSample implements Disposable {
 
 		// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
 		(this.duration as number) = newDuration;
+	}
+
+	/** Sets the encode options used when this sample is passed to an encoder. */
+	setEncodeOptions(newEncodeOptions: VideoEncoderEncodeOptions) {
+		if (!newEncodeOptions || typeof newEncodeOptions !== 'object') {
+			throw new TypeError('newEncodeOptions must be an object.');
+		}
+
+		// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+		(this.encodeOptions as DeepReadonly<VideoEncoderEncodeOptions>) = newEncodeOptions;
 	}
 
 	/** Calls `.close()`. */

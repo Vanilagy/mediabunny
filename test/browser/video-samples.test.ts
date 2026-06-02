@@ -1,5 +1,11 @@
 import { expect, test } from 'vitest';
 import { VideoSample } from '../../src/sample.js';
+import { VideoSampleSource } from '../../src/media-source.js';
+import { Output } from '../../src/output.js';
+import { Mp4OutputFormat } from '../../src/output-format.js';
+import { BufferTarget } from '../../src/target.js';
+import { QUALITY_MEDIUM } from '../../src/encode.js';
+import { PacketType } from '../../src/packet.js';
 
 test('allocationSize', async () => {
 	{
@@ -443,3 +449,83 @@ test('null format', async () => {
 	await sample.copyTo(buffer, { format: 'BGRA' });
 	await sample.copyTo(buffer, { format: 'BGRX' });
 });
+
+test('encodeOptions', () => {
+	const canvas = new OffscreenCanvas(100, 100);
+	canvas.getContext('2d');
+
+	// The default is an empty object
+	using a = new VideoSample(canvas, { timestamp: 0 });
+	expect(a.encodeOptions).toEqual({});
+
+	// It can be overridden via the setter
+	a.setEncodeOptions({ keyFrame: true });
+	expect(a.encodeOptions).toEqual({ keyFrame: true });
+
+	// Cloning carries the encode options over
+	using aClone = a.clone();
+	expect(aClone.encodeOptions).toEqual({ keyFrame: true });
+
+	// It can be set via the constructor
+	using b = new VideoSample(canvas, { timestamp: 0, encodeOptions: { keyFrame: true } });
+	expect(b.encodeOptions).toEqual({ keyFrame: true });
+});
+
+test('encodeOptions, key frame forcing', async () => {
+	const samples = Array.from({ length: 5 }, (_, i) => makeRedSample(i / 30, { keyFrame: true }));
+
+	await encodeAndAssertPacketTypes(
+		samples,
+		['key', 'key', 'key', 'key', 'key'],
+	);
+});
+
+test('encodeOptions add() override', async () => {
+	const samples = Array.from({ length: 5 }, (_, i) => makeRedSample(i / 30, { keyFrame: true }));
+
+	await encodeAndAssertPacketTypes(
+		samples,
+		['key', 'delta', 'delta', 'delta', 'delta'],
+		samples.map(() => ({ keyFrame: false })),
+	);
+});
+
+const makeRedSample = (timestamp: number, encodeOptions?: VideoEncoderEncodeOptions) => {
+	const canvas = new OffscreenCanvas(100, 100);
+	const ctx = canvas.getContext('2d')!;
+	ctx.fillStyle = 'red';
+	ctx.fillRect(0, 0, 100, 100);
+
+	return new VideoSample(canvas, {
+		timestamp,
+		duration: 1 / 30,
+		encodeOptions,
+	});
+};
+
+const encodeAndAssertPacketTypes = async (
+	samples: VideoSample[],
+	expectedPacketTypes: PacketType[],
+	addOptions?: (VideoEncoderEncodeOptions | undefined)[],
+) => {
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	let i = 0;
+	const videoSource = new VideoSampleSource({
+		codec: 'vp8',
+		bitrate: QUALITY_MEDIUM,
+		onEncodedPacket: packet => expect(packet.type).toBe(expectedPacketTypes[i++]),
+	});
+	output.addVideoTrack(videoSource);
+	await output.start();
+
+	for (let i = 0; i < samples.length; i++) {
+		await videoSource.add(samples[i]!, addOptions?.[i]);
+		samples[i]!.close();
+	}
+
+	await output.finalize();
+};
