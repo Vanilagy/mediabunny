@@ -524,7 +524,7 @@ export const mergeRequestInit = (init1: RequestInit, init2: RequestInit): Reques
 };
 
 /** Normalizes HeadersInit to a Record<string, string> format. */
-const normalizeHeaders = (headers: HeadersInit): Record<string, string> => {
+export const normalizeHeaders = (headers: HeadersInit): Record<string, string> => {
 	if (headers instanceof Headers) {
 		const result: Record<string, string> = {};
 		headers.forEach((value, key) => {

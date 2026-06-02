@@ -120,15 +120,16 @@ export class Reader {
 					return this.requestSlice(0, this.fileSizeNonStrict);
 				}
 
-				const startOffset = chunks.length * CHUNK_SIZE;
-				let slice = this.requestSliceRange(startOffset, 0, CHUNK_SIZE);
+				let slice = this.requestSliceRange(currentSize, 0, CHUNK_SIZE);
 				if (slice instanceof Promise) slice = await slice;
 
-				if (!slice) {
+				if (!slice || slice.length === 0) {
 					break;
 				}
 
-				chunks.push(readBytes(slice, slice.length));
+				const chunk = readBytes(slice, slice.length);
+				chunks.push(chunk);
+
 				currentSize += slice.length;
 			}
 

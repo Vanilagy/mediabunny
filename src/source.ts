@@ -17,6 +17,7 @@ import {
 	isWebKit,
 	MaybePromise,
 	mergeRequestInit,
+	normalizeHeaders,
 	polyfillSymbolDispose,
 	promiseWithResolvers,
 	retriedFetch,
@@ -675,10 +676,10 @@ export type UrlSourceOptions = {
 	 * The [`RequestInit`](https://developer.mozilla.org/en-US/docs/Web/API/RequestInit) used by the Fetch API. Can be
 	 * used to further control the requests, such as setting custom headers.
 	 *
-	 * All fields will work except for `signal` and `headers.Range`; these will be overridden by Mediabunny. If you want
-	 * to cancel ongoing requests, use {@link Input.dispose}.
+	 * The `signal` field is not available, as Mediabunny controls request cancellation internally. If you want to
+	 * cancel ongoing requests, use {@link Input.dispose}.
 	 */
-	requestInit?: RequestInit;
+	requestInit?: Omit<RequestInit, 'signal'>;
 
 	/**
 	 * A function that returns the delay (in seconds) before retrying a failed request. The function is called
@@ -717,6 +718,12 @@ export class UrlSource extends PathedSource {
 	/** @internal */
 	_options: UrlSourceOptions;
 	/** @internal */
+	_requestInit: RequestInit;
+	/** @internal */
+	_offset = 0;
+	/** @internal */
+	_length: number | null = null;
+	/** @internal */
 	_orchestrator: ReadOrchestrator;
 	/**
 	 * Note that this value being true does NOT mean the file size can't change anymore; it just signals that we have at
@@ -728,8 +735,8 @@ export class UrlSource extends PathedSource {
 	/**
 	 * Creates a new {@link UrlSource} backed by the resource at the specified URL.
 	 *
-	 * When passing a `Request` instance, note that the `signal` and `headers.Range` options will be overridden by
-	 * Mediabunny. If you want to cancel ongoing requests, use {@link Input.dispose}.
+	 * When passing a `Request` instance, note that its `signal` will be overridden by Mediabunny; if you want to cancel
+	 * ongoing requests, use {@link Input.dispose}.
 	 */
 	constructor(
 		url: string | URL | Request,
@@ -777,6 +784,42 @@ export class UrlSource extends PathedSource {
 		this._options = options;
 		this._getRetryDelay = options.getRetryDelay ?? DEFAULT_RETRY_DELAY;
 
+		// A user-supplied Range header is interpreted as a byte offset (and optional length) into the resource. We
+		// pull it out of the request and remember it for subsequent requests.
+		this._requestInit = { ...options.requestInit };
+
+		let rangeHeaderValue: string | null = null;
+
+		if (options.requestInit?.headers) {
+			const headers = { ...normalizeHeaders(options.requestInit.headers) };
+			const rangeKey = Object.keys(headers).find(key => key.toLowerCase() === 'range');
+			if (rangeKey !== undefined) {
+				rangeHeaderValue = headers[rangeKey]!;
+				delete headers[rangeKey];
+				this._requestInit.headers = headers;
+			}
+		}
+
+		if (url instanceof Request) {
+			const requestRange = url.headers.get('Range');
+			if (requestRange !== null) {
+				rangeHeaderValue ??= requestRange;
+
+				// Clone the request so we don't mutate the user's object, then strip the Range header
+				const strippedRequest = new Request(url);
+				strippedRequest.headers.delete('Range');
+				this._url = strippedRequest;
+			}
+		}
+
+		if (rangeHeaderValue !== null) {
+			const parsed = parseByteRangeHeader(rangeHeaderValue);
+			if (parsed) {
+				this._offset = parsed.offset;
+				this._length = parsed.length;
+			}
+		}
+
 		// Most files in the real-world have a single sequential access pattern, but having two in parallel can
 		// also happen
 		const DEFAULT_PARALLELISM = 2;
@@ -791,9 +834,16 @@ export class UrlSource extends PathedSource {
 
 	/** @internal */
 	_getFileSize(): number | null | undefined {
-		return this._fileSizeDetermined
-			? this._orchestrator.fileSize
-			: undefined;
+		if (!this._fileSizeDetermined) {
+			return this._length !== null ? this._length : undefined;
+		}
+
+		const baseSize = this._orchestrator.fileSize;
+		if (baseSize === null) {
+			return this._length !== null ? this._length : null;
+		}
+
+		return clamp(baseSize - this._offset, 0, this._length ?? Infinity);
 	}
 
 	/** @internal */
@@ -803,7 +853,32 @@ export class UrlSource extends PathedSource {
 		minReadPosition: number,
 		maxReadPosition: number,
 	): MaybePromise<ReadResult | null> {
-		return this._orchestrator.read(start, end, minReadPosition, maxReadPosition);
+		if (this._length !== null && end > this._length) {
+			return null;
+		}
+
+		const offset = this._offset;
+		const result = this._orchestrator.read(
+			offset + start,
+			offset + end,
+			Math.max(offset + minReadPosition, offset),
+			offset + Math.min(maxReadPosition, this._length ?? Infinity),
+		);
+
+		const processResult = (result: ReadResult | null) => {
+			if (!result) {
+				return null;
+			}
+
+			result.offset -= this._offset;
+			return result;
+		};
+
+		if (result instanceof Promise) {
+			return result.then(processResult);
+		} else {
+			return processResult(result);
+		}
 	}
 
 	/** @internal */
@@ -814,7 +889,7 @@ export class UrlSource extends PathedSource {
 			const response = await retriedFetch(
 				this._options.fetchFn ?? fetch,
 				this._url,
-				mergeRequestInit(this._options.requestInit ?? {}, {
+				mergeRequestInit(this._requestInit, {
 					headers: {
 						// Always sending a range request is a good way to probe if the server supports them
 						Range: `bytes=${worker.currentPos}-`,
@@ -971,6 +1046,26 @@ export class UrlSource extends PathedSource {
 		this._orchestrator.dispose();
 	}
 }
+
+const BYTE_RANGE_REGEX = /^bytes=(\d+)-(\d*)$/;
+const parseByteRangeHeader = (value: string) => {
+	const match = BYTE_RANGE_REGEX.exec(value.trim());
+	if (!match) {
+		return null;
+	}
+
+	const offset = Number(match[1]);
+	const end = match[2] === '' ? null : Number(match[2]);
+
+	if (end !== null && end < offset) {
+		return null;
+	}
+
+	return {
+		offset,
+		length: end !== null ? end - offset + 1 : null,
+	};
+};
 
 /**
  * Options for {@link FilePathSource}.
@@ -2422,22 +2517,19 @@ export class RangedSource extends Source {
 			this._offset + maxReadPosition,
 		);
 
-		if (result instanceof Promise) {
-			return result.then((result) => {
-				if (!result) {
-					return null;
-				}
-
-				result.offset -= this._offset;
-				return result;
-			});
-		} else {
+		const processResult = (result: ReadResult | null) => {
 			if (!result) {
 				return null;
 			}
 
 			result.offset -= this._offset;
 			return result;
+		};
+
+		if (result instanceof Promise) {
+			return result.then(processResult);
+		} else {
+			return processResult(result);
 		}
 	}
 

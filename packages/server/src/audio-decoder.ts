@@ -15,7 +15,7 @@ import { AvFrameAudioSampleResource } from './audio-sample';
 export class NodeAvAudioDecoder extends CustomAudioDecoder {
 	frame!: NodeAv.Frame;
 	packet!: NodeAv.Packet;
-	codecContext!: NodeAv.CodecContext;
+	codecContext: NodeAv.CodecContext | null = null;
 
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	static override supports(codec: AudioCodec, config: AudioDecoderConfig): boolean {
@@ -61,6 +61,8 @@ export class NodeAvAudioDecoder extends CustomAudioDecoder {
 	}
 
 	async decode(packet: EncodedPacket): Promise<void> {
+		assert(this.codecContext);
+
 		this.packet.isKeyframe = packet.type === 'key';
 		this.packet.data = Buffer.from(packet.data);
 		this.packet.timeBase = { num: 1, den: this.config.sampleRate };
@@ -70,6 +72,8 @@ export class NodeAvAudioDecoder extends CustomAudioDecoder {
 
 		const ret = await this.codecContext.sendPacket(this.packet);
 		NodeAv.FFmpegError.throwIfError(ret, 'Send packet');
+
+		this.packet.unref(); // Don't need the data again, so just unref it
 
 		while (true) {
 			const receiveRet = await this.codecContext.receiveFrame(this.frame);
@@ -94,6 +98,8 @@ export class NodeAvAudioDecoder extends CustomAudioDecoder {
 	}
 
 	async flush(): Promise<void> {
+		assert(this.codecContext);
+
 		// Send null packet to signal flush
 		const ret = await this.codecContext.sendPacket(null);
 		NodeAv.FFmpegError.throwIfError(ret, 'Flush decoder');
@@ -113,7 +119,7 @@ export class NodeAvAudioDecoder extends CustomAudioDecoder {
 	}
 
 	close(): MaybePromise<void> {
-		this.codecContext.freeContext();
+		this.codecContext?.freeContext();
 		this.frame.free();
 		this.packet.free();
 	}

@@ -378,12 +378,14 @@ export const free = (size: number): Box => ({ type: 'free', size });
  * Movie Box: Used to specify the information that defines a movie - that is, the information that allows
  * an application to interpret the sample data that is stored elsewhere.
  */
-export const moov = (muxer: IsobmffMuxer) => box('moov', undefined, [
-	mvhd(muxer.creationTime, muxer.trackDatas),
-	...muxer.trackDatas.map(x => trak(x, muxer.creationTime)),
-	muxer.isFragmented ? mvex(muxer.trackDatas) : null,
-	udta(muxer),
-]);
+export const moov = (muxer: IsobmffMuxer) => {
+	return box('moov', undefined, [
+		mvhd(muxer.creationTime, muxer.trackDatas),
+		...muxer.trackDatas.map(x => trak(x, muxer.creationTime)),
+		muxer.isFragmented ? mvex(muxer.trackDatas) : null,
+		udta(muxer),
+	]);
+};
 
 /** Movie Header Box: Used to specify the characteristics of the entire movie, such as timescale and duration. */
 export const mvhd = (
@@ -739,11 +741,13 @@ export const pasp = (trackData: IsobmffVideoTrackData) => {
 
 /** Colour Information Box: Specifies the color space of the video. */
 export const colr = (trackData: IsobmffVideoTrackData) => box('colr', [
-	ascii('nclx'), // Colour type
+	ascii(trackData.muxer.isQuickTime ? 'nclc' : 'nclx'), // Colour type
 	u16(COLOR_PRIMARIES_MAP[trackData.info.decoderConfig.colorSpace!.primaries!]), // Colour primaries
 	u16(TRANSFER_CHARACTERISTICS_MAP[trackData.info.decoderConfig.colorSpace!.transfer!]), // Transfer characteristics
 	u16(MATRIX_COEFFICIENTS_MAP[trackData.info.decoderConfig.colorSpace!.matrix!]), // Matrix coefficients
-	u8((trackData.info.decoderConfig.colorSpace!.fullRange ? 1 : 0) << 7), // Full range flag
+	trackData.muxer.isQuickTime
+		? [] // Doesn't have it
+		: u8((trackData.info.decoderConfig.colorSpace!.fullRange ? 1 : 0) << 7), // Full range flag
 ]);
 
 /** AVC Configuration Box: Provides additional information to the decoder. */

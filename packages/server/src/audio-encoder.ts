@@ -35,16 +35,16 @@ const FRAME_SIZE_FALLBACK = 1024; // Just 'cause
 export class NodeAvAudioEncoder extends CustomAudioEncoder {
 	frame!: NodeAv.Frame;
 	packet!: NodeAv.Packet;
-	avCodec!: NodeAv.Codec;
 	codecContext: NodeAv.CodecContext | null = null;
+	resampler: NodeAv.SoftwareResampleContext | null = null;
+	dstFrame: NodeAv.Frame | null = null;
+	avCodec!: NodeAv.Codec;
 	firstExpectedTimestamp: number | null = null;
 	outputTimestampOffset = 0;
 
-	resampler: NodeAv.SoftwareResampleContext | null = null;
 	inputParametersKey: string | null = null;
 	resamplerInputSampleRate: number | null = null;
 	nextResamplerPts: bigint | null = null;
-	dstFrame: NodeAv.Frame | null = null;
 	packetEmitted = false;
 	adtsHeaderTemplate: AdtsHeaderTemplate | null = null;
 
@@ -134,6 +134,10 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 		this.firstExpectedTimestamp ??= audioSample.timestamp;
 
 		if (audioSample._data instanceof AvFrameAudioSampleResource) {
+			// Release any buffers still referenced from the previous encode before reffing the new frame, otherwise
+			// av_frame_ref leaks them
+			// https://github.com/Vanilagy/mediabunny/issues/392
+			this.frame.unref();
 			this.frame.ref(audioSample._data.frame);
 		} else {
 			copyAudioSampleToAvFrame(audioSample, this.frame);

@@ -352,3 +352,38 @@ test('PCM audio, no silence padding with approximate timestamps', async () => {
 
 	expect(frameCount).toBe(expectedFrameCount);
 });
+
+// https://github.com/Vanilagy/mediabunny/pull/391
+test('At least one track is enabled even if all are added disabled', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const meta = { decoderConfig: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 } };
+
+	const source1 = new EncodedVideoPacketSource('vp8');
+	output.addVideoTrack(source1, { disposition: { default: false } });
+
+	const source2 = new EncodedVideoPacketSource('vp8');
+	output.addVideoTrack(source2, { disposition: { default: false } });
+
+	await output.start();
+
+	await source1.add(new EncodedPacket(new Uint8Array(1024), 'key', 0, 0.1), meta);
+	await source2.add(new EncodedPacket(new Uint8Array(1024), 'key', 0, 0.1), meta);
+
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const tracks = await input.getVideoTracks();
+	expect(tracks.length).toBe(2);
+
+	// Even though both tracks were added disabled, the muxer forces the first one to be enabled
+	expect((await tracks[0]!.getDisposition()).default).toBe(true);
+	expect((await tracks[1]!.getDisposition()).default).toBe(false);
+});

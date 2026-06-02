@@ -44,14 +44,13 @@ import { assert, binarySearchLessOrEqual, simplifyRational, toUint8Array } from 
 export class NodeAvVideoEncoder extends CustomVideoEncoder {
 	frame!: NodeAv.Frame;
 	packet!: NodeAv.Packet;
-	avCodec!: NodeAv.Codec;
 	codecContext: NodeAv.CodecContext | null = null;
+	scaler: NodeAv.SoftwareScaleContext | null = null;
+	dstFrame: NodeAv.Frame | null = null;
+	avCodec!: NodeAv.Codec;
 	lastBuffer: Buffer | null = null;
 	packetEmitted = false;
-
-	scaler: NodeAv.SoftwareScaleContext | null = null;
 	lastScalerKey: string | null = null;
-	dstFrame: NodeAv.Frame | null = null;
 
 	// Bookkeeping to restore the original timing information
 	preciseTimings: {
@@ -183,10 +182,14 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 	async encode(videoSample: VideoSample, options: VideoEncoderEncodeOptions): Promise<void> {
 		if (this.codecContext === null) {
 			await this.createCodecContext();
-			assert(this.codecContext);
 		}
+		assert(this.codecContext);
 
 		if (videoSample._data instanceof AvFrameVideoSampleResource) {
+			// Release any buffers still referenced from the previous encode before reffing the new frame, otherwise
+			// av_frame_ref leaks them
+			// https://github.com/Vanilagy/mediabunny/issues/392
+			this.frame.unref();
 			this.frame.ref(videoSample._data.frame);
 		} else {
 			if (videoSample.format === null) {
@@ -513,12 +516,10 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 				displayAspectHeight: this.config.displayHeight ?? this.codecContext.height,
 				description: decoderConfigDescription ?? undefined,
 				colorSpace: {
-					primaries:
-							unmapColorPrimaries(this.codecContext.colorPrimaries) as VideoColorPrimaries,
-					matrix:
-							unmapMatrixCoefficients(this.codecContext.colorSpace) as VideoMatrixCoefficients,
+					primaries: unmapColorPrimaries(this.codecContext.colorPrimaries) as VideoColorPrimaries,
+					matrix: unmapMatrixCoefficients(this.codecContext.colorSpace) as VideoMatrixCoefficients,
 					transfer:
-							unmapTransferCharacteristics(this.codecContext.colorTrc) as VideoTransferCharacteristics,
+						unmapTransferCharacteristics(this.codecContext.colorTrc) as VideoTransferCharacteristics,
 					fullRange: this.codecContext.colorRange === NodeAv.AVCOL_RANGE_JPEG
 						? true
 						: this.codecContext.colorRange === NodeAv.AVCOL_RANGE_MPEG

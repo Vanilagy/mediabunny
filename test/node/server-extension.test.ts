@@ -871,6 +871,88 @@ describe('Video', async () => {
 		expect(plane[3]).toBe(0xff);
 	});
 
+	// https://github.com/Vanilagy/mediabunny/issues/392
+	test('Memory doesn\'t leak', async () => {
+		const encoder = new NodeAvVideoEncoder();
+		// @ts-expect-error Readonly
+		encoder.codec = 'avc';
+		// @ts-expect-error Readonly
+		encoder.config = {
+			codec: buildVideoCodecString('avc', 1920, 1080, 1e6),
+			width: 1920,
+			height: 1080,
+			bitrate: 1e6,
+		} satisfies VideoEncoderConfig;
+
+		const pendingPackets: EncodedPacket[] = [];
+		const decodedFrames: VideoSample[] = [];
+		let decoderConfig: VideoDecoderConfig | null = null;
+
+		// @ts-expect-error Readonly
+		encoder.onPacket = (packet: EncodedPacket, meta: EncodedVideoChunkMetadata) => {
+			if (meta.decoderConfig) {
+				decoderConfig = meta.decoderConfig;
+			}
+			pendingPackets.push(packet);
+		};
+
+		await encoder.init();
+
+		// Encode a single white frame to get one packet (and the decoder config) to drive the loop with
+		const data = new Uint8Array(1920 * 1080 * 4).fill(0xff); // White
+		using bootstrapSample = new VideoSample(data, {
+			format: 'RGBX',
+			codedWidth: 1920,
+			codedHeight: 1080,
+			timestamp: 0,
+			duration: 1 / 30,
+		});
+		await encoder.encode(bootstrapSample, {});
+		await encoder.flush();
+		assert(decoderConfig);
+		assert(pendingPackets.length > 0);
+
+		const sourcePacket = pendingPackets[0]!;
+		pendingPackets.length = 0;
+
+		const decoder = new NodeAvVideoDecoder();
+		// @ts-expect-error Readonly
+		decoder.codec = 'avc';
+		// @ts-expect-error Readonly
+		decoder.config = decoderConfig;
+		// @ts-expect-error Readonly
+		decoder.onSample = (sample: VideoSample) => {
+			decodedFrames.push(sample);
+		};
+		await decoder.init();
+
+		const iterations = 300;
+		let baselineRss = 0;
+
+		for (let i = 1; i <= iterations; i++) {
+			await decoder.decode(sourcePacket.clone({ timestamp: i / 30 }));
+
+			for (const frame of decodedFrames) {
+				await encoder.encode(frame, {});
+				frame.close();
+			}
+			decodedFrames.length = 0;
+			pendingPackets.length = 0;
+
+			if (i === 100) { // Should have stabilized by then
+				baselineRss = process.memoryUsage().rss;
+			}
+		}
+
+		const finalRss = process.memoryUsage().rss;
+		const growth = finalRss - baselineRss;
+
+		expect(growth).toBeLessThan(10 * 1024 * 1024);
+
+		await encoder.close();
+		await decoder.close();
+	});
+
 	describe('VideoSample transformation', () => {
 		// 400x400 image: red everywhere, with a 200x200 blue square filling the bottom-left quadrant.
 		const TEST_IMAGE = (() => {

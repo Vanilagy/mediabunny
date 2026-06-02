@@ -7,6 +7,7 @@ author: Vanilagy
 authorImage: /vani.png
 authorLink: https://github.com/Vanilagy
 authorSubtitle: Creator of Mediabunny
+headerImage: /on-air.png
 excerpt: Mediabunny v1.42.0 adds read/write support for HTTP Live Streaming (HLS). This has been in the making for the last ~4 months and is, by far, the biggest addition to Mediabunny since its original release.
 ---
 
@@ -14,7 +15,7 @@ excerpt: Mediabunny v1.42.0 adds read/write support for HTTP Live Streaming (HLS
 import BlogAuthor from '../components/BlogAuthor.vue';
 </script>
 
-<img src="../assets/on-air.png" class="rounded-2xl mb-2">
+<img :src="$frontmatter.headerImage" class="rounded-2xl mb-2" />
 
 <p class="!m-0 opacity-70">{{ $frontmatter.publishedOn }}</p>
 

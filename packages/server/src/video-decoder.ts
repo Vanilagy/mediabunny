@@ -91,8 +91,9 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 	async decode(packet: EncodedPacket) {
 		if (this.codecContext === null) {
 			await this.initCodecContext(packet);
-			assert(this.codecContext);
 		}
+
+		assert(this.codecContext);
 
 		this.packet.isKeyframe = packet.type === 'key';
 		this.packet.data = Buffer.from(packet.data);
@@ -143,6 +144,8 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 
 		const ret = await this.codecContext.sendPacket(this.packet);
 		NodeAv.FFmpegError.throwIfError(ret, 'Send packet');
+
+		this.packet.unref(); // Don't need the data again, so just unref it
 
 		while (true) {
 			const receiveRet = await this.codecContext.receiveFrame(this.frame);
