@@ -38,6 +38,7 @@ import { Writer } from '../writer';
 import { EncodedPacket } from '../packet';
 import { SubtitleCue, SubtitleMetadata } from '../subtitles';
 import { NullTarget, PathedTarget, Target, TargetRequest } from '../target';
+import { toHlsCodecString } from './hls-codecs';
 import { HLS_MIME_TYPE } from './hls-misc';
 
 type HlsTrackData = {
@@ -1255,10 +1256,17 @@ export class HlsMuxer extends Muxer {
 					&& decl.playlist.tracks[0].metadata.hasOnlyKeyPackets;
 
 				const codecs: string[] = [];
+				let hasUnknownCodec = false;
 				for (const track of decl.playlist.tracks) {
 					const trackData = this.trackDatas.find(x => x.track === track);
-					const codecString = trackData?.info.decoderConfig.codec ?? track.source._codec;
-					codecs.push(codecString);
+					const codecString = toHlsCodecString(
+						trackData?.info.decoderConfig.codec ?? track.source._codec,
+					);
+					if (codecString) {
+						codecs.push(codecString);
+					} else {
+						hasUnknownCodec = true;
+					}
 				}
 
 				let peakDeclBitrate = 0;
@@ -1268,8 +1276,14 @@ export class HlsMuxer extends Muxer {
 					const firstRef = decl.references[0]!;
 					const firstTrack = firstRef.playlist.tracks[0]!;
 					const trackData = this.trackDatas.find(x => x.track === firstTrack);
-					const codecString = trackData?.info.decoderConfig.codec ?? firstTrack.source._codec;
-					codecs.push(codecString);
+					const codecString = toHlsCodecString(
+						trackData?.info.decoderConfig.codec ?? firstTrack.source._codec,
+					);
+					if (codecString) {
+						codecs.push(codecString);
+					} else {
+						hasUnknownCodec = true;
+					}
 
 					for (const ref of decl.references) {
 						assert(ref.playlist.peakBitrate !== null);
@@ -1299,7 +1313,9 @@ export class HlsMuxer extends Muxer {
 					masterPlaylistText += `,AVERAGE-BANDWIDTH=${Math.ceil(totalAverageBitrate)}`;
 				}
 
-				masterPlaylistText += `,CODECS="${codecs.join(',')}"`;
+				if (!hasUnknownCodec && codecs.length > 0) {
+					masterPlaylistText += `,CODECS="${codecs.join(',')}"`;
+				}
 
 				const videoTrack = decl.playlist.tracks.find(x => x.isVideoTrack());
 				if (videoTrack?.isVideoTrack()) {

@@ -6,6 +6,7 @@ import {
 	HlsOutputSegmentInfo,
 	Mp4OutputFormat,
 	MpegTsOutputFormat,
+	OutputFormat,
 } from '../../src/output-format.js';
 import {
 	AppendOnlyStreamTarget,
@@ -28,6 +29,65 @@ import { EncodedPacketSink } from '../../src/media-sink.js';
 
 const videoSource = (codec: VideoCodec = 'avc') => new EncodedVideoPacketSource(codec);
 const audioSource = (codec: AudioCodec = 'aac') => new EncodedAudioPacketSource(codec);
+
+const getAudioOnlyMasterPlaylistText = async (
+	codec: AudioCodec,
+	segmentFormat: OutputFormat = new MpegTsOutputFormat(),
+) => {
+	let masterPlaylistText = '';
+	const source = audioSource(codec);
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat,
+		}),
+		target: new PathedTarget('master.m3u8', ({ path }) => {
+			const target = new BufferTarget();
+			if (path === 'master.m3u8') {
+				target.on('finalized', () => {
+					masterPlaylistText = new TextDecoder().decode(target.buffer!);
+				});
+			}
+
+			return target;
+		}),
+	});
+
+	output.addAudioTrack(source);
+
+	await output.start();
+	source.close();
+	await output.finalize();
+
+	return masterPlaylistText;
+};
+
+const getVideoOnlyMasterPlaylistText = async (codec: VideoCodec) => {
+	let masterPlaylistText = '';
+	const source = videoSource(codec);
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new MpegTsOutputFormat(),
+		}),
+		target: new PathedTarget('master.m3u8', ({ path }) => {
+			const target = new BufferTarget();
+			if (path === 'master.m3u8') {
+				target.on('finalized', () => {
+					masterPlaylistText = new TextDecoder().decode(target.buffer!);
+				});
+			}
+
+			return target;
+		}),
+	});
+
+	output.addVideoTrack(source);
+
+	await output.start();
+	source.close();
+	await output.finalize();
+
+	return masterPlaylistText;
+};
 
 test('Playlist assignment, single video', async () => {
 	const output = new Output({
@@ -69,6 +129,28 @@ test('Playlist assignment, single audio', async () => {
 	expect(decl[0]!.playlist.tracks).toHaveLength(1);
 	expect(decl[0]!.groupId).toBeNull();
 	expect(decl[0]!.references).toHaveLength(0);
+});
+
+test('HLS master playlist uses RFC 6381 audio codec strings', async () => {
+	const cases: [AudioCodec, OutputFormat, string][] = [
+		['aac', new MpegTsOutputFormat(), 'mp4a.40.2'],
+		['mp3', new MpegTsOutputFormat(), 'mp4a.40.34'],
+		['ac3', new MpegTsOutputFormat(), 'ac-3'],
+		['eac3', new MpegTsOutputFormat(), 'ec-3'],
+		['flac', new CmafOutputFormat(), 'fLaC'],
+	];
+
+	for (const [codec, segmentFormat, expectedCodecString] of cases) {
+		const masterPlaylistText = await getAudioOnlyMasterPlaylistText(codec, segmentFormat);
+
+		expect(masterPlaylistText).toContain(`CODECS="${expectedCodecString}"`);
+	}
+});
+
+test('HLS master playlist omits CODECS when full video codec string is unavailable', async () => {
+	const masterPlaylistText = await getVideoOnlyMasterPlaylistText('avc');
+
+	expect(masterPlaylistText).not.toContain('CODECS=');
 });
 
 test('Playlist assignment, multiple video', async () => {
