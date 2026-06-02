@@ -553,7 +553,12 @@ export class VideoSample implements Disposable {
 				alpha: isFirefox(), // Firefox has VideoFrame glitches with opaque canvases
 				willReadFrequently: true,
 			});
-			assert(context);
+			if (!context) {
+				throw new Error(
+					'OffscreenCanvas must have support for the \'2d\' context in order to create a VideoSample from'
+					+ ' this data.',
+				);
+			}
 
 			// Draw it to a canvas
 			context.drawImage(data, 0, 0);
@@ -852,7 +857,7 @@ export class VideoSample implements Disposable {
 		} else {
 			const canvas = this._data;
 			const context = canvas.getContext('2d');
-			assert(context);
+			assert(context); // We already got it earlier so it's definitely available
 
 			const imageData = context.getImageData(0, 0, this.codedWidth, this.codedHeight);
 
@@ -1503,7 +1508,12 @@ export class VideoSample implements Disposable {
 		const context = canvas.getContext('2d', {
 			alpha: true,
 		}) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
-		assert(context);
+		if (!context) {
+			throw new Error(
+				'The \'2d\' canvas context is required to transform VideoSamples. Register a custom transformer using'
+				+ ' registerVideoSampleTransformer to work around this limitation.',
+			);
+		}
 
 		if (description.alpha === 'discard') {
 			context.fillStyle = 'black';
