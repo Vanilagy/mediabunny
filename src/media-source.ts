@@ -462,14 +462,15 @@ class VideoEncoderWrapper {
 
 				const mergedEncodeOptions = { ...sampleToEncode.encodeOptions, ...encodeOptions };
 
-				// Ensure a key frame every keyFrameInterval seconds. It is important that all video tracks
-				// follow the same "key frame" rhythm, because aligned key frames are required to start new
-				// fragments in ISOBMFF or clusters in Matroska (or at least desirable).
 				const finalEncodeOptions = {
 					...mergedEncodeOptions,
-					keyFrame: mergedEncodeOptions.keyFrame
-						|| keyFrameInterval === 0
-						|| multipleOfKeyFrameInterval !== this.lastMultipleOfKeyFrameInterval,
+					keyFrame: mergedEncodeOptions.keyFrame !== undefined
+						? mergedEncodeOptions.keyFrame
+						// Ensure a key frame every keyFrameInterval seconds. It is important that all video tracks
+						// follow the same "key frame" rhythm, because aligned key frames are required to start new
+						// fragments in ISOBMFF or clusters in Matroska (or at least desirable).
+						: keyFrameInterval === 0
+							|| multipleOfKeyFrameInterval !== this.lastMultipleOfKeyFrameInterval,
 				};
 				this.lastMultipleOfKeyFrameInterval = multipleOfKeyFrameInterval;
 
