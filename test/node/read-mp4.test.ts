@@ -11,6 +11,7 @@ import {
 	Input,
 	MP4,
 	MovOutputFormat,
+	Mp4OutputFormat,
 	Output,
 } from '../../src/index.js';
 
@@ -46,29 +47,54 @@ test('Should be able to get packets from a .MP4 file', async () => {
 	]);
 });
 
-const replaceColorInformationType = (buffer: ArrayBuffer, from: string, to: string) => {
-	const bytes = new Uint8Array(buffer.slice(0));
-	const needle = new TextEncoder().encode(from);
-	const replacement = new TextEncoder().encode(to);
-	const colorInformationBox = new TextEncoder().encode('colr');
+test('MP4 nclx color information', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+	const source = new EncodedVideoPacketSource('vp8');
+	output.addVideoTrack(source);
 
-	expect(replacement.byteLength).toBe(needle.byteLength);
-	expect(replacement.byteLength).toBe(4);
+	await output.start();
+	await source.add(
+		new EncodedPacket(new Uint8Array(1024), 'key', 0, 0.1),
+		{
+			decoderConfig: {
+				codec: 'vp8',
+				codedWidth: 1280,
+				codedHeight: 720,
+				colorSpace: {
+					primaries: 'bt2020' as VideoColorPrimaries,
+					transfer: 'pq' as VideoTransferCharacteristics,
+					matrix: 'bt2020-ncl' as VideoMatrixCoefficients,
+					fullRange: false,
+				},
+			},
+		},
+	);
+	await output.finalize();
 
-	for (let i = 0; i <= bytes.byteLength - colorInformationBox.byteLength - needle.byteLength; i++) {
-		const matches = colorInformationBox.every((value, j) => bytes[i + j] === value);
-		if (matches) {
-			const colorTypeOffset = i + colorInformationBox.byteLength;
-			expect(bytes.slice(colorTypeOffset, colorTypeOffset + needle.byteLength)).toEqual(needle);
-			bytes.set(replacement, colorTypeOffset);
-			return bytes;
-		}
-	}
+	const str = String.fromCharCode(...new Uint8Array(output.target.buffer!));
+	expect(str.includes('nclc')).toBe(false);
+	expect(str.includes('nclx')).toBe(true);
 
-	throw new Error('Could not find color information box');
-};
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryVideoTrack();
+	if (!track) throw new Error('No video track found');
 
-test('Should read QuickTime nclc color information', async () => {
+	expect(await track.getColorSpace()).toEqual({
+		primaries: 'bt2020',
+		transfer: 'pq',
+		matrix: 'bt2020-ncl',
+		fullRange: false,
+	});
+	expect(await track.hasHighDynamicRange()).toBe(true);
+});
+
+test('QuickTime nclc color information', async () => {
 	const output = new Output({
 		format: new MovOutputFormat(),
 		target: new BufferTarget(),
@@ -95,9 +121,12 @@ test('Should read QuickTime nclc color information', async () => {
 	);
 	await output.finalize();
 
-	const nclcFile = replaceColorInformationType(output.target.buffer!, 'nclx', 'nclc');
+	const str = String.fromCharCode(...new Uint8Array(output.target.buffer!));
+	expect(str.includes('nclc')).toBe(true);
+	expect(str.includes('nclx')).toBe(false);
+
 	using input = new Input({
-		source: new BufferSource(nclcFile),
+		source: new BufferSource(output.target.buffer!),
 		formats: ALL_FORMATS,
 	});
 	const track = await input.getPrimaryVideoTrack();

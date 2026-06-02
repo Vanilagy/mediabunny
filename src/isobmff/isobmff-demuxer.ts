@@ -1456,11 +1456,16 @@ export class IsobmffDemuxer extends Demuxer {
 				const transferCharacteristics = readU16Be(slice);
 				const matrixCoefficients = readU16Be(slice);
 
+				let fullRange: boolean | undefined = undefined;
+				if (colourType === 'nclx') {
+					fullRange = Boolean(readU8(slice) & 0x80);
+				}
+
 				track.info.colorSpace = {
 					primaries: COLOR_PRIMARIES_MAP_INVERSE[colourPrimaries],
 					transfer: TRANSFER_CHARACTERISTICS_MAP_INVERSE[transferCharacteristics],
 					matrix: MATRIX_COEFFICIENTS_MAP_INVERSE[matrixCoefficients],
-					...(colourType === 'nclx' ? { fullRange: Boolean(readU8(slice) & 0x80) } : {}),
+					fullRange,
 				} as VideoColorSpaceInit;
 			}; break;
 
