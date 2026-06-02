@@ -6,7 +6,14 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { AudioSample, registerDecoder, registerEncoder, registerVideoSampleTransformer, VideoSample } from 'mediabunny';
+import {
+	AudioSample,
+	MaybePromise,
+	registerDecoder,
+	registerEncoder,
+	registerVideoSampleTransformer,
+	VideoSample,
+} from 'mediabunny';
 import * as NodeAv from 'node-av';
 import { NodeAvVideoDecoder } from './video-decoder';
 import { NodeAvVideoEncoder } from './video-encoder';
@@ -29,6 +36,29 @@ if ((globalThis as Record<symbol, unknown>)[SERVER_LOADED_SYMBOL]) {
 let registered = false;
 
 /**
+ * Options for configuring Mediabunny's server-side polyfills.
+ * @group \@mediabunny/server
+ * @public
+ */
+type MediabunnyServerOptions = {
+	/**
+	 * The hardware context to use for hardware-accelerated decoding and encoding. When set to a
+	 * `NodeAv.HardwareContext`, that context is used directly. When set to a function, the function is invoked (with
+	 * no caching) every time a hardware decoder or encoder codec is resolved, receiving the codec ID and returning the
+	 * context to use for it (or `null` for no hardware acceleration).
+	 *
+	 * When not set, a context is automatically detected on first use and then cached.
+	 */
+	hardwareContext?:
+		| NodeAv.HardwareContext
+		| null
+		| ((codecId: NodeAv.AVCodecID) => MaybePromise<NodeAv.HardwareContext | null>);
+};
+
+/** @internal */
+export let _serverOptions: MediabunnyServerOptions = {};
+
+/**
  * Registers video and audio decoders and encoders for all codecs, using FFmpeg's libavcodec under the hood.
  * Additionally, a custom `VideoSample` transformer based on libavfilter is registered to enable resizing, rotation and
  * cropping of video frames.
@@ -38,14 +68,32 @@ let registered = false;
  * The decoders and encoders will automatically detect hardware acceleration support for each codec and platform and
  * make use of it if applicable.
  *
+ * You can pass optional {@link MediabunnyServerOptions} for additional configuration.
+ *
  * @group \@mediabunny/server
  * @public
  */
-export const registerMediabunnyServer = () => {
+export const registerMediabunnyServer = (options: MediabunnyServerOptions = {}) => {
+	if (typeof options !== 'object' || !options) {
+		throw new TypeError('options must be an object.');
+	}
+	if (
+		options.hardwareContext != null
+		&& !(
+			options.hardwareContext instanceof NodeAv.HardwareContext || typeof options.hardwareContext === 'function'
+		)
+	) {
+		throw new TypeError(
+			'options.hardwareContext, when provided, must be a NodeAv.HardwareContext, a function, or null.',
+		);
+	}
+
 	if (registered) {
 		return;
 	}
+
 	registered = true;
+	_serverOptions = options;
 
 	NodeAv.Log.setLevel(NodeAv.AV_LOG_ERROR);
 
@@ -59,6 +107,8 @@ export const registerMediabunnyServer = () => {
 
 	registerVideoSampleTransformer(transformVideoSample);
 };
+
+export type { MediabunnyServerOptions };
 
 export { AvFrameVideoSampleResource } from './video-sample';
 export { AvFrameAudioSampleResource } from './audio-sample';
@@ -76,6 +126,13 @@ export { AvFrameAudioSampleResource } from './audio-sample';
  * @public
  */
 export const toAvFrame = async (sample: VideoSample | AudioSample, frame: NodeAv.Frame) => {
+	if (!(sample instanceof VideoSample) && !(sample instanceof AudioSample)) {
+		throw new TypeError('sample must be a VideoSample or an AudioSample.');
+	}
+	if (!(frame instanceof NodeAv.Frame)) {
+		throw new TypeError('frame must be a NodeAv.Frame.');
+	}
+
 	if (sample instanceof VideoSample) {
 		if (sample._data instanceof AvFrameVideoSampleResource) {
 			// We're overriding the frame, so release whatever it referenced before, otherwise av_frame_ref leaks it

@@ -42,6 +42,9 @@ export class AvFrameAudioSampleResource extends AudioSampleResource {
 	constructor(frame: NodeAv.Frame) {
 		super();
 
+		if (!(frame instanceof NodeAv.Frame)) {
+			throw new TypeError('frame must be a NodeAv.Frame.');
+		}
 		if (frame.getMediaType() !== NodeAv.AVMEDIA_TYPE_AUDIO) {
 			throw new Error('AvFrameAudioSampleResource must be initialized with an audio frame.');
 		}

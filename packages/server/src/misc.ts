@@ -8,6 +8,7 @@
 
 import { VideoSamplePixelFormat, MediaCodec } from 'mediabunny';
 import * as NodeAv from 'node-av';
+import { _serverOptions } from './index';
 
 export const CODEC_TO_CODEC_ID: Partial<Record<MediaCodec, NodeAv.AVCodecID>> = {
 	avc: NodeAv.AV_CODEC_ID_H264,
@@ -27,14 +28,35 @@ export const CODEC_TO_CODEC_ID: Partial<Record<MediaCodec, NodeAv.AVCodecID>> = 
 
 let cachedHardwareContext: NodeAv.HardwareContext | null | undefined = undefined;
 export const getHardwareContext = (): NodeAv.HardwareContext | null => {
+	if (_serverOptions.hardwareContext !== undefined && typeof _serverOptions.hardwareContext !== 'function') {
+		// Return the user-provided one
+		return _serverOptions.hardwareContext;
+	}
+
 	if (cachedHardwareContext === undefined) {
 		cachedHardwareContext = NodeAv.HardwareContext.auto();
 	}
 	return cachedHardwareContext;
 };
 
+const validateHwContext = (hw: NodeAv.HardwareContext | null) => {
+	if (hw !== null && !(hw instanceof NodeAv.HardwareContext)) {
+		throw new TypeError(
+			'When serverOptions.hardwareContext is a function, it must return or resolve to a'
+			+ ' NodeAv.HardwareContext or null.',
+		);
+	}
+};
+
 const hardwareDecoderCodecCache = new Map<NodeAv.AVCodecID, NodeAv.Codec | null>();
-export const getHardwareDecoderCodec = (codecId: NodeAv.AVCodecID): NodeAv.Codec | null => {
+export const getHardwareDecoderCodec = async (codecId: NodeAv.AVCodecID): Promise<NodeAv.Codec | null> => {
+	if (typeof _serverOptions.hardwareContext === 'function') {
+		const hw = await _serverOptions.hardwareContext(codecId);
+		validateHwContext(hw);
+
+		return hw?.getDecoderCodec(codecId) ?? null;
+	}
+
 	if (!hardwareDecoderCodecCache.has(codecId)) {
 		const hw = getHardwareContext();
 		hardwareDecoderCodecCache.set(codecId, hw?.getDecoderCodec(codecId) ?? null);
@@ -43,7 +65,14 @@ export const getHardwareDecoderCodec = (codecId: NodeAv.AVCodecID): NodeAv.Codec
 };
 
 const hardwareEncoderCodecCache = new Map<NodeAv.AVCodecID, NodeAv.Codec | null>();
-export const getHardwareEncoderCodec = (codecId: NodeAv.AVCodecID): NodeAv.Codec | null => {
+export const getHardwareEncoderCodec = async (codecId: NodeAv.AVCodecID): Promise<NodeAv.Codec | null> => {
+	if (typeof _serverOptions.hardwareContext === 'function') {
+		const hw = await _serverOptions.hardwareContext(codecId);
+		validateHwContext(hw);
+
+		return hw?.getEncoderCodec(codecId) ?? null;
+	}
+
 	if (!hardwareEncoderCodecCache.has(codecId)) {
 		const hw = getHardwareContext();
 		hardwareEncoderCodecCache.set(codecId, hw?.getEncoderCodec(codecId) ?? null);

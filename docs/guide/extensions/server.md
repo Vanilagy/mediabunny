@@ -35,6 +35,22 @@ registerMediabunnyServer();
 
 That's it - you now have access to the full Mediabunny feature set on the server.
 
+---
+
+An optional `options` parameter is available for further configuration:
+```ts
+import { registerMediabunnyServer } from '@mediabunny/server';
+import * as NodeAv from 'node-av';
+
+registerMediabunnyServer({
+	// Use a specific hardware rendering device:
+	hardwareContext: NodeAv.HardwareContext.create(
+		NodeAv.AV_HWDEVICE_TYPE_VAAPI,
+		'/dev/dri/renderD128',
+	),
+});
+```
+
 ## Upload media compression example
 
 Here, we set up a simple media compression server in Node.js. The client's request body is streamed to Mediabunny, the media gets processed, and the output is streamed directly to the disk. Memory usage is O(1) due to pipelining, and an overly fast uploader is automatically slowed down due to stream backpressure.

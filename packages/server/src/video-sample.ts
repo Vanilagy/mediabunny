@@ -73,6 +73,9 @@ export class AvFrameVideoSampleResource extends VideoSampleResource {
 	constructor(frame: NodeAv.Frame) {
 		super();
 
+		if (!(frame instanceof NodeAv.Frame)) {
+			throw new TypeError('frame must be a NodeAv.Frame.');
+		}
 		if (frame.getMediaType() !== NodeAv.AVMEDIA_TYPE_VIDEO) {
 			throw new Error('AvFrameVideoSampleResource must be initialized with a video frame.');
 		}

@@ -83,7 +83,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 		} else if (this.config.hardwareAcceleration === 'prefer-software') {
 			codec = NodeAv.Codec.findEncoder(codecId);
 		} else {
-			codec = getHardwareEncoderCodec(codecId) ?? NodeAv.Codec.findEncoder(codecId);
+			codec = (await getHardwareEncoderCodec(codecId)) ?? NodeAv.Codec.findEncoder(codecId);
 		}
 
 		if (!codec) {

@@ -483,6 +483,15 @@ export const SECOND_TO_MICROSECOND_FACTOR = 1e6 * (1 + Number.EPSILON);
 export type SetRequired<T, K extends keyof T> = T & Required<Pick<T, K>>;
 
 /**
+ * Recursively makes all properties of T readonly.
+ * @group Miscellaneous
+ * @public
+ */
+export type DeepReadonly<T> = T extends object ? {
+	readonly [K in keyof T]: DeepReadonly<T[K]>;
+} : T;
+
+/**
  * Sets all keys K of T to be optional.
  * @group Miscellaneous
  * @public

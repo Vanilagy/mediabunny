@@ -145,6 +145,7 @@ export {
 export {
 	type AnyIterable,
 	ConcurrentRunner,
+	type DeepReadonly,
 	EventEmitter,
 	type EventListenerOptions,
 	type FilePath,

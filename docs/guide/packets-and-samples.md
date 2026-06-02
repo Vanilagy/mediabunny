@@ -330,9 +330,12 @@ videoSample.microsecondDuration; // => Duration in microseconds
 videoSample.colorSpace; // => VideoColorSpace
 
 videoSample.visibleRect; // Rectangle
+
+// Encode options used when this sample is passed to an encoder
+videoSample.encodeOptions; // => VideoEncoderEncodeOptions (defaults to {})
 ```
 
-While all of these properties are read-only, you can use the `setTimestamp`, `setDuration` and `setRotation` methods to modify some of the metadata of the video sample.
+While all of these properties are read-only, you can use the `setTimestamp`, `setDuration`, `setRotation` and `setEncodeOptions` methods to modify some of the metadata of the video sample.
 
 ::: warning
 Timestamps can be [negative](#negative-timestamps).
