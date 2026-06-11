@@ -2123,15 +2123,24 @@ class ReadOrchestrator {
 					}
 
 					const queuedRead = this.queuedReads[oldestIndex]!;
-					this.queuedReads.splice(oldestIndex, 1);
 
+					// Create the worker before dequeuing the read. Although this worker just stopped running,
+					// this `finally` callback runs on a later microtask - concurrent `read()` calls in that gap
+					// may have already evicted this (now idle, slice-free) worker via LRU and saturated every
+					// slot, making `createWorker` return null. Dequeuing first would then orphan the read: it's
+					// no longer queued, never attached to a worker, and its pending slices' promises never
+					// settle. If no slot is free, leave the read queued - whichever worker stops next drains the
+					// queue from this same block.
 					const newWorker = this.createWorker(
 						queuedRead.hole.start,
 						queuedRead.hole.end,
 						queuedRead.strictTarget,
 					);
-					assert(newWorker); // We just freed up a worker, so this should never fail
+					if (!newWorker) {
+						return;
+					}
 
+					this.queuedReads.splice(oldestIndex, 1);
 					newWorker.pendingSlices = queuedRead.pendingSlices;
 					this.runWorker(newWorker);
 				}
