@@ -47,11 +47,11 @@ import { registerMediabunnyServer } from '@mediabunny/server';
 import * as NodeAv from 'node-av';
 
 registerMediabunnyServer({
-	// Use a specific hardware rendering device:
-	hardwareContext: NodeAv.HardwareContext.create(
-		NodeAv.AV_HWDEVICE_TYPE_VAAPI,
-		'/dev/dri/renderD128',
-	),
+    // Use a specific hardware rendering device:
+    hardwareContext: NodeAv.HardwareContext.create(
+        NodeAv.AV_HWDEVICE_TYPE_VAAPI,
+        '/dev/dri/renderD128',
+    ),
 });
 ```
 
