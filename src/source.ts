@@ -1988,7 +1988,13 @@ class ReadOrchestrator {
 				offset: innerStart,
 			} satisfies ReadResult));
 		} else {
-			// The requested region was satisfied by the cache, but the entire prefetch region was not
+			// The requested region was satisfied by the cache, but the entire prefetch region was not. In this
+			// case, the promise is never handed to the caller - it only tracks completion of the speculative
+			// remainder of the prefetch region. If the worker filling that remainder fails (or its read is
+			// aborted by the caller during teardown), its pending slices reject this promise with no consumer,
+			// surfacing an unhandled promise rejection. Attach a no-op handler: a real failure of this region
+			// is re-encountered - with a consumer - by the next read that actually needs those bytes.
+			promise.catch(() => {});
 		}
 
 		return result;
@@ -2103,7 +2109,12 @@ class ReadOrchestrator {
 				if (worker.pendingSlices.length > 0) {
 					worker.pendingSlices.forEach(x => x.reject(error)); // Make sure to propagate any errors
 					worker.pendingSlices.length = 0;
-				} else {
+				} else if (!worker.aborted && !this.disposed) {
+					// Only rethrow for live workers. An aborted worker (or a disposed orchestrator) rejecting
+					// here is the deliberate cancellation itself - dispose() flags workers aborted before the
+					// caller aborts the underlying reads, so the rejection carries no information, and rethrowing
+					// it into this void'ed chain surfaces an unhandled rejection for every speculative,
+					// slice-free worker cancelled during teardown.
 					throw error; // So it doesn't get swallowed
 				}
 			})

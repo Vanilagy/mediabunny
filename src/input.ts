@@ -528,7 +528,13 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 		this._sourceRefs.length = 0;
 
 		void this._demuxerPromise
-			?.then(demuxer => demuxer.dispose());
+			?.then(demuxer => demuxer.dispose())
+			// This derived chain exists only to dispose the demuxer once it materializes. If dispose() is
+			// called while the demuxer is still initializing (metadata read in flight) and that read then
+			// fails or is aborted, _demuxerPromise rejects - its real awaiters (getPrimaryVideoTrack etc.)
+			// receive the error, but this chain has no consumer and would surface the deliberate cancellation
+			// as an unhandled promise rejection. A demuxer that never came to exist needs no disposal.
+			.catch(() => {});
 	}
 
 	/**
