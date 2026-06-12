@@ -12,7 +12,7 @@ Mediabunny exposes HLS playlists as if they were a single giant input file. Like
 
 ## HLS inputs
 
-HLS playlists (master & media) are read through the same `Input` interface as all other media files in Mediabunny. HLS must read multiple files, meaning any [`PathedSource`](../api/PathedSource) is required:
+HLS playlists (master & media) are read through the same `Input` interface as all other media files in Mediabunny. HLS must read multiple files, meaning any [`PathedSource`](../api/PathedSource) (such as `UrlSource`) is required:
 ```ts
 import { Input, UrlSource, HLS_FORMATS } from 'mediabunny';
 
