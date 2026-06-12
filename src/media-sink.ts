@@ -1750,6 +1750,44 @@ const colorAlphaMergerWorkerCode = () => {
 };
 
 /**
+ * Decoder preferences for sinks that decode video.
+ * @group Media sinks
+ * @public
+ */
+export type VideoSinkDecoderOptions = {
+	/**
+	 * The hardware acceleration preference passed to the underlying `VideoDecoder`. Useful for applications that
+	 * manage many concurrent decoders: the number of concurrent hardware decode sessions is limited (and exceeding
+	 * the limit can fail silently on some platforms), so an application may want to deliberately place some sinks
+	 * on software decoders.
+	 */
+	hardwareAcceleration?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
+	/**
+	 * When `true`, passes the `optimizeForLatency` hint to the underlying `VideoDecoder`, requesting that decoded
+	 * frames be emitted as soon as possible (potentially at the cost of decode throughput).
+	 */
+	optimizeForLatency?: boolean;
+};
+
+const validateVideoSinkDecoderOptions = (decoderOptions: VideoSinkDecoderOptions) => {
+	if (!decoderOptions || typeof decoderOptions !== 'object') {
+		throw new TypeError('decoderOptions must be an object.');
+	}
+	if (
+		decoderOptions.hardwareAcceleration !== undefined
+		&& !['no-preference', 'prefer-hardware', 'prefer-software'].includes(decoderOptions.hardwareAcceleration)
+	) {
+		throw new TypeError(
+			'decoderOptions.hardwareAcceleration, when provided, must be \'no-preference\', \'prefer-hardware\' or'
+			+ ' \'prefer-software\'.',
+		);
+	}
+	if (decoderOptions.optimizeForLatency !== undefined && typeof decoderOptions.optimizeForLatency !== 'boolean') {
+		throw new TypeError('decoderOptions.optimizeForLatency, when provided, must be a boolean.');
+	}
+};
+
+/**
  * A sink that retrieves decoded video samples (video frames) from a video track.
  * @group Media sinks
  * @public
@@ -1757,16 +1795,20 @@ const colorAlphaMergerWorkerCode = () => {
 export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 	/** @internal */
 	_track: InputVideoTrack;
+	/** @internal */
+	_decoderOptions: VideoSinkDecoderOptions;
 
 	/** Creates a new {@link VideoSampleSink} for the given {@link InputVideoTrack}. */
-	constructor(videoTrack: InputVideoTrack) {
+	constructor(videoTrack: InputVideoTrack, decoderOptions: VideoSinkDecoderOptions = {}) {
 		if (!(videoTrack instanceof InputVideoTrack)) {
 			throw new TypeError('videoTrack must be an InputVideoTrack.');
 		}
+		validateVideoSinkDecoderOptions(decoderOptions);
 
 		super();
 
 		this._track = videoTrack;
+		this._decoderOptions = decoderOptions;
 	}
 
 	/** @internal */
@@ -1783,9 +1825,18 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 
 		const codec = await this._track.getCodec();
 		const rotation = await this._track.getRotation();
-		const decoderConfig = await this._track.getDecoderConfig();
+		let decoderConfig = await this._track.getDecoderConfig();
 		const timeResolution = await this._track.getTimeResolution();
 		assert(codec && decoderConfig);
+
+		// Apply per-sink decoder preferences. This runs before VideoDecoderWrapper's own interlaced-AVC
+		// prefer-software injection, which can only strengthen the preference toward software (no conflict).
+		if (this._decoderOptions.hardwareAcceleration !== undefined) {
+			decoderConfig = { ...decoderConfig, hardwareAcceleration: this._decoderOptions.hardwareAcceleration };
+		}
+		if (this._decoderOptions.optimizeForLatency !== undefined) {
+			decoderConfig = { ...decoderConfig, optimizeForLatency: this._decoderOptions.optimizeForLatency };
+		}
 
 		return new VideoDecoderWrapper(onSample, onError, codec, decoderConfig, rotation, timeResolution);
 	}
@@ -1903,6 +1954,11 @@ export type CanvasSinkOptions = {
 	 * canvas is created each time.
 	 */
 	poolSize?: number;
+	/**
+	 * Decoder preferences forwarded to the underlying {@link VideoSampleSink}'s `VideoDecoder`. See
+	 * {@link VideoSinkDecoderOptions}.
+	 */
+	decoderOptions?: VideoSinkDecoderOptions;
 };
 
 /**
@@ -1982,12 +2038,15 @@ export class CanvasSink {
 		) {
 			throw new TypeError('poolSize must be a non-negative integer.');
 		}
+		if (options.decoderOptions !== undefined) {
+			validateVideoSinkDecoderOptions(options.decoderOptions);
+		}
 
 		this._videoTrack = videoTrack;
 		this._alpha = options.alpha ?? false;
 		this._options = options;
 		this._fit = options.fit ?? 'fill';
-		this._videoSampleSink = new VideoSampleSink(videoTrack);
+		this._videoSampleSink = new VideoSampleSink(videoTrack, options.decoderOptions);
 		this._canvasPool = Array.from({ length: options.poolSize ?? 0 }, () => null);
 	}
 
