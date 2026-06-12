@@ -12,6 +12,8 @@ export default defineConfig({
 				path.resolve(__dirname, './packages/aac-encoder/dist/bundles/mediabunny-aac-encoder.mjs'),
 			'@mediabunny/flac-encoder':
 				path.resolve(__dirname, './packages/flac-encoder/dist/bundles/mediabunny-flac-encoder.mjs'),
+			'@mediabunny/dts-decoder':
+				path.resolve(__dirname, './packages/dts-decoder/dist/bundles/mediabunny-dts-decoder.mjs'),
 			'@mediabunny/mp3-encoder':
 				path.resolve(__dirname, './packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.mjs'),
 			'@mediabunny/server':

@@ -73,6 +73,7 @@ export const NON_PCM_AUDIO_CODECS = [
 	'flac',
 	'ac3',
 	'eac3',
+	'dts',
 ] as const;
 /**
  * List of known audio codecs, ordered by encoding preference.
@@ -535,6 +536,8 @@ export const buildAudioCodecString = (codec: AudioCodec, numberOfChannels: numbe
 		return 'ac-3';
 	} else if (codec === 'eac3') {
 		return 'ec-3';
+	} else if (codec === 'dts') {
+		return 'dts';
 	} else if ((PCM_AUDIO_CODECS as readonly string[]).includes(codec)) {
 		return codec;
 	}
@@ -584,6 +587,8 @@ export const extractAudioCodecString = (trackInfo: {
 		return 'ac-3';
 	} else if (codec === 'eac3') {
 		return 'ec-3';
+	} else if (codec === 'dts') {
+		return 'dts';
 	} else if (codec && (PCM_AUDIO_CODECS as readonly string[]).includes(codec)) {
 		return codec;
 	}
@@ -694,6 +699,14 @@ export const inferCodecFromCodecString = (codecString: string): MediaCodec | nul
 		return 'ac3';
 	} else if (codecString === 'ec-3' || codecString === 'eac3') {
 		return 'eac3';
+	} else if (
+		codecString === 'dts'
+		|| codecString === 'dtsc'
+		|| codecString === 'dtsh'
+		|| codecString === 'dtsl'
+		|| codecString === 'dtse'
+	) {
+		return 'dts';
 	} else if (codecString === 'ulaw') {
 		return 'ulaw';
 	} else if (codecString === 'alaw') {
@@ -917,7 +930,17 @@ export const validateVideoChunkMetadata = (metadata: EncodedVideoChunkMetadata |
 };
 
 const VALID_AUDIO_CODEC_STRING_PREFIXES = [
-	'mp4a', 'mp3', 'opus', 'vorbis', 'flac', 'ulaw', 'alaw', 'pcm', 'ac-3', 'ec-3',
+	'mp4a',
+	'mp3',
+	'opus',
+	'vorbis',
+	'flac',
+	'ulaw',
+	'alaw',
+	'pcm',
+	'ac-3',
+	'ec-3',
+	'dts',
 ];
 
 export const validateAudioChunkMetadata = (metadata: EncodedAudioChunkMetadata | undefined) => {
@@ -1047,6 +1070,15 @@ export const validateAudioChunkMetadata = (metadata: EncodedAudioChunkMetadata |
 
 		if (metadata.decoderConfig.codec !== 'ec-3') {
 			throw new TypeError('Audio chunk metadata decoder configuration codec string for EC-3 must be "ec-3".');
+		}
+	} else if (metadata.decoderConfig.codec.startsWith('dts')) {
+		// DTS-specific validation
+
+		if (!['dts', 'dtsc', 'dtsh', 'dtsl', 'dtse'].includes(metadata.decoderConfig.codec)) {
+			throw new TypeError(
+				'Audio chunk metadata decoder configuration codec string for DTS must be "dts", "dtsc", "dtsh",'
+				+ ' "dtsl" or "dtse".',
+			);
 		}
 	} else if (
 		metadata.decoderConfig.codec.startsWith('pcm')

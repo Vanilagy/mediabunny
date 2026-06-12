@@ -10,6 +10,7 @@
 			"@mediabunny/ac3": ["./packages/ac3/src/index.ts"],
 			"@mediabunny/aac-encoder": ["./packages/aac-encoder/src/index.ts"],
 			"@mediabunny/flac-encoder": ["./packages/flac-encoder/src/index.ts"],
+			"@mediabunny/dts-decoder": ["./packages/dts-decoder/src/index.ts"],
 			"@mediabunny/mp3-encoder": ["./packages/mp3-encoder/src/index.ts"],
 			"@mediabunny/server": ["./packages/server/src/index.ts"],
 		},
@@ -21,6 +22,7 @@
 		{ "path": "./packages/ac3" },
 		{ "path": "./packages/aac-encoder" },
 		{ "path": "./packages/flac-encoder" },
+		{ "path": "./packages/dts-decoder" },
 		{ "path": "./packages/mp3-encoder" },
 		{ "path": "./packages/server" },
 	]
