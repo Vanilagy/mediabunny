@@ -1,3 +1,7 @@
+---
+description: Learn about how packets carry encoded media data, samples carry raw decoded media data, and the operations you can perform on them.
+---
+
 # Packets & samples
 
 ## Introduction
@@ -94,6 +98,8 @@ constructor(
 );
 ```
 
+When creating a packet for a given codec, you *must* adhere to the data format specified in the [Mediabunny Codec Registry](/codec-registry/overview).
+
 ::: info
 You probably won't ever need to set `sequenceNumber` or `byteLength` in the constructor.
 :::
@@ -176,7 +182,7 @@ Negative sequence numbers mean the packet's ordering is undefined. When creating
 
 ### Cloning packets
 
-Use the `clone` method to create a new packet from an existing packet. While doing so, you can change its timestamp and duration.
+Use the `clone` method to create a new packet from an existing packet. While doing so, you can partially change its data.
 ```ts
 // Creates a clone identical to the original:
 packet.clone();
@@ -268,6 +274,26 @@ const sample = new VideoSample(buffer, {
 
 See [`VideoPixelFormat`](https://w3c.github.io/webcodecs/#enumdef-videopixelformat) for a list of pixel formats supported by WebCodecs.
 
+#### Custom resource constructor
+
+For advanced use cases (custom decoders, GPU-backed frames, etc.), you can back a `VideoSample` with your own implementation of [`VideoSampleResource`](../api/VideoSampleResource):
+
+```ts
+import { VideoSample, VideoSampleResource } from 'mediabunny';
+
+class MyResource extends VideoSampleResource {
+	// Implement getFormat(), getCodedWidth(), getCodedHeight(),
+	// getSquarePixelWidth(), getSquarePixelHeight(), getColorSpace(),
+	// getDataPlanes(), toRgbSample(), and close().
+}
+
+const sample = new VideoSample(new MyResource(), {
+	timestamp: 0,
+});
+```
+
+This allows you to back a `VideoSample` with your own data without having to copy it.
+
 ### Inspecting video samples
 
 A `VideoSample` has several read-only properties:
@@ -279,6 +305,10 @@ videoSample.format; // => VideoPixelFormat | null
 videoSample.codedWidth; // => number
 videoSample.codedHeight; // => number
 
+// Pixel aspect ratio-corrected dimensions of the sample
+videoSample.squarePixelWidth;
+videoSample.squarePixelHeight;
+
 // Transformed display dimensions of the sample (after rotation)
 videoSample.displayWidth; // => number	
 videoSample.displayHeight; // => number	
@@ -286,6 +316,9 @@ videoSample.displayHeight; // => number
 // Rotation of the sample in degrees clockwise. The raw sample should be
 // rotated by this amount when it is presented.
 videoSample.rotation; // => 0 | 90 | 180 | 270
+
+// The sample's pixel aspect ratio
+videoSample.pixelAspectRatio; // => { num: number, den: number }
 
 // Timing information
 videoSample.timestamp; // => Presentation timestamp in seconds
@@ -295,9 +328,14 @@ videoSample.microsecondDuration; // => Duration in microseconds
 
 // Color space of the sample
 videoSample.colorSpace; // => VideoColorSpace
+
+videoSample.visibleRect; // Rectangle
+
+// Encode options used when this sample is passed to an encoder
+videoSample.encodeOptions; // => VideoEncoderEncodeOptions (defaults to {})
 ```
 
-While all of these properties are read-only, you can use the `setTimestamp`, `setDuration` and `setRotation` methods to modify some of the metadata of the video sample.
+While all of these properties are read-only, you can use the `setTimestamp`, `setDuration`, `setRotation` and `setEncodeOptions` methods to modify some of the metadata of the video sample.
 
 ::: warning
 Timestamps can be [negative](#negative-timestamps).
@@ -378,14 +416,37 @@ const bytesNeeded = videoSample.allocationSize(); // => number
 Then, use `copyTo` to copy the pixel data into the destination buffer:
 ```ts
 const bytes = new Uint8Array(bytesNeeded);
-videoSample.copyTo(bytes);
+const planeLayout = await videoSample.copyTo(bytes);
 ```
 
 ::: info
-The data will always be in the pixel format specified in the `format` field.
-
-To convert the data into a different pixel format, or to extract only a section of the frame, please use the [`allocationSize`](https://developer.mozilla.org/en-US/docs/Web/API/VideoFrame/allocationSize) and [`copyTo`](https://developer.mozilla.org/en-US/docs/Web/API/VideoFrame/copyTo) methods on `VideoFrame` instead. Get a `VideoFrame` by running `videoSample.toVideoFrame()`.
+You can pass additional options to `allocationSize` and `copyTo` to extract data in a different pixel format.
 :::
+
+---
+
+You can transform a `VideoSample` to resize, rotate, and/or crop it, producing a new `VideoSample`:
+```ts
+const transformed = await videoSample.transform({
+	width: 640,
+	height: 360,
+	fit: 'cover',
+	rotate: 90,
+	crop: { left: 0, top: 0, width: 1920, height: 1000 },
+	alpha: 'discard',
+});
+```
+
+In browser environments, the transform is performed using a canvas. In non-browser environments without `OffscreenCanvas` or `HTMLCanvasElement`, this method throws unless you register a custom transformer:
+```ts
+import { registerVideoSampleTransformer } from 'mediabunny';
+
+registerVideoSampleTransformer((sample, description) => {
+	// Return a transformed VideoSample, or null to defer to the next transformer.
+});
+```
+
+The [`@mediabunny/server`](./extensions/server) extension registers such a transformer.
 
 ---
 
@@ -449,6 +510,23 @@ The following audio sample formats are supported:
 Planar formats store each channel's data contiguously, while interleaved formats store the channels' data interleaved together:
 
 ![Planar vs. interleaved formats](../assets/planar_interleaved.svg)
+
+#### Custom resource constructor
+
+For advanced use cases (custom decoders, etc.), you can back an `AudioSample` with your own implementation of [`AudioSampleResource`](../api/AudioSampleResource):
+
+```ts
+import { AudioSample, AudioSampleResource } from 'mediabunny';
+
+class MyResource extends AudioSampleResource {
+	// Implement getFormat(), getSampleRate(), getNumberOfFrames(),
+	// getNumberOfChannels(), getTimestamp(), getDataPlane(), and close().
+}
+
+const sample = new AudioSample(new MyResource());
+```
+
+This allows you to back an `AudioSample` with your own data without having to copy it.
 
 ### Inspecting audio samples
 

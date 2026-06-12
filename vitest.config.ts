@@ -6,7 +6,16 @@ import path from 'node:path';
 export default defineConfig({
 	resolve: {
 		alias: {
-			mediabunny: path.resolve(__dirname, './src/index.ts'),
+			'mediabunny': path.resolve(__dirname, './src/index.ts'),
+			'@mediabunny/ac3': path.resolve(__dirname, './packages/ac3/dist/bundles/mediabunny-ac3.mjs'),
+			'@mediabunny/aac-encoder':
+				path.resolve(__dirname, './packages/aac-encoder/dist/bundles/mediabunny-aac-encoder.mjs'),
+			'@mediabunny/flac-encoder':
+				path.resolve(__dirname, './packages/flac-encoder/dist/bundles/mediabunny-flac-encoder.mjs'),
+			'@mediabunny/mp3-encoder':
+				path.resolve(__dirname, './packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.mjs'),
+			'@mediabunny/server':
+				path.resolve(__dirname, './packages/server/src/index.ts'),
 		},
 	},
 	test: {

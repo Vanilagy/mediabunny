@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -9,13 +9,13 @@
 import { AudioCodec } from '../codec';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
-import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
+import { InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
 import { assert, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readAscii, readBytes, Reader, readU16, readU32, readU64 } from '../reader';
-import { parseId3V2Tag, readId3V2Header } from '../id3';
+import { ID3_V2_HEADER_SIZE, parseId3V2Tag, readId3V2Header } from '../id3';
 
 export enum WaveFormat {
 	PCM = 0x0001,
@@ -39,7 +39,7 @@ export class WaveDemuxer extends Demuxer {
 		blockSizeInBytes: number;
 	} | null = null;
 
-	tracks: InputAudioTrack[] = [];
+	trackBackings: WaveAudioTrackBacking[] = [];
 	lastKnownPacketIndex = 0;
 	metadataTags: MetadataTags = {};
 
@@ -130,7 +130,7 @@ export class WaveDemuxer extends Demuxer {
 			const blockSize = this.audioInfo.blockSizeInBytes;
 			this.dataSize = Math.floor(this.dataSize / blockSize) * blockSize;
 
-			this.tracks.push(new InputAudioTrack(this.input, new WaveAudioTrackBacking(this)));
+			this.trackBackings.push(new WaveAudioTrackBacking(this));
 		})();
 	}
 
@@ -286,10 +286,15 @@ export class WaveDemuxer extends Demuxer {
 
 		const id3V2Header = readId3V2Header(slice);
 		if (id3V2Header) {
-			// Extract the content portion (skip the 10-byte header)
-			const contentSlice = slice.slice(startPos + 10, id3V2Header.size);
+			// Clamp to the available data in case the ID3 header claims more than the WAV chunk provides
+			// https://github.com/Vanilagy/mediabunny/issues/300
+			const availableSize = size - ID3_V2_HEADER_SIZE;
+			id3V2Header.size = Math.min(id3V2Header.size, availableSize);
 
-			parseId3V2Tag(contentSlice, id3V2Header, this.metadataTags);
+			if (id3V2Header.size > 0) {
+				const contentSlice = slice.slice(startPos + ID3_V2_HEADER_SIZE, id3V2Header.size);
+				parseId3V2Tag(contentSlice, id3V2Header, this.metadataTags);
+			}
 		}
 	}
 
@@ -327,18 +332,9 @@ export class WaveDemuxer extends Demuxer {
 		return 'audio/wav';
 	}
 
-	async computeDuration() {
+	async getTrackBackings() {
 		await this.readMetadata();
-
-		const track = this.tracks[0];
-		assert(track);
-
-		return track.computeDuration();
-	}
-
-	async getTracks() {
-		await this.readMetadata();
-		return this.tracks;
+		return this.trackBackings;
 	}
 
 	async getMetadataTags() {
@@ -352,7 +348,15 @@ const PACKET_SIZE_IN_FRAMES = 2048;
 class WaveAudioTrackBacking implements InputAudioTrackBacking {
 	constructor(public demuxer: WaveDemuxer) {}
 
+	getType() {
+		return 'audio' as const;
+	}
+
 	getId() {
+		return 1;
+	}
+
+	getNumber() {
 		return 1;
 	}
 
@@ -379,11 +383,6 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		};
 	}
 
-	async computeDuration() {
-		const lastPacket = await this.getPacket(Infinity, { metadataOnly: true });
-		return (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
-	}
-
 	getNumberOfChannels() {
 		assert(this.demuxer.audioInfo);
 		return this.demuxer.audioInfo.numberOfChannels;
@@ -397,6 +396,32 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 	getTimeResolution() {
 		assert(this.demuxer.audioInfo);
 		return this.demuxer.audioInfo.sampleRate;
+	}
+
+	isRelativeToUnixEpoch() {
+		return false;
+	}
+
+	getPairingMask() {
+		return 1n;
+	}
+
+	getBitrate() {
+		return null;
+	}
+
+	getAverageBitrate() {
+		return null;
+	}
+
+	async getDurationFromMetadata() {
+		assert(this.demuxer.dataSize !== -1);
+
+		return this.demuxer.dataSize / this.demuxer.audioInfo!.blockSizeInBytes / this.demuxer.audioInfo!.sampleRate;
+	}
+
+	async getLiveRefreshInterval() {
+		return null;
 	}
 
 	getName() {
@@ -413,14 +438,12 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		};
 	}
 
-	async getFirstTimestamp() {
-		return 0;
-	}
-
 	private async getPacketAtIndex(
 		packetIndex: number,
 		options: PacketRetrievalOptions,
 	): Promise<EncodedPacket | null> {
+		assert(packetIndex >= 0);
+
 		assert(this.demuxer.audioInfo);
 		const startOffset = packetIndex * PACKET_SIZE_IN_FRAMES * this.demuxer.audioInfo.blockSizeInBytes;
 		if (startOffset >= this.demuxer.dataSize) {
@@ -461,7 +484,7 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 
 		this.demuxer.lastKnownPacketIndex = Math.max(
 			packetIndex,
-			timestamp,
+			this.demuxer.lastKnownPacketIndex,
 		);
 
 		return new EncodedPacket(
@@ -485,6 +508,9 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 			timestamp * this.demuxer.audioInfo.sampleRate / PACKET_SIZE_IN_FRAMES,
 			(this.demuxer.dataSize - 1) / (PACKET_SIZE_IN_FRAMES * this.demuxer.audioInfo.blockSizeInBytes),
 		));
+		if (packetIndex < 0) {
+			return null;
+		}
 
 		const packet = await this.getPacketAtIndex(packetIndex, options);
 		if (packet) {

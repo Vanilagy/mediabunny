@@ -1,6 +1,7 @@
 {
     "heading": "Mediabunny API reference",
     "intro": "Here you can find detailed documentation for all classes, functions, constants and types exposed by Mediabunny's public API.",
+	"description": "Detailed documentation for all classes, functions, constants and types exposed by Mediabunny's public API.",
 
     "Samples": "Raw, unencoded chunks of media data, such as video frames or sections of audio.",
     "Packets": "Chunks of encoded media data.",
@@ -16,8 +17,13 @@
 	"Metadata tags": "Descriptive metadata tags attached to media files.",
     "Codecs": "Codecs understood by Mediabunny.",
     "Encoding": "Encoder configuration and encodability checks.",
+	"Decoding": "Decoder configuration and decodability checks.",
     "Custom coders": "API for adding custom encoders and decoders.",
     "Miscellaneous": "Whatever's left.",
 
-    "@mediabunny/mp3-encoder": "Adds MP3 encoder support to Mediabunny."
+	"@mediabunny/server": "Adds full video/audio decoder and encoder support to Mediabunny running in server-side environments such as Node, Bun, or Deno.",
+    "@mediabunny/mp3-encoder": "Adds MP3 encoder support to Mediabunny.",
+    "@mediabunny/ac3": "Adds AC-3/E-AC-3 decoder and encoder support to Mediabunny.",
+    "@mediabunny/aac-encoder": "Polyfills AAC encoder support to Mediabunny.",
+    "@mediabunny/flac-encoder": "Adds FLAC encoder support to Mediabunny."
 }

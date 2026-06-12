@@ -1,3 +1,7 @@
+---
+description: Media sinks enable different ways to extract video and audio data from files, from built-in decoding to manual per-packet control.
+---
+
 # Media sinks
 
 ## Introduction
@@ -72,6 +76,25 @@ Packets may appear out-of-order in the file, meaning the order in which they are
 - **Presentation order:** The order in which the data is to be presented; sorted by timestamp.
 - **Decode order:** The order in which packets must be decoded; not always sorted by timestamp.
 
+### Live tracks
+
+Some tracks (like in HLS) may be *live*, meaning new media data is still being produced. Check it like this:
+```ts
+await track.isLive();
+```
+
+Mediabunny's mental model for live tracks is simple: it treats them like any other track, just one where the media data at the end is not available yet.
+
+This means that any reading operation that attempts to read media data from the "unavailable" section at the end will wait until the media data becomes available or the live stream ends. Mediabunny calls this the "live wait".
+
+Sometimes, you may want to *skip* the live wait and pretend like the media data ends at the currently-known latest point. For this, you can pass the `skipLiveWait: true` option to all media sinks. For example:
+```ts
+import { EncodedPacketSink } from 'mediabunny';
+
+const packetSink = new EncodedPacketSink(track);
+const lastPacket = await packetSink.getPacket(Infinity, { skipLiveWait: true });
+```
+
 ## General sinks
 
 There is one media sink which can be used with any `InputTrack`:
@@ -97,9 +120,13 @@ await sink.getKeyPacket(5); // => EncodedPacket | null
 
 When retrieving a packet using a timestamp, the last packet (in [presentation order](#decode-vs-presentation-order)) with a timestamp less than or equal to the search timestamp will be returned. The methods return `null` if there exists no such packet.
 
-There is a special method for retrieving the first packet (in [decode order](#decode-vs-presentation-order)):
+There are special methods for retrieving the first packet (in [decode order](#decode-vs-presentation-order)):
 ```ts
 await sink.getFirstPacket(); // => EncodedPacket | null
+
+// The first packet is typically a key frame, but this is not required.
+// This method returns the first key frame:
+await sink.getFirstKeyPacket(); // => EncodedPacket | null
 ```
 The last packet (in [presentation order](#decode-vs-presentation-order)) can be retrieved like so:
 ```ts
@@ -350,7 +377,7 @@ type CanvasSinkOptions = {
 - `rotation`\
 	The clockwise rotation by which to rotate the raw video frame. Defaults to the rotation set in the file metadata. Rotation is applied before cropping and resizing.
 - `crop`\
-	Specifies the rectangular region of the input video to crop to. The crop region will automatically be clamped to the dimensions of the input video track. Cropping is performed after rotation but before resizing.
+	Specifies the rectangular region of the input video to crop to. The crop region will automatically be clamped to the dimensions of the input video track. Cropping is performed after rotation but before resizing. The crop region is in the _display pixel space_ of the underlying video data.
 - `poolSize`\
 	See [Canvas pool](#canvas-pool).
 
@@ -374,7 +401,7 @@ new CanvasSink(videoTrack, {
 	fit: 'cover',
 });
 
-// This sink yields canvases with the unaltered coded dimensions of the track,
+// This sink yields canvases with the unrotated dimensions of the track,
 // and without applying any rotation.
 new CanvasSink(videoTrack, {
 	rotation: 0,

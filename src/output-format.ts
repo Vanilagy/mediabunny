@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -25,8 +25,13 @@ import { MediaSource } from './media-source';
 import { Mp3Muxer } from './mp3/mp3-muxer';
 import { Muxer } from './muxer';
 import { OggMuxer } from './ogg/ogg-muxer';
-import { Output, TrackType } from './output';
+import { Output, OutputTrack, TrackType } from './output';
+import { MpegTsMuxer } from './mpeg-ts/mpeg-ts-muxer';
 import { WaveMuxer } from './wave/wave-muxer';
+import { HlsMuxer } from './hls/hls-muxer';
+import { HLS_MIME_TYPE } from './hls/hls-misc';
+import { MaybePromise, FilePath, toArray } from './misc';
+import { Target } from './target';
 
 /**
  * Specifies an inclusive range of integers.
@@ -73,6 +78,13 @@ export abstract class OutputFormat {
 	abstract getSupportedTrackCounts(): TrackCountLimits;
 	/** Whether this output format supports video rotation metadata. */
 	abstract get supportsVideoRotationMetadata(): boolean;
+	/**
+	 * Whether this output format's tracks store timestamped media data. When `true`, the timestamps of added packets
+	 * will be respected, allowing things like gaps in media data or non-zero start times. When `false`, the format's
+	 * media data implicitly starts at zero and follows an implicit sequential timing from there, using the intrinsic
+	 * durations of the media data.
+	 */
+	abstract get supportsTimestampedMediaData(): boolean;
 
 	/** Returns a list of video codecs that this output format can contain. */
 	getSupportedVideoCodecs() {
@@ -243,15 +255,21 @@ export abstract class IsobmffOutputFormat extends OutputFormat {
 	}
 
 	getSupportedTrackCounts(): TrackCountLimits {
+		const max = 2 ** 32 - 1; // Have fun reaching this one
+
 		return {
-			video: { min: 0, max: Infinity },
-			audio: { min: 0, max: Infinity },
-			subtitle: { min: 0, max: Infinity },
-			total: { min: 1, max: 2 ** 32 - 1 }, // Have fun reaching this one
+			video: { min: 0, max },
+			audio: { min: 0, max },
+			subtitle: { min: 0, max },
+			total: { min: 1, max },
 		};
 	}
 
 	get supportsVideoRotationMetadata() {
+		return true;
+	}
+
+	get supportsTimestampedMediaData() {
 		return true;
 	}
 
@@ -289,7 +307,8 @@ export class Mp4OutputFormat extends IsobmffOutputFormat {
 		return [
 			...VIDEO_CODECS,
 			...NON_PCM_AUDIO_CODECS,
-			// These are supported via ISO/IEC 23003-5
+
+			// These are supported via ISO/IEC 23003-5:
 			'pcm-s16',
 			'pcm-s16be',
 			'pcm-s24',
@@ -300,6 +319,7 @@ export class Mp4OutputFormat extends IsobmffOutputFormat {
 			'pcm-f32be',
 			'pcm-f64',
 			'pcm-f64be',
+
 			...SUBTITLE_CODECS,
 		];
 	}
@@ -311,6 +331,66 @@ export class Mp4OutputFormat extends IsobmffOutputFormat {
 		}
 
 		return '';
+	}
+}
+
+/**
+ * CMAF-specific output options.
+ * @group Output formats
+ * @public
+ */
+export type CmafOutputFormatOptions = Omit<IsobmffOutputFormatOptions, 'fastStart'> & {
+	/**
+	 * Controls the minimum duration of each fragment, in seconds. New fragments will only be created when the current
+	 * fragment is longer than this value. Defaults to `Infinity`, meaning the file will contain only one fragment.
+	 */
+	minimumFragmentDuration?: number;
+};
+
+/**
+ * Creates a single Common Media Application Format (CMAF) segment. An init segment will be written to the
+ * {@link Target} specified in {@link OutputOptions.initTarget}. Supports most codecs.
+ * @group Output formats
+ * @public
+ */
+export class CmafOutputFormat extends IsobmffOutputFormat {
+	/** Creates a new {@link CmafOutputFormat} configured with the specified `options`. */
+	constructor(options?: CmafOutputFormatOptions) {
+		super(options);
+	}
+
+	/** @internal */
+	get _name() {
+		return 'CMAF';
+	}
+
+	get fileExtension() {
+		return '.m4s';
+	}
+
+	get mimeType() {
+		return 'video/mp4';
+	}
+
+	getSupportedCodecs(): MediaCodec[] {
+		return [
+			...VIDEO_CODECS,
+			...NON_PCM_AUDIO_CODECS,
+
+			// These are supported via ISO/IEC 23003-5:
+			'pcm-s16',
+			'pcm-s16be',
+			'pcm-s24',
+			'pcm-s24be',
+			'pcm-s32',
+			'pcm-s32be',
+			'pcm-f32',
+			'pcm-f32be',
+			'pcm-f64',
+			'pcm-f64be',
+
+			...SUBTITLE_CODECS,
+		];
 	}
 }
 
@@ -454,11 +534,13 @@ export class MkvOutputFormat extends OutputFormat {
 	}
 
 	getSupportedTrackCounts(): TrackCountLimits {
+		const max = 127;
+
 		return {
-			video: { min: 0, max: Infinity },
-			audio: { min: 0, max: Infinity },
-			subtitle: { min: 0, max: Infinity },
-			total: { min: 1, max: 127 },
+			video: { min: 0, max },
+			audio: { min: 0, max },
+			subtitle: { min: 0, max },
+			total: { min: 1, max },
 		};
 	}
 
@@ -482,6 +564,10 @@ export class MkvOutputFormat extends OutputFormat {
 	get supportsVideoRotationMetadata() {
 		// While it technically does support it with ProjectionPoseRoll, many players appear to ignore this value
 		return false;
+	}
+
+	get supportsTimestampedMediaData() {
+		return true;
 	}
 }
 
@@ -619,6 +705,10 @@ export class Mp3OutputFormat extends OutputFormat {
 	get supportsVideoRotationMetadata() {
 		return false;
 	}
+
+	get supportsTimestampedMediaData() {
+		return false;
+	}
 }
 
 /**
@@ -717,6 +807,10 @@ export class WavOutputFormat extends OutputFormat {
 	get supportsVideoRotationMetadata() {
 		return false;
 	}
+
+	get supportsTimestampedMediaData() {
+		return false;
+	}
 }
 
 /**
@@ -725,6 +819,12 @@ export class WavOutputFormat extends OutputFormat {
  * @public
  */
 export type OggOutputFormatOptions = {
+	/**
+	 * The maximum duration of each Ogg page, in seconds. This is useful for streaming contexts where more frequent page
+	 * output is desired. By default, pages are only flushed when they exceed a certain size.
+	 */
+	maximumPageDuration?: number;
+
 	/**
 	 * Will be called for each Ogg page that is written.
 	 *
@@ -749,6 +849,12 @@ export class OggOutputFormat extends OutputFormat {
 		if (!options || typeof options !== 'object') {
 			throw new TypeError('options must be an object.');
 		}
+		if (
+			options.maximumPageDuration !== undefined
+			&& (!Number.isFinite(options.maximumPageDuration) || options.maximumPageDuration <= 0)
+		) {
+			throw new TypeError('options.maximumPageDuration, when provided, must be a positive number.');
+		}
 		if (options.onPage !== undefined && typeof options.onPage !== 'function') {
 			throw new TypeError('options.onPage, when provided, must be a function.');
 		}
@@ -769,11 +875,13 @@ export class OggOutputFormat extends OutputFormat {
 	}
 
 	getSupportedTrackCounts(): TrackCountLimits {
+		const max = 2 ** 32; // Have fun reaching this one
+
 		return {
 			video: { min: 0, max: 0 },
-			audio: { min: 0, max: Infinity },
+			audio: { min: 0, max },
 			subtitle: { min: 0, max: 0 },
-			total: { min: 1, max: 2 ** 32 },
+			total: { min: 1, max },
 		};
 	}
 
@@ -792,6 +900,10 @@ export class OggOutputFormat extends OutputFormat {
 	}
 
 	get supportsVideoRotationMetadata() {
+		return false;
+	}
+
+	get supportsTimestampedMediaData() {
 		return false;
 	}
 }
@@ -868,6 +980,10 @@ export class AdtsOutputFormat extends OutputFormat {
 	get supportsVideoRotationMetadata() {
 		return false;
 	}
+
+	get supportsTimestampedMediaData() {
+		return false;
+	}
 }
 
 /**
@@ -876,6 +992,13 @@ export class AdtsOutputFormat extends OutputFormat {
  * @public
  */
 export type FlacOutputFormatOptions = {
+	/**
+	 * Configures the output to only append new data at the end, useful for live-streaming the file as it's being
+	 * created. When enabled, the STREAMINFO block will not be finalized with accurate min/max block sizes, frame sizes,
+	 * or total sample count, so don't use this option when you want to write out a clean file for later use.
+	 */
+	appendOnly?: boolean;
+
 	/**
 	 * Will be called for each FLAC frame that is written.
 	 *
@@ -898,6 +1021,9 @@ export class FlacOutputFormat extends OutputFormat {
 	constructor(options: FlacOutputFormatOptions = {}) {
 		if (!options || typeof options !== 'object') {
 			throw new TypeError('options must be an object.');
+		}
+		if (options.appendOnly !== undefined && typeof options.appendOnly !== 'boolean') {
+			throw new TypeError('options.appendOnly, when provided, must be a boolean.');
 		}
 
 		super();
@@ -938,5 +1064,362 @@ export class FlacOutputFormat extends OutputFormat {
 
 	get supportsVideoRotationMetadata() {
 		return false;
+	}
+
+	get supportsTimestampedMediaData() {
+		return false;
+	}
+}
+
+/**
+ * MPEG-TS-specific output options.
+ * @group Output formats
+ * @public
+ */
+export type MpegTsOutputFormatOptions = {
+	/**
+	 * Will be called for each 188-byte Transport Stream packet that is written.
+	 *
+	 * @param data - The raw bytes.
+	 * @param position - The byte offset of the data in the file.
+	 */
+	onPacket?: (data: Uint8Array, position: number) => unknown;
+};
+
+/**
+ * MPEG Transport Stream file format.
+ * @group Output formats
+ * @public
+ */
+export class MpegTsOutputFormat extends OutputFormat {
+	/** @internal */
+	_options: MpegTsOutputFormatOptions;
+
+	/** Creates a new {@link MpegTsOutputFormat} configured with the specified `options`. */
+	constructor(options: MpegTsOutputFormatOptions = {}) {
+		if (!options || typeof options !== 'object') {
+			throw new TypeError('options must be an object.');
+		}
+		if (options.onPacket !== undefined && typeof options.onPacket !== 'function') {
+			throw new TypeError('options.onPacket, when provided, must be a function.');
+		}
+
+		super();
+
+		this._options = options;
+	}
+
+	/** @internal */
+	_createMuxer(output: Output) {
+		return new MpegTsMuxer(output, this);
+	}
+
+	/** @internal */
+	get _name() {
+		return 'MPEG-TS';
+	}
+
+	getSupportedTrackCounts(): TrackCountLimits {
+		const maxVideo = 16; // Stream IDs 0xE0-0xEF
+		const maxAudio = 32;
+		const maxTotal = maxVideo + maxAudio;
+
+		return {
+			video: { min: 0, max: maxVideo },
+			audio: { min: 0, max: maxAudio },
+			subtitle: { min: 0, max: 0 },
+			total: { min: 1, max: maxTotal },
+		};
+	}
+
+	get fileExtension() {
+		return '.ts';
+	}
+
+	get mimeType() {
+		return 'video/MP2T';
+	}
+
+	getSupportedCodecs(): MediaCodec[] {
+		return [
+			...VIDEO_CODECS.filter(codec => ['avc', 'hevc'].includes(codec)),
+			...AUDIO_CODECS.filter(codec => ['aac', 'mp3', 'ac3', 'eac3'].includes(codec)),
+		];
+	}
+
+	get supportsVideoRotationMetadata() {
+		return false;
+	}
+
+	get supportsTimestampedMediaData() {
+		return true;
+	}
+}
+
+/**
+ * Info about an HLS media playlist.
+ * @group Output formats
+ * @public
+ */
+export type HlsOutputPlaylistInfo = {
+	/** The 1-based index of the media playlist in the master playlist. */
+	n: number;
+	/** The output tracks contained in this playlist. */
+	tracks: OutputTrack[];
+	/** The format of the media segments in this playlist. */
+	segmentFormat: OutputFormat;
+};
+
+/**
+ * Info about an HLS media segment.
+ * @group Output formats
+ * @public
+ */
+export type HlsOutputSegmentInfo = {
+	/** The 1-based index of the segment in the containing media playlist. */
+	n: number;
+	/** If the segment is a single file, meaning it is a single segment file that covers the entire playlist. */
+	isSingleFile: boolean;
+	/** The format of the media segment. */
+	format: OutputFormat;
+	/** The media playlist to which this segment belongs. */
+	playlist: HlsOutputPlaylistInfo;
+};
+
+/**
+ * HLS-specific output options.
+ * @group Output formats
+ * @public
+ */
+export type HlsOutputFormatOptions = {
+	/**
+	 * Specifies the file format of each media segment. Not all formats are supported by all players; prefer sticking
+	 * to the most commonly used ones: {@link MpegTsOutputFormat}, {@link CmafOutputFormat}, {@link AdtsOutputFormat},
+	 * and {@link Mp3OutputFormat}.
+	 *
+	 * When an array of formats is specified, for each playlist, the first format that can contain all of the playlist's
+	 * tracks is chosen. This allows you to, for example, package audio into .aac files and video into .ts files.
+	 */
+	segmentFormat: OutputFormat | OutputFormat[];
+	/**
+	 * Specifies the target (max) duration in seconds for each media segment, defaulting to 2 seconds.
+	 *
+	 * Mediabunny will try not to emit media segments longer than the target duration, but it is forced to if key frames
+	 * are provided with a longer period than the target duration. Therefore, make sure to encode a key frame at least
+	 * every `targetDuration` seconds to guarantee segment length, controllable via
+	 * {@link VideoEncodingConfig.keyFrameInterval}.
+	 */
+	targetDuration?: number;
+	/**
+	 * Whether to bundle all media segments for a playlist into a single file. Individual segments are then extracted
+	 * via range requests.
+	 */
+	singleFilePerPlaylist?: boolean;
+	/**
+	 * If `true`, the muxer will be in "live mode", continuously emitting updated playlists as new segments are created.
+	 * The master playlist will be emitted as soon as all playlists have been emitted at least once, and will continue
+	 * to be emitted each time a segment is finalized to further refine the accuracy of the `BANDWIDTH` attribute.
+	 *
+	 * When `false` (the default), all playlists will only be emitted once, upon output finalization.
+	 */
+	live?: boolean;
+	/**
+	 * When in live mode, this controls the maximum number of segments contained in each playlist. Defaults to
+	 * `Infinity`, meaning playlists continually grow in size.
+	 */
+	maxLiveSegmentCount?: number;
+	/**
+	 * Returns the file path for a given media playlist. If the returned path is relative, it is relative to the root
+	 * path.
+	 *
+	 * Defaults to `'playlist-{n}.m3u8'`, where `n` is the 1-based index of the media playlist in the master playlist.
+	 */
+	getPlaylistPath?: (info: HlsOutputPlaylistInfo) => MaybePromise<FilePath>;
+	/**
+	 * Returns the file path for a given media segment. If the returned path is relative, it is relative to the path
+	 * of the containing playlist.
+	 *
+	 * Defaults to `'segment-{n}-{k}{ext}'`, where `n` is the 1-based index of the containing media playlist in the
+	 * master playlist, `k` is the 1-based index of the segment in its playlist, and `ext` is the file extension of the
+	 * segment format (including the leading dot).
+	 *
+	 * If {@link HlsOutputFormatOptions.singleFilePerPlaylist} is true, it defaults to `'segments-{n}{ext}'` instead.
+	 */
+	getSegmentPath?: (info: HlsOutputSegmentInfo) => MaybePromise<FilePath>;
+	/**
+	 * Returns the file path for a given media init segment. If the returned path is relative, it is relative to the
+	 * path of the containing playlist.
+	 *
+	 * Only necessary for segment formats that require an init file, such as {@link CmafOutputFormat}.
+	 *
+	 * Defaults to `'init-{n}{ext}'`, where `n` is the 1-based index of the containing media playlist in the master
+	 * playlist and `ext` is the file extension of the segment format (including the leading dot).
+	 */
+	getInitPath?: (info: HlsOutputPlaylistInfo) => MaybePromise<FilePath>;
+
+	/** Called whenever the master playlist is written. */
+	onMaster?: (content: string) => unknown;
+	/** Called whenever a media playlist is written. */
+	onPlaylist?: (content: string, info: HlsOutputPlaylistInfo) => unknown;
+	/**
+	 * Called whenever a media segment has been fully written. In single-file mode, this function will only be called
+	 * once when the playlist is finalized.
+	 */
+	onSegment?: (target: Target, info: HlsOutputSegmentInfo) => unknown;
+	/**
+	 * Called when a media playlist is initialized, before any segments have been written. In single-file mode, this
+	 * function is never called.
+	 */
+	onInit?: (target: Target, info: HlsOutputPlaylistInfo) => unknown;
+	/**
+	 * Called when a media segment is removed from the start of a media playlist due to
+	 * {@link HlsOutputFormatOptions.maxLiveSegmentCount}. Will not be called when
+	 * {@link HlsOutputFormatOptions.singleFilePerPlaylist} is `true`.
+	 */
+	onSegmentPopped?: (path: string, info: HlsOutputSegmentInfo) => unknown;
+};
+
+/**
+ * HTTP Live Streaming (HLS) output format. HLS media is represented by a set of .m3u8 playlist files and media segment
+ * files, meaning this format writes out multiple files, requiring the use of a _pathed Output_
+ * ({@link OutputOptions.target} must be a {@link PathedTarget}).
+ *
+ * This output format creates the following files:
+ * - A master playlist .m3u8 file, containing the list of available playlists. A master playlist is always emitted,
+ * written to the root path.
+ * - One .m3u8 file for each playlist, each containing a list of media segments.
+ * - Many media segments, containing the actual media data.
+ *
+ * To emit media playlists that use the `#EXT-X-PROGRAM-DATE-TIME` tag to map segment timestamps to real-world time,
+ * set {@link BaseTrackMetadata.isRelativeToUnixEpoch} to `true` for all tracks.
+ *
+ * @group Output formats
+ * @public
+ */
+export class HlsOutputFormat extends OutputFormat {
+	/** @internal */
+	_options: HlsOutputFormatOptions;
+
+	/** Creates a new {@link HlsOutputFormat} configured with the specified `options`. */
+	constructor(options: HlsOutputFormatOptions) {
+		if (!options || typeof options !== 'object') {
+			throw new TypeError('options must be an object.');
+		}
+		if (
+			!(options.segmentFormat instanceof OutputFormat)
+			&& (
+				!Array.isArray(options.segmentFormat)
+				|| options.segmentFormat.length === 0
+				|| !options.segmentFormat.every(format => format instanceof OutputFormat)
+			)
+		) {
+			throw new TypeError(
+				'options.segmentFormat must be an OutputFormat or a non-empty array of OutputFormat instances.',
+			);
+		}
+		if (
+			options.targetDuration !== undefined
+			&& (typeof options.targetDuration !== 'number' || options.targetDuration <= 0)
+		) {
+			throw new TypeError('options.targetDuration, when provided, must be a positive number.');
+		}
+		if (options.singleFilePerPlaylist !== undefined && typeof options.singleFilePerPlaylist !== 'boolean') {
+			throw new TypeError('options.singleFilePerPlaylist, when provided, must be a boolean.');
+		}
+		if (options.live !== undefined && typeof options.live !== 'boolean') {
+			throw new TypeError('options.live, when provided, must be a boolean.');
+		}
+		if (
+			options.maxLiveSegmentCount !== undefined
+			&& (typeof options.maxLiveSegmentCount !== 'number' || options.maxLiveSegmentCount < 1
+				|| (Number.isFinite(options.maxLiveSegmentCount) && !Number.isInteger(options.maxLiveSegmentCount)))
+		) {
+			throw new TypeError('options.maxLiveSegmentCount, when provided, must be a positive integer or Infinity.');
+		}
+		if (options.getPlaylistPath !== undefined && typeof options.getPlaylistPath !== 'function') {
+			throw new TypeError('options.getPlaylistPath, when provided, must be a function.');
+		}
+		if (options.getSegmentPath !== undefined && typeof options.getSegmentPath !== 'function') {
+			throw new TypeError('options.getSegmentPath, when provided, must be a function.');
+		}
+		if (options.getInitPath !== undefined && typeof options.getInitPath !== 'function') {
+			throw new TypeError('options.getInitPath, when provided, must be a function.');
+		}
+		if (options.onMaster !== undefined && typeof options.onMaster !== 'function') {
+			throw new TypeError('options.onMaster, when provided, must be a function.');
+		}
+		if (options.onPlaylist !== undefined && typeof options.onPlaylist !== 'function') {
+			throw new TypeError('options.onPlaylist, when provided, must be a function.');
+		}
+		if (options.onSegment !== undefined && typeof options.onSegment !== 'function') {
+			throw new TypeError('options.onSegment, when provided, must be a function.');
+		}
+		if (options.onInit !== undefined && typeof options.onInit !== 'function') {
+			throw new TypeError('options.onInit, when provided, must be a function.');
+		}
+		if (options.onSegmentPopped !== undefined && typeof options.onSegmentPopped !== 'function') {
+			throw new TypeError('options.onSegmentPopped, when provided, must be a function.');
+		}
+
+		super();
+
+		this._options = options;
+	}
+
+	/** @internal */
+	_createMuxer(output: Output): Muxer {
+		return new HlsMuxer(output, this);
+	}
+
+	/** @internal */
+	get _name() {
+		return 'HTTP Live Streaming (HLS)';
+	}
+
+	get fileExtension() {
+		return '.m3u8';
+	}
+
+	get mimeType() {
+		return HLS_MIME_TYPE;
+	}
+
+	getSupportedCodecs(): MediaCodec[] {
+		const uniqueCodecs = new Set(toArray(this._options.segmentFormat).flatMap(x => x.getSupportedCodecs()));
+		return [...uniqueCodecs];
+	}
+
+	getSupportedTrackCounts(): TrackCountLimits {
+		let supportsVideo = false;
+		let supportsAudio = false;
+		let supportsSubtitle = false;
+
+		for (const format of toArray(this._options.segmentFormat)) {
+			const trackCounts = format.getSupportedTrackCounts();
+			supportsVideo ||= trackCounts.video.max > 0;
+			supportsAudio ||= trackCounts.audio.max > 0;
+			supportsSubtitle ||= trackCounts.subtitle.max > 0;
+		}
+
+		return {
+			video: { min: 0, max: supportsVideo ? Infinity : 0 },
+			audio: { min: 0, max: supportsAudio ? Infinity : 0 },
+			subtitle: { min: 0, max: 0 }, // Currently disabled
+			total: { min: 1, max: Infinity },
+		};
+	}
+
+	get supportsVideoRotationMetadata(): boolean {
+		return toArray(this._options.segmentFormat).some(format => format.supportsVideoRotationMetadata);
+	}
+
+	get supportsTimestampedMediaData(): boolean {
+		return true; // I guess??
+	}
+
+	/** @internal */
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	override _codecUnsupportedHint(codec: MediaCodec): string {
+		return ` Using different segment formats may grant support for this codec.`;
 	}
 }

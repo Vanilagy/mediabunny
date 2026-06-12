@@ -1,0 +1,129 @@
+import { expect, test } from 'vitest';
+import { Input } from '../../src/input.js';
+import { BufferSource } from '../../src/source.js';
+import { ALL_FORMATS } from '../../src/input-format.js';
+import { Output } from '../../src/output.js';
+import { BufferTarget } from '../../src/target.js';
+import { canEncode } from '../../src/encode.js';
+import { AudioSampleSource } from '../../src/media-source.js';
+import { EncodedPacketSink } from '../../src/media-sink.js';
+import { Mp3OutputFormat, Mp4OutputFormat } from '../../src/output-format.js';
+import { AudioSample } from '../../src/sample.js';
+import { registerMp3Encoder } from '@mediabunny/mp3-encoder';
+import { assert } from '../../src/misc.js';
+
+const createSineWave = (sampleRate: number, channels: number, durationSeconds: number) => {
+	const totalFrames = sampleRate * durationSeconds;
+	const data = new Float32Array(totalFrames * channels);
+
+	for (let i = 0; i < totalFrames; i++) {
+		const value = Math.sin(2 * Math.PI * 440 * i / sampleRate);
+		for (let ch = 0; ch < channels; ch++) {
+			data[i * channels + ch] = value;
+		}
+	}
+
+	return data;
+};
+
+test('Custom coder registration', async () => {
+	expect(await canEncode('mp3')).toBe(false);
+
+	registerMp3Encoder();
+
+	expect(await canEncode('mp3')).toBe(true);
+});
+
+test('MP3 encoding', async () => {
+	registerMp3Encoder();
+
+	const sampleRate = 44100;
+	const channels = 2;
+	const durationSeconds = 2;
+	const data = createSineWave(sampleRate, channels, durationSeconds);
+
+	const output = new Output({
+		format: new Mp3OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const audioSource = new AudioSampleSource({ codec: 'mp3', bitrate: 128_000 });
+	output.addAudioTrack(audioSource);
+
+	await output.start();
+	const sample = new AudioSample({
+		data,
+		format: 'f32',
+		numberOfChannels: channels,
+		sampleRate,
+		timestamp: 0,
+	});
+	await audioSource.add(sample);
+	sample.close();
+	audioSource.close();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const track = (await input.getPrimaryAudioTrack())!;
+	expect(await track.getCodec()).toBe('mp3');
+	expect(await track.getSampleRate()).toBe(sampleRate);
+	expect(await track.getNumberOfChannels()).toBe(channels);
+
+	const sink = new EncodedPacketSink(track);
+	let packetCount = 0;
+	for await (const packet of sink.packets()) {
+		expect(packet.type).toBe('key');
+		packetCount++;
+	}
+	// MP3 frames are 1152 samples each, so ~77 packets for 2 seconds at 44.1kHz
+	expect(packetCount).toBeGreaterThan(durationSeconds * sampleRate / 1152 - 2);
+
+	expect(await track.computeDuration()).toBeCloseTo(2, 0);
+});
+
+test('MP3 with huge timestamps', async () => {
+	registerMp3Encoder();
+
+	const sampleRate = 44100;
+	const channels = 2;
+	const timestamp = 1e9;
+	const durationSeconds = 2;
+	const data = createSineWave(sampleRate, channels, durationSeconds);
+
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart: 'fragmented' }),
+		target: new BufferTarget(),
+	});
+
+	const audioSource = new AudioSampleSource({ codec: 'mp3', bitrate: 128_000 });
+	output.addAudioTrack(audioSource);
+
+	await output.start();
+	const sample = new AudioSample({
+		data,
+		format: 'f32',
+		numberOfChannels: channels,
+		sampleRate,
+		timestamp,
+	});
+	await audioSource.add(sample);
+	sample.close();
+	audioSource.close();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const track = (await input.getPrimaryAudioTrack())!;
+	const sink = new EncodedPacketSink(track);
+	const firstPacket = await sink.getFirstPacket();
+	assert(firstPacket);
+
+	expect(firstPacket.timestamp).toBe(timestamp);
+});

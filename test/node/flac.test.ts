@@ -21,7 +21,7 @@ test('can loop over all samples', async () => {
 
 	const track = await input.getPrimaryAudioTrack();
 	assert(track);
-	expect(await track.computeDuration()).toEqual(19.71428571428571);
+	expect(await track.computeDuration()).toEqual(19.714285714285715);
 	expect(await track.getDecoderConfig()).toEqual({
 		codec: 'flac',
 		numberOfChannels: 2,
@@ -33,7 +33,7 @@ test('can loop over all samples', async () => {
 		]),
 	});
 	expect(await track.getCodecParameterString()).toEqual('flac');
-	expect(track.timeResolution).toEqual(44100);
+	expect(await track.getTimeResolution()).toEqual(44100);
 	expect(await input.getMimeType()).toEqual('audio/flac');
 
 	const sink = new EncodedPacketSink(track);
@@ -179,9 +179,9 @@ test('can re-mux a .flac', async () => {
 
 	const inputTrack = await input.getPrimaryAudioTrack();
 	assert(inputTrack);
-	expect(inputTrack.sampleRate).toBe(outputTrack.sampleRate);
-	expect(inputTrack.numberOfChannels).toBe(outputTrack.numberOfChannels);
-	expect(inputTrack.timeResolution).toBe(outputTrack.timeResolution);
+	expect(await inputTrack.getSampleRate()).toBe(await outputTrack.getSampleRate());
+	expect(await inputTrack.getNumberOfChannels()).toBe(await outputTrack.getNumberOfChannels());
+	expect(await inputTrack.getTimeResolution()).toBe(await outputTrack.getTimeResolution());
 
 	const outputMetadataTags = await outputAsInput.getMetadataTags();
 
@@ -253,4 +253,34 @@ test('can re-mux a .flac', async () => {
 	expect(inputWithoutCrc).toEqual(outputWithoutCrc);
 
 	expect(otherInputDecoderConfig).toEqual(otherOutputDecoderConfig);
+});
+
+test('appendOnly writes correct STREAMINFO header', async () => {
+	const filePath = path.join(__dirname, '..', 'public/sample.flac');
+	using input = new Input({
+		source: new FilePathSource(filePath),
+		formats: ALL_FORMATS,
+	});
+
+	const target = new BufferTarget();
+	const output = new Output({
+		format: new FlacOutputFormat({ appendOnly: true }),
+		target,
+	});
+
+	const conversion = await Conversion.init({ input, output });
+	await conversion.execute();
+
+	assert(target.buffer);
+	const bytes = new Uint8Array(target.buffer);
+
+	// STREAMINFO: min_block=16, max_block=65535, min_frame=0, max_frame=0
+	expect(bytes.slice(8, 18)).toEqual(new Uint8Array([
+		// minimum_block_size=16
+		0x00, 0x10,
+		// maximum_block_size=65535
+		0xFF, 0xFF,
+		// minimum_frame_size=0
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	]));
 });

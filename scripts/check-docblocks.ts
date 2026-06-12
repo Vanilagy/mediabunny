@@ -16,7 +16,6 @@ const checkDocblocks = (filePath: string) => {
 		if (
 			ts.isInterfaceDeclaration(node)
 			|| ts.isClassDeclaration(node)
-			|| ts.isConstructorDeclaration(node)
 			|| ts.isMethodDeclaration(node)
 			|| ts.isGetAccessorDeclaration(node)
 			|| ts.isSetAccessorDeclaration(node)
@@ -61,13 +60,7 @@ const checkDocblocks = (filePath: string) => {
 			let name = 'anonymous';
 			const kind = ts.SyntaxKind[node.kind].replace(/Declaration|Statement/g, '').toLowerCase();
 
-			if (ts.isConstructorDeclaration(node)) {
-				// For constructors, use the parent class name
-				const parent = node.parent;
-				if (ts.isClassDeclaration(parent) && parent.name) {
-					name = parent.name.text;
-				}
-			} else if ('name' in node && node.name) {
+			if ('name' in node && node.name) {
 				if (ts.isIdentifier(node.name)) {
 					name = node.name.text;
 				} else if ('getText' in node.name) {

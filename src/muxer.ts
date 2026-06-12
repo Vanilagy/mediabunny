@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -14,13 +14,6 @@ import { SubtitleCue, SubtitleMetadata } from './subtitles';
 export abstract class Muxer {
 	output: Output;
 	mutex = new AsyncMutex();
-
-	/**
-	 * This field is used to synchronize multiple MediaStreamTracks. They use the same time coordinate system across
-	 * tracks, and to ensure correct audio-video sync, we must use the same offset for all of them. The reason an offset
-	 * is needed at all is because the timestamps typically don't start at zero.
-	 */
-	firstMediaStreamTimestamp: number | null = null;
 
 	constructor(output: Output) {
 		this.output = output;
@@ -46,11 +39,13 @@ export abstract class Muxer {
 
 	private trackTimestampInfo = new WeakMap<OutputTrack, {
 		maxTimestamp: number;
-		maxTimestampBeforeLastKeyPacket: number;
+		maxTimestampBeforeLastKeyPacket: number | null;
 	}>();
 
-	protected validateAndNormalizeTimestamp(track: OutputTrack, timestampInSeconds: number, isKeyPacket: boolean) {
-		timestampInSeconds += track.source._timestampOffset;
+	protected validateTimestamp(track: OutputTrack, timestampInSeconds: number, isKeyPacket: boolean) {
+		if (timestampInSeconds < 0) {
+			throw new Error(`Timestamps must be non-negative (got ${timestampInSeconds}s).`);
+		}
 
 		let timestampInfo = this.trackTimestampInfo.get(track);
 		if (!timestampInfo) {
@@ -60,29 +55,26 @@ export abstract class Muxer {
 
 			timestampInfo = {
 				maxTimestamp: timestampInSeconds,
-				maxTimestampBeforeLastKeyPacket: timestampInSeconds,
+				maxTimestampBeforeLastKeyPacket: null,
 			};
 			this.trackTimestampInfo.set(track, timestampInfo);
+		} else {
+			if (isKeyPacket) {
+				timestampInfo.maxTimestampBeforeLastKeyPacket = timestampInfo.maxTimestamp;
+			}
+
+			if (
+				timestampInfo.maxTimestampBeforeLastKeyPacket !== null
+				&& timestampInSeconds < timestampInfo.maxTimestampBeforeLastKeyPacket
+			) {
+				throw new Error(
+					`Timestamps cannot be smaller than the largest timestamp of the previous GOP (a GOP begins with a`
+					+ ` key packet and ends right before the next key packet). Got ${timestampInSeconds}s, but largest`
+					+ ` timestamp is ${timestampInfo.maxTimestampBeforeLastKeyPacket}s.`,
+				);
+			}
+
+			timestampInfo.maxTimestamp = Math.max(timestampInfo.maxTimestamp, timestampInSeconds);
 		}
-
-		if (timestampInSeconds < 0) {
-			throw new Error(`Timestamps must be non-negative (got ${timestampInSeconds}s).`);
-		}
-
-		if (isKeyPacket) {
-			timestampInfo.maxTimestampBeforeLastKeyPacket = timestampInfo.maxTimestamp;
-		}
-
-		if (timestampInSeconds < timestampInfo.maxTimestampBeforeLastKeyPacket) {
-			throw new Error(
-				`Timestamps cannot be smaller than the largest timestamp of the previous GOP (a GOP begins with a key`
-				+ ` packet and ends right before the next key packet). Got ${timestampInSeconds}s, but largest`
-				+ ` timestamp is ${timestampInfo.maxTimestampBeforeLastKeyPacket}s.`,
-			);
-		}
-
-		timestampInfo.maxTimestamp = Math.max(timestampInfo.maxTimestamp, timestampInSeconds);
-
-		return timestampInSeconds;
 	}
 }

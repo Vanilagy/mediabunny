@@ -1,3 +1,7 @@
+---
+description: Efficiently convert any media file to any format, directly in the browser. Optionally apply trimming, video resizing, rotation, custom overlays, and more.
+---
+
 # Converting media files
 
 The [reading](./reading-media-files) and [writing](./writing-media-files) primitives in Mediabunny provide everything you need to convert media files. However, since this is such a common operation and the details can be tricky, Mediabunny ships with a built-in file conversion abstraction.
@@ -92,13 +96,13 @@ A progress of `1` doesn't indicate the conversion has finished; the conversion i
 Tracking conversion progress can slightly affect performance as it requires knowledge of the input file's total duration. This is usually negligible but should be avoided when using append-only input sources such as [`ReadableStreamSource`](./reading-media-files#readablestreamsource).
 :::
 
-If you want to monitor the output size of the conversion (in bytes), simply use the `onwrite` callback on your `Target`:
+If you want to monitor the output size of the conversion (in bytes), simply use the `write` event on your `Target`:
 ```ts
 let currentFileSize = 0;
 
-output.target.onwrite = (start, end) => {
+const stopListening = output.target.on('write', ({ start, end }) => {
 	currentFileSize = Math.max(currentFileSize, end);
-};
+});
 ```
 
 ### Canceling a conversion
@@ -108,7 +112,7 @@ Sometimes, you may want to cancel an ongoing conversion process. For this, use t
 await conversion.cancel(); // Resolves once the conversion is canceled
 ```
 
-This automatically frees up all resources used by the conversion process.
+This automatically frees up all resources used by the conversion process and will cause any ongoing call to `execute` to throw a `ConversionCanceledError`.
 
 ## Video options
 
@@ -120,11 +124,13 @@ type ConversionVideoOptions = {
 	height?: number;
 	fit?: 'fill' | 'contain' | 'cover';
 	rotate?: 0 | 90 | 180 | 270;
+	allowRotationMetadata?: boolean;
 	crop?: { left: number; top: number; width: number; height: number };
 	frameRate?: number;
 	codec?: VideoCodec;
 	bitrate?: number | Quality;
 	alpha?: 'discard' | 'keep'; // Defaults to 'discard'
+	hardwareAcceleration?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
 	keyFrameInterval?: number;
 	forceTranscode?: boolean;
 	process?: (sample: VideoSample) => MaybePromise<
@@ -132,6 +138,7 @@ type ConversionVideoOptions = {
 	>;
 	processedWidth?: number;
 	processedHeight?: number;
+	group?: OutputTrackGroup | OutputTrackGroup[];
 };
 
 type MaybePromise<T> = T | Promise<T>;
@@ -175,6 +182,8 @@ In the rare case that the input video changes size over time, the `fit` field ca
 
 `rotation` rotates the video by the specified number of degrees clockwise. This rotation is applied on top of any rotation metadata in the original input file and happens before cropping and resizing.
 
+By default, Mediabunny will try to make use of rotation metadata in the output file to perform the rotation whenever possible. However, if you don't want this to happen, or you want to use Mediabunny to strip all rotation metadata from a file, you can set `allowRotationMetadata` to `false`.
+
 ### Cropping video
 
 `crop` can be used to extract a rectangular region from the original video. The rectangle is specified using `left`, `top`, `width` and `height` and is clamped to the dimensions of the video. Cropping is applied after rotation but before resizing.
@@ -190,8 +199,9 @@ Use the `codec` property to control the codec of the output track. This should b
 Use the `bitrate` property to control the bitrate of the output video. For example, you can use this field to compress the video track. Accepted values are the number of bits per second or a [subjective quality](./media-sources#subjective-qualities). If this property is set, transcoding will always happen. If this property is not set but transcoding is still required, `QUALITY_HIGH` will be used as the value.
 
 Use the `keyFrameInterval` property to control the maximum interval in seconds between key frames in the output video. Setting this fields forces a transcode.
-
 If you want to prevent direct copying of media data and force a transcoding step, use `forceTranscode: true`.
+
+Use the `hardwareAcceleration` property to control whether hardware or software acceleration is used for video transcoding.
 
 ### Processing video
 
@@ -236,6 +246,7 @@ type ConversionAudioOptions = {
 	bitrate?: number | Quality;
 	numberOfChannels?: number;
 	sampleRate?: number;
+	sampleFormat?: 'u8' | 's16' | 's32' | 'f32';
 	forceTranscode?: boolean;
 	process?: (sample: AudioSample) => MaybePromise<
 		AudioSample | AudioSample[] | null
@@ -301,21 +312,21 @@ const conversion = await Conversion.init({
 	output,
 
 	// Function gets invoked for each video track:
-	video: (videoTrack, n) => {
-		if (n > 1) {
+	video: async (videoTrack) => {
+		if (videoTrack.number > 1) {
 			// Keep only the first video track
 			return { discard: true };
 		}
 
 		return {
 			// Shrink width to 640 only if the track is wider
-			width: Math.min(videoTrack.displayWidth, 640),
+			width: Math.min(await videoTrack.getDisplayWidth(), 640),
 		};
 	},
 
 	// Async functions work too:
-	audio: async (audioTrack, n) => {
-		if (audioTrack.languageCode !== 'rus') {
+	audio: async (audioTrack) => {
+		if (await audioTrack.getLanguageCode() !== 'rus') {
 			// Keep only Russian audio tracks
 			return { discard: true };
 		}
@@ -328,6 +339,23 @@ const conversion = await Conversion.init({
 ```
 
 For documentation about the properties of video and audio tracks, refer to [Reading track metadata](./reading-media-files#reading-track-metadata).
+
+## Track fan-out
+
+You can also set (or return) an array of options for a single input track, which causes Mediabunny to create one output track per entry, or, in other words, multiple output tracks from one input track (fan-out).
+
+This is useful for producing multiple renditions at different qualities, e.g. for [HLS](./output-formats#hls):
+```ts
+const conversion = await Conversion.init({
+	input,
+	output,
+	video: [
+		{ height: 1080, bitrate: QUALITY_HIGH },
+		{ height: 720, bitrate: QUALITY_MEDIUM },
+		{ height: 480, bitrate: QUALITY_LOW },
+	],
+});
+```
 
 ## Trimming
 
@@ -359,6 +387,21 @@ const conversion = await Conversion.init({
 In this case, the output will be 15 seconds long.
 
 If only `start` is set, the clip will run until the end of the input file. If only `end` is set, the clip will start at the beginning of the input file.
+
+Note that when using the trimming defaults, the resulting media file will always begin at timestamp 0. If your input file has a start time offset (like is common with MPEG-TS files) and you want to retain that, use `trim: { start: 0 }` to ensure timestamps don't get shifted.
+
+---
+
+You can even use negative trimming values to offset the start of the media:
+```ts
+const conversion = await Conversion.init({
+	// ...
+	trim: {
+		start: -2, // Two seconds of no media data (freeze frame / silence) at the start
+	},
+	// ...
+});
+```
 
 ## Metadata tags
 
@@ -397,6 +440,21 @@ const conversion = await Conversion.init({
 	// ...
 });
 ```
+
+## Selecting tracks
+
+Use the `tracks` option to control which input tracks are considered for conversion:
+```ts
+const conversion = await Conversion.init({
+	input,
+	output,
+	tracks: 'primary', // Only the primary video and audio tracks
+});
+```
+
+Accepted values are `'all'` or `'primary'`. The default is `'all'`, unless the input format is HLS, then it is `'primary'`. This is because HLS typically has multiple renditions of a track, and converting all of them is (usually) not desired.
+
+For a more granular selection, use the `discard` field on the tracks.
 
 ## Discarded tracks
 
@@ -445,4 +503,28 @@ On the flip side, you can always query which input tracks made it into the outpu
 ```ts
 const conversion = await Conversion.init({ input, output });
 conversion.utilizedTracks; // => InputTrack[]
+```
+A track may appear multiple times in this list when [fan-out](#track-fan-out) produces multiple output tracks from it.
+
+## Converting live streams
+
+Live inputs, like HLS live streams, can also be used with the Conversion API. In this case, by default, the conversion will run until the live stream has ended.
+
+If you only want to convert a part of the live stream instead of waiting until it has ended, you can [trim](#trimming) the conversion. For example, here we're capturing the next 60 seconds of the live stream:
+```ts
+// Get the live edge
+const currentDuration = await input.getDurationFromMetadata(undefined, {
+	skipLiveWait: true,
+});
+
+const conversion = await Conversion.init({
+	input,
+	output,
+	trim: {
+		// Start at the current live edge
+		start: currentDuration,
+		// End at most 60 seconds later
+		end: currentDuration + 60,
+	},
+});
 ```

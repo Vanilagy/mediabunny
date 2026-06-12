@@ -1,7 +1,8 @@
 ---
 layout: home
 
-title: Mediabunny
+title: Mediabunny — A complete JavaScript media toolkit for the browser
+titleTemplate: false
 
 hero:
     name: Mediabunny
@@ -20,6 +21,9 @@ hero:
     - theme: alt
       text: Examples
       link: /examples
+    - theme: alt
+      text: Blog
+      link: /blog
     - theme: alt
       text: Sponsors
       link: "#sponsors"
@@ -91,32 +95,49 @@ const bundleSizes = [
 
 const sponsors = {
 	gold: [
-		{ image: '/sponsors/remotion.png', name: 'Remotion', url: 'https://remotion.dev/' },
+		{ image: '/sponsors/remotion-light.png', name: 'Remotion', url: 'https://remotion.dev/' },
 		{ image: '/sponsors/gling.svg', name: 'Gling AI', url: 'https://www.gling.ai/' },
 		{ image: '/sponsors/diffusionstudio.png', name: 'Diffusion Studio', url: 'https://diffusion.studio/' },
 		{ image: '/sponsors/kino.jpg', name: 'Kino', url: 'https://kino.ai/' },
+		{ image: '/sponsors/screen-studio.webp', name: 'Screen Studio', url: 'https://screen.studio/' },
+		{ image: '/sponsors/tella.svg', name: 'Tella', url: 'https://www.tella.com/' },
 	],
 	silver: [
-		{ image: '/sponsors/pintura-labs.png', name: 'Pintura Labs', url: 'https://pqina.nl/pintura/' },
 		{ image: '/sponsors/ponder.png', name: 'Ponder', url: 'https://ponder.ai/' },
 	],
 	bronze: [
+		{ image: '/sponsors/elevenlabs.png', name: 'ElevenLabs', url: 'https://elevenlabs.io/' },
 		{ image: '/sponsors/rve.png', name: 'React Video Editor', url: 'https://www.reactvideoeditor.com/' },
 		{ image: '/sponsors/mux.jpg', name: 'Mux', url: 'https://www.mux.com/' },
 		{ image: '/sponsors/jellypod.png', name: 'Jellypod', url: 'https://jellypod.ai/' },
 	],
 	individual: [
+		{ image: '/sponsors/pintura-labs.png', name: 'Pintura Labs', url: 'https://pqina.nl/pintura/' },
+		{ image: 'https://avatars.githubusercontent.com/u/189556080', name: 'Cursorful', url: 'https://github.com/cursorful' },
+		{ image: 'https://avatars.githubusercontent.com/u/11537072', name: 'Threema', url: 'https://threema.com/en' },
+		{ image: 'https://avatars.githubusercontent.com/u/82552321', name: 'Polotno', url: 'https://github.com/polotno-project' },
+		{ image: 'https://avatars.githubusercontent.com/u/489051', name: 'Roman Rädle', url: 'https://github.com/raedle' },
 		{ image: 'https://avatars.githubusercontent.com/u/197597', name: 'Christopher Chedeau', url: 'https://github.com/vjeux' },
-		{ image: 'https://avatars.githubusercontent.com/u/84167135', name: 'Memenome', url: 'https://github.com/memenome' },
+		{ image: 'https://avatars.githubusercontent.com/u/18653821', name: 'ZerGo0', url: 'https://github.com/ZerGo0' },
 		{ image: 'https://avatars.githubusercontent.com/u/5913254', name: 'Brandon McConnell', url: 'https://github.com/brandonmcconnell' },
 		{ image: 'https://avatars.githubusercontent.com/u/9549394', name: 'studnitz', url: 'https://github.com/studnitz' },
+		{ image: 'https://avatars.githubusercontent.com/u/67356781', name: 'Ahmed Rowaihi', url: 'https://github.com/ahmedrowaihi' },
+		{ image: 'https://avatars.githubusercontent.com/u/4714175', name: 'Phoomparin Mano', url: 'https://github.com/heypoom' },
 		{ image: 'https://avatars.githubusercontent.com/u/504909', name: 'Hirbod', url: 'https://github.com/hirbod' },
+		{ image: 'https://avatars.githubusercontent.com/u/2565549', name: 'MatthewNorton', url: 'https://github.com/MatthewNorton' },
+		{ image: 'https://avatars.githubusercontent.com/u/272247752', name: 'Motionik', url: 'https://github.com/Motionik' },
 		{ image: 'https://avatars.githubusercontent.com/u/2698271', name: 'Matthew Gardner', url: 'https://github.com/spheric' },
 		{ image: 'https://avatars.githubusercontent.com/u/5475819', name: 'AJ Funk', url: 'https://github.com/AJFunk' },
 		{ image: 'https://avatars.githubusercontent.com/u/30229596', name: 'Pablo Bonilla', url: 'https://github.com/devPablo' },
+		{ image: 'https://avatars.githubusercontent.com/u/536008', name: 'Satish Goda', url: 'https://github.com/satishgoda' },
+		{ image: 'https://avatars.githubusercontent.com/u/139718', name: 'Anton Kosiakin', url: 'https://github.com/deil' },
 		{ image: 'https://avatars.githubusercontent.com/u/56988069', name: 'SyhabouthAlex', url: 'https://github.com/SyhabouthAlex' },
 		{ image: 'https://avatars.githubusercontent.com/u/38181164', name: 'wcw', url: 'https://github.com/asd55667' },
 		{ image: 'https://avatars.githubusercontent.com/u/1836701', name: 'Bean Deng', url: 'https://github.com/HADB' },
+		{ image: 'https://avatars.githubusercontent.com/u/255616819', name: 'cronischarles-del', url: 'https://github.com/cronischarles-del' },
+		{ image: 'https://avatars.githubusercontent.com/u/37973863', name: 'Gomi', url: 'https://github.com/gxy5202' },
+		{ image: 'https://avatars.githubusercontent.com/u/36898190', name: 'jepcd', url: 'https://github.com/jepcd' },
+		{ image: 'https://avatars.githubusercontent.com/u/695166', name: 'Takenori Nakagawa', url: 'https://github.com/ww24' },
 		{ image: 'https://avatars.githubusercontent.com/u/63088713', name: 'taf2000', url: 'https://github.com/taf2000' },
 		{ image: 'https://avatars.githubusercontent.com/u/58149663', name: 'H7GhosT', url: 'https://github.com/H7GhosT' },
 		{ image: 'https://avatars.githubusercontent.com/u/91711202', name: 'ihasq', url: 'https://github.com/ihasq' },
@@ -124,6 +145,12 @@ const sponsors = {
 		{ image: 'https://avatars.githubusercontent.com/u/97225946', name: '808vita', url: 'https://github.com/808vita' },
 		{ image: 'https://avatars.githubusercontent.com/u/3709646', name: 'Rodrigo Belfiore', url: 'https://github.com/roprgm' },
 		{ image: 'https://avatars.githubusercontent.com/u/31102694', name: 'Aiden Liu', url: 'https://github.com/aidenlx' },
+		{ image: 'https://avatars.githubusercontent.com/u/41021374', name: 'arthco', url: 'https://github.com/arthtyagi' },
+		{ image: 'https://avatars.githubusercontent.com/u/5907357', name: 'Harvey Zhao', url: 'https://github.com/zhw2590582' },
+		{ image: 'https://avatars.githubusercontent.com/u/13042781', name: 'Anshul Bansal', url: 'https://github.com/akbansa' },
+		{ image: 'https://avatars.githubusercontent.com/u/43105172', name: 'zhmou', url: 'https://github.com/zhmou' },
+		{ image: 'https://avatars.githubusercontent.com/u/695166', name: 'Takenori Nakagawa', url: 'https://github.com/ww24' },
+		{ image: 'https://avatars.githubusercontent.com/u/43607012', name: 'Sturlen', url: 'https://github.com/Sturlen' },
 	],
 };
 </script>
@@ -134,7 +161,7 @@ const sponsors = {
 		<p class="!my-0 flex-1 text-sm !leading-6">{{ quote.quote }}</p>
 		<div class="shrink-0 flex gap-2 items-center mt-1.5">
 			<a :href="quote.url" target="_blank">
-				<img :src="quote.image" class="size-8 rounded-full shrink-0" alt="Author image">
+				<img :src="quote.image" class="size-8 rounded-full shrink-0" :alt="quote.author">
 			</a>
 			<p class="!my-0 flex-1 text-xs font-medium">{{ quote.author }}</p>
 		</div>
@@ -152,7 +179,7 @@ npm install mediabunny
 <div class="space-y-16 mt-18">
 <div class="flex flex-col lg:flex-row lg:gap-20 lg:items-center">
 <div class="flex-1 min-w-0">
-<h1 class="inline-block" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">Read any media file, efficiently</h1>
+<h2 class="inline-block !text-[32px] !border-0 !m-0 !p-0 !leading-[40px]" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">Read any media file, efficiently</h2>
 <p class="text-lg">Mediabunny allows you efficiently read data from any video or audio file, no matter the size: duration, resolution, rotation, tracks, codecs and other metadata, as well as raw or decoded media data from anywhere in the file. Load only what you need.</p>
 <a class="!no-underline inline-flex items-center gap-1.5" :no-icon="true" href="/guide/reading-media-files">
 	Docs
@@ -166,16 +193,19 @@ npm install mediabunny
 ```ts
 const input = new Input({
 	source: new UrlSource('./bigbuckbunny.mp4'),
-	formats: ALL_FORMATS, // .mp4, .webm, .wav, ...
+	formats: ALL_FORMATS, // .mp4, .webm, .wav, .m3u8, ...
 });
 
 const duration = await input.computeDuration();
 
 const videoTrack = await input.getPrimaryVideoTrack();
-const { displayWidth, displayHeight, rotation } = videoTrack;
+const displayWidth = await videoTrack.getDisplayWidth();
+const displayHeight = await videoTrack.getDisplayHeight();
+const rotation = await videoTrack.getRotation();
 
 const audioTrack = await input.getPrimaryAudioTrack();
-const { sampleRate, numberOfChannels } = audioTrack;
+const sampleRate = await audioTrack.getSampleRate();
+const numberOfChannels = await audioTrack.getNumberOfChannels();
 
 // Get the frame halfway through the video
 const sink = new VideoSampleSink(videoTrack);
@@ -225,7 +255,7 @@ const { buffer } = output.target; // Contains the final file
 
 </div>
 <div class="flex-1 min-w-0">
-<h1 class="inline-block" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">Create new media files, programmatically</h1>
+<h2 class="inline-block !text-[32px] !border-0 !m-0 !p-0 !leading-[40px]" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">Create new media files, programmatically</h2>
 <p class="text-lg">Generate new media files (such as MP4 or WebM) directly on the client, and as fast as the hardware allows. Add multiple video, audio, or subtitle tracks, and have precise control down to the microsecond.</p>
 <a class="!no-underline inline-flex items-center gap-1.5" :no-icon="true" href="/guide/writing-media-files">
 	Docs
@@ -236,7 +266,7 @@ const { buffer } = output.target; // Contains the final file
 
 <div class="flex flex-col lg:flex-row lg:gap-20 lg:items-center">
 <div class="flex-1 min-w-0">
-<h1 class="inline-block" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">Hopping-fast file conversion</h1>
+<h2 class="inline-block !text-[32px] !border-0 !m-0 !p-0 !leading-[40px]" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">Hopping-fast file conversion</h2>
 <p class="text-lg">Use the Conversion API to transform any media file into any other media file: perform transmuxing, transcoding, resizing, rotation, audio resampling, trimming, and more.</p>
 <a class="!no-underline inline-flex items-center gap-1.5" :no-icon="true" href="/guide/converting-media-files">
 	Docs
@@ -272,14 +302,14 @@ await conversion.execute();
 <img class="relative" src="./assets/inspiring-io.svg">
 </div>
 <div class="flex-1 min-w-0">
-<h1 class="inline-block" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">Universal I/O</h1>
+<h2 class="inline-block !text-[32px] !border-0 !m-0 !p-0 !leading-[40px]" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">Universal I/O</h2>
 <p class="text-lg">Read and write files from and to memory, disk, or the network. Create files for offline use, or live-stream them as they're being created. Inject media data from a canvas, webcam, screen, microphone, audio buffer, your own encoding stack, or whatever. It's all up to you.</p>
 </div>
 </div>
 
 <div class="flex flex-col lg:flex-row gap-4 lg:gap-20 lg:items-center">
 <div class="flex-1 min-w-0">
-<h1 class="inline-block" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">Wide container & codec support</h1>
+<h2 class="inline-block !text-[32px] !border-0 !m-0 !p-0 !leading-[40px]" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">Wide container & codec support</h2>
 <p class="text-lg">Mediabunny supports many commonly used container formats and a wide variety of video and audio codecs. And all of them bidirectionally, too! (that means for reading and writing)</p>
 <a class="!no-underline inline-flex items-center gap-1.5" :no-icon="true" href="/guide/supported-formats-and-codecs">
 	See full list
@@ -305,14 +335,14 @@ await conversion.execute();
 	<p class="!my-0 text-center text-[10px] opacity-50 !leading-4">Reading BigBuckBunny1080pH264.mov (691 MiB) from disk<br>Ryzen 7600X, RTX 4070, NVMe SSD, measured 2025-06-22</p>
 </div>
 <div class="flex-1 min-w-0">
-<h1 class="inline-block" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">High performance</h1>
+<h2 class="inline-block !text-[32px] !border-0 !m-0 !p-0 !leading-[40px]" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">High performance</h2>
 <p class="text-lg">By reading only what you need, writing progressively, utilizing hardware-accelerated encoding and decoding via the WebCodecs API, and using a pipelined design, Mediabunny is able to get the job done fast.</p>
 </div>
 </div>
 
 <div class="flex flex-col lg:flex-row gap-4 lg:gap-20 lg:items-center">
 <div class="flex-1 min-w-0">
-<h1 class="inline-block" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">Built from scratch, for the web</h1>
+<h2 class="inline-block !text-[32px] !border-0 !m-0 !p-0 !leading-[40px]" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">Built from scratch, for the web</h2>
 <p class="text-lg">Mediabunny is 100% implemented in TypeScript and has zero dependencies. Its API was designed to be highly tree-shakable, meaning you only include what you use.</p>
 </div>
 <div class="space-y-2 flex-1 min-w-0">
@@ -345,10 +375,10 @@ await conversion.execute();
 <hr class="!my-16" />
 
 <div class="flex flex-col items-center">
-	<h1 id="sponsors" class="flex items-center gap-4" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">
+	<h2 id="sponsors" class="flex items-center gap-4 !text-[32px] !border-0 !m-0 !p-0 !leading-[40px]" style="background: -webkit-linear-gradient(-30deg, #ff45ac, #ff78c2); -webkit-background-clip: text; color: transparent;">
 		Made possible by you
 		<img class="size-8" src="./assets/fluent-emoji--heart-suit.svg">
-	</h1>
+	</h2>
 	<p class="max-w-2xl">Mediabunny is an open-source project released under the <a href="https://choosealicense.com/licenses/mpl-2.0/" target="_blank">MPL-2.0</a> and is therefore free to use for any purpose, including closed-source commercial use. A permissive license is essential for a foundational library like this to truly thrive. That said, this project requires an immense amount of work and care. This is made possible by the generous financial backing of these awesome sponsors:</p>
 	<template v-if="sponsors.gold.length > 0">
 		<h3 class="!text-3xl">Gold sponsors</h3>

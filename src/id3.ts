@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -16,6 +16,7 @@ import {
 	assertNever,
 	keyValueIterator,
 	toDataView,
+	isRecordStringString,
 } from './misc';
 import { FileSlice, readAscii, readBytes, readU32Be, readU8 } from './reader';
 import { Writer } from './writer';
@@ -92,7 +93,7 @@ export const parseId3V1Tag = (slice: FileSlice, tags: MetadataTags) => {
 	const yearText = readId3V1String(slice, 4);
 	const year = Number.parseInt(yearText, 10);
 	if (Number.isInteger(year) && year > 0) {
-		tags.date ??= new Date(year, 0, 1);
+		tags.date ??= new Date(String(year)); // String so that it parses as UTC
 	}
 
 	const commentBytes = readBytes(slice, 30);
@@ -225,7 +226,14 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 		}
 
 		tags.raw ??= {};
-		if (frame.id[0] === 'T') {
+		if (frame.id === 'TXXX') {
+			const txxx = tags.raw['TXXX'] ??= {};
+			const encoding = reader.readId3V2TextEncoding();
+			const description = reader.readId3V2Text(encoding, frameEndPos);
+			const value = reader.readId3V2Text(encoding, frameEndPos);
+
+			(txxx as Record<string, string>)[description] ??= value;
+		} else if (frame.id[0] === 'T') {
 			// It's a text frame, let's decode as text
 			tags.raw[frame.id] ??= reader.readId3V2EncodingAndText(frameEndPos);
 		} else {
@@ -331,7 +339,7 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 				const year = Number.parseInt(yearText, 10);
 
 				if (Number.isInteger(year)) {
-					tags.date ??= new Date(year, 0, 1);
+					tags.date ??= new Date(String(year)); // String so that it parses as UTC
 				}
 			}; break;
 
@@ -480,7 +488,7 @@ export class Id3V2Reader {
 
 	readU24() {
 		const high = this.view.getUint16(this.pos, false);
-		const low = this.view.getUint8(this.pos + 1);
+		const low = this.view.getUint8(this.pos + 2);
 		this.pos += 3;
 		return high * 0x100 + low;
 	}
@@ -761,13 +769,51 @@ export class Id3V2Writer {
 
 				let bytes: Uint8Array;
 				if (typeof value === 'string') {
-					const encoded = textEncoder.encode(value);
-					bytes = new Uint8Array(encoded.byteLength + 2);
-					bytes[0] = Id3V2TextEncoding.UTF_8;
-					bytes.set(encoded, 1);
-					// Last byte is the null terminator
+					const useIso88591 = isIso88591Compatible(value);
+					if (useIso88591) {
+						bytes = new Uint8Array(value.length + 2);
+						bytes[0] = Id3V2TextEncoding.ISO_8859_1;
+						for (let i = 0; i < value.length; i++) {
+							bytes[i + 1] = value.charCodeAt(i);
+						}
+						// Last byte is the null terminator
+					} else {
+						const encoded = textEncoder.encode(value);
+						bytes = new Uint8Array(encoded.byteLength + 2);
+						bytes[0] = Id3V2TextEncoding.UTF_8;
+						bytes.set(encoded, 1);
+						// Last byte is the null terminator
+					}
 				} else if (value instanceof Uint8Array) {
 					bytes = value;
+				} else if (key === 'TXXX' && isRecordStringString(value)) {
+					for (const description in value) {
+						const frameValue = value[description]!;
+						const useIso88591 = isIso88591Compatible(description) && isIso88591Compatible(frameValue);
+
+						const encodedDescription = useIso88591 ? null : textEncoder.encode(description);
+						const encodedValue = useIso88591 ? null : textEncoder.encode(frameValue);
+						const descriptionDataLength = useIso88591 ? description.length : encodedDescription!.byteLength;
+						const valueDataLength = useIso88591 ? frameValue.length : encodedValue!.byteLength;
+
+						const frameSize = 1 + descriptionDataLength + 1 + valueDataLength + 1;
+
+						this.writeAscii('TXXX');
+						this.writeSynchsafeU32(frameSize);
+						this.writeU16(0x0000);
+
+						this.writeU8(useIso88591 ? Id3V2TextEncoding.ISO_8859_1 : Id3V2TextEncoding.UTF_8);
+						if (useIso88591) {
+							this.writeIsoString(description);
+							this.writeIsoString(frameValue);
+						} else {
+							this.writer.write(encodedDescription!);
+							this.writeU8(0x00);
+							this.writer.write(encodedValue!);
+							this.writeU8(0x00);
+						}
+					}
+					continue;
 				} else {
 					continue;
 				}
@@ -821,7 +867,8 @@ export class Id3V2Writer {
 		for (let i = 0; i < text.length; i++) {
 			bytes[i] = text.charCodeAt(i);
 		}
-		bytes[text.length] = 0x00;
+		// Last byte is the null terminator
+
 		this.writer.write(bytes);
 	}
 

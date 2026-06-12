@@ -1,3 +1,7 @@
+---
+description: Install Mediabunny using npm (or your favorite package manager), or include it directly as a <script> tag.
+---
+
 # Installation
 
 Install Mediabunny using your favorite package manager:

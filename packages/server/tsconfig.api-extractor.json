@@ -1,0 +1,6 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"paths": {} // Fails if we don't override it due to the Mediabunny imports
+	}
+}
