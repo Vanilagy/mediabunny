@@ -286,6 +286,27 @@ type WavOutputFormatOptions = {
 - `onHeader`\
 	Will be called once the file header is written. The header consists of the RIFF header, the format chunk, and the start of the data chunk (with a placeholder size of 0).
 
+## AIFF
+
+This output format creates AIFF / AIFF-C (.aiff) files. Uncompressed signed PCM is written as plain AIFF, while floating-point and µ-law/A-law data is written as AIFF-C.
+```ts
+import { Output, AiffOutputFormat } from 'mediabunny';	
+
+const output = new Output({
+	format: new AiffOutputFormat(options),
+	// ...
+});
+```
+
+The following options are available:
+```ts
+type AiffOutputFormatOptions = {
+	onHeader?: (data: Uint8Array, position: number) => unknown;
+};
+```
+- `onHeader`\
+	Will be called once the file header is written. The header consists of the FORM header, the COMM chunk, and the start of the SSND chunk (with a placeholder size).
+
 ## ADTS
 
 This output format creates ADTS (.aac) files.

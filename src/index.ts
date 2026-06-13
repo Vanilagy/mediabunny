@@ -38,6 +38,8 @@ export {
 	OutputFormat,
 	AdtsOutputFormat,
 	type AdtsOutputFormatOptions,
+	AiffOutputFormat,
+	type AiffOutputFormatOptions,
 	CmafOutputFormat,
 	type CmafOutputFormatOptions,
 	FlacOutputFormat,
