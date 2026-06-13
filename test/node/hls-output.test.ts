@@ -29,6 +29,34 @@ import { EncodedPacketSink } from '../../src/media-sink.js';
 const videoSource = (codec: VideoCodec = 'avc') => new EncodedVideoPacketSource(codec);
 const audioSource = (codec: AudioCodec = 'aac') => new EncodedAudioPacketSource(codec);
 
+const getTopLevelBoxTypes = (buffer: ArrayBuffer) => {
+	const bytes = new Uint8Array(buffer);
+	const view = new DataView(buffer);
+	const boxTypes: string[] = [];
+
+	let offset = 0;
+	while (offset + 8 <= bytes.byteLength) {
+		let size = view.getUint32(offset);
+		let headerSize = 8;
+		const type = String.fromCharCode(...bytes.subarray(offset + 4, offset + 8));
+
+		if (size === 1) {
+			size = Number(view.getBigUint64(offset + 8));
+			headerSize = 16;
+		} else if (size === 0) {
+			size = bytes.byteLength - offset;
+		}
+		if (size < headerSize) {
+			break;
+		}
+
+		boxTypes.push(type);
+		offset += size;
+	}
+
+	return boxTypes;
+};
+
 test('Playlist assignment, single video', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
@@ -2246,6 +2274,81 @@ test('CMAF segmentation, single file per playlist', async () => {
 	expect(playlistText!.match(/#EXT-X-BYTERANGE/g)).toHaveLength(2);
 	expect(playlistText).toContain('#EXT-X-VERSION:6');
 	expect(playlistText).toContain('#EXT-X-MAP:URI=');
+});
+
+test('Single-file standalone MP4 mode', async () => {
+	let playlistText: string | null = null;
+	const targets = new Map<string, BufferTarget>();
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new Mp4OutputFormat(),
+			targetDuration: 2,
+			singleFilePerPlaylist: true,
+			singleFilePerPlaylistMode: 'standalone',
+			getSegmentPath: () => 'video.mp4',
+		}),
+		target: new PathedTarget('', (request) => {
+			const target = new BufferTarget();
+			targets.set(request.path, target);
+
+			if (request.path.includes('playlist')) {
+				target.on('finalized', () => {
+					playlistText = new TextDecoder().decode(target.buffer!);
+				});
+			}
+
+			return target;
+		}),
+	});
+
+	const source = videoSource();
+	output.addVideoTrack(source);
+
+	await output.start();
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0), avcMetadata);
+
+	await output.finalize();
+
+	expect(targets.has('video.mp4')).toBe(true);
+	expect(targets.has('init-1.mp4')).toBe(false);
+
+	expect(playlistText).not.toBeNull();
+	expect(playlistText!.match(/#EXT-X-BYTERANGE/g)).toHaveLength(2);
+	expect(playlistText).toContain('#EXT-X-VERSION:6');
+	expect(playlistText).toContain('#EXT-X-MAP:URI="video.mp4",BYTERANGE=');
+
+	const mediaTarget = targets.get('video.mp4')!;
+	const boxTypes = getTopLevelBoxTypes(mediaTarget.buffer!);
+
+	expect(boxTypes.slice(0, 2)).toEqual(['ftyp', 'moov']);
+	expect(boxTypes).toContain('moof');
+	expect(boxTypes).toContain('mdat');
+	expect(boxTypes).toContain('mfra');
+	expect(boxTypes).not.toContain('styp');
+
+	using input = new Input({
+		source: new BufferSource(mediaTarget.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const videoTrack = await input.getPrimaryVideoTrack() as InputVideoTrack;
+	expect(videoTrack).toBeTruthy();
+
+	const sink = new EncodedPacketSink(videoTrack);
+	let packetCount = 0;
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	for await (const packet of sink.packets()) {
+		packetCount++;
+	}
+	expect(packetCount).toBe(8);
 });
 
 test('Live mode', async () => {
