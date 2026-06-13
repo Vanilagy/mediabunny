@@ -2455,6 +2455,10 @@ export const determineVideoPacketType = (
 			return null;
 		};
 
+		case 'vvc': {
+			return null; // TODO: implement VVC frame type detection
+		};
+
 		default: {
 			assertNever(codec);
 			assert(false);
@@ -2941,6 +2945,12 @@ export const AC3_REGISTRATION_DESCRIPTOR = new Uint8Array([0x05, 0x04, 0x41, 0x4
 
 /** E-AC-3 registration_descriptor for MPEG-TS/ */
 export const EAC3_REGISTRATION_DESCRIPTOR = new Uint8Array([0x05, 0x04, 0x45, 0x41, 0x43, 0x33]);
+
+/** DTS registration_descriptor for MPEG-TS. */
+export const DTS_REGISTRATION_DESCRIPTOR = new Uint8Array([0x05, 0x04, 0x44, 0x54, 0x53, 0x20]);
+
+/** TrueHD (MLP) registration_descriptor for MPEG-TS. */
+export const TRUEHD_REGISTRATION_DESCRIPTOR = new Uint8Array([0x05, 0x04, 0x4D, 0x4C, 0x50, 0x20]);
 
 /** Number of audio blocks per syncframe, indexed by numblkscod */
 export const EAC3_NUMBLKS_TABLE = [1, 2, 3, 6];

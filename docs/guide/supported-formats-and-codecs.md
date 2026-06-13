@@ -1,5 +1,5 @@
 ---
-description: Mediabunny supports a wide range of media container formats (.mp4, .webm, .mp3, .wav, .m3u8, ...) and video/audio codecs (H.264, HEVC, VP9, AV1, AAC, Opus, FLAC, ...).
+description: Mediabunny supports a wide range of media container formats (.mp4, .webm, .mp3, .wav, .m3u8, ...) and video/audio codecs (H.264, HEVC, VP9, AV1, VVC, AAC, Opus, FLAC, DTS, TrueHD, ALAC, ...).
 ---
 
 # Supported formats & codecs
@@ -40,6 +40,7 @@ Mediabunny ships with built-in decoders and encoders for all audio PCM codecs, m
 - `'vp8'` - VP8
 - `'vp9'` - VP9
 - `'av1'` - AOMedia Video 1 (AV1)
+- `'vvc'` - Versatile Video Coding (VVC) / H.266
 
 ### Audio codecs
 
@@ -50,6 +51,9 @@ Mediabunny ships with built-in decoders and encoders for all audio PCM codecs, m
 - `'flac'` - Free Lossless Audio Codec (FLAC) [^flac]
 - `'ac3'` - Dolby Digital (AC-3) [^ac3]
 - `'eac3'` - Dolby Digital Plus (E-AC-3) [^ac3]
+- `'dts'` - Digital Theater Systems (DTS)
+- `'truehd'` - Dolby TrueHD
+- `'alac'` - Apple Lossless Audio Codec (ALAC)
 - `'pcm-u8'` - 8-bit unsigned PCM
 - `'pcm-s8'` - 8-bit signed PCM
 - `'pcm-s16'` - 16-bit little-endian signed PCM
@@ -80,6 +84,7 @@ Not all codecs can be used with all containers. The following table specifies th
 | `'vp8'`        |    ✓     |   ✓   |   ✓   |     ✓     |       |       |       |       |       |       |
 | `'vp9'`        |    ✓     |   ✓   |   ✓   |     ✓     |       |       |       |       |       |       |
 | `'av1'`        |    ✓     |   ✓   |   ✓   |     ✓     |       |       |       |       |       |       |
+| `'vvc'`        |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |   ✓   |
 | `'aac'`        |    ✓     |   ✓   |   ✓   |           |       |       |       |   ✓   |       |   ✓   |
 | `'opus'`       |    ✓     |   ✓   |   ✓   |     ✓     |   ✓   |       |       |       |       |       |
 | `'mp3'`        |    ✓     |   ✓   |   ✓   |           |       |   ✓   |       |       |       |   ✓   |
@@ -87,6 +92,9 @@ Not all codecs can be used with all containers. The following table specifies th
 | `'flac'`       |    ✓     |   ✓   |   ✓   |           |       |       |       |       |   ✓   |       |
 | `'ac3'`        |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |   ✓   |
 | `'eac3'`       |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |   ✓   |
+| `'dts'`        |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |   ✓   |
+| `'truehd'`     |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |   ✓   |
+| `'alac'`       |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |       |
 | `'pcm-u8'`     |          |   ✓   |   ✓   |           |       |       |   ✓   |       |       |       |
 | `'pcm-s8'`     |          |   ✓   |       |           |       |       |       |       |       |       |
 | `'pcm-s16'`    |    ✓     |   ✓   |   ✓   |           |       |       |   ✓   |       |       |       |

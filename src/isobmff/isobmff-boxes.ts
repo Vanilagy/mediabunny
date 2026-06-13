@@ -1780,6 +1780,7 @@ const videoCodecToBoxName = (codec: VideoCodec, fullCodecString: string) => {
 		case 'vp8': return 'vp08';
 		case 'vp9': return 'vp09';
 		case 'av1': return 'av01';
+		case 'vvc': return 'vvc1';
 	}
 };
 
@@ -1789,6 +1790,7 @@ const VIDEO_CODEC_TO_CONFIGURATION_BOX: Record<VideoCodec, (trackData: IsobmffVi
 	vp8: vpcC,
 	vp9: vpcC,
 	av1: av1C,
+	vvc: () => null, // TODO: implement vvcC box writer when VVC muxing support is added
 };
 
 const audioCodecToBoxName = (codec: AudioCodec, isQuickTime: boolean): string => {
@@ -1804,6 +1806,9 @@ const audioCodecToBoxName = (codec: AudioCodec, isQuickTime: boolean): string =>
 		case 'pcm-s8': return 'sowt';
 		case 'ac3': return 'ac-3';
 		case 'eac3': return 'ec-3';
+		case 'alac': return 'alac';
+		case 'dts': return 'dtsc';
+		case 'truehd': return 'mlpa';
 	}
 
 	// Logic diverges here
@@ -1845,6 +1850,9 @@ const audioCodecToConfigurationBox = (codec: AudioCodec, isQuickTime: boolean) =
 		case 'flac': return dfLa;
 		case 'ac3': return dac3;
 		case 'eac3': return dec3;
+		case 'dts': return null; // TODO: implement dtsc box writer when DTS muxing support is added
+		case 'truehd': return null; // TODO: implement mlpa box writer when TrueHD muxing support is added
+		case 'alac': return null; // TODO: implement alac box writer when ALAC muxing support is added
 	}
 
 	// Logic diverges here

@@ -546,6 +546,7 @@ export class Quality {
 			vp9: 0.6, // Similar to HEVC
 			av1: 0.4, // ~60% more efficient than AVC
 			vp8: 1.2, // Slightly less efficient than AVC
+			vvc: 0.4, // VVC (~35% more efficient than HEVC, similar to AV1)
 		};
 
 		const referencePixels = 1920 * 1080;
@@ -561,7 +562,10 @@ export class Quality {
 
 	/** @internal */
 	_toAudioBitrate(codec: AudioCodec) {
-		if ((PCM_AUDIO_CODECS as readonly string[]).includes(codec) || codec === 'flac') {
+		if (
+			(PCM_AUDIO_CODECS as readonly string[]).includes(codec)
+			|| codec === 'flac' || codec === 'alac' || codec === 'dts' || codec === 'truehd'
+		) {
 			return undefined;
 		}
 

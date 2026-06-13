@@ -1076,6 +1076,9 @@ export class MatroskaDemuxer extends Demuxer {
 							this.currentTrack.info.codec = 'vp9';
 						} else if (codecIdWithoutSuffix === CODEC_STRING_MAP.av1) {
 							this.currentTrack.info.codec = 'av1';
+						} else if (codecIdWithoutSuffix === CODEC_STRING_MAP.vvc) {
+							this.currentTrack.info.codec = 'vvc';
+							this.currentTrack.info.codecDescription = this.currentTrack.codecPrivate;
 						}
 
 						const videoTrack = this.currentTrack as InternalVideoTrack;
@@ -1106,6 +1109,15 @@ export class MatroskaDemuxer extends Demuxer {
 							this.currentTrack.info.codecDescription = this.currentTrack.codecPrivate;
 						} else if (codecIdWithoutSuffix === CODEC_STRING_MAP.eac3) {
 							this.currentTrack.info.codec = 'eac3';
+							this.currentTrack.info.codecDescription = this.currentTrack.codecPrivate;
+						} else if (codecIdWithoutSuffix === CODEC_STRING_MAP.dts) {
+							this.currentTrack.info.codec = 'dts';
+							this.currentTrack.info.codecDescription = this.currentTrack.codecPrivate;
+						} else if (codecIdWithoutSuffix === CODEC_STRING_MAP.truehd) {
+							this.currentTrack.info.codec = 'truehd';
+							this.currentTrack.info.codecDescription = this.currentTrack.codecPrivate;
+						} else if (codecIdWithoutSuffix === CODEC_STRING_MAP.alac) {
+							this.currentTrack.info.codec = 'alac';
 							this.currentTrack.info.codecDescription = this.currentTrack.codecPrivate;
 						} else if (this.currentTrack.codecId === 'A_PCM/INT/LIT') {
 							if (this.currentTrack.info.bitDepth === 8) {
