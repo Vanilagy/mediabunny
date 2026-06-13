@@ -6,7 +6,7 @@ description: Mediabunny supports a wide range of media container formats (.mp4, 
  
 ## Container formats
 
-Mediabunny supports many commonly used media container formats, all of which are supported bidirectionally (reading & writing):
+Mediabunny supports many commonly used media container formats. Unless noted otherwise, each is supported bidirectionally (reading & writing):
 
 - ISOBMFF-based formats (.mp4, .m4v, .m4a, ...)
 - QuickTime File Format (.mov)
@@ -16,6 +16,7 @@ Mediabunny supports many commonly used media container formats, all of which are
 - Ogg (.ogg)
 - MP3 (.mp3)
 - WAVE (.wav)
+- AIFF / AIFF-C (.aiff, .aifc) (reading only)
 - ADTS (.aac)
 - FLAC (.flac)
 - MPEG Transport Stream (.ts)
