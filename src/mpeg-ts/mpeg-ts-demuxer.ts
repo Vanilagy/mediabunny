@@ -309,7 +309,7 @@ export class MpegTsDemuxer extends Demuxer {
 								hasAc3Descriptor = true;
 							} else if (descriptorTag === 0x7a || descriptorTag === 0xcc) {
 								hasEac3Descriptor = true;
-							} else if (descriptorTag === 0x73 || descriptorTag === 0x8a) {
+							} else if (descriptorTag === 0x73) {
 								hasDtsDescriptor = true;
 							} else if (descriptorTag === 0x7b) {
 								hasTruehdDescriptor = true;

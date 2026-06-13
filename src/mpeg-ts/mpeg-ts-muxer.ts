@@ -15,6 +15,7 @@ import {
 	concatNalUnitsInAnnexB,
 	deserializeAvcDecoderConfigurationRecord,
 	deserializeHevcDecoderConfigurationRecord,
+	DTS_REGISTRATION_DESCRIPTOR,
 	EAC3_REGISTRATION_DESCRIPTOR,
 	extractNalUnitTypeForAvc,
 	extractNalUnitTypeForHevc,
@@ -22,6 +23,7 @@ import {
 	HevcNalUnitType,
 	iterateNalUnitsInAnnexB,
 	iterateNalUnitsInLengthPrefixed,
+	TRUEHD_REGISTRATION_DESCRIPTOR,
 } from '../codec-data';
 import { Bitstream } from '../../shared/bitstream';
 import { assert, promiseWithResolvers, setUint24, toDataView, toUint8Array } from '../misc';
@@ -815,6 +817,13 @@ const buildPmt = (trackDatas: MpegTsTrackData[]) => {
 			totalEsBytes += AC3_REGISTRATION_DESCRIPTOR.length;
 		} else if (trackData.streamType === MpegTsStreamType.EAC3_SYSTEM_A) {
 			totalEsBytes += EAC3_REGISTRATION_DESCRIPTOR.length;
+		} else if (trackData.streamType === MpegTsStreamType.DTS_SMPTE
+			|| trackData.streamType === MpegTsStreamType.DTS_HD
+			|| trackData.streamType === MpegTsStreamType.DTS_HD_MA
+			|| trackData.streamType === MpegTsStreamType.DTS_ARIB) {
+			totalEsBytes += DTS_REGISTRATION_DESCRIPTOR.length;
+		} else if (trackData.streamType === MpegTsStreamType.TRUEHD) {
+			totalEsBytes += TRUEHD_REGISTRATION_DESCRIPTOR.length;
 		}
 	}
 
@@ -848,6 +857,19 @@ const buildPmt = (trackDatas: MpegTsTrackData[]) => {
 			offset += 2;
 			section.set(EAC3_REGISTRATION_DESCRIPTOR, offset);
 			offset += EAC3_REGISTRATION_DESCRIPTOR.length;
+		} else if (trackData.streamType === MpegTsStreamType.DTS_SMPTE
+			|| trackData.streamType === MpegTsStreamType.DTS_HD
+			|| trackData.streamType === MpegTsStreamType.DTS_HD_MA
+			|| trackData.streamType === MpegTsStreamType.DTS_ARIB) {
+			view.setUint16(offset, 0xF000 | DTS_REGISTRATION_DESCRIPTOR.length, false);
+			offset += 2;
+			section.set(DTS_REGISTRATION_DESCRIPTOR, offset);
+			offset += DTS_REGISTRATION_DESCRIPTOR.length;
+		} else if (trackData.streamType === MpegTsStreamType.TRUEHD) {
+			view.setUint16(offset, 0xF000 | TRUEHD_REGISTRATION_DESCRIPTOR.length, false);
+			offset += 2;
+			section.set(TRUEHD_REGISTRATION_DESCRIPTOR, offset);
+			offset += TRUEHD_REGISTRATION_DESCRIPTOR.length;
 		} else {
 			view.setUint16(offset, 0xF000, false); // reserved=1111, ES_info_length=0
 			offset += 2;
