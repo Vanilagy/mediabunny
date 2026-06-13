@@ -296,10 +296,12 @@ export class MpegTsDemuxer extends Demuxer {
 						bitstream.skipBits(6);
 						const esInfoLength = bitstream.readBits(10);
 
-						// Check ES descriptors to detect AC-3/E-AC-3 in System B
+						// Check ES descriptors to detect AC-3/E-AC-3/DTS/TrueHD in System B
 						const esInfoEndPos = bitstream.pos + 8 * esInfoLength;
 						let hasAc3Descriptor = false;
 						let hasEac3Descriptor = false;
+						let hasDtsDescriptor = false;
+						let hasTruehdDescriptor = false;
 						while (bitstream.pos < esInfoEndPos) {
 							const descriptorTag = bitstream.readBits(8);
 							const descriptorLength = bitstream.readBits(8);
@@ -307,6 +309,10 @@ export class MpegTsDemuxer extends Demuxer {
 								hasAc3Descriptor = true;
 							} else if (descriptorTag === 0x7a || descriptorTag === 0xcc) {
 								hasEac3Descriptor = true;
+							} else if (descriptorTag === 0x73 || descriptorTag === 0x8a) {
+								hasDtsDescriptor = true;
+							} else if (descriptorTag === 0x7b) {
+								hasTruehdDescriptor = true;
 							}
 							bitstream.skipBits(8 * descriptorLength);
 						}
@@ -315,8 +321,13 @@ export class MpegTsDemuxer extends Demuxer {
 
 						switch (streamType) {
 							case MpegTsStreamType.AVC:
-							case MpegTsStreamType.HEVC: {
-								const codec = streamType === MpegTsStreamType.AVC ? 'avc' : 'hevc';
+							case MpegTsStreamType.HEVC:
+							case MpegTsStreamType.VVC: {
+								const codec = streamType === MpegTsStreamType.AVC
+									? 'avc'
+									: streamType === MpegTsStreamType.HEVC
+										? 'hevc'
+										: 'vvc';
 
 								info = {
 									type: 'video',
@@ -342,6 +353,11 @@ export class MpegTsDemuxer extends Demuxer {
 							case MpegTsStreamType.MP3_MPEG2:
 							case MpegTsStreamType.AAC:
 							case MpegTsStreamType.AC3_SYSTEM_A:
+							case MpegTsStreamType.DTS_SMPTE:
+							case MpegTsStreamType.DTS_HD:
+							case MpegTsStreamType.DTS_HD_MA:
+							case MpegTsStreamType.DTS_ARIB:
+							case MpegTsStreamType.TRUEHD:
 							case MpegTsStreamType.EAC3_SYSTEM_A: {
 								let codec: AudioCodec;
 								if (
@@ -353,8 +369,15 @@ export class MpegTsDemuxer extends Demuxer {
 									codec = 'aac';
 								} else if (streamType === MpegTsStreamType.AC3_SYSTEM_A) {
 									codec = 'ac3';
-								} else if (streamType === MpegTsStreamType.EAC3_SYSTEM_A) {
-									codec = 'eac3';
+								} else if (
+									streamType === MpegTsStreamType.DTS_SMPTE
+									|| streamType === MpegTsStreamType.DTS_HD
+									|| streamType === MpegTsStreamType.DTS_HD_MA
+									|| streamType === MpegTsStreamType.DTS_ARIB
+								) {
+									codec = 'dts';
+								} else if (streamType === MpegTsStreamType.TRUEHD) {
+									codec = 'truehd';
 								} else {
 									throw new Error('Unreachable.');
 								}
@@ -383,6 +406,24 @@ export class MpegTsDemuxer extends Demuxer {
 									info = {
 										type: 'audio',
 										codec: 'ac3',
+										decoderConfig: null,
+										aacCodecInfo: null,
+										numberOfChannels: -1,
+										sampleRate: -1,
+									};
+								} else if (hasDtsDescriptor) {
+									info = {
+										type: 'audio',
+										codec: 'dts',
+										decoderConfig: null,
+										aacCodecInfo: null,
+										numberOfChannels: -1,
+										sampleRate: -1,
+									};
+								} else if (hasTruehdDescriptor) {
+									info = {
+										type: 'audio',
+										codec: 'truehd',
 										decoderConfig: null,
 										aacCodecInfo: null,
 										numberOfChannels: -1,
@@ -669,6 +710,14 @@ export class MpegTsDemuxer extends Demuxer {
 
 								elementaryStream.info.numberOfChannels = getEac3ChannelCount(frameInfo);
 								elementaryStream.info.sampleRate = sampleRate;
+							} else if (elementaryStream.info.codec === 'dts') {
+								// TODO: parse DTS frame header for sample rate and channel count
+								elementaryStream.info.sampleRate = 48000;
+								elementaryStream.info.numberOfChannels = 6;
+							} else if (elementaryStream.info.codec === 'truehd') {
+								// TODO: parse TrueHD access unit for sample rate and channel count
+								elementaryStream.info.sampleRate = 48000;
+								elementaryStream.info.numberOfChannels = 8;
 							} else {
 								throw new Error('Unhandled.');
 							}
@@ -1975,7 +2024,7 @@ class PacketReadingContext {
 			const codec = elementaryStream.info.codec;
 			const CHUNK_SIZE = 1024;
 
-			if (codec !== 'avc' && codec !== 'hevc') {
+			if (codec !== 'avc' && codec !== 'hevc' && codec !== 'vvc') {
 				throw new Error('Unhandled.');
 			}
 
@@ -2044,7 +2093,7 @@ class PacketReadingContext {
 					}
 
 					// We have a second start code. Check if it's an AUD.
-					if (nalUnitTypeByte !== null) {
+					if (nalUnitTypeByte !== null && codec !== 'vvc') {
 						const nalUnitType = codec === 'avc'
 							? extractNalUnitTypeForAvc(nalUnitTypeByte)
 							: extractNalUnitTypeForHevc(nalUnitTypeByte);
@@ -2079,6 +2128,17 @@ class PacketReadingContext {
 		} else {
 			const codec = elementaryStream.info.codec;
 			const CHUNK_SIZE = 128;
+
+			if (codec === 'dts' || codec === 'truehd') {
+				// TODO: implement proper frame-level packet parsing
+				// No frame-level parsing implemented for these codecs;
+				// supply the entire PES packet data as one packet.
+				const remaining = this.endPos - this.currentPos;
+				if (remaining > 0) {
+					return this.supplyPacket(remaining, 0);
+				}
+				return;
+			}
 
 			while (true) {
 				let remaining = this.ensureBuffered(CHUNK_SIZE);

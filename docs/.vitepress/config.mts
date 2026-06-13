@@ -143,6 +143,7 @@ export default withMermaid({
 						{ text: 'VP8', link: '/codec-registry/vp8' },
 						{ text: 'VP9', link: '/codec-registry/vp9' },
 						{ text: 'AV1', link: '/codec-registry/av1' },
+						{ text: 'VVC (H.266)', link: '/codec-registry/vvc' },
 					],
 				},
 				{
@@ -155,6 +156,9 @@ export default withMermaid({
 						{ text: 'FLAC', link: '/codec-registry/flac' },
 						{ text: 'AC-3', link: '/codec-registry/ac3' },
 						{ text: 'E-AC-3', link: '/codec-registry/eac3' },
+						{ text: 'DTS', link: '/codec-registry/dts' },
+						{ text: 'Dolby TrueHD', link: '/codec-registry/truehd' },
+						{ text: 'ALAC', link: '/codec-registry/alac' },
 						{ text: 'Linear PCM', link: '/codec-registry/pcm' },
 						{ text: 'μ-law PCM', link: '/codec-registry/ulaw' },
 						{ text: 'A-law PCM', link: '/codec-registry/alaw' },

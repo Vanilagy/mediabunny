@@ -1092,6 +1092,8 @@ export class IsobmffDemuxer extends Demuxer {
 							track.info.codec = 'vp9';
 						} else if (codecName === 'av01') {
 							track.info.codec = 'av1';
+						} else if (codecName === 'vvc1' || codecName === 'vvi1') {
+							track.info.codec = 'vvc';
 						} else if (codecName === null) {
 							console.warn(`Unknown encrypted video codec due to missing frma box.`);
 						} else {
@@ -1164,6 +1166,17 @@ export class IsobmffDemuxer extends Demuxer {
 							track.info.codec = 'ac3';
 						} else if (codecName === 'ec-3') {
 							track.info.codec = 'eac3';
+						} else if (
+							codecName === 'dtsc'
+							|| codecName === 'dtsh'
+							|| codecName === 'dtsl'
+							|| codecName === 'dtse'
+						) {
+							track.info.codec = 'dts';
+						} else if (codecName === 'mlpa') {
+							track.info.codec = 'truehd';
+						} else if (codecName === 'alac') {
+							track.info.codec = 'alac';
 						} else if (codecName === 'twos') {
 							if (sampleSize === 8) {
 								track.info.codec = 'pcm-s8';

@@ -116,11 +116,13 @@ export class MpegTsMuxer extends Muxer {
 		assert(meta?.decoderConfig);
 
 		const codec = track.source._codec;
-		assert(codec === 'avc' || codec === 'hevc');
+		assert(codec === 'avc' || codec === 'hevc' || codec === 'vvc');
 
 		const streamType = codec === 'avc'
 			? MpegTsStreamType.AVC
-			: MpegTsStreamType.HEVC;
+			: codec === 'hevc'
+				? MpegTsStreamType.HEVC
+				: MpegTsStreamType.VVC;
 		const pid = FIRST_TRACK_PID + this.trackDatas.length;
 		const streamId = VIDEO_STREAM_ID_BASE + this.videoTrackIndex++;
 
@@ -161,7 +163,10 @@ export class MpegTsMuxer extends Muxer {
 		assert(meta?.decoderConfig);
 
 		const codec = track.source._codec;
-		assert(codec === 'aac' || codec === 'mp3' || codec === 'ac3' || codec === 'eac3');
+		assert(
+			codec === 'aac' || codec === 'mp3' || codec === 'ac3' || codec === 'eac3'
+			|| codec === 'dts' || codec === 'truehd',
+		);
 
 		let streamType: MpegTsStreamType;
 		let streamId: number;
@@ -184,6 +189,16 @@ export class MpegTsMuxer extends Muxer {
 
 			case 'eac3': {
 				streamType = MpegTsStreamType.EAC3_SYSTEM_A;
+				streamId = 0xbd;
+			}; break;
+
+			case 'dts': {
+				streamType = MpegTsStreamType.DTS_SMPTE;
+				streamId = 0xbd;
+			}; break;
+
+			case 'truehd': {
+				streamType = MpegTsStreamType.TRUEHD;
 				streamId = 0xbd;
 			}; break;
 		}
@@ -303,10 +318,16 @@ export class MpegTsMuxer extends Muxer {
 				const bytes = toUint8Array(description!);
 				if (codec === 'avc') {
 					trackData.avcDecoderConfig = deserializeAvcDecoderConfigurationRecord(bytes);
-				} else {
+				} else if (codec === 'hevc') {
 					trackData.hevcDecoderConfig = deserializeHevcDecoderConfigurationRecord(bytes);
 				}
 			}
+		}
+
+		if (codec === 'vvc') {
+			// TODO verify this
+			// VVC in MPEG-TS always uses Annex B format without AUD
+			return packet.data;
 		}
 
 		if (trackData.inputIsAnnexB) {
@@ -414,7 +435,7 @@ export class MpegTsMuxer extends Muxer {
 	): Uint8Array {
 		const codec = (trackData.track as OutputAudioTrack).source._codec;
 
-		if (codec === 'mp3' || codec === 'ac3' || codec === 'eac3') {
+		if (codec === 'mp3' || codec === 'ac3' || codec === 'eac3' || codec === 'dts' || codec === 'truehd') {
 			// We're good
 			return packet.data;
 		}

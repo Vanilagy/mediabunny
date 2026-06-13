@@ -2455,6 +2455,10 @@ export const determineVideoPacketType = (
 			return null;
 		};
 
+		case 'vvc': {
+			return null; // TODO: implement VVC frame type detection
+		};
+
 		default: {
 			assertNever(codec);
 			assert(false);

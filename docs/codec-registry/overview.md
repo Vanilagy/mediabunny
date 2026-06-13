@@ -12,6 +12,7 @@ The registry is an extension of the [WebCodecs Codec Registry](https://www.w3.or
 
 - [AVC (H.264)](./avc)
 - [HEVC (H.265)](./hevc)
+- [VVC (H.266)](./vvc)
 - [VP8](./vp8)
 - [VP9](./vp9)
 - [AV1](./av1)
@@ -25,6 +26,9 @@ The registry is an extension of the [WebCodecs Codec Registry](https://www.w3.or
 - [FLAC](./flac)
 - [AC-3](./ac3)
 - [E-AC-3](./eac3)
+- [DTS](./dts)
+- [Dolby TrueHD](./truehd)
+- [ALAC](./alac)
 - [Linear PCM](./pcm)
 - [μ-law PCM](./ulaw)
 - [A-law PCM](./alaw)
