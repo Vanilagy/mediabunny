@@ -15,6 +15,7 @@ import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
 import { assert, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readAscii, readBytes, Reader, readU16Be, readU32Be } from '../reader';
+import { ID3_V2_HEADER_SIZE, parseId3V2Tag, readId3V2Header } from '../id3';
 
 const PACKET_SIZE_IN_FRAMES = 2048;
 
@@ -157,6 +158,10 @@ export class AiffDemuxer extends Demuxer {
 					await this.parseCommChunk(dataStart, chunkSize, isAifc);
 				} else if (chunkId === 'SSND') {
 					await this.parseSsndChunk(dataStart, chunkSize);
+				} else if (chunkId === 'ID3 ' || chunkId === 'id3 ') {
+					await this.parseId3Chunk(dataStart, chunkSize);
+				} else if (chunkId === 'NAME' || chunkId === 'AUTH' || chunkId === 'ANNO' || chunkId === '(c) ') {
+					await this.parseTextChunk(chunkId, dataStart, chunkSize);
 				}
 
 				currentPos = dataStart + chunkSize + (chunkSize & 1); // Chunks are padded to even sizes
@@ -220,6 +225,56 @@ export class AiffDemuxer extends Demuxer {
 
 		this.dataStart = startPos + 8 + offset;
 		this.dataSize = Math.min(size - 8 - offset, (this.reader.fileSize ?? Infinity) - this.dataStart);
+	}
+
+	async parseTextChunk(chunkId: string, startPos: number, size: number) {
+		let slice = this.reader.requestSlice(startPos, size);
+		if (slice instanceof Promise) slice = await slice;
+		if (!slice) {
+			return; // File too short
+		}
+
+		const bytes = readBytes(slice, size);
+		// AIFF text chunks are ISO 8859-1; trim any trailing null padding.
+		let length = bytes.length;
+		while (length > 0 && bytes[length - 1] === 0) {
+			length--;
+		}
+		const value = String.fromCharCode(...bytes.subarray(0, length));
+
+		this.metadataTags.raw ??= {};
+		this.metadataTags.raw[chunkId] = value;
+
+		switch (chunkId) {
+			case 'NAME': {
+				this.metadataTags.title ??= value;
+			}; break;
+			case 'AUTH': {
+				this.metadataTags.artist ??= value;
+			}; break;
+			case 'ANNO': {
+				this.metadataTags.comment ??= value;
+			}; break;
+		}
+	}
+
+	async parseId3Chunk(startPos: number, size: number) {
+		let slice = this.reader.requestSlice(startPos, size);
+		if (slice instanceof Promise) slice = await slice;
+		if (!slice) {
+			return; // File too short
+		}
+
+		const id3V2Header = readId3V2Header(slice);
+		if (id3V2Header) {
+			// Clamp to the data the chunk actually provides, in case the ID3 header over-claims.
+			const availableSize = size - ID3_V2_HEADER_SIZE;
+			id3V2Header.size = Math.min(id3V2Header.size, availableSize);
+			if (id3V2Header.size > 0) {
+				const contentSlice = slice.slice(startPos + ID3_V2_HEADER_SIZE, id3V2Header.size);
+				parseId3V2Tag(contentSlice, id3V2Header, this.metadataTags);
+			}
+		}
 	}
 
 	getCodec() {

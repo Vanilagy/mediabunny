@@ -821,8 +821,18 @@ export class WavOutputFormat extends OutputFormat {
  */
 export type AiffOutputFormatOptions = {
 	/**
-	 * Will be called once the file header is written. The header consists of the FORM header, the COMM chunk, and the
-	 * start of the SSND chunk (with a placeholder size).
+	 * The metadata format to use for writing metadata tags.
+	 *
+	 * - `'text'` (default): Writes metadata into the native AIFF text chunks (`NAME`, `AUTH`, `ANNO`). Only allows for
+	 * a limited subset of tags (title, artist, comment) to be written.
+	 * - `'id3'`: Writes metadata into an ID3 chunk. Non-default, but used by many taggers in practice. Allows for a
+	 * much larger and richer set of tags to be written.
+	 */
+	metadataFormat?: 'text' | 'id3';
+
+	/**
+	 * Will be called once the file header is written. The header consists of the FORM header, the COMM chunk, any
+	 * metadata chunks, and the start of the SSND chunk (with a placeholder size).
 	 */
 	onHeader?: (data: Uint8Array, position: number) => unknown;
 };
@@ -841,6 +851,9 @@ export class AiffOutputFormat extends OutputFormat {
 	constructor(options: AiffOutputFormatOptions = {}) {
 		if (!options || typeof options !== 'object') {
 			throw new TypeError('options must be an object.');
+		}
+		if (options.metadataFormat !== undefined && !['text', 'id3'].includes(options.metadataFormat)) {
+			throw new TypeError('options.metadataFormat, when provided, must be either \'text\' or \'id3\'.');
 		}
 		if (options.onHeader !== undefined && typeof options.onHeader !== 'function') {
 			throw new TypeError('options.onHeader, when provided, must be a function.');

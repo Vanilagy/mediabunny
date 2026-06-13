@@ -301,11 +301,16 @@ const output = new Output({
 The following options are available:
 ```ts
 type AiffOutputFormatOptions = {
+	metadataFormat?: 'text' | 'id3';
 	onHeader?: (data: Uint8Array, position: number) => unknown;
 };
 ```
+- `metadataFormat`\
+	The metadata format to use for writing metadata tags.
+	- `'text'` (default): Writes metadata into the native AIFF text chunks (`NAME`, `AUTH`, `ANNO`). Only allows for a limited subset of tags (title, artist, comment) to be written.
+	- `'id3'`: Writes metadata into an ID3 chunk. Non-default, but used by many taggers in practice. Allows for a much larger and richer set of tags to be written.
 - `onHeader`\
-	Will be called once the file header is written. The header consists of the FORM header, the COMM chunk, and the start of the SSND chunk (with a placeholder size).
+	Will be called once the file header is written. The header consists of the FORM header, the COMM chunk, any metadata chunks, and the start of the SSND chunk (with a placeholder size).
 
 ## ADTS
 

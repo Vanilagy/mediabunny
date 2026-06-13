@@ -13,7 +13,9 @@ import { AiffWriter } from './aiff-writer';
 import { Writer } from '../writer';
 import { EncodedPacket } from '../packet';
 import { AiffOutputFormat } from '../output-format';
-import { assert } from '../misc';
+import { assert, assertNever, isIso88591Compatible, keyValueIterator } from '../misc';
+import { MetadataTags, metadataTagsAreEmpty } from '../metadata';
+import { Id3V2Writer } from '../id3';
 
 // The AIFF-C version timestamp written into the FVER chunk (the standard, fixed "AIFF-C version 1" value).
 const AIFC_VERSION_1 = 0xa2805140;
@@ -167,6 +169,19 @@ export class AiffMuxer extends Muxer {
 			this.writer.write(compressionNameBytes);
 		}
 
+		// Metadata chunks (written before SSND, since SSND holds the bulk sample data)
+		if (!metadataTagsAreEmpty(this.output._metadataTags)) {
+			const metadataFormat = this.format._options.metadataFormat ?? 'text';
+
+			if (metadataFormat === 'text') {
+				this.writeTextChunks(this.output._metadataTags);
+			} else if (metadataFormat === 'id3') {
+				this.writeId3Chunk(this.output._metadataTags);
+			} else {
+				assertNever(metadataFormat);
+			}
+		}
+
 		// SSND chunk header (sample data is appended after this)
 		this.aiffWriter.writeAscii('SSND');
 		this.ssndSizePos = this.writer.getPos();
@@ -177,6 +192,105 @@ export class AiffMuxer extends Muxer {
 		if (this.format._options.onHeader) {
 			const { data, start } = this.writer.stopTrackingWrites();
 			this.format._options.onHeader(data, start);
+		}
+	}
+
+	private writeTextChunk(chunkId: string, value: string) {
+		if (!isIso88591Compatible(value)) {
+			// AIFF text chunks are ISO 8859-1 only; richer text needs the 'id3' metadata format.
+			console.warn(`Didn't write tag '${chunkId}' because '${value}' is not ISO 8859-1-compatible.`);
+			return;
+		}
+
+		const bytes = new Uint8Array(value.length);
+		for (let i = 0; i < value.length; i++) {
+			bytes[i] = value.charCodeAt(i);
+		}
+
+		this.aiffWriter.writeAscii(chunkId);
+		this.aiffWriter.writeU32(value.length);
+		this.writer.write(bytes);
+
+		// Pad to an even chunk size.
+		if (value.length & 1) {
+			this.writer.write(new Uint8Array(1));
+		}
+	}
+
+	private writeTextChunks(metadata: MetadataTags) {
+		const writtenChunks = new Set<string>();
+
+		for (const { key, value } of keyValueIterator(metadata)) {
+			switch (key) {
+				case 'title': {
+					this.writeTextChunk('NAME', value);
+					writtenChunks.add('NAME');
+				}; break;
+
+				case 'artist': {
+					this.writeTextChunk('AUTH', value);
+					writtenChunks.add('AUTH');
+				}; break;
+
+				case 'comment': {
+					this.writeTextChunk('ANNO', value);
+					writtenChunks.add('ANNO');
+				}; break;
+
+				case 'description':
+				case 'album':
+				case 'albumArtist':
+				case 'trackNumber':
+				case 'tracksTotal':
+				case 'discNumber':
+				case 'discsTotal':
+				case 'genre':
+				case 'date':
+				case 'lyrics':
+				case 'images': {
+					// Not representable as a native AIFF text chunk; use the 'id3' metadata format for these.
+				}; break;
+
+				case 'raw': {
+					// Handled below
+				}; break;
+
+				default: assertNever(key);
+			}
+		}
+
+		if (metadata.raw) {
+			for (const key in metadata.raw) {
+				const value = metadata.raw[key];
+				if (value == null || key.length !== 4 || writtenChunks.has(key)) {
+					continue;
+				}
+
+				if (typeof value === 'string') {
+					this.writeTextChunk(key, value);
+				}
+			}
+		}
+	}
+
+	private writeId3Chunk(metadata: MetadataTags) {
+		const startPos = this.writer.getPos();
+
+		this.aiffWriter.writeAscii('ID3 ');
+		this.aiffWriter.writeU32(0); // Size placeholder
+
+		const id3Writer = new Id3V2Writer(this.writer);
+		const id3TagSize = id3Writer.writeId3V2Tag(metadata);
+
+		const endPos = this.writer.getPos();
+
+		this.writer.seek(startPos + 4);
+		this.aiffWriter.writeU32(id3TagSize);
+		this.writer.seek(endPos);
+
+		// Pad to an even chunk size.
+		if (id3TagSize & 1) {
+			this.writer.write(new Uint8Array(1));
 		}
 	}
 

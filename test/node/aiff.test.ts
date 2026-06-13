@@ -163,3 +163,63 @@ for (const { codec, formType, compression, tolerance } of writeCases) {
 		expect(maxError).toBeLessThan(tolerance);
 	});
 }
+
+const writeAiff = async (metadataFormat: 'text' | 'id3', tags: Parameters<Output['setMetadataTags']>[0]) => {
+	const output = new Output({
+		format: new AiffOutputFormat({ metadataFormat }),
+		target: new BufferTarget(),
+	});
+	output.setMetadataTags(tags);
+
+	const source = new AudioSampleSource({ codec: 'pcm-s16be' });
+	output.addAudioTrack(source);
+	await output.start();
+	await source.add(new AudioSample({
+		data: makeTone(),
+		format: 'f32-planar',
+		numberOfChannels: 1,
+		sampleRate: SAMPLE_RATE,
+		timestamp: 0,
+	}));
+	source.close();
+	await output.finalize();
+
+	return output.target.buffer!;
+};
+
+const readTags = async (buffer: ArrayBuffer) => {
+	using input = new Input({ source: new BufferSource(buffer), formats: [AIFF] });
+	return await input.getMetadataTags();
+};
+
+test('Should round-trip metadata via native AIFF text chunks', async () => {
+	const buffer = await writeAiff('text', {
+		title: 'Trying to Feel Alive',
+		artist: 'Porter Robinson',
+		comment: 'A great song',
+		album: 'Nurture', // Not representable as a text chunk; should be dropped
+	});
+
+	const tags = await readTags(buffer);
+	expect(tags.title).toBe('Trying to Feel Alive');
+	expect(tags.artist).toBe('Porter Robinson');
+	expect(tags.comment).toBe('A great song');
+	expect(tags.album).toBeUndefined();
+});
+
+test('Should round-trip rich metadata via an ID3 chunk', async () => {
+	const buffer = await writeAiff('id3', {
+		title: 'Trying to Feel Alive',
+		artist: 'Porter Robinson',
+		album: 'Nurture',
+		genre: 'Electronic',
+		trackNumber: 3,
+	});
+
+	const tags = await readTags(buffer);
+	expect(tags.title).toBe('Trying to Feel Alive');
+	expect(tags.artist).toBe('Porter Robinson');
+	expect(tags.album).toBe('Nurture');
+	expect(tags.genre).toBe('Electronic');
+	expect(tags.trackNumber).toBe(3);
+});
