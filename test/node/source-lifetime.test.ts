@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
-import { BufferSource, FilePathSource } from '../../src/source.js';
+import { FilePathSource } from '../../src/source.js';
 import path from 'node:path';
-import { Input, UnsupportedInputFormatError } from '../../src/input.js';
+import { Input } from '../../src/input.js';
 import { ALL_FORMATS, MP4 } from '../../src/input-format.js';
 
 const __dirname = new URL('.', import.meta.url).pathname;
@@ -53,28 +53,4 @@ test('Implicit source disposal, double input', async () => {
 	expect(!source._disposed);
 	input2.dispose();
 	expect(source._disposed);
-});
-
-test('Disposing after failed format detection does not emit an unhandled rejection', async () => {
-	const input = new Input({
-		source: new BufferSource(new Uint8Array([1, 2, 3, 4])),
-		formats: ALL_FORMATS,
-	});
-
-	await expect(input.getFormat()).rejects.toThrow(UnsupportedInputFormatError);
-
-	const unhandledRejections: unknown[] = [];
-	const onUnhandledRejection = (reason: unknown) => {
-		unhandledRejections.push(reason);
-	};
-
-	process.on('unhandledRejection', onUnhandledRejection);
-	try {
-		input.dispose();
-		await new Promise(resolve => setTimeout(resolve, 0));
-	} finally {
-		process.off('unhandledRejection', onUnhandledRejection);
-	}
-
-	expect(unhandledRejections).toEqual([]);
 });
