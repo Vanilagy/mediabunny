@@ -2713,6 +2713,74 @@ export class AudioSample implements Disposable {
 	}
 
 	/**
+	 * Returns a new {@link AudioSample} containing only the frames in the range [startSample, endSample). Both bounds
+	 * must lie within this sample's range of frames. The returned sample's timestamp is shifted to match the start of
+	 * the trimmed section.
+	 */
+	trim(startSample: number, endSample = this.numberOfFrames) {
+		if (!Number.isInteger(startSample) || startSample < 0) {
+			throw new TypeError('startSample must be a non-negative integer.');
+		}
+		if (!Number.isInteger(endSample) || endSample < 0) {
+			throw new TypeError('endSample must be a non-negative integer.');
+		}
+		if (startSample > this.numberOfFrames) {
+			throw new RangeError('startSample out of range.');
+		}
+		if (endSample > this.numberOfFrames) {
+			throw new RangeError('endSample out of range.');
+		}
+		if (endSample < startSample) {
+			throw new RangeError('endSample must not be less than startSample.');
+		}
+
+		if (this._closed) {
+			throw new Error('AudioSample is closed.');
+		}
+
+		const frameCount = endSample - startSample;
+		const bytesPerSample = getBytesPerSample(this.format);
+
+		let data: Uint8Array;
+		if (formatIsPlanar(this.format)) {
+			const planeSize = frameCount * bytesPerSample;
+			data = new Uint8Array(planeSize * this.numberOfChannels);
+
+			if (frameCount > 0) {
+				// Copy plane-by-plane
+				for (let i = 0; i < this.numberOfChannels; i++) {
+					this.copyTo(data.subarray(i * planeSize, (i + 1) * planeSize), {
+						planeIndex: i,
+						format: this.format,
+						frameOffset: startSample,
+						frameCount,
+					});
+				}
+			}
+		} else {
+			// Trivial
+			data = new Uint8Array(frameCount * this.numberOfChannels * bytesPerSample);
+
+			if (frameCount > 0) {
+				this.copyTo(data, {
+					planeIndex: 0,
+					format: this.format,
+					frameOffset: startSample,
+					frameCount,
+				});
+			}
+		}
+
+		return new AudioSample({
+			data,
+			format: this.format,
+			sampleRate: this.sampleRate,
+			numberOfChannels: this.numberOfChannels,
+			timestamp: this.timestamp + startSample / this.sampleRate,
+		});
+	}
+
+	/**
 	 * Closes this audio sample, releasing held resources. Audio samples should be closed as soon as they are not
 	 * needed anymore.
 	 */

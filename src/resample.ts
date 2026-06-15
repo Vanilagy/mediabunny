@@ -20,41 +20,32 @@ export class AudioResampler {
 	targetSampleRate: number;
 	sourceNumberOfChannels: number | null = null;
 	targetNumberOfChannels: number;
-	endTime: number;
+	startTime: number | null = null;
 	onSample: (sample: AudioSample) => Promise<void>;
 
 	bufferSizeInFrames: number;
 	bufferSizeInSamples: number;
 	outputBuffer: Float32Array;
 	/** Start frame of current buffer */
-	bufferStartFrame: number;
+	bufferStartFrame = 0;
 	/** The highest index written to in the current buffer */
 	maxWrittenFrame: number | null = null;
 	channelMixer!: (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => number;
 	tempSourceBuffer!: Float32Array;
-	timestampOffset: number;
 
 	constructor(options: {
 		targetSampleRate: number;
 		targetNumberOfChannels: number;
-		startTime: number;
-		endTime: number;
 		onSample: (sample: AudioSample) => Promise<void>;
 	}) {
 		this.targetSampleRate = options.targetSampleRate;
 		this.targetNumberOfChannels = options.targetNumberOfChannels;
-		this.endTime = options.endTime;
 		this.onSample = options.onSample;
 
 		this.bufferSizeInFrames = Math.floor(this.targetSampleRate * 5.0); // 5 seconds
 		this.bufferSizeInSamples = this.bufferSizeInFrames * this.targetNumberOfChannels;
 
 		this.outputBuffer = new Float32Array(this.bufferSizeInSamples);
-
-		this.bufferStartFrame = Math.floor(options.startTime * this.targetSampleRate);
-		// Set to ensure that if the buffer start frame lands on a fractional sample, that the first timestamp still
-		// comes out as exactly startTime
-		this.timestampOffset = options.startTime - this.bufferStartFrame / this.targetSampleRate;
 	}
 
 	/**
@@ -186,12 +177,15 @@ export class AudioResampler {
 			// they see fit.
 			this.sourceSampleRate = audioSample.sampleRate;
 			this.sourceNumberOfChannels = audioSample.numberOfChannels;
+			this.startTime = audioSample.timestamp;
 
 			// Pre-allocate temporary buffer for source data
 			this.tempSourceBuffer = new Float32Array(this.sourceSampleRate * this.sourceNumberOfChannels);
 
 			this.doChannelMixerSetup();
 		}
+
+		assert(this.startTime !== null);
 
 		const requiredSamples = audioSample.numberOfFrames * audioSample.numberOfChannels;
 		this.ensureTempBufferSize(requiredSamples);
@@ -201,8 +195,8 @@ export class AudioResampler {
 		const sourceView = new Float32Array(this.tempSourceBuffer.buffer, 0, sourceDataSize / 4);
 		audioSample.copyTo(sourceView, { planeIndex: 0, format: 'f32' });
 
-		const inputStartTime = audioSample.timestamp;
-		const inputEndTime = Math.min(audioSample.timestamp + audioSample.duration, this.endTime);
+		const inputStartTime = audioSample.timestamp - this.startTime;
+		const inputEndTime = inputStartTime + audioSample.duration;
 
 		// Compute which output frames are affected by this sample
 		const outputStartFrame = Math.floor(inputStartTime * this.targetSampleRate);
@@ -266,17 +260,18 @@ export class AudioResampler {
 			return; // Nothing to finalize
 		}
 
+		assert(this.startTime !== null);
+
 		const samplesWritten = (this.maxWrittenFrame + 1) * this.targetNumberOfChannels;
 
 		const outputData = new Float32Array(samplesWritten);
 		outputData.set(this.outputBuffer.subarray(0, samplesWritten));
 
-		const timestampSeconds = this.bufferStartFrame / this.targetSampleRate;
 		const audioSample = new AudioSample({
 			format: 'f32',
 			sampleRate: this.targetSampleRate,
 			numberOfChannels: this.targetNumberOfChannels,
-			timestamp: timestampSeconds + this.timestampOffset,
+			timestamp: this.startTime + this.bufferStartFrame / this.targetSampleRate,
 			data: outputData,
 		});
 

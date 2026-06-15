@@ -74,6 +74,8 @@ export type VideoEncodingConfig = {
 	 * WebCodecs API, is created.
 	 */
 	onEncoderConfig?: (config: VideoEncoderConfig) => unknown;
+	/** Called right before a sample is passed to the encoder. */
+	onEncodedSample?: (sample: VideoSample) => unknown;
 } & VideoEncodingAdditionalOptions;
 
 /**
@@ -232,6 +234,9 @@ export const validateVideoEncodingConfig = (config: VideoEncodingConfig) => {
 	if (config.onEncoderConfig !== undefined && typeof config.onEncoderConfig !== 'function') {
 		throw new TypeError('config.onEncoderConfig, when provided, must be a function.');
 	}
+	if (config.onEncodedSample !== undefined && typeof config.onEncodedSample !== 'function') {
+		throw new TypeError('config.onEncodedSample, when provided, must be a function.');
+	}
 
 	validateVideoEncodingAdditionalOptions(config.codec, config);
 };
@@ -382,6 +387,8 @@ export type AudioEncodingConfig = {
 	 * WebCodecs API, is created.
 	 */
 	onEncoderConfig?: (config: AudioEncoderConfig) => unknown;
+	/** Called right before a sample is passed to the encoder. */
+	onEncodedSample?: (sample: AudioSample) => unknown;
 } & AudioEncodingAdditionalOptions;
 
 /**
@@ -461,6 +468,9 @@ export const validateAudioEncodingConfig = (config: AudioEncodingConfig) => {
 	}
 	if (config.onEncoderConfig !== undefined && typeof config.onEncoderConfig !== 'function') {
 		throw new TypeError('config.onEncoderConfig, when provided, must be a function.');
+	}
+	if (config.onEncodedSample !== undefined && typeof config.onEncodedSample !== 'function') {
+		throw new TypeError('config.onEncodedSample, when provided, must be a function.');
 	}
 
 	validateAudioEncodingAdditionalOptions(config.codec, config);
