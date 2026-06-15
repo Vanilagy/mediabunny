@@ -2069,8 +2069,14 @@ export class IsobmffDemuxer extends Demuxer {
 				// referenced in the track fragment header.
 				if (this.currentTrack) {
 					const trackData = this.currentFragment.trackData.get(this.currentTrack.id);
+					cond:
 					if (trackData) {
-						this.currentFragment.implicitBaseDataOffset = trackData.currentOffset;
+						if (trackData.samples.length === 0) {
+							// Don't associate the fragment with the track if it has no samples, this simplifies
+							// other code
+							this.currentFragment.trackData.delete(this.currentTrack.id);
+							break cond;
+						}
 
 						trackData.presentationTimestamps = trackData.samples
 							.map((x, i) => ({ presentationTimestamp: x.presentationTimestamp, sampleIndex: i }))
@@ -2260,12 +2266,6 @@ export class IsobmffDemuxer extends Demuxer {
 					this.currentFragment.trackData.set(track.id, trackData);
 				}
 
-				if (sampleCount === 0) {
-					// Don't associate the fragment with the track if it has no samples, this simplifies other code
-					this.currentFragment.implicitBaseDataOffset = trackData.currentOffset;
-					break;
-				}
-
 				for (let i = 0; i < sampleCount; i++) {
 					let sampleDuration: number;
 					if (sampleDurationPresent) {
@@ -2317,6 +2317,8 @@ export class IsobmffDemuxer extends Demuxer {
 					trackData.currentOffset += sampleSize;
 					trackData.currentTimestamp += sampleDuration;
 				}
+
+				this.currentFragment.implicitBaseDataOffset = trackData.currentOffset;
 			}; break;
 
 			case 'saiz': {
