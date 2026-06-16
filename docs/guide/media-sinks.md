@@ -228,7 +228,7 @@ const sink = new VideoSampleSink(videoTrack);
 
 // Optionally, configure the decoder:
 const sink = new VideoSampleSink(videoTrack, {
-	hardwarePreference: 'prefer-software',
+	hardwareAcceleration: 'prefer-software',
 });
 ```
 
