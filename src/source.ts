@@ -289,10 +289,15 @@ export class SourceRef<S extends Source = Source> implements Disposable {
  */
 export abstract class PathedSource extends Source {
 	constructor(
-		/** The path that points to the root file; the entry file of the media. */
+		/**
+		 * The path that points to the root file; the entry file of the media.
+		 *
+		 * This path may be modified by the source to indicate a redirect: an updated path to perform new requests
+		 * relative to.
+		 */
 		public rootPath: FilePath,
 		/** The callback that is called for each requested file; must return a {@link Source} or {@link SourceRef}. */
-		public requestHandler: (request: SourceRequest) => MaybePromise<Source | SourceRef>,
+		public readonly requestHandler: (request: SourceRequest) => MaybePromise<Source | SourceRef>,
 	) {
 		if (typeof rootPath !== 'string') {
 			throw new TypeError('rootPath must be a string.');
@@ -778,7 +783,10 @@ export class UrlSource extends PathedSource {
 				? url.href
 				: url;
 
-		super(urlString, request => new UrlSource(request.path, this._options));
+		super(
+			urlString,
+			request => new UrlSource(request.path, this._options),
+		);
 
 		this._url = url;
 		this._options = options;
@@ -903,6 +911,11 @@ export class UrlSource extends PathedSource {
 			if (!response.ok) {
 				// eslint-disable-next-line @typescript-eslint/no-base-to-string
 				throw new Error(`Error fetching ${String(this._url)}: ${response.status} ${response.statusText}`);
+			}
+
+			if (response.redirected) {
+				// Modify our own root path so that future subrequests get made relative to the redirected URL
+				this.rootPath = response.url;
 			}
 
 			outer:
