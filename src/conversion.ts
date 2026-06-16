@@ -14,6 +14,7 @@ import {
 	VideoCodec,
 } from './codec';
 import {
+	AudioEncodingConfig,
 	getEncodableAudioCodecs,
 	getFirstEncodableVideoCodec,
 	Quality,
@@ -50,17 +51,14 @@ import { Output, OutputTrackGroup, TrackType } from './output';
 import { Mp4OutputFormat } from './output-format';
 import {
 	AudioSample,
-	audioSampleToInterleavedFormat,
 	clampCropRectangle,
 	CropRectangle,
-	toInterleavedAudioFormat,
 	validateCropRectangle,
 	VideoSample,
 	VideoSampleResource,
 } from './sample';
 import { MetadataTags, validateMetadataTags } from './metadata';
 import { NullTarget } from './target';
-import { AudioResampler } from './resample';
 
 /**
  * The options for media file conversion.
@@ -1342,6 +1340,10 @@ export class Conversion {
 				encodingConfig.transform.frameRate = trackOptions.frameRate;
 			}
 
+			if (trackOptions.process) {
+				encodingConfig.transform.process = trackOptions.process;
+			}
+
 			if (needsRerender) {
 				outputTrackRotation = 0; // Since the rotation is baked into the output
 
@@ -1352,6 +1354,12 @@ export class Conversion {
 				encodingConfig.transform.crop = crop;
 				encodingConfig.transform.alpha = alpha;
 			}
+
+			// We need to do this because `process` can emit new timestamps
+			let lastSampleTimestamp: number | null = null;
+			encodingConfig.onEncodedSample = (sample) => {
+				lastSampleTimestamp = sample.timestamp;
+			};
 
 			const source = new VideoSampleSource(encodingConfig);
 			videoSource = source;
@@ -1370,7 +1378,14 @@ export class Conversion {
 					const adjustedSampleTimestamp = Math.max(sample.timestamp - this._startTimestamp, 0);
 					sample.setTimestamp(adjustedSampleTimestamp);
 
-					await this._registerVideoSample(trackOptions, outputTrackId, source, sample);
+					this._reportProgress(outputTrackId, sample.timestamp + sample.duration);
+					await source.add(sample);
+
+					if (lastSampleTimestamp !== null) {
+						if (this._synchronizer.shouldWait(outputTrackId, lastSampleTimestamp)) {
+							await this._synchronizer.wait(lastSampleTimestamp);
+						}
+					}
 
 					sample.close();
 				}
@@ -1404,69 +1419,6 @@ export class Conversion {
 	}
 
 	/** @internal */
-	async _registerVideoSample(
-		trackOptions: ConversionVideoOptions,
-		outputTrackId: number,
-		source: VideoSampleSource,
-		sample: VideoSample,
-	) {
-		if (this._canceled) {
-			return;
-		}
-
-		this._reportProgress(outputTrackId, sample.timestamp + sample.duration);
-
-		let finalSamples: VideoSample[];
-		if (!trackOptions.process) {
-			finalSamples = [sample];
-		} else {
-			let processed = trackOptions.process(sample);
-			if (processed instanceof Promise) processed = await processed;
-
-			if (!Array.isArray(processed)) {
-				processed = processed === null ? [] : [processed];
-			}
-
-			finalSamples = processed.map((x) => {
-				if (x instanceof VideoSample) {
-					return x;
-				}
-
-				if (typeof VideoFrame !== 'undefined' && x instanceof VideoFrame) {
-					return new VideoSample(x);
-				}
-
-				// Calling the VideoSample constructor here will automatically handle input validation for us
-				// (it throws for any non-legal argument).
-				return new VideoSample(x as CanvasImageSource, {
-					timestamp: sample.timestamp,
-					duration: sample.duration,
-				});
-			});
-		}
-
-		try {
-			for (const finalSample of finalSamples) {
-				if (this._canceled) {
-					break;
-				}
-
-				await source.add(finalSample);
-
-				if (this._synchronizer.shouldWait(outputTrackId, finalSample.timestamp)) {
-					await this._synchronizer.wait(finalSample.timestamp);
-				}
-			}
-		} finally {
-			for (const finalSample of finalSamples) {
-				if (finalSample !== sample) {
-					finalSample.close();
-				}
-			}
-		}
-	}
-
-	/** @internal */
 	async _processAudioTrack(track: InputAudioTrack, trackOptions: ConversionAudioOptions, outputTrackId: number) {
 		const sourceCodec = await track.getCodec();
 		if (!sourceCodec) {
@@ -1487,16 +1439,18 @@ export class Conversion {
 
 		let numberOfChannels = trackOptions.numberOfChannels ?? originalNumberOfChannels;
 		let sampleRate = trackOptions.sampleRate ?? originalSampleRate;
-		let needsResample = numberOfChannels !== originalNumberOfChannels
-			|| sampleRate !== originalSampleRate
-			|| firstTimestamp < this._startTimestamp
-			|| (firstTimestamp > this._startTimestamp && !this.output.format.supportsTimestampedMediaData);
+
+		const needsTrimming = firstTimestamp < this._startTimestamp;
+		const needsPadding = firstTimestamp > this._startTimestamp && !this.output.format.supportsTimestampedMediaData;
 
 		let audioCodecs = this.output.format.getSupportedAudioCodecs();
 		if (
 			!trackOptions.forceTranscode
 			&& !trackOptions.bitrate
-			&& !needsResample
+			&& numberOfChannels === originalNumberOfChannels
+			&& sampleRate === originalSampleRate
+			&& !needsTrimming
+			&& !needsPadding
 			&& audioCodecs.includes(sourceCodec)
 			&& (!trackOptions.codec || trackOptions.codec === sourceCodec)
 			&& !trackOptions.process
@@ -1589,7 +1543,6 @@ export class Conversion {
 					.find(codec => (NON_PCM_AUDIO_CODECS as readonly string[]).includes(codec));
 				if (nonPcmCodec) {
 					// We are able to encode using a non-PCM codec, but it'll require resampling
-					needsResample = true;
 					codecOfChoice = nonPcmCodec;
 					numberOfChannels = FALLBACK_NUMBER_OF_CHANNELS;
 					sampleRate = FALLBACK_SAMPLE_RATE;
@@ -1607,44 +1560,86 @@ export class Conversion {
 				return;
 			}
 
-			if (needsResample) {
-				audioSource = this._resampleAudio(
-					track,
-					trackOptions,
-					outputTrackId,
-					codecOfChoice,
-					numberOfChannels,
-					sampleRate,
-					bitrate,
-				);
-			} else {
-				const source = new AudioSampleSource({
-					codec: codecOfChoice,
-					bitrate,
-				});
-				audioSource = source;
+			const encodingConfig: AudioEncodingConfig = {
+				codec: codecOfChoice,
+				bitrate,
+				transform: {
+					sampleFormat: trackOptions.sampleFormat,
+					process: trackOptions.process,
+				},
+			};
+			assert(encodingConfig.transform);
 
-				this._trackPromises.push((async () => {
-					await this._started;
+			if (numberOfChannels !== originalNumberOfChannels) {
+				encodingConfig.transform.numberOfChannels = numberOfChannels;
+			}
+			if (sampleRate !== originalSampleRate) {
+				encodingConfig.transform.sampleRate = sampleRate;
+			}
 
-					const sink = new AudioSampleSink(track);
-					for await (const sample of sink.samples(undefined, this._endTimestamp)) {
-						if (this._canceled) {
-							sample.close();
-							return;
-						}
+			let lastSampleTimestamp: number | null = null;
+			encodingConfig.onEncodedSample = (sample) => {
+				lastSampleTimestamp = sample.timestamp;
+			};
 
-						// Offset the timestamp as needed
-						sample.setTimestamp(sample.timestamp - this._startTimestamp);
+			const source = new AudioSampleSource(encodingConfig);
+			audioSource = source;
 
-						await this._registerAudioSample(trackOptions, outputTrackId, source, sample);
+			this._trackPromises.push((async () => {
+				await this._started;
+
+				if (needsPadding) {
+					const paddingLength = firstTimestamp - this._startTimestamp;
+					const paddingLengthSamples = Math.round(paddingLength * originalSampleRate);
+
+					const silentSample = new AudioSample({
+						data: new Float32Array(paddingLengthSamples * originalNumberOfChannels),
+						format: 'f32-planar',
+						numberOfChannels: originalNumberOfChannels,
+						sampleRate: originalSampleRate,
+						timestamp: 0,
+					});
+					await this._registerAudioSample(silentSample, source, outputTrackId, () => lastSampleTimestamp);
+				}
+
+				const sink = new AudioSampleSink(track);
+				for await (let sample of sink.samples(this._startTimestamp, this._endTimestamp)) {
+					if (this._canceled) {
 						sample.close();
+						return;
 					}
 
-					source.close();
-					this._synchronizer.closeTrack(outputTrackId);
-				})());
-			}
+					let startFrame = 0;
+					let endFrame = sample.numberOfFrames;
+
+					if (sample.timestamp < this._startTimestamp) {
+						startFrame = Math.round((this._startTimestamp - sample.timestamp) * sample.sampleRate);
+					}
+					if (sample.timestamp + sample.duration > this._endTimestamp) {
+						endFrame = Math.round((this._endTimestamp - sample.timestamp) * sample.sampleRate);
+					}
+
+					if (startFrame > 0 || endFrame < sample.numberOfFrames) {
+						// Trim the sample if it sticks out of the trim region on either end
+						const trimmedSample = sample.trim(startFrame, endFrame);
+						sample.close();
+						sample = trimmedSample;
+
+						if (sample.numberOfFrames === 0) {
+							sample.close();
+							continue;
+						}
+					}
+
+					// Offset the timestamp as needed
+					sample.setTimestamp(sample.timestamp - this._startTimestamp);
+
+					await this._registerAudioSample(sample, source, outputTrackId, () => lastSampleTimestamp);
+				}
+
+				source.close();
+				this._synchronizer.closeTrack(outputTrackId);
+			})());
 		}
 
 		let ownGroup: OutputTrackGroup | null = null;
@@ -1670,124 +1665,22 @@ export class Conversion {
 
 	/** @internal */
 	async _registerAudioSample(
-		trackOptions: ConversionAudioOptions,
-		outputTrackId: number,
+		sample: AudioSample,
 		source: AudioSampleSource,
-		inputSample: AudioSample,
+		outputTrackId: number,
+		getLastSampleTimestamp: () => number | null,
 	) {
-		if (this._canceled) {
-			return;
-		}
-
-		let sample = inputSample;
-
-		if (
-			trackOptions.sampleFormat !== undefined
-			&& toInterleavedAudioFormat(sample.format) !== trackOptions.sampleFormat
-		) {
-			// Do a sample format conversion
-			sample = audioSampleToInterleavedFormat(sample, trackOptions.sampleFormat);
-		}
-
 		this._reportProgress(outputTrackId, sample.timestamp + sample.duration);
 
-		let finalSamples: AudioSample[];
-		if (!trackOptions.process) {
-			finalSamples = [sample];
-		} else {
-			let processed = trackOptions.process(sample);
-			if (processed instanceof Promise) processed = await processed;
+		await source.add(sample);
+		sample.close();
 
-			if (!Array.isArray(processed)) {
-				processed = processed === null ? [] : [processed];
-			}
-
-			if (!processed.every(x => x instanceof AudioSample)) {
-				throw new TypeError(
-					'The audio process function must return an AudioSample, null, or an array of AudioSamples.',
-				);
-			}
-
-			finalSamples = processed;
-		}
-
-		try {
-			for (const finalSample of finalSamples) {
-				if (this._canceled) {
-					break;
-				}
-
-				await source.add(finalSample);
-
-				if (this._synchronizer.shouldWait(outputTrackId, finalSample.timestamp)) {
-					await this._synchronizer.wait(finalSample.timestamp);
-				}
-			}
-		} finally {
-			if (sample !== inputSample) {
-				sample.close();
-			}
-
-			for (const finalSample of finalSamples) {
-				if (finalSample !== inputSample) {
-					finalSample.close();
-				}
+		const lastSampleTimestamp = getLastSampleTimestamp();
+		if (lastSampleTimestamp !== null) {
+			if (this._synchronizer.shouldWait(outputTrackId, lastSampleTimestamp)) {
+				await this._synchronizer.wait(lastSampleTimestamp);
 			}
 		}
-	}
-
-	/** @internal */
-	_resampleAudio(
-		track: InputAudioTrack,
-		trackOptions: ConversionAudioOptions,
-		outputTrackId: number,
-		codec: AudioCodec,
-		targetNumberOfChannels: number,
-		targetSampleRate: number,
-		bitrate: number | Quality,
-	) {
-		const source = new AudioSampleSource({
-			codec,
-			bitrate,
-		});
-
-		this._trackPromises.push((async () => {
-			await this._started;
-
-			const resampler = new AudioResampler({
-				targetNumberOfChannels,
-				targetSampleRate,
-				startTime: this._startTimestamp,
-				endTime: this._endTimestamp,
-				onSample: async (sample) => {
-					assert(sample.timestamp >= this._startTimestamp);
-					sample.setTimestamp(sample.timestamp - this._startTimestamp);
-
-					await this._registerAudioSample(trackOptions, outputTrackId, source, sample);
-					sample.close();
-				},
-			});
-
-			const sink = new AudioSampleSink(track);
-			const iterator = sink.samples(this._startTimestamp, this._endTimestamp);
-
-			for await (const sample of iterator) {
-				if (this._canceled) {
-					sample.close();
-					return;
-				}
-
-				await resampler.add(sample);
-				sample.close();
-			}
-
-			await resampler.finalize();
-
-			source.close();
-			this._synchronizer.closeTrack(outputTrackId);
-		})());
-
-		return source;
 	}
 
 	/** @internal */

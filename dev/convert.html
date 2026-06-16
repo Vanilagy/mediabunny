@@ -91,13 +91,16 @@
 		//const startTime = await primaryTrack.getFirstTimestamp();
 		//console.log(startTime)
 
-		let ctx = null;
+		const canvas = new OffscreenCanvas(1280, 720);
+		const ctx = canvas.getContext('2d');
+
+		//let ctx = null;
 		let conversion = await Mediabunny.Conversion.init({
 			input,
 			output,
 			audio: {
-				codec: 'aac',
-				forceTranscode: true,
+				//codec: 'aac',
+				//forceTranscode: true,
 				//forceTranscode: true,
 				//sampleFormat: 's16',
 			},
@@ -126,7 +129,10 @@
 			},
 			*/
 			video: {
-				discard: true,
+				process: (sample) => {
+					sample.draw(ctx, 0, 0, 1280, 720);
+					return new Mediabunny.VideoSample(canvas, { timestamp: sample.timestamp, duration: sample.duration });
+				},
 			},
 			tags: {} ?? {
 				title: 'Bigggy',
@@ -146,8 +152,10 @@
 				}
 			},
 			trim: {
-				start: 300.14984567374756 - 100,
-				end: 310.1548298151939 - 100,
+				start: -2,
+				end: 10,
+				//start: 300.14984567374756 - 100,
+				//end: 310.1548298151939 - 100,
 				//end: 10,
 				//start: startTime,
 				//end: startTime + 2,
