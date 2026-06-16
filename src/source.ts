@@ -2108,7 +2108,7 @@ class ReadOrchestrator {
 				}
 			})
 			.finally(() => {
-				if (worker.running) {
+				if (worker.running || this.workers.length >= this.options.maxWorkerCount) {
 					// Rare, but can happen with multiple concurrent reads. In this case, don't do anything.
 					return;
 				}
