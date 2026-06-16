@@ -789,4 +789,15 @@ export const validateInputFormatOptions = (options: InputFormatOptions, prefix: 
 			throw new TypeError(`${prefix}.isobmff.resolveKeyId, when provided, must be a function.`);
 		}
 	}
+	if (options.hls !== undefined) {
+		if (!options.hls || typeof options.hls !== 'object') {
+			throw new TypeError(`${prefix}.hls, when provided, must be an object.`);
+		}
+		if (
+			options.hls.offsetTimestampsByDateTime !== undefined
+			&& typeof options.hls.offsetTimestampsByDateTime !== 'boolean'
+		) {
+			throw new TypeError(`${prefix}.hls.offsetTimestampsByDateTime, when provided, must be a boolean.`);
+		}
+	}
 };
