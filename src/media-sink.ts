@@ -1750,21 +1750,19 @@ const colorAlphaMergerWorkerCode = () => {
 };
 
 /**
- * Decoder preferences for sinks that decode video.
+ * Describes additional decoder preferences for video sinks.
  * @group Media sinks
  * @public
  */
 export type VideoSinkDecoderOptions = {
 	/**
-	 * The hardware acceleration preference passed to the underlying `VideoDecoder`. Useful for applications that
-	 * manage many concurrent decoders: the number of concurrent hardware decode sessions is limited (and exceeding
-	 * the limit can fail silently on some platforms), so an application may want to deliberately place some sinks
-	 * on software decoders.
+	 * A hint that configures the hardware acceleration method of the decoder. This is best left on `'no-preference'`,
+	 * the default.
 	 */
 	hardwareAcceleration?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
 	/**
-	 * When `true`, passes the `optimizeForLatency` hint to the underlying `VideoDecoder`, requesting that decoded
-	 * frames be emitted as soon as possible (potentially at the cost of decode throughput).
+	 * Hint that the selected decoder should be configured to minimize the number of packets that have to be decoded
+	 * before video frames are output.
 	 */
 	optimizeForLatency?: boolean;
 };
@@ -1829,14 +1827,11 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 		const timeResolution = await this._track.getTimeResolution();
 		assert(codec && decoderConfig);
 
-		// Apply per-sink decoder preferences. This runs before VideoDecoderWrapper's own interlaced-AVC
-		// prefer-software injection, which can only strengthen the preference toward software (no conflict).
-		if (this._decoderOptions.hardwareAcceleration !== undefined) {
-			decoderConfig = { ...decoderConfig, hardwareAcceleration: this._decoderOptions.hardwareAcceleration };
-		}
-		if (this._decoderOptions.optimizeForLatency !== undefined) {
-			decoderConfig = { ...decoderConfig, optimizeForLatency: this._decoderOptions.optimizeForLatency };
-		}
+		decoderConfig = {
+			...decoderConfig,
+			hardwareAcceleration: this._decoderOptions.hardwareAcceleration,
+			optimizeForLatency: this._decoderOptions.optimizeForLatency,
+		};
 
 		return new VideoDecoderWrapper(onSample, onError, codec, decoderConfig, rotation, timeResolution);
 	}
@@ -1954,10 +1949,7 @@ export type CanvasSinkOptions = {
 	 * canvas is created each time.
 	 */
 	poolSize?: number;
-	/**
-	 * Decoder preferences forwarded to the underlying {@link VideoSampleSink}'s `VideoDecoder`. See
-	 * {@link VideoSinkDecoderOptions}.
-	 */
+	/** Additional preferences for the underlying video decoder. */
 	decoderOptions?: VideoSinkDecoderOptions;
 };
 
