@@ -1750,6 +1750,42 @@ const colorAlphaMergerWorkerCode = () => {
 };
 
 /**
+ * Describes additional decoder preferences for video sinks.
+ * @group Media sinks
+ * @public
+ */
+export type VideoSinkDecoderOptions = {
+	/**
+	 * A hint that configures the hardware acceleration method of the decoder. This is best left on `'no-preference'`,
+	 * the default.
+	 */
+	hardwareAcceleration?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
+	/**
+	 * Hint that the selected decoder should be configured to minimize the number of packets that have to be decoded
+	 * before video frames are output.
+	 */
+	optimizeForLatency?: boolean;
+};
+
+const validateVideoSinkDecoderOptions = (decoderOptions: VideoSinkDecoderOptions) => {
+	if (!decoderOptions || typeof decoderOptions !== 'object') {
+		throw new TypeError('decoderOptions must be an object.');
+	}
+	if (
+		decoderOptions.hardwareAcceleration !== undefined
+		&& !['no-preference', 'prefer-hardware', 'prefer-software'].includes(decoderOptions.hardwareAcceleration)
+	) {
+		throw new TypeError(
+			'decoderOptions.hardwareAcceleration, when provided, must be \'no-preference\', \'prefer-hardware\' or'
+			+ ' \'prefer-software\'.',
+		);
+	}
+	if (decoderOptions.optimizeForLatency !== undefined && typeof decoderOptions.optimizeForLatency !== 'boolean') {
+		throw new TypeError('decoderOptions.optimizeForLatency, when provided, must be a boolean.');
+	}
+};
+
+/**
  * A sink that retrieves decoded video samples (video frames) from a video track.
  * @group Media sinks
  * @public
@@ -1757,16 +1793,20 @@ const colorAlphaMergerWorkerCode = () => {
 export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 	/** @internal */
 	_track: InputVideoTrack;
+	/** @internal */
+	_decoderOptions: VideoSinkDecoderOptions;
 
 	/** Creates a new {@link VideoSampleSink} for the given {@link InputVideoTrack}. */
-	constructor(videoTrack: InputVideoTrack) {
+	constructor(videoTrack: InputVideoTrack, decoderOptions: VideoSinkDecoderOptions = {}) {
 		if (!(videoTrack instanceof InputVideoTrack)) {
 			throw new TypeError('videoTrack must be an InputVideoTrack.');
 		}
+		validateVideoSinkDecoderOptions(decoderOptions);
 
 		super();
 
 		this._track = videoTrack;
+		this._decoderOptions = decoderOptions;
 	}
 
 	/** @internal */
@@ -1783,9 +1823,15 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 
 		const codec = await this._track.getCodec();
 		const rotation = await this._track.getRotation();
-		const decoderConfig = await this._track.getDecoderConfig();
+		let decoderConfig = await this._track.getDecoderConfig();
 		const timeResolution = await this._track.getTimeResolution();
 		assert(codec && decoderConfig);
+
+		decoderConfig = {
+			...decoderConfig,
+			hardwareAcceleration: this._decoderOptions.hardwareAcceleration,
+			optimizeForLatency: this._decoderOptions.optimizeForLatency,
+		};
 
 		return new VideoDecoderWrapper(onSample, onError, codec, decoderConfig, rotation, timeResolution);
 	}
@@ -1903,6 +1949,8 @@ export type CanvasSinkOptions = {
 	 * canvas is created each time.
 	 */
 	poolSize?: number;
+	/** Additional preferences for the underlying video decoder. */
+	decoderOptions?: VideoSinkDecoderOptions;
 };
 
 /**
@@ -1982,12 +2030,15 @@ export class CanvasSink {
 		) {
 			throw new TypeError('poolSize must be a non-negative integer.');
 		}
+		if (options.decoderOptions !== undefined) {
+			validateVideoSinkDecoderOptions(options.decoderOptions);
+		}
 
 		this._videoTrack = videoTrack;
 		this._alpha = options.alpha ?? false;
 		this._options = options;
 		this._fit = options.fit ?? 'fill';
-		this._videoSampleSink = new VideoSampleSink(videoTrack);
+		this._videoSampleSink = new VideoSampleSink(videoTrack, options.decoderOptions);
 		this._canvasPool = Array.from({ length: options.poolSize ?? 0 }, () => null);
 	}
 

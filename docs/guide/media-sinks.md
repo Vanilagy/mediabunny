@@ -225,6 +225,11 @@ Create the sink like so:
 import { VideoSampleSink } from 'mediabunny';
 
 const sink = new VideoSampleSink(videoTrack);
+
+// Optionally, configure the decoder:
+const sink = new VideoSampleSink(videoTrack, {
+	hardwarePreference: 'prefer-software',
+});
 ```
 
 #### Single retrieval
@@ -363,6 +368,8 @@ type CanvasSinkOptions = {
 	rotation?: 0 | 90 | 180 | 270;
 	crop?: { left: number; top: number; width: number; height: number };
 	poolSize?: number;
+	alpha?: boolean;
+	decoderOptions?: VideoSinkDecoderOptions;
 };
 ```
 - `width`\
@@ -380,6 +387,10 @@ type CanvasSinkOptions = {
 	Specifies the rectangular region of the input video to crop to. The crop region will automatically be clamped to the dimensions of the input video track. Cropping is performed after rotation but before resizing. The crop region is in the _display pixel space_ of the underlying video data.
 - `poolSize`\
 	See [Canvas pool](#canvas-pool).
+- `alpha`\
+	Whether the output canvases should have transparency instead of a black background. Defaults to `false`. Set this to `true` when using this sink to read transparent videos.
+- `decoderOptions`\
+	Additional preferences for the underlying video decoder.
 
 Some examples:
 ```ts
