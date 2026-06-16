@@ -20,7 +20,7 @@ import {
 	base64ToBytes,
 } from '../misc';
 import { readAllLines, readBytes, Reader } from '../reader';
-import { CustomPathedSource, ReadableStreamSource, SourceRef, SourceRequest } from '../source';
+import { CustomPathedSource, PathedSource, ReadableStreamSource, SourceRef, SourceRequest } from '../source';
 import { HlsDemuxer } from './hls-demuxer';
 import {
 	AttributeList,
@@ -68,6 +68,7 @@ export type HlsSegmentLocation = {
 };
 
 export class HlsSegmentedInput extends SegmentedInput {
+	rootPath: string;
 	demuxer: HlsDemuxer;
 	segments: HlsSegment[] = [];
 	nextLines: string[] | null = null;
@@ -84,6 +85,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 	) {
 		super(demuxer.input, path, trackDeclarations);
 
+		this.rootPath = path;
 		this.demuxer = demuxer;
 		this.nextLines = lines;
 	}
@@ -126,16 +128,24 @@ export class HlsSegmentedInput extends SegmentedInput {
 		this.nextLines = null;
 
 		if (!lines) {
-			using ref = await this.demuxer.input._getSourceUncached({ path: this.path, isRoot: false });
+			using ref = await this.demuxer.input._getSourceUncached({ path: this.rootPath, isRoot: false });
 			const reader = new Reader(ref.source);
 
 			const slice = await reader.requestEntireFile();
 			assert(slice);
 			lines = readAllLines(slice, slice.length, { ignore: canIgnoreLine });
+
+			if (ref.source instanceof PathedSource) {
+				// Copy back the source's path to become aware of potential redirects
+				this.rootPath = ref.source.rootPath;
+			}
 		}
+
+		const offsetTimestampsByDateTime = this.input._formatOptions.hls?.offsetTimestampsByDateTime !== false;
 
 		let headerRead = false;
 		let accumulatedTime = 0;
+		let accumulatedUnixTime: number | null = null;
 		let nextSegmentDuration: number | null = null;
 		let currentKey: HlsEncryptionInfo | null = null;
 		let nextSequenceNumber = 0;
@@ -182,6 +192,9 @@ export class HlsSegmentedInput extends SegmentedInput {
 					currentFirstSegment = prevLastSegment.firstSegment;
 					currentInitSegment = prevLastSegment.initSegment;
 					lastProgramDateTimeSeconds = prevLastSegment.lastProgramDateTimeSeconds;
+					accumulatedUnixTime = prevLastSegment.unixEpochTimestamp !== null
+						? prevLastSegment.unixEpochTimestamp + prevLastSegment.duration
+						: null;
 					prevLastSegment = null;
 				}
 			}
@@ -219,7 +232,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 						key = { ...key, iv };
 					}
 
-					const fullPath = joinPaths(this.path, line);
+					const fullPath = joinPaths(this.rootPath, line);
 					const location: HlsSegmentLocation = {
 						path: fullPath,
 						offset: nextByteRange?.offset ?? 0,
@@ -228,7 +241,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 
 					const segment: HlsSegment = {
 						timestamp: accumulatedTime,
-						relativeToUnixEpoch: lastProgramDateTimeSeconds !== null,
+						unixEpochTimestamp: accumulatedUnixTime,
 						firstSegment: currentFirstSegment,
 						sequenceNumber: nextSequenceNumber,
 						location,
@@ -240,6 +253,9 @@ export class HlsSegmentedInput extends SegmentedInput {
 
 					currentFirstSegment ??= segment;
 					accumulatedTime += nextSegmentDuration;
+					if (accumulatedUnixTime !== null) {
+						accumulatedUnixTime += nextSegmentDuration;
+					}
 
 					this.segments.push(segment);
 				} else {
@@ -299,7 +315,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 				}
 
 				if (!prevLastSegment) {
-					const fullPath = joinPaths(this.path, uri);
+					const fullPath = joinPaths(this.rootPath, uri);
 					const location: HlsSegmentLocation = {
 						path: fullPath,
 						offset: parsedByteRange?.offset ?? 0,
@@ -313,7 +329,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 
 					const segment: HlsSegment = {
 						timestamp: accumulatedTime,
-						relativeToUnixEpoch: lastProgramDateTimeSeconds !== null,
+						unixEpochTimestamp: accumulatedUnixTime,
 						firstSegment: null,
 						sequenceNumber: null,
 						location,
@@ -375,7 +391,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 
 					currentKey = {
 						method: 'AES-128',
-						keyUri: joinPaths(this.path, uri),
+						keyUri: joinPaths(this.rootPath, uri),
 						iv,
 						keyFormat,
 					};
@@ -471,15 +487,19 @@ export class HlsSegmentedInput extends SegmentedInput {
 					const offset = dateTimeSeconds - lastSegmentEnd;
 
 					for (const segment of this.segments) {
-						segment.timestamp += offset;
-						segment.relativeToUnixEpoch = true;
+						segment.unixEpochTimestamp = segment.timestamp + offset;
+						if (offsetTimestampsByDateTime) {
+							segment.timestamp = segment.unixEpochTimestamp;
+						}
 					}
-
-					accumulatedTime += offset;
 				}
 
 				lastProgramDateTimeSeconds = dateTimeSeconds;
-				accumulatedTime = dateTimeSeconds; // Snap the accumulated time to the datetime
+				accumulatedUnixTime = dateTimeSeconds;
+
+				if (offsetTimestampsByDateTime) {
+					accumulatedTime = dateTimeSeconds; // Snap the accumulated time into Unix space
+				}
 			} else if (line === TAG_DISCONTINUITY) {
 				currentFirstSegment = null;
 				// Note: the init segment is not reset; the #EXT-X-MAP statement simply lasts until the next

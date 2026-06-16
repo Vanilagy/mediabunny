@@ -197,6 +197,7 @@ export {
 	IsobmffInputFormat,
 	type IsobmffInputFormatOptions,
 	HlsInputFormat,
+	type HlsInputFormatOptions,
 	MatroskaInputFormat,
 	Mp3InputFormat,
 	Mp4InputFormat,
@@ -270,6 +271,7 @@ export {
 	EncodedPacketSink,
 	type PacketRetrievalOptions,
 	VideoSampleSink,
+	type VideoSinkDecoderOptions,
 	type WrappedAudioBuffer,
 	type WrappedCanvas,
 } from './media-sink';

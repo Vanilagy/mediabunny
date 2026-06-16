@@ -233,6 +233,35 @@ This makes cross-track synchronization trivial. To know if a track's timestamps 
 await track.isRelativeToUnixEpoch(); // => boolean
 ```
 
+### Disabling Unix offsets
+
+If you don't want Mediabunny to offset packet timestamps to be in Unix time, you can set `offsetTimestampsByDateTime` to `false` in the input format options:
+```ts
+const input = new Input({
+	// ...
+	formatOptions: {
+		hls: {
+			offsetTimestampsByDateTime: false,
+		},
+	},
+});
+```
+
+This way, track and packet timestamps behave as if no `#EXT-X-PROGRAM-DATE-TIME` tags existed. This also means that any date time gaps are completely collapsed.
+
+You will still be able to query the Unix time metadata via a mapping function on the `InputTrack`:
+```ts
+const firstTimestamp = await inputTrack.getFirstTimestamp(); // => 0
+await inputTrack.getUnixTimeForTimestamp(firstTimestamp); // => 1704067200 (Unix timestamp for 2024-01-01T00:00:00Z)
+```
+
+This function performs a piecewise-continuous mapping of timestamp space into Unix time space.
+
+If no wall-clock time information is available, `getUnixTimeForTimestamp()` will return `null`. You can check the presence of Unix time metadata via:
+```ts
+await inputTrack.hasUnixTimeMapping(); // boolean
+```
+
 ## Live HLS
 
 HLS playlists may be live. You can check that a track is live via:

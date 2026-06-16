@@ -1953,6 +1953,10 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		return false;
 	}
 
+	getUnixTimeForTimestamp() {
+		return null;
+	}
+
 	getDisposition() {
 		return this.internalTrack.disposition;
 	}
