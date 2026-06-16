@@ -1989,6 +1989,14 @@ class ReadOrchestrator {
 			} satisfies ReadResult));
 		} else {
 			// The requested region was satisfied by the cache, but the entire prefetch region was not
+			promise.catch((error) => {
+				if (this.disposed) {
+					return; // Swallow the error
+				}
+
+				// Nobody's awaiting this result but an errored read is still notable
+				throw error;
+			});
 		}
 
 		return result;
@@ -2103,7 +2111,7 @@ class ReadOrchestrator {
 				if (worker.pendingSlices.length > 0) {
 					worker.pendingSlices.forEach(x => x.reject(error)); // Make sure to propagate any errors
 					worker.pendingSlices.length = 0;
-				} else {
+				} else if (!worker.aborted && !this.disposed) {
 					throw error; // So it doesn't get swallowed
 				}
 			})
