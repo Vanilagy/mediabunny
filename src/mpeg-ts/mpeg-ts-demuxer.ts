@@ -1103,6 +1103,10 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 		return false;
 	}
 
+	getUnixTimeForTimestamp() {
+		return null;
+	}
+
 	getPairingMask() {
 		return 1n;
 	}

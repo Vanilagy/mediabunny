@@ -141,8 +141,11 @@ export class HlsSegmentedInput extends SegmentedInput {
 			}
 		}
 
+		const offsetTimestampsByDateTime = this.input._formatOptions.hls?.offsetTimestampsByDateTime !== false;
+
 		let headerRead = false;
 		let accumulatedTime = 0;
+		let accumulatedUnixTime: number | null = null;
 		let nextSegmentDuration: number | null = null;
 		let currentKey: HlsEncryptionInfo | null = null;
 		let nextSequenceNumber = 0;
@@ -189,6 +192,9 @@ export class HlsSegmentedInput extends SegmentedInput {
 					currentFirstSegment = prevLastSegment.firstSegment;
 					currentInitSegment = prevLastSegment.initSegment;
 					lastProgramDateTimeSeconds = prevLastSegment.lastProgramDateTimeSeconds;
+					accumulatedUnixTime = prevLastSegment.unixEpochTimestamp !== null
+						? prevLastSegment.unixEpochTimestamp + prevLastSegment.duration
+						: null;
 					prevLastSegment = null;
 				}
 			}
@@ -235,7 +241,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 
 					const segment: HlsSegment = {
 						timestamp: accumulatedTime,
-						relativeToUnixEpoch: lastProgramDateTimeSeconds !== null,
+						unixEpochTimestamp: accumulatedUnixTime,
 						firstSegment: currentFirstSegment,
 						sequenceNumber: nextSequenceNumber,
 						location,
@@ -247,6 +253,9 @@ export class HlsSegmentedInput extends SegmentedInput {
 
 					currentFirstSegment ??= segment;
 					accumulatedTime += nextSegmentDuration;
+					if (accumulatedUnixTime !== null) {
+						accumulatedUnixTime += nextSegmentDuration;
+					}
 
 					this.segments.push(segment);
 				} else {
@@ -320,7 +329,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 
 					const segment: HlsSegment = {
 						timestamp: accumulatedTime,
-						relativeToUnixEpoch: lastProgramDateTimeSeconds !== null,
+						unixEpochTimestamp: accumulatedUnixTime,
 						firstSegment: null,
 						sequenceNumber: null,
 						location,
@@ -478,15 +487,19 @@ export class HlsSegmentedInput extends SegmentedInput {
 					const offset = dateTimeSeconds - lastSegmentEnd;
 
 					for (const segment of this.segments) {
-						segment.timestamp += offset;
-						segment.relativeToUnixEpoch = true;
+						segment.unixEpochTimestamp = segment.timestamp + offset;
+						if (offsetTimestampsByDateTime) {
+							segment.timestamp = segment.unixEpochTimestamp;
+						}
 					}
-
-					accumulatedTime += offset;
 				}
 
 				lastProgramDateTimeSeconds = dateTimeSeconds;
-				accumulatedTime = dateTimeSeconds; // Snap the accumulated time to the datetime
+				accumulatedUnixTime = dateTimeSeconds;
+
+				if (offsetTimestampsByDateTime) {
+					accumulatedTime = dateTimeSeconds; // Snap the accumulated time into Unix space
+				}
 			} else if (line === TAG_DISCONTINUITY) {
 				currentFirstSegment = null;
 				// Note: the init segment is not reset; the #EXT-X-MAP statement simply lasts until the next

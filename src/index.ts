@@ -197,6 +197,7 @@ export {
 	IsobmffInputFormat,
 	type IsobmffInputFormatOptions,
 	HlsInputFormat,
+	type HlsInputFormatOptions,
 	MatroskaInputFormat,
 	Mp3InputFormat,
 	Mp4InputFormat,

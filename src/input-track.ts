@@ -42,6 +42,7 @@ export interface InputTrackBacking {
 	getLanguageCode(): MaybePromise<string>;
 	getTimeResolution(): MaybePromise<number>;
 	isRelativeToUnixEpoch(): MaybePromise<boolean>;
+	getUnixTimeForTimestamp(timestamp: number): MaybePromise<number | null>;
 	getDisposition(): MaybePromise<TrackDisposition>;
 	getPairingMask(): bigint;
 	getBitrate(): MaybePromise<number | null>;
@@ -201,6 +202,28 @@ export abstract class InputTrack {
 	 */
 	async isRelativeToUnixEpoch() {
 		return this._backing.isRelativeToUnixEpoch();
+	}
+
+	/**
+	 * Returns the Unix time (in seconds since January 1, 1970 00:00:00 UTC) that the given track timestamp (in seconds)
+	 * maps to, or `null` if there is no such mapping. This provides a piecewise-continuous mapping from this track's
+	 * timestamp space into wall-clock time. Such mapping exists, for example, for HLS playlists with
+	 * `#EXT-X-PROGRAM-DATE-TIME` tags present.
+	 *
+	 * This mapping can be available even when {@link InputTrack.isRelativeToUnixEpoch} is `false`, for example for HLS
+	 * streams with program date time information but with {@link HlsInputFormatOptions.offsetTimestampsByDateTime}
+	 * set to `false`.
+	 */
+	async getUnixTimeForTimestamp(timestamp: number): Promise<number | null> {
+		return this._backing.getUnixTimeForTimestamp(timestamp);
+	}
+
+	/**
+	 * Whether the track's timestamps can be mapped to Unix wall clock time via
+	 * {@link InputTrack.getUnixTimeForTimestamp}.
+	 */
+	async hasUnixTimeMapping(): Promise<boolean> {
+		return (await this._backing.getUnixTimeForTimestamp(await this.getFirstTimestamp())) !== null;
 	}
 
 	/** Returns the track's disposition, i.e. information about its intended usage. */

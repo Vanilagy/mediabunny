@@ -727,6 +727,8 @@ export const HLS_FORMATS: InputFormat[] = [HLS, MP4, QTFF, MP3, ADTS, MPEG_TS];
 export type InputFormatOptions = {
 	/** ISOBMFF-specific configuration. */
 	isobmff?: IsobmffInputFormatOptions;
+	/** HLS-specific configuration. */
+	hls?: HlsInputFormatOptions;
 };
 
 /**
@@ -753,6 +755,26 @@ export type IsobmffInputFormatOptions = {
 
 	/** @internal */
 	_suppressPsshParsing?: boolean;
+};
+
+/**
+ * Additional HLS input configuration.
+ * @group Input formats
+ * @public
+ */
+export type HlsInputFormatOptions = {
+	/**
+	 * Whether, in the presence of `#EXT-X-PROGRAM-DATE-TIME` tags, to offset track and packet timestamps to be relative
+	 * to the Unix epoch.
+	 *
+	 * Defaults to `true`, meaning packet timestamps map directly to wall-clock time. This guarantees AV sync across
+	 * multiple tracks, even with gaps present.
+	 *
+	 * When you don't want this mapping, you can set this value to `false`. In addition to timestamps not being Unix
+	 * timestamps anymore, any gaps in the playlist are also naturally removed. When `false`, you can still access the
+	 * wall-clock Unix timestamps via {@link InputTrack.getUnixTimeForTimestamp}.
+	 */
+	offsetTimestampsByDateTime?: boolean;
 };
 
 export const validateInputFormatOptions = (options: InputFormatOptions, prefix: string) => {

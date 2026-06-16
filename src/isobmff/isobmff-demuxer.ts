@@ -2811,6 +2811,10 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		return false;
 	}
 
+	getUnixTimeForTimestamp() {
+		return null;
+	}
+
 	getDisposition() {
 		return this.internalTrack.disposition;
 	}

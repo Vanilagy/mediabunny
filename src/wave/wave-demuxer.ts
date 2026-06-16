@@ -402,6 +402,10 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		return false;
 	}
 
+	getUnixTimeForTimestamp() {
+		return null;
+	}
+
 	getPairingMask() {
 		return 1n;
 	}

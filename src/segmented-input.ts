@@ -41,7 +41,12 @@ export type AssociatedGroup = {
 export type Segment = {
 	timestamp: number;
 	duration: number;
-	relativeToUnixEpoch: boolean;
+	/**
+	 * The Unix time (in seconds) corresponding to this segment's start timestamp, or null if unknown. This is computed
+	 * whenever the source provides wall-clock information (e.g. HLS program date time), even if the segment timestamps
+	 * themselves are not shifted into Unix time space.
+	 */
+	unixEpochTimestamp: number | null;
 	firstSegment: Segment | null;
 };
 
@@ -95,6 +100,18 @@ export abstract class SegmentedInput {
 		}
 
 		return lastSegment.timestamp + lastSegment.duration;
+	}
+
+	async getUnixTimeForTimestamp(timestamp: number): Promise<number | null> {
+		let segment = await this.getSegmentAt(timestamp, {});
+		segment ??= await this.getFirstSegment({});
+
+		if (!segment || segment.unixEpochTimestamp === null) {
+			return null;
+		}
+
+		const elapsed = timestamp - segment.timestamp;
+		return segment.unixEpochTimestamp + elapsed;
 	}
 
 	async getTrackBackings(): Promise<InputTrackBacking[]> {
@@ -310,7 +327,11 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 		await this.hydrate();
 
 		assert(this.segmentedInput.firstSegment);
-		return this.segmentedInput.firstSegment.relativeToUnixEpoch;
+		return this.segmentedInput.firstSegment.unixEpochTimestamp === this.segmentedInput.firstSegment.timestamp;
+	}
+
+	getUnixTimeForTimestamp(timestamp: number) {
+		return this.segmentedInput.getUnixTimeForTimestamp(timestamp);
 	}
 
 	getBitrate() {

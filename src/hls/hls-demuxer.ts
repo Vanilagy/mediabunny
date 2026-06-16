@@ -759,6 +759,10 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 		return this.delegate(() => this.internalTrack.backingTrack!.isRelativeToUnixEpoch());
 	}
 
+	getUnixTimeForTimestamp(timestamp: number): MaybePromise<number | null> {
+		return this.delegate(() => this.internalTrack.backingTrack!.getUnixTimeForTimestamp(timestamp));
+	}
+
 	getBitrate(): number | null {
 		return this.internalTrack.peakBitrate;
 	}
