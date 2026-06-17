@@ -17,8 +17,16 @@
 			source: new Mediabunny.BlobSource(file),
 		});
 
-		const track = await input.getPrimaryAudioTrack();
+		const track = await input.getPrimaryVideoTrack();
 		const packetSink = new Mediabunny.EncodedPacketSink(track);
+
+		const first = await packetSink.getFirstPacket({ verifyKeyPackets: true });
+		const second = await packetSink.getNextPacket(first, { verifyKeyPackets: true });
+		const third = await packetSink.getNextPacket(second, { verifyKeyPackets: true });
+		const fourth = await packetSink.getNextPacket(third, { verifyKeyPackets: true });
+		console.log(first, second, third, fourth);
+
+		/*
 
 		for await (const packet of packetSink.packets()) {
 			//console.log(packet);
@@ -39,6 +47,7 @@
 				break;
 			}
 		}
+		*/
 
 		/*
 		const track = await input.getPrimaryAudioTrack();

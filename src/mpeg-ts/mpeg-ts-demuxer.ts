@@ -26,8 +26,6 @@ import {
 	determineVideoPacketType,
 	extractAvcDecoderConfigurationRecord,
 	extractHevcDecoderConfigurationRecord,
-	extractNalUnitTypeForAvc,
-	extractNalUnitTypeForHevc,
 	EAC3_NUMBLKS_TABLE,
 	getEac3ChannelCount,
 	getEac3SampleRate,
@@ -38,6 +36,8 @@ import {
 	parseEac3SyncFrame,
 	parseHevcSps,
 	AC3_FRAME_SIZES,
+	extractNalUnitTypeForAvc,
+	extractNalUnitTypeForHevc,
 } from '../codec-data';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
@@ -57,6 +57,7 @@ import {
 	floorToMultiple,
 	last,
 	MATRIX_COEFFICIENTS_MAP_INVERSE,
+	readExpGolomb,
 	Rotation,
 	roundIfAlmostInteger,
 	toDataView,
@@ -202,6 +203,12 @@ export class MpegTsDemuxer extends Demuxer {
 
 				if (packetHeader.payloadUnitStartIndicator === 0) {
 					// Not the start of a section
+					currentPos += this.packetStride;
+					continue;
+				}
+
+				if (hasProgramMap && !this.elementaryStreams.some(x => x.pid === packetHeader.pid)) {
+					// Don't care about this PID
 					currentPos += this.packetStride;
 					continue;
 				}
@@ -1976,6 +1983,9 @@ class PacketReadingContext {
 		const elementaryStream = this.elementaryStream;
 
 		if (elementaryStream.info.type === 'video') {
+			// Our job here is to separate the video stream into access units. Sometimes this is easy (like when AUDs
+			// are present), sometimes it's a little harder.
+
 			const codec = elementaryStream.info.codec;
 			const CHUNK_SIZE = 1024;
 
@@ -1983,7 +1993,10 @@ class PacketReadingContext {
 				throw new Error('Unhandled.');
 			}
 
+			const nalHeaderSize = codec === 'avc' ? 1 : 2;
 			let packetStartPos: number | null = null;
+			let frameStartFound = false;
+			let lastFirstMacroblockInSlice = 0;
 
 			while (true) {
 				let remaining = this.ensureBuffered(CHUNK_SIZE);
@@ -2005,11 +2018,10 @@ class PacketReadingContext {
 					}
 					i = zeroIndex;
 
-					// Check if we have enough bytes to identify a start code
 					const posBeforeZero = chunkStartPos + i;
 
-					// Need at least 4 more bytes after the 0x00 to check for start code + NAL type
-					if (i + 4 >= length) {
+					// Need 3 more bytes after the 0x00 to recognize a start code prefix
+					if (i + 3 >= length) {
 						// Not enough data in current chunk, seek back and let the next iteration handle it
 						this.seekTo(posBeforeZero);
 						break;
@@ -2020,16 +2032,13 @@ class PacketReadingContext {
 					const b3 = chunk[i + 3]!;
 
 					let startCodeLength = 0;
-					let nalUnitTypeByte: number | null = null;
 
 					// Check for 4-byte start code (0x00000001)
 					if (b1 === 0x00 && b2 === 0x00 && b3 === 0x01) {
 						startCodeLength = 4;
-						nalUnitTypeByte = chunk[i + 4]!;
 					} else if (b1 === 0x00 && b2 === 0x01) {
 						// 3-byte start code (0x000001)
 						startCodeLength = 3;
-						nalUnitTypeByte = b3;
 					}
 
 					if (startCodeLength === 0) {
@@ -2040,31 +2049,90 @@ class PacketReadingContext {
 
 					const startCodePos = posBeforeZero;
 
-					if (packetStartPos === null) {
-						// This is our first start code, mark packet start
-						packetStartPos = startCodePos;
-						i += startCodeLength;
-						continue;
+					// The packet only really begins at the first NAL unit; anything before it isn't usable
+					packetStartPos ??= startCodePos;
+
+					const nalHeaderStart = i + startCodeLength;
+					const payloadStart = nalHeaderStart + nalHeaderSize;
+
+					// Bytes peeked from the start of a slice header to decode first_mb_in_slice. Six bytes (48 bits)
+					// comfortably covers the exp-Golomb code for any realistic macroblock count
+					const AVC_SLICE_HEADER_PEEK_SIZE = 6;
+
+					// We read the NAL header plus, for slices, the start of the slice header to decode the
+					// first_mb_in_slice / first_slice_segment_in_pic_flag. Make sure all of it is buffered.
+					const bytesNeeded = payloadStart + (codec === 'avc' ? AVC_SLICE_HEADER_PEEK_SIZE : 1);
+					if (bytesNeeded > length) {
+						this.seekTo(posBeforeZero);
+						break;
 					}
 
-					// We have a second start code. Check if it's an AUD.
-					if (nalUnitTypeByte !== null) {
-						const nalUnitType = codec === 'avc'
-							? extractNalUnitTypeForAvc(nalUnitTypeByte)
-							: extractNalUnitTypeForHevc(nalUnitTypeByte);
-						const isAud = codec === 'avc'
-							? nalUnitType === AvcNalUnitType.AUD
-							: nalUnitType === HevcNalUnitType.AUD_NUT;
+					const headerByte0 = chunk[nalHeaderStart]!;
 
-						if (isAud) {
-							// End the packet at this start code (before the AUD)
-							const packetLength = startCodePos - packetStartPos;
-							this.seekTo(packetStartPos);
-							return this.supplyPacket(packetLength, 0);
+					let nalUnitType: number;
+					let isSlice: boolean;
+					let isAccessUnitStart: boolean;
+
+					if (codec === 'avc') {
+						nalUnitType = extractNalUnitTypeForAvc(headerByte0);
+						isSlice = nalUnitType === AvcNalUnitType.NON_IDR_SLICE
+							|| nalUnitType === AvcNalUnitType.SLICE_DPA
+							|| nalUnitType === AvcNalUnitType.IDR;
+						isAccessUnitStart = nalUnitType === AvcNalUnitType.SEI
+							|| nalUnitType === AvcNalUnitType.SPS
+							|| nalUnitType === AvcNalUnitType.PPS
+							|| nalUnitType === AvcNalUnitType.AUD;
+					} else {
+						nalUnitType = extractNalUnitTypeForHevc(headerByte0);
+						const layerId = ((headerByte0 & 1) << 5) | (chunk[nalHeaderStart + 1]! >> 3);
+						if (layerId > 0) {
+							// Higher layers don't delimit the base-layer frames we care about
+							i += startCodeLength;
+							continue;
 						}
+
+						// VCL slices: 0..RASL_R, plus the IRAP range BLA_W_LP..CRA_NUT
+						isSlice = nalUnitType <= HevcNalUnitType.RASL_R
+							|| (nalUnitType >= HevcNalUnitType.BLA_W_LP && nalUnitType <= 21);
+						// VPS..FD, prefix SEI, and the reserved/unspecified non-VCL ranges
+						isAccessUnitStart = (nalUnitType >= HevcNalUnitType.VPS_NUT && nalUnitType <= 37)
+							|| nalUnitType === HevcNalUnitType.PREFIX_SEI_NUT
+							|| (nalUnitType >= 41 && nalUnitType <= 44)
+							|| (nalUnitType >= 48 && nalUnitType <= 55);
 					}
 
-					// Not an AUD, continue searching
+					let isFrameBoundary = false;
+
+					if (isSlice) {
+						let startsNewPicture: boolean;
+
+						if (codec === 'avc') {
+							const headerBytes = chunk.subarray(payloadStart, payloadStart + AVC_SLICE_HEADER_PEEK_SIZE);
+							const firstMacroblockInSlice = readExpGolomb(new Bitstream(headerBytes));
+							startsNewPicture = !frameStartFound || firstMacroblockInSlice <= lastFirstMacroblockInSlice;
+							lastFirstMacroblockInSlice = firstMacroblockInSlice;
+						} else {
+							startsNewPicture = (chunk[payloadStart]! >> 7) === 1;
+						}
+
+						if (startsNewPicture) {
+							if (frameStartFound) {
+								isFrameBoundary = true;
+							} else {
+								frameStartFound = true;
+							}
+						}
+					} else if (isAccessUnitStart && frameStartFound) {
+						isFrameBoundary = true;
+					}
+
+					if (isFrameBoundary) {
+						// End the packet at this start code (the next frame begins here)
+						const packetLength = startCodePos - packetStartPos;
+						this.seekTo(packetStartPos);
+						return this.supplyPacket(packetLength, 0);
+					}
+
 					i += startCodeLength;
 				}
 
@@ -2074,8 +2142,8 @@ class PacketReadingContext {
 				}
 			}
 
-			// End of stream - return remaining data if we have a packet start
-			if (packetStartPos !== null) {
+			// End of stream - emit whatever's left as the final packet
+			if (packetStartPos !== null && this.endPos > packetStartPos) {
 				const packetLength = this.endPos - packetStartPos;
 				this.seekTo(packetStartPos);
 				return this.supplyPacket(packetLength, 0);

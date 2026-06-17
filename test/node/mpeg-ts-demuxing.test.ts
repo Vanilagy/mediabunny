@@ -875,3 +875,26 @@ test('MPEG-TS with "extension" PES packets without PTS', async () => {
 		4693, 223, 144, 174, 118, 9155, 1188, 379, 169, 213,
 	]);
 });
+
+test('MPEG-TS with AUD-less video packets', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/no-aud.ts')),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	const sink = new EncodedPacketSink(videoTrack);
+
+	const firstPacket = await sink.getFirstPacket();
+	assert(firstPacket);
+	const secondPacket = await sink.getNextPacket(firstPacket);
+	assert(secondPacket);
+	const thirdPacket = await sink.getNextPacket(secondPacket);
+	assert(thirdPacket);
+
+	expect(firstPacket.data.byteLength).toBe(331774);
+	expect(secondPacket.data.byteLength).toBe(1749);
+	expect(thirdPacket.data.byteLength).toBe(4273);
+});
