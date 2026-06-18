@@ -446,7 +446,23 @@ export class OggInputFormat extends InputFormat {
 export class FlacInputFormat extends InputFormat {
 	/** @internal */
 	async _canReadInput(input: Input) {
-		let slice = input._reader.requestSlice(0, 4);
+		let currentPos = 0;
+
+		// There might be ID3v2 headers at the start, skip 'em
+		while (true) {
+			let slice = input._reader.requestSlice(currentPos, ID3_V2_HEADER_SIZE);
+			if (slice instanceof Promise) slice = await slice;
+			if (!slice) break;
+
+			const id3V2Header = readId3V2Header(slice);
+			if (!id3V2Header) {
+				break;
+			}
+
+			currentPos = slice.filePos + id3V2Header.size;
+		}
+
+		let slice = input._reader.requestSlice(currentPos, 4);
 		if (slice instanceof Promise) slice = await slice;
 		if (!slice) return false;
 

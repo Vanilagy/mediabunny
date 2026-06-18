@@ -37,6 +37,7 @@ import {
 	getSampleRateOrUncommon,
 } from './flac-misc';
 import { Bitstream } from '../../shared/bitstream';
+import { ID3_V2_HEADER_SIZE, parseId3V2Tag, readId3V2Header } from '../id3';
 
 type FlacAudioInfo = {
 	numberOfChannels: number;
@@ -102,9 +103,34 @@ export class FlacDemuxer extends Demuxer {
 	}
 
 	async readMetadata() {
-		let currentPos = 4; // Skip 'fLaC'
-
 		return (this.metadataPromise ??= (async () => {
+			// Read all ID3v2 tags at the start of the file
+			let currentPos = 0;
+			while (true) {
+				let headerSlice = this.reader.requestSlice(currentPos, ID3_V2_HEADER_SIZE);
+				if (headerSlice instanceof Promise) headerSlice = await headerSlice;
+
+				if (!headerSlice) {
+					this.lastSampleLoaded = true;
+					return;
+				}
+
+				const id3V2Header = readId3V2Header(headerSlice);
+				if (!id3V2Header) {
+					break;
+				}
+
+				let contentSlice = this.reader.requestSlice(headerSlice.filePos, id3V2Header.size);
+				if (contentSlice instanceof Promise) contentSlice = await contentSlice;
+				assert(contentSlice);
+
+				parseId3V2Tag(contentSlice, id3V2Header, this.metadataTags);
+
+				currentPos = headerSlice.filePos + id3V2Header.size;
+			}
+
+			currentPos += 4; // Skip 'fLaC'
+
 			while (
 				this.reader.fileSize === null
 				|| currentPos < this.reader.fileSize
