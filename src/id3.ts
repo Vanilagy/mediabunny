@@ -18,7 +18,7 @@ import {
 	toDataView,
 	isRecordStringString,
 } from './misc';
-import { FileSlice, readAscii, readBytes, readU32Be, readU8 } from './reader';
+import { FileSlice, readAscii, readBytes, Reader, readU32Be, readU8 } from './reader';
 import { Writer } from './writer';
 
 export type Id3V2Header = {
@@ -155,6 +155,28 @@ export const readId3V2Header = (slice: FileSlice): Id3V2Header | null => {
 	const size = decodeSynchsafe(sizeRaw);
 
 	return { majorVersion, revision, flags, size };
+};
+
+export const getId3V2TagsEnd = async (reader: Reader) => {
+	let currentPos = 0;
+
+	while (true) {
+		let slice = reader.requestSlice(currentPos, ID3_V2_HEADER_SIZE);
+		if (slice instanceof Promise) slice = await slice;
+		if (!slice) break;
+
+		const id3V2Header = readId3V2Header(slice);
+		if (!id3V2Header) {
+			break;
+		}
+
+		currentPos = slice.filePos + id3V2Header.size;
+		if (id3V2Header.flags & Id3V2HeaderFlags.Footer) {
+			currentPos += ID3_V2_HEADER_SIZE;
+		}
+	}
+
+	return currentPos;
 };
 
 export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: MetadataTags) => {

@@ -23,7 +23,7 @@ import {
 import { MatroskaDemuxer } from './matroska/matroska-demuxer';
 import { Mp3Demuxer } from './mp3/mp3-demuxer';
 import { MP3_FRAME_HEADER_SIZE, getXingOffset, INFO, XING } from '../shared/mp3-misc';
-import { ID3_V2_HEADER_SIZE, readId3V2Header } from './id3';
+import { getId3V2TagsEnd, ID3_V2_HEADER_SIZE, readId3V2Header } from './id3';
 import { readNextMp3FrameHeader } from './mp3/mp3-reader';
 import { OggDemuxer } from './ogg/ogg-demuxer';
 import { WaveDemuxer } from './wave/wave-demuxer';
@@ -446,7 +446,7 @@ export class OggInputFormat extends InputFormat {
 export class FlacInputFormat extends InputFormat {
 	/** @internal */
 	async _canReadInput(input: Input) {
-		let slice = input._reader.requestSlice(0, 4);
+		let slice = input._reader.requestSlice(await getId3V2TagsEnd(input._reader), 4);
 		if (slice instanceof Promise) slice = await slice;
 		if (!slice) return false;
 

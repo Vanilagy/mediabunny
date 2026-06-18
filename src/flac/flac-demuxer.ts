@@ -8,6 +8,7 @@
 
 import { FlacBlockType, readVorbisComments } from '../codec-data';
 import { Demuxer } from '../demuxer';
+import { getId3V2TagsEnd } from '../id3';
 import { Input } from '../input';
 import { InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
@@ -102,9 +103,13 @@ export class FlacDemuxer extends Demuxer {
 	}
 
 	async readMetadata() {
-		let currentPos = 4; // Skip 'fLaC'
-
 		return (this.metadataPromise ??= (async () => {
+			let currentPos = await getId3V2TagsEnd(this.reader);
+			let signatureSlice = this.reader.requestSlice(currentPos, 4);
+			if (signatureSlice instanceof Promise) signatureSlice = await signatureSlice;
+			assert(signatureSlice);
+			currentPos += 4; // Skip 'fLaC'
+
 			while (
 				this.reader.fileSize === null
 				|| currentPos < this.reader.fileSize
