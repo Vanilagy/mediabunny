@@ -13,34 +13,6 @@ import { Conversion } from '../../src/conversion.js';
 
 const __dirname = new URL('.', import.meta.url).pathname;
 
-const createId3V23TitleTag = (title: string) => {
-	const titleBytes = new TextEncoder().encode(title);
-	const frame = new Uint8Array(11 + titleBytes.length);
-	frame.set([0x54, 0x49, 0x54, 0x32]); // TIT2
-	frame[7] = 1 + titleBytes.length;
-	frame[10] = 0; // ISO-8859-1
-	frame.set(titleBytes, 11);
-
-	const tag = new Uint8Array(10 + frame.length);
-	tag.set([0x49, 0x44, 0x33, 0x03, 0x00, 0x00]); // ID3v2.3
-	tag[9] = frame.length;
-	tag.set(frame, 10);
-
-	return tag;
-};
-
-const concatenateBytes = (...chunks: Uint8Array[]) => {
-	const result = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0));
-	let offset = 0;
-
-	for (const chunk of chunks) {
-		result.set(chunk, offset);
-		offset += chunk.byteLength;
-	}
-
-	return result;
-};
-
 test('can loop over all samples', async () => {
 	const filePath = path.join(__dirname, '..', 'public/sample.flac');
 	using input = new Input({
@@ -81,29 +53,6 @@ test('can loop over all samples', async () => {
 	}
 	expect(samples).toBe(213);
 	expect(lastSampleTimestamp).toBe(19.690521541950112);
-});
-
-test('can read a FLAC file with leading ID3v2 tags', async () => {
-	using input = new Input({
-		source: new BufferSource(concatenateBytes(
-			createId3V23TitleTag('First tag'),
-			createId3V23TitleTag('Second tag'),
-			await fs.readFile(new URL('../public/sample.flac', import.meta.url)),
-		)),
-		formats: ALL_FORMATS,
-	});
-
-	expect(await input.canRead()).toBe(true);
-	expect(await input.getFormat()).toBe(FLAC);
-
-	const track = await input.getPrimaryAudioTrack();
-	assert(track);
-	expect(await track.getDurationFromMetadata()).toEqual(19.714285714285715);
-
-	const firstPacket = await new EncodedPacketSink(track).getPacket(0);
-	assert(firstPacket);
-	expect(firstPacket.sequenceNumber).toBe(0);
-	expect(firstPacket.timestamp).toBe(0);
 });
 
 test('can do random access', async () => {
@@ -335,4 +284,60 @@ test('appendOnly writes correct STREAMINFO header', async () => {
 		// minimum_frame_size=0
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 	]));
+});
+
+test('can read a FLAC file with leading ID3v2 tags', async () => {
+	const createId3V23TitleTag = (title: string) => {
+		const titleBytes = new TextEncoder().encode(title);
+		const frame = new Uint8Array(11 + titleBytes.length);
+		frame.set([0x54, 0x49, 0x54, 0x32]); // TIT2
+		frame[7] = 1 + titleBytes.length;
+		frame[10] = 0; // ISO-8859-1
+		frame.set(titleBytes, 11);
+
+		const tag = new Uint8Array(10 + frame.length);
+		tag.set([0x49, 0x44, 0x33, 0x03, 0x00, 0x00]); // ID3v2.3
+		tag[9] = frame.length;
+		tag.set(frame, 10);
+
+		return tag;
+	};
+
+	const concatenateBytes = (...chunks: Uint8Array[]) => {
+		const result = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0));
+		let offset = 0;
+
+		for (const chunk of chunks) {
+			result.set(chunk, offset);
+			offset += chunk.byteLength;
+		}
+
+		return result;
+	};
+
+	using input = new Input({
+		source: new BufferSource(concatenateBytes(
+			createId3V23TitleTag('First tag'),
+			createId3V23TitleTag('Second tag'),
+			await fs.readFile(new URL('../public/sample.flac', import.meta.url)),
+		)),
+		formats: ALL_FORMATS,
+	});
+
+	expect(await input.canRead()).toBe(true);
+	expect(await input.getFormat()).toBe(FLAC);
+
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+	expect(await track.getDurationFromMetadata()).toEqual(19.714285714285715);
+
+	const firstPacket = await new EncodedPacketSink(track).getPacket(0);
+	assert(firstPacket);
+	expect(firstPacket.sequenceNumber).toBe(0);
+	expect(firstPacket.timestamp).toBe(0);
+
+	const metadataTags = await input.getMetadataTags();
+	expect(metadataTags.title).toBe('First tag');
+	expect(metadataTags.raw!['TIT2']).toBe('First tag');
+	expect(metadataTags.raw!['TITLE']).toBe('The Happy Meeting');
 });

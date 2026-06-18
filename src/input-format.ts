@@ -23,7 +23,7 @@ import {
 import { MatroskaDemuxer } from './matroska/matroska-demuxer';
 import { Mp3Demuxer } from './mp3/mp3-demuxer';
 import { MP3_FRAME_HEADER_SIZE, getXingOffset, INFO, XING } from '../shared/mp3-misc';
-import { getId3V2TagsEnd, ID3_V2_HEADER_SIZE, readId3V2Header } from './id3';
+import { ID3_V2_HEADER_SIZE, readId3V2Header } from './id3';
 import { readNextMp3FrameHeader } from './mp3/mp3-reader';
 import { OggDemuxer } from './ogg/ogg-demuxer';
 import { WaveDemuxer } from './wave/wave-demuxer';
@@ -446,7 +446,23 @@ export class OggInputFormat extends InputFormat {
 export class FlacInputFormat extends InputFormat {
 	/** @internal */
 	async _canReadInput(input: Input) {
-		let slice = input._reader.requestSlice(await getId3V2TagsEnd(input._reader), 4);
+		let currentPos = 0;
+
+		// There might be ID3v2 headers at the start, skip 'em
+		while (true) {
+			let slice = input._reader.requestSlice(currentPos, ID3_V2_HEADER_SIZE);
+			if (slice instanceof Promise) slice = await slice;
+			if (!slice) break;
+
+			const id3V2Header = readId3V2Header(slice);
+			if (!id3V2Header) {
+				break;
+			}
+
+			currentPos = slice.filePos + id3V2Header.size;
+		}
+
+		let slice = input._reader.requestSlice(currentPos, 4);
 		if (slice instanceof Promise) slice = await slice;
 		if (!slice) return false;
 

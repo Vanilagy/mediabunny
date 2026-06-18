@@ -18,7 +18,7 @@ import {
 	toDataView,
 	isRecordStringString,
 } from './misc';
-import { FileSlice, readAscii, readBytes, Reader, readU32Be, readU8 } from './reader';
+import { FileSlice, readAscii, readBytes, readU32Be, readU8 } from './reader';
 import { Writer } from './writer';
 
 export type Id3V2Header = {
@@ -152,31 +152,13 @@ export const readId3V2Header = (slice: FileSlice): Id3V2Header | null => {
 		return null;
 	}
 
-	const size = decodeSynchsafe(sizeRaw);
+	let size = decodeSynchsafe(sizeRaw);
 
-	return { majorVersion, revision, flags, size };
-};
-
-export const getId3V2TagsEnd = async (reader: Reader) => {
-	let currentPos = 0;
-
-	while (true) {
-		let slice = reader.requestSlice(currentPos, ID3_V2_HEADER_SIZE);
-		if (slice instanceof Promise) slice = await slice;
-		if (!slice) break;
-
-		const id3V2Header = readId3V2Header(slice);
-		if (!id3V2Header) {
-			break;
-		}
-
-		currentPos = slice.filePos + id3V2Header.size;
-		if (id3V2Header.flags & Id3V2HeaderFlags.Footer) {
-			currentPos += ID3_V2_HEADER_SIZE;
-		}
+	if (flags & Id3V2HeaderFlags.Footer) {
+		size += ID3_V2_HEADER_SIZE;
 	}
 
-	return currentPos;
+	return { majorVersion, revision, flags, size };
 };
 
 export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: MetadataTags) => {
@@ -187,12 +169,12 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 		return;
 	}
 
-	const bytes = readBytes(slice, header.size);
-	const reader = new Id3V2Reader(header, bytes);
+	const dataSize = (header.flags & Id3V2HeaderFlags.Footer)
+		? header.size - ID3_V2_HEADER_SIZE
+		: header.size;
 
-	if (header.flags & Id3V2HeaderFlags.Footer) {
-		reader.removeFooter();
-	}
+	const bytes = readBytes(slice, dataSize);
+	const reader = new Id3V2Reader(header, bytes);
 
 	if ((header.flags & Id3V2HeaderFlags.Unsynchronisation) && header.majorVersion === 3) {
 		reader.ununsynchronizeAll();
@@ -482,11 +464,6 @@ export class Id3V2Reader {
 		this.bytes.set(newBytes, before.length);
 		this.bytes.set(after, before.length + newBytes.length);
 
-		this.view = new DataView(this.bytes.buffer);
-	}
-
-	removeFooter() {
-		this.bytes = this.bytes.subarray(0, this.bytes.length - ID3_V2_HEADER_SIZE);
 		this.view = new DataView(this.bytes.buffer);
 	}
 

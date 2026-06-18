@@ -8,7 +8,6 @@
 
 import { FlacBlockType, readVorbisComments } from '../codec-data';
 import { Demuxer } from '../demuxer';
-import { getId3V2TagsEnd } from '../id3';
 import { Input } from '../input';
 import { InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
@@ -38,6 +37,7 @@ import {
 	getSampleRateOrUncommon,
 } from './flac-misc';
 import { Bitstream } from '../../shared/bitstream';
+import { ID3_V2_HEADER_SIZE, parseId3V2Tag, readId3V2Header } from '../id3';
 
 type FlacAudioInfo = {
 	numberOfChannels: number;
@@ -104,10 +104,31 @@ export class FlacDemuxer extends Demuxer {
 
 	async readMetadata() {
 		return (this.metadataPromise ??= (async () => {
-			let currentPos = await getId3V2TagsEnd(this.reader);
-			let signatureSlice = this.reader.requestSlice(currentPos, 4);
-			if (signatureSlice instanceof Promise) signatureSlice = await signatureSlice;
-			assert(signatureSlice);
+			// Read all ID3v2 tags at the start of the file
+			let currentPos = 0;
+			while (true) {
+				let headerSlice = this.reader.requestSlice(currentPos, ID3_V2_HEADER_SIZE);
+				if (headerSlice instanceof Promise) headerSlice = await headerSlice;
+
+				if (!headerSlice) {
+					this.lastSampleLoaded = true;
+					return;
+				}
+
+				const id3V2Header = readId3V2Header(headerSlice);
+				if (!id3V2Header) {
+					break;
+				}
+
+				let contentSlice = this.reader.requestSlice(headerSlice.filePos, id3V2Header.size);
+				if (contentSlice instanceof Promise) contentSlice = await contentSlice;
+				assert(contentSlice);
+
+				parseId3V2Tag(contentSlice, id3V2Header, this.metadataTags);
+
+				currentPos = headerSlice.filePos + id3V2Header.size;
+			}
+
 			currentPos += 4; // Skip 'fLaC'
 
 			while (
