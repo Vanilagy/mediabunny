@@ -54,6 +54,7 @@ import {
 	VideoSample,
 	VideoSamplePixelFormat,
 } from './sample';
+import { Logging } from './logging';
 
 /**
  * Additional options for controlling packet retrieval.
@@ -1324,7 +1325,7 @@ export class ColorAlphaMerger {
 				this.gl = null;
 				this.canvas = null;
 				mergerGpuUnavailable = true;
-				console.warn('Falling back to CPU for color/alpha merging.', error);
+				Logging._warn('Falling back to CPU for color/alpha merging.', error);
 			}
 		}
 	}

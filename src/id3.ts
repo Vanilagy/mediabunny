@@ -7,6 +7,7 @@
  */
 
 import { decodeSynchsafe, encodeSynchsafe } from '../shared/mp3-misc';
+import { Logging } from './logging';
 import { MetadataTags } from './metadata';
 import {
 	coalesceIndex,
@@ -165,7 +166,7 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 	// https://id3.org/id3v2.3.0
 
 	if (![2, 3, 4].includes(header.majorVersion)) {
-		console.warn(`Unsupported ID3v2 major version: ${header.majorVersion}`);
+		Logging._warn(`Unsupported ID3v2 major version: ${header.majorVersion}`);
 		return;
 	}
 
@@ -214,13 +215,13 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 		}
 
 		if (frameEncrypted) {
-			console.warn(`Skipping encrypted ID3v2 frame ${frame.id}`);
+			Logging._warn(`Skipping encrypted ID3v2 frame ${frame.id}`);
 			reader.pos = frameEndPos;
 			continue;
 		}
 
 		if (frameCompressed) {
-			console.warn(`Skipping compressed ID3v2 frame ${frame.id}`); // Maybe someday? Idk
+			Logging._warn(`Skipping compressed ID3v2 frame ${frame.id}`); // Maybe someday? Idk
 			reader.pos = frameEndPos;
 			continue;
 		}

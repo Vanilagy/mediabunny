@@ -41,6 +41,7 @@ import {
 } from '../codec-data';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
+import { Logging } from '../logging';
 import {
 	InputAudioTrackBacking,
 	InputTrackBacking,
@@ -403,7 +404,7 @@ export class MpegTsDemuxer extends Demuxer {
 								// we can't determine its metadata and also have no idea how to packetize its data.
 
 								if (!ignoredStreamTypes.has(streamType)) {
-									console.warn(
+									Logging._warn(
 										`Note: MPEG-TS streams with stream_type 0x${streamType.toString(16)} are not`
 										+ ` currently supported.`,
 									);

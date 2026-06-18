@@ -32,6 +32,7 @@ import {
 	MaybePromise,
 	DeepReadonly,
 } from './misc';
+import { Logging } from './logging';
 
 polyfillSymbolDispose();
 
@@ -55,7 +56,7 @@ if (typeof FinalizationRegistry !== 'undefined') {
 		if (value.type === 'video') {
 			if (now - lastVideoGcErrorLog >= 1000) {
 				// This error is annoying but oh so important
-				console.error(
+				Logging._error(
 					`A VideoSample was garbage collected without first being closed. For proper resource management,`
 					+ ` make sure to call close() on all your VideoSamples as soon as you're done using them.`,
 				);
@@ -68,7 +69,7 @@ if (typeof FinalizationRegistry !== 'undefined') {
 			}
 		} else {
 			if (now - lastAudioGcErrorLog >= 1000) {
-				console.error(
+				Logging._error(
 					`An AudioSample was garbage collected without first being closed. For proper resource management,`
 					+ ` make sure to call close() on all your AudioSamples as soon as you're done using them.`,
 				);

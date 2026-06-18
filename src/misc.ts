@@ -7,6 +7,7 @@
  */
 
 import { Bitstream } from '../shared/bitstream';
+import { Logging } from './logging';
 
 export function assert(x: unknown): asserts x {
 	if (!x) {
@@ -577,7 +578,7 @@ export const retriedFetch = async (
 				throw error;
 			}
 
-			console.error('Retrying failed fetch. Error:', error);
+			Logging._error('Retrying failed fetch. Error:', error);
 
 			if (!Number.isFinite(retryDelayInSeconds) || retryDelayInSeconds < 0) {
 				throw new TypeError('Retry delay must be a non-negative finite number.');
@@ -1215,7 +1216,7 @@ export class EventEmitter<TEvents extends Record<string, unknown>> {
 	/** @internal */
 	_listeners = new Map<keyof TEvents, Set<{ fn: (data: never) => unknown; once: boolean }>>();
 
-	/** Registers a listener for the given event. */
+	/** Registers a listener for the given event. Returns a function that, when called, removes the listener again. */
 	on<K extends keyof TEvents>(
 		event: K,
 		listener: (data: TEvents[K]) => unknown,
@@ -1246,6 +1247,8 @@ export class EventEmitter<TEvents extends Record<string, unknown>> {
 			try {
 				(entry.fn as (data: unknown) => void)(data);
 			} catch (error) {
+				// Deliberately not routed through Logging here: Logging emits via an EventEmitter, so a throwing
+				// log listener would recurse straight back into this handler.
 				console.error(error);
 			}
 

@@ -28,6 +28,7 @@ import {
 } from './misc';
 import * as nodeAlias from './node';
 import { InputDisposedError } from './input';
+import { Logging } from './logging';
 
 polyfillSymbolDispose();
 
@@ -658,7 +659,7 @@ const DEFAULT_RETRY_DELAY
 			= typeof navigator !== 'undefined' && typeof navigator.onLine === 'boolean' ? navigator.onLine : true;
 
 			if (isOnline && originOfSrc !== null && originOfSrc !== window.location.origin) {
-				console.warn(
+				Logging._warn(
 					`Request will not be retried because a CORS error was suspected due to different origins. You can`
 					+ ` modify this behavior by providing your own function for the 'getRetryDelay' option.`,
 				);
@@ -955,7 +956,7 @@ export class UrlSource extends PathedSource {
 						&& !(url.pathname.endsWith('.m3u8') || url.pathname.endsWith('.m3u'))
 					) {
 						if (!warnedOrigins.has(url.origin)) {
-							console.warn(
+							Logging._warn(
 								`HTTP server (origin ${url.origin}) did not respond to a range request with 206 Partial`
 								+ ' Content, meaning the entire resource will now be downloaded. To enable efficient'
 								+ ' media file streaming across a network, please make sure your server supports'
@@ -1009,7 +1010,7 @@ export class UrlSource extends PathedSource {
 
 					const retryDelayInSeconds = this._getRetryDelay(1, error, this._url);
 					if (retryDelayInSeconds !== null) {
-						console.error('Error while reading response stream. Attempting to resume.', error);
+						Logging._error('Error while reading response stream. Attempting to resume.', error);
 						await wait(1000 * retryDelayInSeconds);
 
 						break;

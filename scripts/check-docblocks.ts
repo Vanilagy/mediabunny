@@ -23,6 +23,7 @@ const checkDocblocks = (filePath: string) => {
 			|| ts.isFunctionDeclaration(node)
 			|| ts.isTypeAliasDeclaration(node)
 			|| ts.isEnumDeclaration(node)
+			|| ts.isEnumMember(node)
 			|| ts.isPropertySignature(node)
 			|| ts.isMethodSignature(node)
 			|| ts.isVariableStatement(node)

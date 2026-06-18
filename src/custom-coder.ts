@@ -9,6 +9,7 @@
 import { AudioCodec, VideoCodec } from './codec';
 import { canDecodeAudioMemo, canDecodeVideoMemo } from './decode';
 import { canEncodeAudioMemo, canEncodeVideoMemo } from './encode';
+import { Logging } from './logging';
 import { MaybePromise } from './misc';
 import { EncodedPacket } from './packet';
 import { AudioSample, VideoSample } from './sample';
@@ -149,7 +150,7 @@ export const registerDecoder = (decoder: typeof CustomVideoDecoder | typeof Cust
 		const casted = decoder as typeof CustomVideoDecoder;
 
 		if (customVideoDecoders.includes(casted)) {
-			console.warn('Video decoder already registered.');
+			Logging._warn('Video decoder already registered.');
 			return;
 		}
 
@@ -159,7 +160,7 @@ export const registerDecoder = (decoder: typeof CustomVideoDecoder | typeof Cust
 		const casted = decoder as typeof CustomAudioDecoder;
 
 		if (customAudioDecoders.includes(casted)) {
-			console.warn('Audio decoder already registered.');
+			Logging._warn('Audio decoder already registered.');
 			return;
 		}
 
@@ -181,7 +182,7 @@ export const registerEncoder = (encoder: typeof CustomVideoEncoder | typeof Cust
 		const casted = encoder as typeof CustomVideoEncoder;
 
 		if (customVideoEncoders.includes(casted)) {
-			console.warn('Video encoder already registered.');
+			Logging._warn('Video encoder already registered.');
 			return;
 		}
 
@@ -191,7 +192,7 @@ export const registerEncoder = (encoder: typeof CustomVideoEncoder | typeof Cust
 		const casted = encoder as typeof CustomAudioEncoder;
 
 		if (customAudioEncoders.includes(casted)) {
-			console.warn('Audio encoder already registered.');
+			Logging._warn('Audio encoder already registered.');
 			return;
 		}
 

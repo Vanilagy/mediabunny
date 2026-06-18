@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { CustomAudioEncoder, AudioCodec, AudioSample, EncodedPacket, registerEncoder } from 'mediabunny';
+import { CustomAudioEncoder, AudioCodec, AudioSample, EncodedPacket, Logging, registerEncoder } from 'mediabunny';
 import { MP3_FRAME_HEADER_SIZE, readMp3FrameHeader, SAMPLING_RATES } from '../../../shared/mp3-misc';
 import type { WorkerCommand, WorkerResponse, WorkerResponseData } from './shared';
 // @ts-expect-error An esbuild plugin handles this, TypeScript doesn't need to understand
@@ -14,7 +14,7 @@ import createWorker from './encode.worker';
 
 const MP3_ENCODER_LOADED_SYMBOL = Symbol.for('@mediabunny/mp3-encoder loaded');
 if ((globalThis as Record<symbol, unknown>)[MP3_ENCODER_LOADED_SYMBOL]) {
-	console.error(
+	Logging._error(
 		'[WARNING]\n@mediabunny/mp3-encoder was loaded twice.'
 		+ ' This will likely cause the encoder not to work correctly.'
 		+ ' Check if multiple dependencies are importing different versions of @mediabunny/mp3-encoder,'

@@ -13,6 +13,7 @@ import { OutputFormat } from './output-format';
 import { AudioSource, MediaSource, SubtitleSource, VideoSource } from './media-source';
 import { PathedTarget, Target, TargetRequest } from './target';
 import { Writer } from './writer';
+import { Logging } from './logging';
 
 /**
  * List of all track types.
@@ -794,7 +795,7 @@ export class Output<
 		}
 
 		if (this._startPromise) {
-			console.warn('Output has already been started.');
+			Logging._warn('Output has already been started.');
 			return this._startPromise;
 		}
 
@@ -831,13 +832,13 @@ export class Output<
 	 */
 	async cancel() {
 		if (this._cancelPromise) {
-			console.warn('Output has already been canceled.');
+			Logging._warn('Output has already been canceled.');
 			return this._cancelPromise;
 		} else if (this.state === 'finalizing' || this.state === 'finalized') {
 			// Don't wanna warn when finalizing since that shows a warning when finalization fails and then cancel
 			// is called
 			if (this.state === 'finalized') {
-				console.warn('Output has already been finalized.');
+				Logging._warn('Output has already been finalized.');
 			}
 
 			return;
@@ -872,7 +873,7 @@ export class Output<
 			throw new Error('Cannot finalize after canceling.');
 		}
 		if (this._finalizePromise) {
-			console.warn('Output has already been finalized.');
+			Logging._warn('Output has already been finalized.');
 			return this._finalizePromise;
 		}
 

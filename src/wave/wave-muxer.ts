@@ -17,6 +17,7 @@ import { WavOutputFormat } from '../output-format';
 import { assert, assertNever, isIso88591Compatible, keyValueIterator } from '../misc';
 import { MetadataTags, metadataTagsAreEmpty } from '../metadata';
 import { Id3V2Writer } from '../id3';
+import { Logging } from '../logging';
 
 export class WaveMuxer extends Muxer {
 	private format: WavOutputFormat;
@@ -206,7 +207,7 @@ export class WaveMuxer extends Muxer {
 		const writeInfoTag = (tag: string, value: string) => {
 			if (!isIso88591Compatible(value)) {
 				// No Unicode supported here
-				console.warn(`Didn't write tag '${tag}' because '${value}' is not ISO 8859-1-compatible.`);
+				Logging._warn(`Didn't write tag '${tag}' because '${value}' is not ISO 8859-1-compatible.`);
 				return;
 			}
 

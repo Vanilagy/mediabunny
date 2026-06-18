@@ -7,6 +7,7 @@
  */
 
 import { MediaCodec, validateAudioChunkMetadata, validateVideoChunkMetadata } from '../codec';
+import { Logging } from '../logging';
 import { EncodedAudioPacketSource, EncodedVideoPacketSource } from '../media-source';
 import {
 	arrayArgmax,
@@ -197,7 +198,7 @@ export class HlsMuxer extends Muxer {
 
 				if (track.type === otherTrack.type) {
 					if (!illegalPairingDetected) {
-						console.warn(
+						Logging._warn(
 							`Illegal pairing of two ${track.type} tracks detected, which is not possible in HLS;`
 							+ ` treating them as unpaired.`,
 						);
@@ -213,7 +214,7 @@ export class HlsMuxer extends Muxer {
 					|| (otherTrack.isVideoTrack() && otherTrack.metadata.hasOnlyKeyPackets)
 				) {
 					if (!keyPacketsOnlyPairingWarned) {
-						console.warn(
+						Logging._warn(
 							`A key-packets-only video track is pairable with another track, which is not`
 							+ ` possible in HLS; treating them as unpaired.`,
 						);
@@ -1370,7 +1371,7 @@ export class HlsMuxer extends Muxer {
 				masterPlaylistText += `#EXT-X-MEDIA:TYPE=${type.toUpperCase()},GROUP-ID="${decl.groupId}"`;
 
 				if (name !== null && /[\n\r"]/.test(name)) {
-					console.warn(
+					Logging._warn(
 						'Dropping track name since it includes a line feed, carriage return, or double quote'
 						+ ' character, which are not allowed in HLS playlist attributes.',
 					);
