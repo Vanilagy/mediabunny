@@ -64,6 +64,7 @@ import {
 } from './encode';
 import { AudioResampler } from './resample';
 import { determineVideoPacketType } from './codec-data';
+import { Logging } from './logging';
 
 /**
  * Base class for media sources. Media sources are used to add media samples to an output file.
@@ -968,7 +969,7 @@ export class ColorAlphaSplitter {
 				this.gl = null;
 				this.canvas = null;
 				splitterGpuUnavailable = true;
-				console.warn('Falling back to CPU for color/alpha splitting.', error);
+				Logging._warn('Falling back to CPU for color/alpha splitting.', error);
 			}
 		}
 	}
@@ -1116,7 +1117,7 @@ export class ColorAlphaSplitter {
 		this.gl.shaderSource(shader, source);
 		this.gl.compileShader(shader);
 		if (!this.gl.getShaderParameter(shader, this.gl.COMPILE_STATUS)) {
-			console.error('Shader compile error:', this.gl.getShaderInfoLog(shader));
+			Logging._error('Shader compile error:', this.gl.getShaderInfoLog(shader));
 		}
 		return shader;
 	}
@@ -1673,7 +1674,7 @@ export class MediaStreamVideoTrackSource extends VideoSource {
 	/** @internal */
 	override async _start() {
 		if (!this._errorPromiseAccessed) {
-			console.warn(
+			Logging._warn(
 				'Make sure not to ignore the `errorPromise` field on MediaStreamVideoTrackSource, so that any internal'
 				+ ' errors get bubbled up properly.',
 			);
@@ -2783,7 +2784,7 @@ export class MediaStreamAudioTrackSource extends AudioSource {
 	/** @internal */
 	override async _start() {
 		if (!this._errorPromiseAccessed) {
-			console.warn(
+			Logging._warn(
 				'Make sure not to ignore the `errorPromise` field on MediaStreamAudioTrackSource, so that any internal'
 				+ ' errors get bubbled up properly.',
 			);

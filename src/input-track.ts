@@ -10,6 +10,7 @@ import { AudioCodec, MediaCodec, VideoCodec } from './codec';
 import { determineVideoPacketType } from './codec-data';
 import { customAudioDecoders, customVideoDecoders } from './custom-coder';
 import { Input } from './input';
+import { Logging } from './logging';
 import { EncodedPacketSink, PacketRetrievalOptions } from './media-sink';
 import { assert, MaybePromise, Rational, Rotation, roundToDivisor, simplifyRational } from './misc';
 import { TrackType } from './output';
@@ -763,7 +764,7 @@ export class InputVideoTrack extends InputTrack {
 			const support = await VideoDecoder.isConfigSupported(decoderConfig);
 			return support.supported === true;
 		} catch (error) {
-			console.error('Error during decodability check:', error);
+			Logging._error('Error during decodability check:', error);
 			return false;
 		}
 	}
@@ -903,7 +904,7 @@ export class InputAudioTrack extends InputTrack {
 				return support.supported === true;
 			}
 		} catch (error) {
-			console.error('Error during decodability check:', error);
+			Logging._error('Error during decodability check:', error);
 			return false;
 		}
 	}

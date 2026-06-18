@@ -279,6 +279,40 @@ return new VideoSample(pixels, {
 });
 ```
 
+## Controlling logging
+
+Especially in command-line applications you usually don't want Mediabunny interfering with your stdout and stderr output. Mediabunny provides ways to control its console output:
+```ts
+import { Logging, LogLevel } from 'mediabunny';
+
+// The default: Mediabunny can log errors, warnings, and information messages.
+Logging.level = LogLevel.Info;
+
+// Only log warnings and errors.
+Logging.level = LogLevel.Warnings;
+
+// Only log errors.
+Logging.level = LogLevel.Errors;
+
+// Don't log anything at all.
+Logging.level = LogLevel.None;
+```
+
+You can also hook into log events:
+```ts
+Logging.on('error', (args: unknown[]) => {
+	// Handle error message
+});
+
+Logging.on('warn', (args: unknown[]) => {
+	// Handle warning message
+});
+
+Logging.on('info', (args: unknown[]) => {
+	// Handle info message
+});
+```
+
 ## Implementation details
 
 `@mediabunny/server` uses [NodeAV](https://github.com/seydx/node-av) under the hood which provides N-API C bindings to FFmpeg's C API. Using NodeAV, this package implements [custom decoders and encoders](https://mediabunny.dev/guide/supported-formats-and-codecs#custom-coders) by directly using the APIs provided by `libavcodec`.

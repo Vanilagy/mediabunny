@@ -23,6 +23,7 @@ import {
 } from './encode';
 import { Input } from './input';
 import { InputAudioTrack, InputTrack, InputVideoTrack } from './input-track';
+import { Logging } from './logging';
 import {
 	AudioSampleSink,
 	EncodedPacketSink,
@@ -958,7 +959,7 @@ export class Conversion {
 			}
 
 			if (warnElements.length > 0) {
-				console.warn(...warnElements);
+				Logging._warn(...warnElements);
 			}
 		}
 	}
@@ -1122,7 +1123,7 @@ export class Conversion {
 		}
 
 		if (this._canceled) {
-			console.warn('Conversion already canceled.');
+			Logging._warn('Conversion already canceled.');
 			return;
 		}
 
@@ -1327,7 +1328,7 @@ export class Conversion {
 						firstSample.close();
 						await tempOutput.finalize();
 					} catch (error) {
-						console.info('Error when probing encoder support. Falling back to rerender path.', error);
+						Logging._info('Error when probing encoder support. Falling back to rerender path.', error);
 						needsRerender = true;
 						void tempOutput.cancel();
 					}

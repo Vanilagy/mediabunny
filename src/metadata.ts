@@ -20,7 +20,8 @@ import { isRecordStringString } from './misc';
  * in Vorbis-style comment headers.
  * - For WAVE files, the metadata refers to the chunks within the RIFF INFO chunk.
  * - For ADTS files, the metadata refers to the ID3v2 tags.
- * - For FLAC files, the metadata lives in Vorbis style in the Vorbis comment block.
+ * - For FLAC files, the metadata lives in Vorbis style in the Vorbis comment block, or sometimes in ID3v2 tags at the
+ * start of the file.
  * - For MPEG-TS files, metadata tags are currently not supported.
  *
  * @group Metadata tags
@@ -78,7 +79,8 @@ export type MetadataTags = {
 	 * Additionally, the `'vendor'` key refers to the vendor string within this header.
 	 * - WAVE: The individual metadata chunks within the RIFF INFO chunk. Values are always ISO 8859-1 strings.
 	 * - FLAC: The key-value string pairs from the vorbis metadata block (see RFC 9639, Section D.2.3).
-	 * Additionally, the `'vendor'` key refers to the vendor string within this header.
+	 * Additionally, the `'vendor'` key refers to the vendor string within this header. If ID3v2 tags appear at the
+	 * start of the file, their content is stored just like for MP3.
 	 * - MPEG-TS: Not supported.
 	*/
 	raw?: Record<string, string | Uint8Array | RichImageData | AttachedFile | Record<string, string> | null>;
