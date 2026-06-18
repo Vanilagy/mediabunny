@@ -1,0 +1,56 @@
+{
+  "name": "@mediabunny/dts-decoder",
+  "author": "Vanilagy",
+  "version": "1.45.4",
+  "description": "DTS decoder extension for Mediabunny, based on FFmpeg.",
+  "main": "./dist/bundles/mediabunny-dts-decoder.mjs",
+  "module": "./dist/bundles/mediabunny-dts-decoder.mjs",
+  "types": "./dist/modules/src/index.d.ts",
+  "exports": {
+    "types": "./dist/modules/src/index.d.ts",
+    "import": "./dist/bundles/mediabunny-dts-decoder.mjs",
+    "require": "./dist/bundles/mediabunny-dts-decoder.mjs"
+  },
+  "files": [
+    "README.md",
+    "package.json",
+    "LICENSE",
+    "dist",
+    "src"
+  ],
+  "browser": {
+    "worker_threads": false
+  },
+  "sideEffects": false,
+  "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vanilagy/mediabunny.git",
+    "directory": "packages/dts-decoder"
+  },
+  "bugs": {
+    "url": "https://github.com/Vanilagy/mediabunny/issues"
+  },
+  "homepage": "https://mediabunny.dev/guide/extensions/dts-decoder",
+  "funding": {
+    "type": "individual",
+    "url": "https://github.com/sponsors/Vanilagy"
+  },
+  "peerDependencies": {
+    "mediabunny": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/emscripten": "^1.40.1"
+  },
+  "keywords": [
+    "dts",
+    "dca",
+    "decoding",
+    "codec",
+    "mediabunny",
+    "ffmpeg",
+    "browser",
+    "wasm",
+    "polyfill"
+  ]
+}

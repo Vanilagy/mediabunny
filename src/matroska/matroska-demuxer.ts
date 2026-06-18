@@ -1107,6 +1107,9 @@ export class MatroskaDemuxer extends Demuxer {
 						} else if (codecIdWithoutSuffix === CODEC_STRING_MAP.eac3) {
 							this.currentTrack.info.codec = 'eac3';
 							this.currentTrack.info.codecDescription = this.currentTrack.codecPrivate;
+						} else if (codecIdWithoutSuffix === CODEC_STRING_MAP.dts) {
+							this.currentTrack.info.codec = 'dts';
+							this.currentTrack.info.codecDescription = this.currentTrack.codecPrivate;
 						} else if (this.currentTrack.codecId === 'A_PCM/INT/LIT') {
 							if (this.currentTrack.info.bitDepth === 8) {
 								this.currentTrack.info.codec = 'pcm-u8';

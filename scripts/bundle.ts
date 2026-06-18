@@ -223,6 +223,37 @@ const flacEncoderVariants = await createVariants(
 	},
 );
 
+const dtsDecoderVariants = await createVariants(
+	'packages/dts-decoder/src/index.ts',
+	'MediabunnyDtsDecoder',
+	'packages/dts-decoder/dist/bundles/mediabunny-dts-decoder',
+	'js', // The bundles are purely for the browser, not for Node (due to the peer dependecy)
+	{
+		plugins: [
+			PluginExternalGlobal.externalGlobalPlugin({
+				mediabunny: 'Mediabunny',
+			}),
+			inlineWorkerPlugin({
+				define: {
+					'import.meta.url': '""',
+				},
+				legalComments: 'none',
+			}),
+		],
+	},
+	{
+		external: ['mediabunny'],
+		plugins: [
+			inlineWorkerPlugin({
+				define: {
+					'import.meta.url': '""',
+				},
+				legalComments: 'none',
+			}),
+		],
+	},
+);
+
 const serverVariants = await createVariants(
 	'packages/server/src/index.ts',
 	'MediabunnyServer',
@@ -246,6 +277,7 @@ const contexts = [
 	...ac3Variants,
 	...aacEncoderVariants,
 	...flacEncoderVariants,
+	...dtsDecoderVariants,
 	...serverVariants,
 ];
 

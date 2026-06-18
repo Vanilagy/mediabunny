@@ -1164,6 +1164,13 @@ export class IsobmffDemuxer extends Demuxer {
 							track.info.codec = 'ac3';
 						} else if (codecName === 'ec-3') {
 							track.info.codec = 'eac3';
+						} else if (
+							codecName === 'dtsc'
+							|| codecName === 'dtsh'
+							|| codecName === 'dtsl'
+							|| codecName === 'dtse'
+						) {
+							track.info.codec = 'dts';
 						} else if (codecName === 'twos') {
 							if (sampleSize === 8) {
 								track.info.codec = 'pcm-s8';

@@ -395,92 +395,122 @@ export const serializeAvcDecoderConfigurationRecord = (record: AvcDecoderConfigu
 
 /** Deserializes an AvcDecoderConfigurationRecord from the format specified in Section 5.3.3.1 of ISO 14496-15. */
 export const deserializeAvcDecoderConfigurationRecord = (data: Uint8Array): AvcDecoderConfigurationRecord | null => {
-	try {
-		const view = toDataView(data);
-		let offset = 0;
+	const hasBytes = (offset: number, byteCount: number) =>
+		offset <= data.length && byteCount <= data.length - offset;
+	const readLengthPrefixedNalUnits = (
+		view: DataView,
+		offset: number,
+		count: number,
+	) => {
+		const nalUnits: Uint8Array[] = [];
+		let currentOffset = offset;
 
-		// Read header
-		const configurationVersion = view.getUint8(offset++);
-		const avcProfileIndication = view.getUint8(offset++);
-		const profileCompatibility = view.getUint8(offset++);
-		const avcLevelIndication = view.getUint8(offset++);
-		const lengthSizeMinusOne = view.getUint8(offset++) & 0x03;
-
-		const numOfSequenceParameterSets = view.getUint8(offset++) & 0x1F;
-
-		// Read SPS
-		const sequenceParameterSets: Uint8Array[] = [];
-		for (let i = 0; i < numOfSequenceParameterSets; i++) {
-			const length = view.getUint16(offset, false);
-			offset += 2;
-
-			sequenceParameterSets.push(data.subarray(offset, offset + length));
-			offset += length;
-		}
-
-		const numOfPictureParameterSets = view.getUint8(offset++);
-
-		// Read PPS
-		const pictureParameterSets: Uint8Array[] = [];
-		for (let i = 0; i < numOfPictureParameterSets; i++) {
-			const length = view.getUint16(offset, false);
-			offset += 2;
-
-			pictureParameterSets.push(data.subarray(offset, offset + length));
-			offset += length;
-		}
-
-		const record: AvcDecoderConfigurationRecord = {
-			configurationVersion,
-			avcProfileIndication,
-			profileCompatibility,
-			avcLevelIndication,
-			lengthSizeMinusOne,
-			sequenceParameterSets,
-			pictureParameterSets,
-			chromaFormat: null,
-			bitDepthLumaMinus8: null,
-			bitDepthChromaMinus8: null,
-			sequenceParameterSetExt: null,
-		};
-
-		// Check if there are extended profile fields
-		if (
-			(
-				avcProfileIndication === 100
-				|| avcProfileIndication === 110
-				|| avcProfileIndication === 122
-				|| avcProfileIndication === 144
-			)
-			&& offset + 4 <= data.length
-		) {
-			const chromaFormat = view.getUint8(offset++) & 0x03;
-			const bitDepthLumaMinus8 = view.getUint8(offset++) & 0x07;
-			const bitDepthChromaMinus8 = view.getUint8(offset++) & 0x07;
-			const numOfSequenceParameterSetExt = view.getUint8(offset++);
-
-			record.chromaFormat = chromaFormat;
-			record.bitDepthLumaMinus8 = bitDepthLumaMinus8;
-			record.bitDepthChromaMinus8 = bitDepthChromaMinus8;
-
-			// Read SPS Ext
-			const sequenceParameterSetExt: Uint8Array[] = [];
-			for (let i = 0; i < numOfSequenceParameterSetExt; i++) {
-				const length = view.getUint16(offset, false);
-				offset += 2;
-
-				sequenceParameterSetExt.push(data.subarray(offset, offset + length));
-				offset += length;
+		for (let i = 0; i < count; i++) {
+			if (!hasBytes(currentOffset, 2)) {
+				return null;
 			}
 
-			record.sequenceParameterSetExt = sequenceParameterSetExt;
+			const length = view.getUint16(currentOffset, false);
+			currentOffset += 2;
+
+			if (!hasBytes(currentOffset, length)) {
+				return null;
+			}
+
+			nalUnits.push(data.subarray(currentOffset, currentOffset + length));
+			currentOffset += length;
 		}
 
-		return record;
-	} catch (error) {
-		console.error('Error deserializing AVC Decoder Configuration Record:', error);
+		return {
+			nalUnits,
+			offset: currentOffset,
+		};
+	};
+
+	if (!hasBytes(0, 6)) {
 		return null;
 	}
+
+	const view = toDataView(data);
+	let offset = 0;
+
+	// Read header
+	const configurationVersion = view.getUint8(offset++);
+	const avcProfileIndication = view.getUint8(offset++);
+	const profileCompatibility = view.getUint8(offset++);
+	const avcLevelIndication = view.getUint8(offset++);
+	const lengthSizeMinusOne = view.getUint8(offset++) & 0x03;
+
+	const numOfSequenceParameterSets = view.getUint8(offset++) & 0x1F;
+
+	// Read SPS
+	const sequenceParameterSets = readLengthPrefixedNalUnits(view, offset, numOfSequenceParameterSets);
+	if (!sequenceParameterSets || !hasBytes(sequenceParameterSets.offset, 1)) {
+		return null;
+	}
+
+	offset = sequenceParameterSets.offset;
+	const numOfPictureParameterSets = view.getUint8(offset++);
+
+	// Read PPS
+	const pictureParameterSets = readLengthPrefixedNalUnits(view, offset, numOfPictureParameterSets);
+	if (!pictureParameterSets) {
+		return null;
+	}
+
+	offset = pictureParameterSets.offset;
+
+	const record: AvcDecoderConfigurationRecord = {
+		configurationVersion,
+		avcProfileIndication,
+		profileCompatibility,
+		avcLevelIndication,
+		lengthSizeMinusOne,
+		sequenceParameterSets: sequenceParameterSets.nalUnits,
+		pictureParameterSets: pictureParameterSets.nalUnits,
+		chromaFormat: null,
+		bitDepthLumaMinus8: null,
+		bitDepthChromaMinus8: null,
+		sequenceParameterSetExt: null,
+	};
+
+	// Check if there are extended profile fields
+	if (
+		(
+			avcProfileIndication === 100
+			|| avcProfileIndication === 110
+			|| avcProfileIndication === 122
+			|| avcProfileIndication === 144
+		)
+		&& offset < data.length
+	) {
+		if (!hasBytes(offset, 4)) {
+			return null;
+		}
+
+		const chromaFormat = view.getUint8(offset++) & 0x03;
+		const bitDepthLumaMinus8 = view.getUint8(offset++) & 0x07;
+		const bitDepthChromaMinus8 = view.getUint8(offset++) & 0x07;
+		const numOfSequenceParameterSetExt = view.getUint8(offset++);
+
+		record.chromaFormat = chromaFormat;
+		record.bitDepthLumaMinus8 = bitDepthLumaMinus8;
+		record.bitDepthChromaMinus8 = bitDepthChromaMinus8;
+
+		// Read SPS Ext
+		const sequenceParameterSetExt = readLengthPrefixedNalUnits(
+			view,
+			offset,
+			numOfSequenceParameterSetExt,
+		);
+		if (!sequenceParameterSetExt) {
+			return null;
+		}
+
+		record.sequenceParameterSetExt = sequenceParameterSetExt.nalUnits;
+	}
+
+	return record;
 };
 
 export type AvcSpsInfo = {
@@ -2799,6 +2829,117 @@ export const createVorbisComments = (headerBytes: Uint8Array, tags: MetadataTags
 	}
 
 	return commentHeader;
+};
+
+// ============================================================================
+// DTS Parsing
+// Reference: ETSI TS 102 114
+// ============================================================================
+
+export interface DtsCoreFrameInfo {
+	/** Frame size in bytes, including the sync word. */
+	frameSize: number;
+	/** Sample rate in Hz. */
+	sampleRate: number;
+	/** Channel count including LFE when present. */
+	channelCount: number;
+	/** PCM samples per channel in this frame. */
+	sampleCount: number;
+	/** DTS channel arrangement code. */
+	channelArrangement: number;
+	/** DTS sample rate code. */
+	sampleRateCode: number;
+}
+
+export const DTS_CORE_SYNC_WORD = 0x7ffe8001;
+export const DTS_CORE_HEADER_SIZE = 11;
+
+export const DTS_SAMPLE_RATES = [
+	null,
+	8000,
+	16000,
+	32000,
+	null,
+	null,
+	11025,
+	22050,
+	44100,
+	null,
+	null,
+	12000,
+	24000,
+	48000,
+	96000,
+	192000,
+] as const;
+
+export const DTS_CHANNEL_COUNTS = [
+	1,
+	2,
+	2,
+	2,
+	2,
+	3,
+	3,
+	4,
+	4,
+	5,
+	6,
+	6,
+	6,
+	7,
+	8,
+	8,
+] as const;
+
+/**
+ * Parse a DTS core frame header. This intentionally covers the common 16-bit big-endian core stream.
+ */
+export const parseDtsCoreFrameHeader = (data: Uint8Array): DtsCoreFrameInfo | null => {
+	if (data.length < DTS_CORE_HEADER_SIZE) {
+		return null;
+	}
+
+	const view = toDataView(data);
+	if (view.getUint32(0) !== DTS_CORE_SYNC_WORD) {
+		return null;
+	}
+
+	const bitstream = new Bitstream(data);
+	bitstream.skipBits(32); // Sync word
+	bitstream.skipBits(1); // Frame type
+	bitstream.skipBits(5); // Deficit sample count
+	bitstream.skipBits(1); // CRC present
+
+	const sampleBlockCount = bitstream.readBits(7) + 1;
+	const frameSize = bitstream.readBits(14) + 1;
+	const channelArrangement = bitstream.readBits(6);
+	const sampleRateCode = bitstream.readBits(4);
+	bitstream.skipBits(5); // Bit rate code
+	bitstream.skipBits(1); // Down mix
+	bitstream.skipBits(1); // Dynamic range
+	bitstream.skipBits(1); // Time stamp
+	bitstream.skipBits(1); // Auxiliary data
+	bitstream.skipBits(1); // HDCD
+	bitstream.skipBits(3); // Extension audio ID
+	bitstream.skipBits(1); // Extended audio
+	bitstream.skipBits(1); // Audio sync word insertion
+	const lfeCode = bitstream.readBits(2);
+
+	const sampleRate = DTS_SAMPLE_RATES[sampleRateCode];
+	const baseChannelCount = DTS_CHANNEL_COUNTS[channelArrangement];
+	if (!sampleRate || baseChannelCount === undefined || frameSize < DTS_CORE_HEADER_SIZE) {
+		return null;
+	}
+
+	return {
+		frameSize,
+		sampleRate,
+		channelCount: baseChannelCount + (lfeCode === 0 ? 0 : 1),
+		sampleCount: sampleBlockCount * 32,
+		channelArrangement,
+		sampleRateCode,
+	};
 };
 
 // ============================================================================
