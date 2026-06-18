@@ -955,7 +955,6 @@ export class UrlSource extends PathedSource {
 						&& !(url.pathname.endsWith('.m3u8') || url.pathname.endsWith('.m3u'))
 					) {
 						if (!warnedOrigins.has(url.origin)) {
-							console.log(this._usedForHls, this._url, url.pathname);
 							console.warn(
 								`HTTP server (origin ${url.origin}) did not respond to a range request with 206 Partial`
 								+ ' Content, meaning the entire resource will now be downloaded. To enable efficient'
