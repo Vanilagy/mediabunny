@@ -54,6 +54,7 @@ import {
 	AudioSample,
 	clampCropRectangle,
 	CropRectangle,
+	getBytesPerSample,
 	validateCropRectangle,
 	VideoSample,
 	VideoSampleResource,
@@ -1442,7 +1443,7 @@ export class Conversion {
 		let sampleRate = trackOptions.sampleRate ?? originalSampleRate;
 
 		const needsTrimming = firstTimestamp < this._startTimestamp;
-		const needsPadding = firstTimestamp > this._startTimestamp && !this.output.format.supportsTimestampedMediaData;
+		let needsPadding = firstTimestamp > this._startTimestamp && !this.output.format.supportsTimestampedMediaData;
 
 		let audioCodecs = this.output.format.getSupportedAudioCodecs();
 		if (
@@ -1589,25 +1590,36 @@ export class Conversion {
 			this._trackPromises.push((async () => {
 				await this._started;
 
-				if (needsPadding) {
-					const paddingLength = firstTimestamp - this._startTimestamp;
-					const paddingLengthSamples = Math.round(paddingLength * originalSampleRate);
-
-					const silentSample = new AudioSample({
-						data: new Float32Array(paddingLengthSamples * originalNumberOfChannels),
-						format: 'f32-planar',
-						numberOfChannels: originalNumberOfChannels,
-						sampleRate: originalSampleRate,
-						timestamp: 0,
-					});
-					await this._registerAudioSample(silentSample, source, outputTrackId, () => lastSampleTimestamp);
-				}
-
 				const sink = new AudioSampleSink(track);
 				for await (let sample of sink.samples(this._startTimestamp, this._endTimestamp)) {
 					if (this._canceled) {
 						sample.close();
 						return;
+					}
+
+					if (needsPadding) {
+						// Add one padding sample at the beginning
+						const paddingLength = firstTimestamp - this._startTimestamp;
+						const paddingLengthSamples = Math.round(paddingLength * originalSampleRate);
+
+						const bytesPerSample = getBytesPerSample(sample.format);
+						const data = new Uint8Array(bytesPerSample * paddingLengthSamples * originalNumberOfChannels);
+						if (sample.format === 'u8' || sample.format === 'u8-planar') {
+							data.fill(2 ** 7); // Fill it with the silent value
+						}
+
+						const silentSample = new AudioSample({
+							data,
+							// Use the same format the decoder is spitting out. This avoids feeding changing sample
+							// formats to the audio encoder.
+							format: sample.format,
+							numberOfChannels: originalNumberOfChannels,
+							sampleRate: originalSampleRate,
+							timestamp: 0,
+						});
+						await this._registerAudioSample(silentSample, source, outputTrackId, () => lastSampleTimestamp);
+
+						needsPadding = false;
 					}
 
 					let startFrame = 0;
