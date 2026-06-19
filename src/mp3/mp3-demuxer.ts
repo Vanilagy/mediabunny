@@ -264,6 +264,10 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 		return false;
 	}
 
+	getUnixTimeForTimestamp() {
+		return null;
+	}
+
 	getPairingMask() {
 		return 1n;
 	}

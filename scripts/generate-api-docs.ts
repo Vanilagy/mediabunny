@@ -683,7 +683,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 		}
 
 		// Check if it's a supported type
-		if (ts.isClassDeclaration(declaration) || ts.isInterfaceDeclaration(declaration) || ts.isTypeAliasDeclaration(declaration) || ts.isVariableDeclaration(declaration)) {
+		if (ts.isClassDeclaration(declaration) || ts.isInterfaceDeclaration(declaration) || ts.isTypeAliasDeclaration(declaration) || ts.isVariableDeclaration(declaration) || ts.isEnumDeclaration(declaration)) {
 			// Supported types - continue processing
 		} else {
 			// Unsupported type - throw error with type info
@@ -773,6 +773,43 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 
 				generatedDocs.set(variableName, markdown);
 			}
+
+			return;
+		}
+
+		// Handle enum declarations separately
+		if (ts.isEnumDeclaration(declaration)) {
+			const enumName = declaration.name.text;
+
+			const description = extractJsDocDescription(declaration, {
+				tagHandling: 'filterAll',
+				transform: text => processLinkTags(text, enumName),
+			});
+
+			const order = symbolOrderMap.get(enumName);
+			if (order === undefined) {
+				throw new Error(`Symbol '${enumName}' not found in entry files export order`);
+			}
+			indexEntries.push({ name: enumName, type: 'Enum', group: groupName, order });
+
+			// Reconstruct the enum body so each member keeps its value and description
+			const memberLines = declaration.members.map((member) => {
+				const memberName = member.name.getText();
+				const initializer = member.initializer ? ` = ${member.initializer.getText()}` : '';
+				const memberDescription = extractJsDocDescription(member, {
+					tagHandling: 'filterAll',
+					transform: text => processLinkTags(text, enumName),
+				});
+				const commentLine = memberDescription ? `\t/** ${memberDescription} */\n` : '';
+				return `${commentLine}\t${memberName}${initializer},`;
+			});
+
+			const enumDefinition = `enum ${enumName} {\n${memberLines.join('\n')}\n}`;
+			const deprecationNotice = getDeprecationNotice(declaration, enumName);
+			let markdown = `${buildFrontmatter(description)}<script setup>\nimport { VPBadge } from 'vitepress/theme'\n</script>\n\n<VPBadge type="info" text="Enum" />\n\n# ${enumName}\n\n${deprecationNotice}${description ? `${description}\n\n` : ''}`;
+			markdown += `\`\`\`ts\n${enumDefinition}\n\`\`\``;
+
+			generatedDocs.set(enumName, markdown);
 
 			return;
 		}

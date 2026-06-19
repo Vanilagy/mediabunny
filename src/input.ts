@@ -527,8 +527,12 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 		}
 		this._sourceRefs.length = 0;
 
-		void this._demuxerPromise
-			?.then(demuxer => demuxer.dispose());
+		if (this._demuxerPromise) {
+			// The demuxer promise may already be rejected after failed format detection.
+			void this._demuxerPromise
+				.then(demuxer => demuxer.dispose())
+				.catch(() => {});
+		}
 	}
 
 	/**

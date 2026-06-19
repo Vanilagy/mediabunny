@@ -8,6 +8,7 @@
 
 import {
 	AudioSample,
+	Logging,
 	MaybePromise,
 	registerDecoder,
 	registerEncoder,
@@ -24,7 +25,7 @@ import { copyAudioSampleToAvFrame, AvFrameAudioSampleResource } from './audio-sa
 
 const SERVER_LOADED_SYMBOL = Symbol.for('@mediabunny/server loaded');
 if ((globalThis as Record<symbol, unknown>)[SERVER_LOADED_SYMBOL]) {
-	console.error(
+	Logging._error(
 		'[WARNING]\n@mediabunny/server was loaded twice.'
 		+ ' This will likely cause the package not to work correctly.'
 		+ ' Check if multiple dependencies are importing different versions of @mediabunny/server,'

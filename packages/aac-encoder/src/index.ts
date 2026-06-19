@@ -6,9 +6,11 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { Logging } from 'mediabunny';
+
 const AAC_ENCODER_LOADED_SYMBOL = Symbol.for('@mediabunny/aac-encoder loaded');
 if ((globalThis as Record<symbol, unknown>)[AAC_ENCODER_LOADED_SYMBOL]) {
-	console.error(
+	Logging._error(
 		'[WARNING]\n@mediabunny/aac-encoder was loaded twice.'
 		+ ' This will likely cause the encoder not to work correctly.'
 		+ ' Check if multiple dependencies are importing different versions of @mediabunny/aac-encoder,'

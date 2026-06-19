@@ -64,6 +64,7 @@ import {
 } from './encode';
 import { AudioResampler } from './resample';
 import { determineVideoPacketType } from './codec-data';
+import { Logging } from './logging';
 
 /**
  * Base class for media sources. Media sources are used to add media samples to an output file.
@@ -265,6 +266,7 @@ class VideoEncoderWrapper {
 	 * So, we keep track of the encoder error and throw it as soon as we get the chance.
 	 */
 	private error: Error | null = null;
+	private closed = false;
 
 	private lastMuxerPromise: Promise<void> = Promise.resolve();
 
@@ -429,6 +431,8 @@ class VideoEncoderWrapper {
 					return new VideoSample(x);
 				}
 
+				// Calling the VideoSample constructor here will automatically handle input validation for us
+				// (it throws for any non-legal argument).
 				return new VideoSample(x as CanvasImageSource, {
 					timestamp: videoSample.timestamp,
 					duration: videoSample.duration,
@@ -457,6 +461,10 @@ class VideoEncoderWrapper {
 				}
 				assert(this.encoderInitialized);
 
+				if (this.closed) {
+					break;
+				}
+
 				const keyFrameInterval = this.encodingConfig.keyFrameInterval ?? 2;
 				const multipleOfKeyFrameInterval = Math.floor(sampleToEncode.timestamp / keyFrameInterval);
 
@@ -473,6 +481,8 @@ class VideoEncoderWrapper {
 							|| multipleOfKeyFrameInterval !== this.lastMultipleOfKeyFrameInterval,
 				};
 				this.lastMultipleOfKeyFrameInterval = multipleOfKeyFrameInterval;
+
+				this.encodingConfig.onEncodedSample?.(sampleToEncode);
 
 				if (this.customEncoder) {
 					this.customEncoderQueueSize++;
@@ -843,6 +853,8 @@ class VideoEncoderWrapper {
 			await this.padFrameRate(alignedEnd);
 		}
 
+		this.closed = true;
+
 		this.frameRateLastSample?.close();
 		this.frameRateLastSample = null;
 
@@ -957,7 +969,7 @@ export class ColorAlphaSplitter {
 				this.gl = null;
 				this.canvas = null;
 				splitterGpuUnavailable = true;
-				console.warn('Falling back to CPU for color/alpha splitting.', error);
+				Logging._warn('Falling back to CPU for color/alpha splitting.', error);
 			}
 		}
 	}
@@ -1105,7 +1117,7 @@ export class ColorAlphaSplitter {
 		this.gl.shaderSource(shader, source);
 		this.gl.compileShader(shader);
 		if (!this.gl.getShaderParameter(shader, this.gl.COMPILE_STATUS)) {
-			console.error('Shader compile error:', this.gl.getShaderInfoLog(shader));
+			Logging._error('Shader compile error:', this.gl.getShaderInfoLog(shader));
 		}
 		return shader;
 	}
@@ -1662,7 +1674,7 @@ export class MediaStreamVideoTrackSource extends VideoSource {
 	/** @internal */
 	override async _start() {
 		if (!this._errorPromiseAccessed) {
-			console.warn(
+			Logging._warn(
 				'Make sure not to ignore the `errorPromise` field on MediaStreamVideoTrackSource, so that any internal'
 				+ ' errors get bubbled up properly.',
 			);
@@ -2033,6 +2045,7 @@ class AudioEncoderWrapper {
 	 */
 	private error: Error | null = null;
 	private lastMuxerPromise: Promise<void> = Promise.resolve();
+	private closed = false;
 
 	constructor(private source: AudioSource, private encodingConfig: AudioEncodingConfig) {}
 
@@ -2070,8 +2083,6 @@ class AudioEncoderWrapper {
 							?? audioSample.numberOfChannels,
 						targetSampleRate: config.transform!.sampleRate
 							?? audioSample.sampleRate,
-						startTime: audioSample.timestamp,
-						endTime: Infinity,
 						onSample: async (sample) => {
 							await this.processAndEncode(sample, true);
 						},
@@ -2162,6 +2173,10 @@ class AudioEncoderWrapper {
 			}
 			assert(this.encoderInitialized);
 
+			if (this.closed) {
+				return;
+			}
+
 			// Handle padding of gaps with silence to avoid audio drift over time, like in
 			// https://github.com/Vanilagy/mediabunny/issues/176
 			// TODO An open question is how encoders deal with the first AudioData having a non-zero timestamp, and with
@@ -2196,6 +2211,8 @@ class AudioEncoderWrapper {
 					this.lastEndSampleIndex += audioSample.numberOfFrames;
 				}
 			}
+
+			this.encodingConfig.onEncodedSample?.(audioSample);
 
 			if (this.customEncoder) {
 				this.customEncoderQueueSize++;
@@ -2536,6 +2553,8 @@ class AudioEncoderWrapper {
 		}
 		this.resampler = null;
 
+		this.closed = true;
+
 		if (this.customEncoder) {
 			if (!forceClose) {
 				void this.customEncoderCallSerializer.call(() => this.customEncoder!.flush());
@@ -2765,7 +2784,7 @@ export class MediaStreamAudioTrackSource extends AudioSource {
 	/** @internal */
 	override async _start() {
 		if (!this._errorPromiseAccessed) {
-			console.warn(
+			Logging._warn(
 				'Make sure not to ignore the `errorPromise` field on MediaStreamAudioTrackSource, so that any internal'
 				+ ' errors get bubbled up properly.',
 			);

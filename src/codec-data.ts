@@ -26,6 +26,7 @@ import {
 	isChromium,
 	setUint24,
 } from './misc';
+import { Logging } from './logging';
 import { PacketType } from './packet';
 import { MetadataTags } from './metadata';
 import { AC3_SAMPLE_RATES, EAC3_REDUCED_SAMPLE_RATES } from '../shared/ac3-misc';
@@ -318,7 +319,7 @@ export const extractAvcDecoderConfigurationRecord = (packetData: Uint8Array): Av
 			sequenceParameterSetExt: hasExtendedData ? spsExtUnits : null,
 		};
 	} catch (error) {
-		console.error('Error building AVC Decoder Configuration Record:', error);
+		Logging._error('Error building AVC Decoder Configuration Record:', error);
 		return null;
 	}
 };
@@ -478,7 +479,7 @@ export const deserializeAvcDecoderConfigurationRecord = (data: Uint8Array): AvcD
 
 		return record;
 	} catch (error) {
-		console.error('Error deserializing AVC Decoder Configuration Record:', error);
+		Logging._error('Error deserializing AVC Decoder Configuration Record:', error);
 		return null;
 	}
 };
@@ -795,7 +796,7 @@ export const parseAvcSps = (sps: Uint8Array): AvcSpsInfo | null => {
 			maxDecFrameBuffering,
 		};
 	} catch (error) {
-		console.error('Error parsing AVC SPS:', error);
+		Logging._error('Error parsing AVC SPS:', error);
 		return null;
 	}
 };
@@ -1044,7 +1045,7 @@ export const parseHevcSps = (sps: Uint8Array): HevcSpsInfo | null => {
 			minSpatialSegmentationIdc,
 		};
 	} catch (error) {
-		console.error('Error parsing HEVC SPS:', error);
+		Logging._error('Error parsing HEVC SPS:', error);
 		return null;
 	}
 };
@@ -1176,7 +1177,7 @@ export const extractHevcDecoderConfigurationRecord = (packetData: Uint8Array) =>
 
 		return record;
 	} catch (error) {
-		console.error('Error building HEVC Decoder Configuration Record:', error);
+		Logging._error('Error building HEVC Decoder Configuration Record:', error);
 		return null;
 	}
 };
@@ -1612,7 +1613,7 @@ export const deserializeHevcDecoderConfigurationRecord = (data: Uint8Array): Hev
 			arrays,
 		};
 	} catch (error) {
-		console.error('Error deserializing HEVC Decoder Configuration Record:', error);
+		Logging._error('Error deserializing HEVC Decoder Configuration Record:', error);
 		return null;
 	}
 };

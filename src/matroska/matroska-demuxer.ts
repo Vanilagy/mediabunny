@@ -25,6 +25,7 @@ import {
 } from '../codec';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
+import { Logging } from '../logging';
 import {
 	InputAudioTrackBacking,
 	InputTrackBacking,
@@ -1023,7 +1024,7 @@ export class MatroskaDemuxer extends Demuxer {
 						|| instruction.scope !== ContentEncodingScope.Block
 						|| instruction.data.algorithm !== ContentCompAlgo.HeaderStripping;
 				})) {
-					console.warn(`Track #${this.currentTrack.id} has an unsupported content encoding; dropping.`);
+					Logging._warn(`Track #${this.currentTrack.id} has an unsupported content encoding; dropping.`);
 					this.currentTrack = null;
 				}
 
@@ -1963,6 +1964,10 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 
 	isRelativeToUnixEpoch() {
 		return false;
+	}
+
+	getUnixTimeForTimestamp() {
+		return null;
 	}
 
 	getDisposition() {

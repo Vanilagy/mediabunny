@@ -6,9 +6,11 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { Logging } from 'mediabunny';
+
 const FLAC_ENCODER_LOADED_SYMBOL = Symbol.for('@mediabunny/flac-encoder loaded');
 if ((globalThis as Record<symbol, unknown>)[FLAC_ENCODER_LOADED_SYMBOL]) {
-	console.error(
+	Logging._error(
 		'[WARNING]\n@mediabunny/flac-encoder was loaded twice.'
 		+ ' This will likely cause the encoder not to work correctly.'
 		+ ' Check if multiple dependencies are importing different versions of @mediabunny/flac-encoder,'

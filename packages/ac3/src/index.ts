@@ -6,9 +6,11 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { Logging } from 'mediabunny';
+
 const AC3_LOADED_SYMBOL = Symbol.for('@mediabunny/ac3 loaded');
 if ((globalThis as Record<symbol, unknown>)[AC3_LOADED_SYMBOL]) {
-	console.error(
+	Logging._error(
 		'[WARNING]\n@mediabunny/ac3 was loaded twice.'
 		+ ' This will likely cause the encoder/decoder not to work correctly.'
 		+ ' Check if multiple dependencies are importing different versions of @mediabunny/ac3,'

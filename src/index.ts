@@ -9,9 +9,11 @@
 /// <reference types="dom-mediacapture-transform" preserve="true" />
 /// <reference types="dom-webcodecs" preserve="true" />
 
+import { Logging } from './logging';
+
 const MEDIABUNNY_LOADED_SYMBOL = Symbol.for('mediabunny loaded');
 if ((globalThis as Record<symbol, unknown>)[MEDIABUNNY_LOADED_SYMBOL]) {
-	console.error(
+	Logging._error(
 		'[WARNING]\nMediabunny was loaded twice.'
 		+ ' This will likely cause Mediabunny not to work correctly.'
 		+ ' Check if multiple dependencies are importing different versions of Mediabunny,'
@@ -152,6 +154,11 @@ export {
 	type MaybePromise,
 } from './misc';
 export {
+	Logging,
+	LogLevel,
+	type LoggingEvents,
+} from './logging';
+export {
 	type PsshBox,
 } from './isobmff/isobmff-misc';
 export {
@@ -197,6 +204,7 @@ export {
 	IsobmffInputFormat,
 	type IsobmffInputFormatOptions,
 	HlsInputFormat,
+	type HlsInputFormatOptions,
 	MatroskaInputFormat,
 	Mp3InputFormat,
 	Mp4InputFormat,
@@ -270,6 +278,7 @@ export {
 	EncodedPacketSink,
 	type PacketRetrievalOptions,
 	VideoSampleSink,
+	type VideoSinkDecoderOptions,
 	type WrappedAudioBuffer,
 	type WrappedCanvas,
 } from './media-sink';

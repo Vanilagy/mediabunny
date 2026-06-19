@@ -95,6 +95,7 @@ import { DEFAULT_TRACK_DISPOSITION, MetadataTags, RichImageData, TrackDispositio
 import { AC3_SAMPLE_RATES } from '../../shared/ac3-misc';
 import { Bitstream } from '../../shared/bitstream';
 import { Aes128CbcContext } from '../aes';
+import { Logging } from '../logging';
 
 type InternalTrack = {
 	id: number;
@@ -927,7 +928,7 @@ export class IsobmffDemuxer extends Demuxer {
 					}
 
 					if (relevantEntryFound) {
-						console.warn(
+						Logging._warn(
 							'Unsupported edit list: multiple edits are not currently supported. Only using first edit.',
 						);
 						break;
@@ -939,7 +940,7 @@ export class IsobmffDemuxer extends Demuxer {
 					}
 
 					if (mediaRate !== 1) {
-						console.warn('Unsupported edit list entry: media rate must be 1.');
+						Logging._warn('Unsupported edit list entry: media rate must be 1.');
 						break;
 					}
 
@@ -1099,9 +1100,9 @@ export class IsobmffDemuxer extends Demuxer {
 							track.info.codec = 'prores';
 							track.info.proresFormat = lowercaseBoxName;
 						} else if (codecName === null) {
-							console.warn(`Unknown encrypted video codec due to missing frma box.`);
+							Logging._warn(`Unknown encrypted video codec due to missing frma box.`);
 						} else {
-							console.warn(`Unsupported video codec (sample entry type '${sampleBoxInfo.name}').`);
+							Logging._warn(`Unsupported video codec (sample entry type '${sampleBoxInfo.name}').`);
 						}
 					} else {
 						slice.skip(6 * 1 + 2);
@@ -1176,7 +1177,7 @@ export class IsobmffDemuxer extends Demuxer {
 							} else if (sampleSize === 16) {
 								track.info.codec = track.info.pcmLittleEndian ? 'pcm-s16' : 'pcm-s16be';
 							} else {
-								console.warn(`Unsupported sample size ${sampleSize} for codec 'twos'.`);
+								Logging._warn(`Unsupported sample size ${sampleSize} for codec 'twos'.`);
 								track.info.codec = null;
 							}
 						} else if (codecName === 'sowt') {
@@ -1185,7 +1186,7 @@ export class IsobmffDemuxer extends Demuxer {
 							} else if (sampleSize === 16) {
 								track.info.codec = 'pcm-s16';
 							} else {
-								console.warn(`Unsupported sample size ${sampleSize} for codec 'sowt'.`);
+								Logging._warn(`Unsupported sample size ${sampleSize} for codec 'sowt'.`);
 								track.info.codec = null;
 							}
 						} else if (codecName === 'raw ') {
@@ -1209,7 +1210,7 @@ export class IsobmffDemuxer extends Demuxer {
 								} else if (pcmSampleSize === 32) {
 									track.info.codec = 'pcm-s32';
 								} else {
-									console.warn(`Invalid ipcm sample size ${pcmSampleSize}.`);
+									Logging._warn(`Invalid ipcm sample size ${pcmSampleSize}.`);
 									track.info.codec = null;
 								}
 							} else {
@@ -1220,7 +1221,7 @@ export class IsobmffDemuxer extends Demuxer {
 								} else if (pcmSampleSize === 32) {
 									track.info.codec = 'pcm-s32be';
 								} else {
-									console.warn(`Invalid ipcm sample size ${pcmSampleSize}.`);
+									Logging._warn(`Invalid ipcm sample size ${pcmSampleSize}.`);
 									track.info.codec = null;
 								}
 							}
@@ -1233,7 +1234,7 @@ export class IsobmffDemuxer extends Demuxer {
 								} else if (pcmSampleSize === 64) {
 									track.info.codec = 'pcm-f64';
 								} else {
-									console.warn(`Invalid fpcm sample size ${pcmSampleSize}.`);
+									Logging._warn(`Invalid fpcm sample size ${pcmSampleSize}.`);
 									track.info.codec = null;
 								}
 							} else {
@@ -1242,7 +1243,7 @@ export class IsobmffDemuxer extends Demuxer {
 								} else if (pcmSampleSize === 64) {
 									track.info.codec = 'pcm-f64be';
 								} else {
-									console.warn(`Invalid fpcm sample size ${pcmSampleSize}.`);
+									Logging._warn(`Invalid fpcm sample size ${pcmSampleSize}.`);
 									track.info.codec = null;
 								}
 							}
@@ -1277,12 +1278,12 @@ export class IsobmffDemuxer extends Demuxer {
 							}
 
 							if (track.info.codec === null) {
-								console.warn('Unsupported PCM format.');
+								Logging._warn('Unsupported PCM format.');
 							}
 						} else if (codecName === null) {
-							console.warn(`Unknown encrypted audio codec due to missing frma box.`);
+							Logging._warn(`Unknown encrypted audio codec due to missing frma box.`);
 						} else {
-							console.warn(`Unsupported audio codec (sample entry type '${sampleBoxInfo.name}').`);
+							Logging._warn(`Unsupported audio codec (sample entry type '${sampleBoxInfo.name}').`);
 						}
 					}
 
@@ -1323,7 +1324,7 @@ export class IsobmffDemuxer extends Demuxer {
 						defaultSkipByteBlock: null,
 					};
 				} else {
-					console.warn(`Unsupported encryption scheme '${schemeType}'.`);
+					Logging._warn(`Unsupported encryption scheme '${schemeType}'.`);
 				}
 			}; break;
 
@@ -1550,7 +1551,7 @@ export class IsobmffDemuxer extends Demuxer {
 				} else if (objectTypeIndication === 0xdd) {
 					track.info.codec = 'vorbis'; // "nonstandard, gpac uses it" - FFmpeg
 				} else {
-					console.warn(
+					Logging._warn(
 						`Unsupported audio codec (objectTypeIndication ${objectTypeIndication}) - discarding track.`,
 					);
 				}
@@ -1736,7 +1737,7 @@ export class IsobmffDemuxer extends Demuxer {
 				const config = parseEac3Config(bytes);
 
 				if (!config) {
-					console.warn('Invalid dec3 box contents, ignoring.');
+					Logging._warn('Invalid dec3 box contents, ignoring.');
 					break;
 				}
 
@@ -2075,8 +2076,14 @@ export class IsobmffDemuxer extends Demuxer {
 				// referenced in the track fragment header.
 				if (this.currentTrack) {
 					const trackData = this.currentFragment.trackData.get(this.currentTrack.id);
+					cond:
 					if (trackData) {
-						this.currentFragment.implicitBaseDataOffset = trackData.currentOffset;
+						if (trackData.samples.length === 0) {
+							// Don't associate the fragment with the track if it has no samples, this simplifies
+							// other code
+							this.currentFragment.trackData.delete(this.currentTrack.id);
+							break cond;
+						}
 
 						trackData.presentationTimestamps = trackData.samples
 							.map((x, i) => ({ presentationTimestamp: x.presentationTimestamp, sampleIndex: i }))
@@ -2266,12 +2273,6 @@ export class IsobmffDemuxer extends Demuxer {
 					this.currentFragment.trackData.set(track.id, trackData);
 				}
 
-				if (sampleCount === 0) {
-					// Don't associate the fragment with the track if it has no samples, this simplifies other code
-					this.currentFragment.implicitBaseDataOffset = trackData.currentOffset;
-					break;
-				}
-
 				for (let i = 0; i < sampleCount; i++) {
 					let sampleDuration: number;
 					if (sampleDurationPresent) {
@@ -2323,6 +2324,8 @@ export class IsobmffDemuxer extends Demuxer {
 					trackData.currentOffset += sampleSize;
 					trackData.currentTimestamp += sampleDuration;
 				}
+
+				this.currentFragment.implicitBaseDataOffset = trackData.currentOffset;
 			}; break;
 
 			case 'saiz': {
@@ -2381,7 +2384,7 @@ export class IsobmffDemuxer extends Demuxer {
 					break;
 				}
 				if (entryCount > 1) {
-					console.warn('Multiple saio entries are not supported; using the first offset only.');
+					Logging._warn('Multiple saio entries are not supported; using the first offset only.');
 				}
 
 				let offset = version === 0 ? readU32Be(slice) : Number(readU64Be(slice));
@@ -2813,6 +2816,10 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 
 	isRelativeToUnixEpoch() {
 		return false;
+	}
+
+	getUnixTimeForTimestamp() {
+		return null;
 	}
 
 	getDisposition() {

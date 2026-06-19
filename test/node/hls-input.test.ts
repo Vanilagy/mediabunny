@@ -526,10 +526,13 @@ test.concurrent('Single-value PDT', { timeout: 15_000 }, async () => {
 
 	const tracks = await input.getTracks();
 	expect((await Promise.all(tracks.map(x => x.isRelativeToUnixEpoch()))).every(x => x)).toBe(true);
+	expect((await Promise.all(tracks.map(x => x.hasUnixTimeMapping()))).every(x => x)).toBe(true);
 
 	const track = tracks[0]!;
 	const firstTimestamp = await track.getFirstTimestamp();
 	expect(firstTimestamp).toBe(Date.parse('2013-05-08T17:40:50Z') / 1000);
+
+	expect(await track.getUnixTimeForTimestamp(firstTimestamp)).toBe(firstTimestamp);
 
 	const endTimestamp = await track.computeDuration();
 	expect(endTimestamp).toBe(firstTimestamp + 50);
@@ -598,6 +601,49 @@ test.concurrent('PDT with bad values', { timeout: 15_000 }, async () => {
 	assert(audioTrack);
 
 	expect(await audioTrack.isRelativeToUnixEpoch()).toBe(false);
+});
+
+test.concurrent('Single-value PDT with unix offsets disabled', { timeout: 15_000 }, async () => {
+	using input = new Input({
+		source: new UrlSource('https://playertest.longtailvideo.com/adaptive/aviion/manifest.m3u8'),
+		formats: ALL_FORMATS,
+		formatOptions: {
+			hls: {
+				offsetTimestampsByDateTime: false,
+			},
+		},
+	});
+
+	const tracks = await input.getTracks();
+	expect((await Promise.all(tracks.map(x => x.isRelativeToUnixEpoch()))).every(x => x)).toBe(false);
+	expect((await Promise.all(tracks.map(x => x.hasUnixTimeMapping()))).every(x => x)).toBe(true);
+
+	const track = tracks[0]!;
+	const firstTimestamp = await track.getFirstTimestamp();
+	expect(firstTimestamp).toBe(0);
+
+	const endTimestamp = await track.computeDuration();
+	expect(endTimestamp).toBe(firstTimestamp + 50);
+
+	const firstPacket = await new EncodedPacketSink(track).getFirstPacket();
+	assert(firstPacket);
+	expect(firstPacket.timestamp).toBe(firstTimestamp); // Kinda obvious check tbh
+
+	const unixStartTime = await track.getUnixTimeForTimestamp(firstTimestamp);
+	expect(unixStartTime).toBe(Date.parse('2013-05-08T17:40:50Z') / 1000);
+
+	const unixEndTime = await track.getUnixTimeForTimestamp(endTimestamp);
+	expect(unixEndTime).toBe(Date.parse('2013-05-08T17:41:40Z') / 1000);
+
+	const unixTimeBeforeStart = await track.getUnixTimeForTimestamp(firstTimestamp - 10);
+	expect(unixTimeBeforeStart).toBe(Date.parse('2013-05-08T17:40:40Z') / 1000);
+
+	const unixTimeAfterEnd = await track.getUnixTimeForTimestamp(endTimestamp + 10);
+	expect(unixTimeAfterEnd).toBe(Date.parse('2013-05-08T17:41:50Z') / 1000);
+
+	const timestampDt = 0.001;
+	const unixTimeDt = (await track.getUnixTimeForTimestamp(firstTimestamp + 0.001))! - unixStartTime!;
+	expect(unixTimeDt).toBeCloseTo(timestampDt);
 });
 
 test.concurrent('Alternative audio only', { timeout: 15_000 }, async () => {

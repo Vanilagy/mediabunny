@@ -77,11 +77,14 @@ export class HlsDemuxer extends Demuxer {
 	readMetadata() {
 		return this.metadataPromise ??= (async () => {
 			assert(this.input._rootSource instanceof PathedSource);
-			const { rootPath } = this.input._rootSource;
 
 			const slice = await this.input._reader.requestEntireFile();
 			assert(slice);
 			const lines = readAllLines(slice, slice.length, { ignore: canIgnoreLine });
+
+			// Important: get the root path AFTER reading data to get the final root path, possibly affected by
+			// redirects. Any follow requests should be related to the redirected path, not the original one.
+			const { rootPath } = this.input._rootSource;
 
 			const variantStreams: {
 				fullPath: string;
@@ -754,6 +757,10 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 
 	isRelativeToUnixEpoch(): MaybePromise<boolean> {
 		return this.delegate(() => this.internalTrack.backingTrack!.isRelativeToUnixEpoch());
+	}
+
+	getUnixTimeForTimestamp(timestamp: number): MaybePromise<number | null> {
+		return this.delegate(() => this.internalTrack.backingTrack!.getUnixTimeForTimestamp(timestamp));
 	}
 
 	getBitrate(): number | null {

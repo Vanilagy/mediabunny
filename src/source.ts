@@ -28,6 +28,7 @@ import {
 } from './misc';
 import * as nodeAlias from './node';
 import { InputDisposedError } from './input';
+import { Logging } from './logging';
 
 polyfillSymbolDispose();
 
@@ -289,10 +290,15 @@ export class SourceRef<S extends Source = Source> implements Disposable {
  */
 export abstract class PathedSource extends Source {
 	constructor(
-		/** The path that points to the root file; the entry file of the media. */
+		/**
+		 * The path that points to the root file; the entry file of the media.
+		 *
+		 * This path may be modified by the source to indicate a redirect: an updated path to perform new requests
+		 * relative to.
+		 */
 		public rootPath: FilePath,
 		/** The callback that is called for each requested file; must return a {@link Source} or {@link SourceRef}. */
-		public requestHandler: (request: SourceRequest) => MaybePromise<Source | SourceRef>,
+		public readonly requestHandler: (request: SourceRequest) => MaybePromise<Source | SourceRef>,
 	) {
 		if (typeof rootPath !== 'string') {
 			throw new TypeError('rootPath must be a string.');
@@ -653,7 +659,7 @@ const DEFAULT_RETRY_DELAY
 			= typeof navigator !== 'undefined' && typeof navigator.onLine === 'boolean' ? navigator.onLine : true;
 
 			if (isOnline && originOfSrc !== null && originOfSrc !== window.location.origin) {
-				console.warn(
+				Logging._warn(
 					`Request will not be retried because a CORS error was suspected due to different origins. You can`
 					+ ` modify this behavior by providing your own function for the 'getRetryDelay' option.`,
 				);
@@ -778,7 +784,10 @@ export class UrlSource extends PathedSource {
 				? url.href
 				: url;
 
-		super(urlString, request => new UrlSource(request.path, this._options));
+		super(
+			urlString,
+			request => new UrlSource(request.path, this._options),
+		);
 
 		this._url = url;
 		this._options = options;
@@ -905,6 +914,11 @@ export class UrlSource extends PathedSource {
 				throw new Error(`Error fetching ${String(this._url)}: ${response.status} ${response.statusText}`);
 			}
 
+			if (response.redirected) {
+				// Modify our own root path so that future subrequests get made relative to the redirected URL
+				this.rootPath = response.url;
+			}
+
 			outer:
 			if (this._orchestrator.fileSize === null) {
 				// See if we can deduce the file size from the response
@@ -942,8 +956,7 @@ export class UrlSource extends PathedSource {
 						&& !(url.pathname.endsWith('.m3u8') || url.pathname.endsWith('.m3u'))
 					) {
 						if (!warnedOrigins.has(url.origin)) {
-							console.log(this._usedForHls, this._url, url.pathname);
-							console.warn(
+							Logging._warn(
 								`HTTP server (origin ${url.origin}) did not respond to a range request with 206 Partial`
 								+ ' Content, meaning the entire resource will now be downloaded. To enable efficient'
 								+ ' media file streaming across a network, please make sure your server supports'
@@ -997,7 +1010,7 @@ export class UrlSource extends PathedSource {
 
 					const retryDelayInSeconds = this._getRetryDelay(1, error, this._url);
 					if (retryDelayInSeconds !== null) {
-						console.error('Error while reading response stream. Attempting to resume.', error);
+						Logging._error('Error while reading response stream. Attempting to resume.', error);
 						await wait(1000 * retryDelayInSeconds);
 
 						break;
@@ -1989,6 +2002,14 @@ class ReadOrchestrator {
 			} satisfies ReadResult));
 		} else {
 			// The requested region was satisfied by the cache, but the entire prefetch region was not
+			promise.catch((error) => {
+				if (this.disposed) {
+					return; // Swallow the error
+				}
+
+				// Nobody's awaiting this result but an errored read is still notable
+				throw error;
+			});
 		}
 
 		return result;
@@ -2103,12 +2124,12 @@ class ReadOrchestrator {
 				if (worker.pendingSlices.length > 0) {
 					worker.pendingSlices.forEach(x => x.reject(error)); // Make sure to propagate any errors
 					worker.pendingSlices.length = 0;
-				} else {
+				} else if (!worker.aborted && !this.disposed) {
 					throw error; // So it doesn't get swallowed
 				}
 			})
 			.finally(() => {
-				if (worker.running) {
+				if (worker.running || this.workers.length >= this.options.maxWorkerCount) {
 					// Rare, but can happen with multiple concurrent reads. In this case, don't do anything.
 					return;
 				}
