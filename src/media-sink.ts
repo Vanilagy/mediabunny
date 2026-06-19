@@ -1574,8 +1574,8 @@ const colorAlphaMergerWorkerCode = () => {
 			);
 		}
 
-		const width = color.codedWidth;
-		const height = color.codedHeight;
+		const width = color.visibleRect?.width ?? color.displayWidth;
+		const height = color.visibleRect?.height ?? color.displayHeight;
 
 		if (format === 'RGBX' || format === 'RGBA' || format === 'BGRX' || format === 'BGRA') {
 			return await mergeInterleavedRgba(color, alpha, width, height, format);
@@ -1616,6 +1616,8 @@ const colorAlphaMergerWorkerCode = () => {
 			format: outputFormat,
 			codedWidth: width,
 			codedHeight: height,
+			displayWidth: color.displayWidth,
+			displayHeight: color.displayHeight,
 			timestamp: color.timestamp,
 			duration: color.duration ?? undefined,
 			transfer: [output.buffer],
@@ -1673,6 +1675,8 @@ const colorAlphaMergerWorkerCode = () => {
 			format: outputFormat,
 			codedWidth: width,
 			codedHeight: height,
+			displayWidth: color.displayWidth,
+			displayHeight: color.displayHeight,
 			timestamp: color.timestamp,
 			duration: color.duration ?? undefined,
 			transfer: [output.buffer],
@@ -1719,6 +1723,8 @@ const colorAlphaMergerWorkerCode = () => {
 			format: 'I420A',
 			codedWidth: width,
 			codedHeight: height,
+			displayWidth: color.displayWidth,
+			displayHeight: color.displayHeight,
 			timestamp: color.timestamp,
 			duration: color.duration ?? undefined,
 			transfer: [output.buffer],

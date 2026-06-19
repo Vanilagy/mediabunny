@@ -11,6 +11,33 @@ import { canEncodeVideo, QUALITY_HIGH } from '../../src/encode.js';
 import { VideoSample } from '../../src/sample.js';
 import { Conversion } from '../../src/conversion.js';
 
+const canvasToPngBlob = async (canvas: HTMLCanvasElement | OffscreenCanvas) => {
+	const blob = 'convertToBlob' in canvas
+		? await canvas.convertToBlob({ type: 'image/png' })
+		: await new Promise<Blob>((resolve, reject) => {
+			canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Failed to create PNG blob.')), 'image/png');
+		});
+
+	return blob;
+};
+
+const decodeFirstVideoFrame = async (config: VideoDecoderConfig, chunk: EncodedVideoChunk) => {
+	const frames: VideoFrame[] = [];
+	const decoder = new VideoDecoder({
+		output: frame => frames.push(frame),
+		error: error => {
+			throw error;
+		},
+	});
+
+	decoder.configure(config);
+	decoder.decode(chunk);
+	await decoder.flush();
+	decoder.close();
+
+	return frames[0]!;
+};
+
 const decodeTransparentVideoTest = async () => {
 	using input = new Input({
 		source: new UrlSource('/transparency.webm'),
@@ -92,6 +119,55 @@ test('Can extract transparent frames via CanvasSink', async () => {
 
 	imageData = context.getImageData(0, 0, canvas.width, canvas.height);
 	expect(imageData.data[3]).toBe(255);
+});
+
+test('Can extract a VP9 alpha frame and save it as PNG', async () => {
+	using input = new Input({
+		source: new UrlSource('/vp9-alpha-padded-width.webm'),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = (await input.getPrimaryVideoTrack())!;
+	expect(await videoTrack.canBeTransparent()).toBe(true);
+
+	const packetSink = new EncodedPacketSink(videoTrack);
+	const firstPacket = (await packetSink.getFirstPacket())!;
+	const decoderConfig = (await videoTrack.getDecoderConfig())!;
+	const rawColorFrame = await decodeFirstVideoFrame(decoderConfig, firstPacket.toEncodedVideoChunk());
+	expect(rawColorFrame.codedWidth).toBe(1504);
+	expect(rawColorFrame.displayWidth).toBe(1440);
+	rawColorFrame.close();
+
+	const rawAlphaFrame = await decodeFirstVideoFrame(decoderConfig, firstPacket.alphaToEncodedVideoChunk());
+	expect(rawAlphaFrame.codedWidth).toBe(1504);
+	expect(rawAlphaFrame.displayWidth).toBe(1440);
+	rawAlphaFrame.close();
+
+	const sampleSink = new VideoSampleSink(videoTrack);
+	using sample = (await sampleSink.getSample(await videoTrack.getFirstTimestamp()))!;
+	expect(sample.format).toBe('I420A');
+	expect(sample.codedWidth).toBe(1440);
+	expect(sample.displayWidth).toBe(1440);
+
+	const rgbaBytes = new Uint8Array(sample.allocationSize({ format: 'RGBA' }));
+	const rgbaLayout = await sample.copyTo(rgbaBytes, { format: 'RGBA' });
+	expect(rgbaLayout).toEqual([{ offset: 0, stride: 1440 * 4 }]);
+
+	const sink = new CanvasSink(videoTrack, { alpha: true });
+	const wrappedCanvas = (await sink.getCanvas(await videoTrack.getFirstTimestamp()))!;
+
+	const context = wrappedCanvas.canvas.getContext('2d') as OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D;
+	const imageData = context.getImageData(0, 0, wrappedCanvas.canvas.width, wrappedCanvas.canvas.height);
+	const hasTransparentPixel = imageData.data.some((value: number, index: number) => index % 4 === 3 && value < 255);
+	expect(hasTransparentPixel).toBe(true);
+
+	const pngBytes = new Uint8Array(await (await canvasToPngBlob(wrappedCanvas.canvas)).arrayBuffer());
+	expect([...pngBytes.slice(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+	const opaqueSink = new CanvasSink(videoTrack, { alpha: false });
+	const opaqueWrappedCanvas = (await opaqueSink.getCanvas(await videoTrack.getFirstTimestamp()))!;
+	const opaquePngBytes = new Uint8Array(await (await canvasToPngBlob(opaqueWrappedCanvas.canvas)).arrayBuffer());
+	expect([...opaquePngBytes.slice(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 });
 
 const encodeTransparentVideoTest = async () => {
