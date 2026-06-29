@@ -68,6 +68,7 @@ const compressFile = async (resource: File | string) => {
 				bitrate: QUALITY_VERY_LOW,
 			},
 			audio: {
+				codec: 'opus',
 				bitrate: QUALITY_VERY_LOW,
 			},
 		});

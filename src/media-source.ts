@@ -265,10 +265,18 @@ class VideoEncoderWrapper {
 	 * However, we want to surface these errors to the user within the normal control flow, so they don't go uncaught.
 	 * So, we keep track of the encoder error and throw it as soon as we get the chance.
 	 */
-	private error: Error | null = null;
-	private closed = false;
+	private error: unknown = null;
+	private errorSet = false;
+
+	private setError(error: unknown) {
+		if (!this.errorSet) {
+			this.error = error;
+			this.errorSet = true;
+		}
+	}
 
 	private lastMuxerPromise: Promise<void> = Promise.resolve();
+	private closed = false;
 
 	constructor(private source: VideoSource, private encodingConfig: VideoEncodingConfig) {}
 
@@ -492,9 +500,9 @@ class VideoEncoderWrapper {
 
 					const promise = this.customEncoderCallSerializer
 						.call(() => this.customEncoder!.encode(clonedSample, finalEncodeOptions))
-						.then(() => this.customEncoderQueueSize--)
-						.catch((error: Error) => this.error ??= error)
+						.catch((error: unknown) => this.setError(error))
 						.finally(() => {
+							this.customEncoderQueueSize--;
 							clonedSample.close();
 						});
 
@@ -641,8 +649,12 @@ class VideoEncoderWrapper {
 					this.lastMuxerPromise
 						= this.muxer!.addEncodedVideoPacket(this.source._connectedTrack!, packet, meta)
 							.catch((error) => {
-								this.error ??= error;
+								this.setError(error);
 							});
+				};
+				// @ts-expect-error It's technically readonly
+				this.customEncoder.onError = (error) => {
+					this.setError(error);
 				};
 
 				await this.customEncoder.init();
@@ -746,7 +758,7 @@ class VideoEncoderWrapper {
 					this.lastMuxerPromise
 						= this.muxer!.addEncodedVideoPacket(this.source._connectedTrack!, packet, meta)
 							.catch((error) => {
-								this.error ??= error;
+								this.setError(error);
 							});
 
 					this.emittedEncoderPackets++;
@@ -791,7 +803,7 @@ class VideoEncoderWrapper {
 					},
 					error: (error) => {
 						error.stack = stack; // Provide a more useful stack trace, the default one sucks
-						this.error ??= error;
+						this.setError(error);
 					},
 				});
 				this.encoder.configure(encoderConfig);
@@ -827,7 +839,7 @@ class VideoEncoderWrapper {
 						},
 						error: (error) => {
 							error.stack = stack; // Provide a more useful stack trace
-							this.error ??= error;
+							this.setError(error);
 						},
 					});
 					this.alphaEncoder.configure(encoderConfig);
@@ -899,7 +911,7 @@ class VideoEncoderWrapper {
 	}
 
 	checkForEncoderError() {
-		if (this.error) {
+		if (this.errorSet) {
 			throw this.error;
 		}
 	}
@@ -2043,7 +2055,16 @@ class AudioEncoderWrapper {
 	 * However, we want to surface these errors to the user within the normal control flow, so they don't go uncaught.
 	 * So, we keep track of the encoder error and throw it as soon as we get the chance.
 	 */
-	private error: Error | null = null;
+	private error: unknown = null;
+	private errorSet = false;
+
+	private setError(error: unknown) {
+		if (!this.errorSet) {
+			this.error = error;
+			this.errorSet = true;
+		}
+	}
+
 	private lastMuxerPromise: Promise<void> = Promise.resolve();
 	private closed = false;
 
@@ -2222,9 +2243,9 @@ class AudioEncoderWrapper {
 
 				const promise = this.customEncoderCallSerializer
 					.call(() => this.customEncoder!.encode(clonedSample))
-					.then(() => this.customEncoderQueueSize--)
-					.catch((error: Error) => this.error ??= error)
+					.catch((error: unknown) => this.setError(error))
 					.finally(() => {
+						this.customEncoderQueueSize--;
 						clonedSample.close();
 					});
 
@@ -2365,8 +2386,12 @@ class AudioEncoderWrapper {
 					this.lastMuxerPromise
 						= this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet, meta)
 							.catch((error) => {
-								this.error ??= error;
+								this.setError(error);
 							});
+				};
+				// @ts-expect-error It's technically readonly
+				this.customEncoder.onError = (error) => {
+					this.setError(error);
 				};
 
 				await this.customEncoder.init();
@@ -2431,12 +2456,12 @@ class AudioEncoderWrapper {
 						this.lastMuxerPromise
 							= this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet, meta)
 								.catch((error) => {
-									this.error ??= error;
+									this.setError(error);
 								});
 					},
 					error: (error) => {
 						error.stack = stack; // Provide a more useful stack trace
-						this.error ??= error;
+						this.setError(error);
 					},
 				});
 				this.encoder.configure(encoderConfig);
@@ -2587,7 +2612,7 @@ class AudioEncoderWrapper {
 	}
 
 	checkForEncoderError() {
-		if (this.error) {
+		if (this.errorSet) {
 			throw this.error;
 		}
 	}
@@ -2959,7 +2984,7 @@ type MediaStreamTrackProcessorWorkerMessage = {
 } | {
 	type: 'error';
 	trackId: number;
-	error: Error;
+	error: unknown;
 };
 
 type MediaStreamTrackProcessorControllerMessage = {
@@ -3018,7 +3043,7 @@ const mediaStreamTrackProcessorWorkerCode = () => {
 
 				processor.readable.pipeTo(consumer, {
 					signal: abortController.signal,
-				}).catch((error: Error) => {
+				}).catch((error: unknown) => {
 					// Handle AbortError silently
 					if (error instanceof DOMException && error.name === 'AbortError') return;
 
@@ -3138,7 +3163,9 @@ export class TextSubtitleSource extends SubtitleSource {
 	/** @internal */
 	private _parser: SubtitleParser;
 	/** @internal */
-	private _error: Error | null = null;
+	private _error: unknown = null;
+	/** @internal */
+	private _errorSet = false;
 	/** @internal */
 	private _lastMuxerPromise: Promise<void> = Promise.resolve();
 
@@ -3152,7 +3179,7 @@ export class TextSubtitleSource extends SubtitleSource {
 				this._lastMuxerPromise
 					= this._connectedTrack!.output._muxer.addSubtitleCue(this._connectedTrack!, cue, metadata)
 						.catch((error) => {
-							this._error ??= error;
+							this._setError(error);
 						});
 			},
 		});
@@ -3179,8 +3206,16 @@ export class TextSubtitleSource extends SubtitleSource {
 	}
 
 	/** @internal */
+	private _setError(error: unknown) {
+		if (!this._errorSet) {
+			this._error = error;
+			this._errorSet = true;
+		}
+	}
+
+	/** @internal */
 	_checkForError() {
-		if (this._error) {
+		if (this._errorSet) {
 			throw this._error;
 		}
 	}

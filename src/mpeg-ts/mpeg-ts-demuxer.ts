@@ -589,6 +589,7 @@ export class MpegTsDemuxer extends Demuxer {
 									hevcCodecInfo: elementaryStream.info.hevcCodecInfo,
 									vp9CodecInfo: null,
 									av1CodecInfo: null,
+									proresFormat: null,
 								}),
 								codedWidth: elementaryStream.info.width,
 								codedHeight: elementaryStream.info.height,

@@ -224,7 +224,8 @@ export const PRORES_FOURCCS = [
 	'apcn', // ProRes 422 Standard Definition
 	'apcs', // ProRes 422 LT
 	'apco', // ProRes 422 Proxy
-];
+] as const;
+export type ProresFourCc = typeof PRORES_FOURCCS[number];
 
 export const buildVideoCodecString = (codec: VideoCodec, width: number, height: number, bitrate: number) => {
 	if (codec === 'avc') {
@@ -359,7 +360,7 @@ export const extractVideoCodecString = (trackInfo: {
 	hevcCodecInfo: HevcDecoderConfigurationRecord | null;
 	vp9CodecInfo: Vp9CodecInfo | null;
 	av1CodecInfo: Av1CodecInfo | null;
-	proresFormat: string | null;
+	proresFormat: ProresFourCc | null;
 }) => {
 	const {
 		codec,
@@ -946,7 +947,7 @@ export const validateVideoChunkMetadata = (metadata: EncodedVideoChunkMetadata |
 
 		if (!PRORES_FOURCCS.some(x => metadata.decoderConfig!.codec === x)) {
 			throw new TypeError(
-				'Video chunk metadata decoder configuration codec string for ProRes must be one of the valid ProRes'
+				`Video chunk metadata decoder configuration codec string for ProRes must be one of the valid ProRes`
 				+ ` four-character codes: ${PRORES_FOURCCS.join(', ')}.`,
 			);
 		}

@@ -1,2 +1,0 @@
-- different codec strings
-- separate out prores and prores raw (?) ffmpeg does this, so probably good reasons. Matroska does not.

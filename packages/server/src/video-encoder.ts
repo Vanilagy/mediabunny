@@ -375,6 +375,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 					hevcCodecInfo: null,
 					vp9CodecInfo: null,
 					av1CodecInfo: null,
+					proresFormat: null,
 				});
 
 				if (!expectsAnnexB) {
@@ -450,6 +451,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 					hevcCodecInfo: null,
 					vp9CodecInfo: null,
 					av1CodecInfo: null,
+					proresFormat: null,
 				});
 			}
 		} else if (this.codec === 'vp9') {
@@ -467,6 +469,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 					hevcCodecInfo: null,
 					vp9CodecInfo,
 					av1CodecInfo: null,
+					proresFormat: null,
 				});
 			}
 		} else if (this.codec === 'av1') {
@@ -484,6 +487,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 					hevcCodecInfo: null,
 					vp9CodecInfo: null,
 					av1CodecInfo,
+					proresFormat: null,
 				});
 			}
 		} else {

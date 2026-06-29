@@ -423,15 +423,12 @@ export class VideoSample implements Disposable {
 				);
 			}
 
-			this._data = init._doNotCopy
-				? toUint8Array(data)
-				: toUint8Array(data).slice(); // Copy it
-			this._layout = init.layout ?? createDefaultPlaneLayout(init.format, init.codedWidth!, init.codedHeight!);
-
 			this.format = init.format;
 			this.rotation = init.rotation ?? 0;
 			this.timestamp = init.timestamp!;
 			this.duration = init.duration ?? 0;
+
+			const layout = init.layout ?? createDefaultPlaneLayout(init.format, init.codedWidth!, init.codedHeight!);
 
 			let colorSpaceInit = init.colorSpace ?? null;
 			if (colorSpaceInit === null) {
@@ -457,8 +454,6 @@ export class VideoSample implements Disposable {
 				}
 			}
 
-			this.colorSpace = new VideoSampleColorSpace(colorSpaceInit);
-
 			this.visibleRect = {
 				left: init.visibleRect?.left ?? 0,
 				top: init.visibleRect?.top ?? 0,
@@ -473,6 +468,48 @@ export class VideoSample implements Disposable {
 				this.squarePixelWidth = this.visibleRect.width;
 				this.squarePixelHeight = this.visibleRect.height;
 			}
+
+			// If VideoFrame is available, route through it directly instead of holding onto the buffer. Going
+			// buffer -> VideoSample -> VideoFrame would copy the data twice (once here, once in toVideoFrame);
+			// building the VideoFrame now means it's only ever copied once.
+			if (typeof VideoFrame !== 'undefined' && !init._doNotCopy) {
+				let videoFrame: VideoFrame | null = null;
+
+				try {
+					videoFrame = new VideoFrame(toUint8Array(data), {
+						format: init.format as VideoPixelFormat,
+						codedWidth: init.codedWidth!,
+						codedHeight: init.codedHeight!,
+						layout,
+						colorSpace: colorSpaceInit,
+						visibleRect: {
+							x: this.visibleRect.left,
+							y: this.visibleRect.top,
+							width: this.visibleRect.width,
+							height: this.visibleRect.height,
+						},
+						displayWidth: this.squarePixelWidth,
+						displayHeight: this.squarePixelHeight,
+						timestamp: Math.trunc(init.timestamp! * SECOND_TO_MICROSECOND_FACTOR),
+						// Drag 0 to undefined
+						duration: Math.trunc((init.duration ?? 0) * SECOND_TO_MICROSECOND_FACTOR) || undefined,
+					});
+				} catch {
+					// Ignore the error and move on like it didn't happen. We don't want errors caused by the local
+					// VideoFrame implementation to prevent us from creating the VideoSample. Errors, for example, could
+					// be caused by an unsupported pixel format.
+				}
+
+				if (videoFrame) {
+					return new VideoSample(videoFrame, init);
+				}
+			}
+
+			this._data = init._doNotCopy
+				? toUint8Array(data)
+				: toUint8Array(data).slice(); // Copy it
+			this._layout = layout;
+			this.colorSpace = new VideoSampleColorSpace(colorSpaceInit);
 		} else if (typeof VideoFrame !== 'undefined' && data instanceof VideoFrame) {
 			if (init?.rotation !== undefined && ![0, 90, 180, 270].includes(init.rotation)) {
 				throw new TypeError('init.rotation, when provided, must be 0, 90, 180, or 270.');
@@ -1036,6 +1073,7 @@ export class VideoSample implements Disposable {
 				timestamp: this.microsecondTimestamp,
 				duration: this.microsecondDuration,
 				colorSpace: this.colorSpace,
+				visibleRect: this.visibleRect,
 				displayWidth: this.squarePixelWidth, // Not display* since we're not passing rotation
 				displayHeight: this.squarePixelHeight,
 			});
@@ -1045,13 +1083,17 @@ export class VideoSample implements Disposable {
 				duration: this.microsecondDuration || undefined, // Drag 0 duration to undefined, glitches some codecs
 			});
 		} else if (this._data instanceof Uint8Array) {
+			assert(this._layout);
+
 			return new VideoFrame(this._data, {
 				format: this.format! as VideoPixelFormat,
-				codedWidth: this.codedWidth,
-				codedHeight: this.codedHeight,
+				codedWidth: this.codedWidth, // This is technically wrong! codedWidth is a lie technically. But, since
+				codedHeight: this.codedHeight, // we pass the layout (which contains the true coded width), we're good.
+				layout: this._layout,
 				timestamp: this.microsecondTimestamp,
 				duration: this.microsecondDuration || undefined,
 				colorSpace: this.colorSpace,
+				visibleRect: this.visibleRect,
 				displayWidth: this.squarePixelWidth, // Not display* since we're not passing rotation
 				displayHeight: this.squarePixelHeight,
 			});
