@@ -3048,7 +3048,7 @@ export class AudioSample implements Disposable {
 	}
 }
 
-const getBytesPerSample = (format: AudioSampleFormat): number => {
+export const getBytesPerSample = (format: AudioSampleFormat): number => {
 	switch (format) {
 		case 'u8':
 		case 'u8-planar':
