@@ -251,8 +251,9 @@ export type VideoEncodingAdditionalOptions = {
 	 * What to do with alpha data contained in the video samples.
 	 *
 	 * - `'discard'` (default): Only the samples' color data is kept; the video is opaque.
-	 * - `'keep'`: The samples' alpha data is also encoded as side data. Make sure to pair this mode with a container
-	 * format that supports transparency (such as WebM or Matroska).
+	 * - `'keep'`: The samples' alpha data is also encoded. Depending on the codec, the alpha may be emitted as packet
+	 * side data or in-band alongside the main packet. For codecs that emit alpha side data, such as VP9, make sure to
+	 * pair this mode with a container format that supports transparency (such as WebM or Matroska).
 	 */
 	alpha?: 'discard' | 'keep';
 	/** Configures the bitrate mode; defaults to `'variable'`. */
@@ -344,6 +345,7 @@ export const buildVideoEncoderConfig = (options: {
 			options.width,
 			options.height,
 			resolvedBitrate,
+			options.alpha === 'keep',
 		),
 		width: options.width,
 		height: options.height,
@@ -549,19 +551,19 @@ export class Quality {
 	/** @internal */
 	_toVideoBitrate(codec: VideoCodec, width: number, height: number) {
 		const pixels = width * height;
+		const referencePixels = 1920 * 1080;
+		const referenceBitrate = 3_000_000;
+		const scaleFactor = Math.pow(pixels / referencePixels, 0.95); // Slight non-linear scaling
+		const baseBitrate = referenceBitrate * scaleFactor;
 
-		const codecEfficiencyFactors = {
+		const codecEfficiencyFactors: Record<VideoCodec, number> = {
 			avc: 1.0, // H.264/AVC (baseline)
 			hevc: 0.6, // H.265/HEVC (~40% more efficient than AVC)
 			vp9: 0.6, // Similar to HEVC
 			av1: 0.4, // ~60% more efficient than AVC
 			vp8: 1.2, // Slightly less efficient than AVC
+			prores: 220_000_000 / referenceBitrate, // Apple ProRes white paper claims 220 Mbps for 1080p 422 HQ @30Hz
 		};
-
-		const referencePixels = 1920 * 1080;
-		const referenceBitrate = 3000000;
-		const scaleFactor = Math.pow(pixels / referencePixels, 0.95); // Slight non-linear scaling
-		const baseBitrate = referenceBitrate * scaleFactor;
 
 		const codecAdjustedBitrate = baseBitrate * codecEfficiencyFactors[codec];
 		const finalBitrate = codecAdjustedBitrate * this._factor;

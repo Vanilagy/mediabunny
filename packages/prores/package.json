@@ -1,15 +1,15 @@
 {
-  "name": "@mediabunny/ac3",
+  "name": "@mediabunny/prores",
   "author": "Vanilagy",
   "version": "1.50.0",
-  "description": "AC-3 and E-AC-3 (Dolby Digital) decoder and encoder extension for Mediabunny, based on FFmpeg.",
-  "main": "./dist/bundles/mediabunny-ac3.mjs",
-  "module": "./dist/bundles/mediabunny-ac3.mjs",
+  "description": "Apple ProRes decoder extension for Mediabunny, based on TurboRes.",
+  "main": "./dist/bundles/mediabunny-prores.mjs",
+  "module": "./dist/bundles/mediabunny-prores.mjs",
   "types": "./dist/modules/src/index.d.ts",
   "exports": {
     "types": "./dist/modules/src/index.d.ts",
-    "import": "./dist/bundles/mediabunny-ac3.mjs",
-    "require": "./dist/bundles/mediabunny-ac3.mjs"
+    "import": "./dist/bundles/mediabunny-prores.mjs",
+    "require": "./dist/bundles/mediabunny-prores.mjs"
   },
   "files": [
     "README.md",
@@ -18,40 +18,39 @@
     "dist",
     "src"
   ],
-  "browser": {
-    "worker_threads": false
-  },
   "sideEffects": false,
+  "browser": {
+    "node:worker_threads": false,
+    "node:os": false
+  },
   "license": "MPL-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Vanilagy/mediabunny.git",
-    "directory": "packages/ac3"
+    "directory": "packages/prores"
   },
   "bugs": {
     "url": "https://github.com/Vanilagy/mediabunny/issues"
   },
-  "homepage": "https://mediabunny.dev/guide/extensions/ac3",
+  "homepage": "https://mediabunny.dev/guide/extensions/prores",
   "funding": {
     "type": "individual",
     "url": "https://github.com/sponsors/Vanilagy"
   },
-  "peerDependencies": {
-    "mediabunny": "^1.0.0"
+  "dependencies": {
+    "turbores": "^1.1.1"
   },
-  "devDependencies": {
-    "@types/emscripten": "^1.40.1"
+  "peerDependencies": {
+    "mediabunny": "^1.49.0"
   },
   "keywords": [
-    "ac3",
-    "eac3",
-    "dolby",
-    "dolby-digital",
-    "encoding",
+    "prores",
+    "apple-prores",
     "decoding",
     "codec",
     "mediabunny",
-    "ffmpeg",
+    "turbores",
+    "video",
     "browser",
     "wasm",
     "polyfill"

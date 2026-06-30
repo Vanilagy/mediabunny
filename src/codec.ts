@@ -18,6 +18,7 @@ import {
 	MATRIX_COEFFICIENTS_MAP,
 	TRANSFER_CHARACTERISTICS_MAP,
 	assert,
+	assertNever,
 	base64ToBytes,
 	bytesToHexString,
 	isAllowSharedBufferSource,
@@ -38,6 +39,7 @@ export const VIDEO_CODECS = [
 	'vp9',
 	'av1',
 	'vp8',
+	'prores',
 ] as const;
 /**
  * List of known PCM (uncompressed) audio codecs, ordered by encoding preference.
@@ -215,7 +217,33 @@ const AV1_LEVEL_TABLE = [
 const VP9_DEFAULT_SUFFIX = '.01.01.01.01.00';
 const AV1_DEFAULT_SUFFIX = '.0.110.01.01.01.0';
 
-export const buildVideoCodecString = (codec: VideoCodec, width: number, height: number, bitrate: number) => {
+export const PRORES_FOURCCS = [
+	'ap4x', // ProRes 4444 XQ
+	'ap4h', // ProRes 4444
+	'apch', // ProRes 422 High Quality
+	'apcn', // ProRes 422 Standard Definition
+	'apcs', // ProRes 422 LT
+	'apco', // ProRes 422 Proxy
+] as const;
+export type ProresFourCc = typeof PRORES_FOURCCS[number];
+
+// Target data rates of the ProRes profiles at 1920x1080 ~30fps, as published by Apple
+const PRORES_PROFILE_TARGET_BITRATES: { fourCc: ProresFourCc; bitrate: number; alpha: boolean }[] = [
+	{ fourCc: 'apco', bitrate: 45_000_000, alpha: false }, // 422 Proxy
+	{ fourCc: 'apcs', bitrate: 102_000_000, alpha: false }, // 422 LT
+	{ fourCc: 'apcn', bitrate: 147_000_000, alpha: false }, // 422 Standard
+	{ fourCc: 'apch', bitrate: 220_000_000, alpha: false }, // 422 HQ
+	{ fourCc: 'ap4h', bitrate: 330_000_000, alpha: true }, // 4444
+	{ fourCc: 'ap4x', bitrate: 500_000_000, alpha: true }, // 4444 XQ
+];
+
+export const buildVideoCodecString = (
+	codec: VideoCodec,
+	width: number,
+	height: number,
+	bitrate: number,
+	alpha: boolean,
+) => {
 	if (codec === 'avc') {
 		const profileIndication = 0x64; // High Profile
 		const totalMacroblocks = Math.ceil(width / 16) * Math.ceil(height / 16);
@@ -274,10 +302,28 @@ export const buildVideoCodecString = (codec: VideoCodec, width: number, height: 
 		const bitDepth = '08'; // 8-bit
 
 		return `av01.${profile}.${level}${levelInfo.tier}.${bitDepth}`;
+	} else if (codec === 'prores') {
+		const referencePixels = 1920 * 1080;
+		const scaleFactor = Math.pow((width * height) / referencePixels, 0.95);
+
+		const candidates = PRORES_PROFILE_TARGET_BITRATES.filter(x => x.alpha === alpha);
+
+		let bestFourCc = candidates[0]!.fourCc;
+		let smallestDifference = Infinity;
+		for (const { fourCc, bitrate: targetBitrate } of candidates) {
+			const difference = Math.abs(targetBitrate * scaleFactor - bitrate);
+			if (difference < smallestDifference) {
+				smallestDifference = difference;
+				bestFourCc = fourCc;
+			}
+		}
+
+		return bestFourCc;
+	} else {
+		assertNever(codec);
 	}
 
-	// eslint-disable-next-line @typescript-eslint/restrict-template-expressions
-	throw new TypeError(`Unhandled codec '${codec}'.`);
+	throw new TypeError(`Unhandled codec '${String(codec)}'.`);
 };
 
 export const generateVp9CodecConfigurationFromCodecString = (codecString: string) => {
@@ -345,8 +391,18 @@ export const extractVideoCodecString = (trackInfo: {
 	hevcCodecInfo: HevcDecoderConfigurationRecord | null;
 	vp9CodecInfo: Vp9CodecInfo | null;
 	av1CodecInfo: Av1CodecInfo | null;
+	proresFormat: ProresFourCc | null;
 }) => {
-	const { codec, codecDescription, colorSpace, avcCodecInfo, hevcCodecInfo, vp9CodecInfo, av1CodecInfo } = trackInfo;
+	const {
+		codec,
+		codecDescription,
+		colorSpace,
+		avcCodecInfo,
+		hevcCodecInfo,
+		vp9CodecInfo,
+		av1CodecInfo,
+		proresFormat,
+	} = trackInfo;
 
 	if (codec === 'avc') {
 		assert(trackInfo.avcType !== null);
@@ -504,6 +560,10 @@ export const extractVideoCodecString = (trackInfo: {
 		}
 
 		return string;
+	} else if (codec === 'prores') {
+		return proresFormat ?? 'apch';
+	} else if (codec !== null) {
+		assertNever(codec);
 	}
 
 	throw new TypeError(`Unhandled codec '${codec}'.`);
@@ -671,6 +731,8 @@ export const inferCodecFromCodecString = (codecString: string): MediaCodec | nul
 		return 'vp9';
 	} else if (codecString.startsWith('av01')) {
 		return 'av1';
+	} else if ((PRORES_FOURCCS as readonly string[]).includes(codecString)) {
+		return 'prores';
 	}
 
 	// Audio codecs
@@ -746,7 +808,7 @@ export const getAudioEncoderConfigExtension = (codec: AudioCodec) => {
 	return {};
 };
 
-const VALID_VIDEO_CODEC_STRING_PREFIXES = ['avc1', 'avc3', 'hev1', 'hvc1', 'vp8', 'vp09', 'av01'];
+const VALID_VIDEO_CODEC_STRING_PREFIXES = ['avc1', 'avc3', 'hev1', 'hvc1', 'vp8', 'vp09', 'av01', ...PRORES_FOURCCS];
 const AVC_CODEC_STRING_REGEX = /^(avc1|avc3)\.[0-9a-fA-F]{6}$/;
 const HEVC_CODEC_STRING_REGEX = /^(hev1|hvc1)\.(?:[ABC]?\d+)\.[0-9a-fA-F]{1,8}\.[LH]\d+(?:\.[0-9a-fA-F]{1,2}){0,6}$/;
 const VP9_CODEC_STRING_REGEX = /^vp09(?:\.\d{2}){3}(?:(?:\.\d{2}){5})?$/;
@@ -911,6 +973,15 @@ export const validateVideoChunkMetadata = (metadata: EncodedVideoChunkMetadata |
 			throw new TypeError(
 				'Video chunk metadata decoder configuration codec string for AV1 must be a valid AV1 codec string as'
 				+ ' specified in Section "Codecs Parameter String" of https://aomediacodec.github.io/av1-isobmff/.',
+			);
+		}
+	} else if (PRORES_FOURCCS.some(x => metadata.decoderConfig!.codec.startsWith(x))) {
+		// ProRes-specific validation
+
+		if (!PRORES_FOURCCS.some(x => metadata.decoderConfig!.codec === x)) {
+			throw new TypeError(
+				`Video chunk metadata decoder configuration codec string for ProRes must be one of the valid ProRes`
+				+ ` four-character codes: ${PRORES_FOURCCS.join(', ')}.`,
 			);
 		}
 	}

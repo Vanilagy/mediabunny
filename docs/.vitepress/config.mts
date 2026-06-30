@@ -121,6 +121,7 @@ export default withMermaid({
 						{ text: 'aac-encoder', link: '/guide/extensions/aac-encoder' },
 						{ text: 'ac3', link: '/guide/extensions/ac3' },
 						{ text: 'flac-encoder', link: '/guide/extensions/flac-encoder' },
+						{ text: 'prores', link: '/guide/extensions/prores' },
 					],
 				},
 			],
@@ -143,6 +144,7 @@ export default withMermaid({
 						{ text: 'VP8', link: '/codec-registry/vp8' },
 						{ text: 'VP9', link: '/codec-registry/vp9' },
 						{ text: 'AV1', link: '/codec-registry/av1' },
+						{ text: 'ProRes', link: '/codec-registry/prores' },
 					],
 				},
 				{

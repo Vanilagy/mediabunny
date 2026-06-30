@@ -38,8 +38,17 @@ import {
 	serializeAvcDecoderConfigurationRecord,
 	serializeHevcDecoderConfigurationRecord,
 } from '../../../src/codec-data';
-import { extractVideoCodecString } from '../../../src/codec';
+import { extractVideoCodecString, ProresFourCc } from '../../../src/codec';
 import { assert, binarySearchLessOrEqual, simplifyRational, toUint8Array } from '../../../src/misc';
+
+const PRORES_FOURCC_TO_PROFILE: Record<ProresFourCc, NodeAv.AVProfile> = {
+	apco: NodeAv.AV_PROFILE_PRORES_PROXY,
+	apcs: NodeAv.AV_PROFILE_PRORES_LT,
+	apcn: NodeAv.AV_PROFILE_PRORES_STANDARD,
+	apch: NodeAv.AV_PROFILE_PRORES_HQ,
+	ap4h: NodeAv.AV_PROFILE_PRORES_4444,
+	ap4x: NodeAv.AV_PROFILE_PRORES_XQ,
+};
 
 export class NodeAvVideoEncoder extends CustomVideoEncoder {
 	frame!: NodeAv.Frame;
@@ -62,8 +71,10 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 	}[] = [];
 
 	static override supports(codec: VideoCodec, config: VideoEncoderConfig): boolean {
-		return (codec === 'avc' || codec === 'hevc' || codec === 'vp8' || codec === 'vp9' || codec === 'av1')
-			&& config.bitrateMode !== 'quantizer';
+		return (
+			codec === 'avc' || codec === 'hevc' || codec === 'vp8' || codec === 'vp9' || codec === 'av1'
+			|| codec === 'prores'
+		) && config.bitrateMode !== 'quantizer';
 	}
 
 	async init(): Promise<void> {
@@ -77,13 +88,25 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 		const codecId = CODEC_TO_CODEC_ID[this.codec];
 		assert(codecId !== undefined);
 
+		const getSoftwareCodec = () => {
+			if (this.codec === 'prores') {
+				// Prefer prores_ks for ProRes
+				const proresKs = NodeAv.Codec.findEncoderByName(NodeAv.FF_ENCODER_PRORES_KS);
+				if (proresKs) {
+					return proresKs;
+				}
+			}
+
+			return NodeAv.Codec.findEncoder(codecId);
+		};
+
 		let codec: NodeAv.Codec | null = null;
 		if (this.codec === 'vp9' && this.config.alpha === 'keep') {
 			codec = NodeAv.Codec.findEncoderByName(NodeAv.FF_ENCODER_LIBVPX_VP9) ?? NodeAv.Codec.findEncoder(codecId);
 		} else if (this.config.hardwareAcceleration === 'prefer-software') {
-			codec = NodeAv.Codec.findEncoder(codecId);
+			codec = getSoftwareCodec();
 		} else {
-			codec = (await getHardwareEncoderCodec(codecId)) ?? NodeAv.Codec.findEncoder(codecId);
+			codec = (await getHardwareEncoderCodec(codecId)) ?? getSoftwareCodec();
 		}
 
 		if (!codec) {
@@ -108,8 +131,17 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 				pixelFormat = this.avCodec.pixelFormats[0]!;
 			}
 
-			if (this.config.alpha === 'keep' && this.avCodec.pixelFormats.includes(NodeAv.AV_PIX_FMT_YUVA420P)) {
-				pixelFormat = NodeAv.AV_PIX_FMT_YUVA420P;
+			if (this.config.alpha === 'keep') {
+				if (this.avCodec.pixelFormats.includes(NodeAv.AV_PIX_FMT_YUVA420P)) {
+					pixelFormat = NodeAv.AV_PIX_FMT_YUVA420P;
+				} else {
+					// Let FFmpeg pick the best alpha-capable format it supports, minimizing data loss versus a
+					// high-quality YUVA source
+					pixelFormat = NodeAv.avcodecFindBestPixFmtOfList(
+						this.avCodec.pixelFormats,
+						NodeAv.AV_PIX_FMT_YUVA444P12LE,
+					);
+				}
 			}
 		}
 
@@ -171,6 +203,14 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			if (isRealtime) {
 				codecContext.setOption('preset', '12');
 			}
+		}
+
+		if (this.codec === 'prores') {
+			// Pick the encoder profile from the requested ProRes four-character code
+			const profile = PRORES_FOURCC_TO_PROFILE[this.config.codec as ProresFourCc];
+			assert(profile !== undefined);
+
+			codecContext.setOption('profile', String(profile));
 		}
 
 		const ret = await codecContext.open2();
@@ -375,6 +415,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 					hevcCodecInfo: null,
 					vp9CodecInfo: null,
 					av1CodecInfo: null,
+					proresFormat: null,
 				});
 
 				if (!expectsAnnexB) {
@@ -450,6 +491,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 					hevcCodecInfo: null,
 					vp9CodecInfo: null,
 					av1CodecInfo: null,
+					proresFormat: null,
 				});
 			}
 		} else if (this.codec === 'vp9') {
@@ -467,6 +509,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 					hevcCodecInfo: null,
 					vp9CodecInfo,
 					av1CodecInfo: null,
+					proresFormat: null,
 				});
 			}
 		} else if (this.codec === 'av1') {
@@ -484,6 +527,23 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 					hevcCodecInfo: null,
 					vp9CodecInfo: null,
 					av1CodecInfo,
+					proresFormat: null,
+				});
+			}
+		} else if (this.codec === 'prores') {
+			if (!this.packetEmitted) {
+				decoderConfigCodecString = extractVideoCodecString({
+					width: this.config.width,
+					height: this.config.height,
+					codec: 'prores',
+					codecDescription: null,
+					colorSpace: null,
+					avcType: null,
+					avcCodecInfo: null,
+					hevcCodecInfo: null,
+					vp9CodecInfo: null,
+					av1CodecInfo: null,
+					proresFormat: this.config.codec as ProresFourCc,
 				});
 			}
 		} else {
