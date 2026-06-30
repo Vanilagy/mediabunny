@@ -215,7 +215,7 @@ const initMediaPlayer = async (resource: File | string) => {
 
 		if (audioContext.state === 'running') {
 			// Start playback automatically if the audio context permits
-			await play();
+			// await play();
 		}
 
 		loadingElement.style.display = 'none';

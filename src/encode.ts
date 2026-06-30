@@ -549,19 +549,19 @@ export class Quality {
 	/** @internal */
 	_toVideoBitrate(codec: VideoCodec, width: number, height: number) {
 		const pixels = width * height;
+		const referencePixels = 1920 * 1080;
+		const referenceBitrate = 3_000_000;
+		const scaleFactor = Math.pow(pixels / referencePixels, 0.95); // Slight non-linear scaling
+		const baseBitrate = referenceBitrate * scaleFactor;
 
-		const codecEfficiencyFactors = {
+		const codecEfficiencyFactors: Record<VideoCodec, number> = {
 			avc: 1.0, // H.264/AVC (baseline)
 			hevc: 0.6, // H.265/HEVC (~40% more efficient than AVC)
 			vp9: 0.6, // Similar to HEVC
 			av1: 0.4, // ~60% more efficient than AVC
 			vp8: 1.2, // Slightly less efficient than AVC
+			prores: 220_000_000 / referenceBitrate, // Apple ProRes white paper claims 220 Mbps for 1080p 422 HQ @30Hz
 		};
-
-		const referencePixels = 1920 * 1080;
-		const referenceBitrate = 3000000;
-		const scaleFactor = Math.pow(pixels / referencePixels, 0.95); // Slight non-linear scaling
-		const baseBitrate = referenceBitrate * scaleFactor;
 
 		const codecAdjustedBitrate = baseBitrate * codecEfficiencyFactors[codec];
 		const finalBitrate = codecAdjustedBitrate * this._factor;

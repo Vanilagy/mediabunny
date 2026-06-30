@@ -1,0 +1,58 @@
+{
+  "name": "@mediabunny/prores",
+  "author": "Vanilagy",
+  "version": "1.49.0",
+  "description": "Apple ProRes decoder extension for Mediabunny, based on TurboRes.",
+  "main": "./dist/bundles/mediabunny-prores.mjs",
+  "module": "./dist/bundles/mediabunny-prores.mjs",
+  "types": "./dist/modules/src/index.d.ts",
+  "exports": {
+    "types": "./dist/modules/src/index.d.ts",
+    "import": "./dist/bundles/mediabunny-prores.mjs",
+    "require": "./dist/bundles/mediabunny-prores.mjs"
+  },
+  "files": [
+    "README.md",
+    "package.json",
+    "LICENSE",
+    "dist",
+    "src"
+  ],
+  "sideEffects": false,
+  "browser": {
+    "node:worker_threads": false,
+    "node:os": false
+  },
+  "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vanilagy/mediabunny.git",
+    "directory": "packages/prores"
+  },
+  "bugs": {
+    "url": "https://github.com/Vanilagy/mediabunny/issues"
+  },
+  "homepage": "https://mediabunny.dev/guide/extensions/prores",
+  "funding": {
+    "type": "individual",
+    "url": "https://github.com/sponsors/Vanilagy"
+  },
+  "dependencies": {
+    "turbores": "^1.0.0"
+  },
+  "peerDependencies": {
+    "mediabunny": "^1.49.0"
+  },
+  "keywords": [
+    "prores",
+    "apple-prores",
+    "decoding",
+    "codec",
+    "mediabunny",
+    "turbores",
+    "video",
+    "browser",
+    "wasm",
+    "polyfill"
+  ]
+}

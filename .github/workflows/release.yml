@@ -93,6 +93,11 @@ jobs:
           packages/flac-encoder/dist/bundles/mediabunny-flac-encoder.mjs
           packages/flac-encoder/dist/bundles/mediabunny-flac-encoder.min.mjs
           packages/flac-encoder/dist/mediabunny-flac-encoder.d.ts
+          packages/prores/dist/bundles/mediabunny-prores.js
+          packages/prores/dist/bundles/mediabunny-prores.min.js
+          packages/prores/dist/bundles/mediabunny-prores.mjs
+          packages/prores/dist/bundles/mediabunny-prores.min.mjs
+          packages/prores/dist/mediabunny-prores.d.ts
           packages/server/dist/bundles/mediabunny-server.cjs
           packages/server/dist/bundles/mediabunny-server.min.cjs
           packages/server/dist/bundles/mediabunny-server.mjs

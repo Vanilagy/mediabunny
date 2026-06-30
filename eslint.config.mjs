@@ -47,6 +47,7 @@ export default tseslint.config(
 			'packages/aac-encoder/build',
 			'packages/flac-encoder/dist',
 			'packages/flac-encoder/build',
+			'packages/prores/dist',
 			'packages/server/dist',
 			'eslint.config.mjs',
 			'docs/.vitepress/cache',
