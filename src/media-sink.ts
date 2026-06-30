@@ -333,7 +333,8 @@ export class EncodedPacketSink {
 		// This stores errors that are "out of band" in the sense that they didn't occur in the normal flow of this
 		// method but instead in a different context. This error should not go unnoticed and must be bubbled up to
 		// the consumer.
-		let outOfBandError = null as Error | null;
+		let outOfBandError = null as unknown;
+		let hasOutOfBandError = false;
 
 		const timestamps: number[] = [];
 		// The queue should always be big enough to hold 1 second worth of packets
@@ -364,9 +365,10 @@ export class EncodedPacketSink {
 
 			ended = true;
 			onQueueNotEmpty();
-		})().catch((error: Error) => {
-			if (!outOfBandError) {
+		})().catch((error) => {
+			if (!hasOutOfBandError) {
 				outOfBandError = error;
+				hasOutOfBandError = true;
 				onQueueNotEmpty();
 			}
 		});
@@ -380,7 +382,7 @@ export class EncodedPacketSink {
 						throw new InputDisposedError();
 					} else if (terminated) {
 						return { value: undefined, done: true };
-					} else if (outOfBandError) {
+					} else if (hasOutOfBandError) {
 						throw outOfBandError;
 					} else if (packetQueue.length > 0) {
 						const value = packetQueue.shift()!;
@@ -423,7 +425,7 @@ abstract class DecoderWrapper<
 > {
 	constructor(
 		public onSample: (sample: MediaSample) => unknown,
-		public onError: (error: Error) => unknown,
+		public onError: (error: unknown) => unknown,
 	) {}
 
 	abstract getDecodeQueueSize(): number;
@@ -446,7 +448,7 @@ export abstract class BaseMediaSampleSink<
 	/** @internal */
 	abstract _createDecoder(
 		onSample: (sample: MediaSample) => unknown,
-		onError: (error: Error) => unknown
+		onError: (error: unknown) => unknown
 	): Promise<DecoderWrapper<MediaSample>>;
 	/** @internal */
 	abstract _createPacketSink(): EncodedPacketSink;
@@ -472,7 +474,8 @@ export abstract class BaseMediaSampleSink<
 		// This stores errors that are "out of band" in the sense that they didn't occur in the normal flow of this
 		// method but instead in a different context. This error should not go unnoticed and must be bubbled up to
 		// the consumer.
-		let outOfBandError = null as Error | null;
+		let outOfBandError = null as unknown;
+		let hasOutOfBandError = false;
 
 		const packetRetrievalOptions: PacketRetrievalOptions = {
 			...options,
@@ -518,8 +521,9 @@ export abstract class BaseMediaSampleSink<
 					({ promise: queueNotEmpty, resolve: onQueueNotEmpty } = promiseWithResolvers());
 				}
 			}, (error) => {
-				if (!outOfBandError) {
+				if (!hasOutOfBandError) {
 					outOfBandError = error;
+					hasOutOfBandError = true;
 					onQueueNotEmpty();
 				}
 			});
@@ -572,9 +576,10 @@ export abstract class BaseMediaSampleSink<
 
 			decoderIsFlushed = true;
 			onQueueNotEmpty(); // To unstuck the generator
-		})().catch((error: Error) => {
-			if (!outOfBandError) {
+		})().catch((error) => {
+			if (!hasOutOfBandError) {
 				outOfBandError = error;
+				hasOutOfBandError = true;
 				onQueueNotEmpty();
 			}
 		});
@@ -595,7 +600,7 @@ export abstract class BaseMediaSampleSink<
 						throw new InputDisposedError();
 					} else if (terminated) {
 						return { value: undefined, done: true };
-					} else if (outOfBandError) {
+					} else if (hasOutOfBandError) {
 						closeSamples();
 						throw outOfBandError;
 					} else if (sampleQueue.length > 0) {
@@ -645,7 +650,8 @@ export abstract class BaseMediaSampleSink<
 		// This stores errors that are "out of band" in the sense that they didn't occur in the normal flow of this
 		// method but instead in a different context. This error should not go unnoticed and must be bubbled up to
 		// the consumer.
-		let outOfBandError = null as Error | null;
+		let outOfBandError = null as unknown;
+		let hasOutOfBandError = false;
 
 		const pushToQueue = (sample: MediaSample | null) => {
 			sampleQueue.push(sample);
@@ -687,8 +693,9 @@ export abstract class BaseMediaSampleSink<
 					sample.close();
 				}
 			}, (error) => {
-				if (!outOfBandError) {
+				if (!hasOutOfBandError) {
 					outOfBandError = error;
+					hasOutOfBandError = true;
 					onQueueNotEmpty();
 				}
 			});
@@ -792,9 +799,10 @@ export abstract class BaseMediaSampleSink<
 
 			decoderIsFlushed = true;
 			onQueueNotEmpty(); // To unstuck the generator
-		})().catch((error: Error) => {
-			if (!outOfBandError) {
+		})().catch((error) => {
+			if (!hasOutOfBandError) {
 				outOfBandError = error;
+				hasOutOfBandError = true;
 				onQueueNotEmpty();
 			}
 		});
@@ -814,7 +822,7 @@ export abstract class BaseMediaSampleSink<
 						throw new InputDisposedError();
 					} else if (terminated) {
 						return { value: undefined, done: true };
-					} else if (outOfBandError) {
+					} else if (hasOutOfBandError) {
 						closeSamples();
 						throw outOfBandError;
 					} else if (sampleQueue.length > 0) {
@@ -882,7 +890,7 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 
 	constructor(
 		onSample: (sample: VideoSample) => unknown,
-		onError: (error: Error) => unknown,
+		onError: (error: unknown) => unknown,
 		public codec: VideoCodec,
 		public decoderConfig: VideoDecoderConfig,
 		public rotation: Rotation,
@@ -906,8 +914,14 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 
 				this.finalizeAndEmitSample(sample);
 			};
+			// @ts-expect-error It's technically readonly
+			this.customDecoder.onError = (error) => {
+				onError(error);
+			};
 
-			void this.customDecoderCallSerializer.call(() => this.customDecoder!.init());
+			void this.customDecoderCallSerializer
+				.call(() => this.customDecoder!.init())
+				.catch(error => onError(error));
 		} else {
 			const colorHandler = (frame: VideoFrame) => {
 				this.frameHandlerSerializer.call(async () => {
@@ -920,7 +934,7 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 					} else {
 						this.colorQueue.push(frame);
 					}
-				}).catch((error: Error) => this.onError(error));
+				}).catch(error => this.onError(error));
 			};
 
 			if (codec === 'avc' && this.decoderConfig.description && isChromium()) {
@@ -946,7 +960,7 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 					try {
 						colorHandler(frame);
 					} catch (error) {
-						this.onError(error as Error);
+						this.onError(error);
 					}
 				},
 				error: (error) => {
@@ -984,7 +998,8 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			this.customDecoderQueueSize++;
 			void this.customDecoderCallSerializer
 				.call(() => this.customDecoder!.decode(packet))
-				.then(() => this.customDecoderQueueSize--);
+				.catch(error => this.onError(error))
+				.finally(() => this.customDecoderQueueSize--);
 		} else {
 			assert(this.decoder);
 
@@ -1074,7 +1089,7 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 					}
 
 					this.alphaDecoderQueueSize--;
-				}).catch((error: Error) => this.onError(error));
+				}).catch(error => this.onError(error));
 			};
 
 			const stack = new Error('Decoding error').stack;
@@ -1084,7 +1099,7 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 					try {
 						alphaHandler(frame);
 					} catch (error) {
-						this.onError(error as Error);
+						this.onError(error);
 					}
 				},
 				error: (error) => {
@@ -1819,7 +1834,7 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 	/** @internal */
 	async _createDecoder(
 		onSample: (sample: VideoSample) => unknown,
-		onError: (error: Error) => unknown,
+		onError: (error: unknown) => unknown,
 	) {
 		if (!(await this._track.canDecode())) {
 			throw new Error(
@@ -2221,7 +2236,7 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 
 	constructor(
 		onSample: (sample: AudioSample) => unknown,
-		onError: (error: Error) => unknown,
+		onError: (error: unknown) => unknown,
 		codec: AudioCodec,
 		decoderConfig: AudioDecoderConfig,
 	) {
@@ -2277,8 +2292,14 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 
 				sampleHandler(sample);
 			};
+			// @ts-expect-error It's technically readonly
+			this.customDecoder.onError = (error) => {
+				onError(error);
+			};
 
-			void this.customDecoderCallSerializer.call(() => this.customDecoder!.init());
+			void this.customDecoderCallSerializer
+				.call(() => this.customDecoder!.init())
+				.catch(error => onError(error));
 		} else {
 			const stack = new Error('Decoding error').stack;
 
@@ -2287,7 +2308,7 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 					try {
 						sampleHandler(new AudioSample(data));
 					} catch (error) {
-						this.onError(error as Error);
+						this.onError(error);
 					}
 				},
 				error: (error) => {
@@ -2313,7 +2334,8 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 			this.customDecoderQueueSize++;
 			void this.customDecoderCallSerializer
 				.call(() => this.customDecoder!.decode(packet))
-				.then(() => this.customDecoderQueueSize--);
+				.catch(error => this.onError(error))
+				.finally(() => this.customDecoderQueueSize--);
 		} else {
 			assert(this.decoder);
 
@@ -2363,7 +2385,7 @@ class PcmAudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 
 	constructor(
 		onSample: (sample: AudioSample) => unknown,
-		onError: (error: Error) => unknown,
+		onError: (error: unknown) => unknown,
 		public decoderConfig: AudioDecoderConfig,
 	) {
 		super(onSample, onError);
@@ -2553,7 +2575,7 @@ export class AudioSampleSink extends BaseMediaSampleSink<AudioSample> {
 	/** @internal */
 	async _createDecoder(
 		onSample: (sample: AudioSample) => unknown,
-		onError: (error: Error) => unknown,
+		onError: (error: unknown) => unknown,
 	) {
 		if (!(await this._track.canDecode())) {
 			throw new Error(

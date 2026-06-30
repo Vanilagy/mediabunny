@@ -20,6 +20,8 @@ import {
 	extractVideoCodecString,
 	MediaCodec,
 	OPUS_SAMPLE_RATE,
+	PRORES_FOURCCS,
+	ProresFourCc,
 	VideoCodec,
 } from '../codec';
 import { Demuxer } from '../demuxer';
@@ -43,6 +45,7 @@ import {
 	normalizeRotation,
 	Rotation,
 	roundIfAlmostInteger,
+	textDecoder,
 	TRANSFER_CHARACTERISTICS_MAP_INVERSE,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
@@ -214,6 +217,7 @@ type InternalTrack = {
 			codecDescription: Uint8Array | null;
 			colorSpace: VideoColorSpaceInit | null;
 			alphaMode: boolean;
+			proresFormat: ProresFourCc | null;
 		}
 		| {
 			type: 'audio';
@@ -1077,6 +1081,18 @@ export class MatroskaDemuxer extends Demuxer {
 							this.currentTrack.info.codec = 'vp9';
 						} else if (codecIdWithoutSuffix === CODEC_STRING_MAP.av1) {
 							this.currentTrack.info.codec = 'av1';
+						} else if (codecIdWithoutSuffix === CODEC_STRING_MAP.prores) {
+							const format = this.currentTrack.codecPrivate
+								? textDecoder.decode(this.currentTrack.codecPrivate)
+								: '';
+
+							if ((PRORES_FOURCCS as readonly string[]).includes(format)) {
+								this.currentTrack.info.codec = 'prores';
+								this.currentTrack.info.proresFormat = format as ProresFourCc;
+							} else {
+								// Either an invalid string or ProRes RAW, which we don't support yet (it's a
+								// different codec).
+							}
 						}
 
 						const videoTrack = this.currentTrack as InternalVideoTrack;
@@ -1170,6 +1186,7 @@ export class MatroskaDemuxer extends Demuxer {
 						codecDescription: null,
 						colorSpace: null,
 						alphaMode: false,
+						proresFormat: null,
 					};
 				} else if (type === 2) {
 					this.currentTrack.info = {
@@ -2435,7 +2452,12 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 	}
 
 	async canBeTransparent() {
-		return this.internalTrack.info.alphaMode;
+		return this.internalTrack.info.alphaMode || (
+			this.internalTrack.info.codec === 'prores' && (
+				this.internalTrack.info.proresFormat === 'ap4h'
+				|| this.internalTrack.info.proresFormat === 'ap4x'
+			)
+		);
 	}
 
 	async getDecoderConfig(): Promise<VideoDecoderConfig | null> {
@@ -2477,6 +2499,7 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 					av1CodecInfo: this.internalTrack.info.codec === 'av1' && firstPacket
 						? extractAv1CodecInfoFromPacket(firstPacket.data)
 						: null,
+					proresFormat: this.internalTrack.info.proresFormat,
 				}),
 				codedWidth: this.internalTrack.info.width,
 				codedHeight: this.internalTrack.info.height,

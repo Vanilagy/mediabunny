@@ -223,6 +223,24 @@ const flacEncoderVariants = await createVariants(
 	},
 );
 
+const proresVariants = await createVariants(
+	'packages/prores/src/index.ts',
+	'MediabunnyProres',
+	'packages/prores/dist/bundles/mediabunny-prores',
+	'js', // The bundles are purely for the browser, not for Node (due to the peer dependecy)
+	{
+		plugins: [
+			PluginExternalGlobal.externalGlobalPlugin({
+				mediabunny: 'Mediabunny',
+			}),
+		],
+	},
+	{
+		external: ['mediabunny'],
+		platform: 'node', // To retain the Node imports
+	},
+);
+
 const serverVariants = await createVariants(
 	'packages/server/src/index.ts',
 	'MediabunnyServer',
@@ -246,6 +264,7 @@ const contexts = [
 	...ac3Variants,
 	...aacEncoderVariants,
 	...flacEncoderVariants,
+	...proresVariants,
 	...serverVariants,
 ];
 

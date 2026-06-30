@@ -40,6 +40,7 @@ checkDirectory(path.join(__dirname, '..', 'packages', 'mp3-encoder', 'src'));
 checkDirectory(path.join(__dirname, '..', 'packages', 'ac3', 'src'));
 checkDirectory(path.join(__dirname, '..', 'packages', 'flac-encoder', 'src'));
 checkDirectory(path.join(__dirname, '..', 'packages', 'aac-encoder', 'src'));
+checkDirectory(path.join(__dirname, '..', 'packages', 'prores', 'src'));
 checkDirectory(path.join(__dirname, '..', 'packages', 'server', 'src'));
 
 if (missingFiles.length > 0) {

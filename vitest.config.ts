@@ -1,7 +1,7 @@
 /// <reference types="@vitest/browser/providers/webdriverio" />
 
 import { defineConfig } from 'vitest/config';
-import path from 'path';
+import path from 'node:path';
 
 export default defineConfig({
 	resolve: {
@@ -14,6 +14,8 @@ export default defineConfig({
 				path.resolve(__dirname, './packages/flac-encoder/dist/bundles/mediabunny-flac-encoder.mjs'),
 			'@mediabunny/mp3-encoder':
 				path.resolve(__dirname, './packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.mjs'),
+			'@mediabunny/prores':
+				path.resolve(__dirname, './packages/prores/dist/bundles/mediabunny-prores.mjs'),
 			'@mediabunny/server':
 				path.resolve(__dirname, './packages/server/src/index.ts'),
 		},

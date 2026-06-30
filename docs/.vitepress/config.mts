@@ -121,6 +121,7 @@ export default withMermaid({
 						{ text: 'aac-encoder', link: '/guide/extensions/aac-encoder' },
 						{ text: 'ac3', link: '/guide/extensions/ac3' },
 						{ text: 'flac-encoder', link: '/guide/extensions/flac-encoder' },
+						{ text: 'prores', link: '/guide/extensions/prores' },
 					],
 				},
 			],
