@@ -227,7 +227,23 @@ export const PRORES_FOURCCS = [
 ] as const;
 export type ProresFourCc = typeof PRORES_FOURCCS[number];
 
-export const buildVideoCodecString = (codec: VideoCodec, width: number, height: number, bitrate: number) => {
+// Target data rates of the ProRes profiles at 1920x1080 ~30fps, as published by Apple
+const PRORES_PROFILE_TARGET_BITRATES: { fourCc: ProresFourCc; bitrate: number; alpha: boolean }[] = [
+	{ fourCc: 'apco', bitrate: 45_000_000, alpha: false }, // 422 Proxy
+	{ fourCc: 'apcs', bitrate: 102_000_000, alpha: false }, // 422 LT
+	{ fourCc: 'apcn', bitrate: 147_000_000, alpha: false }, // 422 Standard
+	{ fourCc: 'apch', bitrate: 220_000_000, alpha: false }, // 422 HQ
+	{ fourCc: 'ap4h', bitrate: 330_000_000, alpha: true }, // 4444
+	{ fourCc: 'ap4x', bitrate: 500_000_000, alpha: true }, // 4444 XQ
+];
+
+export const buildVideoCodecString = (
+	codec: VideoCodec,
+	width: number,
+	height: number,
+	bitrate: number,
+	alpha: boolean,
+) => {
 	if (codec === 'avc') {
 		const profileIndication = 0x64; // High Profile
 		const totalMacroblocks = Math.ceil(width / 16) * Math.ceil(height / 16);
@@ -287,7 +303,22 @@ export const buildVideoCodecString = (codec: VideoCodec, width: number, height: 
 
 		return `av01.${profile}.${level}${levelInfo.tier}.${bitDepth}`;
 	} else if (codec === 'prores') {
-		return 'apch';
+		const referencePixels = 1920 * 1080;
+		const scaleFactor = Math.pow((width * height) / referencePixels, 0.95);
+
+		const candidates = PRORES_PROFILE_TARGET_BITRATES.filter(x => x.alpha === alpha);
+
+		let bestFourCc = candidates[0]!.fourCc;
+		let smallestDifference = Infinity;
+		for (const { fourCc, bitrate: targetBitrate } of candidates) {
+			const difference = Math.abs(targetBitrate * scaleFactor - bitrate);
+			if (difference < smallestDifference) {
+				smallestDifference = difference;
+				bestFourCc = fourCc;
+			}
+		}
+
+		return bestFourCc;
 	} else {
 		assertNever(codec);
 	}
@@ -700,6 +731,8 @@ export const inferCodecFromCodecString = (codecString: string): MediaCodec | nul
 		return 'vp9';
 	} else if (codecString.startsWith('av01')) {
 		return 'av1';
+	} else if ((PRORES_FOURCCS as readonly string[]).includes(codecString)) {
+		return 'prores';
 	}
 
 	// Audio codecs

@@ -15,6 +15,7 @@ import {
 	buildAudioCodecString,
 	buildVideoCodecString,
 	NON_PCM_AUDIO_CODECS,
+	PRORES_FOURCCS,
 	VideoCodec,
 } from '../../src/codec.js';
 import { EncodedPacket } from '../../src/packet.js';
@@ -30,6 +31,8 @@ import { Output } from '../../src/output.js';
 import { Mp4OutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
 import { Conversion } from '../../src/conversion.js';
+import { VideoSampleSource } from '../../src/media-source.js';
+import { QUALITY_HIGH } from '../../src/encode.js';
 import { AvFrameVideoSampleResource } from '../../packages/server/src/video-sample.js';
 import { AvFrameAudioSampleResource } from '../../packages/server/src/audio-sample.js';
 import { toAvFrame } from '../../packages/server/src/index.js';
@@ -113,7 +116,7 @@ describe('Video', async () => {
 		encoder.codec = 'avc';
 		// @ts-expect-error Readonly
 		encoder.config = {
-			codec: buildVideoCodecString('avc', 1280, 720, 1e6),
+			codec: buildVideoCodecString('avc', 1280, 720, 1e6, false),
 			width: 1280,
 			height: 720,
 			bitrate: 1e6,
@@ -196,7 +199,7 @@ describe('Video', async () => {
 		encoder.codec = 'avc';
 		// @ts-expect-error Readonly
 		encoder.config = {
-			codec: buildVideoCodecString('avc', 1280, 720, 1e6),
+			codec: buildVideoCodecString('avc', 1280, 720, 1e6, false),
 			width: 1280,
 			height: 720,
 			bitrate: 1e6,
@@ -471,6 +474,188 @@ describe('Video', async () => {
 		});
 	});
 
+	test('ProRes encode', async () => {
+		// ProRes can't be decoded by node-av's wrapper here, so this is encode-only.
+		const encoder = new NodeAvVideoEncoder();
+		// @ts-expect-error Readonly
+		encoder.codec = 'prores';
+		// @ts-expect-error Readonly
+		encoder.config = {
+			codec: 'apch',
+			width: 1280,
+			height: 720,
+			bitrate: 1e6,
+		} satisfies VideoEncoderConfig;
+
+		const packets: EncodedPacket[] = [];
+		const sampleTimestamps: number[] = [];
+
+		// @ts-expect-error Readonly
+		encoder.onPacket = (packet: EncodedPacket, meta: EncodedVideoChunkMetadata) => {
+			expect(packet.duration).toBe(1 / 30);
+			expect(packet.type).toBe('key');
+			expect(String.fromCharCode(...packet.data.slice(4, 8))).toBe('icpf');
+
+			if (packets.length === 0) {
+				expect(meta.decoderConfig).toBeDefined();
+				expect(meta.decoderConfig!.codec).toBe('apch');
+				expect(meta.decoderConfig!.codedWidth).toBe(1280);
+				expect(meta.decoderConfig!.codedHeight).toBe(720);
+				expect(meta.decoderConfig!.description).toBeUndefined();
+			}
+
+			packets.push(packet);
+		};
+
+		await encoder.init();
+
+		const data = new Uint8Array(1280 * 720 * 4).fill(0xff); // White
+		for (let i = 0; i < 10; i++) {
+			using sample = new VideoSample(data, {
+				format: 'RGBX',
+				codedWidth: 1280,
+				codedHeight: 720,
+				timestamp: i / 30,
+				duration: 1 / 30,
+			});
+
+			sampleTimestamps.push(sample.timestamp);
+
+			await encoder.encode(sample, {});
+		}
+
+		await encoder.flush();
+
+		expect(packets).toHaveLength(10);
+		expect(packets.map(x => x.timestamp)).toEqual(sampleTimestamps);
+
+		await encoder.close();
+	});
+
+	test('ProRes Proxy encode', async () => {
+		const encoder = new NodeAvVideoEncoder();
+		// @ts-expect-error Readonly
+		encoder.codec = 'prores';
+		// @ts-expect-error Readonly
+		encoder.config = {
+			codec: 'apco', // Force ProRes 422 Proxy
+			width: 1280,
+			height: 720,
+			bitrate: 1e6,
+		} satisfies VideoEncoderConfig;
+
+		const packets: EncodedPacket[] = [];
+		const sampleTimestamps: number[] = [];
+
+		// @ts-expect-error Readonly
+		encoder.onPacket = (packet: EncodedPacket, meta: EncodedVideoChunkMetadata) => {
+			expect(packet.duration).toBe(1 / 30);
+			expect(packet.type).toBe('key');
+			expect(String.fromCharCode(...packet.data.slice(4, 8))).toBe('icpf');
+
+			if (packets.length === 0) {
+				expect(meta.decoderConfig).toBeDefined();
+				expect(PRORES_FOURCCS).toContain(meta.decoderConfig!.codec);
+				expect(meta.decoderConfig!.codec).toBe('apco');
+				expect(meta.decoderConfig!.codedWidth).toBe(1280);
+				expect(meta.decoderConfig!.codedHeight).toBe(720);
+				expect(meta.decoderConfig!.description).toBeUndefined();
+			}
+
+			packets.push(packet);
+		};
+
+		await encoder.init();
+
+		const data = new Uint8Array(1280 * 720 * 4).fill(0xff); // White
+		for (let i = 0; i < 10; i++) {
+			using sample = new VideoSample(data, {
+				format: 'RGBX',
+				codedWidth: 1280,
+				codedHeight: 720,
+				timestamp: i / 30,
+				duration: 1 / 30,
+			});
+
+			sampleTimestamps.push(sample.timestamp);
+
+			await encoder.encode(sample, {});
+		}
+
+		await encoder.flush();
+
+		expect(packets).toHaveLength(10);
+		expect(packets.map(x => x.timestamp)).toEqual(sampleTimestamps);
+
+		await encoder.close();
+	});
+
+	test('Transparent ProRes encode and decode', async () => {
+		const output = new Output({
+			format: new Mp4OutputFormat(),
+			target: new BufferTarget(),
+		});
+
+		const source = new VideoSampleSource({
+			codec: 'prores',
+			bitrate: QUALITY_HIGH,
+			alpha: 'keep',
+		});
+		output.addVideoTrack(source);
+
+		await output.start();
+
+		// Solid red at 50% alpha
+		const data = new Uint8Array(640 * 480 * 4);
+		for (let i = 0; i < data.byteLength; i += 4) {
+			data[i] = 0xff;
+			data[i + 3] = 0x80;
+		}
+
+		using inputSample = new VideoSample(data, {
+			format: 'RGBA',
+			codedWidth: 640,
+			codedHeight: 480,
+			timestamp: 0,
+			duration: 1,
+		});
+		await source.add(inputSample);
+
+		await output.finalize();
+
+		using input = new Input({
+			source: new BufferSource(output.target.buffer!),
+			formats: ALL_FORMATS,
+		});
+
+		const videoTrack = (await input.getPrimaryVideoTrack())!;
+		expect(await videoTrack.canBeTransparent()).toBe(true);
+
+		const sink = new VideoSampleSink(videoTrack);
+		using sample = (await sink.getSample(0))!;
+
+		expect(sample.format).toBe('I444AP12');
+
+		const decodedData = new Uint8Array(sample.allocationSize());
+		const layout = await sample.copyTo(decodedData);
+
+		const view = new DataView(decodedData.buffer);
+		const alphaPlane = layout[3]!;
+		let minAlpha = Infinity;
+		let maxAlpha = -Infinity;
+		for (let y = 0; y < sample.codedHeight; y++) {
+			for (let x = 0; x < sample.codedWidth; x++) {
+				const alpha = view.getUint16(alphaPlane.offset + y * alphaPlane.stride + x * 2, true);
+				minAlpha = Math.min(minAlpha, alpha);
+				maxAlpha = Math.max(maxAlpha, alpha);
+			}
+		}
+
+		expect(maxAlpha).toBeLessThan(4095);
+		expect(Math.abs(minAlpha - 4095 / 2)).toBeLessThan(32);
+		expect(Math.abs(maxAlpha - 4095 / 2)).toBeLessThan(32);
+	});
+
 	test('Non-square pixels encode and decode #1', async () => {
 		await encodeDecodeTest('avc', { displayWidth: 2 * 1280, displayHeight: 720 }, async (packet, meta, i) => {
 			if (i === 0) {
@@ -517,7 +702,7 @@ describe('Video', async () => {
 		encoder.codec = codec;
 		// @ts-expect-error Readonly
 		encoder.config = {
-			codec: buildVideoCodecString(codec, 1280, 720, 1e6),
+			codec: buildVideoCodecString(codec, 1280, 720, 1e6, false),
 			width: 1280,
 			height: 720,
 			bitrate: 1e6,
@@ -614,6 +799,10 @@ describe('Video', async () => {
 
 	test('AV1 conversion roundtrip', { timeout: 20_000 }, async () => {
 		await conversionRoundtrip('av1');
+	});
+
+	test('ProRes conversion roundtrip', { timeout: 20_000 }, async () => {
+		await conversionRoundtrip('prores');
 	});
 
 	const conversionRoundtrip = async (codec: VideoCodec, duration?: number) => {
@@ -878,7 +1067,7 @@ describe('Video', async () => {
 		encoder.codec = 'avc';
 		// @ts-expect-error Readonly
 		encoder.config = {
-			codec: buildVideoCodecString('avc', 1920, 1080, 1e6),
+			codec: buildVideoCodecString('avc', 1920, 1080, 1e6, false),
 			width: 1920,
 			height: 1080,
 			bitrate: 1e6,

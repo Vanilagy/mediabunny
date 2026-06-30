@@ -137,10 +137,16 @@ test('ProRes decoding', { timeout: 10_000 }, async () => {
 	expect(sample.timestamp).toBe(firstTimestamp);
 	expect(sample.duration).toBeGreaterThan(0);
 
-	expect(sample.displayWidth).toBe(await videoTrack.getDisplayWidth());
-	expect(sample.displayHeight).toBe(await videoTrack.getDisplayHeight());
+	expect(sample.displayWidth).toBe(1920);
+	expect(sample.displayHeight).toBe(1080);
 	expect(sample.codedWidth).toBe(1920);
 	expect(sample.codedHeight).toBe(1080); // Technically a lie but the field is ill-defined
+	expect(sample.visibleRect).toEqual({
+		left: 0,
+		top: 0,
+		width: 1920,
+		height: 1080,
+	});
 	expect(sample.format).toBe('I422P10');
 
 	const allocationSize = sample.allocationSize();

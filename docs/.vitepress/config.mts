@@ -144,6 +144,7 @@ export default withMermaid({
 						{ text: 'VP8', link: '/codec-registry/vp8' },
 						{ text: 'VP9', link: '/codec-registry/vp9' },
 						{ text: 'AV1', link: '/codec-registry/av1' },
+						{ text: 'ProRes', link: '/codec-registry/prores' },
 					],
 				},
 				{

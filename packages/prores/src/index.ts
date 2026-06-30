@@ -125,6 +125,19 @@ class ProresDecoder extends CustomVideoDecoder {
 			fullRange: result.colorRangeFull,
 		};
 
+		let displayWidth = result.visibleWidth;
+		let displayHeight = result.visibleHeight;
+
+		if (result.pixelAspectRatio.num > result.pixelAspectRatio.den) {
+			displayWidth = Math.round(
+				result.visibleWidth * result.pixelAspectRatio.num / result.pixelAspectRatio.den,
+			);
+		} else {
+			displayHeight = Math.round(
+				result.visibleHeight * result.pixelAspectRatio.den / result.pixelAspectRatio.num,
+			);
+		}
+
 		let sample: VideoSample;
 		if (typeof VideoFrame !== 'undefined') {
 			// Create a VideoFrame directly; this avoids the frame data being copied twice
@@ -132,6 +145,8 @@ class ProresDecoder extends CustomVideoDecoder {
 				format: result.pixelFormat as VideoPixelFormat,
 				codedWidth: result.codedWidth,
 				codedHeight: result.codedHeight,
+				displayWidth,
+				displayHeight,
 				visibleRect: {
 					x: 0,
 					y: 0,
@@ -152,6 +167,8 @@ class ProresDecoder extends CustomVideoDecoder {
 				format: result.pixelFormat,
 				codedWidth: result.codedWidth,
 				codedHeight: result.codedHeight,
+				displayWidth,
+				displayHeight,
 				visibleRect: {
 					left: 0,
 					top: 0,

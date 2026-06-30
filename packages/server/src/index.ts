@@ -22,6 +22,7 @@ import { NodeAvAudioDecoder } from './audio-decoder';
 import { NodeAvAudioEncoder } from './audio-encoder';
 import { copyVideoSampleToAvFrame, AvFrameVideoSampleResource, transformVideoSample } from './video-sample';
 import { copyAudioSampleToAvFrame, AvFrameAudioSampleResource } from './audio-sample';
+import { registerProresDecoder } from '@mediabunny/prores';
 
 const SERVER_LOADED_SYMBOL = Symbol.for('@mediabunny/server loaded');
 if ((globalThis as Record<symbol, unknown>)[SERVER_LOADED_SYMBOL]) {
@@ -100,6 +101,7 @@ export const registerMediabunnyServer = (options: MediabunnyServerOptions = {}) 
 
 	// Video
 	registerDecoder(NodeAvVideoDecoder);
+	registerProresDecoder(); // Faster than FFmpeg, so we use it
 	registerEncoder(NodeAvVideoEncoder);
 
 	// Audio

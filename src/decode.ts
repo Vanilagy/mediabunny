@@ -140,7 +140,7 @@ export const canDecodeVideo = async (
 		...options,
 		codedWidth: options.codedWidth ?? 1280,
 		codedHeight: options.codedHeight ?? 720,
-		codec: options.codec ?? buildVideoCodecString(codec, 1280, 720, 1e6),
+		codec: options.codec ?? buildVideoCodecString(codec, 1280, 720, 1e6, false),
 	};
 	resolvedOptions.description ??= guessDescriptionForVideo(resolvedOptions);
 
