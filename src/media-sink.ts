@@ -1589,19 +1589,16 @@ const colorAlphaMergerWorkerCode = () => {
 			);
 		}
 
-		const width = color.codedWidth;
-		const height = color.codedHeight;
-
 		if (format === 'RGBX' || format === 'RGBA' || format === 'BGRX' || format === 'BGRA') {
-			return await mergeInterleavedRgba(color, alpha, width, height, format);
+			return await mergeInterleavedRgba(color, alpha, format);
 		} else if (
 			format === 'I420' || format === 'I420P10' || format === 'I420P12'
 			|| format === 'I422' || format === 'I422P10' || format === 'I422P12'
 			|| format === 'I444' || format === 'I444P10' || format === 'I444P12'
 		) {
-			return await mergePlanarYuv(color, alpha, width, height, format);
+			return await mergePlanarYuv(color, alpha, format);
 		} else if (format === 'NV12') {
-			return await mergeNv12(color, alpha, width, height);
+			return await mergeNv12(color, alpha);
 		}
 
 		throw new Error(`CPU color/alpha merging does not support format '${format}'.`);
@@ -1610,10 +1607,11 @@ const colorAlphaMergerWorkerCode = () => {
 	const mergeInterleavedRgba = async (
 		color: VideoFrame,
 		alpha: VideoFrame,
-		width: number,
-		height: number,
 		format: 'RGBX' | 'RGBA' | 'BGRX' | 'BGRA',
 	): Promise<VideoFrame> => {
+		const width = color.visibleRect?.width ?? color.codedWidth;
+		const height = color.visibleRect?.height ?? color.codedHeight;
+
 		const pixelCount = width * height;
 		const output = new Uint8Array(pixelCount * 4);
 
@@ -1642,13 +1640,14 @@ const colorAlphaMergerWorkerCode = () => {
 	const mergePlanarYuv = async (
 		color: VideoFrame,
 		alpha: VideoFrame,
-		width: number,
-		height: number,
 		format:
 			| 'I420' | 'I420P10' | 'I420P12'
 			| 'I422' | 'I422P10' | 'I422P12'
 			| 'I444' | 'I444P10' | 'I444P12',
 	): Promise<VideoFrame> => {
+		const width = color.visibleRect?.width ?? color.codedWidth;
+		const height = color.visibleRect?.height ?? color.codedHeight;
+
 		const is10 = format.includes('P10');
 		const is12 = format.includes('P12');
 		const bytesPerSample = (is10 || is12) ? 2 : 1;
@@ -1699,9 +1698,10 @@ const colorAlphaMergerWorkerCode = () => {
 	const mergeNv12 = async (
 		color: VideoFrame,
 		alpha: VideoFrame,
-		width: number,
-		height: number,
 	): Promise<VideoFrame> => {
+		const width = color.visibleRect?.width ?? color.codedWidth;
+		const height = color.visibleRect?.height ?? color.codedHeight;
+
 		const ySize = width * height;
 		const chromaW = Math.ceil(width / 2);
 		const chromaH = Math.ceil(height / 2);

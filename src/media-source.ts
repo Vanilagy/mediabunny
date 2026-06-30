@@ -1324,8 +1324,6 @@ const colorAlphaSplitterWorkerCode = () => {
 			throw new Error('CPU color/alpha splitting requires a known VideoFrame format.');
 		}
 
-		const width = sourceFrame.codedWidth;
-		const height = sourceFrame.codedHeight;
 		const sourceSize = sourceFrame.allocationSize();
 
 		if (!cpuSourceBuffer || cpuSourceBuffer.byteLength !== sourceSize) {
@@ -1334,13 +1332,13 @@ const colorAlphaSplitterWorkerCode = () => {
 		await sourceFrame.copyTo(cpuSourceBuffer);
 
 		if (format === 'RGBA' || format === 'BGRA') {
-			return splitInterleavedRgba(cpuSourceBuffer, width, height, format, sourceFrame);
+			return splitInterleavedRgba(cpuSourceBuffer, format, sourceFrame);
 		} else if (
 			format === 'I420A' || format === 'I420AP10' || format === 'I420AP12'
 			|| format === 'I422A' || format === 'I422AP10' || format === 'I422AP12'
 			|| format === 'I444A' || format === 'I444AP10' || format === 'I444AP12'
 		) {
-			return splitPlanarYuvA(cpuSourceBuffer, width, height, format, sourceFrame);
+			return splitPlanarYuvA(cpuSourceBuffer, format, sourceFrame);
 		}
 
 		throw new Error(`CPU color/alpha splitting does not support format '${format}'.`);
@@ -1348,11 +1346,12 @@ const colorAlphaSplitterWorkerCode = () => {
 
 	const splitInterleavedRgba = (
 		source: Uint8Array,
-		width: number,
-		height: number,
 		format: 'RGBA' | 'BGRA',
 		sourceFrame: VideoFrame,
 	) => {
+		const width = sourceFrame.visibleRect?.width ?? sourceFrame.codedWidth;
+		const height = sourceFrame.visibleRect?.height ?? sourceFrame.codedHeight;
+
 		const pixelCount = width * height;
 		const chromaW = Math.ceil(width / 2);
 		const chromaH = Math.ceil(height / 2);
@@ -1388,14 +1387,15 @@ const colorAlphaSplitterWorkerCode = () => {
 
 	const splitPlanarYuvA = (
 		source: Uint8Array,
-		width: number,
-		height: number,
 		format:
 			| 'I420A' | 'I420AP10' | 'I420AP12'
 			| 'I422A' | 'I422AP10' | 'I422AP12'
 			| 'I444A' | 'I444AP10' | 'I444AP12',
 		sourceFrame: VideoFrame,
 	) => {
+		const width = sourceFrame.visibleRect?.width ?? sourceFrame.codedWidth;
+		const height = sourceFrame.visibleRect?.height ?? sourceFrame.codedHeight;
+
 		const is10 = format.includes('P10');
 		const is12 = format.includes('P12');
 		const bytesPerSample = (is10 || is12) ? 2 : 1;
