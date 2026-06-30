@@ -469,41 +469,10 @@ export class VideoSample implements Disposable {
 				this.squarePixelHeight = this.visibleRect.height;
 			}
 
-			// If VideoFrame is available, route through it directly instead of holding onto the buffer. Going
-			// buffer -> VideoSample -> VideoFrame would copy the data twice (once here, once in toVideoFrame);
-			// building the VideoFrame now means it's only ever copied once.
-			if (typeof VideoFrame !== 'undefined' && !init._doNotCopy) {
-				let videoFrame: VideoFrame | null = null;
-
-				try {
-					videoFrame = new VideoFrame(toUint8Array(data), {
-						format: init.format as VideoPixelFormat,
-						codedWidth: init.codedWidth!,
-						codedHeight: init.codedHeight!,
-						layout,
-						colorSpace: colorSpaceInit,
-						visibleRect: {
-							x: this.visibleRect.left,
-							y: this.visibleRect.top,
-							width: this.visibleRect.width,
-							height: this.visibleRect.height,
-						},
-						displayWidth: this.squarePixelWidth,
-						displayHeight: this.squarePixelHeight,
-						timestamp: Math.trunc(init.timestamp! * SECOND_TO_MICROSECOND_FACTOR),
-						// Drag 0 to undefined
-						duration: Math.trunc((init.duration ?? 0) * SECOND_TO_MICROSECOND_FACTOR) || undefined,
-					});
-				} catch {
-					// Ignore the error and move on like it didn't happen. We don't want errors caused by the local
-					// VideoFrame implementation to prevent us from creating the VideoSample. Errors, for example, could
-					// be caused by an unsupported pixel format.
-				}
-
-				if (videoFrame) {
-					return new VideoSample(videoFrame, init);
-				}
-			}
+			// As an optimization, one could check if VideoFrame is defined and if it is, create a VideoFrame here from
+			// the data. Since VideoFrames are typically needed anyway, doing it this way would avoid an additional
+			// copy of the frame data. But due to https://issues.chromium.org/issues/529413114, this is currently
+			// not done.
 
 			this._data = init._doNotCopy
 				? toUint8Array(data)

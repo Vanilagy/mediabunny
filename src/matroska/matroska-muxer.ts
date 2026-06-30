@@ -844,7 +844,7 @@ export class MatroskaMuxer extends Muxer {
 			},
 			chunkQueue: [],
 			lastWrittenMsTimestamp: null,
-			codecPrivate: meta.decoderConfig.description ?? null,
+			codecPrivate: decoderConfig.description ?? null,
 			closed: false,
 		};
 

@@ -118,25 +118,52 @@ class ProresDecoder extends CustomVideoDecoder {
 			this.trimCodedHeightToVisibleHeight(result);
 		}
 
-		const sample = new VideoSample(result.frameData, {
-			format: result.pixelFormat,
-			codedWidth: result.codedWidth,
-			codedHeight: result.codedHeight,
-			visibleRect: {
-				left: 0,
-				top: 0,
-				width: result.visibleWidth,
-				height: result.visibleHeight,
-			},
-			timestamp: packet.timestamp,
-			duration: packet.duration,
-			colorSpace: {
-				primaries: result.colorPrimariesString as VideoColorPrimaries | undefined,
-				matrix: result.colorMatrixString as VideoMatrixCoefficients | undefined,
-				transfer: result.colorTransferString as VideoTransferCharacteristics | undefined,
-				fullRange: result.colorRangeFull,
-			},
-		});
+		const colorSpaceInit = {
+			primaries: result.colorPrimariesString as VideoColorPrimaries | undefined,
+			matrix: result.colorMatrixString as VideoMatrixCoefficients | undefined,
+			transfer: result.colorTransferString as VideoTransferCharacteristics | undefined,
+			fullRange: result.colorRangeFull,
+		};
+
+		let sample: VideoSample;
+		if (typeof VideoFrame !== 'undefined') {
+			// Create a VideoFrame directly; this avoids the frame data being copied twice
+			const frame = new VideoFrame(result.frameData, {
+				format: result.pixelFormat as VideoPixelFormat,
+				codedWidth: result.codedWidth,
+				codedHeight: result.codedHeight,
+				visibleRect: {
+					x: 0,
+					y: 0,
+					width: result.visibleWidth,
+					height: result.visibleHeight,
+				},
+				timestamp: packet.microsecondTimestamp,
+				duration: packet.microsecondDuration,
+				colorSpace: colorSpaceInit,
+			});
+
+			sample = new VideoSample(frame, {
+				timestamp: packet.timestamp,
+				duration: packet.duration,
+			});
+		} else {
+			sample = new VideoSample(result.frameData, {
+				format: result.pixelFormat,
+				codedWidth: result.codedWidth,
+				codedHeight: result.codedHeight,
+				visibleRect: {
+					left: 0,
+					top: 0,
+					width: result.visibleWidth,
+					height: result.visibleHeight,
+				},
+				timestamp: packet.timestamp,
+				duration: packet.duration,
+				colorSpace: colorSpaceInit,
+			});
+		}
+
 		this.onSample(sample);
 	}
 
