@@ -559,15 +559,12 @@ class VideoEncoderWrapper {
 							this.encoder.encode(videoFrame, finalEncodeOptions);
 							videoFrame.close();
 						} else {
-							const width = videoFrame.displayWidth;
-							const height = videoFrame.displayHeight;
-
 							if (!this.splitter) {
-								this.splitter = new ColorAlphaSplitter(width, height);
+								this.splitter = new ColorAlphaSplitter();
 							}
 
 							// The splitter takes ownership, so no need to close the frames ourselves
-							const { colorFrame, alphaFrame } = await this.splitter.update(videoFrame);
+							const { colorFrame, alphaFrame } = await this.splitter.split(videoFrame);
 
 							this.alphaFrameQueue.push(alphaFrame);
 							this.encoder.encode(colorFrame, finalEncodeOptions);
@@ -917,21 +914,10 @@ class VideoEncoderWrapper {
 	}
 }
 
-let splitterGpuUnavailable = false;
+let splitterWorkerUrl: string | null = null;
 
-/** Utility class for splitting a composite frame into separate color and alpha components. */
+/** Utility class for splitting a composite frame into separate color and alpha parts on the CPU in a worker. */
 export class ColorAlphaSplitter {
-	static forceCpu = true;
-
-	canvas: OffscreenCanvas | HTMLCanvasElement | null = null;
-
-	private gl: WebGL2RenderingContext | null = null;
-	private colorProgram: WebGLProgram | null = null;
-	private alphaProgram: WebGLProgram | null = null;
-	private vao: WebGLVertexArrayObject | null = null;
-	private sourceTexture: WebGLTexture | null = null;
-	private alphaResolutionLocation: WebGLUniformLocation | null = null;
-
 	private worker: Worker | null = null;
 	private pendingRequests = new Map<
 		number,
@@ -940,308 +926,17 @@ export class ColorAlphaSplitter {
 
 	private nextRequestId = 0;
 
-	constructor(initialWidth: number, initialHeight: number) {
-		const canMakeCanvas = typeof OffscreenCanvas !== 'undefined'
-			// eslint-disable-next-line @typescript-eslint/no-deprecated
-			|| (typeof document !== 'undefined' && typeof document.createElement === 'function');
-
-		if (!ColorAlphaSplitter.forceCpu && canMakeCanvas && !splitterGpuUnavailable) {
-			// Try the GPU path. If anything goes wrong, we silently fall back to the CPU path.
-			try {
-				if (typeof OffscreenCanvas !== 'undefined') {
-					this.canvas = new OffscreenCanvas(initialWidth, initialHeight);
-				} else {
-					this.canvas = document.createElement('canvas');
-					this.canvas.width = initialWidth;
-					this.canvas.height = initialHeight;
-				}
-
-				const gl = this.canvas.getContext('webgl2', {
-					alpha: true, // Needed due to the YUV thing we do for alpha
-				}) as unknown as WebGL2RenderingContext | null; // Casting because of some TypeScript weirdness
-				if (!gl) {
-					throw new Error('Couldn\'t acquire WebGL 2 context.');
-				}
-
-				this.gl = gl;
-
-				this.colorProgram = this.createColorProgram();
-				this.alphaProgram = this.createAlphaProgram();
-				this.vao = this.createVAO();
-				this.sourceTexture = this.createTexture();
-
-				this.alphaResolutionLocation = this.gl.getUniformLocation(this.alphaProgram, 'u_resolution')!;
-
-				this.gl.useProgram(this.colorProgram);
-				this.gl.uniform1i(this.gl.getUniformLocation(this.colorProgram, 'u_sourceTexture'), 0);
-
-				this.gl.useProgram(this.alphaProgram);
-				this.gl.uniform1i(this.gl.getUniformLocation(this.alphaProgram, 'u_sourceTexture'), 0);
-			} catch (error) {
-				this.gl = null;
-				this.canvas = null;
-				splitterGpuUnavailable = true;
-				Logging._warn('Falling back to CPU for color/alpha splitting.', error);
-			}
-		}
-	}
-
-	async update(sourceFrame: VideoFrame) {
-		if (this.gl) {
-			return this.updateGpu(sourceFrame);
-		} else {
-			return this.updateCpu(sourceFrame);
-		}
-	}
-
-	private updateGpu(sourceFrame: VideoFrame) {
-		assert(this.gl);
-		assert(this.canvas);
-
-		if (sourceFrame.displayWidth !== this.canvas.width || sourceFrame.displayHeight !== this.canvas.height) {
-			this.canvas.width = sourceFrame.displayWidth;
-			this.canvas.height = sourceFrame.displayHeight;
-		}
-
-		this.gl.activeTexture(this.gl.TEXTURE0);
-		this.gl.bindTexture(this.gl.TEXTURE_2D, this.sourceTexture);
-		this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, sourceFrame);
-
-		const colorFrame = this.runColorProgram(sourceFrame);
-		const alphaFrame = this.runAlphaProgram(sourceFrame);
-
-		sourceFrame.close();
-
-		return { colorFrame, alphaFrame };
-	}
-
-	private createVertexShader(): WebGLShader {
-		assert(this.gl);
-
-		return this.createShader(this.gl.VERTEX_SHADER, `#version 300 es
-			in vec2 a_position;
-			in vec2 a_texCoord;
-			out vec2 v_texCoord;
-			
-			void main() {
-				gl_Position = vec4(a_position, 0.0, 1.0);
-				v_texCoord = a_texCoord;
-			}
-		`);
-	}
-
-	private createColorProgram(): WebGLProgram {
-		assert(this.gl);
-
-		const vertexShader = this.createVertexShader();
-
-		// This shader is simple, simply copy the color information while setting alpha to 1
-		const fragmentShader = this.createShader(this.gl.FRAGMENT_SHADER, `#version 300 es
-			precision highp float;
-			
-			uniform sampler2D u_sourceTexture;
-			in vec2 v_texCoord;
-			out vec4 fragColor;
-			
-			void main() {
-				vec4 source = texture(u_sourceTexture, v_texCoord);
-				fragColor = vec4(source.rgb, 1.0);
-			}
-		`);
-
-		const program = this.gl.createProgram();
-		this.gl.attachShader(program, vertexShader);
-		this.gl.attachShader(program, fragmentShader);
-		this.gl.linkProgram(program);
-
-		return program;
-	}
-
-	private createAlphaProgram(): WebGLProgram {
-		assert(this.gl);
-
-		const vertexShader = this.createVertexShader();
-
-		// This shader's more complex. The main reason is that this shader writes data in I420 (yuv420) pixel format
-		// instead of regular RGBA. In other words, we use the shader to write out I420 data into an RGBA canvas, which
-		// we then later read out with JavaScript. The reason being that browsers weirdly encode canvases and mess up
-		// the color spaces, and the only way to have full control over the color space is by outputting YUV data
-		// directly (avoiding the RGB conversion). Doing this conversion in JS is painfully slow, so let's utlize the
-		// GPU since we're already calling it anyway.
-		const fragmentShader = this.createShader(this.gl.FRAGMENT_SHADER, `#version 300 es
-			precision highp float;
-			
-			uniform sampler2D u_sourceTexture;
-			uniform vec2 u_resolution; // The width and height of the canvas
-			in vec2 v_texCoord;
-			out vec4 fragColor;
-
-			// This function determines the value for a single byte in the YUV stream
-			float getByteValue(float byteOffset) {
-				float width = u_resolution.x;
-				float height = u_resolution.y;
-
-				float yPlaneSize = width * height;
-
-				if (byteOffset < yPlaneSize) {
-					// This byte is in the luma plane. Find the corresponding pixel coordinates to sample from
-					float y = floor(byteOffset / width);
-					float x = mod(byteOffset, width);
-					
-					// Add 0.5 to sample the center of the texel
-					vec2 sampleCoord = (vec2(x, y) + 0.5) / u_resolution;
-					
-					// The luma value is the alpha from the source texture
-					return texture(u_sourceTexture, sampleCoord).a;
-				} else {
-					// Write a fixed value for chroma and beyond
-					return 128.0 / 255.0;
-				}
-			}
-			
-			void main() {
-				// Each fragment writes 4 bytes (R, G, B, A)
-				float pixelIndex = floor(gl_FragCoord.y) * u_resolution.x + floor(gl_FragCoord.x);
-				float baseByteOffset = pixelIndex * 4.0;
-
-				vec4 result;
-				for (int i = 0; i < 4; i++) {
-					float currentByteOffset = baseByteOffset + float(i);
-					result[i] = getByteValue(currentByteOffset);
-				}
-				
-				fragColor = result;
-			}
-		`);
-
-		const program = this.gl.createProgram();
-		this.gl.attachShader(program, vertexShader);
-		this.gl.attachShader(program, fragmentShader);
-		this.gl.linkProgram(program);
-
-		return program;
-	}
-
-	private createShader(type: number, source: string): WebGLShader {
-		assert(this.gl);
-
-		const shader = this.gl.createShader(type)!;
-		this.gl.shaderSource(shader, source);
-		this.gl.compileShader(shader);
-		if (!this.gl.getShaderParameter(shader, this.gl.COMPILE_STATUS)) {
-			Logging._error('Shader compile error:', this.gl.getShaderInfoLog(shader));
-		}
-		return shader;
-	}
-
-	private createVAO(): WebGLVertexArrayObject {
-		assert(this.gl);
-		assert(this.colorProgram);
-
-		const vao = this.gl.createVertexArray();
-		this.gl.bindVertexArray(vao);
-
-		const vertices = new Float32Array([
-			-1, -1, 0, 1,
-			1, -1, 1, 1,
-			-1, 1, 0, 0,
-			1, 1, 1, 0,
-		]);
-
-		const buffer = this.gl.createBuffer();
-		this.gl.bindBuffer(this.gl.ARRAY_BUFFER, buffer);
-		this.gl.bufferData(this.gl.ARRAY_BUFFER, vertices, this.gl.STATIC_DRAW);
-
-		const positionLocation = this.gl.getAttribLocation(this.colorProgram, 'a_position');
-		const texCoordLocation = this.gl.getAttribLocation(this.colorProgram, 'a_texCoord');
-
-		this.gl.enableVertexAttribArray(positionLocation);
-		this.gl.vertexAttribPointer(positionLocation, 2, this.gl.FLOAT, false, 16, 0);
-
-		this.gl.enableVertexAttribArray(texCoordLocation);
-		this.gl.vertexAttribPointer(texCoordLocation, 2, this.gl.FLOAT, false, 16, 8);
-
-		return vao;
-	}
-
-	private createTexture(): WebGLTexture {
-		assert(this.gl);
-
-		const texture = this.gl.createTexture();
-
-		this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
-		this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);
-		this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
-		this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.LINEAR);
-		this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.LINEAR);
-
-		return texture;
-	}
-
-	private runColorProgram(sourceFrame: VideoFrame) {
-		assert(this.gl);
-		assert(this.canvas);
-
-		this.gl.useProgram(this.colorProgram);
-		this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-		this.gl.clear(this.gl.COLOR_BUFFER_BIT);
-		this.gl.bindVertexArray(this.vao);
-		this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
-
-		return new VideoFrame(this.canvas, {
-			timestamp: sourceFrame.timestamp,
-			duration: sourceFrame.duration ?? undefined,
-			alpha: 'discard',
-		});
-	}
-
-	private runAlphaProgram(sourceFrame: VideoFrame) {
-		assert(this.gl);
-		assert(this.canvas);
-
-		this.gl.useProgram(this.alphaProgram);
-		this.gl.uniform2f(this.alphaResolutionLocation, this.canvas.width, this.canvas.height);
-
-		this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-		this.gl.clear(this.gl.COLOR_BUFFER_BIT);
-		this.gl.bindVertexArray(this.vao);
-		this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
-
-		const { width, height } = this.canvas;
-
-		const chromaSamples = Math.ceil(width / 2) * Math.ceil(height / 2);
-		const yuvSize = width * height + chromaSamples * 2;
-		const requiredHeight = Math.ceil(yuvSize / (width * 4));
-
-		let yuv = new Uint8Array(4 * width * requiredHeight);
-		this.gl.readPixels(0, 0, width, requiredHeight, this.gl.RGBA, this.gl.UNSIGNED_BYTE, yuv);
-		yuv = yuv.subarray(0, yuvSize);
-
-		assert(yuv[width * height] === 128); // Where chroma data starts
-		assert(yuv[yuv.length - 1] === 128); // Assert the YUV data has been fully written
-
-		// Defining this separately because TypeScript doesn't know `transfer` and I can't be bothered to do declaration
-		// merging right now
-		const init = {
-			format: 'I420' as const,
-			codedWidth: width,
-			codedHeight: height,
-			timestamp: sourceFrame.timestamp,
-			duration: sourceFrame.duration ?? undefined,
-			transfer: [yuv.buffer],
-		};
-		return new VideoFrame(yuv, init);
-	}
-
-	private updateCpu(sourceFrame: VideoFrame): Promise<{ colorFrame: VideoFrame; alphaFrame: VideoFrame }> {
+	split(sourceFrame: VideoFrame): Promise<{ colorFrame: VideoFrame; alphaFrame: VideoFrame }> {
 		if (!this.worker) {
-			const blob = new Blob(
-				[`(${colorAlphaSplitterWorkerCode.toString()})()`],
-				{ type: 'application/javascript' },
-			);
-			const url = URL.createObjectURL(blob);
-			this.worker = new Worker(url);
-			URL.revokeObjectURL(url);
+			if (!splitterWorkerUrl) {
+				const blob = new Blob(
+					[`(${colorAlphaSplitterWorkerCode.toString()})()`],
+					{ type: 'application/javascript' },
+				);
+				splitterWorkerUrl = URL.createObjectURL(blob);
+			}
+
+			this.worker = new Worker(splitterWorkerUrl);
 
 			this.worker.addEventListener('message', (event: MessageEvent<ColorAlphaSplitterWorkerResponse>) => {
 				const data = event.data;
@@ -1271,16 +966,14 @@ export class ColorAlphaSplitter {
 		const pending = promiseWithResolvers<{ colorFrame: VideoFrame; alphaFrame: VideoFrame }>();
 		this.pendingRequests.set(id, pending);
 		this.worker.postMessage({ id, sourceFrame }, { transfer: [sourceFrame] });
+
 		return pending.promise;
 	}
 
 	close() {
-		this.gl?.getExtension('WEBGL_lose_context')?.loseContext();
-		this.gl = null;
-		this.canvas = null;
-
 		this.worker?.terminate();
 		this.worker = null;
+
 		const error = new Error('Color/alpha splitter closed.');
 		for (const pending of this.pendingRequests.values()) {
 			pending.reject(error);

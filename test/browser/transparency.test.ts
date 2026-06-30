@@ -2,11 +2,11 @@ import { expect, test } from 'vitest';
 import { Input } from '../../src/input.js';
 import { BufferSource, UrlSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
-import { CanvasSink, ColorAlphaMerger, EncodedPacketSink, VideoSampleSink } from '../../src/media-sink.js';
+import { CanvasSink, EncodedPacketSink, VideoSampleSink } from '../../src/media-sink.js';
 import { Output } from '../../src/output.js';
 import { WebMOutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
-import { CanvasSource, ColorAlphaSplitter, VideoSampleSource } from '../../src/media-source.js';
+import { CanvasSource, VideoSampleSource } from '../../src/media-source.js';
 import { canEncodeVideo, QUALITY_HIGH } from '../../src/encode.js';
 import { VideoSample } from '../../src/sample.js';
 import { Conversion } from '../../src/conversion.js';
@@ -37,15 +37,6 @@ const decodeTransparentVideoTest = async () => {
 
 test('Can decode transparent video', async () => {
 	await decodeTransparentVideoTest();
-});
-
-test('Can decode transparent video, forced CPU path', async () => {
-	try {
-		ColorAlphaMerger.forceCpu = true;
-		await decodeTransparentVideoTest();
-	} finally {
-		ColorAlphaMerger.forceCpu = false;
-	}
 });
 
 test('Can decode faulty transparent video and behaves gracefully', async () => {
@@ -190,15 +181,6 @@ const encodeTransparentVideoTest = async () => {
 
 test('Can encode transparent video', async () => {
 	await encodeTransparentVideoTest();
-});
-
-test('Can encode transparent video, forced CPU path', async () => {
-	try {
-		ColorAlphaSplitter.forceCpu = true;
-		await encodeTransparentVideoTest();
-	} finally {
-		ColorAlphaSplitter.forceCpu = false;
-	}
 });
 
 test('Can encode video with alternating transparency', async () => {

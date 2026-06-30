@@ -28,6 +28,7 @@ import {
 	assert,
 	assertNever,
 	CallSerializer,
+	clamp,
 	getInt24,
 	getUint24,
 	insertSorted,
@@ -38,6 +39,7 @@ import {
 	last,
 	mapAsyncGenerator,
 	promiseWithResolvers,
+	removeItem,
 	Rotation,
 	toAsyncIterator,
 	toDataView,
@@ -54,7 +56,6 @@ import {
 	VideoSample,
 	VideoSamplePixelFormat,
 } from './sample';
-import { Logging } from './logging';
 
 /**
  * Additional options for controlling packet retrieval.
@@ -886,7 +887,8 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	nullAlphaFrameQueue: number[] = [];
 	currentAlphaPacketIndex = 0;
 	alphaRaslSkipped = false; // For HEVC stuff
-	frameHandlerSerializer = new CallSerializer();
+	finalSamples: { sample: VideoSample | null }[] = [];
+	mergeAlphaPromises: Promise<void>[] = [];
 
 	constructor(
 		onSample: (sample: VideoSample) => unknown,
@@ -924,17 +926,15 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 				.catch(error => onError(error));
 		} else {
 			const colorHandler = (frame: VideoFrame) => {
-				this.frameHandlerSerializer.call(async () => {
-					if (this.alphaQueue.length > 0) {
-						// Even when no alpha data is present (most of the time), there will be nulls in this queue
-						const alphaFrame = this.alphaQueue.shift();
-						assert(alphaFrame !== undefined);
+				if (this.alphaQueue.length > 0) {
+					// Even when no alpha data is present (most of the time), there will be nulls in this queue
+					const alphaFrame = this.alphaQueue.shift();
+					assert(alphaFrame !== undefined);
 
-						await this.mergeAlpha(frame, alphaFrame);
-					} else {
-						this.colorQueue.push(frame);
-					}
-				}).catch(error => this.onError(error));
+					void this.mergeAlpha(frame, alphaFrame);
+				} else {
+					this.colorQueue.push(frame);
+				}
 			};
 
 			if (codec === 'avc' && this.decoderConfig.description && isChromium()) {
@@ -1060,36 +1060,34 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 		// Check if we need to set up the alpha decoder
 		if (!this.alphaDecoder) {
 			const alphaHandler = (frame: VideoFrame) => {
-				this.frameHandlerSerializer.call(async () => {
+				if (this.colorQueue.length > 0) {
+					const colorFrame = this.colorQueue.shift();
+					assert(colorFrame !== undefined);
+
+					void this.mergeAlpha(colorFrame, frame);
+				} else {
+					this.alphaQueue.push(frame);
+				}
+
+				// Check if any null frames have been queued for this point
+				this.decodedAlphaChunkCount++;
+				while (
+					this.nullAlphaFrameQueue.length > 0
+					&& this.nullAlphaFrameQueue[0] === this.decodedAlphaChunkCount
+				) {
+					this.nullAlphaFrameQueue.shift();
+
 					if (this.colorQueue.length > 0) {
 						const colorFrame = this.colorQueue.shift();
 						assert(colorFrame !== undefined);
 
-						await this.mergeAlpha(colorFrame, frame);
+						void this.mergeAlpha(colorFrame, null);
 					} else {
-						this.alphaQueue.push(frame);
+						this.alphaQueue.push(null);
 					}
+				}
 
-					// Check if any null frames have been queued for this point
-					this.decodedAlphaChunkCount++;
-					while (
-						this.nullAlphaFrameQueue.length > 0
-						&& this.nullAlphaFrameQueue[0] === this.decodedAlphaChunkCount
-					) {
-						this.nullAlphaFrameQueue.shift();
-
-						if (this.colorQueue.length > 0) {
-							const colorFrame = this.colorQueue.shift();
-							assert(colorFrame !== undefined);
-
-							await this.mergeAlpha(colorFrame, null);
-						} else {
-							this.alphaQueue.push(null);
-						}
-					}
-
-					this.alphaDecoderQueueSize--;
-				}).catch(error => this.onError(error));
+				this.alphaDecoderQueueSize--;
 			};
 
 			const stack = new Error('Decoding error').stack;
@@ -1211,21 +1209,38 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	}
 
 	async mergeAlpha(color: VideoFrame, alpha: VideoFrame | null) {
-		if (!alpha) {
-			// Nothing needs to be merged
-			const finalSample = new VideoSample(color);
-			this.sampleHandler(finalSample);
+		const resolver = promiseWithResolvers();
+		this.mergeAlphaPromises.push(resolver.promise);
 
-			return;
+		// Alpha merging is concurrent but the samples must still be emitted in the same order in which the merging
+		// began. Therefore, serialize the results in an array.
+		const result: { sample: VideoSample | null } = { sample: null };
+		this.finalSamples.push(result);
+
+		try {
+			if (!alpha) {
+				// Nothing needs to be merged
+				result.sample = new VideoSample(color);
+			} else {
+				assert(this.merger);
+
+				// The merger takes ownership of the frames, so no need to close them ourselves
+				const finalFrame = await this.merger.merge(color, alpha);
+				result.sample = new VideoSample(finalFrame);
+			}
+
+			// Emit any leading samples that are ready, preserving input order
+			while (this.finalSamples.length > 0 && this.finalSamples[0]!.sample !== null) {
+				const next = this.finalSamples.shift()!;
+				this.sampleHandler(next.sample!);
+			}
+		} catch (error) {
+			removeItem(this.finalSamples, result);
+			this.onError(error);
+		} finally {
+			removeItem(this.mergeAlphaPromises, resolver.promise);
+			resolver.resolve();
 		}
-
-		assert(this.merger);
-
-		// The merger takes ownership of the frames, so no need to close them ourselves
-		const finalFrame = await this.merger.update(color, alpha);
-
-		const finalSample = new VideoSample(finalFrame);
-		this.sampleHandler(finalSample);
 	}
 
 	async flush() {
@@ -1237,7 +1252,7 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 				this.decoder.flush(),
 				this.alphaDecoder?.flush(),
 			]);
-			await this.frameHandlerSerializer.currentPromise;
+			await Promise.all(this.mergeAlphaPromises);
 
 			this.colorQueue.forEach(x => x.close());
 			this.colorQueue.length = 0;
@@ -1287,246 +1302,73 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	}
 }
 
-let mergerGpuUnavailable = false;
+let mergerWorkerUrl: string | null = null;
 
-/** Utility class that merges together color and alpha information using simple WebGL 2 shaders. */
+/** Utility class that merges together color and alpha information on the CPU in a pool of workers. */
 export class ColorAlphaMerger {
-	static forceCpu = true;
-
-	canvas: OffscreenCanvas | HTMLCanvasElement | null = null;
-	private gl: WebGL2RenderingContext | null = null;
-	private program: WebGLProgram | null = null;
-	private vao: WebGLVertexArrayObject | null = null;
-	private colorTexture: WebGLTexture | null = null;
-	private alphaTexture: WebGLTexture | null = null;
-
-	private worker: Worker | null = null;
+	private workers: Worker[] = [];
+	private nextWorkerIndex = 0;
 	private pendingRequests = new Map<number, ReturnType<typeof promiseWithResolvers<VideoFrame>>>();
 	private nextRequestId = 0;
 
-	constructor() {
-		const canMakeCanvas = typeof OffscreenCanvas !== 'undefined'
-			// eslint-disable-next-line @typescript-eslint/no-deprecated
-			|| (typeof document !== 'undefined' && typeof document.createElement === 'function');
-
-		if (!ColorAlphaMerger.forceCpu && canMakeCanvas && !mergerGpuUnavailable) {
-			// Try the GPU path. If anything goes wrong, we silently fall back to the CPU path.
-			try {
-				// Canvas will be resized later
-				if (typeof OffscreenCanvas !== 'undefined') {
-					// Prefer OffscreenCanvas for Worker environments
-					this.canvas = new OffscreenCanvas(300, 150);
-				} else {
-					this.canvas = document.createElement('canvas');
-				}
-
-				const gl = this.canvas.getContext('webgl2', {
-					premultipliedAlpha: false,
-				}) as unknown as WebGL2RenderingContext | null; // Casting because of some TypeScript weirdness
-				if (!gl) {
-					throw new Error('Couldn\'t acquire WebGL 2 context.');
-				}
-
-				this.gl = gl;
-				this.program = this.createProgram();
-				this.vao = this.createVAO();
-				this.colorTexture = this.createTexture();
-				this.alphaTexture = this.createTexture();
-
-				this.gl.useProgram(this.program);
-				this.gl.uniform1i(this.gl.getUniformLocation(this.program, 'u_colorTexture'), 0);
-				this.gl.uniform1i(this.gl.getUniformLocation(this.program, 'u_alphaTexture'), 1);
-			} catch (error) {
-				this.gl = null;
-				this.canvas = null;
-				mergerGpuUnavailable = true;
-				Logging._warn('Falling back to CPU for color/alpha merging.', error);
+	merge(color: VideoFrame, alpha: VideoFrame): Promise<VideoFrame> {
+		if (this.workers.length === 0) {
+			if (!mergerWorkerUrl) {
+				const blob = new Blob(
+					[`(${colorAlphaMergerWorkerCode.toString()})()`],
+					{ type: 'application/javascript' },
+				);
+				mergerWorkerUrl = URL.createObjectURL(blob);
 			}
-		}
-	}
 
-	async update(color: VideoFrame, alpha: VideoFrame): Promise<VideoFrame> {
-		if (this.gl) {
-			return this.updateGpu(color, alpha);
-		} else {
-			return this.updateCpu(color, alpha);
-		}
-	}
+			const poolSize = clamp(navigator.hardwareConcurrency, 1, 4);
+			for (let i = 0; i < poolSize; i++) {
+				const worker = new Worker(mergerWorkerUrl);
 
-	private createProgram(): WebGLProgram {
-		assert(this.gl);
+				worker.addEventListener('message', (event: MessageEvent<ColorAlphaMergerWorkerResponse>) => {
+					const data = event.data;
+					const pending = this.pendingRequests.get(data.id);
+					if (!pending) {
+						return;
+					}
+					this.pendingRequests.delete(data.id);
 
-		const vertexShader = this.createShader(this.gl.VERTEX_SHADER, `#version 300 es
-			in vec2 a_position;
-			in vec2 a_texCoord;
-			out vec2 v_texCoord;
-			
-			void main() {
-				gl_Position = vec4(a_position, 0.0, 1.0);
-				v_texCoord = a_texCoord;
+					if ('error' in data) {
+						pending.reject(new Error(data.error));
+					} else {
+						pending.resolve(data.frame);
+					}
+				});
+
+				worker.addEventListener('error', (event) => {
+					const error = new Error(event.message || 'Color/alpha merge worker error.');
+					for (const pending of this.pendingRequests.values()) {
+						pending.reject(error);
+					}
+					this.pendingRequests.clear();
+				});
+
+				this.workers.push(worker);
 			}
-		`);
-
-		const fragmentShader = this.createShader(this.gl.FRAGMENT_SHADER, `#version 300 es
-			precision highp float;
-			
-			uniform sampler2D u_colorTexture;
-			uniform sampler2D u_alphaTexture;
-			in vec2 v_texCoord;
-			out vec4 fragColor;
-			
-			void main() {
-				vec3 color = texture(u_colorTexture, v_texCoord).rgb;
-				float alpha = texture(u_alphaTexture, v_texCoord).r;
-				fragColor = vec4(color, alpha);
-			}
-		`);
-
-		const program = this.gl.createProgram();
-		this.gl.attachShader(program, vertexShader);
-		this.gl.attachShader(program, fragmentShader);
-		this.gl.linkProgram(program);
-
-		return program;
-	}
-
-	private createShader(type: number, source: string): WebGLShader {
-		assert(this.gl);
-
-		const shader = this.gl.createShader(type)!;
-		this.gl.shaderSource(shader, source);
-		this.gl.compileShader(shader);
-		return shader;
-	}
-
-	private createVAO(): WebGLVertexArrayObject {
-		assert(this.gl);
-		assert(this.program);
-
-		const vao = this.gl.createVertexArray();
-		this.gl.bindVertexArray(vao);
-
-		const vertices = new Float32Array([
-			-1, -1, 0, 1,
-			1, -1, 1, 1,
-			-1, 1, 0, 0,
-			1, 1, 1, 0,
-		]);
-
-		const buffer = this.gl.createBuffer();
-		this.gl.bindBuffer(this.gl.ARRAY_BUFFER, buffer);
-		this.gl.bufferData(this.gl.ARRAY_BUFFER, vertices, this.gl.STATIC_DRAW);
-
-		const positionLocation = this.gl.getAttribLocation(this.program, 'a_position');
-		const texCoordLocation = this.gl.getAttribLocation(this.program, 'a_texCoord');
-
-		this.gl.enableVertexAttribArray(positionLocation);
-		this.gl.vertexAttribPointer(positionLocation, 2, this.gl.FLOAT, false, 16, 0);
-
-		this.gl.enableVertexAttribArray(texCoordLocation);
-		this.gl.vertexAttribPointer(texCoordLocation, 2, this.gl.FLOAT, false, 16, 8);
-
-		return vao;
-	}
-
-	private createTexture(): WebGLTexture {
-		assert(this.gl);
-
-		const texture = this.gl.createTexture();
-
-		this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
-		this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);
-		this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
-		this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.LINEAR);
-		this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.LINEAR);
-
-		return texture;
-	}
-
-	private updateGpu(color: VideoFrame, alpha: VideoFrame): VideoFrame {
-		assert(this.gl);
-		assert(this.canvas);
-
-		if (color.displayWidth !== this.canvas.width || color.displayHeight !== this.canvas.height) {
-			this.canvas.width = color.displayWidth;
-			this.canvas.height = color.displayHeight;
-		}
-
-		this.gl.activeTexture(this.gl.TEXTURE0);
-		this.gl.bindTexture(this.gl.TEXTURE_2D, this.colorTexture);
-		this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, color);
-
-		this.gl.activeTexture(this.gl.TEXTURE1);
-		this.gl.bindTexture(this.gl.TEXTURE_2D, this.alphaTexture);
-		this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, alpha);
-
-		this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-		this.gl.clear(this.gl.COLOR_BUFFER_BIT);
-
-		this.gl.bindVertexArray(this.vao);
-		this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
-
-		const finalFrame = new VideoFrame(this.canvas, {
-			timestamp: color.timestamp,
-			duration: color.duration ?? undefined,
-		});
-
-		color.close();
-		alpha.close();
-
-		return finalFrame;
-	}
-
-	private updateCpu(color: VideoFrame, alpha: VideoFrame): Promise<VideoFrame> {
-		if (!this.worker) {
-			const blob = new Blob(
-				[`(${colorAlphaMergerWorkerCode.toString()})()`],
-				{ type: 'application/javascript' },
-			);
-			const url = URL.createObjectURL(blob);
-			this.worker = new Worker(url);
-			URL.revokeObjectURL(url);
-
-			this.worker.addEventListener('message', (event: MessageEvent<ColorAlphaMergerWorkerResponse>) => {
-				const data = event.data;
-				const pending = this.pendingRequests.get(data.id);
-				if (!pending) {
-					return;
-				}
-				this.pendingRequests.delete(data.id);
-
-				if ('error' in data) {
-					pending.reject(new Error(data.error));
-				} else {
-					pending.resolve(data.frame);
-				}
-			});
-
-			this.worker.addEventListener('error', (event) => {
-				const error = new Error(event.message || 'Color/alpha merge worker error.');
-				for (const pending of this.pendingRequests.values()) {
-					pending.reject(error);
-				}
-				this.pendingRequests.clear();
-			});
 		}
 
 		const id = this.nextRequestId++;
 		const pending = promiseWithResolvers<VideoFrame>();
 		this.pendingRequests.set(id, pending);
 
-		this.worker.postMessage({ id, color, alpha }, { transfer: [color, alpha] });
+		// Hand the job to the next worker in round-robin fashion
+		const worker = this.workers[this.nextWorkerIndex]!;
+		this.nextWorkerIndex = (this.nextWorkerIndex + 1) % this.workers.length;
+		worker.postMessage({ id, color, alpha }, { transfer: [color, alpha] });
 
 		return pending.promise;
 	}
 
 	close() {
-		this.gl?.getExtension('WEBGL_lose_context')?.loseContext();
-		this.gl = null;
-		this.canvas = null;
-
-		this.worker?.terminate();
-		this.worker = null;
+		for (const worker of this.workers) {
+			worker.terminate();
+		}
+		this.workers.length = 0;
 
 		const error = new Error('Color/alpha merger closed.');
 		for (const pending of this.pendingRequests.values()) {
