@@ -46,6 +46,7 @@ import {
 	Rotation,
 	roundIfAlmostInteger,
 	textDecoder,
+	toDataView,
 	TRANSFER_CHARACTERISTICS_MAP_INVERSE,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
@@ -141,6 +142,7 @@ type ClusterBlock = {
 	data: Uint8Array;
 	lacing: BlockLacing;
 	decoded: boolean;
+	postProcessed: boolean; // For codec-specific processing
 	mainAdditional: Uint8Array | null;
 };
 
@@ -864,6 +866,7 @@ export class MatroskaDemuxer extends Demuxer {
 					data: frameData,
 					lacing: BlockLacing.None,
 					decoded: true,
+					postProcessed: false,
 					mainAdditional: originalBlock.mainAdditional,
 				});
 			}
@@ -1502,6 +1505,7 @@ export class MatroskaDemuxer extends Demuxer {
 					data: blockData,
 					lacing,
 					decoded: !hasDecodingInstructions,
+					postProcessed: false,
 					mainAdditional: null,
 				});
 			}; break;
@@ -1538,6 +1542,7 @@ export class MatroskaDemuxer extends Demuxer {
 					data: blockData,
 					lacing,
 					decoded: !hasDecodingInstructions,
+					postProcessed: false,
 					mainAdditional: null,
 				};
 				trackData.blocks.push(this.currentBlock);
@@ -2192,6 +2197,35 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		if (!block.decoded) {
 			block.data = this.internalTrack.demuxer.decodeBlockData(this.internalTrack, block.data);
 			block.decoded = true;
+		}
+
+		if (!block.postProcessed) {
+			if (this.internalTrack.info?.codec === 'prores') {
+				// For some reason, ProRes packets are stored in Matroska without the frame container atom. FFmpeg cites
+				// the "Matroska spec" but the actual spec says nothing about this.
+
+				const hasFrameContainer = block.data.length >= 8
+					&& block.data[4] === 105 // 'i'
+					&& block.data[5] === 99 // 'c'
+					&& block.data[6] === 112 // 'p'
+					&& block.data[7] === 102; // 'f'
+
+				if (!hasFrameContainer) {
+					// Wrap the frame in a frame container
+					const newData = new Uint8Array(block.data.length + 8);
+					const newDataView = toDataView(newData);
+
+					newDataView.setUint32(0, newData.length, false);
+					newData[4] = 105; // 'i'
+					newData[5] = 99; // 'c'
+					newData[6] = 112; // 'p'
+					newData[7] = 102; // 'f'
+					newData.set(block.data, 8);
+					block.data = newData;
+				}
+			}
+
+			block.postProcessed = true;
 		}
 
 		const data = options.metadataOnly ? PLACEHOLDER_DATA : block.data;
