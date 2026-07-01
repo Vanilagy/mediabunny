@@ -7,7 +7,7 @@ on:
   pull_request:
 
 jobs:
-  lint:
+  build-check:
     runs-on: ubuntu-latest
 
     steps:
