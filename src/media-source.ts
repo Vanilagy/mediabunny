@@ -36,6 +36,7 @@ import {
 	setUint24,
 	toUint8Array,
 	UnthrottledTimerHandle,
+	wait,
 } from './misc';
 import { Muxer } from './muxer';
 import { SubtitleParser } from './subtitles';
@@ -878,6 +879,9 @@ class VideoEncoderWrapper {
 				// These are wired in series, therefore they must also be flushed in series
 				await this.encoder.flush();
 				await this.alphaEncoder?.flush();
+
+				// Workaround for https://issues.chromium.org/issues/529852980 to give it time for errors to surface
+				await wait(25);
 			}
 
 			if (this.encoder.state !== 'closed') {

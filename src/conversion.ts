@@ -1329,9 +1329,13 @@ export class Conversion {
 						firstSample.close();
 						await tempOutput.finalize();
 					} catch (error) {
-						Logging._info('Error when probing encoder support. Falling back to rerender path.', error);
-						needsRerender = true;
+						Logging._warn(
+							'An error occurred when probing encoder support. Falling back to rerender path.', error,
+						);
 						void tempOutput.cancel();
+
+						needsRerender = true;
+						encodingConfig.transform.force = true;
 					}
 				} else {
 					await tempOutput.cancel();
