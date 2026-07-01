@@ -1,4 +1,4 @@
-name: Lint
+name: Build check
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
   pull_request:
 
 jobs:
-  lint:
+  build-check:
     runs-on: ubuntu-latest
 
     steps:
@@ -23,8 +23,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run TypeScript
-        run: npm run check
-
-      - name: Run ESLint
-        run: npm run lint
+      # Building the docs also means building the core library
+      - name: Build everything
+        run: npm run docs:build
