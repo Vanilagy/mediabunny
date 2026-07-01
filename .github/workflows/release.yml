@@ -25,15 +25,6 @@ jobs:
         with:
           script: "core.setFailed('Non-prerelease releases must target the main branch (got: ${{ github.event.release.target_commitish }}).')"
 
-      - name: Merge main into release branch
-        if: ${{ !github.event.release.prerelease }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout release
-          git merge origin/main --no-ff -m "Merge main into release for tag ${{ github.event.release.tag_name }}"
-          git push origin release
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -107,3 +98,12 @@ jobs:
 
       - name: Publish workspace packages to npm
         run: npm publish --access public --workspaces ${{ github.event.release.prerelease && '--tag beta' || '' }}
+
+      - name: Merge main into release branch
+        if: ${{ !github.event.release.prerelease }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout release
+          git merge origin/main --no-ff -m "Merge main into release for tag ${{ github.event.release.tag_name }}"
+          git push origin release
