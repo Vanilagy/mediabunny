@@ -31,3 +31,10 @@ jobs:
 
       - name: Run build
         run: npm run build
+
+      - name: Generate API docs
+        run: npm run docs:generate
+
+      # We do this because we want to surface doc-building errors early
+      - name: Build docs
+        run: vitepress build docs

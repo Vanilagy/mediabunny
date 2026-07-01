@@ -134,8 +134,18 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 				if (aliasedDeclaration) {
 					const sourceFile = aliasedDeclaration.getSourceFile();
 					const moduleSymbol = typeChecker.getSymbolAtLocation(sourceFile);
-					if (moduleSymbol) {
+					// If the aliased declaration lives in a module we've already visited (e.g. a
+					// same-file `export type { Foo }` re-export of a local declaration), recursing
+					// won't reach it, so add the alias symbol directly. Otherwise follow the reexport.
+					if (moduleSymbol && !visited.has(moduleSymbol)) {
 						symbols.push(...getAllExportedSymbols(moduleSymbol, visited));
+					} else {
+						// Push the aliased symbol (not the alias) so downstream sees the real
+						// declaration and its JSDoc rather than the empty ExportSpecifier.
+						const hasPublicTag = ts.getJSDocTags(aliasedDeclaration).some(tag => tag.tagName.text === 'public');
+						if (hasPublicTag) {
+							symbols.push(aliasedSymbol);
+						}
 					}
 				}
 			}
