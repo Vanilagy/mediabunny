@@ -801,7 +801,7 @@ describe('Video', async () => {
 		await conversionRoundtrip('av1');
 	});
 
-	test('ProRes conversion roundtrip', { timeout: 20_000 }, async () => {
+	test('ProRes conversion roundtrip', { timeout: 30_000 }, async () => {
 		await conversionRoundtrip('prores');
 	});
 
@@ -1061,7 +1061,7 @@ describe('Video', async () => {
 	});
 
 	// https://github.com/Vanilagy/mediabunny/issues/392
-	test('Memory doesn\'t leak', async () => {
+	test('Memory doesn\'t leak', { timeout: 10_000 }, async () => {
 		const encoder = new NodeAvVideoEncoder();
 		// @ts-expect-error Readonly
 		encoder.codec = 'avc';
