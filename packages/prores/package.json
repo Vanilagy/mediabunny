@@ -1,7 +1,7 @@
 {
   "name": "@mediabunny/prores",
   "author": "Vanilagy",
-  "version": "1.50.0",
+  "version": "1.50.1",
   "description": "Apple ProRes decoder extension for Mediabunny, based on TurboRes.",
   "main": "./dist/bundles/mediabunny-prores.mjs",
   "module": "./dist/bundles/mediabunny-prores.mjs",
@@ -19,10 +19,6 @@
     "src"
   ],
   "sideEffects": false,
-  "browser": {
-    "node:worker_threads": false,
-    "node:os": false
-  },
   "license": "MPL-2.0",
   "repository": {
     "type": "git",
@@ -38,7 +34,7 @@
     "url": "https://github.com/sponsors/Vanilagy"
   },
   "dependencies": {
-    "turbores": "^1.1.1"
+    "turbores": "^1.1.2"
   },
   "peerDependencies": {
     "mediabunny": "^1.49.0"

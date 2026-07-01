@@ -28,6 +28,25 @@ Alternatively, directly include them using a script tag:
 
 This will expose the global objects `Mediabunny` and `MediabunnyProres`. Use `mediabunny-prores.d.ts` to provide types for these globals. You can download the built distribution files from the [releases page](https://github.com/Vanilagy/mediabunny/releases).
 
+## Setup
+
+`@mediabunny/prores` can make use of shared-memory multithreading to achieve maximum performance. To enable this in browsers, your website must be cross-origin isolated by setting the following response headers:
+```
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+Alternatively, you can use:
+```
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: credentialless
+```
+which is generally more permissive but is not supported in Safari (of course).
+
+---
+
+If you cannot enable cross-origin isolation, `@mediabunny/prores` will fall back to a slower multithreading algorithm.
+
 ## Usage
 
 ```ts
