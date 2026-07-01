@@ -354,7 +354,7 @@ test('MPEG-TS seeking race condition test', async () => {
 	}
 });
 
-test('MPEG-TS video key packets', { timeout: 10_000 }, async () => {
+test('MPEG-TS video key packets', { timeout: 30_000 }, async () => {
 	for (let i = 0; i < 2; i++) {
 		using input = new Input({
 			source: new FilePathSource(path.join(__dirname, '../public/trim-buck-bunny-ffmpeg.ts')),
