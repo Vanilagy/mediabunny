@@ -60,8 +60,9 @@ jobs:
       - name: Run tests
         run: xvfb-run npm test
 
-      - name: Run build
-        run: npm run build
+      # Building the docs also builds the core library
+      - name: Build everything
+        run: npm run docs:build
 
       - name: Upload build artifacts
         env:
