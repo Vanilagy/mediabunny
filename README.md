@@ -70,6 +70,10 @@ Mediabunny is a JavaScript library for reading, writing, and converting media (l
   <a href="https://jellypod.ai/" target="_blank" rel="sponsored">
     <img src="./docs/public/sponsors/jellypod.png" width="40" height="40" alt="Jellypod">
   </a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.photocircleapp.com/" target="_blank" rel="sponsored">
+    <img src="./docs/public/sponsors/photocircle.png" width="40" height="40" alt="PhotoCircle">
+  </a>
 </div>
 
 [Sponsor Mediabunny's development](https://github.com/sponsors/Vanilagy)

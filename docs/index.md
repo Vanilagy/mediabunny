@@ -110,6 +110,7 @@ const sponsors = {
 		{ image: '/sponsors/rve.png', name: 'React Video Editor', url: 'https://www.reactvideoeditor.com/' },
 		{ image: '/sponsors/mux.jpg', name: 'Mux', url: 'https://www.mux.com/' },
 		{ image: '/sponsors/jellypod.png', name: 'Jellypod', url: 'https://jellypod.ai/' },
+		{ image: '/sponsors/photocircle.png', name: 'PhotoCircle', url: 'https://www.photocircleapp.com/' },
 	],
 	individual: [
 		{ image: '/sponsors/pintura-labs.png', name: 'Pintura Labs', url: 'https://pqina.nl/pintura/' },
