@@ -28,6 +28,7 @@ import { OggMuxer } from './ogg/ogg-muxer';
 import { Output, OutputTrack, TrackType } from './output';
 import { MpegTsMuxer } from './mpeg-ts/mpeg-ts-muxer';
 import { WaveMuxer } from './wave/wave-muxer';
+import { AiffMuxer } from './aiff/aiff-muxer';
 import { HlsMuxer } from './hls/hls-muxer';
 import { HLS_MIME_TYPE } from './hls/hls-misc';
 import { MaybePromise, FilePath, toArray } from './misc';
@@ -800,6 +801,101 @@ export class WavOutputFormat extends OutputFormat {
 		return [
 			...PCM_AUDIO_CODECS.filter(codec =>
 				['pcm-s16', 'pcm-s24', 'pcm-s32', 'pcm-f32', 'pcm-u8', 'ulaw', 'alaw'].includes(codec),
+			),
+		];
+	}
+
+	get supportsVideoRotationMetadata() {
+		return false;
+	}
+
+	get supportsTimestampedMediaData() {
+		return false;
+	}
+}
+
+/**
+ * AIFF-specific output options.
+ * @group Output formats
+ * @public
+ */
+export type AiffOutputFormatOptions = {
+	/**
+	 * The metadata format to use for writing metadata tags.
+	 *
+	 * - `'text'` (default): Writes metadata into the native AIFF text chunks (`NAME`, `AUTH`, `ANNO`). Only allows for
+	 * a limited subset of tags (title, artist, comment) to be written.
+	 * - `'id3'`: Writes metadata into an ID3 chunk. Non-default, but used by many taggers in practice. Allows for a
+	 * much larger and richer set of tags to be written.
+	 */
+	metadataFormat?: 'text' | 'id3';
+
+	/**
+	 * Will be called once the file header is written. The header consists of the FORM header, the COMM chunk, any
+	 * metadata chunks, and the start of the SSND chunk (with a placeholder size).
+	 */
+	onHeader?: (data: Uint8Array, position: number) => unknown;
+};
+
+/**
+ * AIFF / AIFF-C file format. Big-endian, IFF-based audio. Uncompressed signed PCM is written as plain AIFF; floating-
+ * point and µ-law/A-law data is written as AIFF-C.
+ * @group Output formats
+ * @public
+ */
+export class AiffOutputFormat extends OutputFormat {
+	/** @internal */
+	_options: AiffOutputFormatOptions;
+
+	/** Creates a new {@link AiffOutputFormat} configured with the specified `options`. */
+	constructor(options: AiffOutputFormatOptions = {}) {
+		if (!options || typeof options !== 'object') {
+			throw new TypeError('options must be an object.');
+		}
+		if (options.metadataFormat !== undefined && !['text', 'id3'].includes(options.metadataFormat)) {
+			throw new TypeError('options.metadataFormat, when provided, must be either \'text\' or \'id3\'.');
+		}
+		if (options.onHeader !== undefined && typeof options.onHeader !== 'function') {
+			throw new TypeError('options.onHeader, when provided, must be a function.');
+		}
+
+		super();
+
+		this._options = options;
+	}
+
+	/** @internal */
+	_createMuxer(output: Output) {
+		return new AiffMuxer(output, this);
+	}
+
+	/** @internal */
+	get _name() {
+		return 'AIFF';
+	}
+
+	getSupportedTrackCounts(): TrackCountLimits {
+		return {
+			video: { min: 0, max: 0 },
+			audio: { min: 1, max: 1 },
+			subtitle: { min: 0, max: 0 },
+			total: { min: 1, max: 1 },
+		};
+	}
+
+	get fileExtension() {
+		return '.aiff';
+	}
+
+	get mimeType() {
+		return 'audio/aiff';
+	}
+
+	getSupportedCodecs(): MediaCodec[] {
+		return [
+			...PCM_AUDIO_CODECS.filter(codec =>
+				['pcm-s8', 'pcm-s16be', 'pcm-s24be', 'pcm-s32be', 'pcm-f32be', 'pcm-f64be', 'ulaw', 'alaw']
+					.includes(codec),
 			),
 		];
 	}
