@@ -897,6 +897,17 @@ export class MatroskaMuxer extends Muxer {
 		try {
 			const trackData = this.getVideoTrackData(track, packet, meta);
 
+			let packetData = packet.data;
+			if (track.source._codec === 'prores') {
+				if (packetData.byteLength < 8) {
+					throw new Error('ProRes packet too small, expected at least 8 bytes.');
+				}
+
+				// Trim off the frame container atom header. FFmpeg does this too and cites the "Matroska spec" as the
+				// reason, despite the spec not saying anything about this.
+				packetData = packetData.subarray(8);
+			}
+
 			const isKeyFrame = packet.type === 'key';
 			this.validateTimestamp(trackData.track, packet.timestamp, isKeyFrame);
 
@@ -913,7 +924,7 @@ export class MatroskaMuxer extends Muxer {
 				? packet.sideData.alpha ?? null
 				: null;
 
-			const videoChunk = this.createInternalChunk(packet.data, timestamp, duration, packet.type, additions);
+			const videoChunk = this.createInternalChunk(packetData, timestamp, duration, packet.type, additions);
 			if (track.source._codec === 'vp9') this.fixVP9ColorSpace(trackData, videoChunk);
 
 			trackData.chunkQueue.push(videoChunk);

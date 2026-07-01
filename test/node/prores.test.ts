@@ -7,7 +7,7 @@ import { Output } from '../../src/output.js';
 import { MkvOutputFormat, MovOutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
 import { Conversion } from '../../src/conversion.js';
-import { VideoSampleSink } from '../../src/media-sink.js';
+import { EncodedPacketSink, VideoSampleSink } from '../../src/media-sink.js';
 import { assert } from '../../src/misc.js';
 
 const SAMPLE_URL = 'https://pub-1ee78aacb848486482b20a72b55b3121.r2.dev/turbores-sample.mov';
@@ -88,6 +88,10 @@ test.concurrent('ProRes transmuxing into MKV', { timeout: 10_000 }, async () => 
 	});
 	await conversion.execute();
 
+	// No 'icpf' means the frame container atom headers were successfully stripped from the ProRes packets
+	let str = new TextDecoder('ascii').decode(output.target.buffer!);
+	expect(str.includes('icpf')).toBe(false);
+
 	using newInput = new Input({
 		source: new BufferSource(output.target.buffer!),
 		formats: ALL_FORMATS,
@@ -100,6 +104,14 @@ test.concurrent('ProRes transmuxing into MKV', { timeout: 10_000 }, async () => 
 	const decoderConfig = (await videoTrack.getDecoderConfig())!;
 	expect(decoderConfig.codec).toBe('apch');
 	expect(decoderConfig.description).toBeUndefined();
+
+	const sink = new EncodedPacketSink(videoTrack);
+	const firstPacket = await sink.getFirstPacket();
+	assert(firstPacket);
+
+	// The frame container atom headers are added back when reading out the packets
+	str = new TextDecoder('ascii').decode(firstPacket.data);
+	expect(str.includes('icpf')).toBe(true);
 });
 
 test('Custom coder registration', { timeout: 10_000 }, async () => {
