@@ -83,16 +83,12 @@ class ProresDecoder extends CustomVideoDecoder {
 	async decode(packet: EncodedPacket) {
 		assert(this.decoder);
 
-		if (this.decoder.useSharedMemory) {
-			await this.runDecode(packet);
-		} else {
-			while (this.decoder.decodeQueueSize >= this.decoder.concurrency) {
-				await this.decoder.dequeued;
-			}
-
-			void this.runDecode(packet)
-				.catch(error => this.onError(error));
+		while (this.decoder.desiredSize <= 0) {
+			await this.decoder.dequeued;
 		}
+
+		void this.runDecode(packet)
+			.catch(error => this.onError(error));
 	}
 
 	private async runDecode(packet: EncodedPacket) {

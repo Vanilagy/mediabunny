@@ -24,6 +24,9 @@ const videoElement = document.querySelector('video') as HTMLVideoElement;
 const compressionFacts = document.querySelector('#compression-facts') as HTMLParagraphElement;
 const errorElement = document.querySelector('#error-element') as HTMLParagraphElement;
 
+import { registerProresDecoder } from '@mediabunny/prores';
+registerProresDecoder();
+
 let currentConversion: Conversion | null = null;
 let currentIntervalId = -1;
 
