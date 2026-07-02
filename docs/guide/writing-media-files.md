@@ -342,7 +342,7 @@ Each chunk written to the `WritableStream` represents a contiguous chunk of byte
 ::: warning
 Note that some byte regions in the output file may be written to multiple times. It is therefore **incorrect** to construct the final file by simply concatenating all `Uint8Array`s together - you **must** write each chunk of data at the specified byte offset position _in the order_ in which the chunks arrived. If you don't do this, your output file will likely be invalid or corrupted.
 
-Some [output formats](./output-formats) have *append-only* writing modes in which the byte offset of a written chunk will always be equal to the total number of bytes in all previously written chunks. In other words, when writing is append-only, simply concatening all `Uint8Array`s yields the correct result. Some APIs (like `appendBuffer` of Media Source Extensions) require this, so make sure to configure your output format accordingly for those cases.
+Some [output formats](./output-formats) have *append-only* writing modes in which the byte offset of a written chunk will always be equal to the total number of bytes in all previously written chunks. In other words, when writing is append-only, simply concatenating all `Uint8Array`s yields the correct result. Some APIs (like `appendBuffer` of Media Source Extensions) require this, so make sure to configure your output format accordingly for those cases.
 :::
 
 #### Chunked mode
