@@ -267,6 +267,29 @@ export const concatAvcNalUnits = (nalUnits: Uint8Array[], decoderConfig: VideoDe
 	}
 };
 
+// This function sanitizes the contents of an AVC packet such that Chromium's key frame detection
+// does not trip up on its contents.
+// See https://issues.chromium.org/issues/470109459.
+export const sanitizeAvcPacketForChromium = (
+	packetData: Uint8Array,
+	decoderConfig: VideoDecoderConfig,
+): Uint8Array => {
+	const filteredNalUnits: Uint8Array[] = [];
+
+	for (const loc of iterateAvcNalUnits(packetData, decoderConfig)) {
+		const type = extractNalUnitTypeForAvc(packetData[loc.offset]!);
+
+		// These trip up Chromium's key frame detection, so let's strip them
+		if (type >= 20 && type <= 31) {
+			continue;
+		}
+
+		filteredNalUnits.push(packetData.subarray(loc.offset, loc.offset + loc.length));
+	}
+
+	return concatAvcNalUnits(filteredNalUnits, decoderConfig);
+};
+
 /** Builds an AvcDecoderConfigurationRecord from an AVC packet in Annex B format. */
 export const extractAvcDecoderConfigurationRecord = (packetData: Uint8Array): AvcDecoderConfigurationRecord | null => {
 	try {

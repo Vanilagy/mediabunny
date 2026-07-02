@@ -8,16 +8,13 @@
 
 import { parsePcmCodec, PCM_AUDIO_CODECS, PcmAudioCodec, VideoCodec, AudioCodec } from './codec';
 import {
-	AvcNalUnitType,
-	concatAvcNalUnits,
 	deserializeAvcDecoderConfigurationRecord,
 	determineVideoPacketType,
-	extractNalUnitTypeForAvc,
 	extractNalUnitTypeForHevc,
 	HevcNalUnitType,
-	iterateAvcNalUnits,
 	iterateHevcNalUnits,
 	parseAvcSps,
+	sanitizeAvcPacketForChromium,
 	sanitizeHevcPacketForChromium,
 } from './codec-data';
 import { CustomVideoDecoder, customVideoDecoders, CustomAudioDecoder, customAudioDecoders } from './custom-coder';
@@ -1010,25 +1007,7 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			if (isChromium() && this.currentPacketIndex === 0) {
 				if (this.codec === 'avc') {
 					// Workaround for https://issues.chromium.org/issues/470109459
-					const filteredNalUnits: Uint8Array[] = [];
-
-					for (const loc of iterateAvcNalUnits(packet.data, this.decoderConfig)) {
-						const type = extractNalUnitTypeForAvc(packet.data[loc.offset]!);
-
-						if (type === AvcNalUnitType.AUD) {
-							// If packets contain an AUD and have NALUs before it, this trips up Chromium's key frame
-							// detector. Clear the NALUs if an AUD is encountered.
-							// https://github.com/Vanilagy/mediabunny/issues/396
-							filteredNalUnits.length = 0;
-						}
-
-						// These trip up Chromium's key frame detection, so let's strip them
-						if (!(type >= 20 && type <= 31)) {
-							filteredNalUnits.push(packet.data.subarray(loc.offset, loc.offset + loc.length));
-						}
-					}
-
-					const newData = concatAvcNalUnits(filteredNalUnits, this.decoderConfig);
+					const newData = sanitizeAvcPacketForChromium(packet.data, this.decoderConfig);
 					packet = new EncodedPacket(newData, packet.type, packet.timestamp, packet.duration);
 				} else if (this.codec === 'hevc') {
 					// Workaround for https://issues.chromium.org/issues/507611247
