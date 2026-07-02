@@ -838,7 +838,7 @@ export class Conversion {
 		if (this._options.trim?.start !== undefined) {
 			this._startTimestamp = this._options.trim.start;
 		} else {
-			// Compute the start timestamp from the set of filtered tracks. Techncially these can still be narrowed
+			// Compute the start timestamp from the set of filtered tracks. Technically these can still be narrowed
 			// down later due to discarded tracks, but we need to fix the start timestamp now due to track processing
 			// depending on it.
 			this._startTimestamp = Math.max(
