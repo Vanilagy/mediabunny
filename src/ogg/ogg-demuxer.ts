@@ -638,11 +638,11 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 
 		const lowPages: Page[] = [lowPage];
 
-		// First, let's perform a binary serach (bisection search) on the file to find the approximate page where
+		// First, let's perform a binary search (bisection search) on the file to find the approximate page where
 		// we'll find the packet. We want to find a page whose end packet position is less than or equal to the
 		// packet position we're searching for.
 
-		// Outer loop: Does the binary serach
+		// Outer loop: Does the binary search
 		outer:
 		while (lowPage.headerStartPos + lowPage.totalSize < high) {
 			const low = lowPage.headerStartPos;

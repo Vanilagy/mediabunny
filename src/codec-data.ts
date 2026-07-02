@@ -1878,7 +1878,7 @@ export type Av1CodecInfo = {
 	chromaSamplePosition: number;
 };
 
-/** Iterates over all OBUs in an AV1 packet bistream. */
+/** Iterates over all OBUs in an AV1 packet bitstream. */
 export const iterateAv1PacketObus = function* (packet: Uint8Array) {
 	// https://aomediacodec.github.io/av1-spec/av1-spec.pdf
 

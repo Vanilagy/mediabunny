@@ -186,7 +186,7 @@ export class FlacDemuxer extends Demuxer {
 						// description is required, and has to be the following:
 						// 1. The bytes 0x66 0x4C 0x61 0x43 ("fLaC" in ASCII)
 						// 2. A metadata block (called the STREAMINFO block) as described in section 7 of [FLAC]
-						// 3. Optionaly (sic) other metadata blocks, that are not used by the specification
+						// 3. Optionally (sic) other metadata blocks, that are not used by the specification
 
 						bitstream.skipBits(16 * 8); // md5 hash
 
@@ -296,7 +296,7 @@ export class FlacDemuxer extends Demuxer {
 		// we expect that there are at least `minimumFrameSize` bytes left in the file
 
 		// Ideally we also want to validate the next header is valid
-		// to throw out an accidential sync word
+		// to throw out an accidental sync word
 
 		// The shortest valid FLAC header I can think of, based off the code
 		// of readFlacFrameHeader:

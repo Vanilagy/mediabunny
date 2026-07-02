@@ -103,7 +103,7 @@ const mp3EncoderVariants = await createVariants(
 	'packages/mp3-encoder/src/index.ts',
 	'MediabunnyMp3Encoder',
 	'packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder',
-	'js', // The bundles are purely for the browser, not for Node (due to the peer dependecy)
+	'js', // The bundles are purely for the browser, not for Node (due to the peer dependency)
 	{
 		plugins: [
 			PluginExternalGlobal.externalGlobalPlugin({
@@ -134,7 +134,7 @@ const ac3Variants = await createVariants(
 	'packages/ac3/src/index.ts',
 	'MediabunnyAc3',
 	'packages/ac3/dist/bundles/mediabunny-ac3',
-	'js', // The bundles are purely for the browser, not for Node (due to the peer dependecy)
+	'js', // The bundles are purely for the browser, not for Node (due to the peer dependency)
 	{
 		plugins: [
 			PluginExternalGlobal.externalGlobalPlugin({
@@ -165,7 +165,7 @@ const aacEncoderVariants = await createVariants(
 	'packages/aac-encoder/src/index.ts',
 	'MediabunnyAacEncoder',
 	'packages/aac-encoder/dist/bundles/mediabunny-aac-encoder',
-	'js', // The bundles are purely for the browser, not for Node (due to the peer dependecy)
+	'js', // The bundles are purely for the browser, not for Node (due to the peer dependency)
 	{
 		plugins: [
 			PluginExternalGlobal.externalGlobalPlugin({
@@ -196,7 +196,7 @@ const flacEncoderVariants = await createVariants(
 	'packages/flac-encoder/src/index.ts',
 	'MediabunnyFlacEncoder',
 	'packages/flac-encoder/dist/bundles/mediabunny-flac-encoder',
-	'js', // The bundles are purely for the browser, not for Node (due to the peer dependecy)
+	'js', // The bundles are purely for the browser, not for Node (due to the peer dependency)
 	{
 		plugins: [
 			PluginExternalGlobal.externalGlobalPlugin({
@@ -227,7 +227,7 @@ const proresVariants = await createVariants(
 	'packages/prores/src/index.ts',
 	'MediabunnyProres',
 	'packages/prores/dist/bundles/mediabunny-prores',
-	'js', // The bundles are purely for the browser, not for Node (due to the peer dependecy)
+	'js', // The bundles are purely for the browser, not for Node (due to the peer dependency)
 	{
 		plugins: [
 			PluginExternalGlobal.externalGlobalPlugin({

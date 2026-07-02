@@ -177,8 +177,8 @@ test('HLS track assignability is kept #1', async () => {
 
 	await output.finalize();
 
-	const masterPlayist = sanitizeMasterPlaylist(new TextDecoder().decode(files.get('master.m3u8')));
-	expect(masterPlayist.match(/\.m3u8/g)?.length).toBe(1);
+	const masterPlaylist = sanitizeMasterPlaylist(new TextDecoder().decode(files.get('master.m3u8')));
+	expect(masterPlaylist.match(/\.m3u8/g)?.length).toBe(1);
 
 	using input = new Input({
 		formats: ALL_FORMATS,
@@ -208,8 +208,8 @@ test('HLS track assignability is kept #1', async () => {
 	const conversion = await Conversion.init({ input, output: newOutput });
 	await conversion.execute();
 
-	const newMasterPlayist = sanitizeMasterPlaylist(new TextDecoder().decode(files.get('new/master.m3u8')));
-	expect(newMasterPlayist).toBe(masterPlayist);
+	const newMasterPlaylist = sanitizeMasterPlaylist(new TextDecoder().decode(files.get('new/master.m3u8')));
+	expect(newMasterPlaylist).toBe(masterPlaylist);
 });
 
 test('HLS track assignability is kept #2', async () => {
@@ -256,8 +256,8 @@ test('HLS track assignability is kept #2', async () => {
 
 	await output.finalize();
 
-	const masterPlayist = sanitizeMasterPlaylist(new TextDecoder().decode(files.get('master.m3u8')));
-	expect(masterPlayist.match(/\.m3u8/g)?.length).toBe(2);
+	const masterPlaylist = sanitizeMasterPlaylist(new TextDecoder().decode(files.get('master.m3u8')));
+	expect(masterPlaylist.match(/\.m3u8/g)?.length).toBe(2);
 
 	using input = new Input({
 		formats: ALL_FORMATS,
@@ -287,8 +287,8 @@ test('HLS track assignability is kept #2', async () => {
 	const conversion = await Conversion.init({ input, output: newOutput });
 	await conversion.execute();
 
-	const newMasterPlayist = sanitizeMasterPlaylist(new TextDecoder().decode(files.get('new/master.m3u8')));
-	expect(newMasterPlayist).toBe(masterPlayist);
+	const newMasterPlaylist = sanitizeMasterPlaylist(new TextDecoder().decode(files.get('new/master.m3u8')));
+	expect(newMasterPlaylist).toBe(masterPlaylist);
 });
 
 test('HLS track assignability can be overridden', async () => {
@@ -335,8 +335,8 @@ test('HLS track assignability can be overridden', async () => {
 
 	await output.finalize();
 
-	const masterPlayist = sanitizeMasterPlaylist(new TextDecoder().decode(files.get('master.m3u8')));
-	expect(masterPlayist.match(/\.m3u8/g)?.length).toBe(2);
+	const masterPlaylist = sanitizeMasterPlaylist(new TextDecoder().decode(files.get('master.m3u8')));
+	expect(masterPlaylist.match(/\.m3u8/g)?.length).toBe(2);
 
 	using input = new Input({
 		formats: ALL_FORMATS,
@@ -371,9 +371,9 @@ test('HLS track assignability can be overridden', async () => {
 	});
 	await conversion.execute();
 
-	const newMasterPlayist = sanitizeMasterPlaylist(new TextDecoder().decode(files.get('new/master.m3u8')));
-	expect(newMasterPlayist).not.toBe(masterPlayist);
-	expect(newMasterPlayist.match(/\.m3u8/g)?.length).toBe(1);
+	const newMasterPlaylist = sanitizeMasterPlaylist(new TextDecoder().decode(files.get('new/master.m3u8')));
+	expect(newMasterPlaylist).not.toBe(masterPlaylist);
+	expect(newMasterPlaylist.match(/\.m3u8/g)?.length).toBe(1);
 });
 
 test('Fractional audio sample boundary', async () => {

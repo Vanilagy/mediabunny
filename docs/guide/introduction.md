@@ -60,7 +60,7 @@ To get going with Mediabunny, here are some starting points:
 
 ## Server-side usage
 
-Mediabunny's simple yet flexible API provides a modern alternative to traditional server-side media processing pipelines which may involve calling out to FFmpeg's CLI manually. Mediabunny was primary built for client-side environments, but when combined with the [`@mediabunny/server`](./extensions/server) extension, the full Mediabunny feature set is available in server-side environments such as Node, Bun, and Deno.
+Mediabunny's simple yet flexible API provides a modern alternative to traditional server-side media processing pipelines which may involve calling out to FFmpeg's CLI manually. Mediabunny was primarily built for client-side environments, but when combined with the [`@mediabunny/server`](./extensions/server) extension, the full Mediabunny feature set is available in server-side environments such as Node, Bun, and Deno.
 
 The extension enables:
 - Video decoders and encoders for AVC (H.264), HEVC (H.265), VP8, VP9, and AV1. Supports both length-prefixed and Annex B AVC/HEVC as well as transparent video via VP9.
@@ -74,7 +74,7 @@ For more, see [the corresponding guide](./extensions/server).
 
 ## Motivation
 
-Mediabunny is the evolution of my previous libraries, [mp4-muxer](https://github.com/Vanilagy/mp4-muxer) and [webm-muxer](https://github.com/Vanilagy/webm-muxer), which were both created due to the advent of the WebCodecs API. While they fulfilled their job just fine, I saw a few painpoints:
+Mediabunny is the evolution of my previous libraries, [mp4-muxer](https://github.com/Vanilagy/mp4-muxer) and [webm-muxer](https://github.com/Vanilagy/webm-muxer), which were both created due to the advent of the WebCodecs API. While they fulfilled their job just fine, I saw a few pain points:
 - Lots of duplicated code between the two libraries, otherwise very similar API.
 - No help with the difficulties of navigating the WebCodecs API & related browser APIs.
 - "mp4-demuxer when??"

@@ -172,7 +172,7 @@ export class AudioResampler {
 
 	async add(audioSample: AudioSample) {
 		if (this.sourceSampleRate === null) {
-			// This is the first sample, so let's init the missing data. Initting the sample rate from the decoded
+			// This is the first sample, so let's init the missing data. Initing the sample rate from the decoded
 			// sample is more reliable than using the file's metadata, because decoders are free to emit any sample rate
 			// they see fit.
 			this.sourceSampleRate = audioSample.sampleRate;
