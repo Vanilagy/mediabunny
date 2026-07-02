@@ -35,7 +35,7 @@
   },
   "dependencies": {
     "node-av": "^6.0.0",
-    "@mediabunny/prores": "^1.50.0"
+    "@mediabunny/prores": "^1.50.4"
   },
   "peerDependencies": {
     "mediabunny": "^1.45.0"
