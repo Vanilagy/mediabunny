@@ -2129,7 +2129,7 @@ class ReadOrchestrator {
 				}
 			})
 			.finally(() => {
-				if (worker.running || this.workers.length >= this.options.maxWorkerCount) {
+				if (worker.running) {
 					// Rare, but can happen with multiple concurrent reads. In this case, don't do anything.
 					return;
 				}
@@ -2144,15 +2144,19 @@ class ReadOrchestrator {
 					}
 
 					const queuedRead = this.queuedReads[oldestIndex]!;
-					this.queuedReads.splice(oldestIndex, 1);
 
 					const newWorker = this.createWorker(
 						queuedRead.hole.start,
 						queuedRead.hole.end,
 						queuedRead.strictTarget,
 					);
-					assert(newWorker); // We just freed up a worker, so this should never fail
+					if (!newWorker) {
+						// In high-contention cases, it could be that we've already reached max worker count, so in this
+						// case we don't do anything.
+						return;
+					}
 
+					this.queuedReads.splice(oldestIndex, 1);
 					newWorker.pendingSlices = queuedRead.pendingSlices;
 					this.runWorker(newWorker);
 				}
