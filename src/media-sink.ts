@@ -1011,15 +1011,22 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 				if (this.codec === 'avc') {
 					// Workaround for https://issues.chromium.org/issues/470109459
 					const filteredNalUnits: Uint8Array[] = [];
+					let hasFrameData = false;
 
 					for (const loc of iterateAvcNalUnits(packet.data, this.decoderConfig)) {
 						const type = extractNalUnitTypeForAvc(packet.data[loc.offset]!);
+						hasFrameData ||= type >= 1 && type <= 5;
 
 						if (type === AvcNalUnitType.AUD) {
-							// If packets contain an AUD and have NALUs before it, this trips up Chromium's key frame
-							// detector. Clear the NALUs if an AUD is encountered.
-							// https://github.com/Vanilagy/mediabunny/issues/396
-							filteredNalUnits.length = 0;
+							if (hasFrameData) {
+								// Already has actual frame data, so treat an AUD as simply the end of the packet
+								break;
+							} else {
+								// If packets contain an AUD and have NALUs before it, this trips up Chromium's key
+								// frame detector. Clear the NALUs if an AUD is encountered.
+								// https://github.com/Vanilagy/mediabunny/issues/396
+								filteredNalUnits.length = 0;
+							}
 						}
 
 						// These trip up Chromium's key frame detection, so let's strip them
