@@ -544,7 +544,8 @@ export class InputVideoTrack extends InputTrack {
 	}
 
 	async hasOnlyKeyPackets() {
-		return (await this._backing.getHasOnlyKeyPackets?.()) ?? false;
+		return (await this._backing.getHasOnlyKeyPackets?.())
+			?? (await this._backing.getCodec() === 'prores'); // Only ProRes is fully intra-frame
 	}
 
 	/** Returns the width in pixels of the track's coded samples, before any transformations or rotations. */
