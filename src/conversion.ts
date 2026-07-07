@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -14,6 +14,7 @@ import {
 	VideoCodec,
 } from './codec';
 import {
+	AudioEncodingConfig,
 	getEncodableAudioCodecs,
 	getFirstEncodableVideoCodec,
 	Quality,
@@ -22,6 +23,8 @@ import {
 } from './encode';
 import { Input } from './input';
 import { InputAudioTrack, InputTrack, InputVideoTrack } from './input-track';
+import { Logging } from './logging';
+import { AudioSampleCursor, PacketCursor, VideoSampleCursor } from './cursors';
 import {
 	AudioSource,
 	EncodedVideoPacketSource,
@@ -32,6 +35,8 @@ import {
 } from './media-source';
 import {
 	assert,
+	assertNever,
+	ceilToMultipleOfTwo,
 	clamp,
 	isIso639Dash2LanguageCode,
 	MaybePromise,
@@ -39,12 +44,19 @@ import {
 	promiseWithResolvers,
 	Rotation,
 } from './misc';
-import { Output, TrackType } from './output';
+import { Output, OutputTrackGroup, TrackType } from './output';
 import { Mp4OutputFormat } from './output-format';
-import { AudioSample, clampCropRectangle, validateCropRectangle, VideoSample } from './sample';
+import {
+	AudioSample,
+	clampCropRectangle,
+	CropRectangle,
+	getBytesPerSample,
+	validateCropRectangle,
+	VideoSample,
+	VideoSampleResource,
+} from './sample';
 import { MetadataTags, validateMetadataTags } from './metadata';
 import { NullTarget } from './target';
-import { AudioSampleCursor, canvasTransformer, PacketCursor, VideoSampleCursor, WrappedCanvas } from './cursors';
 
 /**
  * The options for media file conversion.
@@ -58,28 +70,54 @@ export type ConversionOptions = {
 	output: Output;
 
 	/**
+	 * Defines which input tracks are used for conversion. Defaults to `'all'` unless the input is an HLS input, in
+	 * which case it defaults to `'primary'`.
+	 *
+	 * - `'all'`: All input tracks are eligible for conversion.
+	 * - `'primary'`: Only the primary video and audio track from the input are eligible for conversion.
+	 */
+	tracks?: 'all' | 'primary';
+
+	/**
 	 * Video-specific options. When passing an object, the same options are applied to all video tracks. When passing a
 	 * function, it will be invoked for each video track and is expected to return or resolve to the options
 	 * for that specific track. The function is passed an instance of {@link InputVideoTrack} as well as a number `n`,
-	 * which is the 1-based index of the track in the list of all video tracks.
+	 * which is the 1-based index of the track in the list of all video tracks. Using `n` is deprecated, prefer the
+	 * identical `track.number` instead.
+	 *
+	 * When passing an array of a function that returns an array, one output track per array element will be created,
+	 * allowing for "fan-out". Useful for creating multiple variants from a single track, for example with different
+	 * resolutions.
 	 */
 	video?: ConversionVideoOptions
-		| ((track: InputVideoTrack, n: number) => MaybePromise<ConversionVideoOptions | undefined>);
+		| ConversionVideoOptions[]
+		| ((track: InputVideoTrack, n: number) => MaybePromise<
+			ConversionVideoOptions | ConversionVideoOptions[] | undefined
+		>);
 
 	/**
 	 * Audio-specific options. When passing an object, the same options are applied to all audio tracks. When passing a
 	 * function, it will be invoked for each audio track and is expected to return or resolve to the options
 	 * for that specific track. The function is passed an instance of {@link InputAudioTrack} as well as a number `n`,
-	 * which is the 1-based index of the track in the list of all audio tracks.
+	 * which is the 1-based index of the track in the list of all audio tracks. Using `n` is deprecated, prefer the
+	 * identical `track.number` instead.
+	 *
+	 * When passing an array of a function that returns an array, one output track per array element will be created,
+	 * allowing for "fan-out". Useful for creating multiple variants from a single track, for example with different
+	 * bitrates.
 	 */
 	audio?: ConversionAudioOptions
-		| ((track: InputAudioTrack, n: number) => MaybePromise<ConversionAudioOptions | undefined>);
+		| ConversionAudioOptions[]
+		| ((track: InputAudioTrack, n: number) => MaybePromise<
+			ConversionAudioOptions | ConversionAudioOptions[] | undefined
+		>);
 
 	/** Options to trim the input file. */
 	trim?: {
 		/**
 		 * The time in the input file in seconds at which the output file should start. Must be less than `end`.
-		 * Defaults to 0 when omitted.
+		 * When omitted, defaults to the earliest start timestamp of the non-discarded tracks, or to 0, whichever
+		 * is higher.
 		 */
 		start?: number;
 		/**
@@ -135,12 +173,11 @@ export type ConversionVideoOptions = {
 	fit?: 'fill' | 'contain' | 'cover';
 	/**
 	 * The angle in degrees to rotate the input video by, clockwise. Rotation is applied before cropping and resizing.
-	 * This rotation is _in addition to_ the natural rotation of the input video as specified in the input file's
-	 * metadata.
+	 * This rotation is _in addition to_ the natural rotation of the input video as specified in input file's metadata.
 	 */
 	rotate?: Rotation;
 	/**
-	 * Defaults to `true`. When enabaled, Mediabunny will use the rotation metadata in the output file to perform video
+	 * Defaults to `true`. When enabled, Mediabunny will use the rotation metadata in the output file to perform video
 	 * rotation whenever possible. Set this field to `false` if you want to ensure the output file does not make use of
 	 * rotation metadata and that any rotation is baked into the video frames directly.
 	 */
@@ -149,16 +186,7 @@ export type ConversionVideoOptions = {
 	 * Specifies the rectangular region of the input video to crop to. The crop region will automatically be clamped to
 	 * the dimensions of the input video track. Cropping is performed after rotation but before resizing.
 	 */
-	crop?: {
-		/** The distance in pixels from the left edge of the source frame to the left edge of the crop rectangle. */
-		left: number;
-		/** The distance in pixels from the top edge of the source frame to the top edge of the crop rectangle. */
-		top: number;
-		/** The width in pixels of the crop rectangle. */
-		width: number;
-		/** The height in pixels of the crop rectangle. */
-		height: number;
-	};
+	crop?: CropRectangle;
 	/**
 	 * The desired frame rate of the output video, in hertz. If not specified, the original input frame rate will
 	 * be used (which may be variable).
@@ -179,7 +207,7 @@ export type ConversionVideoOptions = {
 	 * frames improve seeking behavior but increase file size. When using multiple video tracks, you should give them
 	 * all the same key frame interval.
 	 *
-	 * Setting this field forces a transcode.
+	 * Setting this fields forces a transcode.
 	 */
 	keyFrameInterval?: number;
 	/**
@@ -194,16 +222,17 @@ export type ConversionVideoOptions = {
 	 * timestamp modifications. Will be called for each input video sample after transformations and frame rate
 	 * corrections.
 	 *
-	 * Must return a {@link VideoSample} or a `CanvasImageSource`, an array of them, or `null` for dropping the frame.
-	 * When non-timestamped data is returned, the timestamp and duration from the source sample will be used. Rotation
-	 * metadata of the returned sample will be ignored.
+	 * Must return a {@link VideoSample}, a {@link VideoSampleResource} or a `CanvasImageSource`, an array of them, or
+	 * `null` for dropping the frame. When non-timestamped data is returned, the timestamp and duration from the source
+	 * sample will be used. Rotation metadata of the returned sample will be ignored.
 	 *
 	 * This function can also be used to manually resize frames. When doing so, you should signal the post-process
 	 * dimensions using the `processedWidth` and `processedHeight` fields, which enables the encoder to better know what
 	 * to expect. If these fields aren't set, Mediabunny will assume you won't perform any resizing.
 	 */
 	process?: (sample: VideoSample) => MaybePromise<
-		CanvasImageSource | VideoSample | (CanvasImageSource | VideoSample)[] | null
+		CanvasImageSource | VideoSample | VideoSampleResource
+		| (CanvasImageSource | VideoSample | VideoSampleResource)[] | null
 	>;
 	/**
 	 * An optional hint specifying the width of video samples returned by the `process` function, for better
@@ -215,6 +244,13 @@ export type ConversionVideoOptions = {
 	 * encoder configuration.
 	 */
 	processedHeight?: number;
+	/**
+	 * Defines the group(s) the output track is a part of. For more, see {@link BaseTrackMetadata.group}.
+	 *
+	 * If left blank, tracks will internally be assigned to groups such that the output track pairability graph exactly
+	 * matches the input track pairability graph.
+	 */
+	group?: OutputTrackGroup | OutputTrackGroup[];
 };
 
 /**
@@ -229,6 +265,13 @@ export type ConversionAudioOptions = {
 	numberOfChannels?: number;
 	/** The desired sample rate of the output audio, in hertz. */
 	sampleRate?: number;
+	/**
+	 * The desired sample format (and therefore bit depth) of the audio samples before they are passed to the encoder.
+	 * Can be used to control bit depth with certain output codecs such as FLAC.
+	 *
+	 * Setting this field forces audio transcoding.
+	 */
+	sampleFormat?: 'u8' | 's16' | 's32' | 'f32';
 	/** The desired output audio codec. */
 	codec?: AudioCodec;
 	/** The desired bitrate of the output audio. */
@@ -259,10 +302,17 @@ export type ConversionAudioOptions = {
 	 * encoder configuration.
 	 */
 	processedSampleRate?: number;
+	/**
+	 * Defines the group(s) the output track is a part of. For more, see {@link BaseTrackMetadata.group}.
+	 *
+	 * If left blank, tracks will internally be assigned to groups such that the output track pairability graph exactly
+	 * matches the input track pairability graph.
+	 */
+	group?: OutputTrackGroup | OutputTrackGroup[];
 };
 
-const validateVideoOptions = (videoOptions: ConversionVideoOptions | undefined) => {
-	if (videoOptions !== undefined && (!videoOptions || typeof videoOptions !== 'object')) {
+const validateVideoOptions = (videoOptions: ConversionVideoOptions) => {
+	if (!videoOptions || typeof videoOptions !== 'object') {
 		throw new TypeError('options.video, when provided, must be an object.');
 	}
 	if (videoOptions?.discard !== undefined && typeof videoOptions.discard !== 'boolean') {
@@ -356,10 +406,21 @@ const validateVideoOptions = (videoOptions: ConversionVideoOptions | undefined) 
 			+ ' \'prefer-software\'.',
 		);
 	}
+	if (
+		videoOptions?.group !== undefined
+		&& !(
+			videoOptions.group instanceof OutputTrackGroup
+			|| (Array.isArray(videoOptions.group) && videoOptions.group.every(x => x instanceof OutputTrackGroup))
+		)
+	) {
+		throw new TypeError(
+			'options.video.group, when provided, must be an OutputTrackGroup or an array of OutputTrackGroups.',
+		);
+	}
 };
 
-const validateAudioOptions = (audioOptions: ConversionAudioOptions | undefined) => {
-	if (audioOptions !== undefined && (!audioOptions || typeof audioOptions !== 'object')) {
+const validateAudioOptions = (audioOptions: ConversionAudioOptions) => {
+	if (!audioOptions || typeof audioOptions !== 'object') {
 		throw new TypeError('options.audio, when provided, must be an object.');
 	}
 	if (audioOptions?.discard !== undefined && typeof audioOptions.discard !== 'boolean') {
@@ -392,6 +453,12 @@ const validateAudioOptions = (audioOptions: ConversionAudioOptions | undefined) 
 	) {
 		throw new TypeError('options.audio.sampleRate, when provided, must be a positive integer.');
 	}
+	if (
+		audioOptions?.sampleFormat !== undefined
+		&& !['u8', 's16', 's32', 'f32'].includes(audioOptions.sampleFormat)
+	) {
+		throw new TypeError('options.audio.sampleFormat, when provided, must be one of: u8, s16, s32, f32.');
+	}
 	if (audioOptions?.process !== undefined && typeof audioOptions.process !== 'function') {
 		throw new TypeError('options.audio.process, when provided, must be a function.');
 	}
@@ -406,6 +473,17 @@ const validateAudioOptions = (audioOptions: ConversionAudioOptions | undefined) 
 		&& (!Number.isInteger(audioOptions.processedSampleRate) || audioOptions.processedSampleRate <= 0)
 	) {
 		throw new TypeError('options.audio.processedSampleRate, when provided, must be a positive integer.');
+	}
+	if (
+		audioOptions?.group !== undefined
+		&& !(
+			audioOptions.group instanceof OutputTrackGroup
+			|| (Array.isArray(audioOptions.group) && audioOptions.group.every(x => x instanceof OutputTrackGroup))
+		)
+	) {
+		throw new TypeError(
+			'options.audio.group, when provided, must be an OutputTrackGroup or an array of OutputTrackGroups.',
+		);
 	}
 };
 
@@ -441,6 +519,8 @@ export type DiscardedTrack = {
 		| 'unknown_source_codec'
 		| 'undecodable_source_codec'
 		| 'no_encodable_target_codec';
+	/** The options that were provided for this track, or `{}` if none were provided. */
+	trackOptions: ConversionVideoOptions | ConversionAudioOptions;
 };
 
 /**
@@ -458,9 +538,9 @@ export class Conversion {
 	/** @internal */
 	_options: ConversionOptions;
 	/** @internal */
-	_startTimestamp: number;
+	_startTimestamp!: number;
 	/** @internal */
-	_endTimestamp: number;
+	_endTimestamp!: number;
 
 	/** @internal */
 	_addedCounts: Record<TrackType, number> = {
@@ -471,6 +551,12 @@ export class Conversion {
 
 	/** @internal */
 	_totalTrackCount = 0;
+	/** @internal */
+	_nextOutputTrackId = 0;
+	/** @internal */
+	_outputTrackIds: number[] = [];
+	/** @internal */
+	_outputOwnTrackGroups: (OutputTrackGroup | null)[] = [];
 
 	/** @internal */
 	_trackPromises: Promise<void>[] = [];
@@ -494,24 +580,34 @@ export class Conversion {
 	_canceled = false;
 
 	/**
-	 * A callback that is fired whenever the conversion progresses. Returns a number between 0 and 1, indicating the
-	 * completion of the conversion. Note that a progress of 1 doesn't necessarily mean the conversion is complete;
-	 * the conversion is complete once `execute()` resolves.
+	 * A callback that is fired whenever the conversion progresses. Gets passed as first argument a number between
+	 * 0 and 1, indicating the completion of the conversion. Note that a progress of 1 doesn't necessarily mean the
+	 * conversion is complete; the conversion is complete once `execute()` resolves.
+	 *
+	 * As second argument, this callback receives the input time in seconds that has been processed.
 	 *
 	 * In order for progress to be computed, this property must be set before `execute` is called.
 	 */
-	onProgress?: (progress: number) => unknown = undefined;
+	onProgress?: (progress: number, processedTime: number) => unknown = undefined;
 	/** @internal */
 	_computeProgress = false;
 	/** @internal */
 	_lastProgress = 0;
+	/** @internal */
+	_lastProcessedTime = 0;
 
 	/**
 	 * Whether this conversion, as it has been configured, is valid and can be executed. If this field is `false`, check
 	 * the `discardedTracks` field for reasons.
+	 *
+	 * Note: a conversion having discarded tracks does not automatically mean it is invalid; if the remaining, utilized
+	 * tracks make for a valid output file, the conversion is still allowed.
 	 */
 	isValid = false;
-	/** The list of tracks that are included in the output file. */
+	/**
+	 * The list of tracks that are included in the output file. When fan-out is used, the same track appears in this
+	 * array multiple times.
+	 */
 	readonly utilizedTracks: InputTrack[] = [];
 	/** The list of tracks from the input file that have been discarded, alongside the discard reason. */
 	readonly discardedTracks: DiscardedTrack[] = [];
@@ -536,6 +632,15 @@ export class Conversion {
 			throw new TypeError('options.output must be an Output.');
 		}
 		if (
+			options.tracks !== undefined
+			&& options.tracks !== 'all'
+			&& options.tracks !== 'primary'
+		) {
+			throw new TypeError(
+				'options.tracks, when provided, must be either \'all\' or \'primary\'.',
+			);
+		}
+		if (
 			options.output._tracks.length > 0
 			|| Object.keys(options.output._metadataTags).length > 0
 			|| options.output.state !== 'pending'
@@ -543,14 +648,26 @@ export class Conversion {
 			throw new TypeError('options.output must be fresh: no tracks or metadata tags added and not started.');
 		}
 
-		if (typeof options.video !== 'function') {
-			validateVideoOptions(options.video);
+		if (options.video !== undefined && typeof options.video !== 'function') {
+			if (Array.isArray(options.video)) {
+				for (const obj of options.video) {
+					validateVideoOptions(obj);
+				}
+			} else {
+				validateVideoOptions(options.video);
+			}
 		} else {
 			// We'll validate the return value later
 		}
 
-		if (typeof options.audio !== 'function') {
-			validateAudioOptions(options.audio);
+		if (options.audio !== undefined && typeof options.audio !== 'function') {
+			if (Array.isArray(options.audio)) {
+				for (const obj of options.audio) {
+					validateAudioOptions(obj);
+				}
+			} else {
+				validateAudioOptions(options.audio);
+			}
 		} else {
 			// We'll validate the return value later
 		}
@@ -558,11 +675,11 @@ export class Conversion {
 		if (options.trim !== undefined && (!options.trim || typeof options.trim !== 'object')) {
 			throw new TypeError('options.trim, when provided, must be an object.');
 		}
-		if (options.trim?.start !== undefined && (!Number.isFinite(options.trim.start) || options.trim.start < 0)) {
-			throw new TypeError('options.trim.start, when provided, must be a non-negative number.');
+		if (options.trim?.start !== undefined && (!Number.isFinite(options.trim.start))) {
+			throw new TypeError('options.trim.start, when provided, must be a finite number.');
 		}
-		if (options.trim?.end !== undefined && (!Number.isFinite(options.trim.end) || options.trim.end < 0)) {
-			throw new TypeError('options.trim.end, when provided, must be a non-negative number.');
+		if (options.trim?.end !== undefined && (!Number.isFinite(options.trim.end))) {
+			throw new TypeError('options.trim.end, when provided, must be a finite number.');
 		}
 		if (
 			options.trim?.start !== undefined
@@ -588,9 +705,6 @@ export class Conversion {
 		this.input = options.input;
 		this.output = options.output;
 
-		this._startTimestamp = options.trim?.start ?? 0;
-		this._endTimestamp = options.trim?.end ?? Infinity;
-
 		const { promise: started, resolve: start } = promiseWithResolvers();
 		this._started = started;
 		this._start = start;
@@ -598,66 +712,195 @@ export class Conversion {
 
 	/** @internal */
 	async _init() {
-		const inputTracks = await this.input.getTracks();
+		const inputFormat = await this.input.getFormat();
+
+		let tracks: InputTrack[];
+
+		let trackMode = this._options.tracks;
+		if (trackMode === undefined) {
+			// HACK to keep bundle size low, temp for now
+			const defaultTrackMode = inputFormat.name.includes('(HLS)')
+				? 'primary'
+				: 'all';
+
+			trackMode = defaultTrackMode;
+		}
+
+		if (trackMode === 'all') {
+			tracks = await this.input.getTracks();
+		} else if (trackMode === 'primary') {
+			const primaryVideoTrack = await this.input.getPrimaryVideoTrack();
+			const primaryAudioTrack = await this.input.getPrimaryAudioTrack();
+
+			tracks = [primaryVideoTrack, primaryAudioTrack].filter(x => x !== null);
+		} else {
+			assertNever(trackMode);
+			assert(false);
+		}
+
 		const outputTrackCounts = this.output.format.getSupportedTrackCounts();
 
+		// Input track counters
 		let nVideo = 1;
 		let nAudio = 1;
 
-		for (const track of inputTracks) {
-			let trackOptions: ConversionVideoOptions | ConversionAudioOptions | undefined = undefined;
+		// All tracks that aren't discarded by the user
+		const filteredTracks: InputTrack[] = [];
+		const filteredTrackOptions: (ConversionVideoOptions | ConversionAudioOptions)[][] = [];
+
+		for (const track of tracks) {
+			let trackOptions: (ConversionVideoOptions | ConversionAudioOptions)[];
+
 			if (track.isVideoTrack()) {
 				if (this._options.video) {
 					if (typeof this._options.video === 'function') {
-						trackOptions = await this._options.video(track, nVideo);
-						validateVideoOptions(trackOptions);
+						const returnedTrackOptions = await this._options.video(track, nVideo) ?? {};
+						if (Array.isArray(returnedTrackOptions)) {
+							for (const obj of returnedTrackOptions) {
+								validateVideoOptions(obj);
+							}
+						} else {
+							validateVideoOptions(returnedTrackOptions);
+						}
+
+						trackOptions = Array.isArray(returnedTrackOptions)
+							? returnedTrackOptions
+							: [returnedTrackOptions];
+
 						nVideo++;
 					} else {
-						trackOptions = this._options.video;
+						// Already validated
+						trackOptions = Array.isArray(this._options.video)
+							? this._options.video
+							: [this._options.video];
 					}
+				} else {
+					trackOptions = [{}];
 				}
 			} else if (track.isAudioTrack()) {
 				if (this._options.audio) {
 					if (typeof this._options.audio === 'function') {
-						trackOptions = await this._options.audio(track, nAudio);
-						validateAudioOptions(trackOptions);
+						const returnedTrackOptions = await this._options.audio(track, nAudio) ?? {};
+						if (Array.isArray(returnedTrackOptions)) {
+							for (const obj of returnedTrackOptions) {
+								validateAudioOptions(obj);
+							}
+						} else {
+							validateAudioOptions(returnedTrackOptions);
+						}
+
+						trackOptions = Array.isArray(returnedTrackOptions)
+							? returnedTrackOptions
+							: [returnedTrackOptions];
+
 						nAudio++;
 					} else {
-						trackOptions = this._options.audio;
+						// Already validated
+						trackOptions = Array.isArray(this._options.audio)
+							? this._options.audio
+							: [this._options.audio];
 					}
+				} else {
+					trackOptions = [{}];
 				}
 			} else {
 				assert(false);
 			}
 
-			if (trackOptions?.discard) {
+			const discardOptions = trackOptions.filter(x => x.discard);
+			for (const discardOption of discardOptions) {
 				this.discardedTracks.push({
 					track,
 					reason: 'discarded_by_user',
+					trackOptions: discardOption,
 				});
+			}
+
+			if (trackOptions.length === discardOptions.length) {
+				if (trackOptions.length === 0) {
+					this.discardedTracks.push({
+						track,
+						reason: 'discarded_by_user',
+						trackOptions: {},
+					});
+				}
+
 				continue;
 			}
 
-			if (this._totalTrackCount === outputTrackCounts.total.max) {
-				this.discardedTracks.push({
-					track,
-					reason: 'max_track_count_reached',
-				});
-				continue;
-			}
+			const nonDiscardOptions = trackOptions.filter(x => !x.discard);
+			filteredTracks.push(track);
+			filteredTrackOptions.push(nonDiscardOptions);
+		}
 
-			if (this._addedCounts[track.type] === outputTrackCounts[track.type].max) {
-				this.discardedTracks.push({
-					track,
-					reason: 'max_track_count_of_type_reached',
-				});
-				continue;
-			}
+		if (this._options.trim?.start !== undefined) {
+			this._startTimestamp = this._options.trim.start;
+		} else {
+			// Compute the start timestamp from the set of filtered tracks. Technically these can still be narrowed
+			// down later due to discarded tracks, but we need to fix the start timestamp now due to track processing
+			// depending on it.
+			this._startTimestamp = Math.max(
+				await this.input.getFirstTimestamp(filteredTracks),
+				// Samples can also have negative timestamps, but the meaning typically is "don't present me", so let's
+				// cut those out by default.
+				0,
+			);
+		}
 
-			if (track.isVideoTrack()) {
-				await this._processVideoTrack(track, (trackOptions ?? {}) as ConversionVideoOptions);
-			} else if (track.isAudioTrack()) {
-				await this._processAudioTrack(track, (trackOptions ?? {}) as ConversionAudioOptions);
+		this._endTimestamp = Math.max(this._options.trim?.end ?? Infinity, this._startTimestamp);
+
+		// Run these sequentially so that output tracks have a deterministic order
+		for (let i = 0; i < filteredTracks.length; i++) {
+			const track = filteredTracks[i]!;
+			const options = filteredTrackOptions[i]!;
+
+			for (const option of options) {
+				if (this._totalTrackCount === outputTrackCounts.total.max) {
+					this.discardedTracks.push({
+						track,
+						reason: 'max_track_count_reached',
+						trackOptions: option,
+					});
+					continue;
+				}
+
+				if (this._addedCounts[track.type] === outputTrackCounts[track.type].max) {
+					this.discardedTracks.push({
+						track,
+						reason: 'max_track_count_of_type_reached',
+						trackOptions: option,
+					});
+					continue;
+				}
+
+				const outputTrackId = this._nextOutputTrackId++;
+
+				if (track.isVideoTrack()) {
+					await this._processVideoTrack(track, option as ConversionVideoOptions, outputTrackId);
+				} else if (track.isAudioTrack()) {
+					await this._processAudioTrack(track, option as ConversionAudioOptions, outputTrackId);
+				} else {
+					assert(false);
+				}
+			}
+		}
+
+		// When no track groups are set by the user, then the output track pairability should be *identical* to the
+		// input's. We do the naive algorithm to achieve this: assign each track to its own group, and pair groups with
+		// each other based on input track pairability.
+		for (let i = 0; i < this.utilizedTracks.length - 1; i++) {
+			for (let j = i + 1; j < this.utilizedTracks.length; j++) {
+				const trackA = this.utilizedTracks[i]!;
+				const trackB = this.utilizedTracks[j]!;
+				const ownGroupA = this._outputOwnTrackGroups[i];
+				const ownGroupB = this._outputOwnTrackGroups[j];
+
+				assert(ownGroupA !== undefined);
+				assert(ownGroupB !== undefined);
+
+				if (ownGroupA && ownGroupB && trackA.canBePairedWith(trackB)) {
+					ownGroupA.pairWith(ownGroupB);
+				}
 			}
 		}
 
@@ -678,7 +921,7 @@ export class Conversion {
 		}
 
 		// Somewhat dirty but pragmatic
-		const inputAndOutputFormatMatch = (await this.input.getFormat()).mimeType === this.output.format.mimeType;
+		const inputAndOutputFormatMatch = inputFormat.mimeType === this.output.format.mimeType;
 		const rawTagsAreUnchanged = inputTags.raw === outputTags.raw;
 
 		if (inputTags.raw && rawTagsAreUnchanged && !inputAndOutputFormatMatch) {
@@ -707,11 +950,15 @@ export class Conversion {
 			}
 
 			if (!this.isValid) {
-				warnElements.push('\n\n' + this._getInvalidityExplanation().join(''));
+				if (warnElements.length > 0) {
+					warnElements.push('\n\n');
+				}
+
+				warnElements.push(this._getInvalidityExplanation().join(''));
 			}
 
 			if (warnElements.length > 0) {
-				console.warn(...warnElements);
+				Logging._warn(...warnElements);
 			}
 		}
 	}
@@ -727,7 +974,7 @@ export class Conversion {
 		} else {
 			const encodabilityIsTheProblem = this.discardedTracks.every(x =>
 				x.reason === 'discarded_by_user' || x.reason === 'no_encodable_target_codec',
-			);
+			) && this.discardedTracks.some(x => x.reason === 'no_encodable_target_codec');
 
 			elements.push(
 				'Due to discarded tracks, this conversion cannot be executed.',
@@ -746,20 +993,41 @@ export class Conversion {
 					}
 				});
 
-				if (codecs.length === 1) {
+				const uniqueCodecs = [...new Set(codecs)];
+
+				if (uniqueCodecs.length === 1) {
 					elements.push(
-						`\nTracks were discarded because your environment is not able to encode '${codecs[0]}'.`,
+						`\nTracks were discarded because your environment is not able to encode '${uniqueCodecs[0]}'.`,
 					);
 				} else {
 					elements.push(
 						'\nTracks were discarded because your environment is not able to encode any of the following'
-						+ ` codecs: ${codecs.map(x => `'${x}'`).join(', ')}.`,
+						+ ` codecs: ${uniqueCodecs.map(x => `'${x}'`).join(', ')}.`,
 					);
 				}
 
-				if (codecs.includes('mp3')) {
+				if (uniqueCodecs.includes('mp3')) {
 					elements.push(
 						`\nThe @mediabunny/mp3-encoder extension package provides support for encoding MP3.`,
+					);
+				}
+
+				if (uniqueCodecs.includes('aac')) {
+					elements.push(
+						'\nThe @mediabunny/aac-encoder extension package provides support for encoding AAC.',
+					);
+				}
+
+				if (uniqueCodecs.includes('ac3') || uniqueCodecs.includes('eac3')) {
+					elements.push(
+						'\nThe @mediabunny/ac3 extension package provides support'
+						+ ' for encoding and decoding AC-3/E-AC-3.',
+					);
+				}
+
+				if (uniqueCodecs.includes('flac')) {
+					elements.push(
+						'\nThe @mediabunny/flac-encoder extension package provides support for encoding FLAC.',
 					);
 				}
 			} else {
@@ -789,18 +1057,33 @@ export class Conversion {
 		}
 		this._executed = true;
 
+		for (const id of this._outputTrackIds) {
+			this._synchronizer.declareTrack(id);
+		}
+
 		if (this.onProgress) {
+			// Compute duration using only the utilized tracks
+			const uniqueUtilizedTracks = new Set(this.utilizedTracks);
+			const durationPromises = [...uniqueUtilizedTracks].map(async (track) => {
+				if (await track.isLive()) {
+					return Infinity; // Upper bound (assuming no universe heat death)
+				}
+
+				return (await track.getDurationFromMetadata()) ?? (await track.computeDuration());
+			});
+			const duration = Math.max(0, ...await Promise.all(durationPromises));
+
 			this._computeProgress = true;
 			this._totalDuration = Math.min(
-				(await this.input.computeDuration()) - this._startTimestamp,
+				duration - this._startTimestamp,
 				this._endTimestamp - this._startTimestamp,
 			);
 
-			for (const track of this.utilizedTracks) {
-				this._maxTimestamps.set(track.id, 0);
+			for (const id of this._outputTrackIds) {
+				this._maxTimestamps.set(id, 0);
 			}
 
-			this.onProgress?.(0);
+			this.onProgress?.(0, 0);
 		}
 
 		await this.output.start();
@@ -818,24 +1101,29 @@ export class Conversion {
 		}
 
 		if (this._canceled) {
-			await new Promise(() => {}); // Never resolve
+			throw new ConversionCanceledError();
 		}
 
 		await this.output.finalize();
 
 		if (this._computeProgress) {
-			this.onProgress?.(1);
+			// By this point, all tracks have closed and removed themselves from _maxTimestamps, so we use the last
+			// processed time we saw while they were still open
+			this.onProgress?.(1, this._lastProcessedTime);
 		}
 	}
 
-	/** Cancels the conversion process. Does nothing if the conversion is already complete. */
+	/**
+	 * Cancels the conversion process, causing any ongoing `execute` call to throw a `ConversionCanceledError`.
+	 * Does nothing if the conversion is already complete.
+	 */
 	async cancel() {
 		if (this.output.state === 'finalizing' || this.output.state === 'finalized') {
 			return;
 		}
 
 		if (this._canceled) {
-			console.warn('Conversion already canceled.');
+			Logging._warn('Conversion already canceled.');
 			return;
 		}
 
@@ -844,29 +1132,34 @@ export class Conversion {
 	}
 
 	/** @internal */
-	async _processVideoTrack(track: InputVideoTrack, trackOptions: ConversionVideoOptions) {
-		const sourceCodec = track.codec;
+	async _processVideoTrack(track: InputVideoTrack, trackOptions: ConversionVideoOptions, outputTrackId: number) {
+		const sourceCodec = await track.getCodec();
 		if (!sourceCodec) {
 			this.discardedTracks.push({
 				track,
 				reason: 'unknown_source_codec',
+				trackOptions,
 			});
 			return;
 		}
 
 		let videoSource: VideoSource;
 
-		const totalRotation = normalizeRotation(track.rotation + (trackOptions.rotate ?? 0));
+		const innateRotation = await track.getRotation();
+		const totalRotation = normalizeRotation(innateRotation + (trackOptions.rotate ?? 0));
+		let outputTrackRotation = totalRotation;
 		const canUseRotationMetadata = this.output.format.supportsVideoRotationMetadata
 			&& (trackOptions.allowRotationMetadata ?? true);
 
+		const squarePixelWidth = await track.getSquarePixelWidth();
+		const squarePixelHeight = await track.getSquarePixelHeight();
 		const [rotatedWidth, rotatedHeight] = totalRotation % 180 === 0
-			? [track.codedWidth, track.codedHeight]
-			: [track.codedHeight, track.codedWidth];
+			? [squarePixelWidth, squarePixelHeight]
+			: [squarePixelHeight, squarePixelWidth];
 
-		const crop = trackOptions.crop;
+		let crop = trackOptions.crop;
 		if (crop) {
-			clampCropRectangle(crop, rotatedWidth, rotatedHeight);
+			crop = clampCropRectangle(crop, rotatedWidth, rotatedHeight);
 		}
 
 		const [originalWidth, originalHeight] = crop
@@ -878,8 +1171,6 @@ export class Conversion {
 		const aspectRatio = width / height;
 
 		// A lot of video encoders require that the dimensions be multiples of 2
-		const ceilToMultipleOfTwo = (value: number) => Math.ceil(value / 2) * 2;
-
 		if (trackOptions.width !== undefined && trackOptions.height === undefined) {
 			width = ceilToMultipleOfTwo(trackOptions.width);
 			height = ceilToMultipleOfTwo(Math.round(width / aspectRatio));
@@ -892,30 +1183,27 @@ export class Conversion {
 		}
 
 		const firstTimestamp = await track.getFirstTimestamp();
+		let videoCodecs = this.output.format.getSupportedVideoCodecs();
+
 		const needsTranscode = !!trackOptions.forceTranscode
-			|| this._startTimestamp > 0
-			|| firstTimestamp < 0
+			|| firstTimestamp < this._startTimestamp
 			|| !!trackOptions.frameRate
 			|| trackOptions.keyFrameInterval !== undefined
-			|| trackOptions.process !== undefined;
-		let needsRerender = width !== originalWidth
+			|| trackOptions.process !== undefined
+			|| trackOptions.bitrate !== undefined
+			|| !videoCodecs.includes(sourceCodec)
+			|| (trackOptions.codec && trackOptions.codec !== sourceCodec)
+			|| width !== originalWidth
 			|| height !== originalHeight
 			// TODO This is suboptimal: Forcing a rerender when both rotation and process are set is not
 			// performance-optimal, but right now there's no other way because we can't change the track rotation
 			// metadata after the output has already started. Should be possible with API changes in v2, though!
-			|| (totalRotation !== 0 && (!canUseRotationMetadata || trackOptions.process !== undefined))
+			|| (totalRotation !== 0 && !canUseRotationMetadata)
 			|| !!crop;
 
 		const alpha = trackOptions.alpha ?? 'discard';
 
-		let videoCodecs = this.output.format.getSupportedVideoCodecs();
-		if (
-			!needsTranscode
-			&& !trackOptions.bitrate
-			&& !needsRerender
-			&& videoCodecs.includes(sourceCodec)
-			&& (!trackOptions.codec || trackOptions.codec === sourceCodec)
-		) {
+		if (!needsTranscode) {
 			// Fast path, we can simply copy over the encoded packets
 
 			const source = new EncodedVideoPacketSource(sourceCodec);
@@ -933,17 +1221,19 @@ export class Conversion {
 						return false;
 					}
 
-					if (alpha === 'discard') {
-						// Feels hacky given that the rest of the packet is readonly. But, works for now.
-						delete packet.sideData.alpha;
-						delete packet.sideData.alphaByteLength;
-					}
+					const modifiedPacket = packet.clone({
+						timestamp: packet.timestamp - this._startTimestamp,
+						sideData: alpha === 'discard'
+							? {} // Remove alpha side data
+							: packet.sideData,
+					});
+					assert(modifiedPacket.timestamp >= 0);
 
-					this._updateProgress(track.id, packet.timestamp);
-					await source.add(packet, meta);
+					this._updateProgress(outputTrackId, modifiedPacket.timestamp + modifiedPacket.duration);
+					await source.add(modifiedPacket, meta);
 
-					if (this._synchronizer.shouldWait(track.id, packet.timestamp)) {
-						await this._synchronizer.wait(packet.timestamp);
+					if (this._synchronizer.shouldWait(outputTrackId, modifiedPacket.timestamp)) {
+						await this._synchronizer.wait(modifiedPacket.timestamp);
 					}
 				});
 
@@ -952,7 +1242,7 @@ export class Conversion {
 				}
 
 				source.close();
-				this._closeTrack(track.id);
+				this._closeTrack(outputTrackId);
 			})());
 		} else {
 			// We need to decode & reencode the video
@@ -962,6 +1252,7 @@ export class Conversion {
 				this.discardedTracks.push({
 					track,
 					reason: 'undecodable_source_codec',
+					trackOptions,
 				});
 				return;
 			}
@@ -985,6 +1276,7 @@ export class Conversion {
 				this.discardedTracks.push({
 					track,
 					reason: 'no_encodable_target_codec',
+					trackOptions,
 				});
 				return;
 			}
@@ -996,10 +1288,17 @@ export class Conversion {
 				sizeChangeBehavior: trackOptions.fit ?? 'passThrough',
 				alpha,
 				hardwareAcceleration: trackOptions.hardwareAcceleration,
+				transform: {},
 			};
+			assert(encodingConfig.transform);
 
-			const source = new VideoSampleSource(encodingConfig);
-			videoSource = source;
+			let needsRerender = width !== originalWidth
+				|| height !== originalHeight
+				|| (totalRotation !== 0 && (!canUseRotationMetadata || trackOptions.process !== undefined))
+				|| !!crop
+				// Don't expect encoders to reliably handle non-square pixels:
+				|| squarePixelWidth !== await track.getCodedWidth()
+				|| squarePixelHeight !== await track.getCodedHeight();
 
 			if (!needsRerender) {
 				// If we're directly passing decoded samples back to the encoder, sometimes the encoder may error due
@@ -1029,213 +1328,152 @@ export class Conversion {
 						await tempSource.add(firstSample);
 						await tempOutput.finalize();
 					} catch (error) {
-						console.info('Error when probing encoder support. Falling back to rerender path.', error);
-						needsRerender = true;
+						Logging._warn(
+							'An error occurred when probing encoder support. Falling back to rerender path.', error,
+						);
 						void tempOutput.cancel();
+
+						needsRerender = true;
+						encodingConfig.transform.force = true;
 					}
 				} else {
 					await tempOutput.cancel();
 				}
 			}
 
+			if (trackOptions.frameRate) {
+				encodingConfig.transform.frameRate = trackOptions.frameRate;
+			}
+
+			if (trackOptions.process) {
+				encodingConfig.transform.process = trackOptions.process;
+			}
+
+			if (needsRerender) {
+				outputTrackRotation = 0; // Since the rotation is baked into the output
+
+				encodingConfig.transform.width = width;
+				encodingConfig.transform.height = height;
+				encodingConfig.transform.fit = trackOptions.fit ?? 'fill';
+				encodingConfig.transform.rotate = normalizeRotation(totalRotation - innateRotation);
+				encodingConfig.transform.crop = crop;
+				encodingConfig.transform.alpha = alpha;
+			}
+
+			// We need to do this because `process` can emit new timestamps
+			let lastSampleTimestamp: number | null = null;
+			encodingConfig.onEncodedSample = (sample) => {
+				lastSampleTimestamp = sample.timestamp;
+			};
+
+			const source = new VideoSampleSource(encodingConfig);
+			videoSource = source;
+
 			this._trackPromises.push((async () => {
 				await this._started;
 
-				const transform = needsRerender
-					? canvasTransformer({
-							width,
-							height,
-							fit: trackOptions.fit ?? 'fill',
-							rotation: totalRotation, // Bake the rotation into the output
-							crop: trackOptions.crop,
-							poolSize: 1,
-							alpha: alpha === 'keep',
-						})
-					: undefined;
+				await using cursor = new VideoSampleCursor(track);
+				await cursor.seekTo(this._startTimestamp);
 
-				await using cursor = new VideoSampleCursor<VideoSample | WrappedCanvas>(track, { transform });
-				const frameRate = trackOptions.frameRate;
-
-				if (frameRate === undefined) {
-					await cursor.seekTo(this._startTimestamp);
-
-					for await (const it of cursor) {
-						if (this._canceled) {
-							return;
-						}
-
-						if (it.timestamp >= this._endTimestamp) {
-							break;
-						}
-
-						const timestamp = Math.max(it.timestamp - this._startTimestamp, 0);
-						const duration = clamp(
-							it.timestamp + it.duration - this._startTimestamp,
-							0,
-							it.duration,
-						);
-
-						using sample = it instanceof WrappedCanvas
-							? new VideoSample(it.canvas, { timestamp, duration })
-							: it.clone({ timestamp, duration });
-
-						await this._registerVideoSample(track, trackOptions, source, sample);
+				for await (const sample of cursor) {
+					if (this._canceled) {
+						return;
 					}
-				} else {
-					let targetFrame = 0;
 
-					while (true) {
-						if (this._canceled) {
-							return;
+					if (sample.timestamp >= this._endTimestamp) {
+						break;
+					}
+
+					const adjustedSampleTimestamp = Math.max(sample.timestamp - this._startTimestamp, 0);
+
+					// Clamp the duration so the sample doesn't stick out of the trim region on either end
+					const adjustedSampleDuration = clamp(
+						Math.min(sample.timestamp + sample.duration, this._endTimestamp)
+						- this._startTimestamp
+						- adjustedSampleTimestamp,
+						0,
+						sample.duration,
+					);
+					using adjustedSample = sample.clone({
+						timestamp: adjustedSampleTimestamp,
+						duration: adjustedSampleDuration,
+					});
+
+					this._updateProgress(outputTrackId, adjustedSample.timestamp + adjustedSample.duration);
+					await source.add(adjustedSample);
+
+					if (lastSampleTimestamp !== null) {
+						if (this._synchronizer.shouldWait(outputTrackId, lastSampleTimestamp)) {
+							await this._synchronizer.wait(lastSampleTimestamp);
 						}
-
-						const targetTimestamp = targetFrame / frameRate;
-						const sourceTimestamp = this._startTimestamp + targetTimestamp;
-
-						if (sourceTimestamp >= this._endTimestamp) {
-							break;
-						}
-
-						let it = await cursor.seekTo(sourceTimestamp);
-						if (!it) {
-							it = await cursor.seekToFirst();
-						}
-
-						if (!it) {
-							break;
-						}
-
-						const timestamp = targetTimestamp;
-						const duration = 1 / frameRate;
-						using sample = it instanceof WrappedCanvas
-							? new VideoSample(it.canvas, { timestamp, duration })
-							: it.clone({ timestamp, duration });
-
-						await this._registerVideoSample(track, trackOptions, source, sample);
-
-						const hasNext = await cursor.hasNext();
-						if (!hasNext && sourceTimestamp >= it.timestamp + it.duration) {
-							// We've reached the end
-							break;
-						}
-
-						targetFrame++;
 					}
 				}
 
 				source.close();
-				this._closeTrack(track.id);
+				this._closeTrack(outputTrackId);
 			})());
 		}
 
+		let ownGroup: OutputTrackGroup | null = null;
+		if (!trackOptions.group) {
+			ownGroup = new OutputTrackGroup();
+		}
+
+		const videoTrackLanguageCode = await track.getLanguageCode();
 		this.output.addVideoTrack(videoSource, {
 			frameRate: trackOptions.frameRate,
 			// TODO: This condition can be removed when all demuxers properly homogenize to BCP47 in v2
-			languageCode: isIso639Dash2LanguageCode(track.languageCode) ? track.languageCode : undefined,
-			name: track.name ?? undefined,
-			disposition: track.disposition,
-			rotation: needsRerender ? 0 : totalRotation, // Rerendering will bake the rotation into the output
+			languageCode: isIso639Dash2LanguageCode(videoTrackLanguageCode) ? videoTrackLanguageCode : undefined,
+			name: await track.getName() ?? undefined,
+			disposition: await track.getDisposition(),
+			rotation: outputTrackRotation,
+			group: ownGroup ?? trackOptions.group,
 		});
 		this._addedCounts.video++;
 		this._totalTrackCount++;
 
 		this.utilizedTracks.push(track);
+		this._outputTrackIds.push(outputTrackId);
+		this._outputOwnTrackGroups.push(ownGroup);
 	}
 
 	/** @internal */
-	async _registerVideoSample(
-		track: InputVideoTrack,
-		trackOptions: ConversionVideoOptions,
-		source: VideoSampleSource,
-		sample: VideoSample,
-	) {
-		if (this._canceled) {
-			return;
-		}
-
-		this._updateProgress(track.id, sample.timestamp);
-
-		let finalSamples: VideoSample[];
-		if (!trackOptions.process) {
-			finalSamples = [sample];
-		} else {
-			let processed = trackOptions.process(sample);
-			if (processed instanceof Promise) processed = await processed;
-
-			if (!Array.isArray(processed)) {
-				processed = processed === null ? [] : [processed];
-			}
-
-			finalSamples = processed.map((x) => {
-				if (x instanceof VideoSample) {
-					return x;
-				}
-
-				if (typeof VideoFrame !== 'undefined' && x instanceof VideoFrame) {
-					return new VideoSample(x);
-				}
-
-				// Calling the VideoSample constructor here will automatically handle input validation for us
-				// (it throws for any non-legal argument).
-				return new VideoSample(x, {
-					timestamp: sample.timestamp,
-					duration: sample.duration,
-				});
-			});
-		}
-
-		for (const finalSample of finalSamples) {
-			if (this._canceled) {
-				break;
-			}
-
-			await source.add(finalSample);
-
-			if (this._synchronizer.shouldWait(track.id, finalSample.timestamp)) {
-				await this._synchronizer.wait(finalSample.timestamp);
-			}
-		}
-
-		for (const finalSample of finalSamples) {
-			if (finalSample !== sample) {
-				finalSample.close();
-			}
-		}
-	}
-
-	/** @internal */
-	async _processAudioTrack(track: InputAudioTrack, trackOptions: ConversionAudioOptions) {
-		const sourceCodec = track.codec;
+	async _processAudioTrack(track: InputAudioTrack, trackOptions: ConversionAudioOptions, outputTrackId: number) {
+		const sourceCodec = await track.getCodec();
 		if (!sourceCodec) {
 			this.discardedTracks.push({
 				track,
 				reason: 'unknown_source_codec',
+				trackOptions,
 			});
 			return;
 		}
 
 		let audioSource: AudioSource;
 
-		const originalNumberOfChannels = track.numberOfChannels;
-		const originalSampleRate = track.sampleRate;
+		const originalNumberOfChannels = await track.getNumberOfChannels();
+		const originalSampleRate = await track.getSampleRate();
 
 		const firstTimestamp = await track.getFirstTimestamp();
 
 		let numberOfChannels = trackOptions.numberOfChannels ?? originalNumberOfChannels;
 		let sampleRate = trackOptions.sampleRate ?? originalSampleRate;
-		let needsResample = numberOfChannels !== originalNumberOfChannels
-			|| sampleRate !== originalSampleRate
-			|| this._startTimestamp > 0
-			|| firstTimestamp < 0;
+
+		const needsTrimming = firstTimestamp < this._startTimestamp;
+		let needsPadding = firstTimestamp > this._startTimestamp && !this.output.format.supportsTimestampedMediaData;
 
 		let audioCodecs = this.output.format.getSupportedAudioCodecs();
 		if (
 			!trackOptions.forceTranscode
 			&& !trackOptions.bitrate
-			&& !needsResample
+			&& numberOfChannels === originalNumberOfChannels
+			&& sampleRate === originalSampleRate
+			&& !needsTrimming
+			&& !needsPadding
 			&& audioCodecs.includes(sourceCodec)
 			&& (!trackOptions.codec || trackOptions.codec === sourceCodec)
 			&& !trackOptions.process
+			&& trackOptions.sampleFormat === undefined
 		) {
 			// Fast path, we can simply copy over the encoded packets
 
@@ -1254,11 +1492,16 @@ export class Conversion {
 						return false;
 					}
 
-					this._updateProgress(track.id, packet.timestamp);
-					await source.add(packet, meta);
+					const modifiedPacket = packet.clone({
+						timestamp: packet.timestamp - this._startTimestamp,
+					});
+					assert(modifiedPacket.timestamp >= 0);
 
-					if (this._synchronizer.shouldWait(track.id, packet.timestamp)) {
-						await this._synchronizer.wait(packet.timestamp);
+					this._updateProgress(outputTrackId, modifiedPacket.timestamp + modifiedPacket.duration);
+					await source.add(modifiedPacket, meta);
+
+					if (this._synchronizer.shouldWait(outputTrackId, modifiedPacket.timestamp)) {
+						await this._synchronizer.wait(modifiedPacket.timestamp);
 					}
 				});
 
@@ -1267,7 +1510,7 @@ export class Conversion {
 				}
 
 				source.close();
-				this._closeTrack(track.id);
+				this._closeTrack(outputTrackId);
 			})());
 		} else {
 			// We need to decode & reencode the audio
@@ -1277,6 +1520,7 @@ export class Conversion {
 				this.discardedTracks.push({
 					track,
 					reason: 'undecodable_source_codec',
+					trackOptions,
 				});
 				return;
 			}
@@ -1318,7 +1562,6 @@ export class Conversion {
 					.find(codec => (NON_PCM_AUDIO_CODECS as readonly string[]).includes(codec));
 				if (nonPcmCodec) {
 					// We are able to encode using a non-PCM codec, but it'll require resampling
-					needsResample = true;
 					codecOfChoice = nonPcmCodec;
 					numberOfChannels = FALLBACK_NUMBER_OF_CHANNELS;
 					sampleRate = FALLBACK_SAMPLE_RATE;
@@ -1331,163 +1574,149 @@ export class Conversion {
 				this.discardedTracks.push({
 					track,
 					reason: 'no_encodable_target_codec',
+					trackOptions,
 				});
 				return;
 			}
 
-			if (needsResample) {
-				audioSource = this._resampleAudio(
-					track,
-					trackOptions,
-					codecOfChoice,
-					numberOfChannels,
-					sampleRate,
-					bitrate,
-				);
-			} else {
-				const source = new AudioSampleSource({
-					codec: codecOfChoice,
-					bitrate,
-				});
-				audioSource = source;
+			const encodingConfig: AudioEncodingConfig = {
+				codec: codecOfChoice,
+				bitrate,
+				transform: {
+					sampleFormat: trackOptions.sampleFormat,
+					process: trackOptions.process,
+				},
+			};
+			assert(encodingConfig.transform);
 
-				this._trackPromises.push((async () => {
-					await this._started;
+			if (numberOfChannels !== originalNumberOfChannels) {
+				encodingConfig.transform.numberOfChannels = numberOfChannels;
+			}
+			if (sampleRate !== originalSampleRate) {
+				encodingConfig.transform.sampleRate = sampleRate;
+			}
 
-					await using cursor = new AudioSampleCursor(track);
+			let lastSampleTimestamp: number | null = null;
+			encodingConfig.onEncodedSample = (sample) => {
+				lastSampleTimestamp = sample.timestamp;
+			};
 
-					for await (const sample of cursor) {
-						if (this._canceled) {
-							return;
-						}
+			const source = new AudioSampleSource(encodingConfig);
+			audioSource = source;
 
-						if (sample.timestamp >= this._endTimestamp) {
-							break;
-						}
+			this._trackPromises.push((async () => {
+				await this._started;
 
-						await this._registerAudioSample(track, trackOptions, source, sample);
+				await using cursor = new AudioSampleCursor(track);
+				await cursor.seekTo(this._startTimestamp);
+
+				for await (const sample of cursor) {
+					if (this._canceled) {
+						return;
 					}
 
-					source.close();
-					this._closeTrack(track.id);
-				})());
-			}
+					if (sample.timestamp >= this._endTimestamp) {
+						break;
+					}
+
+					if (needsPadding) {
+						// Add one padding sample at the beginning
+						const paddingLength = firstTimestamp - this._startTimestamp;
+						const paddingLengthSamples = Math.round(paddingLength * originalSampleRate);
+
+						const bytesPerSample = getBytesPerSample(sample.format);
+						const data = new Uint8Array(bytesPerSample * paddingLengthSamples * originalNumberOfChannels);
+						if (sample.format === 'u8' || sample.format === 'u8-planar') {
+							data.fill(2 ** 7); // Fill it with the silent value
+						}
+
+						const silentSample = new AudioSample({
+							data,
+							// Use the same format the decoder is spitting out. This avoids feeding changing sample
+							// formats to the audio encoder.
+							format: sample.format,
+							numberOfChannels: originalNumberOfChannels,
+							sampleRate: originalSampleRate,
+							timestamp: 0,
+						});
+						await this._registerAudioSample(silentSample, source, outputTrackId, () => lastSampleTimestamp);
+
+						needsPadding = false;
+					}
+
+					let startFrame = 0;
+					let endFrame = sample.numberOfFrames;
+
+					if (sample.timestamp < this._startTimestamp) {
+						startFrame = Math.round((this._startTimestamp - sample.timestamp) * sample.sampleRate);
+					}
+					if (sample.timestamp + sample.duration > this._endTimestamp) {
+						endFrame = Math.round((this._endTimestamp - sample.timestamp) * sample.sampleRate);
+					}
+
+					// Trim the sample if it sticks out of the trim region on either end
+					using trimmedSample = startFrame > 0 || endFrame < sample.numberOfFrames
+						? sample.trim(startFrame, endFrame)
+						: null;
+
+					if (trimmedSample?.numberOfFrames === 0) {
+						continue;
+					}
+
+					// Offset the timestamp as needed. The clone also gives us a sample that we own (the one yielded
+					// by the cursor belongs to the cursor).
+					const sourceSample = trimmedSample ?? sample;
+					const finalSample = sourceSample.clone({
+						timestamp: sourceSample.timestamp - this._startTimestamp,
+					});
+
+					await this._registerAudioSample(finalSample, source, outputTrackId, () => lastSampleTimestamp);
+				}
+
+				source.close();
+				this._closeTrack(outputTrackId);
+			})());
 		}
 
+		let ownGroup: OutputTrackGroup | null = null;
+		if (!trackOptions.group) {
+			ownGroup = new OutputTrackGroup();
+		}
+
+		const audioTrackLanguageCode = await track.getLanguageCode();
 		this.output.addAudioTrack(audioSource, {
 			// TODO: This condition can be removed when all demuxers properly homogenize to BCP47 in v2
-			languageCode: isIso639Dash2LanguageCode(track.languageCode) ? track.languageCode : undefined,
-			name: track.name ?? undefined,
-			disposition: track.disposition,
+			languageCode: isIso639Dash2LanguageCode(audioTrackLanguageCode) ? audioTrackLanguageCode : undefined,
+			name: await track.getName() ?? undefined,
+			disposition: await track.getDisposition(),
+			group: ownGroup ?? trackOptions.group,
 		});
 		this._addedCounts.audio++;
 		this._totalTrackCount++;
 
 		this.utilizedTracks.push(track);
+		this._outputTrackIds.push(outputTrackId);
+		this._outputOwnTrackGroups.push(ownGroup);
 	}
 
 	/** @internal */
 	async _registerAudioSample(
-		track: InputAudioTrack,
-		trackOptions: ConversionAudioOptions,
-		source: AudioSampleSource,
 		sample: AudioSample,
+		source: AudioSampleSource,
+		outputTrackId: number,
+		getLastSampleTimestamp: () => number | null,
 	) {
-		if (this._canceled) {
-			return;
-		}
+		this._updateProgress(outputTrackId, sample.timestamp + sample.duration);
 
-		this._updateProgress(track.id, sample.timestamp);
+		await source.add(sample);
+		sample.close();
 
-		let finalSamples: AudioSample[];
-		if (!trackOptions.process) {
-			finalSamples = [sample];
-		} else {
-			let processed = trackOptions.process(sample);
-			if (processed instanceof Promise) processed = await processed;
-
-			if (!Array.isArray(processed)) {
-				processed = processed === null ? [] : [processed];
-			}
-
-			if (!processed.every(x => x instanceof AudioSample)) {
-				throw new TypeError(
-					'The audio process function must return an AudioSample, null, or an array of AudioSamples.',
-				);
-			}
-
-			finalSamples = processed;
-		}
-
-		for (const finalSample of finalSamples) {
-			if (this._canceled) {
-				break;
-			}
-
-			await source.add(finalSample);
-
-			if (this._synchronizer.shouldWait(track.id, finalSample.timestamp)) {
-				await this._synchronizer.wait(finalSample.timestamp);
+		const lastSampleTimestamp = getLastSampleTimestamp();
+		if (lastSampleTimestamp !== null) {
+			if (this._synchronizer.shouldWait(outputTrackId, lastSampleTimestamp)) {
+				await this._synchronizer.wait(lastSampleTimestamp);
 			}
 		}
-
-		for (const finalSample of finalSamples) {
-			if (finalSample !== sample) {
-				finalSample.close();
-			}
-		}
-	}
-
-	/** @internal */
-	_resampleAudio(
-		track: InputAudioTrack,
-		trackOptions: ConversionAudioOptions,
-		codec: AudioCodec,
-		targetNumberOfChannels: number,
-		targetSampleRate: number,
-		bitrate: number | Quality,
-	) {
-		const source = new AudioSampleSource({
-			codec,
-			bitrate,
-		});
-
-		this._trackPromises.push((async () => {
-			await this._started;
-
-			const resampler = new AudioResampler({
-				targetNumberOfChannels,
-				targetSampleRate,
-				startTime: this._startTimestamp,
-				endTime: this._endTimestamp,
-				onSample: async (sample) => {
-					await this._registerAudioSample(track, trackOptions, source, sample);
-					sample.close();
-				},
-			});
-
-			await using cursor = new AudioSampleCursor(track);
-			await cursor.seekTo(this._startTimestamp);
-
-			for await (const sample of cursor) {
-				if (this._canceled) {
-					return;
-				}
-
-				if (sample.timestamp >= this._endTimestamp) {
-					break;
-				}
-
-				await resampler.add(sample);
-			}
-
-			await resampler.finalize();
-
-			source.close();
-			this._closeTrack(track.id);
-		})());
-
-		return source;
 	}
 
 	/** @internal */
@@ -1500,6 +1729,10 @@ export class Conversion {
 
 	/** @internal */
 	_updateProgress(trackId: number, endTimestamp: number) {
+		if (!this._computeProgress) {
+			return;
+		}
+
 		this._maxTimestamps.set(
 			trackId,
 			Math.max(endTimestamp, this._maxTimestamps.get(trackId)!),
@@ -1517,14 +1750,29 @@ export class Conversion {
 		const minTimestamp = Math.min(...this._maxTimestamps.values());
 		const newProgress = clamp(minTimestamp / this._totalDuration, 0, 1);
 
+		this._lastProcessedTime = minTimestamp;
+
 		if (newProgress !== this._lastProgress) {
 			this._lastProgress = newProgress;
-			this.onProgress?.(newProgress);
+			this.onProgress?.(newProgress, minTimestamp);
 		}
 	}
 }
 
-const MAX_TIMESTAMP_GAP = 5;
+/**
+ * Thrown when a conversion couldn't complete due to being canceled.
+ * @group Conversion
+ * @public
+ */
+export class ConversionCanceledError extends Error {
+	/** Creates a new {@link ConversionCanceledError}. */
+	constructor(message = 'Conversion has been canceled.') {
+		super(message);
+		this.name = 'ConversionCanceledError';
+	}
+}
+
+const MAX_TIMESTAMP_GAP = 1; // in seconds
 
 /**
  * Utility class for synchronizing multiple track packet consumers with one another. We don't want one consumer to get
@@ -1538,6 +1786,36 @@ class TrackSynchronizer {
 		timestamp: number;
 		resolve: () => void;
 	}[] = [];
+
+	declareTrack(trackId: number) {
+		this.maxTimestamps.set(trackId, 0);
+	}
+
+	shouldWait(trackId: number, timestamp: number) {
+		const currentValue = this.maxTimestamps.get(trackId);
+		assert(currentValue !== undefined);
+
+		this.maxTimestamps.set(trackId, Math.max(timestamp, currentValue));
+
+		const newMin = this.computeMinAndMaybeResolve();
+		return timestamp - newMin > MAX_TIMESTAMP_GAP; // Should wait if it is too far ahead of the slowest consumer
+	}
+
+	wait(timestamp: number) {
+		const { promise, resolve } = promiseWithResolvers();
+
+		this.resolvers.push({
+			timestamp,
+			resolve,
+		});
+
+		return promise;
+	}
+
+	closeTrack(trackId: number) {
+		this.maxTimestamps.delete(trackId);
+		this.computeMinAndMaybeResolve();
+	}
 
 	computeMinAndMaybeResolve() {
 		let newMin = Infinity;
@@ -1557,305 +1835,5 @@ class TrackSynchronizer {
 		}
 
 		return newMin;
-	}
-
-	shouldWait(trackId: number, timestamp: number) {
-		this.maxTimestamps.set(trackId, Math.max(timestamp, this.maxTimestamps.get(trackId) ?? -Infinity));
-
-		const newMin = this.computeMinAndMaybeResolve();
-		return timestamp - newMin >= MAX_TIMESTAMP_GAP; // Should wait if it is too far ahead of the slowest consumer
-	}
-
-	wait(timestamp: number) {
-		const { promise, resolve } = promiseWithResolvers();
-
-		this.resolvers.push({
-			timestamp,
-			resolve,
-		});
-
-		return promise;
-	}
-
-	closeTrack(trackId: number) {
-		this.maxTimestamps.delete(trackId);
-		this.computeMinAndMaybeResolve();
-	}
-}
-
-/**
- * Utility class to handle audio resampling, handling both sample rate resampling as well as channel up/downmixing.
- * The advantage over doing this manually rather than using OfflineAudioContext to do it for us is the artifact-free
- * handling of putting multiple resampled audio samples back to back, which produces flaky results using
- * OfflineAudioContext.
- */
-export class AudioResampler {
-	sourceSampleRate: number | null = null;
-	targetSampleRate: number;
-	sourceNumberOfChannels: number | null = null;
-	targetNumberOfChannels: number;
-	startTime: number;
-	endTime: number;
-	onSample: (sample: AudioSample) => Promise<void>;
-
-	bufferSizeInFrames: number;
-	bufferSizeInSamples: number;
-	outputBuffer: Float32Array;
-	/** Start frame of current buffer */
-	bufferStartFrame: number;
-	/** The highest index written to in the current buffer */
-	maxWrittenFrame: number;
-	channelMixer!: (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => number;
-	tempSourceBuffer!: Float32Array;
-
-	constructor(options: {
-		targetSampleRate: number;
-		targetNumberOfChannels: number;
-		startTime: number;
-		endTime: number;
-		onSample: (sample: AudioSample) => Promise<void>;
-	}) {
-		this.targetSampleRate = options.targetSampleRate;
-		this.targetNumberOfChannels = options.targetNumberOfChannels;
-		this.startTime = options.startTime;
-		this.endTime = options.endTime;
-		this.onSample = options.onSample;
-
-		this.bufferSizeInFrames = Math.floor(this.targetSampleRate * 5.0); // 5 seconds
-		this.bufferSizeInSamples = this.bufferSizeInFrames * this.targetNumberOfChannels;
-
-		this.outputBuffer = new Float32Array(this.bufferSizeInSamples);
-		this.bufferStartFrame = 0;
-		this.maxWrittenFrame = -1;
-	}
-
-	/**
-	 * Sets up the channel mixer to handle up/downmixing in the case where input and output channel counts don't match.
-	 */
-	doChannelMixerSetup(): void {
-		assert(this.sourceNumberOfChannels !== null);
-
-		const sourceNum = this.sourceNumberOfChannels;
-		const targetNum = this.targetNumberOfChannels;
-
-		// Logic taken from
-		// https://developer.mozilla.org/en-US/docs/Web/API/Web_Audio_API/Basic_concepts_behind_Web_Audio_API
-		// Most of the mapping functions are branchless.
-
-		if (sourceNum === 1 && targetNum === 2) {
-			// Mono to Stereo: M -> L, M -> R
-			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number) => {
-				return sourceData[sourceFrameIndex * sourceNum]!;
-			};
-		} else if (sourceNum === 1 && targetNum === 4) {
-			// Mono to Quad: M -> L, M -> R, 0 -> SL, 0 -> SR
-			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => {
-				return sourceData[sourceFrameIndex * sourceNum]! * +(targetChannelIndex < 2);
-			};
-		} else if (sourceNum === 1 && targetNum === 6) {
-			// Mono to 5.1: 0 -> L, 0 -> R, M -> C, 0 -> LFE, 0 -> SL, 0 -> SR
-			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => {
-				return sourceData[sourceFrameIndex * sourceNum]! * +(targetChannelIndex === 2);
-			};
-		} else if (sourceNum === 2 && targetNum === 1) {
-			// Stereo to Mono: 0.5 * (L + R)
-			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number) => {
-				const baseIdx = sourceFrameIndex * sourceNum;
-				return 0.5 * (sourceData[baseIdx]! + sourceData[baseIdx + 1]!);
-			};
-		} else if (sourceNum === 2 && targetNum === 4) {
-			// Stereo to Quad: L -> L, R -> R, 0 -> SL, 0 -> SR
-			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => {
-				return sourceData[sourceFrameIndex * sourceNum + targetChannelIndex]! * +(targetChannelIndex < 2);
-			};
-		} else if (sourceNum === 2 && targetNum === 6) {
-			// Stereo to 5.1: L -> L, R -> R, 0 -> C, 0 -> LFE, 0 -> SL, 0 -> SR
-			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => {
-				return sourceData[sourceFrameIndex * sourceNum + targetChannelIndex]! * +(targetChannelIndex < 2);
-			};
-		} else if (sourceNum === 4 && targetNum === 1) {
-			// Quad to Mono: 0.25 * (L + R + SL + SR)
-			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number) => {
-				const baseIdx = sourceFrameIndex * sourceNum;
-				return 0.25 * (
-					sourceData[baseIdx]! + sourceData[baseIdx + 1]!
-					+ sourceData[baseIdx + 2]! + sourceData[baseIdx + 3]!
-				);
-			};
-		} else if (sourceNum === 4 && targetNum === 2) {
-			// Quad to Stereo: 0.5 * (L + SL), 0.5 * (R + SR)
-			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => {
-				const baseIdx = sourceFrameIndex * sourceNum;
-				return 0.5 * (
-					sourceData[baseIdx + targetChannelIndex]!
-					+ sourceData[baseIdx + targetChannelIndex + 2]!
-				);
-			};
-		} else if (sourceNum === 4 && targetNum === 6) {
-			// Quad to 5.1: L -> L, R -> R, 0 -> C, 0 -> LFE, SL -> SL, SR -> SR
-			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => {
-				const baseIdx = sourceFrameIndex * sourceNum;
-
-				// It's a bit harder to do this one branchlessly
-				if (targetChannelIndex < 2) return sourceData[baseIdx + targetChannelIndex]!; // L, R
-				if (targetChannelIndex === 2 || targetChannelIndex === 3) return 0; // C, LFE
-				return sourceData[baseIdx + targetChannelIndex - 2]!; // SL, SR
-			};
-		} else if (sourceNum === 6 && targetNum === 1) {
-			// 5.1 to Mono: sqrt(1/2) * (L + R) + C + 0.5 * (SL + SR)
-			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number) => {
-				const baseIdx = sourceFrameIndex * sourceNum;
-				return Math.SQRT1_2 * (sourceData[baseIdx]! + sourceData[baseIdx + 1]!)
-					+ sourceData[baseIdx + 2]!
-					+ 0.5 * (sourceData[baseIdx + 4]! + sourceData[baseIdx + 5]!);
-			};
-		} else if (sourceNum === 6 && targetNum === 2) {
-			// 5.1 to Stereo: L + sqrt(1/2) * (C + SL), R + sqrt(1/2) * (C + SR)
-			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => {
-				const baseIdx = sourceFrameIndex * sourceNum;
-				return sourceData[baseIdx + targetChannelIndex]!
-					+ Math.SQRT1_2 * (sourceData[baseIdx + 2]! + sourceData[baseIdx + targetChannelIndex + 4]!);
-			};
-		} else if (sourceNum === 6 && targetNum === 4) {
-			// 5.1 to Quad: L + sqrt(1/2) * C, R + sqrt(1/2) * C, SL, SR
-			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => {
-				const baseIdx = sourceFrameIndex * sourceNum;
-
-				// It's a bit harder to do this one branchlessly
-				if (targetChannelIndex < 2) {
-					return sourceData[baseIdx + targetChannelIndex]! + Math.SQRT1_2 * sourceData[baseIdx + 2]!;
-				}
-				return sourceData[baseIdx + targetChannelIndex + 2]!; // SL, SR
-			};
-		} else {
-			// Discrete fallback: direct mapping with zero-fill or drop
-			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => {
-				return targetChannelIndex < sourceNum
-					? sourceData[sourceFrameIndex * sourceNum + targetChannelIndex]!
-					: 0;
-			};
-		}
-	}
-
-	ensureTempBufferSize(requiredSamples: number): void {
-		let length = this.tempSourceBuffer.length;
-
-		while (length < requiredSamples) {
-			length *= 2;
-		}
-
-		if (length !== this.tempSourceBuffer.length) {
-			const newBuffer = new Float32Array(length);
-			newBuffer.set(this.tempSourceBuffer);
-			this.tempSourceBuffer = newBuffer;
-		}
-	}
-
-	async add(audioSample: AudioSample) {
-		if (this.sourceSampleRate === null) {
-			// This is the first sample, so let's init the missing data. Initting the sample rate from the decoded
-			// sample is more reliable than using the file's metadata, because decoders are free to emit any sample rate
-			// they see fit.
-			this.sourceSampleRate = audioSample.sampleRate;
-			this.sourceNumberOfChannels = audioSample.numberOfChannels;
-
-			// Pre-allocate temporary buffer for source data
-			this.tempSourceBuffer = new Float32Array(this.sourceSampleRate * this.sourceNumberOfChannels);
-
-			this.doChannelMixerSetup();
-		}
-
-		const requiredSamples = audioSample.numberOfFrames * audioSample.numberOfChannels;
-		this.ensureTempBufferSize(requiredSamples);
-
-		// Copy the audio data to the temp buffer
-		const sourceDataSize = audioSample.allocationSize({ planeIndex: 0, format: 'f32' });
-		const sourceView = new Float32Array(this.tempSourceBuffer.buffer, 0, sourceDataSize / 4);
-		audioSample.copyTo(sourceView, { planeIndex: 0, format: 'f32' });
-
-		const inputStartTime = audioSample.timestamp - this.startTime;
-		const inputDuration = audioSample.numberOfFrames / this.sourceSampleRate;
-		const inputEndTime = Math.min(inputStartTime + inputDuration, this.endTime - this.startTime);
-
-		// Compute which output frames are affected by this sample
-		const outputStartFrame = Math.floor(inputStartTime * this.targetSampleRate);
-		const outputEndFrame = Math.ceil(inputEndTime * this.targetSampleRate);
-
-		for (let outputFrame = outputStartFrame; outputFrame < outputEndFrame; outputFrame++) {
-			if (outputFrame < this.bufferStartFrame) {
-				continue; // Skip writes to the past
-			}
-
-			while (outputFrame >= this.bufferStartFrame + this.bufferSizeInFrames) {
-				// The write is after the current buffer, so finalize it
-				await this.finalizeCurrentBuffer();
-				this.bufferStartFrame += this.bufferSizeInFrames;
-			}
-
-			const bufferFrameIndex = outputFrame - this.bufferStartFrame;
-			assert(bufferFrameIndex < this.bufferSizeInFrames);
-
-			const outputTime = outputFrame / this.targetSampleRate;
-			const inputTime = outputTime - inputStartTime;
-			const sourcePosition = inputTime * this.sourceSampleRate;
-
-			const sourceLowerFrame = Math.floor(sourcePosition);
-			const sourceUpperFrame = Math.ceil(sourcePosition);
-			const fraction = sourcePosition - sourceLowerFrame;
-
-			// Process each output channel
-			for (let targetChannel = 0; targetChannel < this.targetNumberOfChannels; targetChannel++) {
-				let lowerSample = 0;
-				let upperSample = 0;
-
-				if (sourceLowerFrame >= 0 && sourceLowerFrame < audioSample.numberOfFrames) {
-					lowerSample = this.channelMixer(sourceView, sourceLowerFrame, targetChannel);
-				}
-
-				if (sourceUpperFrame >= 0 && sourceUpperFrame < audioSample.numberOfFrames) {
-					upperSample = this.channelMixer(sourceView, sourceUpperFrame, targetChannel);
-				}
-
-				// For resampling, we do naive linear interpolation to find the in-between sample. This produces
-				// suboptimal results especially for downsampling (for which a low-pass filter would first need to be
-				// applied), but AudioContext doesn't do this either, so, whatever, for now.
-				const outputSample = lowerSample + fraction * (upperSample - lowerSample);
-
-				// Write to output buffer (interleaved)
-				const outputIndex = bufferFrameIndex * this.targetNumberOfChannels + targetChannel;
-				this.outputBuffer[outputIndex]! += outputSample; // Add in case of overlapping samples
-			}
-
-			this.maxWrittenFrame = Math.max(this.maxWrittenFrame, bufferFrameIndex);
-		}
-	}
-
-	async finalizeCurrentBuffer() {
-		if (this.maxWrittenFrame < 0) {
-			return; // Nothing to finalize
-		}
-
-		const samplesWritten = (this.maxWrittenFrame + 1) * this.targetNumberOfChannels;
-
-		const outputData = new Float32Array(samplesWritten);
-		outputData.set(this.outputBuffer.subarray(0, samplesWritten));
-
-		const timestampSeconds = this.bufferStartFrame / this.targetSampleRate;
-		const audioSample = new AudioSample({
-			format: 'f32',
-			sampleRate: this.targetSampleRate,
-			numberOfChannels: this.targetNumberOfChannels,
-			timestamp: timestampSeconds,
-			data: outputData,
-		});
-
-		await this.onSample(audioSample);
-
-		this.outputBuffer.fill(0);
-		this.maxWrittenFrame = -1;
-	}
-
-	finalize() {
-		return this.finalizeCurrentBuffer();
 	}
 }

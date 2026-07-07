@@ -1,11 +1,12 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { parseAacAudioSpecificConfig } from '../shared/aac-misc';
 import {
 	Av1CodecInfo,
 	AvcDecoderConfigurationRecord,
@@ -13,11 +14,12 @@ import {
 	Vp9CodecInfo,
 } from './codec-data';
 import {
-	Bitstream,
 	COLOR_PRIMARIES_MAP,
 	MATRIX_COEFFICIENTS_MAP,
 	TRANSFER_CHARACTERISTICS_MAP,
 	assert,
+	assertNever,
+	base64ToBytes,
 	bytesToHexString,
 	isAllowSharedBufferSource,
 	last,
@@ -37,6 +39,7 @@ export const VIDEO_CODECS = [
 	'vp9',
 	'av1',
 	'vp8',
+	'prores',
 ] as const;
 /**
  * List of known PCM (uncompressed) audio codecs, ordered by encoding preference.
@@ -70,6 +73,8 @@ export const NON_PCM_AUDIO_CODECS = [
 	'mp3',
 	'vorbis',
 	'flac',
+	'ac3',
+	'eac3',
 ] as const;
 /**
  * List of known audio codecs, ordered by encoding preference.
@@ -116,26 +121,26 @@ export type SubtitleCodec = typeof SUBTITLE_CODECS[number];
 export type MediaCodec = VideoCodec | AudioCodec | SubtitleCodec;
 
 // https://en.wikipedia.org/wiki/Advanced_Video_Coding
-const AVC_LEVEL_TABLE = [
-	{ maxMacroblocks: 99, maxBitrate: 64000, level: 0x0A }, // Level 1
-	{ maxMacroblocks: 396, maxBitrate: 192000, level: 0x0B }, // Level 1.1
-	{ maxMacroblocks: 396, maxBitrate: 384000, level: 0x0C }, // Level 1.2
-	{ maxMacroblocks: 396, maxBitrate: 768000, level: 0x0D }, // Level 1.3
-	{ maxMacroblocks: 396, maxBitrate: 2000000, level: 0x14 }, // Level 2
-	{ maxMacroblocks: 792, maxBitrate: 4000000, level: 0x15 }, // Level 2.1
-	{ maxMacroblocks: 1620, maxBitrate: 4000000, level: 0x16 }, // Level 2.2
-	{ maxMacroblocks: 1620, maxBitrate: 10000000, level: 0x1E }, // Level 3
-	{ maxMacroblocks: 3600, maxBitrate: 14000000, level: 0x1F }, // Level 3.1
-	{ maxMacroblocks: 5120, maxBitrate: 20000000, level: 0x20 }, // Level 3.2
-	{ maxMacroblocks: 8192, maxBitrate: 20000000, level: 0x28 }, // Level 4
-	{ maxMacroblocks: 8192, maxBitrate: 50000000, level: 0x29 }, // Level 4.1
-	{ maxMacroblocks: 8704, maxBitrate: 50000000, level: 0x2A }, // Level 4.2
-	{ maxMacroblocks: 22080, maxBitrate: 135000000, level: 0x32 }, // Level 5
-	{ maxMacroblocks: 36864, maxBitrate: 240000000, level: 0x33 }, // Level 5.1
-	{ maxMacroblocks: 36864, maxBitrate: 240000000, level: 0x34 }, // Level 5.2
-	{ maxMacroblocks: 139264, maxBitrate: 240000000, level: 0x3C }, // Level 6
-	{ maxMacroblocks: 139264, maxBitrate: 480000000, level: 0x3D }, // Level 6.1
-	{ maxMacroblocks: 139264, maxBitrate: 800000000, level: 0x3E }, // Level 6.2
+export const AVC_LEVEL_TABLE = [
+	{ maxMacroblocks: 99, maxBitrate: 64000, maxDpbMbs: 396, level: 0x0A }, // Level 1
+	{ maxMacroblocks: 396, maxBitrate: 192000, maxDpbMbs: 900, level: 0x0B }, // Level 1.1
+	{ maxMacroblocks: 396, maxBitrate: 384000, maxDpbMbs: 2376, level: 0x0C }, // Level 1.2
+	{ maxMacroblocks: 396, maxBitrate: 768000, maxDpbMbs: 2376, level: 0x0D }, // Level 1.3
+	{ maxMacroblocks: 396, maxBitrate: 2000000, maxDpbMbs: 2376, level: 0x14 }, // Level 2
+	{ maxMacroblocks: 792, maxBitrate: 4000000, maxDpbMbs: 4752, level: 0x15 }, // Level 2.1
+	{ maxMacroblocks: 1620, maxBitrate: 4000000, maxDpbMbs: 8100, level: 0x16 }, // Level 2.2
+	{ maxMacroblocks: 1620, maxBitrate: 10000000, maxDpbMbs: 8100, level: 0x1E }, // Level 3
+	{ maxMacroblocks: 3600, maxBitrate: 14000000, maxDpbMbs: 18000, level: 0x1F }, // Level 3.1
+	{ maxMacroblocks: 5120, maxBitrate: 20000000, maxDpbMbs: 20480, level: 0x20 }, // Level 3.2
+	{ maxMacroblocks: 8192, maxBitrate: 20000000, maxDpbMbs: 32768, level: 0x28 }, // Level 4
+	{ maxMacroblocks: 8192, maxBitrate: 50000000, maxDpbMbs: 32768, level: 0x29 }, // Level 4.1
+	{ maxMacroblocks: 8704, maxBitrate: 50000000, maxDpbMbs: 34816, level: 0x2A }, // Level 4.2
+	{ maxMacroblocks: 22080, maxBitrate: 135000000, maxDpbMbs: 110400, level: 0x32 }, // Level 5
+	{ maxMacroblocks: 36864, maxBitrate: 240000000, maxDpbMbs: 184320, level: 0x33 }, // Level 5.1
+	{ maxMacroblocks: 36864, maxBitrate: 240000000, maxDpbMbs: 184320, level: 0x34 }, // Level 5.2
+	{ maxMacroblocks: 139264, maxBitrate: 240000000, maxDpbMbs: 696320, level: 0x3C }, // Level 6
+	{ maxMacroblocks: 139264, maxBitrate: 480000000, maxDpbMbs: 696320, level: 0x3D }, // Level 6.1
+	{ maxMacroblocks: 139264, maxBitrate: 800000000, maxDpbMbs: 696320, level: 0x3E }, // Level 6.2
 ];
 
 // https://en.wikipedia.org/wiki/High_Efficiency_Video_Coding
@@ -212,7 +217,33 @@ const AV1_LEVEL_TABLE = [
 const VP9_DEFAULT_SUFFIX = '.01.01.01.01.00';
 const AV1_DEFAULT_SUFFIX = '.0.110.01.01.01.0';
 
-export const buildVideoCodecString = (codec: VideoCodec, width: number, height: number, bitrate: number) => {
+export const PRORES_FOURCCS = [
+	'ap4x', // ProRes 4444 XQ
+	'ap4h', // ProRes 4444
+	'apch', // ProRes 422 High Quality
+	'apcn', // ProRes 422 Standard Definition
+	'apcs', // ProRes 422 LT
+	'apco', // ProRes 422 Proxy
+] as const;
+export type ProresFourCc = typeof PRORES_FOURCCS[number];
+
+// Target data rates of the ProRes profiles at 1920x1080 ~30fps, as published by Apple
+const PRORES_PROFILE_TARGET_BITRATES: { fourCc: ProresFourCc; bitrate: number; alpha: boolean }[] = [
+	{ fourCc: 'apco', bitrate: 45_000_000, alpha: false }, // 422 Proxy
+	{ fourCc: 'apcs', bitrate: 102_000_000, alpha: false }, // 422 LT
+	{ fourCc: 'apcn', bitrate: 147_000_000, alpha: false }, // 422 Standard
+	{ fourCc: 'apch', bitrate: 220_000_000, alpha: false }, // 422 HQ
+	{ fourCc: 'ap4h', bitrate: 330_000_000, alpha: true }, // 4444
+	{ fourCc: 'ap4x', bitrate: 500_000_000, alpha: true }, // 4444 XQ
+];
+
+export const buildVideoCodecString = (
+	codec: VideoCodec,
+	width: number,
+	height: number,
+	bitrate: number,
+	alpha: boolean,
+) => {
 	if (codec === 'avc') {
 		const profileIndication = 0x64; // High Profile
 		const totalMacroblocks = Math.ceil(width / 16) * Math.ceil(height / 16);
@@ -271,10 +302,28 @@ export const buildVideoCodecString = (codec: VideoCodec, width: number, height: 
 		const bitDepth = '08'; // 8-bit
 
 		return `av01.${profile}.${level}${levelInfo.tier}.${bitDepth}`;
+	} else if (codec === 'prores') {
+		const referencePixels = 1920 * 1080;
+		const scaleFactor = Math.pow((width * height) / referencePixels, 0.95);
+
+		const candidates = PRORES_PROFILE_TARGET_BITRATES.filter(x => x.alpha === alpha);
+
+		let bestFourCc = candidates[0]!.fourCc;
+		let smallestDifference = Infinity;
+		for (const { fourCc, bitrate: targetBitrate } of candidates) {
+			const difference = Math.abs(targetBitrate * scaleFactor - bitrate);
+			if (difference < smallestDifference) {
+				smallestDifference = difference;
+				bestFourCc = fourCc;
+			}
+		}
+
+		return bestFourCc;
+	} else {
+		assertNever(codec);
 	}
 
-	// eslint-disable-next-line @typescript-eslint/restrict-template-expressions
-	throw new TypeError(`Unhandled codec '${codec}'.`);
+	throw new TypeError(`Unhandled codec '${String(codec)}'.`);
 };
 
 export const generateVp9CodecConfigurationFromCodecString = (codecString: string) => {
@@ -342,8 +391,18 @@ export const extractVideoCodecString = (trackInfo: {
 	hevcCodecInfo: HevcDecoderConfigurationRecord | null;
 	vp9CodecInfo: Vp9CodecInfo | null;
 	av1CodecInfo: Av1CodecInfo | null;
+	proresFormat: ProresFourCc | null;
 }) => {
-	const { codec, codecDescription, colorSpace, avcCodecInfo, hevcCodecInfo, vp9CodecInfo, av1CodecInfo } = trackInfo;
+	const {
+		codec,
+		codecDescription,
+		colorSpace,
+		avcCodecInfo,
+		hevcCodecInfo,
+		vp9CodecInfo,
+		av1CodecInfo,
+		proresFormat,
+	} = trackInfo;
 
 	if (codec === 'avc') {
 		assert(trackInfo.avcType !== null);
@@ -501,6 +560,10 @@ export const extractVideoCodecString = (trackInfo: {
 		}
 
 		return string;
+	} else if (codec === 'prores') {
+		return proresFormat ?? 'apch';
+	} else if (codec !== null) {
+		assertNever(codec);
 	}
 
 	throw new TypeError(`Unhandled codec '${codec}'.`);
@@ -528,6 +591,10 @@ export const buildAudioCodecString = (codec: AudioCodec, numberOfChannels: numbe
 		return 'vorbis';
 	} else if (codec === 'flac') {
 		return 'flac';
+	} else if (codec === 'ac3') {
+		return 'ac-3';
+	} else if (codec === 'eac3') {
+		return 'ec-3';
 	} else if ((PCM_AUDIO_CODECS as readonly string[]).includes(codec)) {
 		return codec;
 	}
@@ -537,6 +604,7 @@ export const buildAudioCodecString = (codec: AudioCodec, numberOfChannels: numbe
 
 export type AacCodecInfo = {
 	isMpeg2: boolean;
+	objectType: number | null;
 };
 
 export const extractAudioCodecString = (trackInfo: {
@@ -554,8 +622,15 @@ export const extractAudioCodecString = (trackInfo: {
 		if (aacCodecInfo.isMpeg2) {
 			return 'mp4a.67';
 		} else {
-			const audioSpecificConfig = parseAacAudioSpecificConfig(codecDescription);
-			return `mp4a.40.${audioSpecificConfig.objectType}`;
+			let objectType: number;
+			if (aacCodecInfo.objectType !== null) {
+				objectType = aacCodecInfo.objectType;
+			} else {
+				const audioSpecificConfig = parseAacAudioSpecificConfig(codecDescription);
+				objectType = audioSpecificConfig.objectType;
+			}
+
+			return `mp4a.40.${objectType}`;
 		}
 	} else if (codec === 'mp3') {
 		return 'mp3';
@@ -565,6 +640,10 @@ export const extractAudioCodecString = (trackInfo: {
 		return 'vorbis';
 	} else if (codec === 'flac') {
 		return 'flac';
+	} else if (codec === 'ac3') {
+		return 'ac-3';
+	} else if (codec === 'eac3') {
+		return 'ec-3';
 	} else if (codec && (PCM_AUDIO_CODECS as readonly string[]).includes(codec)) {
 		return codec;
 	}
@@ -572,109 +651,45 @@ export const extractAudioCodecString = (trackInfo: {
 	throw new TypeError(`Unhandled codec '${codec}'.`);
 };
 
-export type AacAudioSpecificConfig = {
-	objectType: number;
-	frequencyIndex: number;
-	sampleRate: number | null;
-	channelConfiguration: number;
-	numberOfChannels: number | null;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export const guessDescriptionForVideo = (decoderConfig: VideoDecoderConfig): Uint8Array | undefined => {
+	return undefined; // All codecs allow an undefined description
 };
 
-export const aacFrequencyTable = [
-	96000, 88200, 64000, 48000, 44100, 32000,
-	24000, 22050, 16000, 12000, 11025, 8000, 7350,
-];
+export const guessDescriptionForAudio = (decoderConfig: AudioDecoderConfig): Uint8Array | undefined | false => {
+	switch (decoderConfig.codec) {
+		case 'flac': {
+			const referenceDescription = base64ToBytes('ZkxhQ4AAACIQABAAAAYtACWtCsRC8AANRBhVFucAcYu5ASE2m1Dxv8tw');
+			if (decoderConfig.sampleRate >= (1 << 20) || decoderConfig.numberOfChannels > 8) {
+				return false;
+			}
 
-export const aacChannelMap = [-1, 1, 2, 3, 4, 5, 6, 8];
+			referenceDescription[18] = decoderConfig.sampleRate >>> 12;
+			referenceDescription[19] = decoderConfig.sampleRate >>> 4;
+			referenceDescription[20]
+				= ((decoderConfig.sampleRate & 0x0f) << 4) | ((decoderConfig.numberOfChannels - 1) << 1);
 
-export const parseAacAudioSpecificConfig = (bytes: Uint8Array | null): AacAudioSpecificConfig => {
-	if (!bytes || bytes.byteLength < 2) {
-		throw new TypeError('AAC description must be at least 2 bytes long.');
+			return referenceDescription;
+		};
+
+		case 'vorbis': {
+			// eslint-disable-next-line @stylistic/max-len
+			const referenceDescription = base64ToBytes('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AAAAAAAAAAAIAAAYcAAACDChDBQashIAiAIAcCiKZQHHsSzgOJYFJMmyAJYF0DyApgFEEQAIAAAocAAACLBBU2JxgEJDVgIAUQAABsWxLE0TRZKkaZoniiRJ0zxPFGma53meacLzPM80IYqiaJoQRVE0TZimaaoqME1VFQAAUOAAABBgg6bE4gCFhqwEAEICAByKYlma5nmeJ4qmqZokSdM8TxRF0TRNU1VJkqZ5niiKommapqqyLE3zPFEURdNUVVWFpnmeKIqiaaqq6sLzPE8URdE0VdV14XmeJ4qiaJqq6roQRVE0TdNUTVV1XSCKpmmaqqqqrgtETxRNU1Vd13WB54miaaqqq7ouEE3TVFVVdV1ZBpimaaqq68oyQFVV1XVdV5YBqqqqruu6sgxQVdd1XVmWZQCu67qyLMsCAAAOHAAAAoygk4wqi7DRhAsPQKEhKwKAKAAAwBimFFPKMCYhpBAaxiSEFEImJaXSUqogpFJSKRWEVEoqJaOUUmopVRBSKamUCkIqJZVSAADYgQMA2IGFUGjISgAgDwCAMEYpxhhzTiKkFGPOOScRUoox55yTSjHmnHPOSSkZc8w556SUzjnnnHNSSuacc845KaVzzjnnnJRSSuecc05KKSWEzkEnpZTSOeecEwAAVOAAABBgo8jmBCNBhYasBABSAQAMjmNZmuZ5omialiRpmud5niiapiZJmuZ5nieKqsnzPE8URdE0VZXneZ4oiqJpqirXFUXTNE1VVV2yLIqmaZqq6rowTdNUVdd1XZimaaqq67oubFtVVdV1ZRm2raqq6rqyDFzXdWXZloEsu67s2rIAAPAEBwCgAhtWRzgpGgssNGQlAJABAEAYg5BCCCFlEEIKIYSUUggJAAAYcAAACDChDBQashIASAUAAIyx1lprrbXWQGettdZaa62AzFprrbXWWmuttdZaa6211lJrrbXWWmuttdZaa6211lprrbXWWmuttdZaa6211lprrbXWWmuttdZaa6211lprrbXWWmstpZRSSimllFJKKaWUUkoppZRSSgUA+lU4APg/2LA6wknRWGChISsBgHAAAMAYpRhzDEIppVQIMeacdFRai7FCiDHnJKTUWmzFc85BKCGV1mIsnnMOQikpxVZjUSmEUlJKLbZYi0qho5JSSq3VWIwxqaTWWoutxmKMSSm01FqLMRYjbE2ptdhqq7EYY2sqLbQYY4zFCF9kbC2m2moNxggjWywt1VprMMYY3VuLpbaaizE++NpSLDHWXAAAd4MDAESCjTOsJJ0VjgYXGrISAAgJACAQUooxxhhzzjnnpFKMOeaccw5CCKFUijHGnHMOQgghlIwx5pxzEEIIIYRSSsaccxBCCCGEkFLqnHMQQgghhBBKKZ1zDkIIIYQQQimlgxBCCCGEEEoopaQUQgghhBBCCKmklEIIIYRSQighlZRSCCGEEEIpJaSUUgohhFJCCKGElFJKKYUQQgillJJSSimlEkoJJYQSUikppRRKCCGUUkpKKaVUSgmhhBJKKSWllFJKIYQQSikFAAAcOAAABBhBJxlVFmGjCRcegEJDVgIAZAAAkKKUUiktRYIipRikGEtGFXNQWoqocgxSzalSziDmJJaIMYSUk1Qy5hRCDELqHHVMKQYtlRhCxhik2HJLoXMOAAAAQQCAgJAAAAMEBTMAwOAA4XMQdAIERxsAgCBEZohEw0JweFAJEBFTAUBigkIuAFRYXKRdXECXAS7o4q4DIQQhCEEsDqCABByccMMTb3jCDU7QKSp1IAAAAAAADADwAACQXAAREdHMYWRobHB0eHyAhIiMkAgAAAAAABcAfAAAJCVAREQ0cxgZGhscHR4fICEiIyQBAIAAAgAAAAAggAAEBAQAAAAAAAIAAAAEBA==');
+
+			const view = toDataView(referenceDescription);
+			view.setUint8(15, decoderConfig.numberOfChannels);
+			view.setUint32(16, decoderConfig.sampleRate, true);
+
+			return referenceDescription;
+		};
+
+		default: return undefined; // All other codecs allow an undefined description
 	}
-
-	const bitstream = new Bitstream(bytes);
-
-	let objectType = bitstream.readBits(5);
-	if (objectType === 31) {
-		objectType = 32 + bitstream.readBits(6);
-	}
-
-	const frequencyIndex = bitstream.readBits(4);
-	let sampleRate: number | null = null;
-	if (frequencyIndex === 15) {
-		sampleRate = bitstream.readBits(24);
-	} else {
-		if (frequencyIndex < aacFrequencyTable.length) {
-			sampleRate = aacFrequencyTable[frequencyIndex]!;
-		}
-	}
-
-	const channelConfiguration = bitstream.readBits(4);
-	let numberOfChannels: number | null = null;
-	if (channelConfiguration >= 1 && channelConfiguration <= 7) {
-		numberOfChannels = aacChannelMap[channelConfiguration]!;
-	}
-
-	return {
-		objectType,
-		frequencyIndex,
-		sampleRate,
-		channelConfiguration,
-		numberOfChannels,
-	};
-};
-
-export const buildAacAudioSpecificConfig = (config: {
-	objectType: number;
-	sampleRate: number;
-	numberOfChannels: number;
-}) => {
-	let frequencyIndex = aacFrequencyTable.indexOf(config.sampleRate);
-	let customSampleRate: number | null = null;
-
-	if (frequencyIndex === -1) {
-		frequencyIndex = 15;
-		customSampleRate = config.sampleRate;
-	}
-
-	const channelConfiguration = aacChannelMap.indexOf(config.numberOfChannels);
-	if (channelConfiguration === -1) {
-		throw new TypeError(`Unsupported number of channels: ${config.numberOfChannels}`);
-	}
-
-	let bitCount = 5 + 4 + 4;
-	if (config.objectType >= 32) {
-		bitCount += 6;
-	}
-	if (frequencyIndex === 15) {
-		bitCount += 24;
-	}
-
-	const byteCount = Math.ceil(bitCount / 8);
-	const bytes = new Uint8Array(byteCount);
-	const bitstream = new Bitstream(bytes);
-
-	if (config.objectType < 32) {
-		bitstream.writeBits(5, config.objectType);
-	} else {
-		bitstream.writeBits(5, 31);
-		bitstream.writeBits(6, config.objectType - 32);
-	}
-
-	bitstream.writeBits(4, frequencyIndex);
-
-	if (frequencyIndex === 15) {
-		bitstream.writeBits(24, customSampleRate!);
-	}
-
-	bitstream.writeBits(4, channelConfiguration);
-
-	return bytes;
 };
 
 export const OPUS_SAMPLE_RATE = 48_000;
 
-const PCM_CODEC_REGEX = /^pcm-([usf])(\d+)+(be)?$/;
+const PCM_CODEC_REGEX = /^pcm-([usf])(\d+)(be)?$/;
 
 export const parsePcmCodec = (codec: PcmAudioCodec) => {
 	assert(PCM_AUDIO_CODECS.includes(codec));
@@ -716,24 +731,31 @@ export const inferCodecFromCodecString = (codecString: string): MediaCodec | nul
 		return 'vp9';
 	} else if (codecString.startsWith('av01')) {
 		return 'av1';
+	} else if ((PRORES_FOURCCS as readonly string[]).includes(codecString)) {
+		return 'prores';
 	}
 
 	// Audio codecs
-	if (codecString.startsWith('mp4a.40') || codecString === 'mp4a.67') {
-		return 'aac';
-	} else if (
+	if (
 		codecString === 'mp3'
 		|| codecString === 'mp4a.69'
 		|| codecString === 'mp4a.6B'
 		|| codecString === 'mp4a.6b'
+		|| codecString === 'mp4a.40.34'
 	) {
 		return 'mp3';
+	} else if (codecString.startsWith('mp4a.40.') || codecString === 'mp4a.67') {
+		return 'aac';
 	} else if (codecString === 'opus') {
 		return 'opus';
 	} else if (codecString === 'vorbis') {
 		return 'vorbis';
 	} else if (codecString === 'flac') {
 		return 'flac';
+	} else if (codecString === 'ac-3' || codecString === 'ac3') {
+		return 'ac3';
+	} else if (codecString === 'ec-3' || codecString === 'eac3') {
+		return 'eac3';
 	} else if (codecString === 'ulaw') {
 		return 'ulaw';
 	} else if (codecString === 'alaw') {
@@ -786,7 +808,7 @@ export const getAudioEncoderConfigExtension = (codec: AudioCodec) => {
 	return {};
 };
 
-const VALID_VIDEO_CODEC_STRING_PREFIXES = ['avc1', 'avc3', 'hev1', 'hvc1', 'vp8', 'vp09', 'av01'];
+const VALID_VIDEO_CODEC_STRING_PREFIXES = ['avc1', 'avc3', 'hev1', 'hvc1', 'vp8', 'vp09', 'av01', ...PRORES_FOURCCS];
 const AVC_CODEC_STRING_REGEX = /^(avc1|avc3)\.[0-9a-fA-F]{6}$/;
 const HEVC_CODEC_STRING_REGEX = /^(hev1|hvc1)\.(?:[ABC]?\d+)\.[0-9a-fA-F]{1,8}\.[LH]\d+(?:\.[0-9a-fA-F]{1,2}){0,6}$/;
 const VP9_CODEC_STRING_REGEX = /^vp09(?:\.\d{2}){3}(?:(?:\.\d{2}){5})?$/;
@@ -811,7 +833,7 @@ export const validateVideoChunkMetadata = (metadata: EncodedVideoChunkMetadata |
 	if (!VALID_VIDEO_CODEC_STRING_PREFIXES.some(prefix => metadata.decoderConfig!.codec.startsWith(prefix))) {
 		throw new TypeError(
 			'Video chunk metadata decoder configuration codec string must be a valid video codec string as specified in'
-			+ ' the WebCodecs Codec Registry.',
+			+ ' the Mediabunny Codec Registry.',
 		);
 	}
 	if (!Number.isInteger(metadata.decoderConfig.codedWidth) || metadata.decoderConfig.codedWidth! <= 0) {
@@ -822,6 +844,37 @@ export const validateVideoChunkMetadata = (metadata: EncodedVideoChunkMetadata |
 	if (!Number.isInteger(metadata.decoderConfig.codedHeight) || metadata.decoderConfig.codedHeight! <= 0) {
 		throw new TypeError(
 			'Video chunk metadata decoder configuration must specify a valid codedHeight (positive integer).',
+		);
+	}
+	if (
+		metadata.decoderConfig.displayAspectWidth !== undefined
+		&& (
+			!Number.isInteger(metadata.decoderConfig.displayAspectWidth)
+			|| metadata.decoderConfig.displayAspectWidth <= 0
+		)
+	) {
+		throw new TypeError(
+			'Video chunk metadata decoder configuration displayAspectWidth, when defined, must be a positive integer.',
+		);
+	}
+	if (
+		metadata.decoderConfig.displayAspectHeight !== undefined
+		&& (
+			!Number.isInteger(metadata.decoderConfig.displayAspectHeight)
+			|| metadata.decoderConfig.displayAspectHeight <= 0
+		)
+	) {
+		throw new TypeError(
+			'Video chunk metadata decoder configuration displayAspectHeight, when defined, must be a positive integer.',
+		);
+	}
+	if (
+		(metadata.decoderConfig.displayAspectWidth !== undefined)
+		!== (metadata.decoderConfig.displayAspectHeight !== undefined)
+	) {
+		throw new TypeError(
+			'Video chunk metadata decoder configuration must specify both displayAspectWidth and displayAspectHeight,'
+			+ ' or neither.',
 		);
 	}
 	if (metadata.decoderConfig.description !== undefined) {
@@ -922,10 +975,21 @@ export const validateVideoChunkMetadata = (metadata: EncodedVideoChunkMetadata |
 				+ ' specified in Section "Codecs Parameter String" of https://aomediacodec.github.io/av1-isobmff/.',
 			);
 		}
+	} else if (PRORES_FOURCCS.some(x => metadata.decoderConfig!.codec.startsWith(x))) {
+		// ProRes-specific validation
+
+		if (!PRORES_FOURCCS.some(x => metadata.decoderConfig!.codec === x)) {
+			throw new TypeError(
+				`Video chunk metadata decoder configuration codec string for ProRes must be one of the valid ProRes`
+				+ ` four-character codes: ${PRORES_FOURCCS.join(', ')}.`,
+			);
+		}
 	}
 };
 
-const VALID_AUDIO_CODEC_STRING_PREFIXES = ['mp4a', 'mp3', 'opus', 'vorbis', 'flac', 'ulaw', 'alaw', 'pcm'];
+const VALID_AUDIO_CODEC_STRING_PREFIXES = [
+	'mp4a', 'mp3', 'opus', 'vorbis', 'flac', 'ulaw', 'alaw', 'pcm', 'ac-3', 'ec-3',
+];
 
 export const validateAudioChunkMetadata = (metadata: EncodedAudioChunkMetadata | undefined) => {
 	if (!metadata) {
@@ -946,7 +1010,7 @@ export const validateAudioChunkMetadata = (metadata: EncodedAudioChunkMetadata |
 	if (!VALID_AUDIO_CODEC_STRING_PREFIXES.some(prefix => metadata.decoderConfig!.codec.startsWith(prefix))) {
 		throw new TypeError(
 			'Audio chunk metadata decoder configuration codec string must be a valid audio codec string as specified in'
-			+ ' the WebCodecs Codec Registry.',
+			+ ' the Mediabunny Codec Registry.',
 		);
 	}
 	if (!Number.isInteger(metadata.decoderConfig.sampleRate) || metadata.decoderConfig.sampleRate <= 0) {
@@ -985,12 +1049,9 @@ export const validateAudioChunkMetadata = (metadata: EncodedAudioChunkMetadata |
 			);
 		}
 
-		if (!metadata.decoderConfig.description) {
-			throw new TypeError(
-				'Audio chunk metadata decoder configuration for AAC must include a description, which is expected to be'
-				+ ' an AudioSpecificConfig as specified in ISO 14496-3.',
-			);
-		}
+		// `description` may or may not be set, depending on if the format is AAC or ADTS, so don't perform any
+		// validation for it.
+		// https://www.w3.org/TR/webcodecs-aac-codec-registration
 	} else if (metadata.decoderConfig.codec.startsWith('mp3') || metadata.decoderConfig.codec.startsWith('mp4a')) {
 		// MP3-specific validation
 
@@ -1045,6 +1106,18 @@ export const validateAudioChunkMetadata = (metadata: EncodedAudioChunkMetadata |
 				'Audio chunk metadata decoder configuration for FLAC must include a description, which is expected to'
 				+ ' adhere to the format described in https://www.w3.org/TR/webcodecs-flac-codec-registration/.',
 			);
+		}
+	} else if (metadata.decoderConfig.codec.startsWith('ac-3') || metadata.decoderConfig.codec.startsWith('ac3')) {
+		// AC3-specific validation
+
+		if (metadata.decoderConfig.codec !== 'ac-3') {
+			throw new TypeError('Audio chunk metadata decoder configuration codec string for AC-3 must be "ac-3".');
+		}
+	} else if (metadata.decoderConfig.codec.startsWith('ec-3') || metadata.decoderConfig.codec.startsWith('eac3')) {
+		// EAC3-specific validation
+
+		if (metadata.decoderConfig.codec !== 'ec-3') {
+			throw new TypeError('Audio chunk metadata decoder configuration codec string for EC-3 must be "ec-3".');
 		}
 	} else if (
 		metadata.decoderConfig.codec.startsWith('pcm')

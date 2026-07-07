@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -22,8 +22,12 @@ import {
 	VideoCodec,
 } from './codec';
 import { customAudioEncoders, customVideoEncoders } from './custom-coder';
-import { isFirefox } from './misc';
+import { isFirefox, MaybePromise, Rotation } from './misc';
 import { EncodedPacket } from './packet';
+import { AudioSample, CropRectangle, validateCropRectangle, VideoSample, VideoSampleResource } from './sample';
+
+export const canEncodeVideoMemo = new Map<string, Promise<boolean>>();
+export const canEncodeAudioMemo = new Map<string, Promise<boolean>>();
 
 /**
  * Configuration object that controls video encoding. Can be used to set codec, quality, and more.
@@ -39,7 +43,7 @@ export type VideoEncodingConfig = {
 	 */
 	bitrate: number | Quality;
 	/**
-	 * The interval, in seconds, of how often frames are encoded as a key frame. The default is 5 seconds. Frequent key
+	 * The interval, in seconds, of how often frames are encoded as a key frame. The default is 2 seconds. Frequent key
 	 * frames improve seeking behavior but increase file size. When using multiple video tracks, you should give them
 	 * all the same key frame interval.
 	 */
@@ -58,6 +62,11 @@ export type VideoEncodingConfig = {
 	 */
 	sizeChangeBehavior?: 'deny' | 'passThrough' | 'fill' | 'contain' | 'cover';
 
+	/**
+	 * Optional transformations to apply to the video frames before they are passed to the encoder.
+	 */
+	transform?: VideoTransformOptions;
+
 	/** Called for each successfully encoded packet. Both the packet and the encoding metadata are passed. */
 	onEncodedPacket?: (packet: EncodedPacket, meta: EncodedVideoChunkMetadata | undefined) => unknown;
 	/**
@@ -65,7 +74,74 @@ export type VideoEncodingConfig = {
 	 * WebCodecs API, is created.
 	 */
 	onEncoderConfig?: (config: VideoEncoderConfig) => unknown;
+	/** Called right before a sample is passed to the encoder. */
+	onEncodedSample?: (sample: VideoSample) => unknown;
 } & VideoEncodingAdditionalOptions;
+
+/**
+ * Options for transforming video frames before encoding.
+ * @group Encoding
+ * @public
+ */
+export type VideoTransformOptions = {
+	/**
+	 * The width in pixels to resize the frames to. If height is not set, it will be deduced
+	 * automatically based on aspect ratio.
+	 */
+	width?: number;
+	/**
+	 * The height in pixels to resize the frames to. If width is not set, it will be deduced
+	 * automatically based on aspect ratio.
+	 */
+	height?: number;
+	/**
+	 * The fitting algorithm in case both width and height are set.
+	 *
+	 * - `'fill'` will stretch the image to fill the entire box, potentially altering aspect ratio.
+	 * - `'contain'` will contain the entire image within the box while preserving aspect ratio. This may lead to
+	 * letterboxing.
+	 * - `'cover'` will scale the image until the entire box is filled, while preserving aspect ratio.
+	 *
+	 * To avoid ambiguity, this field must not be set when `sizeChangeBehavior` is `'fill'`, `'contain'` or
+	 * `'deny'`, since `sizeChangeBehavior` already determines the fitting algorithm.
+	 */
+	fit?: 'fill' | 'contain' | 'cover';
+	/**
+	 * The clockwise rotation by which to rotate the frames. Rotation is applied before resizing.
+	 */
+	rotate?: Rotation;
+	/**
+	 * Specifies the rectangular region of the frames to crop to. The crop region will automatically be
+	 * clamped to the dimensions of the frame. Cropping is performed after rotation but before resizing.
+	 */
+	crop?: CropRectangle;
+	/**
+	 * Whether to discard or keep the transparency information of the video samples. The default is `'keep'`.
+	 */
+	alpha?: 'keep' | 'discard';
+	/**
+	 * The frame rate in hertz to normalize the video frame stream to.
+	 */
+	frameRate?: number;
+	/**
+	 * Allows for custom user-defined processing of video frames, e.g. for applying overlays, color transformations,
+	 * or timestamp modifications. Will be called for each video frame after transformations and frame rate
+	 * corrections.
+	 *
+	 * Must return a {@link VideoSample}, a {@link VideoSampleResource} or a `CanvasImageSource`, an array of them, or
+	 * `null` for dropping the frame. When non-timestamped data is returned, the timestamp and duration from the input
+	 * sample will be used.
+	 */
+	process?: (sample: VideoSample) => MaybePromise<
+		CanvasImageSource | VideoSample | VideoSampleResource
+		| (CanvasImageSource | VideoSample | VideoSampleResource)[] | null
+	>;
+	/**
+	 * Forces every video frame through the transformation step even if no transformation properties are defined.
+	 * This can be used, for example, to bake rotation into the encoded video frames.
+	 */
+	force?: boolean;
+};
 
 export const validateVideoEncodingConfig = (config: VideoEncodingConfig) => {
 	if (!config || typeof config !== 'object') {
@@ -92,11 +168,74 @@ export const validateVideoEncodingConfig = (config: VideoEncodingConfig) => {
 			+ ' or \'cover\'.',
 		);
 	}
+	if (config.transform !== undefined) {
+		if (typeof config.transform !== 'object' || !config.transform) {
+			throw new TypeError('config.transform, when provided, must be an object.');
+		}
+		if (
+			config.transform.width !== undefined
+			&& (!Number.isInteger(config.transform.width) || config.transform.width <= 0)
+		) {
+			throw new TypeError('config.transform.width, when provided, must be a positive integer.');
+		}
+		if (
+			config.transform.height !== undefined
+			&& (!Number.isInteger(config.transform.height) || config.transform.height <= 0)
+		) {
+			throw new TypeError('config.transform.height, when provided, must be a positive integer.');
+		}
+		if (config.transform.fit !== undefined && !['fill', 'contain', 'cover'].includes(config.transform.fit)) {
+			throw new TypeError('config.transform.fit, when provided, must be one of "fill", "contain", or "cover".');
+		}
+		if (
+			config.transform.width !== undefined
+			&& config.transform.height !== undefined
+			&& config.transform.fit === undefined
+			&& !['fill', 'contain', 'cover'].includes(config.sizeChangeBehavior!)
+		) {
+			throw new TypeError(
+				'When both config.transform.width and config.transform.height are provided, config.transform.fit'
+				+ ' must also be provided.',
+			);
+		}
+		if (
+			config.transform.fit !== undefined
+			&& ['fill', 'contain', 'cover'].includes(config.sizeChangeBehavior!)
+			&& config.transform.fit !== config.sizeChangeBehavior
+		) {
+			throw new TypeError(
+				'config.transform.fit, when provided, cannot differ from config.sizeChangeBehavior when'
+				+ ' config.sizeChangeBehavior is \'fill\', \'contain\' or \'cover\', as sizeChangeBehavior already'
+				+ ' determines the fitting algorithm.',
+			);
+		}
+		if (config.transform.rotate !== undefined && ![0, 90, 180, 270].includes(config.transform.rotate)) {
+			throw new TypeError('config.transform.rotate, when provided, must be 0, 90, 180 or 270.');
+		}
+		if (config.transform.crop !== undefined) {
+			validateCropRectangle(config.transform.crop, 'config.transform.');
+		}
+		if (config.transform.process !== undefined && typeof config.transform.process !== 'function') {
+			throw new TypeError('config.transform.process, when provided, must be a function.');
+		}
+		if (
+			config.transform.frameRate !== undefined
+			&& (!Number.isFinite(config.transform.frameRate) || config.transform.frameRate <= 0)
+		) {
+			throw new TypeError('config.transform.frameRate, when provided, must be a finite positive number.');
+		}
+		if (config.transform.force !== undefined && typeof config.transform.force !== 'boolean') {
+			throw new TypeError('config.transform.force, when provided, must be a boolean.');
+		}
+	}
 	if (config.onEncodedPacket !== undefined && typeof config.onEncodedPacket !== 'function') {
-		throw new TypeError('config.onEncodedChunk, when provided, must be a function.');
+		throw new TypeError('config.onEncodedPacket, when provided, must be a function.');
 	}
 	if (config.onEncoderConfig !== undefined && typeof config.onEncoderConfig !== 'function') {
 		throw new TypeError('config.onEncoderConfig, when provided, must be a function.');
+	}
+	if (config.onEncodedSample !== undefined && typeof config.onEncodedSample !== 'function') {
+		throw new TypeError('config.onEncodedSample, when provided, must be a function.');
 	}
 
 	validateVideoEncodingAdditionalOptions(config.codec, config);
@@ -112,8 +251,9 @@ export type VideoEncodingAdditionalOptions = {
 	 * What to do with alpha data contained in the video samples.
 	 *
 	 * - `'discard'` (default): Only the samples' color data is kept; the video is opaque.
-	 * - `'keep'`: The samples' alpha data is also encoded as side data. Make sure to pair this mode with a container
-	 * format that supports transparency (such as WebM or Matroska).
+	 * - `'keep'`: The samples' alpha data is also encoded. Depending on the codec, the alpha may be emitted as packet
+	 * side data or in-band alongside the main packet. For codecs that emit alpha side data, such as VP9, make sure to
+	 * pair this mode with a container format that supports transparency (such as WebM or Matroska).
 	 */
 	alpha?: 'discard' | 'keep';
 	/** Configures the bitrate mode; defaults to `'variable'`. */
@@ -127,7 +267,7 @@ export type VideoEncodingAdditionalOptions = {
 	 */
 	latencyMode?: 'quality' | 'realtime';
 	/**
-	 * The full codec string as specified in the WebCodecs Codec Registry. This string must match the codec
+	 * The full codec string as specified in the Mediabunny Codec Registry. This string must match the codec
 	 * specified in `codec`. When not set, a fitting codec string will be constructed automatically by the library.
 	 */
 	fullCodecString?: string;
@@ -192,6 +332,8 @@ export const buildVideoEncoderConfig = (options: {
 	height: number;
 	bitrate: number | Quality;
 	framerate: number | undefined;
+	squarePixelWidth?: number;
+	squarePixelHeight?: number;
 } & VideoEncodingAdditionalOptions): VideoEncoderConfig => {
 	const resolvedBitrate = options.bitrate instanceof Quality
 		? options.bitrate._toVideoBitrate(options.codec, options.width, options.height)
@@ -203,9 +345,12 @@ export const buildVideoEncoderConfig = (options: {
 			options.width,
 			options.height,
 			resolvedBitrate,
+			options.alpha === 'keep',
 		),
 		width: options.width,
 		height: options.height,
+		displayWidth: options.squarePixelWidth,
+		displayHeight: options.squarePixelHeight,
 		bitrate: resolvedBitrate,
 		bitrateMode: options.bitrateMode,
 		alpha: options.alpha ?? 'discard',
@@ -232,6 +377,11 @@ export type AudioEncodingConfig = {
 	 */
 	bitrate?: number | Quality;
 
+	/**
+	 * Optional transformations to apply to the audio samples before they are passed to the encoder.
+	 */
+	transform?: AudioTransformOptions;
+
 	/** Called for each successfully encoded packet. Both the packet and the encoding metadata are passed. */
 	onEncodedPacket?: (packet: EncodedPacket, meta: EncodedAudioChunkMetadata | undefined) => unknown;
 	/**
@@ -239,7 +389,35 @@ export type AudioEncodingConfig = {
 	 * WebCodecs API, is created.
 	 */
 	onEncoderConfig?: (config: AudioEncoderConfig) => unknown;
+	/** Called right before a sample is passed to the encoder. */
+	onEncodedSample?: (sample: AudioSample) => unknown;
 } & AudioEncodingAdditionalOptions;
+
+/**
+ * Options for transforming audio samples before encoding.
+ * @group Encoding
+ * @public
+ */
+export type AudioTransformOptions = {
+	/** The desired number of output channels to up/downmix to. */
+	numberOfChannels?: number;
+	/** The desired output sample rate in hertz to resample to. */
+	sampleRate?: number;
+	/**
+	 * The desired sample format (and therefore bit depth) of the audio samples before they are passed to the encoder.
+	 * Can be used to control bit depth with certain output codecs such as FLAC.
+	 */
+	sampleFormat?: 'u8' | 's16' | 's32' | 'f32';
+	/**
+	 * Allows for custom user-defined processing of audio samples, e.g. for applying audio effects or timestamp
+	 * modifications. Called for each audio sample after resampling and remixing.
+	 *
+	 * Must return an {@link AudioSample}, an array of them, or `null` for dropping the sample.
+	 */
+	process?: (sample: AudioSample) => MaybePromise<
+		AudioSample | AudioSample[] | null
+	>;
+};
 
 export const validateAudioEncodingConfig = (config: AudioEncodingConfig) => {
 	if (!config || typeof config !== 'object') {
@@ -250,7 +428,7 @@ export const validateAudioEncodingConfig = (config: AudioEncodingConfig) => {
 	}
 	if (
 		config.bitrate === undefined
-		&& (!(PCM_AUDIO_CODECS as readonly string[]).includes(config.codec) || config.codec === 'flac')
+		&& !((PCM_AUDIO_CODECS as readonly string[]).includes(config.codec) || config.codec === 'flac')
 	) {
 		throw new TypeError('config.bitrate must be provided for compressed audio codecs.');
 	}
@@ -261,11 +439,40 @@ export const validateAudioEncodingConfig = (config: AudioEncodingConfig) => {
 	) {
 		throw new TypeError('config.bitrate, when provided, must be a positive integer or a quality.');
 	}
+	if (config.transform !== undefined) {
+		if (typeof config.transform !== 'object' || !config.transform) {
+			throw new TypeError('config.transform, when provided, must be an object.');
+		}
+		if (
+			config.transform.numberOfChannels !== undefined
+			&& (!Number.isInteger(config.transform.numberOfChannels) || config.transform.numberOfChannels <= 0)
+		) {
+			throw new TypeError('config.transform.numberOfChannels, when provided, must be a positive integer.');
+		}
+		if (
+			config.transform.sampleRate !== undefined
+			&& (!Number.isInteger(config.transform.sampleRate) || config.transform.sampleRate <= 0)
+		) {
+			throw new TypeError('config.transform.sampleRate, when provided, must be a positive integer.');
+		}
+		if (
+			config.transform.sampleFormat !== undefined
+			&& !['u8', 's16', 's32', 'f32'].includes(config.transform.sampleFormat)
+		) {
+			throw new TypeError('config.transform.sampleFormat, when provided, must be one of: u8, s16, s32, f32.');
+		}
+		if (config.transform.process !== undefined && typeof config.transform.process !== 'function') {
+			throw new TypeError('config.transform.process, when provided, must be a function.');
+		}
+	}
 	if (config.onEncodedPacket !== undefined && typeof config.onEncodedPacket !== 'function') {
-		throw new TypeError('config.onEncodedChunk, when provided, must be a function.');
+		throw new TypeError('config.onEncodedPacket, when provided, must be a function.');
 	}
 	if (config.onEncoderConfig !== undefined && typeof config.onEncoderConfig !== 'function') {
 		throw new TypeError('config.onEncoderConfig, when provided, must be a function.');
+	}
+	if (config.onEncodedSample !== undefined && typeof config.onEncodedSample !== 'function') {
+		throw new TypeError('config.onEncodedSample, when provided, must be a function.');
 	}
 
 	validateAudioEncodingAdditionalOptions(config.codec, config);
@@ -280,7 +487,7 @@ export type AudioEncodingAdditionalOptions = {
 	/** Configures the bitrate mode. */
 	bitrateMode?: 'constant' | 'variable';
 	/**
-	 * The full codec string as specified in the WebCodecs Codec Registry. This string must match the codec
+	 * The full codec string as specified in the Mediabunny Codec Registry. This string must match the codec
 	 * specified in `codec`. When not set, a fitting codec string will be constructed automatically by the library.
 	 */
 	fullCodecString?: string;
@@ -344,19 +551,19 @@ export class Quality {
 	/** @internal */
 	_toVideoBitrate(codec: VideoCodec, width: number, height: number) {
 		const pixels = width * height;
+		const referencePixels = 1920 * 1080;
+		const referenceBitrate = 3_000_000;
+		const scaleFactor = Math.pow(pixels / referencePixels, 0.95); // Slight non-linear scaling
+		const baseBitrate = referenceBitrate * scaleFactor;
 
-		const codecEfficiencyFactors = {
+		const codecEfficiencyFactors: Record<VideoCodec, number> = {
 			avc: 1.0, // H.264/AVC (baseline)
 			hevc: 0.6, // H.265/HEVC (~40% more efficient than AVC)
 			vp9: 0.6, // Similar to HEVC
 			av1: 0.4, // ~60% more efficient than AVC
 			vp8: 1.2, // Slightly less efficient than AVC
+			prores: 220_000_000 / referenceBitrate, // Apple ProRes white paper claims 220 Mbps for 1080p 422 HQ @30Hz
 		};
-
-		const referencePixels = 1920 * 1080;
-		const referenceBitrate = 3000000;
-		const scaleFactor = Math.pow(pixels / referencePixels, 0.95); // Slight non-linear scaling
-		const baseBitrate = referenceBitrate * scaleFactor;
 
 		const codecAdjustedBitrate = baseBitrate * codecEfficiencyFactors[codec];
 		const finalBitrate = codecAdjustedBitrate * this._factor;
@@ -375,6 +582,8 @@ export class Quality {
 			opus: 64000, // 64kbps base for Opus
 			mp3: 160000, // 160kbps base for MP3
 			vorbis: 64000, // 64kbps base for Vorbis
+			ac3: 384000, // 384kbps base for AC-3
+			eac3: 192000, // 192kbps base for E-AC-3
 		};
 
 		const baseBitrate = baseRates[codec as keyof typeof baseRates];
@@ -488,38 +697,7 @@ export const canEncodeVideo = async (
 	}
 	validateVideoEncodingAdditionalOptions(codec, restOptions);
 
-	let encoderConfig: VideoEncoderConfig | null = null;
-
-	if (customVideoEncoders.length > 0) {
-		encoderConfig ??= buildVideoEncoderConfig({
-			codec,
-			width,
-			height,
-			bitrate,
-			framerate: undefined,
-			...restOptions,
-		});
-
-		if (customVideoEncoders.some(x => x.supports(codec, encoderConfig!))) {
-			// There's a custom encoder
-			return true;
-		}
-	}
-
-	if (typeof VideoEncoder === 'undefined') {
-		return false;
-	}
-
-	const hasOddDimension = width % 2 === 1 || height % 2 === 1;
-	if (
-		hasOddDimension
-		&& (codec === 'avc' || codec === 'hevc')
-	) {
-		// Disallow odd dimensions for certain codecs
-		return false;
-	}
-
-	encoderConfig ??= buildVideoEncoderConfig({
+	const encoderConfig = buildVideoEncoderConfig({
 		codec,
 		width,
 		height,
@@ -529,46 +707,74 @@ export const canEncodeVideo = async (
 		alpha: 'discard', // Since we handle alpha ourselves
 	});
 
-	const support = await VideoEncoder.isConfigSupported(encoderConfig);
-	if (!support.supported) {
-		return false;
+	const key = JSON.stringify(encoderConfig);
+	const memoized = canEncodeVideoMemo.get(key);
+	if (memoized) {
+		return memoized;
 	}
 
-	if (isFirefox()) {
-		// isConfigSupported on Firefox appears to unreliably indicate if encoding will actually succeed. Therefore, we
-		// just try encoding a frame to see if it actually works.
-		// https://github.com/Vanilagy/mediabunny/issues/222
+	const promise = (async () => {
+		if (customVideoEncoders.some(x => x.supports(codec, encoderConfig))) {
+			// There's a custom encoder
+			return true;
+		}
+		if (typeof VideoEncoder === 'undefined') {
+			return false;
+		}
 
-		// eslint-disable-next-line @typescript-eslint/no-misused-promises, no-async-promise-executor
-		return new Promise<boolean>(async (resolve) => {
-			try {
-				const encoder = new VideoEncoder({
-					output: () => {},
-					error: () => resolve(false),
-				});
-				encoder.configure(encoderConfig);
+		const hasOddDimension = width % 2 === 1 || height % 2 === 1;
+		if (
+			hasOddDimension
+			&& (codec === 'avc' || codec === 'hevc')
+		) {
+			// Disallow odd dimensions for certain codecs
+			return false;
+		}
 
-				const frameData = new Uint8Array(width * height * 4);
-				const frame = new VideoFrame(frameData, {
-					format: 'RGBA',
-					codedWidth: width,
-					codedHeight: height,
-					timestamp: 0,
-				});
+		const support = await VideoEncoder.isConfigSupported(encoderConfig);
+		if (!support.supported) {
+			return false;
+		}
 
-				encoder.encode(frame);
-				frame.close();
+		if (isFirefox()) {
+			// isConfigSupported on Firefox appears to unreliably indicate if encoding will actually succeed. Therefore,
+			// we just try encoding a frame to see if it actually works.
+			// https://github.com/Vanilagy/mediabunny/issues/222
 
-				await encoder.flush();
+			// eslint-disable-next-line @typescript-eslint/no-misused-promises, no-async-promise-executor
+			return new Promise<boolean>(async (resolve) => {
+				try {
+					const encoder = new VideoEncoder({
+						output: () => {},
+						error: () => resolve(false),
+					});
+					encoder.configure(encoderConfig);
 
-				resolve(true);
-			} catch {
-				resolve(false);
-			}
-		});
-	} else {
+					const frameData = new Uint8Array(width * height * 4);
+					const frame = new VideoFrame(frameData, {
+						format: 'RGBA',
+						codedWidth: width,
+						codedHeight: height,
+						timestamp: 0,
+					});
+
+					encoder.encode(frame);
+					frame.close();
+
+					await encoder.flush();
+
+					resolve(true);
+				} catch {
+					resolve(false);
+				}
+			});
+		}
+
 		return true;
-	}
+	})();
+	canEncodeVideoMemo.set(key, promise);
+
+	return promise;
 };
 
 /**
@@ -605,32 +811,7 @@ export const canEncodeAudio = async (
 	}
 	validateAudioEncodingAdditionalOptions(codec, restOptions);
 
-	let encoderConfig: AudioEncoderConfig | null = null;
-
-	if (customAudioEncoders.length > 0) {
-		encoderConfig ??= buildAudioEncoderConfig({
-			codec,
-			numberOfChannels,
-			sampleRate,
-			bitrate,
-			...restOptions,
-		});
-
-		if (customAudioEncoders.some(x => x.supports(codec, encoderConfig!))) {
-			// There's a custom encoder
-			return true;
-		}
-	}
-
-	if ((PCM_AUDIO_CODECS as readonly string[]).includes(codec)) {
-		return true; // Because we encode these ourselves
-	}
-
-	if (typeof AudioEncoder === 'undefined') {
-		return false;
-	}
-
-	encoderConfig ??= buildAudioEncoderConfig({
+	const encoderConfig = buildAudioEncoderConfig({
 		codec,
 		numberOfChannels,
 		sampleRate,
@@ -638,8 +819,30 @@ export const canEncodeAudio = async (
 		...restOptions,
 	});
 
-	const support = await AudioEncoder.isConfigSupported(encoderConfig);
-	return support.supported === true;
+	const key = JSON.stringify(encoderConfig);
+	const memoized = canEncodeAudioMemo.get(key);
+	if (memoized) {
+		return memoized;
+	}
+
+	const promise = (async () => {
+		if (customAudioEncoders.some(x => x.supports(codec, encoderConfig))) {
+			// There's a custom encoder
+			return true;
+		}
+		if ((PCM_AUDIO_CODECS as readonly string[]).includes(codec)) {
+			return true; // Because we encode these ourselves
+		}
+		if (typeof AudioEncoder === 'undefined') {
+			return false;
+		}
+
+		const support = await AudioEncoder.isConfigSupported(encoderConfig);
+		return support.supported === true;
+	})();
+	canEncodeAudioMemo.set(key, promise);
+
+	return promise;
 };
 
 /**

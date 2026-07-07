@@ -1,0 +1,389 @@
+import { expect, test } from 'vitest';
+import path from 'node:path';
+import { Input } from '../../src/input.js';
+import { BufferSource, FilePathSource } from '../../src/source.js';
+import { ADTS, ALL_FORMATS } from '../../src/input-format.js';
+import { PacketCursor } from '../../src/cursors.js';
+import { Output } from '../../src/output.js';
+import { BufferTarget } from '../../src/target.js';
+import { Mp4OutputFormat } from '../../src/output-format.js';
+import { Conversion } from '../../src/conversion.js';
+import { assert } from '../../src/misc.js';
+import { EncodedAudioPacketSource, EncodedVideoPacketSource } from '../../src/media-source.js';
+import { EncodedPacket } from '../../src/packet.js';
+
+const __dirname = new URL('.', import.meta.url).pathname;
+
+test('ISOBMFF muxer internally converts ADTS to AAC', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/sample3.aac')),
+		formats: ALL_FORMATS,
+	});
+
+	expect(await input.getFormat()).toBe(ADTS);
+
+	const inputTrack = await input.getPrimaryAudioTrack();
+	assert(inputTrack);
+
+	const inputDecoderConfig = await inputTrack.getDecoderConfig();
+	expect(inputDecoderConfig!.description).toBeUndefined(); // ADTS input has no description
+
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({ input, output, showWarnings: false });
+	await conversion.execute();
+
+	using outputAsInput = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const outputTrack = await outputAsInput.getPrimaryAudioTrack();
+	assert(outputTrack);
+
+	expect(await outputTrack.getCodec()).toBe('aac');
+	expect(await outputTrack.getSampleRate()).toBe(await inputTrack.getSampleRate());
+	expect(await outputTrack.getNumberOfChannels()).toBe(await inputTrack.getNumberOfChannels());
+
+	const outputDecoderConfig = await outputTrack.getDecoderConfig();
+	expect(outputDecoderConfig!.description).toBeDefined();
+
+	const outputCursor = new PacketCursor(outputTrack);
+
+	let count = 0;
+	for await (const packet of outputCursor) {
+		// Packets should NOT be ADTS frames (should not start with 0xFFF sync word)
+		const isAdts = packet.data[0] === 0xff && (packet.data[1]! & 0xf0) === 0xf0;
+		expect(isAdts).toBe(false);
+		count++;
+	}
+
+	expect(count).toBe(4557);
+});
+
+test('Fragmented fMP4 with video+audio preserves B-frame CTS', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/video.mp4')),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(videoTrack);
+	assert(audioTrack);
+
+	const originalVideoCursor = new PacketCursor(videoTrack);
+	const originalTimestamps: number[] = [];
+	for await (const packet of originalVideoCursor) {
+		originalTimestamps.push(packet.timestamp);
+	}
+
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart: 'fragmented' }),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({ input, output, showWarnings: false });
+	await conversion.execute();
+
+	using outputAsInput = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const outputVideoTrack = await outputAsInput.getPrimaryVideoTrack();
+	assert(outputVideoTrack);
+
+	const videoCursor = new PacketCursor(outputVideoTrack);
+
+	const timestamps: number[] = [];
+	for await (const packet of videoCursor) {
+		timestamps.push(packet.timestamp);
+	}
+
+	expect(timestamps).toEqual(originalTimestamps);
+});
+
+test('Zero start timestamp, regular MP4', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const source = new EncodedVideoPacketSource('vp8');
+	output.addVideoTrack(source);
+
+	await output.start();
+
+	const meta = { decoderConfig: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 } };
+
+	await source.add(new EncodedPacket(new Uint8Array(1024), 'key', 0, 0.1), meta);
+	await source.add(new EncodedPacket(new Uint8Array(1024), 'delta', 0.1, 0.1));
+	await source.add(new EncodedPacket(new Uint8Array(1024), 'delta', 0.2, 0.1));
+	await source.add(new EncodedPacket(new Uint8Array(1024), 'delta', 0.3, 0.1));
+
+	await output.finalize();
+
+	// Hacky but works
+	const str = String.fromCharCode(...new Uint8Array(output.target.buffer!));
+	expect(str.includes('edts') || str.includes('elst')).toBe(false);
+});
+
+test('Non-zero start timestamp, regular MP4', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const source = new EncodedVideoPacketSource('vp8');
+	output.addVideoTrack(source);
+
+	await output.start();
+
+	const meta = { decoderConfig: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 } };
+
+	await source.add(new EncodedPacket(new Uint8Array(1024), 'key', 1, 0.1), meta);
+	await source.add(new EncodedPacket(new Uint8Array(1024), 'delta', 1.1, 0.1));
+	await source.add(new EncodedPacket(new Uint8Array(1024), 'delta', 1.2, 0.1));
+	await source.add(new EncodedPacket(new Uint8Array(1024), 'delta', 1.3, 0.1));
+
+	await output.finalize();
+
+	// Hacky but works
+	const str = String.fromCharCode(...new Uint8Array(output.target.buffer!));
+	expect(str.includes('edts') && str.includes('elst')).toBe(true);
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryVideoTrack();
+	assert(track);
+	const cursor = new PacketCursor(track);
+
+	const timestamps: number[] = [];
+	const durations: number[] = [];
+	for await (const packet of cursor) {
+		timestamps.push(packet.timestamp);
+		durations.push(packet.duration);
+	}
+
+	expect(timestamps).toEqual([1, 1.1, 1.2, 1.3]);
+	expect(durations).toEqual([0.1, 0.1, 0.1, 0.1]);
+});
+
+test('Non-zero start timestamp, fragmented MP4', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart: 'fragmented' }),
+		target: new BufferTarget(),
+	});
+
+	const source = new EncodedVideoPacketSource('vp8');
+	output.addVideoTrack(source);
+
+	await output.start();
+
+	const meta = { decoderConfig: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 } };
+
+	await source.add(new EncodedPacket(new Uint8Array(1024), 'key', 1, 0.1), meta);
+	await source.add(new EncodedPacket(new Uint8Array(1024), 'delta', 1.1, 0.1));
+	await source.add(new EncodedPacket(new Uint8Array(1024), 'delta', 1.2, 0.1));
+	await source.add(new EncodedPacket(new Uint8Array(1024), 'delta', 1.3, 0.1));
+
+	await output.finalize();
+
+	// Hacky but works
+	const str = String.fromCharCode(...new Uint8Array(output.target.buffer!));
+	expect(str.includes('edts') || str.includes('elst')).toBe(false);
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryVideoTrack();
+	assert(track);
+	const cursor = new PacketCursor(track);
+
+	const timestamps: number[] = [];
+	const durations: number[] = [];
+	for await (const packet of cursor) {
+		timestamps.push(packet.timestamp);
+		durations.push(packet.duration);
+	}
+
+	expect(timestamps).toEqual([1, 1.1, 1.2, 1.3]);
+	expect(durations).toEqual([0.1, 0.1, 0.1, 0.1]);
+});
+
+test('PCM audio', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const source = new EncodedAudioPacketSource('pcm-s16');
+	output.addAudioTrack(source);
+
+	await output.start();
+
+	const meta = { decoderConfig: { codec: 'pcm-s16', numberOfChannels: 2, sampleRate: 48000 } };
+
+	await source.add(new EncodedPacket(new Uint8Array(1024), 'key', 0, 1024 / 2 / 2 / 48000), meta);
+
+	await output.finalize();
+
+	const input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	expect(await audioTrack.getFirstTimestamp()).toBe(0);
+});
+
+test('PCM audio with non-zero timestamp', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const source = new EncodedAudioPacketSource('pcm-s16');
+	output.addAudioTrack(source);
+
+	await output.start();
+
+	const meta = { decoderConfig: { codec: 'pcm-s16', numberOfChannels: 2, sampleRate: 48000 } };
+
+	await source.add(new EncodedPacket(new Uint8Array(1024), 'key', 1, 1024 / 2 / 2 / 48000), meta);
+
+	await output.finalize();
+
+	const input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	expect(await audioTrack.getFirstTimestamp()).toBe(1);
+});
+
+test('PCM audio, silence padding', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const source = new EncodedAudioPacketSource('pcm-s16');
+	output.addAudioTrack(source);
+
+	await output.start();
+
+	const meta = { decoderConfig: { codec: 'pcm-s16', numberOfChannels: 2, sampleRate: 48000 } };
+
+	await source.add(new EncodedPacket(new Uint8Array(1024), 'key', 0, 1024 / 2 / 2 / 48000), meta);
+	await source.add(new EncodedPacket(new Uint8Array(1024), 'key', 1, 1024 / 2 / 2 / 48000), meta);
+
+	await output.finalize();
+
+	const input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	expect(await audioTrack.getCodec()).toBe('pcm-s16');
+	const numChannels = await audioTrack.getNumberOfChannels();
+
+	const expectedFrameCount = 48000 + 256;
+	const cursor = new PacketCursor(audioTrack);
+	let frameCount = 0;
+
+	for await (const packet of cursor) {
+		frameCount += packet.byteLength / 2 / numChannels;
+	}
+
+	expect(frameCount).toBe(expectedFrameCount);
+});
+
+test('PCM audio, no silence padding with approximate timestamps', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const source = new EncodedAudioPacketSource('pcm-s16');
+	output.addAudioTrack(source);
+
+	await output.start();
+
+	const meta = { decoderConfig: { codec: 'pcm-s16', numberOfChannels: 2, sampleRate: 48000 } };
+
+	await source.add(new EncodedPacket(new Uint8Array(1024), 'key', 0, 1024 / 2 / 2 / 48000), meta);
+	// 0.006 is 256/48000 "rounded up", but it's close enough for silence padding not to kick in
+	await source.add(new EncodedPacket(new Uint8Array(1024), 'key', 0.006, 1024 / 2 / 2 / 48000), meta);
+
+	await output.finalize();
+
+	const input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	expect(await audioTrack.getCodec()).toBe('pcm-s16');
+	const numChannels = await audioTrack.getNumberOfChannels();
+
+	const expectedFrameCount = 256 + 256;
+	const cursor = new PacketCursor(audioTrack);
+	let frameCount = 0;
+
+	for await (const packet of cursor) {
+		frameCount += packet.byteLength / 2 / numChannels;
+	}
+
+	expect(frameCount).toBe(expectedFrameCount);
+});
+
+// https://github.com/Vanilagy/mediabunny/pull/391
+test('At least one track is enabled even if all are added disabled', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const meta = { decoderConfig: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 } };
+
+	const source1 = new EncodedVideoPacketSource('vp8');
+	output.addVideoTrack(source1, { disposition: { default: false } });
+
+	const source2 = new EncodedVideoPacketSource('vp8');
+	output.addVideoTrack(source2, { disposition: { default: false } });
+
+	await output.start();
+
+	await source1.add(new EncodedPacket(new Uint8Array(1024), 'key', 0, 0.1), meta);
+	await source2.add(new EncodedPacket(new Uint8Array(1024), 'key', 0, 0.1), meta);
+
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const tracks = await input.getVideoTracks();
+	expect(tracks.length).toBe(2);
+
+	// Even though both tracks were added disabled, the muxer forces the first one to be enabled
+	expect((await tracks[0]!.getDisposition()).default).toBe(true);
+	expect((await tracks[1]!.getDisposition()).default).toBe(false);
+});

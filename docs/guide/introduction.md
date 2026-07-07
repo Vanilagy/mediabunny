@@ -1,3 +1,7 @@
+---
+description: Mediabunny is a zero-dependency, tree-shakable TypeScript library for reading, writing and converting media files in the browser. Like FFmpeg, but for the web.
+---
+
 # Introduction
 
 Mediabunny is a JavaScript library for reading, writing, and converting media files (like MP4 or WebM), directly in the browser. It aims to be a complete toolkit for high-performance media operations on the web. It's written from scratch in pure TypeScript, has zero dependencies, and is extremely tree-shakable, meaning you only include what you use. You can think of it a bit like [FFmpeg](https://ffmpeg.org/), but built for the web's needs.
@@ -12,7 +16,8 @@ Here's a long list of stuff this library does:
 - Converting media files
 - Hardware-accelerated decoding & encoding (via the WebCodecs API)
 - Support for multiple video, audio and subtitle tracks
-- Read & write support for many container formats (.mp4, .mov, .webm, .mkv, .mp3, .wav, .ogg, .aac, .flac), including variations such as MP4 with Fast Start, fragmented MP4, streamable Matroska, transparent WebM, etc.
+- Read & write support for many container formats (.mp4, .mov, .webm, .mkv, .mp3, .wav, .ogg, .aac, .flac, .ts), including variations such as MP4 with Fast Start, fragmented MP4, streamable Matroska, transparent WebM, etc.
+- Read & write support for HLS, both VOD and live
 - Support for 25 different codecs
 - Lazy, optimized, on-demand file reading
 - Input and output streaming, arbitrary file size support
@@ -26,7 +31,7 @@ Here's a long list of stuff this library does:
 - Custom encoder & decoder support for polyfilling
 - Low- & high-level abstractions for different use cases
 - Performant everything
-- Node.js support
+- Server-side support (Node, Bun, Deno) via `@mediabunny/server`
 
 ...and there's probably more.
 
@@ -53,9 +58,23 @@ To get going with Mediabunny, here are some starting points:
 - Start with [Converting media files](./converting-media-files) if you care about file conversions.
 - Dive into [Packets & samples](./packets-and-samples) for a deeper understanding of the concepts underlying this library.
 
+## Server-side usage
+
+Mediabunny's simple yet flexible API provides a modern alternative to traditional server-side media processing pipelines which may involve calling out to FFmpeg's CLI manually. Mediabunny was primarily built for client-side environments, but when combined with the [`@mediabunny/server`](./extensions/server) extension, the full Mediabunny feature set is available in server-side environments such as Node, Bun, and Deno.
+
+The extension enables:
+- Video decoders and encoders for AVC (H.264), HEVC (H.265), VP8, VP9, and AV1. Supports both length-prefixed and Annex B AVC/HEVC as well as transparent video via VP9.
+- Audio decoders and encoders for AAC, MP3, Vorbis, Opus, FLAC, AC-3 and E-AC-3. Supports AAC in both AAC and ADTS formats.
+- Video frame transformation support (resize, rotate, crop)
+- Automatic hardware acceleration on all platforms (macOS, Linux, Windows)
+- Built-in multithreading
+- Zero-copy decode and encode paths
+
+For more, see [the corresponding guide](./extensions/server).
+
 ## Motivation
 
-Mediabunny is the evolution of my previous libraries, [mp4-muxer](https://github.com/Vanilagy/mp4-muxer) and [webm-muxer](https://github.com/Vanilagy/webm-muxer), which were both created due to the advent of the WebCodecs API. While they fulfilled their job just fine, I saw a few painpoints:
+Mediabunny is the evolution of my previous libraries, [mp4-muxer](https://github.com/Vanilagy/mp4-muxer) and [webm-muxer](https://github.com/Vanilagy/webm-muxer), which were both created due to the advent of the WebCodecs API. While they fulfilled their job just fine, I saw a few pain points:
 - Lots of duplicated code between the two libraries, otherwise very similar API.
 - No help with the difficulties of navigating the WebCodecs API & related browser APIs.
 - "mp4-demuxer when??"

@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -64,7 +64,10 @@ export class EncodedPacket {
 
 	/** Creates a new {@link EncodedPacket} from raw bytes and timing information. */
 	constructor(
-		/** The encoded data of this packet. */
+		/**
+		 * The encoded data of this packet. For any given codec, this data must adhere to the format specified in the
+		 * Mediabunny Codec Registry.
+		 */
 		public readonly data: Uint8Array,
 		/** The type of this packet. */
 		public readonly type: PacketType,
@@ -242,15 +245,29 @@ export class EncodedPacket {
 		);
 	}
 
-	/** Clones this packet while optionally updating timing information. */
+	/** Clones this packet while optionally modifying the new packet's data. */
 	clone(options?: {
+		/** The data of the cloned packet. */
+		data?: Uint8Array;
+		/** The type of the cloned packet. */
+		type?: PacketType;
 		/** The timestamp of the cloned packet in seconds. */
 		timestamp?: number;
 		/** The duration of the cloned packet in seconds. */
 		duration?: number;
+		/** The sequence number of the cloned packet. */
+		sequenceNumber?: number;
+		/** The side data of the cloned packet. */
+		sideData?: EncodedPacketSideData;
 	}): EncodedPacket {
 		if (options !== undefined && (typeof options !== 'object' || options === null)) {
 			throw new TypeError('options, when provided, must be an object.');
+		}
+		if (options?.data !== undefined && !(options.data instanceof Uint8Array)) {
+			throw new TypeError('options.data, when provided, must be a Uint8Array.');
+		}
+		if (options?.type !== undefined && options.type !== 'key' && options.type !== 'delta') {
+			throw new TypeError('options.type, when provided, must be either "key" or "delta".');
 		}
 		if (options?.timestamp !== undefined && !Number.isFinite(options.timestamp)) {
 			throw new TypeError('options.timestamp, when provided, must be a number.');
@@ -258,14 +275,21 @@ export class EncodedPacket {
 		if (options?.duration !== undefined && !Number.isFinite(options.duration)) {
 			throw new TypeError('options.duration, when provided, must be a number.');
 		}
+		if (options?.sequenceNumber !== undefined && !Number.isFinite(options.sequenceNumber)) {
+			throw new TypeError('options.sequenceNumber, when provided, must be a number.');
+		}
+		if (options?.sideData !== undefined && (typeof options.sideData !== 'object' || options.sideData === null)) {
+			throw new TypeError('options.sideData, when provided, must be an object.');
+		}
 
 		return new EncodedPacket(
-			this.data,
-			this.type,
+			options?.data ?? this.data,
+			options?.type ?? this.type,
 			options?.timestamp ?? this.timestamp,
 			options?.duration ?? this.duration,
-			this.sequenceNumber,
+			options?.sequenceNumber ?? this.sequenceNumber,
 			this.byteLength,
+			options?.sideData ?? this.sideData,
 		);
 	}
 }
@@ -289,6 +313,19 @@ export type PacketRetrievalOptions = {
 	 * its data, this option cannot be enabled together with `metadataOnly`.
 	 */
 	verifyKeyPackets?: boolean;
+
+	/**
+	 * When querying packets in live media that are in the future relative to the current live edge, Mediabunny will,
+	 * by default, wait for the stream to advance until the query can be satisfied. In a sense, Mediabunny simply treats
+	 * live streams as media files that are still being written, and any read that depends on future information will
+	 * wait until it can be fulfilled.
+	 *
+	 * If you want to query packets based only on the currently known information, set this field to `true` - this way,
+	 * Mediabunny will never wait for the live stream to catch up.
+	 *
+	 * For non-live media, this field has no effect.
+	 */
+	skipLiveWait?: boolean;
 };
 
 export const validatePacketRetrievalOptions = (options: PacketRetrievalOptions) => {
@@ -303,6 +340,9 @@ export const validatePacketRetrievalOptions = (options: PacketRetrievalOptions) 
 	}
 	if (options.verifyKeyPackets && options.metadataOnly) {
 		throw new TypeError('options.verifyKeyPackets and options.metadataOnly cannot be enabled together.');
+	}
+	if (options.skipLiveWait !== undefined && typeof options.skipLiveWait !== 'boolean') {
+		throw new TypeError('options.skipLiveWait, when defined, must be a boolean.');
 	}
 };
 
@@ -354,6 +394,24 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 			return promise.then(() => this._maybeVerifyPacketType(result.value, options));
 		} else {
 			return this._maybeVerifyPacketType(result.value, options);
+		}
+	}
+
+	getFirstKey(options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
+		const result = this.getFirst(options);
+
+		const onPacket = (packet: EncodedPacket | null): MaybePromise<EncodedPacket | null> => {
+			if (!packet || packet.type === 'key') {
+				return packet;
+			}
+
+			return this.getNextKey(packet, options);
+		};
+
+		if (result instanceof Promise) {
+			return result.then(onPacket);
+		} else {
+			return onPacket(result);
 		}
 	}
 
@@ -413,7 +471,7 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 		const determinedType = await this.track.determinePacketType(packet);
 		if (determinedType === 'delta') {
 			// Try returning the previous key packet (in hopes that it's actually a key packet)
-			return this._readKeyAtVerified(packet.timestamp - 1 / this.track.timeResolution, options);
+			return this._readKeyAtVerified(packet.timestamp - 1 / await this.track.getTimeResolution(), options);
 		}
 
 		return packet;

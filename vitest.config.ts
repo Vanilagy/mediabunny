@@ -1,11 +1,29 @@
 /// <reference types="@vitest/browser/providers/webdriverio" />
 
 import { defineConfig } from 'vitest/config';
+import path from 'node:path';
 
 export default defineConfig({
+	resolve: {
+		alias: {
+			'mediabunny': path.resolve(__dirname, './src/index.ts'),
+			'@mediabunny/ac3': path.resolve(__dirname, './packages/ac3/dist/bundles/mediabunny-ac3.mjs'),
+			'@mediabunny/aac-encoder':
+				path.resolve(__dirname, './packages/aac-encoder/dist/bundles/mediabunny-aac-encoder.mjs'),
+			'@mediabunny/flac-encoder':
+				path.resolve(__dirname, './packages/flac-encoder/dist/bundles/mediabunny-flac-encoder.mjs'),
+			'@mediabunny/mp3-encoder':
+				path.resolve(__dirname, './packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.mjs'),
+			'@mediabunny/prores':
+				path.resolve(__dirname, './packages/prores/dist/bundles/mediabunny-prores.mjs'),
+			'@mediabunny/server':
+				path.resolve(__dirname, './packages/server/src/index.ts'),
+		},
+	},
 	test: {
 		projects: [
 			{
+				extends: true,
 				test: {
 					name: 'node',
 					root: 'test',
@@ -14,6 +32,7 @@ export default defineConfig({
 				},
 			},
 			{
+				extends: true,
 				test: {
 					name: 'browser',
 					root: 'test',

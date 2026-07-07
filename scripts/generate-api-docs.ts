@@ -48,11 +48,13 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 	// Extract special fields
 	const headingText = apiConfig['heading'] || 'API Reference';
 	const introText = apiConfig['intro'];
+	const indexDescription = apiConfig['description'];
 
 	// Create a copy without the special fields for group processing
 	const groupConfig = { ...apiConfig };
 	delete groupConfig['heading'];
 	delete groupConfig['intro'];
+	delete groupConfig['description'];
 
 	// Clear and recreate output directory (skip if dry run)
 	if (!dry) {
@@ -66,6 +68,10 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 	const exportedTypes = new Set<string>();
 	const classHierarchy = new Map<string, string[]>(); // Maps parent class to array of subclasses
 	const classInstances = new Map<string, string[]>(); // Maps class name to array of instance variable names
+
+	const hasDeprecatedTag = (node: ts.Node): boolean => {
+		return ts.getJSDocTags(node).some(tag => tag.tagName.text === 'deprecated');
+	};
 
 	const collectExportedTypes = (module: ts.Symbol, visited = new Set<ts.Symbol>()): void => {
 		if (visited.has(module)) return;
@@ -120,15 +126,22 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 			const declaration = exportSymbol.valueDeclaration || exportSymbol.declarations?.[0];
 			if (!declaration) return;
 
-			// If it's a reexport, follow it recursively
+			// If it's a reexport, resolve it to the underlying symbol (following chains of aliases,
+			// e.g. a re-export of a re-export) rather than recursing into the whole module it lives in
+			// -- `getExportsOfModule` above already gives us one entry per exported symbol, so a module
+			// recursion here would revisit (and duplicate) every other export of that module too.
 			if (exportSymbol.flags & ts.SymbolFlags.Alias) {
-				const aliasedSymbol = typeChecker.getAliasedSymbol(exportSymbol);
+				let aliasedSymbol = typeChecker.getAliasedSymbol(exportSymbol);
+				while (aliasedSymbol.flags & ts.SymbolFlags.Alias) {
+					aliasedSymbol = typeChecker.getAliasedSymbol(aliasedSymbol);
+				}
 				const aliasedDeclaration = aliasedSymbol.valueDeclaration || aliasedSymbol.declarations?.[0];
 				if (aliasedDeclaration) {
-					const sourceFile = aliasedDeclaration.getSourceFile();
-					const moduleSymbol = typeChecker.getSymbolAtLocation(sourceFile);
-					if (moduleSymbol) {
-						symbols.push(...getAllExportedSymbols(moduleSymbol, visited));
+					// Push the aliased symbol (not the alias) so downstream sees the real
+					// declaration and its JSDoc rather than the empty ExportSpecifier.
+					const hasPublicTag = ts.getJSDocTags(aliasedDeclaration).some(tag => tag.tagName.text === 'public');
+					if (hasPublicTag) {
+						symbols.push(aliasedSymbol);
 					}
 				}
 			}
@@ -333,11 +346,11 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 			if (linkText) {
 				// If custom link text is provided, always use it.
 				displayText = linkText.trim();
-			} else if (memberName) {
-				// If it's a member link, default the text to just the member name.
+			} else if (memberName && typeName === currentTypeName) {
+				// Member link on the current type: just the member name.
 				displayText = `\`${memberName}\``;
 			} else {
-				// Otherwise, it's a type link, so use the full type name.
+				// Type link, or member link on another type: use the full target.
 				displayText = `\`${cleanTarget}\``;
 			}
 
@@ -370,6 +383,34 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 			// Fallback for unknown types: just format as code
 			return `\`${cleanTarget}\``;
 		});
+	};
+
+	// Helper to build a "> **Deprecated.** ..." notice from a node's @deprecated JSDoc tag.
+	// Returns an empty string if the node has no @deprecated tag.
+	const getDeprecationNotice = (node: ts.Node, currentTypeName?: string): string => {
+		const tag = ts.getJSDocTags(node).find(t => t.tagName.text === 'deprecated');
+		if (!tag) {
+			return '';
+		}
+		let text = '';
+		if (tag.comment) {
+			if (typeof tag.comment === 'string') {
+				text = processLinkTags(tag.comment.trim(), currentTypeName);
+			} else {
+				// comment is a NodeArray of JSDocComment elements (text + inline tags)
+				const raw = tag.comment.map((part) => {
+					if (ts.isJSDocLinkLike(part)) {
+						const linkName = part.name?.getText() ?? '';
+						const linkText = part.text?.trim() ?? '';
+						// Reconstruct as {@link Name text}
+						return `{@link ${linkName}${linkText ? ' ' + linkText : ''}}`;
+					}
+					return part.text ?? '';
+				}).join('');
+				text = processLinkTags(raw.trim(), currentTypeName);
+			}
+		}
+		return text ? `> **Deprecated.** ${text}\n\n` : '> **Deprecated.**\n\n';
 	};
 
 	// Helper to extract linked types from {@link} tags in text
@@ -622,7 +663,9 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 
 		// Only process symbols with @public tag
 		const hasPublicTag = ts.getJSDocTags(declaration).some(tag => tag.tagName.text === 'public');
-		if (!hasPublicTag) return;
+		if (!hasPublicTag) {
+			return;
+		}
 
 		// Check for @group tag (handle re-exports by looking at the original declaration)
 		let targetDeclaration = declaration;
@@ -646,7 +689,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 		}
 
 		// Check if it's a supported type
-		if (ts.isClassDeclaration(declaration) || ts.isInterfaceDeclaration(declaration) || ts.isTypeAliasDeclaration(declaration) || ts.isVariableDeclaration(declaration)) {
+		if (ts.isClassDeclaration(declaration) || ts.isInterfaceDeclaration(declaration) || ts.isTypeAliasDeclaration(declaration) || ts.isVariableDeclaration(declaration) || ts.isEnumDeclaration(declaration)) {
 			// Supported types - continue processing
 		} else {
 			// Unsupported type - throw error with type info
@@ -660,14 +703,10 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 			const variableName = declaration.name.getText();
 
 			// Get variable description from JSDoc
-			const jsDocComment = ts.getJSDocCommentsAndTags(declaration)[0];
-			let description = '';
-			if (jsDocComment && ts.isJSDoc(jsDocComment)) {
-				const commentText = jsDocComment.comment;
-				if (typeof commentText === 'string') {
-					description = processLinkTags(commentText.trim(), variableName);
-				}
-			}
+			const description = extractJsDocDescription(declaration, {
+				tagHandling: 'filterAll',
+				transform: text => processLinkTags(text, variableName),
+			});
 
 			// Check if it's a function type
 			const variableType = typeChecker.getTypeAtLocation(declaration);
@@ -710,7 +749,8 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 						? `${variableName}(\n${params.join(',\n')},\n): ${returnType};`
 						: `${variableName}(): ${returnType};`;
 
-					let markdown = `<script setup>\nimport { VPBadge } from 'vitepress/theme'\n</script>\n\n<VPBadge type="info" text="Function" />\n\n# ${variableName}\n\n\`\`\`ts\n${functionSig}\n\`\`\`${description ? `\n\n${description}` : ''}`;
+					const deprecationNotice = getDeprecationNotice(declaration, variableName);
+					let markdown = `${buildFrontmatter(description)}<script setup>\nimport { VPBadge } from 'vitepress/theme'\n</script>\n\n<VPBadge type="info" text="Function" />\n\n# ${variableName}\n\n${deprecationNotice}\`\`\`ts\n${functionSig}\n\`\`\`${description ? `\n\n${description}` : ''}`;
 
 					// Find referenced types in all parameters and return type
 					const allTypeStrings = params.map(p => p.replace(/\t.*?:\s*/, '')).concat([returnType]);
@@ -724,7 +764,8 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 				}
 			} else {
 				// Handle regular variables
-				let markdown = `<script setup>\nimport { VPBadge } from 'vitepress/theme'\n</script>\n\n<VPBadge type="info" text="Constant" />\n\n# ${variableName}\n\n${description ? `${description}\n\n` : ''}`;
+				const deprecationNotice = getDeprecationNotice(declaration, variableName);
+				let markdown = `${buildFrontmatter(description)}<script setup>\nimport { VPBadge } from 'vitepress/theme'\n</script>\n\n<VPBadge type="info" text="Constant" />\n\n# ${variableName}\n\n${deprecationNotice}${description ? `${description}\n\n` : ''}`;
 				const variableValue = declaration.initializer ? declaration.initializer.getText() : 'undefined';
 				const variableDefinition = `const ${variableName} = ${variableValue};`;
 				markdown += `\`\`\`ts\n${variableDefinition}\n\`\`\``;
@@ -738,6 +779,43 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 
 				generatedDocs.set(variableName, markdown);
 			}
+
+			return;
+		}
+
+		// Handle enum declarations separately
+		if (ts.isEnumDeclaration(declaration)) {
+			const enumName = declaration.name.text;
+
+			const description = extractJsDocDescription(declaration, {
+				tagHandling: 'filterAll',
+				transform: text => processLinkTags(text, enumName),
+			});
+
+			const order = symbolOrderMap.get(enumName);
+			if (order === undefined) {
+				throw new Error(`Symbol '${enumName}' not found in entry files export order`);
+			}
+			indexEntries.push({ name: enumName, type: 'Enum', group: groupName, order });
+
+			// Reconstruct the enum body so each member keeps its value and description
+			const memberLines = declaration.members.map((member) => {
+				const memberName = member.name.getText();
+				const initializer = member.initializer ? ` = ${member.initializer.getText()}` : '';
+				const memberDescription = extractJsDocDescription(member, {
+					tagHandling: 'filterAll',
+					transform: text => processLinkTags(text, enumName),
+				});
+				const commentLine = memberDescription ? `\t/** ${memberDescription} */\n` : '';
+				return `${commentLine}\t${memberName}${initializer},`;
+			});
+
+			const enumDefinition = `enum ${enumName} {\n${memberLines.join('\n')}\n}`;
+			const deprecationNotice = getDeprecationNotice(declaration, enumName);
+			let markdown = `${buildFrontmatter(description)}<script setup>\nimport { VPBadge } from 'vitepress/theme'\n</script>\n\n<VPBadge type="info" text="Enum" />\n\n# ${enumName}\n\n${deprecationNotice}${description ? `${description}\n\n` : ''}`;
+			markdown += `\`\`\`ts\n${enumDefinition}\n\`\`\``;
+
+			generatedDocs.set(enumName, markdown);
 
 			return;
 		}
@@ -765,48 +843,18 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 			const events: string[] = [];
 			const methods: string[] = [];
 			const staticMethods: string[] = [];
+			const deprecatedProperties: string[] = [];
+			const deprecatedMethods: string[] = [];
 			let constructor: string | null = null;
 			let extendsClause = '';
 			let implementsClause = '';
 			let typeParameters: string | null = null;
 
 			// Get class description from JSDoc (or from superclass if none)
-			let description = '';
-			const jsDocComment = ts.getJSDocCommentsAndTags(declaration)[0];
-
-			if (jsDocComment && ts.isJSDoc(jsDocComment)) {
-				// First try to get the comment from the parsed JSDoc
-				const commentText = jsDocComment.comment;
-				if (typeof commentText === 'string' && commentText.trim()) {
-					description = processLinkTags(commentText.trim(), className);
-				} else {
-					// If no comment text, extract from raw source text
-					const sourceFile = declaration.getSourceFile();
-					const sourceText = sourceFile.getFullText();
-					const start = jsDocComment.getStart();
-					const end = jsDocComment.getEnd();
-					const rawJsDoc = sourceText.substring(start, end);
-
-					// Extract the content between /** and */
-					const match = rawJsDoc.match(/\/\*\*(.*?)\*\//s);
-					if (match && match[1]) {
-						const content = match[1]
-							.split('\n')
-							.map(line => line.replace(/^\s*\*\s?/, '')) // Remove leading * and spaces
-							.join('\n')
-							.trim();
-
-						// Filter out @tags but keep the description
-						const lines = content.split('\n');
-						const descLines = lines.filter(line => !line.trim().startsWith('@'));
-						const rawDesc = descLines.join('\n').trim();
-
-						if (rawDesc) {
-							description = processLinkTags(rawDesc, className);
-						}
-					}
-				}
-			}
+			let description = extractJsDocDescription(declaration, {
+				tagHandling: 'filterAll',
+				transform: text => processLinkTags(text, className),
+			});
 
 			// If no description, check superclass (only for classes/interfaces)
 			if (!description && (ts.isClassDeclaration(declaration) || ts.isInterfaceDeclaration(declaration)) && declaration.heritageClauses) {
@@ -915,37 +963,12 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 
 			// Helper to get JSDoc description with superclass fallback (recursive)
 			const getDescriptionWithFallback = (member: ts.ClassElement | ts.TypeElement, memberName: string): string => {
-				const jsDoc = ts.getJSDocCommentsAndTags(member)[0];
-				if (jsDoc && ts.isJSDoc(jsDoc)) {
-					// First try the parsed comment
-					if (typeof jsDoc.comment === 'string' && jsDoc.comment.trim()) {
-						return processLinkTags(jsDoc.comment.trim(), className);
-					} else {
-						// If no parsed comment, extract from raw source (same logic as class descriptions)
-						const sourceFile = member.getSourceFile();
-						const sourceText = sourceFile.getFullText();
-						const start = jsDoc.getStart();
-						const end = jsDoc.getEnd();
-						const rawJsDoc = sourceText.substring(start, end);
-
-						const match = rawJsDoc.match(/\/\*\*(.*?)\*\//s);
-						if (match && match[1]) {
-							const content = match[1]
-								.split('\n')
-								.map(line => line.replace(/^\s*\*\s?/, '')) // Remove leading * and spaces
-								.join('\n')
-								.trim();
-
-							// Filter out @tags but keep the description
-							const lines = content.split('\n');
-							const descLines = lines.filter(line => !line.trim().startsWith('@'));
-							const rawDesc = descLines.join('\n').trim();
-
-							if (rawDesc) {
-								return processLinkTags(rawDesc, className);
-							}
-						}
-					}
+				const ownDescription = extractJsDocDescription(member, {
+					tagHandling: 'filterAll',
+					transform: text => processLinkTags(text, className),
+				});
+				if (ownDescription) {
+					return ownDescription;
 				}
 
 				// Recursively check superclass hierarchy for this member's documentation
@@ -1019,6 +1042,30 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 				// Check if member has @internal in JSDoc
 				const hasInternalTag = ts.getJSDocTags(member).some(tag => tag.tagName.text === 'internal');
 				if (hasInternalTag) return;
+
+				const isDeprecatedMember = hasDeprecatedTag(member);
+
+				const addDeprecationNotice = (content: string) => {
+					// Insert the deprecation notice right after the heading line
+					const headingEnd = content.indexOf('\n');
+					return content.slice(0, headingEnd) + '\n\n' + getDeprecationNotice(member, className) + content.slice(headingEnd + 1);
+				};
+
+				const pushProperty = (content: string) => {
+					if (isDeprecatedMember) {
+						deprecatedProperties.push(addDeprecationNotice(content));
+					} else {
+						properties.push(content);
+					}
+				};
+
+				const pushMethod = (content: string) => {
+					if (isDeprecatedMember) {
+						deprecatedMethods.push(addDeprecationNotice(content));
+					} else {
+						methods.push(content);
+					}
+				};
 
 				if (ts.isConstructorDeclaration(member) && !isAbstract) {
 					// Skip private constructors
@@ -1230,7 +1277,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 					if (isEventHandler) {
 						events.push(propertyContent);
 					} else {
-						properties.push(propertyContent);
+						pushProperty(propertyContent);
 					}
 				} else if (ts.isGetAccessorDeclaration(member) && member.name) {
 					const name = member.name.getText();
@@ -1263,7 +1310,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 					references.forEach(ref => addUsage(ref, className, name, 'property'));
 
 					const inheritedBadge = '';
-					properties.push(`### \`${name}\`${inheritedBadge}\n\n\`\`\`ts\n${accessorDef}\n\`\`\`${desc ? `\n\n${desc}` : ''}${referencesText}`);
+					pushProperty(`### \`${name}\`${inheritedBadge}\n\n\`\`\`ts\n${accessorDef}\n\`\`\`${desc ? `\n\n${desc}` : ''}${referencesText}`);
 				} else if (ts.isSetAccessorDeclaration(member) && member.name) {
 					const name = member.name.getText();
 					const param = member.parameters[0];
@@ -1286,7 +1333,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 					references.forEach(ref => addUsage(ref, className, name, 'property'));
 
 					const inheritedBadge = '';
-					properties.push(`### \`${name}\`${inheritedBadge}\n\n\`\`\`ts\n${accessorDef}\n\`\`\`${desc ? `\n\n${desc}` : ''}${referencesText}`);
+					pushProperty(`### \`${name}\`${inheritedBadge}\n\n\`\`\`ts\n${accessorDef}\n\`\`\`${desc ? `\n\n${desc}` : ''}${referencesText}`);
 				} else if ((ts.isMethodDeclaration(member) || ts.isMethodSignature(member)) && member.name) {
 					const name = member.name.getText();
 					const isStatic = member.modifiers?.some(mod => mod.kind === ts.SyntaxKind.StaticKeyword);
@@ -1384,7 +1431,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 					if (isStatic) {
 						staticMethods.push(methodContent);
 					} else {
-						methods.push(methodContent);
+						pushMethod(methodContent);
 					}
 				}
 			};
@@ -1496,22 +1543,29 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 				}
 			}
 
-			// Sort properties and methods alphabetically (but not for type aliases - keep source order)
+			// Sort properties and methods alphabetically, but with bracketed names like
+			// `[Symbol.dispose]()` always at the bottom. Type aliases keep source order.
+			const compareMemberNames = (a: string, b: string) => {
+				const nameA = a.match(/### `([^`]+)`/)?.[1] ?? '';
+				const nameB = b.match(/### `([^`]+)`/)?.[1] ?? '';
+				const aIsBracket = nameA.startsWith('[');
+				const bIsBracket = nameB.startsWith('[');
+				if (aIsBracket !== bIsBracket) {
+					return aIsBracket ? 1 : -1;
+				}
+				return nameA.localeCompare(nameB);
+			};
+
 			if (!ts.isTypeAliasDeclaration(declaration)) {
-				properties.sort((a, b) => {
-					const nameA = a.match(/### (.+)/)?.[1] || '';
-					const nameB = b.match(/### (.+)/)?.[1] || '';
-					return nameA.localeCompare(nameB);
-				});
+				properties.sort(compareMemberNames);
+				methods.sort(compareMemberNames);
 			}
 
-			staticMethods.sort((a, b) => {
-				const nameA = a.match(/### (.+)/)?.[1] || '';
-				const nameB = b.match(/### (.+)/)?.[1] || '';
-				return nameA.localeCompare(nameB);
-			});
+			staticMethods.sort(compareMemberNames);
+			deprecatedProperties.sort(compareMemberNames);
+			deprecatedMethods.sort(compareMemberNames);
 
-			let markdown = '';
+			let markdown = buildFrontmatter(description);
 
 			// Add VPBadge import and badge for all types
 			markdown += `<script setup>\nimport { VPBadge } from 'vitepress/theme'\n</script>\n\n`;
@@ -1526,7 +1580,8 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 				markdown += `<VPBadge type="info" text="Interface" />\n\n`;
 			}
 
-			markdown += `# ${className}\n\n${description ? `${description}\n` : ''}${extendsClause}${implementsClause}`;
+			const deprecationNotice = getDeprecationNotice(declaration, className);
+			markdown += `# ${className}\n\n${deprecationNotice}${description ? `${description}\n` : ''}${extendsClause}${implementsClause}`;
 
 			// Add subclasses section for classes that have subclasses
 			if (ts.isClassDeclaration(declaration) && classHierarchy.has(className)) {
@@ -1684,6 +1739,11 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 				markdown += `\n## Methods\n\n${methods.join('\n\n')}\n`;
 			}
 
+			const deprecated = [...deprecatedProperties, ...deprecatedMethods];
+			if (deprecated.length > 0) {
+				markdown += `\n## Deprecated\n\n${deprecated.join('\n\n')}\n`;
+			}
+
 			generatedDocs.set(className, markdown);
 		}
 	});
@@ -1788,7 +1848,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 		throw new Error(`Groups found in code but not in API config: ${missingGroups.join(', ')}`);
 	}
 
-	let indexMarkdown = `# ${headingText}\n\n`;
+	let indexMarkdown = `${buildFrontmatter(indexDescription ?? '')}# ${headingText}\n\n`;
 
 	// Add intro text if provided
 	if (introText) {
@@ -1840,43 +1900,114 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 	}
 };
 
-// Helper to get the full description text from a JSDoc comment, handling inline tags.
-const getFullJSDocDescription = (node: ts.Node): string => {
+// Shared helper for extracting a JSDoc description, handling inline tags via raw-source fallback.
+// - `tagHandling: 'stopAtFirst'` matches the behavior used by property-level descriptions: if any
+//   @-tag line is encountered, all subsequent lines are dropped (including any trailing description).
+// - `tagHandling: 'filterAll'` matches the behavior used by class/variable top-level descriptions:
+//   every @-tag line is filtered out individually, preserving interleaved description lines.
+// - `transform` is applied to the final non-empty description (e.g. to process {@link} tags).
+const extractJsDocDescription = (
+	node: ts.Node,
+	opts: { tagHandling: 'stopAtFirst' | 'filterAll'; transform?: (text: string) => string },
+): string => {
 	const jsDoc = ts.getJSDocCommentsAndTags(node)[0];
-	if (!jsDoc || !ts.isJSDoc(jsDoc)) return '';
-
-	// If it's a simple string, just return it.
-	if (typeof jsDoc.comment === 'string') {
-		return jsDoc.comment.trim();
+	if (!jsDoc || !ts.isJSDoc(jsDoc)) {
+		return '';
 	}
 
-	// If it's a structured comment (with inline tags), get the raw text.
+	const transform = opts.transform ?? ((t: string) => t);
+
+	// If the parsed comment is a non-empty string (no inline tags), use it directly.
+	// When the parsed comment is an empty string or a structured NodeArray (inline tags like
+	// {@link}), fall through to raw-source extraction. For empty-string comments this is safe:
+	// the raw block can only contain @-tags, so raw extraction also yields empty.
+	if (typeof jsDoc.comment === 'string' && jsDoc.comment.trim()) {
+		return transform(jsDoc.comment.trim());
+	}
+
+	// Structured comment (contains inline tags like {@link}); extract description from raw source.
 	const sourceFile = node.getSourceFile();
 	const sourceText = sourceFile.getFullText();
-	const start = jsDoc.getStart();
-	const end = jsDoc.getEnd();
-	const rawJsDoc = sourceText.substring(start, end);
+	const rawJsDoc = sourceText.substring(jsDoc.getStart(), jsDoc.getEnd());
 
-	// Extract the content between /** and */
 	const match = rawJsDoc.match(/\/\*\*(.*?)\*\//s);
-	if (match && match[1]) {
-		const content = match[1]
-			.split('\n')
-			.map(line => line.replace(/^\s*\*\s?/, '')) // Remove leading * and spaces
-			.join('\n')
-			.trim();
-
-		// Filter out @-tags (like @param, @returns) to keep only the main description
-		const lines = content.split('\n');
-		const descLines = [];
-		for (const line of lines) {
-			if (line.trim().startsWith('@')) break; // Stop at the first @-tag
-			descLines.push(line);
-		}
-		return descLines.join('\n').trim();
+	if (!match || !match[1]) {
+		return '';
 	}
 
-	return '';
+	const content = match[1]
+		.split('\n')
+		.map(line => line.replace(/^\s*\*\s?/, '')) // Remove leading * and spaces
+		.join('\n')
+		.trim();
+
+	const lines = content.split('\n');
+	let descLines: string[];
+	if (opts.tagHandling === 'stopAtFirst') {
+		descLines = [];
+		for (const line of lines) {
+			if (line.trim().startsWith('@')) {
+				break;
+			}
+			descLines.push(line);
+		}
+	} else {
+		// Skip @tag lines and their continuation lines (continuation ends at a blank line
+		// or the next @tag). Without this, multi-line tags like @deprecated bleed into the
+		// description.
+		descLines = [];
+		let inTagContinuation = false;
+		for (const line of lines) {
+			const trimmed = line.trim();
+			if (trimmed.startsWith('@')) {
+				inTagContinuation = true;
+				continue;
+			}
+			if (inTagContinuation) {
+				if (trimmed === '') {
+					inTagContinuation = false;
+				}
+				continue;
+			}
+			descLines.push(line);
+		}
+	}
+
+	const rawDesc = descLines.join('\n').trim();
+	if (!rawDesc) {
+		return '';
+	}
+	return transform(rawDesc);
+};
+
+// Helper to get the full description text from a JSDoc comment, handling inline tags.
+const getFullJSDocDescription = (node: ts.Node): string => {
+	return extractJsDocDescription(node, { tagHandling: 'stopAtFirst' });
+};
+
+// Convert a markdown description (possibly multi-paragraph, with **bold**, `code`,
+// and [text](link) from processed @link tags) into a single-line plain-text string
+// suitable for the `description` field in YAML frontmatter.
+const descriptionToFrontmatter = (description: string): string => {
+	return description
+		.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+		.replace(/\*\*([^*]+)\*\*/g, '$1')
+		.replace(/__([^_]+)__/g, '$1')
+		.replace(/`([^`]+)`/g, '$1')
+		.replace(/\s+/g, ' ')
+		.trim();
+};
+
+const buildFrontmatter = (description: string): string => {
+	if (!description) {
+		return '';
+	}
+	const cleaned = descriptionToFrontmatter(description);
+	if (!cleaned) {
+		return '';
+	}
+	const yamlValue = `"${cleaned.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+	return `---\ndescription: ${yamlValue}\n---\n\n`;
 };
 
 const main = () => {

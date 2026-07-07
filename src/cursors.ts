@@ -75,6 +75,23 @@ export class PacketCursor<T extends InputTrack = InputTrack> {
 		return this._callSerializer.call(() => this._seekToFirstDirect());
 	}
 
+	seekToFirstKey(): MaybePromise<EncodedPacket | null> {
+		return this._callSerializer.call(() => {
+			const result = this._reader.getFirstKey(this._options);
+
+			const onPacket = (packet: EncodedPacket | null) => {
+				this._nextIsFirst = false;
+				return this.current = packet;
+			};
+
+			if (result instanceof Promise) {
+				return result.then(onPacket);
+			} else {
+				return onPacket(result);
+			}
+		});
+	}
+
 	seekTo(timestamp: number): MaybePromise<EncodedPacket | null> {
 		validateTimestamp(timestamp);
 
@@ -231,6 +248,7 @@ export type SampleTransformer<Sample, TransformedSample> = (sample: Sample) => T
 export type SampleCursorOptions<Sample, TransformedSample> = {
 	autoClose?: boolean;
 	transform?: SampleTransformer<Sample, TransformedSample>;
+	skipLiveWait?: boolean;
 };
 
 const validateSampleCursorOptions = <Sample, TransformedSample>(
@@ -245,6 +263,9 @@ const validateSampleCursorOptions = <Sample, TransformedSample>(
 	if (options.transform !== undefined && typeof options.transform !== 'function') {
 		throw new TypeError('options.transform, when provided, must be a function.');
 	}
+	if (options.skipLiveWait !== undefined && typeof options.skipLiveWait !== 'boolean') {
+		throw new TypeError('options.skipLiveWait, when provided, must be a boolean.');
+	}
 };
 
 export abstract class SampleCursor<
@@ -256,6 +277,7 @@ export abstract class SampleCursor<
 
 	private _transform: SampleTransformer<Sample, TransformedSample>;
 	private _autoClose: boolean;
+	private _retrievalOptions: PacketRetrievalOptions;
 
 	private _mutex = new AsyncMutex();
 
@@ -324,8 +346,9 @@ export abstract class SampleCursor<
 		options: SampleCursorOptions<Sample, TransformedSample>,
 	) {
 		this.track = track;
+		this._retrievalOptions = { skipLiveWait: options.skipLiveWait };
 		this._packetReader = new PacketReader(track);
-		this._packetCursor = new PacketCursor(track);
+		this._packetCursor = new PacketCursor(track, this._retrievalOptions);
 		this._autoClose = options.autoClose ?? true;
 		this._transform = options.transform ?? (sample => sample as unknown as TransformedSample);
 
@@ -362,17 +385,28 @@ export abstract class SampleCursor<
 	}
 
 	seekToFirst(): MaybePromise<TransformedSample | null> {
-		return this._getSample(result => this._seekToPacket(result, this._packetReader.getFirst()));
+		// The first packet, as far as sample cursors are concerned, is the first *key* packet - it's the first packet
+		// with which decoding can begin.
+		return this._getSample(result => this._seekToPacket(
+			result,
+			this._packetReader.getFirstKey({ ...this._retrievalOptions, verifyKeyPackets: true }),
+		));
 	}
 
 	seekTo(timestamp: number): MaybePromise<TransformedSample | null> {
 		validateTimestamp(timestamp);
-		return this._getSample(result => this._seekToPacket(result, this._packetReader.getAt(timestamp)));
+		return this._getSample(result => this._seekToPacket(
+			result,
+			this._packetReader.getAt(timestamp, this._retrievalOptions),
+		));
 	}
 
 	seekToKey(timestamp: number): MaybePromise<TransformedSample | null> {
 		validateTimestamp(timestamp);
-		return this._getSample(result => this._seekToPacket(result, this._packetReader.getKeyAt(timestamp)));
+		return this._getSample(result => this._seekToPacket(
+			result,
+			this._packetReader.getKeyAt(timestamp, this._retrievalOptions),
+		));
 	}
 
 	next(): MaybePromise<TransformedSample | null> {
@@ -574,6 +608,10 @@ export abstract class SampleCursor<
 					this._sampleQueue.push(sample);
 				}
 			} else {
+				// If requests are pending, the sample queue must be empty; samples are queued only when there is
+				// nobody to hand them to
+				assert(this._sampleQueue.length === 0);
+
 				let given = false;
 				let nextInsertionIndex = 0;
 
@@ -708,20 +746,29 @@ export abstract class SampleCursor<
 		);
 
 		if (lastTimestamp !== -Infinity && lastTimestamp <= targetPacket.timestamp) {
-			// First, let's see if an already-decoded sample can satisfy the request
-			while (this._sampleQueue.length > 0) {
-				const nextSample = this._sampleQueue.shift()!;
-				this._pumpGate.open();
+			const findQueuedSatisfyingSample = () => {
+				while (this._sampleQueue.length > 0) {
+					const nextSample = this._sampleQueue.shift()!;
+					this._pumpGate.open();
 
-				if (targetPacket.timestamp <= nextSample.timestamp) {
-					this._setCurrentRaw(nextSample);
-					return res.set(this._transformSample());
-				} else {
-					nextSample.close();
+					if (targetPacket.timestamp <= nextSample.timestamp) {
+						return nextSample;
+					} else {
+						nextSample.close();
+					}
 				}
+			};
+
+			// First, let's see if an already-decoded sample can satisfy the request
+			let satisfyingSample = findQueuedSatisfyingSample();
+			if (satisfyingSample) {
+				this._setCurrentRaw(satisfyingSample);
+				return res.set(this._transformSample());
 			}
 
 			if (targetPacket.timestamp - lastTimestamp < 0.1) {
+				// TODO this, keep for stuff like prores? Prores is fastest when every frame is just decoded directly
+				//
 				// The difference is too small for it to be worth to set up a new pump (especially relevant for
 				// audio tracks)
 				needsNewPump = false;
@@ -730,7 +777,7 @@ export abstract class SampleCursor<
 					// We need to see if the target packet is ahead of the decoder, GOP-wise
 					let nextKey = this._packetReader.getNextKey(
 						this._packetCursor.current,
-						{ verifyKeyPackets: true },
+						{ ...this._retrievalOptions, verifyKeyPackets: true },
 					);
 					if (nextKey instanceof Promise) nextKey = await nextKey;
 
@@ -738,6 +785,13 @@ export abstract class SampleCursor<
 				} else {
 					needsNewPump = true;
 				}
+			}
+
+			// We need to check the queue again because the pump may have advanced ever since the last await
+			satisfyingSample = findQueuedSatisfyingSample();
+			if (satisfyingSample) {
+				this._setCurrentRaw(satisfyingSample);
+				return res.set(this._transformSample());
 			}
 		} else {
 			// This is the first packet or we went backwards, create a new pump
@@ -763,6 +817,13 @@ export abstract class SampleCursor<
 		}
 
 		this._ensureNotClosed();
+
+		// A request may only ever be registered when the sample queue is empty, otherwise the queued samples would
+		// never be reconsidered and could clog up the pump
+		assert(this._sampleQueue.length === 0);
+		// There must be a pump running if we reach this point. If there isn't, then the request would never be
+		// fulfilled, which would cause a hang.
+		assert(this._pumpRunning);
 
 		// Add the request to the queue
 		const request = promiseWithResolvers<TransformedSample | null>();
@@ -791,7 +852,11 @@ export abstract class SampleCursor<
 		if (this._nextIsFirst) {
 			// Easy, just seek to the first sample
 			// await is important so that the lock doesn't release too early
-			return await this._seekToPacket(res, this._packetReader.getFirst(), lock);
+			return await this._seekToPacket(
+				res,
+				this._packetReader.getFirstKey({ ...this._retrievalOptions, verifyKeyPackets: true }),
+				lock,
+			);
 		}
 
 		// See if the request can be satisfied using already-decoded samples
@@ -812,6 +877,9 @@ export abstract class SampleCursor<
 		assert(this._lastPendingRequest);
 
 		this._ensureNotClosed();
+
+		// A request may only ever be registered when the sample queue is empty
+		assert(this._sampleQueue.length === 0);
 
 		// Instead of figuring out what the next presentation timestamp is (no easy way to do that), we simply add a
 		// new request that can be fulfilled by *any* timestamp. This way, whatever the decoder produces next (and the
@@ -847,7 +915,11 @@ export abstract class SampleCursor<
 
 		if (this._nextIsFirst) {
 			// await is important so that the lock doesn't release too early
-			return await this._seekToPacket(res, this._packetReader.getFirst(), lock);
+			return await this._seekToPacket(
+				res,
+				this._packetReader.getFirstKey({ ...this._retrievalOptions, verifyKeyPackets: true }),
+				lock,
+			);
 		}
 
 		let timestampToCheck: number;
@@ -882,11 +954,11 @@ export abstract class SampleCursor<
 		// are ascending in timestamp, so we first get the current key (based on a presentation-order search), then
 		// get the next key after that, which will be the answer we're looking for.
 
-		let key = this._packetReader.getKeyAt(timestampToCheck, { verifyKeyPackets: true });
+		let key = this._packetReader.getKeyAt(timestampToCheck, { ...this._retrievalOptions, verifyKeyPackets: true });
 		if (key instanceof Promise) key = await key;
 		assert(key); // Must be
 
-		let nextKey = this._packetReader.getNextKey(key, { verifyKeyPackets: true });
+		let nextKey = this._packetReader.getNextKey(key, { ...this._retrievalOptions, verifyKeyPackets: true });
 		if (nextKey instanceof Promise) nextKey = await nextKey;
 
 		if (!nextKey) {
@@ -904,7 +976,7 @@ export abstract class SampleCursor<
 		this._ensureNotClosed();
 
 		if (this._nextIsFirst) {
-			let first = this._packetReader.getFirst();
+			let first = this._packetReader.getFirstKey({ ...this._retrievalOptions, verifyKeyPackets: true });
 			if (first instanceof Promise) first = await first;
 
 			return res.set(!!first);
@@ -1020,7 +1092,11 @@ export abstract class SampleCursor<
 		} catch (error) {
 			if (!this._decoder.closed && this._pendingRequests.length > 0) {
 				// The pump errored but the decoder is still fine, let's first flush the decoder before continuing
-				await this._decoder.flush();
+				try {
+					await this._decoder.flush();
+				} catch {
+					// The original pump error is the interesting one; _closeWithError below settles the requests
+				}
 			}
 
 			this._pumpRunning = false; // So that close() doesn't attempt to stop the pump
@@ -1128,19 +1204,56 @@ export abstract class SampleCursor<
 	}
 }
 
+export type VideoSampleCursorOptions<TransformedSample = VideoSample> =
+	SampleCursorOptions<VideoSample, TransformedSample> & {
+		/**
+		 * A hint that configures the hardware acceleration method of the decoder. This is best left on
+		 * `'no-preference'`, the default.
+		 */
+		hardwareAcceleration?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
+		/**
+		 * Hint that the selected decoder should be configured to minimize the number of packets that have to be decoded
+		 * before video frames are output.
+		 */
+		optimizeForLatency?: boolean;
+	};
+
+const validateVideoSampleCursorOptions = <TransformedSample>(
+	options: VideoSampleCursorOptions<TransformedSample>,
+) => {
+	validateSampleCursorOptions(options);
+
+	if (
+		options.hardwareAcceleration !== undefined
+		&& !['no-preference', 'prefer-hardware', 'prefer-software'].includes(options.hardwareAcceleration)
+	) {
+		throw new TypeError(
+			'options.hardwareAcceleration, when provided, must be \'no-preference\', \'prefer-hardware\' or'
+			+ ' \'prefer-software\'.',
+		);
+	}
+	if (options.optimizeForLatency !== undefined && typeof options.optimizeForLatency !== 'boolean') {
+		throw new TypeError('options.optimizeForLatency, when provided, must be a boolean.');
+	}
+};
+
 export class VideoSampleCursor<TransformedSample = VideoSample> extends SampleCursor<VideoSample, TransformedSample> {
 	override track!: InputVideoTrack;
 
+	private _options: VideoSampleCursorOptions<TransformedSample>;
+
 	constructor(
 		track: InputVideoTrack,
-		options: SampleCursorOptions<VideoSample, TransformedSample> = {},
+		options: VideoSampleCursorOptions<TransformedSample> = {},
 	) {
 		if (!(track instanceof InputVideoTrack)) {
 			throw new TypeError('track must be an InputVideoTrack.');
 		}
-		validateSampleCursorOptions(options);
+		validateVideoSampleCursorOptions(options);
 
 		super(track, options);
+
+		this._options = options;
 	}
 
 	/** @internal */
@@ -1156,17 +1269,25 @@ export class VideoSampleCursor<TransformedSample = VideoSample> extends SampleCu
 			throw new Error('Fake decoder init error!');
 		}
 
-		const decoderConfig = await this.track.getDecoderConfig();
-		assert(decoderConfig);
-		assert(this.track.codec);
+		const codec = await this.track.getCodec();
+		const rotation = await this.track.getRotation();
+		let decoderConfig = await this.track.getDecoderConfig();
+		const timeResolution = await this.track.getTimeResolution();
+		assert(codec && decoderConfig);
+
+		decoderConfig = {
+			...decoderConfig,
+			hardwareAcceleration: this._options.hardwareAcceleration,
+			optimizeForLatency: this._options.optimizeForLatency,
+		};
 
 		const decoder = new VideoDecoderWrapper(
 			sample => this._onDecoderSample(sample),
 			error => this._onDecoderError(error),
-			this.track.codec,
+			codec,
 			decoderConfig,
-			this.track.rotation,
-			this.track.timeResolution,
+			rotation,
+			timeResolution,
 		);
 
 		decoder.onDequeue = () => this._onDecoderDequeue();
@@ -1175,17 +1296,26 @@ export class VideoSampleCursor<TransformedSample = VideoSample> extends SampleCu
 	}
 }
 
+export type AudioSampleCursorOptions<TransformedSample = AudioSample> =
+	SampleCursorOptions<AudioSample, TransformedSample>;
+
+const validateAudioSampleCursorOptions = <TransformedSample>(
+	options: AudioSampleCursorOptions<TransformedSample>,
+) => {
+	validateSampleCursorOptions(options);
+};
+
 export class AudioSampleCursor<TransformedSample = AudioSample> extends SampleCursor<AudioSample, TransformedSample> {
 	override track!: InputAudioTrack;
 
 	constructor(
 		track: InputAudioTrack,
-		options: SampleCursorOptions<AudioSample, TransformedSample> = {},
+		options: AudioSampleCursorOptions<TransformedSample> = {},
 	) {
 		if (!(track instanceof InputAudioTrack)) {
 			throw new TypeError('track must be an InputAudioTrack.');
 		}
-		validateSampleCursorOptions(options);
+		validateAudioSampleCursorOptions(options);
 
 		super(track, options);
 	}
@@ -1203,7 +1333,7 @@ export class AudioSampleCursor<TransformedSample = AudioSample> extends SampleCu
 			throw new Error('Fake decoder init error!');
 		}
 
-		const codec = this.track.codec;
+		const codec = await this.track.getCodec();
 		const decoderConfig = await this.track.getDecoderConfig();
 		assert(codec && decoderConfig);
 
@@ -1284,7 +1414,8 @@ export type CanvasTransformerOptions = {
 	rotation?: Rotation;
 	/**
 	 * Specifies the rectangular region of the input video to crop to. The crop region will automatically be clamped to
-	 * the dimensions of the input video track. Cropping is performed after rotation but before resizing.
+	 * the dimensions of the input video track. Cropping is performed after rotation but before resizing. The crop
+	 * region is in the _display pixel space_ of the underlying video data.
 	 */
 	crop?: CropRectangle;
 	/**
@@ -1351,12 +1482,12 @@ export const canvasTransformer = (
 			rotation = options.rotation ?? sample.rotation;
 
 			const [rotatedWidth, rotatedHeight] = rotation % 180 === 0
-				? [sample.codedWidth, sample.codedHeight]
-				: [sample.codedHeight, sample.codedWidth];
+				? [sample.squarePixelWidth, sample.squarePixelHeight]
+				: [sample.squarePixelHeight, sample.squarePixelWidth];
 
 			crop = options.crop;
 			if (crop) {
-				clampCropRectangle(crop, rotatedWidth, rotatedHeight);
+				crop = clampCropRectangle(crop, rotatedWidth, rotatedHeight);
 			}
 
 			[width, height] = crop

@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -10,8 +10,8 @@ import { OPUS_SAMPLE_RATE } from '../codec';
 import { parseModesFromVorbisSetupPacket, parseOpusIdentificationHeader, readVorbisComments } from '../codec-data';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
-import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
-import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
+import { InputAudioTrackBacking } from '../input-track';
+import { DEFAULT_TRACK_DISPOSITION, MetadataTags, TrackDisposition } from '../metadata';
 import {
 	assert,
 	AsyncMutex,
@@ -63,7 +63,7 @@ export class OggDemuxer extends Demuxer {
 
 	metadataPromise: Promise<void> | null = null;
 	bitstreams: LogicalBitstream[] = [];
-	tracks: InputAudioTrack[] = [];
+	trackBackings: OggAudioTrackBacking[] = [];
 	metadataTags: MetadataTags = {};
 
 	constructor(input: Input) {
@@ -147,7 +147,7 @@ export class OggDemuxer extends Demuxer {
 				}
 
 				if (bitstream.codecInfo.codec !== null) {
-					this.tracks.push(new InputAudioTrack(this.input, new OggAudioTrackBacking(bitstream, this)));
+					this.trackBackings.push(new OggAudioTrackBacking(bitstream, this));
 				}
 			}
 		})();
@@ -348,6 +348,11 @@ export class OggDemuxer extends Demuxer {
 			currentSegmentIndex = 0;
 		}
 
+		const totalPacketSize = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+		if (totalPacketSize === 0) {
+			return res.set(null); // Invalid packet, treat it as end of stream
+		}
+
 		let packetData: Uint8Array;
 
 		if (chunks.length === 1) {
@@ -409,16 +414,18 @@ export class OggDemuxer extends Demuxer {
 	async getMimeType() {
 		await this.readMetadata();
 
-		const codecStrings = await Promise.all(this.tracks.map(x => x.getCodecParameterString()));
+		const codecStrings = await Promise.all(this.trackBackings.map(
+			x => x.getDecoderConfig().then(c => c?.codec ?? null),
+		));
 
 		return buildOggMimeType({
 			codecStrings: codecStrings.filter(Boolean) as string[],
 		});
 	}
 
-	async getTracks() {
+	async getTrackBackings() {
 		await this.readMetadata();
-		return this.tracks;
+		return this.trackBackings;
 	}
 
 	async getMetadataTags() {
@@ -447,8 +454,22 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 			: bitstream.sampleRate;
 	}
 
+	getType() {
+		return 'audio' as const;
+	}
+
 	getId() {
 		return this.bitstream.serialNumber;
+	}
+
+	getNumber() {
+		// All Ogg tracks are audio, so the track's index + 1 is its number
+		const index = this.demuxer.trackBackings.findIndex(
+			x => x.bitstream === this.bitstream,
+		);
+		assert(index !== -1);
+
+		return index + 1;
 	}
 
 	getNumberOfChannels() {
@@ -461,6 +482,34 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 
 	getTimeResolution() {
 		return this.bitstream.sampleRate;
+	}
+
+	isRelativeToUnixEpoch() {
+		return false;
+	}
+
+	getUnixTimeForTimestamp() {
+		return null;
+	}
+
+	getPairingMask() {
+		return 1n;
+	}
+
+	getBitrate() {
+		return null;
+	}
+
+	getAverageBitrate() {
+		return null;
+	}
+
+	async getDurationFromMetadata() {
+		return null; // Not stored anywhere
+	}
+
+	async getLiveRefreshInterval() {
+		return null;
 	}
 
 	getCodec() {
@@ -490,9 +539,10 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		return UNDETERMINED_LANGUAGE;
 	}
 
-	getDisposition() {
+	getDisposition(): TrackDisposition {
 		return {
 			...DEFAULT_TRACK_DISPOSITION,
+			primary: false,
 		};
 	}
 
@@ -650,11 +700,11 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 
 		const lowPages: Page[] = [lowPage];
 
-		// First, let's perform a binary serach (bisection search) on the file to find the approximate page where
+		// First, let's perform a binary search (bisection search) on the file to find the approximate page where
 		// we'll find the packet. We want to find a page whose end packet position is less than or equal to the
 		// packet position we're searching for.
 
-		// Outer loop: Does the binary serach
+		// Outer loop: Does the binary search
 		outer:
 		while (lowPage.headerStartPos + lowPage.totalSize < high) {
 			const low = lowPage.headerStartPos;

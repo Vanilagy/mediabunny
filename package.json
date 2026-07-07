@@ -1,19 +1,29 @@
 {
   "name": "mediabunny",
   "author": "Vanilagy",
-  "version": "1.27.2",
+  "version": "1.50.6",
   "description": "Pure TypeScript media toolkit for reading, writing, and converting media files, directly in the browser.",
   "type": "module",
   "workspaces": [
+    ".",
     "packages/*"
   ],
   "main": "./dist/bundles/mediabunny.cjs",
   "module": "./dist/modules/src/index.js",
   "types": "./dist/modules/src/index.d.ts",
   "exports": {
-    "types": "./dist/modules/src/index.d.ts",
-    "import": "./dist/modules/src/index.js",
-    "require": "./dist/bundles/mediabunny.cjs"
+    ".": {
+      "types": "./dist/modules/src/index.d.ts",
+      "browser": {
+        "import": "./dist/modules/src/index.js",
+        "require": "./dist/bundles/mediabunny.cjs"
+      },
+      "node": {
+        "import": "./dist/modules/src/index.js",
+        "require": "./dist/bundles/mediabunny.node.cjs"
+      },
+      "default": "./dist/modules/src/index.js"
+    }
   },
   "files": [
     "README.md",
@@ -29,25 +39,27 @@
   },
   "sideEffects": false,
   "scripts": {
-    "build": "./build.sh",
+    "build": "./scripts/build.sh",
     "watch": "tsx scripts/bundle.ts --watch",
     "lint": "eslint .",
-    "test": "npx vitest --run",
-    "test-node": "npm run test node/",
-    "test-browser": "npm run test browser/",
-    "check": "rm -rf dist/modules && tsc -p src --stripInternal false && tsc -p packages/mp3-encoder/src --noEmit && tsc -p tsconfig.vitest.json --noEmit && tsc -p scripts --noEmit && tsc -p tsconfig.vite.json --noEmit",
+    "test": "npm run pre-test && npx vitest --run",
+    "test-node": "npm run pre-test && npm run test node/",
+    "test-browser": "npm run pre-test && npm run test browser/",
+    "pre-test": "tsx scripts/bundle.ts",
+    "check": "./scripts/check.sh",
     "check-docblocks": "tsx scripts/check-docblocks.ts dist/mediabunny.d.ts",
     "docs:dev": "vitepress dev docs",
     "docs:build": "npm run build && npm run docs:generate && vitepress build docs && npm run examples:build && cp dist/mediabunny.d.ts dist-docs/",
     "docs:preview": "vitepress preview docs",
-    "docs:generate": "tsx scripts/generate-api-docs.ts src/index.ts packages/mp3-encoder/src/index.ts docs/api-config.json",
+    "docs:generate": "tsx scripts/generate-api-docs.ts src/index.ts packages/mp3-encoder/src/index.ts packages/ac3/src/index.ts packages/aac-encoder/src/index.ts packages/flac-encoder/src/index.ts packages/prores/src/index.ts packages/server/src/index.ts docs/api-config.json",
     "dev": "vite",
     "examples:build": "vite build",
     "fix-build-import-paths": "tsx scripts/add-import-extensions.ts",
     "append-namespace": "echo 'export as namespace Mediabunny;' >> dist/mediabunny.d.ts",
-    "bump-patch": "npm version patch --no-git-tag-version --workspaces --include-workspace-root",
-    "bump-minor": "npm version minor --no-git-tag-version --workspaces --include-workspace-root",
-    "bump-major": "npm version major --no-git-tag-version --workspaces --include-workspace-root"
+    "bump-patch": "npm version patch --no-git-tag-version --workspaces && tsx scripts/sync-workspace-deps.ts",
+    "bump-minor": "npm version minor --no-git-tag-version --workspaces && tsx scripts/sync-workspace-deps.ts",
+    "bump-major": "npm version major --no-git-tag-version --workspaces && tsx scripts/sync-workspace-deps.ts",
+    "set-version": "npm version --no-git-tag-version --workspaces && tsx scripts/sync-workspace-deps.ts"
   },
   "license": "MPL-2.0",
   "repository": {

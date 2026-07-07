@@ -12,7 +12,7 @@ import { Conversion } from '../../src/conversion.js';
 import { canvasTransformer, PacketCursor, VideoSampleCursor } from '../../src/cursors.js';
 import { PacketReader } from '../../src/packet.js';
 
-test('Can decode transparent video', async () => {
+const decodeTransparentVideoTest = async () => {
 	using input = new Input({
 		source: new UrlSource('/transparency.webm'),
 		formats: ALL_FORMATS,
@@ -34,6 +34,10 @@ test('Can decode transparent video', async () => {
 
 	const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
 	expect(imageData.data[3]).toBeLessThan(255); // Check that there's actually transparent pixels
+};
+
+test('Can decode transparent video', async () => {
+	await decodeTransparentVideoTest();
 });
 
 test('Can decode faulty transparent video and behaves gracefully', async () => {
@@ -48,7 +52,7 @@ test('Can decode faulty transparent video and behaves gracefully', async () => {
 
 	await using cursor = new VideoSampleCursor(videoTrack);
 
-	using startSample = (await cursor.seekTo(await videoTrack.getFirstTimestamp()))!;
+	using startSample = (await cursor.seekToFirst())!;
 	expect(startSample.format).toContain('A');
 
 	using secondSample = (await cursor.seekTo(secondKeyPacket.timestamp))!;
@@ -88,7 +92,7 @@ test('Can extract transparent frames via CanvasSink', async () => {
 	expect(imageData.data[3]).toBe(255);
 });
 
-test('Can encode transparent video', async () => {
+const encodeTransparentVideoTest = async () => {
 	const output = new Output({
 		format: new WebMOutputFormat(),
 		target: new BufferTarget(),
@@ -179,77 +183,84 @@ test('Can encode transparent video', async () => {
 
 	imageData = probeContext.getImageData(0, 0, probeCanvas.width, probeCanvas.height);
 
-	expect(imageData.data[3]).toBe(0); // Transparent
+	expect(imageData.data[4 * (2 * probeCanvas.width + 2) + 3]).toBe(0); // Transparent
+};
+
+test('Can encode transparent video', async () => {
+	await encodeTransparentVideoTest();
 });
 
 test('Can encode video with alternating transparency', async () => {
-	const output = new Output({
-		format: new WebMOutputFormat(),
-		target: new BufferTarget(),
-	});
-
-	const canvas1 = new OffscreenCanvas(640, 480);
-	const context1 = canvas1.getContext('2d', { alpha: true })!;
-	context1.fillStyle = '#ff000080';
-	context1.fillRect(0, 0, canvas1.width, canvas1.height);
-
-	const canvas2 = new OffscreenCanvas(640, 480);
-	const context2 = canvas2.getContext('2d', { alpha: false })!;
-	context2.fillStyle = '#0000ff';
-	context2.fillRect(0, 0, canvas2.width, canvas2.height);
-
-	const source = new VideoSampleSource({
-		codec: 'vp9',
-		bitrate: QUALITY_HIGH,
-		alpha: 'keep',
-	});
-	output.addVideoTrack(source);
-
-	await output.start();
-
-	for (let i = 0; i < 64; i++) {
-		using sample = new VideoSample(new Uint8Array(640 * 480 * 4), {
-			format: i % 2 ? 'RGBX' : 'RGBA',
-			codedWidth: 640,
-			codedHeight: 480,
-			timestamp: i,
-			duration: 1,
+	// This test is already brutal when it comes to finding async race conditions, so run it thrice to be MORE brutal
+	for (let j = 0; j < 3; j++) {
+		const output = new Output({
+			format: new WebMOutputFormat(),
+			target: new BufferTarget(),
 		});
-		await source.add(sample);
-	}
 
-	await output.finalize();
+		const canvas1 = new OffscreenCanvas(640, 480);
+		const context1 = canvas1.getContext('2d', { alpha: true })!;
+		context1.fillStyle = '#ff000080';
+		context1.fillRect(0, 0, canvas1.width, canvas1.height);
 
-	using input = new Input({
-		source: new BufferSource(output.target.buffer!),
-		formats: ALL_FORMATS,
-	});
+		const canvas2 = new OffscreenCanvas(640, 480);
+		const context2 = canvas2.getContext('2d', { alpha: false })!;
+		context2.fillStyle = '#0000ff';
+		context2.fillRect(0, 0, canvas2.width, canvas2.height);
 
-	const videoTrack = (await input.getPrimaryVideoTrack())!;
-	const packetCursor = new PacketCursor(videoTrack);
+		const source = new VideoSampleSource({
+			codec: 'vp9',
+			bitrate: QUALITY_HIGH,
+			alpha: 'keep',
+		});
+		output.addVideoTrack(source);
 
-	let i = 0;
-	for await (const packet of packetCursor) {
-		if (i % 2) {
-			expect(packet.sideData.alpha).toBeUndefined();
-		} else {
-			expect(packet.sideData.alpha).toBeDefined();
+		await output.start();
+
+		for (let i = 0; i < 64; i++) {
+			using sample = new VideoSample(new Uint8Array(640 * 480 * 4), {
+				format: i % 2 ? 'RGBX' : 'RGBA',
+				codedWidth: 640,
+				codedHeight: 480,
+				timestamp: i,
+				duration: 1,
+			});
+			await source.add(sample);
 		}
 
-		i++;
-	}
+		await output.finalize();
 
-	await using sampleCursor = new VideoSampleCursor(videoTrack);
+		using input = new Input({
+			source: new BufferSource(output.target.buffer!),
+			formats: ALL_FORMATS,
+		});
 
-	i = 0;
-	for await (using sample of sampleCursor) {
-		if (i % 2) {
-			expect(sample.format).not.toContain('A');
-		} else {
-			expect(sample.format).toContain('A');
+		const videoTrack = (await input.getPrimaryVideoTrack())!;
+		const packetCursor = new PacketCursor(videoTrack);
+
+		let i = 0;
+		for await (const packet of packetCursor) {
+			if (i % 2) {
+				expect(packet.sideData.alpha).toBeUndefined();
+			} else {
+				expect(packet.sideData.alpha).toBeDefined();
+			}
+
+			i++;
 		}
 
-		i++;
+		await using sampleCursor = new VideoSampleCursor(videoTrack);
+
+		i = 0;
+		for await (const sample of sampleCursor) {
+			if (i % 2) {
+				expect(sample.format).not.toContain('A');
+			} else {
+				expect(sample.format).toContain('A');
+			}
+
+			i++;
+		}
 	}
 });
 
@@ -374,7 +385,7 @@ test('Can reencode transparent video, keeping alpha', async () => {
 
 	const videoTrack = (await outputInput.getPrimaryVideoTrack())!;
 	expect(await videoTrack.canBeTransparent()).toBe(true);
-	expect(videoTrack.displayWidth).toBe(320);
+	expect(await videoTrack.getDisplayWidth()).toBe(320);
 
 	const cursor = new VideoSampleCursor(videoTrack);
 	using sample = (await cursor.seekToFirst())!;

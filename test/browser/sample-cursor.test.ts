@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, expect, test } from 'vitest';
 import { Input } from '../../src/input.js';
 import { BufferSource, UrlSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
@@ -11,12 +11,17 @@ import {
 import { AudioSample, VideoSample } from '../../src/sample.js';
 import { promiseAllEnsureOrder, promiseIterateAll } from '../../src/misc.js';
 
+beforeEach(() => {
+	VideoSample._openSampleCount = 0;
+	AudioSample._openSampleCount = 0;
+});
+
 afterEach(() => {
 	expect(VideoSample._openSampleCount).toBe(0);
 	expect(AudioSample._openSampleCount).toBe(0);
 });
 
-test('Sample cursor seeking', async () => {
+test('Sample cursor seeking', { timeout: 30_000 }, async () => {
 	using input = new Input({
 		source: new UrlSource('/trim-buck-bunny.mov'),
 		formats: ALL_FORMATS,
@@ -1077,8 +1082,8 @@ test('Canvas transformer', async () => {
 	const firstSample = (await cursor1.seekToFirst())!;
 	expect(firstSample).toBeInstanceOf(WrappedCanvas);
 	expect(firstSample.canvas).toBeInstanceOf(HTMLCanvasElement);
-	expect(firstSample.canvas.width).toBe(videoTrack.displayWidth);
-	expect(firstSample.canvas.height).toBe(videoTrack.displayHeight);
+	expect(firstSample.canvas.width).toBe(await videoTrack.getDisplayWidth());
+	expect(firstSample.canvas.height).toBe(await videoTrack.getDisplayHeight());
 	expect(firstSample.timestamp).toBe(0);
 	expect(firstSample.duration).toBeGreaterThan(0);
 

@@ -7,7 +7,7 @@ import { Output } from '../../src/output.js';
 import { Mp4OutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
 import { Conversion } from '../../src/conversion.js';
-import { extractAvcNalUnits } from '../../src/codec-data.js';
+import { iterateAvcNalUnits } from '../../src/codec-data.js';
 import { PacketReader } from '../../src/packet.js';
 
 const __dirname = new URL('.', import.meta.url).pathname;
@@ -20,13 +20,14 @@ test('Annex B to length-prefixed conversion, MP4', async () => {
 	const originalVideoTrack = (await originalInput.getPrimaryVideoTrack())!;
 	const originalDecoderConfig = (await originalVideoTrack.getDecoderConfig())!;
 	expect(originalDecoderConfig.description).toBeUndefined();
-	expect(originalVideoTrack.codec).toBe('avc');
+	expect(await originalVideoTrack.getCodec()).toBe('avc');
 
 	const originalReader = new PacketReader(originalVideoTrack);
 	const originalFirstPacket = await originalReader.getFirst();
 	expect([...originalFirstPacket!.data.slice(0, 4)]).toEqual([0, 0, 0, 1]);
 
-	const originalNalUnits = extractAvcNalUnits(originalFirstPacket!.data, originalDecoderConfig);
+	const originalNalUnits = [...iterateAvcNalUnits(originalFirstPacket!.data, originalDecoderConfig)]
+		.map(loc => originalFirstPacket!.data.subarray(loc.offset, loc.offset + loc.length));
 
 	const output = new Output({
 		format: new Mp4OutputFormat(),
@@ -43,12 +44,13 @@ test('Annex B to length-prefixed conversion, MP4', async () => {
 	const newVideoTrack = (await newInput.getPrimaryVideoTrack())!;
 	const newDecoderConfig = (await newVideoTrack.getDecoderConfig())!;
 	expect(newDecoderConfig.description).toBeDefined();
-	expect(newVideoTrack.codec).toBe('avc');
+	expect(await newVideoTrack.getCodec()).toBe('avc');
 
 	const newReader = new PacketReader(newVideoTrack);
 	const newFirstPacket = await newReader.getFirst();
 	expect([...newFirstPacket!.data.slice(0, 4)]).not.toEqual([0, 0, 0, 1]); // Successfully converted
 
-	const newNalUnits = extractAvcNalUnits(newFirstPacket!.data, newDecoderConfig);
+	const newNalUnits = [...iterateAvcNalUnits(newFirstPacket!.data, newDecoderConfig)]
+		.map(loc => newFirstPacket!.data.subarray(loc.offset, loc.offset + loc.length));
 	expect(newNalUnits).toEqual(originalNalUnits); // Content is the same though
 });

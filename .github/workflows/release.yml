@@ -19,13 +19,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Merge main into release branch
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout release
-          git merge origin/main --no-ff -m "Merge main into release for tag ${{ github.event.release.tag_name }}"
-          git push origin release
+      - name: Enforce stable releases target main
+        if: ${{ !github.event.release.prerelease && github.event.release.target_commitish != 'main' }}
+        uses: actions/github-script@ffc2c79a5b2490bd33e0a41c1de74b877714d736 # v3.2.0
+        with:
+          script: "core.setFailed('Non-prerelease releases must target the main branch (got: ${{ github.event.release.target_commitish }}).')"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -35,7 +33,7 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Update npm
-        run: npm install -g npm@latest
+        run: npm install -g npm@11.11.0
 
       - name: Get package.json version
         id: package-json-version
@@ -53,16 +51,59 @@ jobs:
       - name: Run tests
         run: xvfb-run npm test
 
-      - name: Run build
-        run: npm run build
+      # Building the docs also builds the core library
+      - name: Build everything
+        run: npm run docs:build
 
       - name: Upload build artifacts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload ${{ github.event.release.tag_name }} dist/bundles/mediabunny.cjs dist/bundles/mediabunny.min.cjs dist/bundles/mediabunny.mjs dist/bundles/mediabunny.min.mjs dist/mediabunny.d.ts packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.js packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.min.js packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.mjs packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.min.mjs packages/mp3-encoder/dist/mediabunny-mp3-encoder.d.ts
-
-      - name: Publish Mediabunny to npm
-        run: npm publish --access public
+        run: >
+          gh release upload ${{ github.event.release.tag_name }}
+          dist/bundles/mediabunny.cjs
+          dist/bundles/mediabunny.min.cjs
+          dist/bundles/mediabunny.mjs
+          dist/bundles/mediabunny.min.mjs
+          dist/mediabunny.d.ts
+          packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.js
+          packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.min.js
+          packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.mjs
+          packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.min.mjs
+          packages/mp3-encoder/dist/mediabunny-mp3-encoder.d.ts
+          packages/ac3/dist/bundles/mediabunny-ac3.js
+          packages/ac3/dist/bundles/mediabunny-ac3.min.js
+          packages/ac3/dist/bundles/mediabunny-ac3.mjs
+          packages/ac3/dist/bundles/mediabunny-ac3.min.mjs
+          packages/ac3/dist/mediabunny-ac3.d.ts
+          packages/aac-encoder/dist/bundles/mediabunny-aac-encoder.js
+          packages/aac-encoder/dist/bundles/mediabunny-aac-encoder.min.js
+          packages/aac-encoder/dist/bundles/mediabunny-aac-encoder.mjs
+          packages/aac-encoder/dist/bundles/mediabunny-aac-encoder.min.mjs
+          packages/aac-encoder/dist/mediabunny-aac-encoder.d.ts
+          packages/flac-encoder/dist/bundles/mediabunny-flac-encoder.js
+          packages/flac-encoder/dist/bundles/mediabunny-flac-encoder.min.js
+          packages/flac-encoder/dist/bundles/mediabunny-flac-encoder.mjs
+          packages/flac-encoder/dist/bundles/mediabunny-flac-encoder.min.mjs
+          packages/flac-encoder/dist/mediabunny-flac-encoder.d.ts
+          packages/prores/dist/bundles/mediabunny-prores.js
+          packages/prores/dist/bundles/mediabunny-prores.min.js
+          packages/prores/dist/bundles/mediabunny-prores.mjs
+          packages/prores/dist/bundles/mediabunny-prores.min.mjs
+          packages/prores/dist/mediabunny-prores.d.ts
+          packages/server/dist/bundles/mediabunny-server.cjs
+          packages/server/dist/bundles/mediabunny-server.min.cjs
+          packages/server/dist/bundles/mediabunny-server.mjs
+          packages/server/dist/bundles/mediabunny-server.min.mjs
+          packages/server/dist/mediabunny-server.d.ts
 
       - name: Publish workspace packages to npm
-        run: npm publish --access public --workspaces 
+        run: npm publish --access public --workspaces ${{ github.event.release.prerelease && '--tag beta' || '' }}
+
+      - name: Merge main into release branch
+        if: ${{ !github.event.release.prerelease }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout release
+          git merge origin/main --no-ff -m "Merge main into release for tag ${{ github.event.release.tag_name }}"
+          git push origin release

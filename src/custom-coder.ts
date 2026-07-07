@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -7,6 +7,9 @@
  */
 
 import { AudioCodec, VideoCodec } from './codec';
+import { canDecodeAudioMemo, canDecodeVideoMemo } from './decode';
+import { canEncodeAudioMemo, canEncodeVideoMemo } from './encode';
+import { Logging } from './logging';
 import { MaybePromise } from './misc';
 import { EncodedPacket } from './packet';
 import { AudioSample, VideoSample } from './sample';
@@ -24,6 +27,8 @@ export abstract class CustomVideoDecoder {
 	readonly config!: VideoDecoderConfig;
 	/** The callback to call when a decoded VideoSample is available. */
 	readonly onSample!: (sample: VideoSample) => unknown;
+	/** The callback to call to surface out-of-band errors that can't be surfaced through the main methods. */
+	readonly onError!: (error: unknown) => undefined;
 
 	/** Returns true if and only if the decoder can decode the given codec configuration. */
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -54,6 +59,8 @@ export abstract class CustomAudioDecoder {
 	readonly config!: AudioDecoderConfig;
 	/** The callback to call when a decoded AudioSample is available. */
 	readonly onSample!: (sample: AudioSample) => unknown;
+	/** The callback to call to surface out-of-band errors that can't be surfaced through the main methods. */
+	readonly onError!: (error: unknown) => undefined;
 
 	/** Returns true if and only if the decoder can decode the given codec configuration. */
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -84,6 +91,8 @@ export abstract class CustomVideoEncoder {
 	readonly config!: VideoEncoderConfig;
 	/** The callback to call when an EncodedPacket is available. */
 	readonly onPacket!: (packet: EncodedPacket, meta?: EncodedVideoChunkMetadata) => unknown;
+	/** The callback to call to surface out-of-band errors that can't be surfaced through the main methods. */
+	readonly onError!: (error: unknown) => undefined;
 
 	/** Returns true if and only if the encoder can encode the given codec configuration. */
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -114,6 +123,8 @@ export abstract class CustomAudioEncoder {
 	readonly config!: AudioEncoderConfig;
 	/** The callback to call when an EncodedPacket is available. */
 	readonly onPacket!: (packet: EncodedPacket, meta?: EncodedAudioChunkMetadata) => unknown;
+	/** The callback to call to surface out-of-band errors that can't be surfaced through the main methods. */
+	readonly onError!: (error: unknown) => undefined;
 
 	/** Returns true if and only if the encoder can encode the given codec configuration. */
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -147,20 +158,22 @@ export const registerDecoder = (decoder: typeof CustomVideoDecoder | typeof Cust
 		const casted = decoder as typeof CustomVideoDecoder;
 
 		if (customVideoDecoders.includes(casted)) {
-			console.warn('Video decoder already registered.');
+			Logging._warn('Video decoder already registered.');
 			return;
 		}
 
 		customVideoDecoders.push(casted);
+		canDecodeVideoMemo.clear();
 	} else if (decoder.prototype instanceof CustomAudioDecoder) {
 		const casted = decoder as typeof CustomAudioDecoder;
 
 		if (customAudioDecoders.includes(casted)) {
-			console.warn('Audio decoder already registered.');
+			Logging._warn('Audio decoder already registered.');
 			return;
 		}
 
 		customAudioDecoders.push(casted);
+		canDecodeAudioMemo.clear();
 	} else {
 		throw new TypeError('Decoder must be a CustomVideoDecoder or CustomAudioDecoder.');
 	}
@@ -177,20 +190,22 @@ export const registerEncoder = (encoder: typeof CustomVideoEncoder | typeof Cust
 		const casted = encoder as typeof CustomVideoEncoder;
 
 		if (customVideoEncoders.includes(casted)) {
-			console.warn('Video encoder already registered.');
+			Logging._warn('Video encoder already registered.');
 			return;
 		}
 
 		customVideoEncoders.push(casted);
+		canEncodeVideoMemo.clear();
 	} else if (encoder.prototype instanceof CustomAudioEncoder) {
 		const casted = encoder as typeof CustomAudioEncoder;
 
 		if (customAudioEncoders.includes(casted)) {
-			console.warn('Audio encoder already registered.');
+			Logging._warn('Audio encoder already registered.');
 			return;
 		}
 
 		customAudioEncoders.push(casted);
+		canEncodeAudioMemo.clear();
 	} else {
 		throw new TypeError('Encoder must be a CustomVideoEncoder or CustomAudioEncoder.');
 	}

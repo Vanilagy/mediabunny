@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -10,7 +10,6 @@ import { validateAudioChunkMetadata } from '../codec';
 import { createVorbisComments, FlacBlockType } from '../codec-data';
 import {
 	assert,
-	Bitstream,
 	textEncoder,
 	toDataView,
 	toUint8Array,
@@ -27,13 +26,14 @@ import {
 	getBlockSizeOrUncommon,
 	readCodedNumber,
 } from './flac-misc';
+import { Bitstream } from '../../shared/bitstream';
 
 const FLAC_HEADER = /* #__PURE__ */ new Uint8Array([0x66, 0x4c, 0x61, 0x43]); // 'fLaC'
 const STREAMINFO_SIZE = 38;
 const STREAMINFO_BLOCK_SIZE = 34;
 
 export class FlacMuxer extends Muxer {
-	private writer: Writer;
+	private writer!: Writer;
 	private metadataWritten = false;
 
 	private blockSizes: number[] = [];
@@ -48,11 +48,14 @@ export class FlacMuxer extends Muxer {
 	constructor(output: Output, format: FlacOutputFormat) {
 		super(output);
 
-		this.writer = output._writer;
 		this.format = format;
 	}
 
 	async start() {
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
+
+		this.writer = await this.output._getRootWriter(!!this.format._options.appendOnly);
 		this.writer.write(FLAC_HEADER);
 	}
 
@@ -165,7 +168,9 @@ export class FlacMuxer extends Muxer {
 	}
 
 	writeVorbisCommentAndPictureBlock() {
-		this.writer.seek(STREAMINFO_SIZE + FLAC_HEADER.byteLength);
+		if (!this.format._options.appendOnly) {
+			this.writer.seek(STREAMINFO_SIZE + FLAC_HEADER.byteLength);
+		}
 		if (metadataTagsAreEmpty(this.output._metadataTags)) {
 			this.metadataWritten = true;
 			return;
@@ -208,27 +213,23 @@ export class FlacMuxer extends Muxer {
 		using lock = this.mutex.lock();
 		if (lock.pending) await lock.ready;
 
-		validateAudioChunkMetadata(meta);
-
-		assert(meta);
-		assert(meta.decoderConfig);
-		assert(meta.decoderConfig.description);
-
-		this.validateAndNormalizeTimestamp(
+		this.validateTimestamp(
 			track,
 			packet.timestamp,
 			packet.type === 'key',
 		);
 
 		if (this.sampleRate === null) {
+			// It's the first packet
+			validateAudioChunkMetadata(meta);
+
+			assert(meta);
+			assert(meta.decoderConfig);
+			assert(meta.decoderConfig.description);
+
 			this.sampleRate = meta.decoderConfig.sampleRate;
-		}
-
-		if (this.channels === null) {
 			this.channels = meta.decoderConfig.numberOfChannels;
-		}
 
-		if (this.bitsPerSample === null) {
 			const descriptionBitstream = new Bitstream(
 				toUint8Array(meta.decoderConfig.description),
 			);
@@ -237,6 +238,30 @@ export class FlacMuxer extends Muxer {
 			descriptionBitstream.skipBits(103 + 64);
 			const bitsPerSample = descriptionBitstream.readBits(5) + 1;
 			this.bitsPerSample = bitsPerSample;
+
+			if (this.format._options.appendOnly) {
+				// Write STREAMINFO immediately since we can't seek back later.
+				this.writeHeader({
+					// https://www.rfc-editor.org/rfc/rfc9639.html#name-streaminfo
+					// Per RFC 9639, min/max block sizes can be looser than
+					// actual values, so we use the full valid range (16–65535).
+					// "The actual max block size MAY be smaller than what's
+					// listed, and the actual min (excluding last block) MAY be
+					// larger. This is because the encoder has to write these
+					// fields before receiving any input audio data and cannot
+					// know beforehand what block sizes it will use."
+					minimumBlockSize: 16,
+					maximumBlockSize: 65535,
+					// https://www.rfc-editor.org/rfc/rfc9639.html#name-streaminfo
+					// "A value of 0 signifies that the value is not known."
+					minimumFrameSize: 0,
+					maximumFrameSize: 0,
+					sampleRate: this.sampleRate,
+					channels: this.channels,
+					bitsPerSample: this.bitsPerSample,
+					totalSamples: 0,
+				});
+			}
 		}
 
 		if (!this.metadataWritten) {
@@ -244,7 +269,7 @@ export class FlacMuxer extends Muxer {
 		}
 
 		const slice = FileSlice.tempFromBytes(packet.data);
-		readBytes(slice, 2);
+		slice.skip(2);
 		const bytes = readBytes(slice, 2);
 		const bitstream = new Bitstream(bytes);
 		const blockSizeOrUncommon = getBlockSizeOrUncommon(bitstream.readBits(4));
@@ -255,8 +280,10 @@ export class FlacMuxer extends Muxer {
 		readCodedNumber(slice); // num
 		const blockSize = readBlockSize(slice, blockSizeOrUncommon);
 
-		this.blockSizes.push(blockSize);
-		this.frameSizes.push(packet.data.length);
+		if (!this.format._options.appendOnly) {
+			this.blockSizes.push(blockSize);
+			this.frameSizes.push(packet.data.length);
+		}
 
 		const startPos = this.writer.getPos();
 		this.writer.write(packet.data);
@@ -276,41 +303,43 @@ export class FlacMuxer extends Muxer {
 		using lock = this.mutex.lock();
 		if (lock.pending) await lock.ready;
 
-		let minimumBlockSize = Infinity;
-		let maximumBlockSize = 0;
-		let minimumFrameSize = Infinity;
-		let maximumFrameSize = 0;
-		let totalSamples = 0;
-		for (let i = 0; i < this.blockSizes.length; i++) {
-			minimumFrameSize = Math.min(minimumFrameSize, this.frameSizes[i]!);
-			maximumFrameSize = Math.max(maximumFrameSize, this.frameSizes[i]!);
-			maximumBlockSize = Math.max(maximumBlockSize, this.blockSizes[i]!);
-			totalSamples += this.blockSizes[i]!;
+		if (!this.format._options.appendOnly) {
+			let minimumBlockSize = Infinity;
+			let maximumBlockSize = 0;
+			let minimumFrameSize = Infinity;
+			let maximumFrameSize = 0;
+			let totalSamples = 0;
+			for (let i = 0; i < this.blockSizes.length; i++) {
+				minimumFrameSize = Math.min(minimumFrameSize, this.frameSizes[i]!);
+				maximumFrameSize = Math.max(maximumFrameSize, this.frameSizes[i]!);
+				maximumBlockSize = Math.max(maximumBlockSize, this.blockSizes[i]!);
+				totalSamples += this.blockSizes[i]!;
 
-			// Excluding the last frame from block size calculation
-			// https://www.rfc-editor.org/rfc/rfc9639.html#name-streaminfo
-			// "The minimum block size (in samples) used in the stream, excluding the last block."
-			const isLastFrame = i === this.blockSizes.length - 1;
-			if (isLastFrame) {
-				continue;
+				// Excluding the last frame from block size calculation
+				// https://www.rfc-editor.org/rfc/rfc9639.html#name-streaminfo
+				// "The minimum block size (in samples) used in the stream, excluding the last block."
+				const isLastFrame = i === this.blockSizes.length - 1;
+				if (isLastFrame) {
+					continue;
+				}
+				minimumBlockSize = Math.min(minimumBlockSize, this.blockSizes[i]!);
 			}
-			minimumBlockSize = Math.min(minimumBlockSize, this.blockSizes[i]!);
+
+			assert(this.sampleRate !== null);
+			assert(this.channels !== null);
+			assert(this.bitsPerSample !== null);
+
+			this.writer.seek(4);
+			this.writeHeader({
+				minimumBlockSize,
+				maximumBlockSize,
+				minimumFrameSize,
+				maximumFrameSize,
+				sampleRate: this.sampleRate,
+				channels: this.channels,
+				bitsPerSample: this.bitsPerSample,
+				totalSamples,
+			});
 		}
-
-		assert(this.sampleRate !== null);
-		assert(this.channels !== null);
-		assert(this.bitsPerSample !== null);
-
-		this.writer.seek(4);
-		this.writeHeader({
-			minimumBlockSize,
-			maximumBlockSize,
-			minimumFrameSize,
-			maximumFrameSize,
-			sampleRate: this.sampleRate,
-			channels: this.channels,
-			bitsPerSample: this.bitsPerSample,
-			totalSamples,
-		});
 	}
 }

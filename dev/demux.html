@@ -1,8 +1,11 @@
 <!DOCTYPE html>
 
 <script src="../dist/bundles/mediabunny.cjs"></script>
+<script src="../packages/ac3/dist/bundles/mediabunny-ac3.js"></script>
 
 <script type="module">
+	MediabunnyAc3.registerAc3Decoder();
+
 	const fileInput = document.createElement('input');
 	fileInput.type = 'file';
 	document.body.append(fileInput);
@@ -14,21 +17,252 @@
 			source: new Mediabunny.BufferSource(await file.arrayBuffer()),
 		});
 
-		const audioTrack = await input.getPrimaryAudioTrack();
+		/*
+		const track = await input.getPrimaryVideoTrack();
+		const packetSink = new Mediabunny.EncodedPacketSink(track);
 
-		const iters = 250;
-		let total = 0;
+		const first = await packetSink.getFirstPacket({ verifyKeyPackets: true });
+		const second = await packetSink.getNextPacket(first, { verifyKeyPackets: true });
+		const third = await packetSink.getNextPacket(second, { verifyKeyPackets: true });
+		const fourth = await packetSink.getNextPacket(third, { verifyKeyPackets: true });
+		console.log(first, second, third, fourth);
+		*/
 
-		for (let i = 0; i < iters; i++) {
-			const start = performance.now();
-			let count = 0;
-			const reader = new Mediabunny.PacketCursor(audioTrack);
-			await reader.iterate(() => count++);
+		/*
 
-			console.log(count)
-
-			total += performance.now() - start;
+		for await (const packet of packetSink.packets()) {
+			//console.log(packet);
+			break;
 		}
+
+		const sink = new Mediabunny.AudioSampleSink(track);
+
+		let count = 0;
+		for await (const sample of sink.samples()) {
+			const buf = new Float32Array(new ArrayBuffer(sample.allocationSize({ format: 'f32-planar', planeIndex: 0 })));
+			sample.copyTo(buf, { format: 'f32-planar', planeIndex: 0 });
+			let max = Math.max(...buf.map(x => Math.abs(x)));
+
+			console.log(sample, buf, max)
+			
+			if (++count === 3) {
+				break;
+			}
+		}
+		*/
+
+		/*
+		const track = await input.getPrimaryAudioTrack();
+		const sink = new Mediabunny.EncodedPacketSink(track);
+		
+		for await (const packet of sink.packets()) {
+			console.log(packet);
+		}
+
+		const output = new Mediabunny.Output({
+			format: new Mediabunny.Mp4OutputFormat(),
+			target: new Mediabunny.BufferTarget(),
+		});
+
+		const conversion = await Mediabunny.Conversion.init({ input, output });
+		await conversion.execute();
+		
+		return;
+		
+		// Download it now
+		const blob = new Blob([output.target.buffer]);
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = file.name.replace(/\.\w+$/, '.mp4');
+		a.click();
+		URL.revokeObjectURL(url);
+		*/
+
+		/*
+		const track = await input.getPrimaryAudioTrack();
+		const sink = new Mediabunny.EncodedPacketSink(track);
+		
+		for await (const packet of sink.packets()) {
+			console.log(packet);
+		}
+
+		console.log("Done")
+		*/
+
+		/*
+		const input = new Mediabunny.Input({
+			source: new Mediabunny.UrlSource('https://storage.googleapis.com/shaka-demo-assets/angel-one-widevine-hls/hls.m3u8'),
+			formats: Mediabunny.ALL_FORMATS,
+		});
+
+		const videoTrack = await input.getPrimaryVideoTrack();
+		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
+		console.log(await sink.getFirstPacket());
+		*/
+
+		/*
+		return
+		
+		const tracks = await manifest.getTracks();
+		console.log(tracks);
+		const [track] = tracks;
+		
+		window.kekw = () => {
+			console.log(track.getDurationFromMetadata())
+		};
+
+		return;
+		const ugh = new Mediabunny.EncodedPacketSink(audioTrack);
+
+		for await (const packet of ugh.packets()) {
+			console.log(packet);
+		}
+
+		//console.log(await manifest.getTracks());
+		return;
+
+		const videoTrack = await manifest.getPrimaryVideoTrack();
+		await videoTrack.hydrate();
+
+		console.log("Doing...")
+		console.log(await videoTrack.getDurationFromMetadata({skipLiveWait: true}));
+		return;
+
+		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
+		const firstTimestamp = await videoTrack.getFirstTimestamp();
+
+		console.log(await videoTrack.computeDuration({ skipLiveWait: true }));
+
+		manifest.dispose()
+		*/
+
+		/*
+		let last = -Infinity;
+		for await (const packet of sink.packets()) {
+			const rel = packet.timestamp - firstTimestamp;
+			console.log(rel, rel - last);
+
+			last = rel;
+
+			if (rel >= 10) {
+				break;
+			}
+		}
+		*/
+
+		/*
+		console.log("here")
+		const lastPacket = await sink.getPacket(Infinity, { skipLiveWait: true });
+		const other = await sink.getPacket(lastPacket.timestamp - 5);
+
+		for await (const packet of sink.packets(other)) {
+			console.log(packet.timestamp);
+		}
+
+		console.log("Done")
+		*/
+		
+
+		/*
+		const tracks = await manifest.getTracks();
+		//await input.hydrateAllTracks();
+		console.log(tracks, tracks.map(x => [x.getFirstTimestamp(), x.computeDuration()]));
+
+		return;
+		*/
+		/*
+		for await (using sample of sink.samples()) {
+			console.log(sample.timestamp);
+		}
+		*/
+
+		/*
+		const manifest = new Mediabunny.ManifestInput({
+			entryPath: 'https://storage.googleapis.com/shaka-demo-assets/angel-one-hls/hls.m3u8'
+			 	?? 'https://playertest.longtailvideo.com/adaptive/vod-with-mp3/manifest.m3u8'
+				?? 'https://playertest.longtailvideo.com/adaptive/aes-with-tracks/master.m3u8'
+				?? 'https://playertest.longtailvideo.com/adaptive/customIV/prog_index.m3u8'
+				?? 'https://playertest.longtailvideo.com/adaptive/issue666/playlists/cisq0gim60007xzvi505emlxx.m3u8'
+				?? 'https://test-streams.mux.dev/dai-discontinuity-deltatre/manifest.m3u8'
+				?? 'https://test-streams.mux.dev/x36xhzz/url_0/193039199_mp4_h264_aac_hd_7.m3u8'
+				?? 'https://test-streams.mux.dev/dai-discontinuity-deltatre/manifest.m3u8'
+				?? 'https://cdn.jwplayer.com/manifests/pZxWPRg4.m3u8'
+				?? 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8'
+				?? 'https://test-streams.mux.dev/x36xhzz/url_0/193039199_mp4_h264_aac_hd_7.m3u8',
+			getSource: path => new Mediabunny.UrlSource(path),
+			manifestFormats: Mediabunny.ALL_MANIFEST_FORMATS,
+			mediaFormats: Mediabunny.ALL_FORMATS,
+		});
+
+		const variants = await manifest.getVariants();
+		const variant = variants[0];
+		const firstSegment = await variant.getFirstSegment();
+		const input = await firstSegment.toInput();
+		const videoTrack = await input.getPrimaryVideoTrack();
+		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
+
+		for await (const packet of sink.packets()) {
+			console.log(packet.byteLength, packet.timestamp, packet.duration)
+		}
+		*/
+
+		/*
+		return;
+		const variant = variants[2];//variants.find(x => x.path.endsWith('aac/und/stream.m3u8'));
+		const input = variant.toInput();
+		const audioTrack = await input.getPrimaryAudioTrack();
+		const sink = new Mediabunny.EncodedPacketSink(audioTrack);
+
+		for await (const packet of sink.packets()) {
+			console.log(packet.timestamp, packet.duration)
+		}
+		*/
+
+		/*
+		const file = fileInput.files[0];
+		const input = new Mediabunny.Input({
+			formats: Mediabunny.ALL_FORMATS,
+			source: new Mediabunny.UrlSource('https://playertest.longtailvideo.com/adaptive/captions/130130211307_1.ts'),
+		});
+
+		const videoTrack = await input.getPrimaryVideoTrack();
+		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
+
+		for await (const packet of sink.packets()) {
+			console.log("Packet", packet.timestamp)
+			for (const thing of window.iterateNalUnitsInAnnexB(packet.data)) {
+				console.log(thing, "type", window.extractNalUnitTypeForAvc(packet.data[thing.offset]))
+			}
+		}
+		*/
+
+		/*
+		
+		//const secondPacket = await sink.getNextPacket(firstPacket);
+		//const thirdPacket = await sink.getNextPacket(secondPacket);
+		//const fourthPacket = await sink.getNextPacket(thirdPacket);
+		//const fifthPacket = await sink.getNextPacket(fourthPacket);
+		//const sixthPacket = await sink.getNextPacket(fifthPacket);
+		//const seventhPacket = await sink.getNextPacket(sixthPacket);
+		//const eighthPacket = await sink.getNextPacket(seventhPacket);
+		//const ninthPacket = await sink.getNextPacket(eighthPacket);
+		//const tenthPacket = await sink.getNextPacket(ninthPacket);
+
+		console.log(firstPacket, secondPacket, thirdPacket, fourthPacket, fifthPacket, sixthPacket, seventhPacket, eighthPacket, ninthPacket, tenthPacket);
+
+		const packets = [firstPacket, secondPacket, thirdPacket, fourthPacket, fifthPacket, sixthPacket, seventhPacket, eighthPacket, ninthPacket, tenthPacket];
+
+		const videoDecoder = new VideoDecoder({
+			output: (frame) => console.log(frame.timestamp, frame),
+			error: console.error,
+		});
+		videoDecoder.configure(await videoTrack.getDecoderConfig());
+
+		for (const packet of packets) {
+			//videoDecoder.decode(packet.toEncodedVideoChunk());
+		}
+		*/
 
 		alert(total / iters);
 

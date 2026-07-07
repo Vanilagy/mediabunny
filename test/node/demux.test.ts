@@ -179,13 +179,13 @@ test('MP3 demuxing', async () => {
 	const audioTrack = tracks[0] as InputAudioTrack;
 	expect(audioTrack).toBeInstanceOf(InputAudioTrack);
 
-	expect(audioTrack.numberOfChannels).toBe(1);
-	expect(audioTrack.sampleRate).toBe(44100);
+	expect(await audioTrack.getNumberOfChannels()).toBe(1);
+	expect(await audioTrack.getSampleRate()).toBe(44100);
 
 	const decoderConfig = await audioTrack.getDecoderConfig();
 	expect(decoderConfig!.codec).toBe('mp3');
-	expect(decoderConfig!.numberOfChannels).toBe(audioTrack.numberOfChannels);
-	expect(decoderConfig!.sampleRate).toBe(audioTrack.sampleRate);
+	expect(decoderConfig!.numberOfChannels).toBe(await audioTrack.getNumberOfChannels());
+	expect(decoderConfig!.sampleRate).toBe(await audioTrack.getSampleRate());
 	expect(decoderConfig!.description).toBeUndefined();
 
 	await testBasicPacketReading(audioTrack);
@@ -256,9 +256,9 @@ test('ADTS demuxing', async () => {
 	const audioTrack = tracks[0] as InputAudioTrack;
 	expect(audioTrack).toBeInstanceOf(InputAudioTrack);
 
-	expect(audioTrack.codec).toBe('aac');
-	expect(audioTrack.numberOfChannels).toBeGreaterThan(0);
-	expect(audioTrack.sampleRate).toBeGreaterThan(0);
+	expect(await audioTrack.getCodec()).toBe('aac');
+	expect(await audioTrack.getNumberOfChannels()).toBeGreaterThan(0);
+	expect(await audioTrack.getSampleRate()).toBeGreaterThan(0);
 
 	await testBasicPacketReading(audioTrack);
 
@@ -293,9 +293,9 @@ test('Ogg demuxing', async () => {
 	const audioTrack = tracks[0] as InputAudioTrack;
 	expect(audioTrack).toBeInstanceOf(InputAudioTrack);
 
-	expect(audioTrack.codec).toBe('vorbis');
-	expect(audioTrack.numberOfChannels).toBeGreaterThan(0);
-	expect(audioTrack.sampleRate).toBeGreaterThan(0);
+	expect(await audioTrack.getCodec()).toBe('vorbis');
+	expect(await audioTrack.getNumberOfChannels()).toBeGreaterThan(0);
+	expect(await audioTrack.getSampleRate()).toBeGreaterThan(0);
 
 	await testBasicPacketReading(audioTrack);
 
@@ -330,9 +330,9 @@ test('FLAC demuxing', async () => {
 	const audioTrack = tracks[0] as InputAudioTrack;
 	expect(audioTrack).toBeInstanceOf(InputAudioTrack);
 
-	expect(audioTrack.codec).toBe('flac');
-	expect(audioTrack.numberOfChannels).toBeGreaterThan(0);
-	expect(audioTrack.sampleRate).toBeGreaterThan(0);
+	expect(await audioTrack.getCodec()).toBe('flac');
+	expect(await audioTrack.getNumberOfChannels()).toBeGreaterThan(0);
+	expect(await audioTrack.getSampleRate()).toBeGreaterThan(0);
 
 	await testBasicPacketReading(audioTrack);
 

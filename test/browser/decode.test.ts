@@ -18,5 +18,5 @@ test('MP3 decoding', async () => {
 	const sample = await cursor.seekToFirst();
 	expect(sample).not.toBe(null);
 	expect(sample!.timestamp).toBe(0);
-	expect(sample!.duration).toBeCloseTo(1152 / audioTrack.sampleRate);
+	expect(sample!.duration).toBeCloseTo(1152 / await audioTrack.getSampleRate());
 });

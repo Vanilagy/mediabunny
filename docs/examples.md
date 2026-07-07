@@ -1,4 +1,5 @@
 ---
+description: "Demos showcasing the various features of Mediabunny: metadata extraction, thumbnail generation, compression, media playback, live streaming, and more."
 layout: home
 title: Examples
 
@@ -43,4 +44,10 @@ features:
       target: _self
       icon:
         src: /mingcute--microphone-line.svg
+    - title: HLS transcoding
+      details: Convert one video into a full HLS manifest with five video renditions and one audio track.
+      link: /examples/hls-transcoding/
+      target: _self
+      icon:
+        src: /mingcute--live-line.svg
 ---

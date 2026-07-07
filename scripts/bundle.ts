@@ -11,6 +11,7 @@ const createVariants = async (
 	umdExtension: string,
 	specificUmdConfig: esbuild.BuildOptions = {},
 	specificEsmConfig: esbuild.BuildOptions = {},
+	nodeUmdVariant = false,
 ) => {
 	const baseConfig: esbuild.BuildOptions = {
 		entryPoints: [entryPoint],
@@ -22,7 +23,7 @@ const createVariants = async (
 		},
 		banner: {
 			js: `/*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -73,7 +74,19 @@ const createVariants = async (
 		minify: true,
 	});
 
-	return [umdVariant, esmVariant, umdMinifiedVariant, esmMinifiedVariant];
+	const variants = [umdVariant, esmVariant, umdMinifiedVariant, esmMinifiedVariant];
+
+	if (nodeUmdVariant) {
+		const nodeVariant = await esbuild.context({
+			...umdConfig,
+			...specificUmdConfig,
+			outfile: `${outfileBase}.node.${umdExtension}`,
+			platform: 'node', // This is different
+		});
+		variants.push(nodeVariant);
+	}
+
+	return variants;
 };
 
 const mediabunnyVariants = await createVariants(
@@ -81,13 +94,16 @@ const mediabunnyVariants = await createVariants(
 	'Mediabunny',
 	'dist/bundles/mediabunny',
 	'cjs',
+	undefined,
+	undefined,
+	true,
 );
 
 const mp3EncoderVariants = await createVariants(
 	'packages/mp3-encoder/src/index.ts',
 	'MediabunnyMp3Encoder',
 	'packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder',
-	'js', // The bundles are purely for the browser, not for Node (due to the peer dependecy)
+	'js', // The bundles are purely for the browser, not for Node (due to the peer dependency)
 	{
 		plugins: [
 			PluginExternalGlobal.externalGlobalPlugin({
@@ -114,9 +130,142 @@ const mp3EncoderVariants = await createVariants(
 	},
 );
 
+const ac3Variants = await createVariants(
+	'packages/ac3/src/index.ts',
+	'MediabunnyAc3',
+	'packages/ac3/dist/bundles/mediabunny-ac3',
+	'js', // The bundles are purely for the browser, not for Node (due to the peer dependency)
+	{
+		plugins: [
+			PluginExternalGlobal.externalGlobalPlugin({
+				mediabunny: 'Mediabunny',
+			}),
+			inlineWorkerPlugin({
+				define: {
+					'import.meta.url': '""',
+				},
+				legalComments: 'none',
+			}),
+		],
+	},
+	{
+		external: ['mediabunny'],
+		plugins: [
+			inlineWorkerPlugin({
+				define: {
+					'import.meta.url': '""',
+				},
+				legalComments: 'none',
+			}),
+		],
+	},
+);
+
+const aacEncoderVariants = await createVariants(
+	'packages/aac-encoder/src/index.ts',
+	'MediabunnyAacEncoder',
+	'packages/aac-encoder/dist/bundles/mediabunny-aac-encoder',
+	'js', // The bundles are purely for the browser, not for Node (due to the peer dependency)
+	{
+		plugins: [
+			PluginExternalGlobal.externalGlobalPlugin({
+				mediabunny: 'Mediabunny',
+			}),
+			inlineWorkerPlugin({
+				define: {
+					'import.meta.url': '""',
+				},
+				legalComments: 'none',
+			}),
+		],
+	},
+	{
+		external: ['mediabunny'],
+		plugins: [
+			inlineWorkerPlugin({
+				define: {
+					'import.meta.url': '""',
+				},
+				legalComments: 'none',
+			}),
+		],
+	},
+);
+
+const flacEncoderVariants = await createVariants(
+	'packages/flac-encoder/src/index.ts',
+	'MediabunnyFlacEncoder',
+	'packages/flac-encoder/dist/bundles/mediabunny-flac-encoder',
+	'js', // The bundles are purely for the browser, not for Node (due to the peer dependency)
+	{
+		plugins: [
+			PluginExternalGlobal.externalGlobalPlugin({
+				mediabunny: 'Mediabunny',
+			}),
+			inlineWorkerPlugin({
+				define: {
+					'import.meta.url': '""',
+				},
+				legalComments: 'none',
+			}),
+		],
+	},
+	{
+		external: ['mediabunny'],
+		plugins: [
+			inlineWorkerPlugin({
+				define: {
+					'import.meta.url': '""',
+				},
+				legalComments: 'none',
+			}),
+		],
+	},
+);
+
+const proresVariants = await createVariants(
+	'packages/prores/src/index.ts',
+	'MediabunnyProres',
+	'packages/prores/dist/bundles/mediabunny-prores',
+	'js', // The bundles are purely for the browser, not for Node (due to the peer dependency)
+	{
+		plugins: [
+			PluginExternalGlobal.externalGlobalPlugin({
+				mediabunny: 'Mediabunny',
+			}),
+		],
+	},
+	{
+		external: ['mediabunny'],
+		platform: 'node', // To retain the Node imports
+	},
+);
+
+const serverVariants = await createVariants(
+	'packages/server/src/index.ts',
+	'MediabunnyServer',
+	'packages/server/dist/bundles/mediabunny-server',
+	'cjs',
+	{
+		platform: 'node',
+		packages: 'external',
+		external: ['mediabunny'],
+	},
+	{
+		platform: 'node',
+		packages: 'external',
+		external: ['mediabunny'],
+	},
+);
+
 const contexts = [
 	...mediabunnyVariants,
 	...mp3EncoderVariants,
+	...ac3Variants,
+	...aacEncoderVariants,
+	...flacEncoderVariants,
+	...proresVariants,
+	...serverVariants,
 ];
 
 if (process.argv[2] === '--watch') {
