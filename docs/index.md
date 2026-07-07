@@ -102,6 +102,7 @@ const sponsors = {
 		{ image: '/sponsors/screen-studio.webp', name: 'Screen Studio', url: 'https://screen.studio/' },
 		{ image: '/sponsors/tella.svg', name: 'Tella', url: 'https://www.tella.com/' },
 	],
+	silver: [],
 	bronze: [
 		{ image: '/sponsors/elevenlabs.png', name: 'ElevenLabs', url: 'https://elevenlabs.io/' },
 		{ image: '/sponsors/rve.png', name: 'React Video Editor', url: 'https://www.reactvideoeditor.com/' },
