@@ -56,10 +56,10 @@
     "examples:build": "vite build",
     "fix-build-import-paths": "tsx scripts/add-import-extensions.ts",
     "append-namespace": "echo 'export as namespace Mediabunny;' >> dist/mediabunny.d.ts",
-    "bump-patch": "npm version patch --no-git-tag-version --workspaces && tsx scripts/sync-workspace-deps.ts",
-    "bump-minor": "npm version minor --no-git-tag-version --workspaces && tsx scripts/sync-workspace-deps.ts",
-    "bump-major": "npm version major --no-git-tag-version --workspaces && tsx scripts/sync-workspace-deps.ts",
-    "set-version": "npm version --no-git-tag-version --workspaces && tsx scripts/sync-workspace-deps.ts"
+    "bump-patch": "npm version patch --no-git-tag-version --workspaces && tsx scripts/sync-workspace-deps.ts && npm i",
+    "bump-minor": "npm version minor --no-git-tag-version --workspaces && tsx scripts/sync-workspace-deps.ts && npm i",
+    "bump-major": "npm version major --no-git-tag-version --workspaces && tsx scripts/sync-workspace-deps.ts && npm i",
+    "set-version": "npm version --no-git-tag-version --workspaces && tsx scripts/sync-workspace-deps.ts && npm i"
   },
   "license": "MPL-2.0",
   "repository": {
