@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en-US" translate="no">
+	<head>
+		<meta charset="utf-8">
+		<meta http-equiv="X-UA-Compatible" content="IE=edge">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<title>External audio source example | Mediabunny</title>
+		<meta name="description" content="Add a generated audio track to a video using the Conversion API's externalAudioSource option.">
+		<script type="module" src="../base.ts"></script>
+		<script type="module" src="./external-audio.ts"></script>
+		<link rel="stylesheet" href="../base.css">
+		<link rel="icon" href="../../docs/public/mediabunny-logo.svg">
+	</head>
+
+	<body class="flex flex-col items-center py-10 bg-zinc-50 text-zinc-800 dark:bg-zinc-900 dark:text-zinc-200 px-2">
+		<h1 class="text-3xl font-bold text-teal-500 text-center">External audio source</h1>
+		<p class="max-w-lg text-center mt-2">Select a video file. Mediabunny will generate a synthesized beep track and multiplex it into the video using the <code>externalAudioSource</code> option in the <code>Conversion</code> API.</p>
+
+		<div class="flex flex-col items-center gap-1 mt-4">
+			<button id="select-file" class="rounded-lg bg-zinc-200 dark:bg-zinc-750 hover:bg-zinc-300 dark:hover:bg-zinc-700 px-5 py-2">
+				Select video file
+			</button>
+		</div>
+
+		<p class="text-xs opacity-60 mt-2 mx-auto text-center max-w-[36rem]" id="file-name"></p>
+
+		<div id="loading" class="hidden mt-8 flex flex-col items-center gap-4">
+			<div class="w-8 h-8 border-4 border-teal-500 border-t-transparent rounded-full animate-spin"></div>
+			<p class="animate-pulse">Processing media...</p>
+		</div>
+
+		<div id="result" class="hidden mt-8 flex flex-col items-center gap-4 w-full max-w-2xl">
+			<video id="output-video" class="w-full rounded-lg shadow-lg bg-black" controls></video>
+			<a id="download-link" class="rounded-lg bg-teal-500 text-white hover:bg-teal-600 px-5 py-2 font-medium">
+				Download MP4
+			</a>
+		</div>
+
+		<div id="error-message" class="hidden mt-8 text-red-500 text-center max-w-lg bg-red-500/10 p-4 rounded-lg"></div>
+	</body>
+</html>
