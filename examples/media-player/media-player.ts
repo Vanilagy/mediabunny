@@ -8,8 +8,13 @@ import {
 	WrappedAudioBuffer,
 	WrappedCanvas,
 } from 'mediabunny';
+import { registerAc3Decoder } from '@mediabunny/ac3';
+import { registerProresDecoder } from '@mediabunny/prores';
 
 import SampleFileUrl from '../../docs/assets/big-buck-bunny-trimmed.mp4';
+
+registerAc3Decoder();
+registerProresDecoder();
 (document.querySelector('#sample-file-download') as HTMLAnchorElement).href = SampleFileUrl;
 
 const selectMediaButton = document.querySelector('#select-file') as HTMLButtonElement;
@@ -732,7 +737,32 @@ window.addEventListener('resize', () => {
 selectMediaButton.addEventListener('click', () => {
 	const fileInput = document.createElement('input');
 	fileInput.type = 'file';
-	fileInput.accept = 'video/*,video/x-matroska,video/mp2t,.ts,audio/*,audio/aac';
+	fileInput.accept = [
+		'video/*',
+		'audio/*',
+		'video/quicktime',
+		'video/x-matroska',
+		'video/webm',
+		'video/mp2t',
+		'application/ogg',
+		'application/vnd.apple.mpegurl',
+		'.mp4',
+		'.m4v',
+		'.m4a',
+		'.mov',
+		'.m4s',
+		'.mkv',
+		'.webm',
+		'.ogg',
+		'.ogv',
+		'.oga',
+		'.mp3',
+		'.wav',
+		'.aac',
+		'.flac',
+		'.ts',
+		'.m3u8',
+	].join(',');
 	fileInput.addEventListener('change', () => {
 		const file = fileInput.files?.[0];
 		if (!file) {

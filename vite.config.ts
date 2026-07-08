@@ -21,6 +21,8 @@ export default defineConfig({
 	resolve: {
 		alias: {
 			'mediabunny': path.resolve(__dirname, './dist/bundles/mediabunny.mjs'),
+			'@mediabunny/ac3':
+				path.resolve(__dirname, './packages/ac3/dist/bundles/mediabunny-ac3.mjs'),
 			'@mediabunny/aac-encoder':
 				path.resolve(__dirname, './packages/aac-encoder/dist/bundles/mediabunny-aac-encoder.mjs'),
 			'@mediabunny/flac-encoder':
