@@ -18,6 +18,8 @@ import {
 	arrayArgmin,
 	wait,
 	base64ToBytes,
+	MaybeRelevantPromise,
+	ResultValue,
 } from '../misc';
 import { readAllLines, readBytes, Reader } from '../reader';
 import { CustomPathedSource, PathedSource, ReadableStreamSource, SourceRef, SourceRequest } from '../source';
@@ -531,15 +533,19 @@ export class HlsSegmentedInput extends SegmentedInput {
 		}
 	}
 
-	async getFirstSegment() {
+	async getFirstSegment(res: ResultValue<Segment | null>): MaybeRelevantPromise {
 		if (this.segments.length === 0) {
 			await this.runUpdateSegments();
 		}
 
-		return this.segments[0] ?? null;
+		return res.set(this.segments[0] ?? null);
 	}
 
-	async getSegmentAt(timestamp: number, options: SegmentRetrievalOptions) {
+	async getSegmentAt(
+		res: ResultValue<Segment | null>,
+		timestamp: number,
+		options: SegmentRetrievalOptions,
+	): MaybeRelevantPromise {
 		if (this.segments.length === 0) {
 			await this.runUpdateSegments();
 		}
@@ -550,16 +556,16 @@ export class HlsSegmentedInput extends SegmentedInput {
 		while (true) {
 			const index = binarySearchLessOrEqual(this.segments, timestamp, x => x.timestamp);
 			if (index === -1) {
-				return null;
+				return res.set(null);
 			}
 
 			if (index < this.segments.length - 1 || this.streamHasEnded || isLazy) {
-				return this.segments[index]!;
+				return res.set(this.segments[index]!);
 			}
 
 			const segment = this.segments[index]!;
 			if (timestamp < segment.timestamp + segment.duration) {
-				return segment;
+				return res.set(segment);
 			}
 
 			await this.runUpdateSegments();
@@ -570,7 +576,11 @@ export class HlsSegmentedInput extends SegmentedInput {
 		}
 	}
 
-	async getNextSegment(segment: Segment, options: SegmentRetrievalOptions) {
+	async getNextSegment(
+		res: ResultValue<Segment | null>,
+		segment: Segment,
+		options: SegmentRetrievalOptions,
+	): MaybeRelevantPromise {
 		const index = this.segments.indexOf(segment as HlsSegment);
 		assert(index !== -1);
 
@@ -581,11 +591,11 @@ export class HlsSegmentedInput extends SegmentedInput {
 
 		while (true) {
 			if (nextIndex < this.segments.length) {
-				return this.segments[nextIndex]!;
+				return res.set(this.segments[nextIndex]!);
 			}
 
 			if (this.streamHasEnded || isLazy) {
-				return null;
+				return res.set(null);
 			}
 
 			await this.runUpdateSegments();
@@ -596,11 +606,11 @@ export class HlsSegmentedInput extends SegmentedInput {
 		}
 	}
 
-	async getPreviousSegment(segment: Segment) {
+	async getPreviousSegment(res: ResultValue<Segment | null>, segment: Segment): MaybeRelevantPromise {
 		const index = this.segments.indexOf(segment as HlsSegment);
 		assert(index !== -1);
 
-		return this.segments[index - 1] ?? null;
+		return res.set(this.segments[index - 1] ?? null);
 	}
 
 	getInputForSegment(segment: Segment): Input {

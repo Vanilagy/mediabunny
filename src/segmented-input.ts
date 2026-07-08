@@ -82,18 +82,37 @@ export abstract class SegmentedInput {
 		this.trackDeclarations = trackDeclarations;
 	}
 
-	abstract getFirstSegment(options: SegmentRetrievalOptions): Promise<Segment | null>;
-	abstract getSegmentAt(timestamp: number, options: SegmentRetrievalOptions): Promise<Segment | null>;
-	abstract getNextSegment(segment: Segment, options: SegmentRetrievalOptions): Promise<Segment | null>;
-	abstract getPreviousSegment(segment: Segment, options: SegmentRetrievalOptions): Promise<Segment | null>;
+	abstract getFirstSegment(
+		res: ResultValue<Segment | null>,
+		options: SegmentRetrievalOptions,
+	): MaybeRelevantPromise;
+	abstract getSegmentAt(
+		res: ResultValue<Segment | null>,
+		timestamp: number,
+		options: SegmentRetrievalOptions,
+	): MaybeRelevantPromise;
+	abstract getNextSegment(
+		res: ResultValue<Segment | null>,
+		segment: Segment,
+		options: SegmentRetrievalOptions,
+	): MaybeRelevantPromise;
+	abstract getPreviousSegment(
+		res: ResultValue<Segment | null>,
+		segment: Segment,
+		options: SegmentRetrievalOptions,
+	): MaybeRelevantPromise;
 	abstract getInputForSegment(segment: Segment): Input;
 
 	abstract getLiveRefreshInterval(): Promise<number | null>;
 
 	async getDurationFromMetadata(options: DurationMetadataRequestOptions) {
-		const lastSegment = await this.getSegmentAt(Infinity, {
+		const segmentResult = new ResultValue<Segment | null>();
+		const promise = this.getSegmentAt(segmentResult, Infinity, {
 			skipLiveWait: options.skipLiveWait,
 		});
+		if (segmentResult.pending) await promise;
+
+		const lastSegment = segmentResult.value;
 		if (!lastSegment) {
 			return null;
 		}
@@ -102,8 +121,19 @@ export abstract class SegmentedInput {
 	}
 
 	async getUnixTimeForTimestamp(timestamp: number): Promise<number | null> {
-		let segment = await this.getSegmentAt(timestamp, {});
-		segment ??= await this.getFirstSegment({});
+		const segmentResult = new ResultValue<Segment | null>();
+		const promise = this.getSegmentAt(segmentResult, timestamp, {});
+		if (segmentResult.pending) await promise;
+
+		let segment = segmentResult.value;
+		if (!segment) {
+			// Default to the first segment
+			segmentResult.reset();
+			const promise = this.getFirstSegment(segmentResult, {});
+			if (segmentResult.pending) await promise;
+
+			segment = segmentResult.value;
+		}
 
 		if (!segment || segment.unixEpochTimestamp === null) {
 			return null;
@@ -135,7 +165,11 @@ export abstract class SegmentedInput {
 				}
 			} else {
 				// There are no declarations, we must determine the tracks from the first segment
-				this.firstSegment = await this.getFirstSegment({});
+				const firstSegmentResult = new ResultValue<Segment | null>();
+				const promise = this.getFirstSegment(firstSegmentResult, {});
+				if (firstSegmentResult.pending) await promise;
+
+				this.firstSegment = firstSegmentResult.value;
 				if (!this.firstSegment) {
 					return [];
 				}
@@ -171,19 +205,19 @@ export abstract class SegmentedInput {
 	}
 
 	// This operation is done a lot and can be semi-expensive, so it's good to have a cache for it
-	async getFirstTimestampForInput(input: Input) {
+	getFirstTimestampForInput(input: Input): MaybePromise<number> {
 		const existing = this.firstTimestampCache.get(input);
 		if (existing !== undefined) {
 			return existing;
 		}
 
-		const firstTimestamp = await input.getFirstTimestamp();
-		this.firstTimestampCache.set(input, firstTimestamp);
-
-		return firstTimestamp;
+		return input.getFirstTimestamp().then((firstTimestamp) => {
+			this.firstTimestampCache.set(input, firstTimestamp);
+			return firstTimestamp;
+		});
 	}
 
-	async getMediaOffset(segment: Segment, input: Input) {
+	async getMediaOffset(res: ResultValue<number>, segment: Segment, input: Input): MaybeRelevantPromise {
 		const firstSegment = segment.firstSegment ?? segment;
 
 		let firstSegmentFirstTimestamp: number;
@@ -191,29 +225,34 @@ export abstract class SegmentedInput {
 			firstSegmentFirstTimestamp = this.firstSegmentFirstTimestamps.get(firstSegment)!;
 		} else {
 			const firstInput = this.getInputForSegment(firstSegment);
-			firstSegmentFirstTimestamp = await this.getFirstTimestampForInput(firstInput);
+			let firstTimestamp = this.getFirstTimestampForInput(firstInput);
+			if (firstTimestamp instanceof Promise) firstTimestamp = await firstTimestamp;
+
+			firstSegmentFirstTimestamp = firstTimestamp;
 			this.firstSegmentFirstTimestamps.set(firstSegment, firstSegmentFirstTimestamp);
 		}
 
 		if (firstSegment === segment) {
-			return firstSegment.timestamp - firstSegmentFirstTimestamp;
+			return res.set(firstSegment.timestamp - firstSegmentFirstTimestamp);
 		}
 
-		const segmentFirstTimestamp = await this.getFirstTimestampForInput(input);
+		let segmentFirstTimestamp = this.getFirstTimestampForInput(input);
+		if (segmentFirstTimestamp instanceof Promise) segmentFirstTimestamp = await segmentFirstTimestamp;
+
 		const segmentElapsed = segment.timestamp - firstSegment.timestamp;
 		const inputElapsed = segmentFirstTimestamp - firstSegmentFirstTimestamp;
 		const difference = inputElapsed - segmentElapsed;
 
 		if (Math.abs(difference) <= Math.min(0.25, segmentElapsed)) { // Heuristic
 			// We're close enough
-			return firstSegment.timestamp - firstSegmentFirstTimestamp;
+			return res.set(firstSegment.timestamp - firstSegmentFirstTimestamp);
 		} else {
 			// Ideally, each segment has absolute timestamps that are relative to some outside clock which is
 			// consistent across segments. This is often the case, but not always. Either the container format used is
 			// not timestamped at all (like ADTS), or the segments are just fucky. In this case, use the segment's
 			// relative timestamp to determine where we are, and completely offset out the segment's input start
 			// timestamp.
-			return segment.timestamp - segmentFirstTimestamp;
+			return res.set(segment.timestamp - segmentFirstTimestamp);
 		}
 	}
 
@@ -248,7 +287,14 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 
 	hydrate() {
 		return this.hydrationPromise ??= (async () => {
-			this.segmentedInput.firstSegment ??= await this.segmentedInput.getFirstSegment({});
+			if (!this.segmentedInput.firstSegment) {
+				const firstSegmentResult = new ResultValue<Segment | null>();
+				const promise = this.segmentedInput.getFirstSegment(firstSegmentResult, {});
+				if (firstSegmentResult.pending) await promise;
+
+				this.segmentedInput.firstSegment = firstSegmentResult.value;
+			}
+
 			if (!this.segmentedInput.firstSegment) {
 				throw new Error('Missing first segment, can\'t retrieve track.');
 			}
@@ -358,14 +404,21 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 		assert(packet.sequenceNumber >= 0);
 		assert(this.segmentedInput.firstSegment);
 
-		const mediaOffset = await this.segmentedInput.getMediaOffset(segment, track.input);
+		const mediaOffsetResult = new ResultValue<number>();
+		const mediaOffsetPromise = this.segmentedInput.getMediaOffset(mediaOffsetResult, segment, track.input);
+		if (mediaOffsetResult.pending) await mediaOffsetPromise;
+
+		const mediaOffset = mediaOffsetResult.value;
 		// If we didn't do this then sequence numbers would exceed Number.MAX_SAFE_INTEGER for Unix-timestamped segments
 		const segmentTimestampRelativeToFirst = segment.timestamp - this.segmentedInput.firstSegment.timestamp;
+
+		let timeResolution = track._backing.getTimeResolution();
+		if (timeResolution instanceof Promise) timeResolution = await timeResolution;
 
 		const modified = packet.clone({
 			timestamp: roundToDivisor(
 				packet.timestamp + mediaOffset,
-				await track.getTimeResolution(),
+				timeResolution,
 			),
 			// The 1e8 assumes a max of 100 MB per second, highly unlikely to be hit, so this should guarantee
 			// monotonically increasing sequence numbers across segments.
@@ -385,15 +438,17 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 		res: ResultValue<EncodedPacket | null>,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
-		await this.hydrate();
+		if (!this.firstInputTrack) {
+			await this.hydrate();
+		}
 
 		assert(this.segmentedInput.firstSegment);
 		assert(this.firstInputTrack);
 
 		const firstPacketResult = new ResultValue<EncodedPacket | null>();
-
 		const promise = this.firstInputTrack._backing.getFirstPacket(firstPacketResult, options);
 		if (firstPacketResult.pending) await promise;
+
 		const packet = firstPacketResult.value;
 
 		if (!packet) {
@@ -431,11 +486,11 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 		}
 
 		const packetResult = new ResultValue<EncodedPacket | null>();
-
 		const promise = keyframesOnly
 			? info.track._backing.getNextKeyPacket(packetResult, info.sourcePacket, options)
 			: info.track._backing.getNextPacket(packetResult, info.sourcePacket, options);
 		if (packetResult.pending) await promise;
+
 		const nextPacket = packetResult.value;
 
 		if (nextPacket) {
@@ -443,16 +498,24 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 		}
 
 		let currentSegment: Segment | null = info.segment;
+		const segmentResult = new ResultValue<Segment | null>();
+
 		while (true) {
-			const nextSegment = await this.segmentedInput.getNextSegment(currentSegment, {
+			segmentResult.reset();
+			const segmentPromise = this.segmentedInput.getNextSegment(segmentResult, currentSegment, {
 				skipLiveWait: options.skipLiveWait,
 			});
+			if (segmentResult.pending) await segmentPromise;
+
+			const nextSegment = segmentResult.value;
 			if (!nextSegment) {
 				return res.set(null);
 			}
 
 			const nextInput = this.segmentedInput.getInputForSegment(nextSegment);
-			const nextTracks = await nextInput.getTracks();
+			let nextTracks = getTracksMaybeSync(nextInput);
+			if (nextTracks instanceof Promise) nextTracks = await nextTracks;
+
 			const nextTrack = nextTracks.find(t => t.type === info.track.type && t.number === info.track.number);
 
 			if (!nextTrack) {
@@ -463,6 +526,7 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 			packetResult.reset();
 			const promise = nextTrack._backing.getFirstPacket(packetResult, options);
 			if (packetResult.pending) await promise;
+
 			const firstPacket = packetResult.value;
 
 			if (!firstPacket) {
@@ -495,47 +559,67 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 		options: PacketRetrievalOptions,
 		keyframesOnly: boolean,
 	): MaybeRelevantPromise {
-		let currentSegment = await this.segmentedInput.getSegmentAt(timestamp, {
+		const segmentResult = new ResultValue<Segment | null>();
+		const segmentPromise = this.segmentedInput.getSegmentAt(segmentResult, timestamp, {
 			skipLiveWait: options.skipLiveWait,
 		});
+		if (segmentResult.pending) await segmentPromise;
+
+		let currentSegment = segmentResult.value;
 		if (!currentSegment) {
 			return res.set(null);
 		}
 
-		await this.hydrate();
+		if (!this.firstInputTrack) {
+			await this.hydrate();
+		}
 
 		const packetResult = new ResultValue<EncodedPacket | null>();
+		const mediaOffsetResult = new ResultValue<number>();
 
 		while (currentSegment) {
 			const input = this.segmentedInput.getInputForSegment(currentSegment);
-			const tracks = await input.getTracks();
+			let tracks = getTracksMaybeSync(input);
+			if (tracks instanceof Promise) tracks = await tracks;
+
 			const track = tracks.find(t => (
 				t.type === this.firstInputTrack!.type && t.number === this.firstInputTrack!.number
 			));
 
 			if (!track) {
 				// Search the previous segment
-				currentSegment = await this.segmentedInput.getPreviousSegment(currentSegment, {
+				segmentResult.reset();
+				const prevSegmentPromise = this.segmentedInput.getPreviousSegment(segmentResult, currentSegment, {
 					skipLiveWait: options.skipLiveWait,
 				});
+				if (segmentResult.pending) await prevSegmentPromise;
+
+				currentSegment = segmentResult.value;
 				continue;
 			}
 
-			const mediaOffset = await this.segmentedInput.getMediaOffset(currentSegment, input);
-			const offsetTimestamp = timestamp - mediaOffset;
+			mediaOffsetResult.reset();
+			const mediaOffsetPromise = this.segmentedInput.getMediaOffset(mediaOffsetResult, currentSegment, input);
+			if (mediaOffsetResult.pending) await mediaOffsetPromise;
+
+			const offsetTimestamp = timestamp - mediaOffsetResult.value;
 
 			packetResult.reset();
-			const promise = keyframesOnly
+			const packetPromise = keyframesOnly
 				? track._backing.getKeyPacket(packetResult, offsetTimestamp, options)
 				: track._backing.getPacket(packetResult, offsetTimestamp, options);
-			if (packetResult.pending) await promise;
-			const packet = packetResult.value;
+			if (packetResult.pending) await packetPromise;
 
+			const packet = packetResult.value;
 			if (!packet) {
 				// Search the previous segment
-				currentSegment = await this.segmentedInput.getPreviousSegment(currentSegment, {
+				segmentResult.reset();
+				const prevSegmentPromise = this.segmentedInput.getPreviousSegment(segmentResult, currentSegment, {
 					skipLiveWait: options.skipLiveWait,
 				});
+				if (segmentResult.pending) await prevSegmentPromise;
+
+				currentSegment = segmentResult.value;
 				continue;
 			}
 
@@ -545,6 +629,15 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 		return res.set(null);
 	}
 }
+
+/** Retrieves the tracks of an input, synchronously if the input's tracks have already been determined. */
+const getTracksMaybeSync = (input: Input): MaybePromise<InputTrack[]> => {
+	if (input._trackBackingsCache) {
+		return input._trackBackingsCache.map(x => input._wrapBackingAsTrack(x));
+	}
+
+	return input.getTracks();
+};
 
 class SegmentedInputInputVideoTrackBacking
 	extends SegmentedInputInputTrackBacking
