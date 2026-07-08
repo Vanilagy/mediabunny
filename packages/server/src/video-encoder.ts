@@ -203,6 +203,11 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			if (isRealtime) {
 				codecContext.setOption('preset', '12');
 			}
+		} else if (this.avCodec.name === 'h264_nvenc') {
+			// When we force a key frame, we want a true IDR frame, not just an I frame
+			codecContext.setOption('forced-idr', '1');
+		} else if (this.avCodec.name === 'hevc_nvenc') {
+			codecContext.setOption('forced-idr', '1');
 		}
 
 		if (this.codec === 'prores') {
