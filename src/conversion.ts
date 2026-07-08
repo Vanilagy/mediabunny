@@ -146,6 +146,12 @@ export type ConversionOptions = {
 	 * want to keep the console output clean.
 	 */
 	showWarnings?: boolean;
+
+	/**
+	 * An optional external audio source (e.g. an AudioBufferSource) that will be multiplexed alongside the video.
+	 * If provided, this bypasses the requirement for the original input to have a primary audio track.
+	 */
+	externalAudioSource?: AudioSource;
 };
 
 /**
@@ -884,6 +890,17 @@ export class Conversion {
 				} else {
 					assert(false);
 				}
+			}
+		}
+
+		if (this._options.externalAudioSource) {
+			if (
+				this._totalTrackCount < outputTrackCounts.total.max
+				&& this._addedCounts.audio < outputTrackCounts.audio.max
+			) {
+				this.output.addAudioTrack(this._options.externalAudioSource);
+				this._addedCounts.audio++;
+				this._totalTrackCount++;
 			}
 		}
 
