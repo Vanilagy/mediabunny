@@ -44,14 +44,6 @@ Mediabunny is a JavaScript library for reading, writing, and converting media (l
   </a>
 </div>
 
-### Silver sponsors
-
-<div align="center">
-  <a href="https://ponder.ai/" target="_blank" rel="sponsored">
-    <img src="./docs/public/sponsors/ponder.png" width="50" height="50" alt="Ponder">
-  </a>
-</div>
-
 ### Bronze sponsors
 
 <div align="center">
