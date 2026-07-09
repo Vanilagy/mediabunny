@@ -1319,7 +1319,7 @@ export class Conversion {
 
 				await tempOutput.start();
 
-				const cursor = new VideoSampleCursor(track, { autoClose: false });
+				const cursor = new VideoSampleCursor(track, { closeSamples: false });
 				using firstSample = await cursor.seekToFirst(); // Let's just use the first sample
 				await cursor.close();
 

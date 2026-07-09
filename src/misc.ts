@@ -835,7 +835,7 @@ export class ResultValue<T> {
 
 export class AsyncMutex {
 	locked = false;
-	private resolverQueue: (() => void)[] = [];
+	resolverQueue: (() => void)[] = [];
 
 	lock() {
 		if (!this.locked) {
@@ -939,6 +939,7 @@ export class ForgivingCallSerializer {
 
 			if (result instanceof Promise) {
 				this.currentPromise = result
+					.catch(() => {})
 					.finally(() => {
 						if (this.queuedCalls === 0) {
 							this.currentPromise = null;

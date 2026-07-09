@@ -373,7 +373,7 @@ test('Sample cursor sample reuse', async () => {
 	expect(sample2!.closed).toBe(true);
 
 	const cursor2 = new VideoSampleCursor(videoTrack, {
-		autoClose: false,
+		closeSamples: false,
 	});
 
 	const sample3 = await cursor2.seekToFirst();
@@ -398,7 +398,7 @@ test('Sample cursor sample reuse', async () => {
 
 	count = 0;
 	const cursor4 = new VideoSampleCursor(videoTrack, {
-		autoClose: false,
+		closeSamples: false,
 		transform: sample => (sample.close(), count++),
 	});
 
@@ -519,7 +519,7 @@ test('Decoder pump error handling & reset', async () => {
 	});
 
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
-	const cursor = new VideoSampleCursor(videoTrack);
+	await using cursor = new VideoSampleCursor(videoTrack);
 	cursor._debug.enabled = true;
 
 	cursor._debug.throwInPump = true;
@@ -859,7 +859,7 @@ test('Command queuing', async () => {
 
 	await promiseAllEnsureOrder(commands7);
 
-	const cursor8 = new VideoSampleCursor(videoTrack, { autoClose: false });
+	const cursor8 = new VideoSampleCursor(videoTrack, { closeSamples: false });
 
 	const firstSample = await cursor8.seekToFirst();
 	firstSample!.close();
@@ -878,7 +878,7 @@ test('Command queuing', async () => {
 
 	await cursor8.close();
 
-	const cursor9 = new VideoSampleCursor(videoTrack, { autoClose: false });
+	const cursor9 = new VideoSampleCursor(videoTrack, { closeSamples: false });
 
 	const commands9 = [
 		cursor9.seekToFirst(),
@@ -929,6 +929,10 @@ test('Automatic cursor disposal', async () => {
 	input.dispose();
 
 	expect(cursor.closed).toBe(true);
+
+	// Make sure the close is actually complete
+	using lock = cursor._mutex.lock();
+	if (lock.pending) await lock.ready;
 });
 
 test('Video with stubborn first sample emit', async () => {

@@ -56,3 +56,16 @@ test('Error handling', async () => {
 	await expect(second).rejects.toThrow();
 	expect(await third).toBe(3);
 });
+
+test('Dangling rejected call', async () => {
+	const serializer = new ForgivingCallSerializer();
+
+	const first = serializer.call(() => executeDelayed(() => {
+		throw new Error('yo');
+	}));
+
+	await expect(first).rejects.toThrow();
+
+	await new Promise(resolve => setTimeout(resolve, 20));
+	// No error
+});

@@ -246,7 +246,7 @@ type PendingRequest<T> = {
 export type SampleTransformer<Sample, TransformedSample> = (sample: Sample) => TransformedSample;
 
 export type SampleCursorOptions<Sample, TransformedSample> = {
-	autoClose?: boolean;
+	closeSamples?: boolean;
 	transform?: SampleTransformer<Sample, TransformedSample>;
 	skipLiveWait?: boolean;
 };
@@ -257,8 +257,8 @@ const validateSampleCursorOptions = <Sample, TransformedSample>(
 	if (!options || typeof options !== 'object') {
 		throw new TypeError('options must an object.');
 	}
-	if (options.autoClose !== undefined && typeof options.autoClose !== 'boolean') {
-		throw new TypeError('options.autoClose, when provided, must be a boolean.');
+	if (options.closeSamples !== undefined && typeof options.closeSamples !== 'boolean') {
+		throw new TypeError('options.closeSamples, when provided, must be a boolean.');
 	}
 	if (options.transform !== undefined && typeof options.transform !== 'function') {
 		throw new TypeError('options.transform, when provided, must be a function.');
@@ -276,10 +276,11 @@ export abstract class SampleCursor<
 	current: TransformedSample | null = null;
 
 	private _transform: SampleTransformer<Sample, TransformedSample>;
-	private _autoClose: boolean;
+	private _closeSamples: boolean;
 	private _retrievalOptions: PacketRetrievalOptions;
 
-	private _mutex = new AsyncMutex();
+	/** @internal */
+	_mutex = new AsyncMutex();
 
 	private _packetReader: PacketReader;
 	private _packetCursor: PacketCursor;
@@ -349,7 +350,7 @@ export abstract class SampleCursor<
 		this._retrievalOptions = { skipLiveWait: options.skipLiveWait };
 		this._packetReader = new PacketReader(track);
 		this._packetCursor = new PacketCursor(track, this._retrievalOptions);
-		this._autoClose = options.autoClose ?? true;
+		this._closeSamples = options.closeSamples ?? true;
 		this._transform = options.transform ?? (sample => sample as unknown as TransformedSample);
 
 		track.input._openSampleCursors.add(this);
@@ -405,7 +406,7 @@ export abstract class SampleCursor<
 		validateTimestamp(timestamp);
 		return this._getSample(result => this._seekToPacket(
 			result,
-			this._packetReader.getKeyAt(timestamp, this._retrievalOptions),
+			this._packetReader.getKeyAt(timestamp, { ...this._retrievalOptions, verifyKeyPackets: true }),
 		));
 	}
 
@@ -670,7 +671,7 @@ export abstract class SampleCursor<
 	private _transformSample() {
 		assert(this._currentSample && !this._currentSample.closed);
 
-		if (this._autoClose) {
+		if (this._closeSamples) {
 			// Here, the transformation is memoized: repeated calls will not transform the same sample twice.
 			return this.current ??= this._transform(this._currentSample);
 		} else {
@@ -766,11 +767,8 @@ export abstract class SampleCursor<
 				return res.set(this._transformSample());
 			}
 
-			if (targetPacket.timestamp - lastTimestamp < 0.1) {
-				// TODO this, keep for stuff like prores? Prores is fastest when every frame is just decoded directly
-				//
-				// The difference is too small for it to be worth to set up a new pump (especially relevant for
-				// audio tracks)
+			if (this.track.type === 'audio' && targetPacket.timestamp - lastTimestamp < 0.1) {
+				// The difference is too small for it to be worth to set up a new pump, relevant for audio tracks
 				needsNewPump = false;
 			} else {
 				if (this._packetCursor.current) {
