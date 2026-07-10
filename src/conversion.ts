@@ -1185,6 +1185,16 @@ export class Conversion {
 	 */
 	async cancel() {
 		if (this.output.state === 'finalizing' || this.output.state === 'finalized') {
+			if (!this._ownsOutput && !this._canceled) {
+				// The output (owned by someone else) has already moved on to finalizing/finalized while this
+				// conversion was still pumping. We must still mark ourselves canceled and release any pump loops
+				// parked in the synchronizer, or `execute()` would hang forever waiting on `wait()` that never
+				// resolves. We must NOT force-close this conversion's sources here, since finalization already
+				// owns flushing them at this point.
+				this._canceled = true;
+				this._synchronizer.releaseAll();
+			}
+
 			return;
 		}
 

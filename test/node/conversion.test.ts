@@ -290,3 +290,210 @@ test('Track capacity is seeded from tracks already on the output', async () => {
 	// WAVE allows only one track in total, so the total-count check fires before the per-type one
 	expect(conversion.discardedTracks[0]!.reason).toBe('max_track_count_reached');
 });
+
+test('onProgress on a non-owning conversion ticks monotonically up to 1', async () => {
+	using input = makeInput();
+
+	const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
+
+	const conversion = await Conversion.init({
+		input,
+		output,
+		ownsOutput: false,
+		audio: { discard: true }, // The user provides their own audio track
+		showWarnings: false,
+	});
+
+	// onProgress must be assigned before execute() so the conversion knows to compute progress
+	const progressTicks: number[] = [];
+	conversion.onProgress = (progress) => {
+		progressTicks.push(progress);
+	};
+
+	const audioSource = new EncodedAudioPacketSource('aac');
+	output.addAudioTrack(audioSource);
+
+	await output.start();
+
+	await Promise.all([
+		conversion.execute(),
+		(async () => {
+			await addAacPackets(audioSource, 5);
+			audioSource.close();
+		})(),
+	]);
+	await output.finalize();
+
+	expect(progressTicks.length).toBeGreaterThan(1);
+	expect(progressTicks[0]).toBe(0);
+
+	for (let i = 1; i < progressTicks.length; i++) {
+		expect(progressTicks[i]).toBeGreaterThanOrEqual(progressTicks[i - 1]!);
+	}
+
+	expect(progressTicks[progressTicks.length - 1]).toBe(1);
+});
+
+test('Canceling one of two sibling non-owning conversions leaves the other intact', async () => {
+	using videoInput = makeInput();
+	using audioInput = makeInput();
+
+	const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
+
+	const videoConversion = await Conversion.init({
+		input: videoInput,
+		output,
+		ownsOutput: false,
+		audio: { discard: true },
+		showWarnings: false,
+	});
+	const audioConversion = await Conversion.init({
+		input: audioInput,
+		output,
+		ownsOutput: false,
+		video: { discard: true },
+		showWarnings: false,
+	});
+
+	await output.start();
+
+	const videoExecutePromise = videoConversion.execute();
+	const audioExecutePromise = audioConversion.execute();
+	// Cancel B (the audio conversion) right as it starts pumping
+	void audioConversion.cancel();
+
+	await expect(audioExecutePromise).rejects.toBeInstanceOf(ConversionCanceledError);
+	// A (the video conversion) must complete normally, unaffected by B's cancellation
+	await expect(videoExecutePromise).resolves.toBeUndefined();
+
+	expect(output.state).toBe('started');
+
+	await output.finalize();
+	expect(output.state).toBe('finalized');
+
+	using result = new Input({ source: new BufferSource(output.target.buffer!), formats: ALL_FORMATS });
+	const videoTrack = await result.getPrimaryVideoTrack();
+	expect(videoTrack).not.toBeNull();
+	expect(await videoTrack!.getCodec()).toBe('avc');
+	expect(await videoTrack!.computeDuration()).toBeGreaterThan(4);
+});
+
+test('Track capacity is seeded across two sequential non-owning inits on the same output', async () => {
+	using inputA = new Input({ source: new FilePathSource(wavPath), formats: ALL_FORMATS });
+	using inputB = new Input({ source: new FilePathSource(wavPath), formats: ALL_FORMATS });
+
+	const output = new Output({ format: new WavOutputFormat(), target: new BufferTarget() });
+
+	// The first init adds its own audio track to the output, filling WAVE's single track slot
+	const conversionA = await Conversion.init({
+		input: inputA,
+		output,
+		ownsOutput: false,
+		showWarnings: false,
+	});
+	expect(conversionA.isValid).toBe(true);
+	expect(conversionA.utilizedTracks).toHaveLength(1);
+
+	// The second init must see that the output is already full, proving it seeds its counts from the tracks
+	// added by the first conversion (not just from tracks that existed before any conversion ran)
+	const conversionB = await Conversion.init({
+		input: inputB,
+		output,
+		ownsOutput: false,
+		showWarnings: false,
+	});
+
+	expect(conversionB.isValid).toBe(false);
+	expect(conversionB.utilizedTracks).toHaveLength(0);
+	expect(conversionB.discardedTracks).toHaveLength(1);
+	expect(conversionB.discardedTracks[0]!.reason).toBe('max_track_count_reached');
+});
+
+test('Non-owning conversion metadata is exactly what the user set, nothing more', async () => {
+	using input = makeInput(); // This input file carries its own real metadata tags
+
+	const userTags = { title: 'User Title', comment: 'User comment' };
+
+	// Baseline: an output that gets the exact same track and tags, but with no conversion attached at all. Any
+	// difference between this and the conversion-produced output would have to come from the conversion.
+	const baselineOutput = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
+	const baselineSource = new EncodedAudioPacketSource('aac');
+	baselineOutput.addAudioTrack(baselineSource);
+	baselineOutput.setMetadataTags(userTags);
+	await baselineOutput.start();
+	await addAacPackets(baselineSource, 2);
+	baselineSource.close();
+	await baselineOutput.finalize();
+
+	using baselineResult = new Input({ source: new BufferSource(baselineOutput.target.buffer!), formats: ALL_FORMATS });
+	const baselineTags = await baselineResult.getMetadataTags();
+
+	// Now the same setup, but with a non-owning conversion (whose input file itself carries real metadata tags)
+	// also contributing to the output
+	const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
+
+	const conversion = await Conversion.init({
+		input,
+		output,
+		ownsOutput: false,
+		audio: { discard: true },
+		showWarnings: false,
+	});
+
+	const audioSource = new EncodedAudioPacketSource('aac');
+	output.addAudioTrack(audioSource);
+	output.setMetadataTags(userTags);
+
+	await output.start();
+	await Promise.all([
+		conversion.execute(),
+		(async () => {
+			await addAacPackets(audioSource, 2);
+			audioSource.close();
+		})(),
+	]);
+	await output.finalize();
+
+	using result = new Input({ source: new BufferSource(output.target.buffer!), formats: ALL_FORMATS });
+	const outTags = await result.getMetadataTags();
+
+	// The conversion must have contributed exactly zero tags: the output's tags match the baseline byte-for-byte,
+	// even though the conversion's own input file carries real metadata tags of its own
+	expect(outTags).toEqual(baselineTags);
+});
+
+test('Canceling a non-owning conversion before execute() rejects promptly without hanging', async () => {
+	using input = makeInput();
+
+	const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
+
+	const conversion = await Conversion.init({
+		input,
+		output,
+		ownsOutput: false,
+		audio: { discard: true },
+		showWarnings: false,
+	});
+
+	const audioSource = new EncodedAudioPacketSource('aac');
+	output.addAudioTrack(audioSource);
+
+	await output.start();
+
+	// Cancel before execute() is ever called
+	await conversion.cancel();
+
+	// execute() must still settle promptly with a cancellation error, not hang forever
+	await expect(conversion.execute()).rejects.toBeInstanceOf(ConversionCanceledError);
+
+	// The output must remain usable; the user's own track can still finish and the output can still finalize
+	await addAacPackets(audioSource, 2);
+	audioSource.close();
+	await output.finalize();
+	expect(output.state).toBe('finalized');
+
+	using result = new Input({ source: new BufferSource(output.target.buffer!), formats: ALL_FORMATS });
+	const audioTrack = await result.getPrimaryAudioTrack();
+	expect(audioTrack).not.toBeNull();
+	expect(await audioTrack!.getCodec()).toBe('aac');
+});
