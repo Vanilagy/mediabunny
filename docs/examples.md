@@ -50,4 +50,10 @@ features:
       target: _self
       icon:
         src: /mingcute--live-line.svg
+    - title: External audio track
+      details: Attach a synthesized voiceover track to a video without Mediabunny owning the output file.
+      link: /examples/external-audio/
+      target: _self
+      icon:
+        src: /mingcute--microphone-line.svg
 ---
