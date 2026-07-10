@@ -33,6 +33,7 @@ import {
 	AudioSource,
 	EncodedVideoPacketSource,
 	EncodedAudioPacketSource,
+	MediaSource,
 	VideoSource,
 	VideoSampleSource,
 	AudioSampleSource,
@@ -146,6 +147,15 @@ export type ConversionOptions = {
 	 * want to keep the console output clean.
 	 */
 	showWarnings?: boolean;
+
+	/**
+	 * Whether this conversion takes full ownership of the output, defaults to `true`. An owning conversion requires
+	 * a fresh output and controls its entire lifecycle: it starts it, writes its metadata tags, and finalizes it.
+	 * A non-owning conversion only adds tracks to the output and drives their media data; starting and finalizing
+	 * the output remain your responsibility, and additional tracks (or other non-owning conversions) may be attached
+	 * to the same output.
+	 */
+	ownsOutput?: boolean;
 };
 
 /**
@@ -564,6 +574,10 @@ export class Conversion {
 
 	/** @internal */
 	_trackPromises: Promise<void>[] = [];
+	/** @internal */
+	_ownsOutput = true;
+	/** @internal */
+	_sources: MediaSource[] = [];
 
 	/** @internal */
 	_started: Promise<void>;
@@ -642,12 +656,32 @@ export class Conversion {
 				'options.tracks, when provided, must be either \'all\' or \'primary\'.',
 			);
 		}
-		if (
-			options.output._tracks.length > 0
-			|| Object.keys(options.output._metadataTags).length > 0
-			|| options.output.state !== 'pending'
-		) {
-			throw new TypeError('options.output must be fresh: no tracks or metadata tags added and not started.');
+		if (options.ownsOutput !== undefined && typeof options.ownsOutput !== 'boolean') {
+			throw new TypeError('options.ownsOutput, when provided, must be a boolean.');
+		}
+
+		const ownsOutput = options.ownsOutput ?? true;
+
+		if (!ownsOutput && options.tags !== undefined) {
+			throw new TypeError(
+				'options.tags cannot be set by a non-owning conversion; set metadata directly on the output instead.',
+			);
+		}
+
+		if (ownsOutput) {
+			if (
+				options.output._tracks.length > 0
+				|| Object.keys(options.output._metadataTags).length > 0
+				|| options.output.state !== 'pending'
+			) {
+				throw new TypeError('options.output must be fresh: no tracks or metadata tags added and not started.');
+			}
+		} else if (options.output.state !== 'pending') {
+			// A non-owning conversion only adds tracks, which can only happen before the output has started.
+			// Pre-existing tracks and metadata tags are explicitly allowed.
+			throw new TypeError(
+				'options.output must not have been started yet; tracks can only be added before the output starts.',
+			);
 		}
 
 		if (options.video !== undefined && typeof options.video !== 'function') {
@@ -704,6 +738,7 @@ export class Conversion {
 		}
 
 		this._options = options;
+		this._ownsOutput = ownsOutput;
 		this.input = options.input;
 		this.output = options.output;
 
@@ -741,6 +776,15 @@ export class Conversion {
 		}
 
 		const outputTrackCounts = this.output.format.getSupportedTrackCounts();
+
+		if (!this._ownsOutput) {
+			// Seed the track counts from the tracks already present on the output, so that the max-track-count discard
+			// logic is computed against the format's remaining capacity.
+			for (const existingTrack of this.output._tracks) {
+				this._addedCounts[existingTrack.type]++;
+				this._totalTrackCount++;
+			}
+		}
 
 		// Input track counters
 		let nVideo = 1;
@@ -906,39 +950,48 @@ export class Conversion {
 			}
 		}
 
-		// Now, let's deal with metadata tags
+		// Now, let's deal with metadata tags. A non-owning conversion does not touch the output's metadata tags; that
+		// remains the responsibility of whoever owns the output.
 
-		const inputTags = await this.input.getMetadataTags();
-		let outputTags: MetadataTags;
+		if (this._ownsOutput) {
+			const inputTags = await this.input.getMetadataTags();
+			let outputTags: MetadataTags;
 
-		if (this._options.tags) {
-			const result = typeof this._options.tags === 'function'
-				? await this._options.tags(inputTags)
-				: this._options.tags;
-			validateMetadataTags(result);
+			if (this._options.tags) {
+				const result = typeof this._options.tags === 'function'
+					? await this._options.tags(inputTags)
+					: this._options.tags;
+				validateMetadataTags(result);
 
-			outputTags = result;
-		} else {
-			outputTags = inputTags;
+				outputTags = result;
+			} else {
+				outputTags = inputTags;
+			}
+
+			// Somewhat dirty but pragmatic
+			const inputAndOutputFormatMatch = inputFormat.mimeType === this.output.format.mimeType;
+			const rawTagsAreUnchanged = inputTags.raw === outputTags.raw;
+
+			if (inputTags.raw && rawTagsAreUnchanged && !inputAndOutputFormatMatch) {
+				// If the input and output formats aren't the same, copying over raw metadata tags makes no sense and
+				// only results in junk tags, so let's cut them out.
+				delete outputTags.raw;
+			}
+
+			this.output.setMetadataTags(outputTags);
 		}
-
-		// Somewhat dirty but pragmatic
-		const inputAndOutputFormatMatch = inputFormat.mimeType === this.output.format.mimeType;
-		const rawTagsAreUnchanged = inputTags.raw === outputTags.raw;
-
-		if (inputTags.raw && rawTagsAreUnchanged && !inputAndOutputFormatMatch) {
-			// If the input and output formats aren't the same, copying over raw metadata tags makes no sense and only
-			// results in junk tags, so let's cut them out.
-			delete outputTags.raw;
-		}
-
-		this.output.setMetadataTags(outputTags);
 
 		// Let's check if the conversion can actually be executed
-		this.isValid = this._totalTrackCount >= outputTrackCounts.total.min
-			&& this._addedCounts.video >= outputTrackCounts.video.min
-			&& this._addedCounts.audio >= outputTrackCounts.audio.min
-			&& this._addedCounts.subtitle >= outputTrackCounts.subtitle.min;
+		if (this._ownsOutput) {
+			this.isValid = this._totalTrackCount >= outputTrackCounts.total.min
+				&& this._addedCounts.video >= outputTrackCounts.video.min
+				&& this._addedCounts.audio >= outputTrackCounts.audio.min
+				&& this._addedCounts.subtitle >= outputTrackCounts.subtitle.min;
+		} else {
+			// A conversion contributing zero tracks is invalid. The format's minimum track counts are not checked here,
+			// since `Output.start()` enforces those against the full track set.
+			this.isValid = this.utilizedTracks.length > 0;
+		}
 
 		if (this._options.showWarnings ?? true) {
 			const warnElements: unknown[] = [];
@@ -1054,6 +1107,13 @@ export class Conversion {
 			);
 		}
 
+		if (!this._ownsOutput && this.output.state === 'pending') {
+			throw new Error(
+				'A non-owning conversion requires the output to be started. Call output.start() before executing the'
+				+ ' conversion.',
+			);
+		}
+
 		if (this._executed) {
 			throw new Error('Conversion cannot be executed twice.');
 		}
@@ -1088,7 +1148,10 @@ export class Conversion {
 			this.onProgress?.(0, 0);
 		}
 
-		await this.output.start();
+		if (this._ownsOutput) {
+			await this.output.start();
+		}
+
 		this._start();
 
 		try {
@@ -1106,7 +1169,9 @@ export class Conversion {
 			throw new ConversionCanceledError();
 		}
 
-		await this.output.finalize();
+		if (this._ownsOutput) {
+			await this.output.finalize();
+		}
 
 		if (this._computeProgress) {
 			const minTimestamp = Math.min(...this._maxTimestamps.values());
@@ -1129,7 +1194,17 @@ export class Conversion {
 		}
 
 		this._canceled = true;
-		await this.output.cancel();
+
+		if (this._ownsOutput) {
+			await this.output.cancel();
+		} else {
+			// A non-owning conversion must not cancel the output. Release any pump loops that are parked in the
+			// synchronizer (the output stays alive, so they'd otherwise hang forever), then force-close only the
+			// sources this conversion created. This leaves the output usable for its owner.
+			this._synchronizer.releaseAll();
+
+			await Promise.all(this._sources.map(source => source._flushOrWaitForOngoingClose(true)));
+		}
 	}
 
 	/** @internal */
@@ -1402,7 +1477,9 @@ export class Conversion {
 		}
 
 		let ownGroup: OutputTrackGroup | null = null;
-		if (!trackOptions.group) {
+		if (!trackOptions.group && this._ownsOutput) {
+			// Only owning conversions create per-track own groups to replicate the input's pairability graph. For
+			// non-owning conversions, tracks without a user-provided group fall into `Output.defaultTrackGroup`.
 			ownGroup = new OutputTrackGroup();
 		}
 
@@ -1419,6 +1496,7 @@ export class Conversion {
 		this._addedCounts.video++;
 		this._totalTrackCount++;
 
+		this._sources.push(videoSource);
 		this.utilizedTracks.push(track);
 		this._outputTrackIds.push(outputTrackId);
 		this._outputOwnTrackGroups.push(ownGroup);
@@ -1660,7 +1738,9 @@ export class Conversion {
 		}
 
 		let ownGroup: OutputTrackGroup | null = null;
-		if (!trackOptions.group) {
+		if (!trackOptions.group && this._ownsOutput) {
+			// Only owning conversions create per-track own groups to replicate the input's pairability graph. For
+			// non-owning conversions, tracks without a user-provided group fall into `Output.defaultTrackGroup`.
 			ownGroup = new OutputTrackGroup();
 		}
 
@@ -1675,6 +1755,7 @@ export class Conversion {
 		this._addedCounts.audio++;
 		this._totalTrackCount++;
 
+		this._sources.push(audioSource);
 		this.utilizedTracks.push(track);
 		this._outputTrackIds.push(outputTrackId);
 		this._outputOwnTrackGroups.push(ownGroup);
@@ -1750,6 +1831,8 @@ class TrackSynchronizer {
 		resolve: () => void;
 	}[] = [];
 
+	released = false;
+
 	declareTrack(trackId: number) {
 		this.maxTimestamps.set(trackId, 0);
 	}
@@ -1765,6 +1848,11 @@ class TrackSynchronizer {
 	}
 
 	wait(timestamp: number) {
+		if (this.released) {
+			// Already released (e.g. due to a non-owning cancel); don't park, so the pump can run to its cancel check.
+			return Promise.resolve();
+		}
+
 		const { promise, resolve } = promiseWithResolvers();
 
 		this.resolvers.push({
@@ -1778,6 +1866,19 @@ class TrackSynchronizer {
 	closeTrack(trackId: number) {
 		this.maxTimestamps.delete(trackId);
 		this.computeMinAndMaybeResolve();
+	}
+
+	releaseAll() {
+		// Resolve and clear all pending waiters, and ensure future `wait` calls don't park either. Used when a
+		// non-owning conversion is canceled: the output stays alive, so pump loops parked in (or about to enter) `wait`
+		// must be released to let them run to their `_canceled` check and exit.
+		this.released = true;
+
+		for (const entry of this.resolvers) {
+			entry.resolve();
+		}
+
+		this.resolvers.length = 0;
 	}
 
 	computeMinAndMaybeResolve() {
