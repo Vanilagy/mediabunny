@@ -63,7 +63,7 @@ await conversion.execute();
 That's it! A `Conversion` simply takes an instance of `Input` and `Output`, then reads the data from the input and writes it to the output. If you're unfamiliar with [`Input`](./reading-media-files) and [`Output`](./writing-media-files), check out their respective guides.
 
 ::: info
-The `Output` passed to the `Conversion` must be *fresh*; that is, it must have no added tracks or metadata tags and be in the `'pending'` state (not started yet).
+The `Output` passed to the `Conversion` must be *fresh*; that is, it must have no added tracks or metadata tags and be in the `'pending'` state (not started yet). This requirement is relaxed for [non-owning conversions](#non-owning-conversions).
 :::
 
 Unconfigured, the conversion process handles all the details automatically, such as:
@@ -505,6 +505,74 @@ const conversion = await Conversion.init({ input, output });
 conversion.utilizedTracks; // => InputTrack[]
 ```
 A track may appear multiple times in this list when [fan-out](#track-fan-out) produces multiple output tracks from it.
+
+## Non-owning conversions
+
+By default, a `Conversion` takes full ownership of its `Output`: it requires a [fresh output](#running-a-conversion), then starts it, writes its [metadata tags](#metadata-tags), and finalizes it for you. Sometimes, however, you want a conversion to be just *one* of several contributors to a single output file — for example, to keep an input's video track while attaching your own, externally-produced audio track. For this, set `ownsOutput: false`.
+
+A non-owning conversion only adds its own tracks to the output and pumps their media data while `execute()` runs. Everything else about the output's lifecycle is yours: you add any additional tracks, set any metadata tags, and call `start()` and `finalize()` yourself. This also means the output no longer has to be fresh — it may already carry tracks (added by you, or by another non-owning conversion) — but it must still be in the `'pending'` state, since tracks can only be added before the output starts.
+
+The choreography is fixed: initialize the conversion, add your own tracks, call `output.start()` *before* `execute()`, then run the conversion concurrently with your own media source, and finalize the output once both are done:
+
+```ts
+import {
+	Input,
+	Output,
+	Mp4OutputFormat,
+	BufferTarget,
+	Conversion,
+	AudioBufferSource,
+} from 'mediabunny';
+
+const input = new Input({ ... });
+const output = new Output({
+	format: new Mp4OutputFormat(),
+	target: new BufferTarget(),
+});
+
+// This conversion only pumps the input's video track; we're replacing the audio with our own.
+const conversion = await Conversion.init({
+	input,
+	output,
+	ownsOutput: false,
+	audio: { discard: true },
+});
+if (!conversion.isValid) {
+	return;
+}
+
+// Add our own audio track directly to the output. The conversion never touches it.
+const audioSource = new AudioBufferSource({ codec: 'aac', bitrate: 128e3 });
+output.addAudioTrack(audioSource);
+
+// We own the output, so we start it — this must happen before execute().
+await output.start();
+
+// Run the conversion (which pumps the video) concurrently with feeding our own audio.
+// Both write into the very same output.
+await Promise.all([
+	conversion.execute(),
+	(async () => {
+		await audioSource.add(myAudioBuffer);
+		audioSource.close();
+	})(),
+]);
+
+// Since the conversion doesn't own the output, finalizing it is our responsibility.
+await output.finalize();
+
+// output.target.buffer contains the final file
+```
+
+::: warning
+[Canceling](#canceling-a-conversion) a non-owning conversion does *not* cancel the output. `conversion.cancel()` only stops the conversion and closes the media sources it created, leaving the output alive for its other contributors. For a full abort, cancel both the conversion and the output (`await output.cancel()`) — and be sure to tear the output down on your own error paths too, or it will leak.
+:::
+
+In this mode, `isValid` simply means the conversion contributes at least one track. The output format's minimum track-count requirements aren't checked here; those are enforced by `output.start()` against the complete set of tracks.
+
+Since the output's metadata is yours to manage, the [`tags`](#metadata-tags) option cannot be combined with `ownsOutput: false` — set metadata directly on the output using `output.setMetadataTags()` instead.
+
+- Check out the <a href="/examples/external-audio" target="_self">External audio track example</a> for this pattern in action.
 
 ## Converting live streams
 
