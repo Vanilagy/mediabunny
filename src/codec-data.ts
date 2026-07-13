@@ -2207,9 +2207,22 @@ const OPUS_FRAME_DURATION_TABLE = [
 
 export const parseOpusTocByte = (packet: Uint8Array) => {
 	const config = packet[0]! >> 3;
+	const code = packet[0]! & 0b11;
+
+	// A packet may pack more than one frame, in which case its duration is the frame duration times the number of
+	// frames it carries. See https://datatracker.ietf.org/doc/html/rfc6716, section 3.2.
+	let frameCount: number;
+	if (code === 0) {
+		frameCount = 1;
+	} else if (code === 1 || code === 2) {
+		frameCount = 2;
+	} else {
+		// Code 3: the frame count sits in the six low bits of the frame count byte
+		frameCount = (packet[1] ?? 0) & 0b111111;
+	}
 
 	return {
-		durationInSamples: OPUS_FRAME_DURATION_TABLE[config]!,
+		durationInSamples: OPUS_FRAME_DURATION_TABLE[config]! * frameCount,
 	};
 };
 
