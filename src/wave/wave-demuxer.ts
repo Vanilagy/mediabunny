@@ -173,6 +173,28 @@ export class WaveDemuxer extends Demuxer {
 			bitsPerSample = 8;
 		}
 
+		if (
+			formatTag !== WaveFormat.PCM
+			&& formatTag !== WaveFormat.IEEE_FLOAT
+			&& formatTag !== WaveFormat.ALAW
+			&& formatTag !== WaveFormat.MULAW
+		) {
+			throw new Error(
+				`Unsupported WAVE codec (format tag ${formatTag}). Only integer/float PCM, A-law, and μ-law are`
+				+ ` supported.`,
+			);
+		}
+		if (formatTag === WaveFormat.PCM && ![8, 16, 24, 32].includes(bitsPerSample)) {
+			throw new Error(
+				`Unsupported WAVE PCM bit depth (${bitsPerSample}). Only 8, 16, 24, and 32 bits are supported.`,
+			);
+		}
+		if (formatTag === WaveFormat.IEEE_FLOAT && ![32, 64].includes(bitsPerSample)) {
+			throw new Error(
+				`Unsupported WAVE float bit depth (${bitsPerSample}). Only 32 and 64 bits are supported.`,
+			);
+		}
+
 		this.audioInfo = {
 			format: formatTag,
 			numberOfChannels: numChannels,
@@ -322,10 +344,12 @@ export class WaveDemuxer extends Demuxer {
 		if (this.audioInfo.format === WaveFormat.IEEE_FLOAT) {
 			if (this.audioInfo.sampleSizeInBytes === 4) {
 				return 'pcm-f32';
+			} else if (this.audioInfo.sampleSizeInBytes === 8) {
+				return 'pcm-f64';
 			}
 		}
 
-		return null;
+		assert(false);
 	}
 
 	async getMimeType() {
