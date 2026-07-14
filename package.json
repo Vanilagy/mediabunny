@@ -40,6 +40,7 @@
   "sideEffects": false,
   "scripts": {
     "build": "./scripts/build.sh",
+    "build-loose": "./scripts/build.sh --loose",
     "watch": "tsx scripts/bundle.ts --watch",
     "lint": "eslint .",
     "test": "npm run pre-test && npx vitest --run",
