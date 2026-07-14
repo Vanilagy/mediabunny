@@ -211,6 +211,10 @@ export class IsobmffMuxer extends Muxer {
 	async start() {
 		const release = await this.mutex.acquire();
 
+		// The auxiliary writer builds subtitle sample boxes in memory; it must be started too,
+		// else the first box write for any subtitle track asserts (started === false).
+		this.auxWriter.start();
+
 		if (!this.isCmaf) {
 			this.writer = await this.output._getRootWriter(target => (
 				this.format._options.fastStart !== undefined
