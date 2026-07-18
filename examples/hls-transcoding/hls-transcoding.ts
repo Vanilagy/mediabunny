@@ -239,7 +239,7 @@ selectDirectoryButton.addEventListener('click', async () => {
 selectMediaButton.addEventListener('click', () => {
 	const fileInput = document.createElement('input');
 	fileInput.type = 'file';
-	fileInput.accept = 'video/*,video/x-matroska,video/mp2t,.ts';
+	fileInput.accept = 'video/*,video/x-matroska,video/mp2t,.mkv,.ts';
 	fileInput.addEventListener('change', () => {
 		const file = fileInput.files![0];
 		if (file) {
