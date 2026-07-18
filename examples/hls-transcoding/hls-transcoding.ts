@@ -15,8 +15,14 @@ import {
 	QUALITY_LOW,
 	QUALITY_VERY_LOW,
 } from 'mediabunny';
+import { registerAc3Decoder } from '@mediabunny/ac3';
+import { registerProresDecoder } from '@mediabunny/prores';
 
 import SampleFileUrl from '../../docs/assets/big-buck-bunny-trimmed.mp4';
+
+// Enable codecs that aren't natively supported by WebCodecs.
+registerAc3Decoder();
+registerProresDecoder();
 (document.querySelector('#sample-file-download') as HTMLAnchorElement).href = SampleFileUrl;
 
 declare global {
@@ -233,7 +239,7 @@ selectDirectoryButton.addEventListener('click', async () => {
 selectMediaButton.addEventListener('click', () => {
 	const fileInput = document.createElement('input');
 	fileInput.type = 'file';
-	fileInput.accept = 'video/*,video/x-matroska,video/mp2t,.ts';
+	fileInput.accept = 'video/*,video/x-matroska,video/mp2t,.mkv,.ts';
 	fileInput.addEventListener('change', () => {
 		const file = fileInput.files![0];
 		if (file) {
