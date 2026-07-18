@@ -1168,7 +1168,12 @@ export class MatroskaMuxer extends Muxer {
 
 		const msDuration = Math.round(1000 * chunk.duration);
 
-		if (!chunk.additions) {
+		// Subtitle cues need an explicit BlockDuration (a SimpleBlock has none), otherwise players
+		// like VLC/libass don't know how long to show the cue and render nothing. So a subtitle with
+		// a duration must go into a BlockGroup even when it has no additions.
+		const needsBlockGroup = !!chunk.additions || (trackData.type === 'subtitle' && msDuration > 0);
+
+		if (!needsBlockGroup) {
 			// No additions, we can write out a SimpleBlock
 			view.setUint8(3, Number(chunk.type === 'key') << 7); // Flags (keyframe flag only present for SimpleBlock)
 
