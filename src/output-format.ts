@@ -799,7 +799,7 @@ export class WavOutputFormat extends OutputFormat {
 	getSupportedCodecs(): MediaCodec[] {
 		return [
 			...PCM_AUDIO_CODECS.filter(codec =>
-				['pcm-s16', 'pcm-s24', 'pcm-s32', 'pcm-f32', 'pcm-u8', 'ulaw', 'alaw'].includes(codec),
+				['pcm-s16', 'pcm-s24', 'pcm-s32', 'pcm-f32', 'pcm-f64', 'pcm-u8', 'ulaw', 'alaw'].includes(codec),
 			),
 		];
 	}
