@@ -2218,7 +2218,7 @@ export const parseOpusTocByte = (packet: Uint8Array) => {
 		frameCount = 2;
 	} else {
 		// Code 3: the frame count sits in the six low bits of the frame count byte
-		frameCount = (packet[1] ?? 0) & 0b111111;
+		frameCount = packet[1]! & 0b111111;
 	}
 
 	return {
