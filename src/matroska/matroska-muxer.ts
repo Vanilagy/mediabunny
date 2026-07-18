@@ -1168,7 +1168,10 @@ export class MatroskaMuxer extends Muxer {
 
 		const msDuration = Math.round(1000 * chunk.duration);
 
-		if (!chunk.additions) {
+		// Subtitle cues need an explicit BlockDuration (a SimpleBlock has none)
+		const needsBlockGroup = !!chunk.additions || trackData.type === 'subtitle';
+
+		if (!needsBlockGroup) {
 			// No additions, we can write out a SimpleBlock
 			view.setUint8(3, Number(chunk.type === 'key') << 7); // Flags (keyframe flag only present for SimpleBlock)
 

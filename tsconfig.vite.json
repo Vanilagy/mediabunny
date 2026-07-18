@@ -19,6 +19,8 @@
 		"./examples/**/*.ts"
 	],
 	"references": [
-        { "path": "./src" }
-    ]
+		{ "path": "./src" },
+		{ "path": "./packages/ac3" },
+		{ "path": "./packages/prores" }
+	]
 }
