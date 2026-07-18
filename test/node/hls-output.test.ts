@@ -24,7 +24,7 @@ import { Input } from '../../src/input.js';
 import { BufferSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { InputAudioTrack, InputVideoTrack } from '../../src/input-track.js';
-import { EncodedPacketSink } from '../../src/media-sink.js';
+import { PacketCursor } from '../../src/cursors.js';
 
 const videoSource = (codec: VideoCodec = 'avc') => new EncodedVideoPacketSource(codec);
 const audioSource = (codec: AudioCodec = 'aac') => new EncodedAudioPacketSource(codec);
@@ -848,9 +848,9 @@ const setUpSegmentationEnvironment = async (options: {
 
 						const videoTrack = await input.getPrimaryVideoTrack() as InputVideoTrack;
 						if (videoTrack) {
-							const sink = new EncodedPacketSink(videoTrack);
+							const cursor = new PacketCursor(videoTrack);
 							const timestamps: number[] = [];
-							for await (const packet of sink.packets()) {
+							for await (const packet of cursor) {
 								timestamps.push(packet.timestamp);
 							}
 							videoBundle.resolve(timestamps);
@@ -860,9 +860,9 @@ const setUpSegmentationEnvironment = async (options: {
 
 						const audioTrack = await input.getPrimaryAudioTrack() as InputAudioTrack;
 						if (audioTrack) {
-							const sink = new EncodedPacketSink(audioTrack);
+							const cursor = new PacketCursor(audioTrack);
 							const timestamps: number[] = [];
-							for await (const packet of sink.packets()) {
+							for await (const packet of cursor) {
 								timestamps.push(packet.timestamp);
 							}
 							audioBundle.resolve(timestamps);
@@ -2189,10 +2189,10 @@ segment-1-2.m4s
 		const videoTrack = await segmentInput.getPrimaryVideoTrack() as InputVideoTrack;
 		expect(videoTrack).toBeTruthy();
 
-		const sink = new EncodedPacketSink(videoTrack);
+		const cursor = new PacketCursor(videoTrack);
 		let packetCount = 0;
 		// eslint-disable-next-line @typescript-eslint/no-unused-vars
-		for await (const packet of sink.packets()) {
+		for await (const packet of cursor) {
 			packetCount++;
 		}
 		expect(packetCount).toBe(4);

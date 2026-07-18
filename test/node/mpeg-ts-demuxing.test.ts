@@ -6,7 +6,8 @@ import fs from 'node:fs';
 import { Readable } from 'node:stream';
 import { ALL_FORMATS, MPEG_TS } from '../../src/input-format.js';
 import { assert } from '../../src/misc.js';
-import { EncodedPacketSink } from '../../src/media-sink.js';
+import { PacketCursor } from '../../src/cursors.js';
+import { PacketReader } from '../../src/packet.js';
 import { EncodedPacket } from '../../src/packet.js';
 import { MpegTsDemuxer } from '../../src/mpeg-ts/mpeg-ts-demuxer.js';
 import { MpegTsStreamType } from '../../src/mpeg-ts/mpeg-ts-misc.js';
@@ -116,9 +117,9 @@ test('MPEG-TS AVC video packets', async () => {
 	const videoTrack = await input.getPrimaryVideoTrack();
 	assert(videoTrack);
 
-	const sink = new EncodedPacketSink(videoTrack);
+	const reader = new PacketReader(videoTrack);
 
-	const firstPacket = await sink.getFirstPacket();
+	const firstPacket = await reader.getFirst();
 	assert(firstPacket);
 
 	expect([...firstPacket.data.slice(0, 4)]).toEqual([0, 0, 0, 1]);
@@ -128,12 +129,12 @@ test('MPEG-TS AVC video packets', async () => {
 	expect(firstPacket.duration).toBe(0.016666666666666666);
 	expect(firstPacket.sequenceNumber).not.toBe(-1);
 
-	const firstPacketMetadataOnly = await sink.getFirstPacket({ metadataOnly: true });
+	const firstPacketMetadataOnly = await reader.getFirst({ metadataOnly: true });
 	assert(firstPacketMetadataOnly);
 	expect(firstPacketMetadataOnly.data).toHaveLength(0);
 	expect(firstPacketMetadataOnly.byteLength).toBe(23813);
 
-	const secondPacket = await sink.getNextPacket(firstPacket);
+	const secondPacket = await reader.getNext(firstPacket);
 	assert(secondPacket);
 
 	expect([...secondPacket.data.slice(0, 4)]).toEqual([0, 0, 0, 1]);
@@ -149,7 +150,7 @@ test('MPEG-TS AVC video packets', async () => {
 	while (currentPacket) {
 		expect(currentPacket.duration).toBe(0.016666666666666666);
 
-		currentPacket = await sink.getNextPacket(currentPacket);
+		currentPacket = await reader.getNext(currentPacket);
 		count++;
 	}
 
@@ -165,9 +166,9 @@ test('MPEG-TS AAC audio packets', async () => {
 	const audioTrack = await input.getPrimaryAudioTrack();
 	assert(audioTrack);
 
-	const sink = new EncodedPacketSink(audioTrack);
+	const reader = new PacketReader(audioTrack);
 
-	const firstPacket = await sink.getFirstPacket();
+	const firstPacket = await reader.getFirst();
 	assert(firstPacket);
 
 	expect(firstPacket.data[0]).toEqual(0xff);
@@ -177,7 +178,7 @@ test('MPEG-TS AAC audio packets', async () => {
 	expect(firstPacket.duration).toBe(0.021333333333333333);
 	expect(firstPacket.sequenceNumber).not.toBe(-1);
 
-	const secondPacket = await sink.getNextPacket(firstPacket);
+	const secondPacket = await reader.getNext(firstPacket);
 	assert(secondPacket);
 
 	expect(secondPacket.data[0]).toEqual(0xff);
@@ -193,7 +194,7 @@ test('MPEG-TS AAC audio packets', async () => {
 	while (currentPacket) {
 		expect(currentPacket.duration).toBe(0.021333333333333333);
 
-		currentPacket = await sink.getNextPacket(currentPacket);
+		currentPacket = await reader.getNext(currentPacket);
 		count++;
 	}
 
@@ -215,24 +216,24 @@ test('MPEG-TS video seeking', async () => {
 			demuxer.seekChunkSize = 250_000; // Try it again with a smaller chunk size
 		}
 
-		const sink = new EncodedPacketSink(videoTrack);
+		const reader = new PacketReader(videoTrack);
 
 		const firstTimestamp = await videoTrack.getFirstTimestamp();
-		const firstPacket = await sink.getPacket(firstTimestamp);
+		const firstPacket = await reader.getAt(firstTimestamp);
 		assert(firstPacket);
 		expect(firstPacket.timestamp).toBe(firstTimestamp);
 		expect(firstPacket.duration).toBe(0.016666666666666666);
-		expect(firstPacket.sequenceNumber).toBe((await sink.getFirstPacket())?.sequenceNumber);
+		expect(firstPacket.sequenceNumber).toBe((await reader.getFirst())?.sequenceNumber);
 
-		const lastPacket = await sink.getPacket(Infinity);
+		const lastPacket = await reader.getAt(Infinity);
 		assert(lastPacket);
 		expect(lastPacket.timestamp).toBeCloseTo(14.983333333333333);
 		expect(lastPacket.duration).toBe(0.016666666666666666);
 
-		const beforeFirst = await sink.getPacket(-10);
+		const beforeFirst = await reader.getAt(-10);
 		expect(beforeFirst).toBeNull();
 
-		const middlePacket = await sink.getPacket(12.5);
+		const middlePacket = await reader.getAt(12.5);
 		assert(middlePacket);
 		expect(middlePacket.timestamp).toBeCloseTo(12.5);
 		expect(middlePacket.duration).toBe(0.016666666666666666);
@@ -242,13 +243,13 @@ test('MPEG-TS video seeking', async () => {
 
 		while (currentPacket) {
 			allPackets.push(currentPacket);
-			currentPacket = await sink.getNextPacket(currentPacket);
+			currentPacket = await reader.getNext(currentPacket);
 		}
 
 		expect(allPackets).toHaveLength(298);
 
 		for (const packet of allPackets) {
-			const seekedPacket = await sink.getPacket(packet.timestamp);
+			const seekedPacket = await reader.getAt(packet.timestamp);
 			assert(seekedPacket);
 			expect(seekedPacket.timestamp).toBe(packet.timestamp);
 			expect(seekedPacket.duration).toBe(packet.duration);
@@ -272,24 +273,24 @@ test('MPEG-TS audio seeking', async () => {
 			demuxer.seekChunkSize = 250_000; // Try it again with a smaller chunk size
 		}
 
-		const sink = new EncodedPacketSink(audioTrack);
+		const reader = new PacketReader(audioTrack);
 
 		const firstTimestamp = await audioTrack.getFirstTimestamp();
-		const firstPacket = await sink.getPacket(firstTimestamp);
+		const firstPacket = await reader.getAt(firstTimestamp);
 		assert(firstPacket);
 		expect(firstPacket.timestamp).toBe(firstTimestamp);
 		expect(firstPacket.duration).toBe(0.021333333333333333);
-		expect(firstPacket.sequenceNumber).toBe((await sink.getFirstPacket())?.sequenceNumber);
+		expect(firstPacket.sequenceNumber).toBe((await reader.getFirst())?.sequenceNumber);
 
-		const lastPacket = await sink.getPacket(Infinity);
+		const lastPacket = await reader.getAt(Infinity);
 		assert(lastPacket);
 		expect(lastPacket.timestamp).toBeCloseTo(14.982666666666667);
 		expect(lastPacket.duration).toBe(0.021333333333333333);
 
-		const beforeFirst = await sink.getPacket(-10);
+		const beforeFirst = await reader.getAt(-10);
 		expect(beforeFirst).toBeNull();
 
-		const middlePacket = await sink.getPacket(12.5);
+		const middlePacket = await reader.getAt(12.5);
 		assert(middlePacket);
 		expect(middlePacket.timestamp).toBeCloseTo(12.486666666666666);
 		expect(middlePacket.duration).toBe(0.021333333333333333);
@@ -299,13 +300,13 @@ test('MPEG-TS audio seeking', async () => {
 
 		while (currentPacket) {
 			allPackets.push(currentPacket);
-			currentPacket = await sink.getNextPacket(currentPacket);
+			currentPacket = await reader.getNext(currentPacket);
 		}
 
 		expect(allPackets).toHaveLength(234);
 
 		for (const packet of allPackets) {
-			const seekedPacket = await sink.getPacket(packet.timestamp);
+			const seekedPacket = await reader.getAt(packet.timestamp);
 			assert(seekedPacket);
 			expect(seekedPacket.timestamp).toBe(packet.timestamp); // The correct timestamp was retrieved
 			expect(seekedPacket.duration).toBe(packet.duration); // The correct duration was retrieved
@@ -329,18 +330,19 @@ test('MPEG-TS seeking race condition test', async () => {
 			demuxer.seekChunkSize = 250_000; // Try it again with a smaller chunk size
 		}
 
-		const sink = new EncodedPacketSink(videoTrack);
+		const reader = new PacketReader(videoTrack);
 
 		const allPackets: EncodedPacket[] = [];
-		let currentPacket: EncodedPacket | null = await sink.getFirstPacket();
+		let currentPacket: EncodedPacket | null = await reader.getFirst();
 
 		while (currentPacket) {
 			allPackets.push(currentPacket);
-			currentPacket = await sink.getNextPacket(currentPacket);
+			currentPacket = await reader.getNext(currentPacket);
 		}
 
 		// Perform all seeks concurrently
-		const seekPromises = allPackets.map(packet => sink.getPacket(packet.timestamp));
+		const seekPromises = allPackets.map(packet => reader.getAt(packet.timestamp));
+		// eslint-disable-next-line @typescript-eslint/await-thenable
 		const seekedPackets = await Promise.all(seekPromises);
 
 		for (let j = 0; j < allPackets.length; j++) {
@@ -369,37 +371,37 @@ test('MPEG-TS video key packets', { timeout: 30_000 }, async () => {
 			demuxer.seekChunkSize = 250_000; // Try it again with a smaller chunk size
 		}
 
-		const sink = new EncodedPacketSink(videoTrack);
+		const reader = new PacketReader(videoTrack);
 
-		const firstPacket = await sink.getFirstPacket();
+		const firstPacket = await reader.getFirst();
 		assert(firstPacket);
 		expect(firstPacket.type).toBe('key');
 
-		const secondPacket = await sink.getNextPacket(firstPacket);
+		const secondPacket = await reader.getNext(firstPacket);
 		assert(secondPacket);
 		expect(secondPacket.type).toBe('delta');
 
-		const nextKeyPacket = await sink.getNextKeyPacket(firstPacket);
+		const nextKeyPacket = await reader.getNextKey(firstPacket);
 		assert(nextKeyPacket);
 		expect(nextKeyPacket.type).toBe('key');
 		expect(nextKeyPacket.sequenceNumber).toBeGreaterThan(secondPacket.sequenceNumber);
 
-		const firstKeyPacket = await sink.getKeyPacket(firstPacket.timestamp + 0.5);
+		const firstKeyPacket = await reader.getKeyAt(firstPacket.timestamp + 0.5);
 		assert(firstKeyPacket);
 		expect(firstKeyPacket.type).toBe('key');
 		expect(firstKeyPacket.sequenceNumber).toBe(firstPacket.sequenceNumber);
 
-		const afterKeyPacket = await sink.getNextPacket(firstKeyPacket);
+		const afterKeyPacket = await reader.getNext(firstKeyPacket);
 		expect(afterKeyPacket).not.toBe(null);
 		expect(afterKeyPacket!.type).toBe('delta');
 		expect(afterKeyPacket!.sequenceNumber).toBe(secondPacket.sequenceNumber);
 
-		const secondKeyPacket = await sink.getKeyPacket(2.5);
+		const secondKeyPacket = await reader.getKeyAt(2.5);
 		assert(secondKeyPacket);
 		expect(secondKeyPacket.type).toBe('key');
 		expect(secondKeyPacket.sequenceNumber).toBe(nextKeyPacket.sequenceNumber);
 
-		const lastKeyPacket = await sink.getKeyPacket(Infinity);
+		const lastKeyPacket = await reader.getKeyAt(Infinity);
 		assert(lastKeyPacket);
 		expect(lastKeyPacket.type).toBe('key');
 		expect(lastKeyPacket.sequenceNumber).toBeGreaterThan(secondKeyPacket.sequenceNumber);
@@ -409,11 +411,11 @@ test('MPEG-TS video key packets', { timeout: 30_000 }, async () => {
 
 		while (currentKeyPacket) {
 			allKeyPackets.push(currentKeyPacket);
-			currentKeyPacket = await sink.getNextKeyPacket(currentKeyPacket);
+			currentKeyPacket = await reader.getNextKey(currentKeyPacket);
 		}
 
 		for (const packet of allKeyPackets) {
-			const keyPacket = await sink.getKeyPacket(packet.timestamp);
+			const keyPacket = await reader.getKeyAt(packet.timestamp);
 			assert(keyPacket);
 			expect(keyPacket.timestamp).toBe(packet.timestamp); // The correct timestamp was retrieved for this packet
 			expect(keyPacket.duration).toBe(packet.duration); // The correct duration was retrieved for this packet
@@ -437,33 +439,33 @@ test('MPEG-TS audio key packets', async () => {
 			demuxer.seekChunkSize = 250_000; // Try it again with a smaller chunk size
 		}
 
-		const sink = new EncodedPacketSink(audioTrack);
+		const reader = new PacketReader(audioTrack);
 
-		const firstPacket = await sink.getFirstPacket();
+		const firstPacket = await reader.getFirst();
 		assert(firstPacket);
 		expect(firstPacket.type).toBe('key');
 
-		const secondPacket = await sink.getNextPacket(firstPacket);
+		const secondPacket = await reader.getNext(firstPacket);
 		assert(secondPacket);
 		expect(secondPacket.type).toBe('key');
 
-		const nextKeyPacket = await sink.getNextKeyPacket(firstPacket);
+		const nextKeyPacket = await reader.getNextKey(firstPacket);
 		assert(nextKeyPacket);
 		expect(nextKeyPacket.type).toBe('key');
 		expect(nextKeyPacket.sequenceNumber).toBe(secondPacket.sequenceNumber); // All audio packets are key packets
 
-		const middleKeyPacket = await sink.getKeyPacket(12.5);
+		const middleKeyPacket = await reader.getKeyAt(12.5);
 		assert(middleKeyPacket);
 		expect(middleKeyPacket.type).toBe('key');
 
-		const afterKeyPacket = await sink.getNextPacket(middleKeyPacket);
+		const afterKeyPacket = await reader.getNext(middleKeyPacket);
 		expect(afterKeyPacket).not.toBe(null);
 		expect(afterKeyPacket!.type).toBe('key');
 
-		const lastPacket = await sink.getPacket(Infinity);
+		const lastPacket = await reader.getAt(Infinity);
 		assert(lastPacket);
 
-		const lastKeyPacket = await sink.getKeyPacket(Infinity);
+		const lastKeyPacket = await reader.getKeyAt(Infinity);
 		assert(lastKeyPacket);
 		expect(lastKeyPacket.type).toBe('key');
 		expect(lastKeyPacket.sequenceNumber).toBe(lastPacket.sequenceNumber); // It's actually the last packet
@@ -473,11 +475,11 @@ test('MPEG-TS audio key packets', async () => {
 
 		while (currentKeyPacket) {
 			allKeyPackets.push(currentKeyPacket);
-			currentKeyPacket = await sink.getNextKeyPacket(currentKeyPacket);
+			currentKeyPacket = await reader.getNextKey(currentKeyPacket);
 		}
 
 		for (const packet of allKeyPackets) {
-			const keyPacket = await sink.getKeyPacket(packet.timestamp);
+			const keyPacket = await reader.getKeyAt(packet.timestamp);
 			assert(keyPacket);
 			expect(keyPacket.timestamp).toBe(packet.timestamp); // The correct timestamp was retrieved for this packet
 			expect(keyPacket.duration).toBe(packet.duration); // The correct duration was retrieved for this packet
@@ -505,14 +507,14 @@ test('MPEG-TS with unknown file size (ReadableStreamSource)', async () => {
 			demuxer.seekChunkSize = 250_000; // Try it again with a smaller chunk size
 		}
 
-		const sink = new EncodedPacketSink(videoTrack);
+		const reader = new PacketReader(videoTrack);
 
-		const firstPacket = await sink.getFirstPacket();
+		const firstPacket = await reader.getFirst();
 		assert(firstPacket);
 		expect(firstPacket.type).toBe('key');
 		expect(firstPacket.timestamp).toBe(10.033333333333333);
 
-		const middlePacket = await sink.getPacket(12.5);
+		const middlePacket = await reader.getAt(12.5);
 		assert(middlePacket);
 		expect(middlePacket.timestamp).toBeCloseTo(12.5);
 
@@ -568,10 +570,10 @@ test('MPEG-TS with HEVC video', async () => {
 		// No description, it's Annex B
 	});
 
-	const sink = new EncodedPacketSink(videoTrack);
+	const cursor = new PacketCursor(videoTrack);
 
 	let i = 0;
-	for await (const packet of sink.packets()) {
+	for await (const packet of cursor) {
 		expect(packet.data.slice(0, 4)).toEqual(new Uint8Array([0, 0, 0, 1])); // Annex B
 		expect(packet.duration).toBeCloseTo(0.04166666666);
 		expect(packet.type).toBe(i > 0 ? 'delta' : 'key');
@@ -598,13 +600,13 @@ test('MPEG-TS with MP3 audio', async () => {
 		sampleRate: 48000,
 	});
 
-	const sink = new EncodedPacketSink(audioTrack);
+	const reader = new PacketReader(audioTrack);
 
-	const firstPacket = await sink.getFirstPacket();
+	const firstPacket = await reader.getFirst();
 	assert(firstPacket);
 
 	let count = 0;
-	for await (const packet of sink.packets()) {
+	for await (const packet of new PacketCursor(audioTrack)) {
 		expect(packet.data[0]).toBe(0xff);
 		expect(packet.type).toBe('key');
 		count++;
@@ -632,13 +634,13 @@ test('MPEG-TS with AC-3 audio (System A)', async () => {
 		sampleRate: 48000,
 	});
 
-	const sink = new EncodedPacketSink(audioTrack);
+	const reader = new PacketReader(audioTrack);
 
-	const firstPacket = await sink.getFirstPacket();
+	const firstPacket = await reader.getFirst();
 	assert(firstPacket);
 
 	let count = 0;
-	for await (const packet of sink.packets()) {
+	for await (const packet of new PacketCursor(audioTrack)) {
 		expect(packet.data[0]).toBe(0x0b);
 		expect(packet.data[1]).toBe(0x77);
 		expect(packet.type).toBe('key');
@@ -667,13 +669,13 @@ test('MPEG-TS with AC-3 audio (System B)', async () => {
 		sampleRate: 48000,
 	});
 
-	const sink = new EncodedPacketSink(audioTrack);
+	const reader = new PacketReader(audioTrack);
 
-	const firstPacket = await sink.getFirstPacket();
+	const firstPacket = await reader.getFirst();
 	assert(firstPacket);
 
 	let count = 0;
-	for await (const packet of sink.packets()) {
+	for await (const packet of new PacketCursor(audioTrack)) {
 		expect(packet.data[0]).toBe(0x0b);
 		expect(packet.data[1]).toBe(0x77);
 		expect(packet.type).toBe('key');
@@ -702,13 +704,13 @@ test('MPEG-TS with E-AC-3 audio (System A)', async () => {
 		sampleRate: 48000,
 	});
 
-	const sink = new EncodedPacketSink(audioTrack);
+	const reader = new PacketReader(audioTrack);
 
-	const firstPacket = await sink.getFirstPacket();
+	const firstPacket = await reader.getFirst();
 	assert(firstPacket);
 
 	let count = 0;
-	for await (const packet of sink.packets()) {
+	for await (const packet of new PacketCursor(audioTrack)) {
 		expect(packet.data[0]).toBe(0x0b);
 		expect(packet.data[1]).toBe(0x77);
 		expect(packet.type).toBe('key');
@@ -737,13 +739,13 @@ test('MPEG-TS with E-AC-3 audio (System B)', async () => {
 		sampleRate: 48000,
 	});
 
-	const sink = new EncodedPacketSink(audioTrack);
+	const reader = new PacketReader(audioTrack);
 
-	const firstPacket = await sink.getFirstPacket();
+	const firstPacket = await reader.getFirst();
 	assert(firstPacket);
 
 	let count = 0;
-	for await (const packet of sink.packets()) {
+	for await (const packet of new PacketCursor(audioTrack)) {
 		expect(packet.data[0]).toBe(0x0b);
 		expect(packet.data[1]).toBe(0x77);
 		expect(packet.type).toBe('key');
@@ -792,19 +794,19 @@ test('MPEG-TS first packet key packet forcing', async () => {
 			demuxer.seekChunkSize = 250_000; // Try it again with a smaller chunk size
 		}
 
-		const sink = new EncodedPacketSink(videoTrack);
+		const reader = new PacketReader(videoTrack);
 
 		// Test that the first packet is indeed a key packet even if the file doesn't label it that way (L muxer)
-		const firstPacket = await sink.getFirstPacket();
+		const firstPacket = await reader.getFirst();
 		assert(firstPacket);
 		expect(firstPacket.type).toBe('key');
 
-		const firstPacketSeeked = await sink.getPacket(firstPacket.timestamp);
+		const firstPacketSeeked = await reader.getAt(firstPacket.timestamp);
 		assert(firstPacketSeeked);
 		expect(firstPacketSeeked.type).toBe('key');
 		expect(firstPacketSeeked.sequenceNumber).toBe(firstPacket.sequenceNumber);
 
-		const firstKeyPacketSeeked = await sink.getKeyPacket(firstPacket.timestamp);
+		const firstKeyPacketSeeked = await reader.getKeyAt(firstPacket.timestamp);
 		assert(firstKeyPacketSeeked);
 		expect(firstKeyPacketSeeked.type).toBe('key');
 		expect(firstKeyPacketSeeked.sequenceNumber).toBe(firstPacket.sequenceNumber);
@@ -826,16 +828,16 @@ test('MPEG-TS without initial key packet', async () => {
 			demuxer.seekChunkSize = 250_000; // Try it again with a smaller chunk size
 		}
 
-		const sink = new EncodedPacketSink(videoTrack);
+		const reader = new PacketReader(videoTrack);
 
-		const firstPacket = await sink.getFirstPacket();
+		const firstPacket = await reader.getFirst();
 		assert(firstPacket);
 		expect(firstPacket.type).toBe('delta'); // First packet is delta
 
-		const noPacket = await sink.getKeyPacket(firstPacket.timestamp);
+		const noPacket = await reader.getKeyAt(firstPacket.timestamp);
 		expect(noPacket).toBeNull();
 
-		const aKeyPacket = await sink.getKeyPacket(Infinity);
+		const aKeyPacket = await reader.getKeyAt(Infinity);
 		assert(aKeyPacket);
 		expect(aKeyPacket.type).toBe('key');
 	}
@@ -851,12 +853,12 @@ test('MPEG-TS with "extension" PES packets without PTS', async () => {
 	assert(videoTrack);
 
 	const packetSizes: number[] = [];
-	const sink = new EncodedPacketSink(videoTrack);
+	const reader = new PacketReader(videoTrack);
 
-	for await (const packet of sink.packets()) {
+	for await (const packet of new PacketCursor(videoTrack)) {
 		packetSizes.push(packet.data.byteLength);
 
-		const seeked = await sink.getPacket(packet.timestamp);
+		const seeked = await reader.getAt(packet.timestamp);
 		expect(seeked!.timestamp).toBe(packet.timestamp);
 		expect(seeked!.sequenceNumber).toBe(packet.sequenceNumber);
 	}
@@ -885,13 +887,13 @@ test('MPEG-TS with AUD-less video packets', async () => {
 	const videoTrack = await input.getPrimaryVideoTrack();
 	assert(videoTrack);
 
-	const sink = new EncodedPacketSink(videoTrack);
+	const reader = new PacketReader(videoTrack);
 
-	const firstPacket = await sink.getFirstPacket();
+	const firstPacket = await reader.getFirst();
 	assert(firstPacket);
-	const secondPacket = await sink.getNextPacket(firstPacket);
+	const secondPacket = await reader.getNext(firstPacket);
 	assert(secondPacket);
-	const thirdPacket = await sink.getNextPacket(secondPacket);
+	const thirdPacket = await reader.getNext(secondPacket);
 	assert(thirdPacket);
 
 	expect(firstPacket.data.byteLength).toBe(331774);

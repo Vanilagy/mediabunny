@@ -209,7 +209,8 @@ export class IsobmffMuxer extends Muxer {
 	}
 
 	async start() {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		if (!this.isCmaf) {
 			this.writer = await this.output._getRootWriter(target => (
@@ -305,8 +306,6 @@ export class IsobmffMuxer extends Muxer {
 		}
 
 		await this.writer?.flush();
-
-		release();
 	}
 
 	private allTracksAreKnown() {
@@ -578,116 +577,110 @@ export class IsobmffMuxer extends Muxer {
 	}
 
 	async addEncodedVideoPacket(track: OutputVideoTrack, packet: EncodedPacket, meta?: EncodedVideoChunkMetadata) {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
-		try {
-			const trackData = this.getVideoTrackData(track, packet, meta);
+		const trackData = this.getVideoTrackData(track, packet, meta);
 
-			let packetData = packet.data;
-			if (trackData.info.requiresAnnexBTransformation) {
-				const nalUnits = [...iterateNalUnitsInAnnexB(packetData)]
-					.map(loc => packetData.subarray(loc.offset, loc.offset + loc.length));
-				if (nalUnits.length === 0) {
-					// It's not valid Annex B data
-					throw new Error(
-						'Failed to transform packet data. Make sure all packets are provided in Annex B format, as'
-						+ ' specified in ITU-T-REC-H.264 and ITU-T-REC-H.265.',
-					);
-				}
-
-				// We don't strip things like SPS or PPS NALUs here, mainly because they can also appear in the middle
-				// of a stream and potentially modify the parameters of it. So, let's just leave them in to be sure.
-				packetData = concatNalUnitsInLengthPrefixed(nalUnits, 4);
+		let packetData = packet.data;
+		if (trackData.info.requiresAnnexBTransformation) {
+			const nalUnits = [...iterateNalUnitsInAnnexB(packetData)]
+				.map(loc => packetData.subarray(loc.offset, loc.offset + loc.length));
+			if (nalUnits.length === 0) {
+				// It's not valid Annex B data
+				throw new Error(
+					'Failed to transform packet data. Make sure all packets are provided in Annex B format, as'
+					+ ' specified in ITU-T-REC-H.264 and ITU-T-REC-H.265.',
+				);
 			}
 
-			this.validateTimestamp(
-				trackData.track,
-				packet.timestamp,
-				packet.type === 'key',
-			);
-			const internalSample = this.createSampleForTrack(
-				trackData,
-				packetData,
-				packet.timestamp,
-				packet.duration,
-				packet.type,
-			);
-
-			await this.registerSample(trackData, internalSample);
-		} finally {
-			release();
+			// We don't strip things like SPS or PPS NALUs here, mainly because they can also appear in the middle
+			// of a stream and potentially modify the parameters of it. So, let's just leave them in to be sure.
+			packetData = concatNalUnitsInLengthPrefixed(nalUnits, 4);
 		}
+
+		this.validateTimestamp(
+			trackData.track,
+			packet.timestamp,
+			packet.type === 'key',
+		);
+		const internalSample = this.createSampleForTrack(
+			trackData,
+			packetData,
+			packet.timestamp,
+			packet.duration,
+			packet.type,
+		);
+
+		await this.registerSample(trackData, internalSample);
 	}
 
 	async addEncodedAudioPacket(track: OutputAudioTrack, packet: EncodedPacket, meta?: EncodedAudioChunkMetadata) {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
-		try {
-			const trackData = this.getAudioTrackData(track, packet, meta);
+		const trackData = this.getAudioTrackData(track, packet, meta);
 
-			let packetData = packet.data;
-			if (trackData.info.requiresAdtsStripping) {
-				const adtsFrame = readAdtsFrameHeader(FileSlice.tempFromBytes(packetData));
-				if (!adtsFrame) {
-					throw new Error('Expected ADTS frame, didn\'t get one.');
-				}
-
-				const headerLength = adtsFrame.crcCheck === null
-					? MIN_ADTS_FRAME_HEADER_SIZE
-					: MAX_ADTS_FRAME_HEADER_SIZE;
-				packetData = packetData.subarray(headerLength);
+		let packetData = packet.data;
+		if (trackData.info.requiresAdtsStripping) {
+			const adtsFrame = readAdtsFrameHeader(FileSlice.tempFromBytes(packetData));
+			if (!adtsFrame) {
+				throw new Error('Expected ADTS frame, didn\'t get one.');
 			}
 
-			this.validateTimestamp(
-				trackData.track,
-				packet.timestamp,
-				packet.type === 'key',
-			);
-
-			let timestamp = packet.timestamp;
-			let duration = packet.duration;
-
-			if (trackData.info.requiresPcmTransformation) {
-				// Packets may have only approximate timestamp/duration information, but for our PCM logic, we need it
-				// to be precise. So here, we refine the values.
-
-				const pcmInfo = parsePcmCodec(
-					trackData.info.decoderConfig.codec as PcmAudioCodec,
-				);
-				const frameSize = pcmInfo.sampleSize * trackData.info.numberOfChannels;
-
-				// Compute the precise duration
-				duration = packetData.byteLength / frameSize / trackData.info.sampleRate;
-
-				if (trackData.info.expectedNextPcmPacketTimestamp !== null) {
-					const diff = timestamp - trackData.info.expectedNextPcmPacketTimestamp;
-					if (diff < 0.01) {
-						timestamp = trackData.info.expectedNextPcmPacketTimestamp;
-					} else {
-						const paddedDuration = await this.padWithSilence(
-							trackData,
-							trackData.info.expectedNextPcmPacketTimestamp,
-							diff,
-						);
-						timestamp = trackData.info.expectedNextPcmPacketTimestamp + paddedDuration;
-					}
-				}
-
-				trackData.info.expectedNextPcmPacketTimestamp = timestamp + duration;
-			}
-
-			const internalSample = this.createSampleForTrack(
-				trackData,
-				packetData,
-				timestamp,
-				duration,
-				packet.type,
-			);
-
-			await this.registerSample(trackData, internalSample);
-		} finally {
-			release();
+			const headerLength = adtsFrame.crcCheck === null
+				? MIN_ADTS_FRAME_HEADER_SIZE
+				: MAX_ADTS_FRAME_HEADER_SIZE;
+			packetData = packetData.subarray(headerLength);
 		}
+
+		this.validateTimestamp(
+			trackData.track,
+			packet.timestamp,
+			packet.type === 'key',
+		);
+
+		let timestamp = packet.timestamp;
+		let duration = packet.duration;
+
+		if (trackData.info.requiresPcmTransformation) {
+			// Packets may have only approximate timestamp/duration information, but for our PCM logic, we need it
+			// to be precise. So here, we refine the values.
+
+			const pcmInfo = parsePcmCodec(
+				trackData.info.decoderConfig.codec as PcmAudioCodec,
+			);
+			const frameSize = pcmInfo.sampleSize * trackData.info.numberOfChannels;
+
+			// Compute the precise duration
+			duration = packetData.byteLength / frameSize / trackData.info.sampleRate;
+
+			if (trackData.info.expectedNextPcmPacketTimestamp !== null) {
+				const diff = timestamp - trackData.info.expectedNextPcmPacketTimestamp;
+				if (diff < 0.01) {
+					timestamp = trackData.info.expectedNextPcmPacketTimestamp;
+				} else {
+					const paddedDuration = await this.padWithSilence(
+						trackData,
+						trackData.info.expectedNextPcmPacketTimestamp,
+						diff,
+					);
+					timestamp = trackData.info.expectedNextPcmPacketTimestamp + paddedDuration;
+				}
+			}
+
+			trackData.info.expectedNextPcmPacketTimestamp = timestamp + duration;
+		}
+
+		const internalSample = this.createSampleForTrack(
+			trackData,
+			packetData,
+			timestamp,
+			duration,
+			packet.type,
+		);
+
+		await this.registerSample(trackData, internalSample);
 	}
 
 	private async padWithSilence(trackData: IsobmffAudioTrackData, timestamp: number, duration: number) {
@@ -715,21 +708,18 @@ export class IsobmffMuxer extends Muxer {
 	}
 
 	async addSubtitleCue(track: OutputSubtitleTrack, cue: SubtitleCue, meta?: SubtitleMetadata) {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
-		try {
-			const trackData = this.getSubtitleTrackData(track, meta);
+		const trackData = this.getSubtitleTrackData(track, meta);
 
-			this.validateTimestamp(trackData.track, cue.timestamp, true);
+		this.validateTimestamp(trackData.track, cue.timestamp, true);
 
-			if (track.source._codec === 'webvtt') {
-				trackData.cueQueue.push(cue);
-				await this.processWebVTTCues(trackData, cue.timestamp);
-			} else {
-				// TODO
-			}
-		} finally {
-			release();
+		if (track.source._codec === 'webvtt') {
+			trackData.cueQueue.push(cue);
+			await this.processWebVTTCues(trackData, cue.timestamp);
+		} else {
+			// TODO
 		}
 	}
 
@@ -1368,7 +1358,8 @@ export class IsobmffMuxer extends Muxer {
 
 	// eslint-disable-next-line @typescript-eslint/no-misused-promises
 	override async onTrackClose(track: OutputTrack) {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		const trackData = this.trackDatas.find(x => x.track === track);
 		if (trackData) {
@@ -1389,8 +1380,6 @@ export class IsobmffMuxer extends Muxer {
 			// Since a track is now closed, we may be able to write out chunks that were previously waiting
 			await this.interleaveSamples();
 		}
-
-		release();
 	}
 
 	ensureOneEnabledTrack() {
@@ -1417,7 +1406,8 @@ export class IsobmffMuxer extends Muxer {
 
 	/** Finalizes the file, making it ready for use. Must be called after all video and audio chunks have been added. */
 	async finalize() {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		this.allTracksKnown.resolve();
 		this.ensureOneEnabledTrack();
@@ -1582,7 +1572,5 @@ export class IsobmffMuxer extends Muxer {
 				this.format._options.onMoov(data, start);
 			}
 		}
-
-		release();
 	}
 }

@@ -2,7 +2,7 @@ import { expect, test } from 'vitest';
 import { Input } from '../../src/input.js';
 import { BufferSource, UrlSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
-import { EncodedPacketSink } from '../../src/media-sink.js';
+import { PacketCursor } from '../../src/cursors.js';
 import { EncodedAudioPacketSource } from '../../src/media-source.js';
 import { Output } from '../../src/output.js';
 import { StreamTarget, type StreamTargetChunk } from '../../src/target.js';
@@ -56,10 +56,10 @@ test('ADTS with metadata over StreamTarget', async () => {
 	const audioTrack = await input.getPrimaryAudioTrack();
 	assert(audioTrack);
 
-	const sink = new EncodedPacketSink(audioTrack);
+	const cursor = new PacketCursor(audioTrack);
 
 	let isFirst = true;
-	for await (const packet of sink.packets()) {
+	for await (const packet of cursor) {
 		await audioSource.add(packet, {
 			decoderConfig: isFirst ? (await audioTrack.getDecoderConfig())! : undefined,
 		});
@@ -113,11 +113,11 @@ test('StreamTarget write errors surface directly', async () => {
 	const audioTrack = await input.getPrimaryAudioTrack();
 	assert(audioTrack);
 
-	const sink = new EncodedPacketSink(audioTrack);
+	const cursor = new PacketCursor(audioTrack);
 
 	const run = async () => {
 		let isFirst = true;
-		for await (const packet of sink.packets()) {
+		for await (const packet of cursor) {
 			await audioSource.add(packet, {
 				decoderConfig: isFirst ? (await audioTrack.getDecoderConfig())! : undefined,
 			});

@@ -22,7 +22,7 @@ import {
 } from './matroska/ebml';
 import { MatroskaDemuxer } from './matroska/matroska-demuxer';
 import { Mp3Demuxer } from './mp3/mp3-demuxer';
-import { MP3_FRAME_HEADER_SIZE, getXingOffset, INFO, XING } from '../shared/mp3-misc';
+import { MP3_FRAME_HEADER_SIZE, getXingOffset, INFO, XING, Mp3FrameHeader } from '../shared/mp3-misc';
 import { ID3_V2_HEADER_SIZE, readId3V2Header } from './id3';
 import { readNextMp3FrameHeader } from './mp3/mp3-reader';
 import { OggDemuxer } from './ogg/ogg-demuxer';
@@ -36,7 +36,7 @@ import { TS_PACKET_SIZE } from './mpeg-ts/mpeg-ts-misc';
 import { HlsDemuxer } from './hls/hls-demuxer';
 import { HLS_MIME_TYPE } from './hls/hls-misc';
 import { PathedSource } from './source';
-import { MaybePromise } from './misc';
+import { MaybePromise, ResultValue } from './misc';
 
 /**
  * Base class representing an input media file format.
@@ -306,7 +306,15 @@ export class Mp3InputFormat extends InputFormat {
 			currentPos = slice.filePos + id3V2Header.size;
 		}
 
-		const firstResult = await readNextMp3FrameHeader(input._reader, currentPos, currentPos + 4096);
+		const result = new ResultValue<{
+			header: Mp3FrameHeader;
+			startPos: number;
+		} | null>();
+
+		let promise = readNextMp3FrameHeader(result, input._reader, currentPos, currentPos + 4096);
+		if (result.pending) await promise;
+
+		const firstResult = result.value;
 		if (!firstResult) {
 			return false;
 		}
@@ -330,11 +338,11 @@ export class Mp3InputFormat extends InputFormat {
 
 		// Fine, we found one frame header, but we're still not entirely sure this is MP3. Let's check if we can find
 		// another header right after it:
-		const secondResult = await readNextMp3FrameHeader(
-			input._reader,
-			currentPos,
-			currentPos + MP3_FRAME_HEADER_SIZE,
-		);
+		result.reset();
+		promise = readNextMp3FrameHeader(result, input._reader, currentPos, currentPos + MP3_FRAME_HEADER_SIZE);
+		if (result.pending) await promise;
+
+		const secondResult = result.value;
 		if (!secondResult) {
 			return false;
 		}

@@ -9,7 +9,8 @@ import { BufferTarget } from '../../src/target.js';
 import { Conversion } from '../../src/conversion.js';
 import { AC3_REGISTRATION_DESCRIPTOR, EAC3_REGISTRATION_DESCRIPTOR } from '../../src/codec-data.js';
 import { canEncode } from '../../src/encode.js';
-import { AudioSampleSink, EncodedPacketSink } from '../../src/media-sink.js';
+import { AudioSampleCursor, PacketCursor } from '../../src/cursors.js';
+import { PacketReader } from '../../src/packet.js';
 import { AudioSampleSource } from '../../src/media-source.js';
 import { Mp4OutputFormat } from '../../src/output-format.js';
 import { AudioSample } from '../../src/sample.js';
@@ -171,12 +172,12 @@ test('AC-3 decoding', async () => {
 	const { packetCount } = await track.computePacketStats();
 	const trackNumberOfChannels = await track.getNumberOfChannels();
 	const trackSampleRate = await track.getSampleRate();
-	const sink = new AudioSampleSink(track);
+	await using cursor = new AudioSampleCursor(track);
 
 	let sampleCount = 0;
 	let nextTimestamp = 0;
 
-	for await (using sample of sink.samples()) {
+	for await (const sample of cursor) {
 		expect(sample.timestamp).toBeCloseTo(nextTimestamp);
 		expect(sample.duration).toBe(0.032);
 		expect(sample.format).toBe('f32-planar');
@@ -202,12 +203,12 @@ test('E-AC-3 decoding', async () => {
 	const { packetCount } = await track.computePacketStats();
 	const trackNumberOfChannels = await track.getNumberOfChannels();
 	const trackSampleRate = await track.getSampleRate();
-	const sink = new AudioSampleSink(track);
+	await using cursor = new AudioSampleCursor(track);
 
 	let sampleCount = 0;
 	let nextTimestamp = 0;
 
-	for await (using sample of sink.samples()) {
+	for await (const sample of cursor) {
 		expect(sample.timestamp).toBeCloseTo(nextTimestamp);
 		expect(sample.duration).toBe(0.032);
 		expect(sample.format).toBe('f32-planar');
@@ -274,9 +275,9 @@ test('AC-3 encoding', async () => {
 	expect(await track.getSampleRate()).toBe(sampleRate);
 	expect(await track.getNumberOfChannels()).toBe(channels);
 
-	const sink = new EncodedPacketSink(track);
+	const cursor = new PacketCursor(track);
 	let packetCount = 0;
-	for await (const packet of sink.packets()) {
+	for await (const packet of cursor) {
 		expect(packet.type).toBe('key');
 		packetCount++;
 	}
@@ -324,9 +325,9 @@ test('E-AC-3 encoding', async () => {
 	expect(await track.getSampleRate()).toBe(sampleRate);
 	expect(await track.getNumberOfChannels()).toBe(channels);
 
-	const sink = new EncodedPacketSink(track);
+	const cursor = new PacketCursor(track);
 	let packetCount = 0;
-	for await (const packet of sink.packets()) {
+	for await (const packet of cursor) {
 		expect(packet.type).toBe('key');
 		packetCount++;
 	}
@@ -372,15 +373,14 @@ test('AC-3 with huge timestamps', async () => {
 	});
 
 	const track = (await input.getPrimaryAudioTrack())!;
-	const packetSink = new EncodedPacketSink(track);
-	const firstPacket = await packetSink.getFirstPacket();
+	const packetReader = new PacketReader(track);
+	const firstPacket = await packetReader.getFirst();
 	assert(firstPacket);
 
 	expect(firstPacket.timestamp).toBe(timestamp);
 
-	const sampleSink = new AudioSampleSink(track);
-	const iterator = sampleSink.samples(timestamp);
-	const firstSample = (await iterator.next()).value;
+	await using sampleCursor = new AudioSampleCursor(track);
+	const firstSample = await sampleCursor.seekTo(timestamp);
 	assert(firstSample);
 
 	expect(firstSample.timestamp).toBe(timestamp);
@@ -423,15 +423,14 @@ test('E-AC-3 with huge timestamps', async () => {
 	});
 
 	const track = (await input.getPrimaryAudioTrack())!;
-	const packetSink = new EncodedPacketSink(track);
-	const firstPacket = await packetSink.getFirstPacket();
+	const packetReader = new PacketReader(track);
+	const firstPacket = await packetReader.getFirst();
 	assert(firstPacket);
 
 	expect(firstPacket.timestamp).toBe(timestamp);
 
-	const sampleSink = new AudioSampleSink(track);
-	const iterator = sampleSink.samples(timestamp);
-	const firstSample = (await iterator.next()).value;
+	await using sampleCursor = new AudioSampleCursor(track);
+	const firstSample = await sampleCursor.seekTo(timestamp);
 	assert(firstSample);
 
 	expect(firstSample.timestamp).toBe(timestamp);

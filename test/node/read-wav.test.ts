@@ -1,6 +1,6 @@
 import { test } from 'vitest';
 import path from 'node:path';
-import { ALL_FORMATS, EncodedPacketSink, Input, FilePathSource } from '../../src/index.js';
+import { ALL_FORMATS, Input, FilePathSource, PacketCursor } from '../../src/index.js';
 
 const __dirname = new URL('.', import.meta.url).pathname;
 
@@ -16,9 +16,9 @@ test('Should handle WAV file with oversized ID3 chunk', async () => {
 		throw new Error('No audio track found');
 	}
 
-	const sink = new EncodedPacketSink(track);
+	const cursor = new PacketCursor(track);
 
-	for await (const packet of sink.packets()) {
+	for await (const packet of cursor) {
 		void packet;
 	}
 });

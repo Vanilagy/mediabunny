@@ -146,7 +146,8 @@ export class HlsMuxer extends Muxer {
 	}
 
 	async start(): Promise<void> {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		const someRelative = this.output._tracks.some(t => t.metadata.isRelativeToUnixEpoch);
 		const someNotRelative = this.output._tracks.some(t => !t.metadata.isRelativeToUnixEpoch);
@@ -509,8 +510,6 @@ export class HlsMuxer extends Muxer {
 					: [],
 			});
 		}
-
-		release();
 	}
 
 	async getMimeType(): Promise<string> {
@@ -537,13 +536,10 @@ export class HlsMuxer extends Muxer {
 		const playlist = this.playlists.find(x => x.tracks.includes(track));
 		assert(playlist); // If there isn't one then the assignment algo failed innit
 
-		const release = await playlist.mutex.acquire();
+		using lock = playlist.mutex.lock();
+		if (lock.pending) await lock.ready;
 
-		try {
-			await this.advancePlaylist(playlist);
-		} finally {
-			release();
-		}
+		await this.advancePlaylist(playlist);
 	}
 
 	getVideoTrackData(track: OutputVideoTrack, meta?: EncodedVideoChunkMetadata) {
@@ -612,25 +608,22 @@ export class HlsMuxer extends Muxer {
 		const trackData = this.getVideoTrackData(track, meta);
 		const playlist = trackData.playlist;
 
-		const release = await playlist.mutex.acquire();
+		using lock = playlist.mutex.lock();
+		if (lock.pending) await lock.ready;
 
-		try {
-			this.validateTimestamp(track, packet.timestamp, packet.type === 'key');
-			trackData.packets.push(packet);
+		this.validateTimestamp(track, packet.timestamp, packet.type === 'key');
+		trackData.packets.push(packet);
 
-			if (playlist.currentSegmentStartTimestamp === null) {
-				playlist.currentSegmentStartTimestamp = packet.timestamp;
-			} else if (!playlist.currentSegmentStartTimestampIsFixed) {
-				playlist.currentSegmentStartTimestamp = Math.min(
-					playlist.currentSegmentStartTimestamp,
-					packet.timestamp,
-				);
-			}
-
-			await this.advancePlaylist(playlist);
-		} finally {
-			release();
+		if (playlist.currentSegmentStartTimestamp === null) {
+			playlist.currentSegmentStartTimestamp = packet.timestamp;
+		} else if (!playlist.currentSegmentStartTimestampIsFixed) {
+			playlist.currentSegmentStartTimestamp = Math.min(
+				playlist.currentSegmentStartTimestamp,
+				packet.timestamp,
+			);
 		}
+
+		await this.advancePlaylist(playlist);
 	}
 
 	async addEncodedAudioPacket(
@@ -641,25 +634,22 @@ export class HlsMuxer extends Muxer {
 		const trackData = this.getAudioTrackData(track, meta);
 		const playlist = trackData.playlist;
 
-		const release = await playlist.mutex.acquire();
+		using lock = playlist.mutex.lock();
+		if (lock.pending) await lock.ready;
 
-		try {
-			this.validateTimestamp(track, packet.timestamp, packet.type === 'key');
-			trackData.packets.push(packet);
+		this.validateTimestamp(track, packet.timestamp, packet.type === 'key');
+		trackData.packets.push(packet);
 
-			if (playlist.currentSegmentStartTimestamp === null) {
-				playlist.currentSegmentStartTimestamp = packet.timestamp;
-			} else if (!playlist.currentSegmentStartTimestampIsFixed) {
-				playlist.currentSegmentStartTimestamp = Math.min(
-					playlist.currentSegmentStartTimestamp,
-					packet.timestamp,
-				);
-			}
-
-			await this.advancePlaylist(playlist);
-		} finally {
-			release();
+		if (playlist.currentSegmentStartTimestamp === null) {
+			playlist.currentSegmentStartTimestamp = packet.timestamp;
+		} else if (!playlist.currentSegmentStartTimestampIsFixed) {
+			playlist.currentSegmentStartTimestamp = Math.min(
+				playlist.currentSegmentStartTimestamp,
+				packet.timestamp,
+			);
 		}
+
+		await this.advancePlaylist(playlist);
 	}
 
 	async addSubtitleCue(
@@ -1425,35 +1415,32 @@ export class HlsMuxer extends Muxer {
 
 		this.format._options.onMaster?.(masterPlaylistText);
 
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
-		try {
-			let writer: Writer;
-			if (this.numWrittenMasterPlaylists === 0) {
-				// For the first master playlist write, we use the normal root writer getter, so that the target
-				// returned by Output.target emits valid write events.
-				writer = await this.output._getRootWriter(true);
-			} else {
-				// For subsequent master playlist writes, we *must* obtain a different target in order to overwrite
-				// the file.
-				const target = await this.output._getTarget({
-					path: pathedTarget.rootPath,
-					isRoot: true,
-					mimeType: HLS_MIME_TYPE,
-				});
-				writer = new Writer(target, true);
-				writer.start();
-			}
-
-			writer.write(textEncoder.encode(masterPlaylistText));
-
-			await writer.flush();
-			await writer.finalize();
-
-			this.numWrittenMasterPlaylists++;
-		} finally {
-			release();
+		let writer: Writer;
+		if (this.numWrittenMasterPlaylists === 0) {
+			// For the first master playlist write, we use the normal root writer getter, so that the target
+			// returned by Output.target emits valid write events.
+			writer = await this.output._getRootWriter(true);
+		} else {
+			// For subsequent master playlist writes, we *must* obtain a different target in order to overwrite
+			// the file.
+			const target = await this.output._getTarget({
+				path: pathedTarget.rootPath,
+				isRoot: true,
+				mimeType: HLS_MIME_TYPE,
+			});
+			writer = new Writer(target, true);
+			writer.start();
 		}
+
+		writer.write(textEncoder.encode(masterPlaylistText));
+
+		await writer.flush();
+		await writer.finalize();
+
+		this.numWrittenMasterPlaylists++;
 	}
 
 	private async tryWriteMasterPlaylist() {
@@ -1470,8 +1457,11 @@ export class HlsMuxer extends Muxer {
 	}
 
 	async finalize() {
-		const releases = await Promise.all(this.playlists.map(p => p.mutex.acquire()));
-		releases.forEach(release => release());
+		// Wait for all playlist mutexes
+		await Promise.all(this.playlists.map(async (playlist) => {
+			using lock = playlist.mutex.lock();
+			if (lock.pending) await lock.ready;
+		}));
 
 		for (const trackData of this.trackDatas) {
 			trackData.closed = true;

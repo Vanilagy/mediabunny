@@ -164,7 +164,8 @@ export class MatroskaMuxer extends Muxer {
 	}
 
 	async start() {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		this.writer = await this.output._getRootWriter(!!this.format._options.appendOnly);
 		this.ebmlWriter = new EBMLWriter(this.writer);
@@ -175,8 +176,6 @@ export class MatroskaMuxer extends Muxer {
 		this.createCues();
 
 		await this.writer.flush();
-
-		release();
 	}
 
 	private writeEBMLHeader() {
@@ -892,114 +891,105 @@ export class MatroskaMuxer extends Muxer {
 	}
 
 	async addEncodedVideoPacket(track: OutputVideoTrack, packet: EncodedPacket, meta?: EncodedVideoChunkMetadata) {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
-		try {
-			const trackData = this.getVideoTrackData(track, packet, meta);
+		const trackData = this.getVideoTrackData(track, packet, meta);
 
-			let packetData = packet.data;
-			if (track.source._codec === 'prores') {
-				if (packetData.byteLength < 8) {
-					throw new Error('ProRes packet too small, expected at least 8 bytes.');
-				}
-
-				// Trim off the frame container atom header. FFmpeg does this too and cites the "Matroska spec" as the
-				// reason, despite the spec not saying anything about this.
-				packetData = packetData.subarray(8);
+		let packetData = packet.data;
+		if (track.source._codec === 'prores') {
+			if (packetData.byteLength < 8) {
+				throw new Error('ProRes packet too small, expected at least 8 bytes.');
 			}
 
-			const isKeyFrame = packet.type === 'key';
-			this.validateTimestamp(trackData.track, packet.timestamp, isKeyFrame);
-
-			let timestamp = packet.timestamp;
-			let duration = packet.duration;
-
-			if (track.metadata.frameRate !== undefined) {
-				// Constrain the time values to the frame rate
-				timestamp = roundToDivisor(timestamp, track.metadata.frameRate);
-				duration = roundToDivisor(duration, track.metadata.frameRate);
-			}
-
-			const additions = trackData.info.alphaMode
-				? packet.sideData.alpha ?? null
-				: null;
-
-			const videoChunk = this.createInternalChunk(packetData, timestamp, duration, packet.type, additions);
-			if (track.source._codec === 'vp9') this.fixVP9ColorSpace(trackData, videoChunk);
-
-			trackData.chunkQueue.push(videoChunk);
-			await this.interleaveChunks();
-		} finally {
-			release();
+			// Trim off the frame container atom header. FFmpeg does this too and cites the "Matroska spec" as the
+			// reason, despite the spec not saying anything about this.
+			packetData = packetData.subarray(8);
 		}
+
+		const isKeyFrame = packet.type === 'key';
+		this.validateTimestamp(trackData.track, packet.timestamp, isKeyFrame);
+
+		let timestamp = packet.timestamp;
+		let duration = packet.duration;
+
+		if (track.metadata.frameRate !== undefined) {
+			// Constrain the time values to the frame rate
+			timestamp = roundToDivisor(timestamp, track.metadata.frameRate);
+			duration = roundToDivisor(duration, track.metadata.frameRate);
+		}
+
+		const additions = trackData.info.alphaMode
+			? packet.sideData.alpha ?? null
+			: null;
+
+		const videoChunk = this.createInternalChunk(packetData, timestamp, duration, packet.type, additions);
+		if (track.source._codec === 'vp9') this.fixVP9ColorSpace(trackData, videoChunk);
+
+		trackData.chunkQueue.push(videoChunk);
+		await this.interleaveChunks();
 	}
 
 	async addEncodedAudioPacket(track: OutputAudioTrack, packet: EncodedPacket, meta?: EncodedAudioChunkMetadata) {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
-		try {
-			const trackData = this.getAudioTrackData(track, packet, meta);
+		const trackData = this.getAudioTrackData(track, packet, meta);
 
-			let packetData = packet.data;
-			if (trackData.info.requiresAdtsStripping) {
-				const adtsFrame = readAdtsFrameHeader(FileSlice.tempFromBytes(packetData));
-				if (!adtsFrame) {
-					throw new Error('Expected ADTS frame, didn\'t get one.');
-				}
-
-				const headerLength = adtsFrame.crcCheck === null
-					? MIN_ADTS_FRAME_HEADER_SIZE
-					: MAX_ADTS_FRAME_HEADER_SIZE;
-				packetData = packetData.subarray(headerLength);
+		let packetData = packet.data;
+		if (trackData.info.requiresAdtsStripping) {
+			const adtsFrame = readAdtsFrameHeader(FileSlice.tempFromBytes(packetData));
+			if (!adtsFrame) {
+				throw new Error('Expected ADTS frame, didn\'t get one.');
 			}
 
-			const isKeyFrame = packet.type === 'key';
-			this.validateTimestamp(trackData.track, packet.timestamp, isKeyFrame);
-
-			const audioChunk = this.createInternalChunk(packetData, packet.timestamp, packet.duration, packet.type);
-			trackData.chunkQueue.push(audioChunk);
-			await this.interleaveChunks();
-		} finally {
-			release();
+			const headerLength = adtsFrame.crcCheck === null
+				? MIN_ADTS_FRAME_HEADER_SIZE
+				: MAX_ADTS_FRAME_HEADER_SIZE;
+			packetData = packetData.subarray(headerLength);
 		}
+
+		const isKeyFrame = packet.type === 'key';
+		this.validateTimestamp(trackData.track, packet.timestamp, isKeyFrame);
+
+		const audioChunk = this.createInternalChunk(packetData, packet.timestamp, packet.duration, packet.type);
+		trackData.chunkQueue.push(audioChunk);
+		await this.interleaveChunks();
 	}
 
 	async addSubtitleCue(track: OutputSubtitleTrack, cue: SubtitleCue, meta?: SubtitleMetadata) {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
-		try {
-			const trackData = this.getSubtitleTrackData(track, meta);
+		const trackData = this.getSubtitleTrackData(track, meta);
 
-			this.validateTimestamp(trackData.track, cue.timestamp, true);
+		this.validateTimestamp(trackData.track, cue.timestamp, true);
 
-			let bodyText = cue.text;
-			const timestampMs = Math.round(cue.timestamp * 1000);
+		let bodyText = cue.text;
+		const timestampMs = Math.round(cue.timestamp * 1000);
 
-			// Replace in-body timestamps so that they're relative to the cue start time
-			inlineTimestampRegex.lastIndex = 0;
-			bodyText = bodyText.replace(inlineTimestampRegex, (match) => {
-				const time = parseSubtitleTimestamp(match.slice(1, -1));
-				const offsetTime = time - timestampMs;
+		// Replace in-body timestamps so that they're relative to the cue start time
+		inlineTimestampRegex.lastIndex = 0;
+		bodyText = bodyText.replace(inlineTimestampRegex, (match) => {
+			const time = parseSubtitleTimestamp(match.slice(1, -1));
+			const offsetTime = time - timestampMs;
 
-				return `<${formatSubtitleTimestamp(offsetTime)}>`;
-			});
+			return `<${formatSubtitleTimestamp(offsetTime)}>`;
+		});
 
-			const body = textEncoder.encode(bodyText);
-			const additions = `${cue.settings ?? ''}\n${cue.identifier ?? ''}\n${cue.notes ?? ''}`;
+		const body = textEncoder.encode(bodyText);
+		const additions = `${cue.settings ?? ''}\n${cue.identifier ?? ''}\n${cue.notes ?? ''}`;
 
-			const subtitleChunk = this.createInternalChunk(
-				body,
-				cue.timestamp,
-				cue.duration,
-				'key',
-				additions.trim() ? textEncoder.encode(additions) : null,
-			);
+		const subtitleChunk = this.createInternalChunk(
+			body,
+			cue.timestamp,
+			cue.duration,
+			'key',
+			additions.trim() ? textEncoder.encode(additions) : null,
+		);
 
-			trackData.chunkQueue.push(subtitleChunk);
-			await this.interleaveChunks();
-		} finally {
-			release();
-		}
+		trackData.chunkQueue.push(subtitleChunk);
+		await this.interleaveChunks();
 	}
 
 	private async interleaveChunks(isFinalCall = false) {
@@ -1290,7 +1280,8 @@ export class MatroskaMuxer extends Muxer {
 
 	// eslint-disable-next-line @typescript-eslint/no-misused-promises
 	override async onTrackClose(track: OutputTrack) {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		const trackData = this.trackDatas.find(x => x.track === track);
 		if (trackData) {
@@ -1303,15 +1294,12 @@ export class MatroskaMuxer extends Muxer {
 
 		// Since a track is now closed, we may be able to write out chunks that were previously waiting
 		await this.interleaveChunks();
-
-		release();
 	}
 
 	/** Finalizes the file, making it ready for use. Must be called after all media chunks have been added. */
 	async finalize() {
-		const release = await this.mutex.acquire();
-
-		this.allTracksKnown.resolve();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		for (const trackData of this.trackDatas) {
 			trackData.closed = true;
@@ -1351,7 +1339,5 @@ export class MatroskaMuxer extends Muxer {
 			this.maybeCreateSeekHead(true);
 			this.ebmlWriter.writeEBML(this.seekHead);
 		}
-
-		release();
 	}
 }

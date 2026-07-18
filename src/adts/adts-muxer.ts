@@ -32,7 +32,8 @@ export class AdtsMuxer extends Muxer {
 	}
 
 	async start() {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		this.writer = await this.output._getRootWriter(true);
 
@@ -40,8 +41,6 @@ export class AdtsMuxer extends Muxer {
 			const id3Writer = new Id3V2Writer(this.writer);
 			id3Writer.writeId3V2Tag(this.output._metadataTags);
 		}
-
-		release();
 	}
 
 	async getMimeType() {
@@ -57,60 +56,57 @@ export class AdtsMuxer extends Muxer {
 		packet: EncodedPacket,
 		meta?: EncodedAudioChunkMetadata,
 	) {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
-		try {
-			this.validateTimestamp(track, packet.timestamp, packet.type === 'key');
+		this.validateTimestamp(track, packet.timestamp, packet.type === 'key');
 
-			// First packet - determine input format from metadata
-			if (this.inputIsAdts === null) {
-				validateAudioChunkMetadata(meta);
+		// First packet - determine input format from metadata
+		if (this.inputIsAdts === null) {
+			validateAudioChunkMetadata(meta);
 
-				const description = meta?.decoderConfig?.description;
+			const description = meta?.decoderConfig?.description;
 
-				// Follows from the Mediabunny Codec Registry:
-				this.inputIsAdts = !description;
+			// Follows from the Mediabunny Codec Registry:
+			this.inputIsAdts = !description;
 
-				if (!this.inputIsAdts) {
-					const config = parseAacAudioSpecificConfig(toUint8Array(description!));
-					const template = buildAdtsHeaderTemplate(config);
-					this.header = template.header;
-					this.headerBitstream = template.bitstream;
-				}
+			if (!this.inputIsAdts) {
+				const config = parseAacAudioSpecificConfig(toUint8Array(description!));
+				const template = buildAdtsHeaderTemplate(config);
+				this.header = template.header;
+				this.headerBitstream = template.bitstream;
 			}
-
-			if (this.inputIsAdts) {
-				// Packets are already ADTS frames, write them directly
-				const startPos = this.writer.getPos();
-				this.writer.write(packet.data);
-
-				if (this.format._options.onFrame) {
-					this.format._options.onFrame(packet.data, startPos);
-				}
-			} else {
-				assert(this.header);
-
-				// Packets are raw AAC, we gotta turn it into ADTS
-				const frameLength = packet.data.byteLength + this.header.byteLength;
-				writeAdtsFrameLength(this.headerBitstream!, frameLength);
-
-				const startPos = this.writer.getPos();
-				this.writer.write(this.header);
-				this.writer.write(packet.data);
-
-				if (this.format._options.onFrame) {
-					const frameBytes = new Uint8Array(frameLength);
-					frameBytes.set(this.header, 0);
-					frameBytes.set(packet.data, this.header.byteLength);
-
-					this.format._options.onFrame(frameBytes, startPos);
-				}
-			}
-
-			await this.writer.flush();
-		} finally {
-			release();
 		}
+
+		if (this.inputIsAdts) {
+			// Packets are already ADTS frames, write them directly
+			const startPos = this.writer.getPos();
+			this.writer.write(packet.data);
+
+			if (this.format._options.onFrame) {
+				this.format._options.onFrame(packet.data, startPos);
+			}
+		} else {
+			assert(this.header);
+
+			// Packets are raw AAC, we gotta turn it into ADTS
+			const frameLength = packet.data.byteLength + this.header.byteLength;
+			writeAdtsFrameLength(this.headerBitstream!, frameLength);
+
+			const startPos = this.writer.getPos();
+			this.writer.write(this.header);
+			this.writer.write(packet.data);
+
+			if (this.format._options.onFrame) {
+				const frameBytes = new Uint8Array(frameLength);
+				frameBytes.set(this.header, 0);
+				frameBytes.set(packet.data, this.header.byteLength);
+
+				this.format._options.onFrame(frameBytes, startPos);
+			}
+		}
+
+		await this.writer.flush();
 	}
 
 	async addSubtitleCue() {
@@ -118,7 +114,7 @@ export class AdtsMuxer extends Muxer {
 	}
 
 	async finalize() {
-		const release = await this.mutex.acquire(); // Required so that finalize() can't resolve before other calls
-		release();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready; // Required so that finalize() can't resolve before other calls
 	}
 }

@@ -1,5 +1,14 @@
 /* eslint-disable @stylistic/max-len */
-import { ALL_FORMATS, BufferSource, EncodedPacketSink, Input, InputAudioTrack, InputVideoTrack, UrlSource } from 'mediabunny';
+import {
+	ALL_FORMATS,
+	BufferSource,
+	Input,
+	InputAudioTrack,
+	InputVideoTrack,
+	PacketCursor,
+	PacketReader,
+	UrlSource,
+} from 'mediabunny';
 import { expect, test, vi } from 'vitest';
 import { HLS, HLS_FORMATS, HlsInputFormat, MP4 } from '../../src/input-format.js';
 import { assert, hexStringToBytes, rejectAfter } from '../../src/misc.js';
@@ -169,20 +178,20 @@ test.concurrent('Big Buck Bunny', { timeout: 15_000 }, async () => {
 
 	expect(Math.min(await videoTracks[0]!.getFirstTimestamp(), await audioTracks[0]!.getFirstTimestamp())).toBe(0);
 
-	const sink = new EncodedPacketSink(videoTracks[0]!);
-	const lastPacket = await sink.getPacket(Infinity);
+	const reader = new PacketReader(videoTracks[0]!);
+	const lastPacket = await reader.getAt(Infinity);
 	expect(lastPacket!.timestamp).toBeCloseTo(634.5899);
 
 	expect(sourceCount).toBe(1 + 5 + 5 + 1);
 
-	const middlePacket = await sink.getPacket(300);
+	const middlePacket = await reader.getAt(300);
 	expect(middlePacket!.timestamp).toBeCloseTo(299.9899);
 
 	expect(sourceCount).toBe(1 + 5 + 5 + 1 + 1);
 
 	let lastSequenceNumber = -Infinity;
 	let packetCount = 0;
-	for await (const packet of sink.packets()) {
+	for await (const packet of new PacketCursor(videoTracks[0]!)) {
 		expect(packet.sequenceNumber).toBeGreaterThan(lastSequenceNumber);
 
 		lastSequenceNumber = packet.sequenceNumber;
@@ -302,14 +311,17 @@ test.concurrent('AES and discontinuities', { timeout: 15_000 }, async () => {
 
 	expect(sourceCount).toBe(3); // Entry, first segment, and encryption key
 
-	const sink = new EncodedPacketSink(videoTrack);
-	const firstPacket = await sink.getFirstPacket();
+	const reader = new PacketReader(videoTrack);
+	const firstPacket = await reader.getFirst();
 	assert(firstPacket);
 
 	let packetCount = 0;
 
+	const cursor = new PacketCursor(videoTrack);
+	await cursor.seekTo(35);
+
 	// Loop over the discontunity boundary
-	for await (const packet of sink.packets((await sink.getPacket(35))!)) {
+	for await (const packet of cursor) {
 		packetCount++;
 
 		if (packet.timestamp >= 40) {
@@ -335,12 +347,12 @@ test.concurrent('Range requests', { timeout: 15_000 }, async () => {
 	const videoTrack = await input.getPrimaryVideoTrack();
 	assert(videoTrack);
 
-	const sink = new EncodedPacketSink(videoTrack);
-	const firstPacket = await sink.getFirstPacket();
+	const reader = new PacketReader(videoTrack);
+	const firstPacket = await reader.getFirst();
 	assert(firstPacket);
 	expect(firstPacket.timestamp).toBeCloseTo(0, 1);
 
-	const lastPacket = await sink.getPacket(Infinity);
+	const lastPacket = await reader.getAt(Infinity);
 	assert(lastPacket);
 	expect(lastPacket.timestamp).toBeCloseTo(47.26133333333333);
 
@@ -384,8 +396,7 @@ test.concurrent('Out-of-band audio track via ADTS', { timeout: 15_000 }, async (
 	expect(await videoTrack.hasOnlyKeyPackets()).toBe(false);
 
 	let lastTimestamp = -Infinity;
-	const sink = new EncodedPacketSink(audioTrack);
-	for await (const packet of sink.packets()) {
+	for await (const packet of new PacketCursor(audioTrack)) {
 		expect(packet.timestamp).toBeGreaterThan(lastTimestamp);
 		lastTimestamp = packet.timestamp;
 	}
@@ -540,13 +551,13 @@ test.concurrent('Single-value PDT', { timeout: 15_000 }, async () => {
 	const endDateTime = new Date(endTimestamp * 1000).toISOString();
 	expect(endDateTime).toBe('2013-05-08T17:41:40.000Z');
 
-	const sink = new EncodedPacketSink(track);
-	const firstPacket = await sink.getFirstPacket();
+	const reader = new PacketReader(track);
+	const firstPacket = await reader.getFirst();
 	assert(firstPacket);
 	expect(firstPacket.timestamp).toBe(firstTimestamp);
 	expect(firstPacket.sequenceNumber).toBe(752); // Make sure it's not huge
 
-	const lastPacket = await sink.getPacket(Infinity);
+	const lastPacket = await reader.getAt(Infinity);
 	assert(lastPacket);
 	expect(lastPacket.timestamp).toBeCloseTo(firstTimestamp + 50, 1);
 	expect(lastPacket.sequenceNumber).toBeLessThan(1e8 * 60);
@@ -564,9 +575,8 @@ test.concurrent('Duplicate PDT', { timeout: 30_000 }, async () => {
 	expect(await audioTrack.getFirstTimestamp()).toBe(Date.parse('2013-06-17T18:32:00Z') / 1000);
 
 	// Ensure the timestamps are monotonically increasing
-	const sink = new EncodedPacketSink(audioTrack);
 	let lastTimestamp = -Infinity;
-	for await (const packet of sink.packets()) {
+	for await (const packet of new PacketCursor(audioTrack)) {
 		expect(packet.timestamp).toBeGreaterThan(lastTimestamp);
 		lastTimestamp = packet.timestamp;
 	}
@@ -581,11 +591,11 @@ test.concurrent('PDT with large gaps', { timeout: 15_000 }, async () => {
 	const audioTrack = await input.getPrimaryAudioTrack();
 	assert(audioTrack);
 
-	const sink = new EncodedPacketSink(audioTrack);
-	const packet = await sink.getPacket(Date.parse('2012-12-06T19:10:03+00:00') / 1000 + 6);
+	const reader = new PacketReader(audioTrack);
+	const packet = await reader.getAt(Date.parse('2012-12-06T19:10:03+00:00') / 1000 + 6);
 	assert(packet);
 
-	const nextPacket = await sink.getNextPacket(packet);
+	const nextPacket = await reader.getNext(packet);
 	assert(nextPacket);
 
 	expect(nextPacket.timestamp - packet.timestamp).toBeGreaterThan(59);
@@ -625,7 +635,7 @@ test.concurrent('Single-value PDT with unix offsets disabled', { timeout: 15_000
 	const endTimestamp = await track.computeDuration();
 	expect(endTimestamp).toBe(firstTimestamp + 50);
 
-	const firstPacket = await new EncodedPacketSink(track).getFirstPacket();
+	const firstPacket = await new PacketReader(track).getFirst();
 	assert(firstPacket);
 	expect(firstPacket.timestamp).toBe(firstTimestamp); // Kinda obvious check tbh
 
@@ -798,14 +808,14 @@ test.concurrent('Live HLS', { timeout: 30_000 }, async () => {
 	]);
 	expect(duration).toBeGreaterThan((Date.now() / 1000) - 3600);
 
-	const sink = new EncodedPacketSink(videoTrack);
+	const reader = new PacketReader(videoTrack);
 
-	let currentLastPacket = await sink.getPacket(Infinity, { skipLiveWait: true });
+	let currentLastPacket = await reader.getAt(Infinity, { skipLiveWait: true });
 	assert(currentLastPacket);
 
 	// Actually find the last packet in decode order
 	while (true) {
-		const nextKnownPacket = await sink.getNextPacket(currentLastPacket, { skipLiveWait: true });
+		const nextKnownPacket = await reader.getNext(currentLastPacket, { skipLiveWait: true });
 		if (!nextKnownPacket) {
 			break;
 		}
@@ -814,7 +824,7 @@ test.concurrent('Live HLS', { timeout: 30_000 }, async () => {
 	}
 
 	// This tests waiting for the live stream to advance
-	const nextPacket = await sink.getNextPacket(currentLastPacket);
+	const nextPacket = await reader.getNext(currentLastPacket);
 	assert(nextPacket);
 	expect(nextPacket.sequenceNumber).toBeGreaterThan(currentLastPacket.sequenceNumber);
 
@@ -939,8 +949,8 @@ test.concurrent('Widevine encryption (SAMPLE-AES-CTR) fails without keys', async
 	const videoTrack = await input.getPrimaryVideoTrack();
 	assert(videoTrack);
 
-	const sink = new EncodedPacketSink(videoTrack);
-	await expect(sink.getPacket(Infinity)).rejects.toThrow();
+	const reader = new PacketReader(videoTrack);
+	await expect(reader.getAt(Infinity)).rejects.toThrow();
 });
 
 test.concurrent('Widevine encryption (SAMPLE-AES-CTR) succeeds with string keys', async () => {
@@ -980,8 +990,8 @@ test.concurrent('Widevine encryption (SAMPLE-AES-CTR) succeeds with string keys'
 	const videoTrack = await input.getPrimaryVideoTrack();
 	assert(videoTrack);
 
-	const sink = new EncodedPacketSink(videoTrack);
-	const lastPacket = await sink.getPacket(Infinity);
+	const reader = new PacketReader(videoTrack);
+	const lastPacket = await reader.getAt(Infinity);
 	assert(lastPacket);
 	expect(lastPacket.timestamp + lastPacket.duration).toBe(60);
 });
@@ -1013,8 +1023,8 @@ test.concurrent('Widevine encryption (SAMPLE-AES-CTR) succeeds with buffer keys'
 	const videoTrack = await input.getPrimaryVideoTrack();
 	assert(videoTrack);
 
-	const sink = new EncodedPacketSink(videoTrack);
-	const lastPacket = await sink.getPacket(Infinity);
+	const reader = new PacketReader(videoTrack);
+	const lastPacket = await reader.getAt(Infinity);
 	assert(lastPacket);
 	expect(lastPacket.timestamp + lastPacket.duration).toBe(60);
 });
@@ -1057,8 +1067,8 @@ test.concurrent('Widevine HLS passes #EXT-X-KEY PSSH boxes to key resolver', asy
 	const videoTrack = await input.getPrimaryVideoTrack();
 	assert(videoTrack);
 
-	const sink = new EncodedPacketSink(videoTrack);
-	const lastPacket = await sink.getPacket(Infinity);
+	const reader = new PacketReader(videoTrack);
+	const lastPacket = await reader.getAt(Infinity);
 	assert(lastPacket);
 	expect(lastPacket.timestamp + lastPacket.duration).toBe(60);
 });

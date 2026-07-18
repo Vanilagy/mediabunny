@@ -7,7 +7,8 @@ import { MpegTsOutputFormat } from '../../src/output-format.js';
 import { BufferTarget, StreamTarget, StreamTargetChunk } from '../../src/target.js';
 import { CanvasSource, EncodedAudioPacketSource, EncodedVideoPacketSource } from '../../src/media-source.js';
 import { QUALITY_HIGH } from '../../src/encode.js';
-import { EncodedPacketSink } from '../../src/media-sink.js';
+import { PacketCursor } from '../../src/cursors.js';
+import { PacketReader } from '../../src/packet.js';
 import { assert } from '../../src/misc.js';
 import { Conversion } from '../../src/conversion.js';
 
@@ -86,10 +87,10 @@ test('MPEG-TS muxing with AVC and AAC', async () => {
 	const aacTrack = await aacInput.getPrimaryAudioTrack();
 	assert(aacTrack);
 
-	const aacSink = new EncodedPacketSink(aacTrack);
+	const aacCursor = new PacketCursor(aacTrack);
 
 	let isFirst = true;
-	for await (const packet of aacSink.packets()) {
+	for await (const packet of aacCursor) {
 		if (packet.timestamp >= duration) break;
 
 		await audioSource.add(packet, {
@@ -147,48 +148,48 @@ test('MPEG-TS muxing with AVC and AAC', async () => {
 	expect(audioDecoderConfig.description).toBeUndefined(); // ADTS, no description
 
 	// Verify video packets are Annex B
-	const videoSink = new EncodedPacketSink(videoTrack);
+	const videoReader = new PacketReader(videoTrack);
 	let videoPacketCount = 0;
 
-	const firstVideoPacket = await videoSink.getFirstPacket();
+	const firstVideoPacket = await videoReader.getFirst();
 	assert(firstVideoPacket);
 	expect(firstVideoPacket.type).toBe('key');
 
-	const secondVideoPacket = await videoSink.getNextPacket(firstVideoPacket);
+	const secondVideoPacket = await videoReader.getNext(firstVideoPacket);
 	assert(secondVideoPacket);
 
-	for await (const packet of videoSink.packets()) {
+	for await (const packet of new PacketCursor(videoTrack)) {
 		expect(packet.data.slice(0, 4)).toEqual(new Uint8Array([0, 0, 0, 1])); // Annex B start code
 		videoPacketCount++;
 	}
 
 	// Check that seeking works
-	const middlePacket = await videoSink.getPacket(1);
+	const middlePacket = await videoReader.getAt(1);
 	assert(middlePacket);
 	expect(middlePacket.timestamp).toBeCloseTo(1);
 
 	expect(videoPacketCount).toBe(frameCount);
 
 	// Verify audio packets are ADTS
-	const audioSink = new EncodedPacketSink(audioTrack);
+	const audioReader = new PacketReader(audioTrack);
 	let audioPacketCount = 0;
 
-	const firstAudioPacket = await audioSink.getFirstPacket();
+	const firstAudioPacket = await audioReader.getFirst();
 	assert(firstAudioPacket);
 	expect(firstAudioPacket.type).toBe('key');
 
-	const secondAudioPacket = await audioSink.getNextPacket(firstAudioPacket);
+	const secondAudioPacket = await audioReader.getNext(firstAudioPacket);
 	assert(secondAudioPacket);
 	expect(secondAudioPacket.type).toBe('key');
 
-	for await (const packet of audioSink.packets()) {
+	for await (const packet of new PacketCursor(audioTrack)) {
 		expect(packet.data[0]).toBe(0xff); // ADTS sync word
 		expect(packet.data[1]! & 0xf0).toBe(0xf0); // ADTS sync word continued
 		audioPacketCount++;
 	}
 
 	// Check that seeking works
-	const audioMiddlePacket = await audioSink.getPacket(1);
+	const audioMiddlePacket = await audioReader.getAt(1);
 	assert(audioMiddlePacket);
 	expect(audioMiddlePacket.timestamp).toBeCloseTo(1, 1);
 
@@ -233,11 +234,11 @@ test('MPEG-TS muxing with HEVC and MP3', async () => {
 	const hevcTrack = await hevcInput.getPrimaryVideoTrack();
 	assert(hevcTrack);
 
-	const hevcSink = new EncodedPacketSink(hevcTrack);
+	const hevcCursor = new PacketCursor(hevcTrack);
 
 	let isFirstVideo = true;
 	let videoPacketCountWritten = 0;
-	for await (const packet of hevcSink.packets()) {
+	for await (const packet of hevcCursor) {
 		if (packet.timestamp >= duration) break;
 
 		await videoSource.add(packet, {
@@ -258,10 +259,10 @@ test('MPEG-TS muxing with HEVC and MP3', async () => {
 	const mp3Track = await mp3Input.getPrimaryAudioTrack();
 	assert(mp3Track);
 
-	const mp3Sink = new EncodedPacketSink(mp3Track);
+	const mp3Cursor = new PacketCursor(mp3Track);
 
 	let isFirstAudio = true;
-	for await (const packet of mp3Sink.packets()) {
+	for await (const packet of mp3Cursor) {
 		if (packet.timestamp >= duration) break;
 
 		await audioSource.add(packet, {
@@ -313,10 +314,10 @@ test('MPEG-TS muxing with HEVC and MP3', async () => {
 	expect(audioDecoderConfig.description).toBeUndefined(); // MP3 has no description
 
 	// Verify video packets are Annex B
-	const videoSink = new EncodedPacketSink(videoTrack);
+	const videoCursor = new PacketCursor(videoTrack);
 	let videoPacketCount = 0;
 
-	for await (const packet of videoSink.packets()) {
+	for await (const packet of videoCursor) {
 		expect(packet.data.slice(0, 4)).toEqual(new Uint8Array([0, 0, 0, 1])); // Annex B start code
 		videoPacketCount++;
 	}
@@ -324,10 +325,10 @@ test('MPEG-TS muxing with HEVC and MP3', async () => {
 	expect(videoPacketCount).toBe(videoPacketCountWritten);
 
 	// Verify audio packets are MP3 frames
-	const audioSink = new EncodedPacketSink(audioTrack);
+	const audioCursor = new PacketCursor(audioTrack);
 	let audioPacketCount = 0;
 
-	for await (const packet of audioSink.packets()) {
+	for await (const packet of audioCursor) {
 		expect(packet.data[0]).toBe(0xff); // MP3 sync word
 		audioPacketCount++;
 	}
@@ -412,10 +413,10 @@ test('MPEG-TS muxing with video only', async () => {
 	const audioTrack = await input.getPrimaryAudioTrack();
 	expect(audioTrack).toBeNull();
 
-	const videoSink = new EncodedPacketSink(videoTrack);
+	const videoCursor = new PacketCursor(videoTrack);
 	let videoPacketCount = 0;
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
-	for await (const packet of videoSink.packets()) {
+	for await (const packet of videoCursor) {
 		videoPacketCount++;
 	}
 	expect(videoPacketCount).toBe(frameCount);
@@ -442,10 +443,10 @@ test('MPEG-TS muxing with audio only', async () => {
 	const aacTrack = await aacInput.getPrimaryAudioTrack();
 	assert(aacTrack);
 
-	const aacSink = new EncodedPacketSink(aacTrack);
+	const aacCursor = new PacketCursor(aacTrack);
 
 	let isFirst = true;
-	for await (const packet of aacSink.packets()) {
+	for await (const packet of aacCursor) {
 		if (packet.timestamp >= duration) break;
 
 		await audioSource.add(packet, {
@@ -472,10 +473,10 @@ test('MPEG-TS muxing with audio only', async () => {
 	assert(audioTrack);
 	expect(await audioTrack.getCodec()).toBe('aac');
 
-	const audioSink = new EncodedPacketSink(audioTrack);
+	const audioCursor = new PacketCursor(audioTrack);
 	let audioPacketCount = 0;
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
-	for await (const packet of audioSink.packets()) {
+	for await (const packet of audioCursor) {
 		audioPacketCount++;
 	}
 	expect(audioPacketCount).toBeGreaterThan(0);
@@ -505,11 +506,11 @@ test('MPEG-TS muxing with two video tracks', async () => {
 	const hevcTrack = await hevcInput.getPrimaryVideoTrack();
 	assert(hevcTrack);
 
-	const hevcSink = new EncodedPacketSink(hevcTrack);
+	const hevcCursor = new PacketCursor(hevcTrack);
 	const hevcDecoderConfig = await hevcTrack.getDecoderConfig();
 
 	let isFirst = true;
-	for await (const packet of hevcSink.packets()) {
+	for await (const packet of hevcCursor) {
 		if (packet.timestamp >= duration) break;
 
 		const meta = { decoderConfig: isFirst ? hevcDecoderConfig! : undefined };
@@ -561,13 +562,11 @@ test('MPEG-TS muxing with two audio tracks', async () => {
 	const aacTrack = await aacInput.getPrimaryAudioTrack();
 	assert(aacTrack);
 
-	const aacSink = new EncodedPacketSink(aacTrack);
-
 	const decoderConfig = await aacTrack.getDecoderConfig();
 	assert(decoderConfig);
 
 	let isFirst1 = true;
-	for await (const packet of aacSink.packets()) {
+	for await (const packet of new PacketCursor(aacTrack)) {
 		if (packet.timestamp >= duration) break;
 
 		await audioSource1.add(packet, {
@@ -577,7 +576,7 @@ test('MPEG-TS muxing with two audio tracks', async () => {
 	}
 
 	let isFirst2 = true;
-	for await (const packet of aacSink.packets()) {
+	for await (const packet of new PacketCursor(aacTrack)) {
 		if (packet.timestamp >= duration) break;
 
 		await audioSource2.add(packet, {
@@ -650,14 +649,14 @@ test('MPEG-TS transmux (Annex B and ADTS passthrough)', async () => {
 	expect(await outputAudioTrack.getCodec()).toBe(await inputAudioTrack.getCodec());
 
 	// Verify video packets are Annex B
-	const videoSink = new EncodedPacketSink(outputVideoTrack);
-	const firstVideoPacket = await videoSink.getFirstPacket();
+	const videoReader = new PacketReader(outputVideoTrack);
+	const firstVideoPacket = await videoReader.getFirst();
 	assert(firstVideoPacket);
 	expect(firstVideoPacket.data.slice(0, 4)).toEqual(new Uint8Array([0, 0, 0, 1]));
 
 	// Verify audio packets are ADTS
-	const audioSink = new EncodedPacketSink(outputAudioTrack);
-	const firstAudioPacket = await audioSink.getFirstPacket();
+	const audioReader = new PacketReader(outputAudioTrack);
+	const firstAudioPacket = await audioReader.getFirst();
 	assert(firstAudioPacket);
 	expect(firstAudioPacket.data[0]).toBe(0xff);
 	expect(firstAudioPacket.data[1]! & 0xf0).toBe(0xf0);
@@ -730,10 +729,10 @@ test('MPEG-TS muxing with StreamTarget', async () => {
 	assert(videoTrack);
 	expect(await videoTrack.getCodec()).toBe('avc');
 
-	const videoSink = new EncodedPacketSink(videoTrack);
+	const videoCursor = new PacketCursor(videoTrack);
 	let videoPacketCount = 0;
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
-	for await (const packet of videoSink.packets()) {
+	for await (const packet of videoCursor) {
 		videoPacketCount++;
 	}
 	expect(videoPacketCount).toBe(frameCount);

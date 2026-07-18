@@ -2446,13 +2446,23 @@ class ReadOrchestrator {
 	}
 
 	dispose() {
+		this.disposed = true;
+
+		const error = new InputDisposedError();
+		for (const worker of this.workers) {
+			worker.pendingSlices.forEach(x => x.reject(error));
+		}
+		for (const queued of this.queuedReads) {
+			queued.pendingSlices.forEach(x => x.reject(error));
+		}
+
 		for (const worker of this.workers) {
 			worker.aborted = true;
 		}
 
 		this.workers.length = 0;
+		this.queuedReads.length = 0;
 		this.cache.length = 0;
-		this.disposed = true;
 	}
 }
 

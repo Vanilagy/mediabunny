@@ -3,7 +3,7 @@ import path from 'node:path';
 import { Input } from '../../src/input.js';
 import { BufferSource, FilePathSource } from '../../src/source.js';
 import { ADTS, ALL_FORMATS } from '../../src/input-format.js';
-import { EncodedPacketSink } from '../../src/media-sink.js';
+import { PacketCursor } from '../../src/cursors.js';
 import { Output } from '../../src/output.js';
 import { BufferTarget } from '../../src/target.js';
 import { MkvOutputFormat } from '../../src/output-format.js';
@@ -49,10 +49,10 @@ test('Matroska muxer internally converts ADTS to AAC', async () => {
 	const outputDecoderConfig = await outputTrack.getDecoderConfig();
 	expect(outputDecoderConfig!.description).toBeDefined();
 
-	const outputSink = new EncodedPacketSink(outputTrack);
+	const outputCursor = new PacketCursor(outputTrack);
 
 	let count = 0;
-	for await (const packet of outputSink.packets()) {
+	for await (const packet of outputCursor) {
 		// Packets should NOT be ADTS frames (should not start with 0xFFF sync word)
 		const isAdts = packet.data[0] === 0xff && (packet.data[1]! & 0xf0) === 0xf0;
 		expect(isAdts).toBe(false);

@@ -3,7 +3,7 @@ import { Input } from '../../src/input.js';
 import { UrlSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { assert } from '../../src/misc.js';
-import { AudioSampleSink } from '../../src/media-sink.js';
+import { AudioSampleCursor } from '../../src/cursors.js';
 
 // https://github.com/Vanilagy/mediabunny/issues/370
 test('Negative audio timestamps are preserved', async () => {
@@ -17,9 +17,9 @@ test('Negative audio timestamps are preserved', async () => {
 
 	expect(await track.getFirstTimestamp()).toBeLessThan(0);
 
-	const sink = new AudioSampleSink(track);
+	await using cursor = new AudioSampleCursor(track);
 
-	for await (using sample of sink.samples()) {
+	for await (const sample of cursor) {
 		expect(sample.timestamp).toBe(await track.getFirstTimestamp());
 		break;
 	}

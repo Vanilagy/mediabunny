@@ -4,7 +4,7 @@ import { Input } from '../../src/input.js';
 import { BufferSource, FilePathSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { assert, last, toUint8Array } from '../../src/misc.js';
-import { AudioSampleSink, EncodedPacketSink, VideoSampleSink } from '../../src/media-sink.js';
+import { AudioSampleCursor, PacketCursor, VideoSampleCursor } from '../../src/cursors.js';
 import { NodeAvVideoDecoder } from '../../packages/server/src/video-decoder.js';
 import { NodeAvVideoEncoder } from '../../packages/server/src/video-encoder.js';
 import { NodeAvAudioDecoder } from '../../packages/server/src/audio-decoder.js';
@@ -72,9 +72,9 @@ describe('Video', async () => {
 
 		await decoder.init();
 
-		const sink = new EncodedPacketSink(videoTrack);
+		const cursor = new PacketCursor(videoTrack);
 		let packetCount = 0;
-		for await (const packet of sink.packets()) {
+		for await (const packet of cursor) {
 			packetTimestamps.push(packet.timestamp);
 			packetTimestamps.sort((a, b) => a - b); // Because of B-frames
 			await decoder.decode(packet);
@@ -93,7 +93,8 @@ describe('Video', async () => {
 		packetTimestamps.length = 0;
 
 		packetCount = 0;
-		for await (const packet of sink.packets((await sink.getKeyPacket(2))!)) {
+		await cursor.seekToKey(2);
+		for await (const packet of cursor) {
 			packetTimestamps.push(packet.timestamp);
 			packetTimestamps.sort((a, b) => a - b); // Because of B-frames
 			await decoder.decode(packet);
@@ -631,8 +632,8 @@ describe('Video', async () => {
 		const videoTrack = (await input.getPrimaryVideoTrack())!;
 		expect(await videoTrack.canBeTransparent()).toBe(true);
 
-		const sink = new VideoSampleSink(videoTrack);
-		using sample = (await sink.getSample(0))!;
+		await using cursor = new VideoSampleCursor(videoTrack);
+		const sample = (await cursor.seekTo(0))!;
 
 		expect(sample.format).toBe('I444AP12');
 
@@ -657,7 +658,7 @@ describe('Video', async () => {
 	});
 
 	test('Non-square pixels encode and decode #1', async () => {
-		await encodeDecodeTest('avc', { displayWidth: 2 * 1280, displayHeight: 720 }, async (packet, meta, i) => {
+		await encodeDecodeTest('avc', { displayWidth: 2 * 1280, displayHeight: 720 }, async (_, meta, i) => {
 			if (i === 0) {
 				expect(meta.decoderConfig).toBeDefined();
 				expect(meta.decoderConfig!.codedWidth).toBe(1280);
@@ -674,7 +675,7 @@ describe('Video', async () => {
 	});
 
 	test('Non-square pixels encode and decode #2', async () => {
-		await encodeDecodeTest('avc', { displayWidth: 1280, displayHeight: 2 * 720 }, async (packet, meta, i) => {
+		await encodeDecodeTest('avc', { displayWidth: 1280, displayHeight: 2 * 720 }, async (_, meta, i) => {
 			if (i === 0) {
 				expect(meta.decoderConfig).toBeDefined();
 				expect(meta.decoderConfig!.codedWidth).toBe(1280);
@@ -820,9 +821,9 @@ describe('Video', async () => {
 		assert(inputTrack);
 
 		const packetTimestamps: number[] = [];
-		const packetSink = new EncodedPacketSink(inputTrack);
+		const packetCursor = new PacketCursor(inputTrack);
 
-		for await (const packet of packetSink.packets()) {
+		for await (const packet of packetCursor) {
 			if (duration !== undefined && packet.timestamp >= duration) {
 				break;
 			}
@@ -857,10 +858,10 @@ describe('Video', async () => {
 
 		expect(await newInputTrack.getCodec()).toBe(codec);
 
-		const sink = new VideoSampleSink(newInputTrack);
+		await using cursor = new VideoSampleCursor(newInputTrack);
 
 		let sampleCount = 0;
-		for await (using sample of sink.samples()) {
+		for await (const sample of cursor) {
 			expect(sample.codedWidth).toBe(await inputTrack.getCodedWidth());
 			expect(sample.codedHeight).toBe(await inputTrack.getCodedHeight());
 			expect(sample.timestamp).toBe(packetTimestamps[sampleCount]);
@@ -880,8 +881,8 @@ describe('Video', async () => {
 		const videoTrack = await input.getPrimaryVideoTrack();
 		assert(videoTrack);
 
-		const sink = new VideoSampleSink(videoTrack);
-		using sample = await sink.getSample(0);
+		await using cursor = new VideoSampleCursor(videoTrack);
+		const sample = await cursor.seekTo(0);
 		assert(sample);
 
 		expect(sample._data).toBeInstanceOf(AvFrameVideoSampleResource);
@@ -1353,9 +1354,9 @@ describe('Audio', async () => {
 
 		await decoder.init();
 
-		const sink = new EncodedPacketSink(audioTrack);
+		const cursor = new PacketCursor(audioTrack);
 		let packetCount = 0;
-		for await (const packet of sink.packets()) {
+		for await (const packet of cursor) {
 			packetTimestamps.push(packet.timestamp);
 			await decoder.decode(packet);
 
@@ -1373,7 +1374,8 @@ describe('Audio', async () => {
 		packetTimestamps.length = 0;
 
 		packetCount = 0;
-		for await (const packet of sink.packets((await sink.getKeyPacket(5))!)) {
+		await cursor.seekToKey(5);
+		for await (const packet of cursor) {
 			packetTimestamps.push(packet.timestamp);
 			await decoder.decode(packet);
 
@@ -1895,10 +1897,10 @@ describe('Audio', async () => {
 		expect(await newInputTrack.getCodec()).toBe(codec);
 		expect(await newInputTrack.computeDuration()).toBeCloseTo(await inputTrack.computeDuration(), 0);
 
-		const sink = new AudioSampleSink(newInputTrack);
+		await using cursor = new AudioSampleCursor(newInputTrack);
 
 		let sampleCount = 0;
-		for await (using sample of sink.samples()) {
+		for await (const sample of cursor) {
 			expect([await inputTrack.getNumberOfChannels(), 2].includes(sample.numberOfChannels)).toBe(true);
 			expect(sample.sampleRate).toBe(await inputTrack.getSampleRate());
 
@@ -1917,8 +1919,8 @@ describe('Audio', async () => {
 		const audioTrack = await input.getPrimaryAudioTrack();
 		assert(audioTrack);
 
-		const sink = new AudioSampleSink(audioTrack);
-		using sample = await sink.getSample(await audioTrack.getFirstTimestamp());
+		await using cursor = new AudioSampleCursor(audioTrack);
+		const sample = await cursor.seekToFirst();
 		assert(sample);
 
 		expect(sample._data).toBeInstanceOf(AvFrameAudioSampleResource);

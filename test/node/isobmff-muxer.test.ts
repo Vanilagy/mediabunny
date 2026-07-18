@@ -3,7 +3,7 @@ import path from 'node:path';
 import { Input } from '../../src/input.js';
 import { BufferSource, FilePathSource } from '../../src/source.js';
 import { ADTS, ALL_FORMATS } from '../../src/input-format.js';
-import { EncodedPacketSink } from '../../src/media-sink.js';
+import { PacketCursor } from '../../src/cursors.js';
 import { Output } from '../../src/output.js';
 import { BufferTarget } from '../../src/target.js';
 import { Mp4OutputFormat } from '../../src/output-format.js';
@@ -51,10 +51,10 @@ test('ISOBMFF muxer internally converts ADTS to AAC', async () => {
 	const outputDecoderConfig = await outputTrack.getDecoderConfig();
 	expect(outputDecoderConfig!.description).toBeDefined();
 
-	const outputSink = new EncodedPacketSink(outputTrack);
+	const outputCursor = new PacketCursor(outputTrack);
 
 	let count = 0;
-	for await (const packet of outputSink.packets()) {
+	for await (const packet of outputCursor) {
 		// Packets should NOT be ADTS frames (should not start with 0xFFF sync word)
 		const isAdts = packet.data[0] === 0xff && (packet.data[1]! & 0xf0) === 0xf0;
 		expect(isAdts).toBe(false);
@@ -75,9 +75,9 @@ test('Fragmented fMP4 with video+audio preserves B-frame CTS', async () => {
 	assert(videoTrack);
 	assert(audioTrack);
 
-	const originalVideoSink = new EncodedPacketSink(videoTrack);
+	const originalVideoCursor = new PacketCursor(videoTrack);
 	const originalTimestamps: number[] = [];
-	for await (const packet of originalVideoSink.packets()) {
+	for await (const packet of originalVideoCursor) {
 		originalTimestamps.push(packet.timestamp);
 	}
 
@@ -97,10 +97,10 @@ test('Fragmented fMP4 with video+audio preserves B-frame CTS', async () => {
 	const outputVideoTrack = await outputAsInput.getPrimaryVideoTrack();
 	assert(outputVideoTrack);
 
-	const videoSink = new EncodedPacketSink(outputVideoTrack);
+	const videoCursor = new PacketCursor(outputVideoTrack);
 
 	const timestamps: number[] = [];
-	for await (const packet of videoSink.packets()) {
+	for await (const packet of videoCursor) {
 		timestamps.push(packet.timestamp);
 	}
 
@@ -163,11 +163,11 @@ test('Non-zero start timestamp, regular MP4', async () => {
 
 	const track = await input.getPrimaryVideoTrack();
 	assert(track);
-	const sink = new EncodedPacketSink(track);
+	const cursor = new PacketCursor(track);
 
 	const timestamps: number[] = [];
 	const durations: number[] = [];
-	for await (const packet of sink.packets()) {
+	for await (const packet of cursor) {
 		timestamps.push(packet.timestamp);
 		durations.push(packet.duration);
 	}
@@ -207,11 +207,11 @@ test('Non-zero start timestamp, fragmented MP4', async () => {
 
 	const track = await input.getPrimaryVideoTrack();
 	assert(track);
-	const sink = new EncodedPacketSink(track);
+	const cursor = new PacketCursor(track);
 
 	const timestamps: number[] = [];
 	const durations: number[] = [];
-	for await (const packet of sink.packets()) {
+	for await (const packet of cursor) {
 		timestamps.push(packet.timestamp);
 		durations.push(packet.duration);
 	}
@@ -303,10 +303,10 @@ test('PCM audio, silence padding', async () => {
 	const numChannels = await audioTrack.getNumberOfChannels();
 
 	const expectedFrameCount = 48000 + 256;
-	const sink = new EncodedPacketSink(audioTrack);
+	const cursor = new PacketCursor(audioTrack);
 	let frameCount = 0;
 
-	for await (const packet of sink.packets()) {
+	for await (const packet of cursor) {
 		frameCount += packet.byteLength / 2 / numChannels;
 	}
 
@@ -343,10 +343,10 @@ test('PCM audio, no silence padding with approximate timestamps', async () => {
 	const numChannels = await audioTrack.getNumberOfChannels();
 
 	const expectedFrameCount = 256 + 256;
-	const sink = new EncodedPacketSink(audioTrack);
+	const cursor = new PacketCursor(audioTrack);
 	let frameCount = 0;
 
-	for await (const packet of sink.packets()) {
+	for await (const packet of cursor) {
 		frameCount += packet.byteLength / 2 / numChannels;
 	}
 

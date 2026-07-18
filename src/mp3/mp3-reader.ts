@@ -6,18 +6,20 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { MaybeRelevantPromise, ResultValue } from '../misc';
 import { MP3_FRAME_HEADER_SIZE, getMp3ChannelCount, Mp3FrameHeader, readMp3FrameHeader } from '../../shared/mp3-misc';
 import { Reader, readU32Be } from '../reader';
 
 export const readNextMp3FrameHeader = async (
+	res: ResultValue<{
+		header: Mp3FrameHeader;
+		startPos: number;
+	} | null>,
 	reader: Reader,
 	startPos: number,
 	until: number | null,
 	ref: Mp3FrameHeader | null = null,
-): Promise<{
-	header: Mp3FrameHeader;
-	startPos: number;
-} | null> => {
+): MaybeRelevantPromise => {
 	const CHUNK_SIZE = 2 ** 16; // So we don't need to grab thousands of slices
 	let currentPos = startPos;
 
@@ -49,7 +51,7 @@ export const readNextMp3FrameHeader = async (
 					&& getMp3ChannelCount(result.header.channel) === getMp3ChannelCount(ref.channel)
 				))
 			) {
-				return { header: result.header, startPos: currentPos };
+				return res.set({ header: result.header, startPos: currentPos });
 			}
 
 			slice.filePos = posBeforeRead + result.bytesAdvanced;
@@ -57,5 +59,5 @@ export const readNextMp3FrameHeader = async (
 		}
 	}
 
-	return null;
+	return res.set(null);
 };

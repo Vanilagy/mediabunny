@@ -77,11 +77,10 @@ export class OggMuxer extends Muxer {
 	}
 
 	async start() {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		this.writer = await this.output._getRootWriter(true); // Ogg is always monotonically written!
-
-		release();
 	}
 
 	async getMimeType() {
@@ -262,34 +261,31 @@ export class OggMuxer extends Muxer {
 	}
 
 	async addEncodedAudioPacket(track: OutputAudioTrack, packet: EncodedPacket, meta?: EncodedAudioChunkMetadata) {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
-		try {
-			const trackData = this.getTrackData(track, meta);
+		const trackData = this.getTrackData(track, meta);
 
-			this.validateTimestamp(trackData.track, packet.timestamp, packet.type === 'key');
+		this.validateTimestamp(trackData.track, packet.timestamp, packet.type === 'key');
 
-			const currentTimestampInSamples = trackData.currentTimestampInSamples;
+		const currentTimestampInSamples = trackData.currentTimestampInSamples;
 
-			const { durationInSamples, vorbisBlockSize } = extractSampleMetadata(
-				packet.data,
-				trackData.codecInfo,
-				trackData.vorbisLastBlocksize,
-			);
-			trackData.currentTimestampInSamples += durationInSamples;
-			trackData.vorbisLastBlocksize = vorbisBlockSize;
+		const { durationInSamples, vorbisBlockSize } = extractSampleMetadata(
+			packet.data,
+			trackData.codecInfo,
+			trackData.vorbisLastBlocksize,
+		);
+		trackData.currentTimestampInSamples += durationInSamples;
+		trackData.vorbisLastBlocksize = vorbisBlockSize;
 
-			trackData.packetQueue.push({
-				data: packet.data,
-				timestampInSamples: currentTimestampInSamples,
-				durationInSamples,
-				forcePageFlush: false,
-			});
+		trackData.packetQueue.push({
+			data: packet.data,
+			timestampInSamples: currentTimestampInSamples,
+			durationInSamples,
+			forcePageFlush: false,
+		});
 
-			await this.interleavePages();
-		} finally {
-			release();
-		}
+		await this.interleavePages();
 	}
 
 	addSubtitleCue(): never {
@@ -488,7 +484,8 @@ export class OggMuxer extends Muxer {
 
 	// eslint-disable-next-line @typescript-eslint/no-misused-promises
 	override async onTrackClose(track: OutputTrack) {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		const trackData = this.trackDatas.find(x => x.track === track);
 		if (trackData) {
@@ -501,12 +498,11 @@ export class OggMuxer extends Muxer {
 
 		// Since a track is now closed, we may be able to write out chunks that were previously waiting
 		await this.interleavePages();
-
-		release();
 	}
 
 	async finalize() {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		this.allTracksKnown.resolve();
 
@@ -521,7 +517,5 @@ export class OggMuxer extends Muxer {
 				this.writePage(trackData, true);
 			}
 		}
-
-		release();
 	}
 }

@@ -8,6 +8,7 @@
 
 import { Demuxer, DurationMetadataRequestOptions } from './demuxer';
 import { InputFormat, InputFormatOptions, validateInputFormatOptions } from './input-format';
+import { SampleCursor } from './cursors';
 import {
 	InputAudioTrack,
 	InputAudioTrackBacking,
@@ -22,7 +23,6 @@ import {
 	prefer,
 	desc,
 } from './input-track';
-import { PacketRetrievalOptions } from './media-sink';
 import {
 	arrayArgmin,
 	arrayCount,
@@ -39,6 +39,7 @@ import {
 	SourceRequest,
 	sourceRequestsAreEqual,
 } from './source';
+import { PacketRetrievalOptions } from './packet';
 
 polyfillSymbolDispose();
 
@@ -120,7 +121,6 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 	_backingToTrack = new Map<InputTrackBacking, InputTrack>();
 	/** @internal */
 	_disposed = false;
-	/** @internal */
 	_nextSourceCacheAge = 0;
 	/** @internal */
 	_sourceRefs: SourceRef[] = [];
@@ -132,6 +132,10 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 		cacheGroup: number;
 		promise: Promise<SourceCacheEntry>;
 	}[] = [];
+
+	/** @internal */
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	_openSampleCursors = new Set<SampleCursor<any>>();
 
 	/** @internal */
 	_formatOptions: InputFormatOptions;
@@ -532,6 +536,10 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 			void this._demuxerPromise
 				.then(demuxer => demuxer.dispose())
 				.catch(() => {});
+		}
+
+		for (const cursor of [...this._openSampleCursors]) {
+			void cursor.close();
 		}
 	}
 

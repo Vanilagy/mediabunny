@@ -458,13 +458,13 @@ test('encodeOptions', () => {
 	using a = new VideoSample(canvas, { timestamp: 0 });
 	expect(a.encodeOptions).toEqual({});
 
-	// It can be overridden via the setter
-	a.setEncodeOptions({ keyFrame: true });
-	expect(a.encodeOptions).toEqual({ keyFrame: true });
+	// It can be overridden when cloning
+	using aClone = a.clone({ encodeOptions: { keyFrame: true } });
+	expect(aClone.encodeOptions).toEqual({ keyFrame: true });
 
 	// Cloning carries the encode options over
-	using aClone = a.clone();
-	expect(aClone.encodeOptions).toEqual({ keyFrame: true });
+	using aCloneClone = aClone.clone();
+	expect(aCloneClone.encodeOptions).toEqual({ keyFrame: true });
 
 	// It can be set via the constructor
 	using b = new VideoSample(canvas, { timestamp: 0, encodeOptions: { keyFrame: true } });

@@ -52,12 +52,11 @@ export class FlacMuxer extends Muxer {
 	}
 
 	async start() {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		this.writer = await this.output._getRootWriter(!!this.format._options.appendOnly);
 		this.writer.write(FLAC_HEADER);
-
-		release();
 	}
 
 	writeHeader({
@@ -211,92 +210,89 @@ export class FlacMuxer extends Muxer {
 		packet: EncodedPacket,
 		meta?: EncodedAudioChunkMetadata,
 	): Promise<void> {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
-		try {
-			this.validateTimestamp(
-				track,
-				packet.timestamp,
-				packet.type === 'key',
+		this.validateTimestamp(
+			track,
+			packet.timestamp,
+			packet.type === 'key',
+		);
+
+		if (this.sampleRate === null) {
+			// It's the first packet
+			validateAudioChunkMetadata(meta);
+
+			assert(meta);
+			assert(meta.decoderConfig);
+			assert(meta.decoderConfig.description);
+
+			this.sampleRate = meta.decoderConfig.sampleRate;
+			this.channels = meta.decoderConfig.numberOfChannels;
+
+			const descriptionBitstream = new Bitstream(
+				toUint8Array(meta.decoderConfig.description),
 			);
+			// skip 'fLaC' + block size + frame size + sample rate + number of channels
+			// See demuxer for the exact structure
+			descriptionBitstream.skipBits(103 + 64);
+			const bitsPerSample = descriptionBitstream.readBits(5) + 1;
+			this.bitsPerSample = bitsPerSample;
 
-			if (this.sampleRate === null) {
-				// It's the first packet
-				validateAudioChunkMetadata(meta);
-
-				assert(meta);
-				assert(meta.decoderConfig);
-				assert(meta.decoderConfig.description);
-
-				this.sampleRate = meta.decoderConfig.sampleRate;
-				this.channels = meta.decoderConfig.numberOfChannels;
-
-				const descriptionBitstream = new Bitstream(
-					toUint8Array(meta.decoderConfig.description),
-				);
-				// skip 'fLaC' + block size + frame size + sample rate + number of channels
-				// See demuxer for the exact structure
-				descriptionBitstream.skipBits(103 + 64);
-				const bitsPerSample = descriptionBitstream.readBits(5) + 1;
-				this.bitsPerSample = bitsPerSample;
-
-				if (this.format._options.appendOnly) {
-					// Write STREAMINFO immediately since we can't seek back later.
-					this.writeHeader({
-						// https://www.rfc-editor.org/rfc/rfc9639.html#name-streaminfo
-						// Per RFC 9639, min/max block sizes can be looser than
-						// actual values, so we use the full valid range (16–65535).
-						// "The actual max block size MAY be smaller than what's
-						// listed, and the actual min (excluding last block) MAY be
-						// larger. This is because the encoder has to write these
-						// fields before receiving any input audio data and cannot
-						// know beforehand what block sizes it will use."
-						minimumBlockSize: 16,
-						maximumBlockSize: 65535,
-						// https://www.rfc-editor.org/rfc/rfc9639.html#name-streaminfo
-						// "A value of 0 signifies that the value is not known."
-						minimumFrameSize: 0,
-						maximumFrameSize: 0,
-						sampleRate: this.sampleRate,
-						channels: this.channels,
-						bitsPerSample: this.bitsPerSample,
-						totalSamples: 0,
-					});
-				}
+			if (this.format._options.appendOnly) {
+				// Write STREAMINFO immediately since we can't seek back later.
+				this.writeHeader({
+					// https://www.rfc-editor.org/rfc/rfc9639.html#name-streaminfo
+					// Per RFC 9639, min/max block sizes can be looser than
+					// actual values, so we use the full valid range (16–65535).
+					// "The actual max block size MAY be smaller than what's
+					// listed, and the actual min (excluding last block) MAY be
+					// larger. This is because the encoder has to write these
+					// fields before receiving any input audio data and cannot
+					// know beforehand what block sizes it will use."
+					minimumBlockSize: 16,
+					maximumBlockSize: 65535,
+					// https://www.rfc-editor.org/rfc/rfc9639.html#name-streaminfo
+					// "A value of 0 signifies that the value is not known."
+					minimumFrameSize: 0,
+					maximumFrameSize: 0,
+					sampleRate: this.sampleRate,
+					channels: this.channels,
+					bitsPerSample: this.bitsPerSample,
+					totalSamples: 0,
+				});
 			}
-
-			if (!this.metadataWritten) {
-				this.writeVorbisCommentAndPictureBlock();
-			}
-
-			const slice = FileSlice.tempFromBytes(packet.data);
-			slice.skip(2);
-			const bytes = readBytes(slice, 2);
-			const bitstream = new Bitstream(bytes);
-			const blockSizeOrUncommon = getBlockSizeOrUncommon(bitstream.readBits(4));
-			if (blockSizeOrUncommon === null) {
-				throw new Error('Invalid FLAC frame: Invalid block size.');
-			}
-
-			readCodedNumber(slice); // num
-			const blockSize = readBlockSize(slice, blockSizeOrUncommon);
-
-			if (!this.format._options.appendOnly) {
-				this.blockSizes.push(blockSize);
-				this.frameSizes.push(packet.data.length);
-			}
-
-			const startPos = this.writer.getPos();
-			this.writer.write(packet.data);
-
-			if (this.format._options.onFrame) {
-				this.format._options.onFrame(packet.data, startPos);
-			}
-
-			await this.writer.flush();
-		} finally {
-			release();
 		}
+
+		if (!this.metadataWritten) {
+			this.writeVorbisCommentAndPictureBlock();
+		}
+
+		const slice = FileSlice.tempFromBytes(packet.data);
+		slice.skip(2);
+		const bytes = readBytes(slice, 2);
+		const bitstream = new Bitstream(bytes);
+		const blockSizeOrUncommon = getBlockSizeOrUncommon(bitstream.readBits(4));
+		if (blockSizeOrUncommon === null) {
+			throw new Error('Invalid FLAC frame: Invalid block size.');
+		}
+
+		readCodedNumber(slice); // num
+		const blockSize = readBlockSize(slice, blockSizeOrUncommon);
+
+		if (!this.format._options.appendOnly) {
+			this.blockSizes.push(blockSize);
+			this.frameSizes.push(packet.data.length);
+		}
+
+		const startPos = this.writer.getPos();
+		this.writer.write(packet.data);
+
+		if (this.format._options.onFrame) {
+			this.format._options.onFrame(packet.data, startPos);
+		}
+
+		await this.writer.flush();
 	}
 
 	override addSubtitleCue(): Promise<void> {
@@ -304,7 +300,8 @@ export class FlacMuxer extends Muxer {
 	}
 
 	async finalize(): Promise<void> {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		if (!this.format._options.appendOnly) {
 			let minimumBlockSize = Infinity;
@@ -344,7 +341,5 @@ export class FlacMuxer extends Muxer {
 				totalSamples,
 			});
 		}
-
-		release();
 	}
 }

@@ -3,7 +3,8 @@ import path from 'node:path';
 import { Input } from '../../src/input.js';
 import { BufferSource, FilePathSource } from '../../src/source.js';
 import { ADTS, ALL_FORMATS } from '../../src/input-format.js';
-import { EncodedPacketSink } from '../../src/media-sink.js';
+import { PacketCursor } from '../../src/cursors.js';
+import { PacketReader } from '../../src/packet.js';
 import { Output } from '../../src/output.js';
 import { BufferTarget } from '../../src/target.js';
 import { AdtsOutputFormat } from '../../src/output-format.js';
@@ -49,10 +50,10 @@ test('ADTS muxer with raw AAC input', async () => {
 	const outputDecoderConfig = await outputTrack.getDecoderConfig();
 	expect(outputDecoderConfig!.description).toBeUndefined(); // ADTS has no description
 
-	const outputSink = new EncodedPacketSink(outputTrack);
+	const outputCursor = new PacketCursor(outputTrack);
 
 	let count = 0;
-	for await (const packet of outputSink.packets()) {
+	for await (const packet of outputCursor) {
 		// All packets should be ADTS frames now (start with 0xfff sync word)
 		expect(packet.data[0]).toBe(0xff);
 		expect((packet.data[1]! & 0xf0)).toBe(0xf0);
@@ -92,11 +93,11 @@ test('ADTS muxer with ADTS input (passthrough)', { timeout: 15_000 }, async () =
 	const outputTrack = await outputAsInput.getPrimaryAudioTrack();
 	assert(outputTrack);
 
-	const inputSink = new EncodedPacketSink(inputTrack);
-	const outputSink = new EncodedPacketSink(outputTrack);
+	const inputReader = new PacketReader(inputTrack);
+	const outputReader = new PacketReader(outputTrack);
 
-	let inputPacket = await inputSink.getFirstPacket();
-	let outputPacket = await outputSink.getFirstPacket();
+	let inputPacket = await inputReader.getFirst();
+	let outputPacket = await outputReader.getFirst();
 	let count = 0;
 
 	while (inputPacket && outputPacket) {
@@ -105,8 +106,8 @@ test('ADTS muxer with ADTS input (passthrough)', { timeout: 15_000 }, async () =
 		expect(outputPacket.timestamp).toBe(inputPacket.timestamp);
 		expect(outputPacket.duration).toBe(inputPacket.duration);
 
-		inputPacket = await inputSink.getNextPacket(inputPacket);
-		outputPacket = await outputSink.getNextPacket(outputPacket);
+		inputPacket = await inputReader.getNext(inputPacket);
+		outputPacket = await outputReader.getNext(outputPacket);
 		count++;
 	}
 

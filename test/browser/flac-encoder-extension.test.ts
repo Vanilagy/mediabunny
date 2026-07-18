@@ -2,7 +2,6 @@ import { expect, test } from 'vitest';
 import { Input } from '../../src/input.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { AudioSampleSource } from '../../src/media-source.js';
-import { AudioSampleSink } from '../../src/media-sink.js';
 import { assert } from '../../src/misc.js';
 import { Output } from '../../src/output.js';
 import { FlacOutputFormat } from '../../src/output-format.js';
@@ -10,6 +9,7 @@ import { AudioSample } from '../../src/sample.js';
 import { BufferSource } from '../../src/source.js';
 import { BufferTarget } from '../../src/target.js';
 import { registerFlacEncoder } from '@mediabunny/flac-encoder';
+import { EncodedPacket, PacketReader } from '../../src/packet.js';
 
 test('FLAC encoder, 24-bit', async () => {
 	registerFlacEncoder();
@@ -19,15 +19,14 @@ test('FLAC encoder, 24-bit', async () => {
 	const durationSeconds = 2;
 	const data = createF32SineWave(sampleRate, channels, durationSeconds);
 
-	using sample = await encodeAndDecodeFirstSample(new AudioSample({
+	const packet = await encodeSample(new AudioSample({
 		data,
 		format: 'f32',
 		numberOfChannels: channels,
 		sampleRate,
 		timestamp: 0,
 	}));
-
-	expect(sample.format).toBe('s32');
+	expect(getBitDepthFromFlacPacket(packet!)).toBe(0b110); // 0b110 = 24 bit
 });
 
 test('FLAC encoder, 16-bit', async () => {
@@ -38,15 +37,14 @@ test('FLAC encoder, 16-bit', async () => {
 	const durationSeconds = 2;
 	const data = createS16SineWave(sampleRate, channels, durationSeconds);
 
-	using sample = await encodeAndDecodeFirstSample(new AudioSample({
+	const packet = await encodeSample(new AudioSample({
 		data,
 		format: 's16',
 		numberOfChannels: channels,
 		sampleRate,
 		timestamp: 0,
 	}));
-
-	expect(sample.format).toBe('s16');
+	expect(getBitDepthFromFlacPacket(packet!)).toBe(0b100); // 0b100 = 16 bit
 });
 
 const createF32SineWave = (sampleRate: number, channels: number, durationSeconds: number) => {
@@ -77,7 +75,7 @@ const createS16SineWave = (sampleRate: number, channels: number, durationSeconds
 	return data;
 };
 
-const encodeAndDecodeFirstSample = async (audioSample: AudioSample) => {
+const encodeSample = async (audioSample: AudioSample) => {
 	const output = new Output({
 		format: new FlacOutputFormat(),
 		target: new BufferTarget(),
@@ -100,9 +98,10 @@ const encodeAndDecodeFirstSample = async (audioSample: AudioSample) => {
 	const track = await input.getPrimaryAudioTrack();
 	assert(track);
 
-	const sink = new AudioSampleSink(track);
-	const sample = await sink.getSample(0);
-	assert(sample);
+	const reader = new PacketReader(track);
+	return reader.getFirst();
+};
 
-	return sample;
+const getBitDepthFromFlacPacket = (packet: EncodedPacket) => {
+	return (packet.data[3]! & 0b1110) >> 1;
 };

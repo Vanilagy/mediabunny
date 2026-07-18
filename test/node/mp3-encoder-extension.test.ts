@@ -6,7 +6,8 @@ import { Output } from '../../src/output.js';
 import { BufferTarget } from '../../src/target.js';
 import { canEncode } from '../../src/encode.js';
 import { AudioSampleSource } from '../../src/media-source.js';
-import { EncodedPacketSink } from '../../src/media-sink.js';
+import { PacketCursor } from '../../src/cursors.js';
+import { PacketReader } from '../../src/packet.js';
 import { Mp3OutputFormat, Mp4OutputFormat } from '../../src/output-format.js';
 import { AudioSample } from '../../src/sample.js';
 import { registerMp3Encoder } from '@mediabunny/mp3-encoder';
@@ -73,9 +74,9 @@ test('MP3 encoding', async () => {
 	expect(await track.getSampleRate()).toBe(sampleRate);
 	expect(await track.getNumberOfChannels()).toBe(channels);
 
-	const sink = new EncodedPacketSink(track);
+	const cursor = new PacketCursor(track);
 	let packetCount = 0;
-	for await (const packet of sink.packets()) {
+	for await (const packet of cursor) {
 		expect(packet.type).toBe('key');
 		packetCount++;
 	}
@@ -121,8 +122,8 @@ test('MP3 with huge timestamps', async () => {
 	});
 
 	const track = (await input.getPrimaryAudioTrack())!;
-	const sink = new EncodedPacketSink(track);
-	const firstPacket = await sink.getFirstPacket();
+	const reader = new PacketReader(track);
+	const firstPacket = await reader.getFirst();
 	assert(firstPacket);
 
 	expect(firstPacket.timestamp).toBe(timestamp);
