@@ -738,32 +738,7 @@ window.addEventListener('resize', () => {
 selectMediaButton.addEventListener('click', () => {
 	const fileInput = document.createElement('input');
 	fileInput.type = 'file';
-	fileInput.accept = [
-		'video/*',
-		'audio/*',
-		'video/quicktime',
-		'video/x-matroska',
-		'video/webm',
-		'video/mp2t',
-		'application/ogg',
-		'application/vnd.apple.mpegurl',
-		'.mp4',
-		'.m4v',
-		'.m4a',
-		'.mov',
-		'.m4s',
-		'.mkv',
-		'.webm',
-		'.ogg',
-		'.ogv',
-		'.oga',
-		'.mp3',
-		'.wav',
-		'.aac',
-		'.flac',
-		'.ts',
-		'.m3u8',
-	].join(',');
+	fileInput.accept = 'video/*,video/x-matroska,video/mp2t,.mkv,.ts,audio/*,audio/aac,.aac';
 	fileInput.addEventListener('change', () => {
 		const file = fileInput.files?.[0];
 		if (!file) {
