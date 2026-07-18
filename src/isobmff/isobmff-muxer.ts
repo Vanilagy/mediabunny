@@ -206,14 +206,12 @@ export class IsobmffMuxer extends Muxer {
 		this.isCmaf = format instanceof CmafOutputFormat;
 		this.minimumFragmentDuration = format._options.minimumFragmentDuration
 			?? (format instanceof CmafOutputFormat ? Infinity : 1);
+
+		this.auxWriter.start();
 	}
 
 	async start() {
 		const release = await this.mutex.acquire();
-
-		// The auxiliary writer builds subtitle sample boxes in memory; it must be started too,
-		// else the first box write for any subtitle track asserts (started === false).
-		this.auxWriter.start();
 
 		if (!this.isCmaf) {
 			this.writer = await this.output._getRootWriter(target => (
