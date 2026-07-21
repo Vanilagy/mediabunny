@@ -46,6 +46,7 @@ export const unrefWorker = async () => {
 		if (worker) {
 			if (worker.unref) {
 				worker.unref(); // If we don't do this, then the Node process never terminates by itself
+				// Keep the worker around tho
 			} else if (typeof window === 'undefined') {
 				// Non-browser environment without unref - terminate instead
 				worker.terminate();
