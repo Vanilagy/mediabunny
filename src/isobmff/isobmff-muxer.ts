@@ -248,7 +248,7 @@ export class IsobmffMuxer extends Muxer {
 			this.initBoxWriter = new IsobmffBoxWriter(initWriter);
 		}
 
-		const holdsAvc = this.output._tracks.some(x => x.isVideoTrack() && x.source._codec === 'avc');
+		const holdsAvc = this.output.tracks.some(x => x.isVideoTrack() && x.source._codec === 'avc');
 
 		// Write the header
 		{
@@ -282,7 +282,7 @@ export class IsobmffMuxer extends Muxer {
 			// We're write at finalization
 		} else if (this.fastStart === 'reserve') {
 			// Validate that all tracks have set maximumPacketCount
-			for (const track of this.output._tracks) {
+			for (const track of this.output.tracks) {
 				if (track.metadata.maximumPacketCount === undefined) {
 					throw new Error(
 						'All tracks must specify maximumPacketCount in their metadata when using'
@@ -312,7 +312,7 @@ export class IsobmffMuxer extends Muxer {
 	}
 
 	private allTracksAreKnown() {
-		for (const track of this.output._tracks) {
+		for (const track of this.output.tracks) {
 			if (!track.source._closed && !this.trackDatas.some(x => x.track === track)) {
 				return false; // We haven't seen a sample from this open track yet
 			}

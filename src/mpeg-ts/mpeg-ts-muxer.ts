@@ -451,7 +451,7 @@ export class MpegTsMuxer extends Muxer {
 	}
 
 	private allTracksAreKnown() {
-		for (const track of this.output._tracks) {
+		for (const track of this.output.tracks) {
 			if (!track.source._closed && !this.trackDatas.some(x => x.track === track)) {
 				return false;
 			}

@@ -33,7 +33,6 @@ import {
 	AudioSource,
 	EncodedVideoPacketSource,
 	EncodedAudioPacketSource,
-	MediaSource,
 	VideoSource,
 	VideoSampleSource,
 	AudioSampleSource,
@@ -49,7 +48,7 @@ import {
 	promiseWithResolvers,
 	Rotation,
 } from './misc';
-import { Output, OutputTrackGroup, TrackType } from './output';
+import { Output, OutputTrackGroup } from './output';
 import { Mp4OutputFormat } from './output-format';
 import {
 	AudioSample,
@@ -151,9 +150,11 @@ export type ConversionOptions = {
 	/**
 	 * Whether this conversion takes full ownership of the output, defaults to `true`. An owning conversion requires
 	 * a fresh output and controls its entire lifecycle: it starts it, writes its metadata tags, and finalizes it.
+	 *
 	 * A non-owning conversion only adds tracks to the output and drives their media data; starting and finalizing
-	 * the output remain your responsibility, and additional tracks (or other non-owning conversions) may be attached
-	 * to the same output.
+	 * the output is an outside responsibility. This is useful when only some output tracks should be driven by a
+	 * conversion, and other are to be driven manually. Additionally, it can be used to have multiple conversions target
+	 * the same output.
 	 */
 	ownsOutput?: boolean;
 };
@@ -557,15 +558,6 @@ export class Conversion {
 	_endTimestamp!: number;
 
 	/** @internal */
-	_addedCounts: Record<TrackType, number> = {
-		video: 0,
-		audio: 0,
-		subtitle: 0,
-	};
-
-	/** @internal */
-	_totalTrackCount = 0;
-	/** @internal */
 	_nextOutputTrackId = 0;
 	/** @internal */
 	_outputTrackIds: number[] = [];
@@ -576,8 +568,6 @@ export class Conversion {
 	_trackPromises: Promise<void>[] = [];
 	/** @internal */
 	_ownsOutput = true;
-	/** @internal */
-	_sources: MediaSource[] = [];
 
 	/** @internal */
 	_started: Promise<void>;
@@ -614,7 +604,8 @@ export class Conversion {
 
 	/**
 	 * Whether this conversion, as it has been configured, is valid and can be executed. If this field is `false`, check
-	 * the `discardedTracks` field for reasons.
+	 * the `discardedTracks` field for reasons. Non-output-owning conversions are always valid, even if they utilize
+	 * zero tracks.
 	 *
 	 * Note: a conversion having discarded tracks does not automatically mean it is invalid; if the remaining, utilized
 	 * tracks make for a valid output file, the conversion is still allowed.
@@ -661,27 +652,25 @@ export class Conversion {
 		}
 
 		const ownsOutput = options.ownsOutput ?? true;
-
-		if (!ownsOutput && options.tags !== undefined) {
-			throw new TypeError(
-				'options.tags cannot be set by a non-owning conversion; set metadata directly on the output instead.',
-			);
-		}
-
 		if (ownsOutput) {
 			if (
-				options.output._tracks.length > 0
+				options.output.tracks.length > 0
 				|| Object.keys(options.output._metadataTags).length > 0
 				|| options.output.state !== 'pending'
 			) {
 				throw new TypeError('options.output must be fresh: no tracks or metadata tags added and not started.');
 			}
-		} else if (options.output.state !== 'pending') {
-			// A non-owning conversion only adds tracks, which can only happen before the output has started.
-			// Pre-existing tracks and metadata tags are explicitly allowed.
-			throw new TypeError(
-				'options.output must not have been started yet; tracks can only be added before the output starts.',
-			);
+		} else {
+			if (options.tags !== undefined) {
+				throw new TypeError(
+					'options.tags cannot be set by a non-owning conversion; set metadata directly on the output'
+					+ ' instead.',
+				);
+			}
+
+			if (options.output.state !== 'pending') {
+				throw new TypeError('options.output must not have been started yet.');
+			}
 		}
 
 		if (options.video !== undefined && typeof options.video !== 'function') {
@@ -776,15 +765,6 @@ export class Conversion {
 		}
 
 		const outputTrackCounts = this.output.format.getSupportedTrackCounts();
-
-		if (!this._ownsOutput) {
-			// Seed the track counts from the tracks already present on the output, so that the max-track-count discard
-			// logic is computed against the format's remaining capacity.
-			for (const existingTrack of this.output._tracks) {
-				this._addedCounts[existingTrack.type]++;
-				this._totalTrackCount++;
-			}
-		}
 
 		// Input track counters
 		let nVideo = 1;
@@ -901,7 +881,7 @@ export class Conversion {
 			const options = filteredTrackOptions[i]!;
 
 			for (const option of options) {
-				if (this._totalTrackCount === outputTrackCounts.total.max) {
+				if (this.output.tracks.length === outputTrackCounts.total.max) {
 					this.discardedTracks.push({
 						track,
 						reason: 'max_track_count_reached',
@@ -910,7 +890,12 @@ export class Conversion {
 					continue;
 				}
 
-				if (this._addedCounts[track.type] === outputTrackCounts[track.type].max) {
+				const addedCountOfType = this.output.tracks.reduce(
+					(count, t) => count + (t.type === track.type ? 1 : 0),
+					0,
+				);
+
+				if (addedCountOfType === outputTrackCounts[track.type].max) {
 					this.discardedTracks.push({
 						track,
 						reason: 'max_track_count_of_type_reached',
@@ -983,14 +968,10 @@ export class Conversion {
 
 		// Let's check if the conversion can actually be executed
 		if (this._ownsOutput) {
-			this.isValid = this._totalTrackCount >= outputTrackCounts.total.min
-				&& this._addedCounts.video >= outputTrackCounts.video.min
-				&& this._addedCounts.audio >= outputTrackCounts.audio.min
-				&& this._addedCounts.subtitle >= outputTrackCounts.subtitle.min;
+			this.isValid = this.output.hasEnoughTracks();
 		} else {
-			// A conversion contributing zero tracks is invalid. The format's minimum track counts are not checked here,
-			// since `Output.start()` enforces those against the full track set.
-			this.isValid = this.utilizedTracks.length > 0;
+			// Checking Output start validity is not up to us. We consider even zero-track conversions to be valid
+			this.isValid = true;
 		}
 
 		if (this._options.showWarnings ?? true) {
@@ -1109,8 +1090,8 @@ export class Conversion {
 
 		if (!this._ownsOutput && this.output.state === 'pending') {
 			throw new Error(
-				'A non-owning conversion requires the output to be started. Call output.start() before executing the'
-				+ ' conversion.',
+				'A non-owning conversion requires the output to be started. Call start() on the output before executing'
+				+ ' the conversion.',
 			);
 		}
 
@@ -1185,16 +1166,6 @@ export class Conversion {
 	 */
 	async cancel() {
 		if (this.output.state === 'finalizing' || this.output.state === 'finalized') {
-			if (!this._ownsOutput && !this._canceled) {
-				// The output (owned by someone else) has already moved on to finalizing/finalized while this
-				// conversion was still pumping. We must still mark ourselves canceled and release any pump loops
-				// parked in the synchronizer, or `execute()` would hang forever waiting on `wait()` that never
-				// resolves. We must NOT force-close this conversion's sources here, since finalization already
-				// owns flushing them at this point.
-				this._canceled = true;
-				this._synchronizer.releaseAll();
-			}
-
 			return;
 		}
 
@@ -1207,13 +1178,6 @@ export class Conversion {
 
 		if (this._ownsOutput) {
 			await this.output.cancel();
-		} else {
-			// A non-owning conversion must not cancel the output. Release any pump loops that are parked in the
-			// synchronizer (the output stays alive, so they'd otherwise hang forever), then force-close only the
-			// sources this conversion created. This leaves the output usable for its owner.
-			this._synchronizer.releaseAll();
-
-			await Promise.all(this._sources.map(source => source._flushOrWaitForOngoingClose(true)));
 		}
 	}
 
@@ -1304,7 +1268,7 @@ export class Conversion {
 
 				for await (const packet of sink.packets(undefined, undefined, { verifyKeyPackets: true })) {
 					if (this._canceled) {
-						return;
+						break;
 					}
 
 					if (packet.timestamp >= this._endTimestamp) {
@@ -1462,7 +1426,7 @@ export class Conversion {
 
 				for await (using sample of sink.samples(this._startTimestamp, this._endTimestamp)) {
 					if (this._canceled) {
-						return;
+						break;
 					}
 
 					const adjustedSampleTimestamp = Math.max(sample.timestamp - this._startTimestamp, 0);
@@ -1486,8 +1450,8 @@ export class Conversion {
 
 		let ownGroup: OutputTrackGroup | null = null;
 		if (!trackOptions.group && this._ownsOutput) {
-			// Only owning conversions create per-track own groups to replicate the input's pairability graph. For
-			// non-owning conversions, tracks without a user-provided group fall into `Output.defaultTrackGroup`.
+			// Create per-track groups to replicate the input's pairability graph. Don't do this for non-owning
+			// conversations.
 			ownGroup = new OutputTrackGroup();
 		}
 
@@ -1501,10 +1465,7 @@ export class Conversion {
 			rotation: outputTrackRotation,
 			group: ownGroup ?? trackOptions.group,
 		});
-		this._addedCounts.video++;
-		this._totalTrackCount++;
 
-		this._sources.push(videoSource);
 		this.utilizedTracks.push(track);
 		this._outputTrackIds.push(outputTrackId);
 		this._outputOwnTrackGroups.push(ownGroup);
@@ -1562,7 +1523,7 @@ export class Conversion {
 
 				for await (const packet of sink.packets()) {
 					if (this._canceled) {
-						return;
+						break;
 					}
 
 					if (packet.timestamp >= this._endTimestamp) {
@@ -1683,7 +1644,7 @@ export class Conversion {
 				const sink = new AudioSampleSink(track);
 				for await (using sample of sink.samples(this._startTimestamp, this._endTimestamp)) {
 					if (this._canceled) {
-						return;
+						break;
 					}
 
 					if (needsPadding) {
@@ -1752,8 +1713,8 @@ export class Conversion {
 
 		let ownGroup: OutputTrackGroup | null = null;
 		if (!trackOptions.group && this._ownsOutput) {
-			// Only owning conversions create per-track own groups to replicate the input's pairability graph. For
-			// non-owning conversions, tracks without a user-provided group fall into `Output.defaultTrackGroup`.
+			// Create per-track groups to replicate the input's pairability graph. Don't do this for non-owning
+			// conversations.
 			ownGroup = new OutputTrackGroup();
 		}
 
@@ -1765,10 +1726,7 @@ export class Conversion {
 			disposition: await track.getDisposition(),
 			group: ownGroup ?? trackOptions.group,
 		});
-		this._addedCounts.audio++;
-		this._totalTrackCount++;
 
-		this._sources.push(audioSource);
 		this.utilizedTracks.push(track);
 		this._outputTrackIds.push(outputTrackId);
 		this._outputOwnTrackGroups.push(ownGroup);
@@ -1844,8 +1802,6 @@ class TrackSynchronizer {
 		resolve: () => void;
 	}[] = [];
 
-	released = false;
-
 	declareTrack(trackId: number) {
 		this.maxTimestamps.set(trackId, 0);
 	}
@@ -1861,11 +1817,6 @@ class TrackSynchronizer {
 	}
 
 	wait(timestamp: number) {
-		if (this.released) {
-			// Already released (e.g. due to a non-owning cancel); don't park, so the pump can run to its cancel check.
-			return Promise.resolve();
-		}
-
 		const { promise, resolve } = promiseWithResolvers();
 
 		this.resolvers.push({
@@ -1879,19 +1830,6 @@ class TrackSynchronizer {
 	closeTrack(trackId: number) {
 		this.maxTimestamps.delete(trackId);
 		this.computeMinAndMaybeResolve();
-	}
-
-	releaseAll() {
-		// Resolve and clear all pending waiters, and ensure future `wait` calls don't park either. Used when a
-		// non-owning conversion is canceled: the output stays alive, so pump loops parked in (or about to enter) `wait`
-		// must be released to let them run to their `_canceled` check and exit.
-		this.released = true;
-
-		for (const entry of this.resolvers) {
-			entry.resolve();
-		}
-
-		this.resolvers.length = 0;
 	}
 
 	computeMinAndMaybeResolve() {
