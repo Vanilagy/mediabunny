@@ -148,15 +148,16 @@ export type ConversionOptions = {
 	showWarnings?: boolean;
 
 	/**
-	 * Whether this conversion takes full ownership of the output, defaults to `true`. An owning conversion requires
-	 * a fresh output and controls its entire lifecycle: it starts it, writes its metadata tags, and finalizes it.
+	 * Whether this conversion is composable, defaults to `false`. A non-composable conversion takes full ownership of
+	 * the output: it requires a fresh output and controls its entire lifecycle, meaning it starts it, writes its
+	 * metadata tags, and finalizes it.
 	 *
-	 * A non-owning conversion only adds tracks to the output and drives their media data; starting and finalizing
+	 * A composable conversion only adds tracks to the output and drives their media data; starting and finalizing
 	 * the output is an outside responsibility. This is useful when only some output tracks should be driven by a
 	 * conversion, and other are to be driven manually. Additionally, it can be used to have multiple conversions target
 	 * the same output.
 	 */
-	ownsOutput?: boolean;
+	composable?: boolean;
 };
 
 /**
@@ -567,7 +568,7 @@ export class Conversion {
 	/** @internal */
 	_trackPromises: Promise<void>[] = [];
 	/** @internal */
-	_ownsOutput = true;
+	_composable = false;
 
 	/** @internal */
 	_started: Promise<void>;
@@ -604,7 +605,7 @@ export class Conversion {
 
 	/**
 	 * Whether this conversion, as it has been configured, is valid and can be executed. If this field is `false`, check
-	 * the `discardedTracks` field for reasons. Non-output-owning conversions are always valid, even if they utilize
+	 * the `discardedTracks` field for reasons. Composable conversions are always valid, even if they utilize
 	 * zero tracks.
 	 *
 	 * Note: a conversion having discarded tracks does not automatically mean it is invalid; if the remaining, utilized
@@ -647,12 +648,12 @@ export class Conversion {
 				'options.tracks, when provided, must be either \'all\' or \'primary\'.',
 			);
 		}
-		if (options.ownsOutput !== undefined && typeof options.ownsOutput !== 'boolean') {
-			throw new TypeError('options.ownsOutput, when provided, must be a boolean.');
+		if (options.composable !== undefined && typeof options.composable !== 'boolean') {
+			throw new TypeError('options.composable, when provided, must be a boolean.');
 		}
 
-		const ownsOutput = options.ownsOutput ?? true;
-		if (ownsOutput) {
+		const composable = options.composable ?? false;
+		if (!composable) {
 			if (
 				options.output.tracks.length > 0
 				|| Object.keys(options.output._metadataTags).length > 0
@@ -663,7 +664,7 @@ export class Conversion {
 		} else {
 			if (options.tags !== undefined) {
 				throw new TypeError(
-					'options.tags cannot be set by a non-owning conversion; set metadata directly on the output'
+					'options.tags cannot be set by a composable conversion; set metadata directly on the output'
 					+ ' instead.',
 				);
 			}
@@ -727,7 +728,7 @@ export class Conversion {
 		}
 
 		this._options = options;
-		this._ownsOutput = ownsOutput;
+		this._composable = composable;
 		this.input = options.input;
 		this.output = options.output;
 
@@ -935,10 +936,10 @@ export class Conversion {
 			}
 		}
 
-		// Now, let's deal with metadata tags. A non-owning conversion does not touch the output's metadata tags; that
+		// Now, let's deal with metadata tags. A composable conversion does not touch the output's metadata tags; that
 		// remains the responsibility of whoever owns the output.
 
-		if (this._ownsOutput) {
+		if (!this._composable) {
 			const inputTags = await this.input.getMetadataTags();
 			let outputTags: MetadataTags;
 
@@ -967,7 +968,7 @@ export class Conversion {
 		}
 
 		// Let's check if the conversion can actually be executed
-		if (this._ownsOutput) {
+		if (!this._composable) {
 			this.isValid = this.output.hasEnoughTracks();
 		} else {
 			// Checking Output start validity is not up to us. We consider even zero-track conversions to be valid
@@ -1088,9 +1089,9 @@ export class Conversion {
 			);
 		}
 
-		if (!this._ownsOutput && this.output.state === 'pending') {
+		if (this._composable && this.output.state === 'pending') {
 			throw new Error(
-				'A non-owning conversion requires the output to be started. Call start() on the output before executing'
+				'A composable conversion requires the output to be started. Call start() on the output before executing'
 				+ ' the conversion.',
 			);
 		}
@@ -1129,7 +1130,7 @@ export class Conversion {
 			this.onProgress?.(0, 0);
 		}
 
-		if (this._ownsOutput) {
+		if (!this._composable) {
 			await this.output.start();
 		}
 
@@ -1150,7 +1151,7 @@ export class Conversion {
 			throw new ConversionCanceledError();
 		}
 
-		if (this._ownsOutput) {
+		if (!this._composable) {
 			await this.output.finalize();
 		}
 
@@ -1176,7 +1177,7 @@ export class Conversion {
 
 		this._canceled = true;
 
-		if (this._ownsOutput) {
+		if (!this._composable) {
 			await this.output.cancel();
 		}
 	}
@@ -1449,9 +1450,9 @@ export class Conversion {
 		}
 
 		let ownGroup: OutputTrackGroup | null = null;
-		if (!trackOptions.group && this._ownsOutput) {
-			// Create per-track groups to replicate the input's pairability graph. Don't do this for non-owning
-			// conversations.
+		if (!trackOptions.group && !this._composable) {
+			// Create per-track groups to replicate the input's pairability graph. Don't do this for composable
+			// conversions.
 			ownGroup = new OutputTrackGroup();
 		}
 
@@ -1712,9 +1713,9 @@ export class Conversion {
 		}
 
 		let ownGroup: OutputTrackGroup | null = null;
-		if (!trackOptions.group && this._ownsOutput) {
-			// Create per-track groups to replicate the input's pairability graph. Don't do this for non-owning
-			// conversations.
+		if (!trackOptions.group && !this._composable) {
+			// Create per-track groups to replicate the input's pairability graph. Don't do this for composable
+			// conversions.
 			ownGroup = new OutputTrackGroup();
 		}
 

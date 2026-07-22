@@ -403,7 +403,7 @@ test('Fractional audio sample boundary', async () => {
 	await conversion.execute();
 });
 
-test('Owning conversion requires a fresh output', async () => {
+test('Non-composable conversion requires a fresh output', async () => {
 	using input = new Input({
 		source: new UrlSource('/video.mp4'),
 		formats: ALL_FORMATS,
@@ -415,7 +415,7 @@ test('Owning conversion requires a fresh output', async () => {
 	await expect(Conversion.init({ input, output })).rejects.toThrow(/must be fresh/);
 });
 
-test('Non-owning init works on an output that already has a track, but not on a started one', async () => {
+test('Composable init works on an output that already has a track, but not on a started one', async () => {
 	using input = new Input({
 		source: new UrlSource('/video.mp4'),
 		formats: ALL_FORMATS,
@@ -427,7 +427,7 @@ test('Non-owning init works on an output that already has a track, but not on a 
 	const conversion = await Conversion.init({
 		input,
 		output,
-		ownsOutput: false,
+		composable: true,
 		audio: { discard: true }, // Only contribute the video track
 		showWarnings: false,
 	});
@@ -439,13 +439,13 @@ test('Non-owning init works on an output that already has a track, but not on a 
 	startedOutput.addAudioTrack(new EncodedAudioPacketSource('aac'));
 	await startedOutput.start();
 
-	await expect(Conversion.init({ input, output: startedOutput, ownsOutput: false }))
+	await expect(Conversion.init({ input, output: startedOutput, composable: true }))
 		.rejects.toThrow(/not have been started/);
 
 	await startedOutput.cancel();
 });
 
-test('Non-owning conversion rejects tags', async () => {
+test('Composable conversion rejects tags', async () => {
 	using input = new Input({
 		source: new UrlSource('/video.mp4'),
 		formats: ALL_FORMATS,
@@ -456,12 +456,12 @@ test('Non-owning conversion rejects tags', async () => {
 	await expect(Conversion.init({
 		input,
 		output: makeOutput(),
-		ownsOutput: false,
+		composable: true,
 		tags: { title: 'Not allowed' },
-	})).rejects.toThrow(/tags cannot be set by a non-owning conversion/);
+	})).rejects.toThrow(/tags cannot be set by a composable conversion/);
 });
 
-test('Non-owning conversion composes with a user-added track', async () => {
+test('Composable conversion composes with a user-added track', async () => {
 	using input = new Input({
 		source: new UrlSource('/video.mp4'),
 		formats: ALL_FORMATS,
@@ -472,7 +472,7 @@ test('Non-owning conversion composes with a user-added track', async () => {
 	const conversion = await Conversion.init({
 		input,
 		output,
-		ownsOutput: false,
+		composable: true,
 		audio: { discard: true }, // The user provides their own audio track
 		showWarnings: false,
 	});
@@ -491,7 +491,7 @@ test('Non-owning conversion composes with a user-added track', async () => {
 		})(),
 	]);
 
-	// The non-owning conversion must not have finalized the output
+	// The composable conversion must not have finalized the output
 	expect(output.state).toBe('started');
 
 	await output.finalize();
@@ -510,7 +510,7 @@ test('Non-owning conversion composes with a user-added track', async () => {
 	expect(await videoTrack!.computeDuration()).toBeGreaterThan(4);
 });
 
-test('Two non-owning conversions compose into one output', async () => {
+test('Two composable conversions compose into one output', async () => {
 	using input = new Input({
 		source: new UrlSource('/video.mp4'),
 		formats: ALL_FORMATS,
@@ -521,14 +521,14 @@ test('Two non-owning conversions compose into one output', async () => {
 	const videoConversion = await Conversion.init({
 		input,
 		output,
-		ownsOutput: false,
+		composable: true,
 		audio: { discard: true },
 		showWarnings: false,
 	});
 	const audioConversion = await Conversion.init({
 		input,
 		output,
-		ownsOutput: false,
+		composable: true,
 		video: { discard: true },
 		showWarnings: false,
 	});
@@ -550,13 +550,13 @@ test('Two non-owning conversions compose into one output', async () => {
 	expect(await (await result.getPrimaryAudioTrack())!.getCodec()).toBe('aac');
 });
 
-test('Non-owning conversion does not write metadata tags', async () => {
+test('Composable conversion does not write metadata tags', async () => {
 	using input = new Input({
 		source: new UrlSource('/video.mp4'),
 		formats: ALL_FORMATS,
 	});
 
-	// Sanity check: this input carries metadata tags that an owning conversion would copy over
+	// Sanity check: this input carries metadata tags that a non-composable conversion would copy over
 	const inputTags = await input.getMetadataTags();
 	expect(inputTags.comment).toBeDefined();
 
@@ -565,7 +565,7 @@ test('Non-owning conversion does not write metadata tags', async () => {
 	const conversion = await Conversion.init({
 		input,
 		output,
-		ownsOutput: false,
+		composable: true,
 		audio: { discard: true },
 		showWarnings: false,
 	});
@@ -595,7 +595,7 @@ test('Non-owning conversion does not write metadata tags', async () => {
 	expect(outTags.comment).toBe('User-owned');
 });
 
-test('Canceling a non-owning conversion leaves the output usable', async () => {
+test('Canceling a composable conversion leaves the output usable', async () => {
 	using input = new Input({
 		source: new UrlSource('/video.mp4'),
 		formats: ALL_FORMATS,
@@ -606,7 +606,7 @@ test('Canceling a non-owning conversion leaves the output usable', async () => {
 	const conversion = await Conversion.init({
 		input,
 		output,
-		ownsOutput: false,
+		composable: true,
 		audio: { discard: true },
 		showWarnings: false,
 	});
@@ -621,7 +621,7 @@ test('Canceling a non-owning conversion leaves the output usable', async () => {
 
 	await expect(executePromise).rejects.toBeInstanceOf(ConversionCanceledError);
 
-	// The output must not have been canceled by the non-owning conversion
+	// The output must not have been canceled by the composable conversion
 	expect(output.state).toBe('started');
 
 	// The user's own track can still finish, and the output can still be finalized
@@ -636,7 +636,7 @@ test('Canceling a non-owning conversion leaves the output usable', async () => {
 	expect(await audioTrack!.getCodec()).toBe('aac');
 });
 
-test('Track capacity works correctly with non-owning conversions', async () => {
+test('Track capacity works correctly with composable conversions', async () => {
 	using input = new Input({
 		source: new UrlSource('/video.mp4'),
 		formats: ALL_FORMATS,
@@ -649,7 +649,7 @@ test('Track capacity works correctly with non-owning conversions', async () => {
 	const conversion = await Conversion.init({
 		input,
 		output,
-		ownsOutput: false,
+		composable: true,
 		showWarnings: false,
 	});
 
