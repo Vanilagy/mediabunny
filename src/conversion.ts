@@ -48,7 +48,7 @@ import {
 	promiseWithResolvers,
 	Rotation,
 } from './misc';
-import { Output, OutputTrackGroup, TrackType } from './output';
+import { Output, OutputTrackGroup } from './output';
 import { Mp4OutputFormat } from './output-format';
 import {
 	AudioSample,
@@ -146,6 +146,18 @@ export type ConversionOptions = {
 	 * want to keep the console output clean.
 	 */
 	showWarnings?: boolean;
+
+	/**
+	 * Whether this conversion is composable, defaults to `false`. A non-composable conversion takes full ownership of
+	 * the output: it requires a fresh output and controls its entire lifecycle, meaning it starts it, writes its
+	 * metadata tags, and finalizes it.
+	 *
+	 * A composable conversion only adds tracks to the output and drives their media data; starting and finalizing
+	 * the output is an outside responsibility. This is useful when only some output tracks should be driven by a
+	 * conversion, and other are to be driven manually. Additionally, it can be used to have multiple conversions target
+	 * the same output.
+	 */
+	composable?: boolean;
 };
 
 /**
@@ -528,6 +540,33 @@ export type DiscardedTrack = {
 };
 
 /**
+ * Options for controlling a single call to {@link Conversion.execute}.
+ * @group Conversion
+ * @public
+ */
+export type ConversionExecuteOptions = {
+	/**
+	 * The timestamp in seconds, in the output's timescale, until which the conversion should advance. Defaults to
+	 * `Infinity`, meaning the conversion runs until the end.
+	 *
+	 * This field is especially useful for composable conversions, as it allows you to advance the conversion in
+	 * lockstep with other media data sources.
+	 */
+	until?: number;
+	/**
+	 * A signal that, when triggered, pauses the conversion as soon as possible.
+	 */
+	pauseSignal?: AbortSignal;
+};
+
+type TrackPump = {
+	done: boolean;
+	resolvers: ReturnType<typeof promiseWithResolvers<void>>;
+	wake: (() => void) | null;
+	start: () => void;
+};
+
+/**
  * Represents a media file conversion process, used to convert one media file into another. In addition to conversion,
  * this class can be used to resize and rotate video, resample audio, drop tracks, or trim to a specific time range.
  * @group Conversion
@@ -539,6 +578,16 @@ export class Conversion {
 	/** The output file. */
 	readonly output: Output;
 
+	/**
+	 * The current state of the conversion.
+	 *
+	 * - `'idle'`: The conversion is not currently executing and isn't done; `execute` can be called.
+	 * - `'executing'`: A call to `execute` is currently running.
+	 * - `'canceled'`: The conversion has been canceled and can no longer be executed.
+	 * - `'done'`: The conversion has run to completion. Subsequent calls to `execute` do nothing.
+	 */
+	state: 'idle' | 'executing' | 'canceled' | 'done' = 'idle';
+
 	/** @internal */
 	_options: ConversionOptions;
 	/** @internal */
@@ -547,15 +596,6 @@ export class Conversion {
 	_endTimestamp!: number;
 
 	/** @internal */
-	_addedCounts: Record<TrackType, number> = {
-		video: 0,
-		audio: 0,
-		subtitle: 0,
-	};
-
-	/** @internal */
-	_totalTrackCount = 0;
-	/** @internal */
 	_nextOutputTrackId = 0;
 	/** @internal */
 	_outputTrackIds: number[] = [];
@@ -563,25 +603,24 @@ export class Conversion {
 	_outputOwnTrackGroups: (OutputTrackGroup | null)[] = [];
 
 	/** @internal */
-	_trackPromises: Promise<void>[] = [];
+	_trackPumps: TrackPump[] = [];
+	/** @internal */
+	_composable = false;
 
-	/** @internal */
-	_started: Promise<void>;
-	/** @internal */
-	_start: () => void;
 	/** @internal */
 	_executed = false;
+	/** @internal */
+	_executionUntil = Infinity;
+	/** @internal */
+	_pauseRequested = false;
 
 	/** @internal */
-	_synchronizer = new TrackSynchronizer();
+	_synchronizer = new TrackSynchronizer(this);
 
 	/** @internal */
 	_totalDuration: number | null = null;
 	/** @internal */
 	_maxTimestamps = new Map<number, number>(); // Track ID -> timestamp
-
-	/** @internal */
-	_canceled = false;
 
 	/**
 	 * A callback that is fired whenever the conversion progresses. Gets passed as first argument a number between
@@ -600,7 +639,8 @@ export class Conversion {
 
 	/**
 	 * Whether this conversion, as it has been configured, is valid and can be executed. If this field is `false`, check
-	 * the `discardedTracks` field for reasons.
+	 * the `discardedTracks` field for reasons. Composable conversions are always valid, even if they utilize
+	 * zero tracks.
 	 *
 	 * Note: a conversion having discarded tracks does not automatically mean it is invalid; if the remaining, utilized
 	 * tracks make for a valid output file, the conversion is still allowed.
@@ -642,12 +682,30 @@ export class Conversion {
 				'options.tracks, when provided, must be either \'all\' or \'primary\'.',
 			);
 		}
-		if (
-			options.output._tracks.length > 0
-			|| Object.keys(options.output._metadataTags).length > 0
-			|| options.output.state !== 'pending'
-		) {
-			throw new TypeError('options.output must be fresh: no tracks or metadata tags added and not started.');
+		if (options.composable !== undefined && typeof options.composable !== 'boolean') {
+			throw new TypeError('options.composable, when provided, must be a boolean.');
+		}
+
+		const composable = options.composable ?? false;
+		if (!composable) {
+			if (
+				options.output.tracks.length > 0
+				|| Object.keys(options.output._metadataTags).length > 0
+				|| options.output.state !== 'pending'
+			) {
+				throw new TypeError('options.output must be fresh: no tracks or metadata tags added and not started.');
+			}
+		} else {
+			if (options.tags !== undefined) {
+				throw new TypeError(
+					'options.tags cannot be set by a composable conversion; set metadata directly on the output'
+					+ ' instead.',
+				);
+			}
+
+			if (options.output.state !== 'pending') {
+				throw new TypeError('options.output must not have been started yet.');
+			}
 		}
 
 		if (options.video !== undefined && typeof options.video !== 'function') {
@@ -704,12 +762,9 @@ export class Conversion {
 		}
 
 		this._options = options;
+		this._composable = composable;
 		this.input = options.input;
 		this.output = options.output;
-
-		const { promise: started, resolve: start } = promiseWithResolvers();
-		this._started = started;
-		this._start = start;
 	}
 
 	/** @internal */
@@ -857,7 +912,7 @@ export class Conversion {
 			const options = filteredTrackOptions[i]!;
 
 			for (const option of options) {
-				if (this._totalTrackCount === outputTrackCounts.total.max) {
+				if (this.output.tracks.length === outputTrackCounts.total.max) {
 					this.discardedTracks.push({
 						track,
 						reason: 'max_track_count_reached',
@@ -866,7 +921,12 @@ export class Conversion {
 					continue;
 				}
 
-				if (this._addedCounts[track.type] === outputTrackCounts[track.type].max) {
+				const addedCountOfType = this.output.tracks.reduce(
+					(count, t) => count + (t.type === track.type ? 1 : 0),
+					0,
+				);
+
+				if (addedCountOfType === outputTrackCounts[track.type].max) {
 					this.discardedTracks.push({
 						track,
 						reason: 'max_track_count_of_type_reached',
@@ -906,39 +966,44 @@ export class Conversion {
 			}
 		}
 
-		// Now, let's deal with metadata tags
+		// Now, let's deal with metadata tags. A composable conversion does not touch the output's metadata tags; that
+		// remains the responsibility of whoever owns the output.
 
-		const inputTags = await this.input.getMetadataTags();
-		let outputTags: MetadataTags;
+		if (!this._composable) {
+			const inputTags = await this.input.getMetadataTags();
+			let outputTags: MetadataTags;
 
-		if (this._options.tags) {
-			const result = typeof this._options.tags === 'function'
-				? await this._options.tags(inputTags)
-				: this._options.tags;
-			validateMetadataTags(result);
+			if (this._options.tags) {
+				const result = typeof this._options.tags === 'function'
+					? await this._options.tags(inputTags)
+					: this._options.tags;
+				validateMetadataTags(result);
 
-			outputTags = result;
-		} else {
-			outputTags = inputTags;
+				outputTags = result;
+			} else {
+				outputTags = inputTags;
+			}
+
+			// Somewhat dirty but pragmatic
+			const inputAndOutputFormatMatch = inputFormat.mimeType === this.output.format.mimeType;
+			const rawTagsAreUnchanged = inputTags.raw === outputTags.raw;
+
+			if (inputTags.raw && rawTagsAreUnchanged && !inputAndOutputFormatMatch) {
+				// If the input and output formats aren't the same, copying over raw metadata tags makes no sense and
+				// only results in junk tags, so let's cut them out.
+				delete outputTags.raw;
+			}
+
+			this.output.setMetadataTags(outputTags);
 		}
-
-		// Somewhat dirty but pragmatic
-		const inputAndOutputFormatMatch = inputFormat.mimeType === this.output.format.mimeType;
-		const rawTagsAreUnchanged = inputTags.raw === outputTags.raw;
-
-		if (inputTags.raw && rawTagsAreUnchanged && !inputAndOutputFormatMatch) {
-			// If the input and output formats aren't the same, copying over raw metadata tags makes no sense and only
-			// results in junk tags, so let's cut them out.
-			delete outputTags.raw;
-		}
-
-		this.output.setMetadataTags(outputTags);
 
 		// Let's check if the conversion can actually be executed
-		this.isValid = this._totalTrackCount >= outputTrackCounts.total.min
-			&& this._addedCounts.video >= outputTrackCounts.video.min
-			&& this._addedCounts.audio >= outputTrackCounts.audio.min
-			&& this._addedCounts.subtitle >= outputTrackCounts.subtitle.min;
+		if (!this._composable) {
+			this.isValid = this.output.hasEnoughTracks();
+		} else {
+			// Checking Output start validity is not up to us. We consider even zero-track conversions to be valid
+			this.isValid = true;
+		}
 
 		if (this._options.showWarnings ?? true) {
 			const warnElements: unknown[] = [];
@@ -1041,11 +1106,24 @@ export class Conversion {
 	}
 
 	/**
-	 * Executes the conversion process. Resolves once conversion is complete.
+	 * Executes the conversion process and resolves when the conversion is complete. When
+	 * {@link ConversionExecuteOptions.until} is provided, the conversion will be suspended once that output timestamp
+	 * is reached and can be resumed with another call to `execute`. An ongoing execution may also be suspended via
+	 * {@link ConversionExecuteOptions.pauseSignal}.
 	 *
-	 * Will throw if `isValid` is `false`.
+	 * Execution will throw if `isValid` is `false`.
 	 */
-	async execute() {
+	async execute(options: ConversionExecuteOptions = {}) {
+		if (!options || typeof options !== 'object') {
+			throw new TypeError('options must be an object.');
+		}
+		if (options.until !== undefined && (typeof options.until !== 'number' || Number.isNaN(options.until))) {
+			throw new TypeError('options.until, when provided, must be a number.');
+		}
+		if (options.pauseSignal !== undefined && !(options.pauseSignal instanceof AbortSignal)) {
+			throw new TypeError('options.pauseSignal, when provided, must be an AbortSignal.');
+		}
+
 		if (!this.isValid) {
 			throw new Error(
 				'Cannot execute this conversion because its output configuration is invalid. Make sure to always check'
@@ -1054,63 +1132,123 @@ export class Conversion {
 			);
 		}
 
-		if (this._executed) {
-			throw new Error('Conversion cannot be executed twice.');
-		}
-		this._executed = true;
-
-		for (const id of this._outputTrackIds) {
-			this._synchronizer.declareTrack(id);
+		if (this.state === 'executing') {
+			throw new Error('Cannot call execute() while a previous call to execute() is still running.');
 		}
 
-		if (this.onProgress) {
-			// Compute duration using only the utilized tracks
-			const uniqueUtilizedTracks = new Set(this.utilizedTracks);
-			const durationPromises = [...uniqueUtilizedTracks].map(async (track) => {
-				if (await track.isLive()) {
-					return Infinity; // Upper bound (assuming no universe heat death)
-				}
+		if (this.state === 'canceled') {
+			throw new ConversionCanceledError();
+		}
 
-				return (await track.getDurationFromMetadata()) ?? (await track.computeDuration());
-			});
-			const duration = Math.max(0, ...await Promise.all(durationPromises));
+		if (this.state === 'done') {
+			// The conversion already ran to completion, nothing left to do
+			return;
+		}
 
-			this._computeProgress = true;
-			this._totalDuration = Math.min(
-				duration - this._startTimestamp,
-				this._endTimestamp - this._startTimestamp,
+		if (this._composable && this.output.state === 'pending') {
+			throw new Error(
+				'A composable conversion requires the output to be started. Call start() on the output before executing'
+				+ ' the conversion.',
 			);
+		}
 
-			for (const id of this._outputTrackIds) {
-				this._maxTimestamps.set(id, 0);
+		this.state = 'executing';
+		this._executionUntil = options.until ?? Infinity;
+		this._pauseRequested = options.pauseSignal?.aborted ?? false;
+
+		const onPause = () => {
+			if (this.state !== 'executing') {
+				return;
 			}
 
-			this.onProgress?.(0, 0);
+			this._pauseRequested = true;
+
+			// Release any pumps stuck in the synchronizer so they can reach their next checkpoint and suspend
+			this._synchronizer.resolveAll();
+		};
+		options.pauseSignal?.addEventListener('abort', onPause);
+
+		for (const pump of this._trackPumps) {
+			if (!pump.done) {
+				pump.resolvers = promiseWithResolvers();
+			}
 		}
 
-		await this.output.start();
-		this._start();
+		if (!this._executed) {
+			this._executed = true;
+
+			for (const id of this._outputTrackIds) {
+				this._synchronizer.declareTrack(id);
+			}
+
+			if (this.onProgress) {
+				// Compute duration using only the utilized tracks
+				const uniqueUtilizedTracks = new Set(this.utilizedTracks);
+				const durationPromises = [...uniqueUtilizedTracks].map(async (track) => {
+					if (await track.isLive()) {
+						return Infinity; // Upper bound (assuming no universe heat death)
+					}
+
+					return (await track.getDurationFromMetadata()) ?? (await track.computeDuration());
+				});
+				const duration = Math.max(0, ...await Promise.all(durationPromises));
+
+				this._computeProgress = true;
+				this._totalDuration = Math.min(
+					duration - this._startTimestamp,
+					this._endTimestamp - this._startTimestamp,
+				);
+
+				for (const id of this._outputTrackIds) {
+					this._maxTimestamps.set(id, 0);
+				}
+
+				this.onProgress?.(0, 0);
+			}
+
+			if (!this._composable) {
+				await this.output.start();
+			}
+
+			for (const pump of this._trackPumps) {
+				pump.start();
+			}
+		} else {
+			// Wake all suspended track pumps
+			for (const pump of this._trackPumps) {
+				pump.wake?.();
+			}
+		}
 
 		try {
-			await Promise.all(this._trackPromises);
+			await Promise.all(this._trackPumps.map(x => x.resolvers.promise));
 		} catch (error) {
-			if (!this._canceled) {
+			if ((this.state as Conversion['state']) !== 'canceled') {
 				// Make sure to cancel to stop other encoding processes and clean up resources
 				void this.cancel();
 			}
 
 			throw error;
+		} finally {
+			options.pauseSignal?.removeEventListener('abort', onPause);
 		}
 
-		if (this._canceled) {
+		if ((this.state as Conversion['state']) === 'canceled') {
 			throw new ConversionCanceledError();
 		}
 
-		await this.output.finalize();
+		const isDone = this._trackPumps.every(x => x.done);
+		this.state = isDone ? 'done' : 'idle';
 
-		if (this._computeProgress) {
-			const minTimestamp = Math.min(...this._maxTimestamps.values());
-			this.onProgress?.(1, minTimestamp);
+		if (isDone) {
+			if (!this._composable) {
+				await this.output.finalize();
+			}
+
+			if (this._computeProgress) {
+				const minTimestamp = Math.min(...this._maxTimestamps.values());
+				this.onProgress?.(1, minTimestamp);
+			}
 		}
 	}
 
@@ -1119,17 +1257,27 @@ export class Conversion {
 	 * Does nothing if the conversion is already complete.
 	 */
 	async cancel() {
-		if (this.output.state === 'finalizing' || this.output.state === 'finalized') {
+		if (this.state === 'done') {
 			return;
 		}
 
-		if (this._canceled) {
+		if (this.state === 'canceled') {
 			Logging._warn('Conversion already canceled.');
 			return;
 		}
 
-		this._canceled = true;
-		await this.output.cancel();
+		this.state = 'canceled';
+
+		// Wake all suspended track pumps so they can wind down
+		for (const pump of this._trackPumps) {
+			pump.wake?.();
+		}
+
+		this._synchronizer.resolveAll();
+
+		if (!this._composable) {
+			await this.output.cancel();
+		}
 	}
 
 	/** @internal */
@@ -1210,16 +1358,14 @@ export class Conversion {
 			const source = new EncodedVideoPacketSource(sourceCodec);
 			videoSource = source;
 
-			this._trackPromises.push((async () => {
-				await this._started;
-
+			this._registerTrackPump(async (pump) => {
 				const sink = new EncodedPacketSink(track);
 				const decoderConfig = await track.getDecoderConfig();
 				const meta: EncodedVideoChunkMetadata = { decoderConfig: decoderConfig ?? undefined };
 
 				for await (const packet of sink.packets(undefined, undefined, { verifyKeyPackets: true })) {
-					if (this._canceled) {
-						return;
+					if (this.state === 'canceled') {
+						break;
 					}
 
 					if (packet.timestamp >= this._endTimestamp) {
@@ -1240,11 +1386,13 @@ export class Conversion {
 					if (this._synchronizer.shouldWait(outputTrackId, modifiedPacket.timestamp)) {
 						await this._synchronizer.wait(modifiedPacket.timestamp);
 					}
+
+					await this._checkpoint(pump, modifiedPacket.timestamp);
 				}
 
 				source.close();
 				this._synchronizer.closeTrack(outputTrackId);
-			})());
+			});
 		} else {
 			// We need to decode & reencode the video
 
@@ -1370,14 +1518,12 @@ export class Conversion {
 			const source = new VideoSampleSource(encodingConfig);
 			videoSource = source;
 
-			this._trackPromises.push((async () => {
-				await this._started;
-
+			this._registerTrackPump(async (pump) => {
 				const sink = new VideoSampleSink(track);
 
 				for await (using sample of sink.samples(this._startTimestamp, this._endTimestamp)) {
-					if (this._canceled) {
-						return;
+					if (this.state === 'canceled') {
+						break;
 					}
 
 					const adjustedSampleTimestamp = Math.max(sample.timestamp - this._startTimestamp, 0);
@@ -1391,16 +1537,20 @@ export class Conversion {
 						if (this._synchronizer.shouldWait(outputTrackId, lastSampleTimestamp)) {
 							await this._synchronizer.wait(lastSampleTimestamp);
 						}
+
+						await this._checkpoint(pump, lastSampleTimestamp);
 					}
 				}
 
 				source.close();
 				this._synchronizer.closeTrack(outputTrackId);
-			})());
+			});
 		}
 
 		let ownGroup: OutputTrackGroup | null = null;
-		if (!trackOptions.group) {
+		if (!trackOptions.group && !this._composable) {
+			// Create per-track groups to replicate the input's pairability graph. Don't do this for composable
+			// conversions.
 			ownGroup = new OutputTrackGroup();
 		}
 
@@ -1414,8 +1564,6 @@ export class Conversion {
 			rotation: outputTrackRotation,
 			group: ownGroup ?? trackOptions.group,
 		});
-		this._addedCounts.video++;
-		this._totalTrackCount++;
 
 		this.utilizedTracks.push(track);
 		this._outputTrackIds.push(outputTrackId);
@@ -1465,16 +1613,14 @@ export class Conversion {
 			const source = new EncodedAudioPacketSource(sourceCodec);
 			audioSource = source;
 
-			this._trackPromises.push((async () => {
-				await this._started;
-
+			this._registerTrackPump(async (pump) => {
 				const sink = new EncodedPacketSink(track);
 				const decoderConfig = await track.getDecoderConfig();
 				const meta: EncodedAudioChunkMetadata = { decoderConfig: decoderConfig ?? undefined };
 
 				for await (const packet of sink.packets()) {
-					if (this._canceled) {
-						return;
+					if (this.state === 'canceled') {
+						break;
 					}
 
 					if (packet.timestamp >= this._endTimestamp) {
@@ -1492,11 +1638,13 @@ export class Conversion {
 					if (this._synchronizer.shouldWait(outputTrackId, modifiedPacket.timestamp)) {
 						await this._synchronizer.wait(modifiedPacket.timestamp);
 					}
+
+					await this._checkpoint(pump, modifiedPacket.timestamp);
 				}
 
 				source.close();
 				this._synchronizer.closeTrack(outputTrackId);
-			})());
+			});
 		} else {
 			// We need to decode & reencode the audio
 
@@ -1589,13 +1737,11 @@ export class Conversion {
 			const source = new AudioSampleSource(encodingConfig);
 			audioSource = source;
 
-			this._trackPromises.push((async () => {
-				await this._started;
-
+			this._registerTrackPump(async (pump) => {
 				const sink = new AudioSampleSink(track);
 				for await (using sample of sink.samples(this._startTimestamp, this._endTimestamp)) {
-					if (this._canceled) {
-						return;
+					if (this.state === 'canceled') {
+						break;
 					}
 
 					if (needsPadding) {
@@ -1618,7 +1764,9 @@ export class Conversion {
 							sampleRate: originalSampleRate,
 							timestamp: 0,
 						});
-						await this._registerAudioSample(silentSample, source, outputTrackId, () => lastSampleTimestamp);
+						await this._registerAudioSample(
+							pump, silentSample, source, outputTrackId, () => lastSampleTimestamp,
+						);
 
 						needsPadding = false;
 					}
@@ -1654,16 +1802,20 @@ export class Conversion {
 					// Offset the timestamp as needed
 					finalSample.setTimestamp(finalSample.timestamp - this._startTimestamp);
 
-					await this._registerAudioSample(finalSample, source, outputTrackId, () => lastSampleTimestamp);
+					await this._registerAudioSample(
+						pump, finalSample, source, outputTrackId, () => lastSampleTimestamp,
+					);
 				}
 
 				source.close();
 				this._synchronizer.closeTrack(outputTrackId);
-			})());
+			});
 		}
 
 		let ownGroup: OutputTrackGroup | null = null;
-		if (!trackOptions.group) {
+		if (!trackOptions.group && !this._composable) {
+			// Create per-track groups to replicate the input's pairability graph. Don't do this for composable
+			// conversions.
 			ownGroup = new OutputTrackGroup();
 		}
 
@@ -1675,8 +1827,6 @@ export class Conversion {
 			disposition: await track.getDisposition(),
 			group: ownGroup ?? trackOptions.group,
 		});
-		this._addedCounts.audio++;
-		this._totalTrackCount++;
 
 		this.utilizedTracks.push(track);
 		this._outputTrackIds.push(outputTrackId);
@@ -1685,6 +1835,7 @@ export class Conversion {
 
 	/** @internal */
 	async _registerAudioSample(
+		pump: TrackPump,
 		sample: AudioSample,
 		source: AudioSampleSource,
 		outputTrackId: number,
@@ -1700,6 +1851,39 @@ export class Conversion {
 			if (this._synchronizer.shouldWait(outputTrackId, lastSampleTimestamp)) {
 				await this._synchronizer.wait(lastSampleTimestamp);
 			}
+
+			await this._checkpoint(pump, lastSampleTimestamp);
+		}
+	}
+
+	/** @internal */
+	_registerTrackPump(fn: (pump: TrackPump) => Promise<void>) {
+		const pump: TrackPump = {
+			done: false,
+			resolvers: promiseWithResolvers(),
+			wake: null,
+			start: () => {
+				void fn(pump).then(() => {
+					pump.done = true;
+					pump.resolvers.resolve();
+				}, (error) => {
+					pump.resolvers.reject(error);
+				});
+			},
+		};
+
+		this._trackPumps.push(pump);
+	}
+
+	/** @internal */
+	async _checkpoint(pump: TrackPump, timestamp: number) {
+		while (this.state !== 'canceled' && (timestamp >= this._executionUntil || this._pauseRequested)) {
+			// We've reached the target; signal it and suspend until the next execution wakes us up
+			pump.resolvers.resolve();
+
+			const { promise, resolve } = promiseWithResolvers();
+			pump.wake = resolve;
+			await promise;
 		}
 	}
 
@@ -1747,11 +1931,16 @@ const MAX_TIMESTAMP_GAP = 1; // in seconds
  * slowest consumer.
  */
 class TrackSynchronizer {
+	conversion: Conversion;
 	maxTimestamps = new Map<number, number>(); // Track ID -> timestamp
 	resolvers: {
 		timestamp: number;
 		resolve: () => void;
 	}[] = [];
+
+	constructor(conversion: Conversion) {
+		this.conversion = conversion;
+	}
 
 	declareTrack(trackId: number) {
 		this.maxTimestamps.set(trackId, 0);
@@ -1764,6 +1953,15 @@ class TrackSynchronizer {
 		this.maxTimestamps.set(trackId, Math.max(timestamp, currentValue));
 
 		const newMin = this.computeMinAndMaybeResolve();
+		if (
+			this.conversion.state === 'canceled'
+			|| this.conversion._pauseRequested
+			|| timestamp >= this.conversion._executionUntil
+		) {
+			// No point in throttling consumers that are about to suspend or wind down anyway
+			return false;
+		}
+
 		return timestamp - newMin > MAX_TIMESTAMP_GAP; // Should wait if it is too far ahead of the slowest consumer
 	}
 
@@ -1781,6 +1979,13 @@ class TrackSynchronizer {
 	closeTrack(trackId: number) {
 		this.maxTimestamps.delete(trackId);
 		this.computeMinAndMaybeResolve();
+	}
+
+	resolveAll() {
+		for (const entry of this.resolvers) {
+			entry.resolve();
+		}
+		this.resolvers.length = 0;
 	}
 
 	computeMinAndMaybeResolve() {

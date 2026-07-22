@@ -627,6 +627,48 @@ await conversion.execute();
 // Conversion is complete
 ```
 
+## Combine multiple files into one
+
+```ts
+import {
+	Input,
+	Output,
+	Conversion,
+} from 'mediabunny';
+
+// Let's take the video track from one file...
+const videoInput = new Input(...);
+// ...and the audio track from another
+const audioInput = new Input(...);
+
+const output = new Output(...);
+
+const videoConversion = await Conversion.init({
+	input: videoInput,
+	output,
+	composable: true, // Ensure the conversion doesn't own the output
+	audio: { discard: true },
+});
+const audioConversion = await Conversion.init({
+	input: audioInput,
+	output,
+	composable: true,
+	video: { discard: true },
+});
+
+await output.start();
+await Promise.all([
+	videoConversion.execute(),
+	audioConversion.execute(),
+]);
+await output.finalize();
+// Conversion is complete
+```
+
+::: info
+See [Composable conversions](./converting-media-files#composable-conversions) for the full documentation.
+:::
+
 ## Reading HLS playlists
 
 ```ts

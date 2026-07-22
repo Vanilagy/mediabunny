@@ -148,8 +148,8 @@ export class HlsMuxer extends Muxer {
 	async start(): Promise<void> {
 		const release = await this.mutex.acquire();
 
-		const someRelative = this.output._tracks.some(t => t.metadata.isRelativeToUnixEpoch);
-		const someNotRelative = this.output._tracks.some(t => !t.metadata.isRelativeToUnixEpoch);
+		const someRelative = this.output.tracks.some(t => t.metadata.isRelativeToUnixEpoch);
+		const someNotRelative = this.output.tracks.some(t => !t.metadata.isRelativeToUnixEpoch);
 		if (someRelative && someNotRelative) {
 			throw new Error(
 				'All tracks must agree on `relativeToUnixEpoch`: some tracks are relative to the Unix epoch and some'
@@ -180,14 +180,14 @@ export class HlsMuxer extends Muxer {
 		let keyPacketsOnlyPairingWarned = false;
 
 		// First, let's build the "sibling" groups induced by track pairability
-		for (const track of this.output._tracks) {
+		for (const track of this.output.tracks) {
 			if (track.type === 'video') {
 				hasVideo = true;
 			}
 
 			const pairableGroups = new Map<MediaCodec, OutputTrack[]>();
 
-			for (const otherTrack of this.output._tracks) {
+			for (const otherTrack of this.output.tracks) {
 				if (track === otherTrack) {
 					continue;
 				}
@@ -264,7 +264,7 @@ export class HlsMuxer extends Muxer {
 		const unpairedAudioTracks: OutputTrack[] = [];
 
 		// Now, create the top-level variant streams
-		for (const track of this.output._tracks) {
+		for (const track of this.output.tracks) {
 			const assignedGroupKeys = groupAssignment.get(track);
 			if (assignedGroupKeys) {
 				assert(assignedGroupKeys.length > 0);

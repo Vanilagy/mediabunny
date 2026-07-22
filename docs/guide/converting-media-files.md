@@ -22,7 +22,7 @@ It has the following features:
 - Audio up/downmixing
 - User-defined video & audio processing
 
-The conversion API was built to be simple, versatile and extremely performant.
+The conversion API was built to be simple, versatile, composable and performant.
 
 ## Basic usage
 
@@ -63,7 +63,7 @@ await conversion.execute();
 That's it! A `Conversion` simply takes an instance of `Input` and `Output`, then reads the data from the input and writes it to the output. If you're unfamiliar with [`Input`](./reading-media-files) and [`Output`](./writing-media-files), check out their respective guides.
 
 ::: info
-The `Output` passed to the `Conversion` must be *fresh*; that is, it must have no added tracks or metadata tags and be in the `'pending'` state (not started yet).
+The `Output` passed to the `Conversion` must be *fresh*; that is, it must have no added tracks or metadata tags and be in the `'pending'` state (not started yet). This requirement is relaxed for [composable conversions](#composable-conversions), which allows you to combine the conversion with other tracks.
 :::
 
 Unconfigured, the conversion process handles all the details automatically, such as:
@@ -113,6 +113,43 @@ await conversion.cancel(); // Resolves once the conversion is canceled
 ```
 
 This automatically frees up all resources used by the conversion process and will cause any ongoing call to `execute` to throw a `ConversionCanceledError`.
+
+If the conversion is [composable](#composable-conversions), the corresponding `Output` is not canceled and remains usable after conversion cancellation.
+
+### Pausing a conversion
+
+You can pause a conversion mid-execution and resume it later. For this, pass a pause signal to the `execute` method:
+```ts
+const controller = new AbortController();
+button.onclick = () => controller.abort();
+
+await conversion.execute({
+	pauseSignal: controller.signal,
+});
+
+if (conversion.state === 'idle') {
+	// Paused before completion
+} else if (conversion.state === 'done') {
+	// Ran to completion
+}
+```
+
+An unfinished conversion can simply be resumed with another call to `execute`:
+```ts
+await conversion.execute();
+```
+
+### Partial execution
+
+Instead of running a conversion in full, you can execute it only until a certain timestamp is reached:
+```ts
+await conversion.execute({
+	// Pauses execution once an output timestamp of 10 seconds is reached
+	until: 10,
+});
+```
+
+The conversion can then be resumed and continued by calling `execute` again. This feature is especially useful for [composable conversions](#composable-conversions).
 
 ## Video options
 
@@ -505,6 +542,91 @@ const conversion = await Conversion.init({ input, output });
 conversion.utilizedTracks; // => InputTrack[]
 ```
 A track may appear multiple times in this list when [fan-out](#track-fan-out) produces multiple output tracks from it.
+
+## Composable conversions
+
+By default, a `Conversion` takes full ownership of its `Output`: it requires a fresh output, then starts it, adds data, and finalizes it for you. Sometimes, however, you want a conversion to be just *one* of several contributors to a single output file - for example, to keep an input's video track while attaching your own, externally-produced audio track. For this, set `composable: true`.
+
+A composable conversion only adds its own tracks to the output and pumps their media data while `execute()` runs. Everything else about the output's lifecycle is yours: you add any additional tracks, set any metadata tags, and call `start()` and `finalize()` yourself. This enables you to add additional tracks outside of the conversion, or even have multiple conversions target a single `Output`.
+
+To use it, initialize everything, then start the `Output`, and then execute the conversion:
+
+```ts
+import {
+	Input,
+	Output,
+	Mp4OutputFormat,
+	BufferTarget,
+	Conversion,
+	AudioBufferSource,
+} from 'mediabunny';
+
+const input = new Input({ ... });
+const output = new Output({
+	format: new Mp4OutputFormat(),
+	target: new BufferTarget(),
+});
+
+// Use the conversion only to copy over the video
+const conversion = await Conversion.init({
+	input,
+	output,
+	audio: { discard: true },
+	composable: true,
+});
+
+// Add our own audio track directly
+const audioSource = new AudioBufferSource({ codec: 'aac', bitrate: 128e3 });
+output.addAudioTrack(audioSource);
+
+// Start the output
+await output.start();
+
+// Run the conversion concurrently with feeding our own audio
+await Promise.all([
+	conversion.execute(),
+	audioSource.add(myAudioBuffer).then(() => audioSource.close()),
+]);
+
+// Finalize the output
+await output.finalize();
+```
+
+### Running in lockstep
+
+To prevent high memory usage due to buffering needs, it's important to add media data at roughly the same speed across all tracks. To achieve this, you can step the conversion deliberately by calling `execute` multiple times:
+```ts
+await output.start();
+
+for (using sample of generateAudioSamples()) {
+	await audioSource.add(sample);
+	await conversion.execute({ until: sample.timestamp });
+}
+
+// Convert whatever's left
+await conversion.execute();
+
+await output.finalize();
+```
+
+When running multiple composable conversions that target the same output, you can use a pattern like this:
+
+```ts
+await output.start();
+
+for (let until = 1; true; until += 1) {
+	await Promise.all([
+		conversion1.execute({ until }),
+		conversion2.execute({ until }),
+	]);
+
+	if (conversion1.state === 'done' && conversion2.state === 'done') {
+		break;
+	}
+}
+
+await output.finalize();
+```
 
 ## Converting live streams
 
