@@ -114,6 +114,43 @@ await conversion.cancel(); // Resolves once the conversion is canceled
 
 This automatically frees up all resources used by the conversion process and will cause any ongoing call to `execute` to throw a `ConversionCanceledError`.
 
+If the conversion is [composable](#composable-conversions), the corresponding `Output` is not canceled and remains usable after conversion cancellation.
+
+### Pausing a conversion
+
+You can pause a conversion mid-execution and resume it later. For this, pass a pause signal to the `execute` method:
+```ts
+const controller = new AbortController();
+button.onclick = () => controller.abort();
+
+await conversion.execute({
+	pauseSignal: controller.signal,
+});
+
+if (conversion.state === 'idle') {
+	// Paused before completion
+} else if (conversion.state === 'done') {
+	// Ran to completion
+}
+```
+
+An unfinished conversion can simply be resumed with another call to `execute`:
+```ts
+await conversion.execute();
+```
+
+### Partial execution
+
+Instead of running a conversion in full, you can execute it only until a certain timestamp is reached:
+```ts
+await conversion.execute({
+	// Pauses execution once an output timestamp of 10 seconds is reached
+	until: 10,
+});
+```
+
+The conversion can then be resumed and continued by calling `execute` again. This feature is especially useful for [composable conversions](#composable-conversions).
+
 ## Video options
 
 You can set the `video` property in the conversion options to configure the converter's behavior for video tracks. The options are:
@@ -555,9 +592,41 @@ await Promise.all([
 await output.finalize();
 ```
 
-### Cancellation
+### Running in lockstep
 
-[Canceling](#canceling-a-conversion) a composable conversion does *not* cancel the output, it only stops media data from being added and closes its tracks. For a full abort, you must cancel the output manually.
+To prevent high memory usage due to buffering needs, it's important to add media data at roughly the same speed across all tracks. To achieve this, you can step the conversion deliberately by calling `execute` multiple times:
+```ts
+await output.start();
+
+for (using sample of generateAudioSamples()) {
+	await audioSource.add(sample);
+	await conversion.execute({ until: sample.timestamp });
+}
+
+// Convert whatever's left
+await conversion.execute();
+
+await output.finalize();
+```
+
+When running multiple composable conversions that target the same output, you can use a pattern like this:
+
+```ts
+await output.start();
+
+for (let until = 1; true; until += 1) {
+	await Promise.all([
+		conversion1.execute({ until }),
+		conversion2.execute({ until }),
+	]);
+
+	if (conversion1.state === 'done' && conversion2.state === 'done') {
+		break;
+	}
+}
+
+await output.finalize();
+```
 
 ## Converting live streams
 

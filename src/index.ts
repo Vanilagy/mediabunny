@@ -287,6 +287,7 @@ export {
 	type ConversionOptions,
 	type ConversionVideoOptions,
 	type ConversionAudioOptions,
+	type ConversionExecuteOptions,
 	ConversionCanceledError,
 	type DiscardedTrack,
 } from './conversion';

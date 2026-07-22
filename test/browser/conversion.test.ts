@@ -618,6 +618,7 @@ test('Canceling a composable conversion leaves the output usable', async () => {
 
 	const executePromise = conversion.execute();
 	void conversion.cancel();
+	expect(conversion.state).toBe('canceled');
 
 	await expect(executePromise).rejects.toBeInstanceOf(ConversionCanceledError);
 
@@ -659,4 +660,102 @@ test('Track capacity works correctly with composable conversions', async () => {
 	expect(conversion.discardedTracks).toHaveLength(2);
 	// WAVE allows only one track in total, so the total-count check fires before the per-type one
 	expect(conversion.discardedTracks[0]!.reason).toBe('max_track_count_reached');
+});
+
+test('Blank execute', async () => {
+	using input = new Input({
+		source: new UrlSource('/video.mp4'),
+		formats: ALL_FORMATS,
+	});
+
+	const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
+	const conversion = await Conversion.init({ input, output });
+	expect(conversion.state).toBe('idle');
+
+	const promise = conversion.execute();
+	expect(conversion.state).toBe('executing');
+	await promise;
+	expect(conversion.state).toBe('done');
+	expect(output.state).toBe('finalized');
+
+	await conversion.execute();
+	expect(conversion.state).toBe('done');
+});
+
+test('Stepwise until', async () => {
+	using input = new Input({
+		source: new UrlSource('/video.mp4'),
+		formats: ALL_FORMATS,
+	});
+
+	const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
+	const conversion = await Conversion.init({ input, output });
+
+	await conversion.execute({ until: 2 });
+	expect(conversion.state).toBe('idle');
+	expect(output.state).toBe('started');
+	await conversion.execute({ until: 4 });
+	expect(conversion.state).toBe('idle');
+	await conversion.execute({ until: 6 });
+	expect(conversion.state).toBe('done');
+	expect(output.state).toBe('finalized');
+
+	await conversion.execute();
+	expect(conversion.state).toBe('done');
+
+	using result = new Input({ source: new BufferSource(output.target.buffer!), formats: ALL_FORMATS });
+	const videoTrack = await result.getPrimaryVideoTrack();
+	expect(await videoTrack!.computeDuration()).toBeGreaterThan(4);
+});
+
+test('Pause signal', async () => {
+	using input = new Input({
+		source: new UrlSource('/video.mp4'),
+		formats: ALL_FORMATS,
+	});
+
+	const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
+	const conversion = await Conversion.init({ input, output });
+
+	const controller = new AbortController();
+	conversion.onProgress = (progress) => {
+		if (progress >= 0.5 && !controller.signal.aborted) {
+			controller.abort();
+		}
+	};
+
+	await conversion.execute({ pauseSignal: controller.signal });
+	expect(conversion.state).toBe('idle');
+	expect(output.state).toBe('started');
+
+	await conversion.execute();
+	expect(conversion.state).toBe('done');
+	expect(output.state).toBe('finalized');
+
+	await conversion.execute();
+	expect(conversion.state).toBe('done');
+});
+
+test('Pre-signaled pause signal', async () => {
+	using input = new Input({
+		source: new UrlSource('/video.mp4'),
+		formats: ALL_FORMATS,
+	});
+
+	const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
+	const conversion = await Conversion.init({ input, output });
+
+	const controller = new AbortController();
+	controller.abort();
+
+	await conversion.execute({ pauseSignal: controller.signal });
+	expect(conversion.state).toBe('idle');
+	expect(output.state).toBe('started');
+
+	await conversion.execute();
+	expect(conversion.state).toBe('done');
+	expect(output.state).toBe('finalized');
+
+	await conversion.execute();
+	expect(conversion.state).toBe('done');
 });
