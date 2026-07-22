@@ -15,6 +15,7 @@
 import * as ts from 'typescript';
 import * as fs from 'fs';
 import * as path from 'path';
+import { execFileSync } from 'child_process';
 
 const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) => {
 	const program = ts.createProgram(entryFiles, {
@@ -629,6 +630,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 	// Data structures for "Used by" feature
 	const usedByReferences = new Map<string, Set<{ user: string; context: string; type: 'constructor' | 'method' | 'property' | 'extends' | 'type_param' | 'type_alias' | 'variable' | 'function' }>>();
 	const generatedDocs = new Map<string, string>();
+	const symbolSourceFiles = new Map<string, string>();
 
 	const addUsage = (
 		used: string,
@@ -677,6 +679,9 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 				targetDeclaration = aliasedDeclaration;
 			}
 		}
+
+		// Remember where the symbol is actually defined (reexports don't count), for lastModified dates
+		symbolSourceFiles.set(symbolName, targetDeclaration.getSourceFile().fileName);
 
 		const groupTag = ts.getJSDocTags(targetDeclaration).find(tag => tag.tagName.text === 'group');
 		if (!groupTag || typeof groupTag.comment !== 'string') {
@@ -1750,6 +1755,8 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 	});
 
 	// Phase 3: Assemble final docs with "Used by" sections and write files
+	let newestLastModified: string | null = null;
+
 	generatedDocs.forEach((markdown, symbolName) => {
 		const usages = usedByReferences.get(symbolName);
 		let usedByMarkdown = '';
@@ -1821,8 +1828,16 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 			}
 		}
 
-		const finalMarkdown = markdown.replace('<!-- USED_BY_SECTION -->', usedByMarkdown);
 		if (!dry) {
+			const lastModified = getLastModifiedDate(symbolSourceFiles.get(symbolName)!);
+			if (!newestLastModified || new Date(lastModified) > new Date(newestLastModified)) {
+				newestLastModified = lastModified;
+			}
+
+			const finalMarkdown = addLastUpdatedToFrontmatter(
+				markdown.replace('<!-- USED_BY_SECTION -->', usedByMarkdown),
+				lastModified,
+			);
 			const outputPath = path.join(outputDir, `${symbolName}.md`);
 			fs.writeFileSync(outputPath, finalMarkdown);
 			console.log(`Generated: ${outputPath}`);
@@ -1874,7 +1889,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 
 	if (!dry) {
 		const indexPath = path.join(outputDir, 'index.md');
-		fs.writeFileSync(indexPath, indexMarkdown);
+		fs.writeFileSync(indexPath, addLastUpdatedToFrontmatter(indexMarkdown, newestLastModified!));
 		console.log(`Generated: ${indexPath}`);
 	}
 
@@ -1899,6 +1914,30 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 		fs.writeFileSync(jsonPath, JSON.stringify(sidebarConfig, null, 2));
 		console.log(`Generated: ${jsonPath}`);
 	}
+};
+
+// Last-commit date of a source file, so generated pages can carry an honest lastModified date.
+// Falls back to the filesystem mtime for files git doesn't know about yet.
+const lastModifiedCache = new Map<string, string>();
+const getLastModifiedDate = (filePath: string) => {
+	let date = lastModifiedCache.get(filePath);
+	if (date === undefined) {
+		const gitDate = execFileSync('git', ['log', '-1', '--format=%cI', '--', filePath]).toString().trim();
+		date = gitDate
+			? new Date(gitDate).toISOString()
+			: fs.statSync(filePath).mtime.toISOString();
+		lastModifiedCache.set(filePath, date);
+	}
+	return date;
+};
+
+// Unquoted ISO value so YAML parses it as a date -- VitePress only honors the lastUpdated
+// frontmatter key (for both the page footer and the sitemap) when it's an actual Date
+const addLastUpdatedToFrontmatter = (markdown: string, lastModified: string) => {
+	if (markdown.startsWith('---\n')) {
+		return markdown.replace('---\n', `---\nlastUpdated: ${lastModified}\n`);
+	}
+	return `---\nlastUpdated: ${lastModified}\n---\n\n${markdown}`;
 };
 
 // Shared helper for extracting a JSDoc description, handling inline tags via raw-source fallback.
