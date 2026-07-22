@@ -297,7 +297,7 @@ export class OggMuxer extends Muxer {
 	}
 
 	allTracksAreKnown() {
-		for (const track of this.output._tracks) {
+		for (const track of this.output.tracks) {
 			if (!track.source._closed && !this.trackDatas.some(x => x.track === track)) {
 				return false; // We haven't seen a sample from this open track yet
 			}

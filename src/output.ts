@@ -372,6 +372,11 @@ export class Output<
 	 */
 	readonly defaultTrackGroup = new OutputTrackGroup();
 
+	/**
+	 * The tracks that have been added to this output. Treat it as a readonly field; to add tracks, use the methods.
+	 */
+	readonly tracks: OutputTrack[] = [];
+
 	/** @internal */
 	private _initTarget: T | (() => MaybePromise<T>) | null;
 	/** @internal */
@@ -382,8 +387,6 @@ export class Output<
 	_unfinalizedTargets = new Set<Target>();
 	/** @internal */
 	_rootWriterPromise: Promise<Writer> | null = null;
-	/** @internal */
-	_tracks: OutputTrack[] = [];
 	/** @internal */
 	_startPromise: Promise<void> | null = null;
 	/** @internal */
@@ -619,7 +622,7 @@ export class Output<
 		metadataCopy.group ??= this.defaultTrackGroup;
 
 		return this._addTrack(new OutputVideoTrack(
-			this._tracks.length + 1, this, source, metadataCopy,
+			this.tracks.length + 1, this, source, metadataCopy,
 		));
 	}
 
@@ -634,7 +637,7 @@ export class Output<
 		metadataCopy.group ??= this.defaultTrackGroup;
 
 		return this._addTrack(new OutputAudioTrack(
-			this._tracks.length + 1, this, source, metadataCopy,
+			this.tracks.length + 1, this, source, metadataCopy,
 		));
 	}
 
@@ -649,7 +652,7 @@ export class Output<
 		metadataCopy.group ??= this.defaultTrackGroup;
 
 		return this._addTrack(new OutputSubtitleTrack(
-			this._tracks.length + 1, this, source, metadataCopy,
+			this.tracks.length + 1, this, source, metadataCopy,
 		));
 	}
 
@@ -680,7 +683,7 @@ export class Output<
 
 		// Verify maximum track count constraints
 		const supportedTrackCounts = this.format.getSupportedTrackCounts();
-		const presentTracksOfThisType = this._tracks.reduce(
+		const presentTracksOfThisType = this.tracks.reduce(
 			(count, t) => count + (t.type === track.type ? 1 : 0),
 			0,
 		);
@@ -694,7 +697,7 @@ export class Output<
 			);
 		}
 		const maxTotalCount = supportedTrackCounts.total.max;
-		if (this._tracks.length === maxTotalCount) {
+		if (this.tracks.length === maxTotalCount) {
 			throw new Error(
 				`${this.format._name} does not support more than ${maxTotalCount} tracks`
 				+ `${maxTotalCount === 1 ? '' : 's'} in total.`,
@@ -748,10 +751,35 @@ export class Output<
 			}
 		}
 
-		this._tracks.push(track);
+		this.tracks.push(track);
 		track.source._connectedTrack = track;
 
 		return track;
+	}
+
+	/**
+	 * Whether the output has enough tracks (of the correct type) to be started, based on the requirements of the output
+	 * format.
+	 */
+	hasEnoughTracks() {
+		const supportedTrackCounts = this.format.getSupportedTrackCounts();
+		for (const trackType of ALL_TRACK_TYPES) {
+			const presentTracksOfThisType = this.tracks.reduce(
+				(count, track) => count + (track.type === trackType ? 1 : 0),
+				0,
+			);
+			const minCount = supportedTrackCounts[trackType].min;
+			if (presentTracksOfThisType < minCount) {
+				return false;
+			}
+		}
+
+		const totalMinCount = supportedTrackCounts.total.min;
+		if (this.tracks.length < totalMinCount) {
+			return false;
+		}
+
+		return true;
 	}
 
 	/**
@@ -764,7 +792,7 @@ export class Output<
 		// Verify minimum track count constraints
 		const supportedTrackCounts = this.format.getSupportedTrackCounts();
 		for (const trackType of ALL_TRACK_TYPES) {
-			const presentTracksOfThisType = this._tracks.reduce(
+			const presentTracksOfThisType = this.tracks.reduce(
 				(count, track) => count + (track.type === trackType ? 1 : 0),
 				0,
 			);
@@ -780,7 +808,7 @@ export class Output<
 			}
 		}
 		const totalMinCount = supportedTrackCounts.total.min;
-		if (this._tracks.length < totalMinCount) {
+		if (this.tracks.length < totalMinCount) {
 			throw new Error(
 				totalMinCount === supportedTrackCounts.total.max
 					? (`${this.format._name} requires exactly ${totalMinCount} track`
@@ -807,7 +835,7 @@ export class Output<
 			try {
 				await this._muxer.start();
 
-				const promises = this._tracks.map(track => track.source._start());
+				const promises = this.tracks.map(track => track.source._start());
 				await Promise.all(promises);
 			} finally {
 				release();
@@ -850,7 +878,7 @@ export class Output<
 			const release = await this._mutex.acquire();
 
 			try {
-				const promises = this._tracks.map(x => x.source._flushOrWaitForOngoingClose(true)); // Force close
+				const promises = this.tracks.map(x => x.source._flushOrWaitForOngoingClose(true)); // Force close
 				await Promise.all(promises);
 
 				await Promise.all([...this._unfinalizedTargets].map(target => target._close()));
@@ -883,7 +911,7 @@ export class Output<
 			const release = await this._mutex.acquire();
 
 			try {
-				const promises = this._tracks.map(x => x.source._flushOrWaitForOngoingClose(false));
+				const promises = this.tracks.map(x => x.source._flushOrWaitForOngoingClose(false));
 				await Promise.all(promises);
 
 				await this._muxer.finalize();

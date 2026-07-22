@@ -48,7 +48,7 @@ import {
 	promiseWithResolvers,
 	Rotation,
 } from './misc';
-import { Output, OutputTrackGroup, TrackType } from './output';
+import { Output, OutputTrackGroup } from './output';
 import { Mp4OutputFormat } from './output-format';
 import {
 	AudioSample,
@@ -146,6 +146,18 @@ export type ConversionOptions = {
 	 * want to keep the console output clean.
 	 */
 	showWarnings?: boolean;
+
+	/**
+	 * Whether this conversion is composable, defaults to `false`. A non-composable conversion takes full ownership of
+	 * the output: it requires a fresh output and controls its entire lifecycle, meaning it starts it, writes its
+	 * metadata tags, and finalizes it.
+	 *
+	 * A composable conversion only adds tracks to the output and drives their media data; starting and finalizing
+	 * the output is an outside responsibility. This is useful when only some output tracks should be driven by a
+	 * conversion, and other are to be driven manually. Additionally, it can be used to have multiple conversions target
+	 * the same output.
+	 */
+	composable?: boolean;
 };
 
 /**
@@ -547,15 +559,6 @@ export class Conversion {
 	_endTimestamp!: number;
 
 	/** @internal */
-	_addedCounts: Record<TrackType, number> = {
-		video: 0,
-		audio: 0,
-		subtitle: 0,
-	};
-
-	/** @internal */
-	_totalTrackCount = 0;
-	/** @internal */
 	_nextOutputTrackId = 0;
 	/** @internal */
 	_outputTrackIds: number[] = [];
@@ -564,6 +567,8 @@ export class Conversion {
 
 	/** @internal */
 	_trackPromises: Promise<void>[] = [];
+	/** @internal */
+	_composable = false;
 
 	/** @internal */
 	_started: Promise<void>;
@@ -600,7 +605,8 @@ export class Conversion {
 
 	/**
 	 * Whether this conversion, as it has been configured, is valid and can be executed. If this field is `false`, check
-	 * the `discardedTracks` field for reasons.
+	 * the `discardedTracks` field for reasons. Composable conversions are always valid, even if they utilize
+	 * zero tracks.
 	 *
 	 * Note: a conversion having discarded tracks does not automatically mean it is invalid; if the remaining, utilized
 	 * tracks make for a valid output file, the conversion is still allowed.
@@ -642,12 +648,30 @@ export class Conversion {
 				'options.tracks, when provided, must be either \'all\' or \'primary\'.',
 			);
 		}
-		if (
-			options.output._tracks.length > 0
-			|| Object.keys(options.output._metadataTags).length > 0
-			|| options.output.state !== 'pending'
-		) {
-			throw new TypeError('options.output must be fresh: no tracks or metadata tags added and not started.');
+		if (options.composable !== undefined && typeof options.composable !== 'boolean') {
+			throw new TypeError('options.composable, when provided, must be a boolean.');
+		}
+
+		const composable = options.composable ?? false;
+		if (!composable) {
+			if (
+				options.output.tracks.length > 0
+				|| Object.keys(options.output._metadataTags).length > 0
+				|| options.output.state !== 'pending'
+			) {
+				throw new TypeError('options.output must be fresh: no tracks or metadata tags added and not started.');
+			}
+		} else {
+			if (options.tags !== undefined) {
+				throw new TypeError(
+					'options.tags cannot be set by a composable conversion; set metadata directly on the output'
+					+ ' instead.',
+				);
+			}
+
+			if (options.output.state !== 'pending') {
+				throw new TypeError('options.output must not have been started yet.');
+			}
 		}
 
 		if (options.video !== undefined && typeof options.video !== 'function') {
@@ -704,6 +728,7 @@ export class Conversion {
 		}
 
 		this._options = options;
+		this._composable = composable;
 		this.input = options.input;
 		this.output = options.output;
 
@@ -857,7 +882,7 @@ export class Conversion {
 			const options = filteredTrackOptions[i]!;
 
 			for (const option of options) {
-				if (this._totalTrackCount === outputTrackCounts.total.max) {
+				if (this.output.tracks.length === outputTrackCounts.total.max) {
 					this.discardedTracks.push({
 						track,
 						reason: 'max_track_count_reached',
@@ -866,7 +891,12 @@ export class Conversion {
 					continue;
 				}
 
-				if (this._addedCounts[track.type] === outputTrackCounts[track.type].max) {
+				const addedCountOfType = this.output.tracks.reduce(
+					(count, t) => count + (t.type === track.type ? 1 : 0),
+					0,
+				);
+
+				if (addedCountOfType === outputTrackCounts[track.type].max) {
 					this.discardedTracks.push({
 						track,
 						reason: 'max_track_count_of_type_reached',
@@ -906,39 +936,44 @@ export class Conversion {
 			}
 		}
 
-		// Now, let's deal with metadata tags
+		// Now, let's deal with metadata tags. A composable conversion does not touch the output's metadata tags; that
+		// remains the responsibility of whoever owns the output.
 
-		const inputTags = await this.input.getMetadataTags();
-		let outputTags: MetadataTags;
+		if (!this._composable) {
+			const inputTags = await this.input.getMetadataTags();
+			let outputTags: MetadataTags;
 
-		if (this._options.tags) {
-			const result = typeof this._options.tags === 'function'
-				? await this._options.tags(inputTags)
-				: this._options.tags;
-			validateMetadataTags(result);
+			if (this._options.tags) {
+				const result = typeof this._options.tags === 'function'
+					? await this._options.tags(inputTags)
+					: this._options.tags;
+				validateMetadataTags(result);
 
-			outputTags = result;
-		} else {
-			outputTags = inputTags;
+				outputTags = result;
+			} else {
+				outputTags = inputTags;
+			}
+
+			// Somewhat dirty but pragmatic
+			const inputAndOutputFormatMatch = inputFormat.mimeType === this.output.format.mimeType;
+			const rawTagsAreUnchanged = inputTags.raw === outputTags.raw;
+
+			if (inputTags.raw && rawTagsAreUnchanged && !inputAndOutputFormatMatch) {
+				// If the input and output formats aren't the same, copying over raw metadata tags makes no sense and
+				// only results in junk tags, so let's cut them out.
+				delete outputTags.raw;
+			}
+
+			this.output.setMetadataTags(outputTags);
 		}
-
-		// Somewhat dirty but pragmatic
-		const inputAndOutputFormatMatch = inputFormat.mimeType === this.output.format.mimeType;
-		const rawTagsAreUnchanged = inputTags.raw === outputTags.raw;
-
-		if (inputTags.raw && rawTagsAreUnchanged && !inputAndOutputFormatMatch) {
-			// If the input and output formats aren't the same, copying over raw metadata tags makes no sense and only
-			// results in junk tags, so let's cut them out.
-			delete outputTags.raw;
-		}
-
-		this.output.setMetadataTags(outputTags);
 
 		// Let's check if the conversion can actually be executed
-		this.isValid = this._totalTrackCount >= outputTrackCounts.total.min
-			&& this._addedCounts.video >= outputTrackCounts.video.min
-			&& this._addedCounts.audio >= outputTrackCounts.audio.min
-			&& this._addedCounts.subtitle >= outputTrackCounts.subtitle.min;
+		if (!this._composable) {
+			this.isValid = this.output.hasEnoughTracks();
+		} else {
+			// Checking Output start validity is not up to us. We consider even zero-track conversions to be valid
+			this.isValid = true;
+		}
 
 		if (this._options.showWarnings ?? true) {
 			const warnElements: unknown[] = [];
@@ -1054,6 +1089,13 @@ export class Conversion {
 			);
 		}
 
+		if (this._composable && this.output.state === 'pending') {
+			throw new Error(
+				'A composable conversion requires the output to be started. Call start() on the output before executing'
+				+ ' the conversion.',
+			);
+		}
+
 		if (this._executed) {
 			throw new Error('Conversion cannot be executed twice.');
 		}
@@ -1088,7 +1130,10 @@ export class Conversion {
 			this.onProgress?.(0, 0);
 		}
 
-		await this.output.start();
+		if (!this._composable) {
+			await this.output.start();
+		}
+
 		this._start();
 
 		try {
@@ -1106,7 +1151,9 @@ export class Conversion {
 			throw new ConversionCanceledError();
 		}
 
-		await this.output.finalize();
+		if (!this._composable) {
+			await this.output.finalize();
+		}
 
 		if (this._computeProgress) {
 			const minTimestamp = Math.min(...this._maxTimestamps.values());
@@ -1129,7 +1176,10 @@ export class Conversion {
 		}
 
 		this._canceled = true;
-		await this.output.cancel();
+
+		if (!this._composable) {
+			await this.output.cancel();
+		}
 	}
 
 	/** @internal */
@@ -1219,7 +1269,7 @@ export class Conversion {
 
 				for await (const packet of sink.packets(undefined, undefined, { verifyKeyPackets: true })) {
 					if (this._canceled) {
-						return;
+						break;
 					}
 
 					if (packet.timestamp >= this._endTimestamp) {
@@ -1377,7 +1427,7 @@ export class Conversion {
 
 				for await (using sample of sink.samples(this._startTimestamp, this._endTimestamp)) {
 					if (this._canceled) {
-						return;
+						break;
 					}
 
 					const adjustedSampleTimestamp = Math.max(sample.timestamp - this._startTimestamp, 0);
@@ -1400,7 +1450,9 @@ export class Conversion {
 		}
 
 		let ownGroup: OutputTrackGroup | null = null;
-		if (!trackOptions.group) {
+		if (!trackOptions.group && !this._composable) {
+			// Create per-track groups to replicate the input's pairability graph. Don't do this for composable
+			// conversions.
 			ownGroup = new OutputTrackGroup();
 		}
 
@@ -1414,8 +1466,6 @@ export class Conversion {
 			rotation: outputTrackRotation,
 			group: ownGroup ?? trackOptions.group,
 		});
-		this._addedCounts.video++;
-		this._totalTrackCount++;
 
 		this.utilizedTracks.push(track);
 		this._outputTrackIds.push(outputTrackId);
@@ -1474,7 +1524,7 @@ export class Conversion {
 
 				for await (const packet of sink.packets()) {
 					if (this._canceled) {
-						return;
+						break;
 					}
 
 					if (packet.timestamp >= this._endTimestamp) {
@@ -1595,7 +1645,7 @@ export class Conversion {
 				const sink = new AudioSampleSink(track);
 				for await (using sample of sink.samples(this._startTimestamp, this._endTimestamp)) {
 					if (this._canceled) {
-						return;
+						break;
 					}
 
 					if (needsPadding) {
@@ -1663,7 +1713,9 @@ export class Conversion {
 		}
 
 		let ownGroup: OutputTrackGroup | null = null;
-		if (!trackOptions.group) {
+		if (!trackOptions.group && !this._composable) {
+			// Create per-track groups to replicate the input's pairability graph. Don't do this for composable
+			// conversions.
 			ownGroup = new OutputTrackGroup();
 		}
 
@@ -1675,8 +1727,6 @@ export class Conversion {
 			disposition: await track.getDisposition(),
 			group: ownGroup ?? trackOptions.group,
 		});
-		this._addedCounts.audio++;
-		this._totalTrackCount++;
 
 		this.utilizedTracks.push(track);
 		this._outputTrackIds.push(outputTrackId);

@@ -22,7 +22,7 @@ It has the following features:
 - Audio up/downmixing
 - User-defined video & audio processing
 
-The conversion API was built to be simple, versatile and extremely performant.
+The conversion API was built to be simple, versatile, composable and performant.
 
 ## Basic usage
 
@@ -63,7 +63,7 @@ await conversion.execute();
 That's it! A `Conversion` simply takes an instance of `Input` and `Output`, then reads the data from the input and writes it to the output. If you're unfamiliar with [`Input`](./reading-media-files) and [`Output`](./writing-media-files), check out their respective guides.
 
 ::: info
-The `Output` passed to the `Conversion` must be *fresh*; that is, it must have no added tracks or metadata tags and be in the `'pending'` state (not started yet).
+The `Output` passed to the `Conversion` must be *fresh*; that is, it must have no added tracks or metadata tags and be in the `'pending'` state (not started yet). This requirement is relaxed for [composable conversions](#composable-conversions), which allows you to combine the conversion with other tracks.
 :::
 
 Unconfigured, the conversion process handles all the details automatically, such as:
@@ -505,6 +505,59 @@ const conversion = await Conversion.init({ input, output });
 conversion.utilizedTracks; // => InputTrack[]
 ```
 A track may appear multiple times in this list when [fan-out](#track-fan-out) produces multiple output tracks from it.
+
+## Composable conversions
+
+By default, a `Conversion` takes full ownership of its `Output`: it requires a fresh output, then starts it, adds data, and finalizes it for you. Sometimes, however, you want a conversion to be just *one* of several contributors to a single output file - for example, to keep an input's video track while attaching your own, externally-produced audio track. For this, set `composable: true`.
+
+A composable conversion only adds its own tracks to the output and pumps their media data while `execute()` runs. Everything else about the output's lifecycle is yours: you add any additional tracks, set any metadata tags, and call `start()` and `finalize()` yourself. This enables you to add additional tracks outside of the conversion, or even have multiple conversions target a single `Output`.
+
+To use it, initialize everything, then start the `Output`, and then execute the conversion:
+
+```ts
+import {
+	Input,
+	Output,
+	Mp4OutputFormat,
+	BufferTarget,
+	Conversion,
+	AudioBufferSource,
+} from 'mediabunny';
+
+const input = new Input({ ... });
+const output = new Output({
+	format: new Mp4OutputFormat(),
+	target: new BufferTarget(),
+});
+
+// Use the conversion only to copy over the video
+const conversion = await Conversion.init({
+	input,
+	output,
+	audio: { discard: true },
+	composable: true,
+});
+
+// Add our own audio track directly
+const audioSource = new AudioBufferSource({ codec: 'aac', bitrate: 128e3 });
+output.addAudioTrack(audioSource);
+
+// Start the output
+await output.start();
+
+// Run the conversion concurrently with feeding our own audio
+await Promise.all([
+	conversion.execute(),
+	audioSource.add(myAudioBuffer).then(() => audioSource.close()),
+]);
+
+// Finalize the output
+await output.finalize();
+```
+
+### Cancellation
+
+[Canceling](#canceling-a-conversion) a composable conversion does *not* cancel the output, it only stops media data from being added and closes its tracks. For a full abort, you must cancel the output manually.
 
 ## Converting live streams
 
