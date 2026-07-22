@@ -63,7 +63,7 @@ await conversion.execute();
 That's it! A `Conversion` simply takes an instance of `Input` and `Output`, then reads the data from the input and writes it to the output. If you're unfamiliar with [`Input`](./reading-media-files) and [`Output`](./writing-media-files), check out their respective guides.
 
 ::: info
-The `Output` passed to the `Conversion` must be *fresh*; that is, it must have no added tracks or metadata tags and be in the `'pending'` state (not started yet). This requirement is relaxed for [composable conversions](#composable-conversions).
+The `Output` passed to the `Conversion` must be *fresh*; that is, it must have no added tracks or metadata tags and be in the `'pending'` state (not started yet). This requirement is relaxed for [composable conversions](#composable-conversions), which allows you to combine the conversion with other tracks.
 :::
 
 Unconfigured, the conversion process handles all the details automatically, such as:
