@@ -1216,6 +1216,18 @@ export type HlsOutputFormatOptions = {
 	 */
 	singleFilePerPlaylist?: boolean;
 	/**
+	 * Controls how single-file media playlists are written.
+	 *
+	 * - `'segments'` (default): Concatenate the media segments into a single media resource.
+	 * - `'standalone'`: Write the media resource as one standalone fragmented MP4 and use byte ranges into that file.
+	 *   This makes the media resource playable both through the HLS playlist and directly in fragmented-MP4-capable
+	 *   players.
+	 *
+	 * The `'standalone'` mode requires {@link HlsOutputFormatOptions.singleFilePerPlaylist} and
+	 * {@link Mp4OutputFormat}, and is only supported for VOD outputs.
+	 */
+	singleFilePerPlaylistMode?: 'segments' | 'standalone';
+	/**
 	 * If `true`, the muxer will be in "live mode", continuously emitting updated playlists as new segments are created.
 	 * The master playlist will be emitted as soon as all playlists have been emitted at least once, and will continue
 	 * to be emitted each time a segment is finalized to further refine the accuracy of the `BANDWIDTH` attribute.
@@ -1325,6 +1337,20 @@ export class HlsOutputFormat extends OutputFormat {
 		}
 		if (options.singleFilePerPlaylist !== undefined && typeof options.singleFilePerPlaylist !== 'boolean') {
 			throw new TypeError('options.singleFilePerPlaylist, when provided, must be a boolean.');
+		}
+		if (
+			options.singleFilePerPlaylistMode !== undefined
+			&& !['segments', 'standalone'].includes(options.singleFilePerPlaylistMode)
+		) {
+			throw new TypeError(
+				'options.singleFilePerPlaylistMode, when provided, must be either \'segments\' or \'standalone\'.',
+			);
+		}
+		if (options.singleFilePerPlaylistMode === 'standalone' && !options.singleFilePerPlaylist) {
+			throw new TypeError('options.singleFilePerPlaylistMode=\'standalone\' requires singleFilePerPlaylist.');
+		}
+		if (options.singleFilePerPlaylistMode === 'standalone' && options.live) {
+			throw new TypeError('options.singleFilePerPlaylistMode=\'standalone\' is only supported for VOD outputs.');
 		}
 		if (options.live !== undefined && typeof options.live !== 'boolean') {
 			throw new TypeError('options.live, when provided, must be a boolean.');

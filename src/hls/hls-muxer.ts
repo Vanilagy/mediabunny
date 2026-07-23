@@ -33,6 +33,7 @@ import {
 	HlsOutputFormatOptions,
 	HlsOutputPlaylistInfo,
 	HlsOutputSegmentInfo,
+	Mp4OutputFormat,
 	OutputFormat,
 } from '../output-format';
 import { Writer } from '../writer';
@@ -67,6 +68,20 @@ type PlaylistSegment = {
 	info: HlsOutputSegmentInfo | null;
 };
 
+type StandaloneSingleFile = {
+	output: Output;
+	target: Target;
+	path: string;
+	info: HlsOutputSegmentInfo;
+	videoSources: Map<OutputTrack, EncodedVideoPacketSource>;
+	audioSources: Map<OutputTrack, EncodedAudioPacketSource>;
+	fragments: {
+		start: number;
+		end: number | null;
+		timestamp: number;
+	}[];
+};
+
 type Playlist = {
 	id: number;
 	path: string;
@@ -90,6 +105,12 @@ type Playlist = {
 		info: HlsOutputSegmentInfo;
 	} | null;
 
+	standaloneSingleFile: StandaloneSingleFile | null;
+	standaloneSegmentInfos: {
+		timestamp: number;
+		duration: number;
+	}[];
+
 	// For HLS, having a single mutex is too coarse. Every playlist is basically independent and therefore we can have
 	// a per-playlist mutex instead of a per-muxer one. This means two packets from different playlists coming in don't
 	// block each other.
@@ -112,6 +133,7 @@ export class HlsMuxer extends Muxer {
 	targetSegmentDuration: number;
 	trackDatas: HlsTrackData[] = [];
 	singleFilePerPlaylist: boolean;
+	singleFilePerPlaylistMode: NonNullable<HlsOutputFormatOptions['singleFilePerPlaylistMode']>;
 	isLive: boolean;
 	maxLiveSegmentCount: number;
 	isRelativeToUnixEpoch = false;
@@ -131,6 +153,7 @@ export class HlsMuxer extends Muxer {
 		this.format = format;
 		this.targetSegmentDuration = format._options.targetDuration ?? 2;
 		this.singleFilePerPlaylist = format._options.singleFilePerPlaylist ?? false;
+		this.singleFilePerPlaylistMode = format._options.singleFilePerPlaylistMode ?? 'segments';
 		this.isLive = format._options.live ?? false;
 		this.maxLiveSegmentCount = format._options.maxLiveSegmentCount ?? Infinity;
 		this.globalTargetDuration = this.targetSegmentDuration;
@@ -466,6 +489,8 @@ export class HlsMuxer extends Muxer {
 				mediaSequence: 0,
 				done: false,
 				singleFile: null,
+				standaloneSingleFile: null,
+				standaloneSegmentInfos: [],
 				mutex: new AsyncMutex(),
 			};
 			this.playlists.push(playlist);
@@ -673,6 +698,93 @@ export class HlsMuxer extends Muxer {
 		throw new Error('Unreachable.');
 	}
 
+	private async ensureStandaloneSingleFileOutput(playlist: Playlist) {
+		if (playlist.standaloneSingleFile) {
+			return playlist.standaloneSingleFile;
+		}
+
+		if (!(playlist.segmentFormat instanceof Mp4OutputFormat)) {
+			throw new Error('singleFilePerPlaylistMode=\'standalone\' currently requires Mp4OutputFormat.');
+		}
+
+		assert(this.output._target instanceof PathedTarget);
+		const pathedTarget = this.output._target;
+
+		const segmentInfo: HlsOutputSegmentInfo = {
+			n: playlist.nextSegmentId,
+			format: playlist.segmentFormat,
+			isSingleFile: true,
+			playlist: toPlaylistInfo(playlist),
+		};
+
+		const relativeSegmentPath = await this.getSegmentPath(segmentInfo);
+		validateSegmentPath(relativeSegmentPath);
+
+		const fullSegmentPath = joinPaths(
+			joinPaths(pathedTarget.rootPath, playlist.path),
+			relativeSegmentPath,
+		);
+
+		const originalOptions = playlist.segmentFormat._options;
+		const fragments: StandaloneSingleFile['fragments'] = [];
+		const standaloneFormat = new Mp4OutputFormat({
+			...originalOptions,
+			fastStart: 'fragmented',
+			minimumFragmentDuration: this.targetSegmentDuration,
+			onMoof: (data, position, timestamp) => {
+				originalOptions.onMoof?.(data, position, timestamp);
+				fragments.push({
+					start: position,
+					end: null,
+					timestamp,
+				});
+			},
+			onMdat: (data, position) => {
+				originalOptions.onMdat?.(data, position);
+				const fragment = fragments.at(-1);
+				if (fragment) {
+					fragment.end = position + data.byteLength;
+				}
+			},
+		});
+
+		const target = await this.output._getTarget({
+			path: fullSegmentPath,
+			isRoot: false,
+			mimeType: standaloneFormat.mimeType,
+		});
+		const output = new Output({
+			format: standaloneFormat,
+			target,
+		});
+
+		const videoSources = new Map<OutputTrack, EncodedVideoPacketSource>();
+		const audioSources = new Map<OutputTrack, EncodedAudioPacketSource>();
+		for (const track of playlist.tracks) {
+			if (track.isVideoTrack()) {
+				const source = new EncodedVideoPacketSource(track.source._codec);
+				videoSources.set(track, source);
+				output.addVideoTrack(source, track.metadata);
+			} else if (track.isAudioTrack()) {
+				const source = new EncodedAudioPacketSource(track.source._codec);
+				audioSources.set(track, source);
+				output.addAudioTrack(source, track.metadata);
+			}
+		}
+
+		await output.start();
+
+		return playlist.standaloneSingleFile = {
+			output,
+			target,
+			path: relativeSegmentPath,
+			info: segmentInfo,
+			videoSources,
+			audioSources,
+			fragments,
+		};
+	}
+
 	async advancePlaylist(playlist: Playlist) {
 		assert(!playlist.done);
 
@@ -824,6 +936,74 @@ export class HlsMuxer extends Muxer {
 			}
 
 			// We can finalize a new segment!
+			if (this.singleFilePerPlaylistMode === 'standalone') {
+				const standalone = await this.ensureStandaloneSingleFileOutput(playlist);
+				let maxEndTimestamp = -Infinity;
+
+				if (videoTrack) {
+					const source = standalone.videoSources.get(videoTrack.track);
+					assert(source);
+					const meta = { decoderConfig: videoTrack.info.decoderConfig };
+
+					for (let i = 0; i < videoEndIndex; i++) {
+						const packet = videoTrack.packets[i]!;
+
+						await source.add(packet, meta);
+						maxEndTimestamp = Math.max(maxEndTimestamp, packet.timestamp + packet.duration);
+					}
+				}
+
+				if (audioTrack) {
+					const source = standalone.audioSources.get(audioTrack.track);
+					assert(source);
+					const meta = { decoderConfig: audioTrack.info.decoderConfig };
+
+					for (let i = 0; i < audioEndIndex; i++) {
+						const packet = audioTrack.packets[i]!;
+
+						await source.add(packet, meta);
+						maxEndTimestamp = Math.max(maxEndTimestamp, packet.timestamp + packet.duration);
+					}
+				}
+
+				if (videoEndIndex > 0) {
+					assert(videoTrack);
+					videoTrack.packets.splice(0, videoEndIndex);
+				}
+				if (audioEndIndex > 0) {
+					assert(audioTrack);
+					audioTrack.packets.splice(0, audioEndIndex);
+				}
+
+				let minNextTimestamp = Infinity;
+				if (videoTrack && videoTrack.packets.length > 0) {
+					minNextTimestamp = videoTrack.packets[0]!.timestamp;
+				}
+				if (audioTrack && audioTrack.packets.length > 0) {
+					minNextTimestamp = Math.min(minNextTimestamp, audioTrack.packets[0]!.timestamp);
+				}
+
+				const nextSegmentStartTimestamp = minNextTimestamp < Infinity
+					? minNextTimestamp
+					: maxEndTimestamp; // Happens for the last segment for example
+				assert(Number.isFinite(nextSegmentStartTimestamp));
+
+				const segmentDuration = nextSegmentStartTimestamp - playlist.currentSegmentStartTimestamp;
+				assert(segmentDuration >= 0);
+
+				playlist.standaloneSegmentInfos.push({
+					timestamp: playlist.currentSegmentStartTimestamp,
+					duration: segmentDuration,
+				});
+
+				this.globalTargetDuration = Math.max(this.globalTargetDuration, segmentDuration);
+
+				playlist.currentSegmentStartTimestamp = nextSegmentStartTimestamp;
+				// After the first segment, the timestamp is now fixed
+				playlist.currentSegmentStartTimestampIsFixed = true;
+
+				continue;
+			}
 
 			let segmentInfo: HlsOutputSegmentInfo | null = null;
 			let relativeSegmentPath: string;
@@ -1101,7 +1281,51 @@ export class HlsMuxer extends Muxer {
 		assert(!playlist.done);
 		playlist.done = true;
 
-		if (playlist.singleFile) {
+		if (this.singleFilePerPlaylistMode === 'standalone' && playlist.standaloneSingleFile) {
+			const standalone = playlist.standaloneSingleFile;
+			for (const source of standalone.videoSources.values()) {
+				source.close();
+			}
+			for (const source of standalone.audioSources.values()) {
+				source.close();
+			}
+
+			await standalone.output.finalize();
+
+			const fragments = standalone.fragments.filter((fragment): fragment is {
+				start: number;
+				end: number;
+				timestamp: number;
+			} => fragment.end !== null);
+			if (fragments.length > 0) {
+				playlist.initSegment = {
+					path: standalone.path,
+					duration: 0,
+					timestamp: 0,
+					byteSize: fragments[0]!.start,
+					byteOffset: 0,
+					info: null,
+				};
+
+				playlist.writtenSegments = fragments.map((fragment, index) => {
+					const segmentInfo = playlist.standaloneSegmentInfos[index];
+					const nextFragment = fragments[index + 1];
+					const duration = segmentInfo?.duration
+						?? (nextFragment ? nextFragment.timestamp - fragment.timestamp : this.targetSegmentDuration);
+
+					return {
+						path: standalone.path,
+						duration: Math.max(0.001, duration),
+						timestamp: segmentInfo?.timestamp ?? fragment.timestamp,
+						byteSize: fragment.end - fragment.start,
+						byteOffset: fragment.start,
+						info: null,
+					};
+				});
+			}
+
+			this.format._options.onSegment?.(standalone.target, standalone.info);
+		} else if (playlist.singleFile) {
 			await playlist.singleFile.target._flush();
 			await playlist.singleFile.target._finalize();
 
