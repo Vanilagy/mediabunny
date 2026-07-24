@@ -87,19 +87,19 @@ export abstract class OutputFormat {
 	abstract get supportsTimestampedMediaData(): boolean;
 
 	/** Returns a list of video codecs that this output format can contain. */
-	getSupportedVideoCodecs() {
+	getSupportedVideoCodecs(): VideoCodec[] {
 		return this.getSupportedCodecs()
 			.filter(codec => (VIDEO_CODECS as readonly string[]).includes(codec)) as VideoCodec[];
 	}
 
 	/** Returns a list of audio codecs that this output format can contain. */
-	getSupportedAudioCodecs() {
+	getSupportedAudioCodecs(): AudioCodec[] {
 		return this.getSupportedCodecs()
 			.filter(codec => (AUDIO_CODECS as readonly string[]).includes(codec)) as AudioCodec[];
 	}
 
 	/** Returns a list of subtitle codecs that this output format can contain. */
-	getSupportedSubtitleCodecs() {
+	getSupportedSubtitleCodecs(): SubtitleCodec[] {
 		return this.getSupportedCodecs()
 			.filter(codec => (SUBTITLE_CODECS as readonly string[]).includes(codec)) as SubtitleCodec[];
 	}
