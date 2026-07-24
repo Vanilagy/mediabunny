@@ -330,10 +330,11 @@ export class IsobmffMuxer extends Muxer {
 			} else if (trackData.type === 'audio') {
 				return trackData.info.decoderConfig.codec;
 			} else {
-				const map: Record<SubtitleCodec, string> = {
+				// Only ISOBMFF-supported subtitle codecs reach the muxer (validated on add).
+				const map: Partial<Record<SubtitleCodec, string>> = {
 					webvtt: 'wvtt',
 				};
-				return map[trackData.track.source._codec];
+				return map[trackData.track.source._codec]!;
 			}
 		});
 

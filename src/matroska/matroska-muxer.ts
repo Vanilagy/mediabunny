@@ -711,6 +711,7 @@ export class MatroskaMuxer extends Muxer {
 			} else {
 				const map: Record<SubtitleCodec, string> = {
 					webvtt: 'wvtt',
+					ass: 'ass',
 				};
 				return map[trackData.track.source._codec];
 			}

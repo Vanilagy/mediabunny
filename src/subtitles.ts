@@ -24,8 +24,15 @@ export type SubtitleMetadata = {
 };
 
 type SubtitleParserOptions = {
-	codec: 'webvtt';
+	codec: 'webvtt' | 'ass';
 	output: (cue: SubtitleCue, metadata: SubtitleMetadata) => unknown;
+};
+
+// ASS/SSA timestamp "H:MM:SS.cc" (centiseconds) -> milliseconds.
+const parseAssTimestamp = (s: string): number => {
+	const m = /(\d+):(\d{2}):(\d{2})\.(\d{2})/.exec(s.trim());
+	if (!m) return 0;
+	return Number(m[1]) * 3600000 + Number(m[2]) * 60000 + Number(m[3]) * 1000 + Number(m[4]) * 10;
 };
 
 const cueBlockHeaderRegex = /(?:(.+?)\n)?((?:\d{2}:)?\d{2}:\d{2}.\d{3})\s+-->\s+((?:\d{2}:)?\d{2}:\d{2}.\d{3})/g;
@@ -36,12 +43,19 @@ export class SubtitleParser {
 	private options: SubtitleParserOptions;
 	private preambleText: string | null = null;
 	private preambleEmitted = false;
+	private assReadOrder = 0;
+	private assConfigEmitted = false;
 
 	constructor(options: SubtitleParserOptions) {
 		this.options = options;
 	}
 
 	parse(text: string) {
+		if (this.options.codec === 'ass') {
+			this.parseAss(text);
+			return;
+		}
+
 		text = text.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
 
 		cueBlockHeaderRegex.lastIndex = 0;
@@ -103,6 +117,80 @@ export class SubtitleParser {
 			}
 
 			this.options.output(cue, meta);
+		}
+	}
+
+	// Parse an ASS/SSA document: the header (up to and including the [Events] Format line)
+	// becomes the CodecPrivate; each Dialogue line becomes a cue whose text is the S_TEXT/ASS
+	// block payload "ReadOrder,Layer,Style,Name,MarginL,MarginR,MarginV,Effect,Text".
+	private parseAss(text: string) {
+		const lines = text.replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n');
+		let formatIdx = -1;
+		let inEvents = false;
+		for (let i = 0; i < lines.length; i++) {
+			const trimmed = (lines[i] ?? '').trim();
+			if (/^\[events\]/i.test(trimmed)) {
+				inEvents = true;
+			} else if (inEvents && /^format:/i.test(trimmed)) {
+				formatIdx = i;
+				break;
+			}
+		}
+		if (formatIdx === -1) throw new Error('ASS document has no [Events] Format line.');
+
+		const header = lines.slice(0, formatIdx + 1).join('\n');
+		const fmt = (lines[formatIdx] ?? '').replace(/^\s*format:\s*/i, '').split(',').map(s => s.trim().toLowerCase());
+		const col = (name: string) => fmt.indexOf(name);
+		const iStart = col('start');
+		const iEnd = col('end');
+		const iText = col('text');
+		const cols = {
+			layer: col('layer'),
+			style: col('style'),
+			name: col('name'),
+			ml: col('marginl'),
+			mr: col('marginr'),
+			mv: col('marginv'),
+			effect: col('effect'),
+		};
+
+		for (let i = formatIdx + 1; i < lines.length; i++) {
+			const m = /^\s*dialogue:\s*(.*)$/i.exec(lines[i] ?? '');
+			if (!m) {
+				continue;
+			}
+
+			const bits = (m[1] ?? '').split(',');
+			// The Text column is last and may itself contain commas, so it takes every remaining field.
+			const field = (idx: number): string => {
+				if (idx < 0) return '';
+				return idx === iText ? bits.slice(iText).join(',') : (bits[idx] ?? '');
+			};
+			const start = parseAssTimestamp(field(iStart));
+			const end = parseAssTimestamp(field(iEnd));
+			const payload = [
+				this.assReadOrder,
+				field(cols.layer) || '0',
+				field(cols.style),
+				field(cols.name),
+				field(cols.ml) || '0',
+				field(cols.mr) || '0',
+				field(cols.mv) || '0',
+				field(cols.effect),
+				field(iText),
+			].join(',');
+
+			const meta: SubtitleMetadata = {};
+			if (!this.assConfigEmitted) {
+				meta.config = { description: header };
+				this.assConfigEmitted = true;
+			}
+
+			this.options.output(
+				{ timestamp: start / 1000, duration: Math.max(0, end - start) / 1000, text: payload },
+				meta,
+			);
+			this.assReadOrder++;
 		}
 	}
 }
