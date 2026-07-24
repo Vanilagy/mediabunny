@@ -233,7 +233,7 @@ export type BaseTrackMetadata = {
 	 * tracks can be presented together with other tracks. This is needed for configuring things like HLS master
 	 * playlists.
 	 *
-	 * Two groups are considered pairable if they are in the same group but are of different {@link TrackType}, or if
+	 * Two tracks are considered pairable if they are in the same group but are of different {@link TrackType}, or if
 	 * they are in two separate groups that have been paired with each other.
 	 *
 	 * If left blank, a track is automatically assigned to {@link Output.defaultTrackGroup}.

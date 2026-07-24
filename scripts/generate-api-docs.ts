@@ -466,23 +466,90 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 		return result.join('\n');
 	};
 
+	// Reduces the indentation of a multi-line type annotation lifted from source so that it sits naturally at the
+	// top level of a code block
+	const dedentTypeText = (typeText: string) => {
+		const lines = typeText.split('\n');
+		if (lines.length === 1) {
+			return typeText;
+		}
+
+		const continuationLines = lines.slice(1).filter(line => line.trim() !== '');
+		const minIndent = Math.min(...continuationLines.map(line => line.match(/^\t*/)![0].length));
+		// For bracketed types, the closing bracket should align with the first line; for union continuations
+		// (pipes on the following lines), the shallowest lines should sit one level deep instead
+		const firstLineOpensBracket = /[({<[]$/.test(lines[0]!.trimEnd());
+		const amount = minIndent - (firstLineOpensBracket ? 0 : 1);
+		if (amount <= 0) {
+			return typeText;
+		}
+
+		return [
+			lines[0],
+			...lines.slice(1).map(line => line.replace(new RegExp(`^\\t{0,${amount}}`), '')),
+		].join('\n');
+	};
+
+	// Type arguments that merely restate a generic's declared defaults (like Uint8Array<ArrayBufferLike>) add no
+	// information, so we collect every generic's default arguments to strip such noise from printed types
+	const genericDefaults = new Map<string, string | null>();
+	for (const sourceFile of program.getSourceFiles()) {
+		const collectDefaults = (node: ts.Node) => {
+			if (
+				(ts.isInterfaceDeclaration(node) || ts.isClassDeclaration(node) || ts.isTypeAliasDeclaration(node))
+				&& node.name && node.typeParameters && node.typeParameters.length > 0
+			) {
+				const name = node.name.text;
+				const defaults = node.typeParameters.map(tp => tp.default?.getText() ?? null);
+
+				// Merged declarations only state the defaults once, so declarations without them tell us nothing;
+				// but if two declarations disagree on the defaults, better not to strip anything (null marker)
+				if (defaults.every(d => d !== null)) {
+					const joined = defaults.join(', ');
+					const existing = genericDefaults.get(name);
+					if (existing === undefined) {
+						genericDefaults.set(name, joined);
+					} else if (existing !== null && existing !== joined) {
+						genericDefaults.set(name, null);
+					}
+				}
+			}
+			ts.forEachChild(node, collectDefaults);
+		};
+		collectDefaults(sourceFile);
+	}
+
+	const stripDefaultTypeArguments = (typeString: string): string => {
+		const regex = /\b([A-Za-z_$][\w$]*)<([^<>()]+)>/g;
+		let previous;
+		do {
+			previous = typeString;
+			typeString = typeString.replace(regex, (match, name: string, args: string) => {
+				return genericDefaults.get(name) === args.trim() ? name : match;
+			});
+		} while (typeString !== previous);
+		return typeString;
+	};
+
 	// Helper to get better type string representation
 	const getTypeString = (type: ts.Type): string => {
 		// Handle array types specially
 		if (typeChecker.isArrayType(type)) {
 			const elementType = typeChecker.getTypeArguments(type as ts.TypeReference)[0];
 			if (elementType) {
-				return `${getTypeString(elementType)}[]`;
+				return `${parenthesizeArrayElement(getTypeString(elementType))}[]`;
 			}
 		}
 
 		// Check if it's an array-like type by checking the symbol name
-		const typeString = typeChecker.typeToString(type);
+		const typeString = stripDefaultTypeArguments(
+			typeChecker.typeToString(type, undefined, ts.TypeFormatFlags.NoTruncation),
+		);
 		if (typeString === 'Array' && type.symbol && type.symbol.getName() === 'Array') {
 			// Try to get type arguments from the type reference
 			if ((type as any).typeArguments && (type as any).typeArguments.length > 0) {
 				const elementType = (type as any).typeArguments[0];
-				return `${getTypeString(elementType)}[]`;
+				return `${parenthesizeArrayElement(getTypeString(elementType))}[]`;
 			}
 			// If we can't determine the element type, try looking at the declaration
 			if (type.symbol.declarations && type.symbol.declarations[0]) {
@@ -492,12 +559,35 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 					&& declaration.typeArguments
 					&& declaration.typeArguments.length > 0
 				) {
-					return `${declaration.typeArguments[0]!.getText()}[]`;
+					return `${parenthesizeArrayElement(declaration.typeArguments[0]!.getText())}[]`;
 				}
 			}
 		}
 
 		return typeString;
+	};
+
+	// Unions, intersections, and function types need parens before we can slap [] on them
+	const parenthesizeArrayElement = (elementText: string) => {
+		let depth = 0;
+		for (let i = 0; i < elementText.length; i++) {
+			const char = elementText[i];
+			if (char === '<' || char === '(' || char === '{' || char === '[') {
+				depth++;
+			} else if (char === '>' || char === ')' || char === '}' || char === ']') {
+				if (char === '>' && elementText[i - 1] === '=') {
+					// An arrow, not a closing bracket
+					if (depth === 0) {
+						return `(${elementText})`;
+					}
+					continue;
+				}
+				depth--;
+			} else if (depth === 0 && (char === '|' || char === '&')) {
+				return `(${elementText})`;
+			}
+		}
+		return elementText;
 	};
 
 	// Helper to clean up optional parameter types
@@ -506,6 +596,11 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 		if (isOptional) {
 			// Remove "| undefined" from union types for optional parameters
 			cleanedType = cleanedType.replace(/\s*\|\s*undefined$/, '').replace(/^undefined\s*\|\s*/, '');
+
+			// The removed "| undefined" often leaves a function type needlessly wrapped in parens; unwrap it
+			if (isFullyParenthesized(cleanedType)) {
+				cleanedType = cleanedType.slice(1, -1);
+			}
 		}
 		// Convert string literals from double quotes to single quotes
 		cleanedType = cleanedType.replace(/"([^"]*)"/g, '\'$1\'');
@@ -520,6 +615,26 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 		}
 
 		return cleanedType;
+	};
+
+	// Whether the string is wrapped in a single pair of matching outer parens
+	const isFullyParenthesized = (typeString: string) => {
+		if (!typeString.startsWith('(') || !typeString.endsWith(')')) {
+			return false;
+		}
+		let depth = 0;
+		for (let i = 0; i < typeString.length; i++) {
+			const char = typeString[i];
+			if (char === '(') {
+				depth++;
+			} else if (char === ')') {
+				depth--;
+				if (depth === 0) {
+					return i === typeString.length - 1;
+				}
+			}
+		}
+		return false;
 	};
 
 	// Get all exported symbols from all modules
@@ -737,7 +852,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 							const hasQuestionToken = paramDecl.questionToken !== undefined;
 							const hasDefault = paramDecl.initializer !== undefined;
 							const isRest = paramDecl.dotDotDotToken !== undefined;
-							const rawParamType = paramDecl.type ? paramDecl.type.getText() : typeChecker.typeToString(typeChecker.getTypeOfSymbolAtLocation(param, paramDecl));
+							const rawParamType = paramDecl.type ? paramDecl.type.getText() : getTypeString(typeChecker.getTypeOfSymbolAtLocation(param, paramDecl));
 							const paramType = cleanOptionalType(rawParamType, hasQuestionToken);
 
 							if (hasDefault) {
@@ -750,7 +865,9 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 						return `\t${param.getName()}: unknown`;
 					});
 
-					const returnType = getTypeString(signature.getReturnType());
+					const returnType = signature.declaration && !ts.isJSDocSignature(signature.declaration) && signature.declaration.type
+						? signature.declaration.type.getText()
+						: getTypeString(signature.getReturnType());
 					const functionSig = params.length > 0
 						? `${variableName}(\n${params.join(',\n')},\n): ${returnType};`
 						: `${variableName}(): ${returnType};`;
@@ -989,9 +1106,12 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 								m.name && m.name.getText() === memberName,
 							);
 							if (baseMember) {
-								const baseJsDoc = ts.getJSDocCommentsAndTags(baseMember)[0];
-								if (baseJsDoc && ts.isJSDoc(baseJsDoc) && typeof baseJsDoc.comment === 'string') {
-									return processLinkTags(baseJsDoc.comment.trim(), className);
+								const baseDescription = extractJsDocDescription(baseMember, {
+									tagHandling: 'filterAll',
+									transform: text => processLinkTags(text, className),
+								});
+								if (baseDescription) {
+									return baseDescription;
 								}
 							}
 							// Recursively check further up the hierarchy
@@ -1129,7 +1249,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 										const paramName = param.name.getText();
 										const hasQuestionToken = param.questionToken !== undefined;
 										const isReadonly = param.modifiers?.some(mod => mod.kind === ts.SyntaxKind.ReadonlyKeyword);
-										const rawParamType = param.type ? param.type.getText() : typeChecker.typeToString(typeChecker.getTypeAtLocation(param));
+										const rawParamType = param.type ? param.type.getText() : getTypeString(typeChecker.getTypeAtLocation(param));
 										const paramType = cleanOptionalType(rawParamType, hasQuestionToken);
 
 										const propertyDef = `${isReadonly ? 'readonly ' : ''}${paramName}${hasQuestionToken ? '?' : ''}: ${paramType};`;
@@ -1168,7 +1288,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 								const hasQuestionToken = param.questionToken !== undefined;
 								const hasDefault = param.initializer !== undefined;
 								const isRest = param.dotDotDotToken !== undefined;
-								const rawParamType = param.type ? param.type.getText() : typeChecker.typeToString(typeChecker.getTypeAtLocation(param));
+								const rawParamType = param.type ? param.type.getText() : getTypeString(typeChecker.getTypeAtLocation(param));
 								const paramType = cleanOptionalType(rawParamType, hasQuestionToken);
 
 								if (hasDefault) {
@@ -1256,7 +1376,8 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 						}
 					}
 					const type = rawType;
-					const propertyDef = `${isReadonly ? 'readonly ' : ''}${name}${isOptional ? '?' : ''}: ${type};`;
+					const propertyDef
+						= `${isReadonly ? 'readonly ' : ''}${name}${isOptional ? '?' : ''}:${type.startsWith('\n') ? '' : ' '}${type};`;
 
 					// Get description from JSDoc
 					const desc = getDescriptionWithFallback(member, name);
@@ -1302,7 +1423,11 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 						}
 					}
 					const type = cleanOptionalType(rawType, false);
-					const accessorDef = `get ${name}(): ${type};`;
+
+					// Getter-setter pairs are rendered as a single read-write property
+					const hasSetter = ts.isClassDeclaration(member.parent)
+						&& member.parent.members.some(m => ts.isSetAccessorDeclaration(m) && m.name?.getText() === name);
+					const accessorDef = hasSetter ? `${name}: ${type};` : `get ${name}(): ${type};`;
 
 					// Get description from JSDoc
 					const desc = getDescriptionWithFallback(member, name);
@@ -1319,11 +1444,17 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 					pushProperty(`### \`${name}\`${inheritedBadge}\n\n\`\`\`ts\n${accessorDef}\n\`\`\`${desc ? `\n\n${desc}` : ''}${referencesText}`);
 				} else if (ts.isSetAccessorDeclaration(member) && member.name) {
 					const name = member.name.getText();
+
+					// Getter-setter pairs are already fully rendered by the getter
+					const hasGetter = ts.isClassDeclaration(member.parent)
+						&& member.parent.members.some(m => ts.isGetAccessorDeclaration(m) && m.name?.getText() === name);
+					if (hasGetter) {
+						return;
+					}
+
 					const param = member.parameters[0];
 					const isOptional = param?.questionToken !== undefined;
-					const rawParamType = param?.type
-						? typeChecker.typeToString(typeChecker.getTypeAtLocation(param))
-						: 'any';
+					const rawParamType = param?.type ? param.type.getText() : 'any';
 					const paramType = cleanOptionalType(rawParamType, isOptional);
 					const accessorDef = `set ${name}(value: ${paramType});`;
 
@@ -1370,7 +1501,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 						const hasQuestionToken = param.questionToken !== undefined;
 						const hasDefault = param.initializer !== undefined;
 						const isRest = param.dotDotDotToken !== undefined;
-						const rawParamType = param.type ? param.type.getText() : typeChecker.typeToString(typeChecker.getTypeAtLocation(param));
+						const rawParamType = param.type ? param.type.getText() : getTypeString(typeChecker.getTypeAtLocation(param));
 						const paramType = cleanOptionalType(rawParamType, hasQuestionToken);
 
 						if (hasDefault) {
@@ -1381,14 +1512,19 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 						}
 					});
 
-					// Get return type
+					// Get return type, preferring the declared annotation to keep alias names intact
 					const signature = typeChecker.getSignatureFromDeclaration(member);
-					const returnType = signature ? getTypeString(signature.getReturnType()) : 'void';
+					const returnType = member.type
+						? member.type.getText()
+						: signature ? getTypeString(signature.getReturnType()) : 'void';
 
 					// Format method signature
+					const typeParams = member.typeParameters && member.typeParameters.length > 0
+						? `<${member.typeParameters.map(tp => tp.getText()).join(', ')}>`
+						: '';
 					const methodSig = params.length > 0
-						? `${isStatic ? 'static ' : ''}${name}(\n${params.join(',\n')},\n): ${returnType};`
-						: `${isStatic ? 'static ' : ''}${name}(): ${returnType};`;
+						? `${isStatic ? 'static ' : ''}${name}${typeParams}(\n${params.join(',\n')},\n): ${returnType};`
+						: `${isStatic ? 'static ' : ''}${name}${typeParams}(): ${returnType};`;
 
 					// Get method description from JSDoc
 					const desc = getDescriptionWithFallback(member, name);
@@ -1489,23 +1625,23 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 							}
 						}
 
-						// Check if this property's original type annotation references an exported type
-						let cleanedType = propTypeString;
+						// Prefer the annotation's source text; it keeps alias names and inline comments intact
+						let cleanedType: string;
 						if (propDeclaration && ts.isPropertySignature(propDeclaration) && propDeclaration.type) {
-							const originalType = propDeclaration.type.getText();
-							if (exportedTypes.has(originalType)) {
-								cleanedType = originalType;
-							} else {
-								cleanedType = cleanOptionalType(propTypeString, isOptional);
+							cleanedType = dedentTypeText(propDeclaration.type.getText());
+							if (cleanedType.startsWith('|')) {
+								// Multi-line union annotations start with their first pipe; move it to its own line
+								cleanedType = '\n\t' + cleanedType;
 							}
 						} else {
 							cleanedType = cleanOptionalType(propTypeString, isOptional);
 						}
 
-						const propertyDef = `${propName}${isOptional ? '?' : ''}: ${cleanedType};`;
+						const propertyDef
+							= `${propName}${isOptional ? '?' : ''}:${cleanedType.startsWith('\n') ? '' : ' '}${cleanedType};`;
 
-						// Find referenced types
-						const references = filterToExportedTypes(findAllTypeReferences(cleanedType), className);
+						// Find referenced types (with comments stripped so they don't produce bogus references)
+						const references = filterToExportedTypes(findAllTypeReferences(formatObjectType(cleanedType)), className);
 						const referencesText = formatReferences(references);
 
 						// In tandem: update usage map
@@ -1677,7 +1813,7 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 				let typeText;
 				if (isPrimitive || isSimpleUnion) {
 					// For primitive types or simple unions, use resolved type string
-					const resolvedTypeString = typeChecker.typeToString(resolvedType);
+					const resolvedTypeString = typeChecker.typeToString(resolvedType, undefined, ts.TypeFormatFlags.NoTruncation);
 					if (resolvedTypeString === className) {
 						// If resolved type is just the alias name, use original text
 						typeText = declaration.type.getText();
@@ -1709,8 +1845,13 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 					if (typeText.includes('{')) {
 						typeText = formatObjectType(typeText);
 					}
+
+					// Multi-line union annotations start with their first pipe; move it to its own line
+					if (typeText.startsWith('|')) {
+						typeText = '\n\t' + typeText;
+					}
 				}
-				const typeDefinition = `type ${typeName} = ${typeText};`;
+				const typeDefinition = `type ${typeName} =${typeText.startsWith('\n') ? '' : ' '}${typeText};`;
 
 				// Find referenced types in the type definition and generic parameters
 				const allTypeRefs = findAllTypeReferences(typeText);
@@ -1787,6 +1928,11 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 						return false;
 					}
 
+					// Filter out instance constants since they already appear in the "Instances" section
+					if (usage.type === 'variable' && (classInstances.get(symbolName) ?? []).includes(usage.user)) {
+						return false;
+					}
+
 					// Filter out top-level type references when there are more specific contexts available
 					// This prevents redundancy where both "TypeName" and "TypeName.property" appear
 					if (usage.type === 'type_alias' || usage.type === 'type_param') {
@@ -1818,9 +1964,13 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 							link = `./${usage.user}.md#${usage.context.toLowerCase()}`;
 							break;
 						case 'property':
-						case 'variable':
 							displayText = `${usage.user}.${usage.context}`;
 							link = `./${usage.user}.md#${usage.context.toLowerCase()}`;
+							break;
+						case 'variable':
+							// Constants reference other symbols in their definition, not through any member
+							displayText = usage.user;
+							link = `./${usage.user}.md`;
 							break;
 						case 'function':
 							displayText = `${usage.user}()`;
