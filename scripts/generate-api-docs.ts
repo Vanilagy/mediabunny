@@ -1469,13 +1469,19 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 					typeProperties.forEach((prop) => {
 					// Create a synthetic property signature for each resolved property
 						const propName = prop.getName();
+						const propDeclaration = prop.valueDeclaration || prop.declarations?.[0];
+
+						// Skip members marked @internal
+						if (propDeclaration && ts.getJSDocTags(propDeclaration).some(tag => tag.tagName.text === 'internal')) {
+							return;
+						}
+
 						const propType = typeChecker.getTypeOfSymbolAtLocation(prop, declaration);
 						const propTypeString = getTypeString(propType);
 						const isOptional = (prop.flags & ts.SymbolFlags.Optional) !== 0;
 
 						// Get JSDoc from the original declaration
 						let desc = '';
-						const propDeclaration = prop.valueDeclaration || prop.declarations?.[0];
 						if (propDeclaration) {
 							const rawDesc = getFullJSDocDescription(propDeclaration);
 							if (rawDesc) {
@@ -1689,6 +1695,16 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 				} else {
 					// For complex types, use the original text
 					typeText = declaration.type.getText();
+
+					// Drop members marked @internal from the printed definition
+					if (ts.isTypeLiteralNode(declaration.type)) {
+						for (const member of declaration.type.members) {
+							if (ts.getJSDocTags(member).some(tag => tag.tagName.text === 'internal')) {
+								typeText = typeText.replace(member.getText(), '');
+							}
+						}
+					}
+
 					// Format object types with proper line breaks
 					if (typeText.includes('{')) {
 						typeText = formatObjectType(typeText);
