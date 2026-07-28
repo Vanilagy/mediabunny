@@ -4,7 +4,12 @@ import { Mp4OutputFormat, WebMOutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
 import { AudioSampleSource, VideoSampleSource } from '../../src/media-source.js';
 import { AudioSample, VideoSample } from '../../src/sample.js';
-import { QUALITY_MEDIUM } from '../../src/encode.js';
+import {
+	canEncodeVideo,
+	getFirstEncodableVideoCodec,
+	Quality,
+	QUALITY_MEDIUM,
+} from '../../src/encode.js';
 import { Input } from '../../src/input.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { BufferSource } from '../../src/source.js';
@@ -492,12 +497,300 @@ test('VideoSampleSource, transform.frameRate works with process', async () => {
 	input.dispose();
 });
 
+test('Quality, custom quality factors', async () => {
+	expect(() => new Quality(0)).toThrow(TypeError);
+	expect(() => new Quality(-1)).toThrow(TypeError);
+	expect(() => new Quality(NaN)).toThrow(TypeError);
+	expect(() => new Quality(Infinity)).toThrow(TypeError);
+
+	const buffer = await encodeFrames(
+		{ codec: 'vp8', bitrate: new Quality(1.5) },
+		[{ width: 100, height: 100 }, { width: 100, height: 100 }],
+	);
+
+	const samples = await readBackSamples(buffer);
+	expect(samples).toHaveLength(2);
+});
+
+test('VideoSampleSource, quantizer mode config validation', () => {
+	// bitrate is optional in quantizer mode
+	expect(() => new VideoSampleSource({ codec: 'avc', bitrateMode: 'quantizer' })).not.toThrow();
+	// Each codec's scale comes from its codec registration: 0-51 for avc/hevc, 0-63 for vp9, 0-255 for av1
+	expect(() => new VideoSampleSource({ codec: 'avc', bitrateMode: 'quantizer', quantizer: 51 })).not.toThrow();
+	expect(() => new VideoSampleSource({ codec: 'vp9', bitrateMode: 'quantizer', quantizer: 63 })).not.toThrow();
+	expect(() => new VideoSampleSource({ codec: 'av1', bitrateMode: 'quantizer', quantizer: 255 })).not.toThrow();
+	expect(() => new VideoSampleSource({ codec: 'vp9', bitrateMode: 'quantizer', quantizer: 64 })).toThrow(TypeError);
+	expect(() => new VideoSampleSource({ codec: 'av1', bitrateMode: 'quantizer', quantizer: 256 })).toThrow(TypeError);
+
+	// @ts-expect-error bitrate is required outside of quantizer mode
+	expect(() => new VideoSampleSource({ codec: 'avc' })).toThrow(TypeError);
+	// Quantizer mode is only supported for avc, hevc, vp9 and av1 (enforced at runtime)
+	expect(() => new VideoSampleSource({ codec: 'vp8', bitrateMode: 'quantizer' })).toThrow(TypeError);
+	// @ts-expect-error quantizer requires bitrateMode 'quantizer'; also guarded at runtime
+	expect(() => new VideoSampleSource({ codec: 'avc', bitrate: 1e6, quantizer: 20 })).toThrow(TypeError);
+	expect(() => new VideoSampleSource({
+		codec: 'avc',
+		bitrateMode: 'quantizer',
+		quantizer: 52, // Out of range for avc
+	})).toThrow(TypeError);
+	expect(() => new VideoSampleSource({
+		codec: 'vp9',
+		bitrateMode: 'quantizer',
+		quantizer: 64, // Out of range for vp9
+	})).toThrow(TypeError);
+});
+
+test('canEncodeVideo, quantizer mode', async () => {
+	expect(typeof await canEncodeVideo('vp9', { bitrateMode: 'quantizer' })).toBe('boolean');
+	expect(await canEncodeVideo('vp8', { bitrateMode: 'quantizer' })).toBe(false);
+
+	// Out-of-range quantizers return false instead of throwing, so codec lists can still be probed
+	expect(await canEncodeVideo('avc', { bitrateMode: 'quantizer', quantizer: 60 })).toBe(false);
+	expect(await canEncodeVideo('vp9', { bitrateMode: 'quantizer', quantizer: 64 })).toBe(false);
+	// 60 is out of range for avc but fine for vp9, so we skip past avc
+	if (await canEncodeVideo('vp9', { bitrateMode: 'quantizer' })) {
+		expect(await getFirstEncodableVideoCodec(['avc', 'vp9'], { bitrateMode: 'quantizer', quantizer: 60 }))
+			.toBe('vp9');
+	}
+
+	await expect(canEncodeVideo('avc', { bitrate: new Quality(Number.MAX_VALUE) })).rejects.toThrow(TypeError);
+});
+
+test('VideoSampleSource, quantizer bitrate mode', async () => {
+	// Encoding in quantizer mode must always succeed, even in browsers without support for it, thanks to the
+	// automatic fallback to variable bitrate mode
+	const lowQuantizerBuffer = await encodeNoisyFrames(
+		{ codec: 'vp9', bitrateMode: 'quantizer', quantizer: 8 },
+		8,
+	);
+	const highQuantizerBuffer = await encodeNoisyFrames(
+		{ codec: 'vp9', bitrateMode: 'quantizer', quantizer: 60 },
+		8,
+	);
+
+	expect(await readBackSamples(lowQuantizerBuffer)).toHaveLength(8);
+	expect(await readBackSamples(highQuantizerBuffer)).toHaveLength(8);
+
+	if (await canEncodeVideo('vp9', { bitrateMode: 'quantizer' })) {
+		// Noise is largely incompressible, so the margin is small - but consistent
+		expect(lowQuantizerBuffer.byteLength).toBeGreaterThan(1.25 * highQuantizerBuffer.byteLength);
+	}
+});
+
+test('VideoSampleSource, av1 uses the quantizer index scale', async () => {
+	if (!(await canEncodeVideo('av1', { bitrateMode: 'quantizer' }))) {
+		return;
+	}
+
+	// 200 is only meaningful if the encoder really is on the 0-255 quantizer index scale; on a 0-63 scale it would
+	// be out of range, and the size ordering below would collapse
+	const fineBuffer = await encodeNoisyFrames({ codec: 'av1', bitrateMode: 'quantizer', quantizer: 40 }, 6);
+	const coarseBuffer = await encodeNoisyFrames({ codec: 'av1', bitrateMode: 'quantizer', quantizer: 200 }, 6);
+
+	expect(await readBackSamples(fineBuffer)).toHaveLength(6);
+	expect(await readBackSamples(coarseBuffer)).toHaveLength(6);
+	expect(fineBuffer.byteLength).toBeGreaterThan(1.25 * coarseBuffer.byteLength);
+});
+
+test('VideoSampleSource, per-frame quantizer', async () => {
+	if (!(await canEncodeVideo('vp9', { bitrateMode: 'quantizer' }))) {
+		// Per-frame quantizers only take effect when the browser supports quantizer mode
+		return;
+	}
+
+	const packetSizes: number[] = [];
+
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const videoSource = new VideoSampleSource({
+		codec: 'vp9',
+		bitrateMode: 'quantizer',
+		quantizer: 60,
+		onEncodedPacket: packet => packetSizes.push(packet.byteLength),
+	});
+
+	output.addVideoTrack(videoSource);
+	await output.start();
+
+	for (let i = 0; i < 12; i++) {
+		const sample = new VideoSample(makeNoisyCanvas(320, 240), { timestamp: i / 30, duration: 1 / 30 });
+
+		// The second half of the frames overrides the config-level quantizer with a much lower value
+		await videoSource.add(sample, i < 6 ? undefined : { quantizer: 8 });
+		sample.close();
+	}
+
+	const invalidSample = new VideoSample(makeNoisyCanvas(320, 240), { timestamp: 12 / 30, duration: 1 / 30 });
+	await expect(videoSource.add(invalidSample, { quantizer: 64 })).rejects.toThrow(/quantizer/);
+	await expect(videoSource.add(invalidSample, { vp9: { quantizer: 65536 } })).rejects.toThrow(/quantizer/);
+	invalidSample.close();
+
+	await output.finalize();
+
+	expect(packetSizes).toHaveLength(12);
+
+	// Skip the first packet (key frame) for a fair comparison
+	const highQuantizerSizes = packetSizes.slice(1, 6);
+	const lowQuantizerSizes = packetSizes.slice(6);
+	const average = (sizes: number[]) => sizes.reduce((a, b) => a + b, 0) / sizes.length;
+
+	expect(average(lowQuantizerSizes)).toBeGreaterThan(1.25 * average(highQuantizerSizes));
+});
+
+// Moderate quantizers on purpose: Apple's hardware avc encoder misbehaves badly at very low ones
+const SAFE_AVC_QUANTIZER = 26;
+const COARSE_AVC_QUANTIZER = 45;
+
+test('VideoSampleSource, avc quantizer mode on the hardware encoder', async () => {
+	if (!(await canEncodeVideo('avc', { bitrateMode: 'quantizer' }))) {
+		return; // Quantizer mode for avc isn't available on this browser
+	}
+
+	const fineBuffer = await encodeNoisyFrames(
+		{ codec: 'avc', bitrateMode: 'quantizer', quantizer: SAFE_AVC_QUANTIZER },
+		8,
+	);
+	const coarseBuffer = await encodeNoisyFrames(
+		{ codec: 'avc', bitrateMode: 'quantizer', quantizer: COARSE_AVC_QUANTIZER },
+		8,
+	);
+
+	expect(await readBackSamples(fineBuffer)).toHaveLength(8);
+	expect(await readBackSamples(coarseBuffer)).toHaveLength(8);
+
+	// The finer quantizer must yield a meaningfully larger file
+	expect(fineBuffer.byteLength).toBeGreaterThan(1.25 * coarseBuffer.byteLength);
+});
+
+test('VideoSampleSource, avc per-frame quantizer reaches the encoder', async () => {
+	if (!(await canEncodeVideo('avc', { bitrateMode: 'quantizer' }))) {
+		return;
+	}
+
+	const appliedQuantizers: number[] = [];
+	// eslint-disable-next-line @typescript-eslint/unbound-method
+	const originalEncode = VideoEncoder.prototype.encode;
+	VideoEncoder.prototype.encode = function (
+		this: VideoEncoder,
+		frame: VideoFrame,
+		options?: VideoEncoderEncodeOptions,
+	) {
+		const quantizer = (options as { avc?: { quantizer?: number } } | undefined)?.avc?.quantizer;
+		if (quantizer !== undefined) {
+			appliedQuantizers.push(quantizer);
+		}
+
+		return originalEncode.call(this, frame, options);
+	};
+
+	const packetSizes: number[] = [];
+
+	try {
+		const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
+		const videoSource = new VideoSampleSource({
+			codec: 'avc',
+			bitrateMode: 'quantizer',
+			quantizer: COARSE_AVC_QUANTIZER,
+			onEncodedPacket: packet => packetSizes.push(packet.byteLength),
+		});
+		output.addVideoTrack(videoSource);
+		await output.start();
+
+		for (let i = 0; i < 8; i++) {
+			const sample = new VideoSample(makeNoisyCanvas(320, 240), { timestamp: i / 30, duration: 1 / 30 });
+			// The second half overrides the config-level quantizer with a finer (but still safe) one
+			await videoSource.add(sample, i < 4 ? undefined : { quantizer: SAFE_AVC_QUANTIZER });
+			sample.close();
+		}
+
+		await output.finalize();
+	} finally {
+		VideoEncoder.prototype.encode = originalEncode;
+	}
+
+	// Both the config-level and the per-frame quantizer must have reached the encoder, unmodified
+	expect(appliedQuantizers.slice(0, 4)).toEqual(Array(4).fill(COARSE_AVC_QUANTIZER));
+	expect(appliedQuantizers.slice(4)).toEqual(Array(4).fill(SAFE_AVC_QUANTIZER));
+
+	// And the finer half must actually produce larger packets (skipping the leading key frame)
+	const average = (sizes: number[]) => sizes.reduce((a, b) => a + b, 0) / sizes.length;
+	expect(average(packetSizes.slice(4))).toBeGreaterThan(1.25 * average(packetSizes.slice(1, 4)));
+});
+
+test('VideoSampleSource, quantizer mode falls back to variable bitrate mode when unsupported', async () => {
+	const originalIsConfigSupported = VideoEncoder.isConfigSupported.bind(VideoEncoder);
+
+	// Simulate a browser that doesn't know quantizer mode: These browsers reject during the conversion of the
+	// config dictionary since 'quantizer' is not part of their bitrate mode enum
+	VideoEncoder.isConfigSupported = (config: VideoEncoderConfig) => {
+		if (config.bitrateMode === 'quantizer') {
+			return Promise.reject(new TypeError('Failed to read the \'bitrateMode\' property.'));
+		}
+
+		return originalIsConfigSupported(config);
+	};
+
+	try {
+		const buffer = await encodeNoisyFrames(
+			{ codec: 'vp9', bitrateMode: 'quantizer', quantizer: 30 },
+			3,
+		);
+
+		const samples = await readBackSamples(buffer);
+		expect(samples).toHaveLength(3);
+	} finally {
+		VideoEncoder.isConfigSupported = originalIsConfigSupported;
+	}
+});
+
 const makeCanvas = (width: number, height: number) => {
 	const canvas = new OffscreenCanvas(width, height);
 	const ctx = canvas.getContext('2d')!;
 	ctx.fillStyle = 'red';
 	ctx.fillRect(0, 0, width, height);
 	return canvas;
+};
+
+const makeNoisyCanvas = (width: number, height: number) => {
+	const canvas = new OffscreenCanvas(width, height);
+	const ctx = canvas.getContext('2d')!;
+	const imageData = ctx.createImageData(width, height);
+
+	for (let i = 0; i < imageData.data.length; i += 4) {
+		imageData.data[i + 0] = Math.floor(Math.random() * 256);
+		imageData.data[i + 1] = Math.floor(Math.random() * 256);
+		imageData.data[i + 2] = Math.floor(Math.random() * 256);
+		imageData.data[i + 3] = 255;
+	}
+
+	ctx.putImageData(imageData, 0, 0);
+	return canvas;
+};
+
+const encodeNoisyFrames = async (
+	encodingConfig: ConstructorParameters<typeof VideoSampleSource>[0],
+	frameCount: number,
+) => {
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const videoSource = new VideoSampleSource(encodingConfig);
+	output.addVideoTrack(videoSource);
+	await output.start();
+
+	for (let i = 0; i < frameCount; i++) {
+		const sample = new VideoSample(makeNoisyCanvas(320, 240), { timestamp: i / 30, duration: 1 / 30 });
+		await videoSource.add(sample);
+		sample.close();
+	}
+
+	await output.finalize();
+	return output.target.buffer!;
 };
 
 const encodeFrames = async (

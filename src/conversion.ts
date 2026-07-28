@@ -19,7 +19,13 @@ import {
 	getFirstEncodableVideoCodec,
 	Quality,
 	QUALITY_HIGH,
+	canEncodeVideo,
+	QUALITY_MEDIUM,
+	QUANTIZER_BITRATE_MODE_CODECS,
+	QuantizerBitrateModeCodec,
+	validateVideoQuantizer,
 	VideoEncodingConfig,
+	videoQuantizerToQualityFactor,
 } from './encode';
 import { Input } from './input';
 import { InputAudioTrack, InputTrack, InputVideoTrack } from './input-track';
@@ -210,8 +216,29 @@ export type ConversionVideoOptions = {
 	frameRate?: number;
 	/** The desired output video codec. */
 	codec?: VideoCodec;
-	/** The desired bitrate of the output video. */
+	/**
+	 * The desired bitrate of the output video. Alternatively, a subjective {@link Quality} can be provided.
+	 *
+	 * When `bitrateMode` is `'quantizer'`, this value is only used as a fallback for browsers that don't support
+	 * quantizer mode.
+	 */
 	bitrate?: number | Quality;
+	/**
+	 * Configures the bitrate mode of the output video.
+	 *
+	 * When set to `'quantizer'`, the encoder uses a fixed quantizer for each frame instead of targeting a bitrate.
+	 * This mode is only available for the codecs 'avc', 'hevc', 'vp9' and 'av1', and falls back to `'variable'` on
+	 * browsers without support for it.
+	 */
+	bitrateMode?: 'constant' | 'variable' | 'quantizer';
+	/**
+	 * The quantizer value used for encoded frames, using the scale of the codec: 0 to 51 for 'avc' and 'hevc', 0 to
+	 * 63 for 'vp9', or 0 to 255 for 'av1', where lower values mean higher fidelity. When omitted, a fitting value is
+	 * derived from `bitrate`.
+	 *
+	 * Can only be provided when `bitrateMode` is set to `'quantizer'`.
+	 */
+	quantizer?: number;
 	/**
 	 * Whether to discard or keep the transparency information of the input video. The default is `'discard'`. Note that
 	 * for `'keep'` to produce a transparent video, you must use an output config that supports it, such as WebM with
@@ -348,6 +375,44 @@ const validateVideoOptions = (videoOptions: ConversionVideoOptions) => {
 		&& (!Number.isInteger(videoOptions.bitrate) || videoOptions.bitrate <= 0)
 	) {
 		throw new TypeError('options.video.bitrate, when provided, must be a positive integer or a quality.');
+	}
+	if (
+		videoOptions?.bitrateMode !== undefined
+		&& !['constant', 'variable', 'quantizer'].includes(videoOptions.bitrateMode)
+	) {
+		throw new TypeError(
+			'options.video.bitrateMode, when provided, must be \'constant\', \'variable\' or \'quantizer\'.',
+		);
+	}
+	if (
+		videoOptions?.bitrateMode === 'quantizer'
+		&& videoOptions.codec !== undefined
+		&& !(QUANTIZER_BITRATE_MODE_CODECS as readonly string[]).includes(videoOptions.codec)
+	) {
+		throw new TypeError(
+			`options.video.bitrateMode 'quantizer' is not supported for codec '${videoOptions.codec}'. It is only`
+			+ ` supported for: ${QUANTIZER_BITRATE_MODE_CODECS.join(', ')}.`,
+		);
+	}
+	if (videoOptions?.quantizer !== undefined) {
+		if (videoOptions.bitrateMode !== 'quantizer') {
+			throw new TypeError(
+				'options.video.quantizer can only be provided when options.video.bitrateMode is set to \'quantizer\'.',
+			);
+		}
+
+		if (videoOptions.codec === undefined) {
+			throw new TypeError(
+				'When options.video.quantizer is provided, options.video.codec must also be provided, since the'
+				+ ' quantizer uses the scale of the codec. Use a quality instead to leave the codec open.',
+			);
+		}
+
+		validateVideoQuantizer(
+			videoOptions.codec as QuantizerBitrateModeCodec,
+			videoOptions.quantizer,
+			'options.video.quantizer',
+		);
 	}
 	if (
 		videoOptions?.width !== undefined
@@ -1340,6 +1405,8 @@ export class Conversion {
 			|| trackOptions.keyFrameInterval !== undefined
 			|| trackOptions.process !== undefined
 			|| trackOptions.bitrate !== undefined
+			|| trackOptions.bitrateMode !== undefined
+			|| trackOptions.quantizer !== undefined
 			|| !videoCodecs.includes(sourceCodec)
 			|| (trackOptions.codec && trackOptions.codec !== sourceCodec)
 			|| width !== originalWidth
@@ -1410,9 +1477,10 @@ export class Conversion {
 				videoCodecs = videoCodecs.filter(codec => codec === trackOptions.codec);
 			}
 
-			const bitrate = trackOptions.bitrate ?? QUALITY_HIGH;
+			let useQuantizerMode = trackOptions.bitrateMode === 'quantizer';
+			const bitrate = trackOptions.bitrate ?? (useQuantizerMode ? undefined : QUALITY_HIGH);
 
-			const encodableCodec = await getFirstEncodableVideoCodec(videoCodecs, {
+			const probeOptions = {
 				width: trackOptions.process && trackOptions.processedWidth
 					? trackOptions.processedWidth
 					: width,
@@ -1420,7 +1488,45 @@ export class Conversion {
 					? trackOptions.processedHeight
 					: height,
 				bitrate,
+			};
+
+			// The bitrate we'd use if we had to fall back out of quantizer mode. With no bitrate from the user, we
+			// derive one from their quantizer so the fallback still lands near the quality they asked for.
+			const fallbackBitrateFor = (codec: VideoCodec) => {
+				if (bitrate !== undefined) {
+					return bitrate;
+				}
+				if (
+					trackOptions.quantizer !== undefined
+					&& (QUANTIZER_BITRATE_MODE_CODECS as readonly string[]).includes(codec)
+				) {
+					return new Quality(videoQuantizerToQualityFactor(
+						codec as QuantizerBitrateModeCodec,
+						trackOptions.quantizer,
+					));
+				}
+
+				return trackOptions.bitrateMode === 'quantizer' ? QUALITY_MEDIUM : QUALITY_HIGH;
+			};
+
+			let encodableCodec = await getFirstEncodableVideoCodec(videoCodecs, {
+				...probeOptions,
+				bitrateMode: trackOptions.bitrateMode,
+				quantizer: trackOptions.quantizer,
 			});
+
+			if (!encodableCodec && useQuantizerMode) {
+				// No codec supports quantizer mode here, so let's do a regular bitrate encode instead of discarding
+				// the track. We probe with the real bitrate because the codec string (and AVC level) depends on it.
+				for (const codec of videoCodecs) {
+					if (await canEncodeVideo(codec, { ...probeOptions, bitrate: fallbackBitrateFor(codec) })) {
+						encodableCodec = codec;
+						useQuantizerMode = false;
+						break;
+					}
+				}
+			}
+
 			if (!encodableCodec) {
 				this.discardedTracks.push({
 					track,
@@ -1430,9 +1536,19 @@ export class Conversion {
 				return;
 			}
 
+			const fallbackBitrate = fallbackBitrateFor(encodableCodec);
+
 			const encodingConfig: VideoEncodingConfig = {
 				codec: encodableCodec,
-				bitrate,
+				...(useQuantizerMode
+					? { bitrateMode: 'quantizer' as const, bitrate, quantizer: trackOptions.quantizer }
+					// Don't pass 'quantizer' through when we've fallen back; the encoder would reject it
+					: {
+							bitrate: fallbackBitrate,
+							bitrateMode: trackOptions.bitrateMode === 'quantizer'
+								? undefined
+								: trackOptions.bitrateMode,
+						}),
 				keyFrameInterval: trackOptions.keyFrameInterval,
 				sizeChangeBehavior: trackOptions.fit ?? 'passThrough',
 				alpha,

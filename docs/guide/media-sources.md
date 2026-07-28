@@ -50,9 +50,10 @@ All video sources that handle encoding internally require you to specify a `Vide
 ```ts
 type VideoEncodingConfig = {
 	codec: VideoCodec;
-	bitrate: number | Quality;
+	bitrate?: number | Quality; // Required unless bitrateMode is 'quantizer'
 	alpha?: 'discard' | 'keep';
-	bitrateMode?: 'constant' | 'variable';
+	bitrateMode?: 'constant' | 'variable' | 'quantizer';
+	quantizer?: number;
 	latencyMode?: 'quality' | 'realtime';
 	keyFrameInterval?: number;
 	fullCodecString?: string;
@@ -84,11 +85,12 @@ type VideoEncodingConfig = {
 };
 ```
 - `codec`: The [video codec](./supported-formats-and-codecs#video-codecs) used for encoding.
-- `bitrate`: The target number of bits per second. Alternatively, this can be a [subjective quality](#subjective-qualities).
+- `bitrate`: The target number of bits per second. Alternatively, this can be a [subjective quality](#subjective-qualities). Required unless `bitrateMode` is set to `'quantizer'`, in which case it only acts as a fallback for browsers without quantizer mode support.
 - `alpha`:  What to do with alpha data contained in the video samples.
 	- `'discard'` (default): Only the samples' color data is kept; the video is opaque.
 	- `'keep'`: The samples' alpha data is also encoded as side data. Make sure to pair this mode with a container format that supports transparency (such as WebM or Matroska).
-- `bitrateMode`: Can be used to control constant vs. variable bitrate.
+- `bitrateMode`: Can be used to control constant vs. variable bitrate, or to enable [quantizer mode](#quantizer-mode).
+- `quantizer`: The quantizer value used for encoded frames in [quantizer mode](#quantizer-mode).
 - `latencyMode`: The latency mode as specified by the WebCodecs API. Browsers default to `quality`. Media stream-driven video sources will automatically use the `realtime` setting.
 - `keyFrameInterval`: The maximum interval in seconds between two adjacent key frames. Defaults to 2 seconds. More frequent key frames improve seeking behavior but increase file size. When using multiple video tracks, this value should be set to the same value for all tracks.
 - `fullCodecString`: Allows you to optionally specify the full codec string used by the video encoder, as specified in the [Mediabunny Codec Registry](/codec-registry/overview). For example, you may set it to `'avc1.42001f'` when using AVC. Keep in mind that the codec string must still match the codec specified in `codec`. If you don't set this field, a codec string will be generated automatically.
@@ -162,6 +164,57 @@ import {
 	QUALITY_VERY_HIGH,
 } from 'mediabunny';
 ```
+
+If you need finer control, you can create a quality with a custom quality factor. A factor of 1 corresponds to `QUALITY_MEDIUM`, and doubling the factor roughly doubles the target bitrate. For reference, the presets use the factors 0.3, 0.6, 1, 2, and 4.
+
+```ts
+import { Quality } from 'mediabunny';
+
+const quality = new Quality(1.5); // Between QUALITY_MEDIUM and QUALITY_HIGH
+```
+
+### Quantizer mode
+
+Instead of targeting a bitrate, video encoders can be operated in *quantizer mode*, in which a fixed quantizer is used for each frame. This gives you direct control over encoding fidelity, similar to constant-QP encoding in other tools. Quantizer mode is available for the codecs `'avc'`, `'hevc'`, `'vp9'` and `'av1'`.
+
+```ts
+import { VideoSampleSource } from 'mediabunny';
+
+const source = new VideoSampleSource({
+	codec: 'av1',
+	bitrateMode: 'quantizer',
+	quantizer: 30,
+});
+```
+
+The quantizer uses the scale of the codec: 0 to 51 for `'avc'` and `'hevc'`, 0 to 63 for `'vp9'`, and 0 to 255 for `'av1'` (which uses a quantizer index), where lower values mean higher fidelity. Since the value is only meaningful on a known scale, the [Conversion API](./converting-media-files) requires an explicit `codec` whenever a `quantizer` is set; pass a [subjective quality](#subjective-qualities) instead if you want the codec to stay open. When `quantizer` is omitted, a fitting value is derived from `bitrate` instead - this way, you can also use a [subjective quality](#subjective-qualities) to control the quantizer in a codec-independent way:
+
+```ts
+import { VideoSampleSource, QUALITY_HIGH } from 'mediabunny';
+
+const source = new VideoSampleSource({
+	codec: 'av1',
+	bitrateMode: 'quantizer',
+	bitrate: QUALITY_HIGH, // Maps to a fitting quantizer for the codec
+});
+```
+
+The quantizer can also be overridden for each frame individually by passing encode options to `add`:
+
+```ts
+await source.add(videoSample, { quantizer: 24 });
+```
+
+::: warning
+Not all browsers support quantizer mode. When support is missing, the encoder automatically falls back to variable bitrate mode, using a bitrate derived from `bitrate` or `quantizer`; per-frame quantizer values are then ignored. You can check for support using [`canEncodeVideo`](./supported-formats-and-codecs#querying-codec-encodability):
+```ts
+const supported = await canEncodeVideo('av1', { bitrateMode: 'quantizer' });
+```
+:::
+
+::: warning
+On Apple platforms (macOS, iOS), quantizer mode for `'avc'` and `'hevc'` is only available on the hardware encoder, and very low quantizers on that encoder have been observed to fail and, in one case, to crash the operating system. Prefer moderate quantizers for these codecs, or use `'vp9'` or `'av1'`, which encode in software.
+:::
 
 ## Video sources
 

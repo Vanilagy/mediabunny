@@ -285,6 +285,47 @@ test('Positive encodability check with alpha', async () => {
 	expect(result).toBe(true);
 });
 
+test('Can encode transparent video in quantizer mode', async () => {
+	const output = new Output({
+		format: new WebMOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const canvas = new OffscreenCanvas(640, 480);
+	const context = canvas.getContext('2d', { alpha: true })!;
+
+	const source = new CanvasSource(canvas, {
+		codec: 'vp9',
+		bitrateMode: 'quantizer',
+		quantizer: 20,
+		alpha: 'keep',
+	});
+	output.addVideoTrack(source);
+
+	await output.start();
+
+	for (let i = 0; i < 3; i++) {
+		context.clearRect(0, 0, canvas.width, canvas.height);
+		context.fillStyle = '#ff0000';
+		context.fillRect(100 * i, 100, 200, 200);
+		await source.add(i / 30, 1 / 30);
+	}
+
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = (await input.getPrimaryVideoTrack())!;
+	expect(await videoTrack.canBeTransparent()).toBe(true);
+
+	const sink = new VideoSampleSink(videoTrack);
+	using firstSample = (await sink.getSample(0))!;
+	expect(firstSample.format).toContain('A');
+});
+
 test('Can transmux transparent video, discards alpha by default', async () => {
 	using input = new Input({
 		source: new UrlSource('/transparency.webm'),

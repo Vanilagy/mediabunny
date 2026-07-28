@@ -235,10 +235,50 @@ export type VideoSampleInit = {
 	/** Height of the frame in pixels after applying aspect ratio adjustments and rotation. */
 	displayHeight?: number | undefined;
 	/** The encode options to use when this sample is passed to an encoder. */
-	encodeOptions?: DeepReadonly<VideoEncoderEncodeOptions>;
+	encodeOptions?: DeepReadonly<VideoEncodeOptions>;
 
 	/** @internal */
 	_doNotCopy?: boolean;
+};
+
+/**
+ * Options that control how a video sample (frame) is encoded. This extends the WebCodecs API's
+ * [`VideoEncoderEncodeOptions`](https://www.w3.org/TR/webcodecs/#dictdef-videoencoderencodeoptions) with additional
+ * fields.
+ * @group Encoding
+ * @public
+ */
+export type VideoEncodeOptions = VideoEncoderEncodeOptions & {
+	/**
+	 * The quantizer value to use for this frame, using the scale of the codec: 0 to 51 for 'avc' and 'hevc', 0 to 63
+	 * for 'vp9', or 0 to 255 for 'av1', where lower values mean higher fidelity. Overrides the config-level quantizer
+	 * for this frame.
+	 *
+	 * This value only takes effect when the encoder is operating with bitrateMode 'quantizer'; it is ignored
+	 * otherwise (for example, after the automatic fallback for browsers without quantizer mode support). Custom
+	 * encoders should read the quantizer from the codec-specific field below.
+	 */
+	quantizer?: number;
+	/** Codec-specific encode options for AVC, missing from some TypeScript DOM type definitions. */
+	avc?: {
+		/** The quantizer value to use for this frame, from 0 to 51. */
+		quantizer?: number | null;
+	};
+	/** Codec-specific encode options for VP9, missing from some TypeScript DOM type definitions. */
+	vp9?: {
+		/** The quantizer value to use for this frame, from 0 to 63. */
+		quantizer?: number | null;
+	};
+	/** Codec-specific encode options for AV1, missing from some TypeScript DOM type definitions. */
+	av1?: {
+		/** The quantizer index to use for this frame, from 0 to 255. */
+		quantizer?: number | null;
+	};
+	/** Codec-specific encode options for HEVC, missing from some TypeScript DOM type definitions. */
+	hevc?: {
+		/** The quantizer value to use for this frame, from 0 to 51. */
+		quantizer?: number | null;
+	};
 };
 
 /**
@@ -287,7 +327,7 @@ export class VideoSample implements Disposable {
 	/** The color space of the frame. */
 	readonly colorSpace!: VideoSampleColorSpace;
 	/** The encode options to use when this sample is passed to an encoder. */
-	readonly encodeOptions!: DeepReadonly<VideoEncoderEncodeOptions>;
+	readonly encodeOptions!: DeepReadonly<VideoEncodeOptions>;
 
 	/** The width of the frame in pixels. */
 	get codedWidth() {
@@ -1598,13 +1638,13 @@ export class VideoSample implements Disposable {
 	}
 
 	/** Sets the encode options used when this sample is passed to an encoder. */
-	setEncodeOptions(newEncodeOptions: VideoEncoderEncodeOptions) {
+	setEncodeOptions(newEncodeOptions: VideoEncodeOptions) {
 		if (!newEncodeOptions || typeof newEncodeOptions !== 'object') {
 			throw new TypeError('newEncodeOptions must be an object.');
 		}
 
 		// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-		(this.encodeOptions as DeepReadonly<VideoEncoderEncodeOptions>) = newEncodeOptions;
+		(this.encodeOptions as DeepReadonly<VideoEncodeOptions>) = newEncodeOptions;
 	}
 
 	/** Calls `.close()`. */

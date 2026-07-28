@@ -22,7 +22,7 @@ import {
 	VideoCodec,
 } from './codec';
 import { customAudioEncoders, customVideoEncoders } from './custom-coder';
-import { isFirefox, MaybePromise, Rotation } from './misc';
+import { clamp, isFirefox, MaybePromise, Rotation } from './misc';
 import { EncodedPacket } from './packet';
 import { AudioSample, CropRectangle, validateCropRectangle, VideoSample, VideoSampleResource } from './sample';
 
@@ -37,11 +37,6 @@ export const canEncodeAudioMemo = new Map<string, Promise<boolean>>();
 export type VideoEncodingConfig = {
 	/** The video codec that should be used for encoding the video samples (frames). */
 	codec: VideoCodec;
-	/**
-	 * The target bitrate for the encoded video, in bits per second. Alternatively, a subjective {@link Quality} can
-	 * be provided.
-	 */
-	bitrate: number | Quality;
 	/**
 	 * The interval, in seconds, of how often frames are encoded as a key frame. The default is 2 seconds. Frequent key
 	 * frames improve seeking behavior but increase file size. When using multiple video tracks, you should give them
@@ -76,7 +71,44 @@ export type VideoEncodingConfig = {
 	onEncoderConfig?: (config: VideoEncoderConfig) => unknown;
 	/** Called right before a sample is passed to the encoder. */
 	onEncodedSample?: (sample: VideoSample) => unknown;
-} & VideoEncodingAdditionalOptions;
+} & VideoEncodingBitrateOptions & VideoEncodingAdditionalOptions;
+
+/**
+ * Options that control the rate control of the video encoder. A bitrate must always be provided, except in quantizer
+ * mode, where it is optional and only used as a fallback for browsers that don't support quantizer mode.
+ * @group Encoding
+ * @public
+ */
+export type VideoEncodingBitrateOptions = {
+	/**
+	 * The target bitrate for the encoded video, in bits per second. Alternatively, a subjective {@link Quality} can
+	 * be provided.
+	 */
+	bitrate: number | Quality;
+	/** Only available in quantizer mode. */
+	quantizer?: never;
+} | {
+	/**
+	 * When set to `'quantizer'`, the encoder uses a fixed quantizer for each frame instead of targeting a bitrate,
+	 * giving direct control over encoding fidelity.
+	 */
+	bitrateMode: 'quantizer';
+	/**
+	 * The target bitrate for the encoded video, in bits per second. Alternatively, a subjective {@link Quality} can
+	 * be provided.
+	 *
+	 * In quantizer mode, this value is optional and only acts as a fallback: Since not all browsers support
+	 * quantizer mode, the encoder will automatically fall back to variable bitrate mode using this value if support
+	 * is missing. When omitted, the fallback bitrate is derived from `quantizer` instead.
+	 */
+	bitrate?: number | Quality;
+	/**
+	 * The quantizer value used for encoded frames, using the scale of the codec: 0 to 51 for 'avc' and 'hevc', 0 to
+	 * 63 for 'vp9', or 0 to 255 for 'av1', where lower values mean higher fidelity. When omitted, a fitting value is
+	 * derived from `bitrate`. Can be overridden for each frame individually using {@link VideoEncodeOptions}.
+	 */
+	quantizer?: number;
+};
 
 /**
  * Options for transforming video frames before encoding.
@@ -150,7 +182,14 @@ export const validateVideoEncodingConfig = (config: VideoEncodingConfig) => {
 	if (!VIDEO_CODECS.includes(config.codec)) {
 		throw new TypeError(`Invalid video codec '${config.codec}'. Must be one of: ${VIDEO_CODECS.join(', ')}.`);
 	}
-	if (!(config.bitrate instanceof Quality) && (!Number.isInteger(config.bitrate) || config.bitrate <= 0)) {
+	if (config.bitrate === undefined) {
+		if (config.bitrateMode !== 'quantizer') {
+			throw new TypeError(
+				'config.bitrate must be provided (as a positive integer or a quality) unless bitrateMode is set to'
+				+ ' \'quantizer\'.',
+			);
+		}
+	} else if (!(config.bitrate instanceof Quality) && (!Number.isInteger(config.bitrate) || config.bitrate <= 0)) {
 		throw new TypeError('config.bitrate must be a positive integer or a quality.');
 	}
 	if (
@@ -256,8 +295,17 @@ export type VideoEncodingAdditionalOptions = {
 	 * pair this mode with a container format that supports transparency (such as WebM or Matroska).
 	 */
 	alpha?: 'discard' | 'keep';
-	/** Configures the bitrate mode; defaults to `'variable'`. */
-	bitrateMode?: 'constant' | 'variable';
+	/**
+	 * Configures the bitrate mode; defaults to `'variable'`.
+	 *
+	 * When set to `'quantizer'`, the encoder uses a fixed quantizer for each frame instead of targeting a bitrate,
+	 * giving direct control over encoding fidelity. The quantizer that is used is controlled by the `quantizer`
+	 * option and can be overridden for each frame individually using {@link VideoEncodeOptions}. This mode is only
+	 * available for the codecs 'avc', 'hevc', 'vp9' and 'av1'. Since not all browsers support quantizer mode, the
+	 * encoder will automatically fall back to `'variable'` if support is missing, using a bitrate derived from
+	 * `bitrate` or `quantizer`.
+	 */
+	bitrateMode?: 'constant' | 'variable' | 'quantizer';
 	/**
 	 * The latency mode used by the encoder; controls the performance-quality tradeoff.
 	 *
@@ -288,15 +336,34 @@ export type VideoEncodingAdditionalOptions = {
 	contentHint?: string;
 };
 
-export const validateVideoEncodingAdditionalOptions = (codec: VideoCodec, options: VideoEncodingAdditionalOptions) => {
+export const validateVideoEncodingAdditionalOptions = (
+	codec: VideoCodec,
+	options: VideoEncodingAdditionalOptions & { quantizer?: number },
+) => {
 	if (!options || typeof options !== 'object') {
 		throw new TypeError('Encoding options must be an object.');
 	}
 	if (options.alpha !== undefined && !['discard', 'keep'].includes(options.alpha)) {
 		throw new TypeError('options.alpha, when provided, must be \'discard\' or \'keep\'.');
 	}
-	if (options.bitrateMode !== undefined && !['constant', 'variable'].includes(options.bitrateMode)) {
-		throw new TypeError('bitrateMode, when provided, must be \'constant\' or \'variable\'.');
+	if (options.bitrateMode !== undefined && !['constant', 'variable', 'quantizer'].includes(options.bitrateMode)) {
+		throw new TypeError('bitrateMode, when provided, must be \'constant\', \'variable\' or \'quantizer\'.');
+	}
+	if (
+		options.bitrateMode === 'quantizer'
+		&& !(QUANTIZER_BITRATE_MODE_CODECS as readonly string[]).includes(codec)
+	) {
+		throw new TypeError(
+			`bitrateMode 'quantizer' is not supported for codec '${codec}'. It is only supported for:`
+			+ ` ${QUANTIZER_BITRATE_MODE_CODECS.join(', ')}.`,
+		);
+	}
+	if (options.quantizer !== undefined) {
+		if (options.bitrateMode !== 'quantizer') {
+			throw new TypeError('quantizer can only be provided when bitrateMode is set to \'quantizer\'.');
+		}
+
+		validateVideoQuantizer(codec as QuantizerBitrateModeCodec, options.quantizer, 'quantizer');
 	}
 	if (options.latencyMode !== undefined && !['quality', 'realtime'].includes(options.latencyMode)) {
 		throw new TypeError('latencyMode, when provided, must be \'quality\' or \'realtime\'.');
@@ -326,18 +393,63 @@ export const validateVideoEncodingAdditionalOptions = (codec: VideoCodec, option
 	}
 };
 
+export const resolveVideoEncoderBitrate = (
+	bitrate: number | Quality | undefined,
+	quantizer: number | undefined,
+	codec: VideoCodec,
+	width: number,
+	height: number,
+) => {
+	if (typeof bitrate === 'number') {
+		return bitrate;
+	}
+	if (bitrate instanceof Quality) {
+		return bitrate._toVideoBitrate(codec, width, height);
+	}
+
+	const factor = quantizer !== undefined
+		? videoQuantizerToQualityFactor(codec as QuantizerBitrateModeCodec, quantizer)
+		: 1;
+	return new Quality(factor)._toVideoBitrate(codec, width, height);
+};
+
+export const resolveVideoBaseQuantizer = (
+	bitrate: number | Quality | undefined,
+	quantizer: number | undefined,
+	codec: VideoCodec,
+	width: number,
+	height: number,
+) => {
+	if (quantizer !== undefined) {
+		return quantizer;
+	}
+	if (bitrate instanceof Quality) {
+		return bitrate._toVideoQuantizer(codec);
+	}
+
+	const factor = typeof bitrate === 'number'
+		? bitrate / referenceVideoBitrate(codec, width, height)
+		: 1;
+	return videoQualityFactorToQuantizer(codec as QuantizerBitrateModeCodec, factor);
+};
+
 export const buildVideoEncoderConfig = (options: {
 	codec: VideoCodec;
 	width: number;
 	height: number;
-	bitrate: number | Quality;
+	bitrate?: number | Quality;
+	quantizer?: number;
 	framerate: number | undefined;
 	squarePixelWidth?: number;
 	squarePixelHeight?: number;
 } & VideoEncodingAdditionalOptions): VideoEncoderConfig => {
-	const resolvedBitrate = options.bitrate instanceof Quality
-		? options.bitrate._toVideoBitrate(options.codec, options.width, options.height)
-		: options.bitrate;
+	const resolvedBitrate = resolveVideoEncoderBitrate(
+		options.bitrate,
+		options.quantizer,
+		options.codec,
+		options.width,
+		options.height,
+	);
 
 	return {
 		codec: options.fullCodecString ?? buildVideoCodecString(
@@ -351,7 +463,8 @@ export const buildVideoEncoderConfig = (options: {
 		height: options.height,
 		displayWidth: options.squarePixelWidth,
 		displayHeight: options.squarePixelHeight,
-		bitrate: resolvedBitrate,
+		// In quantizer mode, rate control is driven by per-frame quantizers, so no bitrate is included
+		bitrate: options.bitrateMode === 'quantizer' ? undefined : resolvedBitrate,
 		bitrateMode: options.bitrateMode,
 		alpha: options.alpha ?? 'discard',
 		framerate: options.framerate,
@@ -534,8 +647,64 @@ export const buildAudioEncoderConfig = (options: {
 	};
 };
 
+const REFERENCE_VIDEO_BITRATE = 3_000_000;
+
+const VIDEO_CODEC_EFFICIENCY_FACTORS: Record<VideoCodec, number> = {
+	avc: 1.0, // H.264/AVC (baseline)
+	hevc: 0.6, // H.265/HEVC (~40% more efficient than AVC)
+	vp9: 0.6, // Similar to HEVC
+	av1: 0.4, // ~60% more efficient than AVC
+	vp8: 1.2, // Slightly less efficient than AVC
+	prores: 220_000_000 / REFERENCE_VIDEO_BITRATE, // Apple ProRes white paper claims 220 Mbps for 1080p 422 HQ @30Hz
+};
+
+/** The video bitrate corresponding to a quality factor of 1 for the given codec and dimensions. */
+const referenceVideoBitrate = (codec: VideoCodec, width: number, height: number) => {
+	const pixels = width * height;
+	const referencePixels = 1920 * 1080;
+	const scaleFactor = Math.pow(pixels / referencePixels, 0.95); // Slight non-linear scaling
+	const baseBitrate = REFERENCE_VIDEO_BITRATE * scaleFactor;
+
+	return baseBitrate * VIDEO_CODEC_EFFICIENCY_FACTORS[codec];
+};
+
 /**
- * Represents a subjective media quality level.
+ * The list of video codecs for which bitrateMode 'quantizer' can be used. These are the codecs with per-frame
+ * quantizer encode options as specified in the WebCodecs Codec Registry.
+ */
+export const QUANTIZER_BITRATE_MODE_CODECS = ['avc', 'hevc', 'vp9', 'av1'] as const;
+export type QuantizerBitrateModeCodec = (typeof QUANTIZER_BITRATE_MODE_CODECS)[number];
+
+/** Maps a quality factor onto each codec's quantizer scale. Factor 1 -> `reference`, each doubling -> -`slope`. */
+const VIDEO_QUANTIZER_PARAMS: Record<QuantizerBitrateModeCodec, { reference: number; slope: number; max: number }> = {
+	avc: { reference: 26, slope: 6, max: 51 },
+	hevc: { reference: 28, slope: 6, max: 51 },
+	vp9: { reference: 32, slope: 8, max: 63 },
+	// AV1 takes a quantizer index (0-255), not the 0-63 scale VP9 uses
+	av1: { reference: 128, slope: 32, max: 255 },
+};
+
+export const videoQualityFactorToQuantizer = (codec: QuantizerBitrateModeCodec, factor: number) => {
+	const params = VIDEO_QUANTIZER_PARAMS[codec];
+	return clamp(Math.round(params.reference - params.slope * Math.log2(factor)), 0, params.max);
+};
+
+export const videoQuantizerToQualityFactor = (codec: QuantizerBitrateModeCodec, quantizer: number) => {
+	const params = VIDEO_QUANTIZER_PARAMS[codec];
+	// Clamp first, or a quantizer meant for another codec's scale derives an absurd factor
+	return 2 ** ((params.reference - clamp(quantizer, 0, params.max)) / params.slope);
+};
+
+export const validateVideoQuantizer = (codec: QuantizerBitrateModeCodec, quantizer: number, name: string) => {
+	const max = VIDEO_QUANTIZER_PARAMS[codec].max;
+	if (!Number.isInteger(quantizer) || quantizer < 0 || quantizer > max) {
+		throw new TypeError(`${name} must be an integer between 0 and ${max} for codec '${codec}'.`);
+	}
+};
+
+/**
+ * Represents a subjective media quality level. In addition to the provided presets (such as {@link QUALITY_MEDIUM}),
+ * qualities with custom quality factors can be created using the constructor.
  * @group Encoding
  * @public
  */
@@ -543,32 +712,39 @@ export class Quality {
 	/** @internal */
 	_factor: number;
 
-	/** @internal */
+	/**
+	 * Creates a new {@link Quality} with the given quality factor. A factor of 1 corresponds to
+	 * {@link QUALITY_MEDIUM}; doubling the factor roughly doubles the target bitrate. For reference, the presets use
+	 * these factors: 0.3 (very low), 0.6 (low), 1 (medium), 2 (high), and 4 (very high).
+	 */
 	constructor(factor: number) {
+		if (!Number.isFinite(factor) || factor <= 0) {
+			throw new TypeError('factor must be a positive number.');
+		}
+
 		this._factor = factor;
 	}
 
 	/** @internal */
 	_toVideoBitrate(codec: VideoCodec, width: number, height: number) {
-		const pixels = width * height;
-		const referencePixels = 1920 * 1080;
-		const referenceBitrate = 3_000_000;
-		const scaleFactor = Math.pow(pixels / referencePixels, 0.95); // Slight non-linear scaling
-		const baseBitrate = referenceBitrate * scaleFactor;
+		const finalBitrate = Math.ceil(referenceVideoBitrate(codec, width, height) * this._factor / 1000) * 1000;
+		if (!Number.isFinite(finalBitrate) || finalBitrate <= 0) {
+			throw new TypeError(
+				`Quality factor ${this._factor} resolves to an invalid bitrate (${finalBitrate}) for codec`
+				+ ` '${codec}' at ${width}x${height}. Use a less extreme factor.`,
+			);
+		}
 
-		const codecEfficiencyFactors: Record<VideoCodec, number> = {
-			avc: 1.0, // H.264/AVC (baseline)
-			hevc: 0.6, // H.265/HEVC (~40% more efficient than AVC)
-			vp9: 0.6, // Similar to HEVC
-			av1: 0.4, // ~60% more efficient than AVC
-			vp8: 1.2, // Slightly less efficient than AVC
-			prores: 220_000_000 / referenceBitrate, // Apple ProRes white paper claims 220 Mbps for 1080p 422 HQ @30Hz
-		};
+		return finalBitrate;
+	}
 
-		const codecAdjustedBitrate = baseBitrate * codecEfficiencyFactors[codec];
-		const finalBitrate = codecAdjustedBitrate * this._factor;
+	/** @internal */
+	_toVideoQuantizer(codec: VideoCodec) {
+		if (!(QUANTIZER_BITRATE_MODE_CODECS as readonly string[]).includes(codec)) {
+			throw new Error(`Codec '${codec}' does not support quantizer mode.`);
+		}
 
-		return Math.ceil(finalBitrate / 1000) * 1000;
+		return videoQualityFactorToQuantizer(codec as QuantizerBitrateModeCodec, this._factor);
 	}
 
 	/** @internal */
@@ -611,7 +787,15 @@ export class Quality {
 			);
 		}
 
-		return Math.round(finalBitrate / 1000) * 1000;
+		const rounded = Math.round(finalBitrate / 1000) * 1000;
+		if (!Number.isFinite(rounded) || rounded <= 0) {
+			throw new TypeError(
+				`Quality factor ${this._factor} resolves to an invalid bitrate for codec '${codec}'. Use a less`
+				+ ' extreme factor.',
+			);
+		}
+
+		return rounded;
 	}
 }
 
@@ -674,16 +858,26 @@ export const canEncodeVideo = async (
 		width?: number;
 		height?: number;
 		bitrate?: number | Quality;
+		quantizer?: number;
 	} & VideoEncodingAdditionalOptions = {},
 ) => {
 	const {
 		width = 1280,
 		height = 720,
-		bitrate = 1e6,
+		// In quantizer mode, an omitted bitrate is derived from the quantizer so the probed codec string matches the
+		// one the encoder will actually be configured with
+		bitrate = options.bitrateMode === 'quantizer' ? undefined : 1e6,
 		...restOptions
 	} = options;
 
 	if (!VIDEO_CODECS.includes(codec)) {
+		return false;
+	}
+	if (
+		restOptions.bitrateMode === 'quantizer'
+		&& !(QUANTIZER_BITRATE_MODE_CODECS as readonly string[]).includes(codec)
+	) {
+		// Instead of throwing, return false so that codec lists can be probed for quantizer mode support
 		return false;
 	}
 	if (!Number.isInteger(width) || width <= 0) {
@@ -692,8 +886,20 @@ export const canEncodeVideo = async (
 	if (!Number.isInteger(height) || height <= 0) {
 		throw new TypeError('height must be a positive integer.');
 	}
-	if (!(bitrate instanceof Quality) && (!Number.isInteger(bitrate) || bitrate <= 0)) {
+	if (bitrate !== undefined && !(bitrate instanceof Quality) && (!Number.isInteger(bitrate) || bitrate <= 0)) {
 		throw new TypeError('bitrate must be a positive integer or a quality.');
+	}
+	if (restOptions.quantizer !== undefined) {
+		if (restOptions.bitrateMode !== 'quantizer') {
+			throw new TypeError('quantizer can only be provided when bitrateMode is set to \'quantizer\'.');
+		}
+		if (!Number.isInteger(restOptions.quantizer) || restOptions.quantizer < 0) {
+			throw new TypeError('quantizer must be a non-negative integer.');
+		}
+		if (restOptions.quantizer > VIDEO_QUANTIZER_PARAMS[codec as QuantizerBitrateModeCodec].max) {
+			// Outside this codec's scale, but it may be valid on another codec's, so don't throw
+			return false;
+		}
 	}
 	validateVideoEncodingAdditionalOptions(codec, restOptions);
 
@@ -731,7 +937,14 @@ export const canEncodeVideo = async (
 			return false;
 		}
 
-		const support = await VideoEncoder.isConfigSupported(encoderConfig);
+		let support: VideoEncoderSupport;
+		try {
+			support = await VideoEncoder.isConfigSupported(encoderConfig);
+		} catch {
+			// The browser may throw when it encounters values it doesn't know, such as bitrateMode 'quantizer'
+			return false;
+		}
+
 		if (!support.supported) {
 			return false;
 		}
@@ -884,7 +1097,8 @@ export const getEncodableVideoCodecs = async (
 		width?: number;
 		height?: number;
 		bitrate?: number | Quality;
-	},
+		quantizer?: number;
+	} & VideoEncodingAdditionalOptions,
 ): Promise<VideoCodec[]> => {
 	const bools = await Promise.all(checkedCodecs.map(codec => canEncodeVideo(codec, options)));
 	return checkedCodecs.filter((_, i) => bools[i]);
@@ -930,7 +1144,8 @@ export const getFirstEncodableVideoCodec = async (
 		width?: number;
 		height?: number;
 		bitrate?: number | Quality;
-	},
+		quantizer?: number;
+	} & VideoEncodingAdditionalOptions,
 ): Promise<VideoCodec | null> => {
 	for (const codec of checkedCodecs) {
 		if (await canEncodeVideo(codec, options)) {

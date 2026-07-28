@@ -15,7 +15,7 @@ import { Conversion, ConversionCanceledError } from '../../src/conversion.js';
 import { assert } from '../../src/misc.js';
 import { InputVideoTrack } from '../../src/input-track.js';
 import { CanvasSource, EncodedAudioPacketSource } from '../../src/media-source.js';
-import { QUALITY_HIGH } from '../../src/encode.js';
+import { QUALITY_HIGH, Quality, videoQuantizerToQualityFactor } from '../../src/encode.js';
 import { EncodedPacket } from '../../src/packet.js';
 
 test('Rotation is baked in when rerendering', async () => {
@@ -758,4 +758,171 @@ test('Pre-signaled pause signal', async () => {
 
 	await conversion.execute();
 	expect(conversion.state).toBe('done');
+});
+
+const captureEncoderConfigs = async (fn: () => Promise<void>) => {
+	const configs: VideoEncoderConfig[] = [];
+	// eslint-disable-next-line @typescript-eslint/unbound-method
+	const originalConfigure = VideoEncoder.prototype.configure;
+
+	VideoEncoder.prototype.configure = function (this: VideoEncoder, config: VideoEncoderConfig) {
+		configs.push(config);
+		return originalConfigure.call(this, config);
+	};
+
+	try {
+		await fn();
+	} finally {
+		VideoEncoder.prototype.configure = originalConfigure;
+	}
+
+	return configs;
+};
+
+test('Quantizer bitrate mode is passed through to the encoder', async () => {
+	using input = new Input({
+		source: new UrlSource('/video.mp4'),
+		formats: ALL_FORMATS,
+	});
+
+	const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
+
+	const configs = await captureEncoderConfigs(async () => {
+		const conversion = await Conversion.init({
+			input,
+			output,
+			video: {
+				codec: 'vp9',
+				bitrateMode: 'quantizer',
+				quantizer: 40,
+				width: 160,
+			},
+		});
+		await conversion.execute();
+	});
+
+	expect(configs.length).toBeGreaterThan(0);
+	expect(configs[0]!.bitrateMode).toBe('quantizer');
+	expect(configs[0]!.bitrate).toBe(undefined);
+
+	using newInput = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const newTrack = await newInput.getPrimaryVideoTrack();
+	assert(newTrack);
+	expect(await newTrack.getCodedWidth()).toBe(160);
+});
+
+test('Quantizer bitrate mode forces a transcode instead of stream-copying', async () => {
+	using input = new Input({
+		source: new UrlSource('/video.mp4'),
+		formats: ALL_FORMATS,
+	});
+
+	const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
+
+	// No codec or dimension change, so without the quantizer options this would take the stream-copy fast path
+	const configs = await captureEncoderConfigs(async () => {
+		const conversion = await Conversion.init({
+			input,
+			output,
+			video: { bitrateMode: 'quantizer' },
+		});
+		await conversion.execute();
+	});
+
+	expect(configs.length).toBeGreaterThan(0);
+});
+
+test('Quantizer mode falls back to a bitrate-driven encode when the browser lacks support', async () => {
+	using input = new Input({
+		source: new UrlSource('/video.mp4'),
+		formats: ALL_FORMATS,
+	});
+
+	const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
+
+	// Simulate a browser that doesn't know quantizer mode at all: it rejects while converting the config
+	const originalIsConfigSupported = VideoEncoder.isConfigSupported.bind(VideoEncoder);
+	VideoEncoder.isConfigSupported = (config: VideoEncoderConfig) => {
+		if (config.bitrateMode === 'quantizer') {
+			return Promise.reject(new TypeError('Failed to read the \'bitrateMode\' property.'));
+		}
+
+		return originalIsConfigSupported(config);
+	};
+
+	let configs: VideoEncoderConfig[];
+	try {
+		configs = await captureEncoderConfigs(async () => {
+			const conversion = await Conversion.init({
+				input,
+				output,
+				video: { codec: 'avc', bitrateMode: 'quantizer', quantizer: 40, width: 160 },
+			});
+			await conversion.execute();
+		});
+	} finally {
+		VideoEncoder.isConfigSupported = originalIsConfigSupported;
+	}
+
+	expect(configs.length).toBeGreaterThan(0);
+	expect(configs[0]!.bitrateMode).not.toBe('quantizer');
+	// The bitrate comes from the requested quantizer, not from the probe's placeholder or the QUALITY_HIGH default
+	const expectedBitrate = new Quality(videoQuantizerToQualityFactor('avc', 40))._toVideoBitrate('avc', 160, 90);
+	expect(configs[0]!.bitrate).toBe(expectedBitrate);
+
+	using newInput = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const newTrack = await newInput.getPrimaryVideoTrack();
+	assert(newTrack);
+	expect(await newTrack.getCodedWidth()).toBe(160);
+});
+
+test('Quantizer options are validated', async () => {
+	using input = new Input({
+		source: new UrlSource('/video.mp4'),
+		formats: ALL_FORMATS,
+	});
+
+	// Each init needs its own Output, since Conversion requires a fresh one
+	const freshOutput = () => new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
+
+	await expect(Conversion.init({
+		input,
+		output: freshOutput(),
+		// @ts-expect-error invalid bitrate mode
+		video: { bitrateMode: 'nonsense' },
+	})).rejects.toThrow(TypeError);
+
+	// vp8 has no quantizer mode, so asking for both at once is a contradiction rather than something to fall back from
+	await expect(Conversion.init({
+		input,
+		output: freshOutput(),
+		video: { codec: 'vp8', bitrateMode: 'quantizer' },
+	})).rejects.toThrow(TypeError);
+
+	// A raw quantizer means nothing until the codec is known
+	await expect(Conversion.init({
+		input,
+		output: freshOutput(),
+		video: { bitrateMode: 'quantizer', quantizer: 26 },
+	})).rejects.toThrow(TypeError);
+
+	// Out of range for the codec that was asked for
+	await expect(Conversion.init({
+		input,
+		output: freshOutput(),
+		video: { codec: 'vp9', bitrateMode: 'quantizer', quantizer: 64 },
+	})).rejects.toThrow(TypeError);
+
+	// A quantizer without quantizer mode
+	await expect(Conversion.init({
+		input,
+		output: freshOutput(),
+		video: { codec: 'vp9', quantizer: 30 },
+	})).rejects.toThrow(TypeError);
 });

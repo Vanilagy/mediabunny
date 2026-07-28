@@ -105,6 +105,7 @@ export {
 } from './decode';
 export {
 	type VideoEncodingConfig,
+	type VideoEncodingBitrateOptions,
 	type VideoEncodingAdditionalOptions,
 	type VideoTransformOptions,
 	type AudioEncodingConfig,
@@ -259,6 +260,7 @@ export {
 	AudioSampleResource,
 	VideoSample,
 	type VideoSampleInit,
+	type VideoEncodeOptions,
 	type VideoSamplePixelFormat,
 	VideoSampleColorSpace,
 	VideoSampleResource,

@@ -313,7 +313,7 @@ class {
 	static supports(codec: AudioCodec, config: AudioEncoderConfig): boolean;
 
 	init(): Promise<void> | void;
-	encode(sample: VideoSample, options: VideoEncoderEncodeOptions): Promise<void> | void; // For video
+	encode(sample: VideoSample, options: VideoEncodeOptions): Promise<void> | void; // For video
 	encode(sample: AudioSample): Promise<void> | void; // For audio
 	flush(): Promise<void> | void;
 	close(): Promise<void> | void;
@@ -324,7 +324,7 @@ class {
 - `init`\
 	Called by the library after your class is instantiated. Place any initialization logic here.
 - `encode`\
-	Called for each sample that is to be encoded. The resulting encoded packet **must** then be passed to the `onPacket` method.
+	Called for each sample that is to be encoded. The resulting encoded packet **must** then be passed to the `onPacket` method. When encoding video in [quantizer mode](./media-sources#quantizer-mode), the quantizer for the frame is passed in the codec-specific field of the options, such as `options.avc.quantizer`.
 - `flush`\
 	Called when the encoder is expected to finish the encoding process for all remaining samples that haven't finished encoding yet. This method **must** return/resolve only once all samples passed to `encode` have been fully encoded. It **must** then reset its own internal state to be ready for the next encoding batch.
 - `close`\
