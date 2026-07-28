@@ -85,8 +85,6 @@ export type VideoEncodingBitrateOptions = {
 	 * be provided.
 	 */
 	bitrate: number | Quality;
-	/** Only available in quantizer mode. */
-	quantizer?: never;
 } | {
 	/**
 	 * When set to `'quantizer'`, the encoder uses a fixed quantizer for each frame instead of targeting a bitrate,
@@ -393,6 +391,22 @@ export const validateVideoEncodingAdditionalOptions = (
 	}
 };
 
+/** The bitrate a quantizer-mode encode falls back to when quantizer mode turns out to be unavailable. */
+export const videoFallbackBitrate = (
+	bitrate: number | Quality | undefined,
+	quantizer: number | undefined,
+	codec: VideoCodec,
+): number | Quality => {
+	if (bitrate !== undefined) {
+		return bitrate;
+	}
+	if (quantizer !== undefined && (QUANTIZER_BITRATE_MODE_CODECS as readonly string[]).includes(codec)) {
+		return new Quality(videoQuantizerToQualityFactor(codec as QuantizerBitrateModeCodec, quantizer));
+	}
+
+	return QUALITY_MEDIUM;
+};
+
 export const resolveVideoEncoderBitrate = (
 	bitrate: number | Quality | undefined,
 	quantizer: number | undefined,
@@ -400,17 +414,8 @@ export const resolveVideoEncoderBitrate = (
 	width: number,
 	height: number,
 ) => {
-	if (typeof bitrate === 'number') {
-		return bitrate;
-	}
-	if (bitrate instanceof Quality) {
-		return bitrate._toVideoBitrate(codec, width, height);
-	}
-
-	const factor = quantizer !== undefined
-		? videoQuantizerToQualityFactor(codec as QuantizerBitrateModeCodec, quantizer)
-		: 1;
-	return new Quality(factor)._toVideoBitrate(codec, width, height);
+	const fallback = videoFallbackBitrate(bitrate, quantizer, codec);
+	return typeof fallback === 'number' ? fallback : fallback._toVideoBitrate(codec, width, height);
 };
 
 export const resolveVideoBaseQuantizer = (
@@ -889,17 +894,14 @@ export const canEncodeVideo = async (
 	if (bitrate !== undefined && !(bitrate instanceof Quality) && (!Number.isInteger(bitrate) || bitrate <= 0)) {
 		throw new TypeError('bitrate must be a positive integer or a quality.');
 	}
-	if (restOptions.quantizer !== undefined) {
-		if (restOptions.bitrateMode !== 'quantizer') {
-			throw new TypeError('quantizer can only be provided when bitrateMode is set to \'quantizer\'.');
-		}
-		if (!Number.isInteger(restOptions.quantizer) || restOptions.quantizer < 0) {
-			throw new TypeError('quantizer must be a non-negative integer.');
-		}
-		if (restOptions.quantizer > VIDEO_QUANTIZER_PARAMS[codec as QuantizerBitrateModeCodec].max) {
-			// Outside this codec's scale, but it may be valid on another codec's, so don't throw
-			return false;
-		}
+	if (
+		restOptions.bitrateMode === 'quantizer'
+		&& restOptions.quantizer !== undefined
+		&& Number.isInteger(restOptions.quantizer)
+		&& restOptions.quantizer > VIDEO_QUANTIZER_PARAMS[codec as QuantizerBitrateModeCodec].max
+	) {
+		// Outside this codec's scale, but it may be valid on another codec's, so don't throw
+		return false;
 	}
 	validateVideoEncodingAdditionalOptions(codec, restOptions);
 

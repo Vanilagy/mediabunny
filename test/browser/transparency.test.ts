@@ -286,6 +286,24 @@ test('Positive encodability check with alpha', async () => {
 });
 
 test('Can encode transparent video in quantizer mode', async () => {
+	const quantizerModeSupported = await canEncodeVideo('vp9', { bitrateMode: 'quantizer' });
+
+	const appliedQuantizers: number[] = [];
+	// eslint-disable-next-line @typescript-eslint/unbound-method
+	const originalEncode = VideoEncoder.prototype.encode;
+	VideoEncoder.prototype.encode = function (
+		this: VideoEncoder,
+		frame: VideoFrame,
+		options?: VideoEncoderEncodeOptions,
+	) {
+		const quantizer = (options as { vp9?: { quantizer?: number } } | undefined)?.vp9?.quantizer;
+		if (quantizer !== undefined) {
+			appliedQuantizers.push(quantizer);
+		}
+
+		return originalEncode.call(this, frame, options);
+	};
+
 	const output = new Output({
 		format: new WebMOutputFormat(),
 		target: new BufferTarget(),
@@ -302,16 +320,25 @@ test('Can encode transparent video in quantizer mode', async () => {
 	});
 	output.addVideoTrack(source);
 
-	await output.start();
+	try {
+		await output.start();
 
-	for (let i = 0; i < 3; i++) {
-		context.clearRect(0, 0, canvas.width, canvas.height);
-		context.fillStyle = '#ff0000';
-		context.fillRect(100 * i, 100, 200, 200);
-		await source.add(i / 30, 1 / 30);
+		for (let i = 0; i < 3; i++) {
+			context.clearRect(0, 0, canvas.width, canvas.height);
+			context.fillStyle = '#ff0000';
+			context.fillRect(100 * i, 100, 200, 200);
+			await source.add(i / 30, 1 / 30);
+		}
+
+		await output.finalize();
+	} finally {
+		VideoEncoder.prototype.encode = originalEncode;
 	}
 
-	await output.finalize();
+	if (quantizerModeSupported) {
+		// The color and alpha encoders run in series with a shared config, so both get the quantizer
+		expect(appliedQuantizers).toEqual(Array(6).fill(20));
+	}
 
 	using input = new Input({
 		source: new BufferSource(output.target.buffer!),

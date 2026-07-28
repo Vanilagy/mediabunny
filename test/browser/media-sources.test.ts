@@ -526,7 +526,7 @@ test('VideoSampleSource, quantizer mode config validation', () => {
 	expect(() => new VideoSampleSource({ codec: 'avc' })).toThrow(TypeError);
 	// Quantizer mode is only supported for avc, hevc, vp9 and av1 (enforced at runtime)
 	expect(() => new VideoSampleSource({ codec: 'vp8', bitrateMode: 'quantizer' })).toThrow(TypeError);
-	// @ts-expect-error quantizer requires bitrateMode 'quantizer'; also guarded at runtime
+	// quantizer requires bitrateMode 'quantizer'; this compiles and is rejected at runtime
 	expect(() => new VideoSampleSource({ codec: 'avc', bitrate: 1e6, quantizer: 20 })).toThrow(TypeError);
 	expect(() => new VideoSampleSource({
 		codec: 'avc',
@@ -635,7 +635,6 @@ test('VideoSampleSource, per-frame quantizer', async () => {
 	// Skip the first packet (key frame) for a fair comparison
 	const highQuantizerSizes = packetSizes.slice(1, 6);
 	const lowQuantizerSizes = packetSizes.slice(6);
-	const average = (sizes: number[]) => sizes.reduce((a, b) => a + b, 0) / sizes.length;
 
 	expect(average(lowQuantizerSizes)).toBeGreaterThan(1.25 * average(highQuantizerSizes));
 });
@@ -662,6 +661,26 @@ test('VideoSampleSource, avc quantizer mode on the hardware encoder', async () =
 	expect(await readBackSamples(coarseBuffer)).toHaveLength(8);
 
 	// The finer quantizer must yield a meaningfully larger file
+	expect(fineBuffer.byteLength).toBeGreaterThan(1.25 * coarseBuffer.byteLength);
+});
+
+test('VideoSampleSource, hevc quantizer mode', async () => {
+	if (!(await canEncodeVideo('hevc', { bitrateMode: 'quantizer' }))) {
+		return; // Quantizer mode for hevc isn't available on this browser
+	}
+
+	// hevc shares the avc scale, and on Apple hardware it shares the low-quantizer hazard too
+	const fineBuffer = await encodeNoisyFrames(
+		{ codec: 'hevc', bitrateMode: 'quantizer', quantizer: SAFE_AVC_QUANTIZER },
+		8,
+	);
+	const coarseBuffer = await encodeNoisyFrames(
+		{ codec: 'hevc', bitrateMode: 'quantizer', quantizer: COARSE_AVC_QUANTIZER },
+		8,
+	);
+
+	expect(await readBackSamples(fineBuffer)).toHaveLength(8);
+	expect(await readBackSamples(coarseBuffer)).toHaveLength(8);
 	expect(fineBuffer.byteLength).toBeGreaterThan(1.25 * coarseBuffer.byteLength);
 });
 
@@ -716,7 +735,6 @@ test('VideoSampleSource, avc per-frame quantizer reaches the encoder', async () 
 	expect(appliedQuantizers.slice(4)).toEqual(Array(4).fill(SAFE_AVC_QUANTIZER));
 
 	// And the finer half must actually produce larger packets (skipping the leading key frame)
-	const average = (sizes: number[]) => sizes.reduce((a, b) => a + b, 0) / sizes.length;
 	expect(average(packetSizes.slice(4))).toBeGreaterThan(1.25 * average(packetSizes.slice(1, 4)));
 });
 
@@ -746,6 +764,225 @@ test('VideoSampleSource, quantizer mode falls back to variable bitrate mode when
 	}
 });
 
+test('VideoSampleSource, quantizer mode falls back when configure rejects the config', async () => {
+	const originalIsConfigSupported = VideoEncoder.isConfigSupported.bind(VideoEncoder);
+
+	// Claim support in the probe, then have configure itself reject the config anyway
+	VideoEncoder.isConfigSupported = (config: VideoEncoderConfig) => {
+		if (config.bitrateMode === 'quantizer') {
+			return Promise.resolve({ supported: true, config });
+		}
+
+		return originalIsConfigSupported(config);
+	};
+
+	// eslint-disable-next-line @typescript-eslint/unbound-method
+	const originalConfigure = VideoEncoder.prototype.configure;
+	const configuredModes: (string | undefined)[] = [];
+	VideoEncoder.prototype.configure = function (this: VideoEncoder, config: VideoEncoderConfig) {
+		configuredModes.push(config.bitrateMode);
+		if (config.bitrateMode === 'quantizer') {
+			throw new DOMException('Unsupported configuration', 'NotSupportedError');
+		}
+
+		return originalConfigure.call(this, config);
+	};
+
+	try {
+		const buffer = await encodeNoisyFrames(
+			{ codec: 'vp9', bitrateMode: 'quantizer', quantizer: 30 },
+			3,
+		);
+
+		expect(await readBackSamples(buffer)).toHaveLength(3);
+	} finally {
+		VideoEncoder.isConfigSupported = originalIsConfigSupported;
+		VideoEncoder.prototype.configure = originalConfigure;
+	}
+
+	expect(configuredModes).toEqual(['quantizer', 'variable']);
+});
+
+test('VideoSampleSource, codec-specific quantizers do not survive the fallback', async () => {
+	const originalIsConfigSupported = VideoEncoder.isConfigSupported.bind(VideoEncoder);
+	VideoEncoder.isConfigSupported = (config: VideoEncoderConfig) => {
+		if (config.bitrateMode === 'quantizer') {
+			return Promise.reject(new TypeError('Failed to read the \'bitrateMode\' property.'));
+		}
+
+		return originalIsConfigSupported(config);
+	};
+
+	const leakedQuantizers: number[] = [];
+	// eslint-disable-next-line @typescript-eslint/unbound-method
+	const originalEncode = VideoEncoder.prototype.encode;
+	VideoEncoder.prototype.encode = function (
+		this: VideoEncoder,
+		frame: VideoFrame,
+		options?: VideoEncoderEncodeOptions,
+	) {
+		const quantizer = (options as { vp9?: { quantizer?: number } } | undefined)?.vp9?.quantizer;
+		if (quantizer !== undefined) {
+			leakedQuantizers.push(quantizer);
+		}
+
+		return originalEncode.call(this, frame, options);
+	};
+
+	try {
+		const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
+		const videoSource = new VideoSampleSource({ codec: 'vp9', bitrateMode: 'quantizer', quantizer: 30 });
+		output.addVideoTrack(videoSource);
+		await output.start();
+
+		for (let i = 0; i < 3; i++) {
+			const sample = new VideoSample(makeCanvas(320, 240), { timestamp: i / 30, duration: 1 / 30 });
+			await videoSource.add(sample, { vp9: { quantizer: 8 } });
+			sample.close();
+		}
+
+		await output.finalize();
+	} finally {
+		VideoEncoder.isConfigSupported = originalIsConfigSupported;
+		VideoEncoder.prototype.encode = originalEncode;
+	}
+
+	// After the fallback, per-frame quantizers are documented as ignored
+	expect(leakedQuantizers).toEqual([]);
+});
+
+test('VideoSampleSource, quantizer support is probed with the config the encoder will use', async () => {
+	if (!(await canEncodeVideo('vp9', { bitrateMode: 'quantizer' }))) {
+		return;
+	}
+
+	const originalIsConfigSupported = VideoEncoder.isConfigSupported.bind(VideoEncoder);
+
+	// Both real encoders run with alpha 'discard', so a probe asking about 'keep' asks about a config that is
+	// never used. Reject it to catch that.
+	VideoEncoder.isConfigSupported = (config: VideoEncoderConfig) => {
+		if (config.bitrateMode === 'quantizer' && config.alpha === 'keep') {
+			return Promise.reject(new TypeError('Failed to read the \'alpha\' property.'));
+		}
+
+		return originalIsConfigSupported(config);
+	};
+
+	const appliedQuantizers: number[] = [];
+	// eslint-disable-next-line @typescript-eslint/unbound-method
+	const originalEncode = VideoEncoder.prototype.encode;
+	VideoEncoder.prototype.encode = function (
+		this: VideoEncoder,
+		frame: VideoFrame,
+		options?: VideoEncoderEncodeOptions,
+	) {
+		const quantizer = (options as { vp9?: { quantizer?: number } } | undefined)?.vp9?.quantizer;
+		if (quantizer !== undefined) {
+			appliedQuantizers.push(quantizer);
+		}
+
+		return originalEncode.call(this, frame, options);
+	};
+
+	try {
+		const output = new Output({ format: new WebMOutputFormat(), target: new BufferTarget() });
+		const videoSource = new VideoSampleSource({
+			codec: 'vp9',
+			bitrateMode: 'quantizer',
+			quantizer: 20,
+			alpha: 'keep',
+		});
+		output.addVideoTrack(videoSource);
+		await output.start();
+
+		for (let i = 0; i < 3; i++) {
+			const sample = new VideoSample(makeCanvas(320, 240), { timestamp: i / 30, duration: 1 / 30 });
+			await videoSource.add(sample);
+			sample.close();
+		}
+
+		await output.finalize();
+	} finally {
+		VideoEncoder.isConfigSupported = originalIsConfigSupported;
+		VideoEncoder.prototype.encode = originalEncode;
+	}
+
+	// An empty list means the encoder fell back over a config it was never going to use
+	expect(appliedQuantizers.length).toBeGreaterThan(0);
+});
+
+test('VideoSampleSource, a rejected frame leaves the frame rate state intact', async () => {
+	const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
+	const videoSource = new VideoSampleSource({
+		codec: 'vp9',
+		bitrateMode: 'quantizer',
+		quantizer: 30,
+		transform: { frameRate: 10 },
+	});
+	output.addVideoTrack(videoSource);
+	await output.start();
+
+	const firstSample = new VideoSample(makeCanvas(320, 240), { timestamp: 0, duration: 0.1 });
+	await videoSource.add(firstSample);
+	firstSample.close();
+
+	const secondSample = new VideoSample(makeCanvas(320, 240), { timestamp: 0.1, duration: 0.1 });
+	await expect(videoSource.add(secondSample, { quantizer: 64 })).rejects.toThrow(/quantizer/);
+	// The rejected frame must not have claimed its frame rate slot, or this retry would be swallowed
+	await videoSource.add(secondSample, { quantizer: 8 });
+	secondSample.close();
+
+	await output.finalize();
+
+	const samples = await readBackSamples(output.target.buffer!);
+	expect(samples).toHaveLength(2);
+});
+
+test('VideoSampleSource, frame rate padding repeats the stored frame\'s quantizer', async () => {
+	if (!(await canEncodeVideo('vp9', { bitrateMode: 'quantizer' }))) {
+		return;
+	}
+
+	const appliedQuantizers: number[] = [];
+	// eslint-disable-next-line @typescript-eslint/unbound-method
+	const originalEncode = VideoEncoder.prototype.encode;
+	VideoEncoder.prototype.encode = function (
+		this: VideoEncoder,
+		frame: VideoFrame,
+		options?: VideoEncoderEncodeOptions,
+	) {
+		const quantizer = (options as { vp9?: { quantizer?: number } } | undefined)?.vp9?.quantizer;
+		if (quantizer !== undefined) {
+			appliedQuantizers.push(quantizer);
+		}
+
+		return originalEncode.call(this, frame, options);
+	};
+
+	try {
+		const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
+		const videoSource = new VideoSampleSource({
+			codec: 'vp9',
+			bitrateMode: 'quantizer',
+			quantizer: 60,
+			transform: { frameRate: 10 },
+		});
+		output.addVideoTrack(videoSource);
+		await output.start();
+
+		const sample = new VideoSample(makeCanvas(320, 240), { timestamp: 0, duration: 0.5 });
+		await videoSource.add(sample, { quantizer: 8 });
+		sample.close();
+
+		await output.finalize();
+	} finally {
+		VideoEncoder.prototype.encode = originalEncode;
+	}
+
+	// The padded repeats stand in for the frame that was added with quantizer 8, so they carry it too
+	expect(appliedQuantizers).toEqual(Array(5).fill(8));
+});
+
 const makeCanvas = (width: number, height: number) => {
 	const canvas = new OffscreenCanvas(width, height);
 	const ctx = canvas.getContext('2d')!;
@@ -753,6 +990,8 @@ const makeCanvas = (width: number, height: number) => {
 	ctx.fillRect(0, 0, width, height);
 	return canvas;
 };
+
+const average = (sizes: number[]) => sizes.reduce((a, b) => a + b, 0) / sizes.length;
 
 const makeNoisyCanvas = (width: number, height: number) => {
 	const canvas = new OffscreenCanvas(width, height);

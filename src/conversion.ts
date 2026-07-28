@@ -20,12 +20,11 @@ import {
 	Quality,
 	QUALITY_HIGH,
 	canEncodeVideo,
-	QUALITY_MEDIUM,
 	QUANTIZER_BITRATE_MODE_CODECS,
 	QuantizerBitrateModeCodec,
 	validateVideoQuantizer,
+	videoFallbackBitrate,
 	VideoEncodingConfig,
-	videoQuantizerToQualityFactor,
 } from './encode';
 import { Input } from './input';
 import { InputAudioTrack, InputTrack, InputVideoTrack } from './input-track';
@@ -1490,24 +1489,8 @@ export class Conversion {
 				bitrate,
 			};
 
-			// The bitrate we'd use if we had to fall back out of quantizer mode. With no bitrate from the user, we
-			// derive one from their quantizer so the fallback still lands near the quality they asked for.
-			const fallbackBitrateFor = (codec: VideoCodec) => {
-				if (bitrate !== undefined) {
-					return bitrate;
-				}
-				if (
-					trackOptions.quantizer !== undefined
-					&& (QUANTIZER_BITRATE_MODE_CODECS as readonly string[]).includes(codec)
-				) {
-					return new Quality(videoQuantizerToQualityFactor(
-						codec as QuantizerBitrateModeCodec,
-						trackOptions.quantizer,
-					));
-				}
-
-				return trackOptions.bitrateMode === 'quantizer' ? QUALITY_MEDIUM : QUALITY_HIGH;
-			};
+			const fallbackBitrateFor = (codec: VideoCodec) =>
+				videoFallbackBitrate(bitrate, trackOptions.quantizer, codec);
 
 			let encodableCodec = await getFirstEncodableVideoCodec(videoCodecs, {
 				...probeOptions,
@@ -1536,15 +1519,13 @@ export class Conversion {
 				return;
 			}
 
-			const fallbackBitrate = fallbackBitrateFor(encodableCodec);
-
 			const encodingConfig: VideoEncodingConfig = {
 				codec: encodableCodec,
 				...(useQuantizerMode
 					? { bitrateMode: 'quantizer' as const, bitrate, quantizer: trackOptions.quantizer }
 					// Don't pass 'quantizer' through when we've fallen back; the encoder would reject it
 					: {
-							bitrate: fallbackBitrate,
+							bitrate: fallbackBitrateFor(encodableCodec),
 							bitrateMode: trackOptions.bitrateMode === 'quantizer'
 								? undefined
 								: trackOptions.bitrateMode,
