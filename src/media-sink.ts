@@ -471,6 +471,7 @@ export abstract class BaseMediaSampleSink<
 		let decoderIsFlushed = false;
 		let ended = false;
 		let terminated = false;
+		let decoder: DecoderWrapper<MediaSample> | null = null;
 
 		// This stores errors that are "out of band" in the sense that they didn't occur in the normal flow of this
 		// method but instead in a different context. This error should not go unnoticed and must be bubbled up to
@@ -486,7 +487,7 @@ export abstract class BaseMediaSampleSink<
 
 		// The following is the "pump" process that keeps pumping packets into the decoder
 		(async () => {
-			const decoder = await this._createDecoder((sample) => {
+			decoder = await this._createDecoder((sample) => {
 				onQueueDequeue();
 				if (sample.timestamp >= endTimestamp) {
 					ended = true;
@@ -569,20 +570,21 @@ export abstract class BaseMediaSampleSink<
 			if (!terminated && !this._track.input._disposed) {
 				await decoder.flush();
 			}
-			decoder.close();
 
 			if (!firstSampleQueued && lastSample) {
 				sampleQueue.push(lastSample);
 			}
 
 			decoderIsFlushed = true;
-			onQueueNotEmpty(); // To unstuck the generator
+			onQueueNotEmpty(); // To unstuck (unstick?) the generator
 		})().catch((error) => {
 			if (!hasOutOfBandError) {
 				outOfBandError = error;
 				hasOutOfBandError = true;
 				onQueueNotEmpty();
 			}
+		}).finally(() => {
+			decoder?.close();
 		});
 
 		const track = this._track;
@@ -647,6 +649,7 @@ export abstract class BaseMediaSampleSink<
 		let { promise: queueDequeue, resolve: onQueueDequeue } = promiseWithResolvers();
 		let decoderIsFlushed = false;
 		let terminated = false;
+		let decoder: DecoderWrapper<MediaSample> | null = null;
 
 		// This stores errors that are "out of band" in the sense that they didn't occur in the normal flow of this
 		// method but instead in a different context. This error should not go unnoticed and must be bubbled up to
@@ -668,7 +671,7 @@ export abstract class BaseMediaSampleSink<
 
 		// The following is the "pump" process that keeps pumping packets into the decoder
 		(async () => {
-			const decoder = await this._createDecoder((sample) => {
+			decoder = await this._createDecoder((sample) => {
 				onQueueDequeue();
 
 				if (terminated) {
@@ -711,6 +714,7 @@ export abstract class BaseMediaSampleSink<
 
 			const decodePackets = async () => {
 				assert(lastKeyPacket);
+				assert(decoder);
 
 				// Start at the current key packet
 				let currentPacket = lastKeyPacket;
@@ -738,6 +742,7 @@ export abstract class BaseMediaSampleSink<
 			};
 
 			const flushDecoder = async () => {
+				assert(decoder);
 				await decoder.flush();
 
 				// We don't expect this list to have any elements in it anymore, but in case it does, let's emit
@@ -796,7 +801,6 @@ export abstract class BaseMediaSampleSink<
 
 				await flushDecoder();
 			}
-			decoder.close();
 
 			decoderIsFlushed = true;
 			onQueueNotEmpty(); // To unstuck the generator
@@ -806,6 +810,8 @@ export abstract class BaseMediaSampleSink<
 				hasOutOfBandError = true;
 				onQueueNotEmpty();
 			}
+		}).finally(() => {
+			decoder?.close();
 		});
 
 		const track = this._track;

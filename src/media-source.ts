@@ -468,22 +468,42 @@ class VideoEncoderWrapper {
 				processed = [processed];
 			}
 
-			samplesToEncode = processed.map((x) => {
-				if (x instanceof VideoSample) {
-					return x;
+			const mappedSamples: VideoSample[] = [];
+
+			try {
+				for (const x of processed) {
+					if (x instanceof VideoSample) {
+						mappedSamples.push(x);
+					} else if (typeof VideoFrame !== 'undefined' && x instanceof VideoFrame) {
+						mappedSamples.push(new VideoSample(x));
+					} else {
+						// Calling the VideoSample constructor here will automatically handle input validation for us
+						// (it throws for any non-legal argument).
+						mappedSamples.push(new VideoSample(x as CanvasImageSource, {
+							timestamp: videoSample.timestamp,
+							duration: videoSample.duration,
+						}));
+					}
+				}
+			} catch (error) {
+				// One of the returned elements was invalid; close everything closable so no resource is leaked
+				for (const sample of mappedSamples) {
+					if (sample !== videoSample) {
+						sample.close();
+					}
+				}
+				for (const x of processed) {
+					if (x instanceof VideoSample && x !== videoSample) {
+						x.close();
+					} else if (typeof VideoFrame !== 'undefined' && x instanceof VideoFrame) {
+						x.close();
+					}
 				}
 
-				if (typeof VideoFrame !== 'undefined' && x instanceof VideoFrame) {
-					return new VideoSample(x);
-				}
+				throw error;
+			}
 
-				// Calling the VideoSample constructor here will automatically handle input validation for us
-				// (it throws for any non-legal argument).
-				return new VideoSample(x as CanvasImageSource, {
-					timestamp: videoSample.timestamp,
-					duration: videoSample.duration,
-				});
-			});
+			samplesToEncode = mappedSamples;
 		} else {
 			samplesToEncode = [videoSample];
 		}
@@ -610,16 +630,22 @@ class VideoEncoderWrapper {
 
 					if (!this.alphaEncoder) {
 						// No alpha encoder, simple case
-						this.encoder.encode(videoFrame, finalEncodeOptions);
-						videoFrame.close();
+						try {
+							this.encoder.encode(videoFrame, finalEncodeOptions);
+						} finally {
+							videoFrame.close();
+						}
 					} else {
 						// We're expected to encode alpha as well
 						const frameDefinitelyHasNoAlpha = !!videoFrame.format && !videoFrame.format.includes('A');
 
 						if (frameDefinitelyHasNoAlpha || this.splitterCreationFailed) {
 							this.alphaFrameQueue.push(null);
-							this.encoder.encode(videoFrame, finalEncodeOptions);
-							videoFrame.close();
+							try {
+								this.encoder.encode(videoFrame, finalEncodeOptions);
+							} finally {
+								videoFrame.close();
+							}
 						} else {
 							if (!this.splitter) {
 								this.splitter = new ColorAlphaSplitter();
@@ -629,8 +655,11 @@ class VideoEncoderWrapper {
 							const { colorFrame, alphaFrame } = await this.splitter.split(videoFrame);
 
 							this.alphaFrameQueue.push({ frame: alphaFrame, quantizer: appliedQuantizer });
-							this.encoder.encode(colorFrame, finalEncodeOptions);
-							colorFrame.close();
+							try {
+								this.encoder.encode(colorFrame, finalEncodeOptions);
+							} finally {
+								colorFrame.close();
+							}
 						}
 					}
 
@@ -661,11 +690,10 @@ class VideoEncoderWrapper {
 		const frameDifference = Math.round((until - this.frameRateLastTimestamp!) * frameRate);
 
 		for (let i = 1; i < frameDifference; i++) {
-			const sample = this.frameRateLastSample.clone();
+			using sample = this.frameRateLastSample.clone();
 			sample.setTimestamp(this.frameRateLastTimestamp! + i / frameRate);
 			sample.setDuration(1 / frameRate);
 			await this.processAndEncode(sample, this.frameRateLastEncodeOptions);
-			sample.close();
 		}
 	}
 
@@ -984,49 +1012,58 @@ class VideoEncoderWrapper {
 	}
 
 	async flushAndClose(forceClose: boolean) {
-		if (!forceClose) {
-			this.checkForEncoderError();
-		}
-
-		// Final frame rate padding: fill remaining frames up to the last sample's original end timestamp
-		if (!forceClose && this.frameRateLastSample) {
-			const frameRate = this.encodingConfig.transform!.frameRate!;
-			const alignedEnd = floorToDivisor(this.frameRateLastEndTimestamp!, frameRate);
-			await this.padFrameRate(alignedEnd);
-		}
-
-		this.closed = true;
-
-		this.frameRateLastSample?.close();
-		this.frameRateLastSample = null;
-		this.frameRateLastEncodeOptions = undefined;
-
-		if (this.customEncoder) {
+		try {
 			if (!forceClose) {
-				void this.customEncoderCallSerializer.call(() => this.customEncoder!.flush());
+				this.checkForEncoderError();
+
+				// Final frame rate padding: fill remaining frames up to the last sample's original end timestamp
+				if (this.frameRateLastSample) {
+					const frameRate = this.encodingConfig.transform!.frameRate!;
+					const alignedEnd = floorToDivisor(this.frameRateLastEndTimestamp!, frameRate);
+					await this.padFrameRate(alignedEnd);
+				}
 			}
 
-			await this.customEncoderCallSerializer.call(() => this.customEncoder!.close());
-		} else if (this.encoder) {
+			this.closed = true;
+
 			if (!forceClose) {
-				// These are wired in series, therefore they must also be flushed in series
-				await this.encoder.flush();
-				await this.alphaEncoder?.flush();
+				if (this.customEncoder) {
+					void this.customEncoderCallSerializer.call(() => this.customEncoder!.flush());
+				} else if (this.encoder) {
+					// These are wired in series, therefore they must also be flushed in series
+					await this.encoder.flush();
+					await this.alphaEncoder?.flush();
 
-				// Workaround for https://issues.chromium.org/issues/529852980 to give it time for errors to surface
-				await wait(25);
+					// Workaround for https://issues.chromium.org/issues/529852980 to give it time for errors to
+					// surface
+					await wait(25);
+				}
 			}
+		} finally {
+			// This cleanup must also run when padding or flushing threw (e.g. due to an encoder error), otherwise
+			// samples, frames and encoders would be left dangling
+			this.closed = true;
 
-			if (this.encoder.state !== 'closed') {
-				this.encoder.close();
+			this.frameRateLastSample?.close();
+			this.frameRateLastSample = null;
+			this.frameRateLastEncodeOptions = undefined;
+
+			if (this.customEncoder) {
+				await this.customEncoderCallSerializer.call(() => this.customEncoder!.close())
+					.catch((error: unknown) => this.setError(error));
+			} else if (this.encoder) {
+				if (this.encoder.state !== 'closed') {
+					this.encoder.close();
+				}
+				if (this.alphaEncoder && this.alphaEncoder.state !== 'closed') {
+					this.alphaEncoder.close();
+				}
+
+				this.alphaFrameQueue.forEach(x => x?.frame.close());
+				this.alphaFrameQueue.length = 0;
+
+				this.splitter?.close();
 			}
-			if (this.alphaEncoder && this.alphaEncoder.state !== 'closed') {
-				this.alphaEncoder.close();
-			}
-
-			this.alphaFrameQueue.forEach(x => x?.frame.close());
-
-			this.splitter?.close();
 		}
 
 		if (!forceClose) {
@@ -1973,30 +2010,46 @@ class AudioEncoderWrapper {
 		}
 
 		if (config.transform?.process) {
-			let processed = config.transform.process(audioSample);
-			if (processed instanceof Promise) {
-				processed = await processed;
-			}
-
-			if (processed === null) {
-				return;
-			}
-
-			if (!Array.isArray(processed)) {
-				processed = [processed];
-			}
-
-			for (const sample of processed) {
-				if (!(sample instanceof AudioSample)) {
-					throw new TypeError(
-						'The audio process function must return an AudioSample, null, or an array of AudioSamples.',
-					);
+			try {
+				let processed = config.transform.process(audioSample);
+				if (processed instanceof Promise) {
+					processed = await processed;
 				}
-				await this.encodeSample(sample, true);
-			}
 
-			if (shouldClose) {
-				audioSample.close();
+				if (processed === null) {
+					return;
+				}
+
+				if (!Array.isArray(processed)) {
+					processed = [processed];
+				}
+
+				try {
+					for (const sample of processed) {
+						if (!(sample instanceof AudioSample)) {
+							throw new TypeError(
+								'The audio process function must return an AudioSample, null, or an array of'
+								+ ' AudioSamples.',
+							);
+						}
+					}
+
+					for (const sample of processed) {
+						await this.encodeSample(sample, true);
+					}
+				} finally {
+					// encodeSample closes the samples it was passed; this additionally covers the samples never
+					// reached because an earlier one threw (closing is idempotent)
+					for (const sample of processed) {
+						if (sample instanceof AudioSample) {
+							sample.close();
+						}
+					}
+				}
+			} finally {
+				if (shouldClose) {
+					audioSample.close();
+				}
 			}
 		} else {
 			await this.encodeSample(audioSample, shouldClose);
@@ -2398,30 +2451,35 @@ class AudioEncoderWrapper {
 	}
 
 	async flushAndClose(forceClose: boolean) {
-		if (!forceClose) {
-			this.checkForEncoderError();
-		}
-
-		// Finalize the resampler to flush any buffered audio
-		if (!forceClose && this.resampler) {
-			await this.resampler.finalize();
-		}
-		this.resampler = null;
-
-		this.closed = true;
-
-		if (this.customEncoder) {
+		try {
 			if (!forceClose) {
-				void this.customEncoderCallSerializer.call(() => this.customEncoder!.flush());
+				this.checkForEncoderError();
+
+				// Finalize the resampler to flush any buffered audio
+				if (this.resampler) {
+					await this.resampler.finalize();
+				}
 			}
 
-			await this.customEncoderCallSerializer.call(() => this.customEncoder!.close());
-		} else if (this.encoder) {
-			if (!forceClose) {
-				await this.encoder.flush();
-			}
+			this.closed = true;
 
-			if (this.encoder.state !== 'closed') {
+			if (!forceClose) {
+				if (this.customEncoder) {
+					void this.customEncoderCallSerializer.call(() => this.customEncoder!.flush());
+				} else if (this.encoder) {
+					await this.encoder.flush();
+				}
+			}
+		} finally {
+			// This cleanup must also run when flushing threw (e.g. due to an encoder error), otherwise the encoder
+			// would be left dangling
+			this.closed = true;
+			this.resampler = null;
+
+			if (this.customEncoder) {
+				await this.customEncoderCallSerializer.call(() => this.customEncoder!.close())
+					.catch((error: unknown) => this.setError(error));
+			} else if (this.encoder && this.encoder.state !== 'closed') {
 				this.encoder.close();
 			}
 		}
