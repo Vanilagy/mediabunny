@@ -212,6 +212,8 @@ export class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	}
 
 	decode(packet: EncodedPacket) {
+		assert(!packet.isMetadataOnly);
+
 		if (this.codec === 'hevc' && this.currentPacketIndex > 0 && !this.raslSkipped) {
 			if (this.hasHevcRaslPicture(packet.data)) {
 				return; // Drop
@@ -989,6 +991,8 @@ export class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 	}
 
 	decode(packet: EncodedPacket) {
+		assert(!packet.isMetadataOnly);
+
 		if (this.customDecoder) {
 			this.customDecoderQueueSize++;
 			void this.customDecoderCallSerializer

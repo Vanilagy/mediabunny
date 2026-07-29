@@ -477,9 +477,9 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 		return packet;
 	}
 
-	getNext(from: EncodedPacket, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
-		if (!(from instanceof EncodedPacket)) {
-			throw new TypeError('from must be an EncodedPacket.');
+	getNext(packet: EncodedPacket, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
+		if (!(packet instanceof EncodedPacket)) {
+			throw new TypeError('packet must be an EncodedPacket.');
 		}
 		validatePacketRetrievalOptions(options);
 
@@ -488,7 +488,7 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 		}
 
 		const result = new ResultValue<EncodedPacket | null>();
-		const promise = this.track._backing.getNextPacket(result, from, options);
+		const promise = this.track._backing.getNextPacket(result, packet, options);
 
 		if (result.pending) {
 			return promise.then(() => this._maybeVerifyPacketType(result.value, options));
@@ -497,9 +497,9 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 		}
 	}
 
-	getNextKey(from: EncodedPacket, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
-		if (!(from instanceof EncodedPacket)) {
-			throw new TypeError('from must be an EncodedPacket.');
+	getNextKey(packet: EncodedPacket, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
+		if (!(packet instanceof EncodedPacket)) {
+			throw new TypeError('packet must be an EncodedPacket.');
 		}
 		validatePacketRetrievalOptions(options);
 
@@ -508,11 +508,11 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 		}
 
 		if (options.verifyKeyPackets) {
-			return this._getNextKeyVerified(from, options);
+			return this._getNextKeyVerified(packet, options);
 		}
 
 		const result = new ResultValue<EncodedPacket | null>();
-		const promise = this.track._backing.getNextKeyPacket(result, from, options);
+		const promise = this.track._backing.getNextKeyPacket(result, packet, options);
 
 		if (result.pending) {
 			return promise.then(() => result.value);
@@ -522,11 +522,11 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 	}
 
 	private async _getNextKeyVerified(
-		from: EncodedPacket,
+		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
 	): Promise<EncodedPacket | null> {
 		const result = new ResultValue<EncodedPacket | null>();
-		const promise = this.track._backing.getNextKeyPacket(result, from, options);
+		const promise = this.track._backing.getNextKeyPacket(result, packet, options);
 		if (result.pending) await promise;
 
 		const nextPacket = result.value;

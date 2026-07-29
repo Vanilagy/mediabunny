@@ -96,6 +96,7 @@ export {
 	SUBTITLE_CODECS,
 } from './codec';
 export {
+	VideoDecoderWrapper,
 	canDecode,
 	canDecodeVideo,
 	canDecodeAudio,
