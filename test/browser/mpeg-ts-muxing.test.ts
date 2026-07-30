@@ -6,7 +6,7 @@ import { Output } from '../../src/output.js';
 import { MpegTsOutputFormat } from '../../src/output-format.js';
 import { BufferTarget, StreamTarget, StreamTargetChunk } from '../../src/target.js';
 import { CanvasSource, EncodedAudioPacketSource, EncodedVideoPacketSource } from '../../src/media-source.js';
-import { QUALITY_HIGH } from '../../src/encode.js';
+import { Quality } from '../../src/encode.js';
 import { EncodedPacketSink } from '../../src/media-sink.js';
 import { assert } from '../../src/misc.js';
 import { Conversion } from '../../src/conversion.js';
@@ -59,7 +59,7 @@ test('MPEG-TS muxing with AVC and AAC', async () => {
 
 	const videoSource = new CanvasSource(canvas, {
 		codec: 'avc',
-		bitrate: QUALITY_HIGH,
+		quality: new Quality('high'),
 	});
 	output.addVideoTrack(videoSource);
 
@@ -351,7 +351,7 @@ test('MPEG-TS muxing with no data', async () => {
 	const canvas = new OffscreenCanvas(640, 480);
 	const videoSource = new CanvasSource(canvas, {
 		codec: 'avc',
-		bitrate: QUALITY_HIGH,
+		quality: new Quality('high'),
 	});
 	output.addVideoTrack(videoSource);
 
@@ -381,7 +381,7 @@ test('MPEG-TS muxing with video only', async () => {
 
 	const videoSource = new CanvasSource(canvas, {
 		codec: 'avc',
-		bitrate: QUALITY_HIGH,
+		quality: new Quality('high'),
 	});
 	output.addVideoTrack(videoSource);
 
@@ -690,7 +690,7 @@ test('MPEG-TS muxing with StreamTarget', async () => {
 
 	const videoSource = new CanvasSource(canvas, {
 		codec: 'avc',
-		bitrate: QUALITY_HIGH,
+		quality: new Quality('high'),
 	});
 	output.addVideoTrack(videoSource);
 

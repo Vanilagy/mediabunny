@@ -48,9 +48,7 @@ export default withMermaid({
 		['link', { rel: 'icon', type: 'image/png', href: '/mediabunny-logo.png' }],
 		['link', { rel: 'icon', type: 'image/svg+xml', href: '/mediabunny-logo.svg' }],
 		['meta', { property: 'og:site_name', content: 'Mediabunny' }],
-		['meta', { property: 'og:image', content: `${ORIGIN}/mediabunny-og-image.png` }],
 		['meta', { property: 'og:locale', content: 'en-US' }],
-		['meta', { name: 'twitter:image', content: `${ORIGIN}/mediabunny-og-image.png` }],
 		['meta', { name: 'twitter:card', content: 'summary_large_image' }],
 		['meta', { name: 'twitter:site', content: '@vanilagy' }],
 	],
@@ -268,13 +266,20 @@ export default withMermaid({
 			});
 		}
 
+		// Blog posts use their header image for link previews, everything else uses the generic one
+		const imageUrl = isBlogPost && pageData.frontmatter['headerImage']
+			? `${ORIGIN}${pageData.frontmatter['headerImage']}`
+			: `${ORIGIN}/mediabunny-og-image.png`;
+
 		((pageData.frontmatter['head'] ??= []) as HeadConfig[]).push(
 			['meta', { property: 'og:type', content: isBlogPost ? 'article' : 'website' }],
 			['meta', { property: 'og:title', content: title }],
 			['meta', { property: 'og:description', content: pageData.description || DESCRIPTION }],
 			['meta', { property: 'og:url', content: canonicalUrl }],
+			['meta', { property: 'og:image', content: imageUrl }],
 			['meta', { name: 'twitter:title', content: title }],
 			['meta', { name: 'twitter:description', content: pageData.description || DESCRIPTION }],
+			['meta', { name: 'twitter:image', content: imageUrl }],
 			['link', { rel: 'canonical', href: canonicalUrl }],
 		);
 

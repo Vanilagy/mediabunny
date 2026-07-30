@@ -718,8 +718,12 @@ export const videoSampleDescription = (
 	u32(0x00480000), // Vertical resolution
 	u32(0), // Reserved
 	u16(1), // Frame count
-	Array(32).fill(0), // Compressor name
-	u16(0x0018), // Depth
+
+	// Compressor name
+	ascii('Mediabunny'),
+	Array(32 - 'Mediabunny'.length).fill(0),
+
+	u16(trackData.info.hasAlphaChannel ? 32 : 24), // Depth
 	i16(0xffff), // Pre-defined
 ], [
 	VIDEO_CODEC_TO_CONFIGURATION_BOX[trackData.track.source._codec]?.(trackData) ?? null,

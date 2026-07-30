@@ -4,6 +4,7 @@ import { OggOutputFormat } from '../../src/output-format.js';
 import { BufferTarget, NullTarget } from '../../src/target.js';
 import { AudioBufferSource, EncodedAudioPacketSource } from '../../src/media-source.js';
 import { EncodedPacket } from '../../src/packet.js';
+import { Quality } from '../../src/encode.js';
 import { assert } from '../../src/misc.js';
 import { Input } from '../../src/input.js';
 import { BufferSource } from '../../src/source.js';
@@ -27,7 +28,7 @@ test('maximumPageDuration option', async () => {
 			target: new NullTarget(),
 		});
 
-		const audioSource = new AudioBufferSource({ codec: 'opus', bitrate: 64000 });
+		const audioSource = new AudioBufferSource({ codec: 'opus', quality: new Quality({ bitrate: 64000 }) });
 		output.addAudioTrack(audioSource);
 
 		await output.start();
@@ -49,7 +50,7 @@ test('maximumPageDuration option', async () => {
 			target: new NullTarget(),
 		});
 
-		const audioSource = new AudioBufferSource({ codec: 'opus', bitrate: 64000 });
+		const audioSource = new AudioBufferSource({ codec: 'opus', quality: new Quality({ bitrate: 64000 }) });
 		output.addAudioTrack(audioSource);
 
 		await output.start();

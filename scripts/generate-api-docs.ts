@@ -1598,8 +1598,12 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 				const isSimpleUnion = resolvedType.isUnion() && resolvedType.types.every(t =>
 					t.flags & (ts.TypeFlags.StringLiteral | ts.TypeFlags.NumberLiteral | ts.TypeFlags.BooleanLiteral | ts.TypeFlags.String | ts.TypeFlags.Number | ts.TypeFlags.Boolean),
 				);
+				// For unions of named types, the properties are documented on the referenced types themselves, so
+				// listing (the intersection of) them here would just be redundant
+				const isUnionOfTypeReferences = ts.isUnionTypeNode(declaration.type)
+					&& declaration.type.types.every(t => ts.isTypeReferenceNode(t));
 
-				if (!isPrimitive && !isSimpleUnion) {
+				if (!isPrimitive && !isSimpleUnion && !isUnionOfTypeReferences) {
 					const typeProperties = typeChecker.getPropertiesOfType(resolvedType);
 
 					typeProperties.forEach((prop) => {

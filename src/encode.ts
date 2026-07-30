@@ -22,7 +22,7 @@ import {
 	VideoCodec,
 } from './codec';
 import { customAudioEncoders, customVideoEncoders } from './custom-coder';
-import { isFirefox, MaybePromise, Rotation } from './misc';
+import { assert, clamp, isFirefox, lerp, MaybePromise, Rotation } from './misc';
 import { EncodedPacket } from './packet';
 import { AudioSample, CropRectangle, validateCropRectangle, VideoSample, VideoSampleResource } from './sample';
 
@@ -37,11 +37,13 @@ export const canEncodeAudioMemo = new Map<string, Promise<boolean>>();
 export type VideoEncodingConfig = {
 	/** The video codec that should be used for encoding the video samples (frames). */
 	codec: VideoCodec;
+	/** The desired quality of the encoded video. */
+	quality?: Quality;
 	/**
-	 * The target bitrate for the encoded video, in bits per second. Alternatively, a subjective {@link Quality} can
-	 * be provided.
+	 * The target bitrate for the encoded video, in bits per second. Alternatively, a {@link Quality} can be provided.
+	 * @deprecated Use `quality` instead.
 	 */
-	bitrate: number | Quality;
+	bitrate?: number | Quality;
 	/**
 	 * The interval, in seconds, of how often frames are encoded as a key frame. The default is 2 seconds. Frequent key
 	 * frames improve seeking behavior but increase file size. When using multiple video tracks, you should give them
@@ -150,8 +152,19 @@ export const validateVideoEncodingConfig = (config: VideoEncodingConfig) => {
 	if (!VIDEO_CODECS.includes(config.codec)) {
 		throw new TypeError(`Invalid video codec '${config.codec}'. Must be one of: ${VIDEO_CODECS.join(', ')}.`);
 	}
-	if (!(config.bitrate instanceof Quality) && (!Number.isInteger(config.bitrate) || config.bitrate <= 0)) {
-		throw new TypeError('config.bitrate must be a positive integer or a quality.');
+	// eslint-disable-next-line @typescript-eslint/no-deprecated
+	const bitrate = config.bitrate;
+	if (config.quality === undefined && bitrate === undefined) {
+		throw new TypeError('config.quality must be provided.');
+	}
+	if (config.quality !== undefined && bitrate !== undefined) {
+		throw new TypeError('config.quality and config.bitrate cannot both be provided.');
+	}
+	if (config.quality !== undefined && !(config.quality instanceof Quality)) {
+		throw new TypeError('config.quality, when provided, must be a Quality.');
+	}
+	if (bitrate !== undefined && !(bitrate instanceof Quality) && (!Number.isInteger(bitrate) || bitrate <= 0)) {
+		throw new TypeError('config.bitrate, when provided, must be a positive integer or a quality.');
 	}
 	if (
 		config.keyFrameInterval !== undefined
@@ -256,7 +269,11 @@ export type VideoEncodingAdditionalOptions = {
 	 * pair this mode with a container format that supports transparency (such as WebM or Matroska).
 	 */
 	alpha?: 'discard' | 'keep';
-	/** Configures the bitrate mode; defaults to `'variable'`. */
+	/**
+	 * Configures the bitrate mode used for bitrate-based encoding; defaults to `'variable'`. A bitrate mode set
+	 * directly on a {@link Quality} takes precedence over this field.
+	 * @deprecated Specify the bitrate mode in the {@link Quality} instead.
+	 */
 	bitrateMode?: 'constant' | 'variable';
 	/**
 	 * The latency mode used by the encoder; controls the performance-quality tradeoff.
@@ -295,7 +312,9 @@ export const validateVideoEncodingAdditionalOptions = (codec: VideoCodec, option
 	if (options.alpha !== undefined && !['discard', 'keep'].includes(options.alpha)) {
 		throw new TypeError('options.alpha, when provided, must be \'discard\' or \'keep\'.');
 	}
-	if (options.bitrateMode !== undefined && !['constant', 'variable'].includes(options.bitrateMode)) {
+	// eslint-disable-next-line @typescript-eslint/no-deprecated
+	const bitrateMode = options.bitrateMode;
+	if (bitrateMode !== undefined && !['constant', 'variable'].includes(bitrateMode)) {
 		throw new TypeError('bitrateMode, when provided, must be \'constant\' or \'variable\'.');
 	}
 	if (options.latencyMode !== undefined && !['quality', 'realtime'].includes(options.latencyMode)) {
@@ -326,33 +345,58 @@ export const validateVideoEncodingAdditionalOptions = (codec: VideoCodec, option
 	}
 };
 
-export const buildVideoEncoderConfig = (options: {
+export type VideoEncoderConfigCandidate = {
+	config: VideoEncoderConfig;
+	quantizer: number | null; // Since the actual config doesn't contain the quantizer
+};
+
+export type VideoRateControl = {
+	quantizer: number | null;
+	bitrate: number;
+	bitrateMode: 'constant' | 'variable' | 'quantizer';
+};
+
+/**
+ * Builds the encoder configs to attempt, in order of preference. Multiple configs are returned when a Quality can be
+ * satisfied by multiple rate control methods (quantizer-based encoding with a bitrate-based fallback).
+ */
+export const buildVideoEncoderConfigs = (options: {
 	codec: VideoCodec;
 	width: number;
 	height: number;
-	bitrate: number | Quality;
+	quality: Quality;
 	framerate: number | undefined;
 	squarePixelWidth?: number;
 	squarePixelHeight?: number;
-} & VideoEncodingAdditionalOptions): VideoEncoderConfig => {
-	const resolvedBitrate = options.bitrate instanceof Quality
-		? options.bitrate._toVideoBitrate(options.codec, options.width, options.height)
-		: options.bitrate;
+} & VideoEncodingAdditionalOptions): VideoEncoderConfigCandidate[] => {
+	// eslint-disable-next-line @typescript-eslint/no-deprecated
+	const fallbackBitrateMode = options.bitrateMode;
 
-	return {
+	const rateControl = options.quality._toVideoRateControl(
+		options.codec,
+		options.width,
+		options.height,
+		fallbackBitrateMode,
+	);
+
+	const buildConfig = (
+		bitrate: number | undefined,
+		bitrateMode: 'constant' | 'variable' | 'quantizer',
+		bitrateEstimate: number,
+	): VideoEncoderConfig => ({
 		codec: options.fullCodecString ?? buildVideoCodecString(
 			options.codec,
 			options.width,
 			options.height,
-			resolvedBitrate,
+			bitrateEstimate,
 			options.alpha === 'keep',
 		),
 		width: options.width,
 		height: options.height,
 		displayWidth: options.squarePixelWidth,
 		displayHeight: options.squarePixelHeight,
-		bitrate: resolvedBitrate,
-		bitrateMode: options.bitrateMode,
+		bitrate,
+		bitrateMode,
 		alpha: options.alpha ?? 'discard',
 		framerate: options.framerate,
 		latencyMode: options.latencyMode,
@@ -360,7 +404,27 @@ export const buildVideoEncoderConfig = (options: {
 		scalabilityMode: options.scalabilityMode,
 		contentHint: options.contentHint,
 		...getVideoEncoderConfigExtension(options.codec),
-	};
+	});
+
+	const candidates: VideoEncoderConfigCandidate[] = [];
+
+	if (rateControl.quantizer !== null) {
+		candidates.push({
+			config: buildConfig(undefined, 'quantizer', rateControl.bitrate),
+			quantizer: rateControl.quantizer,
+		});
+	}
+
+	if (rateControl.bitrateMode !== 'quantizer') {
+		candidates.push({
+			config: buildConfig(rateControl.bitrate, rateControl.bitrateMode, rateControl.bitrate),
+			quantizer: null,
+		});
+	}
+
+	assert(candidates.length > 0);
+
+	return candidates;
 };
 
 /**
@@ -372,8 +436,12 @@ export type AudioEncodingConfig = {
 	/** The audio codec that should be used for encoding the audio samples. */
 	codec: AudioCodec;
 	/**
-	 * The target bitrate for the encoded audio, in bits per second. Alternatively, a subjective {@link Quality} can
-	 * be provided. Required for compressed audio codecs, unused for PCM codecs.
+	 * The desired quality of the encoded audio. Required for compressed audio codecs, unused for PCM codecs.
+	 */
+	quality?: Quality;
+	/**
+	 * The target bitrate for the encoded audio, in bits per second. Alternatively, a {@link Quality} can be provided.
+	 * @deprecated Use `quality` instead.
 	 */
 	bitrate?: number | Quality;
 
@@ -426,17 +494,22 @@ export const validateAudioEncodingConfig = (config: AudioEncodingConfig) => {
 	if (!AUDIO_CODECS.includes(config.codec)) {
 		throw new TypeError(`Invalid audio codec '${config.codec}'. Must be one of: ${AUDIO_CODECS.join(', ')}.`);
 	}
+	// eslint-disable-next-line @typescript-eslint/no-deprecated
+	const bitrate = config.bitrate;
 	if (
-		config.bitrate === undefined
+		config.quality === undefined
+		&& bitrate === undefined
 		&& !((PCM_AUDIO_CODECS as readonly string[]).includes(config.codec) || config.codec === 'flac')
 	) {
-		throw new TypeError('config.bitrate must be provided for compressed audio codecs.');
+		throw new TypeError('config.quality must be provided for compressed audio codecs.');
 	}
-	if (
-		config.bitrate !== undefined
-		&& !(config.bitrate instanceof Quality)
-		&& (!Number.isInteger(config.bitrate) || config.bitrate <= 0)
-	) {
+	if (config.quality !== undefined && bitrate !== undefined) {
+		throw new TypeError('config.quality and config.bitrate cannot both be provided.');
+	}
+	if (config.quality !== undefined && !(config.quality instanceof Quality)) {
+		throw new TypeError('config.quality, when provided, must be a Quality.');
+	}
+	if (bitrate !== undefined && !(bitrate instanceof Quality) && (!Number.isInteger(bitrate) || bitrate <= 0)) {
 		throw new TypeError('config.bitrate, when provided, must be a positive integer or a quality.');
 	}
 	if (config.transform !== undefined) {
@@ -484,7 +557,10 @@ export const validateAudioEncodingConfig = (config: AudioEncodingConfig) => {
  * @public
  */
 export type AudioEncodingAdditionalOptions = {
-	/** Configures the bitrate mode. */
+	/**
+	 * Configures the bitrate mode. A bitrate mode set directly on a {@link Quality} takes precedence over this field.
+	 * @deprecated Specify the bitrate mode in the {@link Quality} instead.
+	 */
 	bitrateMode?: 'constant' | 'variable';
 	/**
 	 * The full codec string as specified in the Mediabunny Codec Registry. This string must match the codec
@@ -497,7 +573,9 @@ export const validateAudioEncodingAdditionalOptions = (codec: AudioCodec, option
 	if (!options || typeof options !== 'object') {
 		throw new TypeError('Encoding options must be an object.');
 	}
-	if (options.bitrateMode !== undefined && !['constant', 'variable'].includes(options.bitrateMode)) {
+	// eslint-disable-next-line @typescript-eslint/no-deprecated
+	const bitrateMode = options.bitrateMode;
+	if (bitrateMode !== undefined && !['constant', 'variable'].includes(bitrateMode)) {
 		throw new TypeError('bitrateMode, when provided, must be \'constant\' or \'variable\'.');
 	}
 	if (options.fullCodecString !== undefined && typeof options.fullCodecString !== 'string') {
@@ -514,11 +592,10 @@ export const buildAudioEncoderConfig = (options: {
 	codec: AudioCodec;
 	numberOfChannels: number;
 	sampleRate: number;
-	bitrate?: number | Quality;
+	quality?: Quality;
 } & AudioEncodingAdditionalOptions): AudioEncoderConfig => {
-	const resolvedBitrate = options.bitrate instanceof Quality
-		? options.bitrate._toAudioBitrate(options.codec)
-		: options.bitrate;
+	// eslint-disable-next-line @typescript-eslint/no-deprecated
+	const fallbackBitrateMode = options.bitrateMode;
 
 	return {
 		codec: options.fullCodecString ?? buildAudioCodecString(
@@ -528,47 +605,231 @@ export const buildAudioEncoderConfig = (options: {
 		),
 		numberOfChannels: options.numberOfChannels,
 		sampleRate: options.sampleRate,
-		bitrate: resolvedBitrate,
-		bitrateMode: options.bitrateMode,
+		bitrate: options.quality?._toAudioBitrate(options.codec),
+		bitrateMode: options.quality?._bitrateMode ?? fallbackBitrateMode,
 		...getAudioEncoderConfigExtension(options.codec),
 	};
 };
 
 /**
- * Represents a subjective media quality level.
+ * A named qualitative quality level.
+ * @group Encoding
+ * @public
+ */
+export type QualityLevel = 'very-low' | 'low' | 'medium' | 'high' | 'very-high';
+
+/**
+ * Quality options expressing a qualitative (subjective) quality level.
+ * @group Encoding
+ * @public
+ */
+export type QualitativeQualityOptions = {
+	/**
+	 * A qualitative quality level. Either a number ranging from 0 to 1, where 0 means worst and 1 means best quality,
+	 * or one of five named levels ('very-low', 'low', 'medium', 'high', 'very-high'), which map to 0, 0.25, 0.5, 0.75
+	 * and 1, respectively.
+	 *
+	 * Values outside the [0, 1] range are also allowed for extreme behavior, but might break on certain systems.
+	 *
+	 * Internally, either bitrate- or quantizer-driven encoding will be used, depending on availability and settings.
+	 */
+	quality: number | QualityLevel;
+	/**
+	 * When true, the quality level always maps to a bitrate, even if quantizer-based encoding is available. Useful
+	 * when a predictable output size matters more than constant quality.
+	 */
+	preferBitrate?: boolean;
+	/** The bitrate mode to use when encoding resolves to bitrate-based encoding. */
+	bitrateMode?: 'constant' | 'variable';
+};
+
+/**
+ * Quality options expressing quantitative rate control: an explicit bitrate, an explicit quantizer, or both.
+ * @group Encoding
+ * @public
+ */
+export type QuantitativeQualityOptions = {
+	/**
+	 * An explicit bitrate in bits per second. When set, this bitrate is used for encoding. It also acts as the
+	 * fallback in case a specified quantizer cannot be used.
+	 */
+	bitrate?: number;
+	/** The bitrate mode to use when encoding resolves to bitrate-based encoding. */
+	bitrateMode?: 'constant' | 'variable';
+	/**
+	 * An explicit quantizer value used for quantizer-based video encoding; lower values mean higher quality. The valid
+	 * range depends on the codec and is defined in the
+	 * [Mediabunny Codec Registry](https://mediabunny.dev/codec-registry/overview). This option is like FFmpeg's
+	 * constant-rate factor (CRF).
+	 *
+	 * If the quantizer cannot be used due to missing support, then it will throw, unless `bitrate` is defined as a
+	 * fallback.
+	 */
+	quantizer?: number;
+};
+
+/**
+ * Options describing a desired encoding quality.
+ * @group Encoding
+ * @public
+ */
+export type QualityOptions = QualitativeQualityOptions | QuantitativeQualityOptions;
+
+/**
+ * Represents a desired encoding quality. Can express a qualitative quality level, an explicit bitrate, an explicit
+ * quantizer value, or a combination thereof.
  * @group Encoding
  * @public
  */
 export class Quality {
 	/** @internal */
-	_factor: number;
-
+	_quality: number | undefined;
 	/** @internal */
-	constructor(factor: number) {
-		this._factor = factor;
+	_preferBitrate: boolean;
+	/** @internal */
+	_bitrate: number | undefined;
+	/** @internal */
+	_quantizer: number | undefined;
+	/** @internal */
+	_bitrateMode: 'constant' | 'variable' | undefined;
+
+	constructor(options: QualityOptions | number | QualityLevel) {
+		if (typeof options === 'number' || typeof options === 'string') {
+			// Shorthand for directly specifying a qualitative quality level
+			options = { quality: options };
+		}
+		if (!options || typeof options !== 'object') {
+			throw new TypeError('options must be an object.');
+		}
+		if (options.bitrateMode !== undefined && !['constant', 'variable'].includes(options.bitrateMode)) {
+			throw new TypeError('options.bitrateMode, when provided, must be \'constant\' or \'variable\'.');
+		}
+
+		if ('quality' in options) {
+			if (
+				typeof options.quality === 'string'
+					? !(options.quality in QUALITY_LEVELS)
+					: (typeof options.quality !== 'number' || Number.isNaN(options.quality))
+			) {
+				throw new TypeError(
+					'options.quality must be a number, or one of \'very-low\', \'low\', \'medium\', \'high\''
+					+ ' or \'very-high\'.',
+				);
+			}
+			if (options.preferBitrate !== undefined && typeof options.preferBitrate !== 'boolean') {
+				throw new TypeError('options.preferBitrate, when provided, must be a boolean.');
+			}
+			if ('bitrate' in options || 'quantizer' in options) {
+				throw new TypeError('options.quality cannot be combined with options.bitrate or options.quantizer.');
+			}
+
+			this._quality = typeof options.quality === 'string'
+				? QUALITY_LEVELS[options.quality]
+				: options.quality;
+			this._preferBitrate = options.preferBitrate ?? false;
+			this._bitrate = undefined;
+			this._quantizer = undefined;
+		} else {
+			if (options.bitrate !== undefined && (!Number.isInteger(options.bitrate) || options.bitrate <= 0)) {
+				throw new TypeError('options.bitrate, when provided, must be a positive integer.');
+			}
+			if (options.quantizer !== undefined && (!Number.isInteger(options.quantizer) || options.quantizer < 0)) {
+				throw new TypeError('options.quantizer, when provided, must be a non-negative integer.');
+			}
+			if (options.bitrate === undefined && options.quantizer === undefined) {
+				throw new TypeError('At least one of options.bitrate or options.quantizer must be set.');
+			}
+			if ('preferBitrate' in options) {
+				throw new TypeError('options.preferBitrate can only be combined with options.quality.');
+			}
+
+			this._quality = undefined;
+			this._preferBitrate = false;
+			this._bitrate = options.bitrate;
+			this._quantizer = options.quantizer;
+		}
+
+		this._bitrateMode = options.bitrateMode;
+	}
+
+	/**
+	 * Determines the rate control methods usable for the given codec.
+	 * @internal
+	 */
+	_toVideoRateControl(
+		codec: VideoCodec,
+		width: number,
+		height: number,
+		fallbackBitrateMode: 'constant' | 'variable' | undefined,
+	): VideoRateControl {
+		const quantizerSupport = VIDEO_CODEC_QUANTIZER_SUPPORT[codec];
+
+		let quantizer: number | null = null;
+		let bitrateMode: 'constant' | 'variable' | 'quantizer' = this._bitrateMode ?? fallbackBitrateMode ?? 'variable';
+
+		if (this._quantizer !== undefined) {
+			// An explicit quantizer demands quantizer-based encoding, with an explicit bitrate (if any) being the
+			// only permitted fallback
+			if (!quantizerSupport) {
+				if (this._bitrate === undefined) {
+					throw new Error(
+						`Codec '${codec}' does not support quantizer-based encoding. Provide a bitrate in the Quality`
+						+ ` to define a fallback.`,
+					);
+				}
+			} else if (this._quantizer < quantizerSupport.min || this._quantizer > quantizerSupport.max) {
+				if (this._bitrate === undefined) {
+					throw new Error(
+						`Quantizer ${this._quantizer} is out of range for codec '${codec}'; must be between`
+						+ ` ${quantizerSupport.min} and ${quantizerSupport.max}.`,
+					);
+				}
+			} else {
+				quantizer = this._quantizer;
+				if (this._bitrate === undefined) {
+					bitrateMode = 'quantizer';
+				}
+			}
+		} else if (this._bitrate === undefined && quantizerSupport && !this._preferBitrate) {
+			// A qualitative quality level is set; offer quantizer-based encoding since the codec supports it. Since
+			// the quality may lie outside the 0-1 range, we clamp the result to the codec's legal quantizer range.
+			assert(this._quality !== undefined);
+			quantizer = clamp(
+				Math.round(lerp(quantizerSupport.worst, quantizerSupport.best, this._quality)),
+				quantizerSupport.min,
+				quantizerSupport.max,
+			);
+		}
+
+		let bitrate: number;
+		if (this._bitrate !== undefined) {
+			bitrate = this._bitrate;
+		} else {
+			let quality = this._quality;
+			if (quality === undefined) {
+				// Map the quantizer back onto the quality scale to derive a fitting bitrate estimate
+				assert(quantizer !== null && quantizerSupport);
+				quality = clamp(
+					(quantizer - quantizerSupport.worst) / (quantizerSupport.best - quantizerSupport.worst),
+					0,
+					1,
+				);
+			}
+
+			bitrate = computeVideoBitrate(codec, width, height, qualityToBitrateFactor(quality));
+		}
+
+		return { quantizer, bitrate, bitrateMode };
 	}
 
 	/** @internal */
 	_toVideoBitrate(codec: VideoCodec, width: number, height: number) {
-		const pixels = width * height;
-		const referencePixels = 1920 * 1080;
-		const referenceBitrate = 3_000_000;
-		const scaleFactor = Math.pow(pixels / referencePixels, 0.95); // Slight non-linear scaling
-		const baseBitrate = referenceBitrate * scaleFactor;
+		if (this._bitrate !== undefined) {
+			return this._bitrate;
+		}
 
-		const codecEfficiencyFactors: Record<VideoCodec, number> = {
-			avc: 1.0, // H.264/AVC (baseline)
-			hevc: 0.6, // H.265/HEVC (~40% more efficient than AVC)
-			vp9: 0.6, // Similar to HEVC
-			av1: 0.4, // ~60% more efficient than AVC
-			vp8: 1.2, // Slightly less efficient than AVC
-			prores: 220_000_000 / referenceBitrate, // Apple ProRes white paper claims 220 Mbps for 1080p 422 HQ @30Hz
-		};
-
-		const codecAdjustedBitrate = baseBitrate * codecEfficiencyFactors[codec];
-		const finalBitrate = codecAdjustedBitrate * this._factor;
-
-		return Math.ceil(finalBitrate / 1000) * 1000;
+		assert(this._quality !== undefined);
+		return computeVideoBitrate(codec, width, height, qualityToBitrateFactor(this._quality));
 	}
 
 	/** @internal */
@@ -576,6 +837,19 @@ export class Quality {
 		if ((PCM_AUDIO_CODECS as readonly string[]).includes(codec) || codec === 'flac') {
 			return undefined;
 		}
+
+		if (this._bitrate !== undefined) {
+			return this._bitrate;
+		}
+
+		if (this._quality === undefined) {
+			throw new Error(
+				'This Quality defines neither a quality level nor a bitrate and therefore cannot be used for audio'
+				+ ' encoding.',
+			);
+		}
+
+		const factor = qualityToBitrateFactor(this._quality);
 
 		const baseRates = {
 			aac: 128000, // 128kbps base for AAC
@@ -591,7 +865,7 @@ export class Quality {
 			throw new Error(`Unhandled codec: ${codec}`);
 		}
 
-		let finalBitrate = baseBitrate * this._factor;
+		let finalBitrate = baseBitrate * factor;
 
 		if (codec === 'aac') {
 			// AAC only works with specific bitrates, let's find the closest
@@ -615,36 +889,126 @@ export class Quality {
 	}
 }
 
+const QUALITY_LEVELS: Record<QualityLevel, number> = {
+	'very-low': 0,
+	'low': 0.25,
+	'medium': 0.5,
+	'high': 0.75,
+	'very-high': 1,
+};
+
+// best and worse define the reasonable range
+const VIDEO_CODEC_QUANTIZER_SUPPORT: Partial<Record<VideoCodec, {
+	min: number;
+	max: number;
+	worst: number;
+	best: number;
+}>> = {
+	avc: { min: 0, max: 51, worst: 41, best: 16 },
+	hevc: { min: 0, max: 51, worst: 41, best: 16 },
+	vp9: { min: 0, max: 63, worst: 52, best: 20 },
+	av1: { min: 0, max: 255, worst: 208, best: 80 },
+};
+
+/**
+ * Maps the qualitative 0-1 quality scale to a bitrate multiplier. The curve is a least-squares exponential fit through
+ * the multipliers historically used by the predefined quality levels (0.3, 0.6, 1, 2, 4).
+ */
+const qualityToBitrateFactor = (quality: number) => 0.3 * Math.exp(2.5538 * quality);
+
+const computeVideoBitrate = (codec: VideoCodec, width: number, height: number, factor: number) => {
+	const pixels = width * height;
+	const referencePixels = 1920 * 1080;
+	const referenceBitrate = 3_000_000;
+	const scaleFactor = Math.pow(pixels / referencePixels, 0.95); // Slight non-linear scaling
+	const baseBitrate = referenceBitrate * scaleFactor;
+
+	const codecEfficiencyFactors: Record<VideoCodec, number> = {
+		avc: 1.0, // H.264/AVC (baseline)
+		hevc: 0.6, // H.265/HEVC (~40% more efficient than AVC)
+		vp9: 0.6, // Similar to HEVC
+		av1: 0.4, // ~60% more efficient than AVC
+		vp8: 1.2, // Slightly less efficient than AVC
+		prores: 220_000_000 / referenceBitrate, // Apple ProRes white paper claims 220 Mbps for 1080p 422 HQ @30Hz
+	};
+
+	const codecAdjustedBitrate = baseBitrate * codecEfficiencyFactors[codec];
+	const finalBitrate = codecAdjustedBitrate * factor;
+
+	return Math.ceil(finalBitrate / 1000) * 1000;
+};
+
+/** Builds the per-frame encode options that carry the quantizer value for the given codec. */
+export const buildQuantizerEncodeOptions = (codec: VideoCodec, quantizer: number): VideoEncoderEncodeOptions => {
+	if (codec === 'avc') {
+		return { avc: { quantizer } };
+	} else if (codec === 'hevc') {
+		return { hevc: { quantizer } };
+	} else if (codec === 'vp9') {
+		return { vp9: { quantizer } };
+	} else if (codec === 'av1') {
+		return { av1: { quantizer } };
+	}
+
+	assert(false);
+};
+
+// Adds missing per-frame encode options
+declare global {
+	interface VideoEncoderEncodeOptions {
+		hevc?: VideoEncoderEncodeOptionsForHevc;
+		vp9?: VideoEncoderEncodeOptionsForVp9;
+		av1?: VideoEncoderEncodeOptionsForAv1;
+	}
+
+	interface VideoEncoderEncodeOptionsForHevc {
+		quantizer?: number | null;
+	}
+
+	interface VideoEncoderEncodeOptionsForVp9 {
+		quantizer?: number | null;
+	}
+
+	interface VideoEncoderEncodeOptionsForAv1 {
+		quantizer?: number | null;
+	}
+}
+
 /**
  * Represents a very low media quality.
+ * @deprecated Use `new Quality('very-low')` instead.
  * @group Encoding
  * @public
  */
-export const QUALITY_VERY_LOW = /* #__PURE__ */ new Quality(0.3);
+export const QUALITY_VERY_LOW = /* #__PURE__ */ new Quality('very-low');
 /**
  * Represents a low media quality.
+ * @deprecated Use `new Quality('low')` instead.
  * @group Encoding
  * @public
  */
-export const QUALITY_LOW = /* #__PURE__ */ new Quality(0.6);
+export const QUALITY_LOW = /* #__PURE__ */ new Quality('low');
 /**
  * Represents a medium media quality.
+ * @deprecated Use `new Quality('medium')` instead.
  * @group Encoding
  * @public
  */
-export const QUALITY_MEDIUM = /* #__PURE__ */ new Quality(1);
+export const QUALITY_MEDIUM = /* #__PURE__ */ new Quality('medium');
 /**
  * Represents a high media quality.
+ * @deprecated Use `new Quality('high')` instead.
  * @group Encoding
  * @public
  */
-export const QUALITY_HIGH = /* #__PURE__ */ new Quality(2);
+export const QUALITY_HIGH = /* #__PURE__ */ new Quality('high');
 /**
  * Represents a very high media quality.
+ * @deprecated Use `new Quality('very-high')` instead.
  * @group Encoding
  * @public
  */
-export const QUALITY_VERY_HIGH = /* #__PURE__ */ new Quality(4);
+export const QUALITY_VERY_HIGH = /* #__PURE__ */ new Quality('very-high');
 
 /**
  * Checks if the browser is able to encode the given codec.
@@ -673,13 +1037,17 @@ export const canEncodeVideo = async (
 	options: {
 		width?: number;
 		height?: number;
+		quality?: Quality;
+		/** @deprecated Use `quality` instead. */
 		bitrate?: number | Quality;
 	} & VideoEncodingAdditionalOptions = {},
 ) => {
 	const {
 		width = 1280,
 		height = 720,
-		bitrate = 1e6,
+		quality,
+		// eslint-disable-next-line @typescript-eslint/no-deprecated
+		bitrate,
 		...restOptions
 	} = options;
 
@@ -692,31 +1060,48 @@ export const canEncodeVideo = async (
 	if (!Number.isInteger(height) || height <= 0) {
 		throw new TypeError('height must be a positive integer.');
 	}
-	if (!(bitrate instanceof Quality) && (!Number.isInteger(bitrate) || bitrate <= 0)) {
+	if (quality !== undefined && !(quality instanceof Quality)) {
+		throw new TypeError('quality, when provided, must be a Quality.');
+	}
+	if (quality !== undefined && bitrate !== undefined) {
+		throw new TypeError('quality and bitrate cannot both be provided.');
+	}
+	if (bitrate !== undefined && !(bitrate instanceof Quality) && (!Number.isInteger(bitrate) || bitrate <= 0)) {
 		throw new TypeError('bitrate must be a positive integer or a quality.');
 	}
 	validateVideoEncodingAdditionalOptions(codec, restOptions);
 
-	const encoderConfig = buildVideoEncoderConfig({
-		codec,
-		width,
-		height,
-		bitrate,
-		framerate: undefined,
-		...restOptions,
-		alpha: 'discard', // Since we handle alpha ourselves
-	});
+	const resolvedQuality = resolveQuality(quality, bitrate) ?? new Quality({ bitrate: 1e6 });
 
-	const key = JSON.stringify(encoderConfig);
+	let candidates: VideoEncoderConfigCandidate[];
+	try {
+		candidates = buildVideoEncoderConfigs({
+			codec,
+			width,
+			height,
+			quality: resolvedQuality,
+			framerate: undefined,
+			...restOptions,
+			alpha: 'discard', // Since we handle alpha ourselves
+		});
+	} catch {
+		// The requested rate control cannot be used with this codec (e.g. a quantizer with no fallback bitrate on a
+		// codec without quantizer support)
+		return false;
+	}
+
+	const key = JSON.stringify(candidates);
 	const memoized = canEncodeVideoMemo.get(key);
 	if (memoized) {
 		return memoized;
 	}
 
 	const promise = (async () => {
-		if (customVideoEncoders.some(x => x.supports(codec, encoderConfig))) {
-			// There's a custom encoder
-			return true;
+		for (const { config } of candidates) {
+			if (customVideoEncoders.some(x => x.supports(codec, config))) {
+				// There's a custom encoder
+				return true;
+			}
 		}
 		if (typeof VideoEncoder === 'undefined') {
 			return false;
@@ -731,24 +1116,28 @@ export const canEncodeVideo = async (
 			return false;
 		}
 
-		const support = await VideoEncoder.isConfigSupported(encoderConfig);
-		if (!support.supported) {
-			return false;
-		}
+		for (const { config, quantizer } of candidates) {
+			const support = await VideoEncoder.isConfigSupported(config);
+			if (!support.supported) {
+				continue;
+			}
 
-		if (isFirefox()) {
+			if (!isFirefox()) {
+				return true;
+			}
+
 			// isConfigSupported on Firefox appears to unreliably indicate if encoding will actually succeed. Therefore,
 			// we just try encoding a frame to see if it actually works.
 			// https://github.com/Vanilagy/mediabunny/issues/222
 
 			// eslint-disable-next-line @typescript-eslint/no-misused-promises, no-async-promise-executor
-			return new Promise<boolean>(async (resolve) => {
+			const success = await new Promise<boolean>(async (resolve) => {
 				try {
 					const encoder = new VideoEncoder({
 						output: () => {},
 						error: () => resolve(false),
 					});
-					encoder.configure(encoderConfig);
+					encoder.configure(config);
 
 					const frameData = new Uint8Array(width * height * 4);
 					const frame = new VideoFrame(frameData, {
@@ -758,7 +1147,10 @@ export const canEncodeVideo = async (
 						timestamp: 0,
 					});
 
-					encoder.encode(frame);
+					encoder.encode(
+						frame,
+						quantizer !== null ? buildQuantizerEncodeOptions(codec, quantizer) : undefined,
+					);
 					frame.close();
 
 					await encoder.flush();
@@ -768,9 +1160,13 @@ export const canEncodeVideo = async (
 					resolve(false);
 				}
 			});
+
+			if (success) {
+				return true;
+			}
 		}
 
-		return true;
+		return false;
 	})();
 	canEncodeVideoMemo.set(key, promise);
 
@@ -787,13 +1183,17 @@ export const canEncodeAudio = async (
 	options: {
 		numberOfChannels?: number;
 		sampleRate?: number;
+		quality?: Quality;
+		/** @deprecated Use `quality` instead. */
 		bitrate?: number | Quality;
 	} & AudioEncodingAdditionalOptions = {},
 ) => {
 	const {
 		numberOfChannels = 2,
 		sampleRate = 48000,
-		bitrate = 128e3,
+		quality,
+		// eslint-disable-next-line @typescript-eslint/no-deprecated
+		bitrate,
 		...restOptions
 	} = options;
 
@@ -806,16 +1206,24 @@ export const canEncodeAudio = async (
 	if (!Number.isInteger(sampleRate) || sampleRate <= 0) {
 		throw new TypeError('sampleRate must be a positive integer.');
 	}
-	if (!(bitrate instanceof Quality) && (!Number.isInteger(bitrate) || bitrate <= 0)) {
+	if (quality !== undefined && !(quality instanceof Quality)) {
+		throw new TypeError('quality, when provided, must be a Quality.');
+	}
+	if (quality !== undefined && bitrate !== undefined) {
+		throw new TypeError('quality and bitrate cannot both be provided.');
+	}
+	if (bitrate !== undefined && !(bitrate instanceof Quality) && (!Number.isInteger(bitrate) || bitrate <= 0)) {
 		throw new TypeError('bitrate must be a positive integer.');
 	}
 	validateAudioEncodingAdditionalOptions(codec, restOptions);
+
+	const resolvedQuality = resolveQuality(quality, bitrate) ?? new Quality({ bitrate: 128e3 });
 
 	const encoderConfig = buildAudioEncoderConfig({
 		codec,
 		numberOfChannels,
 		sampleRate,
-		bitrate,
+		quality: resolvedQuality,
 		...restOptions,
 	});
 
@@ -843,6 +1251,21 @@ export const canEncodeAudio = async (
 	canEncodeAudioMemo.set(key, promise);
 
 	return promise;
+};
+
+/**
+ * Resolves the `quality` and deprecated `bitrate` fields from the public API into a {@link Quality}, the norm used
+ * internally.
+ */
+export const resolveQuality = (quality: Quality | undefined, bitrate: number | Quality | undefined) => {
+	if (quality !== undefined) {
+		return quality;
+	}
+	if (bitrate === undefined) {
+		return undefined;
+	}
+
+	return bitrate instanceof Quality ? bitrate : new Quality({ bitrate });
 };
 
 /**
@@ -883,6 +1306,8 @@ export const getEncodableVideoCodecs = async (
 	options?: {
 		width?: number;
 		height?: number;
+		quality?: Quality;
+		/** @deprecated Use `quality` instead. */
 		bitrate?: number | Quality;
 	},
 ): Promise<VideoCodec[]> => {
@@ -900,6 +1325,8 @@ export const getEncodableAudioCodecs = async (
 	options?: {
 		numberOfChannels?: number;
 		sampleRate?: number;
+		quality?: Quality;
+		/** @deprecated Use `quality` instead. */
 		bitrate?: number | Quality;
 	},
 ): Promise<AudioCodec[]> => {
@@ -929,6 +1356,8 @@ export const getFirstEncodableVideoCodec = async (
 	options?: {
 		width?: number;
 		height?: number;
+		quality?: Quality;
+		/** @deprecated Use `quality` instead. */
 		bitrate?: number | Quality;
 	},
 ): Promise<VideoCodec | null> => {
@@ -951,6 +1380,8 @@ export const getFirstEncodableAudioCodec = async (
 	options?: {
 		numberOfChannels?: number;
 		sampleRate?: number;
+		quality?: Quality;
+		/** @deprecated Use `quality` instead. */
 		bitrate?: number | Quality;
 	},
 ): Promise<AudioCodec | null> => {

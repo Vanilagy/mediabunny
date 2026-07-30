@@ -1,19 +1,15 @@
 import {
-	Input,
 	ALL_FORMATS,
 	BlobSource,
-	UrlSource,
+	BufferTarget,
+	Conversion,
+	HlsOutputFormat,
+	Input,
+	MpegTsOutputFormat,
 	Output,
 	PathedTarget,
-	BufferTarget,
-	HlsOutputFormat,
-	MpegTsOutputFormat,
-	Conversion,
-	QUALITY_VERY_HIGH,
-	QUALITY_HIGH,
-	QUALITY_MEDIUM,
-	QUALITY_LOW,
-	QUALITY_VERY_LOW,
+	Quality,
+	UrlSource,
 } from 'mediabunny';
 import { registerAc3Decoder } from '@mediabunny/ac3';
 import { registerProresDecoder } from '@mediabunny/prores';
@@ -101,14 +97,14 @@ const convertToHls = async (resource: File | string) => {
 			output,
 			tracks: 'primary', // Use only the primary video and audio tracks of the input
 			video: [
-				{ codec: 'avc', height: 1080, bitrate: QUALITY_VERY_HIGH },
-				{ codec: 'avc', height: 720, bitrate: QUALITY_HIGH },
-				{ codec: 'avc', height: 480, bitrate: QUALITY_MEDIUM },
-				{ codec: 'avc', height: 360, bitrate: QUALITY_LOW },
-				{ codec: 'avc', height: 240, bitrate: QUALITY_VERY_LOW },
+				{ codec: 'avc', height: 1080, quality: new Quality('very-high') },
+				{ codec: 'avc', height: 720, quality: new Quality('high') },
+				{ codec: 'avc', height: 480, quality: new Quality('medium') },
+				{ codec: 'avc', height: 360, quality: new Quality('low') },
+				{ codec: 'avc', height: 240, quality: new Quality('very-low') },
 			],
 			audio: [
-				{ codec: 'aac', bitrate: QUALITY_HIGH },
+				{ codec: 'aac', quality: new Quality('high') },
 			],
 		});
 

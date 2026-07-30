@@ -108,6 +108,7 @@ export type IsobmffTrackData = {
 		 * https://stackoverflow.com/questions/24884827
 		 */
 		requiresAnnexBTransformation: boolean;
+		hasAlphaChannel: boolean;
 	};
 } | {
 	track: OutputAudioTrack;
@@ -413,6 +414,9 @@ export class IsobmffMuxer extends Muxer {
 					den: displayAspectHeight * decoderConfig.codedWidth,
 				});
 
+		// Kicks for ProRes 4444.
+		const hasAlphaChannel = decoderConfig.codec === 'ap4h' || decoderConfig.codec === 'ap4x';
+
 		const newTrackData: IsobmffVideoTrackData = {
 			muxer: this,
 			track,
@@ -423,6 +427,7 @@ export class IsobmffMuxer extends Muxer {
 				pixelAspectRatio,
 				decoderConfig: decoderConfig,
 				requiresAnnexBTransformation,
+				hasAlphaChannel,
 			},
 			timescale,
 			samples: [],

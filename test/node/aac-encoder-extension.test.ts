@@ -4,7 +4,7 @@ import { BufferSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { Output } from '../../src/output.js';
 import { BufferTarget } from '../../src/target.js';
-import { canEncode } from '../../src/encode.js';
+import { canEncode, Quality } from '../../src/encode.js';
 import { AudioSampleSource } from '../../src/media-source.js';
 import { EncodedPacketSink } from '../../src/media-sink.js';
 import { Mp4OutputFormat } from '../../src/output-format.js';
@@ -47,7 +47,7 @@ test('AAC encoding', async () => {
 		target: new BufferTarget(),
 	});
 
-	const audioSource = new AudioSampleSource({ codec: 'aac', bitrate: 128000 });
+	const audioSource = new AudioSampleSource({ codec: 'aac', quality: new Quality({ bitrate: 128000 }) });
 	output.addAudioTrack(audioSource);
 
 	await output.start();
@@ -98,7 +98,7 @@ test('AAC with huge timestamps', async () => {
 		target: new BufferTarget(),
 	});
 
-	const audioSource = new AudioSampleSource({ codec: 'aac', bitrate: 128000 });
+	const audioSource = new AudioSampleSource({ codec: 'aac', quality: new Quality({ bitrate: 128000 }) });
 	output.addAudioTrack(audioSource);
 
 	await output.start();

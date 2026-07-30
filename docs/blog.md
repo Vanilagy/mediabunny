@@ -11,7 +11,7 @@ import BlogAuthor from './components/BlogAuthor.vue';
 
 <h1 class="!mb-8">Blog posts</h1>
 
-<template v-for="(post, i) in data">
+<template v-for="(post, i) in [...data].sort((a, b) => b.frontmatter.publishedOnIso.localeCompare(a.frontmatter.publishedOnIso))">
 	<a :href="post.url" class="flex flex-col sm:flex-row items-start sm:gap-8 !text-inherit !no-underline ![font-weight:inherit] group">
 		<div>
 			<img :src="post.frontmatter.headerImage" class="shrink-0 sm:w-40 rounded" />

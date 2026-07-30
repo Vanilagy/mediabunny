@@ -15,7 +15,7 @@ import { Conversion, ConversionCanceledError } from '../../src/conversion.js';
 import { assert } from '../../src/misc.js';
 import { InputVideoTrack } from '../../src/input-track.js';
 import { CanvasSource, EncodedAudioPacketSource } from '../../src/media-source.js';
-import { QUALITY_HIGH } from '../../src/encode.js';
+import { Quality } from '../../src/encode.js';
 import { EncodedPacket } from '../../src/packet.js';
 
 test('Rotation is baked in when rerendering', async () => {
@@ -161,7 +161,7 @@ test('HLS track assignability is kept #1', async () => {
 	ctx.fillStyle = 'red';
 	ctx.fillRect(100, 100, 200, 200);
 
-	const videoSource = new CanvasSource(canvas, { codec: 'avc', bitrate: QUALITY_HIGH });
+	const videoSource = new CanvasSource(canvas, { codec: 'avc', quality: new Quality('high') });
 	output.addVideoTrack(videoSource);
 
 	const audioSource = new EncodedAudioPacketSource('aac');
@@ -240,7 +240,7 @@ test('HLS track assignability is kept #2', async () => {
 	const a = new OutputTrackGroup();
 	const b = new OutputTrackGroup();
 
-	const videoSource = new CanvasSource(canvas, { codec: 'avc', bitrate: QUALITY_HIGH });
+	const videoSource = new CanvasSource(canvas, { codec: 'avc', quality: new Quality('high') });
 	output.addVideoTrack(videoSource, { group: a });
 
 	const audioSource = new EncodedAudioPacketSource('aac');
@@ -319,7 +319,7 @@ test('HLS track assignability can be overridden', async () => {
 	const a = new OutputTrackGroup();
 	const b = new OutputTrackGroup();
 
-	const videoSource = new CanvasSource(canvas, { codec: 'avc', bitrate: QUALITY_HIGH });
+	const videoSource = new CanvasSource(canvas, { codec: 'avc', quality: new Quality('high') });
 	output.addVideoTrack(videoSource, { group: a });
 
 	const audioSource = new EncodedAudioPacketSource('aac');

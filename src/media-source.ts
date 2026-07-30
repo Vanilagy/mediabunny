@@ -58,9 +58,12 @@ import {
 import {
 	AudioEncodingConfig,
 	buildAudioEncoderConfig,
-	buildVideoEncoderConfig,
+	buildQuantizerEncodeOptions,
+	buildVideoEncoderConfigs,
+	resolveQuality,
 	validateAudioEncodingConfig,
 	validateVideoEncodingConfig,
+	VideoEncoderConfigCandidate,
 	VideoEncodingConfig,
 } from './encode';
 import { AudioResampler } from './resample';
@@ -255,6 +258,9 @@ class VideoEncoderWrapper {
 	private customEncoderCallSerializer = new CallSerializer();
 	private customEncoderQueueSize = 0;
 
+	// Set when the encoder uses quantizer-based rate control; carries the quantizer value applied to each frame
+	private defaultEncodeOptions: VideoEncoderEncodeOptions = {};
+
 	// Alpha stuff
 	private alphaEncoder: VideoEncoder | null = null;
 	private splitter: ColorAlphaSplitter | null = null;
@@ -431,22 +437,42 @@ class VideoEncoderWrapper {
 				processed = [processed];
 			}
 
-			samplesToEncode = processed.map((x) => {
-				if (x instanceof VideoSample) {
-					return x;
+			const mappedSamples: VideoSample[] = [];
+
+			try {
+				for (const x of processed) {
+					if (x instanceof VideoSample) {
+						mappedSamples.push(x);
+					} else if (typeof VideoFrame !== 'undefined' && x instanceof VideoFrame) {
+						mappedSamples.push(new VideoSample(x));
+					} else {
+						// Calling the VideoSample constructor here will automatically handle input validation for us
+						// (it throws for any non-legal argument).
+						mappedSamples.push(new VideoSample(x as CanvasImageSource, {
+							timestamp: videoSample.timestamp,
+							duration: videoSample.duration,
+						}));
+					}
+				}
+			} catch (error) {
+				// One of the returned elements was invalid; close everything closable so no resource is leaked
+				for (const sample of mappedSamples) {
+					if (sample !== videoSample) {
+						sample.close();
+					}
+				}
+				for (const x of processed) {
+					if (x instanceof VideoSample && x !== videoSample) {
+						x.close();
+					} else if (typeof VideoFrame !== 'undefined' && x instanceof VideoFrame) {
+						x.close();
+					}
 				}
 
-				if (typeof VideoFrame !== 'undefined' && x instanceof VideoFrame) {
-					return new VideoSample(x);
-				}
+				throw error;
+			}
 
-				// Calling the VideoSample constructor here will automatically handle input validation for us
-				// (it throws for any non-legal argument).
-				return new VideoSample(x as CanvasImageSource, {
-					timestamp: videoSample.timestamp,
-					duration: videoSample.duration,
-				});
-			});
+			samplesToEncode = mappedSamples;
 		} else {
 			samplesToEncode = [videoSample];
 		}
@@ -477,7 +503,11 @@ class VideoEncoderWrapper {
 				const keyFrameInterval = this.encodingConfig.keyFrameInterval ?? 2;
 				const multipleOfKeyFrameInterval = Math.floor(sampleToEncode.timestamp / keyFrameInterval);
 
-				const mergedEncodeOptions = { ...sampleToEncode.encodeOptions, ...encodeOptions };
+				const mergedEncodeOptions = {
+					...this.defaultEncodeOptions,
+					...sampleToEncode.encodeOptions,
+					...encodeOptions,
+				};
 
 				const finalEncodeOptions = {
 					...mergedEncodeOptions,
@@ -549,16 +579,22 @@ class VideoEncoderWrapper {
 
 					if (!this.alphaEncoder) {
 						// No alpha encoder, simple case
-						this.encoder.encode(videoFrame, finalEncodeOptions);
-						videoFrame.close();
+						try {
+							this.encoder.encode(videoFrame, finalEncodeOptions);
+						} finally {
+							videoFrame.close();
+						}
 					} else {
 						// We're expected to encode alpha as well
 						const frameDefinitelyHasNoAlpha = !!videoFrame.format && !videoFrame.format.includes('A');
 
 						if (frameDefinitelyHasNoAlpha || this.splitterCreationFailed) {
 							this.alphaFrameQueue.push(null);
-							this.encoder.encode(videoFrame, finalEncodeOptions);
-							videoFrame.close();
+							try {
+								this.encoder.encode(videoFrame, finalEncodeOptions);
+							} finally {
+								videoFrame.close();
+							}
 						} else {
 							if (!this.splitter) {
 								this.splitter = new ColorAlphaSplitter();
@@ -568,8 +604,11 @@ class VideoEncoderWrapper {
 							const { colorFrame, alphaFrame } = await this.splitter.split(videoFrame);
 
 							this.alphaFrameQueue.push(alphaFrame);
-							this.encoder.encode(colorFrame, finalEncodeOptions);
-							colorFrame.close();
+							try {
+								this.encoder.encode(colorFrame, finalEncodeOptions);
+							} finally {
+								colorFrame.close();
+							}
 						}
 					}
 
@@ -600,30 +639,107 @@ class VideoEncoderWrapper {
 		const frameDifference = Math.round((until - this.frameRateLastTimestamp!) * frameRate);
 
 		for (let i = 1; i < frameDifference; i++) {
-			const sample = this.frameRateLastSample.clone();
+			using sample = this.frameRateLastSample.clone();
 			sample.setTimestamp(this.frameRateLastTimestamp! + i / frameRate);
 			sample.setDuration(1 / frameRate);
 			await this.processAndEncode(sample, encodeOptions);
-			sample.close();
 		}
 	}
 
 	private ensureEncoder(videoSample: VideoSample) {
 		this.ensureEncoderPromise = (async () => {
-			const encoderConfig = buildVideoEncoderConfig({
+			// eslint-disable-next-line @typescript-eslint/no-deprecated
+			const quality = resolveQuality(this.encodingConfig.quality, this.encodingConfig.bitrate);
+			assert(quality !== undefined);
+
+			const candidates = buildVideoEncoderConfigs({
 				...this.encodingConfig,
+				quality,
 				width: videoSample.codedWidth,
 				height: videoSample.codedHeight,
 				squarePixelWidth: videoSample.squarePixelWidth,
 				squarePixelHeight: videoSample.squarePixelHeight,
 				framerate: this.source._connectedTrack?.metadata.frameRate,
 			});
-			this.encodingConfig.onEncoderConfig?.(encoderConfig);
 
-			const MatchingCustomEncoder = customVideoEncoders.find(x => x.supports(
-				this.encodingConfig.codec,
-				encoderConfig,
-			));
+			// Try the candidate configs in order of preference until we find one that is supported
+			let selected: VideoEncoderConfigCandidate | null = null;
+			let MatchingCustomEncoder: (typeof customVideoEncoders)[number] | undefined;
+
+			for (const candidate of candidates) {
+				const candidateConfig = candidate.config;
+				this.encodingConfig.onEncoderConfig?.(candidateConfig);
+
+				MatchingCustomEncoder = customVideoEncoders.find(x => x.supports(
+					this.encodingConfig.codec,
+					candidateConfig,
+				));
+				if (MatchingCustomEncoder) {
+					selected = candidate;
+					break;
+				}
+
+				if (typeof VideoEncoder === 'undefined') {
+					continue;
+				}
+
+				candidateConfig.alpha = 'discard'; // Since we handle alpha ourselves
+
+				if (this.encodingConfig.alpha === 'keep') {
+					// Encoding alpha requires using two parallel encoders, so we need to make sure they stay in sync
+					// and that neither of them drops frames. Setting latencyMode to 'quality' achieves this, because
+					// "User Agents MUST not drop frames to achieve the target bitrate and/or framerate."
+					candidateConfig.latencyMode = 'quality';
+				}
+
+				const hasOddDimension = candidateConfig.width % 2 === 1 || candidateConfig.height % 2 === 1;
+				if (
+					hasOddDimension
+					&& (this.encodingConfig.codec === 'avc' || this.encodingConfig.codec === 'hevc')
+				) {
+					// Throw a special error for this case as it gets hit often
+					throw new Error(
+						`The dimensions ${candidateConfig.width}x${candidateConfig.height} are not supported for codec`
+						+ ` '${this.encodingConfig.codec}'; both width and height must be even numbers. Make sure to`
+						+ ` round your dimensions to the nearest even number.`,
+					);
+				}
+
+				const support = await VideoEncoder.isConfigSupported(candidateConfig);
+				if (support.supported) {
+					selected = candidate;
+					break;
+				}
+			}
+
+			if (!selected) {
+				if (typeof VideoEncoder === 'undefined') {
+					throw new Error('VideoEncoder is not supported by this browser.');
+				}
+
+				// The candidates only differ in their rate control, so we describe them as one config with a
+				// slash-separated list of the attempted rate control methods
+				const firstConfig = candidates[0]!.config;
+				const rateControls = candidates.map(({ config, quantizer }) =>
+					quantizer !== null ? `quantizer ${quantizer}` : `${config.bitrate} bps`,
+				);
+
+				throw new Error(
+					`This specific encoder configuration (${firstConfig.codec}, ${rateControls.join(' / ')},`
+					+ ` ${firstConfig.width}x${firstConfig.height}, hardware acceleration:`
+					+ ` ${firstConfig.hardwareAcceleration ?? 'no-preference'}) is not supported by this browser.`
+					+ ` Consider using another codec or changing your video parameters.`,
+				);
+			}
+
+			const encoderConfig = selected.config;
+			if (selected.quantizer !== null) {
+				// The chosen config uses quantizer-based rate control, so each frame must carry the quantizer value
+				this.defaultEncodeOptions = buildQuantizerEncodeOptions(
+					this.encodingConfig.codec,
+					selected.quantizer,
+				);
+			}
 
 			if (MatchingCustomEncoder) {
 				// @ts-expect-error "Can't create instance of abstract class 🤓"
@@ -657,42 +773,6 @@ class VideoEncoderWrapper {
 
 				await this.customEncoder.init();
 			} else {
-				if (typeof VideoEncoder === 'undefined') {
-					throw new Error('VideoEncoder is not supported by this browser.');
-				}
-
-				encoderConfig.alpha = 'discard'; // Since we handle alpha ourselves
-
-				if (this.encodingConfig.alpha === 'keep') {
-					// Encoding alpha requires using two parallel encoders, so we need to make sure they stay in sync
-					// and that neither of them drops frames. Setting latencyMode to 'quality' achieves this, because
-					// "User Agents MUST not drop frames to achieve the target bitrate and/or framerate."
-					encoderConfig.latencyMode = 'quality';
-				}
-
-				const hasOddDimension = encoderConfig.width % 2 === 1 || encoderConfig.height % 2 === 1;
-				if (
-					hasOddDimension
-					&& (this.encodingConfig.codec === 'avc' || this.encodingConfig.codec === 'hevc')
-				) {
-					// Throw a special error for this case as it gets hit often
-					throw new Error(
-						`The dimensions ${encoderConfig.width}x${encoderConfig.height} are not supported for codec`
-						+ ` '${this.encodingConfig.codec}'; both width and height must be even numbers. Make sure to`
-						+ ` round your dimensions to the nearest even number.`,
-					);
-				}
-
-				const support = await VideoEncoder.isConfigSupported(encoderConfig);
-				if (!support.supported) {
-					throw new Error(
-						`This specific encoder configuration (${encoderConfig.codec}, ${encoderConfig.bitrate} bps,`
-						+ ` ${encoderConfig.width}x${encoderConfig.height}, hardware acceleration:`
-						+ ` ${encoderConfig.hardwareAcceleration ?? 'no-preference'}) is not supported by this browser.`
-						+ ` Consider using another codec or changing your video parameters.`,
-					);
-				}
-
 				/** Queue of color chunks waiting for their alpha counterpart. */
 				const colorChunkQueue: {
 					chunk: EncodedVideoChunk;
@@ -777,6 +857,7 @@ class VideoEncoderWrapper {
 
 						if (alphaFrame) {
 							this.alphaEncoder.encode(alphaFrame, {
+								...this.defaultEncodeOptions,
 								// Crucial: The alpha frame is forced to be a key frame whenever the color frame
 								// also is. Without this, playback can glitch and even crash in some browsers.
 								// This is the reason why the two encoders are wired in series and not in parallel.
@@ -852,48 +933,57 @@ class VideoEncoderWrapper {
 	}
 
 	async flushAndClose(forceClose: boolean) {
-		if (!forceClose) {
-			this.checkForEncoderError();
-		}
-
-		// Final frame rate padding: fill remaining frames up to the last sample's original end timestamp
-		if (!forceClose && this.frameRateLastSample) {
-			const frameRate = this.encodingConfig.transform!.frameRate!;
-			const alignedEnd = floorToDivisor(this.frameRateLastEndTimestamp!, frameRate);
-			await this.padFrameRate(alignedEnd);
-		}
-
-		this.closed = true;
-
-		this.frameRateLastSample?.close();
-		this.frameRateLastSample = null;
-
-		if (this.customEncoder) {
+		try {
 			if (!forceClose) {
-				void this.customEncoderCallSerializer.call(() => this.customEncoder!.flush());
+				this.checkForEncoderError();
+
+				// Final frame rate padding: fill remaining frames up to the last sample's original end timestamp
+				if (this.frameRateLastSample) {
+					const frameRate = this.encodingConfig.transform!.frameRate!;
+					const alignedEnd = floorToDivisor(this.frameRateLastEndTimestamp!, frameRate);
+					await this.padFrameRate(alignedEnd);
+				}
 			}
 
-			await this.customEncoderCallSerializer.call(() => this.customEncoder!.close());
-		} else if (this.encoder) {
+			this.closed = true;
+
 			if (!forceClose) {
-				// These are wired in series, therefore they must also be flushed in series
-				await this.encoder.flush();
-				await this.alphaEncoder?.flush();
+				if (this.customEncoder) {
+					void this.customEncoderCallSerializer.call(() => this.customEncoder!.flush());
+				} else if (this.encoder) {
+					// These are wired in series, therefore they must also be flushed in series
+					await this.encoder.flush();
+					await this.alphaEncoder?.flush();
 
-				// Workaround for https://issues.chromium.org/issues/529852980 to give it time for errors to surface
-				await wait(25);
+					// Workaround for https://issues.chromium.org/issues/529852980 to give it time for errors to
+					// surface
+					await wait(25);
+				}
 			}
+		} finally {
+			// This cleanup must also run when padding or flushing threw (e.g. due to an encoder error), otherwise
+			// samples, frames and encoders would be left dangling
+			this.closed = true;
 
-			if (this.encoder.state !== 'closed') {
-				this.encoder.close();
+			this.frameRateLastSample?.close();
+			this.frameRateLastSample = null;
+
+			if (this.customEncoder) {
+				await this.customEncoderCallSerializer.call(() => this.customEncoder!.close())
+					.catch((error: unknown) => this.setError(error));
+			} else if (this.encoder) {
+				if (this.encoder.state !== 'closed') {
+					this.encoder.close();
+				}
+				if (this.alphaEncoder && this.alphaEncoder.state !== 'closed') {
+					this.alphaEncoder.close();
+				}
+
+				this.alphaFrameQueue.forEach(x => x?.close());
+				this.alphaFrameQueue.length = 0;
+
+				this.splitter?.close();
 			}
-			if (this.alphaEncoder && this.alphaEncoder.state !== 'closed') {
-				this.alphaEncoder.close();
-			}
-
-			this.alphaFrameQueue.forEach(x => x?.close());
-
-			this.splitter?.close();
 		}
 
 		if (!forceClose) {
@@ -1840,30 +1930,46 @@ class AudioEncoderWrapper {
 		}
 
 		if (config.transform?.process) {
-			let processed = config.transform.process(audioSample);
-			if (processed instanceof Promise) {
-				processed = await processed;
-			}
-
-			if (processed === null) {
-				return;
-			}
-
-			if (!Array.isArray(processed)) {
-				processed = [processed];
-			}
-
-			for (const sample of processed) {
-				if (!(sample instanceof AudioSample)) {
-					throw new TypeError(
-						'The audio process function must return an AudioSample, null, or an array of AudioSamples.',
-					);
+			try {
+				let processed = config.transform.process(audioSample);
+				if (processed instanceof Promise) {
+					processed = await processed;
 				}
-				await this.encodeSample(sample, true);
-			}
 
-			if (shouldClose) {
-				audioSample.close();
+				if (processed === null) {
+					return;
+				}
+
+				if (!Array.isArray(processed)) {
+					processed = [processed];
+				}
+
+				try {
+					for (const sample of processed) {
+						if (!(sample instanceof AudioSample)) {
+							throw new TypeError(
+								'The audio process function must return an AudioSample, null, or an array of'
+								+ ' AudioSamples.',
+							);
+						}
+					}
+
+					for (const sample of processed) {
+						await this.encodeSample(sample, true);
+					}
+				} finally {
+					// encodeSample closes the samples it was passed; this additionally covers the samples never
+					// reached because an earlier one threw (closing is idempotent)
+					for (const sample of processed) {
+						if (sample instanceof AudioSample) {
+							sample.close();
+						}
+					}
+				}
+			} finally {
+				if (shouldClose) {
+					audioSample.close();
+				}
 			}
 		} else {
 			await this.encodeSample(audioSample, shouldClose);
@@ -2051,10 +2157,14 @@ class AudioEncoderWrapper {
 		this.ensureEncoderPromise = (async () => {
 			const { numberOfChannels, sampleRate } = audioSample;
 
+			// eslint-disable-next-line @typescript-eslint/no-deprecated
+			const quality = resolveQuality(this.encodingConfig.quality, this.encodingConfig.bitrate);
+
 			const encoderConfig = buildAudioEncoderConfig({
 				numberOfChannels,
 				sampleRate,
 				...this.encodingConfig,
+				quality,
 			});
 			this.encodingConfig.onEncoderConfig?.(encoderConfig);
 
@@ -2265,30 +2375,35 @@ class AudioEncoderWrapper {
 	}
 
 	async flushAndClose(forceClose: boolean) {
-		if (!forceClose) {
-			this.checkForEncoderError();
-		}
-
-		// Finalize the resampler to flush any buffered audio
-		if (!forceClose && this.resampler) {
-			await this.resampler.finalize();
-		}
-		this.resampler = null;
-
-		this.closed = true;
-
-		if (this.customEncoder) {
+		try {
 			if (!forceClose) {
-				void this.customEncoderCallSerializer.call(() => this.customEncoder!.flush());
+				this.checkForEncoderError();
+
+				// Finalize the resampler to flush any buffered audio
+				if (this.resampler) {
+					await this.resampler.finalize();
+				}
 			}
 
-			await this.customEncoderCallSerializer.call(() => this.customEncoder!.close());
-		} else if (this.encoder) {
-			if (!forceClose) {
-				await this.encoder.flush();
-			}
+			this.closed = true;
 
-			if (this.encoder.state !== 'closed') {
+			if (!forceClose) {
+				if (this.customEncoder) {
+					void this.customEncoderCallSerializer.call(() => this.customEncoder!.flush());
+				} else if (this.encoder) {
+					await this.encoder.flush();
+				}
+			}
+		} finally {
+			// This cleanup must also run when flushing threw (e.g. due to an encoder error), otherwise the encoder
+			// would be left dangling
+			this.closed = true;
+			this.resampler = null;
+
+			if (this.customEncoder) {
+				await this.customEncoderCallSerializer.call(() => this.customEncoder!.close())
+					.catch((error: unknown) => this.setError(error));
+			} else if (this.encoder && this.encoder.state !== 'closed') {
 				this.encoder.close();
 			}
 		}

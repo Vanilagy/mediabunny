@@ -30,7 +30,7 @@
         if (videoTrack) {
             videoSource = new Mediabunny.MediaStreamVideoTrackSource(videoTrack, {
                 codec: 'vp9',
-                bitrate: Mediabunny.QUALITY_MEDIUM,
+                quality: new Mediabunny.Quality('medium'),
 				sizeChangeBehavior: 'passThrough',
             }, { timestampBase: 'unix' });
 
@@ -41,7 +41,7 @@
         if (audioTrack) {
             audioSource = new Mediabunny.MediaStreamAudioTrackSource(audioTrack, {
                 codec: 'opus',
-                bitrate: Mediabunny.QUALITY_MEDIUM
+                quality: new Mediabunny.Quality('medium')
             });
 
             audioSource.errorPromise.catch((d) => console.log("Hello!!???", d));

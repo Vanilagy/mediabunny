@@ -11,7 +11,7 @@ import {
 	AudioSample,
 	CustomAudioEncoder,
 	type MaybePromise,
-	QUALITY_MEDIUM,
+	Quality,
 	EncodedPacket,
 } from 'mediabunny';
 import * as NodeAv from 'node-av';
@@ -112,7 +112,9 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 		codecContext.codecId = CODEC_TO_CODEC_ID[this.codec]!;
 		codecContext.sampleFormat = sampleFormat;
 		codecContext.timeBase = new NodeAv.Rational(1, this.config.sampleRate);
-		codecContext.bitRate = BigInt(this.config.bitrate ?? QUALITY_MEDIUM._toAudioBitrate(this.codec) ?? 0);
+		codecContext.bitRate = BigInt(
+			this.config.bitrate ?? new Quality('medium')._toAudioBitrate(this.codec) ?? 0,
+		);
 
 		if (this.config.bitrateMode === 'constant') {
 			codecContext.rcMinRate = codecContext.bitRate;

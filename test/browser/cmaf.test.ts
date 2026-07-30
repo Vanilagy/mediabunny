@@ -3,7 +3,7 @@ import { Output } from '../../src/output.js';
 import { CmafOutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
 import { CanvasSource } from '../../src/media-source.js';
-import { QUALITY_HIGH } from '../../src/encode.js';
+import { Quality } from '../../src/encode.js';
 import { Input } from '../../src/input.js';
 import { BufferSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
@@ -17,7 +17,7 @@ test('CMAF throws without initTarget', async () => {
 	const canvas = new OffscreenCanvas(640, 480);
 	const videoSource = new CanvasSource(canvas, {
 		codec: 'avc',
-		bitrate: QUALITY_HIGH,
+		quality: new Quality('high'),
 	});
 	output.addVideoTrack(videoSource);
 
@@ -44,7 +44,7 @@ test('CMAF with video track', async () => {
 
 	const videoSource = new CanvasSource(canvas, {
 		codec: 'avc',
-		bitrate: QUALITY_HIGH,
+		quality: new Quality('high'),
 	});
 	output.addVideoTrack(videoSource);
 
@@ -97,7 +97,7 @@ test('CMAF with empty video track', async () => {
 	const canvas = new OffscreenCanvas(640, 480);
 	const videoSource = new CanvasSource(canvas, {
 		codec: 'avc',
-		bitrate: QUALITY_HIGH,
+		quality: new Quality('high'),
 	});
 	output.addVideoTrack(videoSource);
 

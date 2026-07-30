@@ -9,6 +9,7 @@
 import {
 	AUDIO_CODECS,
 	AudioCodec,
+	MediaCodec,
 	NON_PCM_AUDIO_CODECS,
 	VIDEO_CODECS,
 	VideoCodec,
@@ -18,7 +19,7 @@ import {
 	getEncodableAudioCodecs,
 	getFirstEncodableVideoCodec,
 	Quality,
-	QUALITY_HIGH,
+	resolveQuality,
 	VideoEncodingConfig,
 } from './encode';
 import { Input } from './input';
@@ -210,7 +211,12 @@ export type ConversionVideoOptions = {
 	frameRate?: number;
 	/** The desired output video codec. */
 	codec?: VideoCodec;
-	/** The desired bitrate of the output video. */
+	/** The desired quality of the output video. */
+	quality?: Quality;
+	/**
+	 * The desired bitrate of the output video.
+	 * @deprecated Use `quality` instead.
+	 */
 	bitrate?: number | Quality;
 	/**
 	 * Whether to discard or keep the transparency information of the input video. The default is `'discard'`. Note that
@@ -290,7 +296,12 @@ export type ConversionAudioOptions = {
 	sampleFormat?: 'u8' | 's16' | 's32' | 'f32';
 	/** The desired output audio codec. */
 	codec?: AudioCodec;
-	/** The desired bitrate of the output audio. */
+	/** The desired quality of the output audio. */
+	quality?: Quality;
+	/**
+	 * The desired bitrate of the output audio.
+	 * @deprecated Use `quality` instead.
+	 */
 	bitrate?: number | Quality;
 	/** When `true`, audio will always be re-encoded instead of directly copying over the encoded samples. */
 	forceTranscode?: boolean;
@@ -342,11 +353,15 @@ const validateVideoOptions = (videoOptions: ConversionVideoOptions) => {
 			`options.video.codec, when provided, must be one of: ${VIDEO_CODECS.join(', ')}.`,
 		);
 	}
-	if (
-		videoOptions?.bitrate !== undefined
-		&& !(videoOptions.bitrate instanceof Quality)
-		&& (!Number.isInteger(videoOptions.bitrate) || videoOptions.bitrate <= 0)
-	) {
+	// eslint-disable-next-line @typescript-eslint/no-deprecated
+	const bitrate = videoOptions?.bitrate;
+	if (videoOptions?.quality !== undefined && !(videoOptions.quality instanceof Quality)) {
+		throw new TypeError('options.video.quality, when provided, must be a Quality.');
+	}
+	if (videoOptions?.quality !== undefined && bitrate !== undefined) {
+		throw new TypeError('options.video.quality and options.video.bitrate cannot both be provided.');
+	}
+	if (bitrate !== undefined && !(bitrate instanceof Quality) && (!Number.isInteger(bitrate) || bitrate <= 0)) {
 		throw new TypeError('options.video.bitrate, when provided, must be a positive integer or a quality.');
 	}
 	if (
@@ -450,11 +465,15 @@ const validateAudioOptions = (audioOptions: ConversionAudioOptions) => {
 			`options.audio.codec, when provided, must be one of: ${AUDIO_CODECS.join(', ')}.`,
 		);
 	}
-	if (
-		audioOptions?.bitrate !== undefined
-		&& !(audioOptions.bitrate instanceof Quality)
-		&& (!Number.isInteger(audioOptions.bitrate) || audioOptions.bitrate <= 0)
-	) {
+	// eslint-disable-next-line @typescript-eslint/no-deprecated
+	const bitrate = audioOptions?.bitrate;
+	if (audioOptions?.quality !== undefined && !(audioOptions.quality instanceof Quality)) {
+		throw new TypeError('options.audio.quality, when provided, must be a Quality.');
+	}
+	if (audioOptions?.quality !== undefined && bitrate !== undefined) {
+		throw new TypeError('options.audio.quality and options.audio.bitrate cannot both be provided.');
+	}
+	if (bitrate !== undefined && !(bitrate instanceof Quality) && (!Number.isInteger(bitrate) || bitrate <= 0)) {
 		throw new TypeError('options.audio.bitrate, when provided, must be a positive integer or a quality.');
 	}
 	if (
@@ -1051,25 +1070,30 @@ export class Conversion {
 				const codecs = this.discardedTracks.flatMap((x) => {
 					if (x.reason === 'discarded_by_user') return [];
 
+					let supportedCodecs: MediaCodec[];
 					if (x.track.type === 'video') {
-						return this.output.format.getSupportedVideoCodecs();
+						supportedCodecs = this.output.format.getSupportedVideoCodecs();
 					} else if (x.track.type === 'audio') {
-						return this.output.format.getSupportedAudioCodecs();
+						supportedCodecs = this.output.format.getSupportedAudioCodecs();
 					} else {
-						return this.output.format.getSupportedSubtitleCodecs();
+						supportedCodecs = this.output.format.getSupportedSubtitleCodecs();
 					}
+
+					// If the user requested a specific codec, only that codec was ever attempted
+					return supportedCodecs.filter(codec => !x.trackOptions.codec || codec === x.trackOptions.codec);
 				});
 
 				const uniqueCodecs = [...new Set(codecs)];
 
 				if (uniqueCodecs.length === 1) {
 					elements.push(
-						`\nTracks were discarded because your environment is not able to encode '${uniqueCodecs[0]}'.`,
+						`\nTracks were discarded because your environment is not able to encode '${uniqueCodecs[0]}'`
+						+ ' with the provided parameters.',
 					);
 				} else {
 					elements.push(
-						'\nTracks were discarded because your environment is not able to encode any of the following'
-						+ ` codecs: ${uniqueCodecs.map(x => `'${x}'`).join(', ')}.`,
+						'\nTracks were discarded because your environment is not able to encode any of the codecs'
+						+ ` ${uniqueCodecs.map(x => `'${x}'`).join(', ')} with the provided parameters.`,
 					);
 				}
 
@@ -1339,6 +1363,8 @@ export class Conversion {
 			|| !!trackOptions.frameRate
 			|| trackOptions.keyFrameInterval !== undefined
 			|| trackOptions.process !== undefined
+			|| trackOptions.quality !== undefined
+			// eslint-disable-next-line @typescript-eslint/no-deprecated
 			|| trackOptions.bitrate !== undefined
 			|| !videoCodecs.includes(sourceCodec)
 			|| (trackOptions.codec && trackOptions.codec !== sourceCodec)
@@ -1410,7 +1436,9 @@ export class Conversion {
 				videoCodecs = videoCodecs.filter(codec => codec === trackOptions.codec);
 			}
 
-			const bitrate = trackOptions.bitrate ?? QUALITY_HIGH;
+			// eslint-disable-next-line @typescript-eslint/no-deprecated
+			const quality = resolveQuality(trackOptions.quality, trackOptions.bitrate)
+				?? new Quality('high');
 
 			const encodableCodec = await getFirstEncodableVideoCodec(videoCodecs, {
 				width: trackOptions.process && trackOptions.processedWidth
@@ -1419,7 +1447,7 @@ export class Conversion {
 				height: trackOptions.process && trackOptions.processedHeight
 					? trackOptions.processedHeight
 					: height,
-				bitrate,
+				quality,
 			});
 			if (!encodableCodec) {
 				this.discardedTracks.push({
@@ -1432,7 +1460,7 @@ export class Conversion {
 
 			const encodingConfig: VideoEncodingConfig = {
 				codec: encodableCodec,
-				bitrate,
+				quality,
 				keyFrameInterval: trackOptions.keyFrameInterval,
 				sizeChangeBehavior: trackOptions.fit ?? 'passThrough',
 				alpha,
@@ -1598,6 +1626,8 @@ export class Conversion {
 		let audioCodecs = this.output.format.getSupportedAudioCodecs();
 		if (
 			!trackOptions.forceTranscode
+			&& !trackOptions.quality
+			// eslint-disable-next-line @typescript-eslint/no-deprecated
 			&& !trackOptions.bitrate
 			&& numberOfChannels === originalNumberOfChannels
 			&& sampleRate === originalSampleRate
@@ -1664,7 +1694,9 @@ export class Conversion {
 				audioCodecs = audioCodecs.filter(codec => codec === trackOptions.codec);
 			}
 
-			const bitrate = trackOptions.bitrate ?? QUALITY_HIGH;
+			// eslint-disable-next-line @typescript-eslint/no-deprecated
+			const quality = resolveQuality(trackOptions.quality, trackOptions.bitrate)
+				?? new Quality('high');
 
 			const encodableCodecs = await getEncodableAudioCodecs(audioCodecs, {
 				numberOfChannels: trackOptions.process && trackOptions.processedNumberOfChannels
@@ -1673,7 +1705,7 @@ export class Conversion {
 				sampleRate: trackOptions.process && trackOptions.processedSampleRate
 					? trackOptions.processedSampleRate
 					: sampleRate,
-				bitrate,
+				quality,
 			});
 
 			if (
@@ -1688,7 +1720,7 @@ export class Conversion {
 				const encodableCodecsWithDefaultParams = await getEncodableAudioCodecs(audioCodecs, {
 					numberOfChannels: FALLBACK_NUMBER_OF_CHANNELS,
 					sampleRate: FALLBACK_SAMPLE_RATE,
-					bitrate,
+					quality,
 				});
 
 				const nonPcmCodec = encodableCodecsWithDefaultParams
@@ -1714,7 +1746,7 @@ export class Conversion {
 
 			const encodingConfig: AudioEncodingConfig = {
 				codec: codecOfChoice,
-				bitrate,
+				quality,
 				transform: {
 					sampleFormat: trackOptions.sampleFormat,
 					process: trackOptions.process,

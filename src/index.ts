@@ -122,10 +122,19 @@ export {
 	getFirstEncodableAudioCodec,
 	getFirstEncodableSubtitleCodec,
 	Quality,
+	type QualityOptions,
+	type QualitativeQualityOptions,
+	type QuantitativeQualityOptions,
+	type QualityLevel,
+	// eslint-disable-next-line @typescript-eslint/no-deprecated
 	QUALITY_VERY_LOW,
+	// eslint-disable-next-line @typescript-eslint/no-deprecated
 	QUALITY_LOW,
+	// eslint-disable-next-line @typescript-eslint/no-deprecated
 	QUALITY_MEDIUM,
+	// eslint-disable-next-line @typescript-eslint/no-deprecated
 	QUALITY_HIGH,
+	// eslint-disable-next-line @typescript-eslint/no-deprecated
 	QUALITY_VERY_HIGH,
 } from './encode';
 export {

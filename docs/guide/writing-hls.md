@@ -218,11 +218,11 @@ Let's suppose we have a 1080p main video stream. We want to provide a 1080p, 720
 ```ts
 const source1080p = new VideoSampleSource({
 	codec: 'avc',
-	bitrate: QUALITY_VERY_HIGH,
+	quality: new Quality('very-high'),
 });
 const source720p = new VideoSampleSource({
 	codec: 'avc',
-	bitrate: QUALITY_HIGH,
+	quality: new Quality('high'),
 	transform: {
 		// Frames will be automatically resized to 720p before being encoded
 		height: 720,
@@ -230,14 +230,14 @@ const source720p = new VideoSampleSource({
 });
 const source480p = new VideoSampleSource({
 	codec: 'avc',
-	bitrate: QUALITY_MEDIUM,
+	quality: new Quality('medium'),
 	transform: {
 		height: 480,
 	},
 });
 const source360p = new VideoSampleSource({
 	codec: 'avc',
-	bitrate: QUALITY_LOW,
+	quality: new Quality('low'),
 	transform: {
 		height: 360,
 	},
@@ -269,10 +269,10 @@ const conversion = await Conversion.init({
 	input,
 	output,
 	video: [
-		{ height: 1080, bitrate: QUALITY_VERY_HIGH },
-		{ height: 720, bitrate: QUALITY_HIGH },
-		{ height: 480, bitrate: QUALITY_MEDIUM },
-		{ height: 360, bitrate: QUALITY_LOW },
+		{ height: 1080, quality: new Quality('very-high') },
+		{ height: 720, quality: new Quality('high') },
+		{ height: 480, quality: new Quality('medium') },
+		{ height: 360, quality: new Quality('low') },
 	],
 });
 ```

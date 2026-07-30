@@ -196,18 +196,18 @@ const output = new Output({
 // Full resolution video
 const videoSourceFull = new MediaStreamVideoTrackSource(displayTrack, {
 	codec: 'avc',
-	bitrate: QUALITY_HIGH,
+	quality: new Quality('high'),
 }, { timestampBase: 'unix' });
 // 480p video
 const videoSource480p = new MediaStreamVideoTrackSource(displayTrack, {
 	codec: 'avc',
-	bitrate: QUALITY_MEDIUM,
+	quality: new Quality('medium'),
 	transform: { height: 480 },
 }, { timestampBase: 'unix' });
 // Audio
 const audioSource = new MediaStreamAudioTrackSource(micTrack, {
 	codec: 'aac',
-	bitrate: QUALITY_HIGH,
+	quality: new Quality('high'),
 }, { timestampBase: 'unix' });
 
 // The "unix" stuff ensures that #EXT-X-PROGRAM-DATE-TIME gets generated

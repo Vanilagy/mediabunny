@@ -930,6 +930,9 @@ export class Output<
 
 				this.state = 'finalized';
 			} finally {
+				await Promise.all([...this._unfinalizedTargets].map(target => target._close().catch(() => {})));
+				this._unfinalizedTargets.clear();
+
 				release();
 			}
 		})();

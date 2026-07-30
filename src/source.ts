@@ -1665,6 +1665,10 @@ export class ReadableStreamSource extends Source {
 
 	/** @internal */
 	_dispose() {
+		for (const pendingSlice of this._pendingSlices) {
+			pendingSlice.reject(new InputDisposedError());
+		}
+
 		this._pendingSlices.length = 0;
 		this._cache.length = 0;
 		void this._reader?.cancel();
@@ -2328,11 +2332,13 @@ class ReadOrchestrator {
 	signalWorkerStoppedRunning(worker: ReadWorker) {
 		worker.running = false;
 
-		// When a worker stops running, that means it has hit its targetPos. It might still have pendingSlices assigned,
-		// but this is because those pending slices cover data that other workers are assigned to fill. Since targetPos
-		// has been reached, we can confidently say that this worker has completed its share of work on the pending
-		// slices and must no longer care about them.
-		worker.pendingSlices.length = 0;
+		if (!worker.aborted) {
+			// When a worker stops running, that means it has hit its targetPos. It might still have pendingSlices
+			// assigned, but this is because those pending slices cover data that other workers are assigned to fill.
+			// Since targetPos has been reached, we can confidently say that this worker has completed its share of work
+			// on the pending slices and must no longer care about them.
+			worker.pendingSlices.length = 0;
+		}
 	}
 
 	/** Called when a worker reaches the end of the underlying data and must be cleaned up. */
@@ -2447,11 +2453,23 @@ class ReadOrchestrator {
 
 	dispose() {
 		for (const worker of this.workers) {
+			for (const slice of worker.pendingSlices) {
+				slice.reject(new InputDisposedError());
+			}
+
+			worker.pendingSlices.length = 0;
 			worker.aborted = true;
+		}
+
+		for (const queuedRead of this.queuedReads) {
+			for (const slice of queuedRead.pendingSlices) {
+				slice.reject(new InputDisposedError());
+			}
 		}
 
 		this.workers.length = 0;
 		this.cache.length = 0;
+		this.queuedReads.length = 0;
 		this.disposed = true;
 	}
 }

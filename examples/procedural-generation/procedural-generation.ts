@@ -1,13 +1,13 @@
 import {
-	Output,
-	BufferTarget,
-	Mp4OutputFormat,
-	CanvasSource,
 	AudioBufferSource,
-	QUALITY_HIGH,
+	BufferTarget,
+	CanvasSource,
 	getFirstEncodableAudioCodec,
 	getFirstEncodableVideoCodec,
+	Mp4OutputFormat,
+	Output,
 	OutputFormat,
+	Quality,
 } from 'mediabunny';
 
 const durationSlider = document.querySelector('#duration-slider') as HTMLInputElement;
@@ -102,7 +102,7 @@ const generateVideo = async () => {
 		// For video, we use a CanvasSource for convenience, as we're rendering to a canvas
 		const canvasSource = new CanvasSource(renderCanvas, {
 			codec: videoCodec,
-			bitrate: QUALITY_HIGH,
+			quality: new Quality('high'),
 		});
 		output.addVideoTrack(canvasSource, { frameRate });
 
@@ -117,7 +117,7 @@ const generateVideo = async () => {
 		if (audioCodec) {
 			audioBufferSource = new AudioBufferSource({
 				codec: audioCodec,
-				bitrate: QUALITY_HIGH,
+				quality: new Quality('high'),
 			});
 			output.addAudioTrack(audioBufferSource);
 		} else {
