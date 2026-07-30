@@ -9,6 +9,7 @@
 import {
 	AUDIO_CODECS,
 	AudioCodec,
+	MediaCodec,
 	NON_PCM_AUDIO_CODECS,
 	VIDEO_CODECS,
 	VideoCodec,
@@ -1069,25 +1070,30 @@ export class Conversion {
 				const codecs = this.discardedTracks.flatMap((x) => {
 					if (x.reason === 'discarded_by_user') return [];
 
+					let supportedCodecs: MediaCodec[];
 					if (x.track.type === 'video') {
-						return this.output.format.getSupportedVideoCodecs();
+						supportedCodecs = this.output.format.getSupportedVideoCodecs();
 					} else if (x.track.type === 'audio') {
-						return this.output.format.getSupportedAudioCodecs();
+						supportedCodecs = this.output.format.getSupportedAudioCodecs();
 					} else {
-						return this.output.format.getSupportedSubtitleCodecs();
+						supportedCodecs = this.output.format.getSupportedSubtitleCodecs();
 					}
+
+					// If the user requested a specific codec, only that codec was ever attempted
+					return supportedCodecs.filter(codec => !x.trackOptions.codec || codec === x.trackOptions.codec);
 				});
 
 				const uniqueCodecs = [...new Set(codecs)];
 
 				if (uniqueCodecs.length === 1) {
 					elements.push(
-						`\nTracks were discarded because your environment is not able to encode '${uniqueCodecs[0]}'.`,
+						`\nTracks were discarded because your environment is not able to encode '${uniqueCodecs[0]}'`
+						+ ' with the provided parameters.',
 					);
 				} else {
 					elements.push(
-						'\nTracks were discarded because your environment is not able to encode any of the following'
-						+ ` codecs: ${uniqueCodecs.map(x => `'${x}'`).join(', ')}.`,
+						'\nTracks were discarded because your environment is not able to encode any of the codecs'
+						+ ` ${uniqueCodecs.map(x => `'${x}'`).join(', ')} with the provided parameters.`,
 					);
 				}
 

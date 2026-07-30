@@ -34,7 +34,8 @@ test('AVC, explicit bitrate with constant bitrate mode', { timeout: 10_000 }, as
 });
 
 test('AVC, explicit quantizer', { timeout: 10_000 }, async () => {
-	await convertVideo(new Quality({ quantizer: 30 }), 'avc');
+	// No bitrate fallback here, so environments without quantizer support are expected to reject the track
+	await convertVideo(new Quality({ quantizer: 30 }), 'avc', true);
 });
 
 test('AVC, explicit quantizer with bitrate fallback', { timeout: 10_000 }, async () => {
@@ -57,7 +58,7 @@ for (const codec of TESTED_VIDEO_CODECS) {
 }
 
 /** Converts the first two seconds of the test video using the given quality and codec. */
-const convertVideo = async (quality: Quality, codec: VideoCodec) => {
+const convertVideo = async (quality: Quality, codec: VideoCodec, allowMissingQuantizerSupport = false) => {
 	using input = new Input({
 		source: new UrlSource('/video.mp4'),
 		formats: ALL_FORMATS,
@@ -76,6 +77,15 @@ const convertVideo = async (quality: Quality, codec: VideoCodec) => {
 		video: { codec, quality },
 		audio: { discard: true },
 	});
+
+	if (allowMissingQuantizerSupport && !conversion.isValid) {
+		// The environment can't do quantizer-based encoding; a correctly-explained rejection also satisfies the test
+		await expect(conversion.execute()).rejects.toThrow(
+			`not able to encode '${codec}' with the provided parameters`,
+		);
+		return;
+	}
+
 	await conversion.execute();
 
 	expect(conversion.utilizedTracks.some(x => x.isVideoTrack())).toBe(true);
