@@ -18,12 +18,7 @@ import {
 	getEncodableAudioCodecs,
 	getFirstEncodableVideoCodec,
 	Quality,
-	QUALITY_HIGH,
-	canEncodeVideo,
-	QUANTIZER_BITRATE_MODE_CODECS,
-	QuantizerBitrateModeCodec,
-	validateVideoQuantizer,
-	videoFallbackBitrate,
+	resolveQuality,
 	VideoEncodingConfig,
 } from './encode';
 import { Input } from './input';
@@ -215,29 +210,13 @@ export type ConversionVideoOptions = {
 	frameRate?: number;
 	/** The desired output video codec. */
 	codec?: VideoCodec;
+	/** The desired quality of the output video. */
+	quality?: Quality;
 	/**
-	 * The desired bitrate of the output video. Alternatively, a subjective {@link Quality} can be provided.
-	 *
-	 * When `bitrateMode` is `'quantizer'`, this value is only used as a fallback for browsers that don't support
-	 * quantizer mode.
+	 * The desired bitrate of the output video.
+	 * @deprecated Use `quality` instead.
 	 */
 	bitrate?: number | Quality;
-	/**
-	 * Configures the bitrate mode of the output video.
-	 *
-	 * When set to `'quantizer'`, the encoder uses a fixed quantizer for each frame instead of targeting a bitrate.
-	 * This mode is only available for the codecs 'avc', 'hevc', 'vp9' and 'av1', and falls back to `'variable'` on
-	 * browsers without support for it.
-	 */
-	bitrateMode?: 'constant' | 'variable' | 'quantizer';
-	/**
-	 * The quantizer value used for encoded frames, using the scale of the codec: 0 to 51 for 'avc' and 'hevc', 0 to
-	 * 63 for 'vp9', or 0 to 255 for 'av1', where lower values mean higher fidelity. When omitted, a fitting value is
-	 * derived from `bitrate`.
-	 *
-	 * Can only be provided when `bitrateMode` is set to `'quantizer'`.
-	 */
-	quantizer?: number;
 	/**
 	 * Whether to discard or keep the transparency information of the input video. The default is `'discard'`. Note that
 	 * for `'keep'` to produce a transparent video, you must use an output config that supports it, such as WebM with
@@ -316,7 +295,12 @@ export type ConversionAudioOptions = {
 	sampleFormat?: 'u8' | 's16' | 's32' | 'f32';
 	/** The desired output audio codec. */
 	codec?: AudioCodec;
-	/** The desired bitrate of the output audio. */
+	/** The desired quality of the output audio. */
+	quality?: Quality;
+	/**
+	 * The desired bitrate of the output audio.
+	 * @deprecated Use `quality` instead.
+	 */
 	bitrate?: number | Quality;
 	/** When `true`, audio will always be re-encoded instead of directly copying over the encoded samples. */
 	forceTranscode?: boolean;
@@ -368,50 +352,16 @@ const validateVideoOptions = (videoOptions: ConversionVideoOptions) => {
 			`options.video.codec, when provided, must be one of: ${VIDEO_CODECS.join(', ')}.`,
 		);
 	}
-	if (
-		videoOptions?.bitrate !== undefined
-		&& !(videoOptions.bitrate instanceof Quality)
-		&& (!Number.isInteger(videoOptions.bitrate) || videoOptions.bitrate <= 0)
-	) {
+	// eslint-disable-next-line @typescript-eslint/no-deprecated
+	const bitrate = videoOptions?.bitrate;
+	if (videoOptions?.quality !== undefined && !(videoOptions.quality instanceof Quality)) {
+		throw new TypeError('options.video.quality, when provided, must be a Quality.');
+	}
+	if (videoOptions?.quality !== undefined && bitrate !== undefined) {
+		throw new TypeError('options.video.quality and options.video.bitrate cannot both be provided.');
+	}
+	if (bitrate !== undefined && !(bitrate instanceof Quality) && (!Number.isInteger(bitrate) || bitrate <= 0)) {
 		throw new TypeError('options.video.bitrate, when provided, must be a positive integer or a quality.');
-	}
-	if (
-		videoOptions?.bitrateMode !== undefined
-		&& !['constant', 'variable', 'quantizer'].includes(videoOptions.bitrateMode)
-	) {
-		throw new TypeError(
-			'options.video.bitrateMode, when provided, must be \'constant\', \'variable\' or \'quantizer\'.',
-		);
-	}
-	if (
-		videoOptions?.bitrateMode === 'quantizer'
-		&& videoOptions.codec !== undefined
-		&& !(QUANTIZER_BITRATE_MODE_CODECS as readonly string[]).includes(videoOptions.codec)
-	) {
-		throw new TypeError(
-			`options.video.bitrateMode 'quantizer' is not supported for codec '${videoOptions.codec}'. It is only`
-			+ ` supported for: ${QUANTIZER_BITRATE_MODE_CODECS.join(', ')}.`,
-		);
-	}
-	if (videoOptions?.quantizer !== undefined) {
-		if (videoOptions.bitrateMode !== 'quantizer') {
-			throw new TypeError(
-				'options.video.quantizer can only be provided when options.video.bitrateMode is set to \'quantizer\'.',
-			);
-		}
-
-		if (videoOptions.codec === undefined) {
-			throw new TypeError(
-				'When options.video.quantizer is provided, options.video.codec must also be provided, since the'
-				+ ' quantizer uses the scale of the codec. Use a quality instead to leave the codec open.',
-			);
-		}
-
-		validateVideoQuantizer(
-			videoOptions.codec as QuantizerBitrateModeCodec,
-			videoOptions.quantizer,
-			'options.video.quantizer',
-		);
 	}
 	if (
 		videoOptions?.width !== undefined
@@ -514,11 +464,15 @@ const validateAudioOptions = (audioOptions: ConversionAudioOptions) => {
 			`options.audio.codec, when provided, must be one of: ${AUDIO_CODECS.join(', ')}.`,
 		);
 	}
-	if (
-		audioOptions?.bitrate !== undefined
-		&& !(audioOptions.bitrate instanceof Quality)
-		&& (!Number.isInteger(audioOptions.bitrate) || audioOptions.bitrate <= 0)
-	) {
+	// eslint-disable-next-line @typescript-eslint/no-deprecated
+	const bitrate = audioOptions?.bitrate;
+	if (audioOptions?.quality !== undefined && !(audioOptions.quality instanceof Quality)) {
+		throw new TypeError('options.audio.quality, when provided, must be a Quality.');
+	}
+	if (audioOptions?.quality !== undefined && bitrate !== undefined) {
+		throw new TypeError('options.audio.quality and options.audio.bitrate cannot both be provided.');
+	}
+	if (bitrate !== undefined && !(bitrate instanceof Quality) && (!Number.isInteger(bitrate) || bitrate <= 0)) {
 		throw new TypeError('options.audio.bitrate, when provided, must be a positive integer or a quality.');
 	}
 	if (
@@ -1403,9 +1357,9 @@ export class Conversion {
 			|| !!trackOptions.frameRate
 			|| trackOptions.keyFrameInterval !== undefined
 			|| trackOptions.process !== undefined
+			|| trackOptions.quality !== undefined
+			// eslint-disable-next-line @typescript-eslint/no-deprecated
 			|| trackOptions.bitrate !== undefined
-			|| trackOptions.bitrateMode !== undefined
-			|| trackOptions.quantizer !== undefined
 			|| !videoCodecs.includes(sourceCodec)
 			|| (trackOptions.codec && trackOptions.codec !== sourceCodec)
 			|| width !== originalWidth
@@ -1476,40 +1430,19 @@ export class Conversion {
 				videoCodecs = videoCodecs.filter(codec => codec === trackOptions.codec);
 			}
 
-			let useQuantizerMode = trackOptions.bitrateMode === 'quantizer';
-			const bitrate = trackOptions.bitrate ?? (useQuantizerMode ? undefined : QUALITY_HIGH);
+			// eslint-disable-next-line @typescript-eslint/no-deprecated
+			const quality = resolveQuality(trackOptions.quality, trackOptions.bitrate)
+				?? new Quality('high');
 
-			const probeOptions = {
+			const encodableCodec = await getFirstEncodableVideoCodec(videoCodecs, {
 				width: trackOptions.process && trackOptions.processedWidth
 					? trackOptions.processedWidth
 					: width,
 				height: trackOptions.process && trackOptions.processedHeight
 					? trackOptions.processedHeight
 					: height,
-				bitrate,
-			};
-
-			const fallbackBitrateFor = (codec: VideoCodec) =>
-				videoFallbackBitrate(bitrate, trackOptions.quantizer, codec);
-
-			let encodableCodec = await getFirstEncodableVideoCodec(videoCodecs, {
-				...probeOptions,
-				bitrateMode: trackOptions.bitrateMode,
-				quantizer: trackOptions.quantizer,
+				quality,
 			});
-
-			if (!encodableCodec && useQuantizerMode) {
-				// No codec supports quantizer mode here, so let's do a regular bitrate encode instead of discarding
-				// the track. We probe with the real bitrate because the codec string (and AVC level) depends on it.
-				for (const codec of videoCodecs) {
-					if (await canEncodeVideo(codec, { ...probeOptions, bitrate: fallbackBitrateFor(codec) })) {
-						encodableCodec = codec;
-						useQuantizerMode = false;
-						break;
-					}
-				}
-			}
-
 			if (!encodableCodec) {
 				this.discardedTracks.push({
 					track,
@@ -1521,15 +1454,7 @@ export class Conversion {
 
 			const encodingConfig: VideoEncodingConfig = {
 				codec: encodableCodec,
-				...(useQuantizerMode
-					? { bitrateMode: 'quantizer' as const, bitrate, quantizer: trackOptions.quantizer }
-					// Don't pass 'quantizer' through when we've fallen back; the encoder would reject it
-					: {
-							bitrate: fallbackBitrateFor(encodableCodec),
-							bitrateMode: trackOptions.bitrateMode === 'quantizer'
-								? undefined
-								: trackOptions.bitrateMode,
-						}),
+				quality,
 				keyFrameInterval: trackOptions.keyFrameInterval,
 				sizeChangeBehavior: trackOptions.fit ?? 'passThrough',
 				alpha,
@@ -1695,6 +1620,8 @@ export class Conversion {
 		let audioCodecs = this.output.format.getSupportedAudioCodecs();
 		if (
 			!trackOptions.forceTranscode
+			&& !trackOptions.quality
+			// eslint-disable-next-line @typescript-eslint/no-deprecated
 			&& !trackOptions.bitrate
 			&& numberOfChannels === originalNumberOfChannels
 			&& sampleRate === originalSampleRate
@@ -1761,7 +1688,9 @@ export class Conversion {
 				audioCodecs = audioCodecs.filter(codec => codec === trackOptions.codec);
 			}
 
-			const bitrate = trackOptions.bitrate ?? QUALITY_HIGH;
+			// eslint-disable-next-line @typescript-eslint/no-deprecated
+			const quality = resolveQuality(trackOptions.quality, trackOptions.bitrate)
+				?? new Quality('high');
 
 			const encodableCodecs = await getEncodableAudioCodecs(audioCodecs, {
 				numberOfChannels: trackOptions.process && trackOptions.processedNumberOfChannels
@@ -1770,7 +1699,7 @@ export class Conversion {
 				sampleRate: trackOptions.process && trackOptions.processedSampleRate
 					? trackOptions.processedSampleRate
 					: sampleRate,
-				bitrate,
+				quality,
 			});
 
 			if (
@@ -1785,7 +1714,7 @@ export class Conversion {
 				const encodableCodecsWithDefaultParams = await getEncodableAudioCodecs(audioCodecs, {
 					numberOfChannels: FALLBACK_NUMBER_OF_CHANNELS,
 					sampleRate: FALLBACK_SAMPLE_RATE,
-					bitrate,
+					quality,
 				});
 
 				const nonPcmCodec = encodableCodecsWithDefaultParams
@@ -1811,7 +1740,7 @@ export class Conversion {
 
 			const encodingConfig: AudioEncodingConfig = {
 				codec: codecOfChoice,
-				bitrate,
+				quality,
 				transform: {
 					sampleFormat: trackOptions.sampleFormat,
 					process: trackOptions.process,

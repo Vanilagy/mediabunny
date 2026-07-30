@@ -105,7 +105,6 @@ export {
 } from './decode';
 export {
 	type VideoEncodingConfig,
-	type VideoEncodingBitrateOptions,
 	type VideoEncodingAdditionalOptions,
 	type VideoTransformOptions,
 	type AudioEncodingConfig,
@@ -123,10 +122,19 @@ export {
 	getFirstEncodableAudioCodec,
 	getFirstEncodableSubtitleCodec,
 	Quality,
+	type QualityOptions,
+	type QualitativeQualityOptions,
+	type QuantitativeQualityOptions,
+	type QualityLevel,
+	// eslint-disable-next-line @typescript-eslint/no-deprecated
 	QUALITY_VERY_LOW,
+	// eslint-disable-next-line @typescript-eslint/no-deprecated
 	QUALITY_LOW,
+	// eslint-disable-next-line @typescript-eslint/no-deprecated
 	QUALITY_MEDIUM,
+	// eslint-disable-next-line @typescript-eslint/no-deprecated
 	QUALITY_HIGH,
+	// eslint-disable-next-line @typescript-eslint/no-deprecated
 	QUALITY_VERY_HIGH,
 } from './encode';
 export {
@@ -260,7 +268,6 @@ export {
 	AudioSampleResource,
 	VideoSample,
 	type VideoSampleInit,
-	type VideoEncodeOptions,
 	type VideoSamplePixelFormat,
 	VideoSampleColorSpace,
 	VideoSampleResource,

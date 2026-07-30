@@ -107,15 +107,15 @@
 			/*
 			video: {
 				discard: true,
-				bitrate: Mediabunny.QUALITY_VERY_HIGH,
-				//bitrate: Mediabunny.QUALITY_VERY_HIGH
+				quality: new Mediabunny.Quality('very-high'),
+				//quality: new Mediabunny.Quality('very-high')
 				codec: 'av1',
 				//width: 800,
 				//fit: 'fill',
 				//rotate: 90,
 			},
 			audio: {
-				bitrate: Mediabunny.QUALITY_HIGH,
+				quality: new Mediabunny.Quality('high'),
 				codec: 'aac',
 			},
 			*/
@@ -129,10 +129,15 @@
 			},
 			*/
 			video: {
-				process: (sample) => {
-					sample.draw(ctx, 0, 0, 1280, 720);
-					return new Mediabunny.VideoSample(canvas, { timestamp: sample.timestamp, duration: sample.duration });
-				},
+				codec: 'avc',
+				bitrate: new Mediabunny.Quality({
+					quality: 1,
+				}),
+				forceTranscode: true,
+				//process: (sample) => {
+				//	sample.draw(ctx, 0, 0, 1280, 720);
+				//	return new Mediabunny.VideoSample(canvas, { timestamp: sample.timestamp, duration: sample.duration });
+				//},
 			},
 			tags: {} ?? {
 				title: 'Bigggy',
@@ -152,8 +157,9 @@
 				}
 			},
 			trim: {
-				start: -2,
-				end: 10,
+				end: 20,
+				//start: -2,
+				//end: 10,
 				//start: 300.14984567374756 - 100,
 				//end: 310.1548298151939 - 100,
 				//end: 10,

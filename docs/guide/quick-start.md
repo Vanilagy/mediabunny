@@ -226,12 +226,12 @@ Check out [`EncodedPacketSink`](./media-sinks#encodedpacketsink) for the full do
 
 ```ts
 import {
-	Output,
-	BufferTarget,
-	Mp4OutputFormat,
-	CanvasSource,
 	AudioBufferSource,
-	QUALITY_HIGH,
+	BufferTarget,
+	CanvasSource,
+	Mp4OutputFormat,
+	Output,
+	Quality,
 } from 'mediabunny';
 
 // An Output represents a new media file
@@ -243,14 +243,14 @@ const output = new Output({
 // Example: add a video track driven by a canvas
 const videoSource = new CanvasSource(canvas, {
 	codec: 'avc',
-	bitrate: QUALITY_HIGH,
+	quality: new Quality('high'),
 });
 output.addVideoTrack(videoSource);
 
 // Example: add an audio track driven by AudioBuffers
 const audioSource = new AudioBufferSource({
 	codec: 'aac',
-	bitrate: QUALITY_HIGH,
+	quality: new Quality('high'),
 });
 output.addAudioTrack(audioSource);
 
@@ -350,12 +350,12 @@ await uploadComplete;
 
 ```ts
 import {
-	Output,
 	BufferTarget,
-	WebMOutputFormat,
-	MediaStreamVideoTrackSource,
 	MediaStreamAudioTrackSource,
-	QUALITY_MEDIUM
+	MediaStreamVideoTrackSource,
+	Output,
+	Quality,
+	WebMOutputFormat,
 } from 'mediabunny';
 
 const userMedia = await navigator.mediaDevices.getUserMedia({
@@ -373,7 +373,7 @@ const output = new Output({
 if (videoTrack) {
 	const source = new MediaStreamVideoTrackSource(videoTrack, {
 		codec: 'vp9',
-		bitrate: QUALITY_MEDIUM,
+		quality: new Quality('medium'),
 	});
 	output.addVideoTrack(source);
 }
@@ -381,7 +381,7 @@ if (videoTrack) {
 if (audioTrack) {
 	const source = new MediaStreamAudioTrackSource(audioTrack, {
 		codec: 'opus',
-		bitrate: QUALITY_MEDIUM,
+		quality: new Quality('medium'),
 	});
 	output.addAudioTrack(source);
 }
@@ -402,11 +402,11 @@ await output.finalize();
 
 ```ts
 import {
-	Output,
-	WebMOutputFormat,
 	BufferTarget,
 	CanvasSource,
-	QUALITY_MEDIUM,
+	Output,
+	Quality,
+	WebMOutputFormat,
 } from 'mediabunny';
 
 const output = new Output({
@@ -420,7 +420,7 @@ const context = canvas.getContext('2d', { alpha: true })!;
 
 const source = new CanvasSource(canvas, {
 	codec: 'vp9',
-	bitrate: QUALITY_MEDIUM,
+	quality: new Quality('medium'),
 	alpha: 'keep', // => Also encode alpha data
 });
 output.addVideoTrack(source);
@@ -545,10 +545,10 @@ await conversion.execute();
 
 ```ts
 import {
+	Conversion,
 	Input,
 	Output,
-	Conversion,
-	QUALITY_LOW,
+	Quality,
 } from 'mediabunny';
 
 const input = new Input(...);
@@ -560,11 +560,11 @@ const conversion = await Conversion.init({
 	tracks: 'primary', // Keep only the first track of each type
 	video: {
 		width: 480, // Resize to 480p
-		bitrate: QUALITY_LOW,
+		quality: new Quality('low'),
 	},
 	audio: {
 		numberOfChannels: 1, // Resample to mono
-		bitrate: QUALITY_LOW,
+		quality: new Quality('low'),
 	},
 	trim: {
 		// Let's keep only the first 60 seconds

@@ -233,14 +233,14 @@ const output = new Output({
 // Add video, driven by a canvas
 const videoSource = new CanvasSource(canvas, {
 	codec: 'av1',
-	bitrate: QUALITY_HIGH,
+	quality: new Quality('high'),
 });
 output.addVideoTrack(videoSource);
 
 // Add audio, driven by audio buffers
 const audioSource = new AudioBufferSource({
 	codec: 'opus',
-	bitrate: QUALITY_HIGH,
+	quality: new Quality('high'),
 });
 output.addAudioTrack(audioSource);
 

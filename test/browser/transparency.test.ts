@@ -7,7 +7,7 @@ import { Output } from '../../src/output.js';
 import { WebMOutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
 import { CanvasSource, VideoSampleSource } from '../../src/media-source.js';
-import { canEncodeVideo, QUALITY_HIGH } from '../../src/encode.js';
+import { canEncodeVideo, Quality } from '../../src/encode.js';
 import { VideoSample } from '../../src/sample.js';
 import { Conversion } from '../../src/conversion.js';
 
@@ -96,7 +96,7 @@ const encodeTransparentVideoTest = async () => {
 
 	const source = new CanvasSource(canvas, {
 		codec: 'vp9',
-		bitrate: QUALITY_HIGH,
+		quality: new Quality('high'),
 		alpha: 'keep',
 	});
 	output.addVideoTrack(source);
@@ -203,7 +203,7 @@ test('Can encode video with alternating transparency', async () => {
 
 		const source = new VideoSampleSource({
 			codec: 'vp9',
-			bitrate: QUALITY_HIGH,
+			quality: new Quality('high'),
 			alpha: 'keep',
 		});
 		output.addVideoTrack(source);
@@ -270,7 +270,7 @@ test('Can encode transparent video with odd dimensions', async () => {
 
 	const source = new CanvasSource(canvas, {
 		codec: 'vp9',
-		bitrate: QUALITY_HIGH,
+		quality: new Quality('high'),
 		alpha: 'keep',
 	});
 	output.addVideoTrack(source);
@@ -283,74 +283,6 @@ test('Can encode transparent video with odd dimensions', async () => {
 test('Positive encodability check with alpha', async () => {
 	const result = await canEncodeVideo('vp9', { alpha: 'keep' });
 	expect(result).toBe(true);
-});
-
-test('Can encode transparent video in quantizer mode', async () => {
-	const quantizerModeSupported = await canEncodeVideo('vp9', { bitrateMode: 'quantizer' });
-
-	const appliedQuantizers: number[] = [];
-	// eslint-disable-next-line @typescript-eslint/unbound-method
-	const originalEncode = VideoEncoder.prototype.encode;
-	VideoEncoder.prototype.encode = function (
-		this: VideoEncoder,
-		frame: VideoFrame,
-		options?: VideoEncoderEncodeOptions,
-	) {
-		const quantizer = (options as { vp9?: { quantizer?: number } } | undefined)?.vp9?.quantizer;
-		if (quantizer !== undefined) {
-			appliedQuantizers.push(quantizer);
-		}
-
-		return originalEncode.call(this, frame, options);
-	};
-
-	const output = new Output({
-		format: new WebMOutputFormat(),
-		target: new BufferTarget(),
-	});
-
-	const canvas = new OffscreenCanvas(640, 480);
-	const context = canvas.getContext('2d', { alpha: true })!;
-
-	const source = new CanvasSource(canvas, {
-		codec: 'vp9',
-		bitrateMode: 'quantizer',
-		quantizer: 20,
-		alpha: 'keep',
-	});
-	output.addVideoTrack(source);
-
-	try {
-		await output.start();
-
-		for (let i = 0; i < 3; i++) {
-			context.clearRect(0, 0, canvas.width, canvas.height);
-			context.fillStyle = '#ff0000';
-			context.fillRect(100 * i, 100, 200, 200);
-			await source.add(i / 30, 1 / 30);
-		}
-
-		await output.finalize();
-	} finally {
-		VideoEncoder.prototype.encode = originalEncode;
-	}
-
-	if (quantizerModeSupported) {
-		// The color and alpha encoders run in series with a shared config, so both get the quantizer
-		expect(appliedQuantizers).toEqual(Array(6).fill(20));
-	}
-
-	using input = new Input({
-		source: new BufferSource(output.target.buffer!),
-		formats: ALL_FORMATS,
-	});
-
-	const videoTrack = (await input.getPrimaryVideoTrack())!;
-	expect(await videoTrack.canBeTransparent()).toBe(true);
-
-	const sink = new VideoSampleSink(videoTrack);
-	using firstSample = (await sink.getSample(0))!;
-	expect(firstSample.format).toContain('A');
 });
 
 test('Can transmux transparent video, discards alpha by default', async () => {

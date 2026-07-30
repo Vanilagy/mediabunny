@@ -165,9 +165,7 @@ type ConversionVideoOptions = {
 	crop?: { left: number; top: number; width: number; height: number };
 	frameRate?: number;
 	codec?: VideoCodec;
-	bitrate?: number | Quality;
-	bitrateMode?: 'constant' | 'variable' | 'quantizer';
-	quantizer?: number;
+	quality?: Quality;
 	alpha?: 'discard' | 'keep'; // Defaults to 'discard'
 	hardwareAcceleration?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
 	keyFrameInterval?: number;
@@ -235,9 +233,7 @@ The `frameRate` property can be used to set the frame rate of the output video i
 
 Use the `codec` property to control the codec of the output track. This should be set to a [codec](./supported-formats-and-codecs#video-codecs) supported by the output file, or else the track will be [discarded](#discarded-tracks).
 
-Use the `bitrate` property to control the bitrate of the output video. For example, you can use this field to compress the video track. Accepted values are the number of bits per second or a [subjective quality](./media-sources#subjective-qualities). If this property is set, transcoding will always happen. If this property is not set but transcoding is still required, `QUALITY_HIGH` will be used as the value.
-
-Use the `bitrateMode` and `quantizer` properties to control the rate control of the output video. Setting `bitrateMode` to `'quantizer'` encodes every frame with a fixed quantizer instead of targeting a bitrate, giving direct control over encoding fidelity; see [quantizer mode](./media-sources#quantizer-mode) for the codec-specific scales and the automatic fallback for browsers without support. In this mode `bitrate` is only used as a fallback value, and `codec` must be set as well, since a quantizer only means something on a known codec's scale. Setting either property forces a transcode. If no output codec supports quantizer mode, the conversion falls back to a regular bitrate-driven encode.
+Use the `quality` property to control the quality of the output video. For example, you can use this field to compress the video track. See [Encoding quality](./media-sources#encoding-quality) for more. If this property is set, transcoding will always happen. If this property is not set but transcoding is still required, `new Quality('high')` will be used as the value.
 
 Use the `keyFrameInterval` property to control the maximum interval in seconds between key frames in the output video. Setting this fields forces a transcode.
 If you want to prevent direct copying of media data and force a transcoding step, use `forceTranscode: true`.
@@ -284,7 +280,7 @@ You can set the `audio` property in the conversion options to configure the conv
 type ConversionAudioOptions = {
 	discard?: boolean;
 	codec?: AudioCodec;
-	bitrate?: number | Quality;
+	quality?: Quality;
 	numberOfChannels?: number;
 	sampleRate?: number;
 	sampleFormat?: 'u8' | 's16' | 's32' | 'f32';
@@ -329,7 +325,7 @@ The `sampleRate` property controls the sample rate in Hz (e.g., 44100, 48000). I
 
 Use the `codec` property to control the codec of the output track. This should be set to a [codec](./supported-formats-and-codecs#audio-codecs) supported by the output file, or else the track will be [discarded](#discarded-tracks).
 
-Use the `bitrate` property to control the bitrate of the output audio. For example, you can use this field to compress the audio track. Accepted values are the number of bits per second or a [subjective quality](./media-sources#subjective-qualities). If this property is set, transcoding will always happen. If this property is not set but transcoding is still required, `QUALITY_HIGH` will be used as the value.
+Use the `quality` property to control the quality of the output audio. For example, you can use this field to compress the audio track. See [Encoding quality](./media-sources#encoding-quality) for more. If this property is set, transcoding will always happen. If this property is not set but transcoding is still required, `new Quality('high')` will be used as the value.
 
 If you want to prevent direct copying of media data and force a transcoding step, use `forceTranscode: true`.
 
@@ -391,9 +387,9 @@ const conversion = await Conversion.init({
 	input,
 	output,
 	video: [
-		{ height: 1080, bitrate: QUALITY_HIGH },
-		{ height: 720, bitrate: QUALITY_MEDIUM },
-		{ height: 480, bitrate: QUALITY_LOW },
+		{ height: 1080, quality: new Quality('high') },
+		{ height: 720, quality: new Quality('medium') },
+		{ height: 480, quality: new Quality('low') },
 	],
 });
 ```
@@ -580,7 +576,10 @@ const conversion = await Conversion.init({
 });
 
 // Add our own audio track directly
-const audioSource = new AudioBufferSource({ codec: 'aac', bitrate: 128e3 });
+const audioSource = new AudioBufferSource({
+	codec: 'aac',
+	quality: new Quality({ bitrate: 128e3 }),
+});
 output.addAudioTrack(audioSource);
 
 // Start the output

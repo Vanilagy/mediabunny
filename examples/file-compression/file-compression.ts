@@ -1,13 +1,13 @@
 import {
-	Input,
 	ALL_FORMATS,
 	BlobSource,
-	UrlSource,
-	Output,
 	BufferTarget,
-	Mp4OutputFormat,
 	Conversion,
-	QUALITY_VERY_LOW,
+	Input,
+	Mp4OutputFormat,
+	Output,
+	Quality,
+	UrlSource,
 } from 'mediabunny';
 import { registerAc3Decoder } from '@mediabunny/ac3';
 import { registerProresDecoder } from '@mediabunny/prores';
@@ -72,11 +72,11 @@ const compressFile = async (resource: File | string) => {
 			tracks: 'primary', // Keep only one track per type
 			video: {
 				width: 320, // Height will be deduced automatically to retain aspect ratio
-				bitrate: QUALITY_VERY_LOW,
+				quality: new Quality('very-low'),
 			},
 			audio: {
 				codec: 'opus',
-				bitrate: QUALITY_VERY_LOW,
+				quality: new Quality('very-low'),
 			},
 		});
 

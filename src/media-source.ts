@@ -27,7 +27,6 @@ import {
 	CallSerializer,
 	clamp,
 	clearIntervalUnthrottled,
-	DeepReadonly,
 	floorToDivisor,
 	last,
 	promiseWithResolvers,
@@ -53,20 +52,18 @@ import {
 	AudioSample,
 	audioSampleToInterleavedFormat,
 	toInterleavedAudioFormat,
-	VideoEncodeOptions,
 	VideoSample,
 	VideoSamplePixelFormat,
 } from './sample';
 import {
 	AudioEncodingConfig,
 	buildAudioEncoderConfig,
-	buildVideoEncoderConfig,
-	QuantizerBitrateModeCodec,
-	resolveVideoBaseQuantizer,
-	resolveVideoEncoderBitrate,
+	buildQuantizerEncodeOptions,
+	buildVideoEncoderConfigs,
+	resolveQuality,
 	validateAudioEncodingConfig,
 	validateVideoEncodingConfig,
-	validateVideoQuantizer,
+	VideoEncoderConfigCandidate,
 	VideoEncodingConfig,
 } from './encode';
 import { AudioResampler } from './resample';
@@ -244,7 +241,6 @@ class VideoEncoderWrapper {
 
 	// Frame rate normalization state
 	private frameRateLastSample: VideoSample | null = null;
-	private frameRateLastEncodeOptions: VideoEncodeOptions | undefined = undefined;
 	private frameRateLastTimestamp: number | null = null;
 	private frameRateLastEndTimestamp: number | null = null;
 
@@ -262,17 +258,14 @@ class VideoEncoderWrapper {
 	private customEncoderCallSerializer = new CallSerializer();
 	private customEncoderQueueSize = 0;
 
-	/**
-	 * The quantizer used for frames without a per-frame quantizer override. Will be non-null if and only if the
-	 * encoder is operating with bitrateMode 'quantizer'.
-	 */
-	private baseQuantizer: number | null = null;
+	// Set when the encoder uses quantizer-based rate control; carries the quantizer value applied to each frame
+	private defaultEncodeOptions: VideoEncoderEncodeOptions = {};
 
 	// Alpha stuff
 	private alphaEncoder: VideoEncoder | null = null;
 	private splitter: ColorAlphaSplitter | null = null;
 	private splitterCreationFailed = false;
-	private alphaFrameQueue: ({ frame: VideoFrame; quantizer: number | null } | null)[] = [];
+	private alphaFrameQueue: (VideoFrame | null)[] = [];
 
 	/**
 	 * Encoders typically throw their errors "out of band", meaning asynchronously in some other execution context.
@@ -294,15 +287,12 @@ class VideoEncoderWrapper {
 
 	constructor(private source: VideoSource, private encodingConfig: VideoEncodingConfig) {}
 
-	async add(videoSample: VideoSample, shouldClose: boolean, encodeOptions?: VideoEncodeOptions) {
+	async add(videoSample: VideoSample, shouldClose: boolean, encodeOptions?: VideoEncoderEncodeOptions) {
 		const originalSample = videoSample;
 
 		try {
 			this.checkForEncoderError();
 			this.source._ensureValidAdd();
-
-			// Before any state changes: a frame rejected halfway through would corrupt the frame rate padding state
-			this.validateQuantizers({ ...videoSample.encodeOptions, ...encodeOptions });
 
 			const config = this.encodingConfig;
 			const sizeChangeBehavior = config.sizeChangeBehavior ?? 'deny';
@@ -391,12 +381,11 @@ class VideoEncoderWrapper {
 						// Same frame rate slot, replace stored sample with the newer one
 						this.frameRateLastSample.close();
 						this.frameRateLastSample = videoSample.clone();
-						this.frameRateLastEncodeOptions = encodeOptions;
 						this.frameRateLastEndTimestamp = originalEndTimestamp;
 						return;
 					} else {
 						// Pad the gap by repeating the previous frame
-						await this.padFrameRate(alignedTimestamp);
+						await this.padFrameRate(alignedTimestamp, encodeOptions);
 					}
 				}
 
@@ -411,7 +400,6 @@ class VideoEncoderWrapper {
 
 				this.frameRateLastSample?.close();
 				this.frameRateLastSample = videoSample.clone();
-				this.frameRateLastEncodeOptions = encodeOptions;
 				this.frameRateLastTimestamp = alignedTimestamp;
 				this.frameRateLastEndTimestamp = originalEndTimestamp;
 			}
@@ -424,31 +412,12 @@ class VideoEncoderWrapper {
 		}
 	}
 
-	/** Validates quantizer values in encode options against the codec's scale, independent of browser support. */
-	private validateQuantizers(encodeOptions: DeepReadonly<VideoEncodeOptions>) {
-		if (this.encodingConfig.bitrateMode !== 'quantizer') {
-			return;
-		}
-
-		const codec = this.encodingConfig.codec as QuantizerBitrateModeCodec;
-
-		if (encodeOptions.quantizer !== undefined) {
-			validateVideoQuantizer(codec, encodeOptions.quantizer, 'encodeOptions.quantizer');
-		}
-		const codecSpecificQuantizer = encodeOptions[codec]?.quantizer;
-		if (codecSpecificQuantizer !== undefined && codecSpecificQuantizer !== null) {
-			// WebCodecs types this as a plain `unsigned short` without [EnforceRange], so an out-of-range value
-			// would silently wrap (65536 -> 0) and we'd encode with a totally different quantizer
-			validateVideoQuantizer(codec, codecSpecificQuantizer, `encodeOptions.${codec}.quantizer`);
-		}
-	}
-
 	/**
 	 * Runs the process function (if any) and encodes the resulting samples.
 	 */
 	private async processAndEncode(
 		videoSample: VideoSample,
-		encodeOptions?: VideoEncodeOptions,
+		encodeOptions?: VideoEncoderEncodeOptions,
 	) {
 		const config = this.encodingConfig;
 		let samplesToEncode: VideoSample[];
@@ -535,13 +504,12 @@ class VideoEncoderWrapper {
 				const multipleOfKeyFrameInterval = Math.floor(sampleToEncode.timestamp / keyFrameInterval);
 
 				const mergedEncodeOptions = {
+					...this.defaultEncodeOptions,
 					...sampleToEncode.encodeOptions,
 					...encodeOptions,
 				};
-				// Samples can also come out of a process function, so they weren't necessarily validated in `add`
-				this.validateQuantizers(mergedEncodeOptions);
 
-				const finalEncodeOptions: VideoEncodeOptions = {
+				const finalEncodeOptions = {
 					...mergedEncodeOptions,
 					keyFrame: mergedEncodeOptions.keyFrame !== undefined
 						? mergedEncodeOptions.keyFrame
@@ -551,25 +519,6 @@ class VideoEncoderWrapper {
 						: keyFrameInterval === 0
 							|| multipleOfKeyFrameInterval !== this.lastMultipleOfKeyFrameInterval,
 				};
-				// `quantizer` isn't part of WebCodecs, we only use it to derive the codec-specific field
-				delete finalEncodeOptions.quantizer;
-
-				let appliedQuantizer: number | null = null;
-				if (this.encodingConfig.bitrateMode === 'quantizer') {
-					const codec = this.encodingConfig.codec as QuantizerBitrateModeCodec;
-
-					if (this.baseQuantizer !== null) {
-						// WebCodecs wants the quantizer in the codec-specific dict, not at the top level
-						appliedQuantizer = mergedEncodeOptions[codec]?.quantizer
-							?? mergedEncodeOptions.quantizer
-							?? this.baseQuantizer;
-						finalEncodeOptions[codec] = { ...finalEncodeOptions[codec], quantizer: appliedQuantizer };
-					} else {
-						// Per-frame quantizers are documented as ignored after the variable bitrate fallback
-						delete finalEncodeOptions[codec];
-					}
-				}
-
 				this.lastMultipleOfKeyFrameInterval = multipleOfKeyFrameInterval;
 
 				this.encodingConfig.onEncodedSample?.(sampleToEncode);
@@ -654,7 +603,7 @@ class VideoEncoderWrapper {
 							// The splitter takes ownership, so no need to close the frames ourselves
 							const { colorFrame, alphaFrame } = await this.splitter.split(videoFrame);
 
-							this.alphaFrameQueue.push({ frame: alphaFrame, quantizer: appliedQuantizer });
+							this.alphaFrameQueue.push(alphaFrame);
 							try {
 								this.encoder.encode(colorFrame, finalEncodeOptions);
 							} finally {
@@ -683,7 +632,7 @@ class VideoEncoderWrapper {
 	}
 
 	/** Repeats the last frame rate sample to fill the gap up to the given timestamp. */
-	private async padFrameRate(until: number) {
+	private async padFrameRate(until: number, encodeOptions?: VideoEncoderEncodeOptions) {
 		const frameRate = this.encodingConfig.transform!.frameRate!;
 		assert(this.frameRateLastSample);
 
@@ -693,14 +642,19 @@ class VideoEncoderWrapper {
 			using sample = this.frameRateLastSample.clone();
 			sample.setTimestamp(this.frameRateLastTimestamp! + i / frameRate);
 			sample.setDuration(1 / frameRate);
-			await this.processAndEncode(sample, this.frameRateLastEncodeOptions);
+			await this.processAndEncode(sample, encodeOptions);
 		}
 	}
 
 	private ensureEncoder(videoSample: VideoSample) {
 		this.ensureEncoderPromise = (async () => {
-			const encoderConfig = buildVideoEncoderConfig({
+			// eslint-disable-next-line @typescript-eslint/no-deprecated
+			const quality = resolveQuality(this.encodingConfig.quality, this.encodingConfig.bitrate);
+			assert(quality !== undefined);
+
+			const candidates = buildVideoEncoderConfigs({
 				...this.encodingConfig,
+				quality,
 				width: videoSample.codedWidth,
 				height: videoSample.codedHeight,
 				squarePixelWidth: videoSample.squarePixelWidth,
@@ -708,64 +662,84 @@ class VideoEncoderWrapper {
 				framerate: this.source._connectedTrack?.metadata.frameRate,
 			});
 
-			const configQuantizer = 'quantizer' in this.encodingConfig ? this.encodingConfig.quantizer : undefined;
+			// Try the candidate configs in order of preference until we find one that is supported
+			let selected: VideoEncoderConfigCandidate | null = null;
+			let MatchingCustomEncoder: (typeof customVideoEncoders)[number] | undefined;
 
-			if (encoderConfig.bitrateMode === 'quantizer') {
-				this.baseQuantizer = resolveVideoBaseQuantizer(
-					this.encodingConfig.bitrate,
-					configQuantizer,
+			for (const candidate of candidates) {
+				const candidateConfig = candidate.config;
+				this.encodingConfig.onEncoderConfig?.(candidateConfig);
+
+				MatchingCustomEncoder = customVideoEncoders.find(x => x.supports(
 					this.encodingConfig.codec,
-					encoderConfig.width,
-					encoderConfig.height,
-				);
-			}
-
-			/** Downgrades the config to variable bitrate mode, for environments without quantizer mode support. */
-			const fallBackToVariableBitrate = () => {
-				encoderConfig.bitrateMode = 'variable';
-				encoderConfig.bitrate = resolveVideoEncoderBitrate(
-					this.encodingConfig.bitrate,
-					configQuantizer,
-					this.encodingConfig.codec,
-					encoderConfig.width,
-					encoderConfig.height,
-				);
-				this.baseQuantizer = null;
-			};
-
-			if (
-				encoderConfig.bitrateMode === 'quantizer'
-				&& !customVideoEncoders.some(x => x.supports(this.encodingConfig.codec, encoderConfig))
-			) {
-				// No custom encoder takes quantizer mode, so it comes down to the native encoder. Probe it with the
-				// mutations the native path applies below, or we'd decide based on a config that is never used.
-				let nativeSupportsQuantizer = false;
-
-				if (typeof VideoEncoder !== 'undefined') {
-					const probeConfig: VideoEncoderConfig = { ...encoderConfig, alpha: 'discard' };
-					if (this.encodingConfig.alpha === 'keep') {
-						probeConfig.latencyMode = 'quality';
-					}
-
-					try {
-						const probed = await VideoEncoder.isConfigSupported(probeConfig);
-						nativeSupportsQuantizer = probed.supported ?? false;
-					} catch {
-						// The browser threw when it encountered the bitrateMode it doesn't know
-					}
+					candidateConfig,
+				));
+				if (MatchingCustomEncoder) {
+					selected = candidate;
+					break;
 				}
 
-				if (!nativeSupportsQuantizer) {
-					fallBackToVariableBitrate();
+				if (typeof VideoEncoder === 'undefined') {
+					continue;
+				}
+
+				candidateConfig.alpha = 'discard'; // Since we handle alpha ourselves
+
+				if (this.encodingConfig.alpha === 'keep') {
+					// Encoding alpha requires using two parallel encoders, so we need to make sure they stay in sync
+					// and that neither of them drops frames. Setting latencyMode to 'quality' achieves this, because
+					// "User Agents MUST not drop frames to achieve the target bitrate and/or framerate."
+					candidateConfig.latencyMode = 'quality';
+				}
+
+				const hasOddDimension = candidateConfig.width % 2 === 1 || candidateConfig.height % 2 === 1;
+				if (
+					hasOddDimension
+					&& (this.encodingConfig.codec === 'avc' || this.encodingConfig.codec === 'hevc')
+				) {
+					// Throw a special error for this case as it gets hit often
+					throw new Error(
+						`The dimensions ${candidateConfig.width}x${candidateConfig.height} are not supported for codec`
+						+ ` '${this.encodingConfig.codec}'; both width and height must be even numbers. Make sure to`
+						+ ` round your dimensions to the nearest even number.`,
+					);
+				}
+
+				const support = await VideoEncoder.isConfigSupported(candidateConfig);
+				if (support.supported) {
+					selected = candidate;
+					break;
 				}
 			}
 
-			this.encodingConfig.onEncoderConfig?.(encoderConfig);
+			if (!selected) {
+				if (typeof VideoEncoder === 'undefined') {
+					throw new Error('VideoEncoder is not supported by this browser.');
+				}
 
-			const MatchingCustomEncoder = customVideoEncoders.find(x => x.supports(
-				this.encodingConfig.codec,
-				encoderConfig,
-			));
+				// The candidates only differ in their rate control, so we describe them as one config with a
+				// slash-separated list of the attempted rate control methods
+				const firstConfig = candidates[0]!.config;
+				const rateControls = candidates.map(({ config, quantizer }) =>
+					quantizer !== null ? `quantizer ${quantizer}` : `${config.bitrate} bps`,
+				);
+
+				throw new Error(
+					`This specific encoder configuration (${firstConfig.codec}, ${rateControls.join(' / ')},`
+					+ ` ${firstConfig.width}x${firstConfig.height}, hardware acceleration:`
+					+ ` ${firstConfig.hardwareAcceleration ?? 'no-preference'}) is not supported by this browser.`
+					+ ` Consider using another codec or changing your video parameters.`,
+				);
+			}
+
+			const encoderConfig = selected.config;
+			if (selected.quantizer !== null) {
+				// The chosen config uses quantizer-based rate control, so each frame must carry the quantizer value
+				this.defaultEncodeOptions = buildQuantizerEncodeOptions(
+					this.encodingConfig.codec,
+					selected.quantizer,
+				);
+			}
 
 			if (MatchingCustomEncoder) {
 				// @ts-expect-error "Can't create instance of abstract class 🤓"
@@ -799,42 +773,6 @@ class VideoEncoderWrapper {
 
 				await this.customEncoder.init();
 			} else {
-				if (typeof VideoEncoder === 'undefined') {
-					throw new Error('VideoEncoder is not supported by this browser.');
-				}
-
-				encoderConfig.alpha = 'discard'; // Since we handle alpha ourselves
-
-				if (this.encodingConfig.alpha === 'keep') {
-					// Encoding alpha requires using two parallel encoders, so we need to make sure they stay in sync
-					// and that neither of them drops frames. Setting latencyMode to 'quality' achieves this, because
-					// "User Agents MUST not drop frames to achieve the target bitrate and/or framerate."
-					encoderConfig.latencyMode = 'quality';
-				}
-
-				const hasOddDimension = encoderConfig.width % 2 === 1 || encoderConfig.height % 2 === 1;
-				if (
-					hasOddDimension
-					&& (this.encodingConfig.codec === 'avc' || this.encodingConfig.codec === 'hevc')
-				) {
-					// Throw a special error for this case as it gets hit often
-					throw new Error(
-						`The dimensions ${encoderConfig.width}x${encoderConfig.height} are not supported for codec`
-						+ ` '${this.encodingConfig.codec}'; both width and height must be even numbers. Make sure to`
-						+ ` round your dimensions to the nearest even number.`,
-					);
-				}
-
-				const support = await VideoEncoder.isConfigSupported(encoderConfig);
-				if (!support.supported) {
-					throw new Error(
-						`This specific encoder configuration (${encoderConfig.codec}, ${encoderConfig.bitrate} bps,`
-						+ ` ${encoderConfig.width}x${encoderConfig.height}, hardware acceleration:`
-						+ ` ${encoderConfig.hardwareAcceleration ?? 'no-preference'}) is not supported by this browser.`
-						+ ` Consider using another codec or changing your video parameters.`,
-					);
-				}
-
 				/** Queue of color chunks waiting for their alpha counterpart. */
 				const colorChunkQueue: {
 					chunk: EncodedVideoChunk;
@@ -914,26 +852,19 @@ class VideoEncoderWrapper {
 							return;
 						}
 
-						const alphaEntry = this.alphaFrameQueue.shift();
-						assert(alphaEntry !== undefined);
+						const alphaFrame = this.alphaFrameQueue.shift();
+						assert(alphaFrame !== undefined);
 
-						if (alphaEntry) {
-							const alphaEncodeOptions: VideoEncodeOptions = {
+						if (alphaFrame) {
+							this.alphaEncoder.encode(alphaFrame, {
+								...this.defaultEncodeOptions,
 								// Crucial: The alpha frame is forced to be a key frame whenever the color frame
 								// also is. Without this, playback can glitch and even crash in some browsers.
 								// This is the reason why the two encoders are wired in series and not in parallel.
 								keyFrame: chunk.type === 'key',
-							};
-							if (alphaEntry.quantizer !== null) {
-								// The alpha encoder shares the color encoder's config and therefore also operates
-								// in quantizer mode, so the alpha frame needs a quantizer too
-								const codec = this.encodingConfig.codec as QuantizerBitrateModeCodec;
-								alphaEncodeOptions[codec] = { quantizer: alphaEntry.quantizer };
-							}
-
-							this.alphaEncoder.encode(alphaEntry.frame, alphaEncodeOptions);
+							});
 							alphaEncoderQueue++;
-							alphaEntry.frame.close();
+							alphaFrame.close();
 							colorChunkQueue.push({ chunk, meta });
 						} else {
 							// There was no alpha component for this frame
@@ -954,17 +885,7 @@ class VideoEncoderWrapper {
 						this.setError(error);
 					},
 				});
-				try {
-					this.encoder.configure(encoderConfig);
-				} catch (error) {
-					if (encoderConfig.bitrateMode !== 'quantizer') {
-						throw error;
-					}
-
-					// Some encoders accept the config in isConfigSupported and still reject it here
-					fallBackToVariableBitrate();
-					this.encoder.configure(encoderConfig);
-				}
+				this.encoder.configure(encoderConfig);
 
 				if (this.encodingConfig.alpha === 'keep') {
 					const stack = new Error('Encoding error').stack;
@@ -1046,7 +967,6 @@ class VideoEncoderWrapper {
 
 			this.frameRateLastSample?.close();
 			this.frameRateLastSample = null;
-			this.frameRateLastEncodeOptions = undefined;
 
 			if (this.customEncoder) {
 				await this.customEncoderCallSerializer.call(() => this.customEncoder!.close())
@@ -1059,7 +979,7 @@ class VideoEncoderWrapper {
 					this.alphaEncoder.close();
 				}
 
-				this.alphaFrameQueue.forEach(x => x?.frame.close());
+				this.alphaFrameQueue.forEach(x => x?.close());
 				this.alphaFrameQueue.length = 0;
 
 				this.splitter?.close();
@@ -1360,7 +1280,7 @@ export class VideoSampleSource extends VideoSource {
 	 * @returns A Promise that resolves once the output is ready to receive more samples. You should await this Promise
 	 * to respect writer and encoder backpressure.
 	 */
-	add(videoSample: VideoSample, encodeOptions?: VideoEncodeOptions) {
+	add(videoSample: VideoSample, encodeOptions?: VideoEncoderEncodeOptions) {
 		if (!(videoSample instanceof VideoSample)) {
 			throw new TypeError('videoSample must be a VideoSample.');
 		}
@@ -1413,7 +1333,7 @@ export class CanvasSource extends VideoSource {
 	 * @returns A Promise that resolves once the output is ready to receive more samples. You should await this Promise
 	 * to respect writer and encoder backpressure.
 	 */
-	add(timestamp: number, duration = 0, encodeOptions?: VideoEncodeOptions) {
+	add(timestamp: number, duration = 0, encodeOptions?: VideoEncoderEncodeOptions) {
 		if (!Number.isFinite(timestamp) || timestamp < 0) {
 			throw new TypeError('timestamp must be a non-negative number.');
 		}
@@ -2237,10 +2157,14 @@ class AudioEncoderWrapper {
 		this.ensureEncoderPromise = (async () => {
 			const { numberOfChannels, sampleRate } = audioSample;
 
+			// eslint-disable-next-line @typescript-eslint/no-deprecated
+			const quality = resolveQuality(this.encodingConfig.quality, this.encodingConfig.bitrate);
+
 			const encoderConfig = buildAudioEncoderConfig({
 				numberOfChannels,
 				sampleRate,
 				...this.encodingConfig,
+				quality,
 			});
 			this.encodingConfig.onEncoderConfig?.(encoderConfig);
 

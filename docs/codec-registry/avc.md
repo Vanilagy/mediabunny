@@ -43,3 +43,7 @@ The full codec string begins with the prefix `'avc1.'` or `'avc3.'`, with a suff
 If the bitstream is in the _canonical_ (length-prefixed) format, `description` must be an `AVCDecoderConfigurationRecord` as defined in [ISO/IEC 14496-15](https://www.iso.org/standard/89118.html) Section 5.3.3.1.
 
 If the bitstream is in the _Annex B_ format, `description` must be undefined.
+
+## Quantizer range
+
+AVC has quantizer support and supports quantizer values in the range [0, 51].

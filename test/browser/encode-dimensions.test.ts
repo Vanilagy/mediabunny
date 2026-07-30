@@ -3,7 +3,7 @@ import { Output } from '../../src/output.js';
 import { Mp4OutputFormat } from '../../src/output-format.js';
 import { NullTarget } from '../../src/target.js';
 import { VideoSampleSource } from '../../src/media-source.js';
-import { canEncodeVideo, QUALITY_HIGH } from '../../src/encode.js';
+import { canEncodeVideo, Quality } from '../../src/encode.js';
 import { VideoSample } from '../../src/sample.js';
 
 test('Odd video dimensions fail for AVC', async () => {
@@ -14,7 +14,7 @@ test('Odd video dimensions fail for AVC', async () => {
 
 	const source = new VideoSampleSource({
 		codec: 'avc',
-		bitrate: QUALITY_HIGH,
+		quality: new Quality('high'),
 	});
 	output.addVideoTrack(source);
 
@@ -36,7 +36,7 @@ test('Odd video dimensions fail for HEVC', async () => {
 
 	const source = new VideoSampleSource({
 		codec: 'hevc',
-		bitrate: QUALITY_HIGH,
+		quality: new Quality('high'),
 	});
 	output.addVideoTrack(source);
 
@@ -58,7 +58,7 @@ test('Odd video dimensions pass for VP9', async () => {
 
 	const source = new VideoSampleSource({
 		codec: 'vp9',
-		bitrate: QUALITY_HIGH,
+		quality: new Quality('high'),
 	});
 	output.addVideoTrack(source);
 

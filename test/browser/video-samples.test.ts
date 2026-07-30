@@ -4,7 +4,7 @@ import { VideoSampleSource } from '../../src/media-source.js';
 import { Output } from '../../src/output.js';
 import { Mp4OutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
-import { QUALITY_MEDIUM } from '../../src/encode.js';
+import { Quality } from '../../src/encode.js';
 import { PacketType } from '../../src/packet.js';
 
 test('allocationSize', async () => {
@@ -516,7 +516,7 @@ const encodeAndAssertPacketTypes = async (
 	let i = 0;
 	const videoSource = new VideoSampleSource({
 		codec: 'vp8',
-		bitrate: QUALITY_MEDIUM,
+		quality: new Quality('medium'),
 		onEncodedPacket: packet => expect(packet.type).toBe(expectedPacketTypes[i++]),
 	});
 	output.addVideoTrack(videoSource);

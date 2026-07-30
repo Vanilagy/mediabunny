@@ -56,7 +56,7 @@ registerMediabunnyServer({
 Here, we set up a simple media compression server in Node.js. The client's request body is streamed to Mediabunny, the media gets processed, and the output is streamed directly to the disk. Memory usage is O(1) due to pipelining, and an overly fast uploader is automatically slowed down due to stream backpressure.
 
 ```ts
-import { ALL_FORMATS, Conversion, FilePathTarget, Input, Mp4OutputFormat, Output, QUALITY_MEDIUM, ReadableStreamSource } from "mediabunny";
+import { ALL_FORMATS, Conversion, FilePathTarget, Input, Mp4OutputFormat, Output, Quality, ReadableStreamSource } from "mediabunny";
 import { registerMediabunnyServer } from "@mediabunny/server";
 import { Readable } from "node:stream";
 import http from "node:http";
@@ -84,7 +84,7 @@ const server = http.createServer(async (req, res) => {
 			video: async track => ({
 				codec: 'avc',
 				height: Math.min(720, await track.getDisplayHeight()),
-				bitrate: QUALITY_MEDIUM,
+				quality: new Quality('medium'),
 			}),
 		});
 		await conversion.execute();

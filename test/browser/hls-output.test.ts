@@ -3,7 +3,7 @@ import { Output } from '../../src/output.js';
 import { HlsOutputFormat, MpegTsOutputFormat } from '../../src/output-format.js';
 import { BufferTarget, PathedTarget } from '../../src/target.js';
 import { CanvasSource } from '../../src/media-source.js';
-import { QUALITY_HIGH } from '../../src/encode.js';
+import { Quality } from '../../src/encode.js';
 
 test('HLS output, key frames aligning with segment boundaries by default', async () => {
 	let playlistText: string | null = null;
@@ -23,7 +23,7 @@ test('HLS output, key frames aligning with segment boundaries by default', async
 
 	const videoSource = new CanvasSource(canvas, {
 		codec: 'avc',
-		bitrate: QUALITY_HIGH,
+		quality: new Quality('high'),
 	});
 	output.addVideoTrack(videoSource);
 

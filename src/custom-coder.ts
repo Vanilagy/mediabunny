@@ -12,7 +12,7 @@ import { canEncodeAudioMemo, canEncodeVideoMemo } from './encode';
 import { Logging } from './logging';
 import { MaybePromise } from './misc';
 import { EncodedPacket } from './packet';
-import { AudioSample, VideoEncodeOptions, VideoSample } from './sample';
+import { AudioSample, VideoSample } from './sample';
 
 /**
  * Base class for custom video decoders. To add your own custom video decoder, extend this class, implement the
@@ -103,7 +103,7 @@ export abstract class CustomVideoEncoder {
 	/** Called after encoder creation; can be used for custom initialization logic. */
 	abstract init(): MaybePromise<void>;
 	/** Encodes the provided video sample. */
-	abstract encode(videoSample: VideoSample, options: VideoEncodeOptions): MaybePromise<void>;
+	abstract encode(videoSample: VideoSample, options: VideoEncoderEncodeOptions): MaybePromise<void>;
 	/** Encodes all remaining video samples and then resolves. */
 	abstract flush(): MaybePromise<void>;
 	/** Called when the encoder is no longer needed and its resources can be freed. */

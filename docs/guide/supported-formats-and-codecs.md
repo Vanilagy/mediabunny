@@ -131,14 +131,14 @@ Video codecs are checked using 1280x720 @1Mbps, while audio codecs are checked u
 
 You can also check encodability using specific configurations:
 ```ts
-import { canEncodeVideo, canEncodeAudio } from 'mediabunny';
+import { canEncodeVideo, canEncodeAudio, Quality } from 'mediabunny';
 
 canEncodeVideo('hevc', {
-	width: 1920, height: 1080, bitrate: 1e7
+	width: 1920, height: 1080, quality: new Quality({ bitrate: 1e7 })
 }); // => Promise<boolean>
 
 canEncodeAudio('aac', {
-	numberOfChannels: 1, sampleRate: 44100, bitrate: 192e3
+	numberOfChannels: 1, sampleRate: 44100, quality: new Quality({ bitrate: 192e3 })
 }); // => Promise<boolean>
 ```
 
@@ -153,6 +153,7 @@ import {
 	getEncodableVideoCodecs,
 	getEncodableAudioCodecs,
 	getEncodableSubtitleCodecs,
+	Quality,
 } from 'mediabunny';
 
 getEncodableCodecs(); // => Promise<MediaCodec[]>
@@ -164,7 +165,7 @@ getEncodableSubtitleCodecs(); // => Promise<SubtitleCodec[]>
 // Here, we check which of AVC, HEVC and VP8 can be encoded at 1920x1080 @10Mbps:
 getEncodableVideoCodecs(
 	['avc', 'hevc', 'vp8'],
-	{ width: 1920, height: 1080, bitrate: 1e7 },
+	{ width: 1920, height: 1080, quality: new Quality({ bitrate: 1e7 }) },
 ); // => Promise<VideoCodec[]>
 ```
 
@@ -176,6 +177,7 @@ import {
 	getFirstEncodableVideoCodec,
 	getFirstEncodableAudioCodec,
 	getFirstEncodableSubtitleCodec,
+	Quality,
 } from 'mediabunny';
 
 getFirstEncodableVideoCodec(['avc', 'vp9', 'av1']); // => Promise<VideoCodec | null>
@@ -183,7 +185,7 @@ getFirstEncodableAudioCodec(['opus', 'aac']); // => Promise<AudioCodec | null>
 
 getFirstEncodableVideoCodec(
 	['avc', 'hevc', 'vp8'],
-	{ width: 1920, height: 1080, bitrate: 1e7 },
+	{ width: 1920, height: 1080, quality: new Quality({ bitrate: 1e7 }) },
 ); // => Promise<VideoCodec | null>
 ```
 
@@ -313,7 +315,7 @@ class {
 	static supports(codec: AudioCodec, config: AudioEncoderConfig): boolean;
 
 	init(): Promise<void> | void;
-	encode(sample: VideoSample, options: VideoEncodeOptions): Promise<void> | void; // For video
+	encode(sample: VideoSample, options: VideoEncoderEncodeOptions): Promise<void> | void; // For video
 	encode(sample: AudioSample): Promise<void> | void; // For audio
 	flush(): Promise<void> | void;
 	close(): Promise<void> | void;
@@ -324,7 +326,7 @@ class {
 - `init`\
 	Called by the library after your class is instantiated. Place any initialization logic here.
 - `encode`\
-	Called for each sample that is to be encoded. The resulting encoded packet **must** then be passed to the `onPacket` method. When encoding video in [quantizer mode](./media-sources#quantizer-mode), the quantizer for the frame is passed in the codec-specific field of the options, such as `options.avc.quantizer`.
+	Called for each sample that is to be encoded. The resulting encoded packet **must** then be passed to the `onPacket` method.
 - `flush`\
 	Called when the encoder is expected to finish the encoding process for all remaining samples that haven't finished encoding yet. This method **must** return/resolve only once all samples passed to `encode` have been fully encoded. It **must** then reset its own internal state to be ready for the next encoding batch.
 - `close`\

@@ -35,3 +35,7 @@ The full codec string begins with the prefix `'av01.'`, with a variable-length s
 ## `VideoDecoderConfig` description
 
 `description` is not used for this codec.
+
+## Quantizer range
+
+AV1 has quantizer support and supports quantizer values in the range [0, 255].

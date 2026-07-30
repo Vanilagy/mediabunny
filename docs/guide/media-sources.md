@@ -50,10 +50,8 @@ All video sources that handle encoding internally require you to specify a `Vide
 ```ts
 type VideoEncodingConfig = {
 	codec: VideoCodec;
-	bitrate?: number | Quality; // Required unless bitrateMode is 'quantizer'
+	quality: Quality;
 	alpha?: 'discard' | 'keep';
-	bitrateMode?: 'constant' | 'variable' | 'quantizer';
-	quantizer?: number;
 	latencyMode?: 'quality' | 'realtime';
 	keyFrameInterval?: number;
 	fullCodecString?: string;
@@ -85,12 +83,10 @@ type VideoEncodingConfig = {
 };
 ```
 - `codec`: The [video codec](./supported-formats-and-codecs#video-codecs) used for encoding.
-- `bitrate`: The target number of bits per second. Alternatively, this can be a [subjective quality](#subjective-qualities). Required unless `bitrateMode` is set to `'quantizer'`, in which case it only acts as a fallback for browsers without quantizer mode support.
+- `quality`: The desired quality of the encoded video. See [Encoding quality](#encoding-quality).
 - `alpha`:  What to do with alpha data contained in the video samples.
 	- `'discard'` (default): Only the samples' color data is kept; the video is opaque.
 	- `'keep'`: The samples' alpha data is also encoded as side data. Make sure to pair this mode with a container format that supports transparency (such as WebM or Matroska).
-- `bitrateMode`: Can be used to control constant vs. variable bitrate, or to enable [quantizer mode](#quantizer-mode).
-- `quantizer`: The quantizer value used for encoded frames in [quantizer mode](#quantizer-mode).
 - `latencyMode`: The latency mode as specified by the WebCodecs API. Browsers default to `quality`. Media stream-driven video sources will automatically use the `realtime` setting.
 - `keyFrameInterval`: The maximum interval in seconds between two adjacent key frames. Defaults to 2 seconds. More frequent key frames improve seeking behavior but increase file size. When using multiple video tracks, this value should be set to the same value for all tracks.
 - `fullCodecString`: Allows you to optionally specify the full codec string used by the video encoder, as specified in the [Mediabunny Codec Registry](/codec-registry/overview). For example, you may set it to `'avc1.42001f'` when using AVC. Keep in mind that the codec string must still match the codec specified in `codec`. If you don't set this field, a codec string will be generated automatically.
@@ -119,8 +115,7 @@ All audio sources that handle encoding internally require you to specify an `Aud
 ```ts
 type AudioEncodingConfig = {
 	codec: AudioCodec;
-	bitrate?: number | Quality;
-	bitrateMode?: 'constant' | 'variable';
+	quality?: Quality;
 	fullCodecString?: string;
 
 	transform?: {
@@ -141,8 +136,7 @@ type AudioEncodingConfig = {
 };
 ```
 - `codec`: The [audio codec](./supported-formats-and-codecs#audio-codecs) used for encoding. Can be omitted for uncompressed PCM codecs.
-- `bitrate`: The target number of bits per second. Alternatively, this can be a [subjective quality](#subjective-qualities).
-- `bitrateMode`: Can be used to control constant vs. variable bitrate.
+- `quality`: The desired quality of the encoded audio; unused for PCM codecs. See [Encoding quality](#encoding-quality).
 - `fullCodecString`: Allows you to optionally specify the full codec string used by the audio encoder, as specified in the [Mediabunny Codec Registry](/codec-registry/overview). For example, you may set it to `'mp4a.40.2'` when using AAC. Keep in mind that the codec string must still match the codec specified in `codec`. If you don't set this field, a codec string will be generated automatically.
 - `transform`: Optional transformations to apply to the audio samples before they are passed to the encoder.
 	- `numberOfChannels`: The desired number of output channels to up/downmix to.
@@ -151,70 +145,60 @@ type AudioEncodingConfig = {
 - `onEncodedPacket`: Called for each successfully encoded packet. Useful for determining encoding progress.	
 - `onEncoderConfig`: Called when the internal encoder config, as used by the WebCodecs API, is created. You can use this to introspect the full codec string.
 
-### Subjective qualities
+### Encoding quality
 
-Mediabunny provides five subjective quality options as an alternative to manually providing a bitrate. From a subjective quality, a bitrate will be calculated internally based on the codec and track information (width, height, sample rate, ...).
+Mediabunny provides the [`Quality`](../api/Quality) class as a way to describe the desired encoding quality, i.e. how much the media should be compressed.
 
-```ts
-import {
-	QUALITY_VERY_LOW,
-	QUALITY_LOW,
-	QUALITY_MEDIUM,
-	QUALITY_HIGH,
-	QUALITY_VERY_HIGH,
-} from 'mediabunny';
-```
+#### Qualitative quality
 
-If you need finer control, you can create a quality with a custom quality factor. A factor of 1 corresponds to `QUALITY_MEDIUM`, and doubling the factor roughly doubles the target bitrate. For reference, the presets use the factors 0.3, 0.6, 1, 2, and 4.
+Qualitative qualities are defined abstractly will automatically map to an underlying bitrate or quantizer based on codec and media parameters (such as video dimensions).
 
 ```ts
 import { Quality } from 'mediabunny';
 
-const quality = new Quality(1.5); // Between QUALITY_MEDIUM and QUALITY_HIGH
+// A Quality can be created from these five pre-defined values
+new Quality('very-low');
+new Quality('low');
+new Quality('medium');
+new Quality('high');
+new Quality('very-high');
+
+// Or from a quality value from 0 to 1. Here, 0 represents the worst quality and
+// 1 the best.
+new Quality(0.6);
 ```
 
-### Quantizer mode
+#### Quantitative quality
 
-Instead of targeting a bitrate, video encoders can be operated in *quantizer mode*, in which a fixed quantizer is used for each frame. This gives you direct control over encoding fidelity, similar to constant-QP encoding in other tools. Quantizer mode is available for the codecs `'avc'`, `'hevc'`, `'vp9'` and `'av1'`.
+Quantitative qualities allow explicit control over compression parameters.
 
 ```ts
-import { VideoSampleSource } from 'mediabunny';
+import { Quality } from 'mediabunny';
 
-const source = new VideoSampleSource({
-	codec: 'av1',
-	bitrateMode: 'quantizer',
-	quantizer: 30,
+// 1 Mbps bitrate (variable)
+new Quality({
+	bitrate: 1e6,
+});
+
+// 1 Mbps bitrate (constant)
+new Quality({
+	bitrate: 1e6,
+	bitrateMode: 'constant',
+});
+
+// Specific quantizer value to use. The valid range of values depends on each
+// codec and is defined in the Mediabunny Codec Registry. Throws if quantizer
+// mode is unavailable.
+new Quality({
+	quantizer: 32,
+});
+
+// Quantizer and bitrate combined, with bitrate used as a fallback
+new Quality({
+	quantizer: 32,
+	bitrate: 1e6,
 });
 ```
-
-The quantizer uses the scale of the codec: 0 to 51 for `'avc'` and `'hevc'`, 0 to 63 for `'vp9'`, and 0 to 255 for `'av1'` (which uses a quantizer index), where lower values mean higher fidelity. Since the value is only meaningful on a known scale, the [Conversion API](./converting-media-files) requires an explicit `codec` whenever a `quantizer` is set; pass a [subjective quality](#subjective-qualities) instead if you want the codec to stay open. When `quantizer` is omitted, a fitting value is derived from `bitrate` instead - this way, you can also use a [subjective quality](#subjective-qualities) to control the quantizer in a codec-independent way:
-
-```ts
-import { VideoSampleSource, QUALITY_HIGH } from 'mediabunny';
-
-const source = new VideoSampleSource({
-	codec: 'av1',
-	bitrateMode: 'quantizer',
-	bitrate: QUALITY_HIGH, // Maps to a fitting quantizer for the codec
-});
-```
-
-The quantizer can also be overridden for each frame individually by passing encode options to `add`:
-
-```ts
-await source.add(videoSample, { quantizer: 24 });
-```
-
-::: warning
-Not all browsers support quantizer mode. When support is missing, the encoder automatically falls back to variable bitrate mode, using a bitrate derived from `bitrate` or `quantizer`; per-frame quantizer values are then ignored. You can check for support using [`canEncodeVideo`](./supported-formats-and-codecs#querying-codec-encodability):
-```ts
-const supported = await canEncodeVideo('av1', { bitrateMode: 'quantizer' });
-```
-:::
-
-::: warning
-On Apple platforms (macOS, iOS), quantizer mode for `'avc'` and `'hevc'` is only available on the hardware encoder, and very low quantizers on that encoder have been observed to fail and, in one case, to crash the operating system. Prefer moderate quantizers for these codecs, or use `'vp9'` or `'av1'`, which encode in software.
-:::
 
 ## Video sources
 
@@ -225,11 +209,11 @@ Video sources feed data to video tracks on an `Output`. They all extend the abst
 This source takes [video samples](./packets-and-samples#videosample), encodes them, and passes the encoded data to the output.
 
 ```ts
-import { VideoSampleSource } from 'mediabunny';
+import { VideoSampleSource, Quality } from 'mediabunny';
 
 const sampleSource = new VideoSampleSource({
 	codec: 'avc',
-	bitrate: 1e6,
+	quality: new Quality({ bitrate: 1e6 }),
 });
 
 await sampleSource.add(videoSample);
@@ -244,11 +228,11 @@ await sampleSource.add(videoSample, { keyFrame: true });
 This source simplifies a common pattern: A single canvas is repeatedly updated in a render loop and each frame is added to the output file.
 
 ```ts
-import { CanvasSource, QUALITY_MEDIUM } from 'mediabunny';
+import { CanvasSource, Quality } from 'mediabunny';
 
 const canvasSource = new CanvasSource(canvasElement, {
 	codec: 'av1',
-	bitrate: QUALITY_MEDIUM,
+	quality: new Quality('medium'),
 });
 
 await canvasSource.add(0.0, 0.1); // Timestamp, duration (in seconds)
@@ -264,7 +248,7 @@ await canvasSource.add(0.3, 0.1, { keyFrame: true });
 This is a source for use with the [Media Capture and Streams API](https://developer.mozilla.org/en-US/docs/Web/API/Media_Capture_and_Streams_API). Use this source if you want to pipe a real-time video source (such as a webcam or screen recording) to an output file.
 
 ```ts
-import { MediaStreamVideoTrackSource } from 'mediabunny';
+import { MediaStreamVideoTrackSource, Quality } from 'mediabunny';
 
 // Get the user's screen
 const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
@@ -272,7 +256,7 @@ const videoTrack = stream.getVideoTracks()[0];
 
 const videoTrackSource = new MediaStreamVideoTrackSource(videoTrack, {
 	codec: 'vp9',
-	bitrate: 1e7,
+	quality: new Quality({ bitrate: 1e7 }),
 });
 
 // Make sure to allow any internal errors to properly bubble up
@@ -398,11 +382,11 @@ Audio sources feed data to audio tracks on an `Output`. They all extend the abst
 This source takes [audio samples](./packets-and-samples#audiosample), encodes them, and passes the encoded data to the output.
 
 ```ts
-import { AudioSampleSource } from 'mediabunny';
+import { AudioSampleSource, Quality } from 'mediabunny';
 
 const sampleSource = new AudioSampleSource({
 	codec: 'aac',
-	bitrate: 128e3,
+	quality: new Quality({ bitrate: 128e3 }),
 });
 
 await sampleSource.add(audioSample);
@@ -414,11 +398,11 @@ audioSample.close(); // If it's not needed anymore
 This source directly accepts instances of `AudioBuffer` as data, simplifying usage with the Web Audio API. The first AudioBuffer will be played at timestamp 0, and any subsequent AudioBuffer will be appended after all previous AudioBuffers.
 
 ```ts
-import { AudioBufferSource, QUALITY_MEDIUM } from 'mediabunny';
+import { AudioBufferSource, Quality } from 'mediabunny';
 
 const bufferSource = new AudioBufferSource({
 	codec: 'opus',
-	bitrate: QUALITY_MEDIUM,
+	quality: new Quality('medium'),
 });
 
 await bufferSource.add(audioBuffer1);
@@ -431,7 +415,7 @@ await bufferSource.add(audioBuffer3);
 This is a source for use with the [Media Capture and Streams API](https://developer.mozilla.org/en-US/docs/Web/API/Media_Capture_and_Streams_API). Use this source if you want to pipe a real-time audio source (such as a microphone or audio from the user's computer) to an output file.
 
 ```ts
-import { MediaStreamAudioTrackSource } from 'mediabunny';
+import { MediaStreamAudioTrackSource, Quality } from 'mediabunny';
 
 // Get the user's microphone
 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -439,7 +423,7 @@ const audioTrack = stream.getAudioTracks()[0];
 
 const audioTrackSource = new MediaStreamAudioTrackSource(audioTrack, {
 	codec: 'opus',
-	bitrate: 128e3,
+	quality: new Quality({ bitrate: 128e3 }),
 });
 
 // Make sure to allow any internal errors to properly bubble up
