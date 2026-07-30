@@ -720,8 +720,9 @@ export const videoSampleDescription = (
 	u16(1), // Frame count
 
 	// Compressor name
+	u8('Mediabunny'.length), // Weird Pascal-style string
 	ascii('Mediabunny'),
-	Array(32 - 'Mediabunny'.length).fill(0),
+	Array(31 - 'Mediabunny'.length).fill(0),
 
 	u16(trackData.info.hasAlphaChannel ? 32 : 24), // Depth
 	i16(0xffff), // Pre-defined
