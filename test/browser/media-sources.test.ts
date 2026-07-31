@@ -125,6 +125,36 @@ test('VideoSampleSource, same-sized frames with width and height set', async () 
 	input.dispose();
 });
 
+// eslint-disable-next-line @stylistic/max-len
+test('VideoSampleSource, encoder resize passes original frames to an encoder configured at the target size', async () => {
+	let encoderConfig: VideoEncoderConfig | undefined;
+	const encodedSampleDimensions: { width: number; height: number }[] = [];
+	const buffer = await encodeFrames(
+		{
+			codec: 'vp8',
+			quality: new Quality('medium'),
+			transform: { width: 50, height: 80, fit: 'fill', resizeMode: 'encoder' },
+			onEncoderConfig: config => encoderConfig = config,
+			onEncodedSample: sample => encodedSampleDimensions.push({
+				width: sample.codedWidth,
+				height: sample.codedHeight,
+			}),
+		},
+		[{ width: 100, height: 100 }, { width: 100, height: 100 }],
+	);
+
+	expect(encoderConfig).toMatchObject({ width: 50, height: 80 });
+	expect(encodedSampleDimensions).toEqual([
+		{ width: 100, height: 100 },
+		{ width: 100, height: 100 },
+	]);
+
+	const { input, track } = await readBackTrack(buffer);
+	expect(await track.getCodedWidth()).toBe(50);
+	expect(await track.getCodedHeight()).toBe(80);
+	input.dispose();
+});
+
 test('VideoSampleSource, same-sized frames with rotation set to 90', async () => {
 	const buffer = await encodeFrames(
 		{ codec: 'vp8', quality: new Quality('medium'), transform: { rotate: 90 } },

@@ -296,6 +296,7 @@ class VideoEncoderWrapper {
 
 			const config = this.encodingConfig;
 			const sizeChangeBehavior = config.sizeChangeBehavior ?? 'deny';
+			const useEncoderResize = config.transform?.resizeMode === 'encoder';
 			let isSizeChange = false;
 
 			// Ensure video sample size remains constant or handle the change
@@ -317,16 +318,20 @@ class VideoEncoderWrapper {
 			}
 
 			// Determine if we need to apply transformations via canvas
-			const hasTransformConfig = config.transform?.width !== undefined
+			const hasResizeTransform = !useEncoderResize && (
+				config.transform?.width !== undefined
 				|| config.transform?.height !== undefined
+			);
+			const hasTransformConfig = hasResizeTransform
 				|| config.transform?.rotate !== undefined
 				|| config.transform?.crop !== undefined
 				|| config.transform?.force === true;
-			const needsTransform = hasTransformConfig || (isSizeChange && sizeChangeBehavior !== 'passThrough');
+			const needsTransform = hasTransformConfig
+				|| (isSizeChange && sizeChangeBehavior !== 'passThrough' && !useEncoderResize);
 
 			if (needsTransform) {
-				let targetWidth = config.transform?.width;
-				let targetHeight = config.transform?.height;
+				let targetWidth = useEncoderResize ? undefined : config.transform?.width;
+				let targetHeight = useEncoderResize ? undefined : config.transform?.height;
 				let appliedFit: 'fill' | 'contain' | 'cover' = config.transform?.fit ?? 'fill';
 
 				// If the size changed and behavior is fill/contain/cover, lock to the original output dimensions
@@ -352,8 +357,12 @@ class VideoEncoderWrapper {
 
 				// Save the output dimensions of the first frame
 				if (this.outputWidth === null || this.outputHeight === null) {
-					this.outputWidth = transformed.displayWidth;
-					this.outputHeight = transformed.displayHeight;
+					this.outputWidth = useEncoderResize
+						? config.transform!.width!
+						: transformed.displayWidth;
+					this.outputHeight = useEncoderResize
+						? config.transform!.height!
+						: transformed.displayHeight;
 				}
 
 				if (shouldClose) {
@@ -365,8 +374,12 @@ class VideoEncoderWrapper {
 			} else {
 				// If no canvas is needed, we still need to record the output dimensions for the first frame
 				if (this.outputWidth === null || this.outputHeight === null) {
-					this.outputWidth = videoSample.codedWidth;
-					this.outputHeight = videoSample.codedHeight;
+					this.outputWidth = useEncoderResize
+						? config.transform!.width!
+						: videoSample.codedWidth;
+					this.outputHeight = useEncoderResize
+						? config.transform!.height!
+						: videoSample.codedHeight;
 				}
 			}
 
@@ -655,10 +668,18 @@ class VideoEncoderWrapper {
 			const candidates = buildVideoEncoderConfigs({
 				...this.encodingConfig,
 				quality,
-				width: videoSample.codedWidth,
-				height: videoSample.codedHeight,
-				squarePixelWidth: videoSample.squarePixelWidth,
-				squarePixelHeight: videoSample.squarePixelHeight,
+				width: this.encodingConfig.transform?.resizeMode === 'encoder'
+					? this.encodingConfig.transform.width!
+					: videoSample.codedWidth,
+				height: this.encodingConfig.transform?.resizeMode === 'encoder'
+					? this.encodingConfig.transform.height!
+					: videoSample.codedHeight,
+				squarePixelWidth: this.encodingConfig.transform?.resizeMode === 'encoder'
+					? this.encodingConfig.transform.width!
+					: videoSample.squarePixelWidth,
+				squarePixelHeight: this.encodingConfig.transform?.resizeMode === 'encoder'
+					? this.encodingConfig.transform.height!
+					: videoSample.squarePixelHeight,
 				framerate: this.source._connectedTrack?.metadata.frameRate,
 			});
 

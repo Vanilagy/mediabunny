@@ -111,6 +111,48 @@ test('Fan-out', async () => {
 	expect(await tracks[1]!.getDisplayHeight()).toBe(360);
 });
 
+test('Encoder resizing passes original-resolution frames through to the encoder', async () => {
+	using input = new Input({
+		source: new UrlSource('/video.mp4'),
+		formats: ALL_FORMATS,
+	});
+	const inputTrack = await input.getPrimaryVideoTrack();
+	assert(inputTrack);
+	const inputWidth = await inputTrack.getCodedWidth();
+	const inputHeight = await inputTrack.getCodedHeight();
+	const processedDimensions: { width: number; height: number }[] = [];
+
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+	const conversion = await Conversion.init({
+		input,
+		output,
+		video: {
+			height: 360,
+			resizeMode: 'encoder',
+			process: (sample) => {
+				processedDimensions.push({ width: sample.codedWidth, height: sample.codedHeight });
+				return sample;
+			},
+		},
+		audio: { discard: true },
+	});
+	await conversion.execute();
+
+	expect(processedDimensions.length).toBeGreaterThan(0);
+	expect(processedDimensions.every(x => x.width === inputWidth && x.height === inputHeight)).toBe(true);
+
+	using resizedInput = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const resizedTrack = await resizedInput.getPrimaryVideoTrack();
+	assert(resizedTrack);
+	expect(await resizedTrack.getDisplayHeight()).toBe(360);
+});
+
 // eslint-disable-next-line @stylistic/max-len
 const aacPacketData = new Uint8Array([255, 241, 77, 128, 3, 159, 252, 0, 208, 0, 1, 3, 64, 0, 13, 0, 0, 17, 52, 0, 0, 208, 0, 3, 6, 128, 0, 56]);
 const aacMetadata: EncodedAudioChunkMetadata = {
