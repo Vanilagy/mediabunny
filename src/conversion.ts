@@ -191,7 +191,7 @@ export type ConversionVideoOptions = {
 	/**
 	 * How resizing is performed. `'canvas'` (default) resizes decoded frames before encoding and supports all fitting
 	 * modes. `'encoder'` passes frames at their original resolution and lets the encoder scale them, which may improve
-	 * quality or performance. Encoder resizing only supports the `'fill'` fitting mode.
+	 * quality or performance. Encoder resizing only supports the `'fill'` and `'cover'` fitting modes.
 	 */
 	resizeMode?: 'canvas' | 'encoder';
 	/**
@@ -388,8 +388,14 @@ const validateVideoOptions = (videoOptions: ConversionVideoOptions) => {
 	if (videoOptions?.resizeMode !== undefined && !['canvas', 'encoder'].includes(videoOptions.resizeMode)) {
 		throw new TypeError('options.video.resizeMode, when provided, must be one of \'canvas\' or \'encoder\'.');
 	}
-	if (videoOptions?.resizeMode === 'encoder' && videoOptions.fit !== undefined && videoOptions.fit !== 'fill') {
-		throw new TypeError('options.video.fit must be \'fill\' when options.video.resizeMode is \'encoder\'.');
+	if (
+		videoOptions?.resizeMode === 'encoder'
+		&& videoOptions.fit !== undefined
+		&& !['fill', 'cover'].includes(videoOptions.fit)
+	) {
+		throw new TypeError(
+			'options.video.fit must be \'fill\' or \'cover\' when options.video.resizeMode is \'encoder\'.',
+		);
 	}
 	if (
 		videoOptions?.width !== undefined
@@ -1482,12 +1488,13 @@ export class Conversion {
 			assert(encodingConfig.transform);
 
 			const needsResize = width !== originalWidth || height !== originalHeight;
-			if (needsResize) {
+			const needsEncoderTransform = trackOptions.resizeMode === 'encoder' && (needsResize || !!crop);
+			if (needsResize || needsEncoderTransform) {
 				encodingConfig.transform.resizeMode = trackOptions.resizeMode;
 				if (trackOptions.resizeMode === 'encoder') {
 					encodingConfig.transform.width = width;
 					encodingConfig.transform.height = height;
-					encodingConfig.transform.fit = 'fill';
+					encodingConfig.transform.fit = trackOptions.fit ?? 'fill';
 				}
 			}
 			let needsRerender = (needsResize && trackOptions.resizeMode !== 'encoder')
@@ -1496,7 +1503,7 @@ export class Conversion {
 					|| trackOptions.process !== undefined
 					|| trackOptions.resizeMode === 'encoder'
 				))
-				|| !!crop
+				|| (!!crop && trackOptions.resizeMode !== 'encoder')
 				// Don't expect encoders to reliably handle non-square pixels:
 				|| squarePixelWidth !== await track.getCodedWidth()
 				|| squarePixelHeight !== await track.getCodedHeight();

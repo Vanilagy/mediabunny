@@ -90,7 +90,7 @@ export type VideoTransformOptions = {
 	 * How resizing is performed. `'canvas'` (default) resizes frames before encoding and supports all fitting modes.
 	 * `'encoder'` passes frames to the encoder at their original resolution and lets the encoder scale them to the
 	 * configured width and height. Encoder resizing may be faster or higher-quality, but only supports the `'fill'`
-	 * fitting mode and requires both width and height to be set.
+	 * and `'cover'` fitting modes and requires both width and height to be set.
 	 */
 	resizeMode?: 'canvas' | 'encoder';
 	/**
@@ -227,10 +227,10 @@ export const validateVideoEncodingConfig = (config: VideoEncodingConfig) => {
 		if (
 			config.transform.resizeMode === 'encoder'
 			&& config.transform.fit !== undefined
-			&& config.transform.fit !== 'fill'
+			&& !['fill', 'cover'].includes(config.transform.fit)
 		) {
 			throw new TypeError(
-				'config.transform.fit must be "fill" when config.transform.resizeMode is "encoder".',
+				'config.transform.fit must be "fill" or "cover" when config.transform.resizeMode is "encoder".',
 			);
 		}
 		if (

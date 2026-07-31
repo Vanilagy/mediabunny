@@ -324,7 +324,7 @@ class VideoEncoderWrapper {
 			);
 			const hasTransformConfig = hasResizeTransform
 				|| config.transform?.rotate !== undefined
-				|| config.transform?.crop !== undefined
+				|| (!useEncoderResize && config.transform?.crop !== undefined)
 				|| config.transform?.force === true;
 			const needsTransform = hasTransformConfig
 				|| (isSizeChange && sizeChangeBehavior !== 'passThrough' && !useEncoderResize);
@@ -428,6 +428,43 @@ class VideoEncoderWrapper {
 	/**
 	 * Runs the process function (if any) and encodes the resulting samples.
 	 */
+	private getNativeCrop(videoSample: VideoSample) {
+		const transform = this.encodingConfig.transform;
+		if (
+			transform?.resizeMode !== 'encoder'
+			|| transform.rotate !== undefined
+			|| transform.force === true
+		) {
+			return null;
+		}
+
+		let left = transform.crop?.left ?? 0;
+		let top = transform.crop?.top ?? 0;
+		let width = transform.crop?.width ?? videoSample.codedWidth;
+		let height = transform.crop?.height ?? videoSample.codedHeight;
+
+		if (transform.fit === 'cover') {
+			const targetAspectRatio = transform.width! / transform.height!;
+			const sourceAspectRatio = width / height;
+
+			if (sourceAspectRatio > targetAspectRatio) {
+				const newWidth = Math.round(height * targetAspectRatio);
+				left += Math.round((width - newWidth) / 2);
+				width = newWidth;
+			} else if (sourceAspectRatio < targetAspectRatio) {
+				const newHeight = Math.round(width / targetAspectRatio);
+				top += Math.round((height - newHeight) / 2);
+				height = newHeight;
+			}
+		}
+
+		if (left === 0 && top === 0 && width === videoSample.codedWidth && height === videoSample.codedHeight) {
+			return null;
+		}
+
+		return { left, top, width, height };
+	}
+
 	private async processAndEncode(
 		videoSample: VideoSample,
 		encodeOptions?: VideoEncoderEncodeOptions,
@@ -556,7 +593,35 @@ class VideoEncoderWrapper {
 				} else {
 					assert(this.encoder);
 
-					const videoFrame = sampleToEncode.toVideoFrame();
+					let videoFrame = sampleToEncode.toVideoFrame();
+					const nativeCrop = this.getNativeCrop(sampleToEncode);
+					if (nativeCrop) {
+						const rect = {
+							x: (videoFrame.visibleRect?.x ?? 0) + nativeCrop.left,
+							y: (videoFrame.visibleRect?.y ?? 0) + nativeCrop.top,
+							width: nativeCrop.width,
+							height: nativeCrop.height,
+						};
+						let croppedFrame: VideoFrame | undefined;
+						try {
+							assert(videoFrame.format);
+							const data = new ArrayBuffer(videoFrame.allocationSize({ rect }));
+							const layout = await videoFrame.copyTo(data, { rect });
+							croppedFrame = new VideoFrame(data, {
+								format: videoFrame.format,
+								codedWidth: nativeCrop.width,
+								codedHeight: nativeCrop.height,
+								layout,
+								timestamp: videoFrame.timestamp,
+								duration: videoFrame.duration ?? undefined,
+								colorSpace: videoFrame.colorSpace,
+							});
+						} finally {
+							videoFrame.close();
+						}
+						assert(croppedFrame);
+						videoFrame = croppedFrame;
+					}
 
 					const preciseTimingIndex = binarySearchLessOrEqual(
 						this.preciseTimings,
@@ -691,10 +756,12 @@ class VideoEncoderWrapper {
 				const candidateConfig = candidate.config;
 				this.encodingConfig.onEncoderConfig?.(candidateConfig);
 
-				MatchingCustomEncoder = customVideoEncoders.find(x => x.supports(
-					this.encodingConfig.codec,
-					candidateConfig,
-				));
+				MatchingCustomEncoder = this.encodingConfig.transform?.resizeMode === 'encoder'
+					? undefined
+					: customVideoEncoders.find(x => x.supports(
+							this.encodingConfig.codec,
+							candidateConfig,
+						));
 				if (MatchingCustomEncoder) {
 					selected = candidate;
 					break;

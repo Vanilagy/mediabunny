@@ -155,6 +155,52 @@ test('VideoSampleSource, encoder resize passes original frames to an encoder con
 	input.dispose();
 });
 
+test('VideoSampleSource, encoder cover resize crops without a canvas transform', async () => {
+	const canvas = new OffscreenCanvas(200, 100);
+	const context = canvas.getContext('2d')!;
+	context.fillStyle = 'red';
+	context.fillRect(0, 0, 50, 100);
+	context.fillStyle = 'lime';
+	context.fillRect(50, 0, 100, 100);
+	context.fillStyle = 'blue';
+	context.fillRect(150, 0, 50, 100);
+
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+	const videoSource = new VideoSampleSource({
+		codec: 'vp8',
+		quality: new Quality('very-high'),
+		transform: { width: 100, height: 100, fit: 'cover', resizeMode: 'encoder' },
+	});
+	output.addVideoTrack(videoSource);
+	await output.start();
+
+	using sample = new VideoSample(canvas, { timestamp: 0, duration: 1 / 30 });
+	await videoSource.add(sample);
+	videoSource.close();
+	await output.finalize();
+
+	const { input, track } = await readBackTrack(output.target.buffer!);
+	expect(await track.getCodedWidth()).toBe(100);
+	expect(await track.getCodedHeight()).toBe(100);
+	const sink = new VideoSampleSink(track);
+	using decodedSample = await sink.getSample(0);
+	assert(decodedSample);
+
+	const decodedCanvas = new OffscreenCanvas(100, 100);
+	const decodedContext = decodedCanvas.getContext('2d')!;
+	decodedSample.draw(decodedContext, 0, 0);
+	const leftPixel = decodedContext.getImageData(10, 50, 1, 1).data;
+	const rightPixel = decodedContext.getImageData(90, 50, 1, 1).data;
+	expect(leftPixel[1]).toBeGreaterThan(200);
+	expect(leftPixel[0]).toBeLessThan(50);
+	expect(rightPixel[1]).toBeGreaterThan(200);
+	expect(rightPixel[2]).toBeLessThan(50);
+	input.dispose();
+});
+
 test('VideoSampleSource, same-sized frames with rotation set to 90', async () => {
 	const buffer = await encodeFrames(
 		{ codec: 'vp8', quality: new Quality('medium'), transform: { rotate: 90 } },
