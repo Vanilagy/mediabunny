@@ -1546,6 +1546,8 @@ export class VideoSample implements Disposable {
 			);
 		}
 
+		context.imageSmoothingQuality = 'high';
+
 		if (description.alpha === 'discard') {
 			context.fillStyle = 'black';
 			context.fillRect(0, 0, description.width, description.height);

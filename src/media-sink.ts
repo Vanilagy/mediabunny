@@ -1989,7 +1989,7 @@ export class CanvasSink {
 		}) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 		assert(context);
 
-		context.resetTransform();
+		context.imageSmoothingQuality = 'high';
 
 		if (!canvasIsNew) {
 			if (!this._alpha && isFirefox()) {
