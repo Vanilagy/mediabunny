@@ -501,7 +501,7 @@ export const tkhd = (
 		u32OrU64(durationInGlobalTimescale), // Duration
 		Array(8).fill(0), // Reserved
 		u16(0), // Layer
-		u16(trackData.track.id), // Alternate group
+		u16(0), // Alternate group
 		fixed_8_8(trackData.type === 'audio' ? 1 : 0), // Volume
 		u16(0), // Reserved
 		matrixToBytes(matrix), // Matrix

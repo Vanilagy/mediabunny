@@ -387,3 +387,56 @@ test('At least one track is enabled even if all are added disabled', async () =>
 	expect((await tracks[0]!.getDisposition()).default).toBe(true);
 	expect((await tracks[1]!.getDisposition()).default).toBe(false);
 });
+
+test('Tracks are written with alternate_group 0', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const meta = { decoderConfig: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 } };
+
+	const source1 = new EncodedVideoPacketSource('vp8');
+	output.addVideoTrack(source1);
+
+	const source2 = new EncodedVideoPacketSource('vp8');
+	output.addVideoTrack(source2);
+
+	await output.start();
+
+	await source1.add(new EncodedPacket(new Uint8Array(1024), 'key', 0, 0.1), meta);
+	await source2.add(new EncodedPacket(new Uint8Array(1024), 'key', 0, 0.1), meta);
+
+	await output.finalize();
+
+	const bytes = new Uint8Array(output.target.buffer!);
+	const view = new DataView(bytes.buffer);
+
+	// A non-zero alternate group marks the track as one of several selectable alternates
+	// (ISO 14496-12, 8.3.2.3). Players take that seriously: a video track in an alternate
+	// group makes Safari never auto-hide its media controls (#454). Walk moov > trak > tkhd
+	// and check the raw field, since the demuxer does not surface it.
+	const alternateGroups: number[] = [];
+	const walkBoxes = (start: number, end: number) => {
+		let pos = start;
+		while (pos + 8 <= end) {
+			const size = view.getUint32(pos);
+			if (size < 8 || pos + size > end) {
+				return;
+			}
+
+			const type = String.fromCharCode(bytes[pos + 4]!, bytes[pos + 5]!, bytes[pos + 6]!, bytes[pos + 7]!);
+			if (type === 'tkhd') {
+				const version = bytes[pos + 8]!;
+				alternateGroups.push(view.getUint16(pos + 8 + (version === 1 ? 46 : 34)));
+			} else if (type === 'moov' || type === 'trak') {
+				walkBoxes(pos + 8, pos + size);
+			}
+
+			pos += size;
+		}
+	};
+	walkBoxes(0, bytes.byteLength);
+
+	expect(alternateGroups).toEqual([0, 0]);
+});
