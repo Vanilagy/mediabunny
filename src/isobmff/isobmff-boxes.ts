@@ -493,6 +493,17 @@ export const tkhd = (
 		flags |= 0x1; // Track enabled
 	}
 
+	// Set the alternate group based on the track type; this mirror's how FFmpeg does it. A more advanced version would
+	// determine the alternate groups based on the actual track pairability graph. Note that it appears important that
+	// video get assigned to group 0, see https://github.com/Vanilagy/mediabunny/issues/454.
+	const alternateGroup = trackData.type === 'video'
+		? 0
+		: trackData.type === 'audio'
+			? 1
+			: trackData.type === 'subtitle'
+				? 2
+				: assertNever(trackData);
+
 	return fullBox('tkhd', +needsU64, flags, [
 		u32OrU64(creationTime), // Creation time
 		u32OrU64(creationTime), // Modification time
@@ -501,7 +512,7 @@ export const tkhd = (
 		u32OrU64(durationInGlobalTimescale), // Duration
 		Array(8).fill(0), // Reserved
 		u16(0), // Layer
-		u16(trackData.track.id), // Alternate group
+		u16(alternateGroup), // Alternate group
 		fixed_8_8(trackData.type === 'audio' ? 1 : 0), // Volume
 		u16(0), // Reserved
 		matrixToBytes(matrix), // Matrix

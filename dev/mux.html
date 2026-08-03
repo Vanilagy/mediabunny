@@ -47,7 +47,7 @@
 	format = new Mediabunny.MkvOutputFormat();
 	format = new Mediabunny.MovOutputFormat();
 	format = new Mediabunny.Mp4OutputFormat({ fastStart: 'reserve' });
-	format = new Mediabunny.WebMOutputFormat();
+	format = new Mediabunny.Mp4OutputFormat();
 	let target = new Mediabunny.BufferTarget();
 
 	/*
@@ -118,21 +118,21 @@
 	*/
 
 	let videoSource = new Mediabunny.CanvasSource(canvas, {
-		codec: 'vp9',
+		codec: 'avc',
 		//fullCodecString: 'avc1.42001f',
 		bitrate: 1e6,
 		alpha: 'keep',
 		onEncoderConfig: console.log,
 	});
 	let audioSource = new Mediabunny.AudioBufferSource({
-		codec: 'opus',
+		codec: 'aac',
 		bitrate: 128e3,
 	});
 	let subtitleSource = new Mediabunny.TextSubtitleSource('webvtt');
 
 	output.addVideoTrack(videoSource, { languageCode: 'eng', name: 'Mononoké', maximumPacketCount: 100 });
 	output.addAudioTrack(audioSource, { name: 'Yooo', maximumPacketCount: 1000 });
-	//output.addSubtitleTrack(subtitleSource);
+	output.addSubtitleTrack(subtitleSource);
 
 	output.start();
 
@@ -191,8 +191,8 @@ Testing... <00:17.350>One... <00:18.125>Two...
 9. <b>justify (bottom, right)</b>.
 `;
 
-	//subtitleSource.add(simpleWebvttFile);
-	//subtitleSource.close();
+	subtitleSource.add(simpleWebvttFile);
+	subtitleSource.close();
 	
 	const p = document.createElement('p');
 	document.body.append(p);
@@ -216,5 +216,5 @@ Testing... <00:17.350>One... <00:18.125>Two...
 	await output.finalize();
 
 	console.log(target);
-	//download(new Blob([target.buffer]), 'test' + format.fileExtension);
+	download(new Blob([target.buffer]), 'test' + format.fileExtension);
 </script>

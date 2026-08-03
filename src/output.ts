@@ -830,7 +830,8 @@ export class Output<
 		return this._startPromise = (async () => {
 			this.state = 'started';
 
-			const release = await this._mutex.acquire();
+			// We want to call muxer.start immediately, so we avoid using an await here
+			const releasePromise = this._mutex.acquire();
 
 			try {
 				await this._muxer.start();
@@ -838,7 +839,7 @@ export class Output<
 				const promises = this.tracks.map(track => track.source._start());
 				await Promise.all(promises);
 			} finally {
-				release();
+				(await releasePromise)();
 			}
 		})();
 	}

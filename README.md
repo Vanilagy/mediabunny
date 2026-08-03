@@ -130,7 +130,7 @@ const { title, artist, album } = await input.getMetadataTags();
 ### Create new media files
 
 ```js
-import { Output, Mp4OutputFormat, BufferTarget, CanvasSource, QUALITY_HIGH } from 'mediabunny';
+import { Output, Mp4OutputFormat, BufferTarget, CanvasSource, Quality } from 'mediabunny';
 
 const output = new Output({
     format: new Mp4OutputFormat(),
@@ -140,7 +140,7 @@ const output = new Output({
 // Add a video track backed by a canvas element
 const videoSource = new CanvasSource(canvas, {
     codec: 'avc',
-    bitrate: QUALITY_HIGH,
+    bitrate: new Quality('high'),
 });
 output.addVideoTrack(videoSource);
 
