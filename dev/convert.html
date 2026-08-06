@@ -129,6 +129,7 @@
 			},
 			*/
 			video: {
+				height: 320,
 				//codec: 'avc',
 				//bitrate: new Mediabunny.Quality({
 				//	quality: Infinity,
@@ -157,7 +158,7 @@
 				}
 			},
 			trim: {
-				end: 0.5,
+				end: 5,
 				//start: -2,
 				//end: 10,
 				//start: 300.14984567374756 - 100,
@@ -197,7 +198,7 @@
 		document.body.append(video);
 		video.play();
 
-		download(new Blob([target.buffer]), 'converted' + outputFormat.fileExtension);
+		//download(new Blob([target.buffer]), 'converted' + outputFormat.fileExtension);
 
 		function download(blob, filename) {
 			const url = URL.createObjectURL(blob);

@@ -534,6 +534,9 @@ export class VideoSample implements Disposable {
 			if (init.duration !== undefined && (!Number.isFinite(init.duration) || init.duration < 0)) {
 				throw new TypeError('init.duration, when provided, must be a non-negative number.');
 			}
+			if (init.visibleRect !== undefined) {
+				validateRectangle(init.visibleRect, 'init.visibleRect');
+			}
 
 			if (typeof VideoFrame !== 'undefined') {
 				return new VideoSample(
@@ -541,6 +544,13 @@ export class VideoSample implements Disposable {
 						timestamp: Math.trunc(init.timestamp! * SECOND_TO_MICROSECOND_FACTOR),
 						// Drag 0 to undefined
 						duration: Math.trunc((init.duration ?? 0) * SECOND_TO_MICROSECOND_FACTOR) || undefined,
+						// WebCodecs wants DOMRectInit
+						visibleRect: init.visibleRect && {
+							x: init.visibleRect.left,
+							y: init.visibleRect.top,
+							width: init.visibleRect.width,
+							height: init.visibleRect.height,
+						},
 					}),
 					init,
 				);
@@ -565,7 +575,9 @@ export class VideoSample implements Disposable {
 				throw new TypeError('Could not determine dimensions.');
 			}
 
-			const canvas = new OffscreenCanvas(width, height);
+			const visibleRect = init.visibleRect ?? { left: 0, top: 0, width, height };
+
+			const canvas = new OffscreenCanvas(visibleRect.width, visibleRect.height);
 			const context = canvas.getContext('2d', {
 				alpha: isFirefox(), // Firefox has VideoFrame glitches with opaque canvases
 				willReadFrequently: true,
@@ -577,15 +589,15 @@ export class VideoSample implements Disposable {
 				);
 			}
 
-			// Draw it to a canvas
-			context.drawImage(data, 0, 0);
+			// Draw it to a canvas, cropped to the visible rect
+			context.drawImage(data, -visibleRect.left, -visibleRect.top);
 			this._data = canvas;
 			this._layout = null;
 
 			this.format = 'RGBX';
-			this.visibleRect = { left: 0, top: 0, width, height };
-			this.squarePixelWidth = width;
-			this.squarePixelHeight = height;
+			this.visibleRect = { left: 0, top: 0, width: visibleRect.width, height: visibleRect.height };
+			this.squarePixelWidth = visibleRect.width;
+			this.squarePixelHeight = visibleRect.height;
 			this.rotation = init.rotation ?? 0;
 			this.timestamp = init.timestamp!;
 			this.duration = init.duration ?? 0;
@@ -1365,6 +1377,94 @@ export class VideoSample implements Disposable {
 	}
 
 	/**
+	 * Draws the sample onto the target canvas with fit behavior, manually mipmapping on strong downscales for quality.
+	 * @internal
+	 */
+	_drawWithFitAndMipmapping(
+		targetCanvas: HTMLCanvasElement | OffscreenCanvas,
+		targetContext: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+		options: {
+			fit: 'fill' | 'contain' | 'cover';
+			rotation: Rotation;
+			crop: CropRectangle | undefined;
+			/** Freshly-created target canvases carry no stale pixels and don't need to be cleared. */
+			targetIsFresh: boolean;
+			/** Paints on a black background instead of transparency (for alpha discard or opaque emulation). */
+			fillBlack: boolean;
+		},
+	) {
+		const targetWidth = targetCanvas.width;
+		const targetHeight = targetCanvas.height;
+
+		const [rotatedWidth, rotatedHeight] = options.rotation % 180 === 0
+			? [this.squarePixelWidth, this.squarePixelHeight]
+			: [this.squarePixelHeight, this.squarePixelWidth];
+		const sourceWidth = options.crop ? options.crop.width : rotatedWidth;
+		const sourceHeight = options.crop ? options.crop.height : rotatedHeight;
+
+		// Once we downscale by more than 2x, bilinear filtering starts skipping pixels and the result aliases. So in
+		// that case, we do manual mipmapping: draw at a larger size first, then iteratively halve the image until we
+		// arrive at the target size. Sucks that we have to do this honestly, but imageSmoothingQuality is very flaky -
+		// some resources are just not mipmapped in the browser and thus always fall back to bilinear downsampling.
+		let mipLevels = 0;
+		if (2 * targetWidth < sourceWidth && 2 * targetHeight < sourceHeight) {
+			mipLevels = Math.floor(Math.log2(
+				Math.min(sourceWidth / targetWidth, sourceHeight / targetHeight),
+			));
+		}
+
+		const drawWidth = targetWidth * 2 ** mipLevels;
+		const drawHeight = targetHeight * 2 ** mipLevels;
+
+		const { canvas, context, isNew } = mipLevels > 0
+			? getTransformationCanvas(drawWidth, drawHeight)
+			: { canvas: targetCanvas, context: targetContext, isNew: options.targetIsFresh };
+
+		context.imageSmoothingQuality = 'high';
+
+		if (options.fillBlack) {
+			context.fillStyle = 'black';
+			context.fillRect(0, 0, drawWidth, drawHeight);
+		} else if (!isNew) {
+			// Reused canvases carry stale pixels from a prior draw
+			context.clearRect(0, 0, drawWidth, drawHeight);
+		}
+
+		this.drawWithFit(context, {
+			fit: options.fit,
+			rotation: options.rotation,
+			crop: options.crop,
+		});
+
+		// Walk down the mip chain by repeatedly drawing the canvas onto itself at half size. The 'copy' composite
+		// operation makes sure pixels get replaced instead of blended with what's already there.
+		context.globalCompositeOperation = 'copy';
+		for (let i = mipLevels; i > 1; i--) {
+			const levelWidth = targetWidth * 2 ** i;
+			const levelHeight = targetHeight * 2 ** i;
+
+			context.drawImage(canvas, 0, 0, levelWidth, levelHeight, 0, 0, levelWidth / 2, levelHeight / 2);
+		}
+		context.globalCompositeOperation = 'source-over';
+
+		if (mipLevels > 0) {
+			// We'd love to skip this step and hand over the oversized mip canvas cropped with visibleRect, but sadly,
+			// all browsers ignore a frame's visibleRect when encoding it and consume the full coded frame instead
+			// (violating the WebCodecs spec, I think? See https://issues.chromium.org/issues/543284189). So, the result
+			// must live on a canvas of exactly the target size, which is why the last halving step draws onto the
+			// target canvas directly. 'copy' also conveniently disposes of any stale pixels there.
+			targetContext.imageSmoothingQuality = 'high';
+			targetContext.globalCompositeOperation = 'copy';
+			targetContext.drawImage(
+				canvas,
+				0, 0, 2 * targetWidth, 2 * targetHeight,
+				0, 0, targetWidth, targetHeight,
+			);
+			targetContext.globalCompositeOperation = 'source-over';
+		}
+	}
+
+	/**
 	 * Converts this video sample to a
 	 * [`CanvasImageSource`](https://udn.realityripple.com/docs/Web/API/CanvasImageSource) for drawing to a canvas.
 	 *
@@ -1495,71 +1595,14 @@ export class VideoSample implements Disposable {
 
 		// We need to handle it ourselves, and we use canvases to do it
 
-		let canvas: HTMLCanvasElement | OffscreenCanvas | null = null;
-		let canvasIsNew = false;
+		const { canvas, context, isNew } = getTransformationCanvas(description.width, description.height);
 
-		for (const entry of transformationCanvasCache) {
-			if (entry.canvas.width === description.width && entry.canvas.height === description.height) {
-				canvas = entry.canvas;
-				entry.age = transformationCanvasCacheNextAge++;
-
-				break;
-			}
-		}
-
-		if (canvas === null) {
-			if (typeof OffscreenCanvas !== 'undefined') {
-				canvas = new OffscreenCanvas(description.width, description.height);
-			} else {
-				if (typeof window === 'undefined' || typeof document === 'undefined') {
-					throw new Error(
-						'Cannot transform VideoSamples in this environment. Either run in an environment with'
-						+ ' OffscreenCanvas or HTMLCanvasElement, or supply a custom VideoSample transformer using'
-						+ ' registerVideoSampleTransformer().',
-					);
-				}
-
-				canvas = document.createElement('canvas');
-				canvas.width = description.width;
-				canvas.height = description.height;
-			}
-
-			canvasIsNew = true;
-
-			if (transformationCanvasCache.length >= TRANSFORMATION_CANVAS_CACHE_MAX_SIZE) {
-				transformationCanvasCache.splice(arrayArgmin(transformationCanvasCache, x => x.age), 1);
-			}
-
-			transformationCanvasCache.push({
-				canvas,
-				age: transformationCanvasCacheNextAge++,
-			});
-		}
-
-		const context = canvas.getContext('2d', {
-			alpha: true,
-		}) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
-		if (!context) {
-			throw new Error(
-				'The \'2d\' canvas context is required to transform VideoSamples. Register a custom transformer using'
-				+ ' registerVideoSampleTransformer to work around this limitation.',
-			);
-		}
-
-		context.imageSmoothingQuality = 'high';
-
-		if (description.alpha === 'discard') {
-			context.fillStyle = 'black';
-			context.fillRect(0, 0, description.width, description.height);
-		} else if (!canvasIsNew) {
-			// Cached canvases carry stale pixels from a prior draw
-			context.clearRect(0, 0, description.width, description.height);
-		}
-
-		this.drawWithFit(context, {
+		this._drawWithFitAndMipmapping(canvas, context, {
 			fit: description.fit,
 			rotation: description.rotation,
 			crop: description.crop,
+			targetIsFresh: isNew,
+			fillBlack: description.alpha === 'discard',
 		});
 
 		return new VideoSample(canvas, {
@@ -1728,9 +1771,59 @@ export const registerVideoSampleTransformer = (
 const TRANSFORMATION_CANVAS_CACHE_MAX_SIZE = 3;
 const transformationCanvasCache: {
 	canvas: HTMLCanvasElement | OffscreenCanvas;
+	context: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 	age: number;
 }[] = [];
 let transformationCanvasCacheNextAge = 0;
+
+const getTransformationCanvas = (width: number, height: number) => {
+	for (const entry of transformationCanvasCache) {
+		if (entry.canvas.width === width && entry.canvas.height === height) {
+			entry.age = transformationCanvasCacheNextAge++;
+			return { canvas: entry.canvas, context: entry.context, isNew: false };
+		}
+	}
+
+	let canvas: HTMLCanvasElement | OffscreenCanvas;
+	if (typeof OffscreenCanvas !== 'undefined') {
+		canvas = new OffscreenCanvas(width, height);
+	} else {
+		if (typeof window === 'undefined' || typeof document === 'undefined') {
+			throw new Error(
+				'Cannot transform VideoSamples in this environment. Either run in an environment with'
+				+ ' OffscreenCanvas or HTMLCanvasElement, or supply a custom VideoSample transformer using'
+				+ ' registerVideoSampleTransformer().',
+			);
+		}
+
+		canvas = document.createElement('canvas');
+		canvas.width = width;
+		canvas.height = height;
+	}
+
+	const context = canvas.getContext('2d', {
+		alpha: true,
+		willReadFrequently: false,
+	}) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+	if (!context) {
+		throw new Error(
+			'The \'2d\' canvas context is required to transform VideoSamples. Register a custom transformer using'
+			+ ' registerVideoSampleTransformer to work around this limitation.',
+		);
+	}
+
+	if (transformationCanvasCache.length >= TRANSFORMATION_CANVAS_CACHE_MAX_SIZE) {
+		transformationCanvasCache.splice(arrayArgmin(transformationCanvasCache, x => x.age), 1);
+	}
+
+	transformationCanvasCache.push({
+		canvas,
+		context,
+		age: transformationCanvasCacheNextAge++,
+	});
+
+	return { canvas, context, isNew: true };
+};
 
 /**
  * Describes the color space of a {@link VideoSample}. Corresponds to the WebCodecs API's VideoColorSpace.

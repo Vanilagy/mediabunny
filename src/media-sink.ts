@@ -1989,21 +1989,12 @@ export class CanvasSink {
 		}) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 		assert(context);
 
-		context.imageSmoothingQuality = 'high';
-
-		if (!canvasIsNew) {
-			if (!this._alpha && isFirefox()) {
-				context.fillStyle = 'black';
-				context.fillRect(0, 0, width, height);
-			} else {
-				context.clearRect(0, 0, width, height);
-			}
-		}
-
-		sample.drawWithFit(context, {
+		sample._drawWithFitAndMipmapping(canvas, context, {
 			fit: this._fit,
 			rotation: this._rotation,
 			crop: this._crop,
+			targetIsFresh: canvasIsNew,
+			fillBlack: !this._alpha && isFirefox(),
 		});
 
 		const result = {
