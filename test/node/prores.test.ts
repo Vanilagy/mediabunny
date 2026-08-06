@@ -12,7 +12,7 @@ import { assert } from '../../src/misc.js';
 
 const SAMPLE_URL = 'https://pub-1ee78aacb848486482b20a72b55b3121.r2.dev/turbores-sample.mov';
 
-test.concurrent('ProRes MOV file reading', async () => {
+test.concurrent('ProRes MOV file reading', { timeout: 20_000 }, async () => {
 	using input = new Input({
 		source: new UrlSource(SAMPLE_URL),
 		formats: ALL_FORMATS,
