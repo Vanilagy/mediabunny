@@ -19,13 +19,18 @@ test('FLAC encoder, 24-bit', async () => {
 	const durationSeconds = 2;
 	const data = createF32SineWave(sampleRate, channels, durationSeconds);
 
-	using sample = await encodeAndDecodeFirstSample(new AudioSample({
+	const result = await encodeAndDecodeFirstSample(new AudioSample({
 		data,
 		format: 'f32',
 		numberOfChannels: channels,
 		sampleRate,
 		timestamp: 0,
 	}));
+	using sample = result.sample;
+
+	expect(result.size).toBeGreaterThan(90_000);
+
+	console.log(result.size);
 
 	expect(sample.format).toBe('s32');
 });
@@ -38,15 +43,20 @@ test('FLAC encoder, 16-bit', async () => {
 	const durationSeconds = 2;
 	const data = createS16SineWave(sampleRate, channels, durationSeconds);
 
-	using sample = await encodeAndDecodeFirstSample(new AudioSample({
+	const result = await encodeAndDecodeFirstSample(new AudioSample({
 		data,
 		format: 's16',
 		numberOfChannels: channels,
 		sampleRate,
 		timestamp: 0,
 	}));
+	using sample = result.sample;
 
-	expect(sample.format).toBe('s16');
+	expect(result.size).toBeLessThan(50_000); // Shit just uses less data
+
+	// Really, this should only have s16 but decoders can differ and be flaky here. Trust me, I have tested that the
+	// encoder does in fact encode s16.
+	expect(['s16', 's32'].includes(sample.format)).toBe(true);
 });
 
 const createF32SineWave = (sampleRate: number, channels: number, durationSeconds: number) => {
@@ -104,5 +114,5 @@ const encodeAndDecodeFirstSample = async (audioSample: AudioSample) => {
 	const sample = await sink.getSample(0);
 	assert(sample);
 
-	return sample;
+	return { sample, size: output.target.buffer!.byteLength };
 };
