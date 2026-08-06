@@ -178,8 +178,13 @@ test('UrlSource with maxCacheSize: Infinity allows random access against a range
 });
 
 test('UrlSource in sequential mode downloads lazily and aborts the response on dispose', async () => {
-	const fileSize = fs.statSync(videoFilePath).size;
-	const server = await startRangelessServer();
+	// The resource is padded to a size far beyond what kernel socket buffers can swallow. This matters: the server
+	// can only observe the client's laziness through backpressure, and on some systems (like Linux with its TCP
+	// buffer autotuning), the kernel happily buffers multiple megabytes of sent data that the client never read.
+	const paddingSize = 2 ** 26; // 64 MiB
+	const totalSize = fs.statSync(videoFilePath).size + paddingSize;
+
+	const server = await startRangelessServer({ trailingPaddingSize: paddingSize });
 	const logs = captureLogs();
 
 	const input = new Input({
@@ -191,11 +196,11 @@ test('UrlSource in sequential mode downloads lazily and aborts the response on d
 		const track = await input.getPrimaryVideoTrack();
 		if (!track) throw new Error('No video track found');
 
-		// If the client were downloading eagerly, the entire file would easily arrive during this window. Instead,
-		// the server is expected to stall, since data is only pulled down when reads demand it.
+		// If the client were downloading eagerly, the entire resource would easily arrive during this window.
+		// Instead, the server is expected to stall, since data is only pulled down when reads demand it.
 		await new Promise(resolve => setTimeout(resolve, 3000));
 
-		expect(server.bytesSent()).toBeLessThan(fileSize / 2);
+		expect(server.bytesSent()).toBeLessThan(totalSize / 2);
 
 		// The response is merely suspended, not dead: reading still works
 		const sink = new EncodedPacketSink(track);
@@ -210,9 +215,9 @@ test('UrlSource in sequential mode downloads lazily and aborts the response on d
 		// Give the abort a moment to propagate to the server
 		await new Promise(resolve => setTimeout(resolve, 250));
 
-		// Disposal terminated the response early, long before the entire file was sent
+		// Disposal terminated the response early, long before the entire resource was sent
 		expect(server.abortedResponses()).toBe(1);
-		expect(server.bytesSent()).toBeLessThan(fileSize / 2);
+		expect(server.bytesSent()).toBeLessThan(totalSize / 2);
 	} finally {
 		input.dispose();
 		logs.stop();
@@ -220,12 +225,11 @@ test('UrlSource in sequential mode downloads lazily and aborts the response on d
 	}
 }, 10_000);
 
-/**
- * Spins up a server that ignores Range headers, always responding with 200 and the full file. If responseByteLimits
- * is provided, the n-th response gets its connection killed after roughly that many bytes.
- */
-const startRangelessServer = async (options: { responseByteLimits?: number[] } = {}) => {
+const startRangelessServer = async (
+	options: { responseByteLimits?: number[]; trailingPaddingSize?: number } = {},
+) => {
 	const fileSize = fs.statSync(videoFilePath).size;
+	const paddingSize = options.trailingPaddingSize ?? 0;
 	let requestCount = 0;
 	let bytesSent = 0;
 	let abortedResponses = 0;
@@ -242,7 +246,7 @@ const startRangelessServer = async (options: { responseByteLimits?: number[] } =
 		});
 		res.writeHead(200, {
 			'Content-Type': 'video/mp4',
-			'Content-Length': fileSize,
+			'Content-Length': fileSize + paddingSize,
 		});
 
 		// Stream the file with backpressure and a small chunk size, so that the amount of sent bytes closely
@@ -267,7 +271,39 @@ const startRangelessServer = async (options: { responseByteLimits?: number[] } =
 				res.once('drain', () => stream.resume());
 			}
 		});
-		stream.on('end', () => res.end());
+		stream.on('end', () => {
+			if (paddingSize === 0) {
+				res.end();
+				return;
+			}
+
+			// Append a giant 'free' box: valid ISOBMFF, but never read by the demuxer
+			const header = Buffer.alloc(8);
+			header.writeUInt32BE(paddingSize, 0);
+			header.write('free', 4, 'latin1');
+
+			const zeroes = Buffer.alloc(2 ** 14);
+			let paddingSent = 0;
+
+			const writeMore = () => {
+				while (paddingSent < paddingSize) {
+					const chunk = paddingSent === 0
+						? header
+						: zeroes.subarray(0, Math.min(paddingSize - paddingSent, zeroes.length));
+
+					paddingSent += chunk.length;
+					bytesSent += chunk.length;
+
+					if (!res.write(chunk)) {
+						res.once('drain', writeMore);
+						return;
+					}
+				}
+
+				res.end();
+			};
+			writeMore();
+		});
 	});
 
 	await new Promise<void>(resolve => server.listen(0, resolve));
