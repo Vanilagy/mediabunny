@@ -1117,8 +1117,13 @@ export const canEncodeVideo = async (
 		}
 
 		for (const { config, quantizer } of candidates) {
-			const support = await VideoEncoder.isConfigSupported(config);
-			if (!support.supported) {
+			try {
+				const support = await VideoEncoder.isConfigSupported(config);
+				if (!support.supported) {
+					continue;
+				}
+			} catch {
+				// Can type-error when unknown config features are used
 				continue;
 			}
 
@@ -1245,8 +1250,13 @@ export const canEncodeAudio = async (
 			return false;
 		}
 
-		const support = await AudioEncoder.isConfigSupported(encoderConfig);
-		return support.supported === true;
+		try {
+			const support = await AudioEncoder.isConfigSupported(encoderConfig);
+			return support.supported === true;
+		} catch {
+			// Can type-error when unknown config features are used
+			return false;
+		}
 	})();
 	canEncodeAudioMemo.set(key, promise);
 
