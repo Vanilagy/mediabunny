@@ -697,7 +697,12 @@ export type UrlSourceOptions = {
 	 */
 	getRetryDelay?: (previousAttempts: number, error: unknown, url: string | URL | Request) => number | null;
 
-	/** The maximum number of bytes the cache is allowed to hold in memory. Defaults to 64 MiB. */
+	/**
+	 * The maximum number of bytes the cache is allowed to hold in memory. Defaults to 64 MiB.
+	 *
+	 * This bound is always honored, even when the server doesn't support range requests. Note that in that case,
+	 * a backward seek to already-evicted data requires re-downloading the entire resource.
+	 */
 	maxCacheSize?: number;
 
 	/** The maximum number of parallel requests to use for fetching. Defaults to 2. */
@@ -968,7 +973,14 @@ export class UrlSource extends PathedSource {
 				}
 
 				worker.currentPos = 0;
-				this._orchestrator.options.maxCacheSize = Infinity; // 🤷
+
+				if (this._options.maxCacheSize === undefined) {
+					// Since the server ignores range requests, a backward seek past the eviction boundary would force
+					// us to re-download the entire resource from the start. We therefore lift the cache bound in this
+					// fallback mode - but only when the user didn't explicitly set maxCacheSize. An explicitly-set
+					// memory budget is always honored, accepting the risk of full re-downloads on backward seeks.
+					this._orchestrator.options.maxCacheSize = Infinity;
+				}
 
 				if (this._orchestrator.fileSize !== null) {
 					worker.targetPos = this._orchestrator.fileSize;

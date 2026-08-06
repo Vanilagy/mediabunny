@@ -61,6 +61,88 @@ test('Request with Range', async () => {
 	URL.revokeObjectURL(url);
 });
 
+const CHUNK_SIZE = 1024;
+const NO_RANGE_DATA_SIZE = 16 * CHUNK_SIZE;
+
+const makeNoRangeFetch = (data: Uint8Array, onFetch: () => void) => {
+	return (async () => {
+		onFetch();
+
+		// Always respond with the full resource, ignoring any Range header
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				for (let pos = 0; pos < data.length; pos += CHUNK_SIZE) {
+					controller.enqueue(data.subarray(pos, pos + CHUNK_SIZE));
+				}
+				controller.close();
+			},
+		});
+
+		return new Response(stream, {
+			status: 200,
+			headers: { 'Content-Length': String(data.length) },
+		});
+	}) as typeof fetch;
+};
+
+const makeNoRangeData = () => {
+	const data = new Uint8Array(NO_RANGE_DATA_SIZE);
+	for (let i = 0; i < data.length; i++) {
+		data[i] = i % 256;
+	}
+	return data;
+};
+
+test('Explicitly set maxCacheSize is honored when the server does not support range requests', async () => {
+	const data = makeNoRangeData();
+	let fetchCount = 0;
+
+	const source = new UrlSource('https://example.com/no-range-support', {
+		maxCacheSize: 4 * CHUNK_SIZE,
+		fetchFn: makeNoRangeFetch(data, () => fetchCount++),
+	});
+	const reader = new Reader(source);
+
+	// Read the entire resource sequentially, which engages the fallback
+	const full = await reader.requestSlice(0, data.length);
+	expect(full).not.toBeNull();
+	expect([...readBytes(full!, data.length)]).toEqual([...data]);
+
+	// The explicit cache bound must have been kept, meaning early data got evicted during the sequential read
+	expect(source._orchestrator.options.maxCacheSize).toBe(4 * CHUNK_SIZE);
+
+	// A backward read to evicted data must still return correct bytes, but requires re-downloading the resource
+	const before = fetchCount;
+	const slice = await reader.requestSlice(0, CHUNK_SIZE);
+	expect(slice).not.toBeNull();
+	expect([...readBytes(slice!, CHUNK_SIZE)]).toEqual([...data.subarray(0, CHUNK_SIZE)]);
+	expect(fetchCount).toBe(before + 1);
+});
+
+test('Default cache bound is lifted when the server does not support range requests', async () => {
+	const data = makeNoRangeData();
+	let fetchCount = 0;
+
+	const source = new UrlSource('https://example.com/no-range-support', {
+		fetchFn: makeNoRangeFetch(data, () => fetchCount++),
+	});
+	const reader = new Reader(source);
+
+	// Read the entire resource sequentially, which engages the fallback
+	const full = await reader.requestSlice(0, data.length);
+	expect(full).not.toBeNull();
+	expect([...readBytes(full!, data.length)]).toEqual([...data]);
+
+	// With no explicit cache bound, the cache must have been made unbounded to avoid re-downloads
+	expect(source._orchestrator.options.maxCacheSize).toBe(Infinity);
+
+	// A backward read is then served from the cache without an additional request
+	const slice = await reader.requestSlice(0, CHUNK_SIZE);
+	expect(slice).not.toBeNull();
+	expect([...readBytes(slice!, CHUNK_SIZE)]).toEqual([...data.subarray(0, CHUNK_SIZE)]);
+	expect(fetchCount).toBe(1);
+});
+
 const makeRampedUrl = () => {
 	const data = new Uint8Array(256);
 	for (let i = 0; i < data.length; i++) {
