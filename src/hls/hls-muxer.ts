@@ -40,6 +40,7 @@ import { EncodedPacket } from '../packet';
 import { SubtitleCue, SubtitleMetadata } from '../subtitles';
 import { NullTarget, PathedTarget, Target, TargetRequest } from '../target';
 import { HLS_MIME_TYPE } from './hls-misc';
+import type { IsobmffMuxer } from '../isobmff/isobmff-muxer';
 
 type HlsTrackData = {
 	track: OutputTrack;
@@ -88,6 +89,11 @@ type Playlist = {
 		path: string;
 		nextOffset: number;
 		info: HlsOutputSegmentInfo;
+		/**
+		 * Used for the special-cased logic where single file mode is enabled with fMP4. In this case, we write out a
+		 * segments file which is also a perfectly valid standalone fMP4 valid.
+		 */
+		fragmentedIsobmffOutput: FragmentedIsobmffOutput | null;
 	} | null;
 
 	// For HLS, having a single mutex is too coarse. Every playlist is basically independent and therefore we can have
@@ -101,6 +107,14 @@ type PlaylistDeclaration = {
 	groupId: string | null;
 	noUri: boolean;
 	references: PlaylistDeclaration[];
+};
+
+type FragmentedIsobmffOutput = {
+	output: Output;
+	videoSource: EncodedVideoPacketSource | null;
+	audioSource: EncodedAudioPacketSource | null;
+	firstMoofPosition: number | null;
+	currentFileSize: number;
 };
 
 export class HlsMuxer extends Muxer {
@@ -857,13 +871,78 @@ export class HlsMuxer extends Muxer {
 						isRoot: false,
 						mimeType: playlist.segmentFormat.mimeType,
 					});
-					target._start();
+
+					let fragmentedIsobmffOutput: FragmentedIsobmffOutput | null = null;
+					if (playlist.segmentFormat._isFragmentedIsobmff()) {
+						// HARDCODED SPECIAL CASE: Single file mode with fragmented ISOBMFF. Instead of merely creating
+						// a single file that's the concatenation of a bunch of smaller files, here we actually produce
+						// one single fMP4 file that holds all segment media data. The result is a segments file that is
+						// playable standalone!
+
+						fragmentedIsobmffOutput = {
+							output: new Output({
+								format: playlist.segmentFormat,
+								target,
+							}),
+							videoSource: null,
+							audioSource: null,
+							firstMoofPosition: null,
+							currentFileSize: 0,
+						};
+
+						target.on('write', ({ end }) => {
+							fragmentedIsobmffOutput!.currentFileSize = Math.max(
+								fragmentedIsobmffOutput!.currentFileSize,
+								end,
+							);
+						});
+
+						// Make sure it never auto-finalizes fragments for us; we take full control of fragment
+						// finalization to line it up perfectly with segments
+						const muxer = fragmentedIsobmffOutput.output._muxer as IsobmffMuxer;
+						muxer.minimumFragmentDuration = Infinity;
+
+						// Intercept the first moof to determine init segment size
+						const originalOnMoof = muxer.formatOptions.onMoof;
+						muxer.formatOptions.onMoof = (data, position, timestamp) => {
+							fragmentedIsobmffOutput!.firstMoofPosition = position;
+							originalOnMoof?.(data, position, timestamp);
+							muxer.formatOptions.onMoof = originalOnMoof;
+						};
+
+						// Add video track
+						if (videoTrack) {
+							fragmentedIsobmffOutput.videoSource = new EncodedVideoPacketSource(
+								(videoTrack.track as OutputVideoTrack).source._codec,
+							);
+							fragmentedIsobmffOutput.output.addVideoTrack(
+								fragmentedIsobmffOutput.videoSource,
+								videoTrack.track.metadata,
+							);
+						}
+
+						// Add audio track
+						if (audioTrack) {
+							fragmentedIsobmffOutput.audioSource = new EncodedAudioPacketSource(
+								(audioTrack.track as OutputAudioTrack).source._codec,
+							);
+							fragmentedIsobmffOutput.output.addAudioTrack(
+								fragmentedIsobmffOutput.audioSource,
+								audioTrack.track.metadata,
+							);
+						}
+
+						await fragmentedIsobmffOutput.output.start();
+					} else {
+						target._start();
+					}
 
 					playlist.singleFile = {
 						target,
 						path: relativeSegmentPath,
 						nextOffset: 0,
 						info: segmentInfo,
+						fragmentedIsobmffOutput,
 					};
 				} else {
 					relativeSegmentPath = playlist.singleFile.path;
@@ -889,114 +968,125 @@ export class HlsMuxer extends Muxer {
 
 			let segmentSize = 0;
 			let outputTarget: Target | null = null;
+			let maxEndTimestamp = -Infinity;
 
-			const output = new Output({
-				format: playlist.segmentFormat,
-				target: new PathedTarget(
-					fullSegmentPath,
-					async (request: TargetRequest) => {
-						const proxiedRequest: TargetRequest = {
-							...request,
-							isRoot: false,
-						};
+			let output: Output | null = null;
+			let videoSource: EncodedVideoPacketSource | null = null;
+			let audioSource: EncodedAudioPacketSource | null = null;
 
-						if (request.isRoot) {
+			try {
+				if (playlist.singleFile?.fragmentedIsobmffOutput) {
+					output = playlist.singleFile.fragmentedIsobmffOutput.output;
+					videoSource = playlist.singleFile.fragmentedIsobmffOutput.videoSource;
+					audioSource = playlist.singleFile.fragmentedIsobmffOutput.audioSource;
+				} else {
+					// Create the output for this segment
+					output = new Output({
+						format: playlist.segmentFormat,
+						target: new PathedTarget(
+							fullSegmentPath,
+							async (request: TargetRequest) => {
+								const proxiedRequest: TargetRequest = {
+									...request,
+									isRoot: false,
+								};
+
+								if (request.isRoot) {
+									if (playlist.singleFile) {
+										const slice = playlist.singleFile.target.slice(playlist.singleFile.nextOffset);
+										slice.on('write', ({ end }) => segmentSize = Math.max(segmentSize, end));
+
+										return slice;
+									} else {
+										const target = await this.output._getTarget(proxiedRequest);
+										outputTarget = target;
+										target.on('write', ({ end }) => segmentSize = Math.max(segmentSize, end));
+
+										return target;
+									}
+								}
+
+								return this.output._getTarget(proxiedRequest);
+							},
+						),
+						initTarget: async () => {
+							if (playlist.initSegment) {
+								// We already have an init segment from a previous segment
+								return new NullTarget();
+							}
+
 							if (playlist.singleFile) {
+								playlist.initSegment = {
+									path: playlist.singleFile.path,
+									duration: 0,
+									timestamp: 0,
+									byteSize: 0,
+									byteOffset: 0,
+									info: null,
+								};
+
 								const slice = playlist.singleFile.target.slice(playlist.singleFile.nextOffset);
-								slice.on('write', ({ end }) => segmentSize = Math.max(segmentSize, end));
+								slice.on('write', ({ end }) => {
+									playlist.initSegment!.byteSize = Math.max(playlist.initSegment!.byteSize, end);
+								});
+								slice.on('finalized', () => {
+									playlist.singleFile!.nextOffset = playlist.initSegment!.byteSize;
+								});
 
 								return slice;
 							} else {
-								const target = await this.output._getTarget(proxiedRequest);
-								outputTarget = target;
-								target.on('write', ({ end }) => segmentSize = Math.max(segmentSize, end));
+								const playlistInfo = toPlaylistInfo(playlist);
+								const initPath = await this.getInitPath(playlistInfo);
+								validateInitPath(initPath);
+
+								playlist.initSegment = {
+									path: initPath,
+									duration: 0,
+									timestamp: 0,
+									byteSize: 0,
+									byteOffset: null,
+									info: null,
+								};
+
+								const fullInitPath = joinPaths(
+									joinPaths(pathedTarget.rootPath, playlist.path),
+									initPath,
+								);
+								const target = await this.output._getTarget({
+									path: fullInitPath,
+									isRoot: false,
+									mimeType: playlist.segmentFormat.mimeType,
+								});
+								target.on('write', ({ end }) => {
+									playlist.initSegment!.byteSize = Math.max(playlist.initSegment!.byteSize, end);
+								});
+								target.on('finalized', () => {
+									this.format._options.onInit?.(target, playlistInfo);
+								});
 
 								return target;
 							}
-						}
+						},
+					});
 
-						return this.output._getTarget(proxiedRequest);
-					},
-				),
-				initTarget: async () => {
-					if (playlist.initSegment) {
-						// We already have an init segment from a previous segment
-						return new NullTarget();
-					}
-
-					if (playlist.singleFile) {
-						playlist.initSegment = {
-							path: playlist.singleFile.path,
-							duration: 0,
-							timestamp: 0,
-							byteSize: 0,
-							byteOffset: 0,
-							info: null,
-						};
-
-						const slice = playlist.singleFile.target.slice(playlist.singleFile.nextOffset);
-						slice.on('write', ({ end }) => {
-							playlist.initSegment!.byteSize = Math.max(playlist.initSegment!.byteSize, end);
-						});
-						slice.on('finalized', () => {
-							playlist.singleFile!.nextOffset = playlist.initSegment!.byteSize;
-						});
-
-						return slice;
-					} else {
-						const playlistInfo = toPlaylistInfo(playlist);
-						const initPath = await this.getInitPath(playlistInfo);
-						validateInitPath(initPath);
-
-						playlist.initSegment = {
-							path: initPath,
-							duration: 0,
-							timestamp: 0,
-							byteSize: 0,
-							byteOffset: null,
-							info: null,
-						};
-
-						const fullInitPath = joinPaths(
-							joinPaths(pathedTarget.rootPath, playlist.path),
-							initPath,
+					if (videoTrack) {
+						// Always add the track, no matter if it has packets or not (maintains underlying IDs)
+						videoSource = new EncodedVideoPacketSource(
+							(videoTrack.track as OutputVideoTrack).source._codec,
 						);
-						const target = await this.output._getTarget({
-							path: fullInitPath,
-							isRoot: false,
-							mimeType: playlist.segmentFormat.mimeType,
-						});
-						target.on('write', ({ end }) => {
-							playlist.initSegment!.byteSize = Math.max(playlist.initSegment!.byteSize, end);
-						});
-						target.on('finalized', () => {
-							this.format._options.onInit?.(target, playlistInfo);
-						});
-
-						return target;
+						output.addVideoTrack(videoSource, videoTrack.track.metadata);
 					}
-				},
-			});
 
-			let maxEndTimestamp = -Infinity;
+					if (audioTrack) {
+						// Always add the track, no matter if it has packets or not (maintains underlying IDs)
+						audioSource = new EncodedAudioPacketSource(
+							(audioTrack.track as OutputAudioTrack).source._codec,
+						);
+						output.addAudioTrack(audioSource, audioTrack.track.metadata);
+					}
 
-			try {
-				let videoSource: EncodedVideoPacketSource | null = null;
-				let audioSource: EncodedAudioPacketSource | null = null;
-
-				if (videoTrack) {
-					// Always add the track, no matter if it has packets or not (maintains underlying IDs)
-					videoSource = new EncodedVideoPacketSource((videoTrack.track as OutputVideoTrack).source._codec);
-					output.addVideoTrack(videoSource, videoTrack.track.metadata);
+					await output.start();
 				}
-
-				if (audioTrack) {
-					// Always add the track, no matter if it has packets or not (maintains underlying IDs)
-					audioSource = new EncodedAudioPacketSource((audioTrack.track as OutputAudioTrack).source._codec);
-					output.addAudioTrack(audioSource, audioTrack.track.metadata);
-				}
-
-				await output.start();
 
 				// Add all of the packets
 
@@ -1024,9 +1114,32 @@ export class HlsMuxer extends Muxer {
 					}
 				}
 
-				await output.finalize();
+				if (playlist.singleFile?.fragmentedIsobmffOutput) {
+					const muxer = playlist.singleFile.fragmentedIsobmffOutput.output._muxer as IsobmffMuxer;
+					await muxer.forceFragmentFinalization();
+
+					if (
+						playlist.singleFile.fragmentedIsobmffOutput.firstMoofPosition !== null
+						&& !playlist.initSegment
+					) {
+						playlist.initSegment = {
+							path: playlist.singleFile.path,
+							duration: 0,
+							timestamp: 0,
+							byteSize: playlist.singleFile.fragmentedIsobmffOutput.firstMoofPosition,
+							byteOffset: 0,
+							info: null,
+						};
+						playlist.singleFile.nextOffset = playlist.singleFile.fragmentedIsobmffOutput.firstMoofPosition;
+					}
+
+					segmentSize
+						= playlist.singleFile.fragmentedIsobmffOutput.currentFileSize - playlist.singleFile.nextOffset;
+				} else {
+					await output.finalize();
+				}
 			} catch (e) {
-				await output.cancel();
+				await output?.cancel();
 				throw e;
 			}
 
@@ -1102,8 +1215,12 @@ export class HlsMuxer extends Muxer {
 		playlist.done = true;
 
 		if (playlist.singleFile) {
-			await playlist.singleFile.target._flush();
-			await playlist.singleFile.target._finalize();
+			if (playlist.singleFile.fragmentedIsobmffOutput) {
+				await playlist.singleFile.fragmentedIsobmffOutput.output.finalize();
+			} else {
+				await playlist.singleFile.target._flush();
+				await playlist.singleFile.target._finalize();
+			}
 
 			this.format._options.onSegment?.(playlist.singleFile.target, playlist.singleFile.info);
 		}

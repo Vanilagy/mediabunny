@@ -2004,6 +2004,89 @@ test('Single-file mode', async () => {
 	expect(onSegment).toHaveBeenCalledTimes(1);
 });
 
+test('Single-file mode with fragmented MP4 produces proper standalone segment file', async () => {
+	let playlistText: string | null = null;
+	let segmentBuffer: ArrayBuffer | null = null;
+	const segmentPaths = new Set<string>();
+
+	const onSegment = vi.fn();
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new Mp4OutputFormat({
+				fastStart: 'fragmented',
+				minimumFragmentDuration: 0, // This is to be ignored
+			}),
+			singleFilePerPlaylist: true,
+			onSegment,
+		}),
+		target: new PathedTarget('', (request) => {
+			const target = new BufferTarget();
+
+			if (request.path.includes('playlist')) {
+				target.on('finalized', () => {
+					playlistText = new TextDecoder().decode(target.buffer!);
+				});
+			} else if (request.path.includes('segment')) {
+				segmentPaths.add(request.path);
+
+				target.on('finalized', () => {
+					segmentBuffer = target.buffer!;
+				});
+			}
+
+			return target;
+		}),
+	});
+
+	const source = videoSource();
+	output.addVideoTrack(source);
+
+	await output.start();
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0), avcMetadata);
+
+	expect(onSegment).toHaveBeenCalledTimes(0);
+
+	await output.finalize();
+
+	// Only one segment file should have been created
+	expect(segmentPaths.size).toBe(1);
+
+	expect(playlistText).not.toBeNull();
+	expect(playlistText!.match(/#EXT-X-BYTERANGE/g)).toHaveLength(2);
+	expect(playlistText).toContain('#EXT-X-VERSION:6');
+
+	expect(onSegment).toHaveBeenCalledTimes(1);
+
+	assert(segmentBuffer);
+
+	const str = new TextDecoder('ascii').decode(segmentBuffer);
+	expect(str.includes('mfra')).toBe(true); // It's a proper standalone fMP4 file
+	expect(str.split('moov')).toHaveLength(2); // Only one moov box
+
+	using input = new Input({
+		source: new BufferSource(segmentBuffer),
+		formats: ALL_FORMATS,
+	});
+	const track = (await input.getPrimaryVideoTrack())!;
+	const timestamps: number[] = [];
+	const sink = new EncodedPacketSink(track);
+
+	for await (const packet of sink.packets()) {
+		timestamps.push(packet.timestamp);
+	}
+
+	expect(timestamps).toEqual([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5]);
+});
+
 test('StreamTarget, write is called for each target', async () => {
 	const writeCounts = new Map<string, number>();
 

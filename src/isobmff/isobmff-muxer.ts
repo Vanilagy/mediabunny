@@ -168,6 +168,7 @@ export const intoTimescale = (timeInSeconds: number, timescale: number, round = 
 
 export class IsobmffMuxer extends Muxer {
 	format: IsobmffOutputFormat;
+	formatOptions: IsobmffOutputFormatOptions;
 	private writer: Writer | null = null;
 	private boxWriter: IsobmffBoxWriter | null = null;
 	private initWriter: Writer | null = null;
@@ -191,21 +192,23 @@ export class IsobmffMuxer extends Muxer {
 	creationTime = Math.floor(Date.now() / 1000) + TIMESTAMP_OFFSET;
 	private finalizedChunks: Chunk[] = [];
 
+	private wroteFragmentedHeader = false;
 	private nextFragmentNumber = 1;
 	// Only relevant for fragmented files, to make sure new fragments start with the highest timestamp seen so far
 	private maxWrittenTimestamp = -Infinity;
 	minWrittenTimestamp = Infinity;
 	maxWrittenEndTimestamp = -Infinity;
-	private minimumFragmentDuration: number;
+	minimumFragmentDuration: number;
 	private segmentHeaderSize: number | null = null;
 
 	constructor(output: Output, format: IsobmffOutputFormat) {
 		super(output);
 
 		this.format = format;
+		this.formatOptions = { ...format._options };
 		this.isQuickTime = format instanceof MovOutputFormat;
 		this.isCmaf = format instanceof CmafOutputFormat;
-		this.minimumFragmentDuration = format._options.minimumFragmentDuration
+		this.minimumFragmentDuration = this.formatOptions.minimumFragmentDuration
 			?? (format instanceof CmafOutputFormat ? Infinity : 1);
 
 		this.auxWriter.start();
@@ -216,15 +219,15 @@ export class IsobmffMuxer extends Muxer {
 
 		if (!this.isCmaf) {
 			this.writer = await this.output._getRootWriter(target => (
-				this.format._options.fastStart !== undefined
-					? this.format._options.fastStart === 'fragmented'
+				this.formatOptions.fastStart !== undefined
+					? this.formatOptions.fastStart === 'fragmented'
 					: target instanceof BufferTarget // Since if this is the case we'll use 'in-memory'
 			));
 			this.boxWriter = new IsobmffBoxWriter(this.writer);
 
 			// If the fastStart option isn't defined, enable in-memory fast start if the target is an ArrayBuffer, as
 			// the memory usage remains identical
-			this.fastStart = this.format._options.fastStart
+			this.fastStart = this.formatOptions.fastStart
 				?? (this.writer.target instanceof BufferTarget ? 'in-memory' : false);
 			this.isFragmented = this.fastStart === 'fragmented';
 		} else {
@@ -256,7 +259,7 @@ export class IsobmffMuxer extends Muxer {
 			const boxWriter = this.initBoxWriter ?? this.boxWriter;
 			assert(boxWriter);
 
-			if (this.format._options.onFtyp) {
+			if (this.formatOptions.onFtyp) {
 				boxWriter.writer.startTrackingWrites();
 			}
 
@@ -267,9 +270,9 @@ export class IsobmffMuxer extends Muxer {
 				cmaf: this.isCmaf,
 			}));
 
-			if (this.format._options.onFtyp) {
+			if (this.formatOptions.onFtyp) {
 				const { data, start } = boxWriter.writer.stopTrackingWrites();
-				this.format._options.onFtyp(data, start);
+				this.formatOptions.onFtyp(data, start);
 			}
 
 			this.ftypSize = boxWriter.writer.getPos();
@@ -299,7 +302,7 @@ export class IsobmffMuxer extends Muxer {
 			assert(this.writer);
 			assert(this.boxWriter);
 
-			if (this.format._options.onMdat) {
+			if (this.formatOptions.onMdat) {
 				this.writer.startTrackingWrites();
 			}
 
@@ -1180,13 +1183,13 @@ export class IsobmffMuxer extends Muxer {
 	private async finalizeFragment(flushWriter = !this.isCmaf) {
 		assert(this.isFragmented);
 
-		const fragmentNumber = this.nextFragmentNumber++;
+		if (!this.wroteFragmentedHeader) {
+			this.wroteFragmentedHeader = true;
 
-		if (fragmentNumber === 1) {
 			const boxWriter = this.initBoxWriter ?? this.boxWriter;
 			assert(boxWriter);
 
-			if (this.format._options.onMoov) {
+			if (this.formatOptions.onMoov) {
 				boxWriter.writer.startTrackingWrites();
 			}
 
@@ -1196,9 +1199,9 @@ export class IsobmffMuxer extends Muxer {
 			const movieBox = moov(this);
 			boxWriter.writeBox(movieBox);
 
-			if (this.format._options.onMoov) {
+			if (this.formatOptions.onMoov) {
 				const { data, start } = boxWriter.writer.stopTrackingWrites();
-				this.format._options.onMoov(data, start);
+				this.formatOptions.onMoov(data, start);
 			}
 
 			if (this.isCmaf) {
@@ -1224,6 +1227,18 @@ export class IsobmffMuxer extends Muxer {
 
 		// Not all tracks need to be present in every fragment
 		const tracksInFragment = this.trackDatas.filter(x => x.currentChunk);
+
+		if (tracksInFragment.length === 0) {
+			// Zero tracks in this fragment and thus no fragment data
+
+			if (flushWriter) {
+				await this.writer.flush();
+			}
+
+			return;
+		}
+
+		const fragmentNumber = this.nextFragmentNumber++;
 
 		// Create an initial moof box and measure it; we need this to know where the following mdat box will begin
 		const moofBox = moof(fragmentNumber, tracksInFragment);
@@ -1254,21 +1269,21 @@ export class IsobmffMuxer extends Muxer {
 			}
 		}
 
-		if (this.format._options.onMoof) {
+		if (this.formatOptions.onMoof) {
 			this.writer.startTrackingWrites();
 		}
 
 		const newMoofBox = moof(fragmentNumber, tracksInFragment);
 		this.boxWriter.writeBox(newMoofBox);
 
-		if (this.format._options.onMoof) {
+		if (this.formatOptions.onMoof) {
 			const { data, start } = this.writer.stopTrackingWrites();
-			this.format._options.onMoof(data, start, fragmentStartTimestamp);
+			this.formatOptions.onMoof(data, start, fragmentStartTimestamp);
 		}
 
 		assert(this.writer.getPos() === mdatStartPos);
 
-		if (this.format._options.onMdat) {
+		if (this.formatOptions.onMdat) {
 			this.writer.startTrackingWrites();
 		}
 
@@ -1286,9 +1301,9 @@ export class IsobmffMuxer extends Muxer {
 			}
 		}
 
-		if (this.format._options.onMdat) {
+		if (this.formatOptions.onMdat) {
 			const { data, start } = this.writer.stopTrackingWrites();
-			this.format._options.onMdat(data, start);
+			this.formatOptions.onMdat(data, start);
 		}
 
 		for (const trackData of tracksInFragment) {
@@ -1321,7 +1336,7 @@ export class IsobmffMuxer extends Muxer {
 				assert(this.ftypSize !== null);
 				this.writer.seek(this.ftypSize + reservedSize);
 
-				if (this.format._options.onMdat) {
+				if (this.formatOptions.onMdat) {
 					this.writer.startTrackingWrites();
 				}
 
@@ -1422,6 +1437,28 @@ export class IsobmffMuxer extends Muxer {
 		}
 	}
 
+	/** Internal function for external callers who want to full control fragment boundaries. */
+	async forceFragmentFinalization() {
+		assert(this.isFragmented);
+
+		const release = await this.mutex.acquire();
+
+		try {
+			for (const trackData of this.trackDatas) {
+				if (trackData.type === 'subtitle' && trackData.track.source._codec === 'webvtt') {
+					await this.processWebVTTCues(trackData, Infinity);
+				}
+
+				this.processTimestamps(trackData);
+			}
+
+			await this.interleaveSamples(true);
+			await this.finalizeFragment();
+		} finally {
+			release();
+		}
+	}
+
 	/** Finalizes the file, making it ready for use. Must be called after all video and audio chunks have been added. */
 	async finalize() {
 		const release = await this.mutex.acquire();
@@ -1493,19 +1530,19 @@ export class IsobmffMuxer extends Muxer {
 				if (mdatSize >= 2 ** 32) this.mdat.largeSize = true;
 			}
 
-			if (this.format._options.onMoov) {
+			if (this.formatOptions.onMoov) {
 				this.writer.startTrackingWrites();
 			}
 
 			const movieBox = moov(this);
 			this.boxWriter.writeBox(movieBox);
 
-			if (this.format._options.onMoov) {
+			if (this.formatOptions.onMoov) {
 				const { data, start } = this.writer.stopTrackingWrites();
-				this.format._options.onMoov(data, start);
+				this.formatOptions.onMoov(data, start);
 			}
 
-			if (this.format._options.onMdat) {
+			if (this.formatOptions.onMdat) {
 				this.writer.startTrackingWrites();
 			}
 
@@ -1520,9 +1557,9 @@ export class IsobmffMuxer extends Muxer {
 				}
 			}
 
-			if (this.format._options.onMdat) {
+			if (this.formatOptions.onMdat) {
 				const { data, start } = this.writer.stopTrackingWrites();
-				this.format._options.onMdat(data, start);
+				this.formatOptions.onMdat(data, start);
 			}
 		} else if (this.isFragmented) {
 			if (this.isCmaf) {
@@ -1556,9 +1593,9 @@ export class IsobmffMuxer extends Muxer {
 			this.mdat.largeSize = mdatSize >= 2 ** 32; // Only use the large size if we need it
 			this.boxWriter.patchBox(this.mdat);
 
-			if (this.format._options.onMdat) {
+			if (this.formatOptions.onMdat) {
 				const { data, start } = this.writer.stopTrackingWrites();
-				this.format._options.onMdat(data, start);
+				this.formatOptions.onMdat(data, start);
 			}
 
 			const movieBox = moov(this);
@@ -1567,7 +1604,7 @@ export class IsobmffMuxer extends Muxer {
 				assert(this.ftypSize !== null);
 				this.writer.seek(this.ftypSize);
 
-				if (this.format._options.onMoov) {
+				if (this.formatOptions.onMoov) {
 					this.writer.startTrackingWrites();
 				}
 
@@ -1577,16 +1614,16 @@ export class IsobmffMuxer extends Muxer {
 				const remainingSpace = this.boxWriter.offsets.get(this.mdat)! - this.writer.getPos();
 				this.boxWriter.writeBox(free(remainingSpace));
 			} else {
-				if (this.format._options.onMoov) {
+				if (this.formatOptions.onMoov) {
 					this.writer.startTrackingWrites();
 				}
 
 				this.boxWriter.writeBox(movieBox);
 			}
 
-			if (this.format._options.onMoov) {
+			if (this.formatOptions.onMoov) {
 				const { data, start } = this.writer.stopTrackingWrites();
-				this.format._options.onMoov(data, start);
+				this.formatOptions.onMoov(data, start);
 			}
 		}
 

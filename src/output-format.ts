@@ -109,6 +109,11 @@ export abstract class OutputFormat {
 	_codecUnsupportedHint(codec: MediaCodec) {
 		return '';
 	}
+
+	/** @internal */
+	_isFragmentedIsobmff() {
+		return false;
+	}
 }
 
 /**
@@ -276,6 +281,11 @@ export abstract class IsobmffOutputFormat extends OutputFormat {
 	/** @internal */
 	_createMuxer(output: Output) {
 		return new IsobmffMuxer(output, this);
+	}
+
+	/** @internal */
+	override _isFragmentedIsobmff(): boolean {
+		return this._options.fastStart === 'fragmented';
 	}
 }
 
