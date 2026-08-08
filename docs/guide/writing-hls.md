@@ -648,6 +648,8 @@ segments-1.ts
 ...
 ```
 
+This option is special-cased when used in conjunction with a fragmented MP4 segment format: the resulting segments file will be a standalone valid fMP4 file. This way, you get both an HLS playlist as well as a single-file representation of the media.
+
 ## Live HLS
 
 By default, created HLS playlists are assumed to be VODs. If you instead want to create HLS live streams that are to be consumed while they are being produced, you can use live mode:
