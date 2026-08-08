@@ -3,6 +3,7 @@ import { Output, OutputTrackGroup } from '../../src/output.js';
 import {
 	CmafOutputFormat,
 	HlsOutputFormat,
+	HlsOutputFormatOptions,
 	HlsOutputSegmentInfo,
 	Mp4OutputFormat,
 	MpegTsOutputFormat,
@@ -21,7 +22,7 @@ import { AudioCodec, VideoCodec } from '../../src/codec.js';
 import { EncodedPacket, PacketType } from '../../src/packet.js';
 import { assert, promiseWithResolvers } from '../../src/misc.js';
 import { Input } from '../../src/input.js';
-import { BufferSource } from '../../src/source.js';
+import { BufferSource, CustomPathedSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { InputAudioTrack, InputVideoTrack } from '../../src/input-track.js';
 import { EncodedPacketSink } from '../../src/media-sink.js';
@@ -2004,6 +2005,89 @@ test('Single-file mode', async () => {
 	expect(onSegment).toHaveBeenCalledTimes(1);
 });
 
+test('Single-file mode with fragmented MP4 produces proper standalone segment file', async () => {
+	let playlistText: string | null = null;
+	let segmentBuffer: ArrayBuffer | null = null;
+	const segmentPaths = new Set<string>();
+
+	const onSegment = vi.fn();
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new Mp4OutputFormat({
+				fastStart: 'fragmented',
+				minimumFragmentDuration: 0, // This is to be ignored
+			}),
+			singleFilePerPlaylist: true,
+			onSegment,
+		}),
+		target: new PathedTarget('', (request) => {
+			const target = new BufferTarget();
+
+			if (request.path.includes('playlist')) {
+				target.on('finalized', () => {
+					playlistText = new TextDecoder().decode(target.buffer!);
+				});
+			} else if (request.path.includes('segment')) {
+				segmentPaths.add(request.path);
+
+				target.on('finalized', () => {
+					segmentBuffer = target.buffer!;
+				});
+			}
+
+			return target;
+		}),
+	});
+
+	const source = videoSource();
+	output.addVideoTrack(source);
+
+	await output.start();
+
+	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0), avcMetadata);
+	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0), avcMetadata);
+
+	expect(onSegment).toHaveBeenCalledTimes(0);
+
+	await output.finalize();
+
+	// Only one segment file should have been created
+	expect(segmentPaths.size).toBe(1);
+
+	expect(playlistText).not.toBeNull();
+	expect(playlistText!.match(/#EXT-X-BYTERANGE/g)).toHaveLength(2);
+	expect(playlistText).toContain('#EXT-X-VERSION:6');
+
+	expect(onSegment).toHaveBeenCalledTimes(1);
+
+	assert(segmentBuffer);
+
+	const str = new TextDecoder('ascii').decode(segmentBuffer);
+	expect(str.includes('mfra')).toBe(true); // It's a proper standalone fMP4 file
+	expect(str.split('moov')).toHaveLength(2); // Only one moov box
+
+	using input = new Input({
+		source: new BufferSource(segmentBuffer),
+		formats: ALL_FORMATS,
+	});
+	const track = (await input.getPrimaryVideoTrack())!;
+	const timestamps: number[] = [];
+	const sink = new EncodedPacketSink(track);
+
+	for await (const packet of sink.packets()) {
+		timestamps.push(packet.timestamp);
+	}
+
+	expect(timestamps).toEqual([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5]);
+});
+
 test('StreamTarget, write is called for each target', async () => {
 	const writeCounts = new Map<string, number>();
 
@@ -2247,6 +2331,110 @@ test('CMAF segmentation, single file per playlist', async () => {
 	expect(playlistText).toContain('#EXT-X-VERSION:6');
 	expect(playlistText).toContain('#EXT-X-MAP:URI=');
 });
+
+test('Sparse tracks in segments, MPEG-TS', async () => {
+	await runSparseTracksInSegments({
+		segmentFormat: new MpegTsOutputFormat(),
+	});
+});
+
+test('Sparse tracks in segments, CMAF', async () => {
+	await runSparseTracksInSegments({
+		segmentFormat: new CmafOutputFormat(),
+	});
+});
+
+test('Sparse tracks in segments, standard MP4', async () => {
+	await runSparseTracksInSegments({
+		segmentFormat: new Mp4OutputFormat(),
+	});
+});
+
+test('Sparse tracks in segments, fragmented MP4', async () => {
+	await runSparseTracksInSegments({
+		segmentFormat: new Mp4OutputFormat({ fastStart: 'fragmented' }),
+	});
+});
+
+test('Sparse tracks in segments, fragmented MP4 + single file', async () => {
+	await runSparseTracksInSegments({
+		segmentFormat: new Mp4OutputFormat({ fastStart: 'fragmented' }),
+		singleFilePerPlaylist: true,
+	});
+});
+
+const runSparseTracksInSegments = async (hlsOptions: HlsOutputFormatOptions) => {
+	const targets = new Map<string, BufferTarget>();
+
+	const output = new Output({
+		format: new HlsOutputFormat(hlsOptions),
+		target: new PathedTarget('master.m3u8', (request) => {
+			const target = new BufferTarget();
+			targets.set(request.path, target);
+
+			return target;
+		}),
+	});
+
+	const video = videoSource();
+	const audio = audioSource();
+	output.addVideoTrack(video);
+	output.addAudioTrack(audio);
+
+	await output.start();
+
+	// We expect three segments: First one with just video, second with video and audio, last one with just audio.
+
+	await video.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
+	await video.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
+	await video.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
+	await video.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
+	await video.add(new EncodedPacket(avcPacketData, 'key', 2, 0), avcMetadata);
+	await video.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0), avcMetadata);
+	await video.add(new EncodedPacket(avcPacketData, 'delta', 3, 0), avcMetadata);
+	await video.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0), avcMetadata);
+
+	await audio.add(new EncodedPacket(aacPacketData, 'key', 2, 0), aacMetadata);
+	await audio.add(new EncodedPacket(aacPacketData, 'key', 2.5, 0), aacMetadata);
+	await audio.add(new EncodedPacket(aacPacketData, 'key', 3, 0), aacMetadata);
+	await audio.add(new EncodedPacket(aacPacketData, 'key', 3.5, 0), aacMetadata);
+	await audio.add(new EncodedPacket(aacPacketData, 'key', 4, 0), aacMetadata);
+	await audio.add(new EncodedPacket(aacPacketData, 'key', 4.5, 0), aacMetadata);
+	await audio.add(new EncodedPacket(aacPacketData, 'key', 5, 0), aacMetadata);
+	await audio.add(new EncodedPacket(aacPacketData, 'key', 5.5, 0), aacMetadata);
+
+	await output.finalize();
+
+	// Read the entire output back using the HLS input
+	using input = new Input({
+		source: new CustomPathedSource('master.m3u8', ({ path }) => {
+			const target = targets.get(path);
+			assert(target);
+
+			return new BufferSource(target.buffer!);
+		}),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack() as InputVideoTrack;
+	expect(videoTrack).toBeTruthy();
+	const audioTrack = await input.getPrimaryAudioTrack() as InputAudioTrack;
+	expect(audioTrack).toBeTruthy();
+
+	const videoSink = new EncodedPacketSink(videoTrack);
+	const videoTimestamps: number[] = [];
+	for await (const packet of videoSink.packets()) {
+		videoTimestamps.push(packet.timestamp);
+	}
+	expect(videoTimestamps).toEqual([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5]);
+
+	const audioSink = new EncodedPacketSink(audioTrack);
+	const audioTimestamps: number[] = [];
+	for await (const packet of audioSink.packets()) {
+		audioTimestamps.push(packet.timestamp);
+	}
+	expect(audioTimestamps).toEqual([2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5]);
+};
 
 test('Live mode', async () => {
 	const writtenTexts = new Map<string, string>();

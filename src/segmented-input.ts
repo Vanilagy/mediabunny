@@ -240,6 +240,7 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 
 	hydrationPromise: Promise<void> | null = null;
 	firstInputTrack: InputTrack | null = null;
+	firstSegment: Segment | null = null;
 
 	constructor(segmentedInput: SegmentedInput, decl: SegmentedInputTrackDeclaration, number: number) {
 		this.segmentedInput = segmentedInput;
@@ -254,15 +255,29 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 				throw new Error('Missing first segment, can\'t retrieve track.');
 			}
 
-			const input = this.segmentedInput.getInputForSegment(this.segmentedInput.firstSegment);
-			const inputTracks = await input.getTracks();
+			let currentSegment: Segment | null = this.segmentedInput.firstSegment;
+			let track: InputTrack | null = null;
 
-			const track = inputTracks.find(x => x.type === this.decl.type && x.number === this.number);
+			// For playlists with sparse tracks (rare af!!), not every segment has every track, so we need to loop to
+			// find the first segment that actually contains the track we want.
+			while (currentSegment) {
+				const input = this.segmentedInput.getInputForSegment(currentSegment);
+				const inputTracks = await input.getTracks();
+				track = inputTracks.find(x => x.type === this.decl.type && x.number === this.number) ?? null;
+
+				if (track) {
+					break;
+				}
+
+				currentSegment = await this.segmentedInput.getNextSegment(currentSegment, {});
+			}
+
 			if (!track) {
 				throw new Error('No matching track found in underlying media data.');
 			}
 
 			this.firstInputTrack = track;
+			this.firstSegment = currentSegment;
 		})();
 	}
 
@@ -380,15 +395,36 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 	async getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
 		await this.hydrate();
 
-		assert(this.segmentedInput.firstSegment);
 		assert(this.firstInputTrack);
+		assert(this.firstSegment);
 
-		const packet = await this.firstInputTrack._backing.getFirstPacket(options);
-		if (!packet) {
-			return null;
+		let currentTrack: InputTrack | null = this.firstInputTrack;
+		let currentSegment: Segment | null = this.firstSegment;
+
+		// Loop until we found a segment with a packet (segments may contain zero packets in rare cases)
+		while (true) {
+			if (currentTrack) {
+				const packet = await currentTrack._backing.getFirstPacket(options);
+				if (packet) {
+					return this.createAdjustedPacket(packet, currentSegment, currentTrack);
+				}
+			}
+
+			currentSegment = await this.segmentedInput.getNextSegment(currentSegment, {
+				skipLiveWait: options.skipLiveWait,
+			});
+			if (!currentSegment) {
+				break;
+			}
+
+			const nextInput = this.segmentedInput.getInputForSegment(currentSegment);
+			const nextTracks = await nextInput.getTracks();
+			currentTrack = nextTracks.find(t => (
+				t.type === this.firstInputTrack!.type && t.number === this.firstInputTrack!.number
+			)) ?? null;
 		}
 
-		return this.createAdjustedPacket(packet, this.segmentedInput.firstSegment, this.firstInputTrack);
+		return null;
 	}
 
 	getNextPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {

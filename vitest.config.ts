@@ -42,6 +42,14 @@ export default defineConfig({
 						provider: 'webdriverio',
 						instances: [{
 							browser: 'chrome',
+							capabilities: {
+								// macOS periodically purges files (but not folders) from the default os.tmpdir() cache,
+								// leaving a gutted install that bricks the chromedriver setup - so keep the cache
+								// somewhere persistent
+								'wdio:chromedriverOptions': {
+									cacheDir: path.resolve(__dirname, 'node_modules/.cache/webdriver'),
+								},
+							},
 						}],
 						headless: false, // A bunch of features need the head
 						screenshotFailures: false,

@@ -97,7 +97,8 @@ type MatroskaTrackData = {
 		height: number;
 		aspectRatio: Rational | null;
 		decoderConfig: VideoDecoderConfig;
-		alphaMode: boolean;
+		/** Null until the first packet comes in, which is what determines if this track has alpha or not. */
+		alphaMode: boolean | null;
 	};
 } | {
 	track: OutputAudioTrack;
@@ -175,6 +176,22 @@ export class MatroskaMuxer extends Muxer {
 		this.createCues();
 
 		await this.writer.flush();
+
+		for (const track of this.output.tracks) {
+			if (track.isVideoTrack() && track.metadata.decoderConfig) {
+				this.getVideoTrackData(
+					track,
+					track.metadata.primingPacket ?? null,
+					{ decoderConfig: track.metadata.decoderConfig },
+				);
+			} else if (track.isAudioTrack() && track.metadata.decoderConfig) {
+				this.getAudioTrackData(
+					track,
+					track.metadata.primingPacket ?? null,
+					{ decoderConfig: track.metadata.decoderConfig },
+				);
+			}
+		}
 
 		release();
 	}
@@ -724,13 +741,13 @@ export class MatroskaMuxer extends Muxer {
 		});
 	}
 
-	private getVideoTrackData(track: OutputVideoTrack, packet: EncodedPacket, meta?: EncodedVideoChunkMetadata) {
+	private getVideoTrackData(track: OutputVideoTrack, packet: EncodedPacket | null, meta?: EncodedVideoChunkMetadata) {
 		const existingTrackData = this.trackDatas.find(x => x.track === track);
 		if (existingTrackData) {
 			return existingTrackData as MatroskaVideoTrackData;
 		}
 
-		validateVideoChunkMetadata(meta);
+		validateVideoChunkMetadata(meta, track.source._codec);
 
 		assert(meta);
 		assert(meta.decoderConfig);
@@ -755,7 +772,7 @@ export class MatroskaMuxer extends Muxer {
 				height: meta.decoderConfig.codedHeight,
 				aspectRatio,
 				decoderConfig: meta.decoderConfig,
-				alphaMode: !!packet.sideData.alpha, // The first packet determines if this track has alpha or not
+				alphaMode: packet ? !!packet.sideData.alpha : null,
 			},
 			chunkQueue: [],
 			lastWrittenMsTimestamp: null,
@@ -791,13 +808,13 @@ export class MatroskaMuxer extends Muxer {
 		return newTrackData;
 	}
 
-	private getAudioTrackData(track: OutputAudioTrack, packet: EncodedPacket, meta?: EncodedAudioChunkMetadata) {
+	private getAudioTrackData(track: OutputAudioTrack, packet: EncodedPacket | null, meta?: EncodedAudioChunkMetadata) {
 		const existingTrackData = this.trackDatas.find(x => x.track === track);
 		if (existingTrackData) {
 			return existingTrackData as MatroskaAudioTrackData;
 		}
 
-		validateAudioChunkMetadata(meta);
+		validateAudioChunkMetadata(meta, track.source._codec);
 
 		assert(meta);
 		assert(meta.decoderConfig);
@@ -808,6 +825,11 @@ export class MatroskaMuxer extends Muxer {
 		if (track.source._codec === 'aac' && !decoderConfig.description) {
 			// Matroska stores raw AAC with AudioSpecificConfig in CodecPrivate, not ADTS-wrapped data.
 			// Parse the first packet to extract the AudioSpecificConfig.
+
+			if (!packet) {
+				throw new Error('No AAC description provided; you must therefore provide a priming packet.');
+			}
+
 			const adtsFrame = readAdtsFrameHeader(FileSlice.tempFromBytes(packet.data));
 			if (!adtsFrame) {
 				throw new Error(
@@ -896,6 +918,7 @@ export class MatroskaMuxer extends Muxer {
 
 		try {
 			const trackData = this.getVideoTrackData(track, packet, meta);
+			trackData.info.alphaMode ??= !!packet.sideData.alpha;
 
 			let packetData = packet.data;
 			if (track.source._codec === 'prores') {

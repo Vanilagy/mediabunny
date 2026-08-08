@@ -21,7 +21,7 @@ test('MPEG-TS output format', async () => {
 		video: { min: 0, max: 16 },
 		audio: { min: 0, max: 32 },
 		subtitle: { min: 0, max: 0 },
-		total: { min: 1, max: 48 },
+		total: { min: 0, max: 48 },
 	});
 });
 

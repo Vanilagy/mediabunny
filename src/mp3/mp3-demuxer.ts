@@ -53,6 +53,8 @@ export class Mp3Demuxer extends Demuxer {
 	metadataPromise: Promise<void> | null = null;
 	firstFrameHeader: Mp3FrameHeader | null = null;
 	firstFrameHeaderPos: number | null = null;
+	xingFrameHeader: Mp3FrameHeader | null = null;
+	xingFrameHeaderPos: number | null = null;
 	loadedSamples: Sample[] = []; // All samples from the start of the file to lastLoadedPos
 	metadataTags: MetadataTags | null = null;
 	xingData: {
@@ -78,6 +80,13 @@ export class Mp3Demuxer extends Demuxer {
 			// Keep loading until we find the first frame header
 			while (!this.firstFrameHeader && !this.lastSampleLoaded) {
 				await this.advanceReader();
+			}
+
+			if (!this.firstFrameHeader && this.xingFrameHeader) {
+				// The file consists of nothing but a Xing frame, so it holds no audio data - but that frame still
+				// tells us everything about the track
+				this.firstFrameHeader = this.xingFrameHeader;
+				this.firstFrameHeaderPos = this.xingFrameHeaderPos;
 			}
 
 			if (!this.firstFrameHeader) {
@@ -134,6 +143,11 @@ export class Mp3Demuxer extends Demuxer {
 
 			if (isXing) {
 				// There's no actual audio data in this frame, so let's skip it
+
+				if (!this.xingFrameHeader) {
+					this.xingFrameHeader = header;
+					this.xingFrameHeaderPos = result.startPos;
+				}
 
 				if (!this.xingData) {
 					let xingDataSlice = this.reader.requestSlice(result.startPos + xingOffset + 4, 12);

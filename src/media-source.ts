@@ -705,10 +705,14 @@ class VideoEncoderWrapper {
 					);
 				}
 
-				const support = await VideoEncoder.isConfigSupported(candidateConfig);
-				if (support.supported) {
-					selected = candidate;
-					break;
+				try {
+					const support = await VideoEncoder.isConfigSupported(candidateConfig);
+					if (support.supported) {
+						selected = candidate;
+						break;
+					}
+				} catch {
+					// Not supported
 				}
 			}
 
@@ -2209,8 +2213,16 @@ class AudioEncoderWrapper {
 					throw new Error('AudioEncoder is not supported by this browser.');
 				}
 
-				const support = await AudioEncoder.isConfigSupported(encoderConfig);
-				if (!support.supported) {
+				let supported: boolean;
+
+				try {
+					const support = await AudioEncoder.isConfigSupported(encoderConfig);
+					supported = support.supported ?? false;
+				} catch {
+					supported = false;
+				}
+
+				if (!supported) {
 					throw new Error(
 						`This specific encoder configuration (${encoderConfig.codec}, ${encoderConfig.bitrate} bps,`
 						+ ` ${encoderConfig.numberOfChannels} channels, ${encoderConfig.sampleRate} Hz) is not`

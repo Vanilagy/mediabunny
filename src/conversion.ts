@@ -1018,9 +1018,9 @@ export class Conversion {
 
 		// Let's check if the conversion can actually be executed
 		if (!this._composable) {
-			this.isValid = this.output.hasEnoughTracks();
+			this.isValid = this.output.hasEnoughTracks() && this.output.tracks.length > 0;
 		} else {
-			// Checking Output start validity is not up to us. We consider even zero-track conversions to be valid
+			// Checking Output start validity is not up to us. We even consider zero-track conversions to be valid
 			this.isValid = true;
 		}
 

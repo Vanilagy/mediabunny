@@ -712,7 +712,8 @@ export type UrlSourceOptions = {
 
 /**
  * A source backed by a URL. This is useful for reading data from the network. Requests will be made using an optimized
- * reading and prefetching pattern to minimize request count and latency.
+ * reading and prefetching pattern to minimize request count and latency. Works best with servers that support HTTP
+ * range requests; otherwise, resources must be streamed and read sequentially.
  * @group Input sources
  * @public
  */
@@ -737,6 +738,12 @@ export class UrlSource extends PathedSource {
 	 * @internal
 	 */
 	_fileSizeDetermined = false;
+	/**
+	 * When the server doesn't support range requests, we abandon the orchestrator and instead defer to an internal
+	 * ReadableStreamSource wrapping the response body, which pulls new data only when reads demand it.
+	 * @internal
+	 */
+	_sequentialBacking: ReadableStreamSource | null = null;
 
 	/**
 	 * Creates a new {@link UrlSource} backed by the resource at the specified URL.
@@ -847,7 +854,9 @@ export class UrlSource extends PathedSource {
 			return this._length !== null ? this._length : undefined;
 		}
 
-		const baseSize = this._orchestrator.fileSize;
+		const baseSize = this._sequentialBacking
+			? this._sequentialBacking._endIndex
+			: this._orchestrator.fileSize;
 		if (baseSize === null) {
 			return this._length !== null ? this._length : null;
 		}
@@ -867,12 +876,14 @@ export class UrlSource extends PathedSource {
 		}
 
 		const offset = this._offset;
-		const result = this._orchestrator.read(
-			offset + start,
-			offset + end,
-			Math.max(offset + minReadPosition, offset),
-			offset + Math.min(maxReadPosition, this._length ?? Infinity),
-		);
+		const result = this._sequentialBacking
+			? this._sequentialBacking._read(offset + start, offset + end)
+			: this._orchestrator.read(
+					offset + start,
+					offset + end,
+					Math.max(offset + minReadPosition, offset),
+					offset + Math.min(maxReadPosition, this._length ?? Infinity),
+				);
 
 		const processResult = (result: ReadResult | null) => {
 			if (!result) {
@@ -937,13 +948,29 @@ export class UrlSource extends PathedSource {
 					// Note: For range requests, this is _technically_ not correct, as the range response could contain
 					// less data than was requested. In practice, it seems most servers don't do this though, and the
 					// Content-Length header actually contains the length until the end of the file.
-					this._orchestrator.supplyFileSize(worker.currentPos + Number(contentLength));
+					// A non-206 response always spans the entire resource, no matter what range we asked for.
+					const basePos = response.status === 206 ? worker.currentPos : 0;
+					this._orchestrator.supplyFileSize(basePos + Number(contentLength));
 				}
 			}
 
 			this._fileSizeDetermined = true; // Yes, this is correct even if file size is still null
 
+			if (!response.body) {
+				throw new Error(
+					'Missing HTTP response body stream. The used fetch function must provide the response body as a'
+					+ ' ReadableStream.',
+				);
+			}
+
 			if (response.status !== 206) {
+				if (this._sequentialBacking) {
+					// Another worker already discovered the missing range request support and initiated the
+					// transition into sequential mode; this response is of no use anymore
+					void response.body.cancel();
+					return;
+				}
+
 				if (!this._usedForHls) {
 					const url = new URL(
 						this._url instanceof Request ? this._url.url : this._url,
@@ -958,34 +985,19 @@ export class UrlSource extends PathedSource {
 						if (!warnedOrigins.has(url.origin)) {
 							Logging._warn(
 								`HTTP server (origin ${url.origin}) did not respond to a range request with 206 Partial`
-								+ ' Content, meaning the entire resource will now be downloaded. To enable efficient'
-								+ ' media file streaming across a network, please make sure your server supports'
-								+ ' range requests.',
+								+ ' Content, meaning the resource will now be streamed sequentially, with old data'
+								+ ' being evicted from the cache. Reads into evicted regions will throw. To enable'
+								+ ' efficient media file streaming across a network, please make sure your server'
+								+ ' supports range requests. Alternatively, set maxCacheSize to Infinity in the'
+								+ ' UrlSource options to keep the entire resource in memory.',
 							);
 							warnedOrigins.add(url.origin);
 						}
 					}
 				}
 
-				worker.currentPos = 0;
-				this._orchestrator.options.maxCacheSize = Infinity; // 🤷
-
-				if (this._orchestrator.fileSize !== null) {
-					worker.targetPos = this._orchestrator.fileSize;
-				} else {
-					// The server is dumb, doesn't even surface the content length, but we'll work with it.
-					worker.targetPos = Infinity;
-					worker.strictTarget = false;
-				}
-
-				this._orchestrator.consolidateEverythingIntoOneWorker(worker);
-			}
-
-			if (!response.body) {
-				throw new Error(
-					'Missing HTTP response body stream. The used fetch function must provide the response body as a'
-					+ ' ReadableStream.',
-				);
+				this._transitionToSequentialMode(response.body);
+				return;
 			}
 
 			const reader = response.body.getReader();
@@ -1055,8 +1067,164 @@ export class UrlSource extends PathedSource {
 	}
 
 	/** @internal */
+	private _transitionToSequentialMode(body: ReadableStream<Uint8Array>) {
+		// The server ignored our range request and is sending the entire resource from byte 0. Instead of downloading
+		// and caching the whole thing, we hand the response over to an internal ReadableStreamSource, which pulls new
+		// data only when reads demand it and evicts old data as usual. The response body is wrapped in a stream that
+		// transparently resumes when the connection dies.
+
+		let currentReader = body.getReader();
+		let streamPosition = 0;
+		let skipRemaining = 0;
+
+		const wrappedStream = new ReadableStream<Uint8Array>({
+			pull: async (controller) => {
+				while (true) {
+					let readResult: ReadableStreamReadResult<Uint8Array>;
+
+					try {
+						readResult = await currentReader.read();
+					} catch (error) {
+						if (this._disposed) {
+							throw error;
+						}
+
+						const retryDelayInSeconds = this._getRetryDelay(1, error, this._url);
+						if (retryDelayInSeconds === null) {
+							throw error;
+						}
+
+						Logging._error('Error while reading response stream. Attempting to resume.', error);
+						await wait(1000 * retryDelayInSeconds);
+
+						const newResponse = await retriedFetch(
+							this._options.fetchFn ?? fetch,
+							this._url,
+							mergeRequestInit(this._requestInit, {
+								headers: {
+									// Who knows, maybe the server honors range requests this time
+									Range: `bytes=${streamPosition}-`,
+								},
+							}),
+							this._getRetryDelay,
+							() => this._disposed,
+						);
+
+						if (!newResponse.ok) {
+							throw new Error(
+								// eslint-disable-next-line @typescript-eslint/no-base-to-string
+								`Error fetching ${String(this._url)}:`
+								+ ` ${newResponse.status} ${newResponse.statusText}`,
+							);
+						}
+
+						if (!newResponse.body) {
+							throw new Error(
+								'Missing HTTP response body stream. The used fetch function must provide the'
+								+ ' response body as a ReadableStream.',
+							);
+						}
+
+						currentReader = newResponse.body.getReader();
+						// If the server still doesn't do ranges, the new response starts at byte 0 again and
+						// we need to skip over everything we already delivered. Cursed!
+						skipRemaining = newResponse.status === 206 ? 0 : streamPosition;
+
+						continue;
+					}
+
+					if (readResult.done) {
+						controller.close();
+						return;
+					}
+
+					let chunk = readResult.value;
+
+					if (skipRemaining > 0) {
+						const skippedAmount = Math.min(skipRemaining, chunk.length);
+						skipRemaining -= skippedAmount;
+						chunk = chunk.subarray(skippedAmount);
+					}
+
+					if (chunk.length === 0) {
+						continue;
+					}
+
+					streamPosition += chunk.length;
+					controller.enqueue(chunk);
+
+					return;
+				}
+			},
+			cancel: () => currentReader.cancel(),
+		});
+
+		const backing = new ReadableStreamSource(wrappedStream, {
+			maxCacheSize: this._orchestrator.options.maxCacheSize,
+		});
+		backing._endIndex = this._orchestrator.fileSize; // Might still be null
+		backing._cacheMissErrorMessage = 'Attempted to read data from an already-evicted part of the cache. Because the'
+			+ ' HTTP server did not honor the range request, data can only be read sequentially, with old data being'
+			+ ' evicted from the cache. To fix this issue, either ensure your server responds to range requests with'
+			+ ' 206 Partial Content, or set maxCacheSize to Infinity in the UrlSource options. Note that the latter'
+			+ ' will store the entire file in the cache if needed, no matter how large.';
+		backing.on('read', ({ start, end }) => this._dispatchRead(start, end));
+
+		this._sequentialBacking = backing;
+
+		// Everything still pending in the orchestrator must now be served by the backing instead. Gather all
+		// pending slices, then retire the orchestrator's workers and queued reads for good; _read will only
+		// consult the backing from now on.
+		const uniqueSlices = new Set<PendingSlice>();
+
+		for (const otherWorker of this._orchestrator.workers) {
+			for (const slice of otherWorker.pendingSlices) {
+				uniqueSlices.add(slice);
+			}
+
+			otherWorker.aborted = true;
+			otherWorker.pendingSlices.length = 0;
+		}
+
+		for (const queuedRead of this._orchestrator.queuedReads) {
+			for (const slice of queuedRead.pendingSlices) {
+				uniqueSlices.add(slice);
+			}
+		}
+
+		this._orchestrator.workers.length = 0;
+		this._orchestrator.queuedReads.length = 0;
+
+		for (const slice of uniqueSlices) {
+			const result = backing._read(slice.start, slice.start + slice.bytes.length);
+
+			if (result instanceof Promise) {
+				result.then((readResult) => {
+					if (readResult) {
+						// The backing's cache is empty at this point, so the read is guaranteed to produce
+						// exactly the requested range
+						assert(readResult.offset === slice.start);
+						slice.resolve(readResult.bytes);
+					} else {
+						slice.resolve(null);
+					}
+				}, (error: unknown) => slice.reject(error));
+			} else {
+				// Can only happen synchronously when the slice lies beyond the known file size
+				assert(result === null);
+				slice.resolve(null);
+			}
+		}
+	}
+
+	/** @internal */
 	_dispose() {
 		this._orchestrator.dispose();
+
+		if (this._sequentialBacking) {
+			this._sequentialBacking._disposed = true;
+			this._sequentialBacking._dispose();
+		}
 	}
 }
 
@@ -1456,6 +1624,12 @@ export class ReadableStreamSource extends Source {
 	_endIndex: number | null = null;
 	/** @internal */
 	_pulling = false;
+	/**
+	 * Overridable for internal use.
+	 * @internal
+	 */
+	_cacheMissErrorMessage = 'Attempted to read data from an already-evicted part of the cache. With'
+		+ ' ReadableStreamSource, you must access the data more sequentially or increase the size of its cache.';
 
 	/** Creates a new {@link ReadableStreamSource} backed by the specified `ReadableStream<Uint8Array>`. */
 	constructor(stream: ReadableStream<Uint8Array>, options: ReadableStreamSourceOptions = {}) {
@@ -1581,10 +1755,7 @@ export class ReadableStreamSource extends Source {
 
 	/** @internal */
 	_throwDueToCacheMiss() {
-		throw new Error(
-			'Read is before the cached region. With ReadableStreamSource, you must access the data more'
-			+ ' sequentially or increase the size of its cache.',
-		);
+		throw new Error(this._cacheMissErrorMessage);
 	}
 
 	/** @internal */
@@ -1644,8 +1815,8 @@ export class ReadableStreamSource extends Source {
 			});
 
 			// Do cache eviction, based on the distance from the last-requested index. It's important that we do it like
-			// this and not based on where the reader is at, because if the reader is fast, we'll unnecessarily evict
-			// data that we still might need.
+			// this and not based on how far we've pulled the stream, because if the stream supplies data faster than it
+			// is being requested, we'd unnecessarily evict data that we still might need.
 			while (this._cache.length > 0) {
 				const firstEntry = this._cache[0]!;
 				const distance = this._maxRequestedIndex - firstEntry.end;
@@ -2165,40 +2336,6 @@ class ReadOrchestrator {
 					this.runWorker(newWorker);
 				}
 			});
-	}
-
-	consolidateEverythingIntoOneWorker(worker: ReadWorker) {
-		// Here we merge everything into one "megaworker" that spans the entire file. We assume the passed-in worker
-		// is already configured to be a megaworker.
-
-		const uniqueSlices = new Set(worker.pendingSlices);
-
-		for (let i = 0; i < this.workers.length; i++) {
-			const otherWorker = this.workers[i]!;
-			if (otherWorker === worker) {
-				continue;
-			}
-
-			for (const slice of otherWorker.pendingSlices) {
-				uniqueSlices.add(slice);
-			}
-
-			otherWorker.aborted = true;
-			otherWorker.pendingSlices.length = 0;
-			this.workers.splice(i, 1);
-			i--;
-		}
-
-		for (let i = 0; i < this.queuedReads.length; i++) {
-			const queuedRead = this.queuedReads[i]!;
-
-			for (const slice of queuedRead.pendingSlices) {
-				uniqueSlices.add(slice);
-			}
-		}
-
-		worker.pendingSlices = [...uniqueSlices];
-		this.queuedReads.length = 0;
 	}
 
 	/** Called by a worker when it has read some data. */

@@ -112,7 +112,7 @@ export class MpegTsMuxer extends Muxer {
 			return existingTrackData;
 		}
 
-		validateVideoChunkMetadata(meta);
+		validateVideoChunkMetadata(meta, track.source._codec);
 		assert(meta?.decoderConfig);
 
 		const codec = track.source._codec;
@@ -157,7 +157,7 @@ export class MpegTsMuxer extends Muxer {
 			return existingTrackData;
 		}
 
-		validateAudioChunkMetadata(meta);
+		validateAudioChunkMetadata(meta, track.source._codec);
 		assert(meta?.decoderConfig);
 
 		const codec = track.source._codec;

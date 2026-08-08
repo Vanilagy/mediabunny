@@ -759,3 +759,27 @@ test('Pre-signaled pause signal', async () => {
 	await conversion.execute();
 	expect(conversion.state).toBe('done');
 });
+
+test('Resizing at various scale factors', async () => {
+	// The source is 1080p. 720p downscales by less than 2x, 240p downscales by more than 2x (which kicks in the manual
+	// mipmapping path), and 1440p upscales.
+	for (const height of [720, 240, 1440]) {
+		using input = new Input({
+			source: new UrlSource('/video.mp4'),
+			formats: ALL_FORMATS,
+		});
+
+		const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
+		const conversion = await Conversion.init({
+			input,
+			output,
+			video: { height },
+			trim: { end: 1 },
+		});
+		await conversion.execute();
+
+		using result = new Input({ source: new BufferSource(output.target.buffer!), formats: ALL_FORMATS });
+		const videoTrack = await result.getPrimaryVideoTrack();
+		expect(await videoTrack!.getDisplayHeight()).toBe(height);
+	}
+});

@@ -713,6 +713,11 @@ export class MpegTsDemuxer extends Demuxer {
 			}
 
 			for (const stream of this.elementaryStreams) {
+				if (!stream.initialized) {
+					// Stream was declared but no initialization data for it was found
+					continue;
+				}
+
 				if (stream.info.type === 'video') {
 					this.trackBackingEntries.push(
 						new MpegTsVideoTrackBacking(stream as ElementaryVideoStream),
