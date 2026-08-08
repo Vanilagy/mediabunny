@@ -189,6 +189,12 @@ export type ConversionVideoOptions = {
 	 */
 	fit?: 'fill' | 'contain' | 'cover';
 	/**
+	 * How resizing is performed. `'canvas'` (default) resizes decoded frames before encoding and supports all fitting
+	 * modes. `'encoder'` passes frames at their original resolution and lets the encoder scale them, which may improve
+	 * quality or performance. Encoder resizing only supports the `'fill'` and `'cover'` fitting modes.
+	 */
+	resizeMode?: 'canvas' | 'encoder';
+	/**
 	 * The angle in degrees to rotate the input video by, clockwise. Rotation is applied before cropping and resizing.
 	 * This rotation is _in addition to_ the natural rotation of the input video as specified in input file's metadata.
 	 */
@@ -378,6 +384,18 @@ const validateVideoOptions = (videoOptions: ConversionVideoOptions) => {
 	}
 	if (videoOptions?.fit !== undefined && !['fill', 'contain', 'cover'].includes(videoOptions.fit)) {
 		throw new TypeError('options.video.fit, when provided, must be one of \'fill\', \'contain\', or \'cover\'.');
+	}
+	if (videoOptions?.resizeMode !== undefined && !['canvas', 'encoder'].includes(videoOptions.resizeMode)) {
+		throw new TypeError('options.video.resizeMode, when provided, must be one of \'canvas\' or \'encoder\'.');
+	}
+	if (
+		videoOptions?.resizeMode === 'encoder'
+		&& videoOptions.fit !== undefined
+		&& !['fill', 'cover'].includes(videoOptions.fit)
+	) {
+		throw new TypeError(
+			'options.video.fit must be \'fill\' or \'cover\' when options.video.resizeMode is \'encoder\'.',
+		);
 	}
 	if (
 		videoOptions?.width !== undefined
@@ -1469,10 +1487,23 @@ export class Conversion {
 			};
 			assert(encodingConfig.transform);
 
-			let needsRerender = width !== originalWidth
-				|| height !== originalHeight
-				|| (totalRotation !== 0 && (!canUseRotationMetadata || trackOptions.process !== undefined))
-				|| !!crop
+			const needsResize = width !== originalWidth || height !== originalHeight;
+			const needsEncoderTransform = trackOptions.resizeMode === 'encoder' && (needsResize || !!crop);
+			if (needsResize || needsEncoderTransform) {
+				encodingConfig.transform.resizeMode = trackOptions.resizeMode;
+				if (trackOptions.resizeMode === 'encoder') {
+					encodingConfig.transform.width = width;
+					encodingConfig.transform.height = height;
+					encodingConfig.transform.fit = trackOptions.fit ?? 'fill';
+				}
+			}
+			let needsRerender = (needsResize && trackOptions.resizeMode !== 'encoder')
+				|| (totalRotation !== 0 && (
+					!canUseRotationMetadata
+					|| trackOptions.process !== undefined
+					|| trackOptions.resizeMode === 'encoder'
+				))
+				|| (!!crop && trackOptions.resizeMode !== 'encoder')
 				// Don't expect encoders to reliably handle non-square pixels:
 				|| squarePixelWidth !== await track.getCodedWidth()
 				|| squarePixelHeight !== await track.getCodedHeight();
@@ -1535,6 +1566,9 @@ export class Conversion {
 				encodingConfig.transform.rotate = normalizeRotation(totalRotation - innateRotation);
 				encodingConfig.transform.crop = crop;
 				encodingConfig.transform.alpha = alpha;
+				if (trackOptions.resizeMode === 'encoder') {
+					encodingConfig.transform.force = true;
+				}
 			}
 
 			// We need to do this because `process` can emit new timestamps
