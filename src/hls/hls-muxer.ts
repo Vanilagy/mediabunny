@@ -51,9 +51,11 @@ type HlsTrackData = {
 	info: {
 		type: 'video';
 		decoderConfig: VideoDecoderConfig;
+		primingPacket: EncodedPacket | null;
 	} | {
 		type: 'audio';
 		decoderConfig: AudioDecoderConfig;
+		primingPacket: EncodedPacket | null;
 	};
 };
 type HlsVideoTrackData = HlsTrackData & { info: { type: 'video' } };
@@ -524,6 +526,22 @@ export class HlsMuxer extends Muxer {
 			});
 		}
 
+		for (const track of this.output.tracks) {
+			if (track.isVideoTrack() && track.metadata.decoderConfig) {
+				this.getVideoTrackData(
+					track,
+					track.metadata.primingPacket ?? null,
+					{ decoderConfig: track.metadata.decoderConfig },
+				);
+			} else if (track.isAudioTrack() && track.metadata.decoderConfig) {
+				this.getAudioTrackData(
+					track,
+					track.metadata.primingPacket ?? null,
+					{ decoderConfig: track.metadata.decoderConfig },
+				);
+			}
+		}
+
 		release();
 	}
 
@@ -560,13 +578,13 @@ export class HlsMuxer extends Muxer {
 		}
 	}
 
-	getVideoTrackData(track: OutputVideoTrack, meta?: EncodedVideoChunkMetadata) {
+	getVideoTrackData(track: OutputVideoTrack, packet: EncodedPacket | null, meta?: EncodedVideoChunkMetadata) {
 		let trackData = this.trackDatas.find(x => x.track === track) as HlsVideoTrackData;
 		if (trackData) {
 			return trackData;
 		}
 
-		validateVideoChunkMetadata(meta);
+		validateVideoChunkMetadata(meta, track.source._codec);
 
 		assert(meta);
 		assert(meta?.decoderConfig);
@@ -582,6 +600,7 @@ export class HlsMuxer extends Muxer {
 			info: {
 				type: 'video',
 				decoderConfig: meta.decoderConfig,
+				primingPacket: packet,
 			},
 		};
 		this.trackDatas.push(trackData);
@@ -589,13 +608,13 @@ export class HlsMuxer extends Muxer {
 		return trackData;
 	}
 
-	getAudioTrackData(track: OutputAudioTrack, meta?: EncodedAudioChunkMetadata) {
+	getAudioTrackData(track: OutputAudioTrack, packet: EncodedPacket | null, meta?: EncodedAudioChunkMetadata) {
 		let trackData = this.trackDatas.find(x => x.track === track) as HlsAudioTrackData;
 		if (trackData) {
 			return trackData;
 		}
 
-		validateAudioChunkMetadata(meta);
+		validateAudioChunkMetadata(meta, track.source._codec);
 
 		assert(meta);
 		assert(meta?.decoderConfig);
@@ -611,6 +630,7 @@ export class HlsMuxer extends Muxer {
 			info: {
 				type: 'audio',
 				decoderConfig: meta.decoderConfig,
+				primingPacket: packet,
 			},
 		};
 		this.trackDatas.push(trackData);
@@ -623,7 +643,7 @@ export class HlsMuxer extends Muxer {
 		packet: EncodedPacket,
 		meta?: EncodedVideoChunkMetadata,
 	) {
-		const trackData = this.getVideoTrackData(track, meta);
+		const trackData = this.getVideoTrackData(track, packet, meta);
 		const playlist = trackData.playlist;
 
 		const release = await playlist.mutex.acquire();
@@ -652,7 +672,7 @@ export class HlsMuxer extends Muxer {
 		packet: EncodedPacket,
 		meta?: EncodedAudioChunkMetadata,
 	) {
-		const trackData = this.getAudioTrackData(track, meta);
+		const trackData = this.getAudioTrackData(track, packet, meta);
 		const playlist = trackData.playlist;
 
 		const release = await playlist.mutex.acquire();
@@ -694,14 +714,18 @@ export class HlsMuxer extends Muxer {
 			return;
 		}
 
+		const trackDatas = this.trackDatas.filter(x => playlist.tracks.includes(x.track));
+
 		if (playlist.currentSegmentStartTimestamp === null) {
-			// All tracks are known but we never received any data - all tracks must be closed already
-			await this.onPlaylistDone(playlist);
+			// All tracks are known but we never received any data. Tracks that declared themselves up front are known
+			// before their first packet, so we can only call it a day once they're actually closed.
+			if (trackDatas.every(x => x.closed)) {
+				await this.onPlaylistDone(playlist);
+			}
 
 			return;
 		}
 
-		const trackDatas = this.trackDatas.filter(x => playlist.tracks.includes(x.track));
 		const videoTrack = trackDatas.find(x => x.info.type === 'video') as HlsVideoTrackData | undefined;
 		const audioTrack = trackDatas.find(x => x.info.type === 'audio') as HlsAudioTrackData | undefined;
 
@@ -917,7 +941,11 @@ export class HlsMuxer extends Muxer {
 							);
 							fragmentedIsobmffOutput.output.addVideoTrack(
 								fragmentedIsobmffOutput.videoSource,
-								videoTrack.track.metadata,
+								{
+									...videoTrack.track.metadata,
+									decoderConfig: videoTrack.info.decoderConfig,
+									primingPacket: videoTrack.info.primingPacket ?? undefined,
+								},
 							);
 						}
 
@@ -928,7 +956,11 @@ export class HlsMuxer extends Muxer {
 							);
 							fragmentedIsobmffOutput.output.addAudioTrack(
 								fragmentedIsobmffOutput.audioSource,
-								audioTrack.track.metadata,
+								{
+									...audioTrack.track.metadata,
+									decoderConfig: audioTrack.info.decoderConfig,
+									primingPacket: audioTrack.info.primingPacket ?? undefined,
+								},
 							);
 						}
 
@@ -1074,7 +1106,11 @@ export class HlsMuxer extends Muxer {
 						videoSource = new EncodedVideoPacketSource(
 							(videoTrack.track as OutputVideoTrack).source._codec,
 						);
-						output.addVideoTrack(videoSource, videoTrack.track.metadata);
+						output.addVideoTrack(videoSource, {
+							...videoTrack.track.metadata,
+							decoderConfig: videoTrack.info.decoderConfig,
+							primingPacket: videoTrack.info.primingPacket ?? undefined,
+						});
 					}
 
 					if (audioTrack) {
@@ -1082,7 +1118,11 @@ export class HlsMuxer extends Muxer {
 						audioSource = new EncodedAudioPacketSource(
 							(audioTrack.track as OutputAudioTrack).source._codec,
 						);
-						output.addAudioTrack(audioSource, audioTrack.track.metadata);
+						output.addAudioTrack(audioSource, {
+							...audioTrack.track.metadata,
+							decoderConfig: audioTrack.info.decoderConfig,
+							primingPacket: audioTrack.info.primingPacket ?? undefined,
+						});
 					}
 
 					await output.start();

@@ -352,6 +352,7 @@ export class IsobmffDemuxer extends Demuxer {
 		return this.metadataPromise ??= (async () => {
 			let currentPos = 0;
 			let lookForMfraBox = false;
+			let foundMovieBoxes = false;
 
 			while (true) {
 				let slice = this.reader.requestSliceRange(currentPos, MIN_BOX_HEADER_SIZE, MAX_BOX_HEADER_SIZE);
@@ -388,6 +389,7 @@ export class IsobmffDemuxer extends Demuxer {
 					lookForMfraBox = this.isFragmented
 						&& this.reader.fileSize !== null
 						&& this.reader.fileSize > startPos + boxInfo.totalSize; // There's more after the moov box
+					foundMovieBoxes = true;
 
 					break;
 				} else if (boxInfo.name === 'moof') {
@@ -399,70 +401,21 @@ export class IsobmffDemuxer extends Demuxer {
 						);
 					}
 
-					const initDemuxer = (await this.input._initInput._getDemuxer()) as IsobmffDemuxer;
-					if (initDemuxer.constructor !== IsobmffDemuxer) {
-						throw new Error('Init input must match the input\'s format.');
-					}
-
-					await initDemuxer.readMetadata();
-
-					this.movieTimescale = initDemuxer.movieTimescale;
-					this.movieDurationInTimescale = initDemuxer.movieDurationInTimescale;
-					this.metadataTags = initDemuxer.metadataTags;
-					this.isFragmented = true;
-					this.fragmentTrackDefaults = initDemuxer.fragmentTrackDefaults;
-					this.psshBoxes = initDemuxer.psshBoxes;
-
-					// Create tracks from the init input's tracks
-					for (const foreignTrack of initDemuxer.tracks) {
-						const track: InternalTrack = {
-							id: foreignTrack.id,
-							demuxer: this,
-							trackBacking: null,
-							disposition: foreignTrack.disposition,
-							timescale: foreignTrack.timescale,
-							durationInMediaTimescale: foreignTrack.durationInMediaTimescale,
-							durationInMovieTimescale: foreignTrack.durationInMovieTimescale,
-							rotation: foreignTrack.rotation,
-							internalCodecId: foreignTrack.internalCodecId,
-							name: foreignTrack.name,
-							languageCode: foreignTrack.languageCode,
-							sampleTableByteOffset: null,
-							sampleTable: null,
-							fragmentLookupTable: [],
-							currentFragmentState: null,
-							fragmentPositionCache: [],
-							editListPreviousSegmentDurations: foreignTrack.editListPreviousSegmentDurations,
-							editListOffset: foreignTrack.editListOffset,
-							encryptionInfo: foreignTrack.encryptionInfo,
-							encryptionAuxInfo: null,
-							frmaCodecString: null,
-							info: foreignTrack.info,
-						};
-
-						if (foreignTrack.trackBacking) {
-							assert(track.info);
-
-							if (track.info.type === 'video' && track.info.width !== -1) {
-								const videoTrack = track as InternalVideoTrack;
-								track.trackBacking = new IsobmffVideoTrackBacking(videoTrack);
-								this.tracks.push(track);
-							} else if (track.info.type === 'audio' && track.info.numberOfChannels !== -1) {
-								const audioTrack = track as InternalAudioTrack;
-								track.trackBacking = new IsobmffAudioTrackBacking(audioTrack);
-								this.tracks.push(track);
-							}
-						} else {
-							// The track didn't have enough info to warrant a backing
-						}
-					}
+					await this.copyMetadataFromInitInput(this.input._initInput);
 
 					lookForMfraBox = false; // No point in doing it for segment files
+					foundMovieBoxes = true;
 
 					break;
 				}
 
 				currentPos = startPos + boxInfo.totalSize;
+			}
+
+			if (!foundMovieBoxes && this.input._initInput) {
+				// A segment file is allowed to hold zero fragments, in which case there's no moof box to key off of.
+				// It's still a perfectly valid segment, so let's take the tracks from the init input.
+				await this.copyMetadataFromInitInput(this.input._initInput);
 			}
 
 			if (lookForMfraBox) {
@@ -500,6 +453,66 @@ export class IsobmffDemuxer extends Demuxer {
 				}
 			}
 		})();
+	}
+
+	private async copyMetadataFromInitInput(initInput: Input) {
+		const initDemuxer = (await initInput._getDemuxer()) as IsobmffDemuxer;
+		if (initDemuxer.constructor !== IsobmffDemuxer) {
+			throw new Error('Init input must match the input\'s format.');
+		}
+
+		await initDemuxer.readMetadata();
+
+		this.movieTimescale = initDemuxer.movieTimescale;
+		this.movieDurationInTimescale = initDemuxer.movieDurationInTimescale;
+		this.metadataTags = initDemuxer.metadataTags;
+		this.isFragmented = true;
+		this.fragmentTrackDefaults = initDemuxer.fragmentTrackDefaults;
+		this.psshBoxes = initDemuxer.psshBoxes;
+
+		// Create tracks from the init input's tracks
+		for (const foreignTrack of initDemuxer.tracks) {
+			const track: InternalTrack = {
+				id: foreignTrack.id,
+				demuxer: this,
+				trackBacking: null,
+				disposition: foreignTrack.disposition,
+				timescale: foreignTrack.timescale,
+				durationInMediaTimescale: foreignTrack.durationInMediaTimescale,
+				durationInMovieTimescale: foreignTrack.durationInMovieTimescale,
+				rotation: foreignTrack.rotation,
+				internalCodecId: foreignTrack.internalCodecId,
+				name: foreignTrack.name,
+				languageCode: foreignTrack.languageCode,
+				sampleTableByteOffset: null,
+				sampleTable: null,
+				fragmentLookupTable: [],
+				currentFragmentState: null,
+				fragmentPositionCache: [],
+				editListPreviousSegmentDurations: foreignTrack.editListPreviousSegmentDurations,
+				editListOffset: foreignTrack.editListOffset,
+				encryptionInfo: foreignTrack.encryptionInfo,
+				encryptionAuxInfo: null,
+				frmaCodecString: null,
+				info: foreignTrack.info,
+			};
+
+			if (foreignTrack.trackBacking) {
+				assert(track.info);
+
+				if (track.info.type === 'video' && track.info.width !== -1) {
+					const videoTrack = track as InternalVideoTrack;
+					track.trackBacking = new IsobmffVideoTrackBacking(videoTrack);
+					this.tracks.push(track);
+				} else if (track.info.type === 'audio' && track.info.numberOfChannels !== -1) {
+					const audioTrack = track as InternalAudioTrack;
+					track.trackBacking = new IsobmffAudioTrackBacking(audioTrack);
+					this.tracks.push(track);
+				}
+			} else {
+				// The track didn't have enough info to warrant a backing
+			}
+		}
 	}
 
 	getSampleTableForTrack(internalTrack: InternalTrack) {

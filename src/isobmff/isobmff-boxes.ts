@@ -1048,7 +1048,9 @@ const pcmC = (trackData: IsobmffAudioTrackData) => {
 
 /** AC3SpecificBox */
 const dac3 = (trackData: IsobmffAudioTrackData) => {
-	const frameInfo = parseAc3SyncFrame(trackData.info.firstPacket.data);
+	assert(trackData.info.primingPacket);
+
+	const frameInfo = parseAc3SyncFrame(trackData.info.primingPacket.data);
 	if (!frameInfo) {
 		throw new Error(
 			'Couldn\'t extract AC-3 frame info from the audio packet. '
@@ -1072,7 +1074,9 @@ const dac3 = (trackData: IsobmffAudioTrackData) => {
 
 /** EC3SpecificBox */
 const dec3 = (trackData: IsobmffAudioTrackData) => {
-	const frameInfo = parseEac3SyncFrame(trackData.info.firstPacket.data);
+	assert(trackData.info.primingPacket);
+
+	const frameInfo = parseEac3SyncFrame(trackData.info.primingPacket.data);
 	if (!frameInfo) {
 		throw new Error(
 			'Couldn\'t extract E-AC-3 frame info from the audio packet. '
@@ -1437,7 +1441,7 @@ export const mfra = (trackDatas: IsobmffTrackData[]) => {
 };
 
 /** Track Fragment Random Access Box: Provides pointers to sync samples within the file for random access. */
-export const tfra = (trackData: IsobmffTrackData, trackIndex: number) => {
+export const tfra = (trackData: IsobmffTrackData) => {
 	const version = 1; // Using this version allows us to use 64-bit time and offset values
 
 	return fullBox('tfra', version, 0, [
@@ -1447,7 +1451,7 @@ export const tfra = (trackData: IsobmffTrackData, trackIndex: number) => {
 		trackData.finalizedChunks.map(chunk => [
 			u64(intoTimescale(chunk.samples[0]!.timestamp, trackData.timescale)), // Time (in presentation time)
 			u64(chunk.moofOffset!), // moof offset
-			u32(trackIndex + 1), // traf number
+			u32(chunk.trafIndex! + 1), // traf number
 			u32(1), // trun number
 			u32(1), // Sample number
 		]),

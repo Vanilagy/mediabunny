@@ -72,6 +72,9 @@ type Chunk = {
 	offset: number | null;
 	// In the case of a fragmented file, this indicates the position of the moof box pointing to the data in this chunk
 	moofOffset: number | null;
+	// In the case of a fragmented file, this indicates the index of the traf box in the moof box pointing to the data
+	// in this chunk
+	trafIndex: number | null;
 };
 
 export type IsobmffTrackData = {
@@ -128,7 +131,7 @@ export type IsobmffTrackData = {
 		 * ADTS-wrapped data.
 		 */
 		requiresAdtsStripping: boolean;
-		firstPacket: EncodedPacket;
+		primingPacket: EncodedPacket | null;
 	};
 } | {
 	track: OutputSubtitleTrack;
@@ -312,6 +315,22 @@ export class IsobmffMuxer extends Muxer {
 
 		await this.writer?.flush();
 
+		for (const track of this.output.tracks) {
+			if (track.isVideoTrack() && track.metadata.decoderConfig) {
+				this.getVideoTrackData(
+					track,
+					track.metadata.primingPacket ?? null,
+					{ decoderConfig: track.metadata.decoderConfig },
+				);
+			} else if (track.isAudioTrack() && track.metadata.decoderConfig) {
+				this.getAudioTrackData(
+					track,
+					track.metadata.primingPacket ?? null,
+					{ decoderConfig: track.metadata.decoderConfig },
+				);
+			}
+		}
+
 		release();
 	}
 
@@ -349,13 +368,13 @@ export class IsobmffMuxer extends Muxer {
 		});
 	}
 
-	private getVideoTrackData(track: OutputVideoTrack, packet: EncodedPacket, meta?: EncodedVideoChunkMetadata) {
+	private getVideoTrackData(track: OutputVideoTrack, packet: EncodedPacket | null, meta?: EncodedVideoChunkMetadata) {
 		const existingTrackData = this.trackDatas.find(x => x.track === track);
 		if (existingTrackData) {
 			return existingTrackData as IsobmffVideoTrackData;
 		}
 
-		validateVideoChunkMetadata(meta);
+		validateVideoChunkMetadata(meta, track.source._codec);
 
 		assert(meta);
 		assert(meta.decoderConfig);
@@ -369,6 +388,10 @@ export class IsobmffMuxer extends Muxer {
 		if (track.source._codec === 'avc' && !decoderConfig.description) {
 			// ISOBMFF can only hold AVC in the AVCC format, not in Annex B, but the missing description indicates
 			// Annex B. This means we'll need to do some converterino.
+
+			if (!packet) {
+				throw new Error('No AVC description provided; you must therefore provide a priming packet.');
+			}
 
 			const decoderConfigurationRecord = extractAvcDecoderConfigurationRecord(packet.data);
 			if (!decoderConfigurationRecord) {
@@ -385,6 +408,10 @@ export class IsobmffMuxer extends Muxer {
 		} else if (track.source._codec === 'hevc' && !decoderConfig.description) {
 			// ISOBMFF can only hold HEVC in the HEVC format, not in Annex B, but the missing description indicates
 			// Annex B. This means we'll need to do some converterino.
+
+			if (!packet) {
+				throw new Error('No HEVC description provided; you must therefore provide a priming packet.');
+			}
 
 			const decoderConfigurationRecord = extractHevcDecoderConfigurationRecord(packet.data);
 			if (!decoderConfigurationRecord) {
@@ -457,13 +484,13 @@ export class IsobmffMuxer extends Muxer {
 		return newTrackData;
 	}
 
-	private getAudioTrackData(track: OutputAudioTrack, packet: EncodedPacket, meta?: EncodedAudioChunkMetadata) {
+	private getAudioTrackData(track: OutputAudioTrack, packet: EncodedPacket | null, meta?: EncodedAudioChunkMetadata) {
 		const existingTrackData = this.trackDatas.find(x => x.track === track);
 		if (existingTrackData) {
 			return existingTrackData as IsobmffAudioTrackData;
 		}
 
-		validateAudioChunkMetadata(meta);
+		validateAudioChunkMetadata(meta, track.source._codec);
 
 		assert(meta);
 		assert(meta.decoderConfig);
@@ -474,6 +501,11 @@ export class IsobmffMuxer extends Muxer {
 		if (track.source._codec === 'aac' && !decoderConfig.description) {
 			// ISOBMFF can only hold AAC in raw format, not ADTS, but the missing description indicates ADTS.
 			// Parse the first packet to extract the AudioSpecificConfig.
+
+			if (!packet) {
+				throw new Error('No AAC description provided; you must therefore provide a priming packet.');
+			}
+
 			const adtsFrame = readAdtsFrameHeader(FileSlice.tempFromBytes(packet.data));
 			if (!adtsFrame) {
 				throw new Error(
@@ -499,6 +531,12 @@ export class IsobmffMuxer extends Muxer {
 			requiresAdtsStripping = true;
 		}
 
+		if (track.source._codec === 'ac3' || track.source._codec === 'eac3') {
+			if (!packet) {
+				throw new Error('AC-3/E-AC-3 require a priming packet.');
+			}
+		}
+
 		const newTrackData: IsobmffAudioTrackData = {
 			muxer: this,
 			track,
@@ -512,7 +550,7 @@ export class IsobmffMuxer extends Muxer {
 					&& (PCM_AUDIO_CODECS as readonly string[]).includes(track.source._codec),
 				expectedNextPcmPacketTimestamp: null,
 				requiresAdtsStripping,
-				firstPacket: packet,
+				primingPacket: packet,
 			},
 			timescale: decoderConfig.sampleRate,
 			samples: [],
@@ -1094,6 +1132,7 @@ export class IsobmffMuxer extends Muxer {
 				samples: [],
 				offset: null,
 				moofOffset: null,
+				trafIndex: null,
 			};
 		}
 
@@ -1247,9 +1286,12 @@ export class IsobmffMuxer extends Muxer {
 
 		let currentPos = mdatStartPos + MIN_BOX_HEADER_SIZE;
 		let fragmentStartTimestamp = Infinity;
-		for (const trackData of tracksInFragment) {
+		for (let i = 0; i < tracksInFragment.length; i++) {
+			const trackData = tracksInFragment[i]!;
+
 			trackData.currentChunk!.offset = currentPos;
 			trackData.currentChunk!.moofOffset = moofOffset;
+			trackData.currentChunk!.trafIndex = i;
 
 			for (const sample of trackData.currentChunk!.samples) {
 				currentPos += sample.size;
@@ -1318,44 +1360,48 @@ export class IsobmffMuxer extends Muxer {
 	}
 
 	private async registerSampleFastStartReserve(trackData: IsobmffTrackData, sample: Sample) {
-		assert(this.writer);
-		assert(this.boxWriter);
-
 		if (this.allTracksAreKnown()) {
 			if (!this.mdat) {
-				this.ensureOneEnabledTrack();
-
-				// We finally know all tracks, let's reserve space for the moov box
-				const moovBox = moov(this);
-				const moovSize = this.boxWriter.measureBox(moovBox);
-
-				const reservedSize = moovSize
-					+ this.computeSampleTableSizeUpperBound()
-					+ 4096; // Just a little extra headroom
-
-				assert(this.ftypSize !== null);
-				this.writer.seek(this.ftypSize + reservedSize);
-
-				if (this.formatOptions.onMdat) {
-					this.writer.startTrackingWrites();
-				}
-
-				this.mdat = mdat(true);
-				this.boxWriter.writeBox(this.mdat);
-
-				// Now write everything that was queued
-				for (const trackData of this.trackDatas) {
-					for (const sample of trackData.sampleQueue) {
-						await this.addSampleToTrack(trackData, sample);
-					}
-					trackData.sampleQueue.length = 0;
-				}
+				await this.createFastStartReserveMdat();
 			}
 
 			await this.addSampleToTrack(trackData, sample);
 		} else {
 			// Queue it for when we know all tracks
 			trackData.sampleQueue.push(sample);
+		}
+	}
+
+	private async createFastStartReserveMdat() {
+		assert(this.writer);
+		assert(this.boxWriter);
+
+		this.ensureOneEnabledTrack();
+
+		// We finally know all tracks, let's reserve space for the moov box
+		const moovBox = moov(this);
+		const moovSize = this.boxWriter.measureBox(moovBox);
+
+		const reservedSize = moovSize
+			+ this.computeSampleTableSizeUpperBound()
+			+ 4096; // Just a little extra headroom
+
+		assert(this.ftypSize !== null);
+		this.writer.seek(this.ftypSize + reservedSize);
+
+		if (this.formatOptions.onMdat) {
+			this.writer.startTrackingWrites();
+		}
+
+		this.mdat = mdat(true);
+		this.boxWriter.writeBox(this.mdat);
+
+		// Now write everything that was queued
+		for (const trackData of this.trackDatas) {
+			for (const sample of trackData.sampleQueue) {
+				await this.addSampleToTrack(trackData, sample);
+			}
+			trackData.sampleQueue.length = 0;
 		}
 	}
 
@@ -1466,6 +1512,10 @@ export class IsobmffMuxer extends Muxer {
 		this.allTracksKnown.resolve();
 		this.ensureOneEnabledTrack();
 
+		if (!this.mdat && this.fastStart === 'reserve') {
+			await this.createFastStartReserveMdat();
+		}
+
 		for (const trackData of this.trackDatas) {
 			trackData.closed = true;
 
@@ -1483,15 +1533,14 @@ export class IsobmffMuxer extends Muxer {
 			for (const trackData of this.trackDatas) {
 				await this.finalizeCurrentChunk(trackData);
 
-				// Must hold because we will have processed at least one sample
-				assert(trackData.startTimestampOffset !== null);
-
-				// Shift all of the samples by the start offset. We'll then write out an edit list that will shift them
-				// back to their proper spot in the composition.
-				for (let i = 0; i < trackData.samples.length; i++) {
-					const sample = trackData.samples[i]!;
-					sample.timestamp -= trackData.startTimestampOffset;
-					sample.decodeTimestamp -= trackData.startTimestampOffset;
+				if (trackData.startTimestampOffset !== null) {
+					// Shift all of the samples by the start offset. We'll then write out an edit list that will shift
+					// them back to their proper spot in the composition.
+					for (let i = 0; i < trackData.samples.length; i++) {
+						const sample = trackData.samples[i]!;
+						sample.timestamp -= trackData.startTimestampOffset;
+						sample.decodeTimestamp -= trackData.startTimestampOffset;
+					}
 				}
 			}
 		}

@@ -57,7 +57,55 @@ export class FlacMuxer extends Muxer {
 		this.writer = await this.output._getRootWriter(!!this.format._options.appendOnly);
 		this.writer.write(FLAC_HEADER);
 
+		// If the track already tells us what the stream looks like, we can pin the stream info down right now
+		const track = this.output.tracks[0];
+		assert(track?.isAudioTrack());
+
+		if (track.metadata.decoderConfig) {
+			validateAudioChunkMetadata({ decoderConfig: track.metadata.decoderConfig }, track.source._codec);
+			this.applyDecoderConfig(track.metadata.decoderConfig);
+		}
+
 		release();
+	}
+
+	applyDecoderConfig(decoderConfig: AudioDecoderConfig) {
+		assert(decoderConfig.description);
+
+		this.sampleRate = decoderConfig.sampleRate;
+		this.channels = decoderConfig.numberOfChannels;
+
+		const descriptionBitstream = new Bitstream(
+			toUint8Array(decoderConfig.description),
+		);
+		// skip 'fLaC' + block size + frame size + sample rate + number of channels
+		// See demuxer for the exact structure
+		descriptionBitstream.skipBits(103 + 64);
+		this.bitsPerSample = descriptionBitstream.readBits(5) + 1;
+
+		if (this.format._options.appendOnly) {
+			// Write STREAMINFO immediately since we can't seek back later.
+			this.writeHeader({
+				// https://www.rfc-editor.org/rfc/rfc9639.html#name-streaminfo
+				// Per RFC 9639, min/max block sizes can be looser than
+				// actual values, so we use the full valid range (16–65535).
+				// "The actual max block size MAY be smaller than what's
+				// listed, and the actual min (excluding last block) MAY be
+				// larger. This is because the encoder has to write these
+				// fields before receiving any input audio data and cannot
+				// know beforehand what block sizes it will use."
+				minimumBlockSize: 16,
+				maximumBlockSize: 65535,
+				// https://www.rfc-editor.org/rfc/rfc9639.html#name-streaminfo
+				// "A value of 0 signifies that the value is not known."
+				minimumFrameSize: 0,
+				maximumFrameSize: 0,
+				sampleRate: this.sampleRate,
+				channels: this.channels,
+				bitsPerSample: this.bitsPerSample,
+				totalSamples: 0,
+			});
+		}
 	}
 
 	writeHeader({
@@ -222,47 +270,12 @@ export class FlacMuxer extends Muxer {
 
 			if (this.sampleRate === null) {
 				// It's the first packet
-				validateAudioChunkMetadata(meta);
+				validateAudioChunkMetadata(meta, track.source._codec);
 
 				assert(meta);
 				assert(meta.decoderConfig);
-				assert(meta.decoderConfig.description);
 
-				this.sampleRate = meta.decoderConfig.sampleRate;
-				this.channels = meta.decoderConfig.numberOfChannels;
-
-				const descriptionBitstream = new Bitstream(
-					toUint8Array(meta.decoderConfig.description),
-				);
-				// skip 'fLaC' + block size + frame size + sample rate + number of channels
-				// See demuxer for the exact structure
-				descriptionBitstream.skipBits(103 + 64);
-				const bitsPerSample = descriptionBitstream.readBits(5) + 1;
-				this.bitsPerSample = bitsPerSample;
-
-				if (this.format._options.appendOnly) {
-					// Write STREAMINFO immediately since we can't seek back later.
-					this.writeHeader({
-						// https://www.rfc-editor.org/rfc/rfc9639.html#name-streaminfo
-						// Per RFC 9639, min/max block sizes can be looser than
-						// actual values, so we use the full valid range (16–65535).
-						// "The actual max block size MAY be smaller than what's
-						// listed, and the actual min (excluding last block) MAY be
-						// larger. This is because the encoder has to write these
-						// fields before receiving any input audio data and cannot
-						// know beforehand what block sizes it will use."
-						minimumBlockSize: 16,
-						maximumBlockSize: 65535,
-						// https://www.rfc-editor.org/rfc/rfc9639.html#name-streaminfo
-						// "A value of 0 signifies that the value is not known."
-						minimumFrameSize: 0,
-						maximumFrameSize: 0,
-						sampleRate: this.sampleRate,
-						channels: this.channels,
-						bitsPerSample: this.bitsPerSample,
-						totalSamples: 0,
-					});
-				}
+				this.applyDecoderConfig(meta.decoderConfig);
 			}
 
 			if (!this.metadataWritten) {
@@ -306,6 +319,18 @@ export class FlacMuxer extends Muxer {
 	async finalize(): Promise<void> {
 		const release = await this.mutex.acquire();
 
+		if (this.sampleRate === null) {
+			throw new Error(
+				'Cannot finalize an empty FLAC file: no packets were added and the track specified no decoderConfig in'
+				+ ' its metadata, so there\'s no telling what the file should look like.',
+			);
+		}
+
+		if (!this.metadataWritten) {
+			// Not a single packet came in, so this never happened yet
+			this.writeVorbisCommentAndPictureBlock();
+		}
+
 		if (!this.format._options.appendOnly) {
 			let minimumBlockSize = Infinity;
 			let maximumBlockSize = 0;
@@ -328,7 +353,15 @@ export class FlacMuxer extends Muxer {
 				minimumBlockSize = Math.min(minimumBlockSize, this.blockSizes[i]!);
 			}
 
-			assert(this.sampleRate !== null);
+			if (this.blockSizes.length === 0) {
+				// There are no frames to derive these from, so let's use the full valid range like we do for
+				// append-only output
+				minimumBlockSize = 16;
+				maximumBlockSize = 65535;
+				minimumFrameSize = 0;
+				maximumFrameSize = 0;
+			}
+
 			assert(this.channels !== null);
 			assert(this.bitsPerSample !== null);
 

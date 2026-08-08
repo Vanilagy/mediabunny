@@ -266,7 +266,7 @@ export abstract class IsobmffOutputFormat extends OutputFormat {
 			video: { min: 0, max },
 			audio: { min: 0, max },
 			subtitle: { min: 0, max },
-			total: { min: 1, max },
+			total: { min: 0, max },
 		};
 	}
 
@@ -550,7 +550,7 @@ export class MkvOutputFormat extends OutputFormat {
 			video: { min: 0, max },
 			audio: { min: 0, max },
 			subtitle: { min: 0, max },
-			total: { min: 1, max },
+			total: { min: 0, max },
 		};
 	}
 
@@ -891,7 +891,7 @@ export class OggOutputFormat extends OutputFormat {
 			video: { min: 0, max: 0 },
 			audio: { min: 0, max },
 			subtitle: { min: 0, max: 0 },
-			total: { min: 1, max },
+			total: { min: 0, max },
 		};
 	}
 
@@ -1138,7 +1138,7 @@ export class MpegTsOutputFormat extends OutputFormat {
 			video: { min: 0, max: maxVideo },
 			audio: { min: 0, max: maxAudio },
 			subtitle: { min: 0, max: 0 },
-			total: { min: 1, max: maxTotal },
+			total: { min: 0, max: maxTotal },
 		};
 	}
 
@@ -1415,7 +1415,7 @@ export class HlsOutputFormat extends OutputFormat {
 			video: { min: 0, max: supportsVideo ? Infinity : 0 },
 			audio: { min: 0, max: supportsAudio ? Infinity : 0 },
 			subtitle: { min: 0, max: 0 }, // Currently disabled
-			total: { min: 1, max: Infinity },
+			total: { min: 0, max: Infinity },
 		};
 	}
 

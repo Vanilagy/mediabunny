@@ -814,7 +814,10 @@ const HEVC_CODEC_STRING_REGEX = /^(hev1|hvc1)\.(?:[ABC]?\d+)\.[0-9a-fA-F]{1,8}\.
 const VP9_CODEC_STRING_REGEX = /^vp09(?:\.\d{2}){3}(?:(?:\.\d{2}){5})?$/;
 const AV1_CODEC_STRING_REGEX = /^av01\.\d\.\d{2}[MH]\.\d{2}(?:\.\d\.\d{3}\.\d{2}\.\d{2}\.\d{2}\.\d)?$/;
 
-export const validateVideoChunkMetadata = (metadata: EncodedVideoChunkMetadata | undefined) => {
+export const validateVideoChunkMetadata = (
+	metadata: EncodedVideoChunkMetadata | undefined,
+	trackCodec: VideoCodec | null,
+) => {
 	if (!metadata) {
 		throw new TypeError('Video chunk metadata must be provided.');
 	}
@@ -985,13 +988,23 @@ export const validateVideoChunkMetadata = (metadata: EncodedVideoChunkMetadata |
 			);
 		}
 	}
+
+	if (trackCodec !== null && inferCodecFromCodecString(metadata.decoderConfig.codec) !== trackCodec) {
+		throw new TypeError(
+			`Video chunk metadata decoder configuration codec string '${metadata.decoderConfig.codec}' does not fit to`
+			+ ` the track codec '${trackCodec}'.`,
+		);
+	}
 };
 
 const VALID_AUDIO_CODEC_STRING_PREFIXES = [
 	'mp4a', 'mp3', 'opus', 'vorbis', 'flac', 'ulaw', 'alaw', 'pcm', 'ac-3', 'ec-3',
 ];
 
-export const validateAudioChunkMetadata = (metadata: EncodedAudioChunkMetadata | undefined) => {
+export const validateAudioChunkMetadata = (
+	metadata: EncodedAudioChunkMetadata | undefined,
+	trackCodec: AudioCodec | null,
+) => {
 	if (!metadata) {
 		throw new TypeError('Audio chunk metadata must be provided.');
 	}
@@ -1132,6 +1145,13 @@ export const validateAudioChunkMetadata = (metadata: EncodedAudioChunkMetadata |
 				+ ` codecs (${PCM_AUDIO_CODECS.join(', ')}).`,
 			);
 		}
+	}
+
+	if (trackCodec !== null && inferCodecFromCodecString(metadata.decoderConfig.codec) !== trackCodec) {
+		throw new TypeError(
+			`Audio chunk metadata decoder configuration codec string '${metadata.decoderConfig.codec}' does not fit to`
+			+ ` the track codec '${trackCodec}'.`,
+		);
 	}
 };
 

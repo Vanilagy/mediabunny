@@ -14,6 +14,8 @@ import { AudioSource, MediaSource, SubtitleSource, VideoSource } from './media-s
 import { PathedTarget, Target, TargetRequest } from './target';
 import { Writer } from './writer';
 import { Logging } from './logging';
+import { EncodedPacket } from './packet';
+import { validateAudioChunkMetadata, validateVideoChunkMetadata } from './codec';
 
 /**
  * List of all track types.
@@ -260,13 +262,36 @@ export type VideoTrackMetadata = BaseTrackMetadata & {
 	 * frame to this track.
 	 */
 	hasOnlyKeyPackets?: boolean;
+	/**
+	 * The decoder config for this video track, provided ahead of time. This is provided automatically when media data
+	 * added to the track, but by specifying it here, you give the muxer additional information that it can make use of.
+	 * Zero-packet tracks become possible to write when this field is set.
+	 */
+	decoderConfig?: VideoDecoderConfig;
+	/**
+	 * Can be provided in addition to {@link VideoTrackMetadata.decoderConfig} to provide additional track information
+	 * not included in the decoder config. This packet will not be added to the media data.
+	 */
+	primingPacket?: EncodedPacket;
 };
 /**
  * Additional metadata for audio tracks.
  * @group Output files
  * @public
  */
-export type AudioTrackMetadata = BaseTrackMetadata & {};
+export type AudioTrackMetadata = BaseTrackMetadata & {
+	/**
+	 * The decoder config for this audio track, provided ahead of time. This is provided automatically when media data
+	 * added to the track, but by specifying it here, you give the muxer additional information that it can make use of.
+	 * Zero-packet tracks become possible to write when this field is set.
+	 */
+	decoderConfig?: AudioDecoderConfig;
+	/**
+	 * Can be provided in addition to {@link AudioTrackMetadata.decoderConfig} to provide additional track information
+	 * not included in the decoder config. This packet will not be added to the media data.
+	 */
+	primingPacket?: EncodedPacket;
+};
 /**
  * Additional metadata for subtitle tracks.
  * @group Output files
@@ -617,6 +642,17 @@ export class Output<
 				`Invalid video frame rate: ${metadata.frameRate}. Must be a positive number.`,
 			);
 		}
+		if (metadata.decoderConfig !== undefined) {
+			validateVideoChunkMetadata({ decoderConfig: metadata.decoderConfig }, source._codec);
+		}
+		if (metadata.primingPacket !== undefined) {
+			if (!(metadata.primingPacket instanceof EncodedPacket)) {
+				throw new TypeError('metadata.primingPacket, when provided, must be an EncodedPacket.');
+			}
+			if (metadata.decoderConfig === undefined) {
+				throw new TypeError('metadata.primingPacket can only be provided alongside metadata.decoderConfig.');
+			}
+		}
 
 		const metadataCopy = { ...metadata };
 		metadataCopy.group ??= this.defaultTrackGroup;
@@ -632,6 +668,17 @@ export class Output<
 			throw new TypeError('source must be an AudioSource.');
 		}
 		validateBaseTrackMetadata(metadata);
+		if (metadata.decoderConfig !== undefined) {
+			validateAudioChunkMetadata({ decoderConfig: metadata.decoderConfig }, source._codec);
+		}
+		if (metadata.primingPacket !== undefined) {
+			if (!(metadata.primingPacket instanceof EncodedPacket)) {
+				throw new TypeError('metadata.primingPacket, when provided, must be an EncodedPacket.');
+			}
+			if (metadata.decoderConfig === undefined) {
+				throw new TypeError('metadata.primingPacket can only be provided alongside metadata.decoderConfig.');
+			}
+		}
 
 		const metadataCopy = { ...metadata };
 		metadataCopy.group ??= this.defaultTrackGroup;
