@@ -251,6 +251,8 @@ export {
 	InputVideoTrack,
 	InputAudioTrack,
 	type InputTrackQuery,
+	type FrameRateMetrics,
+	type FrameRateMetricsOptions,
 	type PacketStats,
 	asc,
 	desc,

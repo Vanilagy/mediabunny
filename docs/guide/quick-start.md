@@ -27,8 +27,8 @@ if (videoTrack) {
 	await videoTrack.getRotation(); // in degrees clockwise
 
 	// Estimate frame rate (FPS)
-	const packetStats = await videoTrack.computePacketStats(100);
-	const averageFrameRate = packetStats.averagePacketRate;
+	const frameRateMetrics = await videoTrack.computeFrameRateMetrics();
+	const frameRate = frameRateMetrics.bestGuessFrameRate;
 }
 
 // Extract audio metadata
