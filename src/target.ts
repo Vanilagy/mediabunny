@@ -8,7 +8,7 @@
 
 import type { FileHandle } from 'node:fs/promises';
 import * as nodeAlias from './node';
-import { assert, EventEmitter, FilePath, MaybePromise } from './misc';
+import { assert, EventEmitter, FilePath, isWebKit, MaybePromise } from './misc';
 
 const node = typeof nodeAlias !== 'undefined'
 	? nodeAlias // Aliasing it prevents some bundler warnings
@@ -542,9 +542,19 @@ export class StreamTarget extends Target {
 					throw new Error('Internal error: Monotonicity violation.');
 				}
 
+				const isPartialView = section.start !== 0 || section.end !== chunk.data.byteLength;
+
+				let data: Uint8Array<ArrayBuffer>;
+				if (isPartialView && isWebKit()) {
+					// https://bugs.webkit.org/show_bug.cgi?id=302733
+					data = chunk.data.slice(section.start, section.end);
+				} else {
+					data = chunk.data.subarray(section.start, section.end);
+				}
+
 				void this._streamWriter.write({
 					type: 'write',
-					data: chunk.data.subarray(section.start, section.end),
+					data,
 					position,
 				}).catch((error) => {
 					this._writeError ??= error;
