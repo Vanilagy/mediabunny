@@ -241,7 +241,7 @@ Intuitively, this is the maximum possible "frame rate" of the track (assuming th
 $$ \frac{k}{x},\quad k \in \mathbb{Z} $$
 
 ::: info
-This field only gives an upper bound on a track's frame rate. To get a track's actual frame rate based on its samples, compute its [packet statistics](#packet-statistics).
+This field only gives an upper bound on a track's frame rate. To determine a video track's actual frame rate based on its frames, compute its [frame rate metrics](#frame-rate-metrics).
 :::
 
 Some tracks (especially live tracks) have timestamps which are relative to the Unix epoch (Jan 1 1970, midnight UTC). In other words, their timestamps *are* Unix timestamps. This allows you to map the media data to a definitive point in wall-clock time. To see if this is the case, use:
@@ -281,7 +281,7 @@ This means the video track has a total of 14315 frames, a frame rate of exactly 
 ```ts
 await track.computePacketStats(50);
 ```
-This will only look at the first ~50 packets and then return the result. This is great for quickly getting an estimate of frame rate and bitrate, without having to scan through the entire file. For videos with a constant frame rate, this will also always return the correct frame rate.
+This will only look at the first ~50 packets and then return the result. This is great for quickly getting an estimate of bitrate, without having to scan through the entire file. To determine a video track's frame rate, prefer using [frame rate metrics](#frame-rate-metrics) instead.
 
 ### Video track metadata
 
@@ -310,11 +310,7 @@ await videoTrack.getRotation(); // => 0 | 90 | 180 | 270
 await videoTrack.getPixelAspectRatio(); // => { num: number, den: number }
 ```
 
-To compute a video track's average frame rate (FPS), use [`computePacketStats`](#packet-statistics):
-```ts
-const stats = await videoTrack.computePacketStats(100);
-const frameRate = stats.averagePacketRate; // Approximate, but often exact
-```
+To determine a video track's frame rate (FPS), compute its [frame rate metrics](#frame-rate-metrics).
 
 You can retrieve the track's decoder configuration, which is a `VideoDecoderConfig` from the WebCodecs API for usage within `VideoDecoder`:
 ```ts
@@ -349,6 +345,21 @@ You can also directly check if a video has a _high dynamic range_ (HDR):
 await videoTrack.hasHighDynamicRange(); // => boolean
 ```
 This method compares with the available color space metadata. If it resolves to `true`, then the video is HDR; if it resolves to `false`, the video may or may not be HDR.
+
+#### Frame rate metrics
+
+You can compute metrics about a video track's frame rate (FPS):
+```ts
+const metrics = await videoTrack.computeFrameRateMetrics(); // => FrameRateMetrics
+metrics.bestGuessFrameRate; // => number
+```
+
+Frame rate is never determined from file metadata (which is unreliable) but is always deduced directly from the actual frame timestamps. See [`FrameRateMetrics`](../api/FrameRateMetrics) for more.
+
+By default, this method probes the first 256 packets of the track, which is enough for a reliable estimate. You can control this number using the `targetPacketCount` option, but note that increasing it makes the call more expensive:
+```ts
+await videoTrack.computeFrameRateMetrics({ targetPacketCount: 1024 });
+```
 
 ### Audio track metadata
 
