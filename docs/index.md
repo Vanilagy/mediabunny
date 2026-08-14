@@ -123,6 +123,7 @@ const sponsors = {
 		{ image: 'https://avatars.githubusercontent.com/u/67356781', name: 'Ahmed Rowaihi', url: 'https://github.com/ahmedrowaihi' },
 		{ image: 'https://avatars.githubusercontent.com/u/4714175', name: 'Phoomparin Mano', url: 'https://github.com/heypoom' },
 		{ image: 'https://avatars.githubusercontent.com/u/504909', name: 'Hirbod', url: 'https://github.com/hirbod' },
+		{ image: 'https://avatars.githubusercontent.com/u/15199031', name: 'Marc Rousavy', url: 'https://github.com/mrousavy' },
 		{ image: 'https://avatars.githubusercontent.com/u/2565549', name: 'MatthewNorton', url: 'https://github.com/MatthewNorton' },
 		{ image: 'https://avatars.githubusercontent.com/u/272247752', name: 'Motionik', url: 'https://github.com/Motionik' },
 		{ image: 'https://avatars.githubusercontent.com/u/2698271', name: 'Matthew Gardner', url: 'https://github.com/spheric' },
