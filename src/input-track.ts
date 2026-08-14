@@ -51,7 +51,13 @@ export type FrameRateMetrics = {
 	 * frame-rate (VFR) video.
 	 */
 	underlyingFrameRate: number | null;
-	/** Mediabunny's best guess for the video's actual intended frame rate. */
+	/**
+	 * Mediabunny's best guess for the video's actual intended frame rate.
+	 *
+	 * This value is determined heuristically. If `underlyingFrameRate` exists, this field will be equal to it. If it
+	 * doesn't, Mediabunny will check if `medianFrameRate` is close to a "common" frame rate and if so, snap to it.
+	 * Otherwise, this field simply falls back to `medianFrameRate`.
+	 */
 	bestGuessFrameRate: number;
 	/**
 	 * The minimum frame rate of the video at any given point, based on the largest distance between two
