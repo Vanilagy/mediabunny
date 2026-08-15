@@ -15,7 +15,7 @@ import {
 	EncodedPacket,
 } from 'mediabunny';
 import * as NodeAv from 'node-av';
-import { CODEC_TO_CODEC_ID, getChannelLayout } from './misc';
+import { CODEC_TO_CODEC_ID, getChannelLayout, getDtsChannelLayout } from './misc';
 import { assert, toUint8Array } from '../../../src/misc';
 import { copyAudioSampleToAvFrame, AvFrameAudioSampleResource } from './audio-sample';
 import {
@@ -29,6 +29,11 @@ const AAC_SAMPLE_RATES
 const OPUS_SAMPLE_RATES = [8000, 12000, 16000, 24000, 48000];
 const MP3_SAMPLE_RATES = [8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000];
 const AC3_SAMPLE_RATES = [32000, 44100, 48000];
+const DTS_SAMPLE_RATES = [8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000];
+
+/** DTS only has layouts for these channel counts; 3 and 7 have no mapping. */
+const DTS_CHANNEL_COUNTS = [1, 2, 4, 5, 6];
+const DTS_MAX_FRAME_SIZE = 16384;
 
 const FRAME_SIZE_FALLBACK = 1024; // Just 'cause
 
@@ -72,6 +77,10 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 		) || (
 			codec === 'eac3' && numberOfChannels >= 1 && numberOfChannels <= 16
 			&& AC3_SAMPLE_RATES.includes(sampleRate)
+		) || (
+			codec === 'dts' && DTS_CHANNEL_COUNTS.includes(numberOfChannels)
+			&& DTS_SAMPLE_RATES.includes(sampleRate)
+			&& dtsBitrateFits(resolveBitrate(config, codec), sampleRate, numberOfChannels)
 		);
 	}
 
@@ -107,21 +116,26 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 		}
 
 		codecContext.sampleRate = this.config.sampleRate;
-		codecContext.channelLayout = getChannelLayout(this.config.numberOfChannels);
+		codecContext.channelLayout = this.codec === 'dts'
+			? getDtsChannelLayout(this.config.numberOfChannels)
+			: getChannelLayout(this.config.numberOfChannels);
 		codecContext.codecType = NodeAv.AVMEDIA_TYPE_AUDIO;
 		codecContext.codecId = CODEC_TO_CODEC_ID[this.codec]!;
 		codecContext.sampleFormat = sampleFormat;
 		codecContext.timeBase = new NodeAv.Rational(1, this.config.sampleRate);
-		codecContext.bitRate = BigInt(
-			this.config.bitrate ?? new Quality('medium')._toAudioBitrate(this.codec) ?? 0,
-		);
+		codecContext.bitRate = BigInt(resolveBitrate(this.config, this.codec));
 
 		if (this.config.bitrateMode === 'constant') {
 			codecContext.rcMinRate = codecContext.bitRate;
 			codecContext.rcMaxRate = codecContext.bitRate;
 		}
 
-		const ret = await codecContext.open2();
+		// libav's DTS encoder is marked experimental, so it refuses to open at the default compliance level
+		const options = this.codec === 'dts'
+			? NodeAv.Dictionary.fromObject({ strict: -2 })
+			: null;
+
+		const ret = await codecContext.open2(this.avCodec, options);
 		NodeAv.FFmpegError.throwIfError(ret, 'Open codec context');
 
 		this.codecContext = codecContext;
@@ -172,7 +186,9 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 				this.resampler = new NodeAv.SoftwareResampleContext();
 				this.resamplerInputSampleRate = this.frame.sampleRate;
 
-				const outLayout = getChannelLayout(this.codecContext.channels);
+				// Resample straight to whatever layout the encoder was opened with, since not every codec accepts
+				// the layout that getChannelLayout hands out for a given channel count
+				const outLayout = this.codecContext.channelLayout;
 				const inLayout = getChannelLayout(this.frame.channels);
 
 				const ret = this.resampler.allocSetOpts2(
@@ -400,3 +416,25 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 		this.resampler?.free();
 	}
 }
+
+const resolveBitrate = (config: AudioEncoderConfig, codec: AudioCodec) => {
+	return config.bitrate ?? new Quality('medium')._toAudioBitrate(codec) ?? 0;
+};
+
+/**
+ * The DTS encoder needs each frame to be big enough to hold the per-channel side info and rejects the whole
+ * configuration when it isn't, so this mirrors the check from FFmpeg's dcaenc.c.
+ */
+const dtsBitrateFits = (bitrate: number, sampleRate: number, numberOfChannels: number) => {
+	if (bitrate < 32000 || bitrate > 3840000) {
+		return false;
+	}
+
+	const hasLfe = numberOfChannels === 6;
+	const fullbandChannels = numberOfChannels - (hasLfe ? 1 : 0);
+
+	const frameBits = 32 * Math.ceil(Math.ceil(bitrate * 512 / sampleRate) / 32);
+	const minFrameBits = 132 + (493 + 28 * 32) * fullbandChannels + (hasLfe ? 72 : 0);
+
+	return frameBits >= minFrameBits && frameBits <= 8 * DTS_MAX_FRAME_SIZE;
+};

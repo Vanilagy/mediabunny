@@ -13,6 +13,7 @@ import { aacChannelMap, aacFrequencyTable } from '../../shared/aac-misc';
 import {
 	AacCodecInfo,
 	AudioCodec,
+	DtsFourCc,
 	extractAudioCodecString,
 	extractVideoCodecString,
 	MediaCodec,
@@ -38,6 +39,12 @@ import {
 	AC3_FRAME_SIZES,
 	extractNalUnitTypeForAvc,
 	extractNalUnitTypeForHevc,
+	parseDtsFrame,
+	parseDtsCoreFrameHeader,
+	parseDtsExssHeader,
+	DTS_CORE_FRAME_HEADER_SIZE,
+	DTS_EXSS_HEADER_PREFIX_SIZE,
+	DTS_EXSS_MAX_HEADER_SIZE,
 } from '../codec-data';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
@@ -82,6 +89,22 @@ import { Bitstream } from '../../shared/bitstream';
 const MISSING_PTS_ERROR_MESSAGE = 'PES packet is missing PTS where it was expected. PES packets without PTS are not'
 	+ ' currently supported. If you think this file should be supported, please report it.';
 
+const REGISTRATION_DESCRIPTOR_TAG = 0x05;
+
+// The 'HDMV' and 'HDPR' format identifiers, which mark a program as Blu-ray-derived
+const HDMV_FORMAT_IDENTIFIER = 0x48444d56;
+const HDPR_FORMAT_IDENTIFIER = 0x48445052;
+
+// 'DTS1', 'DTS2' and 'DTS3' all share this prefix
+const DTS_FORMAT_IDENTIFIER_PREFIX = 0x44545300;
+
+// Stream types that only mean DTS within a Blu-ray-derived program
+const BLU_RAY_DTS_STREAM_TYPES = new Set<number>([
+	MpegTsStreamType.BLU_RAY_DTS_HD,
+	MpegTsStreamType.BLU_RAY_DTS_HD_MASTER,
+	MpegTsStreamType.BLU_RAY_DTS_EXPRESS_SECONDARY,
+]);
+
 type ElementaryStream = {
 	demuxer: MpegTsDemuxer;
 	pid: number;
@@ -110,6 +133,7 @@ type ElementaryStream = {
 		codec: AudioCodec;
 		decoderConfig: AudioDecoderConfig | null;
 		aacCodecInfo: AacCodecInfo | null;
+		dtsFormat: DtsFourCc | null;
 		numberOfChannels: number;
 		sampleRate: number;
 	};
@@ -294,7 +318,27 @@ export class MpegTsDemuxer extends Demuxer {
 					// "The remaining 10 bits specify the number of bytes of the descriptors immediately following the
 					// program_info_length field"
 					const programInfoLength = bitstream.readBits(10);
-					bitstream.skipBits(8 * programInfoLength);
+
+					// A few stream types only mean what Blu-ray says they mean, and the program's registration
+					// descriptor is what tells us we're looking at a Blu-ray-derived stream.
+					const programInfoEndPos = bitstream.pos + 8 * programInfoLength;
+					let isBluRayProgram = false;
+
+					while (bitstream.pos < programInfoEndPos) {
+						const descriptorTag = bitstream.readBits(8);
+						const descriptorLength = bitstream.readBits(8);
+						const descriptorEndPos = bitstream.pos + 8 * descriptorLength;
+
+						if (descriptorTag === REGISTRATION_DESCRIPTOR_TAG && descriptorLength >= 4) {
+							const formatIdentifier = bitstream.readBits(32);
+							isBluRayProgram ||= formatIdentifier === HDMV_FORMAT_IDENTIFIER
+								|| formatIdentifier === HDPR_FORMAT_IDENTIFIER;
+						}
+
+						bitstream.pos = descriptorEndPos;
+					}
+
+					bitstream.pos = programInfoEndPos;
 
 					while (8 * (sectionLength + BYTES_BEFORE_SECTION_LENGTH) - bitstream.pos > BITS_IN_CRC_32) {
 						const streamType = bitstream.readBits(8);
@@ -304,24 +348,40 @@ export class MpegTsDemuxer extends Demuxer {
 						bitstream.skipBits(6);
 						const esInfoLength = bitstream.readBits(10);
 
-						// Check ES descriptors to detect AC-3/E-AC-3 in System B
+						// Check ES descriptors to detect AC-3/E-AC-3/DTS in System B
 						const esInfoEndPos = bitstream.pos + 8 * esInfoLength;
 						let hasAc3Descriptor = false;
 						let hasEac3Descriptor = false;
+						let hasDtsDescriptor = false;
 						while (bitstream.pos < esInfoEndPos) {
 							const descriptorTag = bitstream.readBits(8);
 							const descriptorLength = bitstream.readBits(8);
+							const descriptorEndPos = bitstream.pos + 8 * descriptorLength;
+
 							if (descriptorTag === 0x6a) {
 								hasAc3Descriptor = true;
 							} else if (descriptorTag === 0x7a || descriptorTag === 0xcc) {
 								hasEac3Descriptor = true;
+							} else if (descriptorTag === 0x7b) {
+								hasDtsDescriptor = true;
+							} else if (descriptorTag === REGISTRATION_DESCRIPTOR_TAG && descriptorLength >= 4) {
+								// DTS uses 'DTS1', 'DTS2' and 'DTS3' to also signal the stream's frame size,
+								// which we work out from the bitstream anyway
+								const formatIdentifier = bitstream.readBits(32);
+								hasDtsDescriptor ||= (formatIdentifier & 0xffffff00) === DTS_FORMAT_IDENTIFIER_PREFIX;
 							}
-							bitstream.skipBits(8 * descriptorLength);
+
+							bitstream.pos = descriptorEndPos;
 						}
 
 						let info: ElementaryStream['info'] | null = null;
 
-						switch (streamType) {
+						// Blu-ray has its own stream types for the DTS extensions
+						const effectiveStreamType = isBluRayProgram && BLU_RAY_DTS_STREAM_TYPES.has(streamType)
+							? MpegTsStreamType.DTS
+							: streamType;
+
+						switch (effectiveStreamType) {
 							case MpegTsStreamType.AVC:
 							case MpegTsStreamType.HEVC: {
 								const codec = streamType === MpegTsStreamType.AVC ? 'avc' : 'hevc';
@@ -350,21 +410,23 @@ export class MpegTsDemuxer extends Demuxer {
 							case MpegTsStreamType.MP3_MPEG2:
 							case MpegTsStreamType.AAC:
 							case MpegTsStreamType.AC3_SYSTEM_A:
-							case MpegTsStreamType.EAC3_SYSTEM_A: {
+							case MpegTsStreamType.EAC3_SYSTEM_A:
+							case MpegTsStreamType.DTS:
+							case MpegTsStreamType.DTS_ATSC: {
 								let codec: AudioCodec;
 								if (
-									streamType === MpegTsStreamType.MP3_MPEG1
-									|| streamType === MpegTsStreamType.MP3_MPEG2
+									effectiveStreamType === MpegTsStreamType.MP3_MPEG1
+									|| effectiveStreamType === MpegTsStreamType.MP3_MPEG2
 								) {
 									codec = 'mp3';
-								} else if (streamType === MpegTsStreamType.AAC) {
+								} else if (effectiveStreamType === MpegTsStreamType.AAC) {
 									codec = 'aac';
-								} else if (streamType === MpegTsStreamType.AC3_SYSTEM_A) {
+								} else if (effectiveStreamType === MpegTsStreamType.AC3_SYSTEM_A) {
 									codec = 'ac3';
-								} else if (streamType === MpegTsStreamType.EAC3_SYSTEM_A) {
+								} else if (effectiveStreamType === MpegTsStreamType.EAC3_SYSTEM_A) {
 									codec = 'eac3';
 								} else {
-									throw new Error('Unreachable.');
+									codec = 'dts';
 								}
 
 								info = {
@@ -372,6 +434,7 @@ export class MpegTsDemuxer extends Demuxer {
 									codec,
 									decoderConfig: null,
 									aacCodecInfo: null,
+									dtsFormat: null,
 									numberOfChannels: -1,
 									sampleRate: -1,
 								};
@@ -384,6 +447,7 @@ export class MpegTsDemuxer extends Demuxer {
 										codec: 'eac3',
 										decoderConfig: null,
 										aacCodecInfo: null,
+										dtsFormat: null,
 										numberOfChannels: -1,
 										sampleRate: -1,
 									};
@@ -393,6 +457,17 @@ export class MpegTsDemuxer extends Demuxer {
 										codec: 'ac3',
 										decoderConfig: null,
 										aacCodecInfo: null,
+										dtsFormat: null,
+										numberOfChannels: -1,
+										sampleRate: -1,
+									};
+								} else if (hasDtsDescriptor) {
+									info = {
+										type: 'audio',
+										codec: 'dts',
+										decoderConfig: null,
+										aacCodecInfo: null,
+										dtsFormat: null,
 										numberOfChannels: -1,
 										sampleRate: -1,
 									};
@@ -678,6 +753,22 @@ export class MpegTsDemuxer extends Demuxer {
 
 								elementaryStream.info.numberOfChannels = getEac3ChannelCount(frameInfo);
 								elementaryStream.info.sampleRate = sampleRate;
+							} else if (elementaryStream.info.codec === 'dts') {
+								const frameInfo = parseDtsFrame(context.suppliedPacket.data);
+								if (!frameInfo) {
+									throw new Error(
+										'Invalid DTS audio stream; could not read frame header from first packet.',
+									);
+								}
+
+								elementaryStream.info.numberOfChannels = frameInfo.numberOfChannels;
+								elementaryStream.info.sampleRate = frameInfo.sampleRate;
+
+								if (frameInfo.core) {
+									// Telling the two extension-only variants apart would need us to work out
+									// whether the asset holds XLL or LBR data, so we leave those unlabeled
+									elementaryStream.info.dtsFormat = frameInfo.hasExtensions ? 'dtsh' : 'dtsc';
+								}
 							} else {
 								throw new Error('Unhandled.');
 							}
@@ -687,6 +778,7 @@ export class MpegTsDemuxer extends Demuxer {
 									codec: elementaryStream.info.codec,
 									codecDescription: null,
 									aacCodecInfo: elementaryStream.info.aacCodecInfo,
+									dtsFormat: elementaryStream.info.dtsFormat,
 								}),
 								numberOfChannels: elementaryStream.info.numberOfChannels,
 								sampleRate: elementaryStream.info.sampleRate,
@@ -2313,6 +2405,89 @@ class PacketReadingContext {
 						const samplesPerFrame = numblks * 256;
 						const duration = Math.round(
 							samplesPerFrame * TIMESCALE / elementaryStream.info.sampleRate,
+						);
+						return this.supplyPacket(remaining, duration);
+					} else if (codec === 'dts') {
+						if (byte !== 0x7f && byte !== 0x64) {
+							continue;
+						}
+
+						this.skip(-1);
+						const possibleSyncPos = this.currentPos;
+
+						let remaining = this.ensureBuffered(DTS_CORE_FRAME_HEADER_SIZE);
+						if (remaining instanceof Promise) remaining = await remaining;
+
+						if (remaining < DTS_CORE_FRAME_HEADER_SIZE) {
+							return;
+						}
+
+						const headerBytes = this.readBytes(DTS_CORE_FRAME_HEADER_SIZE);
+						const core = parseDtsCoreFrameHeader(headerBytes);
+						let leadingExss = core ? null : parseDtsExssHeader(headerBytes);
+
+						if (!core && !leadingExss) {
+							this.seekTo(possibleSyncPos + 1);
+							continue;
+						}
+
+						if (leadingExss && !leadingExss.asset) {
+							// The static fields and the asset descriptor reach past the bytes we read for the
+							// core header, so take another look with the substream's whole header available
+							this.seekTo(possibleSyncPos);
+
+							const headerBound = Math.min(leadingExss.frameSize, DTS_EXSS_MAX_HEADER_SIZE);
+							let remaining = this.ensureBuffered(headerBound);
+							if (remaining instanceof Promise) remaining = await remaining;
+
+							leadingExss = parseDtsExssHeader(this.readBytes(remaining)) ?? leadingExss;
+						}
+
+						let frameSize = core ? core.frameSize : leadingExss!.frameSize;
+
+						// Extension-only streams put exactly one substream in each frame, so it's only a core
+						// frame that needs us to go looking for the extensions riding along with it. The core is
+						// padded out to a 4-byte boundary before the first of them starts.
+						if (core) {
+							let nextSubstreamPos = Math.ceil(core.frameSize / 4) * 4;
+
+							while (true) {
+								this.seekTo(possibleSyncPos);
+
+								const neededBytes = nextSubstreamPos + DTS_EXSS_HEADER_PREFIX_SIZE;
+								let remaining = this.ensureBuffered(neededBytes);
+								if (remaining instanceof Promise) remaining = await remaining;
+
+								if (remaining < neededBytes) {
+									break;
+								}
+
+								this.seekTo(possibleSyncPos + nextSubstreamPos);
+
+								const exss = parseDtsExssHeader(this.readBytes(DTS_EXSS_HEADER_PREFIX_SIZE));
+								if (!exss) {
+									break;
+								}
+
+								nextSubstreamPos += exss.frameSize;
+								frameSize = nextSubstreamPos;
+							}
+						}
+
+						// Only the substream leading the frame declares how many samples the frame holds
+						const sampleCount = core?.sampleCount ?? leadingExss!.asset?.sampleCount;
+						if (sampleCount === undefined) {
+							this.seekTo(possibleSyncPos + 1);
+							continue;
+						}
+
+						this.seekTo(possibleSyncPos);
+
+						remaining = this.ensureBuffered(frameSize);
+						if (remaining instanceof Promise) remaining = await remaining;
+
+						const duration = Math.round(
+							sampleCount * TIMESCALE / elementaryStream.info.sampleRate,
 						);
 						return this.supplyPacket(remaining, duration);
 					} else {

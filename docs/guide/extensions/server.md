@@ -8,7 +8,7 @@ By default, Mediabunny requires a browser environment for full access to decoder
 
 Features added by this package include:
 - Video decoders and encoders for AVC (H.264), HEVC (H.265), VP8, VP9, AV1, and ProRes. Supports both length-prefixed and Annex B AVC/HEVC as well as transparent video via VP9 and ProRes.
-- Audio decoders and encoders for AAC, MP3, Vorbis, Opus, FLAC, AC-3 and E-AC-3. Supports AAC in both AAC and ADTS formats.
+- Audio decoders and encoders for AAC, MP3, Vorbis, Opus, FLAC, AC-3, E-AC-3 and DTS. Supports AAC in both AAC and ADTS formats.
 - Video frame transformation support (resize, rotate, crop)
 - Automatic hardware acceleration on all platforms (macOS, Linux, Windows)
 - Built-in multithreading

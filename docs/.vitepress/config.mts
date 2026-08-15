@@ -162,6 +162,7 @@ export default withMermaid({
 						{ text: 'FLAC', link: '/codec-registry/flac' },
 						{ text: 'AC-3', link: '/codec-registry/ac3' },
 						{ text: 'E-AC-3', link: '/codec-registry/eac3' },
+						{ text: 'DTS', link: '/codec-registry/dts' },
 						{ text: 'Linear PCM', link: '/codec-registry/pcm' },
 						{ text: 'μ-law PCM', link: '/codec-registry/ulaw' },
 						{ text: 'A-law PCM', link: '/codec-registry/alaw' },
