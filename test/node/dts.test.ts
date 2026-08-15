@@ -10,6 +10,11 @@ import { Conversion } from '../../src/conversion.js';
 import { EncodedPacketSink } from '../../src/media-sink.js';
 import { EncodedPacket } from '../../src/packet.js';
 import { assert, uint8ArraysAreEqual } from '../../src/misc.js';
+import { AudioSampleSink } from '../../src/media-sink.js';
+import { AudioSampleSource } from '../../src/media-source.js';
+import { AudioSample } from '../../src/sample.js';
+import { canEncode, Quality } from '../../src/encode.js';
+import { registerDtsDecoder, registerDtsEncoder } from '@mediabunny/dts';
 
 const __dirname = new URL('.', import.meta.url).pathname;
 
@@ -87,6 +92,160 @@ test('Transmux esds MP4 into Matroska', async () => {
 
 test('Transmux esds MP4 into MPEG-TS', async () => {
 	await expectTransmuxToPreservePackets(ESDS_FILE, new MpegTsOutputFormat(), MPEG_TS_TIMESTAMP_TOLERANCE);
+});
+
+test('Custom coder registration', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '..', 'public', DTSC_FILE)),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	expect(await track.canDecode()).toBe(false);
+	expect(await canEncode('dts')).toBe(false);
+
+	registerDtsDecoder();
+	registerDtsEncoder();
+
+	expect(await track.canDecode()).toBe(true);
+	expect(await canEncode('dts')).toBe(true);
+});
+
+test('Decode with the extension', async () => {
+	registerDtsDecoder();
+
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '..', 'public', DTSC_FILE)),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	const { packetCount } = await track.computePacketStats();
+	const sink = new AudioSampleSink(track);
+
+	let sampleCount = 0;
+	let nextTimestamp = 0;
+
+	for await (using sample of sink.samples()) {
+		expect(sample.timestamp).toBeCloseTo(nextTimestamp);
+		expect(sample.duration).toBeCloseTo(512 / 24000);
+		expect(sample.format).toBe('f32-planar');
+		expect(sample.numberOfChannels).toBe(2);
+		expect(sample.sampleRate).toBe(24000);
+
+		nextTimestamp += sample.duration;
+		sampleCount++;
+	}
+
+	expect(sampleCount).toBe(packetCount);
+});
+
+test('Encode with the extension', async () => {
+	registerDtsEncoder();
+
+	const output = await encodeSineWaveToMp4(0, new Mp4OutputFormat());
+
+	using input = new Input({
+		source: new BufferSource(output),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	expect(await track.getCodec()).toBe('dts');
+	expect(await track.getSampleRate()).toBe(ENCODE_SAMPLE_RATE);
+	expect(await track.getNumberOfChannels()).toBe(ENCODE_CHANNELS);
+
+	const decoderConfig = await track.getDecoderConfig();
+	assert(decoderConfig);
+	expect(decoderConfig.codec).toBe('dtsc');
+	expect(decoderConfig.description).toBeUndefined();
+
+	const sink = new EncodedPacketSink(track);
+	let packetCount = 0;
+
+	for await (const packet of sink.packets()) {
+		expect(packet.type).toBe('key');
+		packetCount++;
+	}
+
+	expect(packetCount).toBeGreaterThan(0);
+	expect(await track.computeDuration()).toBeCloseTo(ENCODE_DURATION, 1);
+});
+
+test('Round-trip through the extension', async () => {
+	registerDtsDecoder();
+	registerDtsEncoder();
+
+	const output = await encodeSineWaveToMp4(0, new Mp4OutputFormat());
+
+	using input = new Input({
+		source: new BufferSource(output),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	const sink = new AudioSampleSink(track);
+	const chunks: Float32Array[] = [];
+	let decodedFrames = 0;
+
+	for await (using sample of sink.samples()) {
+		expect(sample.numberOfChannels).toBe(ENCODE_CHANNELS);
+		expect(sample.sampleRate).toBe(ENCODE_SAMPLE_RATE);
+		decodedFrames += sample.numberOfFrames;
+
+		const chunk = new Float32Array(
+			new ArrayBuffer(sample.allocationSize({ format: 'f32-planar', planeIndex: 0 })),
+		);
+		sample.copyTo(chunk, { format: 'f32-planar', planeIndex: 0 });
+		chunks.push(chunk);
+	}
+
+	expect(decodedFrames).toBeGreaterThanOrEqual(ENCODE_SAMPLE_RATE * ENCODE_DURATION);
+
+	const signal = new Float32Array(chunks.reduce((sum, chunk) => sum + chunk.length, 0));
+	let offset = 0;
+	for (const chunk of chunks) {
+		signal.set(chunk, offset);
+		offset += chunk.length;
+	}
+
+	expect(sine440Score(signal, ENCODE_SAMPLE_RATE, 440)).toBeGreaterThan(0.98);
+});
+
+test('Encode with huge timestamps', async () => {
+	registerDtsDecoder();
+	registerDtsEncoder();
+
+	const timestamp = 1e9;
+	const output = await encodeSineWaveToMp4(timestamp, new Mp4OutputFormat({ fastStart: 'fragmented' }));
+
+	using input = new Input({
+		source: new BufferSource(output),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	const packetSink = new EncodedPacketSink(track);
+	const firstPacket = await packetSink.getFirstPacket();
+	assert(firstPacket);
+
+	expect(firstPacket.timestamp).toBe(timestamp);
+
+	const sampleSink = new AudioSampleSink(track);
+	const firstSample = (await sampleSink.samples(timestamp).next()).value;
+	assert(firstSample);
+
+	expect(firstSample.timestamp).toBe(timestamp);
 });
 
 const expectStreamShape = async (input: Input) => {
@@ -168,4 +327,81 @@ const readAllPackets = async (input: Input) => {
 	}
 
 	return packets;
+};
+
+const ENCODE_SAMPLE_RATE = 48000;
+const ENCODE_CHANNELS = 2;
+const ENCODE_DURATION = 2;
+const ENCODE_BITRATE = 768000;
+
+const encodeSineWaveToMp4 = async (startTimestamp: number, format: Mp4OutputFormat) => {
+	const totalFrames = ENCODE_SAMPLE_RATE * ENCODE_DURATION;
+	const data = new Float32Array(totalFrames * ENCODE_CHANNELS);
+
+	for (let i = 0; i < totalFrames; i++) {
+		const value = Math.sin(2 * Math.PI * 440 * i / ENCODE_SAMPLE_RATE);
+		for (let channel = 0; channel < ENCODE_CHANNELS; channel++) {
+			data[i * ENCODE_CHANNELS + channel] = value;
+		}
+	}
+
+	const output = new Output({ format, target: new BufferTarget() });
+	const source = new AudioSampleSource({ codec: 'dts', quality: new Quality({ bitrate: ENCODE_BITRATE }) });
+	output.addAudioTrack(source);
+
+	await output.start();
+
+	const sample = new AudioSample({
+		data,
+		format: 'f32',
+		numberOfChannels: ENCODE_CHANNELS,
+		sampleRate: ENCODE_SAMPLE_RATE,
+		timestamp: startTimestamp,
+	});
+	await source.add(sample);
+	sample.close();
+	source.close();
+
+	await output.finalize();
+
+	const { buffer } = output.target;
+	assert(buffer);
+
+	return buffer;
+};
+
+/** Returns the fraction of the signal's energy explained by a pure sine at `freq`. */
+const sine440Score = (x: Float32Array, sampleRate: number, freq: number) => {
+	const w = 2 * Math.PI * freq / sampleRate;
+
+	let ss = 0, cc = 0, sc = 0;
+	let xs = 0, xc = 0;
+	let xx = 0;
+
+	for (let n = 0; n < x.length; n++) {
+		const s = Math.sin(w * n);
+		const c = Math.cos(w * n);
+
+		ss += s * s;
+		cc += c * c;
+		sc += s * c;
+
+		xs += x[n]! * s;
+		xc += x[n]! * c;
+		xx += x[n]! * x[n]!;
+	}
+
+	const det = ss * cc - sc * sc;
+
+	const a = (xs * cc - xc * sc) / det;
+	const b = (xc * ss - xs * sc) / det;
+
+	let fitEnergy = 0;
+
+	for (let n = 0; n < x.length; n++) {
+		const y = a * Math.sin(w * n) + b * Math.cos(w * n);
+		fitEnergy += y * y;
+	}
+
+	return fitEnergy / xx;
 };

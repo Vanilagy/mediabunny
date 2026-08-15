@@ -10,6 +10,9 @@ tsc -p packages/mp3-encoder
 rm -rf packages/ac3/dist/modules
 tsc -p packages/ac3
 
+rm -rf packages/dts/dist/modules
+tsc -p packages/dts
+
 rm -rf packages/aac-encoder/dist/modules
 tsc -p packages/aac-encoder
 

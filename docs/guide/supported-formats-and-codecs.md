@@ -114,7 +114,7 @@ For HLS, the supported codecs depend on the segment format chosen.
 [^mp3]: MP3 encoding is not supported by WebCodecs. You can polyfill it with the [`@mediabunny/mp3-encoder`](./extensions/mp3-encoder) extension package.
 [^flac]: FLAC encoding is not supported by WebCodecs. You can polyfill it with the [`@mediabunny/flac-encoder`](./extensions/flac-encoder) extension package.
 [^ac3]: AC-3 and E-AC-3 are not natively supported by WebCodecs. To encode or decode these codecs, you can use the [`@mediabunny/ac3`](./extensions/ac3) extension package.
-[^dts]: DTS is not supported by WebCodecs. The [`@mediabunny/server`](./extensions/server) extension package provides both decoding and encoding support for server-side environments.
+[^dts]: DTS is not natively supported by WebCodecs. To encode or decode it, you can use the [`@mediabunny/dts`](./extensions/dts) extension package.
 [^webm]: WebM only supports a small subset of the codecs supported by Matroska. However, this library can technically read all codecs from a WebM that are supported by Matroska.
 [^webvtt]: WebVTT can only be written, not read.
 

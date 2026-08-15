@@ -1,5 +1,5 @@
 ---
-description: DTS (DTS Coherent Acoustics) audio codec definition, defining legal codec strings, decoder configs, and packet data formats.
+description: DTS audio codec definition, defining legal codec strings, decoder configs, and packet data formats.
 ---
 
 <script setup>
