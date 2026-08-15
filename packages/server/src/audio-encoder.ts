@@ -416,4 +416,3 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 const resolveBitrate = (config: AudioEncoderConfig, codec: AudioCodec) => {
 	return config.bitrate ?? new Quality('medium')._toAudioBitrate(codec) ?? 0;
 };
-
