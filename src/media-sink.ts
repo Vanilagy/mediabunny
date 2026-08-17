@@ -874,6 +874,7 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 
 	customDecoder: CustomVideoDecoder | null = null;
 	customDecoderCallSerializer = new CallSerializer();
+	customDecoderClosed = false;
 	customDecoderQueueSize = 0;
 
 	inputTimestamps: number[] = []; // Timestamps input into the decoder, sorted.
@@ -1294,11 +1295,21 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 
 	close() {
 		if (this.customDecoder) {
-			void this.customDecoderCallSerializer.call(() => this.customDecoder!.close());
+			if (!this.customDecoderClosed) {
+				this.customDecoderClosed = true;
+				void this.customDecoderCallSerializer.call(() => this.customDecoder!.close());
+			}
 		} else {
 			assert(this.decoder);
-			this.decoder.close();
-			this.alphaDecoder?.close();
+
+			// The codec may already be closed: when the platform fails a decoder, the spec closes it before invoking
+			// the error callback, and close() on a closed codec throws InvalidStateError.
+			if (this.decoder.state !== 'closed') {
+				this.decoder.close();
+			}
+			if (this.alphaDecoder && this.alphaDecoder.state !== 'closed') {
+				this.alphaDecoder.close();
+			}
 
 			this.colorQueue.forEach(x => x.close());
 			this.colorQueue.length = 0;
@@ -2065,6 +2076,7 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 
 	customDecoder: CustomAudioDecoder | null = null;
 	customDecoderCallSerializer = new CallSerializer();
+	customDecoderClosed = false;
 	customDecoderQueueSize = 0;
 
 	// Internal state to accumulate a precise current timestamp based on audio durations, not the (potentially
@@ -2199,10 +2211,17 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 
 	close() {
 		if (this.customDecoder) {
-			void this.customDecoderCallSerializer.call(() => this.customDecoder!.close());
+			if (!this.customDecoderClosed) {
+				this.customDecoderClosed = true;
+				void this.customDecoderCallSerializer.call(() => this.customDecoder!.close());
+			}
 		} else {
 			assert(this.decoder);
-			this.decoder.close();
+
+			// See the comment in VideoDecoderWrapper.close().
+			if (this.decoder.state !== 'closed') {
+				this.decoder.close();
+			}
 		}
 	}
 }
