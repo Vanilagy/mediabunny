@@ -238,6 +238,8 @@ Use the `quality` property to control the quality of the output video. For examp
 Use the `keyFrameInterval` property to control the maximum interval in seconds between key frames in the output video. Setting this fields forces a transcode.
 If you want to prevent direct copying of media data and force a transcoding step, use `forceTranscode: true`.
 
+Note that [trimming the start](#trimming) of a track also forces a transcode.
+
 Use the `hardwareAcceleration` property to control whether hardware or software acceleration is used for video transcoding.
 
 ### Processing video
@@ -328,6 +330,8 @@ Use the `codec` property to control the codec of the output track. This should b
 Use the `quality` property to control the quality of the output audio. For example, you can use this field to compress the audio track. See [Encoding quality](./media-sources#encoding-quality) for more. If this property is set, transcoding will always happen. If this property is not set but transcoding is still required, `new Quality('high')` will be used as the value.
 
 If you want to prevent direct copying of media data and force a transcoding step, use `forceTranscode: true`.
+
+Note that [trimming the start](#trimming) of a track also forces a transcode.
 
 ### Processing audio
 
@@ -426,6 +430,17 @@ In this case, the output will be 15 seconds long.
 If only `start` is set, the clip will run until the end of the input file. If only `end` is set, the clip will start at the beginning of the input file.
 
 Note that when using the trimming defaults, the resulting media file will always begin at timestamp 0. If your input file has a start time offset (like is common with MPEG-TS files) and you want to retain that, use `trim: { start: 0 }` to ensure timestamps don't get shifted.
+
+---
+
+Trimming the end and trimming the start have very different performance characteristics:
+
+- **`end` alone is cheap.** Media data is still [copied directly](#transcoding-video) whenever possible; the conversion simply stops once the end timestamp is reached.
+- **`start` forces a transcode** of every track whose first timestamp lies before it. Trimming the start of a long video therefore re-encodes all of the remaining media data, which is dramatically slower than a copy.
+
+So `trim: { end: 10 }` on a one-hour video finishes almost instantly, while `trim: { start: 10 }` re-encodes the remaining 59 minutes. If you only need to shorten a file from the end, prefer `end` over `start`.
+
+Negative `start` values (see below) don't trigger this, as they lie before the track's first timestamp.
 
 ---
 
