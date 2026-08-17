@@ -1,0 +1,59 @@
+{
+  "name": "@mediabunny/dts",
+  "author": "Vanilagy",
+  "version": "1.54.0",
+  "description": "DTS decoder and encoder extension for Mediabunny, based on libavcodec.",
+  "main": "./dist/bundles/mediabunny-dts.mjs",
+  "module": "./dist/bundles/mediabunny-dts.mjs",
+  "types": "./dist/modules/src/index.d.ts",
+  "exports": {
+    "types": "./dist/modules/src/index.d.ts",
+    "import": "./dist/bundles/mediabunny-dts.mjs",
+    "require": "./dist/bundles/mediabunny-dts.mjs"
+  },
+  "files": [
+    "README.md",
+    "package.json",
+    "LICENSE",
+    "dist",
+    "src"
+  ],
+  "browser": {
+    "worker_threads": false
+  },
+  "sideEffects": false,
+  "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vanilagy/mediabunny.git",
+    "directory": "packages/dts"
+  },
+  "bugs": {
+    "url": "https://github.com/Vanilagy/mediabunny/issues"
+  },
+  "homepage": "https://mediabunny.dev/guide/extensions/dts",
+  "funding": {
+    "type": "individual",
+    "url": "https://github.com/sponsors/Vanilagy"
+  },
+  "peerDependencies": {
+    "mediabunny": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/emscripten": "^1.40.1"
+  },
+  "keywords": [
+    "dts",
+    "dca",
+    "dts-hd",
+    "digital-theater-systems",
+    "encoding",
+    "decoding",
+    "codec",
+    "mediabunny",
+    "ffmpeg",
+    "browser",
+    "wasm",
+    "polyfill"
+  ]
+}

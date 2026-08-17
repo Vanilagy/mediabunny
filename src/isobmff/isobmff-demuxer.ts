@@ -11,6 +11,8 @@ import { parseAacAudioSpecificConfig } from '../../shared/aac-misc';
 import {
 	AacCodecInfo,
 	AudioCodec,
+	DTS_FOURCCS,
+	DtsFourCc,
 	extractAudioCodecString,
 	extractVideoCodecString,
 	MediaCodec,
@@ -33,6 +35,9 @@ import {
 	parseEac3Config,
 	getEac3SampleRate,
 	getEac3ChannelCount,
+	extractDtsFourCcFromPacket,
+	parseDtsSpecificBox,
+	DTS_SPECIFIC_BOX_SIZE,
 	AC3_ACMOD_CHANNEL_COUNTS,
 } from '../codec-data';
 import { Demuxer } from '../demuxer';
@@ -159,6 +164,7 @@ type InternalTrack = {
 		codec: AudioCodec | null;
 		codecDescription: Uint8Array | null;
 		aacCodecInfo: AacCodecInfo | null;
+		dtsFormat: DtsFourCc | null;
 		pcmLittleEndian: boolean;
 		pcmSampleSize: number | null;
 	};
@@ -1034,6 +1040,7 @@ export class IsobmffDemuxer extends Demuxer {
 						codec: null,
 						codecDescription: null,
 						aacCodecInfo: null,
+						dtsFormat: null,
 						pcmLittleEndian: false,
 						pcmSampleSize: null,
 					};
@@ -1185,6 +1192,9 @@ export class IsobmffDemuxer extends Demuxer {
 							track.info.codec = 'ac3';
 						} else if (codecName === 'ec-3') {
 							track.info.codec = 'eac3';
+						} else if ((DTS_FOURCCS as readonly string[]).includes(codecName!)) {
+							track.info.codec = 'dts';
+							track.info.dtsFormat = codecName as DtsFourCc;
 						} else if (codecName === 'twos') {
 							if (sampleSize === 8) {
 								track.info.codec = 'pcm-s8';
@@ -1564,6 +1574,8 @@ export class IsobmffDemuxer extends Demuxer {
 					track.info.codec = 'mp3';
 				} else if (objectTypeIndication === 0xdd) {
 					track.info.codec = 'vorbis'; // "nonstandard, gpac uses it" - FFmpeg
+				} else if (objectTypeIndication === 0xa9) {
+					track.info.codec = 'dts';
 				} else {
 					Logging._warn(
 						`Unsupported audio codec (objectTypeIndication ${objectTypeIndication}) - discarding track.`,
@@ -1761,6 +1773,28 @@ export class IsobmffDemuxer extends Demuxer {
 				}
 
 				track.info.numberOfChannels = getEac3ChannelCount(config);
+			}; break;
+
+			case 'ddts': { // DTSSpecificBox
+				const track = this.currentTrack;
+				if (!track) {
+					break;
+				}
+				assert(track.info?.type === 'audio');
+
+				const bytes = readBytes(slice, Math.min(boxInfo.contentSize, DTS_SPECIFIC_BOX_SIZE));
+				const config = parseDtsSpecificBox(bytes);
+
+				if (!config) {
+					Logging._warn('Invalid ddts box contents, ignoring.');
+					break;
+				}
+
+				track.info.sampleRate = config.sampleRate;
+
+				if (config.numberOfChannels !== null) {
+					track.info.numberOfChannels = config.numberOfChannels;
+				}
 			}; break;
 
 			case 'stts': {
@@ -3404,7 +3438,7 @@ class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideo
 
 class IsobmffAudioTrackBacking extends IsobmffTrackBacking implements InputAudioTrackBacking {
 	override internalTrack: InternalAudioTrack;
-	decoderConfig: AudioDecoderConfig | null = null;
+	decoderConfigPromise: Promise<AudioDecoderConfig> | null = null;
 
 	constructor(internalTrack: InternalAudioTrack) {
 		super(internalTrack);
@@ -3432,12 +3466,20 @@ class IsobmffAudioTrackBacking extends IsobmffTrackBacking implements InputAudio
 			return null;
 		}
 
-		return this.decoderConfig ??= {
-			codec: extractAudioCodecString(this.internalTrack.info),
-			numberOfChannels: this.internalTrack.info.numberOfChannels,
-			sampleRate: this.internalTrack.info.sampleRate,
-			description: this.internalTrack.info.codecDescription ?? undefined,
-		};
+		return this.decoderConfigPromise ??= (async (): Promise<AudioDecoderConfig> => {
+			if (this.internalTrack.info.codec === 'dts' && !this.internalTrack.info.dtsFormat) {
+				// Gotta check the packet to determine the DTS variant
+				const firstPacket = await this.getFirstPacket({});
+				this.internalTrack.info.dtsFormat = firstPacket && extractDtsFourCcFromPacket(firstPacket.data);
+			}
+
+			return {
+				codec: extractAudioCodecString(this.internalTrack.info),
+				numberOfChannels: this.internalTrack.info.numberOfChannels,
+				sampleRate: this.internalTrack.info.sampleRate,
+				description: this.internalTrack.info.codecDescription ?? undefined,
+			};
+		})();
 	}
 }
 

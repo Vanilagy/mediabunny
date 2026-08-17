@@ -1297,8 +1297,13 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			void this.customDecoderCallSerializer.call(() => this.customDecoder!.close());
 		} else {
 			assert(this.decoder);
-			this.decoder.close();
-			this.alphaDecoder?.close();
+
+			if (this.decoder.state !== 'closed') {
+				this.decoder.close();
+			}
+			if (this.alphaDecoder && this.alphaDecoder.state !== 'closed') {
+				this.alphaDecoder.close();
+			}
 
 			this.colorQueue.forEach(x => x.close());
 			this.colorQueue.length = 0;
@@ -2202,7 +2207,10 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 			void this.customDecoderCallSerializer.call(() => this.customDecoder!.close());
 		} else {
 			assert(this.decoder);
-			this.decoder.close();
+
+			if (this.decoder.state !== 'closed') {
+				this.decoder.close();
+			}
 		}
 	}
 }

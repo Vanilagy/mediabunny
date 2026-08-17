@@ -10,12 +10,14 @@ import {
 	UrlSource,
 } from 'mediabunny';
 import { registerAc3Decoder } from '@mediabunny/ac3';
+import { registerDtsDecoder } from '@mediabunny/dts';
 import { registerProresDecoder } from '@mediabunny/prores';
 
 import SampleFileUrl from '../../docs/assets/big-buck-bunny-trimmed.mp4';
 
 // Enable codecs that aren't natively supported by WebCodecs.
 registerAc3Decoder();
+registerDtsDecoder();
 registerProresDecoder();
 
 (document.querySelector('#sample-file-download') as HTMLAnchorElement).href = SampleFileUrl;

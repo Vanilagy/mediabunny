@@ -472,6 +472,17 @@ export const ilog = (x: number) => {
 	return ret;
 };
 
+export const popcount = (value: number) => {
+	let count = 0;
+
+	while (value !== 0) {
+		value &= value - 1;
+		count++;
+	}
+
+	return count;
+};
+
 const ISO_639_2_REGEX = /^[a-z]{3}$/;
 export const isIso639Dash2LanguageCode = (x: string) => {
 	return ISO_639_2_REGEX.test(x);
