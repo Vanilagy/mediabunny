@@ -76,6 +76,7 @@ const convertVideo = async (quality: Quality, codec: VideoCodec, allowMissingQua
 		trim: { start: 0, end: 2 },
 		video: { codec, quality },
 		audio: { discard: true },
+		showWarnings: false,
 	});
 
 	if (allowMissingQuantizerSupport && !conversion.isValid) {
