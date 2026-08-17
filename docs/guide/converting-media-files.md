@@ -440,6 +440,12 @@ const conversion = await Conversion.init({
 });
 ```
 
+::: warning
+Setting `start` to a value other than the default will currently force a *transcode* of both video and audio.
+
+In a future version of Mediabunny, the fast "packet copy path" that is currently reachable by leaving `start` unset, may be made available for any arbitrary trim range.
+:::
+
 ## Metadata tags
 
 By default, any [descriptive metadata tags](../api/MetadataTags.md) of the input will be copied to the output. If you want to further control the metadata tags written to the output, you can use the `tags` options:
