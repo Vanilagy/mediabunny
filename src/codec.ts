@@ -75,6 +75,7 @@ export const NON_PCM_AUDIO_CODECS = [
 	'flac',
 	'ac3',
 	'eac3',
+	'dts',
 ] as const;
 /**
  * List of known audio codecs, ordered by encoding preference.
@@ -226,6 +227,14 @@ export const PRORES_FOURCCS = [
 	'apco', // ProRes 422 Proxy
 ] as const;
 export type ProresFourCc = typeof PRORES_FOURCCS[number];
+
+export const DTS_FOURCCS = [
+	'dtsc', // DTS core
+	'dtsh', // DTS-HD, core plus extension substreams
+	'dtsl', // DTS-HD Lossless, no core
+	'dtse', // DTS Express
+] as const;
+export type DtsFourCc = typeof DTS_FOURCCS[number];
 
 // Target data rates of the ProRes profiles at 1920x1080 ~30fps, as published by Apple
 const PRORES_PROFILE_TARGET_BITRATES: { fourCc: ProresFourCc; bitrate: number; alpha: boolean }[] = [
@@ -595,6 +604,8 @@ export const buildAudioCodecString = (codec: AudioCodec, numberOfChannels: numbe
 		return 'ac-3';
 	} else if (codec === 'eac3') {
 		return 'ec-3';
+	} else if (codec === 'dts') {
+		return 'dtsc';
 	} else if ((PCM_AUDIO_CODECS as readonly string[]).includes(codec)) {
 		return codec;
 	}
@@ -611,8 +622,9 @@ export const extractAudioCodecString = (trackInfo: {
 	codec: AudioCodec | null;
 	codecDescription: Uint8Array | null;
 	aacCodecInfo: AacCodecInfo | null;
+	dtsFormat: DtsFourCc | null;
 }) => {
-	const { codec, codecDescription, aacCodecInfo } = trackInfo;
+	const { codec, codecDescription, aacCodecInfo, dtsFormat } = trackInfo;
 
 	if (codec === 'aac') {
 		if (!aacCodecInfo) {
@@ -644,6 +656,8 @@ export const extractAudioCodecString = (trackInfo: {
 		return 'ac-3';
 	} else if (codec === 'eac3') {
 		return 'ec-3';
+	} else if (codec === 'dts') {
+		return dtsFormat ?? 'dtsc';
 	} else if (codec && (PCM_AUDIO_CODECS as readonly string[]).includes(codec)) {
 		return codec;
 	}
@@ -756,6 +770,8 @@ export const inferCodecFromCodecString = (codecString: string): MediaCodec | nul
 		return 'ac3';
 	} else if (codecString === 'ec-3' || codecString === 'eac3') {
 		return 'eac3';
+	} else if ((DTS_FOURCCS as readonly string[]).includes(codecString)) {
+		return 'dts';
 	} else if (codecString === 'ulaw') {
 		return 'ulaw';
 	} else if (codecString === 'alaw') {
@@ -998,7 +1014,7 @@ export const validateVideoChunkMetadata = (
 };
 
 const VALID_AUDIO_CODEC_STRING_PREFIXES = [
-	'mp4a', 'mp3', 'opus', 'vorbis', 'flac', 'ulaw', 'alaw', 'pcm', 'ac-3', 'ec-3',
+	'mp4a', 'mp3', 'opus', 'vorbis', 'flac', 'ulaw', 'alaw', 'pcm', 'ac-3', 'ec-3', 'dts',
 ];
 
 export const validateAudioChunkMetadata = (
@@ -1131,6 +1147,15 @@ export const validateAudioChunkMetadata = (
 
 		if (metadata.decoderConfig.codec !== 'ec-3') {
 			throw new TypeError('Audio chunk metadata decoder configuration codec string for EC-3 must be "ec-3".');
+		}
+	} else if (metadata.decoderConfig.codec.startsWith('dts')) {
+		// DTS-specific validation
+
+		if (!(DTS_FOURCCS as readonly string[]).includes(metadata.decoderConfig.codec)) {
+			throw new TypeError(
+				'Audio chunk metadata decoder configuration codec string for DTS must be one of the following'
+				+ ` four-character codes: ${DTS_FOURCCS.join(', ')}.`,
+			);
 		}
 	} else if (
 		metadata.decoderConfig.codec.startsWith('pcm')

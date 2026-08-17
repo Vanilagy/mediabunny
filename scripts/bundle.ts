@@ -161,6 +161,37 @@ const ac3Variants = await createVariants(
 	},
 );
 
+const dtsVariants = await createVariants(
+	'packages/dts/src/index.ts',
+	'MediabunnyDts',
+	'packages/dts/dist/bundles/mediabunny-dts',
+	'js', // The bundles are purely for the browser, not for Node (due to the peer dependency)
+	{
+		plugins: [
+			PluginExternalGlobal.externalGlobalPlugin({
+				mediabunny: 'Mediabunny',
+			}),
+			inlineWorkerPlugin({
+				define: {
+					'import.meta.url': '""',
+				},
+				legalComments: 'none',
+			}),
+		],
+	},
+	{
+		external: ['mediabunny'],
+		plugins: [
+			inlineWorkerPlugin({
+				define: {
+					'import.meta.url': '""',
+				},
+				legalComments: 'none',
+			}),
+		],
+	},
+);
+
 const aacEncoderVariants = await createVariants(
 	'packages/aac-encoder/src/index.ts',
 	'MediabunnyAacEncoder',
@@ -262,6 +293,7 @@ const contexts = [
 	...mediabunnyVariants,
 	...mp3EncoderVariants,
 	...ac3Variants,
+	...dtsVariants,
 	...aacEncoderVariants,
 	...flacEncoderVariants,
 	...proresVariants,

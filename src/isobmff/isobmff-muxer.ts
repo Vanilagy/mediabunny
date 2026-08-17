@@ -531,9 +531,13 @@ export class IsobmffMuxer extends Muxer {
 			requiresAdtsStripping = true;
 		}
 
-		if (track.source._codec === 'ac3' || track.source._codec === 'eac3') {
-			if (!packet) {
+		if (!packet) {
+			if (track.source._codec === 'ac3' || track.source._codec === 'eac3') {
 				throw new Error('AC-3/E-AC-3 require a priming packet.');
+			}
+
+			if (track.source._codec === 'dts') {
+				throw new Error('DTS requires a priming packet.');
 			}
 		}
 

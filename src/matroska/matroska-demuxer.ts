@@ -9,6 +9,7 @@
 import { TrackType } from '../output';
 import {
 	extractAv1CodecInfoFromPacket,
+	extractDtsFourCcFromPacket,
 	extractAvcDecoderConfigurationRecord,
 	extractHevcDecoderConfigurationRecord,
 	extractVp9CodecInfoFromPacket,
@@ -16,6 +17,7 @@ import {
 import {
 	AacCodecInfo,
 	AudioCodec,
+	DtsFourCc,
 	extractAudioCodecString,
 	extractVideoCodecString,
 	MediaCodec,
@@ -229,6 +231,7 @@ type InternalTrack = {
 			codec: AudioCodec | null;
 			codecDescription: Uint8Array | null;
 			aacCodecInfo: AacCodecInfo | null;
+			dtsFormat: DtsFourCc | null;
 		};
 };
 type InternalVideoTrack = InternalTrack & { info: { type: 'video' } };
@@ -1127,6 +1130,14 @@ export class MatroskaDemuxer extends Demuxer {
 						} else if (codecIdWithoutSuffix === CODEC_STRING_MAP.eac3) {
 							this.currentTrack.info.codec = 'eac3';
 							this.currentTrack.info.codecDescription = this.currentTrack.codecPrivate;
+						} else if (codecIdWithoutSuffix === CODEC_STRING_MAP.dts) {
+							this.currentTrack.info.codec = 'dts';
+
+							if (this.currentTrack.codecId === 'A_DTS/EXPRESS') {
+								this.currentTrack.info.dtsFormat = 'dtse';
+							} else if (this.currentTrack.codecId === 'A_DTS/LOSSLESS') {
+								this.currentTrack.info.dtsFormat = 'dtsl';
+							}
 						} else if (this.currentTrack.codecId === 'A_PCM/INT/LIT') {
 							if (this.currentTrack.info.bitDepth === 8) {
 								this.currentTrack.info.codec = 'pcm-u8';
@@ -1200,6 +1211,7 @@ export class MatroskaDemuxer extends Demuxer {
 						codec: null,
 						codecDescription: null,
 						aacCodecInfo: null,
+						dtsFormat: null,
 					};
 				}
 			}; break;
@@ -2556,7 +2568,7 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 
 class MatroskaAudioTrackBacking extends MatroskaTrackBacking implements InputAudioTrackBacking {
 	override internalTrack: InternalAudioTrack;
-	decoderConfig: AudioDecoderConfig | null = null;
+	decoderConfigPromise: Promise<AudioDecoderConfig> | null = null;
 
 	constructor(internalTrack: InternalAudioTrack) {
 		super(internalTrack);
@@ -2584,15 +2596,24 @@ class MatroskaAudioTrackBacking extends MatroskaTrackBacking implements InputAud
 			return null;
 		}
 
-		return this.decoderConfig ??= {
-			codec: extractAudioCodecString({
-				codec: this.internalTrack.info.codec,
-				codecDescription: this.internalTrack.info.codecDescription,
-				aacCodecInfo: this.internalTrack.info.aacCodecInfo,
-			}),
-			numberOfChannels: this.internalTrack.info.numberOfChannels,
-			sampleRate: this.internalTrack.info.sampleRate,
-			description: this.internalTrack.info.codecDescription ?? undefined,
-		};
+		return this.decoderConfigPromise ??= (async (): Promise<AudioDecoderConfig> => {
+			if (this.internalTrack.info.codec === 'dts' && !this.internalTrack.info.dtsFormat) {
+				// Gotta check the packet to determine the DTS variant
+				const firstPacket = await this.getFirstPacket({});
+				this.internalTrack.info.dtsFormat = firstPacket && extractDtsFourCcFromPacket(firstPacket.data);
+			}
+
+			return {
+				codec: extractAudioCodecString({
+					codec: this.internalTrack.info.codec,
+					codecDescription: this.internalTrack.info.codecDescription,
+					aacCodecInfo: this.internalTrack.info.aacCodecInfo,
+					dtsFormat: this.internalTrack.info.dtsFormat,
+				}),
+				numberOfChannels: this.internalTrack.info.numberOfChannels,
+				sampleRate: this.internalTrack.info.sampleRate,
+				description: this.internalTrack.info.codecDescription ?? undefined,
+			};
+		})();
 	}
 }

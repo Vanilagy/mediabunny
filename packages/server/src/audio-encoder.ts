@@ -15,7 +15,7 @@ import {
 	EncodedPacket,
 } from 'mediabunny';
 import * as NodeAv from 'node-av';
-import { CODEC_TO_CODEC_ID, getChannelLayout } from './misc';
+import { CODEC_TO_CODEC_ID, getChannelLayout, getDtsChannelLayout } from './misc';
 import { assert, toUint8Array } from '../../../src/misc';
 import { copyAudioSampleToAvFrame, AvFrameAudioSampleResource } from './audio-sample';
 import {
@@ -23,6 +23,7 @@ import {
 	buildAdtsHeaderTemplate,
 	parseAacAudioSpecificConfig,
 } from '../../../shared/aac-misc';
+import { DTS_CHANNEL_COUNTS, DTS_SAMPLE_RATES, dtsBitrateFits } from '../../../shared/dts-misc';
 
 const AAC_SAMPLE_RATES
 	= [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
@@ -72,6 +73,10 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 		) || (
 			codec === 'eac3' && numberOfChannels >= 1 && numberOfChannels <= 16
 			&& AC3_SAMPLE_RATES.includes(sampleRate)
+		) || (
+			codec === 'dts' && DTS_CHANNEL_COUNTS.includes(numberOfChannels)
+			&& DTS_SAMPLE_RATES.includes(sampleRate)
+			&& dtsBitrateFits(resolveBitrate(config, codec), sampleRate, numberOfChannels)
 		);
 	}
 
@@ -107,21 +112,26 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 		}
 
 		codecContext.sampleRate = this.config.sampleRate;
-		codecContext.channelLayout = getChannelLayout(this.config.numberOfChannels);
+		codecContext.channelLayout = this.codec === 'dts'
+			? getDtsChannelLayout(this.config.numberOfChannels)
+			: getChannelLayout(this.config.numberOfChannels);
 		codecContext.codecType = NodeAv.AVMEDIA_TYPE_AUDIO;
 		codecContext.codecId = CODEC_TO_CODEC_ID[this.codec]!;
 		codecContext.sampleFormat = sampleFormat;
 		codecContext.timeBase = new NodeAv.Rational(1, this.config.sampleRate);
-		codecContext.bitRate = BigInt(
-			this.config.bitrate ?? new Quality('medium')._toAudioBitrate(this.codec) ?? 0,
-		);
+		codecContext.bitRate = BigInt(resolveBitrate(this.config, this.codec));
 
 		if (this.config.bitrateMode === 'constant') {
 			codecContext.rcMinRate = codecContext.bitRate;
 			codecContext.rcMaxRate = codecContext.bitRate;
 		}
 
-		const ret = await codecContext.open2();
+		// libav's DTS encoder is marked experimental, so it refuses to open at the default compliance level
+		const options = this.codec === 'dts'
+			? NodeAv.Dictionary.fromObject({ strict: -2 })
+			: null;
+
+		const ret = await codecContext.open2(this.avCodec, options);
 		NodeAv.FFmpegError.throwIfError(ret, 'Open codec context');
 
 		this.codecContext = codecContext;
@@ -172,7 +182,9 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 				this.resampler = new NodeAv.SoftwareResampleContext();
 				this.resamplerInputSampleRate = this.frame.sampleRate;
 
-				const outLayout = getChannelLayout(this.codecContext.channels);
+				// Resample straight to whatever layout the encoder was opened with, since not every codec accepts
+				// the layout that getChannelLayout hands out for a given channel count
+				const outLayout = this.codecContext.channelLayout;
 				const inLayout = getChannelLayout(this.frame.channels);
 
 				const ret = this.resampler.allocSetOpts2(
@@ -400,3 +412,7 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 		this.resampler?.free();
 	}
 }
+
+const resolveBitrate = (config: AudioEncoderConfig, codec: AudioCodec) => {
+	return config.bitrate ?? new Quality('medium')._toAudioBitrate(codec) ?? 0;
+};

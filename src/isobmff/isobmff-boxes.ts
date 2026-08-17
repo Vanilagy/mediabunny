@@ -43,7 +43,13 @@ import {
 	IsobmffVideoTrackData,
 	Sample,
 } from './isobmff-muxer';
-import { parseAc3SyncFrame, parseEac3SyncFrame, parseOpusIdentificationHeader } from '../codec-data';
+import {
+	buildDtsSpecificBox,
+	parseAc3SyncFrame,
+	parseDtsFrame,
+	parseEac3SyncFrame,
+	parseOpusIdentificationHeader,
+} from '../codec-data';
 import { MetadataTags, RichImageData } from '../metadata';
 import { Bitstream } from '../../shared/bitstream';
 
@@ -690,7 +696,11 @@ export const stsd = (trackData: IsobmffTrackData) => {
 			trackData,
 		);
 	} else if (trackData.type === 'audio') {
-		const boxName = audioCodecToBoxName(trackData.track.source._codec, trackData.muxer.isQuickTime);
+		const boxName = audioCodecToBoxName(
+			trackData.track.source._codec,
+			trackData.info.decoderConfig.codec,
+			trackData.muxer.isQuickTime,
+		);
 		assert(boxName);
 
 		sampleDescription = soundSampleDescription(
@@ -968,7 +978,11 @@ export const wave = (trackData: IsobmffAudioTrackData) => {
 
 export const frma = (trackData: IsobmffAudioTrackData) => {
 	return box('frma', [
-		ascii(audioCodecToBoxName(trackData.track.source._codec, trackData.muxer.isQuickTime)),
+		ascii(audioCodecToBoxName(
+			trackData.track.source._codec,
+			trackData.info.decoderConfig.codec,
+			trackData.muxer.isQuickTime,
+		)),
 	]);
 };
 
@@ -1121,6 +1135,21 @@ const dec3 = (trackData: IsobmffAudioTrackData) => {
 	}
 
 	return box('dec3', [...bytes]);
+};
+
+/** DTSSpecificBox */
+const ddts = (trackData: IsobmffAudioTrackData) => {
+	assert(trackData.info.primingPacket);
+
+	const frameInfo = parseDtsFrame(trackData.info.primingPacket.data);
+	if (!frameInfo) {
+		throw new Error(
+			'Couldn\'t extract DTS frame info from the audio packet. '
+			+ 'Ensure the packets contain valid DTS frames as specified in ETSI TS 102 114.',
+		);
+	}
+
+	return box('ddts', [...buildDtsSpecificBox(frameInfo)]);
 };
 
 export const subtitleSampleDescription = (
@@ -1816,7 +1845,7 @@ const VIDEO_CODEC_TO_CONFIGURATION_BOX: Record<
 	prores: null,
 };
 
-const audioCodecToBoxName = (codec: AudioCodec, isQuickTime: boolean): string => {
+const audioCodecToBoxName = (codec: AudioCodec, fullCodecString: string, isQuickTime: boolean): string => {
 	switch (codec) {
 		case 'aac': return 'mp4a';
 		case 'mp3': return 'mp4a';
@@ -1829,6 +1858,7 @@ const audioCodecToBoxName = (codec: AudioCodec, isQuickTime: boolean): string =>
 		case 'pcm-s8': return 'sowt';
 		case 'ac3': return 'ac-3';
 		case 'eac3': return 'ec-3';
+		case 'dts': return fullCodecString;
 	}
 
 	// Logic diverges here
@@ -1870,6 +1900,7 @@ const audioCodecToConfigurationBox = (codec: AudioCodec, isQuickTime: boolean) =
 		case 'flac': return dfLa;
 		case 'ac3': return dac3;
 		case 'eac3': return dec3;
+		case 'dts': return ddts;
 	}
 
 	// Logic diverges here

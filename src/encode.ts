@@ -858,6 +858,7 @@ export class Quality {
 			vorbis: 64000, // 64kbps base for Vorbis
 			ac3: 384000, // 384kbps base for AC-3
 			eac3: 192000, // 192kbps base for E-AC-3
+			dts: 768000, // 768kbps base for DTS
 		};
 
 		const baseBitrate = baseRates[codec as keyof typeof baseRates];
@@ -1071,7 +1072,7 @@ export const canEncodeVideo = async (
 	}
 	validateVideoEncodingAdditionalOptions(codec, restOptions);
 
-	const resolvedQuality = resolveQuality(quality, bitrate) ?? new Quality({ bitrate: 1e6 });
+	const resolvedQuality = resolveQuality(quality, bitrate) ?? new Quality('medium');
 
 	let candidates: VideoEncoderConfigCandidate[];
 	try {
@@ -1222,7 +1223,7 @@ export const canEncodeAudio = async (
 	}
 	validateAudioEncodingAdditionalOptions(codec, restOptions);
 
-	const resolvedQuality = resolveQuality(quality, bitrate) ?? new Quality({ bitrate: 128e3 });
+	const resolvedQuality = resolveQuality(quality, bitrate) ?? new Quality('medium');
 
 	const encoderConfig = buildAudioEncoderConfig({
 		codec,

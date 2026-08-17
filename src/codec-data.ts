@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { AVC_LEVEL_TABLE, VideoCodec, VP9_LEVEL_TABLE } from './codec';
+import { AVC_LEVEL_TABLE, DtsFourCc, VideoCodec, VP9_LEVEL_TABLE } from './codec';
 import {
 	assert,
 	assertNever,
@@ -24,6 +24,7 @@ import {
 	toUint8Array,
 	getChromiumVersion,
 	isChromium,
+	popcount,
 	setUint24,
 } from './misc';
 import { Logging } from './logging';
@@ -3175,4 +3176,496 @@ export const getEac3ChannelCount = (config: Eac3FrameInfo): number => {
 	}
 
 	return channels;
+};
+
+// ============================================================================
+// DTS Parsing
+// Reference: ETSI TS 102 114 V1.6.1
+// ============================================================================
+
+/** Core substream sync word, in the 16-bit big-endian packing that the registry mandates. */
+export const DTS_CORE_SYNC_WORD = 0x7ffe8001;
+
+/** Extension substream sync word. Section 7.4.1 */
+export const DTS_EXSS_SYNC_WORD = 0x64582025;
+
+/** The core frame header never reaches beyond this many bytes. */
+export const DTS_CORE_FRAME_HEADER_SIZE = 18;
+
+/** An extension substream always declares its own size within this many bytes. */
+export const DTS_EXSS_HEADER_PREFIX_SIZE = 10;
+
+/** The largest nuExtSSHeaderSize can get, and therefore how far the asset descriptors can reach. */
+export const DTS_EXSS_MAX_HEADER_SIZE = 4096;
+
+/** Number of PCM samples in one core PCM block; the core codes its length as a count of these. */
+export const DTS_PCM_BLOCK_SAMPLES = 32;
+
+/** Size of the DTSSpecificBox (ddts) payload in bytes. */
+export const DTS_SPECIFIC_BOX_SIZE = 20;
+
+/** Number of PCM blocks that a core frame's length must be a multiple of. */
+const DTS_SUBBAND_SAMPLES = 8;
+
+/** Core sample rates indexed by SFREQ. Zeroes mark invalid codes. Table 5-4 */
+const DTS_CORE_SAMPLE_RATES = [
+	0, 8000, 16000, 32000, 0, 0, 11025, 22050,
+	44100, 0, 0, 12000, 24000, 48000, 96000, 192000,
+];
+
+/**
+ * Core bit rates in bps indexed by RATE, where a zero means the code isn't a constant rate. Table 5-7
+ *
+ * Note that FFmpeg's ff_dca_bit_rates has 896000 where the spec has 960, and defines rates for codes 25 to 28
+ * which this revision of the spec calls invalid. We keep the latter, since they cost nothing and some content
+ * predating the spec revision uses them.
+ */
+const DTS_CORE_BIT_RATES = [
+	32000, 56000, 64000, 96000, 112000, 128000, 192000, 224000,
+	256000, 320000, 384000, 448000, 512000, 576000, 640000, 768000,
+	960000, 1024000, 1152000, 1280000, 1344000, 1408000, 1411200, 1472000,
+	1536000, 1920000, 2048000, 3072000, 3840000, 0, 0, 0,
+];
+
+/** Source PCM resolutions in bits indexed by PCMR. Zeroes mark invalid codes. */
+const DTS_PCM_RESOLUTIONS = [16, 16, 20, 20, 0, 24, 24, 0];
+
+/** Channel counts indexed by AMODE, not counting LFE. */
+const DTS_AMODE_CHANNEL_COUNTS = [1, 2, 2, 2, 2, 3, 3, 4, 4, 5, 6, 6, 6, 7, 8, 8];
+
+/**
+ * Speaker layout masks indexed by AMODE, expressed with the same bits as `ChannelLayout` in the DTSSpecificBox
+ * and `nuSpkrActivityMask` in an extension substream asset descriptor.
+ */
+const DTS_AMODE_CHANNEL_LAYOUTS = [
+	0x0001, 0x0002, 0x0002, 0x0002, 0x0002, 0x0003, 0x0012, 0x0013,
+	0x0006, 0x0007, 0x0206, 0x0143, 0x0053, 0x0207, 0x0246, 0x0217,
+];
+
+/** The LFE1 speaker bit in a channel layout mask. */
+const DTS_CHANNEL_LAYOUT_LFE1 = 0x0008;
+
+/** The channel layout bits that stand for a pair of speakers rather than a single one. */
+const DTS_CHANNEL_LAYOUT_PAIR_MASK = 0xae66;
+
+/** Reference clock rates indexed by nuRefClockCode. The last code is unused. Table 7-3 */
+const DTS_EXSS_REF_CLOCKS = [32000, 44100, 48000, 0];
+
+/** Sample rates used by extension substream assets, indexed by nuMaxSampleRate. */
+const DTS_EXSS_SAMPLE_RATES = [
+	8000, 16000, 32000, 64000, 128000, 22050, 44100, 88200,
+	176400, 352800, 12000, 24000, 48000, 96000, 192000, 384000,
+];
+
+/** Frame durations that the DTSSpecificBox can express, indexed by FrameDuration. */
+const DTS_SPECIFIC_BOX_FRAME_DURATIONS = [512, 1024, 2048, 4096];
+
+export type DtsCoreFrameInfo = {
+	/** Size of the core substream frame in bytes */
+	frameSize: number;
+	sampleRate: number;
+	numberOfChannels: number;
+	/** Number of PCM samples the frame decodes to */
+	sampleCount: number;
+	/** Speaker layout mask */
+	channelLayout: number;
+	/** Audio channel arrangement (AMODE) */
+	amode: number;
+	/** Whether an LFE channel is present */
+	lfePresent: boolean;
+	/** Constant bit rate in bps, or 0 when the stream doesn't run at one */
+	bitRate: number;
+	/** Source PCM resolution in bits */
+	pcmResolution: number;
+};
+
+export type DtsExssAssetInfo = {
+	sampleRate: number;
+	numberOfChannels: number;
+	/** Number of PCM samples the frame decodes to */
+	sampleCount: number;
+	/** Speaker layout mask, or 0 when the asset doesn't declare one */
+	channelLayout: number;
+	/** Source PCM resolution in bits */
+	pcmResolution: number;
+};
+
+export type DtsExssInfo = {
+	/** Size of the extension substream in bytes */
+	frameSize: number;
+	/** Null when this substream omits the static fields that describe the stream */
+	asset: DtsExssAssetInfo | null;
+};
+
+export type DtsFrameInfo = {
+	/** Size of the entire frame in bytes, core substream plus any extension substreams */
+	frameSize: number;
+	sampleRate: number;
+	numberOfChannels: number;
+	/** Number of PCM samples the frame decodes to */
+	sampleCount: number;
+	/** Speaker layout mask */
+	channelLayout: number;
+	/** Source PCM resolution in bits */
+	pcmResolution: number;
+	/** Constant bit rate in bps, or 0 when the stream doesn't run at one */
+	bitRate: number;
+	/** The leading core substream, or null for extension-only streams such as DTS Express */
+	core: DtsCoreFrameInfo | null;
+	/** Whether the frame carries extension substreams on top of the core */
+	hasExtensions: boolean;
+};
+
+/**
+ * Parse one complete DTS frame, being a core substream frame followed by any number of extension substreams,
+ * or an extension substream on its own. Section 5 and Section 7.4.1
+ */
+export const parseDtsFrame = (data: Uint8Array): DtsFrameInfo | null => {
+	const core = parseDtsCoreFrameHeader(data);
+	const view = toDataView(data);
+
+	// The core substream is padded out to a 4-byte boundary before the first extension substream starts
+	let offset = core ? Math.ceil(core.frameSize / 4) * 4 : 0;
+	let firstExss: DtsExssInfo | null = null;
+
+	while (offset + 4 <= data.length && view.getUint32(offset) === DTS_EXSS_SYNC_WORD) {
+		const exss = parseDtsExssHeader(data.subarray(offset));
+		if (!exss) {
+			break;
+		}
+
+		firstExss ??= exss;
+		offset += exss.frameSize;
+	}
+
+	if (core) {
+		// The core describes what every DTS decoder can play back; the extension substreams only build on top of
+		// it, so the core's parameters are the ones we report.
+		return {
+			frameSize: firstExss ? offset : core.frameSize,
+			sampleRate: core.sampleRate,
+			numberOfChannels: core.numberOfChannels,
+			sampleCount: core.sampleCount,
+			channelLayout: core.channelLayout,
+			pcmResolution: core.pcmResolution,
+			bitRate: core.bitRate,
+			core,
+			hasExtensions: firstExss !== null,
+		};
+	}
+
+	if (!firstExss?.asset) {
+		return null;
+	}
+
+	const { asset } = firstExss;
+
+	return {
+		frameSize: offset,
+		sampleRate: asset.sampleRate,
+		numberOfChannels: asset.numberOfChannels,
+		sampleCount: asset.sampleCount,
+		channelLayout: asset.channelLayout,
+		pcmResolution: asset.pcmResolution,
+		bitRate: 0,
+		core: null,
+		hasExtensions: true,
+	};
+};
+
+/**
+ * Works out which four-character code describes a packet, or null when the packet doesn't say. Telling 'dtsl'
+ * from 'dtse' would mean working out whether the asset holds XLL or LBR data, which sits behind the speaker
+ * remapping and mixing metadata deep in the asset descriptor, so we don't do it.
+ */
+export const extractDtsFourCcFromPacket = (data: Uint8Array): DtsFourCc | null => {
+	const frameInfo = parseDtsFrame(data);
+	if (!frameInfo?.core) {
+		return null;
+	}
+
+	return frameInfo.hasExtensions ? 'dtsh' : 'dtsc';
+};
+
+/** Parse the header of a core substream frame. Section 5.3 */
+export const parseDtsCoreFrameHeader = (data: Uint8Array): DtsCoreFrameInfo | null => {
+	if (data.length < DTS_CORE_FRAME_HEADER_SIZE) {
+		return null;
+	}
+	if (data[0] !== 0x7f || data[1] !== 0xfe || data[2] !== 0x80 || data[3] !== 0x01) {
+		return null;
+	}
+
+	const bitstream = new Bitstream(data);
+	bitstream.skipBits(32); // SYNC
+
+	bitstream.skipBits(1); // FTYPE
+
+	// Terminating frames carry fewer samples than a full PCM block; we don't handle those
+	if (bitstream.readBits(5) !== DTS_PCM_BLOCK_SAMPLES - 1) {
+		return null;
+	}
+
+	const cpf = bitstream.readBits(1);
+	const npcmblocks = bitstream.readBits(7) + 1;
+	if (npcmblocks % DTS_SUBBAND_SAMPLES !== 0) {
+		return null;
+	}
+
+	const frameSize = bitstream.readBits(14) + 1;
+	if (frameSize < 96) {
+		return null;
+	}
+
+	const amode = bitstream.readBits(6);
+	if (amode >= DTS_AMODE_CHANNEL_COUNTS.length) {
+		return null;
+	}
+
+	const sampleRate = DTS_CORE_SAMPLE_RATES[bitstream.readBits(4)]!;
+	if (sampleRate === 0) {
+		return null;
+	}
+
+	const bitRate = DTS_CORE_BIT_RATES[bitstream.readBits(5)]!;
+
+	if (bitstream.readBits(1) !== 0) {
+		return null; // A reserved bit that must be zero, so a cheap way to reject false sync words
+	}
+
+	bitstream.skipBits(1 + 1 + 1 + 1); // DYNF, TIMEF, AUXF, HDCD
+	bitstream.skipBits(3 + 1 + 1); // EXT_AUDIO_ID, EXT_AUDIO, ASPF
+
+	const lff = bitstream.readBits(2);
+	if (lff === 3) {
+		return null;
+	}
+
+	bitstream.skipBits(1); // HFLAG
+	if (cpf) {
+		bitstream.skipBits(16); // HCRC
+	}
+
+	bitstream.skipBits(1 + 4 + 2); // FILTS, VERNUM, CHIST
+
+	const pcmResolution = DTS_PCM_RESOLUTIONS[bitstream.readBits(3)]!;
+	if (pcmResolution === 0) {
+		return null;
+	}
+
+	const lfePresent = lff !== 0;
+
+	return {
+		frameSize,
+		sampleRate,
+		numberOfChannels: DTS_AMODE_CHANNEL_COUNTS[amode]! + (lfePresent ? 1 : 0),
+		sampleCount: npcmblocks * DTS_PCM_BLOCK_SAMPLES,
+		channelLayout: DTS_AMODE_CHANNEL_LAYOUTS[amode]! | (lfePresent ? DTS_CHANNEL_LAYOUT_LFE1 : 0),
+		amode,
+		lfePresent,
+		bitRate,
+		pcmResolution,
+	};
+};
+
+/** Parse the header of an extension substream, along with its first audio asset descriptor. Section 7.4.1 */
+export const parseDtsExssHeader = (data: Uint8Array): DtsExssInfo | null => {
+	if (data.length < DTS_EXSS_HEADER_PREFIX_SIZE) {
+		return null;
+	}
+	if (data[0] !== 0x64 || data[1] !== 0x58 || data[2] !== 0x20 || data[3] !== 0x25) {
+		return null;
+	}
+
+	const bitstream = new Bitstream(data);
+	bitstream.skipBits(32); // SYNC
+	bitstream.skipBits(8); // nuUserDefinedBits
+
+	const extSsIndex = bitstream.readBits(2);
+	const wideHeader = bitstream.readBits(1);
+	const headerSizeBits = 8 + 4 * wideHeader;
+	const frameSizeBits = 16 + 4 * wideHeader;
+
+	bitstream.skipBits(headerSizeBits); // nuExtSSHeaderSize
+	const frameSize = bitstream.readBits(frameSizeBits) + 1;
+
+	// Everything past this point can run off the end of what we were given, in which case the Bitstream keeps
+	// handing out zeroes; the bounds check further down catches that
+	const incomplete: DtsExssInfo = { frameSize, asset: null };
+
+	if (!bitstream.readBits(1)) { // bStaticFieldsPresent
+		return incomplete;
+	}
+
+	const refClock = DTS_EXSS_REF_CLOCKS[bitstream.readBits(2)]!; // nuRefClockCode
+	// The frame duration is a count of reference clock cycles, not of samples
+	const frameDurationCycles = 512 * (bitstream.readBits(3) + 1); // nuExSSFrameDurationCode
+
+	if (bitstream.readBits(1)) { // bTimeStampFlag
+		bitstream.skipBits(32 + 4); // nuTimeStamp, nLSB
+	}
+
+	const numAudioPresentations = bitstream.readBits(3) + 1;
+	const numAssets = bitstream.readBits(3) + 1;
+
+	const activeExssMasks: number[] = [];
+	for (let i = 0; i < numAudioPresentations; i++) {
+		activeExssMasks.push(bitstream.readBits(extSsIndex + 1));
+	}
+	for (const mask of activeExssMasks) {
+		bitstream.skipBits(8 * popcount(mask)); // nuActiveAssetMask
+	}
+
+	if (bitstream.readBits(1)) { // bMixMetadataEnbl
+		bitstream.skipBits(2); // nuMixMetadataAdjLevel
+		const spkrMaskBits = (bitstream.readBits(2) + 1) << 2;
+		const numMixOutConfigs = bitstream.readBits(2) + 1;
+		bitstream.skipBits(numMixOutConfigs * spkrMaskBits); // nuMixOutChMask
+	}
+
+	for (let i = 0; i < numAssets; i++) {
+		bitstream.skipBits(frameSizeBits); // nuAssetFsize
+	}
+
+	// From here on we're inside the first audio asset descriptor
+	bitstream.skipBits(9); // nuAssetDescriptFsize
+	bitstream.skipBits(3); // nuAssetIndex
+
+	if (bitstream.readBits(1)) { // bAssetTypeDescrPresent
+		bitstream.skipBits(4); // nuAssetTypeDescriptor
+	}
+	if (bitstream.readBits(1)) { // bLanguageDescrPresent
+		bitstream.skipBits(24); // LanguageDescriptor
+	}
+	if (bitstream.readBits(1)) { // bInfoTextPresent
+		bitstream.skipBits(8 * (bitstream.readBits(10) + 1)); // nuInfoTextByteSize, InfoTextString
+	}
+
+	const pcmResolution = bitstream.readBits(5) + 1;
+	const sampleRate = DTS_EXSS_SAMPLE_RATES[bitstream.readBits(4)]!;
+	const numberOfChannels = bitstream.readBits(8) + 1;
+
+	let channelLayout = 0;
+
+	if (bitstream.readBits(1)) { // bOne2OneMapChannels2Speakers
+		if (numberOfChannels > 2) {
+			bitstream.skipBits(1); // bEmbeddedStereoFlag
+		}
+		if (numberOfChannels > 6) {
+			bitstream.skipBits(1); // bEmbeddedSixChFlag
+		}
+
+		if (bitstream.readBits(1)) { // bSpkrMaskEnabled
+			const spkrMaskBits = (bitstream.readBits(2) + 1) << 2;
+			channelLayout = bitstream.readBits(spkrMaskBits); // nuSpkrActivityMask
+		}
+	}
+
+	if (refClock === 0 || bitstream.getBitsLeft() < 0) {
+		return incomplete;
+	}
+
+	return {
+		frameSize,
+		asset: {
+			sampleRate,
+			numberOfChannels,
+			sampleCount: Math.round(frameDurationCycles * sampleRate / refClock),
+			channelLayout,
+			pcmResolution,
+		},
+	};
+};
+
+export type DtsSpecificBoxInfo = {
+	sampleRate: number;
+	maxBitrate: number;
+	avgBitrate: number;
+	pcmSampleDepth: number;
+	/** Number of PCM samples one frame decodes to */
+	sampleCount: number;
+	/** Speaker layout mask, or 0 when the box doesn't declare one */
+	channelLayout: number;
+	/** Null when the box carries nothing we can derive a channel count from */
+	numberOfChannels: number | null;
+};
+
+/** Parse a DTSSpecificBox (ddts). */
+export const parseDtsSpecificBox = (data: Uint8Array): DtsSpecificBoxInfo | null => {
+	if (data.length < DTS_SPECIFIC_BOX_SIZE) {
+		return null;
+	}
+
+	const view = toDataView(data);
+	const sampleRate = view.getUint32(0);
+	if (sampleRate === 0) {
+		return null;
+	}
+
+	const bitstream = new Bitstream(data);
+	bitstream.seekToByte(13);
+
+	const frameDuration = bitstream.readBits(2);
+	bitstream.skipBits(5); // StreamConstruction
+	const coreLfePresent = bitstream.readBits(1);
+	const coreLayout = bitstream.readBits(6);
+	bitstream.skipBits(14); // CoreSize
+	bitstream.skipBits(1); // StereoDownmix
+	bitstream.skipBits(3); // RepresentationType
+	const channelLayout = bitstream.readBits(16);
+
+	let numberOfChannels: number | null = null;
+	if (channelLayout !== 0) {
+		numberOfChannels = getDtsChannelCount(channelLayout);
+	} else if (coreLayout < DTS_AMODE_CHANNEL_COUNTS.length) {
+		numberOfChannels = DTS_AMODE_CHANNEL_COUNTS[coreLayout]! + coreLfePresent;
+	}
+
+	return {
+		sampleRate,
+		maxBitrate: view.getUint32(4),
+		avgBitrate: view.getUint32(8),
+		pcmSampleDepth: data[12]!,
+		sampleCount: DTS_SPECIFIC_BOX_FRAME_DURATIONS[frameDuration]!,
+		channelLayout,
+		numberOfChannels,
+	};
+};
+
+/** Build the payload of a DTSSpecificBox (ddts) from a frame of the stream it describes. */
+export const buildDtsSpecificBox = (frameInfo: DtsFrameInfo) => {
+	const bytes = new Uint8Array(DTS_SPECIFIC_BOX_SIZE);
+	const view = toDataView(bytes);
+
+	view.setUint32(0, frameInfo.sampleRate);
+	view.setUint32(4, frameInfo.bitRate);
+	view.setUint32(8, frameInfo.bitRate);
+	bytes[12] = frameInfo.pcmResolution;
+
+	// The spec only defines codes for streams built out of a known set of substreams. Anything else is required
+	// to be signaled as 0, meaning the construction is left unspecified.
+	const streamConstruction = frameInfo.core && !frameInfo.hasExtensions ? 1 : 0;
+
+	const bitstream = new Bitstream(bytes);
+	bitstream.seekToByte(13);
+
+	bitstream.writeBits(2, Math.max(DTS_SPECIFIC_BOX_FRAME_DURATIONS.indexOf(frameInfo.sampleCount), 0));
+	bitstream.writeBits(5, streamConstruction);
+	bitstream.writeBits(1, frameInfo.core?.lfePresent ? 1 : 0);
+	bitstream.writeBits(6, frameInfo.core?.amode ?? 0);
+	bitstream.writeBits(14, frameInfo.core ? frameInfo.core.frameSize - 1 : 0);
+	bitstream.writeBits(1, 0); // StereoDownmix
+	bitstream.writeBits(3, 0); // RepresentationType
+	bitstream.writeBits(16, frameInfo.channelLayout);
+	bitstream.writeBits(1, 0); // MultiAssetFlag
+	bitstream.writeBits(1, 0); // LBRDurationMod
+	bitstream.writeBits(1, 0); // ReservedBoxPresent
+	bitstream.writeBits(5, 0); // Reserved
+
+	return bytes;
+};
+
+/** Count the channels in a DTS speaker layout mask, where some bits stand for a pair of speakers. */
+const getDtsChannelCount = (channelLayout: number) => {
+	return popcount(channelLayout) + popcount(channelLayout & DTS_CHANNEL_LAYOUT_PAIR_MASK);
 };

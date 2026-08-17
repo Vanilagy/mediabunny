@@ -310,8 +310,17 @@ export class MatroskaMuxer extends Muxer {
 		this.tracksElement = tracksElement;
 
 		for (const trackData of this.trackDatas) {
-			const codecId = CODEC_STRING_MAP[trackData.track.source._codec];
+			let codecId = CODEC_STRING_MAP[trackData.track.source._codec];
 			assert(codecId);
+
+			if (trackData.type === 'audio' && trackData.track.source._codec === 'dts') {
+				// We can further refine the Codec ID
+				if (trackData.info.decoderConfig.codec === 'dtse') {
+					codecId = 'A_DTS/EXPRESS';
+				} else if (trackData.info.decoderConfig.codec === 'dtsl') {
+					codecId = 'A_DTS/LOSSLESS';
+				}
+			}
 
 			let seekPreRollNs = 0;
 			if (trackData.type === 'audio' && trackData.track.source._codec === 'opus') {

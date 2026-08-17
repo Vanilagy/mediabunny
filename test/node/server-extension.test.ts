@@ -1400,6 +1400,9 @@ describe('Video', async () => {
 });
 
 describe('Audio', async () => {
+	/** A DTS bitrate that clears the encoder's per-frame minimum at the 48 kHz stereo the tests here use. */
+	const DTS_BITRATE = 768000;
+
 	test('Decoder lifecycle', async () => {
 		using input = new Input({
 			source: new FilePathSource('./test/public/trim-buck-bunny-ffmpeg.ts'),
@@ -1726,6 +1729,25 @@ describe('Audio', async () => {
 		});
 	});
 
+	test('DTS encode & decode', async () => {
+		await encodeDecodeTest('dts', { bitrate: DTS_BITRATE }, async (packet, meta, i) => {
+			expect(packet.type).toBe('key');
+			expect(packet.duration).toBeCloseTo(512 / 48000);
+
+			if (i === 0) {
+				expect(meta.decoderConfig).toBeDefined();
+				expect(meta.decoderConfig!.codec).toBe('dtsc');
+				expect(meta.decoderConfig!.numberOfChannels).toBe(2);
+				expect(meta.decoderConfig!.sampleRate).toBe(48000);
+				expect(meta.decoderConfig!.description).toBeUndefined();
+			}
+		}, async (sample) => {
+			expect(sample.numberOfChannels).toBe(2);
+			expect(sample.sampleRate).toBe(48000);
+			expect(sample.duration).toBeCloseTo(512 / 48000);
+		});
+	});
+
 	for (const codec of NON_PCM_AUDIO_CODECS) {
 		test(`${codec} encode & decode, negative timestamps`, async () => {
 			await timestampTest(codec, -1);
@@ -1747,7 +1769,10 @@ describe('Audio', async () => {
 		const testDuration = codec !== 'opus';
 		const testSampleStart = codec !== 'vorbis';
 
-		await encodeDecodeTest(codec, {}, async (packet, _meta, i) => {
+		// The harness' default bitrate is below what DTS needs to fit its per-channel side info into a frame
+		const extraConfig = codec === 'dts' ? { bitrate: DTS_BITRATE } : {};
+
+		await encodeDecodeTest(codec, extraConfig, async (packet, _meta, i) => {
 			if (i === 0) {
 				expect(packet.timestamp).toBe(startTimestamp);
 			} else if (testDuration) {

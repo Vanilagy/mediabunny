@@ -231,7 +231,7 @@ The `frameRate` property can be used to set the frame rate of the output video i
 
 ### Transcoding video
 
-Use the `codec` property to control the codec of the output track. This should be set to a [codec](./supported-formats-and-codecs#video-codecs) supported by the output file, or else the track will be [discarded](#discarded-tracks).
+Use the `codec` property to control the codec of the output track. This should be set to a [codec](./supported-formats-and-codecs#video-codecs) supported by the output file, or else the track will be [discarded](#discarded-tracks). When not set and transcoding needs to happen, Mediabunny will automatically pick a codec that the environment can encode and the output format can contain.
 
 Use the `quality` property to control the quality of the output video. For example, you can use this field to compress the video track. See [Encoding quality](./media-sources#encoding-quality) for more. If this property is set, transcoding will always happen. If this property is not set but transcoding is still required, `new Quality('high')` will be used as the value.
 
@@ -323,7 +323,7 @@ The `sampleRate` property controls the sample rate in Hz (e.g., 44100, 48000). I
 
 ### Transcoding audio
 
-Use the `codec` property to control the codec of the output track. This should be set to a [codec](./supported-formats-and-codecs#audio-codecs) supported by the output file, or else the track will be [discarded](#discarded-tracks).
+Use the `codec` property to control the codec of the output track. This should be set to a [codec](./supported-formats-and-codecs#audio-codecs) supported by the output file, or else the track will be [discarded](#discarded-tracks). When not set and transcoding needs to happen, Mediabunny will automatically pick a codec that the environment can encode and the output format can contain.
 
 Use the `quality` property to control the quality of the output audio. For example, you can use this field to compress the audio track. See [Encoding quality](./media-sources#encoding-quality) for more. If this property is set, transcoding will always happen. If this property is not set but transcoding is still required, `new Quality('high')` will be used as the value.
 
@@ -439,6 +439,12 @@ const conversion = await Conversion.init({
 	// ...
 });
 ```
+
+::: warning
+Setting `start` to a value other than the default will currently force a *transcode* of both video and audio.
+
+In a future version of Mediabunny, the fast "packet copy path" that is currently reachable by leaving `start` unset, may be made available for any arbitrary trim range.
+:::
 
 ## Metadata tags
 

@@ -161,7 +161,7 @@ export class MpegTsMuxer extends Muxer {
 		assert(meta?.decoderConfig);
 
 		const codec = track.source._codec;
-		assert(codec === 'aac' || codec === 'mp3' || codec === 'ac3' || codec === 'eac3');
+		assert(codec === 'aac' || codec === 'mp3' || codec === 'ac3' || codec === 'eac3' || codec === 'dts');
 
 		let streamType: MpegTsStreamType;
 		let streamId: number;
@@ -184,6 +184,11 @@ export class MpegTsMuxer extends Muxer {
 
 			case 'eac3': {
 				streamType = MpegTsStreamType.EAC3_SYSTEM_A;
+				streamId = 0xbd;
+			}; break;
+
+			case 'dts': {
+				streamType = MpegTsStreamType.DTS;
 				streamId = 0xbd;
 			}; break;
 		}
@@ -414,7 +419,7 @@ export class MpegTsMuxer extends Muxer {
 	): Uint8Array {
 		const codec = (trackData.track as OutputAudioTrack).source._codec;
 
-		if (codec === 'mp3' || codec === 'ac3' || codec === 'eac3') {
+		if (codec === 'mp3' || codec === 'ac3' || codec === 'eac3' || codec === 'dts') {
 			// We're good
 			return packet.data;
 		}
