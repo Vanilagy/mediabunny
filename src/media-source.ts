@@ -29,6 +29,7 @@ import {
 	clearIntervalUnthrottled,
 	floorToDivisor,
 	last,
+	missingWebCodecsClassMessage,
 	promiseWithResolvers,
 	roundToDivisor,
 	setInt24,
@@ -718,7 +719,7 @@ class VideoEncoderWrapper {
 
 			if (!selected) {
 				if (typeof VideoEncoder === 'undefined') {
-					throw new Error('VideoEncoder is not supported by this browser.');
+					throw new Error(missingWebCodecsClassMessage('VideoEncoder'));
 				}
 
 				// The candidates only differ in their rate control, so we describe them as one config with a
@@ -731,7 +732,7 @@ class VideoEncoderWrapper {
 				throw new Error(
 					`This specific encoder configuration (${firstConfig.codec}, ${rateControls.join(' / ')},`
 					+ ` ${firstConfig.width}x${firstConfig.height}, hardware acceleration:`
-					+ ` ${firstConfig.hardwareAcceleration ?? 'no-preference'}) is not supported by this browser.`
+					+ ` ${firstConfig.hardwareAcceleration ?? 'no-preference'}) is not supported in this environment.`
 					+ ` Consider using another codec or changing your video parameters.`,
 				);
 			}
@@ -1694,8 +1695,8 @@ export class MediaStreamVideoTrackSource extends VideoSource {
 				});
 			} else {
 				throw new Error(
-					'When no explicit frame rate is set, MediaStreamTrackProcessor is required; but it\'s not supported'
-					+ ' by this browser.',
+					'When no explicit frame rate is set, MediaStreamTrackProcessor is required; but it\'s not available'
+					+ ' in this environment.',
 				);
 			}
 		}
@@ -2210,7 +2211,7 @@ class AudioEncoderWrapper {
 				this.initPcmEncoder();
 			} else {
 				if (typeof AudioEncoder === 'undefined') {
-					throw new Error('AudioEncoder is not supported by this browser.');
+					throw new Error(missingWebCodecsClassMessage('AudioEncoder'));
 				}
 
 				let supported: boolean;
@@ -2226,7 +2227,8 @@ class AudioEncoderWrapper {
 					throw new Error(
 						`This specific encoder configuration (${encoderConfig.codec}, ${encoderConfig.bitrate} bps,`
 						+ ` ${encoderConfig.numberOfChannels} channels, ${encoderConfig.sampleRate} Hz) is not`
-						+ ` supported by this browser. Consider using another codec or changing your audio parameters.`,
+						+ ` supported in this environment. Consider using another codec or changing your`
+						+ ` audio parameters.`,
 					);
 				}
 
