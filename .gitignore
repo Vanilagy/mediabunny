@@ -2,7 +2,7 @@ node_modules
 /dist
 /dist-docs
 .DS_Store
-/docs/.vitepress/cache
+.vitepress/cache
 /docs/api
 *.tsbuildinfo
 
