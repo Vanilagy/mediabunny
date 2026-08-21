@@ -463,6 +463,8 @@ export class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 		const result: { frame: VideoFrame | null } = { frame: null };
 		this.finalFrames.push(result);
 
+		let finalFrameRemoved = false;
+
 		try {
 			if (!alpha) {
 				// Nothing needs to be merged
@@ -477,14 +479,21 @@ export class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			// Emit any leading frames that are ready, preserving input order
 			while (this.finalFrames.length > 0 && this.finalFrames[0]!.frame !== null) {
 				const next = this.finalFrames.shift()!;
+				finalFrameRemoved = true;
 				this.frameHandler(next.frame!);
 			}
 		} catch (error) {
 			removeItem(this.finalFrames, result);
+			finalFrameRemoved = true;
 			this.onError(error);
 		} finally {
 			removeItem(this.mergeAlphaPromises, resolver.promise);
 			resolver.resolve();
+
+			if (finalFrameRemoved) {
+				// Since final frames affect the decode queue size
+				this.onDequeue?.();
+			}
 		}
 	}
 
