@@ -155,7 +155,7 @@ export class EncodedPacket {
 			throw new TypeError('Metadata-only packets cannot be converted to a video chunk.');
 		}
 		if (typeof EncodedVideoChunk === 'undefined') {
-			throw new Error('Your browser does not support EncodedVideoChunk.');
+			throw new Error('EncodedVideoChunk is not available in this environment.');
 		}
 
 		return new EncodedVideoChunk({
@@ -179,7 +179,7 @@ export class EncodedPacket {
 			throw new TypeError('Metadata-only packets cannot be converted to a video chunk.');
 		}
 		if (typeof EncodedVideoChunk === 'undefined') {
-			throw new Error('Your browser does not support EncodedVideoChunk.');
+			throw new Error('EncodedVideoChunk is not available in this environment.');
 		}
 
 		return new EncodedVideoChunk({
@@ -198,7 +198,7 @@ export class EncodedPacket {
 			throw new TypeError('Metadata-only packets cannot be converted to an audio chunk.');
 		}
 		if (typeof EncodedAudioChunk === 'undefined') {
-			throw new Error('Your browser does not support EncodedAudioChunk.');
+			throw new Error('EncodedAudioChunk is not available in this environment.');
 		}
 
 		return new EncodedAudioChunk({
