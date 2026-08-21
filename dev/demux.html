@@ -18,7 +18,7 @@
 		});
 
 		const track = await input.getPrimaryVideoTrack();
-		console.log(await track.computeFrameRateMetrics());
+		console.log(await track.getDecoderConfig());
 
 		/*
 

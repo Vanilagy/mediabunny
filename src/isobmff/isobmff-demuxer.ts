@@ -39,6 +39,8 @@ import {
 	parseDtsSpecificBox,
 	DTS_SPECIFIC_BOX_SIZE,
 	AC3_ACMOD_CHANNEL_COUNTS,
+	extractAvcDecoderConfigurationRecord,
+	extractHevcDecoderConfigurationRecord,
 } from '../codec-data';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
@@ -1390,6 +1392,11 @@ export class IsobmffDemuxer extends Demuxer {
 				}
 				assert(track.info);
 
+				if (boxInfo.contentSize === 0) {
+					// avcC box is empty, let's treat this like an Annex B stream
+					break;
+				}
+
 				track.info.codecDescription = readBytes(slice, boxInfo.contentSize);
 			}; break;
 
@@ -1399,6 +1406,11 @@ export class IsobmffDemuxer extends Demuxer {
 					break;
 				}
 				assert(track.info);
+
+				if (boxInfo.contentSize === 0) {
+					// hvcC box is empty, let's treat this like an Annex B stream
+					break;
+				}
 
 				track.info.codecDescription = readBytes(slice, boxInfo.contentSize);
 			}; break;
@@ -3407,7 +3419,15 @@ class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideo
 		}
 
 		return this.decoderConfigPromise ??= (async (): Promise<VideoDecoderConfig> => {
-			if (this.internalTrack.info.codec === 'vp9' && !this.internalTrack.info.vp9CodecInfo) {
+			if (this.internalTrack.info.codec === 'avc' && !this.internalTrack.info.codecDescription) {
+				const firstPacket = await this.getFirstPacket({});
+				this.internalTrack.info.avcCodecInfo
+					= firstPacket && extractAvcDecoderConfigurationRecord(firstPacket.data);
+			} else if (this.internalTrack.info.codec === 'hevc' && !this.internalTrack.info.codecDescription) {
+				const firstPacket = await this.getFirstPacket({});
+				this.internalTrack.info.hevcCodecInfo
+					= firstPacket && extractHevcDecoderConfigurationRecord(firstPacket.data);
+			} else if (this.internalTrack.info.codec === 'vp9' && !this.internalTrack.info.vp9CodecInfo) {
 				const firstPacket = await this.getFirstPacket({});
 				this.internalTrack.info.vp9CodecInfo = firstPacket && extractVp9CodecInfoFromPacket(firstPacket.data);
 			} else if (this.internalTrack.info.codec === 'av1' && !this.internalTrack.info.av1CodecInfo) {

@@ -140,3 +140,23 @@ test('QuickTime nclc color information', async () => {
 	});
 	expect(await track.hasHighDynamicRange()).toBe(true);
 });
+
+// Annex B isn't supposed to exist in MP4, but some files have it anyway, with an empty avcC box
+test('Annex B', async () => {
+	const filePath = path.join(__dirname, '..', 'public/annex-b.mp4');
+	using input = new Input({
+		source: new FilePathSource(filePath),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryVideoTrack();
+	if (!track) throw new Error('No video track found');
+
+	const decoderConfig = (await track.getDecoderConfig())!;
+	expect(decoderConfig.codec).toBe('avc1.424028');
+	expect(decoderConfig.description).toBeUndefined();
+
+	const sink = new EncodedPacketSink(track);
+	const firstPacket = (await sink.getFirstPacket())!;
+	expect([...firstPacket.data.slice(0, 4)]).toEqual([0, 0, 0, 1]);
+});

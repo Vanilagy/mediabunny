@@ -721,6 +721,16 @@ export const getChromiumVersion = () => {
 	return chromiumVersionCache = Number(match[1]!);
 };
 
+export const missingWebCodecsClassMessage = (className: string) => {
+	if (typeof globalThis.isSecureContext !== 'undefined' && !globalThis.isSecureContext) {
+		// WebCodecs is not exposed in insecure contexts
+		return `${className} is not available in this environment; this may be because this page is running in an`
+			+ ` insecure context. Try serving your page over HTTPS or use localhost.`;
+	}
+
+	return `${className} is not available in this environment.`;
+};
+
 /**
  * T or a promise that resolves to T.
  * @group Miscellaneous

@@ -38,6 +38,7 @@ import {
 	isWebKit,
 	last,
 	mapAsyncGenerator,
+	missingWebCodecsClassMessage,
 	promiseWithResolvers,
 	removeItem,
 	Rotation,
@@ -1691,8 +1692,12 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 		onError: (error: unknown) => unknown,
 	) {
 		if (!(await this._track.canDecode())) {
+			if (typeof VideoDecoder === 'undefined') {
+				throw new Error(missingWebCodecsClassMessage('VideoDecoder'));
+			}
+
 			throw new Error(
-				'This video track cannot be decoded by this browser. Make sure to check decodability before using'
+				'This video track cannot be decoded in this environment. Make sure to check decodability before using'
 				+ ' a track.',
 			);
 		}
@@ -2426,8 +2431,12 @@ export class AudioSampleSink extends BaseMediaSampleSink<AudioSample> {
 		onError: (error: unknown) => unknown,
 	) {
 		if (!(await this._track.canDecode())) {
+			if (typeof AudioDecoder === 'undefined') {
+				throw new Error(missingWebCodecsClassMessage('AudioDecoder'));
+			}
+
 			throw new Error(
-				'This audio track cannot be decoded by this browser. Make sure to check decodability before using'
+				'This audio track cannot be decoded in this environment. Make sure to check decodability before using'
 				+ ' a track.',
 			);
 		}
