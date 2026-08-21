@@ -1387,22 +1387,30 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'avcC': {
 				const track = this.currentTrack;
-				if (!track || boxInfo.contentSize === 0) {
-					// FFmpeg will sometimes generate an empty avcC chunk if provided no headers
+				if (!track) {
 					break;
 				}
 				assert(track.info);
+
+				if (boxInfo.contentSize === 0) {
+					// avcC box is empty, let's treat this like an Annex B stream
+					break;
+				}
 
 				track.info.codecDescription = readBytes(slice, boxInfo.contentSize);
 			}; break;
 
 			case 'hvcC': {
 				const track = this.currentTrack;
-				if (!track || boxInfo.contentSize === 0) {
-					// FFmpeg will sometimes generate an empty hvcC chunk if provided no headers
+				if (!track) {
 					break;
 				}
 				assert(track.info);
+
+				if (boxInfo.contentSize === 0) {
+					// hvcC box is empty, let's treat this like an Annex B stream
+					break;
+				}
 
 				track.info.codecDescription = readBytes(slice, boxInfo.contentSize);
 			}; break;
