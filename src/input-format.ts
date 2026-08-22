@@ -27,6 +27,7 @@ import { ID3_V2_HEADER_SIZE, readId3V2Header } from './id3';
 import { readNextMp3FrameHeader } from './mp3/mp3-reader';
 import { OggDemuxer } from './ogg/ogg-demuxer';
 import { WaveDemuxer } from './wave/wave-demuxer';
+import { AiffDemuxer } from './aiff/aiff-demuxer';
 import { MAX_ADTS_FRAME_HEADER_SIZE, MIN_ADTS_FRAME_HEADER_SIZE, readAdtsFrameHeader } from './adts/adts-reader';
 import { AdtsDemuxer } from './adts/adts-demuxer';
 import { readAscii, readBytes, readU32Be } from './reader';
@@ -405,6 +406,47 @@ export class WaveInputFormat extends InputFormat {
 }
 
 /**
+ * AIFF / AIFF-C file format. AIFF is Apple's IFF-based, big-endian audio container, typically wrapping uncompressed
+ * signed PCM.
+ *
+ * Do not instantiate this class; use the {@link AIFF} singleton instead.
+ *
+ * @group Input formats
+ * @public
+ */
+export class AiffInputFormat extends InputFormat {
+	/** @internal */
+	async _canReadInput(input: Input) {
+		let slice = input._reader.requestSlice(0, 12);
+		if (slice instanceof Promise) slice = await slice;
+		if (!slice) return false;
+
+		const form = readAscii(slice, 4);
+		if (form !== 'FORM') {
+			return false;
+		}
+
+		slice.skip(4); // Outer chunk size
+
+		const formType = readAscii(slice, 4);
+		return formType === 'AIFF' || formType === 'AIFC';
+	}
+
+	/** @internal */
+	_createDemuxer(input: Input) {
+		return new AiffDemuxer(input);
+	}
+
+	get name() {
+		return 'AIFF';
+	}
+
+	get mimeType() {
+		return 'audio/aiff';
+	}
+}
+
+/**
  * Ogg file format.
  *
  * Do not instantiate this class; use the {@link OGG} singleton instead.
@@ -686,6 +728,12 @@ export const MP3 = /* #__PURE__ */ new Mp3InputFormat();
  */
 export const WAVE = /* #__PURE__ */ new WaveInputFormat();
 /**
+ * AIFF input format singleton.
+ * @group Input formats
+ * @public
+ */
+export const AIFF = /* #__PURE__ */ new AiffInputFormat();
+/**
  * Ogg input format singleton.
  * @group Input formats
  * @public
@@ -725,7 +773,7 @@ export const HLS = /* #__PURE__ */ new HlsInputFormat();
  * @group Input formats
  * @public
  */
-export const ALL_FORMATS: InputFormat[] = [HLS, MP4, QTFF, MATROSKA, WEBM, WAVE, OGG, FLAC, MP3, ADTS, MPEG_TS];
+export const ALL_FORMATS: InputFormat[] = [HLS, MP4, QTFF, MATROSKA, WEBM, WAVE, AIFF, OGG, FLAC, MP3, ADTS, MPEG_TS];
 
 /**
  * List of input formats required for playback of typical HLS manifests. Includes HLS itself as well as the typical
