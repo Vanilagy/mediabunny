@@ -3151,17 +3151,24 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 
 			data = readBytes(slice, sampleInfo.sampleSize);
 
-			if (this.internalTrack.encryptionAuxInfo) {
-				assert(this.internalTrack.encryptionInfo);
+			if (this.internalTrack.encryptionInfo) {
+				let sampleEncryption: SampleEncryptionInfo | null = null;
 
-				const entries = await resolveEncryptionAuxInfo(
-					this.internalTrack.demuxer.reader,
-					this.internalTrack.encryptionInfo,
-					this.internalTrack.encryptionAuxInfo,
-				);
+				if (this.internalTrack.encryptionAuxInfo) {
+					const entries = await resolveEncryptionAuxInfo(
+						this.internalTrack.demuxer.reader,
+						this.internalTrack.encryptionInfo,
+						this.internalTrack.encryptionAuxInfo,
+					);
 
-				if (sampleIndex < entries.length) {
-					data = await decryptSample(this.internalTrack, entries[sampleIndex]!, data, null);
+					if (sampleIndex < entries.length) {
+						sampleEncryption = entries[sampleIndex]!;
+					}
+				}
+
+				sampleEncryption ??= getDefaultSampleEncryption(this.internalTrack.encryptionInfo);
+				if (sampleEncryption) {
+					data = await decryptSample(this.internalTrack, sampleEncryption, data, null);
 				}
 			}
 		}
@@ -3207,8 +3214,12 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 
 			data = readBytes(slice, fragmentSample.byteSize);
 
-			if (fragmentSample.encryption) {
-				data = await decryptSample(this.internalTrack, fragmentSample.encryption, data, fragment);
+			if (this.internalTrack.encryptionInfo) {
+				const sampleEncryption = fragmentSample.encryption
+					?? getDefaultSampleEncryption(this.internalTrack.encryptionInfo);
+				if (sampleEncryption) {
+					data = await decryptSample(this.internalTrack, sampleEncryption, data, fragment);
+				}
 			}
 		}
 
@@ -3777,6 +3788,17 @@ const resolveEncryptionAuxInfo = async (
 
 	aux.resolved = entries;
 	return entries;
+};
+
+const getDefaultSampleEncryption = (encryptionInfo: TrackEncryptionInfo): SampleEncryptionInfo | null => {
+	if (!encryptionInfo.defaultConstantIv) {
+		return null;
+	}
+
+	return {
+		iv: encryptionInfo.defaultConstantIv,
+		subsamples: null,
+	};
 };
 
 const decryptSample = async (
