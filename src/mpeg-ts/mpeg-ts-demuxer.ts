@@ -63,6 +63,7 @@ import {
 	COLOR_PRIMARIES_MAP_INVERSE,
 	findLastIndex,
 	floorToMultiple,
+	isThenable,
 	last,
 	MATRIX_COEFFICIENTS_MAP_INVERSE,
 	readExpGolomb,
@@ -190,7 +191,7 @@ export class MpegTsDemuxer extends Demuxer {
 		return this.metadataPromise ??= (async () => {
 			const lengthToCheck = TS_PACKET_SIZE + 16 + 1;
 			let startingSlice = this.reader.requestSlice(0, lengthToCheck);
-			if (startingSlice instanceof Promise) startingSlice = await startingSlice;
+			if (isThenable(startingSlice)) startingSlice = await startingSlice;
 			assert(startingSlice);
 
 			const startingBytes = readBytes(startingSlice, lengthToCheck);
@@ -951,7 +952,7 @@ export class MpegTsDemuxer extends Demuxer {
 
 	async readPacketHeader(pos: number): Promise<TsPacketHeader | null> {
 		let slice = this.reader.requestSlice(pos, 4);
-		if (slice instanceof Promise) slice = await slice;
+		if (isThenable(slice)) slice = await slice;
 
 		if (!slice) {
 			return null;
@@ -987,7 +988,7 @@ export class MpegTsDemuxer extends Demuxer {
 	async readPacket(pos: number): Promise<TsPacket | null> {
 		// Code in here is duplicated from readPacketHeader for performance reasons
 		let slice = this.reader.requestSlice(pos, TS_PACKET_SIZE);
-		if (slice instanceof Promise) slice = await slice;
+		if (isThenable(slice)) slice = await slice;
 
 		if (!slice) {
 			return null;
@@ -2099,7 +2100,7 @@ class PacketReadingContext {
 
 			while (true) {
 				let remaining = this.ensureBuffered(CHUNK_SIZE);
-				if (remaining instanceof Promise) remaining = await remaining;
+				if (isThenable(remaining)) remaining = await remaining;
 
 				if (remaining === 0) {
 					break;
@@ -2253,7 +2254,7 @@ class PacketReadingContext {
 
 			while (true) {
 				let remaining = this.ensureBuffered(CHUNK_SIZE);
-				if (remaining instanceof Promise) remaining = await remaining;
+				if (isThenable(remaining)) remaining = await remaining;
 
 				const startPos = this.currentPos;
 
@@ -2269,7 +2270,7 @@ class PacketReadingContext {
 						const possibleHeaderStartPos = this.currentPos;
 
 						let remaining = this.ensureBuffered(MAX_ADTS_FRAME_HEADER_SIZE);
-						if (remaining instanceof Promise) remaining = await remaining;
+						if (isThenable(remaining)) remaining = await remaining;
 
 						if (remaining < MAX_ADTS_FRAME_HEADER_SIZE) {
 							return;
@@ -2282,7 +2283,7 @@ class PacketReadingContext {
 							this.seekTo(possibleHeaderStartPos);
 
 							let remaining = this.ensureBuffered(header.frameLength);
-							if (remaining instanceof Promise) remaining = await remaining;
+							if (isThenable(remaining)) remaining = await remaining;
 
 							return this.supplyPacket(
 								remaining,
@@ -2300,7 +2301,7 @@ class PacketReadingContext {
 						const possibleHeaderStartPos = this.currentPos;
 
 						let remaining = this.ensureBuffered(MP3_FRAME_HEADER_SIZE);
-						if (remaining instanceof Promise) remaining = await remaining;
+						if (isThenable(remaining)) remaining = await remaining;
 
 						if (remaining < MP3_FRAME_HEADER_SIZE) {
 							return;
@@ -2314,7 +2315,7 @@ class PacketReadingContext {
 							this.seekTo(possibleHeaderStartPos);
 
 							let remaining = this.ensureBuffered(result.header.totalSize);
-							if (remaining instanceof Promise) remaining = await remaining;
+							if (isThenable(remaining)) remaining = await remaining;
 
 							const duration = result.header.audioSamplesInFrame * TIMESCALE
 								/ elementaryStream.info.sampleRate;
@@ -2332,7 +2333,7 @@ class PacketReadingContext {
 
 						// Need at least 5 bytes for sync word + CRC + fscod/frmsizecod
 						let remaining = this.ensureBuffered(5);
-						if (remaining instanceof Promise) remaining = await remaining;
+						if (isThenable(remaining)) remaining = await remaining;
 
 						if (remaining < 5) {
 							return;
@@ -2361,7 +2362,7 @@ class PacketReadingContext {
 						this.seekTo(possibleSyncPos);
 
 						remaining = this.ensureBuffered(frameSize);
-						if (remaining instanceof Promise) remaining = await remaining;
+						if (isThenable(remaining)) remaining = await remaining;
 
 						const duration = Math.round(
 							AC3_SAMPLES_PER_FRAME * TIMESCALE / elementaryStream.info.sampleRate,
@@ -2377,7 +2378,7 @@ class PacketReadingContext {
 
 						// Need at least 5 bytes for E-AC-3 header parsing (sync word + frmsiz + fscod/numblkscod)
 						let remaining = this.ensureBuffered(5);
-						if (remaining instanceof Promise) remaining = await remaining;
+						if (isThenable(remaining)) remaining = await remaining;
 
 						if (remaining < 5) {
 							return;
@@ -2399,7 +2400,7 @@ class PacketReadingContext {
 						this.seekTo(possibleSyncPos);
 
 						remaining = this.ensureBuffered(frameSize);
-						if (remaining instanceof Promise) remaining = await remaining;
+						if (isThenable(remaining)) remaining = await remaining;
 
 						// Duration = numblks * 256 samples per block
 						const samplesPerFrame = numblks * 256;
@@ -2416,7 +2417,7 @@ class PacketReadingContext {
 						const possibleSyncPos = this.currentPos;
 
 						let remaining = this.ensureBuffered(DTS_CORE_FRAME_HEADER_SIZE);
-						if (remaining instanceof Promise) remaining = await remaining;
+						if (isThenable(remaining)) remaining = await remaining;
 
 						if (remaining < DTS_CORE_FRAME_HEADER_SIZE) {
 							return;
@@ -2438,7 +2439,7 @@ class PacketReadingContext {
 
 							const headerBound = Math.min(leadingExss.frameSize, DTS_EXSS_MAX_HEADER_SIZE);
 							let remaining = this.ensureBuffered(headerBound);
-							if (remaining instanceof Promise) remaining = await remaining;
+							if (isThenable(remaining)) remaining = await remaining;
 
 							leadingExss = parseDtsExssHeader(this.readBytes(remaining)) ?? leadingExss;
 						}
@@ -2456,7 +2457,7 @@ class PacketReadingContext {
 
 								const neededBytes = nextSubstreamPos + DTS_EXSS_HEADER_PREFIX_SIZE;
 								let remaining = this.ensureBuffered(neededBytes);
-								if (remaining instanceof Promise) remaining = await remaining;
+								if (isThenable(remaining)) remaining = await remaining;
 
 								if (remaining < neededBytes) {
 									break;
@@ -2484,7 +2485,7 @@ class PacketReadingContext {
 						this.seekTo(possibleSyncPos);
 
 						remaining = this.ensureBuffered(frameSize);
-						if (remaining instanceof Promise) remaining = await remaining;
+						if (isThenable(remaining)) remaining = await remaining;
 
 						const duration = Math.round(
 							sampleCount * TIMESCALE / elementaryStream.info.sampleRate,

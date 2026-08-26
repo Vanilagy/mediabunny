@@ -58,6 +58,7 @@ import {
 	COLOR_PRIMARIES_MAP_INVERSE,
 	findLastIndex,
 	isIso639Dash2LanguageCode,
+	isThenable,
 	last,
 	MATRIX_COEFFICIENTS_MAP_INVERSE,
 	normalizeRotation,
@@ -364,7 +365,7 @@ export class IsobmffDemuxer extends Demuxer {
 
 			while (true) {
 				let slice = this.reader.requestSliceRange(currentPos, MIN_BOX_HEADER_SIZE, MAX_BOX_HEADER_SIZE);
-				if (slice instanceof Promise) slice = await slice;
+				if (isThenable(slice)) slice = await slice;
 				if (!slice) break;
 
 				const startPos = currentPos;
@@ -380,7 +381,7 @@ export class IsobmffDemuxer extends Demuxer {
 					// Found moov, load it
 
 					let moovSlice = this.reader.requestSlice(slice.filePos, boxInfo.contentSize);
-					if (moovSlice instanceof Promise) moovSlice = await moovSlice;
+					if (isThenable(moovSlice)) moovSlice = await moovSlice;
 					if (!moovSlice) break;
 
 					this.moovSlice = moovSlice;
@@ -431,7 +432,7 @@ export class IsobmffDemuxer extends Demuxer {
 
 				// The last 4 bytes may contain the size of the mfra box at the end of the file
 				let lastWordSlice = this.reader.requestSlice(this.reader.fileSize - 4, 4);
-				if (lastWordSlice instanceof Promise) lastWordSlice = await lastWordSlice;
+				if (isThenable(lastWordSlice)) lastWordSlice = await lastWordSlice;
 				assert(lastWordSlice);
 
 				const lastWord = readU32Be(lastWordSlice);
@@ -443,7 +444,7 @@ export class IsobmffDemuxer extends Demuxer {
 						MIN_BOX_HEADER_SIZE,
 						MAX_BOX_HEADER_SIZE,
 					);
-					if (mfraHeaderSlice instanceof Promise) mfraHeaderSlice = await mfraHeaderSlice;
+					if (isThenable(mfraHeaderSlice)) mfraHeaderSlice = await mfraHeaderSlice;
 
 					if (mfraHeaderSlice) {
 						const boxInfo = readBoxHeader(mfraHeaderSlice);
@@ -451,7 +452,7 @@ export class IsobmffDemuxer extends Demuxer {
 						if (boxInfo && boxInfo.name === 'mfra') {
 							// We found the mfra box, allowing for much better random access. Let's parse it.
 							let mfraSlice = this.reader.requestSlice(mfraHeaderSlice.filePos, boxInfo.contentSize);
-							if (mfraSlice instanceof Promise) mfraSlice = await mfraSlice;
+							if (isThenable(mfraSlice)) mfraSlice = await mfraSlice;
 
 							if (mfraSlice) {
 								this.readContiguousBoxes(mfraSlice);
@@ -678,14 +679,14 @@ export class IsobmffDemuxer extends Demuxer {
 		}
 
 		let headerSlice = this.reader.requestSliceRange(startPos, MIN_BOX_HEADER_SIZE, MAX_BOX_HEADER_SIZE);
-		if (headerSlice instanceof Promise) headerSlice = await headerSlice;
+		if (isThenable(headerSlice)) headerSlice = await headerSlice;
 		assert(headerSlice);
 
 		const moofBoxInfo = readBoxHeader(headerSlice);
 		assert(moofBoxInfo?.name === 'moof');
 
 		let entireSlice = this.reader.requestSlice(startPos, moofBoxInfo.totalSize);
-		if (entireSlice instanceof Promise) entireSlice = await entireSlice;
+		if (isThenable(entireSlice)) entireSlice = await entireSlice;
 		assert(entireSlice);
 
 		this.traverseBox(entireSlice);
@@ -1608,11 +1609,11 @@ export class IsobmffDemuxer extends Demuxer {
 					if (track.info.codec === 'aac') {
 						// Let's try to deduce more accurate values directly from the AudioSpecificConfig:
 						const audioSpecificConfig = parseAacAudioSpecificConfig(track.info.codecDescription);
-						if (audioSpecificConfig.numberOfChannels !== null) {
-							track.info.numberOfChannels = audioSpecificConfig.numberOfChannels;
+						if (audioSpecificConfig.outputNumberOfChannels !== null) {
+							track.info.numberOfChannels = audioSpecificConfig.outputNumberOfChannels;
 						}
-						if (audioSpecificConfig.sampleRate !== null) {
-							track.info.sampleRate = audioSpecificConfig.sampleRate;
+						if (audioSpecificConfig.outputSampleRate !== null) {
+							track.info.sampleRate = audioSpecificConfig.outputSampleRate;
 						}
 					}
 				}
@@ -3144,24 +3145,31 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 				sampleInfo.sampleOffset,
 				sampleInfo.sampleSize,
 			);
-			if (slice instanceof Promise) slice = await slice;
+			if (isThenable(slice)) slice = await slice;
 			if (!slice) {
 				return null; // Data is outside
 			}
 
 			data = readBytes(slice, sampleInfo.sampleSize);
 
-			if (this.internalTrack.encryptionAuxInfo) {
-				assert(this.internalTrack.encryptionInfo);
+			if (this.internalTrack.encryptionInfo) {
+				let sampleEncryption: SampleEncryptionInfo | null = null;
 
-				const entries = await resolveEncryptionAuxInfo(
-					this.internalTrack.demuxer.reader,
-					this.internalTrack.encryptionInfo,
-					this.internalTrack.encryptionAuxInfo,
-				);
+				if (this.internalTrack.encryptionAuxInfo) {
+					const entries = await resolveEncryptionAuxInfo(
+						this.internalTrack.demuxer.reader,
+						this.internalTrack.encryptionInfo,
+						this.internalTrack.encryptionAuxInfo,
+					);
 
-				if (sampleIndex < entries.length) {
-					data = await decryptSample(this.internalTrack, entries[sampleIndex]!, data, null);
+					if (sampleIndex < entries.length) {
+						sampleEncryption = entries[sampleIndex]!;
+					}
+				}
+
+				sampleEncryption ??= getDefaultSampleEncryption(this.internalTrack.encryptionInfo);
+				if (sampleEncryption) {
+					data = await decryptSample(this.internalTrack, sampleEncryption, data, null);
 				}
 			}
 		}
@@ -3200,15 +3208,19 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 				fragmentSample.byteOffset,
 				fragmentSample.byteSize,
 			);
-			if (slice instanceof Promise) slice = await slice;
+			if (isThenable(slice)) slice = await slice;
 			if (!slice) {
 				return null; // Data is outside
 			}
 
 			data = readBytes(slice, fragmentSample.byteSize);
 
-			if (fragmentSample.encryption) {
-				data = await decryptSample(this.internalTrack, fragmentSample.encryption, data, fragment);
+			if (this.internalTrack.encryptionInfo) {
+				const sampleEncryption = fragmentSample.encryption
+					?? getDefaultSampleEncryption(this.internalTrack.encryptionInfo);
+				if (sampleEncryption) {
+					data = await decryptSample(this.internalTrack, sampleEncryption, data, fragment);
+				}
 			}
 		}
 
@@ -3310,7 +3322,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 
 			// Load the header
 			let slice = demuxer.reader.requestSliceRange(currentPos, MIN_BOX_HEADER_SIZE, MAX_BOX_HEADER_SIZE);
-			if (slice instanceof Promise) slice = await slice;
+			if (isThenable(slice)) slice = await slice;
 			if (!slice) break;
 
 			const boxStartPos = currentPos;
@@ -3737,7 +3749,7 @@ const resolveEncryptionAuxInfo = async (
 	}
 
 	let slice = reader.requestSlice(aux.offset, totalSize);
-	if (slice instanceof Promise) slice = await slice;
+	if (isThenable(slice)) slice = await slice;
 	if (!slice) {
 		throw new Error('Failed to read auxiliary encryption info.');
 	}
@@ -3777,6 +3789,17 @@ const resolveEncryptionAuxInfo = async (
 
 	aux.resolved = entries;
 	return entries;
+};
+
+const getDefaultSampleEncryption = (encryptionInfo: TrackEncryptionInfo): SampleEncryptionInfo | null => {
+	if (!encryptionInfo.defaultConstantIv) {
+		return null;
+	}
+
+	return {
+		iv: encryptionInfo.defaultConstantIv,
+		subsamples: null,
+	};
 };
 
 const decryptSample = async (

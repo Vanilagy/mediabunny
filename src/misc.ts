@@ -738,6 +738,20 @@ export const missingWebCodecsClassMessage = (className: string) => {
  */
 export type MaybePromise<T> = T | Promise<T>;
 
+const NativePromiseConstructor = /* #__PURE__ */ (async () => {})().constructor as PromiseConstructor;
+
+/**
+ * Needed to properly deal with custom Promise implementations and because this is closer to how the JS spec does it.
+ */
+export const isThenable = <T>(value: MaybePromise<T>): value is Promise<T> => {
+	if (value instanceof NativePromiseConstructor || value instanceof Promise) {
+		return true;
+	}
+
+	// Fall back to a crude duck typing check
+	return typeof (value as PromiseLike<T> | null | undefined)?.then === 'function';
+};
+
 /** Acts like `??` except the condition is -1 and not null/undefined. */
 export const coalesceIndex = (a: number, b: number) => {
 	return a !== -1 ? a : b;

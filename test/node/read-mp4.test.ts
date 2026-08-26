@@ -14,6 +14,7 @@ import {
 	Mp4OutputFormat,
 	Output,
 } from '../../src/index.js';
+import { assert, toUint8Array } from '../../src/misc.js';
 
 const __dirname = new URL('.', import.meta.url).pathname;
 
@@ -159,4 +160,24 @@ test('Annex B', async () => {
 	const sink = new EncodedPacketSink(track);
 	const firstPacket = (await sink.getFirstPacket())!;
 	expect([...firstPacket.data.slice(0, 4)]).toEqual([0, 0, 0, 1]);
+});
+
+test('HE-AAC v2 audio config is parsed correctly', async () => {
+	const filePath = path.join(__dirname, '..', 'public/he-aac-v2.mp4');
+	using input = new Input({
+		source: new FilePathSource(filePath),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	expect(await track.getSampleRate()).toBe(44100);
+	expect(await track.getNumberOfChannels()).toBe(2);
+
+	const decoderConfig = (await track.getDecoderConfig())!;
+	expect(decoderConfig.codec).toBe('mp4a.40.29');
+	expect(decoderConfig.sampleRate).toBe(44100);
+	expect(decoderConfig.numberOfChannels).toBe(2);
+	expect([...toUint8Array(decoderConfig.description!)]).toEqual([0xeb, 0x8a, 0x08, 0x00]);
 });

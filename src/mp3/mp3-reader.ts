@@ -7,6 +7,7 @@
  */
 
 import { MP3_FRAME_HEADER_SIZE, getMp3ChannelCount, Mp3FrameHeader, readMp3FrameHeader } from '../../shared/mp3-misc';
+import { isThenable } from '../misc';
 import { Reader, readU32Be } from '../reader';
 
 export const readNextMp3FrameHeader = async (
@@ -27,7 +28,7 @@ export const readNextMp3FrameHeader = async (
 			: CHUNK_SIZE;
 
 		let slice = reader.requestSliceRange(currentPos, MP3_FRAME_HEADER_SIZE, maxLength);
-		if (slice instanceof Promise) slice = await slice;
+		if (isThenable(slice)) slice = await slice;
 		if (!slice || slice.length < MP3_FRAME_HEADER_SIZE) break;
 
 		while (slice.remainingLength >= MP3_FRAME_HEADER_SIZE) {

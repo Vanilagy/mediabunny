@@ -14,6 +14,7 @@ import {
 	closedIntervalsOverlap,
 	FilePath,
 	isNumber,
+	isThenable,
 	isWebKit,
 	MaybePromise,
 	mergeRequestInit,
@@ -328,7 +329,7 @@ export abstract class PathedSource extends Source {
 			return ref;
 		};
 
-		if (result instanceof Promise) {
+		if (isThenable(result)) {
 			return result.then(handle);
 		} else {
 			return handle(result);
@@ -387,7 +388,7 @@ export class CustomPathedSource extends PathedSource {
 					return ref;
 				};
 
-				if (result instanceof Promise) {
+				if (isThenable(result)) {
 					this._rootRequest = result.then(handle);
 				} else {
 					handle(result);
@@ -894,7 +895,7 @@ export class UrlSource extends PathedSource {
 			return result;
 		};
 
-		if (result instanceof Promise) {
+		if (isThenable(result)) {
 			return result.then(processResult);
 		} else {
 			return processResult(result);
@@ -1198,7 +1199,7 @@ export class UrlSource extends PathedSource {
 		for (const slice of uniqueSlices) {
 			const result = backing._read(slice.start, slice.start + slice.bytes.length);
 
-			if (result instanceof Promise) {
+			if (isThenable(result)) {
 				result.then((readResult) => {
 					if (readResult) {
 						// The backing's cache is empty at this point, so the read is guaranteed to produce
@@ -1459,7 +1460,7 @@ export class CustomSource extends Source {
 
 		const result = this._options.getSize();
 
-		if (result instanceof Promise) {
+		if (isThenable(result)) {
 			return result.then((size) => {
 				if (!Number.isInteger(size) || size < 0) {
 					throw new TypeError('options.getSize must return or resolve to a non-negative integer.');
@@ -1485,7 +1486,7 @@ export class CustomSource extends Source {
 			const originalTargetPos = worker.targetPos;
 
 			let data = this._options.read(worker.currentPos, originalTargetPos);
-			if (data instanceof Promise) data = await data;
+			if (isThenable(data)) data = await data;
 
 			if (worker.aborted) {
 				break;
@@ -2706,7 +2707,7 @@ export class RangedSource extends Source {
 			return result;
 		};
 
-		if (result instanceof Promise) {
+		if (isThenable(result)) {
 			return result.then(processResult);
 		} else {
 			return processResult(result);
