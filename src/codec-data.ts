@@ -502,6 +502,8 @@ export type AvcSpsInfo = {
 	transferCharacteristics: number;
 	matrixCoefficients: number;
 	fullRangeFlag: number;
+	videoSignalTypePresentFlag: number;
+	colourDescriptionPresentFlag: number;
 	numReorderFrames: number;
 	maxDecFrameBuffering: number;
 };
@@ -657,6 +659,8 @@ export const parseAvcSps = (sps: Uint8Array): AvcSpsInfo | null => {
 		let transferCharacteristics = 2;
 		let matrixCoefficients = 2;
 		let fullRangeFlag = 0;
+		let videoSignalTypePresentFlag = 0;
+		let colourDescriptionPresentFlag = 0;
 		let pixelAspectRatio: Rational = { num: 1, den: 1 };
 
 		let numReorderFrames: number | null = null;
@@ -686,11 +690,11 @@ export const parseAvcSps = (sps: Uint8Array): AvcSpsInfo | null => {
 				bitstream.skipBits(1); // overscan_appropriate_flag
 			}
 
-			const videoSignalTypePresentFlag = bitstream.readBits(1);
+			videoSignalTypePresentFlag = bitstream.readBits(1);
 			if (videoSignalTypePresentFlag) {
 				bitstream.skipBits(3); // video_format
 				fullRangeFlag = bitstream.readBits(1);
-				const colourDescriptionPresentFlag = bitstream.readBits(1);
+				colourDescriptionPresentFlag = bitstream.readBits(1);
 				if (colourDescriptionPresentFlag) {
 					colourPrimaries = bitstream.readBits(8);
 					transferCharacteristics = bitstream.readBits(8);
@@ -793,6 +797,8 @@ export const parseAvcSps = (sps: Uint8Array): AvcSpsInfo | null => {
 			matrixCoefficients,
 			transferCharacteristics,
 			fullRangeFlag,
+			videoSignalTypePresentFlag,
+			colourDescriptionPresentFlag,
 			numReorderFrames,
 			maxDecFrameBuffering,
 		};

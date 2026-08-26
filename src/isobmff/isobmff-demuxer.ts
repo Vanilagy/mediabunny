@@ -41,6 +41,8 @@ import {
 	AC3_ACMOD_CHANNEL_COUNTS,
 	extractAvcDecoderConfigurationRecord,
 	extractHevcDecoderConfigurationRecord,
+	deserializeAvcDecoderConfigurationRecord,
+	parseAvcSps,
 } from '../codec-data';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
@@ -3409,12 +3411,51 @@ class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideo
 		return this.internalTrack.rotation;
 	}
 
-	async getColorSpace(): Promise<VideoColorSpaceInit> {
+	private getEffectiveColorSpace(): VideoColorSpaceInit | null {
+		if (this.internalTrack.info.colorSpace) {
+			return this.internalTrack.info.colorSpace;
+		}
+		if (this.internalTrack.info.codec !== 'avc') {
+			return null;
+		}
+
+		const codecInfo = this.internalTrack.info.avcCodecInfo
+			?? (this.internalTrack.info.codecDescription
+				? deserializeAvcDecoderConfigurationRecord(this.internalTrack.info.codecDescription)
+				: null);
+		const sps = codecInfo?.sequenceParameterSets[0];
+		if (!sps) {
+			return null;
+		}
+
+		const spsInfo = parseAvcSps(sps);
+		if (!spsInfo?.videoSignalTypePresentFlag) {
+			return null;
+		}
+
 		return {
-			primaries: this.internalTrack.info.colorSpace?.primaries,
-			transfer: this.internalTrack.info.colorSpace?.transfer,
-			matrix: this.internalTrack.info.colorSpace?.matrix,
-			fullRange: this.internalTrack.info.colorSpace?.fullRange,
+			primaries: spsInfo.colourDescriptionPresentFlag
+				? (COLOR_PRIMARIES_MAP_INVERSE[spsInfo.colourPrimaries] as VideoColorPrimaries | undefined)
+				: undefined,
+			transfer: spsInfo.colourDescriptionPresentFlag
+				? (TRANSFER_CHARACTERISTICS_MAP_INVERSE[spsInfo.transferCharacteristics] as
+					VideoTransferCharacteristics | undefined)
+				: undefined,
+			matrix: spsInfo.colourDescriptionPresentFlag
+				? (MATRIX_COEFFICIENTS_MAP_INVERSE[spsInfo.matrixCoefficients] as
+					VideoMatrixCoefficients | undefined)
+				: undefined,
+			fullRange: Boolean(spsInfo.fullRangeFlag),
+		};
+	}
+
+	async getColorSpace(): Promise<VideoColorSpaceInit> {
+		const colorSpace = this.getEffectiveColorSpace();
+		return {
+			primaries: colorSpace?.primaries,
+			transfer: colorSpace?.transfer,
+			matrix: colorSpace?.matrix,
+			fullRange: colorSpace?.fullRange,
 		};
 	}
 
@@ -3452,7 +3493,7 @@ class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideo
 				codedWidth: this.internalTrack.info.width,
 				codedHeight: this.internalTrack.info.height,
 				description: this.internalTrack.info.codecDescription ?? undefined,
-				colorSpace: this.internalTrack.info.colorSpace ?? undefined,
+				colorSpace: this.getEffectiveColorSpace() ?? undefined,
 			};
 
 			if (

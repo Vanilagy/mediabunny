@@ -95,6 +95,27 @@ test('MP4 nclx color information', async () => {
 	expect(await track.hasHighDynamicRange()).toBe(true);
 });
 
+test('MP4 AVC SPS color information is used when nclx/nclc is missing', async () => {
+	const filePath = path.join(__dirname, '..', 'public/video.mp4');
+	using input = new Input({
+		source: new FilePathSource(filePath),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryVideoTrack();
+	if (!track) throw new Error('No video track found');
+
+	const expectedColorSpace = {
+		primaries: undefined,
+		transfer: undefined,
+		matrix: 'bt470bg',
+		fullRange: true,
+	};
+
+	expect(await track.getColorSpace()).toEqual(expectedColorSpace);
+	expect((await track.getDecoderConfig())?.colorSpace).toEqual(expectedColorSpace);
+});
+
 test('QuickTime nclc color information', async () => {
 	const output = new Output({
 		format: new MovOutputFormat(),
@@ -156,6 +177,7 @@ test('Annex B', async () => {
 	const decoderConfig = (await track.getDecoderConfig())!;
 	expect(decoderConfig.codec).toBe('avc1.424028');
 	expect(decoderConfig.description).toBeUndefined();
+	expect(decoderConfig.colorSpace).toBeUndefined();
 
 	const sink = new EncodedPacketSink(track);
 	const firstPacket = (await sink.getFirstPacket())!;
