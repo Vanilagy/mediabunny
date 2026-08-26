@@ -858,8 +858,8 @@ export class MatroskaMuxer extends Muxer {
 
 			decoderConfig.description = buildAacAudioSpecificConfig({
 				objectType: adtsFrame.objectType,
-				sampleRate,
-				numberOfChannels,
+				outputSampleRate: sampleRate,
+				outputNumberOfChannels: numberOfChannels,
 			});
 			requiresAdtsStripping = true;
 		}

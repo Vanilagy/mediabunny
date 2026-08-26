@@ -1609,11 +1609,11 @@ export class IsobmffDemuxer extends Demuxer {
 					if (track.info.codec === 'aac') {
 						// Let's try to deduce more accurate values directly from the AudioSpecificConfig:
 						const audioSpecificConfig = parseAacAudioSpecificConfig(track.info.codecDescription);
-						if (audioSpecificConfig.numberOfChannels !== null) {
-							track.info.numberOfChannels = audioSpecificConfig.numberOfChannels;
+						if (audioSpecificConfig.outputNumberOfChannels !== null) {
+							track.info.numberOfChannels = audioSpecificConfig.outputNumberOfChannels;
 						}
-						if (audioSpecificConfig.sampleRate !== null) {
-							track.info.sampleRate = audioSpecificConfig.sampleRate;
+						if (audioSpecificConfig.outputSampleRate !== null) {
+							track.info.sampleRate = audioSpecificConfig.outputSampleRate;
 						}
 					}
 				}

@@ -2257,8 +2257,8 @@ class AudioEncoderWrapper {
 
 								meta.decoderConfig.description = buildAacAudioSpecificConfig({
 									objectType,
-									numberOfChannels: meta.decoderConfig.numberOfChannels,
-									sampleRate: meta.decoderConfig.sampleRate,
+									outputNumberOfChannels: meta.decoderConfig.numberOfChannels,
+									outputSampleRate: meta.decoderConfig.sampleRate,
 								});
 							}
 						}
