@@ -29,7 +29,7 @@ import { OggDemuxer } from './ogg/ogg-demuxer';
 import { WaveDemuxer } from './wave/wave-demuxer';
 import { MAX_ADTS_FRAME_HEADER_SIZE, MIN_ADTS_FRAME_HEADER_SIZE, readAdtsFrameHeader } from './adts/adts-reader';
 import { AdtsDemuxer } from './adts/adts-demuxer';
-import { readAscii, readBytes, readU32Be } from './reader';
+import { readAscii, readBytes, readU32Be, readU64Be } from './reader';
 import { FlacDemuxer } from './flac/flac-demuxer';
 import { MpegTsDemuxer } from './mpeg-ts/mpeg-ts-demuxer';
 import { TS_PACKET_SIZE } from './mpeg-ts/mpeg-ts-misc';
@@ -116,12 +116,41 @@ export class Mp4InputFormat extends IsobmffInputFormat {
 			return majorBrand !== 'qt  ';
 		}
 
-		let slice = input._reader.requestSlice(4, 4);
-		if (isThenable(slice)) slice = await slice;
-		if (!slice) return false;
+		let pos = 0;
+		for (let iter = 0; iter < 10; iter++) { // Bounded loop
+			let slice = input._reader.requestSlice(pos, 8);
+			if (isThenable(slice)) slice = await slice;
+			if (!slice) return false;
 
-		const fourCc = readAscii(slice, 4);
-		return fourCc === 'moof' || fourCc === 'sidx'; // Seen in HLS for example
+			let size = readU32Be(slice);
+			let headerSize = 8;
+			if (size === 1) {
+				let sizeExtensionSlice = input._reader.requestSlice(pos + 8, 8);
+				if (isThenable(sizeExtensionSlice)) sizeExtensionSlice = await sizeExtensionSlice;
+				if (!sizeExtensionSlice) return false;
+
+				size = readU64Be(sizeExtensionSlice);
+				headerSize = 16;
+			}
+
+			if (size < headerSize) {
+				return false; // Hardly a box is it
+			}
+
+			const fourCc = readAscii(slice, 4);
+			if (fourCc === 'moof' || fourCc === 'sidx') { // Seen in HLS for example
+				return true;
+			} else if (fourCc === 'emsg' || fourCc === 'prft' || fourCc === 'free') {
+				// These are boxes that can appear before the first moof in DASH Media Segments. They're a strong signal
+				// that this is indeed an fMP4 segment, but just to be sure, let's walk the box structure to make sure
+				// it stays sane.
+				pos += size;
+			} else {
+				return false;
+			}
+		}
+
+		return false;
 	}
 
 	get name() {
