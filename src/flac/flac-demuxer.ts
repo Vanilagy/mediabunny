@@ -15,6 +15,7 @@ import {
 	assert,
 	AsyncMutex,
 	binarySearchLessOrEqual,
+	isThenable,
 	textDecoder,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
@@ -108,7 +109,7 @@ export class FlacDemuxer extends Demuxer {
 			let currentPos = 0;
 			while (true) {
 				let headerSlice = this.reader.requestSlice(currentPos, ID3_V2_HEADER_SIZE);
-				if (headerSlice instanceof Promise) headerSlice = await headerSlice;
+				if (isThenable(headerSlice)) headerSlice = await headerSlice;
 
 				if (!headerSlice) {
 					this.lastSampleLoaded = true;
@@ -121,7 +122,7 @@ export class FlacDemuxer extends Demuxer {
 				}
 
 				let contentSlice = this.reader.requestSlice(headerSlice.filePos, id3V2Header.size);
-				if (contentSlice instanceof Promise) contentSlice = await contentSlice;
+				if (isThenable(contentSlice)) contentSlice = await contentSlice;
 				assert(contentSlice);
 
 				parseId3V2Tag(contentSlice, id3V2Header, this.metadataTags);
@@ -136,7 +137,7 @@ export class FlacDemuxer extends Demuxer {
 				|| currentPos < this.reader.fileSize
 			) {
 				let sizeSlice = this.reader.requestSlice(currentPos, 4);
-				if (sizeSlice instanceof Promise) sizeSlice = await sizeSlice;
+				if (isThenable(sizeSlice)) sizeSlice = await sizeSlice;
 				currentPos += 4;
 
 				if (sizeSlice === null) {
@@ -160,7 +161,7 @@ export class FlacDemuxer extends Demuxer {
 							currentPos,
 							size,
 						);
-						if (streamInfoBlock instanceof Promise) streamInfoBlock = await streamInfoBlock;
+						if (isThenable(streamInfoBlock)) streamInfoBlock = await streamInfoBlock;
 
 						assert(streamInfoBlock);
 						if (streamInfoBlock === null) {
@@ -219,7 +220,7 @@ export class FlacDemuxer extends Demuxer {
 							currentPos,
 							size,
 						);
-						if (vorbisCommentBlock instanceof Promise) vorbisCommentBlock = await vorbisCommentBlock;
+						if (isThenable(vorbisCommentBlock)) vorbisCommentBlock = await vorbisCommentBlock;
 
 						assert(vorbisCommentBlock);
 
@@ -237,7 +238,7 @@ export class FlacDemuxer extends Demuxer {
 							currentPos,
 							size,
 						);
-						if (pictureBlock instanceof Promise) pictureBlock = await pictureBlock;
+						if (isThenable(pictureBlock)) pictureBlock = await pictureBlock;
 
 						assert(pictureBlock);
 						const pictureType = readU32Be(pictureBlock);
@@ -775,7 +776,7 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 				rawSample.byteOffset,
 				rawSample.byteSize,
 			);
-			if (slice instanceof Promise) slice = await slice;
+			if (isThenable(slice)) slice = await slice;
 
 			if (!slice) {
 				return null; // Data didn't fit into the rest of the file

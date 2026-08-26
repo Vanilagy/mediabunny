@@ -6,7 +6,16 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { assert, AsyncMutex, EventEmitter, isIso639Dash2LanguageCode, MaybePromise, Rotation, toArray } from './misc';
+import {
+	assert,
+	AsyncMutex,
+	EventEmitter,
+	isIso639Dash2LanguageCode,
+	isThenable,
+	MaybePromise,
+	Rotation,
+	toArray,
+} from './misc';
 import { MetadataTags, TrackDisposition, validateMetadataTags, validateTrackDisposition } from './metadata';
 import { Muxer } from './muxer';
 import { OutputFormat } from './output-format';
@@ -451,7 +460,7 @@ export class Output<
 		}
 
 		const rootTargetResult = this._getRootTarget();
-		if (rootTargetResult instanceof Promise) {
+		if (isThenable(rootTargetResult)) {
 			throw new TypeError(errorMessage);
 		}
 
@@ -516,7 +525,7 @@ export class Output<
 			return result;
 		};
 
-		if (result instanceof Promise) {
+		if (isThenable(result)) {
 			return result.then(handleResult);
 		} else {
 			return handleResult(result);
@@ -604,7 +613,7 @@ export class Output<
 			return target;
 		};
 
-		if (result instanceof Promise) {
+		if (isThenable(result)) {
 			return this._rootTargetPromise = result.then(handleResult);
 		} else {
 			return handleResult(result);

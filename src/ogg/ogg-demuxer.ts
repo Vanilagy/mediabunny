@@ -18,6 +18,7 @@ import {
 	AsyncMutex,
 	binarySearchLessOrEqual,
 	findLast,
+	isThenable,
 	last,
 	roundIfAlmostInteger,
 	toDataView,
@@ -72,7 +73,7 @@ export class OggDemuxer extends Demuxer {
 
 			while (true) {
 				let slice = this.reader.requestSliceRange(currentPos, MIN_PAGE_HEADER_SIZE, MAX_PAGE_HEADER_SIZE);
-				if (slice instanceof Promise) slice = await slice;
+				if (isThenable(slice)) slice = await slice;
 				if (!slice) break;
 
 				const page = readPageHeader(slice);
@@ -274,7 +275,7 @@ export class OggDemuxer extends Demuxer {
 		while (true) {
 			// Load the entire page data
 			let pageSlice = this.reader.requestSlice(currentPage.dataStartPos, currentPage.dataSize);
-			if (pageSlice instanceof Promise) pageSlice = await pageSlice;
+			if (isThenable(pageSlice)) pageSlice = await pageSlice;
 			assert(pageSlice);
 			const pageData = readBytes(pageSlice, currentPage.dataSize);
 
@@ -299,7 +300,7 @@ export class OggDemuxer extends Demuxer {
 			let currentPos = currentPage.headerStartPos + currentPage.totalSize;
 			while (true) {
 				let headerSlice = this.reader.requestSliceRange(currentPos, MIN_PAGE_HEADER_SIZE, MAX_PAGE_HEADER_SIZE);
-				if (headerSlice instanceof Promise) headerSlice = await headerSlice;
+				if (isThenable(headerSlice)) headerSlice = await headerSlice;
 				if (!headerSlice) {
 					return null;
 				}
@@ -358,7 +359,7 @@ export class OggDemuxer extends Demuxer {
 		let currentPos = lastPacket.endPage.headerStartPos + lastPacket.endPage.totalSize;
 		while (true) {
 			let slice = this.reader.requestSliceRange(currentPos, MIN_PAGE_HEADER_SIZE, MAX_PAGE_HEADER_SIZE);
-			if (slice instanceof Promise) slice = await slice;
+			if (isThenable(slice)) slice = await slice;
 			if (!slice) {
 				return null;
 			}
@@ -658,7 +659,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 				);
 
 				let searchSlice = this.demuxer.reader.requestSlice(searchStartPos, until - searchStartPos);
-				if (searchSlice instanceof Promise) searchSlice = await searchSlice;
+				if (isThenable(searchSlice)) searchSlice = await searchSlice;
 				assert(searchSlice);
 
 				const found = findNextPageHeader(searchSlice, until);
@@ -672,7 +673,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 					MIN_PAGE_HEADER_SIZE,
 					MAX_PAGE_HEADER_SIZE,
 				);
-				if (headerSlice instanceof Promise) headerSlice = await headerSlice;
+				if (isThenable(headerSlice)) headerSlice = await headerSlice;
 				assert(headerSlice);
 
 				const page = readPageHeader(headerSlice);
@@ -685,7 +686,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 					pageValid = true;
 				} else {
 					let pageSlice = this.demuxer.reader.requestSlice(page.headerStartPos, page.totalSize);
-					if (pageSlice instanceof Promise) pageSlice = await pageSlice;
+					if (isThenable(pageSlice)) pageSlice = await pageSlice;
 					assert(pageSlice);
 
 					// Validate the page by checking checksum
@@ -759,7 +760,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 
 			const nextPos = currentPage.headerStartPos + currentPage.totalSize;
 			let slice = this.demuxer.reader.requestSliceRange(nextPos, MIN_PAGE_HEADER_SIZE, MAX_PAGE_HEADER_SIZE);
-			if (slice instanceof Promise) slice = await slice;
+			if (isThenable(slice)) slice = await slice;
 			assert(slice);
 
 			const nextPage = readPageHeader(slice);

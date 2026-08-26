@@ -28,6 +28,7 @@ import {
 	clamp,
 	clearIntervalUnthrottled,
 	floorToDivisor,
+	isThenable,
 	last,
 	missingWebCodecsClassMessage,
 	promiseWithResolvers,
@@ -426,7 +427,7 @@ class VideoEncoderWrapper {
 		// Apply the user-defined process function, if any
 		if (config.transform?.process) {
 			let processed = config.transform.process(videoSample);
-			if (processed instanceof Promise) {
+			if (isThenable(processed)) {
 				processed = await processed;
 			}
 
@@ -1937,7 +1938,7 @@ class AudioEncoderWrapper {
 		if (config.transform?.process) {
 			try {
 				let processed = config.transform.process(audioSample);
-				if (processed instanceof Promise) {
+				if (isThenable(processed)) {
 					processed = await processed;
 				}
 

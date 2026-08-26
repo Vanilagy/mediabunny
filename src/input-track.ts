@@ -12,7 +12,7 @@ import { customAudioDecoders, customVideoDecoders } from './custom-coder';
 import { Input } from './input';
 import { Logging } from './logging';
 import { EncodedPacketSink, PacketRetrievalOptions } from './media-sink';
-import { assert, MaybePromise, Rational, Rotation, roundToDivisor, simplifyRational } from './misc';
+import { assert, isThenable, MaybePromise, Rational, Rotation, roundToDivisor, simplifyRational } from './misc';
 import { TrackType } from './output';
 import { EncodedPacket, PacketType } from './packet';
 import { TrackDisposition } from './metadata';
@@ -528,7 +528,7 @@ export abstract class InputTrack {
 }
 
 const requireSync = <T>(value: MaybePromise<T>, getterName: string, asyncName: string): T => {
-	if (value instanceof Promise) {
+	if (isThenable(value)) {
 		throw new Error(
 			`'${getterName}' is deprecated and not available synchronously for this track. Use the preferred`
 			+ ` '${asyncName}()' instead.`,
@@ -554,7 +554,7 @@ const toValidatedPredicate = <T extends InputTrack>(
 				};
 
 				const result = predicate(track);
-				if (result instanceof Promise) {
+				if (isThenable(result)) {
 					return result.then(handle);
 				}
 				return handle(result);
@@ -1225,7 +1225,7 @@ export const toValidatedInputTrackQuery = <T extends InputTrack>(
 					};
 
 					const result = query.filter!(track);
-					if (result instanceof Promise) {
+					if (isThenable(result)) {
 						return result.then(handle);
 					} else {
 						return handle(result);
@@ -1248,7 +1248,7 @@ export const toValidatedInputTrackQuery = <T extends InputTrack>(
 					};
 
 					const result = query.sortBy!(track);
-					if (result instanceof Promise) {
+					if (isThenable(result)) {
 						return result.then(handle);
 					} else {
 						return handle(result);
@@ -1274,7 +1274,7 @@ export const mergeInputTrackQueries = <T extends InputTrack>(
 						return queryB?.filter?.(track) ?? true;
 					};
 
-					if (resultA instanceof Promise) {
+					if (isThenable(resultA)) {
 						return resultA.then(handleResultA);
 					} else {
 						return handleResultA(resultA);
@@ -1294,7 +1294,7 @@ export const mergeInputTrackQueries = <T extends InputTrack>(
 						];
 					};
 
-					if (resultA instanceof Promise || resultB instanceof Promise) {
+					if (isThenable(resultA) || isThenable(resultB)) {
 						return Promise.all([resultA, resultB]).then(([resultA, resultB]) => {
 							return join(resultA, resultB);
 						});
@@ -1313,7 +1313,7 @@ export const queryInputTracks = async <T extends InputTrack>(
 	let matched = tracks;
 	if (query?.filter) {
 		const filterMatches = tracks.map(t => query.filter!(t));
-		const hasAsyncFilter = filterMatches.some(x => x instanceof Promise);
+		const hasAsyncFilter = filterMatches.some(x => isThenable(x));
 		if (hasAsyncFilter) {
 			// eslint-disable-next-line @typescript-eslint/await-thenable
 			const resolvedFilterMatches = await Promise.all(filterMatches);
@@ -1328,7 +1328,7 @@ export const queryInputTracks = async <T extends InputTrack>(
 	}
 
 	const sortValues = matched.map(t => query.sortBy!(t));
-	const hasAsyncSort = sortValues.some(x => x instanceof Promise);
+	const hasAsyncSort = sortValues.some(x => isThenable(x));
 	const resolvedSortValues = hasAsyncSort
 		// eslint-disable-next-line @typescript-eslint/await-thenable
 		? await Promise.all(sortValues)

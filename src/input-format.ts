@@ -36,7 +36,7 @@ import { TS_PACKET_SIZE } from './mpeg-ts/mpeg-ts-misc';
 import { HlsDemuxer } from './hls/hls-demuxer';
 import { HLS_MIME_TYPE } from './hls/hls-misc';
 import { PathedSource } from './source';
-import { MaybePromise } from './misc';
+import { isThenable, MaybePromise } from './misc';
 
 /**
  * Base class representing an input media file format.
@@ -75,7 +75,7 @@ export abstract class IsobmffInputFormat extends InputFormat {
 	/** @internal */
 	protected async _getMajorBrand(input: Input) {
 		let slice = input._reader.requestSlice(0, 12);
-		if (slice instanceof Promise) slice = await slice;
+		if (isThenable(slice)) slice = await slice;
 		if (!slice) return null;
 
 		slice.skip(4);
@@ -117,7 +117,7 @@ export class Mp4InputFormat extends IsobmffInputFormat {
 		}
 
 		let slice = input._reader.requestSlice(4, 4);
-		if (slice instanceof Promise) slice = await slice;
+		if (isThenable(slice)) slice = await slice;
 		if (!slice) return false;
 
 		const fourCc = readAscii(slice, 4);
@@ -169,7 +169,7 @@ export class MatroskaInputFormat extends InputFormat {
 	/** @internal */
 	protected async isSupportedEBMLOfDocType(input: Input, desiredDocType: string) {
 		let headerSlice = input._reader.requestSlice(0, MAX_HEADER_SIZE);
-		if (headerSlice instanceof Promise) headerSlice = await headerSlice;
+		if (isThenable(headerSlice)) headerSlice = await headerSlice;
 		if (!headerSlice) return false;
 
 		const varIntSize = readVarIntSize(headerSlice);
@@ -192,7 +192,7 @@ export class MatroskaInputFormat extends InputFormat {
 		}
 
 		let dataSlice = input._reader.requestSlice(headerSlice.filePos, dataSize);
-		if (dataSlice instanceof Promise) dataSlice = await dataSlice;
+		if (isThenable(dataSlice)) dataSlice = await dataSlice;
 		if (!dataSlice) return false;
 
 		const startPos = headerSlice.filePos;
@@ -295,7 +295,7 @@ export class Mp3InputFormat extends InputFormat {
 
 		while (true) {
 			let slice = input._reader.requestSlice(currentPos, ID3_V2_HEADER_SIZE);
-			if (slice instanceof Promise) slice = await slice;
+			if (isThenable(slice)) slice = await slice;
 			if (!slice) break;
 
 			const id3V2Header = readId3V2Header(slice);
@@ -315,7 +315,7 @@ export class Mp3InputFormat extends InputFormat {
 		const xingOffset = getXingOffset(firstHeader.mpegVersionId, firstHeader.channel);
 
 		let slice = input._reader.requestSlice(firstResult.startPos + xingOffset, 4);
-		if (slice instanceof Promise) slice = await slice;
+		if (isThenable(slice)) slice = await slice;
 		if (!slice) return false;
 
 		const word = readU32Be(slice);
@@ -376,7 +376,7 @@ export class WaveInputFormat extends InputFormat {
 	/** @internal */
 	async _canReadInput(input: Input) {
 		let slice = input._reader.requestSlice(0, 12);
-		if (slice instanceof Promise) slice = await slice;
+		if (isThenable(slice)) slice = await slice;
 		if (!slice) return false;
 
 		const riffType = readAscii(slice, 4);
@@ -416,7 +416,7 @@ export class OggInputFormat extends InputFormat {
 	/** @internal */
 	async _canReadInput(input: Input) {
 		let slice = input._reader.requestSlice(0, 4);
-		if (slice instanceof Promise) slice = await slice;
+		if (isThenable(slice)) slice = await slice;
 		if (!slice) return false;
 
 		return readAscii(slice, 4) === 'OggS';
@@ -451,7 +451,7 @@ export class FlacInputFormat extends InputFormat {
 		// There might be ID3v2 headers at the start, skip 'em
 		while (true) {
 			let slice = input._reader.requestSlice(currentPos, ID3_V2_HEADER_SIZE);
-			if (slice instanceof Promise) slice = await slice;
+			if (isThenable(slice)) slice = await slice;
 			if (!slice) break;
 
 			const id3V2Header = readId3V2Header(slice);
@@ -463,7 +463,7 @@ export class FlacInputFormat extends InputFormat {
 		}
 
 		let slice = input._reader.requestSlice(currentPos, 4);
-		if (slice instanceof Promise) slice = await slice;
+		if (isThenable(slice)) slice = await slice;
 		if (!slice) return false;
 
 		return readAscii(slice, 4) === 'fLaC';
@@ -498,7 +498,7 @@ export class AdtsInputFormat extends InputFormat {
 
 		while (true) {
 			let slice = input._reader.requestSlice(currentPos, ID3_V2_HEADER_SIZE);
-			if (slice instanceof Promise) slice = await slice;
+			if (isThenable(slice)) slice = await slice;
 			if (!slice) break;
 
 			const id3V2Header = readId3V2Header(slice);
@@ -514,7 +514,7 @@ export class AdtsInputFormat extends InputFormat {
 			MIN_ADTS_FRAME_HEADER_SIZE,
 			MAX_ADTS_FRAME_HEADER_SIZE,
 		);
-		if (slice instanceof Promise) slice = await slice;
+		if (isThenable(slice)) slice = await slice;
 		if (!slice) return false;
 
 		const firstHeader = readAdtsFrameHeader(slice);
@@ -529,7 +529,7 @@ export class AdtsInputFormat extends InputFormat {
 			MIN_ADTS_FRAME_HEADER_SIZE,
 			MAX_ADTS_FRAME_HEADER_SIZE,
 		);
-		if (slice instanceof Promise) slice = await slice;
+		if (isThenable(slice)) slice = await slice;
 		if (!slice) return false;
 
 		const secondHeader = readAdtsFrameHeader(slice);
@@ -573,7 +573,7 @@ export class MpegTsInputFormat extends InputFormat {
 	async _canReadInput(input: Input) {
 		const lengthToCheck = TS_PACKET_SIZE + 16 + 1;
 		let slice = input._reader.requestSlice(0, lengthToCheck);
-		if (slice instanceof Promise) slice = await slice;
+		if (isThenable(slice)) slice = await slice;
 		if (!slice) return false;
 
 		const bytes = readBytes(slice, lengthToCheck);
@@ -618,7 +618,7 @@ export class HlsInputFormat extends InputFormat {
 	/** @internal */
 	async _canReadInput(input: Input) {
 		let slice = input._reader.requestSlice(0, 7);
-		if (slice instanceof Promise) slice = await slice;
+		if (isThenable(slice)) slice = await slice;
 		if (!slice) return false;
 
 		const isM3u8 = readAscii(slice, 7) === '#EXTM3U';

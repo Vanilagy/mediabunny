@@ -11,6 +11,7 @@ import {
 	clamp,
 	COLOR_PRIMARIES_MAP,
 	isAllowSharedBufferSource,
+	isThenable,
 	MATRIX_COEFFICIENTS_MAP,
 	Rotation,
 	SECOND_TO_MICROSECOND_FACTOR,
@@ -864,7 +865,7 @@ export class VideoSample implements Disposable {
 
 		if (this._data instanceof VideoSampleResource) {
 			let result = this._data.getDataPlanes();
-			if (result instanceof Promise) result = await result;
+			if (isThenable(result)) result = await result;
 
 			if (
 				!Array.isArray(result)
@@ -1022,7 +1023,7 @@ export class VideoSample implements Disposable {
 			}
 
 			const planes = this._data.getDataPlanes();
-			if (planes instanceof Promise) {
+			if (isThenable(planes)) {
 				throw new Error(
 					'Cannot convert a VideoSampleResource-backed VideoSample to VideoFrame if getDataPlanes() returns'
 					+ ' a promise.',
@@ -1586,7 +1587,7 @@ export class VideoSample implements Disposable {
 		// Description's finalized; let's see if a registered transformer wants to handle it
 		for (const transformer of registeredVideoSampleTransformers) {
 			let result = transformer(this, description);
-			if (result instanceof Promise) result = await result;
+			if (isThenable(result)) result = await result;
 
 			if (result !== null) {
 				return result;

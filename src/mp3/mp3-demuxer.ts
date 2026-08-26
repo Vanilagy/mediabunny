@@ -17,6 +17,7 @@ import {
 	AsyncMutex,
 	binarySearchExact,
 	binarySearchLessOrEqual,
+	isThenable,
 	toDataView,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
@@ -102,7 +103,7 @@ export class Mp3Demuxer extends Demuxer {
 			// Let's skip all ID3v2 tags at the start of the file
 			while (true) {
 				let slice = this.reader.requestSlice(this.lastLoadedPos, ID3_V2_HEADER_SIZE);
-				if (slice instanceof Promise) slice = await slice;
+				if (isThenable(slice)) slice = await slice;
 
 				if (!slice) {
 					this.lastSampleLoaded = true;
@@ -136,7 +137,7 @@ export class Mp3Demuxer extends Demuxer {
 		const xingOffset = getXingOffset(header.mpegVersionId, header.channel);
 
 		let slice = this.reader.requestSlice(result.startPos + xingOffset, 4);
-		if (slice instanceof Promise) slice = await slice;
+		if (isThenable(slice)) slice = await slice;
 		if (slice) {
 			const word = readU32Be(slice);
 			const isXing = word === XING || word === INFO;
@@ -151,7 +152,7 @@ export class Mp3Demuxer extends Demuxer {
 
 				if (!this.xingData) {
 					let xingDataSlice = this.reader.requestSlice(result.startPos + xingOffset + 4, 12);
-					if (xingDataSlice instanceof Promise) xingDataSlice = await xingDataSlice;
+					if (isThenable(xingDataSlice)) xingDataSlice = await xingDataSlice;
 					if (xingDataSlice) {
 						const xingData = readBytes(xingDataSlice, 12);
 						const view = toDataView(xingData);
@@ -216,7 +217,7 @@ export class Mp3Demuxer extends Demuxer {
 
 			while (true) {
 				let headerSlice = this.reader.requestSlice(currentPos, ID3_V2_HEADER_SIZE);
-				if (headerSlice instanceof Promise) headerSlice = await headerSlice;
+				if (isThenable(headerSlice)) headerSlice = await headerSlice;
 				if (!headerSlice) break;
 
 				const id3V2Header = readId3V2Header(headerSlice);
@@ -227,7 +228,7 @@ export class Mp3Demuxer extends Demuxer {
 				id3V2HeaderFound = true;
 
 				let contentSlice = this.reader.requestSlice(headerSlice.filePos, id3V2Header.size);
-				if (contentSlice instanceof Promise) contentSlice = await contentSlice;
+				if (isThenable(contentSlice)) contentSlice = await contentSlice;
 				if (!contentSlice) break;
 
 				parseId3V2Tag(contentSlice, id3V2Header, this.metadataTags);
@@ -238,7 +239,7 @@ export class Mp3Demuxer extends Demuxer {
 			if (!id3V2HeaderFound && this.reader.fileSize !== null && this.reader.fileSize >= ID3_V1_TAG_SIZE) {
 				// Try reading an ID3v1 tag at the end of the file
 				let slice = this.reader.requestSlice(this.reader.fileSize - ID3_V1_TAG_SIZE, ID3_V1_TAG_SIZE);
-				if (slice instanceof Promise) slice = await slice;
+				if (isThenable(slice)) slice = await slice;
 				assert(slice);
 
 				const tag = readAscii(slice, 3);
@@ -388,7 +389,7 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 			data = PLACEHOLDER_DATA;
 		} else {
 			let slice = this.demuxer.reader.requestSlice(rawSample.dataStart, rawSample.dataSize);
-			if (slice instanceof Promise) slice = await slice;
+			if (isThenable(slice)) slice = await slice;
 
 			if (!slice) {
 				return null; // Data didn't fit into the rest of the file
