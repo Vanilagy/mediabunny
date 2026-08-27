@@ -48,9 +48,13 @@ export type PsshBox = {
 	data: Uint8Array;
 };
 
-export const parsePsshBoxContents = (contents: Uint8Array): PsshBox => {
+export const parsePsshBoxContents = (contents: Uint8Array): PsshBox | null => {
 	const view = toDataView(contents);
 	let pos = 0;
+
+	if (contents.length < 24) {
+		return null;
+	}
 
 	const version = view.getUint8(pos);
 	pos += 1;
@@ -62,8 +66,10 @@ export const parsePsshBoxContents = (contents: Uint8Array): PsshBox => {
 
 	let keyIds: string[] | null = null;
 	if (version > 0) {
-		const kidCount = view.getUint32(pos);
+		const declaredKidCount = view.getUint32(pos);
 		pos += 4;
+
+		const kidCount = Math.min(declaredKidCount, Math.floor((contents.length - pos - 4) / 16));
 
 		if (kidCount > 0) {
 			keyIds = [];
@@ -72,6 +78,10 @@ export const parsePsshBoxContents = (contents: Uint8Array): PsshBox => {
 				pos += 16;
 			}
 		}
+	}
+
+	if (contents.length < pos + 4) {
+		return null;
 	}
 
 	const dataSize = view.getUint32(pos);
