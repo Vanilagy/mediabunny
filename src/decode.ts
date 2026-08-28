@@ -910,7 +910,7 @@ export class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 		const sampleHandler = (sample: AudioSample) => {
 			let sampleTimestamp = sample.timestamp;
 
-			if (this.expectedFirstTimestamp && this.currentTimestamp === null) {
+			if (this.expectedFirstTimestamp !== null && this.currentTimestamp === null) {
 				this.timestampOffset = this.expectedFirstTimestamp - sampleTimestamp;
 			}
 
