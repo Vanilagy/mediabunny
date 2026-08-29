@@ -14,7 +14,7 @@ import {
 	UNDETERMINED_LANGUAGE,
 	assert,
 	assertNever,
-	colorSpaceIsComplete,
+	colorSpaceIsEmpty,
 	imageMimeTypeToExtension,
 	keyValueIterator,
 	normalizeRotation,
@@ -405,29 +405,31 @@ export class MatroskaMuxer extends Muxer {
 			(hasNonSquarePixelAspectRatio ? { id: EBMLId.DisplayHeight, data: trackData.info.aspectRatio!.den } : null),
 			(hasNonSquarePixelAspectRatio ? { id: EBMLId.DisplayUnit, data: 3 } : null), // 3 = display aspect ratio
 			trackData.info.alphaMode ? { id: EBMLId.AlphaMode, data: 1 } : null,
-			(colorSpaceIsComplete(colorSpace)
-				? {
+			(colorSpaceIsEmpty(colorSpace)
+				? null
+				: {
 						id: EBMLId.Colour,
 						data: [
 							{
 								id: EBMLId.MatrixCoefficients,
-								data: MATRIX_COEFFICIENTS_MAP[colorSpace.matrix],
+								data: colorSpace?.matrix != null ? MATRIX_COEFFICIENTS_MAP[colorSpace.matrix] : 2,
 							},
 							{
 								id: EBMLId.TransferCharacteristics,
-								data: TRANSFER_CHARACTERISTICS_MAP[colorSpace.transfer],
+								data: colorSpace?.transfer != null
+									? TRANSFER_CHARACTERISTICS_MAP[colorSpace.transfer]
+									: 2,
 							},
 							{
 								id: EBMLId.Primaries,
-								data: COLOR_PRIMARIES_MAP[colorSpace.primaries],
+								data: colorSpace?.primaries != null ? COLOR_PRIMARIES_MAP[colorSpace.primaries] : 2,
 							},
 							{
 								id: EBMLId.Range,
-								data: colorSpace.fullRange ? 2 : 1,
+								data: colorSpace?.fullRange != null ? (colorSpace.fullRange ? 2 : 1) : 0,
 							},
 						],
-					}
-				: null),
+					}),
 			(flippedRotation
 				? {
 						id: EBMLId.Projection,

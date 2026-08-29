@@ -16,7 +16,7 @@ import {
 	COLOR_PRIMARIES_MAP,
 	TRANSFER_CHARACTERISTICS_MAP,
 	MATRIX_COEFFICIENTS_MAP,
-	colorSpaceIsComplete,
+	colorSpaceIsEmpty,
 	UNDETERMINED_LANGUAGE,
 	assertNever,
 	keyValueIterator,
@@ -750,7 +750,9 @@ export const videoSampleDescription = (
 ], [
 	VIDEO_CODEC_TO_CONFIGURATION_BOX[trackData.track.source._codec]?.(trackData) ?? null,
 	pasp(trackData),
-	colorSpaceIsComplete(trackData.info.decoderConfig.colorSpace) ? colr(trackData) : null,
+	colorSpaceIsEmpty(trackData.info.decoderConfig.colorSpace)
+		? null
+		: colr(trackData),
 ]);
 
 /** Pixel Aspect Ratio Box: Specifies pixel width:height spacing for non-square pixels. */
@@ -766,15 +768,28 @@ export const pasp = (trackData: IsobmffVideoTrackData) => {
 };
 
 /** Colour Information Box: Specifies the color space of the video. */
-export const colr = (trackData: IsobmffVideoTrackData) => box('colr', [
-	ascii(trackData.muxer.isQuickTime ? 'nclc' : 'nclx'), // Colour type
-	u16(COLOR_PRIMARIES_MAP[trackData.info.decoderConfig.colorSpace!.primaries!]), // Colour primaries
-	u16(TRANSFER_CHARACTERISTICS_MAP[trackData.info.decoderConfig.colorSpace!.transfer!]), // Transfer characteristics
-	u16(MATRIX_COEFFICIENTS_MAP[trackData.info.decoderConfig.colorSpace!.matrix!]), // Matrix coefficients
-	trackData.muxer.isQuickTime
-		? [] // Doesn't have it
-		: u8((trackData.info.decoderConfig.colorSpace!.fullRange ? 1 : 0) << 7), // Full range flag
-]);
+export const colr = (trackData: IsobmffVideoTrackData) => {
+	const colorSpace = trackData.info.decoderConfig.colorSpace;
+
+	return box('colr', [
+		// Colour type
+		ascii(trackData.muxer.isQuickTime ? 'nclc' : 'nclx'),
+
+		// Colour primaries
+		u16(colorSpace?.primaries != null ? COLOR_PRIMARIES_MAP[colorSpace.primaries] : 2),
+
+		// Transfer characteristics
+		u16(colorSpace?.transfer != null ? TRANSFER_CHARACTERISTICS_MAP[colorSpace.transfer] : 2),
+
+		// Matrix coefficients
+		u16(colorSpace?.matrix != null ? MATRIX_COEFFICIENTS_MAP[colorSpace.matrix] : 2),
+
+		// Full range flag
+		trackData.muxer.isQuickTime
+			? [] // Doesn't have it
+			: u8((colorSpace?.fullRange ? 1 : 0) << 7),
+	]);
+};
 
 /** AVC Configuration Box: Provides additional information to the decoder. */
 export const avcC = (trackData: IsobmffVideoTrackData) => trackData.info.decoderConfig && box('avcC', [
@@ -811,17 +826,17 @@ export const vpcC = (trackData: IsobmffVideoTrackData) => {
 		? Number(parts[5])
 		: decoderConfig.colorSpace?.primaries
 			? COLOR_PRIMARIES_MAP[decoderConfig.colorSpace.primaries]
-			: 2; // Default to undetermined
+			: 1;
 	const transferCharacteristics = parts[6]
 		? Number(parts[6])
 		: decoderConfig.colorSpace?.transfer
 			? TRANSFER_CHARACTERISTICS_MAP[decoderConfig.colorSpace.transfer]
-			: 2;
+			: 1;
 	const matrixCoefficients = parts[7]
 		? Number(parts[7])
 		: decoderConfig.colorSpace?.matrix
 			? MATRIX_COEFFICIENTS_MAP[decoderConfig.colorSpace.matrix]
-			: 2;
+			: 1;
 
 	return fullBox('vpcC', 1, 0, [
 		u8(profile), // Profile

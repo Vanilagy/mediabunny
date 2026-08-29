@@ -22,7 +22,6 @@ import {
 	textEncoder,
 	toDataView,
 	toUint8Array,
-	getChromiumVersion,
 	isChromium,
 	popcount,
 	setUint24,
@@ -1727,6 +1726,16 @@ export type Vp9CodecInfo = {
 	matrixCoefficients: number;
 };
 
+// The color spaces from section 7.2.2 of the VP9 spec The matrix column is taken from FFmpeg's libavcodec/vp9.c
+const VP9_COLOR_SPACE_TABLE = {
+	1: { colourPrimaries: 5, transferCharacteristics: 6, matrixCoefficients: 5 }, // CS_BT_601
+	2: { colourPrimaries: 1, transferCharacteristics: 1, matrixCoefficients: 1 }, // CS_BT_709
+	3: { colourPrimaries: 6, transferCharacteristics: 6, matrixCoefficients: 6 }, // CS_SMPTE_170
+	4: { colourPrimaries: 7, transferCharacteristics: 7, matrixCoefficients: 7 }, // CS_SMPTE_240
+	5: { colourPrimaries: 9, transferCharacteristics: 14, matrixCoefficients: 9 }, // CS_BT_2020
+	7: { colourPrimaries: 1, transferCharacteristics: 13, matrixCoefficients: 0 }, // CS_RGB (sRGB)
+};
+
 export const extractVp9CodecInfoFromPacket = (
 	packet: Uint8Array,
 ): Vp9CodecInfo | null => {
@@ -1835,26 +1844,10 @@ export const extractVp9CodecInfoFromPacket = (
 		}
 	}
 
-	// Map color_space to standard values
-	const matrixCoefficients = colorSpace === 7
-		? 0
-		: colorSpace === 2
-			? 1
-			: colorSpace === 1
-				? 6
-				: 2;
-
-	const colourPrimaries = colorSpace === 2
-		? 1
-		: colorSpace === 1
-			? 6
-			: 2;
-
-	const transferCharacteristics = colorSpace === 2
-		? 1
-		: colorSpace === 1
-			? 6
-			: 2;
+	const colorSpaceValues = VP9_COLOR_SPACE_TABLE[colorSpace as keyof typeof VP9_COLOR_SPACE_TABLE];
+	const colourPrimaries = colorSpaceValues?.colourPrimaries ?? 2;
+	const transferCharacteristics = colorSpaceValues?.transferCharacteristics ?? 2;
+	const matrixCoefficients = colorSpaceValues?.matrixCoefficients ?? 2;
 
 	return {
 		profile,
@@ -1868,6 +1861,12 @@ export const extractVp9CodecInfoFromPacket = (
 	};
 };
 
+export const vp9CodecInfoHasColorInfo = (info: Vp9CodecInfo) => {
+	return info.colourPrimaries !== 2
+		|| info.transferCharacteristics !== 2
+		|| info.matrixCoefficients !== 2;
+};
+
 export type Av1CodecInfo = {
 	profile: number;
 	level: number;
@@ -1877,6 +1876,10 @@ export type Av1CodecInfo = {
 	chromaSubsamplingX: number;
 	chromaSubsamplingY: number;
 	chromaSamplePosition: number;
+	videoFullRangeFlag: number;
+	colourPrimaries: number;
+	transferCharacteristics: number;
+	matrixCoefficients: number;
 };
 
 /** Iterates over all OBUs in an AV1 packet bitstream. */
@@ -1891,7 +1894,8 @@ export const iterateAv1PacketObus = function* (packet: Uint8Array) {
 		for (let i = 0; i < 8; i++) {
 			const byte = bitstream.readAlignedByte();
 
-			value |= ((byte & 0x7f) << (i * 7));
+			// No bit shift since the value can get big
+			value += (byte & 0x7f) * 2 ** (i * 7);
 
 			if (!(byte & 0x80)) {
 				break;
@@ -1904,7 +1908,7 @@ export const iterateAv1PacketObus = function* (packet: Uint8Array) {
 		}
 
 		// Spec requirement
-		if (value >= 2 ** 32 - 1) {
+		if (value > 2 ** 32 - 1) {
 			return null;
 		}
 
@@ -1978,43 +1982,43 @@ export const extractAv1CodecInfoFromPacket = (
 		if (reducedStillPictureHeader) {
 			seqLevel = bitstream.readBits(5);
 		} else {
-			// Parse timing_info_present_flag
 			const timingInfoPresentFlag = bitstream.readBits(1);
 
+			let decoderModelInfoPresentFlag = 0;
+
 			if (timingInfoPresentFlag) {
-				// Skip timing info (num_units_in_display_tick, time_scale, equal_picture_interval)
 				bitstream.skipBits(32); // num_units_in_display_tick
 				bitstream.skipBits(32); // time_scale
 				const equalPictureInterval = bitstream.readBits(1);
 
 				if (equalPictureInterval) {
-					// Skip num_ticks_per_picture_minus_1 (uvlc)
-					// Since this is variable length, we'd need to implement uvlc reading
-					// For now, we'll return null as this is rare
-					return null;
+					// num_ticks_per_picture_minus_1 is uvlc-coded, so we need to seek past it manually
+					let leadingZeros = 0;
+					while (leadingZeros < 32 && !bitstream.readBits(1)) {
+						leadingZeros++;
+					}
+
+					if (leadingZeros < 32) {
+						bitstream.skipBits(leadingZeros);
+					}
+				}
+
+				decoderModelInfoPresentFlag = bitstream.readBits(1);
+
+				if (decoderModelInfoPresentFlag) {
+					bufferDelayLengthMinus1 = bitstream.readBits(5);
+					bitstream.skipBits(32); // num_units_in_decoding_tick
+					bitstream.skipBits(5); // buffer_removal_time_length_minus_1
+					bitstream.skipBits(5); // frame_presentation_time_length_minus_1
 				}
 			}
 
-			// Parse decoder_model_info_present_flag
-			const decoderModelInfoPresentFlag = bitstream.readBits(1);
-
-			if (decoderModelInfoPresentFlag) {
-				// Store buffer_delay_length_minus_1 instead of just skipping
-				bufferDelayLengthMinus1 = bitstream.readBits(5);
-				bitstream.skipBits(32); // num_units_in_decoding_tick
-				bitstream.skipBits(5); // buffer_removal_time_length_minus_1
-				bitstream.skipBits(5); // frame_presentation_time_length_minus_1
-			}
-
-			// Parse operating_points_cnt_minus_1
+			const initialDisplayDelayPresentFlag = bitstream.readBits(1);
 			const operatingPointsCntMinus1 = bitstream.readBits(5);
 
-			// For each operating point
 			for (let i = 0; i <= operatingPointsCntMinus1; i++) {
-				// operating_point_idc[i]
-				bitstream.skipBits(12);
+				bitstream.skipBits(12); // operating_point_idc[i]
 
-				// seq_level_idx[i]
 				const seqLevelIdx = bitstream.readBits(5);
 
 				if (i === 0) {
@@ -2022,7 +2026,6 @@ export const extractAv1CodecInfoFromPacket = (
 				}
 
 				if (seqLevelIdx > 7) {
-					// seq_tier[i]
 					const seqTierTemp = bitstream.readBits(1);
 					if (i === 0) {
 						seqTier = seqTierTemp;
@@ -2030,7 +2033,6 @@ export const extractAv1CodecInfoFromPacket = (
 				}
 
 				if (decoderModelInfoPresentFlag) {
-					// decoder_model_present_for_this_op[i]
 					const decoderModelPresentForThisOp = bitstream.readBits(1);
 
 					if (decoderModelPresentForThisOp) {
@@ -2041,12 +2043,12 @@ export const extractAv1CodecInfoFromPacket = (
 					}
 				}
 
-				// initial_display_delay_present_flag
-				const initialDisplayDelayPresentFlag = bitstream.readBits(1);
-
 				if (initialDisplayDelayPresentFlag) {
-					// initial_display_delay_minus_1[i]
-					bitstream.skipBits(4);
+					const initialDisplayDelayPresentForThisOp = bitstream.readBits(1);
+
+					if (initialDisplayDelayPresentForThisOp) {
+						bitstream.skipBits(4); // initial_display_delay_minus_1[i]
+					}
 				}
 			}
 		}
@@ -2129,11 +2131,32 @@ export const extractAv1CodecInfoFromPacket = (
 			monochrome = bitstream.readBits(1);
 		}
 
+		let colourPrimaries = 2; // CP_UNSPECIFIED
+		let transferCharacteristics = 2; // TC_UNSPECIFIED
+		let matrixCoefficients = 2; // MC_UNSPECIFIED
+
+		const colorDescriptionPresentFlag = bitstream.readBits(1);
+		if (colorDescriptionPresentFlag) {
+			colourPrimaries = bitstream.readBits(8);
+			transferCharacteristics = bitstream.readBits(8);
+			matrixCoefficients = bitstream.readBits(8);
+		}
+
+		let videoFullRangeFlag = 0;
 		let chromaSubsamplingX = 1;
 		let chromaSubsamplingY = 1;
-		let chromaSamplePosition = 0;
+		let chromaSamplePosition = 0; // CSP_UNKNOWN
 
-		if (!monochrome) {
+		if (monochrome) {
+			videoFullRangeFlag = bitstream.readBits(1);
+		} else if (colourPrimaries === 1 && transferCharacteristics === 13 && matrixCoefficients === 0) {
+			// sRGB with an identity matrix, which is always full range 4:4:4
+			videoFullRangeFlag = 1;
+			chromaSubsamplingX = 0;
+			chromaSubsamplingY = 0;
+		} else {
+			videoFullRangeFlag = bitstream.readBits(1);
+
 			if (seqProfile === 0) {
 				chromaSubsamplingX = 1;
 				chromaSubsamplingY = 1;
@@ -2143,9 +2166,10 @@ export const extractAv1CodecInfoFromPacket = (
 			} else {
 				if (bitDepth === 12) {
 					chromaSubsamplingX = bitstream.readBits(1);
-					if (chromaSubsamplingX) {
-						chromaSubsamplingY = bitstream.readBits(1);
-					}
+					chromaSubsamplingY = chromaSubsamplingX ? bitstream.readBits(1) : 0;
+				} else {
+					chromaSubsamplingX = 1;
+					chromaSubsamplingY = 0;
 				}
 			}
 
@@ -2163,10 +2187,54 @@ export const extractAv1CodecInfoFromPacket = (
 			chromaSubsamplingX,
 			chromaSubsamplingY,
 			chromaSamplePosition,
+			videoFullRangeFlag,
+			colourPrimaries,
+			transferCharacteristics,
+			matrixCoefficients,
 		};
 	}
 
 	return null;
+};
+
+export const av1CodecInfoHasColorInfo = (info: Av1CodecInfo) => {
+	return info.colourPrimaries !== 2
+		|| info.transferCharacteristics !== 2
+		|| info.matrixCoefficients !== 2;
+};
+
+export type ProresCodecInfo = {
+	colourPrimaries: number;
+	transferCharacteristics: number;
+	matrixCoefficients: number;
+	fullRange: boolean;
+};
+
+export const extractProresCodecInfoFromPacket = (packet: Uint8Array): ProresCodecInfo | null => {
+	// https://wiki.multimedia.cx/index.php/Apple_ProRes
+
+	const frameHeaderStart = 8;
+	if (packet.length < frameHeaderStart + 28) {
+		return null;
+	}
+
+	const view = toDataView(packet);
+
+	if (view.getUint32(4) !== 0x69637066) { // 'icpf'
+		return null;
+	}
+
+	const headerSize = view.getUint16(frameHeaderStart);
+	if (headerSize < 28) {
+		return null;
+	}
+
+	return {
+		fullRange: false, // ProRes is always limited range
+		colourPrimaries: view.getUint8(frameHeaderStart + 14),
+		transferCharacteristics: view.getUint8(frameHeaderStart + 15),
+		matrixCoefficients: view.getUint8(frameHeaderStart + 16),
+	};
 };
 
 export const parseOpusIdentificationHeader = (bytes: Uint8Array) => {
@@ -2337,8 +2405,8 @@ export const determineVideoPacketType = (
 
 				// In addition to IDR, Recovery Point SEI also counts as a valid H.264 keyframe by current consensus.
 				// See https://github.com/w3c/webcodecs/issues/650 for the relevant discussion. WebKit and Firefox have
-				// always supported them, but Chromium hasn't, therefore the (admittedly dirty) version check.
-				if (type === AvcNalUnitType.SEI && (!isChromium() || getChromiumVersion()! >= 144)) {
+				// always supported them, but Chromium hasn't.
+				if (type === AvcNalUnitType.SEI && !isChromium()) {
 					const nalUnit = packetData.subarray(loc.offset, loc.offset + loc.length);
 					const bytes = removeEmulationPreventionBytes(nalUnit);
 					let pos = 1; // Skip NALU header

@@ -14,6 +14,7 @@ import {
 	DTS_FOURCCS,
 	DtsFourCc,
 	extractAudioCodecString,
+	extractColorSpace,
 	extractVideoCodecString,
 	MediaCodec,
 	OPUS_SAMPLE_RATE,
@@ -26,12 +27,16 @@ import {
 } from '../codec';
 import {
 	Av1CodecInfo,
+	av1CodecInfoHasColorInfo,
 	AvcDecoderConfigurationRecord,
 	extractAv1CodecInfoFromPacket,
+	extractProresCodecInfoFromPacket,
 	extractVp9CodecInfoFromPacket,
 	FlacBlockType,
 	HevcDecoderConfigurationRecord,
+	ProresCodecInfo,
 	Vp9CodecInfo,
+	vp9CodecInfoHasColorInfo,
 	parseEac3Config,
 	getEac3SampleRate,
 	getEac3ChannelCount,
@@ -72,6 +77,8 @@ import {
 	roundIfAlmostInteger,
 	hexStringToBytes,
 	HEX_STRING_REGEX,
+	EMPTY_COLOR_SPACE,
+	colorSpaceIsComplete,
 } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { buildIsobmffMimeType, parsePsshBoxContents, psshBoxesAreEqual, PsshBox } from './isobmff-misc';
@@ -151,12 +158,13 @@ type InternalTrack = {
 		squarePixelHeight: number;
 		codec: VideoCodec | null;
 		codecDescription: Uint8Array | null;
-		colorSpace: VideoColorSpaceInit | null;
+		colorSpace: VideoColorSpaceInit;
 		avcType: 1 | 3 | null;
 		avcCodecInfo: AvcDecoderConfigurationRecord | null;
 		hevcCodecInfo: HevcDecoderConfigurationRecord | null;
 		vp9CodecInfo: Vp9CodecInfo | null;
 		av1CodecInfo: Av1CodecInfo | null;
+		proresCodecInfo: ProresCodecInfo | null;
 		proresFormat: ProresFourCc | null;
 	};
 } | {
@@ -1027,12 +1035,13 @@ export class IsobmffDemuxer extends Demuxer {
 						squarePixelHeight: -1,
 						codec: null,
 						codecDescription: null,
-						colorSpace: null,
+						colorSpace: { ...EMPTY_COLOR_SPACE },
 						avcType: null,
 						avcCodecInfo: null,
 						hevcCodecInfo: null,
 						vp9CodecInfo: null,
 						av1CodecInfo: null,
+						proresCodecInfo: null,
 						proresFormat: null,
 					};
 				} else if (handlerType === 'soun') {
@@ -1472,6 +1481,12 @@ export class IsobmffDemuxer extends Demuxer {
 				// Logic from https://aomediacodec.github.io/av1-spec/av1-spec.pdf
 				const bitDepth = profile === 2 && highBitDepth ? (twelveBit ? 12 : 10) : (highBitDepth ? 10 : 8);
 
+				slice.skip(1); // Reserved bits + initial presentation delay
+
+				// Parse config OBUs if there are any
+				const configObus = readBytes(slice, boxInfo.contentSize - 4);
+				const configObuInfo = extractAv1CodecInfoFromPacket(configObus);
+
 				track.info.av1CodecInfo = {
 					profile,
 					level,
@@ -1481,6 +1496,10 @@ export class IsobmffDemuxer extends Demuxer {
 					chromaSubsamplingX,
 					chromaSubsamplingY,
 					chromaSamplePosition,
+					videoFullRangeFlag: configObuInfo?.videoFullRangeFlag ?? 0,
+					colourPrimaries: configObuInfo?.colourPrimaries ?? 2,
+					transferCharacteristics: configObuInfo?.transferCharacteristics ?? 2,
+					matrixCoefficients: configObuInfo?.matrixCoefficients ?? 2,
 				};
 			}; break;
 
@@ -3410,11 +3429,16 @@ class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideo
 	}
 
 	async getColorSpace(): Promise<VideoColorSpaceInit> {
+		const decoderConfig = await this.getDecoderConfig();
+		if (!decoderConfig) {
+			return this.internalTrack.info.colorSpace;
+		}
+
 		return {
-			primaries: this.internalTrack.info.colorSpace?.primaries,
-			transfer: this.internalTrack.info.colorSpace?.transfer,
-			matrix: this.internalTrack.info.colorSpace?.matrix,
-			fullRange: this.internalTrack.info.colorSpace?.fullRange,
+			primaries: decoderConfig.colorSpace?.primaries,
+			transfer: decoderConfig.colorSpace?.transfer,
+			matrix: decoderConfig.colorSpace?.matrix,
+			fullRange: decoderConfig.colorSpace?.fullRange,
 		};
 	}
 
@@ -3439,12 +3463,56 @@ class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideo
 				const firstPacket = await this.getFirstPacket({});
 				this.internalTrack.info.hevcCodecInfo
 					= firstPacket && extractHevcDecoderConfigurationRecord(firstPacket.data);
-			} else if (this.internalTrack.info.codec === 'vp9' && !this.internalTrack.info.vp9CodecInfo) {
+			} else if (
+				this.internalTrack.info.codec === 'vp9'
+				&& (
+					!this.internalTrack.info.vp9CodecInfo
+					// The codec info extracted from vpcC may claim the color space is "undefined"
+					|| !vp9CodecInfoHasColorInfo(this.internalTrack.info.vp9CodecInfo)
+				)
+			) {
 				const firstPacket = await this.getFirstPacket({});
-				this.internalTrack.info.vp9CodecInfo = firstPacket && extractVp9CodecInfoFromPacket(firstPacket.data);
-			} else if (this.internalTrack.info.codec === 'av1' && !this.internalTrack.info.av1CodecInfo) {
+				const packetInfo = firstPacket && extractVp9CodecInfoFromPacket(firstPacket.data);
+
+				if (packetInfo) {
+					this.internalTrack.info.vp9CodecInfo = {
+						...(this.internalTrack.info.vp9CodecInfo ?? packetInfo),
+						videoFullRangeFlag: packetInfo.videoFullRangeFlag,
+						colourPrimaries: packetInfo.colourPrimaries,
+						transferCharacteristics: packetInfo.transferCharacteristics,
+						matrixCoefficients: packetInfo.matrixCoefficients,
+					};
+				}
+			} else if (
+				this.internalTrack.info.codec === 'av1'
+				&& (
+					!this.internalTrack.info.av1CodecInfo
+					// The codec info extracted from av1C may not contain color space information
+					|| !av1CodecInfoHasColorInfo(
+						this.internalTrack.info.av1CodecInfo,
+					)
+				)
+			) {
 				const firstPacket = await this.getFirstPacket({});
-				this.internalTrack.info.av1CodecInfo = firstPacket && extractAv1CodecInfoFromPacket(firstPacket.data);
+				const packetInfo = firstPacket && extractAv1CodecInfoFromPacket(firstPacket.data);
+
+				if (packetInfo) {
+					this.internalTrack.info.av1CodecInfo = packetInfo;
+				}
+			} else if (this.internalTrack.info.codec === 'prores' && !this.internalTrack.info.proresCodecInfo) {
+				const firstPacket = await this.getFirstPacket({});
+				this.internalTrack.info.proresCodecInfo
+					= firstPacket && extractProresCodecInfoFromPacket(firstPacket.data);
+			}
+
+			if (!colorSpaceIsComplete(this.internalTrack.info.colorSpace)) {
+				const colorSpace = extractColorSpace(this.internalTrack.info);
+
+				// Fill the missing values
+				this.internalTrack.info.colorSpace.primaries ??= colorSpace.primaries;
+				this.internalTrack.info.colorSpace.transfer ??= colorSpace.transfer;
+				this.internalTrack.info.colorSpace.matrix ??= colorSpace.matrix;
+				this.internalTrack.info.colorSpace.fullRange ??= colorSpace.fullRange;
 			}
 
 			const config: VideoDecoderConfig = {
@@ -3452,7 +3520,7 @@ class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideo
 				codedWidth: this.internalTrack.info.width,
 				codedHeight: this.internalTrack.info.height,
 				description: this.internalTrack.info.codecDescription ?? undefined,
-				colorSpace: this.internalTrack.info.colorSpace ?? undefined,
+				colorSpace: this.internalTrack.info.colorSpace,
 			};
 
 			if (

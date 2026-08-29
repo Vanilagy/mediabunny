@@ -29,6 +29,7 @@ import {
 	assertNever,
 	CallSerializer,
 	clamp,
+	colorSpaceIsComplete,
 	getInt24,
 	getUint24,
 	insertSorted,
@@ -944,19 +945,41 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 				}
 			};
 
-			if (codec === 'avc' && this.decoderConfig.description && isChromium()) {
-				// Chromium has/had a bug with playing interlaced AVC (https://issues.chromium.org/issues/456919096)
-				// which can be worked around by requesting that software decoding be used. So, here we peek into the
-				// AVC description, if present, and switch to software decoding if we find interlaced content.
-				const record = deserializeAvcDecoderConfigurationRecord(toUint8Array(this.decoderConfig.description));
-				if (record && record.sequenceParameterSets.length > 0) {
-					const sps = parseAvcSps(record.sequenceParameterSets[0]!);
-					if (sps && sps.frameMbsOnlyFlag === 0) {
-						this.decoderConfig = {
-							...this.decoderConfig,
-							hardwareAcceleration: 'prefer-software',
-						};
+			if (isChromium()) {
+				if (codec === 'avc' && this.decoderConfig.description) {
+					// Chromium has/had a bug with playing interlaced AVC (https://issues.chromium.org/issues/456919096)
+					// which can be worked around by requesting that software decoding be used. So, here we peek into
+					// the AVC description, if present, and switch to software decoding if we find interlaced content.
+					const record = deserializeAvcDecoderConfigurationRecord(
+						toUint8Array(this.decoderConfig.description),
+					);
+					if (record && record.sequenceParameterSets.length > 0) {
+						const sps = parseAvcSps(record.sequenceParameterSets[0]!);
+						if (sps && sps.frameMbsOnlyFlag === 0) {
+							this.decoderConfig = {
+								...this.decoderConfig,
+								hardwareAcceleration: 'prefer-software',
+							};
+						}
 					}
+				}
+
+				if (!colorSpaceIsComplete(this.decoderConfig.colorSpace)) {
+					// Found via https://github.com/remotion-dev/remotion/issues/10841.
+					// If the color space is incomplete (which is often that it's just partially filled), Chromium has
+					// some nasty logic where it doesn't pass that information along to the GPU at all. The result is
+					// that information is genuinely lost, like the color matrix for example. Chromium has other code
+					// paths where it just fills the missing values with a hardcoded default, so we do the exact same
+					// thing here, with the same hardcoded defaults:
+					this.decoderConfig = {
+						...this.decoderConfig,
+						colorSpace: {
+							primaries: this.decoderConfig.colorSpace?.primaries ?? 'bt709',
+							matrix: this.decoderConfig.colorSpace?.matrix ?? 'bt709',
+							transfer: this.decoderConfig.colorSpace?.transfer ?? 'bt709',
+							fullRange: this.decoderConfig.colorSpace?.fullRange ?? false,
+						},
+					};
 				}
 			}
 
@@ -2095,7 +2118,7 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 		const sampleHandler = (sample: AudioSample) => {
 			let sampleTimestamp = sample.timestamp;
 
-			if (this.expectedFirstTimestamp && this.currentTimestamp === null) {
+			if (this.expectedFirstTimestamp !== null && this.currentTimestamp === null) {
 				this.timestampOffset = this.expectedFirstTimestamp - sampleTimestamp; ;
 			}
 

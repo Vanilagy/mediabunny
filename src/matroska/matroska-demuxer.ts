@@ -12,6 +12,7 @@ import {
 	extractDtsFourCcFromPacket,
 	extractAvcDecoderConfigurationRecord,
 	extractHevcDecoderConfigurationRecord,
+	extractProresCodecInfoFromPacket,
 	extractVp9CodecInfoFromPacket,
 } from '../codec-data';
 import {
@@ -19,6 +20,7 @@ import {
 	AudioCodec,
 	DtsFourCc,
 	extractAudioCodecString,
+	extractColorSpace,
 	extractVideoCodecString,
 	MediaCodec,
 	OPUS_SAMPLE_RATE,
@@ -40,6 +42,8 @@ import {
 	assert,
 	binarySearchLessOrEqual,
 	COLOR_PRIMARIES_MAP_INVERSE,
+	colorSpaceIsComplete,
+	EMPTY_COLOR_SPACE,
 	findLastIndex,
 	isIso639Dash2LanguageCode,
 	isThenable,
@@ -220,7 +224,7 @@ type InternalTrack = {
 			rotation: Rotation;
 			codec: VideoCodec | null;
 			codecDescription: Uint8Array | null;
-			colorSpace: VideoColorSpaceInit | null;
+			colorSpace: VideoColorSpaceInit;
 			alphaMode: boolean;
 			proresFormat: ProresFourCc | null;
 		}
@@ -1199,7 +1203,7 @@ export class MatroskaDemuxer extends Demuxer {
 						rotation: 0,
 						codec: null,
 						codecDescription: null,
-						colorSpace: null,
+						colorSpace: { ...EMPTY_COLOR_SPACE },
 						alphaMode: false,
 						proresFormat: null,
 					};
@@ -1363,37 +1367,39 @@ export class MatroskaDemuxer extends Demuxer {
 			case EBMLId.Colour: {
 				if (this.currentTrack?.info?.type !== 'video') break;
 
-				this.currentTrack.info.colorSpace = {};
 				this.readContiguousElements(slice.slice(dataStartPos, size));
 			}; break;
 
 			case EBMLId.MatrixCoefficients: {
-				if (this.currentTrack?.info?.type !== 'video' || !this.currentTrack.info.colorSpace) break;
+				if (this.currentTrack?.info?.type !== 'video') break;
 
 				const matrixCoefficients = readUnsignedInt(slice, size);
-				const mapped = MATRIX_COEFFICIENTS_MAP_INVERSE[matrixCoefficients] ?? null;
+				const mapped = MATRIX_COEFFICIENTS_MAP_INVERSE[matrixCoefficients];
 				this.currentTrack.info.colorSpace.matrix = mapped as VideoColorSpaceInit['matrix'];
 			}; break;
 
 			case EBMLId.Range: {
-				if (this.currentTrack?.info?.type !== 'video' || !this.currentTrack.info.colorSpace) break;
+				if (this.currentTrack?.info?.type !== 'video') break;
 
-				this.currentTrack.info.colorSpace.fullRange = readUnsignedInt(slice, size) === 2;
+				const range = readUnsignedInt(slice, size);
+				this.currentTrack.info.colorSpace.fullRange = range === 1 || range === 2
+					? range === 2
+					: undefined;
 			}; break;
 
 			case EBMLId.TransferCharacteristics: {
-				if (this.currentTrack?.info?.type !== 'video' || !this.currentTrack.info.colorSpace) break;
+				if (this.currentTrack?.info?.type !== 'video') break;
 
 				const transferCharacteristics = readUnsignedInt(slice, size);
-				const mapped = TRANSFER_CHARACTERISTICS_MAP_INVERSE[transferCharacteristics] ?? null;
+				const mapped = TRANSFER_CHARACTERISTICS_MAP_INVERSE[transferCharacteristics];
 				this.currentTrack.info.colorSpace.transfer = mapped as VideoColorSpaceInit['transfer'];
 			}; break;
 
 			case EBMLId.Primaries: {
-				if (this.currentTrack?.info?.type !== 'video' || !this.currentTrack.info.colorSpace) break;
+				if (this.currentTrack?.info?.type !== 'video') break;
 
 				const primaries = readUnsignedInt(slice, size);
-				const mapped = COLOR_PRIMARIES_MAP_INVERSE[primaries] ?? null;
+				const mapped = COLOR_PRIMARIES_MAP_INVERSE[primaries];
 				this.currentTrack.info.colorSpace.primaries = mapped as VideoColorSpaceInit['primaries'];
 			}; break;
 
@@ -2490,11 +2496,16 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 	}
 
 	async getColorSpace(): Promise<VideoColorSpaceInit> {
+		const decoderConfig = await this.getDecoderConfig();
+		if (!decoderConfig) {
+			return this.internalTrack.info.colorSpace;
+		}
+
 		return {
-			primaries: this.internalTrack.info.colorSpace?.primaries,
-			transfer: this.internalTrack.info.colorSpace?.transfer,
-			matrix: this.internalTrack.info.colorSpace?.matrix,
-			fullRange: this.internalTrack.info.colorSpace?.fullRange,
+			primaries: decoderConfig.colorSpace?.primaries,
+			transfer: decoderConfig.colorSpace?.transfer,
+			matrix: decoderConfig.colorSpace?.matrix,
+			fullRange: decoderConfig.colorSpace?.fullRange,
 		};
 	}
 
@@ -2517,6 +2528,7 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 			const needsPacketForAdditionalInfo
 				= this.internalTrack.info.codec === 'vp9'
 					|| this.internalTrack.info.codec === 'av1'
+					|| this.internalTrack.info.codec === 'prores'
 					// Packets are in Annex B format:
 					|| (this.internalTrack.info.codec === 'avc' && !this.internalTrack.info.codecDescription)
 					// Packets are in Annex B format:
@@ -2526,32 +2538,47 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 				firstPacket = await this.getFirstPacket({});
 			}
 
+			const codecInfo = {
+				width: this.internalTrack.info.width,
+				height: this.internalTrack.info.height,
+				codec: this.internalTrack.info.codec,
+				codecDescription: this.internalTrack.info.codecDescription,
+				colorSpace: this.internalTrack.info.colorSpace,
+				avcType: 1 as const, // We don't know better (or do we?) so just assume 'avc1'
+				avcCodecInfo: this.internalTrack.info.codec === 'avc' && firstPacket
+					? extractAvcDecoderConfigurationRecord(firstPacket.data)
+					: null,
+				hevcCodecInfo: this.internalTrack.info.codec === 'hevc' && firstPacket
+					? extractHevcDecoderConfigurationRecord(firstPacket.data)
+					: null,
+				vp9CodecInfo: this.internalTrack.info.codec === 'vp9' && firstPacket
+					? extractVp9CodecInfoFromPacket(firstPacket.data)
+					: null,
+				av1CodecInfo: this.internalTrack.info.codec === 'av1' && firstPacket
+					? extractAv1CodecInfoFromPacket(firstPacket.data)
+					: null,
+				proresCodecInfo: this.internalTrack.info.codec === 'prores' && firstPacket
+					? extractProresCodecInfoFromPacket(firstPacket.data)
+					: null,
+				proresFormat: this.internalTrack.info.proresFormat,
+			};
+
+			if (!colorSpaceIsComplete(this.internalTrack.info.colorSpace)) {
+				const colorSpace = extractColorSpace(codecInfo);
+
+				// Fill the missing values
+				this.internalTrack.info.colorSpace.primaries ??= colorSpace.primaries;
+				this.internalTrack.info.colorSpace.transfer ??= colorSpace.transfer;
+				this.internalTrack.info.colorSpace.matrix ??= colorSpace.matrix;
+				this.internalTrack.info.colorSpace.fullRange ??= colorSpace.fullRange;
+			}
+
 			const config: VideoDecoderConfig = {
-				codec: extractVideoCodecString({
-					width: this.internalTrack.info.width,
-					height: this.internalTrack.info.height,
-					codec: this.internalTrack.info.codec,
-					codecDescription: this.internalTrack.info.codecDescription,
-					colorSpace: this.internalTrack.info.colorSpace,
-					avcType: 1, // We don't know better (or do we?) so just assume 'avc1'
-					avcCodecInfo: this.internalTrack.info.codec === 'avc' && firstPacket
-						? extractAvcDecoderConfigurationRecord(firstPacket.data)
-						: null,
-					hevcCodecInfo: this.internalTrack.info.codec === 'hevc' && firstPacket
-						? extractHevcDecoderConfigurationRecord(firstPacket.data)
-						: null,
-					vp9CodecInfo: this.internalTrack.info.codec === 'vp9' && firstPacket
-						? extractVp9CodecInfoFromPacket(firstPacket.data)
-						: null,
-					av1CodecInfo: this.internalTrack.info.codec === 'av1' && firstPacket
-						? extractAv1CodecInfoFromPacket(firstPacket.data)
-						: null,
-					proresFormat: this.internalTrack.info.proresFormat,
-				}),
+				codec: extractVideoCodecString(codecInfo),
 				codedWidth: this.internalTrack.info.width,
 				codedHeight: this.internalTrack.info.height,
 				description: this.internalTrack.info.codecDescription ?? undefined,
-				colorSpace: this.internalTrack.info.colorSpace ?? undefined,
+				colorSpace: this.internalTrack.info.colorSpace,
 			};
 
 			if (
