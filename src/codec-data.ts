@@ -22,7 +22,6 @@ import {
 	textEncoder,
 	toDataView,
 	toUint8Array,
-	getChromiumVersion,
 	isChromium,
 	popcount,
 	setUint24,
@@ -2412,8 +2411,8 @@ export const determineVideoPacketType = (
 
 				// In addition to IDR, Recovery Point SEI also counts as a valid H.264 keyframe by current consensus.
 				// See https://github.com/w3c/webcodecs/issues/650 for the relevant discussion. WebKit and Firefox have
-				// always supported them, but Chromium hasn't, therefore the (admittedly dirty) version check.
-				if (type === AvcNalUnitType.SEI && (!isChromium() || getChromiumVersion()! >= 144)) {
+				// always supported them, but Chromium hasn't.
+				if (type === AvcNalUnitType.SEI && !isChromium()) {
 					const nalUnit = packetData.subarray(loc.offset, loc.offset + loc.length);
 					const bytes = removeEmulationPreventionBytes(nalUnit);
 					let pos = 1; // Skip NALU header
