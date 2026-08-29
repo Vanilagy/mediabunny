@@ -1726,6 +1726,16 @@ export type Vp9CodecInfo = {
 	matrixCoefficients: number;
 };
 
+// The color spaces from section 7.2.2 of the VP9 spec The matrix column is taken from FFmpeg's libavcodec/vp9.c
+const VP9_COLOR_SPACE_TABLE = {
+	1: { colourPrimaries: 5, transferCharacteristics: 6, matrixCoefficients: 5 }, // CS_BT_601
+	2: { colourPrimaries: 1, transferCharacteristics: 1, matrixCoefficients: 1 }, // CS_BT_709
+	3: { colourPrimaries: 6, transferCharacteristics: 6, matrixCoefficients: 6 }, // CS_SMPTE_170
+	4: { colourPrimaries: 7, transferCharacteristics: 7, matrixCoefficients: 7 }, // CS_SMPTE_240
+	5: { colourPrimaries: 9, transferCharacteristics: 14, matrixCoefficients: 9 }, // CS_BT_2020
+	7: { colourPrimaries: 1, transferCharacteristics: 13, matrixCoefficients: 0 }, // CS_RGB (sRGB)
+};
+
 export const extractVp9CodecInfoFromPacket = (
 	packet: Uint8Array,
 ): Vp9CodecInfo | null => {
@@ -1834,26 +1844,10 @@ export const extractVp9CodecInfoFromPacket = (
 		}
 	}
 
-	// Map color_space to standard values
-	const matrixCoefficients = colorSpace === 7
-		? 0
-		: colorSpace === 2
-			? 1
-			: colorSpace === 1
-				? 6
-				: 2;
-
-	const colourPrimaries = colorSpace === 2
-		? 1
-		: colorSpace === 1
-			? 6
-			: 2;
-
-	const transferCharacteristics = colorSpace === 2
-		? 1
-		: colorSpace === 1
-			? 6
-			: 2;
+	const colorSpaceValues = VP9_COLOR_SPACE_TABLE[colorSpace as keyof typeof VP9_COLOR_SPACE_TABLE];
+	const colourPrimaries = colorSpaceValues?.colourPrimaries ?? 2;
+	const transferCharacteristics = colorSpaceValues?.transferCharacteristics ?? 2;
+	const matrixCoefficients = colorSpaceValues?.matrixCoefficients ?? 2;
 
 	return {
 		profile,

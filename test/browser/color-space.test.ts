@@ -36,10 +36,15 @@ test('Color space extraction, HEVC in MP4', async () => {
 });
 
 test('Color space extraction, VP9 in MP4', async () => {
-	const source = await encodePackets('vp9', 'vp09.00.10.08');
+	const source = await readPackets('/vp9-smpte170m.webm');
 	const buffer = await remuxWithoutColorSpace(new Mp4OutputFormat(), source);
 
-	await expectCompleteColorSpace(new BufferSource(buffer));
+	await expectColorSpace(new BufferSource(buffer), {
+		primaries: 'smpte170m',
+		transfer: 'smpte170m',
+		matrix: 'smpte170m',
+		fullRange: false,
+	});
 });
 
 test('Color space extraction, AV1 in MP4', async () => {
@@ -75,10 +80,15 @@ test('Color space extraction, HEVC in Matroska', async () => {
 });
 
 test('Color space extraction, VP9 in Matroska', async () => {
-	const source = await encodePackets('vp9', 'vp09.00.10.08');
+	const source = await readPackets('/vp9-smpte170m.webm');
 	const buffer = await remuxWithoutColorSpace(new MkvOutputFormat(), source);
 
-	await expectCompleteColorSpace(new BufferSource(buffer));
+	await expectColorSpace(new BufferSource(buffer), {
+		primaries: 'smpte170m',
+		transfer: 'smpte170m',
+		matrix: 'smpte170m',
+		fullRange: false,
+	});
 });
 
 test('Color space extraction, AV1 in Matroska', async () => {
