@@ -162,6 +162,25 @@ export const colorSpaceIsComplete = (
 	);
 };
 
+export const colorSpaceIsEmpty = (colorSpace: VideoColorSpaceInit | undefined) => {
+	return (
+		!colorSpace
+		|| (
+			colorSpace.primaries == null
+			&& colorSpace.transfer == null
+			&& colorSpace.matrix == null
+			&& colorSpace.fullRange == null
+		)
+	);
+};
+
+export const EMPTY_COLOR_SPACE: VideoColorSpaceInit = {
+	primaries: undefined,
+	transfer: undefined,
+	matrix: undefined,
+	fullRange: undefined,
+};
+
 export const isAllowSharedBufferSource = (x: unknown) => {
 	return (
 		x instanceof ArrayBuffer
