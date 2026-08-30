@@ -137,3 +137,108 @@ test('trim, throws on a closed sample', () => {
 	sample.close();
 	expect(() => sample.trim(0, 5)).toThrow('AudioSample is closed.');
 });
+
+test('copyTo, AudioData-backed, planar destination falls back to manual conversion', () => {
+	withMockedNativeCopyTo((calls) => {
+		using sample = makeAudioDataBackedSample();
+
+		for (let c = 0; c < NUM_CHANNELS; c++) {
+			const out = new Int16Array(NUM_FRAMES);
+			sample.copyTo(out, { planeIndex: c, format: 's16-planar' });
+
+			for (let f = 0; f < NUM_FRAMES; f++) {
+				expect(out[f]).toBe(cellValue(f, c));
+			}
+		}
+
+		// With a frame offset
+		const out = new Int16Array(NUM_FRAMES - 3);
+		sample.copyTo(out, { planeIndex: 1, format: 's16-planar', frameOffset: 3 });
+		for (let f = 0; f < NUM_FRAMES - 3; f++) {
+			expect(out[f]).toBe(cellValue(f + 3, 1));
+		}
+
+		// The native conversion must have been attempted (and thrown)
+		expect(calls.some(options => options.format === 's16-planar')).toBe(true);
+	});
+});
+
+test('copyTo, AudioData-backed, interleaved destination falls back to manual conversion', () => {
+	withMockedNativeCopyTo((calls) => {
+		using sample = makeAudioDataBackedSample();
+
+		const out = new Float32Array(NUM_FRAMES * NUM_CHANNELS);
+		sample.copyTo(out, { planeIndex: 0, format: 'f32' });
+
+		for (let f = 0; f < NUM_FRAMES; f++) {
+			for (let c = 0; c < NUM_CHANNELS; c++) {
+				expect(out[f * NUM_CHANNELS + c]).toBe(Math.fround(cellValue(f, c) / 32767));
+			}
+		}
+
+		// The native conversion must have been attempted (and thrown)
+		expect(calls.some(options => options.format === 'f32')).toBe(true);
+	});
+});
+
+test('copyTo, AudioData-backed, control case with native format conversion', () => {
+	using sample = makeAudioDataBackedSample();
+
+	for (let c = 0; c < NUM_CHANNELS; c++) {
+		const out = new Int16Array(NUM_FRAMES);
+		sample.copyTo(out, { planeIndex: c, format: 's16-planar' });
+
+		for (let f = 0; f < NUM_FRAMES; f++) {
+			// Allow off-by-one
+			expect(Math.abs(out[f]! - cellValue(f, c))).toBeLessThanOrEqual(1);
+		}
+	}
+
+	const out = new Float32Array(NUM_FRAMES * NUM_CHANNELS);
+	sample.copyTo(out, { planeIndex: 0, format: 'f32' });
+
+	for (let f = 0; f < NUM_FRAMES; f++) {
+		for (let c = 0; c < NUM_CHANNELS; c++) {
+			expect(out[f * NUM_CHANNELS + c]).toBe(Math.fround(cellValue(f, c) / 32767));
+		}
+	}
+});
+
+const withMockedNativeCopyTo = (fn: (calls: AudioDataCopyToOptions[]) => void) => {
+	// eslint-disable-next-line @typescript-eslint/unbound-method
+	const original = AudioData.prototype.copyTo;
+	const calls: AudioDataCopyToOptions[] = [];
+
+	AudioData.prototype.copyTo = function (this: AudioData, destination, options) {
+		calls.push(options);
+		if (options.format !== undefined && options.format !== 'f32-planar') {
+			throw new DOMException('Format conversion not supported.', 'NotSupportedError');
+		}
+
+		return original.call(this, destination, options);
+	};
+
+	try {
+		fn(calls);
+	} finally {
+		AudioData.prototype.copyTo = original;
+	}
+};
+
+const makeAudioDataBackedSample = () => {
+	const data = new Float32Array(NUM_FRAMES * NUM_CHANNELS);
+	for (let f = 0; f < NUM_FRAMES; f++) {
+		for (let c = 0; c < NUM_CHANNELS; c++) {
+			data[f * NUM_CHANNELS + c] = cellValue(f, c) / 32767;
+		}
+	}
+
+	return new AudioSample(new AudioData({
+		format: 'f32',
+		sampleRate: SAMPLE_RATE,
+		numberOfFrames: NUM_FRAMES,
+		numberOfChannels: NUM_CHANNELS,
+		timestamp: TIMESTAMP * 1e6,
+		data,
+	}));
+};
