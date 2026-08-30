@@ -1932,6 +1932,11 @@ export class IsobmffDemuxer extends Demuxer {
 				const fieldSize = readU8(slice); // in bits
 				const sampleCount = readU32Be(slice);
 
+				if (fieldSize !== 4 && fieldSize !== 8 && fieldSize !== 16) {
+					Logging._warn(`Invalid stz2 field size ${fieldSize}, ignoring.`);
+					break;
+				}
+
 				const bytes = readBytes(slice, Math.ceil(sampleCount * fieldSize / 8));
 				const bitstream = new Bitstream(bytes);
 
@@ -2218,6 +2223,10 @@ export class IsobmffDemuxer extends Demuxer {
 				}
 
 				const psshBox = parsePsshBoxContents(readBytes(slice, boxInfo.contentSize));
+				if (!psshBox) {
+					Logging._warn('Invalid pssh box contents, ignoring.');
+					break;
+				}
 
 				if (this.currentFragment) {
 					this.currentFragment.psshBoxes.push(psshBox);
@@ -2651,6 +2660,11 @@ export class IsobmffDemuxer extends Demuxer {
 
 				for (let i = 0; i < entryCount; i++) {
 					const keySize = readU32Be(slice);
+					if (keySize < 8) {
+						Logging._warn(`Invalid keys entry size ${keySize}, ignoring the rest.`);
+						break;
+					}
+
 					slice.skip(4); // Key namespace
 					const keyName = textDecoder.decode(readBytes(slice, keySize - 8));
 
@@ -3679,7 +3693,7 @@ const getSampleInfo = (sampleTable: SampleTable, sampleIndex: number): SampleInf
 		presentationTimestamp += offsetEntry.offset;
 	}
 
-	const sampleSize = sampleTable.sampleSizes[Math.min(sampleIndex, sampleTable.sampleSizes.length - 1)]!;
+	const sampleSize = sampleTable.sampleSizes[Math.min(sampleIndex, sampleTable.sampleSizes.length - 1)] ?? 0;
 	const chunkEntryIndex = binarySearchLessOrEqual(sampleTable.sampleToChunk, sampleIndex, x => x.startSampleIndex);
 	const chunkEntry = sampleTable.sampleToChunk[chunkEntryIndex];
 	assert(chunkEntry);
