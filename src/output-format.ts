@@ -30,7 +30,7 @@ import { MpegTsMuxer } from './mpeg-ts/mpeg-ts-muxer';
 import { WaveMuxer } from './wave/wave-muxer';
 import { HlsMuxer } from './hls/hls-muxer';
 import { HLS_MIME_TYPE } from './hls/hls-misc';
-import { MaybePromise, FilePath, toArray } from './misc';
+import { MaybePromise, FilePath, isNumber, toArray } from './misc';
 import { Target } from './target';
 
 /**
@@ -229,7 +229,7 @@ export abstract class IsobmffOutputFormat extends OutputFormat {
 		}
 		if (
 			options.minimumFragmentDuration !== undefined
-			&& (!Number.isFinite(options.minimumFragmentDuration) || options.minimumFragmentDuration < 0)
+			&& (!isNumber(options.minimumFragmentDuration) || options.minimumFragmentDuration < 0)
 		) {
 			throw new TypeError('options.minimumFragmentDuration, when provided, must be a non-negative number.');
 		}
@@ -514,7 +514,7 @@ export class MkvOutputFormat extends OutputFormat {
 		}
 		if (
 			options.minimumClusterDuration !== undefined
-			&& (!Number.isFinite(options.minimumClusterDuration) || options.minimumClusterDuration < 0)
+			&& (!isNumber(options.minimumClusterDuration) || options.minimumClusterDuration < 0)
 		) {
 			throw new TypeError('options.minimumClusterDuration, when provided, must be a non-negative number.');
 		}
@@ -861,7 +861,7 @@ export class OggOutputFormat extends OutputFormat {
 		}
 		if (
 			options.maximumPageDuration !== undefined
-			&& (!Number.isFinite(options.maximumPageDuration) || options.maximumPageDuration <= 0)
+			&& (!isNumber(options.maximumPageDuration) || options.maximumPageDuration <= 0)
 		) {
 			throw new TypeError('options.maximumPageDuration, when provided, must be a positive number.');
 		}

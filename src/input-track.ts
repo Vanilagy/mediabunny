@@ -12,7 +12,16 @@ import { customAudioDecoders, customVideoDecoders } from './custom-coder';
 import { Input } from './input';
 import { Logging } from './logging';
 import { EncodedPacketSink, PacketRetrievalOptions } from './media-sink';
-import { assert, isThenable, MaybePromise, Rational, Rotation, roundToDivisor, simplifyRational } from './misc';
+import {
+	assert,
+	isNumber,
+	isThenable,
+	MaybePromise,
+	Rational,
+	Rotation,
+	roundToDivisor,
+	simplifyRational,
+} from './misc';
 import { TrackType } from './output';
 import { EncodedPacket, PacketType } from './packet';
 import { TrackDisposition } from './metadata';
@@ -869,7 +878,7 @@ export class InputVideoTrack extends InputTrack {
 		}
 		if (
 			options.targetPacketCount !== undefined
-			&& (!Number.isFinite(options.targetPacketCount) || options.targetPacketCount < 0)
+			&& (!isNumber(options.targetPacketCount) || options.targetPacketCount < 0)
 		) {
 			throw new TypeError('options.targetPacketCount must be a non-negative number.');
 		}
