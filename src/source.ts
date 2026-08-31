@@ -496,6 +496,14 @@ export type BlobSourceOptions = {
 	useStreamReader?: boolean;
 };
 
+const blobReaderRegistry = typeof FinalizationRegistry !== 'undefined'
+	? new FinalizationRegistry<ReadableStreamDefaultReader<Uint8Array>>((reader) => {
+		// Browsers don't GC readers that aren't "done", which creates indefinite memory leaks,
+		// see https://github.com/Vanilagy/mediabunny/issues/144#issuecomment-5465467062. So, we need to do it instead.
+		void reader.cancel().catch(() => {});
+	})
+	: null;
+
 /**
  * A source backed by a [`Blob`](https://developer.mozilla.org/en-US/docs/Web/API/Blob). Since a
  * [`File`](https://developer.mozilla.org/en-US/docs/Web/API/File) is also a `Blob`, this is the source to use when
@@ -510,6 +518,8 @@ export class BlobSource extends Source {
 	_options: BlobSourceOptions;
 	/** @internal */
 	_orchestrator: ReadOrchestrator;
+	/** @internal */
+	_readers = new WeakMap<ReadWorker, ReadableStreamDefaultReader<Uint8Array> | null>();
 
 	/**
 	 * Creates a new {@link BlobSource} backed by the specified
@@ -563,9 +573,6 @@ export class BlobSource extends Source {
 	}
 
 	/** @internal */
-	_readers = new WeakMap<ReadWorker, ReadableStreamDefaultReader<Uint8Array> | null>();
-
-	/** @internal */
 	private async _runWorker(worker: ReadWorker) {
 		assert(worker.strictTarget);
 
@@ -578,10 +585,16 @@ export class BlobSource extends Source {
 			// - ReadableStream stalls under backpressure (especially video)
 			// Affects Safari and all iOS browsers (Chrome, Firefox, etc.).
 			// Use arrayBuffer() fallback for WebKit browsers.
-			if ('stream' in this._blob && !isWebKit() && this._options.useStreamReader !== false) {
+			if (
+				'stream' in this._blob && !isWebKit()
+				&& this._options.useStreamReader !== false
+				&& blobReaderRegistry // Without it, we cannot guarantee cleanup of abandoned readers
+			) {
 				// Get a reader of the blob starting at the required offset, and then keep it around
 				const slice = this._blob.slice(worker.currentPos);
 				reader = slice.stream().getReader();
+
+				blobReaderRegistry.register(worker, reader);
 			} else {
 				// We'll need to use more primitive ways
 				reader = null;
