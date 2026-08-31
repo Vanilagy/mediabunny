@@ -1,7 +1,7 @@
 {
   "name": "@mediabunny/dts",
   "author": "Vanilagy",
-  "version": "1.55.4",
+  "version": "1.55.5",
   "description": "DTS decoder and encoder extension for Mediabunny, based on libavcodec.",
   "main": "./dist/bundles/mediabunny-dts.mjs",
   "module": "./dist/bundles/mediabunny-dts.mjs",
