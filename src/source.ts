@@ -496,6 +496,14 @@ export type BlobSourceOptions = {
 	useStreamReader?: boolean;
 };
 
+const blobReaderRegistry = typeof FinalizationRegistry !== 'undefined'
+	? new FinalizationRegistry<ReadableStreamDefaultReader<Uint8Array>>((reader) => {
+		// Browsers don't GC readers that aren't "done", which creates indefinite memory leaks,
+		// see https://github.com/Vanilagy/mediabunny/issues/144#issuecomment-5465467062. So, we need to do it instead.
+		void reader.cancel().catch(() => {});
+	})
+	: null;
+
 /**
  * A source backed by a [`Blob`](https://developer.mozilla.org/en-US/docs/Web/API/Blob). Since a
  * [`File`](https://developer.mozilla.org/en-US/docs/Web/API/File) is also a `Blob`, this is the source to use when
@@ -510,6 +518,8 @@ export class BlobSource extends Source {
 	_options: BlobSourceOptions;
 	/** @internal */
 	_orchestrator: ReadOrchestrator;
+	/** @internal */
+	_readers = new WeakMap<ReadWorker, ReadableStreamDefaultReader<Uint8Array> | null>();
 
 	/**
 	 * Creates a new {@link BlobSource} backed by the specified
@@ -541,6 +551,17 @@ export class BlobSource extends Source {
 			maxCacheSize: options.maxCacheSize ?? (8 * 2 ** 20 /* 8 MiB */),
 			maxWorkerCount: 4,
 			runWorker: this._runWorker.bind(this),
+			onIdleWorkerRemoved: (worker) => {
+				const reader = this._readers.get(worker);
+
+				if (reader) {
+					this._readers.delete(worker);
+					blobReaderRegistry?.unregister(worker);
+
+					// If we don't do this, memory leaks indefinitely
+					void reader.cancel().catch(() => {});
+				}
+			},
 			prefetchProfile: PREFETCH_PROFILES.fileSystem,
 		});
 
@@ -563,9 +584,6 @@ export class BlobSource extends Source {
 	}
 
 	/** @internal */
-	_readers = new WeakMap<ReadWorker, ReadableStreamDefaultReader<Uint8Array> | null>();
-
-	/** @internal */
 	private async _runWorker(worker: ReadWorker) {
 		assert(worker.strictTarget);
 
@@ -578,10 +596,15 @@ export class BlobSource extends Source {
 			// - ReadableStream stalls under backpressure (especially video)
 			// Affects Safari and all iOS browsers (Chrome, Firefox, etc.).
 			// Use arrayBuffer() fallback for WebKit browsers.
-			if ('stream' in this._blob && !isWebKit() && this._options.useStreamReader !== false) {
+			if (
+				'stream' in this._blob && !isWebKit()
+				&& this._options.useStreamReader !== false
+			) {
 				// Get a reader of the blob starting at the required offset, and then keep it around
 				const slice = this._blob.slice(worker.currentPos);
 				reader = slice.stream().getReader();
+
+				blobReaderRegistry?.register(worker, reader, worker);
 			} else {
 				// We'll need to use more primitive ways
 				reader = null;
@@ -1970,6 +1993,7 @@ class ReadOrchestrator {
 		runWorker: (worker: ReadWorker) => Promise<void>;
 		prefetchProfile: PrefetchProfile;
 		maxWorkerCount: number;
+		onIdleWorkerRemoved?: (worker: ReadWorker) => void;
 	}) {}
 
 	read(
@@ -2263,6 +2287,7 @@ class ReadOrchestrator {
 				assert(oldestIndex !== null);
 				assert(oldestWorker.pendingSlices.length === 0);
 				this.workers.splice(oldestIndex, 1);
+				this.options.onIdleWorkerRemoved?.(oldestWorker);
 			} else {
 				return null; // All workers are still running, we can't create a new one
 			}
@@ -2410,6 +2435,7 @@ class ReadOrchestrator {
 				otherWorker.currentPos, otherWorker.targetPos, // These should typically be equal when the worker's idle
 			)) {
 				this.workers.splice(i, 1);
+				this.options.onIdleWorkerRemoved?.(otherWorker);
 				i--;
 			}
 		}
@@ -2486,6 +2512,7 @@ class ReadOrchestrator {
 
 		worker.running = false;
 		this.workers.splice(index, 1);
+		this.options.onIdleWorkerRemoved?.(worker);
 
 		if (this.fileSize === null) {
 			// We can now deduce the file size!
@@ -2597,6 +2624,11 @@ class ReadOrchestrator {
 
 			worker.pendingSlices.length = 0;
 			worker.aborted = true;
+
+			if (!worker.running) {
+				// Running workers clean up after themselves when they notice the abort
+				this.options.onIdleWorkerRemoved?.(worker);
+			}
 		}
 
 		for (const queuedRead of this.queuedReads) {

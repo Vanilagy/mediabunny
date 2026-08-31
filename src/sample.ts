@@ -2658,7 +2658,7 @@ export class AudioSample implements Disposable {
 		const { format, frameCount: optFrameCount, frameOffset: optFrameOffset } = options;
 		let { planeIndex } = options;
 
-		const srcFormat = this.format;
+		let srcFormat = this.format;
 		const destFormat = format ?? this.format;
 		if (!destFormat) throw new Error('Destination format not determined');
 
@@ -2705,88 +2705,133 @@ export class AudioSample implements Disposable {
 					frameOffset,
 					copyFrameCount,
 				);
+				return;
 			} else {
-				// Per spec, only f32-planar conversion must be supported, but in practice, all browsers support all
-				// destination formats, so let's just delegate here:
-				this._data.copyTo(destination, {
-					planeIndex,
-					frameOffset,
-					frameCount: copyFrameCount,
-					format: destFormat,
-				});
+				try {
+					// The spec only requires f32-planar to work here, but most of the time, all formats work. Sometimes
+					// they don't, and that's why we try-catch it.
+					this._data.copyTo(destination, {
+						planeIndex,
+						frameOffset,
+						frameCount: copyFrameCount,
+						format: destFormat,
+					});
+					return;
+				} catch (error) {
+					if (destFormat === 'f32-planar') {
+						throw error;
+					}
+
+					// Format conversion likely wasn't supported, so let's fall back to the manual conversion path
+					srcFormat = 'f32-planar';
+				}
 			}
-		} else {
-			const readFn = getReadFunction(srcFormat);
-			const srcBytesPerSample = getBytesPerSample(srcFormat);
-			const srcIsPlanar = formatIsPlanar(srcFormat);
+		}
 
-			let uint8Data: Uint8Array;
-			if (this._data instanceof AudioSampleResource) {
-				const getDataPlaneValidated = (index: number) => {
-					const result = (this._data as AudioSampleResource).getDataPlane(index);
-					if (!(result instanceof Uint8Array)) {
-						throw new TypeError('getDataPlane() must return a Uint8Array.');
-					}
+		const readFn = getReadFunction(srcFormat);
+		const srcBytesPerSample = getBytesPerSample(srcFormat);
+		const srcIsPlanar = formatIsPlanar(srcFormat);
 
-					const expectedSize = numFrames * srcBytesPerSample * (srcIsPlanar ? 1 : numChannels);
-					if (result.byteLength !== expectedSize) {
-						throw new TypeError(
-							`Data plane ${index} has invalid size. Expected exactly ${expectedSize} bytes, got`
-							+ ` ${result.byteLength} bytes.`,
-						);
-					}
+		let uint8Data: Uint8Array;
+		if (this._data instanceof AudioSampleResource) {
+			const getDataPlaneValidated = (index: number) => {
+				const result = (this._data as AudioSampleResource).getDataPlane(index);
+				if (!(result instanceof Uint8Array)) {
+					throw new TypeError('getDataPlane() must return a Uint8Array.');
+				}
 
-					return result;
-				};
+				const expectedSize = numFrames * srcBytesPerSample * (srcIsPlanar ? 1 : numChannels);
+				if (result.byteLength !== expectedSize) {
+					throw new TypeError(
+						`Data plane ${index} has invalid size. Expected exactly ${expectedSize} bytes, got`
+						+ ` ${result.byteLength} bytes.`,
+					);
+				}
 
-				if (srcIsPlanar) {
-					if (destIsPlanar) {
-						// Only one source plane will be extracted, so let's fetch only that one
-						uint8Data = getDataPlaneValidated(planeIndex);
-						planeIndex = 0; // To fix the subsequent access
-					} else {
-						// Pack all planes tightly together
-						uint8Data = new Uint8Array(numFrames * srcBytesPerSample * numChannels);
-						for (let ch = 0; ch < numChannels; ch++) {
-							const planeData = getDataPlaneValidated(ch);
-							uint8Data.set(planeData, ch * numFrames * srcBytesPerSample);
-						}
-					}
+				return result;
+			};
+
+			if (srcIsPlanar) {
+				if (destIsPlanar) {
+					// Only one source plane will be extracted, so let's fetch only that one
+					uint8Data = getDataPlaneValidated(planeIndex);
+					planeIndex = 0; // To fix the subsequent access
 				} else {
-					uint8Data = getDataPlaneValidated(0); // That's the only plane there is
+					// Pack all planes tightly together
+					uint8Data = new Uint8Array(numFrames * srcBytesPerSample * numChannels);
+					for (let ch = 0; ch < numChannels; ch++) {
+						const planeData = getDataPlaneValidated(ch);
+						uint8Data.set(planeData, ch * numFrames * srcBytesPerSample);
+					}
 				}
 			} else {
-				uint8Data = this._data;
+				uint8Data = getDataPlaneValidated(0); // That's the only plane there is
 			}
+		} else if (this._data instanceof Uint8Array) {
+			uint8Data = this._data;
+		} else {
+			assert(srcFormat === 'f32-planar');
 
-			const srcView = toDataView(uint8Data);
+			if (destIsPlanar) {
+				// Only one source plane will be read, so let's copy only that one
+				uint8Data = new Uint8Array(this._data.allocationSize({
+					format: 'f32-planar',
+					planeIndex,
+				}));
+				this._data.copyTo(uint8Data, {
+					format: 'f32-planar',
+					planeIndex,
+				});
+				planeIndex = 0; // To fix the subsequent access
+			} else {
+				// All planes will be read, so fetch 'em all
+				uint8Data = new Uint8Array(this._data.allocationSize({
+					format: 'f32-planar',
+					planeIndex: 0,
+				}) * numChannels);
 
-			for (let i = 0; i < copyFrameCount; i++) {
-				if (destIsPlanar) {
-					const destOffset = i * destBytesPerSample;
+				for (let ch = 0; ch < numChannels; ch++) {
+					this._data.copyTo(
+						uint8Data.subarray(
+							ch * numFrames * srcBytesPerSample,
+							(ch + 1) * numFrames * srcBytesPerSample,
+						),
+						{
+							format: 'f32-planar',
+							planeIndex: ch,
+						},
+					);
+				}
+			}
+		}
+
+		const srcView = toDataView(uint8Data);
+
+		for (let i = 0; i < copyFrameCount; i++) {
+			if (destIsPlanar) {
+				const destOffset = i * destBytesPerSample;
+				let srcOffset: number;
+				if (srcIsPlanar) {
+					srcOffset = (planeIndex * numFrames + (i + frameOffset)) * srcBytesPerSample;
+				} else {
+					srcOffset = (((i + frameOffset) * numChannels) + planeIndex) * srcBytesPerSample;
+				}
+
+				const normalized = readFn(srcView, srcOffset);
+				writeFn(destView, destOffset, normalized);
+			} else {
+				for (let ch = 0; ch < numChannels; ch++) {
+					const destIndex = i * numChannels + ch;
+					const destOffset = destIndex * destBytesPerSample;
 					let srcOffset: number;
 					if (srcIsPlanar) {
-						srcOffset = (planeIndex * numFrames + (i + frameOffset)) * srcBytesPerSample;
+						srcOffset = (ch * numFrames + (i + frameOffset)) * srcBytesPerSample;
 					} else {
-						srcOffset = (((i + frameOffset) * numChannels) + planeIndex) * srcBytesPerSample;
+						srcOffset = (((i + frameOffset) * numChannels) + ch) * srcBytesPerSample;
 					}
 
 					const normalized = readFn(srcView, srcOffset);
 					writeFn(destView, destOffset, normalized);
-				} else {
-					for (let ch = 0; ch < numChannels; ch++) {
-						const destIndex = i * numChannels + ch;
-						const destOffset = destIndex * destBytesPerSample;
-						let srcOffset: number;
-						if (srcIsPlanar) {
-							srcOffset = (ch * numFrames + (i + frameOffset)) * srcBytesPerSample;
-						} else {
-							srcOffset = (((i + frameOffset) * numChannels) + ch) * srcBytesPerSample;
-						}
-
-						const normalized = readFn(srcView, srcOffset);
-						writeFn(destView, destOffset, normalized);
-					}
 				}
 			}
 		}
@@ -3201,9 +3246,9 @@ export const toInterleavedAudioFormat = (format: AudioSampleFormat): 'u8' | 's16
 };
 
 /**
- * WebKit has a bug where calling AudioData.copyTo with a format different from the source format
- * crashes the tab when there are more than 2 channels. This function works around that by always
- * copying with the source format and then manually converting to the destination format.
+ * WebKit has a bug where calling AudioData.copyTo with a format different from the source format crashes the tab when
+ * there are more than 2 channels. This function works around that by always copying with the source format and then
+ * manually converting to the destination format.
  *
  * See https://bugs.webkit.org/show_bug.cgi?id=302521.
  */
