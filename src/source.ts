@@ -551,6 +551,17 @@ export class BlobSource extends Source {
 			maxCacheSize: options.maxCacheSize ?? (8 * 2 ** 20 /* 8 MiB */),
 			maxWorkerCount: 4,
 			runWorker: this._runWorker.bind(this),
+			onIdleWorkerRemoved: (worker) => {
+				const reader = this._readers.get(worker);
+
+				if (reader) {
+					this._readers.delete(worker);
+					blobReaderRegistry?.unregister(worker);
+
+					// If we don't do this, memory leaks indefinitely
+					void reader.cancel().catch(() => {});
+				}
+			},
 			prefetchProfile: PREFETCH_PROFILES.fileSystem,
 		});
 
@@ -588,13 +599,12 @@ export class BlobSource extends Source {
 			if (
 				'stream' in this._blob && !isWebKit()
 				&& this._options.useStreamReader !== false
-				&& blobReaderRegistry // Without it, we cannot guarantee cleanup of abandoned readers
 			) {
 				// Get a reader of the blob starting at the required offset, and then keep it around
 				const slice = this._blob.slice(worker.currentPos);
 				reader = slice.stream().getReader();
 
-				blobReaderRegistry.register(worker, reader);
+				blobReaderRegistry?.register(worker, reader, worker);
 			} else {
 				// We'll need to use more primitive ways
 				reader = null;
@@ -1983,6 +1993,7 @@ class ReadOrchestrator {
 		runWorker: (worker: ReadWorker) => Promise<void>;
 		prefetchProfile: PrefetchProfile;
 		maxWorkerCount: number;
+		onIdleWorkerRemoved?: (worker: ReadWorker) => void;
 	}) {}
 
 	read(
@@ -2276,6 +2287,7 @@ class ReadOrchestrator {
 				assert(oldestIndex !== null);
 				assert(oldestWorker.pendingSlices.length === 0);
 				this.workers.splice(oldestIndex, 1);
+				this.options.onIdleWorkerRemoved?.(oldestWorker);
 			} else {
 				return null; // All workers are still running, we can't create a new one
 			}
@@ -2423,6 +2435,7 @@ class ReadOrchestrator {
 				otherWorker.currentPos, otherWorker.targetPos, // These should typically be equal when the worker's idle
 			)) {
 				this.workers.splice(i, 1);
+				this.options.onIdleWorkerRemoved?.(otherWorker);
 				i--;
 			}
 		}
@@ -2499,6 +2512,7 @@ class ReadOrchestrator {
 
 		worker.running = false;
 		this.workers.splice(index, 1);
+		this.options.onIdleWorkerRemoved?.(worker);
 
 		if (this.fileSize === null) {
 			// We can now deduce the file size!
@@ -2610,6 +2624,11 @@ class ReadOrchestrator {
 
 			worker.pendingSlices.length = 0;
 			worker.aborted = true;
+
+			if (!worker.running) {
+				// Running workers clean up after themselves when they notice the abort
+				this.options.onIdleWorkerRemoved?.(worker);
+			}
 		}
 
 		for (const queuedRead of this.queuedReads) {
