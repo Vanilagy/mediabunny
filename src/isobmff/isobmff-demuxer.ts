@@ -1558,10 +1558,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'esds': {
 				const track = this.currentTrack;
-				if (!track) {
+				if (!track || track.info?.type !== 'audio') {
 					break;
 				}
-				assert(track.info?.type === 'audio');
 
 				slice.skip(4); // Version + flags
 
