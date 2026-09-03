@@ -127,6 +127,7 @@ const sponsors = {
 		{ image: 'https://avatars.githubusercontent.com/u/2565549', name: 'MatthewNorton', url: 'https://github.com/MatthewNorton' },
 		{ image: 'https://avatars.githubusercontent.com/u/272247752', name: 'Motionik', url: 'https://github.com/Motionik' },
 		{ image: 'https://avatars.githubusercontent.com/u/2698271', name: 'Matthew Gardner', url: 'https://github.com/spheric' },
+		{ image: 'https://avatars.githubusercontent.com/u/41021374', name: 'arth', url: 'https://github.com/arthtyagi' },
 		{ image: 'https://avatars.githubusercontent.com/u/5475819', name: 'AJ Funk', url: 'https://github.com/AJFunk' },
 		{ image: 'https://avatars.githubusercontent.com/u/30229596', name: 'Pablo Bonilla', url: 'https://github.com/devPablo' },
 		{ image: 'https://avatars.githubusercontent.com/u/536008', name: 'Satish Goda', url: 'https://github.com/satishgoda' },
