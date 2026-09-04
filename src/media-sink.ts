@@ -601,11 +601,18 @@ export abstract class BaseMediaSampleSink<
 			async next() {
 				while (true) {
 					if (track.input._disposed) {
+						// Once next() throws, the consumer will never call return(), so terminate the
+						// iteration here - otherwise, the pump keeps queueing decoded samples that
+						// nothing can ever close.
+						terminated = true;
+						ended = true;
 						closeSamples();
 						throw new InputDisposedError();
 					} else if (terminated) {
 						return { value: undefined, done: true };
 					} else if (hasOutOfBandError) {
+						terminated = true;
+						ended = true;
 						closeSamples();
 						throw outOfBandError;
 					} else if (sampleQueue.length > 0) {
@@ -827,11 +834,16 @@ export abstract class BaseMediaSampleSink<
 			async next() {
 				while (true) {
 					if (track.input._disposed) {
+						// Once next() throws, the consumer will never call return(), so terminate the
+						// iteration here - otherwise, the pump keeps queueing decoded samples that
+						// nothing can ever close.
+						terminated = true;
 						closeSamples();
 						throw new InputDisposedError();
 					} else if (terminated) {
 						return { value: undefined, done: true };
 					} else if (hasOutOfBandError) {
+						terminated = true;
 						closeSamples();
 						throw outOfBandError;
 					} else if (sampleQueue.length > 0) {
