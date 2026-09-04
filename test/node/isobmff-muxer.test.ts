@@ -221,11 +221,11 @@ test('Non-zero start timestamp, fragmented MP4', async () => {
 });
 
 test('Negative start timestamps, regular MP4', async () => {
-	await testNegativeTimestampRoundTrip([-1, 0, 1, 2, 3], 1, false);
+	await testNegativeTimestampRoundTrip(Array.from({ length: 50 }, (_, index) => (index - 10) / 10), 0.1, false);
 });
 
 test('Negative start timestamps, fragmented MP4', async () => {
-	await testNegativeTimestampRoundTrip([-1, 0, 1, 2, 3], 1, true);
+	await testNegativeTimestampRoundTrip(Array.from({ length: 50 }, (_, index) => (index - 10) / 10), 0.1, true);
 });
 
 test('Wholly negative timestamps, regular MP4', async () => {
@@ -247,7 +247,7 @@ const testNegativeTimestampRoundTrip = async (
 	});
 
 	const source = new EncodedVideoPacketSource('vp8');
-	output.addVideoTrack(source);
+	output.addVideoTrack(source, { frameRate: 10 });
 
 	await output.start();
 
@@ -272,23 +272,33 @@ const testNegativeTimestampRoundTrip = async (
 
 	const track = await input.getPrimaryVideoTrack();
 	assert(track);
+	const sink = new EncodedPacketSink(track);
 
 	const outputPackets: EncodedPacket[] = [];
-	for await (const packet of new EncodedPacketSink(track).packets()) {
+	for await (const packet of sink.packets()) {
 		outputPackets.push(packet);
 	}
 
 	expect(outputPackets.map(packet => ({
-		data: packet.data,
-		type: packet.type,
 		timestamp: packet.timestamp,
 		duration: packet.duration,
 	}))).toEqual(inputPackets.map(packet => ({
-		data: packet.data,
-		type: packet.type,
 		timestamp: packet.timestamp,
 		duration: packet.duration,
 	})));
+
+	for (const inputPacket of inputPackets) {
+		const outputPacket = await sink.getPacket(inputPacket.timestamp);
+		assert(outputPacket);
+
+		expect({
+			timestamp: outputPacket.timestamp,
+			duration: outputPacket.duration,
+		}).toEqual({
+			timestamp: inputPacket.timestamp,
+			duration: inputPacket.duration,
+		});
+	}
 };
 
 test('PCM audio', async () => {

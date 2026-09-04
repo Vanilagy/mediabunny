@@ -47,7 +47,7 @@
 	format = new Mediabunny.MkvOutputFormat();
 	format = new Mediabunny.MovOutputFormat();
 	format = new Mediabunny.Mp4OutputFormat({ fastStart: 'reserve' });
-	format = new Mediabunny.Mp4OutputFormat({  });
+	format = new Mediabunny.MkvOutputFormat({  });
 	let target = new Mediabunny.BufferTarget();
 
 	/*
@@ -197,7 +197,7 @@ Testing... <00:17.350>One... <00:18.125>Two...
 	const p = document.createElement('p');
 	document.body.append(p);
 
-	for (let i = 0; i < 1; i++) {
+	for (let i = 0; i < 100; i++) {
 		context.fillStyle = ['red', 'green', 'blue', 'yellow'][i % 4];
 		context.fillRect(canvas.width * Math.random(), canvas.height * Math.random(), canvas.width * Math.random(), canvas.height * Math.random());
 
