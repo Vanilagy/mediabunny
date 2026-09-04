@@ -30,8 +30,6 @@ test('FLAC encoder, 24-bit', async () => {
 
 	expect(result.size).toBeGreaterThan(90_000);
 
-	console.log(result.size);
-
 	expect(sample.format).toBe('s32');
 });
 
