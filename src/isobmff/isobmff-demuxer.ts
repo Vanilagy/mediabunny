@@ -953,11 +953,6 @@ export class IsobmffDemuxer extends Demuxer {
 						: readI32Be(slice);
 					const mediaRate = readFixed_16_16(slice);
 
-					if (segmentDuration === 0) {
-						// Don't care
-						continue;
-					}
-
 					if (relevantEntryFound) {
 						Logging._warn(
 							'Unsupported edit list: multiple edits are not currently supported. Only using first edit.',

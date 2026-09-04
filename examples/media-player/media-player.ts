@@ -128,6 +128,9 @@ const initMediaPlayer = async (resource: File | string) => {
 		isRelativeToUnixEpoch = (await Promise.all(tracks.map(t => t.isRelativeToUnixEpoch()))).some(Boolean);
 		playbackTimeAtStart = firstTimestamp;
 
+		// For degenerate cases where the end timestamp is less than 0
+		endTimestamp = Math.max(firstTimestamp, endTimestamp);
+
 		// Configure the time display elements accordingly
 		const timestampFontSize = isRelativeToUnixEpoch ? '12px' : '';
 		const timestampWhiteSpace = isRelativeToUnixEpoch ? 'pre' : '';

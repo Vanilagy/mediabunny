@@ -43,10 +43,6 @@ export abstract class Muxer {
 	}>();
 
 	protected validateTimestamp(track: OutputTrack, timestampInSeconds: number, isKeyPacket: boolean) {
-		if (timestampInSeconds < 0) {
-			throw new Error(`Timestamps must be non-negative (got ${timestampInSeconds}s).`);
-		}
-
 		let timestampInfo = this.trackTimestampInfo.get(track);
 		if (!timestampInfo) {
 			if (!isKeyPacket) {
