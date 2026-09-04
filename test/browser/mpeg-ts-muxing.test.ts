@@ -738,3 +738,67 @@ test('MPEG-TS muxing with StreamTarget', async () => {
 	}
 	expect(videoPacketCount).toBe(frameCount);
 });
+
+test('MPEG-TS muxing with negative start timestamps', async () => {
+	await testNegativeTimestampRoundTrip(Array.from({ length: 50 }, (_, index) => (index - 10) / 10), 0.1);
+});
+
+test('MPEG-TS muxing with wholly negative timestamps', async () => {
+	await testNegativeTimestampRoundTrip([-1, -0.9, -0.8, -0.7, -0.6], 0.1);
+});
+
+const testNegativeTimestampRoundTrip = async (timestamps: number[], duration: number) => {
+	const output = new Output({
+		format: new MpegTsOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const canvas = new OffscreenCanvas(640, 480);
+	const context = canvas.getContext('2d')!;
+	context.fillStyle = '#0000ff';
+	context.fillRect(0, 0, canvas.width, canvas.height);
+
+	const source = new CanvasSource(canvas, {
+		codec: 'avc',
+		quality: new Quality('high'),
+	});
+	output.addVideoTrack(source, { frameRate: 10 });
+
+	await output.start();
+
+	for (const timestamp of timestamps) {
+		await source.add(timestamp, duration);
+	}
+
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryVideoTrack();
+	assert(track);
+	const sink = new EncodedPacketSink(track);
+
+	const outputPackets = [];
+	for await (const packet of sink.packets()) {
+		outputPackets.push(packet);
+	}
+
+	const expectedPackets = timestamps.map(timestamp => ({ timestamp, duration }));
+	expect(outputPackets.map(packet => ({
+		timestamp: packet.timestamp,
+		duration: packet.duration,
+	}))).toEqual(expectedPackets);
+
+	for (const expectedPacket of expectedPackets) {
+		const outputPacket = await sink.getPacket(expectedPacket.timestamp);
+		assert(outputPacket);
+
+		expect({
+			timestamp: outputPacket.timestamp,
+			duration: outputPacket.duration,
+		}).toEqual(expectedPacket);
+	}
+};

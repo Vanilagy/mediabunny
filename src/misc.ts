@@ -458,6 +458,10 @@ export const lerp = (from: number, to: number, t: number) => {
 	return from + (to - from) * t;
 };
 
+export const modEuclid = (value: number, modulus: number) => {
+	return value - Math.floor(value / modulus) * modulus;
+};
+
 export const UNDETERMINED_LANGUAGE = 'und';
 
 export const roundIfAlmostInteger = (value: number) => {
