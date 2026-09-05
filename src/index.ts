@@ -73,6 +73,7 @@ export {
 	AudioSource,
 	SubtitleSource,
 	AudioBufferSource,
+	type AudioBufferSourceOptions,
 	AudioSampleSource,
 	CanvasSource,
 	EncodedAudioPacketSource,

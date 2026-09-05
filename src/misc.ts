@@ -42,6 +42,10 @@ export const isU32 = (value: number) => {
 	return value >= 0 && value < 2 ** 32;
 };
 
+export const isI32 = (value: number) => {
+	return value >= -(2 ** 31) && value < 2 ** 31;
+};
+
 /** Reads an exponential-Golomb universal code from a Bitstream.  */
 export const readExpGolomb = (bitstream: Bitstream) => {
 	let leadingZeroBits = 0;
@@ -452,6 +456,10 @@ export const clamp = (value: number, min: number, max: number) => {
 
 export const lerp = (from: number, to: number, t: number) => {
 	return from + (to - from) * t;
+};
+
+export const modEuclid = (value: number, modulus: number) => {
+	return value - Math.floor(value / modulus) * modulus;
 };
 
 export const UNDETERMINED_LANGUAGE = 'und';

@@ -220,6 +220,87 @@ test('Non-zero start timestamp, fragmented MP4', async () => {
 	expect(durations).toEqual([0.1, 0.1, 0.1, 0.1]);
 });
 
+test('Negative start timestamps, regular MP4', async () => {
+	await testNegativeTimestampRoundTrip(Array.from({ length: 50 }, (_, index) => (index - 10) / 10), 0.1, false);
+});
+
+test('Negative start timestamps, fragmented MP4', async () => {
+	await testNegativeTimestampRoundTrip(Array.from({ length: 50 }, (_, index) => (index - 10) / 10), 0.1, true);
+});
+
+test('Wholly negative timestamps, regular MP4', async () => {
+	await testNegativeTimestampRoundTrip([-1, -0.9, -0.8, -0.7, -0.6], 0.1, false);
+});
+
+test('Wholly negative timestamps, fragmented MP4', async () => {
+	await testNegativeTimestampRoundTrip([-1, -0.9, -0.8, -0.7, -0.6], 0.1, true);
+});
+
+const testNegativeTimestampRoundTrip = async (
+	timestamps: number[],
+	duration: number,
+	fragmented: boolean,
+) => {
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart: fragmented ? 'fragmented' : false }),
+		target: new BufferTarget(),
+	});
+
+	const source = new EncodedVideoPacketSource('vp8');
+	output.addVideoTrack(source, { frameRate: 10 });
+
+	await output.start();
+
+	const meta = { decoderConfig: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 } };
+	const inputPackets = timestamps.map((timestamp, index) => new EncodedPacket(
+		new Uint8Array(1024).fill(index),
+		'key',
+		timestamp,
+		duration,
+	));
+
+	for (let i = 0; i < inputPackets.length; i++) {
+		await source.add(inputPackets[i]!, i === 0 ? meta : undefined);
+	}
+
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryVideoTrack();
+	assert(track);
+	const sink = new EncodedPacketSink(track);
+
+	const outputPackets: EncodedPacket[] = [];
+	for await (const packet of sink.packets()) {
+		outputPackets.push(packet);
+	}
+
+	expect(outputPackets.map(packet => ({
+		timestamp: packet.timestamp,
+		duration: packet.duration,
+	}))).toEqual(inputPackets.map(packet => ({
+		timestamp: packet.timestamp,
+		duration: packet.duration,
+	})));
+
+	for (const inputPacket of inputPackets) {
+		const outputPacket = await sink.getPacket(inputPacket.timestamp);
+		assert(outputPacket);
+
+		expect({
+			timestamp: outputPacket.timestamp,
+			duration: outputPacket.duration,
+		}).toEqual({
+			timestamp: inputPacket.timestamp,
+			duration: inputPacket.duration,
+		});
+	}
+};
+
 test('PCM audio', async () => {
 	const output = new Output({
 		format: new Mp4OutputFormat(),

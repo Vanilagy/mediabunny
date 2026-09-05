@@ -7,6 +7,7 @@
  */
 
 export const TIMESCALE = 90_000; // MPEG-TS timestamps run on a 90 kHz clock
+export const TIMESTAMP_MODULUS = 2 ** 33;
 export const TS_PACKET_SIZE = 188;
 
 export const enum MpegTsStreamType {

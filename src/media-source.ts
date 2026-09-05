@@ -1340,8 +1340,8 @@ export class CanvasSource extends VideoSource {
 	 * to respect writer and encoder backpressure.
 	 */
 	add(timestamp: number, duration = 0, encodeOptions?: VideoEncoderEncodeOptions) {
-		if (!Number.isFinite(timestamp) || timestamp < 0) {
-			throw new TypeError('timestamp must be a non-negative number.');
+		if (!Number.isFinite(timestamp)) {
+			throw new TypeError('timestamp must be a finite number.');
 		}
 		if (!Number.isFinite(duration) || duration < 0) {
 			throw new TypeError('duration must be a non-negative number.');
@@ -2487,6 +2487,19 @@ export class AudioSampleSource extends AudioSource {
 }
 
 /**
+ * Options for {@link AudioBufferSource}.
+ * @group Media sources
+ * @public
+ */
+export type AudioBufferSourceOptions = {
+	/**
+	 * The timestamp of the first `AudioBuffer`, in seconds. Subsequent buffers are placed directly after the previous
+	 * one. Defaults to 0.
+	 */
+	startTimestamp?: number;
+};
+
+/**
  * This source can be used to add audio data from an AudioBuffer to the output track. This is useful when working with
  * the Web Audio API.
  * @group Media sources
@@ -2496,23 +2509,30 @@ export class AudioBufferSource extends AudioSource {
 	/** @internal */
 	private _encoder: AudioEncoderWrapper;
 	/** @internal */
-	private _accumulatedTime = 0;
+	private _accumulatedTime: number;
 
 	/**
 	 * Creates a new {@link AudioBufferSource} whose `AudioBuffer` instances are encoded according to the specified
-	 * {@link AudioEncodingConfig}.
+	 * {@link AudioEncodingConfig} and {@link AudioBufferSourceOptions}.
 	 */
-	constructor(encodingConfig: AudioEncodingConfig) {
+	constructor(encodingConfig: AudioEncodingConfig, options: AudioBufferSourceOptions = {}) {
 		validateAudioEncodingConfig(encodingConfig);
+		if (typeof options !== 'object' || !options) {
+			throw new TypeError('options must be an object.');
+		}
+		if (options.startTimestamp !== undefined && !Number.isFinite(options.startTimestamp)) {
+			throw new TypeError('options.startTimestamp, when provided, must be a finite number.');
+		}
 
 		super(encodingConfig.codec);
 		this._encoder = new AudioEncoderWrapper(this, encodingConfig);
+		this._accumulatedTime = options.startTimestamp ?? 0;
 	}
 
 	/**
-	 * Converts an AudioBuffer to audio samples, encodes them and adds them to the output. The first AudioBuffer will
-	 * be played at timestamp 0, and any subsequent AudioBuffer will have a timestamp equal to the total duration of
-	 * all previous AudioBuffers.
+	 * Converts an AudioBuffer to audio samples, encodes them and adds them to the output. The first `AudioBuffer` will
+	 * be played at the configured start timestamp (the default is 0), and each subsequent `AudioBuffer` will be placed
+	 * directly after the previous one.
 	 *
 	 * @returns A Promise that resolves once the output is ready to receive more samples. You should await this Promise
 	 * to respect writer and encoder backpressure.
