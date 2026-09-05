@@ -330,7 +330,7 @@ export class Mp4OutputFormat extends IsobmffOutputFormat {
 			'pcm-f64',
 			'pcm-f64be',
 
-			...SUBTITLE_CODECS,
+			'webvtt', // ISOBMFF (MP4/MOV) subtitles: WebVTT only; S_TEXT/ASS is Matroska-specific
 		];
 	}
 
@@ -399,7 +399,7 @@ export class CmafOutputFormat extends IsobmffOutputFormat {
 			'pcm-f64',
 			'pcm-f64be',
 
-			...SUBTITLE_CODECS,
+			'webvtt', // ISOBMFF (MP4/MOV) subtitles: WebVTT only; S_TEXT/ASS is Matroska-specific
 		];
 	}
 }
@@ -607,7 +607,7 @@ export class WebMOutputFormat extends MkvOutputFormat {
 		return [
 			...VIDEO_CODECS.filter(codec => ['vp8', 'vp9', 'av1'].includes(codec)),
 			...AUDIO_CODECS.filter(codec => ['opus', 'vorbis'].includes(codec)),
-			...SUBTITLE_CODECS,
+			'webvtt', // WebM subtitles: WebVTT only
 		];
 	}
 
