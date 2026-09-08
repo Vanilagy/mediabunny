@@ -8,7 +8,7 @@ The [reading](./reading-media-files) and [writing](./writing-media-files) primit
 
 It has the following features:
 
-- Transmuxing (changing the container format)
+- Transmuxing (changing the container format while copying media data)
 - Transcoding (changing a track's codec)
 - Track removal
 - Compression
@@ -445,6 +445,53 @@ Setting `start` to a value other than the default will currently force a *transc
 
 In a future version of Mediabunny, the fast "packet copy path" that is currently reachable by leaving `start` unset, may be made available for any arbitrary trim range.
 :::
+
+## Copying media data
+
+In media conversions, media data can either be copied directly from the old file to the new file or go through a transcoding step. If you're coming from FFmpeg, you may know the copy path by `-c copy`. Mediabunny differs from FFmpeg in that it will always try to perform a copy conversion by default, if the config permits. Copy conversions are often desirable because they are fast and lossless.
+
+There are a few major factors that decide if a copy conversion is possible:
+- No transcode-forcing operations (resizing, rotation, resampling, codec changes, etc.)
+- Output format must be able to contain the input codecs
+- Output format must support timestamps flexible enough
+
+If you're converting to MP4, copy conversions are usually possible due to the wide range of codecs supported by that format plus the support for negative timestamps via edit lists which allow you to model any arbitrary trim range. Simpler formats such as MP3 are more restrictive and may require transcoding or timestamp offsetting to realize a copy conversion.
+
+---
+
+You can fully configure Mediabunny's behavior via the `copy` conversion option:
+```ts
+type ConversionCopyOptions = {
+	mode?: 'forced' | 'preferred';
+	shiftTolerance?: number;
+	boundaryPolicy?: 'expand' | 'shrink';
+};
+```
+
+- `mode`\
+	Controls whether media copying is preferred or required. Defaults to `'preferred'`.
+	- `'forced'`: Copy encoded media where possible and discard tracks that cannot possibly be copied.
+	- `'preferred'`: Copy encoded media when possible, and transcode tracks that cannot be copied.
+- `shiftTolerance`\
+	The maximum absolute shift, in seconds, that may be applied to the media to be able to copy it into the output format. Defaults to `0`, which permits no additional shift. Set to `Infinity` to permit any shift.
+	
+	A shift of `0` gives you perfect _timeline sync_: output timestamps will match input timestamps exactly (only offset by the trim region). Any non-zero shift will break this property but will still, under all circumstances, maintain perfect cross-track and audio-video sync.
+- `boundaryPolicy`\
+	Controls which media region will be copied to satisfy the requested trim range. Defaults to `'expand'`.
+	- `'expand'`: Include at least all media in the requested range. This may require expanding the media region due to key frames and packet boundaries, and thus may include media outside of your trim range. The region is always minimally expanded to satisfy the copy criteria.
+	- `'shrink'`: Only include media that lies entirely within the requested trim range. This may require shrinking the media region due to key frames and packet boundaries, and thus may exclude media inside of your trim range. The region is always minimally shrunk to satisfy the copy criteria.
+
+	Use `expand` if you don't want to lose any media; use `shrink` to never expose any media outside of the trim region.
+
+---
+
+You can disable copy conversions entirely by setting the field to `false`:
+```ts
+await Conversion.init({
+	copy: false,
+	// ...
+});
+```
 
 ## Metadata tags
 

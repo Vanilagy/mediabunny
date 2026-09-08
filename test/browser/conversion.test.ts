@@ -3,20 +3,23 @@ import { Input } from '../../src/input.js';
 import {
 	AdtsOutputFormat,
 	HlsOutputFormat,
+	MkvOutputFormat,
 	Mp4OutputFormat,
 	MpegTsOutputFormat,
+	OutputFormat,
 	WavOutputFormat,
 } from '../../src/output-format.js';
 import { Output, OutputTrackGroup } from '../../src/output.js';
 import { BufferSource, CustomPathedSource, UrlSource } from '../../src/source.js';
 import { expect, test } from 'vitest';
 import { BufferTarget, PathedTarget } from '../../src/target.js';
-import { Conversion, ConversionCanceledError } from '../../src/conversion.js';
-import { assert } from '../../src/misc.js';
+import { Conversion, ConversionCanceledError, ConversionOptions } from '../../src/conversion.js';
+import { assert, uint8ArraysAreEqual } from '../../src/misc.js';
 import { InputVideoTrack } from '../../src/input-track.js';
 import { CanvasSource, EncodedAudioPacketSource } from '../../src/media-source.js';
 import { Quality } from '../../src/encode.js';
 import { EncodedPacket } from '../../src/packet.js';
+import { EncodedPacketSink } from '../../src/media-sink.js';
 
 test('Rotation is baked in when rerendering', async () => {
 	using input = new Input({
@@ -782,4 +785,398 @@ test('Resizing at various scale factors', async () => {
 		const videoTrack = await result.getPrimaryVideoTrack();
 		expect(await videoTrack!.getDisplayHeight()).toBe(height);
 	}
+});
+
+test('Packet copy, whole file', async () => {
+	await testCopy({
+		conversionOptions: {},
+		expectedTimeOffset: 0,
+		videoStartTimestamp: 0,
+		videoEndTimestamp: 5,
+		audioStartTimestamp: -1024 / 48000,
+		audioEndTimestamp: 5,
+	});
+});
+
+test('Packet copy, keyframe trim', async () => {
+	await testCopy({
+		conversionOptions: {
+			trim: {
+				start: 1,
+				end: 2,
+			},
+		},
+		expectedTimeOffset: 1,
+		videoStartTimestamp: 0,
+		videoEndTimestamp: 1,
+		audioStartTimestamp: -0.04,
+		audioEndTimestamp: 1.0053333333333334,
+	});
+});
+
+test('Packet copy, keyframe trim, shrink', async () => {
+	await testCopy({
+		conversionOptions: {
+			trim: {
+				start: 1,
+				end: 2,
+			},
+			copy: {
+				boundaryPolicy: 'shrink',
+			},
+		},
+		expectedTimeOffset: 1,
+		videoStartTimestamp: 0,
+		videoEndTimestamp: 1,
+		audioStartTimestamp: -0.04 + 2 * 1024 / 48000,
+		audioEndTimestamp: 1.0053333333333334 - 1024 / 48000,
+	});
+});
+
+test('Packet copy, delta frame trim', async () => {
+	await testCopy({
+		conversionOptions: {
+			trim: {
+				start: 1.5,
+				end: 2.5,
+			},
+		},
+		expectedTimeOffset: 1.5,
+		videoStartTimestamp: -0.5,
+		videoEndTimestamp: 1.02,
+		audioStartTimestamp: -0.028,
+		audioEndTimestamp: 1.0173333333333334,
+	});
+});
+
+test('Packet copy, delta frame trim, shrink', async () => {
+	await testCopy({
+		conversionOptions: {
+			trim: {
+				start: 1.5,
+				end: 2.5,
+			},
+			copy: {
+				boundaryPolicy: 'shrink',
+			},
+		},
+		expectedTimeOffset: 1.5,
+		videoStartTimestamp: 0.5,
+		videoEndTimestamp: 1.02, // Due to MP4 not being able to express a different duration for the last packet
+		audioStartTimestamp: -0.028 + 2 * 1024 / 48000,
+		audioEndTimestamp: 1.0173333333333334 - 1024 / 48000,
+	});
+});
+
+test('Packet copy, whole file, Matroska', async () => {
+	await testCopy({
+		outputFormat: new MkvOutputFormat(),
+		conversionOptions: {
+			copy: {
+				shiftTolerance: Infinity,
+			},
+		},
+		expectedTimeOffset: -1024 / 48000,
+		videoStartTimestamp: 0 + 1024 / 48000,
+		videoEndTimestamp: 5 + 1024 / 48000 - 1 / 25,
+		audioStartTimestamp: 0,
+		audioEndTimestamp: 235 * 1024 / 48000,
+		precision: 0.001,
+	});
+});
+
+test('Packet copy, whole file, Matroska, forced', async () => {
+	await testCopy({
+		outputFormat: new MkvOutputFormat(),
+		conversionOptions: {
+			copy: {
+				mode: 'forced',
+			},
+		},
+		expectedTimeOffset: 0,
+		videoStartTimestamp: 0,
+		videoEndTimestamp: 5 - 1 / 25,
+		audioStartTimestamp: -1024 / 48000,
+		audioEndTimestamp: 4.992,
+		precision: 0.001,
+	});
+});
+
+test('Packet copy, delta frame trim, Matroska', async () => {
+	await testCopy({
+		outputFormat: new MkvOutputFormat(),
+		conversionOptions: {
+			trim: {
+				start: 1.5,
+				end: 2.5,
+			},
+			copy: {
+				shiftTolerance: Infinity,
+			},
+		},
+		expectedTimeOffset: 1,
+		videoStartTimestamp: 0,
+		videoEndTimestamp: 1.48,
+		audioStartTimestamp: 0.472,
+		audioEndTimestamp: 1.496,
+		precision: 0.001,
+	});
+});
+
+test('Packet copy, delta frame trim, video transcoded, Matroska', async () => {
+	await testCopy({
+		outputFormat: new MkvOutputFormat(),
+		conversionOptions: {
+			video: {
+				forceTranscode: true,
+				codec: 'vp9',
+			},
+			trim: {
+				start: 1.5,
+				end: 2.5,
+			},
+			copy: {
+				shiftTolerance: Infinity,
+			},
+		},
+		expectedTimeOffset: 1.472,
+		videoStartTimestamp: 0.028,
+		videoEndTimestamp: 1.008,
+		audioStartTimestamp: 0,
+		audioEndTimestamp: 1.024,
+		precision: 0.001,
+		compareVideoPackets: false,
+	});
+});
+
+test('Packet copy, whole file, ADTS', async () => {
+	await testCopy({
+		outputFormat: new AdtsOutputFormat(),
+		conversionOptions: {
+			video: {
+				discard: true,
+			},
+			copy: {
+				mode: 'forced',
+				shiftTolerance: Infinity,
+			},
+		},
+		expectedTimeOffset: -1024 / 48000,
+		audioStartTimestamp: 0,
+		audioEndTimestamp: 5.034666666666666,
+		processNewAudioPacketData: data => data.subarray(7),
+	});
+});
+
+const testCopy = async (options: {
+	outputFormat?: OutputFormat;
+	conversionOptions: Omit<ConversionOptions, 'input' | 'output'>;
+	expectedTimeOffset: number;
+	videoStartTimestamp?: number;
+	videoEndTimestamp?: number;
+	audioStartTimestamp: number;
+	audioEndTimestamp: number;
+	precision?: number;
+	processNewAudioPacketData?: (data: Uint8Array) => Uint8Array;
+	compareVideoPackets?: boolean;
+}) => {
+	const precision = options.precision ?? 0.000001;
+
+	const isCloseTo = (a: number, b: number) => {
+		return Math.abs(a - b) <= precision;
+	};
+
+	using input = new Input({
+		source: new UrlSource('/demo.mp4'),
+		formats: ALL_FORMATS,
+	});
+	const output = new Output({
+		format: options.outputFormat ?? new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(videoTrack);
+	assert(audioTrack);
+	const videoSink = new EncodedPacketSink(videoTrack);
+	const audioSink = new EncodedPacketSink(audioTrack);
+
+	const conversion = await Conversion.init({
+		input,
+		output,
+		...options.conversionOptions,
+	});
+	await conversion.execute();
+
+	using newInput = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const newVideoTrack = await newInput.getPrimaryVideoTrack();
+	const newAudioTrack = await newInput.getPrimaryAudioTrack();
+
+	if (newVideoTrack) {
+		const newVideoSink = new EncodedPacketSink(newVideoTrack);
+
+		expect(isCloseTo(await newVideoTrack.getFirstTimestamp(), options.videoStartTimestamp!)).toBe(true);
+		expect(isCloseTo(await newVideoTrack.computeDuration(), options.videoEndTimestamp!)).toBe(true);
+
+		if (options.compareVideoPackets ?? true) {
+			for await (const newPacket of newVideoSink.packets()) {
+				const oldPacket = await videoSink.getPacket(
+					newPacket.timestamp + options.expectedTimeOffset + precision,
+				);
+				assert(oldPacket);
+
+				expect(uint8ArraysAreEqual(oldPacket.data, newPacket.data)).toBe(true);
+				expect(oldPacket.type).toEqual(newPacket.type);
+			}
+		}
+	}
+
+	if (newAudioTrack) {
+		const newAudioSink = new EncodedPacketSink(newAudioTrack);
+
+		expect(isCloseTo(await newAudioTrack.getFirstTimestamp(), options.audioStartTimestamp)).toBe(true);
+		expect(isCloseTo(await newAudioTrack.computeDuration(), options.audioEndTimestamp)).toBe(true);
+
+		for await (const newPacket of newAudioSink.packets()) {
+			const oldPacket = await audioSink.getPacket(newPacket.timestamp + options.expectedTimeOffset + precision);
+			assert(oldPacket);
+
+			const process = options.processNewAudioPacketData ?? (x => x);
+
+			expect(uint8ArraysAreEqual(oldPacket.data, process(newPacket.data))).toBe(true);
+			expect(oldPacket.type).toEqual(newPacket.type);
+		}
+	}
+};
+
+test('Trim wholly before media data, transcode', async () => {
+	using input = new Input({
+		source: new UrlSource('/demo.mp4'),
+		formats: ALL_FORMATS,
+	});
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({
+		input,
+		output,
+		video: {
+			forceTranscode: true,
+		},
+		audio: {
+			forceTranscode: true,
+		},
+		trim: {
+			start: -10,
+			end: -5,
+		},
+	});
+	await conversion.execute();
+
+	using newInput = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	expect(await newInput.getPrimaryVideoTrack()).toBeNull(); // No video data
+	expect(await newInput.getPrimaryAudioTrack()).toBeNull(); // No audio data
+});
+
+test('Trim wholly before media data, copy', async () => {
+	using input = new Input({
+		source: new UrlSource('/demo.mp4'),
+		formats: ALL_FORMATS,
+	});
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({
+		input,
+		output,
+		copy: { mode: 'forced' },
+		trim: {
+			start: -10,
+			end: -5,
+		},
+	});
+	await conversion.execute();
+
+	using newInput = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	expect(await newInput.getPrimaryVideoTrack()).toBeNull(); // No video data
+	expect(await newInput.getPrimaryAudioTrack()).toBeNull(); // No audio data
+});
+
+test('Trim wholly past media data, transcode', async () => {
+	using input = new Input({
+		source: new UrlSource('/demo.mp4'),
+		formats: ALL_FORMATS,
+	});
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({
+		input,
+		output,
+		video: {
+			forceTranscode: true,
+		},
+		audio: {
+			forceTranscode: true,
+		},
+		trim: {
+			start: 10,
+			end: 15,
+		},
+	});
+	await conversion.execute();
+
+	using newInput = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	expect(await newInput.getPrimaryVideoTrack()).toBeNull(); // No video data
+	expect(await newInput.getPrimaryAudioTrack()).toBeNull(); // No audio data
+});
+
+test('Trim wholly past media data, copy', async () => {
+	using input = new Input({
+		source: new UrlSource('/demo.mp4'),
+		formats: ALL_FORMATS,
+	});
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({
+		input,
+		output,
+		copy: { mode: 'forced' },
+		trim: {
+			start: 10,
+			end: 15,
+		},
+	});
+	await conversion.execute();
+
+	using newInput = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	// Don't test video yet; requires extensions to packet fetching logic. B-frames!!
+	// expect(await newInput.getPrimaryVideoTrack()).toBeNull(); // No video data
+	expect(await newInput.getPrimaryAudioTrack()).toBeNull(); // No audio data
 });

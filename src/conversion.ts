@@ -44,6 +44,7 @@ import {
 	ceilToMultipleOfTwo,
 	clamp,
 	isIso639Dash2LanguageCode,
+	isNumber,
 	MaybePromise,
 	normalizeRotation,
 	promiseWithResolvers,
@@ -51,6 +52,7 @@ import {
 } from './misc';
 import { Output, OutputTrackGroup } from './output';
 import { Mp4OutputFormat } from './output-format';
+import { EncodedPacket } from './packet';
 import {
 	AudioSample,
 	clampCropRectangle,
@@ -131,6 +133,13 @@ export type ConversionOptions = {
 		 */
 		end?: number;
 	};
+
+	/**
+	 * Options for controlling when media is copied directly without transcoding it. Set to `false` to always transcode.
+	 * Defaults to `{}`, which will copy media whenever possible and otherwise transcode it while retaining precise
+	 * timestamps.
+	 */
+	copy?: ConversionCopyOptions | false;
 
 	/**
 	 * An object or a callback that returns or resolves to an object containing the descriptive metadata tags that
@@ -237,7 +246,7 @@ export type ConversionVideoOptions = {
 	 * `'no-preference'`, the default.
 	 */
 	hardwareAcceleration?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
-	/** When `true`, video will always be re-encoded instead of directly copying over the encoded samples. */
+	/** When `true`, video will always be re-encoded instead of directly copying over the encoded packets. */
 	forceTranscode?: boolean;
 	/**
 	 * Allows for custom user-defined processing of video frames, e.g. for applying overlays, color transformations, or
@@ -303,7 +312,7 @@ export type ConversionAudioOptions = {
 	 * @deprecated Use `quality` instead.
 	 */
 	bitrate?: number | Quality;
-	/** When `true`, audio will always be re-encoded instead of directly copying over the encoded samples. */
+	/** When `true`, audio will always be re-encoded instead of directly copying over the encoded packets. */
 	forceTranscode?: boolean;
 	/**
 	 * Allows for custom user-defined processing of audio samples, e.g. for applying audio effects, transformations, or
@@ -336,6 +345,44 @@ export type ConversionAudioOptions = {
 	 * matches the input track pairability graph.
 	 */
 	group?: OutputTrackGroup | OutputTrackGroup[];
+};
+
+/**
+ * Options for copying encoded media during conversion.
+ * @group Conversion
+ * @public
+ */
+export type ConversionCopyOptions = {
+	/**
+	 * Controls whether media copying is preferred or required. Defaults to `'preferred'`.
+	 *
+	 * - `'forced'`: Copy encoded media where possible and discard tracks that cannot possibly be copied.
+	 * - `'preferred'`: Copy encoded media when possible, and transcode tracks that cannot be copied.
+	 */
+	mode?: 'forced' | 'preferred';
+	/**
+	 * The maximum absolute shift, in seconds, that may be applied to the media to be able to copy it into the output
+	 * format. Defaults to `0`, which permits no additional shift. Set to `Infinity` to permit any shift.
+	 *
+	 * A shift of `0` gives you perfect _timeline sync_: output timestamps will match input timestamps exactly (only
+	 * offset by the trim region). Any non-zero shift will break this property but will still, under all circumstances,
+	 * maintain perfect cross-track and audio-video sync.
+	 */
+	shiftTolerance?: number;
+	/**
+	 * Controls which media region will be copied to satisfy the requested trim range. Defaults to `'expand'`.
+	 *
+	 * - `'expand'`: Include at least all media in the requested range. This may require expanding the media region due
+	 * to key frames and packet boundaries, and thus may include media outside of your trim range. The region is always
+	 * minimally expanded to satisfy the copy criteria.
+	 * - `'shrink'`: Only include media that lies entirely within the requested trim range. This may require shrinking
+	 * the media region due to key frames and packet boundaries, and thus may exclude media inside of your trim range.
+	 * The region is always minimally shrunk to satisfy the copy criteria.
+	 *
+	 * Use `expand` if you don't want to lose any media; use `shrink` to never expose any media outside of the
+	 * trim region.
+	 */
+	boundaryPolicy?: 'expand' | 'shrink';
 };
 
 const validateVideoOptions = (videoOptions: ConversionVideoOptions) => {
@@ -546,6 +593,8 @@ export type DiscardedTrack = {
 	 * - `'no_encodable_target_codec'`: We can't find a codec that we are able to encode and that can be contained
 	 * within the output format. This reason can be hit if the environment doesn't support the necessary encoders, or if
 	 * you requested a codec that cannot be contained within the output format.
+	 * - `'cannot_copy'`: {@link ConversionCopyOptions.mode} was set to `'forced'` but the track could not be copied
+	 * with the given copy configuration because it would require a transcode instead.
 	 */
 	reason:
 		| 'discarded_by_user'
@@ -553,7 +602,8 @@ export type DiscardedTrack = {
 		| 'max_track_count_of_type_reached'
 		| 'unknown_source_codec'
 		| 'undecodable_source_codec'
-		| 'no_encodable_target_codec';
+		| 'no_encodable_target_codec'
+		| 'cannot_copy';
 	/** The options that were provided for this track, or `{}` if none were provided. */
 	trackOptions: ConversionVideoOptions | ConversionAudioOptions;
 };
@@ -597,22 +647,28 @@ export class Conversion {
 	/** The output file. */
 	readonly output: Output;
 
-	/**
-	 * The current state of the conversion.
-	 *
-	 * - `'idle'`: The conversion is not currently executing and isn't done; `execute` can be called.
-	 * - `'executing'`: A call to `execute` is currently running.
-	 * - `'canceled'`: The conversion has been canceled and can no longer be executed.
-	 * - `'done'`: The conversion has run to completion. Subsequent calls to `execute` do nothing.
-	 */
-	state: 'idle' | 'executing' | 'canceled' | 'done' = 'idle';
-
+	/** @internal */
+	_state: 'idle' | 'executing' | 'canceled' | 'done' = 'idle';
 	/** @internal */
 	_options: ConversionOptions;
+	/** @internal */
+	_copyMode: false | 'forced' | 'preferred';
+	/** @internal */
+	_copyTimestampShiftTolerance: number;
+	/** @internal */
+	_copyBoundaryPolicy: 'expand' | 'shrink';
 	/** @internal */
 	_startTimestamp!: number;
 	/** @internal */
 	_endTimestamp!: number;
+	/** @internal */
+	_timestampOffset = 0;
+	/** @internal */
+	_timestampOffsetAdjusted = false;
+	/** @internal */
+	_copyTimestampPossible = new Map<InputTrack, boolean>();
+	/** @internal */
+	_copyStartPackets = new Map<InputTrack, EncodedPacket | null>();
 
 	/** @internal */
 	_nextOutputTrackId = 0;
@@ -673,6 +729,18 @@ export class Conversion {
 	/** The list of tracks from the input file that have been discarded, alongside the discard reason. */
 	readonly discardedTracks: DiscardedTrack[] = [];
 
+	/**
+	 * The current state of the conversion.
+	 *
+	 * - `'idle'`: The conversion is not currently executing and isn't done; `execute` can be called.
+	 * - `'executing'`: A call to `execute` is currently running.
+	 * - `'canceled'`: The conversion has been canceled and can no longer be executed.
+	 * - `'done'`: The conversion has run to completion. Subsequent calls to `execute` do nothing.
+	 */
+	get state() {
+		return this._state;
+	}
+
 	/** Initializes a new conversion process without starting the conversion. */
 	static async init(options: ConversionOptions) {
 		const conversion = new Conversion(options);
@@ -703,6 +771,28 @@ export class Conversion {
 		}
 		if (options.composable !== undefined && typeof options.composable !== 'boolean') {
 			throw new TypeError('options.composable, when provided, must be a boolean.');
+		}
+		if (options.copy !== undefined && options.copy !== false) {
+			if (!options.copy || typeof options.copy !== 'object') {
+				throw new TypeError('options.copy, when provided, must be an object or false.');
+			}
+			if (options.copy.mode !== undefined && !['forced', 'preferred'].includes(options.copy.mode)) {
+				throw new TypeError('options.copy.mode, when provided, must be \'forced\' or \'preferred\'.');
+			}
+			if (
+				options.copy.shiftTolerance !== undefined
+				&& (!isNumber(options.copy.shiftTolerance) || options.copy.shiftTolerance < 0)
+			) {
+				throw new TypeError('options.copy.shiftTolerance, when provided, must be a non-negative number.');
+			}
+			if (
+				options.copy.boundaryPolicy !== undefined
+				&& !['expand', 'shrink'].includes(options.copy.boundaryPolicy)
+			) {
+				throw new TypeError(
+					'options.copy.boundaryPolicy, when provided, must be \'expand\' or \'shrink\'.',
+				);
+			}
 		}
 
 		const composable = options.composable ?? false;
@@ -757,8 +847,8 @@ export class Conversion {
 		if (options.trim?.start !== undefined && (!Number.isFinite(options.trim.start))) {
 			throw new TypeError('options.trim.start, when provided, must be a finite number.');
 		}
-		if (options.trim?.end !== undefined && (!Number.isFinite(options.trim.end))) {
-			throw new TypeError('options.trim.end, when provided, must be a finite number.');
+		if (options.trim?.end !== undefined && (!isNumber(options.trim.end))) {
+			throw new TypeError('options.trim.end, when provided, must be a number.');
 		}
 		if (
 			options.trim?.start !== undefined
@@ -781,6 +871,9 @@ export class Conversion {
 		}
 
 		this._options = options;
+		this._copyMode = options.copy === false ? false : options.copy?.mode ?? 'preferred';
+		this._copyTimestampShiftTolerance = options.copy === false ? 0 : options.copy?.shiftTolerance ?? 0;
+		this._copyBoundaryPolicy = options.copy === false ? 'expand' : options.copy?.boundaryPolicy ?? 'expand';
 		this._composable = composable;
 		this.input = options.input;
 		this.output = options.output;
@@ -924,6 +1017,7 @@ export class Conversion {
 		}
 
 		this._endTimestamp = Math.max(this._options.trim?.end ?? Infinity, this._startTimestamp);
+		this._timestampOffset = -this._startTimestamp; // Initial value, may get refined later by track processing
 
 		// Run these sequentially so that output tracks have a deterministic order
 		for (let i = 0; i < filteredTracks.length; i++) {
@@ -1156,15 +1250,15 @@ export class Conversion {
 			);
 		}
 
-		if (this.state === 'executing') {
+		if (this._state === 'executing') {
 			throw new Error('Cannot call execute() while a previous call to execute() is still running.');
 		}
 
-		if (this.state === 'canceled') {
+		if (this._state === 'canceled') {
 			throw new ConversionCanceledError();
 		}
 
-		if (this.state === 'done') {
+		if (this._state === 'done') {
 			// The conversion already ran to completion, nothing left to do
 			return;
 		}
@@ -1176,12 +1270,12 @@ export class Conversion {
 			);
 		}
 
-		this.state = 'executing';
+		this._state = 'executing';
 		this._executionUntil = options.until ?? Infinity;
 		this._pauseRequested = options.pauseSignal?.aborted ?? false;
 
 		const onPause = () => {
-			if (this.state !== 'executing') {
+			if (this._state !== 'executing') {
 				return;
 			}
 
@@ -1224,6 +1318,9 @@ export class Conversion {
 				);
 
 				for (const id of this._outputTrackIds) {
+					// Used for progress calculation. We start these at 0 which is technically not always the first
+					// timestamp, but this is how we choose to model what "progress" means: it's how far we are done
+					// with the trim region.
 					this._maxTimestamps.set(id, 0);
 				}
 
@@ -1247,7 +1344,7 @@ export class Conversion {
 		try {
 			await Promise.all(this._trackPumps.map(x => x.resolvers.promise));
 		} catch (error) {
-			if ((this.state as Conversion['state']) !== 'canceled') {
+			if ((this._state as Conversion['_state']) !== 'canceled') {
 				// Make sure to cancel to stop other encoding processes and clean up resources
 				void this.cancel();
 			}
@@ -1257,12 +1354,12 @@ export class Conversion {
 			options.pauseSignal?.removeEventListener('abort', onPause);
 		}
 
-		if ((this.state as Conversion['state']) === 'canceled') {
+		if ((this._state as Conversion['_state']) === 'canceled') {
 			throw new ConversionCanceledError();
 		}
 
 		const isDone = this._trackPumps.every(x => x.done);
-		this.state = isDone ? 'done' : 'idle';
+		this._state = isDone ? 'done' : 'idle';
 
 		if (isDone) {
 			if (!this._composable) {
@@ -1281,16 +1378,16 @@ export class Conversion {
 	 * Does nothing if the conversion is already complete.
 	 */
 	async cancel() {
-		if (this.state === 'done') {
+		if (this._state === 'done') {
 			return;
 		}
 
-		if (this.state === 'canceled') {
+		if (this._state === 'canceled') {
 			Logging._warn('Conversion already canceled.');
 			return;
 		}
 
-		this.state = 'canceled';
+		this._state = 'canceled';
 
 		// Wake all suspended track pumps so they can wind down
 		for (const pump of this._trackPumps) {
@@ -1355,11 +1452,11 @@ export class Conversion {
 			height = ceilToMultipleOfTwo(trackOptions.height);
 		}
 
-		const firstTimestamp = await track.getFirstTimestamp();
 		let videoCodecs = this.output.format.getSupportedVideoCodecs();
+		const alpha = trackOptions.alpha ?? 'discard';
 
-		const needsTranscode = !!trackOptions.forceTranscode
-			|| firstTimestamp < this._startTimestamp
+		let needsTranscode = !this._copyMode
+			|| !!trackOptions.forceTranscode
 			|| !!trackOptions.frameRate
 			|| trackOptions.keyFrameInterval !== undefined
 			|| trackOptions.process !== undefined
@@ -1376,7 +1473,92 @@ export class Conversion {
 			|| (totalRotation !== 0 && !canUseRotationMetadata)
 			|| !!crop;
 
-		const alpha = trackOptions.alpha ?? 'discard';
+		let copyStartPacket: EncodedPacket | null = null;
+
+		if (!needsTranscode) {
+			// Check if we can copy it
+			const sink = new EncodedPacketSink(track);
+			let startPacket = await sink.getKeyPacket(this._startTimestamp, { verifyKeyPackets: true })
+				?? await sink.getFirstKeyPacket({ verifyKeyPackets: true });
+
+			if (
+				startPacket
+				&& startPacket.timestamp < this._startTimestamp
+				&& startPacket.timestamp + startPacket.duration <= this._startTimestamp
+				&& this._copyBoundaryPolicy === 'shrink'
+			) {
+				startPacket = await sink.getNextKeyPacket(startPacket, { verifyKeyPackets: true });
+			}
+
+			copyStartPacket = startPacket;
+
+			if (startPacket) {
+				// This clamp mirrors the packet timestamp clamping the copy loop does. The reason this is valid is
+				// because in the shrink case, we've already proven that the packet (at least partially) overlaps the
+				// trim region.
+				const effectiveStartTimestamp = this._copyBoundaryPolicy === 'shrink'
+					? Math.max(startPacket.timestamp, this._startTimestamp)
+					: startPacket.timestamp;
+
+				if (!this.output.format.supportsTimestampedMediaData) {
+					// Wants zero
+
+					if (this._timestampOffsetAdjusted) {
+						// We've already adjusted, we can't adjust twice
+						const isValid = effectiveStartTimestamp + this._timestampOffset === 0;
+						if (!isValid) {
+							needsTranscode = true;
+						}
+					} else {
+						const correction = clamp(
+							this._startTimestamp - effectiveStartTimestamp,
+							-this._copyTimestampShiftTolerance,
+							this._copyTimestampShiftTolerance,
+						);
+
+						const shiftedStartTimestamp = effectiveStartTimestamp + correction;
+						const isValid = shiftedStartTimestamp === this._startTimestamp;
+
+						if (isValid) {
+							this._timestampOffset = -this._startTimestamp + correction;
+							this._timestampOffsetAdjusted = true;
+						} else {
+							needsTranscode = true;
+						}
+					}
+				} else if (
+					this.output.format.negativeTimestampSupport !== 'full'
+					&& effectiveStartTimestamp < this._startTimestamp
+				) {
+					const correction = Math.min(
+						this._startTimestamp - effectiveStartTimestamp,
+						this._copyTimestampShiftTolerance,
+					);
+
+					const shiftedStartTimestamp = effectiveStartTimestamp + correction;
+					const isValid = shiftedStartTimestamp >= this._startTimestamp
+						|| (
+							this.output.format.negativeTimestampSupport === 'prefer-non-negative'
+							&& this._copyMode === 'forced'
+						);
+
+					if (isValid) {
+						this._timestampOffset = Math.max(this._timestampOffset, -this._startTimestamp + correction);
+					} else {
+						needsTranscode = true;
+					}
+				}
+			}
+		}
+
+		if (needsTranscode && this._copyMode === 'forced') {
+			this.discardedTracks.push({
+				track,
+				reason: 'cannot_copy',
+				trackOptions,
+			});
+			return;
+		}
 
 		if (!needsTranscode) {
 			// Fast path, we can simply copy over the encoded packets
@@ -1389,22 +1571,66 @@ export class Conversion {
 				const decoderConfig = await track.getDecoderConfig();
 				const meta: EncodedVideoChunkMetadata = { decoderConfig: decoderConfig ?? undefined };
 
-				for await (const packet of sink.packets(undefined, undefined, { verifyKeyPackets: true })) {
-					if (this.state === 'canceled') {
+				// eslint-disable-next-line curly
+				if (copyStartPacket) for await (const packet of sink.packets(
+					copyStartPacket,
+					undefined,
+					{ verifyKeyPackets: true },
+				)) {
+					if (this._state === 'canceled') {
 						break;
 					}
 
 					if (packet.timestamp >= this._endTimestamp) {
-						break;
+						if (this._copyBoundaryPolicy === 'shrink') {
+							break;
+						} else {
+							// Due to B-frames, there might still be packets we care about later on. Do a short
+							// lookahead to find out if there are.
+
+							let current = packet;
+							let found = false;
+							const lookahead = 6; // Heuristic, but should be enough for most streams
+
+							for (let i = 0; i < lookahead; i++) {
+								const next = await sink.getNextPacket(current, { metadataOnly: true });
+								if (!next) {
+									break;
+								}
+
+								if (next.timestamp < this._endTimestamp) {
+									found = true;
+									break;
+								}
+
+								current = next;
+							}
+
+							if (!found) {
+								break;
+							}
+						}
 					}
 
+					let packetStartTimestamp = packet.timestamp;
+					let packetEndTimestamp = packet.timestamp + packet.duration;
+
+					if (this._copyBoundaryPolicy === 'shrink') {
+						packetStartTimestamp = Math.max(packetStartTimestamp, this._startTimestamp);
+						packetEndTimestamp = Math.min(packetEndTimestamp, this._endTimestamp);
+						packetEndTimestamp = Math.max(packetEndTimestamp, packetStartTimestamp); // Just in case
+					}
+
+					packetStartTimestamp += this._timestampOffset;
+					packetEndTimestamp += this._timestampOffset;
+
 					const modifiedPacket = packet.clone({
-						timestamp: packet.timestamp - this._startTimestamp,
+						timestamp: packetStartTimestamp,
+						duration: packetEndTimestamp - packetStartTimestamp,
 						sideData: alpha === 'discard'
 							? {} // Remove alpha side data
 							: packet.sideData,
 					});
-					assert(modifiedPacket.timestamp >= 0);
 
 					this._reportProgress(outputTrackId, modifiedPacket.timestamp + modifiedPacket.duration);
 					await source.add(modifiedPacket, meta);
@@ -1496,8 +1722,9 @@ export class Conversion {
 
 				await tempOutput.start();
 
+				// Let's just use the first sample to test
 				const sink = new VideoSampleSink(track);
-				using firstSample = await sink.getSample(firstTimestamp); // Let's just use the first sample
+				using firstSample = await sink.getSample(await track.getFirstTimestamp());
 
 				if (firstSample) {
 					try {
@@ -1550,12 +1777,20 @@ export class Conversion {
 				const sink = new VideoSampleSink(track);
 
 				for await (using sample of sink.samples(this._startTimestamp, this._endTimestamp)) {
-					if (this.state === 'canceled') {
+					if (this._state === 'canceled') {
 						break;
 					}
 
-					const adjustedSampleTimestamp = Math.max(sample.timestamp - this._startTimestamp, 0);
-					sample.setTimestamp(adjustedSampleTimestamp);
+					const clampedStartTimestamp = Math.max(this._startTimestamp, sample.timestamp);
+					const clampedEndTimestamp = Math.min(this._endTimestamp, sample.timestamp + sample.duration);
+
+					if (clampedStartTimestamp >= clampedEndTimestamp) {
+						// Wholly out of the trim region
+						continue;
+					}
+
+					sample.setTimestamp(clampedStartTimestamp + this._timestampOffset);
+					sample.setDuration(clampedEndTimestamp - clampedStartTimestamp);
 
 					this._reportProgress(outputTrackId, sample.timestamp + sample.duration);
 					await source.add(sample);
@@ -1583,12 +1818,17 @@ export class Conversion {
 		}
 
 		const videoTrackLanguageCode = await track.getLanguageCode();
+		const trackName = await track.getName();
+		const trackDisposition = await track.getDisposition();
+
 		this.output.addVideoTrack(videoSource, {
 			frameRate: trackOptions.frameRate,
 			// TODO: This condition can be removed when all demuxers properly homogenize to BCP47 in v2
-			languageCode: isIso639Dash2LanguageCode(videoTrackLanguageCode) ? videoTrackLanguageCode : undefined,
-			name: await track.getName() ?? undefined,
-			disposition: await track.getDisposition(),
+			languageCode: isIso639Dash2LanguageCode(videoTrackLanguageCode)
+				? videoTrackLanguageCode
+				: undefined,
+			name: trackName ?? undefined,
+			disposition: trackDisposition,
 			rotation: outputTrackRotation,
 			group: ownGroup ?? trackOptions.group,
 		});
@@ -1615,29 +1855,124 @@ export class Conversion {
 		const originalNumberOfChannels = await track.getNumberOfChannels();
 		const originalSampleRate = await track.getSampleRate();
 
-		const firstTimestamp = await track.getFirstTimestamp();
-
 		let numberOfChannels = trackOptions.numberOfChannels ?? originalNumberOfChannels;
 		let sampleRate = trackOptions.sampleRate ?? originalSampleRate;
 
-		const needsTrimming = firstTimestamp < this._startTimestamp;
-		let needsPadding = firstTimestamp > this._startTimestamp && !this.output.format.supportsTimestampedMediaData;
-
 		let audioCodecs = this.output.format.getSupportedAudioCodecs();
-		if (
-			!trackOptions.forceTranscode
-			&& !trackOptions.quality
+
+		let needsTranscode = !this._copyMode
+			|| !!trackOptions.forceTranscode
+			|| !!trackOptions.quality
 			// eslint-disable-next-line @typescript-eslint/no-deprecated
-			&& !trackOptions.bitrate
-			&& numberOfChannels === originalNumberOfChannels
-			&& sampleRate === originalSampleRate
-			&& !needsTrimming
-			&& !needsPadding
-			&& audioCodecs.includes(sourceCodec)
-			&& (!trackOptions.codec || trackOptions.codec === sourceCodec)
-			&& !trackOptions.process
-			&& trackOptions.sampleFormat === undefined
-		) {
+			|| !!trackOptions.bitrate
+			|| numberOfChannels !== originalNumberOfChannels
+			|| sampleRate !== originalSampleRate
+			|| !audioCodecs.includes(sourceCodec)
+			|| (!!trackOptions.codec && trackOptions.codec !== sourceCodec)
+			|| trackOptions.process !== undefined
+			|| trackOptions.sampleFormat !== undefined;
+
+		let copyStartPacket: EncodedPacket | null = null;
+
+		if (!needsTranscode) {
+			// Check if we can copy it
+			const sink = new EncodedPacketSink(track);
+			let startPacket = await sink.getKeyPacket(this._startTimestamp)
+				?? await sink.getFirstKeyPacket();
+
+			if (
+				startPacket
+				&& (
+					(
+						this._copyBoundaryPolicy === 'shrink'
+						&& startPacket.timestamp < this._startTimestamp
+					)
+					|| (
+						this._copyBoundaryPolicy === 'expand'
+						// Check if packet is wholly before the start
+						&& startPacket.timestamp + startPacket.duration <= this._startTimestamp
+					)
+				)
+			) {
+				startPacket = await sink.getNextKeyPacket(startPacket);
+			}
+
+			const hasDecoderWarmup = (NON_PCM_AUDIO_CODECS as readonly AudioCodec[]).includes(sourceCodec)
+				&& sourceCodec !== 'flac';
+			if (startPacket && this._copyBoundaryPolicy === 'expand' && hasDecoderWarmup) {
+				// Go one packet back
+				const previousPacket = await sink.getKeyPacket(
+					startPacket.timestamp - 1 / (await track.getTimeResolution()),
+				);
+				if (previousPacket) {
+					startPacket = previousPacket;
+				}
+			}
+
+			copyStartPacket = startPacket;
+
+			if (startPacket) {
+				if (!this.output.format.supportsTimestampedMediaData) {
+					// Wants zero
+
+					if (this._timestampOffsetAdjusted) {
+						// We've already adjusted, we can't adjust twice
+						const isValid = startPacket.timestamp + this._timestampOffset === 0;
+						if (!isValid) {
+							needsTranscode = true;
+						}
+					} else {
+						const correction = clamp(
+							this._startTimestamp - startPacket.timestamp,
+							-this._copyTimestampShiftTolerance,
+							this._copyTimestampShiftTolerance,
+						);
+
+						const shiftedStartTimestamp = startPacket.timestamp + correction;
+						const isValid = shiftedStartTimestamp === this._startTimestamp;
+
+						if (isValid) {
+							this._timestampOffset = -this._startTimestamp + correction;
+							this._timestampOffsetAdjusted = true;
+						} else {
+							needsTranscode = true;
+						}
+					}
+				} else if (
+					this.output.format.negativeTimestampSupport !== 'full'
+					&& startPacket.timestamp < this._startTimestamp
+				) {
+					const correction = Math.min(
+						this._startTimestamp - startPacket.timestamp,
+						this._copyTimestampShiftTolerance,
+					);
+
+					const shiftedStartTimestamp = startPacket.timestamp + correction;
+					const isValid = shiftedStartTimestamp >= this._startTimestamp
+						|| (
+							this.output.format.negativeTimestampSupport === 'prefer-non-negative'
+							&& this._copyMode === 'forced'
+						);
+
+					if (isValid) {
+						this._timestampOffset = Math.max(this._timestampOffset, -this._startTimestamp + correction);
+					} else {
+						needsTranscode = true;
+					}
+				}
+			}
+		}
+
+		if (needsTranscode && this._copyMode === 'forced') {
+			this.discardedTracks.push({
+				track,
+				reason: 'cannot_copy',
+				trackOptions,
+			});
+			return;
+		}
+
+		if (!needsTranscode) {
 			// Fast path, we can simply copy over the encoded packets
 
 			const source = new EncodedAudioPacketSource(sourceCodec);
@@ -1648,19 +1983,26 @@ export class Conversion {
 				const decoderConfig = await track.getDecoderConfig();
 				const meta: EncodedAudioChunkMetadata = { decoderConfig: decoderConfig ?? undefined };
 
-				for await (const packet of sink.packets()) {
-					if (this.state === 'canceled') {
+				// eslint-disable-next-line curly
+				if (copyStartPacket) for await (const packet of sink.packets(copyStartPacket)) {
+					if (this._state === 'canceled') {
 						break;
 					}
 
 					if (packet.timestamp >= this._endTimestamp) {
 						break;
 					}
+					if (
+						this._copyBoundaryPolicy === 'shrink'
+						&& packet.timestamp + packet.duration > this._endTimestamp
+					) {
+						break;
+					}
 
 					const modifiedPacket = packet.clone({
-						timestamp: packet.timestamp - this._startTimestamp,
+						timestamp: packet.timestamp + this._timestampOffset,
+						duration: packet.duration,
 					});
-					assert(modifiedPacket.timestamp >= 0);
 
 					this._reportProgress(outputTrackId, modifiedPacket.timestamp + modifiedPacket.duration);
 					await source.add(modifiedPacket, meta);
@@ -1770,15 +2112,58 @@ export class Conversion {
 			audioSource = source;
 
 			this._registerTrackPump(async (pump) => {
+				let needsPadding: boolean | null = null;
+
 				const sink = new AudioSampleSink(track);
 				for await (using sample of sink.samples(this._startTimestamp, this._endTimestamp)) {
-					if (this.state === 'canceled') {
+					if (this._state === 'canceled') {
 						break;
+					}
+
+					let startFrame = 0;
+					let endFrame = sample.numberOfFrames;
+
+					if (sample.timestamp < this._startTimestamp) {
+						startFrame = Math.round((this._startTimestamp - sample.timestamp) * sample.sampleRate);
+					}
+					if (sample.timestamp + sample.duration > this._endTimestamp) {
+						endFrame = Math.round((this._endTimestamp - sample.timestamp) * sample.sampleRate);
+					}
+
+					if (startFrame >= endFrame) {
+						// Sample lies wholly out of trim region
+						sample.close();
+						continue; // No break since we may be before the start
+					}
+
+					// Can't assign to "using" identifiers so we gotta do this
+					let finalSampleLet: AudioSample;
+					if (startFrame > 0 || endFrame < sample.numberOfFrames) {
+						// Trim the sample if it sticks out of the trim region on either end
+						const trimmedSample = sample.trim(startFrame, endFrame);
+						sample.close();
+						finalSampleLet = trimmedSample;
+
+						if (trimmedSample.numberOfFrames === 0) {
+							trimmedSample.close();
+							continue;
+						}
+					} else {
+						finalSampleLet = sample;
+					}
+
+					using finalSample = finalSampleLet;
+
+					// Offset the timestamp as needed
+					finalSample.setTimestamp(finalSample.timestamp + this._timestampOffset);
+
+					if (needsPadding === null) {
+						needsPadding = finalSample.timestamp > 0 && !this.output.format.supportsTimestampedMediaData;
 					}
 
 					if (needsPadding) {
 						// Add one padding sample at the beginning
-						const paddingLength = firstTimestamp - this._startTimestamp;
+						const paddingLength = finalSample.timestamp;
 						const paddingLengthSamples = Math.round(paddingLength * originalSampleRate);
 
 						const bytesPerSample = getBytesPerSample(sample.format);
@@ -1803,37 +2188,6 @@ export class Conversion {
 						needsPadding = false;
 					}
 
-					let startFrame = 0;
-					let endFrame = sample.numberOfFrames;
-
-					if (sample.timestamp < this._startTimestamp) {
-						startFrame = Math.round((this._startTimestamp - sample.timestamp) * sample.sampleRate);
-					}
-					if (sample.timestamp + sample.duration > this._endTimestamp) {
-						endFrame = Math.round((this._endTimestamp - sample.timestamp) * sample.sampleRate);
-					}
-
-					// Can't assign to "using" identifiers so we gotta do this
-					let finalSampleLet: AudioSample;
-					if (startFrame > 0 || endFrame < sample.numberOfFrames) {
-						// Trim the sample if it sticks out of the trim region on either end
-						const trimmedSample = sample.trim(startFrame, endFrame);
-						sample.close();
-						finalSampleLet = trimmedSample;
-
-						if (trimmedSample.numberOfFrames === 0) {
-							trimmedSample.close();
-							continue;
-						}
-					} else {
-						finalSampleLet = sample;
-					}
-
-					using finalSample = finalSampleLet;
-
-					// Offset the timestamp as needed
-					finalSample.setTimestamp(finalSample.timestamp - this._startTimestamp);
-
 					await this._registerAudioSample(
 						pump, finalSample, source, outputTrackId, () => lastSampleTimestamp,
 					);
@@ -1852,11 +2206,16 @@ export class Conversion {
 		}
 
 		const audioTrackLanguageCode = await track.getLanguageCode();
+		const trackName = await track.getName();
+		const trackDisposition = await track.getDisposition();
+
 		this.output.addAudioTrack(audioSource, {
 			// TODO: This condition can be removed when all demuxers properly homogenize to BCP47 in v2
-			languageCode: isIso639Dash2LanguageCode(audioTrackLanguageCode) ? audioTrackLanguageCode : undefined,
-			name: await track.getName() ?? undefined,
-			disposition: await track.getDisposition(),
+			languageCode: isIso639Dash2LanguageCode(audioTrackLanguageCode)
+				? audioTrackLanguageCode
+				: undefined,
+			name: trackName ?? undefined,
+			disposition: trackDisposition,
 			group: ownGroup ?? trackOptions.group,
 		});
 
@@ -1909,7 +2268,7 @@ export class Conversion {
 
 	/** @internal */
 	async _checkpoint(pump: TrackPump, timestamp: number) {
-		while (this.state !== 'canceled' && (timestamp >= this._executionUntil || this._pauseRequested)) {
+		while (this._state !== 'canceled' && (timestamp >= this._executionUntil || this._pauseRequested)) {
 			// We've reached the target; signal it and suspend until the next execution wakes us up
 			pump.resolvers.resolve();
 
@@ -1975,7 +2334,9 @@ class TrackSynchronizer {
 	}
 
 	declareTrack(trackId: number) {
-		this.maxTimestamps.set(trackId, 0);
+		// Using -Infinity will automatically cause all tracks to wait for each other at the start until they figure out
+		// the true min timestamp
+		this.maxTimestamps.set(trackId, -Infinity);
 	}
 
 	shouldWait(trackId: number, timestamp: number) {
@@ -1986,7 +2347,7 @@ class TrackSynchronizer {
 
 		const newMin = this.computeMinAndMaybeResolve();
 		if (
-			this.conversion.state === 'canceled'
+			this.conversion._state === 'canceled'
 			|| this.conversion._pauseRequested
 			|| timestamp >= this.conversion._executionUntil
 		) {

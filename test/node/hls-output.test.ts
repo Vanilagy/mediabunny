@@ -1463,6 +1463,70 @@ segment-1-2.ts
 	);
 });
 
+test('Segmentation, negative start time', async () => {
+	const env = await setUpSegmentationEnvironment({ video: true });
+	const timestamps = Array.from({ length: 50 }, (_, index) => (index - 10) / 10);
+
+	for (const timestamp of timestamps) {
+		await env.addVideoPacket(timestamp, 'key', 0.1);
+
+		if (timestamp === 1) {
+			expect(env.segmentCount).toBe(1);
+			expect(await env.lastSegmentVideoTimestamps).toEqual(timestamps.slice(0, 20));
+		} else if (timestamp === 3) {
+			expect(env.segmentCount).toBe(2);
+			expect(await env.lastSegmentVideoTimestamps).toEqual(timestamps.slice(20, 40));
+		}
+	}
+
+	await env.output.finalize();
+	expect(env.segmentCount).toBe(3);
+	expect(await env.lastSegmentVideoTimestamps).toEqual(timestamps.slice(40));
+
+	expect(env.result).toBe(`#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
+
+#EXTINF:2,
+segment-1-1.ts
+#EXTINF:2,
+segment-1-2.ts
+#EXTINF:1,
+segment-1-3.ts
+
+#EXT-X-ENDLIST
+`,
+	);
+});
+
+test('Segmentation, wholly negative timestamps', async () => {
+	const env = await setUpSegmentationEnvironment({ video: true });
+	const timestamps = [-1, -0.9, -0.8, -0.7, -0.6];
+
+	for (const timestamp of timestamps) {
+		await env.addVideoPacket(timestamp, 'key', 0.1);
+	}
+
+	await env.output.finalize();
+	expect(env.segmentCount).toBe(1);
+	expect(await env.lastSegmentVideoTimestamps).toEqual(timestamps);
+
+	expect(env.result).toBe(`#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
+
+#EXTINF:0.5,
+segment-1-1.ts
+
+#EXT-X-ENDLIST
+`,
+	);
+});
+
 test('Segmentation, B-frames before key frame', async () => {
 	const env = await setUpSegmentationEnvironment({ video: true });
 

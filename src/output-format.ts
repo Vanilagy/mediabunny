@@ -85,6 +85,14 @@ export abstract class OutputFormat {
 	 * durations of the media data.
 	 */
 	abstract get supportsTimestampedMediaData(): boolean;
+	/**
+	 * The degree to which this output format supports writing media data with negative timestamps.
+	 * - `'full'` - Negative timestamps are fully supported.
+	 * - `'prefer-non-negative'` - Negative timestamps are technically supported, but their use is discouraged.
+	 * - `'none'` - Negative timestamps are not supported.
+	 * - `null` - Not applicable since the container doesn't support timestamped media at all.
+	 */
+	abstract get negativeTimestampSupport(): 'full' | 'prefer-non-negative' | 'none' | null;
 
 	/** Returns a list of video codecs that this output format can contain. */
 	getSupportedVideoCodecs(): VideoCodec[] {
@@ -276,6 +284,10 @@ export abstract class IsobmffOutputFormat extends OutputFormat {
 
 	get supportsTimestampedMediaData() {
 		return true;
+	}
+
+	get negativeTimestampSupport() {
+		return 'full' as const;
 	}
 
 	/** @internal */
@@ -579,6 +591,10 @@ export class MkvOutputFormat extends OutputFormat {
 	get supportsTimestampedMediaData() {
 		return true;
 	}
+
+	get negativeTimestampSupport() {
+		return 'prefer-non-negative' as const;
+	}
 }
 
 /**
@@ -719,6 +735,10 @@ export class Mp3OutputFormat extends OutputFormat {
 	get supportsTimestampedMediaData() {
 		return false;
 	}
+
+	get negativeTimestampSupport() {
+		return null;
+	}
 }
 
 /**
@@ -821,6 +841,10 @@ export class WavOutputFormat extends OutputFormat {
 	get supportsTimestampedMediaData() {
 		return false;
 	}
+
+	get negativeTimestampSupport() {
+		return null;
+	}
 }
 
 /**
@@ -916,6 +940,10 @@ export class OggOutputFormat extends OutputFormat {
 	get supportsTimestampedMediaData() {
 		return false;
 	}
+
+	get negativeTimestampSupport() {
+		return null;
+	}
 }
 
 /**
@@ -993,6 +1021,10 @@ export class AdtsOutputFormat extends OutputFormat {
 
 	get supportsTimestampedMediaData() {
 		return false;
+	}
+
+	get negativeTimestampSupport() {
+		return null;
 	}
 }
 
@@ -1079,6 +1111,10 @@ export class FlacOutputFormat extends OutputFormat {
 	get supportsTimestampedMediaData() {
 		return false;
 	}
+
+	get negativeTimestampSupport() {
+		return null;
+	}
 }
 
 /**
@@ -1163,6 +1199,10 @@ export class MpegTsOutputFormat extends OutputFormat {
 
 	get supportsTimestampedMediaData() {
 		return true;
+	}
+
+	get negativeTimestampSupport() {
+		return 'prefer-non-negative' as const;
 	}
 }
 
@@ -1424,7 +1464,24 @@ export class HlsOutputFormat extends OutputFormat {
 	}
 
 	get supportsTimestampedMediaData(): boolean {
-		return true; // I guess??
+		return true; // It's only half true, really, but "false" is not correct either
+	}
+
+	get negativeTimestampSupport() {
+		const formats = toArray(this._options.segmentFormat);
+
+		// Return the lowest baseline across all segment formats
+		if (formats.some(format => format.negativeTimestampSupport === 'none')) {
+			return 'none' as const;
+		}
+		if (formats.some(format => format.negativeTimestampSupport === 'prefer-non-negative')) {
+			return 'prefer-non-negative' as const;
+		}
+		if (formats.some(format => format.negativeTimestampSupport === 'full')) {
+			return 'full' as const;
+		}
+
+		return null;
 	}
 
 	/** @internal */

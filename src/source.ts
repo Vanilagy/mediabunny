@@ -494,6 +494,9 @@ export type BlobSourceOptions = {
 	 * field to `false` to try a slower but more stable reading method.
 	 */
 	useStreamReader?: boolean;
+
+	/** Handles errors that occur while no read is pending. By default, these become unhandled rejections. */
+	handleUnhandledError?: (error: unknown) => unknown;
 };
 
 const blobReaderRegistry = typeof FinalizationRegistry !== 'undefined'
@@ -541,6 +544,9 @@ export class BlobSource extends Source {
 		if (options.useStreamReader !== undefined && typeof options.useStreamReader !== 'boolean') {
 			throw new TypeError('options.useStreamReader, when provided, must be a boolean.');
 		}
+		if (options.handleUnhandledError !== undefined && typeof options.handleUnhandledError !== 'function') {
+			throw new TypeError('options.handleUnhandledError, when provided, must be a function.');
+		}
 
 		super();
 
@@ -563,6 +569,7 @@ export class BlobSource extends Source {
 				}
 			},
 			prefetchProfile: PREFETCH_PROFILES.fileSystem,
+			handleUnhandledError: options.handleUnhandledError,
 		});
 
 		this._orchestrator.fileSize = blob.size;
@@ -732,6 +739,9 @@ export type UrlSourceOptions = {
 	 * features, or use a custom implementation.
 	 */
 	fetchFn?: typeof fetch;
+
+	/** Handles errors that occur while no read is pending. By default, these become unhandled rejections. */
+	handleUnhandledError?: (error: unknown) => unknown;
 };
 
 /**
@@ -808,6 +818,9 @@ export class UrlSource extends PathedSource {
 			throw new TypeError('options.fetchFn, when provided, must be a function.');
 			// Won't bother validating this function beyond this
 		}
+		if (options.handleUnhandledError !== undefined && typeof options.handleUnhandledError !== 'function') {
+			throw new TypeError('options.handleUnhandledError, when provided, must be a function.');
+		}
 
 		const urlString = url instanceof Request
 			? url.url
@@ -869,6 +882,7 @@ export class UrlSource extends PathedSource {
 			maxWorkerCount: options.parallelism ?? DEFAULT_PARALLELISM,
 			runWorker: this._runWorker.bind(this),
 			prefetchProfile: PREFETCH_PROFILES.network,
+			handleUnhandledError: options.handleUnhandledError,
 		});
 	}
 
@@ -955,7 +969,13 @@ export class UrlSource extends PathedSource {
 			}
 
 			outer:
-			if (this._orchestrator.fileSize === null) {
+			if (
+				this._orchestrator.fileSize === null
+				// Content-Range/Length fields are meaningless if Content-Encoding is present. Content-Encoding is
+				// basically never used for range responses (since the encoding runs *before* the slicing), so we're set
+				// in that case.
+				&& (response.status === 206 || (response.type === 'basic' && !response.headers.has('Content-Encoding')))
+			) {
 				// See if we can deduce the file size from the response
 
 				const contentRange = response.headers.get('Content-Range');
@@ -1185,6 +1205,7 @@ export class UrlSource extends PathedSource {
 
 		const backing = new ReadableStreamSource(wrappedStream, {
 			maxCacheSize: this._orchestrator.options.maxCacheSize,
+			handleUnhandledError: this._options.handleUnhandledError,
 		});
 		backing._endIndex = this._orchestrator.fileSize; // Might still be null
 		backing._cacheMissErrorMessage = 'Attempted to read data from an already-evicted part of the cache. Because the'
@@ -1280,6 +1301,9 @@ const parseByteRangeHeader = (value: string) => {
 export type FilePathSourceOptions = {
 	/** The maximum number of bytes the cache is allowed to hold in memory. Defaults to 8 MiB. */
 	maxCacheSize?: number;
+
+	/** Handles errors that occur while no read is pending. By default, these become unhandled rejections. */
+	handleUnhandledError?: (error: unknown) => unknown;
 };
 
 /**
@@ -1343,6 +1367,7 @@ export class FilePathSource extends PathedSource {
 			},
 			maxCacheSize: options.maxCacheSize,
 			prefetchProfile: 'fileSystem',
+			handleUnhandledError: options.handleUnhandledError,
 		});
 	}
 
@@ -1413,6 +1438,9 @@ export type CustomSourceOptions = {
 	 * patterns are detected.
 	 */
 	prefetchProfile?: 'none' | 'fileSystem' | 'network';
+
+	/** Handles errors that occur while no read is pending. By default, these become unhandled rejections. */
+	handleUnhandledError?: (error: unknown) => unknown;
 };
 
 /**
@@ -1441,6 +1469,9 @@ export class CustomSource extends Source {
 		if (options.dispose !== undefined && typeof options.dispose !== 'function') {
 			throw new TypeError('options.dispose, when provided, must be a function.');
 		}
+		if (options.handleUnhandledError !== undefined && typeof options.handleUnhandledError !== 'function') {
+			throw new TypeError('options.handleUnhandledError, when provided, must be a function.');
+		}
 		if (
 			options.maxCacheSize !== undefined
 			&& (!isNumber(options.maxCacheSize) || options.maxCacheSize < 0)
@@ -1462,6 +1493,7 @@ export class CustomSource extends Source {
 			maxWorkerCount: 2, // Fixed for now, *should* be fine
 			prefetchProfile: PREFETCH_PROFILES[options.prefetchProfile ?? 'none'],
 			runWorker: this._runWorker.bind(this),
+			handleUnhandledError: options.handleUnhandledError,
 		});
 	}
 
@@ -1611,6 +1643,9 @@ type ReadableStreamSourcePendingSlice = {
 export type ReadableStreamSourceOptions = {
 	/** The maximum number of bytes the cache is allowed to hold in memory. Defaults to 32 MiB. */
 	maxCacheSize?: number;
+
+	/** Handles errors that occur while no read is pending. By default, these become unhandled rejections. */
+	handleUnhandledError?: (error: unknown) => unknown;
 };
 
 /**
@@ -1648,6 +1683,8 @@ export class ReadableStreamSource extends Source {
 	_endIndex: number | null = null;
 	/** @internal */
 	_pulling = false;
+	/** @internal */
+	_handleUnhandledError: ((error: unknown) => void) | undefined;
 	/**
 	 * Overridable for internal use.
 	 * @internal
@@ -1663,6 +1700,9 @@ export class ReadableStreamSource extends Source {
 		if (!options || typeof options !== 'object') {
 			throw new TypeError('options must be an object.');
 		}
+		if (options.handleUnhandledError !== undefined && typeof options.handleUnhandledError !== 'function') {
+			throw new TypeError('options.handleUnhandledError, when provided, must be a function.');
+		}
 		if (
 			options.maxCacheSize !== undefined
 			&& (!isNumber(options.maxCacheSize) || options.maxCacheSize < 0)
@@ -1674,6 +1714,7 @@ export class ReadableStreamSource extends Source {
 
 		this._stream = stream;
 		this._maxCacheSize = options.maxCacheSize ?? (32 * 2 ** 20 /* 32 MiB */);
+		this._handleUnhandledError = options.handleUnhandledError;
 	}
 
 	/** @internal */
@@ -1768,6 +1809,8 @@ export class ReadableStreamSource extends Source {
 					if (this._pendingSlices.length > 0) {
 						this._pendingSlices.forEach(x => x.reject(error)); // Make sure to propagate any errors
 						this._pendingSlices.length = 0;
+					} else if (this._handleUnhandledError) {
+						this._handleUnhandledError(error);
 					} else {
 						throw error; // So it doesn't get swallowed
 					}
@@ -1994,6 +2037,7 @@ class ReadOrchestrator {
 		prefetchProfile: PrefetchProfile;
 		maxWorkerCount: number;
 		onIdleWorkerRemoved?: (worker: ReadWorker) => void;
+		handleUnhandledError?: (error: unknown) => unknown;
 	}) {}
 
 	read(
@@ -2208,7 +2252,11 @@ class ReadOrchestrator {
 				}
 
 				// Nobody's awaiting this result but an errored read is still notable
-				throw error;
+				if (this.options.handleUnhandledError) {
+					this.options.handleUnhandledError(error);
+				} else {
+					throw error;
+				}
 			});
 		}
 
@@ -2326,7 +2374,11 @@ class ReadOrchestrator {
 					worker.pendingSlices.forEach(x => x.reject(error)); // Make sure to propagate any errors
 					worker.pendingSlices.length = 0;
 				} else if (!worker.aborted && !this.disposed) {
-					throw error; // So it doesn't get swallowed
+					if (this.options.handleUnhandledError) {
+						this.options.handleUnhandledError(error);
+					} else {
+						throw error; // So it doesn't get swallowed
+					}
 				}
 			})
 			.finally(() => {

@@ -607,6 +607,9 @@ type BlobSourceOptions = {
 	// The maximum number of bytes the cache is allowed to hold
 	// in memory. Defaults to 8 MiB.
 	maxCacheSize?: number;
+
+	// Handles errors that occur while no read is pending
+	handleUnhandledError?: (error: unknown) => unknown;
 };
 ```
 
@@ -640,6 +643,9 @@ type UrlSourceOptions = {
 
 	// Used to provide a custom fetch function
 	fetchFn?: typeof fetch;
+
+	// Handles errors that occur while no read is pending
+	handleUnhandledError?: (error: unknown) => unknown;
 };
 ```
 
@@ -704,6 +710,9 @@ type FilePathSourceOptions = {
 	// The maximum number of bytes the cache is allowed to hold
 	// in memory. Defaults to 8 MiB.
 	maxCacheSize?: number;
+
+	// Handles errors that occur while no read is pending
+	handleUnhandledError?: (error: unknown) => unknown;
 };
 ```
 
@@ -743,6 +752,7 @@ type CustomSourceOptions = {
 	dispose?: () => unknown;
 	maxCacheSize?: number;
 	prefetchProfile?: 'none' | 'fileSystem' | 'network';
+	handleUnhandledError?: (error: unknown) => unknown;
 };
 
 type MaybePromise<T> = T | Promise<T>;
@@ -761,6 +771,8 @@ type MaybePromise<T> = T | Promise<T>;
 	- `'none'` (default): No prefetching; only the data needed in the moment is requested.
 	- `'fileSystem'`: File system-optimized prefetching: a small amount of data is prefetched bidirectionally, aligned with page boundaries.
 	- `'network'`: Network-optimized prefetching, or more generally, prefetching optimized for any high-latency environment: tries to minimize the amount of read calls and aggressively prefetches data when sequential access patterns are detected.
+- `handleUnhandledError`\
+	Handles errors that occur while no read is pending. By default, these become unhandled promise rejections.
 
 ::: info
 `CustomSource` was previously known as `StreamSource` and is still available under that alias, but usage of `StreamSource` is deprecated.
@@ -790,6 +802,9 @@ type ReadableStreamSourceOptions = {
 	// The maximum number of bytes the cache is allowed to hold
 	// in memory. Defaults to 16 MiB.
 	maxCacheSize?: number;
+
+	// Handles errors that occur while no read is pending
+	handleUnhandledError?: (error: unknown) => unknown;
 };
 ```
 
