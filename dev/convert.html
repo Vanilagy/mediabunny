@@ -99,7 +99,7 @@
 			input,
 			output,
 			audio: {
-				discard: true,
+				forceTranscode: true,
 				//discard: true,
 				//codec: 'aac',
 				//forceTranscode: true,
@@ -162,6 +162,8 @@
 				}
 			},
 			trim: {
+				start: 30,
+				end: 35,
 				//start: -60,
 				//end: 60,
 				//start: -2,

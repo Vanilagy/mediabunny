@@ -2113,6 +2113,12 @@ export class Conversion {
 						endFrame = Math.round((this._endTimestamp - sample.timestamp) * sample.sampleRate);
 					}
 
+					if (startFrame >= endFrame) {
+						// Sample lies wholly out of trim region
+						sample.close();
+						continue; // No break since we may be before the start
+					}
+
 					// Can't assign to "using" identifiers so we gotta do this
 					let finalSampleLet: AudioSample;
 					if (startFrame > 0 || endFrame < sample.numberOfFrames) {
