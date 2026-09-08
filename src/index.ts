@@ -299,6 +299,7 @@ export {
 	type ConversionOptions,
 	type ConversionVideoOptions,
 	type ConversionAudioOptions,
+	type ConversionCopyOptions,
 	type ConversionExecuteOptions,
 	ConversionCanceledError,
 	type DiscardedTrack,

@@ -25,7 +25,7 @@
 			chunked: true,
 			chunkSize: 2**20
 		});
-		const outputFormat = new Mediabunny.MovOutputFormat();
+		const outputFormat = new Mediabunny.Mp4OutputFormat();
 
 		const p = document.createElement('p');
 		p.textContent = 'Capturing...';
@@ -99,6 +99,8 @@
 			input,
 			output,
 			audio: {
+				discard: true,
+				//discard: true,
 				//codec: 'aac',
 				//forceTranscode: true,
 				//forceTranscode: true,
@@ -129,7 +131,9 @@
 			},
 			*/
 			video: {
-				height: 320,
+				forceTranscode: true,
+				//forceTranscode: true,
+				//height: 320,
 				//codec: 'avc',
 				//bitrate: new Mediabunny.Quality({
 				//	quality: Infinity,
@@ -158,7 +162,8 @@
 				}
 			},
 			trim: {
-				end: 5,
+				//start: -60,
+				//end: 60,
 				//start: -2,
 				//end: 10,
 				//start: 300.14984567374756 - 100,
@@ -166,6 +171,12 @@
 				//end: 10,
 				//start: startTime,
 				//end: startTime + 2,
+			},
+			copy: {
+				//mode: 'forced',
+				//mode: 'forced',
+				//shiftTolerance: Infinity,
+				//boundaryPolicy: 'shrink',
 			},
 		});
 		//console.log(conversion);
