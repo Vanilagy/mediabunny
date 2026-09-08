@@ -47,7 +47,7 @@
 	format = new Mediabunny.MkvOutputFormat();
 	format = new Mediabunny.MovOutputFormat();
 	format = new Mediabunny.Mp4OutputFormat({ fastStart: 'reserve' });
-	format = new Mediabunny.Mp4OutputFormat();
+	format = new Mediabunny.MkvOutputFormat({  });
 	let target = new Mediabunny.BufferTarget();
 
 	/*
@@ -191,8 +191,8 @@ Testing... <00:17.350>One... <00:18.125>Two...
 9. <b>justify (bottom, right)</b>.
 `;
 
-	subtitleSource.add(simpleWebvttFile);
-	subtitleSource.close();
+	//subtitleSource.add(simpleWebvttFile);
+	//subtitleSource.close();
 	
 	const p = document.createElement('p');
 	document.body.append(p);
@@ -201,7 +201,7 @@ Testing... <00:17.350>One... <00:18.125>Two...
 		context.fillStyle = ['red', 'green', 'blue', 'yellow'][i % 4];
 		context.fillRect(canvas.width * Math.random(), canvas.height * Math.random(), canvas.width * Math.random(), canvas.height * Math.random());
 
-		await videoSource.add(i / 10, 1 / 10);
+		await videoSource.add(i / 10 - 1, 1 / 10);
 
 		p.textContent = i;
 	}
@@ -211,7 +211,7 @@ Testing... <00:17.350>One... <00:18.125>Two...
 	let length = 10;
 	let slicedAudioBuffer = sliceAudioBuffer(audioBuffer, length, audioContext);
 
-	await audioSource.add(slicedAudioBuffer);
+	//await audioSource.add(slicedAudioBuffer);
 
 	await output.finalize();
 

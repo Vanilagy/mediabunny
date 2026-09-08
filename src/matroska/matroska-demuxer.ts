@@ -1934,6 +1934,29 @@ export class MatroskaDemuxer extends Demuxer {
 			}
 		}
 	}
+
+	async getDurationFromMetadata(segment: Segment) {
+		if (segment.duration <= 0) {
+			return null;
+		}
+
+		// The kosher definition of the Duration field is "latest end time - earliest start time" across all tracks in
+		// the segment; since we currently mean "end timestamp" with "duration", we need to determine the earliest
+		// start time before we can return a value here.
+		let minTimestamp: number | null = null;
+		for (const track of segment.tracks) {
+			assert(track.trackBacking);
+			const firstPacket = await track.trackBacking.getFirstPacket({ metadataOnly: true });
+			if (firstPacket) {
+				minTimestamp = Math.min(minTimestamp ?? Infinity, firstPacket.timestamp);
+			}
+		}
+
+		let endTimestamp = segment.duration / segment.timestampFactor;
+		endTimestamp += minTimestamp ?? 0;
+
+		return endTimestamp;
+	}
 }
 
 abstract class MatroskaTrackBacking implements InputTrackBacking {
@@ -2016,17 +2039,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 	}
 
 	async getDurationFromMetadata() {
-		const segment = this.internalTrack.segment;
-		if (segment.duration <= 0) {
-			return null;
-		}
-
-		let endTimestamp = segment.duration / segment.timestampFactor;
-
-		const firstPacket = await this.getFirstPacket({ metadataOnly: true });
-		endTimestamp += firstPacket?.timestamp ?? 0;
-
-		return endTimestamp;
+		return this.internalTrack.demuxer.getDurationFromMetadata(this.internalTrack.segment);
 	}
 
 	async getLiveRefreshInterval() {

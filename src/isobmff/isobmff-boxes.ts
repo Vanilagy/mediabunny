@@ -9,6 +9,7 @@
 import {
 	toUint8Array,
 	assert,
+	isI32,
 	isU32,
 	last,
 	TransformationMatrix,
@@ -356,7 +357,8 @@ export const styp = () => box('styp', [
 
 /** Segment Index Box */
 export const sidx = (muxer: IsobmffMuxer, referencedSize: number) => {
-	let duration = muxer.maxWrittenEndTimestamp - muxer.minWrittenTimestamp;
+	const earliestPresentationTime = Math.max(0, muxer.minWrittenTimestamp);
+	let duration = Math.max(0, muxer.maxWrittenEndTimestamp - earliestPresentationTime);
 	if (!Number.isFinite(duration)) {
 		duration = 0;
 	}
@@ -364,7 +366,7 @@ export const sidx = (muxer: IsobmffMuxer, referencedSize: number) => {
 	return fullBox('sidx', 1, 0, [
 		u32(1), // Reference ID
 		u32(GLOBAL_TIMESCALE), // Timescale
-		u64(intoTimescale(muxer.minWrittenTimestamp, GLOBAL_TIMESCALE)), // Earliest presentation time
+		u64(intoTimescale(earliestPresentationTime, GLOBAL_TIMESCALE)), // Earliest presentation time
 		u64(0), // First offset
 		u16(0), // Reserved
 		u16(1), // Reference count
@@ -402,8 +404,12 @@ export const mvhd = (
 		0,
 		...trackDatas
 			.map(trackData => (
-				intoTimescale(presentationSpan(trackData), GLOBAL_TIMESCALE)
-				+ intoTimescale(trackData.startTimestampOffset ?? 0, GLOBAL_TIMESCALE)
+				// Round separately to match the edit list
+				Math.max(
+					0,
+					intoTimescale(presentationSpan(trackData), GLOBAL_TIMESCALE)
+					+ intoTimescale(trackData.startTimestampOffset ?? 0, GLOBAL_TIMESCALE),
+				)
 			)),
 	);
 	const nextTrackId = Math.max(0, ...trackDatas.map(x => x.track.id)) + 1;
@@ -459,11 +465,11 @@ const presentationSpan = (trackData: IsobmffTrackData) => {
  */
 export const trak = (trackData: IsobmffTrackData, creationTime: number) => {
 	const trackMetadata = getTrackMetadata(trackData);
-	const needsEditList = trackData.startTimestampOffset !== null && trackData.startTimestampOffset > 0;
+	const needsEditList = trackData.startTimestampOffset !== null && trackData.startTimestampOffset !== 0;
 
 	return box('trak', undefined, [
 		tkhd(trackData, creationTime),
-		needsEditList ? edts(trackData, trackData.startTimestampOffset!) : null,
+		needsEditList ? edts(trackData) : null,
 		mdia(trackData, creationTime),
 		trackMetadata.name !== undefined
 			? box('udta', undefined, [
@@ -480,8 +486,12 @@ export const tkhd = (
 	trackData: IsobmffTrackData,
 	creationTime: number,
 ) => {
-	const durationInGlobalTimescale = intoTimescale(presentationSpan(trackData), GLOBAL_TIMESCALE)
-		+ intoTimescale(trackData.startTimestampOffset ?? 0, GLOBAL_TIMESCALE);
+	// Round separately to match the edit list
+	const durationInGlobalTimescale = Math.max(
+		0,
+		intoTimescale(presentationSpan(trackData), GLOBAL_TIMESCALE)
+		+ intoTimescale(trackData.startTimestampOffset ?? 0, GLOBAL_TIMESCALE),
+	);
 
 	const needsU64 = !isU32(creationTime) || !isU32(durationInGlobalTimescale);
 	const u32OrU64 = needsU64 ? u64 : u32;
@@ -528,29 +538,63 @@ export const tkhd = (
 };
 
 /** Edit Box: Specifies edits to the track's media. */
-export const edts = (trackData: IsobmffTrackData, offset: number) => {
-	const startOffset = intoTimescale(offset, GLOBAL_TIMESCALE);
-	const mediaDuration = intoTimescale(presentationSpan(trackData), GLOBAL_TIMESCALE);
+export const edts = (trackData: IsobmffTrackData) => {
+	const offset = trackData.startTimestampOffset;
+	assert(offset !== null);
 
-	const needs64Bits = !isU32(startOffset) || !isU32(mediaDuration);
-	const u32OrU64 = needs64Bits ? u64 : u32;
-	const i32OrI64 = needs64Bits ? i64 : i32;
+	if (offset > 0) {
+		// Positive offset: empty segment at the start, then the full media afterwards
 
-	return box('edts', undefined, [
-		fullBox('elst', needs64Bits ? 1 : 0, 0, [
-			u32(2), // Entry count
+		const startOffset = intoTimescale(offset, GLOBAL_TIMESCALE);
+		const mediaDuration = intoTimescale(presentationSpan(trackData), GLOBAL_TIMESCALE);
 
-			// #1
-			u32OrU64(startOffset), // Segment duration
-			i32OrI64(-1), // Media time
-			fixed_16_16(1), // Media rate
+		const needs64Bits = !isU32(startOffset) || !isU32(mediaDuration);
+		const u32OrU64 = needs64Bits ? u64 : u32;
+		const i32OrI64 = needs64Bits ? i64 : i32;
 
-			// #2
-			u32OrU64(mediaDuration), // Segment duration
-			i32OrI64(0), // Media time
-			fixed_16_16(1), // Media rate
-		]),
-	]);
+		return box('edts', undefined, [
+			fullBox('elst', needs64Bits ? 1 : 0, 0, [
+				u32(2), // Entry count
+
+				// #1
+				u32OrU64(startOffset), // Segment duration
+				i32OrI64(-1), // Media time
+				fixed_16_16(1), // Media rate
+
+				// #2
+				u32OrU64(mediaDuration), // Segment duration
+				i32OrI64(0), // Media time
+				fixed_16_16(1), // Media rate
+			]),
+		]);
+	} else {
+		// Negative offset: the negative section of the media is trimmed off
+
+		const mediaTime = intoTimescale(-offset, trackData.timescale);
+		// Not the entire media is visible.
+		// For fragmented files, this value is zero, which simply means "unknown duration" in this case. Spec:
+		// "the segment_duration of this edit may be zero"
+		const mediaDuration = Math.max(
+			0,
+			intoTimescale(presentationSpan(trackData), GLOBAL_TIMESCALE)
+			+ intoTimescale(offset, GLOBAL_TIMESCALE),
+		);
+
+		const needs64Bits = !isI32(mediaTime) || !isU32(mediaDuration);
+		const u32OrU64 = needs64Bits ? u64 : u32;
+		const i32OrI64 = needs64Bits ? i64 : i32;
+
+		return box('edts', undefined, [
+			fullBox('elst', needs64Bits ? 1 : 0, 0, [
+				u32(1), // Entry count
+
+				// #1
+				u32OrU64(mediaDuration), // Segment duration
+				i32OrI64(mediaTime), // Media time
+				fixed_16_16(1), // Media rate
+			]),
+		]);
+	}
 };
 
 /** Media Box: Describes and define a track's media type and sample data. */
@@ -565,7 +609,7 @@ export const mdhd = (
 	trackData: IsobmffTrackData,
 	creationTime: number,
 ) => {
-	// Since the duration represents the raw media duration, edit list offsets are not taken into account here
+	// Since _this_ duration represents the raw media duration, edit list offsets are not taken into account here
 	const localDuration = intoTimescale(
 		presentationSpan(trackData),
 		trackData.timescale,

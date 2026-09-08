@@ -69,6 +69,7 @@ import { Writer } from '../writer';
 import { EncodedPacket } from '../packet';
 import { parseOpusIdentificationHeader } from '../codec-data';
 import { AttachedFile } from '../metadata';
+import { Logging } from '../logging';
 
 const MIN_CLUSTER_TIMESTAMP_MS = -(2 ** 15);
 const MAX_CLUSTER_TIMESTAMP_MS = 2 ** 15 - 1;
@@ -157,6 +158,7 @@ export class MatroskaMuxer extends Muxer {
 
 	private startTimestamp = Infinity;
 	private endTimestamp = -Infinity;
+	private warnedAboutTooNegativeTimestamp = false;
 
 	constructor(output: Output, format: MkvOutputFormat) {
 		super(output);
@@ -1191,6 +1193,15 @@ export class MatroskaMuxer extends Muxer {
 		const relativeTimestamp = msTimestamp - this.currentClusterStartMsTimestamp!;
 		if (relativeTimestamp < MIN_CLUSTER_TIMESTAMP_MS) {
 			// The block lies too far in the past, it's not representable within this cluster
+			if (!this.warnedAboutTooNegativeTimestamp) {
+				const formatName = this.format instanceof WebMOutputFormat ? 'WebM' : 'Matroska';
+				Logging._warn(
+					`Packets had to be discarded because their timestamp is too negative to represent in`
+					+ ` ${formatName}.`,
+				);
+				this.warnedAboutTooNegativeTimestamp = true;
+			}
+
 			return;
 		}
 
@@ -1253,6 +1264,8 @@ export class MatroskaMuxer extends Muxer {
 
 	/** Creates a new Cluster element to contain media chunks. */
 	private createNewCluster(msTimestamp: number) {
+		msTimestamp = Math.max(0, msTimestamp); // Cluster timestamps cannot be negative
+
 		if (this.currentCluster) {
 			this.finalizeCurrentCluster();
 		}
@@ -1313,7 +1326,7 @@ export class MatroskaMuxer extends Muxer {
 		for (const [msTimestamp, trackDatas] of groupedAndSortedByTimestamp) {
 			assert(this.cues);
 			(this.cues.data as EBML[]).push({ id: EBMLId.CuePoint, data: [
-				{ id: EBMLId.CueTime, data: msTimestamp },
+				{ id: EBMLId.CueTime, data: Math.max(0, msTimestamp) }, // CueTime is unsigned
 				// Create CueTrackPositions for each track that starts at this timestamp
 				...trackDatas.map((trackData) => {
 					return { id: EBMLId.CueTrackPositions, data: [

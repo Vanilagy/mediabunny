@@ -139,7 +139,7 @@ export type IsobmffTrackData = {
 	info: {
 		config: SubtitleConfig;
 	};
-	lastCueEndTimestamp: number;
+	lastCueEndTimestamp: number | null;
 	cueQueue: SubtitleCue[];
 	nextSourceId: number;
 	cueToSourceId: WeakMap<SubtitleCue, number>;
@@ -613,7 +613,7 @@ export class IsobmffMuxer extends Muxer {
 			compactlyCodedChunkTable: [],
 			closed: false,
 
-			lastCueEndTimestamp: 0,
+			lastCueEndTimestamp: null,
 			cueQueue: [],
 			nextSourceId: 0,
 			cueToSourceId: new WeakMap(),
@@ -790,6 +790,8 @@ export class IsobmffMuxer extends Muxer {
 		// overlapping samples require special logic. The algorithm produces the format specified in ISO 14496-30.
 
 		while (trackData.cueQueue.length > 0) {
+			trackData.lastCueEndTimestamp ??= Math.min(0, trackData.cueQueue[0]!.timestamp);
+
 			const timestamps = new Set<number>([]);
 			for (const cue of trackData.cueQueue) {
 				assert(cue.timestamp <= until);
@@ -904,10 +906,10 @@ export class IsobmffMuxer extends Muxer {
 		}
 
 		if (trackData.type === 'audio' && trackData.info.requiresPcmTransformation) {
-			if (!this.isFragmented) {
-				// The first timestamp is the lowest
-				trackData.startTimestampOffset ??= trackData.timestampProcessingQueue[0]!.timestamp;
-			}
+			assert(!this.isFragmented);
+
+			// The first timestamp is the lowest
+			trackData.startTimestampOffset ??= trackData.timestampProcessingQueue[0]!.timestamp;
 
 			let totalDuration = 0;
 
@@ -936,7 +938,9 @@ export class IsobmffMuxer extends Muxer {
 
 		const sortedTimestamps = trackData.timestampProcessingQueue.map(x => x.timestamp).sort((a, b) => a - b);
 
-		if (!this.isFragmented) {
+		if (this.isFragmented) {
+			trackData.startTimestampOffset ??= Math.min(sortedTimestamps[0]!, 0);
+		} else {
 			trackData.startTimestampOffset ??= sortedTimestamps[0]!;
 		}
 
@@ -1292,16 +1296,22 @@ export class IsobmffMuxer extends Muxer {
 		let fragmentStartTimestamp = Infinity;
 		for (let i = 0; i < tracksInFragment.length; i++) {
 			const trackData = tracksInFragment[i]!;
+			assert(trackData.currentChunk);
+			assert(trackData.startTimestampOffset !== null);
 
-			trackData.currentChunk!.offset = currentPos;
-			trackData.currentChunk!.moofOffset = moofOffset;
-			trackData.currentChunk!.trafIndex = i;
+			trackData.currentChunk.offset = currentPos;
+			trackData.currentChunk.moofOffset = moofOffset;
+			trackData.currentChunk.trafIndex = i;
+			trackData.currentChunk.startTimestamp -= trackData.startTimestampOffset;
 
-			for (const sample of trackData.currentChunk!.samples) {
+			for (const sample of trackData.currentChunk.samples) {
 				currentPos += sample.size;
+
+				sample.timestamp -= trackData.startTimestampOffset;
+				sample.decodeTimestamp -= trackData.startTimestampOffset;
 			}
 
-			fragmentStartTimestamp = Math.min(fragmentStartTimestamp, trackData.currentChunk!.startTimestamp);
+			fragmentStartTimestamp = Math.min(fragmentStartTimestamp, trackData.currentChunk.startTimestamp);
 		}
 
 		const mdatSize = currentPos - mdatStartPos;
