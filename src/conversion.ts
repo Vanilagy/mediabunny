@@ -1781,8 +1781,16 @@ export class Conversion {
 						break;
 					}
 
-					const adjustedSampleTimestamp = Math.max(0, sample.timestamp + this._timestampOffset);
-					sample.setTimestamp(adjustedSampleTimestamp);
+					const clampedStartTimestamp = Math.max(this._startTimestamp, sample.timestamp);
+					const clampedEndTimestamp = Math.min(this._endTimestamp, sample.timestamp + sample.duration);
+
+					if (clampedStartTimestamp >= clampedEndTimestamp) {
+						// Wholly out of the trim region
+						continue;
+					}
+
+					sample.setTimestamp(clampedStartTimestamp + this._timestampOffset);
+					sample.setDuration(clampedEndTimestamp - clampedStartTimestamp);
 
 					this._reportProgress(outputTrackId, sample.timestamp + sample.duration);
 					await source.add(sample);
@@ -1874,8 +1882,17 @@ export class Conversion {
 
 			if (
 				startPacket
-				&& startPacket.timestamp < this._startTimestamp
-				&& this._copyBoundaryPolicy === 'shrink'
+				&& (
+					(
+						this._copyBoundaryPolicy === 'shrink'
+						&& startPacket.timestamp < this._startTimestamp
+					)
+					|| (
+						this._copyBoundaryPolicy === 'expand'
+						// Check if packet is wholly before the start
+						&& startPacket.timestamp + startPacket.duration <= this._startTimestamp
+					)
+				)
 			) {
 				startPacket = await sink.getNextKeyPacket(startPacket);
 			}
