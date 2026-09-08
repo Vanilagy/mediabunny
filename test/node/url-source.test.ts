@@ -2,6 +2,9 @@ import { expect, test } from 'vitest';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { brotliCompressSync } from 'node:zlib';
+import { assert } from '../../src/misc.js';
+import { Reader, readBytes } from '../../src/reader.js';
 import {
 	ALL_FORMATS,
 	EncodedPacket,
@@ -224,6 +227,39 @@ test('UrlSource in sequential mode downloads lazily and aborts the response on d
 		server.close();
 	}
 }, 10_000);
+
+test('UrlSource reads the full decoded body of a compressed response', async () => {
+	const text = 'Some playlist text\n'.repeat(256);
+	const content = Buffer.from(text);
+	const compressed = brotliCompressSync(content);
+	const server = http.createServer((req, res) => {
+		res.writeHead(200, {
+			'Content-Type': 'text/plain',
+			'Content-Encoding': 'br',
+			'Content-Length': compressed.byteLength,
+		});
+		res.end(compressed);
+	});
+
+	await new Promise<void>(resolve => server.listen(0, resolve));
+
+	try {
+		const address = server.address();
+		assert(address && typeof address !== 'string');
+		const source = new UrlSource(`http://localhost:${address.port}/playlist.m3u8`);
+		using ref = source.ref();
+		const reader = new Reader(ref.source);
+
+		const slice = await reader.requestEntireFile();
+		expect(slice).not.toBeNull();
+		expect(compressed.byteLength).toBeLessThan(content.byteLength);
+		expect(slice!.length).toBe(content.byteLength);
+		expect(Buffer.from(readBytes(slice!, slice!.length)).toString()).toBe(text);
+	} finally {
+		server.closeAllConnections();
+		server.close();
+	}
+});
 
 const startRangelessServer = async (
 	options: { responseByteLimits?: number[]; trailingPaddingSize?: number } = {},

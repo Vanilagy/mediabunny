@@ -955,7 +955,13 @@ export class UrlSource extends PathedSource {
 			}
 
 			outer:
-			if (this._orchestrator.fileSize === null) {
+			if (
+				this._orchestrator.fileSize === null
+				// Content-Range/Length fields are meaningless if Content-Encoding is present. Content-Encoding is
+				// basically never used for range responses (since the encoding runs *before* the slicing), so we're set
+				// in that case.
+				&& (response.status === 206 || (response.type === 'basic' && !response.headers.has('Content-Encoding')))
+			) {
 				// See if we can deduce the file size from the response
 
 				const contentRange = response.headers.get('Content-Range');
