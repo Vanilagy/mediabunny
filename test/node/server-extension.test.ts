@@ -1223,6 +1223,28 @@ describe('Video', async () => {
 		await decoder.close();
 	});
 
+	test('No B-frames are skipped when decoding AVC', async () => {
+		using input = new Input({
+			source: new FilePathSource('./test/public/missing-reorder-metadata-v1.mp4'),
+			formats: ALL_FORMATS,
+		});
+
+		const track = await input.getPrimaryVideoTrack();
+		assert(track);
+
+		const sink = new VideoSampleSink(track, {
+			hardwareAcceleration: 'prefer-software',
+		});
+		let count = 0;
+
+		// eslint-disable-next-line @typescript-eslint/no-unused-vars
+		for await (using sample of sink.samples()) {
+			count++;
+		}
+
+		expect(count).toBe(48);
+	});
+
 	describe('VideoSample transformation', () => {
 		// 400x400 image: red everywhere, with a 200x200 blue square filling the bottom-left quadrant.
 		const TEST_IMAGE = (() => {

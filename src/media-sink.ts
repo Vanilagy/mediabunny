@@ -8,6 +8,7 @@
 
 import { parsePcmCodec, PCM_AUDIO_CODECS, PcmAudioCodec, VideoCodec, AudioCodec } from './codec';
 import {
+	addAvcBitstreamRestriction,
 	AvcNalUnitType,
 	concatAvcNalUnits,
 	deserializeAvcDecoderConfigurationRecord,
@@ -19,6 +20,7 @@ import {
 	iterateHevcNalUnits,
 	parseAvcSps,
 	sanitizeHevcPacketForChromium,
+	serializeAvcDecoderConfigurationRecord,
 } from './codec-data';
 import { CustomVideoDecoder, customVideoDecoders, CustomAudioDecoder, customAudioDecoders } from './custom-coder';
 import { InputDisposedError } from './input';
@@ -959,19 +961,31 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 
 			if (isChromium()) {
 				if (codec === 'avc' && this.decoderConfig.description) {
-					// Chromium has/had a bug with playing interlaced AVC (https://issues.chromium.org/issues/456919096)
-					// which can be worked around by requesting that software decoding be used. So, here we peek into
-					// the AVC description, if present, and switch to software decoding if we find interlaced content.
 					const record = deserializeAvcDecoderConfigurationRecord(
 						toUint8Array(this.decoderConfig.description),
 					);
 					if (record && record.sequenceParameterSets.length > 0) {
 						const sps = parseAvcSps(record.sequenceParameterSets[0]!);
-						if (sps && sps.frameMbsOnlyFlag === 0) {
-							this.decoderConfig = {
-								...this.decoderConfig,
-								hardwareAcceleration: 'prefer-software',
-							};
+						if (sps) {
+							if (sps.frameMbsOnlyFlag === 0) {
+								// Chromium has/had a bug with playing interlaced AVC
+								// (https://issues.chromium.org/issues/456919096) which can be worked around by
+								// requesting that software decoding be used. So, here we peek into the AVC description,
+								// if present, and switch to software decoding if we find interlaced content.
+								this.decoderConfig = {
+									...this.decoderConfig,
+									hardwareAcceleration: 'prefer-software',
+								};
+							}
+
+							if (sps.maxDecFrameBuffering !== 0 && sps.bitstreamRestrictionFlag !== 1) {
+								// Modify the SPS to fix potential loss of B frames
+								record.sequenceParameterSets[0] = addAvcBitstreamRestriction(sps);
+								this.decoderConfig = {
+									...this.decoderConfig,
+									description: serializeAvcDecoderConfigurationRecord(record),
+								};
+							}
 						}
 					}
 				}
@@ -1074,6 +1088,23 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 						// These trip up Chromium's key frame detection, so let's strip them
 						if (!(type >= 20 && type <= 31)) {
 							filteredNalUnits.push(packet.data.subarray(loc.offset, loc.offset + loc.length));
+						}
+					}
+
+					if (!this.decoderConfig.description) {
+						// Do SPS fixups if necessary
+						for (let i = 0; i < filteredNalUnits.length; i++) {
+							const nalUnit = filteredNalUnits[i]!;
+							if (extractNalUnitTypeForAvc(nalUnit[0]!) !== AvcNalUnitType.SPS) {
+								continue;
+							}
+
+							const sps = parseAvcSps(nalUnit);
+							if (sps && sps.maxDecFrameBuffering !== 0 && sps.bitstreamRestrictionFlag !== 1) {
+								filteredNalUnits[i] = addAvcBitstreamRestriction(sps);
+							}
+
+							break;
 						}
 					}
 
