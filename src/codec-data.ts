@@ -25,6 +25,7 @@ import {
 	isChromium,
 	popcount,
 	setUint24,
+	writeExpGolomb,
 } from './misc';
 import { Logging } from './logging';
 import { PacketType } from './packet';
@@ -180,6 +181,23 @@ const removeEmulationPreventionBytes = (data: Uint8Array) => {
 		} else {
 			result.push(data[i]!);
 		}
+	}
+
+	return new Uint8Array(result);
+};
+
+export const addEmulationPreventionBytes = (data: Uint8Array) => {
+	const result: number[] = [];
+	let zeroCount = 0;
+
+	for (const byte of data) {
+		if (zeroCount === 2 && byte <= 0x03) {
+			result.push(0x03);
+			zeroCount = 0;
+		}
+
+		result.push(byte);
+		zeroCount = byte === 0 ? zeroCount + 1 : 0;
 	}
 
 	return new Uint8Array(result);
@@ -363,12 +381,14 @@ export const serializeAvcDecoderConfigurationRecord = (record: AvcDecoderConfigu
 	}
 
 	if (
-		record.avcProfileIndication === 100
-		|| record.avcProfileIndication === 110
-		|| record.avcProfileIndication === 122
-		|| record.avcProfileIndication === 144
+		(
+			record.avcProfileIndication === 100
+			|| record.avcProfileIndication === 110
+			|| record.avcProfileIndication === 122
+			|| record.avcProfileIndication === 144
+		)
+		&& record.chromaFormat !== null // Can happen if the data was too short
 	) {
-		assert(record.chromaFormat !== null);
 		assert(record.bitDepthLumaMinus8 !== null);
 		assert(record.bitDepthChromaMinus8 !== null);
 		assert(record.sequenceParameterSetExt !== null);
@@ -485,6 +505,7 @@ export const deserializeAvcDecoderConfigurationRecord = (data: Uint8Array): AvcD
 };
 
 export type AvcSpsInfo = {
+	emulationUnpreventedBytes: Uint8Array;
 	profileIdc: number;
 	constraintFlags: number;
 	levelIdc: number;
@@ -503,6 +524,9 @@ export type AvcSpsInfo = {
 	fullRangeFlag: number;
 	numReorderFrames: number;
 	maxDecFrameBuffering: number;
+	vuiParametersFlagBitOffset: number;
+	bitstreamRestrictionFlagBitOffset: number | null;
+	bitstreamRestrictionFlag: number | null;
 };
 
 const AVC_HEVC_ASPECT_RATIO_IDC_TABLE: Partial<Record<number, Rational>> = {
@@ -527,7 +551,8 @@ const AVC_HEVC_ASPECT_RATIO_IDC_TABLE: Partial<Record<number, Rational>> = {
 /** Parses an AVC SPS (Sequence Parameter Set) to extract basic information. */
 export const parseAvcSps = (sps: Uint8Array): AvcSpsInfo | null => {
 	try {
-		const bitstream = new Bitstream(removeEmulationPreventionBytes(sps));
+		const emulationUnpreventedBytes = removeEmulationPreventionBytes(sps);
+		const bitstream = new Bitstream(emulationUnpreventedBytes);
 
 		bitstream.skipBits(1); // forbidden_zero_bit
 		bitstream.skipBits(2); // nal_ref_idc
@@ -660,7 +685,10 @@ export const parseAvcSps = (sps: Uint8Array): AvcSpsInfo | null => {
 
 		let numReorderFrames: number | null = null;
 		let maxDecFrameBuffering: number | null = null;
+		let bitstreamRestrictionFlagBitOffset: number | null = null;
+		let bitstreamRestrictionFlag: number | null = null;
 
+		const vuiParametersFlagBitOffset = bitstream.pos;
 		const vuiParametersPresentFlag = bitstream.readBits(1);
 		if (vuiParametersPresentFlag) {
 			const aspectRatioInfoPresentFlag = bitstream.readBits(1);
@@ -726,7 +754,8 @@ export const parseAvcSps = (sps: Uint8Array): AvcSpsInfo | null => {
 
 			bitstream.skipBits(1); // pic_struct_present_flag
 
-			const bitstreamRestrictionFlag = bitstream.readBits(1);
+			bitstreamRestrictionFlagBitOffset = bitstream.pos;
+			bitstreamRestrictionFlag = bitstream.readBits(1);
 			if (bitstreamRestrictionFlag) {
 				bitstream.skipBits(1); // motion_vectors_over_pic_boundaries_flag
 				readExpGolomb(bitstream); // max_bytes_per_pic_denom
@@ -776,6 +805,7 @@ export const parseAvcSps = (sps: Uint8Array): AvcSpsInfo | null => {
 		assert(maxDecFrameBuffering !== null);
 
 		return {
+			emulationUnpreventedBytes,
 			profileIdc,
 			constraintFlags,
 			levelIdc,
@@ -794,6 +824,9 @@ export const parseAvcSps = (sps: Uint8Array): AvcSpsInfo | null => {
 			fullRangeFlag,
 			numReorderFrames,
 			maxDecFrameBuffering,
+			vuiParametersFlagBitOffset,
+			bitstreamRestrictionFlagBitOffset,
+			bitstreamRestrictionFlag,
 		};
 	} catch (error) {
 		Logging._error('Error parsing AVC SPS:', error);
@@ -816,6 +849,57 @@ const skipAvcHrdParameters = (bitstream: Bitstream) => {
 	bitstream.skipBits(5); // cpb_removal_delay_length_minus1
 	bitstream.skipBits(5); // dpb_output_delay_length_minus1
 	bitstream.skipBits(5); // time_offset_length
+};
+
+/**
+ * Adds the missing "bitstream restriction" section within the VUI parameter section. This is done to communicate
+ * frame reorder buffer size to the decoder, which may otherwise, in its absence, assume no B-frames and drop or skip
+ * them.
+ * See https://github.com/Vanilagy/mediabunny/issues/488
+ */
+export const addAvcBitstreamRestriction = (sps: AvcSpsInfo) => {
+	assert(sps.bitstreamRestrictionFlag !== 1);
+
+	const modifiedBytes = new Uint8Array(sps.emulationUnpreventedBytes.byteLength + 64);
+	const oldBitstream = new Bitstream(sps.emulationUnpreventedBytes);
+	const newBitstream = new Bitstream(modifiedBytes);
+
+	if (sps.bitstreamRestrictionFlag === null) {
+		// No VUI at all; let's write a minimal one
+		newBitstream.copyBits(sps.vuiParametersFlagBitOffset, oldBitstream);
+		newBitstream.writeBits(1, 1); // vui_parameters_present_flag
+		newBitstream.writeBits(1, 0); // aspect_ratio_info_present_flag
+		newBitstream.writeBits(1, 0); // overscan_info_present_flag
+		newBitstream.writeBits(1, 0); // video_signal_type_present_flag
+		newBitstream.writeBits(1, 0); // chroma_loc_info_present_flag
+		newBitstream.writeBits(1, 0); // timing_info_present_flag
+		newBitstream.writeBits(1, 0); // nal_hrd_parameters_present_flag
+		newBitstream.writeBits(1, 0); // vcl_hrd_parameters_present_flag
+		newBitstream.writeBits(1, 0); // pic_struct_present_flag
+	} else {
+		// We have a VUI but no bitstream restriction info
+		assert(sps.bitstreamRestrictionFlagBitOffset !== null);
+		newBitstream.copyBits(sps.bitstreamRestrictionFlagBitOffset, oldBitstream);
+	}
+	newBitstream.writeBits(1, 1); // bitstream_restriction_flag
+
+	// Defaults from the H.264 spec:
+	newBitstream.writeBits(1, 1); // motion_vectors_over_pic_boundaries_flag
+	writeExpGolomb(newBitstream, 2); // max_bytes_per_pic_denom
+	writeExpGolomb(newBitstream, 1); // max_bits_per_mb_denom
+	writeExpGolomb(newBitstream, 16); // log2_max_mv_length_horizontal
+	writeExpGolomb(newBitstream, 16); // log2_max_mv_length_vertical
+	writeExpGolomb(newBitstream, sps.numReorderFrames);
+	writeExpGolomb(newBitstream, sps.maxDecFrameBuffering);
+
+	// There's nothing after this (VUI is at the end of SPS)
+	newBitstream.writeBits(1, 1); // rbsp_stop_one_bit
+	newBitstream.writeBits((8 - newBitstream.pos % 8) % 8, 0);
+
+	const byteLength = newBitstream.pos / 8;
+	assert(Number.isInteger(byteLength));
+
+	return addEmulationPreventionBytes(modifiedBytes.subarray(0, byteLength));
 };
 
 // Data specified in ISO 14496-15
@@ -2597,7 +2681,13 @@ export const readVorbisComments = (bytes: Uint8Array, metadataTags: MetadataTags
 		const value = string.slice(separatorIndex + 1);
 
 		metadataTags.raw ??= {};
-		metadataTags.raw[key] ??= value;
+		if (Array.isArray(metadataTags.raw[key])) {
+			metadataTags.raw[key] = [...metadataTags.raw[key], value];
+		} else if (typeof metadataTags.raw[key] === 'string') {
+			metadataTags.raw[key] = [metadataTags.raw[key], value];
+		} else {
+			metadataTags.raw[key] ??= value;
+		}
 
 		switch (key) {
 			case 'TITLE': {
@@ -2728,7 +2818,7 @@ export const createVorbisComments = (headerBytes: Uint8Array, tags: MetadataTags
 
 	commentHeaderParts.push(currentBuffer);
 
-	const writtenTags = new Set<string>();
+	const writtenTags: string[] = [];
 	const addCommentTag = (key: string, value: string) => {
 		const joined = `${key}=${value}`;
 		const encoded = textEncoder.encode(joined);
@@ -2740,7 +2830,7 @@ export const createVorbisComments = (headerBytes: Uint8Array, tags: MetadataTags
 		currentBuffer.set(encoded, 4);
 
 		commentHeaderParts.push(currentBuffer);
-		writtenTags.add(key);
+		writtenTags.push(key);
 	};
 
 	for (const { key, value } of keyValueIterator(tags)) {
@@ -2770,12 +2860,7 @@ export const createVorbisComments = (headerBytes: Uint8Array, tags: MetadataTags
 			}; break;
 
 			case 'date': {
-				const rawVersion = tags.raw?.['DATE'] ?? tags.raw?.['date'];
-				if (rawVersion && typeof rawVersion === 'string') {
-					addCommentTag('DATE', rawVersion);
-				} else {
-					addCommentTag('DATE', value.toISOString().slice(0, 10));
-				}
+				addCommentTag('DATE', value.toISOString().slice(0, 10));
 			}; break;
 
 			case 'comment': {
@@ -2803,8 +2888,7 @@ export const createVorbisComments = (headerBytes: Uint8Array, tags: MetadataTags
 			}; break;
 
 			case 'images': {
-				// For example, in .flac, we put the pictures in a different section,
-				// not in the Vorbis comment header.
+				// For example, in .flac, we put the pictures in a different section, not in the Vorbis comment header.
 				if (!writeImages) {
 					break;
 				}
@@ -2861,18 +2945,26 @@ export const createVorbisComments = (headerBytes: Uint8Array, tags: MetadataTags
 	if (tags.raw) {
 		for (const key in tags.raw) {
 			const value = tags.raw[key] ?? tags.raw[key.toLowerCase()];
-			if (key === 'vendor' || value == null || writtenTags.has(key)) {
+			if (key === 'vendor' || value == null || writtenTags.includes(key)) {
 				continue;
 			}
 
 			if (typeof value === 'string') {
 				addCommentTag(key, value);
+			} else if (Array.isArray(value)) {
+				// String arrays turn into the tag being repeated for each element
+				const isOnlyStrings = value.every(x => typeof x === 'string');
+				if (isOnlyStrings) {
+					for (const elem of value) {
+						addCommentTag(key, elem);
+					}
+				}
 			}
 		}
 	}
 
 	const listLengthBuffer = new Uint8Array(4);
-	toDataView(listLengthBuffer).setUint32(0, writtenTags.size, true);
+	toDataView(listLengthBuffer).setUint32(0, writtenTags.length, true);
 	commentHeaderParts.splice(2, 0, listLengthBuffer); // Insert after the header and vendor section
 
 	// Merge all comment header parts into a single buffer

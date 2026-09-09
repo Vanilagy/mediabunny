@@ -82,7 +82,11 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 			: null;
 		codecContext.sampleAspectRatio = new NodeAv.Rational(this.pixelAspectRatio.num, this.pixelAspectRatio.den);
 
-		const ret = await codecContext.open2();
+		// Honor inferred H.264 reorder buffering even when bitstream restrictions aren't explicitly signaled
+		// See https://github.com/Vanilagy/mediabunny/issues/488
+		const options = NodeAv.Dictionary.fromObject({ strict: NodeAv.FF_COMPLIANCE_STRICT });
+
+		const ret = await codecContext.open2(codec, options);
 		NodeAv.FFmpegError.throwIfError(ret, 'Open codec context');
 
 		this.codecContext = codecContext;

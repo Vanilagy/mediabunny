@@ -18,10 +18,44 @@
 		});
 
 		const track = await input.getPrimaryVideoTrack();
+		if (!track) {
+			throw new Error('The synthetic file has no video track.');
+		}
+
+		let encodedPackets = 0;
+		for await (const packet of new Mediabunny.EncodedPacketSink(track).packets()) {
+			console.log(packet.timestamp)
+			encodedPackets++;
+		}
+
+		let decodedFrames = 0;
+		let lastTimestamp = null;
+		const sink = new Mediabunny.VideoSampleSink(track, {
+			hardwareAcceleration: 'prefer-software',
+		});
+		for await (const sample of sink.samples()) {
+			console.log(sample.timestamp)
+			decodedFrames++;
+			lastTimestamp = sample.timestamp;
+			sample.close();
+		}
+
+		input.dispose();
+		const reproduced = encodedPackets === 48 && decodedFrames === 47;
+		console.log({
+			decodedFrames,
+			encodedPackets,
+			lastTimestamp,
+			reproduced,
+		});
+
+		/*
+		const track = await input.getPrimaryVideoTrack();
 		const sink = new Mediabunny.EncodedPacketSink(track);
 
 		const packet = await sink.getFirstPacket();
 		console.log(packet);
+		*/
 		/*
 
 		for await (const packet of packetSink.packets()) {

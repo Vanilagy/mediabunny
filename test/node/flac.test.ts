@@ -205,6 +205,7 @@ test('can re-mux a .flac', async () => {
 		...otherInputMetadataTags,
 		raw: {
 			...otherInputMetadataTags.raw,
+			DATE: '2020-01-01',
 			vendor: 'Mediabunny',
 		},
 		images: inputImages,

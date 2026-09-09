@@ -76,14 +76,16 @@ export type MetadataTags = {
 	 * user-defined text frames are exposed as a `Record<string, string>`.
 	 * - ADTS: The ID3v2 tags, just like in MP3.
 	 * - Ogg: The key-value string pairs from the Vorbis-style comment header (see RFC 7845, Section 5.2).
-	 * Additionally, the `'vendor'` key refers to the vendor string within this header.
+	 * Additionally, the `'vendor'` key refers to the vendor string within this header. If a key exists more than once,
+	 * a string array is used instead.
 	 * - WAVE: The individual metadata chunks within the RIFF INFO chunk. Values are always ISO 8859-1 strings.
 	 * - FLAC: The key-value string pairs from the vorbis metadata block (see RFC 9639, Section D.2.3).
-	 * Additionally, the `'vendor'` key refers to the vendor string within this header. If ID3v2 tags appear at the
-	 * start of the file, their content is stored just like for MP3.
+	 * Additionally, the `'vendor'` key refers to the vendor string within this header. If a key exists more than once,
+	 * a string array is used instead. If ID3v2 tags appear at the start of the file, their content is stored just like
+	 * for MP3.
 	 * - MPEG-TS: Not supported.
 	*/
-	raw?: Record<string, string | Uint8Array | RichImageData | AttachedFile | Record<string, string> | null>;
+	raw?: Record<string, string | string[] | Uint8Array | RichImageData | AttachedFile | Record<string, string> | null>;
 };
 
 /**
@@ -238,13 +240,14 @@ export const validateMetadataTags = (tags: MetadataTags) => {
 			if (
 				value !== null
 				&& typeof value !== 'string'
+				&& !(Array.isArray(value) && value.every(x => typeof x === 'string'))
 				&& !(value instanceof Uint8Array)
 				&& !(value instanceof RichImageData)
 				&& !(value instanceof AttachedFile)
 				&& !isRecordStringString(value)
 			) {
 				throw new TypeError(
-					'Each value in tags.raw must be a string, Uint8Array, RichImageData, AttachedFile, '
+					'Each value in tags.raw must be a string, string array, Uint8Array, RichImageData, AttachedFile, '
 					+ 'Record<string, string>, or null.',
 				);
 			}
