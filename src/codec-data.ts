@@ -2597,7 +2597,13 @@ export const readVorbisComments = (bytes: Uint8Array, metadataTags: MetadataTags
 		const value = string.slice(separatorIndex + 1);
 
 		metadataTags.raw ??= {};
-		metadataTags.raw[key] ??= value;
+		if (Array.isArray(metadataTags.raw[key])) {
+			metadataTags.raw[key] = [...metadataTags.raw[key], value];
+		} else if (typeof metadataTags.raw[key] === 'string') {
+			metadataTags.raw[key] = [metadataTags.raw[key], value];
+		} else {
+			metadataTags.raw[key] ??= value;
+		}
 
 		switch (key) {
 			case 'TITLE': {
@@ -2728,7 +2734,7 @@ export const createVorbisComments = (headerBytes: Uint8Array, tags: MetadataTags
 
 	commentHeaderParts.push(currentBuffer);
 
-	const writtenTags = new Set<string>();
+	const writtenTags: string[] = [];
 	const addCommentTag = (key: string, value: string) => {
 		const joined = `${key}=${value}`;
 		const encoded = textEncoder.encode(joined);
@@ -2740,7 +2746,7 @@ export const createVorbisComments = (headerBytes: Uint8Array, tags: MetadataTags
 		currentBuffer.set(encoded, 4);
 
 		commentHeaderParts.push(currentBuffer);
-		writtenTags.add(key);
+		writtenTags.push(key);
 	};
 
 	for (const { key, value } of keyValueIterator(tags)) {
@@ -2770,12 +2776,7 @@ export const createVorbisComments = (headerBytes: Uint8Array, tags: MetadataTags
 			}; break;
 
 			case 'date': {
-				const rawVersion = tags.raw?.['DATE'] ?? tags.raw?.['date'];
-				if (rawVersion && typeof rawVersion === 'string') {
-					addCommentTag('DATE', rawVersion);
-				} else {
-					addCommentTag('DATE', value.toISOString().slice(0, 10));
-				}
+				addCommentTag('DATE', value.toISOString().slice(0, 10));
 			}; break;
 
 			case 'comment': {
@@ -2803,8 +2804,7 @@ export const createVorbisComments = (headerBytes: Uint8Array, tags: MetadataTags
 			}; break;
 
 			case 'images': {
-				// For example, in .flac, we put the pictures in a different section,
-				// not in the Vorbis comment header.
+				// For example, in .flac, we put the pictures in a different section, not in the Vorbis comment header.
 				if (!writeImages) {
 					break;
 				}
@@ -2861,18 +2861,26 @@ export const createVorbisComments = (headerBytes: Uint8Array, tags: MetadataTags
 	if (tags.raw) {
 		for (const key in tags.raw) {
 			const value = tags.raw[key] ?? tags.raw[key.toLowerCase()];
-			if (key === 'vendor' || value == null || writtenTags.has(key)) {
+			if (key === 'vendor' || value == null || writtenTags.includes(key)) {
 				continue;
 			}
 
 			if (typeof value === 'string') {
 				addCommentTag(key, value);
+			} else if (Array.isArray(value)) {
+				// String arrays turn into the tag being repeated for each element
+				const isOnlyStrings = value.every(x => typeof x === 'string');
+				if (isOnlyStrings) {
+					for (const elem of value) {
+						addCommentTag(key, elem);
+					}
+				}
 			}
 		}
 	}
 
 	const listLengthBuffer = new Uint8Array(4);
-	toDataView(listLengthBuffer).setUint32(0, writtenTags.size, true);
+	toDataView(listLengthBuffer).setUint32(0, writtenTags.length, true);
 	commentHeaderParts.splice(2, 0, listLengthBuffer); // Insert after the header and vendor section
 
 	// Merge all comment header parts into a single buffer

@@ -1101,7 +1101,7 @@ export class Conversion {
 			const inputAndOutputFormatMatch = inputFormat.mimeType === this.output.format.mimeType;
 			const rawTagsAreUnchanged = inputTags.raw === outputTags.raw;
 
-			if (inputTags.raw && rawTagsAreUnchanged && !inputAndOutputFormatMatch) {
+			if (rawTagsAreUnchanged && !inputAndOutputFormatMatch) {
 				// If the input and output formats aren't the same, copying over raw metadata tags makes no sense and
 				// only results in junk tags, so let's cut them out.
 				delete outputTags.raw;
