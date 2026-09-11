@@ -283,6 +283,21 @@ await track.computePacketStats(50);
 ```
 This will only look at the first ~50 packets and then return the result. This is great for quickly getting an estimate of bitrate, without having to scan through the entire file. To determine a video track's frame rate, prefer using [frame rate metrics](#frame-rate-metrics) instead.
 
+### Unsupported features
+
+Some unsupported playback instructions produce warnings while Mediabunny continues reading the track. Query these cases directly to decide whether to continue or use a fallback:
+
+```ts
+const features = await track.getUnsupportedFeatures();
+// => UnsupportedTrackFeature[]
+```
+
+Currently, this reports MP4/MOV edit-list (`elst`) instructions:
+- `'multiple_edits'`: entries after the first media edit are ignored.
+- `'non_unit_playback_rate'`: a media edit with a rate other than 1 is ignored.
+
+The result belongs to the queried track and is independent of the logging configuration. It is a copy and does not change decoding or the existing best-effort behavior. This is not a complete compatibility check: parsing may stop at the first unsupported instruction, and an empty array only means no unsupported features were reported. For HLS, only the first segment containing this track is inspected.
+
 ### Video track metadata
 
 In addition to the [common track metadata](#common-track-metadata), video tracks have additional metadata you can query:
