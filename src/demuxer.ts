@@ -9,6 +9,7 @@
 import { Input } from './input';
 import { InputTrackBacking } from './input-track';
 import { MetadataTags } from './metadata';
+import { TransformationMatrix } from './misc';
 
 /**
  * Options for retrieving media duration from metadata.
@@ -36,6 +37,10 @@ export abstract class Demuxer {
 	abstract getTrackBackings(): Promise<InputTrackBacking[]>;
 	abstract getMimeType(): Promise<string>;
 	abstract getMetadataTags(): Promise<MetadataTags>;
+
+	async getTransformationMatrix(): Promise<TransformationMatrix | null> {
+		return null;
+	}
 
 	dispose() {
 		// Can be overridden

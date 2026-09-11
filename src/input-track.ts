@@ -19,6 +19,7 @@ import {
 	MaybePromise,
 	Rational,
 	Rotation,
+	TransformationMatrix,
 	roundToDivisor,
 	simplifyRational,
 } from './misc';
@@ -581,6 +582,7 @@ export interface InputVideoTrackBacking extends InputTrackBacking {
 	getMetadataDisplayWidth?(): MaybePromise<number | null>;
 	getMetadataDisplayHeight?(): MaybePromise<number | null>;
 	getRotation(): MaybePromise<Rotation>;
+	getTransformationMatrix?(): MaybePromise<TransformationMatrix | null>;
 	getColorSpace(): Promise<VideoColorSpaceInit>;
 	canBeTransparent(): Promise<boolean>;
 	getDecoderConfig(): Promise<VideoDecoderConfig | null>;
@@ -650,6 +652,23 @@ export class InputVideoTrack extends InputTrack {
 	 */
 	get codedHeight() {
 		return requireSync(this._backing.getCodedHeight(), 'codedHeight', 'getCodedHeight');
+	}
+
+	/**
+	 * Returns the track's presentation matrix, or `null` if unavailable. Currently supported for MP4/MOV,
+	 * where it maps track coordinates to movie coordinates (`tkhd`). The identity matrix means no transform;
+	 * `null` does not imply identity. Returns a copy that can be modified without affecting the track.
+	 *
+	 * This includes the rotation described by {@link InputVideoTrack.getRotation}, but can also contain scaling,
+	 * reflection, translation, or perspective. Pixel aspect ratio, cropping, and track sizing are separate.
+	 * The file-level matrix returned by {@link Input.getTransformationMatrix} is not included.
+	 *
+	 * Existing dimension and drawing APIs are unchanged. In particular, `VideoSample.draw()` and
+	 * {@link CanvasSink} already apply rotation; applying this matrix on top would apply that rotation twice.
+	 */
+	async getTransformationMatrix(): Promise<TransformationMatrix | null> {
+		const matrix = await this._backing.getTransformationMatrix?.();
+		return matrix ? [...matrix] : null;
 	}
 
 	/** Returns the angle in degrees by which the track's frames should be rotated (clockwise). */

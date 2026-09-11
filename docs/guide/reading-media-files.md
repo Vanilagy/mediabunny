@@ -310,6 +310,17 @@ await videoTrack.getRotation(); // => 0 | 90 | 180 | 270
 await videoTrack.getPixelAspectRatio(); // => { num: number, den: number }
 ```
 
+MP4 and MOV files can also store presentation matrices that describe more than rotation, including mirroring, scaling, and translation:
+```ts
+await videoTrack.getTransformationMatrix(); // => TransformationMatrix | null
+await input.getTransformationMatrix(); // => TransformationMatrix | null
+```
+The track matrix (`tkhd`) maps track coordinates to movie coordinates. The file-level matrix (`mvhd`) maps movie coordinates to display coordinates. Each method returns a copy of the stored matrix, or `null` when unavailable. An identity matrix is returned as `[1, 0, 0, 0, 1, 0, 0, 0, 1]`; `null` does not mean identity.
+
+Matrices use row-major order `[a, b, u, c, d, v, x, y, w]` and row vectors: `[X, Y, 1] * matrix`. Divide the first two resulting coordinates by the third. When composing the matrices, apply the track matrix first, then the file-level matrix.
+
+These methods expose container metadata for inspection or custom rendering. They do not change decoding or drawing behavior. Pixel aspect ratio, cropping, and track sizing are separate, so the matrices alone are not a complete mapping from decoded pixels to the displayed image. The track matrix includes rotation; `VideoSample.draw()` and `CanvasSink` already apply rotation, so applying the matrix on top would apply that rotation twice.
+
 To determine a video track's frame rate (FPS), compute its [frame rate metrics](#frame-rate-metrics).
 
 You can retrieve the track's decoder configuration, which is a `VideoDecoderConfig` from the WebCodecs API for usage within `VideoDecoder`:

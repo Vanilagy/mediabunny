@@ -32,6 +32,11 @@ export const normalizeRotation = (rotation: number) => {
 	}
 };
 
+/**
+ * A 3-by-3 transformation matrix.
+ * @group Miscellaneous
+ * @public
+ */
 export type TransformationMatrix = [number, number, number, number, number, number, number, number, number];
 
 export const last = <T>(arr: T[]) => {
