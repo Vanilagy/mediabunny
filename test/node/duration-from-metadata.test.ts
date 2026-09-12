@@ -1,9 +1,10 @@
 import { expect, test } from 'vitest';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ALL_FORMATS, Input, FilePathSource } from '../../src/index.js';
 import { assert } from '../../src/misc.js';
 
-const __dirname = new URL('.', import.meta.url).pathname;
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const publicPath = (file: string) => path.join(__dirname, '../public', file);
 
 test('MP4 ISOBMFF duration metadata', async () => {

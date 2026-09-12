@@ -1,5 +1,6 @@
 import { expect, test } from 'vitest';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ALL_FORMATS, Input, FilePathSource, EncodedPacketSink } from '../../src/index.js';
 import { findUnderlyingFrameRate } from '../../src/input-track.js';
 import { assert } from '../../src/misc.js';
@@ -160,5 +161,5 @@ const getSortedTrackTicks = async (filePath: string) => {
 	return { ticks: new Float64Array(dedupedTicks), timeResolution };
 };
 
-const __dirname = new URL('.', import.meta.url).pathname;
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const publicPath = (file: string) => path.join(__dirname, '../public', file);

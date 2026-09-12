@@ -2,6 +2,7 @@ import { expect, test } from 'vitest';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { brotliCompressSync } from 'node:zlib';
 import { assert } from '../../src/misc.js';
 import { Reader, readBytes } from '../../src/reader.js';
@@ -16,7 +17,7 @@ import {
 	UrlSource,
 } from '../../src/index.js';
 
-const __dirname = new URL('.', import.meta.url).pathname;
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const videoFilePath = path.join(__dirname, '..', 'public/video.mp4');
 
 test('UrlSource works against a server without range request support', async () => {
