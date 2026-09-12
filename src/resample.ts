@@ -85,12 +85,16 @@ export class AudioResampler {
 		} else if (sourceNum === 2 && targetNum === 4) {
 			// Stereo to Quad: L -> L, R -> R, 0 -> SL, 0 -> SR
 			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => {
-				return sourceData[sourceFrameIndex * sourceNum + targetChannelIndex]! * +(targetChannelIndex < 2);
+				return targetChannelIndex < 2
+					? sourceData[sourceFrameIndex * sourceNum + targetChannelIndex]!
+					: 0;
 			};
 		} else if (sourceNum === 2 && targetNum === 6) {
 			// Stereo to 5.1: L -> L, R -> R, 0 -> C, 0 -> LFE, 0 -> SL, 0 -> SR
 			this.channelMixer = (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => {
-				return sourceData[sourceFrameIndex * sourceNum + targetChannelIndex]! * +(targetChannelIndex < 2);
+				return targetChannelIndex < 2
+					? sourceData[sourceFrameIndex * sourceNum + targetChannelIndex]!
+					: 0;
 			};
 		} else if (sourceNum === 4 && targetNum === 1) {
 			// Quad to Mono: 0.25 * (L + R + SL + SR)
