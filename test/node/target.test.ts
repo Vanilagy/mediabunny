@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { expect, test } from 'vitest';
 import { Input } from '../../src/input.js';
 import { FilePathSource } from '../../src/source.js';
@@ -8,7 +9,7 @@ import { BufferTarget } from '../../src/target.js';
 import { Mp4OutputFormat } from '../../src/output-format.js';
 import { Conversion } from '../../src/conversion.js';
 
-const __dirname = new URL('.', import.meta.url).pathname;
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
 const samplePath = path.join(__dirname, '../public/video.mp4');
 

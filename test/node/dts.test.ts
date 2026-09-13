@@ -1,5 +1,6 @@
 import { expect, test } from 'vitest';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Input } from '../../src/input.js';
 import { BufferSource, FilePathSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
@@ -16,7 +17,7 @@ import { AudioSample } from '../../src/sample.js';
 import { canEncode, Quality } from '../../src/encode.js';
 import { registerDtsDecoder, registerDtsEncoder } from '@mediabunny/dts';
 
-const __dirname = new URL('.', import.meta.url).pathname;
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
 const DTSC_FILE = 'toothsome-dts.mp4';
 const ESDS_FILE = 'toothsome-dts-esds.mp4';

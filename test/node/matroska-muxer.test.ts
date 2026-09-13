@@ -1,5 +1,6 @@
 import { expect, test } from 'vitest';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Input } from '../../src/input.js';
 import { BufferSource, FilePathSource } from '../../src/source.js';
 import { ADTS, ALL_FORMATS } from '../../src/input-format.js';
@@ -12,7 +13,7 @@ import { assert } from '../../src/misc.js';
 import { EncodedVideoPacketSource } from '../../src/media-source.js';
 import { EncodedPacket } from '../../src/packet.js';
 
-const __dirname = new URL('.', import.meta.url).pathname;
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
 test('Matroska muxer internally converts ADTS to AAC', async () => {
 	using input = new Input({

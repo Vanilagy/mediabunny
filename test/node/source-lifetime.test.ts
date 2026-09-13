@@ -1,10 +1,11 @@
 import { expect, test } from 'vitest';
 import { FilePathSource } from '../../src/source.js';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Input } from '../../src/input.js';
 import { ALL_FORMATS, MP4 } from '../../src/input-format.js';
 
-const __dirname = new URL('.', import.meta.url).pathname;
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
 test('Direct source disposal', async () => {
 	const filePath = path.join(__dirname, '../public/video.mp4');
