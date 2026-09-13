@@ -30,6 +30,7 @@ import {
 	EventEmitter,
 	polyfillSymbolDispose,
 	removeItem,
+	TransformationMatrix,
 } from './misc';
 import { Reader } from './reader';
 import {
@@ -499,6 +500,21 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 	async getMimeType() {
 		const demuxer = await this._getDemuxer();
 		return demuxer.getMimeType();
+	}
+
+	/**
+	 * Returns the file-level presentation matrix, or `null` if unavailable. Currently supported for MP4/MOV,
+	 * where it maps movie coordinates to display coordinates (`mvhd`). The identity matrix means no transform;
+	 * `null` does not imply identity. Returns a copy that can be modified without affecting the input.
+	 *
+	 * This is container metadata, not a complete transform from decoded pixels. Track sizing, pixel aspect ratio,
+	 * and cropping are separate. Apply the track matrix before this matrix when composing the two transforms.
+	 * Reading this metadata does not change decoding, dimensions, or drawing behavior.
+	 */
+	async getTransformationMatrix(): Promise<TransformationMatrix | null> {
+		const demuxer = await this._getDemuxer();
+		const matrix = await demuxer.getTransformationMatrix();
+		return matrix ? [...matrix] : null;
 	}
 
 	/**

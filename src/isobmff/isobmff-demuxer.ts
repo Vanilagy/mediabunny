@@ -88,7 +88,7 @@ import {
 	readBoxHeader,
 	readDataBox,
 	readFixed_16_16,
-	readFixed_2_30,
+	readTransformationMatrix,
 	readIsomVariableInteger,
 	readMetadataStringShort,
 } from './isobmff-reader';
@@ -122,6 +122,7 @@ type InternalTrack = {
 	durationInMovieTimescale: number;
 	durationInMediaTimescale: number;
 	rotation: Rotation;
+	transformationMatrix: TransformationMatrix | null;
 	internalCodecId: string | null;
 	name: string | null;
 	languageCode: string;
@@ -315,6 +316,7 @@ export class IsobmffDemuxer extends Demuxer {
 	currentTrack: InternalTrack | null = null;
 	tracks: InternalTrack[] = [];
 	metadataPromise: Promise<void> | null = null;
+	movieTransformationMatrix: TransformationMatrix | null = null;
 	movieTimescale = -1;
 	movieDurationInTimescale = -1;
 	isQuickTime = false;
@@ -358,6 +360,11 @@ export class IsobmffDemuxer extends Demuxer {
 			hasAudio: this.tracks.some(x => x.info?.type === 'audio'),
 			codecStrings: codecStrings.filter(Boolean) as string[],
 		});
+	}
+
+	override async getTransformationMatrix() {
+		await this.readMetadata();
+		return this.movieTransformationMatrix;
 	}
 
 	async getMetadataTags() {
@@ -480,6 +487,7 @@ export class IsobmffDemuxer extends Demuxer {
 
 		await initDemuxer.readMetadata();
 
+		this.movieTransformationMatrix = initDemuxer.movieTransformationMatrix;
 		this.movieTimescale = initDemuxer.movieTimescale;
 		this.movieDurationInTimescale = initDemuxer.movieDurationInTimescale;
 		this.metadataTags = initDemuxer.metadataTags;
@@ -498,6 +506,7 @@ export class IsobmffDemuxer extends Demuxer {
 				durationInMediaTimescale: foreignTrack.durationInMediaTimescale,
 				durationInMovieTimescale: foreignTrack.durationInMovieTimescale,
 				rotation: foreignTrack.rotation,
+				transformationMatrix: foreignTrack.transformationMatrix,
 				internalCodecId: foreignTrack.internalCodecId,
 				name: foreignTrack.name,
 				languageCode: foreignTrack.languageCode,
@@ -834,6 +843,9 @@ export class IsobmffDemuxer extends Demuxer {
 					this.movieTimescale = readU32Be(slice);
 					this.movieDurationInTimescale = readU32Be(slice);
 				}
+
+				slice.skip(16); // Rate, volume, and reserved fields
+				this.movieTransformationMatrix = readTransformationMatrix(slice);
 			}; break;
 
 			case 'trak': {
@@ -850,6 +862,7 @@ export class IsobmffDemuxer extends Demuxer {
 					durationInMovieTimescale: -1,
 					durationInMediaTimescale: -1,
 					rotation: 0,
+					transformationMatrix: null,
 					internalCodecId: null,
 					name: null,
 					languageCode: UNDETERMINED_LANGUAGE,
@@ -913,17 +926,8 @@ export class IsobmffDemuxer extends Demuxer {
 				}
 
 				slice.skip(2 * 4 + 2 + 2 + 2 + 2);
-				const matrix: TransformationMatrix = [
-					readFixed_16_16(slice),
-					readFixed_16_16(slice),
-					readFixed_2_30(slice),
-					readFixed_16_16(slice),
-					readFixed_16_16(slice),
-					readFixed_2_30(slice),
-					readFixed_16_16(slice),
-					readFixed_16_16(slice),
-					readFixed_2_30(slice),
-				];
+				const matrix = readTransformationMatrix(slice);
+				track.transformationMatrix = matrix;
 
 				const rotation = normalizeRotation(roundToMultiple(extractRotationFromMatrix(matrix), 90));
 				assert(rotation === 0 || rotation === 90 || rotation === 180 || rotation === 270);
@@ -3420,6 +3424,10 @@ class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideo
 
 	getRotation() {
 		return this.internalTrack.rotation;
+	}
+
+	getTransformationMatrix() {
+		return this.internalTrack.transformationMatrix;
 	}
 
 	async getColorSpace(): Promise<VideoColorSpaceInit> {

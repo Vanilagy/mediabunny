@@ -7,7 +7,7 @@
  */
 
 import { RichImageData } from '../metadata';
-import { textDecoder } from '../misc';
+import { textDecoder, TransformationMatrix } from '../misc';
 import { FileSlice, readAscii, readBytes, readI32Be, readU16Be, readU32Be, readU64Be, readU8 } from '../reader';
 
 export const MIN_BOX_HEADER_SIZE = 8;
@@ -89,3 +89,16 @@ export const readDataBox = (slice: FileSlice) => {
 		default: return data;
 	}
 };
+
+/** Reads the mixed 16.16 / 2.30 fixed-point layout used by movie and track headers. */
+export const readTransformationMatrix = (slice: FileSlice): TransformationMatrix => [
+	readFixed_16_16(slice),
+	readFixed_16_16(slice),
+	readFixed_2_30(slice),
+	readFixed_16_16(slice),
+	readFixed_16_16(slice),
+	readFixed_2_30(slice),
+	readFixed_16_16(slice),
+	readFixed_16_16(slice),
+	readFixed_2_30(slice),
+];

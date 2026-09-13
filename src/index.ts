@@ -175,6 +175,7 @@ export {
 	type Rational,
 	type Rectangle,
 	type Rotation,
+	type TransformationMatrix,
 	type SetOptional,
 	type SetRequired,
 } from './misc';
