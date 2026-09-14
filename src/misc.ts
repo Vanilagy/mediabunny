@@ -98,6 +98,168 @@ export const toDataView = (source: AllowSharedBufferSource): DataView => {
 	}
 };
 
+// Include a polyfill for environments that don't have TextEncoder (like AudioWorkletGlobalScope)
+export const TextEncoder = typeof globalThis.TextEncoder !== 'undefined'
+	? globalThis.TextEncoder
+	: class TextEncoder {
+		readonly encoding = 'utf-8';
+
+		encode(input = '') {
+			// UTF-8 needs at most 3 bytes per UTF-16 code unit
+			const bytes = new Uint8Array(3 * input.length);
+			let n = 0;
+
+			for (let i = 0; i < input.length; i++) {
+				let c = input.charCodeAt(i);
+				if (c < 0x80) {
+					bytes[n++] = c;
+				} else if (c < 0x800) {
+					bytes[n++] = 0xc0 | (c >> 6);
+					bytes[n++] = 0x80 | (c & 63);
+				} else if (c < 0xd800 || c > 0xdfff) {
+					bytes[n++] = 0xe0 | (c >> 12);
+					bytes[n++] = 0x80 | ((c >> 6) & 63);
+					bytes[n++] = 0x80 | (c & 63);
+				} else {
+					const next = i + 1 < input.length ? input.charCodeAt(i + 1) : 0;
+					if (c < 0xdc00 && next >= 0xdc00 && next <= 0xdfff) {
+						c = 0x10000 + ((c - 0xd800) << 10) + (next - 0xdc00);
+						i++;
+						bytes[n++] = 0xf0 | (c >> 18);
+						bytes[n++] = 0x80 | ((c >> 12) & 63);
+						bytes[n++] = 0x80 | ((c >> 6) & 63);
+						bytes[n++] = 0x80 | (c & 63);
+					} else {
+						bytes[n++] = 0xef;
+						bytes[n++] = 0xbf;
+						bytes[n++] = 0xbd;
+					}
+				}
+			}
+
+			return bytes.slice(0, n);
+		}
+	};
+
+// Include a polyfill for environments that don't have TextEncoder (like AudioWorkletGlobalScope)
+export const TextDecoder = typeof globalThis.TextDecoder !== 'undefined'
+	? globalThis.TextDecoder
+	: class TextDecoder {
+		readonly encoding: 'utf-8' | 'utf-16le' | 'utf-16be';
+
+		constructor(label = 'utf-8') {
+			const normalized = label.trim().toLowerCase();
+			if (normalized === 'utf-8' || normalized === 'utf8' || normalized === 'unicode-1-1-utf-8') {
+				this.encoding = 'utf-8';
+			} else if (normalized === 'utf-16le' || normalized === 'utf-16') {
+				this.encoding = 'utf-16le';
+			} else if (normalized === 'utf-16be') {
+				this.encoding = 'utf-16be';
+			} else {
+				throw new RangeError(`The encoding label provided ('${label}') is invalid.`);
+			}
+		}
+
+		decode(input?: AllowSharedBufferSource) {
+			const bytes = input ? toUint8Array(input) : new Uint8Array(0);
+			const units: number[] = [];
+
+			if (this.encoding === 'utf-8') {
+				let i = bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? 3 : 0;
+
+				while (i < bytes.length) {
+					const lead = bytes[i]!;
+					if (lead < 0x80) {
+						units.push(lead);
+						i++;
+						continue;
+					}
+
+					let continuationCount: number;
+					let codePoint: number;
+					if (lead >= 0xc2 && lead < 0xe0) {
+						continuationCount = 1;
+						codePoint = lead & 0x1f;
+					} else if (lead >= 0xe0 && lead < 0xf0) {
+						continuationCount = 2;
+						codePoint = lead & 0x0f;
+					} else if (lead >= 0xf0 && lead < 0xf5) {
+						continuationCount = 3;
+						codePoint = lead & 0x07;
+					} else {
+						units.push(0xfffd);
+						i++;
+						continue;
+					}
+
+					let lowerBound = lead === 0xe0 ? 0xa0 : lead === 0xf0 ? 0x90 : 0x80;
+					let upperBound = lead === 0xed ? 0x9f : lead === 0xf4 ? 0x8f : 0xbf;
+
+					let j = 1;
+					for (; j <= continuationCount; j++) {
+						const byte = i + j < bytes.length ? bytes[i + j]! : 0;
+						if (byte < lowerBound || byte > upperBound) {
+							break;
+						}
+						codePoint = (codePoint << 6) | (byte & 0x3f);
+						lowerBound = 0x80;
+						upperBound = 0xbf;
+					}
+
+					i += j;
+
+					if (j <= continuationCount) {
+						units.push(0xfffd);
+					} else if (codePoint >= 0x10000) {
+						codePoint -= 0x10000;
+						units.push(0xd800 | (codePoint >> 10), 0xdc00 | (codePoint & 0x3ff));
+					} else {
+						units.push(codePoint);
+					}
+				}
+			} else {
+				const littleEndian = this.encoding === 'utf-16le';
+				const bomLow = littleEndian ? 0xff : 0xfe;
+				const bomHigh = littleEndian ? 0xfe : 0xff;
+				let i = bytes.length >= 2 && bytes[0] === bomLow && bytes[1] === bomHigh ? 2 : 0;
+
+				while (i + 1 < bytes.length) {
+					const unit = littleEndian
+						? bytes[i]! | (bytes[i + 1]! << 8)
+						: (bytes[i]! << 8) | bytes[i + 1]!;
+					i += 2;
+
+					if (unit >= 0xd800 && unit <= 0xdbff) {
+						const next = i + 1 < bytes.length
+							? (littleEndian ? bytes[i]! | (bytes[i + 1]! << 8) : (bytes[i]! << 8) | bytes[i + 1]!)
+							: -1;
+						if (next >= 0xdc00 && next <= 0xdfff) {
+							units.push(unit, next);
+							i += 2;
+						} else {
+							units.push(0xfffd);
+						}
+					} else if (unit >= 0xdc00 && unit <= 0xdfff) {
+						units.push(0xfffd);
+					} else {
+						units.push(unit);
+					}
+				}
+
+				if (i < bytes.length) {
+					units.push(0xfffd); // Dangling odd byte
+				}
+			}
+
+			let result = '';
+			for (let i = 0; i < units.length; i += 8192) {
+				result += String.fromCharCode(...units.slice(i, i + 8192));
+			}
+
+			return result;
+		}
+	};
+
 export const textDecoder = /* #__PURE__ */ new TextDecoder();
 export const textEncoder = /* #__PURE__ */ new TextEncoder();
 
