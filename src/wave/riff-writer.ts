@@ -6,6 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { textEncoder } from '../misc';
 import { Writer } from '../writer';
 
 export class RiffWriter {
@@ -31,6 +32,6 @@ export class RiffWriter {
 	}
 
 	writeAscii(text: string) {
-		this.writer.write(new TextEncoder().encode(text));
+		this.writer.write(textEncoder.encode(text));
 	}
 }
