@@ -100,7 +100,7 @@ Alternatively, include it directly with a script tag using one of the [builds](h
 <script src="mediabunny.cjs"></script>
 ```
 
-Requires any JavaScript environment that can run ECMAScript 2021 or later. Mediabunny is expected to be run in modern browsers. For types, TypeScript 5.7 or later is required.
+Requires any JavaScript environment that can run ECMAScript 2021 or later. Mediabunny is expected to be run in modern browsers. For types, TypeScript 5.8 or later is required.
 
 ### Read file metadata
 

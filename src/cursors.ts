@@ -1378,6 +1378,7 @@ export class WrappedCanvas {
 
 /**
  * Options for constructing a canvas transformer to be used with {@link VideoSampleCursor}.
+ * @group Media sinks
  * @public
  */
 export type CanvasTransformerOptions = {
