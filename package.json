@@ -13,7 +13,10 @@
   "types": "./dist/modules/src/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/modules/src/index.d.ts",
+      "types": {
+        "import": "./dist/modules/src/index.d.ts",
+        "require": "./dist/mediabunny.d.cts"
+      },
       "browser": {
         "import": "./dist/modules/src/index.js",
         "require": "./dist/bundles/mediabunny.cjs"
@@ -77,7 +80,7 @@
   },
   "dependencies": {
     "@types/dom-mediacapture-transform": "^0.1.11",
-    "@types/dom-webcodecs": "0.1.13"
+    "@types/dom-webcodecs": "0.1.19"
   },
   "devDependencies": {
     "@eslint/js": "^9.22.0",

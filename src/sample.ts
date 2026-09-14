@@ -40,7 +40,7 @@ polyfillSymbolDispose();
 // Patch the type
 declare global {
 	interface VideoFrame {
-		rotation?: number;
+		readonly rotation?: number;
 	}
 
 	interface VideoFrameInit {

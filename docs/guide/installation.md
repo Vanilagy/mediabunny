@@ -22,7 +22,7 @@ bun add mediabunny
 :::
 
 ::: info
-Requires any JavaScript environment that can run ECMAScript 2021 or later. Mediabunny is expected to be run in modern browsers. For types, TypeScript 5.7 or later is required.
+Requires any JavaScript environment that can run ECMAScript 2021 or later. Mediabunny is expected to be run in modern browsers. For types, TypeScript 5.8 or later is required.
 :::
 
 Then, simply import it like this:

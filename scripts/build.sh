@@ -77,3 +77,6 @@ echo 'export as namespace MediabunnyAacEncoder;' >> packages/aac-encoder/dist/me
 echo 'export as namespace MediabunnyFlacEncoder;' >> packages/flac-encoder/dist/mediabunny-flac-encoder.d.ts
 echo 'export as namespace MediabunnyProres;' >> packages/prores/dist/mediabunny-prores.d.ts
 echo 'export as namespace MediabunnyServer;' >> packages/server/dist/mediabunny-server.d.ts
+
+# Copy the declarations for CommonJS consumers
+cp dist/mediabunny.d.ts dist/mediabunny.d.cts
