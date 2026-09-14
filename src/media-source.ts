@@ -82,6 +82,10 @@ export abstract class MediaSource {
 	/** @internal */
 	_closed = false;
 
+	get codec(): MediaCodec {
+		return this._codec;
+	}
+
 	/** @internal */
 	_ensureValidAdd() {
 		if (!this._connectedTrack) {
@@ -140,8 +144,11 @@ export abstract class MediaSource {
 				return;
 			}
 
-			connectedTrack.output._muxer.onTrackClose(connectedTrack);
+			await connectedTrack.output._muxer.onTrackClose(connectedTrack);
 		})();
+
+		// We'll report close failures when finalizing; don't leave an unhandled rejection until then
+		void this._closingPromise.catch(() => {});
 	}
 
 	/** @internal */
@@ -159,6 +166,10 @@ export abstract class MediaSource {
  * @public
  */
 export abstract class VideoSource extends MediaSource {
+	override get codec(): VideoCodec {
+		return this._codec;
+	}
+
 	/** @internal */
 	override _connectedTrack: OutputVideoTrack | null = null;
 	/** @internal */
@@ -1676,6 +1687,10 @@ export class MediaStreamVideoTrackSource extends VideoSource {
  * @public
  */
 export abstract class AudioSource extends MediaSource {
+	override get codec(): AudioCodec {
+		return this._codec;
+	}
+
 	/** @internal */
 	override _connectedTrack: OutputAudioTrack | null = null;
 	/** @internal */
@@ -2837,6 +2852,10 @@ const sendMessageToMediaStreamTrackProcessorWorker = (
  * @public
  */
 export abstract class SubtitleSource extends MediaSource {
+	override get codec(): SubtitleCodec {
+		return this._codec;
+	}
+
 	/** @internal */
 	override _connectedTrack: OutputSubtitleTrack | null = null;
 	/** @internal */

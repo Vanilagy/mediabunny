@@ -252,6 +252,7 @@ export {
 	EncodedPacket,
 	type EncodedPacketSideData,
 	type PacketType,
+	type PacketRetrievalOptions,
 	PacketReader,
 } from './packet';
 export {
@@ -304,5 +305,47 @@ export {
 	AttachedFile,
 	type TrackDisposition,
 } from './metadata';
+export {
+	CustomInputFormat,
+	CustomOutputFormat,
+	type DemuxerReader,
+	type DemuxerContext,
+	type BaseCustomTrack,
+	type CustomVideoTrack,
+	type CustomAudioTrack,
+	type CustomTrack,
+	type CustomDemuxer,
+	type MuxerContext,
+	type CustomMuxer,
+} from './custom-container';
+export {
+	type FileSlice,
+	readBytes,
+	readU8,
+	readU16,
+	readU16Be,
+	readU24Be,
+	readI16Be,
+	readU32,
+	readU32Be,
+	readU32Le,
+	readI32Be,
+	readI32Le,
+	readU64,
+	readU64Be,
+	readI64Be,
+	readI64Le,
+	readF32Be,
+	readF64Be,
+	readAscii,
+} from './reader';
+export {
+	type MuxerWriter,
+} from './writer';
+export {
+	type SubtitleCue,
+	type SubtitleConfig,
+	type SubtitleMetadata,
+} from './subtitles';
 
 // 🐡🦔

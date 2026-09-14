@@ -10,6 +10,8 @@ An _output format_ specifies the container format of the data written by an `Out
 
 Many formats also offer *data callbacks*, which are special callbacks that fire for specific data regions in the output file.
 
+To write a format Mediabunny doesn't ship with, see [Custom containers](./custom-containers).
+
 ### Output format properties
 
 All output formats have a common set of properties you can query.

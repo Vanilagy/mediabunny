@@ -146,13 +146,23 @@ export class Reader {
 }
 
 export class FileSlice {
-	/** The current position in the backing buffer. Do not modify directly, prefer `.skip()` instead. */
+	/**
+	 * The current position in the backing buffer. Do not modify directly, prefer `.skip()` instead.
+	 * @internal
+	 */
 	bufferPos: number;
 
+	/** @internal */
 	constructor(
-		/** The underlying bytes backing this slice. Avoid using this directly and prefer reader functions instead. */
+		/**
+		 * The underlying bytes backing this slice. Avoid using this directly and prefer reader functions instead.
+		 * @internal
+		 */
 		public readonly bytes: Uint8Array,
-		/** A view into the bytes backing this slice. Avoid using this directly and prefer reader functions instead. */
+		/**
+		 * A view into the bytes backing this slice. Avoid using this directly and prefer reader functions instead.
+		 * @internal
+		 */
 		public readonly view: DataView,
 		/** The offset in "file bytes" at which `bytes` begins in the file. */
 		private readonly offset: number,
@@ -164,6 +174,7 @@ export class FileSlice {
 		this.bufferPos = start - offset;
 	}
 
+	/** @internal */
 	static tempFromBytes(bytes: Uint8Array) {
 		return new FileSlice(
 			bytes,
@@ -183,6 +194,10 @@ export class FileSlice {
 	}
 
 	set filePos(value: number) {
+		if (!Number.isSafeInteger(value)) {
+			throw new TypeError('value must be a safe integer.');
+		}
+
 		this.bufferPos = value - this.offset;
 	}
 
@@ -192,11 +207,21 @@ export class FileSlice {
 	}
 
 	skip(byteCount: number) {
+		if (!Number.isSafeInteger(byteCount)) {
+			throw new TypeError('byteCount must be a safe integer.');
+		}
+
 		this.bufferPos += byteCount;
 	}
 
 	/** Creates a new subslice of this slice whose byte range must be contained within this slice. */
 	slice(filePos: number, length = this.end - filePos) {
+		if (!Number.isSafeInteger(filePos)) {
+			throw new TypeError('filePos must be a safe integer.');
+		}
+		if (!Number.isSafeInteger(length) || length < 0) {
+			throw new TypeError('length must be a non-negative safe integer.');
+		}
 		if (filePos < this.start || filePos + length > this.end) {
 			throw new RangeError('Slicing outside of original slice.');
 		}
@@ -212,11 +237,13 @@ export class FileSlice {
 }
 
 const checkIsInRange = (slice: FileSlice, bytesToRead: number) => {
+	if (!Number.isSafeInteger(bytesToRead) || bytesToRead < 0) {
+		throw new TypeError('bytesToRead must be a non-negative safe integer.');
+	}
 	if (slice.filePos < slice.start || slice.filePos + bytesToRead > slice.end) {
 		throw new RangeError(
 			`Tried reading [${slice.filePos}, ${slice.filePos + bytesToRead}), but slice is`
-			+ ` [${slice.start}, ${slice.end}). This is likely an internal error, please report it alongside the file`
-			+ ` that caused it.`,
+			+ ` [${slice.start}, ${slice.end}).`,
 		);
 	}
 };
