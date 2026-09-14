@@ -357,6 +357,10 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 		return this.delegate(() => this.firstInputTrack!._backing.getAverageBitrate());
 	}
 
+	getUnsupportedFeatures() {
+		return this.delegate(() => this.firstInputTrack!.getUnsupportedFeatures());
+	}
+
 	getDurationFromMetadata(options: DurationMetadataRequestOptions): Promise<number | null> {
 		return this.segmentedInput.getDurationFromMetadata(options);
 	}

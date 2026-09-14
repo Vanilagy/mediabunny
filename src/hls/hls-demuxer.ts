@@ -771,6 +771,11 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 		return this.internalTrack.averageBitrate;
 	}
 
+	async getUnsupportedFeatures() {
+		await this.hydrate();
+		return await this.internalTrack.backingTrack!.getUnsupportedFeatures?.() ?? [];
+	}
+
 	async getDurationFromMetadata(options: DurationMetadataRequestOptions): Promise<number | null> {
 		await this.hydrate();
 		return this.internalTrack.backingTrack!.getDurationFromMetadata(options);
