@@ -816,7 +816,9 @@ export class InputVideoTrack extends InputTrack {
 		}
 
 		const decoderConfig = await this.getDecoderConfig();
-		assert(decoderConfig);
+		if (!decoderConfig) {
+			return null; // Nothing to inspect the packet with, so the demuxer's word stands
+		}
 
 		return determineVideoPacketType(codec, decoderConfig, packet.data);
 	}

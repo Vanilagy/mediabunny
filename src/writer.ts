@@ -83,7 +83,7 @@ export class Writer {
 			}
 
 			data = data.subarray(this.trackedStart - pos);
-			pos = 0;
+			pos = this.trackedStart;
 		}
 
 		const neededSize = pos + data.byteLength - this.trackedStart;
@@ -126,3 +126,31 @@ export class Writer {
 		return result;
 	}
 }
+
+/**
+ * A writer for custom muxers. Call flush regularly to apply backpressure. After the muxer finalizes and disposes
+ * successfully, the output flushes and finalizes this writer.
+ * @group Custom containers
+ * @public
+ */
+export type MuxerWriter = {
+	/** Returns the current write position in bytes. */
+	getPos(): number;
+	/** Writes bytes at the current position and advances it. */
+	write(data: Uint8Array): void;
+	/** Sets the write position. Writers declared monotonic must not seek backwards. */
+	seek(position: number): void;
+	/** Flushes pending writes to the target. */
+	flush(): Promise<void>;
+	/** Starts capturing writes for use in header or data callbacks. */
+	startTrackingWrites(): void;
+	/** Stops capturing writes and returns their bytes and file range. */
+	stopTrackingWrites(): {
+		/** The captured bytes. */
+		data: Uint8Array;
+		/** The start of the captured range. */
+		start: number;
+		/** The end of the captured range. */
+		end: number;
+	};
+};

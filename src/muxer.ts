@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { AsyncMutex } from './misc';
+import { AsyncMutex, MaybePromise } from './misc';
 import { Output, OutputAudioTrack, OutputSubtitleTrack, OutputTrack, OutputVideoTrack } from './output';
 import { EncodedPacket } from './packet';
 import { SubtitleCue, SubtitleMetadata } from './subtitles';
@@ -35,7 +35,11 @@ export abstract class Muxer {
 	abstract finalize(): Promise<void>;
 
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
-	onTrackClose(track: OutputTrack) {}
+	onTrackClose(track: OutputTrack): MaybePromise<void> {}
+
+	async dispose() {
+		// Can be overridden
+	}
 
 	private trackTimestampInfo = new WeakMap<OutputTrack, {
 		maxTimestamp: number;

@@ -18,6 +18,7 @@
     "Codecs": "Codecs understood by Mediabunny.",
     "Encoding": "Encoder configuration and encodability checks.",
 	"Decoding": "Decoder configuration and decodability checks.",
+    "Custom containers": "API for adding custom demuxers and muxers.",
     "Custom coders": "API for adding custom encoders and decoders.",
     "Logging": "Control over what Mediabunny logs to the console.",
     "Miscellaneous": "Whatever's left.",
