@@ -1041,6 +1041,12 @@ export const canEncodeVideo = async (
 		quality?: Quality;
 		/** @deprecated Use `quality` instead. */
 		bitrate?: number | Quality;
+		/** Expected frame rate; must be finite and positive when provided. */
+		framerate?: number;
+		/**
+		 * Only queries native support when set to `'config-only'`, bypassing custom encoders, probes, and memoization.
+		 */
+		checkMode?: 'auto' | 'config-only';
 	} & VideoEncodingAdditionalOptions = {},
 ) => {
 	const {
@@ -1049,6 +1055,8 @@ export const canEncodeVideo = async (
 		quality,
 		// eslint-disable-next-line @typescript-eslint/no-deprecated
 		bitrate,
+		framerate,
+		checkMode = 'auto',
 		...restOptions
 	} = options;
 
@@ -1070,6 +1078,12 @@ export const canEncodeVideo = async (
 	if (bitrate !== undefined && !(bitrate instanceof Quality) && (!Number.isInteger(bitrate) || bitrate <= 0)) {
 		throw new TypeError('bitrate must be a positive integer or a quality.');
 	}
+	if (framerate !== undefined && (!Number.isFinite(framerate) || framerate <= 0)) {
+		throw new TypeError('framerate, when provided, must be a finite positive number.');
+	}
+	if (checkMode !== 'auto' && checkMode !== 'config-only') {
+		throw new TypeError('checkMode must be \'auto\' or \'config-only\'.');
+	}
 	validateVideoEncodingAdditionalOptions(codec, restOptions);
 
 	const resolvedQuality = resolveQuality(quality, bitrate) ?? new Quality('medium');
@@ -1081,13 +1095,31 @@ export const canEncodeVideo = async (
 			width,
 			height,
 			quality: resolvedQuality,
-			framerate: undefined,
+			framerate,
 			...restOptions,
 			alpha: 'discard', // Since we handle alpha ourselves
 		});
 	} catch {
 		// The requested rate control cannot be used with this codec (e.g. a quantizer with no fallback bitrate on a
 		// codec without quantizer support)
+		return false;
+	}
+
+	if (checkMode === 'config-only') {
+		if (typeof VideoEncoder === 'undefined') {
+			return false;
+		}
+		if ((width % 2 === 1 || height % 2 === 1) && (codec === 'avc' || codec === 'hevc')) {
+			return false;
+		}
+
+		for (const { config } of candidates) {
+			const support = await VideoEncoder.isConfigSupported(config);
+			if (support.supported === true) {
+				return true;
+			}
+		}
+
 		return false;
 	}
 
@@ -1314,13 +1346,7 @@ export const getEncodableCodecs = async (): Promise<MediaCodec[]> => {
  */
 export const getEncodableVideoCodecs = async (
 	checkedCodecs: VideoCodec[] = VIDEO_CODECS as unknown as VideoCodec[],
-	options?: {
-		width?: number;
-		height?: number;
-		quality?: Quality;
-		/** @deprecated Use `quality` instead. */
-		bitrate?: number | Quality;
-	},
+	options?: Parameters<typeof canEncodeVideo>[1],
 ): Promise<VideoCodec[]> => {
 	const bools = await Promise.all(checkedCodecs.map(codec => canEncodeVideo(codec, options)));
 	return checkedCodecs.filter((_, i) => bools[i]);
@@ -1364,13 +1390,7 @@ export const getEncodableSubtitleCodecs = async (
  */
 export const getFirstEncodableVideoCodec = async (
 	checkedCodecs: VideoCodec[],
-	options?: {
-		width?: number;
-		height?: number;
-		quality?: Quality;
-		/** @deprecated Use `quality` instead. */
-		bitrate?: number | Quality;
-	},
+	options?: Parameters<typeof canEncodeVideo>[1],
 ): Promise<VideoCodec | null> => {
 	for (const codec of checkedCodecs) {
 		if (await canEncodeVideo(codec, options)) {
