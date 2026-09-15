@@ -15,6 +15,129 @@ import { EncodedPacket } from '../../src/packet.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
+const findBytes = (haystack: Uint8Array, needle: Uint8Array) => {
+	for (let i = 0; i <= haystack.length - needle.length; i++) {
+		if (needle.every((byte, j) => haystack[i + j] === byte)) {
+			return i;
+		}
+	}
+
+	return -1;
+};
+
+const findBoxPayload = (bytes: Uint8Array, type: string) => {
+	const typeOffset = findBytes(bytes, new TextEncoder().encode(type));
+	if (typeOffset < 4) {
+		return null;
+	}
+
+	const size = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(typeOffset - 4);
+	return bytes.subarray(typeOffset + 4, typeOffset - 4 + size);
+};
+
+const createEmptyVideoMp4 = async (bitrate?: number) => {
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	output.addVideoTrack(new EncodedVideoPacketSource('vp9'), {
+		bitrate,
+		decoderConfig: {
+			codec: 'vp09.00.10.08',
+			codedWidth: 1280,
+			codedHeight: 720,
+		},
+	});
+
+	await output.start();
+	await output.finalize();
+
+	return new Uint8Array(output.target.buffer!);
+};
+
+const createEmptyAacMp4 = async (bitrate?: number) => {
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	output.addAudioTrack(new EncodedAudioPacketSource('aac'), {
+		bitrate,
+		decoderConfig: {
+			codec: 'mp4a.40.2',
+			sampleRate: 44100,
+			numberOfChannels: 2,
+			description: new Uint8Array([0x12, 0x10]),
+		},
+	});
+
+	await output.start();
+	await output.finalize();
+
+	return new Uint8Array(output.target.buffer!);
+};
+
+test('Track bitrate metadata must be a positive 32-bit unsigned integer', () => {
+	const invalidBitrates = [0, -1, 1.5, 0x1_0000_0000, Number.NaN, Number.POSITIVE_INFINITY];
+
+	for (const bitrate of invalidBitrates) {
+		const videoOutput = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
+		expect(() => videoOutput.addVideoTrack(new EncodedVideoPacketSource('vp9'), { bitrate }))
+			.toThrow('metadata.bitrate, when provided, must be a positive 32-bit unsigned integer.');
+
+		const audioOutput = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
+		expect(() => audioOutput.addAudioTrack(new EncodedAudioPacketSource('aac'), { bitrate }))
+			.toThrow('metadata.bitrate, when provided, must be a positive 32-bit unsigned integer.');
+	}
+
+	const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
+	expect(() => output.addVideoTrack(new EncodedVideoPacketSource('vp9'), { bitrate: 0xffff_ffff }))
+		.not.toThrow();
+});
+
+test('ISOBMFF video bitrate metadata writes an exact btrt box', async () => {
+	const bitrate = 3_000_000;
+	const bytes = await createEmptyVideoMp4(bitrate);
+
+	expect(findBoxPayload(bytes, 'btrt')).toEqual(new Uint8Array([
+		0x00, 0x00, 0x00, 0x00, // Decoder buffer size is unknown
+		0x00, 0x2d, 0xc6, 0xc0, // Maximum bitrate
+		0x00, 0x2d, 0xc6, 0xc0, // Average bitrate
+	]));
+});
+
+test('ISOBMFF video omits btrt when bitrate metadata is absent', async () => {
+	const bytes = await createEmptyVideoMp4();
+
+	expect(findBoxPayload(bytes, 'btrt')).toBeNull();
+});
+
+test('ISOBMFF AAC esds writes bitrate metadata into maximum and average bitrate', async () => {
+	const bitrate = 192_000;
+	const bytes = await createEmptyAacMp4(bitrate);
+	const decoderConfigOffset = findBytes(bytes, new Uint8Array([0x40, 0x15, 0x00, 0x00, 0x00]));
+
+	expect(decoderConfigOffset).toBeGreaterThanOrEqual(0);
+	expect(bytes.subarray(decoderConfigOffset, decoderConfigOffset + 13)).toEqual(new Uint8Array([
+		0x40, 0x15, 0x00, 0x00, 0x00,
+		0x00, 0x02, 0xee, 0x00, // Maximum bitrate
+		0x00, 0x02, 0xee, 0x00, // Average bitrate
+	]));
+});
+
+test('ISOBMFF AAC esds keeps zero bitrates when metadata is absent', async () => {
+	const bytes = await createEmptyAacMp4();
+	const decoderConfigOffset = findBytes(bytes, new Uint8Array([0x40, 0x15, 0x00, 0x00, 0x00]));
+
+	expect(decoderConfigOffset).toBeGreaterThanOrEqual(0);
+	expect(bytes.subarray(decoderConfigOffset, decoderConfigOffset + 13)).toEqual(new Uint8Array([
+		0x40, 0x15, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00,
+	]));
+});
+
 test('ISOBMFF muxer internally converts ADTS to AAC', async () => {
 	using input = new Input({
 		source: new FilePathSource(path.join(__dirname, '../public/sample3.aac')),
