@@ -62,6 +62,8 @@ import {
 	buildAudioEncoderConfig,
 	buildQuantizerEncodeOptions,
 	buildVideoEncoderConfigs,
+	EncoderErrorStage,
+	EncoderSupportEvent,
 	resolveQuality,
 	validateAudioEncodingConfig,
 	validateVideoEncodingConfig,
@@ -225,6 +227,99 @@ export class EncodedVideoPacketSource extends VideoSource {
 		return this._connectedTrack!.output._muxer.addEncodedVideoPacket(this._connectedTrack!, packet, meta);
 	}
 }
+
+const notifyNativeEncoderError = (
+	observer: ((error: unknown, stage: EncoderErrorStage) => void) | undefined,
+	error: unknown,
+	stage: EncoderErrorStage,
+) => {
+	try {
+		observer?.(error, stage);
+	} catch {
+		// Observers cannot change encoder behavior.
+	}
+};
+
+const runNativeEncoderOperation = <T>(
+	observer: ((error: unknown, stage: EncoderErrorStage) => void) | undefined,
+	stage: EncoderErrorStage,
+	operation: () => T,
+): T => {
+	try {
+		return operation();
+	} catch (error) {
+		notifyNativeEncoderError(observer, error, stage);
+		throw error;
+	}
+};
+
+const createNativeVideoEncoder = (
+	observer: ((error: unknown, stage: EncoderErrorStage) => void) | undefined,
+	init: VideoEncoderInit,
+) => runNativeEncoderOperation(observer, 'create', () => new VideoEncoder(init));
+
+const createNativeAudioEncoder = (
+	observer: ((error: unknown, stage: EncoderErrorStage) => void) | undefined,
+	init: AudioEncoderInit,
+) => runNativeEncoderOperation(observer, 'create', () => new AudioEncoder(init));
+
+const flushNativeEncoder = async (
+	observer: ((error: unknown, stage: EncoderErrorStage) => void) | undefined,
+	operation: () => Promise<void> | undefined,
+) => {
+	try {
+		await operation();
+	} catch (error) {
+		notifyNativeEncoderError(observer, error, 'flush');
+		throw error;
+	}
+};
+
+const notifyNativeEncoderSupport = <Config extends VideoEncoderConfig | AudioEncoderConfig>(
+	observer: ((config: Readonly<Config>, event: EncoderSupportEvent) => void) | undefined,
+	config: Config,
+	event: EncoderSupportEvent,
+) => {
+	if (!observer) {
+		return;
+	}
+
+	try {
+		// Native config fields are scalars or one-level codec option dictionaries.
+		const snapshot = Object.fromEntries(Object.entries(config).map(([key, value]) => [
+			key,
+			value !== null && typeof value === 'object' ? { ...value } : value,
+		])) as Config;
+		observer(snapshot, event);
+	} catch {
+		// Observers cannot change the query or its outcome.
+	}
+};
+
+const queryNativeEncoderSupport = async <Config extends VideoEncoderConfig | AudioEncoderConfig>(
+	observer: ((config: Readonly<Config>, event: EncoderSupportEvent) => void) | undefined,
+	config: Config,
+	query: () => Promise<{ supported?: boolean }>,
+	createUnsupportedError: () => Error,
+) => {
+	notifyNativeEncoderSupport(observer, config, { status: 'started' });
+
+	let support: { supported?: boolean };
+	try {
+		support = await query();
+	} catch (error) {
+		notifyNativeEncoderSupport(observer, config, { status: 'error', error });
+		throw error;
+	}
+
+	if (!support.supported) {
+		notifyNativeEncoderSupport(observer, config, { status: 'unsupported', error: createUnsupportedError() });
+		return false;
+	}
+
+	notifyNativeEncoderSupport(observer, config, { status: 'supported' });
+	return true;
+};
 
 class VideoEncoderWrapper {
 	private ensureEncoderPromise: Promise<void> | null = null;
@@ -582,7 +677,11 @@ class VideoEncoderWrapper {
 					if (!this.alphaEncoder) {
 						// No alpha encoder, simple case
 						try {
-							this.encoder.encode(videoFrame, finalEncodeOptions);
+							runNativeEncoderOperation(
+								this.encodingConfig.onEncoderError,
+								'encode',
+								() => this.encoder!.encode(videoFrame, finalEncodeOptions),
+							);
 						} finally {
 							videoFrame.close();
 						}
@@ -593,7 +692,11 @@ class VideoEncoderWrapper {
 						if (frameDefinitelyHasNoAlpha || this.splitterCreationFailed) {
 							this.alphaFrameQueue.push(null);
 							try {
-								this.encoder.encode(videoFrame, finalEncodeOptions);
+								runNativeEncoderOperation(
+									this.encodingConfig.onEncoderError,
+									'encode',
+									() => this.encoder!.encode(videoFrame, finalEncodeOptions),
+								);
 							} finally {
 								videoFrame.close();
 							}
@@ -607,7 +710,11 @@ class VideoEncoderWrapper {
 
 							this.alphaFrameQueue.push(alphaFrame);
 							try {
-								this.encoder.encode(colorFrame, finalEncodeOptions);
+								runNativeEncoderOperation(
+									this.encodingConfig.onEncoderError,
+									'encode',
+									() => this.encoder!.encode(colorFrame, finalEncodeOptions),
+								);
 							} finally {
 								colorFrame.close();
 							}
@@ -667,6 +774,28 @@ class VideoEncoderWrapper {
 			// Try the candidate configs in order of preference until we find one that is supported
 			let selected: VideoEncoderConfigCandidate | null = null;
 			let MatchingCustomEncoder: (typeof customVideoEncoders)[number] | undefined;
+			let singleCandidateUnsupportedError: Error | null = null;
+			const createUnsupportedError = () => {
+				if (candidates.length === 1 && singleCandidateUnsupportedError) {
+					return singleCandidateUnsupportedError;
+				}
+
+				const firstConfig = candidates[0]!.config;
+				const rateControls = candidates.map(({ config, quantizer }) =>
+					quantizer !== null ? `quantizer ${quantizer}` : `${config.bitrate} bps`,
+				);
+				const error = new Error(
+					`This specific encoder configuration (${firstConfig.codec}, ${rateControls.join(' / ')},`
+					+ ` ${firstConfig.width}x${firstConfig.height}, hardware acceleration:`
+					+ ` ${firstConfig.hardwareAcceleration ?? 'no-preference'}) is not supported in this environment.`
+					+ ` Consider using another codec or changing your video parameters.`,
+				);
+				if (candidates.length === 1) {
+					singleCandidateUnsupportedError = error;
+				}
+
+				return error;
+			};
 
 			for (const candidate of candidates) {
 				const candidateConfig = candidate.config;
@@ -708,8 +837,13 @@ class VideoEncoderWrapper {
 				}
 
 				try {
-					const support = await VideoEncoder.isConfigSupported(candidateConfig);
-					if (support.supported) {
+					const supported = await queryNativeEncoderSupport(
+						this.encodingConfig.onEncoderSupport,
+						candidateConfig,
+						() => VideoEncoder.isConfigSupported(candidateConfig),
+						createUnsupportedError,
+					);
+					if (supported) {
 						selected = candidate;
 						break;
 					}
@@ -723,19 +857,7 @@ class VideoEncoderWrapper {
 					throw new Error(missingWebCodecsClassMessage('VideoEncoder'));
 				}
 
-				// The candidates only differ in their rate control, so we describe them as one config with a
-				// slash-separated list of the attempted rate control methods
-				const firstConfig = candidates[0]!.config;
-				const rateControls = candidates.map(({ config, quantizer }) =>
-					quantizer !== null ? `quantizer ${quantizer}` : `${config.bitrate} bps`,
-				);
-
-				throw new Error(
-					`This specific encoder configuration (${firstConfig.codec}, ${rateControls.join(' / ')},`
-					+ ` ${firstConfig.width}x${firstConfig.height}, hardware acceleration:`
-					+ ` ${firstConfig.hardwareAcceleration ?? 'no-preference'}) is not supported in this environment.`
-					+ ` Consider using another codec or changing your video parameters.`,
-				);
+				throw createUnsupportedError();
 			}
 
 			const encoderConfig = selected.config;
@@ -850,7 +972,7 @@ class VideoEncoderWrapper {
 
 				const stack = new Error('Encoding error').stack;
 
-				this.encoder = new VideoEncoder({
+				this.encoder = createNativeVideoEncoder(this.encodingConfig.onEncoderError, {
 					output: (chunk, meta) => {
 						if (!this.alphaEncoder) {
 							// We're done
@@ -862,13 +984,17 @@ class VideoEncoderWrapper {
 						assert(alphaFrame !== undefined);
 
 						if (alphaFrame) {
-							this.alphaEncoder.encode(alphaFrame, {
-								...this.defaultEncodeOptions,
-								// Crucial: The alpha frame is forced to be a key frame whenever the color frame
-								// also is. Without this, playback can glitch and even crash in some browsers.
-								// This is the reason why the two encoders are wired in series and not in parallel.
-								keyFrame: chunk.type === 'key',
-							});
+							runNativeEncoderOperation(
+								this.encodingConfig.onEncoderError,
+								'encode',
+								() => this.alphaEncoder!.encode(alphaFrame, {
+									...this.defaultEncodeOptions,
+									// Crucial: The alpha frame is forced to be a key frame whenever the color frame
+									// also is. Without this, playback can glitch and even crash in some browsers.
+									// This is the reason why the two encoders are wired in series and not in parallel.
+									keyFrame: chunk.type === 'key',
+								}),
+							);
 							alphaEncoderQueue++;
 							alphaFrame.close();
 							colorChunkQueue.push({ chunk, meta });
@@ -888,16 +1014,21 @@ class VideoEncoderWrapper {
 					},
 					error: (error) => {
 						error.stack = stack; // Provide a more useful stack trace, the default one sucks
+						notifyNativeEncoderError(this.encodingConfig.onEncoderError, error, 'error');
 						this.setError(error);
 					},
 				});
-				this.encoder.configure(encoderConfig);
+				runNativeEncoderOperation(
+					this.encodingConfig.onEncoderError,
+					'configure',
+					() => this.encoder!.configure(encoderConfig),
+				);
 
 				if (this.encodingConfig.alpha === 'keep') {
 					const stack = new Error('Encoding error').stack;
 
 					// We need to encode alpha as well, which we do with a separate encoder
-					this.alphaEncoder = new VideoEncoder({
+					this.alphaEncoder = createNativeVideoEncoder(this.encodingConfig.onEncoderError, {
 						// We ignore the alpha chunk's metadata
 						// eslint-disable-next-line @typescript-eslint/no-unused-vars
 						output: (chunk, meta) => {
@@ -924,10 +1055,15 @@ class VideoEncoderWrapper {
 						},
 						error: (error) => {
 							error.stack = stack; // Provide a more useful stack trace
+							notifyNativeEncoderError(this.encodingConfig.onEncoderError, error, 'error');
 							this.setError(error);
 						},
 					});
-					this.alphaEncoder.configure(encoderConfig);
+					runNativeEncoderOperation(
+						this.encodingConfig.onEncoderError,
+						'configure',
+						() => this.alphaEncoder!.configure(encoderConfig),
+					);
 				}
 			}
 
@@ -958,8 +1094,8 @@ class VideoEncoderWrapper {
 					void this.customEncoderCallSerializer.call(() => this.customEncoder!.flush());
 				} else if (this.encoder) {
 					// These are wired in series, therefore they must also be flushed in series
-					await this.encoder.flush();
-					await this.alphaEncoder?.flush();
+					await flushNativeEncoder(this.encodingConfig.onEncoderError, () => this.encoder!.flush());
+					await flushNativeEncoder(this.encodingConfig.onEncoderError, () => this.alphaEncoder?.flush());
 
 					// Workaround for https://issues.chromium.org/issues/529852980 to give it time for errors to
 					// surface
@@ -2068,7 +2204,11 @@ class AudioEncoderWrapper {
 			} else {
 				assert(this.encoder);
 				const audioData = audioSample.toAudioData();
-				this.encoder.encode(audioData);
+				runNativeEncoderOperation(
+					this.encodingConfig.onEncoderError,
+					'encode',
+					() => this.encoder!.encode(audioData),
+				);
 				audioData.close();
 
 				if (shouldClose) {
@@ -2215,27 +2355,33 @@ class AudioEncoderWrapper {
 					throw new Error(missingWebCodecsClassMessage('AudioEncoder'));
 				}
 
+				let unsupportedError: Error | null = null;
+				const getUnsupportedError = () => unsupportedError ??= new Error(
+					`This specific encoder configuration (${encoderConfig.codec}, ${encoderConfig.bitrate} bps,`
+					+ ` ${encoderConfig.numberOfChannels} channels, ${encoderConfig.sampleRate} Hz) is not`
+					+ ` supported in this environment. Consider using another codec or changing your`
+					+ ` audio parameters.`,
+				);
 				let supported: boolean;
 
 				try {
-					const support = await AudioEncoder.isConfigSupported(encoderConfig);
-					supported = support.supported ?? false;
+					supported = await queryNativeEncoderSupport(
+						this.encodingConfig.onEncoderSupport,
+						encoderConfig,
+						() => AudioEncoder.isConfigSupported(encoderConfig),
+						getUnsupportedError,
+					);
 				} catch {
 					supported = false;
 				}
 
 				if (!supported) {
-					throw new Error(
-						`This specific encoder configuration (${encoderConfig.codec}, ${encoderConfig.bitrate} bps,`
-						+ ` ${encoderConfig.numberOfChannels} channels, ${encoderConfig.sampleRate} Hz) is not`
-						+ ` supported in this environment. Consider using another codec or changing your`
-						+ ` audio parameters.`,
-					);
+					throw getUnsupportedError();
 				}
 
 				const stack = new Error('Encoding error').stack;
 
-				this.encoder = new AudioEncoder({
+				this.encoder = createNativeAudioEncoder(this.encodingConfig.onEncoderError, {
 					output: (chunk, meta) => {
 						// WebKit emits an invalid description for AAC (https://bugs.webkit.org/show_bug.cgi?id=302253),
 						// which we try to detect here. If detected, we'll provide our own description instead, derived
@@ -2283,10 +2429,15 @@ class AudioEncoderWrapper {
 					},
 					error: (error) => {
 						error.stack = stack; // Provide a more useful stack trace
+						notifyNativeEncoderError(this.encodingConfig.onEncoderError, error, 'error');
 						this.setError(error);
 					},
 				});
-				this.encoder.configure(encoderConfig);
+				runNativeEncoderOperation(
+					this.encodingConfig.onEncoderError,
+					'configure',
+					() => this.encoder!.configure(encoderConfig),
+				);
 			}
 
 			assert(this.source._connectedTrack);
@@ -2406,7 +2557,7 @@ class AudioEncoderWrapper {
 				if (this.customEncoder) {
 					void this.customEncoderCallSerializer.call(() => this.customEncoder!.flush());
 				} else if (this.encoder) {
-					await this.encoder.flush();
+					await flushNativeEncoder(this.encodingConfig.onEncoderError, () => this.encoder!.flush());
 				}
 			}
 		} finally {
