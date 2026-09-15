@@ -986,6 +986,9 @@ export class Output<
 				}
 
 				this.state = 'finalized';
+			} catch (error) {
+				this.state = 'started';
+				throw error;
 			} finally {
 				await Promise.all([...this._unfinalizedTargets].map(target => target._close().catch(() => {})));
 				this._unfinalizedTargets.clear();
