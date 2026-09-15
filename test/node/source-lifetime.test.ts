@@ -10,6 +10,55 @@ import { setImmediate } from 'node:timers/promises';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
+test('Direct source disposal', async () => {
+	const filePath = path.join(__dirname, '../public/video.mp4');
+	const source = new FilePathSource(filePath);
+
+	expect(!source._disposed);
+
+	const ref = source.ref();
+	ref.free();
+	expect(source._disposed);
+});
+
+test('Implicit source disposal', async () => {
+	const filePath = path.join(__dirname, '../public/video.mp4');
+	const source = new FilePathSource(filePath);
+
+	const input = new Input({
+		source,
+		formats: ALL_FORMATS,
+	});
+	expect(await input.getFormat()).toBe(MP4);
+
+	expect(!source._disposed);
+	input.dispose();
+	expect(source._disposed);
+});
+
+test('Implicit source disposal, double input', async () => {
+	const filePath = path.join(__dirname, '../public/video.mp4');
+	const source = new FilePathSource(filePath);
+
+	const input1 = new Input({
+		source,
+		formats: ALL_FORMATS,
+	});
+	const input2 = new Input({
+		source,
+		formats: ALL_FORMATS,
+	});
+
+	expect(await input1.getFormat()).toBe(MP4);
+	expect(await input2.getFormat()).toBe(MP4);
+
+	expect(!source._disposed);
+	input1.dispose();
+	expect(!source._disposed);
+	input2.dispose();
+	expect(source._disposed);
+});
+
 test.each([
 	{ delayed: false, cancelRejects: false },
 	{ delayed: false, cancelRejects: true },
@@ -96,53 +145,4 @@ test('CustomSource releases stream readers after read errors', async () => {
 	});
 	await expect(input.getFormat()).rejects.toBe(error);
 	expect(stream.locked).toBe(false);
-});
-
-test('Direct source disposal', async () => {
-	const filePath = path.join(__dirname, '../public/video.mp4');
-	const source = new FilePathSource(filePath);
-
-	expect(!source._disposed);
-
-	const ref = source.ref();
-	ref.free();
-	expect(source._disposed);
-});
-
-test('Implicit source disposal', async () => {
-	const filePath = path.join(__dirname, '../public/video.mp4');
-	const source = new FilePathSource(filePath);
-
-	const input = new Input({
-		source,
-		formats: ALL_FORMATS,
-	});
-	expect(await input.getFormat()).toBe(MP4);
-
-	expect(!source._disposed);
-	input.dispose();
-	expect(source._disposed);
-});
-
-test('Implicit source disposal, double input', async () => {
-	const filePath = path.join(__dirname, '../public/video.mp4');
-	const source = new FilePathSource(filePath);
-
-	const input1 = new Input({
-		source,
-		formats: ALL_FORMATS,
-	});
-	const input2 = new Input({
-		source,
-		formats: ALL_FORMATS,
-	});
-
-	expect(await input1.getFormat()).toBe(MP4);
-	expect(await input2.getFormat()).toBe(MP4);
-
-	expect(!source._disposed);
-	input1.dispose();
-	expect(!source._disposed);
-	input2.dispose();
-	expect(source._disposed);
 });

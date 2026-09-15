@@ -1573,9 +1573,7 @@ export class CustomSource extends Source {
 				try {
 					while (worker.currentPos < originalTargetPos && !worker.aborted) {
 						const { done, value } = await reader.read();
-						if (worker.aborted) {
-							break;
-						}
+
 						if (done) {
 							if (worker.currentPos < originalTargetPos) {
 								// Yes, we're *that* strict
@@ -1594,6 +1592,10 @@ export class CustomSource extends Source {
 							throw new TypeError(
 								'ReadableStream returned by options.read must yield Uint8Array chunks.',
 							);
+						}
+
+						if (worker.aborted) {
+							break;
 						}
 
 						const data = toUint8Array(value); // Normalize things like Node.js Buffer to Uint8Array
@@ -1616,10 +1618,12 @@ export class CustomSource extends Source {
 	/** @internal */
 	_dispose() {
 		this._orchestrator.dispose();
+
 		for (const reader of this._readers) {
-			// Pending consumers have already been rejected with InputDisposedError.
+			// Pending consumers have already been rejected with InputDisposedError
 			void reader.cancel().catch(() => {});
 		}
+
 		this._readers.clear();
 		this._options.dispose?.();
 	}
