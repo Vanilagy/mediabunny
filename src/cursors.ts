@@ -1336,7 +1336,12 @@ export class AudioSampleCursor<TransformedSample = AudioSample> extends SampleCu
 		assert(codec && decoderConfig);
 
 		let decoder: AudioDecoderWrapper | PcmAudioDecoderWrapper;
-		if ((PCM_AUDIO_CODECS as readonly string[]).includes(decoderConfig.codec)) {
+		if (
+			(PCM_AUDIO_CODECS as readonly string[]).includes(codec)
+			&& (PCM_AUDIO_CODECS as readonly string[]).includes(decoderConfig.codec)
+		) {
+			// Both have to say PCM: a custom codec may borrow a PCM codec string for its config while being decoded by
+			// a custom decoder, and a PCM track whose container handed out a non-PCM config takes the regular path
 			decoder = new PcmAudioDecoderWrapper(
 				sample => this._onDecoderSample(sample),
 				error => this._onDecoderError(error),

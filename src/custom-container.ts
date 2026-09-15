@@ -6,8 +6,9 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { AUDIO_CODECS, AudioCodec, PCM_AUDIO_CODECS, VIDEO_CODECS, VideoCodec } from './codec';
+import { AudioCodec, isBuiltInAudioCodec, isBuiltInVideoCodec, PCM_AUDIO_CODECS, VideoCodec } from './codec';
 import { Demuxer, DurationMetadataRequestOptions } from './demuxer';
+import { isCustomCodecName } from './custom-codec';
 import { Input, InputDisposedError } from './input';
 import { InputFormat } from './input-format';
 import { InputAudioTrackBacking, InputTrackBacking, InputVideoTrackBacking } from './input-track';
@@ -113,7 +114,7 @@ export type BaseCustomTrack = {
 export type CustomVideoTrack = BaseCustomTrack & {
 	/** The track type. */
 	type: 'video';
-	/** The codec, or `null` if it couldn't be identified. */
+	/** The codec, or `null` if it couldn't be identified. The name doesn't need to be registered. */
 	codec: VideoCodec | null;
 	/** The coded width in pixels. */
 	codedWidth: number;
@@ -145,7 +146,7 @@ export type CustomVideoTrack = BaseCustomTrack & {
 export type CustomAudioTrack = BaseCustomTrack & {
 	/** The track type. */
 	type: 'audio';
-	/** The codec, or `null` if it couldn't be identified. */
+	/** The codec, or `null` if it couldn't be identified. The name doesn't need to be registered. */
 	codec: AudioCodec | null;
 	/** The number of audio channels. */
 	numberOfChannels: number;
@@ -359,9 +360,11 @@ const validateCustomTrack = (track: CustomTrack, ids: Set<number>) => {
 		throw new TypeError('track.timeResolution must be a positive number.');
 	}
 	if (track.codec !== null) {
-		const codecs: readonly string[] = track.type === 'video' ? VIDEO_CODECS : AUDIO_CODECS;
-		if (!codecs.includes(track.codec)) {
-			throw new TypeError('track.codec must be a codec of the track\'s type, or null.');
+		const isBuiltIn = track.type === 'video' ? isBuiltInVideoCodec : isBuiltInAudioCodec;
+		// Names that aren't built in are accepted whether or not anyone has registered them, so that a demuxer's
+		// tracks don't depend on what other modules registered
+		if (!isBuiltIn(track.codec) && !isCustomCodecName(track.codec)) {
+			throw new TypeError('track.codec must be a codec of the track\'s type, a custom codec name, or null.');
 		}
 	}
 	if (track.name !== undefined && track.name !== null && typeof track.name !== 'string') {

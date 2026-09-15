@@ -127,7 +127,7 @@ Video tracks have `codedWidth` and `codedHeight` instead of the audio properties
 - `id`\
 	A safe integer which uniquely identifies the track within the file. It **must** be different for every track.
 - `codec`\
-	The track's codec, or `null` if you can't identify it. It **must** be a codec Mediabunny recognizes for the track's type. If the container stores its own codec identifier, preserve it in `internalCodecId`.
+	The track's codec, or `null` if you can't identify it. It **must** be a codec of the track's type: a built-in name, a registered name, or a name that could be registered, see [Codec names](#codec-names). If the container stores its own codec identifier, preserve it in `internalCodecId`.
 - `timeResolution`\
 	The number of timestamp units per second used by the container, such as an MP4 track's timescale. **Must** be finite and positive.
 - `numberOfChannels`, `sampleRate`, `codedWidth`, `codedHeight`\
@@ -430,3 +430,32 @@ class TestOutputFormat extends CustomOutputFormat {
 ```
 
 That's it - you can now use this format with any `Output`. For a [conversion](./converting-media-files) into it, request what the muxer accepts, here `audio: { numberOfChannels: 1, sampleRate: 1 }`; the supported-codec list doesn't convey those restrictions.
+
+The container we built only carries PCM, which Mediabunny already knows about. Real containers carry codecs it has never heard of.
+
+## Codec names
+
+A demuxer names what it finds. A track's `codec` can be a built-in name, a name someone registered, or any name that could be registered: lowercase letters, digits and hyphens, starting with a letter, not a built-in name and not starting with a built-in codec string prefix such as `avc1` or `pcm`. Nothing needs to be registered to read such a track; `canDecode()` is simply `false` until a [custom decoder](./supported-formats-and-codecs#custom-coders) for the name exists.
+```ts
+const track: CustomVideoTrack = {
+	type: 'video',
+	codec: 'mpeg4', // Not built in, but a decoder registered for 'mpeg4' will serve it
+	// ...
+};
+```
+
+::: info
+Use the codec's common short name (`mpeg4`, `mpeg2`, `dnxhd`, `dv`, `mp2`) and the same name for the same codec in every container, so a decoder registered for it works with all of them. Sharing a name means sharing the packet framing and the shape of the decoder configuration, so document both where you introduce a name. Report codecs Mediabunny already knows under their built-in names (`avc`, not `h264`).
+:::
+
+Report a name as the kind you expect it to be registered as; validation accepts custom names on video and audio tracks alike. Set packet types yourself; Mediabunny's packet inspection only knows built-in and registered codecs.
+
+The track's `codec` is the identity; the `codec` string in its decoder configuration is what a decoder consumes. For built-in codecs that string **must** follow the [codec registry](../codec-registry/overview): the WebCodecs string where WebCodecs has one (`avc` and `avc1.42c00a`, `aac` and `mp4a.40.2`), and Mediabunny's own for the rest, like PCM and ProRes. For other codecs the configuration is meant for a custom decoder, and its string may differ from the name.
+
+Registering a name is what lets outputs, encoders and capability checks accept it. Call `registerVideoCodec` or `registerAudioCodec` before creating outputs that use a new codec, and register the matching decoder or encoder through the [custom coder API](./supported-formats-and-codecs#custom-coders). Video codecs can provide a `determinePacketType` callback in the options. `getAllVideoCodecs` and `getAllAudioCodecs` return the built-in and registered names.
+
+Registration returns a function that removes the name; an abort signal in the options can also remove it. Keep the registration active while using the codec. Removal keeps the names custom demuxers already reported, but capability checks, packet inspection and codec string inference use the current registry. HLS identifies its tracks through codec string inference, which matches a registered name exactly, so a playlist has to list the name itself in `CODECS`, and an HLS track's codec becomes `null` once the registration is gone.
+
+Registration does not add mappings to built-in containers: registering a codec won't let an MP4 muxer write it. A `Quality` resolves to the AVC or AAC reference bitrate for a registered codec, which its encoder is free to treat as a hint.
+
+`VideoCodec` and `AudioCodec` accept arbitrary strings, including dynamic names. TypeScript won't catch typos or names from the wrong media kind. Registration rejects built-in names and names registered for the other kind; registering a name twice for the same kind logs a warning and leaves the first registration in place, so packages that share a name can coexist. Exhaustive switches over these types now have to handle extension names too; for built-in-only unions, use `typeof VIDEO_CODECS[number]` or `typeof AUDIO_CODECS[number]` and check incoming names against those arrays.

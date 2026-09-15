@@ -18,7 +18,6 @@ import {
 	MATRIX_COEFFICIENTS_MAP,
 	TRANSFER_CHARACTERISTICS_MAP,
 	assert,
-	assertNever,
 	base64ToBytes,
 	bytesToHexString,
 	isAllowSharedBufferSource,
@@ -26,6 +25,7 @@ import {
 	reverseBitsU32,
 	toDataView,
 } from './misc';
+import { registeredAudioCodecs, registeredVideoCodecs } from './custom-codec';
 import { SubtitleMetadata } from './subtitles';
 
 /**
@@ -95,18 +95,30 @@ export const SUBTITLE_CODECS = [
 ] as const; // TODO add the rest
 
 /**
- * Union type of known video codecs.
+ * A built-in video codec name, a name registered using {@link registerVideoCodec}, or a name reported by a custom
+ * demuxer. This type accepts arbitrary strings. Built-in and registered names have their media kind checked at runtime.
  * @group Codecs
  * @public
  */
-export type VideoCodec = typeof VIDEO_CODECS[number];
+export type VideoCodec = typeof VIDEO_CODECS[number] | (string & {});
 /**
- * Union type of known audio codecs.
+ * A built-in audio codec name, a name registered using {@link registerAudioCodec}, or a name reported by a custom
+ * demuxer. This type accepts arbitrary strings. Built-in and registered names have their media kind checked at runtime.
  * @group Codecs
  * @public
  */
-export type AudioCodec = typeof AUDIO_CODECS[number];
+export type AudioCodec = typeof AUDIO_CODECS[number] | (string & {});
 export type PcmAudioCodec = typeof PCM_AUDIO_CODECS[number];
+
+/** @internal */
+export const isBuiltInVideoCodec = (codec: string): codec is typeof VIDEO_CODECS[number] => {
+	return (VIDEO_CODECS as readonly string[]).includes(codec);
+};
+
+/** @internal */
+export const isBuiltInAudioCodec = (codec: string): codec is typeof AUDIO_CODECS[number] => {
+	return (AUDIO_CODECS as readonly string[]).includes(codec);
+};
 /**
  * Union type of known subtitle codecs.
  * @group Codecs
@@ -319,11 +331,11 @@ export const buildVideoCodecString = (
 		}
 
 		return bestFourCc;
-	} else {
-		assertNever(codec);
+	} else if (registeredVideoCodecs.has(codec)) {
+		return codec;
 	}
 
-	throw new TypeError(`Unhandled codec '${String(codec)}'.`);
+	throw new TypeError(`Unhandled codec '${codec}'.`);
 };
 
 export const generateVp9CodecConfigurationFromCodecString = (codecString: string) => {
@@ -562,8 +574,8 @@ export const extractVideoCodecString = (trackInfo: {
 		return string;
 	} else if (codec === 'prores') {
 		return proresFormat ?? 'apch';
-	} else if (codec !== null) {
-		assertNever(codec);
+	} else if (codec !== null && registeredVideoCodecs.has(codec)) {
+		return codec;
 	}
 
 	throw new TypeError(`Unhandled codec '${codec}'.`);
@@ -596,6 +608,8 @@ export const buildAudioCodecString = (codec: AudioCodec, numberOfChannels: numbe
 	} else if (codec === 'eac3') {
 		return 'ec-3';
 	} else if ((PCM_AUDIO_CODECS as readonly string[]).includes(codec)) {
+		return codec;
+	} else if (registeredAudioCodecs.has(codec)) {
 		return codec;
 	}
 
@@ -645,6 +659,8 @@ export const extractAudioCodecString = (trackInfo: {
 	} else if (codec === 'eac3') {
 		return 'ec-3';
 	} else if (codec && (PCM_AUDIO_CODECS as readonly string[]).includes(codec)) {
+		return codec;
+	} else if (codec && registeredAudioCodecs.has(codec)) {
 		return codec;
 	}
 
@@ -769,6 +785,10 @@ export const inferCodecFromCodecString = (codecString: string): MediaCodec | nul
 		return 'webvtt';
 	}
 
+	if (registeredVideoCodecs.has(codecString) || registeredAudioCodecs.has(codecString)) {
+		return codecString;
+	}
+
 	return null;
 };
 
@@ -808,7 +828,9 @@ export const getAudioEncoderConfigExtension = (codec: AudioCodec) => {
 	return {};
 };
 
-const VALID_VIDEO_CODEC_STRING_PREFIXES = ['avc1', 'avc3', 'hev1', 'hvc1', 'vp8', 'vp09', 'av01', ...PRORES_FOURCCS];
+export const VALID_VIDEO_CODEC_STRING_PREFIXES = [
+	'avc1', 'avc3', 'hev1', 'hvc1', 'vp8', 'vp09', 'av01', ...PRORES_FOURCCS,
+];
 const AVC_CODEC_STRING_REGEX = /^(avc1|avc3)\.[0-9a-fA-F]{6}$/;
 const HEVC_CODEC_STRING_REGEX = /^(hev1|hvc1)\.(?:[ABC]?\d+)\.[0-9a-fA-F]{1,8}\.[LH]\d+(?:\.[0-9a-fA-F]{1,2}){0,6}$/;
 const VP9_CODEC_STRING_REGEX = /^vp09(?:\.\d{2}){3}(?:(?:\.\d{2}){5})?$/;
@@ -987,7 +1009,7 @@ export const validateVideoChunkMetadata = (metadata: EncodedVideoChunkMetadata |
 	}
 };
 
-const VALID_AUDIO_CODEC_STRING_PREFIXES = [
+export const VALID_AUDIO_CODEC_STRING_PREFIXES = [
 	'mp4a', 'mp3', 'opus', 'vorbis', 'flac', 'ulaw', 'alaw', 'pcm', 'ac-3', 'ec-3',
 ];
 

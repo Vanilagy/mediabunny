@@ -6,8 +6,9 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { AUDIO_CODECS, AudioCodec, inferCodecFromCodecString, MediaCodec, VIDEO_CODECS, VideoCodec } from '../codec';
+import { AudioCodec, inferCodecFromCodecString, MediaCodec, VideoCodec } from '../codec';
 import { Demuxer, DurationMetadataRequestOptions } from '../demuxer';
+import { isAudioCodec, isVideoCodec } from '../custom-codec';
 import { Input } from '../input';
 import {
 	InputAudioTrackBacking,
@@ -236,12 +237,8 @@ export class HlsDemuxer extends Demuxer {
 
 				const videoGroupId = variantStream.attributes.get('video');
 				const audioGroupId = variantStream.attributes.get('audio');
-				const containsVideoCodecs = codecStrings.some(x =>
-					VIDEO_CODECS.includes(inferCodecFromCodecString(x) as VideoCodec),
-				);
-				const containsAudioCodecs = codecStrings.some(x =>
-					AUDIO_CODECS.includes(inferCodecFromCodecString(x) as AudioCodec),
-				);
+				const containsVideoCodecs = codecStrings.some(x => isVideoCodec(inferCodecFromCodecString(x)));
+				const containsAudioCodecs = codecStrings.some(x => isAudioCodec(inferCodecFromCodecString(x)));
 
 				if (videoGroupId !== null && !containsVideoCodecs) {
 					// A video group is linked but no video codec is listed, sigh. Let's resolve the video codec.
@@ -344,7 +341,7 @@ export class HlsDemuxer extends Demuxer {
 						continue;
 					}
 
-					if (VIDEO_CODECS.includes(inferredCodec as VideoCodec)) {
+					if (isVideoCodec(inferredCodec)) {
 						if (videoCodecString !== null) {
 							throw new Error(
 								'Unsupported M3U8 file; multiple video codecs found in the CODECS attribute of a'
@@ -444,7 +441,7 @@ export class HlsDemuxer extends Demuxer {
 								});
 							}
 						}
-					} else if (AUDIO_CODECS.includes(inferredCodec as AudioCodec)) {
+					} else if (isAudioCodec(inferredCodec)) {
 						if (audioCodecString !== null) {
 							throw new Error(
 								'Unsupported M3U8 file; multiple audio codecs found in the CODECS attribute of a'

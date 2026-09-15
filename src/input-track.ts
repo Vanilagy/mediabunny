@@ -6,13 +6,19 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { AudioCodec, MediaCodec, VideoCodec } from './codec';
+import {
+	AudioCodec,
+	isBuiltInAudioCodec,
+	isBuiltInVideoCodec,
+	MediaCodec,
+	PCM_AUDIO_CODECS,
+	VideoCodec,
+} from './codec';
 import { determineVideoPacketType } from './codec-data';
 import { customAudioDecoders, customVideoDecoders } from './custom-coder';
 import { Input } from './input';
 import { Logging } from './logging';
 import {
-	assert,
 	MaybePromise,
 	MaybeRelevantPromise,
 	Rational,
@@ -760,7 +766,8 @@ export class InputVideoTrack extends InputTrack {
 	/**
 	 * Returns the [decoder configuration](https://www.w3.org/TR/webcodecs/#video-decoder-config) for decoding the
 	 * track's packets using a [`VideoDecoder`](https://developer.mozilla.org/en-US/docs/Web/API/VideoDecoder). Returns
-	 * null if the track's codec is unknown.
+	 * null if the track's codec is unknown. For codecs that aren't built in, the configuration is meant for a custom
+	 * decoder and its codec string may differ from the track's codec name.
 	 */
 	async getDecoderConfig() {
 		return this._backing.getDecoderConfig();
@@ -778,19 +785,21 @@ export class InputVideoTrack extends InputTrack {
 
 	async canDecode() {
 		try {
+			const codec = await this._backing.getCodec();
+			if (codec === null) {
+				return false;
+			}
+
 			const decoderConfig = await this._backing.getDecoderConfig();
 			if (!decoderConfig) {
 				return false;
 			}
 
-			const codec = await this._backing.getCodec();
-			assert(codec !== null);
-
 			if (customVideoDecoders.some(x => x.supports(codec, decoderConfig))) {
 				return true;
 			}
 
-			if (typeof VideoDecoder === 'undefined') {
+			if (!isBuiltInVideoCodec(codec) || typeof VideoDecoder === 'undefined') {
 				return false;
 			}
 
@@ -898,7 +907,8 @@ export class InputAudioTrack extends InputTrack {
 	/**
 	 * Returns the [decoder configuration](https://www.w3.org/TR/webcodecs/#audio-decoder-config) for decoding the
 	 * track's packets using an [`AudioDecoder`](https://developer.mozilla.org/en-US/docs/Web/API/AudioDecoder). Returns
-	 * null if the track's codec is unknown.
+	 * null if the track's codec is unknown. For codecs that aren't built in, the configuration is meant for a custom
+	 * decoder and its codec string may differ from the track's codec name.
 	 */
 	async getDecoderConfig() {
 		return this._backing.getDecoderConfig();
@@ -916,28 +926,29 @@ export class InputAudioTrack extends InputTrack {
 
 	async canDecode() {
 		try {
+			const codec = await this._backing.getCodec();
+			if (codec === null) {
+				return false;
+			}
+
 			const decoderConfig = await this._backing.getDecoderConfig();
 			if (!decoderConfig) {
 				return false;
 			}
 
-			const codec = await this._backing.getCodec();
-			assert(codec !== null);
-
 			if (customAudioDecoders.some(x => x.supports(codec, decoderConfig))) {
 				return true;
 			}
 
-			if (decoderConfig.codec.startsWith('pcm-')) {
+			if ((PCM_AUDIO_CODECS as readonly string[]).includes(codec)) {
 				return true; // Since we decode it ourselves
-			} else {
-				if (typeof AudioDecoder === 'undefined') {
-					return false;
-				}
-
-				const support = await AudioDecoder.isConfigSupported(decoderConfig);
-				return support.supported === true;
 			}
+			if (!isBuiltInAudioCodec(codec) || typeof AudioDecoder === 'undefined') {
+				return false;
+			}
+
+			const support = await AudioDecoder.isConfigSupported(decoderConfig);
+			return support.supported === true;
 		} catch (error) {
 			Logging._error('Error during decodability check:', error);
 			return false;

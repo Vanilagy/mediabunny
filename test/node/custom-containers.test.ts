@@ -1,13 +1,18 @@
 import { expect, test } from 'vitest';
 import {
+	type AudioCodec,
+	AudioSample,
+	AudioSampleCursor,
 	BufferSource,
 	BufferTarget,
 	CmafOutputFormat,
+	CustomAudioDecoder,
 	type CustomAudioTrack,
 	type CustomDemuxer,
 	CustomInputFormat,
 	type CustomMuxer,
 	CustomOutputFormat,
+	CustomVideoDecoder,
 	type DemuxerContext,
 	EncodedAudioPacketSource,
 	EncodedPacket,
@@ -24,6 +29,12 @@ import {
 	readAscii,
 	readBytes,
 	readU32Le,
+	registerAudioCodec,
+	registerDecoder,
+	registerVideoCodec,
+	type VideoCodec,
+	VideoSample,
+	VideoSampleCursor,
 	WavOutputFormat,
 } from '../../src/index.js';
 import { assert, promiseWithResolvers } from '../../src/misc.js';
@@ -773,13 +784,24 @@ const TWO_PACKETS = new Uint8Array([84, 69, 83, 84, 2, 0, 0, 0, 1, 2, 3, 4]);
 const openBroken = (mutate: (track: CustomAudioTrack) => void, bytes = ONE_PACKET) => {
 	return new Input({ source: new BufferSource(bytes), formats: [new BrokenTrackFormat(mutate)] });
 };
-const withCodecOnly = (codec: string | null) => (track: CustomAudioTrack) => Object.assign(track, { codec });
+const withCodecOnly = (codec: unknown) => (track: CustomAudioTrack) => Object.assign(track, { codec });
+const withAudioConfig = (codec: string) => (track: CustomAudioTrack) => Object.assign(track, {
+	codec, getDecoderConfig: () => ({ codec, numberOfChannels: 1, sampleRate: 1 }),
+});
+const withVideoConfig = (codec: string) => (track: CustomAudioTrack) => Object.assign(track, {
+	type: 'video', codec, codedWidth: 16, codedHeight: 16,
+	getDecoderConfig: () => ({ codec, codedWidth: 16, codedHeight: 16 }),
+});
+const s16Sample = (value: number, timestamp: number) => new AudioSample({
+	data: new Int16Array([value]), format: 's16', numberOfChannels: 1, sampleRate: 1, timestamp,
+});
+
+const open = async (mutate: (track: CustomAudioTrack) => void) => {
+	using input = openBroken(mutate);
+	await input.getTracks();
+};
 
 test('Custom track validation', async () => {
-	const open = async (mutate: (track: CustomAudioTrack) => void) => {
-		using input = openBroken(mutate);
-		await input.getTracks();
-	};
 	await open(() => {});
 	await expect(open(track => Object.assign(track, { numberOfChannels: 0 }))).rejects.toThrow('numberOfChannels');
 	await expect(open(track => Object.assign(track, { sampleRate: 1.5 }))).rejects.toThrow('sampleRate');
@@ -823,13 +845,6 @@ test('Custom track validation', async () => {
 		})()] });
 		await expect(input.getTracks()).rejects.toThrow('getTracks must return');
 	}
-	// The codec has to be one of the track's type, or null
-	for (const codec of ['avc', 'webvtt', 'Pcm-s16', 123]) {
-		await expect(open(track => Object.assign(track, { codec }))).rejects.toThrow('track.codec');
-	}
-	await open(track => Object.assign(track, { codec: 'aac' }));
-	await open(track => Object.assign(track, video, { codec: 'avc' }));
-	await expect(open(track => Object.assign(track, video, { codec: 'aac' }))).rejects.toThrow('track.codec');
 });
 
 // Native decoders that count and refuse any use, so a test can prove a codec name never reached them (a throw alone
@@ -863,6 +878,137 @@ const withNativeSpies = async (run: (native: { calls: number }) => Promise<void>
 		globals['AudioDecoder'] = previous.AudioDecoder;
 	}
 };
+
+test('Custom track codec names', async () => {
+	// Built-in names of the track's type and names nobody has registered yet are fine
+	for (const codec of [null, 'pcm-s16', 'mp2', 'mpeg2', 'review-audio']) {
+		await open(withCodecOnly(codec));
+	}
+	// Built-in names of the other type, built-in names that aren't codecs, and names that could never be registered
+	for (const codec of ['avc', 'apch', 'webvtt', 'Mpeg4', 'avc1-custom', 'pcm-custom', 123]) {
+		await expect(open(withCodecOnly(codec))).rejects.toThrow('track.codec');
+	}
+	// Whether someone registered a custom name, and for which kind, doesn't change what a demuxer may report
+	const removeAudio = registerAudioCodec('review-audio');
+	const removeVideo = registerVideoCodec('review-video');
+	try {
+		await open(withCodecOnly('review-audio'));
+		await open(withCodecOnly('review-video'));
+	} finally {
+		removeAudio();
+		removeVideo();
+	}
+	const video = { type: 'video', codedWidth: 16, codedHeight: 16 };
+	await open(track => Object.assign(track, video, { codec: 'mpeg4' }));
+	await open(track => Object.assign(track, video, { codec: 'avc' }));
+	await expect(open(track => Object.assign(track, video, { codec: 'aac' }))).rejects.toThrow('track.codec');
+});
+
+test('Named tracks without a decoder', async () => {
+	const decodable = async (mutate: (track: CustomAudioTrack) => void) => {
+		using input = openBroken(mutate);
+		const track = (await input.getTracks())[0];
+		return track!.canDecode();
+	};
+	await withNativeSpies(async () => {
+		// An identified codec nobody decodes
+		expect(await decodable(withAudioConfig('mp2'))).toBe(false);
+		// A custom name doesn't become decodable by borrowing a PCM codec string
+		expect(await decodable(withCodecOnly('review-audio'))).toBe(false);
+		// Built-in PCM is decoded by Mediabunny itself, µ-law included
+		expect(await decodable(withAudioConfig('ulaw'))).toBe(true);
+		// A registered decoder class makes the track decodable, registered name or not
+		class Mp2Decoder extends CustomAudioDecoder {
+			static override supports(codec: AudioCodec) { return codec === 'mp2'; }
+			init() {}
+			decode() {}
+			flush() {}
+			close() {}
+		}
+		registerDecoder(Mp2Decoder);
+		expect(await decodable(withAudioConfig('mp2'))).toBe(true);
+		// Configured tracks of either kind stay undecodable without a decoder, registered name or not
+		expect(await decodable(withAudioConfig('review-audio'))).toBe(false);
+		expect(await decodable(withVideoConfig('review-video'))).toBe(false);
+		const removeAudio = registerAudioCodec('review-audio');
+		const removeVideo = registerVideoCodec('review-video');
+		try {
+			expect(await decodable(withAudioConfig('review-audio'))).toBe(false);
+			expect(await decodable(withVideoConfig('review-video'))).toBe(false);
+		} finally {
+			removeAudio();
+			removeVideo();
+		}
+	});
+});
+
+test('Custom decoders through the sample cursors', async () => {
+	await withNativeSpies(async () => {
+		class CursorVideoDecoder extends CustomVideoDecoder {
+			static override supports(codec: VideoCodec) { return codec === 'cursor-video'; }
+			init() {}
+			decode(packet: EncodedPacket) {
+				this.onSample(new VideoSample(new Uint8Array(16 * 16 * 4), {
+					format: 'RGBA', codedWidth: 16, codedHeight: 16, timestamp: packet.timestamp, duration: 1,
+				}));
+			}
+
+			flush() {}
+			close() {}
+		}
+		class CursorAudioDecoder extends CustomAudioDecoder {
+			static override supports(codec: AudioCodec) { return codec === 'cursor-audio'; }
+			init() {}
+			decode(packet: EncodedPacket) {
+				this.onSample(s16Sample(1234, packet.timestamp));
+			}
+
+			flush() {}
+			close() {}
+		}
+		registerDecoder(CursorVideoDecoder);
+		registerDecoder(CursorAudioDecoder);
+
+		const open = (mutate: (track: CustomAudioTrack) => void) => openBroken(mutate, TWO_PACKETS);
+		// A video track with a config nobody but the custom decoder understands
+		{
+			using input = open(withVideoConfig('cursor-video'));
+			const track = await input.getPrimaryVideoTrack();
+			expect(await track!.canDecode()).toBe(true);
+			await using cursor = new VideoSampleCursor(track!);
+			let count = 0;
+			for await (const sample of cursor) {
+				expect(sample.timestamp).toBe(count++);
+				sample.close();
+			}
+			expect(count).toBe(2);
+		}
+		// An audio track whose config borrows a PCM codec string is still decoded by its own decoder
+		{
+			using input = open(withCodecOnly('cursor-audio'));
+			const track = await input.getPrimaryAudioTrack();
+			expect(await track!.canDecode()).toBe(true);
+			await using cursor = new AudioSampleCursor(track!);
+			const sample = await cursor.next();
+			const decoded = new Int16Array(1);
+			sample!.copyTo(decoded, { planeIndex: 0, format: 's16' });
+			expect(decoded[0]).toBe(1234); // The PCM decoder would have read the packet's bytes, 0x0201
+			sample!.close();
+		}
+		// Registering the names changes nothing about which decoder serves them
+		const removeVideo = registerVideoCodec('cursor-video');
+		const removeAudio = registerAudioCodec('cursor-audio');
+		try {
+			using videoInput = open(withVideoConfig('cursor-video'));
+			expect(await (await videoInput.getPrimaryVideoTrack())!.canDecode()).toBe(true);
+			using audioInput = open(withCodecOnly('cursor-audio'));
+			expect(await (await audioInput.getPrimaryAudioTrack())!.canDecode()).toBe(true);
+		} finally {
+			removeVideo();
+			removeAudio();
+		}
+	});
+});
 
 test('Decoder configs need an identity and PCM configs must name it', async () => {
 	await withNativeSpies(async () => {

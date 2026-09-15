@@ -347,5 +347,13 @@ export {
 	type SubtitleConfig,
 	type SubtitleMetadata,
 } from './subtitles';
+export {
+	registerVideoCodec,
+	registerAudioCodec,
+	getAllVideoCodecs,
+	getAllAudioCodecs,
+	type CodecRegistrationOptions,
+	type VideoCodecRegistrationOptions,
+} from './custom-codec';
 
 // 🐡🦔

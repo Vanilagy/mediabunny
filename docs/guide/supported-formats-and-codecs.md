@@ -266,7 +266,7 @@ Codec decodability checks take [custom decoders](#custom-decoders) into account.
 
 Mediabunny allows you to register your own custom encoders and decoders - useful if you want to polyfill a codec that's not supported in all browsers, or want to use Mediabunny outside of an environment with WebCodecs (such as Node.js).
 
-Encoders and decoders can be registered for [all video and audio codecs](#codecs) supported by the library. It is not possible to add new codecs.
+Encoders and decoders can be registered for [all video and audio codecs](#codecs) supported by the library, and for codec names Mediabunny doesn't know (see [Codec names](./custom-containers#codec-names)).
 
 ::: warning
 Mediabunny requires customs encoders and decoders to follow very specific implementation rules. Pay special attention to the parts labeled with "**must**" to ensure compatibility.
