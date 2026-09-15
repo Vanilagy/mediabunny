@@ -29,6 +29,32 @@ import { AudioSample, CropRectangle, validateCropRectangle, VideoSample, VideoSa
 export const canEncodeVideoMemo = new Map<string, Promise<boolean>>();
 export const canEncodeAudioMemo = new Map<string, Promise<boolean>>();
 
+/** Native encoder operation that produced an error. @group Encoding @public */
+export type EncoderErrorStage = 'create' | 'configure' | 'encode' | 'flush' | 'error';
+
+/** Outcome of an existing native encoder support query. @group Encoding @public */
+export type EncoderSupportEvent =
+	| {
+		/** The native support query has started. */
+		status: 'started';
+	}
+	| {
+		/** The native encoder supports the configuration. */
+		status: 'supported';
+	}
+	| {
+		/** The native encoder does not support the configuration. */
+		status: 'unsupported';
+		/** The error describing the unsupported configuration. */
+		error: unknown;
+	}
+	| {
+		/** The native support query failed. */
+		status: 'error';
+		/** The original error thrown by the native support query. */
+		error: unknown;
+	};
+
 /**
  * Configuration object that controls video encoding. Can be used to set codec, quality, and more.
  * @group Encoding
@@ -76,6 +102,10 @@ export type VideoEncodingConfig = {
 	 * WebCodecs API, is created.
 	 */
 	onEncoderConfig?: (config: VideoEncoderConfig) => unknown;
+	/** Observes native encoder errors. Synchronous observer exceptions are ignored. */
+	onEncoderError?: (error: unknown, stage: EncoderErrorStage) => void;
+	/** Observes native encoder support queries using detached config snapshots. Observer exceptions are ignored. */
+	onEncoderSupport?: (config: Readonly<VideoEncoderConfig>, event: EncoderSupportEvent) => void;
 	/** Called right before a sample is passed to the encoder. */
 	onEncodedSample?: (sample: VideoSample) => unknown;
 } & VideoEncodingAdditionalOptions;
@@ -246,6 +276,12 @@ export const validateVideoEncodingConfig = (config: VideoEncodingConfig) => {
 	}
 	if (config.onEncoderConfig !== undefined && typeof config.onEncoderConfig !== 'function') {
 		throw new TypeError('config.onEncoderConfig, when provided, must be a function.');
+	}
+	if (config.onEncoderError !== undefined && typeof config.onEncoderError !== 'function') {
+		throw new TypeError('config.onEncoderError, when provided, must be a function.');
+	}
+	if (config.onEncoderSupport !== undefined && typeof config.onEncoderSupport !== 'function') {
+		throw new TypeError('config.onEncoderSupport, when provided, must be a function.');
 	}
 	if (config.onEncodedSample !== undefined && typeof config.onEncodedSample !== 'function') {
 		throw new TypeError('config.onEncodedSample, when provided, must be a function.');
@@ -457,6 +493,10 @@ export type AudioEncodingConfig = {
 	 * WebCodecs API, is created.
 	 */
 	onEncoderConfig?: (config: AudioEncoderConfig) => unknown;
+	/** Observes native encoder errors. Synchronous observer exceptions are ignored. */
+	onEncoderError?: (error: unknown, stage: EncoderErrorStage) => void;
+	/** Observes native encoder support queries using detached config snapshots. Observer exceptions are ignored. */
+	onEncoderSupport?: (config: Readonly<AudioEncoderConfig>, event: EncoderSupportEvent) => void;
 	/** Called right before a sample is passed to the encoder. */
 	onEncodedSample?: (sample: AudioSample) => unknown;
 } & AudioEncodingAdditionalOptions;
@@ -543,6 +583,12 @@ export const validateAudioEncodingConfig = (config: AudioEncodingConfig) => {
 	}
 	if (config.onEncoderConfig !== undefined && typeof config.onEncoderConfig !== 'function') {
 		throw new TypeError('config.onEncoderConfig, when provided, must be a function.');
+	}
+	if (config.onEncoderError !== undefined && typeof config.onEncoderError !== 'function') {
+		throw new TypeError('config.onEncoderError, when provided, must be a function.');
+	}
+	if (config.onEncoderSupport !== undefined && typeof config.onEncoderSupport !== 'function') {
+		throw new TypeError('config.onEncoderSupport, when provided, must be a function.');
 	}
 	if (config.onEncodedSample !== undefined && typeof config.onEncodedSample !== 'function') {
 		throw new TypeError('config.onEncodedSample, when provided, must be a function.');

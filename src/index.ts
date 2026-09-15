@@ -105,6 +105,8 @@ export {
 	getDecodableAudioCodecs,
 } from './decode';
 export {
+	type EncoderErrorStage,
+	type EncoderSupportEvent,
 	type VideoEncodingConfig,
 	type VideoEncodingAdditionalOptions,
 	type VideoTransformOptions,
