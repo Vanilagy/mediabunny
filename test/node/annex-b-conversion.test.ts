@@ -2,6 +2,7 @@ import { expect, test } from 'vitest';
 import { Input } from '../../src/input.js';
 import { BufferSource, FilePathSource } from '../../src/source.js';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { Output } from '../../src/output.js';
 import { Mp4OutputFormat } from '../../src/output-format.js';
@@ -10,7 +11,7 @@ import { Conversion } from '../../src/conversion.js';
 import { EncodedPacketSink } from '../../src/media-sink.js';
 import { iterateAvcNalUnits } from '../../src/codec-data.js';
 
-const __dirname = new URL('.', import.meta.url).pathname;
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
 test('Annex B to length-prefixed conversion, MP4', async () => {
 	using originalInput = new Input({

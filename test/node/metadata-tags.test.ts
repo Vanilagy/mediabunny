@@ -18,10 +18,11 @@ import { BufferSource, FilePathSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { AttachedFile, MetadataTags } from '../../src/metadata.js';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { AudioCodec, buildAudioCodecString } from '../../src/codec.js';
 import { Conversion } from '../../src/conversion.js';
 
-const __dirname = new URL('.', import.meta.url).pathname;
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
 const createDummyAudioTrack = (codec: AudioCodec, output: Output) => {
 	const source = new EncodedAudioPacketSource(codec);

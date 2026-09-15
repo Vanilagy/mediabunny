@@ -11,6 +11,7 @@ import { Logging } from './logging';
 import { MetadataTags } from './metadata';
 import {
 	coalesceIndex,
+	TextDecoder,
 	textDecoder,
 	textEncoder,
 	isIso88591Compatible,

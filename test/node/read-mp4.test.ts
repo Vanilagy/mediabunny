@@ -1,5 +1,6 @@
 import { expect, test } from 'vitest';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
 	ALL_FORMATS,
 	BufferSource,
@@ -16,7 +17,7 @@ import {
 } from '../../src/index.js';
 import { assert, toUint8Array } from '../../src/misc.js';
 
-const __dirname = new URL('.', import.meta.url).pathname;
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
 test('Should be able to get packets from a .MP4 file', async () => {
 	const filePath = path.join(__dirname, '..', 'public/video.mp4');

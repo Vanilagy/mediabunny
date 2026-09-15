@@ -1454,6 +1454,8 @@ export class CustomSource extends Source {
 	_options: CustomSourceOptions;
 	/** @internal */
 	_orchestrator: ReadOrchestrator;
+	/** @internal */
+	_readers = new Set<ReadableStreamDefaultReader<Uint8Array>>();
 
 	/** Creates a new {@link CustomSource} whose behavior is specified by `options`.  */
 	constructor(options: CustomSourceOptions) {
@@ -1544,6 +1546,9 @@ export class CustomSource extends Source {
 			if (isThenable(data)) data = await data;
 
 			if (worker.aborted) {
+				if (data instanceof ReadableStream) {
+					await data.cancel();
+				}
 				break;
 			}
 
@@ -1563,35 +1568,44 @@ export class CustomSource extends Source {
 				this._orchestrator.supplyWorkerData(worker, data);
 			} else if (data instanceof ReadableStream) {
 				const reader = data.getReader();
+				this._readers.add(reader);
 
-				while (worker.currentPos < originalTargetPos && !worker.aborted) {
-					const { done, value } = await reader.read();
-					if (done) {
-						if (worker.currentPos < originalTargetPos) {
-							// Yes, we're *that* strict
-							throw new Error(
-								`ReadableStream returned by options.read ended before supplying enough data.`
-								+ ` Requested ${originalTargetPos - originalCurrentPos} bytes, but got ${
-									worker.currentPos - originalCurrentPos
-								}`,
+				try {
+					while (worker.currentPos < originalTargetPos && !worker.aborted) {
+						const { done, value } = await reader.read();
+
+						if (done) {
+							if (worker.currentPos < originalTargetPos) {
+								// Yes, we're *that* strict
+								throw new Error(
+									`ReadableStream returned by options.read ended before supplying enough data.`
+									+ ` Requested ${originalTargetPos - originalCurrentPos} bytes, but got ${
+										worker.currentPos - originalCurrentPos
+									}`,
+								);
+							}
+
+							break;
+						}
+
+						if (!(value instanceof Uint8Array)) {
+							throw new TypeError(
+								'ReadableStream returned by options.read must yield Uint8Array chunks.',
 							);
 						}
 
-						break;
+						if (worker.aborted) {
+							break;
+						}
+
+						const data = toUint8Array(value); // Normalize things like Node.js Buffer to Uint8Array
+
+						this._dispatchRead(worker.currentPos, worker.currentPos + data.length);
+						this._orchestrator.supplyWorkerData(worker, data);
 					}
-
-					if (!(value instanceof Uint8Array)) {
-						throw new TypeError('ReadableStream returned by options.read must yield Uint8Array chunks.');
-					}
-
-					if (worker.aborted) {
-						break;
-					}
-
-					const data = toUint8Array(value); // Normalize things like Node.js Buffer to Uint8Array
-
-					this._dispatchRead(worker.currentPos, worker.currentPos + data.length);
-					this._orchestrator.supplyWorkerData(worker, data);
+				} finally {
+					this._readers.delete(reader);
+					reader.releaseLock();
 				}
 			} else {
 				throw new TypeError('options.read must return or resolve to a Uint8Array or a ReadableStream.');
@@ -1604,6 +1618,13 @@ export class CustomSource extends Source {
 	/** @internal */
 	_dispose() {
 		this._orchestrator.dispose();
+
+		for (const reader of this._readers) {
+			// Pending consumers have already been rejected with InputDisposedError
+			void reader.cancel().catch(() => {});
+		}
+
+		this._readers.clear();
 		this._options.dispose?.();
 	}
 }
