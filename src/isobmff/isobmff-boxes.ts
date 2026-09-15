@@ -24,6 +24,8 @@ import {
 import {
 	AudioCodec,
 	generateAv1CodecConfigurationFromCodecString,
+	isBuiltInAudioCodec,
+	isBuiltInVideoCodec,
 	parsePcmCodec,
 	PCM_AUDIO_CODECS,
 	PcmAudioCodec,
@@ -1774,6 +1776,8 @@ const dataStringBoxLong = (value: string) => {
 };
 
 const videoCodecToBoxName = (codec: VideoCodec, fullCodecString: string) => {
+	assert(isBuiltInVideoCodec(codec));
+
 	switch (codec) {
 		case 'avc': return fullCodecString.startsWith('avc3') ? 'avc3' : 'avc1';
 		case 'hevc': return 'hvc1';
@@ -1797,6 +1801,8 @@ const VIDEO_CODEC_TO_CONFIGURATION_BOX: Record<
 };
 
 const audioCodecToBoxName = (codec: AudioCodec, isQuickTime: boolean): string => {
+	assert(isBuiltInAudioCodec(codec));
+
 	switch (codec) {
 		case 'aac': return 'mp4a';
 		case 'mp3': return 'mp4a';

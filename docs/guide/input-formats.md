@@ -72,6 +72,18 @@ const input = new Input({
 Using `ALL_FORMATS` means [demuxers](https://en.wikipedia.org/wiki/Demultiplexer_(media_file)) for all formats must be included in the bundle, which can increase the bundle size significantly. Use it only if you need to support all formats.
 :::
 
+When data is first requested, the `Input` asks each format in the list, in order, whether it recognizes the file, and uses the first one that does. If none does, reading throws an `UnsupportedInputFormatError`.
+
+`ALL_FORMATS` only contains the formats built into Mediabunny. Your own [custom formats](./custom-containers) have to be added to the list explicitly:
+```ts
+import { Input, ALL_FORMATS } from 'mediabunny';
+
+const input = new Input({
+	formats: [...ALL_FORMATS, new MyInputFormat()],
+	// ...
+});
+```
+
 ## Input format class hierarchy
 
 In addition to singletons, input format classes are structured hierarchically:

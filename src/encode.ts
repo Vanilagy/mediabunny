@@ -7,20 +7,26 @@
  */
 
 import {
-	AUDIO_CODECS,
 	AudioCodec,
 	buildAudioCodecString,
 	buildVideoCodecString,
 	getAudioEncoderConfigExtension,
 	getVideoEncoderConfigExtension,
 	inferCodecFromCodecString,
+	isBuiltInAudioCodec,
+	isBuiltInVideoCodec,
 	MediaCodec,
 	PCM_AUDIO_CODECS,
 	SUBTITLE_CODECS,
 	SubtitleCodec,
-	VIDEO_CODECS,
 	VideoCodec,
 } from './codec';
+import {
+	getAllAudioCodecs,
+	getAllVideoCodecs,
+	isAudioCodec,
+	isVideoCodec,
+} from './custom-codec';
 import { customAudioEncoders, customVideoEncoders } from './custom-coder';
 import { isFirefox, MaybePromise, Rotation } from './misc';
 import { EncodedPacket } from './packet';
@@ -147,8 +153,10 @@ export const validateVideoEncodingConfig = (config: VideoEncodingConfig) => {
 	if (!config || typeof config !== 'object') {
 		throw new TypeError('Encoding config must be an object.');
 	}
-	if (!VIDEO_CODECS.includes(config.codec)) {
-		throw new TypeError(`Invalid video codec '${config.codec}'. Must be one of: ${VIDEO_CODECS.join(', ')}.`);
+	if (!isVideoCodec(config.codec)) {
+		throw new TypeError(
+			`Invalid video codec '${config.codec}'. Must be one of: ${getAllVideoCodecs().join(', ')}.`,
+		);
 	}
 	if (!(config.bitrate instanceof Quality) && (!Number.isInteger(config.bitrate) || config.bitrate <= 0)) {
 		throw new TypeError('config.bitrate must be a positive integer or a quality.');
@@ -304,7 +312,12 @@ export const validateVideoEncodingAdditionalOptions = (codec: VideoCodec, option
 	if (options.fullCodecString !== undefined && typeof options.fullCodecString !== 'string') {
 		throw new TypeError('fullCodecString, when provided, must be a string.');
 	}
-	if (options.fullCodecString !== undefined && inferCodecFromCodecString(options.fullCodecString) !== codec) {
+	// Only built-in codecs have a codec string we know the shape of; a registered one's is its encoder's business
+	if (
+		options.fullCodecString !== undefined
+		&& isBuiltInVideoCodec(codec)
+		&& inferCodecFromCodecString(options.fullCodecString) !== codec
+	) {
 		throw new TypeError(
 			`fullCodecString, when provided, must be a string that matches the specified codec (${codec}).`,
 		);
@@ -326,8 +339,7 @@ export const validateVideoEncodingAdditionalOptions = (codec: VideoCodec, option
 	}
 };
 
-export const buildVideoEncoderConfig = (options: {
-	codec: VideoCodec;
+export const buildVideoEncoderConfig = (codec: VideoCodec, options: {
 	width: number;
 	height: number;
 	bitrate: number | Quality;
@@ -336,12 +348,12 @@ export const buildVideoEncoderConfig = (options: {
 	squarePixelHeight?: number;
 } & VideoEncodingAdditionalOptions): VideoEncoderConfig => {
 	const resolvedBitrate = options.bitrate instanceof Quality
-		? options.bitrate._toVideoBitrate(options.codec, options.width, options.height)
+		? options.bitrate._toVideoBitrate(codec, options.width, options.height)
 		: options.bitrate;
 
 	return {
 		codec: options.fullCodecString ?? buildVideoCodecString(
-			options.codec,
+			codec,
 			options.width,
 			options.height,
 			resolvedBitrate,
@@ -359,7 +371,7 @@ export const buildVideoEncoderConfig = (options: {
 		hardwareAcceleration: options.hardwareAcceleration,
 		scalabilityMode: options.scalabilityMode,
 		contentHint: options.contentHint,
-		...getVideoEncoderConfigExtension(options.codec),
+		...getVideoEncoderConfigExtension(codec),
 	};
 };
 
@@ -423,8 +435,10 @@ export const validateAudioEncodingConfig = (config: AudioEncodingConfig) => {
 	if (!config || typeof config !== 'object') {
 		throw new TypeError('Encoding config must be an object.');
 	}
-	if (!AUDIO_CODECS.includes(config.codec)) {
-		throw new TypeError(`Invalid audio codec '${config.codec}'. Must be one of: ${AUDIO_CODECS.join(', ')}.`);
+	if (!isAudioCodec(config.codec)) {
+		throw new TypeError(
+			`Invalid audio codec '${config.codec}'. Must be one of: ${getAllAudioCodecs().join(', ')}.`,
+		);
 	}
 	if (
 		config.bitrate === undefined
@@ -503,26 +517,30 @@ export const validateAudioEncodingAdditionalOptions = (codec: AudioCodec, option
 	if (options.fullCodecString !== undefined && typeof options.fullCodecString !== 'string') {
 		throw new TypeError('fullCodecString, when provided, must be a string.');
 	}
-	if (options.fullCodecString !== undefined && inferCodecFromCodecString(options.fullCodecString) !== codec) {
+	// Only built-in codecs have a codec string we know the shape of; a registered one's is its encoder's business
+	if (
+		options.fullCodecString !== undefined
+		&& isBuiltInAudioCodec(codec)
+		&& inferCodecFromCodecString(options.fullCodecString) !== codec
+	) {
 		throw new TypeError(
 			`fullCodecString, when provided, must be a string that matches the specified codec (${codec}).`,
 		);
 	}
 };
 
-export const buildAudioEncoderConfig = (options: {
-	codec: AudioCodec;
+export const buildAudioEncoderConfig = (codec: AudioCodec, options: {
 	numberOfChannels: number;
 	sampleRate: number;
 	bitrate?: number | Quality;
 } & AudioEncodingAdditionalOptions): AudioEncoderConfig => {
 	const resolvedBitrate = options.bitrate instanceof Quality
-		? options.bitrate._toAudioBitrate(options.codec)
+		? options.bitrate._toAudioBitrate(codec)
 		: options.bitrate;
 
 	return {
 		codec: options.fullCodecString ?? buildAudioCodecString(
-			options.codec,
+			codec,
 			options.numberOfChannels,
 			options.sampleRate,
 		),
@@ -530,7 +548,7 @@ export const buildAudioEncoderConfig = (options: {
 		sampleRate: options.sampleRate,
 		bitrate: resolvedBitrate,
 		bitrateMode: options.bitrateMode,
-		...getAudioEncoderConfigExtension(options.codec),
+		...getAudioEncoderConfigExtension(codec),
 	};
 };
 
@@ -565,7 +583,9 @@ export class Quality {
 			prores: 220_000_000 / referenceBitrate, // Apple ProRes white paper claims 220 Mbps for 1080p 422 HQ @30Hz
 		};
 
-		const codecAdjustedBitrate = baseBitrate * codecEfficiencyFactors[codec];
+		// Registered codecs get the AVC reference rate; their encoders may treat it as a hint
+		const efficiency = isBuiltInVideoCodec(codec) ? codecEfficiencyFactors[codec] : 1;
+		const codecAdjustedBitrate = baseBitrate * efficiency;
 		const finalBitrate = codecAdjustedBitrate * this._factor;
 
 		return Math.ceil(finalBitrate / 1000) * 1000;
@@ -586,7 +606,8 @@ export class Quality {
 			eac3: 192000, // 192kbps base for E-AC-3
 		};
 
-		const baseBitrate = baseRates[codec as keyof typeof baseRates];
+		// Registered codecs get the AAC reference rate; their encoders may treat it as a hint
+		const baseBitrate = isBuiltInAudioCodec(codec) ? baseRates[codec as keyof typeof baseRates] : 128000;
 		if (!baseBitrate) {
 			throw new Error(`Unhandled codec: ${codec}`);
 		}
@@ -652,9 +673,9 @@ export const QUALITY_VERY_HIGH = /* #__PURE__ */ new Quality(4);
  * @public
  */
 export const canEncode = (codec: MediaCodec) => {
-	if ((VIDEO_CODECS as readonly string[]).includes(codec)) {
+	if (isVideoCodec(codec)) {
 		return canEncodeVideo(codec as VideoCodec);
-	} else if ((AUDIO_CODECS as readonly string[]).includes(codec)) {
+	} else if (isAudioCodec(codec)) {
 		return canEncodeAudio(codec as AudioCodec);
 	} else if ((SUBTITLE_CODECS as readonly string[]).includes(codec)) {
 		return canEncodeSubtitles(codec as SubtitleCodec);
@@ -683,7 +704,7 @@ export const canEncodeVideo = async (
 		...restOptions
 	} = options;
 
-	if (!VIDEO_CODECS.includes(codec)) {
+	if (!isVideoCodec(codec)) {
 		return false;
 	}
 	if (!Number.isInteger(width) || width <= 0) {
@@ -697,8 +718,7 @@ export const canEncodeVideo = async (
 	}
 	validateVideoEncodingAdditionalOptions(codec, restOptions);
 
-	const encoderConfig = buildVideoEncoderConfig({
-		codec,
+	const encoderConfig = buildVideoEncoderConfig(codec, {
 		width,
 		height,
 		bitrate,
@@ -707,7 +727,9 @@ export const canEncodeVideo = async (
 		alpha: 'discard', // Since we handle alpha ourselves
 	});
 
-	const key = JSON.stringify(encoderConfig);
+	// The codec name is part of the identity: a custom coder is asked about it, and two registered codecs can resolve
+	// to the same encoder config
+	const key = JSON.stringify([codec, encoderConfig]);
 	const memoized = canEncodeVideoMemo.get(key);
 	if (memoized) {
 		return memoized;
@@ -718,7 +740,7 @@ export const canEncodeVideo = async (
 			// There's a custom encoder
 			return true;
 		}
-		if (typeof VideoEncoder === 'undefined') {
+		if (!isBuiltInVideoCodec(codec) || typeof VideoEncoder === 'undefined') {
 			return false;
 		}
 
@@ -797,7 +819,7 @@ export const canEncodeAudio = async (
 		...restOptions
 	} = options;
 
-	if (!AUDIO_CODECS.includes(codec)) {
+	if (!isAudioCodec(codec)) {
 		return false;
 	}
 	if (!Number.isInteger(numberOfChannels) || numberOfChannels <= 0) {
@@ -811,15 +833,16 @@ export const canEncodeAudio = async (
 	}
 	validateAudioEncodingAdditionalOptions(codec, restOptions);
 
-	const encoderConfig = buildAudioEncoderConfig({
-		codec,
+	const encoderConfig = buildAudioEncoderConfig(codec, {
 		numberOfChannels,
 		sampleRate,
 		bitrate,
 		...restOptions,
 	});
 
-	const key = JSON.stringify(encoderConfig);
+	// The codec name is part of the identity: a custom coder is asked about it, and two registered codecs can resolve
+	// to the same encoder config
+	const key = JSON.stringify([codec, encoderConfig]);
 	const memoized = canEncodeAudioMemo.get(key);
 	if (memoized) {
 		return memoized;
@@ -833,7 +856,7 @@ export const canEncodeAudio = async (
 		if ((PCM_AUDIO_CODECS as readonly string[]).includes(codec)) {
 			return true; // Because we encode these ourselves
 		}
-		if (typeof AudioEncoder === 'undefined') {
+		if (!isBuiltInAudioCodec(codec) || typeof AudioEncoder === 'undefined') {
 			return false;
 		}
 
@@ -879,7 +902,7 @@ export const getEncodableCodecs = async (): Promise<MediaCodec[]> => {
  * @public
  */
 export const getEncodableVideoCodecs = async (
-	checkedCodecs: VideoCodec[] = VIDEO_CODECS as unknown as VideoCodec[],
+	checkedCodecs: VideoCodec[] = getAllVideoCodecs(),
 	options?: {
 		width?: number;
 		height?: number;
@@ -896,7 +919,7 @@ export const getEncodableVideoCodecs = async (
  * @public
  */
 export const getEncodableAudioCodecs = async (
-	checkedCodecs: AudioCodec[] = AUDIO_CODECS as unknown as AudioCodec[],
+	checkedCodecs: AudioCodec[] = getAllAudioCodecs(),
 	options?: {
 		numberOfChannels?: number;
 		sampleRate?: number;

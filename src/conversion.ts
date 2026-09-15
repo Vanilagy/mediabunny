@@ -7,10 +7,8 @@
  */
 
 import {
-	AUDIO_CODECS,
 	AudioCodec,
-	NON_PCM_AUDIO_CODECS,
-	VIDEO_CODECS,
+	PCM_AUDIO_CODECS,
 	VideoCodec,
 } from './codec';
 import {
@@ -21,6 +19,8 @@ import {
 	QUALITY_HIGH,
 	VideoEncodingConfig,
 } from './encode';
+import { getAllAudioCodecs, getAllVideoCodecs, isAudioCodec, isVideoCodec } from './custom-codec';
+import { CustomMuxer, CustomOutputFormat } from './custom-container';
 import { Input } from './input';
 import { InputAudioTrack, InputTrack, InputVideoTrack } from './input-track';
 import { Logging } from './logging';
@@ -45,7 +45,6 @@ import {
 	Rotation,
 } from './misc';
 import { Output, OutputTrackGroup, TrackType } from './output';
-import { Mp4OutputFormat } from './output-format';
 import {
 	AudioSample,
 	clampCropRectangle,
@@ -321,9 +320,9 @@ const validateVideoOptions = (videoOptions: ConversionVideoOptions) => {
 	if (videoOptions?.forceTranscode !== undefined && typeof videoOptions.forceTranscode !== 'boolean') {
 		throw new TypeError('options.video.forceTranscode, when provided, must be a boolean.');
 	}
-	if (videoOptions?.codec !== undefined && !VIDEO_CODECS.includes(videoOptions.codec)) {
+	if (videoOptions?.codec !== undefined && !isVideoCodec(videoOptions.codec)) {
 		throw new TypeError(
-			`options.video.codec, when provided, must be one of: ${VIDEO_CODECS.join(', ')}.`,
+			`options.video.codec, when provided, must be one of: ${getAllVideoCodecs().join(', ')}.`,
 		);
 	}
 	if (
@@ -429,9 +428,9 @@ const validateAudioOptions = (audioOptions: ConversionAudioOptions) => {
 	if (audioOptions?.forceTranscode !== undefined && typeof audioOptions.forceTranscode !== 'boolean') {
 		throw new TypeError('options.audio.forceTranscode, when provided, must be a boolean.');
 	}
-	if (audioOptions?.codec !== undefined && !AUDIO_CODECS.includes(audioOptions.codec)) {
+	if (audioOptions?.codec !== undefined && !isAudioCodec(audioOptions.codec)) {
 		throw new TypeError(
-			`options.audio.codec, when provided, must be one of: ${AUDIO_CODECS.join(', ')}.`,
+			`options.audio.codec, when provided, must be one of: ${getAllAudioCodecs().join(', ')}.`,
 		);
 	}
 	if (
@@ -522,6 +521,33 @@ export type DiscardedTrack = {
 	/** The options that were provided for this track, or `{}` if none were provided. */
 	trackOptions: ConversionVideoOptions | ConversionAudioOptions;
 };
+
+// Accepts exactly one codec and discards what it is given: a stand-in output for probing an encoder
+class EncoderProbeFormat extends CustomOutputFormat {
+	constructor(private codec: VideoCodec) {
+		super();
+	}
+
+	createMuxer(): CustomMuxer {
+		return { start() {}, getMimeType: () => 'video/probe', addEncodedVideoPacket() {}, finalize() {} };
+	}
+
+	get name() { return 'Encoder probe'; }
+	get fileExtension() { return ''; }
+	get mimeType() { return 'video/probe'; }
+	getSupportedCodecs() { return [this.codec]; }
+	getSupportedTrackCounts() {
+		return {
+			video: { min: 1, max: 1 },
+			audio: { min: 0, max: 0 },
+			subtitle: { min: 0, max: 0 },
+			total: { min: 1, max: 1 },
+		};
+	}
+
+	get supportsVideoRotationMetadata() { return true; }
+	get supportsTimestampedMediaData() { return true; }
+}
 
 /**
  * Represents a media file conversion process, used to convert one media file into another. In addition to conversion,
@@ -1310,7 +1336,7 @@ export class Conversion {
 				// now, this is the simplest way. Will refactor in the future! TODO
 
 				const tempOutput = new Output({
-					format: new Mp4OutputFormat(), // Supports all video codecs
+					format: new EncoderProbeFormat(encodingConfig.codec),
 					target: new NullTarget(),
 				});
 
@@ -1525,8 +1551,6 @@ export class Conversion {
 				return;
 			}
 
-			let codecOfChoice: AudioCodec | null = null;
-
 			if (trackOptions.codec) {
 				audioCodecs = audioCodecs.filter(codec => codec === trackOptions.codec);
 			}
@@ -1543,9 +1567,12 @@ export class Conversion {
 				bitrate,
 			});
 
+			const isPcm = (codec: AudioCodec) => (PCM_AUDIO_CODECS as readonly string[]).includes(codec);
+			let codecOfChoice = encodableCodecs[0] ?? null;
+
 			if (
-				!encodableCodecs.some(codec => (NON_PCM_AUDIO_CODECS as readonly string[]).includes(codec))
-				&& audioCodecs.some(codec => (NON_PCM_AUDIO_CODECS as readonly string[]).includes(codec))
+				encodableCodecs.every(isPcm)
+				&& audioCodecs.some(codec => !isPcm(codec))
 				&& (numberOfChannels !== FALLBACK_NUMBER_OF_CHANNELS || sampleRate !== FALLBACK_SAMPLE_RATE)
 			) {
 				// We could not find a compatible non-PCM codec despite the container supporting them. This can be
@@ -1558,16 +1585,13 @@ export class Conversion {
 					bitrate,
 				});
 
-				const nonPcmCodec = encodableCodecsWithDefaultParams
-					.find(codec => (NON_PCM_AUDIO_CODECS as readonly string[]).includes(codec));
+				const nonPcmCodec = encodableCodecsWithDefaultParams.find(codec => !isPcm(codec));
 				if (nonPcmCodec) {
 					// We are able to encode using a non-PCM codec, but it'll require resampling
 					codecOfChoice = nonPcmCodec;
 					numberOfChannels = FALLBACK_NUMBER_OF_CHANNELS;
 					sampleRate = FALLBACK_SAMPLE_RATE;
 				}
-			} else {
-				codecOfChoice = encodableCodecs[0] ?? null;
 			}
 
 			if (codecOfChoice === null) {

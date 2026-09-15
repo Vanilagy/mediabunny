@@ -121,6 +121,8 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 	_backingToTrack = new Map<InputTrackBacking, InputTrack>();
 	/** @internal */
 	_disposed = false;
+	/** @internal */
+	_abortController = new AbortController();
 	_nextSourceCacheAge = 0;
 	/** @internal */
 	_sourceRefs: SourceRef[] = [];
@@ -525,6 +527,7 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 		}
 
 		this._disposed = true;
+		this._abortController.abort(new InputDisposedError());
 
 		for (const ref of this._sourceRefs) {
 			ref.free();

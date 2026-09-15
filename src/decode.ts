@@ -7,18 +7,18 @@
  */
 
 import {
-	AUDIO_CODECS,
 	AudioCodec,
 	buildAudioCodecString,
 	buildVideoCodecString,
 	guessDescriptionForAudio,
 	guessDescriptionForVideo,
 	inferCodecFromCodecString,
+	isBuiltInAudioCodec,
+	isBuiltInVideoCodec,
 	MediaCodec,
 	parsePcmCodec,
 	PCM_AUDIO_CODECS,
 	PcmAudioCodec,
-	VIDEO_CODECS,
 	VideoCodec,
 } from './codec';
 import {
@@ -34,6 +34,7 @@ import {
 	parseAvcSps,
 	sanitizeHevcPacketForChromium,
 } from './codec-data';
+import { getAllAudioCodecs, getAllVideoCodecs, isAudioCodec, isVideoCodec } from './custom-codec';
 import { CustomAudioDecoder, customAudioDecoders, CustomVideoDecoder, customVideoDecoders } from './custom-coder';
 import {
 	assert,
@@ -142,6 +143,10 @@ export class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 				.call(() => this.customDecoder!.init())
 				.catch(error => onError(error));
 		} else {
+			if (!isBuiltInVideoCodec(codec)) {
+				throw new Error(`No custom decoder supports codec '${codec}' with this configuration.`);
+			}
+
 			const colorHandler = (frame: VideoFrame) => {
 				if (this.alphaQueue.length > 0) {
 					// Even when no alpha data is present (most of the time), there will be nulls in this queue
@@ -967,6 +972,10 @@ export class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 				.call(() => this.customDecoder!.init())
 				.catch(error => onError(error));
 		} else {
+			if (!isBuiltInAudioCodec(codec)) {
+				throw new Error(`No custom decoder supports codec '${codec}' with this configuration.`);
+			}
+
 			const stack = new Error('Decoding error').stack;
 
 			this.decoder = new AudioDecoder({
@@ -1266,7 +1275,12 @@ const validateVideoDecodingConfig = (codec: VideoCodec, options: SetOptional<Vid
 	if (options.codec !== undefined && typeof options.codec !== 'string') {
 		throw new TypeError('options.codec, when provided, must be a string.');
 	}
-	if (options.codec !== undefined && inferCodecFromCodecString(options.codec) !== codec) {
+	// Only built-in codecs have a codec string we know the shape of; a registered one's is its decoder's business
+	if (
+		options.codec !== undefined
+		&& isBuiltInVideoCodec(codec)
+		&& inferCodecFromCodecString(options.codec) !== codec
+	) {
 		throw new TypeError(`options.codec, when provided, must match the specified codec (${codec}).`);
 	}
 	if (
@@ -1320,7 +1334,12 @@ const validateAudioDecodingConfig = (
 	if (options.codec !== undefined && typeof options.codec !== 'string') {
 		throw new TypeError('options.codec, when provided, must be a string.');
 	}
-	if (options.codec !== undefined && inferCodecFromCodecString(options.codec) !== codec) {
+	// Only built-in codecs have a codec string we know the shape of; a registered one's is its decoder's business
+	if (
+		options.codec !== undefined
+		&& isBuiltInAudioCodec(codec)
+		&& inferCodecFromCodecString(options.codec) !== codec
+	) {
 		throw new TypeError(`options.codec, when provided, must match the specified codec (${codec}).`);
 	}
 	if (
@@ -1346,9 +1365,9 @@ const validateAudioDecodingConfig = (
  * @public
  */
 export const canDecode = (codec: MediaCodec) => {
-	if ((VIDEO_CODECS as readonly string[]).includes(codec)) {
+	if (isVideoCodec(codec)) {
 		return canDecodeVideo(codec as VideoCodec);
-	} else if ((AUDIO_CODECS as readonly string[]).includes(codec)) {
+	} else if (isAudioCodec(codec)) {
 		return canDecodeAudio(codec as AudioCodec);
 	}
 
@@ -1364,7 +1383,7 @@ export const canDecodeVideo = async (
 	codec: VideoCodec,
 	options: SetOptional<VideoDecoderConfig, 'codec'> = {},
 ) => {
-	if (!VIDEO_CODECS.includes(codec)) {
+	if (!isVideoCodec(codec)) {
 		return false;
 	}
 
@@ -1376,9 +1395,15 @@ export const canDecodeVideo = async (
 		codedHeight: options.codedHeight ?? 720,
 		codec: options.codec ?? buildVideoCodecString(codec, 1280, 720, 1e6, false),
 	};
-	resolvedOptions.description ??= guessDescriptionForVideo(resolvedOptions);
+	if (isBuiltInVideoCodec(codec)) {
+		// A registered codec's description is whatever its decoder expects; we can't
+		// guess one from a codec string we don't know
+		resolvedOptions.description ??= guessDescriptionForVideo(resolvedOptions);
+	}
 
-	const key = JSON.stringify(resolvedOptions);
+	// The codec name is part of the identity: a custom coder is asked about it, and two registered codecs can resolve
+	// to the same config
+	const key = JSON.stringify([codec, resolvedOptions]);
 	const memoized = canDecodeVideoMemo.get(key);
 	if (memoized) {
 		return memoized;
@@ -1388,7 +1413,7 @@ export const canDecodeVideo = async (
 		if (customVideoDecoders.some(x => x.supports(codec, resolvedOptions))) {
 			return true;
 		}
-		if (typeof VideoDecoder === 'undefined') {
+		if (!isBuiltInVideoCodec(codec) || typeof VideoDecoder === 'undefined') {
 			return false;
 		}
 
@@ -1409,7 +1434,7 @@ export const canDecodeAudio = async (
 	codec: AudioCodec,
 	options: SetOptional<AudioDecoderConfig, 'codec' | 'numberOfChannels' | 'sampleRate'> = {},
 ) => {
-	if (!AUDIO_CODECS.includes(codec)) {
+	if (!isAudioCodec(codec)) {
 		return false;
 	}
 
@@ -1422,7 +1447,9 @@ export const canDecodeAudio = async (
 		codec: options.codec ?? buildAudioCodecString(codec, 2, 48000),
 	};
 
-	if (resolvedOptions.description === undefined) {
+	if (resolvedOptions.description === undefined && isBuiltInAudioCodec(codec)) {
+		// A registered codec's description is whatever its decoder expects; we can't
+		// guess one from a codec string we don't know
 		const generatedDescription = guessDescriptionForAudio(resolvedOptions);
 		if (generatedDescription === false) {
 			return false;
@@ -1431,7 +1458,9 @@ export const canDecodeAudio = async (
 		resolvedOptions.description = generatedDescription;
 	}
 
-	const key = JSON.stringify(resolvedOptions);
+	// The codec name is part of the identity: a custom coder is asked about it, and two registered codecs can resolve
+	// to the same config
+	const key = JSON.stringify([codec, resolvedOptions]);
 	const memoized = canDecodeAudioMemo.get(key);
 	if (memoized) {
 		return memoized;
@@ -1444,7 +1473,7 @@ export const canDecodeAudio = async (
 		if ((PCM_AUDIO_CODECS as readonly string[]).includes(codec)) {
 			return true;
 		}
-		if (typeof AudioDecoder === 'undefined') {
+		if (!isBuiltInAudioCodec(codec) || typeof AudioDecoder === 'undefined') {
 			return false;
 		}
 
@@ -1476,7 +1505,7 @@ export const getDecodableCodecs = async (): Promise<MediaCodec[]> => {
  * @public
  */
 export const getDecodableVideoCodecs = async (
-	checkedCodecs: VideoCodec[] = VIDEO_CODECS as unknown as VideoCodec[],
+	checkedCodecs: VideoCodec[] = getAllVideoCodecs(),
 	options?: SetOptional<VideoDecoderConfig, 'codec'>,
 ): Promise<VideoCodec[]> => {
 	const bools = await Promise.all(checkedCodecs.map(codec => canDecodeVideo(codec, options)));
@@ -1489,7 +1518,7 @@ export const getDecodableVideoCodecs = async (
  * @public
  */
 export const getDecodableAudioCodecs = async (
-	checkedCodecs: AudioCodec[] = AUDIO_CODECS as unknown as AudioCodec[],
+	checkedCodecs: AudioCodec[] = getAllAudioCodecs(),
 	options?: SetOptional<AudioDecoderConfig, 'codec' | 'numberOfChannels' | 'sampleRate'>,
 ): Promise<AudioCodec[]> => {
 	const bools = await Promise.all(checkedCodecs.map(codec => canDecodeAudio(codec, options)));

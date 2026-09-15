@@ -7,7 +7,7 @@
  */
 
 import { buildAdtsHeaderTemplate, parseAacAudioSpecificConfig, writeAdtsFrameLength } from '../../shared/aac-misc';
-import { validateAudioChunkMetadata, validateVideoChunkMetadata } from '../codec';
+import { isBuiltInAudioCodec, validateAudioChunkMetadata, validateVideoChunkMetadata } from '../codec';
 import {
 	AC3_REGISTRATION_DESCRIPTOR,
 	AvcDecoderConfigurationRecord,
@@ -160,6 +160,7 @@ export class MpegTsMuxer extends Muxer {
 		assert(meta?.decoderConfig);
 
 		const codec = track.source._codec;
+		assert(isBuiltInAudioCodec(codec));
 		assert(codec === 'aac' || codec === 'mp3' || codec === 'ac3' || codec === 'eac3');
 
 		let streamType: MpegTsStreamType;

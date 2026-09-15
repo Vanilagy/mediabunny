@@ -26,6 +26,7 @@ import {
 	isChromium,
 	setUint24,
 } from './misc';
+import { registeredVideoCodecs } from './custom-codec';
 import { Logging } from './logging';
 import { PacketType } from './packet';
 import { MetadataTags } from './metadata';
@@ -2461,8 +2462,16 @@ export const determineVideoPacketType = (
 		};
 
 		default: {
-			assertNever(codec);
-			assert(false);
+			const options = registeredVideoCodecs.get(codec);
+			if (!options?.determinePacketType) {
+				return null;
+			}
+
+			const type = options.determinePacketType(packetData, decoderConfig);
+			if (type !== null && type !== 'key' && type !== 'delta') {
+				throw new TypeError('determinePacketType must return \'key\', \'delta\' or null.');
+			}
+			return type;
 		};
 	}
 };

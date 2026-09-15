@@ -217,6 +217,18 @@ export class EncodedPacket {
 		});
 	}
 
+	/** Creates a packet containing timing and size information without loading its encoded bytes. */
+	static metadataOnly(
+		type: PacketType,
+		timestamp: number,
+		duration: number,
+		sequenceNumber: number,
+		byteLength: number,
+		sideData?: EncodedPacketSideData,
+	) {
+		return new EncodedPacket(PLACEHOLDER_DATA, type, timestamp, duration, sequenceNumber, byteLength, sideData);
+	}
+
 	/**
 	 * Creates an {@link EncodedPacket} from an
 	 * [`EncodedVideoChunk`](https://developer.mozilla.org/en-US/docs/Web/API/EncodedVideoChunk) or

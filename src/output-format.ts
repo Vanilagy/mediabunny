@@ -18,6 +18,7 @@ import {
 	VIDEO_CODECS,
 	VideoCodec,
 } from './codec';
+import { isAudioCodec, isVideoCodec } from './custom-codec';
 import { FlacMuxer } from './flac/flac-muxer';
 import { IsobmffMuxer } from './isobmff/isobmff-muxer';
 import { MatroskaMuxer } from './matroska/matroska-muxer';
@@ -88,14 +89,12 @@ export abstract class OutputFormat {
 
 	/** Returns a list of video codecs that this output format can contain. */
 	getSupportedVideoCodecs() {
-		return this.getSupportedCodecs()
-			.filter(codec => (VIDEO_CODECS as readonly string[]).includes(codec)) as VideoCodec[];
+		return this.getSupportedCodecs().filter(codec => isVideoCodec(codec)) as VideoCodec[];
 	}
 
 	/** Returns a list of audio codecs that this output format can contain. */
 	getSupportedAudioCodecs() {
-		return this.getSupportedCodecs()
-			.filter(codec => (AUDIO_CODECS as readonly string[]).includes(codec)) as AudioCodec[];
+		return this.getSupportedCodecs().filter(codec => isAudioCodec(codec)) as AudioCodec[];
 	}
 
 	/** Returns a list of subtitle codecs that this output format can contain. */

@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { OPUS_SAMPLE_RATE, validateAudioChunkMetadata } from '../codec';
+import { isBuiltInAudioCodec, OPUS_SAMPLE_RATE, validateAudioChunkMetadata } from '../codec';
 import { createVorbisComments, parseModesFromVorbisSetupPacket, parseOpusIdentificationHeader } from '../codec-data';
 import {
 	assert,
@@ -107,7 +107,9 @@ export class OggMuxer extends Muxer {
 			serialNumber = Math.floor(2 ** 32 * Math.random());
 		} while (this.trackDatas.some(td => td.serialNumber === serialNumber));
 
-		assert(track.source._codec === 'vorbis' || track.source._codec === 'opus');
+		const codec = track.source._codec;
+		assert(isBuiltInAudioCodec(codec));
+		assert(codec === 'vorbis' || codec === 'opus');
 
 		validateAudioChunkMetadata(meta);
 
@@ -117,11 +119,11 @@ export class OggMuxer extends Muxer {
 		const newTrackData: OggTrackData = {
 			track,
 			serialNumber,
-			internalSampleRate: track.source._codec === 'opus'
+			internalSampleRate: codec === 'opus'
 				? OPUS_SAMPLE_RATE
 				: meta.decoderConfig.sampleRate,
 			codecInfo: {
-				codec: track.source._codec,
+				codec,
 				vorbisInfo: null,
 				opusInfo: null,
 			},

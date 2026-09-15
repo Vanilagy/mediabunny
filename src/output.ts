@@ -379,9 +379,15 @@ export class Output<
 	/** @internal */
 	_muxer: Muxer;
 	/** @internal */
+	_abortController = new AbortController();
+	/** @internal */
 	_unfinalizedTargets = new Set<Target>();
 	/** @internal */
+	_targetsClosed = false;
+	/** @internal */
 	_rootWriterPromise: Promise<Writer> | null = null;
+	/** @internal */
+	_customWriterMonotonic: boolean | ((target: Target) => boolean) | null = null;
 	/** @internal */
 	_tracks: OutputTrack[] = [];
 	/** @internal */
@@ -517,6 +523,28 @@ export class Output<
 		target.on('finalized', () => this._unfinalizedTargets.delete(target), { once: true });
 	}
 
+	/**
+	 * Closes every remembered target. Targets can still arrive while earlier ones are closing, so this drains until
+	 * nothing is left, and keeps draining when a close fails; the first failure is thrown once everything was closed.
+	 */
+	private async _closeRemainingTargets() {
+		let closeError: { reason: unknown } | null = null;
+		while (this._unfinalizedTargets.size > 0) {
+			const targets = [...this._unfinalizedTargets];
+			this._unfinalizedTargets.clear();
+			for (const result of await Promise.allSettled(targets.map(target => target._close()))) {
+				if (result.status === 'rejected') {
+					closeError ??= { reason: result.reason };
+				}
+			}
+		}
+		this._targetsClosed = true;
+
+		if (closeError) {
+			throw closeError.reason;
+		}
+	}
+
 	/** @internal */
 	async _getInitTarget(): Promise<T> {
 		assert(this._initTarget !== null);
@@ -564,22 +592,42 @@ export class Output<
 		const result = this._getTargetValidated(request);
 
 		const handleResult = (target: T) => {
-			if (this.state === 'canceled') {
-				// Promise thrown away here, but no way to surface it to the user really
-				void target._close();
-			} else {
-				this._rememberTarget(target);
-			}
-
 			this._emit('target', { target, request, isRoot: true });
 			this._rootTarget = target;
-			return target;
+
+			if (this.state === 'canceled' && this._targetsClosed) {
+				// Cancellation has finished closing targets, so this one is on its own
+				return target._close();
+			}
+
+			this._rememberTarget(target); // An ongoing cancellation closes it along with the others
+			return null;
 		};
 
 		if (result instanceof Promise) {
-			return this._rootTargetPromise = result.then(handleResult);
+			return this._rootTargetPromise = result.then(async (target) => {
+				await handleResult(target);
+				return target;
+			});
 		} else {
-			return handleResult(result);
+			// A close promise is thrown away here, but this path must stay synchronous for the target getter
+			void handleResult(result);
+			return result;
+		}
+	}
+
+	/** @internal */
+	_ensureWritable() {
+		if (this.state === 'canceled') {
+			throw new Error('Output has been canceled.');
+		}
+
+		if (this.state === 'finalized') {
+			throw new Error('Output has been finalized.');
+		}
+
+		if (this.state === 'pending') {
+			throw new Error('Output has not started.');
 		}
 	}
 
@@ -587,8 +635,13 @@ export class Output<
 	_getRootWriter(isMonotonic: boolean | ((target: Target) => boolean)) {
 		return this._rootWriterPromise ??= (async () => {
 			const target = await this._getRootTarget();
+			this._ensureWritable();
 
-			const writer = new Writer(target, typeof isMonotonic === 'boolean' ? isMonotonic : isMonotonic(target));
+			const monotonic = typeof isMonotonic === 'boolean' ? isMonotonic : isMonotonic(target);
+			// The callback may have canceled the output
+			this._ensureWritable();
+
+			const writer = new Writer(target, monotonic);
 			writer.start();
 			return writer;
 		})();
@@ -831,7 +884,7 @@ export class Output<
 		if (this._cancelPromise) {
 			Logging._warn('Output has already been canceled.');
 			return this._cancelPromise;
-		} else if (this.state === 'finalizing' || this.state === 'finalized') {
+		} else if (this.state === 'finalizing' || this.state === 'finalized' || this.state === 'canceled') {
 			// Don't wanna warn when finalizing since that shows a warning when finalization fails and then cancel
 			// is called
 			if (this.state === 'finalized') {
@@ -843,15 +896,22 @@ export class Output<
 
 		return this._cancelPromise = (async () => {
 			this.state = 'canceled';
+			this._abortController.abort();
 
 			using lock = this._mutex.lock();
 			if (lock.pending) await lock.ready;
 
 			const promises = this._tracks.map(x => x.source._flushOrWaitForOngoingClose(true)); // Force close
-			await Promise.all(promises);
-
-			await Promise.all([...this._unfinalizedTargets].map(target => target._close()));
-			this._unfinalizedTargets.clear();
+			try {
+				await Promise.all(promises);
+			} finally {
+				await Promise.allSettled(promises);
+				try {
+					await this._muxer.dispose();
+				} finally {
+					await this._closeRemainingTargets();
+				}
+			}
 		})();
 	}
 
@@ -878,23 +938,32 @@ export class Output<
 			if (lock.pending) await lock.ready;
 
 			const promises = this._tracks.map(x => x.source._flushOrWaitForOngoingClose(false));
-			await Promise.all(promises);
+			try {
+				await Promise.all(promises);
 
-			await this._muxer.finalize();
+				await this._muxer.finalize();
 
-			if (this._rootWriterPromise) {
-				const rootWriter = await this._rootWriterPromise;
-				if (!rootWriter.finalized) {
-					await rootWriter.flush();
-					await rootWriter.finalize();
+				if (this._rootWriterPromise) {
+					const rootWriter = await this._rootWriterPromise;
+					if (!rootWriter.finalized) {
+						await rootWriter.flush();
+						await rootWriter.finalize();
+					}
 				}
-			}
 
-			if (this._onFinalize) {
-				await this._onFinalize();
-			}
+				if (this._onFinalize) {
+					await this._onFinalize();
+				}
 
-			this.state = 'finalized';
+				this.state = 'finalized';
+			} catch (error) {
+				this.state = 'canceled';
+				this._abortController.abort();
+				await Promise.allSettled(promises);
+				await this._muxer.dispose().catch(() => {});
+				await this._closeRemainingTargets().catch(() => {}); // The original error is the interesting one
+				throw error;
+			}
 		})();
 	}
 }

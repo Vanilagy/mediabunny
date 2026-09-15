@@ -8,15 +8,15 @@
 
 import { buildAacAudioSpecificConfig, parseAacAudioSpecificConfig } from '../shared/aac-misc';
 import {
-	AUDIO_CODECS,
 	AudioCodec,
+	isBuiltInAudioCodec,
+	isBuiltInVideoCodec,
 	MediaCodec,
 	parsePcmCodec,
 	PCM_AUDIO_CODECS,
 	PcmAudioCodec,
 	SUBTITLE_CODECS,
 	SubtitleCodec,
-	VIDEO_CODECS,
 	VideoCodec,
 } from './codec';
 import { OutputAudioTrack, OutputSubtitleTrack, OutputTrack, OutputVideoTrack } from './output';
@@ -65,6 +65,7 @@ import {
 } from './encode';
 import { AudioResampler } from './resample';
 import { determineVideoPacketType } from './codec-data';
+import { getAllAudioCodecs, getAllVideoCodecs, isAudioCodec, isVideoCodec } from './custom-codec';
 import { Logging } from './logging';
 
 /**
@@ -81,6 +82,10 @@ export abstract class MediaSource {
 	_closingPromise: Promise<void> | null = null;
 	/** @internal */
 	_closed = false;
+
+	get codec(): MediaCodec {
+		return this._codec;
+	}
 
 	/** @internal */
 	_ensureValidAdd() {
@@ -140,8 +145,11 @@ export abstract class MediaSource {
 				return;
 			}
 
-			connectedTrack.output._muxer.onTrackClose(connectedTrack);
+			await connectedTrack.output._muxer.onTrackClose(connectedTrack);
 		})();
+
+		// We'll report close failures when finalizing; don't leave an unhandled rejection until then
+		void this._closingPromise.catch(() => {});
 	}
 
 	/** @internal */
@@ -159,6 +167,10 @@ export abstract class MediaSource {
  * @public
  */
 export abstract class VideoSource extends MediaSource {
+	override get codec(): VideoCodec {
+		return this._codec;
+	}
+
 	/** @internal */
 	override _connectedTrack: OutputVideoTrack | null = null;
 	/** @internal */
@@ -168,8 +180,8 @@ export abstract class VideoSource extends MediaSource {
 	constructor(codec: VideoCodec) {
 		super();
 
-		if (!VIDEO_CODECS.includes(codec)) {
-			throw new TypeError(`Invalid video codec '${codec}'. Must be one of: ${VIDEO_CODECS.join(', ')}.`);
+		if (!isVideoCodec(codec)) {
+			throw new TypeError(`Invalid video codec '${codec}'. Must be one of: ${getAllVideoCodecs().join(', ')}.`);
 		}
 
 		this._codec = codec;
@@ -612,7 +624,7 @@ class VideoEncoderWrapper {
 
 	private ensureEncoder(videoSample: VideoSample) {
 		this.ensureEncoderPromise = (async () => {
-			const encoderConfig = buildVideoEncoderConfig({
+			const encoderConfig = buildVideoEncoderConfig(this.encodingConfig.codec, {
 				...this.encodingConfig,
 				width: videoSample.codedWidth,
 				height: videoSample.codedHeight,
@@ -659,6 +671,11 @@ class VideoEncoderWrapper {
 
 				await this.customEncoder.init();
 			} else {
+				if (!isBuiltInVideoCodec(this.encodingConfig.codec)) {
+					throw new Error(
+						`No custom encoder supports codec '${this.encodingConfig.codec}' with this configuration.`,
+					);
+				}
 				if (typeof VideoEncoder === 'undefined') {
 					throw new Error('VideoEncoder is not supported by this browser.');
 				}
@@ -1676,6 +1693,10 @@ export class MediaStreamVideoTrackSource extends VideoSource {
  * @public
  */
 export abstract class AudioSource extends MediaSource {
+	override get codec(): AudioCodec {
+		return this._codec;
+	}
+
 	/** @internal */
 	override _connectedTrack: OutputAudioTrack | null = null;
 	/** @internal */
@@ -1685,8 +1706,8 @@ export abstract class AudioSource extends MediaSource {
 	constructor(codec: AudioCodec) {
 		super();
 
-		if (!AUDIO_CODECS.includes(codec)) {
-			throw new TypeError(`Invalid audio codec '${codec}'. Must be one of: ${AUDIO_CODECS.join(', ')}.`);
+		if (!isAudioCodec(codec)) {
+			throw new TypeError(`Invalid audio codec '${codec}'. Must be one of: ${getAllAudioCodecs().join(', ')}.`);
 		}
 
 		this._codec = codec;
@@ -2053,7 +2074,7 @@ class AudioEncoderWrapper {
 		this.ensureEncoderPromise = (async () => {
 			const { numberOfChannels, sampleRate } = audioSample;
 
-			const encoderConfig = buildAudioEncoderConfig({
+			const encoderConfig = buildAudioEncoderConfig(this.encodingConfig.codec, {
 				numberOfChannels,
 				sampleRate,
 				...this.encodingConfig,
@@ -2097,6 +2118,11 @@ class AudioEncoderWrapper {
 			} else if ((PCM_AUDIO_CODECS as readonly string[]).includes(this.encodingConfig.codec)) {
 				this.initPcmEncoder();
 			} else {
+				if (!isBuiltInAudioCodec(this.encodingConfig.codec)) {
+					throw new Error(
+						`No custom encoder supports codec '${this.encodingConfig.codec}' with this configuration.`,
+					);
+				}
 				if (typeof AudioEncoder === 'undefined') {
 					throw new Error('AudioEncoder is not supported by this browser.');
 				}
@@ -2837,6 +2863,10 @@ const sendMessageToMediaStreamTrackProcessorWorker = (
  * @public
  */
 export abstract class SubtitleSource extends MediaSource {
+	override get codec(): SubtitleCodec {
+		return this._codec;
+	}
+
 	/** @internal */
 	override _connectedTrack: OutputSubtitleTrack | null = null;
 	/** @internal */
