@@ -793,11 +793,26 @@ export const videoSampleDescription = (
 	i16(0xffff), // Pre-defined
 ], [
 	VIDEO_CODEC_TO_CONFIGURATION_BOX[trackData.track.source._codec]?.(trackData) ?? null,
+	btrt(trackData),
 	pasp(trackData),
 	colorSpaceIsEmpty(trackData.info.decoderConfig.colorSpace)
 		? null
 		: colr(trackData),
 ]);
+
+/** Bit Rate Box: Declares the nominal target bitrate configured for the video encoder. */
+const btrt = (trackData: IsobmffVideoTrackData) => {
+	const bitrate = trackData.track.metadata.bitrate;
+	if (bitrate === undefined) {
+		return null;
+	}
+
+	return box('btrt', [
+		u32(0), // Decoder buffer size is unknown
+		u32(bitrate), // Maximum bitrate (nominal target)
+		u32(bitrate), // Average bitrate (nominal target)
+	]);
+};
 
 /** Pixel Aspect Ratio Box: Specifies pixel width:height spacing for non-square pixels. */
 export const pasp = (trackData: IsobmffVideoTrackData) => {
@@ -993,8 +1008,8 @@ export const esds = (trackData: IsobmffAudioTrackData) => {
 		...u8(objectTypeIndication), // Object type indication
 		...u8(0x15), // stream type(6bits)=5 audio, flags(2bits)=1
 		...u24(0), // 24bit buffer size
-		...u32(0), // max bitrate
-		...u32(0), // avg bitrate
+		...u32(trackData.track.metadata.bitrate ?? 0), // max bitrate (nominal target)
+		...u32(trackData.track.metadata.bitrate ?? 0), // avg bitrate (nominal target)
 	];
 	if (trackData.info.decoderConfig.description) {
 		const description = toUint8Array(trackData.info.decoderConfig.description);
