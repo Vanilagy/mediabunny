@@ -151,7 +151,22 @@ export abstract class MediaSource {
 
 	/** @internal */
 	async _flushOrWaitForOngoingClose(forceClose: boolean) {
-		return this._closingPromise ??= (async () => {
+		const ongoingClose = this._closingPromise;
+		if (ongoingClose) {
+			try {
+				await ongoingClose;
+				return;
+			} catch (error) {
+				if (!forceClose) {
+					throw error;
+				}
+				if (this._closingPromise !== ongoingClose) {
+					return this._closingPromise;
+				}
+			}
+		}
+
+		return this._closingPromise = (async () => {
 			await this._flushAndClose(forceClose);
 			this._closed = true;
 		})();
