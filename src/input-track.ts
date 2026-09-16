@@ -668,7 +668,7 @@ export class InputVideoTrack extends InputTrack {
 
 	/**
 	 * Returns the angle in degrees by which the track's frames should be rotated (clockwise). The rotation is
-	 * applied before any flip.
+	 * applied before flipping.
 	 */
 	async getRotation() {
 		return extractRotationFromMatrix(await this._backing.getTransformationMatrix());
@@ -687,7 +687,7 @@ export class InputVideoTrack extends InputTrack {
 	/**
 	 * Returns whether the track's frames should be flipped horizontally (about the vertical axis), after rotation.
 	 */
-	async isFlipped() {
+	async getFlip() {
 		return matrixIsFlipped(await this._backing.getTransformationMatrix());
 	}
 

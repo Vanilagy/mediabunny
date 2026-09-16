@@ -491,12 +491,12 @@ export const tkhd = (
 	if (trackData.type === 'video' && trackData.track.metadata.transformationMatrix) {
 		matrix = trackData.track.metadata.transformationMatrix;
 	} else if (trackData.type === 'video') {
-		const { rotation, isFlipped } = trackData.track.metadata;
+		const { rotation, flip } = trackData.track.metadata;
 
-		// Rotation is applied before the flip
+		// Rotation is applied before flipping
 		const linear = multiplyMatrices(
 			rotationMatrix(rotation ?? 0),
-			scaleMatrix(isFlipped ? -1 : 1, 1),
+			scaleMatrix(flip ? -1 : 1, 1),
 		);
 
 		matrix = centeredTransformationMatrix(linear, trackData.info.width, trackData.info.height);

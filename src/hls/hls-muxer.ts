@@ -410,8 +410,9 @@ export class HlsMuxer extends Muxer {
 			for (const track of tracks) {
 				if (track.isVideoTrack()) {
 					videoCount++;
-					requiresTransformationMetadata
-						||= (track.metadata.rotation ?? 0) !== 0 || !!track.metadata.isFlipped;
+					requiresTransformationMetadata ||= (track.metadata.rotation ?? 0) !== 0
+						|| !!track.metadata.flip
+						|| !!track.metadata.transformationMatrix;
 				} else if (track.isAudioTrack()) {
 					audioCount++;
 				}

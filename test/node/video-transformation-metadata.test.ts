@@ -82,11 +82,11 @@ const expectRoundTrip = async (
 ) => {
 	const track = await roundTrip(format, {
 		rotation,
-		isFlipped: flip,
+		flip,
 	});
 
 	expect(await track.getRotation()).toBe(rotation);
-	expect(await track.isFlipped()).toBe(flip);
+	expect(await track.getFlip()).toBe(flip);
 	expect(await track.getTransformationMatrix()).toEqual(expectedMatrix);
 
 	const [expectedWidth, expectedHeight] = rotation % 180 === 0 ? [WIDTH, HEIGHT] : [HEIGHT, WIDTH];
@@ -103,12 +103,12 @@ const expectMatrixRoundTrip = async (
 	// Conflicting rotation and flip to prove the matrix takes precedence
 	const track = await roundTrip(format, {
 		rotation: 180,
-		isFlipped: !expectedFlip,
+		flip: !expectedFlip,
 		transformationMatrix: matrix,
 	});
 
 	expect(await track.getRotation()).toBe(expectedRotation);
-	expect(await track.isFlipped()).toBe(expectedFlip);
+	expect(await track.getFlip()).toBe(expectedFlip);
 	expect(await track.getTransformationMatrix()).toEqual(matrix);
 };
 

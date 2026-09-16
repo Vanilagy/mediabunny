@@ -308,7 +308,7 @@ await videoTrack.getRotation(); // => 0 | 90 | 180 | 270
 
 // Get whether the track's frames should be flipped horizontally
 // (after rotation):
-await videoTrack.isFlipped(); // => boolean
+await videoTrack.getFlip(); // => boolean
 
 // Get the full transformation matrix that rotation and flip are
 // derived from:

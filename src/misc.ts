@@ -83,7 +83,7 @@ export const centeredTransformationMatrix = (linear: TransformationMatrix, width
 export const extractRotationFromMatrix = (matrix: TransformationMatrix) => {
 	const [a, b] = matrix;
 
-	// (1, 0) projects onto (a, b), so that's all we need. The rotation is applied before the flip though, so we
+	// (1, 0) projects onto (a, b), so that's all we need. The rotation is applied before flipping though, so we
 	// first need to undo the flip to isolate the rotation.
 	const radians = Math.atan2(b, matrixIsFlipped(matrix) ? -a : a);
 	return normalizeRotation(roundToMultiple(radians * RAD_TO_DEG, 90));
@@ -138,6 +138,22 @@ export const multiplyMatrices = (a: TransformationMatrix, b: TransformationMatri
 	}
 
 	return result;
+};
+
+/**
+ * Composes two "rotate, then flip" transformations into one. A flip conjugates any rotation that follows it, meaning
+ * the second rotation flips direction if the first flip is set.
+ */
+export const composeRotationAndFlip = (
+	rotation1: Rotation,
+	flip1: boolean,
+	rotation2: Rotation,
+	flip2: boolean,
+) => {
+	return {
+		rotation: normalizeRotation(rotation1 + (flip1 ? -rotation2 : rotation2)),
+		flip: flip1 !== flip2,
+	};
 };
 
 export const last = <T>(arr: T[]) => {

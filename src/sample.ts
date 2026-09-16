@@ -27,7 +27,7 @@ import {
 	simplifyRational,
 	Rectangle,
 	validateRectangle,
-	normalizeRotation,
+	composeRotationAndFlip,
 	roundToMultiple,
 	arrayArgmin,
 	MaybePromise,
@@ -219,8 +219,10 @@ export type VideoSampleInit = {
 	codedWidth?: number;
 	/** The height of the frame in pixels. */
 	codedHeight?: number;
-	/** The rotation of the frame in degrees, clockwise. */
+	/** The rotation of the frame in degrees, clockwise. Rotation is applied before flipping. */
 	rotation?: Rotation;
+	/** Whether the frame is flipped horizontally (about the vertical axis), after rotation. */
+	flip?: boolean;
 	/** The presentation timestamp of the frame in seconds. */
 	timestamp?: number;
 	/** The duration of the frame in seconds. */
@@ -231,9 +233,9 @@ export type VideoSampleInit = {
 	layout?: PlaneLayout[];
 	/** Visible region in the coded frame. When omitted, the rect defaults to `(0, 0, codedWidth, codedHeight)`. */
 	visibleRect?: Rectangle | undefined;
-	/** Width of the frame in pixels after applying aspect ratio adjustments and rotation. */
+	/** Width of the frame in pixels after applying aspect ratio adjustments, rotation and flip. */
 	displayWidth?: number | undefined;
-	/** Height of the frame in pixels after applying aspect ratio adjustments and rotation. */
+	/** Height of the frame in pixels after applying aspect ratio adjustments, rotation and flip. */
 	displayHeight?: number | undefined;
 	/** The encode options to use when this sample is passed to an encoder. */
 	encodeOptions?: DeepReadonly<VideoEncoderEncodeOptions>;
@@ -267,12 +269,18 @@ export class VideoSample implements Disposable {
 	readonly format!: VideoSamplePixelFormat | null;
 	/** The visible region of the frame in the coded pixel grid. */
 	readonly visibleRect!: Rectangle;
-	/** The width of the frame in square pixels (respecting pixel aspect ratio), before rotation is applied. */
+	/**
+	 * The width of the frame in square pixels (respecting pixel aspect ratio), before rotation and flip are applied.
+	 */
 	readonly squarePixelWidth!: number;
-	/** The height of the frame in square pixels (respecting pixel aspect ratio), before rotation is applied. */
+	/**
+	 * The height of the frame in square pixels (respecting pixel aspect ratio), before rotation and flip are applied.
+	 */
 	readonly squarePixelHeight!: number;
-	/** The rotation of the frame in degrees, clockwise. */
+	/** The rotation of the frame in degrees, clockwise. Rotation is applied before flipping. */
 	readonly rotation!: Rotation;
+	/** Whether the frame is flipped horizontally (about the vertical axis), after rotation. */
+	readonly flip!: boolean;
 	/**
 	 * The pixel aspect ratio of the frame, as a rational number in its reduced form. Most videos use
 	 * square pixels (1:1).
@@ -302,12 +310,12 @@ export class VideoSample implements Disposable {
 		return this.visibleRect.height;
 	}
 
-	/** The display width of the frame in pixels, after aspect ratio adjustment and rotation. */
+	/** The display width of the frame in pixels, after aspect ratio adjustment, rotation and flip. */
 	get displayWidth() {
 		return this.rotation % 180 === 0 ? this.squarePixelWidth : this.squarePixelHeight;
 	}
 
-	/** The display height of the frame in pixels, after aspect ratio adjustment and rotation. */
+	/** The display height of the frame in pixels, after aspect ratio adjustment, rotation and flip. */
 	get displayHeight() {
 		return this.rotation % 180 === 0 ? this.squarePixelHeight : this.squarePixelWidth;
 	}
@@ -380,6 +388,9 @@ export class VideoSample implements Disposable {
 			if (init.rotation !== undefined && ![0, 90, 180, 270].includes(init.rotation)) {
 				throw new TypeError('init.rotation, when provided, must be 0, 90, 180, or 270.');
 			}
+			if (init.flip !== undefined && typeof init.flip !== 'boolean') {
+				throw new TypeError('init.flip, when provided, must be a boolean.');
+			}
 			if (!Number.isFinite(init.timestamp)) {
 				throw new TypeError('init.timestamp must be a number.');
 			}
@@ -426,6 +437,7 @@ export class VideoSample implements Disposable {
 
 			this.format = init.format;
 			this.rotation = init.rotation ?? 0;
+			this.flip = init.flip ?? false;
 			this.timestamp = init.timestamp!;
 			this.duration = init.duration ?? 0;
 
@@ -484,6 +496,9 @@ export class VideoSample implements Disposable {
 			if (init?.rotation !== undefined && ![0, 90, 180, 270].includes(init.rotation)) {
 				throw new TypeError('init.rotation, when provided, must be 0, 90, 180, or 270.');
 			}
+			if (init?.flip !== undefined && typeof init.flip !== 'boolean') {
+				throw new TypeError('init.flip, when provided, must be a boolean.');
+			}
 			if (init?.timestamp !== undefined && !Number.isFinite(init?.timestamp)) {
 				throw new TypeError('init.timestamp, when provided, must be a number.');
 			}
@@ -504,9 +519,10 @@ export class VideoSample implements Disposable {
 				width: data.visibleRect?.width ?? data.codedWidth,
 				height: data.visibleRect?.height ?? data.codedHeight,
 			};
-			// The VideoFrame's rotation is ignored here. It's still a new field, and I'm not sure of any application
-			// where the browser makes use of it. If a case gets found, I'll add it.
+			// The VideoFrame's rotation and flip are ignored here. They're still new fields, and I'm not sure of any
+			// application where the browser makes use of them. If a case gets found, I'll add it.
 			this.rotation = init?.rotation ?? 0;
+			this.flip = init?.flip ?? false;
 
 			// Assuming no innate VideoFrame rotation here
 			this.squarePixelWidth = data.displayWidth;
@@ -528,6 +544,9 @@ export class VideoSample implements Disposable {
 			}
 			if (init.rotation !== undefined && ![0, 90, 180, 270].includes(init.rotation)) {
 				throw new TypeError('init.rotation, when provided, must be 0, 90, 180, or 270.');
+			}
+			if (init.flip !== undefined && typeof init.flip !== 'boolean') {
+				throw new TypeError('init.flip, when provided, must be a boolean.');
 			}
 			if (!Number.isFinite(init.timestamp)) {
 				throw new TypeError('init.timestamp must be a number.');
@@ -600,6 +619,7 @@ export class VideoSample implements Disposable {
 			this.squarePixelWidth = visibleRect.width;
 			this.squarePixelHeight = visibleRect.height;
 			this.rotation = init.rotation ?? 0;
+			this.flip = init.flip ?? false;
 			this.timestamp = init.timestamp!;
 			this.duration = init.duration ?? 0;
 			this.colorSpace = new VideoSampleColorSpace({
@@ -614,6 +634,9 @@ export class VideoSample implements Disposable {
 			}
 			if (init.rotation !== undefined && ![0, 90, 180, 270].includes(init.rotation)) {
 				throw new TypeError('init.rotation, when provided, must be 0, 90, 180, or 270.');
+			}
+			if (init.flip !== undefined && typeof init.flip !== 'boolean') {
+				throw new TypeError('init.flip, when provided, must be a boolean.');
 			}
 			if (!Number.isFinite(init.timestamp)) {
 				throw new TypeError('init.timestamp must be a number.');
@@ -654,6 +677,7 @@ export class VideoSample implements Disposable {
 			}
 
 			this.rotation = init.rotation ?? 0;
+			this.flip = init.flip ?? false;
 			this.timestamp = init.timestamp!;
 			this.duration = init.duration ?? 0;
 			this.colorSpace = data.getColorSpace();
@@ -685,6 +709,7 @@ export class VideoSample implements Disposable {
 				timestamp: this.timestamp,
 				duration: this.duration,
 				rotation: this.rotation,
+				flip: this.flip,
 				encodeOptions: this.encodeOptions,
 			});
 		} else if (isVideoFrame(this._data)) {
@@ -692,6 +717,7 @@ export class VideoSample implements Disposable {
 				timestamp: this.timestamp,
 				duration: this.duration,
 				rotation: this.rotation,
+				flip: this.flip,
 				encodeOptions: this.encodeOptions,
 			});
 		} else if (this._data instanceof Uint8Array) {
@@ -706,6 +732,7 @@ export class VideoSample implements Disposable {
 				duration: this.duration,
 				colorSpace: this.colorSpace,
 				rotation: this.rotation,
+				flip: this.flip,
 				visibleRect: this.visibleRect,
 				displayWidth: this.displayWidth,
 				displayHeight: this.displayHeight,
@@ -723,6 +750,7 @@ export class VideoSample implements Disposable {
 				duration: this.duration,
 				colorSpace: this.colorSpace,
 				rotation: this.rotation,
+				flip: this.flip,
 				visibleRect: this.visibleRect,
 				displayWidth: this.displayWidth,
 				displayHeight: this.displayHeight,
@@ -817,6 +845,7 @@ export class VideoSample implements Disposable {
 						timestamp: this.timestamp,
 						duration: this.duration,
 						rotation: this.rotation,
+						flip: this.flip,
 					},
 					options.colorSpace ?? 'srgb',
 				);
@@ -1088,7 +1117,7 @@ export class VideoSample implements Disposable {
 	}
 
 	/**
-	 * Draws the video sample to a 2D canvas context. Rotation metadata will be taken into account.
+	 * Draws the video sample to a 2D canvas context. Rotation and flip metadata will be taken into account.
 	 *
 	 * @param dx - The x-coordinate in the destination canvas at which to place the top-left corner of the source image.
 	 * @param dy - The y-coordinate in the destination canvas at which to place the top-left corner of the source image.
@@ -1103,7 +1132,7 @@ export class VideoSample implements Disposable {
 		dHeight?: number,
 	): void;
 	/**
-	 * Draws the video sample to a 2D canvas context. Rotation metadata will be taken into account.
+	 * Draws the video sample to a 2D canvas context. Rotation and flip metadata will be taken into account.
 	 *
 	 * @param sx - The x-coordinate of the top left corner of the sub-rectangle of the source image to draw into the
 	 * destination context.
@@ -1210,7 +1239,7 @@ export class VideoSample implements Disposable {
 			throw new Error('VideoSample is closed.');
 		}
 
-		({ sx, sy, sWidth, sHeight } = this._rotateSourceRegion(sx, sy, sWidth, sHeight, this.rotation));
+		({ sx, sy, sWidth, sHeight } = this._unmapSourceRegion(sx, sy, sWidth, sHeight, this.rotation, this.flip));
 
 		const source = this.toCanvasImageSource();
 
@@ -1220,6 +1249,12 @@ export class VideoSample implements Disposable {
 		const centerY = dy + dHeight / 2;
 
 		context.translate(centerX, centerY);
+
+		// Canvas transforms apply to the image in reverse call order, so to rotate first and then flip, the flip has
+		// to be set up before the rotation
+		if (this.flip) {
+			context.scale(-1, 1);
+		}
 		context.rotate(this.rotation * Math.PI / 180);
 
 		const aspectRatioChange = this.rotation % 180 === 0 ? 1 : dWidth / dHeight;
@@ -1255,12 +1290,17 @@ export class VideoSample implements Disposable {
 		 * - `'cover'` will scale the image until the entire box is filled, while preserving aspect ratio.
 		 */
 		fit: 'fill' | 'contain' | 'cover';
-		/** A way to override rotation. Defaults to the rotation of the sample. */
+		/** A way to override rotation. Defaults to the rotation of the sample. Rotation is applied before flipping. */
 		rotation?: Rotation;
 		/**
+		 * A way to override the horizontal flip. Defaults to the flip of the sample. The flip is applied
+		 * after rotation.
+		 */
+		flip?: boolean;
+		/**
 		 * Specifies the rectangular region of the video sample to crop to. The crop region will automatically be
-		 * clamped to the dimensions of the video sample. Cropping is performed after rotation but before resizing.
-		 * The crop region is in the _display pixel space_ of the underlying video data.
+		 * clamped to the dimensions of the video sample. Cropping is performed after rotation and flip but before
+		 * resizing. The crop region is in the _display pixel space_ of the underlying video data.
 		 */
 		crop?: CropRectangle;
 	}) {
@@ -1282,6 +1322,9 @@ export class VideoSample implements Disposable {
 		if (options.rotation !== undefined && ![0, 90, 180, 270].includes(options.rotation)) {
 			throw new TypeError('options.rotation, when provided, must be 0, 90, 180, or 270.');
 		}
+		if (options.flip !== undefined && typeof options.flip !== 'boolean') {
+			throw new TypeError('options.flip, when provided, must be a boolean.');
+		}
 		if (options.crop !== undefined) {
 			validateCropRectangle(options.crop, 'options.');
 		}
@@ -1289,6 +1332,7 @@ export class VideoSample implements Disposable {
 		const canvasWidth = context.canvas.width;
 		const canvasHeight = context.canvas.height;
 		const rotation = options.rotation ?? this.rotation;
+		const flip = options.flip ?? this.flip;
 
 		const [rotatedWidth, rotatedHeight] = rotation % 180 === 0
 			? [this.squarePixelWidth, this.squarePixelHeight]
@@ -1305,12 +1349,13 @@ export class VideoSample implements Disposable {
 		let newWidth: number;
 		let newHeight: number;
 
-		const { sx, sy, sWidth, sHeight } = this._rotateSourceRegion(
+		const { sx, sy, sWidth, sHeight } = this._unmapSourceRegion(
 			options.crop?.left ?? 0,
 			options.crop?.top ?? 0,
 			options.crop?.width ?? rotatedWidth,
 			options.crop?.height ?? rotatedHeight,
 			rotation,
+			flip,
 		);
 
 		if (options.fit === 'fill') {
@@ -1336,23 +1381,34 @@ export class VideoSample implements Disposable {
 
 		const aspectRatioChange = rotation % 180 === 0 ? 1 : newWidth / newHeight;
 		context.translate(canvasWidth / 2, canvasHeight / 2);
+		// Canvas transforms apply to the image in reverse call order, so to rotate first and then flip, the flip has
+		// to be set up before the rotation
+		if (flip) {
+			context.scale(-1, 1);
+		}
 		context.rotate(rotation * Math.PI / 180);
 		// This aspect ratio compensation is done so that we can draw the sample with the intended dimensions and
 		// don't need to think about how those dimensions change after the rotation
 		context.scale(1 / aspectRatioChange, aspectRatioChange);
 		context.translate(-canvasWidth / 2, -canvasHeight / 2);
 
-		// Important that we don't use .draw() here since that would take rotation into account, but we wanna handle it
-		// ourselves here
+		// Important that we don't use .draw() here since that would take rotation and flip into account, but we wanna
+		// handle them ourselves here
 		context.drawImage(this.toCanvasImageSource(), sx, sy, sWidth, sHeight, dx, dy, newWidth, newHeight);
 
 		context.restore();
 	}
 
 	/** @internal */
-	_rotateSourceRegion(sx: number, sy: number, sWidth: number, sHeight: number, rotation: number) {
-		// The provided sx,sy,sWidth,sHeight refer to the final rotated image, but that's not actually how the image is
-		// stored. Therefore, we must map these back onto the original, pre-rotation image.
+	_unmapSourceRegion(sx: number, sy: number, sWidth: number, sHeight: number, rotation: number, flip: boolean) {
+		// The provided sx,sy,sWidth,sHeight refer to the final rotated and flipped image, but that's not actually how
+		// the image is stored. Therefore, we must map these back onto the original image. Since the flip is applied
+		// last, we undo it first, mirroring within the rotated width.
+		if (flip) {
+			const rotatedWidth = rotation % 180 === 0 ? this.squarePixelWidth : this.squarePixelHeight;
+			sx = rotatedWidth - sx - sWidth;
+		}
+
 		if (rotation === 90) {
 			[sx, sy, sWidth, sHeight] = [
 				sy,
@@ -1387,6 +1443,7 @@ export class VideoSample implements Disposable {
 		options: {
 			fit: 'fill' | 'contain' | 'cover';
 			rotation: Rotation;
+			flip: boolean;
 			crop: CropRectangle | undefined;
 			/** Freshly-created target canvases carry no stale pixels and don't need to be cleared. */
 			targetIsFresh: boolean;
@@ -1434,6 +1491,7 @@ export class VideoSample implements Disposable {
 		this.drawWithFit(context, {
 			fit: options.fit,
 			rotation: options.rotation,
+			flip: options.flip,
 			crop: options.crop,
 		});
 
@@ -1491,8 +1549,8 @@ export class VideoSample implements Disposable {
 	}
 
 	/**
-	 * Transform this video sample to a new video sample given the options. Can be used to resize, rotate, and crop
-	 * the sample.
+	 * Transform this video sample to a new video sample given the options. Can be used to resize, rotate, flip, and
+	 * crop the sample.
 	 *
 	 * In non-browser environments, this method will not work by default. To make it work, register a custom
 	 * transformer function via {@link registerVideoSampleTransformer}.
@@ -1528,6 +1586,9 @@ export class VideoSample implements Disposable {
 		if (options.rotate !== undefined && ![0, 90, 180, 270].includes(options.rotate)) {
 			throw new TypeError('options.rotate, when provided, must be 0, 90, 180 or 270.');
 		}
+		if (options.flip !== undefined && typeof options.flip !== 'boolean') {
+			throw new TypeError('options.flip, when provided, must be a boolean.');
+		}
 		if (options.crop !== undefined) {
 			validateCropRectangle(options.crop, 'options.');
 		}
@@ -1535,7 +1596,12 @@ export class VideoSample implements Disposable {
 			throw new TypeError('options.alpha, when provided, must be \'keep\' or \'discard\'.');
 		}
 
-		const rotation = normalizeRotation(this.rotation + (options.rotate ?? 0));
+		const { rotation, flip } = composeRotationAndFlip(
+			this.rotation,
+			this.flip,
+			options.rotate ?? 0,
+			options.flip ?? false,
+		);
 		const [rotatedWidth, rotatedHeight] = rotation % 180 === 0
 			? [this.squarePixelWidth, this.squarePixelHeight]
 			: [this.squarePixelHeight, this.squarePixelWidth];
@@ -1575,6 +1641,7 @@ export class VideoSample implements Disposable {
 			height: targetHeight,
 			fit: options.fit ?? 'fill',
 			rotation,
+			flip,
 			crop: finalCrop ?? {
 				left: 0,
 				top: 0,
@@ -1601,6 +1668,7 @@ export class VideoSample implements Disposable {
 		this._drawWithFitAndMipmapping(canvas, context, {
 			fit: description.fit,
 			rotation: description.rotation,
+			flip: description.flip,
 			crop: description.crop,
 			targetIsFresh: isNew,
 			fillBlack: description.alpha === 'discard',
@@ -1609,7 +1677,9 @@ export class VideoSample implements Disposable {
 		return new VideoSample(canvas, {
 			timestamp: this.timestamp,
 			duration: this.duration,
-			rotation: 0, // Any previous rotation is now baked in
+			// Any previous rotation and flip are now baked in
+			rotation: 0,
+			flip: false,
 		});
 	}
 
@@ -1621,6 +1691,16 @@ export class VideoSample implements Disposable {
 
 		// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
 		(this.rotation as Rotation) = newRotation;
+	}
+
+	/** Sets the flip metadata of this video sample. */
+	setFlip(newFlip: boolean) {
+		if (typeof newFlip !== 'boolean') {
+			throw new TypeError('newFlip must be a boolean.');
+		}
+
+		// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+		(this.flip as boolean) = newFlip;
 	}
 
 	/** Sets the presentation timestamp of this video sample, in seconds. */
@@ -1664,8 +1744,9 @@ export class VideoSample implements Disposable {
  *
  * 1. Pixel aspect ratio normalization (always applied)
  * 2. Rotation
- * 3. Crop
- * 4. Resize using fit
+ * 3. Flip
+ * 4. Crop
+ * 5. Resize using fit
  * @group Samples
  * @public
  */
@@ -1695,12 +1776,18 @@ export type VideoSampleTransformOptions = {
 	 */
 	fit?: 'fill' | 'contain' | 'cover';
 	/**
-	 * The clockwise rotation by which to rotate the frames. Rotation is applied before resizing.
+	 * The clockwise rotation by which to rotate the frames, in addition to the sample's own rotation. Rotation is
+	 * applied before flipping.
 	 */
 	rotate?: Rotation;
 	/**
+	 * Whether to flip the frames horizontally (about the vertical axis), in addition to the sample's own flip. The
+	 * flip is applied after rotation but before cropping and resizing.
+	 */
+	flip?: boolean;
+	/**
 	 * Specifies the rectangular region of the frames to crop to. The crop region will automatically be
-	 * clamped to the dimensions of the frame. Cropping is performed after rotation but before resizing.
+	 * clamped to the dimensions of the frame. Cropping is performed after rotation and flip but before resizing.
 	 */
 	crop?: CropRectangle;
 	/**
@@ -1715,8 +1802,9 @@ export type VideoSampleTransformOptions = {
  * The order of operations must be:
  * 1. Pixel aspect ratio normalization (always applied)
  * 2. Rotation
- * 3. Crop
- * 4. Resize using fit
+ * 3. Flip
+ * 4. Crop
+ * 5. Resize using fit
  * @group Samples
  * @public
  */
@@ -1734,11 +1822,13 @@ export type VideoSampleTransformationDescription = {
 	 * - `'cover'` will scale the image until the entire box is filled, while preserving aspect ratio.
 	 */
 	fit: 'fill' | 'contain' | 'cover';
-	/** The clockwise rotation by which to rotate the frames. Rotation is applied before resizing. */
+	/** The clockwise rotation by which to rotate the frames. Rotation is applied before flipping. */
 	rotation: Rotation;
+	/** Whether to flip the frames horizontally (about the vertical axis). The flip is applied after rotation. */
+	flip: boolean;
 	/**
 	 * The rectangular region of the frames to crop to, clamped to the dimensions of the frame. Cropping is
-	 * performed after rotation but before resizing.
+	 * performed after rotation and flip but before resizing.
 	 */
 	crop: CropRectangle;
 	/** Whether to discard or keep the transparency information of the video sample. */

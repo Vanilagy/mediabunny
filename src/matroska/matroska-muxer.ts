@@ -417,7 +417,7 @@ export class MatroskaMuxer extends Muxer {
 			}
 		} else {
 			rotation = trackData.track.metadata.rotation ?? 0;
-			horizontalScale = trackData.track.metadata.isFlipped ? -1 : 1;
+			horizontalScale = trackData.track.metadata.flip ? -1 : 1;
 			verticalScale = 1;
 		}
 

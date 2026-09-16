@@ -265,10 +265,10 @@ export type VideoTrackMetadata = BaseTrackMetadata & {
 	 */
 	rotation?: Rotation;
 	/** Whether the track's frames should be flipped horizontally (about the vertical axis), after rotation. */
-	isFlipped?: boolean;
+	flip?: boolean;
 	/**
 	 * The full transformation matrix to apply to the track's frames for presentation. When set, this takes precedence
-	 * over `rotation` and `isFlipped`. Formats that can't store an arbitrary matrix extract the closest rotation and
+	 * over `rotation` and `flip`. Formats that can't store an arbitrary matrix extract the closest rotation and
 	 * scale from it.
 	 */
 	transformationMatrix?: TransformationMatrix;
@@ -652,8 +652,8 @@ export class Output<
 		if (metadata.rotation !== undefined && ![0, 90, 180, 270].includes(metadata.rotation)) {
 			throw new TypeError(`Invalid video rotation: ${metadata.rotation}. Has to be 0, 90, 180 or 270.`);
 		}
-		if (metadata.isFlipped !== undefined && typeof metadata.isFlipped !== 'boolean') {
-			throw new TypeError('metadata.isFlipped, when provided, must be a boolean.');
+		if (metadata.flip !== undefined && typeof metadata.flip !== 'boolean') {
+			throw new TypeError('metadata.flip, when provided, must be a boolean.');
 		}
 		if (
 			metadata.transformationMatrix !== undefined

@@ -71,7 +71,7 @@ const extractMetadata = (resource: File | string) => {
 						'Coded width': track.getCodedWidth().then(w => `${w} pixels`),
 						'Coded height': track.getCodedHeight().then(h => `${h} pixels`),
 						'Rotation': track.getRotation().then(rot => `${rot}° clockwise`),
-						'Flipped': track.isFlipped().then(flipped => flipped ? 'Yes' : 'No'),
+						'Flipped': track.getFlip().then(flip => flip ? 'Yes' : 'No'),
 						'Pixel aspect ratio': track.getPixelAspectRatio().then(par => `${par.num}:${par.den}`),
 						'Display width': track.getDisplayWidth().then(w => `${w} pixels`),
 						'Display height': track.getDisplayHeight().then(h => `${h} pixels`),

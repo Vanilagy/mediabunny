@@ -161,7 +161,8 @@ type ConversionVideoOptions = {
 	height?: number;
 	fit?: 'fill' | 'contain' | 'cover';
 	rotate?: 0 | 90 | 180 | 270;
-	allowRotationMetadata?: boolean;
+	flip?: boolean;
+	allowTransformationMetadata?: boolean;
 	crop?: { left: number; top: number; width: number; height: number };
 	frameRate?: number;
 	codec?: VideoCodec;
@@ -209,21 +210,23 @@ The `width`, `height` and `fit` properties control how the video is resized. If 
 - `'contain'` will contain the entire image within the box while preserving aspect ratio. This may lead to letterboxing.
 - `'cover'` will scale the image until the entire box is filled, while preserving aspect ratio.
 
-If `width` or `height` is used in conjunction with `rotation` or `crop`, they control the post-rotation, post-crop dimensions.
+If `width` or `height` is used in conjunction with `rotate`, `flip` or `crop`, they control the post-rotation, post-flip, post-crop dimensions.
 
 If you want to apply max/min constraints to a video's dimensions, check out [track-specific options](#track-specific-options).
 
 In the rare case that the input video changes size over time, the `fit` field can be used to control the size change behavior (see [`VideoEncodingConfig`](./media-sources#video-encoding-config)). When unset, the behavior is `'passThrough'`.
 
-### Rotating video
+### Rotating and flipping video
 
-`rotation` rotates the video by the specified number of degrees clockwise. This rotation is applied on top of any rotation metadata in the original input file and happens before cropping and resizing.
+`rotate` rotates the video by the specified number of degrees clockwise. This rotation is applied on top of any rotation metadata in the original input file and happens before flipping, cropping and resizing.
 
-By default, Mediabunny will try to make use of rotation metadata in the output file to perform the rotation whenever possible. However, if you don't want this to happen, or you want to use Mediabunny to strip all rotation metadata from a file, you can set `allowRotationMetadata` to `false`.
+`flip` flips the video horizontally (about the vertical axis). This flip is applied on top of any flip metadata in the original input file and happens after rotation but before cropping and resizing.
+
+By default, Mediabunny will try to make use of rotation and flip metadata in the output file to perform the rotation and flip whenever possible. However, if you don't want this to happen, or you want to use Mediabunny to strip all such metadata from a file, you can set `allowTransformationMetadata` to `false`.
 
 ### Cropping video
 
-`crop` can be used to extract a rectangular region from the original video. The rectangle is specified using `left`, `top`, `width` and `height` and is clamped to the dimensions of the video. Cropping is applied after rotation but before resizing.
+`crop` can be used to extract a rectangular region from the original video. The rectangle is specified using `left`, `top`, `width` and `height` and is clamped to the dimensions of the video. Cropping is applied after rotation and flip but before resizing.
 
 ### Adjusting frame rate
 

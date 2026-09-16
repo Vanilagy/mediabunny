@@ -109,12 +109,18 @@ export type VideoTransformOptions = {
 	 */
 	fit?: 'fill' | 'contain' | 'cover';
 	/**
-	 * The clockwise rotation by which to rotate the frames. Rotation is applied before resizing.
+	 * The clockwise rotation by which to rotate the frames, in addition to each frame's own rotation. Rotation is
+	 * applied before flipping.
 	 */
 	rotate?: Rotation;
 	/**
+	 * Whether to flip the frames horizontally (about the vertical axis), in addition to each frame's own flip. The flip
+	 * is applied after rotation but before cropping and resizing.
+	 */
+	flip?: boolean;
+	/**
 	 * Specifies the rectangular region of the frames to crop to. The crop region will automatically be
-	 * clamped to the dimensions of the frame. Cropping is performed after rotation but before resizing.
+	 * clamped to the dimensions of the frame. Cropping is performed after rotation and flip but before resizing.
 	 */
 	crop?: CropRectangle;
 	/**
@@ -140,7 +146,7 @@ export type VideoTransformOptions = {
 	>;
 	/**
 	 * Forces every video frame through the transformation step even if no transformation properties are defined.
-	 * This can be used, for example, to bake rotation into the encoded video frames.
+	 * This can be used, for example, to bake rotation and flip into the encoded video frames.
 	 */
 	force?: boolean;
 };
@@ -224,6 +230,9 @@ export const validateVideoEncodingConfig = (config: VideoEncodingConfig) => {
 		}
 		if (config.transform.rotate !== undefined && ![0, 90, 180, 270].includes(config.transform.rotate)) {
 			throw new TypeError('config.transform.rotate, when provided, must be 0, 90, 180 or 270.');
+		}
+		if (config.transform.flip !== undefined && typeof config.transform.flip !== 'boolean') {
+			throw new TypeError('config.transform.flip, when provided, must be a boolean.');
 		}
 		if (config.transform.crop !== undefined) {
 			validateCropRectangle(config.transform.crop, 'config.transform.');
