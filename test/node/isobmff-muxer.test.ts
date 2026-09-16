@@ -9,7 +9,7 @@ import { Output } from '../../src/output.js';
 import { BufferTarget } from '../../src/target.js';
 import { Mp4OutputFormat } from '../../src/output-format.js';
 import { Conversion } from '../../src/conversion.js';
-import { assert } from '../../src/misc.js';
+import { assert, toDataView } from '../../src/misc.js';
 import { EncodedAudioPacketSource, EncodedVideoPacketSource } from '../../src/media-source.js';
 import { EncodedPacket } from '../../src/packet.js';
 
@@ -469,3 +469,131 @@ test('At least one track is enabled even if all are added disabled', async () =>
 	expect((await tracks[0]!.getDisposition()).default).toBe(true);
 	expect((await tracks[1]!.getDisposition()).default).toBe(false);
 });
+
+test('btrt boxes computed from packet sizes, regular MP4', async () => {
+	const bytes = await copyVideoMp4(new Mp4OutputFormat());
+	const boxes = findBtrtBoxes(bytes);
+
+	expect(boxes).toEqual([
+		{
+			bufferSizeDB: 0,
+			maxBitrate: 3261384,
+			avgBitrate: 2858330,
+		},
+		{
+			bufferSizeDB: 0,
+			maxBitrate: 318224,
+			avgBitrate: 317375,
+		},
+	]);
+
+	using input = new Input({
+		source: new BufferSource(bytes),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(videoTrack);
+	assert(audioTrack);
+
+	expect(await videoTrack.getBitrate()).toBe(3261384);
+	expect(await videoTrack.getAverageBitrate()).toBe(2858330);
+	expect(await audioTrack.getBitrate()).toBe(318224);
+	expect(await audioTrack.getAverageBitrate()).toBe(317375);
+});
+
+test('btrt boxes copied from input metadata in conversion, fragmented MP4', async () => {
+	const bytes = await copyVideoMp4(new Mp4OutputFormat({ fastStart: 'fragmented' }));
+
+	// These are equal to what was in the input file
+	expect(findBtrtBoxes(bytes)).toEqual([
+		{
+			bufferSizeDB: 0,
+			maxBitrate: 2858329,
+			avgBitrate: 2858329,
+		},
+		{
+			bufferSizeDB: 0,
+			maxBitrate: 320000,
+			avgBitrate: 317375,
+		},
+	]);
+});
+
+test('No btrt boxes, fragmented MP4 without bitrate metadata', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/video.mp4')),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(videoTrack);
+	assert(audioTrack);
+
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart: 'fragmented' }),
+		target: new BufferTarget(),
+	});
+
+	const videoSource = new EncodedVideoPacketSource((await videoTrack.getCodec())!);
+	const audioSource = new EncodedAudioPacketSource((await audioTrack.getCodec())!);
+	output.addVideoTrack(videoSource);
+	output.addAudioTrack(audioSource);
+
+	await output.start();
+
+	const videoMeta = { decoderConfig: (await videoTrack.getDecoderConfig())! };
+	for await (const packet of new EncodedPacketSink(videoTrack).packets()) {
+		await videoSource.add(packet, videoMeta);
+	}
+
+	const audioMeta = { decoderConfig: (await audioTrack.getDecoderConfig())! };
+	for await (const packet of new EncodedPacketSink(audioTrack).packets()) {
+		await audioSource.add(packet, audioMeta);
+	}
+
+	await output.finalize();
+
+	expect(findBtrtBoxes(new Uint8Array(output.target.buffer!))).toEqual([]);
+});
+
+const copyVideoMp4 = async (format: Mp4OutputFormat) => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/video.mp4')),
+		formats: ALL_FORMATS,
+	});
+
+	const output = new Output({
+		format,
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({ input, output, showWarnings: false });
+	await conversion.execute();
+
+	return new Uint8Array(output.target.buffer!);
+};
+
+const findBtrtBoxes = (bytes: Uint8Array) => {
+	const view = toDataView(bytes);
+	const boxes: { bufferSizeDB: number; maxBitrate: number; avgBitrate: number }[] = [];
+
+	for (let i = 0; i < bytes.length - 4; i++) {
+		if (bytes[i] !== 0x62 || bytes[i + 1] !== 0x74 || bytes[i + 2] !== 0x72 || bytes[i + 3] !== 0x74) {
+			continue;
+		}
+
+		const boxSize = view.getUint32(i - 4);
+		expect(boxSize).toBe(20);
+
+		boxes.push({
+			bufferSizeDB: view.getUint32(i + 4),
+			maxBitrate: view.getUint32(i + 8),
+			avgBitrate: view.getUint32(i + 12),
+		});
+	}
+
+	return boxes;
+};

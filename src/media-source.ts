@@ -86,6 +86,11 @@ export abstract class MediaSource {
 	_closingPromise: Promise<void> | null = null;
 	/** @internal */
 	_closed = false;
+	/**
+	 * Set when the encoder is configured with a bitrate.
+	 * @internal
+	 */
+	_nominalBitrate: number | null = null;
 
 	/** @internal */
 	_ensureValidAdd() {
@@ -745,6 +750,8 @@ class VideoEncoderWrapper {
 					this.encodingConfig.codec,
 					selected.quantizer,
 				);
+			} else {
+				this.source._nominalBitrate = encoderConfig.bitrate ?? null;
 			}
 
 			if (MatchingCustomEncoder) {
@@ -2176,6 +2183,7 @@ class AudioEncoderWrapper {
 				quality,
 			});
 			this.encodingConfig.onEncoderConfig?.(encoderConfig);
+			this.source._nominalBitrate = encoderConfig.bitrate ?? null;
 
 			const MatchingCustomEncoder = customAudioEncoders.find(x => x.supports(
 				this.encodingConfig.codec,

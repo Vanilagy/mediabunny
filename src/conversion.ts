@@ -1821,6 +1821,10 @@ export class Conversion {
 		const trackName = await track.getName();
 		const trackDisposition = await track.getDisposition();
 
+		// The input's bitrate metadata only stays meaningful when packets are copied
+		const bitrate = needsTranscode ? null : await track.getBitrate();
+		const averageBitrate = needsTranscode ? null : await track.getAverageBitrate();
+
 		this.output.addVideoTrack(videoSource, {
 			frameRate: trackOptions.frameRate,
 			// TODO: This condition can be removed when all demuxers properly homogenize to BCP47 in v2
@@ -1831,6 +1835,8 @@ export class Conversion {
 			disposition: trackDisposition,
 			rotation: outputTrackRotation,
 			group: ownGroup ?? trackOptions.group,
+			bitrate: bitrate ?? undefined,
+			averageBitrate: averageBitrate ?? undefined,
 		});
 
 		this.utilizedTracks.push(track);
@@ -2209,6 +2215,10 @@ export class Conversion {
 		const trackName = await track.getName();
 		const trackDisposition = await track.getDisposition();
 
+		// The input's bitrate metadata only stays meaningful when packets are copied
+		const bitrate = needsTranscode ? null : await track.getBitrate();
+		const averageBitrate = needsTranscode ? null : await track.getAverageBitrate();
+
 		this.output.addAudioTrack(audioSource, {
 			// TODO: This condition can be removed when all demuxers properly homogenize to BCP47 in v2
 			languageCode: isIso639Dash2LanguageCode(audioTrackLanguageCode)
@@ -2217,6 +2227,8 @@ export class Conversion {
 			name: trackName ?? undefined,
 			disposition: trackDisposition,
 			group: ownGroup ?? trackOptions.group,
+			bitrate: bitrate ?? undefined,
+			averageBitrate: averageBitrate ?? undefined,
 		});
 
 		this.utilizedTracks.push(track);

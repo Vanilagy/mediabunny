@@ -97,6 +97,10 @@ export type IsobmffTrackData = {
 		samplesPerChunk: number;
 	}[];
 	closed: boolean;
+
+	// 0 means unknown
+	avgBitrate: number;
+	maxBitrate: number;
 } & ({
 	track: OutputVideoTrack;
 	type: 'video';
@@ -167,6 +171,32 @@ export const getTrackMetadata = (trackData: IsobmffTrackData) => {
 export const intoTimescale = (timeInSeconds: number, timescale: number, round = true) => {
 	const value = timeInSeconds * timescale;
 	return round ? Math.round(value) : value;
+};
+
+export const presentationSpan = (trackData: IsobmffTrackData) => {
+	if (trackData.samples.length === 0) {
+		return 0;
+	}
+
+	let minTimestamp = Infinity;
+	let maxEndTimestamp = -Infinity;
+
+	for (let i = 0; i < trackData.samples.length; i++) {
+		const sample = trackData.samples[i]!;
+
+		if (sample.timestamp < minTimestamp) {
+			minTimestamp = sample.timestamp;
+		}
+		if (sample.timestamp + sample.duration > maxEndTimestamp) {
+			maxEndTimestamp = sample.timestamp + sample.duration;
+		}
+	}
+
+	if (minTimestamp === Infinity) {
+		return 0;
+	}
+
+	return maxEndTimestamp - minTimestamp;
 };
 
 export class IsobmffMuxer extends Muxer {
@@ -472,6 +502,8 @@ export class IsobmffMuxer extends Muxer {
 			currentChunk: null,
 			compactlyCodedChunkTable: [],
 			closed: false,
+			avgBitrate: track.source._nominalBitrate ?? track.metadata.averageBitrate ?? 0,
+			maxBitrate: track.source._nominalBitrate ?? track.metadata.bitrate ?? 0,
 		};
 
 		this.trackDatas.push(newTrackData);
@@ -569,6 +601,8 @@ export class IsobmffMuxer extends Muxer {
 			currentChunk: null,
 			compactlyCodedChunkTable: [],
 			closed: false,
+			avgBitrate: track.source._nominalBitrate ?? track.metadata.averageBitrate ?? 0,
+			maxBitrate: track.source._nominalBitrate ?? track.metadata.bitrate ?? 0,
 		};
 
 		this.trackDatas.push(newTrackData);
@@ -612,6 +646,8 @@ export class IsobmffMuxer extends Muxer {
 			currentChunk: null,
 			compactlyCodedChunkTable: [],
 			closed: false,
+			avgBitrate: track.source._nominalBitrate ?? track.metadata.averageBitrate ?? 0,
+			maxBitrate: track.source._nominalBitrate ?? track.metadata.bitrate ?? 0,
 
 			lastCueEndTimestamp: null,
 			cueQueue: [],
@@ -1546,6 +1582,36 @@ export class IsobmffMuxer extends Muxer {
 		} else {
 			for (const trackData of this.trackDatas) {
 				await this.finalizeCurrentChunk(trackData);
+
+				// Now that we have all samples, we can replace the nominal bitrates with measured ones
+				const span = presentationSpan(trackData);
+				if (span > 0) {
+					let totalBytes = 0;
+					for (const sample of trackData.samples) {
+						totalBytes += sample.size;
+					}
+
+					trackData.avgBitrate = Math.round(8 * totalBytes / span);
+				} else {
+					trackData.avgBitrate = 0;
+				}
+
+				// Sliding one-second window over the samples in decode order
+				let windowStart = 0;
+				let windowBytes = 0;
+				let maxWindowBytes = 0;
+				for (let i = 0; i < trackData.samples.length; i++) {
+					const sample = trackData.samples[i]!;
+					windowBytes += sample.size;
+
+					while (sample.decodeTimestamp - trackData.samples[windowStart]!.decodeTimestamp >= 1) {
+						windowBytes -= trackData.samples[windowStart]!.size;
+						windowStart++;
+					}
+
+					maxWindowBytes = Math.max(maxWindowBytes, windowBytes);
+				}
+				trackData.maxBitrate = 8 * maxWindowBytes;
 
 				if (trackData.startTimestampOffset !== null) {
 					// Shift all of the samples by the start offset. We'll then write out an edit list that will shift

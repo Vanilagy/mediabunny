@@ -147,6 +147,9 @@ type InternalTrack = {
 	/** For non-fragmented encrypted tracks: parsed saiz+saio from stbl; aux info is fetched lazily on first use. */
 	encryptionAuxInfo: SampleEncryptionAuxInfo | null;
 	frmaCodecString: string | null;
+	/** In bits per second, from the btrt box if present. */
+	maxBitrate: number | null;
+	avgBitrate: number | null;
 } & ({
 	info: null;
 } | {
@@ -511,6 +514,8 @@ export class IsobmffDemuxer extends Demuxer {
 				encryptionInfo: foreignTrack.encryptionInfo,
 				encryptionAuxInfo: null,
 				frmaCodecString: null,
+				maxBitrate: foreignTrack.maxBitrate,
+				avgBitrate: foreignTrack.avgBitrate,
 				info: foreignTrack.info,
 			};
 
@@ -863,6 +868,8 @@ export class IsobmffDemuxer extends Demuxer {
 					encryptionInfo: null,
 					encryptionAuxInfo: null,
 					frmaCodecString: null,
+					maxBitrate: null,
+					avgBitrate: null,
 				} satisfies InternalTrack as InternalTrack;
 				this.currentTrack = track;
 
@@ -1545,6 +1552,20 @@ export class IsobmffDemuxer extends Demuxer {
 						track.info.squarePixelHeight = Math.round(track.info.height * den / num);
 					}
 				}
+			}; break;
+
+			case 'btrt': {
+				const track = this.currentTrack;
+				if (!track) {
+					break;
+				}
+
+				slice.skip(4); // Buffer size
+				const maxBitrate = readU32Be(slice);
+				const avgBitrate = readU32Be(slice);
+
+				track.maxBitrate = maxBitrate > 0 ? maxBitrate : null;
+				track.avgBitrate = avgBitrate > 0 ? avgBitrate : null;
 			}; break;
 
 			case 'wave': {
@@ -2905,11 +2926,11 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 	}
 
 	getBitrate() {
-		return null;
+		return this.internalTrack.maxBitrate;
 	}
 
 	getAverageBitrate() {
-		return null;
+		return this.internalTrack.avgBitrate;
 	}
 
 	async getDurationFromMetadata() {
