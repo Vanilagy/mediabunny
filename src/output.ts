@@ -916,9 +916,8 @@ export class Output<
 	 * @returns A promise that resolves once all internal resources have been released.
 	 */
 	async cancel() {
-		if (this._cancelPromise) {
-			Logging._warn('Output has already been canceled.');
-			return this._cancelPromise;
+		if (this.state === 'canceled') {
+			return this._cancelPromise ?? undefined;
 		} else if (this.state === 'finalizing' || this.state === 'finalized') {
 			// Don't wanna warn when finalizing since that shows a warning when finalization fails and then cancel
 			// is called
@@ -986,6 +985,9 @@ export class Output<
 				}
 
 				this.state = 'finalized';
+			} catch (error) {
+				this.state = 'canceled';
+				throw error;
 			} finally {
 				await Promise.all([...this._unfinalizedTargets].map(target => target._close().catch(() => {})));
 				this._unfinalizedTargets.clear();
