@@ -206,6 +206,47 @@ test('VideoSampleSource, encoding rotated video frames', async () => {
 	}
 });
 
+test('VideoSampleSource, flip is baked in via transform', async () => {
+	const buffer = await encodeFrames(
+		{ codec: 'vp8', quality: new Quality('medium'), transform: { flip: true } },
+		[{ width: 200, height: 100, leftHalfBlue: true }, { width: 200, height: 100, leftHalfBlue: true }],
+	);
+
+	// After the flip, the blue half is on the right
+	const { input, track } = await readBackTrack(buffer);
+	const sink = new VideoSampleSink(track);
+	using sample = (await sink.getSample(0))!;
+	expect(sample.flip).toBe(false);
+
+	const canvas = new OffscreenCanvas(200, 100);
+	const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+	sample.draw(ctx, 0, 0);
+	const left = ctx.getImageData(50, 50, 1, 1).data;
+	const right = ctx.getImageData(150, 50, 1, 1).data;
+	expect(left[0]).toBeGreaterThan(200); // red
+	expect(right[2]).toBeGreaterThan(200); // blue
+
+	input.dispose();
+});
+
+test('VideoSampleSource, encoding flipped video frames with forced transform', async () => {
+	const buffer = await encodeFrames(
+		{ codec: 'vp8', quality: new Quality('medium'), transform: { force: true } },
+		[{ width: 200, height: 100, flip: true, leftHalfBlue: true }],
+	);
+
+	const { input, track } = await readBackTrack(buffer);
+	const sink = new VideoSampleSink(track);
+	using sample = (await sink.getSample(0))!;
+
+	const canvas = new OffscreenCanvas(200, 100);
+	const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+	sample.draw(ctx, 0, 0);
+	expect(ctx.getImageData(150, 50, 1, 1).data[2]).toBeGreaterThan(200); // blue on the right now
+
+	input.dispose();
+});
+
 test('VideoSampleSource, encoding rotated video frames with forced transform', async () => {
 	const buffer = await encodeFrames(
 		{ codec: 'vp8', quality: new Quality('medium'), transform: { force: true } },
@@ -496,11 +537,17 @@ test('VideoSampleSource, transform.frameRate works with process', async () => {
 	input.dispose();
 });
 
-const makeCanvas = (width: number, height: number) => {
+const makeCanvas = (width: number, height: number, leftHalfBlue = false) => {
 	const canvas = new OffscreenCanvas(width, height);
 	const ctx = canvas.getContext('2d')!;
 	ctx.fillStyle = 'red';
 	ctx.fillRect(0, 0, width, height);
+
+	if (leftHalfBlue) {
+		ctx.fillStyle = 'blue';
+		ctx.fillRect(0, 0, width / 2, height);
+	}
+
 	return canvas;
 };
 
@@ -512,6 +559,8 @@ const encodeFrames = async (
 		timestamp?: number;
 		duration?: number;
 		rotation?: Rotation;
+		flip?: boolean;
+		leftHalfBlue?: boolean;
 	}[],
 ) => {
 	const output = new Output({
@@ -525,11 +574,12 @@ const encodeFrames = async (
 
 	for (let i = 0; i < frames.length; i++) {
 		const f = frames[i]!;
-		const canvas = makeCanvas(f.width, f.height);
+		const canvas = makeCanvas(f.width, f.height, f.leftHalfBlue);
 		const sample = new VideoSample(canvas, {
 			timestamp: f.timestamp ?? i / 30,
 			duration: f.duration ?? 1 / 30,
 			rotation: f.rotation,
+			flip: f.flip,
 		});
 		await videoSource.add(sample);
 		sample.close();

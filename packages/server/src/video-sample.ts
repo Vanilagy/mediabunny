@@ -233,7 +233,7 @@ export const transformVideoSample = async (
 		await copyVideoSampleToAvFrame(sample, srcFrame, null);
 	}
 
-	// Build the filter chain. Order: square-pixel normalize -> rotate -> crop -> resize-with-fit.
+	// Build the filter chain. Order: square-pixel normalize -> rotate -> flip -> crop -> resize-with-fit.
 	const chain: string[] = [];
 
 	if (sample.squarePixelWidth !== sample.codedWidth || sample.squarePixelHeight !== sample.codedHeight) {
@@ -247,6 +247,10 @@ export const transformVideoSample = async (
 		chain.push('transpose=1,transpose=1');
 	} else if (description.rotation === 270) {
 		chain.push('transpose=2');
+	}
+
+	if (description.flip) {
+		chain.push('hflip');
 	}
 
 	chain.push(`crop=${Math.round(description.crop.width)}:${Math.round(description.crop.height)}`
@@ -304,7 +308,9 @@ export const transformVideoSample = async (
 		return new VideoSample(new AvFrameVideoSampleResource(dstFrame), {
 			timestamp: sample.timestamp,
 			duration: sample.duration,
-			rotation: 0, // baked in by the filter graph
+			// Baked in by the filter graph:
+			rotation: 0,
+			flip: false,
 		});
 	} finally {
 		graph.free();

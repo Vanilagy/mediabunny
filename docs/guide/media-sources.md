@@ -65,6 +65,7 @@ type VideoEncodingConfig = {
 		height?: number;
 		fit?: 'fill' | 'contain' | 'cover';
 		rotate?: 0 | 90 | 180 | 270;
+		flip?: boolean;
 		crop?: { left: number; top: number; width: number; height: number };
 		frameRate?: number;
 		process?: (sample: VideoSample) => MaybePromise<
@@ -101,11 +102,12 @@ type VideoEncodingConfig = {
 		- `'fill'` will stretch the image to fill the entire box, potentially altering aspect ratio.
 		- `'contain'` will contain the entire image within the box while preserving aspect ratio. This may lead to letterboxing.
 		- `'cover'` will scale the image until the entire box is filled, while preserving aspect ratio.
-	- `rotate`: The clockwise rotation by which to rotate the frames. Rotation is applied before resizing.
-	- `crop`: Specifies the rectangular region of the frames to crop to. The crop region will automatically be clamped to the dimensions of the frame. Cropping is performed after rotation but before resizing.
+	- `rotate`: The clockwise rotation by which to rotate the frames, in addition to each frame's own rotation. Rotation is applied before flipping.
+	- `flip`: Whether to flip the frames horizontally (about the vertical axis), in addition to each frame's own flip. The flip is applied after rotation but before cropping and resizing.
+	- `crop`: Specifies the rectangular region of the frames to crop to. The crop region will automatically be clamped to the dimensions of the frame. Cropping is performed after rotation and flip but before resizing.
 	- `frameRate`: The frame rate in hertz to normalize the video frame stream to.
 	- `process`: Allows for custom user-defined processing of video frames, e.g. for applying overlays, color transformations, or timestamp modifications. Will be called for each video frame after transformations and frame rate corrections. Must return a `VideoSample` or a `CanvasImageSource`, an array of them, or `null` for dropping the frame. When non-timestamped data is returned, the timestamp and duration from the input sample will be used.
-	- `force`: Forces every video frame through the transformation step even if no transformation properties are defined. This can be used, for example, to bake rotation into the encoded video frames.
+	- `force`: Forces every video frame through the transformation step even if no transformation properties are defined. This can be used, for example, to bake rotation and flip into the encoded video frames.
 - `onEncodedPacket`: Called for each successfully encoded packet. Useful for determining encoding progress.
 - `onEncoderConfig`: Called when the internal encoder config, as used by the WebCodecs API, is created. You can use this to introspect the full codec string.
 

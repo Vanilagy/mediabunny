@@ -13,6 +13,11 @@ import {
 	isU32,
 	last,
 	TransformationMatrix,
+	IDENTITY_MATRIX,
+	centeredTransformationMatrix,
+	multiplyMatrices,
+	rotationMatrix,
+	scaleMatrix,
 	textEncoder,
 	COLOR_PRIMARIES_MAP,
 	TRANSFER_CHARACTERISTICS_MAP,
@@ -42,6 +47,7 @@ import {
 	IsobmffSubtitleTrackData,
 	IsobmffTrackData,
 	IsobmffVideoTrackData,
+	presentationSpan,
 	Sample,
 } from './isobmff-muxer';
 import {
@@ -233,20 +239,6 @@ const ascii = (text: string, nullTerminated = false) => {
 	return bytes;
 };
 
-const rotationMatrix = (rotationInDegrees: number): TransformationMatrix => {
-	const theta = rotationInDegrees * (Math.PI / 180);
-	const cosTheta = Math.round(Math.cos(theta));
-	const sinTheta = Math.round(Math.sin(theta));
-
-	// Matrices are post-multiplied in ISOBMFF, meaning this is the transpose of your typical rotation matrix
-	return [
-		cosTheta, sinTheta, 0,
-		-sinTheta, cosTheta, 0,
-		0, 0, 1,
-	];
-};
-const IDENTITY_MATRIX = /* #__PURE__ */ rotationMatrix(0);
-
 const matrixToBytes = (matrix: TransformationMatrix) => {
 	return [
 		fixed_16_16(matrix[0]), fixed_16_16(matrix[1]), fixed_2_30(matrix[2]),
@@ -432,32 +424,6 @@ export const mvhd = (
 	]);
 };
 
-const presentationSpan = (trackData: IsobmffTrackData) => {
-	if (trackData.samples.length === 0) {
-		return 0;
-	}
-
-	let minTimestamp = Infinity;
-	let maxEndTimestamp = -Infinity;
-
-	for (let i = 0; i < trackData.samples.length; i++) {
-		const sample = trackData.samples[i]!;
-
-		if (sample.timestamp < minTimestamp) {
-			minTimestamp = sample.timestamp;
-		}
-		if (sample.timestamp + sample.duration > maxEndTimestamp) {
-			maxEndTimestamp = sample.timestamp + sample.duration;
-		}
-	}
-
-	if (minTimestamp === Infinity) {
-		return 0;
-	}
-
-	return maxEndTimestamp - minTimestamp;
-};
-
 /**
  * Track Box: Defines a single track of a movie. A movie may consist of one or more tracks. Each track is
  * independent of the other tracks in the movie and carries its own temporal and spatial information. Each Track Box
@@ -497,9 +463,18 @@ export const tkhd = (
 	const u32OrU64 = needsU64 ? u64 : u32;
 
 	let matrix: TransformationMatrix;
-	if (trackData.type === 'video') {
-		const rotation = trackData.track.metadata.rotation;
-		matrix = rotationMatrix(rotation ?? 0);
+	if (trackData.type === 'video' && trackData.track.metadata.transformationMatrix) {
+		matrix = trackData.track.metadata.transformationMatrix;
+	} else if (trackData.type === 'video') {
+		const { rotation, flip } = trackData.track.metadata;
+
+		// Rotation is applied before flipping
+		const linear = multiplyMatrices(
+			rotationMatrix(rotation ?? 0),
+			scaleMatrix(flip ? -1 : 1, 1),
+		);
+
+		matrix = centeredTransformationMatrix(linear, trackData.info.width, trackData.info.height);
 	} else {
 		matrix = IDENTITY_MATRIX;
 	}
@@ -797,7 +772,21 @@ export const videoSampleDescription = (
 	colorSpaceIsEmpty(trackData.info.decoderConfig.colorSpace)
 		? null
 		: colr(trackData),
+	btrt(trackData),
 ]);
+
+/** Bit Rate Box: Signals the average and peak bitrate of the track. */
+export const btrt = (trackData: IsobmffTrackData) => {
+	if (trackData.avgBitrate === 0 && trackData.maxBitrate === 0) {
+		return null;
+	}
+
+	return box('btrt', [
+		u32(0), // Decoding buffer size (unknown)
+		u32(trackData.maxBitrate), // Max bitrate
+		u32(trackData.avgBitrate), // Average bitrate
+	]);
+};
 
 /** Pixel Aspect Ratio Box: Specifies pixel width:height spacing for non-square pixels. */
 export const pasp = (trackData: IsobmffVideoTrackData) => {
@@ -968,6 +957,7 @@ export const soundSampleDescription = (
 
 	return box(compressionType, contents, [
 		audioCodecToConfigurationBox(trackData.track.source._codec, trackData.muxer.isQuickTime)?.(trackData) ?? null,
+		btrt(trackData),
 	]);
 };
 
@@ -993,8 +983,8 @@ export const esds = (trackData: IsobmffAudioTrackData) => {
 		...u8(objectTypeIndication), // Object type indication
 		...u8(0x15), // stream type(6bits)=5 audio, flags(2bits)=1
 		...u24(0), // 24bit buffer size
-		...u32(0), // max bitrate
-		...u32(0), // avg bitrate
+		...u32(trackData.maxBitrate), // max bitrate
+		...u32(trackData.avgBitrate), // avg bitrate
 	];
 	if (trackData.info.decoderConfig.description) {
 		const description = toUint8Array(trackData.info.decoderConfig.description);
@@ -1219,6 +1209,7 @@ export const subtitleSampleDescription = (
 	u16(1), // Data reference index
 ], [
 	SUBTITLE_CODEC_TO_CONFIGURATION_BOX[trackData.track.source._codec](trackData),
+	btrt(trackData),
 ]);
 
 export const vttC = (trackData: IsobmffSubtitleTrackData) => box('vttC', [

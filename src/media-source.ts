@@ -86,6 +86,11 @@ export abstract class MediaSource {
 	_closingPromise: Promise<void> | null = null;
 	/** @internal */
 	_closed = false;
+	/**
+	 * Set when the encoder is configured with a bitrate.
+	 * @internal
+	 */
+	_nominalBitrate: number | null = null;
 
 	/** @internal */
 	_ensureValidAdd() {
@@ -322,6 +327,7 @@ class VideoEncoderWrapper {
 			const hasTransformConfig = config.transform?.width !== undefined
 				|| config.transform?.height !== undefined
 				|| config.transform?.rotate !== undefined
+				|| config.transform?.flip !== undefined
 				|| config.transform?.crop !== undefined
 				|| config.transform?.force === true;
 			const needsTransform = hasTransformConfig || (isSizeChange && sizeChangeBehavior !== 'passThrough');
@@ -348,6 +354,7 @@ class VideoEncoderWrapper {
 					roundDimensionsTo: 2,
 					crop: config.transform?.crop,
 					rotate: config.transform?.rotate,
+					flip: config.transform?.flip,
 					fit: appliedFit,
 					alpha: config.alpha,
 				});
@@ -745,6 +752,8 @@ class VideoEncoderWrapper {
 					this.encodingConfig.codec,
 					selected.quantizer,
 				);
+			} else {
+				this.source._nominalBitrate = encoderConfig.bitrate ?? null;
 			}
 
 			if (MatchingCustomEncoder) {
@@ -1718,49 +1727,52 @@ export class MediaStreamVideoTrackSource extends VideoSource {
 
 	/** @internal */
 	override async _flushAndClose(forceClose: boolean) {
-		if (this._abortController) {
-			this._abortController.abort();
-			this._abortController = null;
+		try {
+			if (this._abortController) {
+				this._abortController.abort();
+				this._abortController = null;
+			}
+
+			if (this._timerHandle) {
+				clearIntervalUnthrottled(this._timerHandle);
+			}
+			this._lastVideoFrame?.close();
+
+			if (this._videoElement) {
+				this._videoElement.srcObject = null;
+				this._videoElement.remove();
+				this._videoElement = null;
+			}
+
+			if (this._workerTrackId !== null) {
+				assert(this._workerListener);
+
+				sendMessageToMediaStreamTrackProcessorWorker({
+					type: 'stopTrack',
+					trackId: this._workerTrackId,
+				});
+
+				// Wait for the worker to stop the track
+				await new Promise<void>((resolve) => {
+					const listener = (event: MessageEvent) => {
+						const message = event.data as MediaStreamTrackProcessorWorkerMessage;
+
+						if (message.type === 'trackStopped' && message.trackId === this._workerTrackId) {
+							assert(this._workerListener);
+							mediaStreamTrackProcessorWorker!.removeEventListener('message', this._workerListener);
+							mediaStreamTrackProcessorWorker!.removeEventListener('message', listener);
+
+							resolve();
+						}
+					};
+
+					mediaStreamTrackProcessorWorker!.addEventListener('message', listener);
+				});
+			}
+		} finally {
+			// The encoder must be closed even if the track teardown above threw
+			await this._encoder.flushAndClose(forceClose);
 		}
-
-		if (this._timerHandle) {
-			clearIntervalUnthrottled(this._timerHandle);
-		}
-		this._lastVideoFrame?.close();
-
-		if (this._videoElement) {
-			this._videoElement.srcObject = null;
-			this._videoElement.remove();
-			this._videoElement = null;
-		}
-
-		if (this._workerTrackId !== null) {
-			assert(this._workerListener);
-
-			sendMessageToMediaStreamTrackProcessorWorker({
-				type: 'stopTrack',
-				trackId: this._workerTrackId,
-			});
-
-			// Wait for the worker to stop the track
-			await new Promise<void>((resolve) => {
-				const listener = (event: MessageEvent) => {
-					const message = event.data as MediaStreamTrackProcessorWorkerMessage;
-
-					if (message.type === 'trackStopped' && message.trackId === this._workerTrackId) {
-						assert(this._workerListener);
-						mediaStreamTrackProcessorWorker!.removeEventListener('message', this._workerListener);
-						mediaStreamTrackProcessorWorker!.removeEventListener('message', listener);
-
-						resolve();
-					}
-				};
-
-				mediaStreamTrackProcessorWorker!.addEventListener('message', listener);
-			});
-		}
-
-		await this._encoder.flushAndClose(forceClose);
 	}
 }
 
@@ -2173,6 +2185,7 @@ class AudioEncoderWrapper {
 				quality,
 			});
 			this.encodingConfig.onEncoderConfig?.(encoderConfig);
+			this.source._nominalBitrate = encoderConfig.bitrate ?? null;
 
 			const MatchingCustomEncoder = customAudioEncoders.find(x => x.supports(
 				this.encodingConfig.codec,
@@ -2800,19 +2813,22 @@ export class MediaStreamAudioTrackSource extends AudioSource {
 
 	/** @internal */
 	override async _flushAndClose(forceClose: boolean) {
-		if (this._abortController) {
-			this._abortController.abort();
-			this._abortController = null;
+		try {
+			if (this._abortController) {
+				this._abortController.abort();
+				this._abortController = null;
+			}
+
+			if (this._audioContext) {
+				assert(this._scriptProcessorNode);
+
+				this._scriptProcessorNode.disconnect();
+				await this._audioContext.suspend();
+			}
+		} finally {
+			// The encoder must be closed even if the track teardown above threw
+			await this._encoder.flushAndClose(forceClose);
 		}
-
-		if (this._audioContext) {
-			assert(this._scriptProcessorNode);
-
-			this._scriptProcessorNode.disconnect();
-			await this._audioContext.suspend();
-		}
-
-		await this._encoder.flushAndClose(forceClose);
 	}
 }
 

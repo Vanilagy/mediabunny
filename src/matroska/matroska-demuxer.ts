@@ -49,9 +49,14 @@ import {
 	isThenable,
 	last,
 	MATRIX_COEFFICIENTS_MAP_INVERSE,
+	centeredTransformationMatrix,
+	DEG_TO_RAD,
+	multiplyMatrices,
 	normalizeRotation,
 	Rotation,
+	rotationMatrix,
 	roundIfAlmostInteger,
+	scaleMatrix,
 	textDecoder,
 	toDataView,
 	TRANSFER_CHARACTERISTICS_MAP_INVERSE,
@@ -221,6 +226,8 @@ type InternalTrack = {
 			displayUnit: number | null;
 			squarePixelWidth: number;
 			squarePixelHeight: number;
+			horizontalScale: number;
+			verticalScale: number;
 			rotation: Rotation;
 			codec: VideoCodec | null;
 			codecDescription: Uint8Array | null;
@@ -1200,6 +1207,8 @@ export class MatroskaDemuxer extends Demuxer {
 						displayUnit: null,
 						squarePixelWidth: -1,
 						squarePixelHeight: -1,
+						horizontalScale: 1,
+						verticalScale: 1,
 						rotation: 0,
 						codec: null,
 						codecDescription: null,
@@ -1407,6 +1416,34 @@ export class MatroskaDemuxer extends Demuxer {
 				if (this.currentTrack?.info?.type !== 'video') break;
 
 				this.readContiguousElements(slice.slice(dataStartPos, size));
+			}; break;
+
+			// Yaw and pitch rotate the frame in 3D space about the vertical and horizontal axis respectively. When
+			// snapped to multiples of 90 degrees, that amounts to scaling each axis by the cosine, which models flips.
+			case EBMLId.ProjectionPoseYaw: {
+				if (this.currentTrack?.info?.type !== 'video') break;
+
+				const yaw = readFloat(slice, size);
+
+				try {
+					const normalized = normalizeRotation(yaw);
+					this.currentTrack.info.horizontalScale = Math.round(Math.cos(normalized * DEG_TO_RAD));
+				} catch {
+					// It wasn't a valid rotation
+				}
+			}; break;
+
+			case EBMLId.ProjectionPosePitch: {
+				if (this.currentTrack?.info?.type !== 'video') break;
+
+				const pitch = readFloat(slice, size);
+
+				try {
+					const normalized = normalizeRotation(pitch);
+					this.currentTrack.info.verticalScale = Math.round(Math.cos(normalized * DEG_TO_RAD));
+				} catch {
+					// It wasn't a valid rotation
+				}
 			}; break;
 
 			case EBMLId.ProjectionPoseRoll: {
@@ -2504,8 +2541,16 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 		return this.internalTrack.info.squarePixelHeight;
 	}
 
-	getRotation() {
-		return this.internalTrack.info.rotation;
+	getTransformationMatrix() {
+		const info = this.internalTrack.info;
+
+		// Yaw and pitch are applied before roll
+		const linear = multiplyMatrices(
+			scaleMatrix(info.horizontalScale, info.verticalScale),
+			rotationMatrix(info.rotation),
+		);
+
+		return centeredTransformationMatrix(linear, info.width, info.height);
 	}
 
 	async getColorSpace(): Promise<VideoColorSpaceInit> {

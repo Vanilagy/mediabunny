@@ -46,7 +46,7 @@ import {
 	isIso639Dash2LanguageCode,
 	isNumber,
 	MaybePromise,
-	normalizeRotation,
+	composeRotationAndFlip,
 	promiseWithResolvers,
 	Rotation,
 } from './misc';
@@ -198,19 +198,32 @@ export type ConversionVideoOptions = {
 	 */
 	fit?: 'fill' | 'contain' | 'cover';
 	/**
-	 * The angle in degrees to rotate the input video by, clockwise. Rotation is applied before cropping and resizing.
-	 * This rotation is _in addition to_ the natural rotation of the input video as specified in input file's metadata.
+	 * The angle in degrees to rotate the input video by, clockwise. Rotation is applied before flipping, cropping and
+	 * resizing. This rotation is _in addition to_ the natural rotation of the input video as specified in input file's
+	 * metadata.
 	 */
 	rotate?: Rotation;
 	/**
+	 * Whether to flip the input video horizontally (about the vertical axis). The flip is applied after rotation but
+	 * before cropping and resizing. This flip is _in addition to_ the natural flip of the input video as specified in
+	 * the input file's metadata.
+	 */
+	flip?: boolean;
+	/**
+	 * Defaults to `true`. When enabled, Mediabunny will use the rotation and flip metadata in the output file to
+	 * perform video rotation and flipping whenever possible. Set this field to `false` if you want to ensure the output
+	 * file does not make use of such metadata and that any rotation and flip is baked into the video frames directly.
+	 */
+	allowTransformationMetadata?: boolean;
+	/**
 	 * Defaults to `true`. When enabled, Mediabunny will use the rotation metadata in the output file to perform video
-	 * rotation whenever possible. Set this field to `false` if you want to ensure the output file does not make use of
-	 * rotation metadata and that any rotation is baked into the video frames directly.
+	 * rotation whenever possible.
+	 * @deprecated Use {@link ConversionVideoOptions.allowTransformationMetadata} instead.
 	 */
 	allowRotationMetadata?: boolean;
 	/**
 	 * Specifies the rectangular region of the input video to crop to. The crop region will automatically be clamped to
-	 * the dimensions of the input video track. Cropping is performed after rotation but before resizing.
+	 * the dimensions of the input video track. Cropping is performed after rotation and flip but before resizing.
 	 */
 	crop?: CropRectangle;
 	/**
@@ -255,7 +268,7 @@ export type ConversionVideoOptions = {
 	 *
 	 * Must return a {@link VideoSample}, a {@link VideoSampleResource} or a `CanvasImageSource`, an array of them, or
 	 * `null` for dropping the frame. When non-timestamped data is returned, the timestamp and duration from the source
-	 * sample will be used. Rotation metadata of the returned sample will be ignored.
+	 * sample will be used. Rotation and flip metadata of the returned sample will be ignored.
 	 *
 	 * This function can also be used to manually resize frames. When doing so, you should signal the post-process
 	 * dimensions using the `processedWidth` and `processedHeight` fields, which enables the encoder to better know what
@@ -439,6 +452,16 @@ const validateVideoOptions = (videoOptions: ConversionVideoOptions) => {
 	if (videoOptions?.rotate !== undefined && ![0, 90, 180, 270].includes(videoOptions.rotate)) {
 		throw new TypeError('options.video.rotate, when provided, must be 0, 90, 180 or 270.');
 	}
+	if (videoOptions?.flip !== undefined && typeof videoOptions.flip !== 'boolean') {
+		throw new TypeError('options.video.flip, when provided, must be a boolean.');
+	}
+	if (
+		videoOptions?.allowTransformationMetadata !== undefined
+		&& typeof videoOptions.allowTransformationMetadata !== 'boolean'
+	) {
+		throw new TypeError('options.video.allowTransformationMetadata, when provided, must be a boolean.');
+	}
+	// eslint-disable-next-line @typescript-eslint/no-deprecated
 	if (videoOptions?.allowRotationMetadata !== undefined && typeof videoOptions.allowRotationMetadata !== 'boolean') {
 		throw new TypeError('options.video.allowRotationMetadata, when provided, must be a boolean.');
 	}
@@ -1416,10 +1439,22 @@ export class Conversion {
 		let videoSource: VideoSource;
 
 		const innateRotation = await track.getRotation();
-		const totalRotation = normalizeRotation(innateRotation + (trackOptions.rotate ?? 0));
+		const innateFlip = await track.getFlip();
+		const { rotation: totalRotation, flip: totalFlip } = composeRotationAndFlip(
+			innateRotation,
+			innateFlip,
+			trackOptions.rotate ?? 0,
+			trackOptions.flip ?? false,
+		);
 		let outputTrackRotation = totalRotation;
-		const canUseRotationMetadata = this.output.format.supportsVideoRotationMetadata
-			&& (trackOptions.allowRotationMetadata ?? true);
+		let outputTrackFlip = totalFlip;
+		// When the transformation is left untouched, we forward the input's full matrix so nothing gets lost
+		let outputTrackMatrix = trackOptions.rotate || trackOptions.flip
+			? null
+			: await track.getTransformationMatrix();
+		const canUseRotationMetadata = this.output.format.supportsVideoTransformationMetadata
+			// eslint-disable-next-line @typescript-eslint/no-deprecated
+			&& (trackOptions.allowTransformationMetadata ?? trackOptions.allowRotationMetadata ?? true);
 
 		const squarePixelWidth = await track.getSquarePixelWidth();
 		const squarePixelHeight = await track.getSquarePixelHeight();
@@ -1471,6 +1506,7 @@ export class Conversion {
 			// performance-optimal, but right now there's no other way because we can't change the track rotation
 			// metadata after the output has already started. Should be possible with API changes in v2, though!
 			|| (totalRotation !== 0 && !canUseRotationMetadata)
+			|| (totalFlip && !canUseRotationMetadata)
 			|| !!crop;
 
 		let copyStartPacket: EncodedPacket | null = null;
@@ -1698,6 +1734,7 @@ export class Conversion {
 			let needsRerender = width !== originalWidth
 				|| height !== originalHeight
 				|| (totalRotation !== 0 && (!canUseRotationMetadata || trackOptions.process !== undefined))
+				|| (totalFlip && (!canUseRotationMetadata || trackOptions.process !== undefined))
 				|| !!crop
 				// Don't expect encoders to reliably handle non-square pixels:
 				|| squarePixelWidth !== await track.getCodedWidth()
@@ -1754,12 +1791,17 @@ export class Conversion {
 			}
 
 			if (needsRerender) {
-				outputTrackRotation = 0; // Since the rotation is baked into the output
+				// Since the transform is baked into the output:
+				outputTrackRotation = 0;
+				outputTrackFlip = false;
+				outputTrackMatrix = null;
 
 				encodingConfig.transform.width = width;
 				encodingConfig.transform.height = height;
 				encodingConfig.transform.fit = trackOptions.fit ?? 'fill';
-				encodingConfig.transform.rotate = normalizeRotation(totalRotation - innateRotation);
+				// The decoded samples already carry the innate rotation and flip, so only the additional ones go here
+				encodingConfig.transform.rotate = trackOptions.rotate;
+				encodingConfig.transform.flip = trackOptions.flip;
 				encodingConfig.transform.crop = crop;
 				encodingConfig.transform.alpha = alpha;
 			}
@@ -1821,6 +1863,10 @@ export class Conversion {
 		const trackName = await track.getName();
 		const trackDisposition = await track.getDisposition();
 
+		// The input's bitrate metadata only stays meaningful when packets are copied
+		const bitrate = needsTranscode ? null : await track.getBitrate();
+		const averageBitrate = needsTranscode ? null : await track.getAverageBitrate();
+
 		this.output.addVideoTrack(videoSource, {
 			frameRate: trackOptions.frameRate,
 			// TODO: This condition can be removed when all demuxers properly homogenize to BCP47 in v2
@@ -1830,7 +1876,11 @@ export class Conversion {
 			name: trackName ?? undefined,
 			disposition: trackDisposition,
 			rotation: outputTrackRotation,
+			flip: outputTrackFlip,
+			transformationMatrix: outputTrackMatrix ?? undefined,
 			group: ownGroup ?? trackOptions.group,
+			bitrate: bitrate ?? undefined,
+			averageBitrate: averageBitrate ?? undefined,
 		});
 
 		this.utilizedTracks.push(track);
@@ -2209,6 +2259,10 @@ export class Conversion {
 		const trackName = await track.getName();
 		const trackDisposition = await track.getDisposition();
 
+		// The input's bitrate metadata only stays meaningful when packets are copied
+		const bitrate = needsTranscode ? null : await track.getBitrate();
+		const averageBitrate = needsTranscode ? null : await track.getAverageBitrate();
+
 		this.output.addAudioTrack(audioSource, {
 			// TODO: This condition can be removed when all demuxers properly homogenize to BCP47 in v2
 			languageCode: isIso639Dash2LanguageCode(audioTrackLanguageCode)
@@ -2217,6 +2271,8 @@ export class Conversion {
 			name: trackName ?? undefined,
 			disposition: trackDisposition,
 			group: ownGroup ?? trackOptions.group,
+			bitrate: bitrate ?? undefined,
+			averageBitrate: averageBitrate ?? undefined,
 		});
 
 		this.utilizedTracks.push(track);

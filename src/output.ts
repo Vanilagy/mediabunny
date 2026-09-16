@@ -15,6 +15,7 @@ import {
 	MaybePromise,
 	Rotation,
 	toArray,
+	TransformationMatrix,
 } from './misc';
 import { MetadataTags, TrackDisposition, validateMetadataTags, validateTrackDisposition } from './metadata';
 import { Muxer } from './muxer';
@@ -235,6 +236,16 @@ export type BaseTrackMetadata = {
 	 */
 	maximumPacketCount?: number;
 	/**
+	 * The peak bitrate of this track in bits per second. The muxer will use this value as a fallback when no better
+	 * value is available.
+	 */
+	bitrate?: number;
+	/**
+	 * The average bitrate of this track in bits per second. The muxer will use this value as a fallback when no better
+	 * value is available.
+	 */
+	averageBitrate?: number;
+	/**
 	 * Whether the timestamps of this track are relative to the Unix epoch (January 1, 1970, 00:00:00 UTC). When `true`,
 	 * each timestamp maps to a definitive point in time.
 	 */
@@ -258,8 +269,19 @@ export type BaseTrackMetadata = {
  * @public
  */
 export type VideoTrackMetadata = BaseTrackMetadata & {
-	/** The angle in degrees by which the track's frames should be rotated (clockwise). */
+	/**
+	 * The angle in degrees by which the track's frames should be rotated (clockwise). Rotation is applied before any
+	 * flip.
+	 */
 	rotation?: Rotation;
+	/** Whether the track's frames should be flipped horizontally (about the vertical axis), after rotation. */
+	flip?: boolean;
+	/**
+	 * The full transformation matrix to apply to the track's frames for presentation. When set, this takes precedence
+	 * over `rotation` and `flip`. Formats that can't store an arbitrary matrix extract the closest rotation and
+	 * scale from it.
+	 */
+	transformationMatrix?: TransformationMatrix;
 	/**
 	 * The expected video frame rate in hertz. If set, all timestamps and durations of this track will be snapped to
 	 * this frame rate. You should avoid adding more frames than the rate allows, as this will lead to multiple frames
@@ -326,6 +348,15 @@ const validateBaseTrackMetadata = (metadata: BaseTrackMetadata) => {
 		&& (!Number.isInteger(metadata.maximumPacketCount) || metadata.maximumPacketCount < 0)
 	) {
 		throw new TypeError('metadata.maximumPacketCount, when provided, must be a non-negative integer.');
+	}
+	if (metadata.bitrate !== undefined && (!Number.isFinite(metadata.bitrate) || metadata.bitrate < 0)) {
+		throw new TypeError('metadata.bitrate, when provided, must be a non-negative number.');
+	}
+	if (
+		metadata.averageBitrate !== undefined
+		&& (!Number.isFinite(metadata.averageBitrate) || metadata.averageBitrate < 0)
+	) {
+		throw new TypeError('metadata.averageBitrate, when provided, must be a non-negative number.');
 	}
 	if (
 		metadata.group !== undefined
@@ -640,8 +671,18 @@ export class Output<
 		if (metadata.rotation !== undefined && ![0, 90, 180, 270].includes(metadata.rotation)) {
 			throw new TypeError(`Invalid video rotation: ${metadata.rotation}. Has to be 0, 90, 180 or 270.`);
 		}
-		if (!this.format.supportsVideoRotationMetadata && metadata.rotation) {
-			throw new Error(`${this.format._name} does not support video rotation metadata.`);
+		if (metadata.flip !== undefined && typeof metadata.flip !== 'boolean') {
+			throw new TypeError('metadata.flip, when provided, must be a boolean.');
+		}
+		if (
+			metadata.transformationMatrix !== undefined
+			&& (
+				!Array.isArray(metadata.transformationMatrix)
+				|| metadata.transformationMatrix.length !== 9
+				|| !metadata.transformationMatrix.every(x => Number.isFinite(x))
+			)
+		) {
+			throw new TypeError('metadata.transformationMatrix, when provided, must be an array of 9 finite numbers.');
 		}
 		if (
 			metadata.frameRate !== undefined
@@ -916,9 +957,8 @@ export class Output<
 	 * @returns A promise that resolves once all internal resources have been released.
 	 */
 	async cancel() {
-		if (this._cancelPromise) {
-			Logging._warn('Output has already been canceled.');
-			return this._cancelPromise;
+		if (this.state === 'canceled') {
+			return this._cancelPromise ?? undefined;
 		} else if (this.state === 'finalizing' || this.state === 'finalized') {
 			// Don't wanna warn when finalizing since that shows a warning when finalization fails and then cancel
 			// is called
@@ -986,6 +1026,9 @@ export class Output<
 				}
 
 				this.state = 'finalized';
+			} catch (error) {
+				this.state = 'canceled';
+				throw error;
 			} finally {
 				await Promise.all([...this._unfinalizedTargets].map(target => target._close().catch(() => {})));
 				this._unfinalizedTargets.clear();

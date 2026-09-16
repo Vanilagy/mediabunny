@@ -47,7 +47,7 @@
 	format = new Mediabunny.MkvOutputFormat();
 	format = new Mediabunny.MovOutputFormat();
 	format = new Mediabunny.Mp4OutputFormat({ fastStart: 'reserve' });
-	format = new Mediabunny.MkvOutputFormat({  });
+	format = new Mediabunny.Mp4OutputFormat({ fastStart: 'fragmented' });
 	let target = new Mediabunny.BufferTarget();
 
 	/*

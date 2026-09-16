@@ -61,6 +61,118 @@ test('Rotation is baked in when rerendering', async () => {
 	expect(await track.getRotation()).toBe(0);
 });
 
+test('Flip is forwarded as metadata when copying', async () => {
+	const buffer = await encodeFlippedVideo();
+	using input = new Input({
+		source: new BufferSource(buffer),
+		formats: ALL_FORMATS,
+	});
+
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+	const conversion = await Conversion.init({ input, output, copy: { mode: 'forced' } });
+	await conversion.execute();
+
+	using newInput = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const track = await newInput.getPrimaryVideoTrack();
+	assert(track);
+
+	expect(await track.getRotation()).toBe(90);
+	expect(await track.getFlip()).toBe(true);
+});
+
+test('Flip is baked in when rerendering', async () => {
+	const buffer = await encodeFlippedVideo();
+	using input = new Input({
+		source: new BufferSource(buffer),
+		formats: ALL_FORMATS,
+	});
+
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+	const conversion = await Conversion.init({ input, output, video: {
+		width: 80,
+	} });
+	await conversion.execute();
+
+	using newInput = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const track = await newInput.getPrimaryVideoTrack();
+	assert(track);
+
+	expect(await track.getRotation()).toBe(0);
+	expect(await track.getFlip()).toBe(false);
+	expect(await track.getCodedWidth()).toBe(80);
+	expect(await track.getCodedHeight()).toBe(160);
+});
+
+test('Additional flip is composed with the input flip', async () => {
+	const buffer = await encodeFlippedVideo();
+	using input = new Input({
+		source: new BufferSource(buffer),
+		formats: ALL_FORMATS,
+	});
+
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+	const conversion = await Conversion.init({
+		input,
+		output,
+		copy: { mode: 'forced' },
+		video: { flip: true },
+	});
+	await conversion.execute();
+
+	using newInput = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const track = await newInput.getPrimaryVideoTrack();
+	assert(track);
+
+	// The two flips cancel out
+	expect(await track.getRotation()).toBe(90);
+	expect(await track.getFlip()).toBe(false);
+});
+
+/** A short 320x160 video with rotation 90 and flip metadata. */
+const encodeFlippedVideo = async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const canvas = new OffscreenCanvas(320, 160);
+	const ctx = canvas.getContext('2d')!;
+	ctx.fillStyle = 'red';
+	ctx.fillRect(0, 0, 320, 160);
+
+	const videoSource = new CanvasSource(canvas, { codec: 'avc', quality: new Quality('high') });
+	output.addVideoTrack(videoSource, {
+		rotation: 90,
+		flip: true,
+	});
+
+	await output.start();
+	for (let i = 0; i < 4; i++) {
+		await videoSource.add(i / 4, 1 / 4);
+	}
+	await output.finalize();
+
+	return output.target.buffer!;
+};
+
 test('Exceeding max allowed track count', async () => {
 	using input = new Input({
 		source: new UrlSource('/multiple-aac-tracks.mp4'),

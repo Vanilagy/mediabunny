@@ -177,6 +177,7 @@ export {
 	type Rotation,
 	type SetOptional,
 	type SetRequired,
+	type TransformationMatrix,
 } from './misc';
 export {
 	type TrackType,

@@ -306,6 +306,14 @@ await videoTrack.getDisplayHeight(); // => number
 // track's frames should be rotated:
 await videoTrack.getRotation(); // => 0 | 90 | 180 | 270
 
+// Get whether the track's frames should be flipped horizontally
+// (after rotation):
+await videoTrack.getFlip(); // => boolean
+
+// Get the full transformation matrix that rotation and flip are
+// derived from:
+await videoTrack.getTransformationMatrix(); // => TransformationMatrix
+
 // Get the aspect ratio of the track's pixels (usually 1:1):
 await videoTrack.getPixelAspectRatio(); // => { num: number, den: number }
 ```
