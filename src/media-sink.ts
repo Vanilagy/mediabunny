@@ -918,6 +918,7 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 		public codec: VideoCodec,
 		public decoderConfig: VideoDecoderConfig,
 		public rotation: Rotation,
+		public flip: boolean,
 		public timeResolution: number,
 	) {
 		super(onSample, onError);
@@ -1284,6 +1285,7 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 		sample.setTimestamp(Math.round(sample.timestamp * this.timeResolution) / this.timeResolution);
 		sample.setDuration(Math.round(sample.duration * this.timeResolution) / this.timeResolution);
 		sample.setRotation(this.rotation);
+		sample.setFlip(this.flip);
 
 		this.onSample(sample);
 	}
@@ -1770,6 +1772,7 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 
 		const codec = await this._track.getCodec();
 		const rotation = await this._track.getRotation();
+		const flip = await this._track.getFlip();
 		let decoderConfig = await this._track.getDecoderConfig();
 		const timeResolution = await this._track.getTimeResolution();
 		assert(codec && decoderConfig);
@@ -1780,7 +1783,7 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 			optimizeForLatency: this._decoderOptions.optimizeForLatency,
 		};
 
-		return new VideoDecoderWrapper(onSample, onError, codec, decoderConfig, rotation, timeResolution);
+		return new VideoDecoderWrapper(onSample, onError, codec, decoderConfig, rotation, flip, timeResolution);
 	}
 
 	/** @internal */
@@ -1880,13 +1883,18 @@ export type CanvasSinkOptions = {
 	fit?: 'fill' | 'contain' | 'cover';
 	/**
 	 * The clockwise rotation by which to rotate the raw video frame. Defaults to the rotation set in the file metadata.
-	 * Rotation is applied before resizing.
+	 * Rotation is applied before flipping.
 	 */
 	rotation?: Rotation;
 	/**
+	 * Whether to flip the raw video frame horizontally (about the vertical axis). Defaults to the flip set in the file
+	 * metadata. The flip is applied after rotation but before cropping and resizing.
+	 */
+	flip?: boolean;
+	/**
 	 * Specifies the rectangular region of the input video to crop to. The crop region will automatically be clamped to
-	 * the dimensions of the input video track. Cropping is performed after rotation but before resizing. The crop
-	 * region is in the _display pixel space_ of the underlying video data.
+	 * the dimensions of the input video track. Cropping is performed after rotation and flip but before resizing. The
+	 * crop region is in the _display pixel space_ of the underlying video data.
 	 */
 	crop?: CropRectangle;
 	/**
@@ -1902,8 +1910,8 @@ export type CanvasSinkOptions = {
 
 /**
  * A sink that renders video samples (frames) of the given video track to canvases. This is often more useful than
- * directly retrieving frames, as it comes with common preprocessing steps such as resizing or applying rotation
- * metadata.
+ * directly retrieving frames, as it comes with common preprocessing steps such as resizing or applying rotation and
+ * flip metadata.
  *
  * This sink will yield `HTMLCanvasElement`s when in a DOM context, and `OffscreenCanvas`es otherwise.
  *
@@ -1925,6 +1933,8 @@ export class CanvasSink {
 	_fit: 'fill' | 'contain' | 'cover';
 	/** @internal */
 	_rotation: Rotation = 0;
+	/** @internal */
+	_flip = false;
 	/** @internal */
 	_crop?: { left: number; top: number; width: number; height: number };
 	/** @internal */
@@ -1968,6 +1978,9 @@ export class CanvasSink {
 		if (options.rotation !== undefined && ![0, 90, 180, 270].includes(options.rotation)) {
 			throw new TypeError('options.rotation, when provided, must be 0, 90, 180 or 270.');
 		}
+		if (options.flip !== undefined && typeof options.flip !== 'boolean') {
+			throw new TypeError('options.flip, when provided, must be a boolean.');
+		}
 		if (options.crop !== undefined) {
 			validateCropRectangle(options.crop, 'options.');
 		}
@@ -1996,6 +2009,7 @@ export class CanvasSink {
 			const videoTrack = this._videoTrack;
 
 			const rotation = options.rotation ?? await videoTrack.getRotation();
+			const flip = options.flip ?? await videoTrack.getFlip();
 			const squarePixelWidth = await videoTrack.getSquarePixelWidth();
 			const squarePixelHeight = await videoTrack.getSquarePixelHeight();
 
@@ -2028,6 +2042,7 @@ export class CanvasSink {
 			this._width = width;
 			this._height = height;
 			this._rotation = rotation;
+			this._flip = flip;
 			this._crop = crop;
 		})();
 	}
@@ -2068,6 +2083,7 @@ export class CanvasSink {
 		sample._drawWithFitAndMipmapping(canvas, context, {
 			fit: this._fit,
 			rotation: this._rotation,
+			flip: this._flip,
 			crop: this._crop,
 			targetIsFresh: canvasIsNew,
 			fillBlack: !this._alpha && isFirefox(),

@@ -64,13 +64,14 @@ import {
 	findLastIndex,
 	floorToMultiple,
 	isThenable,
+	IDENTITY_MATRIX,
 	last,
 	MATRIX_COEFFICIENTS_MAP_INVERSE,
 	readExpGolomb,
-	Rotation,
 	roundIfAlmostInteger,
 	toDataView,
 	TRANSFER_CHARACTERISTICS_MAP_INVERSE,
+	TransformationMatrix,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
 import {
@@ -1833,8 +1834,8 @@ class MpegTsVideoTrackBacking extends MpegTsTrackBacking implements InputVideoTr
 		return this.elementaryStream.info.squarePixelHeight;
 	}
 
-	getRotation(): Rotation {
-		return 0;
+	getTransformationMatrix(): TransformationMatrix {
+		return [...IDENTITY_MATRIX];
 	}
 
 	async getColorSpace(): Promise<VideoColorSpaceInit> {

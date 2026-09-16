@@ -567,8 +567,8 @@ class SegmentedInputInputVideoTrackBacking
 		return this.delegate(() => this.firstInputTrack!._backing.getSquarePixelHeight());
 	}
 
-	getRotation() {
-		return this.delegate(() => this.firstInputTrack!._backing.getRotation());
+	getTransformationMatrix() {
+		return this.delegate(() => this.firstInputTrack!._backing.getTransformationMatrix());
 	}
 
 	async getColorSpace(): Promise<VideoColorSpaceInit> {

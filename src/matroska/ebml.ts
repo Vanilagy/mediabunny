@@ -136,6 +136,8 @@ export enum EBMLId {
 	Range = 0x55b9,
 	Projection = 0x7670,
 	ProjectionType = 0x7671,
+	ProjectionPoseYaw = 0x7673,
+	ProjectionPosePitch = 0x7674,
 	ProjectionPoseRoll = 0x7675,
 	Attachments = 0x1941a469,
 	AttachedFile = 0x61a7,

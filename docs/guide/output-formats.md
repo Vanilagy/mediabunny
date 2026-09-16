@@ -27,8 +27,8 @@ format.getSupportedVideoCodecs(); // => VideoCodec[]
 format.getSupportedAudioCodecs(); // => AudioCodec[]
 format.getSupportedSubtitleCodecs(); // => SubtitleCodec[]
 
-// Check if the format supports video tracks with rotation metadata:
-format.supportsVideoRotationMetadata; // => boolean
+// Check if the format supports video tracks with rotation and flip metadata:
+format.supportsVideoTransformationMetadata; // => boolean
 ```
 
 Refer to the [compatibility table](./supported-formats-and-codecs.md#compatibility-table) to see which codecs can be used with which output format.

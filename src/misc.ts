@@ -22,6 +22,9 @@ export function assert(x: unknown): asserts x {
  */
 export type Rotation = 0 | 90 | 180 | 270;
 
+export const DEG_TO_RAD = Math.PI / 180;
+export const RAD_TO_DEG = 180 / Math.PI;
+
 export const normalizeRotation = (rotation: number) => {
 	const mappedRotation = (rotation % 360 + 360) % 360;
 
@@ -32,7 +35,126 @@ export const normalizeRotation = (rotation: number) => {
 	}
 };
 
-export type TransformationMatrix = [number, number, number, number, number, number, number, number, number];
+/**
+ * Row-major 3x3 affine transformation matrix.
+ * @group Miscellaneous
+ * @public
+ */
+export type TransformationMatrix = [
+	a: number,
+	b: number,
+	u: number,
+	c: number,
+	d: number,
+	v: number,
+	x: number,
+	y: number,
+	w: number,
+];
+
+export const IDENTITY_MATRIX: TransformationMatrix = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+
+/**
+ * Applies a linear transformation (no translation) to a width-by-height frame about its center, with the result
+ * sitting in the positive quadrant.
+ */
+export const centeredTransformationMatrix = (linear: TransformationMatrix, width: number, height: number) => {
+	const [a, b, , c, d] = linear;
+
+	// Bounding box of the transformed frame
+	const transformedWidth = Math.abs(a) * width + Math.abs(c) * height;
+	const transformedHeight = Math.abs(b) * width + Math.abs(d) * height;
+
+	// The transformation happens about the origin (the frame's top-left corner), so we move the center to the
+	// origin, transform, then move it back
+	return multiplyMatrices(
+		multiplyMatrices(
+			translationMatrix(-width / 2, -height / 2),
+			linear,
+		),
+		translationMatrix(transformedWidth / 2, transformedHeight / 2),
+	);
+};
+
+/**
+ * Extracts the rotation from a transformation matrix, assuming the matrix has the form "rotate, then maybe flip
+ * horizontally", and snapping to the nearest multiple of 90 degrees.
+ */
+export const extractRotationFromMatrix = (matrix: TransformationMatrix) => {
+	const [a, b] = matrix;
+
+	// (1, 0) projects onto (a, b), so that's all we need. The rotation is applied before flipping though, so we
+	// first need to undo the flip to isolate the rotation.
+	const radians = Math.atan2(b, matrixIsFlipped(matrix) ? -a : a);
+	return normalizeRotation(roundToMultiple(radians * RAD_TO_DEG, 90));
+};
+
+/** Whether the transformation matrix flips the frame, i.e. has a negative determinant. */
+export const matrixIsFlipped = (matrix: TransformationMatrix) => {
+	const [a, b, , c, d] = matrix;
+	const det = a * d - b * c;
+
+	return det < 0;
+};
+
+export const rotationMatrix = (rotationInDegrees: number): TransformationMatrix => {
+	const theta = rotationInDegrees * DEG_TO_RAD;
+	const cosTheta = Math.round(Math.cos(theta));
+	const sinTheta = Math.round(Math.sin(theta));
+
+	// Points are row vectors, meaning this is the transpose of your typical rotation matrix
+	return [
+		cosTheta, sinTheta, 0,
+		-sinTheta, cosTheta, 0,
+		0, 0, 1,
+	];
+};
+
+export const translationMatrix = (x: number, y: number): TransformationMatrix => {
+	// Points are row vectors, meaning this is the transpose of your typical translation matrix
+	return [
+		1, 0, 0,
+		0, 1, 0,
+		x, y, 1,
+	];
+};
+
+export const scaleMatrix = (x: number, y: number): TransformationMatrix => {
+	return [
+		x, 0, 0,
+		0, y, 0,
+		0, 0, 1,
+	];
+};
+
+/** Computes a * b. Since points are row vectors, this applies a first, then b. */
+export const multiplyMatrices = (a: TransformationMatrix, b: TransformationMatrix): TransformationMatrix => {
+	const result = new Array<number>(9) as TransformationMatrix;
+
+	for (let i = 0; i < 3; i++) {
+		for (let j = 0; j < 3; j++) {
+			result[3 * i + j] = a[3 * i]! * b[j]! + a[3 * i + 1]! * b[3 + j]! + a[3 * i + 2]! * b[6 + j]!;
+		}
+	}
+
+	return result;
+};
+
+/**
+ * Composes two "rotate, then flip" transformations into one. A flip conjugates any rotation that follows it, meaning
+ * the second rotation flips direction if the first flip is set.
+ */
+export const composeRotationAndFlip = (
+	rotation1: Rotation,
+	flip1: boolean,
+	rotation2: Rotation,
+	flip2: boolean,
+) => {
+	return {
+		rotation: normalizeRotation(rotation1 + (flip1 ? -rotation2 : rotation2)),
+		flip: flip1 !== flip2,
+	};
+};
 
 export const last = <T>(arr: T[]) => {
 	return arr && arr[arr.length - 1];

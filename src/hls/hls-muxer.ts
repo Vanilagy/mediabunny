@@ -402,7 +402,7 @@ export class HlsMuxer extends Muxer {
 			const codecs: MediaCodec[] = [];
 			let videoCount = 0;
 			let audioCount = 0;
-			let requiresRotationMetadata = false;
+			let requiresTransformationMetadata = false;
 
 			let candidate: OutputFormat | null = null;
 			let candidateScore = -Infinity;
@@ -410,7 +410,9 @@ export class HlsMuxer extends Muxer {
 			for (const track of tracks) {
 				if (track.isVideoTrack()) {
 					videoCount++;
-					requiresRotationMetadata ||= (track.metadata.rotation ?? 0) !== 0;
+					requiresTransformationMetadata ||= (track.metadata.rotation ?? 0) !== 0
+						|| !!track.metadata.flip
+						|| !!track.metadata.transformationMatrix;
 				} else if (track.isAudioTrack()) {
 					audioCount++;
 				}
@@ -435,7 +437,7 @@ export class HlsMuxer extends Muxer {
 				}
 
 				let score = 0;
-				if (requiresRotationMetadata && format.supportsVideoRotationMetadata) {
+				if (requiresTransformationMetadata && format.supportsVideoTransformationMetadata) {
 					score++;
 				}
 

@@ -327,6 +327,7 @@ class VideoEncoderWrapper {
 			const hasTransformConfig = config.transform?.width !== undefined
 				|| config.transform?.height !== undefined
 				|| config.transform?.rotate !== undefined
+				|| config.transform?.flip !== undefined
 				|| config.transform?.crop !== undefined
 				|| config.transform?.force === true;
 			const needsTransform = hasTransformConfig || (isSizeChange && sizeChangeBehavior !== 'passThrough');
@@ -353,6 +354,7 @@ class VideoEncoderWrapper {
 					roundDimensionsTo: 2,
 					crop: config.transform?.crop,
 					rotate: config.transform?.rotate,
+					flip: config.transform?.flip,
 					fit: appliedFit,
 					alpha: config.alpha,
 				});

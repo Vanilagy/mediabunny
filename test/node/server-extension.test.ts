@@ -1294,7 +1294,7 @@ describe('Video', async () => {
 			}
 		};
 
-		test('resize to 200x200', async () => {
+		test('Resize to 200x200', async () => {
 			using sample = makeSample();
 			using result = await sample.transform({ width: 200, height: 200, fit: 'fill' });
 
@@ -1308,7 +1308,7 @@ describe('Video', async () => {
 			expectColor(getColorAt(rgba, 200, 150, 150), [255, 0, 0]); // bottom-right
 		});
 
-		test('rotate 90 deg clockwise', async () => {
+		test('Rotate 90 deg clockwise', async () => {
 			using sample = makeSample();
 			using result = await sample.transform({ rotate: 90 });
 
@@ -1322,7 +1322,7 @@ describe('Video', async () => {
 			expectColor(getColorAt(rgba, 400, 350, 350), [255, 0, 0]);
 		});
 
-		test('crop top-left, no rotation', async () => {
+		test('Crop top-left, no rotation', async () => {
 			using sample = makeSample();
 			using result = await sample.transform({ crop: { left: 0, top: 0, width: 200, height: 200 } });
 
@@ -1336,7 +1336,7 @@ describe('Video', async () => {
 			expectColor(getColorAt(rgba, 200, 150, 150), [255, 0, 0]);
 		});
 
-		test('rotate 90 deg then crop top-left, crop applies after rotation', async () => {
+		test('Rotate 90 deg then crop top-left, crop applies after rotation', async () => {
 			using sample = makeSample();
 			using result = await sample.transform({
 				rotate: 90,
@@ -1353,7 +1353,67 @@ describe('Video', async () => {
 			expectColor(getColorAt(rgba, 200, 150, 150), [0, 0, 255]);
 		});
 
-		test('resize to 400x200 with fill, vertically squished', async () => {
+		test('Flip horizontally', async () => {
+			using sample = makeSample();
+			using result = await sample.transform({ flip: true });
+
+			expect(result.flip).toBe(false);
+
+			const rgba = await readRgba(result);
+			expectColor(getColorAt(rgba, 400, 50, 50), [255, 0, 0]);
+			expectColor(getColorAt(rgba, 400, 350, 50), [255, 0, 0]);
+			expectColor(getColorAt(rgba, 400, 50, 350), [255, 0, 0]);
+			expectColor(getColorAt(rgba, 400, 350, 350), [0, 0, 255]); // bottom-right (blue)
+		});
+
+		test('Rotate 90 deg and flip', async () => {
+			using sample = makeSample();
+			using result = await sample.transform({ rotate: 90, flip: true });
+
+			const rgba = await readRgba(result);
+			expectColor(getColorAt(rgba, 400, 50, 50), [255, 0, 0]);
+			expectColor(getColorAt(rgba, 400, 350, 50), [0, 0, 255]); // top-right (blue)
+			expectColor(getColorAt(rgba, 400, 50, 350), [255, 0, 0]);
+			expectColor(getColorAt(rgba, 400, 350, 350), [255, 0, 0]);
+		});
+
+		test('Rotate 90 deg and flip and crop top-right', async () => {
+			using sample = makeSample();
+			using result = await sample.transform({
+				rotate: 90,
+				flip: true,
+				crop: { left: 200, top: 0, width: 200, height: 200 },
+			});
+
+			expect(result.codedWidth).toBe(200);
+			expect(result.codedHeight).toBe(200);
+
+			const rgba = await readRgba(result);
+			expectColor(getColorAt(rgba, 200, 50, 50), [0, 0, 255]);
+			expectColor(getColorAt(rgba, 200, 150, 50), [0, 0, 255]);
+			expectColor(getColorAt(rgba, 200, 50, 150), [0, 0, 255]);
+			expectColor(getColorAt(rgba, 200, 150, 150), [0, 0, 255]);
+		});
+
+		test('Sample flip metadata composed with additional rotation', async () => {
+			using sample = makeSample();
+			sample.setFlip(true);
+
+			// The sample's own flip comes first, then the additional rotation: blue goes bottom-left -> bottom-right
+			// -> bottom-left
+			using result = await sample.transform({ rotate: 90 });
+
+			expect(result.rotation).toBe(0);
+			expect(result.flip).toBe(false);
+
+			const rgba = await readRgba(result);
+			expectColor(getColorAt(rgba, 400, 50, 50), [255, 0, 0]);
+			expectColor(getColorAt(rgba, 400, 350, 50), [255, 0, 0]);
+			expectColor(getColorAt(rgba, 400, 50, 350), [0, 0, 255]); // bottom-left (blue)
+			expectColor(getColorAt(rgba, 400, 350, 350), [255, 0, 0]);
+		});
+
+		test('Resize to 400x200 with fill, vertically squished', async () => {
 			using sample = makeSample();
 			using result = await sample.transform({ width: 400, height: 200, fit: 'fill' });
 
@@ -1367,7 +1427,7 @@ describe('Video', async () => {
 			expectColor(getColorAt(rgba, 400, 300, 175), [255, 0, 0]); // bottom-right
 		});
 
-		test('resize to 400x200 with contain, letterboxed', async () => {
+		test('Resize to 400x200 with contain, letterboxed', async () => {
 			using sample = makeSample();
 			using result = await sample.transform({ width: 400, height: 200, fit: 'contain' });
 
@@ -1382,7 +1442,7 @@ describe('Video', async () => {
 			expectColor(getColorAt(rgba, 400, 250, 150), [255, 0, 0]); // bottom-right of image (red)
 		});
 
-		test('resize to 400x200 with cover, vertical center crop', async () => {
+		test('Resize to 400x200 with cover, vertical center crop', async () => {
 			using sample = makeSample();
 			using result = await sample.transform({ width: 400, height: 200, fit: 'cover' });
 
