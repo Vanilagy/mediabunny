@@ -1036,11 +1036,20 @@ export const canEncode = (codec: MediaCodec) => {
 export const canEncodeVideo = async (
 	codec: VideoCodec,
 	options: {
+		/** The width of the video in pixels. */
 		width?: number;
+		/** The height of the video in pixels. */
 		height?: number;
+		/** The desired quality of the encoded video. */
 		quality?: Quality;
-		/** @deprecated Use `quality` instead. */
+		/**
+		 * The target bitrate for the encoded video, in bits per second. Alternatively, a {@link Quality} can
+		 * be provided.
+		 * @deprecated Use `quality` instead.
+		 */
 		bitrate?: number | Quality;
+		/** The expected frame rate in frames per second, if known. */
+		frameRate?: number;
 	} & VideoEncodingAdditionalOptions = {},
 ) => {
 	const {
@@ -1049,6 +1058,7 @@ export const canEncodeVideo = async (
 		quality,
 		// eslint-disable-next-line @typescript-eslint/no-deprecated
 		bitrate,
+		frameRate,
 		...restOptions
 	} = options;
 
@@ -1070,6 +1080,9 @@ export const canEncodeVideo = async (
 	if (bitrate !== undefined && !(bitrate instanceof Quality) && (!Number.isInteger(bitrate) || bitrate <= 0)) {
 		throw new TypeError('bitrate must be a positive integer or a quality.');
 	}
+	if (frameRate !== undefined && (!Number.isFinite(frameRate) || frameRate <= 0)) {
+		throw new TypeError('frameRate, when provided, must be a finite positive number.');
+	}
 	validateVideoEncodingAdditionalOptions(codec, restOptions);
 
 	const resolvedQuality = resolveQuality(quality, bitrate) ?? new Quality('medium');
@@ -1081,7 +1094,7 @@ export const canEncodeVideo = async (
 			width,
 			height,
 			quality: resolvedQuality,
-			framerate: undefined,
+			framerate: frameRate,
 			...restOptions,
 			alpha: 'discard', // Since we handle alpha ourselves
 		});
@@ -1187,10 +1200,17 @@ export const canEncodeVideo = async (
 export const canEncodeAudio = async (
 	codec: AudioCodec,
 	options: {
+		/** The number of audio channels. */
 		numberOfChannels?: number;
+		/** The sample rate in hertz. */
 		sampleRate?: number;
+		/** The desired quality of the encoded audio. */
 		quality?: Quality;
-		/** @deprecated Use `quality` instead. */
+		/**
+		 * The target bitrate for the encoded audio, in bits per second. Alternatively, a {@link Quality} can
+		 * be provided.
+		 * @deprecated Use `quality` instead.
+		 */
 		bitrate?: number | Quality;
 	} & AudioEncodingAdditionalOptions = {},
 ) => {
@@ -1315,11 +1335,20 @@ export const getEncodableCodecs = async (): Promise<MediaCodec[]> => {
 export const getEncodableVideoCodecs = async (
 	checkedCodecs: VideoCodec[] = VIDEO_CODECS as unknown as VideoCodec[],
 	options?: {
+		/** The width of the video in pixels. */
 		width?: number;
+		/** The height of the video in pixels. */
 		height?: number;
+		/** The desired quality of the encoded video. */
 		quality?: Quality;
-		/** @deprecated Use `quality` instead. */
+		/**
+		 * The target bitrate for the encoded video, in bits per second. Alternatively, a {@link Quality} can
+		 * be provided.
+		 * @deprecated Use `quality` instead.
+		 */
 		bitrate?: number | Quality;
+		/** The expected frame rate in frames per second, if known. */
+		frameRate?: number;
 	},
 ): Promise<VideoCodec[]> => {
 	const bools = await Promise.all(checkedCodecs.map(codec => canEncodeVideo(codec, options)));
@@ -1334,10 +1363,17 @@ export const getEncodableVideoCodecs = async (
 export const getEncodableAudioCodecs = async (
 	checkedCodecs: AudioCodec[] = AUDIO_CODECS as unknown as AudioCodec[],
 	options?: {
+		/** The number of audio channels. */
 		numberOfChannels?: number;
+		/** The sample rate in hertz. */
 		sampleRate?: number;
+		/** The desired quality of the encoded audio. */
 		quality?: Quality;
-		/** @deprecated Use `quality` instead. */
+		/**
+		 * The target bitrate for the encoded audio, in bits per second. Alternatively, a {@link Quality} can
+		 * be provided.
+		 * @deprecated Use `quality` instead.
+		 */
 		bitrate?: number | Quality;
 	},
 ): Promise<AudioCodec[]> => {
@@ -1365,11 +1401,20 @@ export const getEncodableSubtitleCodecs = async (
 export const getFirstEncodableVideoCodec = async (
 	checkedCodecs: VideoCodec[],
 	options?: {
+		/** The width of the video in pixels. */
 		width?: number;
+		/** The height of the video in pixels. */
 		height?: number;
+		/** The desired quality of the encoded video. */
 		quality?: Quality;
-		/** @deprecated Use `quality` instead. */
+		/**
+		 * The target bitrate for the encoded video, in bits per second. Alternatively, a {@link Quality} can
+		 * be provided.
+		 * @deprecated Use `quality` instead.
+		 */
 		bitrate?: number | Quality;
+		/** The expected frame rate in frames per second, if known. */
+		frameRate?: number;
 	},
 ): Promise<VideoCodec | null> => {
 	for (const codec of checkedCodecs) {
@@ -1389,10 +1434,17 @@ export const getFirstEncodableVideoCodec = async (
 export const getFirstEncodableAudioCodec = async (
 	checkedCodecs: AudioCodec[],
 	options?: {
+		/** The number of audio channels. */
 		numberOfChannels?: number;
+		/** The sample rate in hertz. */
 		sampleRate?: number;
+		/** The desired quality of the encoded audio. */
 		quality?: Quality;
-		/** @deprecated Use `quality` instead. */
+		/**
+		 * The target bitrate for the encoded audio, in bits per second. Alternatively, a {@link Quality} can
+		 * be provided.
+		 * @deprecated Use `quality` instead.
+		 */
 		bitrate?: number | Quality;
 	},
 ): Promise<AudioCodec | null> => {

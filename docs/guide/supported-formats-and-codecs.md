@@ -137,7 +137,7 @@ You can also check encodability using specific configurations:
 import { canEncodeVideo, canEncodeAudio, Quality } from 'mediabunny';
 
 canEncodeVideo('hevc', {
-	width: 1920, height: 1080, quality: new Quality({ bitrate: 1e7 })
+	width: 1920, height: 1080, frameRate: 60, quality: new Quality({ bitrate: 1e7 })
 }); // => Promise<boolean>
 
 canEncodeAudio('aac', {
