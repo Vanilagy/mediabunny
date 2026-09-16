@@ -15,11 +15,16 @@ import {
 	assert,
 	assertNever,
 	colorSpaceIsEmpty,
+	extractRotationFromMatrix,
 	imageMimeTypeToExtension,
 	keyValueIterator,
+	multiplyMatrices,
 	normalizeRotation,
 	promiseWithResolvers,
+	RAD_TO_DEG,
 	Rational,
+	Rotation,
+	rotationMatrix,
 	simplifyRational,
 	textEncoder,
 	toUint8Array,
@@ -379,7 +384,7 @@ export class MatroskaMuxer extends Muxer {
 	}
 
 	private videoSpecificTrackInfo(trackData: MatroskaVideoTrackData) {
-		const { frameRate, rotation } = trackData.track.metadata;
+		const { frameRate, transformationMatrix } = trackData.track.metadata;
 
 		const elements: EBMLElement['data'] = [
 			(frameRate
@@ -390,8 +395,37 @@ export class MatroskaMuxer extends Muxer {
 				: null),
 		];
 
-		// Convert from clockwise to counter-clockwise
-		const flippedRotation = rotation ? normalizeRotation(-rotation) : 0;
+		// Matroska can only express the transformation as a rotation and per-axis scales of -1, 0 or 1, so we boil
+		// the metadata down to that: a clockwise rotation followed by the scales
+		let rotation: Rotation;
+		let horizontalScale: number;
+		let verticalScale: number;
+
+		if (transformationMatrix) {
+			rotation = extractRotationFromMatrix(transformationMatrix);
+
+			// Undo the rotation to isolate the scale part
+			const unrotated = multiplyMatrices(rotationMatrix(-rotation), transformationMatrix);
+			horizontalScale = Math.sign(unrotated[0]);
+			verticalScale = Math.sign(unrotated[4]);
+
+			if (verticalScale === -1) {
+				// A vertical flip is the same as a 180 degree rotation and a horizontal flip
+				verticalScale = 1;
+				horizontalScale = -horizontalScale;
+				rotation = normalizeRotation(rotation + 180);
+			}
+		} else {
+			rotation = trackData.track.metadata.rotation ?? 0;
+			horizontalScale = trackData.track.metadata.isFlipped ? -1 : 1;
+			verticalScale = 1;
+		}
+
+		// Matroska applies yaw and pitch (our scales) before roll, but our rotation comes before the scales. On top of
+		// that, Matroska wants counter-clockwise angles.
+		const roll = rotation ? normalizeRotation(horizontalScale === -1 ? rotation : -rotation) : 0;
+		const yaw = Math.round(Math.acos(horizontalScale) * RAD_TO_DEG);
+		const pitch = Math.round(Math.acos(verticalScale) * RAD_TO_DEG);
 
 		const hasNonSquarePixelAspectRatio
 			= !!trackData.info.aspectRatio && (
@@ -432,7 +466,7 @@ export class MatroskaMuxer extends Muxer {
 							},
 						],
 					}),
-			(flippedRotation
+			(roll || yaw || pitch
 				? {
 						id: EBMLId.Projection,
 						data: [
@@ -440,10 +474,24 @@ export class MatroskaMuxer extends Muxer {
 								id: EBMLId.ProjectionType,
 								data: 0, // rectangular
 							},
-							{
-								id: EBMLId.ProjectionPoseRoll,
-								data: new EBMLFloat32((flippedRotation + 180) % 360 - 180), // [0, 270] -> [-180, 90]
-							},
+							(yaw
+								? {
+										id: EBMLId.ProjectionPoseYaw,
+										data: new EBMLFloat32(yaw),
+									}
+								: null),
+							(pitch
+								? {
+										id: EBMLId.ProjectionPosePitch,
+										data: new EBMLFloat32(pitch),
+									}
+								: null),
+							(roll
+								? {
+										id: EBMLId.ProjectionPoseRoll,
+										data: new EBMLFloat32((roll + 180) % 360 - 180), // [0, 270] -> [-180, 90]
+									}
+								: null),
 						],
 					}
 				: null),

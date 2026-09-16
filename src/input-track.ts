@@ -14,13 +14,15 @@ import { Logging } from './logging';
 import { EncodedPacketSink, PacketRetrievalOptions } from './media-sink';
 import {
 	assert,
+	extractRotationFromMatrix,
 	isNumber,
 	isThenable,
+	matrixIsFlipped,
 	MaybePromise,
 	Rational,
-	Rotation,
 	roundToDivisor,
 	simplifyRational,
+	TransformationMatrix,
 } from './misc';
 import { TrackType } from './output';
 import { EncodedPacket, PacketType } from './packet';
@@ -580,7 +582,7 @@ export interface InputVideoTrackBacking extends InputTrackBacking {
 	getSquarePixelHeight(): MaybePromise<number>;
 	getMetadataDisplayWidth?(): MaybePromise<number | null>;
 	getMetadataDisplayHeight?(): MaybePromise<number | null>;
-	getRotation(): MaybePromise<Rotation>;
+	getTransformationMatrix(): MaybePromise<TransformationMatrix>;
 	getColorSpace(): Promise<VideoColorSpaceInit>;
 	canBeTransparent(): Promise<boolean>;
 	getDecoderConfig(): Promise<VideoDecoderConfig | null>;
@@ -652,9 +654,24 @@ export class InputVideoTrack extends InputTrack {
 		return requireSync(this._backing.getCodedHeight(), 'codedHeight', 'getCodedHeight');
 	}
 
-	/** Returns the angle in degrees by which the track's frames should be rotated (clockwise). */
+	/**
+	 * Returns the row-major 3x3 affine transformation matrix that is used to transform the raw video frames before they
+	 * are displayed. The raw frames are assumed to be placed with their top-left corner at the origin (0,0).
+	 *
+	 * Usually, this matrix models a rotation and a flip. Depending on the file, it may also contain a translation
+	 * component. When displaying video, you should typically ignore the translation component and display the center of
+	 * the transformed frame in the center of the viewport.
+	 */
+	async getTransformationMatrix() {
+		return this._backing.getTransformationMatrix();
+	}
+
+	/**
+	 * Returns the angle in degrees by which the track's frames should be rotated (clockwise). The rotation is
+	 * applied before any flip.
+	 */
 	async getRotation() {
-		return this._backing.getRotation();
+		return extractRotationFromMatrix(await this._backing.getTransformationMatrix());
 	}
 
 	/**
@@ -662,7 +679,16 @@ export class InputVideoTrack extends InputTrack {
 	 * @deprecated Use {@link InputVideoTrack.getRotation} instead.
 	 */
 	get rotation() {
-		return requireSync(this._backing.getRotation(), 'rotation', 'getRotation');
+		return extractRotationFromMatrix(
+			requireSync(this._backing.getTransformationMatrix(), 'rotation', 'getRotation'),
+		);
+	}
+
+	/**
+	 * Returns whether the track's frames should be flipped horizontally (about the vertical axis), after rotation.
+	 */
+	async isFlipped() {
+		return matrixIsFlipped(await this._backing.getTransformationMatrix());
 	}
 
 	/**
@@ -746,7 +772,9 @@ export class InputVideoTrack extends InputTrack {
 			}
 		}
 
-		const rotation = requireSync(this._backing.getRotation(), 'displayWidth', 'getDisplayWidth');
+		const rotation = extractRotationFromMatrix(
+			requireSync(this._backing.getTransformationMatrix(), 'displayWidth', 'getDisplayWidth'),
+		);
 		const value = rotation % 180 === 0
 			? this._backing.getSquarePixelWidth()
 			: this._backing.getSquarePixelHeight();
@@ -777,7 +805,9 @@ export class InputVideoTrack extends InputTrack {
 			}
 		}
 
-		const rotation = requireSync(this._backing.getRotation(), 'displayHeight', 'getDisplayHeight');
+		const rotation = extractRotationFromMatrix(
+			requireSync(this._backing.getTransformationMatrix(), 'displayHeight', 'getDisplayHeight'),
+		);
 		const value = rotation % 180 === 0
 			? this._backing.getSquarePixelHeight()
 			: this._backing.getSquarePixelWidth();

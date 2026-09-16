@@ -15,6 +15,7 @@ import {
 	MaybePromise,
 	Rotation,
 	toArray,
+	TransformationMatrix,
 } from './misc';
 import { MetadataTags, TrackDisposition, validateMetadataTags, validateTrackDisposition } from './metadata';
 import { Muxer } from './muxer';
@@ -258,8 +259,19 @@ export type BaseTrackMetadata = {
  * @public
  */
 export type VideoTrackMetadata = BaseTrackMetadata & {
-	/** The angle in degrees by which the track's frames should be rotated (clockwise). */
+	/**
+	 * The angle in degrees by which the track's frames should be rotated (clockwise). Rotation is applied before any
+	 * flip.
+	 */
 	rotation?: Rotation;
+	/** Whether the track's frames should be flipped horizontally (about the vertical axis), after rotation. */
+	isFlipped?: boolean;
+	/**
+	 * The full transformation matrix to apply to the track's frames for presentation. When set, this takes precedence
+	 * over `rotation` and `isFlipped`. Formats that can't store an arbitrary matrix extract the closest rotation and
+	 * scale from it.
+	 */
+	transformationMatrix?: TransformationMatrix;
 	/**
 	 * The expected video frame rate in hertz. If set, all timestamps and durations of this track will be snapped to
 	 * this frame rate. You should avoid adding more frames than the rate allows, as this will lead to multiple frames
@@ -640,8 +652,18 @@ export class Output<
 		if (metadata.rotation !== undefined && ![0, 90, 180, 270].includes(metadata.rotation)) {
 			throw new TypeError(`Invalid video rotation: ${metadata.rotation}. Has to be 0, 90, 180 or 270.`);
 		}
-		if (!this.format.supportsVideoRotationMetadata && metadata.rotation) {
-			throw new Error(`${this.format._name} does not support video rotation metadata.`);
+		if (metadata.isFlipped !== undefined && typeof metadata.isFlipped !== 'boolean') {
+			throw new TypeError('metadata.isFlipped, when provided, must be a boolean.');
+		}
+		if (
+			metadata.transformationMatrix !== undefined
+			&& (
+				!Array.isArray(metadata.transformationMatrix)
+				|| metadata.transformationMatrix.length !== 9
+				|| !metadata.transformationMatrix.every(x => Number.isFinite(x))
+			)
+		) {
+			throw new TypeError('metadata.transformationMatrix, when provided, must be an array of 9 finite numbers.');
 		}
 		if (
 			metadata.frameRate !== undefined

@@ -76,8 +76,15 @@ export abstract class OutputFormat {
 	abstract getSupportedCodecs(): MediaCodec[];
 	/** Returns the number of tracks that this output format supports. */
 	abstract getSupportedTrackCounts(): TrackCountLimits;
-	/** Whether this output format supports video rotation metadata. */
-	abstract get supportsVideoRotationMetadata(): boolean;
+	/** Whether this output format supports video rotation and flip metadata. */
+	abstract get supportsVideoTransformationMetadata(): boolean;
+	/**
+	 * Whether this output format supports video rotation metadata.
+	 * @deprecated Use {@link OutputFormat.supportsVideoTransformationMetadata} instead.
+	 */
+	get supportsVideoRotationMetadata() {
+		return this.supportsVideoTransformationMetadata;
+	}
 	/**
 	 * Whether this output format's tracks store timestamped media data. When `true`, the timestamps of added packets
 	 * will be respected, allowing things like gaps in media data or non-zero start times. When `false`, the format's
@@ -278,7 +285,7 @@ export abstract class IsobmffOutputFormat extends OutputFormat {
 		};
 	}
 
-	get supportsVideoRotationMetadata() {
+	get supportsVideoTransformationMetadata() {
 		return true;
 	}
 
@@ -583,8 +590,8 @@ export class MkvOutputFormat extends OutputFormat {
 		];
 	}
 
-	get supportsVideoRotationMetadata() {
-		// While it technically does support it with ProjectionPoseRoll, many players appear to ignore this value
+	get supportsVideoTransformationMetadata() {
+		// While it technically does support it with Projection, many players appear to ignore that stuff
 		return false;
 	}
 
@@ -728,7 +735,7 @@ export class Mp3OutputFormat extends OutputFormat {
 		return ['mp3'];
 	}
 
-	get supportsVideoRotationMetadata() {
+	get supportsVideoTransformationMetadata() {
 		return false;
 	}
 
@@ -834,7 +841,7 @@ export class WavOutputFormat extends OutputFormat {
 		];
 	}
 
-	get supportsVideoRotationMetadata() {
+	get supportsVideoTransformationMetadata() {
 		return false;
 	}
 
@@ -933,7 +940,7 @@ export class OggOutputFormat extends OutputFormat {
 		];
 	}
 
-	get supportsVideoRotationMetadata() {
+	get supportsVideoTransformationMetadata() {
 		return false;
 	}
 
@@ -1015,7 +1022,7 @@ export class AdtsOutputFormat extends OutputFormat {
 		return ['aac'];
 	}
 
-	get supportsVideoRotationMetadata() {
+	get supportsVideoTransformationMetadata() {
 		return false;
 	}
 
@@ -1104,7 +1111,7 @@ export class FlacOutputFormat extends OutputFormat {
 		return ['flac'];
 	}
 
-	get supportsVideoRotationMetadata() {
+	get supportsVideoTransformationMetadata() {
 		return false;
 	}
 
@@ -1193,7 +1200,7 @@ export class MpegTsOutputFormat extends OutputFormat {
 		];
 	}
 
-	get supportsVideoRotationMetadata() {
+	get supportsVideoTransformationMetadata() {
 		return false;
 	}
 
@@ -1459,8 +1466,8 @@ export class HlsOutputFormat extends OutputFormat {
 		};
 	}
 
-	get supportsVideoRotationMetadata(): boolean {
-		return toArray(this._options.segmentFormat).some(format => format.supportsVideoRotationMetadata);
+	get supportsVideoTransformationMetadata(): boolean {
+		return toArray(this._options.segmentFormat).some(format => format.supportsVideoTransformationMetadata);
 	}
 
 	get supportsTimestampedMediaData(): boolean {

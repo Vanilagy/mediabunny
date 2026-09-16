@@ -1416,9 +1416,13 @@ export class Conversion {
 		let videoSource: VideoSource;
 
 		const innateRotation = await track.getRotation();
+		const innateFlip = await track.isFlipped();
 		const totalRotation = normalizeRotation(innateRotation + (trackOptions.rotate ?? 0));
 		let outputTrackRotation = totalRotation;
-		const canUseRotationMetadata = this.output.format.supportsVideoRotationMetadata
+		let outputTrackFlip = innateFlip;
+		// When the transformation is left untouched, we forward the input's full matrix so nothing gets lost
+		let outputTrackMatrix = trackOptions.rotate ? null : await track.getTransformationMatrix();
+		const canUseRotationMetadata = this.output.format.supportsVideoTransformationMetadata
 			&& (trackOptions.allowRotationMetadata ?? true);
 
 		const squarePixelWidth = await track.getSquarePixelWidth();
@@ -1471,6 +1475,7 @@ export class Conversion {
 			// performance-optimal, but right now there's no other way because we can't change the track rotation
 			// metadata after the output has already started. Should be possible with API changes in v2, though!
 			|| (totalRotation !== 0 && !canUseRotationMetadata)
+			|| (innateFlip && !canUseRotationMetadata)
 			|| !!crop;
 
 		let copyStartPacket: EncodedPacket | null = null;
@@ -1698,6 +1703,7 @@ export class Conversion {
 			let needsRerender = width !== originalWidth
 				|| height !== originalHeight
 				|| (totalRotation !== 0 && (!canUseRotationMetadata || trackOptions.process !== undefined))
+				|| (innateFlip && (!canUseRotationMetadata || trackOptions.process !== undefined))
 				|| !!crop
 				// Don't expect encoders to reliably handle non-square pixels:
 				|| squarePixelWidth !== await track.getCodedWidth()
@@ -1754,7 +1760,10 @@ export class Conversion {
 			}
 
 			if (needsRerender) {
-				outputTrackRotation = 0; // Since the rotation is baked into the output
+				// Since the transform is baked into the output:
+				outputTrackRotation = 0;
+				outputTrackFlip = false;
+				outputTrackMatrix = null;
 
 				encodingConfig.transform.width = width;
 				encodingConfig.transform.height = height;
@@ -1830,6 +1839,8 @@ export class Conversion {
 			name: trackName ?? undefined,
 			disposition: trackDisposition,
 			rotation: outputTrackRotation,
+			isFlipped: outputTrackFlip,
+			transformationMatrix: outputTrackMatrix ?? undefined,
 			group: ownGroup ?? trackOptions.group,
 		});
 

@@ -17,7 +17,7 @@ import {
 import { PacketRetrievalOptions } from '../media-sink';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags, TrackDisposition } from '../metadata';
 import { TrackType } from '../output';
-import { assert, joinPaths, MaybePromise, Rotation, UNDETERMINED_LANGUAGE } from '../misc';
+import { assert, joinPaths, MaybePromise, TransformationMatrix, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket } from '../packet';
 import { readAllLines } from '../reader';
 import {
@@ -865,8 +865,8 @@ class HlsInputVideoTrackBacking
 		return this.internalTrack.info.height;
 	}
 
-	getRotation(): MaybePromise<Rotation> {
-		return this.delegate(() => this.backingVideoTrack!.getRotation());
+	getTransformationMatrix(): MaybePromise<TransformationMatrix> {
+		return this.delegate(() => this.backingVideoTrack!.getTransformationMatrix());
 	}
 
 	async getColorSpace(): Promise<VideoColorSpaceInit> {

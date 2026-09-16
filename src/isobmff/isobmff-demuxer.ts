@@ -62,13 +62,12 @@ import {
 	bytesToHexString,
 	COLOR_PRIMARIES_MAP_INVERSE,
 	findLastIndex,
+	IDENTITY_MATRIX,
 	isIso639Dash2LanguageCode,
 	isThenable,
 	last,
 	MATRIX_COEFFICIENTS_MAP_INVERSE,
-	normalizeRotation,
-	roundToMultiple,
-	Rotation,
+	multiplyMatrices,
 	textDecoder,
 	TransformationMatrix,
 	TRANSFER_CHARACTERISTICS_MAP_INVERSE,
@@ -121,7 +120,7 @@ type InternalTrack = {
 	timescale: number;
 	durationInMovieTimescale: number;
 	durationInMediaTimescale: number;
-	rotation: Rotation;
+	matrix: TransformationMatrix;
 	internalCodecId: string | null;
 	name: string | null;
 	languageCode: string;
@@ -317,6 +316,7 @@ export class IsobmffDemuxer extends Demuxer {
 	metadataPromise: Promise<void> | null = null;
 	movieTimescale = -1;
 	movieDurationInTimescale = -1;
+	movieMatrix = IDENTITY_MATRIX;
 	isQuickTime = false;
 	metadataTags: MetadataTags = {};
 	currentMetadataKeys: Map<number, string> | null = null;
@@ -482,6 +482,7 @@ export class IsobmffDemuxer extends Demuxer {
 
 		this.movieTimescale = initDemuxer.movieTimescale;
 		this.movieDurationInTimescale = initDemuxer.movieDurationInTimescale;
+		this.movieMatrix = initDemuxer.movieMatrix;
 		this.metadataTags = initDemuxer.metadataTags;
 		this.isFragmented = true;
 		this.fragmentTrackDefaults = initDemuxer.fragmentTrackDefaults;
@@ -497,7 +498,7 @@ export class IsobmffDemuxer extends Demuxer {
 				timescale: foreignTrack.timescale,
 				durationInMediaTimescale: foreignTrack.durationInMediaTimescale,
 				durationInMovieTimescale: foreignTrack.durationInMovieTimescale,
-				rotation: foreignTrack.rotation,
+				matrix: foreignTrack.matrix,
 				internalCodecId: foreignTrack.internalCodecId,
 				name: foreignTrack.name,
 				languageCode: foreignTrack.languageCode,
@@ -834,6 +835,9 @@ export class IsobmffDemuxer extends Demuxer {
 					this.movieTimescale = readU32Be(slice);
 					this.movieDurationInTimescale = readU32Be(slice);
 				}
+
+				slice.skip(4 + 2 + 2 + 2 * 4); // Rate, volume, reserved
+				this.movieMatrix = readMatrix(slice);
 			}; break;
 
 			case 'trak': {
@@ -849,7 +853,7 @@ export class IsobmffDemuxer extends Demuxer {
 					timescale: -1,
 					durationInMovieTimescale: -1,
 					durationInMediaTimescale: -1,
-					rotation: 0,
+					matrix: IDENTITY_MATRIX,
 					internalCodecId: null,
 					name: null,
 					languageCode: UNDETERMINED_LANGUAGE,
@@ -913,22 +917,10 @@ export class IsobmffDemuxer extends Demuxer {
 				}
 
 				slice.skip(2 * 4 + 2 + 2 + 2 + 2);
-				const matrix: TransformationMatrix = [
-					readFixed_16_16(slice),
-					readFixed_16_16(slice),
-					readFixed_2_30(slice),
-					readFixed_16_16(slice),
-					readFixed_16_16(slice),
-					readFixed_2_30(slice),
-					readFixed_16_16(slice),
-					readFixed_16_16(slice),
-					readFixed_2_30(slice),
-				];
+				const trackMatrix = readMatrix(slice);
 
-				const rotation = normalizeRotation(roundToMultiple(extractRotationFromMatrix(matrix), 90));
-				assert(rotation === 0 || rotation === 90 || rotation === 180 || rotation === 270);
-
-				track.rotation = rotation;
+				// The track matrix maps into movie space, and the movie matrix then maps into the final output space
+				track.matrix = multiplyMatrices(trackMatrix, this.movieMatrix);
 			}; break;
 
 			case 'elst': {
@@ -3418,8 +3410,8 @@ class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideo
 		return this.internalTrack.info.squarePixelHeight;
 	}
 
-	getRotation() {
-		return this.internalTrack.rotation;
+	getTransformationMatrix(): TransformationMatrix {
+		return [...this.internalTrack.matrix];
 	}
 
 	async getColorSpace(): Promise<VideoColorSpaceInit> {
@@ -3749,18 +3741,18 @@ const offsetFragmentTrackDataByTimestamp = (trackData: FragmentTrackData, timest
 	}
 };
 
-/** Extracts the rotation component from a transformation matrix, in degrees. */
-const extractRotationFromMatrix = (matrix: TransformationMatrix) => {
-	const [a, b] = matrix; // (1, 0) projects onto (a, b), so that's all we need
-
-	const radians = Math.atan2(b, a);
-
-	if (!Number.isFinite(radians)) {
-		// Can happen if the entire matrix is 0, for example
-		return 0;
-	}
-
-	return radians * (180 / Math.PI);
+const readMatrix = (slice: FileSlice): TransformationMatrix => {
+	return [
+		readFixed_16_16(slice),
+		readFixed_16_16(slice),
+		readFixed_2_30(slice),
+		readFixed_16_16(slice),
+		readFixed_16_16(slice),
+		readFixed_2_30(slice),
+		readFixed_16_16(slice),
+		readFixed_16_16(slice),
+		readFixed_2_30(slice),
+	];
 };
 
 const sampleTableIsEmpty = (sampleTable: SampleTable) => {

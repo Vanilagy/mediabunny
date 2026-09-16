@@ -13,6 +13,11 @@ import {
 	isU32,
 	last,
 	TransformationMatrix,
+	IDENTITY_MATRIX,
+	centeredTransformationMatrix,
+	multiplyMatrices,
+	rotationMatrix,
+	scaleMatrix,
 	textEncoder,
 	COLOR_PRIMARIES_MAP,
 	TRANSFER_CHARACTERISTICS_MAP,
@@ -232,20 +237,6 @@ const ascii = (text: string, nullTerminated = false) => {
 	if (nullTerminated) bytes.push(0x00);
 	return bytes;
 };
-
-const rotationMatrix = (rotationInDegrees: number): TransformationMatrix => {
-	const theta = rotationInDegrees * (Math.PI / 180);
-	const cosTheta = Math.round(Math.cos(theta));
-	const sinTheta = Math.round(Math.sin(theta));
-
-	// Matrices are post-multiplied in ISOBMFF, meaning this is the transpose of your typical rotation matrix
-	return [
-		cosTheta, sinTheta, 0,
-		-sinTheta, cosTheta, 0,
-		0, 0, 1,
-	];
-};
-const IDENTITY_MATRIX = /* #__PURE__ */ rotationMatrix(0);
 
 const matrixToBytes = (matrix: TransformationMatrix) => {
 	return [
@@ -497,9 +488,18 @@ export const tkhd = (
 	const u32OrU64 = needsU64 ? u64 : u32;
 
 	let matrix: TransformationMatrix;
-	if (trackData.type === 'video') {
-		const rotation = trackData.track.metadata.rotation;
-		matrix = rotationMatrix(rotation ?? 0);
+	if (trackData.type === 'video' && trackData.track.metadata.transformationMatrix) {
+		matrix = trackData.track.metadata.transformationMatrix;
+	} else if (trackData.type === 'video') {
+		const { rotation, isFlipped } = trackData.track.metadata;
+
+		// Rotation is applied before the flip
+		const linear = multiplyMatrices(
+			rotationMatrix(rotation ?? 0),
+			scaleMatrix(isFlipped ? -1 : 1, 1),
+		);
+
+		matrix = centeredTransformationMatrix(linear, trackData.info.width, trackData.info.height);
 	} else {
 		matrix = IDENTITY_MATRIX;
 	}
