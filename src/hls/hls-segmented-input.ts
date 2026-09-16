@@ -372,11 +372,12 @@ export class HlsSegmentedInput extends SegmentedInput {
 						}
 
 						let hex = ivString.slice(2);
-						hex = hex.padStart(AES_128_BLOCK_SIZE * 2, '0');
+						hex = hex.padStart(2 * AES_128_BLOCK_SIZE, '0');
+						hex = hex.slice(-2 * AES_128_BLOCK_SIZE);
 
 						iv = new Uint8Array(AES_128_BLOCK_SIZE);
 						for (let i = 0; i < AES_128_BLOCK_SIZE; i++) {
-							const startIndex = i * 2;
+							const startIndex = 2 * i;
 							iv[i] = parseInt(hex.slice(startIndex, startIndex + 2), 16);
 						}
 					}
