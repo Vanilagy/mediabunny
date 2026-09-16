@@ -35,14 +35,29 @@ const findBoxPayload = (bytes: Uint8Array, type: string) => {
 	return bytes.subarray(typeOffset + 4, typeOffset - 4 + size);
 };
 
-const createEmptyVideoMp4 = async (bitrate?: number) => {
+type PacketFixture = {
+	size: number;
+	timestamp: number;
+	duration: number;
+	type?: 'key' | 'delta';
+};
+
+type FastStart = false | 'in-memory' | 'reserve' | 'fragmented';
+
+const createVideoMp4 = async (
+	fastStart: FastStart,
+	packets: PacketFixture[],
+	nominalBitrate?: number,
+) => {
 	const output = new Output({
-		format: new Mp4OutputFormat(),
+		format: new Mp4OutputFormat({ fastStart }),
 		target: new BufferTarget(),
 	});
 
-	output.addVideoTrack(new EncodedVideoPacketSource('vp9'), {
-		bitrate,
+	const source = new EncodedVideoPacketSource('vp9');
+	source._nominalBitrate = nominalBitrate;
+	output.addVideoTrack(source, {
+		maximumPacketCount: fastStart === 'reserve' ? packets.length : undefined,
 		decoderConfig: {
 			codec: 'vp09.00.10.08',
 			codedWidth: 1280,
@@ -51,91 +66,177 @@ const createEmptyVideoMp4 = async (bitrate?: number) => {
 	});
 
 	await output.start();
+	for (const packet of packets) {
+		await source.add(new EncodedPacket(
+			new Uint8Array(packet.size),
+			packet.type ?? 'key',
+			packet.timestamp,
+			packet.duration,
+		));
+	}
 	await output.finalize();
 
 	return new Uint8Array(output.target.buffer!);
 };
 
-const createEmptyAacMp4 = async (bitrate?: number) => {
+const createAacMp4 = async (
+	fastStart: FastStart,
+	packets: PacketFixture[],
+	nominalBitrate?: number,
+	adts = false,
+) => {
 	const output = new Output({
-		format: new Mp4OutputFormat(),
+		format: new Mp4OutputFormat({ fastStart }),
 		target: new BufferTarget(),
 	});
 
-	output.addAudioTrack(new EncodedAudioPacketSource('aac'), {
-		bitrate,
-		decoderConfig: {
-			codec: 'mp4a.40.2',
-			sampleRate: 44100,
-			numberOfChannels: 2,
-			description: new Uint8Array([0x12, 0x10]),
-		},
+	const source = new EncodedAudioPacketSource('aac');
+	source._nominalBitrate = nominalBitrate;
+	output.addAudioTrack(source, {
+		maximumPacketCount: fastStart === 'reserve' ? packets.length : undefined,
+		decoderConfig: adts
+			? undefined
+			: {
+					codec: 'mp4a.40.2',
+					sampleRate: 44100,
+					numberOfChannels: 2,
+					description: new Uint8Array([0x12, 0x10]),
+				},
 	});
 
 	await output.start();
+	for (let i = 0; i < packets.length; i++) {
+		const packet = packets[i]!;
+		let data = new Uint8Array(packet.size);
+		if (adts) {
+			const frameLength = data.byteLength + 7;
+			const header = new Uint8Array([
+				0xff,
+				0xf1,
+				0x50,
+				0x80 | (frameLength >> 11),
+				(frameLength >> 3) & 0xff,
+				((frameLength & 0x7) << 5) | 0x1f,
+				0xfc,
+			]);
+			const frame = new Uint8Array(frameLength);
+			frame.set(header);
+			frame.set(data, header.length);
+			data = frame;
+		}
+
+		await source.add(new EncodedPacket(
+			data,
+			'key',
+			packet.timestamp,
+			packet.duration,
+		), adts && i === 0
+			? { decoderConfig: { codec: 'mp4a.40.2', sampleRate: 44100, numberOfChannels: 2 } }
+			: undefined);
+	}
 	await output.finalize();
 
 	return new Uint8Array(output.target.buffer!);
 };
 
-test('Track bitrate metadata must be a positive 32-bit unsigned integer', () => {
-	const invalidBitrates = [0, -1, 1.5, 0x1_0000_0000, Number.NaN, Number.POSITIVE_INFINITY];
-
-	for (const bitrate of invalidBitrates) {
-		const videoOutput = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
-		expect(() => videoOutput.addVideoTrack(new EncodedVideoPacketSource('vp9'), { bitrate }))
-			.toThrow('metadata.bitrate, when provided, must be a positive 32-bit unsigned integer.');
-
-		const audioOutput = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
-		expect(() => audioOutput.addAudioTrack(new EncodedAudioPacketSource('aac'), { bitrate }))
-			.toThrow('metadata.bitrate, when provided, must be a positive 32-bit unsigned integer.');
+const expectBitratePayload = (bytes: Uint8Array, boxType: 'btrt' | 'esds', maximum: number, average: number) => {
+	let bitrateBytes: Uint8Array;
+	if (boxType === 'btrt') {
+		const payload = findBoxPayload(bytes, boxType);
+		expect(payload).not.toBeNull();
+		bitrateBytes = payload!.subarray(4, 12);
+	} else {
+		const decoderConfigOffset = findBytes(bytes, new Uint8Array([0x40, 0x15, 0x00, 0x00, 0x00]));
+		expect(decoderConfigOffset).toBeGreaterThanOrEqual(0);
+		bitrateBytes = bytes.subarray(decoderConfigOffset + 5, decoderConfigOffset + 13);
 	}
 
-	const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
-	expect(() => output.addVideoTrack(new EncodedVideoPacketSource('vp9'), { bitrate: 0xffff_ffff }))
-		.not.toThrow();
+	const view = new DataView(bitrateBytes.buffer, bitrateBytes.byteOffset, bitrateBytes.byteLength);
+	expect({ maximum: view.getUint32(0), average: view.getUint32(4) }).toEqual({ maximum, average });
+};
+
+test('Regular MP4 modes write measured maximum and average video bitrates', async () => {
+	const packets: PacketFixture[] = [
+		{ size: 100, timestamp: 0, duration: 0.5 },
+		{ size: 300, timestamp: 0.5, duration: 0.5 },
+		{ size: 50, timestamp: 1, duration: 0.5 },
+		{ size: 50, timestamp: 1.5, duration: 0.5 },
+	];
+
+	for (const fastStart of [false, 'in-memory', 'reserve'] as const) {
+		const bytes = await createVideoMp4(fastStart, packets);
+		expectBitratePayload(bytes, 'btrt', 3200, 2000);
+	}
 });
 
-test('ISOBMFF video bitrate metadata writes an exact btrt box', async () => {
-	const bitrate = 3_000_000;
-	const bytes = await createEmptyVideoMp4(bitrate);
+test('Regular MP4 measures B-frame bitrate by presentation time across negative shifts and gaps', async () => {
+	for (const shift of [-2, 2]) {
+		const bytes = await createVideoMp4(false, [
+			{ size: 300, timestamp: shift + 0.5, duration: 0.5, type: 'key' },
+			{ size: 100, timestamp: shift, duration: 0.5, type: 'delta' },
+			{ size: 100, timestamp: shift + 2, duration: 0.5, type: 'key' },
+		]);
 
-	expect(findBoxPayload(bytes, 'btrt')).toEqual(new Uint8Array([
-		0x00, 0x00, 0x00, 0x00, // Decoder buffer size is unknown
-		0x00, 0x2d, 0xc6, 0xc0, // Maximum bitrate
-		0x00, 0x2d, 0xc6, 0xc0, // Average bitrate
-	]));
+		expectBitratePayload(bytes, 'btrt', 3200, 1600);
+	}
 });
 
-test('ISOBMFF video omits btrt when bitrate metadata is absent', async () => {
-	const bytes = await createEmptyVideoMp4();
+test('Regular MP4 excludes samples exactly one second apart despite floating-point timestamps', async () => {
+	const bytes = await createVideoMp4(false, [
+		{ size: 100, timestamp: 0.4, duration: 1 },
+		{ size: 100, timestamp: 1.4, duration: 1 },
+	]);
 
-	expect(findBoxPayload(bytes, 'btrt')).toBeNull();
+	expectBitratePayload(bytes, 'btrt', 800, 800);
 });
 
-test('ISOBMFF AAC esds writes bitrate metadata into maximum and average bitrate', async () => {
-	const bitrate = 192_000;
-	const bytes = await createEmptyAacMp4(bitrate);
-	const decoderConfigOffset = findBytes(bytes, new Uint8Array([0x40, 0x15, 0x00, 0x00, 0x00]));
+test('Regular MP4 uses a fixed one-second maximum window for short and zero-duration video', async () => {
+	const shortClip = await createVideoMp4(false, [
+		{ size: 100, timestamp: 0, duration: 0.25 },
+	]);
+	expectBitratePayload(shortClip, 'btrt', 800, 3200);
 
-	expect(decoderConfigOffset).toBeGreaterThanOrEqual(0);
-	expect(bytes.subarray(decoderConfigOffset, decoderConfigOffset + 13)).toEqual(new Uint8Array([
-		0x40, 0x15, 0x00, 0x00, 0x00,
-		0x00, 0x02, 0xee, 0x00, // Maximum bitrate
-		0x00, 0x02, 0xee, 0x00, // Average bitrate
-	]));
+	const zeroDuration = await createVideoMp4(false, [
+		{ size: 100, timestamp: 0, duration: 0 },
+	]);
+	expectBitratePayload(zeroDuration, 'btrt', 800, 0);
 });
 
-test('ISOBMFF AAC esds keeps zero bitrates when metadata is absent', async () => {
-	const bytes = await createEmptyAacMp4();
-	const decoderConfigOffset = findBytes(bytes, new Uint8Array([0x40, 0x15, 0x00, 0x00, 0x00]));
+test('Regular MP4 measures AAC bitrate after stripping ADTS headers', async () => {
+	const bytes = await createAacMp4(false, [
+		{ size: 100, timestamp: 0, duration: 0.5 },
+		{ size: 300, timestamp: 0.5, duration: 0.5 },
+		{ size: 100, timestamp: 1, duration: 1 },
+	], undefined, true);
 
-	expect(decoderConfigOffset).toBeGreaterThanOrEqual(0);
-	expect(bytes.subarray(decoderConfigOffset, decoderConfigOffset + 13)).toEqual(new Uint8Array([
-		0x40, 0x15, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x00, 0x00,
-	]));
+	expectBitratePayload(bytes, 'esds', 3200, 2000);
+});
+
+test('Fragmented MP4 writes known nominal bitrate and preserves unknown values', async () => {
+	const packet = [{ size: 100, timestamp: 0, duration: 1 }];
+	const nominalVideo = await createVideoMp4('fragmented', packet, 3_000_000);
+	expectBitratePayload(nominalVideo, 'btrt', 3_000_000, 3_000_000);
+
+	const unknownVideo = await createVideoMp4('fragmented', packet);
+	expect(findBoxPayload(unknownVideo, 'btrt')).toBeNull();
+
+	const nominalAudio = await createAacMp4('fragmented', packet, 192_000);
+	expectBitratePayload(nominalAudio, 'esds', 192_000, 192_000);
+
+	const unknownAudio = await createAacMp4('fragmented', packet);
+	expectBitratePayload(unknownAudio, 'esds', 0, 0);
+});
+
+test('Fragmented MP4 clamps oversized nominal bitrate and rejects non-finite values', async () => {
+	const packet = [{ size: 100, timestamp: 0, duration: 1 }];
+	const oversizedVideo = await createVideoMp4('fragmented', packet, 0x1_0000_0000);
+	expectBitratePayload(oversizedVideo, 'btrt', 0xffff_ffff, 0xffff_ffff);
+
+	const nonFiniteVideo = await createVideoMp4('fragmented', packet, Number.POSITIVE_INFINITY);
+	expect(findBoxPayload(nonFiniteVideo, 'btrt')).toBeNull();
+
+	const nonFiniteAudio = await createAacMp4('fragmented', packet, Number.NaN);
+	expectBitratePayload(nonFiniteAudio, 'esds', 0, 0);
 });
 
 test('ISOBMFF muxer internally converts ADTS to AAC', async () => {

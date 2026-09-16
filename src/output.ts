@@ -258,11 +258,6 @@ export type BaseTrackMetadata = {
  * @public
  */
 export type VideoTrackMetadata = BaseTrackMetadata & {
-	/**
-	 * The nominal target bitrate of this track, in bits per second. This is encoder target metadata and may differ
-	 * from the bitrate of the encoded media data.
-	 */
-	bitrate?: number;
 	/** The angle in degrees by which the track's frames should be rotated (clockwise). */
 	rotation?: Rotation;
 	/**
@@ -294,11 +289,6 @@ export type VideoTrackMetadata = BaseTrackMetadata & {
  * @public
  */
 export type AudioTrackMetadata = BaseTrackMetadata & {
-	/**
-	 * The nominal target bitrate of this track, in bits per second. This is encoder target metadata and may differ
-	 * from the bitrate of the encoded media data.
-	 */
-	bitrate?: number;
 	/**
 	 * The decoder config for this audio track, provided ahead of time. This is provided automatically when media data
 	 * added to the track, but by specifying it here, you give the muxer additional information that it can make use of.
@@ -346,12 +336,6 @@ const validateBaseTrackMetadata = (metadata: BaseTrackMetadata) => {
 			'metadata.group, when provided, must be an OutputTrackGroup instance or an array of'
 			+ ' OutputTrackGroup instances.',
 		);
-	}
-};
-
-const validateTrackBitrate = (bitrate: number | undefined) => {
-	if (bitrate !== undefined && (!Number.isInteger(bitrate) || bitrate <= 0 || bitrate > 0xffff_ffff)) {
-		throw new TypeError('metadata.bitrate, when provided, must be a positive 32-bit unsigned integer.');
 	}
 };
 
@@ -653,7 +637,6 @@ export class Output<
 			throw new TypeError('source must be a VideoSource.');
 		}
 		validateBaseTrackMetadata(metadata);
-		validateTrackBitrate(metadata.bitrate);
 		if (metadata.rotation !== undefined && ![0, 90, 180, 270].includes(metadata.rotation)) {
 			throw new TypeError(`Invalid video rotation: ${metadata.rotation}. Has to be 0, 90, 180 or 270.`);
 		}
@@ -694,7 +677,6 @@ export class Output<
 			throw new TypeError('source must be an AudioSource.');
 		}
 		validateBaseTrackMetadata(metadata);
-		validateTrackBitrate(metadata.bitrate);
 		if (metadata.decoderConfig !== undefined) {
 			validateAudioChunkMetadata({ decoderConfig: metadata.decoderConfig }, source._codec);
 		}

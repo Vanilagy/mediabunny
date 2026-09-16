@@ -65,6 +65,11 @@ export type Sample = {
 	timescaleUnitsToNextSample: number;
 };
 
+export type IsobmffBitrateInfo = {
+	maximum: number;
+	average: number;
+};
+
 type Chunk = {
 	/** The lowest presentation timestamp in this chunk */
 	startTimestamp: number;
@@ -89,6 +94,7 @@ export type IsobmffTrackData = {
 	lastTimescaleUnits: number | null;
 	lastSample: Sample | null;
 	startTimestampOffset: number | null;
+	bitrate: IsobmffBitrateInfo | null;
 
 	finalizedChunks: Chunk[];
 	currentChunk: Chunk | null;
@@ -167,6 +173,87 @@ export const getTrackMetadata = (trackData: IsobmffTrackData) => {
 export const intoTimescale = (timeInSeconds: number, timescale: number, round = true) => {
 	const value = timeInSeconds * timescale;
 	return round ? Math.round(value) : value;
+};
+
+export const presentationSpan = (trackData: IsobmffTrackData) => {
+	if (trackData.samples.length === 0) {
+		return 0;
+	}
+
+	let minTimestamp = Infinity;
+	let maxEndTimestamp = -Infinity;
+
+	for (let i = 0; i < trackData.samples.length; i++) {
+		const sample = trackData.samples[i]!;
+
+		if (sample.timestamp < minTimestamp) {
+			minTimestamp = sample.timestamp;
+		}
+		if (sample.timestamp + sample.duration > maxEndTimestamp) {
+			maxEndTimestamp = sample.timestamp + sample.duration;
+		}
+	}
+
+	if (minTimestamp === Infinity) {
+		return 0;
+	}
+
+	return maxEndTimestamp - minTimestamp;
+};
+
+export const toU32Bitrate = (bitrate: number) => {
+	if (Number.isNaN(bitrate) || bitrate <= 0) {
+		return 0;
+	}
+	if (bitrate >= 0xffff_ffff) {
+		return 0xffff_ffff;
+	}
+
+	return Math.round(bitrate);
+};
+
+const computeBitrate = (trackData: IsobmffTrackData): IsobmffBitrateInfo | null => {
+	if (trackData.samples.length === 0) {
+		return null;
+	}
+
+	// Use integer presentation timestamps so that samples exactly one second apart cannot accidentally share a window
+	// due to floating-point imprecision. Sorting a copy also preserves the decode-order sample table for B-frames.
+	const samplesByPresentationTime = trackData.samples
+		.map(sample => ({
+			timestamp: intoTimescale(sample.timestamp, trackData.timescale),
+			size: sample.size,
+		}))
+		.sort((a, b) => a.timestamp - b.timestamp);
+
+	let totalBytes = 0;
+	let maximumWindowBytes = 0;
+	let windowBytes = 0;
+	let windowStartIndex = 0;
+
+	for (let i = 0; i < samplesByPresentationTime.length; i++) {
+		const sample = samplesByPresentationTime[i]!;
+		totalBytes += sample.size;
+		windowBytes += sample.size;
+
+		while (
+			windowStartIndex <= i
+			&& sample.timestamp - samplesByPresentationTime[windowStartIndex]!.timestamp >= trackData.timescale
+		) {
+			windowBytes -= samplesByPresentationTime[windowStartIndex]!.size;
+			windowStartIndex++;
+		}
+
+		maximumWindowBytes = Math.max(maximumWindowBytes, windowBytes);
+	}
+
+	// Keep this denominator aligned with the duration stored in the media header. In particular, gaps count towards the
+	// average, while shifting every timestamp by the same positive or negative offset has no effect.
+	const duration = presentationSpan(trackData);
+	return {
+		maximum: toU32Bitrate(maximumWindowBytes * 8),
+		average: toU32Bitrate(duration > 0 ? totalBytes * 8 / duration : 0),
+	};
 };
 
 export class IsobmffMuxer extends Muxer {
@@ -468,6 +555,7 @@ export class IsobmffMuxer extends Muxer {
 			lastTimescaleUnits: null,
 			lastSample: null,
 			startTimestampOffset: null,
+			bitrate: null,
 			finalizedChunks: [],
 			currentChunk: null,
 			compactlyCodedChunkTable: [],
@@ -565,6 +653,7 @@ export class IsobmffMuxer extends Muxer {
 			lastTimescaleUnits: null,
 			lastSample: null,
 			startTimestampOffset: null,
+			bitrate: null,
 			finalizedChunks: [],
 			currentChunk: null,
 			compactlyCodedChunkTable: [],
@@ -608,6 +697,7 @@ export class IsobmffMuxer extends Muxer {
 			lastTimescaleUnits: null,
 			lastSample: null,
 			startTimestampOffset: null,
+			bitrate: null,
 			finalizedChunks: [],
 			currentChunk: null,
 			compactlyCodedChunkTable: [],
@@ -1443,6 +1533,10 @@ export class IsobmffMuxer extends Muxer {
 			upperBound += 4 * n;
 			// co64 box - we assume 1 sample per chunk and 64-bit chunk offsets (co64 instead of stco)
 			upperBound += 8 * n;
+			// btrt box - regular video tracks gain this box once their samples have been measured
+			if (trackData.type === 'video') {
+				upperBound += 20;
+			}
 		}
 
 		return upperBound;
@@ -1556,6 +1650,8 @@ export class IsobmffMuxer extends Muxer {
 						sample.decodeTimestamp -= trackData.startTimestampOffset;
 					}
 				}
+
+				trackData.bitrate = computeBitrate(trackData);
 			}
 		}
 

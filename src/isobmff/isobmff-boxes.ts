@@ -42,7 +42,9 @@ import {
 	IsobmffSubtitleTrackData,
 	IsobmffTrackData,
 	IsobmffVideoTrackData,
+	presentationSpan,
 	Sample,
+	toU32Bitrate,
 } from './isobmff-muxer';
 import {
 	buildDtsSpecificBox,
@@ -432,32 +434,6 @@ export const mvhd = (
 	]);
 };
 
-const presentationSpan = (trackData: IsobmffTrackData) => {
-	if (trackData.samples.length === 0) {
-		return 0;
-	}
-
-	let minTimestamp = Infinity;
-	let maxEndTimestamp = -Infinity;
-
-	for (let i = 0; i < trackData.samples.length; i++) {
-		const sample = trackData.samples[i]!;
-
-		if (sample.timestamp < minTimestamp) {
-			minTimestamp = sample.timestamp;
-		}
-		if (sample.timestamp + sample.duration > maxEndTimestamp) {
-			maxEndTimestamp = sample.timestamp + sample.duration;
-		}
-	}
-
-	if (minTimestamp === Infinity) {
-		return 0;
-	}
-
-	return maxEndTimestamp - minTimestamp;
-};
-
 /**
  * Track Box: Defines a single track of a movie. A movie may consist of one or more tracks. Each track is
  * independent of the other tracks in the movie and carries its own temporal and spatial information. Each Track Box
@@ -800,17 +776,31 @@ export const videoSampleDescription = (
 		: colr(trackData),
 ]);
 
-/** Bit Rate Box: Declares the nominal target bitrate configured for the video encoder. */
+const getBitrate = (trackData: IsobmffVideoTrackData | IsobmffAudioTrackData) => {
+	if (!trackData.muxer.isFragmented) {
+		return trackData.bitrate;
+	}
+
+	const nominalBitrate = trackData.track.source._nominalBitrate;
+	if (nominalBitrate === undefined || !Number.isFinite(nominalBitrate) || nominalBitrate <= 0) {
+		return null;
+	}
+
+	const bitrate = toU32Bitrate(nominalBitrate);
+	return { maximum: bitrate, average: bitrate };
+};
+
+/** Bit Rate Box: Declares the track's maximum and average bitrate. */
 const btrt = (trackData: IsobmffVideoTrackData) => {
-	const bitrate = trackData.track.metadata.bitrate;
-	if (bitrate === undefined) {
+	const bitrate = getBitrate(trackData);
+	if (bitrate === null) {
 		return null;
 	}
 
 	return box('btrt', [
 		u32(0), // Decoder buffer size is unknown
-		u32(bitrate), // Maximum bitrate (nominal target)
-		u32(bitrate), // Average bitrate (nominal target)
+		u32(bitrate.maximum), // Maximum bitrate
+		u32(bitrate.average), // Average bitrate
 	]);
 };
 
@@ -989,6 +979,7 @@ export const soundSampleDescription = (
 /** MPEG-4 Elementary Stream Descriptor Box. */
 export const esds = (trackData: IsobmffAudioTrackData) => {
 	// We build up the bytes in a layered way which reflects the nested structure
+	const bitrate = getBitrate(trackData);
 
 	let objectTypeIndication: number;
 	switch (trackData.track.source._codec) {
@@ -1008,8 +999,8 @@ export const esds = (trackData: IsobmffAudioTrackData) => {
 		...u8(objectTypeIndication), // Object type indication
 		...u8(0x15), // stream type(6bits)=5 audio, flags(2bits)=1
 		...u24(0), // 24bit buffer size
-		...u32(trackData.track.metadata.bitrate ?? 0), // max bitrate (nominal target)
-		...u32(trackData.track.metadata.bitrate ?? 0), // avg bitrate (nominal target)
+		...u32(bitrate?.maximum ?? 0), // Maximum bitrate
+		...u32(bitrate?.average ?? 0), // Average bitrate
 	];
 	if (trackData.info.decoderConfig.description) {
 		const description = toUint8Array(trackData.info.decoderConfig.description);

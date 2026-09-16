@@ -86,6 +86,8 @@ export abstract class MediaSource {
 	_closingPromise: Promise<void> | null = null;
 	/** @internal */
 	_closed = false;
+	/** The selected encoder's target bitrate, when known. @internal */
+	_nominalBitrate: number | undefined;
 
 	/** @internal */
 	_ensureValidAdd() {
@@ -739,6 +741,9 @@ class VideoEncoderWrapper {
 			}
 
 			const encoderConfig = selected.config;
+			this.source._nominalBitrate = encoderConfig.bitrateMode === 'quantizer'
+				? undefined
+				: encoderConfig.bitrate;
 			if (selected.quantizer !== null) {
 				// The chosen config uses quantizer-based rate control, so each frame must carry the quantizer value
 				this.defaultEncodeOptions = buildQuantizerEncodeOptions(
@@ -2173,6 +2178,7 @@ class AudioEncoderWrapper {
 				quality,
 			});
 			this.encodingConfig.onEncoderConfig?.(encoderConfig);
+			this.source._nominalBitrate = encoderConfig.bitrate;
 
 			const MatchingCustomEncoder = customAudioEncoders.find(x => x.supports(
 				this.encodingConfig.codec,
