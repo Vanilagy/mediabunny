@@ -110,7 +110,19 @@ export type FrameRateMetricsOptions = {
 	targetPacketCount?: number;
 };
 
+/**
+ * A feature encountered while reading a track that Mediabunny cannot fully support.
+ *
+ * - `'multiple_edits'`: The edit list continues after the first media edit; subsequent entries are ignored.
+ * - `'non_unit_playback_rate'`: A media edit requests a playback rate other than 1; that edit is ignored.
+ *
+ * @group Input files & tracks
+ * @public
+ */
+export type UnsupportedTrackFeature = 'multiple_edits' | 'non_unit_playback_rate';
+
 export interface InputTrackBacking {
+	getUnsupportedFeatures?(): MaybePromise<UnsupportedTrackFeature[]>;
 	getType(): TrackType;
 	getId(): number;
 	getNumber(): number;
@@ -167,6 +179,18 @@ export abstract class InputTrack {
 	abstract get codec(): MediaCodec | null;
 	/** Returns the full codec parameter string for this track. */
 	abstract getCodecParameterString(): Promise<string | null>;
+	/**
+	 * Returns unsupported features detected while reading this track's metadata.
+	 * Currently reports unsupported MP4/MOV edit-list instructions. An empty array does not guarantee that
+	 * every feature in the file is supported, and parsing may stop at the first unsupported instruction.
+	 * For HLS, only the first segment containing this track is inspected.
+	 * Returns a copy; calling this method does not change how the track is read or decoded.
+	 */
+	async getUnsupportedFeatures(): Promise<UnsupportedTrackFeature[]> {
+		const features = await this._backing.getUnsupportedFeatures?.();
+		return features ? [...features] : [];
+	}
+
 	/** Checks if this track's packets can be decoded by the browser. */
 	abstract canDecode(): Promise<boolean>;
 	/**
