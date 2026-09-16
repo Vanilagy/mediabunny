@@ -235,6 +235,16 @@ export type BaseTrackMetadata = {
 	 */
 	maximumPacketCount?: number;
 	/**
+	 * The peak bitrate of this track in bits per second. The muxer will use this value as a fallback when no better
+	 * value is available.
+	 */
+	bitrate?: number;
+	/**
+	 * The average bitrate of this track in bits per second. The muxer will use this value as a fallback when no better
+	 * value is available.
+	 */
+	averageBitrate?: number;
+	/**
 	 * Whether the timestamps of this track are relative to the Unix epoch (January 1, 1970, 00:00:00 UTC). When `true`,
 	 * each timestamp maps to a definitive point in time.
 	 */
@@ -326,6 +336,15 @@ const validateBaseTrackMetadata = (metadata: BaseTrackMetadata) => {
 		&& (!Number.isInteger(metadata.maximumPacketCount) || metadata.maximumPacketCount < 0)
 	) {
 		throw new TypeError('metadata.maximumPacketCount, when provided, must be a non-negative integer.');
+	}
+	if (metadata.bitrate !== undefined && (!Number.isFinite(metadata.bitrate) || metadata.bitrate < 0)) {
+		throw new TypeError('metadata.bitrate, when provided, must be a non-negative number.');
+	}
+	if (
+		metadata.averageBitrate !== undefined
+		&& (!Number.isFinite(metadata.averageBitrate) || metadata.averageBitrate < 0)
+	) {
+		throw new TypeError('metadata.averageBitrate, when provided, must be a non-negative number.');
 	}
 	if (
 		metadata.group !== undefined

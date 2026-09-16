@@ -65,11 +65,6 @@ export type Sample = {
 	timescaleUnitsToNextSample: number;
 };
 
-export type IsobmffBitrateInfo = {
-	maximum: number;
-	average: number;
-};
-
 type Chunk = {
 	/** The lowest presentation timestamp in this chunk */
 	startTimestamp: number;
@@ -94,7 +89,6 @@ export type IsobmffTrackData = {
 	lastTimescaleUnits: number | null;
 	lastSample: Sample | null;
 	startTimestampOffset: number | null;
-	bitrate: IsobmffBitrateInfo | null;
 
 	finalizedChunks: Chunk[];
 	currentChunk: Chunk | null;
@@ -103,6 +97,10 @@ export type IsobmffTrackData = {
 		samplesPerChunk: number;
 	}[];
 	closed: boolean;
+
+	// 0 means unknown
+	avgBitrate: number;
+	maxBitrate: number;
 } & ({
 	track: OutputVideoTrack;
 	type: 'video';
@@ -199,61 +197,6 @@ export const presentationSpan = (trackData: IsobmffTrackData) => {
 	}
 
 	return maxEndTimestamp - minTimestamp;
-};
-
-export const toU32Bitrate = (bitrate: number) => {
-	if (Number.isNaN(bitrate) || bitrate <= 0) {
-		return 0;
-	}
-	if (bitrate >= 0xffff_ffff) {
-		return 0xffff_ffff;
-	}
-
-	return Math.round(bitrate);
-};
-
-const computeBitrate = (trackData: IsobmffTrackData): IsobmffBitrateInfo | null => {
-	if (trackData.samples.length === 0) {
-		return null;
-	}
-
-	// Use integer presentation timestamps so that samples exactly one second apart cannot accidentally share a window
-	// due to floating-point imprecision. Sorting a copy also preserves the decode-order sample table for B-frames.
-	const samplesByPresentationTime = trackData.samples
-		.map(sample => ({
-			timestamp: intoTimescale(sample.timestamp, trackData.timescale),
-			size: sample.size,
-		}))
-		.sort((a, b) => a.timestamp - b.timestamp);
-
-	let totalBytes = 0;
-	let maximumWindowBytes = 0;
-	let windowBytes = 0;
-	let windowStartIndex = 0;
-
-	for (let i = 0; i < samplesByPresentationTime.length; i++) {
-		const sample = samplesByPresentationTime[i]!;
-		totalBytes += sample.size;
-		windowBytes += sample.size;
-
-		while (
-			windowStartIndex <= i
-			&& sample.timestamp - samplesByPresentationTime[windowStartIndex]!.timestamp >= trackData.timescale
-		) {
-			windowBytes -= samplesByPresentationTime[windowStartIndex]!.size;
-			windowStartIndex++;
-		}
-
-		maximumWindowBytes = Math.max(maximumWindowBytes, windowBytes);
-	}
-
-	// Keep this denominator aligned with the duration stored in the media header. In particular, gaps count towards the
-	// average, while shifting every timestamp by the same positive or negative offset has no effect.
-	const duration = presentationSpan(trackData);
-	return {
-		maximum: toU32Bitrate(maximumWindowBytes * 8),
-		average: toU32Bitrate(duration > 0 ? totalBytes * 8 / duration : 0),
-	};
 };
 
 export class IsobmffMuxer extends Muxer {
@@ -555,11 +498,12 @@ export class IsobmffMuxer extends Muxer {
 			lastTimescaleUnits: null,
 			lastSample: null,
 			startTimestampOffset: null,
-			bitrate: null,
 			finalizedChunks: [],
 			currentChunk: null,
 			compactlyCodedChunkTable: [],
 			closed: false,
+			avgBitrate: track.source._nominalBitrate ?? track.metadata.averageBitrate ?? 0,
+			maxBitrate: track.source._nominalBitrate ?? track.metadata.bitrate ?? 0,
 		};
 
 		this.trackDatas.push(newTrackData);
@@ -653,11 +597,12 @@ export class IsobmffMuxer extends Muxer {
 			lastTimescaleUnits: null,
 			lastSample: null,
 			startTimestampOffset: null,
-			bitrate: null,
 			finalizedChunks: [],
 			currentChunk: null,
 			compactlyCodedChunkTable: [],
 			closed: false,
+			avgBitrate: track.source._nominalBitrate ?? track.metadata.averageBitrate ?? 0,
+			maxBitrate: track.source._nominalBitrate ?? track.metadata.bitrate ?? 0,
 		};
 
 		this.trackDatas.push(newTrackData);
@@ -697,11 +642,12 @@ export class IsobmffMuxer extends Muxer {
 			lastTimescaleUnits: null,
 			lastSample: null,
 			startTimestampOffset: null,
-			bitrate: null,
 			finalizedChunks: [],
 			currentChunk: null,
 			compactlyCodedChunkTable: [],
 			closed: false,
+			avgBitrate: track.source._nominalBitrate ?? track.metadata.averageBitrate ?? 0,
+			maxBitrate: track.source._nominalBitrate ?? track.metadata.bitrate ?? 0,
 
 			lastCueEndTimestamp: null,
 			cueQueue: [],
@@ -1533,10 +1479,6 @@ export class IsobmffMuxer extends Muxer {
 			upperBound += 4 * n;
 			// co64 box - we assume 1 sample per chunk and 64-bit chunk offsets (co64 instead of stco)
 			upperBound += 8 * n;
-			// btrt box - regular video tracks gain this box once their samples have been measured
-			if (trackData.type === 'video') {
-				upperBound += 20;
-			}
 		}
 
 		return upperBound;
@@ -1641,6 +1583,36 @@ export class IsobmffMuxer extends Muxer {
 			for (const trackData of this.trackDatas) {
 				await this.finalizeCurrentChunk(trackData);
 
+				// Now that we have all samples, we can replace the nominal bitrates with measured ones
+				const span = presentationSpan(trackData);
+				if (span > 0) {
+					let totalBytes = 0;
+					for (const sample of trackData.samples) {
+						totalBytes += sample.size;
+					}
+
+					trackData.avgBitrate = Math.round(8 * totalBytes / span);
+				} else {
+					trackData.avgBitrate = 0;
+				}
+
+				// Sliding one-second window over the samples in decode order
+				let windowStart = 0;
+				let windowBytes = 0;
+				let maxWindowBytes = 0;
+				for (let i = 0; i < trackData.samples.length; i++) {
+					const sample = trackData.samples[i]!;
+					windowBytes += sample.size;
+
+					while (sample.decodeTimestamp - trackData.samples[windowStart]!.decodeTimestamp >= 1) {
+						windowBytes -= trackData.samples[windowStart]!.size;
+						windowStart++;
+					}
+
+					maxWindowBytes = Math.max(maxWindowBytes, windowBytes);
+				}
+				trackData.maxBitrate = 8 * maxWindowBytes;
+
 				if (trackData.startTimestampOffset !== null) {
 					// Shift all of the samples by the start offset. We'll then write out an edit list that will shift
 					// them back to their proper spot in the composition.
@@ -1650,8 +1622,6 @@ export class IsobmffMuxer extends Muxer {
 						sample.decodeTimestamp -= trackData.startTimestampOffset;
 					}
 				}
-
-				trackData.bitrate = computeBitrate(trackData);
 			}
 		}
 

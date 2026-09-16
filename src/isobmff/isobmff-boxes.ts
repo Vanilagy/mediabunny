@@ -44,7 +44,6 @@ import {
 	IsobmffVideoTrackData,
 	presentationSpan,
 	Sample,
-	toU32Bitrate,
 } from './isobmff-muxer';
 import {
 	buildDtsSpecificBox,
@@ -769,38 +768,23 @@ export const videoSampleDescription = (
 	i16(0xffff), // Pre-defined
 ], [
 	VIDEO_CODEC_TO_CONFIGURATION_BOX[trackData.track.source._codec]?.(trackData) ?? null,
-	btrt(trackData),
 	pasp(trackData),
 	colorSpaceIsEmpty(trackData.info.decoderConfig.colorSpace)
 		? null
 		: colr(trackData),
+	btrt(trackData),
 ]);
 
-const getBitrate = (trackData: IsobmffVideoTrackData | IsobmffAudioTrackData) => {
-	if (!trackData.muxer.isFragmented) {
-		return trackData.bitrate;
-	}
-
-	const nominalBitrate = trackData.track.source._nominalBitrate;
-	if (nominalBitrate === undefined || !Number.isFinite(nominalBitrate) || nominalBitrate <= 0) {
-		return null;
-	}
-
-	const bitrate = toU32Bitrate(nominalBitrate);
-	return { maximum: bitrate, average: bitrate };
-};
-
-/** Bit Rate Box: Declares the track's maximum and average bitrate. */
-const btrt = (trackData: IsobmffVideoTrackData) => {
-	const bitrate = getBitrate(trackData);
-	if (bitrate === null) {
+/** Bit Rate Box: Signals the average and peak bitrate of the track. */
+export const btrt = (trackData: IsobmffTrackData) => {
+	if (trackData.avgBitrate === 0 && trackData.maxBitrate === 0) {
 		return null;
 	}
 
 	return box('btrt', [
-		u32(0), // Decoder buffer size is unknown
-		u32(bitrate.maximum), // Maximum bitrate
-		u32(bitrate.average), // Average bitrate
+		u32(0), // Decoding buffer size (unknown)
+		u32(trackData.maxBitrate), // Max bitrate
+		u32(trackData.avgBitrate), // Average bitrate
 	]);
 };
 
@@ -973,13 +957,13 @@ export const soundSampleDescription = (
 
 	return box(compressionType, contents, [
 		audioCodecToConfigurationBox(trackData.track.source._codec, trackData.muxer.isQuickTime)?.(trackData) ?? null,
+		btrt(trackData),
 	]);
 };
 
 /** MPEG-4 Elementary Stream Descriptor Box. */
 export const esds = (trackData: IsobmffAudioTrackData) => {
 	// We build up the bytes in a layered way which reflects the nested structure
-	const bitrate = getBitrate(trackData);
 
 	let objectTypeIndication: number;
 	switch (trackData.track.source._codec) {
@@ -999,8 +983,8 @@ export const esds = (trackData: IsobmffAudioTrackData) => {
 		...u8(objectTypeIndication), // Object type indication
 		...u8(0x15), // stream type(6bits)=5 audio, flags(2bits)=1
 		...u24(0), // 24bit buffer size
-		...u32(bitrate?.maximum ?? 0), // Maximum bitrate
-		...u32(bitrate?.average ?? 0), // Average bitrate
+		...u32(trackData.maxBitrate), // max bitrate
+		...u32(trackData.avgBitrate), // avg bitrate
 	];
 	if (trackData.info.decoderConfig.description) {
 		const description = toUint8Array(trackData.info.decoderConfig.description);
@@ -1225,6 +1209,7 @@ export const subtitleSampleDescription = (
 	u16(1), // Data reference index
 ], [
 	SUBTITLE_CODEC_TO_CONFIGURATION_BOX[trackData.track.source._codec](trackData),
+	btrt(trackData),
 ]);
 
 export const vttC = (trackData: IsobmffSubtitleTrackData) => box('vttC', [
