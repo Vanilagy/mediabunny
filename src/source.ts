@@ -865,6 +865,11 @@ export class UrlSource extends PathedSource {
 			}
 		}
 
+		// Content-Length/Range only tell us the true file size when the body isn't compressed, so ask the server to
+		// leave it alone. Browsers ignore this header (it's forbidden), but Node & co. respect it. User-supplied
+		// headers still override this
+		this._requestInit = mergeRequestInit({ headers: { 'Accept-Encoding': 'identity' } }, this._requestInit);
+
 		if (rangeHeaderValue !== null) {
 			const parsed = parseByteRangeHeader(rangeHeaderValue);
 			if (parsed) {
@@ -973,8 +978,9 @@ export class UrlSource extends PathedSource {
 				this._orchestrator.fileSize === null
 				// Content-Range/Length fields are meaningless if Content-Encoding is present: they count encoded
 				// bytes, while the reader addresses decoded ones. This holds for 206 responses too - some CDNs do
-				// answer range requests with a content coding, stating the compressed total.
+				// answer range requests with a content coding, stating the compressed total (stupid!)
 				&& !response.headers.has('Content-Encoding')
+				// CORS requests may have Content-Encoding but they hide it from us
 				&& (response.status === 206 || response.type === 'basic')
 			) {
 				// See if we can deduce the file size from the response
