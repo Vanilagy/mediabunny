@@ -865,11 +865,6 @@ export class UrlSource extends PathedSource {
 			}
 		}
 
-		// Content-Length/Range only tell us the true file size when the body isn't compressed, so ask the server to
-		// leave it alone. Browsers ignore this header (it's forbidden), but Node & co. respect it. User-supplied
-		// headers still override this
-		this._requestInit = mergeRequestInit({ headers: { 'Accept-Encoding': 'identity' } }, this._requestInit);
-
 		if (rangeHeaderValue !== null) {
 			const parsed = parseByteRangeHeader(rangeHeaderValue);
 			if (parsed) {
