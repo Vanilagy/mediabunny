@@ -1606,6 +1606,7 @@ export class Conversion {
 				const sink = new EncodedPacketSink(track);
 				const decoderConfig = await track.getDecoderConfig();
 				const meta: EncodedVideoChunkMetadata = { decoderConfig: decoderConfig ?? undefined };
+				let maxTimestamp: number | null = null;
 
 				// eslint-disable-next-line curly
 				if (copyStartPacket) for await (const packet of sink.packets(
@@ -1660,12 +1661,22 @@ export class Conversion {
 					packetStartTimestamp += this._timestampOffset;
 					packetEndTimestamp += this._timestampOffset;
 
+					// The muxer rejects key packets with a timestamp smaller than the largest timestamp of the
+					// previous GOP. Some files in the wild actually violate this, so we demote such packets to delta
+					// packets to keep them in the previous GOP and keep the rule satisfied
+					let packetType = packet.type;
+					if (packetType === 'key' && maxTimestamp !== null && packetStartTimestamp < maxTimestamp) {
+						packetType = 'delta';
+					}
+					maxTimestamp = Math.max(maxTimestamp ?? -Infinity, packetStartTimestamp);
+
 					const modifiedPacket = packet.clone({
 						timestamp: packetStartTimestamp,
 						duration: packetEndTimestamp - packetStartTimestamp,
 						sideData: alpha === 'discard'
 							? {} // Remove alpha side data
 							: packet.sideData,
+						type: packetType,
 					});
 
 					this._reportProgress(outputTrackId, modifiedPacket.timestamp + modifiedPacket.duration);
