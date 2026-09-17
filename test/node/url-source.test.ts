@@ -262,6 +262,43 @@ test('UrlSource reads the full decoded body of a compressed response', async () 
 	}
 });
 
+test('UrlSource reads the full decoded body of a compressed 206 response', async () => {
+	// A 206 carrying Content-Encoding states its Content-Range in compressed bytes, so trusting that
+	// total truncates the decoded document.
+	const text = 'Some playlist text\n'.repeat(256);
+	const content = Buffer.from(text);
+	const compressed = brotliCompressSync(content);
+	const server = http.createServer((req, res) => {
+		res.writeHead(206, {
+			'Content-Type': 'text/plain',
+			'Content-Encoding': 'br',
+			'Content-Range': `bytes 0-${compressed.byteLength - 1}/${compressed.byteLength}`,
+			'Content-Length': compressed.byteLength,
+			'Accept-Ranges': 'bytes',
+		});
+		res.end(compressed);
+	});
+
+	await new Promise<void>(resolve => server.listen(0, resolve));
+
+	try {
+		const address = server.address();
+		assert(address && typeof address !== 'string');
+		const source = new UrlSource(`http://localhost:${address.port}/playlist.m3u8`);
+		using ref = source.ref();
+		const reader = new Reader(ref.source);
+
+		const slice = await reader.requestEntireFile();
+		expect(slice).not.toBeNull();
+		expect(compressed.byteLength).toBeLessThan(content.byteLength);
+		expect(slice!.length).toBe(content.byteLength);
+		expect(Buffer.from(readBytes(slice!, slice!.length)).toString()).toBe(text);
+	} finally {
+		server.closeAllConnections();
+		server.close();
+	}
+});
+
 const startRangelessServer = async (
 	options: { responseByteLimits?: number[]; trailingPaddingSize?: number } = {},
 ) => {

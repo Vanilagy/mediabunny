@@ -971,10 +971,12 @@ export class UrlSource extends PathedSource {
 			outer:
 			if (
 				this._orchestrator.fileSize === null
-				// Content-Range/Length fields are meaningless if Content-Encoding is present. Content-Encoding is
-				// basically never used for range responses (since the encoding runs *before* the slicing), so we're set
-				// in that case.
-				&& (response.status === 206 || (response.type === 'basic' && !response.headers.has('Content-Encoding')))
+				// Content-Range/Length fields are meaningless if Content-Encoding is present: they count encoded
+				// bytes, while the reader addresses decoded ones. This holds for 206 responses too - some CDNs do
+				// answer range requests with a content coding, stating the compressed total (stupid!)
+				&& !response.headers.has('Content-Encoding')
+				// CORS requests may have Content-Encoding but they hide it from us
+				&& (response.status === 206 || response.type === 'basic')
 			) {
 				// See if we can deduce the file size from the response
 

@@ -49,6 +49,20 @@ export default defineConfig({
 		emptyOutDir: false,
 		rollupOptions: {
 			input: rollupInput,
+			output: {
+				manualChunks: (id) => {
+					// The extension packages get merged into one shared chunk, so give it a fitting name instead
+					// of it being named after whichever package Rollup picks
+					if (/\/packages\/[^/]+\/dist\/bundles\//.test(id)) {
+						return 'mediabunny-extensions';
+					}
+					if (id.endsWith('/dist/bundles/mediabunny.mjs')) {
+						return 'mediabunny';
+					}
+
+					return undefined;
+				},
+			},
 		},
 		minify: false,
 	},
