@@ -468,6 +468,7 @@ type ConversionCopyOptions = {
 	mode?: 'forced' | 'preferred';
 	shiftTolerance?: number;
 	boundaryPolicy?: 'expand' | 'shrink';
+	boundaryTolerance?: number;
 };
 ```
 
@@ -485,6 +486,10 @@ type ConversionCopyOptions = {
 	- `'shrink'`: Only include media that lies entirely within the requested trim range. This may require shrinking the media region due to key frames and packet boundaries, and thus may exclude media inside of your trim range. The region is always minimally shrunk to satisfy the copy criteria.
 
 	Use `expand` if you don't want to lose any media; use `shrink` to never expose any media outside of the trim region.
+- `boundaryTolerance`\
+	The maximum amount, in seconds, by which the copied media region may deviate from the requested trim range at its start, as caused by `boundaryPolicy`. Defaults to `Infinity`, which permits any deviation.
+
+	In other words, this field sets how many seconds of media the conversion is allowed to add/remove to make a copy path possible.
 
 ---
 
