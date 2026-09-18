@@ -6,6 +6,8 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { Logging } from '../logging';
+
 export const HLS_MIME_TYPE = 'application/vnd.apple.mpegurl';
 
 export const TAG_STREAM_INF = '#EXT-X-STREAM-INF:';
@@ -26,6 +28,7 @@ export const TAG_I_FRAMES_ONLY = '#EXT-X-I-FRAMES-ONLY';
 
 export const canIgnoreLine = (line: string) => line.length === 0 || (line.startsWith('#') && !line.startsWith('#EXT'));
 
+// variable name `token_1` is referenced as `{$token_1}`
 const VARIABLE_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 const VARIABLE_REFERENCE_PATTERN = /\{\$([A-Za-z0-9_-]+)\}/g;
 
@@ -38,38 +41,38 @@ export class HlsPlaylistVariables {
 	) {}
 
 	define(str: string) {
-		const attributes = parseAttributeList(str);
+		const attributes = new AttributeList(str, this);
 		const name = attributes.get('name');
 		const importedName = attributes.get('import');
 		const queryParameterName = attributes.get('queryparam');
 		const declarationCount = [name, importedName, queryParameterName]
-			.filter(value => value !== undefined)
+			.filter(value => value !== null)
 			.length;
 
 		if (declarationCount !== 1) {
-			throw new Error('EXT-X-DEFINE must declare exactly one of NAME, IMPORT, or QUERYPARAM.');
+			throw new Error(
+				'Invalid #EXT-X-DEFINE tag; exactly one of NAME, IMPORT, or QUERYPARAM must be present.',
+			);
 		}
 
-		if (name !== undefined) {
+		if (name !== null) {
 			const value = attributes.get('value');
-			if (value === undefined) {
-				throw new Error('EXT-X-DEFINE with NAME must also declare VALUE.');
+			if (value === null) {
+				throw new Error('Invalid #EXT-X-DEFINE tag; NAME requires VALUE.');
 			}
 
 			this.set(name, value);
-		} else if (importedName !== undefined) {
+		} else if (importedName !== null) {
 			const value = this.importedVariables?.get(importedName);
 			if (value === undefined) {
-				throw new Error(`Cannot import undefined HLS variable '${importedName}'.`);
+				throw new Error(`Invalid #EXT-X-DEFINE tag; cannot import undefined variable "${importedName}".`);
 			}
 
 			this.set(importedName, value);
-		} else if (queryParameterName !== undefined) {
+		} else if (queryParameterName !== null) {
 			const value = getQueryParameter(this.playlistPath, queryParameterName);
 			if (value === null) {
-				throw new Error(
-					`Cannot define HLS variable '${queryParameterName}' from a missing playlist query parameter.`,
-				);
+				throw new Error(`Invalid #EXT-X-DEFINE tag; query parameter "${queryParameterName}" is missing.`);
 			}
 
 			this.set(queryParameterName, value);
@@ -80,7 +83,7 @@ export class HlsPlaylistVariables {
 		return value.replaceAll(VARIABLE_REFERENCE_PATTERN, (_reference, name: string) => {
 			const replacement = this._variables.get(name);
 			if (replacement === undefined) {
-				throw new Error(`HLS variable '${name}' is not defined before use.`);
+				throw new Error(`Invalid M3U8 file; variable "${name}" is referenced before being defined.`);
 			}
 
 			return replacement;
@@ -93,70 +96,26 @@ export class HlsPlaylistVariables {
 
 	set(name: string, value: string) {
 		if (!VARIABLE_NAME_PATTERN.test(name)) {
-			throw new Error(`Invalid HLS variable name '${name}'.`);
+			throw new Error(`Invalid #EXT-X-DEFINE tag; invalid variable name "${name}".`);
 		}
 		if (this._variables.has(name)) {
-			throw new Error(`HLS variable '${name}' has already been defined.`);
+			// "Parsers that encounter duplicate Variable Name declarations MUST fail to parse the Playlist."
+			throw new Error(`Invalid #EXT-X-DEFINE tag; variable "${name}" is already defined.`);
 		}
 
 		this._variables.set(name, value);
 	}
 }
 
-const parseAttributeList = (str: string) => {
-	const attributes = new Map<string, string>();
-	let position = 0;
-
-	while (position < str.length) {
-		while (str[position] === ',' || str[position] === ' ') {
-			position++;
-		}
-		if (position >= str.length) {
-			break;
-		}
-
-		const equalsPosition = str.indexOf('=', position);
-		if (equalsPosition === -1) {
-			throw new Error('Invalid EXT-X-DEFINE attribute list.');
-		}
-
-		const name = str.slice(position, equalsPosition).trim().toLowerCase();
-		position = equalsPosition + 1;
-
-		let value: string;
-		if (str[position] === '"') {
-			const closingQuotePosition = str.indexOf('"', position + 1);
-			if (closingQuotePosition === -1) {
-				throw new Error('Unterminated quoted EXT-X-DEFINE attribute.');
-			}
-
-			value = str.slice(position + 1, closingQuotePosition);
-			position = closingQuotePosition + 1;
-		} else {
-			const commaPosition = str.indexOf(',', position);
-			const endPosition = commaPosition === -1 ? str.length : commaPosition;
-			value = str.slice(position, endPosition).trim();
-			position = endPosition;
-		}
-
-		if (attributes.has(name)) {
-			throw new Error(`Duplicate EXT-X-DEFINE attribute '${name}'.`);
-		}
-
-		attributes.set(name, value);
-	}
-
-	return attributes;
-};
-
+// eg. path `/media.m3u8?token=abc%20123` and name `token` resolve to `abc 123`
 const getQueryParameter = (path: string, name: string) => {
-	const questionMarkIndex = path.indexOf('?');
-	if (questionMarkIndex === -1) {
+	const queryIndex = path.indexOf('?');
+	if (queryIndex === -1) {
 		return null;
 	}
 
-	const fragmentIndex = path.indexOf('#', questionMarkIndex);
-	const query = path.slice(questionMarkIndex + 1, fragmentIndex === -1 ? undefined : fragmentIndex);
+	const fragmentIndex = path.indexOf('#', queryIndex);
+	const query = path.slice(queryIndex + 1, fragmentIndex === -1 ? undefined : fragmentIndex);
 
 	for (const parameter of query.split('&')) {
 		const equalsIndex = parameter.indexOf('=');
@@ -182,13 +141,21 @@ export class AttributeList {
 		let inQuotes = false;
 		let quotedValue = false;
 
-		const commit = () => {
+		const flushAttribute = () => {
 			if (!key) {
 				return;
 			}
 
+			const attributeName = key.trim().toLowerCase();
+			if (Object.prototype.hasOwnProperty.call(this._attributes, attributeName)) {
+				// "AttributeName MUST NOT appear more than once in a given attribute-list.
+				// Clients SHOULD refuse to parse such Playlists."
+				Logging._warn(`Duplicate AttributeName "${attributeName}"; using last value`);
+			}
+
+			// quoted-string and hexadecimal-sequence AttributeValues are subject to variable substitution
 			const shouldSubstitute = quotedValue || value.startsWith('0x') || value.startsWith('0X');
-			this._attributes[key.trim().toLowerCase()] = shouldSubstitute && variables
+			this._attributes[attributeName] = shouldSubstitute && variables
 				? variables.substitute(value)
 				: value;
 
@@ -209,7 +176,7 @@ export class AttributeList {
 			} else if (char === '=' && !inValue && !inQuotes) {
 				inValue = true;
 			} else if (char === ',' && !inQuotes) {
-				commit();
+				flushAttribute();
 			} else if (inValue) {
 				value += char;
 			} else {
@@ -217,7 +184,11 @@ export class AttributeList {
 			}
 		}
 
-		commit();
+		if (inQuotes) {
+			throw new Error('Invalid M3U8 file; unterminated quoted-string AttributeValue.');
+		}
+
+		flushAttribute();
 	}
 
 	get(name: string) {
