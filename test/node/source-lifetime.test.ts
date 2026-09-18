@@ -1,5 +1,6 @@
 import { expect, test, vi } from 'vitest';
-import { CustomSource, FilePathSource } from '../../src/source.js';
+import { CustomSource, FilePathSource, ReadableStreamSource } from '../../src/source.js';
+import { Reader } from '../../src/reader.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Input, InputDisposedError } from '../../src/input.js';
@@ -145,4 +146,32 @@ test('CustomSource releases stream readers after read errors', async () => {
 	});
 	await expect(input.getFormat()).rejects.toBe(error);
 	expect(stream.locked).toBe(false);
+});
+
+test('ReadableStreamSource disposal swallows reader cancel errors', async () => {
+	const stream = new ReadableStream<Uint8Array>({
+		cancel: () => Promise.reject(new Error('Cancel failed')),
+	});
+	const source = new ReadableStreamSource(stream);
+	const reader = new Reader(source);
+
+	const slicePromise = Promise.resolve(reader.requestEntireFile());
+	void slicePromise.catch(() => {}); // The pending read gets rejected on dispose
+
+	await setImmediate(); // Let the pull loop start so the reader exists
+
+	let unhandledRejection: unknown = null;
+	const onUnhandledRejection = (reason: unknown) => {
+		unhandledRejection = reason;
+	};
+	process.on('unhandledRejection', onUnhandledRejection);
+
+	try {
+		source._dispose();
+		await new Promise(resolve => setTimeout(resolve, 50));
+
+		expect(unhandledRejection).toBeNull();
+	} finally {
+		process.off('unhandledRejection', onUnhandledRejection);
+	}
 });

@@ -299,6 +299,112 @@ test('UrlSource reads the full decoded body of a compressed 206 response', async
 	}
 });
 
+test('UrlSource aborts an in-flight ranged response on dispose', async () => {
+	const fileSize = fs.statSync(videoFilePath).size;
+	let abortedResponses = 0;
+
+	// A range-capable server that sends the response head and then stalls indefinitely
+	const server = http.createServer((req, res) => {
+		res.on('error', () => {});
+		res.on('close', () => {
+			if (!res.writableFinished) {
+				abortedResponses++;
+			}
+		});
+
+		const match = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range ?? '');
+		const start = match ? Number(match[1]) : 0;
+		const end = match && match[2] !== '' ? Number(match[2]) : fileSize - 1;
+
+		res.writeHead(206, {
+			'Content-Type': 'video/mp4',
+			'Accept-Ranges': 'bytes',
+			'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+			'Content-Length': end - start + 1,
+		});
+		res.write(Buffer.alloc(2 ** 14));
+		// Then the response hangs: no more data, no end
+	});
+
+	await new Promise<void>(resolve => server.listen(0, resolve));
+
+	try {
+		const address = server.address();
+		assert(address && typeof address !== 'string');
+		const source = new UrlSource(`http://localhost:${address.port}/video.mp4`);
+		const ref = source.ref();
+		const reader = new Reader(ref.source);
+
+		const slicePromise = reader.requestEntireFile();
+
+		// Give the read a moment to reach the stalled response body
+		await new Promise(resolve => setTimeout(resolve, 250));
+		expect(abortedResponses).toBe(0);
+
+		ref.free();
+		await expect(slicePromise).rejects.toThrow();
+
+		// Give the abort a moment to propagate to the server
+		await new Promise(resolve => setTimeout(resolve, 250));
+		expect(abortedResponses).toBe(1);
+	} finally {
+		server.closeAllConnections();
+		server.close();
+	}
+});
+
+test('UrlSource aborts a pending resume request on dispose', async () => {
+	const fileSize = fs.statSync(videoFilePath).size;
+	let requestCount = 0;
+	let abortedResponses = 0;
+
+	// A rangeless server whose first response dies mid-body and whose resume response stalls indefinitely
+	const server = http.createServer((req, res) => {
+		res.on('error', () => {});
+		res.on('close', () => {
+			if (!res.writableFinished) {
+				abortedResponses++;
+			}
+		});
+		res.writeHead(200, {
+			'Content-Type': 'video/mp4',
+			'Content-Length': fileSize,
+		});
+
+		if (requestCount++ === 0) {
+			const stream = fs.createReadStream(videoFilePath, { end: 2 ** 14 - 1 });
+			stream.on('end', () => res.destroy()); // Kill the connection mid-response
+			stream.pipe(res, { end: false });
+		}
+	});
+
+	await new Promise<void>(resolve => server.listen(0, resolve));
+
+	try {
+		const address = server.address();
+		assert(address && typeof address !== 'string');
+		const source = new UrlSource(`http://localhost:${address.port}/video.mp4`);
+		const ref = source.ref();
+		const reader = new Reader(ref.source);
+
+		const slicePromise = reader.requestEntireFile();
+
+		// The first response dies, then the resume request hangs while the fetch is pending
+		await new Promise(resolve => setTimeout(resolve, 2500));
+		expect(requestCount).toBe(2);
+		expect(abortedResponses).toBe(1); // Only the first, mid-body kill counted so far
+
+		ref.free();
+		await expect(slicePromise).rejects.toThrow();
+
+		await new Promise(resolve => setTimeout(resolve, 250));
+		expect(abortedResponses).toBe(2);
+	} finally {
+		server.closeAllConnections();
+		server.close();
+	}
+});
+
 const startRangelessServer = async (
 	options: { responseByteLimits?: number[]; trailingPaddingSize?: number } = {},
 ) => {

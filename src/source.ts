@@ -778,6 +778,11 @@ export class UrlSource extends PathedSource {
 	 * @internal
 	 */
 	_sequentialBacking: ReadableStreamSource | null = null;
+	/**
+	 * Aborted when this source is disposed; wired into every fetch so that pending requests get released.
+	 * @internal
+	 */
+	_disposeController = new AbortController();
 
 	/**
 	 * Creates a new {@link UrlSource} backed by the resource at the specified URL.
@@ -944,6 +949,11 @@ export class UrlSource extends PathedSource {
 		// The outer loop is for resuming a request if it dies mid-response
 		while (true) {
 			const abortController = new AbortController();
+			this._disposeController.signal.addEventListener(
+				'abort',
+				() => abortController.abort(),
+				{ once: true },
+			);
 			const response = await retriedFetch(
 				this._options.fetchFn ?? fetch,
 				this._url,
@@ -955,7 +965,7 @@ export class UrlSource extends PathedSource {
 					signal: abortController.signal,
 				}),
 				this._getRetryDelay,
-				() => this._disposed,
+				() => this._disposed || this._disposeController.signal.aborted,
 			);
 
 			if (!response.ok) {
@@ -1013,7 +1023,7 @@ export class UrlSource extends PathedSource {
 				if (this._sequentialBacking) {
 					// Another worker already discovered the missing range request support and initiated the
 					// transition into sequential mode; this response is of no use anymore
-					void response.body.cancel();
+					void response.body.cancel().catch(() => {});
 					return;
 				}
 
@@ -1151,9 +1161,10 @@ export class UrlSource extends PathedSource {
 									// Who knows, maybe the server honors range requests this time
 									Range: `bytes=${streamPosition}-`,
 								},
+								signal: this._disposeController.signal,
 							}),
 							this._getRetryDelay,
-							() => this._disposed,
+							() => this._disposed || this._disposeController.signal.aborted,
 						);
 
 						if (!newResponse.ok) {
@@ -1266,6 +1277,7 @@ export class UrlSource extends PathedSource {
 
 	/** @internal */
 	_dispose() {
+		this._disposeController.abort();
 		this._orchestrator.dispose();
 
 		if (this._sequentialBacking) {
@@ -1932,7 +1944,7 @@ export class ReadableStreamSource extends Source {
 
 		this._pendingSlices.length = 0;
 		this._cache.length = 0;
-		void this._reader?.cancel();
+		void this._reader?.cancel().catch(() => {});
 	}
 }
 
