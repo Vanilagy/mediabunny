@@ -37,7 +37,7 @@ export class HlsPlaylistVariables {
 
 	constructor(
 		readonly playlistPath: string,
-		readonly importedVariables: ReadonlyMap<string, string> | null,
+		readonly importedVariables: HlsPlaylistVariables | null,
 	) {}
 
 	define(str: string) {
@@ -90,8 +90,8 @@ export class HlsPlaylistVariables {
 		});
 	}
 
-	getAll() {
-		return this._variables as ReadonlyMap<string, string>;
+	get(name: string) {
+		return this._variables.get(name);
 	}
 
 	set(name: string, value: string) {

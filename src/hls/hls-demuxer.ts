@@ -71,7 +71,7 @@ export class HlsDemuxer extends Demuxer {
 	internalTracks: InternalTrack[] | null = null;
 	segmentedInputs: HlsSegmentedInput[] = [];
 	hasMasterPlaylist = true;
-	masterPlaylistVariables: ReadonlyMap<string, string> = new Map();
+	masterPlaylistVariables: HlsPlaylistVariables | null = null;
 
 	constructor(input: Input) {
 		super(input);
@@ -198,7 +198,7 @@ export class HlsDemuxer extends Demuxer {
 				}
 			}
 
-			this.masterPlaylistVariables = variables.getAll();
+			this.masterPlaylistVariables = variables;
 
 			const videoGroupIds = [...new Set(
 				mediaTags
