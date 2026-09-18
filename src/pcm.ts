@@ -6,6 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+// Original source:
 // https://github.com/dystopiancode/pcm-g711/blob/master/pcm-g711/g711.c
 
 export const toUlaw = (s16: number) => {
@@ -56,7 +57,7 @@ export const fromUlaw = (u8: number) => {
 	const decoded = ((1 << position) | ((number & 0x0F) << (position - 4))
 		| (1 << (position - 5))) - MULAW_BIAS;
 
-	return ((sign === 0) ? decoded : -decoded) * 4;
+	return ((sign === 0) ? decoded : -decoded) << 2;
 };
 
 export const toAlaw = (s16: number) => {
@@ -109,5 +110,5 @@ export const fromAlaw = (u8: number) => {
 		decoded = (number << 1) | 1;
 	}
 
-	return ((sign === 0) ? -decoded : decoded) * 8;
+	return ((sign === 0) ? -decoded : decoded) << 3;
 };
