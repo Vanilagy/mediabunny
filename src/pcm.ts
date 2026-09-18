@@ -12,7 +12,7 @@ export const toUlaw = (s16: number) => {
 	const MULAW_MAX = 0x1FFF;
 	const MULAW_BIAS = 33;
 
-	let number = s16;
+	let number = s16 >> 2;
 	let mask = 0x1000;
 	let sign = 0;
 	let position = 12;
@@ -56,7 +56,7 @@ export const fromUlaw = (u8: number) => {
 	const decoded = ((1 << position) | ((number & 0x0F) << (position - 4))
 		| (1 << (position - 5))) - MULAW_BIAS;
 
-	return (sign === 0) ? decoded : -decoded;
+	return ((sign === 0) ? decoded : -decoded) * 4;
 };
 
 export const toAlaw = (s16: number) => {
@@ -66,10 +66,11 @@ export const toAlaw = (s16: number) => {
 	let position = 11;
 	let lsb = 0;
 
-	let number = s16;
+	let number = s16 >> 3;
 
 	if (number < 0) {
-		number = -number;
+		number = -number - 1;
+	} else {
 		sign = 0x80;
 	}
 
@@ -108,5 +109,5 @@ export const fromAlaw = (u8: number) => {
 		decoded = (number << 1) | 1;
 	}
 
-	return (sign === 0) ? decoded : -decoded;
+	return ((sign === 0) ? -decoded : decoded) * 8;
 };

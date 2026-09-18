@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { AudioCodec, MediaCodec, VideoCodec } from './codec';
+import { AudioCodec, MediaCodec, PCM_AUDIO_CODECS, VideoCodec } from './codec';
 import { determineVideoPacketType } from './codec-data';
 import { customAudioDecoders, customVideoDecoders } from './custom-coder';
 import { Input } from './input';
@@ -1148,7 +1148,7 @@ export class InputAudioTrack extends InputTrack {
 				return true;
 			}
 
-			if (decoderConfig.codec.startsWith('pcm-')) {
+			if ((PCM_AUDIO_CODECS as readonly string[]).includes(decoderConfig.codec)) {
 				return true; // Since we decode it ourselves
 			} else {
 				if (typeof AudioDecoder === 'undefined') {
