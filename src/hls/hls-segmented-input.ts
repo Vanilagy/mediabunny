@@ -146,7 +146,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 		const offsetTimestampsByDateTime = this.input._formatOptions.hls?.offsetTimestampsByDateTime !== false;
 		const variables = new HlsPlaylistVariables(
 			this.rootPath,
-			this.demuxer.hasMasterPlaylist ? this.demuxer.multivariantVariables : null,
+			this.demuxer.hasMasterPlaylist ? this.demuxer.masterPlaylistVariables : null,
 		);
 
 		let headerRead = false;
@@ -279,9 +279,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 				setNextSequenceNumber(nextSequenceNumber + 1);
 			}
 
-			if (line.startsWith(TAG_DEFINE)) {
-				variables.define(line.slice(TAG_DEFINE.length));
-			} else if (line.startsWith(TAG_EXTINF)) {
+			if (line.startsWith(TAG_EXTINF)) {
 				if (prevLastSegment) {
 					segmentSeen = true;
 					continue;
@@ -305,6 +303,8 @@ export class HlsSegmentedInput extends SegmentedInput {
 				}
 
 				nextSegmentDuration = duration;
+			} else if (line.startsWith(TAG_DEFINE)) {
+				variables.define(line.slice(TAG_DEFINE.length));
 			} else if (line.startsWith(TAG_MAP)) {
 				const attributes = new AttributeList(line.slice(TAG_MAP.length), variables);
 				const uri = attributes.get('uri');

@@ -71,7 +71,7 @@ export class HlsDemuxer extends Demuxer {
 	internalTracks: InternalTrack[] | null = null;
 	segmentedInputs: HlsSegmentedInput[] = [];
 	hasMasterPlaylist = true;
-	multivariantVariables: ReadonlyMap<string, string> = new Map();
+	masterPlaylistVariables: ReadonlyMap<string, string> = new Map();
 
 	constructor(input: Input) {
 		super(input);
@@ -111,12 +111,12 @@ export class HlsDemuxer extends Demuxer {
 					variables.define(line.slice(TAG_DEFINE.length));
 				} else if (line.startsWith(TAG_STREAM_INF)) {
 					const streamInfLineNumber = i;
-					const playlistPathLine = lines[++i];
-					if (playlistPathLine === undefined) {
+					let playlistPath = lines[++i];
+					if (playlistPath === undefined) {
 						throw new Error('Incorrect M3U8 file; a line must follow the #EXT-X-STREAM-INF tag.');
 					}
 
-					const playlistPath = variables.substitute(playlistPathLine);
+					playlistPath = variables.substitute(playlistPath);
 					const fullPath = joinPaths(rootPath, playlistPath);
 					const attributes = new AttributeList(line.slice(TAG_STREAM_INF.length), variables);
 
@@ -198,7 +198,7 @@ export class HlsDemuxer extends Demuxer {
 				}
 			}
 
-			this.multivariantVariables = variables.getAll();
+			this.masterPlaylistVariables = variables.getAll();
 
 			const videoGroupIds = [...new Set(
 				mediaTags
