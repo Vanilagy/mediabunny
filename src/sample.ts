@@ -3301,15 +3301,15 @@ const getWriteFunction = (format: AudioSampleFormat): (view: DataView, offset: n
 		case 'u8':
 		case 'u8-planar':
 			return (view, offset, value) =>
-				view.setUint8(offset, clamp((value + 1) * 127.5, 0, 255));
+				view.setUint8(offset, clamp(Math.round(value * 128) + 128, 0, 255));
 		case 's16':
 		case 's16-planar':
 			return (view, offset, value) =>
-				view.setInt16(offset, clamp(Math.round(value * 32767), -32768, 32767), true);
+				view.setInt16(offset, clamp(Math.round(value * 32768), -32768, 32767), true);
 		case 's32':
 		case 's32-planar':
 			return (view, offset, value) =>
-				view.setInt32(offset, clamp(Math.round(value * 2147483647), -2147483648, 2147483647), true);
+				view.setInt32(offset, clamp(Math.round(value * 2147483648), -2147483648, 2147483647), true);
 		case 'f32':
 		case 'f32-planar':
 			return (view, offset, value) => view.setFloat32(offset, value, true);
