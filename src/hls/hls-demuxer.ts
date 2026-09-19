@@ -23,7 +23,9 @@ import { readAllLines } from '../reader';
 import {
 	AttributeList,
 	canIgnoreLine,
+	HlsPlaylistVariables,
 	HLS_MIME_TYPE,
+	TAG_DEFINE,
 	TAG_EXTINF,
 	TAG_I_FRAME_STREAM_INF,
 	TAG_I_FRAMES_ONLY,
@@ -69,6 +71,7 @@ export class HlsDemuxer extends Demuxer {
 	internalTracks: InternalTrack[] | null = null;
 	segmentedInputs: HlsSegmentedInput[] = [];
 	hasMasterPlaylist = true;
+	masterPlaylistVariables: HlsPlaylistVariables | null = null;
 
 	constructor(input: Input) {
 		super(input);
@@ -85,6 +88,7 @@ export class HlsDemuxer extends Demuxer {
 			// Important: get the root path AFTER reading data to get the final root path, possibly affected by
 			// redirects. Any follow requests should be related to the redirected path, not the original one.
 			const { rootPath } = this.input._rootSource;
+			const variables = new HlsPlaylistVariables(rootPath, null);
 
 			const variantStreams: {
 				fullPath: string;
@@ -103,15 +107,18 @@ export class HlsDemuxer extends Demuxer {
 			for (let i = 1; i < lines.length; i++) {
 				const line = lines[i]!;
 
-				if (line.startsWith(TAG_STREAM_INF)) {
+				if (line.startsWith(TAG_DEFINE)) {
+					variables.define(line.slice(TAG_DEFINE.length));
+				} else if (line.startsWith(TAG_STREAM_INF)) {
 					const streamInfLineNumber = i;
-					const playlistPath = lines[++i];
+					let playlistPath = lines[++i];
 					if (playlistPath === undefined) {
 						throw new Error('Incorrect M3U8 file; a line must follow the #EXT-X-STREAM-INF tag.');
 					}
 
+					playlistPath = variables.substitute(playlistPath);
 					const fullPath = joinPaths(rootPath, playlistPath);
-					const attributes = new AttributeList(line.slice(TAG_STREAM_INF.length));
+					const attributes = new AttributeList(line.slice(TAG_STREAM_INF.length), variables);
 
 					const bandwidth = attributes.getAsNumber('bandwidth');
 					if (bandwidth === null) {
@@ -128,7 +135,7 @@ export class HlsDemuxer extends Demuxer {
 						hasOnlyKeyPackets: false,
 					});
 				} else if (line.startsWith(TAG_I_FRAME_STREAM_INF)) {
-					const attributes = new AttributeList(line.slice(TAG_I_FRAME_STREAM_INF.length));
+					const attributes = new AttributeList(line.slice(TAG_I_FRAME_STREAM_INF.length), variables);
 					const playlistPath = attributes.get('uri');
 
 					if (playlistPath === null) {
@@ -154,7 +161,7 @@ export class HlsDemuxer extends Demuxer {
 						hasOnlyKeyPackets: true,
 					});
 				} else if (line.startsWith(TAG_MEDIA)) {
-					const attributes = new AttributeList(line.slice(TAG_MEDIA.length));
+					const attributes = new AttributeList(line.slice(TAG_MEDIA.length), variables);
 
 					const type = attributes.get('type');
 					if (type === null) {
@@ -190,6 +197,8 @@ export class HlsDemuxer extends Demuxer {
 					return;
 				}
 			}
+
+			this.masterPlaylistVariables = variables;
 
 			const videoGroupIds = [...new Set(
 				mediaTags
