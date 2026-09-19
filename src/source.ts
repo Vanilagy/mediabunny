@@ -650,7 +650,7 @@ export class BlobSource extends Source {
 
 		if (worker.aborted) {
 			// MDN: "Calling this method signals a loss of interest in the stream by a consumer."
-			await reader?.cancel();
+			await reader?.cancel().catch(() => {});
 		}
 	}
 
@@ -778,6 +778,10 @@ export class UrlSource extends PathedSource {
 	 * @internal
 	 */
 	_sequentialBacking: ReadableStreamSource | null = null;
+	/** @internal */
+	_abortControllers = new Map<ReadWorker, AbortController>();
+	/** @internal */
+	_sequentialAbortController: AbortController | null = null;
 
 	/**
 	 * Creates a new {@link UrlSource} backed by the resource at the specified URL.
@@ -881,6 +885,7 @@ export class UrlSource extends PathedSource {
 			maxCacheSize: options.maxCacheSize ?? (64 * 2 ** 20 /* 64 MiB */),
 			maxWorkerCount: options.parallelism ?? DEFAULT_PARALLELISM,
 			runWorker: this._runWorker.bind(this),
+			onIdleWorkerRemoved: worker => this._abortControllers.delete(worker),
 			prefetchProfile: PREFETCH_PROFILES.network,
 			handleUnhandledError: options.handleUnhandledError,
 		});
@@ -943,7 +948,15 @@ export class UrlSource extends PathedSource {
 	private async _runWorker(worker: ReadWorker) {
 		// The outer loop is for resuming a request if it dies mid-response
 		while (true) {
+			if (worker.aborted) {
+				// Workers can still get started after disposal, or get aborted while waiting to resume
+				this._orchestrator.signalWorkerStoppedRunning(worker);
+				return;
+			}
+
 			const abortController = new AbortController();
+			this._abortControllers.set(worker, abortController);
+
 			const response = await retriedFetch(
 				this._options.fetchFn ?? fetch,
 				this._url,
@@ -955,7 +968,7 @@ export class UrlSource extends PathedSource {
 					signal: abortController.signal,
 				}),
 				this._getRetryDelay,
-				() => this._disposed,
+				() => abortController.signal.aborted,
 			);
 
 			if (!response.ok) {
@@ -1013,7 +1026,7 @@ export class UrlSource extends PathedSource {
 				if (this._sequentialBacking) {
 					// Another worker already discovered the missing range request support and initiated the
 					// transition into sequential mode; this response is of no use anymore
-					void response.body.cancel();
+					void response.body.cancel().catch(() => {});
 					return;
 				}
 
@@ -1042,7 +1055,8 @@ export class UrlSource extends PathedSource {
 					}
 				}
 
-				this._transitionToSequentialMode(response.body);
+				this._abortControllers.delete(worker);
+				this._transitionToSequentialMode(response.body, abortController);
 				return;
 			}
 
@@ -1061,7 +1075,7 @@ export class UrlSource extends PathedSource {
 				try {
 					readResult = await reader.read();
 				} catch (error) {
-					if (this._disposed) {
+					if (abortController.signal.aborted) {
 						// No need to try to retry
 						throw error;
 					}
@@ -1113,11 +1127,13 @@ export class UrlSource extends PathedSource {
 	}
 
 	/** @internal */
-	private _transitionToSequentialMode(body: ReadableStream<Uint8Array>) {
+	private _transitionToSequentialMode(body: ReadableStream<Uint8Array>, abortController: AbortController) {
 		// The server ignored our range request and is sending the entire resource from byte 0. Instead of downloading
 		// and caching the whole thing, we hand the response over to an internal ReadableStreamSource, which pulls new
 		// data only when reads demand it and evicts old data as usual. The response body is wrapped in a stream that
 		// transparently resumes when the connection dies.
+
+		this._sequentialAbortController = abortController;
 
 		let currentReader = body.getReader();
 		let streamPosition = 0;
@@ -1143,6 +1159,11 @@ export class UrlSource extends PathedSource {
 						Logging._error('Error while reading response stream. Attempting to resume.', error);
 						await wait(1000 * retryDelayInSeconds);
 
+						this._sequentialAbortController = new AbortController();
+						if (this._disposed) {
+							this._sequentialAbortController.abort();
+						}
+
 						const newResponse = await retriedFetch(
 							this._options.fetchFn ?? fetch,
 							this._url,
@@ -1151,6 +1172,7 @@ export class UrlSource extends PathedSource {
 									// Who knows, maybe the server honors range requests this time
 									Range: `bytes=${streamPosition}-`,
 								},
+								signal: this._sequentialAbortController.signal,
 							}),
 							this._getRetryDelay,
 							() => this._disposed,
@@ -1202,7 +1224,7 @@ export class UrlSource extends PathedSource {
 					return;
 				}
 			},
-			cancel: () => currentReader.cancel(),
+			cancel: () => currentReader.cancel().catch(() => {}),
 		});
 
 		const backing = new ReadableStreamSource(wrappedStream, {
@@ -1242,6 +1264,11 @@ export class UrlSource extends PathedSource {
 		this._orchestrator.workers.length = 0;
 		this._orchestrator.queuedReads.length = 0;
 
+		for (const [, otherAbortController] of this._abortControllers) {
+			otherAbortController.abort();
+		}
+		this._abortControllers.clear();
+
 		for (const slice of uniqueSlices) {
 			const result = backing._read(slice.start, slice.start + slice.bytes.length);
 
@@ -1267,6 +1294,12 @@ export class UrlSource extends PathedSource {
 	/** @internal */
 	_dispose() {
 		this._orchestrator.dispose();
+
+		for (const [, abortController] of this._abortControllers) {
+			abortController.abort();
+		}
+		this._abortControllers.clear();
+		this._sequentialAbortController?.abort();
 
 		if (this._sequentialBacking) {
 			this._sequentialBacking._disposed = true;
@@ -1549,7 +1582,7 @@ export class CustomSource extends Source {
 
 			if (worker.aborted) {
 				if (data instanceof ReadableStream) {
-					await data.cancel();
+					await data.cancel().catch(() => {});
 				}
 				break;
 			}
@@ -1932,7 +1965,7 @@ export class ReadableStreamSource extends Source {
 
 		this._pendingSlices.length = 0;
 		this._cache.length = 0;
-		void this._reader?.cancel();
+		void this._reader?.cancel().catch(() => {});
 	}
 }
 
