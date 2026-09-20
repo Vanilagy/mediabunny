@@ -2765,6 +2765,13 @@ export const readVorbisComments = (bytes: Uint8Array, metadataTags: MetadataTags
 				}
 			}; break;
 
+			case 'BPM': {
+				const bpm = Number.parseInt(value, 10);
+				if (Number.isInteger(bpm) && bpm > 0) {
+					metadataTags.beatsPerMinute ??= bpm;
+				}
+			}; break;
+
 			case 'GENRE': {
 				metadataTags.genre ??= value;
 			}; break;
@@ -2885,6 +2892,10 @@ export const createVorbisComments = (headerBytes: Uint8Array, tags: MetadataTags
 
 			case 'discsTotal': {
 				addCommentTag('DISCTOTAL', value.toString());
+			}; break;
+
+			case 'beatsPerMinute': {
+				addCommentTag('BPM', value.toString());
 			}; break;
 
 			case 'images': {

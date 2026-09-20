@@ -1926,6 +1926,13 @@ export class MatroskaDemuxer extends Demuxer {
 					metadataTags.genre ??= value;
 				}; break;
 
+				case 'bpm': {
+					const bpm = Number.parseInt(value, 10);
+					if (Number.isInteger(bpm) && bpm > 0) {
+						metadataTags.beatsPerMinute ??= bpm;
+					}
+				}; break;
+
 				case 'comment': {
 					metadataTags.comment ??= value;
 				}; break;
