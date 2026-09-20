@@ -1645,6 +1645,7 @@ const addQuickTimeMetadataTagBoxes = (boxes: Box[], tags: MetadataTags) => {
 			case 'discsTotal':
 			case 'trackNumber':
 			case 'tracksTotal':
+			case 'beatsPerMinute':
 			case 'images': {
 				// Not written for QuickTime (common Apple L)
 			}; break;
@@ -1727,11 +1728,11 @@ const generateMetadataPairs = (tags: MetadataTags, isMdta: boolean) => {
 				pairs.push({ key: isMdta ? 'genre' : '©gen', value: dataStringBoxLong(value) });
 			}; break;
 
-			case 'bpm': {
+			case 'beatsPerMinute': {
 				if (!isMdta) {
 					pairs.push({ key: 'tmpo', value: box('data', [
-						u32(21), // Type specifier
-						u32(0),
+						u32(21), // Type indicator
+						u32(0), // Locale indicator
 						u16(value),
 					]) });
 				}

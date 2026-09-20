@@ -1929,7 +1929,7 @@ export class MatroskaDemuxer extends Demuxer {
 				case 'bpm': {
 					const bpm = Number.parseInt(value, 10);
 					if (Number.isInteger(bpm) && bpm > 0) {
-						metadataTags.bpm ??= bpm;
+						metadataTags.beatsPerMinute ??= bpm;
 					}
 				}; break;
 

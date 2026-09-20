@@ -568,7 +568,7 @@ export class MatroskaMuxer extends Muxer {
 					writtenTags.add('GENRE');
 				}; break;
 
-				case 'bpm': {
+				case 'beatsPerMinute': {
 					addSimpleTag('BPM', value.toString());
 					writtenTags.add('BPM');
 				}; break;

@@ -355,7 +355,7 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 				const bpm = Number.parseInt(bpmText, 10);
 
 				if (Number.isInteger(bpm)) {
-					tags.bpm ??= bpm;
+					tags.beatsPerMinute ??= bpm;
 				}
 			}; break;
 
@@ -737,7 +737,7 @@ export class Id3V2Writer {
 					writtenTags.add('TDRC');
 				}; break;
 
-				case 'bpm': {
+				case 'beatsPerMinute': {
 					this.writeId3V2TextFrame('TBPM', `${value}`);
 					writtenTags.add('TBPM');
 				}; break;

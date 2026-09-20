@@ -80,6 +80,7 @@ const songMetadata: MetadataTags = {
 	tracksTotal: 14,
 	discNumber: 1,
 	discsTotal: 1,
+	beatsPerMinute: 128,
 	date: new Date(2021, 3, 23),
 	images: [{
 		data: coverArt,
@@ -117,6 +118,7 @@ test('Read and write metadata, MP4', async () => {
 	const readTags = await input.getMetadataTags();
 
 	expect(readTags.title).toBe(songMetadata.title);
+	expect(readTags.beatsPerMinute).toBe(songMetadata.beatsPerMinute);
 	expect(readTags.description).toBe(songMetadata.description);
 	expect(readTags.artist).toBe(songMetadata.artist);
 	expect(readTags.album).toBe(songMetadata.album);
@@ -167,6 +169,7 @@ test('Read and write metadata, QuickTime', async () => {
 	const readTags = await input.getMetadataTags();
 
 	expect(readTags.title).toBe(songMetadata.title);
+	expect(readTags.beatsPerMinute).toBeUndefined();
 	expect(readTags.description).toBe(songMetadata.description);
 	expect(readTags.artist).toBe(songMetadata.artist);
 	expect(readTags.album).toBe(songMetadata.album);
@@ -217,6 +220,7 @@ test('Read and write metadata, MP4 with mdta format', async () => {
 	const readTags = await input.getMetadataTags();
 
 	expect(readTags.title).toBe(songMetadata.title);
+	expect(readTags.beatsPerMinute).toBeUndefined();
 	expect(readTags.description).toBe(songMetadata.description);
 	expect(readTags.artist).toBe(songMetadata.artist);
 	expect(readTags.album).toBe(songMetadata.album);
@@ -293,6 +297,7 @@ test('Read and write metadata, Matroska', async () => {
 	const readTags = await input.getMetadataTags();
 
 	expect(readTags.title).toBe(songMetadata.title);
+	expect(readTags.beatsPerMinute).toBe(songMetadata.beatsPerMinute);
 	expect(readTags.description).toBe(songMetadata.description);
 	expect(readTags.artist).toBe(songMetadata.artist);
 	expect(readTags.album).toBe(songMetadata.album);
@@ -363,6 +368,7 @@ test('Read and write metadata, MP3', async () => {
 
 	// ID3v2 is goated, so pretty much everything was copied:
 	expect(readTags.title).toBe(songMetadata.title);
+	expect(readTags.beatsPerMinute).toBe(songMetadata.beatsPerMinute);
 	expect(readTags.description).toBe(songMetadata.description);
 	expect(readTags.artist).toBe(songMetadata.artist);
 	expect(readTags.album).toBe(songMetadata.album);
@@ -420,6 +426,7 @@ test('Read and write metadata, Ogg', async () => {
 	const readTags = await input.getMetadataTags();
 
 	expect(readTags.title).toBe(songMetadata.title);
+	expect(readTags.beatsPerMinute).toBe(songMetadata.beatsPerMinute);
 	expect(readTags.description).toBe(songMetadata.description);
 	expect(readTags.artist).toBe(songMetadata.artist);
 	expect(readTags.album).toBe(songMetadata.album);
@@ -470,6 +477,7 @@ test('Read and write metadata, FLAC', async () => {
 	const readTags = await input.getMetadataTags();
 
 	expect(readTags.title).toBe(songMetadata.title);
+	expect(readTags.beatsPerMinute).toBe(songMetadata.beatsPerMinute);
 	expect(readTags.description).toBe(songMetadata.description);
 	expect(readTags.artist).toBe(songMetadata.artist);
 	expect(readTags.album).toBe(songMetadata.album);
@@ -524,6 +532,7 @@ test('Read and write metadata, ADTS', async () => {
 
 	// ID3v2 is goated, so pretty much everything was copied:
 	expect(readTags.title).toBe(songMetadata.title);
+	expect(readTags.beatsPerMinute).toBe(songMetadata.beatsPerMinute);
 	expect(readTags.description).toBe(songMetadata.description);
 	expect(readTags.artist).toBe(songMetadata.artist);
 	expect(readTags.album).toBe(songMetadata.album);
@@ -574,6 +583,7 @@ test('Read and write metadata, WAVE', async () => {
 	const readTags = await input.getMetadataTags();
 
 	expect(readTags.title).toBe(songMetadata.title);
+	expect(readTags.beatsPerMinute).toBeUndefined();
 	expect(readTags.description).toBeUndefined();
 	expect(readTags.artist).toBe(songMetadata.artist);
 	expect(readTags.album).toBe(songMetadata.album);
@@ -626,6 +636,7 @@ test('Conversion metadata tags, default case', async () => {
 	const readTags = await input2.getMetadataTags();
 
 	expect(readTags.title).toBe(songMetadata.title);
+	expect(readTags.beatsPerMinute).toBe(songMetadata.beatsPerMinute);
 	expect(readTags.description).toBe(songMetadata.description);
 	expect(readTags.artist).toBe(songMetadata.artist);
 	expect(readTags.album).toBe(songMetadata.album);
@@ -755,6 +766,7 @@ test('Write WAV with ID3 tags', async () => {
 	const readTags = await input.getMetadataTags();
 
 	expect(readTags.title).toBe(songMetadata.title);
+	expect(readTags.beatsPerMinute).toBe(songMetadata.beatsPerMinute);
 	expect(readTags.artist).toBe(songMetadata.artist);
 	expect(readTags.album).toBe(songMetadata.album);
 	expect(readTags.albumArtist).toBe(songMetadata.albumArtist);

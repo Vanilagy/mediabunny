@@ -2772,10 +2772,10 @@ export class IsobmffDemuxer extends Demuxer {
 						}; break;
 
 						case 'tmpo': {
-							if (data instanceof Uint8Array && data.length === 2) {
+							if (data instanceof Uint8Array && data.length >= 2) {
 								const bpm = toDataView(data).getInt16(0, false);
 								if (bpm > 0) {
-									this.metadataTags.bpm ??= bpm;
+									this.metadataTags.beatsPerMinute ??= bpm;
 								}
 							}
 						}; break;
