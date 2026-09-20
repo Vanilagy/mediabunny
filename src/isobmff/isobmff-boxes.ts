@@ -1727,6 +1727,16 @@ const generateMetadataPairs = (tags: MetadataTags, isMdta: boolean) => {
 				pairs.push({ key: isMdta ? 'genre' : '©gen', value: dataStringBoxLong(value) });
 			}; break;
 
+			case 'bpm': {
+				if (!isMdta) {
+					pairs.push({ key: 'tmpo', value: box('data', [
+						u32(21), // Type specifier
+						u32(0),
+						u16(value),
+					]) });
+				}
+			}; break;
+
 			case 'lyrics': {
 				pairs.push({ key: isMdta ? 'lyrics' : '©lyr', value: dataStringBoxLong(value) });
 			}; break;

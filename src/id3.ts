@@ -349,7 +349,8 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 				}
 			}; break;
 
-			case 'TBPM': {
+			case 'TBPM':
+			case 'TBP': {
 				const bpmText = reader.readId3V2EncodingAndText(frameEndPos);
 				const bpm = Number.parseInt(bpmText, 10);
 

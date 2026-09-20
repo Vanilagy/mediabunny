@@ -568,6 +568,11 @@ export class MatroskaMuxer extends Muxer {
 					writtenTags.add('GENRE');
 				}; break;
 
+				case 'bpm': {
+					addSimpleTag('BPM', value.toString());
+					writtenTags.add('BPM');
+				}; break;
+
 				case 'comment': {
 					addSimpleTag('COMMENT', value);
 					writtenTags.add('COMMENT');
