@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { assert } from './misc';
+import { assert, roundIfAlmostInteger } from './misc';
 import { AudioSample } from './sample';
 
 /**
@@ -204,7 +204,8 @@ export class AudioResampler {
 
 		// Compute which output frames are affected by this sample
 		const outputStartFrame = Math.floor((inputStartTime - 1 / this.sourceSampleRate) * this.targetSampleRate) + 1;
-		const outputEndFrame = Math.ceil(inputEndTime * this.targetSampleRate);
+		// An extra frame from rounding error can finalize the buffer before the next sample contributes to it
+		const outputEndFrame = Math.ceil(roundIfAlmostInteger(inputEndTime * this.targetSampleRate));
 
 		for (let outputFrame = outputStartFrame; outputFrame < outputEndFrame; outputFrame++) {
 			if (outputFrame < this.bufferStartFrame) {
