@@ -423,8 +423,8 @@ export class StreamTarget extends Target {
 
 			if (this._chunked) {
 				// Let's first gather the data into bigger chunks before writing it
-				this._writeDataIntoChunks(chunk.data, chunk.start);
-				this._tryToFlushChunks();
+				await this._writeDataIntoChunks(chunk.data, chunk.start);
+				await this._tryToFlushChunks();
 			} else {
 				if (this._monotonicity === true && chunk.start !== this._lastFlushEnd) {
 					throw new Error('Internal error: Monotonicity violation.');
@@ -446,42 +446,44 @@ export class StreamTarget extends Target {
 	}
 
 	/** @internal */
-	_writeDataIntoChunks(data: Uint8Array, position: number) {
-		// First, find the chunk to write the data into, or create one if none exists
-		let chunkIndex = this._chunks.findIndex(x => x.start <= position && position < x.start + this._chunkSize);
-		if (chunkIndex === -1) chunkIndex = this._createChunk(position);
-		const chunk = this._chunks[chunkIndex]!;
-
-		// Figure out how much to write to the chunk, and then write to the chunk
-		const relativePosition = position - chunk.start;
-		const toWrite = data.subarray(0, Math.min(this._chunkSize - relativePosition, data.byteLength));
-		chunk.data.set(toWrite, relativePosition);
-
-		// Create a section describing the region of data that was just written to
-		const section: ChunkSection = {
-			start: relativePosition,
-			end: relativePosition + toWrite.byteLength,
-		};
-		this._insertSectionIntoChunk(chunk, section);
-
-		// Queue chunk for flushing to target if it has been fully written to
-		if (chunk.written[0]!.start === 0 && chunk.written[0]!.end === this._chunkSize) {
-			chunk.shouldFlush = true;
-		}
-
-		// Make sure we don't hold too many chunks in memory at once to keep memory usage down
-		if (this._chunks.length > MAX_CHUNKS_AT_ONCE) {
-			// Flush all but the last chunk
-			for (let i = 0; i < this._chunks.length - 1; i++) {
-				this._chunks[i]!.shouldFlush = true;
+	async _writeDataIntoChunks(data: Uint8Array, position: number) {
+		do {
+			// First, find the chunk to write the data into, or create one if none exists
+			let chunkIndex = this._chunks.findIndex(x => x.start <= position && position < x.start + this._chunkSize);
+			if (chunkIndex === -1) {
+				chunkIndex = this._createChunk(position);
 			}
-			this._tryToFlushChunks();
-		}
+			const chunk = this._chunks[chunkIndex]!;
 
-		// If the data didn't fit in one chunk, recurse with the remaining data
-		if (toWrite.byteLength < data.byteLength) {
-			this._writeDataIntoChunks(data.subarray(toWrite.byteLength), position + toWrite.byteLength);
-		}
+			// Figure out how much to write to the chunk, and then write to the chunk
+			const relativePosition = position - chunk.start;
+			const toWrite = data.subarray(0, Math.min(this._chunkSize - relativePosition, data.byteLength));
+			chunk.data.set(toWrite, relativePosition);
+
+			// Create a section describing the region of data that was just written to
+			const section: ChunkSection = {
+				start: relativePosition,
+				end: relativePosition + toWrite.byteLength,
+			};
+			this._insertSectionIntoChunk(chunk, section);
+
+			// Queue chunk for flushing to target if it has been fully written to
+			if (chunk.written[0]!.start === 0 && chunk.written[0]!.end === this._chunkSize) {
+				chunk.shouldFlush = true;
+			}
+
+			// Make sure we don't hold too many chunks in memory at once to keep memory usage down
+			if (this._chunks.length > MAX_CHUNKS_AT_ONCE) {
+				// Flush all but the last chunk
+				for (let i = 0; i < this._chunks.length - 1; i++) {
+					this._chunks[i]!.shouldFlush = true;
+				}
+				await this._tryToFlushChunks();
+			}
+
+			position += toWrite.byteLength;
+			data = data.subarray(toWrite.byteLength);
+		} while (data.byteLength > 0);
 	}
 
 	/** @internal */
@@ -529,7 +531,7 @@ export class StreamTarget extends Target {
 	}
 
 	/** @internal */
-	_tryToFlushChunks(force = false) {
+	async _tryToFlushChunks(force = false) {
 		assert(this._streamWriter);
 
 		for (let i = 0; i < this._chunks.length; i++) {
@@ -552,6 +554,11 @@ export class StreamTarget extends Target {
 					data = chunk.data.subarray(section.start, section.end);
 				}
 
+				// One flush can emit many sections, so apply backpressure before each write.
+				if (this._streamWriter.desiredSize !== null && this._streamWriter.desiredSize <= 0) {
+					await this._streamWriter.ready;
+				}
+
 				void this._streamWriter.write({
 					type: 'write',
 					data,
@@ -570,7 +577,7 @@ export class StreamTarget extends Target {
 	/** @internal */
 	async _finalize() {
 		if (this._chunked) {
-			this._tryToFlushChunks(true);
+			await this._tryToFlushChunks(true);
 		}
 
 		if (this._writeError !== null) {
