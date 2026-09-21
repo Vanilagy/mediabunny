@@ -1,0 +1,16 @@
+AAC encoder-only build: keep the float transforms used by aacenc.c.
+Adapted from valadaptive's AAC size optimizations:
+https://github.com/ntsc-rs/ntsc-rs-web/blob/63fd1f11a1e1e967737bd16b972cb1c4955ae218/aac-codec/patches/0002-tx-float-only.patch
+
+diff --git a/libavutil/tx.c b/libavutil/tx.c
+--- a/libavutil/tx.c
++++ b/libavutil/tx.c
+@@ -339,8 +339,6 @@ static const FFTXCodelet * const ff_tx_null_list[] = {
+ /* Array of all compiled codelet lists. Order is irrelevant. */
+ static const FFTXCodelet * const * const codelet_list[] = {
+     ff_tx_codelet_list_float_c,
+-    ff_tx_codelet_list_double_c,
+-    ff_tx_codelet_list_int32_c,
+     ff_tx_null_list,
+ #if HAVE_X86ASM
+     ff_tx_codelet_list_float_x86,

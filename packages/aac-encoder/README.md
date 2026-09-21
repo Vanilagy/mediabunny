@@ -96,7 +96,11 @@ For more ways of using Mediabunny, refer to its [guide](https://mediabunny.dev/g
 
 For simplicity, all built WASM artifacts are included in the repo, since these rarely change. However, here are the instructions for building them from scratch:
 
-[Install Emscripten](https://emscripten.org/docs/getting_started/downloads.html) and clone [FFmpeg](https://github.com/FFmpeg/FFmpeg). Then, from the Mediabunny root and with Emscripten sourced in:
+[Install Emscripten](https://emscripten.org/docs/getting_started/downloads.html) **4.0.22** and use a fresh [FFmpeg](https://github.com/FFmpeg/FFmpeg) checkout at commit **`aa483bc42201e673cf7172be5205c14ada26bdbd`** to build the included artifact.
+
+The AAC-only build applies a patch to omit double-precision and fixed-point transforms, which the AAC encoder does not use. This is adapted from [valadaptive's AAC size optimizations](https://github.com/ntsc-rs/ntsc-rs-web/tree/63fd1f11a1e1e967737bd16b972cb1c4955ae218/aac-codec); the encoder's two-loop algorithm and default options remain enabled.
+
+From the Mediabunny root and with Emscripten sourced in:
 
 ```bash
 export FFMPEG_PATH=/path/to/ffmpeg
@@ -104,7 +108,8 @@ export MEDIABUNNY_ROOT=$PWD
 
 # Build FFmpeg
 cd $FFMPEG_PATH
-emmake make distclean
+git apply --check "$MEDIABUNNY_ROOT/packages/aac-encoder/patches/float-only-transforms.patch"
+git apply "$MEDIABUNNY_ROOT/packages/aac-encoder/patches/float-only-transforms.patch"
 emconfigure ./configure \
     --target-os=none \
     --arch=x86_32 \
