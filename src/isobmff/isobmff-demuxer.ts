@@ -3408,12 +3408,11 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 }
 
 class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideoTrackBacking {
-	override internalTrack: InternalVideoTrack;
+	declare internalTrack: InternalVideoTrack;
 	decoderConfigPromise: Promise<VideoDecoderConfig> | null = null;
 
 	constructor(internalTrack: InternalVideoTrack) {
 		super(internalTrack);
-		this.internalTrack = internalTrack;
 	}
 
 	getType() {
@@ -3553,12 +3552,11 @@ class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideo
 }
 
 class IsobmffAudioTrackBacking extends IsobmffTrackBacking implements InputAudioTrackBacking {
-	override internalTrack: InternalAudioTrack;
+	declare internalTrack: InternalAudioTrack;
 	decoderConfigPromise: Promise<AudioDecoderConfig> | null = null;
 
 	constructor(internalTrack: InternalAudioTrack) {
 		super(internalTrack);
-		this.internalTrack = internalTrack;
 	}
 
 	getType() {

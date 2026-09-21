@@ -170,7 +170,7 @@ export abstract class MediaSource {
  */
 export abstract class VideoSource extends MediaSource {
 	/** @internal */
-	override _connectedTrack: OutputVideoTrack | null = null;
+	declare _connectedTrack: OutputVideoTrack | null;
 	/** @internal */
 	override readonly _codec: VideoCodec;
 
@@ -1783,7 +1783,7 @@ export class MediaStreamVideoTrackSource extends VideoSource {
  */
 export abstract class AudioSource extends MediaSource {
 	/** @internal */
-	override _connectedTrack: OutputAudioTrack | null = null;
+	declare _connectedTrack: OutputAudioTrack | null;
 	/** @internal */
 	override readonly _codec: AudioCodec;
 
@@ -3016,7 +3016,7 @@ const sendMessageToMediaStreamTrackProcessorWorker = (
  */
 export abstract class SubtitleSource extends MediaSource {
 	/** @internal */
-	override _connectedTrack: OutputSubtitleTrack | null = null;
+	declare _connectedTrack: OutputSubtitleTrack | null;
 	/** @internal */
 	override readonly _codec: SubtitleCodec;
 

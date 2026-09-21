@@ -541,7 +541,7 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 class SegmentedInputInputVideoTrackBacking
 	extends SegmentedInputInputTrackBacking
 	implements InputVideoTrackBacking {
-	override firstInputTrack!: InputVideoTrack | null;
+	declare firstInputTrack: InputVideoTrack | null;
 
 	override getType() {
 		return 'video' as const;
@@ -587,7 +587,7 @@ class SegmentedInputInputVideoTrackBacking
 class SegmentedInputInputAudioTrackBacking
 	extends SegmentedInputInputTrackBacking
 	implements InputAudioTrackBacking {
-	override firstInputTrack!: InputAudioTrack;
+	declare firstInputTrack: InputAudioTrack;
 
 	override getType() {
 		return 'audio' as const;

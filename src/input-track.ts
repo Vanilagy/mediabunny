@@ -595,15 +595,13 @@ export interface InputVideoTrackBacking extends InputTrackBacking {
  */
 export class InputVideoTrack extends InputTrack {
 	/** @internal */
-	override _backing: InputVideoTrackBacking;
+	declare _backing: InputVideoTrackBacking;
 	/** @internal */
 	_pixelAspectRatioCache: Rational | null = null;
 
 	/** @internal */
 	constructor(input: Input, backing: InputVideoTrackBacking) {
 		super(input, backing);
-
-		this._backing = backing;
 	}
 
 	get type(): TrackType {
@@ -1059,13 +1057,11 @@ export interface InputAudioTrackBacking extends InputTrackBacking {
  */
 export class InputAudioTrack extends InputTrack {
 	/** @internal */
-	override _backing: InputAudioTrackBacking;
+	declare _backing: InputAudioTrackBacking;
 
 	/** @internal */
 	constructor(input: Input, backing: InputAudioTrackBacking) {
 		super(input, backing);
-
-		this._backing = backing;
 	}
 
 	get type(): TrackType {
