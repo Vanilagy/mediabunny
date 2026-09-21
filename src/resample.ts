@@ -25,7 +25,8 @@ export class AudioResampler {
 
 	bufferSizeInFrames: number;
 	bufferSizeInSamples: number;
-	outputBuffer: Float32Array;
+	bufferCapacityInFrames!: number;
+	outputBuffer!: Float32Array;
 	/** Start frame of current buffer */
 	bufferStartFrame = 0;
 	/** The highest index written to in the current buffer */
@@ -44,8 +45,6 @@ export class AudioResampler {
 
 		this.bufferSizeInFrames = Math.floor(this.targetSampleRate * 5.0); // 5 seconds
 		this.bufferSizeInSamples = this.bufferSizeInFrames * this.targetNumberOfChannels;
-
-		this.outputBuffer = new Float32Array(this.bufferSizeInSamples);
 	}
 
 	/**
@@ -183,6 +182,14 @@ export class AudioResampler {
 			this.sourceNumberOfChannels = audioSample.numberOfChannels;
 			this.startTime = audioSample.timestamp;
 
+			// An input sample may map to more than one output sample, which is why we need padding in the buffer to not
+			// lose any data
+			const overflowFrames = Math.ceil(this.targetSampleRate / this.sourceSampleRate);
+			this.bufferCapacityInFrames = this.bufferSizeInFrames + overflowFrames;
+			this.outputBuffer = new Float32Array(
+				this.bufferCapacityInFrames * this.targetNumberOfChannels,
+			);
+
 			// Pre-allocate temporary buffer for source data
 			this.tempSourceBuffer = new Float32Array(this.sourceSampleRate * this.sourceNumberOfChannels);
 
@@ -211,14 +218,14 @@ export class AudioResampler {
 				continue; // Skip writes to the past
 			}
 
-			while (outputFrame >= this.bufferStartFrame + this.bufferSizeInFrames) {
-				// The write is after the current buffer, so finalize it
+			while (outputFrame >= this.bufferStartFrame + this.bufferCapacityInFrames) {
+				// The write is wholly after the current buffer, so finalize it
 				await this.finalizeCurrentBuffer();
 				this.bufferStartFrame += this.bufferSizeInFrames;
 			}
 
 			const bufferFrameIndex = outputFrame - this.bufferStartFrame;
-			assert(bufferFrameIndex < this.bufferSizeInFrames);
+			assert(bufferFrameIndex < this.bufferCapacityInFrames);
 
 			const outputTime = outputFrame / this.targetSampleRate;
 			const inputTime = outputTime - inputStartTime;
@@ -266,7 +273,8 @@ export class AudioResampler {
 
 		assert(this.startTime !== null);
 
-		const samplesWritten = (this.maxWrittenFrame + 1) * this.targetNumberOfChannels;
+		const samplesWritten = Math.min(this.maxWrittenFrame + 1, this.bufferSizeInFrames)
+			* this.targetNumberOfChannels;
 
 		const outputData = new Float32Array(samplesWritten);
 		outputData.set(this.outputBuffer.subarray(0, samplesWritten));
@@ -281,11 +289,17 @@ export class AudioResampler {
 
 		await this.onSample(audioSample);
 
-		this.outputBuffer.fill(0);
-		this.maxWrittenFrame = null;
+		this.outputBuffer.copyWithin(0, this.bufferSizeInSamples);
+		this.outputBuffer.fill(0, this.outputBuffer.length - this.bufferSizeInSamples);
+		this.maxWrittenFrame = this.maxWrittenFrame >= this.bufferSizeInFrames
+			? this.maxWrittenFrame - this.bufferSizeInFrames
+			: null;
 	}
 
-	finalize() {
-		return this.finalizeCurrentBuffer();
+	async finalize() {
+		while (this.maxWrittenFrame !== null) {
+			await this.finalizeCurrentBuffer();
+			this.bufferStartFrame += this.bufferSizeInFrames;
+		}
 	}
 }
