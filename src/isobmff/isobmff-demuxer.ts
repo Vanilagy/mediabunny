@@ -2771,6 +2771,15 @@ export class IsobmffDemuxer extends Demuxer {
 							}
 						}; break;
 
+						case 'tmpo': {
+							if (data instanceof Uint8Array && data.length >= 2) {
+								const bpm = toDataView(data).getInt16(0, false);
+								if (bpm > 0) {
+									this.metadataTags.beatsPerMinute ??= bpm;
+								}
+							}
+						}; break;
+
 						case 'covr':
 						case 'com.apple.quicktime.artwork': {
 							if (data instanceof RichImageData) {
@@ -3399,12 +3408,11 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 }
 
 class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideoTrackBacking {
-	override internalTrack: InternalVideoTrack;
+	declare internalTrack: InternalVideoTrack;
 	decoderConfigPromise: Promise<VideoDecoderConfig> | null = null;
 
 	constructor(internalTrack: InternalVideoTrack) {
 		super(internalTrack);
-		this.internalTrack = internalTrack;
 	}
 
 	getType() {
@@ -3544,12 +3552,11 @@ class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideo
 }
 
 class IsobmffAudioTrackBacking extends IsobmffTrackBacking implements InputAudioTrackBacking {
-	override internalTrack: InternalAudioTrack;
+	declare internalTrack: InternalAudioTrack;
 	decoderConfigPromise: Promise<AudioDecoderConfig> | null = null;
 
 	constructor(internalTrack: InternalAudioTrack) {
 		super(internalTrack);
-		this.internalTrack = internalTrack;
 	}
 
 	getType() {

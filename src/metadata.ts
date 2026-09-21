@@ -46,6 +46,8 @@ export type MetadataTags = {
 	discNumber?: number;
 	/** Total number of discs in the release. */
 	discsTotal?: number;
+	/** The beats per minute (BPM) of the media. */
+	beatsPerMinute?: number;
 	/** Genre or category describing the media's style or content (e.g. Metal, Horror, etc.) */
 	genre?: string;
 	/** Release, recording or creation date of the media. */
@@ -206,6 +208,12 @@ export const validateMetadataTags = (tags: MetadataTags) => {
 	if (tags.date !== undefined && (!(tags.date instanceof Date) || Number.isNaN(tags.date.getTime()))) {
 		throw new TypeError('tags.date, when provided, must be a valid Date.');
 	}
+	if (
+		tags.beatsPerMinute !== undefined
+		&& (!Number.isInteger(tags.beatsPerMinute) || tags.beatsPerMinute <= 0)
+	) {
+		throw new TypeError('tags.beatsPerMinute, when provided, must be a positive integer.');
+	}
 	if (tags.lyrics !== undefined && typeof tags.lyrics !== 'string') {
 		throw new TypeError('tags.lyrics, when provided, must be a string.');
 	}
@@ -266,6 +274,7 @@ export const metadataTagsAreEmpty = (tags: MetadataTags) => {
 		&& tags.discNumber === undefined
 		&& tags.discsTotal === undefined
 		&& tags.genre === undefined
+		&& tags.beatsPerMinute === undefined
 		&& tags.date === undefined
 		&& tags.lyrics === undefined
 		&& (!tags.images || tags.images.length === 0)

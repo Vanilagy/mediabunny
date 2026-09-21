@@ -1926,6 +1926,13 @@ export class MatroskaDemuxer extends Demuxer {
 					metadataTags.genre ??= value;
 				}; break;
 
+				case 'bpm': {
+					const bpm = Number.parseInt(value, 10);
+					if (Number.isInteger(bpm) && bpm > 0) {
+						metadataTags.beatsPerMinute ??= bpm;
+					}
+				}; break;
+
 				case 'comment': {
 					metadataTags.comment ??= value;
 				}; break;
@@ -2509,12 +2516,11 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 }
 
 class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVideoTrackBacking {
-	override internalTrack: InternalVideoTrack;
+	declare internalTrack: InternalVideoTrack;
 	decoderConfigPromise: Promise<VideoDecoderConfig> | null = null;
 
 	constructor(internalTrack: InternalVideoTrack) {
 		super(internalTrack);
-		this.internalTrack = internalTrack;
 	}
 
 	getType() {
@@ -2653,12 +2659,11 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 }
 
 class MatroskaAudioTrackBacking extends MatroskaTrackBacking implements InputAudioTrackBacking {
-	override internalTrack: InternalAudioTrack;
+	declare internalTrack: InternalAudioTrack;
 	decoderConfigPromise: Promise<AudioDecoderConfig> | null = null;
 
 	constructor(internalTrack: InternalAudioTrack) {
 		super(internalTrack);
-		this.internalTrack = internalTrack;
 	}
 
 	getType() {
