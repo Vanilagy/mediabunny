@@ -518,13 +518,22 @@ export class MatroskaDemuxer extends Demuxer {
 
 		if (this.reader.fileSize !== null) {
 			// Use the seek head to read missing metadata elements
+			const visitedSeekHeadPositions = new Set<number>();
+
 			for (const seekEntry of this.currentSegment.seekEntries) {
 				const target = METADATA_ELEMENTS.find(x => x.id === seekEntry.id);
 				if (!target) {
 					continue;
 				}
 
-				if (this.currentSegment[target.flag]) continue;
+				// The Matroska format permits a SeekHead to reference another SeekHead, so the seen flag must
+				// not gate them: it is set by the first one, which would skip every SeekHead it points to.
+				if (target.id === EBMLId.SeekHead) {
+					if (visitedSeekHeadPositions.has(seekEntry.segmentPosition)) continue;
+					visitedSeekHeadPositions.add(seekEntry.segmentPosition);
+				} else if (this.currentSegment[target.flag]) {
+					continue;
+				}
 
 				let slice = this.reader.requestSliceRange(
 					segmentDataStart + seekEntry.segmentPosition,
