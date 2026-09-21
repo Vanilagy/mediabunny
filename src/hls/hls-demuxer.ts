@@ -191,17 +191,6 @@ export class HlsDemuxer extends Demuxer {
 				}
 			}
 
-			const videoGroupIds = [...new Set(
-				mediaTags
-					.filter(tag => tag.attributes.get('type')!.toLowerCase() === 'video')
-					.map(tag => tag.attributes.get('group-id')!)),
-			];
-			const audioGroupIds = [...new Set(
-				mediaTags
-					.filter(tag => tag.attributes.get('type')!.toLowerCase() === 'audio')
-					.map(tag => tag.attributes.get('group-id')!)),
-			];
-
 			// Now, let's process & resolve all variant streams in parallel, mapping each of them to tracks.
 
 			const internalTracksByVariant = await Promise.all(variantStreams.map(async (variantStream, i) => {
@@ -239,13 +228,6 @@ export class HlsDemuxer extends Demuxer {
 				if (videoGroupId !== null && !containsVideoCodecs) {
 					// A video group is linked but no video codec is listed, sigh. Let's resolve the video codec.
 
-					if (!videoGroupIds.includes(videoGroupId)) {
-						throw new Error(
-							`Invalid M3U8 file; variant stream references video group "${videoGroupId}" which`
-							+ ` is not defined in any #EXT-X-MEDIA tags.`,
-						);
-					}
-
 					// We only need to look at the first matching tag, since all tags are required to have the same
 					// codec anyway
 					const matchingVideoMediaTag = mediaTags.find((mediaTag) => {
@@ -279,13 +261,6 @@ export class HlsDemuxer extends Demuxer {
 
 				if (audioGroupId !== null && !containsAudioCodecs) {
 					// An audio group is linked but no audio codec is listed, sigh. Let's resolve the audio codec.
-
-					if (!audioGroupIds.includes(audioGroupId)) {
-						throw new Error(
-							`Invalid M3U8 file; variant stream references audio group "${audioGroupId}" which`
-							+ ` is not defined in any #EXT-X-MEDIA tags.`,
-						);
-					}
 
 					// We only need to look at the first matching tag, since all tags are required to have the same
 					// codec anyway
@@ -384,13 +359,6 @@ export class HlsDemuxer extends Demuxer {
 								},
 							});
 						} else {
-							if (!videoGroupIds.includes(videoGroupId)) {
-								throw new Error(
-									`Invalid M3U8 file; variant stream references video group "${videoGroupId}"`
-									+ ` which is not defined in any #EXT-X-MEDIA tags.`,
-								);
-							}
-
 							for (const mediaTag of mediaTags) {
 								const groupId = mediaTag.attributes.get('group-id')!;
 								const type = mediaTag.attributes.get('type')!;
@@ -481,13 +449,6 @@ export class HlsDemuxer extends Demuxer {
 								},
 							});
 						} else {
-							if (!audioGroupIds.includes(audioGroupId)) {
-								throw new Error(
-									`Invalid M3U8 file; variant stream references audio group "${audioGroupId}"`
-									+ ` which is not defined in any #EXT-X-MEDIA tags.`,
-								);
-							}
-
 							for (const mediaTag of mediaTags) {
 								const groupId = mediaTag.attributes.get('group-id')!;
 								const type = mediaTag.attributes.get('type')!;
