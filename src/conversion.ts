@@ -396,6 +396,15 @@ export type ConversionCopyOptions = {
 	 * trim region.
 	 */
 	boundaryPolicy?: 'expand' | 'shrink';
+	/**
+	 * The maximum amount, in seconds, by which the copied media region may deviate from the requested trim range at
+	 * its start, as caused by {@link ConversionCopyOptions.boundaryPolicy}. Defaults to `Infinity`, which permits any
+	 * deviation.
+	 *
+	 * In other words, this field sets how many seconds of media the conversion is allowed to add/remove to make a copy
+	 * path possible.
+	 */
+	boundaryTolerance?: number;
 };
 
 const validateVideoOptions = (videoOptions: ConversionVideoOptions) => {
@@ -681,6 +690,8 @@ export class Conversion {
 	/** @internal */
 	_copyBoundaryPolicy: 'expand' | 'shrink';
 	/** @internal */
+	_copyBoundaryTolerance: number;
+	/** @internal */
 	_startTimestamp!: number;
 	/** @internal */
 	_endTimestamp!: number;
@@ -816,6 +827,12 @@ export class Conversion {
 					'options.copy.boundaryPolicy, when provided, must be \'expand\' or \'shrink\'.',
 				);
 			}
+			if (
+				options.copy.boundaryTolerance !== undefined
+				&& (!isNumber(options.copy.boundaryTolerance) || options.copy.boundaryTolerance < 0)
+			) {
+				throw new TypeError('options.copy.boundaryTolerance, when provided, must be a non-negative number.');
+			}
 		}
 
 		const composable = options.composable ?? false;
@@ -897,6 +914,7 @@ export class Conversion {
 		this._copyMode = options.copy === false ? false : options.copy?.mode ?? 'preferred';
 		this._copyTimestampShiftTolerance = options.copy === false ? 0 : options.copy?.shiftTolerance ?? 0;
 		this._copyBoundaryPolicy = options.copy === false ? 'expand' : options.copy?.boundaryPolicy ?? 'expand';
+		this._copyBoundaryTolerance = options.copy === false ? Infinity : options.copy?.boundaryTolerance ?? Infinity;
 		this._composable = composable;
 		this.input = options.input;
 		this.output = options.output;
@@ -1536,7 +1554,13 @@ export class Conversion {
 					? Math.max(startPacket.timestamp, this._startTimestamp)
 					: startPacket.timestamp;
 
-				if (!this.output.format.supportsTimestampedMediaData) {
+				const boundaryDeviation = this._copyBoundaryPolicy === 'shrink'
+					? effectiveStartTimestamp - this._startTimestamp
+					: Math.max(this._startTimestamp - effectiveStartTimestamp, 0);
+
+				if (boundaryDeviation > this._copyBoundaryTolerance) {
+					needsTranscode = true;
+				} else if (!this.output.format.supportsTimestampedMediaData) {
 					// Wants zero
 
 					if (this._timestampOffsetAdjusted) {
@@ -1606,6 +1630,7 @@ export class Conversion {
 				const sink = new EncodedPacketSink(track);
 				const decoderConfig = await track.getDecoderConfig();
 				const meta: EncodedVideoChunkMetadata = { decoderConfig: decoderConfig ?? undefined };
+				let maxTimestamp: number | null = null;
 
 				// eslint-disable-next-line curly
 				if (copyStartPacket) for await (const packet of sink.packets(
@@ -1660,12 +1685,22 @@ export class Conversion {
 					packetStartTimestamp += this._timestampOffset;
 					packetEndTimestamp += this._timestampOffset;
 
+					// The muxer rejects key packets with a timestamp smaller than the largest timestamp of the
+					// previous GOP. Some files in the wild actually violate this, so we demote such packets to delta
+					// packets to keep them in the previous GOP and keep the rule satisfied
+					let packetType = packet.type;
+					if (packetType === 'key' && maxTimestamp !== null && packetStartTimestamp < maxTimestamp) {
+						packetType = 'delta';
+					}
+					maxTimestamp = Math.max(maxTimestamp ?? -Infinity, packetStartTimestamp);
+
 					const modifiedPacket = packet.clone({
 						timestamp: packetStartTimestamp,
 						duration: packetEndTimestamp - packetStartTimestamp,
 						sideData: alpha === 'discard'
 							? {} // Remove alpha side data
 							: packet.sideData,
+						type: packetType,
 					});
 
 					this._reportProgress(outputTrackId, modifiedPacket.timestamp + modifiedPacket.duration);
@@ -1962,7 +1997,13 @@ export class Conversion {
 			copyStartPacket = startPacket;
 
 			if (startPacket) {
-				if (!this.output.format.supportsTimestampedMediaData) {
+				const boundaryDeviation = this._copyBoundaryPolicy === 'shrink'
+					? Math.max(startPacket.timestamp - this._startTimestamp, 0)
+					: Math.max(this._startTimestamp - startPacket.timestamp, 0);
+
+				if (boundaryDeviation > this._copyBoundaryTolerance) {
+					needsTranscode = true;
+				} else if (!this.output.format.supportsTimestampedMediaData) {
 					// Wants zero
 
 					if (this._timestampOffsetAdjusted) {

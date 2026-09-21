@@ -1808,7 +1808,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 }
 
 class MpegTsVideoTrackBacking extends MpegTsTrackBacking implements InputVideoTrackBacking {
-	override elementaryStream!: ElementaryVideoStream;
+	declare elementaryStream: ElementaryVideoStream;
 
 	getType() {
 		return 'video' as const;
@@ -1861,7 +1861,7 @@ class MpegTsVideoTrackBacking extends MpegTsTrackBacking implements InputVideoTr
 }
 
 class MpegTsAudioTrackBacking extends MpegTsTrackBacking implements InputAudioTrackBacking {
-	override elementaryStream!: ElementaryAudioStream;
+	declare elementaryStream: ElementaryAudioStream;
 
 	getType() {
 		return 'audio' as const;

@@ -286,6 +286,7 @@ export class WaveMuxer extends Muxer {
 				case 'discNumber':
 				case 'tracksTotal':
 				case 'discsTotal':
+				case 'beatsPerMinute':
 				case 'description':
 				case 'lyrics':
 				case 'images': {

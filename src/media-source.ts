@@ -170,7 +170,7 @@ export abstract class MediaSource {
  */
 export abstract class VideoSource extends MediaSource {
 	/** @internal */
-	override _connectedTrack: OutputVideoTrack | null = null;
+	declare _connectedTrack: OutputVideoTrack | null;
 	/** @internal */
 	override readonly _codec: VideoCodec;
 
@@ -1783,7 +1783,7 @@ export class MediaStreamVideoTrackSource extends VideoSource {
  */
 export abstract class AudioSource extends MediaSource {
 	/** @internal */
-	override _connectedTrack: OutputAudioTrack | null = null;
+	declare _connectedTrack: OutputAudioTrack | null;
 	/** @internal */
 	override readonly _codec: AudioCodec;
 
@@ -2123,11 +2123,17 @@ class AudioEncoderWrapper {
 			outputs.push({ frameCount, view: outputView });
 		}
 
-		const allocationSize = audioSample.allocationSize(({ planeIndex: 0, format: 'f32-planar' }));
-		const floats = new Float32Array(allocationSize / Float32Array.BYTES_PER_ELEMENT);
+		const isS32 = audioSample.format === 's32' || audioSample.format === 's32-planar';
+		const readFormat = isS32 ? 's32-planar' : 'f32-planar'; // Can't read in f32-planar due to precision loss
+		const scale = isS32 ? 1 / 2147483648 : 1;
+
+		const allocationSize = audioSample.allocationSize(({ planeIndex: 0, format: readFormat }));
+		const values = isS32
+			? new Int32Array(allocationSize / 4)
+			: new Float32Array(allocationSize / 4);
 
 		for (let i = 0; i < numberOfChannels; i++) {
-			audioSample.copyTo(floats, { planeIndex: i, format: 'f32-planar' });
+			audioSample.copyTo(values, { planeIndex: i, format: readFormat });
 
 			for (let j = 0; j < outputs.length; j++) {
 				const { frameCount, view } = outputs[j]!;
@@ -2136,7 +2142,7 @@ class AudioEncoderWrapper {
 					this.writeOutputValue(
 						view,
 						(k * numberOfChannels + i) * this.outputSampleSize,
-						floats[j * CHUNK_SIZE + k]!,
+						values[j * CHUNK_SIZE + k]! * scale,
 					);
 				}
 			}
@@ -2323,19 +2329,19 @@ class AudioEncoderWrapper {
 			case 1: {
 				if (dataType === 'unsigned') {
 					this.writeOutputValue = (view, byteOffset, value) =>
-						view.setUint8(byteOffset, clamp((value + 1) * 127.5, 0, 255));
+						view.setUint8(byteOffset, clamp(Math.round(value * 128) + 128, 0, 255));
 				} else if (dataType === 'signed') {
 					this.writeOutputValue = (view, byteOffset, value) => {
 						view.setInt8(byteOffset, clamp(Math.round(value * 128), -128, 127));
 					};
 				} else if (dataType === 'ulaw') {
 					this.writeOutputValue = (view, byteOffset, value) => {
-						const int16 = clamp(Math.floor(value * 32767), -32768, 32767);
+						const int16 = clamp(Math.round(value * 32768), -32768, 32767);
 						view.setUint8(byteOffset, toUlaw(int16));
 					};
 				} else if (dataType === 'alaw') {
 					this.writeOutputValue = (view, byteOffset, value) => {
-						const int16 = clamp(Math.floor(value * 32767), -32768, 32767);
+						const int16 = clamp(Math.round(value * 32768), -32768, 32767);
 						view.setUint8(byteOffset, toAlaw(int16));
 					};
 				} else {
@@ -2345,10 +2351,10 @@ class AudioEncoderWrapper {
 			case 2: {
 				if (dataType === 'unsigned') {
 					this.writeOutputValue = (view, byteOffset, value) =>
-						view.setUint16(byteOffset, clamp((value + 1) * 32767.5, 0, 65535), littleEndian);
+						view.setUint16(byteOffset, clamp(Math.round(value * 32768) + 32768, 0, 65535), littleEndian);
 				} else if (dataType === 'signed') {
 					this.writeOutputValue = (view, byteOffset, value) =>
-						view.setInt16(byteOffset, clamp(Math.round(value * 32767), -32768, 32767), littleEndian);
+						view.setInt16(byteOffset, clamp(Math.round(value * 32768), -32768, 32767), littleEndian);
 				} else {
 					assert(false);
 				}
@@ -2356,13 +2362,18 @@ class AudioEncoderWrapper {
 			case 3: {
 				if (dataType === 'unsigned') {
 					this.writeOutputValue = (view, byteOffset, value) =>
-						setUint24(view, byteOffset, clamp((value + 1) * 8388607.5, 0, 16777215), littleEndian);
+						setUint24(
+							view,
+							byteOffset,
+							clamp(Math.round(value * 8388608) + 8388608, 0, 16777215),
+							littleEndian,
+						);
 				} else if (dataType === 'signed') {
 					this.writeOutputValue = (view, byteOffset, value) =>
 						setInt24(
 							view,
 							byteOffset,
-							clamp(Math.round(value * 8388607), -8388608, 8388607),
+							clamp(Math.round(value * 8388608), -8388608, 8388607),
 							littleEndian,
 						);
 				} else {
@@ -2372,12 +2383,16 @@ class AudioEncoderWrapper {
 			case 4: {
 				if (dataType === 'unsigned') {
 					this.writeOutputValue = (view, byteOffset, value) =>
-						view.setUint32(byteOffset, clamp((value + 1) * 2147483647.5, 0, 4294967295), littleEndian);
+						view.setUint32(
+							byteOffset,
+							clamp(Math.round(value * 2147483648) + 2147483648, 0, 4294967295),
+							littleEndian,
+						);
 				} else if (dataType === 'signed') {
 					this.writeOutputValue = (view, byteOffset, value) =>
 						view.setInt32(
 							byteOffset,
-							clamp(Math.round(value * 2147483647), -2147483648, 2147483647),
+							clamp(Math.round(value * 2147483648), -2147483648, 2147483647),
 							littleEndian,
 						);
 				} else if (dataType === 'float') {
@@ -3001,7 +3016,7 @@ const sendMessageToMediaStreamTrackProcessorWorker = (
  */
 export abstract class SubtitleSource extends MediaSource {
 	/** @internal */
-	override _connectedTrack: OutputSubtitleTrack | null = null;
+	declare _connectedTrack: OutputSubtitleTrack | null;
 	/** @internal */
 	override readonly _codec: SubtitleCodec;
 

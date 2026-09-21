@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { AudioCodec, MediaCodec, VideoCodec } from './codec';
+import { AudioCodec, MediaCodec, PCM_AUDIO_CODECS, VideoCodec } from './codec';
 import { determineVideoPacketType } from './codec-data';
 import { customAudioDecoders, customVideoDecoders } from './custom-coder';
 import { Input } from './input';
@@ -595,15 +595,13 @@ export interface InputVideoTrackBacking extends InputTrackBacking {
  */
 export class InputVideoTrack extends InputTrack {
 	/** @internal */
-	override _backing: InputVideoTrackBacking;
+	declare _backing: InputVideoTrackBacking;
 	/** @internal */
 	_pixelAspectRatioCache: Rational | null = null;
 
 	/** @internal */
 	constructor(input: Input, backing: InputVideoTrackBacking) {
 		super(input, backing);
-
-		this._backing = backing;
 	}
 
 	get type(): TrackType {
@@ -1059,13 +1057,11 @@ export interface InputAudioTrackBacking extends InputTrackBacking {
  */
 export class InputAudioTrack extends InputTrack {
 	/** @internal */
-	override _backing: InputAudioTrackBacking;
+	declare _backing: InputAudioTrackBacking;
 
 	/** @internal */
 	constructor(input: Input, backing: InputAudioTrackBacking) {
 		super(input, backing);
-
-		this._backing = backing;
 	}
 
 	get type(): TrackType {
@@ -1148,7 +1144,7 @@ export class InputAudioTrack extends InputTrack {
 				return true;
 			}
 
-			if (decoderConfig.codec.startsWith('pcm-')) {
+			if ((PCM_AUDIO_CODECS as readonly string[]).includes(decoderConfig.codec)) {
 				return true; // Since we decode it ourselves
 			} else {
 				if (typeof AudioDecoder === 'undefined') {

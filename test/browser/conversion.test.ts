@@ -980,6 +980,26 @@ test('Packet copy, delta frame trim, shrink', async () => {
 	});
 });
 
+test('Packet copy, delta frame trim, boundary tolerance exceeded', async () => {
+	await testCopy({
+		conversionOptions: {
+			trim: {
+				start: 1.5,
+				end: 2.5,
+			},
+			copy: {
+				boundaryTolerance: 0.25,
+			},
+		},
+		expectedTimeOffset: 1.5,
+		videoStartTimestamp: 0,
+		videoEndTimestamp: 1,
+		audioStartTimestamp: -0.028,
+		audioEndTimestamp: 1.0173333333333334,
+		compareVideoPackets: false,
+	});
+});
+
 test('Packet copy, whole file, Matroska', async () => {
 	await testCopy({
 		outputFormat: new MkvOutputFormat(),
