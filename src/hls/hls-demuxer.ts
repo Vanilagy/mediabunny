@@ -425,8 +425,8 @@ export class HlsDemuxer extends Demuxer {
 									fullPath: mediaTag.fullPath ?? variantStream.fullPath,
 									fullCodecString: videoCodecString,
 									pairingMask: 1n << BigInt(i),
-									peakBitrate: null,
-									averageBitrate: null,
+									peakBitrate: mediaTag.fullPath === null ? bandwidth : null,
+									averageBitrate: mediaTag.fullPath === null ? averageBandwidth : null,
 									name: mediaTag.attributes.get('name'),
 									hasOnlyKeyPackets: variantStream.hasOnlyKeyPackets,
 									info: {
@@ -515,8 +515,8 @@ export class HlsDemuxer extends Demuxer {
 									fullPath: mediaTag.fullPath ?? variantStream.fullPath,
 									fullCodecString: audioCodecString,
 									pairingMask: 1n << BigInt(i),
-									peakBitrate: null,
-									averageBitrate: null,
+									peakBitrate: mediaTag.fullPath === null ? bandwidth : null,
+									averageBitrate: mediaTag.fullPath === null ? averageBandwidth : null,
 									name: mediaTag.attributes.get('name'),
 									hasOnlyKeyPackets: variantStream.hasOnlyKeyPackets,
 									info: {
