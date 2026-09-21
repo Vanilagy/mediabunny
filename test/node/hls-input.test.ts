@@ -1083,3 +1083,75 @@ test.concurrent('SourceRequest.isRoot', async () => {
 
 	await videoTrack.computeDuration();
 });
+
+test.concurrent('Variant streams referencing an undefined rendition group fall back to their own playlist', async () => {
+	const text = `#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=1000000,CODECS="avc1.4D401F,mp4a.40.2",RESOLUTION=640x360,VIDEO="nope",AUDIO="also-nope"
+media.m3u8
+`;
+
+	using input = new Input({
+		formats: ALL_FORMATS,
+		source: new CustomPathedSource('master.m3u8', () => new BufferSource(new TextEncoder().encode(text))),
+	});
+
+	const tracks = await input.getTracks();
+	const videoTracks = tracks.filter((x): x is InputVideoTrack => x.isVideoTrack());
+	const audioTracks = tracks.filter((x): x is InputAudioTrack => x.isAudioTrack());
+
+	expect(videoTracks).toHaveLength(1);
+	expect(audioTracks).toHaveLength(1);
+
+	expect(await videoTracks[0]!.getCodec()).toBe('avc');
+	expect(await videoTracks[0]!.getDisplayWidth()).toBe(640);
+	expect(await videoTracks[0]!.getDisplayHeight()).toBe(360);
+	expect(await videoTracks[0]!.getBitrate()).toBe(1000000);
+
+	expect(await audioTracks[0]!.getCodec()).toBe('aac');
+	expect(await audioTracks[0]!.getBitrate()).toBe(1000000);
+});
+
+test.concurrent('Master playlist whose VIDEO attribute references an audio rendition group', async () => {
+	// Twitch/IVS-style playlist: each quality gets its own single-member, URI-less VIDEO group, and the audio-only
+	// variant references that group through VIDEO even though the group's TYPE is AUDIO.
+	const text = `#EXTM3U
+#EXT-X-MEDIA:TYPE=VIDEO,GROUP-ID="720p60",NAME="720p48",AUTOSELECT=YES,DEFAULT=YES
+#EXT-X-STREAM-INF:BANDWIDTH=2988971,CODECS="avc1.4D401F,mp4a.40.2",RESOLUTION=1280x720,VIDEO="720p60"
+720p60/playlist.m3u8
+#EXT-X-MEDIA:TYPE=VIDEO,GROUP-ID="360p30",NAME="360p",AUTOSELECT=YES,DEFAULT=YES
+#EXT-X-STREAM-INF:BANDWIDTH=700000,CODECS="avc1.4D401F,mp4a.40.2",RESOLUTION=640x360,VIDEO="360p30"
+360p30/playlist.m3u8
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio_only",NAME="audio_only",AUTOSELECT=NO,DEFAULT=NO
+#EXT-X-STREAM-INF:BANDWIDTH=146640,CODECS="mp4a.40.2",VIDEO="audio_only"
+audio_only/playlist.m3u8
+`;
+
+	using input = new Input({
+		formats: ALL_FORMATS,
+		source: new CustomPathedSource('master.m3u8', () => new BufferSource(new TextEncoder().encode(text))),
+	});
+
+	const tracks = await input.getTracks();
+	const videoTracks = tracks.filter((x): x is InputVideoTrack => x.isVideoTrack());
+	const audioTracks = tracks.filter((x): x is InputAudioTrack => x.isAudioTrack());
+
+	// The two video variants, plus the muxed audio of each and the standalone audio-only variant
+	expect(videoTracks).toHaveLength(2);
+	expect(audioTracks).toHaveLength(3);
+
+	expect(await Promise.all(videoTracks.map(x => x.getName()))).toEqual(['720p48', '360p']);
+	// The rendition groups have no URI, so each variant's bandwidth describes its own media playlist
+	expect(await Promise.all(videoTracks.map(x => x.getBitrate()))).toEqual([2988971, 700000]);
+	expect(await Promise.all(videoTracks.map(x => x.getDisplayWidth()))).toEqual([1280, 640]);
+	expect(await Promise.all(videoTracks.map(x => x.getDisplayHeight()))).toEqual([720, 360]);
+
+	for (const videoTrack of videoTracks) {
+		expect(await videoTrack.getCodec()).toBe('avc');
+	}
+	for (const audioTrack of audioTracks) {
+		expect(await audioTrack.getCodec()).toBe('aac');
+	}
+
+	// The audio-only variant degrades to a plain audio track instead of rejecting the whole playlist
+	expect(await audioTracks[2]!.getBitrate()).toBe(146640);
+});

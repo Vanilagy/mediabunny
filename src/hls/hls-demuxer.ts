@@ -227,8 +227,8 @@ export class HlsDemuxer extends Demuxer {
 					);
 				}
 
-				const videoGroupId = variantStream.attributes.get('video');
-				const audioGroupId = variantStream.attributes.get('audio');
+				const videoGroupId = resolveGroupId(variantStream.attributes.get('video'), videoGroupIds);
+				const audioGroupId = resolveGroupId(variantStream.attributes.get('audio'), audioGroupIds);
 				const containsVideoCodecs = codecStrings.some(x =>
 					VIDEO_CODECS.includes(inferCodecFromCodecString(x) as VideoCodec),
 				);
@@ -238,13 +238,6 @@ export class HlsDemuxer extends Demuxer {
 
 				if (videoGroupId !== null && !containsVideoCodecs) {
 					// A video group is linked but no video codec is listed, sigh. Let's resolve the video codec.
-
-					if (!videoGroupIds.includes(videoGroupId)) {
-						throw new Error(
-							`Invalid M3U8 file; variant stream references video group "${videoGroupId}" which`
-							+ ` is not defined in any #EXT-X-MEDIA tags.`,
-						);
-					}
 
 					// We only need to look at the first matching tag, since all tags are required to have the same
 					// codec anyway
@@ -279,13 +272,6 @@ export class HlsDemuxer extends Demuxer {
 
 				if (audioGroupId !== null && !containsAudioCodecs) {
 					// An audio group is linked but no audio codec is listed, sigh. Let's resolve the audio codec.
-
-					if (!audioGroupIds.includes(audioGroupId)) {
-						throw new Error(
-							`Invalid M3U8 file; variant stream references audio group "${audioGroupId}" which`
-							+ ` is not defined in any #EXT-X-MEDIA tags.`,
-						);
-					}
 
 					// We only need to look at the first matching tag, since all tags are required to have the same
 					// codec anyway
@@ -347,8 +333,6 @@ export class HlsDemuxer extends Demuxer {
 
 						videoCodecString = codecString;
 
-						const videoGroupId = variantStream.attributes.get('video');
-
 						if (videoGroupId === null) {
 							const resolution = variantStream.attributes.get('resolution');
 							let width: number | null = null;
@@ -384,13 +368,6 @@ export class HlsDemuxer extends Demuxer {
 								},
 							});
 						} else {
-							if (!videoGroupIds.includes(videoGroupId)) {
-								throw new Error(
-									`Invalid M3U8 file; variant stream references video group "${videoGroupId}"`
-									+ ` which is not defined in any #EXT-X-MEDIA tags.`,
-								);
-							}
-
 							for (const mediaTag of mediaTags) {
 								const groupId = mediaTag.attributes.get('group-id')!;
 								const type = mediaTag.attributes.get('type')!;
@@ -412,6 +389,8 @@ export class HlsDemuxer extends Demuxer {
 									}
 								}
 
+								const carriedInVariantPlaylist = mediaTag.fullPath === null;
+
 								result.push({
 									id: -1,
 									demuxer: this,
@@ -425,8 +404,8 @@ export class HlsDemuxer extends Demuxer {
 									fullPath: mediaTag.fullPath ?? variantStream.fullPath,
 									fullCodecString: videoCodecString,
 									pairingMask: 1n << BigInt(i),
-									peakBitrate: null,
-									averageBitrate: null,
+									peakBitrate: carriedInVariantPlaylist ? bandwidth : null,
+									averageBitrate: carriedInVariantPlaylist ? averageBandwidth : null,
 									name: mediaTag.attributes.get('name'),
 									hasOnlyKeyPackets: variantStream.hasOnlyKeyPackets,
 									info: {
@@ -446,8 +425,6 @@ export class HlsDemuxer extends Demuxer {
 						}
 
 						audioCodecString = codecString;
-
-						const audioGroupId = variantStream.attributes.get('audio');
 
 						if (audioGroupId === null) {
 							const channels = variantStream.attributes.get('channels');
@@ -481,13 +458,6 @@ export class HlsDemuxer extends Demuxer {
 								},
 							});
 						} else {
-							if (!audioGroupIds.includes(audioGroupId)) {
-								throw new Error(
-									`Invalid M3U8 file; variant stream references audio group "${audioGroupId}"`
-									+ ` which is not defined in any #EXT-X-MEDIA tags.`,
-								);
-							}
-
 							for (const mediaTag of mediaTags) {
 								const groupId = mediaTag.attributes.get('group-id')!;
 								const type = mediaTag.attributes.get('type')!;
@@ -502,6 +472,8 @@ export class HlsDemuxer extends Demuxer {
 									? Number(channels.split('/')[0]!)
 									: null;
 
+								const carriedInVariantPlaylist = mediaTag.fullPath === null;
+
 								result.push({
 									id: -1,
 									demuxer: this,
@@ -515,8 +487,8 @@ export class HlsDemuxer extends Demuxer {
 									fullPath: mediaTag.fullPath ?? variantStream.fullPath,
 									fullCodecString: audioCodecString,
 									pairingMask: 1n << BigInt(i),
-									peakBitrate: null,
-									averageBitrate: null,
+									peakBitrate: carriedInVariantPlaylist ? bandwidth : null,
+									averageBitrate: carriedInVariantPlaylist ? averageBandwidth : null,
 									name: mediaTag.attributes.get('name'),
 									hasOnlyKeyPackets: variantStream.hasOnlyKeyPackets,
 									info: {
@@ -938,6 +910,14 @@ class HlsInputAudioTrackBacking
 		return this.backingAudioTrack!.getDecoderConfig();
 	}
 }
+
+const resolveGroupId = (groupId: string | null, validGroupIds: string[]) => {
+	if (groupId === null || !validGroupIds.includes(groupId)) {
+		return null;
+	}
+
+	return groupId;
+};
 
 const getMediaTagDefault = (attributes: AttributeList) => {
 	const value = attributes.get('default');
