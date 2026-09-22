@@ -30,6 +30,7 @@ const AAC_SAMPLE_RATES = [
 
 class AacEncoder extends CustomAudioEncoder {
 	private worker: Worker | null = null;
+	private workerError: Error | null = null;
 	private nextMessageId = 0;
 	private pendingMessages = new Map<number, {
 		resolve: (value: WorkerResponseData) => void;
@@ -75,13 +76,27 @@ class AacEncoder extends CustomAudioEncoder {
 			}
 		};
 
+		// Treats any worker error as fatal, rejecting pending and future commands. Otherwise a worker that
+		// fails to load (e.g. a page's CSP forbidding blob: workers) leaves them all unsettled forever.
+		const onError = (error: Error) => {
+			this.workerError = error;
+			for (const pending of this.pendingMessages.values()) {
+				pending.reject(error);
+			}
+			this.pendingMessages.clear();
+		};
+
 		if (this.worker.addEventListener) {
 			this.worker.addEventListener('message', event => onMessage(event.data as WorkerResponse));
+			this.worker.addEventListener('error', (event) => {
+				onError(new Error(event.message || 'AAC encoder worker failed to load or crashed.'));
+			});
 		} else {
 			const nodeWorker = this.worker as unknown as {
 				on: (event: string, listener: (data: never) => void) => void;
 			};
 			nodeWorker.on('message', onMessage);
+			nodeWorker.on('error', onError);
 		}
 
 		assert(this.config.bitrate !== undefined);
@@ -259,6 +274,11 @@ class AacEncoder extends CustomAudioEncoder {
 		transferables?: Transferable[],
 	) {
 		return new Promise<WorkerResponseData & { type: T }>((resolve, reject) => {
+			if (this.workerError) {
+				reject(this.workerError);
+				return;
+			}
+
 			const id = this.nextMessageId++;
 			this.pendingMessages.set(id, {
 				resolve: resolve as (value: WorkerResponseData) => void,

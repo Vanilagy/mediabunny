@@ -56,7 +56,8 @@ class Ac3Decoder extends CustomAudioDecoder {
 	}
 
 	async close() {
-		void sendCommand({ type: 'close-decoder', data: { ctx: this.ctx } });
+		// Closing after the worker has failed would otherwise be an unhandled rejection
+		sendCommand({ type: 'close-decoder', data: { ctx: this.ctx } }).catch(() => {});
 		await unrefWorker();
 	}
 }

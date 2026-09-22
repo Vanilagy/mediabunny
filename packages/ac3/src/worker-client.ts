@@ -16,6 +16,8 @@ type ExtendedWorker = Worker & {
 };
 
 let workerPromise: Promise<ExtendedWorker> | null;
+// Sticky rather than respawning, since codec contexts live in the failed worker's memory
+let workerError: Error | null = null;
 let nextMessageId = 0;
 const pendingMessages = new Map<number, {
 	resolve: (value: WorkerResponseData) => void;
@@ -51,6 +53,7 @@ export const unrefWorker = async () => {
 				// Non-browser environment without unref - terminate instead
 				worker.terminate();
 				workerPromise = null;
+				workerError = null;
 			}
 		}
 	}
@@ -63,6 +66,11 @@ export const sendCommand = async <T extends string>(
 	const worker = await ensureWorker();
 
 	return new Promise<WorkerResponseData & { type: T }>((resolve, reject) => {
+		if (workerError) {
+			reject(workerError);
+			return;
+		}
+
 		const id = nextMessageId++;
 		pendingMessages.set(id, {
 			resolve: resolve as (value: WorkerResponseData) => void,
@@ -95,13 +103,27 @@ const ensureWorker = () => {
 			}
 		};
 
+		// Treats any worker error as fatal, rejecting pending and future commands. Otherwise a worker that
+		// fails to load (e.g. a page's CSP forbidding blob: workers) leaves them all unsettled forever.
+		const onError = (error: Error) => {
+			workerError = error;
+			for (const pending of pendingMessages.values()) {
+				pending.reject(error);
+			}
+			pendingMessages.clear();
+		};
+
 		if (worker.addEventListener) {
 			worker.addEventListener('message', event => onMessage(event.data as WorkerResponse));
+			worker.addEventListener('error', (event) => {
+				onError(new Error(event.message || 'AC-3 codec worker failed to load or crashed.'));
+			});
 		} else {
 			const nodeWorker = worker as unknown as {
 				on: (event: string, listener: (data: never) => void) => void;
 			};
 			nodeWorker.on('message', onMessage);
+			nodeWorker.on('error', onError);
 		}
 
 		return worker;
