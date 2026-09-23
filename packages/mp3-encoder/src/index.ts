@@ -61,8 +61,7 @@ class Mp3Encoder extends CustomAudioEncoder {
 			}
 		};
 
-		// Treats any worker error as fatal, rejecting pending and future commands. Otherwise a worker that
-		// fails to load (e.g. a page's CSP forbidding blob: workers) leaves them all unsettled forever.
+		// Treats any worker error (like CSP errors) as fatal, rejecting pending and future commands
 		const onError = (error: Error) => {
 			this.workerError = error;
 			for (const pending of this.pendingMessages.values()) {
