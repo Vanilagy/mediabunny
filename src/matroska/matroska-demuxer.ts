@@ -442,6 +442,7 @@ export class MatroskaDemuxer extends Demuxer {
 		this.segments.push(this.currentSegment);
 
 		let currentPos = segmentDataStart;
+		const visitedSeekHeadPositions = new Set<number>();
 
 		while (this.currentSegment.elementEndPos === null || currentPos < this.currentSegment.elementEndPos) {
 			let slice = this.reader.requestSliceRange(currentPos, MIN_HEADER_SIZE, MAX_HEADER_SIZE);
@@ -477,6 +478,10 @@ export class MatroskaDemuxer extends Demuxer {
 				const field = METADATA_ELEMENTS[metadataElementIndex]!.flag;
 				this.currentSegment[field] = true;
 
+				if (id === EBMLId.SeekHead) {
+					visitedSeekHeadPositions.add(elementStartPos - segmentDataStart);
+				}
+
 				assertDefinedSize(size);
 
 				let slice = this.reader.requestSlice(dataStartPos, size);
@@ -510,6 +515,41 @@ export class MatroskaDemuxer extends Demuxer {
 				break;
 			} else {
 				currentPos = dataStartPos + size;
+			}
+		}
+
+		if (this.reader.fileSize !== null) {
+			// Seek heads can sometimes point to other seek heads, so follow them until there are no unvisited
+			// ones left.
+			while (true) {
+				const seekEntry = this.currentSegment.seekEntries.find(x =>
+					x.id === EBMLId.SeekHead && !visitedSeekHeadPositions.has(x.segmentPosition),
+				);
+				if (!seekEntry) {
+					break;
+				}
+
+				visitedSeekHeadPositions.add(seekEntry.segmentPosition);
+
+				let slice = this.reader.requestSliceRange(
+					segmentDataStart + seekEntry.segmentPosition,
+					MIN_HEADER_SIZE,
+					MAX_HEADER_SIZE,
+				);
+				if (isThenable(slice)) slice = await slice;
+				if (!slice) continue;
+
+				const header = readElementHeader(slice);
+				if (!header || header.id !== EBMLId.SeekHead) continue;
+
+				const { size } = header;
+				assertDefinedSize(size);
+
+				let dataSlice = this.reader.requestSlice(slice.filePos, size);
+				if (isThenable(dataSlice)) dataSlice = await dataSlice;
+				if (!dataSlice) continue;
+
+				this.readContiguousElements(dataSlice);
 			}
 		}
 
