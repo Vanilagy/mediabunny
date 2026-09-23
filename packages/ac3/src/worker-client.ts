@@ -16,7 +16,6 @@ type ExtendedWorker = Worker & {
 };
 
 let workerPromise: Promise<ExtendedWorker> | null;
-// Sticky rather than respawning, since codec contexts live in the failed worker's memory
 let workerError: Error | null = null;
 let nextMessageId = 0;
 const pendingMessages = new Map<number, {
