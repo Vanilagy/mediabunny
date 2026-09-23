@@ -45,14 +45,17 @@ export const unrefWorker = async () => {
 
 		const worker = await workerPromise;
 		if (worker) {
-			if (worker.unref) {
+			if (workerError) {
+				// The failed worker was already terminated. With nobody using it anymore, the next ref can start fresh
+				workerPromise = null;
+				workerError = null;
+			} else if (worker.unref) {
 				worker.unref(); // If we don't do this, then the Node process never terminates by itself
 				// Keep the worker around tho
 			} else if (typeof window === 'undefined') {
 				// Non-browser environment without unref - terminate instead
 				worker.terminate();
 				workerPromise = null;
-				workerError = null;
 			}
 		}
 	}
@@ -62,14 +65,13 @@ export const sendCommand = async <T extends string>(
 	command: WorkerCommand & { type: T },
 	transferables?: Transferable[],
 ) => {
+	if (workerError) {
+		throw workerError;
+	}
+
 	const worker = await ensureWorker();
 
 	return new Promise<WorkerResponseData & { type: T }>((resolve, reject) => {
-		if (workerError) {
-			reject(workerError);
-			return;
-		}
-
 		const id = nextMessageId++;
 		pendingMessages.set(id, {
 			resolve: resolve as (value: WorkerResponseData) => void,
@@ -110,6 +112,7 @@ const ensureWorker = () => {
 				pending.reject(error);
 			}
 			pendingMessages.clear();
+			worker.terminate();
 		};
 
 		if (worker.addEventListener) {

@@ -13,15 +13,12 @@ import { registerFlacEncoder } from '@mediabunny/flac-encoder';
 import { registerMp3Encoder } from '@mediabunny/mp3-encoder';
 
 beforeAll(() => {
-	// A meta CSP inserted at runtime still applies to workers created afterwards. 'self' excludes blob: URLs,
-	// which is how every extension package loads its inlined worker.
 	const meta = document.createElement('meta');
 	meta.httpEquiv = 'Content-Security-Policy';
 	meta.content = 'worker-src \'self\'';
 	document.head.appendChild(meta);
 });
 
-// Each bitrate has to pass the encoder's `supports`, or Mediabunny rejects the config before any worker is created
 const cases: { codec: AudioCodec; register: () => void; bitrate: number }[] = [
 	{ codec: 'aac', register: registerAacEncoder, bitrate: 192000 },
 	{ codec: 'flac', register: registerFlacEncoder, bitrate: 192000 },
@@ -31,7 +28,7 @@ const cases: { codec: AudioCodec; register: () => void; bitrate: number }[] = [
 ];
 
 for (const { codec, register, bitrate } of cases) {
-	test(`${codec} encoder rejects when a CSP blocks its worker`, async () => {
+	test(`${codec} encoder CSP worker rejection`, async () => {
 		register();
 
 		const output = new Output({
@@ -51,8 +48,6 @@ for (const { codec, register, bitrate } of cases) {
 			timestamp: 0,
 		});
 
-		// Encoders that send no command during init only surface the failure on a later call, so the
-		// whole encode is checked. Before worker errors were handled, this never settled.
 		await expect((async () => {
 			await audioSource.add(sample);
 			audioSource.close();

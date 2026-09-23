@@ -132,7 +132,7 @@ class Ac3Encoder extends CustomAudioEncoder {
 	}
 
 	close() {
-		// Closing after the worker has failed would otherwise be an unhandled rejection
+		// Close shouldn't throw
 		sendCommand({ type: 'close-encoder', data: { ctx: this.ctx } }).catch(() => {});
 		void unrefWorker();
 	}

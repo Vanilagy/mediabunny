@@ -66,6 +66,8 @@ class FlacEncoder extends CustomAudioEncoder {
 				pending.reject(error);
 			}
 			this.pendingMessages.clear();
+			this.worker?.terminate();
+			this.worker = null;
 		};
 
 		if (this.worker.addEventListener) {
