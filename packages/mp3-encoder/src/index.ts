@@ -25,6 +25,7 @@ if ((globalThis as Record<symbol, unknown>)[MP3_ENCODER_LOADED_SYMBOL]) {
 
 class Mp3Encoder extends CustomAudioEncoder {
 	private worker: Worker | null = null;
+	private workerError: Error | null = null;
 	private nextMessageId = 0;
 	private pendingMessages = new Map<number, {
 		resolve: (value: WorkerResponseData) => void;
@@ -60,13 +61,28 @@ class Mp3Encoder extends CustomAudioEncoder {
 			}
 		};
 
+		// Treats any worker error (like CSP errors) as fatal, rejecting pending and future commands
+		const onError = (error: Error) => {
+			this.workerError = error;
+			for (const pending of this.pendingMessages.values()) {
+				pending.reject(error);
+			}
+			this.pendingMessages.clear();
+			this.worker?.terminate();
+			this.worker = null;
+		};
+
 		if (this.worker.addEventListener) {
 			this.worker.addEventListener('message', event => onMessage(event.data as WorkerResponse));
+			this.worker.addEventListener('error', (event) => {
+				onError(new Error(event.message || 'MP3 encoder worker failed to load or crashed.'));
+			});
 		} else {
 			const nodeWorker = this.worker as unknown as {
 				on: (event: string, listener: (data: never) => void) => void;
 			};
 			nodeWorker.on('message', onMessage);
+			nodeWorker.on('error', onError);
 		}
 
 		assert(this.config.bitrate);
@@ -195,6 +211,11 @@ class Mp3Encoder extends CustomAudioEncoder {
 		transferables?: Transferable[],
 	) {
 		return new Promise<WorkerResponseData & { type: T }>((resolve, reject) => {
+			if (this.workerError) {
+				reject(this.workerError);
+				return;
+			}
+
 			const id = this.nextMessageId++;
 			this.pendingMessages.set(id, {
 				resolve: resolve as (value: WorkerResponseData) => void,

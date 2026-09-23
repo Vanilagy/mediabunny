@@ -16,6 +16,7 @@ type ExtendedWorker = Worker & {
 };
 
 let workerPromise: Promise<ExtendedWorker> | null;
+let workerError: Error | null = null;
 let nextMessageId = 0;
 const pendingMessages = new Map<number, {
 	resolve: (value: WorkerResponseData) => void;
@@ -44,7 +45,11 @@ export const unrefWorker = async () => {
 
 		const worker = await workerPromise;
 		if (worker) {
-			if (worker.unref) {
+			if (workerError) {
+				// The failed worker was already terminated. With nobody using it anymore, the next ref can start fresh
+				workerPromise = null;
+				workerError = null;
+			} else if (worker.unref) {
 				worker.unref(); // If we don't do this, then the Node process never terminates by itself
 				// Keep the worker around tho
 			} else if (typeof window === 'undefined') {
@@ -60,6 +65,10 @@ export const sendCommand = async <T extends string>(
 	command: WorkerCommand & { type: T },
 	transferables?: Transferable[],
 ) => {
+	if (workerError) {
+		throw workerError;
+	}
+
 	const worker = await ensureWorker();
 
 	return new Promise<WorkerResponseData & { type: T }>((resolve, reject) => {
@@ -95,13 +104,27 @@ const ensureWorker = () => {
 			}
 		};
 
+		// Treats any worker error (like CSP errors) as fatal, rejecting pending and future commands
+		const onError = (error: Error) => {
+			workerError = error;
+			for (const pending of pendingMessages.values()) {
+				pending.reject(error);
+			}
+			pendingMessages.clear();
+			worker.terminate();
+		};
+
 		if (worker.addEventListener) {
 			worker.addEventListener('message', event => onMessage(event.data as WorkerResponse));
+			worker.addEventListener('error', (event) => {
+				onError(new Error(event.message || 'AC-3 codec worker failed to load or crashed.'));
+			});
 		} else {
 			const nodeWorker = worker as unknown as {
 				on: (event: string, listener: (data: never) => void) => void;
 			};
 			nodeWorker.on('message', onMessage);
+			nodeWorker.on('error', onError);
 		}
 
 		return worker;
