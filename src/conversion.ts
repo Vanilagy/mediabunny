@@ -2073,6 +2073,7 @@ export class Conversion {
 				const sink = new EncodedPacketSink(track);
 				const decoderConfig = await track.getDecoderConfig();
 				const meta: EncodedAudioChunkMetadata = { decoderConfig: decoderConfig ?? undefined };
+				let maxTimestamp: number | null = null;
 
 				// eslint-disable-next-line curly
 				if (copyStartPacket) for await (const packet of sink.packets(copyStartPacket)) {
@@ -2090,8 +2091,16 @@ export class Conversion {
 						break;
 					}
 
+					const packetTimestamp = packet.timestamp + this._timestampOffset;
+
+					// Drop packets that would violate the GOP timestamp monotonicity rule
+					if (maxTimestamp !== null && packetTimestamp < maxTimestamp) {
+						continue;
+					}
+					maxTimestamp = packetTimestamp;
+
 					const modifiedPacket = packet.clone({
-						timestamp: packet.timestamp + this._timestampOffset,
+						timestamp: packetTimestamp,
 						duration: packet.duration,
 					});
 
