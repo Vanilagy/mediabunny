@@ -42,6 +42,19 @@ import { NullTarget, PathedTarget, Target, TargetRequest } from '../target';
 import { HLS_MIME_TYPE } from './hls-misc';
 import type { IsobmffMuxer } from '../isobmff/isobmff-muxer';
 
+/**
+ * Converts a WebCodecs codec string into the form HLS clients expect in the CODECS attribute. WebCodecs calls Opus
+ * "opus", but HLS uses the ISOBMFF sample entry name "Opus", and Safari refuses to play a variant stream listing
+ * "opus".
+ */
+const toHlsCodecString = (codecString: string) => {
+	if (codecString === 'opus') {
+		return 'Opus';
+	}
+
+	return codecString;
+};
+
 type HlsTrackData = {
 	track: OutputTrack;
 	packets: EncodedPacket[];
@@ -1418,7 +1431,7 @@ export class HlsMuxer extends Muxer {
 				for (const track of decl.playlist.tracks) {
 					const trackData = this.trackDatas.find(x => x.track === track);
 					const codecString = trackData?.info.decoderConfig.codec ?? track.source._codec;
-					codecs.push(codecString);
+					codecs.push(toHlsCodecString(codecString));
 				}
 
 				let peakDeclBitrate = 0;
@@ -1429,7 +1442,7 @@ export class HlsMuxer extends Muxer {
 					const firstTrack = firstRef.playlist.tracks[0]!;
 					const trackData = this.trackDatas.find(x => x.track === firstTrack);
 					const codecString = trackData?.info.decoderConfig.codec ?? firstTrack.source._codec;
-					codecs.push(codecString);
+					codecs.push(toHlsCodecString(codecString));
 
 					for (const ref of decl.references) {
 						assert(ref.playlist.peakBitrate !== null);

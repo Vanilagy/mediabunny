@@ -895,7 +895,7 @@ export const inferCodecFromCodecString = (codecString: string): MediaCodec | nul
 		return 'mp3';
 	} else if (codecString.startsWith('mp4a.40.') || codecString === 'mp4a.67') {
 		return 'aac';
-	} else if (codecString === 'opus') {
+	} else if (codecString === 'opus' || codecString === 'Opus') {
 		return 'opus';
 	} else if (codecString === 'vorbis') {
 		return 'vorbis';

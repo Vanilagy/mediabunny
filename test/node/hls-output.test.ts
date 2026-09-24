@@ -813,6 +813,16 @@ const aacMetadata: EncodedAudioChunkMetadata = {
 	},
 };
 
+// A single 20 ms CELT fullband frame (TOC byte 0xfc) followed by some payload
+const opusPacketData = new Uint8Array([252, 255, 254]);
+const opusMetadata: EncodedAudioChunkMetadata = {
+	decoderConfig: {
+		codec: 'opus',
+		numberOfChannels: 2,
+		sampleRate: 48000,
+	},
+};
+
 const setUpSegmentationEnvironment = async (options: {
 	video?: boolean;
 	audio?: boolean;
@@ -2425,6 +2435,62 @@ test('Sparse tracks in segments, fragmented MP4 + single file', async () => {
 		segmentFormat: new Mp4OutputFormat({ fastStart: 'fragmented' }),
 		singleFilePerPlaylist: true,
 	});
+});
+
+test('Opus codec string in master playlist', async () => {
+	let masterText = '';
+	const targets = new Map<string, BufferTarget>();
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new CmafOutputFormat(),
+			onMaster: (text) => { masterText = text; },
+		}),
+		target: new PathedTarget('master.m3u8', (request) => {
+			const target = new BufferTarget();
+			targets.set(request.path, target);
+
+			return target;
+		}),
+	});
+
+	const video = videoSource();
+	const audio = audioSource('opus');
+	output.addVideoTrack(video);
+	output.addAudioTrack(audio);
+
+	await output.start();
+
+	await video.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
+	await video.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
+	await video.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
+	await video.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
+
+	await audio.add(new EncodedPacket(opusPacketData, 'key', 0, 0.02), opusMetadata);
+	await audio.add(new EncodedPacket(opusPacketData, 'key', 0.5, 0.02), opusMetadata);
+	await audio.add(new EncodedPacket(opusPacketData, 'key', 1, 0.02), opusMetadata);
+	await audio.add(new EncodedPacket(opusPacketData, 'key', 1.5, 0.02), opusMetadata);
+
+	await output.finalize();
+
+	// WebCodecs calls it "opus", but HLS clients expect "Opus", the ISOBMFF sample entry name. Safari refuses to play
+	// the variant stream when given "opus".
+	expect(masterText).toMatch(/CODECS="avc1\.[0-9A-Fa-f]+,Opus"/);
+
+	// The HLS input must understand the string the HLS output writes
+	using input = new Input({
+		source: new CustomPathedSource('master.m3u8', ({ path }) => {
+			const target = targets.get(path);
+			assert(target);
+
+			return new BufferSource(target.buffer!);
+		}),
+		formats: ALL_FORMATS,
+	});
+
+	const audioTrack = await input.getPrimaryAudioTrack() as InputAudioTrack;
+	expect(audioTrack).toBeTruthy();
+	expect(await audioTrack.getCodec()).toBe('opus');
 });
 
 const runSparseTracksInSegments = async (hlsOptions: HlsOutputFormatOptions) => {
