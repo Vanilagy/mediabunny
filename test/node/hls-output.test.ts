@@ -16,13 +16,7 @@ import {
 	StreamTarget,
 	StreamTargetChunk,
 } from '../../src/target.js';
-import {
-	AudioSampleSource,
-	EncodedAudioPacketSource,
-	EncodedVideoPacketSource,
-	VideoSampleSource,
-} from '../../src/media-source.js';
-import { Quality } from '../../src/encode.js';
+import { EncodedAudioPacketSource, EncodedVideoPacketSource } from '../../src/media-source.js';
 import { HlsMuxer } from '../../src/hls/hls-muxer.js';
 import { AudioCodec, VideoCodec } from '../../src/codec.js';
 import { EncodedPacket, PacketType } from '../../src/packet.js';
