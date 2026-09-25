@@ -1901,6 +1901,7 @@ export class Conversion {
 		// The input's bitrate metadata only stays meaningful when packets are copied
 		const bitrate = needsTranscode ? null : await track.getBitrate();
 		const averageBitrate = needsTranscode ? null : await track.getAverageBitrate();
+		const canBeTransparent = alpha === 'keep' && await track.canBeTransparent();
 
 		this.output.addVideoTrack(videoSource, {
 			frameRate: trackOptions.frameRate,
@@ -1913,6 +1914,7 @@ export class Conversion {
 			rotation: outputTrackRotation,
 			flip: outputTrackFlip,
 			transformationMatrix: outputTrackMatrix ?? undefined,
+			canBeTransparent,
 			group: ownGroup ?? trackOptions.group,
 			bitrate: bitrate ?? undefined,
 			averageBitrate: averageBitrate ?? undefined,
