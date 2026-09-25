@@ -7,6 +7,7 @@
  */
 
 import { MediaCodec, validateAudioChunkMetadata, validateVideoChunkMetadata } from '../codec';
+import { Quality } from '../encode';
 import { Logging } from '../logging';
 import { EncodedAudioPacketSource, EncodedVideoPacketSource } from '../media-source';
 import {
@@ -42,11 +43,7 @@ import { NullTarget, PathedTarget, Target, TargetRequest } from '../target';
 import { HLS_MIME_TYPE } from './hls-misc';
 import type { IsobmffMuxer } from '../isobmff/isobmff-muxer';
 
-/**
- * Converts a WebCodecs codec string into the form HLS clients expect in the CODECS attribute. WebCodecs calls Opus
- * "opus", but HLS uses the ISOBMFF sample entry name "Opus", and Safari refuses to play a variant stream listing
- * "opus".
- */
+// Maps from WebCodecs to what HLS wants
 const toHlsCodecString = (codecString: string) => {
 	if (codecString === 'opus') {
 		return 'Opus';
@@ -1331,8 +1328,37 @@ export class HlsMuxer extends Muxer {
 			totalBits += 8 * segment.byteSize;
 		}
 
+		let averageBitrate = totalBits / (totalDuration || 1);
+
+		if (segments.length === 0) {
+			// No data to measure, meaning a bandwidth of zero. This breaks some HLS players, so let's use a sensible
+			// default instead
+			for (const track of playlist.tracks) {
+				const trackData = this.trackDatas.find(x => x.track === track);
+				let trackPeakBitrate = track.source._nominalBitrate ?? track.metadata.bitrate ?? 0;
+				averageBitrate += track.source._nominalBitrate ?? track.metadata.averageBitrate ?? 0;
+
+				if (trackPeakBitrate === 0) {
+					const mediumQuality = new Quality('medium');
+
+					if (track.isVideoTrack()) {
+						const decoderConfig = trackData?.info.decoderConfig as VideoDecoderConfig | undefined;
+						trackPeakBitrate = mediumQuality._toVideoBitrate(
+							track.source._codec,
+							decoderConfig?.codedWidth ?? 1920, // Need to assume a resolution
+							decoderConfig?.codedHeight ?? 1080,
+						);
+					} else if (track.isAudioTrack()) {
+						trackPeakBitrate = mediumQuality._toAudioBitrate(track.source._codec) ?? 0;
+					}
+				}
+
+				peakBitrate += trackPeakBitrate;
+			}
+		}
+
 		playlist.peakBitrate = peakBitrate;
-		playlist.averageBitrate = totalBits / (totalDuration || 1);
+		playlist.averageBitrate = averageBitrate;
 	}
 
 	private async writePlaylist(playlist: Playlist) {

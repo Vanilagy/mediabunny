@@ -16,7 +16,13 @@ import {
 	StreamTarget,
 	StreamTargetChunk,
 } from '../../src/target.js';
-import { EncodedAudioPacketSource, EncodedVideoPacketSource } from '../../src/media-source.js';
+import {
+	AudioSampleSource,
+	EncodedAudioPacketSource,
+	EncodedVideoPacketSource,
+	VideoSampleSource,
+} from '../../src/media-source.js';
+import { Quality } from '../../src/encode.js';
 import { HlsMuxer } from '../../src/hls/hls-muxer.js';
 import { AudioCodec, VideoCodec } from '../../src/codec.js';
 import { EncodedPacket, PacketType } from '../../src/packet.js';
@@ -26,7 +32,6 @@ import { BufferSource, CustomPathedSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { InputAudioTrack, InputVideoTrack } from '../../src/input-track.js';
 import { EncodedPacketSink } from '../../src/media-sink.js';
-
 const videoSource = (codec: VideoCodec = 'avc') => new EncodedVideoPacketSource(codec);
 const audioSource = (codec: AudioCodec = 'aac') => new EncodedAudioPacketSource(codec);
 
@@ -2491,6 +2496,53 @@ test('Opus codec string in master playlist', async () => {
 	const audioTrack = await input.getPrimaryAudioTrack() as InputAudioTrack;
 	expect(audioTrack).toBeTruthy();
 	expect(await audioTrack.getCodec()).toBe('opus');
+});
+
+test('Empty playlist bandwidth, from track metadata', async () => {
+	let masterText = '';
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new MpegTsOutputFormat(),
+			onMaster: (text) => { masterText = text; },
+		}),
+		target: new PathedTarget('master.m3u8', () => new BufferTarget()),
+	});
+
+	output.addVideoTrack(videoSource(), {
+		bitrate: 2_000_000,
+		averageBitrate: 1_500_000,
+	});
+	output.addAudioTrack(audioSource(), {
+		bitrate: 128_000,
+		averageBitrate: 100_000,
+	});
+
+	await output.start();
+	await output.finalize();
+
+	expect(masterText).toContain('BANDWIDTH=2128000,AVERAGE-BANDWIDTH=1600000,');
+});
+
+test('Empty playlist bandwidth, medium quality default fallback', async () => {
+	let masterText = '';
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new MpegTsOutputFormat(),
+			onMaster: (text) => { masterText = text; },
+		}),
+		target: new PathedTarget('master.m3u8', () => new BufferTarget()),
+	});
+
+	output.addVideoTrack(videoSource());
+	output.addAudioTrack(audioSource());
+
+	await output.start();
+	await output.finalize();
+
+	const bandwidth = Number(masterText.match(/BANDWIDTH=(\d+)/)![1]);
+	expect(bandwidth).toBeGreaterThan(0);
 });
 
 const runSparseTracksInSegments = async (hlsOptions: HlsOutputFormatOptions) => {
