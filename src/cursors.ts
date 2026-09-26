@@ -791,6 +791,17 @@ export abstract class SampleCursor<
 				this._setCurrentRaw(satisfyingSample);
 				return res.set(this._transformSample());
 			}
+
+			if (!this._pumpRunning) {
+				if (targetPacket.timestamp > lastTimestamp) {
+					// The pump decoded everything to the end and nothing satisfied the request; nothing ever will
+					this._setCurrentRaw(null);
+					return res.set(null);
+				}
+
+				// The sample at lastTimestamp has already been consumed, so it must be decoded again
+				needsNewPump = true;
+			}
 		} else {
 			// This is the first packet or we went backwards, create a new pump
 			needsNewPump = true;
@@ -805,10 +816,7 @@ export abstract class SampleCursor<
 		}
 		this._lastTarget = targetPacket;
 
-		if (!this._pumpRunning) {
-			// Either we just stopped the pump, or it ended on its own (possibly while we were waiting above) with
-			// nothing queued that satisfies the request. Either way, only a new pump can fulfill it.
-
+		if (needsNewPump) {
 			// Set the cursor to the right spot
 			const result = this._packetCursor.seekToKey(targetPacket.timestamp);
 			if (result instanceof Promise) await result;
@@ -1018,9 +1026,8 @@ export abstract class SampleCursor<
 				this._debug.pumpsStarted++;
 			}
 
-			// Yield once so that the caller can register its request before the first packet is decoded. A decoder that
-			// emits samples synchronously (like the PCM decoder) would otherwise queue them before anyone has asked for
-			// them, and requests may only be registered while the sample queue is empty.
+			// Yield once so that the caller can register its request before the first packet is decoded (some decoders
+			// are synchronous)
 			await Promise.resolve();
 
 			// Main loop

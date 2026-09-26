@@ -10,6 +10,11 @@ import {
 } from '../../src/cursors.js';
 import { AudioSample, VideoSample } from '../../src/sample.js';
 import { promiseAllEnsureOrder, promiseIterateAll } from '../../src/misc.js';
+import { Output } from '../../src/output.js';
+import { WavOutputFormat } from '../../src/output-format.js';
+import { BufferTarget } from '../../src/target.js';
+import { EncodedAudioPacketSource } from '../../src/media-source.js';
+import { EncodedPacket } from '../../src/packet.js';
 
 beforeEach(() => {
 	VideoSample._openSampleCount = 0;
@@ -1034,6 +1039,25 @@ test('AudioSampleCursor', async () => {
 	await cursor.close();
 });
 
+test('AudioSampleCursor with PCM', async () => {
+	using input = new Input({
+		source: new UrlSource('/glitch-hop-is-dead.wav'),
+		formats: ALL_FORMATS,
+	});
+
+	const audioTrack = (await input.getPrimaryAudioTrack())!;
+	expect(await audioTrack.getCodec()).toBe('pcm-s16');
+	await using cursor = new AudioSampleCursor(audioTrack);
+
+	let frames = 0;
+	for await (const sample of cursor) {
+		expect(sample.format).toBe('s16');
+		frames += sample.numberOfFrames;
+	}
+
+	expect(frames).toBe(425000);
+});
+
 test('Sample mapping', async () => {
 	using input = new Input({
 		source: new UrlSource('/trim-buck-bunny.mov'),
@@ -1192,6 +1216,60 @@ test('Unthrottled decoder', async () => {
 
 	// Test that all samples in the queue get closed now
 	await cursor2.close();
+});
+
+test('Seeking to a consumed sample after the pump ended', async () => {
+	const output = new Output({
+		format: new WavOutputFormat(),
+		target: new BufferTarget(),
+	});
+	const audioSource = new EncodedAudioPacketSource('pcm-s16');
+	output.addAudioTrack(audioSource);
+	await output.start();
+
+	const data = new Uint8Array(1600);
+	new Int16Array(data.buffer).fill(1234);
+	const decoderConfig = {
+		codec: 'pcm-s16',
+		numberOfChannels: 1,
+		sampleRate: 8000,
+	};
+	await audioSource.add(new EncodedPacket(data, 'key', 0, 0.1), { decoderConfig });
+	await audioSource.add(new EncodedPacket(data, 'key', 0.1, 0.1), { decoderConfig });
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const audioTrack = (await input.getPrimaryAudioTrack())!;
+	await using cursor = new AudioSampleCursor(audioTrack);
+	cursor._debug.enabled = true;
+	const pumpEnded = cursor._debug.pumpEnded.wait();
+
+	const first = (await cursor.next())!;
+	expect(first.timestamp).toBe(0);
+	const decoded = new Int16Array(first.numberOfFrames);
+	first.copyTo(decoded, { planeIndex: 0, format: 's16' });
+	expect(decoded[0]).toBe(1234);
+
+	// Closing it rules out reusing the current sample, so it has to be decoded again
+	first.close();
+
+	await pumpEnded;
+	expect(cursor._pumpRunning).toBe(false);
+
+	const again = (await cursor.seekTo(0))!;
+	expect(again.timestamp).toBe(0);
+	expect(cursor._debug.pumpsStarted).toBe(2);
+
+	let frames = again.numberOfFrames;
+	for (let sample = await cursor.next(); sample; sample = await cursor.next()) {
+		frames += sample.numberOfFrames;
+	}
+
+	expect(frames).toBe(1600);
 });
 
 test('hasNext', async () => {
