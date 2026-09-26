@@ -1891,6 +1891,7 @@ const videoCodecToBoxName = (codec: VideoCodec, fullCodecString: string) => {
 		case 'vp8': return 'vp08';
 		case 'vp9': return 'vp09';
 		case 'av1': return 'av01';
+		case 'mjpeg': return 'jpeg';
 		case 'prores': return fullCodecString;
 	}
 };
@@ -1904,6 +1905,7 @@ const VIDEO_CODEC_TO_CONFIGURATION_BOX: Record<
 	vp8: vpcC,
 	vp9: vpcC,
 	av1: av1C,
+	mjpeg: null,
 	prores: null,
 };
 

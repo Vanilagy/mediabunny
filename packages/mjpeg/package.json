@@ -1,0 +1,51 @@
+{
+  "name": "@mediabunny/mjpeg",
+  "author": "Vanilagy",
+  "version": "1.59.1",
+  "description": "Mjpeg decoder & encoder extension for Mediabunny.",
+  "main": "./dist/bundles/mediabunny-mjpeg.mjs",
+  "module": "./dist/bundles/mediabunny-mjpeg.mjs",
+  "types": "./dist/modules/src/index.d.ts",
+  "exports": {
+    "types": "./dist/modules/src/index.d.ts",
+    "import": "./dist/bundles/mediabunny-mjpeg.mjs",
+    "require": "./dist/bundles/mediabunny-mjpeg.mjs"
+  },
+  "files": [
+    "README.md",
+    "package.json",
+    "LICENSE",
+    "dist",
+    "src"
+  ],
+  "sideEffects": false,
+  "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vanilagy/mediabunny.git",
+    "directory": "packages/mjpeg"
+  },
+  "bugs": {
+    "url": "https://github.com/Vanilagy/mediabunny/issues"
+  },
+  "homepage": "https://mediabunny.dev/guide/extensions/mjpeg",
+  "funding": {
+    "type": "individual",
+    "url": "https://github.com/sponsors/Vanilagy"
+  },
+  "dependencies": {
+    "@jsquash/jpeg": "^1.6.0"
+  },
+  "peerDependencies": {
+    "mediabunny": "^1.49.0"
+  },
+  "keywords": [
+    "mjpeg",
+    "decoding",
+    "codec",
+    "mediabunny",
+    "video",
+    "browser",
+    "polyfill"
+  ]
+}
