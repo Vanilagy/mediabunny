@@ -791,6 +791,17 @@ export abstract class SampleCursor<
 				this._setCurrentRaw(satisfyingSample);
 				return res.set(this._transformSample());
 			}
+
+			if (!this._pumpRunning) {
+				if (targetPacket.timestamp > lastTimestamp) {
+					// The pump decoded everything to the end and nothing satisfied the request; nothing ever will
+					this._setCurrentRaw(null);
+					return res.set(null);
+				}
+
+				// The sample at lastTimestamp has already been consumed, so it must be decoded again
+				needsNewPump = true;
+			}
 		} else {
 			// This is the first packet or we went backwards, create a new pump
 			needsNewPump = true;
@@ -1014,6 +1025,10 @@ export abstract class SampleCursor<
 			if (this._debug.enabled) {
 				this._debug.pumpsStarted++;
 			}
+
+			// Yield once so that the caller can register its request before the first packet is decoded (some decoders
+			// are synchronous)
+			await Promise.resolve();
 
 			// Main loop
 			while (this._packetCursor.current) {
