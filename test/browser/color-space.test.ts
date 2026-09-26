@@ -2,7 +2,7 @@ import { expect, test } from 'vitest';
 import { VideoCodec } from '../../src/codec.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { Input } from '../../src/input.js';
-import { EncodedPacketSink } from '../../src/media-sink.js';
+import { PacketCursor } from '../../src/cursors.js';
 import { EncodedVideoPacketSource } from '../../src/media-source.js';
 import { assert, colorSpaceIsComplete } from '../../src/misc.js';
 import { Output } from '../../src/output.js';
@@ -113,10 +113,10 @@ const readPackets = async (path: string) => {
 	const decoderConfig = await track.getDecoderConfig();
 	assert(decoderConfig);
 
-	const sink = new EncodedPacketSink(track);
+	const cursor = new PacketCursor(track);
 	const packets: EncodedPacket[] = [];
 
-	for await (const packet of sink.packets()) {
+	for await (const packet of cursor) {
 		packets.push(packet);
 
 		if (packets.length === 10) {

@@ -2,7 +2,7 @@ import { expect, test } from 'vitest';
 import { Input } from '../../src/input.js';
 import { UrlSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
-import { AudioSampleSink } from '../../src/media-sink.js';
+import { AudioSampleCursor } from '../../src/cursors.js';
 import { assert } from '../../src/misc.js';
 
 test('Encrypted MP4 without senc', async () => {
@@ -20,8 +20,8 @@ test('Encrypted MP4 without senc', async () => {
 	assert(audioTrack);
 
 	// Test that it can decode
-	const sink = new AudioSampleSink(audioTrack);
-	using firstSample = await sink.getSample(0);
+	await using cursor = new AudioSampleCursor(audioTrack);
+	const firstSample = await cursor.seekTo(0);
 	assert(firstSample);
 	expect(firstSample.timestamp).toBe(0);
 });

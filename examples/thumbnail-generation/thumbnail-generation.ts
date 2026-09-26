@@ -1,9 +1,10 @@
-import { Input, ALL_FORMATS, BlobSource, UrlSource, CanvasSink } from 'mediabunny';
+import { Input, ALL_FORMATS, BlobSource, UrlSource, VideoSampleCursor } from 'mediabunny';
 import { registerAc3Decoder } from '@mediabunny/ac3';
 import { registerDtsDecoder } from '@mediabunny/dts';
 import { registerProresDecoder } from '@mediabunny/prores';
 
 import SampleFileUrl from '../../docs/assets/big-buck-bunny-trimmed.mp4';
+import { canvasTransformer } from '../../src/cursors.js';
 
 // Enable codecs that aren't natively supported by WebCodecs.
 registerAc3Decoder();
@@ -80,16 +81,23 @@ const generateThumbnails = async (resource: File | string) => {
 			(_, i) => firstTimestamp + i * (lastTimestamp - firstTimestamp) / THUMBNAIL_COUNT,
 		);
 
-		// Create a CanvasSink for extracting resized frames from the video track
-		const sink = new CanvasSink(videoTrack, {
-			width: Math.floor(width * window.devicePixelRatio),
-			height: Math.floor(height * window.devicePixelRatio),
-			fit: 'fill',
+		// Create a cursor to extract frames from the video
+		const cursor = new VideoSampleCursor(videoTrack, {
+			transform: canvasTransformer({
+				width: Math.floor(width * window.devicePixelRatio),
+				height: Math.floor(height * window.devicePixelRatio),
+				fit: 'fill',
+			}),
 		});
+
+		// Queue all cursor commands at once, including closing the cursor; this allows it to optimize access patterns
+		const promises = timestamps.map(x => cursor.seekTo(x));
+		void cursor.close();
 
 		// Iterate over all thumbnail canvases
 		let i = 0;
-		for await (const wrappedCanvas of sink.canvasesAtTimestamps(timestamps)) {
+		for (const promise of promises) {
+			const wrappedCanvas = await promise;
 			const container = thumbnailElements[i]!;
 
 			if (wrappedCanvas) {

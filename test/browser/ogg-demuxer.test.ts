@@ -2,7 +2,7 @@ import { expect, test } from 'vitest';
 import { Input } from '../../src/input.js';
 import { UrlSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
-import { AudioBufferSink } from '../../src/media-sink.js';
+import { AudioSampleCursor } from '../../src/cursors.js';
 import { assert } from '../../src/misc.js';
 
 // VLC creates OGG files with an empty EOS page, which previously caused decoding errors
@@ -15,11 +15,17 @@ test('can decode OGG Vorbis file with empty EOS page', async () => {
 	const track = await input.getPrimaryAudioTrack();
 	assert(track);
 
-	const sink = new AudioBufferSink(track);
+	await using cursor = new AudioSampleCursor(track);
 	const buffers: AudioBuffer[] = [];
 
-	for await (const { buffer } of sink.buffers(4, 10)) {
-		buffers.push(buffer);
+	await cursor.seekTo(4);
+
+	for await (const sample of cursor) {
+		if (sample.timestamp >= 10) {
+			break;
+		}
+
+		buffers.push(sample.toAudioBuffer());
 	}
 
 	expect(buffers.length).toBeGreaterThan(0);

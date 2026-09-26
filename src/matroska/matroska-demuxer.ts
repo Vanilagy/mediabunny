@@ -37,7 +37,6 @@ import {
 	InputVideoTrackBacking,
 } from '../input-track';
 import { AttachedFile, DEFAULT_TRACK_DISPOSITION, MetadataTags, TrackDisposition } from '../metadata';
-import { PacketRetrievalOptions } from '../media-sink';
 import {
 	assert,
 	binarySearchLessOrEqual,
@@ -49,10 +48,12 @@ import {
 	isThenable,
 	last,
 	MATRIX_COEFFICIENTS_MAP_INVERSE,
+	MaybeRelevantPromise,
 	centeredTransformationMatrix,
 	DEG_TO_RAD,
 	multiplyMatrices,
 	normalizeRotation,
+	ResultValue,
 	Rotation,
 	rotationMatrix,
 	roundIfAlmostInteger,
@@ -62,7 +63,7 @@ import {
 	TRANSFER_CHARACTERISTICS_MAP_INVERSE,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
-import { EncodedPacket, EncodedPacketSideData, PLACEHOLDER_DATA } from '../packet';
+import { EncodedPacket, EncodedPacketSideData, PacketRetrievalOptions, PLACEHOLDER_DATA } from '../packet';
 import {
 	assertDefinedSize,
 	CODEC_STRING_MAP,
@@ -654,9 +655,9 @@ export class MatroskaDemuxer extends Demuxer {
 		this.currentSegment = null;
 	}
 
-	async readCluster(startPos: number, segment: Segment) {
+	async readCluster(res: ResultValue<Cluster>, startPos: number, segment: Segment): MaybeRelevantPromise {
 		if (segment.lastReadCluster?.elementStartPos === startPos) {
-			return segment.lastReadCluster;
+			return res.set(segment.lastReadCluster);
 		}
 
 		let headerSlice = this.reader.requestSliceRange(startPos, MIN_HEADER_SIZE, MAX_HEADER_SIZE);
@@ -786,7 +787,7 @@ export class MatroskaDemuxer extends Demuxer {
 		}
 
 		segment.lastReadCluster = cluster;
-		return cluster;
+		return res.set(cluster);
 	}
 
 	getTrackDataInCluster(cluster: Cluster, trackNumber: number) {
@@ -2031,11 +2032,6 @@ export class MatroskaDemuxer extends Demuxer {
 }
 
 abstract class MatroskaTrackBacking implements InputTrackBacking {
-	packetToClusterLocation = new WeakMap<EncodedPacket, {
-		cluster: Cluster;
-		blockIndex: number;
-	}>();
-
 	constructor(public internalTrack: InternalTrack) {}
 
 	abstract getType(): TrackType;
@@ -2117,8 +2113,12 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		return null;
 	}
 
-	async getFirstPacket(options: PacketRetrievalOptions) {
+	async getFirstPacket(
+		res: ResultValue<EncodedPacket | null>,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise {
 		return this.performClusterLookup(
+			res,
 			null,
 			(cluster) => {
 				const trackData = cluster.trackData.get(this.internalTrack.id);
@@ -2147,10 +2147,15 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		return roundIfAlmostInteger(timestamp * this.internalTrack.segment.timestampFactor);
 	}
 
-	async getPacket(timestamp: number, options: PacketRetrievalOptions) {
+	async getPacket(
+		res: ResultValue<EncodedPacket | null>,
+		timestamp: number,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise {
 		const timestampInTimescale = this.intoTimescale(timestamp);
 
 		return this.performClusterLookup(
+			res,
 			null,
 			(cluster) => {
 				const trackData = cluster.trackData.get(this.internalTrack.id);
@@ -2175,21 +2180,31 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		);
 	}
 
-	async getNextPacket(packet: EncodedPacket, options: PacketRetrievalOptions) {
-		const locationInCluster = this.packetToClusterLocation.get(packet);
-		if (locationInCluster === undefined) {
+	async getNextPacket(
+		res: ResultValue<EncodedPacket | null>,
+		packet: EncodedPacket,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise {
+		const clusterStartPos = packet._internal;
+		if (clusterStartPos === undefined) {
 			throw new Error('Packet was not created from this track.');
 		}
 
+		assert(typeof clusterStartPos === 'number');
+
+		// sequenceNumber = clusterStartPos + blockIndex, so:
+		const blockIndex = packet.sequenceNumber - clusterStartPos;
+
 		return this.performClusterLookup(
-			locationInCluster.cluster,
+			res,
+			clusterStartPos,
 			(cluster) => {
-				if (cluster === locationInCluster.cluster) {
+				if (cluster.elementStartPos === clusterStartPos) {
 					const trackData = cluster.trackData.get(this.internalTrack.id)!;
-					if (locationInCluster.blockIndex + 1 < trackData.blocks.length) {
+					if (blockIndex + 1 < trackData.blocks.length) {
 						// We can simply take the next block in the cluster
 						return {
-							blockIndex: locationInCluster.blockIndex + 1,
+							blockIndex: blockIndex + 1,
 							correctBlockFound: true,
 						};
 					}
@@ -2214,10 +2229,15 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		);
 	}
 
-	async getKeyPacket(timestamp: number, options: PacketRetrievalOptions) {
+	async getKeyPacket(
+		res: ResultValue<EncodedPacket | null>,
+		timestamp: number,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise {
 		const timestampInTimescale = this.intoTimescale(timestamp);
 
 		return this.performClusterLookup(
+			res,
 			null,
 			(cluster) => {
 				const trackData = cluster.trackData.get(this.internalTrack.id);
@@ -2241,19 +2261,29 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		);
 	}
 
-	async getNextKeyPacket(packet: EncodedPacket, options: PacketRetrievalOptions) {
-		const locationInCluster = this.packetToClusterLocation.get(packet);
-		if (locationInCluster === undefined) {
+	async getNextKeyPacket(
+		res: ResultValue<EncodedPacket | null>,
+		packet: EncodedPacket,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise {
+		const clusterStartPos = packet._internal;
+		if (clusterStartPos === undefined) {
 			throw new Error('Packet was not created from this track.');
 		}
 
+		assert(typeof clusterStartPos === 'number');
+
+		// sequenceNumber = clusterStartPos + blockIndex, so:
+		const blockIndex = packet.sequenceNumber - clusterStartPos;
+
 		return this.performClusterLookup(
-			locationInCluster.cluster,
+			res,
+			clusterStartPos,
 			(cluster) => {
-				if (cluster === locationInCluster.cluster) {
+				if (cluster.elementStartPos === clusterStartPos) {
 					const trackData = cluster.trackData.get(this.internalTrack.id)!;
 					const nextKeyFrameIndex = trackData.blocks.findIndex(
-						(x, i) => x.isKeyFrame && i > locationInCluster.blockIndex,
+						(x, i) => x.isKeyFrame && i > blockIndex,
 					);
 
 					if (nextKeyFrameIndex !== -1) {
@@ -2287,7 +2317,11 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		);
 	}
 
-	private async fetchPacketInCluster(cluster: Cluster, blockIndex: number, options: PacketRetrievalOptions) {
+	private fetchPacketInCluster(
+		cluster: Cluster,
+		blockIndex: number,
+		options: PacketRetrievalOptions,
+	) {
 		if (blockIndex === -1) {
 			return null;
 		}
@@ -2346,20 +2380,21 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 			block.isKeyFrame ? 'key' : 'delta',
 			timestamp,
 			duration,
-			cluster.dataStartPos + blockIndex,
+			cluster.elementStartPos + blockIndex,
 			block.data.byteLength,
 			sideData,
 		);
 
-		this.packetToClusterLocation.set(packet, { cluster, blockIndex });
+		packet._internal = cluster.elementStartPos;
 
 		return packet;
 	}
 
 	/** Looks for a packet in the clusters while trying to load as few clusters as possible to retrieve it. */
 	private async performClusterLookup(
-		// The cluster where we start looking
-		startCluster: Cluster | null,
+		res: ResultValue<EncodedPacket | null>,
+		// The position where we'll start the lookup
+		startOffset: number | null,
 		// This function returns the best-matching block in a given cluster
 		getMatchInCluster: (cluster: Cluster) => { blockIndex: number; correctBlockFound: boolean },
 		// The timestamp with which we can search the lookup table
@@ -2367,19 +2402,24 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		// The timestamp for which we know the correct block will not come after it
 		latestTimestamp: number,
 		options: PacketRetrievalOptions,
-	): Promise<EncodedPacket | null> {
+	): MaybeRelevantPromise {
 		const { demuxer, segment } = this.internalTrack;
 
+		let currentPos = startOffset ?? 0;
 		let currentCluster: Cluster | null = null;
 		let bestCluster: Cluster | null = null;
 		let bestBlockIndex = -1;
 
-		if (startCluster) {
+		if (startOffset !== null && segment.lastReadCluster?.elementStartPos === startOffset) {
+			const startCluster = segment.lastReadCluster;
 			const { blockIndex, correctBlockFound } = getMatchInCluster(startCluster);
 
 			if (correctBlockFound) {
-				return this.fetchPacketInCluster(startCluster, blockIndex, options);
+				return res.set(this.fetchPacketInCluster(startCluster, blockIndex, options));
 			}
+
+			currentPos = startCluster.elementEndPos; // Start reading from the next cluster
+			currentCluster = startCluster;
 
 			if (blockIndex !== -1) {
 				bestCluster = startCluster;
@@ -2413,18 +2453,14 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 			positionCacheEntry?.elementStartPos ?? 0,
 		) || null;
 
-		let currentPos: number;
+		if (lookupEntryPosition !== null && lookupEntryPosition > currentPos) {
+			// Use the lookup entry
+			currentPos = lookupEntryPosition;
+			currentCluster = null;
+		}
 
-		if (!startCluster) {
+		if (startOffset === null) {
 			currentPos = lookupEntryPosition ?? segment.clusterSeekStartPos;
-		} else {
-			if (lookupEntryPosition === null || startCluster.elementStartPos >= lookupEntryPosition) {
-				currentPos = startCluster.elementEndPos;
-				currentCluster = startCluster;
-			} else {
-				// Use the lookup entry
-				currentPos = lookupEntryPosition;
-			}
 		}
 
 		while (segment.elementEndPos === null || currentPos <= segment.elementEndPos - MIN_HEADER_SIZE) {
@@ -2470,13 +2506,18 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 			const dataStartPos = slice.filePos;
 
 			if (id === EBMLId.Cluster) {
-				currentCluster = await demuxer.readCluster(elementStartPos, segment);
+				const result = new ResultValue<Cluster>();
+				const promise = demuxer.readCluster(result, elementStartPos, segment);
+				if (result.pending) await promise;
+
+				currentCluster = result.value;
+
 				// readCluster computes the proper size even if it's undefined in the header, so let's use that instead
 				size = currentCluster.elementEndPos - dataStartPos;
 
 				const { blockIndex, correctBlockFound } = getMatchInCluster(currentCluster);
 				if (correctBlockFound) {
-					return this.fetchPacketInCluster(currentCluster, blockIndex, options);
+					return res.set(this.fetchPacketInCluster(currentCluster, blockIndex, options));
 				}
 
 				if (blockIndex !== -1) {
@@ -2530,15 +2571,17 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 			assert(!previousCuePoint || previousCuePoint.time < cuePoint.time);
 
 			const newSearchTimestamp = previousCuePoint?.time ?? -Infinity;
-			return this.performClusterLookup(null, getMatchInCluster, newSearchTimestamp, latestTimestamp, options);
+			return this.performClusterLookup(
+				res, null, getMatchInCluster, newSearchTimestamp, latestTimestamp, options,
+			);
 		}
 
 		if (bestCluster) {
 			// If we finished looping but didn't find a perfect match, still return the best match we found
-			return this.fetchPacketInCluster(bestCluster, bestBlockIndex, options);
+			return res.set(this.fetchPacketInCluster(bestCluster, bestBlockIndex, options));
 		}
 
-		return null;
+		return res.set(null);
 	}
 }
 
@@ -2626,7 +2669,11 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 					|| (this.internalTrack.info.codec === 'hevc' && !this.internalTrack.info.codecDescription);
 
 			if (needsPacketForAdditionalInfo) {
-				firstPacket = await this.getFirstPacket({});
+				const result = new ResultValue<EncodedPacket | null>();
+				const promise = this.getFirstPacket(result, {});
+				if (result.pending) await promise;
+
+				firstPacket = result.value;
 			}
 
 			const codecInfo = {
@@ -2717,7 +2764,11 @@ class MatroskaAudioTrackBacking extends MatroskaTrackBacking implements InputAud
 		return this.decoderConfigPromise ??= (async (): Promise<AudioDecoderConfig> => {
 			if (this.internalTrack.info.codec === 'dts' && !this.internalTrack.info.dtsFormat) {
 				// Gotta check the packet to determine the DTS variant
-				const firstPacket = await this.getFirstPacket({});
+				const result = new ResultValue<EncodedPacket | null>();
+				const promise = this.getFirstPacket(result, {});
+				if (result.pending) await promise;
+
+				const firstPacket = result.value;
 				this.internalTrack.info.dtsFormat = firstPacket && extractDtsFourCcFromPacket(firstPacket.data);
 			}
 

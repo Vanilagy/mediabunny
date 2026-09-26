@@ -6,7 +6,7 @@ import { Output } from '../../src/output.js';
 import { BufferTarget } from '../../src/target.js';
 import { WavOutputFormat } from '../../src/output-format.js';
 import { AudioSampleSource } from '../../src/media-source.js';
-import { AudioSampleSink } from '../../src/media-sink.js';
+import { AudioSampleCursor } from '../../src/cursors.js';
 import { AudioSample } from '../../src/sample.js';
 import { PcmAudioCodec } from '../../src/codec.js';
 import { toUint8Array, uint8ArraysAreEqual } from '../../src/misc.js';
@@ -106,11 +106,11 @@ const testEncodeDecodeRoundtrip = async (codec: PcmAudioCodec, format: SampleFor
 	const track = (await input.getPrimaryAudioTrack())!;
 	expect(await track.getCodec()).toBe(codec);
 
-	const sink = new AudioSampleSink(track);
+	await using cursor = new AudioSampleCursor(track);
 	const decoded = data.slice().fill(0);
 	let frameOffset = 0;
 
-	for await (using sample of sink.samples()) {
+	for await (const sample of cursor) {
 		sample.copyTo(decoded.subarray(frameOffset), {
 			format,
 			planeIndex: 0,
@@ -219,11 +219,11 @@ const expectG711FileRoundtrip = async (codec: 'ulaw' | 'alaw', decodeCodeword: (
 	const track = (await input.getPrimaryAudioTrack())!;
 	expect(await track.getCodec()).toBe(codec);
 
-	const sink = new AudioSampleSink(track);
+	await using cursor = new AudioSampleCursor(track);
 	const decoded = new Int16Array(data.length);
 	let frameOffset = 0;
 
-	for await (using sample of sink.samples()) {
+	for await (const sample of cursor) {
 		sample.copyTo(decoded.subarray(frameOffset), {
 			format: 's16',
 			planeIndex: 0,

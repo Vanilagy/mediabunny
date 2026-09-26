@@ -3,13 +3,12 @@ import { Output } from '../../src/output.js';
 import { OggOutputFormat } from '../../src/output-format.js';
 import { BufferTarget, NullTarget } from '../../src/target.js';
 import { AudioBufferSource, EncodedAudioPacketSource } from '../../src/media-source.js';
-import { EncodedPacket } from '../../src/packet.js';
+import { EncodedPacket, PacketReader } from '../../src/packet.js';
 import { Quality } from '../../src/encode.js';
 import { assert } from '../../src/misc.js';
 import { Input } from '../../src/input.js';
 import { BufferSource } from '../../src/source.js';
 import { ALL_FORMATS, OggInputFormat } from '../../src/input-format.js';
-import { EncodedPacketSink } from '../../src/media-sink.js';
 
 test('maximumPageDuration option', async () => {
 	const sampleRate = 48000;
@@ -136,8 +135,8 @@ test('Multi-frame Opus packets', async () => {
 
 	expect(await input.getFormat()).toBeInstanceOf(OggInputFormat);
 
-	const sink = new EncodedPacketSink((await input.getPrimaryAudioTrack())!);
-	const packet = await sink.getFirstPacket();
+	const packetReader = new PacketReader((await input.getPrimaryAudioTrack())!);
+	const packet = await packetReader.getFirst();
 
 	expect(packet?.duration).toBe(packetDuration);
 });

@@ -26,8 +26,11 @@ import {
 	Rational,
 	simplifyRational,
 	Rectangle,
+	rectangleToDOMRectInit,
 	validateRectangle,
+	normalizeRotation,
 	composeRotationAndFlip,
+	relativeRotationAndFlip,
 	roundToMultiple,
 	arrayArgmin,
 	MaybePromise,
@@ -36,6 +39,24 @@ import {
 import { Logging } from './logging';
 
 polyfillSymbolDispose();
+
+// Patch the type
+declare global {
+	interface VideoFrame {
+		rotation?: number;
+		flip?: boolean;
+	}
+
+	interface VideoFrameInit {
+		rotation?: number;
+		flip?: boolean;
+	}
+
+	interface VideoFrameBufferInit {
+		rotation?: number;
+		flip?: boolean;
+	}
+}
 
 type FinalizationRegistryValue = {
 	type: 'video';
@@ -252,6 +273,9 @@ export type VideoSampleInit = {
  */
 export class VideoSample implements Disposable {
 	/** @internal */
+	static _openSampleCount = 0;
+
+	/** @internal */
 	_data!: VideoFrame | OffscreenCanvas | Uint8Array | VideoSampleResource | null;
 	/**
 	 * Used for the ArrayBuffer-backed case.
@@ -336,6 +360,14 @@ export class VideoSample implements Disposable {
 	 */
 	get hasAlpha() {
 		return this.format && this.format.includes('A');
+	}
+
+	/**
+	 * Whether this sample is closed, meaning its underlying data has been discarded. When a sample is closed, most
+	 * operations will fail.
+	 */
+	get closed() {
+		return this._closed;
 	}
 
 	/**
@@ -513,20 +545,21 @@ export class VideoSample implements Disposable {
 			this._layout = null;
 
 			this.format = data.format;
+
 			this.visibleRect = {
 				left: data.visibleRect?.x ?? 0,
 				top: data.visibleRect?.y ?? 0,
 				width: data.visibleRect?.width ?? data.codedWidth,
 				height: data.visibleRect?.height ?? data.codedHeight,
 			};
-			// The VideoFrame's rotation and flip are ignored here. They're still new fields, and I'm not sure of any
-			// application where the browser makes use of them. If a case gets found, I'll add it.
-			this.rotation = init?.rotation ?? 0;
-			this.flip = init?.flip ?? false;
 
-			// Assuming no innate VideoFrame rotation here
-			this.squarePixelWidth = data.displayWidth;
-			this.squarePixelHeight = data.displayHeight;
+			const frameRotation = normalizeRotation(data.rotation ?? 0);
+			this.rotation = init?.rotation ?? frameRotation;
+			this.flip = init?.flip ?? data.flip ?? false;
+
+			// data.displayWidth/Height are post-rotation, but the square pixel dimensions are pre-rotation
+			this.squarePixelWidth = frameRotation % 180 === 0 ? data.displayWidth : data.displayHeight;
+			this.squarePixelHeight = frameRotation % 180 === 0 ? data.displayHeight : data.displayWidth;
 
 			this.timestamp = init?.timestamp ?? data.timestamp / 1e6;
 			this.duration = init?.duration ?? (data.duration ?? 0) / 1e6;
@@ -694,31 +727,44 @@ export class VideoSample implements Disposable {
 			den: this.squarePixelHeight * this.codedWidth,
 		});
 		finalizationRegistry?.register(this, { type: 'video', data: this._data }, this);
+		VideoSample._openSampleCount++;
 	}
 
 	/** Clones this video sample. */
-	clone() {
+	clone(override?: {
+		timestamp?: number;
+		duration?: number;
+		rotation?: Rotation;
+		flip?: boolean;
+		encodeOptions?: VideoEncoderEncodeOptions;
+	}) {
 		if (this._closed) {
 			throw new Error('VideoSample is closed.');
 		}
 
 		assert(this._data !== null);
 
+		const timestamp = override?.timestamp ?? this.timestamp;
+		const duration = override?.duration ?? this.duration;
+		const rotation = override?.rotation ?? this.rotation;
+		const flip = override?.flip ?? this.flip;
+		const encodeOptions = override?.encodeOptions ?? this.encodeOptions;
+
 		if (this._data instanceof VideoSampleResource) {
 			return new VideoSample(this._data, {
-				timestamp: this.timestamp,
-				duration: this.duration,
-				rotation: this.rotation,
-				flip: this.flip,
-				encodeOptions: this.encodeOptions,
+				timestamp,
+				duration,
+				rotation,
+				flip,
+				encodeOptions,
 			});
 		} else if (isVideoFrame(this._data)) {
 			return new VideoSample(this._data.clone(), {
-				timestamp: this.timestamp,
-				duration: this.duration,
-				rotation: this.rotation,
-				flip: this.flip,
-				encodeOptions: this.encodeOptions,
+				timestamp,
+				duration,
+				rotation,
+				flip,
+				encodeOptions,
 			});
 		} else if (this._data instanceof Uint8Array) {
 			assert(this._layout);
@@ -728,15 +774,16 @@ export class VideoSample implements Disposable {
 				layout: this._layout,
 				codedWidth: this.codedWidth,
 				codedHeight: this.codedHeight,
-				timestamp: this.timestamp,
-				duration: this.duration,
+				timestamp,
+				duration,
 				colorSpace: this.colorSpace,
-				rotation: this.rotation,
-				flip: this.flip,
+				rotation,
+				flip,
 				visibleRect: this.visibleRect,
-				displayWidth: this.displayWidth,
-				displayHeight: this.displayHeight,
-				encodeOptions: this.encodeOptions,
+				// Display dimensions must be given in terms of the clone's rotation, which may differ from ours
+				displayWidth: rotation % 180 === 0 ? this.squarePixelWidth : this.squarePixelHeight,
+				displayHeight: rotation % 180 === 0 ? this.squarePixelHeight : this.squarePixelWidth,
+				encodeOptions,
 
 				// It's already been copied, if we copy it again we make the clone unnecessarily expensive
 				_doNotCopy: true,
@@ -746,15 +793,16 @@ export class VideoSample implements Disposable {
 				format: this.format!,
 				codedWidth: this.codedWidth,
 				codedHeight: this.codedHeight,
-				timestamp: this.timestamp,
-				duration: this.duration,
+				timestamp,
+				duration,
 				colorSpace: this.colorSpace,
-				rotation: this.rotation,
-				flip: this.flip,
+				rotation,
+				flip,
 				visibleRect: this.visibleRect,
-				displayWidth: this.displayWidth,
-				displayHeight: this.displayHeight,
-				encodeOptions: this.encodeOptions,
+				// Display dimensions must be given in terms of the clone's rotation, which may differ from ours
+				displayWidth: rotation % 180 === 0 ? this.squarePixelWidth : this.squarePixelHeight,
+				displayHeight: rotation % 180 === 0 ? this.squarePixelHeight : this.squarePixelWidth,
+				encodeOptions,
 			});
 		}
 	}
@@ -782,6 +830,7 @@ export class VideoSample implements Disposable {
 		}
 
 		this._closed = true;
+		VideoSample._openSampleCount--;
 	}
 
 	/**
@@ -1083,16 +1132,29 @@ export class VideoSample implements Disposable {
 				codedHeight: this.codedHeight,
 				timestamp: this.microsecondTimestamp,
 				duration: this.microsecondDuration,
+				rotation: this.rotation,
+				flip: this.flip,
 				colorSpace: this.colorSpace,
-				visibleRect: this.visibleRect,
-				displayWidth: this.squarePixelWidth, // Not display* since we're not passing rotation
-				displayHeight: this.squarePixelHeight,
+				visibleRect: rectangleToDOMRectInit(this.visibleRect),
+				displayWidth: this.displayWidth,
+				displayHeight: this.displayHeight,
 			});
 		} else if (isVideoFrame(this._data)) {
-			return new VideoFrame(this._data, {
+			// The rotation and flip fields here compose with the frame's existing ones, but we want them to act like an
+			// override instead, so we need to pass the relative orientation
+			const { rotation, flip } = relativeRotationAndFlip(
+				normalizeRotation(this._data.rotation ?? 0),
+				this._data.flip ?? false,
+				this.rotation,
+				this.flip,
+			);
+			const init: VideoFrameInit = {
 				timestamp: this.microsecondTimestamp,
 				duration: this.microsecondDuration || undefined, // Drag 0 duration to undefined, glitches some codecs
-			});
+				rotation,
+				flip,
+			};
+			return new VideoFrame(this._data, init);
 		} else if (this._data instanceof Uint8Array) {
 			assert(this._layout);
 
@@ -1104,15 +1166,20 @@ export class VideoSample implements Disposable {
 				timestamp: this.microsecondTimestamp,
 				duration: this.microsecondDuration || undefined,
 				colorSpace: this.colorSpace,
-				visibleRect: this.visibleRect,
-				displayWidth: this.squarePixelWidth, // Not display* since we're not passing rotation
-				displayHeight: this.squarePixelHeight,
+				rotation: this.rotation,
+				flip: this.flip,
+				visibleRect: rectangleToDOMRectInit(this.visibleRect),
+				displayWidth: this.displayWidth,
+				displayHeight: this.displayHeight,
 			});
 		} else {
-			return new VideoFrame(this._data, {
+			const init: VideoFrameInit = {
 				timestamp: this.microsecondTimestamp,
 				duration: this.microsecondDuration || undefined,
-			});
+				rotation: this.rotation,
+				flip: this.flip,
+			};
+			return new VideoFrame(this._data, init);
 		}
 	}
 
@@ -1239,9 +1306,27 @@ export class VideoSample implements Disposable {
 			throw new Error('VideoSample is closed.');
 		}
 
-		({ sx, sy, sWidth, sHeight } = this._unmapSourceRegion(sx, sy, sWidth, sHeight, this.rotation, this.flip));
-
 		const source = this.toCanvasImageSource();
+
+		// Relative to the innate rotation and flip of the source
+		const { rotation: relativeRotation, flip: relativeFlip }
+			= typeof VideoFrame !== 'undefined' && source instanceof VideoFrame
+				? relativeRotationAndFlip(
+						normalizeRotation(source.rotation ?? 0),
+						source.flip ?? false,
+						this.rotation,
+						this.flip,
+					)
+				: { rotation: this.rotation, flip: this.flip };
+
+		({ sx, sy, sWidth, sHeight } = this._unmapSourceRegion(
+			sx,
+			sy,
+			sWidth,
+			sHeight,
+			relativeRotation,
+			relativeFlip,
+		));
 
 		context.save();
 
@@ -1252,12 +1337,12 @@ export class VideoSample implements Disposable {
 
 		// Canvas transforms apply to the image in reverse call order, so to rotate first and then flip, the flip has
 		// to be set up before the rotation
-		if (this.flip) {
+		if (relativeFlip) {
 			context.scale(-1, 1);
 		}
-		context.rotate(this.rotation * Math.PI / 180);
+		context.rotate(relativeRotation * Math.PI / 180);
 
-		const aspectRatioChange = this.rotation % 180 === 0 ? 1 : dWidth / dHeight;
+		const aspectRatioChange = relativeRotation % 180 === 0 ? 1 : dWidth / dHeight;
 
 		// Scale to compensate for aspect ratio changes when rotated
 		context.scale(1 / aspectRatioChange, aspectRatioChange);
@@ -1334,6 +1419,14 @@ export class VideoSample implements Disposable {
 		const rotation = options.rotation ?? this.rotation;
 		const flip = options.flip ?? this.flip;
 
+		const source = this.toCanvasImageSource();
+
+		// Relative to the innate rotation and flip of the source
+		const { rotation: relativeRotation, flip: relativeFlip }
+			= typeof VideoFrame !== 'undefined' && source instanceof VideoFrame
+				? relativeRotationAndFlip(normalizeRotation(source.rotation ?? 0), source.flip ?? false, rotation, flip)
+				: { rotation, flip };
+
 		const [rotatedWidth, rotatedHeight] = rotation % 180 === 0
 			? [this.squarePixelWidth, this.squarePixelHeight]
 			: [this.squarePixelHeight, this.squarePixelWidth];
@@ -1350,12 +1443,12 @@ export class VideoSample implements Disposable {
 		let newHeight: number;
 
 		const { sx, sy, sWidth, sHeight } = this._unmapSourceRegion(
-			options.crop?.left ?? 0,
-			options.crop?.top ?? 0,
-			options.crop?.width ?? rotatedWidth,
-			options.crop?.height ?? rotatedHeight,
-			rotation,
-			flip,
+			finalCrop?.left ?? 0,
+			finalCrop?.top ?? 0,
+			finalCrop?.width ?? rotatedWidth,
+			finalCrop?.height ?? rotatedHeight,
+			relativeRotation,
+			relativeFlip,
 		);
 
 		if (options.fit === 'fill') {
@@ -1364,8 +1457,8 @@ export class VideoSample implements Disposable {
 			newWidth = canvasWidth;
 			newHeight = canvasHeight;
 		} else {
-			const [sampleWidth, sampleHeight] = options.crop
-				? [options.crop.width, options.crop.height]
+			const [sampleWidth, sampleHeight] = finalCrop
+				? [finalCrop.width, finalCrop.height]
 				: [rotatedWidth, rotatedHeight];
 
 			const scale = options.fit === 'contain'
@@ -1379,14 +1472,14 @@ export class VideoSample implements Disposable {
 
 		context.save();
 
-		const aspectRatioChange = rotation % 180 === 0 ? 1 : newWidth / newHeight;
+		const aspectRatioChange = relativeRotation % 180 === 0 ? 1 : newWidth / newHeight;
 		context.translate(canvasWidth / 2, canvasHeight / 2);
 		// Canvas transforms apply to the image in reverse call order, so to rotate first and then flip, the flip has
 		// to be set up before the rotation
-		if (flip) {
+		if (relativeFlip) {
 			context.scale(-1, 1);
 		}
-		context.rotate(rotation * Math.PI / 180);
+		context.rotate(relativeRotation * Math.PI / 180);
 		// This aspect ratio compensation is done so that we can draw the sample with the intended dimensions and
 		// don't need to think about how those dimensions change after the rotation
 		context.scale(1 / aspectRatioChange, aspectRatioChange);
@@ -1394,36 +1487,54 @@ export class VideoSample implements Disposable {
 
 		// Important that we don't use .draw() here since that would take rotation and flip into account, but we wanna
 		// handle them ourselves here
-		context.drawImage(this.toCanvasImageSource(), sx, sy, sWidth, sHeight, dx, dy, newWidth, newHeight);
+		context.drawImage(source, sx, sy, sWidth, sHeight, dx, dy, newWidth, newHeight);
 
 		context.restore();
 	}
 
 	/** @internal */
-	_unmapSourceRegion(sx: number, sy: number, sWidth: number, sHeight: number, rotation: number, flip: boolean) {
+	_unmapSourceRegion(sx: number, sy: number, sWidth: number, sHeight: number, rotation: Rotation, flip: boolean) {
+		// The formulas below need the intrinsic dimensions of the image source that ends up in drawImage
+		let sourceWidth: number;
+		let sourceHeight: number;
+
+		if (typeof VideoFrame !== 'undefined' && this._data instanceof VideoFrame) {
+			// Kinda dirty but has to be done
+			sourceWidth = this._data.displayWidth;
+			sourceHeight = this._data.displayHeight;
+		} else if (this._data instanceof Uint8Array || this._data instanceof VideoSampleResource) {
+			// toCanvasImageSource() bakes this sample's rotation and flip into the VideoFrame it creates
+			sourceWidth = this.displayWidth;
+			sourceHeight = this.displayHeight;
+		} else {
+			// Canvas-backed; the canvas dimensions equal the square pixel dimensions
+			sourceWidth = this.squarePixelWidth;
+			sourceHeight = this.squarePixelHeight;
+		}
+
 		// The provided sx,sy,sWidth,sHeight refer to the final rotated and flipped image, but that's not actually how
 		// the image is stored. Therefore, we must map these back onto the original image. Since the flip is applied
 		// last, we undo it first, mirroring within the rotated width.
 		if (flip) {
-			const rotatedWidth = rotation % 180 === 0 ? this.squarePixelWidth : this.squarePixelHeight;
+			const rotatedWidth = rotation % 180 === 0 ? sourceWidth : sourceHeight;
 			sx = rotatedWidth - sx - sWidth;
 		}
 
 		if (rotation === 90) {
 			[sx, sy, sWidth, sHeight] = [
 				sy,
-				this.squarePixelHeight - sx - sWidth,
+				sourceHeight - sx - sWidth,
 				sHeight,
 				sWidth,
 			];
 		} else if (rotation === 180) {
 			[sx, sy] = [
-				this.squarePixelWidth - sx - sWidth,
-				this.squarePixelHeight - sy - sHeight,
+				sourceWidth - sx - sWidth,
+				sourceHeight - sy - sHeight,
 			];
 		} else if (rotation === 270) {
 			[sx, sy, sWidth, sHeight] = [
-				this.squarePixelWidth - sy - sHeight,
+				sourceWidth - sy - sHeight,
 				sx,
 				sHeight,
 				sWidth,
@@ -1680,57 +1791,8 @@ export class VideoSample implements Disposable {
 			// Any previous rotation and flip are now baked in
 			rotation: 0,
 			flip: false,
+			encodeOptions: this.encodeOptions,
 		});
-	}
-
-	/** Sets the rotation metadata of this video sample. */
-	setRotation(newRotation: Rotation) {
-		if (![0, 90, 180, 270].includes(newRotation)) {
-			throw new TypeError('newRotation must be 0, 90, 180, or 270.');
-		}
-
-		// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-		(this.rotation as Rotation) = newRotation;
-	}
-
-	/** Sets the flip metadata of this video sample. */
-	setFlip(newFlip: boolean) {
-		if (typeof newFlip !== 'boolean') {
-			throw new TypeError('newFlip must be a boolean.');
-		}
-
-		// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-		(this.flip as boolean) = newFlip;
-	}
-
-	/** Sets the presentation timestamp of this video sample, in seconds. */
-	setTimestamp(newTimestamp: number) {
-		if (!Number.isFinite(newTimestamp)) {
-			throw new TypeError('newTimestamp must be a number.');
-		}
-
-		// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-		(this.timestamp as number) = newTimestamp;
-	}
-
-	/** Sets the duration of this video sample, in seconds. */
-	setDuration(newDuration: number) {
-		if (!Number.isFinite(newDuration) || newDuration < 0) {
-			throw new TypeError('newDuration must be a non-negative number.');
-		}
-
-		// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-		(this.duration as number) = newDuration;
-	}
-
-	/** Sets the encode options used when this sample is passed to an encoder. */
-	setEncodeOptions(newEncodeOptions: VideoEncoderEncodeOptions) {
-		if (!newEncodeOptions || typeof newEncodeOptions !== 'object') {
-			throw new TypeError('newEncodeOptions must be an object.');
-		}
-
-		// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-		(this.encodeOptions as DeepReadonly<VideoEncoderEncodeOptions>) = newEncodeOptions;
 	}
 
 	/** Calls `.close()`. */
@@ -2533,6 +2595,9 @@ export type AudioSampleCopyToOptions = {
  */
 export class AudioSample implements Disposable {
 	/** @internal */
+	static _openSampleCount = 0;
+
+	/** @internal */
 	_data: AudioData | Uint8Array | AudioSampleResource;
 	/** @internal */
 	_closed: boolean = false;
@@ -2566,6 +2631,14 @@ export class AudioSample implements Disposable {
 	/** The duration of the sample in microseconds. */
 	get microsecondDuration() {
 		return Math.trunc(SECOND_TO_MICROSECOND_FACTOR * this.duration);
+	}
+
+	/**
+	 * Whether this sample is closed, meaning its underlying data has been discarded. When a sample is closed, most
+	 * operations will fail.
+	 */
+	get closed() {
+		return this._closed;
 	}
 
 	/**
@@ -2667,6 +2740,7 @@ export class AudioSample implements Disposable {
 			this._data = dataBuffer;
 		}
 
+		AudioSample._openSampleCount++;
 		finalizationRegistry?.register(this, { type: 'audio', data: this._data }, this);
 	}
 
@@ -2928,19 +3002,27 @@ export class AudioSample implements Disposable {
 	}
 
 	/** Clones this audio sample. */
-	clone(): AudioSample {
+	clone(override?: {
+		timestamp?: number;
+	}): AudioSample {
 		if (this._closed) {
 			throw new Error('AudioSample is closed.');
 		}
 
+		const timestamp = override?.timestamp ?? this.timestamp;
+
 		if (this._data instanceof AudioSampleResource) {
 			const sample = new AudioSample(this._data);
-			sample.setTimestamp(this.timestamp); // Make sure the timestamp is correct
+
+			// @ts-expect-error Readonly
+			sample.timestamp = timestamp; // Make sure the timestamp is precise (beyond microsecond accuracy)
 
 			return sample;
 		} else if (isAudioData(this._data)) {
 			const sample = new AudioSample(this._data.clone());
-			sample.setTimestamp(this.timestamp);
+
+			// @ts-expect-error Readonly
+			sample.timestamp = timestamp; // Make sure the timestamp is precise (beyond microsecond accuracy)
 
 			return sample;
 		} else {
@@ -3046,6 +3128,7 @@ export class AudioSample implements Disposable {
 		}
 
 		this._closed = true;
+		AudioSample._openSampleCount--;
 	}
 
 	/**
@@ -3135,16 +3218,6 @@ export class AudioSample implements Disposable {
 		}
 
 		return audioBuffer;
-	}
-
-	/** Sets the presentation timestamp of this audio sample, in seconds. */
-	setTimestamp(newTimestamp: number) {
-		if (!Number.isFinite(newTimestamp)) {
-			throw new TypeError('newTimestamp must be a number.');
-		}
-
-		// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-		(this.timestamp as number) = newTimestamp;
 	}
 
 	/** Calls `.close()`. */

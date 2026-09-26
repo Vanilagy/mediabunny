@@ -25,11 +25,7 @@ import {
 import { Input } from './input';
 import { InputAudioTrack, InputTrack, InputVideoTrack } from './input-track';
 import { Logging } from './logging';
-import {
-	AudioSampleSink,
-	EncodedPacketSink,
-	VideoSampleSink,
-} from './media-sink';
+import { AudioSampleCursor, PacketCursor, VideoSampleCursor } from './cursors';
 import {
 	AudioSource,
 	EncodedVideoPacketSource,
@@ -52,7 +48,7 @@ import {
 } from './misc';
 import { Output, OutputTrackGroup } from './output';
 import { Mp4OutputFormat } from './output-format';
-import { EncodedPacket } from './packet';
+import { EncodedPacket, PacketReader } from './packet';
 import {
 	AudioSample,
 	clampCropRectangle,
@@ -745,6 +741,8 @@ export class Conversion {
 	_computeProgress = false;
 	/** @internal */
 	_lastProgress = 0;
+	/** @internal */
+	_lastProcessedTime = 0;
 
 	/**
 	 * Whether this conversion, as it has been configured, is valid and can be executed. If this field is `false`, check
@@ -1408,8 +1406,9 @@ export class Conversion {
 			}
 
 			if (this._computeProgress) {
-				const minTimestamp = Math.min(...this._maxTimestamps.values());
-				this.onProgress?.(1, minTimestamp);
+				// By this point, all tracks have closed and removed themselves from _maxTimestamps, so we use the last
+				// processed time we saw while they were still open
+				this.onProgress?.(1, this._lastProcessedTime);
 			}
 		}
 	}
@@ -1531,9 +1530,9 @@ export class Conversion {
 
 		if (!needsTranscode) {
 			// Check if we can copy it
-			const sink = new EncodedPacketSink(track);
-			let startPacket = await sink.getKeyPacket(this._startTimestamp, { verifyKeyPackets: true })
-				?? await sink.getFirstKeyPacket({ verifyKeyPackets: true });
+			const reader = new PacketReader(track);
+			let startPacket = await reader.getKeyAt(this._startTimestamp, { verifyKeyPackets: true })
+				?? await reader.getFirstKey({ verifyKeyPackets: true });
 
 			if (
 				startPacket
@@ -1541,7 +1540,7 @@ export class Conversion {
 				&& startPacket.timestamp + startPacket.duration <= this._startTimestamp
 				&& this._copyBoundaryPolicy === 'shrink'
 			) {
-				startPacket = await sink.getNextKeyPacket(startPacket, { verifyKeyPackets: true });
+				startPacket = await reader.getNextKey(startPacket, { verifyKeyPackets: true });
 			}
 
 			copyStartPacket = startPacket;
@@ -1627,17 +1626,18 @@ export class Conversion {
 			videoSource = source;
 
 			this._registerTrackPump(async (pump) => {
-				const sink = new EncodedPacketSink(track);
+				const cursor = new PacketCursor(track, { verifyKeyPackets: true });
+				const reader = new PacketReader(track);
 				const decoderConfig = await track.getDecoderConfig();
 				const meta: EncodedVideoChunkMetadata = { decoderConfig: decoderConfig ?? undefined };
 				let maxTimestamp: number | null = null;
 
+				if (copyStartPacket) {
+					await cursor.seekToKey(copyStartPacket.timestamp);
+				}
+
 				// eslint-disable-next-line curly
-				if (copyStartPacket) for await (const packet of sink.packets(
-					copyStartPacket,
-					undefined,
-					{ verifyKeyPackets: true },
-				)) {
+				if (copyStartPacket) for await (const packet of cursor) {
 					if (this._state === 'canceled') {
 						break;
 					}
@@ -1654,7 +1654,7 @@ export class Conversion {
 							const lookahead = 6; // Heuristic, but should be enough for most streams
 
 							for (let i = 0; i < lookahead; i++) {
-								const next = await sink.getNextPacket(current, { metadataOnly: true });
+								const next = await reader.getNext(current, { metadataOnly: true });
 								if (!next) {
 									break;
 								}
@@ -1703,7 +1703,7 @@ export class Conversion {
 						type: packetType,
 					});
 
-					this._reportProgress(outputTrackId, modifiedPacket.timestamp + modifiedPacket.duration);
+					this._updateProgress(outputTrackId, modifiedPacket.timestamp + modifiedPacket.duration);
 					await source.add(modifiedPacket, meta);
 
 					if (this._synchronizer.shouldWait(outputTrackId, modifiedPacket.timestamp)) {
@@ -1714,7 +1714,7 @@ export class Conversion {
 				}
 
 				source.close();
-				this._synchronizer.closeTrack(outputTrackId);
+				this._closeTrack(outputTrackId);
 			});
 		} else {
 			// We need to decode & reencode the video
@@ -1795,13 +1795,13 @@ export class Conversion {
 				await tempOutput.start();
 
 				// Let's just use the first sample to test
-				const sink = new VideoSampleSink(track);
-				using firstSample = await sink.getSample(await track.getFirstTimestamp());
+				const cursor = new VideoSampleCursor(track, { closeSamples: false });
+				using firstSample = await cursor.seekToFirst();
+				await cursor.close();
 
 				if (firstSample) {
 					try {
 						await tempSource.add(firstSample);
-						firstSample.close();
 						await tempOutput.finalize();
 					} catch (error) {
 						Logging._warn(
@@ -1851,10 +1851,15 @@ export class Conversion {
 			videoSource = source;
 
 			this._registerTrackPump(async (pump) => {
-				const sink = new VideoSampleSink(track);
+				await using cursor = new VideoSampleCursor(track);
+				await cursor.seekTo(this._startTimestamp);
 
-				for await (using sample of sink.samples(this._startTimestamp, this._endTimestamp)) {
+				for await (const sample of cursor) {
 					if (this._state === 'canceled') {
+						break;
+					}
+
+					if (sample.timestamp >= this._endTimestamp) {
 						break;
 					}
 
@@ -1866,12 +1871,14 @@ export class Conversion {
 						continue;
 					}
 
-					sample.setTimestamp(clampedStartTimestamp + this._timestampOffset);
-					sample.setDuration(clampedEndTimestamp - clampedStartTimestamp);
+					using adjustedSample = sample.clone({
+						timestamp: clampedStartTimestamp + this._timestampOffset,
+						duration: clampedEndTimestamp - clampedStartTimestamp,
+					});
 
-					this._reportProgress(outputTrackId, sample.timestamp + sample.duration);
-					await source.add(sample);
-					sample.close();
+					this._updateProgress(outputTrackId, adjustedSample.timestamp + adjustedSample.duration);
+					await source.add(adjustedSample);
+					adjustedSample.close();
 
 					if (lastSampleTimestamp !== null) {
 						if (this._synchronizer.shouldWait(outputTrackId, lastSampleTimestamp)) {
@@ -1883,7 +1890,7 @@ export class Conversion {
 				}
 
 				source.close();
-				this._synchronizer.closeTrack(outputTrackId);
+				this._closeTrack(outputTrackId);
 			});
 		}
 
@@ -1963,9 +1970,9 @@ export class Conversion {
 
 		if (!needsTranscode) {
 			// Check if we can copy it
-			const sink = new EncodedPacketSink(track);
-			let startPacket = await sink.getKeyPacket(this._startTimestamp)
-				?? await sink.getFirstKeyPacket();
+			const reader = new PacketReader(track);
+			let startPacket = await reader.getKeyAt(this._startTimestamp)
+				?? await reader.getFirstKey();
 
 			if (
 				startPacket
@@ -1981,14 +1988,14 @@ export class Conversion {
 					)
 				)
 			) {
-				startPacket = await sink.getNextKeyPacket(startPacket);
+				startPacket = await reader.getNextKey(startPacket);
 			}
 
 			const hasDecoderWarmup = (NON_PCM_AUDIO_CODECS as readonly AudioCodec[]).includes(sourceCodec)
 				&& sourceCodec !== 'flac';
 			if (startPacket && this._copyBoundaryPolicy === 'expand' && hasDecoderWarmup) {
 				// Go one packet back
-				const previousPacket = await sink.getKeyPacket(
+				const previousPacket = await reader.getKeyAt(
 					startPacket.timestamp - 1 / (await track.getTimeResolution()),
 				);
 				if (previousPacket) {
@@ -2072,13 +2079,17 @@ export class Conversion {
 			audioSource = source;
 
 			this._registerTrackPump(async (pump) => {
-				const sink = new EncodedPacketSink(track);
+				const cursor = new PacketCursor(track);
 				const decoderConfig = await track.getDecoderConfig();
 				const meta: EncodedAudioChunkMetadata = { decoderConfig: decoderConfig ?? undefined };
 				let maxTimestamp: number | null = null;
 
+				if (copyStartPacket) {
+					await cursor.seekToKey(copyStartPacket.timestamp);
+				}
+
 				// eslint-disable-next-line curly
-				if (copyStartPacket) for await (const packet of sink.packets(copyStartPacket)) {
+				if (copyStartPacket) for await (const packet of cursor) {
 					if (this._state === 'canceled') {
 						break;
 					}
@@ -2106,7 +2117,7 @@ export class Conversion {
 						duration: packet.duration,
 					});
 
-					this._reportProgress(outputTrackId, modifiedPacket.timestamp + modifiedPacket.duration);
+					this._updateProgress(outputTrackId, modifiedPacket.timestamp + modifiedPacket.duration);
 					await source.add(modifiedPacket, meta);
 
 					if (this._synchronizer.shouldWait(outputTrackId, modifiedPacket.timestamp)) {
@@ -2117,7 +2128,7 @@ export class Conversion {
 				}
 
 				source.close();
-				this._synchronizer.closeTrack(outputTrackId);
+				this._closeTrack(outputTrackId);
 			});
 		} else {
 			// We need to decode & reencode the audio
@@ -2216,9 +2227,15 @@ export class Conversion {
 			this._registerTrackPump(async (pump) => {
 				let needsPadding: boolean | null = null;
 
-				const sink = new AudioSampleSink(track);
-				for await (using sample of sink.samples(this._startTimestamp, this._endTimestamp)) {
+				await using cursor = new AudioSampleCursor(track);
+				await cursor.seekTo(this._startTimestamp);
+
+				for await (const sample of cursor) {
 					if (this._state === 'canceled') {
+						break;
+					}
+
+					if (sample.timestamp >= this._endTimestamp) {
 						break;
 					}
 
@@ -2234,30 +2251,24 @@ export class Conversion {
 
 					if (startFrame >= endFrame) {
 						// Sample lies wholly out of trim region
-						sample.close();
 						continue; // No break since we may be before the start
 					}
 
-					// Can't assign to "using" identifiers so we gotta do this
-					let finalSampleLet: AudioSample;
-					if (startFrame > 0 || endFrame < sample.numberOfFrames) {
-						// Trim the sample if it sticks out of the trim region on either end
-						const trimmedSample = sample.trim(startFrame, endFrame);
-						sample.close();
-						finalSampleLet = trimmedSample;
+					// Trim the sample if it sticks out of the trim region on either end
+					using trimmedSample = startFrame > 0 || endFrame < sample.numberOfFrames
+						? sample.trim(startFrame, endFrame)
+						: null;
 
-						if (trimmedSample.numberOfFrames === 0) {
-							trimmedSample.close();
-							continue;
-						}
-					} else {
-						finalSampleLet = sample;
+					if (trimmedSample?.numberOfFrames === 0) {
+						continue;
 					}
 
-					using finalSample = finalSampleLet;
-
-					// Offset the timestamp as needed
-					finalSample.setTimestamp(finalSample.timestamp + this._timestampOffset);
+					// Offset the timestamp as needed. The clone also gives us a sample that we own (the one yielded
+					// by the cursor belongs to the cursor).
+					const sourceSample = trimmedSample ?? sample;
+					using finalSample = sourceSample.clone({
+						timestamp: sourceSample.timestamp + this._timestampOffset,
+					});
 
 					if (needsPadding === null) {
 						needsPadding = finalSample.timestamp > 0 && !this.output.format.supportsTimestampedMediaData;
@@ -2296,7 +2307,7 @@ export class Conversion {
 				}
 
 				source.close();
-				this._synchronizer.closeTrack(outputTrackId);
+				this._closeTrack(outputTrackId);
 			});
 		}
 
@@ -2340,7 +2351,7 @@ export class Conversion {
 		outputTrackId: number,
 		getLastSampleTimestamp: () => number | null,
 	) {
-		this._reportProgress(outputTrackId, sample.timestamp + sample.duration);
+		this._updateProgress(outputTrackId, sample.timestamp + sample.duration);
 
 		await source.add(sample);
 		sample.close();
@@ -2387,19 +2398,37 @@ export class Conversion {
 	}
 
 	/** @internal */
-	_reportProgress(trackId: number, endTimestamp: number) {
+	_closeTrack(id: number) {
+		this._synchronizer.closeTrack(id);
+
+		this._maxTimestamps.delete(id);
+		this._reportProgress();
+	}
+
+	/** @internal */
+	_updateProgress(trackId: number, endTimestamp: number) {
 		if (!this._computeProgress) {
 			return;
 		}
-		assert(this._totalDuration !== null);
 
 		this._maxTimestamps.set(
 			trackId,
 			Math.max(endTimestamp, this._maxTimestamps.get(trackId)!),
 		);
+		this._reportProgress();
+	}
+
+	/** @internal */
+	_reportProgress() {
+		if (!this._computeProgress || this._maxTimestamps.size === 0) {
+			return;
+		}
+		assert(this._totalDuration !== null);
 
 		const minTimestamp = Math.min(...this._maxTimestamps.values());
 		const newProgress = clamp(minTimestamp / this._totalDuration, 0, 1);
+
+		this._lastProcessedTime = minTimestamp;
 
 		if (newProgress !== this._lastProgress) {
 			this._lastProgress = newProgress;

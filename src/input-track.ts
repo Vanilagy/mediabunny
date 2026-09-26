@@ -11,7 +11,6 @@ import { determineVideoPacketType } from './codec-data';
 import { customAudioDecoders, customVideoDecoders } from './custom-coder';
 import { Input } from './input';
 import { Logging } from './logging';
-import { EncodedPacketSink, PacketRetrievalOptions } from './media-sink';
 import {
 	assert,
 	extractRotationFromMatrix,
@@ -19,14 +18,17 @@ import {
 	isThenable,
 	matrixIsFlipped,
 	MaybePromise,
+	MaybeRelevantPromise,
 	Rational,
+	ResultValue,
 	roundToDivisor,
 	simplifyRational,
 	TransformationMatrix,
 } from './misc';
 import { TrackType } from './output';
-import { EncodedPacket, PacketType } from './packet';
+import { EncodedPacket, PacketRetrievalOptions, PacketType } from './packet';
 import { TrackDisposition } from './metadata';
+import { PacketCursor } from './cursors';
 import { DurationMetadataRequestOptions } from './demuxer';
 
 /**
@@ -134,11 +136,30 @@ export interface InputTrackBacking {
 	getDecoderConfig(): Promise<VideoDecoderConfig | AudioDecoderConfig | null>;
 	getMetadataCodecParameterString?(): MaybePromise<string | null>;
 
-	getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
-	getPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
-	getNextPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
-	getKeyPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
-	getNextKeyPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
+	getFirstPacket(
+		res: ResultValue<EncodedPacket | null>,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise;
+	getNextPacket(
+		res: ResultValue<EncodedPacket | null>,
+		packet: EncodedPacket,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise;
+	getPacket(
+		res: ResultValue<EncodedPacket | null>,
+		timestamp: number,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise;
+	getKeyPacket(
+		res: ResultValue<EncodedPacket | null>,
+		timestamp: number,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise;
+	getNextKeyPacket(
+		res: ResultValue<EncodedPacket | null>,
+		packet: EncodedPacket,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise;
 }
 
 /**
@@ -342,7 +363,9 @@ export abstract class InputTrack {
 	 * with a negative timestamp should not be presented.
 	 */
 	async getFirstTimestamp() {
-		const firstPacket = await this._backing.getFirstPacket({ metadataOnly: true });
+		const resultValue = new ResultValue<EncodedPacket>();
+		await this._backing.getFirstPacket(resultValue, { metadataOnly: true });
+		const firstPacket = resultValue.value;
 		return firstPacket?.timestamp ?? 0;
 	}
 
@@ -354,7 +377,9 @@ export abstract class InputTrack {
 	 * in the options.
 	 */
 	async computeDuration(options?: PacketRetrievalOptions) {
-		const lastPacket = await this._backing.getPacket(Infinity, { metadataOnly: true, ...options });
+		const resultValue = new ResultValue<EncodedPacket>();
+		await this._backing.getPacket(resultValue, Infinity, { metadataOnly: true, ...options });
+		const lastPacket = resultValue.value;
 		const result = (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
 
 		return roundToDivisor(result, await this.getTimeResolution());
@@ -387,20 +412,20 @@ export abstract class InputTrack {
 	 * {@link PacketRetrievalOptions.skipLiveWait} to `true` in the options.
 	 */
 	async computePacketStats(targetPacketCount = Infinity, options?: PacketRetrievalOptions): Promise<PacketStats> {
-		const sink = new EncodedPacketSink(this);
+		const cursor = new PacketCursor(this, { ...options, metadataOnly: true });
 
 		let startTimestamp = Infinity;
 		let endTimestamp = -Infinity;
 		let packetCount = 0;
 		let totalPacketBytes = 0;
 
-		for await (const packet of sink.packets(undefined, undefined, { metadataOnly: true, ...options })) {
+		await cursor.iterate((packet) => {
 			if (
 				packetCount >= targetPacketCount
 				// This additional condition is needed to produce correct results with out-of-presentation-order packets
 				&& packet.timestamp >= endTimestamp
 			) {
-				break;
+				return false;
 			}
 
 			startTimestamp = Math.min(startTimestamp, packet.timestamp);
@@ -408,7 +433,7 @@ export abstract class InputTrack {
 
 			packetCount++;
 			totalPacketBytes += packet.byteLength;
-		}
+		});
 
 		return {
 			packetCount,
@@ -914,25 +939,25 @@ export class InputVideoTrack extends InputTrack {
 		const timeResolution = await this.getTimeResolution();
 		const targetPacketCount = options.targetPacketCount ?? 256;
 
-		const sink = new EncodedPacketSink(this);
+		const cursor = new PacketCursor(this, { metadataOnly: true });
 		const timestamps: number[] = [];
 		let maxTimestamp = -Infinity;
 
 		let probedPacketCount = 0;
 
-		for await (const packet of sink.packets(undefined, undefined, { metadataOnly: true })) {
+		await cursor.iterate((packet) => {
 			if (
 				timestamps.length >= targetPacketCount
 				// Needed for out-of-presentation-order packets.
 				&& packet.timestamp >= maxTimestamp
 			) {
-				break;
+				return false;
 			}
 
 			timestamps.push(packet.timestamp);
 			maxTimestamp = Math.max(maxTimestamp, packet.timestamp);
 			probedPacketCount++;
-		}
+		});
 
 		const ticks = new Float64Array(timestamps.length);
 

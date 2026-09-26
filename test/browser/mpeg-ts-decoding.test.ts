@@ -2,7 +2,7 @@ import { test } from 'vitest';
 import { Input } from '../../src/input.js';
 import { UrlSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
-import { VideoSampleSink, AudioSampleSink } from '../../src/media-sink.js';
+import { VideoSampleCursor, AudioSampleCursor } from '../../src/cursors.js';
 import { assert } from '../../src/misc.js';
 
 test('MPEG-TS video samples are decodable', async () => {
@@ -14,11 +14,11 @@ test('MPEG-TS video samples are decodable', async () => {
 	const videoTrack = await input.getPrimaryVideoTrack();
 	assert(videoTrack);
 
-	const sink = new VideoSampleSink(videoTrack);
+	await using cursor = new VideoSampleCursor(videoTrack);
 
 	let count = 0;
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
-	for await (using sample of sink.samples()) {
+	for await (const sample of cursor) {
 		count++;
 	}
 
@@ -34,11 +34,11 @@ test('MPEG-TS audio samples are decodable', async () => {
 	const audioTrack = await input.getPrimaryAudioTrack();
 	assert(audioTrack);
 
-	const sink = new AudioSampleSink(audioTrack);
+	await using cursor = new AudioSampleCursor(audioTrack);
 
 	let count = 0;
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
-	for await (using sample of sink.samples()) {
+	for await (const sample of cursor) {
 		count++;
 	}
 

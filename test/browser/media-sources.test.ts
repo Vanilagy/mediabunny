@@ -8,7 +8,7 @@ import { Quality } from '../../src/encode.js';
 import { Input } from '../../src/input.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { BufferSource } from '../../src/source.js';
-import { VideoSampleSink } from '../../src/media-sink.js';
+import { VideoSampleCursor } from '../../src/cursors.js';
 import { assert, Rotation } from '../../src/misc.js';
 import { InputAudioTrack, InputVideoTrack } from '../../src/input-track.js';
 
@@ -214,8 +214,8 @@ test('VideoSampleSource, flip is baked in via transform', async () => {
 
 	// After the flip, the blue half is on the right
 	const { input, track } = await readBackTrack(buffer);
-	const sink = new VideoSampleSink(track);
-	using sample = (await sink.getSample(0))!;
+	await using cursor = new VideoSampleCursor(track);
+	const sample = (await cursor.seekTo(0))!;
 	expect(sample.flip).toBe(false);
 
 	const canvas = new OffscreenCanvas(200, 100);
@@ -236,8 +236,8 @@ test('VideoSampleSource, encoding flipped video frames with forced transform', a
 	);
 
 	const { input, track } = await readBackTrack(buffer);
-	const sink = new VideoSampleSink(track);
-	using sample = (await sink.getSample(0))!;
+	await using cursor = new VideoSampleCursor(track);
+	const sample = (await cursor.seekTo(0))!;
 
 	const canvas = new OffscreenCanvas(200, 100);
 	const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
@@ -368,12 +368,8 @@ test('VideoSampleSource, transform.process expands every frame into two', async 
 				process: (sample) => {
 					const t = sample.timestamp;
 					const d = sample.duration;
-					const clone = sample.clone();
-					clone.setTimestamp(2 * t);
-					clone.setDuration(d);
-					const clone2 = sample.clone();
-					clone2.setTimestamp(2 * t + d);
-					clone2.setDuration(d);
+					const clone = sample.clone({ timestamp: 2 * t, duration: d });
+					const clone2 = sample.clone({ timestamp: 2 * t + d, duration: d });
 					return [clone, clone2];
 				},
 			},
@@ -603,10 +599,10 @@ const readBackTrack = async (buffer: ArrayBuffer) => {
 
 const readBackSamples = async (buffer: ArrayBuffer) => {
 	const { input, track } = await readBackTrack(buffer);
-	const sink = new VideoSampleSink(track);
+	await using cursor = new VideoSampleCursor(track);
 	const samples: { codedWidth: number; codedHeight: number; timestamp: number; duration: number }[] = [];
 
-	for await (using sample of sink.samples()) {
+	for await (const sample of cursor) {
 		samples.push({
 			codedWidth: sample.codedWidth,
 			codedHeight: sample.codedHeight,

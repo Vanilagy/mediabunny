@@ -221,7 +221,7 @@ export type BaseTrackMetadata = {
 	/** The track's disposition, i.e. information about its intended usage. */
 	disposition?: Partial<TrackDisposition>;
 	/**
-	 * The maximum amount of encoded packets that will be added to this track. Setting this field provides the muxer
+	 * The maximum number of encoded packets that will be added to this track. Setting this field provides the muxer
 	 * with an additional signal that it can use to preallocate space in the file.
 	 *
 	 * When this field is set, it is an error to provide more packets than whatever this field specifies.
@@ -938,17 +938,13 @@ export class Output<
 		return this._startPromise = (async () => {
 			this.state = 'started';
 
-			// We want to call muxer.start immediately, so we avoid using an await here
-			const releasePromise = this._mutex.acquire();
+			using lock = this._mutex.lock();
+			if (lock.pending) await lock.ready;
 
-			try {
-				await this._muxer.start();
+			await this._muxer.start();
 
-				const promises = this.tracks.map(track => track.source._start());
-				await Promise.all(promises);
-			} finally {
-				(await releasePromise)();
-			}
+			const promises = this.tracks.map(track => track.source._start());
+			await Promise.all(promises);
 		})();
 	}
 
@@ -983,17 +979,14 @@ export class Output<
 		return this._cancelPromise = (async () => {
 			this.state = 'canceled';
 
-			const release = await this._mutex.acquire();
+			using lock = this._mutex.lock();
+			if (lock.pending) await lock.ready;
 
-			try {
-				const promises = this.tracks.map(x => x.source._flushOrWaitForOngoingClose(true)); // Force close
-				await Promise.all(promises);
+			const promises = this.tracks.map(x => x.source._flushOrWaitForOngoingClose(true)); // Force close
+			await Promise.all(promises);
 
-				await Promise.all([...this._unfinalizedTargets].map(target => target._close()));
-				this._unfinalizedTargets.clear();
-			} finally {
-				release();
-			}
+			await Promise.all([...this._unfinalizedTargets].map(target => target._close()));
+			this._unfinalizedTargets.clear();
 		})();
 	}
 
@@ -1016,7 +1009,8 @@ export class Output<
 		return this._finalizePromise = (async () => {
 			this.state = 'finalizing';
 
-			const release = await this._mutex.acquire();
+			using lock = this._mutex.lock();
+			if (lock.pending) await lock.ready;
 
 			try {
 				const promises = this.tracks.map(x => x.source._flushOrWaitForOngoingClose(false));
@@ -1043,8 +1037,6 @@ export class Output<
 			} finally {
 				await Promise.all([...this._unfinalizedTargets].map(target => target._close().catch(() => {})));
 				this._unfinalizedTargets.clear();
-
-				release();
 			}
 		})();
 	}

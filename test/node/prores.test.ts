@@ -7,12 +7,13 @@ import { Output } from '../../src/output.js';
 import { MkvOutputFormat, MovOutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
 import { Conversion } from '../../src/conversion.js';
-import { EncodedPacketSink, VideoSampleSink } from '../../src/media-sink.js';
+import { VideoSampleCursor } from '../../src/cursors.js';
+import { PacketReader } from '../../src/packet.js';
 import { assert } from '../../src/misc.js';
 
 const SAMPLE_URL = 'https://pub-1ee78aacb848486482b20a72b55b3121.r2.dev/turbores-sample.mov';
 
-test.concurrent('ProRes MOV file reading', { timeout: 20_000 }, async () => {
+test('ProRes MOV file reading', { timeout: 20_000 }, async () => {
 	using input = new Input({
 		source: new UrlSource(SAMPLE_URL),
 		formats: ALL_FORMATS,
@@ -28,7 +29,7 @@ test.concurrent('ProRes MOV file reading', { timeout: 20_000 }, async () => {
 	expect(decoderConfig.description).toBeUndefined();
 });
 
-test.concurrent('ProRes transmuxing into MOV', { timeout: 20_000 }, async () => {
+test('ProRes transmuxing into MOV', { timeout: 20_000 }, async () => {
 	using input = new Input({
 		source: new UrlSource(SAMPLE_URL),
 		formats: ALL_FORMATS,
@@ -65,7 +66,7 @@ test.concurrent('ProRes transmuxing into MOV', { timeout: 20_000 }, async () => 
 	expect(decoderConfig.description).toBeUndefined();
 });
 
-test.concurrent('ProRes transmuxing into MKV', { timeout: 20_000 }, async () => {
+test('ProRes transmuxing into MKV', { timeout: 20_000 }, async () => {
 	using input = new Input({
 		source: new UrlSource(SAMPLE_URL),
 		formats: ALL_FORMATS,
@@ -105,8 +106,8 @@ test.concurrent('ProRes transmuxing into MKV', { timeout: 20_000 }, async () => 
 	expect(decoderConfig.codec).toBe('apch');
 	expect(decoderConfig.description).toBeUndefined();
 
-	const sink = new EncodedPacketSink(videoTrack);
-	const firstPacket = await sink.getFirstPacket();
+	const reader = new PacketReader(videoTrack);
+	const firstPacket = await reader.getFirst();
 	assert(firstPacket);
 
 	// The frame container atom headers are added back when reading out the packets
@@ -142,8 +143,8 @@ test('ProRes decoding', { timeout: 20_000 }, async () => {
 	const videoTrack = (await input.getPrimaryVideoTrack())!;
 	const firstTimestamp = await videoTrack.getFirstTimestamp();
 
-	const sink = new VideoSampleSink(videoTrack);
-	using sample = await sink.getSample(firstTimestamp);
+	await using cursor = new VideoSampleCursor(videoTrack);
+	const sample = await cursor.seekToFirst();
 	assert(sample);
 
 	expect(sample.timestamp).toBe(firstTimestamp);

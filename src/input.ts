@@ -8,6 +8,7 @@
 
 import { Demuxer, DurationMetadataRequestOptions } from './demuxer';
 import { InputFormat, InputFormatOptions, validateInputFormatOptions } from './input-format';
+import { SampleCursor } from './cursors';
 import {
 	InputAudioTrack,
 	InputAudioTrackBacking,
@@ -22,7 +23,6 @@ import {
 	prefer,
 	desc,
 } from './input-track';
-import { PacketRetrievalOptions } from './media-sink';
 import {
 	arrayArgmin,
 	arrayCount,
@@ -30,6 +30,7 @@ import {
 	EventEmitter,
 	polyfillSymbolDispose,
 	removeItem,
+	ResultValue,
 } from './misc';
 import { Reader } from './reader';
 import {
@@ -39,6 +40,7 @@ import {
 	SourceRequest,
 	sourceRequestsAreEqual,
 } from './source';
+import { EncodedPacket, PacketRetrievalOptions } from './packet';
 
 polyfillSymbolDispose();
 
@@ -120,7 +122,6 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 	_backingToTrack = new Map<InputTrackBacking, InputTrack>();
 	/** @internal */
 	_disposed = false;
-	/** @internal */
 	_nextSourceCacheAge = 0;
 	/** @internal */
 	_sourceRefs: SourceRef[] = [];
@@ -132,6 +133,10 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 		cacheGroup: number;
 		promise: Promise<SourceCacheEntry>;
 	}[] = [];
+
+	/** @internal */
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	_openSampleCursors = new Set<SampleCursor<any>>();
 
 	/** @internal */
 	_formatOptions: InputFormatOptions;
@@ -337,7 +342,13 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 		}
 
 		// Only count the timestamps of tracks that have at least one packet
-		const firstPackets = await Promise.all(filtered.map(x => x._backing.getFirstPacket({ metadataOnly: true })));
+		const firstPackets = await Promise.all(filtered.map(async (x) => {
+			const result = new ResultValue<EncodedPacket | null>();
+			const promise = x._backing.getFirstPacket(result, { metadataOnly: true });
+			if (result.pending) await promise;
+
+			return result.value;
+		}));
 		const result = Math.min(...firstPackets.map(x => x?.timestamp ?? Infinity));
 
 		return result === Infinity ? 0 : result;
@@ -535,6 +546,10 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 			void this._demuxerPromise
 				.then(demuxer => demuxer.dispose())
 				.catch(() => {});
+		}
+
+		for (const cursor of [...this._openSampleCursors]) {
+			void cursor.close();
 		}
 	}
 

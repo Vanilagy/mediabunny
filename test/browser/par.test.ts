@@ -2,7 +2,7 @@ import { expect, test } from 'vitest';
 import { Conversion } from '../../src/conversion.js';
 import { ALL_FORMATS, MATROSKA, MP4, MPEG_TS } from '../../src/input-format.js';
 import { Input } from '../../src/input.js';
-import { VideoSampleSink } from '../../src/media-sink.js';
+import { VideoSampleCursor } from '../../src/cursors.js';
 import { assert, Rational } from '../../src/misc.js';
 import { Output } from '../../src/output.js';
 import { MkvOutputFormat, Mp4OutputFormat, MpegTsOutputFormat } from '../../src/output-format.js';
@@ -30,8 +30,8 @@ test('Pixel aspect ratio reading', async () => {
 	expect(decoderConfig.displayAspectWidth).toBe(await videoTrack.getSquarePixelWidth());
 	expect(decoderConfig.displayAspectHeight).toBe(await videoTrack.getSquarePixelHeight());
 
-	const sink = new VideoSampleSink(videoTrack);
-	using sample = (await sink.getSample(await videoTrack.getFirstTimestamp()))!;
+	await using cursor = new VideoSampleCursor(videoTrack);
+	const sample = (await cursor.seekToFirst())!;
 
 	expect(sample.rotation).toBe(0);
 	expect(sample.visibleRect.width).toBe(sample.codedWidth);

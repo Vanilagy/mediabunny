@@ -25,7 +25,8 @@ import { Input } from '../../src/input.js';
 import { BufferSource, CustomPathedSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { InputAudioTrack, InputVideoTrack } from '../../src/input-track.js';
-import { EncodedPacketSink } from '../../src/media-sink.js';
+import { PacketCursor } from '../../src/cursors.js';
+
 const videoSource = (codec: VideoCodec = 'avc') => new EncodedVideoPacketSource(codec);
 const audioSource = (codec: AudioCodec = 'aac') => new EncodedAudioPacketSource(codec);
 
@@ -858,9 +859,9 @@ const setUpSegmentationEnvironment = async (options: {
 
 						const videoTrack = await input.getPrimaryVideoTrack() as InputVideoTrack;
 						if (videoTrack) {
-							const sink = new EncodedPacketSink(videoTrack);
+							const cursor = new PacketCursor(videoTrack);
 							const timestamps: number[] = [];
-							for await (const packet of sink.packets()) {
+							for await (const packet of cursor) {
 								timestamps.push(packet.timestamp);
 							}
 							videoBundle.resolve(timestamps);
@@ -870,9 +871,9 @@ const setUpSegmentationEnvironment = async (options: {
 
 						const audioTrack = await input.getPrimaryAudioTrack() as InputAudioTrack;
 						if (audioTrack) {
-							const sink = new EncodedPacketSink(audioTrack);
+							const cursor = new PacketCursor(audioTrack);
 							const timestamps: number[] = [];
-							for await (const packet of sink.packets()) {
+							for await (const packet of cursor) {
 								timestamps.push(packet.timestamp);
 							}
 							audioBundle.resolve(timestamps);
@@ -2152,9 +2153,9 @@ test('Single-file mode with fragmented MP4 produces proper standalone segment fi
 	});
 	const track = (await input.getPrimaryVideoTrack())!;
 	const timestamps: number[] = [];
-	const sink = new EncodedPacketSink(track);
+	const cursor = new PacketCursor(track);
 
-	for await (const packet of sink.packets()) {
+	for await (const packet of cursor) {
 		timestamps.push(packet.timestamp);
 	}
 
@@ -2346,10 +2347,10 @@ segment-1-2.m4s
 		const videoTrack = await segmentInput.getPrimaryVideoTrack() as InputVideoTrack;
 		expect(videoTrack).toBeTruthy();
 
-		const sink = new EncodedPacketSink(videoTrack);
+		const cursor = new PacketCursor(videoTrack);
 		let packetCount = 0;
 		// eslint-disable-next-line @typescript-eslint/no-unused-vars
-		for await (const packet of sink.packets()) {
+		for await (const packet of cursor) {
 			packetCount++;
 		}
 		expect(packetCount).toBe(4);
@@ -2597,16 +2598,16 @@ const runSparseTracksInSegments = async (hlsOptions: HlsOutputFormatOptions) => 
 	const audioTrack = await input.getPrimaryAudioTrack() as InputAudioTrack;
 	expect(audioTrack).toBeTruthy();
 
-	const videoSink = new EncodedPacketSink(videoTrack);
+	const videoCursor = new PacketCursor(videoTrack);
 	const videoTimestamps: number[] = [];
-	for await (const packet of videoSink.packets()) {
+	for await (const packet of videoCursor) {
 		videoTimestamps.push(packet.timestamp);
 	}
 	expect(videoTimestamps).toEqual([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5]);
 
-	const audioSink = new EncodedPacketSink(audioTrack);
+	const audioCursor = new PacketCursor(audioTrack);
 	const audioTimestamps: number[] = [];
-	for await (const packet of audioSink.packets()) {
+	for await (const packet of audioCursor) {
 		audioTimestamps.push(packet.timestamp);
 	}
 	expect(audioTimestamps).toEqual([2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5]);

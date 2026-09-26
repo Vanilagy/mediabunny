@@ -18,8 +18,8 @@ import { assert, uint8ArraysAreEqual } from '../../src/misc.js';
 import { InputVideoTrack } from '../../src/input-track.js';
 import { CanvasSource, EncodedAudioPacketSource } from '../../src/media-source.js';
 import { Quality } from '../../src/encode.js';
-import { EncodedPacket } from '../../src/packet.js';
-import { EncodedPacketSink } from '../../src/media-sink.js';
+import { EncodedPacket, PacketReader } from '../../src/packet.js';
+import { PacketCursor } from '../../src/cursors.js';
 
 test('Rotation is baked in when rerendering', async () => {
 	using input = new Input({
@@ -1131,8 +1131,8 @@ const testCopy = async (options: {
 	const audioTrack = await input.getPrimaryAudioTrack();
 	assert(videoTrack);
 	assert(audioTrack);
-	const videoSink = new EncodedPacketSink(videoTrack);
-	const audioSink = new EncodedPacketSink(audioTrack);
+	const videoPacketReader = new PacketReader(videoTrack);
+	const audioPacketReader = new PacketReader(audioTrack);
 
 	const conversion = await Conversion.init({
 		input,
@@ -1150,14 +1150,14 @@ const testCopy = async (options: {
 	const newAudioTrack = await newInput.getPrimaryAudioTrack();
 
 	if (newVideoTrack) {
-		const newVideoSink = new EncodedPacketSink(newVideoTrack);
+		const newVideoCursor = new PacketCursor(newVideoTrack);
 
 		expect(isCloseTo(await newVideoTrack.getFirstTimestamp(), options.videoStartTimestamp!)).toBe(true);
 		expect(isCloseTo(await newVideoTrack.computeDuration(), options.videoEndTimestamp!)).toBe(true);
 
 		if (options.compareVideoPackets ?? true) {
-			for await (const newPacket of newVideoSink.packets()) {
-				const oldPacket = await videoSink.getPacket(
+			for await (const newPacket of newVideoCursor) {
+				const oldPacket = await videoPacketReader.getAt(
 					newPacket.timestamp + options.expectedTimeOffset + precision,
 				);
 				assert(oldPacket);
@@ -1169,13 +1169,15 @@ const testCopy = async (options: {
 	}
 
 	if (newAudioTrack) {
-		const newAudioSink = new EncodedPacketSink(newAudioTrack);
+		const newAudioCursor = new PacketCursor(newAudioTrack);
 
 		expect(isCloseTo(await newAudioTrack.getFirstTimestamp(), options.audioStartTimestamp)).toBe(true);
 		expect(isCloseTo(await newAudioTrack.computeDuration(), options.audioEndTimestamp)).toBe(true);
 
-		for await (const newPacket of newAudioSink.packets()) {
-			const oldPacket = await audioSink.getPacket(newPacket.timestamp + options.expectedTimeOffset + precision);
+		for await (const newPacket of newAudioCursor) {
+			const oldPacket = await audioPacketReader.getAt(
+				newPacket.timestamp + options.expectedTimeOffset + precision,
+			);
 			assert(oldPacket);
 
 			const process = options.processNewAudioPacketData ?? (x => x);

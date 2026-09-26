@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ALL_FORMATS, Input, FilePathSource, EncodedPacketSink } from '../../src/index.js';
+import { ALL_FORMATS, Input, FilePathSource, PacketCursor } from '../../src/index.js';
 import { findUnderlyingFrameRate } from '../../src/input-track.js';
 import { assert } from '../../src/misc.js';
 
@@ -147,10 +147,10 @@ const getSortedTrackTicks = async (filePath: string) => {
 	assert(videoTrack);
 
 	const timeResolution = await videoTrack.getTimeResolution();
-	const sink = new EncodedPacketSink(videoTrack);
+	const cursor = new PacketCursor(videoTrack, { metadataOnly: true });
 	const ticks: number[] = [];
 
-	for await (const packet of sink.packets(undefined, undefined, { metadataOnly: true })) {
+	for await (const packet of cursor) {
 		ticks.push(Math.round(packet.timestamp * timeResolution));
 	}
 
