@@ -2626,6 +2626,10 @@ export const determineVideoPacketType = (
 			return 'key';
 		};
 
+		case 'mjpeg':{
+			return 'key';
+		}
+
 		default: {
 			assertNever(codec);
 			assert(false);

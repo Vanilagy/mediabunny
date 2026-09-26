@@ -17,6 +17,7 @@ import {
 	extractColorSpace,
 	extractVideoCodecString,
 	MediaCodec,
+	MJPEG_FOURCCS,
 	OPUS_SAMPLE_RATE,
 	parsePcmCodec,
 	PCM_AUDIO_CODECS,
@@ -1123,6 +1124,8 @@ export class IsobmffDemuxer extends Demuxer {
 							track.info.codec = 'vp9';
 						} else if (codecName === 'av01') {
 							track.info.codec = 'av1';
+						} else if ((MJPEG_FOURCCS as readonly string[]).includes(lowercaseBoxName)) {
+							track.info.codec = 'mjpeg';
 						} else if ((PRORES_FOURCCS as readonly string[]).includes(lowercaseBoxName)) {
 							track.info.codec = 'prores';
 							track.info.proresFormat = lowercaseBoxName as ProresFourCc;
