@@ -19,14 +19,17 @@ test('FLAC encoder, 24-bit', async () => {
 	const durationSeconds = 2;
 	const data = createF32SineWave(sampleRate, channels, durationSeconds);
 
-	const packet = await encodeSample(new AudioSample({
+	const result = await encodeSample(new AudioSample({
 		data,
 		format: 'f32',
 		numberOfChannels: channels,
 		sampleRate,
 		timestamp: 0,
 	}));
-	expect(getBitDepthFromFlacPacket(packet!)).toBe(0b110); // 0b110 = 24 bit
+
+	expect(result.size).toBeGreaterThan(90_000);
+
+	expect(getBitDepthFromFlacPacket(result.packet!)).toBe(0b110); // 0b110 = 24 bit
 });
 
 test('FLAC encoder, 16-bit', async () => {
@@ -37,14 +40,17 @@ test('FLAC encoder, 16-bit', async () => {
 	const durationSeconds = 2;
 	const data = createS16SineWave(sampleRate, channels, durationSeconds);
 
-	const packet = await encodeSample(new AudioSample({
+	const result = await encodeSample(new AudioSample({
 		data,
 		format: 's16',
 		numberOfChannels: channels,
 		sampleRate,
 		timestamp: 0,
 	}));
-	expect(getBitDepthFromFlacPacket(packet!)).toBe(0b100); // 0b100 = 16 bit
+
+	expect(result.size).toBeLessThan(50_000); // Shit just uses less data
+
+	expect(getBitDepthFromFlacPacket(result.packet!)).toBe(0b100); // 0b100 = 16 bit
 });
 
 const createF32SineWave = (sampleRate: number, channels: number, durationSeconds: number) => {
@@ -99,7 +105,9 @@ const encodeSample = async (audioSample: AudioSample) => {
 	assert(track);
 
 	const reader = new PacketReader(track);
-	return reader.getFirst();
+	const packet = await reader.getFirst();
+
+	return { packet, size: output.target.buffer!.byteLength };
 };
 
 const getBitDepthFromFlacPacket = (packet: EncodedPacket) => {

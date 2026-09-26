@@ -6,7 +6,17 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { assert, AsyncMutex, EventEmitter, isIso639Dash2LanguageCode, MaybePromise, Rotation, toArray } from './misc';
+import {
+	assert,
+	AsyncMutex,
+	EventEmitter,
+	isIso639Dash2LanguageCode,
+	isThenable,
+	MaybePromise,
+	Rotation,
+	toArray,
+	TransformationMatrix,
+} from './misc';
 import { MetadataTags, TrackDisposition, validateMetadataTags, validateTrackDisposition } from './metadata';
 import { Muxer } from './muxer';
 import { OutputFormat } from './output-format';
@@ -14,6 +24,8 @@ import { AudioSource, MediaSource, SubtitleSource, VideoSource } from './media-s
 import { PathedTarget, Target, TargetRequest } from './target';
 import { Writer } from './writer';
 import { Logging } from './logging';
+import { EncodedPacket } from './packet';
+import { validateAudioChunkMetadata, validateVideoChunkMetadata } from './codec';
 
 /**
  * List of all track types.
@@ -224,6 +236,16 @@ export type BaseTrackMetadata = {
 	 */
 	maximumPacketCount?: number;
 	/**
+	 * The peak bitrate of this track in bits per second. The muxer will use this value as a fallback when no better
+	 * value is available.
+	 */
+	bitrate?: number;
+	/**
+	 * The average bitrate of this track in bits per second. The muxer will use this value as a fallback when no better
+	 * value is available.
+	 */
+	averageBitrate?: number;
+	/**
 	 * Whether the timestamps of this track are relative to the Unix epoch (January 1, 1970, 00:00:00 UTC). When `true`,
 	 * each timestamp maps to a definitive point in time.
 	 */
@@ -233,7 +255,7 @@ export type BaseTrackMetadata = {
 	 * tracks can be presented together with other tracks. This is needed for configuring things like HLS master
 	 * playlists.
 	 *
-	 * Two groups are considered pairable if they are in the same group but are of different {@link TrackType}, or if
+	 * Two tracks are considered pairable if they are in the same group but are of different {@link TrackType}, or if
 	 * they are in two separate groups that have been paired with each other.
 	 *
 	 * If left blank, a track is automatically assigned to {@link Output.defaultTrackGroup}.
@@ -247,8 +269,19 @@ export type BaseTrackMetadata = {
  * @public
  */
 export type VideoTrackMetadata = BaseTrackMetadata & {
-	/** The angle in degrees by which the track's frames should be rotated (clockwise). */
+	/**
+	 * The angle in degrees by which the track's frames should be rotated (clockwise). Rotation is applied before any
+	 * flip.
+	 */
 	rotation?: Rotation;
+	/** Whether the track's frames should be flipped horizontally (about the vertical axis), after rotation. */
+	flip?: boolean;
+	/**
+	 * The full transformation matrix to apply to the track's frames for presentation. When set, this takes precedence
+	 * over `rotation` and `flip`. Formats that can't store an arbitrary matrix extract the closest rotation and
+	 * scale from it.
+	 */
+	transformationMatrix?: TransformationMatrix;
 	/**
 	 * The expected video frame rate in hertz. If set, all timestamps and durations of this track will be snapped to
 	 * this frame rate. You should avoid adding more frames than the rate allows, as this will lead to multiple frames
@@ -260,13 +293,41 @@ export type VideoTrackMetadata = BaseTrackMetadata & {
 	 * frame to this track.
 	 */
 	hasOnlyKeyPackets?: boolean;
+	/**
+	 * When `true`, this is a hint that the track may contain transparent data. Mediabunny can use this to better
+	 * prepare for writing packet alpha side data.
+	 */
+	canBeTransparent?: boolean;
+	/**
+	 * The decoder config for this video track, provided ahead of time. This is provided automatically when media data
+	 * added to the track, but by specifying it here, you give the muxer additional information that it can make use of.
+	 * Zero-packet tracks become possible to write when this field is set.
+	 */
+	decoderConfig?: VideoDecoderConfig;
+	/**
+	 * Can be provided in addition to {@link VideoTrackMetadata.decoderConfig} to provide additional track information
+	 * not included in the decoder config. This packet will not be added to the media data.
+	 */
+	primingPacket?: EncodedPacket;
 };
 /**
  * Additional metadata for audio tracks.
  * @group Output files
  * @public
  */
-export type AudioTrackMetadata = BaseTrackMetadata & {};
+export type AudioTrackMetadata = BaseTrackMetadata & {
+	/**
+	 * The decoder config for this audio track, provided ahead of time. This is provided automatically when media data
+	 * added to the track, but by specifying it here, you give the muxer additional information that it can make use of.
+	 * Zero-packet tracks become possible to write when this field is set.
+	 */
+	decoderConfig?: AudioDecoderConfig;
+	/**
+	 * Can be provided in addition to {@link AudioTrackMetadata.decoderConfig} to provide additional track information
+	 * not included in the decoder config. This packet will not be added to the media data.
+	 */
+	primingPacket?: EncodedPacket;
+};
 /**
  * Additional metadata for subtitle tracks.
  * @group Output files
@@ -292,6 +353,15 @@ const validateBaseTrackMetadata = (metadata: BaseTrackMetadata) => {
 		&& (!Number.isInteger(metadata.maximumPacketCount) || metadata.maximumPacketCount < 0)
 	) {
 		throw new TypeError('metadata.maximumPacketCount, when provided, must be a non-negative integer.');
+	}
+	if (metadata.bitrate !== undefined && (!Number.isFinite(metadata.bitrate) || metadata.bitrate < 0)) {
+		throw new TypeError('metadata.bitrate, when provided, must be a non-negative number.');
+	}
+	if (
+		metadata.averageBitrate !== undefined
+		&& (!Number.isFinite(metadata.averageBitrate) || metadata.averageBitrate < 0)
+	) {
+		throw new TypeError('metadata.averageBitrate, when provided, must be a non-negative number.');
 	}
 	if (
 		metadata.group !== undefined
@@ -372,6 +442,11 @@ export class Output<
 	 */
 	readonly defaultTrackGroup = new OutputTrackGroup();
 
+	/**
+	 * The tracks that have been added to this output. Treat it as a readonly field; to add tracks, use the methods.
+	 */
+	readonly tracks: OutputTrack[] = [];
+
 	/** @internal */
 	private _initTarget: T | (() => MaybePromise<T>) | null;
 	/** @internal */
@@ -382,8 +457,6 @@ export class Output<
 	_unfinalizedTargets = new Set<Target>();
 	/** @internal */
 	_rootWriterPromise: Promise<Writer> | null = null;
-	/** @internal */
-	_tracks: OutputTrack[] = [];
 	/** @internal */
 	_startPromise: Promise<void> | null = null;
 	/** @internal */
@@ -423,7 +496,7 @@ export class Output<
 		}
 
 		const rootTargetResult = this._getRootTarget();
-		if (rootTargetResult instanceof Promise) {
+		if (isThenable(rootTargetResult)) {
 			throw new TypeError(errorMessage);
 		}
 
@@ -488,7 +561,7 @@ export class Output<
 			return result;
 		};
 
-		if (result instanceof Promise) {
+		if (isThenable(result)) {
 			return result.then(handleResult);
 		} else {
 			return handleResult(result);
@@ -576,7 +649,7 @@ export class Output<
 			return target;
 		};
 
-		if (result instanceof Promise) {
+		if (isThenable(result)) {
 			return this._rootTargetPromise = result.then(handleResult);
 		} else {
 			return handleResult(result);
@@ -603,8 +676,18 @@ export class Output<
 		if (metadata.rotation !== undefined && ![0, 90, 180, 270].includes(metadata.rotation)) {
 			throw new TypeError(`Invalid video rotation: ${metadata.rotation}. Has to be 0, 90, 180 or 270.`);
 		}
-		if (!this.format.supportsVideoRotationMetadata && metadata.rotation) {
-			throw new Error(`${this.format._name} does not support video rotation metadata.`);
+		if (metadata.flip !== undefined && typeof metadata.flip !== 'boolean') {
+			throw new TypeError('metadata.flip, when provided, must be a boolean.');
+		}
+		if (
+			metadata.transformationMatrix !== undefined
+			&& (
+				!Array.isArray(metadata.transformationMatrix)
+				|| metadata.transformationMatrix.length !== 9
+				|| !metadata.transformationMatrix.every(x => Number.isFinite(x))
+			)
+		) {
+			throw new TypeError('metadata.transformationMatrix, when provided, must be an array of 9 finite numbers.');
 		}
 		if (
 			metadata.frameRate !== undefined
@@ -614,12 +697,29 @@ export class Output<
 				`Invalid video frame rate: ${metadata.frameRate}. Must be a positive number.`,
 			);
 		}
+		if (metadata.hasOnlyKeyPackets !== undefined && typeof metadata.hasOnlyKeyPackets !== 'boolean') {
+			throw new TypeError('metadata.hasOnlyKeyPackets, when provided, must be a boolean.');
+		}
+		if (metadata.canBeTransparent !== undefined && typeof metadata.canBeTransparent !== 'boolean') {
+			throw new TypeError('metadata.canBeTransparent, when provided, must be a boolean.');
+		}
+		if (metadata.decoderConfig !== undefined) {
+			validateVideoChunkMetadata({ decoderConfig: metadata.decoderConfig }, source._codec);
+		}
+		if (metadata.primingPacket !== undefined) {
+			if (!(metadata.primingPacket instanceof EncodedPacket)) {
+				throw new TypeError('metadata.primingPacket, when provided, must be an EncodedPacket.');
+			}
+			if (metadata.decoderConfig === undefined) {
+				throw new TypeError('metadata.primingPacket can only be provided alongside metadata.decoderConfig.');
+			}
+		}
 
 		const metadataCopy = { ...metadata };
 		metadataCopy.group ??= this.defaultTrackGroup;
 
 		return this._addTrack(new OutputVideoTrack(
-			this._tracks.length + 1, this, source, metadataCopy,
+			this.tracks.length + 1, this, source, metadataCopy,
 		));
 	}
 
@@ -629,12 +729,23 @@ export class Output<
 			throw new TypeError('source must be an AudioSource.');
 		}
 		validateBaseTrackMetadata(metadata);
+		if (metadata.decoderConfig !== undefined) {
+			validateAudioChunkMetadata({ decoderConfig: metadata.decoderConfig }, source._codec);
+		}
+		if (metadata.primingPacket !== undefined) {
+			if (!(metadata.primingPacket instanceof EncodedPacket)) {
+				throw new TypeError('metadata.primingPacket, when provided, must be an EncodedPacket.');
+			}
+			if (metadata.decoderConfig === undefined) {
+				throw new TypeError('metadata.primingPacket can only be provided alongside metadata.decoderConfig.');
+			}
+		}
 
 		const metadataCopy = { ...metadata };
 		metadataCopy.group ??= this.defaultTrackGroup;
 
 		return this._addTrack(new OutputAudioTrack(
-			this._tracks.length + 1, this, source, metadataCopy,
+			this.tracks.length + 1, this, source, metadataCopy,
 		));
 	}
 
@@ -649,7 +760,7 @@ export class Output<
 		metadataCopy.group ??= this.defaultTrackGroup;
 
 		return this._addTrack(new OutputSubtitleTrack(
-			this._tracks.length + 1, this, source, metadataCopy,
+			this.tracks.length + 1, this, source, metadataCopy,
 		));
 	}
 
@@ -680,7 +791,7 @@ export class Output<
 
 		// Verify maximum track count constraints
 		const supportedTrackCounts = this.format.getSupportedTrackCounts();
-		const presentTracksOfThisType = this._tracks.reduce(
+		const presentTracksOfThisType = this.tracks.reduce(
 			(count, t) => count + (t.type === track.type ? 1 : 0),
 			0,
 		);
@@ -694,7 +805,7 @@ export class Output<
 			);
 		}
 		const maxTotalCount = supportedTrackCounts.total.max;
-		if (this._tracks.length === maxTotalCount) {
+		if (this.tracks.length === maxTotalCount) {
 			throw new Error(
 				`${this.format._name} does not support more than ${maxTotalCount} tracks`
 				+ `${maxTotalCount === 1 ? '' : 's'} in total.`,
@@ -748,10 +859,35 @@ export class Output<
 			}
 		}
 
-		this._tracks.push(track);
+		this.tracks.push(track);
 		track.source._connectedTrack = track;
 
 		return track;
+	}
+
+	/**
+	 * Whether the output has enough tracks (of the correct type) to be started, based on the requirements of the output
+	 * format.
+	 */
+	hasEnoughTracks() {
+		const supportedTrackCounts = this.format.getSupportedTrackCounts();
+		for (const trackType of ALL_TRACK_TYPES) {
+			const presentTracksOfThisType = this.tracks.reduce(
+				(count, track) => count + (track.type === trackType ? 1 : 0),
+				0,
+			);
+			const minCount = supportedTrackCounts[trackType].min;
+			if (presentTracksOfThisType < minCount) {
+				return false;
+			}
+		}
+
+		const totalMinCount = supportedTrackCounts.total.min;
+		if (this.tracks.length < totalMinCount) {
+			return false;
+		}
+
+		return true;
 	}
 
 	/**
@@ -764,7 +900,7 @@ export class Output<
 		// Verify minimum track count constraints
 		const supportedTrackCounts = this.format.getSupportedTrackCounts();
 		for (const trackType of ALL_TRACK_TYPES) {
-			const presentTracksOfThisType = this._tracks.reduce(
+			const presentTracksOfThisType = this.tracks.reduce(
 				(count, track) => count + (track.type === trackType ? 1 : 0),
 				0,
 			);
@@ -780,7 +916,7 @@ export class Output<
 			}
 		}
 		const totalMinCount = supportedTrackCounts.total.min;
-		if (this._tracks.length < totalMinCount) {
+		if (this.tracks.length < totalMinCount) {
 			throw new Error(
 				totalMinCount === supportedTrackCounts.total.max
 					? (`${this.format._name} requires exactly ${totalMinCount} track`
@@ -807,7 +943,7 @@ export class Output<
 
 			await this._muxer.start();
 
-			const promises = this._tracks.map(track => track.source._start());
+			const promises = this.tracks.map(track => track.source._start());
 			await Promise.all(promises);
 		})();
 	}
@@ -828,9 +964,8 @@ export class Output<
 	 * @returns A promise that resolves once all internal resources have been released.
 	 */
 	async cancel() {
-		if (this._cancelPromise) {
-			Logging._warn('Output has already been canceled.');
-			return this._cancelPromise;
+		if (this.state === 'canceled') {
+			return this._cancelPromise ?? undefined;
 		} else if (this.state === 'finalizing' || this.state === 'finalized') {
 			// Don't wanna warn when finalizing since that shows a warning when finalization fails and then cancel
 			// is called
@@ -847,7 +982,7 @@ export class Output<
 			using lock = this._mutex.lock();
 			if (lock.pending) await lock.ready;
 
-			const promises = this._tracks.map(x => x.source._flushOrWaitForOngoingClose(true)); // Force close
+			const promises = this.tracks.map(x => x.source._flushOrWaitForOngoingClose(true)); // Force close
 			await Promise.all(promises);
 
 			await Promise.all([...this._unfinalizedTargets].map(target => target._close()));
@@ -877,24 +1012,32 @@ export class Output<
 			using lock = this._mutex.lock();
 			if (lock.pending) await lock.ready;
 
-			const promises = this._tracks.map(x => x.source._flushOrWaitForOngoingClose(false));
-			await Promise.all(promises);
+			try {
+				const promises = this.tracks.map(x => x.source._flushOrWaitForOngoingClose(false));
+				await Promise.all(promises);
 
-			await this._muxer.finalize();
+				await this._muxer.finalize();
 
-			if (this._rootWriterPromise) {
-				const rootWriter = await this._rootWriterPromise;
-				if (!rootWriter.finalized) {
-					await rootWriter.flush();
-					await rootWriter.finalize();
+				if (this._rootWriterPromise) {
+					const rootWriter = await this._rootWriterPromise;
+					if (!rootWriter.finalized) {
+						await rootWriter.flush();
+						await rootWriter.finalize();
+					}
 				}
-			}
 
-			if (this._onFinalize) {
-				await this._onFinalize();
-			}
+				if (this._onFinalize) {
+					await this._onFinalize();
+				}
 
-			this.state = 'finalized';
+				this.state = 'finalized';
+			} catch (error) {
+				this.state = 'canceled';
+				throw error;
+			} finally {
+				await Promise.all([...this._unfinalizedTargets].map(target => target._close().catch(() => {})));
+				this._unfinalizedTargets.clear();
+			}
 		})();
 	}
 }

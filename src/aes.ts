@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { assert, MaybePromise } from './misc';
+import { assert, isThenable, MaybePromise } from './misc';
 import { readBytes, Reader } from './reader';
 
 // Inspired in part by https://github.com/halloweeks/AES-128-CBC/blob/main/AES_128_CBC.h
@@ -258,7 +258,7 @@ export const createAes128CbcDecryptStream = (
 			const requestedLength = CHUNK_SIZE + BLOCK_SIZE;
 
 			let nextSlice = reader.requestSliceRange(pos, 0, requestedLength);
-			if (nextSlice instanceof Promise) nextSlice = await nextSlice;
+			if (isThenable(nextSlice)) nextSlice = await nextSlice;
 			if (!nextSlice || nextSlice.length === 0) {
 				// Due to padding, this should never happen
 				throw new Error('Invalid ciphertext.');

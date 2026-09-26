@@ -32,7 +32,7 @@ import { Mp4OutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
 import { Conversion } from '../../src/conversion.js';
 import { VideoSampleSource } from '../../src/media-source.js';
-import { QUALITY_HIGH } from '../../src/encode.js';
+import { buildQuantizerEncodeOptions, Quality } from '../../src/encode.js';
 import { AvFrameVideoSampleResource } from '../../packages/server/src/video-sample.js';
 import { AvFrameAudioSampleResource } from '../../packages/server/src/audio-sample.js';
 import { toAvFrame } from '../../packages/server/src/index.js';
@@ -475,6 +475,34 @@ describe('Video', async () => {
 		});
 	});
 
+	const QUANTIZER_TEST_CODECS = [
+		{ codec: 'avc', name: 'AVC', low: 10, high: 45 },
+		{ codec: 'hevc', name: 'HEVC', low: 10, high: 45 },
+		{ codec: 'vp9', name: 'VP9', low: 10, high: 55 },
+		{ codec: 'av1', name: 'AV1', low: 40, high: 220 },
+	] as const;
+
+	for (const { codec, name, low, high } of QUANTIZER_TEST_CODECS) {
+		test(`${name} quantizer encode`, { timeout: 20_000 }, async () => {
+			const lowQuantizerPackets = await quantizerEncodeTest(codec, () => low);
+			const highQuantizerPackets = await quantizerEncodeTest(codec, () => high);
+
+			// A lower quantizer means higher quality, which shows in the encoded size
+			expect(lowQuantizerPackets.reduce((sum, packet) => sum + packet.data.byteLength, 0))
+				.toBeGreaterThan(highQuantizerPackets.reduce((sum, packet) => sum + packet.data.byteLength, 0));
+		});
+
+		test(`${name} mid-stream quantizer change`, { timeout: 20_000 }, async () => {
+			const packets = await quantizerEncodeTest(codec, i => i < 5 ? low : high);
+
+			// Changing the quantizer forces a fresh encoder stream, which begins with a new key frame
+			expect(packets[5]!.type).toBe('key');
+
+			expect(packets.slice(0, 5).reduce((sum, packet) => sum + packet.data.byteLength, 0))
+				.toBeGreaterThan(packets.slice(5).reduce((sum, packet) => sum + packet.data.byteLength, 0));
+		});
+	}
+
 	test('ProRes encode', async () => {
 		// ProRes can't be decoded by node-av's wrapper here, so this is encode-only.
 		const encoder = new NodeAvVideoEncoder();
@@ -599,7 +627,7 @@ describe('Video', async () => {
 
 		const source = new VideoSampleSource({
 			codec: 'prores',
-			bitrate: QUALITY_HIGH,
+			quality: new Quality({ quality: 0.75, preferBitrate: true }),
 			alpha: 'keep',
 		});
 		output.addVideoTrack(source);
@@ -780,6 +808,59 @@ describe('Video', async () => {
 		for (using sample of decodedSamples) {
 			await onSample(sample, decodedSamples.indexOf(sample));
 		}
+	};
+
+	const quantizerEncodeTest = async (codec: VideoCodec, getQuantizer: (frameIndex: number) => number) => {
+		const width = 640;
+		const height = 360;
+
+		const encoder = new NodeAvVideoEncoder();
+		// @ts-expect-error Readonly
+		encoder.codec = codec;
+		// @ts-expect-error Readonly
+		encoder.config = {
+			codec: buildVideoCodecString(codec, width, height, 1e6, false),
+			width,
+			height,
+			bitrateMode: 'quantizer',
+		} satisfies VideoEncoderConfig;
+
+		const packets: EncodedPacket[] = [];
+
+		// @ts-expect-error Readonly
+		encoder.onPacket = (packet: EncodedPacket) => {
+			packets.push(packet);
+		};
+
+		await encoder.init();
+
+		// Noise, so that quality differences clearly show in the encoded size
+		const data = new Uint8Array(width * height * 4);
+		let seed = 123456789;
+		for (let i = 0; i < data.length; i++) {
+			seed = (seed * 48271) % 2147483647;
+			data[i] = seed & 0xff;
+		}
+
+		for (let i = 0; i < 10; i++) {
+			using sample = new VideoSample(data, {
+				format: 'RGBX',
+				codedWidth: width,
+				codedHeight: height,
+				timestamp: i / 30,
+				duration: 1 / 30,
+			});
+
+			await encoder.encode(sample, buildQuantizerEncodeOptions(codec, getQuantizer(i)));
+		}
+
+		await encoder.flush();
+		await encoder.close();
+
+		expect(packets).toHaveLength(10);
+		expect(packets[0]!.type).toBe('key');
+
+		return packets;
 	};
 
 	test('AVC conversion roundtrip', { timeout: 20_000 }, async () => {
@@ -1143,6 +1224,28 @@ describe('Video', async () => {
 		await decoder.close();
 	});
 
+	test('No B-frames are skipped when decoding AVC', async () => {
+		using input = new Input({
+			source: new FilePathSource('./test/public/missing-reorder-metadata-v1.mp4'),
+			formats: ALL_FORMATS,
+		});
+
+		const track = await input.getPrimaryVideoTrack();
+		assert(track);
+
+		await using cursor = new VideoSampleCursor(track, {
+			hardwareAcceleration: 'prefer-software',
+		});
+		let count = 0;
+
+		// eslint-disable-next-line @typescript-eslint/no-unused-vars
+		for await (const sample of cursor) {
+			count++;
+		}
+
+		expect(count).toBe(48);
+	});
+
 	describe('VideoSample transformation', () => {
 		// 400x400 image: red everywhere, with a 200x200 blue square filling the bottom-left quadrant.
 		const TEST_IMAGE = (() => {
@@ -1192,7 +1295,7 @@ describe('Video', async () => {
 			}
 		};
 
-		test('resize to 200x200', async () => {
+		test('Resize to 200x200', async () => {
 			using sample = makeSample();
 			using result = await sample.transform({ width: 200, height: 200, fit: 'fill' });
 
@@ -1206,7 +1309,7 @@ describe('Video', async () => {
 			expectColor(getColorAt(rgba, 200, 150, 150), [255, 0, 0]); // bottom-right
 		});
 
-		test('rotate 90 deg clockwise', async () => {
+		test('Rotate 90 deg clockwise', async () => {
 			using sample = makeSample();
 			using result = await sample.transform({ rotate: 90 });
 
@@ -1220,7 +1323,7 @@ describe('Video', async () => {
 			expectColor(getColorAt(rgba, 400, 350, 350), [255, 0, 0]);
 		});
 
-		test('crop top-left, no rotation', async () => {
+		test('Crop top-left, no rotation', async () => {
 			using sample = makeSample();
 			using result = await sample.transform({ crop: { left: 0, top: 0, width: 200, height: 200 } });
 
@@ -1234,7 +1337,7 @@ describe('Video', async () => {
 			expectColor(getColorAt(rgba, 200, 150, 150), [255, 0, 0]);
 		});
 
-		test('rotate 90 deg then crop top-left, crop applies after rotation', async () => {
+		test('Rotate 90 deg then crop top-left, crop applies after rotation', async () => {
 			using sample = makeSample();
 			using result = await sample.transform({
 				rotate: 90,
@@ -1251,7 +1354,67 @@ describe('Video', async () => {
 			expectColor(getColorAt(rgba, 200, 150, 150), [0, 0, 255]);
 		});
 
-		test('resize to 400x200 with fill, vertically squished', async () => {
+		test('Flip horizontally', async () => {
+			using sample = makeSample();
+			using result = await sample.transform({ flip: true });
+
+			expect(result.flip).toBe(false);
+
+			const rgba = await readRgba(result);
+			expectColor(getColorAt(rgba, 400, 50, 50), [255, 0, 0]);
+			expectColor(getColorAt(rgba, 400, 350, 50), [255, 0, 0]);
+			expectColor(getColorAt(rgba, 400, 50, 350), [255, 0, 0]);
+			expectColor(getColorAt(rgba, 400, 350, 350), [0, 0, 255]); // bottom-right (blue)
+		});
+
+		test('Rotate 90 deg and flip', async () => {
+			using sample = makeSample();
+			using result = await sample.transform({ rotate: 90, flip: true });
+
+			const rgba = await readRgba(result);
+			expectColor(getColorAt(rgba, 400, 50, 50), [255, 0, 0]);
+			expectColor(getColorAt(rgba, 400, 350, 50), [0, 0, 255]); // top-right (blue)
+			expectColor(getColorAt(rgba, 400, 50, 350), [255, 0, 0]);
+			expectColor(getColorAt(rgba, 400, 350, 350), [255, 0, 0]);
+		});
+
+		test('Rotate 90 deg and flip and crop top-right', async () => {
+			using sample = makeSample();
+			using result = await sample.transform({
+				rotate: 90,
+				flip: true,
+				crop: { left: 200, top: 0, width: 200, height: 200 },
+			});
+
+			expect(result.codedWidth).toBe(200);
+			expect(result.codedHeight).toBe(200);
+
+			const rgba = await readRgba(result);
+			expectColor(getColorAt(rgba, 200, 50, 50), [0, 0, 255]);
+			expectColor(getColorAt(rgba, 200, 150, 50), [0, 0, 255]);
+			expectColor(getColorAt(rgba, 200, 50, 150), [0, 0, 255]);
+			expectColor(getColorAt(rgba, 200, 150, 150), [0, 0, 255]);
+		});
+
+		test('Sample flip metadata composed with additional rotation', async () => {
+			using unflippedSample = makeSample();
+			using sample = unflippedSample.clone({ flip: true });
+
+			// The sample's own flip comes first, then the additional rotation: blue goes bottom-left -> bottom-right
+			// -> bottom-left
+			using result = await sample.transform({ rotate: 90 });
+
+			expect(result.rotation).toBe(0);
+			expect(result.flip).toBe(false);
+
+			const rgba = await readRgba(result);
+			expectColor(getColorAt(rgba, 400, 50, 50), [255, 0, 0]);
+			expectColor(getColorAt(rgba, 400, 350, 50), [255, 0, 0]);
+			expectColor(getColorAt(rgba, 400, 50, 350), [0, 0, 255]); // bottom-left (blue)
+			expectColor(getColorAt(rgba, 400, 350, 350), [255, 0, 0]);
+		});
+
+		test('Resize to 400x200 with fill, vertically squished', async () => {
 			using sample = makeSample();
 			using result = await sample.transform({ width: 400, height: 200, fit: 'fill' });
 
@@ -1265,7 +1428,7 @@ describe('Video', async () => {
 			expectColor(getColorAt(rgba, 400, 300, 175), [255, 0, 0]); // bottom-right
 		});
 
-		test('resize to 400x200 with contain, letterboxed', async () => {
+		test('Resize to 400x200 with contain, letterboxed', async () => {
 			using sample = makeSample();
 			using result = await sample.transform({ width: 400, height: 200, fit: 'contain' });
 
@@ -1280,7 +1443,7 @@ describe('Video', async () => {
 			expectColor(getColorAt(rgba, 400, 250, 150), [255, 0, 0]); // bottom-right of image (red)
 		});
 
-		test('resize to 400x200 with cover, vertical center crop', async () => {
+		test('Resize to 400x200 with cover, vertical center crop', async () => {
 			using sample = makeSample();
 			using result = await sample.transform({ width: 400, height: 200, fit: 'cover' });
 
@@ -1320,6 +1483,9 @@ describe('Video', async () => {
 });
 
 describe('Audio', async () => {
+	/** A DTS bitrate that clears the encoder's per-frame minimum at the 48 kHz stereo the tests here use. */
+	const DTS_BITRATE = 768000;
+
 	test('Decoder lifecycle', async () => {
 		using input = new Input({
 			source: new FilePathSource('./test/public/trim-buck-bunny-ffmpeg.ts'),
@@ -1647,6 +1813,25 @@ describe('Audio', async () => {
 		});
 	});
 
+	test('DTS encode & decode', async () => {
+		await encodeDecodeTest('dts', { bitrate: DTS_BITRATE }, async (packet, meta, i) => {
+			expect(packet.type).toBe('key');
+			expect(packet.duration).toBeCloseTo(512 / 48000);
+
+			if (i === 0) {
+				expect(meta.decoderConfig).toBeDefined();
+				expect(meta.decoderConfig!.codec).toBe('dtsc');
+				expect(meta.decoderConfig!.numberOfChannels).toBe(2);
+				expect(meta.decoderConfig!.sampleRate).toBe(48000);
+				expect(meta.decoderConfig!.description).toBeUndefined();
+			}
+		}, async (sample) => {
+			expect(sample.numberOfChannels).toBe(2);
+			expect(sample.sampleRate).toBe(48000);
+			expect(sample.duration).toBeCloseTo(512 / 48000);
+		});
+	});
+
 	for (const codec of NON_PCM_AUDIO_CODECS) {
 		test(`${codec} encode & decode, negative timestamps`, async () => {
 			await timestampTest(codec, -1);
@@ -1668,7 +1853,10 @@ describe('Audio', async () => {
 		const testDuration = codec !== 'opus';
 		const testSampleStart = codec !== 'vorbis';
 
-		await encodeDecodeTest(codec, {}, async (packet, _meta, i) => {
+		// The harness' default bitrate is below what DTS needs to fit its per-channel side info into a frame
+		const extraConfig = codec === 'dts' ? { bitrate: DTS_BITRATE } : {};
+
+		await encodeDecodeTest(codec, extraConfig, async (packet, _meta, i) => {
 			if (i === 0) {
 				expect(packet.timestamp).toBe(startTimestamp);
 			} else if (testDuration) {

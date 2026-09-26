@@ -11,6 +11,7 @@ import {
 	clamp,
 	COLOR_PRIMARIES_MAP,
 	isAllowSharedBufferSource,
+	isThenable,
 	MATRIX_COEFFICIENTS_MAP,
 	Rotation,
 	SECOND_TO_MICROSECOND_FACTOR,
@@ -28,6 +29,8 @@ import {
 	rectangleToDOMRectInit,
 	validateRectangle,
 	normalizeRotation,
+	composeRotationAndFlip,
+	relativeRotationAndFlip,
 	roundToMultiple,
 	arrayArgmin,
 	MaybePromise,
@@ -41,14 +44,17 @@ polyfillSymbolDispose();
 declare global {
 	interface VideoFrame {
 		rotation?: number;
+		flip?: boolean;
 	}
 
 	interface VideoFrameInit {
 		rotation?: number;
+		flip?: boolean;
 	}
 
 	interface VideoFrameBufferInit {
 		rotation?: number;
+		flip?: boolean;
 	}
 }
 
@@ -234,8 +240,10 @@ export type VideoSampleInit = {
 	codedWidth?: number;
 	/** The height of the frame in pixels. */
 	codedHeight?: number;
-	/** The rotation of the frame in degrees, clockwise. */
+	/** The rotation of the frame in degrees, clockwise. Rotation is applied before flipping. */
 	rotation?: Rotation;
+	/** Whether the frame is flipped horizontally (about the vertical axis), after rotation. */
+	flip?: boolean;
 	/** The presentation timestamp of the frame in seconds. */
 	timestamp?: number;
 	/** The duration of the frame in seconds. */
@@ -246,9 +254,9 @@ export type VideoSampleInit = {
 	layout?: PlaneLayout[];
 	/** Visible region in the coded frame. When omitted, the rect defaults to `(0, 0, codedWidth, codedHeight)`. */
 	visibleRect?: Rectangle | undefined;
-	/** Width of the frame in pixels after applying aspect ratio adjustments and rotation. */
+	/** Width of the frame in pixels after applying aspect ratio adjustments, rotation and flip. */
 	displayWidth?: number | undefined;
-	/** Height of the frame in pixels after applying aspect ratio adjustments and rotation. */
+	/** Height of the frame in pixels after applying aspect ratio adjustments, rotation and flip. */
 	displayHeight?: number | undefined;
 	/** The encode options to use when this sample is passed to an encoder. */
 	encodeOptions?: DeepReadonly<VideoEncoderEncodeOptions>;
@@ -285,12 +293,18 @@ export class VideoSample implements Disposable {
 	readonly format!: VideoSamplePixelFormat | null;
 	/** The visible region of the frame in the coded pixel grid. */
 	readonly visibleRect!: Rectangle;
-	/** The width of the frame in square pixels (respecting pixel aspect ratio), before rotation is applied. */
+	/**
+	 * The width of the frame in square pixels (respecting pixel aspect ratio), before rotation and flip are applied.
+	 */
 	readonly squarePixelWidth!: number;
-	/** The height of the frame in square pixels (respecting pixel aspect ratio), before rotation is applied. */
+	/**
+	 * The height of the frame in square pixels (respecting pixel aspect ratio), before rotation and flip are applied.
+	 */
 	readonly squarePixelHeight!: number;
-	/** The rotation of the frame in degrees, clockwise. */
+	/** The rotation of the frame in degrees, clockwise. Rotation is applied before flipping. */
 	readonly rotation!: Rotation;
+	/** Whether the frame is flipped horizontally (about the vertical axis), after rotation. */
+	readonly flip!: boolean;
 	/**
 	 * The pixel aspect ratio of the frame, as a rational number in its reduced form. Most videos use
 	 * square pixels (1:1).
@@ -320,12 +334,12 @@ export class VideoSample implements Disposable {
 		return this.visibleRect.height;
 	}
 
-	/** The display width of the frame in pixels, after aspect ratio adjustment and rotation. */
+	/** The display width of the frame in pixels, after aspect ratio adjustment, rotation and flip. */
 	get displayWidth() {
 		return this.rotation % 180 === 0 ? this.squarePixelWidth : this.squarePixelHeight;
 	}
 
-	/** The display height of the frame in pixels, after aspect ratio adjustment and rotation. */
+	/** The display height of the frame in pixels, after aspect ratio adjustment, rotation and flip. */
 	get displayHeight() {
 		return this.rotation % 180 === 0 ? this.squarePixelHeight : this.squarePixelWidth;
 	}
@@ -406,6 +420,9 @@ export class VideoSample implements Disposable {
 			if (init.rotation !== undefined && ![0, 90, 180, 270].includes(init.rotation)) {
 				throw new TypeError('init.rotation, when provided, must be 0, 90, 180, or 270.');
 			}
+			if (init.flip !== undefined && typeof init.flip !== 'boolean') {
+				throw new TypeError('init.flip, when provided, must be a boolean.');
+			}
 			if (!Number.isFinite(init.timestamp)) {
 				throw new TypeError('init.timestamp must be a number.');
 			}
@@ -452,6 +469,7 @@ export class VideoSample implements Disposable {
 
 			this.format = init.format;
 			this.rotation = init.rotation ?? 0;
+			this.flip = init.flip ?? false;
 			this.timestamp = init.timestamp!;
 			this.duration = init.duration ?? 0;
 
@@ -510,6 +528,9 @@ export class VideoSample implements Disposable {
 			if (init?.rotation !== undefined && ![0, 90, 180, 270].includes(init.rotation)) {
 				throw new TypeError('init.rotation, when provided, must be 0, 90, 180, or 270.');
 			}
+			if (init?.flip !== undefined && typeof init.flip !== 'boolean') {
+				throw new TypeError('init.flip, when provided, must be a boolean.');
+			}
 			if (init?.timestamp !== undefined && !Number.isFinite(init?.timestamp)) {
 				throw new TypeError('init.timestamp, when provided, must be a number.');
 			}
@@ -534,6 +555,7 @@ export class VideoSample implements Disposable {
 
 			const frameRotation = normalizeRotation(data.rotation ?? 0);
 			this.rotation = init?.rotation ?? frameRotation;
+			this.flip = init?.flip ?? data.flip ?? false;
 
 			// data.displayWidth/Height are post-rotation, but the square pixel dimensions are pre-rotation
 			this.squarePixelWidth = frameRotation % 180 === 0 ? data.displayWidth : data.displayHeight;
@@ -556,11 +578,17 @@ export class VideoSample implements Disposable {
 			if (init.rotation !== undefined && ![0, 90, 180, 270].includes(init.rotation)) {
 				throw new TypeError('init.rotation, when provided, must be 0, 90, 180, or 270.');
 			}
+			if (init.flip !== undefined && typeof init.flip !== 'boolean') {
+				throw new TypeError('init.flip, when provided, must be a boolean.');
+			}
 			if (!Number.isFinite(init.timestamp)) {
 				throw new TypeError('init.timestamp must be a number.');
 			}
 			if (init.duration !== undefined && (!Number.isFinite(init.duration) || init.duration < 0)) {
 				throw new TypeError('init.duration, when provided, must be a non-negative number.');
+			}
+			if (init.visibleRect !== undefined) {
+				validateRectangle(init.visibleRect, 'init.visibleRect');
 			}
 
 			if (typeof VideoFrame !== 'undefined') {
@@ -569,6 +597,13 @@ export class VideoSample implements Disposable {
 						timestamp: Math.trunc(init.timestamp! * SECOND_TO_MICROSECOND_FACTOR),
 						// Drag 0 to undefined
 						duration: Math.trunc((init.duration ?? 0) * SECOND_TO_MICROSECOND_FACTOR) || undefined,
+						// WebCodecs wants DOMRectInit
+						visibleRect: init.visibleRect && {
+							x: init.visibleRect.left,
+							y: init.visibleRect.top,
+							width: init.visibleRect.width,
+							height: init.visibleRect.height,
+						},
 					}),
 					init,
 				);
@@ -593,7 +628,9 @@ export class VideoSample implements Disposable {
 				throw new TypeError('Could not determine dimensions.');
 			}
 
-			const canvas = new OffscreenCanvas(width, height);
+			const visibleRect = init.visibleRect ?? { left: 0, top: 0, width, height };
+
+			const canvas = new OffscreenCanvas(visibleRect.width, visibleRect.height);
 			const context = canvas.getContext('2d', {
 				alpha: isFirefox(), // Firefox has VideoFrame glitches with opaque canvases
 				willReadFrequently: true,
@@ -605,16 +642,17 @@ export class VideoSample implements Disposable {
 				);
 			}
 
-			// Draw it to a canvas
-			context.drawImage(data, 0, 0);
+			// Draw it to a canvas, cropped to the visible rect
+			context.drawImage(data, -visibleRect.left, -visibleRect.top);
 			this._data = canvas;
 			this._layout = null;
 
 			this.format = 'RGBX';
-			this.visibleRect = { left: 0, top: 0, width, height };
-			this.squarePixelWidth = width;
-			this.squarePixelHeight = height;
+			this.visibleRect = { left: 0, top: 0, width: visibleRect.width, height: visibleRect.height };
+			this.squarePixelWidth = visibleRect.width;
+			this.squarePixelHeight = visibleRect.height;
 			this.rotation = init.rotation ?? 0;
+			this.flip = init.flip ?? false;
 			this.timestamp = init.timestamp!;
 			this.duration = init.duration ?? 0;
 			this.colorSpace = new VideoSampleColorSpace({
@@ -629,6 +667,9 @@ export class VideoSample implements Disposable {
 			}
 			if (init.rotation !== undefined && ![0, 90, 180, 270].includes(init.rotation)) {
 				throw new TypeError('init.rotation, when provided, must be 0, 90, 180, or 270.');
+			}
+			if (init.flip !== undefined && typeof init.flip !== 'boolean') {
+				throw new TypeError('init.flip, when provided, must be a boolean.');
 			}
 			if (!Number.isFinite(init.timestamp)) {
 				throw new TypeError('init.timestamp must be a number.');
@@ -669,6 +710,7 @@ export class VideoSample implements Disposable {
 			}
 
 			this.rotation = init.rotation ?? 0;
+			this.flip = init.flip ?? false;
 			this.timestamp = init.timestamp!;
 			this.duration = init.duration ?? 0;
 			this.colorSpace = data.getColorSpace();
@@ -693,6 +735,7 @@ export class VideoSample implements Disposable {
 		timestamp?: number;
 		duration?: number;
 		rotation?: Rotation;
+		flip?: boolean;
 		encodeOptions?: VideoEncoderEncodeOptions;
 	}) {
 		if (this._closed) {
@@ -704,6 +747,7 @@ export class VideoSample implements Disposable {
 		const timestamp = override?.timestamp ?? this.timestamp;
 		const duration = override?.duration ?? this.duration;
 		const rotation = override?.rotation ?? this.rotation;
+		const flip = override?.flip ?? this.flip;
 		const encodeOptions = override?.encodeOptions ?? this.encodeOptions;
 
 		if (this._data instanceof VideoSampleResource) {
@@ -711,6 +755,7 @@ export class VideoSample implements Disposable {
 				timestamp,
 				duration,
 				rotation,
+				flip,
 				encodeOptions,
 			});
 		} else if (isVideoFrame(this._data)) {
@@ -718,6 +763,7 @@ export class VideoSample implements Disposable {
 				timestamp,
 				duration,
 				rotation,
+				flip,
 				encodeOptions,
 			});
 		} else if (this._data instanceof Uint8Array) {
@@ -732,6 +778,7 @@ export class VideoSample implements Disposable {
 				duration,
 				colorSpace: this.colorSpace,
 				rotation,
+				flip,
 				visibleRect: this.visibleRect,
 				// Display dimensions must be given in terms of the clone's rotation, which may differ from ours
 				displayWidth: rotation % 180 === 0 ? this.squarePixelWidth : this.squarePixelHeight,
@@ -750,6 +797,7 @@ export class VideoSample implements Disposable {
 				duration,
 				colorSpace: this.colorSpace,
 				rotation,
+				flip,
 				visibleRect: this.visibleRect,
 				// Display dimensions must be given in terms of the clone's rotation, which may differ from ours
 				displayWidth: rotation % 180 === 0 ? this.squarePixelWidth : this.squarePixelHeight,
@@ -846,6 +894,7 @@ export class VideoSample implements Disposable {
 						timestamp: this.timestamp,
 						duration: this.duration,
 						rotation: this.rotation,
+						flip: this.flip,
 					},
 					options.colorSpace ?? 'srgb',
 				);
@@ -894,7 +943,7 @@ export class VideoSample implements Disposable {
 
 		if (this._data instanceof VideoSampleResource) {
 			let result = this._data.getDataPlanes();
-			if (result instanceof Promise) result = await result;
+			if (isThenable(result)) result = await result;
 
 			if (
 				!Array.isArray(result)
@@ -1052,7 +1101,7 @@ export class VideoSample implements Disposable {
 			}
 
 			const planes = this._data.getDataPlanes();
-			if (planes instanceof Promise) {
+			if (isThenable(planes)) {
 				throw new Error(
 					'Cannot convert a VideoSampleResource-backed VideoSample to VideoFrame if getDataPlanes() returns'
 					+ ' a promise.',
@@ -1084,18 +1133,26 @@ export class VideoSample implements Disposable {
 				timestamp: this.microsecondTimestamp,
 				duration: this.microsecondDuration,
 				rotation: this.rotation,
+				flip: this.flip,
 				colorSpace: this.colorSpace,
 				visibleRect: rectangleToDOMRectInit(this.visibleRect),
 				displayWidth: this.displayWidth,
 				displayHeight: this.displayHeight,
 			});
 		} else if (isVideoFrame(this._data)) {
+			// The rotation and flip fields here compose with the frame's existing ones, but we want them to act like an
+			// override instead, so we need to pass the relative orientation
+			const { rotation, flip } = relativeRotationAndFlip(
+				normalizeRotation(this._data.rotation ?? 0),
+				this._data.flip ?? false,
+				this.rotation,
+				this.flip,
+			);
 			const init: VideoFrameInit = {
 				timestamp: this.microsecondTimestamp,
 				duration: this.microsecondDuration || undefined, // Drag 0 duration to undefined, glitches some codecs
-				// The rotation field here is additive (adds to the existing rotation), but we want it to act like an
-				// override instead, so we need to do some subtraction
-				rotation: this.rotation - (this._data.rotation ?? 0),
+				rotation,
+				flip,
 			};
 			return new VideoFrame(this._data, init);
 		} else if (this._data instanceof Uint8Array) {
@@ -1110,6 +1167,7 @@ export class VideoSample implements Disposable {
 				duration: this.microsecondDuration || undefined,
 				colorSpace: this.colorSpace,
 				rotation: this.rotation,
+				flip: this.flip,
 				visibleRect: rectangleToDOMRectInit(this.visibleRect),
 				displayWidth: this.displayWidth,
 				displayHeight: this.displayHeight,
@@ -1119,13 +1177,14 @@ export class VideoSample implements Disposable {
 				timestamp: this.microsecondTimestamp,
 				duration: this.microsecondDuration || undefined,
 				rotation: this.rotation,
+				flip: this.flip,
 			};
 			return new VideoFrame(this._data, init);
 		}
 	}
 
 	/**
-	 * Draws the video sample to a 2D canvas context. Rotation metadata will be taken into account.
+	 * Draws the video sample to a 2D canvas context. Rotation and flip metadata will be taken into account.
 	 *
 	 * @param dx - The x-coordinate in the destination canvas at which to place the top-left corner of the source image.
 	 * @param dy - The y-coordinate in the destination canvas at which to place the top-left corner of the source image.
@@ -1140,7 +1199,7 @@ export class VideoSample implements Disposable {
 		dHeight?: number,
 	): void;
 	/**
-	 * Draws the video sample to a 2D canvas context. Rotation metadata will be taken into account.
+	 * Draws the video sample to a 2D canvas context. Rotation and flip metadata will be taken into account.
 	 *
 	 * @param sx - The x-coordinate of the top left corner of the sub-rectangle of the source image to draw into the
 	 * destination context.
@@ -1249,12 +1308,25 @@ export class VideoSample implements Disposable {
 
 		const source = this.toCanvasImageSource();
 
-		// Relative to the innate rotation of the source
-		const relativeRotation = typeof VideoFrame !== 'undefined' && source instanceof VideoFrame
-			? normalizeRotation(this.rotation - (source.rotation ?? 0))
-			: this.rotation;
+		// Relative to the innate rotation and flip of the source
+		const { rotation: relativeRotation, flip: relativeFlip }
+			= typeof VideoFrame !== 'undefined' && source instanceof VideoFrame
+				? relativeRotationAndFlip(
+						normalizeRotation(source.rotation ?? 0),
+						source.flip ?? false,
+						this.rotation,
+						this.flip,
+					)
+				: { rotation: this.rotation, flip: this.flip };
 
-		({ sx, sy, sWidth, sHeight } = this._rotateSourceRegion(sx, sy, sWidth, sHeight, relativeRotation));
+		({ sx, sy, sWidth, sHeight } = this._unmapSourceRegion(
+			sx,
+			sy,
+			sWidth,
+			sHeight,
+			relativeRotation,
+			relativeFlip,
+		));
 
 		context.save();
 
@@ -1262,6 +1334,12 @@ export class VideoSample implements Disposable {
 		const centerY = dy + dHeight / 2;
 
 		context.translate(centerX, centerY);
+
+		// Canvas transforms apply to the image in reverse call order, so to rotate first and then flip, the flip has
+		// to be set up before the rotation
+		if (relativeFlip) {
+			context.scale(-1, 1);
+		}
 		context.rotate(relativeRotation * Math.PI / 180);
 
 		const aspectRatioChange = relativeRotation % 180 === 0 ? 1 : dWidth / dHeight;
@@ -1297,12 +1375,17 @@ export class VideoSample implements Disposable {
 		 * - `'cover'` will scale the image until the entire box is filled, while preserving aspect ratio.
 		 */
 		fit: 'fill' | 'contain' | 'cover';
-		/** A way to override rotation. Defaults to the rotation of the sample. */
+		/** A way to override rotation. Defaults to the rotation of the sample. Rotation is applied before flipping. */
 		rotation?: Rotation;
 		/**
+		 * A way to override the horizontal flip. Defaults to the flip of the sample. The flip is applied
+		 * after rotation.
+		 */
+		flip?: boolean;
+		/**
 		 * Specifies the rectangular region of the video sample to crop to. The crop region will automatically be
-		 * clamped to the dimensions of the video sample. Cropping is performed after rotation but before resizing.
-		 * The crop region is in the _display pixel space_ of the underlying video data.
+		 * clamped to the dimensions of the video sample. Cropping is performed after rotation and flip but before
+		 * resizing. The crop region is in the _display pixel space_ of the underlying video data.
 		 */
 		crop?: CropRectangle;
 	}) {
@@ -1324,6 +1407,9 @@ export class VideoSample implements Disposable {
 		if (options.rotation !== undefined && ![0, 90, 180, 270].includes(options.rotation)) {
 			throw new TypeError('options.rotation, when provided, must be 0, 90, 180, or 270.');
 		}
+		if (options.flip !== undefined && typeof options.flip !== 'boolean') {
+			throw new TypeError('options.flip, when provided, must be a boolean.');
+		}
 		if (options.crop !== undefined) {
 			validateCropRectangle(options.crop, 'options.');
 		}
@@ -1331,13 +1417,15 @@ export class VideoSample implements Disposable {
 		const canvasWidth = context.canvas.width;
 		const canvasHeight = context.canvas.height;
 		const rotation = options.rotation ?? this.rotation;
+		const flip = options.flip ?? this.flip;
 
 		const source = this.toCanvasImageSource();
 
-		// Relative to the innate rotation of the source
-		const relativeRotation = typeof VideoFrame !== 'undefined' && source instanceof VideoFrame
-			? normalizeRotation(rotation - (source.rotation ?? 0))
-			: rotation;
+		// Relative to the innate rotation and flip of the source
+		const { rotation: relativeRotation, flip: relativeFlip }
+			= typeof VideoFrame !== 'undefined' && source instanceof VideoFrame
+				? relativeRotationAndFlip(normalizeRotation(source.rotation ?? 0), source.flip ?? false, rotation, flip)
+				: { rotation, flip };
 
 		const [rotatedWidth, rotatedHeight] = rotation % 180 === 0
 			? [this.squarePixelWidth, this.squarePixelHeight]
@@ -1354,12 +1442,13 @@ export class VideoSample implements Disposable {
 		let newWidth: number;
 		let newHeight: number;
 
-		const { sx, sy, sWidth, sHeight } = this._rotateSourceRegion(
+		const { sx, sy, sWidth, sHeight } = this._unmapSourceRegion(
 			finalCrop?.left ?? 0,
 			finalCrop?.top ?? 0,
 			finalCrop?.width ?? rotatedWidth,
 			finalCrop?.height ?? rotatedHeight,
 			relativeRotation,
+			relativeFlip,
 		);
 
 		if (options.fit === 'fill') {
@@ -1385,21 +1474,26 @@ export class VideoSample implements Disposable {
 
 		const aspectRatioChange = relativeRotation % 180 === 0 ? 1 : newWidth / newHeight;
 		context.translate(canvasWidth / 2, canvasHeight / 2);
+		// Canvas transforms apply to the image in reverse call order, so to rotate first and then flip, the flip has
+		// to be set up before the rotation
+		if (relativeFlip) {
+			context.scale(-1, 1);
+		}
 		context.rotate(relativeRotation * Math.PI / 180);
 		// This aspect ratio compensation is done so that we can draw the sample with the intended dimensions and
 		// don't need to think about how those dimensions change after the rotation
 		context.scale(1 / aspectRatioChange, aspectRatioChange);
 		context.translate(-canvasWidth / 2, -canvasHeight / 2);
 
-		// Important that we don't use .draw() here since that would take rotation into account, but we wanna handle it
-		// ourselves here
+		// Important that we don't use .draw() here since that would take rotation and flip into account, but we wanna
+		// handle them ourselves here
 		context.drawImage(source, sx, sy, sWidth, sHeight, dx, dy, newWidth, newHeight);
 
 		context.restore();
 	}
 
 	/** @internal */
-	_rotateSourceRegion(sx: number, sy: number, sWidth: number, sHeight: number, rotation: Rotation) {
+	_unmapSourceRegion(sx: number, sy: number, sWidth: number, sHeight: number, rotation: Rotation, flip: boolean) {
 		// The formulas below need the intrinsic dimensions of the image source that ends up in drawImage
 		let sourceWidth: number;
 		let sourceHeight: number;
@@ -1409,7 +1503,7 @@ export class VideoSample implements Disposable {
 			sourceWidth = this._data.displayWidth;
 			sourceHeight = this._data.displayHeight;
 		} else if (this._data instanceof Uint8Array || this._data instanceof VideoSampleResource) {
-			// toCanvasImageSource() bakes this sample's rotation into the VideoFrame it creates
+			// toCanvasImageSource() bakes this sample's rotation and flip into the VideoFrame it creates
 			sourceWidth = this.displayWidth;
 			sourceHeight = this.displayHeight;
 		} else {
@@ -1418,8 +1512,14 @@ export class VideoSample implements Disposable {
 			sourceHeight = this.squarePixelHeight;
 		}
 
-		// The provided sx,sy,sWidth,sHeight refer to the final rotated image, but that's not actually how the image is
-		// stored. Therefore, we must map these back onto the original, pre-rotation image.
+		// The provided sx,sy,sWidth,sHeight refer to the final rotated and flipped image, but that's not actually how
+		// the image is stored. Therefore, we must map these back onto the original image. Since the flip is applied
+		// last, we undo it first, mirroring within the rotated width.
+		if (flip) {
+			const rotatedWidth = rotation % 180 === 0 ? sourceWidth : sourceHeight;
+			sx = rotatedWidth - sx - sWidth;
+		}
+
 		if (rotation === 90) {
 			[sx, sy, sWidth, sHeight] = [
 				sy,
@@ -1442,6 +1542,96 @@ export class VideoSample implements Disposable {
 		}
 
 		return { sx, sy, sWidth, sHeight };
+	}
+
+	/**
+	 * Draws the sample onto the target canvas with fit behavior, manually mipmapping on strong downscales for quality.
+	 * @internal
+	 */
+	_drawWithFitAndMipmapping(
+		targetCanvas: HTMLCanvasElement | OffscreenCanvas,
+		targetContext: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+		options: {
+			fit: 'fill' | 'contain' | 'cover';
+			rotation: Rotation;
+			flip: boolean;
+			crop: CropRectangle | undefined;
+			/** Freshly-created target canvases carry no stale pixels and don't need to be cleared. */
+			targetIsFresh: boolean;
+			/** Paints on a black background instead of transparency (for alpha discard or opaque emulation). */
+			fillBlack: boolean;
+		},
+	) {
+		const targetWidth = targetCanvas.width;
+		const targetHeight = targetCanvas.height;
+
+		const [rotatedWidth, rotatedHeight] = options.rotation % 180 === 0
+			? [this.squarePixelWidth, this.squarePixelHeight]
+			: [this.squarePixelHeight, this.squarePixelWidth];
+		const sourceWidth = options.crop ? options.crop.width : rotatedWidth;
+		const sourceHeight = options.crop ? options.crop.height : rotatedHeight;
+
+		// Once we downscale by more than 2x, bilinear filtering starts skipping pixels and the result aliases. So in
+		// that case, we do manual mipmapping: draw at a larger size first, then iteratively halve the image until we
+		// arrive at the target size. Sucks that we have to do this honestly, but imageSmoothingQuality is very flaky -
+		// some resources are just not mipmapped in the browser and thus always fall back to bilinear downsampling.
+		let mipLevels = 0;
+		if (2 * targetWidth < sourceWidth && 2 * targetHeight < sourceHeight) {
+			mipLevels = Math.floor(Math.log2(
+				Math.min(sourceWidth / targetWidth, sourceHeight / targetHeight),
+			));
+		}
+
+		const drawWidth = targetWidth * 2 ** mipLevels;
+		const drawHeight = targetHeight * 2 ** mipLevels;
+
+		const { canvas, context, isNew } = mipLevels > 0
+			? getTransformationCanvas(drawWidth, drawHeight)
+			: { canvas: targetCanvas, context: targetContext, isNew: options.targetIsFresh };
+
+		context.imageSmoothingQuality = 'high';
+
+		if (options.fillBlack) {
+			context.fillStyle = 'black';
+			context.fillRect(0, 0, drawWidth, drawHeight);
+		} else if (!isNew) {
+			// Reused canvases carry stale pixels from a prior draw
+			context.clearRect(0, 0, drawWidth, drawHeight);
+		}
+
+		this.drawWithFit(context, {
+			fit: options.fit,
+			rotation: options.rotation,
+			flip: options.flip,
+			crop: options.crop,
+		});
+
+		// Walk down the mip chain by repeatedly drawing the canvas onto itself at half size. The 'copy' composite
+		// operation makes sure pixels get replaced instead of blended with what's already there.
+		context.globalCompositeOperation = 'copy';
+		for (let i = mipLevels; i > 1; i--) {
+			const levelWidth = targetWidth * 2 ** i;
+			const levelHeight = targetHeight * 2 ** i;
+
+			context.drawImage(canvas, 0, 0, levelWidth, levelHeight, 0, 0, levelWidth / 2, levelHeight / 2);
+		}
+		context.globalCompositeOperation = 'source-over';
+
+		if (mipLevels > 0) {
+			// We'd love to skip this step and hand over the oversized mip canvas cropped with visibleRect, but sadly,
+			// all browsers ignore a frame's visibleRect when encoding it and consume the full coded frame instead
+			// (violating the WebCodecs spec, I think? See https://issues.chromium.org/issues/543284189). So, the result
+			// must live on a canvas of exactly the target size, which is why the last halving step draws onto the
+			// target canvas directly. 'copy' also conveniently disposes of any stale pixels there.
+			targetContext.imageSmoothingQuality = 'high';
+			targetContext.globalCompositeOperation = 'copy';
+			targetContext.drawImage(
+				canvas,
+				0, 0, 2 * targetWidth, 2 * targetHeight,
+				0, 0, targetWidth, targetHeight,
+			);
+			targetContext.globalCompositeOperation = 'source-over';
+		}
 	}
 
 	/**
@@ -1470,8 +1660,8 @@ export class VideoSample implements Disposable {
 	}
 
 	/**
-	 * Transform this video sample to a new video sample given the options. Can be used to resize, rotate, and crop
-	 * the sample.
+	 * Transform this video sample to a new video sample given the options. Can be used to resize, rotate, flip, and
+	 * crop the sample.
 	 *
 	 * In non-browser environments, this method will not work by default. To make it work, register a custom
 	 * transformer function via {@link registerVideoSampleTransformer}.
@@ -1507,6 +1697,9 @@ export class VideoSample implements Disposable {
 		if (options.rotate !== undefined && ![0, 90, 180, 270].includes(options.rotate)) {
 			throw new TypeError('options.rotate, when provided, must be 0, 90, 180 or 270.');
 		}
+		if (options.flip !== undefined && typeof options.flip !== 'boolean') {
+			throw new TypeError('options.flip, when provided, must be a boolean.');
+		}
 		if (options.crop !== undefined) {
 			validateCropRectangle(options.crop, 'options.');
 		}
@@ -1514,7 +1707,12 @@ export class VideoSample implements Disposable {
 			throw new TypeError('options.alpha, when provided, must be \'keep\' or \'discard\'.');
 		}
 
-		const rotation = normalizeRotation(this.rotation + (options.rotate ?? 0));
+		const { rotation, flip } = composeRotationAndFlip(
+			this.rotation,
+			this.flip,
+			options.rotate ?? 0,
+			options.flip ?? false,
+		);
 		const [rotatedWidth, rotatedHeight] = rotation % 180 === 0
 			? [this.squarePixelWidth, this.squarePixelHeight]
 			: [this.squarePixelHeight, this.squarePixelWidth];
@@ -1554,6 +1752,7 @@ export class VideoSample implements Disposable {
 			height: targetHeight,
 			fit: options.fit ?? 'fill',
 			rotation,
+			flip,
 			crop: finalCrop ?? {
 				left: 0,
 				top: 0,
@@ -1566,7 +1765,7 @@ export class VideoSample implements Disposable {
 		// Description's finalized; let's see if a registered transformer wants to handle it
 		for (const transformer of registeredVideoSampleTransformers) {
 			let result = transformer(this, description);
-			if (result instanceof Promise) result = await result;
+			if (isThenable(result)) result = await result;
 
 			if (result !== null) {
 				return result;
@@ -1575,75 +1774,23 @@ export class VideoSample implements Disposable {
 
 		// We need to handle it ourselves, and we use canvases to do it
 
-		let canvas: HTMLCanvasElement | OffscreenCanvas | null = null;
-		let canvasIsNew = false;
+		const { canvas, context, isNew } = getTransformationCanvas(description.width, description.height);
 
-		for (const entry of transformationCanvasCache) {
-			if (entry.canvas.width === description.width && entry.canvas.height === description.height) {
-				canvas = entry.canvas;
-				entry.age = transformationCanvasCacheNextAge++;
-
-				break;
-			}
-		}
-
-		if (canvas === null) {
-			if (typeof OffscreenCanvas !== 'undefined') {
-				canvas = new OffscreenCanvas(description.width, description.height);
-			} else {
-				if (typeof window === 'undefined' || typeof document === 'undefined') {
-					throw new Error(
-						'Cannot transform VideoSamples in this environment. Either run in an environment with'
-						+ ' OffscreenCanvas or HTMLCanvasElement, or supply a custom VideoSample transformer using'
-						+ ' registerVideoSampleTransformer().',
-					);
-				}
-
-				canvas = document.createElement('canvas');
-				canvas.width = description.width;
-				canvas.height = description.height;
-			}
-
-			canvasIsNew = true;
-
-			if (transformationCanvasCache.length >= TRANSFORMATION_CANVAS_CACHE_MAX_SIZE) {
-				transformationCanvasCache.splice(arrayArgmin(transformationCanvasCache, x => x.age), 1);
-			}
-
-			transformationCanvasCache.push({
-				canvas,
-				age: transformationCanvasCacheNextAge++,
-			});
-		}
-
-		const context = canvas.getContext('2d', {
-			alpha: true,
-		}) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
-		if (!context) {
-			throw new Error(
-				'The \'2d\' canvas context is required to transform VideoSamples. Register a custom transformer using'
-				+ ' registerVideoSampleTransformer to work around this limitation.',
-			);
-		}
-
-		if (description.alpha === 'discard') {
-			context.fillStyle = 'black';
-			context.fillRect(0, 0, description.width, description.height);
-		} else if (!canvasIsNew) {
-			// Cached canvases carry stale pixels from a prior draw
-			context.clearRect(0, 0, description.width, description.height);
-		}
-
-		this.drawWithFit(context, {
+		this._drawWithFitAndMipmapping(canvas, context, {
 			fit: description.fit,
 			rotation: description.rotation,
+			flip: description.flip,
 			crop: description.crop,
+			targetIsFresh: isNew,
+			fillBlack: description.alpha === 'discard',
 		});
 
 		return new VideoSample(canvas, {
 			timestamp: this.timestamp,
 			duration: this.duration,
-			rotation: 0, // Any previous rotation is now baked in
+			// Any previous rotation and flip are now baked in
+			rotation: 0,
+			flip: false,
 			encodeOptions: this.encodeOptions,
 		});
 	}
@@ -1659,8 +1806,9 @@ export class VideoSample implements Disposable {
  *
  * 1. Pixel aspect ratio normalization (always applied)
  * 2. Rotation
- * 3. Crop
- * 4. Resize using fit
+ * 3. Flip
+ * 4. Crop
+ * 5. Resize using fit
  * @group Samples
  * @public
  */
@@ -1690,12 +1838,18 @@ export type VideoSampleTransformOptions = {
 	 */
 	fit?: 'fill' | 'contain' | 'cover';
 	/**
-	 * The clockwise rotation by which to rotate the frames. Rotation is applied before resizing.
+	 * The clockwise rotation by which to rotate the frames, in addition to the sample's own rotation. Rotation is
+	 * applied before flipping.
 	 */
 	rotate?: Rotation;
 	/**
+	 * Whether to flip the frames horizontally (about the vertical axis), in addition to the sample's own flip. The
+	 * flip is applied after rotation but before cropping and resizing.
+	 */
+	flip?: boolean;
+	/**
 	 * Specifies the rectangular region of the frames to crop to. The crop region will automatically be
-	 * clamped to the dimensions of the frame. Cropping is performed after rotation but before resizing.
+	 * clamped to the dimensions of the frame. Cropping is performed after rotation and flip but before resizing.
 	 */
 	crop?: CropRectangle;
 	/**
@@ -1710,8 +1864,9 @@ export type VideoSampleTransformOptions = {
  * The order of operations must be:
  * 1. Pixel aspect ratio normalization (always applied)
  * 2. Rotation
- * 3. Crop
- * 4. Resize using fit
+ * 3. Flip
+ * 4. Crop
+ * 5. Resize using fit
  * @group Samples
  * @public
  */
@@ -1729,11 +1884,13 @@ export type VideoSampleTransformationDescription = {
 	 * - `'cover'` will scale the image until the entire box is filled, while preserving aspect ratio.
 	 */
 	fit: 'fill' | 'contain' | 'cover';
-	/** The clockwise rotation by which to rotate the frames. Rotation is applied before resizing. */
+	/** The clockwise rotation by which to rotate the frames. Rotation is applied before flipping. */
 	rotation: Rotation;
+	/** Whether to flip the frames horizontally (about the vertical axis). The flip is applied after rotation. */
+	flip: boolean;
 	/**
 	 * The rectangular region of the frames to crop to, clamped to the dimensions of the frame. Cropping is
-	 * performed after rotation but before resizing.
+	 * performed after rotation and flip but before resizing.
 	 */
 	crop: CropRectangle;
 	/** Whether to discard or keep the transparency information of the video sample. */
@@ -1767,9 +1924,59 @@ export const registerVideoSampleTransformer = (
 const TRANSFORMATION_CANVAS_CACHE_MAX_SIZE = 3;
 const transformationCanvasCache: {
 	canvas: HTMLCanvasElement | OffscreenCanvas;
+	context: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 	age: number;
 }[] = [];
 let transformationCanvasCacheNextAge = 0;
+
+const getTransformationCanvas = (width: number, height: number) => {
+	for (const entry of transformationCanvasCache) {
+		if (entry.canvas.width === width && entry.canvas.height === height) {
+			entry.age = transformationCanvasCacheNextAge++;
+			return { canvas: entry.canvas, context: entry.context, isNew: false };
+		}
+	}
+
+	let canvas: HTMLCanvasElement | OffscreenCanvas;
+	if (typeof OffscreenCanvas !== 'undefined') {
+		canvas = new OffscreenCanvas(width, height);
+	} else {
+		if (typeof window === 'undefined' || typeof document === 'undefined') {
+			throw new Error(
+				'Cannot transform VideoSamples in this environment. Either run in an environment with'
+				+ ' OffscreenCanvas or HTMLCanvasElement, or supply a custom VideoSample transformer using'
+				+ ' registerVideoSampleTransformer().',
+			);
+		}
+
+		canvas = document.createElement('canvas');
+		canvas.width = width;
+		canvas.height = height;
+	}
+
+	const context = canvas.getContext('2d', {
+		alpha: true,
+		willReadFrequently: false,
+	}) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+	if (!context) {
+		throw new Error(
+			'The \'2d\' canvas context is required to transform VideoSamples. Register a custom transformer using'
+			+ ' registerVideoSampleTransformer to work around this limitation.',
+		);
+	}
+
+	if (transformationCanvasCache.length >= TRANSFORMATION_CANVAS_CACHE_MAX_SIZE) {
+		transformationCanvasCache.splice(arrayArgmin(transformationCanvasCache, x => x.age), 1);
+	}
+
+	transformationCanvasCache.push({
+		canvas,
+		context,
+		age: transformationCanvasCacheNextAge++,
+	});
+
+	return { canvas, context, isNew: true };
+};
 
 /**
  * Describes the color space of a {@link VideoSample}. Corresponds to the WebCodecs API's VideoColorSpace.
@@ -2615,7 +2822,7 @@ export class AudioSample implements Disposable {
 		const { format, frameCount: optFrameCount, frameOffset: optFrameOffset } = options;
 		let { planeIndex } = options;
 
-		const srcFormat = this.format;
+		let srcFormat = this.format;
 		const destFormat = format ?? this.format;
 		if (!destFormat) throw new Error('Destination format not determined');
 
@@ -2662,88 +2869,133 @@ export class AudioSample implements Disposable {
 					frameOffset,
 					copyFrameCount,
 				);
+				return;
 			} else {
-				// Per spec, only f32-planar conversion must be supported, but in practice, all browsers support all
-				// destination formats, so let's just delegate here:
-				this._data.copyTo(destination, {
-					planeIndex,
-					frameOffset,
-					frameCount: copyFrameCount,
-					format: destFormat,
-				});
+				try {
+					// The spec only requires f32-planar to work here, but most of the time, all formats work. Sometimes
+					// they don't, and that's why we try-catch it.
+					this._data.copyTo(destination, {
+						planeIndex,
+						frameOffset,
+						frameCount: copyFrameCount,
+						format: destFormat,
+					});
+					return;
+				} catch (error) {
+					if (destFormat === 'f32-planar') {
+						throw error;
+					}
+
+					// Format conversion likely wasn't supported, so let's fall back to the manual conversion path
+					srcFormat = 'f32-planar';
+				}
 			}
-		} else {
-			const readFn = getReadFunction(srcFormat);
-			const srcBytesPerSample = getBytesPerSample(srcFormat);
-			const srcIsPlanar = formatIsPlanar(srcFormat);
+		}
 
-			let uint8Data: Uint8Array;
-			if (this._data instanceof AudioSampleResource) {
-				const getDataPlaneValidated = (index: number) => {
-					const result = (this._data as AudioSampleResource).getDataPlane(index);
-					if (!(result instanceof Uint8Array)) {
-						throw new TypeError('getDataPlane() must return a Uint8Array.');
-					}
+		const readFn = getReadFunction(srcFormat);
+		const srcBytesPerSample = getBytesPerSample(srcFormat);
+		const srcIsPlanar = formatIsPlanar(srcFormat);
 
-					const expectedSize = numFrames * srcBytesPerSample * (srcIsPlanar ? 1 : numChannels);
-					if (result.byteLength !== expectedSize) {
-						throw new TypeError(
-							`Data plane ${index} has invalid size. Expected exactly ${expectedSize} bytes, got`
-							+ ` ${result.byteLength} bytes.`,
-						);
-					}
+		let uint8Data: Uint8Array;
+		if (this._data instanceof AudioSampleResource) {
+			const getDataPlaneValidated = (index: number) => {
+				const result = (this._data as AudioSampleResource).getDataPlane(index);
+				if (!(result instanceof Uint8Array)) {
+					throw new TypeError('getDataPlane() must return a Uint8Array.');
+				}
 
-					return result;
-				};
+				const expectedSize = numFrames * srcBytesPerSample * (srcIsPlanar ? 1 : numChannels);
+				if (result.byteLength !== expectedSize) {
+					throw new TypeError(
+						`Data plane ${index} has invalid size. Expected exactly ${expectedSize} bytes, got`
+						+ ` ${result.byteLength} bytes.`,
+					);
+				}
 
-				if (srcIsPlanar) {
-					if (destIsPlanar) {
-						// Only one source plane will be extracted, so let's fetch only that one
-						uint8Data = getDataPlaneValidated(planeIndex);
-						planeIndex = 0; // To fix the subsequent access
-					} else {
-						// Pack all planes tightly together
-						uint8Data = new Uint8Array(numFrames * srcBytesPerSample * numChannels);
-						for (let ch = 0; ch < numChannels; ch++) {
-							const planeData = getDataPlaneValidated(ch);
-							uint8Data.set(planeData, ch * numFrames * srcBytesPerSample);
-						}
-					}
+				return result;
+			};
+
+			if (srcIsPlanar) {
+				if (destIsPlanar) {
+					// Only one source plane will be extracted, so let's fetch only that one
+					uint8Data = getDataPlaneValidated(planeIndex);
+					planeIndex = 0; // To fix the subsequent access
 				} else {
-					uint8Data = getDataPlaneValidated(0); // That's the only plane there is
+					// Pack all planes tightly together
+					uint8Data = new Uint8Array(numFrames * srcBytesPerSample * numChannels);
+					for (let ch = 0; ch < numChannels; ch++) {
+						const planeData = getDataPlaneValidated(ch);
+						uint8Data.set(planeData, ch * numFrames * srcBytesPerSample);
+					}
 				}
 			} else {
-				uint8Data = this._data;
+				uint8Data = getDataPlaneValidated(0); // That's the only plane there is
 			}
+		} else if (this._data instanceof Uint8Array) {
+			uint8Data = this._data;
+		} else {
+			assert(srcFormat === 'f32-planar');
 
-			const srcView = toDataView(uint8Data);
+			if (destIsPlanar) {
+				// Only one source plane will be read, so let's copy only that one
+				uint8Data = new Uint8Array(this._data.allocationSize({
+					format: 'f32-planar',
+					planeIndex,
+				}));
+				this._data.copyTo(uint8Data, {
+					format: 'f32-planar',
+					planeIndex,
+				});
+				planeIndex = 0; // To fix the subsequent access
+			} else {
+				// All planes will be read, so fetch 'em all
+				uint8Data = new Uint8Array(this._data.allocationSize({
+					format: 'f32-planar',
+					planeIndex: 0,
+				}) * numChannels);
 
-			for (let i = 0; i < copyFrameCount; i++) {
-				if (destIsPlanar) {
-					const destOffset = i * destBytesPerSample;
+				for (let ch = 0; ch < numChannels; ch++) {
+					this._data.copyTo(
+						uint8Data.subarray(
+							ch * numFrames * srcBytesPerSample,
+							(ch + 1) * numFrames * srcBytesPerSample,
+						),
+						{
+							format: 'f32-planar',
+							planeIndex: ch,
+						},
+					);
+				}
+			}
+		}
+
+		const srcView = toDataView(uint8Data);
+
+		for (let i = 0; i < copyFrameCount; i++) {
+			if (destIsPlanar) {
+				const destOffset = i * destBytesPerSample;
+				let srcOffset: number;
+				if (srcIsPlanar) {
+					srcOffset = (planeIndex * numFrames + (i + frameOffset)) * srcBytesPerSample;
+				} else {
+					srcOffset = (((i + frameOffset) * numChannels) + planeIndex) * srcBytesPerSample;
+				}
+
+				const normalized = readFn(srcView, srcOffset);
+				writeFn(destView, destOffset, normalized);
+			} else {
+				for (let ch = 0; ch < numChannels; ch++) {
+					const destIndex = i * numChannels + ch;
+					const destOffset = destIndex * destBytesPerSample;
 					let srcOffset: number;
 					if (srcIsPlanar) {
-						srcOffset = (planeIndex * numFrames + (i + frameOffset)) * srcBytesPerSample;
+						srcOffset = (ch * numFrames + (i + frameOffset)) * srcBytesPerSample;
 					} else {
-						srcOffset = (((i + frameOffset) * numChannels) + planeIndex) * srcBytesPerSample;
+						srcOffset = (((i + frameOffset) * numChannels) + ch) * srcBytesPerSample;
 					}
 
 					const normalized = readFn(srcView, srcOffset);
 					writeFn(destView, destOffset, normalized);
-				} else {
-					for (let ch = 0; ch < numChannels; ch++) {
-						const destIndex = i * numChannels + ch;
-						const destOffset = destIndex * destBytesPerSample;
-						let srcOffset: number;
-						if (srcIsPlanar) {
-							srcOffset = (ch * numFrames + (i + frameOffset)) * srcBytesPerSample;
-						} else {
-							srcOffset = (((i + frameOffset) * numChannels) + ch) * srcBytesPerSample;
-						}
-
-						const normalized = readFn(srcView, srcOffset);
-						writeFn(destView, destOffset, normalized);
-					}
 				}
 			}
 		}
@@ -2786,32 +3038,32 @@ export class AudioSample implements Disposable {
 	}
 
 	/**
-	 * Returns a new {@link AudioSample} containing only the frames in the range [startSample, endSample). Both bounds
+	 * Returns a new {@link AudioSample} containing only the frames in the range [startFrame, endFrame). Both bounds
 	 * must lie within this sample's range of frames. The returned sample's timestamp is shifted to match the start of
 	 * the trimmed section.
 	 */
-	trim(startSample: number, endSample = this.numberOfFrames) {
-		if (!Number.isInteger(startSample) || startSample < 0) {
-			throw new TypeError('startSample must be a non-negative integer.');
+	trim(startFrame: number, endFrame = this.numberOfFrames) {
+		if (!Number.isInteger(startFrame) || startFrame < 0) {
+			throw new TypeError('startFrame must be a non-negative integer.');
 		}
-		if (!Number.isInteger(endSample) || endSample < 0) {
-			throw new TypeError('endSample must be a non-negative integer.');
+		if (!Number.isInteger(endFrame) || endFrame < 0) {
+			throw new TypeError('endFrame must be a non-negative integer.');
 		}
-		if (startSample > this.numberOfFrames) {
-			throw new RangeError('startSample out of range.');
+		if (startFrame > this.numberOfFrames) {
+			throw new RangeError('startFrame out of range.');
 		}
-		if (endSample > this.numberOfFrames) {
-			throw new RangeError('endSample out of range.');
+		if (endFrame > this.numberOfFrames) {
+			throw new RangeError('endFrame out of range.');
 		}
-		if (endSample < startSample) {
-			throw new RangeError('endSample must not be less than startSample.');
+		if (endFrame < startFrame) {
+			throw new RangeError('endFrame must not be less than startFrame.');
 		}
 
 		if (this._closed) {
 			throw new Error('AudioSample is closed.');
 		}
 
-		const frameCount = endSample - startSample;
+		const frameCount = endFrame - startFrame;
 		const bytesPerSample = getBytesPerSample(this.format);
 
 		let data: Uint8Array;
@@ -2825,7 +3077,7 @@ export class AudioSample implements Disposable {
 					this.copyTo(data.subarray(i * planeSize, (i + 1) * planeSize), {
 						planeIndex: i,
 						format: this.format,
-						frameOffset: startSample,
+						frameOffset: startFrame,
 						frameCount,
 					});
 				}
@@ -2838,7 +3090,7 @@ export class AudioSample implements Disposable {
 				this.copyTo(data, {
 					planeIndex: 0,
 					format: this.format,
-					frameOffset: startSample,
+					frameOffset: startFrame,
 					frameCount,
 				});
 			}
@@ -2849,7 +3101,7 @@ export class AudioSample implements Disposable {
 			format: this.format,
 			sampleRate: this.sampleRate,
 			numberOfChannels: this.numberOfChannels,
-			timestamp: this.timestamp + startSample / this.sampleRate,
+			timestamp: this.timestamp + startFrame / this.sampleRate,
 		});
 	}
 
@@ -3122,15 +3374,15 @@ const getWriteFunction = (format: AudioSampleFormat): (view: DataView, offset: n
 		case 'u8':
 		case 'u8-planar':
 			return (view, offset, value) =>
-				view.setUint8(offset, clamp((value + 1) * 127.5, 0, 255));
+				view.setUint8(offset, clamp(Math.round(value * 128) + 128, 0, 255));
 		case 's16':
 		case 's16-planar':
 			return (view, offset, value) =>
-				view.setInt16(offset, clamp(Math.round(value * 32767), -32768, 32767), true);
+				view.setInt16(offset, clamp(Math.round(value * 32768), -32768, 32767), true);
 		case 's32':
 		case 's32-planar':
 			return (view, offset, value) =>
-				view.setInt32(offset, clamp(Math.round(value * 2147483647), -2147483648, 2147483647), true);
+				view.setInt32(offset, clamp(Math.round(value * 2147483648), -2147483648, 2147483647), true);
 		case 'f32':
 		case 'f32-planar':
 			return (view, offset, value) => view.setFloat32(offset, value, true);
@@ -3157,9 +3409,9 @@ export const toInterleavedAudioFormat = (format: AudioSampleFormat): 'u8' | 's16
 };
 
 /**
- * WebKit has a bug where calling AudioData.copyTo with a format different from the source format
- * crashes the tab when there are more than 2 channels. This function works around that by always
- * copying with the source format and then manually converting to the destination format.
+ * WebKit has a bug where calling AudioData.copyTo with a format different from the source format crashes the tab when
+ * there are more than 2 channels. This function works around that by always copying with the source format and then
+ * manually converting to the destination format.
  *
  * See https://bugs.webkit.org/show_bug.cgi?id=302521.
  */

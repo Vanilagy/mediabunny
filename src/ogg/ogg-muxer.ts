@@ -81,6 +81,13 @@ export class OggMuxer extends Muxer {
 		if (lock.pending) await lock.ready;
 
 		this.writer = await this.output._getRootWriter(true); // Ogg is always monotonically written!
+
+		for (const track of this.output.tracks) {
+			assert(track.isAudioTrack());
+			if (track.metadata.decoderConfig) {
+				this.getTrackData(track, { decoderConfig: track.metadata.decoderConfig });
+			}
+		}
 	}
 
 	async getMimeType() {
@@ -109,7 +116,7 @@ export class OggMuxer extends Muxer {
 
 		assert(track.source._codec === 'vorbis' || track.source._codec === 'opus');
 
-		validateAudioChunkMetadata(meta);
+		validateAudioChunkMetadata(meta, track.source._codec);
 
 		assert(meta);
 		assert(meta.decoderConfig);
@@ -293,7 +300,7 @@ export class OggMuxer extends Muxer {
 	}
 
 	allTracksAreKnown() {
-		for (const track of this.output._tracks) {
+		for (const track of this.output.tracks) {
 			if (!track.source._closed && !this.trackDatas.some(x => x.track === track)) {
 				return false; // We haven't seen a sample from this open track yet
 			}

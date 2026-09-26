@@ -4,7 +4,7 @@ import { Mp4OutputFormat, WebMOutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
 import { AudioSampleSource, VideoSampleSource } from '../../src/media-source.js';
 import { AudioSample, VideoSample } from '../../src/sample.js';
-import { QUALITY_MEDIUM } from '../../src/encode.js';
+import { Quality } from '../../src/encode.js';
 import { Input } from '../../src/input.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { BufferSource } from '../../src/source.js';
@@ -14,7 +14,7 @@ import { InputAudioTrack, InputVideoTrack } from '../../src/input-track.js';
 
 test('VideoSampleSource, normal usage', async () => {
 	const buffer = await encodeFrames(
-		{ codec: 'vp8', bitrate: QUALITY_MEDIUM },
+		{ codec: 'vp8', quality: new Quality('medium') },
 		[{ width: 100, height: 100 }, { width: 100, height: 100 }, { width: 100, height: 100 }],
 	);
 
@@ -35,7 +35,7 @@ test('VideoSampleSource, .close() should be idempotent after finalize()', async 
 
 	const videoSource = new VideoSampleSource({
 		codec: 'vp8',
-		bitrate: QUALITY_MEDIUM,
+		quality: new Quality('medium'),
 	});
 
 	output.addVideoTrack(videoSource);
@@ -63,7 +63,7 @@ test('VideoSampleSource, changing input dimensions throws with deny (default)', 
 
 	const videoSource = new VideoSampleSource({
 		codec: 'vp8',
-		bitrate: QUALITY_MEDIUM,
+		quality: new Quality('medium'),
 	});
 
 	output.addVideoTrack(videoSource);
@@ -82,7 +82,7 @@ test('VideoSampleSource, changing input dimensions throws with deny (default)', 
 
 test('VideoSampleSource, changing input dimensions with passThrough preserves per-frame dimensions', async () => {
 	const buffer = await encodeFrames(
-		{ codec: 'vp8', bitrate: QUALITY_MEDIUM, sizeChangeBehavior: 'passThrough' },
+		{ codec: 'vp8', quality: new Quality('medium'), sizeChangeBehavior: 'passThrough' },
 		[{ width: 100, height: 100 }, { width: 200, height: 150 }],
 	);
 
@@ -101,7 +101,7 @@ test(
 	async () => {
 		for (const behavior of ['fill', 'contain', 'cover'] as const) {
 			const buffer = await encodeFrames(
-				{ codec: 'vp8', bitrate: QUALITY_MEDIUM, sizeChangeBehavior: behavior },
+				{ codec: 'vp8', quality: new Quality('medium'), sizeChangeBehavior: behavior },
 				[{ width: 100, height: 100 }, { width: 200, height: 150 }],
 			);
 
@@ -115,7 +115,7 @@ test(
 
 test('VideoSampleSource, same-sized frames with width and height set', async () => {
 	const buffer = await encodeFrames(
-		{ codec: 'vp8', bitrate: QUALITY_MEDIUM, transform: { width: 50, height: 80, fit: 'fill' } },
+		{ codec: 'vp8', quality: new Quality('medium'), transform: { width: 50, height: 80, fit: 'fill' } },
 		[{ width: 100, height: 100 }, { width: 100, height: 100 }],
 	);
 
@@ -127,7 +127,7 @@ test('VideoSampleSource, same-sized frames with width and height set', async () 
 
 test('VideoSampleSource, same-sized frames with rotation set to 90', async () => {
 	const buffer = await encodeFrames(
-		{ codec: 'vp8', bitrate: QUALITY_MEDIUM, transform: { rotate: 90 } },
+		{ codec: 'vp8', quality: new Quality('medium'), transform: { rotate: 90 } },
 		[{ width: 200, height: 100 }, { width: 200, height: 100 }],
 	);
 
@@ -139,7 +139,11 @@ test('VideoSampleSource, same-sized frames with rotation set to 90', async () =>
 
 test('VideoSampleSource, same-sized frames with rotation, width and height', async () => {
 	const buffer = await encodeFrames(
-		{ codec: 'vp8', bitrate: QUALITY_MEDIUM, transform: { rotate: 90, width: 50, height: 80, fit: 'contain' } },
+		{
+			codec: 'vp8',
+			quality: new Quality('medium'),
+			transform: { rotate: 90, width: 50, height: 80, fit: 'contain' },
+		},
 		[{ width: 200, height: 100 }, { width: 200, height: 100 }],
 	);
 
@@ -151,7 +155,7 @@ test('VideoSampleSource, same-sized frames with rotation, width and height', asy
 
 test('VideoSampleSource, changing dimensions with passThrough and rotation 90', async () => {
 	const buffer = await encodeFrames(
-		{ codec: 'vp8', bitrate: QUALITY_MEDIUM, sizeChangeBehavior: 'passThrough', transform: { rotate: 90 } },
+		{ codec: 'vp8', quality: new Quality('medium'), sizeChangeBehavior: 'passThrough', transform: { rotate: 90 } },
 		[{ width: 200, height: 100 }, { width: 300, height: 150 }],
 	);
 
@@ -169,7 +173,7 @@ test('VideoSampleSource, changing dimensions with passThrough, width and height 
 	const buffer = await encodeFrames(
 		{
 			codec: 'vp8',
-			bitrate: QUALITY_MEDIUM,
+			quality: new Quality('medium'),
 			sizeChangeBehavior: 'passThrough',
 			transform: {
 				width: 50,
@@ -189,7 +193,7 @@ test('VideoSampleSource, changing dimensions with passThrough, width and height 
 
 test('VideoSampleSource, encoding rotated video frames', async () => {
 	const buffer = await encodeFrames(
-		{ codec: 'vp8', bitrate: QUALITY_MEDIUM },
+		{ codec: 'vp8', quality: new Quality('medium') },
 		[{ width: 200, height: 100, rotation: 90 }, { width: 200, height: 100, rotation: 90 }],
 	);
 
@@ -202,9 +206,50 @@ test('VideoSampleSource, encoding rotated video frames', async () => {
 	}
 });
 
+test('VideoSampleSource, flip is baked in via transform', async () => {
+	const buffer = await encodeFrames(
+		{ codec: 'vp8', quality: new Quality('medium'), transform: { flip: true } },
+		[{ width: 200, height: 100, leftHalfBlue: true }, { width: 200, height: 100, leftHalfBlue: true }],
+	);
+
+	// After the flip, the blue half is on the right
+	const { input, track } = await readBackTrack(buffer);
+	await using cursor = new VideoSampleCursor(track);
+	const sample = (await cursor.seekTo(0))!;
+	expect(sample.flip).toBe(false);
+
+	const canvas = new OffscreenCanvas(200, 100);
+	const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+	sample.draw(ctx, 0, 0);
+	const left = ctx.getImageData(50, 50, 1, 1).data;
+	const right = ctx.getImageData(150, 50, 1, 1).data;
+	expect(left[0]).toBeGreaterThan(200); // red
+	expect(right[2]).toBeGreaterThan(200); // blue
+
+	input.dispose();
+});
+
+test('VideoSampleSource, encoding flipped video frames with forced transform', async () => {
+	const buffer = await encodeFrames(
+		{ codec: 'vp8', quality: new Quality('medium'), transform: { force: true } },
+		[{ width: 200, height: 100, flip: true, leftHalfBlue: true }],
+	);
+
+	const { input, track } = await readBackTrack(buffer);
+	await using cursor = new VideoSampleCursor(track);
+	const sample = (await cursor.seekTo(0))!;
+
+	const canvas = new OffscreenCanvas(200, 100);
+	const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+	sample.draw(ctx, 0, 0);
+	expect(ctx.getImageData(150, 50, 1, 1).data[2]).toBeGreaterThan(200); // blue on the right now
+
+	input.dispose();
+});
+
 test('VideoSampleSource, encoding rotated video frames with forced transform', async () => {
 	const buffer = await encodeFrames(
-		{ codec: 'vp8', bitrate: QUALITY_MEDIUM, transform: { force: true } },
+		{ codec: 'vp8', quality: new Quality('medium'), transform: { force: true } },
 		[{ width: 200, height: 100, rotation: 90 }, { width: 200, height: 100, rotation: 90 }],
 	);
 
@@ -219,7 +264,7 @@ test('VideoSampleSource, encoding rotated video frames with forced transform', a
 
 test('VideoSampleSource, transform.process identity function', async () => {
 	const buffer = await encodeFrames(
-		{ codec: 'vp8', bitrate: QUALITY_MEDIUM, transform: { process: sample => sample } },
+		{ codec: 'vp8', quality: new Quality('medium'), transform: { process: sample => sample } },
 		[{ width: 100, height: 100 }, { width: 100, height: 100 }, { width: 100, height: 100 }],
 	);
 
@@ -235,7 +280,7 @@ test('VideoSampleSource, transform.process manual resize', async () => {
 	const buffer = await encodeFrames(
 		{
 			codec: 'vp8',
-			bitrate: QUALITY_MEDIUM,
+			quality: new Quality('medium'),
 			transform: {
 				process: (sample) => {
 					const canvas = new OffscreenCanvas(60, 40);
@@ -262,7 +307,7 @@ test('VideoSampleSource, transform.process receives pre-transformed frames', asy
 	const buffer = await encodeFrames(
 		{
 			codec: 'vp8',
-			bitrate: QUALITY_MEDIUM,
+			quality: new Quality('medium'),
 			transform: {
 				width: 50,
 				height: 80,
@@ -297,7 +342,7 @@ test('VideoSampleSource, transform.process drops all frames after the first', as
 	const buffer = await encodeFrames(
 		{
 			codec: 'vp8',
-			bitrate: QUALITY_MEDIUM,
+			quality: new Quality('medium'),
 			transform: {
 				process: (sample) => {
 					if (frameIndex++ > 0) {
@@ -318,7 +363,7 @@ test('VideoSampleSource, transform.process expands every frame into two', async 
 	const buffer = await encodeFrames(
 		{
 			codec: 'vp8',
-			bitrate: QUALITY_MEDIUM,
+			quality: new Quality('medium'),
 			transform: {
 				process: (sample) => {
 					const t = sample.timestamp;
@@ -344,7 +389,7 @@ test('VideoSampleSource, transform.process expands every frame into two', async 
 
 test('VideoSampleSource, transform.frameRate normalizes variable-rate input to fixed rate', async () => {
 	const buffer = await encodeFrames(
-		{ codec: 'vp8', bitrate: QUALITY_MEDIUM, transform: { frameRate: 10 } },
+		{ codec: 'vp8', quality: new Quality('medium'), transform: { frameRate: 10 } },
 		[
 			{ width: 100, height: 100, timestamp: 0, duration: 0.15 },
 			{ width: 100, height: 100, timestamp: 0.15, duration: 0.1 },
@@ -362,7 +407,7 @@ test('VideoSampleSource, transform.frameRate normalizes variable-rate input to f
 
 test('VideoSampleSource, transform.frameRate pads gaps by repeating last frame', async () => {
 	const buffer = await encodeFrames(
-		{ codec: 'vp8', bitrate: QUALITY_MEDIUM, transform: { frameRate: 10 } },
+		{ codec: 'vp8', quality: new Quality('medium'), transform: { frameRate: 10 } },
 		[
 			{ width: 100, height: 100, timestamp: 0, duration: 0.1 },
 			{ width: 100, height: 100, timestamp: 0.3, duration: 0.1 },
@@ -379,7 +424,7 @@ test('VideoSampleSource, transform.frameRate pads gaps by repeating last frame',
 
 test('VideoSampleSource, transform.frameRate deduplicates frames in the same slot', async () => {
 	const buffer = await encodeFrames(
-		{ codec: 'vp8', bitrate: QUALITY_MEDIUM, transform: { frameRate: 10 } },
+		{ codec: 'vp8', quality: new Quality('medium'), transform: { frameRate: 10 } },
 		[
 			{ width: 100, height: 100, timestamp: 0, duration: 0.03 },
 			{ width: 100, height: 100, timestamp: 0.03, duration: 0.03 },
@@ -396,7 +441,7 @@ test('VideoSampleSource, transform.frameRate deduplicates frames in the same slo
 
 test('VideoSampleSource, transform.frameRate final padding fills remaining duration', async () => {
 	const buffer = await encodeFrames(
-		{ codec: 'vp8', bitrate: QUALITY_MEDIUM, transform: { frameRate: 10 } },
+		{ codec: 'vp8', quality: new Quality('medium'), transform: { frameRate: 10 } },
 		[
 			{ width: 100, height: 100, timestamp: 0, duration: 0.5 },
 		],
@@ -411,7 +456,7 @@ test('VideoSampleSource, transform.frameRate final padding fills remaining durat
 
 test('VideoSampleSource, transform.frameRate skipping and padding combined', async () => {
 	const buffer = await encodeFrames(
-		{ codec: 'vp8', bitrate: QUALITY_MEDIUM, transform: { frameRate: 10 } },
+		{ codec: 'vp8', quality: new Quality('medium'), transform: { frameRate: 10 } },
 		[
 			{ width: 100, height: 100, timestamp: 0, duration: 0.02 },
 			{ width: 100, height: 100, timestamp: 0.02, duration: 0.02 },
@@ -433,7 +478,7 @@ test('VideoSampleSource, transform.frameRate works with transform', async () => 
 	const buffer = await encodeFrames(
 		{
 			codec: 'vp8',
-			bitrate: QUALITY_MEDIUM,
+			quality: new Quality('medium'),
 			transform: { width: 50, height: 50, fit: 'fill', frameRate: 10 },
 		},
 		[
@@ -457,7 +502,7 @@ test('VideoSampleSource, transform.frameRate works with process', async () => {
 	const buffer = await encodeFrames(
 		{
 			codec: 'vp8',
-			bitrate: QUALITY_MEDIUM,
+			quality: new Quality('medium'),
 			transform: {
 				frameRate: 10,
 				process: (sample) => {
@@ -488,11 +533,17 @@ test('VideoSampleSource, transform.frameRate works with process', async () => {
 	input.dispose();
 });
 
-const makeCanvas = (width: number, height: number) => {
+const makeCanvas = (width: number, height: number, leftHalfBlue = false) => {
 	const canvas = new OffscreenCanvas(width, height);
 	const ctx = canvas.getContext('2d')!;
 	ctx.fillStyle = 'red';
 	ctx.fillRect(0, 0, width, height);
+
+	if (leftHalfBlue) {
+		ctx.fillStyle = 'blue';
+		ctx.fillRect(0, 0, width / 2, height);
+	}
+
 	return canvas;
 };
 
@@ -504,6 +555,8 @@ const encodeFrames = async (
 		timestamp?: number;
 		duration?: number;
 		rotation?: Rotation;
+		flip?: boolean;
+		leftHalfBlue?: boolean;
 	}[],
 ) => {
 	const output = new Output({
@@ -517,11 +570,12 @@ const encodeFrames = async (
 
 	for (let i = 0; i < frames.length; i++) {
 		const f = frames[i]!;
-		const canvas = makeCanvas(f.width, f.height);
+		const canvas = makeCanvas(f.width, f.height, f.leftHalfBlue);
 		const sample = new VideoSample(canvas, {
 			timestamp: f.timestamp ?? i / 30,
 			duration: f.duration ?? 1 / 30,
 			rotation: f.rotation,
+			flip: f.flip,
 		});
 		await videoSource.add(sample);
 		sample.close();

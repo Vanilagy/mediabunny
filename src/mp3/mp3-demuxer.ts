@@ -15,6 +15,7 @@ import {
 	assert,
 	AsyncMutex,
 	binarySearchLessOrEqual,
+	isThenable,
 	toDataView,
 	MaybeRelevantPromise,
 	ResultValue,
@@ -53,6 +54,8 @@ export class Mp3Demuxer extends Demuxer {
 	metadataPromise: Promise<void> | null = null;
 	firstFrameHeader: Mp3FrameHeader | null = null;
 	firstFrameHeaderPos: number | null = null;
+	xingFrameHeader: Mp3FrameHeader | null = null;
+	xingFrameHeaderPos: number | null = null;
 	loadedSamples: Sample[] = []; // All samples from the start of the file to lastLoadedPos
 	metadataTags: MetadataTags | null = null;
 	xingData: {
@@ -82,6 +85,13 @@ export class Mp3Demuxer extends Demuxer {
 				if (result.pending) await promise;
 			}
 
+			if (!this.firstFrameHeader && this.xingFrameHeader) {
+				// The file consists of nothing but a Xing frame, so it holds no audio data - but that frame still
+				// tells us everything about the track
+				this.firstFrameHeader = this.xingFrameHeader;
+				this.firstFrameHeaderPos = this.xingFrameHeaderPos;
+			}
+
 			if (!this.firstFrameHeader) {
 				throw new Error('No valid MP3 frame found.');
 			}
@@ -95,7 +105,7 @@ export class Mp3Demuxer extends Demuxer {
 			// Let's skip all ID3v2 tags at the start of the file
 			while (true) {
 				let slice = this.reader.requestSlice(this.lastLoadedPos, ID3_V2_HEADER_SIZE);
-				if (slice instanceof Promise) slice = await slice;
+				if (isThenable(slice)) slice = await slice;
 
 				if (!slice) {
 					this.lastSampleLoaded = true;
@@ -136,7 +146,7 @@ export class Mp3Demuxer extends Demuxer {
 		const xingOffset = getXingOffset(header.mpegVersionId, header.channel);
 
 		let slice = this.reader.requestSlice(result.value.startPos + xingOffset, 4);
-		if (slice instanceof Promise) slice = await slice;
+		if (isThenable(slice)) slice = await slice;
 		if (slice) {
 			const word = readU32Be(slice);
 			const isXing = word === XING || word === INFO;
@@ -144,9 +154,14 @@ export class Mp3Demuxer extends Demuxer {
 			if (isXing) {
 				// There's no actual audio data in this frame, so let's skip it
 
+				if (!this.xingFrameHeader) {
+					this.xingFrameHeader = header;
+					this.xingFrameHeaderPos = result.value.startPos;
+				}
+
 				if (!this.xingData) {
 					let xingDataSlice = this.reader.requestSlice(result.value.startPos + xingOffset + 4, 12);
-					if (xingDataSlice instanceof Promise) xingDataSlice = await xingDataSlice;
+					if (isThenable(xingDataSlice)) xingDataSlice = await xingDataSlice;
 					if (xingDataSlice) {
 						const xingData = readBytes(xingDataSlice, 12);
 						const view = toDataView(xingData);
@@ -211,7 +226,7 @@ export class Mp3Demuxer extends Demuxer {
 
 		while (true) {
 			let headerSlice = this.reader.requestSlice(currentPos, ID3_V2_HEADER_SIZE);
-			if (headerSlice instanceof Promise) headerSlice = await headerSlice;
+			if (isThenable(headerSlice)) headerSlice = await headerSlice;
 			if (!headerSlice) break;
 
 			const id3V2Header = readId3V2Header(headerSlice);
@@ -222,7 +237,7 @@ export class Mp3Demuxer extends Demuxer {
 			id3V2HeaderFound = true;
 
 			let contentSlice = this.reader.requestSlice(headerSlice.filePos, id3V2Header.size);
-			if (contentSlice instanceof Promise) contentSlice = await contentSlice;
+			if (isThenable(contentSlice)) contentSlice = await contentSlice;
 			if (!contentSlice) break;
 
 			parseId3V2Tag(contentSlice, id3V2Header, this.metadataTags);
@@ -233,7 +248,7 @@ export class Mp3Demuxer extends Demuxer {
 		if (!id3V2HeaderFound && this.reader.fileSize !== null && this.reader.fileSize >= ID3_V1_TAG_SIZE) {
 			// Try reading an ID3v1 tag at the end of the file
 			let slice = this.reader.requestSlice(this.reader.fileSize - ID3_V1_TAG_SIZE, ID3_V1_TAG_SIZE);
-			if (slice instanceof Promise) slice = await slice;
+			if (isThenable(slice)) slice = await slice;
 			assert(slice);
 
 			const tag = readAscii(slice, 3);
@@ -384,7 +399,7 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 			data = PLACEHOLDER_DATA;
 		} else {
 			let slice = this.demuxer.reader.requestSlice(rawSample.dataStart, rawSample.dataSize);
-			if (slice instanceof Promise) slice = await slice;
+			if (isThenable(slice)) slice = await slice;
 
 			if (!slice) {
 				return res.set(null); // Data didn't fit into the rest of the file

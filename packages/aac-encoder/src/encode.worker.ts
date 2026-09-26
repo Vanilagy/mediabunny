@@ -192,3 +192,7 @@ if (parentPort) {
 } else {
 	self.addEventListener('message', event => onMessage(event.data as { id: number; command: WorkerCommand }));
 }
+
+// Prevents the worker for being randomly closed by Firefox
+// https://github.com/Vanilagy/mediabunny/issues/435
+setInterval(() => {}, 1000);

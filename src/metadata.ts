@@ -46,6 +46,8 @@ export type MetadataTags = {
 	discNumber?: number;
 	/** Total number of discs in the release. */
 	discsTotal?: number;
+	/** The beats per minute (BPM) of the media. */
+	beatsPerMinute?: number;
 	/** Genre or category describing the media's style or content (e.g. Metal, Horror, etc.) */
 	genre?: string;
 	/** Release, recording or creation date of the media. */
@@ -76,14 +78,16 @@ export type MetadataTags = {
 	 * user-defined text frames are exposed as a `Record<string, string>`.
 	 * - ADTS: The ID3v2 tags, just like in MP3.
 	 * - Ogg: The key-value string pairs from the Vorbis-style comment header (see RFC 7845, Section 5.2).
-	 * Additionally, the `'vendor'` key refers to the vendor string within this header.
+	 * Additionally, the `'vendor'` key refers to the vendor string within this header. If a key exists more than once,
+	 * a string array is used instead.
 	 * - WAVE: The individual metadata chunks within the RIFF INFO chunk. Values are always ISO 8859-1 strings.
 	 * - FLAC: The key-value string pairs from the Vorbis metadata block (see RFC 9639, Section D.2.3).
-	 * Additionally, the `'vendor'` key refers to the vendor string within this header. If ID3v2 tags appear at the
-	 * start of the file, their content is stored just like for MP3.
+	 * Additionally, the `'vendor'` key refers to the vendor string within this header. If a key exists more than once,
+	 * a string array is used instead. If ID3v2 tags appear at the start of the file, their content is stored just like
+	 * for MP3.
 	 * - MPEG-TS: Not supported.
 	*/
-	raw?: Record<string, string | Uint8Array | RichImageData | AttachedFile | Record<string, string> | null>;
+	raw?: Record<string, string | string[] | Uint8Array | RichImageData | AttachedFile | Record<string, string> | null>;
 };
 
 /**
@@ -204,6 +208,12 @@ export const validateMetadataTags = (tags: MetadataTags) => {
 	if (tags.date !== undefined && (!(tags.date instanceof Date) || Number.isNaN(tags.date.getTime()))) {
 		throw new TypeError('tags.date, when provided, must be a valid Date.');
 	}
+	if (
+		tags.beatsPerMinute !== undefined
+		&& (!Number.isInteger(tags.beatsPerMinute) || tags.beatsPerMinute <= 0)
+	) {
+		throw new TypeError('tags.beatsPerMinute, when provided, must be a positive integer.');
+	}
 	if (tags.lyrics !== undefined && typeof tags.lyrics !== 'string') {
 		throw new TypeError('tags.lyrics, when provided, must be a string.');
 	}
@@ -238,13 +248,14 @@ export const validateMetadataTags = (tags: MetadataTags) => {
 			if (
 				value !== null
 				&& typeof value !== 'string'
+				&& !(Array.isArray(value) && value.every(x => typeof x === 'string'))
 				&& !(value instanceof Uint8Array)
 				&& !(value instanceof RichImageData)
 				&& !(value instanceof AttachedFile)
 				&& !isRecordStringString(value)
 			) {
 				throw new TypeError(
-					'Each value in tags.raw must be a string, Uint8Array, RichImageData, AttachedFile, '
+					'Each value in tags.raw must be a string, string array, Uint8Array, RichImageData, AttachedFile, '
 					+ 'Record<string, string>, or null.',
 				);
 			}
@@ -263,6 +274,7 @@ export const metadataTagsAreEmpty = (tags: MetadataTags) => {
 		&& tags.discNumber === undefined
 		&& tags.discsTotal === undefined
 		&& tags.genre === undefined
+		&& tags.beatsPerMinute === undefined
 		&& tags.date === undefined
 		&& tags.lyrics === undefined
 		&& (!tags.images || tags.images.length === 0)

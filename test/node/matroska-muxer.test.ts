@@ -1,5 +1,6 @@
 import { expect, test } from 'vitest';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Input } from '../../src/input.js';
 import { BufferSource, FilePathSource } from '../../src/source.js';
 import { ADTS, ALL_FORMATS } from '../../src/input-format.js';
@@ -9,8 +10,10 @@ import { BufferTarget } from '../../src/target.js';
 import { MkvOutputFormat } from '../../src/output-format.js';
 import { Conversion } from '../../src/conversion.js';
 import { assert } from '../../src/misc.js';
+import { EncodedVideoPacketSource } from '../../src/media-source.js';
+import { EncodedPacket, PacketReader } from '../../src/packet.js';
 
-const __dirname = new URL('.', import.meta.url).pathname;
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
 test('Matroska muxer internally converts ADTS to AAC', async () => {
 	using input = new Input({
@@ -61,3 +64,76 @@ test('Matroska muxer internally converts ADTS to AAC', async () => {
 
 	expect(count).toBe(4557);
 });
+
+test('Negative start timestamps', async () => {
+	await testNegativeTimestampRoundTrip(
+		Array.from({ length: 50 }, (_, index) => (index - 10) / 10),
+		0.1,
+		10,
+	);
+});
+
+test('Wholly negative timestamps', async () => {
+	await testNegativeTimestampRoundTrip([-1, -0.9, -0.8, -0.7, -0.6], 0.1, 10);
+});
+
+const testNegativeTimestampRoundTrip = async (timestamps: number[], duration: number, frameRate: number) => {
+	const output = new Output({
+		format: new MkvOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const source = new EncodedVideoPacketSource('vp8');
+	output.addVideoTrack(source, { frameRate });
+
+	await output.start();
+
+	const meta = { decoderConfig: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 } };
+	const inputPackets = timestamps.map((timestamp, index) => new EncodedPacket(
+		new Uint8Array(1024).fill(index),
+		'key',
+		timestamp,
+		duration,
+	));
+
+	for (let i = 0; i < inputPackets.length; i++) {
+		await source.add(inputPackets[i]!, i === 0 ? meta : undefined);
+	}
+
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryVideoTrack();
+	assert(track);
+	const packetReader = new PacketReader(track);
+
+	const outputPackets: EncodedPacket[] = [];
+	for await (const packet of new PacketCursor(track)) {
+		outputPackets.push(packet);
+	}
+
+	expect(outputPackets.map(packet => ({
+		timestamp: packet.timestamp,
+		duration: packet.duration,
+	}))).toEqual(inputPackets.map(packet => ({
+		timestamp: packet.timestamp,
+		duration: packet.duration,
+	})));
+
+	for (const inputPacket of inputPackets) {
+		const outputPacket = await packetReader.getAt(inputPacket.timestamp);
+		assert(outputPacket);
+
+		expect({
+			timestamp: outputPacket.timestamp,
+			duration: outputPacket.duration,
+		}).toEqual({
+			timestamp: inputPacket.timestamp,
+			duration: inputPacket.duration,
+		});
+	}
+};

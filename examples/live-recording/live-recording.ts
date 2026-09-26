@@ -4,7 +4,7 @@ import {
 	MediaStreamAudioTrackSource,
 	Mp4OutputFormat,
 	Output,
-	QUALITY_MEDIUM,
+	Quality,
 	StreamTarget,
 } from 'mediabunny';
 
@@ -48,7 +48,7 @@ const startRecording = async () => {
 		context.fillRect(0, 0, canvas.width, canvas.height);
 
 		const audioIsEncodable = await canEncodeAudio('opus', {
-			bitrate: QUALITY_MEDIUM,
+			quality: new Quality('medium'),
 		});
 
 		let audioTrack: MediaStreamAudioTrack | null = null;
@@ -99,7 +99,7 @@ const startRecording = async () => {
 		// Add the video track, with the canvas as the source
 		videoSource = new CanvasSource(canvas, {
 			codec: 'avc',
-			bitrate: QUALITY_MEDIUM,
+			quality: new Quality('medium'),
 			keyFrameInterval: 0.5,
 			latencyMode: 'realtime', // Allow the encoder to skip frames to keep up with real-time constraints
 		});
@@ -109,7 +109,7 @@ const startRecording = async () => {
 			// Add the audio track, with the media stream track as the source
 			const audioSource = new MediaStreamAudioTrackSource(audioTrack, {
 				codec: 'opus',
-				bitrate: QUALITY_MEDIUM,
+				quality: new Quality('medium'),
 			});
 			audioSource.errorPromise.catch(cancelRecording); // Make sure errors are bubbled up
 

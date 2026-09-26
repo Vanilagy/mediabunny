@@ -26,32 +26,13 @@ const checkDocblocks = (filePath: string) => {
 			|| ts.isEnumMember(node)
 			|| ts.isPropertySignature(node)
 			|| ts.isMethodSignature(node)
-			|| ts.isVariableStatement(node)
 			|| ts.isVariableDeclaration(node)
 			|| (ts.isParameter(node) && ts.isPropertyDeclaration(node.parent))
 		) {
 			let symbol: ts.Symbol | undefined;
 
 			try {
-				if (ts.isVariableStatement(node)) {
-					node.declarationList.declarations.forEach((declaration) => {
-						const declSymbol = checker.getSymbolAtLocation(declaration.name);
-						if (declSymbol) {
-							const docStatus = checkDocumentationContent(declSymbol, declaration);
-							if (docStatus.hasProblem) {
-								const name = declaration.name.getText(sourceFile);
-								const line = sourceFile.getLineAndCharacterOfPosition(declaration.getStart()).line + 1;
-								missingDocblocks.push({
-									name,
-									kind: 'variable',
-									line,
-									reason: docStatus.reason,
-								});
-							}
-						}
-					});
-					return;
-				} else if ('name' in node && node.name) {
+				if ('name' in node && node.name) {
 					symbol = checker.getSymbolAtLocation(node.name);
 				}
 			} catch {

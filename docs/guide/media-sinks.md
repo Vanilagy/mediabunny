@@ -366,6 +366,7 @@ type CanvasSinkOptions = {
 	height?: number;
 	fit?: 'fill' | 'contain' | 'cover';
 	rotation?: 0 | 90 | 180 | 270;
+	flip?: boolean;
 	crop?: { left: number; top: number; width: number; height: number };
 	poolSize?: number;
 	alpha?: boolean;
@@ -382,9 +383,11 @@ type CanvasSinkOptions = {
 	- `'contain'` will contain the entire image within the box while preserving aspect ratio. This may lead to letterboxing.
 	- `'cover'` will scale the image until the entire box is filled, while preserving aspect ratio.
 - `rotation`\
-	The clockwise rotation by which to rotate the raw video frame. Defaults to the rotation set in the file metadata. Rotation is applied before cropping and resizing.
+	The clockwise rotation by which to rotate the raw video frame. Defaults to the rotation set in the file metadata. Rotation is applied before flipping, cropping and resizing.
+- `flip`\
+	Whether to flip the raw video frame horizontally (about the vertical axis). Defaults to the flip set in the file metadata. The flip is applied after rotation but before cropping and resizing.
 - `crop`\
-	Specifies the rectangular region of the input video to crop to. The crop region will automatically be clamped to the dimensions of the input video track. Cropping is performed after rotation but before resizing. The crop region is in the _display pixel space_ of the underlying video data.
+	Specifies the rectangular region of the input video to crop to. The crop region will automatically be clamped to the dimensions of the input video track. Cropping is performed after rotation and flip but before resizing. The crop region is in the _display pixel space_ of the underlying video data.
 - `poolSize`\
 	See [Canvas pool](#canvas-pool).
 - `alpha`\
@@ -395,7 +398,7 @@ type CanvasSinkOptions = {
 Some examples:
 ```ts
 // This sink yields canvases with the unaltered display dimensions of the track,
-// and respecting the track's rotation metadata.
+// and respecting the track's rotation and flip metadata.
 new CanvasSink(videoTrack);
 
 // This sink yields canvases with a width of 1280 and a height that maintains the
@@ -413,9 +416,10 @@ new CanvasSink(videoTrack, {
 });
 
 // This sink yields canvases with the unrotated dimensions of the track,
-// and without applying any rotation.
+// and without applying any rotation or flip.
 new CanvasSink(videoTrack, {
 	rotation: 0,
+	flip: false,
 });
 ```
 

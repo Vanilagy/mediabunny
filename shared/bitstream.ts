@@ -55,7 +55,19 @@ export class Bitstream {
 		}
 
 		this.pos = end;
-	};
+	}
+
+	copyBits(n: number, other: Bitstream) {
+		let i = 0;
+		for (i; i < n - 7; i += 8) {
+			this.writeBits(8, other.readBits(8));
+		}
+
+		const leftover = n - i;
+		if (leftover > 0) {
+			this.writeBits(leftover, other.readBits(leftover));
+		}
+	}
 
 	readAlignedByte() {
 		if (this.pos % 8 !== 0) {

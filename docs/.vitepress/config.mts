@@ -10,6 +10,7 @@ import apiRoutes from '../api/index.json';
 import m3u8Grammar from './m3u8-grammar.json' with { type: 'json' };
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 const DESCRIPTION = 'A JavaScript library for reading, writing, and converting media files. Directly in the browser,'
 	+ ' and faster than anybunny else.';
@@ -27,8 +28,14 @@ export default withMermaid({
 			for (const entry of entries) {
 				const isDirectory = await fs.stat(path.join('./examples', entry)).then(stat => stat.isDirectory());
 				if (isDirectory) {
+					const gitDate = execFileSync(
+						'git',
+						['log', '-1', '--format=%cI', '--', path.join('./examples', entry)],
+					).toString().trim();
+
 					items.push({
 						url: `/examples/${entry}/`, // With trailing slash
+						lastmod: new Date(gitDate).toISOString(),
 					});
 				}
 			}
@@ -36,14 +43,12 @@ export default withMermaid({
 			return items;
 		},
 	},
-	// lastUpdated: true,
+	lastUpdated: true,
 	head: [
 		['link', { rel: 'icon', type: 'image/png', href: '/mediabunny-logo.png' }],
 		['link', { rel: 'icon', type: 'image/svg+xml', href: '/mediabunny-logo.svg' }],
 		['meta', { property: 'og:site_name', content: 'Mediabunny' }],
-		['meta', { property: 'og:image', content: `${ORIGIN}/mediabunny-og-image.png` }],
 		['meta', { property: 'og:locale', content: 'en-US' }],
-		['meta', { name: 'twitter:image', content: `${ORIGIN}/mediabunny-og-image.png` }],
 		['meta', { name: 'twitter:card', content: 'summary_large_image' }],
 		['meta', { name: 'twitter:site', content: '@vanilagy' }],
 	],
@@ -120,6 +125,7 @@ export default withMermaid({
 						{ text: 'mp3-encoder', link: '/guide/extensions/mp3-encoder' },
 						{ text: 'aac-encoder', link: '/guide/extensions/aac-encoder' },
 						{ text: 'ac3', link: '/guide/extensions/ac3' },
+						{ text: 'dts', link: '/guide/extensions/dts' },
 						{ text: 'flac-encoder', link: '/guide/extensions/flac-encoder' },
 						{ text: 'prores', link: '/guide/extensions/prores' },
 					],
@@ -157,6 +163,7 @@ export default withMermaid({
 						{ text: 'FLAC', link: '/codec-registry/flac' },
 						{ text: 'AC-3', link: '/codec-registry/ac3' },
 						{ text: 'E-AC-3', link: '/codec-registry/eac3' },
+						{ text: 'DTS', link: '/codec-registry/dts' },
 						{ text: 'Linear PCM', link: '/codec-registry/pcm' },
 						{ text: 'μ-law PCM', link: '/codec-registry/ulaw' },
 						{ text: 'A-law PCM', link: '/codec-registry/alaw' },
@@ -201,7 +208,7 @@ export default withMermaid({
 			tailwindcss() as any,
 			llmstxt({
 				ignoreFiles: [
-					'api/*',
+					'api/!(index).md',
 					'examples.md',
 					'llms.md',
 				],
@@ -261,13 +268,20 @@ export default withMermaid({
 			});
 		}
 
+		// Blog posts use their header image for link previews, everything else uses the generic one
+		const imageUrl = isBlogPost && pageData.frontmatter['headerImage']
+			? `${ORIGIN}${pageData.frontmatter['headerImage']}`
+			: `${ORIGIN}/mediabunny-og-image.png`;
+
 		((pageData.frontmatter['head'] ??= []) as HeadConfig[]).push(
 			['meta', { property: 'og:type', content: isBlogPost ? 'article' : 'website' }],
 			['meta', { property: 'og:title', content: title }],
 			['meta', { property: 'og:description', content: pageData.description || DESCRIPTION }],
 			['meta', { property: 'og:url', content: canonicalUrl }],
+			['meta', { property: 'og:image', content: imageUrl }],
 			['meta', { name: 'twitter:title', content: title }],
 			['meta', { name: 'twitter:description', content: pageData.description || DESCRIPTION }],
+			['meta', { name: 'twitter:image', content: imageUrl }],
 			['link', { rel: 'canonical', href: canonicalUrl }],
 		);
 
@@ -305,5 +319,10 @@ export default withMermaid({
 		for (const file of files) {
 			await fs.copyFile('./docs/api/' + file, './dist-docs/api/' + file);
 		}
+
+		// The llms.txt generation leaves behind runs of empty lines, collapse them into one
+		const llmsTxtPath = './dist-docs/llms.txt';
+		const llmsTxt = await fs.readFile(llmsTxtPath, 'utf-8');
+		await fs.writeFile(llmsTxtPath, llmsTxt.replace(/\n{3,}/g, '\n\n'));
 	},
 });

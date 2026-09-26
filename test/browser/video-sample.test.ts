@@ -116,3 +116,74 @@ test('Can create VideoSample from rotated VideoFrame', () => {
 	expect(colorDistance(sampleCanvasColor(ctx, 5, 55), { r: 0, g: 0, b: 255 })).toBeLessThan(10);
 	expect(colorDistance(sampleCanvasColor(ctx, 110, 5), { r: 0, g: 0, b: 255 })).toBeLessThan(10);
 });
+
+test('Can create VideoSample from rotated and flipped VideoFrame', () => {
+	const frame = new VideoFrame(createCanvas(), { timestamp: 0, rotation: 90, flip: true });
+	using sample = new VideoSample(frame);
+
+	expect(frame.rotation).toBe(90);
+	expect(frame.flip).toBe(true);
+	expect(sample.rotation).toBe(90);
+	expect(sample.flip).toBe(true);
+
+	const canvas = document.createElement('canvas');
+	canvas.width = 150;
+	canvas.height = 300;
+	const ctx = canvas.getContext('2d')!;
+
+	// Rotating moves the red corner to the top right, flipping then moves it back to the top left
+	sample.draw(ctx, 0, 0);
+
+	expect(colorDistance(sampleCanvasColor(ctx, 5, 5), { r: 255, g: 0, b: 0 })).toBeLessThan(10);
+	expect(colorDistance(sampleCanvasColor(ctx, 145, 5), { r: 0, g: 0, b: 255 })).toBeLessThan(10);
+	expect(colorDistance(sampleCanvasColor(ctx, 5, 150), { r: 0, g: 0, b: 255 })).toBeLessThan(10);
+
+	ctx.clearRect(0, 0, canvas.width, canvas.height);
+	sample.drawWithFit(ctx, { fit: 'fill' });
+
+	expect(colorDistance(sampleCanvasColor(ctx, 5, 5), { r: 255, g: 0, b: 0 })).toBeLessThan(10);
+	expect(colorDistance(sampleCanvasColor(ctx, 145, 5), { r: 0, g: 0, b: 255 })).toBeLessThan(10);
+	expect(colorDistance(sampleCanvasColor(ctx, 5, 150), { r: 0, g: 0, b: 255 })).toBeLessThan(10);
+
+	using unflipped = sample.clone({ flip: false });
+	expect(unflipped.rotation).toBe(90);
+	expect(unflipped.flip).toBe(false);
+
+	ctx.clearRect(0, 0, canvas.width, canvas.height);
+	unflipped.draw(ctx, 0, 0);
+
+	expect(colorDistance(sampleCanvasColor(ctx, 145, 5), { r: 255, g: 0, b: 0 })).toBeLessThan(10);
+	expect(colorDistance(sampleCanvasColor(ctx, 5, 5), { r: 0, g: 0, b: 255 })).toBeLessThan(10);
+
+	ctx.clearRect(0, 0, canvas.width, canvas.height);
+	unflipped.drawWithFit(ctx, { fit: 'fill' });
+
+	expect(colorDistance(sampleCanvasColor(ctx, 145, 5), { r: 255, g: 0, b: 0 })).toBeLessThan(10);
+	expect(colorDistance(sampleCanvasColor(ctx, 5, 5), { r: 0, g: 0, b: 255 })).toBeLessThan(10);
+
+	const extracted = unflipped.toVideoFrame();
+	expect(extracted.rotation).toBe(90);
+	expect(extracted.flip).toBe(false); // It was changed
+	extracted.close();
+
+	using upright = sample.clone({ rotation: 0, flip: false });
+
+	canvas.width = 300;
+	canvas.height = 150;
+	upright.draw(ctx, 0, 0);
+
+	expect(colorDistance(sampleCanvasColor(ctx, 5, 5), { r: 255, g: 0, b: 0 })).toBeLessThan(10);
+	expect(colorDistance(sampleCanvasColor(ctx, 5, 55), { r: 0, g: 0, b: 255 })).toBeLessThan(10);
+	expect(colorDistance(sampleCanvasColor(ctx, 110, 5), { r: 0, g: 0, b: 255 })).toBeLessThan(10);
+
+	ctx.clearRect(0, 0, canvas.width, canvas.height);
+	upright.drawWithFit(ctx, { fit: 'fill' });
+
+	expect(colorDistance(sampleCanvasColor(ctx, 5, 5), { r: 255, g: 0, b: 0 })).toBeLessThan(10);
+	expect(colorDistance(sampleCanvasColor(ctx, 110, 5), { r: 0, g: 0, b: 255 })).toBeLessThan(10);
+
+	const uprightExtracted = upright.toVideoFrame();
+	expect(uprightExtracted.rotation).toBe(0);
+	expect(uprightExtracted.flip).toBe(false);
+	uprightExtracted.close();
+});

@@ -25,6 +25,7 @@ export const CODEC_TO_CODEC_ID: Partial<Record<MediaCodec, NodeAv.AVCodecID>> = 
 	flac: NodeAv.AV_CODEC_ID_FLAC,
 	ac3: NodeAv.AV_CODEC_ID_AC3,
 	eac3: NodeAv.AV_CODEC_ID_EAC3,
+	dts: NodeAv.AV_CODEC_ID_DTS,
 };
 
 let cachedHardwareContext: NodeAv.HardwareContext | null | undefined = undefined;
@@ -264,6 +265,24 @@ export const getChannelLayout = (numChannels: number): NodeAv.ChannelLayout => {
 		case 4: return NodeAv.AV_CHANNEL_LAYOUT_QUAD;
 		case 6: return NodeAv.AV_CHANNEL_LAYOUT_5POINT1_BACK;
 		case 8: return NodeAv.AV_CHANNEL_LAYOUT_7POINT1;
+		default: return { nbChannels: numChannels, order: NodeAv.AV_CHANNEL_ORDER_UNSPEC, mask: 0n };
+	}
+};
+
+/** FL + FR + SL + SR, which libav has no constant for. */
+const QUAD_SIDE_MASK = 0x603n;
+
+/**
+ * DTS insists on the side-based surround layouts and rejects the back-based ones that {@link getChannelLayout}
+ * hands out, so it gets its own mapping.
+ */
+export const getDtsChannelLayout = (numChannels: number): NodeAv.ChannelLayout => {
+	switch (numChannels) {
+		case 1: return NodeAv.AV_CHANNEL_LAYOUT_MONO;
+		case 2: return NodeAv.AV_CHANNEL_LAYOUT_STEREO;
+		case 4: return { nbChannels: 4, order: NodeAv.AV_CHANNEL_ORDER_NATIVE, mask: QUAD_SIDE_MASK };
+		case 5: return NodeAv.AV_CHANNEL_LAYOUT_5POINT0;
+		case 6: return NodeAv.AV_CHANNEL_LAYOUT_5POINT1;
 		default: return { nbChannels: numChannels, order: NodeAv.AV_CHANNEL_ORDER_UNSPEC, mask: 0n };
 	}
 };

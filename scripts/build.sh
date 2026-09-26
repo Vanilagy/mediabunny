@@ -18,6 +18,7 @@ fi
 rm -rf dist
 rm -rf packages/mp3-encoder/dist
 rm -rf packages/ac3/dist
+rm -rf packages/dts/dist
 rm -rf packages/aac-encoder/dist
 rm -rf packages/flac-encoder/dist
 rm -rf packages/prores/dist
@@ -30,6 +31,7 @@ tsx scripts/ensure-license-headers.ts
 tsc -p src --stripInternal false # Don't strip internals since the packages may use them
 tsc -p packages/mp3-encoder
 tsc -p packages/ac3
+tsc -p packages/dts
 tsc -p packages/aac-encoder
 tsc -p packages/flac-encoder
 tsc -p packages/prores
@@ -50,6 +52,7 @@ tsx scripts/bundle.ts
 api-extractor run $API_EXTRACTOR_FLAGS
 api-extractor run $API_EXTRACTOR_FLAGS -c packages/mp3-encoder/api-extractor.json
 api-extractor run $API_EXTRACTOR_FLAGS -c packages/ac3/api-extractor.json
+api-extractor run $API_EXTRACTOR_FLAGS -c packages/dts/api-extractor.json
 api-extractor run $API_EXTRACTOR_FLAGS -c packages/aac-encoder/api-extractor.json
 api-extractor run $API_EXTRACTOR_FLAGS -c packages/flac-encoder/api-extractor.json
 api-extractor run $API_EXTRACTOR_FLAGS -c packages/prores/api-extractor.json
@@ -60,6 +63,7 @@ if [ "$LOOSE" = false ]; then
 	tsx scripts/check-docblocks.ts dist/mediabunny.d.ts
 	tsx scripts/check-docblocks.ts packages/mp3-encoder/dist/mediabunny-mp3-encoder.d.ts
 	tsx scripts/check-docblocks.ts packages/ac3/dist/mediabunny-ac3.d.ts
+	tsx scripts/check-docblocks.ts packages/dts/dist/mediabunny-dts.d.ts
 	tsx scripts/check-docblocks.ts packages/aac-encoder/dist/mediabunny-aac-encoder.d.ts
 	tsx scripts/check-docblocks.ts packages/flac-encoder/dist/mediabunny-flac-encoder.d.ts
 	tsx scripts/check-docblocks.ts packages/prores/dist/mediabunny-prores.d.ts
@@ -73,6 +77,7 @@ fi
 echo 'export as namespace Mediabunny;' >> dist/mediabunny.d.ts
 echo 'export as namespace MediabunnyMp3Encoder;' >> packages/mp3-encoder/dist/mediabunny-mp3-encoder.d.ts
 echo 'export as namespace MediabunnyAc3;' >> packages/ac3/dist/mediabunny-ac3.d.ts
+echo 'export as namespace MediabunnyDts;' >> packages/dts/dist/mediabunny-dts.d.ts
 echo 'export as namespace MediabunnyAacEncoder;' >> packages/aac-encoder/dist/mediabunny-aac-encoder.d.ts
 echo 'export as namespace MediabunnyFlacEncoder;' >> packages/flac-encoder/dist/mediabunny-flac-encoder.d.ts
 echo 'export as namespace MediabunnyProres;' >> packages/prores/dist/mediabunny-prores.d.ts

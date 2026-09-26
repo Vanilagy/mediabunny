@@ -6,7 +6,7 @@ import { Output } from '../../src/output.js';
 import { WebMOutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
 import { CanvasSource, VideoSampleSource } from '../../src/media-source.js';
-import { canEncodeVideo, QUALITY_HIGH } from '../../src/encode.js';
+import { canEncodeVideo, Quality } from '../../src/encode.js';
 import { VideoSample } from '../../src/sample.js';
 import { Conversion } from '../../src/conversion.js';
 import { canvasTransformer, PacketCursor, VideoSampleCursor } from '../../src/cursors.js';
@@ -103,7 +103,7 @@ const encodeTransparentVideoTest = async () => {
 
 	const source = new CanvasSource(canvas, {
 		codec: 'vp9',
-		bitrate: QUALITY_HIGH,
+		quality: new Quality('high'),
 		alpha: 'keep',
 	});
 	output.addVideoTrack(source);
@@ -210,7 +210,7 @@ test('Can encode video with alternating transparency', async () => {
 
 		const source = new VideoSampleSource({
 			codec: 'vp9',
-			bitrate: QUALITY_HIGH,
+			quality: new Quality('high'),
 			alpha: 'keep',
 		});
 		output.addVideoTrack(source);
@@ -277,7 +277,7 @@ test('Can encode transparent video with odd dimensions', async () => {
 
 	const source = new CanvasSource(canvas, {
 		codec: 'vp9',
-		bitrate: QUALITY_HIGH,
+		quality: new Quality('high'),
 		alpha: 'keep',
 	});
 	output.addVideoTrack(source);

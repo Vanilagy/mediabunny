@@ -1,16 +1,25 @@
 import {
-	Input,
 	ALL_FORMATS,
 	BlobSource,
-	UrlSource,
-	Output,
 	BufferTarget,
-	Mp4OutputFormat,
 	Conversion,
-	QUALITY_VERY_LOW,
+	Input,
+	Mp4OutputFormat,
+	Output,
+	Quality,
+	UrlSource,
 } from 'mediabunny';
+import { registerAc3Decoder } from '@mediabunny/ac3';
+import { registerDtsDecoder } from '@mediabunny/dts';
+import { registerProresDecoder } from '@mediabunny/prores';
 
 import SampleFileUrl from '../../docs/assets/big-buck-bunny-trimmed.mp4';
+
+// Enable codecs that aren't natively supported by WebCodecs.
+registerAc3Decoder();
+registerDtsDecoder();
+registerProresDecoder();
+
 (document.querySelector('#sample-file-download') as HTMLAnchorElement).href = SampleFileUrl;
 
 const selectMediaButton = document.querySelector('#select-file') as HTMLButtonElement;
@@ -65,11 +74,11 @@ const compressFile = async (resource: File | string) => {
 			tracks: 'primary', // Keep only one track per type
 			video: {
 				width: 320, // Height will be deduced automatically to retain aspect ratio
-				bitrate: QUALITY_VERY_LOW,
+				quality: new Quality('very-low'),
 			},
 			audio: {
 				codec: 'opus',
-				bitrate: QUALITY_VERY_LOW,
+				quality: new Quality('very-low'),
 			},
 		});
 
@@ -137,7 +146,7 @@ const compressFile = async (resource: File | string) => {
 selectMediaButton.addEventListener('click', () => {
 	const fileInput = document.createElement('input');
 	fileInput.type = 'file';
-	fileInput.accept = 'video/*,video/x-matroska,video/mp2t,.ts,audio/*,audio/aac';
+	fileInput.accept = 'video/*,video/x-matroska,video/mp2t,.mkv,.ts,audio/*,audio/aac,.aac';
 	fileInput.addEventListener('change', () => {
 		const file = fileInput.files?.[0];
 		if (!file) {

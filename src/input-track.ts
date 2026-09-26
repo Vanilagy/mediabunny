@@ -6,20 +6,24 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { AudioCodec, MediaCodec, VideoCodec } from './codec';
+import { AudioCodec, MediaCodec, PCM_AUDIO_CODECS, VideoCodec } from './codec';
 import { determineVideoPacketType } from './codec-data';
 import { customAudioDecoders, customVideoDecoders } from './custom-coder';
 import { Input } from './input';
 import { Logging } from './logging';
 import {
 	assert,
+	extractRotationFromMatrix,
+	isNumber,
+	isThenable,
+	matrixIsFlipped,
 	MaybePromise,
 	MaybeRelevantPromise,
 	Rational,
 	ResultValue,
-	Rotation,
 	roundToDivisor,
 	simplifyRational,
+	TransformationMatrix,
 } from './misc';
 import { TrackType } from './output';
 import { EncodedPacket, PacketRetrievalOptions, PacketType } from './packet';
@@ -39,6 +43,75 @@ export type PacketStats = {
 	averagePacketRate: number;
 	/** The average number of bits per second. */
 	averageBitrate: number;
+};
+
+/**
+ * Computed metrics about the frame rate of a video track.
+ * @group Input files & tracks
+ * @public
+ */
+export type FrameRateMetrics = {
+	/**
+	 * The true, underlying frame rate of the video that produced the frame timestamps. This value is heuristically
+	 * determined by examining the time differences between frames, excluding outliers, and then fitting them to
+	 * fractions. This algorithm is stable even when frames are dropped, as long as all frames lie roughly on one
+	 * uniform lattice.
+	 *
+	 * If this field is not `null`, Mediabunny is extremely confident in having found the actual frame rate of
+	 * the video.
+	 *
+	 * This field is `null` for videos where no consistent underlying frame rate was detected, indicating a variable
+	 * frame-rate (VFR) video.
+	 */
+	underlyingFrameRate: number | null;
+	/**
+	 * Mediabunny's best guess for the video's actual intended frame rate.
+	 *
+	 * This value is determined heuristically. If `underlyingFrameRate` exists, this field will be equal to it. If it
+	 * doesn't, Mediabunny will check if `medianFrameRate` is close to a "common" frame rate and if so, snap to it.
+	 * Otherwise, this field simply falls back to `medianFrameRate`.
+	 */
+	bestGuessFrameRate: number;
+	/**
+	 * The minimum frame rate of the video at any given point, based on the largest distance between two
+	 * consecutive frames.
+	 */
+	minFrameRate: number;
+	/**
+	 * The maximum frame rate of the video at any given point, based on the smallest distance between two
+	 * consecutive frames.
+	 */
+	maxFrameRate: number;
+	/**
+	 * The average frame rate across the duration of the probed packets. This value represents the average frames per
+	 * second; it is not the average of frame rates across the video.
+	 */
+	averageFrameRate: number;
+	/**
+	 * The median frame rate, as determined by the distance between any two consecutive frames. For variable frame-rate
+	 * (VFR) videos, this field gives you a good idea of the _de facto_ frame rate of the video.
+	 */
+	medianFrameRate: number;
+	/** Is `true` only when the underlying video is CFR (constant frame-rate) and no frames are skipped. */
+	frameRateIsConstant: boolean;
+	/**
+	 * The number of packets that were probed/inspected to estimate the frame rate. Probe at least 256 packets for a
+	 * reliable estimation of frame rate.
+	 */
+	probedPacketCount: number;
+};
+
+/**
+ * Options for controlling how a video track's {@link FrameRateMetrics} are computed.
+ * @group Input files & tracks
+ * @public
+ */
+export type FrameRateMetricsOptions = {
+	/**
+	 * The target number of packets to inspect to compute the frame rate. Defaults to `256`. Pass `Infinity` to scan
+	 * the entire file.
+	 */
+	targetPacketCount?: number;
 };
 
 export interface InputTrackBacking {
@@ -491,7 +564,7 @@ export abstract class InputTrack {
 }
 
 const requireSync = <T>(value: MaybePromise<T>, getterName: string, asyncName: string): T => {
-	if (value instanceof Promise) {
+	if (isThenable(value)) {
 		throw new Error(
 			`'${getterName}' is deprecated and not available synchronously for this track. Use the preferred`
 			+ ` '${asyncName}()' instead.`,
@@ -517,7 +590,7 @@ const toValidatedPredicate = <T extends InputTrack>(
 				};
 
 				const result = predicate(track);
-				if (result instanceof Promise) {
+				if (isThenable(result)) {
 					return result.then(handle);
 				}
 				return handle(result);
@@ -534,7 +607,7 @@ export interface InputVideoTrackBacking extends InputTrackBacking {
 	getSquarePixelHeight(): MaybePromise<number>;
 	getMetadataDisplayWidth?(): MaybePromise<number | null>;
 	getMetadataDisplayHeight?(): MaybePromise<number | null>;
-	getRotation(): MaybePromise<Rotation>;
+	getTransformationMatrix(): MaybePromise<TransformationMatrix>;
 	getColorSpace(): Promise<VideoColorSpaceInit>;
 	canBeTransparent(): Promise<boolean>;
 	getDecoderConfig(): Promise<VideoDecoderConfig | null>;
@@ -547,15 +620,13 @@ export interface InputVideoTrackBacking extends InputTrackBacking {
  */
 export class InputVideoTrack extends InputTrack {
 	/** @internal */
-	override _backing: InputVideoTrackBacking;
+	declare _backing: InputVideoTrackBacking;
 	/** @internal */
 	_pixelAspectRatioCache: Rational | null = null;
 
 	/** @internal */
 	constructor(input: Input, backing: InputVideoTrackBacking) {
 		super(input, backing);
-
-		this._backing = backing;
 	}
 
 	get type(): TrackType {
@@ -606,9 +677,24 @@ export class InputVideoTrack extends InputTrack {
 		return requireSync(this._backing.getCodedHeight(), 'codedHeight', 'getCodedHeight');
 	}
 
-	/** Returns the angle in degrees by which the track's frames should be rotated (clockwise). */
+	/**
+	 * Returns the row-major 3x3 affine transformation matrix that is used to transform the raw video frames before they
+	 * are displayed. The raw frames are assumed to be placed with their top-left corner at the origin (0,0).
+	 *
+	 * Usually, this matrix models a rotation and a flip. Depending on the file, it may also contain a translation
+	 * component. When displaying video, you should typically ignore the translation component and display the center of
+	 * the transformed frame in the center of the viewport.
+	 */
+	async getTransformationMatrix() {
+		return this._backing.getTransformationMatrix();
+	}
+
+	/**
+	 * Returns the angle in degrees by which the track's frames should be rotated (clockwise). The rotation is
+	 * applied before flipping.
+	 */
 	async getRotation() {
-		return this._backing.getRotation();
+		return extractRotationFromMatrix(await this._backing.getTransformationMatrix());
 	}
 
 	/**
@@ -616,7 +702,16 @@ export class InputVideoTrack extends InputTrack {
 	 * @deprecated Use {@link InputVideoTrack.getRotation} instead.
 	 */
 	get rotation() {
-		return requireSync(this._backing.getRotation(), 'rotation', 'getRotation');
+		return extractRotationFromMatrix(
+			requireSync(this._backing.getTransformationMatrix(), 'rotation', 'getRotation'),
+		);
+	}
+
+	/**
+	 * Returns whether the track's frames should be flipped horizontally (about the vertical axis), after rotation.
+	 */
+	async getFlip() {
+		return matrixIsFlipped(await this._backing.getTransformationMatrix());
 	}
 
 	/**
@@ -700,7 +795,9 @@ export class InputVideoTrack extends InputTrack {
 			}
 		}
 
-		const rotation = requireSync(this._backing.getRotation(), 'displayWidth', 'getDisplayWidth');
+		const rotation = extractRotationFromMatrix(
+			requireSync(this._backing.getTransformationMatrix(), 'displayWidth', 'getDisplayWidth'),
+		);
 		const value = rotation % 180 === 0
 			? this._backing.getSquarePixelWidth()
 			: this._backing.getSquarePixelHeight();
@@ -731,7 +828,9 @@ export class InputVideoTrack extends InputTrack {
 			}
 		}
 
-		const rotation = requireSync(this._backing.getRotation(), 'displayHeight', 'getDisplayHeight');
+		const rotation = extractRotationFromMatrix(
+			requireSync(this._backing.getTransformationMatrix(), 'displayHeight', 'getDisplayHeight'),
+		);
 		const value = rotation % 180 === 0
 			? this._backing.getSquarePixelHeight()
 			: this._backing.getSquarePixelWidth();
@@ -820,6 +919,152 @@ export class InputVideoTrack extends InputTrack {
 
 		return determineVideoPacketType(codec, decoderConfig, packet.data);
 	}
+
+	/**
+	 * Computes frame rate metrics for this video track, i.e. estimates the video's frame rate. Frame rate is never
+	 * determined from file metadata (which is unreliable) but is always deduced directly from the actual frame
+	 * timestamps.
+	 */
+	async computeFrameRateMetrics(options: FrameRateMetricsOptions = {}): Promise<FrameRateMetrics> {
+		if (!options || typeof options !== 'object') {
+			throw new TypeError('options must be an object.');
+		}
+		if (
+			options.targetPacketCount !== undefined
+			&& (!isNumber(options.targetPacketCount) || options.targetPacketCount < 0)
+		) {
+			throw new TypeError('options.targetPacketCount must be a non-negative number.');
+		}
+
+		const timeResolution = await this.getTimeResolution();
+		const targetPacketCount = options.targetPacketCount ?? 256;
+
+		const cursor = new PacketCursor(this, { metadataOnly: true });
+		const timestamps: number[] = [];
+		let maxTimestamp = -Infinity;
+
+		let probedPacketCount = 0;
+
+		await cursor.iterate((packet) => {
+			if (
+				timestamps.length >= targetPacketCount
+				// Needed for out-of-presentation-order packets.
+				&& packet.timestamp >= maxTimestamp
+			) {
+				return false;
+			}
+
+			timestamps.push(packet.timestamp);
+			maxTimestamp = Math.max(maxTimestamp, packet.timestamp);
+			probedPacketCount++;
+		});
+
+		const ticks = new Float64Array(timestamps.length);
+
+		for (let i = 0; i < timestamps.length; i++) {
+			ticks[i] = Math.round(timestamps[i]! * timeResolution);
+		}
+
+		ticks.sort();
+
+		// Deduplicate in-place; only ticks[0..n) remains active.
+		let n = 1;
+
+		for (let i = 1; i < ticks.length; i++) {
+			if (ticks[i] !== ticks[n - 1]) {
+				ticks[n++] = ticks[i]!;
+			}
+		}
+
+		if (n < 2) {
+			return {
+				underlyingFrameRate: null,
+				bestGuessFrameRate: timeResolution,
+				minFrameRate: timeResolution,
+				maxFrameRate: timeResolution,
+				averageFrameRate: timeResolution,
+				medianFrameRate: timeResolution,
+				frameRateIsConstant: true,
+				probedPacketCount,
+			};
+		}
+
+		const activeTicks = ticks.subarray(0, n);
+		const underlyingFrameRate = findUnderlyingFrameRate(activeTicks, timeResolution);
+
+		// If an underlying frame rate exists, differences are expressed in inferred frame intervals. Otherwise they
+		// remain raw timestamp ticks.
+		const unitRate = underlyingFrameRate ?? timeResolution;
+		const ticksPerFrame = underlyingFrameRate !== null
+			? timeResolution / underlyingFrameRate
+			: null;
+
+		const histogram = new Map<number, number>();
+
+		let minDifference = Infinity;
+		let maxDifference = -Infinity;
+		let totalDifference = 0;
+
+		for (let i = 1; i < n; i++) {
+			const tickDifference = activeTicks[i]! - activeTicks[i - 1]!;
+
+			const difference = ticksPerFrame !== null
+				? Math.max(1, Math.round(tickDifference / ticksPerFrame))
+				: tickDifference;
+
+			histogram.set(difference, (histogram.get(difference) ?? 0) + 1);
+
+			minDifference = Math.min(minDifference, difference);
+			maxDifference = Math.max(maxDifference, difference);
+			totalDifference += difference;
+		}
+
+		const differenceCount = n - 1;
+
+		// Get the two middle differences so the even-sized case has a true median.
+		const sortedDifferences = [...histogram.keys()].sort((a, b) => a - b);
+		const middleA = (differenceCount - 1) >> 1;
+		const middleB = differenceCount >> 1;
+
+		let medianDifferenceA = 0;
+		let medianDifferenceB = 0;
+		let cumulativeCount = 0;
+
+		for (const difference of sortedDifferences) {
+			cumulativeCount += histogram.get(difference)!;
+
+			if (medianDifferenceA === 0 && cumulativeCount > middleA) {
+				medianDifferenceA = difference;
+			}
+
+			if (cumulativeCount > middleB) {
+				medianDifferenceB = difference;
+				break;
+			}
+		}
+
+		// Median is defined over instantaneous frame rates, not durations.
+		const medianFrameRate = (
+			unitRate / medianDifferenceA
+			+ unitRate / medianDifferenceB
+		) / 2;
+
+		return {
+			underlyingFrameRate,
+			bestGuessFrameRate: underlyingFrameRate !== null
+				? underlyingFrameRate
+				: getBestGuessFrameRate(medianFrameRate),
+			minFrameRate: unitRate / maxDifference,
+			maxFrameRate: unitRate / minDifference,
+			averageFrameRate: unitRate * differenceCount / totalDifference,
+			medianFrameRate,
+			frameRateIsConstant:
+				underlyingFrameRate !== null
+				&& minDifference === 1
+				&& maxDifference === 1,
+			probedPacketCount,
+		};
+	}
 }
 
 export interface InputAudioTrackBacking extends InputTrackBacking {
@@ -837,13 +1082,11 @@ export interface InputAudioTrackBacking extends InputTrackBacking {
  */
 export class InputAudioTrack extends InputTrack {
 	/** @internal */
-	override _backing: InputAudioTrackBacking;
+	declare _backing: InputAudioTrackBacking;
 
 	/** @internal */
 	constructor(input: Input, backing: InputAudioTrackBacking) {
 		super(input, backing);
-
-		this._backing = backing;
 	}
 
 	get type(): TrackType {
@@ -926,7 +1169,7 @@ export class InputAudioTrack extends InputTrack {
 				return true;
 			}
 
-			if (decoderConfig.codec.startsWith('pcm-')) {
+			if ((PCM_AUDIO_CODECS as readonly string[]).includes(decoderConfig.codec)) {
 				return true; // Since we decode it ourselves
 			} else {
 				if (typeof AudioDecoder === 'undefined') {
@@ -1042,7 +1285,7 @@ export const toValidatedInputTrackQuery = <T extends InputTrack>(
 					};
 
 					const result = query.filter!(track);
-					if (result instanceof Promise) {
+					if (isThenable(result)) {
 						return result.then(handle);
 					} else {
 						return handle(result);
@@ -1065,7 +1308,7 @@ export const toValidatedInputTrackQuery = <T extends InputTrack>(
 					};
 
 					const result = query.sortBy!(track);
-					if (result instanceof Promise) {
+					if (isThenable(result)) {
 						return result.then(handle);
 					} else {
 						return handle(result);
@@ -1091,7 +1334,7 @@ export const mergeInputTrackQueries = <T extends InputTrack>(
 						return queryB?.filter?.(track) ?? true;
 					};
 
-					if (resultA instanceof Promise) {
+					if (isThenable(resultA)) {
 						return resultA.then(handleResultA);
 					} else {
 						return handleResultA(resultA);
@@ -1111,7 +1354,7 @@ export const mergeInputTrackQueries = <T extends InputTrack>(
 						];
 					};
 
-					if (resultA instanceof Promise || resultB instanceof Promise) {
+					if (isThenable(resultA) || isThenable(resultB)) {
 						return Promise.all([resultA, resultB]).then(([resultA, resultB]) => {
 							return join(resultA, resultB);
 						});
@@ -1130,7 +1373,7 @@ export const queryInputTracks = async <T extends InputTrack>(
 	let matched = tracks;
 	if (query?.filter) {
 		const filterMatches = tracks.map(t => query.filter!(t));
-		const hasAsyncFilter = filterMatches.some(x => x instanceof Promise);
+		const hasAsyncFilter = filterMatches.some(x => isThenable(x));
 		if (hasAsyncFilter) {
 			// eslint-disable-next-line @typescript-eslint/await-thenable
 			const resolvedFilterMatches = await Promise.all(filterMatches);
@@ -1145,7 +1388,7 @@ export const queryInputTracks = async <T extends InputTrack>(
 	}
 
 	const sortValues = matched.map(t => query.sortBy!(t));
-	const hasAsyncSort = sortValues.some(x => x instanceof Promise);
+	const hasAsyncSort = sortValues.some(x => isThenable(x));
 	const resolvedSortValues = hasAsyncSort
 		// eslint-disable-next-line @typescript-eslint/await-thenable
 		? await Promise.all(sortValues)
@@ -1170,4 +1413,268 @@ export const queryInputTracks = async <T extends InputTrack>(
 			return 0;
 		})
 		.map(x => x.track);
+};
+
+/**
+ * Estimates the underlying CFR-like frame rate from timestamp deltas.
+ *
+ * Each delta is modeled as an integer multiple of one frame period, allowing dropped frames and a small number of
+ * malformed timestamps.
+ */
+export const findUnderlyingFrameRate = (
+	ticks: Float64Array,
+	resolution: number,
+): number | null => {
+	const MAX_DENOMINATOR = 1_000_000;
+	const MIN_INLIER_RATIO = 0.98;
+	const DELTA_TOLERANCE = 1 + 1e-9;
+	const MAX_EFFECTIVE_FRAME_SPAN = 1000;
+
+	const KNOWN_FRAME_RATES = [
+		12,
+		15,
+		20,
+		24000 / 1001,
+		24,
+		25,
+		30000 / 1001,
+		30,
+		48,
+		50,
+		60000 / 1001,
+		60,
+		100,
+		120000 / 1001,
+		120,
+		144,
+		240,
+	];
+
+	if (ticks.length < 2) {
+		return null;
+	}
+
+	const gaps = new Float64Array(ticks.length - 1);
+
+	for (let i = 1; i < ticks.length; i++) {
+		const gap = ticks[i]! - ticks[i - 1]!;
+
+		if (!(gap > 0)) {
+			return null;
+		}
+
+		gaps[i - 1] = gap;
+	}
+
+	// Start near the low end so dropped frames don't inflate the estimate, without letting one anomalously short gap
+	// determine it.
+	const sortedGaps = gaps.slice();
+	sortedGaps.sort();
+
+	let period = sortedGaps[Math.floor(sortedGaps.length * 0.05)]!;
+
+	// Repeatedly infer how many frame periods each gap spans and refine the underlying period from the locally
+	// consistent gaps.
+	for (let iteration = 0; iteration < 6; iteration++) {
+		let totalTicks = 0;
+		let totalFrames = 0;
+
+		for (const gap of gaps) {
+			const multiple = Math.max(1, Math.round(gap / period));
+
+			if (Math.abs(gap - multiple * period) >= DELTA_TOLERANCE) {
+				continue;
+			}
+
+			totalTicks += gap;
+			totalFrames += multiple;
+		}
+
+		if (totalFrames === 0) {
+			return null;
+		}
+
+		const refinedPeriod = totalTicks / totalFrames;
+
+		if (
+			Math.abs(refinedPeriod - period)
+			<= 1e-12 * Math.max(1, period)
+		) {
+			period = refinedPeriod;
+			break;
+		}
+
+		period = refinedPeriod;
+	}
+
+	let inlierCount = 0;
+	let totalTicks = 0;
+	let totalFrames = 0;
+
+	for (const gap of gaps) {
+		const multiple = Math.max(1, Math.round(gap / period));
+
+		if (Math.abs(gap - multiple * period) >= DELTA_TOLERANCE) {
+			continue;
+		}
+
+		inlierCount++;
+		totalTicks += gap;
+		totalFrames += multiple;
+	}
+
+	if (inlierCount / gaps.length < MIN_INLIER_RATIO) {
+		return null;
+	}
+
+	period = totalTicks / totalFrames;
+
+	// Don't let arbitrarily long files force arbitrarily precise rational reconstruction from microscopic clock drift.
+	const uncertainty = 1 / Math.min(
+		totalFrames,
+		MAX_EFFECTIVE_FRAME_SPAN,
+	);
+
+	const periodLo = Math.max(Number.EPSILON, period - uncertainty);
+	const periodHi = period + uncertainty;
+
+	const fpsLo = resolution / periodHi;
+	const fpsHi = resolution / periodLo;
+	const fittedFps = resolution / period;
+
+	// Prefer established frame rates when they're supported by the measured interval. If several fit, use the one
+	// closest to the measured cadence.
+	let fps: number | null = null;
+	let bestKnownError = Infinity;
+
+	for (const candidate of KNOWN_FRAME_RATES) {
+		if (candidate < fpsLo || candidate > fpsHi) {
+			continue;
+		}
+
+		const error = Math.abs(candidate / fittedFps - 1);
+
+		if (error < bestKnownError) {
+			fps = candidate;
+			bestKnownError = error;
+		}
+	}
+
+	if (fps === null) {
+		// Otherwise, the natural fraction may be simpler either as FPS or as ticks/frame.
+		const periodFraction = simplestFractionBetween(
+			periodLo,
+			periodHi,
+			MAX_DENOMINATOR,
+		);
+
+		const fpsFraction = simplestFractionBetween(
+			fpsLo,
+			fpsHi,
+			MAX_DENOMINATOR,
+		);
+
+		if (
+			fpsFraction
+			&& (
+				!periodFraction
+				|| fpsFraction.den < periodFraction.den
+				|| (
+					fpsFraction.den === periodFraction.den
+					&& fpsFraction.num <= periodFraction.num
+				)
+			)
+		) {
+			fps = fpsFraction.num / fpsFraction.den;
+		} else if (periodFraction) {
+			fps = resolution * periodFraction.den / periodFraction.num;
+		} else {
+			return null;
+		}
+	}
+
+	// Make sure the chosen rate still explains the deltas.
+	const finalPeriod = resolution / fps;
+	let finalInlierCount = 0;
+
+	for (const gap of gaps) {
+		const multiple = Math.max(1, Math.round(gap / finalPeriod));
+
+		if (
+			Math.abs(gap - multiple * finalPeriod)
+			< DELTA_TOLERANCE
+		) {
+			finalInlierCount++;
+		}
+	}
+
+	if (finalInlierCount / gaps.length < MIN_INLIER_RATIO) {
+		return null;
+	}
+
+	return fps;
+};
+
+const simplestFractionBetween = (
+	lo: number,
+	hi: number,
+	maxDenominator: number,
+): Rational | null => {
+	for (let den = 1; den <= maxDenominator; den++) {
+		const num = Math.floor(lo * den) + 1;
+
+		if (num / den < hi) {
+			return simplifyRational({ num, den });
+		}
+	}
+
+	return null;
+};
+
+const getBestGuessFrameRate = (frameRate: number) => {
+	const SPECIAL_FRAME_RATES = [
+		24 / 1.001,
+		30 / 1.001,
+		60 / 1.001,
+		120 / 1.001,
+	];
+
+	const COMMON_FRAME_RATES = [
+		12,
+		15,
+		20,
+		24,
+		25,
+		30,
+		48,
+		50,
+		60,
+		100,
+		120,
+		144,
+		240,
+	];
+
+	const SPECIAL_TOLERANCE = 0.0005;
+	const COMMON_TOLERANCE = 0.025;
+
+	for (const candidate of SPECIAL_FRAME_RATES) {
+		if (Math.abs(candidate / frameRate - 1) <= SPECIAL_TOLERANCE) {
+			return candidate;
+		}
+	}
+
+	let best = frameRate;
+	let bestError = Infinity;
+
+	for (const candidate of COMMON_FRAME_RATES) {
+		const error = Math.abs(candidate / frameRate - 1);
+
+		if (error <= COMMON_TOLERANCE && error < bestError) {
+			best = candidate;
+			bestError = error;
+		}
+	}
+
+	return best;
 };

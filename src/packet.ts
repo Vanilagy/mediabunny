@@ -8,7 +8,7 @@
 
 import { InputDisposedError } from './input';
 import { InputTrack } from './input-track';
-import { isNumber, MaybePromise, ResultValue, SECOND_TO_MICROSECOND_FACTOR } from './misc';
+import { isNumber, isThenable, MaybePromise, ResultValue, SECOND_TO_MICROSECOND_FACTOR } from './misc';
 
 export const PLACEHOLDER_DATA = /* #__PURE__ */ new Uint8Array(0);
 
@@ -163,7 +163,7 @@ export class EncodedPacket {
 			throw new TypeError('Metadata-only packets cannot be converted to a video chunk.');
 		}
 		if (typeof EncodedVideoChunk === 'undefined') {
-			throw new Error('Your browser does not support EncodedVideoChunk.');
+			throw new Error('EncodedVideoChunk is not available in this environment.');
 		}
 
 		return new EncodedVideoChunk({
@@ -187,7 +187,7 @@ export class EncodedPacket {
 			throw new TypeError('Metadata-only packets cannot be converted to a video chunk.');
 		}
 		if (typeof EncodedVideoChunk === 'undefined') {
-			throw new Error('Your browser does not support EncodedVideoChunk.');
+			throw new Error('EncodedVideoChunk is not available in this environment.');
 		}
 
 		return new EncodedVideoChunk({
@@ -206,7 +206,7 @@ export class EncodedPacket {
 			throw new TypeError('Metadata-only packets cannot be converted to an audio chunk.');
 		}
 		if (typeof EncodedAudioChunk === 'undefined') {
-			throw new Error('Your browser does not support EncodedAudioChunk.');
+			throw new Error('EncodedAudioChunk is not available in this environment.');
 		}
 
 		return new EncodedAudioChunk({
@@ -408,7 +408,7 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 			return this.getNextKey(packet, options);
 		};
 
-		if (result instanceof Promise) {
+		if (isThenable(result)) {
 			return result.then(onPacket);
 		} else {
 			return onPacket(result);

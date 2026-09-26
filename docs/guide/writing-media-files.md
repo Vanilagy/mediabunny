@@ -90,19 +90,19 @@ As an example, let's add two tracks to our output:
 - An audio track driven by the user's microphone input, encoded using AAC
 
 ```ts
-import { CanvasSource, MediaStreamAudioTrackSource } from 'mediabunny';
+import { CanvasSource, MediaStreamAudioTrackSource, Quality } from 'mediabunny';
 
 // Assuming `canvasElement` exists
 const videoSource = new CanvasSource(canvasElement, {
 	codec: 'avc',
-	bitrate: 1e6, // 1 Mbps	
+	quality: new Quality({ bitrate: 1e6 }), // 1 Mbps
 });
 
 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 const audioStreamTrack = stream.getAudioTracks()[0];
 const audioSource = new MediaStreamAudioTrackSource(audioStreamTrack, {
 	codec: 'aac',
-	bitrate: 128e3, // 128 kbps
+	quality: new Quality({ bitrate: 128e3 }), // 128 kbps
 });
 
 output.addVideoTrack(videoSource, { frameRate: 30 });

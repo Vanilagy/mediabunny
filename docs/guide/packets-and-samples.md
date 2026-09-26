@@ -238,10 +238,11 @@ const sample = new VideoSample(canvas, {
 	duration: 1/24, // in seconds
 });
 
-// Creates a sample from an image element, with some added rotation
+// Creates a sample from an image element, with some added rotation and flip
 const sample = new VideoSample(imageElement, {
 	timestamp: 5, // in seconds
 	rotation: 90, // in degrees clockwise
+	flip: true, // horizontal flip, applied after rotation
 });
 
 // Creates a sample from a VideoFrame (timestamp will be copied)
@@ -309,13 +310,17 @@ videoSample.codedHeight; // => number
 videoSample.squarePixelWidth;
 videoSample.squarePixelHeight;
 
-// Transformed display dimensions of the sample (after rotation)
+// Transformed display dimensions of the sample (after rotation and flip)
 videoSample.displayWidth; // => number	
 videoSample.displayHeight; // => number	
 
 // Rotation of the sample in degrees clockwise. The raw sample should be
 // rotated by this amount when it is presented.
 videoSample.rotation; // => 0 | 90 | 180 | 270
+
+// Whether the raw sample should be flipped horizontally when it is presented,
+// after rotation.
+videoSample.flip; // => boolean
 
 // The sample's pixel aspect ratio
 videoSample.pixelAspectRatio; // => { num: number, den: number }
@@ -335,7 +340,7 @@ videoSample.visibleRect; // Rectangle
 videoSample.encodeOptions; // => VideoEncoderEncodeOptions (defaults to {})
 ```
 
-While all of these properties are read-only, you can use the `setTimestamp`, `setDuration`, `setRotation` and `setEncodeOptions` methods to modify some of the metadata of the video sample.
+While all of these properties are read-only, you can use the `setTimestamp`, `setDuration`, `setRotation`, `setFlip` and `setEncodeOptions` methods to modify some of the metadata of the video sample.
 
 ::: warning
 Timestamps can be [negative](#negative-timestamps).
@@ -379,7 +384,7 @@ draw(
 	dHeight?: number, // defaults to sHeight
 ): void;
 ```
-These methods behave like [drawImage](https://developer.mozilla.org/en-US/docs/Web/API/CanvasRenderingContext2D/drawImage) and paint the video frame at the given position with the given dimensions. This method will automatically draw the frame with the correct rotation based on its `rotation` property.
+These methods behave like [drawImage](https://developer.mozilla.org/en-US/docs/Web/API/CanvasRenderingContext2D/drawImage) and paint the video frame at the given position with the given dimensions. This method will automatically draw the frame with the correct rotation and flip based on its `rotation` and `flip` properties.
 
 The `drawWithFit` method can be used to draw the video sample to fill an entire canvas with a specified fitting algorithm:
 ```ts
@@ -388,12 +393,13 @@ drawWithFit(
 	options: {
 		fit: 'fill' | 'contain' | 'cover';
 		rotation?: Rotation; // Overrides the sample's rotation
+		flip?: boolean; // Overrides the sample's flip
 		crop?: CropRectangle;
 	},
 ): void;
 ```
 
-If you want to draw the raw underlying image to a canvas directly (without respecting the rotation metadata), then you can use the following method:
+If you want to draw the raw underlying image to a canvas directly (without respecting the rotation and flip metadata), then you can use the following method:
 ```ts
 videoSample.toCanvasImageSource(); // => VideoFrame | OffscreenCanvas;
 ```
@@ -425,17 +431,20 @@ You can pass additional options to `allocationSize` and `copyTo` to extract data
 
 ---
 
-You can transform a `VideoSample` to resize, rotate, and/or crop it, producing a new `VideoSample`:
+You can transform a `VideoSample` to resize, rotate, flip, and/or crop it, producing a new `VideoSample`:
 ```ts
 const transformed = await videoSample.transform({
 	width: 640,
 	height: 360,
 	fit: 'cover',
 	rotate: 90,
+	flip: true,
 	crop: { left: 0, top: 0, width: 1920, height: 1000 },
 	alpha: 'discard',
 });
 ```
+
+The operations are applied in this order: pixel aspect ratio normalization, rotation, flip, crop, resize. Rotation and flip are in addition to the sample's own `rotation` and `flip` metadata.
 
 In browser environments, the transform is performed using a canvas. In non-browser environments without `OffscreenCanvas` or `HTMLCanvasElement`, this method throws unless you register a custom transformer:
 ```ts

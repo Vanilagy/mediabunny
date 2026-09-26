@@ -10,10 +10,11 @@ import { Bitstream } from './bitstream';
 
 export type AacAudioSpecificConfig = {
 	objectType: number;
+	coreObjectType: number;
 	frequencyIndex: number;
-	sampleRate: number | null;
 	channelConfiguration: number;
-	numberOfChannels: number | null;
+	outputSampleRate: number | null;
+	outputNumberOfChannels: number | null;
 };
 
 export const aacFrequencyTable = [
@@ -30,20 +31,8 @@ export const parseAacAudioSpecificConfig = (bytes: Uint8Array | null): AacAudioS
 
 	const bitstream = new Bitstream(bytes);
 
-	let objectType = bitstream.readBits(5);
-	if (objectType === 31) {
-		objectType = 32 + bitstream.readBits(6);
-	}
-
-	const frequencyIndex = bitstream.readBits(4);
-	let sampleRate: number | null = null;
-	if (frequencyIndex === 15) {
-		sampleRate = bitstream.readBits(24);
-	} else {
-		if (frequencyIndex < aacFrequencyTable.length) {
-			sampleRate = aacFrequencyTable[frequencyIndex]!;
-		}
-	}
+	const objectType = readAacObjectType(bitstream);
+	const { frequencyIndex, sampleRate } = readAacSamplingFrequency(bitstream);
 
 	const channelConfiguration = bitstream.readBits(4);
 	let numberOfChannels: number | null = null;
@@ -51,61 +40,155 @@ export const parseAacAudioSpecificConfig = (bytes: Uint8Array | null): AacAudioS
 		numberOfChannels = aacChannelMap[channelConfiguration]!;
 	}
 
+	let coreObjectType = objectType;
+	let psPresent = false;
+	let outputSampleRate = sampleRate;
+
+	if (objectType === 5 || objectType === 29) {
+		// Explicit hierarchical signaling: everything read so far describes the core coder, and the rate the
+		// decoder actually outputs follows right here
+		psPresent = objectType === 29;
+
+		outputSampleRate = readAacSamplingFrequency(bitstream).sampleRate;
+		coreObjectType = readAacObjectType(bitstream);
+
+		if (coreObjectType === 22) {
+			bitstream.skipBits(4); // extensionChannelConfiguration
+		}
+	} else {
+		// There may be SBR/PS flags sitting behind a sync word after the config of the core coder. We find them by
+		// scanning for the sync word, just like FFmpeg does.
+		while (bitstream.getBitsLeft() > 15) {
+			const searchStart = bitstream.pos;
+
+			if (bitstream.readBits(11) !== 0x2b7) {
+				bitstream.pos = searchStart + 1;
+				continue;
+			}
+
+			if (readAacObjectType(bitstream) === 5 && bitstream.readBits(1)) {
+				outputSampleRate = readAacSamplingFrequency(bitstream).sampleRate;
+
+				if (bitstream.getBitsLeft() > 11 && bitstream.readBits(11) === 0x548) {
+					psPresent = !!bitstream.readBits(1);
+				}
+			}
+
+			break;
+		}
+	}
+
+	if (numberOfChannels !== null && numberOfChannels > 1) {
+		// PS only ever upmixes a mono core. A stereo signal means whatever we read was bogus
+		psPresent = false;
+	}
+
 	return {
 		objectType,
+		coreObjectType,
 		frequencyIndex,
-		sampleRate,
 		channelConfiguration,
-		numberOfChannels,
+		outputSampleRate,
+		outputNumberOfChannels: psPresent && numberOfChannels === 1
+			? 2
+			: numberOfChannels,
+	};
+};
+
+const readAacObjectType = (bitstream: Bitstream) => {
+	const objectType = bitstream.readBits(5);
+	return objectType === 31 ? 32 + bitstream.readBits(6) : objectType;
+};
+
+const readAacSamplingFrequency = (bitstream: Bitstream) => {
+	const frequencyIndex = bitstream.readBits(4);
+
+	if (frequencyIndex === 15) {
+		return {
+			frequencyIndex,
+			sampleRate: bitstream.readBits(24),
+		};
+	}
+
+	return {
+		frequencyIndex,
+		sampleRate: frequencyIndex < aacFrequencyTable.length
+			? aacFrequencyTable[frequencyIndex]!
+			: null,
 	};
 };
 
 export const buildAacAudioSpecificConfig = (config: {
 	objectType: number;
-	sampleRate: number;
-	numberOfChannels: number;
+	outputSampleRate: number;
+	outputNumberOfChannels: number;
 }) => {
-	let frequencyIndex = aacFrequencyTable.indexOf(config.sampleRate);
-	let customSampleRate: number | null = null;
+	const usesSbr = config.objectType === 5 || config.objectType === 29;
+	const usesPs = config.objectType === 29;
 
-	if (frequencyIndex === -1) {
-		frequencyIndex = 15;
-		customSampleRate = config.sampleRate;
-	}
+	// SBR runs the core coder at half the output rate, and PS upmixes a mono core to stereo
+	const coreSampleRate = usesSbr ? config.outputSampleRate / 2 : config.outputSampleRate;
+	const coreNumberOfChannels = usesPs ? 1 : config.outputNumberOfChannels;
 
-	const channelConfiguration = aacChannelMap.indexOf(config.numberOfChannels);
+	const channelConfiguration = aacChannelMap.indexOf(coreNumberOfChannels);
 	if (channelConfiguration === -1) {
-		throw new TypeError(`Unsupported number of channels: ${config.numberOfChannels}`);
+		throw new TypeError(`Unsupported number of channels: ${config.outputNumberOfChannels}`);
 	}
 
-	let bitCount = 5 + 4 + 4;
+	// Object type, sampling frequency, channel configuration, then a bare GASpecificConfig
+	let bitCount = 5 + 4 + 4 + 3;
 	if (config.objectType >= 32) {
 		bitCount += 6;
 	}
-	if (frequencyIndex === 15) {
+	if (findAacFrequencyIndex(coreSampleRate) === 15) {
 		bitCount += 24;
+	}
+	if (usesSbr) {
+		bitCount += 4 + 5; // Extension sampling frequency and the object type of the core coder
+		if (findAacFrequencyIndex(config.outputSampleRate) === 15) {
+			bitCount += 24;
+		}
 	}
 
 	const byteCount = Math.ceil(bitCount / 8);
 	const bytes = new Uint8Array(byteCount);
 	const bitstream = new Bitstream(bytes);
 
-	if (config.objectType < 32) {
-		bitstream.writeBits(5, config.objectType);
-	} else {
-		bitstream.writeBits(5, 31);
-		bitstream.writeBits(6, config.objectType - 32);
+	writeAacObjectType(bitstream, config.objectType);
+	writeAacSamplingFrequency(bitstream, coreSampleRate);
+	bitstream.writeBits(4, channelConfiguration);
+
+	if (usesSbr) {
+		writeAacSamplingFrequency(bitstream, config.outputSampleRate);
+		writeAacObjectType(bitstream, 2); // AAC-LC underneath
 	}
 
+	bitstream.writeBits(3, 0); // frameLengthFlag, dependsOnCoreCoder, extensionFlag
+
+	return bytes;
+};
+
+const writeAacObjectType = (bitstream: Bitstream, objectType: number) => {
+	if (objectType < 32) {
+		bitstream.writeBits(5, objectType);
+	} else {
+		bitstream.writeBits(5, 31);
+		bitstream.writeBits(6, objectType - 32);
+	}
+};
+
+const writeAacSamplingFrequency = (bitstream: Bitstream, sampleRate: number) => {
+	const frequencyIndex = findAacFrequencyIndex(sampleRate);
 	bitstream.writeBits(4, frequencyIndex);
 
 	if (frequencyIndex === 15) {
-		bitstream.writeBits(24, customSampleRate!);
+		bitstream.writeBits(24, sampleRate);
 	}
+};
 
-	bitstream.writeBits(4, channelConfiguration);
-
-	return bytes;
+const findAacFrequencyIndex = (sampleRate: number) => {
+	const index = aacFrequencyTable.indexOf(sampleRate);
+	return index === -1 ? 15 : index;
 };
 
 export type AdtsHeaderTemplate = {
@@ -117,8 +200,8 @@ export const buildAdtsHeaderTemplate = (config: AacAudioSpecificConfig): AdtsHea
 	const header = new Uint8Array(7);
 	const bitstream = new Bitstream(header);
 
-	const { objectType, frequencyIndex, channelConfiguration } = config;
-	const profile = objectType - 1;
+	const { coreObjectType, frequencyIndex, channelConfiguration } = config;
+	const profile = coreObjectType - 1;
 
 	bitstream.writeBits(12, 0b1111_11111111); // Syncword
 	bitstream.writeBits(1, 0); // MPEG Version

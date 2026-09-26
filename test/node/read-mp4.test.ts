@@ -1,5 +1,6 @@
 import { expect, test } from 'vitest';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
 	ALL_FORMATS,
 	BufferSource,
@@ -13,9 +14,11 @@ import {
 	Mp4OutputFormat,
 	Output,
 	PacketCursor,
+	PacketReader,
 } from '../../src/index.js';
+import { assert, toUint8Array } from '../../src/misc.js';
 
-const __dirname = new URL('.', import.meta.url).pathname;
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
 test('Should be able to get packets from a .MP4 file', async () => {
 	const filePath = path.join(__dirname, '..', 'public/video.mp4');
@@ -139,4 +142,44 @@ test('QuickTime nclc color information', async () => {
 		fullRange: undefined,
 	});
 	expect(await track.hasHighDynamicRange()).toBe(true);
+});
+
+// Annex B isn't supposed to exist in MP4, but some files have it anyway, with an empty avcC box
+test('Annex B', async () => {
+	const filePath = path.join(__dirname, '..', 'public/annex-b.mp4');
+	using input = new Input({
+		source: new FilePathSource(filePath),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryVideoTrack();
+	if (!track) throw new Error('No video track found');
+
+	const decoderConfig = (await track.getDecoderConfig())!;
+	expect(decoderConfig.codec).toBe('avc1.424028');
+	expect(decoderConfig.description).toBeUndefined();
+
+	const packetReader = new PacketReader(track);
+	const firstPacket = (await packetReader.getFirst())!;
+	expect([...firstPacket.data.slice(0, 4)]).toEqual([0, 0, 0, 1]);
+});
+
+test('HE-AAC v2 audio config is parsed correctly', async () => {
+	const filePath = path.join(__dirname, '..', 'public/he-aac-v2.mp4');
+	using input = new Input({
+		source: new FilePathSource(filePath),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	expect(await track.getSampleRate()).toBe(44100);
+	expect(await track.getNumberOfChannels()).toBe(2);
+
+	const decoderConfig = (await track.getDecoderConfig())!;
+	expect(decoderConfig.codec).toBe('mp4a.40.29');
+	expect(decoderConfig.sampleRate).toBe(44100);
+	expect(decoderConfig.numberOfChannels).toBe(2);
+	expect([...toUint8Array(decoderConfig.description!)]).toEqual([0xeb, 0x8a, 0x08, 0x00]);
 });

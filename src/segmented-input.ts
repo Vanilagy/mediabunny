@@ -18,7 +18,15 @@ import {
 	InputVideoTrack,
 	InputVideoTrackBacking,
 } from './input-track';
-import { arrayCount, assert, MaybePromise, MaybeRelevantPromise, ResultValue, roundToDivisor } from './misc';
+import {
+	arrayCount,
+	assert,
+	isThenable,
+	MaybePromise,
+	MaybeRelevantPromise,
+	ResultValue,
+	roundToDivisor,
+} from './misc';
 import { EncodedPacket, PacketRetrievalOptions } from './packet';
 
 export type SegmentedInputMetadata = {
@@ -226,7 +234,7 @@ export abstract class SegmentedInput {
 		} else {
 			const firstInput = this.getInputForSegment(firstSegment);
 			let firstTimestamp = this.getFirstTimestampForInput(firstInput);
-			if (firstTimestamp instanceof Promise) firstTimestamp = await firstTimestamp;
+			if (isThenable(firstTimestamp)) firstTimestamp = await firstTimestamp;
 
 			firstSegmentFirstTimestamp = firstTimestamp;
 			this.firstSegmentFirstTimestamps.set(firstSegment, firstSegmentFirstTimestamp);
@@ -237,7 +245,7 @@ export abstract class SegmentedInput {
 		}
 
 		let segmentFirstTimestamp = this.getFirstTimestampForInput(input);
-		if (segmentFirstTimestamp instanceof Promise) segmentFirstTimestamp = await segmentFirstTimestamp;
+		if (isThenable(segmentFirstTimestamp)) segmentFirstTimestamp = await segmentFirstTimestamp;
 
 		const segmentElapsed = segment.timestamp - firstSegment.timestamp;
 		const inputElapsed = segmentFirstTimestamp - firstSegmentFirstTimestamp;
@@ -278,6 +286,7 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 
 	hydrationPromise: Promise<void> | null = null;
 	firstInputTrack: InputTrack | null = null;
+	firstSegment: Segment | null = null;
 
 	constructor(segmentedInput: SegmentedInput, decl: SegmentedInputTrackDeclaration, number: number) {
 		this.segmentedInput = segmentedInput;
@@ -299,15 +308,34 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 				throw new Error('Missing first segment, can\'t retrieve track.');
 			}
 
-			const input = this.segmentedInput.getInputForSegment(this.segmentedInput.firstSegment);
-			const inputTracks = await input.getTracks();
+			let currentSegment: Segment | null = this.segmentedInput.firstSegment;
+			let track: InputTrack | null = null;
+			const segmentResult = new ResultValue<Segment | null>();
 
-			const track = inputTracks.find(x => x.type === this.decl.type && x.number === this.number);
+			// For playlists with sparse tracks (rare af!!), not every segment has every track, so we need to loop to
+			// find the first segment that actually contains the track we want.
+			while (currentSegment) {
+				const input = this.segmentedInput.getInputForSegment(currentSegment);
+				const inputTracks = await input.getTracks();
+				track = inputTracks.find(x => x.type === this.decl.type && x.number === this.number) ?? null;
+
+				if (track) {
+					break;
+				}
+
+				segmentResult.reset();
+				const promise = this.segmentedInput.getNextSegment(segmentResult, currentSegment, {});
+				if (segmentResult.pending) await promise;
+
+				currentSegment = segmentResult.value;
+			}
+
 			if (!track) {
 				throw new Error('No matching track found in underlying media data.');
 			}
 
 			this.firstInputTrack = track;
+			this.firstSegment = currentSegment;
 		})();
 	}
 
@@ -413,7 +441,7 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 		const segmentTimestampRelativeToFirst = segment.timestamp - this.segmentedInput.firstSegment.timestamp;
 
 		let timeResolution = track._backing.getTimeResolution();
-		if (timeResolution instanceof Promise) timeResolution = await timeResolution;
+		if (isThenable(timeResolution)) timeResolution = await timeResolution;
 
 		const modified = packet.clone({
 			timestamp: roundToDivisor(
@@ -442,20 +470,48 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 			await this.hydrate();
 		}
 
-		assert(this.segmentedInput.firstSegment);
 		assert(this.firstInputTrack);
+		assert(this.firstSegment);
 
-		const firstPacketResult = new ResultValue<EncodedPacket | null>();
-		const promise = this.firstInputTrack._backing.getFirstPacket(firstPacketResult, options);
-		if (firstPacketResult.pending) await promise;
+		let currentTrack: InputTrack | null = this.firstInputTrack;
+		let currentSegment: Segment | null = this.firstSegment;
+		const packetResult = new ResultValue<EncodedPacket | null>();
+		const segmentResult = new ResultValue<Segment | null>();
 
-		const packet = firstPacketResult.value;
+		// Loop until we found a segment with a packet (segments may contain zero packets in rare cases)
+		while (true) {
+			if (currentTrack) {
+				packetResult.reset();
+				const promise = currentTrack._backing.getFirstPacket(packetResult, options);
+				if (packetResult.pending) await promise;
 
-		if (!packet) {
-			return res.set(null);
+				const packet = packetResult.value;
+				if (packet) {
+					return this.createAdjustedPacket(res, packet, currentSegment, currentTrack);
+				}
+			}
+
+			segmentResult.reset();
+			const segmentPromise = this.segmentedInput.getNextSegment(segmentResult, currentSegment, {
+				skipLiveWait: options.skipLiveWait,
+			});
+			if (segmentResult.pending) await segmentPromise;
+
+			currentSegment = segmentResult.value;
+			if (!currentSegment) {
+				break;
+			}
+
+			const nextInput = this.segmentedInput.getInputForSegment(currentSegment);
+			let nextTracks = getTracksMaybeSync(nextInput);
+			if (isThenable(nextTracks)) nextTracks = await nextTracks;
+
+			currentTrack = nextTracks.find(t => (
+				t.type === this.firstInputTrack!.type && t.number === this.firstInputTrack!.number
+			)) ?? null;
 		}
 
-		return this.createAdjustedPacket(res, packet, this.segmentedInput.firstSegment, this.firstInputTrack);
+		return res.set(null);
 	}
 
 	getNextPacket(
@@ -514,7 +570,7 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 
 			const nextInput = this.segmentedInput.getInputForSegment(nextSegment);
 			let nextTracks = getTracksMaybeSync(nextInput);
-			if (nextTracks instanceof Promise) nextTracks = await nextTracks;
+			if (isThenable(nextTracks)) nextTracks = await nextTracks;
 
 			const nextTrack = nextTracks.find(t => t.type === info.track.type && t.number === info.track.number);
 
@@ -580,7 +636,7 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 		while (currentSegment) {
 			const input = this.segmentedInput.getInputForSegment(currentSegment);
 			let tracks = getTracksMaybeSync(input);
-			if (tracks instanceof Promise) tracks = await tracks;
+			if (isThenable(tracks)) tracks = await tracks;
 
 			const track = tracks.find(t => (
 				t.type === this.firstInputTrack!.type && t.number === this.firstInputTrack!.number
@@ -642,7 +698,7 @@ const getTracksMaybeSync = (input: Input): MaybePromise<InputTrack[]> => {
 class SegmentedInputInputVideoTrackBacking
 	extends SegmentedInputInputTrackBacking
 	implements InputVideoTrackBacking {
-	override firstInputTrack!: InputVideoTrack | null;
+	declare firstInputTrack: InputVideoTrack | null;
 
 	override getType() {
 		return 'video' as const;
@@ -668,8 +724,8 @@ class SegmentedInputInputVideoTrackBacking
 		return this.delegate(() => this.firstInputTrack!._backing.getSquarePixelHeight());
 	}
 
-	getRotation() {
-		return this.delegate(() => this.firstInputTrack!._backing.getRotation());
+	getTransformationMatrix() {
+		return this.delegate(() => this.firstInputTrack!._backing.getTransformationMatrix());
 	}
 
 	async getColorSpace(): Promise<VideoColorSpaceInit> {
@@ -688,7 +744,7 @@ class SegmentedInputInputVideoTrackBacking
 class SegmentedInputInputAudioTrackBacking
 	extends SegmentedInputInputTrackBacking
 	implements InputAudioTrackBacking {
-	override firstInputTrack!: InputAudioTrack;
+	declare firstInputTrack: InputAudioTrack;
 
 	override getType() {
 		return 'audio' as const;

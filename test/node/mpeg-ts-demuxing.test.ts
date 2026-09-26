@@ -2,6 +2,7 @@ import { expect, test } from 'vitest';
 import { Input } from '../../src/input.js';
 import { FilePathSource, ReadableStreamSource, CustomSource } from '../../src/source.js';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import { Readable } from 'node:stream';
 import { ALL_FORMATS, MPEG_TS } from '../../src/input-format.js';
@@ -12,7 +13,7 @@ import { EncodedPacket } from '../../src/packet.js';
 import { MpegTsDemuxer } from '../../src/mpeg-ts/mpeg-ts-demuxer.js';
 import { MpegTsStreamType } from '../../src/mpeg-ts/mpeg-ts-misc.js';
 
-const __dirname = new URL('.', import.meta.url).pathname;
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
 test('MPEG-TS input format', async () => {
 	expect(MPEG_TS.mimeType).toBe('video/MP2T');

@@ -7,7 +7,7 @@
  */
 
 import { InputDisposedError } from './input';
-import { assert, clamp, getUint24, MaybePromise, textDecoder, toDataView } from './misc';
+import { assert, clamp, getUint24, isThenable, MaybePromise, textDecoder, toDataView } from './misc';
 import { DEFAULT_MAX_READ_POSITION, DEFAULT_MIN_READ_POSITION, Source } from './source';
 
 export class Reader {
@@ -47,7 +47,7 @@ export class Reader {
 		const end = start + length;
 		const result = this.source._read(start, end, DEFAULT_MIN_READ_POSITION, DEFAULT_MAX_READ_POSITION);
 
-		if (result instanceof Promise) {
+		if (isThenable(result)) {
 			return result.then((x) => {
 				if (!x) {
 					return null;
@@ -95,7 +95,7 @@ export class Reader {
 				);
 			};
 
-			if (promisedAttempt instanceof Promise) {
+			if (isThenable(promisedAttempt)) {
 				return promisedAttempt.then(handleAttempt);
 			} else {
 				return handleAttempt(promisedAttempt);
@@ -121,7 +121,7 @@ export class Reader {
 				}
 
 				let slice = this.requestSliceRange(currentSize, 0, CHUNK_SIZE);
-				if (slice instanceof Promise) slice = await slice;
+				if (isThenable(slice)) slice = await slice;
 
 				if (!slice || slice.length === 0) {
 					break;

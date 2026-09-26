@@ -24,13 +24,19 @@ import {
 	iterateNalUnitsInLengthPrefixed,
 } from '../codec-data';
 import { Bitstream } from '../../shared/bitstream';
-import { assert, promiseWithResolvers, setUint24, toDataView, toUint8Array } from '../misc';
+import { assert, modEuclid, promiseWithResolvers, setUint24, toDataView, toUint8Array } from '../misc';
 import { Muxer } from '../muxer';
 import { Output, OutputAudioTrack, OutputTrack, OutputVideoTrack } from '../output';
 import { MpegTsOutputFormat } from '../output-format';
 import { EncodedPacket } from '../packet';
 import { Writer } from '../writer';
-import { buildMpegTsMimeType, MpegTsStreamType, TIMESCALE, TS_PACKET_SIZE } from './mpeg-ts-misc';
+import {
+	buildMpegTsMimeType,
+	MpegTsStreamType,
+	TIMESCALE,
+	TIMESTAMP_MODULUS,
+	TS_PACKET_SIZE,
+} from './mpeg-ts-misc';
 
 // Resources:
 // ISO/IEC 13818-1
@@ -111,7 +117,7 @@ export class MpegTsMuxer extends Muxer {
 			return existingTrackData;
 		}
 
-		validateVideoChunkMetadata(meta);
+		validateVideoChunkMetadata(meta, track.source._codec);
 		assert(meta?.decoderConfig);
 
 		const codec = track.source._codec;
@@ -156,11 +162,11 @@ export class MpegTsMuxer extends Muxer {
 			return existingTrackData;
 		}
 
-		validateAudioChunkMetadata(meta);
+		validateAudioChunkMetadata(meta, track.source._codec);
 		assert(meta?.decoderConfig);
 
 		const codec = track.source._codec;
-		assert(codec === 'aac' || codec === 'mp3' || codec === 'ac3' || codec === 'eac3');
+		assert(codec === 'aac' || codec === 'mp3' || codec === 'ac3' || codec === 'eac3' || codec === 'dts');
 
 		let streamType: MpegTsStreamType;
 		let streamId: number;
@@ -183,6 +189,11 @@ export class MpegTsMuxer extends Muxer {
 
 			case 'eac3': {
 				streamType = MpegTsStreamType.EAC3_SYSTEM_A;
+				streamId = 0xbd;
+			}; break;
+
+			case 'dts': {
+				streamType = MpegTsStreamType.DTS;
 				streamId = 0xbd;
 			}; break;
 		}
@@ -407,7 +418,7 @@ export class MpegTsMuxer extends Muxer {
 	): Uint8Array {
 		const codec = (trackData.track as OutputAudioTrack).source._codec;
 
-		if (codec === 'mp3' || codec === 'ac3' || codec === 'eac3') {
+		if (codec === 'mp3' || codec === 'ac3' || codec === 'eac3' || codec === 'dts') {
 			// We're good
 			return packet.data;
 		}
@@ -444,7 +455,7 @@ export class MpegTsMuxer extends Muxer {
 	}
 
 	private allTracksAreKnown() {
-		for (const track of this.output._tracks) {
+		for (const track of this.output.tracks) {
 			if (!track.source._closed && !this.trackDatas.some(x => x.track === track)) {
 				return false;
 			}
@@ -577,26 +588,30 @@ export class MpegTsMuxer extends Muxer {
 		pesView.setUint8(7, includeDts ? 0xC0 : 0x80); // PTS_DTS_flags, other flags=0
 		pesView.setUint8(8, headerDataLength); // PES_header_data_length
 
-		const pts = Math.round(queuedPacket.presentationTimestamp * TIMESCALE);
+		// This logic supports writing negative timestamps by simplying Euclid-modding them. It is then up to the
+		// demuxer to interpret them as negative, if it wasnts to.
+		const unwrappedPts = Math.round(queuedPacket.presentationTimestamp * TIMESCALE);
+		const pts = modEuclid(unwrappedPts, TIMESTAMP_MODULUS);
 		ptsDtsBitstream.pos = 0;
 		ptsDtsBitstream.writeBits(4, includeDts ? 0b0011 : 0b0010); // marker
-		ptsDtsBitstream.writeBits(3, (pts >>> 30) & 0x7); // PTS[32:30]
+		ptsDtsBitstream.writeBits(3, Math.floor(pts / 2 ** 30)); // PTS[32:30]
 		ptsDtsBitstream.writeBits(1, 1); // marker_bit
-		ptsDtsBitstream.writeBits(15, (pts >>> 15) & 0x7FFF); // PTS[29:15]
+		ptsDtsBitstream.writeBits(15, Math.floor(pts / 2 ** 15) % 2 ** 15); // PTS[29:15]
 		ptsDtsBitstream.writeBits(1, 1); // marker_bit
-		ptsDtsBitstream.writeBits(15, pts & 0x7FFF); // PTS[14:0]
+		ptsDtsBitstream.writeBits(15, pts % 2 ** 15); // PTS[14:0]
 		ptsDtsBitstream.writeBits(1, 1); // marker_bit
 
 		if (includeDts) {
 			assert(queuedPacket.decodeTimestamp !== null);
 
-			const dts = Math.round(queuedPacket.decodeTimestamp * TIMESCALE);
+			const unwrappedDts = Math.round(queuedPacket.decodeTimestamp * TIMESCALE);
+			const dts = modEuclid(unwrappedDts, TIMESTAMP_MODULUS);
 			ptsDtsBitstream.writeBits(4, 0b0001);
-			ptsDtsBitstream.writeBits(3, (dts >>> 30) & 0x7); // DTS[32:30]
+			ptsDtsBitstream.writeBits(3, Math.floor(dts / 2 ** 30)); // DTS[32:30]
 			ptsDtsBitstream.writeBits(1, 1); // marker_bit
-			ptsDtsBitstream.writeBits(15, (dts >>> 15) & 0x7FFF); // DTS[29:15]
+			ptsDtsBitstream.writeBits(15, Math.floor(dts / 2 ** 15) % 2 ** 15); // DTS[29:15]
 			ptsDtsBitstream.writeBits(1, 1); // marker_bit
-			ptsDtsBitstream.writeBits(15, dts & 0x7FFF); // DTS[14:0]
+			ptsDtsBitstream.writeBits(15, dts % 2 ** 15); // DTS[14:0]
 			ptsDtsBitstream.writeBits(1, 1); // marker_bit
 		}
 

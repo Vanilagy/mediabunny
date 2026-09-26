@@ -43,3 +43,7 @@ The full codec string begins with the prefix `'hev1.'` or `'hvc1.'`, with a vari
 If the bitstream is in the _canonical_ (length-prefixed) format, `description` must be an `HEVCDecoderConfigurationRecord` as defined in [ISO/IEC 14496-15](https://www.iso.org/standard/89118.html) Section 8.3.3.1.
 
 If the bitstream is in the _Annex B_ format, `description` must be undefined.
+
+## Quantizer range
+
+HEVC has quantizer support and supports quantizer values in the range [0, 51].

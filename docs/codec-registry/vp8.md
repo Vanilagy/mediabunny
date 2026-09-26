@@ -37,3 +37,7 @@ If the packet's type is `'key'`, then the packet is expected to contain a frame 
 ## `VideoDecoderConfig` description
 
 `description` is not used for this codec.
+
+## Quantizer range
+
+VP8 has no quantizer support.

@@ -25,7 +25,7 @@
 			chunked: true,
 			chunkSize: 2**20
 		});
-		const outputFormat = new Mediabunny.Mp4OutputFormat();
+		const outputFormat = new Mediabunny.WebMOutputFormat();
 
 		const p = document.createElement('p');
 		p.textContent = 'Capturing...';
@@ -99,6 +99,9 @@
 			input,
 			output,
 			audio: {
+				//discard: true,
+				//forceTranscode: true,
+				//discard: true,
 				//codec: 'aac',
 				//forceTranscode: true,
 				//forceTranscode: true,
@@ -107,15 +110,15 @@
 			/*
 			video: {
 				discard: true,
-				bitrate: Mediabunny.QUALITY_VERY_HIGH,
-				//bitrate: Mediabunny.QUALITY_VERY_HIGH
+				quality: new Mediabunny.Quality('very-high'),
+				//quality: new Mediabunny.Quality('very-high')
 				codec: 'av1',
 				//width: 800,
 				//fit: 'fill',
 				//rotate: 90,
 			},
 			audio: {
-				bitrate: Mediabunny.QUALITY_HIGH,
+				quality: new Mediabunny.Quality('high'),
 				codec: 'aac',
 			},
 			*/
@@ -129,10 +132,24 @@
 			},
 			*/
 			video: {
-				process: (sample) => {
-					sample.draw(ctx, 0, 0, 1280, 720);
-					return new Mediabunny.VideoSample(canvas, { timestamp: sample.timestamp, duration: sample.duration });
-				},
+				//forceTranscode: true,
+				//width: 1920,
+				//height: 1080,
+				//fit: 'fill',
+				//codec: 'avc',
+				//forceTranscode: true,
+				//flip: true,
+				//forceTranscode: true,
+				//height: 320,
+				//codec: 'avc',
+				//bitrate: new Mediabunny.Quality({
+				//	quality: Infinity,
+				//}),
+				//forceTranscode: true,
+				//process: (sample) => {
+				//	sample.draw(ctx, 0, 0, 1280, 720);
+				//	return new Mediabunny.VideoSample(canvas, { timestamp: sample.timestamp, duration: sample.duration });
+				//},
 			},
 			tags: {} ?? {
 				title: 'Bigggy',
@@ -152,13 +169,25 @@
 				}
 			},
 			trim: {
-				start: -2,
-				end: 10,
+				//start: 0,
+				//end: 5,
+				//start: 25,
+				//end: 35,
+				//start: -60,
+				//end: 60,
+				//start: -2,
+				//end: 10,
 				//start: 300.14984567374756 - 100,
 				//end: 310.1548298151939 - 100,
 				//end: 10,
 				//start: startTime,
 				//end: startTime + 2,
+			},
+			copy: {
+				//mode: 'forced',
+				//mode: 'forced',
+				//shiftTolerance: Infinity,
+				//boundaryPolicy: 'shrink',
 			},
 		});
 		//console.log(conversion);

@@ -2,13 +2,14 @@ import { expect, test } from 'vitest';
 import { Input } from '../../src/input.js';
 import { BufferSource, FilePathSource } from '../../src/source.js';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { Output } from '../../src/output.js';
 import { MpegTsOutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
 import { Conversion } from '../../src/conversion.js';
 import { AC3_REGISTRATION_DESCRIPTOR, EAC3_REGISTRATION_DESCRIPTOR } from '../../src/codec-data.js';
-import { canEncode } from '../../src/encode.js';
+import { canEncode, Quality } from '../../src/encode.js';
 import { AudioSampleCursor, PacketCursor } from '../../src/cursors.js';
 import { PacketReader } from '../../src/packet.js';
 import { AudioSampleSource } from '../../src/media-source.js';
@@ -17,7 +18,7 @@ import { AudioSample } from '../../src/sample.js';
 import { registerAc3Decoder, registerAc3Encoder } from '@mediabunny/ac3';
 import { assert } from '../../src/misc.js';
 
-const __dirname = new URL('.', import.meta.url).pathname;
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
 test('reads AC-3 from MP4', async () => {
 	using input = new Input({
@@ -249,7 +250,7 @@ test('AC-3 encoding', async () => {
 		target: new BufferTarget(),
 	});
 
-	const audioSource = new AudioSampleSource({ codec: 'ac3', bitrate: 192000 });
+	const audioSource = new AudioSampleSource({ codec: 'ac3', quality: new Quality({ bitrate: 192000 }) });
 	output.addAudioTrack(audioSource);
 
 	await output.start();
@@ -299,7 +300,7 @@ test('E-AC-3 encoding', async () => {
 		target: new BufferTarget(),
 	});
 
-	const audioSource = new AudioSampleSource({ codec: 'eac3', bitrate: 192000 });
+	const audioSource = new AudioSampleSource({ codec: 'eac3', quality: new Quality({ bitrate: 192000 }) });
 	output.addAudioTrack(audioSource);
 
 	await output.start();
@@ -351,7 +352,7 @@ test('AC-3 with huge timestamps', async () => {
 		target: new BufferTarget(),
 	});
 
-	const audioSource = new AudioSampleSource({ codec: 'ac3', bitrate: 192000 });
+	const audioSource = new AudioSampleSource({ codec: 'ac3', quality: new Quality({ bitrate: 192000 }) });
 	output.addAudioTrack(audioSource);
 
 	await output.start();
@@ -401,7 +402,7 @@ test('E-AC-3 with huge timestamps', async () => {
 		target: new BufferTarget(),
 	});
 
-	const audioSource = new AudioSampleSource({ codec: 'eac3', bitrate: 192000 });
+	const audioSource = new AudioSampleSource({ codec: 'eac3', quality: new Quality({ bitrate: 192000 }) });
 	output.addAudioTrack(audioSource);
 
 	await output.start();

@@ -9,7 +9,7 @@
 import {
 	CustomVideoEncoder,
 	type MaybePromise,
-	QUALITY_MEDIUM,
+	Quality,
 	VideoCodec,
 	VideoSample,
 	EncodedPacket,
@@ -60,6 +60,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 	lastBuffer: Buffer | null = null;
 	packetEmitted = false;
 	lastScalerKey: string | null = null;
+	quantizer: number | null = null;
 
 	// Bookkeeping to restore the original timing information
 	preciseTimings: {
@@ -71,10 +72,14 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 	}[] = [];
 
 	static override supports(codec: VideoCodec, config: VideoEncoderConfig): boolean {
+		if (config.bitrateMode === 'quantizer') {
+			return codec === 'avc' || codec === 'hevc' || codec === 'vp9' || codec === 'av1';
+		}
+
 		return (
 			codec === 'avc' || codec === 'hevc' || codec === 'vp8' || codec === 'vp9' || codec === 'av1'
 			|| codec === 'prores'
-		) && config.bitrateMode !== 'quantizer';
+		);
 	}
 
 	async init(): Promise<void> {
@@ -106,7 +111,13 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 		} else if (this.config.hardwareAcceleration === 'prefer-software') {
 			codec = getSoftwareCodec();
 		} else {
-			codec = (await getHardwareEncoderCodec(codecId)) ?? getSoftwareCodec();
+			let hardwareCodec = await getHardwareEncoderCodec(codecId);
+			if (hardwareCodec && this.config.bitrateMode === 'quantizer' && !hardwareCodec.name?.endsWith('_nvenc')) {
+				// NVENC is the only hardware encoder we know how to drive in constant-quantizer mode
+				hardwareCodec = null;
+			}
+
+			codec = hardwareCodec ?? getSoftwareCodec();
 		}
 
 		if (!codec) {
@@ -115,7 +126,11 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 
 		this.avCodec = codec;
 
-		await this.createCodecContext();
+		if (this.config.bitrateMode !== 'quantizer') {
+			// In quantizer mode, the codec context is instead created lazily on the first encode, once the quantizer
+			// value is known
+			await this.createCodecContext();
+		}
 	}
 
 	async createCodecContext() {
@@ -156,9 +171,14 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 		codecContext.timeBase = new NodeAv.Rational(1, 1e6);
 		codecContext.gopSize = 60;
 		codecContext.framerate = new NodeAv.Rational(Math.round(this.config.framerate ?? 0) || 30, 1);
-		codecContext.bitRate = BigInt(
-			this.config.bitrate ?? QUALITY_MEDIUM._toVideoBitrate(this.codec, this.config.width, this.config.height),
-		);
+		// In quantizer mode, the quantizer dictates the rate; a target bitrate would put encoders in the wrong rate
+		// control mode
+		codecContext.bitRate = this.config.bitrateMode === 'quantizer'
+			? 0n
+			: BigInt(
+					this.config.bitrate ?? new Quality('medium')
+						._toVideoBitrate(this.codec, this.config.width, this.config.height),
+				);
 		codecContext.sampleAspectRatio = new NodeAv.Rational(pixelAspectRatio.num, pixelAspectRatio.den);
 
 		if (this.config.bitrateMode === 'constant') {
@@ -210,6 +230,41 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			codecContext.setOption('forced-idr', '1');
 		}
 
+		if (this.config.bitrateMode === 'quantizer') {
+			assert(this.quantizer !== null);
+
+			// Map the quantizer from the scale used by Mediabunny to the scale expected by the specific FFmpeg encoder
+			let mapped: number;
+			if (this.avCodec.name === 'libaom-av1' || this.avCodec.name === 'libsvtav1') {
+				// Mediabunny uses AV1's quantizer index (0-255), while these encoders expect the 0-63 quantizer scale
+				mapped = Math.round(this.quantizer / 4);
+			} else {
+				// Everything else lines up with Mediabunny directly
+				mapped = this.quantizer;
+			}
+
+			// Put the encoder into its constant-quantizer mode
+			if (this.avCodec.name === 'libx264' || this.avCodec.name === 'libx265') {
+				codecContext.setOption('qp', String(mapped));
+			} else if (this.avCodec.name === 'libvpx-vp9' || this.avCodec.name === 'libaom-av1') {
+				codecContext.setOption('crf', String(mapped));
+			} else if (this.avCodec.name === 'libsvtav1') {
+				// qp (unlike crf) selects true constant-quantizer mode
+				codecContext.setOption('qp', String(mapped));
+			} else if (this.avCodec.name === 'librav1e') {
+				codecContext.setOption('qp', String(mapped));
+			} else if (this.avCodec.name?.endsWith('_nvenc')) {
+				codecContext.setOption('rc', 'constqp');
+				codecContext.setOption('qp', String(mapped));
+			} else {
+				throw new Error(`Encoder '${this.avCodec.name}' cannot be used for quantizer-based encoding.`);
+			}
+
+			// Also pin the quantizer range so crf-based encoders (libvpx, libaom) hold the quantizer truly constant
+			codecContext.qMin = mapped;
+			codecContext.qMax = mapped;
+		}
+
 		if (this.codec === 'prores') {
 			// Pick the encoder profile from the requested ProRes four-character code
 			const profile = PRORES_FOURCC_TO_PROFILE[this.config.codec as ProresFourCc];
@@ -225,6 +280,41 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 	}
 
 	async encode(videoSample: VideoSample, options: VideoEncoderEncodeOptions): Promise<void> {
+		if (this.config.bitrateMode === 'quantizer') {
+			let quantizer: number | null | undefined;
+			if (this.codec === 'avc') {
+				quantizer = options.avc?.quantizer;
+			} else if (this.codec === 'hevc') {
+				quantizer = options.hevc?.quantizer;
+			} else if (this.codec === 'vp9') {
+				quantizer = options.vp9?.quantizer;
+			} else {
+				quantizer = options.av1?.quantizer;
+			}
+			assert(quantizer !== undefined && quantizer !== null);
+
+			if (this.codecContext !== null && quantizer !== this.quantizer) {
+				// Almost no FFmpeg encoder supports changing the quantizer past init, so drain the current encoder
+				// and start a fresh one. Dirty but what else are you gonna do
+				const ret = await this.codecContext.sendFrame(null);
+				NodeAv.FFmpegError.throwIfError(ret, 'Send frame');
+
+				while (true) {
+					const receiveRet = await this.codecContext.receivePacket(this.packet);
+					if (receiveRet === NodeAv.AVERROR_EAGAIN || receiveRet === NodeAv.AVERROR_EOF) {
+						break;
+					}
+
+					this.receivePacket(receiveRet);
+				}
+
+				this.codecContext.freeContext();
+				this.codecContext = null;
+			}
+
+			this.quantizer = quantizer;
+		}
+
 		if (this.codecContext === null) {
 			await this.createCodecContext();
 		}

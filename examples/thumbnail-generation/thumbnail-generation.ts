@@ -1,7 +1,16 @@
 import { Input, ALL_FORMATS, BlobSource, UrlSource, VideoSampleCursor } from 'mediabunny';
+import { registerAc3Decoder } from '@mediabunny/ac3';
+import { registerDtsDecoder } from '@mediabunny/dts';
+import { registerProresDecoder } from '@mediabunny/prores';
 
 import SampleFileUrl from '../../docs/assets/big-buck-bunny-trimmed.mp4';
 import { canvasTransformer } from '../../src/cursors.js';
+
+// Enable codecs that aren't natively supported by WebCodecs.
+registerAc3Decoder();
+registerDtsDecoder();
+registerProresDecoder();
+
 (document.querySelector('#sample-file-download') as HTMLAnchorElement).href = SampleFileUrl;
 
 const selectMediaButton = document.querySelector('#select-file') as HTMLButtonElement;
@@ -130,7 +139,7 @@ const generateThumbnails = async (resource: File | string) => {
 selectMediaButton.addEventListener('click', () => {
 	const fileInput = document.createElement('input');
 	fileInput.type = 'file';
-	fileInput.accept = 'video/*,video/x-matroska,video/mp2t,.ts,audio/*,audio/aac';
+	fileInput.accept = 'video/*,video/x-matroska,video/mp2t,.mkv,.ts,audio/*,audio/aac,.aac';
 	fileInput.addEventListener('change', () => {
 		const file = fileInput.files?.[0];
 		if (!file) {

@@ -16,8 +16,10 @@ import {
 	ForgivingCallSerializer,
 	defer,
 	isFirefox,
+	isThenable,
 	last,
 	MaybePromise,
+	missingWebCodecsClassMessage,
 	polyfillSymbolDispose,
 	promiseWithResolvers,
 	ResultValue,
@@ -64,7 +66,7 @@ export class PacketCursor<T extends InputTrack = InputTrack> {
 			return this.current = packet;
 		};
 
-		if (result instanceof Promise) {
+		if (isThenable(result)) {
 			return result.then(onPacket);
 		} else {
 			return onPacket(result);
@@ -84,7 +86,7 @@ export class PacketCursor<T extends InputTrack = InputTrack> {
 				return this.current = packet;
 			};
 
-			if (result instanceof Promise) {
+			if (isThenable(result)) {
 				return result.then(onPacket);
 			} else {
 				return onPacket(result);
@@ -103,7 +105,7 @@ export class PacketCursor<T extends InputTrack = InputTrack> {
 				return this.current = packet;
 			};
 
-			if (result instanceof Promise) {
+			if (isThenable(result)) {
 				return result.then(onPacket);
 			} else {
 				return onPacket(result);
@@ -122,7 +124,7 @@ export class PacketCursor<T extends InputTrack = InputTrack> {
 				return this.current = packet;
 			};
 
-			if (result instanceof Promise) {
+			if (isThenable(result)) {
 				return result.then(onPacket);
 			} else {
 				return onPacket(result);
@@ -146,7 +148,7 @@ export class PacketCursor<T extends InputTrack = InputTrack> {
 				return this.current = packet;
 			};
 
-			if (result instanceof Promise) {
+			if (isThenable(result)) {
 				return result.then(onPacket);
 			} else {
 				return onPacket(result);
@@ -170,7 +172,7 @@ export class PacketCursor<T extends InputTrack = InputTrack> {
 				return this.current = packet;
 			};
 
-			if (result instanceof Promise) {
+			if (isThenable(result)) {
 				return result.then(onPacket);
 			} else {
 				return onPacket(result);
@@ -191,7 +193,7 @@ export class PacketCursor<T extends InputTrack = InputTrack> {
 		while (true) {
 			if (this.current) {
 				let result = callback(this.current);
-				if (result instanceof Promise) result = await result;
+				if (isThenable(result)) result = await result;
 
 				if (result === false) {
 					break;
@@ -199,7 +201,7 @@ export class PacketCursor<T extends InputTrack = InputTrack> {
 			}
 
 			const result = this.next();
-			if (result instanceof Promise) await result;
+			if (isThenable(result)) await result;
 
 			if (!this.current) {
 				break;
@@ -218,7 +220,7 @@ export class PacketCursor<T extends InputTrack = InputTrack> {
 			}
 
 			const result = this.next();
-			if (result instanceof Promise) await result;
+			if (isThenable(result)) await result;
 
 			if (!this.current) {
 				break;
@@ -454,7 +456,7 @@ export abstract class SampleCursor<
 		while (true) {
 			if (this.current) {
 				let result = callback(this.current);
-				if (result instanceof Promise) result = await result;
+				if (isThenable(result)) result = await result;
 
 				if (result === false) {
 					break;
@@ -462,7 +464,7 @@ export abstract class SampleCursor<
 			}
 
 			const result = this.next();
-			if (result instanceof Promise) await result;
+			if (isThenable(result)) await result;
 
 			if (!this.current) {
 				break;
@@ -485,7 +487,7 @@ export abstract class SampleCursor<
 			}
 
 			const result = this.next();
-			if (result instanceof Promise) await result;
+			if (isThenable(result)) await result;
 
 			if (!this.current) {
 				break;
@@ -703,7 +705,7 @@ export abstract class SampleCursor<
 		this._ensureNotClosed();
 
 		// First, let's wait for the packet to be retrieved
-		const targetPacket = targetPacketPromise instanceof Promise
+		const targetPacket = isThenable(targetPacketPromise)
 			? await targetPacketPromise
 			: targetPacketPromise;
 
@@ -777,7 +779,7 @@ export abstract class SampleCursor<
 						this._packetCursor.current,
 						{ ...this._retrievalOptions, verifyKeyPackets: true },
 					);
-					if (nextKey instanceof Promise) nextKey = await nextKey;
+					if (isThenable(nextKey)) nextKey = await nextKey;
 
 					needsNewPump = !!nextKey && targetPacket.sequenceNumber >= nextKey.sequenceNumber;
 				} else {
@@ -819,7 +821,7 @@ export abstract class SampleCursor<
 		if (needsNewPump) {
 			// Set the cursor to the right spot
 			const result = this._packetCursor.seekToKey(targetPacket.timestamp);
-			if (result instanceof Promise) await result;
+			if (isThenable(result)) await result;
 
 			// Start the new pump
 			void this._runPump();
@@ -964,11 +966,11 @@ export abstract class SampleCursor<
 		// get the next key after that, which will be the answer we're looking for.
 
 		let key = this._packetReader.getKeyAt(timestampToCheck, { ...this._retrievalOptions, verifyKeyPackets: true });
-		if (key instanceof Promise) key = await key;
+		if (isThenable(key)) key = await key;
 		assert(key); // Must be
 
 		let nextKey = this._packetReader.getNextKey(key, { ...this._retrievalOptions, verifyKeyPackets: true });
-		if (nextKey instanceof Promise) nextKey = await nextKey;
+		if (isThenable(nextKey)) nextKey = await nextKey;
 
 		if (!nextKey) {
 			this._setCurrentRaw(null);
@@ -986,7 +988,7 @@ export abstract class SampleCursor<
 
 		if (this._nextIsFirst) {
 			let first = this._packetReader.getFirstKey({ ...this._retrievalOptions, verifyKeyPackets: true });
-			if (first instanceof Promise) first = await first;
+			if (isThenable(first)) first = await first;
 
 			return res.set(!!first);
 		}
@@ -1072,7 +1074,7 @@ export abstract class SampleCursor<
 
 				// Advance the cursor
 				const maybePromise = this._packetCursor.next();
-				if (maybePromise instanceof Promise) await maybePromise;
+				if (isThenable(maybePromise)) await maybePromise;
 			}
 
 			if (!this._closed || this._pendingRequests.length > 0) {
@@ -1272,8 +1274,12 @@ export class VideoSampleCursor<TransformedSample = VideoSample> extends SampleCu
 	/** @internal */
 	override async _initDecoder(): Promise<DecoderWrapper<VideoSample>> {
 		if (!(await this.track.canDecode())) {
+			if (typeof VideoDecoder === 'undefined') {
+				throw new Error(missingWebCodecsClassMessage('VideoDecoder'));
+			}
+
 			throw new Error(
-				'This video track cannot be decoded by this browser. Make sure to check decodability before using'
+				'This video track cannot be decoded in this environment. Make sure to check decodability before using'
 				+ ' a track.',
 			);
 		}
@@ -1284,6 +1290,7 @@ export class VideoSampleCursor<TransformedSample = VideoSample> extends SampleCu
 
 		const codec = await this.track.getCodec();
 		const rotation = await this.track.getRotation();
+		const flip = await this.track.getFlip();
 		let decoderConfig = await this.track.getDecoderConfig();
 		const timeResolution = await this.track.getTimeResolution();
 		assert(codec && decoderConfig);
@@ -1300,6 +1307,7 @@ export class VideoSampleCursor<TransformedSample = VideoSample> extends SampleCu
 			codec,
 			decoderConfig,
 			rotation,
+			flip,
 			timeResolution,
 		);
 
@@ -1336,8 +1344,12 @@ export class AudioSampleCursor<TransformedSample = AudioSample> extends SampleCu
 	/** @internal */
 	override async _initDecoder(): Promise<DecoderWrapper<AudioSample>> {
 		if (!(await this.track.canDecode())) {
+			if (typeof AudioDecoder === 'undefined') {
+				throw new Error(missingWebCodecsClassMessage('AudioDecoder'));
+			}
+
 			throw new Error(
-				'This audio track cannot be decoded by this browser. Make sure to check decodability before using'
+				'This audio track cannot be decoded in this environment. Make sure to check decodability before using'
 				+ ' a track.',
 			);
 		}
@@ -1422,13 +1434,18 @@ export type CanvasTransformerOptions = {
 	fit?: 'fill' | 'contain' | 'cover';
 	/**
 	 * The clockwise rotation by which to rotate the raw video frame. Defaults to the rotation set in the file metadata.
-	 * Rotation is applied before resizing.
+	 * Rotation is applied before flipping.
 	 */
 	rotation?: Rotation;
 	/**
+	 * Whether to flip the raw video frame horizontally (about the vertical axis). Defaults to the flip set in the file
+	 * metadata. The flip is applied after rotation but before cropping and resizing.
+	 */
+	flip?: boolean;
+	/**
 	 * Specifies the rectangular region of the input video to crop to. The crop region will automatically be clamped to
-	 * the dimensions of the input video track. Cropping is performed after rotation but before resizing. The crop
-	 * region is in the _display pixel space_ of the underlying video data.
+	 * the dimensions of the input video track. Cropping is performed after rotation and flip but before resizing. The
+	 * crop region is in the _display pixel space_ of the underlying video data.
 	 */
 	crop?: CropRectangle;
 	/**
@@ -1470,6 +1487,9 @@ export const canvasTransformer = (
 	if (options.rotation !== undefined && ![0, 90, 180, 270].includes(options.rotation)) {
 		throw new TypeError('options.rotation, when provided, must be 0, 90, 180 or 270.');
 	}
+	if (options.flip !== undefined && typeof options.flip !== 'boolean') {
+		throw new TypeError('options.flip, when provided, must be a boolean.');
+	}
 	if (options.crop !== undefined) {
 		validateCropRectangle(options.crop, 'options.');
 	}
@@ -1486,6 +1506,7 @@ export const canvasTransformer = (
 	let height: number;
 	let fit: 'fill' | 'contain' | 'cover';
 	let rotation: Rotation;
+	let flip: boolean;
 	let crop: { left: number; top: number; width: number; height: number } | undefined;
 	let canvasPool: (HTMLCanvasElement | OffscreenCanvas | null)[];
 	let nextCanvasIndex = 0;
@@ -1493,6 +1514,7 @@ export const canvasTransformer = (
 	return (sample) => {
 		if (needsSetup) {
 			rotation = options.rotation ?? sample.rotation;
+			flip = options.flip ?? sample.flip;
 
 			const [rotatedWidth, rotatedHeight] = rotation % 180 === 0
 				? [sample.squarePixelWidth, sample.squarePixelHeight]
@@ -1555,18 +1577,14 @@ export const canvasTransformer = (
 		}) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 		assert(context);
 
-		context.resetTransform();
-
-		if (!canvasIsNew) {
-			if (!alpha && isFirefox()) {
-				context.fillStyle = 'black';
-				context.fillRect(0, 0, width, height);
-			} else {
-				context.clearRect(0, 0, width, height);
-			}
-		}
-
-		sample.drawWithFit(context, { fit, rotation, crop });
+		sample._drawWithFitAndMipmapping(canvas, context, {
+			fit,
+			rotation,
+			flip,
+			crop,
+			targetIsFresh: canvasIsNew,
+			fillBlack: !alpha && isFirefox(),
+		});
 		sample.close();
 
 		return new WrappedCanvas(canvas, sample.timestamp, sample.duration);

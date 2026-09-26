@@ -123,9 +123,11 @@ const sponsors = {
 		{ image: 'https://avatars.githubusercontent.com/u/67356781', name: 'Ahmed Rowaihi', url: 'https://github.com/ahmedrowaihi' },
 		{ image: 'https://avatars.githubusercontent.com/u/4714175', name: 'Phoomparin Mano', url: 'https://github.com/heypoom' },
 		{ image: 'https://avatars.githubusercontent.com/u/504909', name: 'Hirbod', url: 'https://github.com/hirbod' },
+		{ image: 'https://avatars.githubusercontent.com/u/15199031', name: 'Marc Rousavy', url: 'https://github.com/mrousavy' },
 		{ image: 'https://avatars.githubusercontent.com/u/2565549', name: 'MatthewNorton', url: 'https://github.com/MatthewNorton' },
 		{ image: 'https://avatars.githubusercontent.com/u/272247752', name: 'Motionik', url: 'https://github.com/Motionik' },
 		{ image: 'https://avatars.githubusercontent.com/u/2698271', name: 'Matthew Gardner', url: 'https://github.com/spheric' },
+		{ image: 'https://avatars.githubusercontent.com/u/41021374', name: 'arth', url: 'https://github.com/arthtyagi' },
 		{ image: 'https://avatars.githubusercontent.com/u/5475819', name: 'AJ Funk', url: 'https://github.com/AJFunk' },
 		{ image: 'https://avatars.githubusercontent.com/u/30229596', name: 'Pablo Bonilla', url: 'https://github.com/devPablo' },
 		{ image: 'https://avatars.githubusercontent.com/u/536008', name: 'Satish Goda', url: 'https://github.com/satishgoda' },
@@ -233,14 +235,14 @@ const output = new Output({
 // Add video, driven by a canvas
 const videoSource = new CanvasSource(canvas, {
 	codec: 'av1',
-	bitrate: QUALITY_HIGH,
+	quality: new Quality('high'),
 });
 output.addVideoTrack(videoSource);
 
 // Add audio, driven by audio buffers
 const audioSource = new AudioBufferSource({
 	codec: 'opus',
-	bitrate: QUALITY_HIGH,
+	quality: new Quality('high'),
 });
 output.addAudioTrack(audioSource);
 

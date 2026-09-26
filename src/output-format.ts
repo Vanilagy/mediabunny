@@ -30,7 +30,7 @@ import { MpegTsMuxer } from './mpeg-ts/mpeg-ts-muxer';
 import { WaveMuxer } from './wave/wave-muxer';
 import { HlsMuxer } from './hls/hls-muxer';
 import { HLS_MIME_TYPE } from './hls/hls-misc';
-import { MaybePromise, FilePath, toArray } from './misc';
+import { MaybePromise, FilePath, isNumber, toArray } from './misc';
 import { Target } from './target';
 
 /**
@@ -76,8 +76,15 @@ export abstract class OutputFormat {
 	abstract getSupportedCodecs(): MediaCodec[];
 	/** Returns the number of tracks that this output format supports. */
 	abstract getSupportedTrackCounts(): TrackCountLimits;
-	/** Whether this output format supports video rotation metadata. */
-	abstract get supportsVideoRotationMetadata(): boolean;
+	/** Whether this output format supports video rotation and flip metadata. */
+	abstract get supportsVideoTransformationMetadata(): boolean;
+	/**
+	 * Whether this output format supports video rotation metadata.
+	 * @deprecated Use {@link OutputFormat.supportsVideoTransformationMetadata} instead.
+	 */
+	get supportsVideoRotationMetadata() {
+		return this.supportsVideoTransformationMetadata;
+	}
 	/**
 	 * Whether this output format's tracks store timestamped media data. When `true`, the timestamps of added packets
 	 * will be respected, allowing things like gaps in media data or non-zero start times. When `false`, the format's
@@ -85,21 +92,29 @@ export abstract class OutputFormat {
 	 * durations of the media data.
 	 */
 	abstract get supportsTimestampedMediaData(): boolean;
+	/**
+	 * The degree to which this output format supports writing media data with negative timestamps.
+	 * - `'full'` - Negative timestamps are fully supported.
+	 * - `'prefer-non-negative'` - Negative timestamps are technically supported, but their use is discouraged.
+	 * - `'none'` - Negative timestamps are not supported.
+	 * - `null` - Not applicable since the container doesn't support timestamped media at all.
+	 */
+	abstract get negativeTimestampSupport(): 'full' | 'prefer-non-negative' | 'none' | null;
 
 	/** Returns a list of video codecs that this output format can contain. */
-	getSupportedVideoCodecs() {
+	getSupportedVideoCodecs(): VideoCodec[] {
 		return this.getSupportedCodecs()
 			.filter(codec => (VIDEO_CODECS as readonly string[]).includes(codec)) as VideoCodec[];
 	}
 
 	/** Returns a list of audio codecs that this output format can contain. */
-	getSupportedAudioCodecs() {
+	getSupportedAudioCodecs(): AudioCodec[] {
 		return this.getSupportedCodecs()
 			.filter(codec => (AUDIO_CODECS as readonly string[]).includes(codec)) as AudioCodec[];
 	}
 
 	/** Returns a list of subtitle codecs that this output format can contain. */
-	getSupportedSubtitleCodecs() {
+	getSupportedSubtitleCodecs(): SubtitleCodec[] {
 		return this.getSupportedCodecs()
 			.filter(codec => (SUBTITLE_CODECS as readonly string[]).includes(codec)) as SubtitleCodec[];
 	}
@@ -108,6 +123,11 @@ export abstract class OutputFormat {
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	_codecUnsupportedHint(codec: MediaCodec) {
 		return '';
+	}
+
+	/** @internal */
+	_isFragmentedIsobmff() {
+		return false;
 	}
 }
 
@@ -224,7 +244,7 @@ export abstract class IsobmffOutputFormat extends OutputFormat {
 		}
 		if (
 			options.minimumFragmentDuration !== undefined
-			&& (!Number.isFinite(options.minimumFragmentDuration) || options.minimumFragmentDuration < 0)
+			&& (!isNumber(options.minimumFragmentDuration) || options.minimumFragmentDuration < 0)
 		) {
 			throw new TypeError('options.minimumFragmentDuration, when provided, must be a non-negative number.');
 		}
@@ -261,11 +281,11 @@ export abstract class IsobmffOutputFormat extends OutputFormat {
 			video: { min: 0, max },
 			audio: { min: 0, max },
 			subtitle: { min: 0, max },
-			total: { min: 1, max },
+			total: { min: 0, max },
 		};
 	}
 
-	get supportsVideoRotationMetadata() {
+	get supportsVideoTransformationMetadata() {
 		return true;
 	}
 
@@ -273,9 +293,18 @@ export abstract class IsobmffOutputFormat extends OutputFormat {
 		return true;
 	}
 
+	get negativeTimestampSupport() {
+		return 'full' as const;
+	}
+
 	/** @internal */
 	_createMuxer(output: Output) {
 		return new IsobmffMuxer(output, this);
+	}
+
+	/** @internal */
+	override _isFragmentedIsobmff(): boolean {
+		return this._options.fastStart === 'fragmented';
 	}
 }
 
@@ -504,7 +533,7 @@ export class MkvOutputFormat extends OutputFormat {
 		}
 		if (
 			options.minimumClusterDuration !== undefined
-			&& (!Number.isFinite(options.minimumClusterDuration) || options.minimumClusterDuration < 0)
+			&& (!isNumber(options.minimumClusterDuration) || options.minimumClusterDuration < 0)
 		) {
 			throw new TypeError('options.minimumClusterDuration, when provided, must be a non-negative number.');
 		}
@@ -540,7 +569,7 @@ export class MkvOutputFormat extends OutputFormat {
 			video: { min: 0, max },
 			audio: { min: 0, max },
 			subtitle: { min: 0, max },
-			total: { min: 1, max },
+			total: { min: 0, max },
 		};
 	}
 
@@ -561,13 +590,17 @@ export class MkvOutputFormat extends OutputFormat {
 		];
 	}
 
-	get supportsVideoRotationMetadata() {
-		// While it technically does support it with ProjectionPoseRoll, many players appear to ignore this value
+	get supportsVideoTransformationMetadata() {
+		// While it technically does support it with Projection, many players appear to ignore that stuff
 		return false;
 	}
 
 	get supportsTimestampedMediaData() {
 		return true;
+	}
+
+	get negativeTimestampSupport() {
+		return 'prefer-non-negative' as const;
 	}
 }
 
@@ -702,12 +735,16 @@ export class Mp3OutputFormat extends OutputFormat {
 		return ['mp3'];
 	}
 
-	get supportsVideoRotationMetadata() {
+	get supportsVideoTransformationMetadata() {
 		return false;
 	}
 
 	get supportsTimestampedMediaData() {
 		return false;
+	}
+
+	get negativeTimestampSupport() {
+		return null;
 	}
 }
 
@@ -799,17 +836,21 @@ export class WavOutputFormat extends OutputFormat {
 	getSupportedCodecs(): MediaCodec[] {
 		return [
 			...PCM_AUDIO_CODECS.filter(codec =>
-				['pcm-s16', 'pcm-s24', 'pcm-s32', 'pcm-f32', 'pcm-u8', 'ulaw', 'alaw'].includes(codec),
+				['pcm-s16', 'pcm-s24', 'pcm-s32', 'pcm-f32', 'pcm-f64', 'pcm-u8', 'ulaw', 'alaw'].includes(codec),
 			),
 		];
 	}
 
-	get supportsVideoRotationMetadata() {
+	get supportsVideoTransformationMetadata() {
 		return false;
 	}
 
 	get supportsTimestampedMediaData() {
 		return false;
+	}
+
+	get negativeTimestampSupport() {
+		return null;
 	}
 }
 
@@ -851,7 +892,7 @@ export class OggOutputFormat extends OutputFormat {
 		}
 		if (
 			options.maximumPageDuration !== undefined
-			&& (!Number.isFinite(options.maximumPageDuration) || options.maximumPageDuration <= 0)
+			&& (!isNumber(options.maximumPageDuration) || options.maximumPageDuration <= 0)
 		) {
 			throw new TypeError('options.maximumPageDuration, when provided, must be a positive number.');
 		}
@@ -881,7 +922,7 @@ export class OggOutputFormat extends OutputFormat {
 			video: { min: 0, max: 0 },
 			audio: { min: 0, max },
 			subtitle: { min: 0, max: 0 },
-			total: { min: 1, max },
+			total: { min: 0, max },
 		};
 	}
 
@@ -899,12 +940,16 @@ export class OggOutputFormat extends OutputFormat {
 		];
 	}
 
-	get supportsVideoRotationMetadata() {
+	get supportsVideoTransformationMetadata() {
 		return false;
 	}
 
 	get supportsTimestampedMediaData() {
 		return false;
+	}
+
+	get negativeTimestampSupport() {
+		return null;
 	}
 }
 
@@ -977,12 +1022,16 @@ export class AdtsOutputFormat extends OutputFormat {
 		return ['aac'];
 	}
 
-	get supportsVideoRotationMetadata() {
+	get supportsVideoTransformationMetadata() {
 		return false;
 	}
 
 	get supportsTimestampedMediaData() {
 		return false;
+	}
+
+	get negativeTimestampSupport() {
+		return null;
 	}
 }
 
@@ -1062,12 +1111,16 @@ export class FlacOutputFormat extends OutputFormat {
 		return ['flac'];
 	}
 
-	get supportsVideoRotationMetadata() {
+	get supportsVideoTransformationMetadata() {
 		return false;
 	}
 
 	get supportsTimestampedMediaData() {
 		return false;
+	}
+
+	get negativeTimestampSupport() {
+		return null;
 	}
 }
 
@@ -1128,7 +1181,7 @@ export class MpegTsOutputFormat extends OutputFormat {
 			video: { min: 0, max: maxVideo },
 			audio: { min: 0, max: maxAudio },
 			subtitle: { min: 0, max: 0 },
-			total: { min: 1, max: maxTotal },
+			total: { min: 0, max: maxTotal },
 		};
 	}
 
@@ -1143,16 +1196,20 @@ export class MpegTsOutputFormat extends OutputFormat {
 	getSupportedCodecs(): MediaCodec[] {
 		return [
 			...VIDEO_CODECS.filter(codec => ['avc', 'hevc'].includes(codec)),
-			...AUDIO_CODECS.filter(codec => ['aac', 'mp3', 'ac3', 'eac3'].includes(codec)),
+			...AUDIO_CODECS.filter(codec => ['aac', 'mp3', 'ac3', 'eac3', 'dts'].includes(codec)),
 		];
 	}
 
-	get supportsVideoRotationMetadata() {
+	get supportsVideoTransformationMetadata() {
 		return false;
 	}
 
 	get supportsTimestampedMediaData() {
 		return true;
+	}
+
+	get negativeTimestampSupport() {
+		return 'prefer-non-negative' as const;
 	}
 }
 
@@ -1405,16 +1462,33 @@ export class HlsOutputFormat extends OutputFormat {
 			video: { min: 0, max: supportsVideo ? Infinity : 0 },
 			audio: { min: 0, max: supportsAudio ? Infinity : 0 },
 			subtitle: { min: 0, max: 0 }, // Currently disabled
-			total: { min: 1, max: Infinity },
+			total: { min: 0, max: Infinity },
 		};
 	}
 
-	get supportsVideoRotationMetadata(): boolean {
-		return toArray(this._options.segmentFormat).some(format => format.supportsVideoRotationMetadata);
+	get supportsVideoTransformationMetadata(): boolean {
+		return toArray(this._options.segmentFormat).some(format => format.supportsVideoTransformationMetadata);
 	}
 
 	get supportsTimestampedMediaData(): boolean {
-		return true; // I guess??
+		return true; // It's only half true, really, but "false" is not correct either
+	}
+
+	get negativeTimestampSupport() {
+		const formats = toArray(this._options.segmentFormat);
+
+		// Return the lowest baseline across all segment formats
+		if (formats.some(format => format.negativeTimestampSupport === 'none')) {
+			return 'none' as const;
+		}
+		if (formats.some(format => format.negativeTimestampSupport === 'prefer-non-negative')) {
+			return 'prefer-non-negative' as const;
+		}
+		if (formats.some(format => format.negativeTimestampSupport === 'full')) {
+			return 'full' as const;
+		}
+
+		return null;
 	}
 
 	/** @internal */

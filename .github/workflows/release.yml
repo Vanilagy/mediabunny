@@ -75,6 +75,11 @@ jobs:
           packages/ac3/dist/bundles/mediabunny-ac3.mjs
           packages/ac3/dist/bundles/mediabunny-ac3.min.mjs
           packages/ac3/dist/mediabunny-ac3.d.ts
+          packages/dts/dist/bundles/mediabunny-dts.js
+          packages/dts/dist/bundles/mediabunny-dts.min.js
+          packages/dts/dist/bundles/mediabunny-dts.mjs
+          packages/dts/dist/bundles/mediabunny-dts.min.mjs
+          packages/dts/dist/mediabunny-dts.d.ts
           packages/aac-encoder/dist/bundles/mediabunny-aac-encoder.js
           packages/aac-encoder/dist/bundles/mediabunny-aac-encoder.min.js
           packages/aac-encoder/dist/bundles/mediabunny-aac-encoder.mjs

@@ -62,8 +62,8 @@ export let _serverOptions: MediabunnyServerOptions = {};
 
 /**
  * Registers video and audio decoders and encoders for all codecs, using FFmpeg's libavcodec under the hood.
- * Additionally, a custom `VideoSample` transformer based on libavfilter is registered to enable resizing, rotation and
- * cropping of video frames.
+ * Additionally, a custom `VideoSample` transformer based on libavfilter is registered to enable resizing, rotation,
+ * flipping and cropping of video frames.
  *
  * Make sure to call this function before interacting with Mediabunny.
  *

@@ -6,8 +6,17 @@ import {
 	UrlSource,
 	VideoSampleCursor,
 } from 'mediabunny';
+import { registerAc3Decoder } from '@mediabunny/ac3';
+import { registerDtsDecoder } from '@mediabunny/dts';
+import { registerProresDecoder } from '@mediabunny/prores';
 
 import SampleFileUrl from '../../docs/assets/big-buck-bunny-trimmed.mp4';
+
+// Enable codecs that aren't natively supported by WebCodecs.
+registerAc3Decoder();
+registerDtsDecoder();
+registerProresDecoder();
+
 (document.querySelector('#sample-file-download') as HTMLAnchorElement).href = SampleFileUrl;
 
 const selectMediaButton = document.querySelector('#select-file') as HTMLButtonElement;
@@ -105,6 +114,9 @@ const initMediaPlayer = async (resource: File | string) => {
 			?? await input.computeDuration(tracks, { skipLiveWait: true });
 		isRelativeToUnixEpoch = (await Promise.all(tracks.map(t => t.isRelativeToUnixEpoch()))).some(Boolean);
 		playbackTimeAtStart = firstTimestamp;
+
+		// For degenerate cases where the end timestamp is less than 0
+		endTimestamp = Math.max(firstTimestamp, endTimestamp);
 
 		// Configure the time display elements accordingly
 		const timestampFontSize = isRelativeToUnixEpoch ? '12px' : '';
@@ -677,7 +689,7 @@ window.addEventListener('resize', () => {
 selectMediaButton.addEventListener('click', () => {
 	const fileInput = document.createElement('input');
 	fileInput.type = 'file';
-	fileInput.accept = 'video/*,video/x-matroska,video/mp2t,.ts,audio/*,audio/aac';
+	fileInput.accept = 'video/*,video/x-matroska,video/mp2t,.mkv,.ts,audio/*,audio/aac,.aac';
 	fileInput.addEventListener('change', () => {
 		const file = fileInput.files?.[0];
 		if (!file) {

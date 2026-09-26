@@ -10,13 +10,22 @@ import { parseAacAudioSpecificConfig } from '../shared/aac-misc';
 import {
 	Av1CodecInfo,
 	AvcDecoderConfigurationRecord,
+	deserializeAvcDecoderConfigurationRecord,
+	deserializeHevcDecoderConfigurationRecord,
 	HevcDecoderConfigurationRecord,
+	HevcNalUnitType,
+	parseAvcSps,
+	parseHevcSps,
+	ProresCodecInfo,
 	Vp9CodecInfo,
 } from './codec-data';
 import {
 	COLOR_PRIMARIES_MAP,
+	COLOR_PRIMARIES_MAP_INVERSE,
 	MATRIX_COEFFICIENTS_MAP,
+	MATRIX_COEFFICIENTS_MAP_INVERSE,
 	TRANSFER_CHARACTERISTICS_MAP,
+	TRANSFER_CHARACTERISTICS_MAP_INVERSE,
 	assert,
 	assertNever,
 	base64ToBytes,
@@ -75,6 +84,7 @@ export const NON_PCM_AUDIO_CODECS = [
 	'flac',
 	'ac3',
 	'eac3',
+	'dts',
 ] as const;
 /**
  * List of known audio codecs, ordered by encoding preference.
@@ -227,6 +237,14 @@ export const PRORES_FOURCCS = [
 ] as const;
 export type ProresFourCc = typeof PRORES_FOURCCS[number];
 
+export const DTS_FOURCCS = [
+	'dtsc', // DTS core
+	'dtsh', // DTS-HD, core plus extension substreams
+	'dtsl', // DTS-HD Lossless, no core
+	'dtse', // DTS Express
+] as const;
+export type DtsFourCc = typeof DTS_FOURCCS[number];
+
 // Target data rates of the ProRes profiles at 1920x1080 ~30fps, as published by Apple
 const PRORES_PROFILE_TARGET_BITRATES: { fourCc: ProresFourCc; bitrate: number; alpha: boolean }[] = [
 	{ fourCc: 'apco', bitrate: 45_000_000, alpha: false }, // 422 Proxy
@@ -361,7 +379,7 @@ export const generateAv1CodecConfigurationFromCodecString = (codecString: string
 	const tier = levelAndTier.slice(-1) === 'H' ? 1 : 0;
 	const bitDepth = Number(parts[3]);
 	const highBitDepth = bitDepth === 8 ? 0 : 1;
-	const twelveBit = 0;
+	const twelveBit = bitDepth === 12 ? 1 : 0;
 	const monochrome = parts[4] ? Number(parts[4]) : 0;
 	const chromaSubsamplingX = parts[5] ? Number(parts[5][0]) : 1;
 	const chromaSubsamplingY = parts[5] ? Number(parts[5][1]) : 1;
@@ -569,6 +587,132 @@ export const extractVideoCodecString = (trackInfo: {
 	throw new TypeError(`Unhandled codec '${codec}'.`);
 };
 
+export const extractColorSpace = (info: {
+	codec: VideoCodec | null;
+	codecDescription: Uint8Array | null;
+	avcCodecInfo: AvcDecoderConfigurationRecord | null;
+	hevcCodecInfo: HevcDecoderConfigurationRecord | null;
+	vp9CodecInfo: Vp9CodecInfo | null;
+	av1CodecInfo: Av1CodecInfo | null;
+	proresCodecInfo: ProresCodecInfo | null;
+}): VideoColorSpaceInit => {
+	switch (info.codec) {
+		case 'avc': {
+			let spsData = info.avcCodecInfo?.sequenceParameterSets[0];
+			if (!spsData && info.codecDescription) {
+				spsData = deserializeAvcDecoderConfigurationRecord(info.codecDescription)?.sequenceParameterSets[0];
+			}
+
+			if (spsData) {
+				const spsInfo = parseAvcSps(spsData);
+				if (spsInfo) {
+					return {
+						primaries:
+							COLOR_PRIMARIES_MAP_INVERSE[spsInfo.colourPrimaries] as
+							VideoColorPrimaries | undefined,
+						transfer:
+							TRANSFER_CHARACTERISTICS_MAP_INVERSE[spsInfo.transferCharacteristics] as
+							VideoTransferCharacteristics | undefined,
+						matrix:
+							MATRIX_COEFFICIENTS_MAP_INVERSE[spsInfo.matrixCoefficients] as
+							VideoMatrixCoefficients | undefined,
+						fullRange: !!spsInfo.fullRangeFlag,
+					};
+				}
+			}
+		}; break;
+
+		case 'hevc': {
+			let spsData = info.hevcCodecInfo?.arrays
+				.find(x => x.nalUnitType === HevcNalUnitType.SPS_NUT)?.nalUnits[0];
+			if (!spsData && info.codecDescription) {
+				spsData = deserializeHevcDecoderConfigurationRecord(info.codecDescription)?.arrays
+					.find(x => x.nalUnitType === HevcNalUnitType.SPS_NUT)?.nalUnits[0];
+			}
+
+			if (spsData) {
+				const spsInfo = parseHevcSps(spsData);
+				if (spsInfo) {
+					return {
+						primaries:
+							COLOR_PRIMARIES_MAP_INVERSE[spsInfo.colourPrimaries] as
+							VideoColorPrimaries | undefined,
+						transfer:
+							TRANSFER_CHARACTERISTICS_MAP_INVERSE[spsInfo.transferCharacteristics] as
+							VideoTransferCharacteristics | undefined,
+						matrix:
+							MATRIX_COEFFICIENTS_MAP_INVERSE[spsInfo.matrixCoefficients] as
+							VideoMatrixCoefficients | undefined,
+						fullRange: !!spsInfo.fullRangeFlag,
+					};
+				}
+			}
+		}; break;
+
+		case 'vp8': {
+			// The situation is fucky; do nothing for now.
+		}; break;
+
+		case 'vp9': {
+			if (info.vp9CodecInfo) {
+				return {
+					primaries:
+						COLOR_PRIMARIES_MAP_INVERSE[info.vp9CodecInfo.colourPrimaries] as
+						VideoColorPrimaries | undefined,
+					transfer:
+						TRANSFER_CHARACTERISTICS_MAP_INVERSE[info.vp9CodecInfo.transferCharacteristics] as
+						VideoTransferCharacteristics | undefined,
+					matrix:
+						MATRIX_COEFFICIENTS_MAP_INVERSE[info.vp9CodecInfo.matrixCoefficients] as
+						VideoMatrixCoefficients | undefined,
+					fullRange: !!info.vp9CodecInfo.videoFullRangeFlag,
+				};
+			}
+		}; break;
+
+		case 'av1': {
+			if (info.av1CodecInfo) {
+				return {
+					primaries:
+						COLOR_PRIMARIES_MAP_INVERSE[info.av1CodecInfo.colourPrimaries] as
+						VideoColorPrimaries | undefined,
+					transfer:
+						TRANSFER_CHARACTERISTICS_MAP_INVERSE[info.av1CodecInfo.transferCharacteristics] as
+						VideoTransferCharacteristics | undefined,
+					matrix:
+						MATRIX_COEFFICIENTS_MAP_INVERSE[info.av1CodecInfo.matrixCoefficients] as
+						VideoMatrixCoefficients | undefined,
+					fullRange: !!info.av1CodecInfo.videoFullRangeFlag,
+				};
+			}
+		}; break;
+
+		case 'prores': {
+			if (info.proresCodecInfo) {
+				return {
+					primaries:
+						COLOR_PRIMARIES_MAP_INVERSE[info.proresCodecInfo.colourPrimaries] as
+						VideoColorPrimaries | undefined,
+					transfer:
+						TRANSFER_CHARACTERISTICS_MAP_INVERSE[info.proresCodecInfo.transferCharacteristics] as
+						VideoTransferCharacteristics | undefined,
+					matrix:
+						MATRIX_COEFFICIENTS_MAP_INVERSE[info.proresCodecInfo.matrixCoefficients] as
+						VideoMatrixCoefficients | undefined,
+					fullRange: info.proresCodecInfo.fullRange,
+				};
+			}
+		}; break;
+	}
+
+	return {
+		primaries: undefined,
+		transfer: undefined,
+		matrix: undefined,
+		fullRange: undefined,
+	};
+};
+
 export const buildAudioCodecString = (codec: AudioCodec, numberOfChannels: number, sampleRate: number) => {
 	if (codec === 'aac') {
 		// If stereo or higher channels and lower sample rate, likely using HE-AAC v2 with PS
@@ -595,6 +739,8 @@ export const buildAudioCodecString = (codec: AudioCodec, numberOfChannels: numbe
 		return 'ac-3';
 	} else if (codec === 'eac3') {
 		return 'ec-3';
+	} else if (codec === 'dts') {
+		return 'dtsc';
 	} else if ((PCM_AUDIO_CODECS as readonly string[]).includes(codec)) {
 		return codec;
 	}
@@ -611,8 +757,9 @@ export const extractAudioCodecString = (trackInfo: {
 	codec: AudioCodec | null;
 	codecDescription: Uint8Array | null;
 	aacCodecInfo: AacCodecInfo | null;
+	dtsFormat: DtsFourCc | null;
 }) => {
-	const { codec, codecDescription, aacCodecInfo } = trackInfo;
+	const { codec, codecDescription, aacCodecInfo, dtsFormat } = trackInfo;
 
 	if (codec === 'aac') {
 		if (!aacCodecInfo) {
@@ -644,6 +791,8 @@ export const extractAudioCodecString = (trackInfo: {
 		return 'ac-3';
 	} else if (codec === 'eac3') {
 		return 'ec-3';
+	} else if (codec === 'dts') {
+		return dtsFormat ?? 'dtsc';
 	} else if (codec && (PCM_AUDIO_CODECS as readonly string[]).includes(codec)) {
 		return codec;
 	}
@@ -746,7 +895,7 @@ export const inferCodecFromCodecString = (codecString: string): MediaCodec | nul
 		return 'mp3';
 	} else if (codecString.startsWith('mp4a.40.') || codecString === 'mp4a.67') {
 		return 'aac';
-	} else if (codecString === 'opus') {
+	} else if (codecString === 'opus' || codecString === 'Opus' /* HLS variant */) {
 		return 'opus';
 	} else if (codecString === 'vorbis') {
 		return 'vorbis';
@@ -756,6 +905,8 @@ export const inferCodecFromCodecString = (codecString: string): MediaCodec | nul
 		return 'ac3';
 	} else if (codecString === 'ec-3' || codecString === 'eac3') {
 		return 'eac3';
+	} else if ((DTS_FOURCCS as readonly string[]).includes(codecString)) {
+		return 'dts';
 	} else if (codecString === 'ulaw') {
 		return 'ulaw';
 	} else if (codecString === 'alaw') {
@@ -814,7 +965,10 @@ const HEVC_CODEC_STRING_REGEX = /^(hev1|hvc1)\.(?:[ABC]?\d+)\.[0-9a-fA-F]{1,8}\.
 const VP9_CODEC_STRING_REGEX = /^vp09(?:\.\d{2}){3}(?:(?:\.\d{2}){5})?$/;
 const AV1_CODEC_STRING_REGEX = /^av01\.\d\.\d{2}[MH]\.\d{2}(?:\.\d\.\d{3}\.\d{2}\.\d{2}\.\d{2}\.\d)?$/;
 
-export const validateVideoChunkMetadata = (metadata: EncodedVideoChunkMetadata | undefined) => {
+export const validateVideoChunkMetadata = (
+	metadata: EncodedVideoChunkMetadata | undefined,
+	trackCodec: VideoCodec | null,
+) => {
 	if (!metadata) {
 		throw new TypeError('Video chunk metadata must be provided.');
 	}
@@ -985,13 +1139,23 @@ export const validateVideoChunkMetadata = (metadata: EncodedVideoChunkMetadata |
 			);
 		}
 	}
+
+	if (trackCodec !== null && inferCodecFromCodecString(metadata.decoderConfig.codec) !== trackCodec) {
+		throw new TypeError(
+			`Video chunk metadata decoder configuration codec string '${metadata.decoderConfig.codec}' does not fit to`
+			+ ` the track codec '${trackCodec}'.`,
+		);
+	}
 };
 
 const VALID_AUDIO_CODEC_STRING_PREFIXES = [
-	'mp4a', 'mp3', 'opus', 'vorbis', 'flac', 'ulaw', 'alaw', 'pcm', 'ac-3', 'ec-3',
+	'mp4a', 'mp3', 'opus', 'vorbis', 'flac', 'ulaw', 'alaw', 'pcm', 'ac-3', 'ec-3', 'dts',
 ];
 
-export const validateAudioChunkMetadata = (metadata: EncodedAudioChunkMetadata | undefined) => {
+export const validateAudioChunkMetadata = (
+	metadata: EncodedAudioChunkMetadata | undefined,
+	trackCodec: AudioCodec | null,
+) => {
 	if (!metadata) {
 		throw new TypeError('Audio chunk metadata must be provided.');
 	}
@@ -1119,6 +1283,15 @@ export const validateAudioChunkMetadata = (metadata: EncodedAudioChunkMetadata |
 		if (metadata.decoderConfig.codec !== 'ec-3') {
 			throw new TypeError('Audio chunk metadata decoder configuration codec string for EC-3 must be "ec-3".');
 		}
+	} else if (metadata.decoderConfig.codec.startsWith('dts')) {
+		// DTS-specific validation
+
+		if (!(DTS_FOURCCS as readonly string[]).includes(metadata.decoderConfig.codec)) {
+			throw new TypeError(
+				'Audio chunk metadata decoder configuration codec string for DTS must be one of the following'
+				+ ` four-character codes: ${DTS_FOURCCS.join(', ')}.`,
+			);
+		}
 	} else if (
 		metadata.decoderConfig.codec.startsWith('pcm')
 		|| metadata.decoderConfig.codec.startsWith('ulaw')
@@ -1132,6 +1305,13 @@ export const validateAudioChunkMetadata = (metadata: EncodedAudioChunkMetadata |
 				+ ` codecs (${PCM_AUDIO_CODECS.join(', ')}).`,
 			);
 		}
+	}
+
+	if (trackCodec !== null && inferCodecFromCodecString(metadata.decoderConfig.codec) !== trackCodec) {
+		throw new TypeError(
+			`Audio chunk metadata decoder configuration codec string '${metadata.decoderConfig.codec}' does not fit to`
+			+ ` the track codec '${trackCodec}'.`,
+		);
 	}
 };
 

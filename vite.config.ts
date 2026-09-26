@@ -21,6 +21,10 @@ export default defineConfig({
 	resolve: {
 		alias: {
 			'mediabunny': path.resolve(__dirname, './dist/bundles/mediabunny.mjs'),
+			'@mediabunny/ac3':
+				path.resolve(__dirname, './packages/ac3/dist/bundles/mediabunny-ac3.mjs'),
+			'@mediabunny/dts':
+				path.resolve(__dirname, './packages/dts/dist/bundles/mediabunny-dts.mjs'),
 			'@mediabunny/aac-encoder':
 				path.resolve(__dirname, './packages/aac-encoder/dist/bundles/mediabunny-aac-encoder.mjs'),
 			'@mediabunny/flac-encoder':
@@ -45,6 +49,20 @@ export default defineConfig({
 		emptyOutDir: false,
 		rollupOptions: {
 			input: rollupInput,
+			output: {
+				manualChunks: (id) => {
+					// The extension packages get merged into one shared chunk, so give it a fitting name instead
+					// of it being named after whichever package Rollup picks
+					if (/\/packages\/[^/]+\/dist\/bundles\//.test(id)) {
+						return 'mediabunny-extensions';
+					}
+					if (id.endsWith('/dist/bundles/mediabunny.mjs')) {
+						return 'mediabunny';
+					}
+
+					return undefined;
+				},
+			},
 		},
 		minify: false,
 	},

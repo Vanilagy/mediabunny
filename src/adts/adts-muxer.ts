@@ -63,7 +63,7 @@ export class AdtsMuxer extends Muxer {
 
 		// First packet - determine input format from metadata
 		if (this.inputIsAdts === null) {
-			validateAudioChunkMetadata(meta);
+			validateAudioChunkMetadata(meta, track.source._codec);
 
 			const description = meta?.decoderConfig?.description;
 
@@ -116,5 +116,9 @@ export class AdtsMuxer extends Muxer {
 	async finalize() {
 		using lock = this.mutex.lock();
 		if (lock.pending) await lock.ready; // Required so that finalize() can't resolve before other calls
+
+		if (this.inputIsAdts === null) {
+			throw new Error('Cannot finalize an empty ADTS file: not a single packet was added.');
+		}
 	}
 }

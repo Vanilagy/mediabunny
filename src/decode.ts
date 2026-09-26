@@ -22,6 +22,7 @@ import {
 	VideoCodec,
 } from './codec';
 import {
+	addAvcBitstreamRestriction,
 	AvcNalUnitType,
 	concatAvcNalUnits,
 	deserializeAvcDecoderConfigurationRecord,
@@ -33,12 +34,14 @@ import {
 	iterateHevcNalUnits,
 	parseAvcSps,
 	sanitizeHevcPacketForChromium,
+	serializeAvcDecoderConfigurationRecord,
 } from './codec-data';
 import { CustomAudioDecoder, customAudioDecoders, CustomVideoDecoder, customVideoDecoders } from './custom-coder';
 import {
 	assert,
 	assertNever,
 	clamp,
+	colorSpaceIsComplete,
 	getInt24,
 	getUint24,
 	insertSorted,
@@ -110,6 +113,7 @@ export class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 		public codec: VideoCodec,
 		public decoderConfig: VideoDecoderConfig,
 		public rotation: Rotation,
+		public flip: boolean,
 		public timeResolution: number,
 	) {
 		super(onSample, onError);
@@ -130,6 +134,8 @@ export class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 
 				// @ts-expect-error Readonly
 				sample.rotation = this.rotation;
+				// @ts-expect-error Readonly
+				sample.flip = this.flip;
 
 				this.onSample(sample);
 			};
@@ -154,19 +160,53 @@ export class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 				}
 			};
 
-			if (codec === 'avc' && this.decoderConfig.description && isChromium()) {
-				// Chromium has/had a bug with playing interlaced AVC (https://issues.chromium.org/issues/456919096)
-				// which can be worked around by requesting that software decoding be used. So, here we peek into the
-				// AVC description, if present, and switch to software decoding if we find interlaced content.
-				const record = deserializeAvcDecoderConfigurationRecord(toUint8Array(this.decoderConfig.description));
-				if (record && record.sequenceParameterSets.length > 0) {
-					const sps = parseAvcSps(record.sequenceParameterSets[0]!);
-					if (sps && sps.frameMbsOnlyFlag === 0) {
-						this.decoderConfig = {
-							...this.decoderConfig,
-							hardwareAcceleration: 'prefer-software',
-						};
+			if (isChromium()) {
+				if (codec === 'avc' && this.decoderConfig.description) {
+					const record = deserializeAvcDecoderConfigurationRecord(
+						toUint8Array(this.decoderConfig.description),
+					);
+					if (record && record.sequenceParameterSets.length > 0) {
+						const sps = parseAvcSps(record.sequenceParameterSets[0]!);
+						if (sps) {
+							if (sps.frameMbsOnlyFlag === 0) {
+								// Chromium has/had a bug with playing interlaced AVC
+								// (https://issues.chromium.org/issues/456919096) which can be worked around by
+								// requesting that software decoding be used. So, here we peek into the AVC description,
+								// if present, and switch to software decoding if we find interlaced content.
+								this.decoderConfig = {
+									...this.decoderConfig,
+									hardwareAcceleration: 'prefer-software',
+								};
+							}
+
+							if (sps.maxDecFrameBuffering !== 0 && sps.bitstreamRestrictionFlag !== 1) {
+								// Modify the SPS to fix potential loss of B frames
+								record.sequenceParameterSets[0] = addAvcBitstreamRestriction(sps);
+								this.decoderConfig = {
+									...this.decoderConfig,
+									description: serializeAvcDecoderConfigurationRecord(record),
+								};
+							}
+						}
 					}
+				}
+
+				if (!colorSpaceIsComplete(this.decoderConfig.colorSpace)) {
+					// Found via https://github.com/remotion-dev/remotion/issues/10841.
+					// If the color space is incomplete (which is often that it's just partially filled), Chromium has
+					// some nasty logic where it doesn't pass that information along to the GPU at all. The result is
+					// that information is genuinely lost, like the color matrix for example. Chromium has other code
+					// paths where it just fills the missing values with a hardcoded default, so we do the exact same
+					// thing here, with the same hardcoded defaults:
+					this.decoderConfig = {
+						...this.decoderConfig,
+						colorSpace: {
+							primaries: this.decoderConfig.colorSpace?.primaries ?? 'bt709',
+							matrix: this.decoderConfig.colorSpace?.matrix ?? 'bt709',
+							transfer: this.decoderConfig.colorSpace?.transfer ?? 'bt709',
+							fullRange: this.decoderConfig.colorSpace?.fullRange ?? false,
+						},
+					};
 				}
 			}
 
@@ -263,6 +303,23 @@ export class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 						// These trip up Chromium's key frame detection, so let's strip them
 						if (!(type >= 20 && type <= 31)) {
 							filteredNalUnits.push(packet.data.subarray(loc.offset, loc.offset + loc.length));
+						}
+					}
+
+					if (!this.decoderConfig.description) {
+						// Do SPS fixups if necessary
+						for (let i = 0; i < filteredNalUnits.length; i++) {
+							const nalUnit = filteredNalUnits[i]!;
+							if (extractNalUnitTypeForAvc(nalUnit[0]!) !== AvcNalUnitType.SPS) {
+								continue;
+							}
+
+							const sps = parseAvcSps(nalUnit);
+							if (sps && sps.maxDecFrameBuffering !== 0 && sps.bitstreamRestrictionFlag !== 1) {
+								filteredNalUnits[i] = addAvcBitstreamRestriction(sps);
+							}
+
+							break;
 						}
 					}
 
@@ -449,6 +506,7 @@ export class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 				(frame.duration ?? 0) / 1e6 * this.timeResolution,
 			) / this.timeResolution,
 			rotation: this.rotation,
+			flip: this.flip,
 		});
 
 		this.onSample(sample);

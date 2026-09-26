@@ -900,6 +900,33 @@ test.concurrent('#EXT-X-STREAM-INF tags without BANDWIDTH attribute are rejected
 	await expect(input.getTracks()).rejects.toThrow('BANDWIDTH');
 });
 
+test.concurrent('URI-less video and audio renditions inherit variant bandwidth', async () => {
+	const text = `#EXTM3U
+#EXT-X-MEDIA:TYPE=VIDEO,GROUP-ID="video",NAME="Source",AUTOSELECT=YES,DEFAULT=YES
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Audio",AUTOSELECT=YES,DEFAULT=YES
+#EXT-X-STREAM-INF:BANDWIDTH=3214134,AVERAGE-BANDWIDTH=2800000,CODECS="avc1.64001F,mp4a.40.2",VIDEO="video",AUDIO="audio"
+variant.m3u8
+`;
+
+	using input = new Input({
+		formats: HLS_FORMATS,
+		source: new CustomPathedSource('master.m3u8', ({ path }) => {
+			assert(path === 'master.m3u8');
+			return new BufferSource(new TextEncoder().encode(text));
+		}),
+	});
+
+	const videoTracks = await input.getVideoTracks();
+	const audioTracks = await input.getAudioTracks();
+	expect(videoTracks).toHaveLength(1);
+	expect(audioTracks).toHaveLength(1);
+
+	for (const track of [...videoTracks, ...audioTracks]) {
+		expect(await track.getBitrate()).toBe(3214134);
+		expect(await track.getAverageBitrate()).toBe(2800000);
+	}
+});
+
 test.concurrent('Missing media tag codec', async () => {
 	using input = new Input({
 		source: new UrlSource('https://playertest.longtailvideo.com/adaptive/elephants_dream_v4/index.m3u8'),

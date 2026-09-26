@@ -21,6 +21,7 @@ import {
 	assert,
 	AsyncMutex,
 	binarySearchLessOrEqual,
+	isThenable,
 	MaybeRelevantPromise,
 	ResultValue,
 	UNDETERMINED_LANGUAGE,
@@ -87,7 +88,7 @@ export class AdtsDemuxer extends Demuxer {
 			// Skip all ID3v2 tags at the start of the file
 			while (true) {
 				let slice = this.reader.requestSlice(this.lastLoadedPos, ID3_V2_HEADER_SIZE);
-				if (slice instanceof Promise) slice = await slice;
+				if (isThenable(slice)) slice = await slice;
 
 				if (!slice) {
 					this.lastSampleLoaded = true;
@@ -108,7 +109,7 @@ export class AdtsDemuxer extends Demuxer {
 			MIN_ADTS_FRAME_HEADER_SIZE,
 			MAX_ADTS_FRAME_HEADER_SIZE,
 		);
-		if (slice instanceof Promise) slice = await slice;
+		if (isThenable(slice)) slice = await slice;
 		if (!slice) {
 			this.lastSampleLoaded = true;
 			return res.set();
@@ -172,7 +173,7 @@ export class AdtsDemuxer extends Demuxer {
 
 		while (true) {
 			let headerSlice = this.reader.requestSlice(currentPos, ID3_V2_HEADER_SIZE);
-			if (headerSlice instanceof Promise) headerSlice = await headerSlice;
+			if (isThenable(headerSlice)) headerSlice = await headerSlice;
 			if (!headerSlice) break;
 
 			const id3V2Header = readId3V2Header(headerSlice);
@@ -181,7 +182,7 @@ export class AdtsDemuxer extends Demuxer {
 			}
 
 			let contentSlice = this.reader.requestSlice(headerSlice.filePos, id3V2Header.size);
-			if (contentSlice instanceof Promise) contentSlice = await contentSlice;
+			if (isThenable(contentSlice)) contentSlice = await contentSlice;
 			if (!contentSlice) break;
 
 			parseId3V2Tag(contentSlice, id3V2Header, this.metadataTags);
@@ -312,7 +313,7 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 			data = PLACEHOLDER_DATA;
 		} else {
 			let slice = this.demuxer.reader.requestSlice(rawSample.dataStart, rawSample.dataSize);
-			if (slice instanceof Promise) slice = await slice;
+			if (isThenable(slice)) slice = await slice;
 
 			if (!slice) {
 				return res.set(null); // Data didn't fit into the rest of the file

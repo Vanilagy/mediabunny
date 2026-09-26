@@ -14,7 +14,7 @@ By default, Mediabunny requires a browser environment for full access to decoder
 Features added by this package include:
 - Video decoders and encoders for AVC (H.264), HEVC (H.265), VP8, VP9, AV1, and ProRes. Supports both length-prefixed and Annex B AVC/HEVC as well as transparent video via VP9 and ProRes.
 - Audio decoders and encoders for AAC, MP3, Vorbis, Opus, FLAC, AC-3 and E-AC-3. Supports AAC in both AAC and ADTS formats.
-- Video frame transformation support (resize, rotate, crop)
+- Video frame transformation support (resize, rotate, flip, crop)
 - Automatic hardware acceleration on all platforms (macOS, Linux, Windows)
 - Built-in multithreading
 - Zero-copy decode and encode paths
@@ -60,7 +60,7 @@ registerMediabunnyServer({
 Here, we set up a simple media compression server in Node.js. The client's request body is streamed to Mediabunny, the media gets processed, and the output is streamed directly to the disk. Memory usage is O(1) due to pipelining, and an overly fast uploader is automatically slowed down due to stream backpressure.
 
 ```ts
-import { ALL_FORMATS, Conversion, FilePathTarget, Input, Mp4OutputFormat, Output, QUALITY_MEDIUM, ReadableStreamSource } from "mediabunny";
+import { ALL_FORMATS, Conversion, FilePathTarget, Input, Mp4OutputFormat, Output, Quality, ReadableStreamSource } from "mediabunny";
 import { registerMediabunnyServer } from "@mediabunny/server";
 import { Readable } from "node:stream";
 import http from "node:http";
@@ -88,7 +88,7 @@ const server = http.createServer(async (req, res) => {
             video: async track => ({
                 codec: 'avc',
                 height: Math.min(720, await track.getDisplayHeight()),
-                bitrate: QUALITY_MEDIUM,
+                quality: new Quality('medium'),
             }),
         });
         await conversion.execute();
@@ -317,7 +317,7 @@ Logging.on('info', (args: unknown[]) => {
 
 `@mediabunny/server` uses [NodeAV](https://github.com/seydx/node-av) under the hood which provides N-API C bindings to FFmpeg's C API. Using NodeAV, this package implements [custom decoders and encoders](https://mediabunny.dev/guide/supported-formats-and-codecs#custom-coders) by directly using the APIs provided by `libavcodec`.
 
-For encoding, video frames and audio samples are transferred to FFmpeg by converting them to an `AVFrame` and are then passed to the correct encoder. The resulting packets are then normalized into the format expected by WebCodecs and the [Mediabunny Codec Registry](https://mediabunny.dev/codec-registry/overview). For decoding, the above process is inverted: packets and decoder metadata are passed to the correct decoder, and the resulting `AVFrame` instances are wrapped in `VideoSample` or `AudioSample` instances. Video frame transformations (resize, rotate, crop) are implemented using the `libavfilter` API.
+For encoding, video frames and audio samples are transferred to FFmpeg by converting them to an `AVFrame` and are then passed to the correct encoder. The resulting packets are then normalized into the format expected by WebCodecs and the [Mediabunny Codec Registry](https://mediabunny.dev/codec-registry/overview). For decoding, the above process is inverted: packets and decoder metadata are passed to the correct decoder, and the resulting `AVFrame` instances are wrapped in `VideoSample` or `AudioSample` instances. Video frame transformations (resize, rotate, flip, crop) are implemented using the `libavfilter` API.
 
 Whenever possible, `AVFrame`s are never copied over to JavaScript unless explicitly needed. This enables zero-copy decode -> transformation -> encode paths.
 

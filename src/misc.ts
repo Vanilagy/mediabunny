@@ -22,6 +22,9 @@ export function assert(x: unknown): asserts x {
  */
 export type Rotation = 0 | 90 | 180 | 270;
 
+export const DEG_TO_RAD = Math.PI / 180;
+export const RAD_TO_DEG = 180 / Math.PI;
+
 export const normalizeRotation = (rotation: number) => {
 	const mappedRotation = (rotation % 360 + 360) % 360;
 
@@ -32,7 +35,139 @@ export const normalizeRotation = (rotation: number) => {
 	}
 };
 
-export type TransformationMatrix = [number, number, number, number, number, number, number, number, number];
+/**
+ * Row-major 3x3 affine transformation matrix.
+ * @group Miscellaneous
+ * @public
+ */
+export type TransformationMatrix = [
+	a: number,
+	b: number,
+	u: number,
+	c: number,
+	d: number,
+	v: number,
+	x: number,
+	y: number,
+	w: number,
+];
+
+export const IDENTITY_MATRIX: TransformationMatrix = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+
+/**
+ * Applies a linear transformation (no translation) to a width-by-height frame about its center, with the result
+ * sitting in the positive quadrant.
+ */
+export const centeredTransformationMatrix = (linear: TransformationMatrix, width: number, height: number) => {
+	const [a, b, , c, d] = linear;
+
+	// Bounding box of the transformed frame
+	const transformedWidth = Math.abs(a) * width + Math.abs(c) * height;
+	const transformedHeight = Math.abs(b) * width + Math.abs(d) * height;
+
+	// The transformation happens about the origin (the frame's top-left corner), so we move the center to the
+	// origin, transform, then move it back
+	return multiplyMatrices(
+		multiplyMatrices(
+			translationMatrix(-width / 2, -height / 2),
+			linear,
+		),
+		translationMatrix(transformedWidth / 2, transformedHeight / 2),
+	);
+};
+
+/**
+ * Extracts the rotation from a transformation matrix, assuming the matrix has the form "rotate, then maybe flip
+ * horizontally", and snapping to the nearest multiple of 90 degrees.
+ */
+export const extractRotationFromMatrix = (matrix: TransformationMatrix) => {
+	const [a, b] = matrix;
+
+	// (1, 0) projects onto (a, b), so that's all we need. The rotation is applied before flipping though, so we
+	// first need to undo the flip to isolate the rotation.
+	const radians = Math.atan2(b, matrixIsFlipped(matrix) ? -a : a);
+	return normalizeRotation(roundToMultiple(radians * RAD_TO_DEG, 90));
+};
+
+/** Whether the transformation matrix flips the frame, i.e. has a negative determinant. */
+export const matrixIsFlipped = (matrix: TransformationMatrix) => {
+	const [a, b, , c, d] = matrix;
+	const det = a * d - b * c;
+
+	return det < 0;
+};
+
+export const rotationMatrix = (rotationInDegrees: number): TransformationMatrix => {
+	const theta = rotationInDegrees * DEG_TO_RAD;
+	const cosTheta = Math.round(Math.cos(theta));
+	const sinTheta = Math.round(Math.sin(theta));
+
+	// Points are row vectors, meaning this is the transpose of your typical rotation matrix
+	return [
+		cosTheta, sinTheta, 0,
+		-sinTheta, cosTheta, 0,
+		0, 0, 1,
+	];
+};
+
+export const translationMatrix = (x: number, y: number): TransformationMatrix => {
+	// Points are row vectors, meaning this is the transpose of your typical translation matrix
+	return [
+		1, 0, 0,
+		0, 1, 0,
+		x, y, 1,
+	];
+};
+
+export const scaleMatrix = (x: number, y: number): TransformationMatrix => {
+	return [
+		x, 0, 0,
+		0, y, 0,
+		0, 0, 1,
+	];
+};
+
+/** Computes a * b. Since points are row vectors, this applies a first, then b. */
+export const multiplyMatrices = (a: TransformationMatrix, b: TransformationMatrix): TransformationMatrix => {
+	const result = new Array<number>(9) as TransformationMatrix;
+
+	for (let i = 0; i < 3; i++) {
+		for (let j = 0; j < 3; j++) {
+			result[3 * i + j] = a[3 * i]! * b[j]! + a[3 * i + 1]! * b[3 + j]! + a[3 * i + 2]! * b[6 + j]!;
+		}
+	}
+
+	return result;
+};
+
+/**
+ * Composes two "rotate, then flip" transformations into one. A flip conjugates any rotation that follows it, meaning
+ * the second rotation flips direction if the first flip is set.
+ */
+export const composeRotationAndFlip = (
+	rotation1: Rotation,
+	flip1: boolean,
+	rotation2: Rotation,
+	flip2: boolean,
+) => {
+	return {
+		rotation: normalizeRotation(rotation1 + (flip1 ? -rotation2 : rotation2)),
+		flip: flip1 !== flip2,
+	};
+};
+
+/** The inverse of {@link composeRotationAndFlip}: what needs to be composed onto the base to arrive at the target. */
+export const relativeRotationAndFlip = (
+	baseRotation: Rotation,
+	baseFlip: boolean,
+	targetRotation: Rotation,
+	targetFlip: boolean,
+) => {
+	return {
+		rotation: normalizeRotation(baseFlip ? baseRotation - targetRotation : targetRotation - baseRotation),
+		flip: baseFlip !== targetFlip,
+	};
+};
 
 export const last = <T>(arr: T[]) => {
 	return arr && arr[arr.length - 1];
@@ -40,6 +175,10 @@ export const last = <T>(arr: T[]) => {
 
 export const isU32 = (value: number) => {
 	return value >= 0 && value < 2 ** 32;
+};
+
+export const isI32 = (value: number) => {
+	return value >= -(2 ** 31) && value < 2 ** 31;
 };
 
 /** Reads an exponential-Golomb universal code from a Bitstream.  */
@@ -55,6 +194,14 @@ export const readExpGolomb = (bitstream: Bitstream) => {
 
 	const result = (1 << leadingZeroBits) - 1 + bitstream.readBits(leadingZeroBits);
 	return result;
+};
+
+export const writeExpGolomb = (bitstream: Bitstream, value: number) => {
+	const codeNum = value + 1;
+	const leadingZeroBits = Math.floor(Math.log2(codeNum));
+	bitstream.writeBits(leadingZeroBits, 0);
+	bitstream.writeBits(1, 1);
+	bitstream.writeBits(leadingZeroBits, codeNum - 2 ** leadingZeroBits);
 };
 
 /** Reads a signed exponential-Golomb universal code from a Bitstream. */
@@ -324,6 +471,25 @@ export const colorSpaceIsComplete = (
 	);
 };
 
+export const colorSpaceIsEmpty = (colorSpace: VideoColorSpaceInit | undefined) => {
+	return (
+		!colorSpace
+		|| (
+			colorSpace.primaries == null
+			&& colorSpace.transfer == null
+			&& colorSpace.matrix == null
+			&& colorSpace.fullRange == null
+		)
+	);
+};
+
+export const EMPTY_COLOR_SPACE: VideoColorSpaceInit = {
+	primaries: undefined,
+	transfer: undefined,
+	matrix: undefined,
+	fullRange: undefined,
+};
+
 export const isAllowSharedBufferSource = (x: unknown) => {
 	return (
 		x instanceof ArrayBuffer
@@ -435,7 +601,7 @@ export const promiseAllEnsureOrder = async <T>(promises: T[]) => {
 
 	for (let i = 0; i < promises.length; i++) {
 		const value = promises[i]!;
-		if (value instanceof Promise) {
+		if (isThenable(value)) {
 			void value.then(x => onValue(x as Awaited<T>, i));
 		} else {
 			onValue(value as Awaited<T>, i);
@@ -592,6 +758,14 @@ export const clamp = (value: number, min: number, max: number) => {
 	return Math.max(min, Math.min(max, value));
 };
 
+export const lerp = (from: number, to: number, t: number) => {
+	return from + (to - from) * t;
+};
+
+export const modEuclid = (value: number, modulus: number) => {
+	return value - Math.floor(value / modulus) * modulus;
+};
+
 export const UNDETERMINED_LANGUAGE = 'und';
 
 export const roundIfAlmostInteger = (value: number) => {
@@ -627,6 +801,17 @@ export const ilog = (x: number) => {
 		x >>= 1;
 	}
 	return ret;
+};
+
+export const popcount = (value: number) => {
+	let count = 0;
+
+	while (value !== 0) {
+		value &= value - 1;
+		count++;
+	}
+
+	return count;
 };
 
 const ISO_639_2_REGEX = /^[a-z]{3}$/;
@@ -859,12 +1044,36 @@ export const getChromiumVersion = () => {
 	return chromiumVersionCache = Number(match[1]!);
 };
 
+export const missingWebCodecsClassMessage = (className: string) => {
+	if (typeof globalThis.isSecureContext !== 'undefined' && !globalThis.isSecureContext) {
+		// WebCodecs is not exposed in insecure contexts
+		return `${className} is not available in this environment; this may be because this page is running in an`
+			+ ` insecure context. Try serving your page over HTTPS or use localhost.`;
+	}
+
+	return `${className} is not available in this environment.`;
+};
+
 /**
  * T or a promise that resolves to T.
  * @group Miscellaneous
  * @public
  */
 export type MaybePromise<T> = T | Promise<T>;
+
+const NativePromiseConstructor = /* #__PURE__ */ (async () => {})().constructor as PromiseConstructor;
+
+/**
+ * Needed to properly deal with custom Promise implementations and because this is closer to how the JS spec does it.
+ */
+export const isThenable = <T>(value: MaybePromise<T>): value is Promise<T> => {
+	if (value instanceof NativePromiseConstructor || value instanceof Promise) {
+		return true;
+	}
+
+	// Fall back to a crude duck typing check
+	return typeof (value as PromiseLike<T> | null | undefined)?.then === 'function';
+};
 
 /** Acts like `??` except the condition is -1 and not null/undefined. */
 export const coalesceIndex = (a: number, b: number) => {
@@ -1099,7 +1308,7 @@ export class ForgivingCallSerializer {
 		} else {
 			const result = fn();
 
-			if (result instanceof Promise) {
+			if (isThenable(result)) {
 				this.currentPromise = result
 					.catch(() => {})
 					.finally(() => {

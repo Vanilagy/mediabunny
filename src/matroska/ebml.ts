@@ -7,7 +7,7 @@
  */
 
 import { MediaCodec } from '../codec';
-import { assert, assertNever, textDecoder, textEncoder } from '../misc';
+import { assert, assertNever, isThenable, textDecoder, textEncoder } from '../misc';
 import { FileSlice, readBytes, Reader, readF32Be, readF64Be, readU8 } from '../reader';
 import { Writer } from '../writer';
 
@@ -136,6 +136,8 @@ export enum EBMLId {
 	Range = 0x55b9,
 	Projection = 0x7670,
 	ProjectionType = 0x7671,
+	ProjectionPoseYaw = 0x7673,
+	ProjectionPosePitch = 0x7674,
 	ProjectionPoseRoll = 0x7675,
 	Attachments = 0x1941a469,
 	AttachedFile = 0x61a7,
@@ -688,7 +690,7 @@ export const searchForNextElementId = async (
 
 	while (until === null || currentPos < until) {
 		let slice = reader.requestSliceRange(currentPos, MIN_HEADER_SIZE, MAX_HEADER_SIZE);
-		if (slice instanceof Promise) slice = await slice;
+		if (isThenable(slice)) slice = await slice;
 		if (!slice) break;
 
 		const elementHeader = readElementHeader(slice);
@@ -716,7 +718,7 @@ export const resync = async (reader: Reader, startPos: number, ids: EBMLId[], un
 
 	while (currentPos < until) {
 		let slice = reader.requestSliceRange(currentPos, 0, Math.min(CHUNK_SIZE, until - currentPos));
-		if (slice instanceof Promise) slice = await slice;
+		if (isThenable(slice)) slice = await slice;
 		if (!slice) break;
 		if (slice.length < MAX_VAR_INT_SIZE) break;
 
@@ -750,6 +752,7 @@ export const CODEC_STRING_MAP: Partial<Record<MediaCodec, string>> = {
 	'flac': 'A_FLAC',
 	'ac3': 'A_AC3',
 	'eac3': 'A_EAC3',
+	'dts': 'A_DTS',
 	'pcm-u8': 'A_PCM/INT/LIT',
 	'pcm-s16': 'A_PCM/INT/LIT',
 	'pcm-s16be': 'A_PCM/INT/BIG',

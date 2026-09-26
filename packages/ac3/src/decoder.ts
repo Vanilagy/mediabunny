@@ -56,7 +56,8 @@ class Ac3Decoder extends CustomAudioDecoder {
 	}
 
 	async close() {
-		void sendCommand({ type: 'close-decoder', data: { ctx: this.ctx } });
+		// Close shouldn't throw
+		sendCommand({ type: 'close-decoder', data: { ctx: this.ctx } }).catch(() => {});
 		await unrefWorker();
 	}
 }

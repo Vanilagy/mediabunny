@@ -4,8 +4,9 @@ import { VideoSampleSource } from '../../src/media-source.js';
 import { Output } from '../../src/output.js';
 import { Mp4OutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
-import { QUALITY_MEDIUM } from '../../src/encode.js';
+import { Quality } from '../../src/encode.js';
 import { PacketType } from '../../src/packet.js';
+import { Rotation } from '../../src/misc.js';
 
 test('allocationSize', async () => {
 	{
@@ -419,6 +420,90 @@ test('crop (rect option) for ArrayBuffer-backed data', async () => {
 	}
 });
 
+test('draw with flip', () => {
+	using sample = makeCoordinateSample({ flip: true });
+	const pixels = drawToPixels(sample, 4, 4);
+
+	expect(pixelAt(pixels, 4, 0, 0)).toEqual([3, 0]);
+	expect(pixelAt(pixels, 4, 3, 0)).toEqual([0, 0]);
+	expect(pixelAt(pixels, 4, 0, 3)).toEqual([3, 3]);
+});
+
+test('draw with rotation then flip', () => {
+	using sample = makeCoordinateSample({ rotation: 90, flip: true });
+	const pixels = drawToPixels(sample, 4, 4);
+
+	expect(pixelAt(pixels, 4, 0, 0)).toEqual([0, 0]);
+	expect(pixelAt(pixels, 4, 3, 0)).toEqual([0, 3]);
+	expect(pixelAt(pixels, 4, 0, 3)).toEqual([3, 0]);
+});
+
+test('drawWithFit with rotation, flip and crop', () => {
+	using sample = makeCoordinateSample({ rotation: 90, flip: true });
+
+	const canvas = new OffscreenCanvas(1, 4);
+	const context = canvas.getContext('2d', { willReadFrequently: true })!;
+	context.imageSmoothingEnabled = false;
+	sample.drawWithFit(context, {
+		fit: 'fill',
+		crop: { left: 3, top: 0, width: 1, height: 4 },
+	});
+
+	const pixels = context.getImageData(0, 0, 1, 4).data;
+	expect(pixelAt(pixels, 1, 0, 0)).toEqual([0, 3]);
+	expect(pixelAt(pixels, 1, 0, 3)).toEqual([3, 3]);
+});
+
+test('transform with flip metadata and additional rotation', async () => {
+	using sample = makeCoordinateSample({ flip: true });
+	using result = await sample.transform({ rotate: 90 });
+
+	expect(result.rotation).toBe(0);
+	expect(result.flip).toBe(false);
+
+	const pixels = drawToPixels(result, 4, 4);
+	expect(pixelAt(pixels, 4, 3, 3)).toEqual([0, 0]);
+	expect(pixelAt(pixels, 4, 0, 3)).toEqual([0, 3]);
+	expect(pixelAt(pixels, 4, 3, 0)).toEqual([3, 0]);
+});
+
+/** 4x4 RGBA sample where each pixel's R/G channels encode its (x, y) position. */
+const makeCoordinateSample = (init: { rotation?: Rotation; flip?: boolean }) => {
+	const data = new Uint8Array(4 * 4 * 4);
+	for (let y = 0; y < 4; y++) {
+		for (let x = 0; x < 4; x++) {
+			const i = (y * 4 + x) * 4;
+			data[i] = x;
+			data[i + 1] = y;
+			data[i + 2] = 0;
+			data[i + 3] = 255;
+		}
+	}
+
+	return new VideoSample(data, {
+		format: 'RGBA',
+		codedWidth: 4,
+		codedHeight: 4,
+		timestamp: 0,
+		rotation: init.rotation,
+		flip: init.flip,
+	});
+};
+
+const drawToPixels = (sample: VideoSample, width: number, height: number) => {
+	const canvas = new OffscreenCanvas(width, height);
+	const context = canvas.getContext('2d', { willReadFrequently: true })!;
+	context.imageSmoothingEnabled = false;
+	sample.draw(context, 0, 0, width, height);
+
+	return context.getImageData(0, 0, width, height).data;
+};
+
+const pixelAt = (pixels: Uint8ClampedArray, width: number, x: number, y: number) => {
+	const i = (y * width + x) * 4;
+	return [pixels[i]!, pixels[i + 1]!];
+};
+
 test('null format', async () => {
 	const canvas = new OffscreenCanvas(1280, 720);
 	canvas.getContext('2d');
@@ -516,7 +601,7 @@ const encodeAndAssertPacketTypes = async (
 	let i = 0;
 	const videoSource = new VideoSampleSource({
 		codec: 'vp8',
-		bitrate: QUALITY_MEDIUM,
+		quality: new Quality('medium'),
 		onEncodedPacket: packet => expect(packet.type).toBe(expectedPacketTypes[i++]),
 	});
 	output.addVideoTrack(videoSource);

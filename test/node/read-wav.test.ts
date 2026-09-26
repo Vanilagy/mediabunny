@@ -1,8 +1,9 @@
 import { test } from 'vitest';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ALL_FORMATS, Input, FilePathSource, PacketCursor } from '../../src/index.js';
 
-const __dirname = new URL('.', import.meta.url).pathname;
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
 test('Should handle WAV file with oversized ID3 chunk', async () => {
 	const filePath = path.join(__dirname, '..', 'public/oversized-id3.wav');

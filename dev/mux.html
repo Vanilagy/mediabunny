@@ -47,7 +47,7 @@
 	format = new Mediabunny.MkvOutputFormat();
 	format = new Mediabunny.MovOutputFormat();
 	format = new Mediabunny.Mp4OutputFormat({ fastStart: 'reserve' });
-	format = new Mediabunny.WebMOutputFormat();
+	format = new Mediabunny.Mp4OutputFormat({ fastStart: 'fragmented' });
 	let target = new Mediabunny.BufferTarget();
 
 	/*
@@ -65,7 +65,7 @@
 	/*
 	let sourcy = new Mediabunny.AudioBufferSource({
 		codec: 'pcm-s16',
-		bitrate: Mediabunny.QUALITY_HIGH
+		quality: new Mediabunny.Quality('high')
 	});
 	output.addAudioTrack(sourcy);
 
@@ -118,21 +118,21 @@
 	*/
 
 	let videoSource = new Mediabunny.CanvasSource(canvas, {
-		codec: 'vp9',
+		codec: 'avc',
 		//fullCodecString: 'avc1.42001f',
 		bitrate: 1e6,
 		alpha: 'keep',
 		onEncoderConfig: console.log,
 	});
 	let audioSource = new Mediabunny.AudioBufferSource({
-		codec: 'opus',
+		codec: 'aac',
 		bitrate: 128e3,
 	});
 	let subtitleSource = new Mediabunny.TextSubtitleSource('webvtt');
 
 	output.addVideoTrack(videoSource, { languageCode: 'eng', name: 'Mononoké', maximumPacketCount: 100 });
 	output.addAudioTrack(audioSource, { name: 'Yooo', maximumPacketCount: 1000 });
-	//output.addSubtitleTrack(subtitleSource);
+	output.addSubtitleTrack(subtitleSource);
 
 	output.start();
 
@@ -201,7 +201,7 @@ Testing... <00:17.350>One... <00:18.125>Two...
 		context.fillStyle = ['red', 'green', 'blue', 'yellow'][i % 4];
 		context.fillRect(canvas.width * Math.random(), canvas.height * Math.random(), canvas.width * Math.random(), canvas.height * Math.random());
 
-		await videoSource.add(i / 10, 1 / 10);
+		await videoSource.add(i / 10 - 1, 1 / 10);
 
 		p.textContent = i;
 	}
@@ -211,10 +211,10 @@ Testing... <00:17.350>One... <00:18.125>Two...
 	let length = 10;
 	let slicedAudioBuffer = sliceAudioBuffer(audioBuffer, length, audioContext);
 
-	await audioSource.add(slicedAudioBuffer);
+	//await audioSource.add(slicedAudioBuffer);
 
 	await output.finalize();
 
 	console.log(target);
-	//download(new Blob([target.buffer]), 'test' + format.fileExtension);
+	download(new Blob([target.buffer]), 'test' + format.fileExtension);
 </script>

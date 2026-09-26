@@ -116,6 +116,8 @@ export class Mp3Writer {
 		const frameSize = computeMp3FrameSize(
 			lowSamplingFrequency, data.layer, 1000 * kilobitRate, data.sampleRate, padding,
 		);
-		this.writer.seek(startPos + frameSize);
+
+		// Pad the frame out to its full size
+		this.writer.write(new Uint8Array(startPos + frameSize - this.writer.getPos()));
 	}
 }
