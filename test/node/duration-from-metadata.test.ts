@@ -110,16 +110,17 @@ test('ADTS AAC duration metadata', async () => {
 	}
 });
 
+// LAME: 1607 frames × 576 samples − 576 delay − 1056 padding = 924000 samples at 24 kHz.
 test('MP3 duration metadata', async () => {
 	using input = new Input({
 		source: new FilePathSource(publicPath('Toothsome-Meme.VBRv2.mp3')),
 		formats: ALL_FORMATS,
 	});
 
-	expect(await input.getDurationFromMetadata()).toBe(38.568);
-	expect(await input.computeDuration()).toBe(38.568000000000005);
+	expect(await input.getDurationFromMetadata()).toBe(38.5);
+	expect(await input.computeDuration()).toBe(38.5);
 
 	const audioTrack = await input.getPrimaryAudioTrack();
 	assert(audioTrack);
-	expect(await audioTrack.getDurationFromMetadata()).toBe(38.568);
+	expect(await audioTrack.getDurationFromMetadata()).toBe(38.5);
 });

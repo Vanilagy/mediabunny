@@ -17,6 +17,7 @@ import {
 	AsyncMutex,
 	binarySearchExact,
 	binarySearchLessOrEqual,
+	clamp,
 	isThenable,
 	toDataView,
 	UNDETERMINED_LANGUAGE,
@@ -48,6 +49,16 @@ type Sample = {
 	dataSize: number;
 };
 
+/**
+ * Fixed reconstruction latency of a conformant MPEG-1 Layer III decoder: the synthesis filterbank + IMDCT
+ * overlap-add emit output 528.5 samples behind the encoded timeline (rounded up by convention). The LAME tag's
+ * gapless declaration stores only the encoder-side numbers and expects the player to add this decoder-side
+ * constant — a raw-frame decoder never sees the tag and cannot compensate itself. Reference implementations
+ * hardcode the same value: ffmpeg's `start_skip_samples = start_pad + 528 + 1` (libavformat/mp3dec.c), mpg123's
+ * `GAPLESS_DELAY 529`.
+ */
+const MP3_DECODER_DELAY_IN_SAMPLES = 529;
+
 export class Mp3Demuxer extends Demuxer {
 	reader: Reader;
 
@@ -61,6 +72,13 @@ export class Mp3Demuxer extends Demuxer {
 	xingData: {
 		frameCount: number | null;
 		fileSize: number | null;
+		/**
+		 * mp3 gapless declaration from the LAME-style Xing extension: the number
+		 * of codec-priming samples at the start (encoder delay) and of padding
+		 * samples at the end. `null` when the tag doesn't declare them.
+		 */
+		encoderDelay: number | null;
+		encoderPadding: number | null;
 	} | null = null;
 
 	trackBackings: Mp3AudioTrackBacking[] = [];
@@ -151,21 +169,48 @@ export class Mp3Demuxer extends Demuxer {
 				}
 
 				if (!this.xingData) {
-					let xingDataSlice = this.reader.requestSlice(result.startPos + xingOffset + 4, 12);
+					// Optional Xing fields and the LAME extension must stay inside their frame; a field cut off by
+					// the frame's end counts as absent.
+					const readSize = clamp(header.totalSize - xingOffset - 4, 0, 160);
+					let xingDataSlice = this.reader.requestSlice(result.startPos + xingOffset + 4, readSize);
 					if (isThenable(xingDataSlice)) xingDataSlice = await xingDataSlice;
 					if (xingDataSlice) {
-						const xingData = readBytes(xingDataSlice, 12);
+						const xingData = readBytes(xingDataSlice, readSize);
 						const view = toDataView(xingData);
-						const flags = view.getUint32(0, false);
+						const readField = (offset: number) => offset + 4 <= view.byteLength
+							? view.getUint32(offset, false)
+							: null;
+						const flags = readField(0) ?? 0;
 
-						this.xingData = {
-							frameCount: (flags & XingFlags.FrameCount)
-								? view.getUint32(4, false)
-								: null,
-							fileSize: (flags & XingFlags.FileSize)
-								? view.getUint32(8, false)
-								: null,
-						};
+						let pos = 4;
+						const frameCount = (flags & XingFlags.FrameCount) ? readField(pos) : null;
+						if (flags & XingFlags.FrameCount) pos += 4;
+						const fileSize = (flags & XingFlags.FileSize) ? readField(pos) : null;
+						if (flags & XingFlags.FileSize) pos += 4;
+						if (flags & XingFlags.Toc) pos += 100;
+						if (flags & (1 << 3)) pos += 4; // Quality indicator field
+
+						// LAME-style extension: a 9-byte encoder string, then the encoder
+						// delay and padding packed into 3 bytes at offset 21 — the mp3
+						// gapless declaration (true stream length = frames * spf - delay
+						// - padding).
+						let encoderDelay: number | null = null;
+						let encoderPadding: number | null = null;
+						if (view.byteLength >= pos + 24) {
+							const encoderIsAscii = xingData
+								.subarray(pos, pos + 4)
+								.every(byte => byte >= 0x20 && byte <= 0x7e);
+							const delay = (view.getUint8(pos + 21) << 4) | (view.getUint8(pos + 22) >> 4);
+							const padding = ((view.getUint8(pos + 22) & 0x0f) << 8) | view.getUint8(pos + 23);
+
+							// All-zero fields mean "not declared" (bare Xing header)
+							if (encoderIsAscii && (delay !== 0 || padding !== 0)) {
+								encoderDelay = delay;
+								encoderPadding = padding;
+							}
+						}
+
+						this.xingData = { frameCount, fileSize, encoderDelay, encoderPadding };
 					}
 				}
 
@@ -178,10 +223,29 @@ export class Mp3Demuxer extends Demuxer {
 			this.firstFrameHeaderPos = result.startPos;
 		}
 
-		const sampleDuration = header.audioSamplesInFrame / this.firstFrameHeader.sampleRate;
+		// mp3 gapless (LAME tag): the declared encoder delay PLUS the decoder's fixed
+		// reconstruction latency shift the whole timeline left (pre-zero audio is codec
+		// priming, cropped downstream like an mp4 edit list), and the declared stream
+		// end clamps the final frame's duration (trailing encoder padding is not
+		// content). The tag carries encoder-side numbers only — the decoder-side 529
+		// is the demuxer's to add, exactly where ffmpeg's mp3 demuxer adds it. The end
+		// discard thus becomes padding − 529; a padding below 529 comes out short by
+		// the difference, identically to the reference decoder.
+		const gapless = this.getGaplessDeclaration();
+		const timelineShiftInSamples = gapless ? gapless.delay + MP3_DECODER_DELAY_IN_SAMPLES : 0;
+		const declaredEndInSamples = gapless && this.xingData?.frameCount != null
+			? this.xingData.frameCount * header.audioSamplesInFrame - gapless.delay - gapless.padding
+			: null;
+
+		const startInSamples = this.nextTimestampInSamples - timelineShiftInSamples;
+		let endInSamples = startInSamples + header.audioSamplesInFrame;
+		if (declaredEndInSamples !== null) {
+			endInSamples = Math.min(endInSamples, declaredEndInSamples);
+		}
+
 		const sample: Sample = {
-			timestamp: this.nextTimestampInSamples / this.firstFrameHeader.sampleRate,
-			duration: sampleDuration,
+			timestamp: startInSamples / this.firstFrameHeader.sampleRate,
+			duration: Math.max(endInSamples - startInSamples, 0) / this.firstFrameHeader.sampleRate,
 			dataStart: result.startPos,
 			dataSize: header.totalSize,
 		};
@@ -190,6 +254,29 @@ export class Mp3Demuxer extends Demuxer {
 		this.nextTimestampInSamples += header.audioSamplesInFrame;
 
 		return;
+	}
+
+	/**
+	 * The encoder delay and padding the LAME tag declares, or null if it declares none. Delay and padding that
+	 * together exceed the samples of the frames the Xing header counts are inconsistent, so they count as absent too
+	 * and the timing stays untrimmed.
+	 */
+	getGaplessDeclaration() {
+		assert(this.firstFrameHeader);
+
+		const xingData = this.xingData;
+		if (!xingData || xingData.encoderDelay === null || xingData.encoderPadding === null) {
+			return null;
+		}
+
+		const totalSamples = xingData.frameCount !== null
+			? xingData.frameCount * this.firstFrameHeader.audioSamplesInFrame
+			: Infinity;
+		if (xingData.encoderDelay + xingData.encoderPadding > totalSamples) {
+			return null;
+		}
+
+		return { delay: xingData.encoderDelay, padding: xingData.encoderPadding };
 	}
 
 	async getMimeType() {
@@ -272,7 +359,7 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 
 	getTimeResolution() {
 		assert(this.demuxer.firstFrameHeader);
-		return this.demuxer.firstFrameHeader.sampleRate / this.demuxer.firstFrameHeader.audioSamplesInFrame;
+		return this.demuxer.firstFrameHeader.sampleRate;
 	}
 
 	isRelativeToUnixEpoch() {
@@ -303,9 +390,13 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 
 		if (demuxer.xingData) {
 			if (demuxer.xingData.frameCount !== null) {
-				return demuxer.xingData.frameCount
-					* demuxer.firstFrameHeader.audioSamplesInFrame
-					/ demuxer.firstFrameHeader.sampleRate;
+				const totalSamples = demuxer.xingData.frameCount * demuxer.firstFrameHeader.audioSamplesInFrame;
+				// With a gapless declaration the timeline is shifted by -delay and
+				// ends at the declared stream length.
+				const gapless = demuxer.getGaplessDeclaration();
+				const trimmedSamples = gapless ? totalSamples - gapless.delay - gapless.padding : totalSamples;
+
+				return trimmedSamples / demuxer.firstFrameHeader.sampleRate;
 			}
 		} else {
 			// No Xing, assuming CBR
@@ -445,11 +536,16 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 
 		try {
 			while (true) {
-				const index = binarySearchLessOrEqual(
+				let index = binarySearchLessOrEqual(
 					this.demuxer.loadedSamples,
 					timestamp,
 					x => x.timestamp,
 				);
+				// Packets that start at or after the declared end present nothing: they stay in decode order, but a
+				// timestamp lookup never lands on them
+				while (index >= 0 && this.demuxer.loadedSamples[index]!.duration === 0) {
+					index--;
+				}
 
 				if (index === -1 && this.demuxer.loadedSamples.length > 0) {
 					// We're before the first sample
