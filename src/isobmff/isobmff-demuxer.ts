@@ -97,12 +97,13 @@ import {
 	readF64Be,
 	readI16Be,
 	readI32Be,
-	readI64Be,
+	readI64BeBigInt,
 	Reader,
 	readU16Be,
 	readU24Be,
 	readU32Be,
 	readU64Be,
+	readU64BeBigInt,
 	readU8,
 	readAscii,
 } from '../reader';
@@ -138,9 +139,11 @@ type InternalTrack = {
 		endTimestamp: number;
 	}[];
 	/** The segment durations of all edit list entries leading up to the main one (from which the offset is taken.) */
-	editListPreviousSegmentDurations: number;
+	editListPreviousSegmentDurations: bigint;
 	/** The media time offset of the main edit list entry (with media time !== -1) */
-	editListOffset: number;
+	editListOffset: bigint;
+	/** The segment duration of the main edit list entry, in the movie timescale, or null if there is no such entry. */
+	editListSegmentDuration: bigint | null;
 	/** Set when the track's samples are encrypted using a supported scheme (cenc/cens/cbcs), parsed from sinf/tenc. */
 	encryptionInfo: TrackEncryptionInfo | null;
 	/** For non-fragmented encrypted tracks: parsed saiz+saio from stbl; aux info is fetched lazily on first use. */
@@ -398,14 +401,6 @@ export class IsobmffDemuxer extends Demuxer {
 					this.moovSlice = moovSlice;
 					this.readContiguousBoxes(this.moovSlice);
 
-					for (const track of this.tracks) {
-						// Modify the edit list offset based on the previous segment durations. They are in different
-						// timescales, so we first convert to seconds and then into the track timescale.
-						const previousSegmentDurationsInSeconds
-							= track.editListPreviousSegmentDurations / this.movieTimescale;
-						track.editListOffset -= Math.round(previousSegmentDurationsInSeconds * track.timescale);
-					}
-
 					lookForMfraBox = this.isFragmented
 						&& this.reader.fileSize !== null
 						&& this.reader.fileSize > startPos + boxInfo.totalSize; // There's more after the moov box
@@ -512,6 +507,7 @@ export class IsobmffDemuxer extends Demuxer {
 				fragmentPositionCache: [],
 				editListPreviousSegmentDurations: foreignTrack.editListPreviousSegmentDurations,
 				editListOffset: foreignTrack.editListOffset,
+				editListSegmentDuration: foreignTrack.editListSegmentDuration,
 				encryptionInfo: foreignTrack.encryptionInfo,
 				encryptionAuxInfo: null,
 				frmaCodecString: null,
@@ -867,8 +863,9 @@ export class IsobmffDemuxer extends Demuxer {
 					fragmentLookupTable: [],
 					currentFragmentState: null,
 					fragmentPositionCache: [],
-					editListPreviousSegmentDurations: 0,
-					editListOffset: 0,
+					editListPreviousSegmentDurations: 0n,
+					editListOffset: 0n,
+					editListSegmentDuration: null,
 					encryptionInfo: null,
 					encryptionAuxInfo: null,
 					frmaCodecString: null,
@@ -940,37 +937,54 @@ export class IsobmffDemuxer extends Demuxer {
 				slice.skip(3); // Flags
 
 				let relevantEntryFound = false;
-				let previousSegmentDurations = 0;
+				let stopLookingForRelevantEntries = false;
+				let multipleEditWarningEmitted = false;
+				let previousSegmentDurations = 0n;
 
 				const entryCount = readU32Be(slice);
 				for (let i = 0; i < entryCount; i++) {
 					const segmentDuration = version === 1
-						? readU64Be(slice)
-						: readU32Be(slice);
+						? readU64BeBigInt(slice)
+						: BigInt(readU32Be(slice));
 					const mediaTime = version === 1
-						? readI64Be(slice)
-						: readI32Be(slice);
+						? readI64BeBigInt(slice)
+						: BigInt(readI32Be(slice));
 					const mediaRate = readFixed_16_16(slice);
 
 					if (relevantEntryFound) {
-						Logging._warn(
-							'Unsupported edit list: multiple edits are not currently supported. Only using first edit.',
-						);
-						break;
+						if (!multipleEditWarningEmitted) {
+							Logging._warn(
+								'Unsupported edit list: multiple edits are not currently supported.'
+								+ ' Only using first edit.',
+							);
+							multipleEditWarningEmitted = true;
+						}
+
+						// The first media edit does not define the end of a multi-edit presentation. Keep the existing
+						// best-effort timestamp mapping, but disable end clamping so later valid edits remain visible.
+						track.editListSegmentDuration = null;
+						continue;
 					}
 
-					if (mediaTime === -1) {
+					if (stopLookingForRelevantEntries) {
+						continue;
+					}
+
+					if (mediaTime === -1n) {
 						previousSegmentDurations += segmentDuration;
 						continue;
 					}
 
 					if (mediaRate !== 1) {
 						Logging._warn('Unsupported edit list entry: media rate must be 1.');
-						break;
+						stopLookingForRelevantEntries = true;
+						continue;
 					}
 
 					track.editListPreviousSegmentDurations = previousSegmentDurations;
 					track.editListOffset = mediaTime;
+					// ISO/IEC 14496-12, 8.6.6.1: a zero-duration media edit supplies an offset for subsequent media.
+					track.editListSegmentDuration = segmentDuration > 0n ? segmentDuration : null;
 					relevantEntryFound = true;
 				}
 			}; break;
@@ -2907,7 +2921,49 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 	}
 
 	getTimeResolution() {
-		return this.internalTrack.timescale;
+		const track = this.internalTrack;
+		const movieTimescale = track.demuxer.movieTimescale;
+		if (movieTimescale <= 0) {
+			return track.timescale;
+		}
+
+		const movieTimescaleBigInt = BigInt(movieTimescale);
+		const getMovieDurationDenominator = (duration: bigint) => {
+			return movieTimescaleBigInt
+				/ greatestCommonDivisor(movieTimescaleBigInt, duration < 0n ? -duration : duration);
+		};
+
+		let resolution = leastCommonMultiple(
+			BigInt(track.timescale),
+			getMovieDurationDenominator(track.editListPreviousSegmentDurations),
+		);
+		if (track.editListSegmentDuration !== null) {
+			resolution = leastCommonMultiple(
+				resolution,
+				getMovieDurationDenominator(track.editListSegmentDuration),
+			);
+		}
+
+		// `getTimeResolution()` returns a number. Above this cap, even the least common multiple cannot be represented
+		// as a safe integer, so no fallback number could preserve the method's integer-multiple contract.
+		if (resolution > BigInt(Number.MAX_SAFE_INTEGER)) {
+			throw new RangeError(
+				`The exact track time resolution (${resolution}) exceeds Number.MAX_SAFE_INTEGER and cannot be returned`
+				+ ' without violating InputTrack.getTimeResolution().',
+			);
+		}
+
+		return Number(resolution);
+	}
+
+	private getPresentationEndTimestamp() {
+		const track = this.internalTrack;
+		if (track.editListSegmentDuration === null || track.demuxer.movieTimescale <= 0) {
+			return null;
+		}
+
+		return Number(track.editListPreviousSegmentDurations + track.editListSegmentDuration)
+			/ track.demuxer.movieTimescale;
 	}
 
 	isRelativeToUnixEpoch() {
@@ -2936,6 +2992,11 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 
 	async getDurationFromMetadata() {
 		const track = this.internalTrack;
+		const presentationEndTimestamp = this.getPresentationEndTimestamp();
+		if (presentationEndTimestamp !== null) {
+			return presentationEndTimestamp;
+		}
+
 		if (track.durationInMediaTimescale <= 0) {
 			// The duration is often zero for fragmented files for example; return `null` to signal that the duration
 			// must be computed instead.
@@ -2976,20 +3037,49 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 				};
 			},
 			-Infinity, // Use -Infinity as a search timestamp to avoid using the lookup entries
-			Infinity,
 			options,
 		);
 	}
 
+	private getLastPresentedMediaTimestamp() {
+		const track = this.internalTrack;
+		if (track.editListSegmentDuration === null || track.demuxer.movieTimescale <= 0) {
+			return Infinity;
+		}
+
+		const durationInMediaTimescaleNumerator = track.editListSegmentDuration * BigInt(track.timescale);
+		const movieTimescale = BigInt(track.demuxer.movieTimescale);
+		const durationInMediaTimescaleCeil
+			= (durationInMediaTimescaleNumerator + movieTimescale - 1n) / movieTimescale;
+
+		return Number(track.editListOffset + durationInMediaTimescaleCeil - 1n);
+	}
+
+	private mapMediaTimestampToPresentationTimestamp(timestampInTimescale: number) {
+		const track = this.internalTrack;
+		const editStartTimestamp = track.demuxer.movieTimescale > 0
+			? Number(track.editListPreviousSegmentDurations) / track.demuxer.movieTimescale
+			: 0;
+
+		return (timestampInTimescale - Number(track.editListOffset)) / track.timescale + editStartTimestamp;
+	}
+
 	private mapTimestampIntoTimescale(timestamp: number) {
+		const track = this.internalTrack;
+		const editStartTimestamp = track.demuxer.movieTimescale > 0
+			? Number(track.editListPreviousSegmentDurations) / track.demuxer.movieTimescale
+			: 0;
 		// Do a little rounding to catch cases where the result is very close to an integer. If it is, it's likely
 		// that the number was originally an integer divided by the timescale. For stability, it's best
 		// to return the integer in this case.
-		return roundIfAlmostInteger(timestamp * this.internalTrack.timescale) + this.internalTrack.editListOffset;
+		return roundIfAlmostInteger((timestamp - editStartTimestamp) * track.timescale) + Number(track.editListOffset);
 	}
 
 	async getPacket(timestamp: number, options: PacketRetrievalOptions) {
-		const timestampInTimescale = this.mapTimestampIntoTimescale(timestamp);
+		const timestampInTimescale = Math.min(
+			this.mapTimestampIntoTimescale(timestamp),
+			this.getLastPresentedMediaTimestamp(),
+		);
 
 		const sampleTable = this.internalTrack.demuxer.getSampleTableForTrack(this.internalTrack);
 		const sampleIndex = getSampleIndexForTimestamp(sampleTable, timestampInTimescale);
@@ -3019,7 +3109,6 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 
 				return { sampleIndex, correctSampleFound };
 			},
-			timestampInTimescale,
 			timestampInTimescale,
 			options,
 		);
@@ -3066,13 +3155,15 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 				};
 			},
 			-Infinity, // Use -Infinity as a search timestamp to avoid using the lookup entries
-			Infinity,
 			options,
 		);
 	}
 
 	async getKeyPacket(timestamp: number, options: PacketRetrievalOptions) {
-		const timestampInTimescale = this.mapTimestampIntoTimescale(timestamp);
+		const timestampInTimescale = Math.min(
+			this.mapTimestampIntoTimescale(timestamp),
+			this.getLastPresentedMediaTimestamp(),
+		);
 
 		const sampleTable = this.internalTrack.demuxer.getSampleTableForTrack(this.internalTrack);
 		const sampleIndex = getKeyframeSampleIndexForTimestamp(sampleTable, timestampInTimescale);
@@ -3101,7 +3192,6 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 
 				return { sampleIndex, correctSampleFound };
 			},
-			timestampInTimescale,
 			timestampInTimescale,
 			options,
 		);
@@ -3156,12 +3246,33 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 				};
 			},
 			-Infinity, // Use -Infinity as a search timestamp to avoid using the lookup entries
-			Infinity,
 			options,
 		);
 	}
 
-	private async fetchPacketForSampleIndex(sampleIndex: number, options: PacketRetrievalOptions) {
+	private getPresentedPacketDuration(presentationTimestampInTimescale: number, durationInTimescale: number) {
+		const track = this.internalTrack;
+		if (track.editListSegmentDuration === null || track.demuxer.movieTimescale <= 0) {
+			return durationInTimescale / track.timescale;
+		}
+
+		const movieTimescale = BigInt(track.demuxer.movieTimescale);
+		const durationUntilEditEndNumerator = track.editListSegmentDuration * BigInt(track.timescale)
+			- (BigInt(presentationTimestampInTimescale) - track.editListOffset) * movieTimescale;
+		const nominalDurationNumerator = BigInt(durationInTimescale) * movieTimescale;
+		const clampedDurationNumerator = durationUntilEditEndNumerator < 0n
+			? 0n
+			: durationUntilEditEndNumerator < nominalDurationNumerator
+				? durationUntilEditEndNumerator
+				: nominalDurationNumerator;
+
+		return Number(clampedDurationNumerator) / track.timescale / track.demuxer.movieTimescale;
+	}
+
+	private async fetchPacketForSampleIndex(
+		sampleIndex: number,
+		options: PacketRetrievalOptions,
+	) {
 		if (sampleIndex === -1) {
 			return null;
 		}
@@ -3209,9 +3320,9 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			}
 		}
 
-		const timestamp = (sampleInfo.presentationTimestamp - this.internalTrack.editListOffset)
-			/ this.internalTrack.timescale;
-		const duration = sampleInfo.duration / this.internalTrack.timescale;
+		const timestamp = this.mapMediaTimestampToPresentationTimestamp(sampleInfo.presentationTimestamp);
+		// Retain decode dependencies, but never expose their duration beyond the presentation window.
+		const duration = this.getPresentedPacketDuration(sampleInfo.presentationTimestamp, sampleInfo.duration);
 		const packet = new EncodedPacket(
 			data,
 			sampleInfo.isKeyFrame ? 'key' : 'delta',
@@ -3226,7 +3337,11 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		return packet;
 	}
 
-	private async fetchPacketInFragment(fragment: Fragment, sampleIndex: number, options: PacketRetrievalOptions) {
+	private async fetchPacketInFragment(
+		fragment: Fragment,
+		sampleIndex: number,
+		options: PacketRetrievalOptions,
+	) {
 		if (sampleIndex === -1) {
 			return null;
 		}
@@ -3259,9 +3374,9 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			}
 		}
 
-		const timestamp = (fragmentSample.presentationTimestamp - this.internalTrack.editListOffset)
-			/ this.internalTrack.timescale;
-		const duration = fragmentSample.duration / this.internalTrack.timescale;
+		const timestamp = this.mapMediaTimestampToPresentationTimestamp(fragmentSample.presentationTimestamp);
+		// Retain decode dependencies, but never expose their duration beyond the presentation window.
+		const duration = this.getPresentedPacketDuration(fragmentSample.presentationTimestamp, fragmentSample.duration);
 		const packet = new EncodedPacket(
 			data,
 			fragmentSample.isKeyFrame ? 'key' : 'delta',
@@ -3284,8 +3399,6 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		getMatchInFragment: (fragment: Fragment) => { sampleIndex: number; correctSampleFound: boolean },
 		// The timestamp with which we can search the lookup table
 		searchTimestamp: number,
-		// The timestamp for which we know the correct sample will not come after it
-		latestTimestamp: number,
 		options: PacketRetrievalOptions,
 	): Promise<EncodedPacket | null> {
 		const demuxer = this.internalTrack.demuxer;
@@ -3347,14 +3460,6 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		}
 
 		while (true) {
-			if (currentFragment) {
-				const trackData = currentFragment.trackData.get(this.internalTrack.id);
-				if (trackData && trackData.startTimestamp > latestTimestamp) {
-					// We're already past the upper bound, no need to keep searching
-					break;
-				}
-			}
-
 			// Load the header
 			let slice = demuxer.reader.requestSliceRange(currentPos, MIN_BOX_HEADER_SIZE, MAX_BOX_HEADER_SIZE);
 			if (isThenable(slice)) slice = await slice;
@@ -3393,7 +3498,6 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 				null,
 				getMatchInFragment,
 				newSearchTimestamp,
-				latestTimestamp,
 				options,
 			);
 		}
@@ -3596,6 +3700,19 @@ class IsobmffAudioTrackBacking extends IsobmffTrackBacking implements InputAudio
 		})();
 	}
 }
+
+const greatestCommonDivisor = (first: bigint, second: bigint) => {
+	while (second !== 0n) {
+		const remainder = first % second;
+		first = second;
+		second = remainder;
+	}
+	return first;
+};
+
+const leastCommonMultiple = (first: bigint, second: bigint) => {
+	return first / greatestCommonDivisor(first, second) * second;
+};
 
 const getSampleIndexForTimestamp = (sampleTable: SampleTable, timescaleUnits: number) => {
 	if (sampleTable.presentationTimestamps) {

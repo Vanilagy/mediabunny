@@ -262,7 +262,8 @@ export abstract class InputTrack {
 
 	/**
 	 * Returns a positive number x such that all timestamps and durations of all packets of this track are
-	 * integer multiples of 1/x.
+	 * integer multiples of 1/x. If the exact resolution exceeds `Number.MAX_SAFE_INTEGER`, this method rejects with a
+	 * `RangeError` rather than returning an inexact value.
 	 */
 	async getTimeResolution() {
 		return this._backing.getTimeResolution();
@@ -270,7 +271,8 @@ export abstract class InputTrack {
 
 	/**
 	 * A positive number x such that all timestamps and durations of all packets of this track are
-	 * integer multiples of 1/x.
+	 * integer multiples of 1/x. If the exact resolution exceeds `Number.MAX_SAFE_INTEGER`, this getter throws a
+	 * `RangeError` rather than returning an inexact value.
 	 * @deprecated Use {@link InputTrack.getTimeResolution} instead.
 	 */
 	get timeResolution() {

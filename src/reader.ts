@@ -337,10 +337,22 @@ export const readU64Be = (slice: FileSlice) => {
 	return high * 0x100000000 + low;
 };
 
+export const readU64BeBigInt = (slice: FileSlice) => {
+	const high = BigInt(readU32Be(slice));
+	const low = BigInt(readU32Be(slice));
+	return high * 0x100000000n + low;
+};
+
 export const readI64Be = (slice: FileSlice) => {
 	const high = readI32Be(slice);
 	const low = readU32Be(slice);
 	return high * 0x100000000 + low;
+};
+
+export const readI64BeBigInt = (slice: FileSlice) => {
+	const high = BigInt(readI32Be(slice));
+	const low = BigInt(readU32Be(slice));
+	return high * 0x100000000n + low;
 };
 
 export const readI64Le = (slice: FileSlice) => {

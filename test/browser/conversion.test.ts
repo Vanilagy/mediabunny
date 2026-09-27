@@ -922,7 +922,7 @@ test('Packet copy, keyframe trim', async () => {
 		videoStartTimestamp: 0,
 		videoEndTimestamp: 1,
 		audioStartTimestamp: -0.04,
-		audioEndTimestamp: 1.0053333333333334,
+		audioEndTimestamp: 57907 / 57600,
 	});
 });
 
@@ -940,8 +940,8 @@ test('Packet copy, keyframe trim, shrink', async () => {
 		expectedTimeOffset: 1,
 		videoStartTimestamp: 0,
 		videoEndTimestamp: 1,
-		audioStartTimestamp: -0.04 + 2 * 1024 / 48000,
-		audioEndTimestamp: 1.0053333333333334 - 1024 / 48000,
+		audioStartTimestamp: 154 / 57600,
+		audioEndTimestamp: 283394 / 288000,
 	});
 });
 
@@ -957,7 +957,7 @@ test('Packet copy, delta frame trim', async () => {
 		videoStartTimestamp: -0.5,
 		videoEndTimestamp: 1.02,
 		audioStartTimestamp: -0.028,
-		audioEndTimestamp: 1.0173333333333334,
+		audioEndTimestamp: 58598 / 57600,
 	});
 });
 
@@ -974,9 +974,9 @@ test('Packet copy, delta frame trim, shrink', async () => {
 		},
 		expectedTimeOffset: 1.5,
 		videoStartTimestamp: 0.5,
-		videoEndTimestamp: 1.02, // Due to MP4 not being able to express a different duration for the last packet
-		audioStartTimestamp: -0.028 + 2 * 1024 / 48000,
-		audioEndTimestamp: 1.0173333333333334 - 1024 / 48000,
+		videoEndTimestamp: 1, // Honor the edit-list presentation end
+		audioStartTimestamp: 845 / 57600,
+		audioEndTimestamp: 286849 / 288000,
 	});
 });
 
@@ -995,7 +995,7 @@ test('Packet copy, delta frame trim, boundary tolerance exceeded', async () => {
 		videoStartTimestamp: 0,
 		videoEndTimestamp: 1,
 		audioStartTimestamp: -0.028,
-		audioEndTimestamp: 1.0173333333333334,
+		audioEndTimestamp: 58598 / 57600,
 		compareVideoPackets: false,
 	});
 });
