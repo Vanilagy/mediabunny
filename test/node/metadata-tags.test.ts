@@ -30,12 +30,16 @@ const createDummyAudioTrack = (codec: AudioCodec, output: Output) => {
 
 	return {
 		async addPacket() {
-			// Data to make it behave like an MP3 frame
-			const data = new Uint8Array(2000);
-			data[0] = 255;
-			data[1] = 251;
-			data[2] = 224;
-			data[3] = 100;
+			const data = new Uint8Array(codec === 'opus' ? 1276 : 2000);
+			if (codec === 'opus') {
+				data[0] = (31 << 3) | 0b00; // One 20 ms, 1275-byte Opus frame
+			} else {
+				// Data to make it behave like an MP3 frame
+				data[0] = 255;
+				data[1] = 251;
+				data[2] = 224;
+				data[3] = 100;
+			}
 
 			const description = codec === 'flac'
 				? new Uint8Array([

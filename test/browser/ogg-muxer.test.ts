@@ -137,7 +137,11 @@ test('Multi-frame Opus packets', async () => {
 	expect(await input.getFormat()).toBeInstanceOf(OggInputFormat);
 
 	const sink = new EncodedPacketSink((await input.getPrimaryAudioTrack())!);
-	const packet = await sink.getFirstPacket();
+	const firstPacket = await sink.getFirstPacket();
+	assert(firstPacket);
+	const secondPacket = await sink.getNextPacket(firstPacket);
 
-	expect(packet?.duration).toBe(packetDuration);
+	// The first packet shares the EOS page and its public duration excludes pre-skip; later packets stay nominal.
+	expect(firstPacket.duration).toBe(packetDuration - 312 / SAMPLE_RATE);
+	expect(secondPacket?.duration).toBe(packetDuration);
 });

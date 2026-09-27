@@ -61,39 +61,37 @@ export const extractSampleMetadata = (
 	let durationInSamples = 0;
 	let currentBlocksize: number | null = null;
 
-	if (data.length > 0) {
+	if (codecInfo.codec === 'opus') {
+		const toc = parseOpusTocByte(data);
+		durationInSamples = toc.durationInSamples;
+	} else if (data.length > 0 && codecInfo.codec === 'vorbis') {
 		// To know sample duration, we'll need to peak inside the packet
-		if (codecInfo.codec === 'vorbis') {
-			assert(codecInfo.vorbisInfo);
+		assert(codecInfo.vorbisInfo);
 
-			const vorbisModeCount = codecInfo.vorbisInfo.modeBlockflags.length;
-			const bitCount = ilog(vorbisModeCount - 1);
-			const modeMask = ((1 << bitCount) - 1) << 1;
-			const modeNumber = (data[0]! & modeMask) >> 1;
+		const vorbisModeCount = codecInfo.vorbisInfo.modeBlockflags.length;
+		const bitCount = ilog(vorbisModeCount - 1);
+		const modeMask = ((1 << bitCount) - 1) << 1;
+		const modeNumber = (data[0]! & modeMask) >> 1;
 
-			if (modeNumber >= codecInfo.vorbisInfo.modeBlockflags.length) {
-				throw new Error('Invalid mode number.');
-			}
-
-			// In Vorbis, packet duration also depends on the blocksize of the previous packet
-			let prevBlocksize = vorbisLastBlocksize;
-
-			const blockflag = codecInfo.vorbisInfo.modeBlockflags[modeNumber]!;
-			currentBlocksize = codecInfo.vorbisInfo.blocksizes[blockflag]!;
-
-			if (blockflag === 1) {
-				const prevMask = (modeMask | 0x1) + 1;
-				const flag = data[0]! & prevMask ? 1 : 0;
-				prevBlocksize = codecInfo.vorbisInfo.blocksizes[flag]!;
-			}
-
-			durationInSamples = prevBlocksize !== null
-				? (prevBlocksize + currentBlocksize) >> 2
-				: 0; // The first sample outputs no audio data and therefore has a duration of 0
-		} else if (codecInfo.codec === 'opus') {
-			const toc = parseOpusTocByte(data);
-			durationInSamples = toc.durationInSamples;
+		if (modeNumber >= codecInfo.vorbisInfo.modeBlockflags.length) {
+			throw new Error('Invalid mode number.');
 		}
+
+		// In Vorbis, packet duration also depends on the blocksize of the previous packet
+		let prevBlocksize = vorbisLastBlocksize;
+
+		const blockflag = codecInfo.vorbisInfo.modeBlockflags[modeNumber]!;
+		currentBlocksize = codecInfo.vorbisInfo.blocksizes[blockflag]!;
+
+		if (blockflag === 1) {
+			const prevMask = (modeMask | 0x1) + 1;
+			const flag = data[0]! & prevMask ? 1 : 0;
+			prevBlocksize = codecInfo.vorbisInfo.blocksizes[flag]!;
+		}
+
+		durationInSamples = prevBlocksize !== null
+			? (prevBlocksize + currentBlocksize) >> 2
+			: 0; // The first sample outputs no audio data and therefore has a duration of 0
 	}
 
 	return {

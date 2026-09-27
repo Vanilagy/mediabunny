@@ -323,10 +323,6 @@ export class OggDemuxer extends Demuxer {
 		}
 
 		const totalPacketSize = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-		if (totalPacketSize === 0) {
-			return null; // Invalid packet, treat it as end of stream
-		}
-
 		const packetData = new Uint8Array(totalPacketSize);
 
 		let offset = 0;
@@ -413,6 +409,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 	encodedPacketToMetadata = new WeakMap<EncodedPacket, EncodedPacketMetadata>();
 	sequentialScanCache: EncodedPacketMetadata[] = [];
 	sequentialScanMutex = new AsyncMutex();
+	initialTimestampInSamplesPromise: Promise<number> | null = null;
 
 	constructor(public bitstream: LogicalBitstream, public demuxer: OggDemuxer) {
 		// Opus always uses a fixed sample rate for its internal calculations, even if the actual rate is different
@@ -522,6 +519,66 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		return granulePosition;
 	}
 
+	getInitialTimestampInSamples() {
+		return this.initialTimestampInSamplesPromise ??= (async () => {
+			if (this.bitstream.codecInfo.codec !== 'opus') {
+				return 0;
+			}
+
+			assert(this.bitstream.codecInfo.opusInfo);
+			const defaultTimestampInSamples = -this.bitstream.codecInfo.opusInfo.preSkip;
+
+			assert(this.bitstream.lastMetadataPacket);
+			const firstPacketPosition = await this.demuxer.findNextPacketStart(this.bitstream.lastMetadataPacket);
+			if (!firstPacketPosition) {
+				return defaultTimestampInSamples;
+			}
+
+			const firstPacket = await this.demuxer.readPacket(
+				firstPacketPosition.startPage,
+				firstPacketPosition.startSegmentIndex,
+			);
+			if (
+				!firstPacket
+				|| firstPacket.endPage.granulePosition < 0
+				|| (firstPacket.endPage.headerType & 0x04)
+			) {
+				// On a first-and-EOS audio page, the granule alone cannot distinguish an initial offset from end trim.
+				return defaultTimestampInSamples;
+			}
+
+			const firstCompletedPage = firstPacket.endPage;
+			let decodedDurationAtPageEnd = extractSampleMetadata(
+				firstPacket.data,
+				this.bitstream.codecInfo,
+				null,
+			).durationInSamples;
+			let nextSegmentIndex = firstPacket.endSegmentIndex + 1;
+
+			// A page granule describes its last completed packet, so include every later packet completed on this page.
+			while (nextSegmentIndex < firstCompletedPage.lacingValues.length) {
+				const packet = await this.demuxer.readPacket(firstCompletedPage, nextSegmentIndex);
+				if (!packet || packet.endPage.headerStartPos !== firstCompletedPage.headerStartPos) {
+					break;
+				}
+
+				decodedDurationAtPageEnd += extractSampleMetadata(
+					packet.data,
+					this.bitstream.codecInfo,
+					null,
+				).durationInSamples;
+				nextSegmentIndex = packet.endSegmentIndex + 1;
+			}
+
+			// RFC 7845 section 4.5 permits cropped/joined streams to begin at a positive granule offset.
+			const initialGranuleOffset = Math.max(
+				firstCompletedPage.granulePosition - decodedDurationAtPageEnd,
+				0,
+			);
+			return initialGranuleOffset - this.bitstream.codecInfo.opusInfo.preSkip;
+		})();
+	}
+
 	createEncodedPacketFromOggPacket(
 		packet: Packet | null,
 		additional: {
@@ -539,12 +596,37 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 			this.bitstream.codecInfo,
 			additional.vorbisLastBlocksize,
 		);
+		let timestampInSamples = Math.max(0, additional.timestampInSamples);
+		let clampedDurationInSamples = durationInSamples;
+		if (
+			this.bitstream.codecInfo.codec === 'opus'
+			&& (packet.endPage.headerType & 0x04)
+			&& packet.endPage.granulePosition >= 0
+		) {
+			// RFC 7845 sections 4.2 and 4.4: exclude pre-skip and end padding from the public timeline.
+			const endInSamples = this.granulePositionToTimestampInSamples(packet.endPage.granulePosition);
+			timestampInSamples = Math.min(timestampInSamples, Math.max(0, endInSamples));
+			clampedDurationInSamples = Math.max(
+				Math.min(additional.timestampInSamples + durationInSamples, endInSamples) - timestampInSamples,
+				0,
+			);
+		}
+
+		// Opus validation above must see empty packets. After that, honor the EOS bit for formats that permit an empty
+		// terminal packet; VLC emits Vorbis streams this way.
+		if (
+			packet.data.length === 0
+			&& (packet.endPage.headerType & 0x04)
+			&& packet.endSegmentIndex === packet.endPage.lacingValues.length - 1
+		) {
+			return null;
+		}
 
 		const encodedPacket = new EncodedPacket(
 			options.metadataOnly ? PLACEHOLDER_DATA : packet.data,
 			'key',
-			Math.max(0, additional.timestampInSamples) / this.internalSampleRate,
-			durationInSamples / this.internalSampleRate,
+			timestampInSamples / this.internalSampleRate,
+			clampedDurationInSamples / this.internalSampleRate,
 			packet.endPage.headerStartPos + packet.endSegmentIndex,
 			packet.data.byteLength,
 		);
@@ -552,6 +634,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		this.encodedPacketToMetadata.set(encodedPacket, {
 			packet,
 			timestampInSamples: additional.timestampInSamples,
+			// Keep the nominal decode duration for reconstructing the next packet's timestamp.
 			durationInSamples,
 			vorbisLastBlockSize: additional.vorbisLastBlocksize,
 			vorbisBlockSize,
@@ -566,11 +649,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 			return null;
 		}
 
-		let timestampInSamples = 0;
-		if (this.bitstream.codecInfo.codec === 'opus') {
-			assert(this.bitstream.codecInfo.opusInfo);
-			timestampInSamples -= this.bitstream.codecInfo.opusInfo.preSkip;
-		}
+		const timestampInSamples = await this.getInitialTimestampInSamples();
 
 		const packet = await this.demuxer.readPacket(packetPosition.startPage, packetPosition.startSegmentIndex);
 
@@ -621,7 +700,8 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		const timestampInSamples = roundIfAlmostInteger(timestamp * this.internalSampleRate);
 		if (timestampInSamples === 0) {
 			// Fast path for timestamp 0 - avoids binary search when playing back from the start
-			return this.getFirstPacket(options);
+			const firstPacket = await this.getFirstPacket(options);
+			return firstPacket && firstPacket.timestamp <= timestamp ? firstPacket : null;
 		}
 		if (timestampInSamples < 0) {
 			// There's nothing here
@@ -646,8 +726,9 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		// Outer loop: Does the binary search
 		outer:
 		while (lowPage.headerStartPos + lowPage.totalSize < high) {
-			const low = lowPage.headerStartPos;
-			const mid = Math.floor((low + high) / 2);
+			const low = lowPage.headerStartPos + lowPage.totalSize;
+			if (high - low <= MIN_PAGE_HEADER_SIZE) break;
+			const mid = Math.floor((low + high - MIN_PAGE_HEADER_SIZE) / 2);
 
 			let searchStartPos = mid;
 
@@ -784,7 +865,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		let endSegmentIndex = 0;
 
 		if (currentPage.headerStartPos === startPosition.startPage.headerStartPos) {
-			currentTimestampInSamples = this.granulePositionToTimestampInSamples(0);
+			currentTimestampInSamples = await this.getInitialTimestampInSamples();
 			currentTimestampIsCorrect = true;
 			currentSegmentIndex = 0;
 		} else {
@@ -885,7 +966,9 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 					},
 					options,
 				);
-				assert(encodedPacket);
+				if (!encodedPacket) {
+					break;
+				}
 
 				let encodedPacketMetadata = this.encodedPacketToMetadata.get(encodedPacket);
 				assert(encodedPacketMetadata);
@@ -943,7 +1026,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 			currentSegmentIndex = nextPosition.startSegmentIndex;
 		}
 
-		return lastEncodedPacket;
+		return lastEncodedPacket && lastEncodedPacket.timestamp <= timestamp ? lastEncodedPacket : null;
 	}
 
 	// A slower but simpler and sequential algorithm for finding a packet in a file
@@ -1002,7 +1085,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 				}
 			}
 
-			return currentPacket;
+			return currentPacket && currentPacket.timestamp <= timestamp ? currentPacket : null;
 		} finally {
 			release();
 		}

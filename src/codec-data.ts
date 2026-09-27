@@ -2359,6 +2359,10 @@ const OPUS_FRAME_DURATION_TABLE = [
 ];
 
 export const parseOpusTocByte = (packet: Uint8Array) => {
+	if (packet.length === 0) {
+		throw new Error('Opus packet must not be empty.');
+	}
+
 	const config = packet[0]! >> 3;
 	const code = packet[0]! & 0b11;
 
@@ -2371,11 +2375,24 @@ export const parseOpusTocByte = (packet: Uint8Array) => {
 		frameCount = 2;
 	} else {
 		// Code 3: the frame count sits in the six low bits of the frame count byte
+		if (packet.length < 2) {
+			throw new Error('Code 3 Opus packet is missing its frame count byte.');
+		}
+
 		frameCount = packet[1]! & 0b111111;
 	}
 
+	if (frameCount === 0) {
+		throw new Error('Opus packet must contain at least one frame.');
+	}
+
+	const durationInSamples = OPUS_FRAME_DURATION_TABLE[config]! * frameCount;
+	if (durationInSamples > 120e-3 * 48000) {
+		throw new Error('Opus packet duration must not exceed 120 milliseconds.');
+	}
+
 	return {
-		durationInSamples: OPUS_FRAME_DURATION_TABLE[config]! * frameCount,
+		durationInSamples,
 	};
 };
 

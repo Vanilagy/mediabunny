@@ -71,6 +71,7 @@ import {
 import { AudioResampler } from './resample';
 import { determineVideoPacketType } from './codec-data';
 import { Logging } from './logging';
+import { recordRawAudioEncoderFrames } from './audio-encoder-metrics';
 
 /**
  * Base class for media sources. Media sources are used to add media samples to an output file.
@@ -2055,6 +2056,10 @@ class AudioEncoderWrapper {
 			}
 
 			this.encodingConfig.onEncodedSample?.(audioSample);
+
+			// Count post-transform, post-resampler frames in encoder feed order. Synthesized gap-fill samples recurse
+			// through this same point, while absolute source timestamps (including Unix time) never enter the count.
+			recordRawAudioEncoderFrames(this.source, audioSample.numberOfFrames, audioSample.sampleRate);
 
 			if (this.customEncoder) {
 				this.customEncoderQueueSize++;

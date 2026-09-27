@@ -22,6 +22,7 @@ import { Output,
 import { OggOutputFormat } from '../output-format';
 import { EncodedPacket } from '../packet';
 import { Writer } from '../writer';
+import { getRawAudioEncoderMetrics } from '../audio-encoder-metrics';
 import {
 	buildOggMimeType,
 	computeOggPageCrc,
@@ -374,7 +375,17 @@ export class OggMuxer extends Muxer {
 	}
 
 	writePacket(trackData: OggTrackData, packet: Packet, isFinalPacket: boolean) {
-		const packetEndTimestampInSamples = packet.timestampInSamples + packet.durationInSamples;
+		let packetEndTimestampInSamples = packet.timestampInSamples + packet.durationInSamples;
+
+		if (isFinalPacket) {
+			const metrics = getRawAudioEncoderMetrics(trackData.track.source);
+			if (metrics) {
+				// The EOS granule excludes encoder fill and includes Opus pre-skip, on the container's clock.
+				const end = (trackData.codecInfo.opusInfo?.preSkip ?? 0)
+					+ Math.round(metrics.frameCount * trackData.internalSampleRate / metrics.sampleRate);
+				packetEndTimestampInSamples = Math.max(end, packet.timestampInSamples);
+			}
+		}
 
 		if (this.format._options.maximumPageDuration !== undefined) {
 			const maxDurationInSamples = this.format._options.maximumPageDuration * trackData.internalSampleRate;
@@ -412,6 +423,9 @@ export class OggMuxer extends Muxer {
 				trackData.currentPageData.push(slice);
 				trackData.currentPageSize += slice.length;
 
+				if (segmentIsLastOfPacket) {
+					trackData.currentGranulePosition = packetEndTimestampInSamples;
+				}
 				this.writePage(trackData, isFinalPacket && segmentIsLastOfPacket);
 
 				if (segmentIsLastOfPacket) {

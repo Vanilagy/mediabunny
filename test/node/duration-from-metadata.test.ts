@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ALL_FORMATS, Input, FilePathSource } from '../../src/index.js';
+import { ALL_FORMATS, EncodedPacketSink, FilePathSource, Input } from '../../src/index.js';
 import { assert } from '../../src/misc.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -90,10 +90,33 @@ test('OGG Vorbis duration metadata', async () => {
 
 	expect(await input.getDurationFromMetadata()).toBe(null);
 
-	const tracks = await input.getTracks();
-	for (const track of tracks) {
-		expect(await track.getDurationFromMetadata()).toBe(null);
-	}
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+	expect(await track.getDurationFromMetadata()).toBe(null);
+	expect(await track.computeDuration()).toBe(5.396167800453514);
+	expect(await input.computeDuration()).toBe(5.396167800453514);
+});
+
+test('OGG Vorbis empty EOS supports random access', async () => {
+	using input = new Input({
+		source: new FilePathSource(publicPath('vorbis-eos.ogg')),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	const sink = new EncodedPacketSink(track);
+	const lastPacket = await sink.getPacket(Infinity);
+	assert(lastPacket);
+	expect(lastPacket.timestamp).toBe(5.372947845804989);
+	expect(lastPacket.duration).toBe(0.023219954648526078);
+	expect(lastPacket.data).toHaveLength(355);
+
+	const finiteSeekPacket = await sink.getPacket(5.4);
+	assert(finiteSeekPacket);
+	expect(finiteSeekPacket.timestamp).toBe(5.372947845804989);
+	expect(finiteSeekPacket.duration).toBe(0.023219954648526078);
+	expect(finiteSeekPacket.data).toHaveLength(355);
 });
 
 test('ADTS AAC duration metadata', async () => {
