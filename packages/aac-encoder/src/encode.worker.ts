@@ -18,6 +18,7 @@ let modulePromise: Promise<ExtendedEmscriptenModule> | null = null;
 
 let initEncoderFn: (channels: number, sampleRate: number, bitrate: number) => number;
 let getEncoderFrameSize: (ctx: number) => number;
+let getEncoderInitialPadding: (ctx: number) => number;
 let getEncoderExtradata: (ctx: number) => number;
 let getEncoderExtradataSize: (ctx: number) => number;
 let getEncodeInputPtr: (ctx: number, size: number) => number;
@@ -40,6 +41,7 @@ const ensureModule = async () => {
 
 		initEncoderFn = module.cwrap('init_encoder', 'number', ['number', 'number', 'number']);
 		getEncoderFrameSize = module.cwrap('get_encoder_frame_size', 'number', ['number']);
+		getEncoderInitialPadding = module.cwrap('get_encoder_initial_padding', 'number', ['number']);
 		getEncoderExtradata = module.cwrap('get_encoder_extradata', 'number', ['number']);
 		getEncoderExtradataSize = module.cwrap('get_encoder_extradata_size', 'number', ['number']);
 		getEncodeInputPtr = module.cwrap('get_encode_input_ptr', 'number', ['number', 'number']);
@@ -66,12 +68,13 @@ const initEncoder = async (
 	}
 
 	const frameSize = getEncoderFrameSize(ctx);
+	const initialPadding = getEncoderInitialPadding(ctx);
 
 	const extradataPtr = getEncoderExtradata(ctx);
 	const extradataSize = getEncoderExtradataSize(ctx);
 	const extradata = module.HEAPU8.slice(extradataPtr, extradataPtr + extradataSize).buffer;
 
-	return { ctx, frameSize, extradata };
+	return { ctx, frameSize, initialPadding, extradata };
 };
 
 const drainPackets = (ctx: number) => {
@@ -116,12 +119,12 @@ const onMessage = (data: { id: number; command: WorkerCommand }) => {
 
 			switch (command.type) {
 				case 'init': {
-					const { ctx, frameSize, extradata } = await initEncoder(
+					const { ctx, frameSize, initialPadding, extradata } = await initEncoder(
 						command.data.numberOfChannels,
 						command.data.sampleRate,
 						command.data.bitrate,
 					);
-					result = { type: command.type, ctx, frameSize, extradata };
+					result = { type: command.type, ctx, frameSize, initialPadding, extradata };
 					transferables.push(extradata);
 				}; break;
 

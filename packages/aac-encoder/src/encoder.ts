@@ -39,6 +39,7 @@ class AacEncoder extends CustomAudioEncoder {
 
 	private ctx = 0;
 	private encoderFrameSize = 0;
+	private encoderInitialPadding = 0;
 	private sampleRate = 0;
 	private numberOfChannels = 0;
 	private chunkMetadata: EncodedAudioChunkMetadata = {};
@@ -115,6 +116,9 @@ class AacEncoder extends CustomAudioEncoder {
 
 		this.ctx = result.ctx;
 		this.encoderFrameSize = result.frameSize;
+		this.encoderInitialPadding = result.initialPadding;
+		assert(Number.isSafeInteger(this.encoderInitialPadding));
+		assert(this.encoderInitialPadding >= 0);
 
 		// The ffmpeg encoder provides an AudioSpecificConfig as extradata after init
 		const description = new Uint8Array(result.extradata);
@@ -149,7 +153,9 @@ class AacEncoder extends CustomAudioEncoder {
 	async encode(audioSample: AudioSample) {
 		if (this.nextSampleTimestampInSamples === null) {
 			this.nextSampleTimestampInSamples = Math.round(audioSample.timestamp * this.sampleRate);
-			this.nextPacketTimestampInSamples = this.nextSampleTimestampInSamples;
+			// Expose FFmpeg's coded priming interval so muxers can declare the presentation start.
+			this.nextPacketTimestampInSamples = this.nextSampleTimestampInSamples
+				- this.encoderInitialPadding;
 		}
 
 		const channels = this.numberOfChannels;

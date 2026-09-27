@@ -37,6 +37,7 @@ export type WorkerResponseData = {
 	type: 'init';
 	ctx: number;
 	frameSize: number;
+	initialPadding: number;
 	extradata: ArrayBuffer;
 } | {
 	type: 'encode';

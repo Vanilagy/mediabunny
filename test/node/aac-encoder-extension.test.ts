@@ -124,5 +124,25 @@ test('AAC with huge timestamps', async () => {
 	const firstPacket = await sink.getFirstPacket();
 	assert(firstPacket);
 
-	expect(firstPacket.timestamp).toBe(timestamp);
+	expect(firstPacket.timestamp).toBe(timestamp - 1024 / sampleRate);
+});
+
+test('AAC packets expose initial padding before the first PCM timestamp', async () => {
+	registerAacEncoder();
+	const timestamps: number[] = [];
+	const source = new AudioSampleSource({
+		codec: 'aac',
+		quality: new Quality({ bitrate: 128000 }),
+		onEncodedPacket: packet => timestamps.push(packet.timestamp),
+	});
+	const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
+	output.addAudioTrack(source);
+	await output.start();
+	using sample = new AudioSample({
+		data: new Float32Array(48337 * 2), format: 'f32', numberOfChannels: 2, sampleRate: 48000, timestamp: 0,
+	});
+	await source.add(sample);
+	await output.finalize();
+	expect(timestamps[0]).toBe(-1024 / 48000);
+	expect(timestamps[1]).toBe(0);
 });

@@ -100,6 +100,11 @@ int get_encoder_frame_size(EncoderContext *ctx) {
 }
 
 EMSCRIPTEN_KEEPALIVE
+int get_encoder_initial_padding(EncoderContext *ctx) {
+	return ctx->codec_ctx->initial_padding;
+}
+
+EMSCRIPTEN_KEEPALIVE
 uint8_t *get_encoder_extradata(EncoderContext *ctx) {
 	return ctx->codec_ctx->extradata;
 }
