@@ -12,6 +12,8 @@ import { Conversion } from '../../src/conversion.js';
 import { assert } from '../../src/misc.js';
 import { EncodedVideoPacketSource } from '../../src/media-source.js';
 import { EncodedPacket } from '../../src/packet.js';
+import { EBMLId, readElementHeader, readUnsignedInt } from '../../src/matroska/ebml.js';
+import { FileSlice } from '../../src/reader.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
@@ -137,3 +139,46 @@ const testNegativeTimestampRoundTrip = async (timestamps: number[], duration: nu
 		});
 	}
 };
+
+const readMatroskaIntegers = (bytes: Uint8Array, wanted: number): number[] => {
+	const slice = FileSlice.tempFromBytes(bytes);
+	const values: number[] = [];
+	while (slice.filePos < bytes.length) {
+		const header = readElementHeader(slice);
+		assert(header && header.size != null);
+		const end = slice.filePos + header.size;
+		if (header.id === wanted) {
+			values.push(readUnsignedInt(slice, header.size));
+		} else if ([
+			EBMLId.Segment, EBMLId.Tracks, EBMLId.TrackEntry, EBMLId.Cluster, EBMLId.BlockGroup,
+		].includes(header.id)) {
+			values.push(...readMatroskaIntegers(bytes.subarray(slice.filePos, end), wanted));
+		}
+		slice.skip(end - slice.filePos);
+	}
+	return values;
+};
+
+test('Matroska video preserves variable packet durations in BlockGroups', async () => {
+	const durations = [0.017, 0.043, 0.021];
+	const source = new EncodedVideoPacketSource('vp8');
+	const output = new Output({ format: new MkvOutputFormat(), target: new BufferTarget() });
+	output.addVideoTrack(source);
+	await output.start();
+	let timestamp = 0;
+	for (const duration of durations) {
+		await source.add(new EncodedPacket(new Uint8Array([0]), 'key', timestamp, duration), {
+			decoderConfig: { codec: 'vp8', codedWidth: 16, codedHeight: 16 },
+		});
+		timestamp += duration;
+	}
+	await output.finalize();
+	const bytes = new Uint8Array(output.target.buffer!);
+	expect(readMatroskaIntegers(bytes, EBMLId.BlockDuration)).toEqual([17, 43, 21]);
+	using input = new Input({ source: new BufferSource(bytes), formats: ALL_FORMATS });
+	const track = await input.getPrimaryVideoTrack();
+	assert(track);
+	const packets = [];
+	for await (const packet of new EncodedPacketSink(track).packets()) packets.push(packet);
+	expect(packets.map(packet => packet.duration)).toEqual(durations);
+});

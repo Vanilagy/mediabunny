@@ -1269,8 +1269,8 @@ export class MatroskaMuxer extends Muxer {
 
 		const msDuration = Math.round(1000 * chunk.duration);
 
-		// Subtitle cues need an explicit BlockDuration (a SimpleBlock has none)
-		const needsBlockGroup = !!chunk.additions || trackData.type === 'subtitle';
+		// Video and subtitles need explicit durations (a SimpleBlock has none).
+		const needsBlockGroup = !!chunk.additions || trackData.type === 'subtitle' || trackData.type === 'video';
 
 		if (!needsBlockGroup) {
 			// No additions, we can write out a SimpleBlock
