@@ -180,11 +180,14 @@ let parentPort: {
 	on: (event: string, listener: (data: never) => void) => void;
 } | null = null;
 
-if (typeof self === 'undefined') {
+try {
+	// We're in Node.js (or a runtime that mimics it)
 	const workerModule = 'worker_threads';
 	// eslint-disable-next-line @stylistic/max-len
 	// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-member-access
 	parentPort = require(workerModule).parentPort;
+} catch {
+	// Web worker (browser, Deno), no require available
 }
 
 if (parentPort) {
