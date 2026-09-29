@@ -1050,6 +1050,13 @@ export const missingWebCodecsClassMessage = (className: string) => {
 	return `${className} is not available in this environment.`;
 };
 
+// Browsers (at least Chromium) close codecs that have been idle for a long time and report this error
+export const isCodecReclaimedError = (error: unknown) => {
+	return error instanceof DOMException
+		&& error.name === 'QuotaExceededError'
+		&& /reclaimed/i.test(error.message);
+};
+
 /**
  * T or a promise that resolves to T.
  * @group Miscellaneous
