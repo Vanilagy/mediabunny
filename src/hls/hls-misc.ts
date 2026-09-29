@@ -7,6 +7,7 @@
  */
 
 import { Logging } from '../logging';
+import { getQueryParameter } from '../misc';
 
 export const HLS_MIME_TYPE = 'application/vnd.apple.mpegurl';
 
@@ -27,109 +28,6 @@ export const TAG_PLAYLIST_TYPE = '#EXT-X-PLAYLIST-TYPE:';
 export const TAG_I_FRAMES_ONLY = '#EXT-X-I-FRAMES-ONLY';
 
 export const canIgnoreLine = (line: string) => line.length === 0 || (line.startsWith('#') && !line.startsWith('#EXT'));
-
-// variable name `token_1` is referenced as `{$token_1}`
-const VARIABLE_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
-const VARIABLE_REFERENCE_PATTERN = /\{\$([A-Za-z0-9_-]+)\}/g;
-
-export class HlsPlaylistVariables {
-	_variables = new Map<string, string>();
-
-	constructor(
-		readonly playlistPath: string,
-		readonly importedVariables: HlsPlaylistVariables | null,
-	) {}
-
-	define(str: string) {
-		const attributes = new AttributeList(str, this);
-		const name = attributes.get('name');
-		const importedName = attributes.get('import');
-		const queryParameterName = attributes.get('queryparam');
-		const declarationCount = [name, importedName, queryParameterName]
-			.filter(value => value !== null)
-			.length;
-
-		if (declarationCount !== 1) {
-			throw new Error(
-				'Invalid #EXT-X-DEFINE tag; exactly one of NAME, IMPORT, or QUERYPARAM must be present.',
-			);
-		}
-
-		if (name !== null) {
-			const value = attributes.get('value');
-			if (value === null) {
-				throw new Error('Invalid #EXT-X-DEFINE tag; NAME requires VALUE.');
-			}
-
-			this.set(name, value);
-		} else if (importedName !== null) {
-			const value = this.importedVariables?.get(importedName);
-			if (value === undefined) {
-				throw new Error(`Invalid #EXT-X-DEFINE tag; cannot import undefined variable "${importedName}".`);
-			}
-
-			this.set(importedName, value);
-		} else if (queryParameterName !== null) {
-			const value = getQueryParameter(this.playlistPath, queryParameterName);
-			if (value === null) {
-				throw new Error(`Invalid #EXT-X-DEFINE tag; query parameter "${queryParameterName}" is missing.`);
-			}
-
-			this.set(queryParameterName, value);
-		}
-	}
-
-	substitute(value: string) {
-		return value.replaceAll(VARIABLE_REFERENCE_PATTERN, (_reference, name: string) => {
-			const replacement = this._variables.get(name);
-			if (replacement === undefined) {
-				throw new Error(`Invalid M3U8 file; variable "${name}" is referenced before being defined.`);
-			}
-
-			return replacement;
-		});
-	}
-
-	get(name: string) {
-		return this._variables.get(name);
-	}
-
-	set(name: string, value: string) {
-		if (!VARIABLE_NAME_PATTERN.test(name)) {
-			throw new Error(`Invalid #EXT-X-DEFINE tag; invalid variable name "${name}".`);
-		}
-		if (this._variables.has(name)) {
-			// "Parsers that encounter duplicate Variable Name declarations MUST fail to parse the Playlist."
-			throw new Error(`Invalid #EXT-X-DEFINE tag; variable "${name}" is already defined.`);
-		}
-
-		this._variables.set(name, value);
-	}
-}
-
-// eg. path `/media.m3u8?token=abc%20123` and name `token` resolve to `abc 123`
-const getQueryParameter = (path: string, name: string) => {
-	const queryIndex = path.indexOf('?');
-	if (queryIndex === -1) {
-		return null;
-	}
-
-	const fragmentIndex = path.indexOf('#', queryIndex);
-	const query = path.slice(queryIndex + 1, fragmentIndex === -1 ? undefined : fragmentIndex);
-
-	for (const parameter of query.split('&')) {
-		const equalsIndex = parameter.indexOf('=');
-		const encodedName = equalsIndex === -1 ? parameter : parameter.slice(0, equalsIndex);
-		if (decodeURIComponent(encodedName) !== name) {
-			continue;
-		}
-
-		const encodedValue = equalsIndex === -1 ? '' : parameter.slice(equalsIndex + 1);
-		return decodeURIComponent(encodedValue);
-	}
-
-	return null;
-};
 
 export class AttributeList {
 	_attributes: Record<string, string> = {};
@@ -207,5 +105,84 @@ export class AttributeList {
 
 	merge(other: AttributeList) {
 		Object.assign(this._attributes, other._attributes);
+	}
+}
+
+// Variable name `token_1` is referenced as `{$token_1}`
+const VARIABLE_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
+const VARIABLE_REFERENCE_PATTERN = /\{\$([A-Za-z0-9_-]+)\}/g;
+
+export class HlsPlaylistVariables {
+	variables = new Map<string, string>();
+
+	constructor(
+		readonly playlistPath: string,
+		readonly importedVariables: HlsPlaylistVariables | null,
+	) {}
+
+	define(str: string) {
+		const attributes = new AttributeList(str, this);
+		const name = attributes.get('name');
+		const importedName = attributes.get('import');
+		const queryParameterName = attributes.get('queryparam');
+		const declarationCount = [name, importedName, queryParameterName]
+			.filter(value => value !== null)
+			.length;
+
+		if (declarationCount !== 1) {
+			throw new Error(
+				'Invalid #EXT-X-DEFINE tag; exactly one of NAME, IMPORT, or QUERYPARAM must be present.',
+			);
+		}
+
+		if (name !== null) {
+			const value = attributes.get('value');
+			if (value === null) {
+				throw new Error('Invalid #EXT-X-DEFINE tag; NAME requires VALUE.');
+			}
+
+			this.set(name, value);
+		} else if (importedName !== null) {
+			const value = this.importedVariables?.get(importedName);
+			if (value === undefined) {
+				throw new Error(`Invalid #EXT-X-DEFINE tag; cannot import undefined variable "${importedName}".`);
+			}
+
+			this.set(importedName, value);
+		} else if (queryParameterName !== null) {
+			const value = getQueryParameter(this.playlistPath, queryParameterName);
+			if (value === null) {
+				throw new Error(`Invalid #EXT-X-DEFINE tag; query parameter "${queryParameterName}" is missing.`);
+			}
+
+			this.set(queryParameterName, value);
+		}
+	}
+
+	substitute(value: string) {
+		return value.replaceAll(VARIABLE_REFERENCE_PATTERN, (_reference, name: string) => {
+			const replacement = this.variables.get(name);
+			if (replacement === undefined) {
+				throw new Error(`Invalid M3U8 file; variable "${name}" is referenced before being defined.`);
+			}
+
+			return replacement;
+		});
+	}
+
+	get(name: string) {
+		return this.variables.get(name);
+	}
+
+	set(name: string, value: string) {
+		if (!VARIABLE_NAME_PATTERN.test(name)) {
+			throw new Error(`Invalid #EXT-X-DEFINE tag; invalid variable name "${name}".`);
+		}
+		if (this.variables.has(name)) {
+			// "Parsers that encounter duplicate Variable Name declarations MUST fail to parse the Playlist."
+			throw new Error(`Invalid #EXT-X-DEFINE tag; variable "${name}" is already defined.`);
+		}
+
+		this.variables.set(name, value);
 	}
 }
