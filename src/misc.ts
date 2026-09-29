@@ -1050,6 +1050,13 @@ export const missingWebCodecsClassMessage = (className: string) => {
 	return `${className} is not available in this environment.`;
 };
 
+// Browsers (at least Chromium) close codecs that have been idle for a long time and report this error
+export const isCodecReclaimedError = (error: unknown) => {
+	return error instanceof DOMException
+		&& error.name === 'QuotaExceededError'
+		&& /reclaimed/i.test(error.message);
+};
+
 /**
  * T or a promise that resolves to T.
  * @group Miscellaneous
@@ -1249,6 +1256,30 @@ export const joinPaths = (basePath: FilePath, relativePath: FilePath) => {
 	}
 
 	return prefix + normalized.join('/');
+};
+
+// eg. path `/media.m3u8?token=abc%20123` and name `token` resolve to `abc 123`
+export const getQueryParameter = (path: string, name: string) => {
+	const queryIndex = path.indexOf('?');
+	if (queryIndex === -1) {
+		return null;
+	}
+
+	const fragmentIndex = path.indexOf('#', queryIndex);
+	const query = path.slice(queryIndex + 1, fragmentIndex === -1 ? undefined : fragmentIndex);
+
+	for (const parameter of query.split('&')) {
+		const equalsIndex = parameter.indexOf('=');
+		const encodedName = equalsIndex === -1 ? parameter : parameter.slice(0, equalsIndex);
+		if (decodeURIComponent(encodedName) !== name) {
+			continue;
+		}
+
+		const encodedValue = equalsIndex === -1 ? '' : parameter.slice(equalsIndex + 1);
+		return decodeURIComponent(encodedValue);
+	}
+
+	return null;
 };
 
 export const arrayCount = <T>(array: T[], predicate: (item: T) => boolean) => {

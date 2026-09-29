@@ -73,7 +73,7 @@ const output = new Output({
 	target: new PathedTarget(
 		'master.m3u8',
 		({ path }) => new BufferTarget({
-			onFinalized: buffer => writtenFiles.set(path, buffer),
+			onFinalize: buffer => writtenFiles.set(path, buffer),
 		}),
 	),
 	// ...

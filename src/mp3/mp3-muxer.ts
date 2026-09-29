@@ -19,6 +19,7 @@ import { Id3V2Writer } from '../id3';
 
 export class Mp3Muxer extends Muxer {
 	private format: Mp3OutputFormat;
+	private writeXingHeader: boolean;
 	private writer!: Writer;
 	private mp3Writer!: Mp3Writer;
 	private xingFrameData: XingFrameData | null = null;
@@ -30,12 +31,13 @@ export class Mp3Muxer extends Muxer {
 		super(output);
 
 		this.format = format;
+		this.writeXingHeader = format._options.xingHeader !== false;
 	}
 
 	async start() {
 		const release = await this.mutex.acquire();
 
-		this.writer = await this.output._getRootWriter(this.format._options.xingHeader === false);
+		this.writer = await this.output._getRootWriter(!this.writeXingHeader);
 		this.mp3Writer = new Mp3Writer(this.writer);
 
 		if (!metadataTagsAreEmpty(this.output._metadataTags)) {
@@ -61,9 +63,7 @@ export class Mp3Muxer extends Muxer {
 		const release = await this.mutex.acquire();
 
 		try {
-			const writeXingHeader = this.format._options.xingHeader !== false;
-
-			if (!this.xingFrameData && writeXingHeader) {
+			if (!this.xingFrameData && this.writeXingHeader) {
 				const view = toDataView(packet.data);
 				if (view.byteLength < 4) {
 					throw new Error('Invalid MP3 header in sample.');
@@ -112,7 +112,7 @@ export class Mp3Muxer extends Muxer {
 
 			this.validateTimestamp(track, packet.timestamp, packet.type === 'key');
 
-			if (writeXingHeader) {
+			if (this.writeXingHeader) {
 				this.framePositions.push(this.writer.getPos());
 			}
 
@@ -132,15 +132,17 @@ export class Mp3Muxer extends Muxer {
 	async finalize() {
 		const release = await this.mutex.acquire();
 
-		if (!this.xingFrameData && this.format._options.xingHeader === false) {
-			// MP3 has no container-level header, so the Xing frame is the only thing we could have synthesized
-			throw new Error(
-				'Cannot finalize an empty MP3 file: not a single packet was added and the Xing header is disabled, so'
-				+ ' there\'s no frame we could write.',
-			);
-		}
+		const isEmpty = this.frameCount === 0;
 
-		if (!this.xingFrameData) {
+		if (isEmpty) {
+			if (!this.writeXingHeader) {
+				// MP3 has no container-level header, so the Xing frame is the only thing we could have synthesized
+				throw new Error(
+					'Cannot finalize an empty MP3 file: not a single packet was added and the Xing header is disabled,'
+					+ ' so there\'s no frame we could write.',
+				);
+			}
+
 			// Not a single packet came in, so let's write a lone Xing frame; that way, the file is still a valid
 			// (if empty) MP3. We derive its header from whatever the track told us up front.
 			const track = this.output.tracks[0];
@@ -225,37 +227,40 @@ export class Mp3Muxer extends Muxer {
 			this.frameCount++;
 		}
 
-		assert(this.xingFramePos !== null);
+		if (this.writeXingHeader) {
+			assert(this.xingFrameData);
+			assert(this.xingFramePos !== null);
 
-		const endPos = this.writer.getPos();
-		const audioDataEndPos = endPos - this.xingFramePos;
+			const endPos = this.writer.getPos();
+			const audioDataEndPos = endPos - this.xingFramePos;
 
-		this.writer.seek(this.xingFramePos);
+			this.writer.seek(this.xingFramePos);
 
-		if (this.framePositions.length > 0) {
-			const toc = new Uint8Array(100);
-			for (let i = 0; i < 100; i++) {
-				const index = Math.floor(this.framePositions.length * (i / 100));
+			if (this.framePositions.length > 0) {
+				const toc = new Uint8Array(100);
+				for (let i = 0; i < 100; i++) {
+					const index = Math.floor(this.framePositions.length * (i / 100));
 
-				const byteOffset = this.framePositions[index]! - this.xingFramePos;
-				toc[i] = 256 * (byteOffset / audioDataEndPos);
+					const byteOffset = this.framePositions[index]! - this.xingFramePos;
+					toc[i] = 256 * (byteOffset / audioDataEndPos);
+				}
+
+				this.xingFrameData.toc = toc;
 			}
 
-			this.xingFrameData.toc = toc;
-		}
+			this.xingFrameData.frameCount = this.frameCount;
+			this.xingFrameData.fileSize = audioDataEndPos;
 
-		this.xingFrameData.frameCount = this.frameCount;
-		this.xingFrameData.fileSize = audioDataEndPos;
+			if (this.format._options.onXingFrame) {
+				this.writer.startTrackingWrites();
+			}
 
-		if (this.format._options.onXingFrame) {
-			this.writer.startTrackingWrites();
-		}
+			this.mp3Writer.writeXingFrame(this.xingFrameData);
 
-		this.mp3Writer.writeXingFrame(this.xingFrameData);
-
-		if (this.format._options.onXingFrame) {
-			const { data, start } = this.writer.stopTrackingWrites();
-			this.format._options.onXingFrame(data, start);
+			if (this.format._options.onXingFrame) {
+				const { data, start } = this.writer.stopTrackingWrites();
+				this.format._options.onXingFrame(data, start);
+			}
 		}
 
 		release();

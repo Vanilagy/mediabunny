@@ -59,6 +59,7 @@ import {
 } from '../codec-data';
 import { MetadataTags, RichImageData } from '../metadata';
 import { Bitstream } from '../../shared/bitstream';
+import { VERSIONED_NAME } from '../version';
 
 export class IsobmffBoxWriter {
 	private helper = new Uint8Array(8);
@@ -760,9 +761,9 @@ export const videoSampleDescription = (
 	u16(1), // Frame count
 
 	// Compressor name
-	u8('Mediabunny'.length), // Weird Pascal-style string
-	ascii('Mediabunny'),
-	Array(31 - 'Mediabunny'.length).fill(0),
+	u8(VERSIONED_NAME.length), // Weird Pascal-style string
+	ascii(VERSIONED_NAME),
+	Array(31 - VERSIONED_NAME.length).fill(0),
 
 	u16(trackData.info.hasAlphaChannel ? 32 : 24), // Depth
 	i16(0xffff), // Pre-defined
