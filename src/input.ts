@@ -189,9 +189,16 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 
 	/** @internal */
 	async _getSourceUncached(request: SourceRequest) {
+		if (this._disposed) {
+			throw new InputDisposedError();
+		}
 		assert(this._rootSource instanceof PathedSource);
 
 		const ref = await this._rootSource._resolveRequest(request);
+		if (this._disposed) {
+			ref.free();
+			throw new InputDisposedError();
+		}
 
 		this._emit('source', { source: ref.source, request, isRoot: request.isRoot });
 		return ref;
@@ -199,6 +206,9 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 
 	/** @internal */
 	_getSourceCached(request: SourceRequest, cacheGroup = DEFAULT_SOURCE_CACHE_GROUP): Promise<SourceRef> {
+		if (this._disposed) {
+			return Promise.reject(new InputDisposedError());
+		}
 		const cachedEntry = this._sourceCache.find(x =>
 			x.cacheGroup === cacheGroup && sourceRequestsAreEqual(x.request, request),
 		);
@@ -211,11 +221,20 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 			x.cacheGroup === cacheGroup && sourceRequestsAreEqual(x.request, request),
 		);
 		if (cachedPromiseEntry) {
-			return cachedPromiseEntry.promise.then(x => x.sourceRef.source.ref());
+			return cachedPromiseEntry.promise.then((entry) => {
+				if (this._disposed) {
+					throw new InputDisposedError();
+				}
+				return entry.sourceRef.source.ref();
+			});
 		}
 
 		const promise = (async () => {
 			const sourceRef = await this._getSourceUncached(request);
+			if (this._disposed) {
+				sourceRef.free();
+				throw new InputDisposedError();
+			}
 
 			const MAX_SOURCE_CACHE_SIZE = 4;
 			const count = arrayCount(
@@ -258,6 +277,9 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 		});
 
 		return promise.then((entry) => {
+			if (this._disposed) {
+				throw new InputDisposedError();
+			}
 			const ref = entry.sourceRef.source.ref();
 
 			// We need to add it to the cache this late to avoid the ref being freed prematurely due to race conditions

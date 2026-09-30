@@ -418,8 +418,9 @@ export class CustomPathedSource extends PathedSource {
 		if (this._root) {
 			this._root.free();
 		} else if (this._rootRequest) {
+			// The pending read observes request failures; disposal must not create a second rejected promise.
 			void this._rootRequest
-				.then(ref => ref.free());
+				.then(ref => ref.free(), () => {});
 		}
 	}
 }
