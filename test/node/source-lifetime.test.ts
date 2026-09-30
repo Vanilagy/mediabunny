@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest';
-import { CustomSource, FilePathSource } from '../../src/source.js';
+import { BufferSource, CustomPathedSource, CustomSource, FilePathSource } from '../../src/source.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Input, InputDisposedError } from '../../src/input.js';
@@ -9,6 +9,44 @@ import { readFile } from 'node:fs/promises';
 import { setImmediate } from 'node:timers/promises';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
+
+test.each([false, true])('Source resolution releases late sources (cached=%s)', async (cached) => {
+	const pending = promiseWithResolvers<BufferSource>();
+	const source = new BufferSource(new Uint8Array(8));
+	using input = new Input({
+		formats: ALL_FORMATS,
+		source: new CustomPathedSource('root', () => pending.promise),
+	});
+	const request = { path: 'segment', isRoot: false };
+	const result = (cached ? input._getSourceCached(request) : input._getSourceUncached(request))
+		.catch((error: unknown) => error);
+	const shared = cached
+		? input._getSourceCached(request).catch((error: unknown) => error)
+		: null;
+	input.dispose();
+	pending.resolve(source);
+	expect(await result).toBeInstanceOf(InputDisposedError);
+	if (shared) {
+		expect(await shared).toBeInstanceOf(InputDisposedError);
+	}
+	expect(source._disposed).toBe(true);
+	expect(input._sourceCache).toHaveLength(0);
+});
+
+test('Cached source continuations reject when a source event disposes the input', async () => {
+	const source = new BufferSource(new Uint8Array(8));
+	using input = new Input({
+		formats: ALL_FORMATS,
+		source: new CustomPathedSource('root', () => source),
+	});
+	input.on('source', () => input.dispose());
+	const request = { path: 'segment', isRoot: false };
+	const result = input._getSourceCached(request).catch((error: unknown) => error);
+	const shared = input._getSourceCached(request).catch((error: unknown) => error);
+	expect(await result).toBeInstanceOf(InputDisposedError);
+	expect(await shared).toBeInstanceOf(InputDisposedError);
+	expect(source._disposed).toBe(true);
+});
 
 test('Direct source disposal', async () => {
 	const filePath = path.join(__dirname, '../public/video.mp4');
