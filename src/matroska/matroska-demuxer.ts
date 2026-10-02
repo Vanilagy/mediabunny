@@ -2192,10 +2192,6 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
 		const clusterStartPos = packet._internal;
-		if (clusterStartPos === undefined) {
-			throw new Error('Packet was not created from this track.');
-		}
-
 		assert(typeof clusterStartPos === 'number');
 
 		// sequenceNumber = clusterStartPos + blockIndex, so:
@@ -2273,10 +2269,6 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
 		const clusterStartPos = packet._internal;
-		if (clusterStartPos === undefined) {
-			throw new Error('Packet was not created from this track.');
-		}
-
 		assert(typeof clusterStartPos === 'number');
 
 		// sequenceNumber = clusterStartPos + blockIndex, so:

@@ -553,9 +553,7 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 		keyframesOnly: boolean,
 	): MaybeRelevantPromise {
 		const info = packet._internal as PacketInfo | undefined;
-		if (!info) {
-			throw new Error('Packet was not created from this track.');
-		}
+		assert(info);
 
 		const packetResult = new ResultValue<PacketRetrievalResult>();
 		const promise = keyframesOnly

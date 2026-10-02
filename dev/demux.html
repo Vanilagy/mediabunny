@@ -18,10 +18,10 @@
 		});
 		
 		const track = await input.getPrimaryVideoTrack();
-		const cache = new Mediabunny.PacketCache();
+		const cache = new Mediabunny.PacketCache({ maxCacheSize: Infinity });
 		const reader = new Mediabunny.PacketReader(track, { cache });
 
-		for (let i = 0; i < 100; i++) {
+		for (let i = 0; i < 50; i++) {
 			console.time()
 			let packet = await reader.getFirst();
 			let count = 0;

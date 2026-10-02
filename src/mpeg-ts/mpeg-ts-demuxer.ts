@@ -1377,9 +1377,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
 		const metadata = packet._internal as EncodedPacketMetadata | undefined;
-		if (!metadata) {
-			throw new Error('Packet was not created from this track.');
-		}
+		assert(metadata);
 
 		const readResult = new ResultValue<PacketWithDuration | null>();
 

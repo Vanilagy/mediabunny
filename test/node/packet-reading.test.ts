@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { PacketCursor } from '../../src/cursors.js';
 import { promiseAllEnsureOrder } from '../../src/misc.js';
-import { PacketReader } from '../../src/packet.js';
+import { EncodedPacket, PacketReader } from '../../src/packet.js';
 
 const __dirname = new URL('.', import.meta.url).pathname;
 
@@ -36,6 +36,37 @@ test('Packet reader', async () => {
 	const packet6 = (await reader.getAt(2.4))!;
 	expect(packet6.timestamp).toBeGreaterThan(2);
 	expect(packet6.timestamp).toBeLessThanOrEqual(2.4);
+});
+
+test('Packet reader rejecting packet inputs it didn\'t create', async () => {
+	const filePath = path.join(__dirname, '../public/trim-buck-bunny.mov');
+	using input = new Input({
+		source: new FilePathSource(filePath),
+		formats: ALL_FORMATS,
+	});
+	using otherInput = new Input({
+		source: new FilePathSource(filePath),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = (await input.getPrimaryVideoTrack())!;
+	const reader = new PacketReader(videoTrack);
+	const first = (await reader.getFirst())!;
+	expect(await reader.getNext(first)).not.toBe(null);
+
+	// Clones, synthetic packets and packets of other tracks could carry arbitrary data, so they're rejected
+	expect(() => reader.getNext(first.clone())).toThrow('Packet was not created from this track.');
+	expect(() => reader.getNextKey(first.clone({ sequenceNumber: 5 }))).toThrow(
+		'Packet was not created from this track.',
+	);
+
+	const synthetic = new EncodedPacket(first.data, 'key', 0, 0.04, first.sequenceNumber);
+	expect(() => reader.getNext(synthetic)).toThrow('Packet was not created from this track.');
+
+	const otherReader = new PacketReader((await otherInput.getPrimaryVideoTrack())!);
+	const otherFirst = (await otherReader.getFirst())!;
+	expect(() => reader.getNext(otherFirst)).toThrow('Packet was not created from this track.');
+	expect(() => otherReader.getNext(first)).toThrow('Packet was not created from this track.');
 });
 
 test('Packet reading throwing after Input disposal', async () => {

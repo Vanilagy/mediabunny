@@ -162,6 +162,8 @@ export interface InputTrackBacking {
 	): MaybeRelevantPromise;
 }
 
+let nextInputTrackId = 0;
+
 /**
  * Represents a media track in an input file.
  * @group Input files & tracks
@@ -172,6 +174,9 @@ export abstract class InputTrack {
 	readonly input: Input;
 	/** @internal */
 	_backing: InputTrackBacking;
+	/** @internal */
+	_uniqueId = nextInputTrackId++;
+
 	/** @internal */
 	constructor(input: Input, backing: InputTrackBacking) {
 		this.input = input;

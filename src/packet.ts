@@ -73,6 +73,12 @@ export class EncodedPacket {
 	 */
 	_internal: unknown = undefined;
 
+	/**
+	 * The unique ID of the track this packet was retrieved from.
+	 * @internal
+	 */
+	_ownerId: number | null = null;
+
 	/** Creates a new {@link EncodedPacket} from raw bytes and timing information. */
 	constructor(
 		/**
@@ -293,7 +299,7 @@ export class EncodedPacket {
 			throw new TypeError('options.sideData, when provided, must be an object.');
 		}
 
-		const packet = new EncodedPacket(
+		return new EncodedPacket(
 			options?.data ?? this.data,
 			options?.type ?? this.type,
 			options?.timestamp ?? this.timestamp,
@@ -302,7 +308,13 @@ export class EncodedPacket {
 			this.byteLength,
 			options?.sideData ?? this.sideData,
 		);
+	}
+
+	/** @internal */
+	_cloneInternal(options?: Parameters<EncodedPacket['clone']>[0]) {
+		const packet = this.clone(options);
 		packet._internal = this._internal;
+		packet._ownerId = this._ownerId;
 
 		return packet;
 	}
@@ -313,7 +325,7 @@ export class EncodedPacket {
 			return this;
 		}
 
-		return this.clone({
+		return this._cloneInternal({
 			data: PLACEHOLDER_DATA,
 			sideData: {
 				...this.sideData,
@@ -450,6 +462,10 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 			const packet = result.value.packet;
 			const cache = result.value.provisional ? null : this.cache;
 
+			if (packet) {
+				packet._ownerId = this.track._uniqueId;
+			}
+
 			if (!options.verifyKeyPackets || !packet || packet.type === 'delta') {
 				cache?._insertFirst(cacheTrackInfo!, packet, undefined);
 				return packet;
@@ -459,7 +475,7 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 				cache?._insertFirst(cacheTrackInfo!, packet, determinedType);
 
 				if (determinedType === 'delta') {
-					return packet.clone({ type: 'delta' });
+					return packet._cloneInternal({ type: 'delta' });
 				} else {
 					return packet;
 				}
@@ -525,6 +541,10 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 			const packet = result.value.packet;
 			const cache = result.value.provisional ? null : this.cache;
 
+			if (packet) {
+				packet._ownerId = this.track._uniqueId;
+			}
+
 			if (!options.verifyKeyPackets || !packet || packet.type === 'delta') {
 				cache?._insertAt(cacheTrackInfo!, timestamp, packet, undefined);
 				return packet;
@@ -534,7 +554,7 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 				cache?._insertAt(cacheTrackInfo!, timestamp, packet, determinedType);
 
 				if (determinedType === 'delta') {
-					return packet.clone({ type: 'delta' });
+					return packet._cloneInternal({ type: 'delta' });
 				} else {
 					return packet;
 				}
@@ -618,6 +638,10 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 			const packet = result.value.packet;
 			const cache = result.value.provisional ? null : this.cache;
 
+			if (packet) {
+				packet._ownerId = this.track._uniqueId;
+			}
+
 			if (!options.verifyKeyPackets || !packet) {
 				cache?._insertKeyAt(cacheTrackInfo!, timestamp, packet, undefined);
 				return res.set(packet);
@@ -660,6 +684,9 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 		if (!(packet instanceof EncodedPacket)) {
 			throw new TypeError('packet must be an EncodedPacket.');
 		}
+		if (packet._ownerId !== this.track._uniqueId) {
+			throw new Error('Packet was not created from this track.');
+		}
 		validatePacketRetrievalOptions(options);
 
 		if (this.track.input._disposed) {
@@ -688,6 +715,10 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 			const nextPacket = result.value.packet;
 			const cache = result.value.provisional ? null : this.cache;
 
+			if (nextPacket) {
+				nextPacket._ownerId = this.track._uniqueId;
+			}
+
 			if (!options.verifyKeyPackets || !nextPacket || nextPacket.type === 'delta') {
 				cache?._insertNext(cacheTrackInfo!, packet, nextPacket, undefined);
 				return nextPacket;
@@ -697,7 +728,7 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 				cache?._insertNext(cacheTrackInfo!, packet, nextPacket, determinedType);
 
 				if (determinedType === 'delta') {
-					return nextPacket.clone({ type: 'delta' });
+					return nextPacket._cloneInternal({ type: 'delta' });
 				} else {
 					return nextPacket;
 				}
@@ -718,6 +749,9 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 	getNextKey(packet: EncodedPacket, options: PacketRetrievalOptions = {}): MaybePromise<EncodedPacket | null> {
 		if (!(packet instanceof EncodedPacket)) {
 			throw new TypeError('packet must be an EncodedPacket.');
+		}
+		if (packet._ownerId !== this.track._uniqueId) {
+			throw new Error('Packet was not created from this track.');
 		}
 		validatePacketRetrievalOptions(options);
 
@@ -780,6 +814,10 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 			const nextKeyPacket = result.value.packet;
 			const cache = result.value.provisional ? null : this.cache;
 
+			if (nextKeyPacket) {
+				nextKeyPacket._ownerId = this.track._uniqueId;
+			}
+
 			if (!options.verifyKeyPackets || !nextKeyPacket) {
 				cache?._insertNextKey(cacheTrackInfo!, packet, nextKeyPacket, undefined);
 				return res.set(nextKeyPacket);
@@ -800,22 +838,12 @@ export class PacketReader<T extends InputTrack = InputTrack> {
 
 type PacketCacheTrackInfo = {
 	track: InputTrack;
-	packets: EncodedPacket[]; // Sorted by timestamp
-	next: Map<number, EncodedPacket | null>;
-	prev: Map<number, EncodedPacket | null>;
-	nextKey: Map<number, EncodedPacket | null>;
-	// For each packet, stores the inclusive timestamp up to which getAt() queries are valid
-	seekValidityEndpoint: Map<number, number>;
-	// For each key packet, stores the inclusive timestamp up to which getKeyAt() queries are valid
-	keySeekValidityEndpoint: Map<number, number>;
-	// For each key packet, stores the minimum timestamp of all packets within its GOP, if known
-	gopMinTimestamps: Map<number, number>;
-	// Maps each packet to the key packet that starts its GOP
-	gopKeys: Map<number, number>;
-	first: EncodedPacket | null | undefined;
+	// Contains exactly the cached packets, keyed by sequence number
+	entries: Map<number, CacheEntry>;
+	sortedEntries: CacheEntry[]; // Sorted by timestamp, then by sequence number
+	first: CacheEntry | null | undefined;
 	minTimestamp: number;
 	minKeyTimestamp: number;
-	determinedTypes: Map<number, PacketType | null>;
 
 	pendingFirstCalls: PendingCall[];
 	pendingAtCalls: Map<number, PendingCall[]>;
@@ -829,9 +857,146 @@ type PendingCall = {
 	promise: Promise<unknown>;
 };
 
+// Everything the cache knows about a cached packet
+type CacheEntry = {
+	trackInfo: PacketCacheTrackInfo;
+	// Set to null once evicted, so that lingering references to the entry don't keep the packet alive
+	packet: EncodedPacket | null;
+	// Copied from the packet since it's still needed after eviction
+	timestamp: number;
+
+	// For the links, undefined means unknown and null means there is none
+	next: CacheEntry | null | undefined;
+	prev: CacheEntry | null | undefined;
+	nextKey: CacheEntry | null | undefined;
+	// The inclusive timestamp up to which getAt() queries landing on this packet are valid
+	seekValidityEndpoint: number | null;
+	// The inclusive timestamp up to which getKeyAt() queries landing on this (key) packet are valid
+	keySeekValidityEndpoint: number | null;
+	// For key packets, the minimum timestamp of all packets within their GOP, if known
+	gopMinTimestamp: number | null;
+	// The key packet that starts this packet's GOP, if known
+	gopKey: CacheEntry | null;
+	determinedType: PacketType | null | undefined;
+
+	size: number;
+	lruPrev: CacheEntry | null; // More recently used
+	lruNext: CacheEntry | null; // Less recently used
+};
+
+const DEFAULT_MAX_CACHE_SIZE = 64 * 1024 * 1024;
+
+// To make eviction batched, which improves performance:
+const EVICTION_HIGH_WATERMARK = 1.1;
+const EVICTION_LOW_WATERMARK = 0.9;
+
+/** Rough estimate of the memory a cached packet takes up besides its data. */
+export const PACKET_SIZE_OVERHEAD = 200;
+
+export type PacketCacheOptions = {
+	maxCacheSize?: number;
+	autoEvict?: boolean;
+};
+
 export class PacketCache {
 	/** @internal */
 	_trackInfos = new Map<InputTrack, PacketCacheTrackInfo>();
+	/** @internal */
+	_maxCacheSize: number;
+	/** @internal */
+	_autoEvict: boolean;
+	/** @internal */
+	_evictionEnabled: boolean;
+	/** @internal */
+	_cacheSize = 0;
+	/** @internal */
+	_lruHead: CacheEntry | null = null;
+	/** @internal */
+	_lruTail: CacheEntry | null = null;
+
+	constructor(options: PacketCacheOptions = {}) {
+		if (!options || typeof options !== 'object') {
+			throw new TypeError('options must be an object.');
+		}
+		if (options.maxCacheSize !== undefined && (!isNumber(options.maxCacheSize) || options.maxCacheSize < 0)) {
+			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative number.');
+		}
+		if (options.autoEvict !== undefined && typeof options.autoEvict !== 'boolean') {
+			throw new TypeError('options.autoEvict, when provided, must be a boolean.');
+		}
+
+		this._maxCacheSize = options.maxCacheSize ?? DEFAULT_MAX_CACHE_SIZE;
+		this._autoEvict = options.autoEvict ?? true;
+		this._evictionEnabled = this._maxCacheSize !== Infinity;
+	}
+
+	clear() {
+		// Emptied in place since in-flight requests may still be holding on to them
+		for (const trackInfo of this._trackInfos.values()) {
+			for (const entry of trackInfo.sortedEntries) {
+				entry.packet = null; // Marks the entry as evicted for anyone still holding on to it
+			}
+
+			trackInfo.entries.clear();
+			trackInfo.sortedEntries.length = 0;
+			trackInfo.first = undefined;
+			trackInfo.minTimestamp = -Infinity;
+			trackInfo.minKeyTimestamp = -Infinity;
+		}
+
+		this._lruHead = null;
+		this._lruTail = null;
+		this._cacheSize = 0;
+	}
+
+	evict() {
+		if (this._cacheSize <= EVICTION_HIGH_WATERMARK * this._maxCacheSize) {
+			return;
+		}
+
+		const targetSize = EVICTION_LOW_WATERMARK * this._maxCacheSize;
+		const affectedTrackInfos = new Set<PacketCacheTrackInfo>();
+
+		while (this._cacheSize > targetSize) {
+			const entry = this._lruTail!;
+			this._unlinkLruEntry(entry);
+			this._cacheSize -= entry.size;
+			affectedTrackInfos.add(entry.trackInfo);
+			this._removeEntry(entry);
+		}
+
+		// Now, remove the evicted entries from the sorted lists in a single pass each
+		for (const trackInfo of affectedTrackInfos) {
+			const sortedEntries = trackInfo.sortedEntries;
+			let writeIndex = 0;
+			let previousWasKept = false;
+
+			for (let i = 0; i < sortedEntries.length; i++) {
+				const entry = sortedEntries[i]!;
+				if (entry.packet !== null) {
+					sortedEntries[writeIndex++] = entry;
+					previousWasKept = true;
+					continue;
+				}
+
+				if (previousWasKept) {
+					// Lookups that used to land on this run of evicted packets now land on the kept packet before it,
+					// which therefore mustn't claim validity up to the run anymore
+					const predecessor = sortedEntries[writeIndex - 1]!;
+					if (predecessor.seekValidityEndpoint !== null) {
+						predecessor.seekValidityEndpoint = Math.min(
+							predecessor.seekValidityEndpoint,
+							nextDown(entry.timestamp),
+						);
+					}
+				}
+
+				previousWasKept = false;
+			}
+
+			sortedEntries.length = writeIndex;
+		}
+	}
 
 	/** @internal */
 	_getTrackInfo(track: InputTrack) {
@@ -839,18 +1004,11 @@ export class PacketCache {
 		if (!info) {
 			info = {
 				track,
-				packets: [],
-				next: new Map(),
-				prev: new Map(),
-				nextKey: new Map(),
-				seekValidityEndpoint: new Map(),
-				keySeekValidityEndpoint: new Map(),
-				gopMinTimestamps: new Map(),
-				gopKeys: new Map(),
+				entries: new Map(),
+				sortedEntries: [],
 				first: undefined,
 				minTimestamp: -Infinity,
 				minKeyTimestamp: -Infinity,
-				determinedTypes: new Map(),
 
 				pendingFirstCalls: [],
 				pendingAtCalls: new Map(),
@@ -875,14 +1033,19 @@ export class PacketCache {
 			return;
 		}
 
-		trackInfo.first = this._insertPacket(trackInfo, packet);
-		trackInfo.prev.set(packet.sequenceNumber, null);
+		const entry = this._insertPacket(trackInfo, packet);
+		trackInfo.first = entry;
+		entry.prev = null;
 
 		// Knowing that nothing comes before this packet may be what completes the first GOP
-		this._finalizeGop(trackInfo, packet);
+		this._finalizeGop(entry);
 
 		if (determinedType !== undefined) {
-			trackInfo.determinedTypes.set(packet.sequenceNumber, determinedType);
+			entry.determinedType = determinedType;
+		}
+
+		if (this._autoEvict) {
+			this.evict();
 		}
 	}
 
@@ -898,23 +1061,21 @@ export class PacketCache {
 			return;
 		}
 
-		this._insertPacket(trackInfo, packet);
+		const entry = this._insertPacket(trackInfo, packet);
 
-		trackInfo.seekValidityEndpoint.set(
-			packet.sequenceNumber,
-			Math.max(timestamp, trackInfo.seekValidityEndpoint.get(packet.sequenceNumber) ?? -Infinity),
-		);
+		entry.seekValidityEndpoint = Math.max(timestamp, entry.seekValidityEndpoint ?? -Infinity);
 
-		if (packet.type === 'key') {
+		if (entry.packet!.type === 'key') {
 			// There's no packet at all between this one and the timestamp, so certainly no key packet either
-			trackInfo.keySeekValidityEndpoint.set(
-				packet.sequenceNumber,
-				Math.max(timestamp, trackInfo.keySeekValidityEndpoint.get(packet.sequenceNumber) ?? -Infinity),
-			);
+			entry.keySeekValidityEndpoint = Math.max(timestamp, entry.keySeekValidityEndpoint ?? -Infinity);
 		}
 
 		if (determinedType !== undefined) {
-			trackInfo.determinedTypes.set(packet.sequenceNumber, determinedType);
+			entry.determinedType = determinedType;
+		}
+
+		if (this._autoEvict) {
+			this.evict();
 		}
 	}
 
@@ -930,15 +1091,16 @@ export class PacketCache {
 			return;
 		}
 
-		this._insertPacket(trackInfo, packet);
+		const entry = this._insertPacket(trackInfo, packet);
 
-		trackInfo.keySeekValidityEndpoint.set(
-			packet.sequenceNumber,
-			Math.max(timestamp, trackInfo.keySeekValidityEndpoint.get(packet.sequenceNumber) ?? -Infinity),
-		);
+		entry.keySeekValidityEndpoint = Math.max(timestamp, entry.keySeekValidityEndpoint ?? -Infinity);
 
 		if (determinedType !== undefined) {
-			trackInfo.determinedTypes.set(packet.sequenceNumber, determinedType);
+			entry.determinedType = determinedType;
+		}
+
+		if (this._autoEvict) {
+			this.evict();
 		}
 	}
 
@@ -949,55 +1111,72 @@ export class PacketCache {
 		next: EncodedPacket | null,
 		determinedType: PacketType | null | undefined,
 	) {
-		if (next) {
-			trackInfo.next.set(packet.sequenceNumber, this._insertPacket(trackInfo, next));
-			trackInfo.prev.set(next.sequenceNumber, packet);
+		const nextEntry = next ? this._insertPacket(trackInfo, next) : null;
+		if (nextEntry && determinedType !== undefined) {
+			nextEntry.determinedType = determinedType;
+		}
 
-			if (determinedType !== undefined) {
-				trackInfo.determinedTypes.set(next.sequenceNumber, determinedType);
+		// Links only ever connect two packets in the cache
+		const entry = trackInfo.entries.get(packet.sequenceNumber);
+		if (!entry) {
+			if (this._autoEvict) {
+				this.evict();
 			}
-		} else {
-			trackInfo.next.set(packet.sequenceNumber, null);
+
+			return;
+		}
+
+		entry.next = nextEntry;
+		if (nextEntry) {
+			nextEntry.prev = entry;
 		}
 
 		// Only these links can complete a GOP: either they close it off, or they join onto an existing chain that
 		// leads to its end. Trying to finalize on every link would be quadratic in the GOP size.
-		if (!next || next.type === 'key' || trackInfo.next.has(next.sequenceNumber)) {
-			this._finalizeGop(trackInfo, packet);
+		if (!nextEntry || nextEntry.packet!.type === 'key' || nextEntry.next !== undefined) {
+			this._finalizeGop(entry);
 		}
 
 		// Under the GOP rule, a future key packet can't have a smaller timestamp than any packet before it. So, as the
 		// chain following a key packet grows, so does the range in which no other key packet can lie.
-		const gopKey = packet.type === 'key' ? packet.sequenceNumber : trackInfo.gopKeys.get(packet.sequenceNumber);
-		if (gopKey !== undefined) {
-			let keyEndpoint = trackInfo.keySeekValidityEndpoint.get(gopKey) ?? -Infinity;
+		if (entry.gopKey && !entry.gopKey.packet) {
+			entry.gopKey = null; // The GOP's key packet has been evicted
+		}
+		const gopKey = entry.packet!.type === 'key' ? entry : entry.gopKey;
+		if (gopKey) {
+			let keyEndpoint = gopKey.keySeekValidityEndpoint ?? -Infinity;
 
-			let currentPacket = packet;
+			let currentEntry = entry;
 			while (true) {
-				const nextPacket = trackInfo.next.get(currentPacket.sequenceNumber);
-				if (nextPacket === undefined) {
+				const followingEntry = currentEntry.next;
+				if (followingEntry === undefined) {
 					break;
 				}
-				if (nextPacket === null) {
+				if (followingEntry === null) {
 					keyEndpoint = Infinity;
 					break;
 				}
-				if (nextPacket.type === 'key') {
-					keyEndpoint = Math.max(keyEndpoint, nextPacket.timestamp);
+				if (followingEntry.packet!.type === 'key') {
+					// Exclusive, so that this stays true even once the next key packet is no longer cached
+					keyEndpoint = Math.max(keyEndpoint, nextDown(followingEntry.timestamp));
 					break;
 				}
-				if (trackInfo.gopKeys.has(nextPacket.sequenceNumber)) {
+				if (followingEntry.gopKey === gopKey) {
 					break; // We've already been here
 				}
 
-				trackInfo.gopKeys.set(nextPacket.sequenceNumber, gopKey);
+				followingEntry.gopKey = gopKey;
 				// A future key packet may share this packet's timestamp, so we can only go right up to it
-				keyEndpoint = Math.max(keyEndpoint, nextDown(nextPacket.timestamp));
+				keyEndpoint = Math.max(keyEndpoint, nextDown(followingEntry.timestamp));
 
-				currentPacket = nextPacket;
+				currentEntry = followingEntry;
 			}
 
-			trackInfo.keySeekValidityEndpoint.set(gopKey, keyEndpoint);
+			gopKey.keySeekValidityEndpoint = keyEndpoint;
+		}
+
+		if (this._autoEvict) {
+			this.evict();
 		}
 	}
 
@@ -1008,26 +1187,35 @@ export class PacketCache {
 		nextKey: EncodedPacket | null,
 		determinedType: PacketType | null | undefined,
 	) {
-		if (nextKey) {
-			trackInfo.nextKey.set(packet.sequenceNumber, this._insertPacket(trackInfo, nextKey));
-
-			if (determinedType !== undefined) {
-				trackInfo.determinedTypes.set(nextKey.sequenceNumber, determinedType);
-			}
-		} else {
-			trackInfo.nextKey.set(packet.sequenceNumber, null);
+		const nextKeyEntry = nextKey ? this._insertPacket(trackInfo, nextKey) : null;
+		if (nextKeyEntry && determinedType !== undefined) {
+			nextKeyEntry.determinedType = determinedType;
 		}
 
-		// If we know the key packet starting this packet's GOP, then we now also know the key packet following it
-		const gopKey = packet.type === 'key' ? packet.sequenceNumber : trackInfo.gopKeys.get(packet.sequenceNumber);
-		if (gopKey !== undefined) {
-			const existingEndpoint = trackInfo.keySeekValidityEndpoint.get(gopKey) ?? -Infinity;
-			trackInfo.keySeekValidityEndpoint.set(gopKey, Math.max(nextKey?.timestamp ?? Infinity, existingEndpoint));
+		// Like with next(), only remember the link if the packet we came from is also cached
+		const entry = trackInfo.entries.get(packet.sequenceNumber);
+		if (entry) {
+			entry.nextKey = nextKeyEntry;
+
+			// If we know the key packet starting this packet's GOP, then we now also know the key packet following it
+			if (entry.gopKey && !entry.gopKey.packet) {
+				entry.gopKey = null; // The GOP's key packet has been evicted
+			}
+
+			const gopKey = entry.packet!.type === 'key' ? entry : entry.gopKey;
+			if (gopKey) {
+				const newEndpoint = nextKeyEntry ? nextDown(nextKeyEntry.timestamp) : Infinity;
+				gopKey.keySeekValidityEndpoint = Math.max(newEndpoint, gopKey.keySeekValidityEndpoint ?? -Infinity);
+			}
+		}
+
+		if (this._autoEvict) {
+			this.evict();
 		}
 	}
 
 	/** @internal */
-	_finalizeGop(trackInfo: PacketCacheTrackInfo, packet: EncodedPacket) {
+	_finalizeGop(entry: CacheEntry) {
 		// When we know an entire GOP, we can conclude a bunch of additional information about it and make the packets
 		// eligible for being returned by the .getAt method. This is because we make the assumption that the "GOP rule"
 		// holds for the streams we read. This rule says that when a key frame occurs, no timestamp after it can be
@@ -1035,122 +1223,182 @@ export class PacketCache {
 		// timestamp monotonicity.
 
 		// Walk forward to the last packet of the GOP; what follows it is either the next GOP's key packet or the end
-		let lastGopPacket = packet;
-		let gopEnd: EncodedPacket | null;
+		let lastGopEntry = entry;
+		let gopEnd: CacheEntry | null;
 		while (true) {
-			const nextPacket = trackInfo.next.get(lastGopPacket.sequenceNumber);
-			if (nextPacket === undefined) {
+			const nextEntry = lastGopEntry.next;
+			if (nextEntry === undefined) {
 				return; // Incomplete
 			}
-			if (nextPacket === null || nextPacket.type === 'key') {
-				gopEnd = nextPacket;
+			if (nextEntry === null || nextEntry.packet!.type === 'key') {
+				gopEnd = nextEntry;
 				break;
 			}
 
-			lastGopPacket = nextPacket;
+			lastGopEntry = nextEntry;
 		}
 
 		// Walk backward to the start of the GOP
-		const gopPackets: EncodedPacket[] = [];
-		let gopStart = lastGopPacket;
+		let minTimestamp = Infinity;
+		let endpoint = -Infinity;
+		let gopStart = lastGopEntry;
 		while (true) {
-			gopPackets.push(gopStart);
-			if (gopStart.type === 'key') {
+			minTimestamp = Math.min(minTimestamp, gopStart.timestamp);
+			endpoint = Math.max(endpoint, gopStart.timestamp, gopStart.seekValidityEndpoint ?? -Infinity);
+			if (gopStart.packet!.type === 'key') {
 				break;
 			}
 
-			const prevPacket = trackInfo.prev.get(gopStart.sequenceNumber);
-			if (prevPacket === undefined) {
+			const prevEntry = gopStart.prev;
+			if (prevEntry === undefined) {
 				return; // Incomplete
 			}
-			if (prevPacket === null) {
+			if (prevEntry === null) {
 				break; // The first packet always starts a GOP
 			}
 
-			gopStart = prevPacket;
-		}
-
-		let minTimestamp = Infinity;
-		let endpoint = -Infinity;
-		for (const gopPacket of gopPackets) {
-			minTimestamp = Math.min(minTimestamp, gopPacket.timestamp);
-			endpoint = Math.max(
-				endpoint,
-				gopPacket.timestamp,
-				trackInfo.seekValidityEndpoint.get(gopPacket.sequenceNumber) ?? -Infinity,
-			);
+			gopStart = prevEntry;
 		}
 
 		if (gopEnd) {
-			// If we already know the next GOP's minimum timestamp, nothing can lie between this GOP and it
-			endpoint = Math.max(endpoint, trackInfo.gopMinTimestamps.get(gopEnd.sequenceNumber) ?? -Infinity);
+			// If we already know the next GOP's minimum timestamp, nothing can lie between this GOP and it. Exclusive,
+			// since the packet at that timestamp may no longer be cached.
+			if (gopEnd.gopMinTimestamp !== null) {
+				endpoint = Math.max(endpoint, nextDown(gopEnd.gopMinTimestamp));
+			}
 		} else {
 			endpoint = Infinity;
 		}
 
-		for (const gopPacket of gopPackets) {
-			trackInfo.seekValidityEndpoint.set(gopPacket.sequenceNumber, endpoint);
-		}
-
-		trackInfo.gopMinTimestamps.set(gopStart.sequenceNumber, minTimestamp);
-
-		// Same thing the other way around: if the previous GOP is complete, it now extends up to our minimum timestamp
-		const previousGopPackets: EncodedPacket[] = [];
-		let currentPacket = gopStart;
+		let currentEntry = gopStart;
 		while (true) {
-			const prevPacket = trackInfo.prev.get(currentPacket.sequenceNumber);
-			if (prevPacket === undefined) {
-				return; // Incomplete
-			}
-			if (prevPacket === null) {
-				break; // We've reached the first packet
-			}
-
-			previousGopPackets.push(prevPacket);
-			if (prevPacket.type === 'key') {
+			currentEntry.seekValidityEndpoint = endpoint;
+			if (currentEntry === lastGopEntry) {
 				break;
 			}
 
-			currentPacket = prevPacket;
+			currentEntry = currentEntry.next!;
 		}
 
-		for (const { sequenceNumber } of previousGopPackets) {
-			const existingEndpoint = trackInfo.seekValidityEndpoint.get(sequenceNumber) ?? -Infinity;
-			trackInfo.seekValidityEndpoint.set(sequenceNumber, Math.max(minTimestamp, existingEndpoint));
+		gopStart.gopMinTimestamp = minTimestamp;
+
+		// Same thing the other way around: if the previous GOP is complete, it now extends up to our minimum timestamp
+		let previousGopStart = gopStart;
+		while (true) {
+			const prevEntry = previousGopStart.prev;
+			if (prevEntry === undefined) {
+				return; // Incomplete
+			}
+			if (prevEntry === null) {
+				break; // We've reached the first packet
+			}
+
+			previousGopStart = prevEntry;
+			if (prevEntry.packet!.type === 'key') {
+				break;
+			}
+		}
+
+		currentEntry = previousGopStart;
+		while (currentEntry !== gopStart) {
+			currentEntry.seekValidityEndpoint = Math.max(minTimestamp, currentEntry.seekValidityEndpoint ?? -Infinity);
+			currentEntry = currentEntry.next!;
 		}
 	}
 
 	/** @internal */
 	_insertPacket(trackInfo: PacketCacheTrackInfo, packet: EncodedPacket) {
-		let index = binarySearchLessOrEqual(trackInfo.packets, packet.timestamp, x => x.timestamp);
-
-		// Packets with equal timestamps are ordered by sequence number
-		while (
-			index !== -1
-			&& trackInfo.packets[index]!.timestamp === packet.timestamp
-			&& trackInfo.packets[index]!.sequenceNumber > packet.sequenceNumber
-		) {
-			index--;
-		}
-
-		if (index !== -1 && trackInfo.packets[index]!.sequenceNumber === packet.sequenceNumber) {
-			const existingPacket = trackInfo.packets[index]!;
+		const existingEntry = trackInfo.entries.get(packet.sequenceNumber);
+		if (existingEntry) {
+			const existingPacket = existingEntry.packet!;
 			if (existingPacket.isMetadataOnly && !packet.isMetadataOnly) {
 				// Upgrade in place so that everything referencing the packet gets the data too
 				// @ts-expect-error Technically readonly
 				existingPacket.data = packet.data;
 				// @ts-expect-error Technically readonly
 				existingPacket.sideData = packet.sideData;
+
+				if (this._evictionEnabled) {
+					const size = getCachedPacketSize(existingPacket);
+					this._cacheSize += size - existingEntry.size;
+					existingEntry.size = size;
+				}
 			}
 
-			return existingPacket;
+			if (this._evictionEnabled) {
+				this._unlinkLruEntry(existingEntry);
+				this._linkLruEntryAtHead(existingEntry);
+			}
+
+			return existingEntry;
+		}
+
+		const sortedEntries = trackInfo.sortedEntries;
+		let index = binarySearchLessOrEqual(sortedEntries, packet.timestamp, x => x.timestamp);
+
+		// Packets with equal timestamps are ordered by sequence number
+		while (
+			index !== -1
+			&& sortedEntries[index]!.timestamp === packet.timestamp
+			&& sortedEntries[index]!.packet!.sequenceNumber > packet.sequenceNumber
+		) {
+			index--;
 		}
 
 		// Metadata-only packets may get upgraded in place later, which must not affect the instance we were handed
-		const storedPacket = packet.isMetadataOnly ? packet.clone() : packet;
-		trackInfo.packets.splice(index + 1, 0, storedPacket);
+		const storedPacket = packet.isMetadataOnly ? packet._cloneInternal() : packet;
 
-		return storedPacket;
+		const entry: CacheEntry = {
+			trackInfo,
+			packet: storedPacket,
+			timestamp: storedPacket.timestamp,
+			next: undefined,
+			prev: undefined,
+			nextKey: undefined,
+			seekValidityEndpoint: null,
+			keySeekValidityEndpoint: null,
+			gopMinTimestamp: null,
+			gopKey: null,
+			determinedType: undefined,
+			size: 0,
+			lruPrev: null,
+			lruNext: null,
+		};
+		sortedEntries.splice(index + 1, 0, entry);
+		trackInfo.entries.set(storedPacket.sequenceNumber, entry);
+
+		if (this._evictionEnabled) {
+			entry.size = getCachedPacketSize(storedPacket);
+			this._cacheSize += entry.size;
+			this._linkLruEntryAtHead(entry);
+		}
+
+		return entry;
+	}
+
+	/** @internal */
+	_removeEntry(entry: CacheEntry) {
+		const trackInfo = entry.trackInfo;
+
+		if (entry.prev) {
+			entry.prev.next = undefined;
+		}
+		if (entry.next) {
+			entry.next.prev = undefined;
+		}
+		if (trackInfo.first === entry) {
+			trackInfo.first = undefined;
+		}
+
+		trackInfo.entries.delete(entry.packet!.sequenceNumber);
+
+		// Other entries may still reference this one, so mark it as evicted and make sure it doesn't keep
+		// anything alive
+		entry.packet = null;
+		entry.next = undefined;
+		entry.prev = undefined;
+		entry.nextKey = undefined;
+		entry.gopKey = null;
 	}
 
 	/** @internal */
@@ -1159,7 +1407,7 @@ export class PacketCache {
 			return trackInfo.first;
 		}
 
-		return this._checkAgainstRetrievalOptions(trackInfo, trackInfo.first, options);
+		return this._checkAgainstRetrievalOptions(trackInfo.first, options);
 	}
 
 	/** @internal */
@@ -1219,19 +1467,18 @@ export class PacketCache {
 			return null; // Nothing here
 		}
 
-		const index = binarySearchLessOrEqual(trackInfo.packets, timestamp, x => x.timestamp);
+		const index = binarySearchLessOrEqual(trackInfo.sortedEntries, timestamp, x => x.timestamp);
 
 		if (index === -1) {
 			return undefined;
 		}
 
-		const packet = trackInfo.packets[index]!;
-		const endpoint = trackInfo.seekValidityEndpoint.get(packet.sequenceNumber);
-		if (endpoint === undefined || timestamp > endpoint) {
+		const entry = trackInfo.sortedEntries[index]!;
+		if (entry.seekValidityEndpoint === null || timestamp > entry.seekValidityEndpoint) {
 			return undefined;
 		}
 
-		return this._checkAgainstRetrievalOptions(trackInfo, packet, options);
+		return this._checkAgainstRetrievalOptions(entry, options);
 	}
 
 	/** @internal */
@@ -1241,8 +1488,9 @@ export class PacketCache {
 		}
 
 		// Walk back to the latest key packet we know of
-		let index = binarySearchLessOrEqual(trackInfo.packets, timestamp, x => x.timestamp);
-		while (index !== -1 && trackInfo.packets[index]!.type !== 'key') {
+		const sortedEntries = trackInfo.sortedEntries;
+		let index = binarySearchLessOrEqual(sortedEntries, timestamp, x => x.timestamp);
+		while (index !== -1 && sortedEntries[index]!.packet!.type !== 'key') {
 			index--;
 		}
 
@@ -1250,66 +1498,77 @@ export class PacketCache {
 			return undefined;
 		}
 
-		const packet = trackInfo.packets[index]!;
-		const endpoint = trackInfo.keySeekValidityEndpoint.get(packet.sequenceNumber);
-		if (endpoint === undefined || timestamp > endpoint) {
+		const entry = sortedEntries[index]!;
+		if (entry.keySeekValidityEndpoint === null || timestamp > entry.keySeekValidityEndpoint) {
 			return undefined;
 		}
 
-		return this._checkAgainstRetrievalOptions(trackInfo, packet, options);
+		return this._checkAgainstRetrievalOptions(entry, options);
 	}
 
 	/** @internal */
 	_getNext(trackInfo: PacketCacheTrackInfo, packet: EncodedPacket, options: PacketRetrievalOptions) {
-		const nextPacket = trackInfo.next.get(packet.sequenceNumber);
-		if (nextPacket === undefined) {
+		const nextEntry = trackInfo.entries.get(packet.sequenceNumber)?.next;
+		if (nextEntry === undefined) {
 			return undefined;
 		}
 
-		if (nextPacket === null) {
+		if (nextEntry === null) {
 			return null;
 		}
 
-		return this._checkAgainstRetrievalOptions(trackInfo, nextPacket, options);
+		return this._checkAgainstRetrievalOptions(nextEntry, options);
 	}
 
 	/** @internal */
 	_getNextKey(trackInfo: PacketCacheTrackInfo, packet: EncodedPacket, options: PacketRetrievalOptions) {
-		const nextKeyPacket = trackInfo.nextKey.get(packet.sequenceNumber);
-		if (nextKeyPacket === null) {
+		const entry = trackInfo.entries.get(packet.sequenceNumber);
+		if (!entry) {
+			return undefined;
+		}
+
+		if (entry.nextKey === null) {
 			return null;
 		}
-		if (nextKeyPacket !== undefined) {
-			return this._checkAgainstRetrievalOptions(trackInfo, nextKeyPacket, options);
+		// The next key packet itself may have been evicted in the meantime
+		if (entry.nextKey && !entry.nextKey.packet) {
+			entry.nextKey = undefined;
+		}
+		if (entry.nextKey) {
+			return this._checkAgainstRetrievalOptions(entry.nextKey, options);
 		}
 
 		// No direct information, but maybe we can find it by following the chain
-		let currentPacket = packet;
+		let currentEntry = entry;
 		while (true) {
-			const nextPacket = trackInfo.next.get(currentPacket.sequenceNumber);
-			if (nextPacket === undefined) {
+			const nextEntry = currentEntry.next;
+			if (nextEntry === undefined) {
 				return undefined;
 			}
-			if (nextPacket === null) {
+			if (nextEntry === null) {
 				return null;
 			}
-			if (nextPacket.type === 'key') {
-				return this._checkAgainstRetrievalOptions(trackInfo, nextPacket, options);
+			if (nextEntry.packet!.type === 'key') {
+				return this._checkAgainstRetrievalOptions(nextEntry, options);
 			}
 
-			currentPacket = nextPacket;
+			currentEntry = nextEntry;
 		}
 	}
 
 	/** @internal */
-	_checkAgainstRetrievalOptions(
-		trackInfo: PacketCacheTrackInfo,
-		packet: EncodedPacket,
-		options: PacketRetrievalOptions,
-	) {
+	_checkAgainstRetrievalOptions(entry: CacheEntry, options: PacketRetrievalOptions) {
+		const packet = entry.packet!;
 		if (packet.isMetadataOnly && !options.metadataOnly) {
 			return undefined;
 		}
+
+		if (this._evictionEnabled) {
+			// The packet gets returned, so it's now the most recently used one
+			this._unlinkLruEntry(entry);
+			this._linkLruEntryAtHead(entry);
+		}
+
 		if (!packet.isMetadataOnly && options.metadataOnly) {
 			return packet._toMetadataOnly();
 		}
@@ -1317,27 +1576,63 @@ export class PacketCache {
 		if (options.verifyKeyPackets && packet.type === 'key') {
 			assert(!packet.isMetadataOnly); // Can't be
 
-			const determinedType = trackInfo.determinedTypes.get(packet.sequenceNumber);
-			if (determinedType !== undefined) {
-				if (determinedType === 'delta') {
-					return packet.clone({ type: 'delta' });
+			if (entry.determinedType !== undefined) {
+				if (entry.determinedType === 'delta') {
+					return packet._cloneInternal({ type: 'delta' });
 				} else {
-					return packet.clone();
+					return packet._cloneInternal();
 				}
 			}
 
-			return trackInfo.track.determinePacketType(packet).then((determinedType) => {
-				trackInfo.determinedTypes.set(packet.sequenceNumber, determinedType);
+			return entry.trackInfo.track.determinePacketType(packet).then((determinedType) => {
+				// The packet may have been evicted while we were waiting
+				if (entry.packet) {
+					entry.determinedType = determinedType;
+				}
 
 				if (determinedType === 'delta') {
-					return packet.clone({ type: 'delta' });
+					return packet._cloneInternal({ type: 'delta' });
 				} else {
-					return packet.clone();
+					return packet._cloneInternal();
 				}
 			});
 		}
 
-		// Never hand out our own instances, just like demuxers always return fresh ones
-		return packet.clone();
+		return packet._cloneInternal();
+	}
+
+	/** @internal */
+	_unlinkLruEntry(entry: CacheEntry) {
+		if (entry.lruPrev) {
+			entry.lruPrev.lruNext = entry.lruNext;
+		} else {
+			this._lruHead = entry.lruNext;
+		}
+
+		if (entry.lruNext) {
+			entry.lruNext.lruPrev = entry.lruPrev;
+		} else {
+			this._lruTail = entry.lruPrev;
+		}
+
+		entry.lruPrev = null;
+		entry.lruNext = null;
+	}
+
+	/** @internal */
+	_linkLruEntryAtHead(entry: CacheEntry) {
+		entry.lruNext = this._lruHead;
+
+		if (this._lruHead) {
+			this._lruHead.lruPrev = entry;
+		} else {
+			this._lruTail = entry;
+		}
+
+		this._lruHead = entry;
 	}
 }
+
+const getCachedPacketSize = (packet: EncodedPacket) => {
+	return PACKET_SIZE_OVERHEAD + packet.data.byteLength + (packet.sideData.alpha?.byteLength ?? 0);
+};

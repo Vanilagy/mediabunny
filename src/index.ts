@@ -266,6 +266,7 @@ export {
 	type EncodedPacketSideData,
 	type PacketType,
 	PacketCache,
+	type PacketCacheOptions,
 	PacketReader,
 	type PacketReaderOptions,
 } from './packet';

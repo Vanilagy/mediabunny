@@ -718,9 +718,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
 		const prevMetadata = prevPacket._internal as EncodedPacketMetadata | undefined;
-		if (!prevMetadata) {
-			throw new Error('Packet was not created from this track.');
-		}
+		assert(prevMetadata);
 
 		const positionResult = new ResultValue<PacketStart | null>();
 		let promise = this.demuxer.findNextPacketStart(positionResult, prevMetadata.packet);

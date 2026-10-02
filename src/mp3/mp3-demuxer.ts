@@ -431,9 +431,7 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 		if (lock.pending) await lock.ready;
 
 		const sampleIndex = packet.sequenceNumber;
-		if (sampleIndex < 0) {
-			throw new Error('Packet was not created from this track.');
-		}
+		assert(sampleIndex >= 0);
 
 		const nextIndex = sampleIndex + 1;
 

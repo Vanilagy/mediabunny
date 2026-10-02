@@ -238,8 +238,8 @@ test('can re-mux a .flac', async () => {
 	assert(inputPacket);
 	assert(outputPacket);
 
-	const { data: inputPacketData, ...otherInputPacket } = inputPacket;
-	const { data: outputPacketData, ...otherOutputPacket } = outputPacket;
+	const { data: inputPacketData, _ownerId: _inputOwnerId, ...otherInputPacket } = inputPacket;
+	const { data: outputPacketData, _ownerId: _outputOwnerId, ...otherOutputPacket } = outputPacket;
 
 	expect(otherInputPacket).toEqual(otherOutputPacket);
 	expect(inputPacketData).toEqual(outputPacketData);

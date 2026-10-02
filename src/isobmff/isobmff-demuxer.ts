@@ -3040,9 +3040,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		const isFromFragment = packet._internal !== undefined;
 		if (!isFromFragment) {
 			const sampleIndex = packet.sequenceNumber; // sequenceNumber = sampleIndex in this case
-			if (sampleIndex < 0) {
-				throw new Error('Packet was not created from this track.');
-			}
+			assert(sampleIndex >= 0);
 
 			return this.fetchPacketForSampleIndex(res, sampleIndex + 1, options);
 		}
@@ -3133,9 +3131,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		const isFromFragment = packet._internal !== undefined;
 		if (!isFromFragment) {
 			const sampleIndex = packet.sequenceNumber; // sequenceNumber = sampleIndex in this case
-			if (sampleIndex < 0) {
-				throw new Error('Packet was not created from this track.');
-			}
+			assert(sampleIndex >= 0);
 
 			const sampleTable = this.internalTrack.demuxer.getSampleTableForTrack(this.internalTrack);
 			const nextKeyFrameSampleIndex = getNextKeyframeIndexForSample(sampleTable, sampleIndex);

@@ -589,9 +589,7 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		assert(this.demuxer.audioInfo);
 
 		const packetIndex = packet.sequenceNumber;
-		if (packetIndex < 0) {
-			throw new Error('Packet was not created from this track.');
-		}
+		assert(packetIndex >= 0);
 
 		return this.getPacketAtIndex(res, packetIndex + 1, options);
 	}
