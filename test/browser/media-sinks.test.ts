@@ -3,7 +3,7 @@ import { Input } from '../../src/input.js';
 import { BufferSource, UrlSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { assert } from '../../src/misc.js';
-import { AudioSampleSink, VideoSampleSink } from '../../src/media-sink.js';
+import { AudioSampleCursor, VideoSampleCursor } from '../../src/cursors.js';
 import { Output } from '../../src/output.js';
 import { MpegTsOutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
@@ -21,9 +21,9 @@ test('Negative audio timestamps are preserved', async () => {
 
 	expect(await track.getFirstTimestamp()).toBeLessThan(0);
 
-	const sink = new AudioSampleSink(track);
+	await using cursor = new AudioSampleCursor(track);
 
-	for await (using sample of sink.samples()) {
+	for await (const sample of cursor) {
 		expect(sample.timestamp).toBe(await track.getFirstTimestamp());
 		break;
 	}
@@ -38,13 +38,13 @@ test('No B-frames are skipped when software-decoding AVC', async () => {
 	const track = await input.getPrimaryVideoTrack();
 	assert(track);
 
-	const sink = new VideoSampleSink(track, {
+	await using cursor = new VideoSampleCursor(track, {
 		hardwareAcceleration: 'prefer-software',
 	});
 	let count = 0;
 
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
-	for await (using sample of sink.samples()) {
+	for await (const sample of cursor) {
 		count++;
 	}
 
@@ -74,13 +74,13 @@ test('No B-frames are skipped when software-decoding AVC, Annex B edition', asyn
 	const track = await newInput.getPrimaryVideoTrack();
 	assert(track);
 
-	const sink = new VideoSampleSink(track, {
+	await using cursor = new VideoSampleCursor(track, {
 		hardwareAcceleration: 'prefer-software',
 	});
 	let count = 0;
 
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
-	for await (using sample of sink.samples()) {
+	for await (const sample of cursor) {
 		count++;
 	}
 

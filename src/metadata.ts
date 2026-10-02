@@ -81,7 +81,7 @@ export type MetadataTags = {
 	 * Additionally, the `'vendor'` key refers to the vendor string within this header. If a key exists more than once,
 	 * a string array is used instead.
 	 * - WAVE: The individual metadata chunks within the RIFF INFO chunk. Values are always ISO 8859-1 strings.
-	 * - FLAC: The key-value string pairs from the vorbis metadata block (see RFC 9639, Section D.2.3).
+	 * - FLAC: The key-value string pairs from the Vorbis metadata block (see RFC 9639, Section D.2.3).
 	 * Additionally, the `'vendor'` key refers to the vendor string within this header. If a key exists more than once,
 	 * a string array is used instead. If ID3v2 tags appear at the start of the file, their content is stored just like
 	 * for MP3.

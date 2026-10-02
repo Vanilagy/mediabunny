@@ -9,13 +9,14 @@ import { Reader, readBytes } from '../../src/reader.js';
 import {
 	ALL_FORMATS,
 	EncodedPacket,
-	EncodedPacketSink,
 	FilePathSource,
 	Input,
 	Logging,
 	LogLevel,
 	UrlSource,
 } from '../../src/index.js';
+import { PacketCursor } from '../../src/cursors.js';
+import { PacketReader } from '../../src/packet.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const videoFilePath = path.join(__dirname, '..', 'public/video.mp4');
@@ -33,17 +34,18 @@ test('UrlSource works against a server without range request support', async () 
 		const track = await input.getPrimaryVideoTrack();
 		if (!track) throw new Error('No video track found');
 
-		const sink = new EncodedPacketSink(track);
+		const packetReader = new PacketReader(track);
+		const cursor = new PacketCursor(track);
 
 		const timestamps: number[] = [];
-		for await (const packet of sink.packets()) {
+		for await (const packet of cursor) {
 			timestamps.push(packet.timestamp);
 		}
 
 		expect(timestamps).toHaveLength(125);
 
 		// The default cache size exceeds the file size, so random access back to the start of the file still works
-		const firstPacket = await sink.getFirstPacket();
+		const firstPacket = await packetReader.getFirst();
 		if (!firstPacket) throw new Error('No first packet found');
 
 		expect(firstPacket.timestamp).toBe(0);
@@ -72,16 +74,17 @@ test('UrlSource throws when reading from an evicted region in sequential mode', 
 		const track = await input.getPrimaryVideoTrack();
 		if (!track) throw new Error('No video track found');
 
-		const sink = new EncodedPacketSink(track);
+		const packetReader = new PacketReader(track);
+		const cursor = new PacketCursor(track);
 
 		const timestamps: number[] = [];
-		for await (const packet of sink.packets()) {
+		for await (const packet of cursor) {
 			timestamps.push(packet.timestamp);
 		}
 
 		expect(timestamps).toHaveLength(125);
 
-		await expect(sink.getFirstPacket()).rejects.toThrow(/already-evicted part of the cache/);
+		await expect(async () => packetReader.getFirst()).rejects.toThrow(/already-evicted part of the cache/);
 
 		expect(logs.warnings.filter(
 			x => x.includes('did not respond to a range request with 206 Partial Content'),
@@ -109,7 +112,7 @@ test('UrlSource resumes with correct data when the connection dies in sequential
 		if (!referenceTrack) throw new Error('No video track found');
 
 		const referencePackets: EncodedPacket[] = [];
-		for await (const packet of new EncodedPacketSink(referenceTrack).packets()) {
+		for await (const packet of new PacketCursor(referenceTrack)) {
 			referencePackets.push(packet);
 		}
 
@@ -122,7 +125,7 @@ test('UrlSource resumes with correct data when the connection dies in sequential
 		if (!track) throw new Error('No video track found');
 
 		let packetIndex = 0;
-		for await (const packet of new EncodedPacketSink(track).packets()) {
+		for await (const packet of new PacketCursor(track)) {
 			const referencePacket = referencePackets[packetIndex]!;
 
 			expect(packet.timestamp).toBe(referencePacket.timestamp);
@@ -157,16 +160,17 @@ test('UrlSource with maxCacheSize: Infinity allows random access against a range
 		const track = await input.getPrimaryVideoTrack();
 		if (!track) throw new Error('No video track found');
 
-		const sink = new EncodedPacketSink(track);
+		const packetReader = new PacketReader(track);
+		const cursor = new PacketCursor(track);
 
 		const timestamps: number[] = [];
-		for await (const packet of sink.packets()) {
+		for await (const packet of cursor) {
 			timestamps.push(packet.timestamp);
 		}
 
 		expect(timestamps).toHaveLength(125);
 
-		const firstPacket = await sink.getFirstPacket();
+		const firstPacket = await packetReader.getFirst();
 		if (!firstPacket) throw new Error('No first packet found');
 
 		expect(firstPacket.timestamp).toBe(0);
@@ -207,8 +211,8 @@ test('UrlSource in sequential mode downloads lazily and aborts the response on d
 		expect(server.bytesSent()).toBeLessThan(totalSize / 2);
 
 		// The response is merely suspended, not dead: reading still works
-		const sink = new EncodedPacketSink(track);
-		const firstPacket = await sink.getFirstPacket();
+		const packetReader = new PacketReader(track);
+		const firstPacket = await packetReader.getFirst();
 		if (!firstPacket) throw new Error('No first packet found');
 
 		expect(firstPacket.timestamp).toBe(0);

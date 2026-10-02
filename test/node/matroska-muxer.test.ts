@@ -4,14 +4,14 @@ import { fileURLToPath } from 'node:url';
 import { Input } from '../../src/input.js';
 import { BufferSource, FilePathSource } from '../../src/source.js';
 import { ADTS, ALL_FORMATS } from '../../src/input-format.js';
-import { EncodedPacketSink } from '../../src/media-sink.js';
+import { PacketCursor } from '../../src/cursors.js';
 import { Output } from '../../src/output.js';
 import { BufferTarget } from '../../src/target.js';
 import { MkvOutputFormat } from '../../src/output-format.js';
 import { Conversion } from '../../src/conversion.js';
 import { assert } from '../../src/misc.js';
 import { EncodedVideoPacketSource } from '../../src/media-source.js';
-import { EncodedPacket } from '../../src/packet.js';
+import { EncodedPacket, PacketReader } from '../../src/packet.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
@@ -52,10 +52,10 @@ test('Matroska muxer internally converts ADTS to AAC', async () => {
 	const outputDecoderConfig = await outputTrack.getDecoderConfig();
 	expect(outputDecoderConfig!.description).toBeDefined();
 
-	const outputSink = new EncodedPacketSink(outputTrack);
+	const outputCursor = new PacketCursor(outputTrack);
 
 	let count = 0;
-	for await (const packet of outputSink.packets()) {
+	for await (const packet of outputCursor) {
 		// Packets should NOT be ADTS frames (should not start with 0xFFF sync word)
 		const isAdts = packet.data[0] === 0xff && (packet.data[1]! & 0xf0) === 0xf0;
 		expect(isAdts).toBe(false);
@@ -109,10 +109,10 @@ const testNegativeTimestampRoundTrip = async (timestamps: number[], duration: nu
 
 	const track = await input.getPrimaryVideoTrack();
 	assert(track);
-	const sink = new EncodedPacketSink(track);
+	const packetReader = new PacketReader(track);
 
 	const outputPackets: EncodedPacket[] = [];
-	for await (const packet of sink.packets()) {
+	for await (const packet of new PacketCursor(track)) {
 		outputPackets.push(packet);
 	}
 
@@ -125,7 +125,7 @@ const testNegativeTimestampRoundTrip = async (timestamps: number[], duration: nu
 	})));
 
 	for (const inputPacket of inputPackets) {
-		const outputPacket = await sink.getPacket(inputPacket.timestamp);
+		const outputPacket = await packetReader.getAt(inputPacket.timestamp);
 		assert(outputPacket);
 
 		expect({

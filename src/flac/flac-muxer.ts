@@ -52,7 +52,8 @@ export class FlacMuxer extends Muxer {
 	}
 
 	async start() {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		this.writer = await this.output._getRootWriter(!!this.format._options.appendOnly);
 		this.writer.write(FLAC_HEADER);
@@ -65,8 +66,6 @@ export class FlacMuxer extends Muxer {
 			validateAudioChunkMetadata({ decoderConfig: track.metadata.decoderConfig }, track.source._codec);
 			this.applyDecoderConfig(track.metadata.decoderConfig);
 		}
-
-		release();
 	}
 
 	applyDecoderConfig(decoderConfig: AudioDecoderConfig) {
@@ -259,57 +258,54 @@ export class FlacMuxer extends Muxer {
 		packet: EncodedPacket,
 		meta?: EncodedAudioChunkMetadata,
 	): Promise<void> {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
-		try {
-			this.validateTimestamp(
-				track,
-				packet.timestamp,
-				packet.type === 'key',
-			);
+		this.validateTimestamp(
+			track,
+			packet.timestamp,
+			packet.type === 'key',
+		);
 
-			if (this.sampleRate === null) {
-				// It's the first packet
-				validateAudioChunkMetadata(meta, track.source._codec);
+		if (this.sampleRate === null) {
+			// It's the first packet
+			validateAudioChunkMetadata(meta, track.source._codec);
 
-				assert(meta);
-				assert(meta.decoderConfig);
+			assert(meta);
+			assert(meta.decoderConfig);
 
-				this.applyDecoderConfig(meta.decoderConfig);
-			}
-
-			if (!this.metadataWritten) {
-				this.writeVorbisCommentAndPictureBlock();
-			}
-
-			const slice = FileSlice.tempFromBytes(packet.data);
-			slice.skip(2);
-			const bytes = readBytes(slice, 2);
-			const bitstream = new Bitstream(bytes);
-			const blockSizeOrUncommon = getBlockSizeOrUncommon(bitstream.readBits(4));
-			if (blockSizeOrUncommon === null) {
-				throw new Error('Invalid FLAC frame: Invalid block size.');
-			}
-
-			readCodedNumber(slice); // num
-			const blockSize = readBlockSize(slice, blockSizeOrUncommon);
-
-			if (!this.format._options.appendOnly) {
-				this.blockSizes.push(blockSize);
-				this.frameSizes.push(packet.data.length);
-			}
-
-			const startPos = this.writer.getPos();
-			this.writer.write(packet.data);
-
-			if (this.format._options.onFrame) {
-				this.format._options.onFrame(packet.data, startPos);
-			}
-
-			await this.writer.flush();
-		} finally {
-			release();
+			this.applyDecoderConfig(meta.decoderConfig);
 		}
+
+		if (!this.metadataWritten) {
+			this.writeVorbisCommentAndPictureBlock();
+		}
+
+		const slice = FileSlice.tempFromBytes(packet.data);
+		slice.skip(2);
+		const bytes = readBytes(slice, 2);
+		const bitstream = new Bitstream(bytes);
+		const blockSizeOrUncommon = getBlockSizeOrUncommon(bitstream.readBits(4));
+		if (blockSizeOrUncommon === null) {
+			throw new Error('Invalid FLAC frame: Invalid block size.');
+		}
+
+		readCodedNumber(slice); // num
+		const blockSize = readBlockSize(slice, blockSizeOrUncommon);
+
+		if (!this.format._options.appendOnly) {
+			this.blockSizes.push(blockSize);
+			this.frameSizes.push(packet.data.length);
+		}
+
+		const startPos = this.writer.getPos();
+		this.writer.write(packet.data);
+
+		if (this.format._options.onFrame) {
+			this.format._options.onFrame(packet.data, startPos);
+		}
+
+		await this.writer.flush();
 	}
 
 	override addSubtitleCue(): Promise<void> {
@@ -317,7 +313,8 @@ export class FlacMuxer extends Muxer {
 	}
 
 	async finalize(): Promise<void> {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		if (this.sampleRate === null) {
 			throw new Error(
@@ -377,7 +374,5 @@ export class FlacMuxer extends Muxer {
 				totalSamples,
 			});
 		}
-
-		release();
 	}
 }
