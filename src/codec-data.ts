@@ -32,6 +32,7 @@ import { PacketType } from './packet';
 import { MetadataTags } from './metadata';
 import { AC3_SAMPLE_RATES, EAC3_REDUCED_SAMPLE_RATES } from '../shared/ac3-misc';
 import { Bitstream } from '../shared/bitstream';
+import { VERSIONED_NAME } from './version';
 
 // References for AVC/HEVC code:
 // ISO 14496-15
@@ -2815,8 +2816,7 @@ export const createVorbisComments = (headerBytes: Uint8Array, tags: MetadataTags
 		headerBytes,
 	];
 
-	const vendorString = 'Mediabunny';
-	const encodedVendorString = textEncoder.encode(vendorString);
+	const encodedVendorString = textEncoder.encode(VERSIONED_NAME);
 
 	let currentBuffer = new Uint8Array(4 + encodedVendorString.length);
 	let currentView = new DataView(currentBuffer.buffer);

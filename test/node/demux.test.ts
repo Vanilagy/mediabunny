@@ -300,7 +300,7 @@ test('Ogg demuxing', async () => {
 	await testBasicPacketReading(audioTrack);
 
 	const duration = await audioTrack.computeDuration();
-	expect(duration).toBeCloseTo(57.325714285714284);
+	expect(duration).toBeCloseTo(57.31360544217687);
 });
 
 test('Ogg sync reading', async () => {

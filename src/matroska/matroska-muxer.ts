@@ -75,10 +75,10 @@ import { EncodedPacket } from '../packet';
 import { parseOpusIdentificationHeader } from '../codec-data';
 import { AttachedFile } from '../metadata';
 import { Logging } from '../logging';
+import { VERSIONED_NAME } from '../version';
 
 const MIN_CLUSTER_TIMESTAMP_MS = -(2 ** 15);
 const MAX_CLUSTER_TIMESTAMP_MS = 2 ** 15 - 1;
-const APP_NAME = 'Mediabunny';
 const SEGMENT_SIZE_BYTES = 6;
 const CLUSTER_SIZE_BYTES = 5;
 
@@ -308,8 +308,8 @@ export class MatroskaMuxer extends Muxer {
 
 		const segmentInfo: EBML = { id: EBMLId.Info, data: [
 			{ id: EBMLId.TimestampScale, data: 1e6 },
-			{ id: EBMLId.MuxingApp, data: APP_NAME },
-			{ id: EBMLId.WritingApp, data: APP_NAME },
+			{ id: EBMLId.MuxingApp, data: VERSIONED_NAME },
+			{ id: EBMLId.WritingApp, data: VERSIONED_NAME },
 			!this.format._options.appendOnly ? segmentDuration : null,
 		] };
 		this.segmentInfo = segmentInfo;

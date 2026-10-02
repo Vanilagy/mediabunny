@@ -9,6 +9,7 @@ import { assert } from '../../src/misc.js';
 import { Input } from '../../src/input.js';
 import { BufferSource } from '../../src/source.js';
 import { ALL_FORMATS, OggInputFormat } from '../../src/input-format.js';
+import { PacketCursor } from '../../src/cursors.js';
 
 test('maximumPageDuration option', async () => {
 	const sampleRate = 48000;
@@ -136,7 +137,111 @@ test('Multi-frame Opus packets', async () => {
 	expect(await input.getFormat()).toBeInstanceOf(OggInputFormat);
 
 	const packetReader = new PacketReader((await input.getPrimaryAudioTrack())!);
-	const packet = await packetReader.getFirst();
+	const firstPacket = await packetReader.getFirst();
+	assert(firstPacket);
+
+	// The first packet is shortened by the pre-skip, so check the second one
+	const packet = await packetReader.getNext(firstPacket);
 
 	expect(packet?.duration).toBe(packetDuration);
+});
+
+test('Opus start offset and end trimming survive a demux-mux roundtrip', async () => {
+	const SAMPLE_RATE = 48000;
+	const PRE_SKIP = 312;
+	const SAMPLES_PER_FRAME = 960; // 20 ms at 48 kHz
+
+	const opusHead = new Uint8Array(19);
+	const opusHeadView = new DataView(opusHead.buffer);
+	opusHead.set([0x4f, 0x70, 0x75, 0x73, 0x48, 0x65, 0x61, 0x64], 0); // 'OpusHead'
+	opusHead[8] = 1; // Version
+	opusHead[9] = 1; // Channel count
+	opusHeadView.setUint16(10, PRE_SKIP, true);
+	opusHeadView.setUint32(12, SAMPLE_RATE, true);
+
+	const decoderConfig: AudioDecoderConfig = {
+		codec: 'opus',
+		numberOfChannels: 1,
+		sampleRate: SAMPLE_RATE,
+		description: opusHead,
+	};
+
+	const mux = async (packets: EncodedPacket[]) => {
+		const output = new Output({
+			format: new OggOutputFormat(),
+			target: new BufferTarget(),
+		});
+
+		const audioSource = new EncodedAudioPacketSource('opus');
+		output.addAudioTrack(audioSource);
+		await output.start();
+
+		for (const packet of packets) {
+			await audioSource.add(packet, { decoderConfig });
+		}
+
+		audioSource.close();
+		await output.finalize();
+
+		assert(output.target.buffer);
+		return output.target.buffer;
+	};
+
+	const demux = async (buffer: ArrayBuffer) => {
+		const input = new Input({
+			source: new BufferSource(buffer),
+			formats: ALL_FORMATS,
+		});
+		const track = await input.getPrimaryAudioTrack();
+		assert(track);
+
+		const packets: EncodedPacket[] = [];
+		for await (const packet of new PacketCursor(track)) {
+			packets.push(packet);
+		}
+
+		return { packets, duration: await track.computeDuration() };
+	};
+
+	// A stream whose audible part starts at 1 second and ends 312 samples into its final packet
+	const startInSamples = SAMPLE_RATE - PRE_SKIP;
+	const packetCount = 50;
+	const lastPacketDurationInSamples = 312;
+
+	const packets: EncodedPacket[] = [];
+	for (let i = 0; i < packetCount; i++) {
+		const isLast = i === packetCount - 1;
+
+		packets.push(new EncodedPacket(
+			new Uint8Array([31 << 3, 0]), // TOC byte: config 31 (CELT fullband, 20 ms), code 0
+			'key',
+			(startInSamples + i * SAMPLES_PER_FRAME) / SAMPLE_RATE,
+			(isLast ? lastPacketDurationInSamples : SAMPLES_PER_FRAME) / SAMPLE_RATE,
+		));
+	}
+
+	const first = await demux(await mux(packets));
+
+	const expectedEndInSamples = startInSamples + (packetCount - 1) * SAMPLES_PER_FRAME + lastPacketDurationInSamples;
+	expect(first.packets[0]!.timestamp).toBe(startInSamples / SAMPLE_RATE);
+	expect(first.duration).toBe(expectedEndInSamples / SAMPLE_RATE);
+	expect(first.packets.at(-1)!.duration).toBe(lastPacketDurationInSamples / SAMPLE_RATE);
+
+	const second = await demux(await mux(first.packets));
+
+	const toTiming = (packet: EncodedPacket) => [packet.timestamp, packet.duration];
+	expect(second.packets.map(toTiming)).toEqual(first.packets.map(toTiming));
+	expect(second.duration).toBe(first.duration);
+
+	// A stream starting at zero has the pre-skip precede it, which is reflected in a shortened first packet
+	const fromZero = await demux(await mux(packets.map((packet, i) => new EncodedPacket(
+		packet.data,
+		'key',
+		i * SAMPLES_PER_FRAME / SAMPLE_RATE,
+		SAMPLES_PER_FRAME / SAMPLE_RATE,
+	))));
+
+	expect(fromZero.packets[0]!.timestamp).toBe(0);
+	expect(fromZero.packets[0]!.duration).toBe((SAMPLES_PER_FRAME - PRE_SKIP) / SAMPLE_RATE);
+	expect(fromZero.duration).toBe((packetCount * SAMPLES_PER_FRAME - PRE_SKIP) / SAMPLE_RATE);
 });

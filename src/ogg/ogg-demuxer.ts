@@ -16,6 +16,7 @@ import {
 	assert,
 	AsyncMutex,
 	binarySearchLessOrEqual,
+	clamp,
 	findLast,
 	isThenable,
 	last,
@@ -447,6 +448,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 	internalSampleRate: number;
 	sequentialScanCache: EncodedPacketMetadata[] = [];
 	sequentialScanMutex = new AsyncMutex();
+	firstTimestampInSamples: number | null = null;
 
 	constructor(public bitstream: LogicalBitstream, public demuxer: OggDemuxer) {
 		// Opus always uses a fixed sample rate for its internal calculations, even if the actual rate is different
@@ -568,17 +570,31 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 			return null;
 		}
 
-		const { durationInSamples, vorbisBlockSize } = extractSampleMetadata(
+		const sampleMetadata = extractSampleMetadata(
 			packet.data,
 			this.bitstream.codecInfo,
 			additional.vorbisLastBlocksize,
 		);
+		const { vorbisBlockSize } = sampleMetadata;
+		let { durationInSamples } = sampleMetadata;
+
+		const isEos = !!(packet.endPage.headerType & 0x04);
+		if (isEos && packet.endSegmentIndex === packet.endPage.lacingValues.length - 1) {
+			// This is the last packet of the bitstream. The final page's granule position may be smaller than what
+			// the packet durations imply, in which case the excess samples at the end are to be trimmed.
+			const endTimestampInSamples = this.granulePositionToTimestampInSamples(packet.endPage.granulePosition);
+			durationInSamples = clamp(endTimestampInSamples - additional.timestampInSamples, 0, durationInSamples);
+		}
+
+		// Clamp both ends so that a packet partially before zero doesn't overlap with the following packet
+		const startTimestampInSamples = Math.max(additional.timestampInSamples, 0);
+		const endTimestampInSamples = Math.max(additional.timestampInSamples + durationInSamples, 0);
 
 		const encodedPacket = new EncodedPacket(
 			options.metadataOnly ? PLACEHOLDER_DATA : packet.data,
 			'key',
-			Math.max(0, additional.timestampInSamples) / this.internalSampleRate,
-			durationInSamples / this.internalSampleRate,
+			startTimestampInSamples / this.internalSampleRate,
+			(endTimestampInSamples - startTimestampInSamples) / this.internalSampleRate,
 			packet.endPage.headerStartPos + packet.endSegmentIndex,
 			packet.data.byteLength,
 		);
@@ -592,6 +608,72 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		} satisfies EncodedPacketMetadata;
 
 		return encodedPacket;
+	}
+
+	async getFirstTimestampInSamples(res: ResultValue<number>): MaybeRelevantPromise {
+		if (this.firstTimestampInSamples !== null) {
+			return res.set(this.firstTimestampInSamples);
+		}
+
+		const defaultTimestampInSamples = this.granulePositionToTimestampInSamples(0);
+
+		assert(this.bitstream.lastMetadataPacket);
+
+		const positionResult = new ResultValue<PacketStart | null>();
+		let promise = this.demuxer.findNextPacketStart(positionResult, this.bitstream.lastMetadataPacket);
+		if (positionResult.pending) await promise;
+
+		let position = positionResult.value;
+		if (!position) {
+			return res.set(this.firstTimestampInSamples = defaultTimestampInSamples);
+		}
+
+		// The first page on which a packet completes may have a granule position larger than the number of samples in
+		// the packets completing on it, meaning the stream starts at a later time. So, let's sum up the durations of
+		// these packets and compare.
+		let firstEndPage: Page | null = null;
+		let totalDurationInSamples = 0;
+		let vorbisLastBlocksize: number | null = null;
+		const packetResult = new ResultValue<Packet | null>();
+
+		while (position) {
+			packetResult.reset();
+			promise = this.demuxer.readPacket(packetResult, position.startPage, position.startSegmentIndex);
+			if (packetResult.pending) await promise;
+
+			const packet = packetResult.value;
+			if (!packet) {
+				break;
+			}
+
+			firstEndPage ??= packet.endPage;
+			if (packet.endPage.headerStartPos !== firstEndPage.headerStartPos) {
+				break;
+			}
+
+			const { durationInSamples, vorbisBlockSize } = extractSampleMetadata(
+				packet.data,
+				this.bitstream.codecInfo,
+				vorbisLastBlocksize,
+			);
+			totalDurationInSamples += durationInSamples;
+			vorbisLastBlocksize = vorbisBlockSize;
+
+			positionResult.reset();
+			promise = this.demuxer.findNextPacketStart(positionResult, packet);
+			if (positionResult.pending) await promise;
+
+			position = positionResult.value;
+		}
+
+		if (!firstEndPage) {
+			return res.set(this.firstTimestampInSamples = defaultTimestampInSamples);
+		}
+
+		// A smaller granule position is only legal on the final page, where it signals end trimming
+		this.firstTimestampInSamples = defaultTimestampInSamples
+			+ Math.max(firstEndPage.granulePosition - totalDurationInSamples, 0);
+		return res.set(this.firstTimestampInSamples);
 	}
 
 	async getFirstPacket(
@@ -610,11 +692,11 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 			return res.set(new PacketRetrievalResult(null));
 		}
 
-		let timestampInSamples = 0;
-		if (this.bitstream.codecInfo.codec === 'opus') {
-			assert(this.bitstream.codecInfo.opusInfo);
-			timestampInSamples -= this.bitstream.codecInfo.opusInfo.preSkip;
-		}
+		const firstTimestampResult = new ResultValue<number>();
+		promise = this.getFirstTimestampInSamples(firstTimestampResult);
+		if (firstTimestampResult.pending) await promise;
+
+		const timestampInSamples = firstTimestampResult.value;
 
 		const packetResult = new ResultValue<Packet | null>();
 		promise = this.demuxer.readPacket(packetResult, packetPosition.startPage, packetPosition.startSegmentIndex);
@@ -676,11 +758,16 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		}
 
 		const timestampInSamples = roundIfAlmostInteger(timestamp * this.internalSampleRate);
-		if (timestampInSamples === 0) {
-			// Fast path for timestamp 0 - avoids binary search when playing back from the start
+		const firstTimestampResult = new ResultValue<number>();
+		const firstTimestampPromise = this.getFirstTimestampInSamples(firstTimestampResult);
+		if (firstTimestampResult.pending) await firstTimestampPromise;
+
+		const firstTimestampInSamples = firstTimestampResult.value;
+		if (timestampInSamples === Math.max(firstTimestampInSamples, 0)) {
+			// Fast path for the first timestamp - avoids binary search when playing back from the start
 			return this.getFirstPacket(res, options);
 		}
-		if (timestampInSamples < 0) {
+		if (timestampInSamples < Math.max(firstTimestampInSamples, 0)) {
 			// There's nothing here
 			return res.set(new PacketRetrievalResult(null));
 		}
@@ -726,6 +813,11 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 
 				const found = findNextPageHeader(searchSlice, until);
 				if (!found) {
+					if (high <= mid + MIN_PAGE_HEADER_SIZE) {
+						// The range can't be narrowed any further
+						break outer;
+					}
+
 					high = mid + MIN_PAGE_HEADER_SIZE;
 					continue outer;
 				}
@@ -846,7 +938,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		let endSegmentIndex = 0;
 
 		if (currentPage.headerStartPos === startPosition.startPage.headerStartPos) {
-			currentTimestampInSamples = this.granulePositionToTimestampInSamples(0);
+			currentTimestampInSamples = firstTimestampInSamples;
 			currentTimestampIsCorrect = true;
 			currentSegmentIndex = 0;
 		} else {
@@ -1060,6 +1152,10 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 			if (result.pending) await promise;
 
 			currentPacket = result.value.packet;
+			if (currentPacket && currentPacket.timestamp > timestamp) {
+				// The stream starts after the requested timestamp
+				return res.set(new PacketRetrievalResult(null));
+			}
 		}
 
 		let i = 0;

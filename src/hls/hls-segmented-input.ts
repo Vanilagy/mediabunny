@@ -33,7 +33,9 @@ import { HlsDemuxer } from './hls-demuxer';
 import {
 	AttributeList,
 	canIgnoreLine,
+	HlsPlaylistVariables,
 	TAG_BYTERANGE,
+	TAG_DEFINE,
 	TAG_DISCONTINUITY,
 	TAG_ENDLIST,
 	TAG_EXTINF,
@@ -150,6 +152,10 @@ export class HlsSegmentedInput extends SegmentedInput {
 		}
 
 		const offsetTimestampsByDateTime = this.input._formatOptions.hls?.offsetTimestampsByDateTime !== false;
+		const variables = new HlsPlaylistVariables(
+			this.rootPath,
+			this.demuxer.hasMasterPlaylist ? this.demuxer.masterPlaylistVariables : null,
+		);
 
 		let headerRead = false;
 		let accumulatedTime = 0;
@@ -240,7 +246,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 						key = { ...key, iv };
 					}
 
-					const fullPath = joinPaths(this.rootPath, line);
+					const fullPath = joinPaths(this.rootPath, variables.substitute(line));
 					const location: HlsSegmentLocation = {
 						path: fullPath,
 						offset: nextByteRange?.offset ?? 0,
@@ -305,8 +311,10 @@ export class HlsSegmentedInput extends SegmentedInput {
 				}
 
 				nextSegmentDuration = duration;
+			} else if (line.startsWith(TAG_DEFINE)) {
+				variables.define(line.slice(TAG_DEFINE.length));
 			} else if (line.startsWith(TAG_MAP)) {
-				const attributes = new AttributeList(line.slice(TAG_MAP.length));
+				const attributes = new AttributeList(line.slice(TAG_MAP.length), variables);
 				const uri = attributes.get('uri');
 				if (!uri) {
 					throw new Error('Invalid #EXT-X-MAP tag; missing URI attribute.');
@@ -361,7 +369,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 					nextByteRange = null;
 				}
 			} else if (line.startsWith(TAG_KEY)) {
-				const attributes = new AttributeList(line.slice(TAG_KEY.length));
+				const attributes = new AttributeList(line.slice(TAG_KEY.length), variables);
 				const method = attributes.get('method');
 
 				if (method === 'NONE') {

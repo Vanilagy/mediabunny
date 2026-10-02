@@ -400,7 +400,18 @@ export class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 					this.onError(error);
 				},
 			});
-			this.alphaDecoder.configure(this.decoderConfig);
+			this.alphaDecoder.configure({
+				...this.decoderConfig,
+				// Alpha is always full range, regardless of what the color track says. The decoder only honors the
+				// override if all fields are set tho.
+				colorSpace: {
+					fullRange: true,
+					// These fields are irrelevant:
+					matrix: 'bt709',
+					primaries: 'bt709',
+					transfer: 'bt709',
+				},
+			});
 
 			this.alphaDecoder.addEventListener('dequeue', () => {
 				this.onDequeue?.();
@@ -935,7 +946,25 @@ const colorAlphaMergerWorkerCode = () => {
 			return cpuAlphaBuffer.subarray(0, pixelCount);
 		} else {
 			// For Y-plane-first formats (I*** and NV12), the leading width*height samples are the Y plane
-			return cpuAlphaBuffer.subarray(0, width * height * bytesPerSample);
+			const yPlane = cpuAlphaBuffer.subarray(0, width * height * bytesPerSample);
+
+			if (alpha.colorSpace.fullRange === false) {
+				// Some decoders hand us limited-range alpha, so stretch it back out to full range
+				const bitDepth = format!.includes('P12') ? 12 : format!.includes('P10') ? 10 : 8;
+				const low = 16 << (bitDepth - 8);
+				const high = 235 << (bitDepth - 8);
+				const max = (1 << bitDepth) - 1;
+				const samples = bytesPerSample === 2
+					? new Uint16Array(yPlane.buffer, 0, width * height)
+					: yPlane;
+
+				for (let i = 0; i < samples.length; i++) {
+					const value = Math.round((samples[i]! - low) * max / (high - low));
+					samples[i] = Math.min(Math.max(value, 0), max);
+				}
+			}
+
+			return yPlane;
 		}
 	};
 };
