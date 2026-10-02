@@ -16,9 +16,46 @@
 			formats: Mediabunny.ALL_FORMATS,
 			source: new Mediabunny.BufferSource(await file.arrayBuffer()),
 		});
+		
+		const track = await input.getPrimaryVideoTrack();
+		const cache = new Mediabunny.PacketCache();
+		const reader = new Mediabunny.PacketReader(track, { cache });
+
+		for (let i = 0; i < 100; i++) {
+			console.time()
+			let packet = await reader.getFirst();
+			let count = 0;
+			while (packet) {
+				packet = reader.getNext(packet);
+				if (packet instanceof Promise) packet = await packet;
+
+				count++;
+	
+				/*
+				if (packet.type === 'key') {
+					i++;
+				}
+	
+				if (i === 2) {
+					break;
+				}
+				*/
+			}
+			console.timeEnd()
+
+			console.log(count)
+		}
+
+		console.log("Done")
+
+		//console.log(cache);
+//
+		//reader.getAt(0.5)
+		//reader.getAt(0.5)
+		//console.log(await reader.getAt(0.5));
+		//console.log(await reader.getAt(0.99));
 
 		/*
-		const track = await input.getPrimaryVideoTrack();
 		const packetSink = new Mediabunny.EncodedPacketSink(track);
 
 		const first = await packetSink.getFirstPacket({ verifyKeyPackets: true });
@@ -264,7 +301,7 @@
 		}
 		*/
 
-		alert(total / iters);
+		//alert(total / iters);
 
 		/*
 		console.log(await cursor.seekTo(2.00));

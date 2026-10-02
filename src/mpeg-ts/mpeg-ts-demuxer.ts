@@ -80,7 +80,13 @@ import {
 	getMp3ChannelCount,
 	readMp3FrameHeader,
 } from '../../shared/mp3-misc';
-import { EncodedPacket, PacketType, PLACEHOLDER_DATA, PacketRetrievalOptions } from '../packet';
+import {
+	EncodedPacket,
+	PacketType,
+	PLACEHOLDER_DATA,
+	PacketRetrievalOptions,
+	PacketRetrievalResult,
+} from '../packet';
 import { FileSlice, readBytes, Reader, readU16Be, readU32Be, readU8 } from '../reader';
 import {
 	buildMpegTsMimeType,
@@ -1214,11 +1220,13 @@ const readPesPacket = <T extends boolean>(
 	} as T extends true ? TimestampedPesPacket : PesPacket;
 };
 
-abstract class MpegTsTrackBacking implements InputTrackBacking {
-	packetBuffers = new WeakMap<EncodedPacket, PacketBuffer>();
-	/** Used for recreating PacketBuffers if necessary. */
-	packetSectionStarts = new WeakMap<EncodedPacket, number>();
+type EncodedPacketMetadata = {
+	buffer: PacketBuffer | null;
+	/** Used for recreating the PacketBuffer if necessary. */
+	sectionStartPos: number;
+};
 
+abstract class MpegTsTrackBacking implements InputTrackBacking {
 	constructor(public elementaryStream: ElementaryStream) {}
 
 	abstract getType(): TrackType;
@@ -1308,6 +1316,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 	createEncodedPacket(
 		suppliedPacket: SuppliedPacket,
 		duration: number,
+		buffer: PacketBuffer,
 		options: PacketRetrievalOptions,
 	) {
 		let packetType: PacketType;
@@ -1320,7 +1329,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 				: 'delta';
 		}
 
-		return new EncodedPacket(
+		const packet = new EncodedPacket(
 			options.metadataOnly ? PLACEHOLDER_DATA : suppliedPacket.data,
 			packetType,
 			suppliedPacket.pts / TIMESCALE,
@@ -1328,10 +1337,16 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 			suppliedPacket.sequenceNumber,
 			suppliedPacket.data.byteLength,
 		);
+		packet._internal = {
+			buffer,
+			sectionStartPos: suppliedPacket.sectionStartPos,
+		} satisfies EncodedPacketMetadata;
+
+		return packet;
 	}
 
 	async getFirstPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
 		const section = this.elementaryStream.firstSection;
@@ -1349,53 +1364,47 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 
 		const result = readResult.value;
 		if (!result) {
-			return res.set(null);
+			return res.set(new PacketRetrievalResult(null));
 		}
 
-		const packet = this.createEncodedPacket(result.packet, result.duration, options);
-		this.packetBuffers.set(packet, buffer);
-		this.packetSectionStarts.set(packet, result.packet.sectionStartPos);
-
-		return res.set(packet);
+		const packet = this.createEncodedPacket(result.packet, result.duration, buffer, options);
+		return res.set(new PacketRetrievalResult(packet));
 	}
 
 	async getNextPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
-		let buffer = this.packetBuffers.get(packet);
+		const metadata = packet._internal as EncodedPacketMetadata | undefined;
+		if (!metadata) {
+			throw new Error('Packet was not created from this track.');
+		}
+
 		const readResult = new ResultValue<PacketWithDuration | null>();
 
-		if (buffer) {
+		if (metadata.buffer) {
 			// Fast path
+			const buffer = metadata.buffer;
 			const promise = buffer.readNext(readResult);
 			if (readResult.pending) await promise;
 
 			const result = readResult.value;
 			if (!result) {
-				return res.set(null);
+				return res.set(new PacketRetrievalResult(null));
 			}
 
-			// Remove PacketBuffer access from the old packet, it belongs to the next packet now
-			this.packetBuffers.delete(packet);
+			// Remove PacketBuffer access from the old packet (and all its clones), it belongs to the next packet now
+			metadata.buffer = null;
 
-			const newPacket = this.createEncodedPacket(result.packet, result.duration, options);
-			this.packetBuffers.set(newPacket, buffer);
-			this.packetSectionStarts.set(newPacket, result.packet.sectionStartPos);
-
-			return res.set(newPacket);
+			const newPacket = this.createEncodedPacket(result.packet, result.duration, buffer, options);
+			return res.set(new PacketRetrievalResult(newPacket));
 		}
 
 		// No buffer, we gotta do some rereading
-		const sectionStartPos = this.packetSectionStarts.get(packet);
-		if (sectionStartPos === undefined) {
-			throw new Error('Packet was not created from this track.');
-		}
-
 		const demuxer = this.elementaryStream.demuxer;
 		const sectionResult = new ResultValue<Section | null>();
-		const sectionPromise = demuxer.readSection(sectionResult, sectionStartPos, true);
+		const sectionPromise = demuxer.readSection(sectionResult, metadata.sectionStartPos, true);
 		if (sectionResult.pending) await sectionPromise;
 
 		const section = sectionResult.value;
@@ -1405,7 +1414,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 		assert(pesPacket);
 
 		const context = new PacketReadingContext(this.elementaryStream, pesPacket);
-		buffer = new PacketBuffer(this, context);
+		const buffer = new PacketBuffer(this, context);
 
 		// Advance until we pass the current packet's sequence number
 		const targetSequenceNumber = packet.sequenceNumber;
@@ -1416,27 +1425,25 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 
 			const result = readResult.value;
 			if (!result) {
-				return res.set(null);
+				return res.set(new PacketRetrievalResult(null));
 			}
 
 			if (result.packet.sequenceNumber > targetSequenceNumber) {
 				// We found the next packet!
-				const newPacket = this.createEncodedPacket(result.packet, result.duration, options);
-				this.packetBuffers.set(newPacket, buffer);
-				this.packetSectionStarts.set(newPacket, result.packet.sectionStartPos);
-				return res.set(newPacket);
+				const newPacket = this.createEncodedPacket(result.packet, result.duration, buffer, options);
+				return res.set(new PacketRetrievalResult(newPacket));
 			}
 		}
 	}
 
 	async getNextKeyPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
 		let currentPacket: EncodedPacket | null = packet;
 
-		const nextResult = new ResultValue<EncodedPacket | null>();
+		const nextResult = new ResultValue<PacketRetrievalResult>();
 
 		// Just loop until we hit one
 		while (true) {
@@ -1444,20 +1451,20 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 			const promise = this.getNextPacket(nextResult, currentPacket, options);
 			if (nextResult.pending) await promise;
 
-			currentPacket = nextResult.value;
+			currentPacket = nextResult.value.packet;
 
 			if (!currentPacket) {
-				return res.set(null);
+				return res.set(nextResult.value);
 			}
 
 			if (currentPacket.type === 'key') {
-				return res.set(currentPacket);
+				return res.set(nextResult.value);
 			}
 		}
 	}
 
 	getPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
@@ -1465,7 +1472,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 	}
 
 	getKeyPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
@@ -1478,7 +1485,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 	 * make it more performant for small files and over high-latency readers such as the network.
 	 */
 	async doPacketLookup(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		timestamp: number,
 		keyframesOnly: boolean,
 		options: PacketRetrievalOptions,
@@ -1546,7 +1553,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 
 		if (searchPts < firstPesPacketHeader.pts) {
 			// We're before the first packet, definitely nothing here
-			return res.set(null);
+			return res.set(new PacketRetrievalResult(null));
 		}
 
 		let scanStartPos: number;
@@ -1668,7 +1675,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 
 			const targetIndex = findLastIndex(buffer.presentationOrderPackets, predicate);
 			if (targetIndex === -1) {
-				return res.set(null);
+				return res.set(new PacketRetrievalResult(null));
 			}
 
 			const targetPacket = buffer.presentationOrderPackets[targetIndex]!;
@@ -1689,11 +1696,8 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 			const result = readResult.value;
 			assert(result);
 
-			const packet = this.createEncodedPacket(result.packet, result.duration, options);
-			this.packetBuffers.set(packet, buffer);
-			this.packetSectionStarts.set(packet, result.packet.sectionStartPos);
-
-			return res.set(packet);
+			const packet = this.createEncodedPacket(result.packet, result.duration, buffer, options);
+			return res.set(new PacketRetrievalResult(packet));
 		};
 
 		if (!keyframesOnly || this.allPacketsAreKeyPackets()) {
@@ -1941,7 +1945,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 				}
 
 				if (isFirstChunk) {
-					return res.set(null);
+					return res.set(new PacketRetrievalResult(null));
 				}
 
 				// No key frame found in this chunk, move one chunk to the left

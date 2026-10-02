@@ -26,7 +26,7 @@ import {
 	ResultValue,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
-import { EncodedPacket, PacketRetrievalOptions, PLACEHOLDER_DATA } from '../packet';
+import { EncodedPacket, PacketRetrievalOptions, PacketRetrievalResult, PLACEHOLDER_DATA } from '../packet';
 import { readBytes, Reader } from '../reader';
 import {
 	AdtsFrameHeader,
@@ -295,17 +295,17 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 	}
 
 	async getPacketAtIndex(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		sampleIndex: number,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
 		if (sampleIndex === -1) {
-			return res.set(null);
+			return res.set(new PacketRetrievalResult(null));
 		}
 
 		const rawSample = this.demuxer.loadedSamples[sampleIndex];
 		if (!rawSample) {
-			return res.set(null);
+			return res.set(new PacketRetrievalResult(null));
 		}
 
 		let data: Uint8Array;
@@ -316,28 +316,28 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 			if (isThenable(slice)) slice = await slice;
 
 			if (!slice) {
-				return res.set(null); // Data didn't fit into the rest of the file
+				return res.set(new PacketRetrievalResult(null)); // Data didn't fit into the rest of the file
 			}
 
 			data = readBytes(slice, rawSample.dataSize);
 		}
 
-		return res.set(new EncodedPacket(
+		return res.set(new PacketRetrievalResult(new EncodedPacket(
 			data,
 			'key',
 			rawSample.timestamp,
 			rawSample.duration,
 			sampleIndex,
 			rawSample.dataSize,
-		));
+		)));
 	}
 
-	getFirstPacket(res: ResultValue<EncodedPacket | null>, options: PacketRetrievalOptions) {
+	getFirstPacket(res: ResultValue<PacketRetrievalResult>, options: PacketRetrievalOptions) {
 		return this.getPacketAtIndex(res, 0, options);
 	}
 
 	async getNextPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
@@ -365,7 +365,7 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 	}
 
 	async getPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
@@ -381,7 +381,7 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 
 			if (index === -1 && this.demuxer.loadedSamples.length > 0) {
 				// We're before the first sample
-				return res.set(null);
+				return res.set(new PacketRetrievalResult(null));
 			}
 
 			if (this.demuxer.lastSampleLoaded) {
@@ -402,7 +402,7 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 	}
 
 	getKeyPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
@@ -410,7 +410,7 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 	}
 
 	getNextKeyPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {

@@ -20,7 +20,7 @@ import {
 	textDecoder,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
-import { EncodedPacket, PacketRetrievalOptions, PLACEHOLDER_DATA } from '../packet';
+import { EncodedPacket, PacketRetrievalOptions, PacketRetrievalResult, PLACEHOLDER_DATA } from '../packet';
 import {
 	FileSlice,
 	readBytes,
@@ -679,14 +679,14 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 	}
 
 	async getPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
 		assert(this.demuxer.audioInfo);
 
 		if (timestamp < 0) {
-			return res.set(null);
+			return res.set(new PacketRetrievalResult(null));
 		}
 
 		using lock = this.demuxer.readingMutex.lock();
@@ -735,7 +735,7 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 	}
 
 	async getNextPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
@@ -751,7 +751,7 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 			this.demuxer.lastSampleLoaded
 			&& nextIndex >= this.demuxer.loadedSamples.length
 		) {
-			return res.set(null);
+			return res.set(new PacketRetrievalResult(null));
 		}
 
 		const advanceResult = new ResultValue<void>();
@@ -770,7 +770,7 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 	}
 
 	getKeyPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
@@ -778,7 +778,7 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 	}
 
 	getNextKeyPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
@@ -786,13 +786,13 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 	}
 
 	async getPacketAtIndex(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		sampleIndex: number,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
 		const rawSample = this.demuxer.loadedSamples[sampleIndex];
 		if (!rawSample) {
-			return res.set(null);
+			return res.set(new PacketRetrievalResult(null));
 		}
 
 		let data: Uint8Array;
@@ -806,7 +806,7 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 			if (isThenable(slice)) slice = await slice;
 
 			if (!slice) {
-				return res.set(null); // Data didn't fit into the rest of the file
+				return res.set(new PacketRetrievalResult(null)); // Data didn't fit into the rest of the file
 			}
 
 			data = readBytes(slice, rawSample.byteSize);
@@ -816,18 +816,18 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		const timestamp = rawSample.blockOffset / this.demuxer.audioInfo.sampleRate;
 		const duration = rawSample.blockSize / this.demuxer.audioInfo.sampleRate;
 
-		return res.set(new EncodedPacket(
+		return res.set(new PacketRetrievalResult(new EncodedPacket(
 			data,
 			'key',
 			timestamp,
 			duration,
 			sampleIndex,
 			rawSample.byteSize,
-		));
+		)));
 	}
 
 	async getFirstPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
 		const advanceResult = new ResultValue<void>();

@@ -27,7 +27,7 @@ import {
 	ResultValue,
 	roundToDivisor,
 } from './misc';
-import { EncodedPacket, PacketRetrievalOptions } from './packet';
+import { EncodedPacket, PacketRetrievalOptions, PacketRetrievalResult } from './packet';
 
 export type SegmentedInputMetadata = {
 	name: string | null;
@@ -61,6 +61,15 @@ export type SegmentRetrievalOptions = {
 	skipLiveWait?: boolean;
 };
 
+export class SegmentRetrievalResult {
+	segment: Segment | null;
+	provisional = false;
+
+	constructor(segment: Segment | null) {
+		this.segment = segment;
+	}
+}
+
 export type SegmentedInputTrackDeclaration = {
 	id: number;
 	type: TrackType;
@@ -91,21 +100,21 @@ export abstract class SegmentedInput {
 	}
 
 	abstract getFirstSegment(
-		res: ResultValue<Segment | null>,
+		res: ResultValue<SegmentRetrievalResult>,
 		options: SegmentRetrievalOptions,
 	): MaybeRelevantPromise;
 	abstract getSegmentAt(
-		res: ResultValue<Segment | null>,
+		res: ResultValue<SegmentRetrievalResult>,
 		timestamp: number,
 		options: SegmentRetrievalOptions,
 	): MaybeRelevantPromise;
 	abstract getNextSegment(
-		res: ResultValue<Segment | null>,
+		res: ResultValue<SegmentRetrievalResult>,
 		segment: Segment,
 		options: SegmentRetrievalOptions,
 	): MaybeRelevantPromise;
 	abstract getPreviousSegment(
-		res: ResultValue<Segment | null>,
+		res: ResultValue<SegmentRetrievalResult>,
 		segment: Segment,
 		options: SegmentRetrievalOptions,
 	): MaybeRelevantPromise;
@@ -114,13 +123,13 @@ export abstract class SegmentedInput {
 	abstract getLiveRefreshInterval(): Promise<number | null>;
 
 	async getDurationFromMetadata(options: DurationMetadataRequestOptions) {
-		const segmentResult = new ResultValue<Segment | null>();
+		const segmentResult = new ResultValue<SegmentRetrievalResult>();
 		const promise = this.getSegmentAt(segmentResult, Infinity, {
 			skipLiveWait: options.skipLiveWait,
 		});
 		if (segmentResult.pending) await promise;
 
-		const lastSegment = segmentResult.value;
+		const lastSegment = segmentResult.value.segment;
 		if (!lastSegment) {
 			return null;
 		}
@@ -129,18 +138,18 @@ export abstract class SegmentedInput {
 	}
 
 	async getUnixTimeForTimestamp(timestamp: number): Promise<number | null> {
-		const segmentResult = new ResultValue<Segment | null>();
+		const segmentResult = new ResultValue<SegmentRetrievalResult>();
 		const promise = this.getSegmentAt(segmentResult, timestamp, {});
 		if (segmentResult.pending) await promise;
 
-		let segment = segmentResult.value;
+		let segment = segmentResult.value.segment;
 		if (!segment) {
 			// Default to the first segment
 			segmentResult.reset();
 			const promise = this.getFirstSegment(segmentResult, {});
 			if (segmentResult.pending) await promise;
 
-			segment = segmentResult.value;
+			segment = segmentResult.value.segment;
 		}
 
 		if (!segment || segment.unixEpochTimestamp === null) {
@@ -173,11 +182,11 @@ export abstract class SegmentedInput {
 				}
 			} else {
 				// There are no declarations, we must determine the tracks from the first segment
-				const firstSegmentResult = new ResultValue<Segment | null>();
+				const firstSegmentResult = new ResultValue<SegmentRetrievalResult>();
 				const promise = this.getFirstSegment(firstSegmentResult, {});
 				if (firstSegmentResult.pending) await promise;
 
-				this.firstSegment = firstSegmentResult.value;
+				this.firstSegment = firstSegmentResult.value.segment;
 				if (!this.firstSegment) {
 					return [];
 				}
@@ -282,7 +291,6 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 	segmentedInput: SegmentedInput;
 	decl: SegmentedInputTrackDeclaration;
 	number: number;
-	packetInfos = new WeakMap<EncodedPacket, PacketInfo>();
 
 	hydrationPromise: Promise<void> | null = null;
 	firstInputTrack: InputTrack | null = null;
@@ -297,11 +305,11 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 	hydrate() {
 		return this.hydrationPromise ??= (async () => {
 			if (!this.segmentedInput.firstSegment) {
-				const firstSegmentResult = new ResultValue<Segment | null>();
+				const firstSegmentResult = new ResultValue<SegmentRetrievalResult>();
 				const promise = this.segmentedInput.getFirstSegment(firstSegmentResult, {});
 				if (firstSegmentResult.pending) await promise;
 
-				this.segmentedInput.firstSegment = firstSegmentResult.value;
+				this.segmentedInput.firstSegment = firstSegmentResult.value.segment;
 			}
 
 			if (!this.segmentedInput.firstSegment) {
@@ -310,7 +318,7 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 
 			let currentSegment: Segment | null = this.segmentedInput.firstSegment;
 			let track: InputTrack | null = null;
-			const segmentResult = new ResultValue<Segment | null>();
+			const segmentResult = new ResultValue<SegmentRetrievalResult>();
 
 			// For playlists with sparse tracks (rare af!!), not every segment has every track, so we need to loop to
 			// find the first segment that actually contains the track we want.
@@ -327,7 +335,7 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 				const promise = this.segmentedInput.getNextSegment(segmentResult, currentSegment, {});
 				if (segmentResult.pending) await promise;
 
-				currentSegment = segmentResult.value;
+				currentSegment = segmentResult.value.segment;
 			}
 
 			if (!track) {
@@ -424,10 +432,11 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 	}
 
 	async createAdjustedPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		packet: EncodedPacket,
 		segment: Segment,
 		track: InputTrack,
+		provisional: boolean,
 	): MaybeRelevantPromise {
 		assert(packet.sequenceNumber >= 0);
 		assert(this.segmentedInput.firstSegment);
@@ -453,17 +462,21 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 			sequenceNumber: Math.floor(1e8 * segmentTimestampRelativeToFirst) + packet.sequenceNumber,
 		});
 
-		this.packetInfos.set(modified, {
+		// Replaces the inner packet's internal data the clone carried over; it stays reachable via sourcePacket
+		modified._internal = {
 			segment,
 			track,
 			sourcePacket: packet,
-		});
+		} satisfies PacketInfo;
 
-		return res.set(modified);
+		const result = new PacketRetrievalResult(modified);
+		result.provisional = provisional;
+
+		return res.set(result);
 	}
 
 	async getFirstPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
 		if (!this.firstInputTrack) {
@@ -475,8 +488,8 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 
 		let currentTrack: InputTrack | null = this.firstInputTrack;
 		let currentSegment: Segment | null = this.firstSegment;
-		const packetResult = new ResultValue<EncodedPacket | null>();
-		const segmentResult = new ResultValue<Segment | null>();
+		const packetResult = new ResultValue<PacketRetrievalResult>();
+		const segmentResult = new ResultValue<SegmentRetrievalResult>();
 
 		// Loop until we found a segment with a packet (segments may contain zero packets in rare cases)
 		while (true) {
@@ -485,9 +498,9 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 				const promise = currentTrack._backing.getFirstPacket(packetResult, options);
 				if (packetResult.pending) await promise;
 
-				const packet = packetResult.value;
+				const packet = packetResult.value.packet;
 				if (packet) {
-					return this.createAdjustedPacket(res, packet, currentSegment, currentTrack);
+					return this.createAdjustedPacket(res, packet, currentSegment, currentTrack, false);
 				}
 			}
 
@@ -497,7 +510,7 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 			});
 			if (segmentResult.pending) await segmentPromise;
 
-			currentSegment = segmentResult.value;
+			currentSegment = segmentResult.value.segment;
 			if (!currentSegment) {
 				break;
 			}
@@ -511,11 +524,14 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 			)) ?? null;
 		}
 
-		return res.set(null);
+		const result = new PacketRetrievalResult(null);
+		result.provisional = segmentResult.value.provisional;
+
+		return res.set(result);
 	}
 
 	getNextPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
@@ -523,7 +539,7 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 	}
 
 	getNextKeyPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
@@ -531,30 +547,30 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 	}
 
 	async _getNextInternal(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
 		keyframesOnly: boolean,
 	): MaybeRelevantPromise {
-		const info = this.packetInfos.get(packet);
+		const info = packet._internal as PacketInfo | undefined;
 		if (!info) {
 			throw new Error('Packet was not created from this track.');
 		}
 
-		const packetResult = new ResultValue<EncodedPacket | null>();
+		const packetResult = new ResultValue<PacketRetrievalResult>();
 		const promise = keyframesOnly
 			? info.track._backing.getNextKeyPacket(packetResult, info.sourcePacket, options)
 			: info.track._backing.getNextPacket(packetResult, info.sourcePacket, options);
 		if (packetResult.pending) await promise;
 
-		const nextPacket = packetResult.value;
+		const nextPacket = packetResult.value.packet;
 
 		if (nextPacket) {
-			return this.createAdjustedPacket(res, nextPacket, info.segment, info.track);
+			return this.createAdjustedPacket(res, nextPacket, info.segment, info.track, false);
 		}
 
 		let currentSegment: Segment | null = info.segment;
-		const segmentResult = new ResultValue<Segment | null>();
+		const segmentResult = new ResultValue<SegmentRetrievalResult>();
 
 		while (true) {
 			segmentResult.reset();
@@ -563,9 +579,12 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 			});
 			if (segmentResult.pending) await segmentPromise;
 
-			const nextSegment = segmentResult.value;
+			const nextSegment = segmentResult.value.segment;
 			if (!nextSegment) {
-				return res.set(null);
+				const result = new PacketRetrievalResult(null);
+				result.provisional = segmentResult.value.provisional;
+
+				return res.set(result);
 			}
 
 			const nextInput = this.segmentedInput.getInputForSegment(nextSegment);
@@ -583,18 +602,18 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 			const promise = nextTrack._backing.getFirstPacket(packetResult, options);
 			if (packetResult.pending) await promise;
 
-			const firstPacket = packetResult.value;
+			const firstPacket = packetResult.value.packet;
 
 			if (!firstPacket) {
-				return res.set(null);
+				return res.set(new PacketRetrievalResult(null));
 			}
 
-			return this.createAdjustedPacket(res, firstPacket, nextSegment, nextTrack);
+			return this.createAdjustedPacket(res, firstPacket, nextSegment, nextTrack, false);
 		}
 	}
 
 	getPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
@@ -602,7 +621,7 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 	}
 
 	getKeyPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
@@ -610,27 +629,33 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 	}
 
 	async _getPacketInternal(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
 		keyframesOnly: boolean,
 	): MaybeRelevantPromise {
-		const segmentResult = new ResultValue<Segment | null>();
+		const segmentResult = new ResultValue<SegmentRetrievalResult>();
 		const segmentPromise = this.segmentedInput.getSegmentAt(segmentResult, timestamp, {
 			skipLiveWait: options.skipLiveWait,
 		});
 		if (segmentResult.pending) await segmentPromise;
 
-		let currentSegment = segmentResult.value;
+		// If the segment lookup is provisional, then so is anything we derive from it
+		const provisional = segmentResult.value.provisional;
+
+		let currentSegment = segmentResult.value.segment;
 		if (!currentSegment) {
-			return res.set(null);
+			const result = new PacketRetrievalResult(null);
+			result.provisional = provisional;
+
+			return res.set(result);
 		}
 
 		if (!this.firstInputTrack) {
 			await this.hydrate();
 		}
 
-		const packetResult = new ResultValue<EncodedPacket | null>();
+		const packetResult = new ResultValue<PacketRetrievalResult>();
 		const mediaOffsetResult = new ResultValue<number>();
 
 		while (currentSegment) {
@@ -650,7 +675,7 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 				});
 				if (segmentResult.pending) await prevSegmentPromise;
 
-				currentSegment = segmentResult.value;
+				currentSegment = segmentResult.value.segment;
 				continue;
 			}
 
@@ -666,7 +691,7 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 				: track._backing.getPacket(packetResult, offsetTimestamp, options);
 			if (packetResult.pending) await packetPromise;
 
-			const packet = packetResult.value;
+			const packet = packetResult.value.packet;
 			if (!packet) {
 				// Search the previous segment
 				segmentResult.reset();
@@ -675,14 +700,17 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 				});
 				if (segmentResult.pending) await prevSegmentPromise;
 
-				currentSegment = segmentResult.value;
+				currentSegment = segmentResult.value.segment;
 				continue;
 			}
 
-			return this.createAdjustedPacket(res, packet, currentSegment, track);
+			return this.createAdjustedPacket(res, packet, currentSegment, track, provisional);
 		}
 
-		return res.set(null);
+		const result = new PacketRetrievalResult(null);
+		result.provisional = provisional;
+
+		return res.set(result);
 	}
 }
 

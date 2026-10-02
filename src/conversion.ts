@@ -1626,7 +1626,7 @@ export class Conversion {
 			videoSource = source;
 
 			this._registerTrackPump(async (pump) => {
-				const cursor = new PacketCursor(track, { verifyKeyPackets: true });
+				const cursor = new PacketCursor(track, { options: { verifyKeyPackets: true } });
 				const reader = new PacketReader(track);
 				const decoderConfig = await track.getDecoderConfig();
 				const meta: EncodedVideoChunkMetadata = { decoderConfig: decoderConfig ?? undefined };

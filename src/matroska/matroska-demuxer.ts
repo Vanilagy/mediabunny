@@ -63,7 +63,13 @@ import {
 	TRANSFER_CHARACTERISTICS_MAP_INVERSE,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
-import { EncodedPacket, EncodedPacketSideData, PacketRetrievalOptions, PLACEHOLDER_DATA } from '../packet';
+import {
+	EncodedPacket,
+	EncodedPacketSideData,
+	PacketRetrievalOptions,
+	PacketRetrievalResult,
+	PLACEHOLDER_DATA,
+} from '../packet';
 import {
 	assertDefinedSize,
 	CODEC_STRING_MAP,
@@ -2114,7 +2120,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 	}
 
 	async getFirstPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
 		return this.performClusterLookup(
@@ -2148,7 +2154,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 	}
 
 	async getPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
@@ -2181,7 +2187,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 	}
 
 	async getNextPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
@@ -2230,7 +2236,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 	}
 
 	async getKeyPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
@@ -2262,7 +2268,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 	}
 
 	async getNextKeyPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
@@ -2392,7 +2398,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 
 	/** Looks for a packet in the clusters while trying to load as few clusters as possible to retrieve it. */
 	private async performClusterLookup(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		// The position where we'll start the lookup
 		startOffset: number | null,
 		// This function returns the best-matching block in a given cluster
@@ -2415,7 +2421,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 			const { blockIndex, correctBlockFound } = getMatchInCluster(startCluster);
 
 			if (correctBlockFound) {
-				return res.set(this.fetchPacketInCluster(startCluster, blockIndex, options));
+				return res.set(new PacketRetrievalResult(this.fetchPacketInCluster(startCluster, blockIndex, options)));
 			}
 
 			currentPos = startCluster.elementEndPos; // Start reading from the next cluster
@@ -2517,7 +2523,9 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 
 				const { blockIndex, correctBlockFound } = getMatchInCluster(currentCluster);
 				if (correctBlockFound) {
-					return res.set(this.fetchPacketInCluster(currentCluster, blockIndex, options));
+					return res.set(
+						new PacketRetrievalResult(this.fetchPacketInCluster(currentCluster, blockIndex, options)),
+					);
 				}
 
 				if (blockIndex !== -1) {
@@ -2578,10 +2586,10 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 
 		if (bestCluster) {
 			// If we finished looping but didn't find a perfect match, still return the best match we found
-			return res.set(this.fetchPacketInCluster(bestCluster, bestBlockIndex, options));
+			return res.set(new PacketRetrievalResult(this.fetchPacketInCluster(bestCluster, bestBlockIndex, options)));
 		}
 
-		return res.set(null);
+		return res.set(new PacketRetrievalResult(null));
 	}
 }
 
@@ -2669,11 +2677,11 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 					|| (this.internalTrack.info.codec === 'hevc' && !this.internalTrack.info.codecDescription);
 
 			if (needsPacketForAdditionalInfo) {
-				const result = new ResultValue<EncodedPacket | null>();
+				const result = new ResultValue<PacketRetrievalResult>();
 				const promise = this.getFirstPacket(result, {});
 				if (result.pending) await promise;
 
-				firstPacket = result.value;
+				firstPacket = result.value.packet;
 			}
 
 			const codecInfo = {
@@ -2764,11 +2772,11 @@ class MatroskaAudioTrackBacking extends MatroskaTrackBacking implements InputAud
 		return this.decoderConfigPromise ??= (async (): Promise<AudioDecoderConfig> => {
 			if (this.internalTrack.info.codec === 'dts' && !this.internalTrack.info.dtsFormat) {
 				// Gotta check the packet to determine the DTS variant
-				const result = new ResultValue<EncodedPacket | null>();
+				const result = new ResultValue<PacketRetrievalResult>();
 				const promise = this.getFirstPacket(result, {});
 				if (result.pending) await promise;
 
-				const firstPacket = result.value;
+				const firstPacket = result.value.packet;
 				this.internalTrack.info.dtsFormat = firstPacket && extractDtsFourCcFromPacket(firstPacket.data);
 			}
 

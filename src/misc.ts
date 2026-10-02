@@ -794,6 +794,37 @@ export const floorToDivisor = (value: number, multiple: number) => {
 	return Math.floor(value * multiple) / multiple;
 };
 
+const nextDownView = /* #__PURE__ */ new DataView(new ArrayBuffer(8));
+
+/** Returns the largest number smaller than the given number. */
+export const nextDown = (value: number) => {
+	if (value === 0) {
+		return -Number.MIN_VALUE;
+	}
+
+	nextDownView.setFloat64(0, value);
+	const high = nextDownView.getUint32(0);
+	const low = nextDownView.getUint32(4);
+
+	if (value > 0) {
+		if (low === 0) {
+			nextDownView.setUint32(0, high - 1);
+			nextDownView.setUint32(4, 0xffffffff);
+		} else {
+			nextDownView.setUint32(4, low - 1);
+		}
+	} else {
+		if (low === 0xffffffff) {
+			nextDownView.setUint32(0, high + 1);
+			nextDownView.setUint32(4, 0);
+		} else {
+			nextDownView.setUint32(4, low + 1);
+		}
+	}
+
+	return nextDownView.getFloat64(0);
+};
+
 export const ilog = (x: number) => {
 	let ret = 0;
 	while (x) {

@@ -25,7 +25,7 @@ import {
 	toDataView,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
-import { EncodedPacket, PacketRetrievalOptions, PLACEHOLDER_DATA } from '../packet';
+import { EncodedPacket, PacketRetrievalOptions, PacketRetrievalResult, PLACEHOLDER_DATA } from '../packet';
 import { readBytes, Reader } from '../reader';
 import { buildOggMimeType, computeOggPageCrc, extractSampleMetadata, OggCodecInfo } from './ogg-misc';
 import {
@@ -595,7 +595,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 	}
 
 	async getFirstPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
 		assert(this.bitstream.lastMetadataPacket);
@@ -607,7 +607,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		const packetPosition = positionResult.value;
 
 		if (!packetPosition) {
-			return res.set(null);
+			return res.set(new PacketRetrievalResult(null));
 		}
 
 		let timestampInSamples = 0;
@@ -620,18 +620,18 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		promise = this.demuxer.readPacket(packetResult, packetPosition.startPage, packetPosition.startSegmentIndex);
 		if (packetResult.pending) await promise;
 
-		return res.set(this.createEncodedPacketFromOggPacket(
+		return res.set(new PacketRetrievalResult(this.createEncodedPacketFromOggPacket(
 			packetResult.value,
 			{
 				timestampInSamples,
 				vorbisLastBlocksize: null,
 			},
 			options,
-		));
+		)));
 	}
 
 	async getNextPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		prevPacket: EncodedPacket,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
@@ -646,7 +646,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 
 		const packetPosition = positionResult.value;
 		if (!packetPosition) {
-			return res.set(null);
+			return res.set(new PacketRetrievalResult(null));
 		}
 
 		const timestampInSamples = prevMetadata.timestampInSamples + prevMetadata.durationInSamples;
@@ -655,18 +655,18 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		promise = this.demuxer.readPacket(packetResult, packetPosition.startPage, packetPosition.startSegmentIndex);
 		if (packetResult.pending) await promise;
 
-		return res.set(this.createEncodedPacketFromOggPacket(
+		return res.set(new PacketRetrievalResult(this.createEncodedPacketFromOggPacket(
 			packetResult.value,
 			{
 				timestampInSamples,
 				vorbisLastBlocksize: prevMetadata.vorbisBlockSize,
 			},
 			options,
-		));
+		)));
 	}
 
 	async getPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
@@ -682,7 +682,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		}
 		if (timestampInSamples < 0) {
 			// There's nothing here
-			return res.set(null);
+			return res.set(new PacketRetrievalResult(null));
 		}
 
 		assert(this.bitstream.lastMetadataPacket);
@@ -693,7 +693,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 
 		const startPosition = positionResult.value;
 		if (!startPosition) {
-			return res.set(null);
+			return res.set(new PacketRetrievalResult(null));
 		}
 
 		let lowPage = startPosition.startPage;
@@ -1020,12 +1020,12 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 			currentSegmentIndex = nextPosition.startSegmentIndex;
 		}
 
-		return res.set(lastEncodedPacket);
+		return res.set(new PacketRetrievalResult(lastEncodedPacket));
 	}
 
 	// A slower but simpler and sequential algorithm for finding a packet in a file
 	async getPacketSequential(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
@@ -1041,7 +1041,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 			x => x.timestampInSamples,
 		);
 
-		const result = new ResultValue<EncodedPacket | null>();
+		const result = new ResultValue<PacketRetrievalResult>();
 		let currentPacket: EncodedPacket | null;
 
 		if (index !== -1) {
@@ -1059,7 +1059,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 			const promise = this.getFirstPacket(result, options);
 			if (result.pending) await promise;
 
-			currentPacket = result.value;
+			currentPacket = result.value.packet;
 		}
 
 		let i = 0;
@@ -1069,7 +1069,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 			const promise = this.getNextPacket(result, currentPacket, options);
 			if (result.pending) await promise;
 
-			const nextPacket = result.value;
+			const nextPacket = result.value.packet;
 			if (!nextPacket || nextPacket.timestamp > timestamp) {
 				break;
 			}
@@ -1092,15 +1092,15 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 			}
 		}
 
-		return res.set(currentPacket);
+		return res.set(new PacketRetrievalResult(currentPacket));
 	}
 
-	getKeyPacket(res: ResultValue<EncodedPacket | null>, timestamp: number, options: PacketRetrievalOptions) {
+	getKeyPacket(res: ResultValue<PacketRetrievalResult>, timestamp: number, options: PacketRetrievalOptions) {
 		// Correct since only audio codecs are supported
 		return this.getPacket(res, timestamp, options);
 	}
 
-	getNextKeyPacket(res: ResultValue<EncodedPacket | null>, packet: EncodedPacket, options: PacketRetrievalOptions) {
+	getNextKeyPacket(res: ResultValue<PacketRetrievalResult>, packet: EncodedPacket, options: PacketRetrievalOptions) {
 		// Correct since only audio codecs are supported
 		return this.getNextPacket(res, packet, options);
 	}

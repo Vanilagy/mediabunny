@@ -147,7 +147,7 @@ const getSortedTrackTicks = async (filePath: string) => {
 	assert(videoTrack);
 
 	const timeResolution = await videoTrack.getTimeResolution();
-	const cursor = new PacketCursor(videoTrack, { metadataOnly: true });
+	const cursor = new PacketCursor(videoTrack, { options: { metadataOnly: true } });
 	const ticks: number[] = [];
 
 	for await (const packet of cursor) {

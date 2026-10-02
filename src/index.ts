@@ -265,7 +265,9 @@ export {
 	EncodedPacket,
 	type EncodedPacketSideData,
 	type PacketType,
+	PacketCache,
 	PacketReader,
+	type PacketReaderOptions,
 } from './packet';
 export {
 	AudioSample,
@@ -286,6 +288,7 @@ export {
 } from './sample';
 export {
 	PacketCursor,
+	type PacketCursorConfig,
 	SampleCursor,
 	VideoSampleCursor,
 	AudioSampleCursor,

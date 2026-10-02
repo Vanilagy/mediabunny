@@ -40,7 +40,7 @@ import {
 	SourceRequest,
 	sourceRequestsAreEqual,
 } from './source';
-import { EncodedPacket, PacketRetrievalOptions } from './packet';
+import { PacketRetrievalOptions, PacketRetrievalResult } from './packet';
 
 polyfillSymbolDispose();
 
@@ -343,11 +343,11 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 
 		// Only count the timestamps of tracks that have at least one packet
 		const firstPackets = await Promise.all(filtered.map(async (x) => {
-			const result = new ResultValue<EncodedPacket | null>();
+			const result = new ResultValue<PacketRetrievalResult>();
 			const promise = x._backing.getFirstPacket(result, { metadataOnly: true });
 			if (result.pending) await promise;
 
-			return result.value;
+			return result.value.packet;
 		}));
 		const result = Math.min(...firstPackets.map(x => x?.timestamp ?? Infinity));
 

@@ -29,6 +29,7 @@ import {
 } from './misc';
 import {
 	EncodedPacket,
+	PacketCache,
 	PacketReader,
 	PacketRetrievalOptions,
 	validatePacketRetrievalOptions,
@@ -37,6 +38,11 @@ import {
 import { AudioSample, clampCropRectangle, CropRectangle, validateCropRectangle, VideoSample } from './sample';
 
 polyfillSymbolDispose();
+
+export type PacketCursorConfig = {
+	options?: PacketRetrievalOptions;
+	cache?: PacketCache;
+};
 
 export class PacketCursor<T extends InputTrack = InputTrack> {
 	track: T;
@@ -47,15 +53,23 @@ export class PacketCursor<T extends InputTrack = InputTrack> {
 	private _nextIsFirst = true;
 	private _callSerializer = new ForgivingCallSerializer();
 
-	constructor(track: T, options: PacketRetrievalOptions = {}) {
+	constructor(track: T, config: PacketCursorConfig = {}) {
 		if (!(track instanceof InputTrack)) {
 			throw new TypeError('track must be an InputTrack.');
 		}
-		validatePacketRetrievalOptions(options);
+		if (typeof config !== 'object' || config === null) {
+			throw new TypeError('config must be an object.');
+		}
+		if (config.options !== undefined) {
+			validatePacketRetrievalOptions(config.options, 'config.options');
+		}
+		if (config.cache !== undefined && !(config.cache instanceof PacketCache)) {
+			throw new TypeError('config.cache, when provided, must be a PacketCache.');
+		}
 
 		this.track = track;
-		this._reader = new PacketReader(track);
-		this._options = options;
+		this._reader = new PacketReader(track, { cache: config.cache });
+		this._options = config.options ?? {};
 	}
 
 	private _seekToFirstDirect(): MaybePromise<EncodedPacket | null> {
@@ -251,6 +265,7 @@ export type SampleCursorOptions<Sample, TransformedSample> = {
 	closeSamples?: boolean;
 	transform?: SampleTransformer<Sample, TransformedSample>;
 	skipLiveWait?: boolean;
+	cache?: PacketCache;
 };
 
 const validateSampleCursorOptions = <Sample, TransformedSample>(
@@ -267,6 +282,9 @@ const validateSampleCursorOptions = <Sample, TransformedSample>(
 	}
 	if (options.skipLiveWait !== undefined && typeof options.skipLiveWait !== 'boolean') {
 		throw new TypeError('options.skipLiveWait, when provided, must be a boolean.');
+	}
+	if (options.cache !== undefined && !(options.cache instanceof PacketCache)) {
+		throw new TypeError('options.cache, when provided, must be a PacketCache.');
 	}
 };
 
@@ -350,8 +368,8 @@ export abstract class SampleCursor<
 	) {
 		this.track = track;
 		this._retrievalOptions = { skipLiveWait: options.skipLiveWait };
-		this._packetReader = new PacketReader(track);
-		this._packetCursor = new PacketCursor(track, this._retrievalOptions);
+		this._packetReader = new PacketReader(track, { cache: options.cache });
+		this._packetCursor = new PacketCursor(track, { options: this._retrievalOptions, cache: options.cache });
 		this._closeSamples = options.closeSamples ?? true;
 		this._transform = options.transform ?? (sample => sample as unknown as TransformedSample);
 

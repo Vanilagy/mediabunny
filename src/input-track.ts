@@ -26,7 +26,7 @@ import {
 	TransformationMatrix,
 } from './misc';
 import { TrackType } from './output';
-import { EncodedPacket, PacketRetrievalOptions, PacketType } from './packet';
+import { EncodedPacket, PacketRetrievalOptions, PacketRetrievalResult, PacketType } from './packet';
 import { TrackDisposition } from './metadata';
 import { PacketCursor } from './cursors';
 import { DurationMetadataRequestOptions } from './demuxer';
@@ -137,26 +137,26 @@ export interface InputTrackBacking {
 	getMetadataCodecParameterString?(): MaybePromise<string | null>;
 
 	getFirstPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise;
 	getNextPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise;
 	getPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise;
 	getKeyPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise;
 	getNextKeyPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise;
@@ -363,9 +363,9 @@ export abstract class InputTrack {
 	 * with a negative timestamp should not be presented.
 	 */
 	async getFirstTimestamp() {
-		const resultValue = new ResultValue<EncodedPacket>();
+		const resultValue = new ResultValue<PacketRetrievalResult>();
 		await this._backing.getFirstPacket(resultValue, { metadataOnly: true });
-		const firstPacket = resultValue.value;
+		const firstPacket = resultValue.value.packet;
 		return firstPacket?.timestamp ?? 0;
 	}
 
@@ -377,9 +377,9 @@ export abstract class InputTrack {
 	 * in the options.
 	 */
 	async computeDuration(options?: PacketRetrievalOptions) {
-		const resultValue = new ResultValue<EncodedPacket>();
+		const resultValue = new ResultValue<PacketRetrievalResult>();
 		await this._backing.getPacket(resultValue, Infinity, { metadataOnly: true, ...options });
-		const lastPacket = resultValue.value;
+		const lastPacket = resultValue.value.packet;
 		const result = (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
 
 		return roundToDivisor(result, await this.getTimeResolution());
@@ -412,7 +412,7 @@ export abstract class InputTrack {
 	 * {@link PacketRetrievalOptions.skipLiveWait} to `true` in the options.
 	 */
 	async computePacketStats(targetPacketCount = Infinity, options?: PacketRetrievalOptions): Promise<PacketStats> {
-		const cursor = new PacketCursor(this, { ...options, metadataOnly: true });
+		const cursor = new PacketCursor(this, { options: { ...options, metadataOnly: true } });
 
 		let startTimestamp = Infinity;
 		let endTimestamp = -Infinity;
@@ -939,7 +939,7 @@ export class InputVideoTrack extends InputTrack {
 		const timeResolution = await this.getTimeResolution();
 		const targetPacketCount = options.targetPacketCount ?? 256;
 
-		const cursor = new PacketCursor(this, { metadataOnly: true });
+		const cursor = new PacketCursor(this, { options: { metadataOnly: true } });
 		const timestamps: number[] = [];
 		let maxTimestamp = -Infinity;
 

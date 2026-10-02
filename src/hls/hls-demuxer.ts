@@ -25,7 +25,7 @@ import {
 	TransformationMatrix,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
-import { EncodedPacket, PacketRetrievalOptions } from '../packet';
+import { EncodedPacket, PacketRetrievalOptions, PacketRetrievalResult } from '../packet';
 import { readAllLines } from '../reader';
 import {
 	AttributeList,
@@ -754,7 +754,7 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 	}
 
 	async getFirstPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
 		if (!this.internalTrack.backingTrack) {
@@ -764,7 +764,7 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 	}
 
 	async getPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
@@ -775,7 +775,7 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 	}
 
 	async getKeyPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
@@ -786,7 +786,7 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 	}
 
 	async getNextPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
@@ -797,7 +797,7 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 	}
 
 	async getNextKeyPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {

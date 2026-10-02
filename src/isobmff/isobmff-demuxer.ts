@@ -80,7 +80,7 @@ import {
 	EMPTY_COLOR_SPACE,
 	colorSpaceIsComplete,
 } from '../misc';
-import { EncodedPacket, PacketRetrievalOptions, PLACEHOLDER_DATA } from '../packet';
+import { EncodedPacket, PacketRetrievalOptions, PacketRetrievalResult, PLACEHOLDER_DATA } from '../packet';
 import { buildIsobmffMimeType, parsePsshBoxContents, psshBoxesAreEqual, PsshBox } from './isobmff-misc';
 import {
 	MAX_BOX_HEADER_SIZE,
@@ -2939,9 +2939,9 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 
 		assert(track.trackBacking);
 
-		const result = new ResultValue<EncodedPacket | null>();
+		const result = new ResultValue<PacketRetrievalResult>();
 		await track.trackBacking.getFirstPacket(result, { metadataOnly: true });
-		const firstPacket = result.value;
+		const firstPacket = result.value.packet;
 		return (firstPacket?.timestamp ?? 0) + track.durationInMediaTimescale / track.timescale;
 	}
 
@@ -2950,14 +2950,14 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 	}
 
 	async getFirstPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
-		const result = new ResultValue<EncodedPacket | null>();
+		const result = new ResultValue<PacketRetrievalResult>();
 		const promise = this.fetchPacketForSampleIndex(result, 0, options);
 		if (result.pending) await promise;
 
-		if (result.value || !this.internalTrack.demuxer.isFragmented) {
+		if (result.value.packet || !this.internalTrack.demuxer.isFragmented) {
 			// If there's a non-fragmented packet, always prefer that
 			return res.set(result.value);
 		}
@@ -2993,7 +2993,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 	}
 
 	async getPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
@@ -3033,7 +3033,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 	}
 
 	async getNextPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
@@ -3087,7 +3087,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 	}
 
 	async getKeyPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		timestamp: number,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
@@ -3126,7 +3126,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 	}
 
 	async getNextKeyPacket(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		packet: EncodedPacket,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
@@ -3189,18 +3189,18 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 	}
 
 	private async fetchPacketForSampleIndex(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		sampleIndex: number,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
 		if (sampleIndex === -1) {
-			return res.set(null);
+			return res.set(new PacketRetrievalResult(null));
 		}
 
 		const sampleTable = this.internalTrack.demuxer.getSampleTableForTrack(this.internalTrack);
 		const sampleInfo = getSampleInfo(sampleTable, sampleIndex);
 		if (!sampleInfo) {
-			return res.set(null);
+			return res.set(new PacketRetrievalResult(null));
 		}
 
 		let data: Uint8Array;
@@ -3213,7 +3213,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			);
 			if (isThenable(slice)) slice = await slice;
 			if (!slice) {
-				return res.set(null); // Data is outside
+				return res.set(new PacketRetrievalResult(null)); // Data is outside
 			}
 
 			data = readBytes(slice, sampleInfo.sampleSize);
@@ -3252,17 +3252,17 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			sampleInfo.sampleSize,
 		);
 
-		return res.set(packet);
+		return res.set(new PacketRetrievalResult(packet));
 	}
 
 	private async fetchPacketInFragment(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		fragment: Fragment,
 		sampleIndex: number,
 		options: PacketRetrievalOptions,
 	): MaybeRelevantPromise {
 		if (sampleIndex === -1) {
-			return res.set(null);
+			return res.set(new PacketRetrievalResult(null));
 		}
 
 		const trackData = fragment.trackData.get(this.internalTrack.id)!;
@@ -3279,7 +3279,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			);
 			if (isThenable(slice)) slice = await slice;
 			if (!slice) {
-				return res.set(null); // Data is outside
+				return res.set(new PacketRetrievalResult(null)); // Data is outside
 			}
 
 			data = readBytes(slice, fragmentSample.byteSize);
@@ -3307,12 +3307,12 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 
 		packet._internal = fragment.moofOffset;
 
-		return res.set(packet);
+		return res.set(new PacketRetrievalResult(packet));
 	}
 
 	/** Looks for a packet in the fragments while trying to load as few fragments as possible to retrieve it. */
 	private async performFragmentedLookup(
-		res: ResultValue<EncodedPacket | null>,
+		res: ResultValue<PacketRetrievalResult>,
 		// The position where we'll start the lookup
 		startOffset: number | null,
 		// This function returns the best-matching sample in a given fragment
@@ -3441,7 +3441,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			return this.fetchPacketInFragment(res, bestFragment, bestSampleIndex, options);
 		}
 
-		return res.set(null);
+		return res.set(new PacketRetrievalResult(null));
 	}
 }
 
@@ -3509,11 +3509,11 @@ class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideo
 
 		return this.decoderConfigPromise ??= (async (): Promise<VideoDecoderConfig> => {
 			const getFirstPacket = async () => {
-				const result = new ResultValue<EncodedPacket | null>();
+				const result = new ResultValue<PacketRetrievalResult>();
 				const promise = this.getFirstPacket(result, {});
 				if (result.pending) await promise;
 
-				return result.value;
+				return result.value.packet;
 			};
 
 			if (this.internalTrack.info.codec === 'avc' && !this.internalTrack.info.codecDescription) {
@@ -3629,11 +3629,11 @@ class IsobmffAudioTrackBacking extends IsobmffTrackBacking implements InputAudio
 		return this.decoderConfigPromise ??= (async (): Promise<AudioDecoderConfig> => {
 			if (this.internalTrack.info.codec === 'dts' && !this.internalTrack.info.dtsFormat) {
 				// Gotta check the packet to determine the DTS variant
-				const result = new ResultValue<EncodedPacket | null>();
+				const result = new ResultValue<PacketRetrievalResult>();
 				const promise = this.getFirstPacket(result, {});
 				if (result.pending) await promise;
 
-				const firstPacket = result.value;
+				const firstPacket = result.value.packet;
 				this.internalTrack.info.dtsFormat = firstPacket && extractDtsFourCcFromPacket(firstPacket.data);
 			}
 
