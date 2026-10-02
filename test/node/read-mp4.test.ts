@@ -182,3 +182,23 @@ test('HE-AAC v2 audio config is parsed correctly', async () => {
 	expect(decoderConfig.numberOfChannels).toBe(2);
 	expect([...toUint8Array(decoderConfig.description!)]).toEqual([0xeb, 0x8a, 0x08, 0x00]);
 });
+
+test('Should read the pixel aspect ratio from the SPS when there is no pasp box', async () => {
+	// Both files are 64x64 with SAR 9:16 signalled only in the SPS VUI (the pasp box was stripped)
+	for (const fileName of ['sps-only-sar-h264.mp4', 'sps-only-sar-hevc.mp4']) {
+		using input = new Input({
+			source: new FilePathSource(path.join(__dirname, '..', 'public', fileName)),
+			formats: ALL_FORMATS,
+		});
+
+		const track = await input.getPrimaryVideoTrack();
+		assert(track);
+
+		expect(await track.getCodedWidth()).toBe(64);
+		expect(await track.getCodedHeight()).toBe(64);
+		expect(await track.getSquarePixelWidth()).toBe(64);
+		expect(await track.getSquarePixelHeight()).toBe(114);
+		expect(await track.getDisplayWidth()).toBe(64);
+		expect(await track.getDisplayHeight()).toBe(114);
+	}
+});
