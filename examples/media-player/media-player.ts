@@ -47,6 +47,8 @@ const warningElement = document.querySelector('#warning-element') as HTMLDivElem
 
 const context = canvas.getContext('2d')!;
 
+const isFirefox = navigator.userAgent.includes('Firefox');
+
 let audioContext: AudioContext | null = null;
 let gainNode: GainNode | null = null;
 
@@ -199,6 +201,9 @@ const initMediaPlayer = async (resource: File | string) => {
 			poolSize: 2,
 			fit: 'contain', // In case the video changes dimensions over time
 			alpha: videoCanBeTransparent,
+			// Firefox is slow to draw hardware-decoded frames onto a canvas (about 30 ms per 1080p frame), which makes
+			// playback stutter and the audio drop out. Software-decoded frames draw much faster there, so prefer them.
+			decoderOptions: isFirefox ? { hardwareAcceleration: 'prefer-software' } : undefined,
 		});
 		// For audio, we'll use an AudioBufferSink to directly retrieve AudioBuffers compatible with the Web Audio API
 		audioSink = audioTrack && new AudioBufferSink(audioTrack);
