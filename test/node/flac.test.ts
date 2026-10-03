@@ -11,6 +11,7 @@ import { Output } from '../../src/output.js';
 import { BufferTarget } from '../../src/target.js';
 import { FlacOutputFormat } from '../../src/output-format.js';
 import { Conversion } from '../../src/conversion.js';
+import { VERSIONED_NAME } from '../../src/version.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
@@ -207,7 +208,7 @@ test('can re-mux a .flac', async () => {
 		raw: {
 			...otherInputMetadataTags.raw,
 			DATE: '2020-01-01',
-			vendor: 'Mediabunny',
+			vendor: VERSIONED_NAME,
 		},
 		images: inputImages,
 	});

@@ -17,6 +17,7 @@ import { Input } from '../../src/input.js';
 import { BufferSource, FilePathSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { AttachedFile, MetadataTags } from '../../src/metadata.js';
+import { VERSIONED_NAME } from '../../src/version.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AudioCodec, buildAudioCodecString } from '../../src/codec.js';
@@ -445,7 +446,7 @@ test('Read and write metadata, Ogg', async () => {
 	expect(readTags.images![0]!.description).toEqual(songMetadata.images![0]!.description);
 	expect(readTags.images![0]!.name).toBeUndefined(); // Can't be contained in Vorbis-style metadata
 
-	expect(readTags.raw!['vendor']).toBe('Mediabunny');
+	expect(readTags.raw!['vendor']).toBe(VERSIONED_NAME);
 	expect(readTags.raw!['COMPOSER']).toBe('Hans Zimmer');
 });
 
@@ -496,7 +497,7 @@ test('Read and write metadata, FLAC', async () => {
 	expect(readTags.images![0]!.description).toEqual(songMetadata.images![0]!.description);
 	expect(readTags.images![0]!.name).toBeUndefined(); // Can't be contained in Vorbis-style metadata
 
-	expect(readTags.raw!['vendor']).toBe('Mediabunny');
+	expect(readTags.raw!['vendor']).toBe(VERSIONED_NAME);
 	expect(readTags.raw!['COMPOSER']).toBe('Hans Zimmer');
 });
 

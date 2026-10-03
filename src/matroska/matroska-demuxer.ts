@@ -2019,27 +2019,14 @@ export class MatroskaDemuxer extends Demuxer {
 		}
 	}
 
-	async getDurationFromMetadata(segment: Segment) {
+	getDurationFromMetadata(segment: Segment) {
 		if (segment.duration <= 0) {
 			return null;
 		}
 
-		// The kosher definition of the Duration field is "latest end time - earliest start time" across all tracks in
-		// the segment; since we currently mean "end timestamp" with "duration", we need to determine the earliest
-		// start time before we can return a value here.
-		let minTimestamp: number | null = null;
-		for (const track of segment.tracks) {
-			assert(track.trackBacking);
-			const firstPacket = await track.trackBacking.getFirstPacket({ metadataOnly: true });
-			if (firstPacket) {
-				minTimestamp = Math.min(minTimestamp ?? Infinity, firstPacket.timestamp);
-			}
-		}
-
-		let endTimestamp = segment.duration / segment.timestampFactor;
-		endTimestamp += minTimestamp ?? 0;
-
-		return endTimestamp;
+		// We treat the Duration field as the end timestamp of the segment, since this is what FFmpeg treats it as.
+		// The spec unfortunately does not clarify what it means by duration here.
+		return segment.duration / segment.timestampFactor;
 	}
 }
 

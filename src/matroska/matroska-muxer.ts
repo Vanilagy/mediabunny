@@ -75,10 +75,10 @@ import { EncodedPacket } from '../packet';
 import { parseOpusIdentificationHeader } from '../codec-data';
 import { AttachedFile } from '../metadata';
 import { Logging } from '../logging';
+import { VERSIONED_NAME } from '../version';
 
 const MIN_CLUSTER_TIMESTAMP_MS = -(2 ** 15);
 const MAX_CLUSTER_TIMESTAMP_MS = 2 ** 15 - 1;
-const APP_NAME = 'Mediabunny';
 const SEGMENT_SIZE_BYTES = 6;
 const CLUSTER_SIZE_BYTES = 5;
 
@@ -103,7 +103,10 @@ type MatroskaTrackData = {
 		height: number;
 		aspectRatio: Rational | null;
 		decoderConfig: VideoDecoderConfig;
-		/** Null until the first packet comes in, which is what determines if this track has alpha or not. */
+		/**
+		 * Null until the first packet comes in, which is what determines if this track has alpha or not, unless the
+		 * track metadata already hints at transparency.
+		 */
 		alphaMode: boolean | null;
 	};
 } | {
@@ -214,7 +217,7 @@ export class MatroskaMuxer extends Muxer {
 			{ id: EBMLId.EBMLMaxIDLength, data: 4 },
 			{ id: EBMLId.EBMLMaxSizeLength, data: 8 },
 			{ id: EBMLId.DocType, data: this.format instanceof WebMOutputFormat ? 'webm' : 'matroska' },
-			{ id: EBMLId.DocTypeVersion, data: 2 },
+			{ id: EBMLId.DocTypeVersion, data: 4 },
 			{ id: EBMLId.DocTypeReadVersion, data: 2 },
 		] };
 		this.ebmlWriter.writeEBML(ebmlHeader);
@@ -240,17 +243,8 @@ export class MatroskaMuxer extends Muxer {
 		const kaxAttachments = new Uint8Array([0x19, 0x41, 0xa4, 0x69]);
 		const kaxTags = new Uint8Array([0x12, 0x54, 0xc3, 0x67]);
 
+		// Entries are ordered by their position in the file
 		const seekHead = { id: EBMLId.SeekHead, data: [
-			{ id: EBMLId.Seek, data: [
-				{ id: EBMLId.SeekID, data: kaxCues },
-				{
-					id: EBMLId.SeekPosition,
-					size: 5,
-					data: writeOffsets
-						? this.ebmlWriter.offsets.get(this.cues!)! - this.segmentDataOffset
-						: 0,
-				},
-			] },
 			{ id: EBMLId.Seek, data: [
 				{ id: EBMLId.SeekID, data: kaxInfo },
 				{
@@ -295,6 +289,16 @@ export class MatroskaMuxer extends Muxer {
 						},
 					] }
 				: null,
+			{ id: EBMLId.Seek, data: [
+				{ id: EBMLId.SeekID, data: kaxCues },
+				{
+					id: EBMLId.SeekPosition,
+					size: 5,
+					data: writeOffsets
+						? this.ebmlWriter.offsets.get(this.cues!)! - this.segmentDataOffset
+						: 0,
+				},
+			] },
 		] };
 		this.seekHead = seekHead;
 	}
@@ -305,8 +309,8 @@ export class MatroskaMuxer extends Muxer {
 
 		const segmentInfo: EBML = { id: EBMLId.Info, data: [
 			{ id: EBMLId.TimestampScale, data: 1e6 },
-			{ id: EBMLId.MuxingApp, data: APP_NAME },
-			{ id: EBMLId.WritingApp, data: APP_NAME },
+			{ id: EBMLId.MuxingApp, data: VERSIONED_NAME },
+			{ id: EBMLId.WritingApp, data: VERSIONED_NAME },
 			!this.format._options.appendOnly ? segmentDuration : null,
 		] };
 		this.segmentInfo = segmentInfo;
@@ -371,8 +375,7 @@ export class MatroskaMuxer extends Muxer {
 				trackData.codecPrivate
 					? { id: EBMLId.CodecPrivate, data: toUint8Array(trackData.codecPrivate) }
 					: null,
-				{ id: EBMLId.CodecDelay, data: 0 },
-				{ id: EBMLId.SeekPreRoll, data: seekPreRollNs },
+				seekPreRollNs > 0 ? { id: EBMLId.SeekPreRoll, data: seekPreRollNs } : null,
 				trackData.track.metadata.name !== undefined
 					? { id: EBMLId.Name, data: new EBMLUnicodeString(trackData.track.metadata.name) }
 					: null,
@@ -838,7 +841,7 @@ export class MatroskaMuxer extends Muxer {
 				height: meta.decoderConfig.codedHeight,
 				aspectRatio,
 				decoderConfig: meta.decoderConfig,
-				alphaMode: packet ? !!packet.sideData.alpha : null,
+				alphaMode: track.metadata.canBeTransparent || (packet ? !!packet.sideData.alpha : null),
 			},
 			chunkQueue: [],
 			lastWrittenMsTimestamp: null,
@@ -1441,9 +1444,7 @@ export class MatroskaMuxer extends Muxer {
 			this.ebmlWriter.writeVarInt(segmentSize, SEGMENT_SIZE_BYTES);
 
 			// Write the duration of the media to the Segment
-			const duration = this.startTimestamp === Infinity
-				? 0
-				: this.endTimestamp - this.startTimestamp;
+			const duration = this.startTimestamp === Infinity ? 0 : this.endTimestamp;
 			this.segmentDuration!.data = new EBMLFloat64(duration);
 			this.writer.seek(this.ebmlWriter.offsets.get(this.segmentDuration!)!);
 			this.ebmlWriter.writeEBML(this.segmentDuration);

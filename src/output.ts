@@ -294,6 +294,11 @@ export type VideoTrackMetadata = BaseTrackMetadata & {
 	 */
 	hasOnlyKeyPackets?: boolean;
 	/**
+	 * When `true`, this is a hint that the track may contain transparent data. Mediabunny can use this to better
+	 * prepare for writing packet alpha side data.
+	 */
+	canBeTransparent?: boolean;
+	/**
 	 * The decoder config for this video track, provided ahead of time. This is provided automatically when media data
 	 * added to the track, but by specifying it here, you give the muxer additional information that it can make use of.
 	 * Zero-packet tracks become possible to write when this field is set.
@@ -691,6 +696,12 @@ export class Output<
 			throw new TypeError(
 				`Invalid video frame rate: ${metadata.frameRate}. Must be a positive number.`,
 			);
+		}
+		if (metadata.hasOnlyKeyPackets !== undefined && typeof metadata.hasOnlyKeyPackets !== 'boolean') {
+			throw new TypeError('metadata.hasOnlyKeyPackets, when provided, must be a boolean.');
+		}
+		if (metadata.canBeTransparent !== undefined && typeof metadata.canBeTransparent !== 'boolean') {
+			throw new TypeError('metadata.canBeTransparent, when provided, must be a boolean.');
 		}
 		if (metadata.decoderConfig !== undefined) {
 			validateVideoChunkMetadata({ decoderConfig: metadata.decoderConfig }, source._codec);

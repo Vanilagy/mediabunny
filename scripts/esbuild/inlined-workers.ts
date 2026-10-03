@@ -33,7 +33,6 @@ export default async function inlineWorker(scriptText) {
 		const blob = new Blob([scriptText], { type: "text/javascript" });
 		const url = URL.createObjectURL(blob);
 		const worker = new Worker(url, { type: typeof Deno !== 'undefined' ? 'module' : undefined }); // module for Deno
-		URL.revokeObjectURL(url);
 		return worker;
 	} else {
 		// Node, Bun (Bun's Worker is flaky, worker_threads works much better)

@@ -28,6 +28,7 @@ import {
 	clamp,
 	clearIntervalUnthrottled,
 	floorToDivisor,
+	isCodecReclaimedError,
 	isThenable,
 	last,
 	missingWebCodecsClassMessage,
@@ -235,6 +236,9 @@ class VideoEncoderWrapper {
 	private ensureEncoderPromise: Promise<void> | null = null;
 	private encoderInitialized = false;
 	private encoder: VideoEncoder | null = null;
+	private encoderConfig: VideoEncoderConfig | null = null;
+	// Set when the browser closed our encoders due to inactivity; they'll be recreated on the next encode
+	private encodersReclaimed = false;
 	private muxer: Muxer | null = null;
 	private lastMultipleOfKeyFrameInterval = -1;
 	private emittedEncoderPackets = 0;
@@ -507,6 +511,10 @@ class VideoEncoderWrapper {
 
 				if (this.closed) {
 					break;
+				}
+
+				if (this.encodersReclaimed) {
+					this.recreateWebCodecsEncoders();
 				}
 
 				const keyFrameInterval = this.encodingConfig.keyFrameInterval ?? 2;
@@ -788,156 +796,8 @@ class VideoEncoderWrapper {
 
 				await this.customEncoder.init();
 			} else {
-				/** Queue of color chunks waiting for their alpha counterpart. */
-				const colorChunkQueue: {
-					chunk: EncodedVideoChunk;
-					meta: EncodedVideoChunkMetadata | undefined;
-				}[] = [];
-				/** Each value is the number of encoded alpha chunks at which a null alpha chunk should be added. */
-				const nullAlphaChunkQueue: number[] = [];
-				let encodedAlphaChunkCount = 0;
-				let alphaEncoderQueue = 0;
-
-				const addPacket = (
-					colorChunk: EncodedVideoChunk,
-					alphaChunk: EncodedVideoChunk | null,
-					meta: EncodedVideoChunkMetadata | undefined,
-				) => {
-					const sideData: EncodedPacketSideData = {};
-
-					if (alphaChunk) {
-						const alphaData = new Uint8Array(alphaChunk.byteLength);
-						alphaChunk.copyTo(alphaData);
-
-						sideData.alpha = alphaData;
-					}
-
-					let packet = EncodedPacket.fromEncodedChunk(colorChunk, sideData);
-
-					// See if there's a relevant timing entry to refine the packet's timing data
-					const preciseTimingIndex = binarySearchLessOrEqual(
-						this.preciseTimings,
-						colorChunk.timestamp,
-						x => x.microsecondTimestamp,
-					);
-					const entry = preciseTimingIndex !== -1
-						? this.preciseTimings[preciseTimingIndex]
-						: null;
-
-					let actualType: PacketType | null = null;
-					if (this.emittedEncoderPackets === 0 && packet.type === 'delta' && meta?.decoderConfig) {
-						// https://github.com/Vanilagy/mediabunny/issues/365
-						// We expect the first packet to be a key packet. If it's not, let's actually verify that it's
-						// not by getting the actual type.
-						actualType = determineVideoPacketType(
-							this.encodingConfig.codec,
-							meta.decoderConfig,
-							packet.data,
-						);
-					}
-
-					// Define the packet
-					if ((entry && entry.microsecondTimestamp === colorChunk.timestamp) || actualType !== null) {
-						packet = packet.clone({
-							timestamp: entry?.timestampIsValid ? entry.timestamp : undefined,
-							duration: entry?.durationIsValid ? entry.duration : undefined,
-							type: actualType ?? undefined,
-						});
-					}
-
-					maybeEnsureIsKeyPacket(this.source._connectedTrack!, packet);
-
-					this.encodingConfig.onEncodedPacket?.(packet, meta);
-					this.lastMuxerPromise
-						= this.muxer!.addEncodedVideoPacket(this.source._connectedTrack!, packet, meta)
-							.catch((error) => {
-								this.setError(error);
-							});
-
-					this.emittedEncoderPackets++;
-				};
-
-				const stack = new Error('Encoding error').stack;
-
-				this.encoder = new VideoEncoder({
-					output: (chunk, meta) => {
-						if (!this.alphaEncoder) {
-							// We're done
-							addPacket(chunk, null, meta);
-							return;
-						}
-
-						const alphaFrame = this.alphaFrameQueue.shift();
-						assert(alphaFrame !== undefined);
-
-						if (alphaFrame) {
-							this.alphaEncoder.encode(alphaFrame, {
-								...this.defaultEncodeOptions,
-								// Crucial: The alpha frame is forced to be a key frame whenever the color frame
-								// also is. Without this, playback can glitch and even crash in some browsers.
-								// This is the reason why the two encoders are wired in series and not in parallel.
-								keyFrame: chunk.type === 'key',
-							});
-							alphaEncoderQueue++;
-							alphaFrame.close();
-							colorChunkQueue.push({ chunk, meta });
-						} else {
-							// There was no alpha component for this frame
-							if (alphaEncoderQueue === 0) {
-								// No pending alpha encodes either, so we're done
-								addPacket(chunk, null, meta);
-							} else {
-								// There are still alpha encodes pending, so we can't add the packet immediately since
-								// we'd end up with out-of-order packets. Instead, let's queue a null alpha chunk to be
-								// added in the future, after the current encoder workload has completed:
-								nullAlphaChunkQueue.push(encodedAlphaChunkCount + alphaEncoderQueue);
-								colorChunkQueue.push({ chunk, meta });
-							}
-						}
-					},
-					error: (error) => {
-						error.stack = stack; // Provide a more useful stack trace, the default one sucks
-						this.setError(error);
-					},
-				});
-				this.encoder.configure(encoderConfig);
-
-				if (this.encodingConfig.alpha === 'keep') {
-					const stack = new Error('Encoding error').stack;
-
-					// We need to encode alpha as well, which we do with a separate encoder
-					this.alphaEncoder = new VideoEncoder({
-						// We ignore the alpha chunk's metadata
-						// eslint-disable-next-line @typescript-eslint/no-unused-vars
-						output: (chunk, meta) => {
-							alphaEncoderQueue--;
-
-							// There has to be a color chunk because the encoders are wired in series
-							const colorChunk = colorChunkQueue.shift();
-							assert(colorChunk !== undefined);
-
-							addPacket(colorChunk.chunk, chunk, colorChunk.meta);
-
-							// See if there are any null alpha chunks queued up
-							encodedAlphaChunkCount++;
-							while (
-								nullAlphaChunkQueue.length > 0
-								&& nullAlphaChunkQueue[0] === encodedAlphaChunkCount
-							) {
-								nullAlphaChunkQueue.shift();
-								const colorChunk = colorChunkQueue.shift();
-								assert(colorChunk !== undefined);
-
-								addPacket(colorChunk.chunk, null, colorChunk.meta);
-							}
-						},
-						error: (error) => {
-							error.stack = stack; // Provide a more useful stack trace
-							this.setError(error);
-						},
-					});
-					this.alphaEncoder.configure(encoderConfig);
-				}
+				this.encoderConfig = encoderConfig;
+				this.createWebCodecsEncoders();
 			}
 
 			assert(this.source._connectedTrack);
@@ -945,6 +805,188 @@ class VideoEncoderWrapper {
 
 			this.encoderInitialized = true;
 		})();
+	}
+
+	private createWebCodecsEncoders() {
+		const encoderConfig = this.encoderConfig;
+		assert(encoderConfig);
+
+		/** Queue of color chunks waiting for their alpha counterpart. */
+		const colorChunkQueue: {
+			chunk: EncodedVideoChunk;
+			meta: EncodedVideoChunkMetadata | undefined;
+		}[] = [];
+		/** Each value is the number of encoded alpha chunks at which a null alpha chunk should be added. */
+		const nullAlphaChunkQueue: number[] = [];
+		let encodedAlphaChunkCount = 0;
+		let alphaEncoderQueue = 0;
+
+		const handleError = (error: DOMException, stack: string | undefined) => {
+			if (isCodecReclaimedError(error)) {
+				this.encodersReclaimed = true;
+				return;
+			}
+
+			error.stack = stack; // Provide a more useful stack trace, the default one sucks
+			this.setError(error);
+		};
+
+		const stack = new Error('Encoding error').stack;
+
+		this.encoder = new VideoEncoder({
+			output: (chunk, meta) => {
+				if (!this.alphaEncoder) {
+					// We're done
+					this.addPacket(chunk, null, meta);
+					return;
+				}
+
+				const alphaFrame = this.alphaFrameQueue.shift();
+				assert(alphaFrame !== undefined);
+
+				if (alphaFrame) {
+					this.alphaEncoder.encode(alphaFrame, {
+						...this.defaultEncodeOptions,
+						// Crucial: The alpha frame is forced to be a key frame whenever the color frame
+						// also is. Without this, playback can glitch and even crash in some browsers.
+						// This is the reason why the two encoders are wired in series and not in parallel.
+						keyFrame: chunk.type === 'key',
+					});
+					alphaEncoderQueue++;
+					alphaFrame.close();
+					colorChunkQueue.push({ chunk, meta });
+				} else {
+					// There was no alpha component for this frame
+					if (alphaEncoderQueue === 0) {
+						// No pending alpha encodes either, so we're done
+						this.addPacket(chunk, null, meta);
+					} else {
+						// There are still alpha encodes pending, so we can't add the packet immediately since
+						// we'd end up with out-of-order packets. Instead, let's queue a null alpha chunk to be
+						// added in the future, after the current encoder workload has completed:
+						nullAlphaChunkQueue.push(encodedAlphaChunkCount + alphaEncoderQueue);
+						colorChunkQueue.push({ chunk, meta });
+					}
+				}
+			},
+			error: error => handleError(error, stack),
+		});
+		this.encoder.configure(encoderConfig);
+
+		if (this.encodingConfig.alpha === 'keep') {
+			const stack = new Error('Encoding error').stack;
+
+			// We need to encode alpha as well, which we do with a separate encoder
+			this.alphaEncoder = new VideoEncoder({
+				// We ignore the alpha chunk's metadata
+				// eslint-disable-next-line @typescript-eslint/no-unused-vars
+				output: (chunk, meta) => {
+					alphaEncoderQueue--;
+
+					// There has to be a color chunk because the encoders are wired in series
+					const colorChunk = colorChunkQueue.shift();
+					assert(colorChunk !== undefined);
+
+					this.addPacket(colorChunk.chunk, chunk, colorChunk.meta);
+
+					// See if there are any null alpha chunks queued up
+					encodedAlphaChunkCount++;
+					while (
+						nullAlphaChunkQueue.length > 0
+						&& nullAlphaChunkQueue[0] === encodedAlphaChunkCount
+					) {
+						nullAlphaChunkQueue.shift();
+						const colorChunk = colorChunkQueue.shift();
+						assert(colorChunk !== undefined);
+
+						this.addPacket(colorChunk.chunk, null, colorChunk.meta);
+					}
+				},
+				error: error => handleError(error, stack),
+			});
+			this.alphaEncoder.configure(encoderConfig);
+		}
+	}
+
+	private addPacket(
+		colorChunk: EncodedVideoChunk,
+		alphaChunk: EncodedVideoChunk | null,
+		meta: EncodedVideoChunkMetadata | undefined,
+	) {
+		const sideData: EncodedPacketSideData = {};
+
+		if (alphaChunk) {
+			const alphaData = new Uint8Array(alphaChunk.byteLength);
+			alphaChunk.copyTo(alphaData);
+
+			sideData.alpha = alphaData;
+		}
+
+		let packet = EncodedPacket.fromEncodedChunk(colorChunk, sideData);
+
+		// See if there's a relevant timing entry to refine the packet's timing data
+		const preciseTimingIndex = binarySearchLessOrEqual(
+			this.preciseTimings,
+			colorChunk.timestamp,
+			x => x.microsecondTimestamp,
+		);
+		const entry = preciseTimingIndex !== -1
+			? this.preciseTimings[preciseTimingIndex]
+			: null;
+
+		let actualType: PacketType | null = null;
+		if (this.emittedEncoderPackets === 0 && packet.type === 'delta' && meta?.decoderConfig) {
+			// https://github.com/Vanilagy/mediabunny/issues/365
+			// We expect the first packet to be a key packet. If it's not, let's actually verify that it's
+			// not by getting the actual type.
+			actualType = determineVideoPacketType(
+				this.encodingConfig.codec,
+				meta.decoderConfig,
+				packet.data,
+			);
+		}
+
+		// Define the packet
+		if ((entry && entry.microsecondTimestamp === colorChunk.timestamp) || actualType !== null) {
+			packet = packet.clone({
+				timestamp: entry?.timestampIsValid ? entry.timestamp : undefined,
+				duration: entry?.durationIsValid ? entry.duration : undefined,
+				type: actualType ?? undefined,
+			});
+		}
+
+		maybeEnsureIsKeyPacket(this.source._connectedTrack!, packet);
+
+		this.encodingConfig.onEncodedPacket?.(packet, meta);
+		this.lastMuxerPromise
+			= this.muxer!.addEncodedVideoPacket(this.source._connectedTrack!, packet, meta)
+				.catch((error) => {
+					this.setError(error);
+				});
+
+		this.emittedEncoderPackets++;
+	}
+
+	// Browsers may reclaim codecs that have been inactive for a while (see
+	// https://github.com/Vanilagy/mediabunny/issues/531), closing them and reporting a QuotaExceededError. Since a
+	// reclaimed encoder was idle, no frames are lost, so we transparently replace the encoders with fresh ones.
+	private recreateWebCodecsEncoders() {
+		assert(this.encoder);
+
+		if (this.encoder.state !== 'closed') {
+			this.encoder.close();
+		}
+		if (this.alphaEncoder && this.alphaEncoder.state !== 'closed') {
+			this.alphaEncoder.close();
+		}
+
+		this.alphaFrameQueue.forEach(x => x?.close());
+		this.alphaFrameQueue.length = 0;
+
+		this.encodersReclaimed = false;
+		this.lastMultipleOfKeyFrameInterval = -1; // The fresh encoder must start with a key frame
+
+		this.createWebCodecsEncoders();
 	}
 
 	async flushAndClose(forceClose: boolean) {
@@ -965,7 +1007,7 @@ class VideoEncoderWrapper {
 			if (!forceClose) {
 				if (this.customEncoder) {
 					void this.customEncoderCallSerializer.call(() => this.customEncoder!.flush());
-				} else if (this.encoder) {
+				} else if (this.encoder && !this.encodersReclaimed) {
 					// These are wired in series, therefore they must also be flushed in series
 					await this.encoder.flush();
 					await this.alphaEncoder?.flush();
@@ -1181,6 +1223,12 @@ const colorAlphaSplitterWorkerCode = () => {
 			codedHeight: height,
 			timestamp: sourceFrame.timestamp,
 			duration: sourceFrame.duration ?? undefined,
+			colorSpace: {
+				fullRange: true,
+				matrix: 'bt709',
+				primaries: 'bt709',
+				transfer: 'bt709',
+			} as const,
 			transfer: [alphaBuffer.buffer],
 		};
 		const alphaFrame = new VideoFrame(alphaBuffer, alphaInit);
@@ -1261,6 +1309,12 @@ const colorAlphaSplitterWorkerCode = () => {
 			codedHeight: height,
 			timestamp: sourceFrame.timestamp,
 			duration: sourceFrame.duration ?? undefined,
+			colorSpace: {
+				fullRange: true,
+				matrix: 'bt709',
+				primaries: 'bt709',
+				transfer: 'bt709',
+			} as const,
 			transfer: [alphaBuffer.buffer],
 		};
 		const alphaFrame = new VideoFrame(alphaBuffer, alphaInit);

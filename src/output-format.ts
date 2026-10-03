@@ -945,11 +945,11 @@ export class OggOutputFormat extends OutputFormat {
 	}
 
 	get supportsTimestampedMediaData() {
-		return false;
+		return true;
 	}
 
 	get negativeTimestampSupport() {
-		return null;
+		return 'none' as const;
 	}
 }
 
