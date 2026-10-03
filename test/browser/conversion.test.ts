@@ -11,7 +11,7 @@ import {
 } from '../../src/output-format.js';
 import { Output, OutputTrackGroup } from '../../src/output.js';
 import { BufferSource, CustomPathedSource, UrlSource } from '../../src/source.js';
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 import { BufferTarget, PathedTarget } from '../../src/target.js';
 import { Conversion, ConversionCanceledError, ConversionOptions } from '../../src/conversion.js';
 import { assert, uint8ArraysAreEqual } from '../../src/misc.js';
@@ -20,6 +20,37 @@ import { CanvasSource, EncodedAudioPacketSource } from '../../src/media-source.j
 import { Quality } from '../../src/encode.js';
 import { EncodedPacket } from '../../src/packet.js';
 import { EncodedPacketSink } from '../../src/media-sink.js';
+
+test('Conversion passes the requested latency mode to the video encoder', async () => {
+	using input = new Input({
+		source: new UrlSource('/video.mp4'),
+		formats: ALL_FORMATS,
+	});
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+	const configure = vi.spyOn(VideoEncoder.prototype, 'configure');
+
+	try {
+		const conversion = await Conversion.init({
+			input,
+			output,
+			video: { codec: 'avc', forceTranscode: true, latencyMode: 'realtime' },
+			audio: [],
+			trim: { start: 0, end: 1 },
+		});
+		await conversion.execute();
+
+		const avcConfigs = configure.mock.calls
+			.map(([config]) => config)
+			.filter(config => config.codec.startsWith('avc1'));
+		expect(avcConfigs.length).toBeGreaterThan(0);
+		expect(avcConfigs.every(config => config.latencyMode === 'realtime')).toBe(true);
+	} finally {
+		configure.mockRestore();
+	}
+});
 
 test('Rotation is baked in when rerendering', async () => {
 	using input = new Input({
