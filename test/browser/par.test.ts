@@ -43,6 +43,25 @@ test('Pixel aspect ratio reading', async () => {
 	expect(sample.squarePixelHeight).toBe(await videoTrack.getSquarePixelHeight());
 });
 
+test('Pixel aspect ratio from SPS without pasp box', async () => {
+	for (const fileName of ['sps-only-sar-h264.mp4', 'sps-only-sar-hevc.mp4']) {
+		using input = new Input({
+			source: new UrlSource(`/${fileName}`),
+			formats: ALL_FORMATS,
+		});
+
+		const track = await input.getPrimaryVideoTrack();
+		assert(track);
+
+		expect(await track.getCodedWidth()).toBe(64);
+		expect(await track.getCodedHeight()).toBe(64);
+		expect(await track.getSquarePixelWidth()).toBe(64);
+		expect(await track.getSquarePixelHeight()).toBe(114);
+		expect(await track.getDisplayWidth()).toBe(64);
+		expect(await track.getDisplayHeight()).toBe(114);
+	}
+});
+
 test('Pixel aspect ratio copy conversion', async () => {
 	using input = new Input({
 		source: new UrlSource(SOURCE_PATH),
