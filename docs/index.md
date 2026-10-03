@@ -115,6 +115,7 @@ const sponsors = {
 		{ image: 'https://avatars.githubusercontent.com/u/189556080', name: 'Cursorful', url: 'https://github.com/cursorful' },
 		{ image: 'https://avatars.githubusercontent.com/u/11537072', name: 'Threema', url: 'https://threema.com/en' },
 		{ image: 'https://avatars.githubusercontent.com/u/82552321', name: 'Polotno', url: 'https://github.com/polotno-project' },
+		{ image: 'https://avatars.githubusercontent.com/u/136796770', name: 'jj', url: 'https://github.com/dumbmoron' },
 		{ image: 'https://avatars.githubusercontent.com/u/489051', name: 'Roman Rädle', url: 'https://github.com/raedle' },
 		{ image: 'https://avatars.githubusercontent.com/u/197597', name: 'Christopher Chedeau', url: 'https://github.com/vjeux' },
 		{ image: 'https://avatars.githubusercontent.com/u/18653821', name: 'ZerGo0', url: 'https://github.com/ZerGo0' },
