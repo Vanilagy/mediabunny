@@ -1223,6 +1223,12 @@ const colorAlphaSplitterWorkerCode = () => {
 			codedHeight: height,
 			timestamp: sourceFrame.timestamp,
 			duration: sourceFrame.duration ?? undefined,
+			colorSpace: {
+				fullRange: true,
+				matrix: 'bt709',
+				primaries: 'bt709',
+				transfer: 'bt709',
+			} as const,
 			transfer: [alphaBuffer.buffer],
 		};
 		const alphaFrame = new VideoFrame(alphaBuffer, alphaInit);
@@ -1303,6 +1309,12 @@ const colorAlphaSplitterWorkerCode = () => {
 			codedHeight: height,
 			timestamp: sourceFrame.timestamp,
 			duration: sourceFrame.duration ?? undefined,
+			colorSpace: {
+				fullRange: true,
+				matrix: 'bt709',
+				primaries: 'bt709',
+				transfer: 'bt709',
+			} as const,
 			transfer: [alphaBuffer.buffer],
 		};
 		const alphaFrame = new VideoFrame(alphaBuffer, alphaInit);
