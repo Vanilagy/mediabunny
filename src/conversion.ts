@@ -259,6 +259,11 @@ export type ConversionVideoOptions = {
 	 * `'no-preference'`, the default.
 	 */
 	hardwareAcceleration?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
+	/**
+	 * The latency mode used when transcoding video. `'quality'` (the default) prioritizes quality, while `'realtime'`
+	 * prioritizes low latency and can work around encoder stalls on Safari. Has no effect when packets are copied.
+	 */
+	latencyMode?: 'quality' | 'realtime';
 	/** When `true`, video will always be re-encoded instead of directly copying over the encoded packets. */
 	forceTranscode?: boolean;
 	/**
@@ -515,6 +520,9 @@ const validateVideoOptions = (videoOptions: ConversionVideoOptions) => {
 			'options.video.hardwareAcceleration, when provided, must be \'no-preference\', \'prefer-hardware\' or'
 			+ ' \'prefer-software\'.',
 		);
+	}
+	if (videoOptions.latencyMode !== undefined && !['quality', 'realtime'].includes(videoOptions.latencyMode)) {
+		throw new TypeError('options.video.latencyMode, when provided, must be \'quality\' or \'realtime\'.');
 	}
 	if (
 		videoOptions?.group !== undefined
@@ -1762,6 +1770,7 @@ export class Conversion {
 				sizeChangeBehavior: trackOptions.fit ?? 'passThrough',
 				alpha,
 				hardwareAcceleration: trackOptions.hardwareAcceleration,
+				latencyMode: trackOptions.latencyMode,
 				transform: {},
 			};
 			assert(encodingConfig.transform);
