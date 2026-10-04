@@ -62,7 +62,11 @@ class MjpegDecoder extends CustomVideoDecoder {
 
 	flush() {
 		if (this._flushPromise) {
+			this._checkFlushPromise();
 			return this._flushPromise.promise;
+		}
+		if (this._pendingSamples === 0) {
+			return;
 		}
 		let resolve;
 		const promise = new Promise<void>((res) => {
@@ -130,7 +134,11 @@ class MjpegEncoder extends CustomVideoEncoder {
 
 	flush(): MaybePromise<void> {
 		if (this._flushPromise) {
+			this._checkFlushPromise();
 			return this._flushPromise.promise;
+		}
+		if (this._pendingSamples === 0) {
+			return;
 		}
 		let resolve;
 		const promise = new Promise<void>(res => {
