@@ -10,7 +10,7 @@ rm -rf packages/ac3/dist
 rm -rf packages/dts/dist
 rm -rf packages/aac-encoder/dist
 rm -rf packages/flac-encoder/dist
-rm -rf packages/mjpeg/mjpeg
+rm -rf packages/mjpeg/dist
 rm -rf packages/prores/dist
 rm -rf packages/server/dist
 

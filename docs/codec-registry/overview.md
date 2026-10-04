@@ -16,6 +16,7 @@ The registry is an extension of the [WebCodecs Codec Registry](https://www.w3.or
 - [VP9](./vp9)
 - [AV1](./av1)
 - [ProRes](./prores)
+- [Mjpeg](./mjpeg)
 
 ## Audio codecs
 

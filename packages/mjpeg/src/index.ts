@@ -43,9 +43,10 @@ class MjpegDecoder extends CustomVideoDecoder {
 				: new Uint8Array(data);
 			const blob = new Blob([buffer], { type: 'image/jpeg' });
 			const bitmap = await createImageBitmap(blob);
-			const frame = new VideoFrame(bitmap, { timestamp: packet.timestamp });
-			const sample = new VideoSample(frame, { timestamp: packet.timestamp });
+			const frame = new VideoFrame(bitmap, { timestamp: packet.microsecondTimestamp, duration: packet.microsecondDuration });
+			const sample = new VideoSample(frame, { timestamp: packet.timestamp, duration: packet.duration });
 			this.onSample(sample);
+			bitmap.close();
 		} finally {
 			this._pendingSamples -= 1;
 			this._checkFlushPromise();

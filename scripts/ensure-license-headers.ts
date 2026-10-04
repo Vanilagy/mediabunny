@@ -41,6 +41,7 @@ checkDirectory(path.join(__dirname, '..', 'packages', 'ac3', 'src'));
 checkDirectory(path.join(__dirname, '..', 'packages', 'dts', 'src'));
 checkDirectory(path.join(__dirname, '..', 'packages', 'flac-encoder', 'src'));
 checkDirectory(path.join(__dirname, '..', 'packages', 'aac-encoder', 'src'));
+checkDirectory(path.join(__dirname, '..', 'packages', 'mjpeg', 'src'));
 checkDirectory(path.join(__dirname, '..', 'packages', 'prores', 'src'));
 checkDirectory(path.join(__dirname, '..', 'packages', 'server', 'src'));
 

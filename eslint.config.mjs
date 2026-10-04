@@ -49,6 +49,7 @@ export default tseslint.config(
 			'packages/aac-encoder/build',
 			'packages/flac-encoder/dist',
 			'packages/flac-encoder/build',
+			'packages/mjpeg/dist',
 			'packages/prores/dist',
 			'packages/server/dist',
 			'eslint.config.mjs',
