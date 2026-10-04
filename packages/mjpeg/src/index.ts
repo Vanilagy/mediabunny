@@ -101,13 +101,13 @@ class MjpegEncoder extends CustomVideoEncoder {
 		};
 	}
 
-	override encode(videoSample: VideoSample, meta?: VideoEncoderEncodeOptions): MaybePromise<void> {
-		console.log('encode', videoSample.timestamp);
-		assert(this.context);
+	override async encode(videoSample: VideoSample, meta?: VideoEncoderEncodeOptions) {
+		assert(this.context && this.canvas);
 
-		videoSample.draw(this.context, 0, 0);
-		const imageData = this.context.getImageData(0, 0, videoSample.displayWidth, videoSample.displayHeight);
-		const packetData = new Uint8Array(imageData.data.buffer);
+		videoSample.draw(this.context, 0, 0, this.config.width, this.config.height);
+
+		const imageBlob = await this.canvas.convertToBlob({ type: 'image/jpeg', quality: 0 });
+		const packetData = new Uint8Array(await imageBlob.arrayBuffer());
 
 		const packet = new EncodedPacket(packetData, 'key', videoSample.timestamp, videoSample.duration);
 		this.onPacket(packet, this.metadata);
