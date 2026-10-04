@@ -71,6 +71,6 @@ echo 'export as namespace MediabunnyAc3;' >> packages/ac3/dist/mediabunny-ac3.d.
 echo 'export as namespace MediabunnyDts;' >> packages/dts/dist/mediabunny-dts.d.ts
 echo 'export as namespace MediabunnyAacEncoder;' >> packages/aac-encoder/dist/mediabunny-aac-encoder.d.ts
 echo 'export as namespace MediabunnyFlacEncoder;' >> packages/flac-encoder/dist/mediabunny-flac-encoder.d.ts
-echo 'export as namespace MediabunnyMjpeg;' >> packages/prores/dist/mediabunny-mjpeg.d.ts
+echo 'export as namespace MediabunnyMjpeg;' >> packages/mjpeg/dist/mediabunny-mjpeg.d.ts
 echo 'export as namespace MediabunnyProres;' >> packages/prores/dist/mediabunny-prores.d.ts
 echo 'export as namespace MediabunnyServer;' >> packages/server/dist/mediabunny-server.d.ts
