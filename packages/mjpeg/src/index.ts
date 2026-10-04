@@ -78,6 +78,8 @@ class MjpegDecoder extends CustomVideoDecoder {
 }
 
 class MjpegEncoder extends CustomVideoEncoder {
+	_pendingSamples: number = 0;
+	_flushPromise: { promise: Promise<void>; resolve: () => void } | null = null;
 	canvas?: OffscreenCanvas;
 	context?: OffscreenCanvasRenderingContext2D;
 	metadata?: EncodedVideoChunkMetadata;
@@ -103,19 +105,44 @@ class MjpegEncoder extends CustomVideoEncoder {
 
 	override async encode(videoSample: VideoSample, meta?: VideoEncoderEncodeOptions) {
 		assert(this.context && this.canvas);
+		this._pendingSamples += 1;
 
-		videoSample.draw(this.context, 0, 0, this.config.width, this.config.height);
+		try {
+			videoSample.draw(this.context, 0, 0, this.config.width, this.config.height);
 
-		const imageBlob = await this.canvas.convertToBlob({ type: 'image/jpeg', quality: 0 });
-		const packetData = new Uint8Array(await imageBlob.arrayBuffer());
+			const imageBlob = await this.canvas.convertToBlob({ type: 'image/jpeg', quality: 0 });
+			const packetData = new Uint8Array(await imageBlob.arrayBuffer());
 
-		const packet = new EncodedPacket(packetData, 'key', videoSample.timestamp, videoSample.duration);
-		this.onPacket(packet, this.metadata);
+			const packet = new EncodedPacket(packetData, 'key', videoSample.timestamp, videoSample.duration);
+			this.onPacket(packet, this.metadata);
+		} finally {
+			this._pendingSamples -= 1;
+			this._checkFlushPromise();
+		}
 	}
 
-	flush(): MaybePromise<void> {}
+	_checkFlushPromise() {
+		if (this._flushPromise && this._pendingSamples === 0) {
+			this._flushPromise.resolve();
+			this._flushPromise = null;
+		}
+	}
 
-	close(): MaybePromise<void> {}
+	flush(): MaybePromise<void> {
+		if (this._flushPromise) {
+			return this._flushPromise.promise;
+		}
+		let resolve;
+		const promise = new Promise<void>(res => {
+			resolve = res;
+		})
+		this._flushPromise = { resolve: resolve!, promise };
+		return promise;
+	}
+
+	close(): MaybePromise<void> {
+		return this._flushPromise?.promise;
+	}
 }
 
 let decoderRegistered = false;
