@@ -1139,6 +1139,8 @@ export class MatroskaDemuxer extends Demuxer {
 							this.currentTrack.info.codec = 'vp9';
 						} else if (codecIdWithoutSuffix === CODEC_STRING_MAP.av1) {
 							this.currentTrack.info.codec = 'av1';
+						} else if (codecIdWithoutSuffix === CODEC_STRING_MAP.mjpeg) {
+							this.currentTrack.info.codec = 'mjpeg';
 						} else if (codecIdWithoutSuffix === CODEC_STRING_MAP.prores) {
 							const format = this.currentTrack.codecPrivate
 								? textDecoder.decode(this.currentTrack.codecPrivate)
