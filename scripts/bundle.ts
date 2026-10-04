@@ -258,7 +258,7 @@ const mjpegVariants = await createVariants(
 	'packages/mjpeg/src/index.ts',
 	'MediabunnyMjpeg',
 	'packages/mjpeg/dist/bundles/mediabunny-mjpeg',
-	'js', // The bundles are purely for the browser, not for Node (due to the peer dependency)
+	'js', // The bundles are purely for the browser, not for Node (due to the canvas)
 	{
 		plugins: [
 			PluginExternalGlobal.externalGlobalPlugin({
