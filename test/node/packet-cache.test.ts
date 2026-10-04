@@ -115,26 +115,10 @@ test('Sequential reading', async () => {
 
 	expectConsistentCache(ctx.cache);
 
-	// Having read everything, every GOP is complete, so pretty much everything can be answered by the cache now
+	// Having read everything, every GOP is complete, so everything can be answered by the cache now
 	for (const timestamp of QUERY_TIMESTAMPS) {
-		if (timestamp === -Infinity) {
-			// Nothing can ever lie at or before negative infinity
-			expect(cached.at(timestamp)).toBe(null);
-			expect(cached.keyAt(timestamp)).toBe(null);
-			continue;
-		}
-
-		if (timestamp < 0) {
-			expect(cached.at(timestamp)).toBe(undefined);
-		} else {
-			expectPacket(cached.at(timestamp), MAIN_PACKETS, modelAt(MAIN_PACKETS, timestamp));
-		}
-
-		if (timestamp < 2) {
-			expect(cached.keyAt(timestamp)).toBe(undefined);
-		} else {
-			expectPacket(cached.keyAt(timestamp), MAIN_PACKETS, modelKeyAt(MAIN_PACKETS, timestamp));
-		}
+		expectPacket(cached.at(timestamp), MAIN_PACKETS, modelAt(MAIN_PACKETS, timestamp));
+		expectPacket(cached.keyAt(timestamp), MAIN_PACKETS, modelKeyAt(MAIN_PACKETS, timestamp));
 	}
 
 	for (let i = 0; i < ctx.packets.length; i++) {
@@ -143,7 +127,7 @@ test('Sequential reading', async () => {
 
 	// And the reader no longer needs the backing at all
 	const callCount = backing.totalCalls();
-	for (const timestamp of QUERY_TIMESTAMPS.filter(x => x >= 2)) {
+	for (const timestamp of QUERY_TIMESTAMPS) {
 		expectPacket(await reader.getAt(timestamp), MAIN_PACKETS, modelAt(MAIN_PACKETS, timestamp));
 		expectPacket(await reader.getKeyAt(timestamp), MAIN_PACKETS, modelKeyAt(MAIN_PACKETS, timestamp));
 	}
@@ -154,15 +138,6 @@ test('Sequential reading', async () => {
 	expectPacket(await reader.getFirst(), MAIN_PACKETS, 0);
 	expectPacket(await reader.getFirstKey(), MAIN_PACKETS, 0);
 	expect(backing.totalCalls()).toBe(callCount);
-
-	// What lies before the first packets still needs to be learned
-	expect(await reader.getAt(-1)).toBe(null);
-	expect(cached.at(-1)).toBe(null);
-	expect(cached.at(-2)).toBe(null);
-	expect(await reader.getKeyAt(1)).toBe(null);
-	expect(cached.keyAt(1)).toBe(null);
-	expect(cached.keyAt(0.5)).toBe(null);
-	expect(backing.totalCalls()).toBe(callCount + 2);
 });
 
 test('Seeking', async () => {
@@ -407,6 +382,20 @@ test('Key packet sharing its timestamp with the preceding delta packet', async (
 	expectPacket(ctx2.cached.keyAt(9.99), MAIN_PACKETS, 11);
 });
 
+test('Key packet seeking from regular seeking', async () => {
+	using ctx = await setup(mainFile);
+	const { reader, cached } = ctx;
+
+	expectPacket(await reader.getKeyAt(6), MAIN_PACKETS, 4);
+	await readSequentially(reader, ctx.packets[4]!, 3);
+	expect(cached.keyAt(7.5)).toBe(undefined); // A key packet could still share packet 7's timestamp
+
+	// Seeking to a packet of a known GOP rules out any key packet between the two
+	expectPacket(await reader.getAt(7.5), MAIN_PACKETS, 7);
+	expectPacket(cached.keyAt(7.5), MAIN_PACKETS, 4);
+	expect(cached.keyAt(7.6)).toBe(undefined);
+});
+
 test('Next key packets', async () => {
 	using ctx = await setup(mainFile);
 	const { reader, cached, backing } = ctx;
@@ -488,6 +477,86 @@ test('Next key packets from the next() chain', async () => {
 	expectPacket(await reader.getAt(10), MAIN_PACKETS, 12);
 	await readSequentially(reader, ctx.packets[12]!, 1);
 	expect(cached.nextKey(ctx.packets[12]!)).toBe(null);
+});
+
+test('Next key packets from earlier packets in the GOP', async () => {
+	using ctx = await setup(mainFile);
+	const { reader, cached, backing, info } = ctx;
+
+	// Delta packets following a packet share its next key packet
+	expectPacket(await reader.getAt(4.5), MAIN_PACKETS, 5);
+	expectPacket(await reader.getNextKey(ctx.packets[5]!), MAIN_PACKETS, 8);
+	await readSequentially(reader, ctx.packets[5]!, 2);
+	expectPacket(cached.nextKey(ctx.packets[7]!), MAIN_PACKETS, 8);
+	expectPacket(await reader.getNextKey(ctx.packets[6]!), MAIN_PACKETS, 8);
+	expect(backing.calls.getNextKeyPacket).toBe(1);
+	expect(info.entries.get(7)!.nextKey).toBe(info.entries.get(8)); // Remembered
+
+	// Also when it's learned for the GOP's key packet
+	expectPacket(await reader.getFirst(), MAIN_PACKETS, 0);
+	expectPacket(await reader.getNextKey(ctx.packets[0]!), MAIN_PACKETS, 4);
+	await readSequentially(reader, ctx.packets[0]!, 2);
+	expectPacket(cached.nextKey(ctx.packets[2]!), MAIN_PACKETS, 4);
+
+	// And when there is none
+	expectPacket(await reader.getKeyAt(9.5), MAIN_PACKETS, 11);
+	expect(await reader.getNextKey(ctx.packets[11]!)).toBe(null);
+	await readSequentially(reader, ctx.packets[11]!, 1);
+	expect(cached.nextKey(ctx.packets[12]!)).toBe(null);
+
+	// A key packet in between starts a new GOP, so what came before it doesn't apply
+	await readSequentially(reader, ctx.packets[7]!, 2);
+	expect(cached.nextKey(ctx.packets[9]!)).toBe(undefined);
+
+	// An evicted next key packet teaches us nothing
+	using ctx2 = await setup(mainFile, new PacketCache({ maxCacheSize: 2.5 * FULL_PACKET_SIZE, autoEvict: false }));
+	expectPacket(await ctx2.reader.getAt(4.5), MAIN_PACKETS, 5);
+	expectPacket(await ctx2.reader.getNextKey(ctx2.packets[5]!), MAIN_PACKETS, 8);
+	expectPacket(await ctx2.reader.getNext(ctx2.packets[5]!), MAIN_PACKETS, 6);
+	expectPacket(ctx2.cached.at(4.5), MAIN_PACKETS, 5);
+
+	ctx2.cache.evict();
+	expect(getLruOrder(ctx2.cache)).toEqual([5, 6]);
+	expect(ctx2.cached.nextKey(ctx2.packets[6]!)).toBe(undefined);
+	expectConsistentCache(ctx2.cache);
+
+	expectConsistentCache(ctx.cache);
+});
+
+test('Next key packets from key packet seeking', async () => {
+	using ctx = await setup(mainFile);
+	const { reader, cached, backing } = ctx;
+
+	// The key packet that's valid indefinitely is the last one
+	expectPacket(await reader.getKeyAt(Infinity), MAIN_PACKETS, 11);
+	expect(cached.nextKey(ctx.packets[11]!)).toBe(null);
+
+	// And so its whole GOP has no next key packet
+	await readSequentially(reader, ctx.packets[11]!, 1);
+	expect(await reader.getNextKey(ctx.packets[12]!)).toBe(null);
+	expect(backing.calls.getNextKeyPacket).toBe(0);
+});
+
+test('Next key packets learned before joining the GOP', async () => {
+	using ctx = await setup(mainFile);
+	const { reader, cached } = ctx;
+
+	expectPacket(await reader.getAt(4.5), MAIN_PACKETS, 5);
+	expectPacket(await reader.getNextKey(ctx.packets[5]!), MAIN_PACKETS, 8);
+	expectPacket(await reader.getKeyAt(6), MAIN_PACKETS, 4);
+	expect(cached.keyAt(7.5)).toBe(undefined);
+
+	// Joining packet 5 onto its GOP's key packet bounds key packet seeking
+	expectPacket(await reader.getNext(ctx.packets[4]!), MAIN_PACKETS, 5);
+	expectPacket(cached.keyAt(7.99), MAIN_PACKETS, 4);
+	expect(cached.keyAt(8)).toBe(undefined);
+
+	// Same when there's no next key packet
+	expectPacket(await reader.getAt(10), MAIN_PACKETS, 12);
+	expect(await reader.getNextKey(ctx.packets[12]!)).toBe(null);
+	expectPacket(await reader.getKeyAt(9), MAIN_PACKETS, 11);
+	await readSequentially(reader, ctx.packets[11]!, 1);
+	expectPacket(cached.keyAt(1000), MAIN_PACKETS, 11);
 });
 
 test('Metadata-only packets', async () => {
@@ -693,6 +762,42 @@ test('First GOP completed by learning the first packet', async () => {
 	expectPacket(await reader.getFirst(), FAKE_FIRST_KEY_PACKETS, 0);
 	expectPacket(cached.at(1.5), FAKE_FIRST_KEY_PACKETS, 1);
 	expectPacket(cached.at(1.99), FAKE_FIRST_KEY_PACKETS, 1);
+});
+
+test('Start of the track', async () => {
+	using ctx = await setup(mainFile);
+	const { reader, cached } = ctx;
+
+	// No key packet comes before the first one
+	expectPacket(await reader.getFirst(), MAIN_PACKETS, 0);
+	expect(cached.keyAt(1.99)).toBe(null);
+	expect(cached.at(-1)).toBe(undefined);
+
+	// Once the first GOP is complete, no packet comes before its smallest timestamp
+	await readSequentially(reader, ctx.packets[0]!, 4);
+	expect(cached.at(-0.01)).toBe(null);
+	expectPacket(cached.at(0), MAIN_PACKETS, 1);
+
+	// Muxers won't write tracks starting with a delta packet, so these get inserted directly. There, the key packet
+	// ending the first GOP is the first one.
+	const cache = new PacketCache();
+	const info = cache._getTrackInfo(ctx.track);
+	insertChain(cache, info, [
+		{ type: 'delta', timestamp: 1 },
+		{ type: 'delta', timestamp: 0 },
+		{ type: 'key', timestamp: 3 },
+	]);
+	expect(cache._getKeyAt(info, 2.99, {})).toBe(null);
+	expect(cache._getAt(info, -0.01, {})).toBe(null);
+
+	// And without any key packet, there's nothing to find at all
+	const keylessCache = new PacketCache();
+	const keylessInfo = keylessCache._getTrackInfo(ctx.track);
+	insertChain(keylessCache, keylessInfo, [
+		{ type: 'delta', timestamp: 0 },
+		{ type: 'delta', timestamp: 1 },
+	]);
+	expect(keylessCache._getKeyAt(keylessInfo, Infinity, {})).toBe(null);
 });
 
 test('Empty track', async () => {
@@ -1365,6 +1470,18 @@ const readSequentially = async (reader: PacketReader, start: EncodedPacket, coun
 	}
 
 	return packet;
+};
+
+// Teaches the cache a whole track, from its first packet to its end
+const insertChain = (cache: PacketCache, info: PacketCacheTrackInfo, specs: PacketSpec[]) => {
+	const packets = specs.map((spec, i) => {
+		return new EncodedPacket(new Uint8Array(PACKET_DATA_SIZE), spec.type, spec.timestamp, 1, i);
+	});
+
+	cache._insertFirst(info, packets[0]!, undefined);
+	for (let i = 0; i < packets.length; i++) {
+		cache._insertNext(info, packets[i]!, packets[i + 1] ?? null, undefined);
+	}
 };
 
 const expectPacket = (

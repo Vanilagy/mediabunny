@@ -1037,6 +1037,11 @@ export class PacketCache {
 		trackInfo.first = entry;
 		entry.prev = null;
 
+		if (entry.packet!.type === 'key') {
+			// Under the GOP rule, no later key packet can have a smaller timestamp than the first one
+			trackInfo.minKeyTimestamp = Math.max(trackInfo.minKeyTimestamp, nextDown(entry.timestamp));
+		}
+
 		// Knowing that nothing comes before this packet may be what completes the first GOP
 		this._finalizeGop(entry);
 
@@ -1065,9 +1070,16 @@ export class PacketCache {
 
 		entry.seekValidityEndpoint = Math.max(timestamp, entry.seekValidityEndpoint ?? -Infinity);
 
-		if (entry.packet!.type === 'key') {
-			// There's no packet at all between this one and the timestamp, so certainly no key packet either
-			entry.keySeekValidityEndpoint = Math.max(timestamp, entry.keySeekValidityEndpoint ?? -Infinity);
+		if (entry.gopKey && !entry.gopKey.packet) {
+			entry.gopKey = null; // The GOP's key packet has been evicted
+		}
+
+		const gopKey = entry.packet!.type === 'key' ? entry : entry.gopKey;
+		if (gopKey) {
+			// There's no packet at all between this one and the timestamp, so certainly no key packet either. And since
+			// any key packet after this one can't have a smaller timestamp, the key packet of this packet's GOP is
+			// valid up to the timestamp too.
+			gopKey.keySeekValidityEndpoint = Math.max(timestamp, gopKey.keySeekValidityEndpoint ?? -Infinity);
 		}
 
 		if (determinedType !== undefined) {
@@ -1168,6 +1180,15 @@ export class PacketCache {
 				followingEntry.gopKey = gopKey;
 				// A future key packet may share this packet's timestamp, so we can only go right up to it
 				keyEndpoint = Math.max(keyEndpoint, nextDown(followingEntry.timestamp));
+
+				// The packet may have learned about its next key packet before joining the GOP. Its timestamp stays
+				// true even if it has been evicted since.
+				if (followingEntry.nextKey !== undefined) {
+					keyEndpoint = Math.max(
+						keyEndpoint,
+						followingEntry.nextKey ? nextDown(followingEntry.nextKey.timestamp) : Infinity,
+					);
+				}
 
 				currentEntry = followingEntry;
 			}
@@ -1281,6 +1302,18 @@ export class PacketCache {
 		}
 
 		gopStart.gopMinTimestamp = minTimestamp;
+
+		if (gopStart.prev === null) {
+			// Nothing after the first GOP can go below anything in it, so this is the smallest timestamp of the track
+			const trackInfo = gopStart.trackInfo;
+			trackInfo.minTimestamp = Math.max(trackInfo.minTimestamp, nextDown(minTimestamp));
+
+			if (gopStart.packet!.type !== 'key') {
+				// The track starts with a delta packet, so the first key packet is the one ending this GOP
+				const firstKeyEndpoint = gopEnd ? nextDown(gopEnd.timestamp) : Infinity;
+				trackInfo.minKeyTimestamp = Math.max(trackInfo.minKeyTimestamp, firstKeyEndpoint);
+			}
+		}
 
 		// Same thing the other way around: if the previous GOP is complete, it now extends up to our minimum timestamp
 		let previousGopStart = gopStart;
@@ -1527,19 +1560,34 @@ export class PacketCache {
 			return undefined;
 		}
 
-		if (entry.nextKey === null) {
-			return null;
-		}
-		// The next key packet itself may have been evicted in the meantime
-		if (entry.nextKey && !entry.nextKey.packet) {
-			entry.nextKey = undefined;
-		}
-		if (entry.nextKey) {
-			return this._checkAgainstRetrievalOptions(entry.nextKey, options);
+		// Delta packets share the next key packet of the packet before them, so walk back through the GOP until some
+		// packet knows it
+		let currentEntry = entry;
+		while (true) {
+			// The next key packet itself may have been evicted in the meantime
+			if (currentEntry.nextKey && !currentEntry.nextKey.packet) {
+				currentEntry.nextKey = undefined;
+			}
+			if (currentEntry.nextKey === undefined && currentEntry.keySeekValidityEndpoint === Infinity) {
+				currentEntry.nextKey = null; // It's the last key packet
+			}
+			if (currentEntry.nextKey !== undefined) {
+				entry.nextKey = currentEntry.nextKey; // Remember it so the next lookup doesn't need to walk again
+				if (entry.nextKey === null) {
+					return null;
+				}
+
+				return this._checkAgainstRetrievalOptions(entry.nextKey, options);
+			}
+			if (currentEntry.packet!.type === 'key' || !currentEntry.prev) {
+				break;
+			}
+
+			currentEntry = currentEntry.prev;
 		}
 
 		// No direct information, but maybe we can find it by following the chain
-		let currentEntry = entry;
+		currentEntry = entry;
 		while (true) {
 			const nextEntry = currentEntry.next;
 			if (nextEntry === undefined) {
