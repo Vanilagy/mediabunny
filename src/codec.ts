@@ -347,7 +347,7 @@ export const buildVideoCodecString = (
 
 		return bestFourCc;
 	} else if (codec === 'mjpeg') {
-		return 'mjpeg';
+		return 'mjpg';
 	} else {
 		assertNever(codec);
 	}
