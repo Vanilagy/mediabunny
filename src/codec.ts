@@ -974,7 +974,17 @@ export const getAudioEncoderConfigExtension = (codec: AudioCodec) => {
 	return {};
 };
 
-const VALID_VIDEO_CODEC_STRING_PREFIXES = ['avc1', 'avc3', 'hev1', 'hvc1', 'vp8', 'vp09', 'av01', ...PRORES_FOURCCS, ...MJPEG_FOURCCS];
+const VALID_VIDEO_CODEC_STRING_PREFIXES = [
+	'avc1',
+	'avc3',
+	'hev1',
+	'hvc1',
+	'vp8',
+	'vp09',
+	'av01',
+	...PRORES_FOURCCS,
+	...MJPEG_FOURCCS
+];
 const AVC_CODEC_STRING_REGEX = /^(avc1|avc3)\.[0-9a-fA-F]{6}$/;
 const HEVC_CODEC_STRING_REGEX = /^(hev1|hvc1)\.(?:[ABC]?\d+)\.[0-9a-fA-F]{1,8}\.[LH]\d+(?:\.[0-9a-fA-F]{1,2}){0,6}$/;
 const VP9_CODEC_STRING_REGEX = /^vp09(?:\.\d{2}){3}(?:(?:\.\d{2}){5})?$/;
