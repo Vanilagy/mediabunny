@@ -52,7 +52,7 @@ test.concurrent('encodes mjpeg frames', async () => {
 		format: new Mp4OutputFormat(),
 		target: outputTarget,
 	});
-	const conversion = await Conversion.init({ input, output });
+	const conversion = await Conversion.init({ input, output, video: { codec: 'mjpeg' } });
 
 	await conversion.execute();
 

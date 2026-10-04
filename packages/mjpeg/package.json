@@ -33,9 +33,6 @@
     "type": "individual",
     "url": "https://github.com/sponsors/Vanilagy"
   },
-  "dependencies": {
-    "@jsquash/jpeg": "^1.6.0"
-  },
   "peerDependencies": {
     "mediabunny": "^1.49.0"
   },

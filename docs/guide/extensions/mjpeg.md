@@ -2,7 +2,7 @@
 description: The @mediabunny/mjpeg extension provides an mjpeg encoding and encoding for browsers.
 ---
 
-# @mediabunny/prores
+# @mediabunny/mjpeg
 
 Browsers don't support mjpeg in their WebCodecs implementations. This extension package provides a decoder and encoder for use with Mediabunny, allowing you to decode mjpeg in the browser. It is implemented using Mediabunny's [custom coder API](https://mediabunny.dev/guide/supported-formats-and-codecs#custom-coders) and the canvas API.
 
