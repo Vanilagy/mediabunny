@@ -94,7 +94,6 @@ class MjpegEncoder extends CustomVideoEncoder {
 		assert(this.config.width && this.config.height);
 		this.canvas = new OffscreenCanvas(this.config.width, this.config.height);
 		this.context = this.canvas.getContext('2d') ?? undefined;
-		console.log('config', this.config);
 		this.metadata = {
 			decoderConfig: {
 				codec: 'jpeg',
