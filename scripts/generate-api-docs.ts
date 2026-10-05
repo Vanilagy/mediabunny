@@ -3,7 +3,6 @@
 // good, which is the point of a custom script for this: full, precise control.
 
 /* eslint-disable @typescript-eslint/restrict-template-expressions */
-/* eslint-disable @typescript-eslint/no-unused-vars */
 /* eslint-disable @stylistic/max-len */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */

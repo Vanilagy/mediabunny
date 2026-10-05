@@ -97,6 +97,7 @@ export {
 	SUBTITLE_CODECS,
 } from './codec';
 export {
+	VideoDecoderWrapper,
 	canDecode,
 	canDecodeVideo,
 	canDecodeAudio,
@@ -264,6 +265,10 @@ export {
 	EncodedPacket,
 	type EncodedPacketSideData,
 	type PacketType,
+	PacketCache,
+	type PacketCacheOptions,
+	PacketReader,
+	type PacketReaderOptions,
 } from './packet';
 export {
 	AudioSample,
@@ -283,18 +288,16 @@ export {
 	registerVideoSampleTransformer,
 } from './sample';
 export {
-	AudioBufferSink,
-	AudioSampleSink,
-	BaseMediaSampleSink,
-	CanvasSink,
-	type CanvasSinkOptions,
-	EncodedPacketSink,
-	type PacketRetrievalOptions,
-	VideoSampleSink,
-	type VideoSinkDecoderOptions,
-	type WrappedAudioBuffer,
-	type WrappedCanvas,
-} from './media-sink';
+	PacketCursor,
+	type PacketCursorConfig,
+	SampleCursor,
+	VideoSampleCursor,
+	AudioSampleCursor,
+	type VideoSampleCursorOptions,
+	type AudioSampleCursorOptions,
+	canvasTransformer,
+	type CanvasTransformerOptions,
+} from './cursors';
 export {
 	Conversion,
 	type ConversionOptions,

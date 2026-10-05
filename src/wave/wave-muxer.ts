@@ -43,7 +43,8 @@ export class WaveMuxer extends Muxer {
 	}
 
 	async start() {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		this.writer = await this.output._getRootWriter(false);
 		this.riffWriter = new RiffWriter(this.writer);
@@ -60,8 +61,6 @@ export class WaveMuxer extends Muxer {
 			this.sampleRate = track.metadata.decoderConfig.sampleRate;
 			this.headerWritten = true;
 		}
-
-		release();
 	}
 
 	async getMimeType() {
@@ -77,37 +76,34 @@ export class WaveMuxer extends Muxer {
 		packet: EncodedPacket,
 		meta?: EncodedAudioChunkMetadata,
 	) {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
-		try {
-			if (!this.headerWritten) {
-				validateAudioChunkMetadata(meta, track.source._codec);
+		if (!this.headerWritten) {
+			validateAudioChunkMetadata(meta, track.source._codec);
 
-				assert(meta);
-				assert(meta.decoderConfig);
+			assert(meta);
+			assert(meta.decoderConfig);
 
-				this.writeHeader(track, meta.decoderConfig);
-				this.sampleRate = meta.decoderConfig.sampleRate;
-				this.headerWritten = true;
-			}
-
-			this.validateTimestamp(track, packet.timestamp, packet.type === 'key');
-
-			if (!this.isRf64 && this.writer.getPos() + packet.data.byteLength >= 2 ** 32) {
-				throw new Error(
-					'Adding more audio data would exceed the maximum RIFF size of 4 GiB. To write larger files, use'
-					+ ' RF64 by setting `large: true` in the WavOutputFormatOptions.',
-				);
-			}
-
-			this.writer.write(packet.data);
-			this.dataSize += packet.data.byteLength;
-			this.sampleCount += Math.round(packet.duration * this.sampleRate!);
-
-			await this.writer.flush();
-		} finally {
-			release();
+			this.writeHeader(track, meta.decoderConfig);
+			this.sampleRate = meta.decoderConfig.sampleRate;
+			this.headerWritten = true;
 		}
+
+		this.validateTimestamp(track, packet.timestamp, packet.type === 'key');
+
+		if (!this.isRf64 && this.writer.getPos() + packet.data.byteLength >= 2 ** 32) {
+			throw new Error(
+				'Adding more audio data would exceed the maximum RIFF size of 4 GiB. To write larger files, use'
+				+ ' RF64 by setting `large: true` in the WavOutputFormatOptions.',
+			);
+		}
+
+		this.writer.write(packet.data);
+		this.dataSize += packet.data.byteLength;
+		this.sampleCount += Math.round(packet.duration * this.sampleRate!);
+
+		await this.writer.flush();
 	}
 
 	async addSubtitleCue() {
@@ -351,7 +347,8 @@ export class WaveMuxer extends Muxer {
 	}
 
 	async finalize() {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		if (!this.headerWritten) {
 			throw new Error(
@@ -388,7 +385,5 @@ export class WaveMuxer extends Muxer {
 			this.writer.seek(this.dataSizePos);
 			this.riffWriter.writeU32(this.dataSize);
 		}
-
-		release();
 	}
 }

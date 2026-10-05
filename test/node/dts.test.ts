@@ -8,10 +8,9 @@ import { Output } from '../../src/output.js';
 import { MkvOutputFormat, Mp4OutputFormat, MpegTsOutputFormat, OutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
 import { Conversion } from '../../src/conversion.js';
-import { EncodedPacketSink } from '../../src/media-sink.js';
-import { EncodedPacket } from '../../src/packet.js';
+import { EncodedPacket, PacketReader } from '../../src/packet.js';
 import { assert, uint8ArraysAreEqual } from '../../src/misc.js';
-import { AudioSampleSink } from '../../src/media-sink.js';
+import { AudioSampleCursor, PacketCursor } from '../../src/cursors.js';
 import { AudioSampleSource } from '../../src/media-source.js';
 import { AudioSample } from '../../src/sample.js';
 import { canEncode, Quality } from '../../src/encode.js';
@@ -126,12 +125,12 @@ test('Decode with the extension', async () => {
 	assert(track);
 
 	const { packetCount } = await track.computePacketStats();
-	const sink = new AudioSampleSink(track);
+	await using cursor = new AudioSampleCursor(track);
 
 	let sampleCount = 0;
 	let nextTimestamp = 0;
 
-	for await (using sample of sink.samples()) {
+	for await (const sample of cursor) {
 		expect(sample.timestamp).toBeCloseTo(nextTimestamp);
 		expect(sample.duration).toBeCloseTo(512 / 24000);
 		expect(sample.format).toBe('f32-planar');
@@ -167,10 +166,10 @@ test('Encode with the extension', async () => {
 	expect(decoderConfig.codec).toBe('dtsc');
 	expect(decoderConfig.description).toBeUndefined();
 
-	const sink = new EncodedPacketSink(track);
+	const cursor = new PacketCursor(track);
 	let packetCount = 0;
 
-	for await (const packet of sink.packets()) {
+	for await (const packet of cursor) {
 		expect(packet.type).toBe('key');
 		packetCount++;
 	}
@@ -193,11 +192,11 @@ test('Round-trip through the extension', async () => {
 	const track = await input.getPrimaryAudioTrack();
 	assert(track);
 
-	const sink = new AudioSampleSink(track);
+	await using cursor = new AudioSampleCursor(track);
 	const chunks: Float32Array[] = [];
 	let decodedFrames = 0;
 
-	for await (using sample of sink.samples()) {
+	for await (const sample of cursor) {
 		expect(sample.numberOfChannels).toBe(ENCODE_CHANNELS);
 		expect(sample.sampleRate).toBe(ENCODE_SAMPLE_RATE);
 		decodedFrames += sample.numberOfFrames;
@@ -236,14 +235,14 @@ test('Encode with huge timestamps', async () => {
 	const track = await input.getPrimaryAudioTrack();
 	assert(track);
 
-	const packetSink = new EncodedPacketSink(track);
-	const firstPacket = await packetSink.getFirstPacket();
+	const packetReader = new PacketReader(track);
+	const firstPacket = await packetReader.getFirst();
 	assert(firstPacket);
 
 	expect(firstPacket.timestamp).toBe(timestamp);
 
-	const sampleSink = new AudioSampleSink(track);
-	const firstSample = (await sampleSink.samples(timestamp).next()).value;
+	await using sampleCursor = new AudioSampleCursor(track);
+	const firstSample = await sampleCursor.seekTo(timestamp);
 	assert(firstSample);
 
 	expect(firstSample.timestamp).toBe(timestamp);
@@ -320,10 +319,10 @@ const readAllPackets = async (input: Input) => {
 	const track = await input.getPrimaryAudioTrack();
 	assert(track);
 
-	const sink = new EncodedPacketSink(track);
+	const cursor = new PacketCursor(track);
 	const packets: EncodedPacket[] = [];
 
-	for await (const packet of sink.packets()) {
+	for await (const packet of cursor) {
 		packets.push(packet);
 	}
 

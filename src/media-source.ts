@@ -24,7 +24,7 @@ import {
 	assert,
 	assertNever,
 	binarySearchLessOrEqual,
-	CallSerializer,
+	NaiveCallSerializer,
 	clamp,
 	clearIntervalUnthrottled,
 	floorToDivisor,
@@ -266,7 +266,7 @@ class VideoEncoderWrapper {
 	}[] = [];
 
 	private customEncoder: CustomVideoEncoder | null = null;
-	private customEncoderCallSerializer = new CallSerializer();
+	private customEncoderCallSerializer = new NaiveCallSerializer();
 	private customEncoderQueueSize = 0;
 
 	// Set when the encoder uses quantizer-based rate control; carries the quantizer value applied to each frame
@@ -299,8 +299,6 @@ class VideoEncoderWrapper {
 	constructor(private source: VideoSource, private encodingConfig: VideoEncodingConfig) {}
 
 	async add(videoSample: VideoSample, shouldClose: boolean, encodeOptions?: VideoEncoderEncodeOptions) {
-		const originalSample = videoSample;
-
 		try {
 			this.checkForEncoderError();
 			this.source._ensureValidAdd();
@@ -402,14 +400,17 @@ class VideoEncoderWrapper {
 					}
 				}
 
-				// Clone if the sample is still the user's, to avoid mutating externally-owned data
-				if (videoSample === originalSample) {
-					videoSample = videoSample.clone();
-					shouldClose = true;
+				const adjusted = videoSample.clone({
+					timestamp: alignedTimestamp,
+					duration: 1 / frameRate,
+				});
+
+				if (shouldClose) {
+					videoSample.close();
 				}
 
-				videoSample.setTimestamp(alignedTimestamp);
-				videoSample.setDuration(1 / frameRate);
+				videoSample = adjusted;
+				shouldClose = true;
 
 				this.frameRateLastSample?.close();
 				this.frameRateLastSample = videoSample.clone();
@@ -656,9 +657,10 @@ class VideoEncoderWrapper {
 		const frameDifference = Math.round((until - this.frameRateLastTimestamp!) * frameRate);
 
 		for (let i = 1; i < frameDifference; i++) {
-			using sample = this.frameRateLastSample.clone();
-			sample.setTimestamp(this.frameRateLastTimestamp! + i / frameRate);
-			sample.setDuration(1 / frameRate);
+			using sample = this.frameRateLastSample.clone({
+				timestamp: this.frameRateLastTimestamp! + i / frameRate,
+				duration: 1 / frameRate,
+			});
 			await this.processAndEncode(sample, encodeOptions);
 		}
 	}
@@ -1902,7 +1904,7 @@ class AudioEncoderWrapper {
 	private writeOutputValue: ((view: DataView, byteOffset: number, value: number) => void) | null = null;
 
 	private customEncoder: CustomAudioEncoder | null = null;
-	private customEncoderCallSerializer = new CallSerializer();
+	private customEncoderCallSerializer = new NaiveCallSerializer();
 	private customEncoderQueueSize = 0;
 
 	private lastEndSampleIndex: number | null = null;
@@ -2806,7 +2808,8 @@ export class MediaStreamAudioTrackSource extends AudioSource {
 				return;
 			}
 
-			audioSample.setTimestamp(currentTimestamp + timestampOffset);
+			// @ts-expect-error Readonly, kind of a hack
+			audioSample.timestamp = currentTimestamp + timestampOffset;
 
 			void this._encoder.add(audioSample, true)
 				.catch((error) => {

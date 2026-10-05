@@ -100,11 +100,10 @@ export class MpegTsMuxer extends Muxer {
 	}
 
 	async start() {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		this.writer = await this.output._getRootWriter(true);
-
-		release();
 	}
 
 	async getMimeType() {
@@ -233,32 +232,29 @@ export class MpegTsMuxer extends Muxer {
 		packet: EncodedPacket,
 		meta?: EncodedVideoChunkMetadata,
 	) {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
-		try {
-			const trackData = this.getVideoTrackData(track, meta);
+		const trackData = this.getVideoTrackData(track, meta);
 
-			this.validateTimestamp(
-				trackData.track,
-				packet.timestamp,
-				packet.type === 'key',
-			);
+		this.validateTimestamp(
+			trackData.track,
+			packet.timestamp,
+			packet.type === 'key',
+		);
 
-			const preparedData = this.prepareVideoPacket(trackData, packet, meta);
+		const preparedData = this.prepareVideoPacket(trackData, packet, meta);
 
-			if (packet.type === 'key') {
-				await this.flushTimestampQueue(trackData);
-			}
-
-			trackData.timestampProcessingQueue.push({
-				data: preparedData,
-				presentationTimestamp: packet.timestamp,
-				decodeTimestamp: null,
-				isKeyframe: packet.type === 'key',
-			});
-		} finally {
-			release();
+		if (packet.type === 'key') {
+			await this.flushTimestampQueue(trackData);
 		}
+
+		trackData.timestampProcessingQueue.push({
+			data: preparedData,
+			presentationTimestamp: packet.timestamp,
+			decodeTimestamp: null,
+			isKeyframe: packet.type === 'key',
+		});
 	}
 
 	async addEncodedAudioPacket(
@@ -266,32 +262,29 @@ export class MpegTsMuxer extends Muxer {
 		packet: EncodedPacket,
 		meta?: EncodedAudioChunkMetadata,
 	) {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
-		try {
-			const trackData = this.getAudioTrackData(track, meta);
+		const trackData = this.getAudioTrackData(track, meta);
 
-			this.validateTimestamp(
-				trackData.track,
-				packet.timestamp,
-				packet.type === 'key',
-			);
+		this.validateTimestamp(
+			trackData.track,
+			packet.timestamp,
+			packet.type === 'key',
+		);
 
-			const preparedData = this.prepareAudioPacket(trackData, packet, meta);
+		const preparedData = this.prepareAudioPacket(trackData, packet, meta);
 
-			if (packet.type === 'key') {
-				await this.flushTimestampQueue(trackData);
-			}
-
-			trackData.timestampProcessingQueue.push({
-				data: preparedData,
-				presentationTimestamp: packet.timestamp,
-				decodeTimestamp: null,
-				isKeyframe: packet.type === 'key',
-			});
-		} finally {
-			release();
+		if (packet.type === 'key') {
+			await this.flushTimestampQueue(trackData);
 		}
+
+		trackData.timestampProcessingQueue.push({
+			data: preparedData,
+			presentationTimestamp: packet.timestamp,
+			decodeTimestamp: null,
+			isKeyframe: packet.type === 'key',
+		});
 	}
 
 	async addSubtitleCue(): Promise<void> {
@@ -729,7 +722,8 @@ export class MpegTsMuxer extends Muxer {
 
 	// eslint-disable-next-line @typescript-eslint/no-misused-promises
 	override async onTrackClose(track: OutputTrack) {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		const trackData = this.trackDatas.find(x => x.track === track);
 		if (trackData) {
@@ -742,12 +736,11 @@ export class MpegTsMuxer extends Muxer {
 		}
 
 		await this.interleavePackets();
-
-		release();
 	}
 
 	async finalize() {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		this.allTracksKnown.resolve();
 
@@ -757,8 +750,6 @@ export class MpegTsMuxer extends Muxer {
 		}
 
 		await this.interleavePackets(true);
-
-		release();
 	}
 }
 

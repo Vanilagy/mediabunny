@@ -2,8 +2,8 @@ import { expect, test } from 'vitest';
 import { Input } from '../../src/input.js';
 import { UrlSource } from '../../src/source.js';
 import { ADTS, ALL_FORMATS } from '../../src/input-format.js';
-import { AudioSampleSink, EncodedPacketSink } from '../../src/media-sink.js';
 import { assert } from '../../src/misc.js';
+import { AudioSampleCursor, PacketCursor } from '../../src/cursors.js';
 
 test('ADTS demuxing', async () => {
 	using input = new Input({
@@ -30,16 +30,16 @@ test('ADTS demuxing', async () => {
 		// No description
 	});
 
-	const sink = new EncodedPacketSink(audioTrack);
+	const cursor = new PacketCursor(audioTrack);
 
-	const firstPacket = await sink.getFirstPacket();
+	const firstPacket = await cursor.seekToFirst();
 	assert(firstPacket);
 
 	expect(firstPacket.data[0]).toBe(0xff);
 	expect((firstPacket.data[1]! & 0xf0)).toBe(0xf0); // Second nibble is also all 1s
 	expect(firstPacket.type).toBe('key');
 
-	const secondPacket = await sink.getNextPacket(firstPacket);
+	const secondPacket = await cursor.next();
 	assert(secondPacket);
 
 	expect(secondPacket.data[0]).toBe(0xff);
@@ -56,11 +56,11 @@ test('ADTS packet decodability', async () => {
 	const audioTrack = await input.getPrimaryAudioTrack();
 	assert(audioTrack);
 
-	const sink = new AudioSampleSink(audioTrack);
+	const cursor = new AudioSampleCursor(audioTrack);
 
 	let count = 0;
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
-	for await (using sample of sink.samples()) {
+	for await (using sample of cursor) {
 		count++;
 	}
 

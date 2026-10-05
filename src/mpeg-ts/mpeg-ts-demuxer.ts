@@ -54,7 +54,6 @@ import {
 	InputTrackBacking,
 	InputVideoTrackBacking,
 } from '../input-track';
-import { PacketRetrievalOptions } from '../media-sink';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags, TrackDisposition } from '../metadata';
 import {
 	assert,
@@ -67,7 +66,9 @@ import {
 	IDENTITY_MATRIX,
 	last,
 	MATRIX_COEFFICIENTS_MAP_INVERSE,
+	MaybeRelevantPromise,
 	readExpGolomb,
+	ResultValue,
 	roundIfAlmostInteger,
 	toDataView,
 	TRANSFER_CHARACTERISTICS_MAP_INVERSE,
@@ -79,7 +80,13 @@ import {
 	getMp3ChannelCount,
 	readMp3FrameHeader,
 } from '../../shared/mp3-misc';
-import { EncodedPacket, PacketType, PLACEHOLDER_DATA } from '../packet';
+import {
+	EncodedPacket,
+	PacketType,
+	PLACEHOLDER_DATA,
+	PacketRetrievalOptions,
+	PacketRetrievalResult,
+} from '../packet';
 import { FileSlice, readBytes, Reader, readU16Be, readU32Be, readU8 } from '../reader';
 import {
 	buildMpegTsMimeType,
@@ -232,8 +239,15 @@ export class MpegTsDemuxer extends Demuxer {
 			let hasProgramAssociationTable = false;
 			let hasProgramMap = false;
 
+			const packetHeaderResult = new ResultValue<TsPacketHeader | null>();
+			const sectionResult = new ResultValue<Section | null>();
+
 			while (true) {
-				const packetHeader = await this.readPacketHeader(currentPos);
+				packetHeaderResult.reset();
+				const packetHeaderPromise = this.readPacketHeader(packetHeaderResult, currentPos);
+				if (packetHeaderResult.pending) await packetHeaderPromise;
+
+				const packetHeader = packetHeaderResult.value;
 				if (!packetHeader) {
 					break;
 				}
@@ -250,11 +264,16 @@ export class MpegTsDemuxer extends Demuxer {
 					continue;
 				}
 
-				const section = await this.readSection(
+				sectionResult.reset();
+				const sectionPromise = this.readSection(
+					sectionResult,
 					currentPos,
 					true,
 					!hasProgramMap, // Expect contiguous sections as long as we don't have the PMT
 				);
+				if (sectionResult.pending) await sectionPromise;
+
+				const section = sectionResult.value;
 				if (!section) {
 					break;
 				}
@@ -544,13 +563,16 @@ export class MpegTsDemuxer extends Demuxer {
 						}
 
 						const context = new PacketReadingContext(elementaryStream, pesPacket);
+						const markResult = new ResultValue<void>();
 
 						if (elementaryStream.info.type === 'video') {
 							// We loop because in some files, the video parameters are not in the first packet
 							while (true) {
 								const contextAlias = context; // TyyyyypeScript 😩
 								contextAlias.suppliedPacket = null;
-								await context.markNextPacket();
+								markResult.reset();
+								const markPromise = context.markNextPacket(markResult);
+								if (markResult.pending) await markPromise;
 
 								if (elementaryStream.info.codec === 'avc') {
 									if (!context.suppliedPacket) {
@@ -701,7 +723,9 @@ export class MpegTsDemuxer extends Demuxer {
 
 							elementaryStream.initialized = true;
 						} else {
-							await context.markNextPacket();
+							const markPromise = context.markNextPacket(markResult);
+							if (markResult.pending) await markPromise;
+
 							if (!context.suppliedPacket) {
 								throw new Error(
 									`Couldn't parse first media packet for Elementary Stream with`
@@ -860,7 +884,12 @@ export class MpegTsDemuxer extends Demuxer {
 		return buildMpegTsMimeType(codecStrings);
 	}
 
-	async readSection(startPos: number, full: boolean, contiguous = false): Promise<Section | null> {
+	async readSection(
+		res: ResultValue<Section | null>,
+		startPos: number,
+		full: boolean,
+		contiguous = false,
+	): MaybeRelevantPromise {
 		let endPos = startPos;
 		let currentPos = startPos;
 		const chunks: Uint8Array[] = [];
@@ -869,8 +898,14 @@ export class MpegTsDemuxer extends Demuxer {
 		let mustAddSectionEnd = true;
 		let randomAccessIndicator = 0;
 
+		const packetResult = new ResultValue<TsPacket | null>();
+
 		while (true) {
-			const packet = await this.readPacket(currentPos);
+			packetResult.reset();
+			const promise = this.readPacket(packetResult, currentPos);
+			if (packetResult.pending) await promise;
+
+			const packet = packetResult.value;
 			currentPos += this.packetStride;
 
 			if (!packet) {
@@ -942,7 +977,7 @@ export class MpegTsDemuxer extends Demuxer {
 		}
 
 		if (!firstPacket) {
-			return null;
+			return res.set(null);
 		}
 
 		let merged: Uint8Array;
@@ -958,21 +993,21 @@ export class MpegTsDemuxer extends Demuxer {
 			}
 		}
 
-		return {
+		return res.set({
 			startPos,
 			endPos: full ? endPos : null,
 			pid: firstPacket.pid,
 			payload: merged,
 			randomAccessIndicator,
-		};
+		});
 	}
 
-	async readPacketHeader(pos: number): Promise<TsPacketHeader | null> {
+	async readPacketHeader(res: ResultValue<TsPacketHeader | null>, pos: number): MaybeRelevantPromise {
 		let slice = this.reader.requestSlice(pos, 4);
 		if (isThenable(slice)) slice = await slice;
 
 		if (!slice) {
-			return null;
+			return res.set(null);
 		}
 
 		const syncByte = readU8(slice);
@@ -995,20 +1030,20 @@ export class MpegTsDemuxer extends Demuxer {
 		// eslint-disable-next-line @typescript-eslint/no-unused-vars
 		const continuityCounter = nextByte & 0xF;
 
-		return {
+		return res.set({
 			payloadUnitStartIndicator,
 			pid,
 			adaptationFieldControl,
-		};
+		});
 	}
 
-	async readPacket(pos: number): Promise<TsPacket | null> {
+	async readPacket(res: ResultValue<TsPacket | null>, pos: number): MaybeRelevantPromise {
 		// Code in here is duplicated from readPacketHeader for performance reasons
 		let slice = this.reader.requestSlice(pos, TS_PACKET_SIZE);
 		if (isThenable(slice)) slice = await slice;
 
 		if (!slice) {
-			return null;
+			return res.set(null);
 		}
 
 		const bytes = readBytes(slice, TS_PACKET_SIZE);
@@ -1033,12 +1068,12 @@ export class MpegTsDemuxer extends Demuxer {
 		// eslint-disable-next-line @typescript-eslint/no-unused-vars
 		const continuityCounter = nextByte & 0xF;
 
-		return {
+		return res.set({
 			payloadUnitStartIndicator,
 			pid,
 			adaptationFieldControl,
 			body: bytes.subarray(4),
-		};
+		});
 	}
 
 	normalizeTimestamp(timestamp: number) {
@@ -1191,11 +1226,13 @@ const readPesPacket = <T extends boolean>(
 	} as T extends true ? TimestampedPesPacket : PesPacket;
 };
 
-abstract class MpegTsTrackBacking implements InputTrackBacking {
-	packetBuffers = new WeakMap<EncodedPacket, PacketBuffer>();
-	/** Used for recreating PacketBuffers if necessary. */
-	packetSectionStarts = new WeakMap<EncodedPacket, number>();
+type EncodedPacketMetadata = {
+	buffer: PacketBuffer | null;
+	/** Used for recreating the PacketBuffer if necessary. */
+	sectionStartPos: number;
+};
 
+abstract class MpegTsTrackBacking implements InputTrackBacking {
 	constructor(public elementaryStream: ElementaryStream) {}
 
 	abstract getType(): TrackType;
@@ -1285,6 +1322,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 	createEncodedPacket(
 		suppliedPacket: SuppliedPacket,
 		duration: number,
+		buffer: PacketBuffer,
 		options: PacketRetrievalOptions,
 	) {
 		let packetType: PacketType;
@@ -1297,7 +1335,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 				: 'delta';
 		}
 
-		return new EncodedPacket(
+		const packet = new EncodedPacket(
 			options.metadataOnly ? PLACEHOLDER_DATA : suppliedPacket.data,
 			packetType,
 			suppliedPacket.pts / TIMESCALE,
@@ -1305,9 +1343,18 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 			suppliedPacket.sequenceNumber,
 			suppliedPacket.data.byteLength,
 		);
+		packet._internal = {
+			buffer,
+			sectionStartPos: suppliedPacket.sectionStartPos,
+		} satisfies EncodedPacketMetadata;
+
+		return packet;
 	}
 
-	async getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
+	async getFirstPacket(
+		res: ResultValue<PacketRetrievalResult>,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise {
 		const section = this.elementaryStream.firstSection;
 		assert(section);
 
@@ -1317,95 +1364,123 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 		const context = new PacketReadingContext(this.elementaryStream, pesPacket);
 		const buffer = new PacketBuffer(this, context);
 
-		const result = await buffer.readNext();
+		const readResult = new ResultValue<PacketWithDuration | null>();
+		const promise = buffer.readNext(readResult);
+		if (readResult.pending) await promise;
+
+		const result = readResult.value;
 		if (!result) {
-			return null;
+			return res.set(new PacketRetrievalResult(null));
 		}
 
-		const packet = this.createEncodedPacket(result.packet, result.duration, options);
-		this.packetBuffers.set(packet, buffer);
-		this.packetSectionStarts.set(packet, result.packet.sectionStartPos);
-
-		return packet;
+		const packet = this.createEncodedPacket(result.packet, result.duration, buffer, options);
+		return res.set(new PacketRetrievalResult(packet));
 	}
 
-	async getNextPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
-		let buffer = this.packetBuffers.get(packet);
+	async getNextPacket(
+		res: ResultValue<PacketRetrievalResult>,
+		packet: EncodedPacket,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise {
+		const metadata = packet._internal as EncodedPacketMetadata | undefined;
+		assert(metadata);
 
-		if (buffer) {
+		const readResult = new ResultValue<PacketWithDuration | null>();
+
+		if (metadata.buffer) {
 			// Fast path
-			const result = await buffer.readNext();
+			const buffer = metadata.buffer;
+			const promise = buffer.readNext(readResult);
+			if (readResult.pending) await promise;
+
+			const result = readResult.value;
 			if (!result) {
-				return null;
+				return res.set(new PacketRetrievalResult(null));
 			}
 
-			// Remove PacketBuffer access from the old packet, it belongs to the next packet now
-			this.packetBuffers.delete(packet);
+			// Remove PacketBuffer access from the old packet (and all its clones), it belongs to the next packet now
+			metadata.buffer = null;
 
-			const newPacket = this.createEncodedPacket(result.packet, result.duration, options);
-			this.packetBuffers.set(newPacket, buffer);
-			this.packetSectionStarts.set(newPacket, result.packet.sectionStartPos);
-
-			return newPacket;
+			const newPacket = this.createEncodedPacket(result.packet, result.duration, buffer, options);
+			return res.set(new PacketRetrievalResult(newPacket));
 		}
 
 		// No buffer, we gotta do some rereading
-		const sectionStartPos = this.packetSectionStarts.get(packet);
-		if (sectionStartPos === undefined) {
-			throw new Error('Packet was not created from this track.');
-		}
-
 		const demuxer = this.elementaryStream.demuxer;
-		const section = await demuxer.readSection(sectionStartPos, true);
+		const sectionResult = new ResultValue<Section | null>();
+		const sectionPromise = demuxer.readSection(sectionResult, metadata.sectionStartPos, true);
+		if (sectionResult.pending) await sectionPromise;
+
+		const section = sectionResult.value;
 		assert(section);
 
 		const pesPacket = readPesPacket(demuxer, section, true);
 		assert(pesPacket);
 
 		const context = new PacketReadingContext(this.elementaryStream, pesPacket);
-		buffer = new PacketBuffer(this, context);
+		const buffer = new PacketBuffer(this, context);
 
 		// Advance until we pass the current packet's sequence number
 		const targetSequenceNumber = packet.sequenceNumber;
 		while (true) {
-			const result = await buffer.readNext();
+			readResult.reset();
+			const promise = buffer.readNext(readResult);
+			if (readResult.pending) await promise;
+
+			const result = readResult.value;
 			if (!result) {
-				return null;
+				return res.set(new PacketRetrievalResult(null));
 			}
 
 			if (result.packet.sequenceNumber > targetSequenceNumber) {
 				// We found the next packet!
-				const newPacket = this.createEncodedPacket(result.packet, result.duration, options);
-				this.packetBuffers.set(newPacket, buffer);
-				this.packetSectionStarts.set(newPacket, result.packet.sectionStartPos);
-				return newPacket;
+				const newPacket = this.createEncodedPacket(result.packet, result.duration, buffer, options);
+				return res.set(new PacketRetrievalResult(newPacket));
 			}
 		}
 	}
 
-	async getNextKeyPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
+	async getNextKeyPacket(
+		res: ResultValue<PacketRetrievalResult>,
+		packet: EncodedPacket,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise {
 		let currentPacket: EncodedPacket | null = packet;
+
+		const nextResult = new ResultValue<PacketRetrievalResult>();
 
 		// Just loop until we hit one
 		while (true) {
-			currentPacket = await this.getNextPacket(currentPacket, options);
+			nextResult.reset();
+			const promise = this.getNextPacket(nextResult, currentPacket, options);
+			if (nextResult.pending) await promise;
+
+			currentPacket = nextResult.value.packet;
 
 			if (!currentPacket) {
-				return null;
+				return res.set(nextResult.value);
 			}
 
 			if (currentPacket.type === 'key') {
-				return currentPacket;
+				return res.set(nextResult.value);
 			}
 		}
 	}
 
-	getPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
-		return this.doPacketLookup(timestamp, false, options);
+	getPacket(
+		res: ResultValue<PacketRetrievalResult>,
+		timestamp: number,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise {
+		return this.doPacketLookup(res, timestamp, false, options);
 	}
 
-	getKeyPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
-		return this.doPacketLookup(timestamp, true, options);
+	getKeyPacket(
+		res: ResultValue<PacketRetrievalResult>,
+		timestamp: number,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise {
+		return this.doPacketLookup(res, timestamp, true, options);
 	}
 
 	/**
@@ -1414,48 +1489,64 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 	 * make it more performant for small files and over high-latency readers such as the network.
 	 */
 	async doPacketLookup(
+		res: ResultValue<PacketRetrievalResult>,
 		timestamp: number,
 		keyframesOnly: boolean,
 		options: PacketRetrievalOptions,
-	): Promise<EncodedPacket | null> {
+	): MaybeRelevantPromise {
 		const searchPts = roundIfAlmostInteger(timestamp * TIMESCALE);
 
 		const demuxer = this.elementaryStream.demuxer;
 		const { reader, seekChunkSize } = demuxer;
 		const pid = this.elementaryStream.pid;
 
+		type ChunkSearchResult = { pesPacketHeader: TimestampedPesPacketHeader; section: Section } | null;
+
+		const packetHeaderResult = new ResultValue<TsPacketHeader | null>();
+		const sectionResult = new ResultValue<Section | null>();
+		const chunkSearchResult = new ResultValue<ChunkSearchResult>();
+
 		const findFirstPesPacketHeaderInChunk = async (
+			res: ResultValue<ChunkSearchResult>,
 			startPos: number,
 			endPos: number,
 			readSectionInFull: boolean,
-		) => {
+		): MaybeRelevantPromise => {
 			let currentPos = startPos;
 
 			while (currentPos < endPos) {
-				const packetHeader = await demuxer.readPacketHeader(currentPos);
+				packetHeaderResult.reset();
+				const packetHeaderPromise = demuxer.readPacketHeader(packetHeaderResult, currentPos);
+				if (packetHeaderResult.pending) await packetHeaderPromise;
+
+				const packetHeader = packetHeaderResult.value;
 				if (!packetHeader) {
-					return null;
+					return res.set(null);
 				}
 
 				if (packetHeader.pid === pid && packetHeader.payloadUnitStartIndicator === 1) {
-					const section = await demuxer.readSection(currentPos, readSectionInFull);
+					sectionResult.reset();
+					const sectionPromise = demuxer.readSection(sectionResult, currentPos, readSectionInFull);
+					if (sectionResult.pending) await sectionPromise;
+
+					const section = sectionResult.value;
 					if (!section) {
-						return null;
+						return res.set(null);
 					}
 
 					const pesPacketHeader = readPesPacketHeader(demuxer, section, false);
 					if (pesPacketHeader && pesPacketHeader.pts !== null) {
-						return {
+						return res.set({
 							pesPacketHeader: pesPacketHeader as TimestampedPesPacketHeader,
 							section,
-						};
+						});
 					}
 				}
 
 				currentPos += demuxer.packetStride;
 			}
 
-			return null;
+			return res.set(null);
 		};
 
 		// Get the first PES packet of the track
@@ -1466,7 +1557,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 
 		if (searchPts < firstPesPacketHeader.pts) {
 			// We're before the first packet, definitely nothing here
-			return null;
+			return res.set(new PacketRetrievalResult(null));
 		}
 
 		let scanStartPos: number;
@@ -1495,7 +1586,16 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 							+ firstPesPacketHeader.sectionStartPos;
 						const chunkEndPos = chunkStartPos + seekChunkSize;
 
-						const result = await findFirstPesPacketHeaderInChunk(chunkStartPos, chunkEndPos, false);
+						chunkSearchResult.reset();
+						const promise = findFirstPesPacketHeaderInChunk(
+							chunkSearchResult,
+							chunkStartPos,
+							chunkEndPos,
+							false,
+						);
+						if (chunkSearchResult.pending) await promise;
+
+						const result = chunkSearchResult.value;
 
 						if (!result) {
 							// No PES packet found in this chunk, search left
@@ -1522,11 +1622,16 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 		}
 
 		// Find the first PES packet at or after scanStartPos
-		const result = await findFirstPesPacketHeaderInChunk(
+		chunkSearchResult.reset();
+		const scanPromise = findFirstPesPacketHeaderInChunk(
+			chunkSearchResult,
 			scanStartPos,
 			reader.fileSize ?? Infinity,
 			false,
 		);
+		if (chunkSearchResult.pending) await scanPromise;
+
+		const result = chunkSearchResult.value;
 
 		let currentPesHeader = result?.pesPacketHeader ?? null;
 		if (!currentPesHeader) {
@@ -1539,9 +1644,13 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 		const retrieveEncodedPacket = async (
 			sectionStartPos: number,
 			predicate: (packet: SuppliedPacket) => boolean,
-		) => {
+		): MaybeRelevantPromise => {
 			// Load the relevant section in full
-			const section = await demuxer.readSection(sectionStartPos, true);
+			sectionResult.reset();
+			const sectionPromise = demuxer.readSection(sectionResult, sectionStartPos, true);
+			if (sectionResult.pending) await sectionPromise;
+
+			const section = sectionResult.value;
 			assert(section);
 
 			const pesPacket = readPesPacket(demuxer, section, true);
@@ -1550,6 +1659,8 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 			const context = new PacketReadingContext(this.elementaryStream, pesPacket);
 			const buffer = new PacketBuffer(this, context);
 
+			const didReadResult = new ResultValue<boolean>();
+
 			// Advance until the top-most presentation timestamp crosses or equals searchPts
 			while (true) {
 				const topPts = last(buffer.presentationOrderPackets)?.pts ?? -Infinity;
@@ -1557,15 +1668,18 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 					break;
 				}
 
-				const didRead = await buffer.readNextPacket();
-				if (!didRead) {
+				didReadResult.reset();
+				const promise = buffer.readNextPacket(didReadResult);
+				if (didReadResult.pending) await promise;
+
+				if (!didReadResult.value) {
 					break;
 				}
 			}
 
 			const targetIndex = findLastIndex(buffer.presentationOrderPackets, predicate);
 			if (targetIndex === -1) {
-				return null;
+				return res.set(new PacketRetrievalResult(null));
 			}
 
 			const targetPacket = buffer.presentationOrderPackets[targetIndex]!;
@@ -1579,14 +1693,15 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 			}
 			buffer.lastDuration = lastDuration; // Kinda ugly but necessary fix
 
-			const result = await buffer.readNext();
+			const readResult = new ResultValue<PacketWithDuration | null>();
+			const readPromise = buffer.readNext(readResult);
+			if (readResult.pending) await readPromise;
+
+			const result = readResult.value;
 			assert(result);
 
-			const packet = this.createEncodedPacket(result.packet, result.duration, options);
-			this.packetBuffers.set(packet, buffer);
-			this.packetSectionStarts.set(packet, result.packet.sectionStartPos);
-
-			return packet;
+			const packet = this.createEncodedPacket(result.packet, result.duration, buffer, options);
+			return res.set(new PacketRetrievalResult(packet));
 		};
 
 		if (!keyframesOnly || this.allPacketsAreKeyPackets()) {
@@ -1600,13 +1715,21 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 				let currentPos = currentPesHeader.sectionStartPos + demuxer.packetStride;
 
 				while (true) {
-					const packetHeader = await demuxer.readPacketHeader(currentPos);
+					packetHeaderResult.reset();
+					const packetHeaderPromise = demuxer.readPacketHeader(packetHeaderResult, currentPos);
+					if (packetHeaderResult.pending) await packetHeaderPromise;
+
+					const packetHeader = packetHeaderResult.value;
 					if (!packetHeader) {
 						break outer; // End of file
 					}
 
 					if (packetHeader.pid === pid && packetHeader.payloadUnitStartIndicator === 1) {
-						const section = await demuxer.readSection(currentPos, false);
+						sectionResult.reset();
+						const sectionPromise = demuxer.readSection(sectionResult, currentPos, false);
+						if (sectionResult.pending) await sectionPromise;
+
+						const section = sectionResult.value;
 						if (section) {
 							const nextPesHeader = readPesPacketHeader(demuxer, section, false);
 							if (nextPesHeader && nextPesHeader.pts !== null) {
@@ -1632,13 +1755,21 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 				let pos = currentPesHeader.sectionStartPos - demuxer.packetStride;
 
 				while (pos >= demuxer.packetOffset) {
-					const packetHeader = await demuxer.readPacketHeader(pos);
+					packetHeaderResult.reset();
+					const packetHeaderPromise = demuxer.readPacketHeader(packetHeaderResult, pos);
+					if (packetHeaderResult.pending) await packetHeaderPromise;
+
+					const packetHeader = packetHeaderResult.value;
 					if (!packetHeader) {
 						break outer;
 					}
 
 					if (packetHeader.pid === pid && packetHeader.payloadUnitStartIndicator === 1) {
-						const section = await demuxer.readSection(pos, false);
+						sectionResult.reset();
+						const sectionPromise = demuxer.readSection(sectionResult, pos, false);
+						if (sectionResult.pending) await sectionPromise;
+
+						const section = sectionResult.value;
 						if (section) {
 							const header = readPesPacketHeader(demuxer, section, false);
 							if (header && header.pts !== null) {
@@ -1661,6 +1792,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 			let nextChunkStartPos: number | null = null; // "next" as in later in the file, even tho we scan backwards
 
 			const readSectionsInFull = !this.elementaryStream.canBeTrustedWithKeyPackets;
+			const markResult = new ResultValue<void>();
 
 			while (true) {
 				let bestKeyPesHeader: TimestampedPesPacketHeader | null = null;
@@ -1674,11 +1806,16 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 					pesHeader = firstPesPacketHeader;
 					pesHeaderSection = firstSection;
 				} else {
-					const result = await findFirstPesPacketHeaderInChunk(
+					chunkSearchResult.reset();
+					const promise = findFirstPesPacketHeaderInChunk(
+						chunkSearchResult,
 						currentChunkStartPos,
 						reader.fileSize ?? Infinity,
 						readSectionsInFull,
 					);
+					if (chunkSearchResult.pending) await promise;
+
+					const result = chunkSearchResult.value;
 
 					pesHeader = result?.pesPacketHeader ?? null;
 					pesHeaderSection = result?.section ?? null;
@@ -1704,7 +1841,9 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 							assert(pesPacket);
 
 							const context = new PacketReadingContext(this.elementaryStream, pesPacket);
-							await context.markNextPacket();
+							markResult.reset();
+							const markPromise = context.markNextPacket(markResult);
+							if (markResult.pending) await markPromise;
 
 							isKeyPacket = context.suppliedPacket?.randomAccessIndicator === 1;
 						}
@@ -1731,13 +1870,21 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 					let currentPos = pesHeader.sectionStartPos + demuxer.packetStride;
 
 					while (true) {
-						const packetHeader = await demuxer.readPacketHeader(currentPos);
+						packetHeaderResult.reset();
+						const packetHeaderPromise = demuxer.readPacketHeader(packetHeaderResult, currentPos);
+						if (packetHeaderResult.pending) await packetHeaderPromise;
+
+						const packetHeader = packetHeaderResult.value;
 						if (!packetHeader) {
 							break outer; // End of file
 						}
 
 						if (packetHeader.pid === pid && packetHeader.payloadUnitStartIndicator === 1) {
-							const section = await demuxer.readSection(currentPos, readSectionsInFull);
+							sectionResult.reset();
+							const sectionPromise = demuxer.readSection(sectionResult, currentPos, readSectionsInFull);
+							if (sectionResult.pending) await sectionPromise;
+
+							const section = sectionResult.value;
 							if (section) {
 								const nextPesHeader = readPesPacketHeader(demuxer, section, false);
 
@@ -1765,13 +1912,21 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 							let pos = startPesHeader.sectionStartPos - demuxer.packetStride;
 
 							while (pos >= demuxer.packetOffset) {
-								const packetHeader = await demuxer.readPacketHeader(pos);
+								packetHeaderResult.reset();
+								const packetHeaderPromise = demuxer.readPacketHeader(packetHeaderResult, pos);
+								if (packetHeaderResult.pending) await packetHeaderPromise;
+
+								const packetHeader = packetHeaderResult.value;
 								if (!packetHeader) {
 									break outer;
 								}
 
 								if (packetHeader.pid === pid && packetHeader.payloadUnitStartIndicator === 1) {
-									const section = await demuxer.readSection(pos, readSectionsInFull);
+									sectionResult.reset();
+									const sectionPromise = demuxer.readSection(sectionResult, pos, readSectionsInFull);
+									if (sectionResult.pending) await sectionPromise;
+
+									const section = sectionResult.value;
 									if (section) {
 										const header = readPesPacketHeader(demuxer, section, false);
 										if (header && header.pts !== null) {
@@ -1786,17 +1941,15 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 						}
 					}
 
-					const encodedPacket = await retrieveEncodedPacket(
+					// There must be one that matches
+					return retrieveEncodedPacket(
 						startPesHeader.sectionStartPos,
 						p => p.pts <= searchPts && p.randomAccessIndicator === 1,
 					);
-					assert(encodedPacket); // There must be one
-
-					return encodedPacket;
 				}
 
 				if (isFirstChunk) {
-					return null;
+					return res.set(new PacketRetrievalResult(null));
 				}
 
 				// No key frame found in this chunk, move one chunk to the left
@@ -1951,6 +2104,11 @@ type SuppliedPacket = {
 	randomAccessIndicator: number;
 };
 
+type PacketWithDuration = {
+	packet: SuppliedPacket;
+	duration: number;
+};
+
 /** Stateful context used to extract exact encoded packets from the underlying data stream. */
 class PacketReadingContext {
 	elementaryStream: ElementaryStream;
@@ -1975,25 +2133,15 @@ class PacketReadingContext {
 		this.startingPesPacket = startingPesPacket;
 	}
 
-	ensureBuffered(length: number) {
-		const remaining = this.endPos - this.currentPos;
-		if (remaining >= length) {
-			return length;
+	async ensureBuffered(res: ResultValue<number>, length: number): MaybeRelevantPromise {
+		const targetEndPos = this.currentPos + length;
+
+		if (this.endPos >= targetEndPos) {
+			return res.set(length);
 		}
 
-		return this.bufferData(length - remaining)
-			.then(() => Math.min(this.endPos - this.currentPos, length));
-	}
-
-	getCurrentPesPacket() {
-		const packet = this.pesPackets[this.currentPesPacketIndex];
-		assert(packet);
-
-		return packet;
-	}
-
-	async bufferData(length: number): Promise<void> {
-		const targetEndPos = this.endPos + length;
+		const packetHeaderResult = new ResultValue<TsPacketHeader | null>();
+		const sectionResult = new ResultValue<Section | null>();
 
 		while (this.endPos < targetEndPos) {
 			let pesPacket: PesPacket;
@@ -2005,15 +2153,23 @@ class PacketReadingContext {
 				assert(currentPos !== null);
 
 				while (true) {
-					const packetHeader = await this.demuxer.readPacketHeader(currentPos);
+					packetHeaderResult.reset();
+					const packetHeaderPromise = this.demuxer.readPacketHeader(packetHeaderResult, currentPos);
+					if (packetHeaderResult.pending) await packetHeaderPromise;
+
+					const packetHeader = packetHeaderResult.value;
 					if (!packetHeader) {
-						return;
+						return res.set(Math.min(this.endPos - this.currentPos, length));
 					}
 
 					if (packetHeader.pid === this.pid) {
-						const nextSection = await this.demuxer.readSection(currentPos, true);
+						sectionResult.reset();
+						const sectionPromise = this.demuxer.readSection(sectionResult, currentPos, true);
+						if (sectionResult.pending) await sectionPromise;
+
+						const nextSection = sectionResult.value;
 						if (!nextSection) {
-							return;
+							return res.set(Math.min(this.endPos - this.currentPos, length));
 						}
 
 						const nextPesPacket = readPesPacket(this.demuxer, nextSection, false);
@@ -2030,6 +2186,15 @@ class PacketReadingContext {
 			this.pesPackets.push(pesPacket);
 			this.endPos += pesPacket.data.byteLength;
 		}
+
+		return res.set(length);
+	}
+
+	getCurrentPesPacket() {
+		const packet = this.pesPackets[this.currentPesPacketIndex];
+		assert(packet);
+
+		return packet;
 	}
 
 	readBytes(length: number) {
@@ -2122,10 +2287,11 @@ class PacketReadingContext {
 		this.currentPesPacketIndex++;
 	}
 
-	async markNextPacket() {
+	async markNextPacket(res: ResultValue<void>): MaybeRelevantPromise {
 		assert(!this.suppliedPacket);
 
 		const elementaryStream = this.elementaryStream;
+		const bufferedResult = new ResultValue<number>();
 
 		if (elementaryStream.info.type === 'video') {
 			// Our job here is to separate the video stream into access units. Sometimes this is easy (like when AUDs
@@ -2144,8 +2310,11 @@ class PacketReadingContext {
 			let lastFirstMacroblockInSlice = 0;
 
 			while (true) {
-				let remaining = this.ensureBuffered(CHUNK_SIZE);
-				if (isThenable(remaining)) remaining = await remaining;
+				bufferedResult.reset();
+				const bufferedPromise = this.ensureBuffered(bufferedResult, CHUNK_SIZE);
+				if (bufferedResult.pending) await bufferedPromise;
+
+				const remaining = bufferedResult.value;
 
 				if (remaining === 0) {
 					break;
@@ -2275,7 +2444,8 @@ class PacketReadingContext {
 						// End the packet at this start code (the next frame begins here)
 						const packetLength = startCodePos - packetStartPos;
 						this.seekTo(packetStartPos);
-						return this.supplyPacket(packetLength, 0);
+						this.supplyPacket(packetLength, 0);
+						return res.set();
 					}
 
 					i += startCodeLength;
@@ -2291,15 +2461,20 @@ class PacketReadingContext {
 			if (packetStartPos !== null && this.endPos > packetStartPos) {
 				const packetLength = this.endPos - packetStartPos;
 				this.seekTo(packetStartPos);
-				return this.supplyPacket(packetLength, 0);
+				this.supplyPacket(packetLength, 0);
 			}
+
+			return res.set();
 		} else {
 			const codec = elementaryStream.info.codec;
 			const CHUNK_SIZE = 128;
 
 			while (true) {
-				let remaining = this.ensureBuffered(CHUNK_SIZE);
-				if (isThenable(remaining)) remaining = await remaining;
+				bufferedResult.reset();
+				const bufferedPromise = this.ensureBuffered(bufferedResult, CHUNK_SIZE);
+				if (bufferedResult.pending) await bufferedPromise;
+
+				const remaining = bufferedResult.value;
 
 				const startPos = this.currentPos;
 
@@ -2314,11 +2489,12 @@ class PacketReadingContext {
 						this.skip(-1);
 						const possibleHeaderStartPos = this.currentPos;
 
-						let remaining = this.ensureBuffered(MAX_ADTS_FRAME_HEADER_SIZE);
-						if (isThenable(remaining)) remaining = await remaining;
+						bufferedResult.reset();
+						const headerPromise = this.ensureBuffered(bufferedResult, MAX_ADTS_FRAME_HEADER_SIZE);
+						if (bufferedResult.pending) await headerPromise;
 
-						if (remaining < MAX_ADTS_FRAME_HEADER_SIZE) {
-							return;
+						if (bufferedResult.value < MAX_ADTS_FRAME_HEADER_SIZE) {
+							return res.set();
 						}
 
 						const headerBytes = this.readBytes(MAX_ADTS_FRAME_HEADER_SIZE);
@@ -2327,13 +2503,15 @@ class PacketReadingContext {
 						if (header) {
 							this.seekTo(possibleHeaderStartPos);
 
-							let remaining = this.ensureBuffered(header.frameLength);
-							if (isThenable(remaining)) remaining = await remaining;
+							bufferedResult.reset();
+							const framePromise = this.ensureBuffered(bufferedResult, header.frameLength);
+							if (bufferedResult.pending) await framePromise;
 
-							return this.supplyPacket(
-								remaining,
+							this.supplyPacket(
+								bufferedResult.value,
 								Math.round(SAMPLES_PER_AAC_FRAME * TIMESCALE / elementaryStream.info.sampleRate),
 							);
+							return res.set();
 						} else {
 							this.seekTo(possibleHeaderStartPos + 1);
 						}
@@ -2345,11 +2523,12 @@ class PacketReadingContext {
 						this.skip(-1);
 						const possibleHeaderStartPos = this.currentPos;
 
-						let remaining = this.ensureBuffered(MP3_FRAME_HEADER_SIZE);
-						if (isThenable(remaining)) remaining = await remaining;
+						bufferedResult.reset();
+						const headerPromise = this.ensureBuffered(bufferedResult, MP3_FRAME_HEADER_SIZE);
+						if (bufferedResult.pending) await headerPromise;
 
-						if (remaining < MP3_FRAME_HEADER_SIZE) {
-							return;
+						if (bufferedResult.value < MP3_FRAME_HEADER_SIZE) {
+							return res.set();
 						}
 
 						const headerBytes = this.readBytes(MP3_FRAME_HEADER_SIZE);
@@ -2359,12 +2538,14 @@ class PacketReadingContext {
 						if (result.header) {
 							this.seekTo(possibleHeaderStartPos);
 
-							let remaining = this.ensureBuffered(result.header.totalSize);
-							if (isThenable(remaining)) remaining = await remaining;
+							bufferedResult.reset();
+							const framePromise = this.ensureBuffered(bufferedResult, result.header.totalSize);
+							if (bufferedResult.pending) await framePromise;
 
 							const duration = result.header.audioSamplesInFrame * TIMESCALE
 								/ elementaryStream.info.sampleRate;
-							return this.supplyPacket(remaining, Math.round(duration));
+							this.supplyPacket(bufferedResult.value, Math.round(duration));
+							return res.set();
 						} else {
 							this.seekTo(possibleHeaderStartPos + 1);
 						}
@@ -2377,11 +2558,12 @@ class PacketReadingContext {
 						const possibleSyncPos = this.currentPos;
 
 						// Need at least 5 bytes for sync word + CRC + fscod/frmsizecod
-						let remaining = this.ensureBuffered(5);
-						if (isThenable(remaining)) remaining = await remaining;
+						bufferedResult.reset();
+						const headerPromise = this.ensureBuffered(bufferedResult, 5);
+						if (bufferedResult.pending) await headerPromise;
 
-						if (remaining < 5) {
-							return;
+						if (bufferedResult.value < 5) {
+							return res.set();
 						}
 
 						const headerBytes = this.readBytes(5);
@@ -2406,13 +2588,15 @@ class PacketReadingContext {
 
 						this.seekTo(possibleSyncPos);
 
-						remaining = this.ensureBuffered(frameSize);
-						if (isThenable(remaining)) remaining = await remaining;
+						bufferedResult.reset();
+						const framePromise = this.ensureBuffered(bufferedResult, frameSize);
+						if (bufferedResult.pending) await framePromise;
 
 						const duration = Math.round(
 							AC3_SAMPLES_PER_FRAME * TIMESCALE / elementaryStream.info.sampleRate,
 						);
-						return this.supplyPacket(remaining, duration);
+						this.supplyPacket(bufferedResult.value, duration);
+						return res.set();
 					} else if (codec === 'eac3') {
 						if (byte !== 0x0b) {
 							continue;
@@ -2422,11 +2606,12 @@ class PacketReadingContext {
 						const possibleSyncPos = this.currentPos;
 
 						// Need at least 5 bytes for E-AC-3 header parsing (sync word + frmsiz + fscod/numblkscod)
-						let remaining = this.ensureBuffered(5);
-						if (isThenable(remaining)) remaining = await remaining;
+						bufferedResult.reset();
+						const headerPromise = this.ensureBuffered(bufferedResult, 5);
+						if (bufferedResult.pending) await headerPromise;
 
-						if (remaining < 5) {
-							return;
+						if (bufferedResult.value < 5) {
+							return res.set();
 						}
 
 						const headerBytes = this.readBytes(5);
@@ -2444,15 +2629,17 @@ class PacketReadingContext {
 
 						this.seekTo(possibleSyncPos);
 
-						remaining = this.ensureBuffered(frameSize);
-						if (isThenable(remaining)) remaining = await remaining;
+						bufferedResult.reset();
+						const framePromise = this.ensureBuffered(bufferedResult, frameSize);
+						if (bufferedResult.pending) await framePromise;
 
 						// Duration = numblks * 256 samples per block
 						const samplesPerFrame = numblks * 256;
 						const duration = Math.round(
 							samplesPerFrame * TIMESCALE / elementaryStream.info.sampleRate,
 						);
-						return this.supplyPacket(remaining, duration);
+						this.supplyPacket(bufferedResult.value, duration);
+						return res.set();
 					} else if (codec === 'dts') {
 						if (byte !== 0x7f && byte !== 0x64) {
 							continue;
@@ -2461,11 +2648,12 @@ class PacketReadingContext {
 						this.skip(-1);
 						const possibleSyncPos = this.currentPos;
 
-						let remaining = this.ensureBuffered(DTS_CORE_FRAME_HEADER_SIZE);
-						if (isThenable(remaining)) remaining = await remaining;
+						bufferedResult.reset();
+						const headerPromise = this.ensureBuffered(bufferedResult, DTS_CORE_FRAME_HEADER_SIZE);
+						if (bufferedResult.pending) await headerPromise;
 
-						if (remaining < DTS_CORE_FRAME_HEADER_SIZE) {
-							return;
+						if (bufferedResult.value < DTS_CORE_FRAME_HEADER_SIZE) {
+							return res.set();
 						}
 
 						const headerBytes = this.readBytes(DTS_CORE_FRAME_HEADER_SIZE);
@@ -2483,10 +2671,11 @@ class PacketReadingContext {
 							this.seekTo(possibleSyncPos);
 
 							const headerBound = Math.min(leadingExss.frameSize, DTS_EXSS_MAX_HEADER_SIZE);
-							let remaining = this.ensureBuffered(headerBound);
-							if (isThenable(remaining)) remaining = await remaining;
+							bufferedResult.reset();
+							const boundPromise = this.ensureBuffered(bufferedResult, headerBound);
+							if (bufferedResult.pending) await boundPromise;
 
-							leadingExss = parseDtsExssHeader(this.readBytes(remaining)) ?? leadingExss;
+							leadingExss = parseDtsExssHeader(this.readBytes(bufferedResult.value)) ?? leadingExss;
 						}
 
 						let frameSize = core ? core.frameSize : leadingExss!.frameSize;
@@ -2501,10 +2690,11 @@ class PacketReadingContext {
 								this.seekTo(possibleSyncPos);
 
 								const neededBytes = nextSubstreamPos + DTS_EXSS_HEADER_PREFIX_SIZE;
-								let remaining = this.ensureBuffered(neededBytes);
-								if (isThenable(remaining)) remaining = await remaining;
+								bufferedResult.reset();
+								const neededPromise = this.ensureBuffered(bufferedResult, neededBytes);
+								if (bufferedResult.pending) await neededPromise;
 
-								if (remaining < neededBytes) {
+								if (bufferedResult.value < neededBytes) {
 									break;
 								}
 
@@ -2529,13 +2719,15 @@ class PacketReadingContext {
 
 						this.seekTo(possibleSyncPos);
 
-						remaining = this.ensureBuffered(frameSize);
-						if (isThenable(remaining)) remaining = await remaining;
+						bufferedResult.reset();
+						const framePromise = this.ensureBuffered(bufferedResult, frameSize);
+						if (bufferedResult.pending) await framePromise;
 
 						const duration = Math.round(
 							sampleCount * TIMESCALE / elementaryStream.info.sampleRate,
 						);
-						return this.supplyPacket(remaining, duration);
+						this.supplyPacket(bufferedResult.value, duration);
+						return res.set();
 					} else {
 						throw new Error('Unhandled.');
 					}
@@ -2545,6 +2737,8 @@ class PacketReadingContext {
 					break;
 				}
 			}
+
+			return res.set();
 		}
 	}
 
@@ -2630,19 +2824,39 @@ class PacketBuffer {
 		assert(this.reorderSize >= 0);
 	}
 
-	async readNext(): Promise<{ packet: SuppliedPacket; duration: number } | null> {
+	async readNext(res: ResultValue<PacketWithDuration | null>): MaybeRelevantPromise {
+		const readResult = new ResultValue<boolean>();
+
 		if (this.decodeOrderPackets.length === 0) {
 			// We need the next packet
-			const didRead = await this.readNextPacket();
-			if (!didRead) {
-				return null;
+			const promise = this.readNextPacket(readResult);
+			if (readResult.pending) await promise;
+
+			if (!readResult.value) {
+				return res.set(null);
 			}
 		}
 
-		// Ensure we know the next packet in presentation order so we can compute the current packet's duration
-		await this.ensureCurrentPacketHasNext();
+		const packet = this.decodeOrderPackets[0];
+		assert(packet);
 
-		const packet = this.decodeOrderPackets[0]!;
+		// Ensure we know the next packet in presentation order so we can compute the current packet's duration
+		while (true) {
+			const presentationIndex = this.presentationOrderPackets.indexOf(packet);
+
+			// Check if the current packet has a next packet
+			if (presentationIndex !== -1 && presentationIndex <= this.presentationOrderPackets.length - 2) {
+				break;
+			}
+
+			readResult.reset();
+			const promise = this.readNextPacket(readResult);
+			if (readResult.pending) await promise;
+
+			if (!readResult.value) {
+				break;
+			}
+		}
 
 		// Let's compute the duration
 		const presentationIndex = this.presentationOrderPackets.indexOf(packet);
@@ -2669,12 +2883,12 @@ class PacketBuffer {
 			this.presentationOrderPackets.shift();
 		}
 
-		return { packet, duration };
+		return res.set({ packet, duration });
 	}
 
-	async readNextPacket() {
+	async readNextPacket(res: ResultValue<boolean>): MaybeRelevantPromise {
 		if (this.reachedEnd) {
-			return false;
+			return res.set(false);
 		}
 
 		let suppliedPacket: SuppliedPacket | null;
@@ -2682,7 +2896,10 @@ class PacketBuffer {
 			// Small optimization: there was already a supplied packet in the context, so let's first use that one
 			suppliedPacket = this.context.suppliedPacket;
 		} else {
-			await this.context.markNextPacket();
+			const markResult = new ResultValue<void>();
+			const promise = this.context.markNextPacket(markResult);
+			if (markResult.pending) await promise;
+
 			suppliedPacket = this.context.suppliedPacket;
 		}
 		this.context.suppliedPacket = null;
@@ -2691,32 +2908,13 @@ class PacketBuffer {
 			this.reachedEnd = true;
 			this.flushReorderBuffer();
 
-			return false;
+			return res.set(false);
 		}
 
 		this.decodeOrderPackets.push(suppliedPacket);
 		this.processPacketThroughReorderBuffer(suppliedPacket);
 
-		return true;
-	}
-
-	async ensureCurrentPacketHasNext() {
-		const current = this.decodeOrderPackets[0];
-		assert(current);
-
-		while (true) {
-			const presentationIndex = this.presentationOrderPackets.indexOf(current);
-
-			// Check if current packet has a next packet
-			if (presentationIndex !== -1 && presentationIndex <= this.presentationOrderPackets.length - 2) {
-				break;
-			}
-
-			const didRead = await this.readNextPacket();
-			if (!didRead) {
-				break;
-			}
-		}
+		return res.set(true);
 	}
 
 	processPacketThroughReorderBuffer(packet: SuppliedPacket) {

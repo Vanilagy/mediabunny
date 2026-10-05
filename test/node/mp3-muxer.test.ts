@@ -8,7 +8,7 @@ import { Output } from '../../src/output.js';
 import { Mp3OutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
 import { EncodedAudioPacketSource } from '../../src/media-source.js';
-import { EncodedPacketSink } from '../../src/media-sink.js';
+import { PacketCursor } from '../../src/cursors.js';
 import { assert } from '../../src/misc.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -32,7 +32,7 @@ test('Muxing without Xing header', async () => {
 	await output.start();
 
 	let inputPacketCount = 0;
-	for await (const packet of new EncodedPacketSink(inputTrack).packets()) {
+	for await (const packet of new PacketCursor(inputTrack)) {
 		await source.add(packet);
 		inputPacketCount++;
 	}
@@ -48,8 +48,7 @@ test('Muxing without Xing header', async () => {
 	assert(outputTrack);
 
 	let outputPacketCount = 0;
-	// eslint-disable-next-line @typescript-eslint/no-unused-vars
-	for await (const packet of new EncodedPacketSink(outputTrack).packets()) {
+	for await (const _ of new PacketCursor(outputTrack)) {
 		outputPacketCount++;
 	}
 

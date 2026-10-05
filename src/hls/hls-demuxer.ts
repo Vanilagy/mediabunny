@@ -14,11 +14,18 @@ import {
 	InputTrackBacking,
 	InputVideoTrackBacking,
 } from '../input-track';
-import { PacketRetrievalOptions } from '../media-sink';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags, TrackDisposition } from '../metadata';
 import { TrackType } from '../output';
-import { assert, joinPaths, MaybePromise, TransformationMatrix, UNDETERMINED_LANGUAGE } from '../misc';
-import { EncodedPacket } from '../packet';
+import {
+	assert,
+	joinPaths,
+	MaybePromise,
+	MaybeRelevantPromise,
+	ResultValue,
+	TransformationMatrix,
+	UNDETERMINED_LANGUAGE,
+} from '../misc';
+import { EncodedPacket, PacketRetrievalOptions, PacketRetrievalResult } from '../packet';
 import { readAllLines } from '../reader';
 import {
 	AttributeList,
@@ -754,29 +761,58 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 		return this.internalTrack.hasOnlyKeyPackets || null;
 	}
 
-	async getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
-		await this.hydrate();
-		return this.internalTrack.backingTrack!.getFirstPacket(options);
+	async getFirstPacket(
+		res: ResultValue<PacketRetrievalResult>,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise {
+		if (!this.internalTrack.backingTrack) {
+			await this.hydrate();
+		}
+		return this.internalTrack.backingTrack!.getFirstPacket(res, options);
 	}
 
-	async getPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
-		await this.hydrate();
-		return this.internalTrack.backingTrack!.getPacket(timestamp, options);
+	async getPacket(
+		res: ResultValue<PacketRetrievalResult>,
+		timestamp: number,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise {
+		if (!this.internalTrack.backingTrack) {
+			await this.hydrate();
+		}
+		return this.internalTrack.backingTrack!.getPacket(res, timestamp, options);
 	}
 
-	async getKeyPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
-		await this.hydrate();
-		return this.internalTrack.backingTrack!.getKeyPacket(timestamp, options);
+	async getKeyPacket(
+		res: ResultValue<PacketRetrievalResult>,
+		timestamp: number,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise {
+		if (!this.internalTrack.backingTrack) {
+			await this.hydrate();
+		}
+		return this.internalTrack.backingTrack!.getKeyPacket(res, timestamp, options);
 	}
 
-	async getNextPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
-		await this.hydrate();
-		return this.internalTrack.backingTrack!.getNextPacket(packet, options);
+	async getNextPacket(
+		res: ResultValue<PacketRetrievalResult>,
+		packet: EncodedPacket,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise {
+		if (!this.internalTrack.backingTrack) {
+			await this.hydrate();
+		}
+		return this.internalTrack.backingTrack!.getNextPacket(res, packet, options);
 	}
 
-	async getNextKeyPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
-		await this.hydrate();
-		return this.internalTrack.backingTrack!.getNextKeyPacket(packet, options);
+	async getNextKeyPacket(
+		res: ResultValue<PacketRetrievalResult>,
+		packet: EncodedPacket,
+		options: PacketRetrievalOptions,
+	): MaybeRelevantPromise {
+		if (!this.internalTrack.backingTrack) {
+			await this.hydrate();
+		}
+		return this.internalTrack.backingTrack!.getNextKeyPacket(res, packet, options);
 	}
 }
 

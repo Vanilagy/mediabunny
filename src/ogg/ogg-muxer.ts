@@ -81,7 +81,8 @@ export class OggMuxer extends Muxer {
 	}
 
 	async start() {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		this.writer = await this.output._getRootWriter(true); // Ogg is always monotonically written!
 
@@ -91,8 +92,6 @@ export class OggMuxer extends Muxer {
 				this.getTrackData(track, { decoderConfig: track.metadata.decoderConfig });
 			}
 		}
-
-		release();
 	}
 
 	async getMimeType() {
@@ -280,59 +279,56 @@ export class OggMuxer extends Muxer {
 	}
 
 	async addEncodedAudioPacket(track: OutputAudioTrack, packet: EncodedPacket, meta?: EncodedAudioChunkMetadata) {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
-		try {
-			const trackData = this.getTrackData(track, meta);
+		const trackData = this.getTrackData(track, meta);
 
-			this.validateTimestamp(trackData.track, packet.timestamp, packet.type === 'key');
+		this.validateTimestamp(trackData.track, packet.timestamp, packet.type === 'key');
 
-			if (trackData.startTimestampInSamples === null) {
-				// The first packet determines where the stream begins. A packet at zero means the stream starts at
-				// zero, with the pre-skip preceding it. A later timestamp is treated as the start of the packet's
-				// decoded output, which the first page's granule position then signals as a start offset.
-				const timestampInSamples = Math.round(packet.timestamp * trackData.internalSampleRate);
-				const preSkip = trackData.codecInfo.opusInfo?.preSkip ?? 0;
+		if (trackData.startTimestampInSamples === null) {
+			// The first packet determines where the stream begins. A packet at zero means the stream starts at
+			// zero, with the pre-skip preceding it. A later timestamp is treated as the start of the packet's
+			// decoded output, which the first page's granule position then signals as a start offset.
+			const timestampInSamples = Math.round(packet.timestamp * trackData.internalSampleRate);
+			const preSkip = trackData.codecInfo.opusInfo?.preSkip ?? 0;
 
-				trackData.startTimestampInSamples = timestampInSamples > 0
-					? timestampInSamples + preSkip
-					: 0;
-				trackData.currentTimestampInSamples = trackData.startTimestampInSamples;
-			}
-
-			const currentTimestampInSamples = trackData.currentTimestampInSamples;
-
-			const { durationInSamples, vorbisBlockSize } = extractSampleMetadata(
-				packet.data,
-				trackData.codecInfo,
-				trackData.vorbisLastBlocksize,
-			);
-			trackData.currentTimestampInSamples += durationInSamples;
-			trackData.vorbisLastBlocksize = vorbisBlockSize;
-
-			// A shorter packet duration signals trailing samples to discard, which only the final packet can express
-			const trimmedDurationInSamples = packet.duration > 0
-				? clamp(Math.round(packet.duration * trackData.internalSampleRate), 0, durationInSamples)
-				: durationInSamples;
-
-			// With a start offset, the second audio packet flushes the page. This keeps the offset from sharing a page
-			// with end trimming, as both are signaled through the granule position and would be indistinguishable.
-			// This mirrors a requirement of the Vorbis spec.
-			const forcePageFlush = trackData.startTimestampInSamples > 0 && trackData.audioPacketCount === 1;
-			trackData.audioPacketCount++;
-
-			trackData.packetQueue.push({
-				data: packet.data,
-				timestampInSamples: currentTimestampInSamples,
-				durationInSamples,
-				trimmedDurationInSamples,
-				forcePageFlush,
-			});
-
-			await this.interleavePages();
-		} finally {
-			release();
+			trackData.startTimestampInSamples = timestampInSamples > 0
+				? timestampInSamples + preSkip
+				: 0;
+			trackData.currentTimestampInSamples = trackData.startTimestampInSamples;
 		}
+
+		const currentTimestampInSamples = trackData.currentTimestampInSamples;
+
+		const { durationInSamples, vorbisBlockSize } = extractSampleMetadata(
+			packet.data,
+			trackData.codecInfo,
+			trackData.vorbisLastBlocksize,
+		);
+		trackData.currentTimestampInSamples += durationInSamples;
+		trackData.vorbisLastBlocksize = vorbisBlockSize;
+
+		// A shorter packet duration signals trailing samples to discard, which only the final packet can express
+		const trimmedDurationInSamples = packet.duration > 0
+			? clamp(Math.round(packet.duration * trackData.internalSampleRate), 0, durationInSamples)
+			: durationInSamples;
+
+		// With a start offset, the second audio packet flushes the page. This keeps the offset from sharing a page
+		// with end trimming, as both are signaled through the granule position and would be indistinguishable.
+		// This mirrors a requirement of the Vorbis spec.
+		const forcePageFlush = trackData.startTimestampInSamples > 0 && trackData.audioPacketCount === 1;
+		trackData.audioPacketCount++;
+
+		trackData.packetQueue.push({
+			data: packet.data,
+			timestampInSamples: currentTimestampInSamples,
+			durationInSamples,
+			trimmedDurationInSamples,
+			forcePageFlush,
+		});
+
+		await this.interleavePages();
 	}
 
 	addSubtitleCue(): never {
@@ -540,7 +536,8 @@ export class OggMuxer extends Muxer {
 
 	// eslint-disable-next-line @typescript-eslint/no-misused-promises
 	override async onTrackClose(track: OutputTrack) {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		const trackData = this.trackDatas.find(x => x.track === track);
 		if (trackData) {
@@ -553,12 +550,11 @@ export class OggMuxer extends Muxer {
 
 		// Since a track is now closed, we may be able to write out chunks that were previously waiting
 		await this.interleavePages();
-
-		release();
 	}
 
 	async finalize() {
-		const release = await this.mutex.acquire();
+		using lock = this.mutex.lock();
+		if (lock.pending) await lock.ready;
 
 		this.allTracksKnown.resolve();
 
@@ -573,7 +569,5 @@ export class OggMuxer extends Muxer {
 				this.writePage(trackData, true);
 			}
 		}
-
-		release();
 	}
 }
