@@ -9,6 +9,7 @@
 import { parseAacAudioSpecificConfig } from '../shared/aac-misc';
 import {
 	Av1CodecInfo,
+	av1CodecInfoHasColorInfo,
 	AvcDecoderConfigurationRecord,
 	deserializeAvcDecoderConfigurationRecord,
 	deserializeHevcDecoderConfigurationRecord,
@@ -559,12 +560,23 @@ export const extractVideoCodecString = (trackInfo: {
 					: 0
 			);
 
-		// The defaults are 1 (ITU-R BT.709)
-		const colorPrimaries = colorSpace?.primaries ? COLOR_PRIMARIES_MAP[colorSpace.primaries] : 1;
-		const transferCharacteristics = colorSpace?.transfer ? TRANSFER_CHARACTERISTICS_MAP[colorSpace.transfer] : 1;
-		const matrixCoefficients = colorSpace?.matrix ? MATRIX_COEFFICIENTS_MAP[colorSpace.matrix] : 1;
+		let colorPrimaries: number;
+		let transferCharacteristics: number;
+		let matrixCoefficients: number;
+		let videoFullRangeFlag: number;
 
-		const videoFullRangeFlag = colorSpace?.fullRange ? 1 : 0;
+		if (av1CodecInfoHasColorInfo(av1CodecInfo)) {
+			colorPrimaries = av1CodecInfo.colourPrimaries;
+			transferCharacteristics = av1CodecInfo.transferCharacteristics;
+			matrixCoefficients = av1CodecInfo.matrixCoefficients;
+			videoFullRangeFlag = av1CodecInfo.videoFullRangeFlag;
+		} else {
+			// The defaults are 1 (ITU-R BT.709)
+			colorPrimaries = colorSpace?.primaries ? COLOR_PRIMARIES_MAP[colorSpace.primaries] : 1;
+			transferCharacteristics = colorSpace?.transfer ? TRANSFER_CHARACTERISTICS_MAP[colorSpace.transfer] : 1;
+			matrixCoefficients = colorSpace?.matrix ? MATRIX_COEFFICIENTS_MAP[colorSpace.matrix] : 1;
+			videoFullRangeFlag = colorSpace?.fullRange ? 1 : 0;
+		}
 
 		let string = `av01.${profile}.${level}${tier}.${bitDepth}`;
 		string += `.${monochrome}.${chromaSubsampling.toString().padStart(3, '0')}`;
