@@ -864,6 +864,59 @@ describe('Video', async () => {
 		expectColorSpace(await videoTrack.getColorSpace(), expectedColorSpace);
 	});
 
+	test('RGB input with BT.2020 primaries is converted with the BT.2020 matrix', async () => {
+		const width = 320;
+		const height = 180;
+
+		// Solid red
+		const data = new Uint8Array(width * height * 4);
+		for (let i = 0; i < data.byteLength; i += 4) {
+			data[i] = 0xff;
+			data[i + 3] = 0xff;
+		}
+
+		const { packets, decoderConfig } = await encodeFrames(width, height, i => new VideoSample(data, {
+			format: 'RGBA',
+			codedWidth: width,
+			codedHeight: height,
+			timestamp: i / 30,
+			duration: 1 / 30,
+			colorSpace: {
+				primaries: 'bt2020' as VideoColorPrimaries,
+				transfer: 'pq' as VideoTransferCharacteristics,
+				matrix: 'rgb',
+				fullRange: true,
+			},
+		}));
+
+		const expectedColorSpace: VideoColorSpaceInit = {
+			primaries: 'bt2020' as VideoColorPrimaries,
+			transfer: 'pq' as VideoTransferCharacteristics,
+			matrix: 'bt2020-ncl' as VideoMatrixCoefficients,
+			fullRange: false,
+		};
+		expectColorSpace(decoderConfig.colorSpace, expectedColorSpace);
+
+		const samples = await decodePackets(decoderConfig, packets);
+		expect(samples.length).toBeGreaterThan(0);
+
+		using sample = samples[0]!;
+		expectColorSpace(sample.colorSpace, expectedColorSpace);
+
+		const yuv = new Uint8Array(sample.allocationSize());
+		await sample.copyTo(yuv);
+
+		// Pure red in limited-range BT.2020 NCL is Y'=74, Cb=97, Cr=240 (BT.709 would give Y'=63, Cb=102)
+		const lumaSize = width * height;
+		expect(Math.abs(yuv[0]! - 74)).toBeLessThanOrEqual(3);
+		expect(Math.abs(yuv[lumaSize]! - 97)).toBeLessThanOrEqual(3);
+		expect(Math.abs(yuv[lumaSize + lumaSize / 4]! - 240)).toBeLessThanOrEqual(3);
+
+		for (const sample of samples.slice(1)) {
+			sample.close();
+		}
+	});
+
 	test('YUV input color properties pass through untouched', async () => {
 		const width = 320;
 		const height = 180;

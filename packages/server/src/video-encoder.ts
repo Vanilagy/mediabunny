@@ -51,6 +51,16 @@ const PRORES_FOURCC_TO_PROFILE: Record<ProresFourCc, NodeAv.AVProfile> = {
 	ap4x: NodeAv.AV_PROFILE_PRORES_XQ,
 };
 
+/** The matrix coefficients that conventionally go with a set of color primaries. */
+const matrixForPrimaries = (primaries: NodeAv.AVColorPrimaries) => {
+	switch (primaries) {
+		case NodeAv.AVCOL_PRI_BT2020: return NodeAv.AVCOL_SPC_BT2020_NCL;
+		case NodeAv.AVCOL_PRI_BT470BG: return NodeAv.AVCOL_SPC_BT470BG;
+		case NodeAv.AVCOL_PRI_SMPTE170M: return NodeAv.AVCOL_SPC_SMPTE170M;
+		default: return NodeAv.AVCOL_SPC_BT709; // BT.709, P3 (which uses the BT.709 matrix), unspecified
+	}
+};
+
 /**
  * Determines the color space the encoded output will be in, given the input frame's color properties and the pixel
  * format the encoder will be fed. The scaler converts into this color space and the codec context is tagged with it,
@@ -79,20 +89,22 @@ const determineOutputColorSpace = (frame: NodeAv.Frame, outputPixelFormat: NodeA
 		};
 	}
 
-	// RGB -> YUV, the common case when encoding canvas/raster content. Convert into limited-range BT.709, the
-	// standard SDR video color space (and the color space Mediabunny assumes for YUV samples by default). An sRGB
-	// transfer function is re-tagged as BT.709: the two share primaries and have near-identical transfer curves,
-	// and players deal with BT.709 far better than with transfer_characteristics = 13 in a video stream.
+	// RGB -> YUV, the common case when encoding canvas/raster content. Convert into limited-range YUV using the matrix
+	// that goes with the input's primaries, which for the usual sRGB input means BT.709, the standard SDR video color
+	// space (and the color space Mediabunny assumes for YUV samples by default). An sRGB transfer function is
+	// re-tagged as BT.709: the two share primaries and have near-identical transfer curves, and players deal with
+	// BT.709 far better than with transfer_characteristics = 13 in a video stream.
+	const primaries = frame.colorPrimaries === NodeAv.AVCOL_PRI_UNSPECIFIED
+		? NodeAv.AVCOL_PRI_BT709
+		: frame.colorPrimaries;
 	const transferIsSrgbOrUnspecified = frame.colorTrc === NodeAv.AVCOL_TRC_UNSPECIFIED
 		|| frame.colorTrc === NodeAv.AVCOL_TRC_IEC61966_2_1;
 	const transfer = transferIsSrgbOrUnspecified ? NodeAv.AVCOL_TRC_BT709 : frame.colorTrc;
 
 	return {
-		primaries: frame.colorPrimaries === NodeAv.AVCOL_PRI_UNSPECIFIED
-			? NodeAv.AVCOL_PRI_BT709
-			: frame.colorPrimaries,
+		primaries,
 		transfer,
-		matrix: NodeAv.AVCOL_SPC_BT709,
+		matrix: matrixForPrimaries(primaries),
 		range: NodeAv.AVCOL_RANGE_MPEG,
 	};
 };
