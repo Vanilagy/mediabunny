@@ -9,7 +9,7 @@ import { NodeAvVideoDecoder } from '../../packages/server/src/video-decoder.js';
 import { NodeAvVideoEncoder } from '../../packages/server/src/video-encoder.js';
 import { NodeAvAudioDecoder } from '../../packages/server/src/audio-decoder.js';
 import { NodeAvAudioEncoder } from '../../packages/server/src/audio-encoder.js';
-import { AudioSample, VideoSample } from '../../src/sample.js';
+import { AudioSample, VideoSample, VideoSampleColorSpace } from '../../src/sample.js';
 import {
 	AudioCodec,
 	buildAudioCodecString,
@@ -716,6 +716,206 @@ describe('Video', async () => {
 			expect(sample.squarePixelWidth).toBe(1280);
 			expect(sample.squarePixelHeight).toBe(2 * 720);
 		});
+	});
+
+	const encodeFrames = async (
+		width: number,
+		height: number,
+		createSample: (i: number) => VideoSample,
+	) => {
+		const encoder = new NodeAvVideoEncoder();
+		// @ts-expect-error Readonly
+		encoder.codec = 'avc';
+		// @ts-expect-error Readonly
+		encoder.config = {
+			codec: buildVideoCodecString('avc', width, height, 1e6, false),
+			width,
+			height,
+			bitrate: 1e6,
+		} satisfies VideoEncoderConfig;
+
+		const packets: EncodedPacket[] = [];
+		const metas: EncodedVideoChunkMetadata[] = [];
+
+		// @ts-expect-error Readonly
+		encoder.onPacket = (packet: EncodedPacket, meta: EncodedVideoChunkMetadata) => {
+			packets.push(packet);
+			metas.push(meta);
+		};
+
+		await encoder.init();
+
+		for (let i = 0; i < 3; i++) {
+			using sample = createSample(i);
+			await encoder.encode(sample, {});
+		}
+
+		await encoder.flush();
+		await encoder.close();
+
+		return { packets, decoderConfig: metas[0]!.decoderConfig! };
+	};
+
+	const decodePackets = async (decoderConfig: VideoDecoderConfig, packets: EncodedPacket[]) => {
+		const decoder = new NodeAvVideoDecoder();
+		// @ts-expect-error Readonly
+		decoder.codec = 'avc';
+		// @ts-expect-error Readonly
+		decoder.config = decoderConfig;
+
+		const samples: VideoSample[] = [];
+
+		// @ts-expect-error Readonly
+		decoder.onSample = (sample: VideoSample) => {
+			samples.push(sample);
+		};
+
+		await decoder.init();
+
+		for (const packet of packets) {
+			await decoder.decode(packet);
+		}
+
+		await decoder.flush();
+		await decoder.close();
+
+		return samples;
+	};
+
+	const expectColorSpace = (
+		actual: VideoColorSpaceInit | VideoSampleColorSpace | undefined,
+		expected: VideoColorSpaceInit,
+	) => {
+		expect(actual?.primaries).toBe(expected.primaries);
+		expect(actual?.transfer).toBe(expected.transfer);
+		expect(actual?.matrix).toBe(expected.matrix);
+		expect(actual?.fullRange).toBe(expected.fullRange);
+	};
+
+	test('RGB input is converted to and tagged as limited-range BT.709', async () => {
+		const width = 320;
+		const height = 180;
+
+		// Solid red
+		const data = new Uint8Array(width * height * 4);
+		for (let i = 0; i < data.byteLength; i += 4) {
+			data[i] = 0xff;
+			data[i + 3] = 0xff;
+		}
+
+		// No explicit colorSpace: RGBA samples default to sRGB
+		const createSample = (i: number) => new VideoSample(data, {
+			format: 'RGBA',
+			codedWidth: width,
+			codedHeight: height,
+			timestamp: i / 30,
+			duration: 1 / 30,
+		});
+
+		const expectedColorSpace: VideoColorSpaceInit = {
+			primaries: 'bt709',
+			transfer: 'bt709',
+			matrix: 'bt709',
+			fullRange: false,
+		};
+
+		const { packets, decoderConfig } = await encodeFrames(width, height, createSample);
+		expectColorSpace(decoderConfig.colorSpace, expectedColorSpace);
+
+		const samples = await decodePackets(decoderConfig, packets);
+		expect(samples.length).toBeGreaterThan(0);
+
+		using sample = samples[0]!;
+		// The decoder gets these from the bitstream (SPS VUI), so this proves the tags were actually written
+		expectColorSpace(sample.colorSpace, expectedColorSpace);
+
+		expect(sample.format).toBe('I420');
+		const yuv = new Uint8Array(sample.allocationSize());
+		await sample.copyTo(yuv);
+
+		// Pure red in limited-range BT.709 is Y'=63, Cb=102, Cr=240; the BT.601 matrix would give Y'=81, Cb=90
+		const lumaSize = width * height;
+		expect(Math.abs(yuv[0]! - 63)).toBeLessThanOrEqual(3);
+		expect(Math.abs(yuv[lumaSize]! - 102)).toBeLessThanOrEqual(3);
+		expect(Math.abs(yuv[lumaSize + lumaSize / 4]! - 240)).toBeLessThanOrEqual(3);
+
+		for (const sample of samples.slice(1)) {
+			sample.close();
+		}
+
+		// And the color space must make it into the container
+		const output = new Output({
+			format: new Mp4OutputFormat(),
+			target: new BufferTarget(),
+		});
+		const source = new VideoSampleSource({ codec: 'avc', bitrate: 1e6 });
+		output.addVideoTrack(source);
+		await output.start();
+
+		using inputSample = createSample(0);
+		await source.add(inputSample);
+		await output.finalize();
+
+		using input = new Input({
+			source: new BufferSource(output.target.buffer!),
+			formats: ALL_FORMATS,
+		});
+		const videoTrack = (await input.getPrimaryVideoTrack())!;
+		expectColorSpace(await videoTrack.getColorSpace(), expectedColorSpace);
+	});
+
+	test('YUV input color properties pass through untouched', async () => {
+		const width = 320;
+		const height = 180;
+		const lumaSize = width * height;
+
+		// Arbitrary but distinct plane values, so we can tell if any matrix or range conversion happened
+		const data = new Uint8Array(lumaSize * 3 / 2);
+		data.fill(81, 0, lumaSize);
+		data.fill(90, lumaSize, lumaSize + lumaSize / 4);
+		data.fill(240, lumaSize + lumaSize / 4);
+
+		// Deliberately not the BT.709 defaults, so defaulting would be caught. (Note that x264 rewrites some VUI codes
+		// to equivalent ones, e.g. bt470bg -> smpte170m, which is why these particular values are used here.)
+		const colorSpaces: VideoColorSpaceInit[] = [
+			{
+				primaries: 'bt2020' as VideoColorPrimaries,
+				transfer: 'pq' as VideoTransferCharacteristics,
+				matrix: 'bt2020-ncl' as VideoMatrixCoefficients,
+				fullRange: false,
+			},
+			{ primaries: 'bt709', transfer: 'bt709', matrix: 'bt709', fullRange: true },
+		];
+
+		for (const colorSpace of colorSpaces) {
+			const { packets, decoderConfig } = await encodeFrames(width, height, i => new VideoSample(data, {
+				format: 'I420',
+				codedWidth: width,
+				codedHeight: height,
+				timestamp: i / 30,
+				duration: 1 / 30,
+				colorSpace,
+			}));
+			expectColorSpace(decoderConfig.colorSpace, colorSpace);
+
+			const samples = await decodePackets(decoderConfig, packets);
+			expect(samples.length).toBeGreaterThan(0);
+
+			using sample = samples[0]!;
+			expectColorSpace(sample.colorSpace, colorSpace);
+
+			expect(sample.format).toBe('I420');
+			const yuv = new Uint8Array(sample.allocationSize());
+			await sample.copyTo(yuv);
+
+			expect(Math.abs(yuv[0]! - 81)).toBeLessThanOrEqual(3);
+			expect(Math.abs(yuv[lumaSize]! - 90)).toBeLessThanOrEqual(3);
+			expect(Math.abs(yuv[lumaSize + lumaSize / 4]! - 240)).toBeLessThanOrEqual(3);
+
+			for (const sample of samples.slice(1)) {
+				sample.close();
+			}
+		}
 	});
 
 	const encodeDecodeTest = async (

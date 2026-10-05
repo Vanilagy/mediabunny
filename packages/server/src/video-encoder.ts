@@ -50,6 +50,58 @@ const PRORES_FOURCC_TO_PROFILE: Record<ProresFourCc, NodeAv.AVProfile> = {
 	ap4x: NodeAv.AV_PROFILE_PRORES_XQ,
 };
 
+const isRgbPixelFormat = (pixelFormat: NodeAv.AVPixelFormat) => {
+	// node-av doesn't expose av_pix_fmt_desc_get, so go by name: rgb24, bgra, rgb0, gbrp, rgb48le, x2rgb10le, ...
+	const name = NodeAv.avGetPixFmtName(pixelFormat) ?? '';
+	return /rgb|bgr|gbr/.test(name);
+};
+
+/**
+ * Determines the color space the encoded output will be in, given the input frame's color properties and the pixel
+ * format the encoder will be fed. The scaler converts into this color space and the codec context is tagged with it,
+ * so the bitstream metadata and the actual pixel values agree.
+ */
+const determineOutputColorSpace = (frame: NodeAv.Frame, outputPixelFormat: NodeAv.AVPixelFormat) => {
+	const inputIsRgb = isRgbPixelFormat(frame.format as NodeAv.AVPixelFormat);
+	const outputIsRgb = isRgbPixelFormat(outputPixelFormat);
+
+	if (inputIsRgb === outputIsRgb) {
+		// No change of color model, so the input's properties carry over untouched (including "unspecified")
+		return {
+			primaries: frame.colorPrimaries,
+			transfer: frame.colorTrc,
+			matrix: frame.colorSpace,
+			range: frame.colorRange,
+		};
+	}
+
+	if (outputIsRgb) {
+		return {
+			primaries: frame.colorPrimaries,
+			transfer: frame.colorTrc,
+			matrix: NodeAv.AVCOL_SPC_RGB,
+			range: NodeAv.AVCOL_RANGE_JPEG,
+		};
+	}
+
+	// RGB -> YUV, the common case when encoding canvas/raster content. Convert into limited-range BT.709, the
+	// standard SDR video color space (and the color space Mediabunny assumes for YUV samples by default). An sRGB
+	// transfer function is re-tagged as BT.709: the two share primaries and have near-identical transfer curves,
+	// and players deal with BT.709 far better than with transfer_characteristics = 13 in a video stream.
+	const transferIsSrgbOrUnspecified = frame.colorTrc === NodeAv.AVCOL_TRC_UNSPECIFIED
+		|| frame.colorTrc === NodeAv.AVCOL_TRC_IEC61966_2_1;
+	const transfer = transferIsSrgbOrUnspecified ? NodeAv.AVCOL_TRC_BT709 : frame.colorTrc;
+
+	return {
+		primaries: frame.colorPrimaries === NodeAv.AVCOL_PRI_UNSPECIFIED
+			? NodeAv.AVCOL_PRI_BT709
+			: frame.colorPrimaries,
+		transfer,
+		matrix: NodeAv.AVCOL_SPC_BT709,
+		range: NodeAv.AVCOL_RANGE_MPEG,
+	};
+};
+
 export class NodeAvVideoEncoder extends CustomVideoEncoder {
 	frame!: NodeAv.Frame;
 	packet!: NodeAv.Packet;
@@ -59,7 +111,6 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 	avCodec!: NodeAv.Codec;
 	lastBuffer: Buffer | null = null;
 	packetEmitted = false;
-	lastScalerKey: string | null = null;
 	quantizer: number | null = null;
 
 	// Bookkeeping to restore the original timing information
@@ -126,11 +177,8 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 
 		this.avCodec = codec;
 
-		if (this.config.bitrateMode !== 'quantizer') {
-			// In quantizer mode, the codec context is instead created lazily on the first encode, once the quantizer
-			// value is known
-			await this.createCodecContext();
-		}
+		// The codec context is created lazily on the first encode: the output color space is derived from the first
+		// frame (and, in quantizer mode, the quantizer value isn't known until then either)
 	}
 
 	async createCodecContext() {
@@ -273,6 +321,15 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			codecContext.setOption('profile', String(profile));
 		}
 
+		// Encoders read the color properties off the codec context when they open (libx264 writes them into the
+		// SPS VUI, for example), and getDecoderConfig reports them in decoderConfig.colorSpace, so they have to be
+		// set before open2.
+		const outputColorSpace = determineOutputColorSpace(this.frame, pixelFormat);
+		codecContext.colorPrimaries = outputColorSpace.primaries;
+		codecContext.colorTrc = outputColorSpace.transfer;
+		codecContext.colorSpace = outputColorSpace.matrix;
+		codecContext.colorRange = outputColorSpace.range;
+
 		const ret = await codecContext.open2();
 		NodeAv.FFmpegError.throwIfError(ret, 'Open codec context');
 
@@ -315,11 +372,6 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			this.quantizer = quantizer;
 		}
 
-		if (this.codecContext === null) {
-			await this.createCodecContext();
-		}
-		assert(this.codecContext);
-
 		if (videoSample._data instanceof AvFrameVideoSampleResource) {
 			// Release any buffers still referenced from the previous encode before reffing the new frame, otherwise
 			// av_frame_ref leaks them
@@ -334,6 +386,12 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			this.lastBuffer = await copyVideoSampleToAvFrame(videoSample, this.frame, this.lastBuffer);
 		}
 
+		if (this.codecContext === null) {
+			// Needs the frame to be populated so the output color space can be derived from it
+			await this.createCodecContext();
+		}
+		assert(this.codecContext);
+
 		let frameToEncode = this.frame;
 
 		const requiresScaler
@@ -343,23 +401,13 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 
 		if (requiresScaler) {
 			if (!this.scaler) {
+				// Deliberately not configured via getContext/initContext: an unconfigured context makes sws_scale_frame
+				// take the frame-based path, which (re)configures itself from the frames' dimensions, pixel formats
+				// AND color properties. The legacy path ignores the latter and always converts RGB<->YUV with the
+				// BT.601 matrix, which contradicts the color space we tag the output with.
 				this.scaler = new NodeAv.SoftwareScaleContext();
-			}
-
-			const key = `${this.frame.width}x${this.frame.height}:${this.frame.format}`;
-			const needsConfigure = key !== this.lastScalerKey;
-
-			if (needsConfigure) {
-				this.scaler.getContext(
-					this.frame.width, this.frame.height, this.frame.format as NodeAv.AVPixelFormat,
-					this.codecContext.width, this.codecContext.height, this.codecContext.pixelFormat,
-					NodeAv.SWS_FAST_BILINEAR,
-				);
-
-				this.lastScalerKey = key;
-
-				const ret = this.scaler.initContext();
-				NodeAv.FFmpegError.throwIfError(ret, 'initContext');
+				this.scaler.allocContext();
+				this.scaler.setOption('sws_flags', 'fast_bilinear');
 			}
 
 			if (!this.dstFrame) {
@@ -371,8 +419,17 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 				this.dstFrame.allocBuffer();
 			}
 
-			await this.scaler.scaleFrame(this.dstFrame, this.frame);
+			// Copy the props over before scaling, then override the color properties: they tell the scaler which
+			// color space to convert into, and must match what the codec context was opened with.
 			this.dstFrame.copyProps(this.frame);
+			this.dstFrame.colorPrimaries = this.codecContext.colorPrimaries;
+			this.dstFrame.colorTrc = this.codecContext.colorTrc;
+			this.dstFrame.colorSpace = this.codecContext.colorSpace;
+			this.dstFrame.colorRange = this.codecContext.colorRange;
+
+			const ret = await this.scaler.scaleFrame(this.dstFrame, this.frame);
+			NodeAv.FFmpegError.throwIfError(ret, 'Scale frame');
+
 			frameToEncode = this.dstFrame;
 		}
 
