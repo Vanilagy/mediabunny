@@ -19,6 +19,7 @@ import * as NodeAv from 'node-av';
 import {
 	CODEC_TO_CODEC_ID,
 	getHardwareEncoderCodec,
+	isRgbPixelFormat,
 	unmapColorPrimaries,
 	unmapMatrixCoefficients,
 	unmapTransferCharacteristics,
@@ -48,12 +49,6 @@ const PRORES_FOURCC_TO_PROFILE: Record<ProresFourCc, NodeAv.AVProfile> = {
 	apch: NodeAv.AV_PROFILE_PRORES_HQ,
 	ap4h: NodeAv.AV_PROFILE_PRORES_4444,
 	ap4x: NodeAv.AV_PROFILE_PRORES_XQ,
-};
-
-const isRgbPixelFormat = (pixelFormat: NodeAv.AVPixelFormat) => {
-	// node-av doesn't expose av_pix_fmt_desc_get, so go by name: rgb24, bgra, rgb0, gbrp, rgb48le, x2rgb10le, ...
-	const name = NodeAv.avGetPixFmtName(pixelFormat) ?? '';
-	return /rgb|bgr|gbr/.test(name);
 };
 
 /**

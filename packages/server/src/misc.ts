@@ -156,6 +156,12 @@ export const unmapMatrixCoefficients = (matrix: number) => {
 	return null;
 };
 
+export const isRgbPixelFormat = (pixelFormat: NodeAv.AVPixelFormat) => {
+	// node-av doesn't expose av_pix_fmt_desc_get, so go by name: rgb24, bgra, rgb0, gbrp, rgb48le, x2rgb10le, ...
+	const name = NodeAv.avGetPixFmtName(pixelFormat) ?? '';
+	return /rgb|bgr|gbr/.test(name);
+};
+
 export const toPixelFormat = (ffmpegPixelFormat: NodeAv.AVPixelFormat): VideoSamplePixelFormat | null => {
 	switch (ffmpegPixelFormat) {
 		case NodeAv.AV_PIX_FMT_YUV420P: return 'I420';

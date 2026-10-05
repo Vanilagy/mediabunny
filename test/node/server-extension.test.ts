@@ -918,6 +918,58 @@ describe('Video', async () => {
 		}
 	});
 
+	test('Decoded YUV is converted to RGB with its tagged matrix', async () => {
+		const width = 320;
+		const height = 180;
+		const lumaSize = width * height;
+
+		// Pure red, as limited-range BT.709 and as limited-range BT.601. Converted with the right matrix, both come out
+		// as (255, 0, 0); the wrong one gives (233, 0, 2) or (255, 24, 0).
+		const cases = [
+			{
+				yuv: [63, 102, 240],
+				colorSpace: { primaries: 'bt709', transfer: 'bt709', matrix: 'bt709', fullRange: false },
+			},
+			{
+				yuv: [81, 90, 240],
+				colorSpace: { primaries: 'bt470bg', transfer: 'smpte170m', matrix: 'bt470bg', fullRange: false },
+			},
+		] satisfies { yuv: number[]; colorSpace: VideoColorSpaceInit }[];
+
+		for (const { yuv, colorSpace } of cases) {
+			const data = new Uint8Array(lumaSize * 3 / 2);
+			data.fill(yuv[0]!, 0, lumaSize);
+			data.fill(yuv[1]!, lumaSize, lumaSize + lumaSize / 4);
+			data.fill(yuv[2]!, lumaSize + lumaSize / 4);
+
+			const { packets, decoderConfig } = await encodeFrames(width, height, i => new VideoSample(data, {
+				format: 'I420',
+				codedWidth: width,
+				codedHeight: height,
+				timestamp: i / 30,
+				duration: 1 / 30,
+				colorSpace,
+			}));
+
+			const samples = await decodePackets(decoderConfig, packets);
+			expect(samples.length).toBeGreaterThan(0);
+
+			using sample = samples[0]!;
+			expect(sample.format).toBe('I420');
+
+			const rgba = new Uint8Array(sample.allocationSize({ format: 'RGBA' }));
+			await sample.copyTo(rgba, { format: 'RGBA' });
+
+			expect(rgba[0]).toBeGreaterThanOrEqual(250);
+			expect(rgba[1]).toBeLessThanOrEqual(5);
+			expect(rgba[2]).toBeLessThanOrEqual(5);
+
+			for (const sample of samples.slice(1)) {
+				sample.close();
+			}
+		}
+	});
+
 	const encodeDecodeTest = async (
 		codec: VideoCodec,
 		extraConfig: Partial<VideoEncoderConfig>,
