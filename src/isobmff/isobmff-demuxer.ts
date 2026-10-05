@@ -2337,7 +2337,7 @@ export class IsobmffDemuxer extends Demuxer {
 				assert(this.currentFragment);
 				assert(track.currentFragmentState);
 
-				const version = readU8(slice);
+				slice.skip(1); // Version
 				const flags = readU24Be(slice);
 				const dataOffsetPresent = Boolean(flags & 0x000001);
 				const firstSampleFlagsPresent = Boolean(flags & 0x000004);
@@ -2414,11 +2414,10 @@ export class IsobmffDemuxer extends Demuxer {
 
 					let sampleCompositionTimeOffset = 0;
 					if (sampleCompositionTimeOffsetsPresent) {
-						if (version === 0) {
-							sampleCompositionTimeOffset = readU32Be(slice);
-						} else {
-							sampleCompositionTimeOffset = readI32Be(slice);
-						}
+						// Technically unsigned for version 0, but some writers write signed values here without
+						// changing the version. Since the large unsigned values make little sense anyway, it should be
+						// safe to do this.
+						sampleCompositionTimeOffset = readI32Be(slice);
 					}
 
 					const isKeyFrame = !(sampleFlags & 0x00010000);
