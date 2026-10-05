@@ -3268,6 +3268,52 @@ test('Append-only stream with monotonicity violation', async () => {
 		.rejects.toThrow('AppendOnlyStreamTarget');
 });
 
+test('Append-only stream, segment sizes count towards BANDWIDTH', async () => {
+	const masterBandwidth = async (appendOnly: boolean) => {
+		let master = '';
+		const decoder = new TextDecoder();
+
+		const output = new Output({
+			format: new HlsOutputFormat({
+				segmentFormat: new MpegTsOutputFormat(),
+			}),
+			target: new PathedTarget('master.m3u8', (request) => {
+				const keep = (data: Uint8Array) => {
+					if (request.path === 'master.m3u8') {
+						master += decoder.decode(data);
+					}
+				};
+
+				return appendOnly
+					? new AppendOnlyStreamTarget(new WritableStream<Uint8Array>({ write: keep }))
+					: new StreamTarget(new WritableStream<StreamTargetChunk>({ write: chunk => keep(chunk.data) }));
+			}),
+		});
+
+		const source = videoSource();
+		output.addVideoTrack(source);
+
+		await output.start();
+
+		await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0.5), avcMetadata);
+		await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0.5), avcMetadata);
+		await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0.5), avcMetadata);
+		await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0.5), avcMetadata);
+		await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0.5), avcMetadata);
+		await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0.5), avcMetadata);
+
+		await output.finalize();
+
+		return Number(master.match(/BANDWIDTH=(\d+)/)![1]);
+	};
+
+	const appendOnly = await masterBandwidth(true);
+
+	// Measured from the segments it wrote, like any other target
+	expect(appendOnly).toBeGreaterThan(0);
+	expect(appendOnly).toBe(await masterBandwidth(false));
+});
+
 test('Relative paths & isRoot', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
