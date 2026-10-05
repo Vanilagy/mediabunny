@@ -10,6 +10,7 @@ import { buildAacAudioSpecificConfig, parseAacAudioSpecificConfig } from '../sha
 import {
 	AUDIO_CODECS,
 	AudioCodec,
+	extractVideoCodecString,
 	MediaCodec,
 	parsePcmCodec,
 	PCM_AUDIO_CODECS,
@@ -70,7 +71,13 @@ import {
 	VideoEncodingConfig,
 } from './encode';
 import { AudioResampler } from './resample';
-import { determineVideoPacketType } from './codec-data';
+import {
+	determineVideoPacketType,
+	extractAv1CodecInfoFromPacket,
+	extractAvcDecoderConfigurationRecord,
+	extractHevcDecoderConfigurationRecord,
+	extractVp9CodecInfoFromPacket,
+} from './codec-data';
 import { Logging } from './logging';
 
 /**
@@ -923,6 +930,41 @@ class VideoEncoderWrapper {
 		}
 
 		let packet = EncodedPacket.fromEncodedChunk(colorChunk, sideData);
+
+		const encoderConfig = this.encoderConfig;
+		assert(encoderConfig);
+
+		if (meta?.decoderConfig) {
+			// Let's correct the codec string based on the actual bitstream data, rather than leaving it on the default
+			// value (which is just what was in the encoder config). This provides better consistency.
+			meta.decoderConfig.codec = extractVideoCodecString({
+				width: encoderConfig.width,
+				height: encoderConfig.height,
+				codec: this.encodingConfig.codec,
+				codecDescription: meta.decoderConfig.description
+					? toUint8Array(meta.decoderConfig.description)
+					: null,
+				colorSpace: meta.decoderConfig.colorSpace ?? null,
+				avcType: encoderConfig.codec.includes('avc1.')
+					? 1
+					: encoderConfig.codec.includes('avc3.')
+						? 3
+						: null,
+				avcCodecInfo: this.encodingConfig.codec === 'avc' && !meta.decoderConfig.description
+					? extractAvcDecoderConfigurationRecord(packet.data)
+					: null,
+				hevcCodecInfo: this.encodingConfig.codec === 'hevc' && !meta.decoderConfig.description
+					? extractHevcDecoderConfigurationRecord(packet.data)
+					: null,
+				vp9CodecInfo: this.encodingConfig.codec === 'vp9'
+					? extractVp9CodecInfoFromPacket(packet.data)
+					: null,
+				av1CodecInfo: this.encodingConfig.codec === 'av1'
+					? extractAv1CodecInfoFromPacket(packet.data)
+					: null,
+				proresFormat: null, // Can't be encoded by WebCodecs
+			});
+		}
 
 		// See if there's a relevant timing entry to refine the packet's timing data
 		const preciseTimingIndex = binarySearchLessOrEqual(
