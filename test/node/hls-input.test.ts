@@ -2,8 +2,57 @@
 import { ALL_FORMATS, BufferSource, EncodedPacketSink, Input, InputAudioTrack, InputVideoTrack, UrlSource } from 'mediabunny';
 import { expect, test, vi } from 'vitest';
 import { HLS, HLS_FORMATS, HlsInputFormat, MP4 } from '../../src/input-format.js';
-import { assert, hexStringToBytes, rejectAfter } from '../../src/misc.js';
+import { assert, hexStringToBytes, promiseWithResolvers, rejectAfter } from '../../src/misc.js';
 import { CustomPathedSource, FilePathSource } from '../../src/source.js';
+import { InputDisposedError } from '../../src/input.js';
+import { readFile } from 'node:fs/promises';
+import { setImmediate } from 'node:timers/promises';
+
+test.each([false, true])('HLS source resolution during disposal (dispose=%s)', async (dispose) => {
+	const started = promiseWithResolvers();
+	const resume = promiseWithResolvers();
+	const audio = await readFile(new URL('../public/glitch-hop-is-dead.wav', import.meta.url));
+	const playlist = new TextEncoder().encode(
+		'#EXTM3U\n#EXT-X-TARGETDURATION:100\n#EXTINF:100,\nfirst.wav\n'
+		+ '#EXTINF:100,\nsecond.wav\n#EXT-X-ENDLIST\n',
+	);
+	const sources: BufferSource[] = [];
+	using input = new Input({
+		formats: ALL_FORMATS,
+		source: new CustomPathedSource('https://example.com/index.m3u8', async (request) => {
+			if (request.path.endsWith('second.wav')) {
+				started.resolve();
+				await resume.promise;
+			}
+			const source = new BufferSource(request.isRoot ? playlist : audio);
+			sources.push(source);
+			return source;
+		}),
+	});
+	try {
+		const track = await input.getPrimaryAudioTrack();
+		assert(track);
+		const sink = new EncodedPacketSink(track);
+		expect(await sink.getPacket(0)).not.toBeNull();
+		const result = sink.getPacket(100).catch((error: unknown) => error);
+		await started.promise;
+		if (dispose) {
+			input.dispose();
+		}
+		resume.resolve();
+		if (dispose) {
+			expect(await result).toBeInstanceOf(InputDisposedError);
+		} else {
+			expect(await result).not.toBeNull();
+			expect(await result).not.toBeInstanceOf(Error);
+		}
+	} finally {
+		resume.resolve();
+		input.dispose();
+	}
+	await setImmediate();
+	expect(sources.every(source => source._disposed)).toBe(true);
+});
 
 // A lot of test cases taken from:
 // https://github.com/video-dev/hls.js/blob/master/tests/test-streams.js
