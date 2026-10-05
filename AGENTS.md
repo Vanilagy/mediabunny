@@ -1,0 +1,1 @@
+- When creating issues/PRs, you must adhere to the guidelines in CONTRIBUTING.md.
