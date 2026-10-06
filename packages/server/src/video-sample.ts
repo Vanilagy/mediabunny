@@ -20,6 +20,7 @@ import {
 import * as NodeAv from 'node-av';
 import { assert, toUint8Array } from '../../../src/misc';
 import {
+	isRgbPixelFormat,
 	toPixelFormat,
 	unmapColorPrimaries,
 	unmapTransferCharacteristics,
@@ -148,32 +149,56 @@ export class AvFrameVideoSampleResource extends VideoSampleResource {
 		const width = this.frame.width;
 		const height = this.frame.height;
 
-		const scaler = new NodeAv.SoftwareScaleContext();
-		const srcFmt = this.frame.format as NodeAv.AVPixelFormat;
-		const dstFmt = fromPixelFormat('RGBA');
+		// Work on a reference to the decoded frame so we can fill in unspecified color properties without altering
+		// what the sample itself reports. The conversion needs to know the source's matrix and range; where the
+		// stream doesn't say, assume BT.709 limited range, the default color space for YUV samples (and what
+		// browsers assume for untagged video, too). Without this, swscale silently falls back to BT.601.
+		const srcFrame = new NodeAv.Frame();
+		srcFrame.alloc();
+		srcFrame.ref(this.frame);
 
-		scaler.getContext(
-			width, height, srcFmt,
-			width, height, dstFmt,
-			NodeAv.SWS_BILINEAR,
-		);
-
-		const dstFrame = new NodeAv.Frame();
-		dstFrame.width = width;
-		dstFrame.height = height;
-		dstFrame.format = dstFmt;
-		dstFrame.alloc();
-		dstFrame.allocBuffer();
-
-		const srcFrame = this.frame;
-
-		try {
-			await scaler.scaleFrame(dstFrame, srcFrame);
-		} finally {
-			scaler.freeContext();
+		const srcIsRgb = isRgbPixelFormat(srcFrame.format as NodeAv.AVPixelFormat);
+		if (srcFrame.colorPrimaries === NodeAv.AVCOL_PRI_UNSPECIFIED) {
+			srcFrame.colorPrimaries = NodeAv.AVCOL_PRI_BT709;
+		}
+		if (srcFrame.colorTrc === NodeAv.AVCOL_TRC_UNSPECIFIED) {
+			srcFrame.colorTrc = srcIsRgb ? NodeAv.AVCOL_TRC_IEC61966_2_1 : NodeAv.AVCOL_TRC_BT709;
+		}
+		if (srcFrame.colorSpace === NodeAv.AVCOL_SPC_UNSPECIFIED) {
+			srcFrame.colorSpace = srcIsRgb ? NodeAv.AVCOL_SPC_RGB : NodeAv.AVCOL_SPC_BT709;
+		}
+		if (srcFrame.colorRange === NodeAv.AVCOL_RANGE_UNSPECIFIED) {
+			srcFrame.colorRange = srcIsRgb ? NodeAv.AVCOL_RANGE_JPEG : NodeAv.AVCOL_RANGE_MPEG;
 		}
 
-		dstFrame.sampleAspectRatio = srcFrame.sampleAspectRatio;
+		const dstFrame = new NodeAv.Frame();
+		dstFrame.alloc();
+		dstFrame.width = width;
+		dstFrame.height = height;
+		dstFrame.format = fromPixelFormat('RGBA');
+		dstFrame.allocBuffer();
+		// Primaries and transfer function don't change, only the color model does
+		dstFrame.colorPrimaries = srcFrame.colorPrimaries;
+		dstFrame.colorTrc = srcFrame.colorTrc;
+		dstFrame.colorSpace = NodeAv.AVCOL_SPC_RGB;
+		dstFrame.colorRange = NodeAv.AVCOL_RANGE_JPEG;
+
+		// Deliberately not configured via getContext/initContext: an unconfigured context makes sws_scale_frame take
+		// the frame-based path, which honors the frames' color properties. The legacy path ignores them and always
+		// converts with BT.601.
+		const scaler = new NodeAv.SoftwareScaleContext();
+		scaler.allocContext();
+		scaler.setOption('sws_flags', 'bilinear');
+
+		try {
+			const ret = await scaler.scaleFrame(dstFrame, srcFrame);
+			NodeAv.FFmpegError.throwIfError(ret, 'Scale frame');
+		} finally {
+			scaler.freeContext();
+			srcFrame.free();
+		}
+
+		dstFrame.sampleAspectRatio = this.frame.sampleAspectRatio;
 
 		return new VideoSample(new AvFrameVideoSampleResource(dstFrame), init);
 	}
