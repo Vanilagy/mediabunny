@@ -625,6 +625,22 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 					proresFormat: null,
 				});
 			}
+		} else if (this.codec === 'mjpeg') {
+			if (!this.packetEmitted) {
+				decoderConfigCodecString = extractVideoCodecString({
+					width: this.config.width,
+					height: this.config.height,
+					codec: 'mjpeg',
+					codecDescription: null,
+					colorSpace: null,
+					avcType: null,
+					avcCodecInfo: null,
+					hevcCodecInfo: null,
+					vp9CodecInfo: null,
+					av1CodecInfo: null,
+					proresFormat: null,
+				});
+			}
 		} else if (this.codec === 'prores') {
 			if (!this.packetEmitted) {
 				decoderConfigCodecString = extractVideoCodecString({
