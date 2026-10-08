@@ -246,12 +246,7 @@ export const DTS_FOURCCS = [
 ] as const;
 export type DtsFourCc = typeof DTS_FOURCCS[number];
 
-export const MJPEG_FOURCCS = [
-	'mjpa',
-	'mjpb',
-	'jpeg',
-	'mjpg',
-] as const;
+export const MJPEG_FOURCCS = ['jpeg'] as const;
 export type MjpegFourCc = typeof MJPEG_FOURCCS[number];
 
 // Target data rates of the ProRes profiles at 1920x1080 ~30fps, as published by Apple
@@ -592,7 +587,11 @@ export const extractVideoCodecString = (trackInfo: {
 	} else if (codec === 'prores') {
 		return proresFormat ?? 'apch';
 	} else if (codec === 'mjpeg') {
+<<<<<<< Updated upstream
 		return 'mjpg';
+=======
+		return 'jpeg';
+>>>>>>> Stashed changes
 	} else if (codec !== null) {
 		assertNever(codec);
 	}
@@ -699,6 +698,13 @@ export const extractColorSpace = (info: {
 				};
 			}
 		}; break;
+
+		case 'mjpeg': {
+			return {
+				primaries: 'bt709',
+				transfer: 'bt709',
+			};
+		} break;
 
 		case 'prores': {
 			if (info.proresCodecInfo) {
