@@ -78,7 +78,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 
 		return (
 			codec === 'avc' || codec === 'hevc' || codec === 'vp8' || codec === 'vp9' || codec === 'av1'
-			|| codec === 'prores'
+			|| codec === 'prores' || codec === 'mjpeg'
 		);
 	}
 
@@ -158,6 +158,11 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 					);
 				}
 			}
+		}
+
+		if (this.codec === 'mjpeg') {
+			pixelFormat = NodeAv.AV_PIX_FMT_YUVJ420P;
+			codecContext.colorRange = NodeAv.AVCOL_RANGE_JPEG;
 		}
 
 		const pixelAspectRatio = simplifyRational({

@@ -84,7 +84,7 @@ Not all codecs can be used with all containers. The following table specifies th
 | `'vp9'`        |    ✓     |   ✓   |   ✓   |     ✓     |       |       |       |       |       |       |
 | `'av1'`        |    ✓     |   ✓   |   ✓   |     ✓     |       |       |       |       |       |       |
 | `'prores'`     |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |       |
-| `'mjpeg'`      |          |   ✓   |   ✓   |           |       |       |       |       |       |       |
+| `'mjpeg'`      |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |       |
 | `'aac'`        |    ✓     |   ✓   |   ✓   |           |       |       |       |   ✓   |       |   ✓   |
 | `'opus'`       |    ✓     |   ✓   |   ✓   |     ✓     |   ✓   |       |       |       |       |       |
 | `'mp3'`        |    ✓     |   ✓   |   ✓   |           |       |   ✓   |       |       |       |   ✓   |

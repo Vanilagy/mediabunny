@@ -29,7 +29,8 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	static override supports(codec: VideoCodec, config: VideoDecoderConfig): boolean {
-		return codec === 'avc' || codec === 'hevc' || codec === 'vp8' || codec === 'vp9' || codec === 'av1';
+		return codec === 'avc' || codec === 'hevc' || codec === 'vp8' || codec === 'vp9' || codec === 'av1'
+			|| codec === 'mjpeg';
 	}
 
 	async init() {

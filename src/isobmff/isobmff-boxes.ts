@@ -712,7 +712,9 @@ export const stsd = (trackData: IsobmffTrackData) => {
 
 	if (trackData.type === 'video') {
 		sampleDescription = videoSampleDescription(
-			videoCodecToBoxName(trackData.track.source._codec, trackData.info.decoderConfig.codec),
+			videoCodecToBoxName(
+				trackData.track.source._codec, trackData.info.decoderConfig.codec, trackData.muxer.isQuickTime,
+			),
 			trackData,
 		);
 	} else if (trackData.type === 'audio') {
@@ -768,7 +770,7 @@ export const videoSampleDescription = (
 	u16(trackData.info.hasAlphaChannel ? 32 : 24), // Depth
 	i16(0xffff), // Pre-defined
 ], [
-	VIDEO_CODEC_TO_CONFIGURATION_BOX[trackData.track.source._codec]?.(trackData) ?? null,
+	videoCodecToConfigurationBox(trackData.track.source._codec, trackData.muxer.isQuickTime)?.(trackData) ?? null,
 	pasp(trackData),
 	colorSpaceIsEmpty(trackData.info.decoderConfig.colorSpace)
 		? null
@@ -963,7 +965,7 @@ export const soundSampleDescription = (
 };
 
 /** MPEG-4 Elementary Stream Descriptor Box. */
-export const esds = (trackData: IsobmffAudioTrackData) => {
+export const esds = (trackData: IsobmffAudioTrackData | IsobmffVideoTrackData) => {
 	// We build up the bytes in a layered way which reflects the nested structure
 
 	let objectTypeIndication: number;
@@ -977,12 +979,15 @@ export const esds = (trackData: IsobmffAudioTrackData) => {
 		case 'vorbis': {
 			objectTypeIndication = 0xdd;
 		}; break;
-		default: throw new Error(`Unhandled audio codec: ${trackData.track.source._codec}`);
+		case 'mjpeg': {
+			objectTypeIndication = 0x6c;
+		}; break;
+		default: throw new Error(`Unhandled ES descriptor codec: ${trackData.track.source._codec}`);
 	}
 
 	let bytes = [
 		...u8(objectTypeIndication), // Object type indication
-		...u8(0x15), // stream type(6bits)=5 audio, flags(2bits)=1
+		...u8(trackData.type === 'video' ? 0x11 : 0x15), // Stream type: 4 visual or 5 audio; reserved bit = 1
 		...u24(0), // 24bit buffer size
 		...u32(trackData.maxBitrate), // max bitrate
 		...u32(trackData.avgBitrate), // avg bitrate
@@ -1884,29 +1889,28 @@ const dataStringBoxLong = (value: string) => {
 	]);
 };
 
-const videoCodecToBoxName = (codec: VideoCodec, fullCodecString: string) => {
+const videoCodecToBoxName = (codec: VideoCodec, fullCodecString: string, isQuickTime: boolean) => {
 	switch (codec) {
 		case 'avc': return fullCodecString.startsWith('avc3') ? 'avc3' : 'avc1';
 		case 'hevc': return 'hvc1';
 		case 'vp8': return 'vp08';
 		case 'vp9': return 'vp09';
 		case 'av1': return 'av01';
-		case 'mjpeg': return 'jpeg';
+		case 'mjpeg': return isQuickTime ? 'jpeg' : 'mp4v';
 		case 'prores': return fullCodecString;
 	}
 };
 
-const VIDEO_CODEC_TO_CONFIGURATION_BOX: Record<
-	VideoCodec,
-	((trackData: IsobmffVideoTrackData) => Box | null) | null
-> = {
-	avc: avcC,
-	hevc: hvcC,
-	vp8: vpcC,
-	vp9: vpcC,
-	av1: av1C,
-	mjpeg: null,
-	prores: null,
+const videoCodecToConfigurationBox = (codec: VideoCodec, isQuickTime: boolean) => {
+	switch (codec) {
+		case 'avc': return avcC;
+		case 'hevc': return hvcC;
+		case 'vp8': return vpcC;
+		case 'vp9': return vpcC;
+		case 'av1': return av1C;
+		case 'mjpeg': return isQuickTime ? null : esds;
+		case 'prores': return null;
+	}
 };
 
 const audioCodecToBoxName = (codec: AudioCodec, fullCodecString: string, isQuickTime: boolean): string => {
