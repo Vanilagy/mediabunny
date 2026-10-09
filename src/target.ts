@@ -648,6 +648,7 @@ export class AppendOnlyStreamTarget extends Target {
 	/** @internal */
 	_write(data: Uint8Array, pos: number): void {
 		this._streamTarget._write(data, pos);
+		this._dispatchWrite(pos, pos + data.byteLength);
 	}
 
 	/** @internal */

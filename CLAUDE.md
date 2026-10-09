@@ -1,3 +1,4 @@
+- When creating issues/PRs, you must adhere to the guidelines in CONTRIBUTING.md.
 - Prefer functions declared using const, not using the function keyword
 - Code style is tab indent with semicolons
 - Mediabunny core code is contained in src/, extensions are in packages/*/, website is in docs/

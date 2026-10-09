@@ -47,6 +47,11 @@ import {
 	AC3_ACMOD_CHANNEL_COUNTS,
 	extractAvcDecoderConfigurationRecord,
 	extractHevcDecoderConfigurationRecord,
+	deserializeAvcDecoderConfigurationRecord,
+	deserializeHevcDecoderConfigurationRecord,
+	HevcNalUnitType,
+	parseAvcSps,
+	parseHevcSps,
 } from '../codec-data';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
@@ -69,6 +74,7 @@ import {
 	last,
 	MATRIX_COEFFICIENTS_MAP_INVERSE,
 	multiplyMatrices,
+	Rational,
 	textDecoder,
 	TransformationMatrix,
 	TRANSFER_CHARACTERISTICS_MAP_INVERSE,
@@ -1407,6 +1413,13 @@ export class IsobmffDemuxer extends Demuxer {
 				}
 
 				track.info.codecDescription = readBytes(slice, boxInfo.contentSize);
+
+				const sps = deserializeAvcDecoderConfigurationRecord(track.info.codecDescription)
+					?.sequenceParameterSets[0];
+				const spsInfo = sps && parseAvcSps(sps);
+				if (spsInfo) {
+					applySpsPixelAspectRatio(track, spsInfo.pixelAspectRatio);
+				}
 			}; break;
 
 			case 'hvcC': {
@@ -1422,6 +1435,13 @@ export class IsobmffDemuxer extends Demuxer {
 				}
 
 				track.info.codecDescription = readBytes(slice, boxInfo.contentSize);
+
+				const sps = deserializeHevcDecoderConfigurationRecord(track.info.codecDescription)
+					?.arrays.find(x => x.nalUnitType === HevcNalUnitType.SPS_NUT)?.nalUnits[0];
+				const spsInfo = sps && parseHevcSps(sps);
+				if (spsInfo) {
+					applySpsPixelAspectRatio(track, spsInfo.pixelAspectRatio);
+				}
 			}; break;
 
 			case 'vpcC': {
@@ -1543,6 +1563,10 @@ export class IsobmffDemuxer extends Demuxer {
 
 				// https://github.com/Vanilagy/mediabunny/issues/362
 				if (num > 0 && den > 0) {
+					// The ratio may already be set by the SPS, but the pasp box wins
+					track.info.squarePixelWidth = track.info.width;
+					track.info.squarePixelHeight = track.info.height;
+
 					if (num > den) {
 						track.info.squarePixelWidth = Math.round(track.info.width * num / den);
 					} else {
@@ -2328,7 +2352,7 @@ export class IsobmffDemuxer extends Demuxer {
 				assert(this.currentFragment);
 				assert(track.currentFragmentState);
 
-				const version = readU8(slice);
+				slice.skip(1); // Version
 				const flags = readU24Be(slice);
 				const dataOffsetPresent = Boolean(flags & 0x000001);
 				const firstSampleFlagsPresent = Boolean(flags & 0x000004);
@@ -2405,11 +2429,10 @@ export class IsobmffDemuxer extends Demuxer {
 
 					let sampleCompositionTimeOffset = 0;
 					if (sampleCompositionTimeOffsetsPresent) {
-						if (version === 0) {
-							sampleCompositionTimeOffset = readU32Be(slice);
-						} else {
-							sampleCompositionTimeOffset = readI32Be(slice);
-						}
+						// Technically unsigned for version 0, but some writers write signed values here without
+						// changing the version. Since the large unsigned values make little sense anyway, it should be
+						// safe to do this.
+						sampleCompositionTimeOffset = readI32Be(slice);
 					}
 
 					const isKeyFrame = !(sampleFlags & 0x00010000);
@@ -3796,6 +3819,26 @@ const readMatrix = (slice: FileSlice): TransformationMatrix => {
 		readFixed_16_16(slice),
 		readFixed_2_30(slice),
 	];
+};
+
+const applySpsPixelAspectRatio = (track: InternalTrack, pixelAspectRatio: Rational) => {
+	const info = track.info!;
+	if (info.type !== 'video') {
+		return;
+	}
+
+	const { num, den } = pixelAspectRatio;
+	if (!(num > 0 && den > 0) || num === den) {
+		return;
+	}
+
+	if (num > den) {
+		info.squarePixelWidth = Math.round(info.width * num / den);
+		info.squarePixelHeight = info.height;
+	} else {
+		info.squarePixelWidth = info.width;
+		info.squarePixelHeight = Math.round(info.height * den / num);
+	}
 };
 
 const sampleTableIsEmpty = (sampleTable: SampleTable) => {
