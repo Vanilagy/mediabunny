@@ -587,11 +587,7 @@ export const extractVideoCodecString = (trackInfo: {
 	} else if (codec === 'prores') {
 		return proresFormat ?? 'apch';
 	} else if (codec === 'mjpeg') {
-<<<<<<< Updated upstream
-		return 'mjpg';
-=======
 		return 'jpeg';
->>>>>>> Stashed changes
 	} else if (codec !== null) {
 		assertNever(codec);
 	}
