@@ -28,5 +28,6 @@
     "@mediabunny/dts": "Adds DTS decoder and encoder support to Mediabunny.",
     "@mediabunny/aac-encoder": "Polyfills AAC encoder support to Mediabunny.",
     "@mediabunny/flac-encoder": "Adds FLAC encoder support to Mediabunny.",
+    "@mediabunny/mjpeg": "Adds mjpeg encoder and decoder support to Mediabunny",
     "@mediabunny/prores": "Adds Apple ProRes decoder support to Mediabunny."
 }

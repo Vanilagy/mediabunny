@@ -50,6 +50,7 @@ export const VIDEO_CODECS = [
 	'av1',
 	'vp8',
 	'prores',
+	'mjpeg',
 ] as const;
 /**
  * List of known PCM (uncompressed) audio codecs, ordered by encoding preference.
@@ -246,6 +247,9 @@ export const DTS_FOURCCS = [
 ] as const;
 export type DtsFourCc = typeof DTS_FOURCCS[number];
 
+export const MJPEG_FOURCCS = ['jpeg'] as const;
+export type MjpegFourCc = typeof MJPEG_FOURCCS[number];
+
 // Target data rates of the ProRes profiles at 1920x1080 ~30fps, as published by Apple
 const PRORES_PROFILE_TARGET_BITRATES: { fourCc: ProresFourCc; bitrate: number; alpha: boolean }[] = [
 	{ fourCc: 'apco', bitrate: 45_000_000, alpha: false }, // 422 Proxy
@@ -338,6 +342,8 @@ export const buildVideoCodecString = (
 		}
 
 		return bestFourCc;
+	} else if (codec === 'mjpeg') {
+		return 'mjpg';
 	} else {
 		assertNever(codec);
 	}
@@ -592,6 +598,8 @@ export const extractVideoCodecString = (trackInfo: {
 		return string;
 	} else if (codec === 'prores') {
 		return proresFormat ?? 'apch';
+	} else if (codec === 'mjpeg') {
+		return 'jpeg';
 	} else if (codec !== null) {
 		assertNever(codec);
 	}
@@ -698,6 +706,13 @@ export const extractColorSpace = (info: {
 				};
 			}
 		}; break;
+
+		case 'mjpeg': {
+			return {
+				primaries: 'bt709',
+				transfer: 'bt709',
+			};
+		} break;
 
 		case 'prores': {
 			if (info.proresCodecInfo) {
@@ -894,6 +909,8 @@ export const inferCodecFromCodecString = (codecString: string): MediaCodec | nul
 		return 'av1';
 	} else if ((PRORES_FOURCCS as readonly string[]).includes(codecString)) {
 		return 'prores';
+	} else if ((MJPEG_FOURCCS as readonly string[]).includes(codecString)) {
+		return 'mjpeg';
 	}
 
 	// Audio codecs
@@ -971,7 +988,17 @@ export const getAudioEncoderConfigExtension = (codec: AudioCodec) => {
 	return {};
 };
 
-const VALID_VIDEO_CODEC_STRING_PREFIXES = ['avc1', 'avc3', 'hev1', 'hvc1', 'vp8', 'vp09', 'av01', ...PRORES_FOURCCS];
+const VALID_VIDEO_CODEC_STRING_PREFIXES = [
+	'avc1',
+	'avc3',
+	'hev1',
+	'hvc1',
+	'vp8',
+	'vp09',
+	'av01',
+	...PRORES_FOURCCS,
+	...MJPEG_FOURCCS
+];
 const AVC_CODEC_STRING_REGEX = /^(avc1|avc3)\.[0-9a-fA-F]{6}$/;
 const HEVC_CODEC_STRING_REGEX = /^(hev1|hvc1)\.(?:[ABC]?\d+)\.[0-9a-fA-F]{1,8}\.[LH]\d+(?:\.[0-9a-fA-F]{1,2}){0,6}$/;
 const VP9_CODEC_STRING_REGEX = /^vp09(?:\.\d{2}){3}(?:(?:\.\d{2}){5})?$/;

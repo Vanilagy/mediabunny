@@ -886,6 +886,10 @@ describe('Video', async () => {
 		await conversionRoundtrip('prores');
 	});
 
+	test('MJPEG conversion roundtrip', { timeout: 20_000 }, async () => {
+		await conversionRoundtrip('mjpeg');
+	});
+
 	const conversionRoundtrip = async (codec: VideoCodec, duration?: number) => {
 		using input = new Input({
 			source: new FilePathSource('./test/public/video.mp4'),
@@ -919,7 +923,8 @@ describe('Video', async () => {
 			video: {
 				codec,
 				forceTranscode: true,
-			}, audio: {
+			},
+			audio: {
 				discard: true,
 			},
 			trim: {

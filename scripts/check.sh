@@ -19,6 +19,9 @@ tsc -p packages/aac-encoder
 rm -rf packages/flac-encoder/dist/modules
 tsc -p packages/flac-encoder
 
+rm -rf packages/mjpeg/dist/modules
+tsc -p packages/mjpeg
+
 rm -rf packages/prores/dist/modules
 tsc -p packages/prores
 

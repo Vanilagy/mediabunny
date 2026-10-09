@@ -151,6 +151,7 @@ export default withMermaid({
 						{ text: 'VP9', link: '/codec-registry/vp9' },
 						{ text: 'AV1', link: '/codec-registry/av1' },
 						{ text: 'ProRes', link: '/codec-registry/prores' },
+						{ text: 'Mjpeg', link: '/codec-registry/mjpeg' },
 					],
 				},
 				{
