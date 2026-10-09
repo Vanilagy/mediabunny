@@ -114,7 +114,7 @@ class MjpegEncoder extends CustomVideoEncoder {
 		try {
 			videoSample.draw(this.context, 0, 0, this.config.width, this.config.height);
 
-			const imageBlob = await this.canvas.convertToBlob({ type: 'image/jpeg', quality: 0 });
+			const imageBlob = await this.canvas.convertToBlob({ type: 'image/jpeg', quality: 1 });
 			const packetData = new Uint8Array(await imageBlob.arrayBuffer());
 
 			const packet = new EncodedPacket(packetData, 'key', videoSample.timestamp, videoSample.duration);
