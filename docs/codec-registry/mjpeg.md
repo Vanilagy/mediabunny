@@ -18,7 +18,7 @@ that each frame is a jpeg image.
 ## Codec ID
 
 ```ts
-'mjpeg'
+"mjpeg";
 ```
 
 ## `EncodedPacket` data
@@ -35,14 +35,8 @@ therefore always `'key'`.
 
 ## `VideoDecoderConfig` codec string
 
-The codec string must be one of the four four-character codes:
-
-- `'mjpg'`
-- `'jpeg'`
-- `'mjpa'`
-- `'mjpb'`
+The codec string must be `'jpeg'`.
 
 ## `VideoDecoderConfig` description
 
 `description` is not used for this codec.
-
