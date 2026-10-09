@@ -26,7 +26,7 @@ that each frame is a jpeg image.
 Each packet data should be a jpeg image as defined in
 [ITU-T81](https://www.w3.org/Graphics/JPEG/itu-t81.pdf)
 
-https://developer.apple.com/documentation/quicktime-file-format/video_sample_data#Motion-JPEG
+[Quicktime mjpeg specification](https://developer.apple.com/documentation/quicktime-file-format/video_sample_data#Motion-JPEG)
 
 ## `EncodedPacket` type
 
