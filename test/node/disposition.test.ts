@@ -46,6 +46,43 @@ test('Default track disposition', async () => {
 	});
 });
 
+test('Disabled track disposition', async () => {
+	const output = new Output({
+		format: new MkvOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	for (let i = 0; i < 2; i++) {
+		output.addVideoTrack(new EncodedVideoPacketSource('avc'), {
+			disposition: { default: i !== 0 },
+			decoderConfig: {
+				codec: 'avc1.123456',
+				codedWidth: 1920,
+				codedHeight: 1080,
+			},
+		});
+	}
+
+	await output.start();
+	await output.finalize();
+
+	const buffer = Buffer.from(output.target.buffer!);
+	const flagOffset = buffer.indexOf(Buffer.from([0x88, 0x81, 0, 0x9c, 0x81, 0]));
+	expect(flagOffset).toBeGreaterThanOrEqual(0);
+	// The muxer can't write FlagEnabled; replace FlagDefault/FlagLacing with FlagEnabled=0/FlagDefault=1.
+	buffer.set([0xb9, 0x81, 0, 0x88, 0x81, 1], flagOffset);
+
+	using input = new Input({
+		source: new BufferSource(buffer),
+		formats: ALL_FORMATS,
+	});
+
+	const tracks = await input.getVideoTracks();
+	expect(tracks).toHaveLength(2);
+	expect((await tracks[0]!.getDisposition()).default).toBe(false);
+	expect((await tracks[1]!.getDisposition()).default).toBe(true);
+});
+
 test('Customized track disposition', async () => {
 	const output = new Output({
 		format: new MkvOutputFormat(),

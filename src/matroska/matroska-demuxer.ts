@@ -205,6 +205,7 @@ type InternalTrack = {
 	cuePoints: CuePoint[];
 
 	disposition: TrackDisposition;
+	enabled: boolean;
 	trackBacking: InputTrackBacking | null;
 	codecId: string | null;
 	codecPrivate: Uint8Array | null;
@@ -1059,6 +1060,7 @@ export class MatroskaDemuxer extends Demuxer {
 						...DEFAULT_TRACK_DISPOSITION,
 						primary: false,
 					},
+					enabled: true,
 					trackBacking: null,
 					codecId: null,
 					codecPrivate: null,
@@ -1074,9 +1076,8 @@ export class MatroskaDemuxer extends Demuxer {
 
 				this.readContiguousElements(slice.slice(dataStartPos, size));
 
-				// Check if track was disabled during parsing (e.g., by FlagEnabled being 0)
-				if (!this.currentTrack) {
-					break;
+				if (!this.currentTrack.enabled) {
+					this.currentTrack.disposition.default = false;
 				}
 
 				if (this.currentTrack.decodingInstructions.some((instruction) => {
@@ -1273,10 +1274,7 @@ export class MatroskaDemuxer extends Demuxer {
 			case EBMLId.FlagEnabled: {
 				if (!this.currentTrack) break;
 
-				const enabled = readUnsignedInt(slice, size);
-				if (!enabled) {
-					this.currentTrack = null;
-				}
+				this.currentTrack.enabled = !!readUnsignedInt(slice, size);
 			}; break;
 
 			case EBMLId.FlagDefault: {
