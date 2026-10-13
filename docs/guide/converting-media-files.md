@@ -151,6 +151,49 @@ await conversion.execute({
 
 The conversion can then be resumed and continued by calling `execute` again. This feature is especially useful for [composable conversions](#composable-conversions).
 
+### Persisting progress across restarts
+
+`Conversion` pause/resume keeps the current instance alive. Use `RecoverableConversion` when completed work must survive a worker termination, page reload, or application restart.
+
+```ts
+import { RecoverableConversion, BufferTarget } from 'mediabunny';
+import type { ConversionRecoveryStore } from 'mediabunny';
+
+// Implement these methods using your application's durable storage.
+const store: ConversionRecoveryStore = {
+	readSegment: async (index) => readStoredSegment(index),
+	commit: async (index, bytes, checkpoint) => {
+		// Persist the complete object, then atomically publish its checkpoint.
+		await persistSegmentAndCheckpoint(index, bytes, checkpoint);
+	},
+};
+
+const recovery = await RecoverableConversion.init({
+	source: input,
+	sourceIdentity: verifiedContentIdentity,
+	store,
+	checkpoint: savedCheckpoint, // Omit for a new job.
+	conversion: {
+		video: { codec: 'avc', width: 1280 },
+		audio: { codec: 'aac' },
+	},
+});
+
+while (await recovery.step()) {
+	// Each successful step publishes one complete durable object.
+}
+const target = new BufferTarget();
+await recovery.assemble(target);
+recovery.dispose();
+// target.buffer contains the completed file.
+```
+
+The application owns storage, reopening the input, and ensuring that only one writer operates on a job. An `Input` requires a verified immutable content identity; a `Uint8Array` source is copied and hashed. Keep completed objects until final output publication succeeds. Assembly can be repeated into a fresh target after an interruption.
+
+Recovery supports declarative conversion options, packet copying, and mixed copied/transcoded tracks. Callbacks and composable outputs are unsupported. Audio transcoding supports AAC/Opus with bounded preroll, FLAC, and PCM outside Matroska. Other source audio codecs can still be copied. The default output is fragmented MP4.
+
+If the source or settings change, or a restarted encoder produces an incompatible configuration, start a new job with a fresh storage namespace and no checkpoint. Do not overwrite objects referenced by the previous checkpoint.
+
 ## Video options
 
 You can set the `video` property in the conversion options to configure the converter's behavior for video tracks. The options are:

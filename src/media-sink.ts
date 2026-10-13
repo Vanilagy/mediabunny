@@ -534,6 +534,12 @@ export abstract class BaseMediaSampleSink<
 				}
 			});
 
+			if (decoder instanceof PcmAudioDecoderWrapper
+				&& this instanceof AudioSampleSink && this._trimPcmBeforeDecode) {
+				decoder.decodeStart = this._pcmDecodeStart ?? startTimestamp;
+				decoder.decodeEnd = endTimestamp;
+			}
+
 			const packetSink = this._createPacketSink();
 			const keyPacket = await packetSink.getKeyPacket(startTimestamp, packetRetrievalOptions)
 				?? await packetSink.getFirstKeyPacket(packetRetrievalOptions);
@@ -2469,7 +2475,30 @@ class PcmAudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 		return 0;
 	}
 
+	/** Requested sample range, applied before PCM expansion (container packets may span hours). */
+	decodeStart = -Infinity;
+	decodeEnd = Infinity;
+
 	decode(packet: EncodedPacket) {
+		const frameBytes = this.decoderConfig.numberOfChannels * this.inputSampleSize;
+		const packetFrames = packet.byteLength / frameBytes;
+		const packetDuration = packetFrames / this.decoderConfig.sampleRate;
+		// Establish the sample clock before slicing: container timestamps may be millisecond-rounded.
+		if (this.currentTimestamp === null || Math.abs(packet.timestamp - this.currentTimestamp) >= packetDuration) {
+			this.currentTimestamp = packet.timestamp;
+		}
+		const packetTimestamp = this.currentTimestamp;
+		this.currentTimestamp += packetDuration;
+		const start = Math.max(0, Math.round((this.decodeStart - packetTimestamp) * this.decoderConfig.sampleRate));
+		const end = Math.min(packetFrames,
+			Math.round((this.decodeEnd - packetTimestamp) * this.decoderConfig.sampleRate));
+		if (start >= end) {
+			return;
+		}
+		if (start !== 0 || end !== packetFrames) {
+			packet = new EncodedPacket(packet.data.subarray(start * frameBytes, end * frameBytes), packet.type,
+				packetTimestamp + start / this.decoderConfig.sampleRate, (end - start) / this.decoderConfig.sampleRate);
+		}
 		const inputView = toDataView(packet.data);
 
 		const numberOfFrames = packet.byteLength / this.decoderConfig.numberOfChannels / this.inputSampleSize;
@@ -2486,14 +2515,7 @@ class PcmAudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 			this.writeOutputValue(outputView, outputIndex, value);
 		}
 
-		const preciseDuration = numberOfFrames / this.decoderConfig.sampleRate;
-		if (this.currentTimestamp === null || Math.abs(packet.timestamp - this.currentTimestamp) >= preciseDuration) {
-			// We need to sync with the packet timestamp again
-			this.currentTimestamp = packet.timestamp;
-		}
-
-		const preciseTimestamp = this.currentTimestamp;
-		this.currentTimestamp += preciseDuration;
+		const preciseTimestamp = packetTimestamp + start / this.decoderConfig.sampleRate;
 
 		const audioSample = new AudioSample({
 			format: this.outputFormat,
@@ -2522,6 +2544,10 @@ class PcmAudioDecoderWrapper extends DecoderWrapper<AudioSample> {
  * @public
  */
 export class AudioSampleSink extends BaseMediaSampleSink<AudioSample> {
+	/** @internal Trim PCM before expansion for bounded conversion checkpoint ranges. */
+	_trimPcmBeforeDecode = false;
+	/** @internal Seek earlier while bounding retained decoded PCM to this timestamp. */
+	_pcmDecodeStart?: number;
 	/** @internal */
 	_track: InputAudioTrack;
 

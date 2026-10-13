@@ -306,6 +306,12 @@ export {
 	type DiscardedTrack,
 } from './conversion';
 export {
+	RecoverableConversion,
+	type RecoverableConversionOptions,
+	type ConversionCheckpoint,
+	type ConversionRecoveryStore,
+} from './conversion-recovery';
+export {
 	CustomVideoDecoder,
 	CustomVideoEncoder,
 	CustomAudioDecoder,
