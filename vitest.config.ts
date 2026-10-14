@@ -4,9 +4,11 @@ import { defineConfig } from 'vitest/config';
 import path from 'node:path';
 
 export default defineConfig({
+	define: { __RECOVERY_TEST_MEDIA__: JSON.stringify(process.env['RECOVERY_TEST_MEDIA'] ?? '') },
 	resolve: {
 		alias: {
 			'mediabunny': path.resolve(__dirname, './src/index.ts'),
+			'@mediabunny/dts': path.resolve(__dirname, './packages/dts/dist/bundles/mediabunny-dts.mjs'),
 			'@mediabunny/ac3': path.resolve(__dirname, './packages/ac3/dist/bundles/mediabunny-ac3.mjs'),
 			'@mediabunny/aac-encoder':
 				path.resolve(__dirname, './packages/aac-encoder/dist/bundles/mediabunny-aac-encoder.mjs'),

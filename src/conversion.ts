@@ -674,6 +674,179 @@ type TrackPump = {
  * @public
  */
 export class Conversion {
+	/** @internal Planned copied tracks; execution and durable recovery share this exact global plan. */
+	_copyPlans: {
+		outputTrackId: number;
+		track: InputTrack;
+		startPacket: EncodedPacket | null;
+		alpha?: 'keep' | 'discard';
+	}[] = [];
+
+	/** @internal Iterate one globally planned copy stream without running encoders or output pumps. */
+	async* _copyPackets(
+		outputTrackId: number,
+		committedPackets = 0,
+		metadataOnly = false,
+		resume?: { previous: EncodedPacket; maxTimestamp: number },
+		onPacket?: (original: EncodedPacket) => void,
+	) {
+		if (!Number.isSafeInteger(committedPackets) || committedPackets < 0) {
+			throw new TypeError('Committed copy packet count must be a non-negative safe integer.');
+		}
+		const plan = this._copyPlans.find(plan => plan.outputTrackId === outputTrackId);
+		if (!plan) {
+			throw new Error('Output track is not planned for packet copying.');
+		}
+		if (!plan.startPacket) {
+			return;
+		}
+		const sink = new EncodedPacketSink(plan.track);
+		const video = plan.track instanceof InputVideoTrack;
+		const cursor = video
+			? this._createVideoCopyCursor(sink, plan.alpha!, resume?.maxTimestamp)
+			: this._createAudioCopyCursor(resume?.maxTimestamp);
+		const retrieval = metadataOnly ? { metadataOnly: true } : video ? { verifyKeyPackets: true } : {};
+		let packet = resume ? await sink.getNextPacket(resume.previous, retrieval) : plan.startPacket;
+		while (packet) {
+			const next = await cursor.next(packet);
+			if (next === null) {
+				break;
+			}
+			if (next !== undefined) {
+				if (committedPackets > 0) {
+					committedPackets--;
+				} else {
+					onPacket?.(packet);
+					yield next;
+				}
+			}
+			packet = await sink.getNextPacket(packet, committedPackets > 0 ? { metadataOnly: true } : retrieval);
+		}
+	}
+
+	/** @internal Audio cursor distinguishes end-of-range (null) from a dropped timestamp regression (undefined). */
+	_createAudioCopyCursor(initialMaxTimestamp: number | null = null) {
+		const end = this._endTimestamp;
+		const offset = this._timestampOffset;
+		const boundary = this._copyBoundaryPolicy;
+		let maxTimestamp: number | null = initialMaxTimestamp;
+		return {
+			next(packet: EncodedPacket): EncodedPacket | null | undefined {
+				if (packet.timestamp >= end || (boundary === 'shrink' && packet.timestamp + packet.duration > end)) {
+					return null;
+				}
+				const timestamp = packet.timestamp + offset;
+				if (maxTimestamp !== null && timestamp < maxTimestamp) {
+					return undefined;
+				}
+				maxTimestamp = timestamp;
+				return packet.clone({ timestamp, duration: packet.duration });
+			},
+		};
+	}
+
+	/** @internal Shared copy boundary state, resolved after all tracks have planned their timestamp shifts. */
+	_createVideoCopyCursor(
+		sink: EncodedPacketSink,
+		alpha: 'keep' | 'discard',
+		initialMaxTimestamp: number | null = null,
+	) {
+		const start = this._startTimestamp;
+		const end = this._endTimestamp;
+		const offset = this._timestampOffset;
+		const boundary = this._copyBoundaryPolicy;
+		let maxTimestamp: number | null = initialMaxTimestamp;
+		return {
+			async next(packet: EncodedPacket): Promise<EncodedPacket | null> {
+				if (packet.timestamp >= end) {
+					if (boundary === 'shrink') {
+						return null;
+					}
+					// Due to B-frames, there might still be packets we care about later on. Do a short
+					// lookahead to find out if there are.
+					let current = packet;
+					let found = false;
+					const lookahead = 6; // Heuristic, but should be enough for most streams
+					for (let i = 0; i < lookahead; i++) {
+						const next = await sink.getNextPacket(current, { metadataOnly: true });
+						if (!next) {
+							break;
+						}
+						if (next.timestamp < end) {
+							found = true;
+							break;
+						}
+						current = next;
+					}
+					if (!found) {
+						return null;
+					}
+				}
+				let packetStart = packet.timestamp;
+				let packetEnd = packet.timestamp + packet.duration;
+				if (boundary === 'shrink') {
+					packetStart = Math.max(packetStart, start);
+					packetEnd = Math.max(Math.min(packetEnd, end), packetStart);
+				}
+				packetStart += offset;
+				packetEnd += offset;
+				// The muxer rejects key packets with a timestamp smaller than the largest timestamp of the
+				// previous GOP. Some files in the wild actually violate this, so we demote such packets to delta
+				// packets to keep them in the previous GOP and keep the rule satisfied
+				const type
+					= packet.type === 'key' && maxTimestamp !== null && packetStart < maxTimestamp
+						? 'delta'
+						: packet.type;
+				maxTimestamp = Math.max(maxTimestamp ?? -Infinity, packetStart);
+				return packet.clone({
+					timestamp: packetStart,
+					duration: packetEnd - packetStart,
+					type,
+					sideData: alpha === 'discard' ? {} : packet.sideData,
+				});
+			},
+		};
+	}
+
+	/** @internal Validate declarative recovery variants before allocating resources. */
+	static _declarativeVariants<T extends ConversionVideoOptions | ConversionAudioOptions>(
+		options: T | T[] | undefined,
+		kind: 'audio' | 'video',
+	): T[] {
+		const variants = Array.isArray(options) ? options : [options ?? {} as T];
+		for (const variant of variants) {
+			if (kind === 'video') {
+				validateVideoOptions(variant as ConversionVideoOptions);
+			} else {
+				validateAudioOptions(variant as ConversionAudioOptions);
+			}
+		}
+		return variants;
+	}
+
+	/** @internal Shared metadata policy for normal and recovered transcoded tracks. */
+	static async _getTrackMetadata(track: InputTrack) {
+		const language = await track.getLanguageCode();
+		return {
+			// TODO: This condition can be removed when all demuxers properly homogenize to BCP47 in v2
+			languageCode: isIso639Dash2LanguageCode(language) ? language : undefined,
+			name: (await track.getName()) ?? undefined,
+			disposition: await track.getDisposition(),
+		};
+	}
+
+	/** @internal Retain raw tags only when they belong to the destination container. */
+	static async _getOutputTags(input: Input, output: Output, tags?: MetadataTags) {
+		const inputTags = await input.getMetadataTags();
+		const result = { ...(tags ?? inputTags) };
+		if (result.raw === inputTags.raw && (await input.getFormat()).mimeType !== output.format.mimeType) {
+			// If the input and output formats aren't the same, copying over raw metadata tags makes no sense and
+			// only results in junk tags, so let's cut them out.
+			delete result.raw;
+		}
+		return result;
+	}
+
 	/** The input file. */
 	readonly input: Input;
 	/** The output file. */
@@ -1138,17 +1311,7 @@ export class Conversion {
 				outputTags = inputTags;
 			}
 
-			// Somewhat dirty but pragmatic
-			const inputAndOutputFormatMatch = inputFormat.mimeType === this.output.format.mimeType;
-			const rawTagsAreUnchanged = inputTags.raw === outputTags.raw;
-
-			if (rawTagsAreUnchanged && !inputAndOutputFormatMatch) {
-				// If the input and output formats aren't the same, copying over raw metadata tags makes no sense and
-				// only results in junk tags, so let's cut them out.
-				delete outputTags.raw;
-			}
-
-			this.output.setMetadataTags(outputTags);
+			this.output.setMetadataTags(await Conversion._getOutputTags(this.input, this.output, outputTags));
 		}
 
 		// Let's check if the conversion can actually be executed
@@ -1625,12 +1788,13 @@ export class Conversion {
 
 			const source = new EncodedVideoPacketSource(sourceCodec);
 			videoSource = source;
+			this._copyPlans.push({ outputTrackId, track, startPacket: copyStartPacket, alpha });
 
 			this._registerTrackPump(async (pump) => {
 				const sink = new EncodedPacketSink(track);
 				const decoderConfig = await track.getDecoderConfig();
 				const meta: EncodedVideoChunkMetadata = { decoderConfig: decoderConfig ?? undefined };
-				let maxTimestamp: number | null = null;
+				const cursor = this._createVideoCopyCursor(sink, alpha);
 
 				// eslint-disable-next-line curly
 				if (copyStartPacket) for await (const packet of sink.packets(
@@ -1642,66 +1806,10 @@ export class Conversion {
 						break;
 					}
 
-					if (packet.timestamp >= this._endTimestamp) {
-						if (this._copyBoundaryPolicy === 'shrink') {
-							break;
-						} else {
-							// Due to B-frames, there might still be packets we care about later on. Do a short
-							// lookahead to find out if there are.
-
-							let current = packet;
-							let found = false;
-							const lookahead = 6; // Heuristic, but should be enough for most streams
-
-							for (let i = 0; i < lookahead; i++) {
-								const next = await sink.getNextPacket(current, { metadataOnly: true });
-								if (!next) {
-									break;
-								}
-
-								if (next.timestamp < this._endTimestamp) {
-									found = true;
-									break;
-								}
-
-								current = next;
-							}
-
-							if (!found) {
-								break;
-							}
-						}
+					const modifiedPacket = await cursor.next(packet);
+					if (modifiedPacket === null) {
+						break;
 					}
-
-					let packetStartTimestamp = packet.timestamp;
-					let packetEndTimestamp = packet.timestamp + packet.duration;
-
-					if (this._copyBoundaryPolicy === 'shrink') {
-						packetStartTimestamp = Math.max(packetStartTimestamp, this._startTimestamp);
-						packetEndTimestamp = Math.min(packetEndTimestamp, this._endTimestamp);
-						packetEndTimestamp = Math.max(packetEndTimestamp, packetStartTimestamp); // Just in case
-					}
-
-					packetStartTimestamp += this._timestampOffset;
-					packetEndTimestamp += this._timestampOffset;
-
-					// The muxer rejects key packets with a timestamp smaller than the largest timestamp of the
-					// previous GOP. Some files in the wild actually violate this, so we demote such packets to delta
-					// packets to keep them in the previous GOP and keep the rule satisfied
-					let packetType = packet.type;
-					if (packetType === 'key' && maxTimestamp !== null && packetStartTimestamp < maxTimestamp) {
-						packetType = 'delta';
-					}
-					maxTimestamp = Math.max(maxTimestamp ?? -Infinity, packetStartTimestamp);
-
-					const modifiedPacket = packet.clone({
-						timestamp: packetStartTimestamp,
-						duration: packetEndTimestamp - packetStartTimestamp,
-						sideData: alpha === 'discard'
-							? {} // Remove alpha side data
-							: packet.sideData,
-						type: packetType,
-					});
 
 					this._reportProgress(outputTrackId, modifiedPacket.timestamp + modifiedPacket.duration);
 					await source.add(modifiedPacket, meta);
@@ -1894,10 +2002,6 @@ export class Conversion {
 			ownGroup = new OutputTrackGroup();
 		}
 
-		const videoTrackLanguageCode = await track.getLanguageCode();
-		const trackName = await track.getName();
-		const trackDisposition = await track.getDisposition();
-
 		// The input's bitrate metadata only stays meaningful when packets are copied
 		const bitrate = needsTranscode ? null : await track.getBitrate();
 		const averageBitrate = needsTranscode ? null : await track.getAverageBitrate();
@@ -1905,12 +2009,7 @@ export class Conversion {
 
 		this.output.addVideoTrack(videoSource, {
 			frameRate: trackOptions.frameRate,
-			// TODO: This condition can be removed when all demuxers properly homogenize to BCP47 in v2
-			languageCode: isIso639Dash2LanguageCode(videoTrackLanguageCode)
-				? videoTrackLanguageCode
-				: undefined,
-			name: trackName ?? undefined,
-			disposition: trackDisposition,
+			...(await Conversion._getTrackMetadata(track)),
 			rotation: outputTrackRotation,
 			flip: outputTrackFlip,
 			transformationMatrix: outputTrackMatrix ?? undefined,
@@ -2070,12 +2169,13 @@ export class Conversion {
 
 			const source = new EncodedAudioPacketSource(sourceCodec);
 			audioSource = source;
+			this._copyPlans.push({ outputTrackId, track, startPacket: copyStartPacket });
 
 			this._registerTrackPump(async (pump) => {
 				const sink = new EncodedPacketSink(track);
 				const decoderConfig = await track.getDecoderConfig();
 				const meta: EncodedAudioChunkMetadata = { decoderConfig: decoderConfig ?? undefined };
-				let maxTimestamp: number | null = null;
+				const cursor = this._createAudioCopyCursor();
 
 				// eslint-disable-next-line curly
 				if (copyStartPacket) for await (const packet of sink.packets(copyStartPacket)) {
@@ -2083,28 +2183,13 @@ export class Conversion {
 						break;
 					}
 
-					if (packet.timestamp >= this._endTimestamp) {
+					const modifiedPacket = cursor.next(packet);
+					if (modifiedPacket === null) {
 						break;
 					}
-					if (
-						this._copyBoundaryPolicy === 'shrink'
-						&& packet.timestamp + packet.duration > this._endTimestamp
-					) {
-						break;
-					}
-
-					const packetTimestamp = packet.timestamp + this._timestampOffset;
-
-					// Drop packets that would violate the GOP timestamp monotonicity rule
-					if (maxTimestamp !== null && packetTimestamp < maxTimestamp) {
+					if (modifiedPacket === undefined) {
 						continue;
 					}
-					maxTimestamp = packetTimestamp;
-
-					const modifiedPacket = packet.clone({
-						timestamp: packetTimestamp,
-						duration: packet.duration,
-					});
 
 					this._reportProgress(outputTrackId, modifiedPacket.timestamp + modifiedPacket.duration);
 					await source.add(modifiedPacket, meta);
@@ -2307,21 +2392,12 @@ export class Conversion {
 			ownGroup = new OutputTrackGroup();
 		}
 
-		const audioTrackLanguageCode = await track.getLanguageCode();
-		const trackName = await track.getName();
-		const trackDisposition = await track.getDisposition();
-
 		// The input's bitrate metadata only stays meaningful when packets are copied
 		const bitrate = needsTranscode ? null : await track.getBitrate();
 		const averageBitrate = needsTranscode ? null : await track.getAverageBitrate();
 
 		this.output.addAudioTrack(audioSource, {
-			// TODO: This condition can be removed when all demuxers properly homogenize to BCP47 in v2
-			languageCode: isIso639Dash2LanguageCode(audioTrackLanguageCode)
-				? audioTrackLanguageCode
-				: undefined,
-			name: trackName ?? undefined,
-			disposition: trackDisposition,
+			...(await Conversion._getTrackMetadata(track)),
 			group: ownGroup ?? trackOptions.group,
 			bitrate: bitrate ?? undefined,
 			averageBitrate: averageBitrate ?? undefined,
