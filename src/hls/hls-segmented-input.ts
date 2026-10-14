@@ -772,7 +772,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 	}
 
 	async getLiveRefreshInterval() {
-		if (this.getRemainingWaitTimeMs() === 0) {
+		if (!this.streamHasEnded && this.getRemainingWaitTimeMs() === 0) {
 			await this.runUpdateSegments();
 		}
 
