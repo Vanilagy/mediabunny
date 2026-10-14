@@ -577,6 +577,7 @@ export abstract class BaseMediaSampleSink<
 
 			if (!firstSampleQueued && lastSample) {
 				sampleQueue.push(lastSample);
+				lastSample = null;
 			}
 
 			decoderIsFlushed = true;
