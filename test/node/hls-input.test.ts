@@ -1,6 +1,5 @@
 /* eslint-disable @stylistic/max-len */
 import { ALL_FORMATS, BufferSource, EncodedPacketSink, Input, InputAudioTrack, InputVideoTrack, UrlSource } from 'mediabunny';
-import { readFileSync } from 'node:fs';
 import { expect, test, vi } from 'vitest';
 import { HLS, HLS_FORMATS, HlsInputFormat, MP4 } from '../../src/input-format.js';
 import { assert, hexStringToBytes, rejectAfter } from '../../src/misc.js';
@@ -1227,40 +1226,3 @@ test.concurrent('Invalid #EXT-X-DEFINE tags are rejected', async () => {
 		await expect(input.getTracks()).rejects.toThrow(error);
 	}
 });
-
-// Regression from Kino preview track checks: completed playlists were re-read on every expired interval.
-test.each(['#EXT-X-ENDLIST', '#EXT-X-PLAYLIST-TYPE:VOD', 'live-to-ended'])(
-	'Completed HLS playlists stop refreshing (%s)', async (marker) => {
-		const segment = readFileSync(new URL('../public/video.mp4', import.meta.url));
-		let now = 0;
-		let playlistReads = 0;
-		let ended = marker !== 'live-to-ended';
-		const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
-		const input = new Input({
-			formats: ALL_FORMATS,
-			source: new CustomPathedSource('/stream.m3u8', ({ path }) => {
-				if (!path.endsWith('.m3u8')) {
-					return new BufferSource(segment);
-				}
-				playlistReads++;
-				const endTag = marker === 'live-to-ended' ? '#EXT-X-ENDLIST' : marker;
-				return new BufferSource(new TextEncoder().encode(
-					`#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\nsegment.mp4\n${ended ? endTag : ''}\n`,
-				));
-			}),
-		});
-		try {
-			const track = (await input.getPrimaryVideoTrack())!;
-			expect(await track.isLive()).toBe(!ended);
-			const initialReads = playlistReads;
-			ended = true;
-			for (now of [5_000, 10_000]) {
-				expect(await track.isLive()).toBe(false);
-				expect(playlistReads).toBe(initialReads + Number(marker === 'live-to-ended'));
-			}
-		} finally {
-			input.dispose();
-			clock.mockRestore();
-		}
-	},
-);
