@@ -463,6 +463,12 @@ export abstract class BaseMediaSampleSink<
 	abstract _createPacketSink(): EncodedPacketSink;
 
 	/** @internal */
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	protected _createQueueTransform(_onError: (error: unknown) => void): (sample: MediaSample) => MediaSample | null {
+		return sample => sample;
+	}
+
+	/** @internal */
 	protected mediaSamplesInRange(
 		startTimestamp = -Infinity,
 		endTimestamp = Infinity,
@@ -486,6 +492,12 @@ export abstract class BaseMediaSampleSink<
 		// the consumer.
 		let outOfBandError = null as unknown;
 		let hasOutOfBandError = false;
+		const prepareSample = this._createQueueTransform((error) => {
+			outOfBandError = error;
+			hasOutOfBandError = true;
+			ended = true;
+			onQueueNotEmpty();
+		});
 
 		const packetRetrievalOptions: PacketRetrievalOptions = {
 			...options,
@@ -512,15 +524,19 @@ export abstract class BaseMediaSampleSink<
 						// last first whose timestamp is less than or equal to the start timestamp. Therefore we need to
 						// wait for the first first after the start timestamp, and then we'll know that the previous
 						// first was the first first.
-						sampleQueue.push(lastSample);
+						const prepared = prepareSample(lastSample);
+						if (prepared) sampleQueue.push(prepared);
 						firstSampleQueued = true;
 					} else {
 						lastSample.close();
 					}
 				}
 
-				if (sample.timestamp >= startTimestamp) {
-					sampleQueue.push(sample);
+				if (ended) {
+					sample.close();
+				} else if (sample.timestamp >= startTimestamp) {
+					const prepared = prepareSample(sample);
+					if (prepared) sampleQueue.push(prepared);
 					firstSampleQueued = true;
 				}
 
@@ -580,7 +596,8 @@ export abstract class BaseMediaSampleSink<
 			}
 
 			if (!firstSampleQueued && lastSample) {
-				sampleQueue.push(lastSample);
+				const prepared = prepareSample(lastSample);
+				if (prepared) sampleQueue.push(prepared);
 				lastSample = null;
 			}
 
@@ -672,6 +689,13 @@ export abstract class BaseMediaSampleSink<
 		// the consumer.
 		let outOfBandError = null as unknown;
 		let hasOutOfBandError = false;
+		const prepareSample = this._createQueueTransform((error) => {
+			outOfBandError = error;
+			hasOutOfBandError = true;
+			terminated = true;
+			onQueueDequeue();
+			onQueueNotEmpty();
+		});
 
 		const pushToQueue = (sample: MediaSample | null) => {
 			sampleQueue.push(sample);
@@ -705,6 +729,9 @@ export abstract class BaseMediaSampleSink<
 				}
 
 				if (sampleUses > 0) {
+					const prepared = prepareSample(sample);
+					if (!prepared) return;
+					sample = prepared;
 					for (let i = 0; i < sampleUses; i++) {
 						// Clone the sample if we need to emit it multiple times
 						pushToQueue((i < sampleUses - 1 ? sample.clone() : sample) as MediaSample);
@@ -847,12 +874,12 @@ export abstract class BaseMediaSampleSink<
 						terminated = true;
 						closeSamples();
 						throw new InputDisposedError();
-					} else if (terminated) {
-						return { value: undefined, done: true };
 					} else if (hasOutOfBandError) {
 						terminated = true;
 						closeSamples();
 						throw outOfBandError;
+					} else if (terminated) {
+						return { value: undefined, done: true };
 					} else if (sampleQueue.length > 0) {
 						const value = sampleQueue.shift();
 						assert(value !== undefined);
@@ -1767,6 +1794,23 @@ const validateVideoSinkDecoderOptions = (decoderOptions: VideoSinkDecoderOptions
 };
 
 /**
+ * Options for constructing a video sample sink.
+ * @group Media sinks
+ * @public
+ */
+export type VideoSampleSinkOptions = VideoSinkDecoderOptions & {
+	/**
+	 * Optionally reduce retained 8-bit SDR samples to fit this box, preserving aspect ratio and never upscaling.
+	 * Resizing happens before read-ahead queue retention and applies rotation and flip to the pixels. Timestamps
+	 * and durations are preserved. This trades rasterization work for lower memory use; frames discarded by a
+	 * later seek may already have been resized. HDR, high-bit-depth, unknown formats/color spaces, and samples
+	 * whose RGBA copy would not reduce allocation are returned unchanged. This is not a strict output-size limit.
+	 * Omit to preserve the original samples. Both dimensions must be positive integers.
+	 */
+	maxSampleSize?: { width: number; height: number };
+};
+
+/**
  * A sink that retrieves decoded video samples (video frames) from a video track.
  * @group Media sinks
  * @public
@@ -1775,14 +1819,54 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 	/** @internal */
 	_track: InputVideoTrack;
 	/** @internal */
-	_decoderOptions: VideoSinkDecoderOptions;
+	_decoderOptions: VideoSampleSinkOptions;
+
+	/** @internal */
+	protected override _createQueueTransform(
+		onError: (error: unknown) => void,
+	): (sample: VideoSample) => VideoSample | null {
+		const size = this._decoderOptions.maxSampleSize;
+		if (!size) return sample => sample;
+		let canvas: OffscreenCanvas | undefined;
+		return (sample) => {
+			// Only compact known 8-bit SDR frames. Opaque formats may carry HDR/10-bit data.
+			if (!/^(I420|I420A|I422|I444|NV12|RGBA|RGBX|BGRA|BGRX)$/.test(sample.format ?? '')
+				|| !['bt709', 'smpte170m', 'bt470bg'].includes(sample.colorSpace.primaries ?? '')
+				|| !['bt709', 'smpte170m', 'iec61966-2-1'].includes(sample.colorSpace.transfer ?? '')) return sample;
+			const scale = Math.min(1, size.width / sample.displayWidth, size.height / sample.displayHeight);
+			const width = Math.max(1, Math.round(sample.displayWidth * scale));
+			const height = Math.max(1, Math.round(sample.displayHeight * scale));
+			// RGBA copies cost four bytes/pixel; only copy when it actually reduces allocation.
+			if (scale === 1 || width * height * 4 >= sample.allocationSize()) return sample;
+			try {
+				canvas ??= new OffscreenCanvas(width, height);
+				if (canvas.width !== width) canvas.width = width;
+				if (canvas.height !== height) canvas.height = height;
+				const context = canvas.getContext('2d');
+				if (!context) throw new Error('Could not create sample resize canvas context');
+				context.clearRect(0, 0, width, height);
+				sample.draw(context, 0, 0, width, height);
+				return new VideoSample(canvas, { timestamp: sample.timestamp, duration: sample.duration });
+			} catch (error) {
+				onError(error);
+				return null;
+			} finally {
+				sample.close();
+			}
+		};
+	}
 
 	/** Creates a new {@link VideoSampleSink} for the given {@link InputVideoTrack}. */
-	constructor(videoTrack: InputVideoTrack, decoderOptions: VideoSinkDecoderOptions = {}) {
+	constructor(videoTrack: InputVideoTrack, decoderOptions: VideoSampleSinkOptions = {}) {
 		if (!(videoTrack instanceof InputVideoTrack)) {
 			throw new TypeError('videoTrack must be an InputVideoTrack.');
 		}
 		validateVideoSinkDecoderOptions(decoderOptions);
+		const size = decoderOptions.maxSampleSize;
+		if (size !== undefined && (!size || !Number.isSafeInteger(size.width) || size.width <= 0
+			|| !Number.isSafeInteger(size.height) || size.height <= 0)) {
+			throw new TypeError('maxSampleSize must contain positive integer width and height.');
+		}
 
 		super();
 
