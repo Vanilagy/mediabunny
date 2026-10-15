@@ -745,6 +745,8 @@ export class Conversion {
 	_computeProgress = false;
 	/** @internal */
 	_lastProgress = 0;
+	/** @internal */
+	_lastProcessedTime = 0;
 
 	/**
 	 * Whether this conversion, as it has been configured, is valid and can be executed. If this field is `false`, check
@@ -1408,8 +1410,9 @@ export class Conversion {
 			}
 
 			if (this._computeProgress) {
-				const minTimestamp = Math.min(...this._maxTimestamps.values());
-				this.onProgress?.(1, minTimestamp);
+				// By this point, all tracks have closed and removed themselves from _maxTimestamps, so we use the last
+				// processed time we saw while they were still open
+				this.onProgress?.(1, this._lastProcessedTime);
 			}
 		}
 	}
@@ -1703,7 +1706,7 @@ export class Conversion {
 						type: packetType,
 					});
 
-					this._reportProgress(outputTrackId, modifiedPacket.timestamp + modifiedPacket.duration);
+					this._updateProgress(outputTrackId, modifiedPacket.timestamp + modifiedPacket.duration);
 					await source.add(modifiedPacket, meta);
 
 					if (this._synchronizer.shouldWait(outputTrackId, modifiedPacket.timestamp)) {
@@ -1714,7 +1717,7 @@ export class Conversion {
 				}
 
 				source.close();
-				this._synchronizer.closeTrack(outputTrackId);
+				this._closeTrack(outputTrackId);
 			});
 		} else {
 			// We need to decode & reencode the video
@@ -1869,7 +1872,7 @@ export class Conversion {
 					sample.setTimestamp(clampedStartTimestamp + this._timestampOffset);
 					sample.setDuration(clampedEndTimestamp - clampedStartTimestamp);
 
-					this._reportProgress(outputTrackId, sample.timestamp + sample.duration);
+					this._updateProgress(outputTrackId, sample.timestamp + sample.duration);
 					await source.add(sample);
 					sample.close();
 
@@ -1883,7 +1886,7 @@ export class Conversion {
 				}
 
 				source.close();
-				this._synchronizer.closeTrack(outputTrackId);
+				this._closeTrack(outputTrackId);
 			});
 		}
 
@@ -2106,7 +2109,7 @@ export class Conversion {
 						duration: packet.duration,
 					});
 
-					this._reportProgress(outputTrackId, modifiedPacket.timestamp + modifiedPacket.duration);
+					this._updateProgress(outputTrackId, modifiedPacket.timestamp + modifiedPacket.duration);
 					await source.add(modifiedPacket, meta);
 
 					if (this._synchronizer.shouldWait(outputTrackId, modifiedPacket.timestamp)) {
@@ -2117,7 +2120,7 @@ export class Conversion {
 				}
 
 				source.close();
-				this._synchronizer.closeTrack(outputTrackId);
+				this._closeTrack(outputTrackId);
 			});
 		} else {
 			// We need to decode & reencode the audio
@@ -2296,7 +2299,7 @@ export class Conversion {
 				}
 
 				source.close();
-				this._synchronizer.closeTrack(outputTrackId);
+				this._closeTrack(outputTrackId);
 			});
 		}
 
@@ -2340,7 +2343,7 @@ export class Conversion {
 		outputTrackId: number,
 		getLastSampleTimestamp: () => number | null,
 	) {
-		this._reportProgress(outputTrackId, sample.timestamp + sample.duration);
+		this._updateProgress(outputTrackId, sample.timestamp + sample.duration);
 
 		await source.add(sample);
 		sample.close();
@@ -2387,19 +2390,37 @@ export class Conversion {
 	}
 
 	/** @internal */
-	_reportProgress(trackId: number, endTimestamp: number) {
+	_closeTrack(id: number) {
+		this._synchronizer.closeTrack(id);
+
+		this._maxTimestamps.delete(id);
+		this._reportProgress();
+	}
+
+	/** @internal */
+	_updateProgress(trackId: number, endTimestamp: number) {
 		if (!this._computeProgress) {
 			return;
 		}
-		assert(this._totalDuration !== null);
 
 		this._maxTimestamps.set(
 			trackId,
 			Math.max(endTimestamp, this._maxTimestamps.get(trackId)!),
 		);
+		this._reportProgress();
+	}
+
+	/** @internal */
+	_reportProgress() {
+		if (!this._computeProgress || this._maxTimestamps.size === 0) {
+			return;
+		}
+		assert(this._totalDuration !== null);
 
 		const minTimestamp = Math.min(...this._maxTimestamps.values());
 		const newProgress = clamp(minTimestamp / this._totalDuration, 0, 1);
+
+		this._lastProcessedTime = minTimestamp;
 
 		if (newProgress !== this._lastProgress) {
 			this._lastProgress = newProgress;
