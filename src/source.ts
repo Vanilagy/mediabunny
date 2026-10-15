@@ -419,7 +419,8 @@ export class CustomPathedSource extends PathedSource {
 			this._root.free();
 		} else if (this._rootRequest) {
 			void this._rootRequest
-				.then(ref => ref.free());
+				.then(ref => ref.free())
+				.catch(() => {});
 		}
 	}
 }

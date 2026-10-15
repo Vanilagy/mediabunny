@@ -19,6 +19,7 @@ import * as NodeAv from 'node-av';
 import {
 	CODEC_TO_CODEC_ID,
 	getHardwareEncoderCodec,
+	isRgbPixelFormat,
 	unmapColorPrimaries,
 	unmapMatrixCoefficients,
 	unmapTransferCharacteristics,
@@ -59,7 +60,6 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 	avCodec!: NodeAv.Codec;
 	lastBuffer: Buffer | null = null;
 	packetEmitted = false;
-	lastScalerKey: string | null = null;
 	quantizer: number | null = null;
 
 	// Bookkeeping to restore the original timing information
@@ -125,12 +125,6 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 		}
 
 		this.avCodec = codec;
-
-		if (this.config.bitrateMode !== 'quantizer') {
-			// In quantizer mode, the codec context is instead created lazily on the first encode, once the quantizer
-			// value is known
-			await this.createCodecContext();
-		}
 	}
 
 	async createCodecContext() {
@@ -235,8 +229,12 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 
 			// Map the quantizer from the scale used by Mediabunny to the scale expected by the specific FFmpeg encoder
 			let mapped: number;
-			if (this.avCodec.name === 'libaom-av1' || this.avCodec.name === 'libsvtav1') {
-				// Mediabunny uses AV1's quantizer index (0-255), while these encoders expect the 0-63 quantizer scale
+			if (
+				this.avCodec.name === 'libaom-av1'
+				|| this.avCodec.name === 'libsvtav1'
+				|| this.avCodec.name === 'libvpx-vp9'
+			) {
+				// Mediabunny uses the quantizer index (0-255), while these encoders expect the 0-63 quantizer scale
 				mapped = Math.round(this.quantizer / 4);
 			} else {
 				// Everything else lines up with Mediabunny directly
@@ -272,6 +270,46 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 
 			codecContext.setOption('profile', String(profile));
 		}
+
+		let primaries = this.frame.colorPrimaries;
+		let transfer = this.frame.colorTrc;
+		let matrix = this.frame.colorSpace;
+		let range = this.frame.colorRange;
+
+		const inputIsRgb = isRgbPixelFormat(this.frame.format as NodeAv.AVPixelFormat);
+		const outputIsRgb = isRgbPixelFormat(pixelFormat);
+
+		// If the pixel format "types" differ, modify the destination color space accordingly
+		if (inputIsRgb && !outputIsRgb) {
+			// Very common case: RGB->YUV conversion during encoding
+			// Retag sRGB as BT.709 since players handle that way better, and pick the matrix matching the primaries
+			if (primaries === NodeAv.AVCOL_PRI_UNSPECIFIED) {
+				primaries = NodeAv.AVCOL_PRI_BT709;
+			}
+			if (transfer === NodeAv.AVCOL_TRC_UNSPECIFIED || transfer === NodeAv.AVCOL_TRC_IEC61966_2_1) {
+				transfer = NodeAv.AVCOL_TRC_BT709;
+			}
+
+			if (primaries === NodeAv.AVCOL_PRI_BT2020) {
+				matrix = NodeAv.AVCOL_SPC_BT2020_NCL;
+			} else if (primaries === NodeAv.AVCOL_PRI_BT470BG) {
+				matrix = NodeAv.AVCOL_SPC_BT470BG;
+			} else if (primaries === NodeAv.AVCOL_PRI_SMPTE170M) {
+				matrix = NodeAv.AVCOL_SPC_SMPTE170M;
+			} else {
+				matrix = NodeAv.AVCOL_SPC_BT709;
+			}
+
+			range = NodeAv.AVCOL_RANGE_MPEG;
+		} else if (!inputIsRgb && outputIsRgb) {
+			matrix = NodeAv.AVCOL_SPC_RGB;
+			range = NodeAv.AVCOL_RANGE_JPEG;
+		}
+
+		codecContext.colorPrimaries = primaries;
+		codecContext.colorTrc = transfer;
+		codecContext.colorSpace = matrix;
+		codecContext.colorRange = range;
 
 		const ret = await codecContext.open2();
 		NodeAv.FFmpegError.throwIfError(ret, 'Open codec context');
@@ -315,11 +353,6 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			this.quantizer = quantizer;
 		}
 
-		if (this.codecContext === null) {
-			await this.createCodecContext();
-		}
-		assert(this.codecContext);
-
 		if (videoSample._data instanceof AvFrameVideoSampleResource) {
 			// Release any buffers still referenced from the previous encode before reffing the new frame, otherwise
 			// av_frame_ref leaks them
@@ -334,6 +367,12 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			this.lastBuffer = await copyVideoSampleToAvFrame(videoSample, this.frame, this.lastBuffer);
 		}
 
+		if (this.codecContext === null) {
+			// We create it after the frame was initializied since info about the frame is needed for context init
+			await this.createCodecContext();
+		}
+		assert(this.codecContext);
+
 		let frameToEncode = this.frame;
 
 		const requiresScaler
@@ -343,23 +382,10 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 
 		if (requiresScaler) {
 			if (!this.scaler) {
+				// Left unconfigured on purpose: getContext/initContext ignore color properties and use BT.601
 				this.scaler = new NodeAv.SoftwareScaleContext();
-			}
-
-			const key = `${this.frame.width}x${this.frame.height}:${this.frame.format}`;
-			const needsConfigure = key !== this.lastScalerKey;
-
-			if (needsConfigure) {
-				this.scaler.getContext(
-					this.frame.width, this.frame.height, this.frame.format as NodeAv.AVPixelFormat,
-					this.codecContext.width, this.codecContext.height, this.codecContext.pixelFormat,
-					NodeAv.SWS_FAST_BILINEAR,
-				);
-
-				this.lastScalerKey = key;
-
-				const ret = this.scaler.initContext();
-				NodeAv.FFmpegError.throwIfError(ret, 'initContext');
+				this.scaler.allocContext();
+				this.scaler.setOption('sws_flags', 'fast_bilinear');
 			}
 
 			if (!this.dstFrame) {
@@ -371,8 +397,15 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 				this.dstFrame.allocBuffer();
 			}
 
-			await this.scaler.scaleFrame(this.dstFrame, this.frame);
 			this.dstFrame.copyProps(this.frame);
+			this.dstFrame.colorPrimaries = this.codecContext.colorPrimaries;
+			this.dstFrame.colorTrc = this.codecContext.colorTrc;
+			this.dstFrame.colorSpace = this.codecContext.colorSpace;
+			this.dstFrame.colorRange = this.codecContext.colorRange;
+
+			const ret = await this.scaler.scaleFrame(this.dstFrame, this.frame);
+			NodeAv.FFmpegError.throwIfError(ret, 'Scale frame');
+
 			frameToEncode = this.dstFrame;
 		}
 

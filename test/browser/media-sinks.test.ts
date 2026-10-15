@@ -86,3 +86,23 @@ test('No B-frames are skipped when software-decoding AVC, Annex B edition', asyn
 
 	expect(count).toBe(48);
 });
+
+test('Fallback sample past the end survives iterator return', async () => {
+	using input = new Input({
+		source: new UrlSource('/video.mp4'),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryVideoTrack();
+	assert(track);
+
+	const sink = new VideoSampleSink(track);
+	const iterator = sink.samples(await track.computeDuration() + 0.5);
+
+	const { value: sample } = await iterator.next();
+	assert(sample);
+	await iterator.return();
+
+	expect(sample._closed).toBe(false);
+	sample.close();
+});

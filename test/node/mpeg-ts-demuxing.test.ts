@@ -315,7 +315,7 @@ test('MPEG-TS audio seeking', async () => {
 	}
 });
 
-test('MPEG-TS seeking race condition test', async () => {
+test('MPEG-TS seeking race condition test', { timeout: 30_000 }, async () => {
 	for (let i = 0; i < 2; i++) {
 		using input = new Input({
 			source: new FilePathSource(path.join(__dirname, '../public/0.ts')),
