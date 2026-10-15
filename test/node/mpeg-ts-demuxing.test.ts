@@ -315,7 +315,9 @@ test('MPEG-TS audio seeking', async () => {
 	}
 });
 
-test('MPEG-TS seeking race condition test', async () => {
+// Reads every packet, then seeks to all of them concurrently, twice. Measured between 1.2 s and 8.4 s
+// depending on machine load, so the 5 s default is too tight.
+test('MPEG-TS seeking race condition test', { timeout: 30_000 }, async () => {
 	for (let i = 0; i < 2; i++) {
 		using input = new Input({
 			source: new FilePathSource(path.join(__dirname, '../public/0.ts')),
