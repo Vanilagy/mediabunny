@@ -149,10 +149,7 @@ export class AvFrameVideoSampleResource extends VideoSampleResource {
 		const width = this.frame.width;
 		const height = this.frame.height;
 
-		// Work on a reference to the decoded frame so we can fill in unspecified color properties without altering
-		// what the sample itself reports. The conversion needs to know the source's matrix and range; where the
-		// stream doesn't say, assume BT.709 limited range, the default color space for YUV samples (and what
-		// browsers assume for untagged video, too). Without this, swscale silently falls back to BT.601.
+		// A separate ref so we can fill in unspecified color properties without changing the original frame
 		const srcFrame = new NodeAv.Frame();
 		srcFrame.alloc();
 		srcFrame.ref(this.frame);
@@ -177,15 +174,13 @@ export class AvFrameVideoSampleResource extends VideoSampleResource {
 		dstFrame.height = height;
 		dstFrame.format = fromPixelFormat('RGBA');
 		dstFrame.allocBuffer();
-		// Primaries and transfer function don't change, only the color model does
+
 		dstFrame.colorPrimaries = srcFrame.colorPrimaries;
 		dstFrame.colorTrc = srcFrame.colorTrc;
 		dstFrame.colorSpace = NodeAv.AVCOL_SPC_RGB;
 		dstFrame.colorRange = NodeAv.AVCOL_RANGE_JPEG;
 
-		// Deliberately not configured via getContext/initContext: an unconfigured context makes sws_scale_frame take
-		// the frame-based path, which honors the frames' color properties. The legacy path ignores them and always
-		// converts with BT.601.
+		// Left unconfigured on purpose: getContext/initContext ignore the frames' color properties and use BT.601
 		const scaler = new NodeAv.SoftwareScaleContext();
 		scaler.allocContext();
 		scaler.setOption('sws_flags', 'bilinear');

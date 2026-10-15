@@ -51,64 +51,6 @@ const PRORES_FOURCC_TO_PROFILE: Record<ProresFourCc, NodeAv.AVProfile> = {
 	ap4x: NodeAv.AV_PROFILE_PRORES_XQ,
 };
 
-/** The matrix coefficients that conventionally go with a set of color primaries. */
-const matrixForPrimaries = (primaries: NodeAv.AVColorPrimaries) => {
-	switch (primaries) {
-		case NodeAv.AVCOL_PRI_BT2020: return NodeAv.AVCOL_SPC_BT2020_NCL;
-		case NodeAv.AVCOL_PRI_BT470BG: return NodeAv.AVCOL_SPC_BT470BG;
-		case NodeAv.AVCOL_PRI_SMPTE170M: return NodeAv.AVCOL_SPC_SMPTE170M;
-		default: return NodeAv.AVCOL_SPC_BT709; // BT.709, P3 (which uses the BT.709 matrix), unspecified
-	}
-};
-
-/**
- * Determines the color space the encoded output will be in, given the input frame's color properties and the pixel
- * format the encoder will be fed. The scaler converts into this color space and the codec context is tagged with it,
- * so the bitstream metadata and the actual pixel values agree.
- */
-const determineOutputColorSpace = (frame: NodeAv.Frame, outputPixelFormat: NodeAv.AVPixelFormat) => {
-	const inputIsRgb = isRgbPixelFormat(frame.format as NodeAv.AVPixelFormat);
-	const outputIsRgb = isRgbPixelFormat(outputPixelFormat);
-
-	if (inputIsRgb === outputIsRgb) {
-		// No change of color model, so the input's properties carry over untouched (including "unspecified")
-		return {
-			primaries: frame.colorPrimaries,
-			transfer: frame.colorTrc,
-			matrix: frame.colorSpace,
-			range: frame.colorRange,
-		};
-	}
-
-	if (outputIsRgb) {
-		return {
-			primaries: frame.colorPrimaries,
-			transfer: frame.colorTrc,
-			matrix: NodeAv.AVCOL_SPC_RGB,
-			range: NodeAv.AVCOL_RANGE_JPEG,
-		};
-	}
-
-	// RGB -> YUV, the common case when encoding canvas/raster content. Convert into limited-range YUV using the matrix
-	// that goes with the input's primaries, which for the usual sRGB input means BT.709, the standard SDR video color
-	// space (and the color space Mediabunny assumes for YUV samples by default). An sRGB transfer function is
-	// re-tagged as BT.709: the two share primaries and have near-identical transfer curves, and players deal with
-	// BT.709 far better than with transfer_characteristics = 13 in a video stream.
-	const primaries = frame.colorPrimaries === NodeAv.AVCOL_PRI_UNSPECIFIED
-		? NodeAv.AVCOL_PRI_BT709
-		: frame.colorPrimaries;
-	const transferIsSrgbOrUnspecified = frame.colorTrc === NodeAv.AVCOL_TRC_UNSPECIFIED
-		|| frame.colorTrc === NodeAv.AVCOL_TRC_IEC61966_2_1;
-	const transfer = transferIsSrgbOrUnspecified ? NodeAv.AVCOL_TRC_BT709 : frame.colorTrc;
-
-	return {
-		primaries,
-		transfer,
-		matrix: matrixForPrimaries(primaries),
-		range: NodeAv.AVCOL_RANGE_MPEG,
-	};
-};
-
 export class NodeAvVideoEncoder extends CustomVideoEncoder {
 	frame!: NodeAv.Frame;
 	packet!: NodeAv.Packet;
@@ -183,9 +125,6 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 		}
 
 		this.avCodec = codec;
-
-		// The codec context is created lazily on the first encode: the output color space is derived from the first
-		// frame (and, in quantizer mode, the quantizer value isn't known until then either)
 	}
 
 	async createCodecContext() {
@@ -328,14 +267,45 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			codecContext.setOption('profile', String(profile));
 		}
 
-		// Encoders read the color properties off the codec context when they open (libx264 writes them into the
-		// SPS VUI, for example), and getDecoderConfig reports them in decoderConfig.colorSpace, so they have to be
-		// set before open2.
-		const outputColorSpace = determineOutputColorSpace(this.frame, pixelFormat);
-		codecContext.colorPrimaries = outputColorSpace.primaries;
-		codecContext.colorTrc = outputColorSpace.transfer;
-		codecContext.colorSpace = outputColorSpace.matrix;
-		codecContext.colorRange = outputColorSpace.range;
+		let primaries = this.frame.colorPrimaries;
+		let transfer = this.frame.colorTrc;
+		let matrix = this.frame.colorSpace;
+		let range = this.frame.colorRange;
+
+		const inputIsRgb = isRgbPixelFormat(this.frame.format as NodeAv.AVPixelFormat);
+		const outputIsRgb = isRgbPixelFormat(pixelFormat);
+
+		// If the pixel format "types" differ, modify the destination color space accordingly
+		if (inputIsRgb && !outputIsRgb) {
+			// Very common case: RGB->YUV conversion during encoding
+			// Retag sRGB as BT.709 since players handle that way better, and pick the matrix matching the primaries
+			if (primaries === NodeAv.AVCOL_PRI_UNSPECIFIED) {
+				primaries = NodeAv.AVCOL_PRI_BT709;
+			}
+			if (transfer === NodeAv.AVCOL_TRC_UNSPECIFIED || transfer === NodeAv.AVCOL_TRC_IEC61966_2_1) {
+				transfer = NodeAv.AVCOL_TRC_BT709;
+			}
+
+			if (primaries === NodeAv.AVCOL_PRI_BT2020) {
+				matrix = NodeAv.AVCOL_SPC_BT2020_NCL;
+			} else if (primaries === NodeAv.AVCOL_PRI_BT470BG) {
+				matrix = NodeAv.AVCOL_SPC_BT470BG;
+			} else if (primaries === NodeAv.AVCOL_PRI_SMPTE170M) {
+				matrix = NodeAv.AVCOL_SPC_SMPTE170M;
+			} else {
+				matrix = NodeAv.AVCOL_SPC_BT709;
+			}
+
+			range = NodeAv.AVCOL_RANGE_MPEG;
+		} else if (!inputIsRgb && outputIsRgb) {
+			matrix = NodeAv.AVCOL_SPC_RGB;
+			range = NodeAv.AVCOL_RANGE_JPEG;
+		}
+
+		codecContext.colorPrimaries = primaries;
+		codecContext.colorTrc = transfer;
+		codecContext.colorSpace = matrix;
+		codecContext.colorRange = range;
 
 		const ret = await codecContext.open2();
 		NodeAv.FFmpegError.throwIfError(ret, 'Open codec context');
@@ -394,7 +364,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 		}
 
 		if (this.codecContext === null) {
-			// Needs the frame to be populated so the output color space can be derived from it
+			// We create it after the frame was initializied since info about the frame is needed for context init
 			await this.createCodecContext();
 		}
 		assert(this.codecContext);
@@ -408,10 +378,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 
 		if (requiresScaler) {
 			if (!this.scaler) {
-				// Deliberately not configured via getContext/initContext: an unconfigured context makes sws_scale_frame
-				// take the frame-based path, which (re)configures itself from the frames' dimensions, pixel formats
-				// AND color properties. The legacy path ignores the latter and always converts RGB<->YUV with the
-				// BT.601 matrix, which contradicts the color space we tag the output with.
+				// Left unconfigured on purpose: getContext/initContext ignore color properties and use BT.601
 				this.scaler = new NodeAv.SoftwareScaleContext();
 				this.scaler.allocContext();
 				this.scaler.setOption('sws_flags', 'fast_bilinear');
@@ -426,8 +393,6 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 				this.dstFrame.allocBuffer();
 			}
 
-			// Copy the props over before scaling, then override the color properties: they tell the scaler which
-			// color space to convert into, and must match what the codec context was opened with.
 			this.dstFrame.copyProps(this.frame);
 			this.dstFrame.colorPrimaries = this.codecContext.colorPrimaries;
 			this.dstFrame.colorTrc = this.codecContext.colorTrc;
