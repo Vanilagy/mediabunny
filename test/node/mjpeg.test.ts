@@ -1,4 +1,4 @@
-import { expect, test } from 'vitest';
+import { beforeAll, expect, test } from 'vitest';
 import { Input } from '../../src/input.js';
 import { BufferSource, FilePathSource } from '../../src/source.js';
 import { ALL_FORMATS, MATROSKA } from '../../src/input-format.js';
@@ -8,8 +8,13 @@ import { EncodedPacketSink } from '../../src/media-sink.js';
 import { BufferTarget } from '../../src/target.js';
 import { Conversion } from '../../src/conversion.js';
 import path from 'path';
+import { registerMediabunnyServer } from '@mediabunny/server';
 
 const movFilePath = path.join(__dirname, '..', 'public/mjpeg.mov');
+
+beforeAll(() => {
+	registerMediabunnyServer();
+});
 
 // Generated with FFmpeg: -i mjpeg.mov -map 0:v:0 -frames:v 2 -c:v copy mjpeg.mp4
 test.concurrent('reading FFmpeg MJPEG in an mp4v sample entry', async () => {
@@ -27,28 +32,31 @@ test.concurrent('reading FFmpeg MJPEG in an mp4v sample entry', async () => {
 	expect((await track.computePacketStats()).packetCount).toBe(2);
 });
 
-test.concurrent.each(['in-memory', 'fragmented'] as const)(
-	'MJPEG MP4 %s round trip',
-	async (fastStart) => {
-		using input = new Input({
-			source: new FilePathSource(movFilePath),
-			formats: ALL_FORMATS,
-		});
-		const output = new Output({
-			format: new Mp4OutputFormat({ fastStart }),
-			target: new BufferTarget(),
-		});
-		const conversion = await Conversion.init({ input, output });
-		await conversion.execute();
-		using result = new Input({
-			source: new BufferSource(output.target.buffer!),
-			formats: ALL_FORMATS,
-		});
-		const track = (await result.getPrimaryVideoTrack())!;
-		expect(await track.getCodec()).toBe('mjpeg');
-		expect((await track.computePacketStats()).packetCount).toBe(125);
-	},
-);
+test.concurrent.each(['in-memory', 'fragmented'] as const)('MJPEG MP4 %s round trip', async (fastStart) => {
+	using input = new Input({
+		source: new FilePathSource(movFilePath),
+		formats: ALL_FORMATS,
+	});
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart }),
+		target: new BufferTarget(),
+	});
+	const conversion = await Conversion.init({
+		input,
+		output,
+		video: {
+			codec: 'mjpeg',
+		},
+	});
+	await conversion.execute();
+	using result = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const track = (await result.getPrimaryVideoTrack())!;
+	expect(await track.getCodec()).toBe('mjpeg');
+	expect((await track.computePacketStats()).packetCount).toBe(125);
+});
 
 test.concurrent('mjpeg reading', { timeout: 20_000 }, async () => {
 	using input = new Input({

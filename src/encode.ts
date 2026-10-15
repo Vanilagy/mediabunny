@@ -918,6 +918,7 @@ const VIDEO_CODEC_QUANTIZER_SUPPORT: Partial<Record<VideoCodec, {
 	hevc: { min: 0, max: 51, worst: 41, best: 16 },
 	vp9: { min: 0, max: 63, worst: 52, best: 20 },
 	av1: { min: 0, max: 255, worst: 208, best: 80 },
+	mjpeg: { min: 0, max: 100, worst: 0, best: 92 },
 };
 
 /**
@@ -959,6 +960,8 @@ export const buildQuantizerEncodeOptions = (codec: VideoCodec, quantizer: number
 		return { vp9: { quantizer } };
 	} else if (codec === 'av1') {
 		return { av1: { quantizer } };
+	} else if (codec === 'mjpeg') {
+		return { mjpeg: { quantizer } };
 	}
 
 	assert(false);
@@ -970,6 +973,7 @@ declare global {
 		hevc?: VideoEncoderEncodeOptionsForHevc;
 		vp9?: VideoEncoderEncodeOptionsForVp9;
 		av1?: VideoEncoderEncodeOptionsForAv1;
+		mjpeg?: VideoEncoderEncodeOptionsForMjpeg;
 	}
 
 	interface VideoEncoderEncodeOptionsForHevc {
@@ -981,6 +985,10 @@ declare global {
 	}
 
 	interface VideoEncoderEncodeOptionsForAv1 {
+		quantizer?: number | null;
+	}
+
+	interface VideoEncoderEncodeOptionsForMjpeg {
 		quantizer?: number | null;
 	}
 }

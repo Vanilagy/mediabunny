@@ -708,6 +708,7 @@ export const extractColorSpace = (info: {
 		}; break;
 
 		case 'mjpeg': {
+			// Educated guess
 			return {
 				primaries: 'bt709',
 				transfer: 'bt709',

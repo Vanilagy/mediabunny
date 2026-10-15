@@ -107,14 +107,24 @@ class MjpegEncoder extends CustomVideoEncoder {
 		};
 	}
 
+	_getSampleQuality(sample: VideoSample, meta?: VideoEncoderEncodeOptions) {
+		if (this.config.bitrateMode === 'quantizer' && typeof meta?.mjpeg?.quantizer === 'number') {
+			return meta.mjpeg.quantizer / 100;
+		}
+
+		// TODO: quality/bitrate loop
+		return 1;
+	}
+
 	override async encode(videoSample: VideoSample, meta?: VideoEncoderEncodeOptions) {
 		assert(this.context && this.canvas);
 		this._pendingSamples += 1;
 
 		try {
+			const quality = this._getSampleQuality(videoSample, meta);
 			videoSample.draw(this.context, 0, 0, this.config.width, this.config.height);
 
-			const imageBlob = await this.canvas.convertToBlob({ type: 'image/jpeg', quality: 1 });
+			const imageBlob = await this.canvas.convertToBlob({ type: 'image/jpeg', quality });
 			const packetData = new Uint8Array(await imageBlob.arrayBuffer());
 
 			const packet = new EncodedPacket(packetData, 'key', videoSample.timestamp, videoSample.duration);

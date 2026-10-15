@@ -161,6 +161,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 		}
 
 		if (this.codec === 'mjpeg') {
+			// Educated guesses
 			pixelFormat = NodeAv.AV_PIX_FMT_YUVJ420P;
 			codecContext.colorRange = NodeAv.AVCOL_RANGE_JPEG;
 		}
@@ -293,8 +294,10 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 				quantizer = options.hevc?.quantizer;
 			} else if (this.codec === 'vp9') {
 				quantizer = options.vp9?.quantizer;
-			} else {
+			} else if (this.codec === 'av1') {
 				quantizer = options.av1?.quantizer;
+			} else if (this.codec === 'mjpeg') {
+				quantizer = options.mjpeg?.quantizer;
 			}
 			assert(quantizer !== undefined && quantizer !== null);
 
