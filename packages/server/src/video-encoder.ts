@@ -229,8 +229,12 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 
 			// Map the quantizer from the scale used by Mediabunny to the scale expected by the specific FFmpeg encoder
 			let mapped: number;
-			if (this.avCodec.name === 'libaom-av1' || this.avCodec.name === 'libsvtav1') {
-				// Mediabunny uses AV1's quantizer index (0-255), while these encoders expect the 0-63 quantizer scale
+			if (
+				this.avCodec.name === 'libaom-av1'
+				|| this.avCodec.name === 'libsvtav1'
+				|| this.avCodec.name === 'libvpx-vp9'
+			) {
+				// Mediabunny uses the quantizer index (0-255), while these encoders expect the 0-63 quantizer scale
 				mapped = Math.round(this.quantizer / 4);
 			} else {
 				// Everything else lines up with Mediabunny directly

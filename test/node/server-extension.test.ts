@@ -477,7 +477,7 @@ describe('Video', async () => {
 	const QUANTIZER_TEST_CODECS = [
 		{ codec: 'avc', name: 'AVC', low: 10, high: 45 },
 		{ codec: 'hevc', name: 'HEVC', low: 10, high: 45 },
-		{ codec: 'vp9', name: 'VP9', low: 10, high: 55 },
+		{ codec: 'vp9', name: 'VP9', low: 40, high: 220 },
 		{ codec: 'av1', name: 'AV1', low: 40, high: 220 },
 	] as const;
 
