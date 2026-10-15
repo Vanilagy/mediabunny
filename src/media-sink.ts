@@ -425,9 +425,13 @@ export class EncodedPacketSink {
 	}
 }
 
+const MAX_QUEUE_SIZE = 4;
+
 abstract class DecoderWrapper<
 	MediaSample extends VideoSample | AudioSample,
 > {
+	onDequeue: (() => unknown) | null = null;
+
 	constructor(
 		public onSample: (sample: MediaSample) => unknown,
 		public onError: (error: unknown) => unknown,
@@ -533,6 +537,7 @@ export abstract class BaseMediaSampleSink<
 					onQueueNotEmpty();
 				}
 			});
+			decoder.onDequeue = () => onQueueDequeue();
 
 			const packetSink = this._createPacketSink();
 			const keyPacket = await packetSink.getKeyPacket(startTimestamp, packetRetrievalOptions)
@@ -552,8 +557,7 @@ export abstract class BaseMediaSampleSink<
 			await packets.next(); // Skip the start packet as we already have it
 
 			while (currentPacket && !ended && !this._track.input._disposed) {
-				const maxQueueSize = computeMaxQueueSize(sampleQueue.length);
-				if (sampleQueue.length + decoder.getDecodeQueueSize() > maxQueueSize) {
+				if (sampleQueue.length + decoder.getDecodeQueueSize() >= MAX_QUEUE_SIZE) {
 					({ promise: queueDequeue, resolve: onQueueDequeue } = promiseWithResolvers());
 					await queueDequeue;
 					continue;
@@ -715,6 +719,7 @@ export abstract class BaseMediaSampleSink<
 					onQueueNotEmpty();
 				}
 			});
+			decoder.onDequeue = () => onQueueDequeue();
 
 			const packetSink = this._createPacketSink();
 			let lastPacket: EncodedPacket | null = null;
@@ -733,8 +738,7 @@ export abstract class BaseMediaSampleSink<
 				decoder.decode(currentPacket);
 
 				while (currentPacket.sequenceNumber < maxSequenceNumber) {
-					const maxQueueSize = computeMaxQueueSize(sampleQueue.length);
-					while (sampleQueue.length + decoder.getDecodeQueueSize() > maxQueueSize && !terminated) {
+					while (sampleQueue.length + decoder.getDecodeQueueSize() >= MAX_QUEUE_SIZE && !terminated) {
 						({ promise: queueDequeue, resolve: onQueueDequeue } = promiseWithResolvers());
 						await queueDequeue;
 					}
@@ -879,13 +883,6 @@ export abstract class BaseMediaSampleSink<
 	}
 }
 
-const computeMaxQueueSize = (decodedSampleQueueSize: number) => {
-	// If we have decoded samples lying around, limit the total queue size to a small value (decoded samples can use up
-	// a lot of memory). If not, we're fine with a much bigger queue of encoded packets waiting to be decoded. In fact,
-	// some decoders only start flushing out decoded chunks when the packet queue is large enough.
-	return decodedSampleQueueSize === 0 ? 40 : 8;
-};
-
 class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	decoder: VideoDecoder | null = null;
 
@@ -1026,6 +1023,9 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 					this.onError(error);
 				},
 			});
+			this.decoder.addEventListener('dequeue', () => {
+				this.onDequeue?.();
+			});
 			this.decoder.configure(this.decoderConfig);
 		}
 	}
@@ -1057,7 +1057,10 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			void this.customDecoderCallSerializer
 				.call(() => this.customDecoder!.decode(packet))
 				.catch(error => this.onError(error))
-				.finally(() => this.customDecoderQueueSize--);
+				.finally(() => {
+					this.customDecoderQueueSize--;
+					this.onDequeue?.();
+				});
 		} else {
 			assert(this.decoder);
 
@@ -1186,6 +1189,9 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 					error.stack = stack; // Provide a more useful stack trace, the default one sucks
 					this.onError(error);
 				},
+			});
+			this.alphaDecoder.addEventListener('dequeue', () => {
+				this.onDequeue?.();
 			});
 			this.alphaDecoder.configure({
 				...this.decoderConfig,
@@ -2278,6 +2284,9 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 					this.onError(error);
 				},
 			});
+			this.decoder.addEventListener('dequeue', () => {
+				this.onDequeue?.();
+			});
 			this.decoder.configure(decoderConfig);
 		}
 	}
@@ -2297,7 +2306,10 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 			void this.customDecoderCallSerializer
 				.call(() => this.customDecoder!.decode(packet))
 				.catch(error => this.onError(error))
-				.finally(() => this.customDecoderQueueSize--);
+				.finally(() => {
+					this.customDecoderQueueSize--;
+					this.onDequeue?.();
+				});
 		} else {
 			assert(this.decoder);
 
