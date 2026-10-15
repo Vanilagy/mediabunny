@@ -8,8 +8,23 @@ import { assert, colorSpaceIsComplete } from '../../src/misc.js';
 import { Output } from '../../src/output.js';
 import { MkvOutputFormat, Mp4OutputFormat } from '../../src/output-format.js';
 import { EncodedPacket } from '../../src/packet.js';
+import { VideoSample } from '../../src/sample.js';
 import { BufferSource, Source, UrlSource } from '../../src/source.js';
 import { BufferTarget } from '../../src/target.js';
+
+test('VideoSample treats non-standard VideoFrame color space values as unknown', () => {
+	const frame = new VideoFrame(new Uint8Array(16), { format: 'RGBA', codedWidth: 2, codedHeight: 2, timestamp: 0 });
+	// What WebKitGTK reports for decoded frames
+	Object.defineProperty(frame, 'colorSpace', {
+		value: { primaries: 'unspecified', transfer: 'unspecified', matrix: 'smpte170m', fullRange: true },
+	});
+
+	using sample = new VideoSample(frame);
+	expect(sample.colorSpace.primaries).toBe(null);
+	expect(sample.colorSpace.transfer).toBe(null);
+	expect(sample.colorSpace.matrix).toBe('smpte170m');
+	expect(sample.colorSpace.fullRange).toBe(true);
+});
 
 test('Color space extraction, AVC in MP4', async () => {
 	const source = await readPackets('/video.mp4');
