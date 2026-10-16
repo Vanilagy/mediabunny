@@ -30,6 +30,7 @@ import {
 	clearIntervalUnthrottled,
 	floorToDivisor,
 	isCodecReclaimedError,
+	isFirefox,
 	isThenable,
 	last,
 	missingWebCodecsClassMessage,
@@ -72,11 +73,13 @@ import {
 } from './encode';
 import { AudioResampler } from './resample';
 import {
+	deserializeAvcDecoderConfigurationRecord,
 	determineVideoPacketType,
 	extractAv1CodecInfoFromPacket,
 	extractAvcDecoderConfigurationRecord,
 	extractHevcDecoderConfigurationRecord,
 	extractVp9CodecInfoFromPacket,
+	serializeAvcDecoderConfigurationRecord,
 } from './codec-data';
 import { Logging } from './logging';
 
@@ -964,6 +967,30 @@ class VideoEncoderWrapper {
 					: null,
 				proresFormat: null, // Can't be encoded by WebCodecs
 			});
+
+			if (this.encodingConfig.codec === 'avc' && meta.decoderConfig.description && isFirefox()) {
+				// This works around https://bugzilla.mozilla.org/show_bug.cgi?id=2082867
+				// Also see https://github.com/Vanilagy/mediabunny/issues/559
+				const parsed = deserializeAvcDecoderConfigurationRecord(toUint8Array(meta.decoderConfig.description));
+				let sps = parsed?.sequenceParameterSets[0];
+
+				if (sps && sps[0] === sps[1]) { // The first two bytes of the SPS being the same is a reliable signal
+					assert(parsed);
+					sps = sps.subarray(1);
+
+					let pps = parsed.pictureParameterSets[0];
+					if (pps) {
+						pps = pps.subarray(1);
+					}
+
+					const record = serializeAvcDecoderConfigurationRecord({
+						...parsed,
+						sequenceParameterSets: [sps],
+						pictureParameterSets: pps ? [pps] : [],
+					});
+					meta.decoderConfig.description = record;
+				}
+			}
 		}
 
 		// See if there's a relevant timing entry to refine the packet's timing data
