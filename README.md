@@ -44,6 +44,14 @@ Mediabunny is a JavaScript library for reading, writing, and converting media (l
   </a>
 </div>
 
+### Silver sponsors
+
+<div align="center">
+  <a href="https://jitter.video/" target="_blank" rel="sponsored">
+    <img src="./docs/public/sponsors/jitter.png" width="50" height="50" alt="Jitter">
+  </a>
+</div>
+
 ### Bronze sponsors
 
 <div align="center">

@@ -94,7 +94,7 @@ import {
 	readDataBox,
 	readFixed_16_16,
 	readFixed_2_30,
-	readIsomVariableInteger,
+	readEsDescriptor,
 	readMetadataStringShort,
 } from './isobmff-reader';
 import {
@@ -1596,37 +1596,7 @@ export class IsobmffDemuxer extends Demuxer {
 
 				slice.skip(4); // Version + flags
 
-				const tag = readU8(slice);
-				assert(tag === 0x03); // ES Descriptor
-
-				readIsomVariableInteger(slice); // Length
-
-				slice.skip(2); // ES ID
-				const mixed = readU8(slice);
-
-				const streamDependenceFlag = (mixed & 0x80) !== 0;
-				const urlFlag = (mixed & 0x40) !== 0;
-				const ocrStreamFlag = (mixed & 0x20) !== 0;
-
-				if (streamDependenceFlag) {
-					slice.skip(2);
-				}
-				if (urlFlag) {
-					const urlLength = readU8(slice);
-					slice.skip(urlLength);
-				}
-				if (ocrStreamFlag) {
-					slice.skip(2);
-				}
-
-				const decoderConfigTag = readU8(slice);
-				assert(decoderConfigTag === 0x04); // DecoderConfigDescriptor
-
-				const decoderConfigDescriptorLength = readIsomVariableInteger(slice); // Length
-
-				const payloadStart = slice.filePos;
-
-				const objectTypeIndication = readU8(slice);
+				const { objectTypeIndication, decoderSpecificInfo } = readEsDescriptor(slice);
 				if (objectTypeIndication === 0x40 || objectTypeIndication === 0x67) {
 					track.info.codec = 'aac';
 					track.info.aacCodecInfo = {
@@ -1645,16 +1615,8 @@ export class IsobmffDemuxer extends Demuxer {
 					);
 				}
 
-				slice.skip(1 + 3 + 4 + 4);
-
-				if (decoderConfigDescriptorLength > slice.filePos - payloadStart) {
-					// There's a DecoderSpecificInfo at the end, let's read it
-
-					const decoderSpecificInfoTag = readU8(slice);
-					assert(decoderSpecificInfoTag === 0x05); // DecoderSpecificInfo
-
-					const decoderSpecificInfoLength = readIsomVariableInteger(slice);
-					track.info.codecDescription = readBytes(slice, decoderSpecificInfoLength);
+				if (decoderSpecificInfo) {
+					track.info.codecDescription = decoderSpecificInfo;
 
 					if (track.info.codec === 'aac') {
 						// Let's try to deduce more accurate values directly from the AudioSpecificConfig:
