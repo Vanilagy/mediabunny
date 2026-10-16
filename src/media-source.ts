@@ -82,6 +82,8 @@ import {
 	serializeAvcDecoderConfigurationRecord,
 } from './codec-data';
 import { Logging } from './logging';
+import { readEsDescriptor } from './isobmff/isobmff-reader';
+import { FileSlice } from './reader';
 
 /**
  * Base class for media sources. Media sources are used to add media samples to an output file.
@@ -2439,6 +2441,18 @@ class AudioEncoderWrapper {
 						// which we try to detect here. If detected, we'll provide our own description instead, derived
 						// from the codec string and audio parameters.
 						if (this.encodingConfig.codec === 'aac' && meta?.decoderConfig) {
+							if (
+								meta.decoderConfig.description
+								&& meta.decoderConfig.description.byteLength > 0
+								&& toUint8Array(meta.decoderConfig.description)[0] === 0x03
+							) {
+								// We were handed an ES descriptor instead of an AudioSpecificConfig
+								const { decoderSpecificInfo } = readEsDescriptor(
+									FileSlice.tempFromBytes(toUint8Array(meta.decoderConfig.description)),
+								);
+								meta.decoderConfig.description = decoderSpecificInfo ?? undefined;
+							}
+
 							let needsDescriptionOverwrite = false;
 							if (!meta.decoderConfig.description || meta.decoderConfig.description.byteLength < 2) {
 								needsDescriptionOverwrite = true;

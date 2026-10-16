@@ -56,6 +56,64 @@ export const readIsomVariableInteger = (slice: FileSlice) => {
 	return result;
 };
 
+export const readEsDescriptor = (slice: FileSlice) => {
+	const tag = readU8(slice);
+	if (tag !== 0x03) {
+		throw new Error('Invalid esds: expected ES_Descriptor.');
+	}
+
+	readIsomVariableInteger(slice); // Length
+
+	slice.skip(2); // ES ID
+	const mixed = readU8(slice);
+
+	const streamDependenceFlag = (mixed & 0x80) !== 0;
+	const urlFlag = (mixed & 0x40) !== 0;
+	const ocrStreamFlag = (mixed & 0x20) !== 0;
+
+	if (streamDependenceFlag) {
+		slice.skip(2);
+	}
+	if (urlFlag) {
+		const urlLength = readU8(slice);
+		slice.skip(urlLength);
+	}
+	if (ocrStreamFlag) {
+		slice.skip(2);
+	}
+
+	const decoderConfigTag = readU8(slice);
+	if (decoderConfigTag !== 0x04) {
+		throw new Error('Invalid esds: expected DecoderConfigDescriptor.');
+	}
+
+	const decoderConfigDescriptorLength = readIsomVariableInteger(slice); // Length
+
+	const payloadStart = slice.filePos;
+
+	const objectTypeIndication = readU8(slice);
+
+	slice.skip(1 + 3 + 4 + 4);
+
+	let decoderSpecificInfo: Uint8Array | null = null;
+	if (decoderConfigDescriptorLength > slice.filePos - payloadStart) {
+		// There's a DecoderSpecificInfo at the end, let's read it
+
+		const decoderSpecificInfoTag = readU8(slice);
+		if (decoderSpecificInfoTag !== 0x05) {
+			throw new Error('Invalid esds: expected DecoderSpecificInfo.');
+		}
+
+		const decoderSpecificInfoLength = readIsomVariableInteger(slice);
+		decoderSpecificInfo = readBytes(slice, decoderSpecificInfoLength);
+	}
+
+	return {
+		objectTypeIndication,
+		decoderSpecificInfo,
+	};
+};
+
 export const readMetadataStringShort = (slice: FileSlice) => {
 	let stringLength = readU16Be(slice);
 	slice.skip(2); // Language
