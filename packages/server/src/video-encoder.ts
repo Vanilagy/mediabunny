@@ -403,6 +403,12 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			this.dstFrame.colorSpace = this.codecContext.colorSpace;
 			this.dstFrame.colorRange = this.codecContext.colorRange;
 
+			// Primaries and transfer only ever differ due to retagging (e.g. sRGB as BT.709), so mirror them onto the
+			// source. Otherwise, swscale would do a real (and slow) transfer conversion instead of just the matrix.
+			// See https://github.com/Vanilagy/mediabunny/issues/572
+			this.frame.colorPrimaries = this.codecContext.colorPrimaries;
+			this.frame.colorTrc = this.codecContext.colorTrc;
+
 			const ret = await this.scaler.scaleFrame(this.dstFrame, this.frame);
 			NodeAv.FFmpegError.throwIfError(ret, 'Scale frame');
 
