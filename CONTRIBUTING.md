@@ -10,7 +10,7 @@ Also, keep your descriptions terse. AIs can write long walls of text but realize
 
 ## Explain the reasoning behind an issue/PR
 
-Don't just explain that there is a bug in line X. Instead, elaborate when and how you ran into this bug, and the problems it has caused for you. This information should go at the top of the description as it provides the most information: it lets Mediabunny maintainers know what you did and what didn't work. The symptom is 10x more valuable information than the fix alone.
+Don't just explain that there is a bug in line X. Instead, elaborate when and how you ran into this bug, and the problems it has caused for you. This information should go at the top of the description as it provides the most information: it lets Mediabunny maintainers know what you did and what didn't work. The symptom is 10x more valuable information than the fix alone. PR descriptions also should not serve as mere summaries of code changes (those should go to the bottom, if they exist). Instead, they should more abstractly talk about the architectural decisions taken (and the reasoning behind them) to implement the given feature.
 
 ## No synthetic bugs
 
