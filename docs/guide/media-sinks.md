@@ -232,6 +232,24 @@ const sink = new VideoSampleSink(videoTrack, {
 });
 ```
 
+#### Reducing retained sample size
+
+For small previews of large videos, you can opt into resizing samples before they enter the read-ahead queue:
+
+```ts
+const sink = new VideoSampleSink(videoTrack, {
+	maxSampleSize: { width: 640, height: 360 },
+});
+```
+
+This applies to single, range, and sparse retrieval. It preserves aspect ratio, timestamp and duration, and applies
+rotation and flip to the pixels. Resizing adds rasterization work, including for queued frames that a subsequent seek
+may discard. The default still returns original samples.
+
+Only known 8-bit SDR formats are resized, and only when an RGBA copy uses fewer bytes. HDR, high-bit-depth and unknown
+formats/color spaces remain unchanged, so this option is a memory optimization rather than a guaranteed output size.
+Use `CanvasSink` when you need exact output dimensions or cropping.
+
 #### Single retrieval
 
 You can retrieve the sample presented at a given timestamp in seconds:

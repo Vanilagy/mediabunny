@@ -292,6 +292,7 @@ export {
 	type PacketRetrievalOptions,
 	VideoSampleSink,
 	type VideoSinkDecoderOptions,
+	type VideoSampleSinkOptions,
 	type WrappedAudioBuffer,
 	type WrappedCanvas,
 } from './media-sink';
