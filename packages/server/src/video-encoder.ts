@@ -78,7 +78,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 
 		return (
 			codec === 'avc' || codec === 'hevc' || codec === 'vp8' || codec === 'vp9' || codec === 'av1'
-			|| codec === 'prores'
+			|| codec === 'prores' || codec === 'mjpeg'
 		);
 	}
 
@@ -152,6 +152,12 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 					);
 				}
 			}
+		}
+
+		if (this.codec === 'mjpeg') {
+			// Educated guesses
+			pixelFormat = NodeAv.AV_PIX_FMT_YUVJ420P;
+			codecContext.colorRange = NodeAv.AVCOL_RANGE_JPEG;
 		}
 
 		const pixelAspectRatio = simplifyRational({
@@ -326,8 +332,10 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 				quantizer = options.hevc?.quantizer;
 			} else if (this.codec === 'vp9') {
 				quantizer = options.vp9?.quantizer;
-			} else {
+			} else if (this.codec === 'av1') {
 				quantizer = options.av1?.quantizer;
+			} else if (this.codec === 'mjpeg') {
+				quantizer = options.mjpeg?.quantizer;
 			}
 			assert(quantizer !== undefined && quantizer !== null);
 
@@ -655,6 +663,22 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 					hevcCodecInfo: null,
 					vp9CodecInfo: null,
 					av1CodecInfo,
+					proresFormat: null,
+				});
+			}
+		} else if (this.codec === 'mjpeg') {
+			if (!this.packetEmitted) {
+				decoderConfigCodecString = extractVideoCodecString({
+					width: this.config.width,
+					height: this.config.height,
+					codec: 'mjpeg',
+					codecDescription: null,
+					colorSpace: null,
+					avcType: null,
+					avcCodecInfo: null,
+					hevcCodecInfo: null,
+					vp9CodecInfo: null,
+					av1CodecInfo: null,
 					proresFormat: null,
 				});
 			}
