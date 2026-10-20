@@ -518,6 +518,28 @@ test('Fractional audio sample boundary', async () => {
 	await conversion.execute();
 });
 
+test('Trim start leaving less than half a sample of padding', async () => {
+	using input = new Input({
+		source: new UrlSource('/glitch-hop-is-dead.wav'),
+		formats: ALL_FORMATS,
+	});
+
+	const output = new Output({
+		format: new WavOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({
+		input,
+		output,
+		trim: {
+			start: 0.0026,
+			end: 0.1026,
+		},
+	});
+	await conversion.execute();
+});
+
 test('Non-composable conversion requires a fresh output', async () => {
 	using input = new Input({
 		source: new UrlSource('/video.mp4'),
