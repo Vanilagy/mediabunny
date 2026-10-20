@@ -128,7 +128,7 @@ export const readDataBox = (slice: FileSlice) => {
 		return null;
 	}
 
-	if (slice.remainingLength < 8) {
+	if (header.contentSize < 8 || slice.remainingLength < 8) {
 		// Box is too small
 		return null;
 	}

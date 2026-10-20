@@ -54,6 +54,13 @@ export abstract class InputFormat {
 	abstract get name(): string;
 	/** Returns the typical base MIME type of the input format. */
 	abstract get mimeType(): string;
+	/**
+	 * Whether this input format's tracks store timestamped media data. When `true`, the timestamps of read packets
+	 * come from the file, allowing things like gaps in media data or non-zero start times. When `false`, the format's
+	 * media data implicitly starts at zero and follows an implicit sequential timing from there, using the intrinsic
+	 * durations of the media data.
+	 */
+	abstract get supportsTimestampedMediaData(): boolean;
 
 	/**
 	 * Provided for tree-shakable checking.
@@ -94,6 +101,10 @@ export abstract class IsobmffInputFormat extends InputFormat {
 	/** @internal */
 	_createDemuxer(input: Input) {
 		return new IsobmffDemuxer(input);
+	}
+
+	get supportsTimestampedMediaData() {
+		return true;
 	}
 
 	/** @internal */
@@ -234,6 +245,10 @@ export class MatroskaInputFormat extends InputFormat {
 			const dataStartPos = dataSlice.filePos;
 			if (size === undefined) return false;
 
+			if (dataStartPos + size > startPos + dataSize || (size > 8 && id !== EBMLId.DocType)) {
+				return false; // The element overruns the header or is an integer of impossible size
+			}
+
 			switch (id) {
 				case EBMLId.EBMLVersion: {
 					const ebmlVersion = readUnsignedInt(dataSlice, size);
@@ -283,6 +298,10 @@ export class MatroskaInputFormat extends InputFormat {
 
 	get mimeType() {
 		return 'video/x-matroska';
+	}
+
+	get supportsTimestampedMediaData() {
+		return true;
 	}
 }
 
@@ -391,6 +410,10 @@ export class Mp3InputFormat extends InputFormat {
 	get mimeType() {
 		return 'audio/mpeg';
 	}
+
+	get supportsTimestampedMediaData() {
+		return false;
+	}
 }
 
 /**
@@ -431,6 +454,10 @@ export class WaveInputFormat extends InputFormat {
 	get mimeType() {
 		return 'audio/wav';
 	}
+
+	get supportsTimestampedMediaData() {
+		return false;
+	}
 }
 
 /**
@@ -462,6 +489,10 @@ export class OggInputFormat extends InputFormat {
 
 	get mimeType() {
 		return 'application/ogg';
+	}
+
+	get supportsTimestampedMediaData() {
+		return true;
 	}
 }
 /**
@@ -504,6 +535,10 @@ export class FlacInputFormat extends InputFormat {
 
 	get mimeType() {
 		return 'audio/flac';
+	}
+
+	get supportsTimestampedMediaData() {
+		return false;
 	}
 
 	/** @internal */
@@ -583,6 +618,10 @@ export class AdtsInputFormat extends InputFormat {
 	get mimeType() {
 		return 'audio/aac';
 	}
+
+	get supportsTimestampedMediaData() {
+		return false;
+	}
 }
 
 /**
@@ -633,6 +672,10 @@ export class MpegTsInputFormat extends InputFormat {
 	get mimeType() {
 		return 'video/MP2T';
 	}
+
+	get supportsTimestampedMediaData() {
+		return true;
+	}
 }
 
 /**
@@ -675,6 +718,10 @@ export class HlsInputFormat extends InputFormat {
 
 	get mimeType() {
 		return HLS_MIME_TYPE;
+	}
+
+	get supportsTimestampedMediaData() {
+		return true;
 	}
 }
 

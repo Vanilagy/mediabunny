@@ -362,6 +362,21 @@ test.concurrent('Custom IV', { timeout: 15_000 }, async () => {
 	expect(sourceCount).toBe(3); // Entry, first segment, and encryption key
 });
 
+test.concurrent('Segments shorter than their EXTINF duration', { timeout: 15_000 }, async () => {
+	using input = new Input({
+		source: new UrlSource('https://playertest.longtailvideo.com/adaptive/oceans_aes/oceans_aes-audio=65000-video=236000.m3u8'),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	// The playlist places this timestamp at the end of one segment, but the media puts it in the next one
+	const sink = new EncodedPacketSink(videoTrack);
+	expect((await sink.getPacket(35.9))!.timestamp).toBeCloseTo(35.89986666666667);
+	expect((await sink.getKeyPacket(35.9))!.timestamp).toBeCloseTo(35.81645555555556);
+});
+
 test.concurrent('Out-of-band audio track via ADTS', { timeout: 15_000 }, async () => {
 	using input = new Input({
 		source: new UrlSource('https://playertest.longtailvideo.com/adaptive/aes-with-tracks/master.m3u8'),
@@ -1225,4 +1240,41 @@ test.concurrent('Invalid #EXT-X-DEFINE tags are rejected', async () => {
 
 		await expect(input.getTracks()).rejects.toThrow(error);
 	}
+});
+
+test.concurrent('Key packets of segments starting with a delta frame', async () => {
+	const text = `#EXTM3U
+#EXT-X-TARGETDURATION:100
+#EXTINF:100,
+a.ts
+#EXTINF:100,
+b.ts
+#EXT-X-ENDLIST
+`;
+
+	using input = new Input({
+		source: new CustomPathedSource('master.m3u8', ({ path }) => {
+			if (path === 'master.m3u8') {
+				return new BufferSource(new TextEncoder().encode(text));
+			}
+
+			return new FilePathSource('./test/public/no-initial-keyframe.ts');
+		}),
+		formats: HLS_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	const sink = new EncodedPacketSink(videoTrack);
+
+	const types: string[] = [];
+	let packet = await sink.getFirstKeyPacket({ verifyKeyPackets: true });
+	while (packet) {
+		types.push(packet.type);
+		packet = await sink.getNextKeyPacket(packet, { verifyKeyPackets: true });
+	}
+
+	expect(types.length).toBeGreaterThan(0);
+	expect(types.every(type => type === 'key')).toBe(true);
 });

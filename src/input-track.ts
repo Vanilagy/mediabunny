@@ -726,10 +726,10 @@ export class InputVideoTrack extends InputTrack {
 	async getPixelAspectRatio() {
 		// Potential minor async race condition here if called twice, but doesn't matter since the computation is
 		// so cheap
-		return this._pixelAspectRatioCache ??= simplifyRational({
-			num: (await this.getSquarePixelWidth()) * (await this.getCodedHeight()),
-			den: (await this.getSquarePixelHeight()) * (await this.getCodedWidth()),
-		});
+		return this._pixelAspectRatioCache ??= toPixelAspectRatio(
+			(await this.getSquarePixelWidth()) * (await this.getCodedHeight()),
+			(await this.getSquarePixelHeight()) * (await this.getCodedWidth()),
+		);
 	}
 
 	/**
@@ -738,12 +738,12 @@ export class InputVideoTrack extends InputTrack {
 	 * @deprecated Use {@link InputVideoTrack.getPixelAspectRatio} instead.
 	 */
 	get pixelAspectRatio() {
-		return this._pixelAspectRatioCache ??= simplifyRational({
-			num: requireSync(this._backing.getSquarePixelWidth(), 'pixelAspectRatio', 'getPixelAspectRatio')
-				* requireSync(this._backing.getCodedHeight(), 'pixelAspectRatio', 'getPixelAspectRatio'),
-			den: requireSync(this._backing.getSquarePixelHeight(), 'pixelAspectRatio', 'getPixelAspectRatio')
-				* requireSync(this._backing.getCodedWidth(), 'pixelAspectRatio', 'getPixelAspectRatio'),
-		});
+		return this._pixelAspectRatioCache ??= toPixelAspectRatio(
+			requireSync(this._backing.getSquarePixelWidth(), 'pixelAspectRatio', 'getPixelAspectRatio')
+			* requireSync(this._backing.getCodedHeight(), 'pixelAspectRatio', 'getPixelAspectRatio'),
+			requireSync(this._backing.getSquarePixelHeight(), 'pixelAspectRatio', 'getPixelAspectRatio')
+			* requireSync(this._backing.getCodedWidth(), 'pixelAspectRatio', 'getPixelAspectRatio'),
+		);
 	}
 
 	/** Returns the display width of the track's frames in pixels, after aspect ratio adjustment and rotation. */
@@ -1041,6 +1041,15 @@ export class InputVideoTrack extends InputTrack {
 		};
 	}
 }
+
+const toPixelAspectRatio = (num: number, den: number) => {
+	if (num === 0 || den === 0) {
+		// Can kick if dimensions are zero, so just return square pixels
+		return { num: 1, den: 1 };
+	}
+
+	return simplifyRational({ num, den });
+};
 
 export interface InputAudioTrackBacking extends InputTrackBacking {
 	getType(): 'audio';

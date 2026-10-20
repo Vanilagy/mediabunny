@@ -27,7 +27,7 @@ import {
 } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readBytes, Reader } from '../reader';
-import { buildOggMimeType, computeOggPageCrc, extractSampleMetadata, OggCodecInfo } from './ogg-misc';
+import { buildOggMimeType, extractSampleMetadata, OggCodecInfo } from './ogg-misc';
 import {
 	findNextPageHeader,
 	MAX_PAGE_HEADER_SIZE,
@@ -36,6 +36,10 @@ import {
 	Page,
 	readPageHeader,
 } from './ogg-reader';
+
+const MAX_LOGICAL_BITSTREAMS = 64;
+const VORBIS_IDENTIFICATION_HEADER_SIZE = 30;
+const OPUS_IDENTIFICATION_HEADER_MIN_SIZE = 19;
 
 type LogicalBitstream = {
 	serialNumber: number;
@@ -89,6 +93,10 @@ export class OggDemuxer extends Demuxer {
 					break;
 				}
 
+				if (this.bitstreams.length === MAX_LOGICAL_BITSTREAMS) {
+					throw new Error(`Too many (> ${MAX_LOGICAL_BITSTREAMS}) logical bitstreams.`);
+				}
+
 				this.bitstreams.push({
 					serialNumber: page.serialNumber,
 					bosPage: page,
@@ -114,7 +122,7 @@ export class OggDemuxer extends Demuxer {
 
 				if (
 					// Check for Vorbis
-					firstPacket.data.byteLength >= 7
+					firstPacket.data.byteLength >= VORBIS_IDENTIFICATION_HEADER_SIZE
 					&& firstPacket.data[0] === 0x01 // Packet type 1 = identification header
 					&& firstPacket.data[1] === 0x76 // 'v'
 					&& firstPacket.data[2] === 0x6f // 'o'
@@ -126,7 +134,7 @@ export class OggDemuxer extends Demuxer {
 					await this.readVorbisMetadata(firstPacket, bitstream);
 				} else if (
 					// Check for Opus
-					firstPacket.data.byteLength >= 8
+					firstPacket.data.byteLength >= OPUS_IDENTIFICATION_HEADER_MIN_SIZE
 					&& firstPacket.data[0] === 0x4f // 'O'
 					&& firstPacket.data[1] === 0x70 // 'p'
 					&& firstPacket.data[2] === 0x75 // 'u'
@@ -171,6 +179,13 @@ export class OggDemuxer extends Demuxer {
 			return;
 		}
 
+		const view = toDataView(firstPacket.data);
+		const numberOfChannels = view.getUint8(11);
+		const sampleRate = view.getUint32(12, true);
+		if (numberOfChannels === 0 || sampleRate === 0) {
+			throw new Error('Invalid Vorbis identification header: channel count and sample rate must not be 0.');
+		}
+
 		const lacingValues: number[] = [];
 		const addBytesToSegmentTable = (bytes: number) => {
 			while (true) {
@@ -210,9 +225,8 @@ export class OggDemuxer extends Demuxer {
 		bitstream.description = description;
 		bitstream.lastMetadataPacket = thirdPacket;
 
-		const view = toDataView(firstPacket.data);
-		bitstream.numberOfChannels = view.getUint8(11);
-		bitstream.sampleRate = view.getUint32(12, true);
+		bitstream.numberOfChannels = numberOfChannels;
+		bitstream.sampleRate = sampleRate;
 
 		const blockSizeByte = view.getUint8(28);
 		bitstream.codecInfo.vorbisInfo = {
@@ -277,7 +291,10 @@ export class OggDemuxer extends Demuxer {
 			// Load the entire page data
 			let pageSlice = this.reader.requestSlice(currentPage.dataStartPos, currentPage.dataSize);
 			if (isThenable(pageSlice)) pageSlice = await pageSlice;
-			assert(pageSlice);
+			if (!pageSlice) {
+				return null; // The page is cut off
+			}
+
 			const pageData = readBytes(pageSlice, currentPage.dataSize);
 
 			while (true) {
@@ -718,12 +735,10 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 					high - MIN_PAGE_HEADER_SIZE,
 				);
 
-				let searchSlice = this.demuxer.reader.requestSlice(searchStartPos, until - searchStartPos);
+				let searchSlice = this.demuxer.reader.requestSlice(searchStartPos, Math.max(until - searchStartPos, 0));
 				if (isThenable(searchSlice)) searchSlice = await searchSlice;
-				assert(searchSlice);
 
-				const found = findNextPageHeader(searchSlice, until);
-				if (!found) {
+				if (!searchSlice || !findNextPageHeader(searchSlice, until, this.bitstream.serialNumber)) {
 					if (high <= mid + MIN_PAGE_HEADER_SIZE) {
 						// The range can't be narrowed any further
 						break outer;
@@ -733,44 +748,22 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 					continue outer;
 				}
 
+				const pageStartPos = searchSlice.filePos;
+
 				let headerSlice = this.demuxer.reader.requestSliceRange(
-					searchSlice.filePos,
+					pageStartPos,
 					MIN_PAGE_HEADER_SIZE,
 					MAX_PAGE_HEADER_SIZE,
 				);
 				if (isThenable(headerSlice)) headerSlice = await headerSlice;
-				assert(headerSlice);
+				const page = headerSlice && readPageHeader(headerSlice);
 
-				const page = readPageHeader(headerSlice);
-				assert(page);
-
-				let pageValid = false;
-				if (page.serialNumber === this.bitstream.serialNumber) {
-					// Serial numbers are basically random numbers, and the chance of finding a fake page with
-					// matching serial number is astronomically low, so we can be pretty sure this page is legit.
-					pageValid = true;
-				} else {
-					let pageSlice = this.demuxer.reader.requestSlice(page.headerStartPos, page.totalSize);
-					if (isThenable(pageSlice)) pageSlice = await pageSlice;
-					assert(pageSlice);
-
-					// Validate the page by checking checksum
-					const bytes = readBytes(pageSlice, page.totalSize);
-					const crc = computeOggPageCrc(bytes);
-
-					pageValid = crc === page.checksum;
-				}
-
-				if (!pageValid) {
-					// Keep searching for a valid page
-					searchStartPos = page.headerStartPos + 4; // 'OggS' is 4 bytes
-					continue;
-				}
-
-				if (pageValid && page.serialNumber !== this.bitstream.serialNumber) {
-					// Page is valid but from a different bitstream, so keep searching forward until we find one
-					// belonging to the our bitstream
-					searchStartPos = page.headerStartPos + page.totalSize;
+				// Serial numbers are basically random numbers, and the chance of finding a fake page with matching
+				// serial number is astronomically low, so we can be pretty sure a page with our serial is legit.
+				// Pages of other bitstreams (or junk) we simply scan past; validating them via their checksum instead
+				// could be abused to make us checksum huge amounts of data over and over.
+				if (!page || page.serialNumber !== this.bitstream.serialNumber) {
+					searchStartPos = pageStartPos + 4; // 'OggS' is 4 bytes
 					continue;
 				}
 
@@ -826,10 +819,14 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 			const nextPos = currentPage.headerStartPos + currentPage.totalSize;
 			let slice = this.demuxer.reader.requestSliceRange(nextPos, MIN_PAGE_HEADER_SIZE, MAX_PAGE_HEADER_SIZE);
 			if (isThenable(slice)) slice = await slice;
-			assert(slice);
 
-			const nextPage = readPageHeader(slice);
-			assert(nextPage);
+			const nextPage = slice && readPageHeader(slice);
+			if (!nextPage) {
+				// There's junk between the pages, so we can't walk any further. Let's just jump to the page we know.
+				currentPage = lowPage;
+				previousPages.push(lowPage);
+				break;
+			}
 
 			currentPage = nextPage;
 
@@ -837,8 +834,6 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 				previousPages.push(currentPage);
 			}
 		}
-
-		assert(currentPage.granulePosition !== -1);
 
 		let currentSegmentIndex: number | null = null;
 		let currentTimestampInSamples: number;
@@ -853,6 +848,9 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 			currentTimestampIsCorrect = true;
 			currentSegmentIndex = 0;
 		} else {
+			// Holds since lowPage, if not the start page, came out of the bisection, which skips such pages
+			assert(currentPage.granulePosition !== -1);
+
 			currentTimestampInSamples = 0; // Placeholder value! We'll refine it once we can
 			currentTimestampIsCorrect = false;
 
@@ -892,6 +890,10 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 				if (startPosition) {
 					currentPage = startPosition.page;
 					currentSegmentIndex = startPosition.segmentIndex;
+				} else {
+					// The page chain is broken, so we can't step back; let's just start at the next packet then
+					currentPage = nextPosition.startPage;
+					currentSegmentIndex = nextPosition.startSegmentIndex;
 				}
 			} else {
 				// There is no next position, which means we're looking for the last packet in the bitstream. The

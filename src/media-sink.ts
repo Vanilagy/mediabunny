@@ -251,19 +251,32 @@ export class EncodedPacketSink {
 			return this._track._backing.getKeyPacket(timestamp, options);
 		}
 
-		const packet = await this._track._backing.getKeyPacket(timestamp, options);
-		if (!packet) {
-			return packet;
-		}
-		assert(packet.type === 'key');
+		let packet = await this._track._backing.getKeyPacket(timestamp, options);
+		while (packet) {
+			assert(packet.type === 'key');
 
-		const determinedType = await this._track.determinePacketType(packet);
-		if (determinedType === 'delta') {
-			// Try returning the previous key packet (in hopes that it's actually a key packet)
-			return this.getKeyPacket(packet.timestamp - 1 / await this._track.getTimeResolution(), options);
+			const determinedType = await this._track.determinePacketType(packet);
+			if (determinedType !== 'delta') {
+				return packet;
+			}
+
+			// Try the previous key packet instead (in hopes that it's actually a key packet)
+			let step = 1 / await this._track.getTimeResolution();
+			let previousPacket: EncodedPacket | null;
+			while (true) {
+				previousPacket = await this._track._backing.getKeyPacket(packet.timestamp - step, options);
+				if (!previousPacket || previousPacket.timestamp < packet.timestamp) {
+					break;
+				}
+
+				// Huge timestamps, the step wasn't enough to move us, try again
+				step *= 2;
+			}
+
+			packet = previousPacket;
 		}
 
-		return packet;
+		return null;
 	}
 
 	/**
@@ -286,19 +299,20 @@ export class EncodedPacketSink {
 			return this._track._backing.getNextKeyPacket(packet, options);
 		}
 
-		const nextPacket = await this._track._backing.getNextKeyPacket(packet, options);
-		if (!nextPacket) {
-			return nextPacket;
-		}
-		assert(nextPacket.type === 'key');
+		let nextPacket = await this._track._backing.getNextKeyPacket(packet, options);
+		while (nextPacket) {
+			assert(nextPacket.type === 'key');
 
-		const determinedType = await this._track.determinePacketType(nextPacket);
-		if (determinedType === 'delta') {
-			// Try returning the next key packet (in hopes that it's actually a key packet)
-			return this.getNextKeyPacket(nextPacket, options);
+			const determinedType = await this._track.determinePacketType(nextPacket);
+			if (determinedType !== 'delta') {
+				return nextPacket;
+			}
+
+			// Try the next key packet instead (in hopes that it's actually a key packet)
+			nextPacket = await this._track._backing.getNextKeyPacket(nextPacket, options);
 		}
 
-		return nextPacket;
+		return null;
 	}
 
 	/**
@@ -748,7 +762,9 @@ export abstract class BaseMediaSampleSink<
 					}
 
 					const nextPacket = await packetSink.getNextPacket(currentPacket, retrievalOptions);
-					assert(nextPacket);
+					if (!nextPacket) {
+						throw new Error('Internal error: couldn\'t get next packet when one was expected.');
+					}
 
 					decoder.decode(nextPacket);
 					currentPacket = nextPacket;
@@ -2485,7 +2501,10 @@ class PcmAudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 	decode(packet: EncodedPacket) {
 		const inputView = toDataView(packet.data);
 
-		const numberOfFrames = packet.byteLength / this.decoderConfig.numberOfChannels / this.inputSampleSize;
+		// A trailing partial frame (only in malformed files) gets dropped
+		const numberOfFrames = Math.floor(
+			packet.byteLength / this.decoderConfig.numberOfChannels / this.inputSampleSize,
+		);
 
 		const outputBufferSize = numberOfFrames * this.decoderConfig.numberOfChannels * this.outputSampleSize;
 		const outputBuffer = new ArrayBuffer(outputBufferSize);

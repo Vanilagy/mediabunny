@@ -7,7 +7,8 @@
  */
 
 import { Bitstream } from '../../shared/bitstream';
-import { FileSlice, readBytes } from '../reader';
+import { aacFrequencyTable } from '../../shared/aac-misc';
+import { FileSlice, readBytes, readU16Be } from '../reader';
 
 export const MIN_ADTS_FRAME_HEADER_SIZE = 7;
 export const MAX_ADTS_FRAME_HEADER_SIZE = 9;
@@ -27,7 +28,11 @@ export const readAdtsFrameHeader = (slice: FileSlice): AdtsFrameHeader | null =>
 
 	const startPos = slice.filePos;
 
-	const bytes = readBytes(slice, 9); // 9 with CRC, 7 without CRC
+	if (slice.remainingLength < MIN_ADTS_FRAME_HEADER_SIZE) {
+		return null;
+	}
+
+	const bytes = readBytes(slice, MIN_ADTS_FRAME_HEADER_SIZE);
 	const bitstream = new Bitstream(bytes);
 
 	const syncword = bitstream.readBits(12);
@@ -44,7 +49,7 @@ export const readAdtsFrameHeader = (slice: FileSlice): AdtsFrameHeader | null =>
 	const protectionAbsence = bitstream.readBits(1);
 	const objectType = bitstream.readBits(2) + 1;
 	const samplingFrequencyIndex = bitstream.readBits(4);
-	if (samplingFrequencyIndex === 15) {
+	if (samplingFrequencyIndex >= aacFrequencyTable.length) {
 		return null;
 	}
 
@@ -67,10 +72,16 @@ export const readAdtsFrameHeader = (slice: FileSlice): AdtsFrameHeader | null =>
 
 	let crcCheck: number | null = null;
 
-	if (protectionAbsence === 1) { // No CRC
-		slice.filePos -= 2;
-	} else { // CRC
-		crcCheck = bitstream.readBits(16);
+	if (protectionAbsence === 0) { // CRC
+		if (slice.remainingLength < 2) {
+			return null;
+		}
+
+		crcCheck = readU16Be(slice);
+	}
+
+	if (frameLength < slice.filePos - startPos) {
+		return null; // The frame must at least contain its own header
 	}
 
 	return {

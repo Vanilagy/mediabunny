@@ -457,6 +457,11 @@ export class OggMuxer extends Muxer {
 				trackData.currentPageData.push(slice);
 				trackData.currentPageSize += slice.length;
 
+				if (segmentIsLastOfPacket) {
+					// The packet ends on this page, so the page's granule position must include it
+					trackData.currentGranulePosition = packetEndTimestampInSamples;
+				}
+
 				this.writePage(trackData, isFinalPacket && segmentIsLastOfPacket);
 
 				if (segmentIsLastOfPacket) {

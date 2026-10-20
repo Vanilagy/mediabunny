@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import { Input } from '../../src/input.js';
-import { FilePathSource, ReadableStreamSource, CustomSource } from '../../src/source.js';
+import { BufferSource, FilePathSource, ReadableStreamSource, CustomSource } from '../../src/source.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
@@ -776,6 +776,29 @@ test('MPEG-TS partial reading', async () => {
 
 	// Not much of the file has been read since we only requested metadata
 	expect(maxEnd).toBeLessThanOrEqual(86480);
+});
+
+test('MPEG-TS init input without stream data', async () => {
+	const buffer = await fs.promises.readFile(path.join(__dirname, '../public/0.ts'));
+
+	// Only the PAT and PMT, so the streams are declared but never set up
+	using initInput = new Input({
+		source: new BufferSource(buffer.subarray(0, 2 * 188)),
+		formats: ALL_FORMATS,
+	});
+	await initInput.getTracks();
+
+	using input = new Input({
+		source: new BufferSource(buffer),
+		formats: ALL_FORMATS,
+		initInput,
+	});
+
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	expect(await audioTrack.getNumberOfChannels()).toBe(2);
+	expect(await audioTrack.getSampleRate()).toBe(48000);
 });
 
 test('MPEG-TS first packet key packet forcing', async () => {

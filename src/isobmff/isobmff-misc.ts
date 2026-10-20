@@ -49,6 +49,10 @@ export type PsshBox = {
 };
 
 export const parsePsshBoxContents = (contents: Uint8Array): PsshBox => {
+	if (contents.length < 24) {
+		throw new Error('Invalid pssh box: too small.');
+	}
+
 	const view = toDataView(contents);
 	let pos = 0;
 
@@ -64,6 +68,10 @@ export const parsePsshBoxContents = (contents: Uint8Array): PsshBox => {
 	if (version > 0) {
 		const kidCount = view.getUint32(pos);
 		pos += 4;
+
+		if (pos + 16 * kidCount + 4 > contents.length) {
+			throw new Error('Invalid pssh box: key ID count exceeds box size.');
+		}
 
 		if (kidCount > 0) {
 			keyIds = [];

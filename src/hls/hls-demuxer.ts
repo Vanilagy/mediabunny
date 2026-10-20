@@ -65,6 +65,9 @@ type InternalTrack = {
 type InternalVideoTrack = InternalTrack & { info: { type: 'video' } };
 type InternalAudioTrack = InternalTrack & { info: { type: 'audio' } };
 
+const MAX_VARIANT_STREAMS = 256;
+const MAX_MEDIA_TAGS = 256;
+
 export class HlsDemuxer extends Demuxer {
 	metadataPromise: Promise<void> | null = null;
 	trackBackings: InputTrackBacking[] | null = null;
@@ -196,6 +199,10 @@ export class HlsDemuxer extends Demuxer {
 
 					return;
 				}
+			}
+
+			if (variantStreams.length > MAX_VARIANT_STREAMS || mediaTags.length > MAX_MEDIA_TAGS) {
+				throw new Error('Unsupported M3U8 file; too many variant streams or media tags.');
 			}
 
 			this.masterPlaylistVariables = variables;
@@ -857,6 +864,12 @@ class HlsInputVideoTrackBacking
 
 	async getDecoderConfig(): Promise<VideoDecoderConfig | null> {
 		await this.hydrate();
+
+		if ((await this.backingVideoTrack!.getCodec()) !== this.getCodec()) {
+			// We check as late as possible, and we gotta check here
+			throw new Error('The codec in the playlist doesn\'t match the codec of the media data.');
+		}
+
 		return this.backingVideoTrack!.getDecoderConfig();
 	}
 }
@@ -904,6 +917,12 @@ class HlsInputAudioTrackBacking
 
 	async getDecoderConfig(): Promise<AudioDecoderConfig | null> {
 		await this.hydrate();
+
+		if ((await this.backingAudioTrack!.getCodec()) !== this.getCodec()) {
+			// We check as late as possible, and we gotta check here
+			throw new Error('The codec in the playlist doesn\'t match the codec of the media data.');
+		}
+
 		return this.backingAudioTrack!.getDecoderConfig();
 	}
 }
