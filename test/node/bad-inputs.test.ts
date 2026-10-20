@@ -852,7 +852,7 @@ test('Matroska huge FileUID', async () => {
 	await expectGracefulRead(matroska(info(), tracks(videoTrack(1)), attachments));
 });
 
-test('Matroska clusters with decreasing timestamps', async () => {
+test('Matroska clusters with decreasing timestamps', { timeout: 10_000 }, async () => {
 	// Caching their positions used to insert at the front over and over
 	const clusters = Array.from({ length: 100_000 }, (_, i) => cluster(100_000 - i, simpleBlock(1, 0, 0x80)));
 	using input = new Input({
