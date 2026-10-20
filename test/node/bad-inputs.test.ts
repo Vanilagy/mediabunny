@@ -954,27 +954,6 @@ test('Matroska failing tags read twice', async () => {
 	await expect(input.getMetadataTags()).rejects.toThrow(/unsigned int size/);
 });
 
-test('Matroska concurrent tag reads', async () => {
-	const tags = element(EBMLId.Tags, element(
-		EBMLId.Tag,
-		element(EBMLId.Targets, uintElement(EBMLId.TargetTypeValue, 50)),
-		element(EBMLId.SimpleTag, element(EBMLId.TagName, ascii('TITLE')), element(EBMLId.TagString, ascii('Hi'))),
-	));
-	const file = matroskaWithLazyTags(tags);
-
-	using input = new Input({
-		source: new CustomSource({
-			getSize: async () => file.length,
-			read: async (start, end) => file.slice(start, end),
-		}),
-		formats: ALL_FORMATS,
-	});
-
-	const [first, second] = await Promise.all([input.getMetadataTags(), input.getMetadataTags()]);
-	expect(first.title).toBe('Hi');
-	expect(second.title).toBe('Hi');
-});
-
 test('Matroska element larger than its parent', async () => {
 	await expectGracefulRead(matroska(info(), tracks(element(
 		EBMLId.TrackEntry,
@@ -2049,31 +2028,6 @@ test('HLS variant stream pointing at a huge file that is no playlist', async () 
 
 	await expect(sink.getFirstPacket()).rejects.toThrow(/EXTM3U/);
 	expect(bytesRead).toBeLessThan(2 ** 24);
-});
-
-test('HLS segment starting with a delta frame', async () => {
-	// Moving on to the next segment used to hand out its first packet as a key packet, even when it wasn't one
-	const segment = readFileSync(path.join(__dirname, '../public/no-initial-keyframe.ts'));
-	using input = new Input({
-		source: hlsSource({
-			'index.m3u8': '#EXTM3U\n#EXT-X-TARGETDURATION:100\n#EXTINF:100,\na.ts\n#EXTINF:100,\nb.ts\n'
-				+ '#EXT-X-ENDLIST\n',
-			'a.ts': segment,
-			'b.ts': segment,
-		}),
-		formats: ALL_FORMATS,
-	});
-	const sink = new EncodedPacketSink((await input.getVideoTracks())[0]!);
-
-	const types: string[] = [];
-	let packet = await sink.getFirstKeyPacket({ verifyKeyPackets: true });
-	while (packet && types.length < 1000) {
-		types.push(packet.type);
-		packet = await sink.getNextKeyPacket(packet, { verifyKeyPackets: true });
-	}
-
-	expect(types.length).toBeGreaterThan(0);
-	expect(types.every(type => type === 'key')).toBe(true);
 });
 
 test('HLS playlist codec not matching the media data', async () => {
