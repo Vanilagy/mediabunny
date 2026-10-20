@@ -235,6 +235,8 @@ type FragmentTrackDefaults = {
 type FragmentLookupTableEntry = {
 	timestamp: number;
 	moofOffset: number;
+	trunNumber: number; // 1-indexed
+	sampleNumber: number; // 1-indexed
 };
 
 type FragmentTrackState = {
@@ -263,6 +265,7 @@ type FragmentTrackData = {
 		sampleIndex: number;
 	}[];
 	startTimestampIsFinal: boolean;
+	trunSampleCounts: number[];
 	encryptionAuxInfo: SampleEncryptionAuxInfo | null;
 };
 
@@ -832,10 +835,25 @@ export class IsobmffDemuxer extends Demuxer {
 					x => x.moofOffset,
 				);
 				const lookupEntry = track.fragmentLookupTable[lookupEntryIndex];
+				const lookupEntryIsValid = lookupEntry
+					&& trackData.trunSampleCounts.length >= lookupEntry.trunNumber
+					&& trackData.trunSampleCounts[lookupEntry.trunNumber - 1]! >= lookupEntry.sampleNumber;
 
-				if (lookupEntry) {
-					// There's a lookup entry, let's use its timestamp
-					offsetFragmentTrackDataByTimestamp(trackData, lookupEntry.timestamp);
+				if (lookupEntryIsValid) {
+					// We ignore traf number here, since we've already matched based on track ID
+
+					let sampleIndex = 0;
+					for (let i = 1; i < lookupEntry.trunNumber; i++) {
+						sampleIndex += trackData.trunSampleCounts[i - 1]!;
+					}
+
+					sampleIndex += lookupEntry.sampleNumber - 1;
+					const sample = trackData.samples[sampleIndex];
+					assert(sample); // Must hold due to the above range checks
+
+					// The timestamp in the lookup entry describes the timestamp of the referenced sample
+					const timestampOffset = lookupEntry.timestamp - sample.presentationTimestamp;
+					offsetFragmentTrackDataByTimestamp(trackData, timestampOffset);
 				} else {
 					const lastCacheIndex = binarySearchLessOrEqual(
 						fragmentPositionCache,
@@ -843,7 +861,7 @@ export class IsobmffDemuxer extends Demuxer {
 						x => x.moofOffset,
 					);
 					if (lastCacheIndex !== -1) {
-						// Let's use the timestamp of the previous fragment in the cache
+						// Let's use the end timestamp of the previous fragment in the cache
 						const lastCache = fragmentPositionCache[lastCacheIndex]!;
 						offsetFragmentTrackDataByTimestamp(trackData, lastCache.endTimestamp);
 					} else {
@@ -2262,14 +2280,20 @@ export class IsobmffDemuxer extends Demuxer {
 					const time = version === 1 ? readU64Be(slice) : readU32Be(slice);
 					const moofOffset = version === 1 ? readU64Be(slice) : readU32Be(slice);
 
-					readTrafNum(slice);
-					readTrunNum(slice);
-					readSampleNum(slice);
+					readTrafNum(slice); // Not used
+					const trunNumber = readTrunNum(slice);
+					const sampleNumber = readSampleNum(slice);
 
-					track.fragmentLookupTable.push({
-						timestamp: time,
-						moofOffset,
-					});
+					if (trunNumber >= 1 && sampleNumber >= 1) {
+						track.fragmentLookupTable.push({
+							timestamp: time,
+							moofOffset,
+							trunNumber,
+							sampleNumber,
+						});
+					} else {
+						// Invalid
+					}
 				}
 
 				// The table gets sorted and deduplicated once all metadata has been read
@@ -2408,6 +2432,11 @@ export class IsobmffDemuxer extends Demuxer {
 					break;
 				}
 
+				if (this.currentFragment.trackData.has(trackId)) {
+					Logging._warn(`Multiple traf boxes for track ${trackId} in the same moof box; skipping.`);
+					break;
+				}
+
 				const defaults = this.fragmentTrackDefaults.get(trackId);
 
 				this.currentTrack = track;
@@ -2522,10 +2551,13 @@ export class IsobmffDemuxer extends Demuxer {
 						samples: [],
 						presentationTimestamps: [],
 						startTimestampIsFinal: false,
+						trunSampleCounts: [],
 						encryptionAuxInfo: null,
 					};
 					this.currentFragment.trackData.set(track.id, trackData);
 				}
+
+				trackData.trunSampleCounts.push(sampleCount);
 
 				for (let i = 0; i < sampleCount; i++) {
 					let sampleDuration: number;
