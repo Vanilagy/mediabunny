@@ -75,8 +75,6 @@ export abstract class SegmentedInput {
 	firstSegment: Segment | null = null;
 	firstSegmentFirstTimestamps = new WeakMap<Segment, number>();
 
-	firstTimestampCache = new WeakMap<Input, number>();
-
 	constructor(input: Input, path: string, trackDeclarations: SegmentedInputTrackDeclaration[] | null) {
 		this.input = input;
 		this.path = path;
@@ -171,51 +169,24 @@ export abstract class SegmentedInput {
 		})();
 	}
 
-	// This operation is done a lot and can be semi-expensive, so it's good to have a cache for it
-	async getFirstTimestampForInput(input: Input) {
-		const existing = this.firstTimestampCache.get(input);
-		if (existing !== undefined) {
-			return existing;
+	async getMediaOffset(segment: Segment, input: Input) {
+		const format = await input.getFormat();
+		if (!format.supportsTimestampedMediaData) {
+			return segment.timestamp;
 		}
 
-		const firstTimestamp = await input.getFirstTimestamp();
-		this.firstTimestampCache.set(input, firstTimestamp);
-
-		return firstTimestamp;
-	}
-
-	async getMediaOffset(segment: Segment, input: Input) {
+		// The segments' timestamps are assumed to lie on one shared timeline (until the next discontinuity), which we
+		// align to the playlist using the first segment
 		const firstSegment = segment.firstSegment ?? segment;
 
-		let firstSegmentFirstTimestamp: number;
-		if (this.firstSegmentFirstTimestamps.has(firstSegment)) {
-			firstSegmentFirstTimestamp = this.firstSegmentFirstTimestamps.get(firstSegment)!;
-		} else {
+		let firstSegmentFirstTimestamp = this.firstSegmentFirstTimestamps.get(firstSegment);
+		if (firstSegmentFirstTimestamp === undefined) {
 			const firstInput = this.getInputForSegment(firstSegment);
-			firstSegmentFirstTimestamp = await this.getFirstTimestampForInput(firstInput);
+			firstSegmentFirstTimestamp = await firstInput.getFirstTimestamp();
 			this.firstSegmentFirstTimestamps.set(firstSegment, firstSegmentFirstTimestamp);
 		}
 
-		if (firstSegment === segment) {
-			return firstSegment.timestamp - firstSegmentFirstTimestamp;
-		}
-
-		const segmentFirstTimestamp = await this.getFirstTimestampForInput(input);
-		const segmentElapsed = segment.timestamp - firstSegment.timestamp;
-		const inputElapsed = segmentFirstTimestamp - firstSegmentFirstTimestamp;
-		const difference = inputElapsed - segmentElapsed;
-
-		if (Math.abs(difference) <= Math.min(0.25, segmentElapsed)) { // Heuristic
-			// We're close enough
-			return firstSegment.timestamp - firstSegmentFirstTimestamp;
-		} else {
-			// Ideally, each segment has absolute timestamps that are relative to some outside clock which is
-			// consistent across segments. This is often the case, but not always. Either the container format used is
-			// not timestamped at all (like ADTS), or the segments are just fucky. In this case, use the segment's
-			// relative timestamp to determine where we are, and completely offset out the segment's input start
-			// timestamp.
-			return segment.timestamp - segmentFirstTimestamp;
-		}
+		return firstSegment.timestamp - firstSegmentFirstTimestamp;
 	}
 
 	dispose() {
@@ -535,6 +506,45 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 					skipLiveWait: options.skipLiveWait,
 				});
 				continue;
+			}
+
+			// The playlist may claim the segment to be longer than its media actually is, in which case the timestamp
+			// can lie in the next segment instead. That's only possible if it lies past this segment's media.
+			const lastPacket = keyframesOnly
+				? await track._backing.getPacket(offsetTimestamp, { ...options, metadataOnly: true })
+				: packet;
+			assert(lastPacket);
+
+			if (offsetTimestamp >= lastPacket.timestamp + lastPacket.duration) {
+				const nextSegment = await this.segmentedInput.getNextSegment(currentSegment, {
+					skipLiveWait: options.skipLiveWait,
+				});
+
+				if (nextSegment) {
+					const nextInput = this.segmentedInput.getInputForSegment(nextSegment);
+					const nextTracks = await nextInput.getTracks();
+					const nextTrack = nextTracks.find(t => (
+						t.type === this.firstInputTrack!.type && t.number === this.firstInputTrack!.number
+					));
+
+					let nextPacket = nextTrack
+						? await nextTrack._backing.getFirstPacket({ ...options, metadataOnly: true })
+						: null;
+					if (nextPacket && keyframesOnly && nextPacket.type !== 'key') {
+						nextPacket = await nextTrack!._backing.getNextKeyPacket(nextPacket, {
+							...options,
+							metadataOnly: true,
+						});
+					}
+
+					if (nextPacket) {
+						const nextMediaOffset = await this.segmentedInput.getMediaOffset(nextSegment, nextInput);
+						if (nextPacket.timestamp + nextMediaOffset <= timestamp) {
+							currentSegment = nextSegment;
+							continue;
+						}
+					}
+				}
 			}
 
 			return this.createAdjustedPacket(packet, currentSegment, track);

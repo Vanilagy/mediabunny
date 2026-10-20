@@ -362,6 +362,21 @@ test.concurrent('Custom IV', { timeout: 15_000 }, async () => {
 	expect(sourceCount).toBe(3); // Entry, first segment, and encryption key
 });
 
+test.concurrent('Segments shorter than their EXTINF duration', { timeout: 15_000 }, async () => {
+	using input = new Input({
+		source: new UrlSource('https://playertest.longtailvideo.com/adaptive/oceans_aes/oceans_aes-audio=65000-video=236000.m3u8'),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	// The playlist places this timestamp at the end of one segment, but the media puts it in the next one
+	const sink = new EncodedPacketSink(videoTrack);
+	expect((await sink.getPacket(35.9))!.timestamp).toBeCloseTo(35.89986666666667);
+	expect((await sink.getKeyPacket(35.9))!.timestamp).toBeCloseTo(35.81645555555556);
+});
+
 test.concurrent('Out-of-band audio track via ADTS', { timeout: 15_000 }, async () => {
 	using input = new Input({
 		source: new UrlSource('https://playertest.longtailvideo.com/adaptive/aes-with-tracks/master.m3u8'),
