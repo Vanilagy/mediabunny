@@ -2153,19 +2153,6 @@ class PacketReadingContext {
 		this.currentPesPacketIndex++;
 	}
 
-	getPesPacketAt(pos: number) {
-		assert(pos <= this.currentPos);
-
-		let pesPacketIndex = this.currentPesPacketIndex;
-		let pesPacketPos = this.currentPesPacketPos;
-		while (pos < pesPacketPos) {
-			pesPacketIndex--;
-			pesPacketPos -= this.pesPackets[pesPacketIndex]!.data.byteLength;
-		}
-
-		return this.pesPackets[pesPacketIndex]!;
-	}
-
 	async markNextPacket() {
 		assert(!this.suppliedPacket);
 
@@ -2185,7 +2172,6 @@ class PacketReadingContext {
 			const nalHeaderSize = codec === 'avc' ? 1 : 2;
 			let packetStartPos: number | null = null;
 			let frameStartFound = false;
-			let slicePts: number | null = null;
 			let lastFirstMacroblockInSlice = 0;
 
 			while (true) {
@@ -2262,6 +2248,7 @@ class PacketReadingContext {
 					let nalUnitType: number;
 					let isSlice: boolean;
 					let isAccessUnitStart: boolean;
+					let isAccessUnitDelimiter: boolean;
 
 					if (codec === 'avc') {
 						nalUnitType = extractNalUnitTypeForAvc(headerByte0);
@@ -2272,6 +2259,7 @@ class PacketReadingContext {
 							|| nalUnitType === AvcNalUnitType.SPS
 							|| nalUnitType === AvcNalUnitType.PPS
 							|| nalUnitType === AvcNalUnitType.AUD;
+						isAccessUnitDelimiter = nalUnitType === AvcNalUnitType.AUD;
 					} else {
 						nalUnitType = extractNalUnitTypeForHevc(headerByte0);
 						const layerId = ((headerByte0 & 1) << 5) | (chunk[nalHeaderStart + 1]! >> 3);
@@ -2289,6 +2277,7 @@ class PacketReadingContext {
 							|| nalUnitType === HevcNalUnitType.PREFIX_SEI_NUT
 							|| (nalUnitType >= 41 && nalUnitType <= 44)
 							|| (nalUnitType >= 48 && nalUnitType <= 55);
+						isAccessUnitDelimiter = nalUnitType === HevcNalUnitType.AUD_NUT;
 					}
 
 					let isFrameBoundary = false;
@@ -2310,22 +2299,21 @@ class PacketReadingContext {
 								isFrameBoundary = true;
 							} else {
 								frameStartFound = true;
-
-								// When we find a slice, we prefer the timestamp of the PES packet containing that slice
-								// instead of the one at the start of the access unit. This is almost almost the same
-								// PES packet anyways, but some malformed streams can have weird packetization
-								slicePts = this.getPesPacketAt(chunkStartPos + nalHeaderStart).pts;
 							}
 						}
 					} else if (isAccessUnitStart && frameStartFound) {
 						isFrameBoundary = true;
+					} else if (isAccessUnitDelimiter) {
+						// An AUD always begins a new access unit. We haven't seen a slice yet, so whatever came before
+						// it holds no picture; let's drop it
+						packetStartPos = startCodePos;
 					}
 
 					if (isFrameBoundary) {
 						// End the packet at this start code (the next frame begins here)
 						const packetLength = startCodePos - packetStartPos;
 						this.seekTo(packetStartPos);
-						return this.supplyPacket(packetLength, 0, slicePts);
+						return this.supplyPacket(packetLength, 0);
 					}
 
 					i += startCodeLength;
@@ -2337,11 +2325,13 @@ class PacketReadingContext {
 				}
 			}
 
-			// End of stream - emit whatever's left as the final packet
-			if (packetStartPos !== null && this.endPos > packetStartPos) {
+			// End of stream - emit whatever's left as the final packet, unless it holds no picture
+			if (frameStartFound) {
+				assert(packetStartPos !== null);
+
 				const packetLength = this.endPos - packetStartPos;
 				this.seekTo(packetStartPos);
-				return this.supplyPacket(packetLength, 0, slicePts);
+				return this.supplyPacket(packetLength, 0);
 			}
 		} else {
 			const codec = elementaryStream.info.codec;
@@ -2599,13 +2589,11 @@ class PacketReadingContext {
 	}
 
 	/** Supplies the context with a new encoded packet, beginning at the current position. */
-	supplyPacket(packetLength: number, intrinsicDuration: number, timestampOverride: number | null = null) {
+	supplyPacket(packetLength: number, intrinsicDuration: number) {
 		const currentPesPacket = this.getCurrentPesPacket();
 
 		let pts: number;
-		if (timestampOverride !== null) {
-			pts = timestampOverride;
-		} else if (this.lastSuppliedPesPacket === currentPesPacket) {
+		if (this.lastSuppliedPesPacket === currentPesPacket) {
 			assert(this.nextPts !== null);
 			pts = this.nextPts;
 		} else {
