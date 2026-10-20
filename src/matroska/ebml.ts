@@ -539,7 +539,8 @@ export const readVarInt = (slice: FileSlice) => {
 };
 
 export const readUnsignedInt = (slice: FileSlice, width: number) => {
-	if (width < 1 || width > 8) {
+	// Zero width is valid and means zero
+	if (width > 8) {
 		throw new Error('Bad unsigned int size ' + width);
 	}
 
@@ -555,7 +556,7 @@ export const readUnsignedInt = (slice: FileSlice, width: number) => {
 };
 
 export const readUnsignedBigInt = (slice: FileSlice, width: number) => {
-	if (width < 1) {
+	if (width < 1 || width > 8) {
 		throw new Error('Bad unsigned int size ' + width);
 	}
 
@@ -646,12 +647,12 @@ export const readAsciiString = (slice: FileSlice, length: number) => {
 	const bytes = readBytes(slice, length);
 
 	// Actual string length might be shorter due to null terminators
-	let strLength = 0;
-	while (strLength < length && bytes[strLength] !== 0) {
-		strLength += 1;
+	let str = '';
+	for (let i = 0; i < length && bytes[i] !== 0; i++) {
+		str += String.fromCharCode(bytes[i]!);
 	}
 
-	return String.fromCharCode(...bytes.subarray(0, strLength));
+	return str;
 };
 
 export const readUnicodeString = (slice: FileSlice, length: number) => {
@@ -719,10 +720,13 @@ export const resync = async (reader: Reader, startPos: number, ids: EBMLId[], un
 	while (currentPos < until) {
 		let slice = reader.requestSliceRange(currentPos, 0, Math.min(CHUNK_SIZE, until - currentPos));
 		if (isThenable(slice)) slice = await slice;
-		if (!slice) break;
-		if (slice.length < MAX_VAR_INT_SIZE) break;
+		if (!slice || slice.length === 0) break;
 
-		for (let i = 0; i < slice.length - MAX_VAR_INT_SIZE; i++) {
+		// The last few positions are left for the next chunk so their IDs can be read in full. Close to the end, there
+		// is no next chunk to speak of, so we must still make progress.
+		const positionsToCheck = Math.max(slice.length - MAX_VAR_INT_SIZE, 1);
+
+		for (let i = 0; i < positionsToCheck; i++) {
 			slice.filePos = currentPos;
 
 			const elementId = readElementId(slice);

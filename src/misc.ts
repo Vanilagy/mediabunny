@@ -179,7 +179,8 @@ export const readExpGolomb = (bitstream: Bitstream) => {
 		throw new Error('Invalid exponential-Golomb code.');
 	}
 
-	const result = (1 << leadingZeroBits) - 1 + bitstream.readBits(leadingZeroBits);
+	// Not using bit shifts here, since they'd overflow into negative numbers for 31 leading zeros
+	const result = 2 ** leadingZeroBits - 1 + bitstream.readBits(leadingZeroBits);
 	return result;
 };
 
@@ -195,9 +196,10 @@ export const writeExpGolomb = (bitstream: Bitstream, value: number) => {
 export const readSignedExpGolomb = (bitstream: Bitstream) => {
 	const codeNum = readExpGolomb(bitstream);
 
-	return ((codeNum & 1) === 0)
-		? -(codeNum >> 1)
-		: ((codeNum + 1) >> 1);
+	// Division instead of bit shifts, since codeNum may exceed the 32-bit signed range
+	return codeNum % 2 === 0
+		? -(codeNum / 2)
+		: (codeNum + 1) / 2;
 };
 
 export const writeBits = (bytes: Uint8Array, start: number, end: number, value: number) => {
@@ -563,7 +565,7 @@ export const binarySearchExact = <T>(arr: T[], key: number, valueGetter: (x: T) 
 };
 
 /** Returns the largest index i such that val[i] <= key, or -1 if no such index exists. */
-export const binarySearchLessOrEqual = <T>(arr: T[], key: number, valueGetter: (x: T) => number) => {
+export const binarySearchLessOrEqual = <T>(arr: ArrayLike<T>, key: number, valueGetter: (x: T) => number) => {
 	let low = 0;
 	let high = arr.length - 1;
 	let ans = -1;
@@ -1133,7 +1135,13 @@ export const imageMimeTypeToExtension = (mimeType: string) => {
 };
 
 export const base64ToBytes = (base64: string) => {
-	const decoded = atob(base64);
+	let decoded: string;
+	try {
+		decoded = atob(base64);
+	} catch {
+		throw new Error('Invalid base64 string.');
+	}
+
 	const bytes = new Uint8Array(decoded.length);
 
 	for (let i = 0; i < decoded.length; i++) {
@@ -1271,12 +1279,15 @@ export const getQueryParameter = (path: string, name: string) => {
 	for (const parameter of query.split('&')) {
 		const equalsIndex = parameter.indexOf('=');
 		const encodedName = equalsIndex === -1 ? parameter : parameter.slice(0, equalsIndex);
-		if (decodeURIComponent(encodedName) !== name) {
-			continue;
-		}
-
 		const encodedValue = equalsIndex === -1 ? '' : parameter.slice(equalsIndex + 1);
-		return decodeURIComponent(encodedValue);
+
+		try {
+			if (decodeURIComponent(encodedName) === name) {
+				return decodeURIComponent(encodedValue);
+			}
+		} catch {
+			// Malformed percent-encoding, so let's not treat this as the parameter we're looking for
+		}
 	}
 
 	return null;

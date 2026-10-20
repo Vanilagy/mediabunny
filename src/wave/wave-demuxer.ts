@@ -94,7 +94,7 @@ export class WaveDemuxer extends Demuxer {
 					dataChunkSize ??= chunkSize;
 
 					this.dataStart = slice.filePos;
-					this.dataSize = Math.min(dataChunkSize, (totalFileSize ?? Infinity) - this.dataStart);
+					this.dataSize = Math.max(Math.min(dataChunkSize, (totalFileSize ?? Infinity) - this.dataStart), 0);
 
 					if (this.reader.fileSize === null) {
 						break; // Stop once we hit the data chunk
@@ -105,6 +105,10 @@ export class WaveDemuxer extends Demuxer {
 					let ds64Slice = this.reader.requestSlice(startPos, chunkSize);
 					if (isThenable(ds64Slice)) ds64Slice = await ds64Slice;
 					if (!ds64Slice) break;
+
+					if (chunkSize < 16) {
+						throw new Error('Invalid RF64 file: "ds64" chunk is too small.');
+					}
 
 					const riffChunkSize = readU64(ds64Slice, littleEndian);
 					dataChunkSize = readU64(ds64Slice, littleEndian);
@@ -139,15 +143,23 @@ export class WaveDemuxer extends Demuxer {
 		if (isThenable(slice)) slice = await slice;
 		if (!slice) return; // File too short
 
+		if (size < 14) {
+			throw new Error('Invalid WAVE file - "fmt " chunk is too small');
+		}
+
 		let formatTag = readU16(slice, littleEndian);
 		const numChannels = readU16(slice, littleEndian);
 		const sampleRate = readU32(slice, littleEndian);
 		slice.skip(4); // Bytes per second
 		const blockAlign = readU16(slice, littleEndian);
 
+		if (numChannels === 0 || sampleRate === 0 || blockAlign === 0) {
+			throw new Error('Invalid WAVE file - channel count, sample rate and block align must be positive');
+		}
+
 		let bitsPerSample: number;
 
-		if (size === 14) { // Plain WAVEFORMAT
+		if (size < 16) { // Plain WAVEFORMAT
 			bitsPerSample = 8;
 		} else {
 			bitsPerSample = readU16(slice, littleEndian);
@@ -205,6 +217,8 @@ export class WaveDemuxer extends Demuxer {
 	}
 
 	private async parseListChunk(startPos: number, size: number, littleEndian: boolean) {
+		if (size < 4) return; // Chunk too short
+
 		let slice = this.reader.requestSlice(startPos, size);
 		if (isThenable(slice)) slice = await slice;
 		if (!slice) return; // File too short
@@ -220,18 +234,16 @@ export class WaveDemuxer extends Demuxer {
 
 			const chunkName = readAscii(slice, 4);
 			const chunkSize = readU32(slice, littleEndian);
-			const bytes = readBytes(slice, chunkSize);
-
-			let stringLength = 0;
-			for (let i = 0; i < bytes.length; i++) {
-				if (bytes[i] === 0) {
-					break;
-				}
-
-				stringLength++;
+			if (chunkSize > slice.remainingLength) {
+				break; // The sub-chunk doesn't fit into the LIST chunk
 			}
 
-			const value = String.fromCharCode(...bytes.subarray(0, stringLength));
+			const bytes = readBytes(slice, chunkSize);
+
+			let value = '';
+			for (let i = 0; i < bytes.length && bytes[i] !== 0; i++) {
+				value += String.fromCharCode(bytes[i]!);
+			}
 
 			this.metadataTags.raw ??= {};
 			this.metadataTags.raw[chunkName] = value;
@@ -302,6 +314,8 @@ export class WaveDemuxer extends Demuxer {
 
 	private async parseId3Chunk(startPos: number, size: number) {
 		// Parse ID3 tag embedded in WAV file (non-default, but used a lot in practice anyway)
+		if (size < ID3_V2_HEADER_SIZE) return; // Chunk too short
+
 		let slice = this.reader.requestSlice(startPos, size);
 		if (isThenable(slice)) slice = await slice;
 		if (!slice) return; // File too short

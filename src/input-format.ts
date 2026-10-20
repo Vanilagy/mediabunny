@@ -234,6 +234,10 @@ export class MatroskaInputFormat extends InputFormat {
 			const dataStartPos = dataSlice.filePos;
 			if (size === undefined) return false;
 
+			if (dataStartPos + size > startPos + dataSize || (size > 8 && id !== EBMLId.DocType)) {
+				return false; // The element overruns the header or is an integer of impossible size
+			}
+
 			switch (id) {
 				case EBMLId.EBMLVersion: {
 					const ebmlVersion = readUnsignedInt(dataSlice, size);

@@ -183,6 +183,10 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 	}
 
 	if (header.flags & Id3V2HeaderFlags.ExtendedHeader) {
+		if (reader.bytes.length < 4) {
+			return;
+		}
+
 		const extendedHeaderSize = reader.readU32();
 
 		if (header.majorVersion === 3) {
@@ -199,7 +203,8 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 		}
 
 		const frameStartPos = reader.pos;
-		const frameEndPos = reader.pos + frame.size;
+		const nextFramePos = Math.min(reader.pos + frame.size, reader.bytes.length);
+		let frameEndPos = nextFramePos;
 
 		let	frameEncrypted = false;
 		let frameCompressed = false;
@@ -217,23 +222,31 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 
 		if (frameEncrypted) {
 			Logging._warn(`Skipping encrypted ID3v2 frame ${frame.id}`);
-			reader.pos = frameEndPos;
+			reader.pos = nextFramePos;
 			continue;
 		}
 
 		if (frameCompressed) {
 			Logging._warn(`Skipping compressed ID3v2 frame ${frame.id}`); // Maybe someday? Idk
-			reader.pos = frameEndPos;
+			reader.pos = nextFramePos;
 			continue;
 		}
 
 		if (frameUnsynchronized) {
-			reader.ununsynchronizeRegion(reader.pos, frameEndPos);
+			frameEndPos = reader.ununsynchronizeRegion(reader.pos, frameEndPos);
 		}
+
+		// Frames don't necessarily hold the fixed-size fields they're supposed to
+		const ensureFrameHasBytes = (byteCount: number) => {
+			if (frameEndPos - reader.pos < byteCount) {
+				throw new Error(`Invalid ID3v2 ${frame.id} frame: too short.`);
+			}
+		};
 
 		tags.raw ??= {};
 		if (frame.id === 'TXXX') {
 			const txxx = tags.raw['TXXX'] ??= {};
+			ensureFrameHasBytes(1);
 			const encoding = reader.readId3V2TextEncoding();
 			const description = reader.readId3V2Text(encoding, frameEndPos);
 			const value = reader.readId3V2Text(encoding, frameEndPos);
@@ -244,7 +257,7 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 			tags.raw[frame.id] ??= reader.readId3V2EncodingAndText(frameEndPos);
 		} else {
 			// For the others, let's just get the bytes
-			tags.raw[frame.id] ??= reader.readBytes(frame.size);
+			tags.raw[frame.id] ??= reader.readBytes(frameEndPos - reader.pos);
 		}
 
 		reader.pos = frameStartPos;
@@ -361,6 +374,7 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 
 			case 'USLT':
 			case 'ULT': {
+				ensureFrameHasBytes(4);
 				const encoding = reader.readU8();
 				reader.pos += 3; // Skip language
 				reader.readId3V2Text(encoding, frameEndPos); // Short content description
@@ -369,6 +383,7 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 
 			case 'COMM':
 			case 'COM': {
+				ensureFrameHasBytes(4);
 				const encoding = reader.readU8();
 				reader.pos += 3; // Skip language
 				reader.readId3V2Text(encoding, frameEndPos); // Short content description
@@ -377,10 +392,12 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 
 			case 'APIC':
 			case 'PIC': {
+				ensureFrameHasBytes(1);
 				const encoding = reader.readId3V2TextEncoding();
 
 				let mimeType: string;
 				if (header.majorVersion === 2) {
+					ensureFrameHasBytes(3);
 					const imageFormat = reader.readAscii(3);
 					mimeType = imageFormat === 'PNG'
 						? 'image/png'
@@ -391,6 +408,7 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 					mimeType = reader.readId3V2Text(encoding, frameEndPos);
 				}
 
+				ensureFrameHasBytes(1);
 				const pictureType = reader.readU8();
 				const description = reader.readId3V2Text(encoding, frameEndPos).trimEnd(); // Trim ending spaces
 
@@ -417,7 +435,7 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 			}; break;
 		}
 
-		reader.pos = frameEndPos;
+		reader.pos = nextFramePos;
 	}
 };
 
@@ -425,6 +443,7 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 export class Id3V2Reader {
 	pos = 0;
 	view: DataView;
+	ownsBytes = false;
 
 	constructor(public header: Id3V2Header, public bytes: Uint8Array) {
 		this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -454,11 +473,19 @@ export class Id3V2Reader {
 	}
 
 	ununsynchronizeRegion(start: number, end: number) {
-		const newBytes: number[] = [];
+		if (!this.ownsBytes) {
+			// The bytes might belong to the file, which we must not modify
+			this.bytes = this.bytes.slice();
+			this.view = toDataView(this.bytes);
+			this.ownsBytes = true;
+		}
+
+		// Done in place rather than rebuilding the entire tag, which keeps it cheap for tags with tons of frames
+		let writePos = start;
 
 		for (let i = start; i < end; i++) {
 			const value1 = this.bytes[i]!;
-			newBytes.push(value1);
+			this.bytes[writePos++] = value1;
 
 			if (value1 === 0xff && i !== end - 1) {
 				const value2 = this.bytes[i + 1]!;
@@ -468,15 +495,7 @@ export class Id3V2Reader {
 			}
 		}
 
-		const before = this.bytes.subarray(0, start);
-		const after = this.bytes.subarray(end);
-
-		this.bytes = new Uint8Array(before.length + newBytes.length + after.length);
-		this.bytes.set(before, 0);
-		this.bytes.set(newBytes, before.length);
-		this.bytes.set(after, before.length + newBytes.length);
-
-		this.view = new DataView(this.bytes.buffer);
+		return writePos;
 	}
 
 	readBytes(length: number) {

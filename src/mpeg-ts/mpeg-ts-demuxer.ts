@@ -244,8 +244,11 @@ export class MpegTsDemuxer extends Demuxer {
 					continue;
 				}
 
-				if (hasProgramMap && !this.elementaryStreams.some(x => x.pid === packetHeader.pid)) {
-					// Don't care about this PID
+				if (
+					hasProgramMap
+					&& !this.elementaryStreams.some(x => x.pid === packetHeader.pid && !x.initialized)
+				) {
+					// Don't care about this PID (anymore)
 					currentPos += this.packetStride;
 					continue;
 				}
@@ -532,7 +535,7 @@ export class MpegTsDemuxer extends Demuxer {
 						if (this.input._initInput) {
 							const initDemuxer = (await this.input._initInput._getDemuxer()) as MpegTsDemuxer;
 							const matchingStream = initDemuxer.elementaryStreams.find(x => (
-								x.pid === section.pid && x.info.codec === elementaryStream.info.codec
+								x.pid === section.pid && x.info.codec === elementaryStream.info.codec && x.initialized
 							));
 
 							if (matchingStream) {
@@ -977,7 +980,7 @@ export class MpegTsDemuxer extends Demuxer {
 
 		const syncByte = readU8(slice);
 		if (syncByte !== 0x47) {
-			throw new Error('Invalid TS packet sync byte. Likely an internal bug, please report this file.');
+			throw new Error('Invalid TS packet sync byte; the file is likely corrupted.');
 		}
 
 		const nextTwoBytes = readU16Be(slice);
@@ -1015,7 +1018,7 @@ export class MpegTsDemuxer extends Demuxer {
 
 		const syncByte = bytes[0]!;
 		if (syncByte !== 0x47) {
-			throw new Error('Invalid TS packet sync byte. Likely an internal bug, please report this file.');
+			throw new Error('Invalid TS packet sync byte; the file is likely corrupted.');
 		}
 
 		const nextTwoBytes = (bytes[1]! << 8) + bytes[2]!;
@@ -1574,9 +1577,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 				: targetPacket.pts - buffer.presentationOrderPackets[targetIndex - 1]!.pts;
 
 			// Pop packets in decode order until we hit the target packet
-			while (buffer.decodeOrderPackets[0] !== targetPacket) {
-				buffer.decodeOrderPackets.shift();
-			}
+			buffer.decodeOrderPackets.splice(0, buffer.decodeOrderPackets.indexOf(targetPacket));
 			buffer.lastDuration = lastDuration; // Kinda ugly but necessary fix
 
 			const result = await buffer.readNext();
@@ -1650,6 +1651,10 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 
 					pos -= demuxer.packetStride;
 				}
+
+				if (pos < demuxer.packetOffset) {
+					break; // We've hit the start of the file, there's nothing more to rewind
+				}
 			}
 
 			return retrieveEncodedPacket(currentPesHeader.sectionStartPos, p => p.pts <= searchPts);
@@ -1676,7 +1681,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 				} else {
 					const result = await findFirstPesPacketHeaderInChunk(
 						currentChunkStartPos,
-						reader.fileSize ?? Infinity,
+						nextChunkStartPos ?? reader.fileSize ?? Infinity,
 						readSectionsInFull,
 					);
 
@@ -1686,6 +1691,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 
 				let passedSearchPts = false;
 				let lookaheadCount = 0;
+				let context: PacketReadingContext | null = null; // Walks the chunk's packets in order
 
 				outer:
 				while (pesHeader) {
@@ -1699,14 +1705,29 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 						if (this.elementaryStream.canBeTrustedWithKeyPackets) {
 							isKeyPacket = pesHeader.randomAccessIndicator === 1;
 						} else {
-							assert(pesHeaderSection);
-							const pesPacket = readPesPacket(demuxer, pesHeaderSection, true);
-							assert(pesPacket);
+							if (!context) {
+								assert(pesHeaderSection);
+								const pesPacket = readPesPacket(demuxer, pesHeaderSection, true);
+								assert(pesPacket);
 
-							const context = new PacketReadingContext(this.elementaryStream, pesPacket);
-							await context.markNextPacket();
+								context = new PacketReadingContext(this.elementaryStream, pesPacket);
+							}
 
-							isKeyPacket = context.suppliedPacket?.randomAccessIndicator === 1;
+							// Advance to the first packet that starts in this PES packet
+							while (
+								!context.suppliedPacket
+								|| context.suppliedPacket.sectionStartPos < pesHeader.sectionStartPos
+							) {
+								context.suppliedPacket = null;
+								await context.markNextPacket();
+
+								if (!context.suppliedPacket) {
+									break;
+								}
+							}
+
+							isKeyPacket = context.suppliedPacket?.sectionStartPos === pesHeader.sectionStartPos
+								&& context.suppliedPacket.randomAccessIndicator === 1;
 						}
 
 						if (isKeyPacket) {
@@ -1783,6 +1804,10 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 
 								pos -= demuxer.packetStride;
 							}
+
+							if (pos < demuxer.packetOffset) {
+								break; // We've hit the start of the file, there's nothing more to rewind
+							}
 						}
 					}
 
@@ -1790,9 +1815,12 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 						startPesHeader.sectionStartPos,
 						p => p.pts <= searchPts && p.randomAccessIndicator === 1,
 					);
-					assert(encodedPacket); // There must be one
-
-					return encodedPacket;
+					if (encodedPacket) {
+						return encodedPacket;
+					} else {
+						// The key packet didn't materialize (can happen with odd packetization where packets take their
+						// timestamp from a later PES packet), so let's keep looking further back
+					}
 				}
 
 				if (isFirstChunk) {
@@ -2077,9 +2105,12 @@ class PacketReadingContext {
 			return currentPesPacket.data[relativeOffset]!;
 		}
 
-		this.advanceCurrentPacket();
+		// Skip over PES packets without any data
+		do {
+			this.advanceCurrentPacket();
+			currentPesPacket = this.getCurrentPesPacket();
+		} while (currentPesPacket.data.byteLength === 0);
 
-		currentPesPacket = this.getCurrentPesPacket();
 		return currentPesPacket.data[0]!;
 	}
 
@@ -2667,10 +2698,10 @@ class PacketBuffer {
 
 		// Let's compute the duration
 		const presentationIndex = this.presentationOrderPackets.indexOf(packet);
-		assert(presentationIndex !== -1);
 
 		let duration: number;
-		if (presentationIndex === this.presentationOrderPackets.length - 1) {
+		if (presentationIndex === -1 || presentationIndex === this.presentationOrderPackets.length - 1) {
+			// The packet has no known successor (or isn't even placed yet when timestamps are messed up)
 			duration = this.lastDuration; // Reasonable heuristic
 		} else {
 			const nextPacket = this.presentationOrderPackets[presentationIndex + 1]!;
@@ -2730,6 +2761,11 @@ class PacketBuffer {
 
 			// Check if current packet has a next packet
 			if (presentationIndex !== -1 && presentationIndex <= this.presentationOrderPackets.length - 2) {
+				break;
+			}
+
+			// Cap it so that nonsensical timestamps don't scan the entire file
+			if (this.decodeOrderPackets.length > 4 * (this.reorderSize + 1)) {
 				break;
 			}
 

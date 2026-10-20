@@ -212,7 +212,7 @@ export class FileSlice {
 }
 
 const checkIsInRange = (slice: FileSlice, bytesToRead: number) => {
-	if (slice.filePos < slice.start || slice.filePos + bytesToRead > slice.end) {
+	if (bytesToRead < 0 || slice.filePos < slice.start || slice.filePos + bytesToRead > slice.end) {
 		throw new RangeError(
 			`Tried reading [${slice.filePos}, ${slice.filePos + bytesToRead}), but slice is`
 			+ ` [${slice.start}, ${slice.end}). This is likely an internal error, please report it alongside the file`

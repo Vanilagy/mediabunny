@@ -470,14 +470,18 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 				continue;
 			}
 
-			const firstPacket = await nextTrack._backing.getFirstPacket(options);
-			if (!firstPacket) {
+			let packet = await nextTrack._backing.getFirstPacket(options);
+			if (packet && keyframesOnly && packet.type !== 'key') {
+				packet = await nextTrack._backing.getNextKeyPacket(packet, options);
+			}
+
+			if (!packet) {
 				// Segments may contain zero packets for a track, so, move on
 				currentSegment = nextSegment;
 				continue;
 			}
 
-			return this.createAdjustedPacket(firstPacket, nextSegment, nextTrack);
+			return this.createAdjustedPacket(packet, nextSegment, nextTrack);
 		}
 	}
 

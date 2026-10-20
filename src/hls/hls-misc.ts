@@ -111,9 +111,12 @@ export class AttributeList {
 // Variable name `token_1` is referenced as `{$token_1}`
 const VARIABLE_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 const VARIABLE_REFERENCE_PATTERN = /\{\$([A-Za-z0-9_-]+)\}/g;
+// Variable values may reference earlier variables, so substitution can grow output exponentially ("billion laughs")
+const MAX_TOTAL_SUBSTITUTED_LENGTH = 2 ** 26;
 
 export class HlsPlaylistVariables {
 	variables = new Map<string, string>();
+	totalSubstitutedLength = 0;
 
 	constructor(
 		readonly playlistPath: string,
@@ -164,6 +167,11 @@ export class HlsPlaylistVariables {
 			const replacement = this.variables.get(name);
 			if (replacement === undefined) {
 				throw new Error(`Invalid M3U8 file; variable "${name}" is referenced before being defined.`);
+			}
+
+			this.totalSubstitutedLength += replacement.length;
+			if (this.totalSubstitutedLength > MAX_TOTAL_SUBSTITUTED_LENGTH) {
+				throw new Error('Invalid M3U8 file; variable substitution produces an excessive amount of data.');
 			}
 
 			return replacement;

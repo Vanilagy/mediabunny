@@ -182,3 +182,25 @@ test('HE-AAC v2 audio config is parsed correctly', async () => {
 	expect(decoderConfig.numberOfChannels).toBe(2);
 	expect([...toUint8Array(decoderConfig.description!)]).toEqual([0xeb, 0x8a, 0x08, 0x00]);
 });
+
+test('PCM track with stsc not starting at the first chunk', async () => {
+	// The stsc box's first entry starts at the second chunk, leaving three chunks of PCM audio
+	const filePath = path.join(__dirname, '..', 'public/pcm-stsc-not-first-chunk.mp4');
+	using input = new Input({
+		source: new FilePathSource(filePath),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	const sink = new EncodedPacketSink(track);
+
+	let packetCount = 0;
+	for await (const packet of sink.packets(undefined, undefined, { metadataOnly: true })) {
+		void packet;
+		packetCount++;
+	}
+
+	expect(packetCount).toBe(3);
+});
