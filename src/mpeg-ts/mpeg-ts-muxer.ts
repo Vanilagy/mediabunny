@@ -78,6 +78,7 @@ type QueuedPacket = {
 
 export class MpegTsMuxer extends Muxer {
 	private format: MpegTsOutputFormat;
+	private timestampOffset: number;
 	private writer!: Writer;
 
 	private trackDatas: MpegTsTrackData[] = [];
@@ -97,6 +98,7 @@ export class MpegTsMuxer extends Muxer {
 		super(output);
 
 		this.format = format;
+		this.timestampOffset = format._options.timestampOffset ?? 10;
 	}
 
 	async start() {
@@ -597,7 +599,7 @@ export class MpegTsMuxer extends Muxer {
 
 		// This logic supports writing negative timestamps by simplying Euclid-modding them. It is then up to the
 		// demuxer to interpret them as negative, if it wasnts to.
-		const unwrappedPts = Math.round(queuedPacket.presentationTimestamp * TIMESCALE);
+		const unwrappedPts = Math.round((queuedPacket.presentationTimestamp + this.timestampOffset) * TIMESCALE);
 		const pts = modEuclid(unwrappedPts, TIMESTAMP_MODULUS);
 		ptsDtsBitstream.pos = 0;
 		ptsDtsBitstream.writeBits(4, includeDts ? 0b0011 : 0b0010); // marker
@@ -611,7 +613,7 @@ export class MpegTsMuxer extends Muxer {
 		if (includeDts) {
 			assert(queuedPacket.decodeTimestamp !== null);
 
-			const unwrappedDts = Math.round(queuedPacket.decodeTimestamp * TIMESCALE);
+			const unwrappedDts = Math.round((queuedPacket.decodeTimestamp + this.timestampOffset) * TIMESCALE);
 			const dts = modEuclid(unwrappedDts, TIMESTAMP_MODULUS);
 			ptsDtsBitstream.writeBits(4, 0b0001);
 			ptsDtsBitstream.writeBits(3, Math.floor(dts / 2 ** 30)); // DTS[32:30]

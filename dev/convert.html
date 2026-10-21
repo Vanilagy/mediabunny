@@ -59,7 +59,7 @@
 		const tracks = [];
 		let start = 0;
 
-		if (true) {
+		if (false) {
 			input = new Mediabunny.Input({
 				source: new Mediabunny.UrlSource('http://localhost:8080/playlist.m3u8'),
 				formats: Mediabunny.ALL_FORMATS,
@@ -177,6 +177,8 @@
 				}
 			},
 			trim: {
+				start: 5,
+				end: 10,
 				//start: 0,
 				//end: 5,
 				//start: 25,
@@ -191,12 +193,7 @@
 				//start: startTime,
 				//end: startTime + 2,
 			},
-			copy: {
-				//mode: 'forced',
-				//mode: 'forced',
-				//shiftTolerance: Infinity,
-				//boundaryPolicy: 'shrink',
-			},
+			copy: false,
 		});
 		//console.log(conversion);
 		console.log(conversion.discardedTracks);

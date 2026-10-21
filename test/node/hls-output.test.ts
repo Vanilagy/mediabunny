@@ -833,7 +833,7 @@ const setUpSegmentationEnvironment = async (options: {
 
 	const output = new Output({
 		format: new HlsOutputFormat({
-			segmentFormat: new MpegTsOutputFormat(), // No ADTS for simplicity
+			segmentFormat: new MpegTsOutputFormat({ timestampOffset: 0 }), // No ADTS for simplicity
 		}),
 		target: new PathedTarget('', (request) => {
 			const target = new BufferTarget();

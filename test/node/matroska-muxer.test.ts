@@ -10,7 +10,7 @@ import { BufferTarget } from '../../src/target.js';
 import { MkvOutputFormat } from '../../src/output-format.js';
 import { Conversion } from '../../src/conversion.js';
 import { assert } from '../../src/misc.js';
-import { EncodedVideoPacketSource } from '../../src/media-source.js';
+import { EncodedAudioPacketSource, EncodedVideoPacketSource } from '../../src/media-source.js';
 import { EncodedPacket } from '../../src/packet.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -136,4 +136,73 @@ const testNegativeTimestampRoundTrip = async (timestamps: number[], duration: nu
 			duration: inputPacket.duration,
 		});
 	}
+};
+
+test('Negative audio start timestamps via CodecDelay', async () => {
+	const output = new Output({
+		format: new MkvOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const source = new EncodedAudioPacketSource('aac');
+	output.addAudioTrack(source);
+
+	await output.start();
+
+	const meta = {
+		decoderConfig: {
+			codec: 'mp4a.40.2',
+			numberOfChannels: 2,
+			sampleRate: 32000, // Makes the first frame start at exactly -32 ms
+			description: new Uint8Array([0x12, 0x90]),
+		},
+	};
+	const inputPackets = Array.from({ length: 50 }, (_, index) => new EncodedPacket(
+		new Uint8Array(64).fill(index),
+		'key',
+		(index - 1) * 32 / 1000,
+		32 / 1000,
+	));
+
+	for (let i = 0; i < inputPackets.length; i++) {
+		await source.add(inputPackets[i]!, i === 0 ? meta : undefined);
+	}
+
+	await output.finalize();
+
+	const bytes = new Uint8Array(output.target.buffer!);
+	expect(containsBytes(bytes, [0x56, 0xaa])).toBe(true); // CodecDelay element ID
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+	const sink = new EncodedPacketSink(track);
+
+	const outputPackets: EncodedPacket[] = [];
+	for await (const packet of sink.packets()) {
+		outputPackets.push(packet);
+	}
+
+	expect(outputPackets.map(packet => packet.timestamp)).toEqual(inputPackets.map(packet => packet.timestamp));
+
+	for (const inputPacket of inputPackets) {
+		const outputPacket = await sink.getPacket(inputPacket.timestamp);
+		assert(outputPacket);
+
+		expect(outputPacket.timestamp).toBe(inputPacket.timestamp);
+	}
+});
+
+const containsBytes = (haystack: Uint8Array, needle: number[]) => {
+	for (let i = 0; i <= haystack.length - needle.length; i++) {
+		if (needle.every((byte, j) => haystack[i + j] === byte)) {
+			return true;
+		}
+	}
+
+	return false;
 };

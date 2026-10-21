@@ -11,6 +11,7 @@ import {
 	AUDIO_CODECS,
 	AudioCodec,
 	extractVideoCodecString,
+	getAudioEncoderConfigExtension,
 	MediaCodec,
 	parsePcmCodec,
 	PCM_AUDIO_CODECS,
@@ -2433,46 +2434,17 @@ class AudioEncoderWrapper {
 					);
 				}
 
-				const stack = new Error('Encoding error').stack;
+				const primingShiftInSamples = await detectAudioEncoderPrimingShift(
+					this.encodingConfig.codec,
+					encoderConfig.codec,
+				);
+				const primingShift = primingShiftInSamples / encoderConfig.sampleRate;
 
+				const stack = new Error('Encoding error').stack;
 				this.encoder = new AudioEncoder({
 					output: (chunk, meta) => {
-						// WebKit emits an invalid description for AAC (https://bugs.webkit.org/show_bug.cgi?id=302253),
-						// which we try to detect here. If detected, we'll provide our own description instead, derived
-						// from the codec string and audio parameters.
-						if (this.encodingConfig.codec === 'aac' && meta?.decoderConfig) {
-							if (
-								meta.decoderConfig.description
-								&& meta.decoderConfig.description.byteLength > 0
-								&& toUint8Array(meta.decoderConfig.description)[0] === 0x03
-							) {
-								// We were handed an ES descriptor instead of an AudioSpecificConfig
-								const { decoderSpecificInfo } = readEsDescriptor(
-									FileSlice.tempFromBytes(toUint8Array(meta.decoderConfig.description)),
-								);
-								meta.decoderConfig.description = decoderSpecificInfo ?? undefined;
-							}
-
-							let needsDescriptionOverwrite = false;
-							if (!meta.decoderConfig.description || meta.decoderConfig.description.byteLength < 2) {
-								needsDescriptionOverwrite = true;
-							} else {
-								const audioSpecificConfig = parseAacAudioSpecificConfig(
-									toUint8Array(meta.decoderConfig.description),
-								);
-
-								needsDescriptionOverwrite = audioSpecificConfig.objectType === 0;
-							}
-
-							if (needsDescriptionOverwrite) {
-								const objectType = Number(last(encoderConfig.codec.split('.')));
-
-								meta.decoderConfig.description = buildAacAudioSpecificConfig({
-									objectType,
-									outputNumberOfChannels: meta.decoderConfig.numberOfChannels,
-									outputSampleRate: meta.decoderConfig.sampleRate,
-								});
-							}
+						if (meta?.decoderConfig) {
+							fixAudioDecoderConfig(this.encodingConfig.codec, encoderConfig, meta.decoderConfig);
 						}
 
 						let packet = EncodedPacket.fromEncodedChunk(chunk);
@@ -2480,7 +2452,7 @@ class AudioEncoderWrapper {
 						// Snap the timing information to the sample rate to recover information lost in microsecond
 						// conversion
 						packet = packet.clone({
-							timestamp: roundToDivisor(packet.timestamp, encoderConfig.sampleRate),
+							timestamp: roundToDivisor(packet.timestamp - primingShift, encoderConfig.sampleRate),
 							duration: chunk.duration != null
 								? roundToDivisor(packet.duration, encoderConfig.sampleRate)
 								: undefined,
@@ -2665,6 +2637,158 @@ class AudioEncoderWrapper {
 		}
 	}
 }
+
+const audioEncoderPrimingShiftPromises = new Map<string, Promise<number>>();
+
+// WebCodecs audio encoders have encoder priming delay but don't surface this delay whatsoever, meaning they typically
+// just emit audio at incorrect timestamps. This priming delay depends heavily on the browser-OS combo, so instead of
+// hardcoding it, we simply detect it locally.
+const detectAudioEncoderPrimingShift = (codec: AudioCodec, codecString: string) => {
+	let promise = audioEncoderPrimingShiftPromises.get(codecString);
+	if (promise) {
+		return promise;
+	}
+
+	promise = (async () => {
+		const numberOfChannels = 1;
+		const sampleRate = 48000;
+		const encoderConfig: AudioEncoderConfig = {
+			codec: codecString,
+			numberOfChannels,
+			sampleRate,
+			...getAudioEncoderConfigExtension(codec),
+		};
+		const impulseIndex = 4096;
+		const numberOfFrames = 2 * impulseIndex;
+
+		const chunks: EncodedAudioChunk[] = [];
+		let decoderConfig = null as AudioDecoderConfig | null;
+		let peakIndex = null as number | null;
+		let peakValue = -Infinity;
+		let decodedFrames = 0;
+		let codecError = null as DOMException | null;
+
+		const encoder = new AudioEncoder({
+			output: (chunk, meta) => {
+				if (meta?.decoderConfig) {
+					decoderConfig ??= meta.decoderConfig;
+				}
+
+				chunks.push(chunk);
+			},
+			error: (error) => {
+				codecError ??= error;
+			},
+		});
+		const decoder = new AudioDecoder({
+			output: (audioData) => {
+				const values = new Float32Array(audioData.numberOfFrames);
+				audioData.copyTo(values, { planeIndex: 0, format: 'f32-planar' });
+				audioData.close();
+
+				for (let i = 0; i < values.length; i++) {
+					if (values[i]! > peakValue) {
+						peakValue = values[i]!;
+						peakIndex = decodedFrames + i;
+					}
+				}
+
+				decodedFrames += values.length;
+			},
+			error: (error) => {
+				codecError ??= error;
+			},
+		});
+
+		try {
+			encoder.configure(encoderConfig);
+
+			const data = new Float32Array(numberOfChannels * numberOfFrames);
+			data[impulseIndex] = 1;
+
+			const audioData = new AudioData({
+				data,
+				format: 'f32-planar',
+				numberOfChannels,
+				numberOfFrames,
+				sampleRate,
+				timestamp: 0,
+			});
+			encoder.encode(audioData);
+			audioData.close();
+
+			await encoder.flush();
+
+			assert(decoderConfig);
+			fixAudioDecoderConfig(codec, encoderConfig, decoderConfig);
+
+			decoder.configure(decoderConfig);
+			for (const chunk of chunks) {
+				decoder.decode(chunk);
+			}
+
+			await decoder.flush();
+		} catch (error) {
+			throw codecError ?? error;
+		} finally {
+			if (encoder.state !== 'closed') {
+				encoder.close();
+			}
+			if (decoder.state !== 'closed') {
+				decoder.close();
+			}
+		}
+
+		assert(peakIndex !== null);
+
+		const firstChunkTimestampInSamples = Math.round(chunks[0]!.timestamp / 1e6 * sampleRate);
+		return peakIndex - impulseIndex + firstChunkTimestampInSamples;
+	})();
+
+	audioEncoderPrimingShiftPromises.set(codecString, promise);
+	return promise;
+};
+
+const fixAudioDecoderConfig = (
+	codec: AudioCodec,
+	encoderConfig: AudioEncoderConfig,
+	decoderConfig: AudioDecoderConfig,
+) => {
+	// WebKit emits an invalid description for AAC (https://bugs.webkit.org/show_bug.cgi?id=302253), which we try to
+	// detect here. If detected, we'll provide our own description instead, derived from the codec string and audio
+	// parameters.
+	if (codec === 'aac') {
+		if (
+			decoderConfig.description
+			&& decoderConfig.description.byteLength > 0
+			&& toUint8Array(decoderConfig.description)[0] === 0x03
+		) {
+			// We were handed an ES descriptor instead of an AudioSpecificConfig
+			const { decoderSpecificInfo } = readEsDescriptor(
+				FileSlice.tempFromBytes(toUint8Array(decoderConfig.description)),
+			);
+			decoderConfig.description = decoderSpecificInfo ?? undefined;
+		}
+
+		let needsDescriptionOverwrite = false;
+		if (!decoderConfig.description || decoderConfig.description.byteLength < 2) {
+			needsDescriptionOverwrite = true;
+		} else {
+			const audioSpecificConfig = parseAacAudioSpecificConfig(toUint8Array(decoderConfig.description));
+			needsDescriptionOverwrite = audioSpecificConfig.objectType === 0;
+		}
+
+		if (needsDescriptionOverwrite) {
+			const objectType = Number(last(encoderConfig.codec.split('.')));
+
+			decoderConfig.description = buildAacAudioSpecificConfig({
+				objectType,
+				outputNumberOfChannels: decoderConfig.numberOfChannels,
+				outputSampleRate: decoderConfig.sampleRate,
+			});
+		}
+	}
+};
 
 /**
  * This source can be used to add raw, unencoded audio samples to an output audio track. These samples will

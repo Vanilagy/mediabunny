@@ -1131,6 +1131,15 @@ export class FlacOutputFormat extends OutputFormat {
  */
 export type MpegTsOutputFormatOptions = {
 	/**
+	 * An offset in seconds that is added to all timestamps written to the file. The use of it is to prevent otherwise
+	 * negative timestamps (caused by audio priming samples or B-frames) not to be negative in the final file (which
+	 * would trip up some players).
+	 *
+	 * Defaults to 10 seconds.
+	 */
+	timestampOffset?: number;
+
+	/**
 	 * Will be called for each 188-byte Transport Stream packet that is written.
 	 *
 	 * @param data - The raw bytes.
@@ -1152,6 +1161,12 @@ export class MpegTsOutputFormat extends OutputFormat {
 	constructor(options: MpegTsOutputFormatOptions = {}) {
 		if (!options || typeof options !== 'object') {
 			throw new TypeError('options must be an object.');
+		}
+		if (
+			options.timestampOffset !== undefined
+			&& (!Number.isFinite(options.timestampOffset) || options.timestampOffset < 0)
+		) {
+			throw new TypeError('options.timestampOffset, when provided, must be a number.');
 		}
 		if (options.onPacket !== undefined && typeof options.onPacket !== 'function') {
 			throw new TypeError('options.onPacket, when provided, must be a function.');

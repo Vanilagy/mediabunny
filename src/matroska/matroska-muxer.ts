@@ -121,6 +121,7 @@ type MatroskaTrackData = {
 		 * ADTS-wrapped data.
 		 */
 		requiresAdtsStripping: boolean;
+		codecDelay: number | null; // in seconds
 	};
 } | {
 	track: OutputSubtitleTrack;
@@ -333,17 +334,45 @@ export class MatroskaMuxer extends Muxer {
 				}
 			}
 
-			let seekPreRollNs = 0;
-			if (trackData.type === 'audio' && trackData.track.source._codec === 'opus') {
-				seekPreRollNs = 1e6 * 80; // In "Matroska ticks" (nanoseconds)
+			let seekPreRollNs = 0; // In "Matroska ticks" (nanoseconds)
+			if (trackData.type === 'audio') {
+				const codec = trackData.track.source._codec;
+				const { sampleRate, decoderConfig } = trackData.info;
 
-				const description = trackData.info.decoderConfig.description;
-				if (description) {
-					const bytes = toUint8Array(description);
-					const header = parseOpusIdentificationHeader(bytes);
+				if (codec === 'opus') {
+					seekPreRollNs = 1e6 * 80;
 
-					// Use the preSkip value from the header
-					seekPreRollNs = Math.round(1e9 * (header.preSkip / OPUS_SAMPLE_RATE));
+					const description = decoderConfig.description;
+					if (description) {
+						const bytes = toUint8Array(description);
+						const header = parseOpusIdentificationHeader(bytes);
+
+						// Use the preSkip value from the header
+						seekPreRollNs = Math.round(1e9 * (header.preSkip / OPUS_SAMPLE_RATE));
+					}
+				} else if (codec === 'aac') {
+					// One frame of overlap, and with SBR, frames are twice as long at the output sample rate
+					const isHeAac = decoderConfig.codec === 'mp4a.40.5' || decoderConfig.codec === 'mp4a.40.29';
+					seekPreRollNs = Math.round(1e9 * (isHeAac ? 2048 : 1024) / sampleRate);
+				} else if (codec === 'mp3') {
+					seekPreRollNs = Math.round(1e9 * 1152 / sampleRate);
+				} else if (codec === 'vorbis') {
+					assert(decoderConfig.description);
+
+					const bytes = toUint8Array(decoderConfig.description);
+					let pos = 1;
+					let lacedLengthsLeft = 2;
+					while (lacedLengthsLeft > 0) {
+						if (bytes[pos++]! < 255) {
+							lacedLengthsLeft--;
+						}
+					}
+
+					const blockSizeByte = bytes[pos + 28]!;
+					const longBlockSize = 1 << (blockSizeByte >> 4); // blocksize_1
+
+					// The previous packet's long window overlaps by up to half its size
+					seekPreRollNs = Math.round(1e9 * (longBlockSize / 2) / sampleRate);
 				}
 			}
 
@@ -374,6 +403,9 @@ export class MatroskaMuxer extends Muxer {
 				{ id: EBMLId.CodecID, data: codecId },
 				trackData.codecPrivate
 					? { id: EBMLId.CodecPrivate, data: toUint8Array(trackData.codecPrivate) }
+					: null,
+				trackData.type === 'audio' && trackData.info.codecDelay
+					? { id: EBMLId.CodecDelay, data: Math.round(1e9 * trackData.info.codecDelay) }
 					: null,
 				seekPreRollNs > 0 ? { id: EBMLId.SeekPreRoll, data: seekPreRollNs } : null,
 				trackData.track.metadata.name !== undefined
@@ -932,6 +964,7 @@ export class MatroskaMuxer extends Muxer {
 				sampleRate: meta.decoderConfig.sampleRate,
 				decoderConfig,
 				requiresAdtsStripping,
+				codecDelay: null,
 			},
 			chunkQueue: [],
 			lastWrittenMsTimestamp: null,
@@ -1048,7 +1081,15 @@ export class MatroskaMuxer extends Muxer {
 			const isKeyFrame = packet.type === 'key';
 			this.validateTimestamp(trackData.track, packet.timestamp, isKeyFrame);
 
-			const audioChunk = this.createInternalChunk(packetData, packet.timestamp, packet.duration, packet.type);
+			// A negative start (like from encoder priming) is expressed this way.
+			trackData.info.codecDelay ??= Math.max(-packet.timestamp, 0);
+
+			const audioChunk = this.createInternalChunk(
+				packetData,
+				packet.timestamp + trackData.info.codecDelay,
+				packet.duration,
+				packet.type,
+			);
 			trackData.chunkQueue.push(audioChunk);
 			await this.interleaveChunks();
 		} finally {
@@ -1306,8 +1347,12 @@ export class MatroskaMuxer extends Muxer {
 			this.ebmlWriter.writeEBML(blockGroup);
 		}
 
+		const msCodecDelay = trackData.type === 'audio'
+			? 1000 * (trackData.info.codecDelay ?? 0)
+			: 0;
+
 		this.startTimestamp = Math.min(this.startTimestamp, msTimestamp);
-		this.endTimestamp = Math.max(this.endTimestamp, msTimestamp + msDuration);
+		this.endTimestamp = Math.max(this.endTimestamp, msTimestamp + msDuration - msCodecDelay);
 		trackData.lastWrittenMsTimestamp = msTimestamp;
 
 		if (!this.trackDatasInCurrentCluster.has(trackData)) {
