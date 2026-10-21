@@ -50,7 +50,6 @@ class AacEncoder extends CustomAudioEncoder {
 	private pendingBuffer = new Float32Array(2 ** 16);
 	private pendingFrames = 0;
 	private nextSampleTimestampInSamples: number | null = null;
-	private nextPacketTimestampInSamples: number | null = null;
 
 	static override supports(codec: AudioCodec, config: AudioEncoderConfig): boolean {
 		return codec === 'aac'
@@ -134,7 +133,6 @@ class AacEncoder extends CustomAudioEncoder {
 	private resetInternalState() {
 		this.pendingFrames = 0;
 		this.nextSampleTimestampInSamples = null;
-		this.nextPacketTimestampInSamples = null;
 
 		this.chunkMetadata = {
 			decoderConfig: {
@@ -149,7 +147,6 @@ class AacEncoder extends CustomAudioEncoder {
 	async encode(audioSample: AudioSample) {
 		if (this.nextSampleTimestampInSamples === null) {
 			this.nextSampleTimestampInSamples = Math.round(audioSample.timestamp * this.sampleRate);
-			this.nextPacketTimestampInSamples = this.nextSampleTimestampInSamples;
 		}
 
 		const channels = this.numberOfChannels;
@@ -205,7 +202,6 @@ class AacEncoder extends CustomAudioEncoder {
 
 	private async encodeOneFrame() {
 		assert(this.nextSampleTimestampInSamples !== null);
-		assert(this.nextPacketTimestampInSamples !== null);
 
 		const channels = this.numberOfChannels;
 		const frameSize = this.encoderFrameSize;
@@ -235,8 +231,6 @@ class AacEncoder extends CustomAudioEncoder {
 	}
 
 	private emitPackets(packets: PacketInfo[]) {
-		assert(this.nextPacketTimestampInSamples !== null);
-
 		for (const p of packets) {
 			let data = new Uint8Array(p.encodedData);
 
@@ -255,11 +249,9 @@ class AacEncoder extends CustomAudioEncoder {
 			const packet = new EncodedPacket(
 				data,
 				'key',
-				this.nextPacketTimestampInSamples / this.sampleRate,
+				p.pts / this.sampleRate,
 				p.duration / this.sampleRate,
 			);
-
-			this.nextPacketTimestampInSamples += p.duration;
 
 			this.onPacket(
 				packet,

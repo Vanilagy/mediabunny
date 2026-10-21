@@ -13,6 +13,7 @@ import {
 	extractVideoCodecString,
 	getAudioEncoderConfigExtension,
 	MediaCodec,
+	OPUS_SAMPLE_RATE,
 	parsePcmCodec,
 	PCM_AUDIO_CODECS,
 	PcmAudioCodec,
@@ -80,6 +81,7 @@ import {
 	extractAvcDecoderConfigurationRecord,
 	extractHevcDecoderConfigurationRecord,
 	extractVp9CodecInfoFromPacket,
+	parseOpusIdentificationHeader,
 	serializeAvcDecoderConfigurationRecord,
 } from './codec-data';
 import { Logging } from './logging';
@@ -2439,12 +2441,19 @@ class AudioEncoderWrapper {
 					encoderConfig.codec,
 				);
 				const primingShift = primingShiftInSamples / encoderConfig.sampleRate;
+				let opusPreSkip = 0; // In seconds
 
 				const stack = new Error('Encoding error').stack;
 				this.encoder = new AudioEncoder({
 					output: (chunk, meta) => {
 						if (meta?.decoderConfig) {
 							fixAudioDecoderConfig(this.encodingConfig.codec, encoderConfig, meta.decoderConfig);
+
+							// We want Opus packet timestamps to include the pre-skip
+							if (this.encodingConfig.codec === 'opus' && meta.decoderConfig.description) {
+								const description = toUint8Array(meta.decoderConfig.description);
+								opusPreSkip = parseOpusIdentificationHeader(description).preSkip / OPUS_SAMPLE_RATE;
+							}
 						}
 
 						let packet = EncodedPacket.fromEncodedChunk(chunk);
@@ -2452,11 +2461,19 @@ class AudioEncoderWrapper {
 						// Snap the timing information to the sample rate to recover information lost in microsecond
 						// conversion
 						packet = packet.clone({
-							timestamp: roundToDivisor(packet.timestamp - primingShift, encoderConfig.sampleRate),
+							timestamp: roundToDivisor(
+								packet.timestamp - primingShift - opusPreSkip,
+								encoderConfig.sampleRate,
+							),
 							duration: chunk.duration != null
 								? roundToDivisor(packet.duration, encoderConfig.sampleRate)
 								: undefined,
 						});
+
+						if (isFirefox()) {
+							// For Firefox, we only need to offset the first timestamp
+							opusPreSkip = 0;
+						}
 
 						this.encodingConfig.onEncodedPacket?.(packet, meta);
 						this.lastMuxerPromise
