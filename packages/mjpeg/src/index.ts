@@ -15,13 +15,10 @@ import {
 	VideoCodec,
 	VideoSample,
 } from 'mediabunny';
-import { assert, MaybePromise } from '../../../src/misc';
+import { assert } from '../../../src/misc';
 
 class MjpegDecoder extends CustomVideoDecoder {
 	canvas: OffscreenCanvas | null = null;
-
-	_pendingSamples = 0;
-	_flushPromise: { promise: Promise<void>; resolve: () => void } | null = null;
 
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	static override supports(codec: VideoCodec, _config: VideoDecoderConfig): boolean {
@@ -34,57 +31,36 @@ class MjpegDecoder extends CustomVideoDecoder {
 	}
 
 	async decode(packet: EncodedPacket) {
-		this._pendingSamples += 1;
-
-		try {
-			const data = packet.data;
-			const buffer = data.buffer instanceof ArrayBuffer
+		const data = packet.data;
+		const buffer =
+			data.buffer instanceof ArrayBuffer
 				? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
 				: new Uint8Array(data);
-			const blob = new Blob([buffer], { type: 'image/jpeg' });
-			const bitmap = await createImageBitmap(blob);
-			const frame = new VideoFrame(bitmap, { timestamp: packet.microsecondTimestamp, duration: packet.microsecondDuration });
-			const sample = new VideoSample(frame, { timestamp: packet.timestamp, duration: packet.duration });
-			this.onSample(sample);
-			bitmap.close();
+		const blob = new Blob([buffer], { type: 'image/jpeg' });
+		const bitmap = await createImageBitmap(blob);
+		try {
+			const frame = new VideoFrame(bitmap, {
+				timestamp: packet.microsecondTimestamp,
+				duration: packet.microsecondDuration,
+			});
+			const sample = new VideoSample(frame, {
+				timestamp: packet.timestamp,
+				duration: packet.duration,
+			});
+			await this.onSample(sample);
 		} finally {
-			this._pendingSamples -= 1;
-			this._checkFlushPromise();
-		}
-	}
-
-	_checkFlushPromise() {
-		if (this._flushPromise && this._pendingSamples === 0) {
-			this._flushPromise.resolve();
-			this._flushPromise = null;
+			bitmap.close();
 		}
 	}
 
 	flush() {
-		if (this._flushPromise) {
-			this._checkFlushPromise();
-			return this._flushPromise.promise;
-		}
-		if (this._pendingSamples === 0) {
-			return;
-		}
-		let resolve;
-		const promise = new Promise<void>((res) => {
-			resolve = res;
-		});
-		assert(resolve);
-		this._flushPromise = { resolve, promise };
-		return promise;
+		// Each decode call awaits its output, so there is nothing buffered to flush.
 	}
 
-	async close() {
-		await this.flush();
-	}
+	close() {}
 }
 
 class MjpegEncoder extends CustomVideoEncoder {
-	_pendingSamples: number = 0;
-	_flushPromise: { promise: Promise<void>; resolve: () => void } | null = null;
 	canvas?: OffscreenCanvas;
 	context?: OffscreenCanvasRenderingContext2D;
 	metadata?: EncodedVideoChunkMetadata;
@@ -94,7 +70,7 @@ class MjpegEncoder extends CustomVideoEncoder {
 		return codec === 'mjpeg';
 	}
 
-	init(): MaybePromise<void> {
+	init() {
 		assert(this.config.width && this.config.height);
 		this.canvas = new OffscreenCanvas(this.config.width, this.config.height);
 		this.context = this.canvas.getContext('2d') ?? undefined;
@@ -107,50 +83,25 @@ class MjpegEncoder extends CustomVideoEncoder {
 		};
 	}
 
-	override async encode(videoSample: VideoSample, meta?: VideoEncoderEncodeOptions) {
+	override async encode(videoSample: VideoSample) {
 		assert(this.context && this.canvas);
-		this._pendingSamples += 1;
+		videoSample.draw(this.context, 0, 0, this.config.width, this.config.height);
 
-		try {
-			videoSample.draw(this.context, 0, 0, this.config.width, this.config.height);
+		const imageBlob = await this.canvas.convertToBlob({
+			type: 'image/jpeg',
+			quality: 1,
+		});
+		const packetData = new Uint8Array(await imageBlob.arrayBuffer());
 
-			const imageBlob = await this.canvas.convertToBlob({ type: 'image/jpeg', quality: 1 });
-			const packetData = new Uint8Array(await imageBlob.arrayBuffer());
-
-			const packet = new EncodedPacket(packetData, 'key', videoSample.timestamp, videoSample.duration);
-			this.onPacket(packet, this.metadata);
-		} finally {
-			this._pendingSamples -= 1;
-			this._checkFlushPromise();
-		}
+		const packet = new EncodedPacket(packetData, 'key', videoSample.timestamp, videoSample.duration);
+		await this.onPacket(packet, this.metadata);
 	}
 
-	_checkFlushPromise() {
-		if (this._flushPromise && this._pendingSamples === 0) {
-			this._flushPromise.resolve();
-			this._flushPromise = null;
-		}
+	flush() {
+		// Each encode call awaits its output, so there is nothing buffered to flush.
 	}
 
-	flush(): MaybePromise<void> {
-		if (this._flushPromise) {
-			this._checkFlushPromise();
-			return this._flushPromise.promise;
-		}
-		if (this._pendingSamples === 0) {
-			return;
-		}
-		let resolve;
-		const promise = new Promise<void>(res => {
-			resolve = res;
-		})
-		this._flushPromise = { resolve: resolve!, promise };
-		return promise;
-	}
-
-	close(): MaybePromise<void> {
-		return this._flushPromise?.promise;
-	}
+	close() {}
 }
 
 let decoderRegistered = false;
