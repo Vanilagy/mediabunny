@@ -60,6 +60,8 @@ class MjpegDecoder extends CustomVideoDecoder {
 	close() {}
 }
 
+const quantizerToCanvasQuality = (quantizer: number) => 1 - quantizer / 100;
+
 class MjpegEncoder extends CustomVideoEncoder {
 	canvas?: OffscreenCanvas;
 	context?: OffscreenCanvasRenderingContext2D;
@@ -83,13 +85,14 @@ class MjpegEncoder extends CustomVideoEncoder {
 		};
 	}
 
-	override async encode(videoSample: VideoSample) {
+	override async encode(videoSample: VideoSample, options: VideoEncoderEncodeOptions) {
 		assert(this.context && this.canvas);
 		videoSample.draw(this.context, 0, 0, this.config.width, this.config.height);
 
+		const quality = quantizerToCanvasQuality(options.mjpeg?.quantizer ?? 0);
 		const imageBlob = await this.canvas.convertToBlob({
 			type: 'image/jpeg',
-			quality: 1,
+			quality,
 		});
 		const packetData = new Uint8Array(await imageBlob.arrayBuffer());
 

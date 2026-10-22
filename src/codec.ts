@@ -997,7 +997,7 @@ const VALID_VIDEO_CODEC_STRING_PREFIXES = [
 	'vp09',
 	'av01',
 	...PRORES_FOURCCS,
-	...MJPEG_FOURCCS
+	...MJPEG_FOURCCS,
 ];
 const AVC_CODEC_STRING_REGEX = /^(avc1|avc3)\.[0-9a-fA-F]{6}$/;
 const HEVC_CODEC_STRING_REGEX = /^(hev1|hvc1)\.(?:[ABC]?\d+)\.[0-9a-fA-F]{1,8}\.[LH]\d+(?:\.[0-9a-fA-F]{1,2}){0,6}$/;

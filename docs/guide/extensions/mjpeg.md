@@ -14,11 +14,13 @@ Browsers don't support mjpeg in their WebCodecs implementations. This extension 
 ## Installation
 
 This library peer-depends on Mediabunny. Install both using npm:
+
 ```bash
 npm install mediabunny @mediabunny/mjpeg
 ```
 
 Alternatively, directly include them using a script tag:
+
 ```html
 <script src="mediabunny.js"></script>
 <script src="mediabunny-mjpeg.js"></script>
@@ -29,8 +31,11 @@ This will expose the global objects `Mediabunny` and `MediabunnyMjpeg`. Use `med
 ## Usage
 
 ```ts
-import { registerMjpegDecoder, registerMjpegEncoder } from '@mediabunny/mjpeg';
+import { registerMjpegDecoder, registerMjpegEncoder } from "@mediabunny/mjpeg";
 
 registerMjpegDecoder();
 registerMjpegEncoder();
 ```
+
+The encoder supports quantizers from 0 to 100, where 0 is the highest quality and 100 is the lowest.
+Set `quality: new Quality({ quantizer: 25 })` in your video encoding options to use an explicit quantizer.
