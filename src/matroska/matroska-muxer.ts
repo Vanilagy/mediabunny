@@ -56,7 +56,6 @@ import {
 } from '../subtitles';
 import { aacChannelMap, aacFrequencyTable, buildAacAudioSpecificConfig } from '../../shared/aac-misc';
 import {
-	OPUS_SAMPLE_RATE,
 	PCM_AUDIO_CODECS,
 	PcmAudioCodec,
 	SubtitleCodec,
@@ -72,7 +71,6 @@ import { FileSlice } from '../reader';
 import { Muxer } from '../muxer';
 import { Writer } from '../writer';
 import { EncodedPacket } from '../packet';
-import { parseOpusIdentificationHeader } from '../codec-data';
 import { AttachedFile } from '../metadata';
 import { Logging } from '../logging';
 import { VERSIONED_NAME } from '../version';
@@ -341,21 +339,13 @@ export class MatroskaMuxer extends Muxer {
 
 				if (codec === 'opus') {
 					seekPreRollNs = 1e6 * 80;
-
-					const description = decoderConfig.description;
-					if (description) {
-						const bytes = toUint8Array(description);
-						const header = parseOpusIdentificationHeader(bytes);
-
-						// Use the preSkip value from the header
-						seekPreRollNs = Math.round(1e9 * (header.preSkip / OPUS_SAMPLE_RATE));
-					}
 				} else if (codec === 'aac') {
 					// One frame of overlap, and with SBR, frames are twice as long at the output sample rate
 					const isHeAac = decoderConfig.codec === 'mp4a.40.5' || decoderConfig.codec === 'mp4a.40.29';
 					seekPreRollNs = Math.round(1e9 * (isHeAac ? 2048 : 1024) / sampleRate);
 				} else if (codec === 'mp3') {
-					seekPreRollNs = Math.round(1e9 * 1152 / sampleRate);
+					// One frame of overlap plus one for the bit reservoir, which usually doesn't reach back further
+					seekPreRollNs = Math.round(1e9 * 2 * 1152 / sampleRate);
 				} else if (codec === 'vorbis') {
 					assert(decoderConfig.description);
 

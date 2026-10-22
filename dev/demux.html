@@ -17,7 +17,9 @@
 			source: new Mediabunny.BlobSource(file),
 		});
 
-		console.log(await input.getMetadataTags());
+		const audioTrack = await input.getPrimaryAudioTrack();
+		const sink = new Mediabunny.EncodedPacketSink(audioTrack);
+		console.log(await sink.getPacket(Infinity));
 
 		/*
 		const track = await input.getPrimaryVideoTrack();
