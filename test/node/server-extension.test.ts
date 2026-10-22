@@ -1790,6 +1790,16 @@ describe('Audio', async () => {
 	/** A DTS bitrate that clears the encoder's per-frame minimum at the 48 kHz stereo the tests here use. */
 	const DTS_BITRATE = 768000;
 
+	// In samples, as signaled by FFmpeg's encoders through negative packet timestamps
+	const PRIMING_DELAYS: Partial<Record<AudioCodec, number>> = {
+		aac: 1024,
+		opus: 312,
+		mp3: 1105,
+		vorbis: 128,
+		ac3: 256,
+		eac3: 256,
+	};
+
 	test('Decoder lifecycle', async () => {
 		using input = new Input({
 			source: new FilePathSource('./test/public/trim-buck-bunny-ffmpeg.ts'),
@@ -1880,7 +1890,7 @@ describe('Audio', async () => {
 			expect(packet.type).toBe('key');
 
 			if (packetCount === 0) {
-				expect(packet.timestamp).toBe(0);
+				expect(packet.timestamp).toBe(-1024 / 48000); // Due to priming delay!
 
 				expect(meta.decoderConfig).toBeDefined();
 				expect(meta.decoderConfig!.codec).toBe('mp4a.40.2');
@@ -2158,10 +2168,11 @@ describe('Audio', async () => {
 
 		// The harness' default bitrate is below what DTS needs to fit its per-channel side info into a frame
 		const extraConfig = codec === 'dts' ? { bitrate: DTS_BITRATE } : {};
+		const primingDelay = (PRIMING_DELAYS[codec] ?? 0) / 48000;
 
 		await encodeDecodeTest(codec, extraConfig, async (packet, _meta, i) => {
 			if (i === 0) {
-				expect(packet.timestamp).toBe(startTimestamp);
+				expect(packet.timestamp).toBe(startTimestamp - primingDelay);
 			} else if (testDuration) {
 				expect(packet.timestamp).toBeCloseTo(previousPacket!.timestamp + previousPacket!.duration);
 			}
@@ -2169,7 +2180,9 @@ describe('Audio', async () => {
 		}, async (sample, i) => {
 			if (i === 0) {
 				if (testSampleStart) {
-					expect(sample.timestamp).toBe(startTimestamp);
+					// The decoder discards Opus' pre-skip itself
+					const expectedDelay = codec === 'opus' ? 0 : primingDelay;
+					expect(sample.timestamp).toBe(startTimestamp - expectedDelay);
 				}
 			} else if (testDuration) {
 				expect(sample.timestamp).toBeCloseTo(previousSample!.timestamp + previousSample!.duration);

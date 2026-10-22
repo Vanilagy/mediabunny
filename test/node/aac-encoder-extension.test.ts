@@ -73,6 +73,8 @@ test('AAC encoding', async () => {
 	expect(await track.getSampleRate()).toBe(sampleRate);
 	expect(await track.getNumberOfChannels()).toBe(channels);
 
+	expect(await track.getFirstTimestamp()).toBeLessThan(0); // Due to priming delay!
+
 	const sink = new EncodedPacketSink(track);
 	let packetCount = 0;
 	for await (const packet of sink.packets()) {
@@ -124,5 +126,6 @@ test('AAC with huge timestamps', async () => {
 	const firstPacket = await sink.getFirstPacket();
 	assert(firstPacket);
 
-	expect(firstPacket.timestamp).toBe(timestamp);
+	const primingDelay = 1024 / 48000;
+	expect(firstPacket.timestamp).toBe(timestamp - primingDelay);
 });

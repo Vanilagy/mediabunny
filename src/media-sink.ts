@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { parsePcmCodec, PCM_AUDIO_CODECS, PcmAudioCodec, VideoCodec, AudioCodec } from './codec';
+import { parsePcmCodec, PCM_AUDIO_CODECS, PcmAudioCodec, VideoCodec, AudioCodec, OPUS_SAMPLE_RATE } from './codec';
 import {
 	addAvcBitstreamRestriction,
 	AvcNalUnitType,
@@ -19,6 +19,7 @@ import {
 	iterateAvcNalUnits,
 	iterateHevcNalUnits,
 	parseAvcSps,
+	parseOpusIdentificationHeader,
 	sanitizeHevcPacketForChromium,
 	serializeAvcDecoderConfigurationRecord,
 } from './codec-data';
@@ -2226,11 +2227,16 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 	) {
 		super(onSample, onError);
 
+		// WebCodecs impls discards the preskip (correct) but doesn't advance the timestamp (incorrect)
+		const opusPreSkip = codec === 'opus' && decoderConfig.description
+			? parseOpusIdentificationHeader(toUint8Array(decoderConfig.description)).preSkip / OPUS_SAMPLE_RATE
+			: 0;
+
 		const sampleHandler = (sample: AudioSample) => {
 			let sampleTimestamp = sample.timestamp;
 
 			if (this.expectedFirstTimestamp !== null && this.currentTimestamp === null) {
-				this.timestampOffset = this.expectedFirstTimestamp - sampleTimestamp; ;
+				this.timestampOffset = this.expectedFirstTimestamp + opusPreSkip - sampleTimestamp;
 			}
 
 			sampleTimestamp += this.timestampOffset;

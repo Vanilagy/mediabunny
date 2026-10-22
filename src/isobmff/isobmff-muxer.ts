@@ -30,6 +30,7 @@ import { IsobmffOutputFormatOptions, IsobmffOutputFormat, MovOutputFormat, CmafO
 import { inlineTimestampRegex, SubtitleConfig, SubtitleCue, SubtitleMetadata } from '../subtitles';
 import { aacChannelMap, aacFrequencyTable, buildAacAudioSpecificConfig } from '../../shared/aac-misc';
 import {
+	OPUS_SAMPLE_RATE,
 	parsePcmCodec,
 	PCM_AUDIO_CODECS,
 	PcmAudioCodec,
@@ -46,6 +47,7 @@ import {
 	extractAvcDecoderConfigurationRecord,
 	extractHevcDecoderConfigurationRecord,
 	iterateNalUnitsInAnnexB,
+	parseOpusTocByte,
 	serializeAvcDecoderConfigurationRecord,
 	serializeHevcDecoderConfigurationRecord,
 } from '../codec-data';
@@ -63,6 +65,7 @@ export type Sample = {
 	size: number;
 	type: PacketType;
 	timescaleUnitsToNextSample: number;
+	prerollSamples: number;
 };
 
 type Chunk = {
@@ -136,6 +139,11 @@ export type IsobmffTrackData = {
 		 */
 		requiresAdtsStripping: boolean;
 		primingPacket: EncodedPacket | null;
+		preroll: {
+			packetCount: number;
+			accumulatedAudioSamples: number;
+			audioSampleDurationHistory: number[];
+		};
 	};
 } | {
 	track: OutputSubtitleTrack;
@@ -587,6 +595,11 @@ export class IsobmffMuxer extends Muxer {
 				expectedNextPcmPacketTimestamp: null,
 				requiresAdtsStripping,
 				primingPacket: packet,
+				preroll: {
+					packetCount: 0,
+					accumulatedAudioSamples: 0,
+					audioSampleDurationHistory: [],
+				},
 			},
 			timescale: decoderConfig.sampleRate,
 			samples: [],
@@ -699,6 +712,7 @@ export class IsobmffMuxer extends Muxer {
 				packet.timestamp,
 				packet.duration,
 				packet.type,
+				0,
 			);
 
 			await this.registerSample(trackData, internalSample);
@@ -764,12 +778,43 @@ export class IsobmffMuxer extends Muxer {
 				trackData.info.expectedNextPcmPacketTimestamp = timestamp + duration;
 			}
 
+			const { preroll } = trackData.info;
+
+			// Let's specify how many samples (packets) worth of preroll are needed to decode audio properly, based on
+			// the codec.
+			let prerollSamples = 0;
+			if (track.source._codec === 'aac' || track.source._codec === 'vorbis') {
+				prerollSamples = -Math.min(1, preroll.packetCount);
+			} else if (track.source._codec === 'mp3') {
+				// One packet of overlap plus one for the bit reservoir, which usually doesn't reach back further
+				prerollSamples = -Math.min(2, preroll.packetCount);
+			} else if (track.source._codec === 'opus') {
+				const OPUS_PREROLL_SAMPLES = 0.08 * OPUS_SAMPLE_RATE; // 80 ms
+
+				prerollSamples = -preroll.audioSampleDurationHistory.length;
+
+				const toc = parseOpusTocByte(packetData);
+				preroll.accumulatedAudioSamples += toc.durationInSamples;
+				preroll.audioSampleDurationHistory.push(toc.durationInSamples);
+
+				while (
+					preroll.accumulatedAudioSamples - preroll.audioSampleDurationHistory[0]!
+					>= OPUS_PREROLL_SAMPLES
+				) {
+					preroll.accumulatedAudioSamples -= preroll.audioSampleDurationHistory.shift()!;
+					assert(preroll.audioSampleDurationHistory.length > 0);
+				}
+			}
+
+			preroll.packetCount++;
+
 			const internalSample = this.createSampleForTrack(
 				trackData,
 				packetData,
 				timestamp,
 				duration,
 				packet.type,
+				prerollSamples,
 			);
 
 			await this.registerSample(trackData, internalSample);
@@ -795,6 +840,7 @@ export class IsobmffMuxer extends Muxer {
 				timestamp,
 				duration,
 				'key',
+				0,
 			);
 			await this.registerSample(trackData, paddingSample);
 		}
@@ -860,6 +906,7 @@ export class IsobmffMuxer extends Muxer {
 					trackData.lastCueEndTimestamp,
 					sampleStart - trackData.lastCueEndTimestamp,
 					'key',
+					0,
 				);
 
 				await this.registerSample(trackData, sample);
@@ -909,7 +956,7 @@ export class IsobmffMuxer extends Muxer {
 			}
 
 			const body = this.auxTarget._getSlice(0, this.auxWriter.getPos());
-			const sample = this.createSampleForTrack(trackData, body, sampleStart, sampleEnd - sampleStart, 'key');
+			const sample = this.createSampleForTrack(trackData, body, sampleStart, sampleEnd - sampleStart, 'key', 0);
 
 			await this.registerSample(trackData, sample);
 			trackData.lastCueEndTimestamp = sampleEnd;
@@ -922,6 +969,7 @@ export class IsobmffMuxer extends Muxer {
 		timestamp: number,
 		duration: number,
 		type: PacketType,
+		prerollSamples: number,
 	) {
 		const sample: Sample = {
 			timestamp,
@@ -931,6 +979,7 @@ export class IsobmffMuxer extends Muxer {
 			size: data.byteLength,
 			type,
 			timescaleUnitsToNextSample: intoTimescale(duration, trackData.timescale), // Will be refined
+			prerollSamples,
 		};
 
 		return sample;

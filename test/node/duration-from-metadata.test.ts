@@ -31,12 +31,14 @@ test('Matroska MKV duration metadata', async () => {
 		formats: ALL_FORMATS,
 	});
 
-	expect(await input.getDurationFromMetadata()).toBe(2);
-	expect(await input.computeDuration()).toBe(2);
+	expect(await input.getFirstTimestamp()).toBe(-0.005);
+	expect(await input.getDurationFromMetadata()).toBe(1.995);
+	expect(await input.computeDuration()).toBe(1.995);
 
 	const audioTrack = await input.getPrimaryAudioTrack();
 	assert(audioTrack);
-	expect(await audioTrack.getDurationFromMetadata()).toBe(2);
+	expect(await audioTrack.getFirstTimestamp()).toBe(-0.005);
+	expect(await audioTrack.getDurationFromMetadata()).toBe(1.995);
 });
 
 test('MPEG-TS duration metadata', async () => {

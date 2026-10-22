@@ -17,6 +17,11 @@
 			source: new Mediabunny.BlobSource(file),
 		});
 
+		const audioTrack = await input.getPrimaryAudioTrack();
+		const sink = new Mediabunny.EncodedPacketSink(audioTrack);
+		console.log(await sink.getPacket(Infinity));
+
+		/*
 		const track = await input.getPrimaryVideoTrack();
 		if (!track) {
 			throw new Error('The synthetic file has no video track.');
@@ -25,6 +30,7 @@
 		for await (const packet of new Mediabunny.EncodedPacketSink(track).packets()) {
 			console.log(packet.timestamp)
 		}
+		*/
 
 		/*
 		const track = await input.getPrimaryVideoTrack();
