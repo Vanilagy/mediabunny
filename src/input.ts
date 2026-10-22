@@ -217,6 +217,11 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 		const promise = (async () => {
 			const sourceRef = await this._getSourceUncached(request);
 
+			if (this._disposed) {
+				sourceRef.free();
+				throw new InputDisposedError();
+			}
+
 			const MAX_SOURCE_CACHE_SIZE = 4;
 			const count = arrayCount(
 				this._sourceCache,

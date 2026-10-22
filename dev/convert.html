@@ -25,7 +25,7 @@
 			chunked: true,
 			chunkSize: 2**20
 		});
-		const outputFormat = new Mediabunny.WebMOutputFormat();
+		const outputFormat = new Mediabunny.Mp4OutputFormat();
 
 		const p = document.createElement('p');
 		p.textContent = 'Capturing...';
@@ -59,9 +59,9 @@
 		const tracks = [];
 		let start = 0;
 
-		if (false) {
+		if (true) {
 			input = new Mediabunny.Input({
-				source: new Mediabunny.UrlSource('http://localhost:8000/index.m3u8'),
+				source: new Mediabunny.UrlSource('http://localhost:8080/playlist.m3u8'),
 				formats: Mediabunny.ALL_FORMATS,
 			});
 
@@ -87,7 +87,15 @@
 			});
 		}
 
-		//const primaryTrack = await input.getPrimaryAudioTrack();
+		//let last  = -Infinity;
+		//const primaryTrack = await input.getPrimaryVideoTrack();
+		//for await (const packet of new Mediabunny.EncodedPacketSink(primaryTrack).packets()) {
+		//	console.log(packet.timestamp, packet.duration, packet.timestamp - last)
+		//	last = packet.timestamp;
+		//}
+		//console.log("Done")
+		//return;
+
 		//const startTime = await primaryTrack.getFirstTimestamp();
 		//console.log(startTime)
 

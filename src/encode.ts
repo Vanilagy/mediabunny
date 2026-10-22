@@ -22,7 +22,7 @@ import {
 	VideoCodec,
 } from './codec';
 import { customAudioEncoders, customVideoEncoders } from './custom-coder';
-import { assert, clamp, isFirefox, lerp, MaybePromise, Rotation } from './misc';
+import { assert, clamp, getChromiumVersion, isFirefox, lerp, MaybePromise, Rotation } from './misc';
 import { EncodedPacket } from './packet';
 import { AudioSample, CropRectangle, validateCropRectangle, VideoSample, VideoSampleResource } from './sample';
 
@@ -916,7 +916,10 @@ const VIDEO_CODEC_QUANTIZER_SUPPORT: Partial<Record<VideoCodec, {
 }>> = {
 	avc: { min: 0, max: 51, worst: 41, best: 16 },
 	hevc: { min: 0, max: 51, worst: 41, best: 16 },
-	vp9: { min: 0, max: 63, worst: 52, best: 20 },
+	// Chromium used the 0-63 scale before v145, see https://github.com/Vanilagy/mediabunny/issues/566
+	vp9: (getChromiumVersion() ?? Infinity) < 145
+		? { min: 0, max: 63, worst: 52, best: 20 }
+		: { min: 0, max: 255, worst: 208, best: 80 },
 	av1: { min: 0, max: 255, worst: 208, best: 80 },
 };
 

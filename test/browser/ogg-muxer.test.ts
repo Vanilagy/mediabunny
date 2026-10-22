@@ -245,3 +245,62 @@ test('Opus start offset and end trimming survive a demux-mux roundtrip', async (
 	expect(fromZero.packets[0]!.duration).toBe((SAMPLES_PER_FRAME - PRE_SKIP) / SAMPLE_RATE);
 	expect(fromZero.duration).toBe((packetCount * SAMPLES_PER_FRAME - PRE_SKIP) / SAMPLE_RATE);
 });
+
+test('Granule positions of full pages', async () => {
+	const SAMPLE_RATE = 48000;
+	const SAMPLES_PER_FRAME = 120; // 2.5 ms at 48 kHz
+
+	const opusHead = new Uint8Array(19);
+	const opusHeadView = new DataView(opusHead.buffer);
+	opusHead.set([0x4f, 0x70, 0x75, 0x73, 0x48, 0x65, 0x61, 0x64], 0); // 'OpusHead'
+	opusHead[8] = 1; // Version
+	opusHead[9] = 1; // Channel count
+	opusHeadView.setUint16(10, 312, true); // Pre-skip
+	opusHeadView.setUint32(12, SAMPLE_RATE, true);
+
+	const output = new Output({
+		format: new OggOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const audioSource = new EncodedAudioPacketSource('opus');
+	output.addAudioTrack(audioSource);
+	await output.start();
+
+	// Packets this small fill up all 255 segments of a page before the page reaches its target size
+	const packetDuration = SAMPLES_PER_FRAME / SAMPLE_RATE;
+	for (let i = 0; i < 1000; i++) {
+		const data = new Uint8Array(10);
+		data[0] = 16 << 3;
+
+		await audioSource.add(new EncodedPacket(data, 'key', i * packetDuration, packetDuration), {
+			decoderConfig: {
+				codec: 'opus',
+				numberOfChannels: 1,
+				sampleRate: SAMPLE_RATE,
+				description: opusHead,
+			},
+		});
+	}
+
+	audioSource.close();
+	await output.finalize();
+
+	assert(output.target.buffer);
+
+	const input = new Input({
+		source: new BufferSource(output.target.buffer),
+		formats: ALL_FORMATS,
+	});
+	const sink = new EncodedPacketSink((await input.getPrimaryAudioTrack())!);
+
+	const timestamps: number[] = [];
+	for await (const packet of sink.packets()) {
+		timestamps.push(packet.timestamp);
+	}
+
+	for (const timestamp of timestamps) {
+		const packet = await sink.getPacket(timestamp);
+		expect(packet?.timestamp).toBe(timestamp);
+	}
+});

@@ -251,19 +251,32 @@ export class EncodedPacketSink {
 			return this._track._backing.getKeyPacket(timestamp, options);
 		}
 
-		const packet = await this._track._backing.getKeyPacket(timestamp, options);
-		if (!packet) {
-			return packet;
-		}
-		assert(packet.type === 'key');
+		let packet = await this._track._backing.getKeyPacket(timestamp, options);
+		while (packet) {
+			assert(packet.type === 'key');
 
-		const determinedType = await this._track.determinePacketType(packet);
-		if (determinedType === 'delta') {
-			// Try returning the previous key packet (in hopes that it's actually a key packet)
-			return this.getKeyPacket(packet.timestamp - 1 / await this._track.getTimeResolution(), options);
+			const determinedType = await this._track.determinePacketType(packet);
+			if (determinedType !== 'delta') {
+				return packet;
+			}
+
+			// Try the previous key packet instead (in hopes that it's actually a key packet)
+			let step = 1 / await this._track.getTimeResolution();
+			let previousPacket: EncodedPacket | null;
+			while (true) {
+				previousPacket = await this._track._backing.getKeyPacket(packet.timestamp - step, options);
+				if (!previousPacket || previousPacket.timestamp < packet.timestamp) {
+					break;
+				}
+
+				// Huge timestamps, the step wasn't enough to move us, try again
+				step *= 2;
+			}
+
+			packet = previousPacket;
 		}
 
-		return packet;
+		return null;
 	}
 
 	/**
@@ -286,19 +299,20 @@ export class EncodedPacketSink {
 			return this._track._backing.getNextKeyPacket(packet, options);
 		}
 
-		const nextPacket = await this._track._backing.getNextKeyPacket(packet, options);
-		if (!nextPacket) {
-			return nextPacket;
-		}
-		assert(nextPacket.type === 'key');
+		let nextPacket = await this._track._backing.getNextKeyPacket(packet, options);
+		while (nextPacket) {
+			assert(nextPacket.type === 'key');
 
-		const determinedType = await this._track.determinePacketType(nextPacket);
-		if (determinedType === 'delta') {
-			// Try returning the next key packet (in hopes that it's actually a key packet)
-			return this.getNextKeyPacket(nextPacket, options);
+			const determinedType = await this._track.determinePacketType(nextPacket);
+			if (determinedType !== 'delta') {
+				return nextPacket;
+			}
+
+			// Try the next key packet instead (in hopes that it's actually a key packet)
+			nextPacket = await this._track._backing.getNextKeyPacket(nextPacket, options);
 		}
 
-		return nextPacket;
+		return null;
 	}
 
 	/**
@@ -425,9 +439,13 @@ export class EncodedPacketSink {
 	}
 }
 
+const MAX_QUEUE_SIZE = 4;
+
 abstract class DecoderWrapper<
 	MediaSample extends VideoSample | AudioSample,
 > {
+	onDequeue: (() => unknown) | null = null;
+
 	constructor(
 		public onSample: (sample: MediaSample) => unknown,
 		public onError: (error: unknown) => unknown,
@@ -533,6 +551,7 @@ export abstract class BaseMediaSampleSink<
 					onQueueNotEmpty();
 				}
 			});
+			decoder.onDequeue = () => onQueueDequeue();
 
 			const packetSink = this._createPacketSink();
 			const keyPacket = await packetSink.getKeyPacket(startTimestamp, packetRetrievalOptions)
@@ -552,8 +571,7 @@ export abstract class BaseMediaSampleSink<
 			await packets.next(); // Skip the start packet as we already have it
 
 			while (currentPacket && !ended && !this._track.input._disposed) {
-				const maxQueueSize = computeMaxQueueSize(sampleQueue.length);
-				if (sampleQueue.length + decoder.getDecodeQueueSize() > maxQueueSize) {
+				if (sampleQueue.length + decoder.getDecodeQueueSize() >= MAX_QUEUE_SIZE) {
 					({ promise: queueDequeue, resolve: onQueueDequeue } = promiseWithResolvers());
 					await queueDequeue;
 					continue;
@@ -577,6 +595,7 @@ export abstract class BaseMediaSampleSink<
 
 			if (!firstSampleQueued && lastSample) {
 				sampleQueue.push(lastSample);
+				lastSample = null;
 			}
 
 			decoderIsFlushed = true;
@@ -714,6 +733,7 @@ export abstract class BaseMediaSampleSink<
 					onQueueNotEmpty();
 				}
 			});
+			decoder.onDequeue = () => onQueueDequeue();
 
 			const packetSink = this._createPacketSink();
 			let lastPacket: EncodedPacket | null = null;
@@ -732,8 +752,7 @@ export abstract class BaseMediaSampleSink<
 				decoder.decode(currentPacket);
 
 				while (currentPacket.sequenceNumber < maxSequenceNumber) {
-					const maxQueueSize = computeMaxQueueSize(sampleQueue.length);
-					while (sampleQueue.length + decoder.getDecodeQueueSize() > maxQueueSize && !terminated) {
+					while (sampleQueue.length + decoder.getDecodeQueueSize() >= MAX_QUEUE_SIZE && !terminated) {
 						({ promise: queueDequeue, resolve: onQueueDequeue } = promiseWithResolvers());
 						await queueDequeue;
 					}
@@ -743,7 +762,9 @@ export abstract class BaseMediaSampleSink<
 					}
 
 					const nextPacket = await packetSink.getNextPacket(currentPacket, retrievalOptions);
-					assert(nextPacket);
+					if (!nextPacket) {
+						throw new Error('Internal error: couldn\'t get next packet when one was expected.');
+					}
 
 					decoder.decode(nextPacket);
 					currentPacket = nextPacket;
@@ -877,13 +898,6 @@ export abstract class BaseMediaSampleSink<
 		};
 	}
 }
-
-const computeMaxQueueSize = (decodedSampleQueueSize: number) => {
-	// If we have decoded samples lying around, limit the total queue size to a small value (decoded samples can use up
-	// a lot of memory). If not, we're fine with a much bigger queue of encoded packets waiting to be decoded. In fact,
-	// some decoders only start flushing out decoded chunks when the packet queue is large enough.
-	return decodedSampleQueueSize === 0 ? 40 : 8;
-};
 
 class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	decoder: VideoDecoder | null = null;
@@ -1025,6 +1039,9 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 					this.onError(error);
 				},
 			});
+			this.decoder.addEventListener('dequeue', () => {
+				this.onDequeue?.();
+			});
 			this.decoder.configure(this.decoderConfig);
 		}
 	}
@@ -1056,7 +1073,10 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			void this.customDecoderCallSerializer
 				.call(() => this.customDecoder!.decode(packet))
 				.catch(error => this.onError(error))
-				.finally(() => this.customDecoderQueueSize--);
+				.finally(() => {
+					this.customDecoderQueueSize--;
+					this.onDequeue?.();
+				});
 		} else {
 			assert(this.decoder);
 
@@ -1185,6 +1205,9 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 					error.stack = stack; // Provide a more useful stack trace, the default one sucks
 					this.onError(error);
 				},
+			});
+			this.alphaDecoder.addEventListener('dequeue', () => {
+				this.onDequeue?.();
 			});
 			this.alphaDecoder.configure({
 				...this.decoderConfig,
@@ -2277,6 +2300,9 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 					this.onError(error);
 				},
 			});
+			this.decoder.addEventListener('dequeue', () => {
+				this.onDequeue?.();
+			});
 			this.decoder.configure(decoderConfig);
 		}
 	}
@@ -2296,7 +2322,10 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 			void this.customDecoderCallSerializer
 				.call(() => this.customDecoder!.decode(packet))
 				.catch(error => this.onError(error))
-				.finally(() => this.customDecoderQueueSize--);
+				.finally(() => {
+					this.customDecoderQueueSize--;
+					this.onDequeue?.();
+				});
 		} else {
 			assert(this.decoder);
 
@@ -2472,7 +2501,10 @@ class PcmAudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 	decode(packet: EncodedPacket) {
 		const inputView = toDataView(packet.data);
 
-		const numberOfFrames = packet.byteLength / this.decoderConfig.numberOfChannels / this.inputSampleSize;
+		// A trailing partial frame (only in malformed files) gets dropped
+		const numberOfFrames = Math.floor(
+			packet.byteLength / this.decoderConfig.numberOfChannels / this.inputSampleSize,
+		);
 
 		const outputBufferSize = numberOfFrames * this.decoderConfig.numberOfChannels * this.outputSampleSize;
 		const outputBuffer = new ArrayBuffer(outputBufferSize);

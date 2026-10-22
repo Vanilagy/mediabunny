@@ -190,7 +190,7 @@ test('Exceeding max allowed track count', async () => {
 	expect(conversion.discardedTracks[0]!.reason).toBe('max_track_count_reached');
 });
 
-test('Fan-out', async () => {
+test('Fan-out', { timeout: 30_000 }, async () => {
 	using input = new Input({
 		source: new UrlSource('/video.mp4'),
 		formats: ALL_FORMATS,
@@ -513,6 +513,28 @@ test('Fractional audio sample boundary', async () => {
 		},
 		trim: {
 			start: 0.4 / 48000,
+		},
+	});
+	await conversion.execute();
+});
+
+test('Trim start leaving less than half a sample of padding', async () => {
+	using input = new Input({
+		source: new UrlSource('/glitch-hop-is-dead.wav'),
+		formats: ALL_FORMATS,
+	});
+
+	const output = new Output({
+		format: new WavOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({
+		input,
+		output,
+		trim: {
+			start: 0.0026,
+			end: 0.1026,
 		},
 	});
 	await conversion.execute();

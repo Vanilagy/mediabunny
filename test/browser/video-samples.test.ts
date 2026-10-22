@@ -614,3 +614,17 @@ const encodeAndAssertPacketTypes = async (
 
 	await output.finalize();
 };
+
+test('Treat non-standard VideoFrame color space values as unknown', () => {
+	const frame = new VideoFrame(new Uint8Array(16), { format: 'RGBA', codedWidth: 2, codedHeight: 2, timestamp: 0 });
+
+	Object.defineProperty(frame, 'colorSpace', {
+		value: { primaries: 'unspecified', transfer: 'unspecified', matrix: 'smpte170m', fullRange: true },
+	});
+
+	using sample = new VideoSample(frame);
+	expect(sample.colorSpace.primaries).toBe(null);
+	expect(sample.colorSpace.transfer).toBe(null);
+	expect(sample.colorSpace.matrix).toBe('smpte170m');
+	expect(sample.colorSpace.fullRange).toBe(true);
+});

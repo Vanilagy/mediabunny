@@ -530,7 +530,16 @@ export class VideoSample implements Disposable {
 
 			this.timestamp = init?.timestamp ?? data.timestamp / 1e6;
 			this.duration = init?.duration ?? (data.duration ?? 0) / 1e6;
-			this.colorSpace = new VideoSampleColorSpace(data.colorSpace);
+
+			// Sanitize the inputs we pass in so that out-of-spec values don't throw
+			// See https://github.com/Vanilagy/mediabunny/issues/555
+			const { primaries, transfer, matrix, fullRange } = data.colorSpace;
+			this.colorSpace = new VideoSampleColorSpace({
+				primaries: primaries !== null && primaries in COLOR_PRIMARIES_MAP ? primaries : null,
+				transfer: transfer !== null && transfer in TRANSFER_CHARACTERISTICS_MAP ? transfer : null,
+				matrix: matrix !== null && matrix in MATRIX_COEFFICIENTS_MAP ? matrix : null,
+				fullRange,
+			});
 		} else if (
 			(typeof HTMLImageElement !== 'undefined' && data instanceof HTMLImageElement)
 			|| (typeof SVGImageElement !== 'undefined' && data instanceof SVGImageElement)

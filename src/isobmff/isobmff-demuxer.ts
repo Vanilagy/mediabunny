@@ -95,7 +95,7 @@ import {
 	readDataBox,
 	readFixed_16_16,
 	readFixed_2_30,
-	readIsomVariableInteger,
+	readEsDescriptor,
 	readMetadataStringShort,
 } from './isobmff-reader';
 import {
@@ -197,18 +197,12 @@ type SampleTable = {
 	sampleTimingEntries: SampleTimingEntry[];
 	sampleCompositionTimeOffsets: SampleCompositionTimeOffsetEntry[];
 	sampleSizes: number[];
+	sampleCount: number;
+	cumulativeSampleSizes: number[] | null; // At i, the summed size of all samples before sample i
 	keySampleIndices: number[] | null; // Samples that are keyframes
 	chunkOffsets: number[];
 	sampleToChunk: SampleToChunkEntry[];
-	presentationTimestamps: {
-		presentationTimestamp: number;
-		sampleIndex: number;
-	}[] | null;
-	/**
-	 * Provides a fast map from sample index to index in the sorted presentation timestamps array - so, a fast map from
-	 * decode order to presentation order.
-	 */
-	presentationTimestampIndexMap: number[] | null;
+	sortedCompositionTimeOffsets: SampleCompositionTimeOffsetEntry[] | null; // Sorted by presentation timestamp
 };
 type SampleTimingEntry = {
 	startIndex: number;
@@ -220,6 +214,9 @@ type SampleCompositionTimeOffsetEntry = {
 	startIndex: number;
 	count: number;
 	offset: number;
+	startTimestamp: number; // Of the first sample
+	lastTimestamp: number; // Of the last sample
+	maxLastTimestamp: number; // Over this and all entries before it in presentation order
 };
 type SampleToChunkEntry = {
 	startSampleIndex: number;
@@ -239,6 +236,8 @@ type FragmentTrackDefaults = {
 type FragmentLookupTableEntry = {
 	timestamp: number;
 	moofOffset: number;
+	trunNumber: number; // 1-indexed
+	sampleNumber: number; // 1-indexed
 };
 
 type FragmentTrackState = {
@@ -267,6 +266,7 @@ type FragmentTrackData = {
 		sampleIndex: number;
 	}[];
 	startTimestampIsFinal: boolean;
+	trunSampleCounts: number[];
 	encryptionAuxInfo: SampleEncryptionAuxInfo | null;
 };
 
@@ -285,6 +285,12 @@ type Fragment = {
 	implicitBaseDataOffset: number;
 	trackData: Map<InternalTrack['id'], FragmentTrackData>;
 	psshBoxes: PsshBox[];
+	sampleCount: number;
+};
+
+type FragmentSummary = {
+	moofSize: number;
+	trackIds: Set<number>; // The tracks with samples in the fragment
 };
 
 type TrackEncryptionInfo = {
@@ -317,12 +323,16 @@ type SampleEncryptionAuxInfo = {
 	resolved: SampleEncryptionInfo[] | null;
 };
 
+// Anything beyond this is malicious
+const MAX_BOX_NESTING_DEPTH = 64;
+
 export class IsobmffDemuxer extends Demuxer {
 	reader: Reader;
 	moovSlice: FileSlice | null = null;
 
 	currentTrack: InternalTrack | null = null;
 	tracks: InternalTrack[] = [];
+	idToTrack = new Map<number, InternalTrack>();
 	metadataPromise: Promise<void> | null = null;
 	movieTimescale = -1;
 	movieDurationInTimescale = -1;
@@ -332,16 +342,19 @@ export class IsobmffDemuxer extends Demuxer {
 	currentMetadataKeys: Map<number, string> | null = null;
 
 	isFragmented = false;
-	fragmentTrackDefaults: FragmentTrackDefaults[] = [];
+	fragmentTrackDefaults = new Map<number, FragmentTrackDefaults>();
 	psshBoxes: PsshBox[] = [];
 	currentFragment: Fragment | null = null;
+	isReadingTraf = false;
 	/**
 	 * Caches the last fragment that was read. Based on the assumption that there will be multiple reads to the
 	 * same fragment in quick succession.
 	 */
 	lastReadFragment: Fragment | null = null;
+	fragmentSummaries = new Map<number, FragmentSummary>(); // Keyed by moof offset
 
 	decryptionKeyCache = new Map<string, Promise<Uint8Array>>();
+	boxNestingDepth = 0;
 
 	constructor(input: Input) {
 		super(input);
@@ -392,7 +405,7 @@ export class IsobmffDemuxer extends Demuxer {
 					break;
 				}
 
-				if (boxInfo.name === 'ftyp' || boxInfo.name === 'styp') {
+				if ((boxInfo.name === 'ftyp' || boxInfo.name === 'styp') && slice.remainingLength >= 4) {
 					const majorBrand = readAscii(slice, 4);
 					this.isQuickTime = majorBrand === 'qt  ';
 				} else if (boxInfo.name === 'moov') {
@@ -404,6 +417,10 @@ export class IsobmffDemuxer extends Demuxer {
 
 					this.moovSlice = moovSlice;
 					this.readContiguousBoxes(this.moovSlice);
+
+					if (this.movieTimescale === -1) {
+						throw new Error('Invalid moov box: missing mvhd box.');
+					}
 
 					for (const track of this.tracks) {
 						// Modify the edit list offset based on the previous segment durations. They are in different
@@ -479,6 +496,20 @@ export class IsobmffDemuxer extends Demuxer {
 					}
 				}
 			}
+
+			for (const track of this.tracks) {
+				// Sort by timestamp in case it's not naturally sorted, and remove multiple entries for the same time
+				const table = track.fragmentLookupTable;
+				table.sort((a, b) => a.timestamp - b.timestamp);
+
+				let writeIndex = 0;
+				for (const entry of table) {
+					if (writeIndex === 0 || entry.timestamp !== table[writeIndex - 1]!.timestamp) {
+						table[writeIndex++] = entry;
+					}
+				}
+				table.length = writeIndex;
+			}
 		})();
 	}
 
@@ -534,10 +565,12 @@ export class IsobmffDemuxer extends Demuxer {
 					const videoTrack = track as InternalVideoTrack;
 					track.trackBacking = new IsobmffVideoTrackBacking(videoTrack);
 					this.tracks.push(track);
+					this.idToTrack.set(track.id, track);
 				} else if (track.info.type === 'audio' && track.info.numberOfChannels !== -1) {
 					const audioTrack = track as InternalAudioTrack;
 					track.trackBacking = new IsobmffAudioTrackBacking(audioTrack);
 					this.tracks.push(track);
+					this.idToTrack.set(track.id, track);
 				}
 			} else {
 				// The track didn't have enough info to warrant a backing
@@ -554,11 +587,12 @@ export class IsobmffDemuxer extends Demuxer {
 			sampleTimingEntries: [],
 			sampleCompositionTimeOffsets: [],
 			sampleSizes: [],
+			sampleCount: 0,
+			cumulativeSampleSizes: null,
 			keySampleIndices: null,
 			chunkOffsets: [],
 			sampleToChunk: [],
-			presentationTimestamps: null,
-			presentationTimestampIndexMap: null,
+			sortedCompositionTimeOffsets: null,
 		};
 		internalTrack.sampleTable = sampleTable;
 
@@ -572,14 +606,45 @@ export class IsobmffDemuxer extends Demuxer {
 		const stblContainerSlice = this.moovSlice.slice(internalTrack.sampleTableByteOffset);
 
 		this.currentTrack = internalTrack;
-		this.traverseBox(stblContainerSlice);
-		this.currentTrack = null;
+		try {
+			this.traverseBox(stblContainerSlice);
+		} catch (error) {
+			internalTrack.sampleTable = null;
+			throw error;
+		} finally {
+			this.currentTrack = null;
+		}
+
+		const lastTimingEntry = last(sampleTable.sampleTimingEntries);
+		const lastChunkEntryIndex = binarySearchLessOrEqual(
+			sampleTable.sampleToChunk,
+			sampleTable.chunkOffsets.length - 1,
+			x => x.startChunkIndex,
+		);
+		const lastChunkEntry = sampleTable.sampleToChunk[lastChunkEntryIndex];
+
+		// Clamp the sample count on the minimum of what all the subentries tell us
+		sampleTable.sampleCount = Math.min(
+			sampleTable.sampleCount,
+			lastTimingEntry ? lastTimingEntry.startIndex + lastTimingEntry.count : 0,
+			lastChunkEntry
+				? lastChunkEntry.startSampleIndex
+				+ (sampleTable.chunkOffsets.length - lastChunkEntry.startChunkIndex) * lastChunkEntry.samplesPerChunk
+				: 0,
+		);
+
+		capEntryCounts(sampleTable.sampleTimingEntries, sampleTable.sampleCount);
+		capEntryCounts(sampleTable.sampleCompositionTimeOffsets, sampleTable.sampleCount);
 
 		const isPcmCodec = internalTrack.info?.type === 'audio'
 			&& internalTrack.info.codec
 			&& (PCM_AUDIO_CODECS as readonly string[]).includes(internalTrack.info.codec);
 
-		if (isPcmCodec && sampleTable.sampleCompositionTimeOffsets.length === 0) {
+		if (
+			isPcmCodec
+			&& sampleTable.sampleCompositionTimeOffsets.length === 0
+			&& sampleTable.sampleTimingEntries.length > 0
+		) {
 			// If the audio has PCM samples, the way the samples are defined in the sample table is somewhat
 			// suboptimal: Each individual audio sample is its own sample, meaning we can have 48000 samples per second.
 			// Because we treat each sample as its own atomic unit that can be decoded, this would lead to a huge
@@ -597,8 +662,11 @@ export class IsobmffDemuxer extends Demuxer {
 			for (let i = 0; i < sampleTable.sampleToChunk.length; i++) {
 				const chunkEntry = sampleTable.sampleToChunk[i]!;
 				const nextEntry = sampleTable.sampleToChunk[i + 1];
-				const chunkCount = (nextEntry ? nextEntry.startChunkIndex : sampleTable.chunkOffsets.length)
-					- chunkEntry.startChunkIndex;
+				const chunkCount = Math.min(
+					nextEntry ? nextEntry.startChunkIndex : Infinity,
+					sampleTable.chunkOffsets.length,
+				) - chunkEntry.startChunkIndex;
+				const newStartSampleIndex = newSampleSizes.length;
 
 				for (let j = 0; j < chunkCount; j++) {
 					const startSampleIndex = chunkEntry.startSampleIndex + j * chunkEntry.samplesPerChunk;
@@ -629,7 +697,7 @@ export class IsobmffDemuxer extends Demuxer {
 					} else {
 						// One sample for the entire chunk
 						newSampleTimingEntries.push({
-							startIndex: chunkEntry.startChunkIndex + j,
+							startIndex: newSampleSizes.length,
 							startDecodeTimestamp: firstSampleTimestamp,
 							count: 1,
 							delta,
@@ -647,54 +715,83 @@ export class IsobmffDemuxer extends Demuxer {
 					newSampleSizes.push(chunkSize);
 				}
 
-				chunkEntry.startSampleIndex = chunkEntry.startChunkIndex;
+				// The new samples are numbered consecutively, even if the chunks don't start at the first one
+				chunkEntry.startSampleIndex = newStartSampleIndex;
 				chunkEntry.samplesPerChunk = 1;
 			}
 
 			sampleTable.sampleTimingEntries = newSampleTimingEntries;
 			sampleTable.sampleSizes = newSampleSizes;
+			sampleTable.sampleCount = newSampleSizes.length;
 		}
 
 		if (sampleTable.sampleCompositionTimeOffsets.length > 0) {
-			// If composition time offsets are defined, we must build a list of all presentation timestamps and then
-			// sort them
-			sampleTable.presentationTimestamps = [];
+			// Presentation order differs from decode order. Let's prepare the offset entries for timestamped-keyed
+			// random access later
+			const entries = sampleTable.sampleCompositionTimeOffsets;
+			const lastEntry = last(entries)!;
+			const coveredSampleCount = lastEntry.startIndex + lastEntry.count;
+			if (coveredSampleCount < sampleTable.sampleCount) {
+				// The remaining samples have no offset
+				entries.push({
+					startIndex: coveredSampleCount,
+					count: sampleTable.sampleCount - coveredSampleCount,
+					offset: 0,
+					startTimestamp: -1,
+					lastTimestamp: -1,
+					maxLastTimestamp: -1,
+				});
+			}
 
-			for (const entry of sampleTable.sampleTimingEntries) {
-				for (let i = 0; i < entry.count; i++) {
-					sampleTable.presentationTimestamps.push({
-						presentationTimestamp: entry.startDecodeTimestamp + i * entry.delta,
-						sampleIndex: entry.startIndex + i,
-					});
+			const sortedEntries = entries.filter(entry => entry.count > 0);
+
+			const timingEntries = sampleTable.sampleTimingEntries;
+			let timingEntryIndex = 0;
+			const getDecodeTimestampAhead = (sampleIndex: number) => {
+				while (
+					timingEntryIndex + 1 < timingEntries.length
+					&& timingEntries[timingEntryIndex + 1]!.startIndex <= sampleIndex
+				) {
+					timingEntryIndex++;
 				}
+
+				const timingEntry = timingEntries[timingEntryIndex]!;
+				return timingEntry.startDecodeTimestamp + (sampleIndex - timingEntry.startIndex) * timingEntry.delta;
+			};
+
+			for (const entry of sortedEntries) {
+				const lastSampleIndex = entry.startIndex + entry.count - 1;
+				entry.startTimestamp = getDecodeTimestampAhead(entry.startIndex) + entry.offset;
+				entry.lastTimestamp = getDecodeTimestampAhead(lastSampleIndex) + entry.offset;
 			}
 
-			for (const entry of sampleTable.sampleCompositionTimeOffsets) {
-				for (let i = 0; i < entry.count; i++) {
-					const sampleIndex = entry.startIndex + i;
-					const sample = sampleTable.presentationTimestamps[sampleIndex];
-					if (!sample) {
-						continue;
-					}
+			sortedEntries.sort((a, b) => a.startTimestamp - b.startTimestamp || a.startIndex - b.startIndex);
 
-					sample.presentationTimestamp += entry.offset;
-				}
+			let maxLastTimestamp = -Infinity;
+			for (const entry of sortedEntries) {
+				maxLastTimestamp = Math.max(maxLastTimestamp, entry.lastTimestamp);
+				entry.maxLastTimestamp = maxLastTimestamp;
 			}
 
-			sampleTable.presentationTimestamps.sort((a, b) => a.presentationTimestamp - b.presentationTimestamp);
-
-			sampleTable.presentationTimestampIndexMap = Array(sampleTable.presentationTimestamps.length).fill(-1);
-			for (let i = 0; i < sampleTable.presentationTimestamps.length; i++) {
-				sampleTable.presentationTimestampIndexMap[sampleTable.presentationTimestamps[i]!.sampleIndex] = i;
-			}
+			sampleTable.sortedCompositionTimeOffsets = sortedEntries;
 		} else {
 			// If they're not defined, we can simply use the decode timestamps as presentation timestamps
+		}
+
+		if (sampleTable.sampleSizes.length > 1) {
+			sampleTable.cumulativeSampleSizes = [0];
+
+			for (let i = 0; i < sampleTable.sampleSizes.length; i++) {
+				sampleTable.cumulativeSampleSizes.push(
+					sampleTable.cumulativeSampleSizes[i]! + sampleTable.sampleSizes[i]!,
+				);
+			}
 		}
 
 		return sampleTable;
 	}
 
-	async readFragment(startPos: number): Promise<Fragment> {
+	async readFragment(startPos: number): Promise<Fragment | null> {
 		if (this.lastReadFragment?.moofOffset === startPos) {
 			return this.lastReadFragment;
 		}
@@ -708,12 +805,17 @@ export class IsobmffDemuxer extends Demuxer {
 
 		let entireSlice = this.reader.requestSlice(startPos, moofBoxInfo.totalSize);
 		if (isThenable(entireSlice)) entireSlice = await entireSlice;
-		assert(entireSlice);
+		if (!entireSlice) return null; // The moof box is cut off
 
 		this.traverseBox(entireSlice);
 
 		const fragment = this.lastReadFragment;
 		assert(fragment && fragment.moofOffset === startPos);
+
+		this.fragmentSummaries.set(startPos, {
+			moofSize: fragment.moofSize,
+			trackIds: new Set(fragment.trackData.keys()),
+		});
 
 		for (const [, trackData] of fragment.trackData) {
 			const track = trackData.track;
@@ -727,10 +829,32 @@ export class IsobmffDemuxer extends Demuxer {
 				// lookup starts sequentially from the start, incrementally summing up all fragment durations. It's sort
 				// of implicit, but it ends up working nicely.
 
-				const lookupEntry = track.fragmentLookupTable.find(x => x.moofOffset === fragment.moofOffset);
-				if (lookupEntry) {
-					// There's a lookup entry, let's use its timestamp
-					offsetFragmentTrackDataByTimestamp(trackData, lookupEntry.timestamp);
+				// The table is sorted by timestamp, which for any sane file means it's also sorted by offset
+				const lookupEntryIndex = binarySearchExact(
+					track.fragmentLookupTable,
+					fragment.moofOffset,
+					x => x.moofOffset,
+				);
+				const lookupEntry = track.fragmentLookupTable[lookupEntryIndex];
+				const lookupEntryIsValid = lookupEntry
+					&& trackData.trunSampleCounts.length >= lookupEntry.trunNumber
+					&& trackData.trunSampleCounts[lookupEntry.trunNumber - 1]! >= lookupEntry.sampleNumber;
+
+				if (lookupEntryIsValid) {
+					// We ignore traf number here, since we've already matched based on track ID
+
+					let sampleIndex = 0;
+					for (let i = 1; i < lookupEntry.trunNumber; i++) {
+						sampleIndex += trackData.trunSampleCounts[i - 1]!;
+					}
+
+					sampleIndex += lookupEntry.sampleNumber - 1;
+					const sample = trackData.samples[sampleIndex];
+					assert(sample); // Must hold due to the above range checks
+
+					// The timestamp in the lookup entry describes the timestamp of the referenced sample
+					const timestampOffset = lookupEntry.timestamp - sample.presentationTimestamp;
+					offsetFragmentTrackDataByTimestamp(trackData, timestampOffset);
 				} else {
 					const lastCacheIndex = binarySearchLessOrEqual(
 						fragmentPositionCache,
@@ -738,7 +862,7 @@ export class IsobmffDemuxer extends Demuxer {
 						x => x.moofOffset,
 					);
 					if (lastCacheIndex !== -1) {
-						// Let's use the timestamp of the previous fragment in the cache
+						// Let's use the end timestamp of the previous fragment in the cache
 						const lastCache = fragmentPositionCache[lastCacheIndex]!;
 						offsetFragmentTrackDataByTimestamp(trackData, lastCache.endTimestamp);
 					} else {
@@ -756,9 +880,13 @@ export class IsobmffDemuxer extends Demuxer {
 				trackData.startTimestamp,
 				x => x.startTimestamp,
 			);
+			const previousEntry = fragmentPositionCache[insertionIndex];
+			const nextEntry = fragmentPositionCache[insertionIndex + 1];
+
+			// Only remember it if the timestamp order matches the moof offset order
 			if (
-				insertionIndex === -1
-				|| fragmentPositionCache[insertionIndex]!.moofOffset !== fragment.moofOffset
+				(!previousEntry || previousEntry.moofOffset < fragment.moofOffset)
+				&& (!nextEntry || nextEntry.moofOffset > fragment.moofOffset)
 			) {
 				fragmentPositionCache.splice(insertionIndex + 1, 0, {
 					moofOffset: fragment.moofOffset,
@@ -786,14 +914,23 @@ export class IsobmffDemuxer extends Demuxer {
 	}
 
 	readContiguousBoxes(slice: FileSlice) {
+		if (this.boxNestingDepth === MAX_BOX_NESTING_DEPTH) {
+			throw new Error('Invalid file: boxes are nested too deeply.');
+		}
+
 		const startIndex = slice.filePos;
+		this.boxNestingDepth++;
 
-		while (slice.filePos - startIndex <= slice.length - MIN_BOX_HEADER_SIZE) {
-			const foundBox = this.traverseBox(slice);
+		try {
+			while (slice.filePos - startIndex <= slice.length - MIN_BOX_HEADER_SIZE) {
+				const foundBox = this.traverseBox(slice);
 
-			if (!foundBox) {
-				break;
+				if (!foundBox) {
+					break;
+				}
 			}
+		} finally {
+			this.boxNestingDepth--;
 		}
 	}
 
@@ -848,11 +985,19 @@ export class IsobmffDemuxer extends Demuxer {
 					this.movieDurationInTimescale = readU32Be(slice);
 				}
 
+				if (this.movieTimescale === 0) {
+					throw new Error('Invalid mvhd box: timescale must not be 0.');
+				}
+
 				slice.skip(4 + 2 + 2 + 2 * 4); // Rate, volume, reserved
 				this.movieMatrix = readMatrix(slice);
 			}; break;
 
 			case 'trak': {
+				if (this.currentFragment || this.currentTrack) {
+					break; // Misplaced
+				}
+
 				const track = {
 					id: -1,
 					demuxer: this,
@@ -886,15 +1031,22 @@ export class IsobmffDemuxer extends Demuxer {
 
 				this.readContiguousBoxes(slice.slice(contentStartPos, boxInfo.contentSize));
 
-				if (track.id !== -1 && track.timescale !== -1 && track.info !== null) {
+				if (
+					track.id !== -1
+					&& track.timescale !== -1
+					&& track.info !== null
+					&& track.sampleTableByteOffset !== -1
+				) {
 					if (track.info.type === 'video' && track.info.width !== -1) {
 						const videoTrack = track as InternalVideoTrack;
 						track.trackBacking = new IsobmffVideoTrackBacking(videoTrack);
 						this.tracks.push(track);
+						this.idToTrack.set(track.id, track);
 					} else if (track.info.type === 'audio' && track.info.numberOfChannels !== -1) {
 						const audioTrack = track as InternalAudioTrack;
 						track.trackBacking = new IsobmffAudioTrackBacking(audioTrack);
 						this.tracks.push(track);
+						this.idToTrack.set(track.id, track);
 					}
 				}
 
@@ -903,7 +1055,7 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'tkhd': {
 				const track = this.currentTrack;
-				if (!track) {
+				if (!track || this.currentFragment) {
 					break;
 				}
 
@@ -999,6 +1151,10 @@ export class IsobmffDemuxer extends Demuxer {
 					slice.skip(16);
 					track.timescale = readU32Be(slice);
 					track.durationInMediaTimescale = readU64Be(slice);
+				}
+
+				if (track.timescale === 0) {
+					throw new Error('Invalid mdhd box: timescale must not be 0.');
 				}
 
 				let language = readU16Be(slice);
@@ -1392,8 +1548,16 @@ export class IsobmffDemuxer extends Demuxer {
 				track.encryptionInfo.defaultPerSampleIvSize = readU8(slice);
 				track.encryptionInfo.defaultKid = bytesToHexString(readBytes(slice, 16));
 
+				if (track.encryptionInfo.defaultPerSampleIvSize > 16) {
+					throw new Error('Invalid tenc box: IV size must not exceed 16 bytes.');
+				}
+
 				if (track.encryptionInfo.defaultIsProtected && track.encryptionInfo.defaultPerSampleIvSize === 0) {
 					const constantIvSize = readU8(slice);
+					if (constantIvSize > 16) {
+						throw new Error('Invalid tenc box: IV size must not exceed 16 bytes.');
+					}
+
 					const constantIv = new Uint8Array(16);
 					constantIv.set(readBytes(slice, constantIvSize), 0);
 					track.encryptionInfo.defaultConstantIv = constantIv;
@@ -1402,10 +1566,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'avcC': {
 				const track = this.currentTrack;
-				if (!track) {
+				if (!track || track.info?.type !== 'video') {
 					break;
 				}
-				assert(track.info);
 
 				if (boxInfo.contentSize === 0) {
 					// avcC box is empty, let's treat this like an Annex B stream
@@ -1424,10 +1587,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'hvcC': {
 				const track = this.currentTrack;
-				if (!track) {
+				if (!track || track.info?.type !== 'video') {
 					break;
 				}
-				assert(track.info);
 
 				if (boxInfo.contentSize === 0) {
 					// hvcC box is empty, let's treat this like an Annex B stream
@@ -1446,10 +1608,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'vpcC': {
 				const track = this.currentTrack;
-				if (!track) {
+				if (!track || track.info?.type !== 'video') {
 					break;
 				}
-				assert(track.info?.type === 'video');
 
 				slice.skip(4); // Version + flags
 
@@ -1477,10 +1638,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'av1C': {
 				const track = this.currentTrack;
-				if (!track) {
+				if (!track || track.info?.type !== 'video') {
 					break;
 				}
-				assert(track.info?.type === 'video');
 
 				slice.skip(1); // Marker + version
 
@@ -1524,10 +1684,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'colr': {
 				const track = this.currentTrack;
-				if (!track) {
+				if (!track || track.info?.type !== 'video') {
 					break;
 				}
-				assert(track.info?.type === 'video');
 
 				const colourType = readAscii(slice, 4);
 				if (colourType !== 'nclx' && colourType !== 'nclc') {
@@ -1553,10 +1712,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'pasp': {
 				const track = this.currentTrack;
-				if (!track) {
+				if (!track || track.info?.type !== 'video') {
 					break;
 				}
-				assert(track.info?.type === 'video');
 
 				const num = readU32Be(slice);
 				const den = readU32Be(slice);
@@ -1601,47 +1759,7 @@ export class IsobmffDemuxer extends Demuxer {
 
 				slice.skip(4); // Version + flags
 
-				const tag = readU8(slice);
-				assert(tag === 0x03); // ES Descriptor
-
-				readIsomVariableInteger(slice); // Length
-
-				slice.skip(2); // ES ID
-				const mixed = readU8(slice);
-
-				const streamDependenceFlag = (mixed & 0x80) !== 0;
-				const urlFlag = (mixed & 0x40) !== 0;
-				const ocrStreamFlag = (mixed & 0x20) !== 0;
-
-				if (streamDependenceFlag) {
-					slice.skip(2);
-				}
-				if (urlFlag) {
-					const urlLength = readU8(slice);
-					slice.skip(urlLength);
-				}
-				if (ocrStreamFlag) {
-					slice.skip(2);
-				}
-
-				const decoderConfigTag = readU8(slice);
-				assert(decoderConfigTag === 0x04); // DecoderConfigDescriptor
-
-				const decoderConfigDescriptorLength = readIsomVariableInteger(slice); // Length
-
-				const payloadStart = slice.filePos;
-
-				const objectTypeIndication = readU8(slice);
-				if (track.info.type === 'video') {
-					const streamType = readU8(slice) >>> 2;
-					if (objectTypeIndication === 0x6c && streamType === 4) {
-						track.info.codec = 'mjpeg';
-					} else {
-						Logging._warn(`Unsupported video codec (objectTypeIndication ${objectTypeIndication}).`);
-					}
-					break;
-				}
-
+				const { objectTypeIndication, decoderSpecificInfo } = readEsDescriptor(slice);
 				if (objectTypeIndication === 0x40 || objectTypeIndication === 0x67) {
 					track.info.codec = 'aac';
 					track.info.aacCodecInfo = {
@@ -1660,16 +1778,18 @@ export class IsobmffDemuxer extends Demuxer {
 					);
 				}
 
-				slice.skip(1 + 3 + 4 + 4);
+				if (track.info.type === 'video') {
+					const streamType = readU8(slice) >>> 2;
+					if (objectTypeIndication === 0x6c && streamType === 4) {
+						track.info.codec = 'mjpeg';
+					} else {
+						Logging._warn(`Unsupported video codec (objectTypeIndication ${objectTypeIndication}).`);
+					}
+					break;
+				}
 
-				if (decoderConfigDescriptorLength > slice.filePos - payloadStart) {
-					// There's a DecoderSpecificInfo at the end, let's read it
-
-					const decoderSpecificInfoTag = readU8(slice);
-					assert(decoderSpecificInfoTag === 0x05); // DecoderSpecificInfo
-
-					const decoderSpecificInfoLength = readIsomVariableInteger(slice);
-					track.info.codecDescription = readBytes(slice, decoderSpecificInfoLength);
+				if (decoderSpecificInfo) {
+					track.info.codecDescription = decoderSpecificInfo;
 
 					if (track.info.codec === 'aac') {
 						// Let's try to deduce more accurate values directly from the AudioSpecificConfig:
@@ -1686,20 +1806,18 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'enda': {
 				const track = this.currentTrack;
-				if (!track) {
+				if (!track || track.info?.type !== 'audio') {
 					break;
 				}
-				assert(track.info?.type === 'audio');
 
 				track.info.pcmLittleEndian = !!(readU16Be(slice) & 0xff); // 0xff is from FFmpeg
 			}; break;
 
 			case 'pcmC': {
 				const track = this.currentTrack;
-				if (!track) {
+				if (!track || track.info?.type !== 'audio') {
 					break;
 				}
-				assert(track.info?.type === 'audio');
 
 				slice.skip(1 + 3); // Version + flags
 
@@ -1712,10 +1830,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'dOps': { // Used for Opus audio
 				const track = this.currentTrack;
-				if (!track) {
+				if (!track || track.info?.type !== 'audio') {
 					break;
 				}
-				assert(track.info?.type === 'audio');
 
 				slice.skip(1); // Version
 
@@ -1753,10 +1870,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'dfLa': { // Used for FLAC audio
 				const track = this.currentTrack;
-				if (!track) {
+				if (!track || track.info?.type !== 'audio') {
 					break;
 				}
-				assert(track.info?.type === 'audio');
 
 				slice.skip(4); // Version + flags
 
@@ -1810,10 +1926,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'dac3': { // AC3SpecificBox
 				const track = this.currentTrack;
-				if (!track) {
+				if (!track || track.info?.type !== 'audio') {
 					break;
 				}
-				assert(track.info?.type === 'audio');
 
 				const bytes = readBytes(slice, 3);
 				const bitstream = new Bitstream(bytes);
@@ -1832,10 +1947,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'dec3': { // EC3SpecificBox
 				const track = this.currentTrack;
-				if (!track) {
+				if (!track || track.info?.type !== 'audio') {
 					break;
 				}
-				assert(track.info?.type === 'audio');
 
 				const bytes = readBytes(slice, boxInfo.contentSize);
 				const config = parseEac3Config(bytes);
@@ -1855,10 +1969,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'ddts': { // DTSSpecificBox
 				const track = this.currentTrack;
-				if (!track) {
+				if (!track || track.info?.type !== 'audio') {
 					break;
 				}
-				assert(track.info?.type === 'audio');
 
 				const bytes = readBytes(slice, Math.min(boxInfo.contentSize, DTS_SPECIFIC_BOX_SIZE));
 				const config = parseDtsSpecificBox(bytes);
@@ -1931,6 +2044,9 @@ export class IsobmffDemuxer extends Demuxer {
 						startIndex: sampleIndex,
 						count: sampleCount,
 						offset: sampleOffset,
+						startTimestamp: -1,
+						lastTimestamp: -1,
+						maxLastTimestamp: -1,
 					});
 
 					sampleIndex += sampleCount;
@@ -1960,6 +2076,8 @@ export class IsobmffDemuxer extends Demuxer {
 				} else {
 					track.sampleTable.sampleSizes.push(sampleSize);
 				}
+
+				track.sampleTable.sampleCount = sampleCount;
 			}; break;
 
 			case 'stz2': {
@@ -1978,6 +2096,10 @@ export class IsobmffDemuxer extends Demuxer {
 				const fieldSize = readU8(slice); // in bits
 				const sampleCount = readU32Be(slice);
 
+				if (fieldSize !== 4 && fieldSize !== 8 && fieldSize !== 16) {
+					throw new Error(`Invalid stz2 box: unsupported field size ${fieldSize}.`);
+				}
+
 				const bytes = readBytes(slice, Math.ceil(sampleCount * fieldSize / 8));
 				const bitstream = new Bitstream(bytes);
 
@@ -1985,6 +2107,8 @@ export class IsobmffDemuxer extends Demuxer {
 					const sampleSize = bitstream.readBits(fieldSize);
 					track.sampleTable.sampleSizes.push(sampleSize);
 				}
+
+				track.sampleTable.sampleCount = sampleCount;
 			}; break;
 
 			case 'stss': {
@@ -2007,6 +2131,9 @@ export class IsobmffDemuxer extends Demuxer {
 					track.sampleTable.keySampleIndices.push(sampleIndex);
 				}
 
+				// We binary search this list, so it must be sorted
+				track.sampleTable.keySampleIndices.sort((a, b) => a - b);
+
 				if (track.sampleTable.keySampleIndices[0] !== 0) {
 					// Some files don't mark the first sample a key sample, which is basically almost always incorrect.
 					// Here, we correct for that mistake:
@@ -2027,11 +2154,19 @@ export class IsobmffDemuxer extends Demuxer {
 				slice.skip(4);
 
 				const entryCount = readU32Be(slice);
+				let skippedEntryCount = 0;
 
 				for (let i = 0; i < entryCount; i++) {
 					const startChunkIndex = readU32Be(slice) - 1; // Convert to 0-indexed
 					const samplesPerChunk = readU32Be(slice);
 					const sampleDescriptionIndex = readU32Be(slice);
+
+					const lastEntry = last(track.sampleTable.sampleToChunk);
+					if (lastEntry && startChunkIndex <= lastEntry.startChunkIndex) {
+						// Keeping it would mess up the sample-to-chunk mapping and make chunk iteration blow up
+						skippedEntryCount++;
+						continue;
+					}
 
 					track.sampleTable.sampleToChunk.push({
 						startSampleIndex: -1,
@@ -2039,6 +2174,13 @@ export class IsobmffDemuxer extends Demuxer {
 						samplesPerChunk,
 						sampleDescriptionIndex,
 					});
+				}
+
+				if (skippedEntryCount > 0) {
+					Logging._warn(
+						`Skipped ${skippedEntryCount} invalid stsc entries whose chunk indices weren't strictly`
+						+ ' increasing.',
+					);
 				}
 
 				let startSampleIndex = 0;
@@ -2117,7 +2259,7 @@ export class IsobmffDemuxer extends Demuxer {
 				const defaultSampleFlags = readU32Be(slice);
 
 				// We store these separately rather than in the tracks since the tracks may not exist yet
-				this.fragmentTrackDefaults.push({
+				this.fragmentTrackDefaults.set(trackId, {
 					trackId,
 					defaultSampleDescriptionIndex,
 					defaultSampleDuration,
@@ -2131,7 +2273,7 @@ export class IsobmffDemuxer extends Demuxer {
 				slice.skip(3); // Flags
 
 				const trackId = readU32Be(slice);
-				const track = this.tracks.find(x => x.id === trackId);
+				const track = this.idToTrack.get(trackId);
 				if (!track) {
 					break;
 				}
@@ -2153,50 +2295,59 @@ export class IsobmffDemuxer extends Demuxer {
 					const time = version === 1 ? readU64Be(slice) : readU32Be(slice);
 					const moofOffset = version === 1 ? readU64Be(slice) : readU32Be(slice);
 
-					readTrafNum(slice);
-					readTrunNum(slice);
-					readSampleNum(slice);
+					readTrafNum(slice); // Not used
+					const trunNumber = readTrunNum(slice);
+					const sampleNumber = readSampleNum(slice);
 
-					track.fragmentLookupTable.push({
-						timestamp: time,
-						moofOffset,
-					});
-				}
-
-				// Sort by timestamp in case it's not naturally sorted
-				track.fragmentLookupTable.sort((a, b) => a.timestamp - b.timestamp);
-
-				// Remove multiple entries for the same time
-				for (let i = 0; i < track.fragmentLookupTable.length - 1; i++) {
-					const entry1 = track.fragmentLookupTable[i]!;
-					const entry2 = track.fragmentLookupTable[i + 1]!;
-
-					if (entry1.timestamp === entry2.timestamp) {
-						track.fragmentLookupTable.splice(i + 1, 1);
-						i--;
+					if (trunNumber >= 1 && sampleNumber >= 1) {
+						track.fragmentLookupTable.push({
+							timestamp: time,
+							moofOffset,
+							trunNumber,
+							sampleNumber,
+						});
+					} else {
+						// Invalid
 					}
 				}
+
+				// The table gets sorted and deduplicated once all metadata has been read
 			}; break;
 
 			case 'moof': {
+				if (this.currentFragment) {
+					break; // Nested moof boxes make no sense
+				}
+
 				this.currentFragment = {
 					moofOffset: startPos,
 					moofSize: boxInfo.totalSize,
 					implicitBaseDataOffset: startPos,
 					trackData: new Map(),
 					psshBoxes: [],
+					sampleCount: 0,
 				};
 
-				this.readContiguousBoxes(slice.slice(contentStartPos, boxInfo.contentSize));
-
-				this.lastReadFragment = this.currentFragment;
-				this.currentFragment = null;
+				try {
+					this.readContiguousBoxes(slice.slice(contentStartPos, boxInfo.contentSize));
+					this.lastReadFragment = this.currentFragment;
+				} finally {
+					this.currentFragment = null;
+					this.currentTrack = null;
+				}
 			}; break;
 
 			case 'traf': {
-				assert(this.currentFragment);
+				if (!this.currentFragment || this.isReadingTraf) {
+					break;
+				}
 
-				this.readContiguousBoxes(slice.slice(contentStartPos, boxInfo.contentSize));
+				this.isReadingTraf = true;
+				try {
+					this.readContiguousBoxes(slice.slice(contentStartPos, boxInfo.contentSize));
+				} finally {
+					this.isReadingTraf = false;
+				}
 
 				// It is possible that there is no current track, for example when we don't care about the track
 				// referenced in the track fragment header.
@@ -2273,7 +2424,10 @@ export class IsobmffDemuxer extends Demuxer {
 			}; break;
 
 			case 'tfhd': {
-				assert(this.currentFragment);
+				// Only the first tfhd of a traf counts; anywhere else, there'd be no traf to finish the track data
+				if (!this.currentFragment || !this.isReadingTraf || this.currentTrack) {
+					break;
+				}
 
 				slice.skip(1); // Version
 
@@ -2287,13 +2441,18 @@ export class IsobmffDemuxer extends Demuxer {
 				const defaultBaseIsMoof = Boolean(flags & 0x020000);
 
 				const trackId = readU32Be(slice);
-				const track = this.tracks.find(x => x.id === trackId);
+				const track = this.idToTrack.get(trackId);
 				if (!track) {
 					// We don't care about this track
 					break;
 				}
 
-				const defaults = this.fragmentTrackDefaults.find(x => x.trackId === trackId);
+				if (this.currentFragment.trackData.has(trackId)) {
+					Logging._warn(`Multiple traf boxes for track ${trackId} in the same moof box; skipping.`);
+					break;
+				}
+
+				const defaults = this.fragmentTrackDefaults.get(trackId);
 
 				this.currentTrack = track;
 				track.currentFragmentState = {
@@ -2330,11 +2489,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'tfdt': {
 				const track = this.currentTrack;
-				if (!track) {
+				if (!track?.currentFragmentState) {
 					break;
 				}
-
-				assert(track.currentFragmentState);
 
 				const version = readU8(slice);
 				slice.skip(3); // Flags
@@ -2345,12 +2502,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'trun': {
 				const track = this.currentTrack;
-				if (!track) {
+				if (!track?.currentFragmentState || !this.currentFragment) {
 					break;
 				}
-
-				assert(this.currentFragment);
-				assert(track.currentFragmentState);
 
 				slice.skip(1); // Version
 				const flags = readU24Be(slice);
@@ -2362,6 +2516,24 @@ export class IsobmffDemuxer extends Demuxer {
 				const sampleCompositionTimeOffsetsPresent = Boolean(flags & 0x000800);
 
 				const sampleCount = readU32Be(slice);
+
+				const { defaultSampleDuration, defaultSampleSize, defaultSampleFlags } = track.currentFragmentState;
+				if (
+					sampleCount > 0
+					&& (
+						(!sampleDurationPresent && defaultSampleDuration === null)
+						|| (!sampleSizePresent && defaultSampleSize === null)
+						|| (!sampleFlagsPresent && defaultSampleFlags === null)
+					)
+				) {
+					throw new Error('Invalid trun box: sample values are missing and there are no defaults.');
+				}
+
+				this.currentFragment.sampleCount += sampleCount;
+				if (this.currentFragment.sampleCount > 2 ** 20) {
+					// Safety measure
+					throw new Error('Too many (> 2^20) samples in fragment.');
+				}
 
 				let dataOffset: number | null = null;
 				if (dataOffsetPresent) {
@@ -2394,34 +2566,34 @@ export class IsobmffDemuxer extends Demuxer {
 						samples: [],
 						presentationTimestamps: [],
 						startTimestampIsFinal: false,
+						trunSampleCounts: [],
 						encryptionAuxInfo: null,
 					};
 					this.currentFragment.trackData.set(track.id, trackData);
 				}
+
+				trackData.trunSampleCounts.push(sampleCount);
 
 				for (let i = 0; i < sampleCount; i++) {
 					let sampleDuration: number;
 					if (sampleDurationPresent) {
 						sampleDuration = readU32Be(slice);
 					} else {
-						assert(track.currentFragmentState.defaultSampleDuration !== null);
-						sampleDuration = track.currentFragmentState.defaultSampleDuration;
+						sampleDuration = defaultSampleDuration!;
 					}
 
 					let sampleSize: number;
 					if (sampleSizePresent) {
 						sampleSize = readU32Be(slice);
 					} else {
-						assert(track.currentFragmentState.defaultSampleSize !== null);
-						sampleSize = track.currentFragmentState.defaultSampleSize;
+						sampleSize = defaultSampleSize!;
 					}
 
 					let sampleFlags: number;
 					if (sampleFlagsPresent) {
 						sampleFlags = readU32Be(slice);
 					} else {
-						assert(track.currentFragmentState.defaultSampleFlags !== null);
-						sampleFlags = track.currentFragmentState.defaultSampleFlags;
+						sampleFlags = defaultSampleFlags!;
 					}
 					if (i === 0 && firstSampleFlags !== null) {
 						sampleFlags = firstSampleFlags;
@@ -2531,8 +2703,7 @@ export class IsobmffDemuxer extends Demuxer {
 					break;
 				}
 
-				assert(this.currentFragment);
-				const trackData = this.currentFragment.trackData.get(track.id);
+				const trackData = this.currentFragment?.trackData.get(track.id);
 				if (!trackData) {
 					break;
 				}
@@ -2543,7 +2714,9 @@ export class IsobmffDemuxer extends Demuxer {
 
 				const sampleCount = readU32Be(slice);
 				const ivSize = track.encryptionInfo.defaultPerSampleIvSize;
-				assert(ivSize !== null);
+				if (ivSize === null) {
+					throw new Error('Invalid file: encrypted track is missing its tenc box.');
+				}
 
 				for (let i = 0; i < Math.min(sampleCount, trackData.samples.length); i++) {
 					// Normalize the IV to 16 bytes so downstream code can assume a full-length buffer. For CTR with
@@ -2552,8 +2725,10 @@ export class IsobmffDemuxer extends Demuxer {
 					const iv = new Uint8Array(16);
 					if (ivSize > 0) {
 						iv.set(readBytes(slice, ivSize), 0);
+					} else if (track.encryptionInfo.defaultConstantIv) {
+						iv.set(track.encryptionInfo.defaultConstantIv, 0);
 					} else {
-						iv.set(track.encryptionInfo.defaultConstantIv!, 0);
+						throw new Error('Invalid file: encrypted sample has no IV.');
 					}
 
 					let subsamples: SampleEncryptionInfo['subsamples'] = null;
@@ -2696,6 +2871,10 @@ export class IsobmffDemuxer extends Demuxer {
 
 				for (let i = 0; i < entryCount; i++) {
 					const keySize = readU32Be(slice);
+					if (keySize < 8) {
+						throw new Error('Invalid keys box: key size must be at least 8.');
+					}
+
 					slice.skip(4); // Key namespace
 					const keyName = textDecoder.decode(readBytes(slice, keySize - 8));
 
@@ -3164,16 +3343,15 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			(fragment) => {
 				if (fragment === locationInFragment.fragment) {
 					const trackData = fragment.trackData.get(this.internalTrack.id)!;
-					const nextKeyFrameIndex = trackData.samples.findIndex(
-						(x, i) => x.isKeyFrame && i > locationInFragment.sampleIndex,
-					);
 
-					if (nextKeyFrameIndex !== -1) {
-						// We can simply take the next key frame in the fragment
-						return {
-							sampleIndex: nextKeyFrameIndex,
-							correctSampleFound: true,
-						};
+					for (let i = locationInFragment.sampleIndex + 1; i < trackData.samples.length; i++) {
+						if (trackData.samples[i]!.isKeyFrame) {
+							// We can simply take the next key frame in the fragment
+							return {
+								sampleIndex: i,
+								correctSampleFound: true,
+							};
+						}
 					}
 				} else {
 					const trackData = fragment.trackData.get(this.internalTrack.id);
@@ -3325,6 +3503,10 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		// The timestamp for which we know the correct sample will not come after it
 		latestTimestamp: number,
 		options: PacketRetrievalOptions,
+		// The position for which we know the correct sample will not come after it
+		stopPos = Infinity,
+		// How many times we've retried due to a faulty lookup table entry
+		lookupRetryCount = 0,
 	): Promise<EncodedPacket | null> {
 		const demuxer = this.internalTrack.demuxer;
 
@@ -3369,6 +3551,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			lookupEntry?.moofOffset ?? 0,
 			positionCacheEntry?.moofOffset ?? 0,
 		) || null;
+		const lookupTableWins = !!lookupEntry && lookupEntry.moofOffset >= (positionCacheEntry?.moofOffset ?? 0);
 
 		let currentPos: number;
 
@@ -3384,13 +3567,24 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			}
 		}
 
-		while (true) {
+		const scanStartPos = currentFragment ? currentFragment.moofOffset : currentPos;
+
+		while (currentPos < stopPos) {
 			if (currentFragment) {
 				const trackData = currentFragment.trackData.get(this.internalTrack.id);
 				if (trackData && trackData.startTimestamp > latestTimestamp) {
 					// We're already past the upper bound, no need to keep searching
 					break;
 				}
+
+				currentFragment = null; // So we don't process it again next iteration
+			}
+
+			const summary = demuxer.fragmentSummaries.get(currentPos);
+			if (summary && !summary.trackIds.has(this.internalTrack.id)) {
+				// We've read this fragment before and know it has nothing for this track, so let's not read it again
+				currentPos += summary.moofSize;
+				continue;
 			}
 
 			// Load the header
@@ -3406,6 +3600,10 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 
 			if (boxInfo.name === 'moof') {
 				currentFragment = await demuxer.readFragment(boxStartPos);
+				if (!currentFragment) {
+					break;
+				}
+
 				const { sampleIndex, correctSampleFound } = getMatchInFragment(currentFragment);
 				if (correctSampleFound) {
 					return this.fetchPacketInFragment(currentFragment, sampleIndex, options);
@@ -3419,20 +3617,26 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			currentPos = boxStartPos + boxInfo.totalSize;
 		}
 
-		// Catch faulty lookup table entries
-		if (lookupEntry && (!bestFragment || bestFragment.moofOffset < lookupEntry.moofOffset)) {
-			// The lookup table entry lied to us! We found a lookup entry but no fragment there that satisfied
-			// the match. In this case, let's search again but using the lookup entry before that.
-			const previousLookupEntry = this.internalTrack.fragmentLookupTable[lookupEntryIndex - 1];
-			assert(!previousLookupEntry || previousLookupEntry.timestamp < lookupEntry.timestamp);
+		// Handle unsatisfactory lookup table entries or position cache entries
+		if (lookupEntryPosition !== null && (!bestFragment || bestFragment.moofOffset < lookupEntryPosition)) {
+			// We found a lookup entry but no fragment from there on that satisfied the match. In this case, let's
+			// search again but using a previous entry of the kind we started from. Each time this happens, we double
+			// the backwards step to perform better (and have more sequential reads) if it takes us a long time to find
+			// the media.
+			const step = 1 << lookupRetryCount;
+			const previousEntryTimestamp = lookupTableWins
+				? this.internalTrack.fragmentLookupTable[lookupEntryIndex - step]?.timestamp
+				: this.internalTrack.fragmentPositionCache[positionCacheIndex - step]?.startTimestamp;
+			const newSearchTimestamp = previousEntryTimestamp ?? -Infinity;
 
-			const newSearchTimestamp = previousLookupEntry?.timestamp ?? -Infinity;
 			return this.performFragmentedLookup(
 				null,
 				getMatchInFragment,
 				newSearchTimestamp,
 				latestTimestamp,
 				options,
+				scanStartPos, // So we don't read the same fragments again
+				lookupRetryCount + 1,
 			);
 		}
 
@@ -3636,17 +3840,8 @@ class IsobmffAudioTrackBacking extends IsobmffTrackBacking implements InputAudio
 }
 
 const getSampleIndexForTimestamp = (sampleTable: SampleTable, timescaleUnits: number) => {
-	if (sampleTable.presentationTimestamps) {
-		const index = binarySearchLessOrEqual(
-			sampleTable.presentationTimestamps,
-			timescaleUnits,
-			x => x.presentationTimestamp,
-		);
-		if (index === -1) {
-			return -1;
-		}
-
-		return sampleTable.presentationTimestamps[index]!.sampleIndex;
+	if (sampleTable.sortedCompositionTimeOffsets) {
+		return performPresentationTimeLookup(sampleTable, timescaleUnits, false);
 	} else {
 		const index = binarySearchLessOrEqual(
 			sampleTable.sampleTimingEntries,
@@ -3658,6 +3853,10 @@ const getSampleIndexForTimestamp = (sampleTable: SampleTable, timescaleUnits: nu
 		}
 
 		const entry = sampleTable.sampleTimingEntries[index]!;
+		if (entry.delta === 0) {
+			return entry.startIndex + entry.count - 1; // All samples share the same timestamp
+		}
+
 		return entry.startIndex
 			+ Math.min(
 				Math.floor((timescaleUnits - entry.startDecodeTimestamp) / entry.delta),
@@ -3672,27 +3871,8 @@ const getKeyframeSampleIndexForTimestamp = (sampleTable: SampleTable, timescaleU
 		return getSampleIndexForTimestamp(sampleTable, timescaleUnits);
 	}
 
-	if (sampleTable.presentationTimestamps) {
-		const index = binarySearchLessOrEqual(
-			sampleTable.presentationTimestamps,
-			timescaleUnits,
-			x => x.presentationTimestamp,
-		);
-		if (index === -1) {
-			return -1;
-		}
-
-		// Walk the samples in presentation order until we find one that's a keyframe
-		for (let i = index; i >= 0; i--) {
-			const sampleIndex = sampleTable.presentationTimestamps[i]!.sampleIndex;
-			const isKeyFrame = binarySearchExact(sampleTable.keySampleIndices, sampleIndex, x => x) !== -1;
-
-			if (isKeyFrame) {
-				return sampleIndex;
-			}
-		}
-
-		return -1;
+	if (sampleTable.sortedCompositionTimeOffsets) {
+		return performPresentationTimeLookup(sampleTable, timescaleUnits, true);
 	} else {
 		const sampleIndex = getSampleIndexForTimestamp(sampleTable, timescaleUnits);
 
@@ -3707,16 +3887,16 @@ type SampleInfo = {
 	sampleOffset: number;
 	sampleSize: number;
 	chunkOffset: number;
-	chunkSize: number;
 	isKeyFrame: boolean;
 };
 
 const getSampleInfo = (sampleTable: SampleTable, sampleIndex: number): SampleInfo | null => {
-	const timingEntryIndex = binarySearchLessOrEqual(sampleTable.sampleTimingEntries, sampleIndex, x => x.startIndex);
-	const timingEntry = sampleTable.sampleTimingEntries[timingEntryIndex];
-	if (!timingEntry || timingEntry.startIndex + timingEntry.count <= sampleIndex) {
+	if (sampleIndex >= sampleTable.sampleCount) {
 		return null;
 	}
+
+	const timingEntryIndex = binarySearchLessOrEqual(sampleTable.sampleTimingEntries, sampleIndex, x => x.startIndex);
+	const timingEntry = sampleTable.sampleTimingEntries[timingEntryIndex]!;
 
 	const decodeTimestamp = timingEntry.startDecodeTimestamp
 		+ (sampleIndex - timingEntry.startIndex) * timingEntry.delta;
@@ -3733,8 +3913,7 @@ const getSampleInfo = (sampleTable: SampleTable, sampleIndex: number): SampleInf
 
 	const sampleSize = sampleTable.sampleSizes[Math.min(sampleIndex, sampleTable.sampleSizes.length - 1)]!;
 	const chunkEntryIndex = binarySearchLessOrEqual(sampleTable.sampleToChunk, sampleIndex, x => x.startSampleIndex);
-	const chunkEntry = sampleTable.sampleToChunk[chunkEntryIndex];
-	assert(chunkEntry);
+	const chunkEntry = sampleTable.sampleToChunk[chunkEntryIndex]!;
 
 	const chunkIndex = chunkEntry.startChunkIndex
 		+ Math.floor((sampleIndex - chunkEntry.startSampleIndex) / chunkEntry.samplesPerChunk);
@@ -3742,33 +3921,21 @@ const getSampleInfo = (sampleTable: SampleTable, sampleIndex: number): SampleInf
 
 	const startSampleIndexOfChunk = chunkEntry.startSampleIndex
 		+ (chunkIndex - chunkEntry.startChunkIndex) * chunkEntry.samplesPerChunk;
-	let chunkSize = 0;
 	let sampleOffset = chunkOffset;
 
 	if (sampleTable.sampleSizes.length === 1) {
 		sampleOffset += sampleSize * (sampleIndex - startSampleIndexOfChunk);
-		chunkSize += sampleSize * chunkEntry.samplesPerChunk;
 	} else {
-		for (let i = startSampleIndexOfChunk; i < startSampleIndexOfChunk + chunkEntry.samplesPerChunk; i++) {
-			const sampleSize = sampleTable.sampleSizes[i]!;
-
-			if (i < sampleIndex) {
-				sampleOffset += sampleSize;
-			}
-			chunkSize += sampleSize;
-		}
+		sampleOffset += sampleTable.cumulativeSampleSizes![sampleIndex]!
+			- sampleTable.cumulativeSampleSizes![startSampleIndexOfChunk]!;
 	}
 
 	let duration = timingEntry.delta;
-	if (sampleTable.presentationTimestamps) {
+	if (sampleTable.sortedCompositionTimeOffsets) {
 		// In order to accurately compute the duration, we need to take the duration to the next sample in presentation
 		// order, not in decode order
-		const presentationIndex = sampleTable.presentationTimestampIndexMap![sampleIndex];
-		assert(presentationIndex !== undefined);
-
-		if (presentationIndex < sampleTable.presentationTimestamps.length - 1) {
-			const nextEntry = sampleTable.presentationTimestamps[presentationIndex + 1]!;
-			const nextPresentationTimestamp = nextEntry.presentationTimestamp;
+		const nextPresentationTimestamp = getNextPresentationTimestamp(sampleTable, sampleIndex, presentationTimestamp);
+		if (nextPresentationTimestamp !== null) {
 			duration = nextPresentationTimestamp - presentationTimestamp;
 		}
 	}
@@ -3779,11 +3946,115 @@ const getSampleInfo = (sampleTable: SampleTable, sampleIndex: number): SampleInf
 		sampleOffset,
 		sampleSize,
 		chunkOffset,
-		chunkSize,
 		isKeyFrame: sampleTable.keySampleIndices
 			? binarySearchExact(sampleTable.keySampleIndices, sampleIndex, x => x) !== -1
 			: true,
 	};
+};
+
+const performPresentationTimeLookup = (
+	sampleTable: SampleTable,
+	timestamp: number,
+	keyFramesOnly: boolean,
+) => {
+	const entries = sampleTable.sortedCompositionTimeOffsets!;
+	let bestSampleIndex = -1;
+	let bestTimestamp = -Infinity;
+
+	// Walk back until no entry can beat the best sample found so far anymore
+	const startIndex = binarySearchLessOrEqual(entries, timestamp, x => x.startTimestamp);
+	for (let i = startIndex; i >= 0; i--) {
+		const entry = entries[i]!;
+		if (entry.maxLastTimestamp < bestTimestamp) {
+			break;
+		}
+
+		let sampleIndex = entry.lastTimestamp <= timestamp
+			? entry.startIndex + entry.count - 1
+			: findFirstSampleInEntry(sampleTable, entry, (_, otherTimestamp) => otherTimestamp > timestamp) - 1;
+		if (keyFramesOnly) {
+			const keySampleIndex = binarySearchLessOrEqual(sampleTable.keySampleIndices!, sampleIndex, x => x);
+			sampleIndex = sampleTable.keySampleIndices![keySampleIndex] ?? -1;
+		}
+		if (sampleIndex < entry.startIndex) {
+			continue; // Nothing suitable in this entry
+		}
+
+		const presentationTimestamp = getDecodeTimestamp(sampleTable, sampleIndex) + entry.offset;
+		if (
+			presentationTimestamp > bestTimestamp
+			|| (presentationTimestamp === bestTimestamp && sampleIndex > bestSampleIndex)
+		) {
+			bestSampleIndex = sampleIndex;
+			bestTimestamp = presentationTimestamp;
+		}
+	}
+
+	return bestSampleIndex;
+};
+
+const getNextPresentationTimestamp = (sampleTable: SampleTable, sampleIndex: number, presentationTimestamp: number) => {
+	const entries = sampleTable.sortedCompositionTimeOffsets!;
+	const lastStartedEntryIndex = binarySearchLessOrEqual(entries, presentationTimestamp, x => x.startTimestamp);
+
+	// No entry starting later can beat the first one of them
+	let nextTimestamp = entries[lastStartedEntryIndex + 1]?.startTimestamp ?? null;
+
+	// Walk back until no entry can beat the best sample found so far anymore
+	for (let i = lastStartedEntryIndex; i >= 0; i--) {
+		const entry = entries[i]!;
+		if (entry.maxLastTimestamp < presentationTimestamp) {
+			break;
+		}
+
+		const nextSampleIndex = findFirstSampleInEntry(
+			sampleTable,
+			entry,
+			(otherSampleIndex, otherTimestamp) => otherTimestamp > presentationTimestamp
+				|| (otherTimestamp === presentationTimestamp && otherSampleIndex > sampleIndex),
+		);
+		if (nextSampleIndex === entry.startIndex + entry.count) {
+			continue; // Nothing after the sample in this entry
+		}
+
+		const timestamp = getDecodeTimestamp(sampleTable, nextSampleIndex) + entry.offset;
+		if (nextTimestamp === null || timestamp < nextTimestamp) {
+			nextTimestamp = timestamp;
+		}
+	}
+
+	return nextTimestamp;
+};
+
+const findFirstSampleInEntry = (
+	sampleTable: SampleTable,
+	entry: SampleCompositionTimeOffsetEntry,
+	predicate: (sampleIndex: number, presentationTimestamp: number) => boolean,
+) => {
+	// The samples of an entry are in presentation order, so this binary searches for the first one satisfying the
+	// predicate
+
+	let low = entry.startIndex;
+	let high = entry.startIndex + entry.count;
+
+	while (low < high) {
+		const mid = Math.floor((low + high) / 2);
+
+		if (predicate(mid, getDecodeTimestamp(sampleTable, mid) + entry.offset)) {
+			high = mid;
+		} else {
+			low = mid + 1;
+		}
+	}
+
+	return low;
+};
+
+const getDecodeTimestamp = (sampleTable: SampleTable, sampleIndex: number) => {
+	const timingEntryIndex = binarySearchLessOrEqual(sampleTable.sampleTimingEntries, sampleIndex, x => x.startIndex);
+	const timingEntry = sampleTable.sampleTimingEntries[timingEntryIndex]!;
+
+	return timingEntry.startDecodeTimestamp + (sampleIndex - timingEntry.startIndex) * timingEntry.delta;
 };
 
 const getNextKeyframeIndexForSample = (sampleTable: SampleTable, sampleIndex: number) => {
@@ -3845,6 +4116,17 @@ const sampleTableIsEmpty = (sampleTable: SampleTable) => {
 	return sampleTable.sampleSizes.length === 0;
 };
 
+const capEntryCounts = (entries: { startIndex: number; count: number }[], sampleCount: number) => {
+	while (entries.length > 0 && last(entries)!.startIndex >= sampleCount) {
+		entries.pop();
+	}
+
+	const lastEntry = last(entries);
+	if (lastEntry) {
+		lastEntry.count = Math.min(lastEntry.count, sampleCount - lastEntry.startIndex);
+	}
+};
+
 const getOrCreateEncryptionAuxInfo = (track: InternalTrack) => {
 	if (track.currentFragmentState) {
 		return track.currentFragmentState.encryptionAuxInfo ??= {
@@ -3895,7 +4177,9 @@ const resolveEncryptionAuxInfo = async (
 	}
 
 	const ivSize = encryptionInfo.defaultPerSampleIvSize;
-	assert(ivSize !== null);
+	if (ivSize === null) {
+		throw new Error('Invalid file: encrypted track is missing its tenc box.');
+	}
 
 	// Each aux entry has the same byte layout as a senc entry: IV (of size ivSize, or the constant IV from tenc
 	// when ivSize is 0), then optionally subsample count + [clearLen, protectedLen] pairs. Subsamples are present
@@ -3909,8 +4193,10 @@ const resolveEncryptionAuxInfo = async (
 		const iv = new Uint8Array(16);
 		if (ivSize > 0) {
 			iv.set(readBytes(slice, ivSize), 0);
+		} else if (encryptionInfo.defaultConstantIv) {
+			iv.set(encryptionInfo.defaultConstantIv, 0);
 		} else {
-			iv.set(encryptionInfo.defaultConstantIv!, 0);
+			throw new Error('Invalid file: encrypted sample has no IV.');
 		}
 
 		let subsamples: { clearLen: number; protectedLen: number }[] | null = null;
@@ -3950,7 +4236,9 @@ const decryptSample = async (
 ): Promise<Uint8Array> => {
 	assert(track.encryptionInfo);
 	const encryptionInfo = track.encryptionInfo;
-	assert(encryptionInfo.defaultKid !== null);
+	if (encryptionInfo.defaultKid === null) {
+		throw new Error('Invalid file: encrypted track is missing its tenc box.');
+	}
 
 	const keyId = encryptionInfo.defaultKid;
 	let keyBytes: Uint8Array;
@@ -4050,6 +4338,7 @@ const decryptCtr = async (
 		sampleEncryption.subsamples,
 		encryptionInfo.defaultCryptByteBlock,
 		encryptionInfo.defaultSkipByteBlock,
+		data.length,
 	);
 
 	// Concatenate all crypt ranges into a single buffer so the continuous CTR counter behavior is preserved
@@ -4119,7 +4408,7 @@ const decryptCbcs = (
 
 	// Pattern decryption: IV is reset at the start of each subsample. Within a subsample, the CBC chain continues
 	// across skipped blocks (the IV after a crypt group carries over to the next crypt group's first block).
-	const cryptRanges = collectCryptRanges(sampleEncryption.subsamples, cryptByteBlock, skipByteBlock);
+	const cryptRanges = collectCryptRanges(sampleEncryption.subsamples, cryptByteBlock, skipByteBlock, data.length);
 	const ivView = new DataView(sampleEncryption.iv.buffer, sampleEncryption.iv.byteOffset, 16);
 
 	for (const range of cryptRanges) {
@@ -4149,12 +4438,17 @@ const collectCryptRanges = (
 	subsamples: { clearLen: number; protectedLen: number }[],
 	cryptByteBlock: number,
 	skipByteBlock: number,
+	dataLength: number,
 ) => {
 	const ranges: { perSubsample: { offset: number; length: number }[] }[] = [];
 	const hasPattern = cryptByteBlock !== 0 || skipByteBlock !== 0;
 
 	let cursor = 0;
 	for (const subsample of subsamples) {
+		if (cursor + subsample.clearLen + subsample.protectedLen > dataLength) {
+			throw new Error('Invalid encryption info: subsamples exceed the sample size.');
+		}
+
 		cursor += subsample.clearLen;
 
 		const perSubsample: { offset: number; length: number }[] = [];

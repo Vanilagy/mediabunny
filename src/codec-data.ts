@@ -171,20 +171,23 @@ export const extractNalUnitTypeForAvc = (byte: number) => {
 };
 
 const removeEmulationPreventionBytes = (data: Uint8Array) => {
-	const result: number[] = [];
+	const result = new Uint8Array(data.length); // The result can only be shorter
 	const len = data.length;
+	let resultLength = 0;
 
 	for (let i = 0; i < len; i++) {
 		// Look for the 0x000003 pattern
 		if (i + 2 < len && data[i] === 0x00 && data[i + 1] === 0x00 && data[i + 2] === 0x03) {
-			result.push(0x00, 0x00); // Push the first two bytes
+			// Push the first two bytes
+			result[resultLength++] = 0x00;
+			result[resultLength++] = 0x00;
 			i += 2; // Skip the 0x03 byte
 		} else {
-			result.push(data[i]!);
+			result[resultLength++] = data[i]!;
 		}
 	}
 
-	return new Uint8Array(result);
+	return result.subarray(0, resultLength);
 };
 
 export const addEmulationPreventionBytes = (data: Uint8Array) => {
@@ -297,11 +300,12 @@ export const extractAvcDecoderConfigurationRecord = (packetData: Uint8Array): Av
 			const nalUnit = packetData.subarray(loc.offset, loc.offset + loc.length);
 			const type = extractNalUnitTypeForAvc(nalUnit[0]!);
 
-			if (type === AvcNalUnitType.SPS) {
+			// The counts are capped at what the record can hold
+			if (type === AvcNalUnitType.SPS && spsUnits.length < 31) {
 				spsUnits.push(nalUnit);
-			} else if (type === AvcNalUnitType.PPS) {
+			} else if (type === AvcNalUnitType.PPS && ppsUnits.length < 255) {
 				ppsUnits.push(nalUnit);
-			} else if (type === AvcNalUnitType.SPS_EXT) {
+			} else if (type === AvcNalUnitType.SPS_EXT && spsExtUnits.length < 255) {
 				spsExtUnits.push(nalUnit);
 			}
 		}
@@ -317,7 +321,9 @@ export const extractAvcDecoderConfigurationRecord = (packetData: Uint8Array): Av
 		// Let's get the first SPS for profile and level information
 		const spsData = spsUnits[0]!;
 		const spsInfo = parseAvcSps(spsData);
-		assert(spsInfo !== null);
+		if (!spsInfo) {
+			return null;
+		}
 
 		const hasExtendedData = spsInfo.profileIdc === 100
 			|| spsInfo.profileIdc === 110
@@ -677,6 +683,10 @@ export const parseAvcSps = (sps: Uint8Array): AvcSpsInfo | null => {
 			displayHeight -= (cropUnitY * (frameCropTopOffset + frameCropBottomOffset));
 		}
 
+		if (displayWidth <= 0 || displayHeight <= 0) {
+			return null; // Cropped away everything, invalid
+		}
+
 		// 2 = unspecified
 		let colourPrimaries = 2;
 		let transferCharacteristics = 2;
@@ -763,8 +773,10 @@ export const parseAvcSps = (sps: Uint8Array): AvcSpsInfo | null => {
 				readExpGolomb(bitstream); // max_bits_per_mb_denom
 				readExpGolomb(bitstream); // log2_max_mv_length_horizontal
 				readExpGolomb(bitstream); // log2_max_mv_length_vertical
-				numReorderFrames = readExpGolomb(bitstream);
-				maxDecFrameBuffering = readExpGolomb(bitstream);
+				// Both can't exceed MaxDpbFrames, which is at most 16. Bigger values would make us buffer absurd
+				// amounts of frames
+				numReorderFrames = Math.min(readExpGolomb(bitstream), 16);
+				maxDecFrameBuffering = Math.min(readExpGolomb(bitstream), 16);
 			}
 		}
 
@@ -1039,6 +1051,10 @@ export const parseHevcSps = (sps: Uint8Array): HevcSpsInfo | null => {
 			displayHeight -= (confWinTopOffset + confWinBottomOffset) * subHeightC;
 		}
 
+		if (displayWidth <= 0 || displayHeight <= 0) {
+			return null; // Cropped away everything, invalid
+		}
+
 		const bitDepthLumaMinus8 = readExpGolomb(bitstream);
 		const bitDepthChromaMinus8 = readExpGolomb(bitstream);
 		readExpGolomb(bitstream); // log2_max_pic_order_cnt_lsb_minus4
@@ -1115,7 +1131,9 @@ export const parseHevcSps = (sps: Uint8Array): HevcSpsInfo | null => {
 			transferCharacteristics,
 			matrixCoefficients,
 			fullRangeFlag,
-			maxDecFrameBuffering: spsMaxNumReorderPics + 1,
+			// Can't exceed MaxDpbSize, which is at most 16. Bigger values would make us buffer absurd amounts of
+			// frames
+			maxDecFrameBuffering: Math.min(spsMaxNumReorderPics + 1, 16),
 			spsMaxSubLayersMinus1,
 			spsTemporalIdNestingFlag,
 			generalProfileSpace: general_profile_space,
@@ -1143,17 +1161,23 @@ export const extractHevcDecoderConfigurationRecord = (packetData: Uint8Array) =>
 		const ppsUnits: Uint8Array[] = [];
 		const seiUnits: Uint8Array[] = [];
 
+		// The counts are capped at what the record can hold
+		const MAX_NAL_UNITS_PER_ARRAY = 0xffff;
+
 		for (const loc of iterateNalUnitsInAnnexB(packetData)) {
 			const nalUnit = packetData.subarray(loc.offset, loc.offset + loc.length);
 			const type = extractNalUnitTypeForHevc(nalUnit[0]!);
 
-			if (type === HevcNalUnitType.VPS_NUT) {
+			if (type === HevcNalUnitType.VPS_NUT && vpsUnits.length < MAX_NAL_UNITS_PER_ARRAY) {
 				vpsUnits.push(nalUnit);
-			} else if (type === HevcNalUnitType.SPS_NUT) {
+			} else if (type === HevcNalUnitType.SPS_NUT && spsUnits.length < MAX_NAL_UNITS_PER_ARRAY) {
 				spsUnits.push(nalUnit);
-			} else if (type === HevcNalUnitType.PPS_NUT) {
+			} else if (type === HevcNalUnitType.PPS_NUT && ppsUnits.length < MAX_NAL_UNITS_PER_ARRAY) {
 				ppsUnits.push(nalUnit);
-			} else if (type === HevcNalUnitType.PREFIX_SEI_NUT || type === HevcNalUnitType.SUFFIX_SEI_NUT) {
+			} else if (
+				(type === HevcNalUnitType.PREFIX_SEI_NUT || type === HevcNalUnitType.SUFFIX_SEI_NUT)
+				&& seiUnits.length < MAX_NAL_UNITS_PER_ARRAY
+			) {
 				seiUnits.push(nalUnit);
 			}
 		}
@@ -2323,6 +2347,10 @@ export const extractProresCodecInfoFromPacket = (packet: Uint8Array): ProresCode
 };
 
 export const parseOpusIdentificationHeader = (bytes: Uint8Array) => {
+	if (bytes.byteLength < 19) {
+		throw new Error('Invalid Opus identification header: too short.');
+	}
+
 	const view = toDataView(bytes);
 
 	const outputChannelCount = view.getUint8(9);
@@ -2527,7 +2555,13 @@ export const determineVideoPacketType = (
 							const bitstream = new Bitstream(bytes);
 							bitstream.pos = 8 * pos;
 
-							const recoveryFrameCount = readExpGolomb(bitstream);
+							let recoveryFrameCount = -1;
+							try {
+								recoveryFrameCount = readExpGolomb(bitstream);
+							} catch {
+								// Malformed SEI payload, so it's surely no recovery point
+							}
+
 							const exactMatchFlag = bitstream.readBits(1);
 
 							if (recoveryFrameCount === 0 && exactMatchFlag === 1) {
@@ -2650,6 +2684,10 @@ export const readVorbisComments = (bytes: Uint8Array, metadataTags: MetadataTags
 	const commentView = toDataView(bytes);
 	let commentPos = 0;
 
+	if (bytes.length < 4) {
+		return;
+	}
+
 	const vendorStringLength = commentView.getUint32(commentPos, true);
 	commentPos += 4;
 
@@ -2664,11 +2702,19 @@ export const readVorbisComments = (bytes: Uint8Array, metadataTags: MetadataTags
 		metadataTags.raw['vendor'] ??= vendorString;
 	}
 
+	if (commentPos + 4 > bytes.length) {
+		return;
+	}
+
 	const listLength = commentView.getUint32(commentPos, true);
 	commentPos += 4;
 
 	// Loop over all metadata tags
 	for (let i = 0; i < listLength; i++) {
+		if (commentPos + 4 > bytes.length) {
+			break; // The list is cut off, keep what we have
+		}
+
 		const stringLength = commentView.getUint32(commentPos, true);
 		commentPos += 4;
 
@@ -2687,7 +2733,7 @@ export const readVorbisComments = (bytes: Uint8Array, metadataTags: MetadataTags
 
 		metadataTags.raw ??= {};
 		if (Array.isArray(metadataTags.raw[key])) {
-			metadataTags.raw[key] = [...metadataTags.raw[key], value];
+			metadataTags.raw[key].push(value);
 		} else if (typeof metadataTags.raw[key] === 'string') {
 			metadataTags.raw[key] = [metadataTags.raw[key], value];
 		} else {
@@ -2783,31 +2829,35 @@ export const readVorbisComments = (bytes: Uint8Array, metadataTags: MetadataTags
 
 			case 'METADATA_BLOCK_PICTURE': {
 				// https://datatracker.ietf.org/doc/rfc9639/ Section 8.8
-				const decoded = base64ToBytes(value);
+				try {
+					const decoded = base64ToBytes(value);
 
-				const view = toDataView(decoded);
-				const pictureType = view.getUint32(0, false);
-				const mediaTypeLength = view.getUint32(4, false);
-				const mediaType = String.fromCharCode(...decoded.subarray(8, 8 + mediaTypeLength)); // ASCII
-				const descriptionLength = view.getUint32(8 + mediaTypeLength, false);
-				const description = textDecoder.decode(decoded.subarray(
-					12 + mediaTypeLength,
-					12 + mediaTypeLength + descriptionLength,
-				));
-				const dataLength = view.getUint32(mediaTypeLength + descriptionLength + 28);
-				const data = decoded.subarray(
-					mediaTypeLength + descriptionLength + 32,
-					mediaTypeLength + descriptionLength + 32 + dataLength,
-				);
+					const view = toDataView(decoded);
+					const pictureType = view.getUint32(0, false);
+					const mediaTypeLength = view.getUint32(4, false);
+					const mediaType = textDecoder.decode(decoded.subarray(8, 8 + mediaTypeLength)); // ASCII
+					const descriptionLength = view.getUint32(8 + mediaTypeLength, false);
+					const description = textDecoder.decode(decoded.subarray(
+						12 + mediaTypeLength,
+						12 + mediaTypeLength + descriptionLength,
+					));
+					const dataLength = view.getUint32(mediaTypeLength + descriptionLength + 28);
+					const data = decoded.subarray(
+						mediaTypeLength + descriptionLength + 32,
+						mediaTypeLength + descriptionLength + 32 + dataLength,
+					);
 
-				metadataTags.images ??= [];
-				metadataTags.images.push({
-					data,
-					mimeType: mediaType,
-					kind: pictureType === 3 ? 'coverFront' : pictureType === 4 ? 'coverBack' : 'unknown',
-					name: undefined,
-					description: description || undefined,
-				});
+					metadataTags.images ??= [];
+					metadataTags.images.push({
+						data,
+						mimeType: mediaType,
+						kind: pictureType === 3 ? 'coverFront' : pictureType === 4 ? 'coverBack' : 'unknown',
+						name: undefined,
+						description: description || undefined,
+					});
+				} catch {
+					// Malformed picture, let's just skip it
+				}
 			}; break;
 		}
 	}

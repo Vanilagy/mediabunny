@@ -38,4 +38,4 @@ The full codec string begins with the prefix `'vp09.'`, with a variable-length s
 
 ## Quantizer range
 
-VP9 has quantizer support and supports quantizer values in the range [0, 63].
+VP9 has quantizer support and supports quantizer values in the range [0, 255].
