@@ -34,6 +34,7 @@ import {
 	isCodecReclaimedError,
 	isFirefox,
 	isThenable,
+	isWebKit,
 	last,
 	missingWebCodecsClassMessage,
 	promiseWithResolvers,
@@ -2363,7 +2364,7 @@ class AudioEncoderWrapper {
 
 	private ensureEncoder(audioSample: AudioSample) {
 		this.ensureEncoderPromise = (async () => {
-			const { numberOfChannels, sampleRate } = audioSample;
+			const { numberOfChannels, sampleRate, timestamp } = audioSample;
 
 			// eslint-disable-next-line @typescript-eslint/no-deprecated
 			const quality = resolveQuality(this.encodingConfig.quality, this.encodingConfig.bitrate);
@@ -2488,6 +2489,10 @@ class AudioEncoderWrapper {
 					},
 				});
 				this.encoder.configure(encoderConfig);
+
+				if (this.encodingConfig.codec === 'aac' && isWebKit()) {
+					encodeAacSilencePrefix(this.encoder, numberOfChannels, sampleRate, timestamp);
+				}
 			}
 
 			assert(this.source._connectedTrack);
@@ -2720,6 +2725,10 @@ const detectAudioEncoderPrimingShift = (codec: AudioCodec, codecString: string) 
 		try {
 			encoder.configure(encoderConfig);
 
+			if (codec === 'aac' && isWebKit()) {
+				encodeAacSilencePrefix(encoder, numberOfChannels, sampleRate, 0);
+			}
+
 			const data = new Float32Array(numberOfChannels * numberOfFrames);
 			data[impulseIndex] = 1;
 
@@ -2764,6 +2773,26 @@ const detectAudioEncoderPrimingShift = (codec: AudioCodec, codecString: string) 
 
 	audioEncoderPrimingShiftPromises.set(codecString, promise);
 	return promise;
+};
+
+/** Works around https://bugs.webkit.org/show_bug.cgi?id=328491 */
+const encodeAacSilencePrefix = (
+	encoder: AudioEncoder,
+	numberOfChannels: number,
+	sampleRate: number,
+	timestamp: number, // In seconds, the timestamp of the first actual sample
+) => {
+	const numberOfFrames = 1024;
+	const audioData = new AudioData({
+		data: new Float32Array(numberOfChannels * numberOfFrames),
+		format: 'f32-planar',
+		numberOfChannels,
+		numberOfFrames,
+		sampleRate,
+		timestamp: Math.round(1e6 * (timestamp - numberOfFrames / sampleRate)),
+	});
+	encoder.encode(audioData);
+	audioData.close();
 };
 
 const fixAudioDecoderConfig = (
