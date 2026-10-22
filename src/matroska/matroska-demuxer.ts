@@ -2460,7 +2460,10 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		// The timestamp for which we know the correct block will not come after it
 		latestTimestamp: number,
 		options: PacketRetrievalOptions,
-		isRetry = false,
+		// The position for which we know the correct block will not come after it
+		stopPos = Infinity,
+		// How many times we've retried due to a faulty lookup entry
+		lookupRetryCount = 0,
 	): Promise<EncodedPacket | null> {
 		const { demuxer, segment } = this.internalTrack;
 
@@ -2506,6 +2509,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 			cuePoint?.clusterPosition ?? 0,
 			positionCacheEntry?.elementStartPos ?? 0,
 		) || null;
+		const cuePointWins = !!cuePoint && cuePoint.clusterPosition >= (positionCacheEntry?.elementStartPos ?? 0);
 
 		let currentPos: number;
 
@@ -2521,13 +2525,20 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 			}
 		}
 
-		while (segment.elementEndPos === null || currentPos <= segment.elementEndPos - MIN_HEADER_SIZE) {
+		const scanStartPos = currentCluster ? currentCluster.elementStartPos : currentPos;
+
+		while (
+			(segment.elementEndPos === null || currentPos <= segment.elementEndPos - MIN_HEADER_SIZE)
+			&& currentPos < stopPos
+		) {
 			if (currentCluster) {
 				const trackData = currentCluster.trackData.get(this.internalTrack.id);
 				if (trackData && trackData.startTimestamp > latestTimestamp) {
 					// We're already past the upper bound, no need to keep searching
 					break;
 				}
+
+				currentCluster = null; // So we don't process it again next iteration
 			}
 
 			const summary = segment.clusterSummaries.get(currentPos);
@@ -2623,14 +2634,21 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 			currentPos = endPos;
 		}
 
-		// Catch faulty cue points
-		if (cuePoint && (!bestCluster || bestCluster.elementStartPos < cuePoint.clusterPosition)) {
-			// The cue point lied to us! We found a cue point but no cluster there that satisfied the match. In this
-			// case, let's search again but using the cue point before that. If that one lies too, we stop trusting the
-			// cues altogether, since walking back through many faulty cue points would mean rescanning the file over
-			// and over.
-			const previousCuePoint = this.internalTrack.cuePoints[cuePointIndex - 1];
-			const newSearchTimestamp = !isRetry && previousCuePoint ? previousCuePoint.time : -Infinity;
+		// Handle unsatisfactoy cue points or position cache entries
+		if (lookupEntryPosition !== null && (!bestCluster || bestCluster.elementStartPos < lookupEntryPosition)) {
+			// We found a lookup entry but no cluster from there on that satisfied the match. In this case, let's search
+			// again but using a previous entry of the kind we started from. Each time this happens, we double the
+			// backwards step to perform better (and have more sequential reads) if it takes us a long time to find
+			// the media.
+			//
+			// Note that this doesn't only kick for faulty cue points but also for multi-track files where only one
+			// track has cue points. Since we distribute the cue points to the track with none, they might not
+			// accurately reflect where media can be found.
+			const step = 1 << lookupRetryCount;
+			const previousEntryTimestamp = cuePointWins
+				? this.internalTrack.cuePoints[cuePointIndex - step]?.time
+				: this.internalTrack.clusterPositionCache[positionCacheIndex - step]?.startTimestamp;
+			const newSearchTimestamp = previousEntryTimestamp ?? -Infinity;
 
 			return this.performClusterLookup(
 				null,
@@ -2638,7 +2656,8 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 				newSearchTimestamp,
 				latestTimestamp,
 				options,
-				true,
+				scanStartPos, // So we don't read the same clusters again
+				lookupRetryCount + 1,
 			);
 		}
 

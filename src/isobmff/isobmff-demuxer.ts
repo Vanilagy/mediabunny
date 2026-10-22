@@ -3488,7 +3488,10 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		// The timestamp for which we know the correct sample will not come after it
 		latestTimestamp: number,
 		options: PacketRetrievalOptions,
-		isRetry = false,
+		// The position for which we know the correct sample will not come after it
+		stopPos = Infinity,
+		// How many times we've retried due to a faulty lookup table entry
+		lookupRetryCount = 0,
 	): Promise<EncodedPacket | null> {
 		const demuxer = this.internalTrack.demuxer;
 
@@ -3533,6 +3536,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			lookupEntry?.moofOffset ?? 0,
 			positionCacheEntry?.moofOffset ?? 0,
 		) || null;
+		const lookupTableWins = !!lookupEntry && lookupEntry.moofOffset >= (positionCacheEntry?.moofOffset ?? 0);
 
 		let currentPos: number;
 
@@ -3548,13 +3552,17 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			}
 		}
 
-		while (true) {
+		const scanStartPos = currentFragment ? currentFragment.moofOffset : currentPos;
+
+		while (currentPos < stopPos) {
 			if (currentFragment) {
 				const trackData = currentFragment.trackData.get(this.internalTrack.id);
 				if (trackData && trackData.startTimestamp > latestTimestamp) {
 					// We're already past the upper bound, no need to keep searching
 					break;
 				}
+
+				currentFragment = null; // So we don't process it again next iteration
 			}
 
 			const summary = demuxer.fragmentSummaries.get(currentPos);
@@ -3594,14 +3602,17 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			currentPos = boxStartPos + boxInfo.totalSize;
 		}
 
-		// Catch faulty lookup table entries
-		if (lookupEntry && (!bestFragment || bestFragment.moofOffset < lookupEntry.moofOffset)) {
-			// The lookup table entry lied to us! We found a lookup entry but no fragment there that satisfied
-			// the match. In this case, let's search again but using the lookup entry before that. If that one lies
-			// too, we stop trusting the table altogether, since walking back through many faulty entries would mean
-			// rescanning the file over and over.
-			const previousLookupEntry = this.internalTrack.fragmentLookupTable[lookupEntryIndex - 1];
-			const newSearchTimestamp = !isRetry && previousLookupEntry ? previousLookupEntry.timestamp : -Infinity;
+		// Handle unsatisfactory lookup table entries or position cache entries
+		if (lookupEntryPosition !== null && (!bestFragment || bestFragment.moofOffset < lookupEntryPosition)) {
+			// We found a lookup entry but no fragment from there on that satisfied the match. In this case, let's
+			// search again but using a previous entry of the kind we started from. Each time this happens, we double
+			// the backwards step to perform better (and have more sequential reads) if it takes us a long time to find
+			// the media.
+			const step = 1 << lookupRetryCount;
+			const previousEntryTimestamp = lookupTableWins
+				? this.internalTrack.fragmentLookupTable[lookupEntryIndex - step]?.timestamp
+				: this.internalTrack.fragmentPositionCache[positionCacheIndex - step]?.startTimestamp;
+			const newSearchTimestamp = previousEntryTimestamp ?? -Infinity;
 
 			return this.performFragmentedLookup(
 				null,
@@ -3609,7 +3620,8 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 				newSearchTimestamp,
 				latestTimestamp,
 				options,
-				true,
+				scanStartPos, // So we don't read the same fragments again
+				lookupRetryCount + 1,
 			);
 		}
 
