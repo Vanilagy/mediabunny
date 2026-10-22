@@ -251,3 +251,24 @@ test('Missing tfdt and tfra entries referencing non-first samples', async () => 
 		3.833333, 3.85, 3.866667, 3.883333, 3.9, 3.916667, 3.933333, 3.95, 3.966667, 3.983333,
 	]);
 });
+
+test('Key packet lookup after reading fragments without key frames', async () => {
+	// See https://github.com/Vanilagy/mediabunny/issues/584
+	const filePath = path.join(__dirname, '..', 'public/fragments-without-keyframes.mp4');
+	using input = new Input({
+		source: new FilePathSource(filePath),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryVideoTrack();
+	assert(track);
+
+	const sink = new EncodedPacketSink(track);
+	expect((await sink.getKeyPacket(1.2))?.timestamp).toBe(1);
+
+	for await (const packet of sink.packets()) {
+		void packet;
+	}
+
+	expect((await sink.getKeyPacket(1.2))?.timestamp).toBe(1);
+});
