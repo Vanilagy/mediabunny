@@ -60,6 +60,8 @@ let isRelativeToUnixEpoch = false;
 /** The value of the audio context's currentTime the moment the playback was started. */
 let audioContextStartTime: number | null = null;
 let playing = false;
+/** Set when playback was stopped by the browser rather than the user; the video iterator is recreated on play. */
+let videoNeedsRestart = false;
 /** The timestamp within the media file when the playback was started. */
 let playbackTimeAtStart = 0;
 
@@ -97,6 +99,7 @@ const initMediaPlayer = async (resource: File | string) => {
 		asyncId++;
 
 		fileLoaded = false;
+		videoNeedsRestart = false;
 		fileNameElement.textContent = resource instanceof File ? resource.name : resource;
 		horizontalRule.style.display = '';
 		loadingElement.style.display = '';
@@ -182,7 +185,18 @@ const initMediaPlayer = async (resource: File | string) => {
 
 		// We must create the audio context with the matching sample rate for correct acoustic results
 		// (especially for low-sample rate files)
-		audioContext = new AudioContext({ sampleRate: await audioTrack?.getSampleRate() });
+		const newAudioContext: AudioContext = new AudioContext({ sampleRate: await audioTrack?.getSampleRate() });
+		audioContext = newAudioContext;
+		// The playback clock is the audio context's clock, which stops whenever the browser stops the context (on iOS,
+		// when the page is left or another app takes the audio). Pause with it so playback resumes from the right spot.
+		newAudioContext.addEventListener('statechange', () => {
+			if (newAudioContext === audioContext && playing && newAudioContext.state !== 'running') {
+				pause();
+				// iOS Safari can also leave the video decoder dead without reporting an error, so start the video
+				// afresh on the next play
+				videoNeedsRestart = true;
+			}
+		});
 		gainNode = audioContext.createGain();
 		gainNode.connect(audioContext.destination);
 		updateVolume();
@@ -346,27 +360,38 @@ setInterval(() => render(false), 500);
 const updateNextFrame = async () => {
 	const currentAsyncId = asyncId;
 
-	// We have a loop here because we may need to iterate over multiple frames until we reach a frame in the future
-	while (true) {
-		const newNextFrame = (await videoFrameIterator!.next()).value ?? null;
-		if (!newNextFrame) {
-			break;
-		}
+	try {
+		// We have a loop here because we may need to iterate over multiple frames until we reach a frame in the future
+		while (true) {
+			const newNextFrame = (await videoFrameIterator!.next()).value ?? null;
+			if (!newNextFrame) {
+				break;
+			}
 
+			if (currentAsyncId !== asyncId) {
+				break;
+			}
+
+			const playbackTime = getPlaybackTime();
+			if (newNextFrame.timestamp <= playbackTime) {
+				// Draw it immediately
+				context.clearRect(0, 0, canvas.width, canvas.height);
+				context.drawImage(newNextFrame.canvas, 0, 0);
+			} else {
+				// Save it for later
+				nextFrame = newNextFrame;
+				break;
+			}
+		}
+	} catch (error) {
 		if (currentAsyncId !== asyncId) {
-			break;
+			return;
 		}
 
-		const playbackTime = getPlaybackTime();
-		if (newNextFrame.timestamp <= playbackTime) {
-			// Draw it immediately
-			context.clearRect(0, 0, canvas.width, canvas.height);
-			context.drawImage(newNextFrame.canvas, 0, 0);
-		} else {
-			// Save it for later
-			nextFrame = newNextFrame;
-			break;
-		}
+		// The browser can take the decoder away mid-playback (iOS Safari does when the notification tray is pulled
+		// down), which fails the iterator. Continue with a fresh one from the current playback time.
+		console.warn('Video decoding failed, restarting from the current playback time.', error);
+		await startVideoIterator();
 	}
 };
 
@@ -432,7 +457,9 @@ const getPlaybackTime = () => {
 };
 
 const play = async () => {
-	if (audioContext!.state === 'suspended') {
+	// Resume from 'interrupted' too, which is what iOS leaves the context in after the page was left or another app
+	// took the audio
+	if (audioContext!.state !== 'running') {
 		await audioContext!.resume();
 	}
 
@@ -440,7 +467,10 @@ const play = async () => {
 		// If we're at the end, let's snap back to the start
 		playbackTimeAtStart = firstTimestamp;
 		await startVideoIterator();
+	} else if (videoNeedsRestart) {
+		await startVideoIterator();
 	}
+	videoNeedsRestart = false;
 
 	audioContextStartTime = audioContext!.currentTime;
 	playing = true;
