@@ -31,11 +31,21 @@ This will expose the global objects `Mediabunny` and `MediabunnyMjpeg`. Use `med
 ## Usage
 
 ```ts
-import { registerMjpegDecoder, registerMjpegEncoder } from "@mediabunny/mjpeg";
+import { registerMjpegDecoder, registerMjpegEncoder } from '@mediabunny/mjpeg';
 
 registerMjpegDecoder();
 registerMjpegEncoder();
 ```
 
-The encoder supports quantizers from 0 to 100, where 0 is the highest quality and 100 is the lowest.
-Set `quality: new Quality({ quantizer: 25 })` in your video encoding options to use an explicit quantizer.
+This library uses the built in canvas capability to export canvas as a jpeg.
+
+### Quality
+
+The encoder respects quality settings.
+
+You can set an explicit quality value from 0 to 100. It will map inversely to the canvas quality export.
+Set `new Quality({ quantizer: 25 })` in your video encoding options .
+
+For bitrate control, use `new Quality({ bitrate: 1_000_000 })`. The encoder uses a simple implementation for bitrate control.
+
+An explicit quantizer takes priority over bitrate control.

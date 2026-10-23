@@ -60,22 +60,31 @@ class MjpegDecoder extends CustomVideoDecoder {
 	close() {}
 }
 
-const quantizerToCanvasQuality = (quantizer: number) => 1 - quantizer / 100;
+type BitrateState = {
+	quality?: number;
+	actualBytes: number;
+	targetBytes: number;
+	smoothedError: number;
+};
 
 class MjpegEncoder extends CustomVideoEncoder {
 	canvas?: OffscreenCanvas;
 	context?: OffscreenCanvasRenderingContext2D;
 	metadata?: EncodedVideoChunkMetadata;
+	framerate?: number;
+	targetSize?: number;
+	bitrateState: BitrateState = { actualBytes: 0, targetBytes: 0, smoothedError: 0 };
 
-	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	static override supports(codec: VideoCodec, config: VideoEncoderConfig): boolean {
 		return codec === 'mjpeg';
 	}
 
 	init() {
 		assert(this.config.width && this.config.height);
-		this.canvas = new OffscreenCanvas(this.config.width, this.config.height);
-		this.context = this.canvas.getContext('2d') ?? undefined;
+		this.framerate = this.config.framerate;
+		if (this.config.bitrate !== undefined && this.framerate !== undefined) {
+			this.targetSize = this.config.bitrate / (8 * this.framerate);
+		}
 		this.metadata = {
 			decoderConfig: {
 				codec: 'jpeg',
@@ -83,17 +92,88 @@ class MjpegEncoder extends CustomVideoEncoder {
 				codedHeight: this.config.height,
 			},
 		};
+		this.canvas = new OffscreenCanvas(this.config.width, this.config.height);
+		this.context = this.canvas.getContext('2d') ?? undefined;
+	}
+
+	private encodeAtQuality(videoSample: VideoSample, quality: number): Promise<Blob> {
+		assert(this.context && this.canvas);
+		videoSample.draw(this.context, 0, 0, this.config.width, this.config.height);
+		return this.canvas.convertToBlob({ type: 'image/jpeg', quality });
+	}
+
+	private async calibrateFrame(videoSample: VideoSample, targetSize: number) {
+		let quality = 1;
+		let imageBlob = await this.encodeAtQuality(videoSample, quality);
+		if (imageBlob.size <= targetSize) {
+			return { quality, imageBlob };
+		}
+
+		quality = 0;
+		imageBlob = await this.encodeAtQuality(videoSample, quality);
+		if (imageBlob.size >= targetSize) {
+			return { quality, imageBlob };
+		}
+
+		let lower = 0;
+		let upper = 1;
+		for (let i = 0; i < 7; i++) {
+			const candidateQuality = (lower + upper) / 2;
+			const candidate = await this.encodeAtQuality(videoSample, candidateQuality);
+			if (candidate.size <= targetSize) {
+				lower = candidateQuality;
+				quality = candidateQuality;
+				imageBlob = candidate;
+			} else {
+				upper = candidateQuality;
+			}
+		}
+		return { quality, imageBlob };
+	}
+
+	private async encodeFrame(videoSample: VideoSample, options: VideoEncoderEncodeOptions): Promise<Blob> {
+		const quantizer = options.mjpeg?.quantizer ?? null;
+		if (quantizer !== null) {
+			return this.encodeAtQuality(videoSample, 1 - quantizer / 100);
+		}
+
+		if (this.config.bitrate === undefined) {
+			return this.encodeAtQuality(videoSample, 1);
+		}
+		if (this.targetSize === undefined) {
+			this.framerate ??= videoSample.duration > 0 ? 1 / videoSample.duration : 30;
+			this.targetSize = this.config.bitrate / (8 * this.framerate);
+		}
+
+		let quality = this.bitrateState.quality;
+		let imageBlob: Blob;
+		if (quality === undefined) {
+			const calibratedFrame = await this.calibrateFrame(videoSample, this.targetSize);
+			quality = calibratedFrame.quality;
+			imageBlob = calibratedFrame.imageBlob;
+		} else {
+			imageBlob = await this.encodeAtQuality(videoSample, quality);
+		}
+
+		this.bitrateState.actualBytes += imageBlob.size;
+		this.bitrateState.targetBytes += this.targetSize;
+		const frameError = (this.targetSize - imageBlob.size) / this.targetSize;
+		this.bitrateState.smoothedError = 0.5 * this.bitrateState.smoothedError + 0.5 * frameError;
+		// Repay accumulated bitrate error gradually, without letting it dominate after an unattainable target.
+		const accumulatedError = Math.max(
+			-1,
+			Math.min(1, (this.bitrateState.targetBytes - this.bitrateState.actualBytes) / (30 * this.targetSize)),
+		);
+		const adjustment = Math.max(
+			-0.05,
+			Math.min(0.05, 0.15 * this.bitrateState.smoothedError + 0.05 * accumulatedError),
+		);
+		this.bitrateState.quality = Math.max(0, Math.min(1, quality + adjustment));
+		return imageBlob;
 	}
 
 	override async encode(videoSample: VideoSample, options: VideoEncoderEncodeOptions) {
-		assert(this.context && this.canvas);
-		videoSample.draw(this.context, 0, 0, this.config.width, this.config.height);
-
-		const quality = quantizerToCanvasQuality(options.mjpeg?.quantizer ?? 0);
-		const imageBlob = await this.canvas.convertToBlob({
-			type: 'image/jpeg',
-			quality,
-		});
+		const imageBlob = await this.encodeFrame(videoSample, options);
 		const packetData = new Uint8Array(await imageBlob.arrayBuffer());
 
 		const packet = new EncodedPacket(packetData, 'key', videoSample.timestamp, videoSample.duration);
