@@ -17,6 +17,7 @@ import {
 	extractColorSpace,
 	extractVideoCodecString,
 	MediaCodec,
+	MJPEG_FOURCCS,
 	OPUS_SAMPLE_RATE,
 	parsePcmCodec,
 	PCM_AUDIO_CODECS,
@@ -1274,7 +1275,9 @@ export class IsobmffDemuxer extends Demuxer {
 							: lowercaseBoxName;
 						track.frmaCodecString = null;
 
-						if (codecName === 'avc1' || codecName === 'avc3') {
+						if (codecName === 'mp4v') {
+							// The codec is set by the esds box.
+						} else if (codecName === 'avc1' || codecName === 'avc3') {
 							track.info.codec = 'avc';
 							track.info.avcType = codecName === 'avc1' ? 1 : 3;
 						} else if (codecName === 'hvc1' || codecName === 'hev1') {
@@ -1285,6 +1288,8 @@ export class IsobmffDemuxer extends Demuxer {
 							track.info.codec = 'vp9';
 						} else if (codecName === 'av01') {
 							track.info.codec = 'av1';
+						} else if ((MJPEG_FOURCCS as readonly string[]).includes(lowercaseBoxName)) {
+							track.info.codec = 'mjpeg';
 						} else if ((PRORES_FOURCCS as readonly string[]).includes(lowercaseBoxName)) {
 							track.info.codec = 'prores';
 							track.info.proresFormat = lowercaseBoxName as ProresFourCc;
@@ -1748,7 +1753,7 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'esds': {
 				const track = this.currentTrack;
-				if (!track || track.info?.type !== 'audio') {
+				if (!track || !track.info) {
 					break;
 				}
 
@@ -1771,6 +1776,16 @@ export class IsobmffDemuxer extends Demuxer {
 					Logging._warn(
 						`Unsupported audio codec (objectTypeIndication ${objectTypeIndication}) - discarding track.`,
 					);
+				}
+
+				if (track.info.type === 'video') {
+					const streamType = readU8(slice) >>> 2;
+					if (objectTypeIndication === 0x6c && streamType === 4) {
+						track.info.codec = 'mjpeg';
+					} else {
+						Logging._warn(`Unsupported video codec (objectTypeIndication ${objectTypeIndication}).`);
+					}
+					break;
 				}
 
 				if (decoderSpecificInfo) {
