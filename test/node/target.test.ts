@@ -41,3 +41,19 @@ test('BufferTarget onFinalize callback', async () => {
 	expect(asyncCallbackDone).toBe(true);
 	expect(output.target.buffer!.byteLength).toBeGreaterThan(0);
 });
+
+test('BufferTarget releases its growth buffer on finalization', async () => {
+	const target = new BufferTarget();
+	const data = new Uint8Array(100_000).fill(42);
+	target._write(data, 0);
+	target._write(new Uint8Array([1, 2, 3]), 10);
+	data.set([1, 2, 3], 10);
+
+	await target._finalize();
+	expect(target.buffer!.byteLength).toBe(data.byteLength);
+	expect(new Uint8Array(target.buffer!)).toEqual(data);
+
+	const backingBuffers = new Set([target.buffer!, target._buffer, target._bytes.buffer]);
+	const retainedBytes = [...backingBuffers].reduce((sum, buffer) => sum + buffer.byteLength, 0);
+	expect(retainedBytes).toBe(target.buffer!.byteLength);
+});

@@ -213,6 +213,8 @@ export class BufferTarget extends Target {
 	/** @internal */
 	async _finalize() {
 		this.buffer = this._buffer.slice(0, this._maxPos);
+		this._buffer = this.buffer;
+		this._bytes = new Uint8Array(this.buffer);
 
 		if (this._options.onFinalize) {
 			await this._options.onFinalize(this.buffer);
