@@ -212,24 +212,19 @@ export class BufferTarget extends Target {
 
 	/** @internal */
 	async _finalize() {
-		const byteLength = this._maxPos;
-
-		// The growth buffer may be resizable. transfer() would keep its maxByteLength.
-		let buffer: ArrayBuffer;
+		// transfer() preserves maxByteLength.
 		if ('transferToFixedLength' in this._buffer) {
 			// @ts-expect-error Don't want to bump "lib" in tsconfig
-			// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-			buffer = this._buffer.transferToFixedLength(byteLength);
+			this.buffer = this._buffer.transferToFixedLength(this._maxPos) as ArrayBuffer;
 		} else {
-			buffer = this._buffer.slice(0, byteLength);
+			this.buffer = this._buffer.slice(0, this._maxPos);
 		}
 
-		this.buffer = buffer;
-		this._buffer = buffer;
-		this._bytes = new Uint8Array(buffer);
+		this._buffer = this.buffer;
+		this._bytes = new Uint8Array(this.buffer);
 
 		if (this._options.onFinalize) {
-			await this._options.onFinalize(buffer);
+			await this._options.onFinalize(this.buffer);
 		}
 
 		this._emit('finalized');
