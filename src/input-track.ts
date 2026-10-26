@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { AudioCodec, MediaCodec, PCM_AUDIO_CODECS, VideoCodec } from './codec';
+import { AudioCodec, getAudioPreRollDuration, MediaCodec, PCM_AUDIO_CODECS, VideoCodec } from './codec';
 import { determineVideoPacketType } from './codec-data';
 import { customAudioDecoders, customVideoDecoders } from './custom-coder';
 import { Input } from './input';
@@ -1137,6 +1137,22 @@ export class InputAudioTrack extends InputTrack {
 
 		const decoderConfig = await this._backing.getDecoderConfig();
 		return decoderConfig?.codec ?? null;
+	}
+
+	/**
+	 * Returns the decoder pre-roll duration for this track. It specifies how far ahead of any given timestamp,
+	 * in seconds, decoding must start so that the audio at that timestamp comes out correctly and the codec state has
+	 * properly converged. Returns `null` if the track's codec is unknown.
+	 */
+	async getPreRollDuration() {
+		const codec = await this._backing.getCodec();
+		if (codec === null) {
+			return null;
+		}
+
+		const decoderConfig = await this._backing.getDecoderConfig();
+		assert(decoderConfig);
+		return getAudioPreRollDuration(codec, decoderConfig);
 	}
 
 	async canDecode() {

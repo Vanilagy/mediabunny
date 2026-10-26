@@ -476,6 +476,8 @@ export abstract class BaseMediaSampleSink<
 	): Promise<DecoderWrapper<MediaSample>>;
 	/** @internal */
 	abstract _createPacketSink(): EncodedPacketSink;
+	/** @internal */
+	abstract _getPreRollDuration(): Promise<number>;
 
 	/** @internal */
 	protected mediaSamplesInRange(
@@ -555,8 +557,13 @@ export abstract class BaseMediaSampleSink<
 			decoder.onDequeue = () => onQueueDequeue();
 
 			const packetSink = this._createPacketSink();
-			const keyPacket = await packetSink.getKeyPacket(startTimestamp, packetRetrievalOptions)
-				?? await packetSink.getFirstKeyPacket(packetRetrievalOptions);
+			const preRollDuration = await this._getPreRollDuration();
+
+			const startPacket = await packetSink.getPacket(startTimestamp, packetRetrievalOptions);
+			const keyPacket = await packetSink.getKeyPacket(
+				(startPacket?.timestamp ?? startTimestamp) - preRollDuration,
+				packetRetrievalOptions,
+			) ?? await packetSink.getFirstKeyPacket(packetRetrievalOptions);
 
 			let currentPacket: EncodedPacket | null = keyPacket;
 
@@ -737,6 +744,7 @@ export abstract class BaseMediaSampleSink<
 			decoder.onDequeue = () => onQueueDequeue();
 
 			const packetSink = this._createPacketSink();
+			const preRollDuration = await this._getPreRollDuration();
 			let lastPacket: EncodedPacket | null = null;
 			let lastKeyPacket: EncodedPacket | null = null;
 
@@ -794,9 +802,19 @@ export abstract class BaseMediaSampleSink<
 				}
 
 				const targetPacket = await packetSink.getPacket(timestamp, retrievalOptions);
-				const keyPacket = targetPacket && await packetSink.getKeyPacket(timestamp, retrievalOptions);
+				let keyPacket = targetPacket && await packetSink.getKeyPacket(
+					targetPacket.timestamp - preRollDuration,
+					retrievalOptions,
+				);
+				if (targetPacket && !keyPacket) {
+					// The track doesn't reach back far enough for the full pre-roll, so this is the best we can do
+					const firstKeyPacket = await packetSink.getFirstKeyPacket(retrievalOptions);
+					if (firstKeyPacket && firstKeyPacket.timestamp <= targetPacket.timestamp) {
+						keyPacket = firstKeyPacket;
+					}
+				}
 
-				if (!keyPacket) {
+				if (!targetPacket || !keyPacket) {
 					if (maxSequenceNumber !== -1) {
 						await decodePackets();
 						await flushDecoder();
@@ -807,23 +825,26 @@ export abstract class BaseMediaSampleSink<
 					continue;
 				}
 
-				// Check if the key packet has changed or if we're going back in time
+				// Keep extending the current batch as long as it reaches the key packet anyway (always the case for an
+				// unchanged key packet), so that consecutive timestamps don't redo their pre-roll. Otherwise, or if
+				// we're going back in time, start a new batch at the key packet.
 				if (
-					lastPacket
-					&& (
-						keyPacket.sequenceNumber !== lastKeyPacket!.sequenceNumber
-						|| targetPacket.timestamp < lastPacket.timestamp
-					)
+					!lastPacket
+					|| keyPacket.sequenceNumber > maxSequenceNumber + 1
+					|| targetPacket.timestamp < lastPacket.timestamp
 				) {
-					await decodePackets();
-					await flushDecoder(); // Always flush here, improves decoder compatibility
+					if (lastPacket) {
+						await decodePackets();
+						await flushDecoder(); // Always flush here, improves decoder compatibility
+					}
+
+					lastKeyPacket = keyPacket;
 				}
 
 				timestampsOfInterest.push(targetPacket.timestamp);
 				maxSequenceNumber = Math.max(targetPacket.sequenceNumber, maxSequenceNumber);
 
 				lastPacket = targetPacket;
-				lastKeyPacket = keyPacket;
 			}
 
 			if (!terminated && !this._track.input._disposed) {
@@ -1844,6 +1865,11 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 		return new EncodedPacketSink(this._track);
 	}
 
+	/** @internal */
+	async _getPreRollDuration() {
+		return 0;
+	}
+
 	/**
 	 * Retrieves the video sample (frame) corresponding to the given timestamp, in seconds. More specifically, returns
 	 * the last video sample (in presentation order) with a start timestamp less than or equal to the given timestamp.
@@ -2604,6 +2630,14 @@ export class AudioSampleSink extends BaseMediaSampleSink<AudioSample> {
 	/** @internal */
 	_createPacketSink() {
 		return new EncodedPacketSink(this._track);
+	}
+
+	/** @internal */
+	async _getPreRollDuration() {
+		const preRollDuration = await this._track.getPreRollDuration();
+		assert(preRollDuration !== null); // The decoder was created, so the codec is known
+
+		return preRollDuration;
 	}
 
 	/**

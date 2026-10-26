@@ -8,6 +8,7 @@ import { Output } from '../../src/output.js';
 import { MpegTsOutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
 import { Conversion } from '../../src/conversion.js';
+import { AudioSample, AudioSampleCopyToOptions } from '../../src/sample.js';
 
 // https://github.com/Vanilagy/mediabunny/issues/370
 test('Negative audio timestamps are preserved', async () => {
@@ -106,3 +107,66 @@ test('Fallback sample past the end survives iterator return', async () => {
 	expect(sample._closed).toBe(false);
 	sample.close();
 });
+
+test('Audio decoder pre-roll', async () => {
+	using input = new Input({
+		source: new UrlSource('/demo.mp4'),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	expect(await track.getCodec()).toBe('aac');
+	expect(await track.getPreRollDuration()).toBe(1024 / await track.getSampleRate());
+
+	const sink = new AudioSampleSink(track);
+
+	// Decoding straight through from the start gives us a reference sample with fully converged decoder state
+	let referenceTimestamp: number | null = null;
+	let referenceData: Float32Array | null = null;
+	for await (using sample of sink.samples(0)) {
+		if (sample.timestamp >= 1) {
+			referenceTimestamp = sample.timestamp;
+			referenceData = getSampleData(sample);
+			break;
+		}
+	}
+	assert(referenceTimestamp !== null);
+	assert(referenceData);
+
+	for await (using sample of sink.samples(referenceTimestamp)) {
+		expect(sample.timestamp).toBe(referenceTimestamp);
+		expectSimilarData(getSampleData(sample), referenceData);
+		break;
+	}
+
+	for await (using sample of sink.samplesAtTimestamps([referenceTimestamp])) {
+		assert(sample);
+		expect(sample.timestamp).toBe(referenceTimestamp);
+		expectSimilarData(getSampleData(sample), referenceData);
+	}
+});
+
+const getSampleData = (sample: AudioSample) => {
+	const options: AudioSampleCopyToOptions = {
+		planeIndex: 0,
+		format: 'f32',
+	};
+
+	const data = new Float32Array(sample.allocationSize(options) / Float32Array.BYTES_PER_ELEMENT);
+	sample.copyTo(data, options);
+
+	return data;
+};
+
+const expectSimilarData = (actual: Float32Array, expected: Float32Array) => {
+	expect(actual.length).toBe(expected.length);
+
+	let maxDifference = 0;
+	for (let i = 0; i < actual.length; i++) {
+		maxDifference = Math.max(maxDifference, Math.abs(actual[i]! - expected[i]!));
+	}
+
+	expect(maxDifference).toBeLessThan(1e-4);
+};

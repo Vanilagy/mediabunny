@@ -60,6 +60,7 @@ import {
 	PcmAudioCodec,
 	SubtitleCodec,
 	generateAv1CodecConfigurationFromCodecString,
+	getAudioPreRollDuration,
 	generateVp9CodecConfigurationFromCodecString,
 	parsePcmCodec,
 	validateAudioChunkMetadata,
@@ -334,36 +335,11 @@ export class MatroskaMuxer extends Muxer {
 
 			let seekPreRollNs = 0; // In "Matroska ticks" (nanoseconds)
 			if (trackData.type === 'audio') {
-				const codec = trackData.track.source._codec;
-				const { sampleRate, decoderConfig } = trackData.info;
-
-				if (codec === 'opus') {
-					seekPreRollNs = 1e6 * 80;
-				} else if (codec === 'aac') {
-					// One frame of overlap, and with SBR, frames are twice as long at the output sample rate
-					const isHeAac = decoderConfig.codec === 'mp4a.40.5' || decoderConfig.codec === 'mp4a.40.29';
-					seekPreRollNs = Math.round(1e9 * (isHeAac ? 2048 : 1024) / sampleRate);
-				} else if (codec === 'mp3') {
-					// One frame of overlap plus one for the bit reservoir, which usually doesn't reach back further
-					seekPreRollNs = Math.round(1e9 * 2 * 1152 / sampleRate);
-				} else if (codec === 'vorbis') {
-					assert(decoderConfig.description);
-
-					const bytes = toUint8Array(decoderConfig.description);
-					let pos = 1;
-					let lacedLengthsLeft = 2;
-					while (lacedLengthsLeft > 0) {
-						if (bytes[pos++]! < 255) {
-							lacedLengthsLeft--;
-						}
-					}
-
-					const blockSizeByte = bytes[pos + 28]!;
-					const longBlockSize = 1 << (blockSizeByte >> 4); // blocksize_1
-
-					// The previous packet's long window overlaps by up to half its size
-					seekPreRollNs = Math.round(1e9 * (longBlockSize / 2) / sampleRate);
-				}
+				const preRollDuration = getAudioPreRollDuration(
+					trackData.track.source._codec,
+					trackData.info.decoderConfig,
+				);
+				seekPreRollNs = Math.round(1e9 * preRollDuration);
 			}
 
 			tracksElement.data.push({ id: EBMLId.TrackEntry, data: [

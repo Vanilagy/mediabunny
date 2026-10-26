@@ -18,8 +18,18 @@
 		});
 
 		const audioTrack = await input.getPrimaryAudioTrack();
-		const sink = new Mediabunny.EncodedPacketSink(audioTrack);
-		console.log(await sink.getPacket(Infinity));
+		const sink = new Mediabunny.AudioSampleSink(audioTrack);
+
+		console.log(await audioTrack.getPreRollDuration());
+
+		const iter = await sink.samples(10 - 0 / 48000);
+		//await iter.next();
+		const sample = (await iter.next()).value;
+		console.log(sample);
+		const buf = new Float32Array(new ArrayBuffer(sample.allocationSize({ format: 'f32-planar', planeIndex: 0 })));
+		sample.copyTo(buf, { format: 'f32-planar', planeIndex: 0 });
+
+		console.log(buf)
 
 		/*
 		const track = await input.getPrimaryVideoTrack();

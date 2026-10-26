@@ -786,7 +786,8 @@ export class IsobmffMuxer extends Muxer {
 			if (track.source._codec === 'aac' || track.source._codec === 'vorbis') {
 				prerollSamples = -Math.min(1, preroll.packetCount);
 			} else if (track.source._codec === 'mp3') {
-				// One packet of overlap plus one for the bit reservoir, which usually doesn't reach back further
+				// One packet of overlap plus one for the bit reservoir, which usually doesn't reach back further.
+				// ESTIMATE!!
 				prerollSamples = -Math.min(2, preroll.packetCount);
 			} else if (track.source._codec === 'opus') {
 				const OPUS_PREROLL_SAMPLES = 0.08 * OPUS_SAMPLE_RATE; // 80 ms
