@@ -1759,28 +1759,30 @@ export class IsobmffDemuxer extends Demuxer {
 
 				slice.skip(4); // Version + flags
 
-				const { objectTypeIndication, decoderSpecificInfo } = readEsDescriptor(slice);
-				if (objectTypeIndication === 0x40 || objectTypeIndication === 0x67) {
-					track.info.codec = 'aac';
-					track.info.aacCodecInfo = {
-						isMpeg2: objectTypeIndication === 0x67,
-						objectType: null,
-					};
-				} else if (objectTypeIndication === 0x69 || objectTypeIndication === 0x6b) {
-					track.info.codec = 'mp3';
-				} else if (objectTypeIndication === 0xdd) {
-					track.info.codec = 'vorbis'; // "nonstandard, gpac uses it" - FFmpeg
-				} else if (objectTypeIndication === 0xa9) {
-					track.info.codec = 'dts';
-				} else {
-					Logging._warn(
-						`Unsupported audio codec (objectTypeIndication ${objectTypeIndication}) - discarding track.`,
-					);
-				}
-
-				if (track.info.type === 'video') {
-					const streamType = readU8(slice) >>> 2;
-					if (objectTypeIndication === 0x6c && streamType === 4) {
+				const { objectTypeIndication, decoderSpecificInfo } =
+					readEsDescriptor(slice);
+				if (track.info.type === 'audio') {
+					if (objectTypeIndication === 0x40 || objectTypeIndication === 0x67) {
+						track.info.codec = 'aac';
+						track.info.aacCodecInfo = {
+							isMpeg2: objectTypeIndication === 0x67,
+							objectType: null,
+						};
+					} else if (objectTypeIndication === 0x69 || objectTypeIndication === 0x6b) {
+						track.info.codec = 'mp3';
+					} else if (objectTypeIndication === 0xdd) {
+						track.info.codec = 'vorbis'; // "nonstandard, gpac uses it" - FFmpeg
+					} else if (objectTypeIndication === 0xa9) {
+						track.info.codec = 'dts';
+					} else {
+						Logging._warn(
+							`Unsupported audio codec (objectTypeIndication ${
+								objectTypeIndication
+							}) - discarding track.`,
+						);
+					}
+				} else if (track.info.type === 'video') {
+					if (objectTypeIndication === 0x6c) {
 						track.info.codec = 'mjpeg';
 					} else {
 						Logging._warn(`Unsupported video codec (objectTypeIndication ${objectTypeIndication}).`);

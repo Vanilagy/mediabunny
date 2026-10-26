@@ -9,15 +9,20 @@ import { BufferTarget } from '../../src/target.js';
 import { Conversion } from '../../src/conversion.js';
 import path from 'path';
 
-const movFilePath = path.join(__dirname, '..', 'public/mjpeg.mov');
-
+// From test/public: ffmpeg -i demo.mp4 -map 0:v:0 -c:v mjpeg -q:v 3 -pix_fmt yuvj420p mjpeg.mov
+const movFilePath = path.join(__dirname, "..", "public/mjpeg.mov");
 // Generated with FFmpeg: -i mjpeg.mov -map 0:v:0 -frames:v 2 -c:v copy mjpeg.mp4
-test.concurrent('reading FFmpeg MJPEG in an mp4v sample entry', async () => {
+const mp4FilePath = path.join(__dirname, '..', 'public/mjpeg.mp4');
+// From test/public: ffmpeg -i demo.mp4 -map 0:v:0 -c:v mjpeg -q:v 3 -pix_fmt yuvj420p mjpeg.mkv
+const mkvFilePath = path.join(__dirname, '../public/mjpeg.mkv');
+
+test.only('reading FFmpeg MJPEG in an mp4v sample entry', async () => {
 	using input = new Input({
-		source: new FilePathSource(path.join(__dirname, '..', 'public/mjpeg.mp4')),
+		source: new FilePathSource(mp4FilePath),
 		formats: ALL_FORMATS,
 	});
 	const track = (await input.getPrimaryVideoTrack())!;
+	console.log({ track });
 	expect(await track.getInternalCodecId()).toBe('mp4v');
 	expect(await track.getCodec()).toBe('mjpeg');
 	expect(await track.getCodedWidth()).toBe(640);
@@ -100,10 +105,9 @@ test.concurrent('transcoding to mjpeg', { timeout: 20_000 }, async () => {
 	expect(decoderConfig.description).toBeUndefined();
 });
 
-// From test/public: ffmpeg -i demo.mp4 -map 0:v:0 -c:v mjpeg -q:v 3 -pix_fmt yuvj420p mjpeg.mkv
 test.concurrent('reads MJPEG frames from an FFmpeg MKV', async () => {
 	using input = new Input({
-		source: new FilePathSource(path.join(__dirname, '../public/mjpeg.mkv')),
+		source: new FilePathSource(mkvFilePath),
 		formats: ALL_FORMATS,
 	});
 

@@ -32,8 +32,8 @@ class MjpegDecoder extends CustomVideoDecoder {
 
 	async decode(packet: EncodedPacket) {
 		const data = packet.data;
-		const buffer =
-			data.buffer instanceof ArrayBuffer
+		const buffer
+			= data.buffer instanceof ArrayBuffer
 				? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
 				: new Uint8Array(data);
 		const blob = new Blob([buffer], { type: 'image/jpeg' });
@@ -75,7 +75,7 @@ class MjpegEncoder extends CustomVideoEncoder {
 	targetSize?: number;
 	bitrateState: BitrateState = { actualBytes: 0, targetBytes: 0, smoothedError: 0 };
 
-	static override supports(codec: VideoCodec, config: VideoEncoderConfig): boolean {
+	static override supports(codec: VideoCodec): boolean {
 		return codec === 'mjpeg';
 	}
 
