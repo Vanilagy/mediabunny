@@ -3,7 +3,7 @@ import { Input } from '../../src/input.js';
 import { BufferSource, UrlSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { assert } from '../../src/misc.js';
-import { AudioSampleSink, VideoSampleSink } from '../../src/media-sink.js';
+import { AudioSampleSink, EncodedPacketSink, VideoSampleSink } from '../../src/media-sink.js';
 import { Output } from '../../src/output.js';
 import { MpegTsOutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
@@ -146,6 +146,56 @@ test('Audio decoder pre-roll', async () => {
 		expect(sample.timestamp).toBe(referenceTimestamp);
 		expectSimilarData(getSampleData(sample), referenceData);
 	}
+});
+
+test('Sample retrieval within Opus pre-skip', async () => {
+	using input = new Input({
+		source: new UrlSource('/demo.webm'),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	expect(await track.getCodec()).toBe('opus');
+	expect(await track.getPreRollDuration()).toBe(0.08);
+
+	const firstPacket = await new EncodedPacketSink(track).getFirstPacket();
+	assert(firstPacket);
+
+	const sink = new AudioSampleSink(track);
+
+	// The decoder trims the pre-skip off the first packet, so the first sample starts after it
+	let firstSampleTimestamp: number | null = null;
+	for await (using sample of sink.samples()) {
+		firstSampleTimestamp = sample.timestamp;
+		break;
+	}
+	assert(firstSampleTimestamp !== null);
+	expect(firstSampleTimestamp).toBeGreaterThan(firstPacket.timestamp);
+
+	const timestamps = [
+		firstPacket.timestamp,
+		(firstPacket.timestamp + firstSampleTimestamp) / 2,
+		firstSampleTimestamp,
+		1,
+	];
+	const results: ({ timestamp: number; duration: number } | null)[] = [];
+	for await (using sample of sink.samplesAtTimestamps(timestamps)) {
+		results.push(sample && {
+			timestamp: sample.timestamp,
+			duration: sample.duration,
+		});
+	}
+
+	// No sample starts at or before these
+	expect(results[0]).toBe(null);
+	expect(results[1]).toBe(null);
+
+	expect(results[2]!.timestamp).toBe(firstSampleTimestamp);
+
+	expect(results[3]!.timestamp).toBeLessThanOrEqual(1);
+	expect(results[3]!.timestamp + results[3]!.duration).toBeGreaterThan(1);
 });
 
 const getSampleData = (sample: AudioSample) => {

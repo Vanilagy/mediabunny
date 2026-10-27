@@ -59,6 +59,7 @@ export class Mp3Demuxer extends Demuxer {
 	loadedSamples: Sample[] = []; // All samples from the start of the file to lastLoadedPos
 	metadataTags: MetadataTags | null = null;
 	xingData: {
+		isVbr: boolean;
 		frameCount: number | null;
 		fileSize: number | null;
 	} | null = null;
@@ -159,6 +160,8 @@ export class Mp3Demuxer extends Demuxer {
 						const flags = view.getUint32(0, false);
 
 						this.xingData = {
+							// LAME and FFmpeg write the same header with 'Info' in place of 'Xing' for CBR streams
+							isVbr: word === XING,
 							frameCount: (flags & XingFlags.FrameCount)
 								? view.getUint32(4, false)
 								: null,
@@ -301,14 +304,12 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 		assert(demuxer.firstFrameHeader !== null);
 		assert(demuxer.firstFrameHeaderPos !== null);
 
-		if (demuxer.xingData) {
-			if (demuxer.xingData.frameCount !== null) {
-				return demuxer.xingData.frameCount
-					* demuxer.firstFrameHeader.audioSamplesInFrame
-					/ demuxer.firstFrameHeader.sampleRate;
-			}
-		} else {
-			// No Xing, assuming CBR
+		if (demuxer.xingData && demuxer.xingData.frameCount !== null) {
+			return demuxer.xingData.frameCount
+				* demuxer.firstFrameHeader.audioSamplesInFrame
+				/ demuxer.firstFrameHeader.sampleRate;
+		} else if (!demuxer.xingData?.isVbr) {
+			// Not tagged as VBR, assuming CBR
 
 			if (demuxer.reader.fileSize !== null) {
 				const averageFrameSize = computeAverageMp3FrameSize(

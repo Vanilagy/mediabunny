@@ -701,6 +701,23 @@ export abstract class BaseMediaSampleSink<
 			({ promise: queueNotEmpty, resolve: onQueueNotEmpty } = promiseWithResolvers());
 		};
 
+		// The answer to a query timestamp is the last sample starting at or before it, but we only know a sample is the
+		// last one once the next one comes in (or the decoder is flushed). So, we hold on to the most recent one until
+		// then.
+		let heldSample: MediaSample | null = null;
+
+		const emitHeldSample = (count: number) => {
+			for (let i = 0; i < count; i++) {
+				// Clone the sample if we need to emit it multiple times
+				pushToQueue(heldSample && (i < count - 1 ? heldSample.clone() : heldSample) as MediaSample);
+			}
+
+			if (count === 0) {
+				heldSample?.close();
+			}
+			heldSample = null;
+		};
+
 		const retrievalOptions: PacketRetrievalOptions = {
 			...options,
 			verifyKeyPackets: true,
@@ -717,23 +734,18 @@ export abstract class BaseMediaSampleSink<
 					return;
 				}
 
-				let sampleUses = 0;
+				// Every query timestamp this sample starts after is answered by the sample before it
+				let heldSampleUses = 0;
 				while (
 					timestampsOfInterest.length > 0
-					&& sample.timestamp - timestampsOfInterest[0]! > -1e-10 // Give it a little epsilon
+					&& sample.timestamp - timestampsOfInterest[0]! > 1e-10 // Give it a little epsilon
 				) {
-					sampleUses++;
+					heldSampleUses++;
 					timestampsOfInterest.shift();
 				}
 
-				if (sampleUses > 0) {
-					for (let i = 0; i < sampleUses; i++) {
-						// Clone the sample if we need to emit it multiple times
-						pushToQueue((i < sampleUses - 1 ? sample.clone() : sample) as MediaSample);
-					}
-				} else {
-					sample.close();
-				}
+				emitHeldSample(heldSampleUses);
+				heldSample = sample;
 			}, (error) => {
 				if (!hasOutOfBandError) {
 					outOfBandError = error;
@@ -786,11 +798,8 @@ export abstract class BaseMediaSampleSink<
 				assert(decoder);
 				await decoder.flush();
 
-				// We don't expect this list to have any elements in it anymore, but in case it does, let's emit
-				// nulls for every remaining element, then clear it.
-				for (let i = 0; i < timestampsOfInterest.length; i++) {
-					pushToQueue(null);
-				}
+				// No sample starts after the remaining query timestamps, so the last one answers all of them
+				emitHeldSample(timestampsOfInterest.length);
 				timestampsOfInterest.length = 0;
 			};
 
@@ -827,11 +836,12 @@ export abstract class BaseMediaSampleSink<
 
 				// Keep extending the current batch as long as it reaches the key packet anyway (always the case for an
 				// unchanged key packet), so that consecutive timestamps don't redo their pre-roll. Otherwise, or if
-				// we're going back in time, start a new batch at the key packet.
+				// we're going back in time, start a new batch at the key packet. The query timestamps within a batch
+				// must not decrease, since the sample matching relies on that.
 				if (
 					!lastPacket
 					|| keyPacket.sequenceNumber > maxSequenceNumber + 1
-					|| targetPacket.timestamp < lastPacket.timestamp
+					|| timestamp < last(timestampsOfInterest)!
 				) {
 					if (lastPacket) {
 						await decodePackets();
@@ -841,7 +851,7 @@ export abstract class BaseMediaSampleSink<
 					lastKeyPacket = keyPacket;
 				}
 
-				timestampsOfInterest.push(targetPacket.timestamp);
+				timestampsOfInterest.push(timestamp);
 				maxSequenceNumber = Math.max(targetPacket.sequenceNumber, maxSequenceNumber);
 
 				lastPacket = targetPacket;
@@ -870,6 +880,8 @@ export abstract class BaseMediaSampleSink<
 
 		const track = this._track;
 		const closeSamples = () => {
+			heldSample?.close();
+			heldSample = null;
 			for (const sample of sampleQueue) {
 				sample?.close();
 			}
