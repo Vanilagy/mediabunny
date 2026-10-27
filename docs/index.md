@@ -94,6 +94,9 @@ const bundleSizes = [
 ];
 
 const sponsors = {
+	platinum: [
+		{ image: '/sponsors/figma.png', name: 'Figma', url: 'https://www.figma.com/' },
+	],
 	gold: [
 		{ image: '/sponsors/remotion-light.png', name: 'Remotion', url: 'https://remotion.dev/' },
 		//{ image: '/sponsors/gling.svg', name: 'Gling AI', url: 'https://www.gling.ai/' },
@@ -388,6 +391,15 @@ await conversion.execute();
 		<img class="size-8" src="./assets/fluent-emoji--heart-suit.svg">
 	</h2>
 	<p class="max-w-2xl">Mediabunny is an open-source project released under the <a href="https://choosealicense.com/licenses/mpl-2.0/" target="_blank">MPL-2.0</a> and is therefore free to use for any purpose, including closed-source commercial use. A permissive license is essential for a foundational library like this to truly thrive. That said, this project requires an immense amount of work and care. This is made possible by the generous financial backing of these awesome sponsors:</p>
+	<template v-if="sponsors.platinum.length > 0">
+		<h3 class="!text-4xl">Platinum sponsors</h3>
+		<div class="flex flex-wrap mt-1 justify-center gap-1">
+			<a v-for="sponsor in sponsors.platinum" :href="sponsor.url" target="_blank" rel="sponsored" class="flex items-center p-2 rounded-full hover:bg-(--vp-c-gray-3) !text-(--vp-c-text-1) !no-underline">
+				<img :src="sponsor.image" class="size-20 rounded-full">
+				<p class="!my-0 !font-medium px-3 text-xl">{{ sponsor.name }}</p>
+			</a>
+		</div>
+	</template>
 	<template v-if="sponsors.gold.length > 0">
 		<h3 class="!text-3xl">Gold sponsors</h3>
 		<div class="flex flex-wrap mt-1 justify-center gap-1">
