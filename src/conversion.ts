@@ -295,6 +295,11 @@ export type ConversionVideoOptions = {
 	 * matches the input track pairability graph.
 	 */
 	group?: OutputTrackGroup | OutputTrackGroup[];
+	/**
+	 * The maximum amount of encoded packets that will be added to this track.
+   * For more, see {@link BaseTrackMetadata.maximumPacketCount}.
+	 */
+	maximumPacketCount?: number;
 };
 
 /**
@@ -358,6 +363,11 @@ export type ConversionAudioOptions = {
 	 * matches the input track pairability graph.
 	 */
 	group?: OutputTrackGroup | OutputTrackGroup[];
+	/**
+	 * The maximum amount of encoded packets that will be added to this track.
+   * For more, see {@link BaseTrackMetadata.maximumPacketCount}.
+	 */
+	maximumPacketCount?: number;
 };
 
 /**
@@ -1921,6 +1931,7 @@ export class Conversion {
 			group: ownGroup ?? trackOptions.group,
 			bitrate: bitrate ?? undefined,
 			averageBitrate: averageBitrate ?? undefined,
+			maximumPacketCount: trackOptions.maximumPacketCount ?? undefined,
 		});
 
 		this.utilizedTracks.push(track);
@@ -2327,6 +2338,7 @@ export class Conversion {
 			group: ownGroup ?? trackOptions.group,
 			bitrate: bitrate ?? undefined,
 			averageBitrate: averageBitrate ?? undefined,
+			maximumPacketCount: trackOptions.maximumPacketCount ?? undefined,
 		});
 
 		this.utilizedTracks.push(track);
