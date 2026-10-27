@@ -1,10 +1,10 @@
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { brotliCompressSync } from 'node:zlib';
-import { assert } from '../../src/misc.js';
+import { assert, wait } from '../../src/misc.js';
 import { Reader, readBytes } from '../../src/reader.js';
 import {
 	ALL_FORMATS,
@@ -12,6 +12,7 @@ import {
 	EncodedPacketSink,
 	FilePathSource,
 	Input,
+	InputDisposedError,
 	Logging,
 	LogLevel,
 	UrlSource,
@@ -297,6 +298,181 @@ test('UrlSource reads the full decoded body of a compressed 206 response', async
 		server.closeAllConnections();
 		server.close();
 	}
+});
+
+test.each([0, 3])('UrlSource honors disabled retries after %i bytes before an empty response', async (prefixLength) => {
+	vi.useFakeTimers();
+	const logs = captureLogs();
+	try {
+		const data = Uint8Array.from({ length: 12 }, (_, i) => i);
+		const starts: number[] = [];
+		const getRetryDelay = vi.fn(() => null);
+		const source = new UrlSource('https://example.invalid/data', {
+			getRetryDelay,
+			fetchFn: async (_, init) => {
+				const start = Number(/bytes=(\d+)/.exec(new Headers(init?.headers).get('Range')!)![1]);
+				starts.push(start);
+				await wait(1);
+				return new Response(start === 0 ? data.subarray(0, prefixLength) : new Uint8Array(), {
+					status: 206,
+					headers: { 'Content-Range': `bytes ${start}-11/12` },
+				});
+			},
+		});
+		using ref = source.ref();
+		const result = Promise.resolve(new Reader(ref.source).requestSlice(0, 12)).catch((error: unknown) => error);
+		await vi.advanceTimersByTimeAsync(20);
+		expect(starts).toEqual(prefixLength ? [0, prefixLength] : [0]);
+		expect(getRetryDelay).toHaveBeenCalledExactlyOnceWith(1, expect.any(Error), 'https://example.invalid/data');
+		expect(await result).toBeInstanceOf(Error);
+		expect(((await result) as Error).message).toContain('without delivering any bytes');
+	} finally {
+		logs.stop();
+		vi.useRealTimers();
+	}
+});
+
+test('UrlSource backs off empty responses and resets attempts only after byte progress', async () => {
+	vi.useFakeTimers();
+	const logs = captureLogs();
+	try {
+		const data = Uint8Array.from({ length: 12 }, (_, i) => i);
+		const starts: number[] = [];
+		const getRetryDelay = vi.fn((attempts: number) => attempts * 0.01);
+		const source = new UrlSource('https://example.invalid/data', {
+			getRetryDelay,
+			fetchFn: async (_, init) => {
+				const start = Number(/bytes=(\d+)/.exec(new Headers(init?.headers).get('Range')!)![1]);
+				starts.push(start);
+				const request = starts.length;
+				await wait(1);
+				// Two empty responses, three bytes of progress, two more empties, then the remainder.
+				const body = request === 3 || request === 6
+					? data.subarray(start, request === 3 ? 3 : data.length)
+					: new ReadableStream<Uint8Array>({
+						start(controller) {
+							controller.enqueue(new Uint8Array()); // A zero-length chunk is not progress.
+							controller.close();
+						},
+					});
+				return new Response(body, { status: 206, headers: { 'Content-Range': `bytes ${start}-11/12` } });
+			},
+		});
+		using ref = source.ref();
+		const result = Promise.resolve(new Reader(ref.source).requestSlice(0, 12));
+		void result.catch(() => {}); // Also handle disposal if an assertion fails before awaiting the read.
+		await vi.advanceTimersByTimeAsync(1);
+		expect(getRetryDelay).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(9);
+		expect(starts).toEqual([0]); // No second fetch before the requested delay.
+		await vi.advanceTimersByTimeAsync(90);
+		const slice = await result;
+		expect(slice).not.toBeNull();
+		expect([...readBytes(slice!, 12)]).toEqual([...data]);
+		expect(starts).toEqual([0, 0, 0, 3, 3, 3]);
+		expect(getRetryDelay.mock.calls.map(([attempts]) => attempts)).toEqual([1, 2, 1, 2]);
+	} finally {
+		logs.stop();
+		vi.useRealTimers();
+	}
+});
+
+test('UrlSource continues capped range responses without treating byte progress as a failed request', async () => {
+	const data = Uint8Array.from({ length: 12 }, (_, i) => i);
+	const starts: number[] = [];
+	const getRetryDelay = vi.fn(() => null);
+	const source = new UrlSource('https://example.invalid/data', {
+		getRetryDelay,
+		fetchFn: async (_, init) => {
+			const start = Number(/bytes=(\d+)/.exec(new Headers(init?.headers).get('Range')!)![1]);
+			starts.push(start);
+			return new Response(data.subarray(start, start + 3), {
+				status: 206,
+				headers: { 'Content-Range': `bytes ${start}-${start + 2}/12`, 'Content-Length': '3' },
+			});
+		},
+	});
+	using ref = source.ref();
+	const slice = await new Reader(ref.source).requestSlice(0, 12);
+	expect(slice).not.toBeNull();
+	expect([...readBytes(slice!, 12)]).toEqual([...data]);
+	expect(starts).toEqual([0, 3, 6, 9]);
+	expect(getRetryDelay).not.toHaveBeenCalled();
+});
+
+test('UrlSource uses its default backoff for an empty ranged response', async () => {
+	vi.useFakeTimers();
+	const logs = captureLogs();
+	try {
+		const fetchFn = vi.fn(async () => {
+			await wait(1);
+			return new Response(new Uint8Array(), { status: 206, headers: { 'Content-Range': 'bytes 0-11/12' } });
+		});
+		const source = new UrlSource('https://example.invalid/data', { fetchFn });
+		using ref = source.ref();
+		const result = Promise.resolve(new Reader(ref.source).requestSlice(0, 12)).catch((error: unknown) => error);
+		await vi.advanceTimersByTimeAsync(500);
+		expect(fetchFn).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(fetchFn).toHaveBeenCalledTimes(2);
+		ref.free();
+		expect(await result).toBeInstanceOf(InputDisposedError);
+		await vi.runAllTimersAsync();
+	} finally {
+		logs.stop();
+		vi.useRealTimers();
+	}
+});
+
+test('UrlSource does not fetch again when disposed during a no-progress retry delay', async () => {
+	vi.useFakeTimers();
+	const logs = captureLogs();
+	try {
+		const getRetryDelay = vi.fn(() => 10);
+		const fetchFn = vi.fn(async () => {
+			await wait(1);
+			return new Response(new Uint8Array(), { status: 206, headers: { 'Content-Range': 'bytes 0-11/12' } });
+		});
+		const source = new UrlSource('https://example.invalid/data', { getRetryDelay, fetchFn });
+		using ref = source.ref();
+		const result = Promise.resolve(new Reader(ref.source).requestSlice(0, 12)).catch((error: unknown) => error);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(getRetryDelay).toHaveBeenCalledOnce();
+		ref.free();
+		expect(await result).toBeInstanceOf(InputDisposedError);
+		await vi.advanceTimersByTimeAsync(10_000);
+		expect(fetchFn).toHaveBeenCalledTimes(1);
+	} finally {
+		logs.stop();
+		vi.useRealTimers();
+	}
+});
+
+test.each([-1, Infinity, NaN])('UrlSource rejects invalid no-progress retry delay %s', async (retryDelay) => {
+	const source = new UrlSource('https://example.invalid/data', {
+		getRetryDelay: () => retryDelay,
+		fetchFn: async () => new Response(new Uint8Array(), {
+			status: 206,
+			headers: { 'Content-Range': 'bytes 0-11/12' },
+		}),
+	});
+	using ref = source.ref();
+	await expect(new Reader(ref.source).requestSlice(0, 12)).rejects
+		.toThrow('Retry delay must be a non-negative finite number.');
+});
+
+test.each<ResponseInit>([
+	{ status: 206, headers: {} },
+	{ status: 206, headers: { 'Content-Encoding': 'br', 'Content-Range': 'bytes 0-11/12' } },
+	{ status: 200, headers: { 'Content-Length': '0' } },
+])('UrlSource preserves empty EOF without a strict target ($status, $headers)', async (responseInit) => {
+	const getRetryDelay = vi.fn(() => null);
+	const fetchFn = vi.fn(async () => new Response(new Uint8Array(), responseInit));
+	const source = new UrlSource('https://example.invalid/empty.m3u8', { getRetryDelay, fetchFn });
+	using ref = source.ref();
+	expect(await new Reader(ref.source).requestSlice(0, 12)).toBeNull();
+	expect(fetchFn).toHaveBeenCalledOnce();
+	expect(getRetryDelay).not.toHaveBeenCalled();
 });
 
 const startRangelessServer = async (

@@ -947,6 +947,8 @@ export class UrlSource extends PathedSource {
 
 	/** @internal */
 	private async _runWorker(worker: ReadWorker) {
+		let emptyResponseAttempts = 0;
+
 		// The outer loop is for resuming a request if it dies mid-response
 		while (true) {
 			if (worker.aborted) {
@@ -955,6 +957,7 @@ export class UrlSource extends PathedSource {
 				return;
 			}
 
+			const requestStartPos = worker.currentPos;
 			const abortController = new AbortController();
 			this._abortControllers.set(worker, abortController);
 
@@ -1106,6 +1109,27 @@ export class UrlSource extends PathedSource {
 					}
 
 					if (worker.strictTarget) {
+						if (worker.currentPos === requestStartPos) {
+							const error = new Error(
+								`HTTP response ended without delivering any bytes at position ${requestStartPos}`
+								+ ` before reaching position ${worker.targetPos}.`,
+							);
+							const retryDelayInSeconds = this._getRetryDelay(++emptyResponseAttempts, error, this._url);
+							if (retryDelayInSeconds === null) {
+								throw error;
+							}
+
+							if (!Number.isFinite(retryDelayInSeconds) || retryDelayInSeconds < 0) {
+								throw new TypeError('Retry delay must be a non-negative finite number.');
+							}
+
+							Logging._error('Error while reading response stream. Attempting to resume.', error);
+							if (retryDelayInSeconds > 0) {
+								await wait(1000 * retryDelayInSeconds);
+							}
+							break;
+						}
+
 						// The response stopped early, before the target. This can happen if server decides to cap range
 						// requests arbitrarily, even if the request had an uncapped end. In this case, let's fetch the
 						// rest of the data using a new request.
@@ -1115,6 +1139,10 @@ export class UrlSource extends PathedSource {
 						this._orchestrator.onWorkerFinished(worker);
 						return;
 					}
+				}
+
+				if (value.length > 0) {
+					emptyResponseAttempts = 0;
 				}
 
 				this._dispatchRead(worker.currentPos, worker.currentPos + value.length);
