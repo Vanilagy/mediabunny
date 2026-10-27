@@ -185,6 +185,11 @@ export type IsobmffOutputFormatOptions = {
 	metadataFormat?: 'auto' | 'mdir' | 'mdta' | 'udta';
 
 	/**
+	 * The output creation time to be used in metadata frames. Defaults to `Date.now()`.
+	 */
+	creationTime?: number;
+
+	/**
 	 * Will be called once the ftyp (File Type) box of the output file has been written.
 	 *
 	 * @param data - The raw bytes.

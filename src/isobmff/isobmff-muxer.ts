@@ -222,7 +222,7 @@ export class IsobmffMuxer extends Muxer {
 	trackDatas: IsobmffTrackData[] = [];
 	private allTracksKnown = promiseWithResolvers();
 
-	creationTime = Math.floor(Date.now() / 1000) + TIMESTAMP_OFFSET;
+	creationTime: number;
 	private finalizedChunks: Chunk[] = [];
 
 	private wroteFragmentedHeader = false;
@@ -243,6 +243,7 @@ export class IsobmffMuxer extends Muxer {
 		this.isCmaf = format instanceof CmafOutputFormat;
 		this.minimumFragmentDuration = this.formatOptions.minimumFragmentDuration
 			?? (format instanceof CmafOutputFormat ? Infinity : 1);
+		this.creationTime = Math.floor((this.formatOptions.creationTime ?? Date.now()) / 1000) + TIMESTAMP_OFFSET;
 
 		this.auxWriter.start();
 	}
