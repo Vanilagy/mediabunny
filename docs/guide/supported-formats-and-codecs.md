@@ -36,7 +36,7 @@ Mediabunny ships with built-in decoders and encoders for all audio PCM codecs, m
 ### Video codecs
 
 - `'avc'` - Advanced Video Coding (AVC) / H.264
-- `'hevc'` - High Efficiency Video Coding (HEVC) / H.265
+- `'hevc'` - High Efficiency Video Coding (HEVC) / H.265 [^hevc]
 - `'vp8'` - VP8
 - `'vp9'` - VP9
 - `'av1'` - AOMedia Video 1 (AV1)
@@ -109,6 +109,7 @@ Not all codecs can be used with all containers. The following table specifies th
 
 For HLS, the supported codecs depend on the segment format chosen.
 
+[^hevc]: HEVC decoding support in WebCodecs depends on the browser and platform. Where it is missing, the third-party [`@hevcjs/mediabunny-plugin`](https://www.npmjs.com/package/@hevcjs/mediabunny-plugin) package provides a WebAssembly decoder for the Main and Main 10 profiles.
 [^prores]: ProRes is not supported by WebCodecs. To decode it, use the [`@mediabunny/prores`](./extensions/prores) extension package. The [`@mediabunny/server`](./extensions/server) extension package provides both decoding and encoding support for server-side environments.
 [^aac]: In some browsers, AAC encoding is not supported by WebCodecs. You can polyfill it with the [`@mediabunny/aac-encoder`](./extensions/aac-encoder) extension package.
 [^mp3]: MP3 encoding is not supported by WebCodecs. You can polyfill it with the [`@mediabunny/mp3-encoder`](./extensions/mp3-encoder) extension package.
