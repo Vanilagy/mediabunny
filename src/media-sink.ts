@@ -758,19 +758,24 @@ export abstract class BaseMediaSampleSink<
 			const packetSink = this._createPacketSink();
 			const preRollDuration = await this._getPreRollDuration();
 			let lastPacket: EncodedPacket | null = null;
+			let lastTimestamp = -Infinity;
 			let lastKeyPacket: EncodedPacket | null = null;
+			let lastDecodedPacket: EncodedPacket | null = null;
 
-			// The end sequence number (inclusive) in the next batch of packets that will be decoded. The batch starts
-			// at the last key frame and goes until this sequence number.
+			// The end sequence number (inclusive) of the current batch of packets. The batch starts at the last key
+			// frame and goes until this sequence number.
 			let maxSequenceNumber = -1;
 
 			const decodePackets = async () => {
 				assert(lastKeyPacket);
 				assert(decoder);
 
-				// Start at the current key packet
-				let currentPacket = lastKeyPacket;
-				decoder.decode(currentPacket);
+				// Continue where we left off, or start at the current key packet
+				let currentPacket = lastDecodedPacket;
+				if (!currentPacket) {
+					currentPacket = lastKeyPacket;
+					decoder.decode(currentPacket);
+				}
 
 				while (currentPacket.sequenceNumber < maxSequenceNumber) {
 					while (sampleQueue.length + decoder.getDecodeQueueSize() >= MAX_QUEUE_SIZE && !terminated) {
@@ -791,7 +796,7 @@ export abstract class BaseMediaSampleSink<
 					currentPacket = nextPacket;
 				}
 
-				maxSequenceNumber = -1;
+				lastDecodedPacket = currentPacket;
 			};
 
 			const flushDecoder = async () => {
@@ -824,8 +829,7 @@ export abstract class BaseMediaSampleSink<
 				}
 
 				if (!targetPacket || !keyPacket) {
-					if (maxSequenceNumber !== -1) {
-						await decodePackets();
+					if (lastPacket) {
 						await flushDecoder();
 					}
 
@@ -841,28 +845,28 @@ export abstract class BaseMediaSampleSink<
 				if (
 					!lastPacket
 					|| keyPacket.sequenceNumber > maxSequenceNumber + 1
-					|| timestamp < last(timestampsOfInterest)!
+					|| timestamp < lastTimestamp
 				) {
 					if (lastPacket) {
-						await decodePackets();
 						await flushDecoder(); // Always flush here, improves decoder compatibility
 					}
 
 					lastKeyPacket = keyPacket;
+					lastDecodedPacket = null;
+					maxSequenceNumber = -1;
 				}
 
 				timestampsOfInterest.push(timestamp);
 				maxSequenceNumber = Math.max(targetPacket.sequenceNumber, maxSequenceNumber);
 
 				lastPacket = targetPacket;
+				lastTimestamp = timestamp;
+
+				// Decode right away so that samples come out while the timestamps are still coming in
+				await decodePackets();
 			}
 
 			if (!terminated && !this._track.input._disposed) {
-				if (maxSequenceNumber !== -1) {
-					// We still need to decode packets
-					await decodePackets();
-				}
-
 				await flushDecoder();
 			}
 

@@ -2772,6 +2772,10 @@ const detectAudioEncoderPrimingShift = (codec: AudioCodec, codecString: string) 
 	})();
 
 	audioEncoderPrimingShiftPromises.set(codecString, promise);
+
+	// Don't remember failures because they _could_ be transient
+	promise.catch(() => audioEncoderPrimingShiftPromises.delete(codecString));
+
 	return promise;
 };
 

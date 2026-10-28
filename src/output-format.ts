@@ -1131,9 +1131,9 @@ export class FlacOutputFormat extends OutputFormat {
  */
 export type MpegTsOutputFormatOptions = {
 	/**
-	 * An offset in seconds that is added to all timestamps written to the file. The use of it is to prevent otherwise
-	 * negative timestamps (caused by audio priming samples or B-frames) not to be negative in the final file (which
-	 * would trip up some players). A recommended value is 10 seconds.
+	 * An offset in seconds that is added to all timestamps written to the file. It keeps timestamps that would
+	 * otherwise be negative (caused by audio priming samples or B-frames) positive in the final file, since negative
+	 * timestamps trip up some players. A recommended value is 10 seconds.
 	 *
 	 * Defaults to 0. When writing HLS, prefer {@link HlsOutputFormatOptions.mediaTimestampBase} instead.
 	 */
@@ -1166,7 +1166,7 @@ export class MpegTsOutputFormat extends OutputFormat {
 			options.timestampOffset !== undefined
 			&& (!Number.isFinite(options.timestampOffset) || options.timestampOffset < 0)
 		) {
-			throw new TypeError('options.timestampOffset, when provided, must be a number.');
+			throw new TypeError('options.timestampOffset, when provided, must be a non-negative number.');
 		}
 		if (options.onPacket !== undefined && typeof options.onPacket !== 'function') {
 			throw new TypeError('options.onPacket, when provided, must be a function.');

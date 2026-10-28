@@ -2,7 +2,7 @@ import { expect, test } from 'vitest';
 import { Input } from '../../src/input.js';
 import { BufferSource, UrlSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
-import { assert } from '../../src/misc.js';
+import { assert, promiseWithResolvers } from '../../src/misc.js';
 import { AudioSampleSink, EncodedPacketSink, VideoSampleSink } from '../../src/media-sink.js';
 import { Output } from '../../src/output.js';
 import { MpegTsOutputFormat } from '../../src/output-format.js';
@@ -196,6 +196,41 @@ test('Sample retrieval within Opus pre-skip', async () => {
 
 	expect(results[3]!.timestamp).toBeLessThanOrEqual(1);
 	expect(results[3]!.timestamp + results[3]!.duration).toBeGreaterThan(1);
+});
+
+test('Samples at timestamps come out while timestamps are still coming in', async () => {
+	using input = new Input({
+		source: new UrlSource('/glitch-hop-is-dead.wav'),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	const packetSink = new EncodedPacketSink(track);
+	const firstPacket = await packetSink.getFirstPacket();
+	assert(firstPacket);
+	const secondPacket = await packetSink.getNextPacket(firstPacket);
+	assert(secondPacket);
+
+	// The timestamps only end once the first sample has come out, which hangs if the sink holds off decoding until
+	// the run of consecutive packets is over
+	const { promise: firstSampleReceived, resolve: onFirstSampleReceived } = promiseWithResolvers();
+	const timestamps = async function* () {
+		yield firstPacket.timestamp;
+		yield secondPacket.timestamp;
+		await firstSampleReceived;
+	};
+
+	const sink = new AudioSampleSink(track);
+	const sampleTimestamps: number[] = [];
+	for await (using sample of sink.samplesAtTimestamps(timestamps())) {
+		assert(sample);
+		sampleTimestamps.push(sample.timestamp);
+		onFirstSampleReceived();
+	}
+
+	expect(sampleTimestamps).toEqual([firstPacket.timestamp, secondPacket.timestamp]);
 });
 
 const getSampleData = (sample: AudioSample) => {

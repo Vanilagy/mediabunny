@@ -178,6 +178,9 @@ test('Negative audio start timestamps via CodecDelay', async () => {
 		formats: ALL_FORMATS,
 	});
 
+	expect(await input.getDurationFromMetadata()).toBe(49 * 32 / 1000);
+	expect(await input.computeDuration()).toBe(49 * 32 / 1000);
+
 	const track = await input.getPrimaryAudioTrack();
 	assert(track);
 	const sink = new EncodedPacketSink(track);
