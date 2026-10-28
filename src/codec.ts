@@ -33,6 +33,7 @@ import {
 	base64ToBytes,
 	bytesToHexString,
 	isAllowSharedBufferSource,
+	isWebKit,
 	last,
 	reverseBitsU32,
 	toDataView,
@@ -266,7 +267,14 @@ export const buildVideoCodecString = (
 	alpha: boolean,
 ) => {
 	if (codec === 'avc') {
-		const profileIndication = 0x64; // High Profile
+		// Needed as a workaround for https://github.com/WebKit/WebKit/pull/74602, otherwise the encoder stalls.
+		// Also see https://github.com/Vanilagy/mediabunny/issues/541
+		// and https://github.com/Vanilagy/mediabunny/issues/587
+		// Unfortunately, Safari doesn't expose its version so we can't condition this on a specific Safari version. In
+		// the future, we can consider adding some runtime detection logic for it.
+		const constrainedBaseline = isWebKit();
+
+		const profileIndication = constrainedBaseline ? 0x42 : 0x64; // Baseline or High Profile
 		const totalMacroblocks = Math.ceil(width / 16) * Math.ceil(height / 16);
 
 		// Determine the level based on the table
@@ -276,7 +284,7 @@ export const buildVideoCodecString = (
 		const levelIndication = levelInfo ? levelInfo.level : 0;
 
 		const hexProfileIndication = profileIndication.toString(16).padStart(2, '0');
-		const hexProfileCompatibility = '00';
+		const hexProfileCompatibility = constrainedBaseline ? '40' : '00'; // constraint_set1_flag for Constrained
 		const hexLevelIndication = levelIndication.toString(16).padStart(2, '0');
 
 		return `avc1.${hexProfileIndication}${hexProfileCompatibility}${hexLevelIndication}`;
