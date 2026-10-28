@@ -25,7 +25,15 @@ import { Muxer } from '../muxer';
 import { Output, OutputAudioTrack, OutputSubtitleTrack, OutputTrack, OutputVideoTrack, TrackType } from '../output';
 import { Writer } from '../writer';
 import { BufferTarget } from '../target';
-import { assert, computeRationalApproximation, last, promiseWithResolvers, Rational, simplifyRational } from '../misc';
+import {
+	assert,
+	computeRationalApproximation,
+	last,
+	promiseWithResolvers,
+	Rational,
+	simplifyRational,
+	toUint8Array,
+} from '../misc';
 import { IsobmffOutputFormatOptions, IsobmffOutputFormat, MovOutputFormat, CmafOutputFormat } from '../output-format';
 import { inlineTimestampRegex, SubtitleConfig, SubtitleCue, SubtitleMetadata } from '../subtitles';
 import { aacChannelMap, aacFrequencyTable, buildAacAudioSpecificConfig } from '../../shared/aac-misc';
@@ -44,6 +52,7 @@ import { FileSlice } from '../reader';
 import { EncodedPacket, PacketType } from '../packet';
 import {
 	concatNalUnitsInLengthPrefixed,
+	deserializeAvcDecoderConfigurationRecord,
 	extractAvcDecoderConfigurationRecord,
 	extractHevcDecoderConfigurationRecord,
 	iterateNalUnitsInAnnexB,
@@ -112,6 +121,7 @@ export type IsobmffTrackData = {
 		height: number;
 		pixelAspectRatio: Rational;
 		decoderConfig: VideoDecoderConfig;
+		lastAvcDescription: Uint8Array | null;
 		/**
 		 * The "Annex B transformation" involves converting the raw packet data from Annex B to
 		 * "MP4" (length-prefixed) format.
@@ -494,6 +504,9 @@ export class IsobmffMuxer extends Muxer {
 				height: decoderConfig.codedHeight,
 				pixelAspectRatio,
 				decoderConfig: decoderConfig,
+				lastAvcDescription: track.source._codec === 'avc' && decoderConfig.description
+					? toUint8Array(decoderConfig.description).slice()
+					: null,
 				requiresAnnexBTransformation,
 				hasAlphaChannel,
 			},
@@ -685,6 +698,47 @@ export class IsobmffMuxer extends Muxer {
 			const trackData = this.getVideoTrackData(track, packet, meta);
 
 			let packetData = packet.data;
+			// An encoder replacement may change SPS/PPS while retaining the same codec string.
+			if (track.source._codec === 'avc' && meta?.decoderConfig?.description
+				&& !trackData.info.requiresAnnexBTransformation) {
+				const description = toUint8Array(meta.decoderConfig.description);
+				const previous = trackData.info.lastAvcDescription;
+				const changed = previous && (previous.length !== description.length
+					|| previous.some((value, index) => value !== description[index]));
+				if (changed) {
+					if (this.isFragmented) {
+						throw new Error('AVC configuration changed after the fragmented MP4 initialization segment.');
+					}
+					if (packet.type !== 'key') {
+						throw new Error('An AVC decoder configuration change must start with a key packet.');
+					}
+					const next = deserializeAvcDecoderConfigurationRecord(description);
+					const initial = deserializeAvcDecoderConfigurationRecord(previous);
+					if (!next || !initial || next.lengthSizeMinusOne !== initial.lengthSizeMinusOne) {
+						throw new Error('AVC decoder configuration changed to an incompatible NAL length format.');
+					}
+					if (meta.decoderConfig.codedWidth !== trackData.info.width
+						|| meta.decoderConfig.codedHeight !== trackData.info.height) {
+						throw new Error('AVC decoder configuration changed the track dimensions.');
+					}
+					// avc3 permits in-band updates; retain initial avcC for the first packets.
+					trackData.info.decoderConfig.codec = trackData.info.decoderConfig.codec.replace(/^avc1\./, 'avc3.');
+					trackData.info.lastAvcDescription = description.slice();
+				}
+			}
+			if (packet.type === 'key' && trackData.info.decoderConfig.codec.startsWith('avc3.')
+				&& trackData.info.lastAvcDescription) {
+				// Every later random-access point must also work without decoding earlier samples.
+				const active = deserializeAvcDecoderConfigurationRecord(trackData.info.lastAvcDescription)!;
+				const headers = concatNalUnitsInLengthPrefixed([
+					...active.sequenceParameterSets,
+					...active.pictureParameterSets,
+					...(active.sequenceParameterSetExt ?? []),
+				], (active.lengthSizeMinusOne + 1) as 1 | 2 | 3 | 4);
+				packetData = new Uint8Array(headers.length + packet.data.length);
+				packetData.set(headers);
+				packetData.set(packet.data, headers.length);
+			}
 			if (trackData.info.requiresAnnexBTransformation) {
 				const nalUnits = [...iterateNalUnitsInAnnexB(packetData)]
 					.map(loc => packetData.subarray(loc.offset, loc.offset + loc.length));
