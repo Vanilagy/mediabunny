@@ -1967,7 +1967,13 @@ const maybeInsertReferencePacket = (
 		}
 	}
 
-	referencePesPackets.splice(index + 1, 0, pesPacketHeader);
+	// Copy the header fields: callers may pass a whole PES packet, whose data would then stay alive in the index
+	referencePesPackets.splice(index + 1, 0, {
+		sectionStartPos: pesPacketHeader.sectionStartPos,
+		sectionEndPos: pesPacketHeader.sectionEndPos,
+		pts: pesPacketHeader.pts,
+		randomAccessIndicator: pesPacketHeader.randomAccessIndicator,
+	});
 	return true;
 };
 
