@@ -565,7 +565,9 @@ new HlsOutputFormat({
 
 // WAV:
 new HlsOutputFormat({
-	segmentFormat: new WavOutputFormat(),
+	segmentFormat: new WavOutputFormat({
+		metadataFormat: 'id3', // Recommended for correct media timestamping
+	}),
 });
 ```
 
@@ -650,6 +652,18 @@ segments-1.ts
 
 This option is special-cased when used in conjunction with a fragmented MP4 segment format: the resulting segments file will be a standalone valid fMP4 file. This way, you get both an HLS playlist as well as a single-file representation of the media.
 
+### Media timestamp base
+
+The media inside the segments always starts at the same timestamp, regardless of the timestamps you add. Use `mediaTimestampBase` to set it:
+```ts
+new HlsOutputFormat({
+	// ...
+	mediaTimestampBase: 0, // Defaults to 10 (seconds)
+});
+```
+
+The default leaves headroom for timestamps that lie slightly before the first packet (B-frames, audio priming). The timestamps in the playlists are not affected.
+
 ## Live HLS
 
 By default, created HLS playlists are assumed to be VODs. If you instead want to create HLS live streams that are to be consumed while they are being produced, you can use live mode:
@@ -669,8 +683,6 @@ Compared to VOD mode, live mode has these main behavioral differences:
 - Media playlists will only have the `#EXT-X-ENDLIST` tag when the stream has ended
 
 Since master and media playlists will be written more than once, multiple targets will be requested for the same path. Make sure to return a different `Target` instance each time.
-
-To guarantee A/V sync, make sure to use [DATE-TIME tags](#date-time-tags) when using live mode.
 
 ### Ending the stream
 

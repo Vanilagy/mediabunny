@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { parsePcmCodec, PCM_AUDIO_CODECS, PcmAudioCodec, VideoCodec, AudioCodec } from './codec';
+import { parsePcmCodec, PCM_AUDIO_CODECS, PcmAudioCodec, VideoCodec, AudioCodec, OPUS_SAMPLE_RATE } from './codec';
 import {
 	addAvcBitstreamRestriction,
 	AvcNalUnitType,
@@ -19,6 +19,7 @@ import {
 	iterateAvcNalUnits,
 	iterateHevcNalUnits,
 	parseAvcSps,
+	parseOpusIdentificationHeader,
 	sanitizeHevcPacketForChromium,
 	serializeAvcDecoderConfigurationRecord,
 } from './codec-data';
@@ -475,6 +476,8 @@ export abstract class BaseMediaSampleSink<
 	): Promise<DecoderWrapper<MediaSample>>;
 	/** @internal */
 	abstract _createPacketSink(): EncodedPacketSink;
+	/** @internal */
+	abstract _getPreRollDuration(): Promise<number>;
 
 	/** @internal */
 	protected mediaSamplesInRange(
@@ -554,8 +557,13 @@ export abstract class BaseMediaSampleSink<
 			decoder.onDequeue = () => onQueueDequeue();
 
 			const packetSink = this._createPacketSink();
-			const keyPacket = await packetSink.getKeyPacket(startTimestamp, packetRetrievalOptions)
-				?? await packetSink.getFirstKeyPacket(packetRetrievalOptions);
+			const preRollDuration = await this._getPreRollDuration();
+
+			const startPacket = await packetSink.getPacket(startTimestamp, packetRetrievalOptions);
+			const keyPacket = await packetSink.getKeyPacket(
+				(startPacket?.timestamp ?? startTimestamp) - preRollDuration,
+				packetRetrievalOptions,
+			) ?? await packetSink.getFirstKeyPacket(packetRetrievalOptions);
 
 			let currentPacket: EncodedPacket | null = keyPacket;
 
@@ -693,6 +701,23 @@ export abstract class BaseMediaSampleSink<
 			({ promise: queueNotEmpty, resolve: onQueueNotEmpty } = promiseWithResolvers());
 		};
 
+		// The answer to a query timestamp is the last sample starting at or before it, but we only know a sample is the
+		// last one once the next one comes in (or the decoder is flushed). So, we hold on to the most recent one until
+		// then.
+		let heldSample: MediaSample | null = null;
+
+		const emitHeldSample = (count: number) => {
+			for (let i = 0; i < count; i++) {
+				// Clone the sample if we need to emit it multiple times
+				pushToQueue(heldSample && (i < count - 1 ? heldSample.clone() : heldSample) as MediaSample);
+			}
+
+			if (count === 0) {
+				heldSample?.close();
+			}
+			heldSample = null;
+		};
+
 		const retrievalOptions: PacketRetrievalOptions = {
 			...options,
 			verifyKeyPackets: true,
@@ -709,23 +734,18 @@ export abstract class BaseMediaSampleSink<
 					return;
 				}
 
-				let sampleUses = 0;
+				// Every query timestamp this sample starts after is answered by the sample before it
+				let heldSampleUses = 0;
 				while (
 					timestampsOfInterest.length > 0
-					&& sample.timestamp - timestampsOfInterest[0]! > -1e-10 // Give it a little epsilon
+					&& sample.timestamp - timestampsOfInterest[0]! > 1e-10 // Give it a little epsilon
 				) {
-					sampleUses++;
+					heldSampleUses++;
 					timestampsOfInterest.shift();
 				}
 
-				if (sampleUses > 0) {
-					for (let i = 0; i < sampleUses; i++) {
-						// Clone the sample if we need to emit it multiple times
-						pushToQueue((i < sampleUses - 1 ? sample.clone() : sample) as MediaSample);
-					}
-				} else {
-					sample.close();
-				}
+				emitHeldSample(heldSampleUses);
+				heldSample = sample;
 			}, (error) => {
 				if (!hasOutOfBandError) {
 					outOfBandError = error;
@@ -736,20 +756,26 @@ export abstract class BaseMediaSampleSink<
 			decoder.onDequeue = () => onQueueDequeue();
 
 			const packetSink = this._createPacketSink();
+			const preRollDuration = await this._getPreRollDuration();
 			let lastPacket: EncodedPacket | null = null;
+			let lastTimestamp = -Infinity;
 			let lastKeyPacket: EncodedPacket | null = null;
+			let lastDecodedPacket: EncodedPacket | null = null;
 
-			// The end sequence number (inclusive) in the next batch of packets that will be decoded. The batch starts
-			// at the last key frame and goes until this sequence number.
+			// The end sequence number (inclusive) of the current batch of packets. The batch starts at the last key
+			// frame and goes until this sequence number.
 			let maxSequenceNumber = -1;
 
 			const decodePackets = async () => {
 				assert(lastKeyPacket);
 				assert(decoder);
 
-				// Start at the current key packet
-				let currentPacket = lastKeyPacket;
-				decoder.decode(currentPacket);
+				// Continue where we left off, or start at the current key packet
+				let currentPacket = lastDecodedPacket;
+				if (!currentPacket) {
+					currentPacket = lastKeyPacket;
+					decoder.decode(currentPacket);
+				}
 
 				while (currentPacket.sequenceNumber < maxSequenceNumber) {
 					while (sampleQueue.length + decoder.getDecodeQueueSize() >= MAX_QUEUE_SIZE && !terminated) {
@@ -770,18 +796,15 @@ export abstract class BaseMediaSampleSink<
 					currentPacket = nextPacket;
 				}
 
-				maxSequenceNumber = -1;
+				lastDecodedPacket = currentPacket;
 			};
 
 			const flushDecoder = async () => {
 				assert(decoder);
 				await decoder.flush();
 
-				// We don't expect this list to have any elements in it anymore, but in case it does, let's emit
-				// nulls for every remaining element, then clear it.
-				for (let i = 0; i < timestampsOfInterest.length; i++) {
-					pushToQueue(null);
-				}
+				// No sample starts after the remaining query timestamps, so the last one answers all of them
+				emitHeldSample(timestampsOfInterest.length);
 				timestampsOfInterest.length = 0;
 			};
 
@@ -793,11 +816,20 @@ export abstract class BaseMediaSampleSink<
 				}
 
 				const targetPacket = await packetSink.getPacket(timestamp, retrievalOptions);
-				const keyPacket = targetPacket && await packetSink.getKeyPacket(timestamp, retrievalOptions);
+				let keyPacket = targetPacket && await packetSink.getKeyPacket(
+					targetPacket.timestamp - preRollDuration,
+					retrievalOptions,
+				);
+				if (targetPacket && !keyPacket) {
+					// The track doesn't reach back far enough for the full pre-roll, so this is the best we can do
+					const firstKeyPacket = await packetSink.getFirstKeyPacket(retrievalOptions);
+					if (firstKeyPacket && firstKeyPacket.timestamp <= targetPacket.timestamp) {
+						keyPacket = firstKeyPacket;
+					}
+				}
 
-				if (!keyPacket) {
-					if (maxSequenceNumber !== -1) {
-						await decodePackets();
+				if (!targetPacket || !keyPacket) {
+					if (lastPacket) {
 						await flushDecoder();
 					}
 
@@ -806,31 +838,35 @@ export abstract class BaseMediaSampleSink<
 					continue;
 				}
 
-				// Check if the key packet has changed or if we're going back in time
+				// Keep extending the current batch as long as it reaches the key packet anyway (always the case for an
+				// unchanged key packet), so that consecutive timestamps don't redo their pre-roll. Otherwise, or if
+				// we're going back in time, start a new batch at the key packet. The query timestamps within a batch
+				// must not decrease, since the sample matching relies on that.
 				if (
-					lastPacket
-					&& (
-						keyPacket.sequenceNumber !== lastKeyPacket!.sequenceNumber
-						|| targetPacket.timestamp < lastPacket.timestamp
-					)
+					!lastPacket
+					|| keyPacket.sequenceNumber > maxSequenceNumber + 1
+					|| timestamp < lastTimestamp
 				) {
-					await decodePackets();
-					await flushDecoder(); // Always flush here, improves decoder compatibility
+					if (lastPacket) {
+						await flushDecoder(); // Always flush here, improves decoder compatibility
+					}
+
+					lastKeyPacket = keyPacket;
+					lastDecodedPacket = null;
+					maxSequenceNumber = -1;
 				}
 
-				timestampsOfInterest.push(targetPacket.timestamp);
+				timestampsOfInterest.push(timestamp);
 				maxSequenceNumber = Math.max(targetPacket.sequenceNumber, maxSequenceNumber);
 
 				lastPacket = targetPacket;
-				lastKeyPacket = keyPacket;
+				lastTimestamp = timestamp;
+
+				// Decode right away so that samples come out while the timestamps are still coming in
+				await decodePackets();
 			}
 
 			if (!terminated && !this._track.input._disposed) {
-				if (maxSequenceNumber !== -1) {
-					// We still need to decode packets
-					await decodePackets();
-				}
-
 				await flushDecoder();
 			}
 
@@ -848,6 +884,8 @@ export abstract class BaseMediaSampleSink<
 
 		const track = this._track;
 		const closeSamples = () => {
+			heldSample?.close();
+			heldSample = null;
 			for (const sample of sampleQueue) {
 				sample?.close();
 			}
@@ -1843,6 +1881,11 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 		return new EncodedPacketSink(this._track);
 	}
 
+	/** @internal */
+	async _getPreRollDuration() {
+		return 0;
+	}
+
 	/**
 	 * Retrieves the video sample (frame) corresponding to the given timestamp, in seconds. More specifically, returns
 	 * the last video sample (in presentation order) with a start timestamp less than or equal to the given timestamp.
@@ -2226,11 +2269,16 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 	) {
 		super(onSample, onError);
 
+		// WebCodecs impls discards the preskip (correct) but doesn't advance the timestamp (incorrect)
+		const opusPreSkip = codec === 'opus' && decoderConfig.description
+			? parseOpusIdentificationHeader(toUint8Array(decoderConfig.description)).preSkip / OPUS_SAMPLE_RATE
+			: 0;
+
 		const sampleHandler = (sample: AudioSample) => {
 			let sampleTimestamp = sample.timestamp;
 
 			if (this.expectedFirstTimestamp !== null && this.currentTimestamp === null) {
-				this.timestampOffset = this.expectedFirstTimestamp - sampleTimestamp; ;
+				this.timestampOffset = this.expectedFirstTimestamp + opusPreSkip - sampleTimestamp;
 			}
 
 			sampleTimestamp += this.timestampOffset;
@@ -2598,6 +2646,14 @@ export class AudioSampleSink extends BaseMediaSampleSink<AudioSample> {
 	/** @internal */
 	_createPacketSink() {
 		return new EncodedPacketSink(this._track);
+	}
+
+	/** @internal */
+	async _getPreRollDuration() {
+		const preRollDuration = await this._track.getPreRollDuration();
+		assert(preRollDuration !== null); // The decoder was created, so the codec is known
+
+		return preRollDuration;
 	}
 
 	/**

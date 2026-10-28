@@ -18,6 +18,7 @@ import {
 	joinPaths,
 	textEncoder,
 	toArray,
+	toDataView,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
 import { Muxer } from '../muxer';
@@ -40,7 +41,8 @@ import { Writer } from '../writer';
 import { EncodedPacket } from '../packet';
 import { SubtitleCue, SubtitleMetadata } from '../subtitles';
 import { NullTarget, PathedTarget, Target, TargetRequest } from '../target';
-import { HLS_MIME_TYPE } from './hls-misc';
+import { HLS_MIME_TYPE, TIMESTAMP_PRIV_OWNER } from './hls-misc';
+import { secondsToMpegTsTimestamp } from '../mpeg-ts/mpeg-ts-misc';
 import type { IsobmffMuxer } from '../isobmff/isobmff-muxer';
 
 // Maps from WebCodecs to what HLS wants
@@ -140,6 +142,8 @@ export class HlsMuxer extends Muxer {
 	singleFilePerPlaylist: boolean;
 	isLive: boolean;
 	maxLiveSegmentCount: number;
+	mediaTimestampBase: number;
+	firstPacketTimestamp: number | null = null;
 	isRelativeToUnixEpoch = false;
 	globalTargetDuration: number;
 	numWrittenMasterPlaylists = 0;
@@ -159,6 +163,7 @@ export class HlsMuxer extends Muxer {
 		this.singleFilePerPlaylist = format._options.singleFilePerPlaylist ?? false;
 		this.isLive = format._options.live ?? false;
 		this.maxLiveSegmentCount = format._options.maxLiveSegmentCount ?? Infinity;
+		this.mediaTimestampBase = format._options.mediaTimestampBase ?? 10;
 		this.globalTargetDuration = this.targetSegmentDuration;
 
 		this.getPlaylistPath = format._options.getPlaylistPath
@@ -663,6 +668,7 @@ export class HlsMuxer extends Muxer {
 		try {
 			this.validateTimestamp(track, packet.timestamp, packet.type === 'key');
 			trackData.packets.push(packet);
+			this.firstPacketTimestamp ??= packet.timestamp;
 
 			if (playlist.currentSegmentStartTimestamp === null) {
 				playlist.currentSegmentStartTimestamp = packet.timestamp;
@@ -692,6 +698,7 @@ export class HlsMuxer extends Muxer {
 		try {
 			this.validateTimestamp(track, packet.timestamp, packet.type === 'key');
 			trackData.packets.push(packet);
+			this.firstPacketTimestamp ??= packet.timestamp;
 
 			if (playlist.currentSegmentStartTimestamp === null) {
 				playlist.currentSegmentStartTimestamp = packet.timestamp;
@@ -1135,6 +1142,21 @@ export class HlsMuxer extends Muxer {
 							decoderConfig: audioTrack.info.decoderConfig,
 							primingPacket: audioTrack.info.primingPacket ?? undefined,
 						});
+
+						if (!playlist.segmentFormat.supportsTimestampedMediaData && audioEndIndex > 0) {
+							// The media itself carries no timestamps, so let's write an ID3v2 PRIV frame. The formats
+							// that the spec permits (MP3, ADTS) understand this just fine.
+							const firstTimestamp = this.toMediaTimestamp(audioTrack.packets[0]!.timestamp);
+							const pts = secondsToMpegTsTimestamp(firstTimestamp);
+
+							const priv = new Uint8Array(TIMESTAMP_PRIV_OWNER.length + 1 + 8);
+							priv.set(textEncoder.encode(TIMESTAMP_PRIV_OWNER), 0);
+							const view = toDataView(priv);
+							view.setUint32(TIMESTAMP_PRIV_OWNER.length + 1, Math.floor(pts / 2 ** 32));
+							view.setUint32(TIMESTAMP_PRIV_OWNER.length + 5, pts % 2 ** 32);
+
+							output.setMetadataTags({ raw: { PRIV: priv } });
+						}
 					}
 
 					await output.start();
@@ -1149,7 +1171,11 @@ export class HlsMuxer extends Muxer {
 					for (let i = 0; i < videoEndIndex; i++) {
 						const packet = videoTrack.packets[i]!;
 
-						await videoSource.add(packet, meta);
+						const offsetPacket = packet.clone({
+							timestamp: this.toMediaTimestamp(packet.timestamp),
+						});
+
+						await videoSource.add(offsetPacket, meta);
 						maxEndTimestamp = Math.max(maxEndTimestamp, packet.timestamp + packet.duration);
 					}
 				}
@@ -1161,7 +1187,11 @@ export class HlsMuxer extends Muxer {
 					for (let i = 0; i < audioEndIndex; i++) {
 						const packet = audioTrack.packets[i]!;
 
-						await audioSource.add(packet, meta);
+						const offsetPacket = packet.clone({
+							timestamp: this.toMediaTimestamp(packet.timestamp),
+						});
+
+						await audioSource.add(offsetPacket, meta);
 						maxEndTimestamp = Math.max(maxEndTimestamp, packet.timestamp + packet.duration);
 					}
 				}
@@ -1260,6 +1290,12 @@ export class HlsMuxer extends Muxer {
 				await this.tryWriteMasterPlaylist();
 			}
 		}
+	}
+
+	private toMediaTimestamp(timestamp: number) {
+		// The media's own timestamps are decoupled from the input timestamps (which may well be huge Unix timestamps)
+		assert(this.firstPacketTimestamp !== null);
+		return timestamp - this.firstPacketTimestamp + this.mediaTimestampBase;
 	}
 
 	private async onPlaylistDone(playlist: Playlist) {

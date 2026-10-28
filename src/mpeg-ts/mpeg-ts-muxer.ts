@@ -24,7 +24,7 @@ import {
 	iterateNalUnitsInLengthPrefixed,
 } from '../codec-data';
 import { Bitstream } from '../../shared/bitstream';
-import { assert, modEuclid, promiseWithResolvers, setUint24, toDataView, toUint8Array } from '../misc';
+import { assert, promiseWithResolvers, setUint24, toDataView, toUint8Array } from '../misc';
 import { Muxer } from '../muxer';
 import { Output, OutputAudioTrack, OutputTrack, OutputVideoTrack } from '../output';
 import { MpegTsOutputFormat } from '../output-format';
@@ -33,8 +33,7 @@ import { Writer } from '../writer';
 import {
 	buildMpegTsMimeType,
 	MpegTsStreamType,
-	TIMESCALE,
-	TIMESTAMP_MODULUS,
+	secondsToMpegTsTimestamp,
 	TS_PACKET_SIZE,
 } from './mpeg-ts-misc';
 
@@ -78,6 +77,7 @@ type QueuedPacket = {
 
 export class MpegTsMuxer extends Muxer {
 	private format: MpegTsOutputFormat;
+	private timestampOffset: number;
 	private writer!: Writer;
 
 	private trackDatas: MpegTsTrackData[] = [];
@@ -97,6 +97,7 @@ export class MpegTsMuxer extends Muxer {
 		super(output);
 
 		this.format = format;
+		this.timestampOffset = format._options.timestampOffset ?? 0;
 	}
 
 	async start() {
@@ -595,10 +596,7 @@ export class MpegTsMuxer extends Muxer {
 		pesView.setUint8(7, includeDts ? 0xC0 : 0x80); // PTS_DTS_flags, other flags=0
 		pesView.setUint8(8, headerDataLength); // PES_header_data_length
 
-		// This logic supports writing negative timestamps by simplying Euclid-modding them. It is then up to the
-		// demuxer to interpret them as negative, if it wasnts to.
-		const unwrappedPts = Math.round(queuedPacket.presentationTimestamp * TIMESCALE);
-		const pts = modEuclid(unwrappedPts, TIMESTAMP_MODULUS);
+		const pts = secondsToMpegTsTimestamp(queuedPacket.presentationTimestamp + this.timestampOffset);
 		ptsDtsBitstream.pos = 0;
 		ptsDtsBitstream.writeBits(4, includeDts ? 0b0011 : 0b0010); // marker
 		ptsDtsBitstream.writeBits(3, Math.floor(pts / 2 ** 30)); // PTS[32:30]
@@ -611,8 +609,7 @@ export class MpegTsMuxer extends Muxer {
 		if (includeDts) {
 			assert(queuedPacket.decodeTimestamp !== null);
 
-			const unwrappedDts = Math.round(queuedPacket.decodeTimestamp * TIMESCALE);
-			const dts = modEuclid(unwrappedDts, TIMESTAMP_MODULUS);
+			const dts = secondsToMpegTsTimestamp(queuedPacket.decodeTimestamp + this.timestampOffset);
 			ptsDtsBitstream.writeBits(4, 0b0001);
 			ptsDtsBitstream.writeBits(3, Math.floor(dts / 2 ** 30)); // DTS[32:30]
 			ptsDtsBitstream.writeBits(1, 1); // marker_bit

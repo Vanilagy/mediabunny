@@ -49,6 +49,8 @@ export class NodeAvAudioDecoder extends CustomAudioDecoder {
 		codecContext.sampleRate = this.config.sampleRate;
 		codecContext.channelLayout = getChannelLayout(this.config.numberOfChannels);
 		codecContext.timeBase = new NodeAv.Rational(1, this.config.sampleRate);
+		// Without this, leading samples are discarded (like Opus pre-skip) without advancing the frame timestamp
+		codecContext.pktTimebase = new NodeAv.Rational(1, this.config.sampleRate);
 		codecContext.codecType = NodeAv.AVMEDIA_TYPE_AUDIO;
 		codecContext.codecId = codecId;
 		codecContext.extraData = this.config.description

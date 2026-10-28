@@ -700,6 +700,7 @@ export const stbl = (trackData: IsobmffTrackData) => {
 		stsz(trackData),
 		stco(trackData),
 		stss(trackData),
+		...sgpdAndSbgp(trackData.samples, false),
 	]);
 };
 
@@ -1048,8 +1049,7 @@ export const enda = (trackData: IsobmffAudioTrackData) => {
 /** Opus Specific Box. */
 export const dOps = (trackData: IsobmffAudioTrackData) => {
 	let outputChannelCount = trackData.info.numberOfChannels;
-	// Default PreSkip, should be at least 80 milliseconds worth of playback, measured in 48000 Hz samples
-	let preSkip = 3840;
+	let preSkip = 312; // Default
 	let inputSampleRate = trackData.info.sampleRate;
 	let outputGain = 0;
 	let channelMappingFamily = 0;
@@ -1362,6 +1362,57 @@ export const cslg = (trackData: IsobmffTrackData) => {
 	]);
 };
 
+const sgpdAndSbgp = (samples: Sample[], inTrackFragment: boolean) => {
+	const entries: {
+		sampleCount: number;
+		prerollSamples: number;
+	}[] = [];
+
+	for (const sample of samples) {
+		if (entries.length === 0) {
+			entries.push({
+				sampleCount: 1,
+				prerollSamples: sample.prerollSamples,
+			});
+		} else {
+			const lastEntry = entries[entries.length - 1]!;
+
+			if (lastEntry.prerollSamples === sample.prerollSamples) {
+				lastEntry.sampleCount++;
+			} else {
+				entries.push({
+					sampleCount: 1,
+					prerollSamples: sample.prerollSamples,
+				});
+			}
+		}
+	}
+
+	const rollEntries = entries.filter(x => x.prerollSamples !== 0);
+	if (rollEntries.length === 0) {
+		return [];
+	}
+
+	let nextGroupIndex = inTrackFragment ? 0x10001 : 1;
+
+	return [
+		fullBox('sgpd', 1, 0, [
+			ascii('roll'), // Grouping type
+			u32(2), // Default length
+			u32(rollEntries.length), // Entry count
+			...rollEntries.map(x => i16(x.prerollSamples)),
+		]),
+		fullBox('sbgp', 0, 0, [
+			ascii('roll'), // Grouping type
+			u32(entries.length), // Entry count
+			...entries.map(x => [
+				u32(x.sampleCount), // Sample count
+				u32(x.prerollSamples !== 0 ? nextGroupIndex++ : 0), // Samples with no preroll belong to no group
+			]),
+		]),
+	];
+};
+
 /**
  * Movie Extends Box: This box signals to readers that the file is fragmented. Contains a single Track Extends Box
  * for each track in the movie.
@@ -1424,6 +1475,7 @@ export const traf = (trackData: IsobmffTrackData) => {
 		tfhd(trackData),
 		tfdt(trackData),
 		trun(trackData),
+		...sgpdAndSbgp(trackData.currentChunk!.samples, true),
 	]);
 };
 

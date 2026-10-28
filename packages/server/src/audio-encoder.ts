@@ -40,8 +40,6 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 	resampler: NodeAv.SoftwareResampleContext | null = null;
 	dstFrame: NodeAv.Frame | null = null;
 	avCodec!: NodeAv.Codec;
-	firstExpectedTimestamp: number | null = null;
-	outputTimestampOffset = 0;
 
 	inputParametersKey: string | null = null;
 	resamplerInputSampleRate: number | null = null;
@@ -142,8 +140,6 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 			await this.createCodecContext();
 			assert(this.codecContext);
 		}
-
-		this.firstExpectedTimestamp ??= audioSample.timestamp;
 
 		if (audioSample._data instanceof AvFrameAudioSampleResource) {
 			// Release any buffers still referenced from the previous encode before reffing the new frame, otherwise
@@ -261,14 +257,13 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 
 	receivePacket(ret: number) {
 		assert(this.codecContext);
-		assert(this.firstExpectedTimestamp !== null);
 		NodeAv.FFmpegError.throwIfError(ret, 'Receive packet');
 
 		if (!this.packet.data) {
 			return;
 		}
 
-		let timestamp = Number(this.packet.pts) / this.codecContext.sampleRate;
+		const timestamp = Number(this.packet.pts) / this.codecContext.sampleRate;
 		const duration = Number(this.packet.duration) / this.codecContext.sampleRate;
 
 		let data: Uint8Array = this.packet.data;
@@ -277,11 +272,6 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 		if (this.packetEmitted) {
 			metadata = {};
 		} else {
-			// To compensate for any negative timestamp things that FFmpeg might do. It does these for a reason, to
-			// indicate encoder delay, but the notion of this is not yet supported in Mediabunny. Yes, this technically
-			// introduces audio sync drift.
-			this.outputTimestampOffset = Math.max(this.firstExpectedTimestamp - timestamp, 0);
-
 			const codecString = this.config.codec;
 			let description = this.codecContext.extraData
 				? toUint8Array(this.codecContext.extraData)
@@ -348,8 +338,6 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 			data = final;
 		}
 
-		timestamp += this.outputTimestampOffset;
-
 		const packet = new EncodedPacket(
 			data,
 			'key',
@@ -391,8 +379,6 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 		this.codecContext.freeContext();
 		this.codecContext = null;
 		this.packetEmitted = false;
-		this.firstExpectedTimestamp = null;
-		this.outputTimestampOffset = 0;
 		this.adtsHeaderTemplate = null;
 
 		this.resampler?.free();

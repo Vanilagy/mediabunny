@@ -13,8 +13,10 @@ export type AacAudioSpecificConfig = {
 	coreObjectType: number;
 	frequencyIndex: number;
 	channelConfiguration: number;
+	coreSampleRate: number | null;
 	outputSampleRate: number | null;
 	outputNumberOfChannels: number | null;
+	frameLength: number; // In samples at the core sample rate
 };
 
 export const aacFrequencyTable = [
@@ -23,6 +25,9 @@ export const aacFrequencyTable = [
 ];
 
 export const aacChannelMap = [-1, 1, 2, 3, 4, 5, 6, 8];
+
+// The object types whose config is a GASpecificConfig, except for AAC-LD, for which frameLengthFlag means 480 vs. 512
+const generalAudioObjectTypes = [1, 2, 3, 4, 6, 7, 17, 19, 20, 21, 22];
 
 export const parseAacAudioSpecificConfig = (bytes: Uint8Array | null): AacAudioSpecificConfig => {
 	if (!bytes || bytes.byteLength < 2) {
@@ -55,7 +60,14 @@ export const parseAacAudioSpecificConfig = (bytes: Uint8Array | null): AacAudioS
 		if (coreObjectType === 22) {
 			bitstream.skipBits(4); // extensionChannelConfiguration
 		}
-	} else {
+	}
+
+	let frameLength = 1024;
+	if (generalAudioObjectTypes.includes(coreObjectType)) {
+		frameLength = bitstream.readBits(1) ? 960 : 1024; // frameLengthFlag
+	}
+
+	if (objectType !== 5 && objectType !== 29) {
 		// There may be SBR/PS flags sitting behind a sync word after the config of the core coder. We find them by
 		// scanning for the sync word, just like FFmpeg does.
 		while (bitstream.getBitsLeft() > 15) {
@@ -88,10 +100,12 @@ export const parseAacAudioSpecificConfig = (bytes: Uint8Array | null): AacAudioS
 		coreObjectType,
 		frequencyIndex,
 		channelConfiguration,
+		coreSampleRate: sampleRate,
 		outputSampleRate,
 		outputNumberOfChannels: psPresent && numberOfChannels === 1
 			? 2
 			: numberOfChannels,
+		frameLength,
 	};
 };
 

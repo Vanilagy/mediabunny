@@ -1131,6 +1131,15 @@ export class FlacOutputFormat extends OutputFormat {
  */
 export type MpegTsOutputFormatOptions = {
 	/**
+	 * An offset in seconds that is added to all timestamps written to the file. It keeps timestamps that would
+	 * otherwise be negative (caused by audio priming samples or B-frames) positive in the final file, since negative
+	 * timestamps trip up some players. A recommended value is 10 seconds.
+	 *
+	 * Defaults to 0. When writing HLS, prefer {@link HlsOutputFormatOptions.mediaTimestampBase} instead.
+	 */
+	timestampOffset?: number;
+
+	/**
 	 * Will be called for each 188-byte Transport Stream packet that is written.
 	 *
 	 * @param data - The raw bytes.
@@ -1152,6 +1161,12 @@ export class MpegTsOutputFormat extends OutputFormat {
 	constructor(options: MpegTsOutputFormatOptions = {}) {
 		if (!options || typeof options !== 'object') {
 			throw new TypeError('options must be an object.');
+		}
+		if (
+			options.timestampOffset !== undefined
+			&& (!Number.isFinite(options.timestampOffset) || options.timestampOffset < 0)
+		) {
+			throw new TypeError('options.timestampOffset, when provided, must be a non-negative number.');
 		}
 		if (options.onPacket !== undefined && typeof options.onPacket !== 'function') {
 			throw new TypeError('options.onPacket, when provided, must be a function.');
@@ -1286,6 +1301,15 @@ export type HlsOutputFormatOptions = {
 	 */
 	maxLiveSegmentCount?: number;
 	/**
+	 * The timestamp in seconds at which the media written into the segments starts. All media is shifted such that
+	 * the first packet added to the output lands on this timestamp, no matter its original timestamp. A positive base
+	 * keeps timestamps positive that would otherwise be negative (caused by audio priming samples, B-frames, or tracks
+	 * starting slightly before the first packet). The timestamps in the playlists are not affected.
+	 *
+	 * Defaults to 10 seconds.
+	 */
+	mediaTimestampBase?: number;
+	/**
 	 * Returns the file path for a given media playlist. If the returned path is relative, it is relative to the root
 	 * path.
 	 *
@@ -1392,6 +1416,9 @@ export class HlsOutputFormat extends OutputFormat {
 				|| (Number.isFinite(options.maxLiveSegmentCount) && !Number.isInteger(options.maxLiveSegmentCount)))
 		) {
 			throw new TypeError('options.maxLiveSegmentCount, when provided, must be a positive integer or Infinity.');
+		}
+		if (options.mediaTimestampBase !== undefined && !Number.isFinite(options.mediaTimestampBase)) {
+			throw new TypeError('options.mediaTimestampBase, when provided, must be a finite number.');
 		}
 		if (options.getPlaylistPath !== undefined && typeof options.getPlaylistPath !== 'function') {
 			throw new TypeError('options.getPlaylistPath, when provided, must be a function.');

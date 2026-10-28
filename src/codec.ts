@@ -7,6 +7,7 @@
  */
 
 import { parseAacAudioSpecificConfig } from '../shared/aac-misc';
+import { MP3_FRAME_HEADER_SIZE } from '../shared/mp3-misc';
 import {
 	Av1CodecInfo,
 	av1CodecInfoHasColorInfo,
@@ -35,6 +36,7 @@ import {
 	last,
 	reverseBitsU32,
 	toDataView,
+	toUint8Array,
 } from './misc';
 import { SubtitleMetadata } from './subtitles';
 
@@ -845,6 +847,101 @@ export const guessDescriptionForAudio = (decoderConfig: AudioDecoderConfig): Uin
 		};
 
 		default: return undefined; // All other codecs allow an undefined description
+	}
+};
+
+export const getAudioPreRollDuration = (codec: AudioCodec, decoderConfig: AudioDecoderConfig) => {
+	switch (codec) {
+		case 'aac': {
+			if (!decoderConfig.description) {
+				// Best guess
+				return 1024 / decoderConfig.sampleRate;
+			}
+
+			const audioSpecificConfig = parseAacAudioSpecificConfig(toUint8Array(decoderConfig.description));
+			if (audioSpecificConfig.coreSampleRate === null) {
+				throw new Error('Invalid AAC sampling frequency index.');
+			}
+
+			return audioSpecificConfig.frameLength / audioSpecificConfig.coreSampleRate;
+		}
+
+		case 'opus': {
+			return 0.08;
+		}
+
+		case 'mp3': {
+			// The bit reservoir reaches back a fixed number of bytes, so it spans the most frames when a (VBR)
+			// stream drops to the lowest bitrate. We can't rule that out, so we go with that worst case, plus one
+			// frame of overlap on top.
+			const { sampleRate, numberOfChannels } = decoderConfig;
+
+			const isMpeg1 = sampleRate >= 32000; // MPEG-2 and MPEG-2.5 cover the rates below
+			const frameSamples = isMpeg1 ? 1152 : 576;
+			const minBitrate = isMpeg1 ? 32000 : 8000;
+			const maxMainDataBegin = isMpeg1 ? 511 : 255;
+			const sideInfoSize = isMpeg1
+				? (numberOfChannels === 1 ? 17 : 32)
+				: (numberOfChannels === 1 ? 9 : 17);
+
+			const minFrameSize = Math.floor(frameSamples / 8 * minBitrate / sampleRate);
+			const minMainDataSize = minFrameSize - MP3_FRAME_HEADER_SIZE - sideInfoSize;
+			const frameCount = 1 + Math.ceil(maxMainDataBegin / minMainDataSize);
+
+			return frameCount * frameSamples / sampleRate;
+		}
+
+		case 'vorbis': {
+			assert(decoderConfig.description);
+
+			// Skip the Xiph lacing to get to the identification header
+			const bytes = toUint8Array(decoderConfig.description);
+			let pos = 1;
+			let lacedLengthsLeft = 2;
+			while (lacedLengthsLeft > 0) {
+				if (bytes[pos++]! < 255) {
+					lacedLengthsLeft--;
+				}
+			}
+
+			const blockSizeByte = bytes[pos + 28]!;
+			const longBlockSize = 1 << (blockSizeByte >> 4); // blocksize_1
+
+			// The previous packet's long window overlaps by up to half its size
+			return (longBlockSize / 2) / decoderConfig.sampleRate;
+		}
+
+		case 'ac3':
+		case 'eac3': {
+			return 256 / decoderConfig.sampleRate;
+		}
+
+		case 'dts': {
+			return 512 / decoderConfig.sampleRate;
+		}
+
+		case 'flac':
+		case 'pcm-s16':
+		case 'pcm-s16be':
+		case 'pcm-s24':
+		case 'pcm-s24be':
+		case 'pcm-s32':
+		case 'pcm-s32be':
+		case 'pcm-f32':
+		case 'pcm-f32be':
+		case 'pcm-f64':
+		case 'pcm-f64be':
+		case 'pcm-u8':
+		case 'pcm-s8':
+		case 'ulaw':
+		case 'alaw': {
+			return 0;
+		}
+
+		default: {
+			assertNever(codec);
+			assert(false);
+		}
 	}
 };
 
