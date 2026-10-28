@@ -124,9 +124,9 @@ export class BufferTarget extends Target {
 	buffer: ArrayBuffer | null = null;
 
 	/** @internal */
-	_buffer: ArrayBuffer;
+	_buffer: ArrayBuffer | null;
 	/** @internal */
-	_bytes: Uint8Array;
+	_bytes: Uint8Array | null;
 	/** @internal */
 	_maxPos = 0;
 	/** @internal */
@@ -165,6 +165,9 @@ export class BufferTarget extends Target {
 
 	/** @internal */
 	_ensureSize(size: number) {
+		assert(this._buffer);
+		assert(this._bytes);
+
 		let newLength = this._buffer.byteLength;
 		while (newLength < size) newLength *= 2;
 
@@ -198,12 +201,11 @@ export class BufferTarget extends Target {
 
 	/** @internal */
 	_write(data: Uint8Array, pos: number) {
+		assert(this._bytes);
+
 		this._ensureSize(pos + data.byteLength);
-
 		this._bytes.set(data, pos);
-
 		this._maxPos = Math.max(this._maxPos, pos + data.byteLength);
-
 		this._dispatchWrite(pos, pos + data.byteLength);
 	}
 
@@ -212,7 +214,19 @@ export class BufferTarget extends Target {
 
 	/** @internal */
 	async _finalize() {
-		this.buffer = this._buffer.slice(0, this._maxPos);
+		assert(this._buffer);
+
+		if ('transferToFixedLength' in this._buffer) {
+			// Transferring detaches the internal buffer so its memory doesn't stick around
+			// @ts-expect-error Don't want to bump "lib" in tsconfig
+			this.buffer = this._buffer.transferToFixedLength(this._maxPos) as ArrayBuffer;
+		} else {
+			// If transferToFixedLength doesn't exist then neither does transfer (they were added together)
+			this.buffer = this._buffer.slice(0, this._maxPos);
+		}
+
+		this._buffer = null;
+		this._bytes = null;
 
 		if (this._options.onFinalize) {
 			await this._options.onFinalize(this.buffer);
@@ -226,6 +240,7 @@ export class BufferTarget extends Target {
 
 	/** @internal */
 	_getSlice(start: number, end: number) {
+		assert(this._bytes);
 		return this._bytes.slice(start, end);
 	}
 }
