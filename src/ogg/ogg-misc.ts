@@ -75,8 +75,9 @@ export const extractSampleMetadata = (
 				throw new Error('Invalid mode number.');
 			}
 
-			// In Vorbis, packet duration also depends on the blocksize of the previous packet
-			let prevBlocksize = vorbisLastBlocksize;
+			// In Vorbis, packet duration also depends on the blocksize of the previous packet. The first packet has
+			// none and decodes to nothing; like FFmpeg, we give it the duration it'd have after a short block
+			let prevBlocksize = vorbisLastBlocksize ?? codecInfo.vorbisInfo.blocksizes[0]!;
 
 			const blockflag = codecInfo.vorbisInfo.modeBlockflags[modeNumber]!;
 			currentBlocksize = codecInfo.vorbisInfo.blocksizes[blockflag]!;
@@ -87,9 +88,7 @@ export const extractSampleMetadata = (
 				prevBlocksize = codecInfo.vorbisInfo.blocksizes[flag]!;
 			}
 
-			durationInSamples = prevBlocksize !== null
-				? (prevBlocksize + currentBlocksize) >> 2
-				: 0; // The first sample outputs no audio data and therefore has a duration of 0
+			durationInSamples = (prevBlocksize + currentBlocksize) >> 2;
 		} else if (codecInfo.codec === 'opus') {
 			const toc = parseOpusTocByte(data);
 			durationInSamples = toc.durationInSamples;

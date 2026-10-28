@@ -41,3 +41,19 @@ test('BufferTarget onFinalize callback', async () => {
 	expect(asyncCallbackDone).toBe(true);
 	expect(output.target.buffer!.byteLength).toBeGreaterThan(0);
 });
+
+test('BufferTarget internal buffer transfer on finalize', async () => {
+	const target = new BufferTarget();
+	target._write(new Uint8Array([1, 2, 3, 4, 5]), 0);
+	target._write(new Uint8Array([6, 7]), 3);
+
+	const internalBuffer = target._buffer!;
+	await target._finalize();
+
+	expect(internalBuffer).toHaveProperty('detached', true);
+	expect(target._buffer).toBeNull();
+	expect(target._bytes).toBeNull();
+
+	expect(target.buffer).toHaveProperty('resizable', false);
+	expect([...new Uint8Array(target.buffer!)]).toEqual([1, 2, 3, 6, 7]);
+});

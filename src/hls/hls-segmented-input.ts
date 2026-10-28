@@ -21,6 +21,7 @@ import {
 	clamp,
 	isThenable,
 	textDecoder,
+	toArray,
 } from '../misc';
 import { readAllLines, readBytes, Reader } from '../reader';
 import { CustomPathedSource, PathedSource, ReadableStreamSource, SourceRef, SourceRequest } from '../source';
@@ -32,6 +33,7 @@ import {
 	TAG_BYTERANGE,
 	TAG_DEFINE,
 	TAG_DISCONTINUITY,
+	TAG_DISCONTINUITY_SEQUENCE,
 	TAG_ENDLIST,
 	TAG_EXTINF,
 	TAG_KEY,
@@ -40,9 +42,16 @@ import {
 	TAG_PLAYLIST_TYPE,
 	TAG_PROGRAM_DATE_TIME,
 	TAG_TARGETDURATION,
+	TIMESTAMP_PRIV_OWNER,
 } from './hls-misc';
 import { HlsInputFormat, type InputFormatOptions } from '../input-format';
 import { parsePsshBoxContents, psshBoxesAreEqual, type PsshBox } from '../isobmff/isobmff-misc';
+import {
+	createTimestampWrapInfo,
+	normalizeWrappedTimestamp,
+	MPEG_TS_TIMESCALE,
+	TIMESTAMP_MODULUS,
+} from '../mpeg-ts/mpeg-ts-misc';
 
 const IV_STRING_REGEX = /^0[xX][0-9a-fA-F]+$/;
 const BASE64_DATA_URI_REGEX = /^data:.*;base64,/i;
@@ -83,8 +92,10 @@ export class HlsSegmentedInput extends SegmentedInput {
 	nextLines: string[] | null = null;
 	currentUpdateSegmentsPromise: Promise<void> | null = null;
 	streamHasEnded = false;
+	neverRemovesSegments = false;
 	lastSegmentUpdateTime = -Infinity;
 	refreshInterval = 5; // Reasonable default in case the playlist doesn't specify it
+	segmentTimestampOffsetPromise: Promise<number> | null = null;
 
 	constructor(
 		demuxer: HlsDemuxer,
@@ -174,13 +185,12 @@ export class HlsSegmentedInput extends SegmentedInput {
 		let nextSegmentDuration: number | null = null;
 		let currentKey: HlsEncryptionInfo | null = null;
 		let nextSequenceNumber = 0;
+		let nextDiscontinuityNumber = 0;
 		let currentFirstSegment: HlsSegment | null = null;
 		let currentInitSegment: HlsSegment | null = null;
 		let lastByteRangeEnd: number | null = null;
 		let nextByteRange: { offset: number; length: number } | null = null;
 		let lastProgramDateTimeSeconds: number | null = null;
-		let targetDuration: number | null = null;
-		let segmentSeen = false;
 
 		// Used for repeated parses where our job it is to only add the new segments
 		let prevLastSegment = last(this.segments) ?? null;
@@ -268,6 +278,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 						index: this.segments.length,
 						timestamp: accumulatedTime,
 						unixEpochTimestamp: accumulatedUnixTime,
+						discontinuityNumber: nextDiscontinuityNumber,
 						firstSegment: currentFirstSegment,
 						sequenceNumber: nextSequenceNumber,
 						location,
@@ -301,17 +312,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 
 			if (line.startsWith(TAG_EXTINF)) {
 				if (prevLastSegment) {
-					segmentSeen = true;
 					continue;
-				}
-
-				if (!segmentSeen) {
-					if (lastProgramDateTimeSeconds === null && nextSequenceNumber > 0 && targetDuration !== null) {
-						// Offset the first segment's start timestamp by the following:
-						accumulatedTime = nextSequenceNumber * targetDuration;
-					}
-
-					segmentSeen = true;
 				}
 
 				const extinfContent = line.slice(TAG_EXTINF.length);
@@ -359,6 +360,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 						index: -1,
 						timestamp: accumulatedTime,
 						unixEpochTimestamp: accumulatedUnixTime,
+						discontinuityNumber: nextDiscontinuityNumber,
 						firstSegment: null,
 						sequenceNumber: null,
 						location,
@@ -532,8 +534,20 @@ export class HlsSegmentedInput extends SegmentedInput {
 				}
 			} else if (line === TAG_DISCONTINUITY) {
 				currentFirstSegment = null;
+				// Counted even for known segments since the discontinuity number is absolute, derived from the
+				// playlist's discontinuity sequence
+				nextDiscontinuityNumber++;
 				// Note: the init segment is not reset; the #EXT-X-MAP statement simply lasts until the next
 				// #EXT-X-MAP statement.
+			} else if (line.startsWith(TAG_DISCONTINUITY_SEQUENCE)) {
+				const value = line.slice(TAG_DISCONTINUITY_SEQUENCE.length);
+				const number = Number(value);
+
+				if (!Number.isSafeInteger(number) || number < 0) {
+					throw new Error(`Invalid EXT-X-DISCONTINUITY-SEQUENCE value '${value}'.`);
+				}
+
+				nextDiscontinuityNumber = number;
 			} else if (line.startsWith(TAG_TARGETDURATION)) {
 				const value = line.slice(TAG_TARGETDURATION.length);
 				const duration = Number(value);
@@ -543,15 +557,20 @@ export class HlsSegmentedInput extends SegmentedInput {
 				}
 
 				this.refreshInterval = clamp(duration, 0.5, 3600); // Clamped for safety
-				targetDuration = duration;
 			} else if (line === TAG_ENDLIST) {
 				this.streamHasEnded = true;
 				break; // No need to keep reading after this
 			} else if (line.startsWith(TAG_PLAYLIST_TYPE)) {
-				const type = line.slice(TAG_PLAYLIST_TYPE.length);
-				if (type.toLowerCase() === 'vod') {
+				const type = line.slice(TAG_PLAYLIST_TYPE.length).toLowerCase();
+
+				if (type === 'vod') {
 					// A VOD playlist cannot be updated per spec so we can be sure the stream has ended
 					this.streamHasEnded = true;
+				}
+
+				if (type === 'vod' || type === 'event') {
+					// Per spec, neither can have segments removed
+					this.neverRemovesSegments = true;
 				}
 			}
 		}
@@ -574,11 +593,13 @@ export class HlsSegmentedInput extends SegmentedInput {
 			await this.runUpdateSegments();
 		}
 
+		const playlistTimestamp = timestamp - (this.learnedSegmentTimestampOffset ?? 0);
+
 		// If we're skipping the live wait BUT there's no wait time, we're actually not lazy for the first iteration
 		let isLazy = !!options.skipLiveWait && this.getRemainingWaitTimeMs() > 0;
 
 		while (true) {
-			const index = binarySearchLessOrEqual(this.segments, timestamp, x => x.timestamp);
+			const index = binarySearchLessOrEqual(this.segments, playlistTimestamp, x => x.timestamp);
 			if (index === -1) {
 				return null;
 			}
@@ -588,7 +609,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 			}
 
 			const segment = this.segments[index]!;
-			if (timestamp < segment.timestamp + segment.duration) {
+			if (playlistTimestamp < segment.timestamp + segment.duration) {
 				return segment;
 			}
 
@@ -798,5 +819,102 @@ export class HlsSegmentedInput extends SegmentedInput {
 		}
 
 		return this.streamHasEnded ? null : this.refreshInterval;
+	}
+
+	getMediaOffsetForDiscontinuity(discontinuityNumber: number) {
+		return this.demuxer.getMediaOffsetForDiscontinuity(discontinuityNumber);
+	}
+
+	getFirstSegmentTimestampOffset() {
+		return this.segmentTimestampOffsetPromise ??= (async () => {
+			const firstSegment = await this.getFirstSegment();
+			assert(firstSegment);
+
+			const referenceSegmentedInput = this.demuxer.getReferenceSegmentedInput();
+			if (this === referenceSegmentedInput) {
+				return 0;
+			}
+
+			// An offset of 0 is only safe (= close enough) if we start at the same point as the reference: either both
+			// of us list all segments since the presentation's start, or both of us are on date-time-based timelines
+			const referenceFirstSegment = await referenceSegmentedInput.getFirstSegment();
+			if (
+				referenceFirstSegment
+				&& (
+					(this.listsAllSegments() && referenceSegmentedInput.listsAllSegments())
+					|| (
+						firstSegment.unixEpochTimestamp === firstSegment.timestamp
+						&& referenceFirstSegment.unixEpochTimestamp === referenceFirstSegment.timestamp
+					)
+				)
+			) {
+				return 0;
+			}
+
+			// Otherwise, we must fetch the actual media timestamp of the first segment to properly deduce the offset
+			// that we need
+
+			const input = this.getInputForSegment(firstSegment);
+			if (await this.getRawTimestampOffset(input) === null) {
+				return 0;
+			}
+
+			const tracks = await input.getTracks();
+			const track = tracks.find(x => x.type === 'video') ?? tracks[0];
+			if (!track) {
+				throw new Error('The playlist\'s first segment contains no tracks.');
+			}
+
+			const mediaOffset = await this.getMediaOffset(firstSegment, input);
+			const offset = await track.getFirstTimestamp() + mediaOffset - firstSegment.timestamp;
+
+			// Set it if it isn't already
+			this.learnedSegmentTimestampOffset ??= offset;
+
+			return offset;
+		})();
+	}
+
+	listsAllSegments() {
+		return this.segments[0]!.sequenceNumber === 0 || this.neverRemovesSegments;
+	}
+
+	async getRawTimestampOffset(input: Input) {
+		const format = await input.getFormat();
+		if (format.supportsTimestampedMediaData) {
+			return 0;
+		}
+
+		// Packed audio has the timestamp of its first sample in an ID3 PRIV frame (RFC 8216, Section 3.4)
+		const tags = await input.getMetadataTags();
+		const priv = tags.raw?.['PRIV'];
+
+		for (const frame of toArray(priv)) {
+			if (
+				!(frame instanceof Uint8Array)
+				|| frame.length !== TIMESTAMP_PRIV_OWNER.length + 1 + 8
+				|| textDecoder.decode(frame.subarray(0, TIMESTAMP_PRIV_OWNER.length)) !== TIMESTAMP_PRIV_OWNER
+				|| frame[TIMESTAMP_PRIV_OWNER.length] !== 0
+			) {
+				continue;
+			}
+
+			// A 33-bit MPEG-TS timestamp but stored as a big-endian 64-bit number
+			const view = toDataView(frame);
+			const timestampHigh = view.getUint32(TIMESTAMP_PRIV_OWNER.length + 1);
+			const timestampLow = view.getUint32(TIMESTAMP_PRIV_OWNER.length + 5);
+			if (timestampHigh > 1) {
+				continue;
+			}
+
+			const timestamp = 2 ** 32 * timestampHigh + timestampLow;
+			return normalizeWrappedTimestamp(timestamp, createTimestampWrapInfo(timestamp)) / MPEG_TS_TIMESCALE;
+		}
+
+		return null;
+	}
+
+	getTimestampWrapPeriod() {
+		return TIMESTAMP_MODULUS / MPEG_TS_TIMESCALE;
 	}
 }

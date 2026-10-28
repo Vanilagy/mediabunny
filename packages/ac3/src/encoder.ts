@@ -28,7 +28,6 @@ class Ac3Encoder extends CustomAudioEncoder {
 	private pendingBuffer = new Float32Array(2 ** 16);
 	private pendingFrames = 0;
 	private nextSampleTimestampInSamples: number | null = null;
-	private nextPacketTimestampInSamples: number | null = null;
 
 	static override supports(codec: AudioCodec, config: AudioEncoderConfig): boolean {
 		const sampleRates = codec === 'eac3'
@@ -68,7 +67,6 @@ class Ac3Encoder extends CustomAudioEncoder {
 	private resetInternalState() {
 		this.pendingFrames = 0;
 		this.nextSampleTimestampInSamples = null;
-		this.nextPacketTimestampInSamples = null;
 
 		this.chunkMetadata = {
 			decoderConfig: {
@@ -82,7 +80,6 @@ class Ac3Encoder extends CustomAudioEncoder {
 	async encode(audioSample: AudioSample) {
 		if (this.nextSampleTimestampInSamples === null) {
 			this.nextSampleTimestampInSamples = Math.round(audioSample.timestamp * this.sampleRate);
-			this.nextPacketTimestampInSamples = this.nextSampleTimestampInSamples;
 		}
 
 		const channels = this.numberOfChannels;
@@ -139,7 +136,6 @@ class Ac3Encoder extends CustomAudioEncoder {
 
 	private async encodeOneFrame() {
 		assert(this.nextSampleTimestampInSamples !== null);
-		assert(this.nextPacketTimestampInSamples !== null);
 
 		const channels = this.numberOfChannels;
 		const frameSize = this.encoderFrameSize;
@@ -169,11 +165,9 @@ class Ac3Encoder extends CustomAudioEncoder {
 		const packet = new EncodedPacket(
 			new Uint8Array(result.encodedData),
 			'key',
-			this.nextPacketTimestampInSamples / this.sampleRate,
+			result.pts / this.sampleRate,
 			result.duration / this.sampleRate,
 		);
-
-		this.nextPacketTimestampInSamples += result.duration;
 
 		this.onPacket(
 			packet,

@@ -250,7 +250,7 @@ const initMediaPlayer = async (resource: File | string) => {
 			const interval = Math.min(...nonNullIntervals);
 			liveDot.style.display = '';
 			liveDot.onclick = () => {
-				void seekToTime(endTimestamp - interval * 1.5);
+				void seekToTime(endTimestamp - 2 * interval);
 			};
 
 			const scheduleLiveRefresh = () => {

@@ -7,6 +7,7 @@
  */
 
 import { parseAacAudioSpecificConfig } from '../shared/aac-misc';
+import { MP3_FRAME_HEADER_SIZE } from '../shared/mp3-misc';
 import {
 	Av1CodecInfo,
 	av1CodecInfoHasColorInfo,
@@ -32,9 +33,11 @@ import {
 	base64ToBytes,
 	bytesToHexString,
 	isAllowSharedBufferSource,
+	isWebKit,
 	last,
 	reverseBitsU32,
 	toDataView,
+	toUint8Array,
 } from './misc';
 import { SubtitleMetadata } from './subtitles';
 
@@ -264,7 +267,14 @@ export const buildVideoCodecString = (
 	alpha: boolean,
 ) => {
 	if (codec === 'avc') {
-		const profileIndication = 0x64; // High Profile
+		// Needed as a workaround for https://github.com/WebKit/WebKit/pull/74602, otherwise the encoder stalls.
+		// Also see https://github.com/Vanilagy/mediabunny/issues/541
+		// and https://github.com/Vanilagy/mediabunny/issues/587
+		// Unfortunately, Safari doesn't expose its version so we can't condition this on a specific Safari version. In
+		// the future, we can consider adding some runtime detection logic for it.
+		const constrainedBaseline = isWebKit();
+
+		const profileIndication = constrainedBaseline ? 0x42 : 0x64; // Baseline or High Profile
 		const totalMacroblocks = Math.ceil(width / 16) * Math.ceil(height / 16);
 
 		// Determine the level based on the table
@@ -274,7 +284,7 @@ export const buildVideoCodecString = (
 		const levelIndication = levelInfo ? levelInfo.level : 0;
 
 		const hexProfileIndication = profileIndication.toString(16).padStart(2, '0');
-		const hexProfileCompatibility = '00';
+		const hexProfileCompatibility = constrainedBaseline ? '40' : '00'; // constraint_set1_flag for Constrained
 		const hexLevelIndication = levelIndication.toString(16).padStart(2, '0');
 
 		return `avc1.${hexProfileIndication}${hexProfileCompatibility}${hexLevelIndication}`;
@@ -845,6 +855,101 @@ export const guessDescriptionForAudio = (decoderConfig: AudioDecoderConfig): Uin
 		};
 
 		default: return undefined; // All other codecs allow an undefined description
+	}
+};
+
+export const getAudioPreRollDuration = (codec: AudioCodec, decoderConfig: AudioDecoderConfig) => {
+	switch (codec) {
+		case 'aac': {
+			if (!decoderConfig.description) {
+				// Best guess
+				return 1024 / decoderConfig.sampleRate;
+			}
+
+			const audioSpecificConfig = parseAacAudioSpecificConfig(toUint8Array(decoderConfig.description));
+			if (audioSpecificConfig.coreSampleRate === null) {
+				throw new Error('Invalid AAC sampling frequency index.');
+			}
+
+			return audioSpecificConfig.frameLength / audioSpecificConfig.coreSampleRate;
+		}
+
+		case 'opus': {
+			return 0.08;
+		}
+
+		case 'mp3': {
+			// The bit reservoir reaches back a fixed number of bytes, so it spans the most frames when a (VBR)
+			// stream drops to the lowest bitrate. We can't rule that out, so we go with that worst case, plus one
+			// frame of overlap on top.
+			const { sampleRate, numberOfChannels } = decoderConfig;
+
+			const isMpeg1 = sampleRate >= 32000; // MPEG-2 and MPEG-2.5 cover the rates below
+			const frameSamples = isMpeg1 ? 1152 : 576;
+			const minBitrate = isMpeg1 ? 32000 : 8000;
+			const maxMainDataBegin = isMpeg1 ? 511 : 255;
+			const sideInfoSize = isMpeg1
+				? (numberOfChannels === 1 ? 17 : 32)
+				: (numberOfChannels === 1 ? 9 : 17);
+
+			const minFrameSize = Math.floor(frameSamples / 8 * minBitrate / sampleRate);
+			const minMainDataSize = minFrameSize - MP3_FRAME_HEADER_SIZE - sideInfoSize;
+			const frameCount = 1 + Math.ceil(maxMainDataBegin / minMainDataSize);
+
+			return frameCount * frameSamples / sampleRate;
+		}
+
+		case 'vorbis': {
+			assert(decoderConfig.description);
+
+			// Skip the Xiph lacing to get to the identification header
+			const bytes = toUint8Array(decoderConfig.description);
+			let pos = 1;
+			let lacedLengthsLeft = 2;
+			while (lacedLengthsLeft > 0) {
+				if (bytes[pos++]! < 255) {
+					lacedLengthsLeft--;
+				}
+			}
+
+			const blockSizeByte = bytes[pos + 28]!;
+			const longBlockSize = 1 << (blockSizeByte >> 4); // blocksize_1
+
+			// The previous packet's long window overlaps by up to half its size
+			return (longBlockSize / 2) / decoderConfig.sampleRate;
+		}
+
+		case 'ac3':
+		case 'eac3': {
+			return 256 / decoderConfig.sampleRate;
+		}
+
+		case 'dts': {
+			return 512 / decoderConfig.sampleRate;
+		}
+
+		case 'flac':
+		case 'pcm-s16':
+		case 'pcm-s16be':
+		case 'pcm-s24':
+		case 'pcm-s24be':
+		case 'pcm-s32':
+		case 'pcm-s32be':
+		case 'pcm-f32':
+		case 'pcm-f32be':
+		case 'pcm-f64':
+		case 'pcm-f64be':
+		case 'pcm-u8':
+		case 'pcm-s8':
+		case 'ulaw':
+		case 'alaw': {
+			return 0;
+		}
+
+		default: {
+			assertNever(codec);
+			assert(false);
+		}
 	}
 };
 

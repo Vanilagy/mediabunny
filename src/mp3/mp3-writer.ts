@@ -10,6 +10,7 @@ import { Writer } from '../writer';
 import {
 	computeMp3FrameSize,
 	getXingOffset,
+	INFO,
 	KILOBIT_RATES,
 	XING,
 	XingFlags,
@@ -26,6 +27,7 @@ export type XingFrameData = {
 	original: number;
 	emphasis: number;
 
+	isCbr: boolean;
 	frameCount: number | null;
 	fileSize: number | null;
 	toc: Uint8Array | null;
@@ -93,7 +95,7 @@ export class Mp3Writer {
 		const xingOffset = getXingOffset(data.mpegVersionId, data.channel);
 
 		this.writer.seek(startPos + xingOffset);
-		this.writeU32(XING);
+		this.writeU32(data.isCbr ? INFO : XING); // Following LAME's convention
 
 		let flags = 0;
 		if (data.frameCount !== null) {

@@ -1311,7 +1311,7 @@ export const arrayArgmin = <T>(array: T[], getValue: (item: T) => number): numbe
 
 	for (let i = 0; i < array.length; i++) {
 		const value = getValue(array[i]!);
-		if (value < minValue) {
+		if (minIndex === -1 || value < minValue) {
 			minValue = value;
 			minIndex = i;
 		}
@@ -1326,7 +1326,7 @@ export const arrayArgmax = <T>(array: T[], getValue: (item: T) => number): numbe
 
 	for (let i = 0; i < array.length; i++) {
 		const value = getValue(array[i]!);
-		if (value > maxValue) {
+		if (maxIndex === -1 || value > maxValue) {
 			maxValue = value;
 			maxIndex = i;
 		}

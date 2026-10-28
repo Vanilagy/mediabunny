@@ -1034,7 +1034,7 @@ test('Packet copy, whole file, Matroska', async () => {
 		videoStartTimestamp: 0 + 1024 / 48000,
 		videoEndTimestamp: 5 + 1024 / 48000 - 1 / 25,
 		audioStartTimestamp: 0,
-		audioEndTimestamp: 235 * 1024 / 48000,
+		audioEndTimestamp: 5 + 1024 / 48000,
 		precision: 0.001,
 	});
 });
@@ -1051,7 +1051,7 @@ test('Packet copy, whole file, Matroska, forced', async () => {
 		videoStartTimestamp: 0,
 		videoEndTimestamp: 5 - 1 / 25,
 		audioStartTimestamp: -1024 / 48000,
-		audioEndTimestamp: 4.992,
+		audioEndTimestamp: 5,
 		precision: 0.001,
 	});
 });
@@ -1072,7 +1072,7 @@ test('Packet copy, delta frame trim, Matroska', async () => {
 		videoStartTimestamp: 0,
 		videoEndTimestamp: 1.48,
 		audioStartTimestamp: 0.472,
-		audioEndTimestamp: 1.496,
+		audioEndTimestamp: 1.496 + 1024 / 48000,
 		precision: 0.001,
 	});
 });
@@ -1095,9 +1095,9 @@ test('Packet copy, delta frame trim, video transcoded, Matroska', async () => {
 		},
 		expectedTimeOffset: 1.472,
 		videoStartTimestamp: 0.028,
-		videoEndTimestamp: 1.008,
+		videoEndTimestamp: 1.028,
 		audioStartTimestamp: 0,
-		audioEndTimestamp: 1.024,
+		audioEndTimestamp: 1.024 + 1024 / 48000,
 		precision: 0.001,
 		compareVideoPackets: false,
 	});

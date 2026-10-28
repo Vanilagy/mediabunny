@@ -41,7 +41,7 @@ type OggTrackData = {
 	codecInfo: OggCodecInfo;
 	vorbisLastBlocksize: number | null;
 	packetQueue: Packet[];
-	startTimestampInSamples: number | null;
+	startOffsetInSamples: number | null;
 	currentTimestampInSamples: number;
 	audioPacketCount: number;
 	pagesWritten: number;
@@ -139,7 +139,7 @@ export class OggMuxer extends Muxer {
 			},
 			vorbisLastBlocksize: null,
 			packetQueue: [],
-			startTimestampInSamples: null,
+			startOffsetInSamples: null,
 			currentTimestampInSamples: 0,
 			audioPacketCount: 0,
 			pagesWritten: 0,
@@ -287,26 +287,29 @@ export class OggMuxer extends Muxer {
 
 			this.validateTimestamp(trackData.track, packet.timestamp, packet.type === 'key');
 
-			if (trackData.startTimestampInSamples === null) {
-				// The first packet determines where the stream begins. A packet at zero means the stream starts at
-				// zero, with the pre-skip preceding it. A later timestamp is treated as the start of the packet's
-				// decoded output, which the first page's granule position then signals as a start offset.
-				const timestampInSamples = Math.round(packet.timestamp * trackData.internalSampleRate);
-				const preSkip = trackData.codecInfo.opusInfo?.preSkip ?? 0;
-
-				trackData.startTimestampInSamples = timestampInSamples > 0
-					? timestampInSamples + preSkip
-					: 0;
-				trackData.currentTimestampInSamples = trackData.startTimestampInSamples;
-			}
-
-			const currentTimestampInSamples = trackData.currentTimestampInSamples;
-
 			const { durationInSamples, vorbisBlockSize } = extractSampleMetadata(
 				packet.data,
 				trackData.codecInfo,
 				trackData.vorbisLastBlocksize,
 			);
+
+			if (trackData.startOffsetInSamples === null) {
+				// The first packet determines where the stream begins. Its timestamp includes the Opus pre-skip, which
+				// offsets the granule position. For Vorbis, it is the priming packet that decodes to nothing. Granule
+				// positions can't be negative, so the earliest representable start is the one where the audible part
+				// begins at zero.
+				const timestampInSamples = Math.round(packet.timestamp * trackData.internalSampleRate);
+				const preSkip = trackData.codecInfo.opusInfo?.preSkip ?? 0;
+				const minTimestampInSamples = trackData.codecInfo.codec === 'vorbis'
+					? -durationInSamples
+					: -preSkip;
+				const startTimestampInSamples = Math.max(timestampInSamples, minTimestampInSamples);
+
+				trackData.startOffsetInSamples = startTimestampInSamples - minTimestampInSamples;
+				trackData.currentTimestampInSamples = startTimestampInSamples + preSkip;
+			}
+
+			const currentTimestampInSamples = trackData.currentTimestampInSamples;
 			trackData.currentTimestampInSamples += durationInSamples;
 			trackData.vorbisLastBlocksize = vorbisBlockSize;
 
@@ -318,7 +321,7 @@ export class OggMuxer extends Muxer {
 			// With a start offset, the second audio packet flushes the page. This keeps the offset from sharing a page
 			// with end trimming, as both are signaled through the granule position and would be indistinguishable.
 			// This mirrors a requirement of the Vorbis spec.
-			const forcePageFlush = trackData.startTimestampInSamples > 0 && trackData.audioPacketCount === 1;
+			const forcePageFlush = trackData.startOffsetInSamples > 0 && trackData.audioPacketCount === 1;
 			trackData.audioPacketCount++;
 
 			trackData.packetQueue.push({

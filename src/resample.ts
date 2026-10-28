@@ -206,12 +206,15 @@ export class AudioResampler {
 		const sourceView = new Float32Array(this.tempSourceBuffer.buffer, 0, sourceDataSize / 4);
 		audioSample.copyTo(sourceView, { planeIndex: 0, format: 'f32' });
 
-		const inputStartTime = audioSample.timestamp - this.startTime;
-		const inputEndTime = inputStartTime + audioSample.duration;
+		// Audio sample is snapped to the input sample rate grid
+		const sourceStartFrame = Math.round((audioSample.timestamp - this.startTime) * this.sourceSampleRate);
+		const sourceEndFrame = sourceStartFrame + audioSample.numberOfFrames;
 
 		// Compute which output frames are affected by this sample
-		const outputStartFrame = Math.floor((inputStartTime - 1 / this.sourceSampleRate) * this.targetSampleRate) + 1;
-		const outputEndFrame = Math.ceil(inputEndTime * this.targetSampleRate);
+		const outputStartFrame = Math.floor(
+			(sourceStartFrame - 1) * this.targetSampleRate / this.sourceSampleRate,
+		) + 1;
+		const outputEndFrame = Math.ceil(sourceEndFrame * this.targetSampleRate / this.sourceSampleRate);
 
 		for (let outputFrame = outputStartFrame; outputFrame < outputEndFrame; outputFrame++) {
 			if (outputFrame < this.bufferStartFrame) {
@@ -227,9 +230,7 @@ export class AudioResampler {
 			const bufferFrameIndex = outputFrame - this.bufferStartFrame;
 			assert(bufferFrameIndex < this.bufferCapacityInFrames);
 
-			const outputTime = outputFrame / this.targetSampleRate;
-			const inputTime = outputTime - inputStartTime;
-			const sourcePosition = inputTime * this.sourceSampleRate;
+			const sourcePosition = outputFrame * this.sourceSampleRate / this.targetSampleRate - sourceStartFrame;
 
 			const sourceLowerFrame = Math.floor(sourcePosition);
 			const sourceUpperFrame = Math.ceil(sourcePosition);
