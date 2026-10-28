@@ -167,9 +167,6 @@ export class MatroskaMuxer extends Muxer {
 	private currentClusterBlocks: ClusterBlock[] = [];
 	private currentClusterStartMsTimestamp: number | null = null;
 	private currentClusterMaxMsTimestamp: number | null = null;
-	private trackDatasInCurrentCluster = new Map<MatroskaTrackData, {
-		firstMsTimestamp: number;
-	}>();
 
 	private startTimestamp = Infinity;
 	private endTimestamp = -Infinity;
@@ -1285,11 +1282,6 @@ export class MatroskaMuxer extends Muxer {
 		this.endTimestamp = Math.max(this.endTimestamp, msTimestamp + Math.round(1000 * chunk.duration));
 		trackData.lastWrittenMsTimestamp = msTimestamp;
 
-		if (!this.trackDatasInCurrentCluster.has(trackData)) {
-			this.trackDatasInCurrentCluster.set(trackData, {
-				firstMsTimestamp: msTimestamp,
-			});
-		}
 		this.currentClusterMaxMsTimestamp = Math.max(this.currentClusterMaxMsTimestamp!, msTimestamp);
 	}
 
@@ -1302,7 +1294,6 @@ export class MatroskaMuxer extends Muxer {
 		const clusterMsTimestamp = Math.max(0, msTimestamp); // Cluster timestamps cannot be negative
 		this.currentClusterStartMsTimestamp = clusterMsTimestamp;
 		this.currentClusterMaxMsTimestamp = clusterMsTimestamp;
-		this.trackDatasInCurrentCluster.clear();
 	}
 
 	/** Writes the current cluster with all of its blocks to the file. */
@@ -1310,9 +1301,23 @@ export class MatroskaMuxer extends Muxer {
 		assert(this.currentClusterStartMsTimestamp !== null);
 		const clusterMsTimestamp = this.currentClusterStartMsTimestamp;
 
+		const firstKeyBlockPerTrack = new Map<MatroskaTrackData, ClusterBlock>();
 		const lastBlockPerTrack = new Map<MatroskaTrackData, ClusterBlock>();
+
 		for (const block of this.currentClusterBlocks) {
+			if (block.chunk.type === 'key' && !firstKeyBlockPerTrack.has(block.trackData)) {
+				firstKeyBlockPerTrack.set(block.trackData, block);
+			}
 			lastBlockPerTrack.set(block.trackData, block);
+		}
+
+		const blockElements = new Map<ClusterBlock, EBML>();
+		for (const block of this.currentClusterBlocks) {
+			blockElements.set(block, this.createBlockElement(
+				block,
+				clusterMsTimestamp,
+				lastBlockPerTrack.get(block.trackData) === block,
+			));
 		}
 
 		const cluster: EBML = {
@@ -1320,11 +1325,7 @@ export class MatroskaMuxer extends Muxer {
 			size: this.format._options.appendOnly ? -1 : CLUSTER_SIZE_BYTES,
 			data: [
 				{ id: EBMLId.Timestamp, data: clusterMsTimestamp },
-				...this.currentClusterBlocks.map(block => this.createBlockElement(
-					block,
-					clusterMsTimestamp,
-					lastBlockPerTrack.get(block.trackData) === block,
-				)),
+				...blockElements.values(),
 			],
 		};
 
@@ -1341,28 +1342,32 @@ export class MatroskaMuxer extends Muxer {
 		}
 
 		const clusterOffsetFromSegment = this.ebmlWriter.offsets.get(cluster)! - this.segmentDataOffset;
+		const clusterDataOffset = this.ebmlWriter.dataOffsets.get(cluster)!;
 
-		// Group tracks by their first timestamp and create a CuePoint for each unique timestamp
-		const groupedByTimestamp = new Map<number, MatroskaTrackData[]>();
-		for (const [trackData, { firstMsTimestamp }] of this.trackDatasInCurrentCluster) {
-			if (!groupedByTimestamp.has(firstMsTimestamp)) {
-				groupedByTimestamp.set(firstMsTimestamp, []);
+		// Group tracks by their first key packet's timestamp and create a CuePoint for each unique timestamp
+		const groupedByTimestamp = new Map<number, ClusterBlock[]>();
+		for (const block of firstKeyBlockPerTrack.values()) {
+			if (!groupedByTimestamp.has(block.msTimestamp)) {
+				groupedByTimestamp.set(block.msTimestamp, []);
 			}
-			groupedByTimestamp.get(firstMsTimestamp)!.push(trackData);
+			groupedByTimestamp.get(block.msTimestamp)!.push(block);
 		}
 
 		const groupedAndSortedByTimestamp = [...groupedByTimestamp.entries()].sort((a, b) => a[0] - b[0]);
 
 		// Add CuePoints to the Cues element for better seeking
-		for (const [msTimestamp, trackDatas] of groupedAndSortedByTimestamp) {
+		for (const [msTimestamp, blocks] of groupedAndSortedByTimestamp) {
 			assert(this.cues);
 			(this.cues.data as EBML[]).push({ id: EBMLId.CuePoint, data: [
 				{ id: EBMLId.CueTime, data: Math.max(0, msTimestamp) }, // CueTime is unsigned
-				// Create CueTrackPositions for each track that starts at this timestamp
-				...trackDatas.map((trackData) => {
+				// Create CueTrackPositions for each track whose first key packet is at this timestamp
+				...blocks.map((block) => {
+					const blockOffset = this.ebmlWriter.offsets.get(blockElements.get(block)!)!;
+
 					return { id: EBMLId.CueTrackPositions, data: [
-						{ id: EBMLId.CueTrack, data: trackData.track.id },
+						{ id: EBMLId.CueTrack, data: block.trackData.track.id },
 						{ id: EBMLId.CueClusterPosition, data: clusterOffsetFromSegment },
+						{ id: EBMLId.CueRelativePosition, data: blockOffset - clusterDataOffset },
 					] };
 				}),
 			] });
