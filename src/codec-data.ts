@@ -2729,7 +2729,7 @@ export const readVorbisComments = (bytes: Uint8Array, metadataTags: MetadataTags
 
 		metadataTags.raw ??= {};
 		if (Array.isArray(metadataTags.raw[key])) {
-			metadataTags.raw[key].push(value);
+			(metadataTags.raw[key] as string[]).push(value);
 		} else if (typeof metadataTags.raw[key] === 'string') {
 			metadataTags.raw[key] = [metadataTags.raw[key], value];
 		} else {

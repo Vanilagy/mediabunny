@@ -275,7 +275,7 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 
 	getTimeResolution() {
 		assert(this.demuxer.firstFrameHeader);
-		return this.demuxer.firstFrameHeader.sampleRate / this.demuxer.firstFrameHeader.audioSamplesInFrame;
+		return this.demuxer.firstFrameHeader.sampleRate;
 	}
 
 	isRelativeToUnixEpoch() {

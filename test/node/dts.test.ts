@@ -82,7 +82,7 @@ test('Transmux dtsc MP4 into Matroska', async () => {
 test('Transmux dtsc MP4 into MPEG-TS', async () => {
 	await expectTransmuxToPreservePackets(
 		DTSC_FILE,
-		new MpegTsOutputFormat({ timestampOffset: 0 }),
+		new MpegTsOutputFormat(),
 		MPEG_TS_TIMESTAMP_TOLERANCE,
 	);
 });
@@ -98,7 +98,7 @@ test('Transmux esds MP4 into Matroska', async () => {
 test('Transmux esds MP4 into MPEG-TS', async () => {
 	await expectTransmuxToPreservePackets(
 		ESDS_FILE,
-		new MpegTsOutputFormat({ timestampOffset: 0 }),
+		new MpegTsOutputFormat(),
 		MPEG_TS_TIMESTAMP_TOLERANCE,
 	);
 });

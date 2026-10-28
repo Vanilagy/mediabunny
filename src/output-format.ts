@@ -1133,9 +1133,9 @@ export type MpegTsOutputFormatOptions = {
 	/**
 	 * An offset in seconds that is added to all timestamps written to the file. The use of it is to prevent otherwise
 	 * negative timestamps (caused by audio priming samples or B-frames) not to be negative in the final file (which
-	 * would trip up some players).
+	 * would trip up some players). A recommended value is 10 seconds.
 	 *
-	 * Defaults to 10 seconds.
+	 * Defaults to 0. When writing HLS, prefer {@link HlsOutputFormatOptions.mediaTimestampBase} instead.
 	 */
 	timestampOffset?: number;
 
@@ -1301,6 +1301,15 @@ export type HlsOutputFormatOptions = {
 	 */
 	maxLiveSegmentCount?: number;
 	/**
+	 * The timestamp in seconds at which the media written into the segments starts. All media is shifted such that
+	 * the first packet added to the output lands on this timestamp, no matter its original timestamp. A positive base
+	 * keeps timestamps positive that would otherwise be negative (caused by audio priming samples, B-frames, or tracks
+	 * starting slightly before the first packet). The timestamps in the playlists are not affected.
+	 *
+	 * Defaults to 10 seconds.
+	 */
+	mediaTimestampBase?: number;
+	/**
 	 * Returns the file path for a given media playlist. If the returned path is relative, it is relative to the root
 	 * path.
 	 *
@@ -1407,6 +1416,9 @@ export class HlsOutputFormat extends OutputFormat {
 				|| (Number.isFinite(options.maxLiveSegmentCount) && !Number.isInteger(options.maxLiveSegmentCount)))
 		) {
 			throw new TypeError('options.maxLiveSegmentCount, when provided, must be a positive integer or Infinity.');
+		}
+		if (options.mediaTimestampBase !== undefined && !Number.isFinite(options.mediaTimestampBase)) {
+			throw new TypeError('options.mediaTimestampBase, when provided, must be a finite number.');
 		}
 		if (options.getPlaylistPath !== undefined && typeof options.getPlaylistPath !== 'function') {
 			throw new TypeError('options.getPlaylistPath, when provided, must be a function.');

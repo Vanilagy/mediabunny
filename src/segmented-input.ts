@@ -47,7 +47,7 @@ export type Segment = {
 	 * themselves are not shifted into Unix time space.
 	 */
 	unixEpochTimestamp: number | null;
-	firstSegment: Segment | null;
+	discontinuityNumber: number;
 };
 
 export type SegmentRetrievalOptions = {
@@ -73,7 +73,10 @@ export abstract class SegmentedInput {
 
 	trackBackingsPromise: Promise<InputTrackBacking[]> | null = null;
 	firstSegment: Segment | null = null;
-	firstSegmentFirstTimestamps = new WeakMap<Segment, number>();
+
+	// Roughly maps local segment timestamps onto actual packet timestamps
+	learnedSegmentTimestampOffset: number | null = null;
+	segmentMediaOffsets = new WeakMap<Segment, Promise<number>>();
 
 	constructor(input: Input, path: string, trackDeclarations: SegmentedInputTrackDeclaration[] | null) {
 		this.input = input;
@@ -88,6 +91,10 @@ export abstract class SegmentedInput {
 	abstract getInputForSegment(segment: Segment): Input;
 
 	abstract getLiveRefreshInterval(): Promise<number | null>;
+	abstract getMediaOffsetForDiscontinuity(discontinuityNumber: number): Promise<number>;
+	abstract getFirstSegmentTimestampOffset(): Promise<number>;
+	abstract getRawTimestampOffset(input: Input): Promise<number | null>; // Needed to make things like MP3/ADTS work
+	abstract getTimestampWrapPeriod(): number;
 
 	async getDurationFromMetadata(options: DurationMetadataRequestOptions) {
 		const lastSegment = await this.getSegmentAt(Infinity, {
@@ -97,7 +104,7 @@ export abstract class SegmentedInput {
 			return null;
 		}
 
-		return lastSegment.timestamp + lastSegment.duration;
+		return (lastSegment.timestamp + await this.getFirstSegmentTimestampOffset()) + lastSegment.duration;
 	}
 
 	async getUnixTimeForTimestamp(timestamp: number): Promise<number | null> {
@@ -108,7 +115,7 @@ export abstract class SegmentedInput {
 			return null;
 		}
 
-		const elapsed = timestamp - segment.timestamp;
+		const elapsed = timestamp - (segment.timestamp + await this.getFirstSegmentTimestampOffset());
 		return segment.unixEpochTimestamp + elapsed;
 	}
 
@@ -169,24 +176,42 @@ export abstract class SegmentedInput {
 		})();
 	}
 
-	async getMediaOffset(segment: Segment, input: Input) {
-		const format = await input.getFormat();
-		if (!format.supportsTimestampedMediaData) {
-			return segment.timestamp;
+	getMediaOffset(segment: Segment, input: Input) {
+		let promise = this.segmentMediaOffsets.get(segment);
+		if (promise) {
+			return promise;
 		}
 
-		// The segments' timestamps are assumed to lie on one shared timeline (until the next discontinuity), which we
-		// align to the playlist using the first segment
-		const firstSegment = segment.firstSegment ?? segment;
+		promise = (async () => {
+			const rawTimestampOffset = await this.getRawTimestampOffset(input);
+			if (rawTimestampOffset === null) {
+				// Without media timestamps, all we can do is place the media at the segment's timestamp
+				return segment.timestamp;
+			}
 
-		let firstSegmentFirstTimestamp = this.firstSegmentFirstTimestamps.get(firstSegment);
-		if (firstSegmentFirstTimestamp === undefined) {
-			const firstInput = this.getInputForSegment(firstSegment);
-			firstSegmentFirstTimestamp = await firstInput.getFirstTimestamp();
-			this.firstSegmentFirstTimestamps.set(firstSegment, firstSegmentFirstTimestamp);
-		}
+			let mediaOffset = rawTimestampOffset
+				+ await this.getMediaOffsetForDiscontinuity(segment.discontinuityNumber);
 
-		return firstSegment.timestamp - firstSegmentFirstTimestamp;
+			const period = this.getTimestampWrapPeriod();
+			if (period < Infinity) {
+				// Media timestamps wrap around periodically (that's how MPEG-TS timestamps work). To make the entire
+				// timeline continuous and monotonic (even for live streams that go on forever), we do a simple trick:
+				// shift the media timestamps by multiples of the period length so that the first timestamp is closest
+				// to the segment's timestamp (which DOES rise monotonically). This even works correctly for
+				// non-wrapping formats like fMP4 because for them it's just a noop (or a constant shift for all media).
+				const tracks = await input.getTracks();
+				const track = tracks.find(x => x.type === 'video') ?? tracks[0];
+				assert(track);
+
+				const mediaStart = await track.getFirstTimestamp() + mediaOffset;
+				mediaOffset += period * Math.round((segment.timestamp - mediaStart) / period);
+			}
+
+			return mediaOffset;
+		})();
+		this.segmentMediaOffsets.set(segment, promise);
+
+		return promise;
 	}
 
 	dispose() {
@@ -494,6 +519,30 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 			}
 
 			const mediaOffset = await this.segmentedInput.getMediaOffset(currentSegment, input);
+
+			// If we don't know the segment timestamp offset yet, learn it once from where this segment's media
+			// actually lies. If the timestamp is more than a segment's duration away from the segment, the lookup was
+			// way off, so redo it with the learned offset instead of walking there segment by segment. Note that it's
+			// fine if the result is still off, because we follow it with a correction step that finds the correct
+			// packet.
+			const firstPacket = this.segmentedInput.learnedSegmentTimestampOffset === null
+				? await track._backing.getFirstPacket({ ...options, metadataOnly: true })
+				: null;
+			if (firstPacket) {
+				const segmentStart = firstPacket.timestamp + mediaOffset;
+				this.segmentedInput.learnedSegmentTimestampOffset = segmentStart - currentSegment.timestamp;
+
+				const distance = timestamp - segmentStart;
+				if (distance < -currentSegment.duration || distance >= 2 * currentSegment.duration) {
+					const segment = await this.segmentedInput.getSegmentAt(timestamp, {
+						skipLiveWait: options.skipLiveWait,
+					});
+					if (segment !== currentSegment) {
+						currentSegment = segment;
+						continue;
+					}
+				}
+			}
 
 			const offsetTimestamp = timestamp - mediaOffset;
 			const packet = keyframesOnly

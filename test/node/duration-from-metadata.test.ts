@@ -119,7 +119,7 @@ test('MP3 duration metadata', async () => {
 	});
 
 	expect(await input.getDurationFromMetadata()).toBe(38.568);
-	expect(await input.computeDuration()).toBe(38.568000000000005);
+	expect(await input.computeDuration()).toBe(38.568);
 
 	const audioTrack = await input.getPrimaryAudioTrack();
 	assert(audioTrack);

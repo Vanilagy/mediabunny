@@ -33,7 +33,6 @@ test('MPEG-TS muxing with AVC and AAC', async () => {
 
 	const output = new Output({
 		format: new MpegTsOutputFormat({
-			timestampOffset: 0,
 			onPacket: (data) => {
 				expect(data[0]).toBe(0x47);
 				tsPacketCount++;
@@ -207,7 +206,6 @@ test('MPEG-TS muxing with HEVC and MP3', async () => {
 	let tsPacketCount = 0;
 	const output = new Output({
 		format: new MpegTsOutputFormat({
-			timestampOffset: 0,
 			onPacket: (data) => {
 				expect(data[0]).toBe(0x47);
 				tsPacketCount++;
@@ -616,7 +614,7 @@ test('MPEG-TS transmux (Annex B and ADTS passthrough)', async () => {
 	expect(await input.getFormat()).toBe(MPEG_TS);
 
 	const output = new Output({
-		format: new MpegTsOutputFormat({ timestampOffset: 0 }),
+		format: new MpegTsOutputFormat(),
 		target: new BufferTarget(),
 	});
 
@@ -751,7 +749,7 @@ test('MPEG-TS muxing with wholly negative timestamps', async () => {
 
 const testNegativeTimestampRoundTrip = async (timestamps: number[], duration: number) => {
 	const output = new Output({
-		format: new MpegTsOutputFormat({ timestampOffset: 0 }),
+		format: new MpegTsOutputFormat(),
 		target: new BufferTarget(),
 	});
 
