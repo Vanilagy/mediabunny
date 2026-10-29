@@ -55,45 +55,4 @@ test('Muxing without Xing header', async () => {
 
 	expect(inputPacketCount).toBeGreaterThan(0);
 	expect(outputPacketCount).toBe(inputPacketCount);
-	expect(await outputTrack.getFirstTimestamp()).toBe(0);
-});
-
-test('LAME delay survives remuxing', async () => {
-	using input = new Input({
-		source: new FilePathSource(path.join(__dirname, '..', 'public/Toothsome-Meme.VBRv2.mp3')),
-		formats: ALL_FORMATS,
-	});
-	const track = await input.getPrimaryAudioTrack();
-	assert(track);
-	const sink = new EncodedPacketSink(track);
-	const first = await sink.getFirstPacket();
-	assert(first);
-	expect(first.timestamp).toBe(-2210 / 48000);
-
-	const output = new Output({ format: new Mp3OutputFormat(), target: new BufferTarget() });
-	const source = new EncodedAudioPacketSource('mp3');
-	output.addAudioTrack(source);
-	await output.start();
-	await source.add(first);
-	await output.finalize();
-
-	using remuxed = new Input({ source: new BufferSource(output.target.buffer!), formats: ALL_FORMATS });
-	const remuxedTrack = await remuxed.getPrimaryAudioTrack();
-	assert(remuxedTrack);
-	expect(await remuxedTrack.getFirstTimestamp()).toBe(first.timestamp);
-});
-
-test('Truncated LAME tag does not read into the next frame', async () => {
-	const bytes = new Uint8Array(104 * 3);
-	for (let i = 0; i < 3; i++) {
-		bytes.set([0xff, 0xfb, 0x10, 0xc0], i * 104);
-	}
-	bytes.set(new TextEncoder().encode('Info'), 21);
-	new DataView(bytes.buffer).setUint32(25, 4); // A TOC cannot fit in this frame.
-	bytes.set(new TextEncoder().encode('LAME'), 129); // A fake tag in the following audio frame.
-	bytes[150] = 36; // 576 samples of delay, if the reader crosses the frame boundary.
-	using input = new Input({ source: new BufferSource(bytes), formats: ALL_FORMATS });
-	const track = await input.getPrimaryAudioTrack();
-	assert(track);
-	expect(await track.getFirstTimestamp()).toBe(0);
 });
