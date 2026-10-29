@@ -875,7 +875,7 @@ export const getAudioPreRollDuration = (codec: AudioCodec, decoderConfig: AudioD
 		}
 
 		case 'opus': {
-			return 0.08;
+			return OPUS_PRE_ROLL_DURATION;
 		}
 
 		case 'mp3': {
@@ -954,6 +954,10 @@ export const getAudioPreRollDuration = (codec: AudioCodec, decoderConfig: AudioD
 };
 
 export const OPUS_SAMPLE_RATE = 48_000;
+
+// RFC 7845 recommends 80 ms, but that one's very far from convergence (gives around -30 dBFS error). 400 ms was found
+// empirically to almost always give an error well below -100 dBFS, so we're using that
+export const OPUS_PRE_ROLL_DURATION = 0.4;
 
 const PCM_CODEC_REGEX = /^pcm-([usf])(\d+)(be)?$/;
 

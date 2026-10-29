@@ -9,6 +9,8 @@ import { MpegTsOutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
 import { Conversion } from '../../src/conversion.js';
 import { AudioSample, AudioSampleCopyToOptions } from '../../src/sample.js';
+import { OPUS_PRE_ROLL_DURATION } from '../../src/codec.js';
+import { InputAudioTrack } from '../../src/input-track.js';
 
 // https://github.com/Vanilagy/mediabunny/issues/370
 test('Negative audio timestamps are preserved', async () => {
@@ -108,7 +110,7 @@ test('Fallback sample past the end survives iterator return', async () => {
 	sample.close();
 });
 
-test('Audio decoder pre-roll', async () => {
+test('Audio decoder pre-roll (AAC)', async () => {
 	using input = new Input({
 		source: new UrlSource('/demo.mp4'),
 		formats: ALL_FORMATS,
@@ -120,6 +122,25 @@ test('Audio decoder pre-roll', async () => {
 	expect(await track.getCodec()).toBe('aac');
 	expect(await track.getPreRollDuration()).toBe(1024 / await track.getSampleRate());
 
+	await testAudioDecoderPreRoll(track, -90);
+});
+
+test('Audio decoder pre-roll (Opus)', async () => {
+	using input = new Input({
+		source: new UrlSource('/mediabunny-opus-preroll-v1.opus'),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	expect(await track.getCodec()).toBe('opus');
+	expect(await track.getPreRollDuration()).toBe(OPUS_PRE_ROLL_DURATION);
+
+	await testAudioDecoderPreRoll(track, -90);
+});
+
+const testAudioDecoderPreRoll = async (track: InputAudioTrack, maxErrorDb: number) => {
 	const sink = new AudioSampleSink(track);
 
 	// Decoding straight through from the start gives us a reference sample with fully converged decoder state
@@ -137,16 +158,39 @@ test('Audio decoder pre-roll', async () => {
 
 	for await (using sample of sink.samples(referenceTimestamp)) {
 		expect(sample.timestamp).toBe(referenceTimestamp);
-		expectSimilarData(getSampleData(sample), referenceData);
+		expectSimilarData(getSampleData(sample), referenceData, maxErrorDb);
 		break;
 	}
 
 	for await (using sample of sink.samplesAtTimestamps([referenceTimestamp])) {
 		assert(sample);
 		expect(sample.timestamp).toBe(referenceTimestamp);
-		expectSimilarData(getSampleData(sample), referenceData);
+		expectSimilarData(getSampleData(sample), referenceData, maxErrorDb);
 	}
-});
+};
+
+const getSampleData = (sample: AudioSample) => {
+	const options: AudioSampleCopyToOptions = {
+		planeIndex: 0,
+		format: 'f32',
+	};
+
+	const data = new Float32Array(sample.allocationSize(options) / Float32Array.BYTES_PER_ELEMENT);
+	sample.copyTo(data, options);
+
+	return data;
+};
+
+const expectSimilarData = (actual: Float32Array, expected: Float32Array, maxErrorDb: number) => {
+	expect(actual.length).toBe(expected.length);
+
+	let maxDifference = 0;
+	for (let i = 0; i < actual.length; i++) {
+		maxDifference = Math.max(maxDifference, Math.abs(actual[i]! - expected[i]!));
+	}
+
+	expect(20 * Math.log10(maxDifference)).toBeLessThan(maxErrorDb);
+};
 
 test('Sample retrieval within Opus pre-skip', async () => {
 	using input = new Input({
@@ -158,7 +202,7 @@ test('Sample retrieval within Opus pre-skip', async () => {
 	assert(track);
 
 	expect(await track.getCodec()).toBe('opus');
-	expect(await track.getPreRollDuration()).toBe(0.08);
+	expect(await track.getPreRollDuration()).toBe(OPUS_PRE_ROLL_DURATION);
 
 	const firstPacket = await new EncodedPacketSink(track).getFirstPacket();
 	assert(firstPacket);
@@ -232,26 +276,3 @@ test('Samples at timestamps come out while timestamps are still coming in', asyn
 
 	expect(sampleTimestamps).toEqual([firstPacket.timestamp, secondPacket.timestamp]);
 });
-
-const getSampleData = (sample: AudioSample) => {
-	const options: AudioSampleCopyToOptions = {
-		planeIndex: 0,
-		format: 'f32',
-	};
-
-	const data = new Float32Array(sample.allocationSize(options) / Float32Array.BYTES_PER_ELEMENT);
-	sample.copyTo(data, options);
-
-	return data;
-};
-
-const expectSimilarData = (actual: Float32Array, expected: Float32Array) => {
-	expect(actual.length).toBe(expected.length);
-
-	let maxDifference = 0;
-	for (let i = 0; i < actual.length; i++) {
-		maxDifference = Math.max(maxDifference, Math.abs(actual[i]! - expected[i]!));
-	}
-
-	expect(maxDifference).toBeLessThan(1e-4);
-};

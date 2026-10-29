@@ -30,6 +30,7 @@ import { IsobmffOutputFormatOptions, IsobmffOutputFormat, MovOutputFormat, CmafO
 import { inlineTimestampRegex, SubtitleConfig, SubtitleCue, SubtitleMetadata } from '../subtitles';
 import { aacChannelMap, aacFrequencyTable, buildAacAudioSpecificConfig } from '../../shared/aac-misc';
 import {
+	OPUS_PRE_ROLL_DURATION,
 	OPUS_SAMPLE_RATE,
 	parsePcmCodec,
 	PCM_AUDIO_CODECS,
@@ -790,7 +791,7 @@ export class IsobmffMuxer extends Muxer {
 				// ESTIMATE!!
 				prerollSamples = -Math.min(2, preroll.packetCount);
 			} else if (track.source._codec === 'opus') {
-				const OPUS_PREROLL_SAMPLES = 0.08 * OPUS_SAMPLE_RATE; // 80 ms
+				const OPUS_PREROLL_SAMPLES = Math.round(OPUS_PRE_ROLL_DURATION * OPUS_SAMPLE_RATE);
 
 				prerollSamples = -preroll.audioSampleDurationHistory.length;
 
