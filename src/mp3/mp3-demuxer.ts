@@ -30,6 +30,7 @@ import {
 	XingFlags,
 	computeAverageMp3FrameSize,
 	getMp3ChannelCount,
+	MP3_DECODER_DELAY,
 } from '../../shared/mp3-misc';
 import {
 	ID3_V1_TAG_SIZE,
@@ -70,6 +71,7 @@ export class Mp3Demuxer extends Demuxer {
 	lastSampleLoaded = false;
 	lastLoadedPos = 0;
 	nextTimestampInSamples = 0;
+	primingDelay = 0;
 
 	constructor(input: Input) {
 		super(input);
@@ -152,22 +154,51 @@ export class Mp3Demuxer extends Demuxer {
 				}
 
 				if (!this.xingData) {
-					let xingDataSlice = this.reader.requestSlice(result.startPos + xingOffset + 4, 12);
+					let xingDataSlice = this.reader.requestSlice(
+						result.startPos + xingOffset + 4,
+						header.totalSize - xingOffset - 4,
+					);
 					if (isThenable(xingDataSlice)) xingDataSlice = await xingDataSlice;
-					if (xingDataSlice) {
-						const xingData = readBytes(xingDataSlice, 12);
+					if (xingDataSlice && xingDataSlice.length >= 4) {
+						const xingData = readBytes(xingDataSlice, header.totalSize - xingOffset - 4);
 						const view = toDataView(xingData);
 						const flags = view.getUint32(0, false);
+						let offset = 4;
+						let frameCount: number | null = null;
+						let fileSize: number | null = null;
+						if (flags & XingFlags.FrameCount) {
+							if (offset + 4 <= view.byteLength) {
+								frameCount = view.getUint32(offset, false);
+							}
+							offset += 4;
+						}
+						if (flags & XingFlags.FileSize) {
+							if (offset + 4 <= view.byteLength) {
+								fileSize = view.getUint32(offset, false);
+							}
+							offset += 4;
+						}
+						if (flags & XingFlags.Toc) {
+							offset += 100;
+						}
+						if (flags & XingFlags.Quality) {
+							offset += 4;
+						}
+
+						if (!this.firstFrameHeader && offset + 24 <= view.byteLength) {
+							const encoder = String.fromCharCode(...xingData.subarray(offset, offset + 4));
+							if (encoder === 'LAME' || encoder === 'Lavf' || encoder === 'Lavc') {
+								const encoderDelay = (xingData[offset + 21]! << 4) | (xingData[offset + 22]! >> 4);
+								this.primingDelay = encoderDelay + MP3_DECODER_DELAY;
+								this.nextTimestampInSamples = -this.primingDelay;
+							}
+						}
 
 						this.xingData = {
 							// LAME and FFmpeg write the same header with 'Info' in place of 'Xing' for CBR streams
 							isVbr: word === XING,
-							frameCount: (flags & XingFlags.FrameCount)
-								? view.getUint32(4, false)
-								: null,
-							fileSize: (flags & XingFlags.FileSize)
-								? view.getUint32(8, false)
-								: null,
+							frameCount,
+							fileSize,
 						};
 					}
 				}
@@ -305,9 +336,9 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 		assert(demuxer.firstFrameHeaderPos !== null);
 
 		if (demuxer.xingData && demuxer.xingData.frameCount !== null) {
-			return demuxer.xingData.frameCount
-				* demuxer.firstFrameHeader.audioSamplesInFrame
-				/ demuxer.firstFrameHeader.sampleRate;
+			return Math.max(0, (demuxer.xingData.frameCount
+				* demuxer.firstFrameHeader.audioSamplesInFrame - demuxer.primingDelay)
+			/ demuxer.firstFrameHeader.sampleRate);
 		} else if (!demuxer.xingData?.isVbr) {
 			// Not tagged as VBR, assuming CBR
 
@@ -320,9 +351,9 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 				);
 				const frameCount = (demuxer.reader.fileSize - demuxer.firstFrameHeaderPos) / averageFrameSize;
 
-				return Math.round(frameCount)
-					* demuxer.firstFrameHeader.audioSamplesInFrame
-					/ demuxer.firstFrameHeader.sampleRate;
+				return Math.max(0, (Math.round(frameCount)
+					* demuxer.firstFrameHeader.audioSamplesInFrame - demuxer.primingDelay)
+				/ demuxer.firstFrameHeader.sampleRate);
 			}
 		}
 

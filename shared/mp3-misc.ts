@@ -7,6 +7,8 @@
  */
 
 export const MP3_FRAME_HEADER_SIZE = 4;
+// LAME-style delay metadata excludes the decoder's 528 + 1 samples of delay.
+export const MP3_DECODER_DELAY = 529;
 export const SAMPLING_RATES = [44100, 48000, 32000];
 export const KILOBIT_RATES = [
 	// lowSamplingFrequency === 0
@@ -212,6 +214,7 @@ export enum XingFlags {
 	FrameCount = 1 << 0,
 	FileSize = 1 << 1,
 	Toc = 1 << 2,
+	Quality = 1 << 3,
 }
 
 export const getMp3ChannelCount = (channel: number) => {

@@ -28,10 +28,10 @@ import {
 	iterateNalUnitsInLengthPrefixed,
 } from '../../src/codec-data.js';
 import { Output } from '../../src/output.js';
-import { Mp4OutputFormat } from '../../src/output-format.js';
+import { Mp3OutputFormat, Mp4OutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
 import { Conversion } from '../../src/conversion.js';
-import { VideoSampleSource } from '../../src/media-source.js';
+import { AudioSampleSource, VideoSampleSource } from '../../src/media-source.js';
 import { buildQuantizerEncodeOptions, Quality } from '../../src/encode.js';
 import { AvFrameVideoSampleResource } from '../../packages/server/src/video-sample.js';
 import { AvFrameAudioSampleResource } from '../../packages/server/src/audio-sample.js';
@@ -2343,6 +2343,55 @@ describe('Audio', async () => {
 
 	test('MP3 conversion roundtrip', async () => {
 		await conversionRoundtrip('mp3');
+	});
+
+	test('MP3 encoding preserves sync through the MP3 container', async () => {
+		for (const sampleRate of [22050, 44100, 48000]) {
+			const data = new Float32Array(sampleRate);
+			for (let i = Math.ceil(sampleRate / 2); i < sampleRate * 0.55; i++) {
+				data[i] = 0.5 * Math.sin(2 * Math.PI * 1000 * i / sampleRate);
+			}
+
+			const timestamps: number[] = [];
+			const output = new Output({ format: new Mp3OutputFormat(), target: new BufferTarget() });
+			const source = new AudioSampleSource({
+				codec: 'mp3',
+				bitrate: 128_000,
+				onEncodedPacket: packet => timestamps.push(packet.timestamp),
+			});
+			output.addAudioTrack(source);
+			await output.start();
+			using sample = new AudioSample({
+				data, format: 'f32', numberOfChannels: 1, sampleRate, timestamp: 0,
+			});
+			await source.add(sample);
+			await output.finalize();
+			expect(timestamps[0]).toBe(-1105 / sampleRate);
+
+			using input = new Input({ source: new BufferSource(output.target.buffer!), formats: ALL_FORMATS });
+			const track = await input.getPrimaryAudioTrack();
+			assert(track);
+			let packetCount = 0;
+			for await (const packet of new EncodedPacketSink(track).packets()) {
+				expect(Math.round(packet.timestamp * sampleRate))
+					.toBe(Math.round(timestamps[packetCount]! * sampleRate));
+				packetCount++;
+			}
+			expect(packetCount).toBe(timestamps.length);
+
+			let beepTimestamp: number | null = null;
+			for await (using decoded of new AudioSampleSink(track).samples()) {
+				const samples = new Float32Array(decoded.numberOfFrames);
+				decoded.copyTo(samples, { format: 'f32-planar', planeIndex: 0 });
+				const index = samples.findIndex(value => Math.abs(value) > 0.03);
+				if (index !== -1) {
+					beepTimestamp = decoded.timestamp + index / sampleRate;
+					break;
+				}
+			}
+			assert(beepTimestamp !== null);
+			expect(Math.abs(beepTimestamp - 0.5)).toBeLessThan(2 / sampleRate);
+		}
 	});
 
 	test('Vorbis conversion roundtrip', async () => {

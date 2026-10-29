@@ -7,7 +7,7 @@
  */
 
 import { CustomAudioEncoder, AudioCodec, AudioSample, EncodedPacket, Logging, registerEncoder } from 'mediabunny';
-import { MP3_FRAME_HEADER_SIZE, readMp3FrameHeader, SAMPLING_RATES } from '../../../shared/mp3-misc';
+import { MP3_DECODER_DELAY, MP3_FRAME_HEADER_SIZE, readMp3FrameHeader, SAMPLING_RATES } from '../../../shared/mp3-misc';
 import type { WorkerCommand, WorkerResponse, WorkerResponseData } from './shared';
 // @ts-expect-error An esbuild plugin handles this, TypeScript doesn't need to understand
 import createWorker from './encode.worker';
@@ -113,8 +113,8 @@ class Mp3Encoder extends CustomAudioEncoder {
 
 	async encode(audioSample: AudioSample) {
 		if (this.currentTimestamp === null) {
-			// The first sample's timestamp determines where we start
-			this.currentTimestamp = audioSample.timestamp;
+			// LAME adds 576 samples of encoder delay; decoding adds another 529 samples.
+			this.currentTimestamp = audioSample.timestamp - (576 + MP3_DECODER_DELAY) / this.config.sampleRate;
 		}
 
 		const sizePerChannel = audioSample.allocationSize({

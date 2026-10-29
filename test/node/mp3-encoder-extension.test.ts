@@ -77,6 +77,7 @@ test('MP3 encoding', async () => {
 	let packetCount = 0;
 	for await (const packet of sink.packets()) {
 		expect(packet.type).toBe('key');
+		expect(packet.timestamp).toBeCloseTo((packetCount * 1152 - 1105) / sampleRate, 10);
 		packetCount++;
 	}
 	// MP3 frames are 1152 samples each, so ~77 packets for 2 seconds at 44.1kHz
@@ -125,5 +126,5 @@ test('MP3 with huge timestamps', async () => {
 	const firstPacket = await sink.getFirstPacket();
 	assert(firstPacket);
 
-	expect(firstPacket.timestamp).toBe(timestamp);
+	expect(firstPacket.timestamp).toBeCloseTo(timestamp - 1105 / sampleRate, 6);
 });
