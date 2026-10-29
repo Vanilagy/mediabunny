@@ -7,8 +7,7 @@
  */
 
 export const MP3_FRAME_HEADER_SIZE = 4;
-// LAME-style delay metadata excludes the decoder's 528 + 1 samples of delay.
-export const MP3_DECODER_DELAY = 529;
+export const MP3_DECODER_DELAY = 529; // Inherent, and not included by LAME-style metadata
 export const SAMPLING_RATES = [44100, 48000, 32000];
 export const KILOBIT_RATES = [
 	// lowSamplingFrequency === 0

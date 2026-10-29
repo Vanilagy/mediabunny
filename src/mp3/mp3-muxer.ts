@@ -96,11 +96,12 @@ export class Mp3Muxer extends Muxer {
 						}
 					}
 
-					const encoderDelay = packet.timestamp < 0
+					let encoderDelay = packet.timestamp < 0
 						? Math.round(-packet.timestamp * header.sampleRate) - MP3_DECODER_DELAY
 						: null;
 					if (encoderDelay !== null && (encoderDelay < 0 || encoderDelay > 0xfff)) {
-						throw new Error('The initial MP3 timestamp cannot be represented by LAME delay metadata.');
+						// Cannot be represented by LAME delay metadata, so let's just write none
+						encoderDelay = null;
 					}
 
 					this.xingFrameData = {
@@ -118,7 +119,7 @@ export class Mp3Muxer extends Muxer {
 						frameCount: null,
 						fileSize: null,
 						toc: null,
-						encoderDelay,
+						encoderDelayInSamples: encoderDelay,
 					};
 
 					// This muxer doesn't make any bitrate constraints, meaning we don't know yet if this will be a
@@ -204,7 +205,7 @@ export class Mp3Muxer extends Muxer {
 					frameCount: null,
 					fileSize: null,
 					toc: null,
-					encoderDelay: null,
+					encoderDelayInSamples: null,
 				};
 			} else if (track.metadata.decoderConfig) {
 				// All we know is the sample rate and channel count, so let's derive the rest
@@ -242,7 +243,7 @@ export class Mp3Muxer extends Muxer {
 					frameCount: null,
 					fileSize: null,
 					toc: null,
-					encoderDelay: null,
+					encoderDelayInSamples: null,
 				};
 			} else {
 				throw new Error(

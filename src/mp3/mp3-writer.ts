@@ -32,7 +32,7 @@ export type XingFrameData = {
 	frameCount: number | null;
 	fileSize: number | null;
 	toc: Uint8Array | null;
-	encoderDelay: number | null;
+	encoderDelayInSamples: number | null;
 };
 
 export class Mp3Writer {
@@ -42,19 +42,20 @@ export class Mp3Writer {
 
 	constructor(private writer: Writer) {}
 
-	private writeWithCrc(bytes: Uint8Array) {
+	private writeAndUpdateCrc(bytes: Uint8Array) {
 		for (const byte of bytes) {
 			this.crc ^= byte;
 			for (let bit = 0; bit < 8; bit++) {
 				this.crc = (this.crc >>> 1) ^ ((this.crc & 1) ? 0xa001 : 0);
 			}
 		}
+
 		this.writer.write(bytes);
 	}
 
 	writeU32(value: number) {
 		this.helperView.setUint32(0, value, false);
-		this.writeWithCrc(this.helper.subarray(0, 4));
+		this.writeAndUpdateCrc(this.helper.subarray(0, 4));
 	}
 
 	writeXingFrame(data: XingFrameData) {
@@ -73,7 +74,7 @@ export class Mp3Writer {
 
 		const padding = 0;
 		const xingOffset = getXingOffset(data.mpegVersionId, data.channel);
-		const neededBytes = data.encoderDelay === null ? 155 : xingOffset + 8 + 4 + 4 + 100 + 36;
+		const neededBytes = data.encoderDelayInSamples === null ? 155 : xingOffset + 8 + 4 + 4 + 100 + 36;
 
 		let bitrateIndex = -1;
 		const bitrateOffset = lowSamplingFrequency * 16 * 4 + data.layer * 16;
@@ -104,8 +105,8 @@ export class Mp3Writer {
 		this.helper[1] = secondByte;
 		this.helper[2] = thirdByte;
 		this.helper[3] = fourthByte;
-		this.writeWithCrc(this.helper.subarray(0, 4));
-		this.writeWithCrc(new Uint8Array(xingOffset - 4));
+		this.writeAndUpdateCrc(this.helper.subarray(0, 4));
+		this.writeAndUpdateCrc(new Uint8Array(xingOffset - 4));
 		this.writeU32(data.isCbr ? INFO : XING); // Following LAME's convention
 
 		let flags = 0;
@@ -122,16 +123,16 @@ export class Mp3Writer {
 		this.writeU32(flags);
 		this.writeU32(data.frameCount ?? 0);
 		this.writeU32(data.fileSize ?? 0);
-		this.writeWithCrc(data.toc ?? new Uint8Array(100));
+		this.writeAndUpdateCrc(data.toc ?? new Uint8Array(100));
 
-		if (data.encoderDelay !== null) {
+		if (data.encoderDelayInSamples !== null) {
 			const lame = new Uint8Array(36);
 			lame.set([0x4c, 0x41, 0x4d, 0x45]); // 'LAME'
-			lame[21] = data.encoderDelay >> 4;
+			lame[21] = data.encoderDelayInSamples >> 4;
 			// Readers subtract the decoder delay from the padding field, so this means no end trim.
-			lame[22] = ((data.encoderDelay & 0xf) << 4) | (MP3_DECODER_DELAY >> 8);
+			lame[22] = ((data.encoderDelayInSamples & 0xf) << 4) | (MP3_DECODER_DELAY >> 8);
 			lame[23] = MP3_DECODER_DELAY & 0xff;
-			this.writeWithCrc(lame.subarray(0, 34));
+			this.writeAndUpdateCrc(lame.subarray(0, 34));
 			new DataView(lame.buffer).setUint16(34, this.crc);
 			this.writer.write(lame.subarray(34));
 		}

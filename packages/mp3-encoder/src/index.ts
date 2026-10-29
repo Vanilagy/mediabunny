@@ -113,7 +113,7 @@ class Mp3Encoder extends CustomAudioEncoder {
 
 	async encode(audioSample: AudioSample) {
 		if (this.currentTimestamp === null) {
-			// LAME adds 576 samples of encoder delay; decoding adds another 529 samples.
+			// LAME adds 576 samples of encoder delay on top of inherent delay
 			this.currentTimestamp = audioSample.timestamp - (576 + MP3_DECODER_DELAY) / this.config.sampleRate;
 		}
 
