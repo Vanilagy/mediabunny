@@ -118,6 +118,8 @@ import { Bitstream } from '../../shared/bitstream';
 import { Aes128CbcContext } from '../aes';
 import { Logging } from '../logging';
 
+const TRUEHD_CHANNEL_ASSIGNMENT_COUNTS = [2, 1, 1, 2, 2, 2, 2, 1, 1, 2, 2, 1, 1];
+
 type InternalTrack = {
 	id: number;
 	demuxer: IsobmffDemuxer;
@@ -1363,6 +1365,8 @@ export class IsobmffDemuxer extends Demuxer {
 						} else if ((DTS_FOURCCS as readonly string[]).includes(codecName!)) {
 							track.info.codec = 'dts';
 							track.info.dtsFormat = codecName as DtsFourCc;
+						} else if (codecName === 'mlpa') {
+							track.info.codec = 'truehd';
 						} else if (codecName === 'twos') {
 							if (sampleSize === 8) {
 								track.info.codec = 'pcm-s8';
@@ -1971,6 +1975,37 @@ export class IsobmffDemuxer extends Demuxer {
 				if (config.numberOfChannels !== null) {
 					track.info.numberOfChannels = config.numberOfChannels;
 				}
+			}; break;
+
+			case 'dmlp': { // MLPSpecificBox
+				const track = this.currentTrack;
+				if (!track || track.info?.type !== 'audio') {
+					break;
+				}
+
+				const formatInfo = readU32Be(slice);
+
+				const rateBits = formatInfo >>> 28;
+				if (rateBits === 0xf) {
+					Logging._warn('Invalid dmlp box contents, ignoring.');
+					break;
+				}
+
+				track.info.sampleRate = (rateBits & 0x8 ? 44100 : 48000) << (rateBits & 0x7);
+
+				// Prefer the 8-channel presentation's assignment, falling back to the 6-channel one
+				const sixChannelAssignment = (formatInfo >>> 15) & 0x1f;
+				const eightChannelAssignment = formatInfo & 0x1fff;
+				const channelAssignment = eightChannelAssignment || sixChannelAssignment;
+
+				let numberOfChannels = 0;
+				for (let i = 0; i < TRUEHD_CHANNEL_ASSIGNMENT_COUNTS.length; i++) {
+					if (channelAssignment & (1 << i)) {
+						numberOfChannels += TRUEHD_CHANNEL_ASSIGNMENT_COUNTS[i]!;
+					}
+				}
+
+				track.info.numberOfChannels = numberOfChannels;
 			}; break;
 
 			case 'stts': {

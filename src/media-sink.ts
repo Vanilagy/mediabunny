@@ -1418,16 +1418,13 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 		const height = visibleRect.height;
 
 		if (!this.frameCopyContext) {
-			let canvas: HTMLCanvasElement | OffscreenCanvas;
+			let context: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
 			if (typeof OffscreenCanvas !== 'undefined') {
-				canvas = new OffscreenCanvas(width, height);
+				context = new OffscreenCanvas(width, height).getContext('2d', { alpha: false });
 			} else {
-				canvas = document.createElement('canvas');
+				context = document.createElement('canvas').getContext('2d', { alpha: false });
 			}
 
-			const context = canvas.getContext('2d', {
-				alpha: false,
-			}) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
 			if (!context) {
 				throw new Error('The \'2d\' canvas context is required to decode video on Chromium for Android.');
 			}

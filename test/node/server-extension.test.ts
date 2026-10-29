@@ -2145,6 +2145,26 @@ describe('Audio', async () => {
 		});
 	});
 
+	test('TrueHD encode & decode', async () => {
+		await encodeDecodeTest('truehd', {}, async (packet, meta, i) => {
+			// libav's encoder writes a major sync every 16 access units
+			expect(packet.type).toBe(i % 16 === 0 ? 'key' : 'delta');
+			expect(packet.duration).toBeCloseTo(40 / 48000);
+
+			if (i === 0) {
+				expect(meta.decoderConfig).toBeDefined();
+				expect(meta.decoderConfig!.codec).toBe('mlpa');
+				expect(meta.decoderConfig!.numberOfChannels).toBe(2);
+				expect(meta.decoderConfig!.sampleRate).toBe(48000);
+				expect(meta.decoderConfig!.description).toBeUndefined();
+			}
+		}, async (sample) => {
+			expect(sample.numberOfChannels).toBe(2);
+			expect(sample.sampleRate).toBe(48000);
+			expect(sample.duration).toBeCloseTo(40 / 48000);
+		});
+	});
+
 	for (const codec of NON_PCM_AUDIO_CODECS) {
 		test(`${codec} encode & decode, negative timestamps`, async () => {
 			await timestampTest(codec, -1);
@@ -2359,6 +2379,10 @@ describe('Audio', async () => {
 
 	test('E-AC-3 conversion roundtrip', async () => {
 		await conversionRoundtrip('eac3');
+	});
+
+	test('TrueHD conversion roundtrip', async () => {
+		await conversionRoundtrip('truehd');
 	});
 
 	const conversionRoundtrip = async (codec: AudioCodec) => {

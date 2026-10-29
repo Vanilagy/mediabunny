@@ -1,0 +1,23 @@
+{
+	// Typechecks all extension packages in a single program, which is much faster than one tsc call per package
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"moduleResolution": "nodenext",
+		"module": "nodenext",
+		"allowJs": true,
+		"composite": true,
+		"noEmit": false,
+		"emitDeclarationOnly": true,
+		"outDir": "./dist/packages",
+		"paths": {
+			"mediabunny": ["./src/index.ts"],
+		},
+	},
+	"include": [
+		"./packages/*/src/**/*",
+		"./packages/*/build/**/*",
+	],
+	"references": [
+		{ "path": "./src" },
+	]
+}

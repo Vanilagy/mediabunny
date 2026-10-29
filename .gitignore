@@ -9,6 +9,7 @@ docs/.vitepress/cache
 packages/mp3-encoder/dist
 packages/ac3/dist
 packages/dts/dist
+packages/truehd/dist
 packages/aac-encoder/dist
 packages/flac-encoder/dist
 packages/server/dist

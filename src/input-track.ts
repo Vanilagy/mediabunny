@@ -6,8 +6,15 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { AudioCodec, getAudioPreRollDuration, MediaCodec, PCM_AUDIO_CODECS, VideoCodec } from './codec';
-import { determineVideoPacketType } from './codec-data';
+import {
+	AUDIO_CODECS_WITH_DELTA_PACKETS,
+	AudioCodec,
+	getAudioPreRollDuration,
+	MediaCodec,
+	PCM_AUDIO_CODECS,
+	VideoCodec,
+} from './codec';
+import { determineAudioPacketType, determineVideoPacketType } from './codec-data';
 import { customAudioDecoders, customVideoDecoders } from './custom-coder';
 import { Input } from './input';
 import { Logging } from './logging';
@@ -1091,7 +1098,10 @@ export class InputAudioTrack extends InputTrack {
 	}
 
 	async hasOnlyKeyPackets() {
-		return (await this._backing.getHasOnlyKeyPackets?.()) ?? true;
+		const codec = await this._backing.getCodec();
+
+		return (await this._backing.getHasOnlyKeyPackets?.())
+			?? (codec === null || !AUDIO_CODECS_WITH_DELTA_PACKETS.includes(codec));
 	}
 
 	/** Returns the number of audio channels in the track. */
@@ -1189,12 +1199,16 @@ export class InputAudioTrack extends InputTrack {
 		if (!(packet instanceof EncodedPacket)) {
 			throw new TypeError('packet must be an EncodedPacket.');
 		}
+		if (packet.isMetadataOnly) {
+			throw new TypeError('packet must not be metadata-only to determine its type.');
+		}
 
-		if ((await this.getCodec()) === null) {
+		const codec = await this.getCodec();
+		if (codec === null) {
 			return null;
 		}
 
-		return 'key'; // No audio codec with delta packets
+		return determineAudioPacketType(codec, packet.data);
 	}
 }
 

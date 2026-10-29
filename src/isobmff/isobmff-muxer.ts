@@ -580,6 +580,10 @@ export class IsobmffMuxer extends Muxer {
 			if (track.source._codec === 'dts') {
 				throw new Error('DTS requires a priming packet.');
 			}
+
+			if (track.source._codec === 'truehd') {
+				throw new Error('TrueHD requires a priming packet.');
+			}
 		}
 
 		const newTrackData: IsobmffAudioTrackData = {
