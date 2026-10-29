@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { AVC_LEVEL_TABLE, DtsFourCc, VideoCodec, VP9_LEVEL_TABLE } from './codec';
+import { AudioCodec, AVC_LEVEL_TABLE, DtsFourCc, VideoCodec, VP9_LEVEL_TABLE } from './codec';
 import {
 	assert,
 	assertNever,
@@ -32,6 +32,7 @@ import { PacketType } from './packet';
 import { MetadataTags } from './metadata';
 import { AC3_SAMPLE_RATES, EAC3_REDUCED_SAMPLE_RATES } from '../shared/ac3-misc';
 import { Bitstream } from '../shared/bitstream';
+import { TRUEHD_MAJOR_SYNC_WORD } from '../shared/truehd-misc';
 import { VERSIONED_NAME } from './version';
 
 // References for AVC/HEVC code:
@@ -2665,6 +2666,16 @@ export const determineVideoPacketType = (
 			assertNever(codec);
 			assert(false);
 		};
+	}
+};
+
+export const determineAudioPacketType = (codec: AudioCodec, packetData: Uint8Array): PacketType => {
+	if (codec === 'truehd') {
+		// Only access units carrying a major sync are restart points
+		const syncWord = packetData.byteLength >= 8 ? toDataView(packetData).getUint32(4) : null;
+		return syncWord === TRUEHD_MAJOR_SYNC_WORD ? 'key' : 'delta';
+	} else {
+		return 'key';
 	}
 };
 

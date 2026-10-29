@@ -52,6 +52,7 @@ Mediabunny ships with built-in decoders and encoders for all audio PCM codecs, m
 - `'ac3'` - Dolby Digital (AC-3) [^ac3]
 - `'eac3'` - Dolby Digital Plus (E-AC-3) [^ac3]
 - `'dts'` - DTS Coherent Acoustics [^dts]
+- `'truehd'` - Dolby TrueHD [^truehd]
 - `'pcm-u8'` - 8-bit unsigned PCM
 - `'pcm-s8'` - 8-bit signed PCM
 - `'pcm-s16'` - 16-bit little-endian signed PCM
@@ -91,6 +92,7 @@ Not all codecs can be used with all containers. The following table specifies th
 | `'ac3'`        |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |   ✓   |
 | `'eac3'`       |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |   ✓   |
 | `'dts'`        |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |   ✓   |
+| `'truehd'`     |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |       |
 | `'pcm-u8'`     |          |   ✓   |   ✓   |           |       |       |   ✓   |       |       |       |
 | `'pcm-s8'`     |          |   ✓   |       |           |       |       |       |       |       |       |
 | `'pcm-s16'`    |    ✓     |   ✓   |   ✓   |           |       |       |   ✓   |       |       |       |
@@ -115,6 +117,7 @@ For HLS, the supported codecs depend on the segment format chosen.
 [^flac]: FLAC encoding is not supported by WebCodecs. You can polyfill it with the [`@mediabunny/flac-encoder`](./extensions/flac-encoder) extension package.
 [^ac3]: AC-3 and E-AC-3 are not natively supported by WebCodecs. To encode or decode these codecs, you can use the [`@mediabunny/ac3`](./extensions/ac3) extension package.
 [^dts]: DTS is not natively supported by WebCodecs. To encode or decode it, you can use the [`@mediabunny/dts`](./extensions/dts) extension package.
+[^truehd]: TrueHD is not natively supported by WebCodecs. To encode or decode it, you can use the [`@mediabunny/truehd`](./extensions/truehd) extension package.
 [^webm]: WebM only supports a small subset of the codecs supported by Matroska. However, this library can technically read all codecs from a WebM that are supported by Matroska.
 [^webvtt]: WebVTT can only be written, not read.
 

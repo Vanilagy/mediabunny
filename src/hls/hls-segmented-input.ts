@@ -908,7 +908,11 @@ export class HlsSegmentedInput extends SegmentedInput {
 			}
 
 			const timestamp = 2 ** 32 * timestampHigh + timestampLow;
-			return normalizeWrappedTimestamp(timestamp, createTimestampWrapInfo(timestamp)) / MPEG_TS_TIMESCALE;
+			const privTimestamp = normalizeWrappedTimestamp(timestamp, createTimestampWrapInfo(timestamp))
+				/ MPEG_TS_TIMESCALE;
+
+			// The PRIV timestamp is that of the first packet
+			return privTimestamp - await input.getFirstTimestamp();
 		}
 
 		return null;

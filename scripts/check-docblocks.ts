@@ -1,8 +1,7 @@
 import ts from 'typescript';
 import * as fs from 'fs';
 
-const checkDocblocks = (filePath: string) => {
-	const program = ts.createProgram([filePath], {});
+const checkDocblocks = (program: ts.Program, filePath: string) => {
 	const sourceFile = program.getSourceFile(filePath);
 	const checker = program.getTypeChecker();
 
@@ -161,38 +160,49 @@ const checkDocblocks = (filePath: string) => {
 };
 
 const main = () => {
-	const args = process.argv.slice(2);
+	const filePaths = process.argv.slice(2);
 
-	if (args.length !== 1) {
+	if (filePaths.length === 0) {
 		console.error('Missing file argument.');
 		process.exit(1);
 	}
 
-	const filePath = args[0]!;
-
-	if (!fs.existsSync(filePath)) {
-		console.error(`File not found: ${filePath}`);
-		process.exit(1);
+	for (const filePath of filePaths) {
+		if (!fs.existsSync(filePath)) {
+			console.error(`File not found: ${filePath}`);
+			process.exit(1);
+		}
 	}
 
+	let failed = false;
+
 	try {
-		const result = checkDocblocks(filePath);
+		// A single program for all files, faster that way
+		const program = ts.createProgram(filePaths, {});
 
-		if (result.success) {
-			console.log(`✅ All symbols in ${filePath} have meaningful docblocks.`);
-		} else {
-			console.log(
-				`❌ Found ${result.missingDocblocks.length} symbols with insufficient docblocks:`,
-			);
+		for (const filePath of filePaths) {
+			const result = checkDocblocks(program, filePath);
 
-			result.missingDocblocks.forEach((item) => {
-				console.log(`  - ${item.kind} '${item.name}' at ${filePath}:${item.line}: ${item.reason}`);
-			});
+			if (result.success) {
+				console.log(`✅ All symbols in ${filePath} have meaningful docblocks.`);
+			} else {
+				console.log(
+					`❌ Found ${result.missingDocblocks.length} symbols in ${filePath} with insufficient docblocks:`,
+				);
 
-			process.exit(1);
+				result.missingDocblocks.forEach((item) => {
+					console.log(`  - ${item.kind} '${item.name}' at ${filePath}:${item.line}: ${item.reason}`);
+				});
+
+				failed = true;
+			}
 		}
 	} catch (error) {
 		console.error('Error:', error);
+		process.exit(1);
+	}
+
+	if (failed) {
 		process.exit(1);
 	}
 };

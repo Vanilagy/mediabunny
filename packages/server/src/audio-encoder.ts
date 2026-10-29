@@ -15,8 +15,9 @@ import {
 	EncodedPacket,
 } from 'mediabunny';
 import * as NodeAv from 'node-av';
-import { CODEC_TO_CODEC_ID, getChannelLayout, getDtsChannelLayout } from './misc';
+import { CODEC_TO_CODEC_ID, getChannelLayout, getDtsChannelLayout, getTrueHdChannelLayout } from './misc';
 import { assert, toUint8Array } from '../../../src/misc';
+import { determineAudioPacketType } from '../../../src/codec-data';
 import { copyAudioSampleToAvFrame, AvFrameAudioSampleResource } from './audio-sample';
 import {
 	AdtsHeaderTemplate,
@@ -24,6 +25,7 @@ import {
 	parseAacAudioSpecificConfig,
 } from '../../../shared/aac-misc';
 import { DTS_CHANNEL_COUNTS, DTS_SAMPLE_RATES, dtsBitrateFits } from '../../../shared/dts-misc';
+import { TRUEHD_CHANNEL_COUNTS, TRUEHD_SAMPLE_RATES } from '../../../shared/truehd-misc';
 
 const AAC_SAMPLE_RATES
 	= [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
@@ -75,6 +77,9 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 			codec === 'dts' && DTS_CHANNEL_COUNTS.includes(numberOfChannels)
 			&& DTS_SAMPLE_RATES.includes(sampleRate)
 			&& dtsBitrateFits(resolveBitrate(config, codec), sampleRate, numberOfChannels)
+		) || (
+			codec === 'truehd' && TRUEHD_CHANNEL_COUNTS.includes(numberOfChannels)
+			&& TRUEHD_SAMPLE_RATES.includes(sampleRate)
 		);
 	}
 
@@ -104,15 +109,22 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 		codecContext.allocContext3(this.avCodec);
 
 		let sampleFormat = NodeAv.AV_SAMPLE_FMT_FLTP;
-		if (this.avCodec.sampleFormats && !this.avCodec.sampleFormats.includes(NodeAv.AV_SAMPLE_FMT_FLTP)) {
+		if (this.codec === 'truehd') {
+			// The first listed format is 16-bit, which would needlessly truncate what's supposed to be lossless
+			sampleFormat = NodeAv.AV_SAMPLE_FMT_S32P;
+		} else if (this.avCodec.sampleFormats && !this.avCodec.sampleFormats.includes(NodeAv.AV_SAMPLE_FMT_FLTP)) {
 			// Use a format that's supported
 			sampleFormat = this.avCodec.sampleFormats[0]!;
 		}
 
 		codecContext.sampleRate = this.config.sampleRate;
-		codecContext.channelLayout = this.codec === 'dts'
-			? getDtsChannelLayout(this.config.numberOfChannels)
-			: getChannelLayout(this.config.numberOfChannels);
+		if (this.codec === 'dts') {
+			codecContext.channelLayout = getDtsChannelLayout(this.config.numberOfChannels);
+		} else if (this.codec === 'truehd') {
+			codecContext.channelLayout = getTrueHdChannelLayout(this.config.numberOfChannels);
+		} else {
+			codecContext.channelLayout = getChannelLayout(this.config.numberOfChannels);
+		}
 		codecContext.codecType = NodeAv.AVMEDIA_TYPE_AUDIO;
 		codecContext.codecId = CODEC_TO_CODEC_ID[this.codec]!;
 		codecContext.sampleFormat = sampleFormat;
@@ -124,8 +136,9 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 			codecContext.rcMaxRate = codecContext.bitRate;
 		}
 
-		// libav's DTS encoder is marked experimental, so it refuses to open at the default compliance level
-		const options = this.codec === 'dts'
+		// libav's DTS and TrueHD encoders are marked experimental, so they refuse to open at the default compliance
+		// level
+		const options = this.codec === 'dts' || this.codec === 'truehd'
 			? NodeAv.Dictionary.fromObject({ strict: -2 })
 			: null;
 
@@ -340,7 +353,7 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 
 		const packet = new EncodedPacket(
 			data,
-			'key',
+			determineAudioPacketType(this.codec, data),
 			timestamp,
 			duration,
 		);

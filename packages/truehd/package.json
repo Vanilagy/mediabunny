@@ -1,0 +1,59 @@
+{
+  "name": "@mediabunny/truehd",
+  "author": "Vanilagy",
+  "version": "1.64.0",
+  "description": "Dolby TrueHD decoder and encoder extension for Mediabunny, based on libavcodec.",
+  "main": "./dist/bundles/mediabunny-truehd.mjs",
+  "module": "./dist/bundles/mediabunny-truehd.mjs",
+  "types": "./dist/modules/src/index.d.ts",
+  "exports": {
+    "types": "./dist/modules/src/index.d.ts",
+    "import": "./dist/bundles/mediabunny-truehd.mjs",
+    "require": "./dist/bundles/mediabunny-truehd.mjs"
+  },
+  "files": [
+    "README.md",
+    "package.json",
+    "LICENSE",
+    "dist",
+    "src"
+  ],
+  "browser": {
+    "worker_threads": false
+  },
+  "sideEffects": false,
+  "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vanilagy/mediabunny.git",
+    "directory": "packages/truehd"
+  },
+  "bugs": {
+    "url": "https://github.com/Vanilagy/mediabunny/issues"
+  },
+  "homepage": "https://mediabunny.dev/guide/extensions/truehd",
+  "funding": {
+    "type": "individual",
+    "url": "https://github.com/sponsors/Vanilagy"
+  },
+  "peerDependencies": {
+    "mediabunny": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/emscripten": "^1.40.1"
+  },
+  "keywords": [
+    "truehd",
+    "dolby-truehd",
+    "mlp",
+    "lossless",
+    "encoding",
+    "decoding",
+    "codec",
+    "mediabunny",
+    "ffmpeg",
+    "browser",
+    "wasm",
+    "polyfill"
+  ]
+}

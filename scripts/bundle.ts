@@ -192,6 +192,37 @@ const dtsVariants = await createVariants(
 	},
 );
 
+const trueHdVariants = await createVariants(
+	'packages/truehd/src/index.ts',
+	'MediabunnyTrueHd',
+	'packages/truehd/dist/bundles/mediabunny-truehd',
+	'js', // The bundles are purely for the browser, not for Node (due to the peer dependency)
+	{
+		plugins: [
+			PluginExternalGlobal.externalGlobalPlugin({
+				mediabunny: 'Mediabunny',
+			}),
+			inlineWorkerPlugin({
+				define: {
+					'import.meta.url': '""',
+				},
+				legalComments: 'none',
+			}),
+		],
+	},
+	{
+		external: ['mediabunny'],
+		plugins: [
+			inlineWorkerPlugin({
+				define: {
+					'import.meta.url': '""',
+				},
+				legalComments: 'none',
+			}),
+		],
+	},
+);
+
 const aacEncoderVariants = await createVariants(
 	'packages/aac-encoder/src/index.ts',
 	'MediabunnyAacEncoder',
@@ -294,6 +325,7 @@ const contexts = [
 	...mp3EncoderVariants,
 	...ac3Variants,
 	...dtsVariants,
+	...trueHdVariants,
 	...aacEncoderVariants,
 	...flacEncoderVariants,
 	...proresVariants,

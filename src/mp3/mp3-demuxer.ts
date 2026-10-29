@@ -30,6 +30,7 @@ import {
 	XingFlags,
 	computeAverageMp3FrameSize,
 	getMp3ChannelCount,
+	MP3_DECODER_DELAY,
 } from '../../shared/mp3-misc';
 import {
 	ID3_V1_TAG_SIZE,
@@ -70,6 +71,7 @@ export class Mp3Demuxer extends Demuxer {
 	lastSampleLoaded = false;
 	lastLoadedPos = 0;
 	nextTimestampInSamples = 0;
+	primingDelay = 0;
 
 	constructor(input: Input) {
 		super(input);
@@ -169,6 +171,24 @@ export class Mp3Demuxer extends Demuxer {
 								? view.getUint32(8, false)
 								: null,
 						};
+
+						const lameOffset = result.startPos + xingOffset + 8
+							+ ((flags & XingFlags.FrameCount) ? 4 : 0)
+							+ ((flags & XingFlags.FileSize) ? 4 : 0)
+							+ ((flags & XingFlags.Toc) ? 100 : 0)
+							+ ((flags & XingFlags.Quality) ? 4 : 0);
+						if (!this.firstFrameHeader && lameOffset + 24 <= result.startPos + header.totalSize) {
+							let lameSlice = this.reader.requestSlice(lameOffset, 24);
+							if (isThenable(lameSlice)) lameSlice = await lameSlice;
+							if (lameSlice) {
+								const lame = readBytes(lameSlice, 24);
+								const encoder = String.fromCharCode(...lame.subarray(0, 4));
+								if (encoder === 'LAME' || encoder === 'Lavf' || encoder === 'Lavc') {
+									this.primingDelay = (lame[21]! << 4 | lame[22]! >> 4) + MP3_DECODER_DELAY;
+									this.nextTimestampInSamples = -this.primingDelay;
+								}
+							}
+						}
 					}
 				}
 
@@ -305,9 +325,9 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 		assert(demuxer.firstFrameHeaderPos !== null);
 
 		if (demuxer.xingData && demuxer.xingData.frameCount !== null) {
-			return demuxer.xingData.frameCount
-				* demuxer.firstFrameHeader.audioSamplesInFrame
-				/ demuxer.firstFrameHeader.sampleRate;
+			return (
+				demuxer.xingData.frameCount * demuxer.firstFrameHeader.audioSamplesInFrame - demuxer.primingDelay
+			) / demuxer.firstFrameHeader.sampleRate;
 		} else if (!demuxer.xingData?.isVbr) {
 			// Not tagged as VBR, assuming CBR
 
@@ -320,9 +340,9 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 				);
 				const frameCount = (demuxer.reader.fileSize - demuxer.firstFrameHeaderPos) / averageFrameSize;
 
-				return Math.round(frameCount)
-					* demuxer.firstFrameHeader.audioSamplesInFrame
-					/ demuxer.firstFrameHeader.sampleRate;
+				return (
+					Math.round(frameCount) * demuxer.firstFrameHeader.audioSamplesInFrame - demuxer.primingDelay
+				) / demuxer.firstFrameHeader.sampleRate;
 			}
 		}
 

@@ -508,7 +508,11 @@ export const validateAudioEncodingConfig = (config: AudioEncodingConfig) => {
 	if (
 		config.quality === undefined
 		&& bitrate === undefined
-		&& !((PCM_AUDIO_CODECS as readonly string[]).includes(config.codec) || config.codec === 'flac')
+		&& !(
+			(PCM_AUDIO_CODECS as readonly string[]).includes(config.codec)
+			|| config.codec === 'flac'
+			|| config.codec === 'truehd'
+		)
 	) {
 		throw new TypeError('config.quality must be provided for compressed audio codecs.');
 	}
@@ -843,7 +847,7 @@ export class Quality {
 
 	/** @internal */
 	_toAudioBitrate(codec: AudioCodec) {
-		if ((PCM_AUDIO_CODECS as readonly string[]).includes(codec) || codec === 'flac') {
+		if ((PCM_AUDIO_CODECS as readonly string[]).includes(codec) || codec === 'flac' || codec === 'truehd') {
 			return undefined;
 		}
 
