@@ -12,6 +12,7 @@
 		"allowJs": true,
 		"paths": {
 			"mediabunny": ["../../src/index.ts"],
+			"@mediabunny/prores": ["../prores/src/index.ts"],
 		},
 	},
 	"include": [
@@ -19,6 +20,7 @@
 		"./build/**/*",
 	],
 	"references": [
-        { "path": "../../src" }
+        { "path": "../../src" },
+        { "path": "../prores" }
     ]
 }
