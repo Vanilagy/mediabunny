@@ -178,7 +178,6 @@ export class Mp3Demuxer extends Demuxer {
 							+ ((flags & XingFlags.Toc) ? 100 : 0)
 							+ ((flags & XingFlags.Quality) ? 4 : 0);
 						if (!this.firstFrameHeader && lameOffset + 24 <= result.startPos + header.totalSize) {
-							// Only read the fixed-size fields needed for priming, never the rest of the frame.
 							let lameSlice = this.reader.requestSlice(lameOffset, 24);
 							if (isThenable(lameSlice)) lameSlice = await lameSlice;
 							if (lameSlice) {
