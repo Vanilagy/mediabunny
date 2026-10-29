@@ -36,6 +36,7 @@ import {
 	getInt24,
 	getUint24,
 	insertSorted,
+	isAndroid,
 	isChromium,
 	isFirefox,
 	isNumber,
@@ -963,6 +964,10 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	alphaRaslSkipped = false; // For HEVC stuff
 	finalSamples: { sample: VideoSample | null }[] = [];
 	mergeAlphaPromises: Promise<void>[] = [];
+	flushing = false;
+
+	// Needed for a Chromium for Android workaround
+	frameCopyContext: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;
 
 	constructor(
 		onSample: (sample: VideoSample) => unknown,
@@ -1067,7 +1072,7 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			this.decoder = new VideoDecoder({
 				output: (frame) => {
 					try {
-						colorHandler(frame);
+						colorHandler(this.copyFrameIfNeeded(frame));
 					} catch (error) {
 						this.onError(error);
 					}
@@ -1234,7 +1239,7 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			this.alphaDecoder = new VideoDecoder({
 				output: (frame) => {
 					try {
-						alphaHandler(frame);
+						alphaHandler(this.copyFrameIfNeeded(frame));
 					} catch (error) {
 						this.onError(error);
 					}
@@ -1397,15 +1402,75 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 		}
 	}
 
+	/**
+	 * This is a workaround for https://issues.chromium.org/issues/579043455. It circumvents the problem by instantly
+	 * drawing a frame to a new region of GPU memory (a canvas), which we know for certain won't get fucked up by
+	 * other draws.
+	 * Also see: https://github.com/Vanilagy/mediabunny/issues/573
+	 */
+	copyFrameIfNeeded(frame: VideoFrame) {
+		if (!isChromium() || !isAndroid()) {
+			return frame;
+		}
+
+		const visibleRect = frame.visibleRect!;
+		const width = visibleRect.width;
+		const height = visibleRect.height;
+
+		if (!this.frameCopyContext) {
+			let canvas: HTMLCanvasElement | OffscreenCanvas;
+			if (typeof OffscreenCanvas !== 'undefined') {
+				canvas = new OffscreenCanvas(width, height);
+			} else {
+				canvas = document.createElement('canvas');
+			}
+
+			const context = canvas.getContext('2d', {
+				alpha: false,
+			}) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
+			if (!context) {
+				throw new Error('The \'2d\' canvas context is required to decode video on Chromium for Android.');
+			}
+
+			this.frameCopyContext = context;
+		}
+
+		const canvas = this.frameCopyContext.canvas;
+		if (canvas.width !== width || canvas.height !== height) {
+			canvas.width = width;
+			canvas.height = height;
+		}
+
+		// TODO: might need to make this more sophisticated once `rotation` and `flip` on VideoFrame are handled
+		this.frameCopyContext.drawImage(frame, 0, 0, width, height);
+		if (this.flushing) {
+			// The draw only runs on the GPU later, so a codec reset could beat it and leave us copying a stale picture.
+			// Reading back a pixel forces the draw to complete right now.
+			this.frameCopyContext.getImageData(0, 0, 1, 1);
+		}
+
+		const copy = new VideoFrame(canvas, {
+			timestamp: frame.timestamp,
+			duration: frame.duration ?? undefined,
+			displayWidth: frame.displayWidth,
+			displayHeight: frame.displayHeight,
+		});
+		frame.close();
+
+		return copy;
+	}
+
 	async flush() {
 		if (this.customDecoder) {
 			await this.customDecoderCallSerializer.call(() => this.customDecoder!.flush());
 		} else {
 			assert(this.decoder);
+			this.flushing = true;
 			await Promise.all([
 				this.decoder.flush(),
 				this.alphaDecoder?.flush(),
 			]);
+			this.flushing = false;
 			await Promise.all(this.mergeAlphaPromises);
 
 			this.colorQueue.forEach(x => x.close());

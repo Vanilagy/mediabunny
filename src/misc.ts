@@ -1042,6 +1042,15 @@ export const getChromiumVersion = () => {
 	return chromiumVersionCache = Number(match[1]!);
 };
 
+let isAndroidCache: boolean | null = null;
+export const isAndroid = () => {
+	if (isAndroidCache !== null) {
+		return isAndroidCache;
+	}
+
+	return isAndroidCache = typeof navigator !== 'undefined' && /Android/.test(navigator.userAgent);
+};
+
 export const missingWebCodecsClassMessage = (className: string) => {
 	if (typeof globalThis.isSecureContext !== 'undefined' && !globalThis.isSecureContext) {
 		// WebCodecs is not exposed in insecure contexts
