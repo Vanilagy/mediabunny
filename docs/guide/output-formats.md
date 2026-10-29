@@ -92,9 +92,6 @@ type IsobmffOutputFormatOptions = {
 		::: info
 		This option ensures [append-only writing](#append-only-writing).
 		:::
-		::: warning
-		This option requires [packet buffering](./writing-media-files#packet-buffering).
-		:::
 	- `undefined`\
 		The default option; it behaves like `'in-memory'` when using [`BufferTarget`](./writing-media-files#buffertarget) and like `false` otherwise.
 - `minimumFragmentDuration`\

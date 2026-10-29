@@ -512,13 +512,11 @@ The kind of `Target` you create inside the callback is up to you - use `FilePath
 
 ## Packet buffering
 
-Some [output formats](./output-formats) require *packet buffering* for multi-track outputs. Packet buffering occurs because the `Output` must wait for data from all tracks for a given timestamp to continue writing data. For example, should you first encode all your video frames and then encode the audio afterward, the `Output` will have to hold all of the video frames in memory until the audio packets start coming in. This might lead to memory exhaustion should your video be very long. When there is only one media track, this issue does not arise.
-
-Check the [Output formats](./output-formats) page to see which format configurations require packet buffering.
+All [output formats](./output-formats) that can hold multiple tracks require *packet buffering* for multi-track outputs. Packet buffering occurs because the `Output` must wait for data from all tracks for a given timestamp to continue writing data, as media data is written to the file in chronological order. For example, should you first encode all your video frames and then encode the audio afterward, the `Output` will have to hold all of the video frames in memory until the audio packets start coming in. This might lead to memory exhaustion should your video be very long. When there is only one media track, this issue does not arise.
 
 ---
 
-If your output format configuration requires packet buffering, make sure to add media data in a somewhat interleaved way to keep memory usage low. For example, if you're creating a 5-minute file, add your data in chunks - 10 seconds of video, then 10 seconds of audio, then repeat - instead of first adding all 300 seconds of video followed by all 300 seconds of audio.
+When writing a multi-track output, make sure to add media data in a somewhat interleaved way to keep memory usage low. For example, if you're creating a 5-minute file, add your data in chunks - 10 seconds of video, then 10 seconds of audio, then repeat - instead of first adding all 300 seconds of video followed by all 300 seconds of audio.
 
 ::: info
 If this kind of chunking isn't possible for your use case, try adding the media with the overall smaller data footprint first: First add the 300 seconds of audio, then add the 300 seconds of video.
