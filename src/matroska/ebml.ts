@@ -758,6 +758,7 @@ export const CODEC_STRING_MAP: Partial<Record<MediaCodec, string>> = {
 	'ac3': 'A_AC3',
 	'eac3': 'A_EAC3',
 	'dts': 'A_DTS',
+	'truehd': 'A_TRUEHD',
 	'pcm-u8': 'A_PCM/INT/LIT',
 	'pcm-s16': 'A_PCM/INT/LIT',
 	'pcm-s16be': 'A_PCM/INT/BIG',

@@ -1967,8 +1967,8 @@ export class Conversion {
 		if (!needsTranscode) {
 			// Check if we can copy it
 			const sink = new EncodedPacketSink(track);
-			let startPacket = await sink.getKeyPacket(this._startTimestamp)
-				?? await sink.getFirstKeyPacket();
+			let startPacket = await sink.getKeyPacket(this._startTimestamp, { verifyKeyPackets: true })
+				?? await sink.getFirstKeyPacket({ verifyKeyPackets: true });
 
 			if (
 				startPacket
@@ -1984,19 +1984,18 @@ export class Conversion {
 					)
 				)
 			) {
-				startPacket = await sink.getNextKeyPacket(startPacket);
+				startPacket = await sink.getNextKeyPacket(startPacket, { verifyKeyPackets: true });
 			}
 
-			const hasDecoderWarmup = (NON_PCM_AUDIO_CODECS as readonly AudioCodec[]).includes(sourceCodec)
-				&& sourceCodec !== 'flac';
-			if (startPacket && this._copyBoundaryPolicy === 'expand' && hasDecoderWarmup) {
-				// Go one packet back
-				const previousPacket = await sink.getKeyPacket(
-					startPacket.timestamp - 1 / (await track.getTimeResolution()),
-				);
-				if (previousPacket) {
-					startPacket = previousPacket;
-				}
+			const preRollDuration = await track.getPreRollDuration();
+			assert(preRollDuration !== null); // Because the codec is known
+
+			if (startPacket && this._copyBoundaryPolicy === 'expand' && preRollDuration > 0) {
+				// Reach back far enough for the decoder to have converged by the start, or as far as the track goes
+				startPacket = await sink.getKeyPacket(
+					startPacket.timestamp - preRollDuration,
+					{ verifyKeyPackets: true },
+				) ?? await sink.getFirstKeyPacket({ verifyKeyPackets: true });
 			}
 
 			copyStartPacket = startPacket;

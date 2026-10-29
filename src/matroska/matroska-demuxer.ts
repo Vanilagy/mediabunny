@@ -17,6 +17,7 @@ import {
 } from '../codec-data';
 import {
 	AacCodecInfo,
+	AUDIO_CODECS_WITH_DELTA_PACKETS,
 	AudioCodec,
 	DtsFourCc,
 	extractAudioCodecString,
@@ -1267,6 +1268,8 @@ export class MatroskaDemuxer extends Demuxer {
 							} else if (this.currentTrack.codecId === 'A_DTS/LOSSLESS') {
 								this.currentTrack.info.dtsFormat = 'dtsl';
 							}
+						} else if (codecIdWithoutSuffix === CODEC_STRING_MAP.truehd) {
+							this.currentTrack.info.codec = 'truehd';
 						} else if (this.currentTrack.codecId === 'A_PCM/INT/LIT') {
 							if (this.currentTrack.info.bitDepth === 8) {
 								this.currentTrack.info.codec = 'pcm-u8';
@@ -1677,10 +1680,14 @@ export class MatroskaDemuxer extends Demuxer {
 				const lacing = (flags >> 1) & 0x3 as BlockLacing; // If the block is laced, we'll expand it later
 
 				let isKeyFrame = !!(flags & 0x80);
-				if (trackData.track.info?.type === 'audio' && trackData.track.info.codec) {
+				if (
+					trackData.track.info?.type === 'audio'
+					&& trackData.track.info.codec
+					&& !AUDIO_CODECS_WITH_DELTA_PACKETS.includes(trackData.track.info.codec)
+				) {
 					// Some files don't mark their audio packets as key packets (I'm looking at you, Firefox). But, we
-					// can fix this in most cases: if we recognize the codec of the track, then we know every packet is
-					// necessarily a key packet, no matter what the container says.
+					// can fix this in most cases: if we recognize the codec of the track and it has no delta packets,
+					// then we know every packet is necessarily a key packet, no matter what the container says.
 					// https://github.com/Vanilagy/mediabunny/issues/192
 					isKeyFrame = true;
 				}

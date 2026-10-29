@@ -26,7 +26,8 @@ export class NodeAvAudioDecoder extends CustomAudioDecoder {
 			|| codec === 'flac'
 			|| codec === 'ac3'
 			|| codec === 'eac3'
-			|| codec === 'dts';
+			|| codec === 'dts'
+			|| codec === 'truehd';
 	}
 
 	async init(): Promise<void> {

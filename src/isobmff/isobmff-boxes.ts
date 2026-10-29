@@ -26,6 +26,7 @@ import {
 	UNDETERMINED_LANGUAGE,
 	assertNever,
 	keyValueIterator,
+	toDataView,
 } from '../misc';
 import {
 	AudioCodec,
@@ -52,6 +53,7 @@ import {
 } from './isobmff-muxer';
 import {
 	buildDtsSpecificBox,
+	determineAudioPacketType,
 	parseAc3SyncFrame,
 	parseDtsFrame,
 	parseEac3SyncFrame,
@@ -909,7 +911,8 @@ export const soundSampleDescription = (
 		}
 	}
 
-	if (trackData.muxer.isQuickTime) {
+	// TrueHD's sample entry is defined on top of version 0, with its own sample rate layout
+	if (trackData.muxer.isQuickTime && trackData.track.source._codec !== 'truehd') {
 		version = 1;
 	}
 
@@ -924,8 +927,12 @@ export const soundSampleDescription = (
 			u16(sampleSizeInBits), // Sample size (bits)
 			u16(0), // Compression ID
 			u16(0), // Packet size
-			u16(trackData.info.sampleRate < 2 ** 16 ? trackData.info.sampleRate : 0), // Sample rate (upper)
-			u16(0), // Sample rate (lower)
+			trackData.track.source._codec === 'truehd'
+				? u32(trackData.info.sampleRate) // TrueHD stores the sample rate as a plain integer
+				: [
+						u16(trackData.info.sampleRate < 2 ** 16 ? trackData.info.sampleRate : 0), // Sample rate (upper)
+						u16(0), // Sample rate (lower)
+					],
 		];
 	} else {
 		const compressionId = isPcmCodec ? 0 : -2;
@@ -1200,6 +1207,29 @@ const ddts = (trackData: IsobmffAudioTrackData) => {
 	}
 
 	return box('ddts', [...buildDtsSpecificBox(frameInfo)]);
+};
+
+/** MLPSpecificBox */
+const dmlp = (trackData: IsobmffAudioTrackData) => {
+	assert(trackData.info.primingPacket);
+
+	const data = trackData.info.primingPacket.data;
+	if (determineAudioPacketType('truehd', data) !== 'key') {
+		throw new Error(
+			'Couldn\'t extract TrueHD stream info from the audio packet. '
+			+ 'Ensure the first packet is an access unit carrying a major sync.',
+		);
+	}
+
+	const view = toDataView(data);
+	const formatInfo = view.getUint32(8);
+	const peakDataRate = view.getUint16(18) & 0x7fff;
+
+	return box('dmlp', [
+		u32(formatInfo), // Format info
+		u16(peakDataRate << 1), // Peak data rate (15 bits) + reserved (1 bit)
+		u32(0), // Reserved
+	]);
 };
 
 export const subtitleSampleDescription = (
@@ -1987,6 +2017,7 @@ const audioCodecToBoxName = (codec: AudioCodec, fullCodecString: string, isQuick
 		case 'ac3': return 'ac-3';
 		case 'eac3': return 'ec-3';
 		case 'dts': return fullCodecString;
+		case 'truehd': return 'mlpa';
 	}
 
 	// Logic diverges here
@@ -2029,6 +2060,7 @@ const audioCodecToConfigurationBox = (codec: AudioCodec, isQuickTime: boolean) =
 		case 'ac3': return dac3;
 		case 'eac3': return dec3;
 		case 'dts': return ddts;
+		case 'truehd': return dmlp;
 	}
 
 	// Logic diverges here

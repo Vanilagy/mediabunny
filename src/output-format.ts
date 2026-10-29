@@ -9,6 +9,7 @@
 import { AdtsMuxer } from './adts/adts-muxer';
 import {
 	AUDIO_CODECS,
+	AUDIO_CODECS_WITH_DELTA_PACKETS,
 	AudioCodec,
 	MediaCodec,
 	NON_PCM_AUDIO_CODECS,
@@ -1470,6 +1471,10 @@ export class HlsOutputFormat extends OutputFormat {
 
 	getSupportedCodecs(): MediaCodec[] {
 		const uniqueCodecs = new Set(toArray(this._options.segmentFormat).flatMap(x => x.getSupportedCodecs()));
+		for (const codec of AUDIO_CODECS_WITH_DELTA_PACKETS) {
+			uniqueCodecs.delete(codec); // Only key-packet-only audio codecs are allowed
+		}
+
 		return [...uniqueCodecs];
 	}
 

@@ -89,6 +89,7 @@ export const NON_PCM_AUDIO_CODECS = [
 	'ac3',
 	'eac3',
 	'dts',
+	'truehd',
 ] as const;
 /**
  * List of known audio codecs, ordered by encoding preference.
@@ -127,6 +128,8 @@ export type PcmAudioCodec = typeof PCM_AUDIO_CODECS[number];
  * @public
  */
 export type SubtitleCodec = typeof SUBTITLE_CODECS[number];
+
+export const AUDIO_CODECS_WITH_DELTA_PACKETS: readonly AudioCodec[] = ['truehd'];
 /**
  * Union type of known media codecs.
  * @group Codecs
@@ -763,6 +766,8 @@ export const buildAudioCodecString = (codec: AudioCodec, numberOfChannels: numbe
 		return 'ec-3';
 	} else if (codec === 'dts') {
 		return 'dtsc';
+	} else if (codec === 'truehd') {
+		return 'mlpa';
 	} else if ((PCM_AUDIO_CODECS as readonly string[]).includes(codec)) {
 		return codec;
 	}
@@ -815,6 +820,8 @@ export const extractAudioCodecString = (trackInfo: {
 		return 'ec-3';
 	} else if (codec === 'dts') {
 		return dtsFormat ?? 'dtsc';
+	} else if (codec === 'truehd') {
+		return 'mlpa';
 	} else if (codec && (PCM_AUDIO_CODECS as readonly string[]).includes(codec)) {
 		return codec;
 	}
@@ -929,6 +936,7 @@ export const getAudioPreRollDuration = (codec: AudioCodec, decoderConfig: AudioD
 		}
 
 		case 'flac':
+		case 'truehd':
 		case 'pcm-s16':
 		case 'pcm-s16be':
 		case 'pcm-s24':
@@ -1028,6 +1036,8 @@ export const inferCodecFromCodecString = (codecString: string): MediaCodec | nul
 		return 'eac3';
 	} else if ((DTS_FOURCCS as readonly string[]).includes(codecString)) {
 		return 'dts';
+	} else if (codecString === 'mlpa') {
+		return 'truehd';
 	} else if (codecString === 'ulaw') {
 		return 'ulaw';
 	} else if (codecString === 'alaw') {
@@ -1270,7 +1280,7 @@ export const validateVideoChunkMetadata = (
 };
 
 const VALID_AUDIO_CODEC_STRING_PREFIXES = [
-	'mp4a', 'mp3', 'opus', 'vorbis', 'flac', 'ulaw', 'alaw', 'pcm', 'ac-3', 'ec-3', 'dts',
+	'mp4a', 'mp3', 'opus', 'vorbis', 'flac', 'ulaw', 'alaw', 'pcm', 'ac-3', 'ec-3', 'dts', 'mlpa',
 ];
 
 export const validateAudioChunkMetadata = (
@@ -1412,6 +1422,12 @@ export const validateAudioChunkMetadata = (
 				'Audio chunk metadata decoder configuration codec string for DTS must be one of the following'
 				+ ` four-character codes: ${DTS_FOURCCS.join(', ')}.`,
 			);
+		}
+	} else if (metadata.decoderConfig.codec.startsWith('mlpa')) {
+		// TrueHD-specific validation
+
+		if (metadata.decoderConfig.codec !== 'mlpa') {
+			throw new TypeError('Audio chunk metadata decoder configuration codec string for TrueHD must be "mlpa".');
 		}
 	} else if (
 		metadata.decoderConfig.codec.startsWith('pcm')
