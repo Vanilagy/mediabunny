@@ -3526,7 +3526,11 @@ const testPackedAudioPrivTimestamps = async (
 		timestamps.push(packet.timestamp);
 	}
 
-	expect(timestamps).toEqual(sourceTimestamps);
+	// HLS normalizes the first packet to zero, including MP3's negative priming timestamp.
+	expect(timestamps).toHaveLength(sourceTimestamps.length);
+	for (let i = 0; i < timestamps.length; i++) {
+		expect(timestamps[i]).toBeCloseTo(sourceTimestamps[i]! - sourceTimestamps[0]!, 10);
+	}
 };
 
 test('Timestamp wraparound, MPEG-TS', async () => {

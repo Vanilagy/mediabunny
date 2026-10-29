@@ -13,7 +13,14 @@ import { Output, OutputAudioTrack } from '../output';
 import { Mp3OutputFormat } from '../output-format';
 import { EncodedPacket } from '../packet';
 import { Writer } from '../writer';
-import { getXingOffset, INFO, readMp3FrameHeader, SAMPLING_RATES, XING } from '../../shared/mp3-misc';
+import {
+	getXingOffset,
+	INFO,
+	MP3_DECODER_DELAY,
+	readMp3FrameHeader,
+	SAMPLING_RATES,
+	XING,
+} from '../../shared/mp3-misc';
 import { Mp3Writer, XingFrameData } from './mp3-writer';
 import { Id3V2Writer } from '../id3';
 
@@ -89,6 +96,14 @@ export class Mp3Muxer extends Muxer {
 						}
 					}
 
+					let encoderDelay = packet.timestamp < 0
+						? Math.round(-packet.timestamp * header.sampleRate) - MP3_DECODER_DELAY
+						: null;
+					if (encoderDelay !== null && (encoderDelay < 0 || encoderDelay > 0xfff)) {
+						// Cannot be represented by LAME delay metadata, so let's just write none
+						encoderDelay = null;
+					}
+
 					this.xingFrameData = {
 						mpegVersionId: header.mpegVersionId,
 						layer: header.layer,
@@ -104,6 +119,7 @@ export class Mp3Muxer extends Muxer {
 						frameCount: null,
 						fileSize: null,
 						toc: null,
+						encoderDelayInSamples: encoderDelay,
 					};
 
 					// This muxer doesn't make any bitrate constraints, meaning we don't know yet if this will be a
@@ -189,6 +205,7 @@ export class Mp3Muxer extends Muxer {
 					frameCount: null,
 					fileSize: null,
 					toc: null,
+					encoderDelayInSamples: null,
 				};
 			} else if (track.metadata.decoderConfig) {
 				// All we know is the sample rate and channel count, so let's derive the rest
@@ -226,6 +243,7 @@ export class Mp3Muxer extends Muxer {
 					frameCount: null,
 					fileSize: null,
 					toc: null,
+					encoderDelayInSamples: null,
 				};
 			} else {
 				throw new Error(
