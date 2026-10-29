@@ -669,3 +669,41 @@ const testChunkOrder = async (fastStart: false | 'in-memory' | 'reserve') => {
 	expect(chunkStartTimestamps.length).toBeGreaterThan(10);
 	expect(chunkStartTimestamps).toEqual([...chunkStartTimestamps].sort((a, b) => a - b));
 };
+
+test.each([false, 'in-memory', 'reserve', 'fragmented'] as const)(
+	'Post-ftyp boxes written after ftyp with correct offsets, fastStart: %s',
+	async (fastStart) => {
+		const box = new Uint8Array([0, 0, 0, 12, 0x74, 0x65, 0x73, 0x74, 1, 2, 3, 4]); // 'test' box
+
+		const output = new Output({
+			format: new Mp4OutputFormat({ fastStart, postFtypBoxes: [box] }),
+			target: new BufferTarget(),
+		});
+
+		const videoSource = new EncodedVideoPacketSource('vp8');
+		output.addVideoTrack(videoSource, { maximumPacketCount: 100 });
+		await output.start();
+
+		const meta = { decoderConfig: { codec: 'vp8', codedWidth: 640, codedHeight: 360 } };
+		for (let i = 0; i < 60; i++) {
+			const data = new Uint8Array(16).fill(i);
+			await videoSource.add(new EncodedPacket(data, i === 0 ? 'key' : 'delta', i / 30, 1 / 30), meta);
+		}
+
+		await output.finalize();
+
+		const bytes = new Uint8Array(output.target.buffer!);
+		const ftypSize = toDataView(bytes).getUint32(0);
+		expect(bytes.subarray(ftypSize, ftypSize + box.byteLength)).toEqual(box);
+
+		using input = new Input({ source: new BufferSource(bytes), formats: ALL_FORMATS });
+		const track = await input.getPrimaryVideoTrack();
+		assert(track);
+
+		let i = 0;
+		for await (const packet of new EncodedPacketSink(track).packets()) {
+			expect(packet.data).toEqual(new Uint8Array(16).fill(i++));
+		}
+		expect(i).toBe(60);
+	},
+);

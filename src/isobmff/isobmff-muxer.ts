@@ -318,6 +318,10 @@ export class IsobmffMuxer extends Muxer {
 				this.formatOptions.onFtyp(data, start);
 			}
 
+			for (const box of this.formatOptions.postFtypBoxes ?? []) {
+				boxWriter.writer.write(box);
+			}
+
 			this.ftypSize = boxWriter.writer.getPos();
 
 			if (this.isCmaf) {

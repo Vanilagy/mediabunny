@@ -186,6 +186,13 @@ export type IsobmffOutputFormatOptions = {
 	metadataFormat?: 'auto' | 'mdir' | 'mdta' | 'udta';
 
 	/**
+	 * Raw boxes to write directly after the ftyp box, before any other box. Each entry must be a complete serialized
+	 * box, including its header. Since these boxes are written before any media data, all offsets in the file account
+	 * for them. Useful for top-level boxes that must appear at the start of the file.
+	 */
+	postFtypBoxes?: Uint8Array[];
+
+	/**
 	 * Will be called once the ftyp (File Type) box of the output file has been written.
 	 *
 	 * @param data - The raw bytes.
@@ -248,6 +255,12 @@ export abstract class IsobmffOutputFormat extends OutputFormat {
 			&& (!isNumber(options.minimumFragmentDuration) || options.minimumFragmentDuration < 0)
 		) {
 			throw new TypeError('options.minimumFragmentDuration, when provided, must be a non-negative number.');
+		}
+		if (
+			options.postFtypBoxes !== undefined
+			&& (!Array.isArray(options.postFtypBoxes) || options.postFtypBoxes.some(x => !(x instanceof Uint8Array)))
+		) {
+			throw new TypeError('options.postFtypBoxes, when provided, must be an array of Uint8Array.');
 		}
 		if (options.onFtyp !== undefined && typeof options.onFtyp !== 'function') {
 			throw new TypeError('options.onFtyp, when provided, must be a function.');
