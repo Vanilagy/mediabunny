@@ -127,7 +127,7 @@ test('Audio decoder pre-roll (AAC)', async () => {
 
 test('Audio decoder pre-roll (Opus)', async () => {
 	using input = new Input({
-		source: new UrlSource('/mediabunny-opus-preroll-v1.opus'),
+		source: new UrlSource('/preroll-test.opus'),
 		formats: ALL_FORMATS,
 	});
 
