@@ -154,52 +154,42 @@ export class Mp3Demuxer extends Demuxer {
 				}
 
 				if (!this.xingData) {
-					let xingDataSlice = this.reader.requestSlice(
-						result.startPos + xingOffset + 4,
-						header.totalSize - xingOffset - 4,
-					);
+					let xingDataSlice = this.reader.requestSlice(result.startPos + xingOffset + 4, 12);
 					if (isThenable(xingDataSlice)) xingDataSlice = await xingDataSlice;
-					if (xingDataSlice && xingDataSlice.length >= 4) {
-						const xingData = readBytes(xingDataSlice, header.totalSize - xingOffset - 4);
+					if (xingDataSlice) {
+						const xingData = readBytes(xingDataSlice, 12);
 						const view = toDataView(xingData);
 						const flags = view.getUint32(0, false);
-						let offset = 4;
-						let frameCount: number | null = null;
-						let fileSize: number | null = null;
-						if (flags & XingFlags.FrameCount) {
-							if (offset + 4 <= view.byteLength) {
-								frameCount = view.getUint32(offset, false);
-							}
-							offset += 4;
-						}
-						if (flags & XingFlags.FileSize) {
-							if (offset + 4 <= view.byteLength) {
-								fileSize = view.getUint32(offset, false);
-							}
-							offset += 4;
-						}
-						if (flags & XingFlags.Toc) {
-							offset += 100;
-						}
-						if (flags & XingFlags.Quality) {
-							offset += 4;
-						}
-
-						if (!this.firstFrameHeader && offset + 24 <= view.byteLength) {
-							const encoder = String.fromCharCode(...xingData.subarray(offset, offset + 4));
-							if (encoder === 'LAME' || encoder === 'Lavf' || encoder === 'Lavc') {
-								const encoderDelay = (xingData[offset + 21]! << 4) | (xingData[offset + 22]! >> 4);
-								this.primingDelay = encoderDelay + MP3_DECODER_DELAY;
-								this.nextTimestampInSamples = -this.primingDelay;
-							}
-						}
 
 						this.xingData = {
 							// LAME and FFmpeg write the same header with 'Info' in place of 'Xing' for CBR streams
 							isVbr: word === XING,
-							frameCount,
-							fileSize,
+							frameCount: (flags & XingFlags.FrameCount)
+								? view.getUint32(4, false)
+								: null,
+							fileSize: (flags & XingFlags.FileSize)
+								? view.getUint32(8, false)
+								: null,
 						};
+
+						const lameOffset = result.startPos + xingOffset + 8
+							+ ((flags & XingFlags.FrameCount) ? 4 : 0)
+							+ ((flags & XingFlags.FileSize) ? 4 : 0)
+							+ ((flags & XingFlags.Toc) ? 100 : 0)
+							+ ((flags & XingFlags.Quality) ? 4 : 0);
+						if (!this.firstFrameHeader && lameOffset + 24 <= result.startPos + header.totalSize) {
+							// Only read the fixed-size fields needed for priming, never the rest of the frame.
+							let lameSlice = this.reader.requestSlice(lameOffset, 24);
+							if (isThenable(lameSlice)) lameSlice = await lameSlice;
+							if (lameSlice) {
+								const lame = readBytes(lameSlice, 24);
+								const encoder = String.fromCharCode(...lame.subarray(0, 4));
+								if (encoder === 'LAME' || encoder === 'Lavf' || encoder === 'Lavc') {
+									this.primingDelay = (lame[21]! << 4 | lame[22]! >> 4) + MP3_DECODER_DELAY;
+									this.nextTimestampInSamples = -this.primingDelay;
+								}
+							}
+						}
 					}
 				}
 

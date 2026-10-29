@@ -280,8 +280,7 @@ export class Mp3Muxer extends Muxer {
 			}
 
 			this.xingFrameData.isCbr = this.frameBitrate !== null && !this.hasVariableBitrate;
-			// The Xing frame itself is not an audio frame.
-			this.xingFrameData.frameCount = this.frameCount - 1;
+			this.xingFrameData.frameCount = this.frameCount;
 			this.xingFrameData.fileSize = audioDataEndPos;
 
 			if (this.format._options.onXingFrame) {
