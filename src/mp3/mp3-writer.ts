@@ -125,7 +125,6 @@ export class Mp3Writer {
 		this.writeWithCrc(data.toc ?? new Uint8Array(100));
 
 		if (data.encoderDelay !== null) {
-			// LAME-compatible tag. Only the start delay is known; end padding is not trimmed.
 			const lame = new Uint8Array(36);
 			lame.set([0x4c, 0x41, 0x4d, 0x45]); // 'LAME'
 			lame[21] = data.encoderDelay >> 4;
