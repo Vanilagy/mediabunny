@@ -325,9 +325,9 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 		assert(demuxer.firstFrameHeaderPos !== null);
 
 		if (demuxer.xingData && demuxer.xingData.frameCount !== null) {
-			return Math.max(0, (demuxer.xingData.frameCount
-				* demuxer.firstFrameHeader.audioSamplesInFrame - demuxer.primingDelay)
-			/ demuxer.firstFrameHeader.sampleRate);
+			return (
+				demuxer.xingData.frameCount * demuxer.firstFrameHeader.audioSamplesInFrame - demuxer.primingDelay
+			) / demuxer.firstFrameHeader.sampleRate;
 		} else if (!demuxer.xingData?.isVbr) {
 			// Not tagged as VBR, assuming CBR
 
@@ -340,9 +340,9 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 				);
 				const frameCount = (demuxer.reader.fileSize - demuxer.firstFrameHeaderPos) / averageFrameSize;
 
-				return Math.max(0, (Math.round(frameCount)
-					* demuxer.firstFrameHeader.audioSamplesInFrame - demuxer.primingDelay)
-				/ demuxer.firstFrameHeader.sampleRate);
+				return (
+					Math.round(frameCount) * demuxer.firstFrameHeader.audioSamplesInFrame - demuxer.primingDelay
+				) / demuxer.firstFrameHeader.sampleRate;
 			}
 		}
 
