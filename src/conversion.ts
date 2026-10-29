@@ -255,8 +255,8 @@ export type ConversionVideoOptions = {
 	 */
 	keyFrameInterval?: number;
 	/**
-	 * A hint that configures the hardware acceleration method used when transcoding. This is best left on
-	 * `'no-preference'`, the default.
+	 * A hint that configures the hardware acceleration method used when transcoding, which applies to both decoding and
+	 * encoding. This is best left on `'no-preference'`, the default.
 	 */
 	hardwareAcceleration?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
 	/** When `true`, video will always be re-encoded instead of directly copying over the encoded packets. */
@@ -1798,7 +1798,7 @@ export class Conversion {
 				await tempOutput.start();
 
 				// Let's just use the first sample to test
-				const sink = new VideoSampleSink(track);
+				const sink = new VideoSampleSink(track, { hardwareAcceleration: trackOptions.hardwareAcceleration });
 				using firstSample = await sink.getSample(await track.getFirstTimestamp());
 
 				if (firstSample) {
@@ -1854,7 +1854,7 @@ export class Conversion {
 			videoSource = source;
 
 			this._registerTrackPump(async (pump) => {
-				const sink = new VideoSampleSink(track);
+				const sink = new VideoSampleSink(track, { hardwareAcceleration: trackOptions.hardwareAcceleration });
 
 				for await (using sample of sink.samples(this._startTimestamp, this._endTimestamp)) {
 					if (this._state === 'canceled') {
