@@ -257,6 +257,41 @@ test('Read MOV metadata tags, ilst with keys', async () => {
 	expect(tags.raw!['com.apple.quicktime.player.movie.audio.gain']).toEqual(new Uint8Array([63, 128, 0, 0]));
 });
 
+test('FFmpeg-unsafe raw udta tags, MP4', async () => {
+	const hmmt = new Uint8Array([0, 0, 0, 1, 0, 0, 0, 250]);
+
+	for (const metadataFormat of ['mdir', 'mdta', 'udta'] as const) {
+		const output = new Output({
+			format: new Mp4OutputFormat({ metadataFormat }),
+			target: new BufferTarget(),
+		});
+
+		output.setMetadataTags({
+			raw: {
+				HMMT: hmmt,
+				cust: new Uint8Array([1, 2, 3, 4]),
+			},
+		});
+
+		const dummyTrack = createDummyAudioTrack('aac', output);
+
+		await output.start();
+		await dummyTrack.addPacket();
+		await output.finalize();
+
+		using input = new Input({
+			source: new BufferSource(output.target.buffer!),
+			formats: ALL_FORMATS,
+		});
+
+		const readTags = await input.getMetadataTags();
+
+		// FFmpeg would misparse HMMT as an ilst item, so it's only dropped in that case
+		expect(readTags.raw!['HMMT']).toEqual(metadataFormat === 'mdir' ? undefined : hmmt);
+		expect(readTags.raw!['cust']).toEqual(new Uint8Array([1, 2, 3, 4]));
+	}
+});
+
 test('Read and write metadata, Matroska', async () => {
 	const output = new Output({
 		format: new MkvOutputFormat(),

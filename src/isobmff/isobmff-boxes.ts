@@ -1791,6 +1791,10 @@ const DATA_BOX_MIME_TYPE_MAP: Record<string, number> = {
 	'image/bmp': 27,
 };
 
+// FFmpeg parses these assuming a udta layout even when they're not in udta, so we simply skip these if we'd write them
+// to ilst metadata
+const ILST_UNSAFE_RAW_KEYS = new Set(['HMMT', 'loci', 'chpl']);
+
 /**
  * Generates key-value metadata for inclusion in the "meta" box.
  */
@@ -1921,7 +1925,11 @@ const generateMetadataPairs = (tags: MetadataTags, isMdta: boolean) => {
 	if (tags.raw) {
 		for (const key in tags.raw) {
 			const value = tags.raw[key];
-			if (value == null || (!isMdta && key.length !== 4) || pairs.some(x => x.key === key)) {
+			if (
+				value == null
+				|| (!isMdta && (key.length !== 4 || ILST_UNSAFE_RAW_KEYS.has(key)))
+				|| pairs.some(x => x.key === key)
+			) {
 				continue;
 			}
 
