@@ -2508,4 +2508,37 @@ describe('Audio', async () => {
 		expect(plane[0]).toBe(data[0]);
 		expect(plane[1]).toBe(data[1]);
 	});
+
+	// This used to fail/crash because the buffer wasn't being reallocated
+	test('toAvFrame with growing AudioSamples into a reused frame', async () => {
+		using frame = new NodeAv.Frame();
+		frame.alloc();
+
+		using smallSample = new AudioSample({
+			data: createF32SineWave(48000, 2, 1024 / 48000),
+			format: 'f32',
+			timestamp: 0,
+			numberOfChannels: 2,
+			sampleRate: 48000,
+		});
+		await toAvFrame(smallSample, frame);
+
+		const largeData = new Float32Array(2 * 48000).fill(0.25);
+		using largeSample = new AudioSample({
+			data: largeData,
+			format: 'f32',
+			timestamp: 1,
+			numberOfChannels: 2,
+			sampleRate: 48000,
+		});
+		await toAvFrame(largeSample, frame);
+
+		expect(frame.nbSamples).toBe(48000);
+		expect(frame.linesize[0]).toBeGreaterThanOrEqual(largeData.byteLength);
+
+		assert(frame.data);
+		const u8 = toUint8Array(frame.data[0]!);
+		const plane = new Float32Array(u8.buffer, u8.byteOffset, largeData.length);
+		expect(plane[plane.length - 1]).toBe(0.25);
+	});
 });
