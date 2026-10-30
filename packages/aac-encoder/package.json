@@ -15,6 +15,7 @@
     "README.md",
     "package.json",
     "LICENSE",
+    "licenses",
     "dist",
     "src"
   ],
