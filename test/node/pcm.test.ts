@@ -5,7 +5,8 @@ import { ALL_FORMATS } from '../../src/input-format.js';
 import { Output } from '../../src/output.js';
 import { BufferTarget } from '../../src/target.js';
 import { WavOutputFormat } from '../../src/output-format.js';
-import { AudioSampleSource } from '../../src/media-source.js';
+import { AudioSampleSource, PCM_ENCODER_PACKET_SIZE } from '../../src/media-source.js';
+import { EncodedPacket } from '../../src/packet.js';
 import { AudioSampleSink } from '../../src/media-sink.js';
 import { AudioSample } from '../../src/sample.js';
 import { PcmAudioCodec } from '../../src/codec.js';
@@ -56,6 +57,53 @@ test('pcm-s32 encode-decode roundtrip', async () => {
 
 test('pcm-f32 encode-decode roundtrip', async () => {
 	await testEncodeDecodeRoundtrip('pcm-f32', 'f32', f32Data);
+});
+
+test('Encoded PCM packets have a fixed size', async () => {
+	const output = new Output({
+		format: new WavOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const packets: EncodedPacket[] = [];
+	const audioSource = new AudioSampleSource({
+		codec: 'pcm-s16',
+		onEncodedPacket: packet => packets.push(packet),
+	});
+	output.addAudioTrack(audioSource);
+	await output.start();
+
+	const sampleCount = 7;
+	const framesPerSample = 1000;
+	const data = new Int16Array(2 * sampleCount * framesPerSample).map((_, i) => i - 2 ** 14);
+
+	for (let i = 0; i < sampleCount; i++) {
+		using sample = new AudioSample({
+			data: data.subarray(2 * i * framesPerSample, 2 * (i + 1) * framesPerSample),
+			format: 's16',
+			numberOfChannels: 2,
+			sampleRate: 48000,
+			timestamp: i * framesPerSample / 48000,
+		});
+		await audioSource.add(sample);
+	}
+	audioSource.close();
+	await output.finalize();
+
+	const totalFrames = sampleCount * framesPerSample;
+	expect(packets.map(x => x.duration * 48000)).toEqual([
+		...Array<number>(Math.floor(totalFrames / PCM_ENCODER_PACKET_SIZE)).fill(PCM_ENCODER_PACKET_SIZE),
+		totalFrames % PCM_ENCODER_PACKET_SIZE,
+	]);
+	expect(packets.map(x => x.timestamp * 48000)).toEqual(packets.map((_, i) => i * PCM_ENCODER_PACKET_SIZE));
+
+	const encoded = new Int16Array(2 * totalFrames);
+	let offset = 0;
+	for (const packet of packets) {
+		encoded.set(new Int16Array(packet.data.slice().buffer), offset);
+		offset += packet.data.byteLength / 2;
+	}
+	expect(encoded).toEqual(data);
 });
 
 const testCopyToIdentity = (format: SampleFormat, data: SampleData) => {

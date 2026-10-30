@@ -345,6 +345,15 @@ export class IsobmffMuxer extends Muxer {
 						+ ' fastStart: \'reserve\'.',
 					);
 				}
+
+				// Sample counts are stored as u32 in the sample table
+				if (track.metadata.maximumPacketCount > 2 ** 32 - 1) {
+					throw new Error(
+						`Track #${track.id} has a maximumPacketCount of ${track.metadata.maximumPacketCount}, which`
+						+ ` exceeds the maximum of ${2 ** 32 - 1} packets per track that a non-fragmented file can`
+						+ ' hold.',
+					);
+				}
 			}
 
 			// We'll start writing once we know all tracks
@@ -1533,6 +1542,13 @@ export class IsobmffMuxer extends Muxer {
 			upperBound += 4 * n;
 			// co64 box - we assume 1 sample per chunk and 64-bit chunk offsets (co64 instead of stco)
 			upperBound += 8 * n;
+
+			if (trackData.type === 'audio') {
+				// sgpd box - 1 roll distance per sample, in case each sample's preroll differs from the one before
+				upperBound += 2 * n;
+				// sbgp box - 1 entry per sample, for the same reason
+				upperBound += (4 + 4) * n;
+			}
 		}
 
 		return upperBound;

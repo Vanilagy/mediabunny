@@ -1348,13 +1348,17 @@ export const ctts = (trackData: IsobmffTrackData) => {
  * Composition to Decode Box: Stores information about the composition and display times of the media samples.
  */
 export const cslg = (trackData: IsobmffTrackData) => {
+	assert(trackData.compositionTimeOffsetTable.length > 0);
+
+	if (trackData.samples.length === 0) {
+		// Happens when the moov is measured before any samples have been added
+		return null;
+	}
+
 	let leastDecodeToDisplayDelta = Infinity;
 	let greatestDecodeToDisplayDelta = -Infinity;
 	let compositionStartTime = Infinity;
 	let compositionEndTime = -Infinity;
-
-	assert(trackData.compositionTimeOffsetTable.length > 0);
-	assert(trackData.samples.length > 0);
 
 	for (let i = 0; i < trackData.compositionTimeOffsetTable.length; i++) {
 		const entry = trackData.compositionTimeOffsetTable[i]!;

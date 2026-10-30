@@ -40,6 +40,7 @@ import {
 	toUint8Array,
 } from './misc';
 import { SubtitleMetadata } from './subtitles';
+import { PCM_ENCODER_PACKET_SIZE } from './media-source';
 
 /**
  * List of known video codecs, ordered by encoding preference.
@@ -952,6 +953,43 @@ export const getAudioPreRollDuration = (codec: AudioCodec, decoderConfig: AudioD
 		case 'ulaw':
 		case 'alaw': {
 			return 0;
+		}
+
+		default: {
+			assertNever(codec);
+			assert(false);
+		}
+	}
+};
+
+/** Returns the shortest packet length, in samples, that encoders commonly produce for the given codec */
+export const getMinimumAudioPacketSize = (codec: AudioCodec, sampleRate: number) => {
+	switch (codec) {
+		case 'aac': return 1024;
+		case 'opus': return 0.02 * sampleRate; // Fixed 20 ms frames, regardless of sample rate
+		case 'mp3': return 576;
+		case 'vorbis': return 256;
+		case 'flac': return 1152;
+		case 'ac3': return 1536;
+		case 'eac3': return 256;
+		case 'dts': return 512;
+		case 'truehd': return 40;
+
+		case 'pcm-s16':
+		case 'pcm-s16be':
+		case 'pcm-s24':
+		case 'pcm-s24be':
+		case 'pcm-s32':
+		case 'pcm-s32be':
+		case 'pcm-f32':
+		case 'pcm-f32be':
+		case 'pcm-f64':
+		case 'pcm-f64be':
+		case 'pcm-u8':
+		case 'pcm-s8':
+		case 'ulaw':
+		case 'alaw': {
+			return PCM_ENCODER_PACKET_SIZE;
 		}
 
 		default: {

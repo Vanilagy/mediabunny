@@ -2020,6 +2020,8 @@ export class EncodedAudioPacketSource extends AudioSource {
 	}
 }
 
+export const PCM_ENCODER_PACKET_SIZE = 2048; // In frames
+
 class AudioEncoderWrapper {
 	private ensureEncoderPromise: Promise<void> | null = null;
 	private encoderInitialized = false;
@@ -2031,6 +2033,12 @@ class AudioEncoderWrapper {
 	private isPcmEncoder = false;
 	private outputSampleSize: number | null = null;
 	private writeOutputValue: ((view: DataView, byteOffset: number, value: number) => void) | null = null;
+	private pcmMeta: EncodedAudioChunkMetadata | null = null;
+	private pcmStartTimestamp = 0;
+	private pcmEmittedFrames = 0;
+	private pcmReadBuffer = new ArrayBuffer(0);
+	private pcmScratchView: DataView | null = null;
+	private pcmScratchFrames = 0;
 
 	private customEncoder: CustomAudioEncoder | null = null;
 	private customEncoderCallSerializer = new CallSerializer();
@@ -2292,74 +2300,87 @@ class AudioEncoderWrapper {
 		// Need to extract data from the audio data before we close it
 		const { numberOfChannels, numberOfFrames, sampleRate, timestamp } = audioSample;
 
-		const CHUNK_SIZE = 2048;
-		const outputs: {
-			frameCount: number;
-			view: DataView;
-		}[] = [];
-
-		// Prepare all of the output buffers, each being bounded by CHUNK_SIZE so we don't generate huge packets
-		for (let frame = 0; frame < numberOfFrames; frame += CHUNK_SIZE) {
-			const frameCount = Math.min(CHUNK_SIZE, audioSample.numberOfFrames - frame);
-			const outputSize = frameCount * numberOfChannels * this.outputSampleSize;
-			const outputBuffer = new ArrayBuffer(outputSize);
-			const outputView = new DataView(outputBuffer);
-
-			outputs.push({ frameCount, view: outputView });
+		if (!this.pcmMeta) {
+			this.pcmMeta = {
+				decoderConfig: {
+					codec: this.encodingConfig.codec,
+					numberOfChannels,
+					sampleRate,
+				},
+			};
+			// Gaps get padded with silence before reaching us, so it's one contiguous run from here on
+			this.pcmStartTimestamp = timestamp;
 		}
 
+		// Read the whole sample interleaved into our reusable read buffer, growing it if needed
 		const isS32 = audioSample.format === 's32' || audioSample.format === 's32-planar';
-		const readFormat = isS32 ? 's32-planar' : 'f32-planar'; // Can't read in f32-planar due to precision loss
+		const readFormat = isS32 ? 's32' : 'f32'; // Can't read in f32 due to precision loss
 		const scale = isS32 ? 1 / 2147483648 : 1;
 
-		const allocationSize = audioSample.allocationSize(({ planeIndex: 0, format: readFormat }));
-		const values = isS32
-			? new Int32Array(allocationSize / 4)
-			: new Float32Array(allocationSize / 4);
-
-		for (let i = 0; i < numberOfChannels; i++) {
-			audioSample.copyTo(values, { planeIndex: i, format: readFormat });
-
-			for (let j = 0; j < outputs.length; j++) {
-				const { frameCount, view } = outputs[j]!;
-
-				for (let k = 0; k < frameCount; k++) {
-					this.writeOutputValue(
-						view,
-						(k * numberOfChannels + i) * this.outputSampleSize,
-						values[j * CHUNK_SIZE + k]! * scale,
-					);
-				}
-			}
+		const allocationSize = audioSample.allocationSize({ planeIndex: 0, format: readFormat });
+		if (this.pcmReadBuffer.byteLength < allocationSize) {
+			this.pcmReadBuffer = new ArrayBuffer(allocationSize);
 		}
+		const values = isS32
+			? new Int32Array(this.pcmReadBuffer, 0, allocationSize / 4)
+			: new Float32Array(this.pcmReadBuffer, 0, allocationSize / 4);
+		audioSample.copyTo(values, { planeIndex: 0, format: readFormat });
 
 		if (shouldClose) {
 			audioSample.close();
 		}
 
-		const meta: EncodedAudioChunkMetadata = {
-			decoderConfig: {
-				codec: this.encodingConfig.codec,
-				numberOfChannels,
-				sampleRate,
-			},
-		};
-
-		for (let i = 0; i < outputs.length; i++) {
-			const { frameCount, view } = outputs[i]!;
-			const outputBuffer = view.buffer;
-			const startFrame = i * CHUNK_SIZE;
-
-			const packet = new EncodedPacket(
-				new Uint8Array(outputBuffer),
-				'key',
-				timestamp + startFrame / sampleRate,
-				frameCount / sampleRate,
+		// Fill up the scratch buffer, emitting it as a packet each time it's full
+		let frame = 0;
+		while (frame < numberOfFrames) {
+			this.pcmScratchView ??= new DataView(
+				new ArrayBuffer(PCM_ENCODER_PACKET_SIZE * numberOfChannels * this.outputSampleSize),
 			);
 
-			this.encodingConfig.onEncodedPacket?.(packet, meta);
-			await this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet, meta); // With backpressure
+			const frameCount = Math.min(PCM_ENCODER_PACKET_SIZE - this.pcmScratchFrames, numberOfFrames - frame);
+			const valueOffset = this.pcmScratchFrames * numberOfChannels;
+			const readOffset = frame * numberOfChannels;
+
+			for (let i = 0; i < frameCount * numberOfChannels; i++) {
+				this.writeOutputValue(
+					this.pcmScratchView,
+					(valueOffset + i) * this.outputSampleSize,
+					values[readOffset + i]! * scale,
+				);
+			}
+
+			this.pcmScratchFrames += frameCount;
+			frame += frameCount;
+
+			if (this.pcmScratchFrames === PCM_ENCODER_PACKET_SIZE) {
+				await this.emitPcmScratchPacket();
+			}
 		}
+	}
+
+	private async emitPcmScratchPacket() {
+		assert(this.outputSampleSize);
+		assert(this.pcmScratchView);
+		assert(this.pcmMeta?.decoderConfig);
+
+		const { numberOfChannels, sampleRate } = this.pcmMeta.decoderConfig;
+		const byteLength = this.pcmScratchFrames * numberOfChannels * this.outputSampleSize;
+
+		const packet = new EncodedPacket(
+			new Uint8Array(this.pcmScratchView.buffer, 0, byteLength),
+			'key',
+			this.pcmStartTimestamp + this.pcmEmittedFrames / sampleRate,
+			this.pcmScratchFrames / sampleRate,
+		);
+		this.pcmEmittedFrames += this.pcmScratchFrames;
+
+		// The packet now owns the buffer
+		this.pcmScratchView = null;
+		this.pcmScratchFrames = 0;
+
+		this.encodingConfig.onEncodedPacket?.(packet, this.pcmMeta);
+		// With backpressure:
+		await this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet, this.pcmMeta);
 	}
 
 	private ensureEncoder(audioSample: AudioSample) {
@@ -2612,6 +2633,10 @@ class AudioEncoderWrapper {
 				// Finalize the resampler to flush any buffered audio
 				if (this.resampler) {
 					await this.resampler.finalize();
+				}
+
+				if (this.pcmScratchFrames > 0) {
+					await this.emitPcmScratchPacket();
 				}
 			}
 

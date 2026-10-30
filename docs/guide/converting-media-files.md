@@ -177,6 +177,7 @@ type ConversionVideoOptions = {
 	processedWidth?: number;
 	processedHeight?: number;
 	group?: OutputTrackGroup | OutputTrackGroup[];
+	maximumPacketCount?: number;
 };
 
 type MaybePromise<T> = T | Promise<T>;
@@ -293,6 +294,7 @@ type ConversionAudioOptions = {
 	>;
 	processedNumberOfChannels?: number;
 	processedSampleRate?: number;
+	maximumPacketCount?: number;
 };
 
 type MaybePromise<T> = T | Promise<T>;
@@ -571,7 +573,11 @@ type DiscardedTrack = {
 		| 'max_track_count_of_type_reached'
 		| 'unknown_source_codec'
 		| 'undecodable_source_codec'
-		| 'no_encodable_target_codec';
+		| 'no_encodable_target_codec'
+		| 'cannot_copy'
+		| 'unknown_maximum_packet_count';
+	// The options that were provided for this track, or {} if none were provided
+	trackOptions: ConversionVideoOptions | ConversionAudioOptions;
 };
 ```
 
@@ -594,6 +600,10 @@ The following reasons exist:
 	The input track's codec is known, but we are unable to decode it.
 - `no_encodable_target_codec`\
 	We can't find a codec that we are able to encode and that can be contained within the output format. This reason can be hit if the environment doesn't support the necessary encoders, or if you requested a codec that cannot be contained within the output format.
+- `cannot_copy`\
+	The copy mode was set to `'forced'` but the track could not be copied with the given copy configuration because it would require a transcode instead.
+- `unknown_maximum_packet_count`\
+	The output format requires a maximum packet count (like MP4 with `fastStart: 'reserve'`), but it can't be estimated because the track is live and no trim end is set. Set it manually using the `maximumPacketCount` track option.
 
 ---
 

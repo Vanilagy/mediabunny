@@ -102,6 +102,14 @@ export abstract class OutputFormat {
 	 */
 	abstract get negativeTimestampSupport(): 'full' | 'prefer-non-negative' | 'none' | null;
 
+	/**
+	 * Whether this output format, as configured, requires {@link BaseTrackMetadata.maximumPacketCount} to be set in
+	 * the metadata of every track added to it.
+	 */
+	get requiresMaximumPacketCount() {
+		return false;
+	}
+
 	/** Returns a list of video codecs that this output format can contain. */
 	getSupportedVideoCodecs(): VideoCodec[] {
 		return this.getSupportedCodecs()
@@ -152,7 +160,7 @@ export type IsobmffOutputFormatOptions = {
 	 * Use `'reserve'` to reserve space at the start of the file into which the metadata will be written later.	This
 	 * produces a file with Fast Start but requires knowledge about the expected length of the file beforehand. When
 	 * using this option, you must set the {@link BaseTrackMetadata.maximumPacketCount} field in the track metadata
-	 * for all tracks.
+	 * for all tracks. {@link Conversion} estimates this count automatically if no override is provided.
 	 *
 	 * Use `'fragmented'` to place metadata at the start of the file by creating a fragmented file (fMP4). In a
 	 * fragmented file, chunks of media and their metadata are written to the file in "fragments", eliminating the need
@@ -296,6 +304,10 @@ export abstract class IsobmffOutputFormat extends OutputFormat {
 
 	get negativeTimestampSupport() {
 		return 'full' as const;
+	}
+
+	override get requiresMaximumPacketCount() {
+		return this._options.fastStart === 'reserve';
 	}
 
 	/** @internal */
