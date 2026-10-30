@@ -52,11 +52,10 @@ import {
 	serializeAvcDecoderConfigurationRecord,
 	serializeHevcDecoderConfigurationRecord,
 } from '../codec-data';
-import { buildIsobmffMimeType } from './isobmff-misc';
+import { buildIsobmffMimeType, TIMESTAMP_OFFSET } from './isobmff-misc';
 import { MAX_BOX_HEADER_SIZE, MIN_BOX_HEADER_SIZE } from './isobmff-reader';
 
 export const GLOBAL_TIMESCALE = 57600; // LCM of a bunch of common frame rates (24, 25, 30, 60, 144, ...)
-const TIMESTAMP_OFFSET = 2_082_844_800; // Seconds between Jan 1 1904 and Jan 1 1970
 const MIN_CHUNK_DURATION = 0.5; // In seconds
 
 export type Sample = {
@@ -232,7 +231,7 @@ export class IsobmffMuxer extends Muxer {
 	trackDatas: IsobmffTrackData[] = [];
 	private allTracksKnown = promiseWithResolvers();
 
-	creationTime = Math.floor(Date.now() / 1000) + TIMESTAMP_OFFSET;
+	creationTime!: number;
 	private finalizedChunks: Chunk[] = [];
 
 	private wroteFragmentedHeader = false;
@@ -259,6 +258,16 @@ export class IsobmffMuxer extends Muxer {
 
 	async start() {
 		const release = await this.mutex.acquire();
+
+		const creationDate = this.output._metadataTags.creationTime === undefined
+			? new Date()
+			: this.output._metadataTags.creationTime;
+		this.creationTime = creationDate
+			? Math.floor(creationDate.getTime() / 1000) + TIMESTAMP_OFFSET
+			: 0;
+		if (creationDate && this.creationTime <= 0) {
+			throw new Error('creationTime must be after 1904-01-01T00:00:00Z for MP4/QuickTime files.');
+		}
 
 		if (!this.isCmaf) {
 			this.writer = await this.output._getRootWriter(target => (

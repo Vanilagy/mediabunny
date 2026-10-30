@@ -1738,6 +1738,10 @@ const addQuickTimeMetadataTagBoxes = (boxes: Box[], tags: MetadataTags) => {
 				// Handled later
 			}; break;
 
+			case 'creationTime': {
+				// Written in the header boxes
+			}; break;
+
 			case 'discNumber':
 			case 'discsTotal':
 			case 'trackNumber':
@@ -1900,6 +1904,10 @@ const generateMetadataPairs = (tags: MetadataTags, isMdta: boolean) => {
 
 			case 'raw': {
 				// Handled later
+			}; break;
+
+			case 'creationTime': {
+				// Written in the header boxes
 			}; break;
 
 			default: assertNever(key);

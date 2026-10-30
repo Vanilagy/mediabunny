@@ -1,4 +1,4 @@
-import { expect, test } from 'vitest';
+import { expect, onTestFinished, test, vi } from 'vitest';
 import { Output } from '../../src/output.js';
 import {
 	AdtsOutputFormat,
@@ -695,7 +695,7 @@ test('Conversion metadata tags, modified', async () => {
 
 	const readTags = await input2.getMetadataTags();
 
-	expect(Object.keys(readTags).length).toBe(3);
+	expect(Object.keys(readTags).length).toBe(4);
 	expect(readTags.title).toBe('Blossom');
 	expect(readTags.artist).toBe(songMetadata.artist);
 	expect(Object.keys(readTags.raw!).length).toBe(2);
@@ -796,4 +796,258 @@ test('Write WAV with ID3 tags', async () => {
 		expect(readTags.raw['TPOS']).toBe(`${songMetadata.discNumber}/${songMetadata.discsTotal}`);
 		expect(readTags.raw['TDRC']).toBeDefined();
 	}
+});
+
+test('Default creation time, ISOBMFF', async () => {
+	vi.useFakeTimers({ toFake: ['Date'] });
+	onTestFinished(() => {
+		vi.useRealTimers();
+	});
+	vi.setSystemTime(new Date('2024-02-29T13:37:42.123Z'));
+
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const dummyTrack = createDummyAudioTrack('opus', output);
+
+	await output.start();
+	await dummyTrack.addPacket();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const readTags = await input.getMetadataTags();
+
+	// The format only stores whole seconds
+	expect(readTags.creationTime).toEqual(new Date('2024-02-29T13:37:42Z'));
+});
+
+test('Default creation time, Matroska', async () => {
+	vi.useFakeTimers({ toFake: ['Date'] });
+	onTestFinished(() => {
+		vi.useRealTimers();
+	});
+	vi.setSystemTime(new Date('2024-02-29T13:37:42.123Z'));
+
+	const output = new Output({
+		format: new MkvOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const dummyTrack = createDummyAudioTrack('opus', output);
+
+	await output.start();
+	await dummyTrack.addPacket();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const readTags = await input.getMetadataTags();
+
+	expect(readTags.creationTime).toEqual(new Date('2024-02-29T13:37:42.123Z'));
+});
+
+test('Creation time override, ISOBMFF', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	output.setMetadataTags({ creationTime: new Date('2024-02-29T13:37:42Z') });
+
+	const dummyTrack = createDummyAudioTrack('opus', output);
+
+	await output.start();
+	await dummyTrack.addPacket();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const readTags = await input.getMetadataTags();
+
+	expect(readTags.creationTime).toEqual(new Date('2024-02-29T13:37:42Z'));
+
+	const nullOutput = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	nullOutput.setMetadataTags({ creationTime: null });
+
+	const nullDummyTrack = createDummyAudioTrack('opus', nullOutput);
+
+	await nullOutput.start();
+	await nullDummyTrack.addPacket();
+	await nullOutput.finalize();
+
+	using nullInput = new Input({
+		source: new BufferSource(nullOutput.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const nullReadTags = await nullInput.getMetadataTags();
+
+	expect(nullReadTags.creationTime).toBeUndefined();
+});
+
+test('Creation time override, Matroska', async () => {
+	const output = new Output({
+		format: new MkvOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	output.setMetadataTags({ creationTime: new Date('2024-02-29T13:37:42.123Z') });
+
+	const dummyTrack = createDummyAudioTrack('opus', output);
+
+	await output.start();
+	await dummyTrack.addPacket();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const readTags = await input.getMetadataTags();
+
+	expect(readTags.creationTime).toEqual(new Date('2024-02-29T13:37:42.123Z'));
+
+	const nullOutput = new Output({
+		format: new MkvOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	nullOutput.setMetadataTags({ creationTime: null });
+
+	const nullDummyTrack = createDummyAudioTrack('opus', nullOutput);
+
+	await nullOutput.start();
+	await nullDummyTrack.addPacket();
+	await nullOutput.finalize();
+
+	using nullInput = new Input({
+		source: new BufferSource(nullOutput.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const nullReadTags = await nullInput.getMetadataTags();
+
+	expect(nullReadTags.creationTime).toBeUndefined();
+});
+
+test('Creation time not copied in conversion', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	output.setMetadataTags({ creationTime: new Date('2010-01-01T00:00:00Z') });
+
+	const dummyTrack = createDummyAudioTrack('opus', output);
+
+	await output.start();
+	await dummyTrack.addPacket();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const output2 = new Output({
+		format: new MkvOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	vi.useFakeTimers({ toFake: ['Date'] });
+	onTestFinished(() => {
+		vi.useRealTimers();
+	});
+	vi.setSystemTime(new Date('2024-02-29T13:37:42.123Z'));
+
+	const conversion = await Conversion.init({ input, output: output2 });
+	await conversion.execute();
+
+	using input2 = new Input({
+		source: new BufferSource(output2.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const readTags = await input2.getMetadataTags();
+
+	expect(readTags.creationTime).toEqual(new Date('2024-02-29T13:37:42.123Z'));
+});
+
+test('Creation time override in conversion', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	output.setMetadataTags({ creationTime: new Date('2010-01-01T00:00:00Z') });
+
+	const dummyTrack = createDummyAudioTrack('opus', output);
+
+	await output.start();
+	await dummyTrack.addPacket();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const output2 = new Output({
+		format: new MkvOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({
+		input,
+		output: output2,
+		tags: { creationTime: new Date('2024-02-29T13:37:42.123Z') },
+	});
+	await conversion.execute();
+
+	using input2 = new Input({
+		source: new BufferSource(output2.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const readTags = await input2.getMetadataTags();
+
+	expect(readTags.creationTime).toEqual(new Date('2024-02-29T13:37:42.123Z'));
+
+	const nullOutput = new Output({
+		format: new MkvOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const nullConversion = await Conversion.init({
+		input,
+		output: nullOutput,
+		tags: { creationTime: null },
+	});
+	await nullConversion.execute();
+
+	using nullInput = new Input({
+		source: new BufferSource(nullOutput.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const nullReadTags = await nullInput.getMetadataTags();
+
+	expect(nullReadTags.creationTime).toBeUndefined();
 });

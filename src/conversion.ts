@@ -146,7 +146,7 @@ export type ConversionOptions = {
 	 * should be written to the output file. If a function is passed, it will be passed the tags of the input file as
 	 * its first argument, allowing you to modify, augment or extend them.
 	 *
-	 * If no function is set, the input's metadata tags will be copied to the output.
+	 * If no function is set, the input's metadata tags will be copied to the output (excluding `creationTime`).
 	 */
 	tags?: MetadataTags | ((inputTags: MetadataTags) => MaybePromise<MetadataTags>);
 
@@ -1126,7 +1126,8 @@ export class Conversion {
 		// remains the responsibility of whoever owns the output.
 
 		if (!this._composable) {
-			const inputTags = await this.input.getMetadataTags();
+			const inputTags = { ...await this.input.getMetadataTags() };
+			delete inputTags.creationTime; // Makes no sense to inherit this one
 			let outputTags: MetadataTags;
 
 			if (this._options.tags) {

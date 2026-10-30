@@ -82,6 +82,8 @@ import {
 	resync,
 	searchForNextElementId,
 	readUnsignedBigInt,
+	readSignedBigInt,
+	EBML_DATE_EPOCH,
 } from './ebml';
 import { buildMatroskaMimeType } from './matroska-misc';
 import { FileSlice, readBytes, Reader, readI16Be, readU8 } from '../reader';
@@ -1112,6 +1114,15 @@ export class MatroskaDemuxer extends Demuxer {
 				if (!this.currentSegment) break;
 
 				this.currentSegment.duration = readFloat(slice, size);
+			}; break;
+
+			case EBMLId.DateUTC: {
+				if (!this.currentSegment) break;
+
+				const nanoseconds = readSignedBigInt(slice, size);
+				this.currentSegment.metadataTags.creationTime = new Date(
+					EBML_DATE_EPOCH + Number(nanoseconds / 1_000_000n),
+				);
 			}; break;
 
 			case EBMLId.TrackEntry: {

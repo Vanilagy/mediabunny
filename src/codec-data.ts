@@ -3010,6 +3010,10 @@ export const createVorbisComments = (headerBytes: Uint8Array, tags: MetadataTags
 				// Handled later
 			}; break;
 
+			case 'creationTime': {
+				// Not supported in Vorbis comments
+			}; break;
+
 			default: assertNever(key);
 		}
 	}

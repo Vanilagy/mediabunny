@@ -35,6 +35,7 @@ import {
 import {
 	CODEC_STRING_MAP,
 	EBML,
+	EBML_DATE_EPOCH,
 	EBMLElement,
 	EBMLFloat32,
 	EBMLFloat64,
@@ -311,11 +312,27 @@ export class MatroskaMuxer extends Muxer {
 		const segmentDuration: EBML = { id: EBMLId.Duration, data: new EBMLFloat64(0) };
 		this.segmentDuration = segmentDuration;
 
+		const creationDate = this.output._metadataTags.creationTime === undefined
+			? new Date()
+			: this.output._metadataTags.creationTime;
+		let dateUtc: EBML | null = null;
+
+		if (creationDate) {
+			const nanoseconds = 1_000_000n * BigInt(creationDate.getTime() - EBML_DATE_EPOCH);
+			if (BigInt.asIntN(64, nanoseconds) !== nanoseconds) {
+				throw new Error('creationTime is out of the range representable by Matroska files.');
+			}
+
+			// Signed 64-bit integer, two's complement
+			dateUtc = { id: EBMLId.DateUTC, size: 8, data: BigInt.asUintN(64, nanoseconds) };
+		}
+
 		const segmentInfo: EBML = { id: EBMLId.Info, data: [
 			{ id: EBMLId.TimestampScale, data: 1e6 },
+			!this.format._options.appendOnly ? segmentDuration : null,
+			dateUtc,
 			{ id: EBMLId.MuxingApp, data: VERSIONED_NAME },
 			{ id: EBMLId.WritingApp, data: VERSIONED_NAME },
-			!this.format._options.appendOnly ? segmentDuration : null,
 		] };
 		this.segmentInfo = segmentInfo;
 	}
@@ -617,7 +634,8 @@ export class MatroskaMuxer extends Muxer {
 				}; break;
 
 				case 'images':
-				case 'raw': {
+				case 'raw':
+				case 'creationTime': {
 					// Handled elsewhere
 				}; break;
 
