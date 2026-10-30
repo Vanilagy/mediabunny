@@ -1802,6 +1802,16 @@ export class IsobmffMuxer extends Muxer {
 
 			if (this.fastStart === 'reserve') {
 				assert(this.ftypSize !== null);
+				const reservedSpace = this.boxWriter.offsets.get(this.mdat)! - this.ftypSize;
+				const moovSize = this.boxWriter.measureBox(movieBox);
+
+				if (moovSize + 8 > reservedSpace) {
+					throw new Error(
+						`The moov box (${moovSize} bytes) plus a free box (8 bytes) exceed the space reserved for them`
+						+ ` (${reservedSpace} bytes) with fastStart: 'reserve'. This is a bug; please report it.`,
+					);
+				}
+
 				this.writer.seek(this.ftypSize);
 
 				if (this.formatOptions.onMoov) {
@@ -1809,10 +1819,7 @@ export class IsobmffMuxer extends Muxer {
 				}
 
 				this.boxWriter.writeBox(movieBox);
-
-				// Fill the remaining space with a free box. If there are less than 8 bytes left, sucks I guess
-				const remainingSpace = this.boxWriter.offsets.get(this.mdat)! - this.writer.getPos();
-				this.boxWriter.writeBox(free(remainingSpace));
+				this.boxWriter.writeBox(free(reservedSpace - moovSize));
 			} else {
 				if (this.formatOptions.onMoov) {
 					this.writer.startTrackingWrites();
