@@ -52,11 +52,10 @@ import {
 	serializeAvcDecoderConfigurationRecord,
 	serializeHevcDecoderConfigurationRecord,
 } from '../codec-data';
-import { buildIsobmffMimeType } from './isobmff-misc';
+import { buildIsobmffMimeType, TIMESTAMP_OFFSET } from './isobmff-misc';
 import { MAX_BOX_HEADER_SIZE, MIN_BOX_HEADER_SIZE } from './isobmff-reader';
 
 export const GLOBAL_TIMESCALE = 57600; // LCM of a bunch of common frame rates (24, 25, 30, 60, 144, ...)
-const TIMESTAMP_OFFSET = 2_082_844_800; // Seconds between Jan 1 1904 and Jan 1 1970
 const MIN_CHUNK_DURATION = 0.5; // In seconds
 
 export type Sample = {
@@ -232,7 +231,7 @@ export class IsobmffMuxer extends Muxer {
 	trackDatas: IsobmffTrackData[] = [];
 	private allTracksKnown = promiseWithResolvers();
 
-	creationTime = Math.floor(Date.now() / 1000) + TIMESTAMP_OFFSET;
+	creationTime!: number;
 	private finalizedChunks: Chunk[] = [];
 
 	private wroteFragmentedHeader = false;
@@ -259,6 +258,16 @@ export class IsobmffMuxer extends Muxer {
 
 	async start() {
 		const release = await this.mutex.acquire();
+
+		const creationDate = this.output._metadataTags.creationTime === undefined
+			? new Date()
+			: this.output._metadataTags.creationTime;
+		this.creationTime = creationDate
+			? Math.floor(creationDate.getTime() / 1000) + TIMESTAMP_OFFSET
+			: 0;
+		if (creationDate && this.creationTime <= 0) {
+			throw new Error('creationTime must be after 1904-01-01T00:00:00Z for MP4/QuickTime files.');
+		}
 
 		if (!this.isCmaf) {
 			this.writer = await this.output._getRootWriter(target => (
@@ -334,6 +343,15 @@ export class IsobmffMuxer extends Muxer {
 					throw new Error(
 						'All tracks must specify maximumPacketCount in their metadata when using'
 						+ ' fastStart: \'reserve\'.',
+					);
+				}
+
+				// Sample counts are stored as u32 in the sample table
+				if (track.metadata.maximumPacketCount > 2 ** 32 - 1) {
+					throw new Error(
+						`Track #${track.id} has a maximumPacketCount of ${track.metadata.maximumPacketCount}, which`
+						+ ` exceeds the maximum of ${2 ** 32 - 1} packets per track that a non-fragmented file can`
+						+ ' hold.',
 					);
 				}
 			}
@@ -1524,6 +1542,13 @@ export class IsobmffMuxer extends Muxer {
 			upperBound += 4 * n;
 			// co64 box - we assume 1 sample per chunk and 64-bit chunk offsets (co64 instead of stco)
 			upperBound += 8 * n;
+
+			if (trackData.type === 'audio') {
+				// sgpd box - 1 roll distance per sample, in case each sample's preroll differs from the one before
+				upperBound += 2 * n;
+				// sbgp box - 1 entry per sample, for the same reason
+				upperBound += (4 + 4) * n;
+			}
 		}
 
 		return upperBound;
@@ -1777,6 +1802,16 @@ export class IsobmffMuxer extends Muxer {
 
 			if (this.fastStart === 'reserve') {
 				assert(this.ftypSize !== null);
+				const reservedSpace = this.boxWriter.offsets.get(this.mdat)! - this.ftypSize;
+				const moovSize = this.boxWriter.measureBox(movieBox);
+
+				if (moovSize + 8 > reservedSpace) {
+					throw new Error(
+						`The moov box (${moovSize} bytes) plus a free box (8 bytes) exceed the space reserved for them`
+						+ ` (${reservedSpace} bytes) with fastStart: 'reserve'. This is a bug; please report it.`,
+					);
+				}
+
 				this.writer.seek(this.ftypSize);
 
 				if (this.formatOptions.onMoov) {
@@ -1784,10 +1819,7 @@ export class IsobmffMuxer extends Muxer {
 				}
 
 				this.boxWriter.writeBox(movieBox);
-
-				// Fill the remaining space with a free box. If there are less than 8 bytes left, sucks I guess
-				const remainingSpace = this.boxWriter.offsets.get(this.mdat)! - this.writer.getPos();
-				this.boxWriter.writeBox(free(remainingSpace));
+				this.boxWriter.writeBox(free(reservedSpace - moovSize));
 			} else {
 				if (this.formatOptions.onMoov) {
 					this.writer.startTrackingWrites();

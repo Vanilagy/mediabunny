@@ -138,3 +138,15 @@ This generates `build/flac.js`, which contains both the JavaScript "glue code" a
 ### Building the package
 
 Then, the complete JavaScript package can be built alongside the rest of Mediabunny by running `npm run build` in Mediabunny's root.
+
+## Provenance
+
+The build artifacts included in this repo, which are also the ones bundled into the published package, were built with exactly the commands above, from:
+
+- libFLAC [`3f1ecff843dd1b8c07fbb5f59425a4ec71fe4f6c`](https://github.com/xiph/flac/commit/3f1ecff843dd1b8c07fbb5f59425a4ec71fe4f6c) (`1.5.0-27-g3f1ecff8`), unmodified
+- Emscripten 4.0.21 (`d6f42310010ddec0753a69bab01a4b33aae255b7`)
+- `src/bridge.c` of this package
+
+SHA-256 of the WASM binary inlined in `build/flac.js`: `ea25f2da12550128391e0d83465deb887c3bef96b7ee4a9b34ebb1d8202fffbe`
+
+libFLAC is licensed under Xiph.Org's BSD-style license; its copyright notice and license are in [`licenses/libflac`](./licenses/libflac).

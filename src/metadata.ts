@@ -58,6 +58,12 @@ export type MetadataTags = {
 	comment?: string;
 	/** Embedded images such as cover art, booklet scans, artwork or preview frames. */
 	images?: AttachedImage[];
+	/** The time at which the media file itself was created.
+	 *
+	 * When writing, leaving this field undefined will write the current date and time to the formats that support this
+	 * field. If you don't want to write this info, set this field to `null` instead.
+	 */
+	creationTime?: Date | null;
 	/**
 	 * The raw, underlying metadata tags.
 	 *
@@ -211,6 +217,13 @@ export const validateMetadataTags = (tags: MetadataTags) => {
 	}
 	if (tags.date !== undefined && (!(tags.date instanceof Date) || Number.isNaN(tags.date.getTime()))) {
 		throw new TypeError('tags.date, when provided, must be a valid Date.');
+	}
+	if (
+		tags.creationTime !== undefined
+		&& tags.creationTime !== null
+		&& (!(tags.creationTime instanceof Date) || Number.isNaN(tags.creationTime.getTime()))
+	) {
+		throw new TypeError('tags.creationTime, when provided, must be a valid Date or null.');
 	}
 	if (
 		tags.beatsPerMinute !== undefined

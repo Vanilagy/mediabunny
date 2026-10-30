@@ -91,7 +91,7 @@ For more ways of using Mediabunny, refer to its [guide](https://mediabunny.dev/g
 
 ## License
 
-`@mediabunny/mp3-encoder` uses [the same MPL-2.0 license](https://sourceforge.net/projects/lame/files/lame/) as Mediabunny. The LAME MP3 Encoder is licensed under LGPL. On their [license page](https://lame.sourceforge.io/license.txt), they ask that you give them a shoutout with a link.
+`@mediabunny/mp3-encoder` uses [the same MPL-2.0 license](./LICENSE) as Mediabunny. The LAME MP3 Encoder is licensed under LGPL. On their [license page](https://lame.sourceforge.io/license.txt), they ask that you give them a shoutout with a link.
 
 ## Implementation details
 
@@ -152,3 +152,15 @@ This generates `build/lame.js`, which contains both the JavaScript "glue code" a
 ### Building the package
 
 Then, the complete JavaScript package can be built alongside the rest of Mediabunny by running `npm run build` in Mediabunny's root.
+
+## Provenance
+
+The build artifacts included in this repo, which are also the ones bundled into the published package, were built with exactly the commands above, from:
+
+- LAME 3.100 from [`lame-3.100.tar.gz`](https://sourceforge.net/projects/lame/files/lame/3.100/lame-3.100.tar.gz) (SHA-256 `ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e`), unmodified
+- Emscripten 4.0.21 (`d6f42310010ddec0753a69bab01a4b33aae255b7`)
+- `src/lame-bridge.c` of this package
+
+SHA-256 of the WASM binary inlined in `build/lame.js`: `a680e507e9d91f1a4dcd6f846b9b94ff1fec7e19ff44e803358c218ddbe446a6`
+
+LAME is licensed under the LGPL v2 or later; its license files are in [`licenses/lame`](./licenses/lame). To use a modified LAME, rebuild using the steps above.

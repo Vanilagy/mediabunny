@@ -1348,13 +1348,17 @@ export const ctts = (trackData: IsobmffTrackData) => {
  * Composition to Decode Box: Stores information about the composition and display times of the media samples.
  */
 export const cslg = (trackData: IsobmffTrackData) => {
+	assert(trackData.compositionTimeOffsetTable.length > 0);
+
+	if (trackData.samples.length === 0) {
+		// Happens when the moov is measured before any samples have been added
+		return null;
+	}
+
 	let leastDecodeToDisplayDelta = Infinity;
 	let greatestDecodeToDisplayDelta = -Infinity;
 	let compositionStartTime = Infinity;
 	let compositionEndTime = -Infinity;
-
-	assert(trackData.compositionTimeOffsetTable.length > 0);
-	assert(trackData.samples.length > 0);
 
 	for (let i = 0; i < trackData.compositionTimeOffsetTable.length; i++) {
 		const entry = trackData.compositionTimeOffsetTable[i]!;
@@ -1738,6 +1742,10 @@ const addQuickTimeMetadataTagBoxes = (boxes: Box[], tags: MetadataTags) => {
 				// Handled later
 			}; break;
 
+			case 'creationTime': {
+				// Written in the header boxes
+			}; break;
+
 			case 'discNumber':
 			case 'discsTotal':
 			case 'trackNumber':
@@ -1782,6 +1790,10 @@ const DATA_BOX_MIME_TYPE_MAP: Record<string, number> = {
 	'image/png': 14,
 	'image/bmp': 27,
 };
+
+// FFmpeg parses these assuming a udta layout even when they're not in udta, so we simply skip these if we'd write them
+// to ilst metadata
+const ILST_UNSAFE_RAW_KEYS = new Set(['HMMT', 'loci', 'chpl']);
 
 /**
  * Generates key-value metadata for inclusion in the "meta" box.
@@ -1902,6 +1914,10 @@ const generateMetadataPairs = (tags: MetadataTags, isMdta: boolean) => {
 				// Handled later
 			}; break;
 
+			case 'creationTime': {
+				// Written in the header boxes
+			}; break;
+
 			default: assertNever(key);
 		}
 	}
@@ -1909,7 +1925,11 @@ const generateMetadataPairs = (tags: MetadataTags, isMdta: boolean) => {
 	if (tags.raw) {
 		for (const key in tags.raw) {
 			const value = tags.raw[key];
-			if (value == null || (!isMdta && key.length !== 4) || pairs.some(x => x.key === key)) {
+			if (
+				value == null
+				|| (!isMdta && (key.length !== 4 || ILST_UNSAFE_RAW_KEYS.has(key)))
+				|| pairs.some(x => x.key === key)
+			) {
 				continue;
 			}
 

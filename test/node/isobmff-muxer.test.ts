@@ -669,3 +669,54 @@ const testChunkOrder = async (fastStart: false | 'in-memory' | 'reserve') => {
 	expect(chunkStartTimestamps.length).toBeGreaterThan(10);
 	expect(chunkStartTimestamps).toEqual([...chunkStartTimestamps].sort((a, b) => a - b));
 };
+
+test('Reserved Fast Start rejects a maximum packet count beyond u32', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart: 'reserve' }),
+		target: new BufferTarget(),
+	});
+	output.addVideoTrack(new EncodedVideoPacketSource('vp8'), { maximumPacketCount: 2 ** 32 });
+
+	await expect(output.start()).rejects.toThrow('exceeds the maximum');
+});
+
+// This used to cause an assertion failure in the box writing code
+test('Reserved Fast Start with a B-frame GOP completed before all tracks are known', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart: 'reserve' }),
+		target: new BufferTarget(),
+	});
+
+	const videoSource = new EncodedVideoPacketSource('vp8');
+	const audioSource = new EncodedAudioPacketSource('mp3');
+	output.addVideoTrack(videoSource, { maximumPacketCount: 100 });
+	output.addAudioTrack(audioSource, { maximumPacketCount: 100 });
+
+	await output.start();
+
+	const videoMeta = { decoderConfig: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 } };
+	const videoTimestamps = [0, 0.2, 0.1, 0.3];
+	for (let i = 0; i < videoTimestamps.length; i++) {
+		const type = i === 0 || i === 3 ? 'key' : 'delta';
+		await videoSource.add(new EncodedPacket(new Uint8Array(8), type, videoTimestamps[i]!, 0.1), videoMeta);
+	}
+
+	const audioMeta = { decoderConfig: { codec: 'mp3', numberOfChannels: 2, sampleRate: 48000 } };
+	await audioSource.add(new EncodedPacket(new Uint8Array(8), 'key', 0, 1152 / 48000), audioMeta);
+
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	const timestamps: number[] = [];
+	for await (const packet of new EncodedPacketSink(videoTrack).packets()) {
+		timestamps.push(packet.timestamp);
+	}
+	expect(timestamps).toEqual(videoTimestamps);
+});

@@ -20,6 +20,7 @@ import { CanvasSource, EncodedAudioPacketSource } from '../../src/media-source.j
 import { Quality } from '../../src/encode.js';
 import { EncodedPacket } from '../../src/packet.js';
 import { EncodedPacketSink } from '../../src/media-sink.js';
+import { PCM_AUDIO_CODECS } from '../../src/codec.js';
 
 test('Rotation is baked in when rerendering', async () => {
 	using input = new Input({
@@ -1334,3 +1335,128 @@ test('Trim wholly past media data, copy', async () => {
 	// expect(await newInput.getPrimaryVideoTrack()).toBeNull(); // No video data
 	expect(await newInput.getPrimaryAudioTrack()).toBeNull(); // No audio data
 });
+
+test('Reserved fast start, copy', async () => {
+	await testReservedFastStart({});
+});
+
+test('Reserved fast start, copy with trim', async () => {
+	await testReservedFastStart({
+		trim: {
+			start: 1.3,
+			end: 3.7,
+		},
+	});
+});
+
+test('Reserved fast start, transcode', async () => {
+	await testReservedFastStart({
+		video: {
+			frameRate: 10,
+			width: 320,
+		},
+		audio: {
+			forceTranscode: true,
+		},
+		trim: {
+			start: 1,
+			end: 4,
+		},
+	});
+});
+
+test('Reserved fast start, PCM transcode', async () => {
+	await testReservedFastStart({
+		audio: {
+			codec: 'pcm-s16',
+		},
+	});
+});
+
+test('Reserved fast start, PCM copy', async () => {
+	await testReservedFastStart({ copy: { mode: 'forced' } }, '/glitch-hop-is-dead.wav');
+});
+
+test('Reserved fast start, manual maximum packet count', async () => {
+	using input = new Input({
+		source: new UrlSource('/demo.mp4'),
+		formats: ALL_FORMATS,
+	});
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart: 'reserve' }),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({
+		input,
+		output,
+		video: {
+			maximumPacketCount: 1000,
+		},
+		audio: {
+			maximumPacketCount: 10,
+		},
+	});
+
+	expect(output.tracks.map(x => x.metadata.maximumPacketCount)).toEqual([1000, 10]);
+
+	// The audio track has way more packets than that
+	await expect(conversion.execute()).rejects.toThrow('maximum packet count');
+});
+
+test('Maximum packet count is not set when not required', async () => {
+	using input = new Input({
+		source: new UrlSource('/demo.mp4'),
+		formats: ALL_FORMATS,
+	});
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	await Conversion.init({ input, output });
+
+	expect(output.tracks.map(x => x.metadata.maximumPacketCount)).toEqual([undefined, undefined]);
+});
+
+const testReservedFastStart = async (
+	conversionOptions: Omit<ConversionOptions, 'input' | 'output'>,
+	inputUrl = '/demo.mp4',
+) => {
+	using input = new Input({
+		source: new UrlSource(inputUrl),
+		formats: ALL_FORMATS,
+	});
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart: 'reserve' }),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({
+		input,
+		output,
+		...conversionOptions,
+	});
+	await conversion.execute();
+
+	using newInput = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const newTracks = await newInput.getTracks();
+	expect(newTracks).toHaveLength(output.tracks.length);
+
+	for (let i = 0; i < newTracks.length; i++) {
+		const maximumPacketCount = output.tracks[i]!.metadata.maximumPacketCount;
+		assert(maximumPacketCount !== undefined);
+
+		if ((PCM_AUDIO_CODECS as readonly string[]).includes((await newTracks[i]!.getCodec())!)) {
+			continue;
+		}
+
+		// The estimate must be an upper bound, but shouldn't be a ridiculous one
+		const { packetCount } = await newTracks[i]!.computePacketStats();
+		expect(maximumPacketCount).toBeGreaterThanOrEqual(packetCount);
+		expect(maximumPacketCount).toBeLessThanOrEqual(2 * packetCount + 64);
+	}
+};

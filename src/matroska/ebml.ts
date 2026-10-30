@@ -78,6 +78,7 @@ export enum EBMLId {
 	Duration = 0x4489,
 	Info = 0x1549a966,
 	TimestampScale = 0x2ad7b1,
+	DateUTC = 0x4461,
 	MuxingApp = 0x4d80,
 	WritingApp = 0x5741,
 	Tracks = 0x1654ae6b,
@@ -471,6 +472,7 @@ export class EBMLWriter {
 	}
 }
 
+export const EBML_DATE_EPOCH = Date.UTC(2001, 0, 1); // In milliseconds since the Unix epoch
 export const MAX_VAR_INT_SIZE = 8;
 export const MIN_HEADER_SIZE = 2; // 1-byte ID and 1-byte size
 export const MAX_HEADER_SIZE = 2 * MAX_VAR_INT_SIZE; // 8-byte ID and 8-byte size
@@ -580,6 +582,15 @@ export const readSignedInt = (slice: FileSlice, width: number) => {
 	}
 
 	return value;
+};
+
+export const readSignedBigInt = (slice: FileSlice, width: number) => {
+	// Zero width is valid and means zero
+	if (width === 0) {
+		return 0n;
+	}
+
+	return BigInt.asIntN(8 * width, readUnsignedBigInt(slice, width));
 };
 
 export const readElementId = (slice: FileSlice) => {

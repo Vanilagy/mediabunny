@@ -202,6 +202,8 @@ export class AvFrameVideoSampleResource extends VideoSampleResource {
 export const copyVideoSampleToAvFrame = async (sample: VideoSample, frame: NodeAv.Frame, lastBuffer: Buffer | null) => {
 	assert(sample.format !== null);
 
+	frame.unref();
+
 	frame.format = fromPixelFormat(sample.format);
 	frame.width = sample.codedWidth;
 	frame.height = sample.codedHeight;

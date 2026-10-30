@@ -86,7 +86,13 @@ import {
 	colorSpaceIsComplete,
 } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
-import { buildIsobmffMimeType, parsePsshBoxContents, psshBoxesAreEqual, PsshBox } from './isobmff-misc';
+import {
+	buildIsobmffMimeType,
+	parsePsshBoxContents,
+	psshBoxesAreEqual,
+	PsshBox,
+	TIMESTAMP_OFFSET,
+} from './isobmff-misc';
 import {
 	MAX_BOX_HEADER_SIZE,
 	MIN_BOX_HEADER_SIZE,
@@ -976,14 +982,23 @@ export class IsobmffDemuxer extends Demuxer {
 				const version = readU8(slice);
 				slice.skip(3); // Flags
 
+				let creationTime: number;
 				if (version === 1) {
-					slice.skip(8 + 8);
+					creationTime = readU64Be(slice);
+					slice.skip(8); // Modification time
 					this.movieTimescale = readU32Be(slice);
 					this.movieDurationInTimescale = readU64Be(slice);
 				} else {
-					slice.skip(4 + 4);
+					creationTime = readU32Be(slice);
+					slice.skip(4); // Modification time
 					this.movieTimescale = readU32Be(slice);
 					this.movieDurationInTimescale = readU32Be(slice);
+				}
+
+				if (creationTime !== 0) {
+					this.metadataTags.creationTime = new Date(1000 * (creationTime - TIMESTAMP_OFFSET));
+				} else {
+					// Assume this means the creation time isn't set (I doubt the file was created in 1904)
 				}
 
 				if (this.movieTimescale === 0) {

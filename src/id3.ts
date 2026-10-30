@@ -798,6 +798,10 @@ export class Id3V2Writer {
 					// Handled later
 				}; break;
 
+				case 'creationTime': {
+					// Not supported in ID3
+				}; break;
+
 				default: {
 					assertNever(key);
 				}

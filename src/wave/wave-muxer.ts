@@ -289,7 +289,8 @@ export class WaveMuxer extends Muxer {
 				case 'beatsPerMinute':
 				case 'description':
 				case 'lyrics':
-				case 'images': {
+				case 'images':
+				case 'creationTime': {
 					// Not supported in RIFF INFO
 				}; break;
 

@@ -8,6 +8,8 @@
 
 import { bytesToHexString, toDataView, uint8ArraysAreEqual } from '../misc';
 
+export const TIMESTAMP_OFFSET = 2_082_844_800; // Seconds between Jan 1 1904 and Jan 1 1970
+
 export const buildIsobmffMimeType = (info: {
 	isQuickTime: boolean;
 	hasVideo: boolean;
