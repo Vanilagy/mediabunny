@@ -33,6 +33,7 @@ import {
 	WEBM, // WebM input format singleton
 	MP3, // MP3 input format singleton
 	WAVE, // WAVE input format singleton
+	AIFF, // AIFF input format singleton
 	OGG, // Ogg input format singleton
 	ADTS, // ADTS input format singleton
 	FLAC, // FLAC input format singleton
@@ -83,6 +84,7 @@ In addition to singletons, input format classes are structured hierarchically:
 		- `WebMInputFormat`
 	- `Mp3InputFormat`
 	- `WaveInputFormat`
+	- `AiffInputFormat`
 	- `OggInputFormat`
 	- `AdtsInputFormat`
 	- `FlacInputFormat`
