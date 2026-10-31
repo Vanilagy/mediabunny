@@ -22,7 +22,6 @@ test.concurrent('reading FFmpeg MJPEG in an mp4v sample entry', async () => {
 		formats: ALL_FORMATS,
 	});
 	const track = (await input.getPrimaryVideoTrack())!;
-	console.log({ track });
 	expect(await track.getInternalCodecId()).toBe('mp4v');
 	expect(await track.getCodec()).toBe('mjpeg');
 	expect(await track.getCodedWidth()).toBe(640);

@@ -46,6 +46,6 @@ The encoder respects quality settings.
 You can set an explicit quality value from 0 to 100. It will map inversely to the canvas quality export.
 Set `new Quality({ quantizer: 25 })` in your video encoding options .
 
-For bitrate control, use `new Quality({ bitrate: 1_000_000 })`. The encoder uses a simple implementation for bitrate control.
+For bitrate control, use `new Quality({ bitrate: 1_000_000 })`. The encoder uses a simple implementation for bitrate control. `bitrateMode` will not make a difference.
 
 An explicit quantizer takes priority over bitrate control.

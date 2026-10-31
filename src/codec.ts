@@ -721,14 +721,6 @@ export const extractColorSpace = (info: {
 			}
 		}; break;
 
-		case 'mjpeg': {
-			// Guessing really
-			return {
-				primaries: 'bt709',
-				transfer: 'bt709',
-			};
-		} break;
-
 		case 'prores': {
 			if (info.proresCodecInfo) {
 				return {
