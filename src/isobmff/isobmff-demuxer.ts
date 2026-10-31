@@ -17,6 +17,7 @@ import {
 	extractColorSpace,
 	extractVideoCodecString,
 	MediaCodec,
+	MJPEG_FOURCCS,
 	OPUS_SAMPLE_RATE,
 	parsePcmCodec,
 	PCM_AUDIO_CODECS,
@@ -1291,7 +1292,9 @@ export class IsobmffDemuxer extends Demuxer {
 							: lowercaseBoxName;
 						track.frmaCodecString = null;
 
-						if (codecName === 'avc1' || codecName === 'avc3') {
+						if (codecName === 'mp4v') {
+							// The codec is set by the esds box.
+						} else if (codecName === 'avc1' || codecName === 'avc3') {
 							track.info.codec = 'avc';
 							track.info.avcType = codecName === 'avc1' ? 1 : 3;
 						} else if (codecName === 'hvc1' || codecName === 'hev1') {
@@ -1302,6 +1305,8 @@ export class IsobmffDemuxer extends Demuxer {
 							track.info.codec = 'vp9';
 						} else if (codecName === 'av01') {
 							track.info.codec = 'av1';
+						} else if ((MJPEG_FOURCCS as readonly string[]).includes(lowercaseBoxName)) {
+							track.info.codec = 'mjpeg';
 						} else if ((PRORES_FOURCCS as readonly string[]).includes(lowercaseBoxName)) {
 							track.info.codec = 'prores';
 							track.info.proresFormat = lowercaseBoxName as ProresFourCc;
@@ -1767,29 +1772,41 @@ export class IsobmffDemuxer extends Demuxer {
 
 			case 'esds': {
 				const track = this.currentTrack;
-				if (!track || track.info?.type !== 'audio') {
+				if (!track || !track.info) {
 					break;
 				}
 
 				slice.skip(4); // Version + flags
 
-				const { objectTypeIndication, decoderSpecificInfo } = readEsDescriptor(slice);
-				if (objectTypeIndication === 0x40 || objectTypeIndication === 0x67) {
-					track.info.codec = 'aac';
-					track.info.aacCodecInfo = {
-						isMpeg2: objectTypeIndication === 0x67,
-						objectType: null,
-					};
-				} else if (objectTypeIndication === 0x69 || objectTypeIndication === 0x6b) {
-					track.info.codec = 'mp3';
-				} else if (objectTypeIndication === 0xdd) {
-					track.info.codec = 'vorbis'; // "nonstandard, gpac uses it" - FFmpeg
-				} else if (objectTypeIndication === 0xa9) {
-					track.info.codec = 'dts';
-				} else {
-					Logging._warn(
-						`Unsupported audio codec (objectTypeIndication ${objectTypeIndication}) - discarding track.`,
-					);
+				const { objectTypeIndication, decoderSpecificInfo } =
+					readEsDescriptor(slice);
+				if (track.info.type === 'audio') {
+					if (objectTypeIndication === 0x40 || objectTypeIndication === 0x67) {
+						track.info.codec = 'aac';
+						track.info.aacCodecInfo = {
+							isMpeg2: objectTypeIndication === 0x67,
+							objectType: null,
+						};
+					} else if (objectTypeIndication === 0x69 || objectTypeIndication === 0x6b) {
+						track.info.codec = 'mp3';
+					} else if (objectTypeIndication === 0xdd) {
+						track.info.codec = 'vorbis'; // "nonstandard, gpac uses it" - FFmpeg
+					} else if (objectTypeIndication === 0xa9) {
+						track.info.codec = 'dts';
+					} else {
+						Logging._warn(
+							`Unsupported audio codec (objectTypeIndication ${
+								objectTypeIndication
+							}) - discarding track.`,
+						);
+					}
+				} else if (track.info.type === 'video') {
+					if (objectTypeIndication === 0x6c) {
+						track.info.codec = 'mjpeg';
+					} else {
+						Logging._warn(`Unsupported video codec (objectTypeIndication ${objectTypeIndication}).`);
+					}
+					break;
 				}
 
 				if (decoderSpecificInfo) {
