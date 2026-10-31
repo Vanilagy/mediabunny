@@ -1778,8 +1778,8 @@ export class IsobmffDemuxer extends Demuxer {
 
 				slice.skip(4); // Version + flags
 
-				const { objectTypeIndication, decoderSpecificInfo } =
-					readEsDescriptor(slice);
+				const { objectTypeIndication, decoderSpecificInfo }
+					= readEsDescriptor(slice);
 				if (track.info.type === 'audio') {
 					if (objectTypeIndication === 0x40 || objectTypeIndication === 0x67) {
 						track.info.codec = 'aac';

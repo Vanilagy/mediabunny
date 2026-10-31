@@ -10,7 +10,7 @@ import { Conversion } from '../../src/conversion.js';
 import path from 'path';
 
 // From test/public: ffmpeg -i demo.mp4 -map 0:v:0 -c:v mjpeg -q:v 3 -pix_fmt yuvj420p mjpeg.mov
-const movFilePath = path.join(__dirname, "..", "public/mjpeg.mov");
+const movFilePath = path.join(__dirname, '..', 'public/mjpeg.mov');
 // Generated with FFmpeg: -i mjpeg.mov -map 0:v:0 -frames:v 2 -c:v copy mjpeg.mp4
 const mp4FilePath = path.join(__dirname, '..', 'public/mjpeg.mp4');
 // From test/public: ffmpeg -i demo.mp4 -map 0:v:0 -c:v mjpeg -q:v 3 -pix_fmt yuvj420p mjpeg.mkv
