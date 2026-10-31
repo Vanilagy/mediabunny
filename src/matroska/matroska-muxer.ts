@@ -35,6 +35,7 @@ import {
 import {
 	CODEC_STRING_MAP,
 	EBML,
+	EBML_DATE_EPOCH,
 	EBMLElement,
 	EBMLFloat32,
 	EBMLFloat64,
@@ -56,11 +57,11 @@ import {
 } from '../subtitles';
 import { aacChannelMap, aacFrequencyTable, buildAacAudioSpecificConfig } from '../../shared/aac-misc';
 import {
-	OPUS_SAMPLE_RATE,
 	PCM_AUDIO_CODECS,
 	PcmAudioCodec,
 	SubtitleCodec,
 	generateAv1CodecConfigurationFromCodecString,
+	getAudioPreRollDuration,
 	generateVp9CodecConfigurationFromCodecString,
 	parsePcmCodec,
 	validateAudioChunkMetadata,
@@ -72,7 +73,6 @@ import { FileSlice } from '../reader';
 import { Muxer } from '../muxer';
 import { Writer } from '../writer';
 import { EncodedPacket } from '../packet';
-import { parseOpusIdentificationHeader } from '../codec-data';
 import { AttachedFile } from '../metadata';
 import { Logging } from '../logging';
 import { VERSIONED_NAME } from '../version';
@@ -88,6 +88,13 @@ type InternalMediaChunk = {
 	timestamp: number;
 	duration: number;
 	additions: Uint8Array | null;
+};
+
+type ClusterBlock = {
+	trackData: MatroskaTrackData;
+	chunk: InternalMediaChunk;
+	msTimestamp: number;
+	previousMsTimestamp: number | null; // Of the track's previous block
 };
 
 type MatroskaTrackData = {
@@ -121,6 +128,7 @@ type MatroskaTrackData = {
 		 * ADTS-wrapped data.
 		 */
 		requiresAdtsStripping: boolean;
+		codecDelay: number | null; // in seconds
 	};
 } | {
 	track: OutputSubtitleTrack;
@@ -157,12 +165,9 @@ export class MatroskaMuxer extends Muxer {
 	private segmentDuration: EBMLElement | null = null;
 	private cues: EBMLElement | null = null;
 
-	private currentCluster: EBMLElement | null = null;
+	private currentClusterBlocks: ClusterBlock[] = [];
 	private currentClusterStartMsTimestamp: number | null = null;
 	private currentClusterMaxMsTimestamp: number | null = null;
-	private trackDatasInCurrentCluster = new Map<MatroskaTrackData, {
-		firstMsTimestamp: number;
-	}>();
 
 	private startTimestamp = Infinity;
 	private endTimestamp = -Infinity;
@@ -307,11 +312,27 @@ export class MatroskaMuxer extends Muxer {
 		const segmentDuration: EBML = { id: EBMLId.Duration, data: new EBMLFloat64(0) };
 		this.segmentDuration = segmentDuration;
 
+		const creationDate = this.output._metadataTags.creationTime === undefined
+			? new Date()
+			: this.output._metadataTags.creationTime;
+		let dateUtc: EBML | null = null;
+
+		if (creationDate) {
+			const nanoseconds = 1_000_000n * BigInt(creationDate.getTime() - EBML_DATE_EPOCH);
+			if (BigInt.asIntN(64, nanoseconds) !== nanoseconds) {
+				throw new Error('creationTime is out of the range representable by Matroska files.');
+			}
+
+			// Signed 64-bit integer, two's complement
+			dateUtc = { id: EBMLId.DateUTC, size: 8, data: BigInt.asUintN(64, nanoseconds) };
+		}
+
 		const segmentInfo: EBML = { id: EBMLId.Info, data: [
 			{ id: EBMLId.TimestampScale, data: 1e6 },
+			!this.format._options.appendOnly ? segmentDuration : null,
+			dateUtc,
 			{ id: EBMLId.MuxingApp, data: VERSIONED_NAME },
 			{ id: EBMLId.WritingApp, data: VERSIONED_NAME },
-			!this.format._options.appendOnly ? segmentDuration : null,
 		] };
 		this.segmentInfo = segmentInfo;
 	}
@@ -333,18 +354,13 @@ export class MatroskaMuxer extends Muxer {
 				}
 			}
 
-			let seekPreRollNs = 0;
-			if (trackData.type === 'audio' && trackData.track.source._codec === 'opus') {
-				seekPreRollNs = 1e6 * 80; // In "Matroska ticks" (nanoseconds)
-
-				const description = trackData.info.decoderConfig.description;
-				if (description) {
-					const bytes = toUint8Array(description);
-					const header = parseOpusIdentificationHeader(bytes);
-
-					// Use the preSkip value from the header
-					seekPreRollNs = Math.round(1e9 * (header.preSkip / OPUS_SAMPLE_RATE));
-				}
+			let seekPreRollNs = 0; // In "Matroska ticks" (nanoseconds)
+			if (trackData.type === 'audio') {
+				const preRollDuration = getAudioPreRollDuration(
+					trackData.track.source._codec,
+					trackData.info.decoderConfig,
+				);
+				seekPreRollNs = Math.round(1e9 * preRollDuration);
 			}
 
 			tracksElement.data.push({ id: EBMLId.TrackEntry, data: [
@@ -374,6 +390,9 @@ export class MatroskaMuxer extends Muxer {
 				{ id: EBMLId.CodecID, data: codecId },
 				trackData.codecPrivate
 					? { id: EBMLId.CodecPrivate, data: toUint8Array(trackData.codecPrivate) }
+					: null,
+				trackData.type === 'audio' && trackData.info.codecDelay
+					? { id: EBMLId.CodecDelay, data: Math.round(1e9 * trackData.info.codecDelay) }
 					: null,
 				seekPreRollNs > 0 ? { id: EBMLId.SeekPreRoll, data: seekPreRollNs } : null,
 				trackData.track.metadata.name !== undefined
@@ -615,7 +634,8 @@ export class MatroskaMuxer extends Muxer {
 				}; break;
 
 				case 'images':
-				case 'raw': {
+				case 'raw':
+				case 'creationTime': {
 					// Handled elsewhere
 				}; break;
 
@@ -932,6 +952,7 @@ export class MatroskaMuxer extends Muxer {
 				sampleRate: meta.decoderConfig.sampleRate,
 				decoderConfig,
 				requiresAdtsStripping,
+				codecDelay: null,
 			},
 			chunkQueue: [],
 			lastWrittenMsTimestamp: null,
@@ -1048,7 +1069,15 @@ export class MatroskaMuxer extends Muxer {
 			const isKeyFrame = packet.type === 'key';
 			this.validateTimestamp(trackData.track, packet.timestamp, isKeyFrame);
 
-			const audioChunk = this.createInternalChunk(packetData, packet.timestamp, packet.duration, packet.type);
+			// A negative start (like from encoder priming) is expressed this way.
+			trackData.info.codecDelay ??= Math.max(-packet.timestamp, 0);
+
+			const audioChunk = this.createInternalChunk(
+				packetData,
+				packet.timestamp + trackData.info.codecDelay,
+				packet.duration,
+				packet.type,
+			);
 			trackData.chunkQueue.push(audioChunk);
 			await this.interleaveChunks();
 		} finally {
@@ -1120,7 +1149,7 @@ export class MatroskaMuxer extends Muxer {
 			}
 
 			const chunk = trackWithMinTimestamp.chunkQueue.shift()!;
-			this.writeBlock(trackWithMinTimestamp, chunk);
+			this.addBlock(trackWithMinTimestamp, chunk);
 		}
 
 		if (!isFinalCall) {
@@ -1195,8 +1224,8 @@ export class MatroskaMuxer extends Muxer {
 		return internalChunk;
 	}
 
-	/** Writes a block containing media data to the file. */
-	private writeBlock(trackData: MatroskaTrackData, chunk: InternalMediaChunk) {
+	/** Adds a block containing media data to the current cluster. */
+	private addBlock(trackData: MatroskaTrackData, chunk: InternalMediaChunk) {
 		// Due to the interlacing algorithm, this code will be run once we've seen one chunk from every media track.
 		if (!this.segment) {
 			this.createSegment();
@@ -1220,10 +1249,9 @@ export class MatroskaMuxer extends Muxer {
 		});
 
 		let shouldCreateNewCluster = false;
-		if (!this.currentCluster) {
+		if (this.currentClusterStartMsTimestamp === null) {
 			shouldCreateNewCluster = true;
 		} else {
-			assert(this.currentClusterStartMsTimestamp !== null);
 			assert(this.currentClusterMaxMsTimestamp !== null);
 
 			const relativeTimestamp = msTimestamp - this.currentClusterStartMsTimestamp;
@@ -1243,7 +1271,7 @@ export class MatroskaMuxer extends Muxer {
 		}
 
 		if (shouldCreateNewCluster) {
-			this.createNewCluster(msTimestamp);
+			this.startNewCluster(msTimestamp);
 		}
 
 		const relativeTimestamp = msTimestamp - this.currentClusterStartMsTimestamp!;
@@ -1261,137 +1289,157 @@ export class MatroskaMuxer extends Muxer {
 			return;
 		}
 
-		const prelude = new Uint8Array(4);
-		const view = new DataView(prelude.buffer);
-		// 0x80 to indicate it's the last byte of a multi-byte number
-		view.setUint8(0, 0x80 | trackData.track.id);
-		view.setInt16(1, relativeTimestamp, false);
-
-		const msDuration = Math.round(1000 * chunk.duration);
-
-		// Subtitle cues need an explicit BlockDuration (a SimpleBlock has none)
-		const needsBlockGroup = !!chunk.additions || trackData.type === 'subtitle';
-
-		if (!needsBlockGroup) {
-			// No additions, we can write out a SimpleBlock
-			view.setUint8(3, Number(chunk.type === 'key') << 7); // Flags (keyframe flag only present for SimpleBlock)
-
-			const simpleBlock = { id: EBMLId.SimpleBlock, data: [
-				prelude,
-				chunk.data,
-			] };
-			this.ebmlWriter.writeEBML(simpleBlock);
-		} else {
-			const blockGroup = { id: EBMLId.BlockGroup, data: [
-				{ id: EBMLId.Block, data: [
-					prelude,
-					chunk.data,
-				] },
-				chunk.type === 'delta'
-					? {
-							id: EBMLId.ReferenceBlock,
-							data: new EBMLSignedInt(trackData.lastWrittenMsTimestamp! - msTimestamp),
-						}
-					: null,
-				chunk.additions
-					? { id: EBMLId.BlockAdditions, data: [
-							{ id: EBMLId.BlockMore, data: [
-								{ id: EBMLId.BlockAddID, data: 1 }, // Some players expect BlockAddID to come first
-								{ id: EBMLId.BlockAdditional, data: chunk.additions },
-							] },
-						] }
-					: null,
-				msDuration > 0 ? { id: EBMLId.BlockDuration, data: msDuration } : null,
-			] };
-			this.ebmlWriter.writeEBML(blockGroup);
-		}
+		this.currentClusterBlocks.push({
+			trackData,
+			chunk,
+			msTimestamp,
+			previousMsTimestamp: trackData.lastWrittenMsTimestamp,
+		});
 
 		this.startTimestamp = Math.min(this.startTimestamp, msTimestamp);
-		this.endTimestamp = Math.max(this.endTimestamp, msTimestamp + msDuration);
+		this.endTimestamp = Math.max(this.endTimestamp, msTimestamp + Math.round(1000 * chunk.duration));
 		trackData.lastWrittenMsTimestamp = msTimestamp;
 
-		if (!this.trackDatasInCurrentCluster.has(trackData)) {
-			this.trackDatasInCurrentCluster.set(trackData, {
-				firstMsTimestamp: msTimestamp,
-			});
-		}
 		this.currentClusterMaxMsTimestamp = Math.max(this.currentClusterMaxMsTimestamp!, msTimestamp);
 	}
 
-	/** Creates a new Cluster element to contain media chunks. */
-	private createNewCluster(msTimestamp: number) {
-		msTimestamp = Math.max(0, msTimestamp); // Cluster timestamps cannot be negative
-
-		if (this.currentCluster) {
-			this.finalizeCurrentCluster();
+	/** Writes out the current cluster, if any, and begins a new one. */
+	private startNewCluster(msTimestamp: number) {
+		if (this.currentClusterStartMsTimestamp !== null) {
+			this.writeCurrentCluster();
 		}
+
+		const clusterMsTimestamp = Math.max(0, msTimestamp); // Cluster timestamps cannot be negative
+		this.currentClusterStartMsTimestamp = clusterMsTimestamp;
+		this.currentClusterMaxMsTimestamp = clusterMsTimestamp;
+	}
+
+	/** Writes the current cluster with all of its blocks to the file. */
+	private writeCurrentCluster() {
+		assert(this.currentClusterStartMsTimestamp !== null);
+		const clusterMsTimestamp = this.currentClusterStartMsTimestamp;
+
+		const firstKeyBlockPerTrack = new Map<MatroskaTrackData, ClusterBlock>();
+		const lastBlockPerTrack = new Map<MatroskaTrackData, ClusterBlock>();
+
+		for (const block of this.currentClusterBlocks) {
+			if (block.chunk.type === 'key' && !firstKeyBlockPerTrack.has(block.trackData)) {
+				firstKeyBlockPerTrack.set(block.trackData, block);
+			}
+			lastBlockPerTrack.set(block.trackData, block);
+		}
+
+		const blockElements = new Map<ClusterBlock, EBML>();
+		for (const block of this.currentClusterBlocks) {
+			blockElements.set(block, this.createBlockElement(
+				block,
+				clusterMsTimestamp,
+				lastBlockPerTrack.get(block.trackData) === block,
+			));
+		}
+
+		const cluster: EBML = {
+			id: EBMLId.Cluster,
+			size: this.format._options.appendOnly ? -1 : CLUSTER_SIZE_BYTES,
+			data: [
+				{ id: EBMLId.Timestamp, data: clusterMsTimestamp },
+				...blockElements.values(),
+			],
+		};
 
 		if (this.format._options.onCluster) {
 			this.writer.startTrackingWrites();
 		}
 
-		this.currentCluster = {
-			id: EBMLId.Cluster,
-			size: this.format._options.appendOnly ? -1 : CLUSTER_SIZE_BYTES,
-			data: [
-				{ id: EBMLId.Timestamp, data: msTimestamp },
-			],
-		};
-		this.ebmlWriter.writeEBML(this.currentCluster);
-
-		this.currentClusterStartMsTimestamp = msTimestamp;
-		this.currentClusterMaxMsTimestamp = msTimestamp;
-		this.trackDatasInCurrentCluster.clear();
-	}
-
-	private finalizeCurrentCluster() {
-		assert(this.currentCluster);
-
-		if (!this.format._options.appendOnly) {
-			const clusterSize = this.writer.getPos() - this.ebmlWriter.dataOffsets.get(this.currentCluster)!;
-			const endPos = this.writer.getPos();
-
-			// Write the size now that we know it
-			this.writer.seek(this.ebmlWriter.offsets.get(this.currentCluster)! + 4);
-			this.ebmlWriter.writeVarInt(clusterSize, CLUSTER_SIZE_BYTES);
-			this.writer.seek(endPos);
-		}
+		this.ebmlWriter.writeEBML(cluster);
+		this.currentClusterBlocks = [];
 
 		if (this.format._options.onCluster) {
-			assert(this.currentClusterStartMsTimestamp !== null);
-
 			const { data, start } = this.writer.stopTrackingWrites();
-			this.format._options.onCluster(data, start, this.currentClusterStartMsTimestamp / 1000);
+			this.format._options.onCluster(data, start, clusterMsTimestamp / 1000);
 		}
 
-		const clusterOffsetFromSegment
-			= this.ebmlWriter.offsets.get(this.currentCluster)! - this.segmentDataOffset;
+		const clusterOffsetFromSegment = this.ebmlWriter.offsets.get(cluster)! - this.segmentDataOffset;
+		const clusterDataOffset = this.ebmlWriter.dataOffsets.get(cluster)!;
 
-		// Group tracks by their first timestamp and create a CuePoint for each unique timestamp
-		const groupedByTimestamp = new Map<number, MatroskaTrackData[]>();
-		for (const [trackData, { firstMsTimestamp }] of this.trackDatasInCurrentCluster) {
-			if (!groupedByTimestamp.has(firstMsTimestamp)) {
-				groupedByTimestamp.set(firstMsTimestamp, []);
+		// Group tracks by their first key packet's timestamp and create a CuePoint for each unique timestamp
+		const groupedByTimestamp = new Map<number, ClusterBlock[]>();
+		for (const block of firstKeyBlockPerTrack.values()) {
+			if (!groupedByTimestamp.has(block.msTimestamp)) {
+				groupedByTimestamp.set(block.msTimestamp, []);
 			}
-			groupedByTimestamp.get(firstMsTimestamp)!.push(trackData);
+			groupedByTimestamp.get(block.msTimestamp)!.push(block);
 		}
 
 		const groupedAndSortedByTimestamp = [...groupedByTimestamp.entries()].sort((a, b) => a[0] - b[0]);
 
 		// Add CuePoints to the Cues element for better seeking
-		for (const [msTimestamp, trackDatas] of groupedAndSortedByTimestamp) {
+		for (const [msTimestamp, blocks] of groupedAndSortedByTimestamp) {
 			assert(this.cues);
 			(this.cues.data as EBML[]).push({ id: EBMLId.CuePoint, data: [
 				{ id: EBMLId.CueTime, data: Math.max(0, msTimestamp) }, // CueTime is unsigned
-				// Create CueTrackPositions for each track that starts at this timestamp
-				...trackDatas.map((trackData) => {
+				// Create CueTrackPositions for each track whose first key packet is at this timestamp
+				...blocks.map((block) => {
+					const blockOffset = this.ebmlWriter.offsets.get(blockElements.get(block)!)!;
+
 					return { id: EBMLId.CueTrackPositions, data: [
-						{ id: EBMLId.CueTrack, data: trackData.track.id },
+						{ id: EBMLId.CueTrack, data: block.trackData.track.id },
 						{ id: EBMLId.CueClusterPosition, data: clusterOffsetFromSegment },
+						{ id: EBMLId.CueRelativePosition, data: blockOffset - clusterDataOffset },
 					] };
 				}),
 			] });
 		}
+	}
+
+	private createBlockElement(block: ClusterBlock, clusterMsTimestamp: number, isLastOfTrack: boolean): EBML {
+		const { trackData, chunk, msTimestamp } = block;
+
+		const prelude = new Uint8Array(4);
+		const view = new DataView(prelude.buffer);
+		// 0x80 to indicate it's the last byte of a multi-byte number
+		view.setUint8(0, 0x80 | trackData.track.id);
+		view.setInt16(1, msTimestamp - clusterMsTimestamp, false);
+
+		const msDuration = Math.round(1000 * chunk.duration);
+
+		// A SimpleBlock has no duration; readers infer it from the track's next block. So subtitle cues need an
+		// explicit BlockDuration, and so does the last block of each track in the cluster, which has no next block
+		// to infer it from
+		const needsBlockGroup = !!chunk.additions
+			|| trackData.type === 'subtitle'
+			|| (isLastOfTrack && msDuration > 0);
+
+		if (!needsBlockGroup) {
+			view.setUint8(3, Number(chunk.type === 'key') << 7); // Flags (keyframe flag only present for SimpleBlock)
+
+			return { id: EBMLId.SimpleBlock, data: [
+				prelude,
+				chunk.data,
+			] };
+		}
+
+		return { id: EBMLId.BlockGroup, data: [
+			{ id: EBMLId.Block, data: [
+				prelude,
+				chunk.data,
+			] },
+			chunk.type === 'delta'
+				? {
+						id: EBMLId.ReferenceBlock,
+						data: new EBMLSignedInt(block.previousMsTimestamp! - msTimestamp),
+					}
+				: null,
+			chunk.additions
+				? { id: EBMLId.BlockAdditions, data: [
+						{ id: EBMLId.BlockMore, data: [
+							{ id: EBMLId.BlockAddID, data: 1 }, // Some players expect BlockAddID to come first
+							{ id: EBMLId.BlockAdditional, data: chunk.additions },
+						] },
+					] }
+				: null,
+			msDuration > 0 ? { id: EBMLId.BlockDuration, data: msDuration } : null,
+		] };
 	}
 
 	// eslint-disable-next-line @typescript-eslint/no-misused-promises
@@ -1430,8 +1478,8 @@ export class MatroskaMuxer extends Muxer {
 		// Flush any remaining queued chunks to the file
 		await this.interleaveChunks(true);
 
-		if (this.currentCluster) {
-			this.finalizeCurrentCluster();
+		if (this.currentClusterStartMsTimestamp !== null) {
+			this.writeCurrentCluster();
 		}
 
 		assert(this.cues);

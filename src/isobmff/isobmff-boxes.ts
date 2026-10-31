@@ -26,6 +26,7 @@ import {
 	UNDETERMINED_LANGUAGE,
 	assertNever,
 	keyValueIterator,
+	toDataView,
 } from '../misc';
 import {
 	AudioCodec,
@@ -52,6 +53,7 @@ import {
 } from './isobmff-muxer';
 import {
 	buildDtsSpecificBox,
+	determineAudioPacketType,
 	parseAc3SyncFrame,
 	parseDtsFrame,
 	parseEac3SyncFrame,
@@ -700,6 +702,7 @@ export const stbl = (trackData: IsobmffTrackData) => {
 		stsz(trackData),
 		stco(trackData),
 		stss(trackData),
+		...sgpdAndSbgp(trackData.samples, false),
 	]);
 };
 
@@ -910,7 +913,8 @@ export const soundSampleDescription = (
 		}
 	}
 
-	if (trackData.muxer.isQuickTime) {
+	// TrueHD's sample entry is defined on top of version 0, with its own sample rate layout
+	if (trackData.muxer.isQuickTime && trackData.track.source._codec !== 'truehd') {
 		version = 1;
 	}
 
@@ -925,8 +929,12 @@ export const soundSampleDescription = (
 			u16(sampleSizeInBits), // Sample size (bits)
 			u16(0), // Compression ID
 			u16(0), // Packet size
-			u16(trackData.info.sampleRate < 2 ** 16 ? trackData.info.sampleRate : 0), // Sample rate (upper)
-			u16(0), // Sample rate (lower)
+			trackData.track.source._codec === 'truehd'
+				? u32(trackData.info.sampleRate) // TrueHD stores the sample rate as a plain integer
+				: [
+						u16(trackData.info.sampleRate < 2 ** 16 ? trackData.info.sampleRate : 0), // Sample rate (upper)
+						u16(0), // Sample rate (lower)
+					],
 		];
 	} else {
 		const compressionId = isPcmCodec ? 0 : -2;
@@ -1053,8 +1061,7 @@ export const enda = (trackData: IsobmffAudioTrackData) => {
 /** Opus Specific Box. */
 export const dOps = (trackData: IsobmffAudioTrackData) => {
 	let outputChannelCount = trackData.info.numberOfChannels;
-	// Default PreSkip, should be at least 80 milliseconds worth of playback, measured in 48000 Hz samples
-	let preSkip = 3840;
+	let preSkip = 312; // Default
 	let inputSampleRate = trackData.info.sampleRate;
 	let outputGain = 0;
 	let channelMappingFamily = 0;
@@ -1207,6 +1214,29 @@ const ddts = (trackData: IsobmffAudioTrackData) => {
 	return box('ddts', [...buildDtsSpecificBox(frameInfo)]);
 };
 
+/** MLPSpecificBox */
+const dmlp = (trackData: IsobmffAudioTrackData) => {
+	assert(trackData.info.primingPacket);
+
+	const data = trackData.info.primingPacket.data;
+	if (determineAudioPacketType('truehd', data) !== 'key') {
+		throw new Error(
+			'Couldn\'t extract TrueHD stream info from the audio packet. '
+			+ 'Ensure the first packet is an access unit carrying a major sync.',
+		);
+	}
+
+	const view = toDataView(data);
+	const formatInfo = view.getUint32(8);
+	const peakDataRate = view.getUint16(18) & 0x7fff;
+
+	return box('dmlp', [
+		u32(formatInfo), // Format info
+		u16(peakDataRate << 1), // Peak data rate (15 bits) + reserved (1 bit)
+		u32(0), // Reserved
+	]);
+};
+
 export const subtitleSampleDescription = (
 	compressionType: string,
 	trackData: IsobmffSubtitleTrackData,
@@ -1323,13 +1353,17 @@ export const ctts = (trackData: IsobmffTrackData) => {
  * Composition to Decode Box: Stores information about the composition and display times of the media samples.
  */
 export const cslg = (trackData: IsobmffTrackData) => {
+	assert(trackData.compositionTimeOffsetTable.length > 0);
+
+	if (trackData.samples.length === 0) {
+		// Happens when the moov is measured before any samples have been added
+		return null;
+	}
+
 	let leastDecodeToDisplayDelta = Infinity;
 	let greatestDecodeToDisplayDelta = -Infinity;
 	let compositionStartTime = Infinity;
 	let compositionEndTime = -Infinity;
-
-	assert(trackData.compositionTimeOffsetTable.length > 0);
-	assert(trackData.samples.length > 0);
 
 	for (let i = 0; i < trackData.compositionTimeOffsetTable.length; i++) {
 		const entry = trackData.compositionTimeOffsetTable[i]!;
@@ -1365,6 +1399,57 @@ export const cslg = (trackData: IsobmffTrackData) => {
 		i32(compositionStartTime), // Composition start time
 		i32(compositionEndTime), // Composition end time
 	]);
+};
+
+const sgpdAndSbgp = (samples: Sample[], inTrackFragment: boolean) => {
+	const entries: {
+		sampleCount: number;
+		prerollSamples: number;
+	}[] = [];
+
+	for (const sample of samples) {
+		if (entries.length === 0) {
+			entries.push({
+				sampleCount: 1,
+				prerollSamples: sample.prerollSamples,
+			});
+		} else {
+			const lastEntry = entries[entries.length - 1]!;
+
+			if (lastEntry.prerollSamples === sample.prerollSamples) {
+				lastEntry.sampleCount++;
+			} else {
+				entries.push({
+					sampleCount: 1,
+					prerollSamples: sample.prerollSamples,
+				});
+			}
+		}
+	}
+
+	const rollEntries = entries.filter(x => x.prerollSamples !== 0);
+	if (rollEntries.length === 0) {
+		return [];
+	}
+
+	let nextGroupIndex = inTrackFragment ? 0x10001 : 1;
+
+	return [
+		fullBox('sgpd', 1, 0, [
+			ascii('roll'), // Grouping type
+			u32(2), // Default length
+			u32(rollEntries.length), // Entry count
+			...rollEntries.map(x => i16(x.prerollSamples)),
+		]),
+		fullBox('sbgp', 0, 0, [
+			ascii('roll'), // Grouping type
+			u32(entries.length), // Entry count
+			...entries.map(x => [
+				u32(x.sampleCount), // Sample count
+				u32(x.prerollSamples !== 0 ? nextGroupIndex++ : 0), // Samples with no preroll belong to no group
+			]),
+		]),
+	];
 };
 
 /**
@@ -1429,6 +1514,7 @@ export const traf = (trackData: IsobmffTrackData) => {
 		tfhd(trackData),
 		tfdt(trackData),
 		trun(trackData),
+		...sgpdAndSbgp(trackData.currentChunk!.samples, true),
 	]);
 };
 
@@ -1661,6 +1747,10 @@ const addQuickTimeMetadataTagBoxes = (boxes: Box[], tags: MetadataTags) => {
 				// Handled later
 			}; break;
 
+			case 'creationTime': {
+				// Written in the header boxes
+			}; break;
+
 			case 'discNumber':
 			case 'discsTotal':
 			case 'trackNumber':
@@ -1705,6 +1795,10 @@ const DATA_BOX_MIME_TYPE_MAP: Record<string, number> = {
 	'image/png': 14,
 	'image/bmp': 27,
 };
+
+// FFmpeg parses these assuming a udta layout even when they're not in udta, so we simply skip these if we'd write them
+// to ilst metadata
+const ILST_UNSAFE_RAW_KEYS = new Set(['HMMT', 'loci', 'chpl']);
 
 /**
  * Generates key-value metadata for inclusion in the "meta" box.
@@ -1825,6 +1919,10 @@ const generateMetadataPairs = (tags: MetadataTags, isMdta: boolean) => {
 				// Handled later
 			}; break;
 
+			case 'creationTime': {
+				// Written in the header boxes
+			}; break;
+
 			default: assertNever(key);
 		}
 	}
@@ -1832,7 +1930,11 @@ const generateMetadataPairs = (tags: MetadataTags, isMdta: boolean) => {
 	if (tags.raw) {
 		for (const key in tags.raw) {
 			const value = tags.raw[key];
-			if (value == null || (!isMdta && key.length !== 4) || pairs.some(x => x.key === key)) {
+			if (
+				value == null
+				|| (!isMdta && (key.length !== 4 || ILST_UNSAFE_RAW_KEYS.has(key)))
+				|| pairs.some(x => x.key === key)
+			) {
 				continue;
 			}
 
@@ -1941,6 +2043,7 @@ const audioCodecToBoxName = (codec: AudioCodec, fullCodecString: string, isQuick
 		case 'ac3': return 'ac-3';
 		case 'eac3': return 'ec-3';
 		case 'dts': return fullCodecString;
+		case 'truehd': return 'mlpa';
 	}
 
 	// Logic diverges here
@@ -1983,6 +2086,7 @@ const audioCodecToConfigurationBox = (codec: AudioCodec, isQuickTime: boolean) =
 		case 'ac3': return dac3;
 		case 'eac3': return dec3;
 		case 'dts': return ddts;
+		case 'truehd': return dmlp;
 	}
 
 	// Logic diverges here

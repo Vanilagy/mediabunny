@@ -78,6 +78,7 @@ export enum EBMLId {
 	Duration = 0x4489,
 	Info = 0x1549a966,
 	TimestampScale = 0x2ad7b1,
+	DateUTC = 0x4461,
 	MuxingApp = 0x4d80,
 	WritingApp = 0x5741,
 	Tracks = 0x1654ae6b,
@@ -129,6 +130,7 @@ export enum EBMLId {
 	CueTrackPositions = 0xb7,
 	CueTrack = 0xf7,
 	CueClusterPosition = 0xf1,
+	CueRelativePosition = 0xf0,
 	Colour = 0x55b0,
 	MatrixCoefficients = 0x55b1,
 	TransferCharacteristics = 0x55ba,
@@ -470,6 +472,7 @@ export class EBMLWriter {
 	}
 }
 
+export const EBML_DATE_EPOCH = Date.UTC(2001, 0, 1); // In milliseconds since the Unix epoch
 export const MAX_VAR_INT_SIZE = 8;
 export const MIN_HEADER_SIZE = 2; // 1-byte ID and 1-byte size
 export const MAX_HEADER_SIZE = 2 * MAX_VAR_INT_SIZE; // 8-byte ID and 8-byte size
@@ -579,6 +582,15 @@ export const readSignedInt = (slice: FileSlice, width: number) => {
 	}
 
 	return value;
+};
+
+export const readSignedBigInt = (slice: FileSlice, width: number) => {
+	// Zero width is valid and means zero
+	if (width === 0) {
+		return 0n;
+	}
+
+	return BigInt.asIntN(8 * width, readUnsignedBigInt(slice, width));
 };
 
 export const readElementId = (slice: FileSlice) => {
@@ -758,6 +770,7 @@ export const CODEC_STRING_MAP: Partial<Record<MediaCodec, string>> = {
 	'ac3': 'A_AC3',
 	'eac3': 'A_EAC3',
 	'dts': 'A_DTS',
+	'truehd': 'A_TRUEHD',
 	'pcm-u8': 'A_PCM/INT/LIT',
 	'pcm-s16': 'A_PCM/INT/LIT',
 	'pcm-s16be': 'A_PCM/INT/BIG',

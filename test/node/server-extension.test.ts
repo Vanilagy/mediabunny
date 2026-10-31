@@ -1795,6 +1795,16 @@ describe('Audio', async () => {
 	/** A DTS bitrate that clears the encoder's per-frame minimum at the 48 kHz stereo the tests here use. */
 	const DTS_BITRATE = 768000;
 
+	// In samples, as signaled by FFmpeg's encoders through negative packet timestamps
+	const PRIMING_DELAYS: Partial<Record<AudioCodec, number>> = {
+		aac: 1024,
+		opus: 312,
+		mp3: 1105,
+		vorbis: 128,
+		ac3: 256,
+		eac3: 256,
+	};
+
 	test('Decoder lifecycle', async () => {
 		using input = new Input({
 			source: new FilePathSource('./test/public/trim-buck-bunny-ffmpeg.ts'),
@@ -1885,7 +1895,7 @@ describe('Audio', async () => {
 			expect(packet.type).toBe('key');
 
 			if (packetCount === 0) {
-				expect(packet.timestamp).toBe(0);
+				expect(packet.timestamp).toBe(-1024 / 48000); // Due to priming delay!
 
 				expect(meta.decoderConfig).toBeDefined();
 				expect(meta.decoderConfig!.codec).toBe('mp4a.40.2');
@@ -2140,6 +2150,26 @@ describe('Audio', async () => {
 		});
 	});
 
+	test('TrueHD encode & decode', async () => {
+		await encodeDecodeTest('truehd', {}, async (packet, meta, i) => {
+			// libav's encoder writes a major sync every 16 access units
+			expect(packet.type).toBe(i % 16 === 0 ? 'key' : 'delta');
+			expect(packet.duration).toBeCloseTo(40 / 48000);
+
+			if (i === 0) {
+				expect(meta.decoderConfig).toBeDefined();
+				expect(meta.decoderConfig!.codec).toBe('mlpa');
+				expect(meta.decoderConfig!.numberOfChannels).toBe(2);
+				expect(meta.decoderConfig!.sampleRate).toBe(48000);
+				expect(meta.decoderConfig!.description).toBeUndefined();
+			}
+		}, async (sample) => {
+			expect(sample.numberOfChannels).toBe(2);
+			expect(sample.sampleRate).toBe(48000);
+			expect(sample.duration).toBeCloseTo(40 / 48000);
+		});
+	});
+
 	for (const codec of NON_PCM_AUDIO_CODECS) {
 		test(`${codec} encode & decode, negative timestamps`, async () => {
 			await timestampTest(codec, -1);
@@ -2163,10 +2193,11 @@ describe('Audio', async () => {
 
 		// The harness' default bitrate is below what DTS needs to fit its per-channel side info into a frame
 		const extraConfig = codec === 'dts' ? { bitrate: DTS_BITRATE } : {};
+		const primingDelay = (PRIMING_DELAYS[codec] ?? 0) / 48000;
 
 		await encodeDecodeTest(codec, extraConfig, async (packet, _meta, i) => {
 			if (i === 0) {
-				expect(packet.timestamp).toBe(startTimestamp);
+				expect(packet.timestamp).toBe(startTimestamp - primingDelay);
 			} else if (testDuration) {
 				expect(packet.timestamp).toBeCloseTo(previousPacket!.timestamp + previousPacket!.duration);
 			}
@@ -2174,7 +2205,9 @@ describe('Audio', async () => {
 		}, async (sample, i) => {
 			if (i === 0) {
 				if (testSampleStart) {
-					expect(sample.timestamp).toBe(startTimestamp);
+					// The decoder discards Opus' pre-skip itself
+					const expectedDelay = codec === 'opus' ? 0 : primingDelay;
+					expect(sample.timestamp).toBe(startTimestamp - expectedDelay);
 				}
 			} else if (testDuration) {
 				expect(sample.timestamp).toBeCloseTo(previousSample!.timestamp + previousSample!.duration);
@@ -2353,6 +2386,10 @@ describe('Audio', async () => {
 		await conversionRoundtrip('eac3');
 	});
 
+	test('TrueHD conversion roundtrip', async () => {
+		await conversionRoundtrip('truehd');
+	});
+
 	const conversionRoundtrip = async (codec: AudioCodec) => {
 		using input = new Input({
 			source: new FilePathSource('./test/public/trim-buck-bunny-ffmpeg.ts'),
@@ -2475,5 +2512,38 @@ describe('Audio', async () => {
 		const plane = new Float32Array(u8.buffer, u8.byteOffset, numberOfFrames * numberOfChannels);
 		expect(plane[0]).toBe(data[0]);
 		expect(plane[1]).toBe(data[1]);
+	});
+
+	// This used to fail/crash because the buffer wasn't being reallocated
+	test('toAvFrame with growing AudioSamples into a reused frame', async () => {
+		using frame = new NodeAv.Frame();
+		frame.alloc();
+
+		using smallSample = new AudioSample({
+			data: createF32SineWave(48000, 2, 1024 / 48000),
+			format: 'f32',
+			timestamp: 0,
+			numberOfChannels: 2,
+			sampleRate: 48000,
+		});
+		await toAvFrame(smallSample, frame);
+
+		const largeData = new Float32Array(2 * 48000).fill(0.25);
+		using largeSample = new AudioSample({
+			data: largeData,
+			format: 'f32',
+			timestamp: 1,
+			numberOfChannels: 2,
+			sampleRate: 48000,
+		});
+		await toAvFrame(largeSample, frame);
+
+		expect(frame.nbSamples).toBe(48000);
+		expect(frame.linesize[0]).toBeGreaterThanOrEqual(largeData.byteLength);
+
+		assert(frame.data);
+		const u8 = toUint8Array(frame.data[0]!);
+		const plane = new Float32Array(u8.buffer, u8.byteOffset, largeData.length);
+		expect(plane[plane.length - 1]).toBe(0.25);
 	});
 });

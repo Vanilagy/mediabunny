@@ -1,7 +1,7 @@
 {
   "name": "@mediabunny/mp3-encoder",
   "author": "Vanilagy",
-  "version": "1.62.1",
+  "version": "1.65.0",
   "description": "MP3 encoder extension for Mediabunny, based on LAME.",
   "main": "./dist/bundles/mediabunny-mp3-encoder.mjs",
   "module": "./dist/bundles/mediabunny-mp3-encoder.mjs",
@@ -15,6 +15,7 @@
     "README.md",
     "package.json",
     "LICENSE",
+    "licenses",
     "dist",
     "src"
   ],

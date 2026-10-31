@@ -233,17 +233,17 @@ test('Opus start offset and end trimming survive a demux-mux roundtrip', async (
 	expect(second.packets.map(toTiming)).toEqual(first.packets.map(toTiming));
 	expect(second.duration).toBe(first.duration);
 
-	// A stream starting at zero has the pre-skip precede it, which is reflected in a shortened first packet
-	const fromZero = await demux(await mux(packets.map((packet, i) => new EncodedPacket(
+	// A standard stream starts at -preSkip, such that the audible part begins at zero
+	const standard = await demux(await mux(packets.map((packet, i) => new EncodedPacket(
 		packet.data,
 		'key',
-		i * SAMPLES_PER_FRAME / SAMPLE_RATE,
+		(i * SAMPLES_PER_FRAME - PRE_SKIP) / SAMPLE_RATE,
 		SAMPLES_PER_FRAME / SAMPLE_RATE,
 	))));
 
-	expect(fromZero.packets[0]!.timestamp).toBe(0);
-	expect(fromZero.packets[0]!.duration).toBe((SAMPLES_PER_FRAME - PRE_SKIP) / SAMPLE_RATE);
-	expect(fromZero.duration).toBe((packetCount * SAMPLES_PER_FRAME - PRE_SKIP) / SAMPLE_RATE);
+	expect(standard.packets[0]!.timestamp).toBe(-PRE_SKIP / SAMPLE_RATE);
+	expect(standard.packets[0]!.duration).toBe(SAMPLES_PER_FRAME / SAMPLE_RATE);
+	expect(standard.duration).toBe((packetCount * SAMPLES_PER_FRAME - PRE_SKIP) / SAMPLE_RATE);
 });
 
 test('Granule positions of full pages', async () => {

@@ -10,6 +10,7 @@ import {
 } from 'mediabunny';
 import { registerAc3Decoder } from '@mediabunny/ac3';
 import { registerDtsDecoder } from '@mediabunny/dts';
+import { registerTrueHdDecoder } from '@mediabunny/truehd';
 import { registerProresDecoder } from '@mediabunny/prores';
 
 import SampleFileUrl from '../../docs/assets/big-buck-bunny-trimmed.mp4';
@@ -17,6 +18,7 @@ import SampleFileUrl from '../../docs/assets/big-buck-bunny-trimmed.mp4';
 // Enable codecs that aren't natively supported by WebCodecs.
 registerAc3Decoder();
 registerDtsDecoder();
+registerTrueHdDecoder();
 registerProresDecoder();
 
 (document.querySelector('#sample-file-download') as HTMLAnchorElement).href = SampleFileUrl;
@@ -250,7 +252,7 @@ const initMediaPlayer = async (resource: File | string) => {
 			const interval = Math.min(...nonNullIntervals);
 			liveDot.style.display = '';
 			liveDot.onclick = () => {
-				void seekToTime(endTimestamp - interval * 1.5);
+				void seekToTime(endTimestamp - 2 * interval);
 			};
 
 			const scheduleLiveRefresh = () => {

@@ -58,6 +58,12 @@ export type MetadataTags = {
 	comment?: string;
 	/** Embedded images such as cover art, booklet scans, artwork or preview frames. */
 	images?: AttachedImage[];
+	/** The time at which the media file itself was created.
+	 *
+	 * When writing, leaving this field undefined will write the current date and time to the formats that support this
+	 * field. If you don't want to write this info, set this field to `null` instead.
+	 */
+	creationTime?: Date | null;
 	/**
 	 * The raw, underlying metadata tags.
 	 *
@@ -75,7 +81,8 @@ export type MetadataTags = {
 	 * values. Additionally, all attached files (such as font files) are included here, where the key corresponds to
 	 * the FileUID and the value is an {@link AttachedFile}.
 	 * - MP3: The ID3v2 tags, or a single `'TAG'` key with the contents of the ID3v1 tag. The ID3v2 `'TXXX'`
-	 * user-defined text frames are exposed as a `Record<string, string>`.
+	 * user-defined text frames are exposed as a `Record<string, string>`. If a non-text frame exists more than once,
+	 * a array of `Uint8Array` is used instead.
 	 * - ADTS: The ID3v2 tags, just like in MP3.
 	 * - Ogg: The key-value string pairs from the Vorbis-style comment header (see RFC 7845, Section 5.2).
 	 * Additionally, the `'vendor'` key refers to the vendor string within this header. If a key exists more than once,
@@ -87,7 +94,10 @@ export type MetadataTags = {
 	 * for MP3.
 	 * - MPEG-TS: Not supported.
 	*/
-	raw?: Record<string, string | string[] | Uint8Array | RichImageData | AttachedFile | Record<string, string> | null>;
+	raw?: Record<
+		string,
+		string | string[] | Uint8Array | Uint8Array[] | RichImageData | AttachedFile | Record<string, string> | null
+	>;
 };
 
 /**
@@ -209,6 +219,13 @@ export const validateMetadataTags = (tags: MetadataTags) => {
 		throw new TypeError('tags.date, when provided, must be a valid Date.');
 	}
 	if (
+		tags.creationTime !== undefined
+		&& tags.creationTime !== null
+		&& (!(tags.creationTime instanceof Date) || Number.isNaN(tags.creationTime.getTime()))
+	) {
+		throw new TypeError('tags.creationTime, when provided, must be a valid Date or null.');
+	}
+	if (
 		tags.beatsPerMinute !== undefined
 		&& (!Number.isInteger(tags.beatsPerMinute) || tags.beatsPerMinute <= 0)
 	) {
@@ -250,13 +267,14 @@ export const validateMetadataTags = (tags: MetadataTags) => {
 				&& typeof value !== 'string'
 				&& !(Array.isArray(value) && value.every(x => typeof x === 'string'))
 				&& !(value instanceof Uint8Array)
+				&& !(Array.isArray(value) && value.every(x => x instanceof Uint8Array))
 				&& !(value instanceof RichImageData)
 				&& !(value instanceof AttachedFile)
 				&& !isRecordStringString(value)
 			) {
 				throw new TypeError(
-					'Each value in tags.raw must be a string, string array, Uint8Array, RichImageData, AttachedFile, '
-					+ 'Record<string, string>, or null.',
+					'Each value in tags.raw must be a string, string array, Uint8Array, Uint8Array array,'
+					+ ' RichImageData, AttachedFile, Record<string, string>, or null.',
 				);
 			}
 		}

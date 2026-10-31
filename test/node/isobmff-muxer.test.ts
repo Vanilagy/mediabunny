@@ -597,3 +597,126 @@ const findBtrtBoxes = (bytes: Uint8Array) => {
 
 	return boxes;
 };
+
+test('Chunks written in chronological order, no Fast Start', async () => {
+	await testChunkOrder(false);
+});
+
+test('Chunks written in chronological order, in-memory Fast Start', async () => {
+	await testChunkOrder('in-memory');
+});
+
+test('Chunks written in chronological order, reserved Fast Start', async () => {
+	await testChunkOrder('reserve');
+});
+
+const testChunkOrder = async (fastStart: false | 'in-memory' | 'reserve') => {
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart }),
+		target: new BufferTarget(),
+	});
+
+	const videoSource = new EncodedVideoPacketSource('vp8');
+	const audioSource = new EncodedAudioPacketSource('mp3');
+	output.addVideoTrack(videoSource, { maximumPacketCount: 1000 });
+	output.addAudioTrack(audioSource, { maximumPacketCount: 1000 });
+
+	await output.start();
+
+	// Add all video before all audio, so the muxer can't just write chunks in the order they complete
+	const videoMeta = { decoderConfig: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 } };
+	for (let i = 0; i < 150; i++) {
+		const packet = new EncodedPacket(new Uint8Array(8), i === 0 ? 'key' : 'delta', i / 30, 1 / 30);
+		await videoSource.add(packet, videoMeta);
+	}
+
+	const audioMeta = { decoderConfig: { codec: 'mp3', numberOfChannels: 2, sampleRate: 48000 } };
+	for (let i = 0; i < 200; i++) {
+		const packet = new EncodedPacket(new Uint8Array(8), 'key', 0.01 + 1152 * i / 48000, 1152 / 48000);
+		await audioSource.add(packet, audioMeta);
+	}
+
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	// Packet data read from a BufferSource is a view into the file, so its byte offset is its position in the file
+	const packets: { trackIndex: number; timestamp: number; offset: number }[] = [];
+	const tracks = await input.getTracks();
+	for (let i = 0; i < tracks.length; i++) {
+		for await (const packet of new EncodedPacketSink(tracks[i]!).packets()) {
+			packets.push({
+				trackIndex: i,
+				timestamp: packet.timestamp,
+				offset: packet.data.byteOffset,
+			});
+		}
+	}
+
+	expect(packets).toHaveLength(350);
+	const packetsInFileOrder = packets.sort((a, b) => a.offset - b.offset);
+
+	const chunkStartTimestamps: number[] = [];
+	for (let i = 0; i < packetsInFileOrder.length; i++) {
+		if (i === 0 || packetsInFileOrder[i]!.trackIndex !== packetsInFileOrder[i - 1]!.trackIndex) {
+			chunkStartTimestamps.push(packetsInFileOrder[i]!.timestamp);
+		}
+	}
+
+	expect(chunkStartTimestamps.length).toBeGreaterThan(10);
+	expect(chunkStartTimestamps).toEqual([...chunkStartTimestamps].sort((a, b) => a - b));
+};
+
+test('Reserved Fast Start rejects a maximum packet count beyond u32', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart: 'reserve' }),
+		target: new BufferTarget(),
+	});
+	output.addVideoTrack(new EncodedVideoPacketSource('vp8'), { maximumPacketCount: 2 ** 32 });
+
+	await expect(output.start()).rejects.toThrow('exceeds the maximum');
+});
+
+// This used to cause an assertion failure in the box writing code
+test('Reserved Fast Start with a B-frame GOP completed before all tracks are known', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart: 'reserve' }),
+		target: new BufferTarget(),
+	});
+
+	const videoSource = new EncodedVideoPacketSource('vp8');
+	const audioSource = new EncodedAudioPacketSource('mp3');
+	output.addVideoTrack(videoSource, { maximumPacketCount: 100 });
+	output.addAudioTrack(audioSource, { maximumPacketCount: 100 });
+
+	await output.start();
+
+	const videoMeta = { decoderConfig: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 } };
+	const videoTimestamps = [0, 0.2, 0.1, 0.3];
+	for (let i = 0; i < videoTimestamps.length; i++) {
+		const type = i === 0 || i === 3 ? 'key' : 'delta';
+		await videoSource.add(new EncodedPacket(new Uint8Array(8), type, videoTimestamps[i]!, 0.1), videoMeta);
+	}
+
+	const audioMeta = { decoderConfig: { codec: 'mp3', numberOfChannels: 2, sampleRate: 48000 } };
+	await audioSource.add(new EncodedPacket(new Uint8Array(8), 'key', 0, 1152 / 48000), audioMeta);
+
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	const timestamps: number[] = [];
+	for await (const packet of new EncodedPacketSink(videoTrack).packets()) {
+		timestamps.push(packet.timestamp);
+	}
+	expect(timestamps).toEqual(videoTimestamps);
+});

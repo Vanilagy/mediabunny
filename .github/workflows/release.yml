@@ -80,6 +80,11 @@ jobs:
           packages/dts/dist/bundles/mediabunny-dts.mjs
           packages/dts/dist/bundles/mediabunny-dts.min.mjs
           packages/dts/dist/mediabunny-dts.d.ts
+          packages/truehd/dist/bundles/mediabunny-truehd.js
+          packages/truehd/dist/bundles/mediabunny-truehd.min.js
+          packages/truehd/dist/bundles/mediabunny-truehd.mjs
+          packages/truehd/dist/bundles/mediabunny-truehd.min.mjs
+          packages/truehd/dist/mediabunny-truehd.d.ts
           packages/aac-encoder/dist/bundles/mediabunny-aac-encoder.js
           packages/aac-encoder/dist/bundles/mediabunny-aac-encoder.min.js
           packages/aac-encoder/dist/bundles/mediabunny-aac-encoder.mjs

@@ -947,6 +947,8 @@ export class UrlSource extends PathedSource {
 
 	/** @internal */
 	private async _runWorker(worker: ReadWorker) {
+		let consecutiveEmptyResponses = 0;
+
 		// The outer loop is for resuming a request if it dies mid-response
 		while (true) {
 			if (worker.aborted) {
@@ -1062,6 +1064,7 @@ export class UrlSource extends PathedSource {
 			}
 
 			const reader = response.body.getReader();
+			const responseStartPos = worker.currentPos;
 
 			while (true) {
 				if (worker.currentPos >= worker.targetPos || worker.aborted) {
@@ -1109,6 +1112,24 @@ export class UrlSource extends PathedSource {
 						// The response stopped early, before the target. This can happen if server decides to cap range
 						// requests arbitrarily, even if the request had an uncapped end. In this case, let's fetch the
 						// rest of the data using a new request.
+
+						if (worker.currentPos > responseStartPos) {
+							// Response still moved us forward; keep going immediately
+							consecutiveEmptyResponses = 0;
+							break;
+						}
+
+						// The response didn't get us any further, so back off instead of hammering the server
+						consecutiveEmptyResponses++;
+						const error = new Error('Range response ended without delivering any data.');
+						const retryDelayInSeconds = this._getRetryDelay(consecutiveEmptyResponses, error, this._url);
+						if (retryDelayInSeconds === null) {
+							throw error;
+						}
+
+						Logging._error('Retrying range request that ended without delivering any data.');
+						await wait(1000 * retryDelayInSeconds);
+
 						break;
 					} else {
 						// Assume we have simply reached the end of the resource

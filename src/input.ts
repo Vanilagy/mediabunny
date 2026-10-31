@@ -87,7 +87,10 @@ export type InputEvents = {
 	source: {
 		/** The loaded source. */
 		source: Source;
-		/** The request that led to loading this source, or `null` if the input is not pathed. */
+		/**
+		 * The request that led to loading this source. Can be `null` if the input is not pathed or the root
+		 * was requested.
+		 */
 		request: SourceRequest | null;
 		/** Whether the source is the root file of the media. */
 		isRoot: boolean;

@@ -90,6 +90,8 @@ export class AvFrameAudioSampleResource extends AudioSampleResource {
 }
 
 export const copyAudioSampleToAvFrame = (sample: AudioSample, frame: NodeAv.Frame) => {
+	frame.unref();
+
 	frame.format = fromAudioSampleFormat(sample.format);
 	frame.nbSamples = sample.numberOfFrames;
 	frame.sampleRate = sample.sampleRate;

@@ -256,8 +256,17 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 			// It's a text frame, let's decode as text
 			tags.raw[frame.id] ??= reader.readId3V2EncodingAndText(frameEndPos);
 		} else {
-			// For the others, let's just get the bytes
-			tags.raw[frame.id] ??= reader.readBytes(frameEndPos - reader.pos);
+			// For the others, let's just get the bytes. Frames that appear more than once are collected into an array.
+			const bytes = reader.readBytes(frameEndPos - reader.pos);
+			const existing = tags.raw[frame.id];
+
+			if (existing instanceof Uint8Array) {
+				tags.raw[frame.id] = [existing, bytes];
+			} else if (Array.isArray(existing)) {
+				(existing as Uint8Array[]).push(bytes);
+			} else {
+				tags.raw[frame.id] ??= bytes;
+			}
 		}
 
 		reader.pos = frameStartPos;
@@ -789,6 +798,10 @@ export class Id3V2Writer {
 					// Handled later
 				}; break;
 
+				case 'creationTime': {
+					// Not supported in ID3
+				}; break;
+
 				default: {
 					assertNever(key);
 				}
@@ -802,8 +815,9 @@ export class Id3V2Writer {
 					continue;
 				}
 
-				let bytes: Uint8Array;
+				let frames: Uint8Array[];
 				if (typeof value === 'string') {
+					let bytes: Uint8Array;
 					const useIso88591 = isIso88591Compatible(value);
 					if (useIso88591) {
 						bytes = new Uint8Array(value.length + 2);
@@ -819,8 +833,13 @@ export class Id3V2Writer {
 						bytes.set(encoded, 1);
 						// Last byte is the null terminator
 					}
+
+					frames = [bytes];
 				} else if (value instanceof Uint8Array) {
-					bytes = value;
+					frames = [value];
+				} else if (Array.isArray(value) && value.every(x => x instanceof Uint8Array)) {
+					// Write one frame per element
+					frames = value;
 				} else if (key === 'TXXX' && isRecordStringString(value)) {
 					for (const description in value) {
 						const frameValue = value[description]!;
@@ -853,10 +872,12 @@ export class Id3V2Writer {
 					continue;
 				}
 
-				this.writeAscii(key);
-				this.writeSynchsafeU32(bytes.byteLength);
-				this.writeU16(0x0000);
-				this.writer.write(bytes);
+				for (const bytes of frames) {
+					this.writeAscii(key);
+					this.writeSynchsafeU32(bytes.byteLength);
+					this.writeU16(0x0000);
+					this.writer.write(bytes);
+				}
 			}
 		}
 

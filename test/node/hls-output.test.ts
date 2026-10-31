@@ -1,12 +1,15 @@
 import { expect, test, vi } from 'vitest';
 import { Output, OutputTrackGroup } from '../../src/output.js';
 import {
+	AdtsOutputFormat,
 	CmafOutputFormat,
 	HlsOutputFormat,
 	HlsOutputFormatOptions,
 	HlsOutputSegmentInfo,
+	Mp3OutputFormat,
 	Mp4OutputFormat,
 	MpegTsOutputFormat,
+	WavOutputFormat,
 } from '../../src/output-format.js';
 import {
 	AppendOnlyStreamTarget,
@@ -22,7 +25,7 @@ import { AudioCodec, VideoCodec } from '../../src/codec.js';
 import { EncodedPacket, PacketType } from '../../src/packet.js';
 import { assert, promiseWithResolvers } from '../../src/misc.js';
 import { Input } from '../../src/input.js';
-import { BufferSource, CustomPathedSource } from '../../src/source.js';
+import { BufferSource, CustomPathedSource, FilePathSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { InputAudioTrack, InputVideoTrack } from '../../src/input-track.js';
 import { EncodedPacketSink } from '../../src/media-sink.js';
@@ -825,6 +828,7 @@ const opusMetadata: EncodedAudioChunkMetadata = {
 const setUpSegmentationEnvironment = async (options: {
 	video?: boolean;
 	audio?: boolean;
+	mediaTimestampBase?: number;
 } = {}) => {
 	let result: string | null = null;
 	let segmentCount = 0;
@@ -834,6 +838,8 @@ const setUpSegmentationEnvironment = async (options: {
 	const output = new Output({
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(), // No ADTS for simplicity
+			// So that segment timestamps can be compared directly
+			mediaTimestampBase: options.mediaTimestampBase ?? 0,
 		}),
 		target: new PathedTarget('', (request) => {
 			const target = new BufferTarget();
@@ -1439,7 +1445,11 @@ segment-1-3.ts
 });
 
 test('Segmentation, non-zero start time', async () => {
-	const env = await setUpSegmentationEnvironment({ video: true, audio: true });
+	const env = await setUpSegmentationEnvironment({
+		video: true,
+		audio: true,
+		mediaTimestampBase: 1,
+	});
 
 	// The minimum packet timestamp becomes the first packet's start time
 	await env.addVideoPacket(1, 'key');
@@ -1473,7 +1483,10 @@ segment-1-2.ts
 });
 
 test('Segmentation, negative start time', async () => {
-	const env = await setUpSegmentationEnvironment({ video: true });
+	const env = await setUpSegmentationEnvironment({
+		video: true,
+		mediaTimestampBase: -1,
+	});
 	const timestamps = Array.from({ length: 50 }, (_, index) => (index - 10) / 10);
 
 	for (const timestamp of timestamps) {
@@ -1511,7 +1524,10 @@ segment-1-3.ts
 });
 
 test('Segmentation, wholly negative timestamps', async () => {
-	const env = await setUpSegmentationEnvironment({ video: true });
+	const env = await setUpSegmentationEnvironment({
+		video: true,
+		mediaTimestampBase: -1,
+	});
 	const timestamps = [-1, -0.9, -0.8, -0.7, -0.6];
 
 	for (const timestamp of timestamps) {
@@ -2158,7 +2174,8 @@ test('Single-file mode with fragmented MP4 produces proper standalone segment fi
 		timestamps.push(packet.timestamp);
 	}
 
-	expect(timestamps).toEqual([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5]);
+	// Offset by the default media timestamp offset
+	expect(timestamps).toEqual([10, 10.5, 11, 11.5, 12, 12.5, 13, 13.5]);
 });
 
 test('StreamTarget, write is called for each target', async () => {
@@ -2406,31 +2423,31 @@ test('CMAF segmentation, single file per playlist', async () => {
 });
 
 test('Sparse tracks in segments, MPEG-TS', async () => {
-	await runSparseTracksInSegments({
+	await testSparseTracksInSegments({
 		segmentFormat: new MpegTsOutputFormat(),
 	});
 });
 
 test('Sparse tracks in segments, CMAF', async () => {
-	await runSparseTracksInSegments({
+	await testSparseTracksInSegments({
 		segmentFormat: new CmafOutputFormat(),
 	});
 });
 
 test('Sparse tracks in segments, standard MP4', async () => {
-	await runSparseTracksInSegments({
+	await testSparseTracksInSegments({
 		segmentFormat: new Mp4OutputFormat(),
 	});
 });
 
 test('Sparse tracks in segments, fragmented MP4', async () => {
-	await runSparseTracksInSegments({
+	await testSparseTracksInSegments({
 		segmentFormat: new Mp4OutputFormat({ fastStart: 'fragmented' }),
 	});
 });
 
 test('Sparse tracks in segments, fragmented MP4 + single file', async () => {
-	await runSparseTracksInSegments({
+	await testSparseTracksInSegments({
 		segmentFormat: new Mp4OutputFormat({ fastStart: 'fragmented' }),
 		singleFilePerPlaylist: true,
 	});
@@ -2539,7 +2556,7 @@ test('Empty playlist bandwidth, medium quality default fallback', async () => {
 	expect(bandwidth).toBeGreaterThan(0);
 });
 
-const runSparseTracksInSegments = async (hlsOptions: HlsOutputFormatOptions) => {
+const testSparseTracksInSegments = async (hlsOptions: HlsOutputFormatOptions) => {
 	const targets = new Map<string, BufferTarget>();
 
 	const output = new Output({
@@ -2875,13 +2892,19 @@ test('Live mode, empty', async () => {
 
 test('EXT-X-PROGRAM-DATE-TIME writing', async () => {
 	let result: string | null = null;
+	const targets = new Map<string, BufferTarget>();
 
 	const output = new Output({
 		format: new HlsOutputFormat({
 			segmentFormat: new MpegTsOutputFormat(),
 			onPlaylist: (text) => { result = text; },
 		}),
-		target: new PathedTarget('', () => new BufferTarget()),
+		target: new PathedTarget('', (request) => {
+			const target = new BufferTarget();
+			targets.set(request.path, target);
+
+			return target;
+		}),
 	});
 
 	const source = videoSource();
@@ -2917,6 +2940,24 @@ segment-1-2.ts
 
 #EXT-X-ENDLIST
 `);
+
+	// Only the playlist carries the Unix time, while the media starts at the default base of 10 seconds
+	const segmentTarget = targets.get('segment-1-1.ts');
+	assert(segmentTarget);
+
+	using segmentInput = new Input({
+		source: new BufferSource(segmentTarget.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const videoTrack = await segmentInput.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	const timestamps: number[] = [];
+	for await (const packet of new EncodedPacketSink(videoTrack).packets()) {
+		timestamps.push(packet.timestamp);
+	}
+
+	expect(timestamps).toEqual([10, 10.5, 11, 11.5]);
 });
 
 test('Throws if some tracks are relativeToUnixEpoch and some are not', async () => {
@@ -3301,3 +3342,268 @@ test('Relative paths & isRoot', async () => {
 
 	await output.finalize();
 });
+
+test('Cross-variant timestamps, MPEG-TS', async () => {
+	await testCrossVariantTimestamps({
+		segmentFormat: new MpegTsOutputFormat(),
+	});
+});
+
+test('Cross-variant timestamps, CMAF', async () => {
+	await testCrossVariantTimestamps({
+		segmentFormat: new CmafOutputFormat(),
+	});
+});
+
+const testCrossVariantTimestamps = async (hlsOptions: HlsOutputFormatOptions) => {
+	const targets = new Map<string, BufferTarget>();
+
+	const output = new Output({
+		format: new HlsOutputFormat(hlsOptions),
+		target: new PathedTarget('master.m3u8', (request) => {
+			const target = new BufferTarget();
+			targets.set(request.path, target);
+
+			return target;
+		}),
+	});
+
+	// The groups aren't paired, so the tracks land in different variant streams
+	const video = videoSource();
+	const audio = audioSource();
+	output.addVideoTrack(video, { group: new OutputTrackGroup() });
+	output.addAudioTrack(audio, { group: new OutputTrackGroup() });
+
+	await output.start();
+
+	// Video starts at 1 second, audio half a second earlier
+	for (let i = 0; i < 8; i++) {
+		const type = i % 4 === 0 ? 'key' : 'delta';
+		await video.add(new EncodedPacket(avcPacketData, type, 1 + 0.5 * i, 0), avcMetadata);
+		await audio.add(new EncodedPacket(aacPacketData, 'key', 0.5 + 0.5 * i, 0), aacMetadata);
+	}
+
+	await output.finalize();
+
+	// Read the entire output back using the HLS input
+	using input = new Input({
+		source: new CustomPathedSource('master.m3u8', ({ path }) => {
+			const target = targets.get(path);
+			assert(target);
+
+			return new BufferSource(target.buffer!);
+		}),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack() as InputVideoTrack;
+	expect(videoTrack).toBeTruthy();
+	const audioTrack = await input.getPrimaryAudioTrack() as InputAudioTrack;
+	expect(audioTrack).toBeTruthy();
+	expect(await audioTrack.getPairableVideoTracks()).toHaveLength(0);
+
+	const videoTimestamps: number[] = [];
+	for await (const packet of new EncodedPacketSink(videoTrack).packets()) {
+		videoTimestamps.push(packet.timestamp);
+	}
+
+	const audioTimestamps: number[] = [];
+	for await (const packet of new EncodedPacketSink(audioTrack).packets()) {
+		audioTimestamps.push(packet.timestamp);
+	}
+
+	// The video is the reference, so its first packet lands at 0
+	expect(videoTimestamps).toEqual([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5]);
+	expect(audioTimestamps).toEqual([-0.5, 0, 0.5, 1, 1.5, 2, 2.5, 3]);
+};
+
+test('PRIV timestamps in packed audio segments, ADTS', async () => {
+	await testPackedAudioPrivTimestamps('sample3.aac', new AdtsOutputFormat());
+});
+
+test('PRIV timestamps in packed audio segments, MP3', async () => {
+	await testPackedAudioPrivTimestamps('Toothsome-Meme.VBRv2.mp3', new Mp3OutputFormat());
+});
+
+test('PRIV timestamps in packed audio segments, WAV', async () => {
+	await testPackedAudioPrivTimestamps('glitch-hop-is-dead.wav', new WavOutputFormat({ metadataFormat: 'id3' }));
+});
+
+const testPackedAudioPrivTimestamps = async (
+	fileName: string,
+	segmentFormat: HlsOutputFormatOptions['segmentFormat'],
+) => {
+	const targets = new Map<string, BufferTarget>();
+
+	const output = new Output({
+		format: new HlsOutputFormat({ segmentFormat }),
+		target: new PathedTarget('master.m3u8', (request) => {
+			const target = new BufferTarget();
+			targets.set(request.path, target);
+
+			return target;
+		}),
+	});
+
+	using sourceInput = new Input({
+		source: new FilePathSource(`./test/public/${fileName}`),
+		formats: ALL_FORMATS,
+	});
+	const sourceTrack = await sourceInput.getPrimaryAudioTrack();
+	assert(sourceTrack);
+	const sourceCodec = await sourceTrack.getCodec();
+	assert(sourceCodec);
+	const decoderConfig = await sourceTrack.getDecoderConfig();
+	assert(decoderConfig);
+
+	const source = new EncodedAudioPacketSource(sourceCodec);
+	output.addAudioTrack(source);
+
+	await output.start();
+
+	const sourceTimestamps: number[] = [];
+	for await (const packet of new EncodedPacketSink(sourceTrack).packets()) {
+		sourceTimestamps.push(packet.timestamp);
+		await source.add(packet, { decoderConfig });
+	}
+
+	await output.finalize();
+
+	// Every segment must start with a PRIV frame holding the timestamp of its first sample, on the 90 kHz MPEG-TS
+	// clock and offset by the default media timestamp offset of 10 seconds
+	const owner = 'com.apple.streaming.transportStreamTimestamp';
+	const playlistLines = new TextDecoder().decode(targets.get('playlist-1.m3u8')!.buffer!).split('\n');
+	let segmentStart = 0;
+	let segmentCount = 0;
+
+	for (let i = 0; i < playlistLines.length; i++) {
+		const line = playlistLines[i]!;
+		if (!line.startsWith('#EXTINF:')) {
+			continue;
+		}
+
+		const segmentTarget = targets.get(playlistLines[i + 1]!);
+		assert(segmentTarget);
+
+		using segmentInput = new Input({
+			source: new BufferSource(segmentTarget.buffer!),
+			formats: ALL_FORMATS,
+		});
+		const priv = (await segmentInput.getMetadataTags()).raw?.['PRIV'];
+		assert(priv instanceof Uint8Array);
+
+		expect(priv.length).toBe(owner.length + 1 + 8);
+		expect(new TextDecoder().decode(priv.subarray(0, owner.length))).toBe(owner);
+		expect(priv[owner.length]).toBe(0);
+
+		const view = new DataView(priv.buffer, priv.byteOffset, priv.byteLength);
+		const timestampHigh = view.getUint32(owner.length + 1);
+		const timestampLow = view.getUint32(owner.length + 5);
+		expect((2 ** 32 * timestampHigh + timestampLow) / 90_000 - 10).toBeCloseTo(segmentStart, 4);
+
+		segmentStart += Number(line.slice('#EXTINF:'.length, line.indexOf(',')));
+		segmentCount++;
+	}
+
+	expect(segmentCount).toBeGreaterThan(1);
+
+	// Read the entire output back using the HLS input
+	using input = new Input({
+		source: new CustomPathedSource('master.m3u8', ({ path }) => {
+			const target = targets.get(path);
+			assert(target);
+
+			return new BufferSource(target.buffer!);
+		}),
+		formats: ALL_FORMATS,
+	});
+
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	const timestamps: number[] = [];
+	for await (const packet of new EncodedPacketSink(audioTrack).packets()) {
+		timestamps.push(packet.timestamp);
+	}
+
+	// HLS normalizes the first packet to zero, including MP3's negative priming timestamp.
+	expect(timestamps).toHaveLength(sourceTimestamps.length);
+	for (let i = 0; i < timestamps.length; i++) {
+		expect(timestamps[i]).toBeCloseTo(sourceTimestamps[i]! - sourceTimestamps[0]!, 10);
+	}
+};
+
+test('Timestamp wraparound, MPEG-TS', async () => {
+	await testTimestampWraparound(new MpegTsOutputFormat(), false);
+});
+
+test('Timestamp wraparound, MPEG-TS with PDT', async () => {
+	await testTimestampWraparound(new MpegTsOutputFormat(), true);
+});
+
+test('Timestamp wraparound, CMAF', async () => {
+	await testTimestampWraparound(new CmafOutputFormat(), false);
+});
+
+const testTimestampWraparound = async (
+	segmentFormat: HlsOutputFormatOptions['segmentFormat'],
+	isRelativeToUnixEpoch: boolean,
+) => {
+	const targets = new Map<string, BufferTarget>();
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat,
+			// Start the media 80 seconds before the 33-bit wraparound of the 90 kHz clock, far enough out so the
+			// demuxer won't interpret the first timestamp as negative
+			mediaTimestampBase: 2 ** 33 / 90_000 - 80,
+		}),
+		target: new PathedTarget('master.m3u8', (request) => {
+			const target = new BufferTarget();
+			targets.set(request.path, target);
+
+			return target;
+		}),
+	});
+
+	const source = videoSource();
+	output.addVideoTrack(source, { isRelativeToUnixEpoch });
+
+	await output.start();
+
+	const start = isRelativeToUnixEpoch ? Date.parse('2026-01-01T00:00:00Z') / 1000 : 0;
+	const packetCount = 240;
+	for (let i = 0; i < packetCount; i++) {
+		const type = i % 4 === 0 ? 'key' : 'delta';
+		await source.add(new EncodedPacket(avcPacketData, type, start + 0.5 * i, 0.5), avcMetadata);
+	}
+
+	await output.finalize();
+
+	const playlist = new TextDecoder().decode(targets.get('playlist-1.m3u8')!.buffer!);
+	expect(playlist.includes('#EXT-X-PROGRAM-DATE-TIME')).toBe(isRelativeToUnixEpoch);
+
+	using input = new Input({
+		source: new CustomPathedSource('master.m3u8', ({ path }) => {
+			const target = targets.get(path);
+			assert(target);
+
+			return new BufferSource(target.buffer!);
+		}),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	const timestamps: number[] = [];
+	for await (const packet of new EncodedPacketSink(videoTrack).packets()) {
+		timestamps.push(packet.timestamp);
+	}
+
+	// The reference's first packet lands at 0, or at its Unix time with PDT
+	expect(timestamps).toHaveLength(packetCount);
+	for (let i = 0; i < packetCount; i++) {
+		expect(timestamps[i]).toBeCloseTo(start + 0.5 * i, 4);
+	}
+};

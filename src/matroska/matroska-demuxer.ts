@@ -17,6 +17,7 @@ import {
 } from '../codec-data';
 import {
 	AacCodecInfo,
+	AUDIO_CODECS_WITH_DELTA_PACKETS,
 	AudioCodec,
 	DtsFourCc,
 	extractAudioCodecString,
@@ -81,6 +82,8 @@ import {
 	resync,
 	searchForNextElementId,
 	readUnsignedBigInt,
+	readSignedBigInt,
+	EBML_DATE_EPOCH,
 } from './ebml';
 import { buildMatroskaMimeType } from './matroska-misc';
 import { FileSlice, readBytes, Reader, readI16Be, readU8 } from '../reader';
@@ -217,6 +220,8 @@ type InternalTrack = {
 	codecPrivate: Uint8Array | null;
 	defaultDuration: number | null;
 	defaultDurationNs: number | null;
+	codecDelay: number;
+	codecDelayNs: number;
 	name: string | null;
 	languageCode: string;
 	hasLanguageBcp47: boolean;
@@ -615,11 +620,13 @@ export class MatroskaDemuxer extends Demuxer {
 			this.currentSegment.timestampFactor = 1e9 / 1e6;
 		}
 
-		// Compute default duration for all tracks now that we have the timestamp factor
+		// Compute default duration and codec delay for all tracks now that we have the timestamp factor
 		for (const track of this.currentSegment.tracks) {
 			if (track.defaultDurationNs !== null) {
 				track.defaultDuration = (this.currentSegment.timestampFactor * track.defaultDurationNs) / 1e9;
 			}
+
+			track.codecDelay = Math.round((this.currentSegment.timestampFactor * track.codecDelayNs) / 1e9);
 		}
 
 		// Assign cue points to their respective tracks
@@ -1109,6 +1116,15 @@ export class MatroskaDemuxer extends Demuxer {
 				this.currentSegment.duration = readFloat(slice, size);
 			}; break;
 
+			case EBMLId.DateUTC: {
+				if (!this.currentSegment) break;
+
+				const nanoseconds = readSignedBigInt(slice, size);
+				this.currentSegment.metadataTags.creationTime = new Date(
+					EBML_DATE_EPOCH + Number(nanoseconds / 1_000_000n),
+				);
+			}; break;
+
 			case EBMLId.TrackEntry: {
 				if (!this.currentSegment) break;
 
@@ -1128,6 +1144,8 @@ export class MatroskaDemuxer extends Demuxer {
 					codecPrivate: null,
 					defaultDuration: null,
 					defaultDurationNs: null,
+					codecDelay: 0,
+					codecDelayNs: 0,
 					name: null,
 					languageCode: 'eng', // The default in Matroska
 					hasLanguageBcp47: false,
@@ -1263,6 +1281,8 @@ export class MatroskaDemuxer extends Demuxer {
 							} else if (this.currentTrack.codecId === 'A_DTS/LOSSLESS') {
 								this.currentTrack.info.dtsFormat = 'dtsl';
 							}
+						} else if (codecIdWithoutSuffix === CODEC_STRING_MAP.truehd) {
+							this.currentTrack.info.codec = 'truehd';
 						} else if (this.currentTrack.codecId === 'A_PCM/INT/LIT') {
 							if (this.currentTrack.info.bitDepth === 8) {
 								this.currentTrack.info.codec = 'pcm-u8';
@@ -1404,6 +1424,11 @@ export class MatroskaDemuxer extends Demuxer {
 			case EBMLId.DefaultDuration: {
 				if (!this.currentTrack) break;
 				this.currentTrack.defaultDurationNs = readUnsignedInt(slice, size);
+			}; break;
+
+			case EBMLId.CodecDelay: {
+				if (!this.currentTrack) break;
+				this.currentTrack.codecDelayNs = readUnsignedInt(slice, size);
 			}; break;
 
 			case EBMLId.Name: {
@@ -1668,10 +1693,14 @@ export class MatroskaDemuxer extends Demuxer {
 				const lacing = (flags >> 1) & 0x3 as BlockLacing; // If the block is laced, we'll expand it later
 
 				let isKeyFrame = !!(flags & 0x80);
-				if (trackData.track.info?.type === 'audio' && trackData.track.info.codec) {
+				if (
+					trackData.track.info?.type === 'audio'
+					&& trackData.track.info.codec
+					&& !AUDIO_CODECS_WITH_DELTA_PACKETS.includes(trackData.track.info.codec)
+				) {
 					// Some files don't mark their audio packets as key packets (I'm looking at you, Firefox). But, we
-					// can fix this in most cases: if we recognize the codec of the track, then we know every packet is
-					// necessarily a key packet, no matter what the container says.
+					// can fix this in most cases: if we recognize the codec of the track and it has no delta packets,
+					// then we know every packet is necessarily a key packet, no matter what the container says.
 					// https://github.com/Vanilagy/mediabunny/issues/192
 					isKeyFrame = true;
 				}
@@ -2120,9 +2149,11 @@ export class MatroskaDemuxer extends Demuxer {
 			return null;
 		}
 
+		const minCodecDelay = Math.min(...segment.tracks.map(x => x.codecDelay));
+
 		// We treat the Duration field as the end timestamp of the segment, since this is what FFmpeg treats it as.
 		// The spec unfortunately does not clarify what it means by duration here.
-		return segment.duration / segment.timestampFactor;
+		return (segment.duration - minCodecDelay) / segment.timestampFactor;
 	}
 }
 
@@ -2240,7 +2271,8 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		// Do a little rounding to catch cases where the result is very close to an integer. If it is, it's likely
 		// that the number was originally an integer divided by the timescale. For stability, it's best
 		// to return the integer in this case.
-		return roundIfAlmostInteger(timestamp * this.internalTrack.segment.timestampFactor);
+		return roundIfAlmostInteger(timestamp * this.internalTrack.segment.timestampFactor)
+			+ this.internalTrack.codecDelay;
 	}
 
 	async getPacket(timestamp: number, options: PacketRetrievalOptions) {
@@ -2427,8 +2459,10 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		}
 
 		const data = options.metadataOnly ? PLACEHOLDER_DATA : block.data;
-		const timestamp = block.timestamp / this.internalTrack.segment.timestampFactor;
-		const duration = block.duration / this.internalTrack.segment.timestampFactor;
+
+		const { codecDelay, segment } = this.internalTrack;
+		const timestamp = (block.timestamp - codecDelay) / segment.timestampFactor;
+		const duration = block.duration / segment.timestampFactor;
 
 		const sideData: EncodedPacketSideData = {};
 		if (block.mainAdditional && this.internalTrack.info?.type === 'video' && this.internalTrack.info.alphaMode) {

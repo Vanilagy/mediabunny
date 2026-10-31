@@ -3084,7 +3084,7 @@ export class AudioSample implements Disposable {
 				numberOfChannels: this.numberOfChannels,
 				timestamp: this.microsecondTimestamp,
 				data: this._data.buffer instanceof ArrayBuffer
-					? this._data.buffer
+					? this._data as Uint8Array<ArrayBuffer>
 					: this._data.slice(), // In the case of SharedArrayBuffer, convert to ArrayBuffer
 			});
 		}

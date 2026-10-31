@@ -569,15 +569,11 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 			durationInSamples = clamp(endTimestampInSamples - additional.timestampInSamples, 0, durationInSamples);
 		}
 
-		// Clamp both ends so that a packet partially before zero doesn't overlap with the following packet
-		const startTimestampInSamples = Math.max(additional.timestampInSamples, 0);
-		const endTimestampInSamples = Math.max(additional.timestampInSamples + durationInSamples, 0);
-
 		const encodedPacket = new EncodedPacket(
 			options.metadataOnly ? PLACEHOLDER_DATA : packet.data,
 			'key',
-			startTimestampInSamples / this.internalSampleRate,
-			(endTimestampInSamples - startTimestampInSamples) / this.internalSampleRate,
+			additional.timestampInSamples / this.internalSampleRate,
+			durationInSamples / this.internalSampleRate,
 			packet.endPage.headerStartPos + packet.endSegmentIndex,
 			packet.data.byteLength,
 		);
@@ -607,6 +603,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 			// durations of these packets and compare.
 			let firstEndPage: Page | null = null;
 			let totalDurationInSamples = 0;
+			let firstPacketDurationInSamples: number | null = null;
 			let vorbisLastBlocksize: number | null = null;
 
 			while (position) {
@@ -626,6 +623,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 					vorbisLastBlocksize,
 				);
 				totalDurationInSamples += durationInSamples;
+				firstPacketDurationInSamples ??= durationInSamples;
 				vorbisLastBlocksize = vorbisBlockSize;
 
 				position = await this.demuxer.findNextPacketStart(packet);
@@ -634,9 +632,15 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 			if (!firstEndPage) {
 				return defaultTimestampInSamples;
 			}
+			assert(firstPacketDurationInSamples !== null);
 
-			// A smaller granule position is only legal on the final page, where it signals end trimming
-			return defaultTimestampInSamples + Math.max(firstEndPage.granulePosition - totalDurationInSamples, 0);
+			// A smaller granule position is only legal on the final page, where it signals end trimming. The Vorbis
+			// priming packet decodes to nothing though, so it's allowed to precede the granule position's origin.
+			const minStartInSamples = this.bitstream.codecInfo.codec === 'vorbis'
+				? -firstPacketDurationInSamples
+				: 0;
+			return defaultTimestampInSamples
+				+ Math.max(firstEndPage.granulePosition - totalDurationInSamples, minStartInSamples);
 		})();
 	}
 
@@ -696,11 +700,11 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 
 		const timestampInSamples = roundIfAlmostInteger(timestamp * this.internalSampleRate);
 		const firstTimestampInSamples = await this.getFirstTimestampInSamples();
-		if (timestampInSamples === Math.max(firstTimestampInSamples, 0)) {
+		if (timestampInSamples === firstTimestampInSamples) {
 			// Fast path for the first timestamp - avoids binary search when playing back from the start
 			return this.getFirstPacket(options);
 		}
-		if (timestampInSamples < Math.max(firstTimestampInSamples, 0)) {
+		if (timestampInSamples < firstTimestampInSamples) {
 			// There's nothing here
 			return null;
 		}
@@ -992,9 +996,9 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 					currentTimestampIsCorrect
 					&& (
 						// Next timestamp will be too late
-						Math.max(currentTimestampInSamples, 0) > timestampInSamples
+						currentTimestampInSamples > timestampInSamples
 						// This timestamp already matches
-						|| Math.max(encodedPacketMetadata.timestampInSamples, 0) === timestampInSamples
+						|| encodedPacketMetadata.timestampInSamples === timestampInSamples
 					)
 				) {
 					break;

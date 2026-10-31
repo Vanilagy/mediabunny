@@ -7,6 +7,7 @@
  */
 
 import { parseAacAudioSpecificConfig } from '../shared/aac-misc';
+import { MP3_FRAME_HEADER_SIZE } from '../shared/mp3-misc';
 import {
 	Av1CodecInfo,
 	av1CodecInfoHasColorInfo,
@@ -32,11 +33,14 @@ import {
 	base64ToBytes,
 	bytesToHexString,
 	isAllowSharedBufferSource,
+	isWebKit,
 	last,
 	reverseBitsU32,
 	toDataView,
+	toUint8Array,
 } from './misc';
 import { SubtitleMetadata } from './subtitles';
+import { PCM_ENCODER_PACKET_SIZE } from './media-source';
 
 /**
  * List of known video codecs, ordered by encoding preference.
@@ -87,6 +91,7 @@ export const NON_PCM_AUDIO_CODECS = [
 	'ac3',
 	'eac3',
 	'dts',
+	'truehd',
 ] as const;
 /**
  * List of known audio codecs, ordered by encoding preference.
@@ -125,6 +130,8 @@ export type PcmAudioCodec = typeof PCM_AUDIO_CODECS[number];
  * @public
  */
 export type SubtitleCodec = typeof SUBTITLE_CODECS[number];
+
+export const AUDIO_CODECS_WITH_DELTA_PACKETS: readonly AudioCodec[] = ['truehd'];
 /**
  * Union type of known media codecs.
  * @group Codecs
@@ -268,7 +275,14 @@ export const buildVideoCodecString = (
 	alpha: boolean,
 ) => {
 	if (codec === 'avc') {
-		const profileIndication = 0x64; // High Profile
+		// Needed as a workaround for https://github.com/WebKit/WebKit/pull/74602, otherwise the encoder stalls.
+		// Also see https://github.com/Vanilagy/mediabunny/issues/541
+		// and https://github.com/Vanilagy/mediabunny/issues/587
+		// Unfortunately, Safari doesn't expose its version so we can't condition this on a specific Safari version. In
+		// the future, we can consider adding some runtime detection logic for it.
+		const constrainedBaseline = isWebKit();
+
+		const profileIndication = constrainedBaseline ? 0x42 : 0x64; // Baseline or High Profile
 		const totalMacroblocks = Math.ceil(width / 16) * Math.ceil(height / 16);
 
 		// Determine the level based on the table
@@ -278,7 +292,7 @@ export const buildVideoCodecString = (
 		const levelIndication = levelInfo ? levelInfo.level : 0;
 
 		const hexProfileIndication = profileIndication.toString(16).padStart(2, '0');
-		const hexProfileCompatibility = '00';
+		const hexProfileCompatibility = constrainedBaseline ? '40' : '00'; // constraint_set1_flag for Constrained
 		const hexLevelIndication = levelIndication.toString(16).padStart(2, '0');
 
 		return `avc1.${hexProfileIndication}${hexProfileCompatibility}${hexLevelIndication}`;
@@ -769,6 +783,8 @@ export const buildAudioCodecString = (codec: AudioCodec, numberOfChannels: numbe
 		return 'ec-3';
 	} else if (codec === 'dts') {
 		return 'dtsc';
+	} else if (codec === 'truehd') {
+		return 'mlpa';
 	} else if ((PCM_AUDIO_CODECS as readonly string[]).includes(codec)) {
 		return codec;
 	}
@@ -821,6 +837,8 @@ export const extractAudioCodecString = (trackInfo: {
 		return 'ec-3';
 	} else if (codec === 'dts') {
 		return dtsFormat ?? 'dtsc';
+	} else if (codec === 'truehd') {
+		return 'mlpa';
 	} else if (codec && (PCM_AUDIO_CODECS as readonly string[]).includes(codec)) {
 		return codec;
 	}
@@ -864,7 +882,144 @@ export const guessDescriptionForAudio = (decoderConfig: AudioDecoderConfig): Uin
 	}
 };
 
+export const getAudioPreRollDuration = (codec: AudioCodec, decoderConfig: AudioDecoderConfig) => {
+	switch (codec) {
+		case 'aac': {
+			if (!decoderConfig.description) {
+				// Best guess
+				return 1024 / decoderConfig.sampleRate;
+			}
+
+			const audioSpecificConfig = parseAacAudioSpecificConfig(toUint8Array(decoderConfig.description));
+			if (audioSpecificConfig.coreSampleRate === null) {
+				throw new Error('Invalid AAC sampling frequency index.');
+			}
+
+			return audioSpecificConfig.frameLength / audioSpecificConfig.coreSampleRate;
+		}
+
+		case 'opus': {
+			return OPUS_PRE_ROLL_DURATION;
+		}
+
+		case 'mp3': {
+			// The bit reservoir reaches back a fixed number of bytes, so it spans the most frames when a (VBR)
+			// stream drops to the lowest bitrate. We can't rule that out, so we go with that worst case, plus one
+			// frame of overlap on top.
+			const { sampleRate, numberOfChannels } = decoderConfig;
+
+			const isMpeg1 = sampleRate >= 32000; // MPEG-2 and MPEG-2.5 cover the rates below
+			const frameSamples = isMpeg1 ? 1152 : 576;
+			const minBitrate = isMpeg1 ? 32000 : 8000;
+			const maxMainDataBegin = isMpeg1 ? 511 : 255;
+			const sideInfoSize = isMpeg1
+				? (numberOfChannels === 1 ? 17 : 32)
+				: (numberOfChannels === 1 ? 9 : 17);
+
+			const minFrameSize = Math.floor(frameSamples / 8 * minBitrate / sampleRate);
+			const minMainDataSize = minFrameSize - MP3_FRAME_HEADER_SIZE - sideInfoSize;
+			const frameCount = 1 + Math.ceil(maxMainDataBegin / minMainDataSize);
+
+			return frameCount * frameSamples / sampleRate;
+		}
+
+		case 'vorbis': {
+			assert(decoderConfig.description);
+
+			// Skip the Xiph lacing to get to the identification header
+			const bytes = toUint8Array(decoderConfig.description);
+			let pos = 1;
+			let lacedLengthsLeft = 2;
+			while (lacedLengthsLeft > 0) {
+				if (bytes[pos++]! < 255) {
+					lacedLengthsLeft--;
+				}
+			}
+
+			const blockSizeByte = bytes[pos + 28]!;
+			const longBlockSize = 1 << (blockSizeByte >> 4); // blocksize_1
+
+			// The previous packet's long window overlaps by up to half its size
+			return (longBlockSize / 2) / decoderConfig.sampleRate;
+		}
+
+		case 'ac3':
+		case 'eac3': {
+			return 256 / decoderConfig.sampleRate;
+		}
+
+		case 'dts': {
+			return 512 / decoderConfig.sampleRate;
+		}
+
+		case 'flac':
+		case 'truehd':
+		case 'pcm-s16':
+		case 'pcm-s16be':
+		case 'pcm-s24':
+		case 'pcm-s24be':
+		case 'pcm-s32':
+		case 'pcm-s32be':
+		case 'pcm-f32':
+		case 'pcm-f32be':
+		case 'pcm-f64':
+		case 'pcm-f64be':
+		case 'pcm-u8':
+		case 'pcm-s8':
+		case 'ulaw':
+		case 'alaw': {
+			return 0;
+		}
+
+		default: {
+			assertNever(codec);
+			assert(false);
+		}
+	}
+};
+
+/** Returns the shortest packet length, in samples, that encoders commonly produce for the given codec */
+export const getMinimumAudioPacketSize = (codec: AudioCodec, sampleRate: number) => {
+	switch (codec) {
+		case 'aac': return 1024;
+		case 'opus': return 0.02 * sampleRate; // Fixed 20 ms frames, regardless of sample rate
+		case 'mp3': return 576;
+		case 'vorbis': return 256;
+		case 'flac': return 1152;
+		case 'ac3': return 1536;
+		case 'eac3': return 256;
+		case 'dts': return 512;
+		case 'truehd': return 40;
+
+		case 'pcm-s16':
+		case 'pcm-s16be':
+		case 'pcm-s24':
+		case 'pcm-s24be':
+		case 'pcm-s32':
+		case 'pcm-s32be':
+		case 'pcm-f32':
+		case 'pcm-f32be':
+		case 'pcm-f64':
+		case 'pcm-f64be':
+		case 'pcm-u8':
+		case 'pcm-s8':
+		case 'ulaw':
+		case 'alaw': {
+			return PCM_ENCODER_PACKET_SIZE;
+		}
+
+		default: {
+			assertNever(codec);
+			assert(false);
+		}
+	}
+};
+
 export const OPUS_SAMPLE_RATE = 48_000;
+
+// RFC 7845 recommends 80 ms, but that one's very far from convergence (gives around -30 dBFS error). 400 ms was found
+// empirically to almost always give an error well below -100 dBFS, so we're using that
+export const OPUS_PRE_ROLL_DURATION = 0.4;
 
 const PCM_CODEC_REGEX = /^pcm-([usf])(\d+)(be)?$/;
 
@@ -937,6 +1092,8 @@ export const inferCodecFromCodecString = (codecString: string): MediaCodec | nul
 		return 'eac3';
 	} else if ((DTS_FOURCCS as readonly string[]).includes(codecString)) {
 		return 'dts';
+	} else if (codecString === 'mlpa') {
+		return 'truehd';
 	} else if (codecString === 'ulaw') {
 		return 'ulaw';
 	} else if (codecString === 'alaw') {
@@ -1189,7 +1346,7 @@ export const validateVideoChunkMetadata = (
 };
 
 const VALID_AUDIO_CODEC_STRING_PREFIXES = [
-	'mp4a', 'mp3', 'opus', 'vorbis', 'flac', 'ulaw', 'alaw', 'pcm', 'ac-3', 'ec-3', 'dts',
+	'mp4a', 'mp3', 'opus', 'vorbis', 'flac', 'ulaw', 'alaw', 'pcm', 'ac-3', 'ec-3', 'dts', 'mlpa',
 ];
 
 export const validateAudioChunkMetadata = (
@@ -1331,6 +1488,12 @@ export const validateAudioChunkMetadata = (
 				'Audio chunk metadata decoder configuration codec string for DTS must be one of the following'
 				+ ` four-character codes: ${DTS_FOURCCS.join(', ')}.`,
 			);
+		}
+	} else if (metadata.decoderConfig.codec.startsWith('mlpa')) {
+		// TrueHD-specific validation
+
+		if (metadata.decoderConfig.codec !== 'mlpa') {
+			throw new TypeError('Audio chunk metadata decoder configuration codec string for TrueHD must be "mlpa".');
 		}
 	} else if (
 		metadata.decoderConfig.codec.startsWith('pcm')

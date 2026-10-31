@@ -1042,6 +1042,15 @@ export const getChromiumVersion = () => {
 	return chromiumVersionCache = Number(match[1]!);
 };
 
+let isAndroidCache: boolean | null = null;
+export const isAndroid = () => {
+	if (isAndroidCache !== null) {
+		return isAndroidCache;
+	}
+
+	return isAndroidCache = typeof navigator !== 'undefined' && /Android/.test(navigator.userAgent);
+};
+
 export const missingWebCodecsClassMessage = (className: string) => {
 	if (typeof globalThis.isSecureContext !== 'undefined' && !globalThis.isSecureContext) {
 		// WebCodecs is not exposed in insecure contexts
@@ -1311,7 +1320,7 @@ export const arrayArgmin = <T>(array: T[], getValue: (item: T) => number): numbe
 
 	for (let i = 0; i < array.length; i++) {
 		const value = getValue(array[i]!);
-		if (value < minValue) {
+		if (minIndex === -1 || value < minValue) {
 			minValue = value;
 			minIndex = i;
 		}
@@ -1326,7 +1335,7 @@ export const arrayArgmax = <T>(array: T[], getValue: (item: T) => number): numbe
 
 	for (let i = 0; i < array.length; i++) {
 		const value = getValue(array[i]!);
-		if (value > maxValue) {
+		if (maxIndex === -1 || value > maxValue) {
 			maxValue = value;
 			maxIndex = i;
 		}

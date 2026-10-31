@@ -13,7 +13,14 @@ import { Output, OutputAudioTrack } from '../output';
 import { Mp3OutputFormat } from '../output-format';
 import { EncodedPacket } from '../packet';
 import { Writer } from '../writer';
-import { getXingOffset, INFO, readMp3FrameHeader, SAMPLING_RATES, XING } from '../../shared/mp3-misc';
+import {
+	getXingOffset,
+	INFO,
+	MP3_DECODER_DELAY,
+	readMp3FrameHeader,
+	SAMPLING_RATES,
+	XING,
+} from '../../shared/mp3-misc';
 import { Mp3Writer, XingFrameData } from './mp3-writer';
 import { Id3V2Writer } from '../id3';
 
@@ -24,6 +31,8 @@ export class Mp3Muxer extends Muxer {
 	private mp3Writer!: Mp3Writer;
 	private xingFrameData: XingFrameData | null = null;
 	private frameCount = 0;
+	private frameBitrate: number | null = null;
+	private hasVariableBitrate = false;
 	private framePositions: number[] = [];
 	private xingFramePos: number | null = null;
 
@@ -63,7 +72,7 @@ export class Mp3Muxer extends Muxer {
 		const release = await this.mutex.acquire();
 
 		try {
-			if (!this.xingFrameData && this.writeXingHeader) {
+			if (this.writeXingHeader) {
 				const view = toDataView(packet.data);
 				if (view.byteLength < 4) {
 					throw new Error('Invalid MP3 header in sample.');
@@ -75,39 +84,58 @@ export class Mp3Muxer extends Muxer {
 					throw new Error('Invalid MP3 header in sample.');
 				}
 
-				const xingOffset = getXingOffset(header.mpegVersionId, header.channel);
-				if (view.byteLength >= xingOffset + 4) {
-					const word = view.getUint32(xingOffset, false);
-					const isXing = word === XING || word === INFO;
+				if (!this.xingFrameData) {
+					const xingOffset = getXingOffset(header.mpegVersionId, header.channel);
+					if (view.byteLength >= xingOffset + 4) {
+						const word = view.getUint32(xingOffset, false);
+						const isXing = word === XING || word === INFO;
 
-					if (isXing) {
-						// This is not a data frame, so let's completely ignore this sample
-						return;
+						if (isXing) {
+							// This is not a data frame, so let's completely ignore this sample
+							return;
+						}
 					}
+
+					let encoderDelay = packet.timestamp < 0
+						? Math.round(-packet.timestamp * header.sampleRate) - MP3_DECODER_DELAY
+						: null;
+					if (encoderDelay !== null && (encoderDelay < 0 || encoderDelay > 0xfff)) {
+						// Cannot be represented by LAME delay metadata, so let's just write none
+						encoderDelay = null;
+					}
+
+					this.xingFrameData = {
+						mpegVersionId: header.mpegVersionId,
+						layer: header.layer,
+						frequencyIndex: header.frequencyIndex,
+						sampleRate: header.sampleRate,
+						channel: header.channel,
+						modeExtension: header.modeExtension,
+						copyright: header.copyright,
+						original: header.original,
+						emphasis: header.emphasis,
+
+						isCbr: false,
+						frameCount: null,
+						fileSize: null,
+						toc: null,
+						encoderDelayInSamples: encoderDelay,
+					};
+
+					// This muxer doesn't make any bitrate constraints, meaning we don't know yet if this will be a
+					// constant or variable bitrate file. So, we always write the frame, and only once we've seen every
+					// frame do we know whether it should say Xing or Info.
+					this.xingFramePos = this.writer.getPos();
+					this.mp3Writer.writeXingFrame(this.xingFrameData);
+
+					this.frameCount++;
 				}
 
-				this.xingFrameData = {
-					mpegVersionId: header.mpegVersionId,
-					layer: header.layer,
-					frequencyIndex: header.frequencyIndex,
-					sampleRate: header.sampleRate,
-					channel: header.channel,
-					modeExtension: header.modeExtension,
-					copyright: header.copyright,
-					original: header.original,
-					emphasis: header.emphasis,
-
-					frameCount: null,
-					fileSize: null,
-					toc: null,
-				};
-
-				// Write a Xing frame because this muxer doesn't make any bitrate constraints, meaning we don't know if
-				// this will be a constant or variable bitrate file. Therefore, always write the Xing frame.
-				this.xingFramePos = this.writer.getPos();
-				this.mp3Writer.writeXingFrame(this.xingFrameData);
-
-				this.frameCount++;
+				if (this.frameBitrate === null) {
+					this.frameBitrate = header.bitrate;
+				} else if (header.bitrate !== this.frameBitrate) {
+					this.hasVariableBitrate = true;
+				}
 			}
 
 			this.validateTimestamp(track, packet.timestamp, packet.type === 'key');
@@ -173,9 +201,11 @@ export class Mp3Muxer extends Muxer {
 					original: header.original,
 					emphasis: header.emphasis,
 
+					isCbr: false,
 					frameCount: null,
 					fileSize: null,
 					toc: null,
+					encoderDelayInSamples: null,
 				};
 			} else if (track.metadata.decoderConfig) {
 				// All we know is the sample rate and channel count, so let's derive the rest
@@ -209,9 +239,11 @@ export class Mp3Muxer extends Muxer {
 					original: 0,
 					emphasis: 0,
 
+					isCbr: false,
 					frameCount: null,
 					fileSize: null,
 					toc: null,
+					encoderDelayInSamples: null,
 				};
 			} else {
 				throw new Error(
@@ -248,6 +280,7 @@ export class Mp3Muxer extends Muxer {
 				this.xingFrameData.toc = toc;
 			}
 
+			this.xingFrameData.isCbr = this.frameBitrate !== null && !this.hasVariableBitrate;
 			this.xingFrameData.frameCount = this.frameCount;
 			this.xingFrameData.fileSize = audioDataEndPos;
 

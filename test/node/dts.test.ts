@@ -80,7 +80,11 @@ test('Transmux dtsc MP4 into Matroska', async () => {
 });
 
 test('Transmux dtsc MP4 into MPEG-TS', async () => {
-	await expectTransmuxToPreservePackets(DTSC_FILE, new MpegTsOutputFormat(), MPEG_TS_TIMESTAMP_TOLERANCE);
+	await expectTransmuxToPreservePackets(
+		DTSC_FILE,
+		new MpegTsOutputFormat(),
+		MPEG_TS_TIMESTAMP_TOLERANCE,
+	);
 });
 
 test('Transmux esds MP4 into MP4', async () => {
@@ -92,7 +96,11 @@ test('Transmux esds MP4 into Matroska', async () => {
 });
 
 test('Transmux esds MP4 into MPEG-TS', async () => {
-	await expectTransmuxToPreservePackets(ESDS_FILE, new MpegTsOutputFormat(), MPEG_TS_TIMESTAMP_TOLERANCE);
+	await expectTransmuxToPreservePackets(
+		ESDS_FILE,
+		new MpegTsOutputFormat(),
+		MPEG_TS_TIMESTAMP_TOLERANCE,
+	);
 });
 
 test('Custom coder registration', async () => {

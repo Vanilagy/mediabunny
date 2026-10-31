@@ -242,3 +242,35 @@ const makeAudioDataBackedSample = () => {
 		data,
 	}));
 };
+
+test('toAudioData, data viewing only a part of a buffer', () => {
+	const padding = 7;
+	const buffer = new Int16Array(padding + NUM_FRAMES * NUM_CHANNELS + padding).fill(-1);
+	const data = buffer.subarray(padding, padding + NUM_FRAMES * NUM_CHANNELS);
+	for (let f = 0; f < NUM_FRAMES; f++) {
+		for (let c = 0; c < NUM_CHANNELS; c++) {
+			data[f * NUM_CHANNELS + c] = cellValue(f, c);
+		}
+	}
+
+	using sample = new AudioSample({
+		data,
+		format: 's16',
+		sampleRate: SAMPLE_RATE,
+		numberOfChannels: NUM_CHANNELS,
+		timestamp: TIMESTAMP,
+	});
+
+	const audioData = sample.toAudioData();
+	expect(audioData.numberOfFrames).toBe(NUM_FRAMES);
+
+	const out = new Int16Array(NUM_FRAMES * NUM_CHANNELS);
+	audioData.copyTo(out, { planeIndex: 0 });
+	audioData.close();
+
+	for (let f = 0; f < NUM_FRAMES; f++) {
+		for (let c = 0; c < NUM_CHANNELS; c++) {
+			expect(out[f * NUM_CHANNELS + c]).toBe(cellValue(f, c));
+		}
+	}
+});

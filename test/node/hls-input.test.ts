@@ -4,6 +4,8 @@ import { expect, test, vi } from 'vitest';
 import { HLS, HLS_FORMATS, HlsInputFormat, MP4 } from '../../src/input-format.js';
 import { assert, hexStringToBytes, rejectAfter } from '../../src/misc.js';
 import { CustomPathedSource, FilePathSource } from '../../src/source.js';
+import { createAes128CbcDecryptStream } from '../../src/aes.js';
+import { Reader } from '../../src/reader.js';
 
 // A lot of test cases taken from:
 // https://github.com/video-dev/hls.js/blob/master/tests/test-streams.js
@@ -167,16 +169,16 @@ test.concurrent('Big Buck Bunny', { timeout: 15_000 }, async () => {
 		expect(await audioTrack.getCodecParameterString()).toEqual('mp4a.40.2');
 	}
 
-	expect(Math.min(await videoTracks[0]!.getFirstTimestamp(), await audioTracks[0]!.getFirstTimestamp())).toBe(0);
+	expect(Math.min(await videoTracks[0]!.getFirstTimestamp(), await audioTracks[0]!.getFirstTimestamp())).toBe(0.0101);
 
 	const sink = new EncodedPacketSink(videoTracks[0]!);
 	const lastPacket = await sink.getPacket(Infinity);
-	expect(lastPacket!.timestamp).toBeCloseTo(634.5899);
+	expect(lastPacket!.timestamp).toBeCloseTo(634.6);
 
 	expect(sourceCount).toBe(1 + 5 + 5 + 1);
 
 	const middlePacket = await sink.getPacket(300);
-	expect(middlePacket!.timestamp).toBeCloseTo(299.9899);
+	expect(middlePacket!.timestamp).toBeCloseTo(300);
 
 	expect(sourceCount).toBe(1 + 5 + 5 + 1 + 1);
 
@@ -242,7 +244,13 @@ test.concurrent('Big Buck Bunny, determining duration from metadata', { timeout:
 	});
 
 	let sourceCount = 0;
-	input.on('source', () => sourceCount++);
+	let m3u8Count = 0;
+	input.on('source', ({ request, isRoot }) => {
+		sourceCount++;
+		if (isRoot || request?.path.endsWith('.m3u8')) {
+			m3u8Count++;
+		}
+	});
 
 	const track = await input.getPrimaryVideoTrack();
 	assert(track);
@@ -252,7 +260,9 @@ test.concurrent('Big Buck Bunny, determining duration from metadata', { timeout:
 	const approxDuration = await track.getDurationFromMetadata();
 	expect(approxDuration).toBe(634.567);
 
-	expect(sourceCount).toBe(2); // We needed to read the playlist, but not any segment
+	// master, playlist and reference playlist, no segments
+	expect(sourceCount).toBe(3);
+	expect(m3u8Count).toBe(sourceCount);
 });
 
 test.concurrent('Single-variant Big Buck Bunny', { timeout: 15_000 }, async () => {
@@ -342,7 +352,12 @@ test.concurrent('Range requests', { timeout: 15_000 }, async () => {
 
 	const lastPacket = await sink.getPacket(Infinity);
 	assert(lastPacket);
-	expect(lastPacket.timestamp).toBeCloseTo(47.26133333333333);
+	expect(lastPacket.timestamp).toBeCloseTo(47.24);
+
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	expect(await audioTrack.getFirstTimestamp()).toBeCloseTo(-0.02133);
 
 	expect(sourceCount).toBe(2);
 });
@@ -373,8 +388,8 @@ test.concurrent('Segments shorter than their EXTINF duration', { timeout: 15_000
 
 	// The playlist places this timestamp at the end of one segment, but the media puts it in the next one
 	const sink = new EncodedPacketSink(videoTrack);
-	expect((await sink.getPacket(35.9))!.timestamp).toBeCloseTo(35.89986666666667);
-	expect((await sink.getKeyPacket(35.9))!.timestamp).toBeCloseTo(35.81645555555556);
+	expect((await sink.getPacket(24.9))!.timestamp).toBeCloseTo(24.89986666666667);
+	expect((await sink.getKeyPacket(24.9))!.timestamp).toBeCloseTo(24.81645555555556);
 });
 
 test.concurrent('Out-of-band audio track via ADTS', { timeout: 15_000 }, async () => {
@@ -405,9 +420,11 @@ test.concurrent('Out-of-band audio track via ADTS', { timeout: 15_000 }, async (
 		lastTimestamp = packet.timestamp;
 	}
 
-	// This way we test that the two are synced up
-	expect(await videoTrack.getFirstTimestamp()).toBe(await audioTrack.getFirstTimestamp());
-	expect(await videoTrack.computeDuration()).toBeCloseTo(await audioTrack.computeDuration(), 1);
+	expect(await videoTrack.getFirstTimestamp()).toBe(0);
+	expect(await audioTrack.getFirstTimestamp()).toBeCloseTo(-0.1111);
+
+	expect(await videoTrack.computeDuration()).toBe(29.56);
+	expect(await audioTrack.computeDuration()).toBe(29.456895833333334);
 });
 
 test.concurrent('MP3 audio only', { timeout: 15_000 }, async () => {
@@ -419,6 +436,104 @@ test.concurrent('MP3 audio only', { timeout: 15_000 }, async () => {
 	const audioTrack = (await input.getAudioTracks())[0];
 	assert(audioTrack);
 	expect(await audioTrack.getCodec()).toBe('mp3');
+
+	expect(await audioTrack.getFirstTimestamp()).toBe(0);
+});
+
+test.concurrent('Out-of-band audio track via ADTS, ID3 tags stripped', { timeout: 30_000 }, async () => {
+	const rootPath = 'https://playertest.longtailvideo.com/adaptive/aes-with-tracks/master.m3u8';
+	let strippedSegmentCount = 0;
+
+	using input = new Input({
+		source: new CustomPathedSource(rootPath, async ({ path }) => {
+			if (path.endsWith('audio/aac/und/stream.m3u8')) {
+				// We decrypt the audio segments ourselves so that we can strip their ID3 tags
+				const playlist = new TextDecoder().decode(await fetchBytes(path));
+				const withoutKey = playlist.split('\n').filter(x => !x.startsWith('#EXT-X-KEY')).join('\n');
+				return new BufferSource(new TextEncoder().encode(withoutKey));
+			}
+
+			if (path.endsWith('.aac')) {
+				const key = await fetchBytes(new URL('key.bin', path).href);
+				const sequenceNumber = Number(path.match(/segment-(\d+)\.aac$/)![1]);
+
+				// Without an IV attribute, the IV is the big-endian media sequence number
+				const iv = new Uint8Array(16);
+				new DataView(iv.buffer).setUint32(12, sequenceNumber);
+
+				const ciphertextReader = new Reader(new BufferSource(await fetchBytes(path)));
+				const stream = createAes128CbcDecryptStream(ciphertextReader, () => ({ key, iv }), () => {});
+				const decrypted = new Uint8Array(await new Response(stream).arrayBuffer());
+
+				strippedSegmentCount++;
+				return new BufferSource(stripId3V2Tags(decrypted));
+			}
+
+			return new UrlSource(path);
+		}),
+		formats: ALL_FORMATS,
+	});
+
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+	const videoTrack = (await audioTrack.getPairableVideoTracks())[0];
+	assert(videoTrack);
+
+	// Without the PRIV timestamps, each segment's media is placed at the segment's playlist timestamp
+	expect(await videoTrack.getFirstTimestamp()).toBe(0);
+	expect(await audioTrack.getFirstTimestamp()).toBe(0);
+
+	const sink = new EncodedPacketSink(audioTrack);
+	expect((await sink.getPacket(6.016))!.timestamp).toBe(6.016);
+	expect((await sink.getPacket(12.032))!.timestamp).toBe(12.032);
+	expect((await sink.getPacket(20))!.timestamp).toBeCloseTo(19.989333, 5);
+
+	let lastTimestamp = -Infinity;
+	for await (const packet of sink.packets()) {
+		expect(packet.timestamp).toBeGreaterThan(lastTimestamp);
+		lastTimestamp = packet.timestamp;
+	}
+
+	expect(strippedSegmentCount).toBeGreaterThan(0);
+});
+
+test.concurrent('MP3 audio only, ID3 tags stripped', { timeout: 30_000 }, async () => {
+	const rootPath = 'https://pl.streamingvideoprovider.com/mp3-playlist/playlist.m3u8';
+	let strippedSegmentCount = 0;
+
+	using input = new Input({
+		source: new CustomPathedSource(rootPath, async ({ path }) => {
+			if (path.endsWith('.mp3')) {
+				strippedSegmentCount++;
+				return new BufferSource(stripId3V2Tags(await fetchBytes(path)));
+			}
+
+			return new UrlSource(path);
+		}),
+		formats: ALL_FORMATS,
+	});
+
+	const audioTrack = (await input.getAudioTracks())[0];
+	assert(audioTrack);
+	expect(await audioTrack.getCodec()).toBe('mp3');
+
+	// Without the PRIV timestamps, each segment's media is placed at the segment's playlist timestamp
+	expect(await audioTrack.getFirstTimestamp()).toBe(0);
+
+	const sink = new EncodedPacketSink(audioTrack);
+	expect((await sink.getPacket(10))!.timestamp).toBe(10);
+	expect((await sink.getPacket(20))!.timestamp).toBe(20);
+
+	let lastTimestamp = -Infinity;
+	let packetCount = 0;
+	for await (const packet of sink.packets(undefined, (await sink.getPacket(40))!)) {
+		expect(packet.timestamp).toBeGreaterThan(lastTimestamp);
+		lastTimestamp = packet.timestamp;
+		packetCount++;
+	}
+	expect(packetCount).toBeGreaterThan(1000);
+
+	expect(strippedSegmentCount).toBeGreaterThan(0);
 });
 
 test.concurrent('fMP4', { timeout: 15_000 }, async () => {
@@ -444,10 +559,14 @@ test.concurrent('fMP4', { timeout: 15_000 }, async () => {
 	expect(await videoTrack.getFirstTimestamp()).toBe(0);
 	expect(await videoTrack.computeDuration()).toBe(60);
 
-	expect(await audioTrack.getFirstTimestamp()).toBe(0);
-	expect(await audioTrack.computeDuration()).toBeCloseTo(60.021333);
+	expect(await audioTrack.getFirstTimestamp()).toBe(-0.021333333333333333);
+	expect(await audioTrack.computeDuration()).toBe(60);
 
-	expect(sourceCount).toBe(1 + 2 * (1 + 1 + 1 + 1));
+	expect(sourceCount).toBe(
+		1 // Master
+		+ 2 * (1 + 1 + 1 + 1) // For each track: playlist, init, first segment, last segment
+		+ (1 + 1 + 1), // Reference track: playlist, init, first segment
+	);
 });
 
 test.concurrent('Track disposition & metadata', { timeout: 15_000 }, async () => {
@@ -524,13 +643,18 @@ test.concurrent('fMP4 Bitmovin', { timeout: 15_000 }, async () => {
 	expect(videoDisplayDims.some(d => d.w === 1280 && d.h === 720)).toBe(true);
 	expect(videoDisplayDims.some(d => d.w === 1920 && d.h === 1080)).toBe(true);
 
-	const videoTrack = (await input.getVideoTracks())[0];
+	const videoTrack = videoTracks[0];
 	assert(videoTrack);
 
-	expect(await videoTrack.getFirstTimestamp()).toBe(4);
-	expect(await videoTrack.computeDuration()).toBe(214.28);
+	expect(await videoTrack.getFirstTimestamp()).toBe(0);
+	expect(await videoTrack.computeDuration()).toBe(210.28);
 
-	expect(sourceCount).toBe(5);
+	const audioTrack = audioTracks[0];
+	assert(audioTrack);
+
+	expect(await audioTrack.getFirstTimestamp()).toBe(-0.08);
+
+	expect(sourceCount).toBe(5 + 3); // 3 for the reference track
 });
 
 test.concurrent('Single-value PDT', { timeout: 15_000 }, async () => {
@@ -573,10 +697,14 @@ test.concurrent('Duplicate PDT', { timeout: 30_000 }, async () => {
 		formats: ALL_FORMATS,
 	});
 
+	const videoTrack = await input.getPrimaryVideoTrack();
 	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(videoTrack);
 	assert(audioTrack);
 
-	expect(await audioTrack.getFirstTimestamp()).toBe(Date.parse('2013-06-17T18:32:00Z') / 1000);
+	const offsetFromVideo = -0.033;
+	expect(await videoTrack.getFirstTimestamp()).toBe(Date.parse('2013-06-17T18:32:00Z') / 1000);
+	expect(await audioTrack.getFirstTimestamp()).toBe(Date.parse('2013-06-17T18:32:00Z') / 1000 + offsetFromVideo);
 
 	// Ensure the timestamps are monotonically increasing
 	const sink = new EncodedPacketSink(audioTrack);
@@ -1278,3 +1406,23 @@ b.ts
 	expect(types.length).toBeGreaterThan(0);
 	expect(types.every(type => type === 'key')).toBe(true);
 });
+
+const fetchBytes = async (url: string) => {
+	const response = await fetch(url);
+	return new Uint8Array(await response.arrayBuffer());
+};
+
+const stripId3V2Tags = (bytes: Uint8Array) => {
+	// Make sure there's actually something to strip, otherwise the test wouldn't test anything
+	expect(new TextDecoder().decode(bytes.subarray(0, 3))).toBe('ID3');
+
+	while (new TextDecoder().decode(bytes.subarray(0, 3)) === 'ID3') {
+		const flags = bytes[5]!;
+		const size = (bytes[6]! << 21) | (bytes[7]! << 14) | (bytes[8]! << 7) | bytes[9]!; // Synchsafe
+		const hasFooter = !!(flags & 0x10);
+
+		bytes = bytes.subarray(10 + size + (hasFooter ? 10 : 0));
+	}
+
+	return bytes;
+};

@@ -87,7 +87,13 @@ import {
 	colorSpaceIsComplete,
 } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
-import { buildIsobmffMimeType, parsePsshBoxContents, psshBoxesAreEqual, PsshBox } from './isobmff-misc';
+import {
+	buildIsobmffMimeType,
+	parsePsshBoxContents,
+	psshBoxesAreEqual,
+	PsshBox,
+	TIMESTAMP_OFFSET,
+} from './isobmff-misc';
 import {
 	MAX_BOX_HEADER_SIZE,
 	MIN_BOX_HEADER_SIZE,
@@ -118,6 +124,8 @@ import { AC3_SAMPLE_RATES } from '../../shared/ac3-misc';
 import { Bitstream } from '../../shared/bitstream';
 import { Aes128CbcContext } from '../aes';
 import { Logging } from '../logging';
+
+const TRUEHD_CHANNEL_ASSIGNMENT_COUNTS = [2, 1, 1, 2, 2, 2, 2, 1, 1, 2, 2, 1, 1];
 
 type InternalTrack = {
 	id: number;
@@ -975,14 +983,23 @@ export class IsobmffDemuxer extends Demuxer {
 				const version = readU8(slice);
 				slice.skip(3); // Flags
 
+				let creationTime: number;
 				if (version === 1) {
-					slice.skip(8 + 8);
+					creationTime = readU64Be(slice);
+					slice.skip(8); // Modification time
 					this.movieTimescale = readU32Be(slice);
 					this.movieDurationInTimescale = readU64Be(slice);
 				} else {
-					slice.skip(4 + 4);
+					creationTime = readU32Be(slice);
+					slice.skip(4); // Modification time
 					this.movieTimescale = readU32Be(slice);
 					this.movieDurationInTimescale = readU32Be(slice);
+				}
+
+				if (creationTime !== 0) {
+					this.metadataTags.creationTime = new Date(1000 * (creationTime - TIMESTAMP_OFFSET));
+				} else {
+					// Assume this means the creation time isn't set (I doubt the file was created in 1904)
 				}
 
 				if (this.movieTimescale === 0) {
@@ -1368,6 +1385,8 @@ export class IsobmffDemuxer extends Demuxer {
 						} else if ((DTS_FOURCCS as readonly string[]).includes(codecName!)) {
 							track.info.codec = 'dts';
 							track.info.dtsFormat = codecName as DtsFourCc;
+						} else if (codecName === 'mlpa') {
+							track.info.codec = 'truehd';
 						} else if (codecName === 'twos') {
 							if (sampleSize === 8) {
 								track.info.codec = 'pcm-s8';
@@ -1988,6 +2007,37 @@ export class IsobmffDemuxer extends Demuxer {
 				if (config.numberOfChannels !== null) {
 					track.info.numberOfChannels = config.numberOfChannels;
 				}
+			}; break;
+
+			case 'dmlp': { // MLPSpecificBox
+				const track = this.currentTrack;
+				if (!track || track.info?.type !== 'audio') {
+					break;
+				}
+
+				const formatInfo = readU32Be(slice);
+
+				const rateBits = formatInfo >>> 28;
+				if (rateBits === 0xf) {
+					Logging._warn('Invalid dmlp box contents, ignoring.');
+					break;
+				}
+
+				track.info.sampleRate = (rateBits & 0x8 ? 44100 : 48000) << (rateBits & 0x7);
+
+				// Prefer the 8-channel presentation's assignment, falling back to the 6-channel one
+				const sixChannelAssignment = (formatInfo >>> 15) & 0x1f;
+				const eightChannelAssignment = formatInfo & 0x1fff;
+				const channelAssignment = eightChannelAssignment || sixChannelAssignment;
+
+				let numberOfChannels = 0;
+				for (let i = 0; i < TRUEHD_CHANNEL_ASSIGNMENT_COUNTS.length; i++) {
+					if (channelAssignment & (1 << i)) {
+						numberOfChannels += TRUEHD_CHANNEL_ASSIGNMENT_COUNTS[i]!;
+					}
+				}
+
+				track.info.numberOfChannels = numberOfChannels;
 			}; break;
 
 			case 'stts': {

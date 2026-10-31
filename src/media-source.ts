@@ -11,7 +11,9 @@ import {
 	AUDIO_CODECS,
 	AudioCodec,
 	extractVideoCodecString,
+	getAudioEncoderConfigExtension,
 	MediaCodec,
+	OPUS_SAMPLE_RATE,
 	parsePcmCodec,
 	PCM_AUDIO_CODECS,
 	PcmAudioCodec,
@@ -32,6 +34,7 @@ import {
 	isCodecReclaimedError,
 	isFirefox,
 	isThenable,
+	isWebKit,
 	last,
 	missingWebCodecsClassMessage,
 	promiseWithResolvers,
@@ -79,6 +82,7 @@ import {
 	extractAvcDecoderConfigurationRecord,
 	extractHevcDecoderConfigurationRecord,
 	extractVp9CodecInfoFromPacket,
+	parseOpusIdentificationHeader,
 	serializeAvcDecoderConfigurationRecord,
 } from './codec-data';
 import { Logging } from './logging';
@@ -2016,6 +2020,8 @@ export class EncodedAudioPacketSource extends AudioSource {
 	}
 }
 
+export const PCM_ENCODER_PACKET_SIZE = 2048; // In frames
+
 class AudioEncoderWrapper {
 	private ensureEncoderPromise: Promise<void> | null = null;
 	private encoderInitialized = false;
@@ -2027,6 +2033,12 @@ class AudioEncoderWrapper {
 	private isPcmEncoder = false;
 	private outputSampleSize: number | null = null;
 	private writeOutputValue: ((view: DataView, byteOffset: number, value: number) => void) | null = null;
+	private pcmMeta: EncodedAudioChunkMetadata | null = null;
+	private pcmStartTimestamp = 0;
+	private pcmEmittedFrames = 0;
+	private pcmReadBuffer = new ArrayBuffer(0);
+	private pcmScratchView: DataView | null = null;
+	private pcmScratchFrames = 0;
 
 	private customEncoder: CustomAudioEncoder | null = null;
 	private customEncoderCallSerializer = new CallSerializer();
@@ -2288,79 +2300,92 @@ class AudioEncoderWrapper {
 		// Need to extract data from the audio data before we close it
 		const { numberOfChannels, numberOfFrames, sampleRate, timestamp } = audioSample;
 
-		const CHUNK_SIZE = 2048;
-		const outputs: {
-			frameCount: number;
-			view: DataView;
-		}[] = [];
-
-		// Prepare all of the output buffers, each being bounded by CHUNK_SIZE so we don't generate huge packets
-		for (let frame = 0; frame < numberOfFrames; frame += CHUNK_SIZE) {
-			const frameCount = Math.min(CHUNK_SIZE, audioSample.numberOfFrames - frame);
-			const outputSize = frameCount * numberOfChannels * this.outputSampleSize;
-			const outputBuffer = new ArrayBuffer(outputSize);
-			const outputView = new DataView(outputBuffer);
-
-			outputs.push({ frameCount, view: outputView });
+		if (!this.pcmMeta) {
+			this.pcmMeta = {
+				decoderConfig: {
+					codec: this.encodingConfig.codec,
+					numberOfChannels,
+					sampleRate,
+				},
+			};
+			// Gaps get padded with silence before reaching us, so it's one contiguous run from here on
+			this.pcmStartTimestamp = timestamp;
 		}
 
+		// Read the whole sample interleaved into our reusable read buffer, growing it if needed
 		const isS32 = audioSample.format === 's32' || audioSample.format === 's32-planar';
-		const readFormat = isS32 ? 's32-planar' : 'f32-planar'; // Can't read in f32-planar due to precision loss
+		const readFormat = isS32 ? 's32' : 'f32'; // Can't read in f32 due to precision loss
 		const scale = isS32 ? 1 / 2147483648 : 1;
 
-		const allocationSize = audioSample.allocationSize(({ planeIndex: 0, format: readFormat }));
-		const values = isS32
-			? new Int32Array(allocationSize / 4)
-			: new Float32Array(allocationSize / 4);
-
-		for (let i = 0; i < numberOfChannels; i++) {
-			audioSample.copyTo(values, { planeIndex: i, format: readFormat });
-
-			for (let j = 0; j < outputs.length; j++) {
-				const { frameCount, view } = outputs[j]!;
-
-				for (let k = 0; k < frameCount; k++) {
-					this.writeOutputValue(
-						view,
-						(k * numberOfChannels + i) * this.outputSampleSize,
-						values[j * CHUNK_SIZE + k]! * scale,
-					);
-				}
-			}
+		const allocationSize = audioSample.allocationSize({ planeIndex: 0, format: readFormat });
+		if (this.pcmReadBuffer.byteLength < allocationSize) {
+			this.pcmReadBuffer = new ArrayBuffer(allocationSize);
 		}
+		const values = isS32
+			? new Int32Array(this.pcmReadBuffer, 0, allocationSize / 4)
+			: new Float32Array(this.pcmReadBuffer, 0, allocationSize / 4);
+		audioSample.copyTo(values, { planeIndex: 0, format: readFormat });
 
 		if (shouldClose) {
 			audioSample.close();
 		}
 
-		const meta: EncodedAudioChunkMetadata = {
-			decoderConfig: {
-				codec: this.encodingConfig.codec,
-				numberOfChannels,
-				sampleRate,
-			},
-		};
-
-		for (let i = 0; i < outputs.length; i++) {
-			const { frameCount, view } = outputs[i]!;
-			const outputBuffer = view.buffer;
-			const startFrame = i * CHUNK_SIZE;
-
-			const packet = new EncodedPacket(
-				new Uint8Array(outputBuffer),
-				'key',
-				timestamp + startFrame / sampleRate,
-				frameCount / sampleRate,
+		// Fill up the scratch buffer, emitting it as a packet each time it's full
+		let frame = 0;
+		while (frame < numberOfFrames) {
+			this.pcmScratchView ??= new DataView(
+				new ArrayBuffer(PCM_ENCODER_PACKET_SIZE * numberOfChannels * this.outputSampleSize),
 			);
 
-			this.encodingConfig.onEncodedPacket?.(packet, meta);
-			await this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet, meta); // With backpressure
+			const frameCount = Math.min(PCM_ENCODER_PACKET_SIZE - this.pcmScratchFrames, numberOfFrames - frame);
+			const valueOffset = this.pcmScratchFrames * numberOfChannels;
+			const readOffset = frame * numberOfChannels;
+
+			for (let i = 0; i < frameCount * numberOfChannels; i++) {
+				this.writeOutputValue(
+					this.pcmScratchView,
+					(valueOffset + i) * this.outputSampleSize,
+					values[readOffset + i]! * scale,
+				);
+			}
+
+			this.pcmScratchFrames += frameCount;
+			frame += frameCount;
+
+			if (this.pcmScratchFrames === PCM_ENCODER_PACKET_SIZE) {
+				await this.emitPcmScratchPacket();
+			}
 		}
+	}
+
+	private async emitPcmScratchPacket() {
+		assert(this.outputSampleSize);
+		assert(this.pcmScratchView);
+		assert(this.pcmMeta?.decoderConfig);
+
+		const { numberOfChannels, sampleRate } = this.pcmMeta.decoderConfig;
+		const byteLength = this.pcmScratchFrames * numberOfChannels * this.outputSampleSize;
+
+		const packet = new EncodedPacket(
+			new Uint8Array(this.pcmScratchView.buffer, 0, byteLength),
+			'key',
+			this.pcmStartTimestamp + this.pcmEmittedFrames / sampleRate,
+			this.pcmScratchFrames / sampleRate,
+		);
+		this.pcmEmittedFrames += this.pcmScratchFrames;
+
+		// The packet now owns the buffer
+		this.pcmScratchView = null;
+		this.pcmScratchFrames = 0;
+
+		this.encodingConfig.onEncodedPacket?.(packet, this.pcmMeta);
+		// With backpressure:
+		await this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet, this.pcmMeta);
 	}
 
 	private ensureEncoder(audioSample: AudioSample) {
 		this.ensureEncoderPromise = (async () => {
-			const { numberOfChannels, sampleRate } = audioSample;
+			const { numberOfChannels, sampleRate, timestamp } = audioSample;
 
 			// eslint-disable-next-line @typescript-eslint/no-deprecated
 			const quality = resolveQuality(this.encodingConfig.quality, this.encodingConfig.bitrate);
@@ -2433,45 +2458,23 @@ class AudioEncoderWrapper {
 					);
 				}
 
-				const stack = new Error('Encoding error').stack;
+				const primingShiftInSamples = await detectAudioEncoderPrimingShift(
+					this.encodingConfig.codec,
+					encoderConfig.codec,
+				);
+				const primingShift = primingShiftInSamples / encoderConfig.sampleRate;
+				let opusPreSkip = 0; // In seconds
 
+				const stack = new Error('Encoding error').stack;
 				this.encoder = new AudioEncoder({
 					output: (chunk, meta) => {
-						// WebKit emits an invalid description for AAC (https://bugs.webkit.org/show_bug.cgi?id=302253),
-						// which we try to detect here. If detected, we'll provide our own description instead, derived
-						// from the codec string and audio parameters.
-						if (this.encodingConfig.codec === 'aac' && meta?.decoderConfig) {
-							if (
-								meta.decoderConfig.description
-								&& meta.decoderConfig.description.byteLength > 0
-								&& toUint8Array(meta.decoderConfig.description)[0] === 0x03
-							) {
-								// We were handed an ES descriptor instead of an AudioSpecificConfig
-								const { decoderSpecificInfo } = readEsDescriptor(
-									FileSlice.tempFromBytes(toUint8Array(meta.decoderConfig.description)),
-								);
-								meta.decoderConfig.description = decoderSpecificInfo ?? undefined;
-							}
+						if (meta?.decoderConfig) {
+							fixAudioDecoderConfig(this.encodingConfig.codec, encoderConfig, meta.decoderConfig);
 
-							let needsDescriptionOverwrite = false;
-							if (!meta.decoderConfig.description || meta.decoderConfig.description.byteLength < 2) {
-								needsDescriptionOverwrite = true;
-							} else {
-								const audioSpecificConfig = parseAacAudioSpecificConfig(
-									toUint8Array(meta.decoderConfig.description),
-								);
-
-								needsDescriptionOverwrite = audioSpecificConfig.objectType === 0;
-							}
-
-							if (needsDescriptionOverwrite) {
-								const objectType = Number(last(encoderConfig.codec.split('.')));
-
-								meta.decoderConfig.description = buildAacAudioSpecificConfig({
-									objectType,
-									outputNumberOfChannels: meta.decoderConfig.numberOfChannels,
-									outputSampleRate: meta.decoderConfig.sampleRate,
-								});
+							// We want Opus packet timestamps to include the pre-skip
+							if (this.encodingConfig.codec === 'opus' && meta.decoderConfig.description) {
+								const description = toUint8Array(meta.decoderConfig.description);
+								opusPreSkip = parseOpusIdentificationHeader(description).preSkip / OPUS_SAMPLE_RATE;
 							}
 						}
 
@@ -2480,11 +2483,19 @@ class AudioEncoderWrapper {
 						// Snap the timing information to the sample rate to recover information lost in microsecond
 						// conversion
 						packet = packet.clone({
-							timestamp: roundToDivisor(packet.timestamp, encoderConfig.sampleRate),
+							timestamp: roundToDivisor(
+								packet.timestamp - primingShift - opusPreSkip,
+								encoderConfig.sampleRate,
+							),
 							duration: chunk.duration != null
 								? roundToDivisor(packet.duration, encoderConfig.sampleRate)
 								: undefined,
 						});
+
+						if (isFirefox()) {
+							// For Firefox, we only need to offset the first timestamp
+							opusPreSkip = 0;
+						}
 
 						this.encodingConfig.onEncodedPacket?.(packet, meta);
 						this.lastMuxerPromise
@@ -2499,6 +2510,10 @@ class AudioEncoderWrapper {
 					},
 				});
 				this.encoder.configure(encoderConfig);
+
+				if (this.encodingConfig.codec === 'aac' && isWebKit()) {
+					encodeAacSilencePrefix(this.encoder, numberOfChannels, sampleRate, timestamp);
+				}
 			}
 
 			assert(this.source._connectedTrack);
@@ -2619,6 +2634,10 @@ class AudioEncoderWrapper {
 				if (this.resampler) {
 					await this.resampler.finalize();
 				}
+
+				if (this.pcmScratchFrames > 0) {
+					await this.emitPcmScratchPacket();
+				}
 			}
 
 			this.closed = true;
@@ -2665,6 +2684,186 @@ class AudioEncoderWrapper {
 		}
 	}
 }
+
+const audioEncoderPrimingShiftPromises = new Map<string, Promise<number>>();
+
+// WebCodecs audio encoders have encoder priming delay but don't surface this delay whatsoever, meaning they typically
+// just emit audio at incorrect timestamps. This priming delay depends heavily on the browser-OS combo, so instead of
+// hardcoding it, we simply detect it locally.
+const detectAudioEncoderPrimingShift = (codec: AudioCodec, codecString: string) => {
+	let promise = audioEncoderPrimingShiftPromises.get(codecString);
+	if (promise) {
+		return promise;
+	}
+
+	promise = (async () => {
+		const numberOfChannels = 1;
+		const sampleRate = 48000;
+		const encoderConfig: AudioEncoderConfig = {
+			codec: codecString,
+			numberOfChannels,
+			sampleRate,
+			...getAudioEncoderConfigExtension(codec),
+		};
+		const impulseIndex = 4096;
+		const numberOfFrames = 2 * impulseIndex;
+
+		const chunks: EncodedAudioChunk[] = [];
+		let decoderConfig = null as AudioDecoderConfig | null;
+		let peakIndex = null as number | null;
+		let peakValue = -Infinity;
+		let decodedFrames = 0;
+		let codecError = null as DOMException | null;
+
+		const encoder = new AudioEncoder({
+			output: (chunk, meta) => {
+				if (meta?.decoderConfig) {
+					decoderConfig ??= meta.decoderConfig;
+				}
+
+				chunks.push(chunk);
+			},
+			error: (error) => {
+				codecError ??= error;
+			},
+		});
+		const decoder = new AudioDecoder({
+			output: (audioData) => {
+				const values = new Float32Array(audioData.numberOfFrames);
+				audioData.copyTo(values, { planeIndex: 0, format: 'f32-planar' });
+				audioData.close();
+
+				for (let i = 0; i < values.length; i++) {
+					if (values[i]! > peakValue) {
+						peakValue = values[i]!;
+						peakIndex = decodedFrames + i;
+					}
+				}
+
+				decodedFrames += values.length;
+			},
+			error: (error) => {
+				codecError ??= error;
+			},
+		});
+
+		try {
+			encoder.configure(encoderConfig);
+
+			if (codec === 'aac' && isWebKit()) {
+				encodeAacSilencePrefix(encoder, numberOfChannels, sampleRate, 0);
+			}
+
+			const data = new Float32Array(numberOfChannels * numberOfFrames);
+			data[impulseIndex] = 1;
+
+			const audioData = new AudioData({
+				data,
+				format: 'f32-planar',
+				numberOfChannels,
+				numberOfFrames,
+				sampleRate,
+				timestamp: 0,
+			});
+			encoder.encode(audioData);
+			audioData.close();
+
+			await encoder.flush();
+
+			assert(decoderConfig);
+			fixAudioDecoderConfig(codec, encoderConfig, decoderConfig);
+
+			decoder.configure(decoderConfig);
+			for (const chunk of chunks) {
+				decoder.decode(chunk);
+			}
+
+			await decoder.flush();
+		} catch (error) {
+			throw codecError ?? error;
+		} finally {
+			if (encoder.state !== 'closed') {
+				encoder.close();
+			}
+			if (decoder.state !== 'closed') {
+				decoder.close();
+			}
+		}
+
+		assert(peakIndex !== null);
+
+		const firstChunkTimestampInSamples = Math.round(chunks[0]!.timestamp / 1e6 * sampleRate);
+		return peakIndex - impulseIndex + firstChunkTimestampInSamples;
+	})();
+
+	audioEncoderPrimingShiftPromises.set(codecString, promise);
+
+	// Don't remember failures because they _could_ be transient
+	promise.catch(() => audioEncoderPrimingShiftPromises.delete(codecString));
+
+	return promise;
+};
+
+/** Works around https://bugs.webkit.org/show_bug.cgi?id=328491 */
+const encodeAacSilencePrefix = (
+	encoder: AudioEncoder,
+	numberOfChannels: number,
+	sampleRate: number,
+	timestamp: number, // In seconds, the timestamp of the first actual sample
+) => {
+	const numberOfFrames = 1024;
+	const audioData = new AudioData({
+		data: new Float32Array(numberOfChannels * numberOfFrames),
+		format: 'f32-planar',
+		numberOfChannels,
+		numberOfFrames,
+		sampleRate,
+		timestamp: Math.round(1e6 * (timestamp - numberOfFrames / sampleRate)),
+	});
+	encoder.encode(audioData);
+	audioData.close();
+};
+
+const fixAudioDecoderConfig = (
+	codec: AudioCodec,
+	encoderConfig: AudioEncoderConfig,
+	decoderConfig: AudioDecoderConfig,
+) => {
+	// WebKit emits an invalid description for AAC (https://bugs.webkit.org/show_bug.cgi?id=302253), which we try to
+	// detect here. If detected, we'll provide our own description instead, derived from the codec string and audio
+	// parameters.
+	if (codec === 'aac') {
+		if (
+			decoderConfig.description
+			&& decoderConfig.description.byteLength > 0
+			&& toUint8Array(decoderConfig.description)[0] === 0x03
+		) {
+			// We were handed an ES descriptor instead of an AudioSpecificConfig
+			const { decoderSpecificInfo } = readEsDescriptor(
+				FileSlice.tempFromBytes(toUint8Array(decoderConfig.description)),
+			);
+			decoderConfig.description = decoderSpecificInfo ?? undefined;
+		}
+
+		let needsDescriptionOverwrite = false;
+		if (!decoderConfig.description || decoderConfig.description.byteLength < 2) {
+			needsDescriptionOverwrite = true;
+		} else {
+			const audioSpecificConfig = parseAacAudioSpecificConfig(toUint8Array(decoderConfig.description));
+			needsDescriptionOverwrite = audioSpecificConfig.objectType === 0;
+		}
+
+		if (needsDescriptionOverwrite) {
+			const objectType = Number(last(encoderConfig.codec.split('.')));
+
+			decoderConfig.description = buildAacAudioSpecificConfig({
+				objectType,
+				outputNumberOfChannels: decoderConfig.numberOfChannels,
+				outputSampleRate: decoderConfig.sampleRate,
+			});
+		}
+	}
+};
 
 /**
  * This source can be used to add raw, unencoded audio samples to an output audio track. These samples will

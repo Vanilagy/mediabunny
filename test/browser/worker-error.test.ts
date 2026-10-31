@@ -9,6 +9,7 @@ import { BufferTarget } from '../../src/target.js';
 import { registerAacEncoder } from '@mediabunny/aac-encoder';
 import { registerAc3Encoder } from '@mediabunny/ac3';
 import { registerDtsEncoder } from '@mediabunny/dts';
+import { registerTrueHdEncoder } from '@mediabunny/truehd';
 import { registerFlacEncoder } from '@mediabunny/flac-encoder';
 import { registerMp3Encoder } from '@mediabunny/mp3-encoder';
 
@@ -25,6 +26,7 @@ const cases: { codec: AudioCodec; register: () => void; bitrate: number }[] = [
 	{ codec: 'mp3', register: registerMp3Encoder, bitrate: 192000 },
 	{ codec: 'ac3', register: registerAc3Encoder, bitrate: 192000 },
 	{ codec: 'dts', register: registerDtsEncoder, bitrate: 768000 },
+	{ codec: 'truehd', register: registerTrueHdEncoder, bitrate: 192000 },
 ];
 
 for (const { codec, register, bitrate } of cases) {

@@ -27,6 +27,7 @@ export const CODEC_TO_CODEC_ID: Partial<Record<MediaCodec, NodeAv.AVCodecID>> = 
 	ac3: NodeAv.AV_CODEC_ID_AC3,
 	eac3: NodeAv.AV_CODEC_ID_EAC3,
 	dts: NodeAv.AV_CODEC_ID_DTS,
+	truehd: NodeAv.AV_CODEC_ID_TRUEHD,
 };
 
 let cachedHardwareContext: NodeAv.HardwareContext | null | undefined = undefined;
@@ -288,6 +289,19 @@ export const getDtsChannelLayout = (numChannels: number): NodeAv.ChannelLayout =
 		case 1: return NodeAv.AV_CHANNEL_LAYOUT_MONO;
 		case 2: return NodeAv.AV_CHANNEL_LAYOUT_STEREO;
 		case 4: return { nbChannels: 4, order: NodeAv.AV_CHANNEL_ORDER_NATIVE, mask: QUAD_SIDE_MASK };
+		case 5: return NodeAv.AV_CHANNEL_LAYOUT_5POINT0;
+		case 6: return NodeAv.AV_CHANNEL_LAYOUT_5POINT1;
+		default: return { nbChannels: numChannels, order: NodeAv.AV_CHANNEL_ORDER_UNSPEC, mask: 0n };
+	}
+};
+
+/** The TrueHD encoder only accepts a fixed set of layouts, so it gets its own mapping. */
+export const getTrueHdChannelLayout = (numChannels: number): NodeAv.ChannelLayout => {
+	switch (numChannels) {
+		case 1: return NodeAv.AV_CHANNEL_LAYOUT_MONO;
+		case 2: return NodeAv.AV_CHANNEL_LAYOUT_STEREO;
+		case 3: return NodeAv.AV_CHANNEL_LAYOUT_SURROUND;
+		case 4: return NodeAv.AV_CHANNEL_LAYOUT_4POINT0;
 		case 5: return NodeAv.AV_CHANNEL_LAYOUT_5POINT0;
 		case 6: return NodeAv.AV_CHANNEL_LAYOUT_5POINT1;
 		default: return { nbChannels: numChannels, order: NodeAv.AV_CHANNEL_ORDER_UNSPEC, mask: 0n };

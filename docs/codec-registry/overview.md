@@ -28,6 +28,7 @@ The registry is an extension of the [WebCodecs Codec Registry](https://www.w3.or
 - [AC-3](./ac3)
 - [E-AC-3](./eac3)
 - [DTS](./dts)
+- [TrueHD](./truehd)
 - [Linear PCM](./pcm)
 - [μ-law PCM](./ulaw)
 - [A-law PCM](./alaw)

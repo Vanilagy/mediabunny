@@ -214,7 +214,7 @@ segment-2.ts
 #EXT-X-ENDLIST
 ```
 
-Here, each segment is assigned a specific Unix timestamp, crucial for cross-track synchronization.
+Here, each segment is assigned a specific Unix timestamp, which clearly places media at a specific point in wall-clock time.
 
 Mediabunny does not expose these timestamps as out-of-band metadata. Instead, it shifts the whole track's timeline so
 that its timestamps *are* Unix timestamps.
@@ -228,7 +228,7 @@ const sink = new EncodedPacketSink(track);
 (await sink.getPacket(1704067210))!.timestamp; // => 1704067210 (Unix timestamp for 2024-01-01T00:00:10Z)
 ```
 
-This makes cross-track synchronization trivial. To know if a track's timestamps are relative to the Unix epoch, use:
+To know if a track's timestamps are relative to the Unix epoch, use:
 ```ts
 await track.isRelativeToUnixEpoch(); // => boolean
 ```
@@ -279,6 +279,8 @@ await track.getLiveRefreshInterval(); // => number | null
 Mediabunny has a very simple mental model for live tracks: they are treated like tracks where media data is continually being added to the end. That also means that the media data *at* the end is not yet known, because the end is not yet known.
 
 Another way to think of it is as input files that have not yet been fully written, where more data is still being added to the end.
+
+This works for streams of any length, including extremely long or non-stop live streams: timestamps stay continuous no matter how long the stream runs.
 
 The point at which the last piece of media data is currently known is called the **live edge**.
 

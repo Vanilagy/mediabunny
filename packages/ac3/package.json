@@ -1,7 +1,7 @@
 {
   "name": "@mediabunny/ac3",
   "author": "Vanilagy",
-  "version": "1.62.1",
+  "version": "1.65.0",
   "description": "AC-3 and E-AC-3 (Dolby Digital) decoder and encoder extension for Mediabunny, based on libavcodec.",
   "main": "./dist/bundles/mediabunny-ac3.mjs",
   "module": "./dist/bundles/mediabunny-ac3.mjs",
@@ -15,6 +15,8 @@
     "README.md",
     "package.json",
     "LICENSE",
+    "licenses",
+    "patches",
     "dist",
     "src"
   ],

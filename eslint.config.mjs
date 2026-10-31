@@ -45,6 +45,8 @@ export default tseslint.config(
 			'packages/ac3/build',
 			'packages/dts/dist',
 			'packages/dts/build',
+			'packages/truehd/dist',
+			'packages/truehd/build',
 			'packages/aac-encoder/dist',
 			'packages/aac-encoder/build',
 			'packages/flac-encoder/dist',
