@@ -16,7 +16,7 @@ const mp4FilePath = path.join(__dirname, '..', 'public/mjpeg.mp4');
 // From test/public: ffmpeg -i demo.mp4 -map 0:v:0 -c:v mjpeg -q:v 3 -pix_fmt yuvj420p mjpeg.mkv
 const mkvFilePath = path.join(__dirname, '../public/mjpeg.mkv');
 
-test.only('reading FFmpeg MJPEG in an mp4v sample entry', async () => {
+test.concurrent('reading FFmpeg MJPEG in an mp4v sample entry', async () => {
 	using input = new Input({
 		source: new FilePathSource(mp4FilePath),
 		formats: ALL_FORMATS,

@@ -155,7 +155,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 		}
 
 		if (this.codec === 'mjpeg') {
-			pixelFormat = NodeAv.AV_PIX_FMT_YUVJ420P;
+			pixelFormat = NodeAv.AV_PIX_FMT_YUV420P;
 			codecContext.colorRange = NodeAv.AVCOL_RANGE_JPEG;
 		}
 
