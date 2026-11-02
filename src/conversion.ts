@@ -1678,6 +1678,7 @@ export class Conversion {
 				const meta: EncodedVideoChunkMetadata = { decoderConfig: decoderConfig ?? undefined };
 				const packetOrderValidator = new PacketOrderValidator();
 				let droppingGop = false;
+				let warnedAboutDroppedPackets = false;
 
 				// eslint-disable-next-line curly
 				if (copyStartPacket) for await (const packet of sink.packets(
@@ -1749,6 +1750,14 @@ export class Conversion {
 
 					if (!packetOrderValidator.digest(packetStartTimestamp, packetType)) {
 						droppingGop = packet.type === 'key';
+
+						if (!warnedAboutDroppedPackets) {
+							Logging._warn(
+								'Some video packets had to be dropped in order to produce correct output timestamps.',
+							);
+							warnedAboutDroppedPackets = true;
+						}
+
 						continue;
 					}
 
@@ -2162,6 +2171,7 @@ export class Conversion {
 				const meta: EncodedAudioChunkMetadata = { decoderConfig: decoderConfig ?? undefined };
 				const packetOrderValidator = new PacketOrderValidator();
 				let droppingGop = false;
+				let warnedAboutDroppedPackets = false;
 
 				// eslint-disable-next-line curly
 				if (copyStartPacket) for await (const packet of sink.packets(copyStartPacket)) {
@@ -2191,6 +2201,14 @@ export class Conversion {
 					// If packets violate the ordering rule (and would throw in the muxer), drop 'em
 					if (!packetOrderValidator.digest(packetTimestamp, packet.type)) {
 						droppingGop = packet.type === 'key';
+
+						if (!warnedAboutDroppedPackets) {
+							Logging._warn(
+								'Some audio packets had to be dropped in order to produce correct output timestamps.',
+							);
+							warnedAboutDroppedPackets = true;
+						}
+
 						continue;
 					}
 
