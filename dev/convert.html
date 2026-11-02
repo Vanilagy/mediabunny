@@ -59,7 +59,7 @@
 		const tracks = [];
 		let start = 0;
 
-		if (false) {
+		if (true) {
 			input = new Mediabunny.Input({
 				source: new Mediabunny.UrlSource('http://localhost:8080/playlist.m3u8'),
 				formats: Mediabunny.ALL_FORMATS,
@@ -90,7 +90,7 @@
 		//let last  = -Infinity;
 		//const primaryTrack = await input.getPrimaryVideoTrack();
 		//for await (const packet of new Mediabunny.EncodedPacketSink(primaryTrack).packets()) {
-		//	console.log(packet.timestamp, packet.duration, packet.timestamp - last)
+		//	console.log(packet.type, packet.timestamp, packet.duration, packet.timestamp - last)
 		//	last = packet.timestamp;
 		//}
 		//console.log("Done")
@@ -177,8 +177,8 @@
 				}
 			},
 			trim: {
-				start: 5,
-				end: 10,
+				//start: 5,
+				//end: 10,
 				//start: 0,
 				//end: 5,
 				//start: 25,
@@ -193,7 +193,7 @@
 				//start: startTime,
 				//end: startTime + 2,
 			},
-			copy: false,
+			//copy: false,
 		});
 		//console.log(conversion);
 		console.log(conversion.discardedTracks);

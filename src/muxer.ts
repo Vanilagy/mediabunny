@@ -8,7 +8,7 @@
 
 import { AsyncMutex } from './misc';
 import { Output, OutputAudioTrack, OutputSubtitleTrack, OutputTrack, OutputVideoTrack } from './output';
-import { EncodedPacket } from './packet';
+import { EncodedPacket, PacketType } from './packet';
 import { SubtitleCue, SubtitleMetadata } from './subtitles';
 
 export abstract class Muxer {
@@ -37,40 +37,59 @@ export abstract class Muxer {
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	onTrackClose(track: OutputTrack) {}
 
-	private trackTimestampInfo = new WeakMap<OutputTrack, {
-		maxTimestamp: number;
-		maxTimestampBeforeLastKeyPacket: number | null;
-	}>();
+	private trackPacketOrderValidators = new WeakMap<OutputTrack, PacketOrderValidator>();
 
 	protected validateTimestamp(track: OutputTrack, timestampInSeconds: number, isKeyPacket: boolean) {
-		let timestampInfo = this.trackTimestampInfo.get(track);
-		if (!timestampInfo) {
-			if (!isKeyPacket) {
-				throw new Error('First packet must be a key packet.');
-			}
-
-			timestampInfo = {
-				maxTimestamp: timestampInSeconds,
-				maxTimestampBeforeLastKeyPacket: null,
-			};
-			this.trackTimestampInfo.set(track, timestampInfo);
-		} else {
-			if (isKeyPacket) {
-				timestampInfo.maxTimestampBeforeLastKeyPacket = timestampInfo.maxTimestamp;
-			}
-
-			if (
-				timestampInfo.maxTimestampBeforeLastKeyPacket !== null
-				&& timestampInSeconds < timestampInfo.maxTimestampBeforeLastKeyPacket
-			) {
-				throw new Error(
-					`Timestamps cannot be smaller than the largest timestamp of the previous GOP (a GOP begins with a`
-					+ ` key packet and ends right before the next key packet). Got ${timestampInSeconds}s, but largest`
-					+ ` timestamp is ${timestampInfo.maxTimestampBeforeLastKeyPacket}s.`,
-				);
-			}
-
-			timestampInfo.maxTimestamp = Math.max(timestampInfo.maxTimestamp, timestampInSeconds);
+		let validator = this.trackPacketOrderValidators.get(track);
+		if (!validator) {
+			validator = new PacketOrderValidator();
+			this.trackPacketOrderValidators.set(track, validator);
 		}
+
+		const type = isKeyPacket ? 'key' : 'delta';
+		if (validator.digest(timestampInSeconds, type)) {
+			return;
+		}
+
+		if (validator.maxTimestamp === null) {
+			throw new Error('First packet must be a key packet.');
+		}
+
+		const largestTimestamp = type === 'key'
+			? validator.maxTimestamp
+			: validator.maxTimestampBeforeLastKeyPacket;
+		throw new Error(
+			`Timestamps cannot be smaller than the largest timestamp of the previous GOP (a GOP begins with a`
+			+ ` key packet and ends right before the next key packet). Got ${timestampInSeconds}s, but largest`
+			+ ` timestamp is ${largestTimestamp}s.`,
+		);
+	}
+}
+
+export class PacketOrderValidator {
+	maxTimestamp: number | null = null;
+	maxTimestampBeforeLastKeyPacket: number | null = null;
+
+	check(timestamp: number, type: PacketType) {
+		if (this.maxTimestamp === null) {
+			return type === 'key';
+		}
+
+		// A key packet starts a new GOP, making the current one the previous one
+		const maxTimestampOfPreviousGop = type === 'key' ? this.maxTimestamp : this.maxTimestampBeforeLastKeyPacket;
+		return maxTimestampOfPreviousGop === null || timestamp >= maxTimestampOfPreviousGop;
+	}
+
+	digest(timestamp: number, type: PacketType) {
+		if (!this.check(timestamp, type)) {
+			return false;
+		}
+
+		if (type === 'key') {
+			this.maxTimestampBeforeLastKeyPacket = this.maxTimestamp;
+		}
+		this.maxTimestamp = Math.max(this.maxTimestamp ?? -Infinity, timestamp);
+
+		return true;
 	}
 }

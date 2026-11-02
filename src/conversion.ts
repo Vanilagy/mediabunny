@@ -65,6 +65,7 @@ import {
 } from './sample';
 import { MetadataTags, validateMetadataTags } from './metadata';
 import { NullTarget } from './target';
+import { PacketOrderValidator } from './muxer';
 
 /**
  * The options for media file conversion.
@@ -1675,7 +1676,8 @@ export class Conversion {
 				const sink = new EncodedPacketSink(track);
 				const decoderConfig = await track.getDecoderConfig();
 				const meta: EncodedVideoChunkMetadata = { decoderConfig: decoderConfig ?? undefined };
-				let maxTimestamp: number | null = null;
+				const packetOrderValidator = new PacketOrderValidator();
+				let droppingGop = false;
 
 				// eslint-disable-next-line curly
 				if (copyStartPacket) for await (const packet of sink.packets(
@@ -1730,14 +1732,25 @@ export class Conversion {
 					packetStartTimestamp += this._timestampOffset;
 					packetEndTimestamp += this._timestampOffset;
 
-					// The muxer rejects key packets with a timestamp smaller than the largest timestamp of the
-					// previous GOP. Some files in the wild actually violate this, so we demote such packets to delta
-					// packets to keep them in the previous GOP and keep the rule satisfied
+					if (packet.type === 'key') {
+						droppingGop = false; // Key packets reset it
+					}
+					if (droppingGop) {
+						continue;
+					}
+
+					// Check the packets against the same validator used by muxers. If a key packet validates it,
+					// we demote it to a delta packet and try again. If the packet still doesn't pass, we simply drop
+					// it entirely.
 					let packetType = packet.type;
-					if (packetType === 'key' && maxTimestamp !== null && packetStartTimestamp < maxTimestamp) {
+					if (packetType === 'key' && !packetOrderValidator.check(packetStartTimestamp, 'key')) {
 						packetType = 'delta';
 					}
-					maxTimestamp = Math.max(maxTimestamp ?? -Infinity, packetStartTimestamp);
+
+					if (!packetOrderValidator.digest(packetStartTimestamp, packetType)) {
+						droppingGop = packet.type === 'key';
+						continue;
+					}
 
 					const modifiedPacket = packet.clone({
 						timestamp: packetStartTimestamp,
@@ -2147,7 +2160,8 @@ export class Conversion {
 				const sink = new EncodedPacketSink(track);
 				const decoderConfig = await track.getDecoderConfig();
 				const meta: EncodedAudioChunkMetadata = { decoderConfig: decoderConfig ?? undefined };
-				let maxTimestamp: number | null = null;
+				const packetOrderValidator = new PacketOrderValidator();
+				let droppingGop = false;
 
 				// eslint-disable-next-line curly
 				if (copyStartPacket) for await (const packet of sink.packets(copyStartPacket)) {
@@ -2167,11 +2181,18 @@ export class Conversion {
 
 					const packetTimestamp = packet.timestamp + this._timestampOffset;
 
-					// Drop packets that would violate the GOP timestamp monotonicity rule
-					if (maxTimestamp !== null && packetTimestamp < maxTimestamp) {
+					if (packet.type === 'key') {
+						droppingGop = false;
+					}
+					if (droppingGop) {
 						continue;
 					}
-					maxTimestamp = packetTimestamp;
+
+					// If packets violate the ordering rule (and would throw in the muxer), drop 'em
+					if (!packetOrderValidator.digest(packetTimestamp, packet.type)) {
+						droppingGop = packet.type === 'key';
+						continue;
+					}
 
 					const modifiedPacket = packet.clone({
 						timestamp: packetTimestamp,
