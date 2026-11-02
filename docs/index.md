@@ -100,7 +100,7 @@ const sponsors = {
 	gold: [
 		{ image: '/sponsors/remotion-light.png', name: 'Remotion', url: 'https://remotion.dev/' },
 		{ image: '/sponsors/diffusionstudio.png', name: 'Diffusion Studio', url: 'https://diffusion.studio/' },
-		{ image: '/sponsors/kino.jpg', name: 'Kino', url: 'https://kino.ai/' },
+		{ image: '/sponsors/kino.png', name: 'Kino', url: 'https://kino.ai/' },
 		{ image: '/sponsors/screen-studio.webp', name: 'Screen Studio', url: 'https://screen.studio/' },
 		{ image: '/sponsors/tella.svg', name: 'Tella', url: 'https://www.tella.com/' },
 	],
