@@ -31,10 +31,6 @@ Mediabunny is a JavaScript library for reading, writing, and converting media (l
     </picture>
   </a>
   &nbsp;&nbsp;&nbsp;&nbsp;
-  <a href="https://diffusion.studio/" target="_blank" rel="sponsored">
-    <img src="./docs/public/sponsors/diffusionstudio.png" width="60" height="60" alt="Diffusion Studio">
-  </a>
-  &nbsp;&nbsp;&nbsp;&nbsp;
   <a href="https://kino.ai/" target="_blank" rel="sponsored">
     <img src="./docs/public/sponsors/kino.png" width="60" height="60" alt="Kino">
   </a>

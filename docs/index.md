@@ -99,7 +99,6 @@ const sponsors = {
 	],
 	gold: [
 		{ image: '/sponsors/remotion-light.png', name: 'Remotion', url: 'https://remotion.dev/' },
-		{ image: '/sponsors/diffusionstudio.png', name: 'Diffusion Studio', url: 'https://diffusion.studio/' },
 		{ image: '/sponsors/kino.png', name: 'Kino', url: 'https://kino.ai/' },
 		{ image: '/sponsors/screen-studio.webp', name: 'Screen Studio', url: 'https://screen.studio/' },
 		{ image: '/sponsors/tella.svg', name: 'Tella', url: 'https://www.tella.com/' },
@@ -115,6 +114,7 @@ const sponsors = {
 	],
 	individual: [
 	    { image: '/sponsors/gling.svg', name: 'Gling AI', url: 'https://www.gling.ai/' },
+		{ image: '/sponsors/diffusionstudio.png', name: 'Diffusion Studio', url: 'https://diffusion.studio/' },
 		{ image: '/sponsors/pintura-labs.png', name: 'Pintura Labs', url: 'https://pqina.nl/pintura/' },
 		{ image: '/sponsors/elevenlabs.png', name: 'ElevenLabs', url: 'https://elevenlabs.io/' },
 		{ image: 'https://avatars.githubusercontent.com/u/189556080', name: 'Cursorful', url: 'https://github.com/cursorful' },
