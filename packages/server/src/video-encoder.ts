@@ -154,11 +154,6 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			}
 		}
 
-		if (this.codec === 'mjpeg') {
-			pixelFormat = NodeAv.AV_PIX_FMT_YUV420P;
-			codecContext.colorRange = NodeAv.AVCOL_RANGE_JPEG;
-		}
-
 		const pixelAspectRatio = simplifyRational({
 			num: (this.config.displayWidth ?? this.config.width) * this.config.height,
 			den: (this.config.displayHeight ?? this.config.height) * this.config.width,
