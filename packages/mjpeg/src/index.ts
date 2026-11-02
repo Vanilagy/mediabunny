@@ -98,6 +98,7 @@ class MjpegEncoder extends CustomVideoEncoder {
 
 	private encodeAtQuality(videoSample: VideoSample, quality: number): Promise<Blob> {
 		assert(this.context && this.canvas);
+		this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
 		videoSample.draw(this.context, 0, 0, this.config.width, this.config.height);
 		return this.canvas.convertToBlob({ type: 'image/jpeg', quality });
 	}
