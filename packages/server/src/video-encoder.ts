@@ -306,6 +306,11 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			range = NodeAv.AVCOL_RANGE_JPEG;
 		}
 
+		// Standard JPEG requires full-range YUV, even when the input uses limited range.
+		if (this.codec === 'mjpeg') {
+			range = NodeAv.AVCOL_RANGE_JPEG;
+		}
+
 		codecContext.colorPrimaries = primaries;
 		codecContext.colorTrc = transfer;
 		codecContext.colorSpace = matrix;
@@ -378,7 +383,8 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 		const requiresScaler
 			= this.codecContext.pixelFormat !== this.frame.format
 				|| this.codecContext.width !== this.frame.width
-				|| this.codecContext.height !== this.frame.height;
+				|| this.codecContext.height !== this.frame.height
+				|| this.codecContext.colorRange !== this.frame.colorRange;
 
 		if (requiresScaler) {
 			if (!this.scaler) {
