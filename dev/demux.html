@@ -20,6 +20,16 @@
 		const audioTrack = await input.getPrimaryAudioTrack();
 		const sink = new Mediabunny.AudioSampleSink(audioTrack);
 
+		for await (const sample of sink.samples()) {
+			const thing = new Float32Array(new ArrayBuffer(sample.allocationSize({ format: 'f32-planar', planeIndex: 0 })));
+			sample.copyTo(thing, { format: 'f32-planar', planeIndex: 0 });
+
+			console.log(sample.timestamp, sample.duration, thing);
+
+			sample.close()
+		}
+		
+		/*
 		console.log(await audioTrack.getPreRollDuration());
 
 		const iter = await sink.samples(10 - 0 / 48000);
@@ -30,6 +40,7 @@
 		sample.copyTo(buf, { format: 'f32-planar', planeIndex: 0 });
 
 		console.log(buf)
+		*/
 
 		/*
 		const track = await input.getPrimaryVideoTrack();

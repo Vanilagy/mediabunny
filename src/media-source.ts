@@ -59,6 +59,7 @@ import { EncodedPacket, EncodedPacketSideData, PacketType } from './packet';
 import {
 	AudioSample,
 	audioSampleToInterleavedFormat,
+	getBytesPerSample,
 	toInterleavedAudioFormat,
 	VideoSample,
 	VideoSamplePixelFormat,
@@ -2231,9 +2232,15 @@ class AudioEncoderWrapper {
 
 					if (sampleDiff >= 64) {
 						// The gap is big enough, let's add a correction sample
+						const bytesPerSample = getBytesPerSample(audioSample.format);
+						const data = new Uint8Array(bytesPerSample * sampleDiff * audioSample.numberOfChannels);
+						if (audioSample.format === 'u8' || audioSample.format === 'u8-planar') {
+							data.fill(2 ** 7); // Fill it with the silent value
+						}
+
 						const fillSample = new AudioSample({
-							data: new Float32Array(sampleDiff * audioSample.numberOfChannels),
-							format: 'f32-planar',
+							data,
+							format: audioSample.format,
 							sampleRate: audioSample.sampleRate,
 							numberOfChannels: audioSample.numberOfChannels,
 							numberOfFrames: sampleDiff,
@@ -2385,7 +2392,7 @@ class AudioEncoderWrapper {
 
 	private ensureEncoder(audioSample: AudioSample) {
 		this.ensureEncoderPromise = (async () => {
-			const { numberOfChannels, sampleRate, timestamp } = audioSample;
+			const { format, numberOfChannels, sampleRate, timestamp } = audioSample;
 
 			// eslint-disable-next-line @typescript-eslint/no-deprecated
 			const quality = resolveQuality(this.encodingConfig.quality, this.encodingConfig.bitrate);
@@ -2512,7 +2519,7 @@ class AudioEncoderWrapper {
 				this.encoder.configure(encoderConfig);
 
 				if (this.encodingConfig.codec === 'aac' && isWebKit()) {
-					encodeAacSilencePrefix(this.encoder, numberOfChannels, sampleRate, timestamp);
+					encodeAacSilencePrefix(this.encoder, format, numberOfChannels, sampleRate, timestamp);
 				}
 			}
 
@@ -2707,6 +2714,7 @@ const detectAudioEncoderPrimingShift = (codec: AudioCodec, codecString: string) 
 		};
 		const impulseIndex = 4096;
 		const numberOfFrames = 2 * impulseIndex;
+		const format = 'f32-planar';
 
 		const chunks: EncodedAudioChunk[] = [];
 		let decoderConfig = null as AudioDecoderConfig | null;
@@ -2730,7 +2738,7 @@ const detectAudioEncoderPrimingShift = (codec: AudioCodec, codecString: string) 
 		const decoder = new AudioDecoder({
 			output: (audioData) => {
 				const values = new Float32Array(audioData.numberOfFrames);
-				audioData.copyTo(values, { planeIndex: 0, format: 'f32-planar' });
+				audioData.copyTo(values, { planeIndex: 0, format });
 				audioData.close();
 
 				for (let i = 0; i < values.length; i++) {
@@ -2751,7 +2759,7 @@ const detectAudioEncoderPrimingShift = (codec: AudioCodec, codecString: string) 
 			encoder.configure(encoderConfig);
 
 			if (codec === 'aac' && isWebKit()) {
-				encodeAacSilencePrefix(encoder, numberOfChannels, sampleRate, 0);
+				encodeAacSilencePrefix(encoder, format, numberOfChannels, sampleRate, 0);
 			}
 
 			const data = new Float32Array(numberOfChannels * numberOfFrames);
@@ -2759,7 +2767,7 @@ const detectAudioEncoderPrimingShift = (codec: AudioCodec, codecString: string) 
 
 			const audioData = new AudioData({
 				data,
-				format: 'f32-planar',
+				format,
 				numberOfChannels,
 				numberOfFrames,
 				sampleRate,
@@ -2807,14 +2815,21 @@ const detectAudioEncoderPrimingShift = (codec: AudioCodec, codecString: string) 
 /** Works around https://bugs.webkit.org/show_bug.cgi?id=328491 */
 const encodeAacSilencePrefix = (
 	encoder: AudioEncoder,
+	format: AudioSampleFormat, // Must match the format of the actual audio data for this workaround to work
 	numberOfChannels: number,
 	sampleRate: number,
 	timestamp: number, // In seconds, the timestamp of the first actual sample
 ) => {
 	const numberOfFrames = 1024;
+	const bytesPerSample = getBytesPerSample(format);
+	const data = new Uint8Array(bytesPerSample * numberOfFrames * numberOfChannels);
+	if (format === 'u8' || format === 'u8-planar') {
+		data.fill(2 ** 7); // Fill it with the silent value
+	}
+
 	const audioData = new AudioData({
-		data: new Float32Array(numberOfChannels * numberOfFrames),
-		format: 'f32-planar',
+		data,
+		format,
 		numberOfChannels,
 		numberOfFrames,
 		sampleRate,
