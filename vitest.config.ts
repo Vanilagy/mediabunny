@@ -20,6 +20,7 @@ export default defineConfig({
 		},
 	},
 	test: {
+		restoreMocks: true,
 		projects: [
 			{
 				extends: true,
