@@ -241,6 +241,14 @@ export const createAes128CbcDecryptStream = (
 	getInit: () => MaybePromise<Aes128CbcContextInit>,
 	close: () => unknown,
 ) => {
+	let closed = false;
+	const closeOnce = () => {
+		if (!closed) {
+			closed = true;
+			close();
+		}
+	};
+
 	let initted = false;
 	let pos = 0;
 	const CHUNK_SIZE = 2 ** 16;
@@ -251,7 +259,11 @@ export const createAes128CbcDecryptStream = (
 	return new ReadableStream<Uint8Array>({
 		pull: async (controller) => {
 			if (!initted) {
-				aesContext.init(await getInit());
+				const init = await getInit();
+				if (closed) {
+					return;
+				}
+				aesContext.init(init);
 				initted = true;
 			}
 
@@ -259,6 +271,9 @@ export const createAes128CbcDecryptStream = (
 
 			let nextSlice = reader.requestSliceRange(pos, 0, requestedLength);
 			if (isThenable(nextSlice)) nextSlice = await nextSlice;
+			if (closed) {
+				return;
+			}
 			if (!nextSlice || nextSlice.length === 0) {
 				// Due to padding, this should never happen
 				throw new Error('Invalid ciphertext.');
@@ -297,11 +312,11 @@ export const createAes128CbcDecryptStream = (
 				controller.enqueue(trimmedOutput);
 				controller.close();
 
-				close();
+				closeOnce();
 			}
 		},
 		cancel: () => {
-			close();
+			closeOnce();
 		},
 	});
 };
