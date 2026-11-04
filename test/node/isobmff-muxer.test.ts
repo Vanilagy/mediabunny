@@ -720,3 +720,33 @@ test('Reserved Fast Start with a B-frame GOP completed before all tracks are kno
 	}
 	expect(timestamps).toEqual(videoTimestamps);
 });
+
+test('Fragmented MP4 preserves interior key packets', async () => {
+	const target = new BufferTarget();
+	const output = new Output({
+		target,
+		format: new Mp4OutputFormat({ fastStart: 'fragmented', minimumFragmentDuration: 10 }),
+	});
+
+	const source = new EncodedVideoPacketSource('vp8');
+	output.addVideoTrack(source);
+	await output.start();
+
+	for (let i = 0; i < 6; i++) {
+		await source.add(new EncodedPacket(new Uint8Array(1), i % 2 === 0 ? 'key' : 'delta', i, 1), {
+			decoderConfig: { codec: 'vp8', codedWidth: 320, codedHeight: 180 },
+		});
+	}
+	await output.finalize();
+
+	using input = new Input({ source: new BufferSource(target.buffer!), formats: ALL_FORMATS });
+	const track = await input.getPrimaryVideoTrack();
+	assert(track);
+
+	const sink = new EncodedPacketSink(track);
+	const first = await sink.getFirstKeyPacket({ metadataOnly: true });
+	assert(first);
+
+	expect((await sink.getNextKeyPacket(first, { metadataOnly: true }))?.timestamp).toBe(2);
+	expect((await sink.getKeyPacket(4.1, { metadataOnly: true }))?.timestamp).toBe(4);
+});

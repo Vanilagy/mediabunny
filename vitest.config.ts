@@ -1,6 +1,5 @@
-/// <reference types="@vitest/browser/providers/webdriverio" />
-
 import { defineConfig } from 'vitest/config';
+import { webdriverio } from '@vitest/browser-webdriverio';
 import path from 'node:path';
 
 export default defineConfig({
@@ -21,6 +20,7 @@ export default defineConfig({
 		},
 	},
 	test: {
+		restoreMocks: true,
 		projects: [
 			{
 				extends: true,
@@ -39,9 +39,7 @@ export default defineConfig({
 					include: ['browser/**/*.test.ts'],
 					browser: {
 						enabled: true,
-						provider: 'webdriverio',
-						instances: [{
-							browser: 'chrome',
+						provider: webdriverio({
 							capabilities: {
 								// macOS periodically purges files (but not folders) from the default os.tmpdir() cache,
 								// leaving a gutted install that bricks the chromedriver setup - so keep the cache
@@ -50,7 +48,8 @@ export default defineConfig({
 									cacheDir: path.resolve(__dirname, 'node_modules/.cache/webdriver'),
 								},
 							},
-						}],
+						}),
+						instances: [{ browser: 'chrome' }],
 						headless: false, // A bunch of features need the head
 						screenshotFailures: false,
 					},

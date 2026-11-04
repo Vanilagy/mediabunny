@@ -216,6 +216,10 @@ export default withMermaid({
 				],
 			}),
 		],
+		optimizeDeps: {
+			// CJS-only deps of mermaid
+			include: ['fastdom', 'fastdom/extensions/fastdom-promised.js'],
+		},
 	},
 	outDir: '../dist-docs',
 	transformPageData(pageData) {
