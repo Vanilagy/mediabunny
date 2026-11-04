@@ -27,6 +27,7 @@ import {
 	assertNever,
 	keyValueIterator,
 	toDataView,
+	findLastIndex,
 } from '../misc';
 import {
 	AudioCodec,
@@ -1567,8 +1568,7 @@ export const trun = (trackData: IsobmffTrackData) => {
 	const uniqueSampleCompositionTimeOffsets = new Set(allSampleCompositionTimeOffsets);
 
 	const firstSampleFlagsPresent = uniqueSampleFlags.size === 2
-		&& allSampleFlags[0] !== allSampleFlags[1]
-		&& allSampleFlags.every((flags, index) => index === 0 || flags === allSampleFlags[1]);
+		&& findLastIndex(allSampleFlags, x => x === allSampleFlags[0]) === 0;
 	const sampleDurationPresent = uniqueSampleDurations.size > 1;
 	const sampleSizePresent = uniqueSampleSizes.size > 1;
 	const sampleFlagsPresent = !firstSampleFlagsPresent && uniqueSampleFlags.size > 1;

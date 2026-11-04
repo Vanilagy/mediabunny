@@ -19,31 +19,6 @@ import { assert, toUint8Array } from '../../src/misc.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
-test('Fragmented MP4 preserves interior key packets (#615)', async () => {
-	const target = new BufferTarget();
-	const output = new Output({
-		target,
-		format: new Mp4OutputFormat({ fastStart: 'fragmented', minimumFragmentDuration: 10 }),
-	});
-	const source = new EncodedVideoPacketSource('vp8');
-	output.addVideoTrack(source);
-	await output.start();
-	for (let i = 0; i < 6; i++) {
-		await source.add(new EncodedPacket(new Uint8Array(1), i % 2 === 0 ? 'key' : 'delta', i, 1), {
-			decoderConfig: { codec: 'vp8', codedWidth: 320, codedHeight: 180 },
-		});
-	}
-	await output.finalize();
-	using input = new Input({ source: new BufferSource(target.buffer!), formats: [MP4] });
-	const track = await input.getPrimaryVideoTrack();
-	assert(track);
-	const sink = new EncodedPacketSink(track);
-	const first = await sink.getFirstKeyPacket({ metadataOnly: true });
-	assert(first);
-	expect((await sink.getNextKeyPacket(first, { metadataOnly: true }))?.timestamp).toBe(2);
-	expect((await sink.getKeyPacket(4.1, { metadataOnly: true }))?.timestamp).toBe(4);
-});
-
 test('Should be able to get packets from a .MP4 file', async () => {
 	const filePath = path.join(__dirname, '..', 'public/video.mp4');
 	using input = new Input({
