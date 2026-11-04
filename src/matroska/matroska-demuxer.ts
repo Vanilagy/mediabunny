@@ -2679,9 +2679,15 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 			// track has cue points. Since we distribute the cue points to the track with none, they might not
 			// accurately reflect where media can be found.
 			const step = 1 << lookupRetryCount;
-			const previousEntryTimestamp = cuePointWins
+			let previousEntryTimestamp = cuePointWins
 				? this.internalTrack.cuePoints[cuePointIndex - step]?.time
 				: this.internalTrack.clusterPositionCache[positionCacheIndex - step]?.startTimestamp;
+			if (!cuePointWins && cuePoint) {
+				// The position cache only holds the clusters we happened to read, so stepping back through it can
+				// skip far past the cue point that precedes the entry we started from - all the way to the start of
+				// the file. Never step back further than that cue point.
+				previousEntryTimestamp = Math.max(previousEntryTimestamp ?? -Infinity, cuePoint.time);
+			}
 			const newSearchTimestamp = previousEntryTimestamp ?? -Infinity;
 
 			return this.performClusterLookup(
