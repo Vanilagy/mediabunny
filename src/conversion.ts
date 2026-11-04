@@ -986,10 +986,6 @@ export class Conversion {
 
 		const outputTrackCounts = this.output.format.getSupportedTrackCounts();
 
-		// Input track counters
-		let nVideo = 1;
-		let nAudio = 1;
-
 		// All tracks that aren't discarded by the user
 		const filteredTracks: InputTrack[] = [];
 		const filteredTrackOptions: (ConversionVideoOptions | ConversionAudioOptions)[][] = [];
@@ -1000,7 +996,7 @@ export class Conversion {
 			if (track.isVideoTrack()) {
 				if (this._options.video) {
 					if (typeof this._options.video === 'function') {
-						const returnedTrackOptions = await this._options.video(track, nVideo) ?? {};
+						const returnedTrackOptions = await this._options.video(track, track.number) ?? {};
 						if (Array.isArray(returnedTrackOptions)) {
 							for (const obj of returnedTrackOptions) {
 								validateVideoOptions(obj);
@@ -1012,8 +1008,6 @@ export class Conversion {
 						trackOptions = Array.isArray(returnedTrackOptions)
 							? returnedTrackOptions
 							: [returnedTrackOptions];
-
-						nVideo++;
 					} else {
 						// Already validated
 						trackOptions = Array.isArray(this._options.video)
@@ -1026,7 +1020,7 @@ export class Conversion {
 			} else if (track.isAudioTrack()) {
 				if (this._options.audio) {
 					if (typeof this._options.audio === 'function') {
-						const returnedTrackOptions = await this._options.audio(track, nAudio) ?? {};
+						const returnedTrackOptions = await this._options.audio(track, track.number) ?? {};
 						if (Array.isArray(returnedTrackOptions)) {
 							for (const obj of returnedTrackOptions) {
 								validateAudioOptions(obj);
@@ -1038,8 +1032,6 @@ export class Conversion {
 						trackOptions = Array.isArray(returnedTrackOptions)
 							? returnedTrackOptions
 							: [returnedTrackOptions];
-
-						nAudio++;
 					} else {
 						// Already validated
 						trackOptions = Array.isArray(this._options.audio)
@@ -1239,8 +1231,12 @@ export class Conversion {
 			);
 
 			if (encodabilityIsTheProblem) {
-				const codecs = this.discardedTracks.flatMap((x) => {
-					if (x.reason === 'discarded_by_user') return [];
+				const codecs: MediaCodec[] = [];
+				const uncontainableCodecs: MediaCodec[] = [];
+				for (const x of this.discardedTracks) {
+					if (x.reason === 'discarded_by_user') {
+						continue;
+					}
 
 					let supportedCodecs: MediaCodec[];
 					if (x.track.type === 'video') {
@@ -1252,17 +1248,30 @@ export class Conversion {
 					}
 
 					// If the user requested a specific codec, only that codec was ever attempted
-					return supportedCodecs.filter(codec => !x.trackOptions.codec || codec === x.trackOptions.codec);
-				});
+					const requestedCodec = x.trackOptions.codec;
+					if (requestedCodec && !supportedCodecs.includes(requestedCodec)) {
+						uncontainableCodecs.push(requestedCodec);
+					} else {
+						codecs.push(...supportedCodecs.filter(codec => !requestedCodec || codec === requestedCodec));
+					}
+				}
 
 				const uniqueCodecs = [...new Set(codecs)];
+				const uniqueUncontainableCodecs = [...new Set(uncontainableCodecs)];
+
+				if (uniqueUncontainableCodecs.length > 0) {
+					elements.push(
+						'\nTracks were discarded because the output format cannot contain the requested codecs'
+						+ ` ${uniqueUncontainableCodecs.map(x => `'${x}'`).join(', ')}.`,
+					);
+				}
 
 				if (uniqueCodecs.length === 1) {
 					elements.push(
 						`\nTracks were discarded because your environment is not able to encode '${uniqueCodecs[0]}'`
 						+ ' with the provided parameters.',
 					);
-				} else {
+				} else if (uniqueCodecs.length > 1) {
 					elements.push(
 						'\nTracks were discarded because your environment is not able to encode any of the codecs'
 						+ ` ${uniqueCodecs.map(x => `'${x}'`).join(', ')} with the provided parameters.`,
@@ -1370,58 +1379,58 @@ export class Conversion {
 			}
 		}
 
-		if (!this._executed) {
-			this._executed = true;
-
-			for (const id of this._outputTrackIds) {
-				this._synchronizer.declareTrack(id);
-			}
-
-			if (this.onProgress) {
-				// Compute duration using only the utilized tracks
-				const uniqueUtilizedTracks = new Set(this.utilizedTracks);
-				const durationPromises = [...uniqueUtilizedTracks].map(track => this._getTrackDuration(track));
-				const duration = Math.max(0, ...await Promise.all(durationPromises));
-
-				this._computeProgress = true;
-				this._totalDuration = Math.min(
-					duration - this._startTimestamp,
-					this._endTimestamp - this._startTimestamp,
-				);
+		try {
+			if (!this._executed) {
+				this._executed = true;
 
 				for (const id of this._outputTrackIds) {
-					// Used for progress calculation. We start these at 0 which is technically not always the first
-					// timestamp, but this is how we choose to model what "progress" means: it's how far we are done
-					// with the trim region.
-					this._maxTimestamps.set(id, 0);
+					this._synchronizer.declareTrack(id);
 				}
 
-				this.onProgress?.(0, 0);
+				if (this.onProgress) {
+					// Compute duration using only the utilized tracks
+					const uniqueUtilizedTracks = new Set(this.utilizedTracks);
+					const durationPromises = [...uniqueUtilizedTracks].map(track => this._getTrackDuration(track));
+					const duration = Math.max(0, ...await Promise.all(durationPromises));
+
+					this._computeProgress = true;
+					this._totalDuration = Math.min(
+						duration - this._startTimestamp,
+						this._endTimestamp - this._startTimestamp,
+					);
+
+					for (const id of this._outputTrackIds) {
+						// Used for progress calculation. We start these at 0 which is technically not always the first
+						// timestamp, but this is how we choose to model what "progress" means: it's how far we are
+						// done with the trim region.
+						this._maxTimestamps.set(id, 0);
+					}
+
+					this.onProgress?.(0, 0);
+				}
+
+				if (!this._composable) {
+					await this.output.start();
+				}
+
+				for (const pump of this._trackPumps) {
+					pump.start();
+				}
+			} else {
+				// Wake all suspended track pumps
+				for (const pump of this._trackPumps) {
+					pump.wake?.();
+				}
 			}
 
-			if (!this._composable) {
-				await this.output.start();
-			}
-
-			for (const pump of this._trackPumps) {
-				pump.start();
-			}
-		} else {
-			// Wake all suspended track pumps
-			for (const pump of this._trackPumps) {
-				pump.wake?.();
-			}
-		}
-
-		try {
 			await Promise.all(this._trackPumps.map(x => x.resolvers.promise));
 		} catch (error) {
+			// Errors after a cancellation are just fallout of it, so those surface as a ConversionCanceledError below
 			if ((this._state as Conversion['_state']) !== 'canceled') {
 				// Make sure to cancel to stop other encoding processes and clean up resources
-				void this.cancel();
+				void this.cancel().catch(() => {});
+				throw error;
 			}
-
-			throw error;
 		} finally {
 			options.pauseSignal?.removeEventListener('abort', onPause);
 		}
@@ -1435,7 +1444,12 @@ export class Conversion {
 
 		if (isDone) {
 			if (!this._composable) {
-				await this.output.finalize();
+				try {
+					await this.output.finalize();
+				} catch (error) {
+					this._state = 'canceled';
+					throw error;
+				}
 			}
 
 			if (this._computeProgress) {
@@ -1928,7 +1942,11 @@ export class Conversion {
 					const clampedStartTimestamp = Math.max(this._startTimestamp, sample.timestamp);
 					const clampedEndTimestamp = Math.min(this._endTimestamp, sample.timestamp + sample.duration);
 
-					if (clampedStartTimestamp >= clampedEndTimestamp) {
+					if (
+						clampedStartTimestamp > clampedEndTimestamp
+						// Zero-duration samples are still part of the trim region when they lie within it
+						|| (clampedStartTimestamp === clampedEndTimestamp && sample.duration > 0)
+					) {
 						// Wholly out of the trim region
 						continue;
 					}
@@ -2073,6 +2091,8 @@ export class Conversion {
 						this._copyBoundaryPolicy === 'expand'
 						// Check if packet is wholly before the start
 						&& startPacket.timestamp + startPacket.duration <= this._startTimestamp
+						// With delta packets, the rest of the key packet's group may still reach past the start
+						&& await track.hasOnlyKeyPackets()
 					)
 				)
 			) {
@@ -2283,6 +2303,8 @@ export class Conversion {
 					outputCodec = nonPcmCodec;
 					numberOfChannels = FALLBACK_NUMBER_OF_CHANNELS;
 					sampleRate = FALLBACK_SAMPLE_RATE;
+				} else {
+					outputCodec = encodableCodecs[0] ?? null;
 				}
 			} else {
 				outputCodec = encodableCodecs[0] ?? null;
@@ -2371,13 +2393,16 @@ export class Conversion {
 					if (paddingLengthInSamples === null) {
 						paddingLengthInSamples = this.output.format.supportsTimestampedMediaData
 							? 0
-							: Math.round(finalSample.timestamp * originalSampleRate);
+							: Math.round(finalSample.timestamp * finalSample.sampleRate);
 					}
 
 					if (paddingLengthInSamples > 0) {
-						// Add one padding sample at the beginning
+						// Add one padding sample at the beginning. Its parameters come from the decoded sample rather
+						// than the track metadata, since these can differ (think implicitly signaled HE-AAC).
 						const bytesPerSample = getBytesPerSample(sample.format);
-						const data = new Uint8Array(bytesPerSample * paddingLengthInSamples * originalNumberOfChannels);
+						const data = new Uint8Array(
+							bytesPerSample * paddingLengthInSamples * finalSample.numberOfChannels,
+						);
 						if (sample.format === 'u8' || sample.format === 'u8-planar') {
 							data.fill(2 ** 7); // Fill it with the silent value
 						}
@@ -2387,8 +2412,8 @@ export class Conversion {
 							// Use the same format the decoder is spitting out. This avoids feeding changing sample
 							// formats to the audio encoder.
 							format: sample.format,
-							numberOfChannels: originalNumberOfChannels,
-							sampleRate: originalSampleRate,
+							numberOfChannels: finalSample.numberOfChannels,
+							sampleRate: finalSample.sampleRate,
 							timestamp: 0,
 						});
 						await this._registerAudioSample(
@@ -2567,7 +2592,9 @@ export class Conversion {
 		assert(this._totalDuration !== null);
 
 		const minTimestamp = Math.min(...this._maxTimestamps.values());
-		const newProgress = clamp(minTimestamp / this._totalDuration, 0, 1);
+		const newProgress = this._totalDuration > 0
+			? clamp(minTimestamp / this._totalDuration, 0, 1)
+			: 0;
 
 		this._lastProcessedTime = minTimestamp;
 

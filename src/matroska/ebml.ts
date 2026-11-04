@@ -79,6 +79,7 @@ export enum EBMLId {
 	Info = 0x1549a966,
 	TimestampScale = 0x2ad7b1,
 	DateUTC = 0x4461,
+	Title = 0x7ba9,
 	MuxingApp = 0x4d80,
 	WritingApp = 0x5741,
 	Tracks = 0x1654ae6b,
@@ -94,6 +95,7 @@ export enum EBMLId {
 	FlagVisualImpaired = 0x55ac,
 	FlagCommentary = 0x55af,
 	FlagLacing = 0x9c,
+	MaxBlockAdditionID = 0x55ee,
 	Name = 0x536e,
 	Language = 0x22b59c,
 	LanguageBCP47 = 0x22b59d,
@@ -111,6 +113,7 @@ export enum EBMLId {
 	AlphaMode = 0x53c0,
 	Audio = 0xe1,
 	SamplingFrequency = 0xb5,
+	OutputSamplingFrequency = 0x78b5,
 	Channels = 0x9f,
 	BitDepth = 0x6264,
 	SimpleBlock = 0xa3,
@@ -559,7 +562,8 @@ export const readUnsignedInt = (slice: FileSlice, width: number) => {
 };
 
 export const readUnsignedBigInt = (slice: FileSlice, width: number) => {
-	if (width < 1 || width > 8) {
+	// Zero width is valid and means zero
+	if (width > 8) {
 		throw new Error('Bad unsigned int size ' + width);
 	}
 
@@ -609,30 +613,17 @@ export const readElementId = (slice: FileSlice) => {
 
 /** Returns `undefined` to indicate the EBML undefined size. Returns `null` if the size couldn't be read. */
 export const readElementSize = (slice: FileSlice): number | undefined | null => {
-	// Need at least 1 byte to read the size
-	if (slice.remainingLength < 1) {
-		return null;
-	}
-
-	const firstByte = readU8(slice);
-
-	if (firstByte === 0xff) {
-		return undefined;
-	}
-
-	slice.skip(-1);
+	const startPos = slice.filePos;
 	const size = readVarInt(slice);
 
 	if (size === null) {
 		return null;
 	}
 
-	// In some (livestreamed) files, this is the value of the size field. While this technically is just a very
-	// large number, it is intended to behave like the reserved size 0xFF, meaning the size is undefined. We
-	// catch the number here. Note that it cannot be perfectly represented as a double, but the comparison works
-	// nonetheless.
-	// eslint-disable-next-line no-loss-of-precision
-	if (size === 0x00ffffffffffffff) {
+	// The size is unknown when all of its data bits are set, at any width. For 8 bytes, the value can't be perfectly
+	// represented as a double, but the comparison works nonetheless.
+	const width = slice.filePos - startPos;
+	if (size === 2 ** (7 * width) - 1) {
 		return undefined;
 	}
 

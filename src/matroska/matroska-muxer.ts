@@ -6,7 +6,6 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { Bitstream } from '../../shared/bitstream';
 import {
 	COLOR_PRIMARIES_MAP,
 	MATRIX_COEFFICIENTS_MAP,
@@ -29,7 +28,6 @@ import {
 	textEncoder,
 	toUint8Array,
 	uint8ArraysAreEqual,
-	writeBits,
 	roundToDivisor,
 } from '../misc';
 import {
@@ -55,7 +53,11 @@ import {
 	inlineTimestampRegex,
 	parseSubtitleTimestamp,
 } from '../subtitles';
-import { aacChannelMap, aacFrequencyTable, buildAacAudioSpecificConfig } from '../../shared/aac-misc';
+import {
+	buildAacAudioSpecificConfigFromAdts,
+	parseAacAudioSpecificConfig,
+	readAdtsProgramConfigElement,
+} from '../../shared/aac-misc';
 import {
 	PCM_AUDIO_CODECS,
 	PcmAudioCodec,
@@ -182,33 +184,35 @@ export class MatroskaMuxer extends Muxer {
 	async start() {
 		const release = await this.mutex.acquire();
 
-		this.writer = await this.output._getRootWriter(!!this.format._options.appendOnly);
-		this.ebmlWriter = new EBMLWriter(this.writer);
+		try {
+			this.writer = await this.output._getRootWriter(!!this.format._options.appendOnly);
+			this.ebmlWriter = new EBMLWriter(this.writer);
 
-		this.writeEBMLHeader();
+			this.writeEBMLHeader();
 
-		this.createSegmentInfo();
-		this.createCues();
+			this.createSegmentInfo();
+			this.createCues();
 
-		await this.writer.flush();
+			await this.writer.flush();
 
-		for (const track of this.output.tracks) {
-			if (track.isVideoTrack() && track.metadata.decoderConfig) {
-				this.getVideoTrackData(
-					track,
-					track.metadata.primingPacket ?? null,
-					{ decoderConfig: track.metadata.decoderConfig },
-				);
-			} else if (track.isAudioTrack() && track.metadata.decoderConfig) {
-				this.getAudioTrackData(
-					track,
-					track.metadata.primingPacket ?? null,
-					{ decoderConfig: track.metadata.decoderConfig },
-				);
+			for (const track of this.output.tracks) {
+				if (track.isVideoTrack() && track.metadata.decoderConfig) {
+					this.getVideoTrackData(
+						track,
+						track.metadata.primingPacket ?? null,
+						{ decoderConfig: track.metadata.decoderConfig },
+					);
+				} else if (track.isAudioTrack() && track.metadata.decoderConfig) {
+					this.getAudioTrackData(
+						track,
+						track.metadata.primingPacket ?? null,
+						{ decoderConfig: track.metadata.decoderConfig },
+					);
+				}
 			}
+		} finally {
+			release();
 		}
-
-		release();
 	}
 
 	private writeEBMLHeader() {
@@ -386,6 +390,9 @@ export class MatroskaMuxer extends Muxer {
 					? { id: EBMLId.FlagCommentary, data: 1 }
 					: null,
 				{ id: EBMLId.FlagLacing, data: 0 },
+				(trackData.type === 'video' && trackData.info.alphaMode) || trackData.type === 'subtitle'
+					? { id: EBMLId.MaxBlockAdditionID, data: 1 } // Must be declared if it's used
+					: null,
 				{ id: EBMLId.Language, data: trackData.track.metadata.languageCode ?? UNDETERMINED_LANGUAGE },
 				{ id: EBMLId.CodecID, data: codecId },
 				trackData.codecPrivate
@@ -412,7 +419,7 @@ export class MatroskaMuxer extends Muxer {
 			(frameRate
 				? {
 						id: EBMLId.DefaultDuration,
-						data: 1e9 / frameRate,
+						data: Math.round(1e9 / frameRate),
 					}
 				: null),
 		];
@@ -529,9 +536,21 @@ export class MatroskaMuxer extends Muxer {
 			? parsePcmCodec(trackData.track.source._codec as PcmAudioCodec)
 			: null;
 
+		// For AAC, SamplingFrequency is the rate of the core coder, while the rate the decoder actually outputs (like
+		// SBR's doubled one) goes into OutputSamplingFrequency
+		let samplingFrequency = trackData.info.sampleRate;
+		if (trackData.track.source._codec === 'aac') {
+			assert(trackData.codecPrivate);
+			const config = parseAacAudioSpecificConfig(toUint8Array(trackData.codecPrivate));
+			samplingFrequency = config.coreSampleRate ?? samplingFrequency;
+		}
+
 		return [
 			{ id: EBMLId.Audio, data: [
-				{ id: EBMLId.SamplingFrequency, data: new EBMLFloat32(trackData.info.sampleRate) },
+				{ id: EBMLId.SamplingFrequency, data: new EBMLFloat32(samplingFrequency) },
+				samplingFrequency !== trackData.info.sampleRate
+					? { id: EBMLId.OutputSamplingFrequency, data: new EBMLFloat32(trackData.info.sampleRate) }
+					: null,
 				{ id: EBMLId.Channels, data: trackData.info.numberOfChannels },
 				pcmInfo ? { id: EBMLId.BitDepth, data: 8 * pcmInfo.sampleSize } : null,
 			] },
@@ -929,18 +948,21 @@ export class MatroskaMuxer extends Muxer {
 				);
 			}
 
-			const sampleRate = aacFrequencyTable[adtsFrame.samplingFrequencyIndex];
-			const numberOfChannels = aacChannelMap[adtsFrame.channelConfiguration];
-
-			if (sampleRate === undefined || numberOfChannels === undefined) {
-				throw new Error('Invalid ADTS frame header.');
+			let programConfigElement: Uint8Array | null = null;
+			if (adtsFrame.channelConfiguration === 0) {
+				// The channel layout is described by a PCE in the frame, which has to move into CodecPrivate
+				const headerSize = adtsFrame.crcCheck === null
+					? MIN_ADTS_FRAME_HEADER_SIZE
+					: MAX_ADTS_FRAME_HEADER_SIZE;
+				programConfigElement = readAdtsProgramConfigElement(packet.data.subarray(headerSize))?.data ?? null;
+				if (!programConfigElement) {
+					throw new Error(
+						'ADTS frames with channel configuration 0 must begin with a program config element.',
+					);
+				}
 			}
 
-			decoderConfig.description = buildAacAudioSpecificConfig({
-				objectType: adtsFrame.objectType,
-				outputSampleRate: sampleRate,
-				outputNumberOfChannels: numberOfChannels,
-			});
+			decoderConfig.description = buildAacAudioSpecificConfigFromAdts(adtsFrame, programConfigElement);
 			requiresAdtsStripping = true;
 		}
 
@@ -1038,7 +1060,6 @@ export class MatroskaMuxer extends Muxer {
 				: null;
 
 			const videoChunk = this.createInternalChunk(packetData, timestamp, duration, packet.type, additions);
-			if (track.source._codec === 'vp9') this.fixVP9ColorSpace(trackData, videoChunk);
 
 			trackData.chunkQueue.push(videoChunk);
 			await this.interleaveChunks();
@@ -1064,6 +1085,14 @@ export class MatroskaMuxer extends Muxer {
 					? MIN_ADTS_FRAME_HEADER_SIZE
 					: MAX_ADTS_FRAME_HEADER_SIZE;
 				packetData = packetData.subarray(headerLength);
+
+				if (adtsFrame.channelConfiguration === 0) {
+					// CodecPrivate already carries the PCE
+					const programConfigElement = readAdtsProgramConfigElement(packetData);
+					if (programConfigElement) {
+						packetData = packetData.subarray(programConfigElement.size);
+					}
+				}
 			}
 
 			const isKeyFrame = packet.type === 'key';
@@ -1155,54 +1184,6 @@ export class MatroskaMuxer extends Muxer {
 		if (!isFinalCall) {
 			await this.writer.flush();
 		}
-	}
-
-	/**
-	 * Due to [a bug in Chromium](https://bugs.chromium.org/p/chromium/issues/detail?id=1377842), VP9 streams often
- 	 * lack color space information. This method patches in that information.
-	 */
-	private fixVP9ColorSpace(
-		trackData: MatroskaVideoTrackData,
-		chunk: InternalMediaChunk,
-	) {
-		// http://downloads.webmproject.org/docs/vp9/vp9-bitstream_superframe-and-uncompressed-header_v1.0.pdf
-
-		if (chunk.type !== 'key') return;
-		if (!trackData.info.decoderConfig.colorSpace || !trackData.info.decoderConfig.colorSpace.matrix) return;
-
-		const bitstream = new Bitstream(chunk.data);
-
-		bitstream.skipBits(2);
-
-		const profileLowBit = bitstream.readBits(1);
-		const profileHighBit = bitstream.readBits(1);
-		const profile = (profileHighBit << 1) + profileLowBit;
-
-		if (profile === 3) bitstream.skipBits(1);
-
-		const showExistingFrame = bitstream.readBits(1);
-		if (showExistingFrame) return;
-
-		const frameType = bitstream.readBits(1);
-		if (frameType !== 0) return; // Just to be sure
-
-		bitstream.skipBits(2);
-
-		const syncCode = bitstream.readBits(24);
-		if (syncCode !== 0x498342) return;
-
-		if (profile >= 2) bitstream.skipBits(1);
-
-		const colorSpaceID = {
-			rgb: 7,
-			bt709: 2,
-			bt470bg: 1,
-			smpte170m: 3,
-		}[trackData.info.decoderConfig.colorSpace.matrix];
-
-		// The bitstream position is now at the start of the color space bits.
-		// We can use the global writeBits function here as requested.
-		writeBits(chunk.data, bitstream.pos, bitstream.pos + 3, colorSpaceID);
 	}
 
 	/** Converts a read-only external chunk into an internal one for easier use. */
@@ -1326,7 +1307,12 @@ export class MatroskaMuxer extends Muxer {
 			if (block.chunk.type === 'key' && !firstKeyBlockPerTrack.has(block.trackData)) {
 				firstKeyBlockPerTrack.set(block.trackData, block);
 			}
-			lastBlockPerTrack.set(block.trackData, block);
+
+			// In presentation order:
+			const lastBlock = lastBlockPerTrack.get(block.trackData);
+			if (!lastBlock || block.msTimestamp >= lastBlock.msTimestamp) {
+				lastBlockPerTrack.set(block.trackData, block);
+			}
 		}
 
 		const blockElements = new Map<ClusterBlock, EBML>();
@@ -1442,68 +1428,71 @@ export class MatroskaMuxer extends Muxer {
 		] };
 	}
 
-	// eslint-disable-next-line @typescript-eslint/no-misused-promises
 	override async onTrackClose(track: OutputTrack) {
 		const release = await this.mutex.acquire();
 
-		const trackData = this.trackDatas.find(x => x.track === track);
-		if (trackData) {
-			trackData.closed = true;
+		try {
+			const trackData = this.trackDatas.find(x => x.track === track);
+			if (trackData) {
+				trackData.closed = true;
+			}
+
+			if (this.allTracksAreKnown()) {
+				this.allTracksKnown.resolve();
+			}
+
+			// Since a track is now closed, we may be able to write out chunks that were previously waiting
+			await this.interleaveChunks();
+		} finally {
+			release();
 		}
-
-		if (this.allTracksAreKnown()) {
-			this.allTracksKnown.resolve();
-		}
-
-		// Since a track is now closed, we may be able to write out chunks that were previously waiting
-		await this.interleaveChunks();
-
-		release();
 	}
 
 	/** Finalizes the file, making it ready for use. Must be called after all media chunks have been added. */
 	async finalize() {
 		const release = await this.mutex.acquire();
 
-		this.allTracksKnown.resolve();
+		try {
+			this.allTracksKnown.resolve();
 
-		for (const trackData of this.trackDatas) {
-			trackData.closed = true;
+			for (const trackData of this.trackDatas) {
+				trackData.closed = true;
+			}
+
+			if (!this.segment) {
+				this.createSegment();
+			}
+
+			// Flush any remaining queued chunks to the file
+			await this.interleaveChunks(true);
+
+			if (this.currentClusterStartMsTimestamp !== null) {
+				this.writeCurrentCluster();
+			}
+
+			assert(this.cues);
+			this.ebmlWriter.writeEBML(this.cues);
+
+			if (!this.format._options.appendOnly) {
+				// Write the Segment size
+				const segmentSize = this.writer.getPos() - this.segmentDataOffset;
+				this.writer.seek(this.ebmlWriter.offsets.get(this.segment!)! + 4);
+				this.ebmlWriter.writeVarInt(segmentSize, SEGMENT_SIZE_BYTES);
+
+				// Write the duration of the media to the Segment
+				const duration = this.startTimestamp === Infinity ? 0 : this.endTimestamp;
+				this.segmentDuration!.data = new EBMLFloat64(duration);
+				this.writer.seek(this.ebmlWriter.offsets.get(this.segmentDuration!)!);
+				this.ebmlWriter.writeEBML(this.segmentDuration);
+
+				// Fill in SeekHead position data and write it again
+				assert(this.seekHead);
+				this.writer.seek(this.ebmlWriter.offsets.get(this.seekHead)!);
+				this.maybeCreateSeekHead(true);
+				this.ebmlWriter.writeEBML(this.seekHead);
+			}
+		} finally {
+			release();
 		}
-
-		if (!this.segment) {
-			this.createSegment();
-		}
-
-		// Flush any remaining queued chunks to the file
-		await this.interleaveChunks(true);
-
-		if (this.currentClusterStartMsTimestamp !== null) {
-			this.writeCurrentCluster();
-		}
-
-		assert(this.cues);
-		this.ebmlWriter.writeEBML(this.cues);
-
-		if (!this.format._options.appendOnly) {
-			// Write the Segment size
-			const segmentSize = this.writer.getPos() - this.segmentDataOffset;
-			this.writer.seek(this.ebmlWriter.offsets.get(this.segment!)! + 4);
-			this.ebmlWriter.writeVarInt(segmentSize, SEGMENT_SIZE_BYTES);
-
-			// Write the duration of the media to the Segment
-			const duration = this.startTimestamp === Infinity ? 0 : this.endTimestamp;
-			this.segmentDuration!.data = new EBMLFloat64(duration);
-			this.writer.seek(this.ebmlWriter.offsets.get(this.segmentDuration!)!);
-			this.ebmlWriter.writeEBML(this.segmentDuration);
-
-			// Fill in SeekHead position data and write it again
-			assert(this.seekHead);
-			this.writer.seek(this.ebmlWriter.offsets.get(this.seekHead)!);
-			this.maybeCreateSeekHead(true);
-			this.ebmlWriter.writeEBML(this.seekHead);
-		}
-
-		release();
 	}
 }

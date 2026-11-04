@@ -62,10 +62,13 @@ export type SourceEvents = {
 	};
 };
 
-let sourceFinalizationRegistry: FinalizationRegistry<() => unknown> | null = null;
+// Holds the file handle itself rather than a cleanup closure: a closure created within the source would reference the
+// source, keeping it alive forever
+let sourceFinalizationRegistry: FinalizationRegistry<FileHandle> | null = null;
 if (typeof FinalizationRegistry !== 'undefined') {
-	sourceFinalizationRegistry = new FinalizationRegistry((cleanup) => {
-		cleanup();
+	sourceFinalizationRegistry = new FinalizationRegistry((fileHandle) => {
+		// If it's not closed, Node prints annoying warnings
+		void fileHandle.close();
 	});
 }
 
@@ -138,7 +141,11 @@ export abstract class Source extends EventEmitter<SourceEvents> {
 			assert(size !== undefined);
 
 			return size;
-		})();
+		})().catch((error: unknown) => {
+			// Forget the failed attempt so that later calls can retry it
+			this._sizePromise = null;
+			throw error;
+		});
 	}
 
 	/**
@@ -365,6 +372,8 @@ export class CustomPathedSource extends PathedSource {
 	_root: SourceRef | null = null;
 	/** @internal */
 	_rootRequest: Promise<SourceRef> | null = null;
+	/** @internal */
+	_removeRootReadListener: (() => void) | null = null;
 
 	/** @internal */
 	override _read(
@@ -384,12 +393,19 @@ export class CustomPathedSource extends PathedSource {
 
 					this._root = ref;
 					this._rootRequest = null;
+					this._removeRootReadListener = ref.source.on('read', ({ start, end }) => {
+						this._dispatchRead(start, end);
+					});
 
 					return ref;
 				};
 
 				if (isThenable(result)) {
-					this._rootRequest = result.then(handle);
+					this._rootRequest = result.then(handle, (error: unknown) => {
+						// Forget the failed request so that later reads can retry it
+						this._rootRequest = null;
+						throw error;
+					});
 				} else {
 					handle(result);
 					assert(this._root);
@@ -397,11 +413,17 @@ export class CustomPathedSource extends PathedSource {
 			}
 
 			if (this._rootRequest) {
-				return this._rootRequest.then(ref => ref.source._read(start, end, minReadPosition, maxReadPosition));
+				return this._rootRequest.then(() => this._read(start, end, minReadPosition, maxReadPosition));
 			}
 		}
 
-		return this._root!.source._read(start, end, minReadPosition, maxReadPosition);
+		// Our size is unknown until the root is resolved, meaning the first read skipped the reader's bounds check
+		const root = this._root!.source;
+		if (end > (root._getFileSize() ?? Infinity)) {
+			return null;
+		}
+
+		return root._read(start, end, minReadPosition, maxReadPosition);
 	}
 
 	/** @internal */
@@ -416,10 +438,14 @@ export class CustomPathedSource extends PathedSource {
 	/** @internal */
 	override _dispose(): void {
 		if (this._root) {
+			this._removeRootReadListener!();
 			this._root.free();
 		} else if (this._rootRequest) {
 			void this._rootRequest
-				.then(ref => ref.free())
+				.then((ref) => {
+					this._removeRootReadListener!();
+					ref.free();
+				})
 				.catch(() => {});
 		}
 	}
@@ -859,15 +885,20 @@ export class UrlSource extends PathedSource {
 		}
 
 		if (url instanceof Request) {
+			let request = url;
+
 			const requestRange = url.headers.get('Range');
 			if (requestRange !== null) {
 				rangeHeaderValue ??= requestRange;
 
 				// Clone the request so we don't mutate the user's object, then strip the Range header
-				const strippedRequest = new Request(url);
-				strippedRequest.headers.delete('Range');
-				this._url = strippedRequest;
+				request = new Request(url);
+				request.headers.delete('Range');
+				this._url = request;
 			}
+
+			// Headers passed to fetch() replace those of the request instead of merging with them, so carry them over
+			this._requestInit.headers = mergeRequestInit({ headers: request.headers }, this._requestInit).headers;
 		}
 
 		if (rangeHeaderValue !== null) {
@@ -886,7 +917,11 @@ export class UrlSource extends PathedSource {
 			maxCacheSize: options.maxCacheSize ?? (64 * 2 ** 20 /* 64 MiB */),
 			maxWorkerCount: options.parallelism ?? DEFAULT_PARALLELISM,
 			runWorker: this._runWorker.bind(this),
-			onIdleWorkerRemoved: worker => this._abortControllers.delete(worker),
+			onIdleWorkerRemoved: (worker) => {
+				// The worker may have died while still holding a response, such as after an error
+				this._abortControllers.get(worker)?.abort();
+				this._abortControllers.delete(worker);
+			},
 			prefetchProfile: PREFETCH_PROFILES.network,
 			handleUnhandledError: options.handleUnhandledError,
 		});
@@ -974,9 +1009,26 @@ export class UrlSource extends PathedSource {
 				() => abortController.signal.aborted,
 			);
 
+			const unsatisfiedRangeMatch = response.status === 416
+				? /^bytes \*\/(\d+)$/.exec(response.headers.get('Content-Range') ?? '')
+				: null;
+			if (unsatisfiedRangeMatch && Number(unsatisfiedRangeMatch[1]) <= worker.currentPos) {
+				// The range starts at or past the end of the resource, which is also what servers say about bytes=0-
+				// for an empty resource
+				void response.body?.cancel().catch(() => {});
+
+				if (this._orchestrator.fileSize === null) {
+					this._orchestrator.supplyFileSize(Number(unsatisfiedRangeMatch[1]));
+				}
+				this._fileSizeDetermined = true;
+				this._orchestrator.onWorkerFinished(worker);
+
+				return;
+			}
+
 			if (!response.ok) {
-				// eslint-disable-next-line @typescript-eslint/no-base-to-string
-				throw new Error(`Error fetching ${String(this._url)}: ${response.status} ${response.statusText}`);
+				void response.body?.cancel().catch(() => {});
+				throw new Error(`Error fetching ${this.rootPath}: ${response.status} ${response.statusText}`);
 			}
 
 			if (response.redirected) {
@@ -1036,7 +1088,9 @@ export class UrlSource extends PathedSource {
 				if (!this._usedForHls) {
 					const url = new URL(
 						this._url instanceof Request ? this._url.url : this._url,
-						typeof window !== 'undefined' ? window.location.href : undefined,
+						// Outside of windows (such as in workers), relative URLs can still be resolved against the
+						// response URL, which is always absolute unless the response is synthetic
+						typeof window !== 'undefined' ? window.location.href : (response.url || undefined),
 					);
 
 					if (
@@ -1138,7 +1192,7 @@ export class UrlSource extends PathedSource {
 					}
 				}
 
-				this._dispatchRead(worker.currentPos, worker.currentPos + value.length);
+				this._dispatchResourceRead(worker.currentPos, worker.currentPos + value.length);
 				this._orchestrator.supplyWorkerData(worker, value);
 			}
 		}
@@ -1201,10 +1255,9 @@ export class UrlSource extends PathedSource {
 						);
 
 						if (!newResponse.ok) {
+							void newResponse.body?.cancel().catch(() => {});
 							throw new Error(
-								// eslint-disable-next-line @typescript-eslint/no-base-to-string
-								`Error fetching ${String(this._url)}:`
-								+ ` ${newResponse.status} ${newResponse.statusText}`,
+								`Error fetching ${this.rootPath}: ${newResponse.status} ${newResponse.statusText}`,
 							);
 						}
 
@@ -1259,7 +1312,7 @@ export class UrlSource extends PathedSource {
 			+ ' evicted from the cache. To fix this issue, either ensure your server responds to range requests with'
 			+ ' 206 Partial Content, or set maxCacheSize to Infinity in the UrlSource options. Note that the latter'
 			+ ' will store the entire file in the cache if needed, no matter how large.';
-		backing.on('read', ({ start, end }) => this._dispatchRead(start, end));
+		backing.on('read', ({ start, end }) => this._dispatchResourceRead(start, end));
 
 		this._sequentialBacking = backing;
 
@@ -1310,6 +1363,16 @@ export class UrlSource extends PathedSource {
 				assert(result === null);
 				slice.resolve(null);
 			}
+		}
+	}
+
+	/** @internal */
+	private _dispatchResourceRead(start: number, end: number) {
+		// The resource may also be read outside of the range given via the Range header
+		const sourceStart = Math.max(start - this._offset, 0);
+		const sourceEnd = Math.min(end - this._offset, this._length ?? Infinity);
+		if (sourceStart < sourceEnd) {
+			this._dispatchRead(sourceStart, sourceEnd);
 		}
 	}
 
@@ -1376,6 +1439,8 @@ export class FilePathSource extends PathedSource {
 	_customSource: CustomSource;
 	/** @internal */
 	_fileHandle: FileHandle | null = null;
+	/** @internal */
+	_fileHandlePromise: Promise<FileHandle> | null = null;
 
 	/** Creates a new {@link FilePathSource} backed by the file at the specified file path. */
 	constructor(filePath: string, options: FilePathSourceOptions = {}) {
@@ -1403,14 +1468,25 @@ export class FilePathSource extends PathedSource {
 		// Let's back this source with a CustomSource, makes the implementation very simple
 		this._customSource = new CustomSource({
 			getSize: async () => {
-				const fileHandle = await node.fs.open(filePath, 'r');
-				this._fileHandle = fileHandle;
+				// Concurrent reads may each call this, but they must all share the same file handle
+				this._fileHandlePromise ??= (async () => {
+					const fileHandle = await node.fs.open(filePath, 'r');
+					if (this._disposed) {
+						void fileHandle.close();
+						throw new InputDisposedError();
+					}
 
-				sourceFinalizationRegistry?.register(this, () => {
-					// If it's not closed, Node prints annoying warnings
-					void fileHandle.close();
-				}, this);
+					this._fileHandle = fileHandle;
+					sourceFinalizationRegistry?.register(this, fileHandle, this);
 
+					return fileHandle;
+				})().catch((error: unknown) => {
+					// Forget the failed attempt so that later reads can retry it
+					this._fileHandlePromise = null;
+					throw error;
+				});
+
+				const fileHandle = await this._fileHandlePromise;
 				const stats = await fileHandle.stat();
 				return stats.size;
 			},
@@ -1426,6 +1502,7 @@ export class FilePathSource extends PathedSource {
 			prefetchProfile: 'fileSystem',
 			handleUnhandledError: options.handleUnhandledError,
 		});
+		this._customSource.on('read', ({ start, end }) => this._dispatchRead(start, end));
 	}
 
 	/** @internal */
@@ -1445,6 +1522,7 @@ export class FilePathSource extends PathedSource {
 
 	/** @internal */
 	_dispose() {
+		this._customSource._disposed = true;
 		this._customSource._dispose();
 
 		if (this._fileHandle) {
@@ -1513,6 +1591,8 @@ export class CustomSource extends Source {
 	_orchestrator: ReadOrchestrator;
 	/** @internal */
 	_readers = new Set<ReadableStreamDefaultReader<Uint8Array>>();
+	/** @internal */
+	_pendingSize: Promise<number> | null = null;
 
 	/** Creates a new {@link CustomSource} whose behavior is specified by `options`.  */
 	constructor(options: CustomSourceOptions) {
@@ -1572,9 +1652,12 @@ export class CustomSource extends Source {
 			return this._orchestrator.read(start, end, minReadPosition, maxReadPosition);
 		}
 
-		const result = this._options.getSize();
+		// Concurrent reads share a single pending getSize call
+		const result = this._pendingSize ?? this._options.getSize();
 
 		if (isThenable(result)) {
+			this._pendingSize = result;
+
 			return result.then((size) => {
 				if (!Number.isInteger(size) || size < 0) {
 					throw new TypeError('options.getSize must return or resolve to a non-negative integer.');
@@ -1590,6 +1673,9 @@ export class CustomSource extends Source {
 				}
 
 				return this._orchestrator.read(start, end, minReadPosition, maxReadPosition);
+			}, (error: unknown) => {
+				this._pendingSize = null; // So that later reads can retry
+				throw error;
 			});
 		} else {
 			if (!Number.isInteger(result) || result < 0) {
@@ -1674,6 +1760,8 @@ export class CustomSource extends Source {
 					}
 				} finally {
 					this._readers.delete(reader);
+					// The stream may hold more than we asked for (or we stopped early), so signal our loss of interest
+					void reader.cancel().catch(() => {});
 					reader.releaseLock();
 				}
 			} else {
@@ -1997,7 +2085,7 @@ export class ReadableStreamSource extends Source {
 
 		this._pendingSlices.length = 0;
 		this._cache.length = 0;
-		void this._reader?.cancel().catch(() => {});
+		void (this._reader ?? this._stream).cancel().catch(() => {});
 	}
 }
 
@@ -2623,25 +2711,24 @@ class ReadOrchestrator {
 		// Trim the queued reads as well
 		for (let i = 0; i < this.queuedReads.length; i++) {
 			const queuedRead = this.queuedReads[i]!;
+
+			for (let j = 0; j < queuedRead.pendingSlices.length; j++) {
+				const slice = queuedRead.pendingSlices[j]!;
+				// If the slice itself is out of bounds, resolve it
+				if (slice.start + slice.bytes.length > size) {
+					slice.resolve(null);
+					queuedRead.pendingSlices.splice(j, 1);
+					j--;
+				}
+			}
+
 			if (queuedRead.hole.start >= size) {
 				// Entirely out of bounds
-				for (const slice of queuedRead.pendingSlices) slice.resolve(null);
 				this.queuedReads.splice(i, 1);
 				i--;
-			} else if (queuedRead.hole.end > size) {
-				// Partially out of bounds
-				queuedRead.hole.end = size;
+			} else {
+				queuedRead.hole.end = Math.min(queuedRead.hole.end, size);
 				queuedRead.strictTarget = true;
-
-				for (let j = 0; j < queuedRead.pendingSlices.length; j++) {
-					const slice = queuedRead.pendingSlices[j]!;
-					// If the slice itself is out of bounds, resolve it
-					if (slice.start >= size) {
-						slice.resolve(null);
-						queuedRead.pendingSlices.splice(j, 1);
-						j--;
-					}
-				}
 			}
 		}
 	}
@@ -2673,7 +2760,10 @@ class ReadOrchestrator {
 		}
 
 		for (const pendingSlice of worker.pendingSlices) {
-			pendingSlice.resolve(null);
+			// Slices ending before this point are still being filled by other workers
+			if (pendingSlice.start + pendingSlice.bytes.length > worker.currentPos) {
+				pendingSlice.resolve(null);
+			}
 		}
 	}
 
@@ -2831,6 +2921,8 @@ export class RangedSource extends Source {
 	_offset: number;
 	/** @internal */
 	_length: number | null;
+	/** @internal */
+	_removeReadListener: (() => void) | null = null;
 
 	/** @internal */
 	constructor(baseSource: Source, offset: number, length?: number) {
@@ -2849,9 +2941,8 @@ export class RangedSource extends Source {
 	override _getFileSize(): number | null | undefined {
 		const baseSize = this._baseSource._getFileSize();
 		if (baseSize === undefined) {
-			return this._length !== null
-				? this._length
-				: undefined;
+			// The base might still turn out to be shorter than our length
+			return this._length === 0 ? 0 : undefined;
 		}
 
 		if (baseSize === null) {
@@ -2873,7 +2964,18 @@ export class RangedSource extends Source {
 		maxReadPosition: number,
 	): MaybePromise<ReadResult | null> {
 		if (this._length !== null && end > this._length) {
-			return null;
+			if (this._length === 0 || this._baseSource._getFileSize() !== undefined) {
+				return null;
+			}
+
+			// Our size depends on the base's, so it must be known once we say no. A tiny read makes the base learn it.
+			const result = this._baseSource._read(
+				this._offset,
+				this._offset + 1,
+				this._offset + minReadPosition,
+				this._offset + maxReadPosition,
+			);
+			return isThenable(result) ? result.then(() => null) : null;
 		}
 
 		const result = this._baseSource._read(
@@ -2902,10 +3004,22 @@ export class RangedSource extends Source {
 	/** @internal */
 	override _dispose(): void {
 		this._ref?.free();
+		this._removeReadListener?.();
 	}
 
 	override ref() {
-		this._ref ??= this._baseSource.ref();
+		if (!this._ref) {
+			this._ref = this._baseSource.ref();
+			this._removeReadListener = this._baseSource.on('read', ({ start, end }) => {
+				// The base may also be read outside of this slice
+				const sliceStart = Math.max(start - this._offset, 0);
+				const sliceEnd = Math.min(end - this._offset, this._length ?? Infinity);
+				if (sliceStart < sliceEnd) {
+					this._dispatchRead(sliceStart, sliceEnd);
+				}
+			});
+		}
+
 		return super.ref();
 	}
 }

@@ -55,7 +55,6 @@ export type SegmentRetrievalOptions = {
 };
 
 export type SegmentedInputTrackDeclaration = {
-	id: number;
 	type: TrackType;
 };
 
@@ -154,19 +153,13 @@ export abstract class SegmentedInput {
 						const number = arrayCount(backings, x => x.getType() === 'video') + 1;
 
 						backings.push(
-							new SegmentedInputInputVideoTrackBacking(this, {
-								id: backings.length + 1,
-								type: 'video',
-							}, number),
+							new SegmentedInputInputVideoTrackBacking(this, { type: 'video' }, number),
 						);
 					} else if (track.type === 'audio') {
 						const number = arrayCount(backings, x => x.getType() === 'audio') + 1;
 
 						backings.push(
-							new SegmentedInputInputAudioTrackBacking(this, {
-								id: backings.length + 1,
-								type: 'audio',
-							}, number),
+							new SegmentedInputInputAudioTrackBacking(this, { type: 'audio' }, number),
 						);
 					}
 				}
@@ -199,11 +192,7 @@ export abstract class SegmentedInput {
 				// shift the media timestamps by multiples of the period length so that the first timestamp is closest
 				// to the segment's timestamp (which DOES rise monotonically). This even works correctly for
 				// non-wrapping formats like fMP4 because for them it's just a noop (or a constant shift for all media).
-				const tracks = await input.getTracks();
-				const track = tracks.find(x => x.type === 'video') ?? tracks[0];
-				assert(track);
-
-				const mediaStart = await track.getFirstTimestamp() + mediaOffset;
+				const mediaStart = await input.getFirstTimestamp() + mediaOffset;
 				mediaOffset += period * Math.round((segment.timestamp - mediaStart) / period);
 			}
 
@@ -275,10 +264,6 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 			this.firstInputTrack = track;
 			this.firstSegment = currentSegment;
 		})();
-	}
-
-	getId(): number {
-		return this.decl.id;
 	}
 
 	getType(): TrackType {
@@ -494,12 +479,16 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 		options: PacketRetrievalOptions,
 		keyframesOnly: boolean,
 	): Promise<EncodedPacket | null> {
+		const firstSegment = await this.segmentedInput.getFirstSegment({});
+		if (!firstSegment) {
+			return null;
+		}
+
 		let currentSegment = await this.segmentedInput.getSegmentAt(timestamp, {
 			skipLiveWait: options.skipLiveWait,
 		});
-		if (!currentSegment) {
-			return null;
-		}
+		// The media may start before the first segment's timestamp, so even earlier timestamps need to look into it
+		currentSegment ??= firstSegment;
 
 		await this.hydrate();
 

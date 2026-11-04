@@ -14,9 +14,11 @@ import {
 	registerDecoder,
 } from 'mediabunny';
 import { sendCommand, refWorker, unrefWorker } from './worker-client';
+import { assert, type DecodedChunk } from './shared';
 
 class Ac3Decoder extends CustomAudioDecoder {
 	private ctx = 0;
+	private nextTimestamp: number | null = null;
 
 	static override supports(codec: AudioCodec): boolean {
 		return codec === 'ac3' || codec === 'eac3';
@@ -41,24 +43,42 @@ class Ac3Decoder extends CustomAudioDecoder {
 			data: { ctx: this.ctx, encodedData, timestamp },
 		}, [encodedData]);
 
-		const sample = new AudioSample({
-			data: result.pcmData,
-			format: result.format,
-			numberOfChannels: result.channels,
-			sampleRate: result.sampleRate,
-			timestamp: result.pts / result.sampleRate,
-		});
-		this.onSample(sample);
+		this.emitSamples(result.chunks);
 	}
 
 	async flush() {
-		await sendCommand({ type: 'flush-decoder', data: { ctx: this.ctx } });
+		const result = await sendCommand({ type: 'flush-decoder', data: { ctx: this.ctx } });
+		this.emitSamples(result.chunks);
 	}
 
 	async close() {
 		// Close shouldn't throw
 		sendCommand({ type: 'close-decoder', data: { ctx: this.ctx } }).catch(() => {});
 		await unrefWorker();
+	}
+
+	private emitSamples(chunks: DecodedChunk[]) {
+		for (const chunk of chunks) {
+			// The frames following the first one of a packet come without a timestamp, but they simply pick up where
+			// the previous frame left off
+			let timestamp: number;
+			if (chunk.pts !== null) {
+				timestamp = chunk.pts / this.config.sampleRate;
+			} else {
+				assert(this.nextTimestamp !== null);
+				timestamp = this.nextTimestamp;
+			}
+
+			const sample = new AudioSample({
+				data: chunk.pcmData,
+				format: chunk.format,
+				numberOfChannels: chunk.channels,
+				sampleRate: chunk.sampleRate,
+				timestamp,
+			});
+			this.nextTimestamp = timestamp + sample.duration;
+			this.onSample(sample);
+		}
 	}
 }
 

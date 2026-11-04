@@ -1,0 +1,95 @@
+- Added support for hybrid fragmented MP4 files, which hold samples both in the `moov` box and in subsequent fragments (such as FFmpeg's `-movflags frag_keyframe` output). Previously, all fragments were ignored.
+- Added read support for 64-bit float PCM in ISOBMFF
+- Added support for the ISOBMFF `srat` box, fixing high sample rates being misreported for `ipcm`/`fpcm` tracks
+- MOV muxer now writes a QuickTime version 2 sound description for sample rates of 65536 Hz and above, which were previously written as 0
+- Fixed reading sample rates of 65536 Hz and above from ISOBMFF files
+- Fixed ISOBMFF PCM tracks losing most of their data when their samples span more than one PCM frame
+- Fixed ISOBMFF fragments without `tfdt` drifting by the composition delay with every fragment
+- Fixed concurrent reads of the same ISOBMFF fragment returning a partially processed fragment, which could surface undecrypted data
+- Fixed all-ones `mdhd` durations not being treated as unknown
+- Fixed `saio` offsets in fragments being resolved relative to the `moof` box instead of the base data offset
+- Fixed track-level `©nam` names including their length and language prefix
+- Fixed `pssh` boxes differing only in their key IDs being deduplicated
+- Fixed fragmented MP4 muxer marking key frames in the middle of a fragment as non-key frames
+- Fixed fragmented MP4 muxer sometimes writing the `moov` box before all tracks' start offsets were known, leading to missing edit lists and A/V desync
+- Fixed fragmented MP4 `mdat` boxes of 4 GiB and larger being written with the wrong size
+- ISOBMFF muxer now throws for fragments whose track data begins 2 GiB or more after the `moof` box, and for CMAF segments of 2 GiB or more, instead of silently writing broken offsets
+- Fixed `onMoof` reporting incorrectly shifted fragment start timestamps
+- Fixed `fastStart: 'in-memory'` not working with `AppendOnlyStreamTarget`
+- Fixed `fastStart: 'reserve'` including the trailing `free` box in the data passed to `onMoov`
+- Fixed WebVTT cues with zero duration hanging the ISOBMFF muxer
+- Fixed touching WebVTT cues producing zero-length samples in ISOBMFF
+- Fixed the WebVTT `ctim` box being written in seconds instead of milliseconds
+- Fixed disc number being written under the `disc` key instead of `disk`
+- Fixed PCM with more than 16 bits per sample in MP4 being written with a QuickTime-only sound description, making it unplayable in AVFoundation
+- AC-3 and E-AC-3 in MOV are now wrapped in a `wave` box like FFmpeg does, fixing E-AC-3 playback in AVFoundation
+- Fixed the ISOBMFF muxer hanging on `finalize()` after `start()` or a track close threw
+- Fixed VP8's `vpcC` box being written with a bit depth of 0
+- Fixed MOV `hdlr` component names being written as C strings instead of counted strings
+- Fixed HE-AAC in Matroska reporting half its sample rate, as `OutputSamplingFrequency` was ignored
+- Matroska muxer now writes AAC's core sample rate as `SamplingFrequency` and adds `OutputSamplingFrequency` when SBR doubles it, like FFmpeg does
+- Added support for the Matroska segment title (`Info\Title`), which is where FFmpeg and mkvmerge write it
+- Matroska AV1 codec info is now read from the `av1C` in `CodecPrivate`, falling back to the first packet only when it holds no sequence header
+- Matroska demuxer now respects `DisplayUnit`, and a lone `DisplayWidth` or `DisplayHeight` is no longer dropped
+- Fixed a Matroska cluster cut off by the end of the file being dropped entirely
+- Fixed wrong track numbers in multi-segment Matroska files
+- Fixed an unknown-size Matroska segment followed by another file (such as concatenated live recordings) reading that file's clusters
+- Fixed Matroska projection yaw, pitch and roll being applied as 2D flips and rotation to 360-degree video
+- Fixed the Matroska projection pose being misread when its elements come before `ProjectionType`
+- Fixed laced Matroska frames getting timestamps off the tick grid, which could make `getPacket(packet.timestamp)` return the previous packet
+- Fixed Matroska packet durations derived from `DefaultDuration` not being whole ticks
+- Fixed empty Matroska elements not taking their default values (an empty `TimestampScale` threw, an empty `FlagDefault` read as 0)
+- Fixed an empty Matroska `FileUID` throwing
+- Fixed EBML lacing with a single frame throwing
+- Fixed EBML unknown sizes of 2 to 7 bytes not being recognized
+- Fixed Matroska muxer writing `BlockDuration` on the last block in decode order instead of presentation order, giving the last frame a duration of 0 with B-frames
+- Matroska muxer now writes `MaxBlockAdditionID` for tracks with block additions (video with alpha, WebVTT)
+- Fixed the Matroska muxer hanging on `finalize()` after `start()`, a track close or `finalize()` threw
+- Matroska muxer no longer patches the color space into VP9 key frames, which zeroed the color space for BT.2020, corrupted RGB streams and modified the caller's packet data
+- Fixed MPEG-TS muxer writing a DTS greater than the PTS for B-frames, which made FFmpeg reject the files
+- Fixed malformed HEVC access unit delimiters in MPEG-TS output, which broke FFmpeg's bitstream filters
+- Fixed a rejected first AAC packet leaving the MPEG-TS track half set up, making every following packet fail
+- Fixed the MPEG-TS muxer hanging on `finalize()` after `start()` or a track close threw
+- Added support for E-AC-3 dependent substreams in MPEG-TS, fixing 7.1 E-AC-3 being read as 6 channels with doubled timing
+- Fixed PAT and PMT sections with a pointer field losing the program or its last stream
+- Fixed private sections on the PMT PID being parsed as the PMT
+- Fixed the PMT still being guessed from other PIDs after the PAT had named it
+- Fixed MPEG-TS captures joined mid-broadcast truncating a PES packet that straddles the PAT and PMT
+- Fixed MPEG-TS packet lookups near the start of a track reading data from before the PMT
+- Fixed MPEG-TS init inputs not being read before use, which made segments without parameter sets throw
+- Fixed a race in MPEG-TS `getNextPacket` that could skip a packet when called concurrently for the same packet
+- Fixed wrong MPEG-TS packet durations with B-frames when retrieving the next packet of the same packet a second time
+- Fixed `getPacket` returning null in MPEG-TS for open-GOP leading frames, which are presented before the first packet in decode order
+- Fixed a multi-packet non-PES section on a track's PID ending the MPEG-TS stream early
+- Fixed false ADTS sync words in AAC payloads ending MPEG-TS audio streams early
+- Fixed a tiny final AVC slice in MPEG-TS being dropped or merged into the previous frame
+- Fixed HEVC end of sequence and end of bitstream NAL units starting a new frame in MPEG-TS
+- Fixed audio timestamps drifting within MPEG-TS PES packets that hold several frames
+- Fixed MPEG-TS packets without a successor ignoring the codec's frame duration (a lone AAC packet had a duration of 0)
+- Fixed the last key packet of intra-only AVC in MPEG-TS having a duration of 0
+- Fixed negative MPEG-TS timestamps following a positive first timestamp being read as about 95443 seconds
+- Ogg muxer now writes streams that begin before the codec's usual start instead of shifting them forward: Opus gets a larger pre-skip (up to 65535 samples), and Vorbis signals start trimming through the first page's granule position. Packets too far before the start to be represented are dropped with a warning.
+- `OggOutputFormat.negativeTimestampSupport` is now `'prefer-non-negative'`, allowing forced copy conversions with trims into Ogg
+- Added support for reading Ogg start trimming signaled through the first page's granule position, as written by `ffmpeg -ss -c copy`
+- Removed end trimming from Ogg reading and writing, as packet durations can't properly signal it
+- Ogg demuxer now throws for empty packets in the middle of a stream, which no supported codec allows (the empty final packet VLC writes is still supported)
+- Fixed the Vorbis comment header in Ogg output lacking its framing bit, making libvorbis reject the files
+- Fixed the Ogg muxer interleaving tracks with different sample rates by sample counts instead of time
+- Fixed the Ogg muxer writing header pages after data pages in multi-track files
+- Fixed the last page of an Ogg track that ended early being held back until finalization
+- Fixed the Ogg muxer hanging on `finalize()` after `start()` or a track close threw
+- Fixed Ogg seeking using the granule position of the page a packet starts on instead of the one it ends on
+- Fixed Ogg packet lookups returning the wrong packet in files with a broken page chain
+- Fixed seeking to the last Vorbis packet ahead of an empty final packet (as written by VLC) giving it the wrong duration
+- Fixed the Ogg MIME type reading `codecs=""` for streams without known codecs
+- FLAC muxer now supports total sample counts of 2^32 and above
+- FLAC muxer now throws for PICTURE and Vorbis comment blocks larger than 16 MiB instead of writing broken block lengths
+- Fixed FLAC frames that code their sample rate in kHz being misread, which left files at 12 or 64 kHz without any packets
+- Fixed FLAC total sample counts of 2^32 and above being misread
+- Fixed FLAC frame sample numbers of 2^31 and above being misread
+- Fixed concurrent `getFirstPacket()` calls on FLAC files corrupting the packet index
+- Fixed FLAC `getPacket()` sometimes returning the previous packet due to floating point error
+- Fixed broken FLAC PICTURE blocks for MIME types or descriptions with non-ASCII characters
+- Fixed single-frame FLAC output having a minimum block size of 0, which FFmpeg rejects
+- Added validation for `FlacOutputFormatOptions.onFrame`
+- `InputTrack.id` is now the track's 1-based index in `getTracks()` for every format, making it unique in multi-segment Matroska files. Previously, it was the container's own track ID (such as the MPEG-TS PID or the Ogg serial number).

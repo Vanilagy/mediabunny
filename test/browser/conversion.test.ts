@@ -6,6 +6,7 @@ import {
 	MkvOutputFormat,
 	Mp4OutputFormat,
 	MpegTsOutputFormat,
+	OggOutputFormat,
 	OutputFormat,
 	WavOutputFormat,
 } from '../../src/output-format.js';
@@ -1033,7 +1034,7 @@ test('Packet copy, whole file, Matroska', async () => {
 		},
 		expectedTimeOffset: -1024 / 48000,
 		videoStartTimestamp: 0 + 1024 / 48000,
-		videoEndTimestamp: 5 + 1024 / 48000 - 1 / 25,
+		videoEndTimestamp: 5 + 1024 / 48000,
 		audioStartTimestamp: 0,
 		audioEndTimestamp: 5 + 1024 / 48000,
 		precision: 0.001,
@@ -1050,7 +1051,7 @@ test('Packet copy, whole file, Matroska, forced', async () => {
 		},
 		expectedTimeOffset: 0,
 		videoStartTimestamp: 0,
-		videoEndTimestamp: 5 - 1 / 25,
+		videoEndTimestamp: 5,
 		audioStartTimestamp: -1024 / 48000,
 		audioEndTimestamp: 5,
 		precision: 0.001,
@@ -1071,7 +1072,7 @@ test('Packet copy, delta frame trim, Matroska', async () => {
 		},
 		expectedTimeOffset: 1,
 		videoStartTimestamp: 0,
-		videoEndTimestamp: 1.48,
+		videoEndTimestamp: 1.52,
 		audioStartTimestamp: 0.472,
 		audioEndTimestamp: 1.496 + 1024 / 48000,
 		precision: 0.001,
@@ -1460,3 +1461,92 @@ const testReservedFastStart = async (
 		expect(maximumPacketCount).toBeLessThanOrEqual(2 * packetCount + 64);
 	}
 };
+
+test('Zero-duration frames are kept when transcoding', async () => {
+	using input = new Input({
+		source: new UrlSource('/annex-b-avc.mkv'),
+		formats: ALL_FORMATS,
+	});
+
+	// This frame closes its cluster and the file lacks a default duration, so it is left with a duration of zero
+	const inputTrack = await input.getPrimaryVideoTrack();
+	assert(inputTrack);
+	const zeroDurationPacket = await new EncodedPacketSink(inputTrack).getPacket(4.81);
+	assert(zeroDurationPacket);
+	expect(zeroDurationPacket.timestamp).toBe(4.81);
+	expect(zeroDurationPacket.duration).toBe(0);
+
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({
+		input,
+		output,
+		video: { forceTranscode: true },
+		audio: { discard: true },
+		trim: { start: 4.5, end: 5 },
+		showWarnings: false,
+	});
+	await conversion.execute();
+
+	using newInput = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const track = await newInput.getPrimaryVideoTrack();
+	assert(track);
+
+	const timestamps: number[] = [];
+	for await (const packet of new EncodedPacketSink(track).packets()) {
+		timestamps.push(packet.timestamp);
+	}
+
+	// The frame overlapping the trim start, the five frames following it, and the zero-duration frame
+	expect(timestamps).toHaveLength(7);
+	expect(timestamps.at(-1)).toBeCloseTo(4.81 - 4.5, 3);
+});
+
+test('Packet copy, trim, Ogg, forced', async () => {
+	using input = new Input({
+		source: new UrlSource('/preroll-test.opus'),
+		formats: ALL_FORMATS,
+	});
+	const output = new Output({
+		format: new OggOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({
+		input,
+		output,
+		trim: { start: 1 },
+		copy: { mode: 'forced' },
+	});
+	await conversion.execute();
+
+	using newInput = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const inputTrack = await input.getPrimaryAudioTrack();
+	const newTrack = await newInput.getPrimaryAudioTrack();
+	assert(inputTrack);
+	assert(newTrack);
+
+	const inputTimestamps: number[] = [];
+	for await (const packet of new EncodedPacketSink(inputTrack).packets()) {
+		inputTimestamps.push(Math.round(48000 * packet.timestamp));
+	}
+
+	const newTimestamps: number[] = [];
+	for await (const packet of new EncodedPacketSink(newTrack).packets()) {
+		newTimestamps.push(Math.round(48000 * packet.timestamp));
+	}
+
+	// The packets kept for decoder preroll lie before the trim start, which the output keeps as negative timestamps
+	// instead of shifting everything forward
+	expect(newTimestamps[0]).toBeLessThan(0);
+	expect(newTimestamps).toEqual(inputTimestamps.filter(x => x >= newTimestamps[0]! + 48000).map(x => x - 48000));
+});

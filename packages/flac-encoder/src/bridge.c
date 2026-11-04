@@ -43,6 +43,7 @@ typedef struct {
 	bool header_done;
 
 	int channels;
+	int sample_rate;
 	int bits_per_sample;
 } EncoderContext;
 
@@ -115,6 +116,24 @@ static void reset_output(EncoderContext *ctx) {
 	ctx->frame_count = 0;
 }
 
+// Finishing the encoder resets its whole configuration, so it's set up from scratch on every (re)init
+static FLAC__StreamEncoderInitStatus init_stream(EncoderContext *ctx) {
+	FLAC__stream_encoder_set_channels(ctx->encoder, ctx->channels);
+	FLAC__stream_encoder_set_sample_rate(ctx->encoder, ctx->sample_rate);
+	FLAC__stream_encoder_set_bits_per_sample(ctx->encoder, ctx->bits_per_sample);
+	FLAC__stream_encoder_set_compression_level(ctx->encoder, COMPRESSION_LEVEL);
+	FLAC__stream_encoder_set_verify(ctx->encoder, false);
+
+	return FLAC__stream_encoder_init_stream(
+		ctx->encoder,
+		write_callback,
+		NULL, // seek callback
+		NULL, // tell callback
+		NULL, // metadata callback
+		ctx
+	);
+}
+
 EMSCRIPTEN_KEEPALIVE
 int init_encoder(int channels, int sample_rate, int bits_per_sample) {
 	EncoderContext *ctx = calloc(1, sizeof(EncoderContext));
@@ -123,6 +142,7 @@ int init_encoder(int channels, int sample_rate, int bits_per_sample) {
 	}
 
 	ctx->channels = channels;
+	ctx->sample_rate = sample_rate;
 	ctx->bits_per_sample = bits_per_sample;
 
 	ctx->encoder = FLAC__stream_encoder_new();
@@ -131,22 +151,7 @@ int init_encoder(int channels, int sample_rate, int bits_per_sample) {
 		return 0;
 	}
 
-	FLAC__stream_encoder_set_channels(ctx->encoder, channels);
-	FLAC__stream_encoder_set_sample_rate(ctx->encoder, sample_rate);
-	FLAC__stream_encoder_set_bits_per_sample(ctx->encoder, bits_per_sample);
-	FLAC__stream_encoder_set_compression_level(ctx->encoder, COMPRESSION_LEVEL);
-	FLAC__stream_encoder_set_verify(ctx->encoder, false);
-
-	FLAC__StreamEncoderInitStatus status = FLAC__stream_encoder_init_stream(
-		ctx->encoder,
-		write_callback,
-		NULL, // seek callback
-		NULL, // tell callback
-		NULL, // metadata callback
-		ctx
-	);
-
-	if (status != FLAC__STREAM_ENCODER_INIT_STATUS_OK) {
+	if (init_stream(ctx) != FLAC__STREAM_ENCODER_INIT_STATUS_OK) {
 		FLAC__stream_encoder_delete(ctx->encoder);
 		free(ctx);
 		return 0;
@@ -230,19 +235,9 @@ int finish_encoder(int ctx_ptr) {
 		return -1;
 	}
 
-	// finish() leaves the encoder uninitialized but retains configuration (channels, sample rate,
-	// etc.), so we just re-init the stream to be ready for the next batch of samples.
+	// Be ready for the next batch of samples
 	ctx->header_size = 0;
 	ctx->header_done = false;
 
-	FLAC__StreamEncoderInitStatus status = FLAC__stream_encoder_init_stream(
-		ctx->encoder,
-		write_callback,
-		NULL,
-		NULL,
-		NULL,
-		ctx
-	);
-
-	return status == FLAC__STREAM_ENCODER_INIT_STATUS_OK ? 0 : -1;
+	return init_stream(ctx) == FLAC__STREAM_ENCODER_INIT_STATUS_OK ? 0 : -1;
 }

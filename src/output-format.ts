@@ -554,7 +554,7 @@ export class MkvOutputFormat extends OutputFormat {
 			throw new TypeError('options.onEbmlHeader, when provided, must be a function.');
 		}
 		if (options.onSegmentHeader !== undefined && typeof options.onSegmentHeader !== 'function') {
-			throw new TypeError('options.onHeader, when provided, must be a function.');
+			throw new TypeError('options.onSegmentHeader, when provided, must be a function.');
 		}
 		if (options.onCluster !== undefined && typeof options.onCluster !== 'function') {
 			throw new TypeError('options.onCluster, when provided, must be a function.');
@@ -962,7 +962,7 @@ export class OggOutputFormat extends OutputFormat {
 	}
 
 	get negativeTimestampSupport() {
-		return 'none' as const;
+		return 'prefer-non-negative' as const;
 	}
 }
 
@@ -1086,6 +1086,9 @@ export class FlacOutputFormat extends OutputFormat {
 		}
 		if (options.appendOnly !== undefined && typeof options.appendOnly !== 'boolean') {
 			throw new TypeError('options.appendOnly, when provided, must be a boolean.');
+		}
+		if (options.onFrame !== undefined && typeof options.onFrame !== 'function') {
+			throw new TypeError('options.onFrame, when provided, must be a function.');
 		}
 
 		super();
@@ -1411,11 +1414,14 @@ export class HlsOutputFormat extends OutputFormat {
 				'options.segmentFormat must be an OutputFormat or a non-empty array of OutputFormat instances.',
 			);
 		}
+		if (toArray(options.segmentFormat).some(format => format instanceof HlsOutputFormat)) {
+			throw new TypeError('options.segmentFormat cannot be an HlsOutputFormat.');
+		}
 		if (
 			options.targetDuration !== undefined
-			&& (typeof options.targetDuration !== 'number' || options.targetDuration <= 0)
+			&& (!Number.isFinite(options.targetDuration) || options.targetDuration <= 0)
 		) {
-			throw new TypeError('options.targetDuration, when provided, must be a positive number.');
+			throw new TypeError('options.targetDuration, when provided, must be a positive finite number.');
 		}
 		if (options.singleFilePerPlaylist !== undefined && typeof options.singleFilePerPlaylist !== 'boolean') {
 			throw new TypeError('options.singleFilePerPlaylist, when provided, must be a boolean.');
@@ -1425,7 +1431,7 @@ export class HlsOutputFormat extends OutputFormat {
 		}
 		if (
 			options.maxLiveSegmentCount !== undefined
-			&& (typeof options.maxLiveSegmentCount !== 'number' || options.maxLiveSegmentCount < 1
+			&& (!isNumber(options.maxLiveSegmentCount) || options.maxLiveSegmentCount < 1
 				|| (Number.isFinite(options.maxLiveSegmentCount) && !Number.isInteger(options.maxLiveSegmentCount)))
 		) {
 			throw new TypeError('options.maxLiveSegmentCount, when provided, must be a positive integer or Infinity.');
@@ -1486,6 +1492,9 @@ export class HlsOutputFormat extends OutputFormat {
 		for (const codec of AUDIO_CODECS_WITH_DELTA_PACKETS) {
 			uniqueCodecs.delete(codec); // Only key-packet-only audio codecs are allowed
 		}
+		for (const codec of SUBTITLE_CODECS) {
+			uniqueCodecs.delete(codec); // Subtitles are currently disabled
+		}
 
 		return [...uniqueCodecs];
 	}
@@ -1535,9 +1544,16 @@ export class HlsOutputFormat extends OutputFormat {
 		return null;
 	}
 
+	override get requiresMaximumPacketCount() {
+		return toArray(this._options.segmentFormat).some(format => format.requiresMaximumPacketCount);
+	}
+
 	/** @internal */
-	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	override _codecUnsupportedHint(codec: MediaCodec): string {
+		if ((AUDIO_CODECS_WITH_DELTA_PACKETS as readonly MediaCodec[]).includes(codec)) {
+			return '';
+		}
+
 		return ` Using different segment formats may grant support for this codec.`;
 	}
 }

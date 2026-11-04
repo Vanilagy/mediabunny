@@ -142,7 +142,8 @@ await input.getAudioTracks({
 
 Once you have an `InputTrack`, you can start extracting metadata from it.
 ```ts
-// Get a unique ID for this track in the input file:
+// Get a unique ID for this track in the input file (its 1-based index in
+// the list of all tracks):
 track.id; // => number
 
 // Get the 1-based index of this track among all tracks of the same type

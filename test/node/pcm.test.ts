@@ -282,3 +282,34 @@ const expectG711FileRoundtrip = async (codec: 'ulaw' | 'alaw', decodeCodeword: (
 	expect(frameOffset).toBe(data.length);
 	expect(decoded).toEqual(data);
 };
+
+test('Encoding an empty AudioSample', async () => {
+	const output = new Output({
+		format: new WavOutputFormat(),
+		target: new BufferTarget(),
+	});
+	const audioSource = new AudioSampleSource({ codec: 'pcm-s16' });
+	output.addAudioTrack(audioSource);
+	await output.start();
+
+	for (const frameCount of [0, 1000]) {
+		using sample = new AudioSample({
+			data: new Float32Array(frameCount),
+			format: 'f32',
+			numberOfChannels: 1,
+			sampleRate: 48000,
+			timestamp: 0,
+		});
+		await audioSource.add(sample);
+	}
+	audioSource.close();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+
+	const track = (await input.getPrimaryAudioTrack())!;
+	expect(await track.computeDuration()).toBe(1000 / 48000);
+});

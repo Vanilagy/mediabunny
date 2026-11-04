@@ -17,6 +17,8 @@ import { sendCommand, refWorker, unrefWorker } from './worker-client';
 import { assert, BATCH_SAMPLE_COUNT, EncodedChunk } from './shared';
 import { TRUEHD_CHANNEL_COUNTS, TRUEHD_MAJOR_SYNC_WORD, TRUEHD_SAMPLE_RATES } from '../../../shared/truehd-misc';
 
+const MAJOR_SYNC_INTERVAL = 16; // In access units, as used by FFmpeg's encoder
+
 class TrueHdEncoder extends CustomAudioEncoder {
 	private ctx = 0;
 	private encoderFrameSize = 0;
@@ -27,6 +29,7 @@ class TrueHdEncoder extends CustomAudioEncoder {
 	// Accumulate interleaved f32 samples until we have a full batch
 	private pendingBuffer = new Float32Array(2 ** 16);
 	private pendingFrames = 0;
+	private receivedFrames = 0;
 	private nextSampleTimestampInSamples: number | null = null;
 
 	static override supports(codec: AudioCodec, config: AudioEncoderConfig): boolean {
@@ -57,6 +60,7 @@ class TrueHdEncoder extends CustomAudioEncoder {
 
 	private resetInternalState() {
 		this.pendingFrames = 0;
+		this.receivedFrames = 0;
 		this.nextSampleTimestampInSamples = null;
 
 		this.chunkMetadata = {
@@ -94,6 +98,7 @@ class TrueHdEncoder extends CustomAudioEncoder {
 		}
 		this.pendingBuffer.set(incomingData, this.pendingFrames * channels);
 		this.pendingFrames += incomingFrames;
+		this.receivedFrames += incomingFrames;
 
 		if (this.pendingFrames >= BATCH_SAMPLE_COUNT) {
 			// Only whole frames for now, since the encoder accepts a short frame only at the very end
@@ -102,6 +107,16 @@ class TrueHdEncoder extends CustomAudioEncoder {
 	}
 
 	async flush() {
+		// The encoder writes no major sync at all for streams shorter than one major sync interval, leaving them
+		// undecodable, so pad these with silence
+		if (Math.ceil(this.receivedFrames / this.encoderFrameSize) < MAJOR_SYNC_INTERVAL) {
+			const channels = this.numberOfChannels;
+			const paddedFrames = this.pendingFrames + MAJOR_SYNC_INTERVAL * this.encoderFrameSize - this.receivedFrames;
+
+			this.pendingBuffer.fill(0, this.pendingFrames * channels, paddedFrames * channels);
+			this.pendingFrames = paddedFrames;
+		}
+
 		if (this.pendingFrames > 0) {
 			await this.encodePendingFrames(this.pendingFrames);
 		}

@@ -187,6 +187,10 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 
 	/** @internal */
 	get _rootSource() {
+		if (this._disposed) {
+			throw new InputDisposedError();
+		}
+
 		return this._rootRef.source;
 	}
 
@@ -206,7 +210,7 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 			x.cacheGroup === cacheGroup && sourceRequestsAreEqual(x.request, request),
 		);
 		if (cachedEntry) {
-			cachedEntry.age++;
+			cachedEntry.age = this._nextSourceCacheAge++;
 			return Promise.resolve(cachedEntry.sourceRef.source.ref());
 		}
 
@@ -218,7 +222,15 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 		}
 
 		const promise = (async () => {
-			const sourceRef = await this._getSourceUncached(request);
+			let sourceRef: SourceRef;
+			try {
+				sourceRef = await this._getSourceUncached(request);
+			} finally {
+				// Also on failure, so that later requests for this source can try again
+				const promiseIndex = this._sourceCachePromises.findIndex(x => x.request === request);
+				assert(promiseIndex !== -1);
+				this._sourceCachePromises.splice(promiseIndex, 1);
+			}
 
 			if (this._disposed) {
 				sourceRef.free();
@@ -245,10 +257,6 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 			}
 
 			this._sourceRefs.push(sourceRef);
-
-			const promiseIndex = this._sourceCachePromises.findIndex(x => x.request === request);
-			assert(promiseIndex !== -1);
-			this._sourceCachePromises.splice(promiseIndex, 1);
 
 			const cacheEntry: SourceCacheEntry = {
 				request,
@@ -537,6 +545,7 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 			ref.free();
 		}
 		this._sourceRefs.length = 0;
+		this._sourceCache.length = 0;
 
 		if (this._demuxerPromise) {
 			// The demuxer promise may already be rejected after failed format detection.

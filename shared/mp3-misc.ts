@@ -27,6 +27,8 @@ export const KILOBIT_RATES = [
 export const XING = 0x58696e67;
 /** 'Info' */
 export const INFO = 0x496e666f;
+/** 'VBRI' */
+export const VBRI = 0x56425249;
 
 export type Mp3FrameHeader = {
 	totalSize: number;
@@ -123,7 +125,12 @@ export const readMp3FrameHeader = (word: number, remainingBytes: number | null):
 	const layer = (secondByte >> 1) & 0x3;
 
 	const bitrateIndex = (thirdByte >> 4) & 0xf;
-	const frequencyIndex = ((thirdByte >> 2) & 0x3) % 3; // FFmpeg effectively does % 3 (but in a roundabout way)
+	const frequencyIndex = (thirdByte >> 2) & 0x3;
+
+	if (mpegVersionId === 1 || frequencyIndex === 3) {
+		// Reserved values, which FFmpeg rejects too. These are a common source of false syncs.
+		return { header: null, bytesAdvanced: 1 };
+	}
 
 	const padding = (thirdByte >> 1) & 0x1;
 

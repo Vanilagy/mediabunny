@@ -17,9 +17,11 @@ import {
 } from '../../src/output-format.js';
 import { EncodedPacket } from '../../src/packet.js';
 import { Bitstream } from '../../shared/bitstream.js';
-import { BufferSource } from '../../src/source.js';
+import { BufferSource, FilePathSource } from '../../src/source.js';
 import { BufferTarget, PathedTarget } from '../../src/target.js';
 import { InputAudioTrack, InputVideoTrack } from '../../src/input-track.js';
+import { Conversion } from '../../src/conversion.js';
+import { assert } from '../../src/misc.js';
 
 type EmptyMediaVariant =
 	| { type: 'mp4'; fastStart: false | 'in-memory' | 'reserve' | 'fragmented' }
@@ -709,3 +711,50 @@ const createFormat = (variant: EmptyMediaVariant) => {
 		return new MkvOutputFormat();
 	}
 };
+
+test('Packet stats of a lone zero-duration packet', async () => {
+	using input = new Input({
+		source: new FilePathSource('./test/public/tags-after-clusters.webm'),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	expect(await videoTrack.computeDuration()).toBe(await videoTrack.getFirstTimestamp());
+	expect(await videoTrack.computePacketStats()).toEqual({
+		packetCount: 1,
+		averagePacketRate: 0,
+		averageBitrate: 0,
+	});
+});
+
+test('Reserved MP4 conversion of a lone zero-duration packet', async () => {
+	using input = new Input({
+		source: new FilePathSource('./test/public/tags-after-clusters.webm'),
+		formats: ALL_FORMATS,
+	});
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart: 'reserve' }),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({
+		input,
+		output,
+	});
+	expect(conversion.isValid).toBe(true);
+	await conversion.execute();
+
+	const buffer = output.target.buffer;
+	assert(buffer);
+
+	using outputInput = new Input({
+		source: new BufferSource(buffer),
+		formats: ALL_FORMATS,
+	});
+	const videoTrack = await outputInput.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	expect((await videoTrack.computePacketStats()).packetCount).toBe(1);
+});

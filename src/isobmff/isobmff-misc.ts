@@ -94,7 +94,16 @@ export const parsePsshBoxContents = (contents: Uint8Array): PsshBox => {
 	};
 };
 
-export const psshBoxesAreEqual = (a: PsshBox, b: PsshBox) => (
-	a.systemId === b.systemId
-	&& uint8ArraysAreEqual(a.data, b.data)
-);
+export const psshBoxesAreEqual = (a: PsshBox, b: PsshBox) => {
+	if (a.systemId !== b.systemId || !uint8ArraysAreEqual(a.data, b.data)) {
+		return false;
+	}
+
+	const aKeyIds = a.keyIds;
+	const bKeyIds = b.keyIds;
+	if (!aKeyIds || !bKeyIds) {
+		return aKeyIds === bKeyIds;
+	}
+
+	return aKeyIds.length === bKeyIds.length && aKeyIds.every((keyId, i) => keyId === bKeyIds[i]);
+};

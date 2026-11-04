@@ -17,6 +17,9 @@ import { sendCommand, refWorker, unrefWorker } from './worker-client';
 import { assert } from './shared';
 import { DTS_CHANNEL_COUNTS, DTS_SAMPLE_RATES, dtsBitrateFits } from '../../../shared/dts-misc';
 
+// FFmpeg's DTS encoder doesn't report it, but the decoded audio comes out this many samples late
+const CODEC_DELAY = 512;
+
 class DtsEncoder extends CustomAudioEncoder {
 	private ctx = 0;
 	private encoderFrameSize = 0;
@@ -99,23 +102,29 @@ class DtsEncoder extends CustomAudioEncoder {
 		this.pendingBuffer.set(incomingData, this.pendingFrames * channels);
 		this.pendingFrames += incomingFrames;
 
-		while (this.pendingFrames >= this.encoderFrameSize) {
-			await this.encodeOneFrame();
+		// Shift the remainder to the front only once at the end, as doing it per frame is quadratic for big samples
+		let encodedFrames = 0;
+		while (this.pendingFrames - encodedFrames >= this.encoderFrameSize) {
+			await this.encodeOneFrame(encodedFrames);
+			encodedFrames += this.encoderFrameSize;
 		}
+
+		this.pendingBuffer.copyWithin(0, encodedFrames * channels, this.pendingFrames * channels);
+		this.pendingFrames -= encodedFrames;
 	}
 
 	async flush() {
-		// Pad remaining samples with silence to fill a full frame
-		if (this.pendingFrames > 0) {
+		// Pad with enough silence to push the remaining samples through the codec delay and to fill up the last frame
+		if (this.nextSampleTimestampInSamples !== null) {
 			const channels = this.numberOfChannels;
 			const frameSize = this.encoderFrameSize;
-			const usedSamples = this.pendingFrames * channels;
-			const frameSamples = frameSize * channels;
+			const paddedFrames = Math.ceil((this.pendingFrames + CODEC_DELAY) / frameSize) * frameSize;
 
-			this.pendingBuffer.fill(0, usedSamples, frameSamples);
-			this.pendingFrames = frameSize;
+			this.pendingBuffer.fill(0, this.pendingFrames * channels, paddedFrames * channels);
 
-			await this.encodeOneFrame();
+			for (let startFrame = 0; startFrame < paddedFrames; startFrame += frameSize) {
+				await this.encodeOneFrame(startFrame);
+			}
 		}
 
 		await sendCommand({ type: 'flush-encoder', data: { ctx: this.ctx } });
@@ -129,20 +138,12 @@ class DtsEncoder extends CustomAudioEncoder {
 		void unrefWorker();
 	}
 
-	private async encodeOneFrame() {
+	private async encodeOneFrame(startFrame: number) {
 		assert(this.nextSampleTimestampInSamples !== null);
 
 		const channels = this.numberOfChannels;
 		const frameSize = this.encoderFrameSize;
-		const frameSamples = frameSize * channels;
-
-		const frameData = this.pendingBuffer.slice(0, frameSamples);
-
-		// Shift remaining using copyWithin
-		this.pendingFrames -= frameSize;
-		if (this.pendingFrames > 0) {
-			this.pendingBuffer.copyWithin(0, frameSamples, frameSamples + this.pendingFrames * channels);
-		}
+		const frameData = this.pendingBuffer.slice(startFrame * channels, (startFrame + frameSize) * channels);
 
 		const audioData = frameData.buffer;
 		const result = await sendCommand({
@@ -150,7 +151,8 @@ class DtsEncoder extends CustomAudioEncoder {
 			data: {
 				ctx: this.ctx,
 				audioData,
-				timestamp: this.nextSampleTimestampInSamples,
+				// Shifted back by the codec delay so that the decoded audio lines up with the input
+				timestamp: this.nextSampleTimestampInSamples - CODEC_DELAY,
 			},
 		}, [audioData]);
 

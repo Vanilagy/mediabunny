@@ -13,6 +13,7 @@ import {
 	isIso639Dash2LanguageCode,
 	isThenable,
 	MaybePromise,
+	promiseWithResolvers,
 	Rotation,
 	toArray,
 	TransformationMatrix,
@@ -456,11 +457,15 @@ export class Output<
 	/** @internal */
 	_unfinalizedTargets = new Set<Target>();
 	/** @internal */
+	_targetsClosed = false;
+	/** @internal */
 	_rootWriterPromise: Promise<Writer> | null = null;
 	/** @internal */
 	_startPromise: Promise<void> | null = null;
 	/** @internal */
 	_cancelPromise: Promise<void> | null = null;
+	/** @internal */
+	_canceled = promiseWithResolvers();
 	/** @internal */
 	_finalizePromise: Promise<void> | null = null;
 	/** @internal */
@@ -497,6 +502,8 @@ export class Output<
 
 		const rootTargetResult = this._getRootTarget();
 		if (isThenable(rootTargetResult)) {
+			// Nobody might await the promise for a while, but a rejection will still surface once the muxer does
+			void rootTargetResult.then(null, () => {});
 			throw new TypeError(errorMessage);
 		}
 
@@ -575,12 +582,13 @@ export class Output<
 		const target = await this._getTargetValidated(request);
 		this._emit('target', { target, request, isRoot: request.isRoot });
 
-		if (this.state === 'canceled') {
+		if (this._targetsClosed) {
 			await target._close();
-		} else {
-			this._rememberTarget(target);
+			// Don't let the muxer write into the target after all
+			throw new Error('Output has been canceled.');
 		}
 
+		this._rememberTarget(target);
 		return target;
 	}
 
@@ -599,8 +607,11 @@ export class Output<
 		}
 
 		const target = await this._initTarget();
+		if (!(target instanceof Target)) {
+			throw new TypeError('initTarget must return or resolve to a Target.');
+		}
 
-		if (this.state === 'canceled') {
+		if (this._targetsClosed) {
 			await target._close();
 		} else {
 			this._rememberTarget(target);
@@ -637,9 +648,9 @@ export class Output<
 		const result = this._getTargetValidated(request);
 
 		const handleResult = (target: T) => {
-			if (this.state === 'canceled') {
+			if (this._targetsClosed) {
 				// Promise thrown away here, but no way to surface it to the user really
-				void target._close();
+				target._close().catch(() => {});
 			} else {
 				this._rememberTarget(target);
 			}
@@ -807,7 +818,7 @@ export class Output<
 		const maxTotalCount = supportedTrackCounts.total.max;
 		if (this.tracks.length === maxTotalCount) {
 			throw new Error(
-				`${this.format._name} does not support more than ${maxTotalCount} tracks`
+				`${this.format._name} does not support more than ${maxTotalCount} track`
 				+ `${maxTotalCount === 1 ? '' : 's'} in total.`,
 			);
 		}
@@ -955,10 +966,17 @@ export class Output<
 	/**
 	 * Resolves with the full MIME type of the output file, including track codecs.
 	 *
-	 * The returned promise will resolve only once the precise codec strings of all tracks are known.
+	 * The returned promise will resolve only once the precise codec strings of all tracks are known. If the output is
+	 * canceled before that, the promise rejects.
 	 */
 	getMimeType() {
-		return this._muxer.getMimeType();
+		return Promise.race([
+			this._muxer.getMimeType(),
+			// Codec strings still unknown once the output is canceled will never be known
+			this._canceled.promise.then(() => {
+				throw new Error('Output has been canceled.');
+			}),
+		]);
 	}
 
 	/**
@@ -982,14 +1000,17 @@ export class Output<
 
 		return this._cancelPromise = (async () => {
 			this.state = 'canceled';
+			this._canceled.resolve();
 
 			const release = await this._mutex.acquire();
 
 			try {
-				const promises = this.tracks.map(x => x.source._flushOrWaitForOngoingClose(true)); // Force close
+				// Force close. Errors don't matter anymore at this point, we just want everything released.
+				const promises = this.tracks.map(x => x.source._flushOrWaitForOngoingClose(true).catch(() => {}));
 				await Promise.all(promises);
 
-				await Promise.all([...this._unfinalizedTargets].map(target => target._close()));
+				this._targetsClosed = true;
+				await Promise.all([...this._unfinalizedTargets].map(target => target._close().catch(() => {})));
 				this._unfinalizedTargets.clear();
 			} finally {
 				release();
@@ -1041,6 +1062,7 @@ export class Output<
 				this.state = 'canceled';
 				throw error;
 			} finally {
+				this._targetsClosed = true;
 				await Promise.all([...this._unfinalizedTargets].map(target => target._close().catch(() => {})));
 				this._unfinalizedTargets.clear();
 

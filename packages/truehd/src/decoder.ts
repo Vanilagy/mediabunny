@@ -14,12 +14,13 @@ import {
 	registerDecoder,
 } from 'mediabunny';
 import { sendCommand, refWorker, unrefWorker } from './worker-client';
-import { BATCH_SAMPLE_COUNT } from './shared';
+import { assert, BATCH_SAMPLE_COUNT } from './shared';
 
 class TrueHdDecoder extends CustomAudioDecoder {
 	private ctx = 0;
 	private samplesPerAccessUnit = 0;
 	private queuedPackets: EncodedPacket[] = [];
+	private nextTimestamp: number | null = null;
 
 	static override supports(codec: AudioCodec): boolean {
 		return codec === 'truehd';
@@ -73,13 +74,24 @@ class TrueHdDecoder extends CustomAudioDecoder {
 		}, packets.map(x => x.encodedData));
 
 		for (const chunk of result.chunks) {
+			// The access units following the first one of a packet come without a timestamp, but they simply pick up
+			// where the previous one left off
+			let timestamp: number;
+			if (chunk.pts !== null) {
+				timestamp = chunk.pts / this.config.sampleRate;
+			} else {
+				assert(this.nextTimestamp !== null);
+				timestamp = this.nextTimestamp;
+			}
+
 			const sample = new AudioSample({
 				data: chunk.pcmData,
 				format: chunk.format,
 				numberOfChannels: chunk.channels,
 				sampleRate: chunk.sampleRate,
-				timestamp: chunk.pts / chunk.sampleRate,
+				timestamp,
 			});
+			this.nextTimestamp = timestamp + sample.duration;
 			this.onSample(sample);
 		}
 	}

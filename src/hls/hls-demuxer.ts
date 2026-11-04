@@ -37,7 +37,6 @@ import { SegmentedInputTrackDeclaration } from '../segmented-input';
 import { PathedSource } from '../source';
 
 type InternalTrack = {
-	id: number;
 	demuxer: HlsDemuxer;
 	backingTrack: InputTrackBacking | null;
 	default: boolean;
@@ -338,9 +337,13 @@ export class HlsDemuxer extends Demuxer {
 
 						videoCodecString = codecString;
 
-						const videoGroupId = variantStream.attributes.get('video');
+						const videoMediaTags = mediaTags.filter(mediaTag => (
+							mediaTag.attributes.get('group-id') === videoGroupId
+							&& mediaTag.attributes.get('type')!.toLowerCase() === 'video'
+						));
 
-						if (videoGroupId === null) {
+						// Undefined groups occur in the wild; we ignore them, so the video lies in the variant stream
+						if (videoMediaTags.length === 0) {
 							const resolution = variantStream.attributes.get('resolution');
 							let width: number | null = null;
 							let height: number | null = null;
@@ -354,7 +357,6 @@ export class HlsDemuxer extends Demuxer {
 							}
 
 							result.push({
-								id: -1,
 								demuxer: this,
 								backingTrack: null,
 								default: true,
@@ -375,14 +377,7 @@ export class HlsDemuxer extends Demuxer {
 								},
 							});
 						} else {
-							for (const mediaTag of mediaTags) {
-								const groupId = mediaTag.attributes.get('group-id')!;
-								const type = mediaTag.attributes.get('type')!;
-
-								if (groupId !== videoGroupId || type.toLowerCase() !== 'video') {
-									continue;
-								}
-
+							for (const mediaTag of videoMediaTags) {
 								const resolution = mediaTag.attributes.get('resolution')
 									?? variantStream.attributes.get('resolution');
 								let width: number | null = null;
@@ -397,7 +392,6 @@ export class HlsDemuxer extends Demuxer {
 								}
 
 								result.push({
-									id: -1,
 									demuxer: this,
 									backingTrack: null,
 									default: getMediaTagDefault(mediaTag.attributes),
@@ -431,16 +425,14 @@ export class HlsDemuxer extends Demuxer {
 
 						audioCodecString = codecString;
 
-						const audioGroupId = variantStream.attributes.get('audio');
+						const audioMediaTags = mediaTags.filter(mediaTag => (
+							mediaTag.attributes.get('group-id') === audioGroupId
+							&& mediaTag.attributes.get('type')!.toLowerCase() === 'audio'
+						));
 
-						if (audioGroupId === null) {
-							const channels = variantStream.attributes.get('channels');
-							const parsedChannels = channels !== null
-								? Number(channels.split('/')[0]!)
-								: null;
-
+						// Like for video, undefined groups are ignored, so the audio lies in the variant stream
+						if (audioMediaTags.length === 0) {
 							result.push({
-								id: -1,
 								demuxer: this,
 								backingTrack: null,
 								default: true,
@@ -456,31 +448,15 @@ export class HlsDemuxer extends Demuxer {
 								hasOnlyKeyPackets: variantStream.hasOnlyKeyPackets,
 								info: {
 									type: 'audio',
-									numberOfChannels:
-											parsedChannels !== null
-											&& Number.isInteger(parsedChannels)
-											&& parsedChannels > 0
-												? parsedChannels
-												: null,
+									numberOfChannels: parseChannelCount(variantStream.attributes.get('channels')),
 								},
 							});
 						} else {
-							for (const mediaTag of mediaTags) {
-								const groupId = mediaTag.attributes.get('group-id')!;
-								const type = mediaTag.attributes.get('type')!;
-
-								if (groupId !== audioGroupId || type.toLowerCase() !== 'audio') {
-									continue;
-								}
-
+							for (const mediaTag of audioMediaTags) {
 								const channels = mediaTag.attributes.get('channels')
 									?? variantStream.attributes.get('channels');
-								const parsedChannels = channels !== null
-									? Number(channels.split('/')[0]!)
-									: null;
 
 								result.push({
-									id: -1,
 									demuxer: this,
 									backingTrack: null,
 									default: getMediaTagDefault(mediaTag.attributes),
@@ -498,12 +474,7 @@ export class HlsDemuxer extends Demuxer {
 									hasOnlyKeyPackets: variantStream.hasOnlyKeyPackets,
 									info: {
 										type: 'audio',
-										numberOfChannels:
-												parsedChannels !== null
-												&& Number.isInteger(parsedChannels)
-												&& parsedChannels > 0
-													? parsedChannels
-													: null,
+										numberOfChannels: parseChannelCount(channels),
 									},
 								});
 							}
@@ -543,7 +514,6 @@ export class HlsDemuxer extends Demuxer {
 						existingTrack.languageCode = track.languageCode;
 					}
 				} else {
-					track.id = internalTracks.length + 1;
 					internalTracks.push(track);
 				}
 			};
@@ -631,8 +601,9 @@ export class HlsDemuxer extends Demuxer {
 		assert(this.internalTracks);
 
 		// Prefer the cheapest video track, since video timestamps are straightforward and its segments are
-		// cheap to load
-		const candidates = this.internalTracks.filter(x => !x.hasOnlyKeyPackets);
+		// cheap to load. I-frame variants are a last resort.
+		const regularTracks = this.internalTracks.filter(x => !x.hasOnlyKeyPackets);
+		const candidates = regularTracks.length > 0 ? regularTracks : this.internalTracks;
 		const videoCandidates = candidates.filter(x => x.info.type === 'video');
 		const pool = videoCandidates.length > 0 ? videoCandidates : candidates;
 		const index = arrayArgmin(pool, x => x.peakBitrate ?? Infinity);
@@ -650,10 +621,7 @@ export class HlsDemuxer extends Demuxer {
 		let decls: SegmentedInputTrackDeclaration[] | null = null;
 		if (this.internalTracks) {
 			const tracks = this.internalTracks.filter(x => x.fullPath === path);
-			decls = tracks.map(x => ({
-				id: x.id,
-				type: x.info.type,
-			}));
+			decls = tracks.map(x => ({ type: x.info.type }));
 		}
 
 		segmentedInput = new HlsSegmentedInput(this, path, decls, null);
@@ -748,10 +716,6 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 			default: this.internalTrack.autoselect,
 			primary: this.internalTrack.default,
 		};
-	}
-
-	getId(): number {
-		return this.internalTrack.id;
 	}
 
 	getPairingMask(): bigint {
@@ -1041,4 +1005,20 @@ const preprocessLanguageCode = (code: string | null) => {
 	// documented as ISO 639-2. Changing the definition would be a breaking change. This will get
 	// cleaned up in the future by defining languageCode to be BCP 47 instead.
 	return languageSubtag;
+};
+
+const parseChannelCount = (channels: string | null) => {
+	if (channels === null) {
+		return null;
+	}
+
+	const [count, objectCodingIdentifiers] = channels.split('/');
+	if (objectCodingIdentifiers !== undefined && objectCodingIdentifiers !== '-') {
+		// For object-based audio (like Dolby Atmos' "16/JOC"), the count isn't the number of channels the media
+		// decodes to
+		return null;
+	}
+
+	const number = Number(count);
+	return Number.isInteger(number) && number > 0 ? number : null;
 };

@@ -251,6 +251,12 @@ export const validateMetadataTags = (tags: MetadataTags) => {
 			if (!['coverFront', 'coverBack', 'unknown'].includes(image.kind)) {
 				throw new TypeError('Each image.kind must be \'coverFront\', \'coverBack\', or \'unknown\'.');
 			}
+			if (image.name !== undefined && typeof image.name !== 'string') {
+				throw new TypeError('Each image.name, when provided, must be a string.');
+			}
+			if (image.description !== undefined && typeof image.description !== 'string') {
+				throw new TypeError('Each image.description, when provided, must be a string.');
+			}
 		}
 	}
 	if (tags.comment !== undefined && typeof tags.comment !== 'string') {
@@ -298,6 +304,14 @@ export const metadataTagsAreEmpty = (tags: MetadataTags) => {
 		&& (!tags.images || tags.images.length === 0)
 		&& tags.comment === undefined
 		&& (tags.raw === undefined || Object.keys(tags.raw).length === 0);
+};
+
+export const createUtcDate = (year: number, monthIndex = 0, day = 1) => {
+	// Unlike Date.UTC or parsing a string, this takes years below 100 literally
+	const date = new Date(0);
+	date.setUTCFullYear(year, monthIndex, day);
+
+	return date;
 };
 
 /**

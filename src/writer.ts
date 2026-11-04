@@ -83,7 +83,7 @@ export class Writer {
 			}
 
 			data = data.subarray(this.trackedStart - pos);
-			pos = 0;
+			pos = this.trackedStart;
 		}
 
 		const neededSize = pos + data.byteLength - this.trackedStart;

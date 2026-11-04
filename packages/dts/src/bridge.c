@@ -90,7 +90,8 @@ int get_decoded_format(DecoderContext *ctx) {
 
 EMSCRIPTEN_KEEPALIVE
 uint8_t *get_decoded_plane_ptr(DecoderContext *ctx, int plane) {
-	return ctx->frame->data[plane];
+	// data only has room for 8 planes, but DTS:X can have more channels than that
+	return ctx->frame->extended_data[plane];
 }
 
 EMSCRIPTEN_KEEPALIVE

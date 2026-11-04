@@ -121,7 +121,6 @@ export type FrameRateMetricsOptions = {
 
 export interface InputTrackBacking {
 	getType(): TrackType;
-	getId(): number;
 	getNumber(): number;
 
 	getCodec(): MaybePromise<MediaCodec | null>;
@@ -199,9 +198,18 @@ export abstract class InputTrack {
 		return this instanceof InputAudioTrack;
 	}
 
-	/** The unique ID of this track in the input file. */
+	/**
+	 * The unique ID of this track in the input file, which is its 1-based index in the list of tracks returned by
+	 * {@link Input.getTracks}.
+	 */
 	get id() {
-		return this._backing.getId();
+		const backings = this.input._trackBackingsCache;
+		assert(backings);
+
+		const index = backings.indexOf(this._backing);
+		assert(index !== -1);
+
+		return index + 1;
 	}
 
 	/**
@@ -417,13 +425,16 @@ export abstract class InputTrack {
 			totalPacketBytes += packet.byteLength;
 		}
 
+		// Without packets, or with a lone packet of unknown (zero) duration, there's no time span to compute rates over
+		const timeSpan = endTimestamp - startTimestamp;
+
 		return {
 			packetCount,
-			averagePacketRate: packetCount
-				? Number((packetCount / (endTimestamp - startTimestamp)).toPrecision(16))
+			averagePacketRate: timeSpan > 0
+				? Number((packetCount / timeSpan).toPrecision(16))
 				: 0,
-			averageBitrate: packetCount
-				? Number((8 * totalPacketBytes / (endTimestamp - startTimestamp)).toPrecision(16))
+			averageBitrate: timeSpan > 0
+				? Number((8 * totalPacketBytes / timeSpan).toPrecision(16))
 				: 0,
 		};
 	}
@@ -1486,6 +1497,9 @@ export const findUnderlyingFrameRate = (
 	sortedGaps.sort();
 
 	let period = sortedGaps[Math.floor(sortedGaps.length * 0.05)]!;
+	// The period estimate is only accurate to about a tick across the frames it was measured over, and that error adds
+	// up for each frame a gap spans. Ignoring it turns gaps with a tick of jitter into outliers, biasing the estimate.
+	let periodUncertainty = 1;
 
 	// Repeatedly infer how many frame periods each gap spans and refine the underlying period from the locally
 	// consistent gaps.
@@ -1496,7 +1510,7 @@ export const findUnderlyingFrameRate = (
 		for (const gap of gaps) {
 			const multiple = Math.max(1, Math.round(gap / period));
 
-			if (Math.abs(gap - multiple * period) >= DELTA_TOLERANCE) {
+			if (Math.abs(gap - multiple * period) >= DELTA_TOLERANCE + multiple * periodUncertainty) {
 				continue;
 			}
 
@@ -1509,6 +1523,7 @@ export const findUnderlyingFrameRate = (
 		}
 
 		const refinedPeriod = totalTicks / totalFrames;
+		periodUncertainty = 1 / Math.min(totalFrames, MAX_EFFECTIVE_FRAME_SPAN);
 
 		if (
 			Math.abs(refinedPeriod - period)
@@ -1528,7 +1543,7 @@ export const findUnderlyingFrameRate = (
 	for (const gap of gaps) {
 		const multiple = Math.max(1, Math.round(gap / period));
 
-		if (Math.abs(gap - multiple * period) >= DELTA_TOLERANCE) {
+		if (Math.abs(gap - multiple * period) >= DELTA_TOLERANCE + multiple * periodUncertainty) {
 			continue;
 		}
 

@@ -105,7 +105,7 @@ export type VideoTransformOptions = {
 	 * - `'cover'` will scale the image until the entire box is filled, while preserving aspect ratio.
 	 *
 	 * To avoid ambiguity, this field must not be set when `sizeChangeBehavior` is `'fill'`, `'contain'` or
-	 * `'deny'`, since `sizeChangeBehavior` already determines the fitting algorithm.
+	 * `'cover'`, since `sizeChangeBehavior` already determines the fitting algorithm.
 	 */
 	fit?: 'fill' | 'contain' | 'cover';
 	/**
@@ -1167,11 +1167,12 @@ export const canEncodeVideo = async (
 
 			// eslint-disable-next-line @typescript-eslint/no-misused-promises, no-async-promise-executor
 			const success = await new Promise<boolean>(async (resolve) => {
+				const encoder = new VideoEncoder({
+					output: () => {},
+					error: () => resolve(false),
+				});
+
 				try {
-					const encoder = new VideoEncoder({
-						output: () => {},
-						error: () => resolve(false),
-					});
 					encoder.configure(config);
 
 					const frameData = new Uint8Array(width * height * 4);
@@ -1193,6 +1194,11 @@ export const canEncodeVideo = async (
 					resolve(true);
 				} catch {
 					resolve(false);
+				} finally {
+					// An encoder error already closes it
+					if (encoder.state !== 'closed') {
+						encoder.close();
+					}
 				}
 			});
 

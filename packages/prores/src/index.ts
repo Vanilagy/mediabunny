@@ -28,6 +28,7 @@ if ((globalThis as Record<symbol, unknown>)[PRORES_LOADED_SYMBOL]) {
 class ProresDecoder extends CustomVideoDecoder {
 	private decoder: Decoder | null = null;
 	private framePool: Frame[] = [];
+	private lastDecodePromise = Promise.resolve();
 
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	static override supports(codec: VideoCodec, config: VideoDecoderConfig): boolean {
@@ -87,7 +88,7 @@ class ProresDecoder extends CustomVideoDecoder {
 			await this.decoder.dequeued;
 		}
 
-		void this.runDecode(packet)
+		this.lastDecodePromise = this.runDecode(packet)
 			.catch(error => this.onError(error));
 	}
 
@@ -114,24 +115,31 @@ class ProresDecoder extends CustomVideoDecoder {
 			this.trimCodedHeightToVisibleHeight(result);
 		}
 
+		// Like with WebCodecs, the decoder config (which carries container-level metadata) overrides in-band values
+		const configColorSpace = this.config.colorSpace;
 		const colorSpaceInit = {
-			primaries: result.colorPrimariesString as VideoColorPrimaries | undefined,
-			matrix: result.colorMatrixString as VideoMatrixCoefficients | undefined,
-			transfer: result.colorTransferString as VideoTransferCharacteristics | undefined,
-			fullRange: result.colorRangeFull,
+			primaries: configColorSpace?.primaries ?? result.colorPrimariesString as VideoColorPrimaries | undefined,
+			matrix: configColorSpace?.matrix ?? result.colorMatrixString as VideoMatrixCoefficients | undefined,
+			transfer: configColorSpace?.transfer
+				?? result.colorTransferString as VideoTransferCharacteristics | undefined,
+			fullRange: configColorSpace?.fullRange ?? result.colorRangeFull,
 		};
+
+		let pixelAspectRatio = result.pixelAspectRatio;
+		if (this.config.displayAspectWidth !== undefined && this.config.displayAspectHeight !== undefined) {
+			pixelAspectRatio = {
+				num: this.config.displayAspectWidth * result.visibleHeight,
+				den: this.config.displayAspectHeight * result.visibleWidth,
+			};
+		}
 
 		let displayWidth = result.visibleWidth;
 		let displayHeight = result.visibleHeight;
 
-		if (result.pixelAspectRatio.num > result.pixelAspectRatio.den) {
-			displayWidth = Math.round(
-				result.visibleWidth * result.pixelAspectRatio.num / result.pixelAspectRatio.den,
-			);
+		if (pixelAspectRatio.num > pixelAspectRatio.den) {
+			displayWidth = Math.round(result.visibleWidth * pixelAspectRatio.num / pixelAspectRatio.den);
 		} else {
-			displayHeight = Math.round(
-				result.visibleHeight * result.pixelAspectRatio.den / result.pixelAspectRatio.num,
-			);
+			displayHeight = Math.round(result.visibleHeight * pixelAspectRatio.den / pixelAspectRatio.num);
 		}
 
 		let sample: VideoSample;
@@ -211,15 +219,24 @@ class ProresDecoder extends CustomVideoDecoder {
 			bytesPerSample * (lumaVisiblePixels + chromaVisiblePixels),
 		);
 
+		if (result.pixelFormat.includes('A')) {
+			// A
+			result.frameData.set(
+				result.frameData.subarray(
+					bytesPerSample * (lumaCodedPixels + 2 * chromaCodedPixels),
+					bytesPerSample * (2 * lumaCodedPixels + 2 * chromaCodedPixels),
+				),
+				bytesPerSample * (lumaVisiblePixels + 2 * chromaVisiblePixels),
+			);
+		}
+
 		result.codedHeight = result.visibleHeight;
 	}
 
 	async flush() {
-		assert(this.decoder);
-
-		while (this.decoder.decodeQueueSize > 0) {
-			await this.decoder.dequeued;
-		}
+		// The decoder's own queue drains before the samples get emitted, so wait for the emission instead. Decodes
+		// finish in order, so the last one finishing means all of them have.
+		await this.lastDecodePromise;
 	}
 
 	async close() {

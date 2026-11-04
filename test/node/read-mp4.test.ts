@@ -3,8 +3,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
 	ALL_FORMATS,
+	AudioSampleSink,
 	BufferSource,
 	BufferTarget,
+	CustomSource,
 	EncodedPacket,
 	EncodedPacketSink,
 	EncodedVideoPacketSource,
@@ -272,3 +274,502 @@ test('Key packet lookup after reading fragments without key frames', async () =>
 
 	expect((await sink.getKeyPacket(1.2))?.timestamp).toBe(1);
 });
+
+test('Sample rate not fitting the sample entry', async () => {
+	// Without a srat box, the sample entry just says 0, leaving the media timescale as the best guess
+	const sampleEntry = audioSampleEntry('ipcm', 0, 2, 16, 0, [
+		fullBox('pcmC', 0, 0, u8(1), u8(16)),
+	]);
+
+	using input = new Input({
+		source: new BufferSource(pcmFile({
+			majorBrand: 'isom',
+			stsd: fullBox('stsd', 0, 0, u32(1), sampleEntry),
+			timescale: 96000,
+			sampleDuration: 1,
+			sampleSize: 4,
+			data: zeros(4 * 96),
+		})),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	expect(await track.getSampleRate()).toBe(96000);
+});
+
+test('Sample rate in srat box', async () => {
+	const sampleEntry = audioSampleEntry('ipcm', 1, 2, 16, 48000, [
+		fullBox('srat', 0, 0, u32(96000)),
+		fullBox('pcmC', 0, 0, u8(1), u8(16)),
+	]);
+
+	using input = new Input({
+		source: new BufferSource(pcmFile({
+			majorBrand: 'isom',
+			stsd: fullBox('stsd', 1, 0, u32(1), sampleEntry),
+			timescale: 96000,
+			sampleDuration: 1,
+			sampleSize: 4,
+			data: zeros(4 * 96),
+		})),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	expect(await track.getSampleRate()).toBe(96000);
+});
+
+test('lpcm with 64-bit float samples', async () => {
+	const values = [0.5, -0.25, 0.125, -1];
+
+	// QuickTime sound description v2, flagged as big-endian packed float
+	const sampleEntry = audioSampleEntry('lpcm', 2, 3, 16, 1, [
+		u32(72), f64(48000), u32(1), u32(0x7f000000), u32(64), u32(0b1011), u32(8), u32(1),
+	]);
+
+	using input = new Input({
+		source: new BufferSource(pcmFile({
+			majorBrand: 'qt  ',
+			stsd: fullBox('stsd', 0, 0, u32(1), sampleEntry),
+			timescale: 48000,
+			sampleDuration: 1,
+			sampleSize: 8,
+			data: concat(...values.map(f64)),
+		})),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	expect(await track.getCodec()).toBe('pcm-f64be');
+
+	const sink = new AudioSampleSink(track);
+	using sample = await sink.getSample(0);
+	assert(sample);
+
+	const decoded = new Float32Array(sample.numberOfFrames);
+	sample.copyTo(decoded, { format: 'f32', planeIndex: 0 });
+	expect([...decoded]).toEqual(values);
+});
+
+test('PCM samples spanning multiple frames', async () => {
+	// Like MP4Box writes them when defragmenting fragmented PCM audio
+	const sampleEntry = audioSampleEntry('ipcm', 0, 2, 16, 48000, [fullBox('pcmC', 0, 0, u8(1), u8(16))]);
+	const data = new Uint8Array(3 * 4096).map((_, i) => i);
+
+	using input = new Input({
+		source: new BufferSource(pcmFile({
+			majorBrand: 'isom',
+			stsd: fullBox('stsd', 0, 0, u32(1), sampleEntry),
+			timescale: 48000,
+			sampleDuration: 1024,
+			sampleSize: 4096,
+			data,
+		})),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	const sink = new EncodedPacketSink(track);
+	const packets: EncodedPacket[] = [];
+	for await (const packet of sink.packets()) {
+		packets.push(packet);
+	}
+
+	// Still one packet for the entire chunk, sized by the frames its samples span
+	expect(packets.map(x => x.timestamp)).toEqual([0]);
+	expect(packets.map(x => x.duration)).toEqual([3072 / 48000]);
+	expect(packets.map(x => x.data)).toEqual([data]);
+});
+
+const audioSampleEntry = (
+	name: string,
+	version: number,
+	channelCount: number,
+	sampleSize: number,
+	sampleRate: number,
+	extra: Bytes[] = [],
+) => box(
+	name, zeros(6), u16(1), u16(version), zeros(6), u16(channelCount), u16(sampleSize), zeros(4),
+	u32(0x10000 * sampleRate), ...extra,
+);
+
+const pcmFile = (options: {
+	majorBrand: string;
+	stsd: Bytes;
+	timescale: number;
+	sampleDuration: number;
+	sampleSize: number;
+	data: Uint8Array;
+}) => {
+	const ftyp = box('ftyp', ascii(options.majorBrand), u32(0), ascii(options.majorBrand));
+	const sampleCount = options.data.length / options.sampleSize;
+
+	return concat(
+		ftyp,
+		box('mdat', options.data),
+		box('moov',
+			mvhd(),
+			trak('soun', mdhd(options.timescale),
+				options.stsd,
+				fullBox('stts', 0, 0, u32(1), u32(sampleCount), u32(options.sampleDuration)),
+				fullBox('stsc', 0, 0, u32(1), u32(1), u32(sampleCount), u32(1)),
+				fullBox('stsz', 0, 0, u32(options.sampleSize), u32(sampleCount)),
+				fullBox('stco', 0, 0, u32(1), u32(ftyp.length + 8)),
+			),
+		),
+	);
+};
+
+test('Missing tfdt and tfra with positive composition offsets', async () => {
+	// IPBB fragments with FFmpeg-style composition offsets, so each one is presented one frame past its decode end
+	const moof = (dataOffset: number) => box('moof', box('traf',
+		fullBox('tfhd', 0, 0x020000, u32(1)), // Default base is moof
+		fullBox('trun', 0, 0x000801, u32(4), u32(dataOffset), u32(1), u32(3), u32(0), u32(0)),
+	));
+	const fragment = concat(moof(moof(0).length + 8), box('mdat', zeros(4)));
+
+	const file = concat(
+		box('ftyp', ascii('isom'), u32(0), ascii('isom')),
+		box('moov',
+			mvhd(),
+			trak('vide', mdhd(1), fullBox('stsd', 0, 0, u32(1), videoSampleEntry('vp08'))),
+			box('mvex', fullBox('trex', 0, 0, u32(1), u32(1), u32(1), u32(1), u32(0))),
+		),
+		fragment,
+		fragment,
+		fragment,
+	);
+
+	using input = new Input({
+		source: new BufferSource(file),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryVideoTrack();
+	assert(track);
+
+	const sink = new EncodedPacketSink(track);
+	const timestamps: number[] = [];
+	for await (const packet of sink.packets()) {
+		timestamps.push(packet.timestamp);
+	}
+
+	expect(timestamps).toEqual([1, 4, 2, 3, 5, 8, 6, 7, 9, 12, 10, 11]);
+});
+
+test('Unknown mdhd duration', async () => {
+	const mediaHeader = fullBox('mdhd', 1, 0, zeros(16), u32(1000), u32(0xffffffff), u32(0xffffffff), zeros(4));
+	const file = concat(
+		box('ftyp', ascii('isom'), u32(0), ascii('isom')),
+		box('moov',
+			mvhd(),
+			trak('vide', mediaHeader, fullBox('stsd', 0, 0, u32(1), videoSampleEntry('vp08'))),
+		),
+	);
+
+	using input = new Input({
+		source: new BufferSource(file),
+		formats: ALL_FORMATS,
+	});
+
+	expect(await input.getDurationFromMetadata()).toBe(null);
+});
+
+test('QuickTime track name in a (c)nam box', async () => {
+	// Like at the movie level, the box holds an international text string with a length and a language code
+	const file = concat(
+		box('ftyp', ascii('qt  '), u32(0), ascii('qt  ')),
+		box('moov', mvhd(), box('trak',
+			fullBox('tkhd', 0, 1, zeros(8), u32(1), zeros(68)),
+			box('mdia',
+				mdhd(1000),
+				fullBox('hdlr', 0, 0, zeros(4), ascii('vide'), zeros(13)),
+				box('minf', box('stbl', fullBox('stsd', 0, 0, u32(1), videoSampleEntry('vp08')))),
+			),
+			box('udta', box('\xa9nam', u16(5), u16(0x55c4), ascii('Hello'))),
+		)),
+	);
+
+	using input = new Input({
+		source: new BufferSource(file),
+		formats: ALL_FORMATS,
+	});
+
+	expect(await (await input.getPrimaryVideoTrack())!.getName()).toBe('Hello');
+});
+
+test('Concurrent reads of an encrypted fragment without senc', async () => {
+	const { iv, plaintext, ciphertext } = await encryptSample();
+
+	// The IV is referenced only by saiz and saio, and lies far enough from the sample that both get read separately
+	const gap = 2 ** 18;
+	const moof = (moofSize: number) => box('moof', box('traf',
+		fullBox('tfhd', 0, 0x020000, u32(1)), // Default base is moof
+		fullBox('trun', 0, 0x000001, u32(1), u32(moofSize + 8 + iv.length + gap)),
+		fullBox('saiz', 0, 0, u8(iv.length), u32(1)),
+		fullBox('saio', 0, 0, u32(1), u32(moofSize + 8)),
+	));
+	const file = concat(
+		box('ftyp', ascii('isom'), u32(0), ascii('isom')),
+		encryptedMoov(iv.length, ciphertext.length),
+		moof(moof(0).length),
+		box('mdat', iv, zeros(gap), ciphertext),
+	);
+	const ivPosition = file.length - ciphertext.length - gap - iv.length;
+
+	using input = new Input({
+		source: new CustomSource({
+			getSize: () => file.length,
+			read: async (start, end) => {
+				if (start <= ivPosition && ivPosition < end) {
+					await new Promise(resolve => setTimeout(resolve, 50));
+				}
+
+				return file.subarray(start, end);
+			},
+		}),
+		formats: ALL_FORMATS,
+		formatOptions: {
+			isobmff: { resolveKeyId: () => '11111111111111111111111111111111' },
+		},
+	});
+	const track = await input.getPrimaryVideoTrack();
+	assert(track);
+
+	// The second read comes in while the first one still waits for the IV
+	const sink = new EncodedPacketSink(track);
+	const firstRead = sink.getFirstPacket();
+	await new Promise(resolve => setTimeout(resolve, 10));
+	const packets = await Promise.all([firstRead, sink.getFirstPacket()]);
+
+	expect(packets.map(x => x?.data)).toEqual([plaintext, plaintext]);
+});
+
+test('saio offset with an explicit base data offset', async () => {
+	const { iv, plaintext, ciphertext } = await encryptSample();
+
+	const ftyp = box('ftyp', ascii('isom'), u32(0), ascii('isom'));
+	const moov = encryptedMoov(iv.length, ciphertext.length);
+	// Like the trun data offset, the saio offset is relative to the base data offset, which here is the mdat's content
+	const moof = (baseDataOffset: number) => box('moof', box('traf',
+		fullBox('tfhd', 0, 0x000001, u32(1), u32(0), u32(baseDataOffset)),
+		fullBox('trun', 0, 0x000001, u32(1), u32(iv.length)),
+		fullBox('saiz', 0, 0, u8(iv.length), u32(1)),
+		fullBox('saio', 0, 0, u32(1), u32(0)),
+	));
+	const file = concat(
+		ftyp,
+		moov,
+		moof(ftyp.length + moov.length + moof(0).length + 8),
+		box('mdat', iv, ciphertext),
+	);
+
+	using input = new Input({
+		source: new BufferSource(file),
+		formats: ALL_FORMATS,
+		formatOptions: {
+			isobmff: { resolveKeyId: () => '11111111111111111111111111111111' },
+		},
+	});
+	const packet = await new EncodedPacketSink((await input.getPrimaryVideoTrack())!).getFirstPacket();
+
+	expect(packet!.data).toEqual(plaintext);
+});
+
+test('PSSH boxes differing only in their key IDs', async () => {
+	const { iv, ciphertext } = await encryptSample();
+
+	// ClearKey boxes carry no data, just the key IDs. Both list the track's key ID, which is all zeros.
+	const pssh = (otherKeyIdByte: number) => fullBox(
+		'pssh',
+		1,
+		0,
+		[0x10, 0x77, 0xef, 0xec, 0xc0, 0xb2, 0x4d, 0x02, 0xac, 0xe3, 0x3c, 0x1e, 0x52, 0xe2, 0xfb, 0x4b],
+		u32(2),
+		zeros(16),
+		new Uint8Array(16).fill(otherKeyIdByte),
+		u32(0),
+	);
+	const moof = (moofSize: number) => box('moof',
+		pssh(0xbb),
+		box('traf',
+			fullBox('tfhd', 0, 0x020000, u32(1)), // Default base is moof
+			fullBox('trun', 0, 0x000001, u32(1), u32(moofSize + 8)),
+			fullBox('senc', 0, 0, u32(1), iv),
+		),
+	);
+	const file = concat(
+		box('ftyp', ascii('isom'), u32(0), ascii('isom')),
+		encryptedMoov(iv.length, ciphertext.length, pssh(0xaa)),
+		moof(moof(0).length),
+		box('mdat', ciphertext),
+	);
+
+	let keyIds: (string[] | null)[] = [];
+	using input = new Input({
+		source: new BufferSource(file),
+		formats: ALL_FORMATS,
+		formatOptions: {
+			isobmff: {
+				resolveKeyId: ({ psshBoxes }) => {
+					keyIds = psshBoxes.map(x => x.keyIds);
+					return '11111111111111111111111111111111';
+				},
+			},
+		},
+	});
+	await new EncodedPacketSink((await input.getPrimaryVideoTrack())!).getFirstPacket();
+
+	expect(keyIds).toEqual([['00'.repeat(16), 'aa'.repeat(16)], ['00'.repeat(16), 'bb'.repeat(16)]]);
+});
+
+const encryptSample = async () => {
+	const iv = [1, 2, 3, 4, 5, 6, 7, 8];
+	const plaintext = new Uint8Array(16).fill(0xaa);
+	const key = await crypto.subtle.importKey('raw', new Uint8Array(16).fill(0x11), 'AES-CTR', false, ['encrypt']);
+	const ciphertext = new Uint8Array(await crypto.subtle.encrypt(
+		{ name: 'AES-CTR', counter: concat(iv, zeros(8)), length: 64 },
+		key,
+		plaintext,
+	));
+
+	return { iv, plaintext, ciphertext };
+};
+
+const encryptedMoov = (ivSize: number, sampleSize: number, ...children: Bytes[]) => box('moov',
+	mvhd(),
+	trak('vide', mdhd(1000), fullBox('stsd', 0, 0, u32(1), videoSampleEntry('encv', box('sinf',
+		box('frma', ascii('vp08')),
+		fullBox('schm', 0, 0, ascii('cenc'), u32(0x10000)),
+		box('schi', fullBox('tenc', 0, 0, zeros(2), u8(1), u8(ivSize), zeros(16))),
+	)))),
+	box('mvex', fullBox('trex', 0, 0, u32(1), u32(1), u32(1), u32(sampleSize), u32(0))),
+	...children,
+);
+
+test('Fragments following samples in the moov box', async () => {
+	// FFmpeg writes files like these when fragmenting without empty_moov: The samples of the first fragment go into the
+	// moov box, all others into movie fragments
+	await testMoovSamplesThenFragment(true);
+});
+
+test('Fragments following samples in the moov box, without tfdt', async () => {
+	// Without a tfdt, the first fragment starts where the samples in the moov box end
+	await testMoovSamplesThenFragment(false);
+});
+
+const testMoovSamplesThenFragment = async (withTfdt: boolean) => {
+	using input = new Input({
+		source: new BufferSource(moovSamplesThenFragment(withTfdt)),
+		formats: ALL_FORMATS,
+	});
+	const track = (await input.getVideoTracks())[0]!;
+	const sink = new EncodedPacketSink(track);
+
+	const packets: EncodedPacket[] = [];
+	for await (const packet of sink.packets()) {
+		packets.push(packet);
+	}
+
+	expect(packets.map(x => x.timestamp)).toEqual([0, 0.04, 0.08, 0.12, 0.16, 0.2]);
+	expect(packets.map(x => x.data[0])).toEqual([0, 1, 2, 3, 4, 5]);
+	expect(packets.map(x => x.type)).toEqual(['key', 'delta', 'delta', 'key', 'delta', 'delta']);
+
+	expect((await sink.getPacket(0.05))!.timestamp).toBe(0.04);
+	expect((await sink.getPacket(0.13))!.timestamp).toBe(0.12);
+	expect((await sink.getKeyPacket(0.1))!.timestamp).toBe(0);
+	expect((await sink.getKeyPacket(0.2))!.timestamp).toBe(0.12);
+	expect((await sink.getNextKeyPacket(packets[0]!))!.timestamp).toBe(0.12);
+
+	expect(await track.computeDuration()).toBe(0.24);
+	// The metadata only knows about the samples in the moov box
+	expect(await track.getDurationFromMetadata()).toBe(null);
+};
+
+const moovSamplesThenFragment = (withTfdt: boolean) => {
+	const moov = (dataOffset: number) => box('moov',
+		mvhd(),
+		trak('vide', fullBox('mdhd', 0, 0, zeros(8), u32(1000), u32(120), zeros(4)),
+			fullBox('stsd', 0, 0, u32(1), videoSampleEntry('avc1')),
+			fullBox('stts', 0, 0, u32(1), u32(3), u32(40)),
+			fullBox('stss', 0, 0, u32(1), u32(1)),
+			fullBox('stsc', 0, 0, u32(1), u32(1), u32(3), u32(1)),
+			fullBox('stsz', 0, 0, u32(0), u32(3), u32(4), u32(4), u32(4)),
+			fullBox('stco', 0, 0, u32(1), u32(dataOffset)),
+		),
+		box('mvex', fullBox('trex', 0, 0, u32(1), u32(1), u32(40), u32(4), u32(0x10000))),
+	);
+	const moof = (dataOffset: number) => box('moof', box('traf',
+		fullBox('tfhd', 0, 0x020000, u32(1)), // Default base is moof
+		...(withTfdt ? [fullBox('tfdt', 0, 0, u32(120))] : []),
+		fullBox('trun', 0, 0x000005, u32(3), u32(dataOffset), u32(0)), // First sample is a key frame
+	));
+
+	const ftyp = box('ftyp', ascii('isom'), u32(0), ascii('isom'));
+	const moovDataOffset = ftyp.length + moov(0).length + 8;
+
+	return concat(
+		ftyp,
+		moov(moovDataOffset),
+		box('mdat', sampleData(0), sampleData(1), sampleData(2)),
+		moof(moof(0).length + 8),
+		box('mdat', sampleData(3), sampleData(4), sampleData(5)),
+	);
+};
+
+const sampleData = (value: number) => [value, value, value, value];
+
+const videoSampleEntry = (name: string, ...children: Bytes[]) => box(
+	name, zeros(6), u16(1), zeros(16), u16(64), u16(64), zeros(50), ...children,
+);
+
+const mvhd = () => fullBox('mvhd', 0, 0, zeros(8), u32(1000), zeros(84));
+
+const trak = (handler: string, mediaHeader: Bytes, ...stblChildren: Bytes[]) => box('trak',
+	fullBox('tkhd', 0, 1, zeros(8), u32(1), zeros(68)),
+	box('mdia',
+		mediaHeader,
+		fullBox('hdlr', 0, 0, zeros(4), ascii(handler), zeros(13)),
+		box('minf', box('stbl', ...stblChildren)),
+	),
+);
+
+const mdhd = (timescale: number) => fullBox('mdhd', 0, 0, zeros(8), u32(timescale), zeros(8));
+
+type Bytes = Uint8Array | number[];
+
+const fullBox = (name: string, version: number, flags: number, ...parts: Bytes[]) => {
+	return box(name, u8(version), u24(flags), ...parts);
+};
+
+const box = (name: string, ...parts: Bytes[]) => {
+	const content = concat(...parts);
+	return concat(u32(8 + content.length), ascii(name), content);
+};
+
+const concat = (...parts: Bytes[]) => {
+	const result = new Uint8Array(parts.reduce((total, part) => total + part.length, 0));
+	let offset = 0;
+	for (const part of parts) {
+		result.set(part, offset);
+		offset += part.length;
+	}
+
+	return result;
+};
+
+const f64 = (value: number) => {
+	const bytes = new Uint8Array(8);
+	new DataView(bytes.buffer).setFloat64(0, value);
+	return bytes;
+};
+
+const u32 = (value: number) => [(value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff];
+const u24 = (value: number) => [(value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff];
+const u16 = (value: number) => [(value >>> 8) & 0xff, value & 0xff];
+const u8 = (value: number) => [value & 0xff];
+const ascii = (text: string) => [...text].map(char => char.charCodeAt(0));
+const zeros = (length: number) => new Uint8Array(length);

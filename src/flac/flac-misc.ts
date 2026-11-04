@@ -94,8 +94,9 @@ export const readCodedNumber = (fileSlice: FileSlice): number => {
 		}
 	}
 
+	// Arithmetic instead of bit operations, since sample numbers can reach 36 bits
 	const encoded = bitArray.reduce((acc, bit, index) => {
-		return acc | (bit << index);
+		return acc + bit * 2 ** index;
 	}, 0);
 
 	return encoded;
@@ -130,7 +131,7 @@ export const readSampleRate = (
 	}
 
 	if (sampleRateOrUncommon === 'uncommon-u8') {
-		return readU8(slice);
+		return 1000 * readU8(slice);
 	}
 
 	if (typeof sampleRateOrUncommon === 'number') {

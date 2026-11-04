@@ -15,7 +15,7 @@ import {
 } from 'mediabunny';
 import { sendCommand, refWorker, unrefWorker } from './worker-client';
 import { assert } from './shared';
-import { AC3_SAMPLE_RATES, EAC3_REDUCED_SAMPLE_RATES } from '../../../shared/ac3-misc';
+import { AC3_SAMPLE_RATES } from '../../../shared/ac3-misc';
 
 class Ac3Encoder extends CustomAudioEncoder {
 	private ctx = 0;
@@ -28,17 +28,24 @@ class Ac3Encoder extends CustomAudioEncoder {
 	private pendingBuffer = new Float32Array(2 ** 16);
 	private pendingFrames = 0;
 	private nextSampleTimestampInSamples: number | null = null;
+	private encodedEndTimestampInSamples = 0;
 
 	static override supports(codec: AudioCodec, config: AudioEncoderConfig): boolean {
-		const sampleRates = codec === 'eac3'
-			? [...AC3_SAMPLE_RATES, ...EAC3_REDUCED_SAMPLE_RATES]
-			: AC3_SAMPLE_RATES;
-
+		// FFmpeg's encoders top out at 5.1 and can't do E-AC-3's reduced sample rates
 		return (codec === 'ac3' || codec === 'eac3')
 			&& config.numberOfChannels >= 1
-			&& config.numberOfChannels <= 8
-			&& sampleRates.includes(config.sampleRate)
-			&& config.bitrate !== undefined;
+			&& config.numberOfChannels <= 6
+			&& AC3_SAMPLE_RATES.includes(config.sampleRate)
+			&& config.bitrate !== undefined
+			// FFmpeg snaps AC-3 bitrates to the closest valid one, but rejects E-AC-3 bitrates outside of what
+			// six-block and single-block syncframes can hold
+			&& (
+				codec === 'ac3'
+				|| (
+					config.bitrate >= 16 * Math.ceil(config.sampleRate / 1536)
+					&& config.bitrate <= 16 * Math.floor(2048 * config.sampleRate / 256)
+				)
+			);
 	}
 
 	async init() {
@@ -80,6 +87,7 @@ class Ac3Encoder extends CustomAudioEncoder {
 	async encode(audioSample: AudioSample) {
 		if (this.nextSampleTimestampInSamples === null) {
 			this.nextSampleTimestampInSamples = Math.round(audioSample.timestamp * this.sampleRate);
+			this.encodedEndTimestampInSamples = this.nextSampleTimestampInSamples;
 		}
 
 		const channels = this.numberOfChannels;
@@ -104,23 +112,31 @@ class Ac3Encoder extends CustomAudioEncoder {
 		this.pendingBuffer.set(incomingData, this.pendingFrames * channels);
 		this.pendingFrames += incomingFrames;
 
-		while (this.pendingFrames >= this.encoderFrameSize) {
-			await this.encodeOneFrame();
+		// Shift the remainder to the front only once at the end, as doing it per frame is quadratic for big samples
+		let encodedFrames = 0;
+		while (this.pendingFrames - encodedFrames >= this.encoderFrameSize) {
+			await this.encodeOneFrame(encodedFrames);
+			encodedFrames += this.encoderFrameSize;
 		}
+
+		this.pendingBuffer.copyWithin(0, encodedFrames * channels, this.pendingFrames * channels);
+		this.pendingFrames -= encodedFrames;
 	}
 
 	async flush() {
-		// Pad remaining samples with silence to fill a full frame
-		if (this.pendingFrames > 0) {
+		if (this.nextSampleTimestampInSamples !== null) {
 			const channels = this.numberOfChannels;
 			const frameSize = this.encoderFrameSize;
-			const usedSamples = this.pendingFrames * channels;
-			const frameSamples = frameSize * channels;
+			const endTimestampInSamples = this.nextSampleTimestampInSamples + this.pendingFrames;
 
-			this.pendingBuffer.fill(0, usedSamples, frameSamples);
-			this.pendingFrames = frameSize;
+			// Pad with silence until every sample has made it out. The encoder's output lags behind its input, so this
+			// can take an extra frame (the bridge drops whatever flushing the encoder would yield).
+			while (this.encodedEndTimestampInSamples < endTimestampInSamples) {
+				this.pendingBuffer.fill(0, this.pendingFrames * channels, frameSize * channels);
+				this.pendingFrames = 0;
 
-			await this.encodeOneFrame();
+				await this.encodeOneFrame(0);
+			}
 		}
 
 		await sendCommand({ type: 'flush-encoder', data: { ctx: this.ctx } });
@@ -134,20 +150,14 @@ class Ac3Encoder extends CustomAudioEncoder {
 		void unrefWorker();
 	}
 
-	private async encodeOneFrame() {
+	private async encodeOneFrame(startFrame: number) {
 		assert(this.nextSampleTimestampInSamples !== null);
 
 		const channels = this.numberOfChannels;
-		const frameSize = this.encoderFrameSize;
-		const frameSamples = frameSize * channels;
-
-		const frameData = this.pendingBuffer.slice(0, frameSamples);
-
-		// Shift remaining using copyWithin
-		this.pendingFrames -= frameSize;
-		if (this.pendingFrames > 0) {
-			this.pendingBuffer.copyWithin(0, frameSamples, frameSamples + this.pendingFrames * channels);
-		}
+		const frameData = this.pendingBuffer.slice(
+			startFrame * channels,
+			(startFrame + this.encoderFrameSize) * channels,
+		);
 
 		const audioData = frameData.buffer;
 		const result = await sendCommand({
@@ -159,7 +169,8 @@ class Ac3Encoder extends CustomAudioEncoder {
 			},
 		}, [audioData]);
 
-		this.nextSampleTimestampInSamples += frameSize;
+		this.nextSampleTimestampInSamples += this.encoderFrameSize;
+		this.encodedEndTimestampInSamples = result.pts + result.duration;
 
 		// We always get exactly one packet because we encode the correct frame size
 		const packet = new EncodedPacket(

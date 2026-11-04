@@ -45,23 +45,25 @@ export class WaveMuxer extends Muxer {
 	async start() {
 		const release = await this.mutex.acquire();
 
-		this.writer = await this.output._getRootWriter(false);
-		this.riffWriter = new RiffWriter(this.writer);
+		try {
+			this.writer = await this.output._getRootWriter(false);
+			this.riffWriter = new RiffWriter(this.writer);
 
-		// If the track already tells us everything we need, we can write the header right now. Otherwise, we'll write
-		// it with the first sample.
-		const track = this.output.tracks[0];
-		assert(track?.isAudioTrack());
+			// If the track already tells us everything we need, we can write the header right now. Otherwise, we'll
+			// write it with the first sample.
+			const track = this.output.tracks[0];
+			assert(track?.isAudioTrack());
 
-		if (track.metadata.decoderConfig) {
-			validateAudioChunkMetadata({ decoderConfig: track.metadata.decoderConfig }, track.source._codec);
+			if (track.metadata.decoderConfig) {
+				validateAudioChunkMetadata({ decoderConfig: track.metadata.decoderConfig }, track.source._codec);
 
-			this.writeHeader(track, track.metadata.decoderConfig);
-			this.sampleRate = track.metadata.decoderConfig.sampleRate;
-			this.headerWritten = true;
+				this.writeHeader(track, track.metadata.decoderConfig);
+				this.sampleRate = track.metadata.decoderConfig.sampleRate;
+				this.headerWritten = true;
+			}
+		} finally {
+			release();
 		}
-
-		release();
 	}
 
 	async getMimeType() {
@@ -359,6 +361,11 @@ export class WaveMuxer extends Muxer {
 				'Cannot finalize an empty WAVE file: no packets were added and the track specified no decoderConfig in'
 				+ ' its metadata, so there\'s no telling what the file should look like.',
 			);
+		}
+
+		// Add padding byte if data chunk size is odd
+		if (this.dataSize & 1) {
+			this.writer.write(new Uint8Array(1));
 		}
 
 		const endPos = this.writer.getPos();

@@ -581,10 +581,6 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		return 'audio' as const;
 	}
 
-	getId() {
-		return 1;
-	}
-
 	getNumber() {
 		return 1;
 	}
@@ -700,12 +696,10 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 				}
 
 				const packet = this.demuxer.loadedSamples[packetIndex]!;
-				const sampleTimestamp
-					= packet.blockOffset / this.demuxer.audioInfo.sampleRate;
-				const sampleDuration
-					= packet.blockSize / this.demuxer.audioInfo.sampleRate;
+				const sampleEndTimestamp
+					= (packet.blockOffset + packet.blockSize) / this.demuxer.audioInfo.sampleRate;
 
-				if (sampleTimestamp + sampleDuration <= timestamp) {
+				if (sampleEndTimestamp <= timestamp) {
 					if (this.demuxer.lastSampleLoaded) {
 						return this.getPacketAtIndex(
 							this.demuxer.loadedSamples.length - 1,
@@ -807,14 +801,20 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 	async getFirstPacket(
 		options: PacketRetrievalOptions,
 	): Promise<EncodedPacket | null> {
-		// Ensure the next sample exists
-		while (
-			this.demuxer.loadedSamples.length === 0
-			&& !this.demuxer.lastSampleLoaded
-		) {
-			await this.demuxer.advanceReader();
-		}
+		const release = await this.demuxer.readingMutex.acquire();
 
-		return this.getPacketAtIndex(0, options);
+		try {
+			// Ensure the next sample exists
+			while (
+				this.demuxer.loadedSamples.length === 0
+				&& !this.demuxer.lastSampleLoaded
+			) {
+				await this.demuxer.advanceReader();
+			}
+
+			return this.getPacketAtIndex(0, options);
+		} finally {
+			release();
+		}
 	}
 }

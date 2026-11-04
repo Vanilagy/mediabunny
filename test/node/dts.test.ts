@@ -12,7 +12,7 @@ import { EncodedPacketSink } from '../../src/media-sink.js';
 import { EncodedPacket } from '../../src/packet.js';
 import { assert, uint8ArraysAreEqual } from '../../src/misc.js';
 import { AudioSampleSink } from '../../src/media-sink.js';
-import { AudioSampleSource } from '../../src/media-source.js';
+import { AudioSampleSource, EncodedAudioPacketSource } from '../../src/media-source.js';
 import { AudioSample } from '../../src/sample.js';
 import { canEncode, Quality } from '../../src/encode.js';
 import { registerDtsDecoder, registerDtsEncoder } from '@mediabunny/dts';
@@ -248,7 +248,8 @@ test('Encode with huge timestamps', async () => {
 	const firstPacket = await packetSink.getFirstPacket();
 	assert(firstPacket);
 
-	expect(firstPacket.timestamp).toBe(timestamp);
+	const codecDelay = 512 / 48000;
+	expect(firstPacket.timestamp).toBe(timestamp - codecDelay);
 
 	const sampleSink = new AudioSampleSink(track);
 	const firstSample = (await sampleSink.samples(timestamp).next()).value;
@@ -414,3 +415,134 @@ const sine440Score = (x: Float32Array, sampleRate: number, freq: number) => {
 
 	return fitEnergy / xx;
 };
+
+test('Track sample rate differing from the decoded sample rate', async () => {
+	registerDtsDecoder();
+
+	using originalInput = new Input({
+		source: new FilePathSource(path.join(__dirname, '..', 'public', DTSC_FILE)),
+		formats: ALL_FORMATS,
+	});
+	const originalTrack = await originalInput.getPrimaryAudioTrack();
+	assert(originalTrack);
+	expect(await originalTrack.getSampleRate()).toBe(24000);
+
+	// Declare twice the rate the stream decodes at, like a container reporting the 48 kHz core rate of a stream that
+	// decodes at 96 kHz
+	const output = new Output({
+		format: new MkvOutputFormat(),
+		target: new BufferTarget(),
+	});
+	const source = new EncodedAudioPacketSource('dts');
+	output.addAudioTrack(source);
+	await output.start();
+
+	let packetCount = 0;
+	for await (const packet of new EncodedPacketSink(originalTrack).packets()) {
+		await source.add(packet, {
+			decoderConfig: {
+				codec: 'dtsc',
+				numberOfChannels: 2,
+				sampleRate: 48000,
+			},
+		});
+
+		if (++packetCount === 20) {
+			break;
+		}
+	}
+
+	await output.finalize();
+	assert(output.target.buffer);
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+	expect(await track.getSampleRate()).toBe(48000);
+
+	const packetTimestamps: number[] = [];
+	for await (const packet of new EncodedPacketSink(track).packets()) {
+		packetTimestamps.push(packet.timestamp);
+	}
+
+	const sampleTimestamps: number[] = [];
+	for await (using sample of new AudioSampleSink(track).samples()) {
+		expect(sample.sampleRate).toBe(24000);
+		sampleTimestamps.push(sample.timestamp);
+	}
+
+	expect(sampleTimestamps.length).toBe(packetTimestamps.length);
+	for (let i = 0; i < packetTimestamps.length; i++) {
+		expect(sampleTimestamps[i]).toBeCloseTo(packetTimestamps[i]!, 3);
+	}
+});
+
+test('Codec delay when encoding', async () => {
+	registerDtsDecoder();
+	registerDtsEncoder();
+
+	const sampleRate = 48000;
+	const startTimestamp = 1;
+	const signal = new Float32Array(1000); // Not a multiple of the frame size
+	for (let i = 0; i < signal.length; i++) {
+		signal[i] = 0.5 * Math.sin(2 * Math.PI * 1000 * i / sampleRate);
+	}
+
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+	const source = new AudioSampleSource({
+		codec: 'dts',
+		quality: new Quality({ bitrate: 768000 }),
+	});
+	output.addAudioTrack(source);
+	await output.start();
+
+	const sample = new AudioSample({
+		data: signal,
+		format: 'f32',
+		numberOfChannels: 1,
+		sampleRate,
+		timestamp: startTimestamp,
+	});
+	await source.add(sample);
+	sample.close();
+	source.close();
+	await output.finalize();
+	assert(output.target.buffer);
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	// Lay the decoded audio out on the timeline to see what ended up where the signal was
+	const decoded = new Float32Array(signal.length);
+	for await (using sample of new AudioSampleSink(track).samples()) {
+		const plane = new Float32Array(sample.numberOfFrames);
+		sample.copyTo(plane, {
+			format: 'f32-planar',
+			planeIndex: 0,
+		});
+
+		const offset = Math.round((sample.timestamp - startTimestamp) * sampleRate);
+		for (let i = Math.max(0, -offset); i < Math.min(plane.length, decoded.length - offset); i++) {
+			decoded[offset + i] = plane[i]!;
+		}
+	}
+
+	let errorEnergy = 0;
+	let signalEnergy = 0;
+	for (let i = 0; i < signal.length; i++) {
+		errorEnergy += (decoded[i]! - signal[i]!) ** 2;
+		signalEnergy += signal[i]! ** 2;
+	}
+
+	expect(errorEnergy / signalEnergy).toBeLessThan(0.01);
+});

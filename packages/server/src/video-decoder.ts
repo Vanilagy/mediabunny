@@ -84,7 +84,10 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 
 		// Honor inferred H.264 reorder buffering even when bitstream restrictions aren't explicitly signaled
 		// See https://github.com/Vanilagy/mediabunny/issues/488
-		const options = NodeAv.Dictionary.fromObject({ strict: NodeAv.FF_COMPLIANCE_STRICT });
+		// Only for AVC though, since other decoders (like libdav1d) then reject streams that browsers decode just fine
+		const options = this.codec === 'avc'
+			? NodeAv.Dictionary.fromObject({ strict: NodeAv.FF_COMPLIANCE_STRICT })
+			: null;
 
 		const ret = await codecContext.open2(codec, options);
 		NodeAv.FFmpegError.throwIfError(ret, 'Open codec context');
@@ -221,6 +224,8 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 		}
 
 		this.codecContext.flushBuffers();
+		// Decoding may jump backwards after a flush, where the old entries would get the new ones evicted right away
+		this.preciseTimings.length = 0;
 	}
 
 	close(): MaybePromise<void> {

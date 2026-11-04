@@ -31,6 +31,8 @@ import {
 	computeAverageMp3FrameSize,
 	getMp3ChannelCount,
 	MP3_DECODER_DELAY,
+	MP3_FRAME_HEADER_SIZE,
+	VBRI,
 } from '../../shared/mp3-misc';
 import {
 	ID3_V1_TAG_SIZE,
@@ -40,7 +42,9 @@ import {
 	readId3V2Header,
 } from '../id3';
 import { readNextMp3FrameHeader } from './mp3-reader';
-import { readAscii, readBytes, Reader, readU32Be } from '../reader';
+import { readAscii, readBytes, Reader, readU16Be, readU32Be, readU32Le } from '../reader';
+
+const APE_TAG_FOOTER_SIZE = 32;
 
 type Sample = {
 	timestamp: number;
@@ -196,6 +200,38 @@ export class Mp3Demuxer extends Demuxer {
 			}
 		}
 
+		// Fraunhofer's Layer III encoder writes a VBRI header instead, which always sits 32 bytes past the frame header
+		let vbriSlice = header.layer === 1
+			? this.reader.requestSlice(result.startPos + MP3_FRAME_HEADER_SIZE + 32, 18)
+			: null;
+		if (isThenable(vbriSlice)) vbriSlice = await vbriSlice;
+		if (vbriSlice) {
+			const word = readU32Be(vbriSlice);
+			const version = readU16Be(vbriSlice);
+
+			if (word === VBRI && version === 1) {
+				// Just like with Xing, there's no actual audio data in this frame
+				if (!this.xingFrameHeader) {
+					this.xingFrameHeader = header;
+					this.xingFrameHeaderPos = result.startPos;
+				}
+
+				if (!this.xingData) {
+					vbriSlice.skip(4); // Delay and quality
+					const fileSize = readU32Be(vbriSlice);
+					const frameCount = readU32Be(vbriSlice);
+
+					this.xingData = {
+						isVbr: true,
+						frameCount,
+						fileSize,
+					};
+				}
+
+				return;
+			}
+		}
+
 		if (!this.firstFrameHeader) {
 			this.firstFrameHeader = header;
 			this.firstFrameHeaderPos = result.startPos;
@@ -285,10 +321,6 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 		return 'audio' as const;
 	}
 
-	getId() {
-		return 1;
-	}
-
 	getNumber() {
 		return 1;
 	}
@@ -332,13 +364,46 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 			// Not tagged as VBR, assuming CBR
 
 			if (demuxer.reader.fileSize !== null) {
+				// Tags trailing the audio data mustn't count toward it
+				let audioEndPos = demuxer.reader.fileSize;
+
+				if (audioEndPos - demuxer.firstFrameHeaderPos >= ID3_V1_TAG_SIZE) {
+					let slice = demuxer.reader.requestSlice(audioEndPos - ID3_V1_TAG_SIZE, 3);
+					if (isThenable(slice)) slice = await slice;
+					assert(slice);
+
+					if (readAscii(slice, 3) === 'TAG') {
+						audioEndPos -= ID3_V1_TAG_SIZE;
+					}
+				}
+
+				// APEv2 tags sit before any ID3v1 tag
+				if (audioEndPos - demuxer.firstFrameHeaderPos >= APE_TAG_FOOTER_SIZE) {
+					let slice = demuxer.reader.requestSlice(audioEndPos - APE_TAG_FOOTER_SIZE, APE_TAG_FOOTER_SIZE);
+					if (isThenable(slice)) slice = await slice;
+					assert(slice);
+
+					if (readAscii(slice, 8) === 'APETAGEX') {
+						slice.skip(4); // Version
+						const tagSize = readU32Le(slice); // Includes the footer, but not the header
+						slice.skip(4); // Item count
+						const flags = readU32Le(slice);
+						const hasHeader = (flags & (1 << 31)) !== 0;
+
+						audioEndPos -= tagSize + (hasHeader ? APE_TAG_FOOTER_SIZE : 0);
+						if (audioEndPos < demuxer.firstFrameHeaderPos) {
+							throw new Error('Invalid APE tag size.');
+						}
+					}
+				}
+
 				const averageFrameSize = computeAverageMp3FrameSize(
 					demuxer.firstFrameHeader.lowSamplingFrequency,
 					demuxer.firstFrameHeader.layer,
 					demuxer.firstFrameHeader.bitrate,
 					demuxer.firstFrameHeader.sampleRate,
 				);
-				const frameCount = (demuxer.reader.fileSize - demuxer.firstFrameHeaderPos) / averageFrameSize;
+				const frameCount = (audioEndPos - demuxer.firstFrameHeaderPos) / averageFrameSize;
 
 				return (
 					Math.round(frameCount) * demuxer.firstFrameHeader.audioSamplesInFrame - demuxer.primingDelay

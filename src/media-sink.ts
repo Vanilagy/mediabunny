@@ -636,6 +636,7 @@ export abstract class BaseMediaSampleSink<
 						// nothing can ever close.
 						terminated = true;
 						ended = true;
+						onQueueDequeue();
 						closeSamples();
 						throw new InputDisposedError();
 					} else if (terminated) {
@@ -643,6 +644,7 @@ export abstract class BaseMediaSampleSink<
 					} else if (hasOutOfBandError) {
 						terminated = true;
 						ended = true;
+						onQueueDequeue();
 						closeSamples();
 						throw outOfBandError;
 					} else if (sampleQueue.length > 0) {
@@ -666,6 +668,8 @@ export abstract class BaseMediaSampleSink<
 				return { value: undefined, done: true };
 			},
 			async throw(error) {
+				// Like a generator function, a throw() ends the iteration
+				await this.return();
 				throw error;
 			},
 			[Symbol.asyncIterator]() {
@@ -688,6 +692,7 @@ export abstract class BaseMediaSampleSink<
 		let { promise: queueDequeue, resolve: onQueueDequeue } = promiseWithResolvers();
 		let decoderIsFlushed = false;
 		let terminated = false;
+		const { promise: terminatedPromise, resolve: onTerminated } = promiseWithResolvers();
 		let decoder: DecoderWrapper<MediaSample> | null = null;
 
 		// This stores errors that are "out of band" in the sense that they didn't occur in the normal flow of this
@@ -809,62 +814,77 @@ export abstract class BaseMediaSampleSink<
 				timestampsOfInterest.length = 0;
 			};
 
-			for await (const timestamp of timestampIterator) {
-				validateTimestamp(timestamp);
-
-				if (terminated || this._track.input._disposed) {
-					break;
-				}
-
-				const targetPacket = await packetSink.getPacket(timestamp, retrievalOptions);
-				let keyPacket = targetPacket && await packetSink.getKeyPacket(
-					targetPacket.timestamp - preRollDuration,
-					retrievalOptions,
-				);
-				if (targetPacket && !keyPacket) {
-					// The track doesn't reach back far enough for the full pre-roll, so this is the best we can do
-					const firstKeyPacket = await packetSink.getFirstKeyPacket(retrievalOptions);
-					if (firstKeyPacket && firstKeyPacket.timestamp <= targetPacket.timestamp) {
-						keyPacket = firstKeyPacket;
-					}
-				}
-
-				if (!targetPacket || !keyPacket) {
-					if (lastPacket) {
-						await flushDecoder();
+			try {
+				while (true) {
+					// The timestamps may take arbitrarily long to come in, so stop waiting on them once terminated.
+					// Else, the decoder would stay open until the next one arrives.
+					const nextTimestamp = timestampIterator.next();
+					nextTimestamp.catch(() => {}); // It may lose the race and reject later on
+					const result = await Promise.race([nextTimestamp, terminatedPromise]);
+					if (!result || result.done) {
+						break;
 					}
 
-					pushToQueue(null);
-					lastPacket = null;
-					continue;
-				}
+					const timestamp = result.value;
+					validateTimestamp(timestamp);
 
-				// Keep extending the current batch as long as it reaches the key packet anyway (always the case for an
-				// unchanged key packet), so that consecutive timestamps don't redo their pre-roll. Otherwise, or if
-				// we're going back in time, start a new batch at the key packet. The query timestamps within a batch
-				// must not decrease, since the sample matching relies on that.
-				if (
-					!lastPacket
-					|| keyPacket.sequenceNumber > maxSequenceNumber + 1
-					|| timestamp < lastTimestamp
-				) {
-					if (lastPacket) {
-						await flushDecoder(); // Always flush here, improves decoder compatibility
+					if (terminated || this._track.input._disposed) {
+						break;
 					}
 
-					lastKeyPacket = keyPacket;
-					lastDecodedPacket = null;
-					maxSequenceNumber = -1;
+					const targetPacket = await packetSink.getPacket(timestamp, retrievalOptions);
+					let keyPacket = targetPacket && await packetSink.getKeyPacket(
+						targetPacket.timestamp - preRollDuration,
+						retrievalOptions,
+					);
+					if (targetPacket && !keyPacket) {
+						// The track doesn't reach back far enough for the full pre-roll, so this is the best we can do
+						const firstKeyPacket = await packetSink.getFirstKeyPacket(retrievalOptions);
+						if (firstKeyPacket && firstKeyPacket.timestamp <= targetPacket.timestamp) {
+							keyPacket = firstKeyPacket;
+						}
+					}
+
+					if (!targetPacket || !keyPacket) {
+						if (lastPacket) {
+							await flushDecoder();
+						}
+
+						pushToQueue(null);
+						lastPacket = null;
+						continue;
+					}
+
+					// Keep extending the current batch as long as it reaches the key packet anyway (always the case for
+					// an unchanged key packet), so that consecutive timestamps don't redo their pre-roll. Otherwise, or
+					// if we're going back in time, start a new batch at the key packet. The query timestamps within a
+					// batch must not decrease, since the sample matching relies on that.
+					if (
+						!lastPacket
+						|| keyPacket.sequenceNumber > maxSequenceNumber + 1
+						|| timestamp < lastTimestamp
+					) {
+						if (lastPacket) {
+							await flushDecoder(); // Always flush here, improves decoder compatibility
+						}
+
+						lastKeyPacket = keyPacket;
+						lastDecodedPacket = null;
+						maxSequenceNumber = -1;
+					}
+
+					timestampsOfInterest.push(timestamp);
+					maxSequenceNumber = Math.max(targetPacket.sequenceNumber, maxSequenceNumber);
+
+					lastPacket = targetPacket;
+					lastTimestamp = timestamp;
+
+					// Decode right away so that samples come out while the timestamps are still coming in
+					await decodePackets();
 				}
-
-				timestampsOfInterest.push(timestamp);
-				maxSequenceNumber = Math.max(targetPacket.sequenceNumber, maxSequenceNumber);
-
-				lastPacket = targetPacket;
-				lastTimestamp = timestamp;
-
-				// Decode right away so that samples come out while the timestamps are still coming in
-				await decodePackets();
+			} finally {
+				// Not awaited, since it queues up behind a timestamp we may still be waiting on
+				timestampIterator.return().catch(() => {});
 			}
 
 			if (!terminated && !this._track.input._disposed) {
@@ -900,12 +920,16 @@ export abstract class BaseMediaSampleSink<
 						// iteration here - otherwise, the pump keeps queueing decoded samples that
 						// nothing can ever close.
 						terminated = true;
+						onTerminated();
+						onQueueDequeue();
 						closeSamples();
 						throw new InputDisposedError();
 					} else if (terminated) {
 						return { value: undefined, done: true };
 					} else if (hasOutOfBandError) {
 						terminated = true;
+						onTerminated();
+						onQueueDequeue();
 						closeSamples();
 						throw outOfBandError;
 					} else if (sampleQueue.length > 0) {
@@ -922,6 +946,7 @@ export abstract class BaseMediaSampleSink<
 			},
 			async return() {
 				terminated = true;
+				onTerminated();
 				onQueueDequeue();
 				onQueueNotEmpty();
 				closeSamples();
@@ -929,6 +954,7 @@ export abstract class BaseMediaSampleSink<
 				return { value: undefined, done: true };
 			},
 			async throw(error) {
+				await this.return();
 				throw error;
 			},
 			[Symbol.asyncIterator]() {
@@ -1095,10 +1121,11 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 		} else {
 			assert(this.decoder);
 
+			// Decoded samples still being merged with their alpha count too, they take up memory all the same
 			return Math.max(
 				this.decoder.decodeQueueSize,
 				this.alphaDecoder?.decodeQueueSize ?? 0,
-			);
+			) + this.finalSamples.length;
 		}
 	}
 
@@ -1127,6 +1154,8 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 				insertSorted(this.inputTimestamps, packet.timestamp, x => x);
 			}
 
+			// The workarounds below only rewrite the color data, the alpha side data stays as is
+			let colorPacket = packet;
 			if (isChromium() && this.currentPacketIndex === 0) {
 				if (this.codec === 'avc') {
 					// Workaround for https://issues.chromium.org/issues/470109459
@@ -1173,17 +1202,17 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 					}
 
 					const newData = concatAvcNalUnits(filteredNalUnits, this.decoderConfig);
-					packet = new EncodedPacket(newData, packet.type, packet.timestamp, packet.duration);
+					colorPacket = new EncodedPacket(newData, packet.type, packet.timestamp, packet.duration);
 				} else if (this.codec === 'hevc') {
 					// Workaround for https://issues.chromium.org/issues/507611247
 					const sanitizedData = sanitizeHevcPacketForChromium(packet.data, this.decoderConfig);
 					if (sanitizedData) {
-						packet = new EncodedPacket(sanitizedData, packet.type, packet.timestamp, packet.duration);
+						colorPacket = new EncodedPacket(sanitizedData, packet.type, packet.timestamp, packet.duration);
 					}
 				}
 			}
 
-			this.decoder.decode(packet.toEncodedVideoChunk());
+			this.decoder.decode(colorPacket.toEncodedVideoChunk());
 			this.decodeAlphaData(packet);
 		}
 
@@ -1395,6 +1424,12 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			}
 		} catch (error) {
 			removeItem(this.finalSamples, result);
+
+			// Samples that finished merging after this one were waiting on it and would be stuck forever otherwise
+			while (this.finalSamples.length > 0 && this.finalSamples[0]!.sample !== null) {
+				this.finalSamples.shift()!.sample!.close();
+			}
+
 			this.onError(error);
 		} finally {
 			removeItem(this.mergeAlphaPromises, resolver.promise);
@@ -1470,6 +1505,10 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			this.flushing = false;
 			await Promise.all(this.mergeAlphaPromises);
 
+			// Packets that never produced a frame (like invisible VP8 frames) leave their timestamps behind, which
+			// would shift the timestamps of all frames to come
+			this.inputTimestamps.length = 0;
+
 			this.colorQueue.forEach(x => x.close());
 			this.colorQueue.length = 0;
 			this.alphaQueue.forEach(x => x?.close());
@@ -1497,7 +1536,11 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 
 	close() {
 		if (this.customDecoder) {
-			void this.customDecoderCallSerializer.call(() => this.customDecoder!.close());
+			// An earlier failed call rejects the whole call chain, but the decoder must get closed regardless
+			void this.customDecoderCallSerializer.currentPromise
+				.catch(() => {})
+				.then(() => this.customDecoder!.close())
+				.catch(error => this.onError(error));
 		} else {
 			assert(this.decoder);
 
@@ -1692,6 +1735,9 @@ const colorAlphaMergerWorkerCode = () => {
 			format: outputFormat,
 			codedWidth: width,
 			codedHeight: height,
+			displayWidth: color.displayWidth,
+			displayHeight: color.displayHeight,
+			colorSpace: color.colorSpace.toJSON(),
 			timestamp: color.timestamp,
 			duration: color.duration ?? undefined,
 			transfer: [output.buffer],
@@ -1750,6 +1796,9 @@ const colorAlphaMergerWorkerCode = () => {
 			format: outputFormat,
 			codedWidth: width,
 			codedHeight: height,
+			displayWidth: color.displayWidth,
+			displayHeight: color.displayHeight,
+			colorSpace: color.colorSpace.toJSON(),
 			timestamp: color.timestamp,
 			duration: color.duration ?? undefined,
 			transfer: [output.buffer],
@@ -1797,6 +1846,9 @@ const colorAlphaMergerWorkerCode = () => {
 			format: 'I420A',
 			codedWidth: width,
 			codedHeight: height,
+			displayWidth: color.displayWidth,
+			displayHeight: color.displayHeight,
+			colorSpace: color.colorSpace.toJSON(),
 			timestamp: color.timestamp,
 			duration: color.duration ?? undefined,
 			transfer: [output.buffer],
@@ -2237,23 +2289,24 @@ export class CanvasSink {
 		}) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 		assert(context);
 
-		sample._drawWithFitAndMipmapping(canvas, context, {
-			fit: this._fit,
-			rotation: this._rotation,
-			flip: this._flip,
-			crop: this._crop,
-			targetIsFresh: canvasIsNew,
-			fillBlack: !this._alpha && isFirefox(),
-		});
+		try {
+			sample._drawWithFitAndMipmapping(canvas, context, {
+				fit: this._fit,
+				rotation: this._rotation,
+				flip: this._flip,
+				crop: this._crop,
+				targetIsFresh: canvasIsNew,
+				fillBlack: !this._alpha && isFirefox(),
+			});
 
-		const result = {
-			canvas,
-			timestamp: sample.timestamp,
-			duration: sample.duration,
-		};
-
-		sample.close();
-		return result;
+			return {
+				canvas,
+				timestamp: sample.timestamp,
+				duration: sample.duration,
+			};
+		} finally {
+			sample.close();
+		}
 	}
 
 	/**
@@ -2459,7 +2512,11 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 
 	close() {
 		if (this.customDecoder) {
-			void this.customDecoderCallSerializer.call(() => this.customDecoder!.close());
+			// An earlier failed call rejects the whole call chain, but the decoder must get closed regardless
+			void this.customDecoderCallSerializer.currentPromise
+				.catch(() => {})
+				.then(() => this.customDecoder!.close())
+				.catch(error => this.onError(error));
 		} else {
 			assert(this.decoder);
 
@@ -2615,6 +2672,10 @@ class PcmAudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 		const numberOfFrames = Math.floor(
 			packet.byteLength / this.decoderConfig.numberOfChannels / this.inputSampleSize,
 		);
+		if (numberOfFrames === 0) {
+			// Skip empty samples, just like the regular decoder does
+			return;
+		}
 
 		const outputBufferSize = numberOfFrames * this.decoderConfig.numberOfChannels * this.outputSampleSize;
 		const outputBuffer = new ArrayBuffer(outputBufferSize);
@@ -2637,20 +2698,22 @@ class PcmAudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 		const preciseTimestamp = this.currentTimestamp;
 		this.currentTimestamp += preciseDuration;
 
+		const sampleRate = this.decoderConfig.sampleRate;
 		const audioSample = new AudioSample({
 			format: this.outputFormat,
 			data: outputBuffer,
 			numberOfChannels: this.decoderConfig.numberOfChannels,
-			sampleRate: this.decoderConfig.sampleRate,
+			sampleRate,
 			numberOfFrames,
-			timestamp: preciseTimestamp,
+			// Summing up durations accumulates floating-point error, so snap the timestamp back onto the sample grid
+			timestamp: Math.round(preciseTimestamp * sampleRate) / sampleRate,
 		});
 
 		this.onSample(audioSample);
 	}
 
 	async flush() {
-		// Do nothing
+		this.currentTimestamp = null;
 	}
 
 	close() {
@@ -2800,14 +2863,15 @@ export class AudioBufferSink {
 
 	/** @internal */
 	_audioSampleToWrappedArrayBuffer(sample: AudioSample): WrappedAudioBuffer {
-		const result: WrappedAudioBuffer = {
-			buffer: sample.toAudioBuffer(),
-			timestamp: sample.timestamp,
-			duration: sample.duration,
-		};
-
-		sample.close();
-		return result;
+		try {
+			return {
+				buffer: sample.toAudioBuffer(),
+				timestamp: sample.timestamp,
+				duration: sample.duration,
+			};
+		} finally {
+			sample.close();
+		}
 	}
 
 	/**

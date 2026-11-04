@@ -33,7 +33,20 @@ const OPUS_SAMPLE_RATES = [8000, 12000, 16000, 24000, 48000];
 const MP3_SAMPLE_RATES = [8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000];
 const AC3_SAMPLE_RATES = [32000, 44100, 48000];
 
+// The ones for which we hand libav's encoder a layout it accepts
+const AAC_CHANNEL_COUNTS = [1, 2, 3, 4, 5, 6, 8];
+
 const FRAME_SIZE_FALLBACK = 1024; // Just 'cause
+
+// libav's DTS encoder delays the audio by this much (its analysis and synthesis filter banks) without signaling it
+const DTS_ENCODER_DELAY = 512; // In samples
+
+// How much audio these encoders hold back without ever flushing it on their own, in samples
+const UNFLUSHED_ENCODER_DELAYS: Partial<Record<AudioCodec, number>> = {
+	ac3: 256,
+	eac3: 256,
+	dts: DTS_ENCODER_DELAY,
+};
 
 export class NodeAvAudioEncoder extends CustomAudioEncoder {
 	frame!: NodeAv.Frame;
@@ -51,19 +64,26 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 
 	static override supports(codec: AudioCodec, config: AudioEncoderConfig): boolean {
 		const { numberOfChannels, sampleRate } = config;
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
+		const isAdts = (config as any).aac?.format === 'adts';
 
 		return (
-			codec === 'aac' && numberOfChannels >= 1 && numberOfChannels <= 48
+			codec === 'aac' && AAC_CHANNEL_COUNTS.includes(numberOfChannels)
 			&& AAC_SAMPLE_RATES.includes(sampleRate)
+			// FFmpeg's encoder signals 7.1 with channel configuration 12, too large for the ADTS header's 3 bits
+			&& !(isAdts && numberOfChannels === 8)
 		) || (
-			codec === 'opus' && numberOfChannels >= 1 && numberOfChannels <= 255
+			// Without an explicit mapping family, libopus only does up to 8 channels
+			codec === 'opus' && numberOfChannels >= 1 && numberOfChannels <= 8
 			&& OPUS_SAMPLE_RATES.includes(sampleRate)
 		) || (
 			codec === 'mp3' && numberOfChannels >= 1 && numberOfChannels <= 2
 			&& MP3_SAMPLE_RATES.includes(sampleRate)
 		) || (
-			codec === 'vorbis' && numberOfChannels >= 1 && numberOfChannels <= 255
-			&& sampleRate <= 200000
+			// libvorbis can't set up bitrate-managed encoding past 50 kHz, and NodeAV's resampler only passes on up to
+			// 8 planes, silencing any channel past that
+			codec === 'vorbis' && numberOfChannels >= 1 && numberOfChannels <= 8
+			&& sampleRate <= 50000
 		) || (
 			codec === 'flac' && numberOfChannels >= 1 && numberOfChannels <= 8
 			&& sampleRate <= 655350
@@ -71,7 +91,7 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 			codec === 'ac3' && numberOfChannels >= 1 && numberOfChannels <= 6
 			&& AC3_SAMPLE_RATES.includes(sampleRate)
 		) || (
-			codec === 'eac3' && numberOfChannels >= 1 && numberOfChannels <= 16
+			codec === 'eac3' && numberOfChannels >= 1 && numberOfChannels <= 6
 			&& AC3_SAMPLE_RATES.includes(sampleRate)
 		) || (
 			codec === 'dts' && DTS_CHANNEL_COUNTS.includes(numberOfChannels)
@@ -117,11 +137,18 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 			sampleFormat = this.avCodec.sampleFormats[0]!;
 		}
 
+		// These reject the unspecified-order layouts that getChannelLayout hands out for 3 and 5 channels
+		const isAacOrAc3 = this.codec === 'aac' || this.codec === 'ac3' || this.codec === 'eac3';
+
 		codecContext.sampleRate = this.config.sampleRate;
 		if (this.codec === 'dts') {
 			codecContext.channelLayout = getDtsChannelLayout(this.config.numberOfChannels);
 		} else if (this.codec === 'truehd') {
 			codecContext.channelLayout = getTrueHdChannelLayout(this.config.numberOfChannels);
+		} else if (isAacOrAc3 && this.config.numberOfChannels === 3) {
+			codecContext.channelLayout = NodeAv.AV_CHANNEL_LAYOUT_SURROUND;
+		} else if (isAacOrAc3 && this.config.numberOfChannels === 5) {
+			codecContext.channelLayout = NodeAv.AV_CHANNEL_LAYOUT_5POINT0_BACK;
 		} else {
 			codecContext.channelLayout = getChannelLayout(this.config.numberOfChannels);
 		}
@@ -192,9 +219,12 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 				this.resamplerInputSampleRate = this.frame.sampleRate;
 
 				// Resample straight to whatever layout the encoder was opened with, since not every codec accepts
-				// the layout that getChannelLayout hands out for a given channel count
+				// the layout that getChannelLayout hands out for a given channel count. Same-count input just takes
+				// on that layout, since remixing it between two layouts could mix or drop channels.
 				const outLayout = this.codecContext.channelLayout;
-				const inLayout = getChannelLayout(this.frame.channels);
+				const inLayout = this.frame.channels === this.codecContext.channels
+					? outLayout
+					: getChannelLayout(this.frame.channels);
 
 				const ret = this.resampler.allocSetOpts2(
 					outLayout, this.codecContext.sampleFormat, this.codecContext.sampleRate,
@@ -276,7 +306,8 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 			return;
 		}
 
-		const timestamp = Number(this.packet.pts) / this.codecContext.sampleRate;
+		const delay = this.codec === 'dts' ? DTS_ENCODER_DELAY : 0;
+		const timestamp = (Number(this.packet.pts) - delay) / this.codecContext.sampleRate;
 		const duration = Number(this.packet.duration) / this.codecContext.sampleRate;
 
 		let data: Uint8Array = this.packet.data;
@@ -370,6 +401,15 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 		outer:
 		if (this.resampler) {
 			assert(this.resamplerInputSampleRate !== null);
+
+			const unflushedDelay = UNFLUSHED_ENCODER_DELAYS[this.codec];
+			if (unflushedDelay !== undefined) {
+				// Push the audio the encoder is still holding back out with silence
+				this.resampler.injectSilence(
+					Math.ceil((unflushedDelay / this.codecContext.sampleRate) * this.resamplerInputSampleRate),
+				);
+				await this.pullResampledFrames();
+			}
 
 			const currentOutSamples = this.resampler.getOutSamples(0);
 			if (currentOutSamples === 0) {

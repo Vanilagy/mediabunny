@@ -151,6 +151,12 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 						NodeAv.AV_PIX_FMT_YUVA444P12LE,
 					);
 				}
+			} else if (
+				(this.config.codec === 'ap4h' || this.config.codec === 'ap4x')
+				&& this.avCodec.pixelFormats.includes(NodeAv.AV_PIX_FMT_YUV444P10LE)
+			) {
+				// ProRes 4444 has full-resolution chroma, but the encoder would subsample it given 4:2:2 input
+				pixelFormat = NodeAv.AV_PIX_FMT_YUV444P10LE;
 			}
 		}
 
@@ -188,7 +194,10 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 				codecContext.setOption('preset', 'ultrafast');
 			}
 		} else if (this.avCodec.name === 'libx265') {
-			codecContext.setOption('x265-params', 'log-level=error');
+			// Closed GOPs, so that every key frame is an IDR frame that later frames can't reference past
+			codecContext.setOption('x265-params', 'log-level=error:open-gop=0');
+			// Forced key frames would otherwise be plain I frames, which x265 only makes key frames past keyint_min
+			codecContext.setOption('forced-idr', '1');
 
 			if (isRealtime) {
 				codecContext.setOption('tune', 'zerolatency');
@@ -200,6 +209,11 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 				codecContext.setOption('cpu-used', '8');
 			} else {
 				codecContext.setOption('cpu-used', '8');
+			}
+
+			if (this.config.alpha === 'keep') {
+				// libvpx refuses to encode VP8 transparency when alternate reference frames are enabled
+				codecContext.setOption('auto-alt-ref', '0');
 			}
 		} else if (this.avCodec.name === 'libvpx-vp9') {
 			codecContext.setOption('deadline', 'realtime');
@@ -750,6 +764,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 		}
 
 		this.packetEmitted = false;
+		this.preciseTimings.length = 0;
 	}
 
 	close(): MaybePromise<void> {

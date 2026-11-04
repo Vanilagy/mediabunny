@@ -15,9 +15,9 @@ import { PacketRetrievalOptions } from '../media-sink';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags, TrackDisposition } from '../metadata';
 import {
 	assert,
+	assertNever,
 	AsyncMutex,
 	binarySearchLessOrEqual,
-	clamp,
 	findLast,
 	isThenable,
 	last,
@@ -342,7 +342,7 @@ export class OggDemuxer extends Demuxer {
 
 		const totalPacketSize = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
 		if (totalPacketSize === 0) {
-			return null; // Invalid packet, treat it as end of stream
+			throw new Error('Invalid Ogg stream: empty packets are only allowed at the very end of a stream.');
 		}
 
 		const packetData = new Uint8Array(totalPacketSize);
@@ -362,37 +362,52 @@ export class OggDemuxer extends Demuxer {
 	}
 
 	async findNextPacketStart(lastPacket: Packet) {
-		// If there's another segment in the same page, return it
-		if (lastPacket.endSegmentIndex < lastPacket.endPage.lacingValues.length - 1) {
-			return { startPage: lastPacket.endPage, startSegmentIndex: lastPacket.endSegmentIndex + 1 };
+		let startPage = lastPacket.endPage;
+		let startSegmentIndex = lastPacket.endSegmentIndex + 1;
+
+		if (startSegmentIndex === startPage.lacingValues.length) {
+			const isEos = !!(startPage.headerType & 0x04);
+			if (isEos) {
+				// The page is marked as the last page of the logical bitstream, so we won't find anything beyond it
+				return null;
+			}
+
+			// Search for the next page belonging to the same bitstream
+			let currentPos = startPage.headerStartPos + startPage.totalSize;
+			while (true) {
+				let slice = this.reader.requestSliceRange(currentPos, MIN_PAGE_HEADER_SIZE, MAX_PAGE_HEADER_SIZE);
+				if (isThenable(slice)) slice = await slice;
+				if (!slice) {
+					return null;
+				}
+
+				const nextPage = readPageHeader(slice);
+				if (!nextPage) {
+					return null;
+				}
+
+				if (nextPage.serialNumber === startPage.serialNumber) {
+					startPage = nextPage;
+					startSegmentIndex = 0;
+					break;
+				}
+
+				currentPos = nextPage.headerStartPos + nextPage.totalSize;
+			}
 		}
 
-		const isEos = !!(lastPacket.endPage.headerType & 0x04);
-		if (isEos) {
-			// The page is marked as the last page of the logical bitstream, so we won't find anything beyond it
+		// VLC ends streams with an empty packet, which carries nothing, so there's no next packet then
+		const isFinalEmptyPacket = !!(startPage.headerType & 0x04)
+			&& startSegmentIndex === startPage.lacingValues.length - 1
+			&& startPage.lacingValues[startSegmentIndex] === 0;
+		if (isFinalEmptyPacket) {
 			return null;
 		}
 
-		// Otherwise, search for the next page belonging to the same bitstream
-		let currentPos = lastPacket.endPage.headerStartPos + lastPacket.endPage.totalSize;
-		while (true) {
-			let slice = this.reader.requestSliceRange(currentPos, MIN_PAGE_HEADER_SIZE, MAX_PAGE_HEADER_SIZE);
-			if (isThenable(slice)) slice = await slice;
-			if (!slice) {
-				return null;
-			}
-
-			const nextPage = readPageHeader(slice);
-			if (!nextPage) {
-				return null;
-			}
-
-			if (nextPage.serialNumber === lastPacket.endPage.serialNumber) {
-				return { startPage: nextPage, startSegmentIndex: 0 };
-			}
-
-			currentPos = nextPage.headerStartPos + nextPage.totalSize;
-		}
+		return {
+			startPage,
+			startSegmentIndex,
+		};
 	}
 
 	async getMimeType() {
@@ -434,18 +449,22 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 	firstTimestampInSamplesPromise: Promise<number> | null = null;
 
 	constructor(public bitstream: LogicalBitstream, public demuxer: OggDemuxer) {
-		// Opus always uses a fixed sample rate for its internal calculations, even if the actual rate is different
-		this.internalSampleRate = bitstream.codecInfo.codec === 'opus'
-			? OPUS_SAMPLE_RATE
-			: bitstream.sampleRate;
+		const codec = bitstream.codecInfo.codec;
+		assert(codec);
+
+		if (codec === 'vorbis') {
+			this.internalSampleRate = bitstream.sampleRate;
+		} else if (codec === 'opus') {
+			// Opus always uses a fixed sample rate for its internal calculations, even if the actual rate is different
+			this.internalSampleRate = OPUS_SAMPLE_RATE;
+		} else {
+			assertNever(codec);
+			assert(false);
+		}
 	}
 
 	getType() {
 		return 'audio' as const;
-	}
-
-	getId() {
-		return this.bitstream.serialNumber;
 	}
 
 	getNumber() {
@@ -533,12 +552,18 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 	}
 
 	granulePositionToTimestampInSamples(granulePosition: number) {
-		if (this.bitstream.codecInfo.codec === 'opus') {
+		const codec = this.bitstream.codecInfo.codec;
+		assert(codec);
+
+		if (codec === 'vorbis') {
+			return granulePosition;
+		} else if (codec === 'opus') {
 			assert(this.bitstream.codecInfo.opusInfo);
 			return granulePosition - this.bitstream.codecInfo.opusInfo.preSkip;
+		} else {
+			assertNever(codec);
+			assert(false);
 		}
-
-		return granulePosition;
 	}
 
 	createEncodedPacketFromOggPacket(
@@ -553,21 +578,11 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 			return null;
 		}
 
-		const sampleMetadata = extractSampleMetadata(
+		const { durationInSamples, vorbisBlockSize } = extractSampleMetadata(
 			packet.data,
 			this.bitstream.codecInfo,
 			additional.vorbisLastBlocksize,
 		);
-		const { vorbisBlockSize } = sampleMetadata;
-		let { durationInSamples } = sampleMetadata;
-
-		const isEos = !!(packet.endPage.headerType & 0x04);
-		if (isEos && packet.endSegmentIndex === packet.endPage.lacingValues.length - 1) {
-			// This is the last packet of the bitstream. The final page's granule position may be smaller than what
-			// the packet durations imply, in which case the excess samples at the end are to be trimmed.
-			const endTimestampInSamples = this.granulePositionToTimestampInSamples(packet.endPage.granulePosition);
-			durationInSamples = clamp(endTimestampInSamples - additional.timestampInSamples, 0, durationInSamples);
-		}
 
 		const encodedPacket = new EncodedPacket(
 			options.metadataOnly ? PLACEHOLDER_DATA : packet.data,
@@ -598,9 +613,9 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 				return defaultTimestampInSamples;
 			}
 
-			// The first page on which a packet completes may have a granule position larger than the number of
-			// samples in the packets completing on it, meaning the stream starts at a later time. So, let's sum up the
-			// durations of these packets and compare.
+			// The first page on which any packet completes may have a granule position larger or smaller than the
+			// number of samples in the packets completing on it, meaning the stream starts at a different time. So,
+			// let's sum up the durations of these packets and compare.
 			let firstEndPage: Page | null = null;
 			let totalDurationInSamples = 0;
 			let firstPacketDurationInSamples: number | null = null;
@@ -634,13 +649,25 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 			}
 			assert(firstPacketDurationInSamples !== null);
 
-			// A smaller granule position is only legal on the final page, where it signals end trimming. The Vorbis
-			// priming packet decodes to nothing though, so it's allowed to precede the granule position's origin.
-			const minStartInSamples = this.bitstream.codecInfo.codec === 'vorbis'
-				? -firstPacketDurationInSamples
-				: 0;
-			return defaultTimestampInSamples
-				+ Math.max(firstEndPage.granulePosition - totalDurationInSamples, minStartInSamples);
+			const startInSamples = firstEndPage.granulePosition - totalDurationInSamples;
+			if (firstEndPage.granulePosition !== -1 && !(firstEndPage.headerType & 0x04)) {
+				return defaultTimestampInSamples + startInSamples;
+			}
+
+			const codec = this.bitstream.codecInfo.codec;
+			assert(codec);
+
+			let minStartInSamples: number;
+			if (codec === 'vorbis') {
+				minStartInSamples = -firstPacketDurationInSamples;
+			} else if (codec === 'opus') {
+				minStartInSamples = 0;
+			} else {
+				assertNever(codec);
+				assert(false);
+			}
+
+			return defaultTimestampInSamples + Math.max(startInSamples, minStartInSamples);
 		})();
 	}
 
@@ -898,6 +925,8 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 					// The page chain is broken, so we can't step back; let's just start at the next packet then
 					currentPage = nextPosition.startPage;
 					currentSegmentIndex = nextPosition.startSegmentIndex;
+					currentTimestampInSamples = this.granulePositionToTimestampInSamples(endPage.granulePosition);
+					currentTimestampIsCorrect = true;
 				}
 			} else {
 				// There is no next position, which means we're looking for the last packet in the bitstream. The
@@ -967,9 +996,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 					&& packet.endSegmentIndex === endSegmentIndex
 				) {
 					// We know this packet end timestamp can be derived from the page's granule position
-					currentTimestampInSamples = this.granulePositionToTimestampInSamples(
-						currentPage.granulePosition,
-					);
+					currentTimestampInSamples = this.granulePositionToTimestampInSamples(endPage.granulePosition);
 					currentTimestampIsCorrect = true;
 
 					// Let's backpatch the packet we just created with the correct timestamp

@@ -1,11 +1,11 @@
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { brotliCompressSync } from 'node:zlib';
-import { assert } from '../../src/misc.js';
-import { Reader, readBytes } from '../../src/reader.js';
+import { assert, promiseWithResolvers, rejectAfter } from '../../src/misc.js';
+import { FileSlice, Reader, readBytes } from '../../src/reader.js';
 import {
 	ALL_FORMATS,
 	EncodedPacket,
@@ -14,6 +14,7 @@ import {
 	Input,
 	Logging,
 	LogLevel,
+	MP4,
 	UrlSource,
 } from '../../src/index.js';
 
@@ -299,6 +300,26 @@ test('UrlSource reads the full decoded body of a compressed 206 response', async
 	}
 });
 
+test('UrlSource relative URL outside a window against a rangeless server', async () => {
+	const server = await startRangelessServer();
+	const logs = captureLogs();
+
+	try {
+		// No window means no base URL to resolve against, just like in a worker
+		const fetchFn: typeof fetch = (url, init) => fetch(new URL(url as string, server.url), init);
+		using input = new Input({
+			source: new UrlSource('/video.mp4', { fetchFn }),
+			formats: ALL_FORMATS,
+		});
+
+		expect(await input.getFormat()).toBe(MP4);
+		expect(logs.warnings.some(x => x.includes('did not respond to a range request'))).toBe(true);
+	} finally {
+		logs.stop();
+		server.close();
+	}
+});
+
 const startRangelessServer = async (
 	options: { responseByteLimits?: number[]; trailingPaddingSize?: number } = {},
 ) => {
@@ -397,6 +418,81 @@ const startRangelessServer = async (
 	};
 };
 
+test('UrlSource read events with a Range header', async () => {
+	const bytes = makeRamp(256);
+	const logs = captureLogs();
+
+	try {
+		for (const supportsRanges of [true, false]) {
+			const server = await startServer((req, res) => {
+				if (!supportsRanges) {
+					res.writeHead(200, { 'Content-Length': bytes.length });
+					res.end(bytes);
+					return;
+				}
+
+				const start = Number(/^bytes=(\d+)-$/.exec(req.headers.range!)![1]);
+				res.writeHead(206, {
+					'Content-Range': `bytes ${start}-${bytes.length - 1}/${bytes.length}`,
+					'Content-Length': bytes.length - start,
+				});
+				res.end(bytes.subarray(start));
+			});
+
+			try {
+				const source = new UrlSource(server.url, { requestInit: { headers: { Range: 'bytes=100-199' } } });
+				const reads: { start: number; end: number }[] = [];
+				source.on('read', read => reads.push(read));
+				using ref = source.ref();
+
+				const slice = await new Reader(ref.source).requestSlice(0, 4);
+				expect([...readBytes(slice!, 4)]).toEqual([100, 101, 102, 103]);
+				expect(reads).toEqual([{ start: 0, end: 100 }]);
+			} finally {
+				server.close();
+			}
+		}
+	} finally {
+		logs.stop();
+	}
+});
+
+test('UrlSource releases the connection of a failed response', async () => {
+	const responseClosed = promiseWithResolvers();
+	const server = await startServer((req, res) => {
+		res.on('close', responseClosed.resolve);
+		res.writeHead(404);
+		res.write('Not found'); // And the body never ends
+	});
+
+	try {
+		using ref = new UrlSource(server.url).ref();
+
+		await expect(new Reader(ref.source).requestSlice(0, 4)).rejects.toThrow('404');
+		await Promise.race([responseClosed.promise, rejectAfter(1000)]);
+	} finally {
+		server.close();
+	}
+});
+
+test('UrlSource on an empty resource', async () => {
+	const server = await startServer((req, res) => {
+		res.writeHead(416, { 'Content-Range': 'bytes */0' });
+		res.end();
+	});
+
+	try {
+		using input = new Input({
+			source: new UrlSource(server.url),
+			formats: ALL_FORMATS,
+		});
+		expect(await input.source.getSize()).toBe(0);
+		expect(await input.canRead()).toBe(false);
+	} finally {
+		server.close();
+	}
+});
+
 /** Collects logged warnings and errors, keeping the console clean while doing so. */
 const captureLogs = () => {
 	const warnings: string[] = [];
@@ -416,4 +512,210 @@ const captureLogs = () => {
 			Logging.level = previousLogLevel;
 		},
 	};
+};
+
+test('UrlSource error message with a Request', async () => {
+	const server = await startServer((req, res) => {
+		res.writeHead(404);
+		res.end();
+	});
+
+	try {
+		const source = new UrlSource(new Request(server.url));
+		using ref = source.ref();
+
+		await expect(new Reader(ref.source).requestSlice(0, 4)).rejects.toThrow(`Error fetching ${server.url}: 404`);
+	} finally {
+		server.close();
+	}
+});
+
+test('UrlSource Request with custom headers', async () => {
+	const bytes = makeRamp(256);
+	const server = await startServer((req, res) => {
+		if (req.headers['x-token'] !== 'secret') {
+			res.writeHead(403);
+			res.end();
+			return;
+		}
+
+		const start = Number(/^bytes=(\d+)-$/.exec(req.headers.range!)![1]);
+		res.writeHead(206, {
+			'Content-Range': `bytes ${start}-${bytes.length - 1}/${bytes.length}`,
+			'Content-Length': bytes.length - start,
+		});
+		res.end(bytes.subarray(start));
+	});
+
+	try {
+		const source = new UrlSource(new Request(server.url, { headers: { 'X-Token': 'secret' } }));
+		using ref = source.ref();
+
+		const slice = await new Reader(ref.source).requestSlice(10, 4);
+		expect([...readBytes(slice!, 4)]).toEqual([10, 11, 12, 13]);
+	} finally {
+		server.close();
+	}
+});
+
+const startServer = async (handler: http.RequestListener) => {
+	const server = http.createServer(handler);
+	await new Promise<void>(resolve => server.listen(0, resolve));
+
+	const address = server.address();
+	if (!address || typeof address === 'string') {
+		throw new Error('Unexpected server address');
+	}
+
+	return {
+		url: `http://localhost:${address.port}/video.mp4`,
+		close: () => {
+			server.closeAllConnections();
+			server.close();
+		},
+	};
+};
+
+const makeRamp = (length: number) => {
+	const bytes = new Uint8Array(length);
+	for (let i = 0; i < length; i++) {
+		bytes[i] = i;
+	}
+
+	return bytes;
+};
+
+test('UrlSource queued read straddling the end', async () => {
+	const data = createTestData(4 * 2 ** 20);
+	const source = new UrlSource('https://example.com/file.bin', {
+		parallelism: 1,
+		fetchFn: createRangeFetchFn(data, { exposeSize: () => true }),
+	});
+	using ref = source.ref();
+	const reader = new Reader(ref.source);
+
+	// The read at the end gets queued behind the first one, whose response then reveals the size
+	const first = reader.requestSlice(0, 8);
+	const last = reader.requestSlice(data.length - 4, 8);
+
+	expect(await first).not.toBeNull();
+	expect(await last).toBeNull();
+});
+
+test('UrlSource queued prefetch beyond the end', async () => {
+	const data = createTestData(22 * 2 ** 16);
+	const gate = promiseWithResolvers();
+	const source = new UrlSource('https://example.com/file.bin', {
+		parallelism: 1,
+		fetchFn: createRangeFetchFn(data, {
+			exposeSize: start => start === 2 ** 19,
+			beforeResponse: start => start === 2 ** 19 ? gate.promise : null,
+		}),
+	});
+	using ref = source.ref();
+	const reader = new Reader(ref.source);
+
+	// Caches [0, 512 KiB) and [896 KiB, end) without learning the size
+	expect(await reader.requestSlice(0, 524_288)).not.toBeNull();
+	expect(await reader.requestSlice(1_000_000, 441_792)).not.toBeNull();
+
+	// The hole at 512 KiB takes the only worker, so the prefetch past the end gets queued. Then, the gated
+	// response reveals the size.
+	const slice = reader.requestSlice(600_000, 600_000);
+	gate.resolve();
+
+	expectBytes(await slice, data.subarray(600_000, 1_200_000));
+});
+
+test('UrlSource queued read with capped responses', async () => {
+	const data = createTestData(4 * 2 ** 20);
+	const source = new UrlSource('https://example.com/file.bin', {
+		parallelism: 1,
+		fetchFn: createRangeFetchFn(data, {
+			exposeSize: () => true,
+			maxResponseLength: 2 ** 15,
+		}),
+	});
+	using ref = source.ref();
+	const reader = new Reader(ref.source);
+
+	// The second read gets queued before the size is known
+	const first = reader.requestSlice(0, 8);
+	const second = reader.requestSlice(2 ** 21 + 2 ** 17, 8);
+
+	expectBytes(await first, data.subarray(0, 8));
+	expectBytes(await second, data.subarray(2 ** 21 + 2 ** 17, 2 ** 21 + 2 ** 17 + 8));
+});
+
+test('UrlSource read spanning a worker that hits the end', async () => {
+	const data = createTestData(1_600_000);
+	const gate = promiseWithResolvers();
+	const source = new UrlSource('https://example.com/file.bin', {
+		fetchFn: createRangeFetchFn(data, {
+			exposeSize: () => false,
+			beforeResponse: start => start === 2 ** 19 ? gate.promise : null,
+		}),
+	});
+	using ref = source.ref();
+	const reader = new Reader(ref.source);
+
+	// Caches [0, 512 KiB) and [896 KiB, 1408 KiB) without learning the size
+	expect(await reader.requestSlice(0, 524_288)).not.toBeNull();
+	expect(await reader.requestSlice(1_000_000, 441_792)).not.toBeNull();
+
+	// Both holes of this read get a worker; the one for the second hole hits the end first
+	const slice = reader.requestSlice(600_000, 900_000);
+	await vi.waitFor(() => expect(source._orchestrator.fileSize).toBe(data.length));
+	gate.resolve();
+
+	expectBytes(await slice, data.subarray(600_000, 1_500_000));
+});
+
+const createTestData = (length: number) => {
+	const data = new Uint8Array(length);
+	for (let i = 0; i < length; i++) {
+		data[i] = (7 * i + (i >> 8)) & 0xff;
+	}
+
+	return data;
+};
+
+const createRangeFetchFn = (data: Uint8Array, options: {
+	exposeSize: (start: number) => boolean;
+	beforeResponse?: (start: number) => Promise<void> | null;
+	maxResponseLength?: number;
+}) => {
+	return async (url: string | URL | Request, init?: RequestInit) => {
+		const range = new Headers(init?.headers).get('Range');
+		const start = Number(/^bytes=(\d+)-$/.exec(range!)![1]);
+		const end = Math.min(data.length, start + (options.maxResponseLength ?? Infinity));
+
+		await options.beforeResponse?.(start);
+
+		let pos = start;
+		const body = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				if (pos === end) {
+					controller.close();
+					return;
+				}
+
+				const chunkEnd = Math.min(end, pos + 2 ** 16);
+				controller.enqueue(data.slice(pos, chunkEnd));
+				pos = chunkEnd;
+			},
+		});
+
+		return new Response(body, {
+			status: 206,
+			headers: {
+				'Content-Range': `bytes ${start}-${end - 1}/${options.exposeSize(start) ? data.length : '*'}`,
+			},
+		});
+	};
+};
+
+const expectBytes = (slice: FileSlice | null, expected: Uint8Array) => {
+	expect(slice).not.toBeNull();
+	expect(Buffer.from(readBytes(slice!, slice!.length)).equals(Buffer.from(expected))).toBe(true);
 };

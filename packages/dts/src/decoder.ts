@@ -46,7 +46,7 @@ class DtsDecoder extends CustomAudioDecoder {
 			format: result.format,
 			numberOfChannels: result.channels,
 			sampleRate: result.sampleRate,
-			timestamp: result.pts / result.sampleRate,
+			timestamp: result.pts / this.config.sampleRate,
 		});
 		this.onSample(sample);
 	}

@@ -55,9 +55,6 @@ export const readAdtsFrameHeader = (slice: FileSlice): AdtsFrameHeader | null =>
 
 	bitstream.skipBits(1); // Private bit
 	const channelConfiguration = bitstream.readBits(3);
-	if (channelConfiguration === 0) {
-		throw new Error('ADTS frames with channel configuration 0 are not supported.');
-	}
 
 	bitstream.skipBits(1); // Originality
 	bitstream.skipBits(1); // Home
@@ -67,7 +64,7 @@ export const readAdtsFrameHeader = (slice: FileSlice): AdtsFrameHeader | null =>
 	bitstream.skipBits(11); // Buffer fullness
 	const numberOfAacFrames = bitstream.readBits(2) + 1;
 	if (numberOfAacFrames !== 1) {
-		throw new Error('ADTS frames with more than one AAC frame are not supported.');
+		return null; // Not supported
 	}
 
 	let crcCheck: number | null = null;

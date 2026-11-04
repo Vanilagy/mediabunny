@@ -206,30 +206,54 @@ export const VP9_LEVEL_TABLE = [
 
 // https://en.wikipedia.org/wiki/AV1
 const AV1_LEVEL_TABLE = [
-	{ maxPictureSize: 147456, maxBitrate: 1500000, tier: 'M', level: 0 }, // Level 2.0 (Main Tier)
-	{ maxPictureSize: 278784, maxBitrate: 3000000, tier: 'M', level: 1 }, // Level 2.1 (Main Tier)
-	{ maxPictureSize: 665856, maxBitrate: 6000000, tier: 'M', level: 4 }, // Level 3.0 (Main Tier)
-	{ maxPictureSize: 1065024, maxBitrate: 10000000, tier: 'M', level: 5 }, // Level 3.1 (Main Tier)
-	{ maxPictureSize: 2359296, maxBitrate: 12000000, tier: 'M', level: 8 }, // Level 4.0 (Main Tier)
-	{ maxPictureSize: 2359296, maxBitrate: 30000000, tier: 'H', level: 8 }, // Level 4.0 (High Tier)
-	{ maxPictureSize: 2359296, maxBitrate: 20000000, tier: 'M', level: 9 }, // Level 4.1 (Main Tier)
-	{ maxPictureSize: 2359296, maxBitrate: 50000000, tier: 'H', level: 9 }, // Level 4.1 (High Tier)
-	{ maxPictureSize: 8912896, maxBitrate: 30000000, tier: 'M', level: 12 }, // Level 5.0 (Main Tier)
-	{ maxPictureSize: 8912896, maxBitrate: 100000000, tier: 'H', level: 12 }, // Level 5.0 (High Tier)
-	{ maxPictureSize: 8912896, maxBitrate: 40000000, tier: 'M', level: 13 }, // Level 5.1 (Main Tier)
-	{ maxPictureSize: 8912896, maxBitrate: 160000000, tier: 'H', level: 13 }, // Level 5.1 (High Tier)
-	{ maxPictureSize: 8912896, maxBitrate: 60000000, tier: 'M', level: 14 }, // Level 5.2 (Main Tier)
-	{ maxPictureSize: 8912896, maxBitrate: 240000000, tier: 'H', level: 14 }, // Level 5.2 (High Tier)
-	{ maxPictureSize: 35651584, maxBitrate: 60000000, tier: 'M', level: 15 }, // Level 5.3 (Main Tier)
-	{ maxPictureSize: 35651584, maxBitrate: 240000000, tier: 'H', level: 15 }, // Level 5.3 (High Tier)
-	{ maxPictureSize: 35651584, maxBitrate: 60000000, tier: 'M', level: 16 }, // Level 6.0 (Main Tier)
-	{ maxPictureSize: 35651584, maxBitrate: 240000000, tier: 'H', level: 16 }, // Level 6.0 (High Tier)
-	{ maxPictureSize: 35651584, maxBitrate: 100000000, tier: 'M', level: 17 }, // Level 6.1 (Main Tier)
-	{ maxPictureSize: 35651584, maxBitrate: 480000000, tier: 'H', level: 17 }, // Level 6.1 (High Tier)
-	{ maxPictureSize: 35651584, maxBitrate: 160000000, tier: 'M', level: 18 }, // Level 6.2 (Main Tier)
-	{ maxPictureSize: 35651584, maxBitrate: 800000000, tier: 'H', level: 18 }, // Level 6.2 (High Tier)
-	{ maxPictureSize: 35651584, maxBitrate: 160000000, tier: 'M', level: 19 }, // Level 6.3 (Main Tier)
-	{ maxPictureSize: 35651584, maxBitrate: 800000000, tier: 'H', level: 19 }, // Level 6.3 (High Tier)
+	// Level 2.0 (Main Tier)
+	{ maxPictureSize: 147456, maxHSize: 2048, maxVSize: 1152, maxBitrate: 1500000, tier: 'M', level: 0 },
+	// Level 2.1 (Main Tier)
+	{ maxPictureSize: 278784, maxHSize: 2816, maxVSize: 1584, maxBitrate: 3000000, tier: 'M', level: 1 },
+	// Level 3.0 (Main Tier)
+	{ maxPictureSize: 665856, maxHSize: 4352, maxVSize: 2448, maxBitrate: 6000000, tier: 'M', level: 4 },
+	// Level 3.1 (Main Tier)
+	{ maxPictureSize: 1065024, maxHSize: 5504, maxVSize: 3096, maxBitrate: 10000000, tier: 'M', level: 5 },
+	// Level 4.0 (Main Tier)
+	{ maxPictureSize: 2359296, maxHSize: 6144, maxVSize: 3456, maxBitrate: 12000000, tier: 'M', level: 8 },
+	// Level 4.0 (High Tier)
+	{ maxPictureSize: 2359296, maxHSize: 6144, maxVSize: 3456, maxBitrate: 30000000, tier: 'H', level: 8 },
+	// Level 4.1 (Main Tier)
+	{ maxPictureSize: 2359296, maxHSize: 6144, maxVSize: 3456, maxBitrate: 20000000, tier: 'M', level: 9 },
+	// Level 4.1 (High Tier)
+	{ maxPictureSize: 2359296, maxHSize: 6144, maxVSize: 3456, maxBitrate: 50000000, tier: 'H', level: 9 },
+	// Level 5.0 (Main Tier)
+	{ maxPictureSize: 8912896, maxHSize: 8192, maxVSize: 4352, maxBitrate: 30000000, tier: 'M', level: 12 },
+	// Level 5.0 (High Tier)
+	{ maxPictureSize: 8912896, maxHSize: 8192, maxVSize: 4352, maxBitrate: 100000000, tier: 'H', level: 12 },
+	// Level 5.1 (Main Tier)
+	{ maxPictureSize: 8912896, maxHSize: 8192, maxVSize: 4352, maxBitrate: 40000000, tier: 'M', level: 13 },
+	// Level 5.1 (High Tier)
+	{ maxPictureSize: 8912896, maxHSize: 8192, maxVSize: 4352, maxBitrate: 160000000, tier: 'H', level: 13 },
+	// Level 5.2 (Main Tier)
+	{ maxPictureSize: 8912896, maxHSize: 8192, maxVSize: 4352, maxBitrate: 60000000, tier: 'M', level: 14 },
+	// Level 5.2 (High Tier)
+	{ maxPictureSize: 8912896, maxHSize: 8192, maxVSize: 4352, maxBitrate: 240000000, tier: 'H', level: 14 },
+	// Level 5.3 (Main Tier)
+	{ maxPictureSize: 8912896, maxHSize: 8192, maxVSize: 4352, maxBitrate: 60000000, tier: 'M', level: 15 },
+	// Level 5.3 (High Tier)
+	{ maxPictureSize: 8912896, maxHSize: 8192, maxVSize: 4352, maxBitrate: 240000000, tier: 'H', level: 15 },
+	// Level 6.0 (Main Tier)
+	{ maxPictureSize: 35651584, maxHSize: 16384, maxVSize: 8704, maxBitrate: 60000000, tier: 'M', level: 16 },
+	// Level 6.0 (High Tier)
+	{ maxPictureSize: 35651584, maxHSize: 16384, maxVSize: 8704, maxBitrate: 240000000, tier: 'H', level: 16 },
+	// Level 6.1 (Main Tier)
+	{ maxPictureSize: 35651584, maxHSize: 16384, maxVSize: 8704, maxBitrate: 100000000, tier: 'M', level: 17 },
+	// Level 6.1 (High Tier)
+	{ maxPictureSize: 35651584, maxHSize: 16384, maxVSize: 8704, maxBitrate: 480000000, tier: 'H', level: 17 },
+	// Level 6.2 (Main Tier)
+	{ maxPictureSize: 35651584, maxHSize: 16384, maxVSize: 8704, maxBitrate: 160000000, tier: 'M', level: 18 },
+	// Level 6.2 (High Tier)
+	{ maxPictureSize: 35651584, maxHSize: 16384, maxVSize: 8704, maxBitrate: 800000000, tier: 'H', level: 18 },
+	// Level 6.3 (Main Tier)
+	{ maxPictureSize: 35651584, maxHSize: 16384, maxVSize: 8704, maxBitrate: 160000000, tier: 'M', level: 19 },
+	// Level 6.3 (High Tier)
+	{ maxPictureSize: 35651584, maxHSize: 16384, maxVSize: 8704, maxBitrate: 800000000, tier: 'H', level: 19 },
 ];
 
 const VP9_DEFAULT_SUFFIX = '.01.01.01.01.00';
@@ -328,7 +352,10 @@ export const buildVideoCodecString = (
 
 		const pictureSize = width * height;
 		const levelInfo = AV1_LEVEL_TABLE.find(
-			level => pictureSize <= level.maxPictureSize && bitrate <= level.maxBitrate,
+			level => pictureSize <= level.maxPictureSize
+				&& width <= level.maxHSize
+				&& height <= level.maxVSize
+				&& bitrate <= level.maxBitrate,
 		) ?? last(AV1_LEVEL_TABLE)!;
 		const level = levelInfo.level.toString().padStart(2, '0');
 
@@ -548,9 +575,13 @@ export const extractVideoCodecString = (trackInfo: {
 		if (!av1CodecInfo) {
 			// Calculate level based on dimensions
 			const pictureSize = trackInfo.width * trackInfo.height;
-			let level = last(VP9_LEVEL_TABLE)!.level; // Default to highest level
-			for (const entry of VP9_LEVEL_TABLE) {
-				if (pictureSize <= entry.maxPictureSize) {
+			let level = last(AV1_LEVEL_TABLE)!.level; // Default to highest level
+			for (const entry of AV1_LEVEL_TABLE) {
+				if (
+					pictureSize <= entry.maxPictureSize
+					&& trackInfo.width <= entry.maxHSize
+					&& trackInfo.height <= entry.maxVSize
+				) {
 					level = entry.level;
 					break;
 				}
@@ -1066,7 +1097,7 @@ export const inferCodecFromCodecString = (codecString: string): MediaCodec | nul
 		return 'opus';
 	} else if (codecString === 'vorbis') {
 		return 'vorbis';
-	} else if (codecString === 'flac') {
+	} else if (codecString === 'flac' || codecString === 'fLaC' /* HLS variant */) {
 		return 'flac';
 	} else if (codecString === 'ac-3' || codecString === 'ac3') {
 		return 'ac3';
@@ -1374,7 +1405,9 @@ export const validateAudioChunkMetadata = (
 	) {
 		// AAC-specific validation
 
-		const validStrings = ['mp4a.40.2', 'mp4a.40.02', 'mp4a.40.5', 'mp4a.40.05', 'mp4a.40.29', 'mp4a.67'];
+		const validStrings = [
+			'mp4a.40.2', 'mp4a.40.02', 'mp4a.40.5', 'mp4a.40.05', 'mp4a.40.29', 'mp4a.40.42', 'mp4a.67',
+		];
 		if (!validStrings.includes(metadata.decoderConfig.codec)) {
 			throw new TypeError(
 				'Audio chunk metadata decoder configuration codec string for AAC must be a valid AAC codec string as'

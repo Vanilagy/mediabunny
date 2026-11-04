@@ -85,7 +85,7 @@ export abstract class IsobmffInputFormat extends InputFormat {
 		if (isThenable(slice)) slice = await slice;
 		if (!slice) return null;
 
-		slice.skip(4);
+		const size = readU32Be(slice);
 		const fourCc = readAscii(slice, 4);
 
 		if (
@@ -93,6 +93,17 @@ export abstract class IsobmffInputFormat extends InputFormat {
 			&& fourCc !== 'styp' // Segment
 		) {
 			return null;
+		}
+
+		if (size === 1) {
+			// The box has a 64-bit size, so the brand only comes after it
+			let brandSlice = input._reader.requestSlice(16, 4);
+			if (isThenable(brandSlice)) brandSlice = await brandSlice;
+			if (!brandSlice) {
+				return null;
+			}
+
+			return readAscii(brandSlice, 4);
 		}
 
 		return readAscii(slice, 4);
@@ -151,10 +162,20 @@ export class Mp4InputFormat extends IsobmffInputFormat {
 			const fourCc = readAscii(slice, 4);
 			if (fourCc === 'moof' || fourCc === 'sidx') { // Seen in HLS for example
 				return true;
-			} else if (fourCc === 'emsg' || fourCc === 'prft' || fourCc === 'free') {
-				// These are boxes that can appear before the first moof in DASH Media Segments. They're a strong signal
-				// that this is indeed an fMP4 segment, but just to be sure, let's walk the box structure to make sure
-				// it stays sane.
+			} else if (fourCc === 'moov' || fourCc === 'mdat') {
+				// A file without ftyp box, which ISO/IEC 14496-12 still allows for compatibility (it's then to be read
+				// as 'mp41'). Old QuickTime files look like this, for example.
+				return true;
+			} else if (
+				fourCc === 'emsg'
+				|| fourCc === 'prft'
+				|| fourCc === 'free'
+				|| fourCc === 'skip'
+				|| fourCc === 'wide'
+			) {
+				// These are boxes that can appear before the first moof in DASH Media Segments, or before the moov or
+				// mdat box in files without ftyp box. They're a strong signal that this is indeed ISOBMFF, but just to
+				// be sure, let's walk the box structure to make sure it stays sane.
 				pos += size;
 			} else {
 				return false;
@@ -587,6 +608,10 @@ export class AdtsInputFormat extends InputFormat {
 		}
 
 		currentPos += firstHeader.frameLength;
+		if (currentPos === input._reader.fileSize) {
+			// The file holds just this one frame, so there's no second one to confirm it with
+			return true;
+		}
 
 		slice = input._reader.requestSliceRange(
 			currentPos,

@@ -8,7 +8,7 @@
 
 import { decodeSynchsafe, encodeSynchsafe } from '../shared/mp3-misc';
 import { Logging } from './logging';
-import { MetadataTags } from './metadata';
+import { createUtcDate, MetadataTags } from './metadata';
 import {
 	coalesceIndex,
 	TextDecoder,
@@ -95,7 +95,7 @@ export const parseId3V1Tag = (slice: FileSlice, tags: MetadataTags) => {
 	const yearText = readId3V1String(slice, 4);
 	const year = Number.parseInt(yearText, 10);
 	if (Number.isInteger(year) && year > 0) {
-		tags.date ??= new Date(String(year)); // String so that it parses as UTC
+		tags.date ??= createUtcDate(year);
 	}
 
 	const commentBytes = readBytes(slice, 30);
@@ -156,7 +156,8 @@ export const readId3V2Header = (slice: FileSlice): Id3V2Header | null => {
 
 	let size = decodeSynchsafe(sizeRaw);
 
-	if (flags & Id3V2HeaderFlags.Footer) {
+	// The footer only exists since ID3v2.4
+	if (majorVersion === 4 && (flags & Id3V2HeaderFlags.Footer)) {
 		size += ID3_V2_HEADER_SIZE;
 	}
 
@@ -171,14 +172,20 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 		return;
 	}
 
-	const dataSize = (header.flags & Id3V2HeaderFlags.Footer)
+	if (header.majorVersion === 2 && (header.flags & Id3V2HeaderFlags.ExtendedHeader)) {
+		// In ID3v2.2, this bit is the compression flag instead, and no compression scheme was ever defined for it
+		Logging._warn('Skipping compressed ID3v2.2 tag');
+		return;
+	}
+
+	const dataSize = (header.majorVersion === 4 && (header.flags & Id3V2HeaderFlags.Footer))
 		? header.size - ID3_V2_HEADER_SIZE
 		: header.size;
 
 	const bytes = readBytes(slice, dataSize);
 	const reader = new Id3V2Reader(header, bytes);
 
-	if ((header.flags & Id3V2HeaderFlags.Unsynchronisation) && header.majorVersion === 3) {
+	if ((header.flags & Id3V2HeaderFlags.Unsynchronisation) && header.majorVersion <= 3) {
 		reader.ununsynchronizeAll();
 	}
 
@@ -192,9 +199,13 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 		if (header.majorVersion === 3) {
 			reader.pos += extendedHeaderSize; // The extended header size excludes itself
 		} else {
-			reader.pos += extendedHeaderSize - 4; // The extended header size includes itself
+			reader.pos += decodeSynchsafe(extendedHeaderSize) - 4; // The extended header size includes itself
 		}
 	}
+
+	// ID3v2.3 splits the date into the year (TYER) and the day and month (TDAT), which may come in any order
+	let year: number | null = null;
+	let dayAndMonth: string | null = null;
 
 	while (reader.pos <= reader.bytes.length - reader.frameHeaderSize()) {
 		const frame = reader.readId3V2Frame();
@@ -202,22 +213,26 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 			break;
 		}
 
-		const frameStartPos = reader.pos;
 		const nextFramePos = Math.min(reader.pos + frame.size, reader.bytes.length);
 		let frameEndPos = nextFramePos;
 
 		let	frameEncrypted = false;
 		let frameCompressed = false;
 		let frameUnsynchronized = false;
+		let frameHasGroupingIdentity = false;
+		let frameHasDataLengthIndicator = false;
 
 		if (header.majorVersion === 3) {
 			frameEncrypted = !!(frame.flags & (1 << 6));
 			frameCompressed = !!(frame.flags & (1 << 7));
+			frameHasGroupingIdentity = !!(frame.flags & (1 << 5));
 		} else if (header.majorVersion === 4) {
+			frameHasGroupingIdentity = !!(frame.flags & (1 << 6));
 			frameEncrypted = !!(frame.flags & (1 << 2));
 			frameCompressed = !!(frame.flags & (1 << 3));
 			frameUnsynchronized = !!(frame.flags & (1 << 1))
 				|| !!(header.flags & Id3V2HeaderFlags.Unsynchronisation);
+			frameHasDataLengthIndicator = !!(frame.flags & (1 << 0));
 		}
 
 		if (frameEncrypted) {
@@ -232,9 +247,19 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 			continue;
 		}
 
+		// These come in the order of their flags, and both precede the frame data
+		if (frameHasGroupingIdentity) {
+			reader.pos += 1;
+		}
+		if (frameHasDataLengthIndicator) {
+			reader.pos += 4;
+		}
+
 		if (frameUnsynchronized) {
 			frameEndPos = reader.ununsynchronizeRegion(reader.pos, frameEndPos);
 		}
+
+		const frameStartPos = reader.pos;
 
 		// Frames don't necessarily hold the fixed-size fields they're supposed to
 		const ensureFrameHasBytes = (byteCount: number) => {
@@ -244,8 +269,8 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 		};
 
 		tags.raw ??= {};
-		if (frame.id === 'TXXX') {
-			const txxx = tags.raw['TXXX'] ??= {};
+		if (frame.id === 'TXXX' || frame.id === 'TXX') {
+			const txxx = tags.raw[frame.id] ??= {};
 			ensureFrameHasBytes(1);
 			const encoding = reader.readId3V2TextEncoding();
 			const description = reader.readId3V2Text(encoding, frameEndPos);
@@ -351,12 +376,21 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 				tags.genre ??= genreText;
 			}; break;
 
-			case 'TDRC':
-			case 'TDAT': {
+			case 'TDRC': {
+				// A subset of ISO 8601, from yyyy up to yyyy-MM-ddTHH:mm:ss, and always UTC
 				const dateText = reader.readId3V2EncodingAndText(frameEndPos);
-				const date = new Date(dateText);
+				const match = /^(\d{4})(?:-(\d{2})(?:-(\d{2})(?:[T ](\d{2})(?::(\d{2})(?::(\d{2}))?)?)?)?)?Z?$/
+					.exec(dateText);
+				if (!match) {
+					break;
+				}
 
-				if (!Number.isNaN(date.getTime())) {
+				const [, year, month = '01', day = '01', hours = '00', minutes = '00', seconds = '00'] = match;
+				const isoString = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
+				const date = new Date(`${isoString}Z`);
+
+				// Out-of-range fields, like a February 31, would otherwise roll over
+				if (!Number.isNaN(date.getTime()) && date.toISOString().startsWith(isoString)) {
 					tags.date ??= date;
 				}
 			}; break;
@@ -364,11 +398,16 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 			case 'TYER':
 			case 'TYE': {
 				const yearText = reader.readId3V2EncodingAndText(frameEndPos);
-				const year = Number.parseInt(yearText, 10);
+				const parsedYear = Number.parseInt(yearText, 10);
 
-				if (Number.isInteger(year)) {
-					tags.date ??= new Date(String(year)); // String so that it parses as UTC
+				if (Number.isInteger(parsedYear)) {
+					year ??= parsedYear;
 				}
+			}; break;
+
+			case 'TDAT':
+			case 'TDA': {
+				dayAndMonth ??= reader.readId3V2EncodingAndText(frameEndPos);
 			}; break;
 
 			case 'TBPM':
@@ -376,7 +415,7 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 				const bpmText = reader.readId3V2EncodingAndText(frameEndPos);
 				const bpm = Number.parseInt(bpmText, 10);
 
-				if (Number.isInteger(bpm)) {
+				if (Number.isInteger(bpm) && bpm > 0) {
 					tags.beatsPerMinute ??= bpm;
 				}
 			}; break;
@@ -395,8 +434,12 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 				ensureFrameHasBytes(4);
 				const encoding = reader.readU8();
 				reader.pos += 3; // Skip language
-				reader.readId3V2Text(encoding, frameEndPos); // Short content description
-				tags.comment ??= reader.readId3V2Text(encoding, frameEndPos);
+				const description = reader.readId3V2Text(encoding, frameEndPos);
+
+				// Described comments are named entries (like iTunes' iTunNORM) rather than the actual comment
+				if (description === '') {
+					tags.comment ??= reader.readId3V2Text(encoding, frameEndPos);
+				}
 			}; break;
 
 			case 'APIC':
@@ -414,7 +457,8 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 							? 'image/jpeg'
 							: 'image/*';
 				} else {
-					mimeType = reader.readId3V2Text(encoding, frameEndPos);
+					// The text encoding only applies to the description
+					mimeType = reader.readId3V2Text(Id3V2TextEncoding.ISO_8859_1, frameEndPos);
 				}
 
 				ensureFrameHasBytes(1);
@@ -446,6 +490,25 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 
 		reader.pos = nextFramePos;
 	}
+
+	if (year !== null) {
+		let date = createUtcDate(year);
+
+		const dayAndMonthMatch = /^(0[1-9]|[12]\d|3[01])(0[1-9]|1[0-2])$/.exec(dayAndMonth ?? '');
+		if (dayAndMonthMatch) {
+			const day = Number(dayAndMonthMatch[1]);
+			const fullDate = createUtcDate(year, Number(dayAndMonthMatch[2]) - 1, day);
+
+			// Days past the end of the month (like 3102) would otherwise roll over into the next one
+			if (fullDate.getUTCDate() === day) {
+				date = fullDate;
+			}
+		}
+
+		if (!Number.isNaN(date.getTime())) {
+			tags.date ??= date;
+		}
+	}
 };
 
 // https://id3.org/id3v2.3.0
@@ -470,7 +533,7 @@ export class Id3V2Reader {
 			newBytes.push(value1);
 
 			if (value1 === 0xff && i !== this.bytes.length - 1) {
-				const value2 = this.bytes[i]!;
+				const value2 = this.bytes[i + 1]!;
 				if (value2 === 0x00) {
 					i++;
 				}
@@ -565,7 +628,9 @@ export class Id3V2Reader {
 			}
 
 			const sizeRaw = this.readU32();
-			let size = this.header.majorVersion === 4
+			// A size with any high bit set can't be synchsafe, leaving only the plain interpretation
+			const canBeSynchsafe = (sizeRaw & 0x80808080) === 0;
+			let size = this.header.majorVersion === 4 && canBeSynchsafe
 				? decodeSynchsafe(sizeRaw)
 				: sizeRaw;
 			const flags = this.readU16();
@@ -576,13 +641,13 @@ export class Id3V2Reader {
 			// tag.
 
 			const isSizeValid = (size: number) => {
-				const nextPos = this.pos + size;
+				const nextPos = headerEndPos + size;
 				if (nextPos > this.bytes.length) {
 					return false;
 				}
 
 				if (nextPos <= this.bytes.length - this.frameHeaderSize()) {
-					this.pos += size;
+					this.pos = nextPos;
 					const nextId = this.readAscii(4);
 					if (nextId !== '\x00\x00\x00\x00' && !/[0-9A-Z]{4}/.test(nextId)) {
 						return false;
@@ -592,7 +657,7 @@ export class Id3V2Reader {
 				return true;
 			};
 
-			if (!isSizeValid(size)) {
+			if (canBeSynchsafe && !isSizeValid(size)) {
 				// Flip the synchsafing, and try if this one makes more sense
 				const otherSize = this.header.majorVersion === 4
 					? sizeRaw
@@ -653,6 +718,10 @@ export class Id3V2Reader {
 					);
 					this.pos = startPos + Math.min(endIndex + 2, data.length);
 					return decoder.decode(data.subarray(2, endIndex));
+				} else if (data[0] === 0 && data[1] === 0) {
+					// Some writers leave out the BOM for empty strings
+					this.pos = startPos + 2;
+					return '';
 				} else {
 					// Treat it like UTF-8, some files do this
 					const endIndex = coalesceIndex(data.findIndex(x => x === 0), data.length);
@@ -787,6 +856,7 @@ export class Id3V2Writer {
 						const description = image.description ?? '';
 						this.writeId3V2ApicFrame(image.mimeType, pictureType, description, image.data);
 					}
+					writtenTags.add('APIC');
 				}; break;
 
 				case 'tracksTotal':
@@ -953,8 +1023,9 @@ export class Id3V2Writer {
 
 	writeId3V2LyricsFrame(lyrics: string) {
 		const useIso88591 = isIso88591Compatible(lyrics);
+		const textDataLength = useIso88591 ? lyrics.length : textEncoder.encode(lyrics).byteLength;
 		const shortDescription = '';
-		const frameSize = 1 + 3 + shortDescription.length + 1 + lyrics.length + 1;
+		const frameSize = 1 + 3 + shortDescription.length + 1 + textDataLength + 1;
 
 		this.writeAscii('USLT');
 		this.writeSynchsafeU32(frameSize);
@@ -998,10 +1069,13 @@ export class Id3V2Writer {
 
 	writeId3V2ApicFrame(mimeType: string, pictureType: number, description: string, imageData: Uint8Array) {
 		const useIso88591 = isIso88591Compatible(mimeType) && isIso88591Compatible(description);
+		const mimeTypeDataLength = useIso88591
+			? mimeType.length
+			: textEncoder.encode(mimeType).byteLength;
 		const descriptionDataLength = useIso88591
 			? description.length
 			: textEncoder.encode(description).byteLength;
-		const frameSize = 1 + mimeType.length + 1 + 1 + descriptionDataLength + 1 + imageData.byteLength;
+		const frameSize = 1 + mimeTypeDataLength + 1 + 1 + descriptionDataLength + 1 + imageData.byteLength;
 
 		this.writeAscii('APIC');
 		this.writeSynchsafeU32(frameSize);

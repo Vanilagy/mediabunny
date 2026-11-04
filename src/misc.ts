@@ -202,18 +202,6 @@ export const readSignedExpGolomb = (bitstream: Bitstream) => {
 		: (codeNum + 1) / 2;
 };
 
-export const writeBits = (bytes: Uint8Array, start: number, end: number, value: number) => {
-	for (let i = start; i < end; i++) {
-		const byteIndex = Math.floor(i / 8);
-		let byte = bytes[byteIndex]!;
-		const bitIndex = 0b111 - (i & 0b111);
-
-		byte &= ~(1 << bitIndex);
-		byte |= ((value & (1 << (end - i - 1))) >> (end - i - 1)) << bitIndex;
-		bytes[byteIndex] = byte;
-	}
-};
-
 export const toUint8Array = (source: AllowSharedBufferSource): Uint8Array => {
 	if (source.constructor === Uint8Array) { // We want a true Uint8Array, not something that extends it like Buffer
 		return source;
@@ -710,8 +698,8 @@ export const setInt64 = (view: DataView, byteOffset: number, value: number, litt
 		view.setUint32(byteOffset + 0, value, true);
 		view.setInt32(byteOffset + 4, Math.floor(value / 2 ** 32), true);
 	} else {
-		view.setInt32(byteOffset + 0, Math.floor(value / 2 ** 32), true);
-		view.setUint32(byteOffset + 4, value, true);
+		view.setInt32(byteOffset + 0, Math.floor(value / 2 ** 32), false);
+		view.setUint32(byteOffset + 4, value, false);
 	}
 };
 
@@ -728,8 +716,14 @@ export const mapAsyncGenerator = <T, U>(
 			const result = await generator.next();
 			if (result.done) {
 				return { value: undefined, done: true };
-			} else {
+			}
+
+			try {
 				return { value: map(result.value), done: false };
+			} catch (error) {
+				// The consumer won't call return() after next() rejected, so we end the source ourselves
+				await generator.return();
+				throw error;
 			}
 		},
 		return() {
@@ -979,7 +973,11 @@ export class CallSerializer {
 	currentPromise = Promise.resolve();
 
 	call(fn: () => Promise<void> | void) {
-		return this.currentPromise = this.currentPromise.then(fn);
+		const result = this.currentPromise.then(fn);
+		// A failed call must not keep later ones (like close()) from running; its caller sees the error via result
+		this.currentPromise = result.catch(() => {});
+
+		return result;
 	}
 }
 
@@ -1214,25 +1212,38 @@ export const isNumber = (x: unknown) => {
 export type FilePath = string;
 
 export const joinPaths = (basePath: FilePath, relativePath: FilePath) => {
-	// If relativePath is a full URL with protocol, return it as-is
-	if (relativePath.includes('://')) {
+	// A path that starts with a scheme is absolute already, and that includes ones without "//" like blob: and data:
+	if (/^[a-z][a-z0-9+.-]*:/i.test(relativePath)) {
 		return relativePath;
 	}
 
-	// Strip query parameters from URL base paths so their contents don't mess up the join
+	// Strip the query and fragment from URL base paths so their contents don't mess up the join
 	if (basePath.includes('://')) {
-		const queryIndex = basePath.indexOf('?');
+		const queryIndex = basePath.search(/[?#]/);
 		if (queryIndex !== -1) {
 			basePath = basePath.slice(0, queryIndex);
 		}
 	}
 
+	// Dot segments only mean something in the path, so the query and fragment stay out of the join and normalization
+	const suffixIndex = relativePath.search(/[?#]/);
+	const suffix = suffixIndex === -1 ? '' : relativePath.slice(suffixIndex);
+	if (suffixIndex !== -1) {
+		relativePath = relativePath.slice(0, suffixIndex);
+	}
+
 	let result: string;
 
-	if (relativePath.startsWith('/')) {
+	if (relativePath === '') {
+		// Just a query or fragment, which goes onto the base path itself
+		result = basePath;
+	} else if (relativePath.startsWith('/')) {
 		const protocolIndex = basePath.indexOf('://');
 		if (protocolIndex === -1) {
 			result = relativePath;
+		} else if (relativePath.startsWith('//')) {
+			// Protocol-relative URL
+			result = basePath.slice(0, protocolIndex + 1) + relativePath;
 		} else {
 			const pathStart = basePath.indexOf('/', protocolIndex + 3);
 			if (pathStart === -1) {
@@ -1242,8 +1253,12 @@ export const joinPaths = (basePath: FilePath, relativePath: FilePath) => {
 			}
 		}
 	} else {
+		const protocolIndex = basePath.indexOf('://');
 		const lastSlash = basePath.lastIndexOf('/');
-		if (lastSlash === -1) {
+		if (protocolIndex !== -1 && lastSlash === protocolIndex + 2) {
+			// The base URL has no path
+			result = basePath + '/' + relativePath;
+		} else if (lastSlash === -1) {
 			result = relativePath;
 		} else {
 			result = basePath.slice(0, lastSlash + 1) + relativePath;
@@ -1266,13 +1281,16 @@ export const joinPaths = (basePath: FilePath, relativePath: FilePath) => {
 	const normalized: string[] = [];
 	for (const segment of segments) {
 		if (segment === '..') {
-			normalized.pop();
+			// Like browsers, never go above the root
+			if (normalized.length !== 1 || normalized[0] !== '') {
+				normalized.pop();
+			}
 		} else if (segment !== '.') {
 			normalized.push(segment);
 		}
 	}
 
-	return prefix + normalized.join('/');
+	return prefix + normalized.join('/') + suffix;
 };
 
 // eg. path `/media.m3u8?token=abc%20123` and name `token` resolve to `abc 123`
@@ -1652,17 +1670,23 @@ export class EventEmitter<TEvents extends Record<string, unknown>> {
 			return;
 		}
 
-		for (const entry of listeners) {
+		// Iterate over a snapshot so that listeners added during this emit only receive the next one
+		for (const entry of [...listeners]) {
+			if (!listeners.has(entry)) {
+				continue;
+			}
+
+			// Remove before calling, so that a re-entrant emit can't call it a second time
+			if (entry.once) {
+				listeners.delete(entry);
+			}
+
 			try {
 				(entry.fn as (data: unknown) => void)(data);
 			} catch (error) {
 				// Deliberately not routed through Logging here: Logging emits via an EventEmitter, so a throwing
 				// log listener would recurse straight back into this handler.
 				console.error(error);
-			}
-
-			if (entry.once) {
-				listeners.delete(entry);
 			}
 		}
 	}

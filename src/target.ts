@@ -319,6 +319,8 @@ export class StreamTarget extends Target {
 	_streamWriter: WritableStreamDefaultWriter<StreamTargetChunk> | null = null;
 	/** @internal */
 	_writeError: unknown = null;
+	/** @internal */
+	_closed = false;
 
 	// These variables regard chunked mode:
 	/** @internal */
@@ -361,6 +363,10 @@ export class StreamTarget extends Target {
 
 	/** @internal */
 	_start() {
+		if (this._closed) {
+			throw new Error('Cannot start a target that has already been closed.');
+		}
+
 		this._streamWriter = this._writable.getWriter();
 	}
 
@@ -602,7 +608,14 @@ export class StreamTarget extends Target {
 
 	/** @internal */
 	async _close() {
-		return this._streamWriter?.close();
+		this._closed = true;
+
+		const writer = this._streamWriter ?? this._writable.getWriter();
+		if (writer.desiredSize === null) {
+			return; // The stream has errored, so there's nothing left to close
+		}
+
+		await writer.close();
 	}
 }
 
@@ -672,8 +685,9 @@ export class AppendOnlyStreamTarget extends Target {
 	}
 
 	/** @internal */
-	_finalize(): Promise<void> {
-		return this._streamTarget._finalize();
+	async _finalize() {
+		await this._streamTarget._finalize();
+		this._emit('finalized');
 	}
 
 	/** @internal */
@@ -773,7 +787,13 @@ export class FilePathTarget extends Target {
 
 	/** @internal */
 	async _close() {
-		return this._streamTarget._close();
+		try {
+			await this._streamTarget._close();
+		} finally {
+			// An errored stream never gets to close the file handle itself
+			await this._fileHandle?.close();
+			this._fileHandle = null;
+		}
 	}
 
 	/** @internal */

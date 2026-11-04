@@ -222,13 +222,15 @@ export class HlsSegmentedInput extends SegmentedInput {
 
 				if (prevLastSegment.sequenceNumber < number) {
 					// The sequence number has finally exceeded the last sequence number we knew, meaning we can now
-					// continue the segment list from there. Set some data to continue where we left off.
-					accumulatedTime = prevLastSegment.timestamp + prevLastSegment.duration;
-					currentFirstSegment = prevLastSegment.firstSegment;
+					// continue the segment list from there. Set some data to continue where we left off. Segments that
+					// dropped out of the playlist before we ever saw them still took up time, so estimate it.
+					const elapsed = (number - prevLastSegment.sequenceNumber) * prevLastSegment.duration;
+					accumulatedTime = prevLastSegment.timestamp + elapsed;
+					currentFirstSegment = prevLastSegment.firstSegment ?? prevLastSegment;
 					currentInitSegment = prevLastSegment.initSegment;
 					lastProgramDateTimeSeconds = prevLastSegment.lastProgramDateTimeSeconds;
 					accumulatedUnixTime = prevLastSegment.unixEpochTimestamp !== null
-						? prevLastSegment.unixEpochTimestamp + prevLastSegment.duration
+						? prevLastSegment.unixEpochTimestamp + elapsed
 						: null;
 					prevLastSegment = null;
 				}
@@ -273,6 +275,11 @@ export class HlsSegmentedInput extends SegmentedInput {
 						offset: nextByteRange?.offset ?? 0,
 						length: nextByteRange?.length ?? null,
 					};
+
+					if (currentFirstSegment && currentFirstSegment.discontinuityNumber !== nextDiscontinuityNumber) {
+						// A discontinuity happened in segments that dropped out before we ever saw them
+						currentFirstSegment = null;
+					}
 
 					const segment: HlsSegment = {
 						index: this.segments.length,
@@ -374,14 +381,6 @@ export class HlsSegmentedInput extends SegmentedInput {
 					currentInitSegment = segment;
 				} else {
 					// We're still seeing segments we already know about
-				}
-
-				nextSegmentDuration = null;
-
-				if (nextByteRange === null) {
-					lastByteRangeEnd = null;
-				} else {
-					nextByteRange = null;
 				}
 			} else if (line.startsWith(TAG_KEY)) {
 				const attributes = new AttributeList(line.slice(TAG_KEY.length), variables);
@@ -581,7 +580,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 	}
 
 	async getFirstSegment() {
-		if (this.segments.length === 0) {
+		if (this.segments.length === 0 && !this.streamHasEnded) {
 			await this.runUpdateSegments();
 		}
 
@@ -589,7 +588,11 @@ export class HlsSegmentedInput extends SegmentedInput {
 	}
 
 	async getSegmentAt(timestamp: number, options: SegmentRetrievalOptions) {
-		if (this.segments.length === 0) {
+		if (
+			this.segments.length === 0
+			&& !this.streamHasEnded
+			&& !(options.skipLiveWait && this.getRemainingWaitTimeMs() > 0)
+		) {
 			await this.runUpdateSegments();
 		}
 
