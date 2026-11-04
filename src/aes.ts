@@ -242,66 +242,79 @@ export const createAes128CbcDecryptStream = (
 	close: () => unknown,
 ) => {
 	let initted = false;
+	let closed = false;
 	let pos = 0;
 	const CHUNK_SIZE = 2 ** 16;
 	const BLOCK_SIZE = 16;
 
 	const aesContext = new Aes128CbcContext();
 
+	const closeOnce = () => {
+		if (!closed) {
+			closed = true;
+			close();
+		}
+	};
+
 	return new ReadableStream<Uint8Array>({
 		pull: async (controller) => {
-			if (!initted) {
-				aesContext.init(await getInit());
-				initted = true;
-			}
-
-			const requestedLength = CHUNK_SIZE + BLOCK_SIZE;
-
-			let nextSlice = reader.requestSliceRange(pos, 0, requestedLength);
-			if (isThenable(nextSlice)) nextSlice = await nextSlice;
-			if (!nextSlice || nextSlice.length === 0) {
-				// Due to padding, this should never happen
-				throw new Error('Invalid ciphertext.');
-			}
-
-			const sliceLength = nextSlice.length;
-			if (sliceLength % 16 !== 0) {
-				throw new Error('Invalid ciphertext.');
-			}
-
-			const bytesToRead = sliceLength === requestedLength
-				? sliceLength - BLOCK_SIZE // Don't read the last block
-				: sliceLength;
-
-			const input = readBytes(nextSlice, bytesToRead);
-			const output = new Uint8Array(bytesToRead);
-
-			for (let i = 0; i < bytesToRead; i += 16) {
-				aesContext.in.set(input.subarray(i, i + 16));
-				aesContext.decrypt();
-				output.set(aesContext.out, i);
-			}
-
-			if (bytesToRead < sliceLength) {
-				controller.enqueue(output);
-				pos += bytesToRead;
-			} else {
-				// This is the last chunk
-				const paddingLength = output[bytesToRead - 1]!;
-				if (paddingLength === 0 || paddingLength > 16) {
-					throw new Error('Invalid PKCS#7 padding. Incorrect key or corrupted data.');
+			try {
+				if (!initted) {
+					aesContext.init(await getInit());
+					initted = true;
 				}
 
-				const trimmedOutput = output.subarray(0, bytesToRead - paddingLength); // PKCS#7 padding
+				const requestedLength = CHUNK_SIZE + BLOCK_SIZE;
 
-				controller.enqueue(trimmedOutput);
-				controller.close();
+				let nextSlice = reader.requestSliceRange(pos, 0, requestedLength);
+				if (isThenable(nextSlice)) nextSlice = await nextSlice;
+				if (!nextSlice || nextSlice.length === 0) {
+					// Due to padding, this should never happen
+					throw new Error('Invalid ciphertext.');
+				}
 
-				close();
+				const sliceLength = nextSlice.length;
+				if (sliceLength % 16 !== 0) {
+					throw new Error('Invalid ciphertext.');
+				}
+
+				const bytesToRead = sliceLength === requestedLength
+					? sliceLength - BLOCK_SIZE // Don't read the last block
+					: sliceLength;
+
+				const input = readBytes(nextSlice, bytesToRead);
+				const output = new Uint8Array(bytesToRead);
+
+				for (let i = 0; i < bytesToRead; i += 16) {
+					aesContext.in.set(input.subarray(i, i + 16));
+					aesContext.decrypt();
+					output.set(aesContext.out, i);
+				}
+
+				if (bytesToRead < sliceLength) {
+					controller.enqueue(output);
+					pos += bytesToRead;
+				} else {
+					// This is the last chunk
+					const paddingLength = output[bytesToRead - 1]!;
+					if (paddingLength === 0 || paddingLength > 16) {
+						throw new Error('Invalid PKCS#7 padding. Incorrect key or corrupted data.');
+					}
+
+					const trimmedOutput = output.subarray(0, bytesToRead - paddingLength); // PKCS#7 padding
+
+					controller.enqueue(trimmedOutput);
+					controller.close();
+
+					closeOnce();
+				}
+			} catch (error) {
+				closeOnce();
+				throw error;
 			}
 		},
 		cancel: () => {
-			close();
+			closeOnce();
 		},
 	});
 };

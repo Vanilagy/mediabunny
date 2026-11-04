@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { Reader } from '../../src/reader.js';
 import { BufferSource } from '../../src/source.js';
-import { createAes128CbcDecryptStream } from '../../src/aes.js';
+import { Aes128CbcContextInit, createAes128CbcDecryptStream } from '../../src/aes.js';
 
 // getRandomValues is length-limited, so let's just do this
 export const fillRandom = <T extends Uint8Array>(buffer: T) => {
@@ -59,4 +59,42 @@ test('createAesDecryptStream', async () => {
 			}
 		}
 	}
+});
+
+test('Decrypt stream with truncated ciphertext', async () => {
+	let closeCount = 0;
+	const stream = createAes128CbcDecryptStream(
+		new Reader(new BufferSource(new Uint8Array(17))),
+		() => ({
+			key: new Uint8Array(16),
+			iv: new Uint8Array(16),
+		}),
+		() => closeCount++,
+	);
+
+	await expect(stream.getReader().read()).rejects.toThrow('Invalid ciphertext.');
+	expect(closeCount).toBe(1);
+});
+
+test('Decrypt stream canceled during pull', async () => {
+	let closeCount = 0;
+	let resolveInit!: (init: Aes128CbcContextInit) => void;
+	const stream = createAes128CbcDecryptStream(
+		new Reader(new BufferSource(new Uint8Array(32))),
+		() => new Promise(resolve => resolveInit = resolve),
+		() => closeCount++,
+	);
+
+	// Let the first pull start waiting for the key, then cancel
+	await new Promise(resolve => setTimeout(resolve));
+	await stream.cancel();
+
+	// The pending pull now resumes on a canceled stream and fails
+	resolveInit({
+		key: new Uint8Array(16),
+		iv: new Uint8Array(16),
+	});
+	await new Promise(resolve => setTimeout(resolve));
+
+	expect(closeCount).toBe(1);
 });
