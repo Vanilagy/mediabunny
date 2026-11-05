@@ -89,4 +89,6 @@ test('joinPaths', () => {
 		.toBe('https://example.com/path/to/dir/x://other.m3u8');
 	expect(joinPaths('https://example.com/path/to/entry.m3u8', 'other_1:2.m3u8'))
 		.toBe('https://example.com/path/to/other_1:2.m3u8');
+	expect(joinPaths('https://example.com/path/to/entry.m3u8', 'seg-12:00.ts'))
+		.toBe('https://example.com/path/to/seg-12:00.ts');
 });

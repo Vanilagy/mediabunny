@@ -192,8 +192,11 @@ export abstract class SegmentedInput {
 				// shift the media timestamps by multiples of the period length so that the first timestamp is closest
 				// to the segment's timestamp (which DOES rise monotonically). This even works correctly for
 				// non-wrapping formats like fMP4 because for them it's just a noop (or a constant shift for all media).
-				const mediaStart = await input.getFirstTimestamp() + mediaOffset;
-				mediaOffset += period * Math.round((segment.timestamp - mediaStart) / period);
+				const firstTimestamp = await getReferenceFirstTimestamp(input);
+				if (firstTimestamp !== null) {
+					const mediaStart = firstTimestamp + mediaOffset;
+					mediaOffset += period * Math.round((segment.timestamp - mediaStart) / period);
+				}
 			}
 
 			return mediaOffset;
@@ -210,6 +213,24 @@ export abstract class SegmentedInput {
 		this.inputCache.length = 0;
 	}
 }
+
+export const getReferenceFirstTimestamp = async (input: Input) => {
+	// Prefer video over audio
+	const tracks = await input.getTracks();
+	const orderedTracks = [
+		...tracks.filter(x => x.type === 'video'),
+		...tracks.filter(x => x.type !== 'video'),
+	];
+
+	for (const track of orderedTracks) {
+		const firstTimestamp = await track.getFirstTimestampOrNull();
+		if (firstTimestamp !== null) {
+			return firstTimestamp;
+		}
+	}
+
+	return null;
+};
 
 type PacketInfo = {
 	segment: Segment;
@@ -479,16 +500,16 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 		options: PacketRetrievalOptions,
 		keyframesOnly: boolean,
 	): Promise<EncodedPacket | null> {
-		const firstSegment = await this.segmentedInput.getFirstSegment({});
-		if (!firstSegment) {
-			return null;
-		}
-
 		let currentSegment = await this.segmentedInput.getSegmentAt(timestamp, {
 			skipLiveWait: options.skipLiveWait,
 		});
-		// The media may start before the first segment's timestamp, so even earlier timestamps need to look into it
-		currentSegment ??= firstSegment;
+
+		// The media may start before the first segment's timestamp
+		currentSegment ??= await this.segmentedInput.getFirstSegment({});
+
+		if (!currentSegment) {
+			return null;
+		}
 
 		await this.hydrate();
 

@@ -1212,8 +1212,8 @@ export const isNumber = (x: unknown) => {
 export type FilePath = string;
 
 export const joinPaths = (basePath: FilePath, relativePath: FilePath) => {
-	// A path that starts with a scheme is absolute already, and that includes ones without "//" like blob: and data:
-	if (/^[a-z][a-z0-9+.-]*:/i.test(relativePath)) {
+	// A path that starts with a scheme followed by "//" is absolute already, as are data: and blob: URIs
+	if (/^(?:[a-z][a-z0-9+.-]*:\/\/|(?:data|blob):)/i.test(relativePath)) {
 		return relativePath;
 	}
 

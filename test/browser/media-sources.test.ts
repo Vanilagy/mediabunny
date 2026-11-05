@@ -1,5 +1,4 @@
 import { expect, test, vi } from 'vitest';
-import { userEvent } from '@vitest/browser/context';
 import { Output } from '../../src/output.js';
 import { Mp4OutputFormat, WavOutputFormat, WebMOutputFormat } from '../../src/output-format.js';
 import { BufferTarget, StreamTarget } from '../../src/target.js';
@@ -979,12 +978,6 @@ test('Audio track resampled with a slow target', async () => {
 });
 
 test('Audio track captured through the audio context fallback', async () => {
-	// Audio contexts only run after user activation
-	const button = document.createElement('button');
-	document.body.append(button);
-	await userEvent.click(button);
-	button.remove();
-
 	const generator = new MediaStreamTrackGenerator({ kind: 'audio' });
 	const writer = generator.writable.getWriter();
 

@@ -33,7 +33,7 @@ import {
 	TAG_STREAM_INF,
 } from './hls-misc';
 import { HlsSegmentedInput } from './hls-segmented-input';
-import { SegmentedInputTrackDeclaration } from '../segmented-input';
+import { getReferenceFirstTimestamp, SegmentedInputTrackDeclaration } from '../segmented-input';
 import { PathedSource } from '../source';
 
 type InternalTrack = {
@@ -337,13 +337,12 @@ export class HlsDemuxer extends Demuxer {
 
 						videoCodecString = codecString;
 
-						const videoMediaTags = mediaTags.filter(mediaTag => (
+						const referencedVideoMediaTags = mediaTags.filter(mediaTag => (
 							mediaTag.attributes.get('group-id') === videoGroupId
 							&& mediaTag.attributes.get('type')!.toLowerCase() === 'video'
 						));
 
-						// Undefined groups occur in the wild; we ignore them, so the video lies in the variant stream
-						if (videoMediaTags.length === 0) {
+						if (referencedVideoMediaTags.length === 0) {
 							const resolution = variantStream.attributes.get('resolution');
 							let width: number | null = null;
 							let height: number | null = null;
@@ -377,7 +376,7 @@ export class HlsDemuxer extends Demuxer {
 								},
 							});
 						} else {
-							for (const mediaTag of videoMediaTags) {
+							for (const mediaTag of referencedVideoMediaTags) {
 								const resolution = mediaTag.attributes.get('resolution')
 									?? variantStream.attributes.get('resolution');
 								let width: number | null = null;
@@ -425,13 +424,12 @@ export class HlsDemuxer extends Demuxer {
 
 						audioCodecString = codecString;
 
-						const audioMediaTags = mediaTags.filter(mediaTag => (
+						const referencedAudioMediaTags = mediaTags.filter(mediaTag => (
 							mediaTag.attributes.get('group-id') === audioGroupId
 							&& mediaTag.attributes.get('type')!.toLowerCase() === 'audio'
 						));
 
-						// Like for video, undefined groups are ignored, so the audio lies in the variant stream
-						if (audioMediaTags.length === 0) {
+						if (referencedAudioMediaTags.length === 0) {
 							result.push({
 								demuxer: this,
 								backingTrack: null,
@@ -452,7 +450,7 @@ export class HlsDemuxer extends Demuxer {
 								},
 							});
 						} else {
-							for (const mediaTag of audioMediaTags) {
+							for (const mediaTag of referencedAudioMediaTags) {
 								const channels = mediaTag.attributes.get('channels')
 									?? variantStream.attributes.get('channels');
 
@@ -580,13 +578,12 @@ export class HlsDemuxer extends Demuxer {
 			const input = referenceSegmentedInput.getInputForSegment(segment);
 			const rawTimestampOffset = await referenceSegmentedInput.getRawTimestampOffset(input) ?? 0;
 
-			const tracks = await input.getTracks();
-			const track = tracks.find(x => x.type === 'video') ?? tracks[0];
-			if (!track) {
-				throw new Error('The reference playlist\'s segment contains no tracks.');
+			const firstTimestamp = await getReferenceFirstTimestamp(input);
+			if (firstTimestamp === null) {
+				throw new Error('The reference playlist\'s segment contains no media.');
 			}
 
-			return segment.timestamp - (rawTimestampOffset + await track.getFirstTimestamp());
+			return segment.timestamp - (rawTimestampOffset + firstTimestamp);
 		})();
 		this.mediaOffsets.set(discontinuityNumber, promise);
 
@@ -1014,8 +1011,7 @@ const parseChannelCount = (channels: string | null) => {
 
 	const [count, objectCodingIdentifiers] = channels.split('/');
 	if (objectCodingIdentifiers !== undefined && objectCodingIdentifiers !== '-') {
-		// For object-based audio (like Dolby Atmos' "16/JOC"), the count isn't the number of channels the media
-		// decodes to
+		// For object-based audio (like Dolby Atmos' "16/JOC"), the count isn't the output number of channels
 		return null;
 	}
 

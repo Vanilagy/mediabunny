@@ -1,6 +1,18 @@
+- Added `InputTrack.getFirstTimestampOrNull()` and `InputTrack.computeDurationOrNull()`, which return `null` instead of 0 for tracks without packets
+- Added `WavOutputFormatOptions.appendOnly` for writing WAVE files in an append-only fashion
 - Added support for hybrid fragmented MP4 files, which hold samples both in the `moov` box and in subsequent fragments (such as FFmpeg's `-movflags frag_keyframe` output). Previously, all fragments were ignored.
 - Added read support for 64-bit float PCM in ISOBMFF
 - Added support for the ISOBMFF `srat` box, fixing high sample rates being misreported for `ipcm`/`fpcm` tracks
+- Added support for reading the Matroska segment title (`Info\Title`) as metadata
+- Added support for E-AC-3 dependent substreams in MPEG-TS, fixing 7.1 E-AC-3 being read as 6 channels with doubled timing
+- Added support for reading Ogg start trimming
+- Added support for VBRI headers in MP3 files
+- Added support for AAC with a program config element (channel configuration 0) in ADTS and MPEG-TS
+- Added detection of ADTS and MP3 files holding just a single frame
+- Added support for ID3v2.2 `TXX` frames
+- Added support for `fLaC` in HLS `CODECS` attributes
+- Added validation for `FlacOutputFormatOptions.onFrame`
+- Added validation for `AttachedImage.name` and `AttachedImage.description`
 - MOV muxer now writes a QuickTime version 2 sound description for sample rates of 65536 Hz and above, which were previously written as 0
 - Fixed reading sample rates of 65536 Hz and above from ISOBMFF files
 - Fixed ISOBMFF PCM tracks losing most of their data when their samples span more than one PCM frame
@@ -22,13 +34,12 @@
 - Fixed the WebVTT `ctim` box being written in seconds instead of milliseconds
 - Fixed disc number being written under the `disc` key instead of `disk`
 - Fixed PCM with more than 16 bits per sample in MP4 being written with a QuickTime-only sound description, making it unplayable in AVFoundation
-- AC-3 and E-AC-3 in MOV are now wrapped in a `wave` box like FFmpeg does, fixing E-AC-3 playback in AVFoundation
+- AC-3 and E-AC-3 in MOV are now wrapped in a `wave` box, fixing E-AC-3 playback in AVFoundation
 - Fixed the ISOBMFF muxer hanging on `finalize()` after `start()` or a track close threw
 - Fixed VP8's `vpcC` box being written with a bit depth of 0
 - Fixed MOV `hdlr` component names being written as C strings instead of counted strings
 - Fixed HE-AAC in Matroska reporting half its sample rate, as `OutputSamplingFrequency` was ignored
-- Matroska muxer now writes AAC's core sample rate as `SamplingFrequency` and adds `OutputSamplingFrequency` when SBR doubles it, like FFmpeg does
-- Added support for the Matroska segment title (`Info\Title`), which is where FFmpeg and mkvmerge write it
+- Matroska muxer now writes AAC's core sample rate as `SamplingFrequency` and adds `OutputSamplingFrequency` when SBR doubles it
 - Matroska AV1 codec info is now read from the `av1C` in `CodecPrivate`, falling back to the first packet only when it holds no sequence header
 - Matroska demuxer now respects `DisplayUnit`, and a lone `DisplayWidth` or `DisplayHeight` is no longer dropped
 - Fixed a Matroska cluster cut off by the end of the file being dropped entirely
@@ -50,7 +61,6 @@
 - Fixed malformed HEVC access unit delimiters in MPEG-TS output, which broke FFmpeg's bitstream filters
 - Fixed a rejected first AAC packet leaving the MPEG-TS track half set up, making every following packet fail
 - Fixed the MPEG-TS muxer hanging on `finalize()` after `start()` or a track close threw
-- Added support for E-AC-3 dependent substreams in MPEG-TS, fixing 7.1 E-AC-3 being read as 6 channels with doubled timing
 - Fixed PAT and PMT sections with a pointer field losing the program or its last stream
 - Fixed private sections on the PMT PID being parsed as the PMT
 - Fixed the PMT still being guessed from other PIDs after the PAT had named it
@@ -70,7 +80,6 @@
 - Fixed negative MPEG-TS timestamps following a positive first timestamp being read as about 95443 seconds
 - Ogg muxer now writes streams that begin before the codec's usual start instead of shifting them forward. Packets too far before the start to be represented are dropped with a warning.
 - `OggOutputFormat.negativeTimestampSupport` is now `'prefer-non-negative'`, allowing forced copy conversions with trims into Ogg
-- Added support for reading Ogg start trimming, as written by `ffmpeg -ss -c copy`
 - Removed end trimming from Ogg reading and writing, as packet durations can't properly signal it
 - Ogg demuxer now throws for empty packets in the middle of a stream, which no supported codec allows (the empty final packet VLC writes is still supported)
 - Fixed the Vorbis comment header in Ogg output lacking its framing bit, making libvorbis reject the files
@@ -92,29 +101,23 @@
 - Fixed broken FLAC PICTURE blocks for MIME types or descriptions with non-ASCII characters
 - Fixed single-frame FLAC output having a minimum block size of 0, which FFmpeg rejects
 - Fixed the FLAC muxer hanging on `finalize()` after `start()` threw
-- Added validation for `FlacOutputFormatOptions.onFrame`
-- Added `WavOutputFormatOptions.appendOnly` for writing WAVE files in an append-only fashion
 - Fixed reading WAVE files whose header overstates the data size from unsized sources, such as FFmpeg's pipe output
 - Fixed chunks following the data chunk in RF64 files, such as metadata, not being read
 - Fixed WAVE `getPacket()` returning the previous packet when given a packet's exact timestamp
 - Fixed RIFF INFO years being read in local time instead of UTC
 - Fixed the WAVE muxer not padding odd-sized data chunks
 - Fixed the WAVE muxer hanging on `finalize()` after `start()` threw
-- Added support for VBRI headers in MP3 files
 - Fixed the Xing/Info frame count of MP3 output including the Xing frame itself, making every file one frame too long
 - Fixed the Xing frame of MP3 output claiming a CRC it didn't have
 - MP3 muxer no longer writes a Xing frame for Layer I and II audio, where decoders would play it as audio
 - Fixed MP3 frame headers with a reserved MPEG version or sample rate index being accepted, causing false syncs
 - Fixed trailing ID3v1 and APEv2 tags counting toward the estimated duration of CBR MP3 files
 - Fixed the MP3 muxer hanging on `finalize()` after `start()` threw
-- Added support for AAC with a program config element (channel configuration 0) in ADTS and MPEG-TS
 - ADTS muxer now throws for AAC configurations that ADTS can't represent instead of writing corrupt headers
 - Fixed ADTS reading stopping at ID3v2 tags between frames
 - ADTS and MP3 streams now end with a warning where the sample rate changes, since a track can only have one sample rate
-- Added detection of ADTS and MP3 files holding just a single frame
 - Fixed the ADTS muxer hanging on `finalize()` after `start()` threw
 - ID3v2 `COMM` frames with a description (like iTunNORM) are no longer read as the comment
-- Added support for ID3v2.2 `TXX` frames
 - Fixed ID3v2.2 and ID3v2.3 tags with whole-tag unsynchronisation being misread
 - Fixed ID3v2.4 tags with non-synchsafe frame sizes (as written by iTunes) being misread
 - Fixed ID3v2 frames with a grouping identity or data length indicator being misread, which could lose all tags
@@ -130,5 +133,16 @@
 - Fixed an ID3 BPM of 0 making conversions fail
 - Fixed ID3v2 lyrics and cover art with non-Latin-1 text being written with the wrong frame size
 - Fixed cover art being duplicated when converting MP3 to MP3
-- Added validation for `AttachedImage.name` and `AttachedImage.description`
+- Fixed HLS variant streams referencing undefined media groups losing their tracks
+- Fixed the HLS `CHANNELS` attribute of object-based audio (such as Dolby Atmos) being read as the channel count
+- Fixed HLS master playlists with only I-frame variants failing to load
+- Fixed several cases of relative URLs in HLS playlists being resolved incorrectly, such as protocol-relative URLs, `data:` URIs and URLs with query strings
+- Fixed sparse fMP4 HLS segments with large timestamps being shifted by a timestamp wrap
+- Fixed HLS packet lookups before the first segment's playlist time returning null
+- Fixed `EXT-X-MAP` tags discarding the duration or byte range of the following segment
+- Fixed live HLS playlists getting a wrong timeline when the window slid past all known segments between playlist reloads
+- Fixed new segments of live HLS playlists losing their init data after a playlist reload
+- Fixed wrong timing after a discontinuity in live HLS segments that slid out of the window between playlist reloads
+- Fixed ended HLS playlists without segments waiting a target duration on every query
+- Fixed `Input.computeDuration()` counting tracks without packets as ending at 0
 - `InputTrack.id` is now the track's 1-based index in `getTracks()` for every format, making it unique in multi-segment Matroska files. Previously, it was the container's own track ID (such as the MPEG-TS PID or the Ogg serial number).

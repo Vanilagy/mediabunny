@@ -47,6 +47,9 @@ export default defineConfig({
 								'wdio:chromedriverOptions': {
 									cacheDir: path.resolve(__dirname, 'node_modules/.cache/webdriver'),
 								},
+								'goog:chromeOptions': {
+									args: ['--autoplay-policy=no-user-gesture-required'],
+								},
 							},
 						}),
 						instances: [{ browser: 'chrome' }],

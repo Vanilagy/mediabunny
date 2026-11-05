@@ -13,84 +13,84 @@ Behavior changes worth a look are marked **[behavior change]**.
 
 ### MP4 / MOV (ISOBMFF) demuxer ✅
 
-- Hybrid fragmented files (samples in moov plus moofs, FFmpeg `-movflags frag_keyframe` without `empty_moov`)
+✅ Hybrid fragmented files (samples in moov plus moofs, FFmpeg `-movflags frag_keyframe` without `empty_moov`)
   ignored every fragment (10 of 30 packets). Fix: the lookups no longer return the moov sample table's result
   as soon as it's non-empty. `getPacket`/`getKeyPacket` also run the fragmented lookup and prefer its match (the
   fragments come after the moov samples), and `getNextPacket`/`getNextKeyPacket` continue into the first
   fragment (new `fetchFirstFragmentedPacket`) once the moov samples run out.
-- `getDurationFromMetadata` returned only the moov part's duration for hybrid fragmented files (now null). Fix:
+✅ `getDurationFromMetadata` returned only the moov part's duration for hybrid fragmented files (now null). Fix:
   return null if the file is fragmented and the moov sample table holds samples.
-- In hybrid fragmented files without tfdt, the first fragment started at 0, overlapping the moov's samples (FFmpeg
+✅ In hybrid fragmented files without tfdt, the first fragment started at 0, overlapping the moov's samples (FFmpeg
   always writes tfdt, but ISO 14496-12 implies the sum of all earlier sample durations when it's missing). Fix:
   the first fragment's fallback start is the end of the moov sample table's decode timeline.
-- `readFragment` race: a second request for the same moof during async post-processing got a half-processed
+✅ `readFragment` race: a second request for the same moof during async post-processing got a half-processed
   fragment (undecrypted ciphertext for saiz/saio-only encryption). Fix: `lastReadFragment` now caches the moof
   offset together with a promise of the fully processed fragment, set before the first await, so concurrent reads
   of the same moof share one read (including the aux info resolution). Failed reads are evicted so they can be
   retried.
-- Fragments without tfdt/tfra drifted by the composition delay with every fragment. Fix: a fragment without
+✅ Fragments without tfdt/tfra drifted by the composition delay with every fragment. Fix: a fragment without
   tfdt continues from the previous fragment's end decode timestamp (the cache stores `endDecodeTimestamp` instead
   of the presentation `endTimestamp`), and `offsetFragmentTrackDataByTimestamp` also shifts `currentTimestamp`.
-- `lpcm` with 64-bit float samples was unsupported. Fix: map 64-bit float to `pcm-f64`/`pcm-f64be`.
-- The `srat` box was ignored (96 kHz ipcm/fpcm read as 48 kHz). Fix: parse `srat` and take the sample rate from
+✅ `lpcm` with 64-bit float samples was unsupported. Fix: map 64-bit float to `pcm-f64`/`pcm-f64be`.
+✅ The `srat` box was ignored (96 kHz ipcm/fpcm read as 48 kHz). Fix: parse `srat` and take the sample rate from
   it.
-- Sample rates >= 65536 Hz, including Mediabunny's own output, read back as 0 (now falls back to the timescale).
+✅ Sample rates >= 65536 Hz, including Mediabunny's own output, read back as 0 (now falls back to the timescale).
   Fix: `sampleRate || track.timescale`.
-- PCM whose samples span multiple frames (stts delta != 1, e.g. MP4Box) lost almost all its data. Fix: the PCM
+✅ PCM whose samples span multiple frames (stts delta != 1, e.g. MP4Box) lost almost all its data. Fix: the PCM
   rewrite that turns every chunk into one sample sized each chunk as `samplesPerChunk` frames; it now derives the
   chunk's frame count from its duration (converted from the track timescale to the sample rate).
-- An all-ones mdhd duration ("unknown") was taken literally (~1.8e12 s). Fix: an all-ones duration (32 or 64
+✅ An all-ones mdhd duration ("unknown") was taken literally (~1.8e12 s). Fix: an all-ones duration (32 or 64
   bits, depending on the version) is mapped to -1, i.e. unknown.
-- `saio` offsets inside a traf were taken relative to the moof start instead of the traf's base data offset. Fix:
+✅ `saio` offsets inside a traf were taken relative to the moof start instead of the traf's base data offset. Fix:
   add the fragment's `baseDataOffset`, just like for the trun data offset (ISO/IEC 14496-12).
-- A track-level `(c)nam` was decoded as raw text, so its length/language prefix ended up in the track name. Fix:
+✅ A track-level `(c)nam` was decoded as raw text, so its length/language prefix ended up in the track name. Fix:
   read it with `readMetadataStringShort`; only the `name` box is raw text.
-- PSSH boxes differing only in their KIDs were deduplicated into one (also in HLS). Fix: `psshBoxesAreEqual`
+✅ PSSH boxes differing only in their KIDs were deduplicated into one (also in HLS). Fix: `psshBoxesAreEqual`
   compares the key IDs too.
 
 ### MP4 / MOV muxer and boxes ✅
 
-- Key frames in the middle of a fragment were written as non-sync (several GOPs per fragment). Fix: trun's
+✅ Key frames in the middle of a fragment were written as non-sync (several GOPs per fragment). Fix: trun's
   first-sample-flags shortcut (first sample gets explicit flags, the rest use the defaults) is only used when the
   first sample's flags occur nowhere else; previously it only checked that the first two samples differed.
-- Fragmented: the moov was written before every track's start offset was known (missing edit list, A/V desync).
+✅ Fragmented: the moov was written before every track's start offset was known (missing edit list, A/V desync).
   Fix: until the fragmented header is written, a new chunk is only begun once every track has a
   `startTimestampOffset` or is closed.
-- Fragmented mdat >= 4 GiB had a size field 8 bytes short. Fix: add the extra 8 header bytes to `mdatSize` when
+✅ Fragmented mdat >= 4 GiB had a size field 8 bytes short. Fix: add the extra 8 header bytes to `mdatSize` when
   switching to the large size.
-- trun data offset silently overflowed its signed 32 bits for traf data >= 2 GiB past the moof.
+✅ trun data offset silently overflowed its signed 32 bits for traf data >= 2 GiB past the moof.
   **[behavior change]** Fix: finalizing such a fragment now throws (an explicit base data offset would break MSE's
   required movie-fragment relative addressing); `trun` asserts the offset fits and writes it as `i32`.
-- CMAF sidx referenced size was silently truncated for segments >= 2 GiB. **[behavior change]** Fix: finalizing
+✅ CMAF sidx referenced size was silently truncated for segments >= 2 GiB. **[behavior change]** Fix: finalizing
   such a segment now throws (CmafOutputFormat isn't meant for files that large); the sidx box asserts the size.
-- `onMoof` timestamps were reported in the internal shifted timeline (regression from the negative-timestamp work).
+✅ `onMoof` timestamps were reported in the internal shifted timeline (regression from the negative-timestamp work).
   Fix: take the fragment start timestamp before the chunk is shifted by `startTimestampOffset`.
-- `fastStart: 'in-memory'` set explicitly failed with AppendOnlyStreamTarget. Fix: the root writer is requested
+✅ `fastStart: 'in-memory'` set explicitly failed with AppendOnlyStreamTarget. Fix: the root writer is requested
   as append-only for `'in-memory'` too, not just `'fragmented'`.
-- `fastStart: 'reserve'` passed 8 extra bytes (the free box header) to `onMoov`. Fix: write the free box first
+✅ `fastStart: 'reserve'` passed 8 extra bytes (the free box header) to `onMoov`. Fix: write the free box first
   (behind the moov's spot), then seek back and track only the moov write.
-- WebVTT: zero-duration cues hung (OOM) or asserted. Fix: cues whose (timescale-snapped) end isn't after their
+✅ WebVTT: zero-duration cues hung (OOM) or asserted. Fix: cues whose (timescale-snapped) end isn't after their
   start are dropped, since they're never visible.
-- WebVTT: touching cues produced zero-length samples (float end times). Fix: cue start/end are snapped to the
+✅ WebVTT: touching cues produced zero-length samples (float end times). Fix: cue start/end are snapped to the
   track timescale when queued and those snapped values are used for sample layout.
-- WebVTT: the `ctim` box was written in seconds instead of milliseconds. Fix: `Math.round(1000 * sampleStart)`.
-- Disc number was written as atom `disc` instead of iTunes `disk`. Fix: use `disk`.
-- PCM > 16 bit in MP4 used the QuickTime v1 sound description (AVFoundation: 0 tracks). Fix: drop the bump to
+✅ WebVTT: the `ctim` box was written in seconds instead of milliseconds. Fix: `Math.round(1000 * sampleStart)`.
+✅ Disc number was written as atom `disc` instead of iTunes `disk`. Fix: use `disk`.
+✅ PCM > 16 bit in MP4 used the QuickTime v1 sound description (AVFoundation: 0 tracks). Fix: drop the bump to
   version 1 for > 16-bit PCM; only MOV uses v1/v2.
-- MP4 `ipcm`/`fpcm` >= 65536 Hz only had a 0 in the sample entry. Fix: also write an `srat` box with the actual
+✅ MP4 `ipcm`/`fpcm` >= 65536 Hz only had a 0 in the sample entry. Fix: also write an `srat` box with the actual
   rate, like FFmpeg (other codecs keep the 0, which the demuxer falls back from).
-- MOV audio >= 65536 Hz wrote sample rate 0 (now a QuickTime v2 sound description). Fix: new version 2 sound
+✅ MOV audio >= 65536 Hz wrote sample rate 0 (now a QuickTime v2 sound description). Fix: new version 2 sound
   description with a float64 sample rate; linear PCM uses `lpcm` with its format described by the
   format-specific flags.
-- E-AC-3 in MOV lacked the `wave` wrapper AVFoundation requires. Fix: in MOV, AC-3 and E-AC-3 are written like
+✅ E-AC-3 in MOV lacked the `wave` wrapper AVFoundation requires. Fix: in MOV, AC-3 and E-AC-3 are written like
   FFmpeg does: a `wave` box holding `frma` and the `dac3`/`dec3` box (AC-3 worked without it, but now matches).
-- xHE-AAC (`mp4a.40.42`) was rejected by validation although browsers can decode it. Fix: add it to the valid
+✅ xHE-AAC (`mp4a.40.42`) was rejected by validation although browsers can decode it. Fix: add it to the valid
   AAC codec strings.
-- `start()` leaked the muxer mutex when it threw, so `finalize()` hung forever. Fix: `try`/`finally` around the
+✅ `start()` leaked the muxer mutex when it threw, so `finalize()` hung forever. Fix: `try`/`finally` around the
   body to release the mutex.
-- `onTrackClose()` leaked the muxer mutex when it threw, so `finalize()` hung forever. Fix: same `try`/`finally`.
-- VP8's `vpcC` had bit depth 0 (the `vp8` codec string has no bit depth field). Fix: default to 8 bits.
-- MOV `hdlr` component names were written as C strings instead of QuickTime's counted strings. Fix: in MOV, write
+✅ `onTrackClose()` leaked the muxer mutex when it threw, so `finalize()` hung forever. Fix: same `try`/`finally`.
+✅ VP8's `vpcC` had bit depth 0 (the `vp8` codec string has no bit depth field). Fix: default to 8 bits.
+✅ MOV `hdlr` component names were written as C strings instead of QuickTime's counted strings. Fix: in MOV, write
   a length byte followed by the name.
 
 ### Matroska / WebM ✅
@@ -371,44 +371,46 @@ Behavior changes worth a look are marked **[behavior change]**.
   byte length when the frame isn't ISO-8859-1.
 ✅ Test fix: the metadata round-trip tests compared `readTags.date` with itself; they now check the written date.
 
-### HLS reading
+### HLS reading ✅
 
-- Variants referencing undefined media groups lost their tracks. Fix: collect the media tags matching the group
+✅ Variants referencing undefined media groups lost their tracks. Fix: collect the media tags matching the group
   first; if there are none (rather than only if the attribute is absent), the track lies in the variant stream.
-- `CHANNELS="16/JOC"` reported 16 channels. Fix: new `parseChannelCount` returns null when the attribute carries
+✅ `CHANNELS="16/JOC"` reported 16 channels. Fix: new `parseChannelCount` returns null when the attribute carries
   object coding identifiers (anything but `-` after the slash).
-- `fLaC` in CODECS wasn't recognized. Fix: `inferCodecFromCodecString` maps `fLaC` to `flac`.
-- A master playlist with only I-frame variants failed with "Assertion failed.". Fix: the reference track
+✅ `fLaC` in CODECS wasn't recognized. Fix: `inferCodecFromCodecString` maps `fLaC` to `flac`.
+✅ A master playlist with only I-frame variants failed with "Assertion failed.". Fix: the reference track
   selection falls back to the key-packet-only tracks when there are no regular ones.
-- `joinPaths`: protocol-relative URLs were resolved wrongly. Fix: a `//` path takes only the base URL's scheme.
-- `joinPaths`: a `://` inside a query made relative URLs look absolute. Fix: a path is absolute only if it starts
+✅ `joinPaths`: protocol-relative URLs were resolved wrongly. Fix: a `//` path takes only the base URL's scheme.
+✅ `joinPaths`: a `://` inside a query made relative URLs look absolute. Fix: a path is absolute only if it starts
   with a URI scheme (regex), which also covers `blob:`/`data:`; the relative path's query/fragment is split off
   before joining and normalizing and appended again afterwards.
-- `joinPaths`: base URLs without a path lost the host. Fix: if the base's last slash is the one of `://`, append
+✅ `joinPaths`: base URLs without a path lost the host. Fix: if the base's last slash is the one of `://`, append
   `/` + the relative path.
-- `joinPaths`: excess `..` popped past the root. Fix: `..` doesn't pop the leading empty root segment.
-- `joinPaths`: dot segments inside the query or fragment were normalized (`seg.ts?p=a/../b`). Fix: same query/
+✅ `joinPaths`: excess `..` popped past the root. Fix: `..` doesn't pop the leading empty root segment.
+✅ `joinPaths`: dot segments inside the query or fragment were normalized (`seg.ts?p=a/../b`). Fix: same query/
   fragment split as above; only the path is normalized (RFC 3986).
-- `joinPaths`: scheme URIs without `//` (e.g. `data:` key URIs) were joined onto the base, and `dir/x://y.ts` was
-  treated as absolute. Fix: absolute means "starts with an RFC 3986 scheme" (`/^[a-z][a-z0-9+.-]*:/i`).
-  **[behavior change]** A relative path like `seg-12:00.ts` now counts as a scheme URI, as in WHATWG URL.
-- Sparse fMP4 segments with large timestamps shifted by a 2^33 wrap. Fix: the wrap correction derives the
-  segment's media start from `input.getFirstTimestamp()` (across all tracks) instead of the video or first
-  track's first timestamp.
-- Lookups before the first segment's playlist timestamp returned null (call-order dependent). Fix: packet lookups
+✅ `joinPaths`: scheme URIs without `//` (e.g. `data:` key URIs) were joined onto the base, and `dir/x://y.ts` was
+  treated as absolute. Fix: absolute means starting with a scheme followed by `://`, or with `data:` or `blob:`.
+  Other colons, like in `seg-12:00.ts`, keep a path relative.
+✅ Sparse fMP4 segments with large timestamps shifted by a 2^33 wrap, since the video track's `getFirstTimestamp()`
+  returned 0 for a segment without video samples. Fix: new `InputTrack.getFirstTimestampOrNull()`; the wrap
+  correction still uses the video track as the reference, but falls back to the other tracks when it has no media
+  in the segment. `getFirstSegmentTimestampOffset` and `getMediaOffsetForDiscontinuity` share the same lookup
+  (`getReferenceFirstTimestamp`), and `Input.getFirstTimestamp()` now uses the new method too.
+✅ Lookups before the first segment's playlist timestamp returned null (call-order dependent). Fix: packet lookups
   fall back to the first segment when `getSegmentAt` finds none, since the media may start before the first
   segment's playlist timestamp.
-- EXT-X-MAP wiped pending EXTINF/BYTERANGE tags. Fix: remove the reset of `nextSegmentDuration`/byte range state
+✅ EXT-X-MAP wiped pending EXTINF/BYTERANGE tags. Fix: remove the reset of `nextSegmentDuration`/byte range state
   from the EXT-X-MAP branch.
-- Live reloads after the window slid past all known segments used a stale timeline. Fix: when continuing after
+✅ Live reloads after the window slid past all known segments used a stale timeline. Fix: when continuing after
   the last known segment, the time of the segments that dropped out unseen is estimated as `(sequence number gap)
   * last duration` instead of one segment duration (for the Unix timestamps too).
-- After a reload, new segments got the wrong first segment (missing init data). Fix: `currentFirstSegment =
+✅ After a reload, new segments got the wrong first segment (missing init data). Fix: `currentFirstSegment =
   prevLastSegment.firstSegment ?? prevLastSegment`, since the first segment's `firstSegment` is null.
-- A discontinuity within the segments that dropped out during a live gap left stale first-segment info (a 48 kHz
+✅ A discontinuity within the segments that dropped out during a live gap left stale first-segment info (a 48 kHz
   period was timed with the 24 kHz one's offsets). Fix: the first-segment info is reset when the next segment's
   discontinuity number differs from it.
-- Empty ended playlists waited one target duration per query. Fix: no reload once the stream has ended, and
+✅ Empty ended playlists waited one target duration per query. Fix: no reload once the stream has ended, and
   `getSegmentAt` honors `skipLiveWait`.
 
 ### HLS writing
@@ -469,6 +471,9 @@ Behavior changes worth a look are marked **[behavior change]**.
   are only computed for a positive time span, 0 otherwise.
 - Source cache eviction was FIFO-ish instead of LRU. Fix: a cache hit gives the entry a fresh age from a counter
   instead of incrementing its age.
+- `Input.computeDuration()` counted tracks without packets as ending at 0, so media lying entirely before zero
+  next to an empty track reported a duration of 0. Fix: new `InputTrack.computeDurationOrNull()`; like
+  `getFirstTimestamp()`, `Input.computeDuration()` now only counts tracks that have packets.
 - A 64-bit ftyp size made detection read the brand from the size field (MOV detected as MP4). Fix: with size 1,
   the brand is read after the 64-bit size.
 - `_getSourceUncached` didn't check disposal. Fix: already covered by the `_rootSource` disposal fix above; a test
@@ -1066,8 +1071,6 @@ Specific real-world files we couldn't produce:
 - PAFF (field-coded) H.264 gives the second field its own packet (x264 only does MBAFF).
 - Legacy Matroska `A_AAC/*` codec IDs without CodecPrivate throw (pre-2008 mkvmerge).
 - Matroska laced TrueHD: laced frames all inherit the keyframe flag.
-- HLS segments whose video track has no samples in the first segment (Mediabunny's muxer always puts a key frame
-  first): `getFirstSegmentTimestampOffset` and `getMediaOffsetForDiscontinuity` use the wrong track.
 - Opus channel mapping family 3 (projection) truncates the demixing matrix.
 - vpcC level 0 is copied into the codec string, which Chrome rejects (FFmpeg only writes it in degenerate cases).
 

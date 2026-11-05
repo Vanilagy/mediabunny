@@ -355,10 +355,20 @@ export abstract class InputTrack {
 	 * Returns the start timestamp of the first packet of this track, in seconds. While often near zero, this value
 	 * may be positive or even negative. A negative starting timestamp means the track's timing has been offset. Samples
 	 * with a negative timestamp should not be presented.
+	 *
+	 * Returns 0 if the track has no packets. Use {@link InputTrack.getFirstTimestampOrNull} to have it
+	 * return `null` instead.
 	 */
 	async getFirstTimestamp() {
+		return (await this.getFirstTimestampOrNull()) ?? 0;
+	}
+
+	/**
+	 * Like {@link InputTrack.getFirstTimestamp}, but returns `null` when the track has no packets.
+	 */
+	async getFirstTimestampOrNull() {
 		const firstPacket = await this._backing.getFirstPacket({ metadataOnly: true });
-		return firstPacket?.timestamp ?? 0;
+		return firstPacket?.timestamp ?? null;
 	}
 
 	/**
@@ -367,12 +377,24 @@ export abstract class InputTrack {
 	 * By default, when the underlying media is live, this method will only resolve once the live stream ends. If you
 	 * want to query the current end timestamp of the stream, set {@link PacketRetrievalOptions.skipLiveWait} to `true`
 	 * in the options.
+	 *
+	 * Returns 0 if the track has no packets. Use {@link InputTrack.computeDurationOrNull} to have it
+	 * return `null` instead.
 	 */
 	async computeDuration(options?: PacketRetrievalOptions) {
-		const lastPacket = await this._backing.getPacket(Infinity, { metadataOnly: true, ...options });
-		const result = (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
+		return (await this.computeDurationOrNull(options)) ?? 0;
+	}
 
-		return roundToDivisor(result, await this.getTimeResolution());
+	/**
+	 * Like {@link InputTrack.computeDuration}, but returns `null` when the track has no packets.
+	 */
+	async computeDurationOrNull(options?: PacketRetrievalOptions) {
+		const lastPacket = await this._backing.getPacket(Infinity, { metadataOnly: true, ...options });
+		if (!lastPacket) {
+			return null;
+		}
+
+		return roundToDivisor(lastPacket.timestamp + lastPacket.duration, await this.getTimeResolution());
 	}
 
 	/**

@@ -353,8 +353,8 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 		}
 
 		// Only count the timestamps of tracks that have at least one packet
-		const firstPackets = await Promise.all(filtered.map(x => x._backing.getFirstPacket({ metadataOnly: true })));
-		const result = Math.min(...firstPackets.map(x => x?.timestamp ?? Infinity));
+		const firstTimestamps = await Promise.all(filtered.map(x => x.getFirstTimestampOrNull()));
+		const result = Math.min(...firstTimestamps.map(x => x ?? Infinity));
 
 		return result === Infinity ? 0 : result;
 	}
@@ -381,8 +381,11 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 			return 0;
 		}
 
-		const tracksDurations = await Promise.all(filtered.map(x => x.computeDuration(options)));
-		return Math.max(...tracksDurations);
+		// Only count the durations of tracks that have at least one packet
+		const tracksDurations = await Promise.all(filtered.map(x => x.computeDurationOrNull(options)));
+		const result = Math.max(...tracksDurations.map(x => x ?? -Infinity));
+
+		return result === -Infinity ? 0 : result;
 	}
 
 	/**

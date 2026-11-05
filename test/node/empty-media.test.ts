@@ -758,3 +758,44 @@ test('Reserved MP4 conversion of a lone zero-duration packet', async () => {
 
 	expect((await videoTrack.computePacketStats()).packetCount).toBe(1);
 });
+
+test('Duration next to an empty track', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const videoSource = new EncodedVideoPacketSource('vp8');
+	output.addVideoTrack(videoSource);
+	output.addAudioTrack(new EncodedAudioPacketSource('opus'), {
+		decoderConfig: {
+			codec: 'opus',
+			sampleRate: 48000,
+			numberOfChannels: 2,
+		},
+	});
+	await output.start();
+
+	// The video lies entirely before zero
+	for (const timestamp of [-2, -1.5]) {
+		await videoSource.add(new EncodedPacket(new Uint8Array(8), 'key', timestamp, 0.5), {
+			decoderConfig: {
+				codec: 'vp8',
+				codedWidth: 16,
+				codedHeight: 16,
+			},
+		});
+	}
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	// The empty track has no end, so it mustn't count as ending at zero
+	expect(await audioTrack.computeDurationOrNull()).toBeNull();
+	expect(await input.computeDuration()).toBe(-1);
+});

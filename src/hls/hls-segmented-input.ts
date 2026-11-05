@@ -8,7 +8,13 @@
 
 import { AES_128_BLOCK_SIZE, createAes128CbcDecryptStream } from '../aes';
 import { ENCRYPTION_KEY_CACHE_GROUP, Input } from '../input';
-import { Segment, SegmentedInput, SegmentedInputTrackDeclaration, SegmentRetrievalOptions } from '../segmented-input';
+import {
+	getReferenceFirstTimestamp,
+	Segment,
+	SegmentedInput,
+	SegmentedInputTrackDeclaration,
+	SegmentRetrievalOptions,
+} from '../segmented-input';
 import {
 	toDataView,
 	joinPaths,
@@ -862,14 +868,13 @@ export class HlsSegmentedInput extends SegmentedInput {
 				return 0;
 			}
 
-			const tracks = await input.getTracks();
-			const track = tracks.find(x => x.type === 'video') ?? tracks[0];
-			if (!track) {
-				throw new Error('The playlist\'s first segment contains no tracks.');
+			const firstTimestamp = await getReferenceFirstTimestamp(input);
+			if (firstTimestamp === null) {
+				throw new Error('The playlist\'s first segment contains no media.');
 			}
 
 			const mediaOffset = await this.getMediaOffset(firstSegment, input);
-			const offset = await track.getFirstTimestamp() + mediaOffset - firstSegment.timestamp;
+			const offset = firstTimestamp + mediaOffset - firstSegment.timestamp;
 
 			// Set it if it isn't already
 			this.learnedSegmentTimestampOffset ??= offset;
