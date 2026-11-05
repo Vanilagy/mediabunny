@@ -12,6 +12,10 @@ import {
 	assertNever,
 	base64ToBytes,
 	bytesToBase64,
+	COLOR_PRIMARIES_MAP,
+	MATRIX_COEFFICIENTS_MAP,
+	TRANSFER_CHARACTERISTICS_MAP,
+	RequiredNonNull,
 	keyValueIterator,
 	getUint24,
 	last,
@@ -533,6 +537,9 @@ export type AvcSpsInfo = {
 	numReorderFrames: number;
 	maxDecFrameBuffering: number;
 	vuiParametersFlagBitOffset: number;
+	videoSignalTypeFlagBitOffset: number | null;
+	videoSignalTypePresentFlag: number;
+	vuiParametersEndBitOffset: number;
 	bitstreamRestrictionFlagBitOffset: number | null;
 	bitstreamRestrictionFlag: number | null;
 };
@@ -699,6 +706,8 @@ export const parseAvcSps = (sps: Uint8Array): AvcSpsInfo | null => {
 		let maxDecFrameBuffering: number | null = null;
 		let bitstreamRestrictionFlagBitOffset: number | null = null;
 		let bitstreamRestrictionFlag: number | null = null;
+		let videoSignalTypeFlagBitOffset: number | null = null;
+		let videoSignalTypePresentFlag = 0;
 
 		const vuiParametersFlagBitOffset = bitstream.pos;
 		const vuiParametersPresentFlag = bitstream.readBits(1);
@@ -725,7 +734,8 @@ export const parseAvcSps = (sps: Uint8Array): AvcSpsInfo | null => {
 				bitstream.skipBits(1); // overscan_appropriate_flag
 			}
 
-			const videoSignalTypePresentFlag = bitstream.readBits(1);
+			videoSignalTypeFlagBitOffset = bitstream.pos;
+			videoSignalTypePresentFlag = bitstream.readBits(1);
 			if (videoSignalTypePresentFlag) {
 				bitstream.skipBits(3); // video_format
 				fullRangeFlag = bitstream.readBits(1);
@@ -780,6 +790,8 @@ export const parseAvcSps = (sps: Uint8Array): AvcSpsInfo | null => {
 				maxDecFrameBuffering = Math.min(readExpGolomb(bitstream), 16);
 			}
 		}
+
+		const vuiParametersEndBitOffset = bitstream.pos;
 
 		if (numReorderFrames === null) {
 			assert(maxDecFrameBuffering === null);
@@ -839,6 +851,9 @@ export const parseAvcSps = (sps: Uint8Array): AvcSpsInfo | null => {
 			numReorderFrames,
 			maxDecFrameBuffering,
 			vuiParametersFlagBitOffset,
+			videoSignalTypeFlagBitOffset,
+			videoSignalTypePresentFlag,
+			vuiParametersEndBitOffset,
 			bitstreamRestrictionFlagBitOffset,
 			bitstreamRestrictionFlag,
 		};
@@ -914,6 +929,56 @@ export const addAvcBitstreamRestriction = (sps: AvcSpsInfo) => {
 	assert(Number.isInteger(byteLength));
 
 	return addEmulationPreventionBytes(modifiedBytes.subarray(0, byteLength));
+};
+
+/**
+ * VideoToolbox can ignore VideoDecoderConfig.colorSpace for untagged AVC and invent BT.709 output tags.
+ * Put the configured fallback in the SPS instead. Preserve all existing signaling, including range-only VUI.
+ * See https://issues.chromium.org/issues/532860177.
+ */
+export const addAvcColorSpace = (sps: AvcSpsInfo, colorSpace: RequiredNonNull<VideoColorSpaceInit>) => {
+	if (sps.videoSignalTypePresentFlag) {
+		return null;
+	}
+
+	const primaries = COLOR_PRIMARIES_MAP[colorSpace.primaries];
+	const transfer = TRANSFER_CHARACTERISTICS_MAP[colorSpace.transfer];
+	const matrix = MATRIX_COEFFICIENTS_MAP[colorSpace.matrix];
+	if (primaries === undefined || transfer === undefined || matrix === undefined) {
+		return null;
+	}
+
+	const bytes = new Uint8Array(sps.emulationUnpreventedBytes.byteLength + 8);
+	const oldBitstream = new Bitstream(sps.emulationUnpreventedBytes);
+	const newBitstream = new Bitstream(bytes);
+
+	if (sps.videoSignalTypeFlagBitOffset === null) {
+		newBitstream.copyBits(sps.vuiParametersFlagBitOffset, oldBitstream);
+		newBitstream.writeBits(1, 1); // vui_parameters_present_flag
+		newBitstream.writeBits(1, 0); // aspect_ratio_info_present_flag
+		newBitstream.writeBits(1, 0); // overscan_info_present_flag
+	} else {
+		newBitstream.copyBits(sps.videoSignalTypeFlagBitOffset, oldBitstream);
+		oldBitstream.skipBits(1); // video_signal_type_present_flag
+	}
+
+	newBitstream.writeBits(1, 1); // video_signal_type_present_flag
+	newBitstream.writeBits(3, 5); // video_format: unspecified
+	newBitstream.writeBits(1, Number(colorSpace.fullRange));
+	newBitstream.writeBits(1, 1); // colour_description_present_flag
+	newBitstream.writeBits(8, primaries);
+	newBitstream.writeBits(8, transfer);
+	newBitstream.writeBits(8, matrix);
+
+	if (sps.videoSignalTypeFlagBitOffset === null) {
+		newBitstream.writeBits(7, 0); // Remaining VUI presence flags, through bitstream_restriction_flag
+	} else {
+		newBitstream.copyBits(sps.vuiParametersEndBitOffset - oldBitstream.pos, oldBitstream);
+	}
+
+	newBitstream.writeBits(1, 1); // rbsp_stop_one_bit
+	newBitstream.writeBits((8 - newBitstream.pos % 8) % 8, 0);
+	return addEmulationPreventionBytes(bytes.subarray(0, newBitstream.pos / 8));
 };
 
 // Data specified in ISO 14496-15

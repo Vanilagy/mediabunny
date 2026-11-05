@@ -1,10 +1,15 @@
 import { expect, test } from 'vitest';
 import { VideoCodec } from '../../src/codec.js';
+import {
+	concatAvcNalUnits,
+	deserializeAvcDecoderConfigurationRecord,
+	iterateAvcNalUnits,
+} from '../../src/codec-data.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { Input } from '../../src/input.js';
-import { EncodedPacketSink } from '../../src/media-sink.js';
+import { EncodedPacketSink, VideoSampleSink } from '../../src/media-sink.js';
 import { EncodedVideoPacketSource } from '../../src/media-source.js';
-import { assert, colorSpaceIsComplete } from '../../src/misc.js';
+import { assert, colorSpaceIsComplete, toUint8Array } from '../../src/misc.js';
 import { Output } from '../../src/output.js';
 import { MkvOutputFormat, Mp4OutputFormat } from '../../src/output-format.js';
 import { EncodedPacket } from '../../src/packet.js';
@@ -97,6 +102,101 @@ test('Color space extraction, AV1 in Matroska', async () => {
 
 	await expectCompleteColorSpace(new BufferSource(buffer));
 });
+
+// https://issues.chromium.org/issues/532860177
+test.for(['prefer-software', 'prefer-hardware'] as const)(
+	'Configured AVC color space reaches %s decoding, including repeated in-band SPS',
+	async (hardwareAcceleration, { skip }) => {
+		const source = await readPackets('/untagged-h264.mp4');
+		if (hardwareAcceleration === 'prefer-hardware') {
+			const { supported } = await VideoDecoder.isConfigSupported({
+				...source.decoderConfig,
+				hardwareAcceleration,
+			});
+			if (!supported) {
+				skip('Hardware H.264 decoding is not supported in this environment.');
+			}
+		}
+		const record = deserializeAvcDecoderConfigurationRecord(toUint8Array(source.decoderConfig.description!));
+		assert(record);
+
+		for (const fullRange of [false, true]) {
+			using referenceInput = new Input({
+				source: new UrlSource(fullRange ? '/bt601-full-range-h264.mp4' : '/bt601-h264.mp4'),
+				formats: ALL_FORMATS,
+			});
+			const referenceTrack = await referenceInput.getPrimaryVideoTrack();
+			assert(referenceTrack);
+			const canvas = new OffscreenCanvas(854, 480);
+			const context = canvas.getContext('2d')!;
+			const referenceFrames: { pixels: Uint8ClampedArray; fullRange: boolean | null }[] = [];
+			const referenceSink = new VideoSampleSink(referenceTrack, { hardwareAcceleration });
+			for await (using sample of referenceSink.samples()) {
+				sample.draw(context, 0, 0);
+				referenceFrames.push({
+					pixels: context.getImageData(0, 0, 854, 480).data,
+					fullRange: sample.colorSpace.fullRange,
+				});
+			}
+
+			for (const mode of ['avc', 'avc-in-band', 'annex-b']) {
+				const annexB = mode === 'annex-b';
+				const decoderConfig: VideoDecoderConfig = {
+					...source.decoderConfig,
+					colorSpace: { primaries: 'smpte170m', transfer: 'smpte170m', matrix: 'smpte170m', fullRange },
+				};
+				if (annexB) {
+					delete decoderConfig.description;
+				}
+
+				const output = new Output({
+					format: annexB ? new MkvOutputFormat() : new Mp4OutputFormat(),
+					target: new BufferTarget(),
+				});
+				const videoSource = new EncodedVideoPacketSource('avc');
+				output.addVideoTrack(videoSource);
+				await output.start();
+				for (let i = 0; i < source.packets.length; i++) {
+					const packet = source.packets[i]!;
+					const nalUnits = [...iterateAvcNalUnits(packet.data, source.decoderConfig)]
+						.map(loc => packet.data.subarray(loc.offset, loc.offset + loc.length));
+					// Repeat the original, untagged SPS even after decoding has started.
+					const data = mode === 'avc'
+						? packet.data
+						: concatAvcNalUnits([
+								...record.sequenceParameterSets,
+								...record.pictureParameterSets,
+								...nalUnits,
+							], decoderConfig);
+					await videoSource.add(packet.clone({ data }), i === 0 ? { decoderConfig } : undefined);
+				}
+				await output.finalize();
+
+				using input = new Input({ source: new BufferSource(output.target.buffer!), formats: ALL_FORMATS });
+				const track = await input.getPrimaryVideoTrack();
+				assert(track);
+				expect(!!(await track.getDecoderConfig())!.description).toBe(!annexB);
+				let count = 0;
+				const sink = new VideoSampleSink(track, { hardwareAcceleration });
+				for await (using sample of sink.samples()) {
+					expect(sample.colorSpace.matrix).toBe('smpte170m');
+					const reference = referenceFrames[count]!;
+					// Decoders may convert full-range input to limited-range output; compare the tagged control.
+					expect(sample.colorSpace.fullRange).toBe(reference.fullRange);
+					sample.draw(context, 0, 0);
+					const pixels = context.getImageData(0, 0, 854, 480).data;
+					let maxDifference = 0;
+					for (let i = 0; i < pixels.length; i++) {
+						maxDifference = Math.max(maxDifference, Math.abs(pixels[i]! - reference.pixels[i]!));
+					}
+					expect(maxDifference).toBe(0);
+					count++;
+				}
+				expect(count).toBe(source.packets.length);
+			}
+		}
+	},
+);
 
 const readPackets = async (path: string) => {
 	using input = new Input({

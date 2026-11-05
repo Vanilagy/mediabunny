@@ -9,6 +9,7 @@
 import { parsePcmCodec, PCM_AUDIO_CODECS, PcmAudioCodec, VideoCodec, AudioCodec, OPUS_SAMPLE_RATE } from './codec';
 import {
 	addAvcBitstreamRestriction,
+	addAvcColorSpace,
 	AvcNalUnitType,
 	concatAvcNalUnits,
 	deserializeAvcDecoderConfigurationRecord,
@@ -47,6 +48,7 @@ import {
 	promiseWithResolvers,
 	removeItem,
 	Rotation,
+	RequiredNonNull,
 	toAsyncIterator,
 	toDataView,
 	toUint8Array,
@@ -949,6 +951,7 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	sampleQueue: VideoSample[] = []; // Safari-specific thing, check usage.
 	currentPacketIndex = 0;
 	raslSkipped = false; // For HEVC stuff
+	avcColorSpace: RequiredNonNull<VideoColorSpaceInit> | null = null;
 
 	// Alpha stuff
 	alphaDecoder: VideoDecoder | null = null;
@@ -1018,11 +1021,18 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			};
 
 			if (isChromium()) {
+				if (codec === 'avc' && colorSpaceIsComplete(decoderConfig.colorSpace)
+					&& decoderConfig.colorSpace.fullRange != null) {
+					// Capture actual metadata before the generic fallback below fills unspecified fields.
+					this.avcColorSpace = { ...decoderConfig.colorSpace };
+				}
+
 				if (codec === 'avc' && this.decoderConfig.description) {
 					const record = deserializeAvcDecoderConfigurationRecord(
 						toUint8Array(this.decoderConfig.description),
 					);
 					if (record && record.sequenceParameterSets.length > 0) {
+						let modified = false;
 						const sps = parseAvcSps(record.sequenceParameterSets[0]!);
 						if (sps) {
 							if (sps.frameMbsOnlyFlag === 0) {
@@ -1039,11 +1049,26 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 							if (sps.maxDecFrameBuffering !== 0 && sps.bitstreamRestrictionFlag !== 1) {
 								// Modify the SPS to fix potential loss of B frames
 								record.sequenceParameterSets[0] = addAvcBitstreamRestriction(sps);
-								this.decoderConfig = {
-									...this.decoderConfig,
-									description: serializeAvcDecoderConfigurationRecord(record),
-								};
+								modified = true;
 							}
+						}
+
+						if (this.avcColorSpace) {
+							for (let i = 0; i < record.sequenceParameterSets.length; i++) {
+								const parsed = parseAvcSps(record.sequenceParameterSets[i]!);
+								const patched = parsed && addAvcColorSpace(parsed, this.avcColorSpace);
+								if (patched) {
+									record.sequenceParameterSets[i] = patched;
+									modified = true;
+								}
+							}
+						}
+
+						if (modified) {
+							this.decoderConfig = {
+								...this.decoderConfig,
+								description: serializeAvcDecoderConfigurationRecord(record),
+							};
 						}
 					}
 				}
@@ -1173,13 +1198,33 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 					}
 
 					const newData = concatAvcNalUnits(filteredNalUnits, this.decoderConfig);
-					packet = new EncodedPacket(newData, packet.type, packet.timestamp, packet.duration);
+					packet = packet.clone({ data: newData });
 				} else if (this.codec === 'hevc') {
 					// Workaround for https://issues.chromium.org/issues/507611247
 					const sanitizedData = sanitizeHevcPacketForChromium(packet.data, this.decoderConfig);
 					if (sanitizedData) {
 						packet = new EncodedPacket(sanitizedData, packet.type, packet.timestamp, packet.duration);
 					}
+				}
+			}
+
+			if (this.avcColorSpace) {
+				const nalUnits: Uint8Array[] = [];
+				let modified = false;
+				for (const loc of iterateAvcNalUnits(packet.data, this.decoderConfig)) {
+					let nalUnit = packet.data.subarray(loc.offset, loc.offset + loc.length);
+					if (extractNalUnitTypeForAvc(nalUnit[0]!) === AvcNalUnitType.SPS) {
+						const parsed = parseAvcSps(nalUnit);
+						const patched = parsed && addAvcColorSpace(parsed, this.avcColorSpace);
+						if (patched) {
+							nalUnit = patched;
+							modified = true;
+						}
+					}
+					nalUnits.push(nalUnit);
+				}
+				if (modified) {
+					packet = packet.clone({ data: concatAvcNalUnits(nalUnits, this.decoderConfig) });
 				}
 			}
 
