@@ -18,16 +18,26 @@ import {
 import { assert } from '../../../src/misc';
 
 class MjpegDecoder extends CustomVideoDecoder {
-	canvas: OffscreenCanvas | null = null;
-
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	static override supports(codec: VideoCodec, _config: VideoDecoderConfig): boolean {
 		return codec === 'mjpeg';
 	}
 
+	displayDimensions: {
+		displayWidth: number;
+		displayHeight: number;
+	} | {
+		displayWidth: undefined;
+		displayHeight: undefined;
+	} = { displayWidth: undefined, displayHeight: undefined };
+
 	init() {
-		assert(this.config.codedWidth && this.config.codedHeight);
-		this.canvas = new OffscreenCanvas(this.config.codedWidth, this.config.codedHeight);
+		if (typeof this.config.displayAspectWidth === 'number' && typeof this.config.displayAspectHeight === 'number') {
+			this.displayDimensions = {
+				displayWidth: this.config.displayAspectWidth,
+				displayHeight: this.config.displayAspectHeight,
+			};
+		}
 	}
 
 	async decode(packet: EncodedPacket) {
@@ -40,8 +50,8 @@ class MjpegDecoder extends CustomVideoDecoder {
 		const bitmap = await createImageBitmap(blob);
 		try {
 			const frame = new VideoFrame(bitmap, {
-				displayWidth: this.config.displayAspectWidth,
-				displayHeight: this.config.displayAspectHeight,
+				displayWidth: this.displayDimensions.displayWidth,
+				displayHeight: this.displayDimensions.displayHeight,
 				timestamp: packet.microsecondTimestamp,
 				duration: packet.microsecondDuration,
 			});
@@ -77,8 +87,8 @@ class MjpegEncoder extends CustomVideoEncoder {
 	targetSize?: number;
 	bitrateState: BitrateState = { actualBytes: 0, targetBytes: 0, smoothedError: 0 };
 
-	static override supports(codec: VideoCodec): boolean {
-		return codec === 'mjpeg';
+	static override supports(codec: VideoCodec, config: VideoEncoderConfig): boolean {
+		return codec === 'mjpeg' && config.alpha !== 'keep';
 	}
 
 	init() {

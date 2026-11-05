@@ -254,7 +254,7 @@ export const DTS_FOURCCS = [
 ] as const;
 export type DtsFourCc = typeof DTS_FOURCCS[number];
 
-export const MJPEG_FOURCCS = ['jpeg'] as const;
+export const MJPEG_FOURCCS = ['jpeg', 'mjpg'] as const; // Maybe also mjpa, mjpb. Don't have examples
 export type MjpegFourCc = typeof MJPEG_FOURCCS[number];
 
 // Target data rates of the ProRes profiles at 1920x1080 ~30fps, as published by Apple
