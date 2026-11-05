@@ -171,8 +171,14 @@ class AacEncoder extends CustomAudioEncoder {
 		this.pendingBuffer.set(incomingData, this.pendingFrames * channels);
 		this.pendingFrames += incomingFrames;
 
+		let frameOffset = 0;
 		while (this.pendingFrames >= this.encoderFrameSize) {
-			await this.encodeOneFrame();
+			await this.encodeOneFrame(frameOffset);
+			frameOffset += this.encoderFrameSize;
+		}
+
+		if (this.pendingFrames > 0 && frameOffset > 0) {
+			this.pendingBuffer.copyWithin(0, frameOffset * channels, (frameOffset + this.pendingFrames) * channels);
 		}
 	}
 
@@ -200,20 +206,17 @@ class AacEncoder extends CustomAudioEncoder {
 		this.worker?.terminate();
 	}
 
-	private async encodeOneFrame() {
+	private async encodeOneFrame(frameOffset = 0) {
 		assert(this.nextSampleTimestampInSamples !== null);
 
 		const channels = this.numberOfChannels;
 		const frameSize = this.encoderFrameSize;
 		const frameSamples = frameSize * channels;
 
-		const frameData = this.pendingBuffer.slice(0, frameSamples);
+		const start = frameOffset * channels;
+		const frameData = this.pendingBuffer.slice(start, start + frameSamples);
 
-		// Shift remaining using copyWithin
 		this.pendingFrames -= frameSize;
-		if (this.pendingFrames > 0) {
-			this.pendingBuffer.copyWithin(0, frameSamples, frameSamples + this.pendingFrames * channels);
-		}
 
 		const audioData = frameData.buffer;
 		const result = await this.sendCommand({

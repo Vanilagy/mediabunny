@@ -129,3 +129,37 @@ test('AAC with huge timestamps', async () => {
 	const primingDelay = 1024 / 48000;
 	expect(firstPacket.timestamp).toBe(timestamp - primingDelay);
 });
+
+test.each([1, 2])('AAC output is independent of input chunk sizes (%i channels)', async (channels) => {
+	registerAacEncoder();
+	const sampleRate = 48000;
+	const data = createSineWave(sampleRate, channels, 0.125);
+	const totalFrames = data.length / channels;
+
+	const encode = async (chunkSizes: number[]) => {
+		const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
+		output.setMetadataTags({ creationTime: new Date(0) });
+		const source = new AudioSampleSource({ codec: 'aac', quality: new Quality({ bitrate: 128000 }) });
+		output.addAudioTrack(source);
+		await output.start();
+
+		let offset = 0;
+		let chunk = 0;
+		while (offset < totalFrames) {
+			const frames = Math.min(chunkSizes[chunk++ % chunkSizes.length]!, totalFrames - offset);
+			const sample = new AudioSample({
+				data: data.subarray(offset * channels, (offset + frames) * channels),
+				format: 'f32', numberOfChannels: channels, sampleRate, timestamp: offset / sampleRate,
+			});
+			await source.add(sample);
+			sample.close();
+			offset += frames;
+		}
+
+		source.close();
+		await output.finalize();
+		return new Uint8Array(output.target.buffer!);
+	};
+
+	expect(await encode([1, 1023, 1024, 17, 2049])).toEqual(await encode([totalFrames]));
+});
