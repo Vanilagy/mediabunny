@@ -31,13 +31,13 @@ export class WaveDemuxer extends Demuxer {
 	metadataPromise: Promise<void> | null = null;
 	dataStart = -1;
 	dataSize = -1;
+	dataSizeCapped = false;
 	audioInfo: {
 		format: number;
 		numberOfChannels: number;
 		sampleRate: number;
 		sampleSizeInBytes: number;
 		blockSizeInBytes: number;
-		littleEndian: boolean;
 	} | null = null;
 
 	trackBackings: WaveAudioTrackBacking[] = [];
@@ -114,8 +114,10 @@ export class WaveDemuxer extends Demuxer {
 						throw new Error('Invalid RF64 file: "ds64" chunk is too small.');
 					}
 
-					const riffChunkSize = readU64(ds64Slice, littleEndian);
-					dataChunkSize = readU64(ds64Slice, littleEndian);
+					// Sizes past what a JS number can address exactly can't be real, they're just placeholders. We need
+					// to cap here to make sure the downstream math still works correctly
+					const riffChunkSize = Math.min(readU64(ds64Slice, littleEndian), Number.MAX_SAFE_INTEGER);
+					dataChunkSize = Math.min(readU64(ds64Slice, littleEndian), Number.MAX_SAFE_INTEGER);
 
 					totalFileSize = Math.min(riffChunkSize + 8, this.reader.fileSize ?? Infinity);
 				} else if (chunkId === 'LIST') {
@@ -137,6 +139,7 @@ export class WaveDemuxer extends Demuxer {
 
 			const blockSize = this.audioInfo.blockSizeInBytes;
 			this.dataSize = Math.floor(this.dataSize / blockSize) * blockSize;
+			this.maybeCapDataSize();
 
 			this.trackBackings.push(new WaveAudioTrackBacking(this));
 		})();
@@ -217,7 +220,6 @@ export class WaveDemuxer extends Demuxer {
 			sampleRate,
 			sampleSizeInBytes: Math.ceil(bitsPerSample / 8),
 			blockSizeInBytes: blockAlign,
-			littleEndian,
 		};
 	}
 
@@ -350,29 +352,47 @@ export class WaveDemuxer extends Demuxer {
 			return 'alaw';
 		}
 
-		// Samples are little-endian, except in RIFX files
-		const { littleEndian } = this.audioInfo;
+		// All formats are little-endian, even in RIFX!
 
 		if (this.audioInfo.format === WaveFormat.PCM) {
 			if (this.audioInfo.sampleSizeInBytes === 1) {
 				return 'pcm-u8';
 			} else if (this.audioInfo.sampleSizeInBytes === 2) {
-				return littleEndian ? 'pcm-s16' : 'pcm-s16be';
+				return 'pcm-s16';
 			} else if (this.audioInfo.sampleSizeInBytes === 3) {
-				return littleEndian ? 'pcm-s24' : 'pcm-s24be';
+				return 'pcm-s24';
 			} else if (this.audioInfo.sampleSizeInBytes === 4) {
-				return littleEndian ? 'pcm-s32' : 'pcm-s32be';
+				return 'pcm-s32';
 			}
 		}
 		if (this.audioInfo.format === WaveFormat.IEEE_FLOAT) {
 			if (this.audioInfo.sampleSizeInBytes === 4) {
-				return littleEndian ? 'pcm-f32' : 'pcm-f32be';
+				return 'pcm-f32';
 			} else if (this.audioInfo.sampleSizeInBytes === 8) {
-				return littleEndian ? 'pcm-f64' : 'pcm-f64be';
+				return 'pcm-f64';
 			}
 		}
 
 		assert(false);
+	}
+
+	maybeCapDataSize() {
+		assert(this.audioInfo);
+
+		if (this.dataSizeCapped) {
+			return;
+		}
+
+		// With unsized sources, we may only get to know the file size after the init logic, so this may only happen
+		// later on
+		const fileSize = this.reader.fileSize;
+		if (fileSize !== null) {
+			this.dataSize = Math.min(
+				this.dataSize,
+				floorToMultiple(fileSize - this.dataStart, this.audioInfo.blockSizeInBytes),
+			);
+			this.dataSizeCapped = true;
+		}
 	}
 
 	async getMimeType() {
@@ -494,15 +514,8 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		assert(this.demuxer.audioInfo);
 		const blockSize = this.demuxer.audioInfo.blockSizeInBytes;
 
+		this.demuxer.maybeCapDataSize();
 		const fileSize = this.demuxer.reader.fileSize;
-		if (fileSize !== null) {
-			// With unsized sources, we may only get to know the file size after the init logic, so the dataSize might
-			// still need to be capped
-			this.demuxer.dataSize = Math.min(
-				this.demuxer.dataSize,
-				floorToMultiple(fileSize - this.demuxer.dataStart, blockSize),
-			);
-		}
 
 		const startOffset = packetIndex * PACKET_SIZE_IN_FRAMES * blockSize;
 		if (startOffset >= this.demuxer.dataSize) {

@@ -3,8 +3,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
 	ALL_FORMATS,
+	AppendOnlyStreamTarget,
 	AudioSample,
-	AudioSampleSink,
 	AudioSampleSource,
 	BufferSource,
 	BufferTarget,
@@ -37,66 +37,6 @@ test('Should handle WAV file with oversized ID3 chunk', async () => {
 		void packet;
 	}
 });
-
-test('RIFX s16', async () => {
-	await testRifx(1, 16);
-});
-
-test('RIFX s24', async () => {
-	await testRifx(1, 24);
-});
-
-test('RIFX s32', async () => {
-	await testRifx(1, 32);
-});
-
-test('RIFX f32', async () => {
-	await testRifx(3, 32);
-});
-
-test('RIFX f64', async () => {
-	await testRifx(3, 64);
-});
-
-const testRifx = async (formatTag: number, bitsPerSample: number) => {
-	// RIFX is RIFF with everything big-endian, so it must decode to the same thing as the byte-swapped RIFF file. The
-	// bytes are arbitrary, but kept below 0x7f so that no float sample comes out as NaN.
-	const sampleSize = bitsPerSample / 8;
-	const riffData = Uint8Array.from({ length: 1000 * sampleSize }, (_, i) => (37 * i) % 127);
-	const rifxData = riffData.slice();
-	for (let i = 0; i < rifxData.length; i += sampleSize) {
-		rifxData.subarray(i, i + sampleSize).reverse();
-	}
-
-	const riff = wav([fmtChunk(formatTag, 1, 8000, bitsPerSample), riffChunk('data', riffData)]);
-	const rifx = wav(
-		[fmtChunk(formatTag, 1, 8000, bitsPerSample, false), riffChunk('data', rifxData, false)],
-		'RIFX',
-		false,
-	);
-
-	expect(await decodeToF32(rifx)).toEqual(await decodeToF32(riff));
-};
-
-const decodeToF32 = async (file: Uint8Array) => {
-	using input = new Input({
-		source: new BufferSource(file),
-		formats: ALL_FORMATS,
-	});
-	const track = (await input.getPrimaryAudioTrack())!;
-
-	const decoded: number[] = [];
-	for await (using sample of new AudioSampleSink(track).samples()) {
-		const chunk = new Float32Array(sample.numberOfFrames);
-		sample.copyTo(chunk, {
-			format: 'f32',
-			planeIndex: 0,
-		});
-		decoded.push(...chunk);
-	}
-
-	return decoded;
-};
 
 test('getPacket at exact packet timestamps', async () => {
 	const file = wav([fmtChunk(1, 1, 44100, 16), riffChunk('data', new Uint8Array(2 * 20 * 2048))]);
@@ -153,6 +93,71 @@ test('Unsized source with overstated data size, lookups once the size is known',
 	expect((await sink.getPacket(1000))!.data.byteLength).toBe(2 * (5000 - 2 * 2048));
 });
 
+test('Append-only', async () => {
+	const file = await testAppendOnly(false);
+	const view = new DataView(file.buffer);
+
+	expect(view.getUint32(4, true)).toBe(0xffffffff); // RIFF size
+	expect(view.getUint32(file.length - 1001 - 4, true)).toBe(0xffffffff); // Data size
+});
+
+test('Append-only, large', async () => {
+	const file = await testAppendOnly(true);
+	const view = new DataView(file.buffer);
+
+	// The ds64 sizes, as the largest signed values
+	for (const offset of [20, 28]) {
+		expect(view.getUint32(offset, true)).toBe(0xffffffff);
+		expect(view.getUint32(offset + 4, true)).toBe(0x7fffffff);
+	}
+});
+
+const testAppendOnly = async (large: boolean) => {
+	const chunks: Uint8Array[] = [];
+	const output = new Output({
+		format: new WavOutputFormat({
+			appendOnly: true,
+			large,
+		}),
+		target: new AppendOnlyStreamTarget(new WritableStream({
+			write: (chunk) => {
+				chunks.push(chunk.slice());
+			},
+		})),
+	});
+	output.setMetadataTags({ title: 'Title' });
+
+	const source = new AudioSampleSource({ codec: 'ulaw' });
+	output.addAudioTrack(source);
+	await output.start();
+
+	using sample = new AudioSample({
+		data: new Int16Array(1001),
+		format: 's16',
+		numberOfChannels: 1,
+		sampleRate: 8000,
+		timestamp: 0,
+	});
+	await source.add(sample);
+	await output.finalize();
+
+	// The odd-sized data isn't padded, since readers would take the padding for audio
+	const file = concat(...chunks);
+	expect(file.subarray(-1001)).toEqual(new Uint8Array(1001).fill(file.at(-1)!));
+
+	for (const source of [new BufferSource(file), streamedSource(file)]) {
+		using input = new Input({
+			source,
+			formats: ALL_FORMATS,
+		});
+
+		expect((await input.getMetadataTags()).title).toBe('Title');
+		expect(await input.computeDuration()).toBe(1001 / 8000);
+	}
+
+	return file;
+};
+
 // The file size stays unknown until the stream ends
 const streamedSource = (file: Uint8Array): Source => new ReadableStreamSource(new ReadableStream<Uint8Array>({
 	start(controller) {
@@ -163,8 +168,8 @@ const streamedSource = (file: Uint8Array): Source => new ReadableStreamSource(ne
 
 // What FFmpeg writes when piping, since it can't seek back to fill in the sizes
 const pipedWav = (frameCount: number) => {
-	const file = wav([fmtChunk(1, 1, 8000, 16), riffChunk('data', new Uint8Array(2 * frameCount), true, 0xffffffff)]);
-	file.set(u32(0xffffffff, true), 4);
+	const file = wav([fmtChunk(1, 1, 8000, 16), riffChunk('data', new Uint8Array(2 * frameCount), 0xffffffff)]);
+	file.set(u32(0xffffffff), 4);
 
 	return file;
 };
@@ -172,7 +177,7 @@ const pipedWav = (frameCount: number) => {
 test('RF64 with metadata after the data chunk', async () => {
 	// What libsndfile writes when tagging an existing RF64 file
 	const ds64 = riffChunk('ds64', new Uint8Array(28));
-	const data = riffChunk('data', new Uint8Array(2 * 80), true, 0xffffffff);
+	const data = riffChunk('data', new Uint8Array(2 * 80), 0xffffffff);
 	const list = riffChunk('LIST', concat(ascii('INFO'), riffChunk('INAM', ascii('Title\0'))));
 	const file = wav([ds64, fmtChunk(1, 1, 8000, 16), data, list], 'RF64');
 
@@ -189,32 +194,26 @@ test('RF64 with metadata after the data chunk', async () => {
 	expect(await input.computeDuration()).toBe(80 / 8000);
 });
 
-const wav = (chunks: Uint8Array[], riffType = 'RIFF', littleEndian = true) => {
+const wav = (chunks: Uint8Array[], riffType = 'RIFF') => {
 	const body = concat(ascii('WAVE'), ...chunks);
-	return concat(ascii(riffType), u32(body.length, littleEndian), body);
+	return concat(ascii(riffType), u32(body.length), body);
 };
 
-const fmtChunk = (
-	formatTag: number,
-	channels: number,
-	sampleRate: number,
-	bitsPerSample: number,
-	littleEndian = true,
-) => {
+const fmtChunk = (formatTag: number, channels: number, sampleRate: number, bitsPerSample: number) => {
 	const blockAlign = channels * bitsPerSample / 8;
 
 	return riffChunk('fmt ', concat(
-		u16(formatTag, littleEndian),
-		u16(channels, littleEndian),
-		u32(sampleRate, littleEndian),
-		u32(sampleRate * blockAlign, littleEndian),
-		u16(blockAlign, littleEndian),
-		u16(bitsPerSample, littleEndian),
-	), littleEndian);
+		u16(formatTag),
+		u16(channels),
+		u32(sampleRate),
+		u32(sampleRate * blockAlign),
+		u16(blockAlign),
+		u16(bitsPerSample),
+	));
 };
 
-const riffChunk = (id: string, body: Uint8Array, littleEndian = true, size = body.length) => {
-	return concat(ascii(id), u32(size, littleEndian), body, new Uint8Array(body.length % 2));
+const riffChunk = (id: string, body: Uint8Array, size = body.length) => {
+	return concat(ascii(id), u32(size), body, new Uint8Array(body.length % 2));
 };
 
 const concat = (...parts: Uint8Array[]) => {
@@ -228,15 +227,15 @@ const concat = (...parts: Uint8Array[]) => {
 	return result;
 };
 
-const u32 = (value: number, littleEndian: boolean) => {
+const u32 = (value: number) => {
 	const bytes = new Uint8Array(4);
-	new DataView(bytes.buffer).setUint32(0, value, littleEndian);
+	new DataView(bytes.buffer).setUint32(0, value, true);
 	return bytes;
 };
 
-const u16 = (value: number, littleEndian: boolean) => {
+const u16 = (value: number) => {
 	const bytes = new Uint8Array(2);
-	new DataView(bytes.buffer).setUint16(0, value, littleEndian);
+	new DataView(bytes.buffer).setUint16(0, value, true);
 	return bytes;
 };
 

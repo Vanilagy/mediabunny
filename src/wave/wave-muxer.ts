@@ -22,6 +22,7 @@ import { Logging } from '../logging';
 export class WaveMuxer extends Muxer {
 	private format: WavOutputFormat;
 	private isRf64: boolean;
+	private appendOnly: boolean;
 	private writer!: Writer;
 	private riffWriter!: RiffWriter;
 	private headerWritten = false;
@@ -40,13 +41,14 @@ export class WaveMuxer extends Muxer {
 
 		this.format = format;
 		this.isRf64 = !!format._options.large;
+		this.appendOnly = !!format._options.appendOnly;
 	}
 
 	async start() {
 		const release = await this.mutex.acquire();
 
 		try {
-			this.writer = await this.output._getRootWriter(false);
+			this.writer = await this.output._getRootWriter(this.appendOnly);
 			this.riffWriter = new RiffWriter(this.writer);
 
 			// If the track already tells us everything we need, we can write the header right now. Otherwise, we'll
@@ -140,6 +142,18 @@ export class WaveMuxer extends Muxer {
 		const sampleRate = config.sampleRate;
 		const blockSize = pcmInfo.sampleSize * channels;
 
+		// With append-only, the sizes never get filled in, so they're set to the largest values they can be. In ds64,
+		// that's the largest signed value, since FFmpeg reads the sizes as signed (lost btw)
+		const sizePlaceholder = this.appendOnly ? 0xffffffff : 0;
+		const writeDs64SizePlaceholder = () => {
+			if (this.appendOnly) {
+				this.riffWriter.writeU32(0xffffffff);
+				this.riffWriter.writeU32(0x7fffffff);
+			} else {
+				this.riffWriter.writeU64(0);
+			}
+		};
+
 		// RIFF header
 		this.riffWriter.writeAscii(this.isRf64 ? 'RF64' : 'RIFF');
 
@@ -147,7 +161,7 @@ export class WaveMuxer extends Muxer {
 			this.riffWriter.writeU32(0xffffffff); // Not used in RF64
 		} else {
 			this.riffSizePos = this.writer.getPos();
-			this.riffWriter.writeU32(0); // File size placeholder
+			this.riffWriter.writeU32(sizePlaceholder); // File size placeholder
 		}
 
 		this.riffWriter.writeAscii('WAVE');
@@ -157,10 +171,10 @@ export class WaveMuxer extends Muxer {
 			this.riffWriter.writeU32(28); // Chunk size
 
 			this.ds64RiffSizePos = this.writer.getPos();
-			this.riffWriter.writeU64(0); // RIFF size placeholder
+			writeDs64SizePlaceholder(); // RIFF size placeholder
 
 			this.ds64DataSizePos = this.writer.getPos();
-			this.riffWriter.writeU64(0); // Data size placeholder
+			writeDs64SizePlaceholder(); // Data size placeholder
 
 			this.ds64SampleCountPos = this.writer.getPos();
 			this.riffWriter.writeU64(0); // Sample count placeholder
@@ -199,7 +213,7 @@ export class WaveMuxer extends Muxer {
 			this.riffWriter.writeU32(0xffffffff); // Not used in RF64
 		} else {
 			this.dataSizePos = this.writer.getPos();
-			this.riffWriter.writeU32(0); // Data size placeholder
+			this.riffWriter.writeU32(sizePlaceholder); // Data size placeholder
 		}
 
 		if (this.format._options.onHeader) {
@@ -364,13 +378,15 @@ export class WaveMuxer extends Muxer {
 		}
 
 		// Add padding byte if data chunk size is odd
-		if (this.dataSize & 1) {
+		if (this.dataSize & 1 && !this.appendOnly) {
 			this.writer.write(new Uint8Array(1));
 		}
 
 		const endPos = this.writer.getPos();
 
-		if (this.isRf64) {
+		if (this.appendOnly) {
+			// We can't go back to fill in the sizes
+		} else if (this.isRf64) {
 			// Write riff size
 			assert(this.ds64RiffSizePos !== null);
 			this.writer.seek(this.ds64RiffSizePos);

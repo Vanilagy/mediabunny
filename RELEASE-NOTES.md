@@ -91,5 +91,13 @@
 - Fixed FLAC `getPacket()` sometimes returning the previous packet due to floating point error
 - Fixed broken FLAC PICTURE blocks for MIME types or descriptions with non-ASCII characters
 - Fixed single-frame FLAC output having a minimum block size of 0, which FFmpeg rejects
+- Fixed the FLAC muxer hanging on `finalize()` after `start()` threw
 - Added validation for `FlacOutputFormatOptions.onFrame`
+- Added `WavOutputFormatOptions.appendOnly` for writing WAVE files in an append-only fashion, also for RF64
+- Fixed reading WAVE files whose header overstates the data size from unsized sources (such as FFmpeg's pipe output), which dropped the end of the audio, made `computeDuration()` throw, and gave a wrong duration once the file size became known
+- Fixed chunks following the data chunk in RF64 files, such as metadata, not being read
+- Fixed WAVE `getPacket()` returning the previous packet when given a packet's exact timestamp
+- Fixed RIFF INFO years being read in local time instead of UTC
+- Fixed the WAVE muxer not padding odd-sized data chunks
+- Fixed the WAVE muxer hanging on `finalize()` after `start()` threw
 - `InputTrack.id` is now the track's 1-based index in `getTracks()` for every format, making it unique in multi-segment Matroska files. Previously, it was the container's own track ID (such as the MPEG-TS PID or the Ogg serial number).

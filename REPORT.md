@@ -258,23 +258,21 @@ Behavior changes worth a look are marked **[behavior change]**.
   (possible thanks to the `Bitstream` fix), or 0 (unknown) if the count doesn't fit in 36 bits.
 ✅ `FlacOutputFormat` didn't validate `onFrame`. Fix: add the `typeof` check.
 
-### WAVE
+### WAVE ✅
 
-- RIFX (big-endian) samples were decoded as little-endian. Fix: store the file's endianness in `audioInfo` and map
-  to the `...be` PCM codecs for RIFX.
-- `getPacket(exact packet timestamp)` returned the previous packet. Fix: `roundIfAlmostInteger` on `timestamp *
+✅ `getPacket(exact packet timestamp)` returned the previous packet. Fix: `roundIfAlmostInteger` on `timestamp *
   sampleRate` before computing the packet index.
-- Unsized sources with an overstated data size (ffmpeg pipe output) dropped the tail. Fix: `getPacketAtIndex` caps
+✅ Unsized sources with an overstated data size (ffmpeg pipe output) dropped the tail. Fix: `getPacketAtIndex` caps
   `dataSize` to the actual data whenever the file size is known; when a read fails because the file is shorter
   (which reveals the file size), it retries with the capped size instead of returning null. `getPacket` likewise
   retries instead of doing a sequential scan from `lastKnownPacketIndex` (removed).
-- The same case made `computeDuration()` fail with "Assertion failed.". Fix: same change; the removed
+✅ The same case made `computeDuration()` fail with "Assertion failed.". Fix: same change; the removed
   sequential-scan path asserted that the file size was still unknown.
-- The same case gave a phantom duration once the file size became known. Fix: same change (the `dataSize` cap).
-- RF64: chunks after the data chunk (e.g. LIST INFO) were never found. Fix: skip the data chunk using the size
+✅ The same case gave a phantom duration once the file size became known. Fix: same change (the `dataSize` cap).
+✅ RF64: chunks after the data chunk (e.g. LIST INFO) were never found. Fix: skip the data chunk using the size
   from ds64 rather than the placeholder in the chunk header.
-- The muxer didn't pad odd-sized data chunks. Fix: write a padding byte at finalize if the data size is odd.
-- RIFF INFO year was parsed in local time (2013 became 2012-12-31 east of UTC). Fix: use `createUtcDate(year)`.
+✅ The muxer didn't pad odd-sized data chunks. Fix: write a padding byte at finalize if the data size is odd.
+✅ RIFF INFO year was parsed in local time (2013 became 2012-12-31 east of UTC). Fix: use `createUtcDate(year)`.
 
 ### MP3
 

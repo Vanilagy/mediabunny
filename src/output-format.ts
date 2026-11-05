@@ -768,6 +768,12 @@ export class Mp3OutputFormat extends OutputFormat {
  */
 export type WavOutputFormatOptions = {
 	/**
+	 * Configures the output to only append new data at the end, useful for live-streaming the file as it's being
+	 * created. When enabled, the header won't state the file's actual size.
+	 */
+	appendOnly?: boolean;
+
+	/**
 	 * When enabled, an RF64 file will be written, allowing for file sizes to exceed 4 GiB, which is otherwise not
 	 * possible for regular WAVE files.
 	 */
@@ -785,7 +791,7 @@ export type WavOutputFormatOptions = {
 
 	/**
 	 * Will be called once the file header is written. The header consists of the RIFF header, the format chunk,
-	 * metadata chunks, and the start of the data chunk (with a placeholder size of 0).
+	 * metadata chunks, and the start of the data chunk (with placeholder sizes).
 	 */
 	onHeader?: (data: Uint8Array, position: number) => unknown;
 };
@@ -803,6 +809,9 @@ export class WavOutputFormat extends OutputFormat {
 	constructor(options: WavOutputFormatOptions = {}) {
 		if (!options || typeof options !== 'object') {
 			throw new TypeError('options must be an object.');
+		}
+		if (options.appendOnly !== undefined && typeof options.appendOnly !== 'boolean') {
+			throw new TypeError('options.appendOnly, when provided, must be a boolean.');
 		}
 		if (options.large !== undefined && typeof options.large !== 'boolean') {
 			throw new TypeError('options.large, when provided, must be a boolean.');
