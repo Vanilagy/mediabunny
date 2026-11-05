@@ -17,6 +17,7 @@ export const CODEC_TO_CODEC_ID: Partial<Record<MediaCodec, NodeAv.AVCodecID>> = 
 	vp9: NodeAv.AV_CODEC_ID_VP9,
 	av1: NodeAv.AV_CODEC_ID_AV1,
 	prores: NodeAv.AV_CODEC_ID_PRORES,
+	mjpeg: NodeAv.AV_CODEC_ID_MJPEG,
 
 	aac: NodeAv.AV_CODEC_ID_AAC,
 	opus: NodeAv.AV_CODEC_ID_OPUS,

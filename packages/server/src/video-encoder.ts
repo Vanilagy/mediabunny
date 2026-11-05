@@ -78,7 +78,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 
 		return (
 			codec === 'avc' || codec === 'hevc' || codec === 'vp8' || codec === 'vp9' || codec === 'av1'
-			|| codec === 'prores'
+			|| codec === 'prores' || codec === 'mjpeg'
 		);
 	}
 
@@ -306,6 +306,11 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			range = NodeAv.AVCOL_RANGE_JPEG;
 		}
 
+		// Standard JPEG requires full-range YUV, even when the input uses limited range.
+		if (this.codec === 'mjpeg') {
+			range = NodeAv.AVCOL_RANGE_JPEG;
+		}
+
 		codecContext.colorPrimaries = primaries;
 		codecContext.colorTrc = transfer;
 		codecContext.colorSpace = matrix;
@@ -378,7 +383,8 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 		const requiresScaler
 			= this.codecContext.pixelFormat !== this.frame.format
 				|| this.codecContext.width !== this.frame.width
-				|| this.codecContext.height !== this.frame.height;
+				|| this.codecContext.height !== this.frame.height
+				|| this.codecContext.colorRange !== this.frame.colorRange;
 
 		if (requiresScaler) {
 			if (!this.scaler) {
@@ -661,6 +667,22 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 					hevcCodecInfo: null,
 					vp9CodecInfo: null,
 					av1CodecInfo,
+					proresFormat: null,
+				});
+			}
+		} else if (this.codec === 'mjpeg') {
+			if (!this.packetEmitted) {
+				decoderConfigCodecString = extractVideoCodecString({
+					width: this.config.width,
+					height: this.config.height,
+					codec: 'mjpeg',
+					codecDescription: null,
+					colorSpace: null,
+					avcType: null,
+					avcCodecInfo: null,
+					hevcCodecInfo: null,
+					vp9CodecInfo: null,
+					av1CodecInfo: null,
 					proresFormat: null,
 				});
 			}

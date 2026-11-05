@@ -886,6 +886,41 @@ describe('Video', async () => {
 		await conversionRoundtrip('prores');
 	});
 
+	test('MJPEG conversion roundtrip', { timeout: 20_000 }, async () => {
+		await conversionRoundtrip('mjpeg');
+	});
+
+	test('MJPEG encoding from RGB pixels', async () => {
+		const output = new Output({
+			format: new Mp4OutputFormat(),
+			target: new BufferTarget(),
+		});
+		const packets: EncodedPacket[] = [];
+		const source = new VideoSampleSource({
+			codec: 'mjpeg',
+			quality: new Quality({ bitrate: 1e6 }),
+			hardwareAcceleration: 'prefer-software',
+			onEncodedPacket: packet => packets.push(packet),
+		});
+		output.addVideoTrack(source);
+		await output.start();
+
+		// RGB input takes a different color conversion path from the full-range YUV fixture.
+		using sample = new VideoSample(new Uint8Array(16 * 16 * 4), {
+			format: 'RGBX',
+			codedWidth: 16,
+			codedHeight: 16,
+			timestamp: 0,
+			duration: 1 / 30,
+		});
+		await source.add(sample);
+		await output.finalize();
+
+		expect(packets).toHaveLength(1);
+		expect(packets[0]!.type).toBe('key');
+		expect(Array.from(packets[0]!.data.subarray(0, 2))).toEqual([0xff, 0xd8]);
+	});
+
 	const conversionRoundtrip = async (codec: VideoCodec, duration?: number) => {
 		using input = new Input({
 			source: new FilePathSource('./test/public/video.mp4'),
@@ -919,7 +954,8 @@ describe('Video', async () => {
 			video: {
 				codec,
 				forceTranscode: true,
-			}, audio: {
+			},
+			audio: {
 				discard: true,
 			},
 			trim: {

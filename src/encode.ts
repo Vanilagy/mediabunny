@@ -925,6 +925,7 @@ const VIDEO_CODEC_QUANTIZER_SUPPORT: Partial<Record<VideoCodec, {
 		? { min: 0, max: 63, worst: 52, best: 20 }
 		: { min: 0, max: 255, worst: 208, best: 80 },
 	av1: { min: 0, max: 255, worst: 208, best: 80 },
+	mjpeg: { min: 0, max: 100, worst: 100, best: 0 },
 };
 
 /**
@@ -947,6 +948,7 @@ const computeVideoBitrate = (codec: VideoCodec, width: number, height: number, f
 		av1: 0.4, // ~60% more efficient than AVC
 		vp8: 1.2, // Slightly less efficient than AVC
 		prores: 220_000_000 / referenceBitrate, // Apple ProRes white paper claims 220 Mbps for 1080p 422 HQ @30Hz
+		mjpeg: 5,
 	};
 
 	const codecAdjustedBitrate = baseBitrate * codecEfficiencyFactors[codec];
@@ -965,6 +967,8 @@ export const buildQuantizerEncodeOptions = (codec: VideoCodec, quantizer: number
 		return { vp9: { quantizer } };
 	} else if (codec === 'av1') {
 		return { av1: { quantizer } };
+	} else if (codec === 'mjpeg') {
+		return { mjpeg: { quantizer } };
 	}
 
 	assert(false);
@@ -976,6 +980,7 @@ declare global {
 		hevc?: VideoEncoderEncodeOptionsForHevc;
 		vp9?: VideoEncoderEncodeOptionsForVp9;
 		av1?: VideoEncoderEncodeOptionsForAv1;
+		mjpeg?: VideoEncoderEncodeOptionsForMjpeg;
 	}
 
 	interface VideoEncoderEncodeOptionsForHevc {
@@ -987,6 +992,11 @@ declare global {
 	}
 
 	interface VideoEncoderEncodeOptionsForAv1 {
+		quantizer?: number | null;
+	}
+
+	interface VideoEncoderEncodeOptionsForMjpeg {
+		/** Quantizer from 0 to 100, where 0 is the highest quality. */
 		quantizer?: number | null;
 	}
 }
