@@ -105,15 +105,13 @@ test('Color space extraction, AV1 in Matroska', async () => {
 
 // https://issues.chromium.org/issues/532860177
 test('Configured AVC color space reaches hardware decoding, including repeated in-band SPS', async () => {
-	const source = await readPackets('https://remotion.media/mediabunny-h264-color-space-v1/untagged-h264.mp4');
+	const source = await readPackets('/untagged-h264.mp4');
 	const record = deserializeAvcDecoderConfigurationRecord(toUint8Array(source.decoderConfig.description!));
 	assert(record);
 
 	for (const fullRange of [false, true]) {
 		using referenceInput = new Input({
-			source: new UrlSource(fullRange
-				? 'https://remotion.media/mediabunny-h264-color-space-v1/bt601-full-range-h264.mp4'
-				: 'https://remotion.media/mediabunny-h264-color-space-v1/bt601-h264.mp4'),
+			source: new UrlSource(fullRange ? '/bt601-full-range-h264.mp4' : '/bt601-h264.mp4'),
 			formats: ALL_FORMATS,
 		});
 		const referenceTrack = await referenceInput.getPrimaryVideoTrack();

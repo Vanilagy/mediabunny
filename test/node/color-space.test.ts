@@ -1,4 +1,5 @@
 import { expect, test } from 'vitest';
+import { fileURLToPath } from 'node:url';
 import { Bitstream } from '../../shared/bitstream.js';
 import {
 	addAvcBitstreamRestriction,
@@ -10,11 +11,11 @@ import {
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { Input } from '../../src/input.js';
 import { assert, RequiredNonNull, toUint8Array } from '../../src/misc.js';
-import { UrlSource } from '../../src/source.js';
+import { FilePathSource } from '../../src/source.js';
 
 test('AVC color fallback preserves existing VUI and composes with reorder metadata', async () => {
 	using input = new Input({
-		source: new UrlSource('https://remotion.media/mediabunny-h264-color-space-v1/untagged-h264.mp4'),
+		source: new FilePathSource(fileURLToPath(new URL('../public/untagged-h264.mp4', import.meta.url))),
 		formats: ALL_FORMATS,
 	});
 	const track = await input.getPrimaryVideoTrack();
