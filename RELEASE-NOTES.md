@@ -100,4 +100,11 @@
 - Fixed RIFF INFO years being read in local time instead of UTC
 - Fixed the WAVE muxer not padding odd-sized data chunks
 - Fixed the WAVE muxer hanging on `finalize()` after `start()` threw
+- Added support for VBRI headers in MP3 files, which are now used for the frame count instead of being read as audio
+- Fixed the Xing/Info frame count of MP3 output including the Xing frame itself, making every file one frame too long
+- Fixed the Xing frame of MP3 output claiming a CRC it didn't have
+- MP3 muxer no longer writes a Xing frame for Layer I and II audio, where decoders would play it as audio
+- Fixed MP3 frame headers with a reserved MPEG version or sample rate index being accepted, causing false syncs
+- Fixed trailing ID3v1 and APEv2 tags counting toward the estimated duration of CBR MP3 files
+- Fixed the MP3 muxer hanging on `finalize()` after `start()` threw
 - `InputTrack.id` is now the track's 1-based index in `getTracks()` for every format, making it unique in multi-segment Matroska files. Previously, it was the container's own track ID (such as the MPEG-TS PID or the Ogg serial number).

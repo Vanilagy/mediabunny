@@ -128,7 +128,7 @@ export const readMp3FrameHeader = (word: number, remainingBytes: number | null):
 	const frequencyIndex = (thirdByte >> 2) & 0x3;
 
 	if (mpegVersionId === 1 || frequencyIndex === 3) {
-		// Reserved values, which FFmpeg rejects too. These are a common source of false syncs.
+		// Reserved values
 		return { header: null, bytesAdvanced: 1 };
 	}
 

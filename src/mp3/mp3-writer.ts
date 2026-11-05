@@ -63,7 +63,10 @@ export class Mp3Writer {
 		this.crc = 0;
 
 		const firstByte = 0xff;
-		const secondByte = 0xe0 | (data.mpegVersionId << 3) | (data.layer << 1) | 1; // No CRC
+		const secondByte = 0xe0
+			| (data.mpegVersionId << 3)
+			| (data.layer << 1)
+			| 1; // No CRC
 
 		let lowSamplingFrequency: number;
 		if (data.mpegVersionId & 2) {

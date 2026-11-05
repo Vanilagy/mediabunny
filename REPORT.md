@@ -274,22 +274,22 @@ Behavior changes worth a look are marked **[behavior change]**.
 ✅ The muxer didn't pad odd-sized data chunks. Fix: write a padding byte at finalize if the data size is odd.
 ✅ RIFF INFO year was parsed in local time (2013 became 2012-12-31 east of UTC). Fix: use `createUtcDate(year)`.
 
-### MP3
+### MP3 ✅
 
-- The Xing/Info frame count included the Xing frame itself (every output one frame too long). Fix: the muxer no
+✅ The Xing/Info frame count included the Xing frame itself (every output one frame too long). Fix: the muxer no
   longer increments `frameCount` for the Xing frame.
-- VBRI headers were not recognized (VBRI frame emitted as audio, CBR duration estimate). Fix: for Layer III
+✅ VBRI headers were not recognized (VBRI frame emitted as audio, CBR duration estimate). Fix: for Layer III
   frames, check for a `VBRI` header (version 1) 32 bytes past the frame header; such a frame is treated like a
   Xing frame (skipped as audio) and its frame count and file size are used.
-- Frame header parsing accepted the reserved MPEG version, causing false syncs. Fix: `readMp3FrameHeader` rejects
+✅ Frame header parsing accepted the reserved MPEG version, causing false syncs. Fix: `readMp3FrameHeader` rejects
   MPEG version ID 1 (reserved), like FFmpeg.
-- Frame header parsing accepted the reserved sample-rate index, causing false syncs. Fix: reject frequency index
+✅ Frame header parsing accepted the reserved sample-rate index, causing false syncs. Fix: reject frequency index
   3 instead of mapping it with `% 3`.
-- The written Xing frame claimed a CRC (protection bit 0) it didn't have (CRC mismatch in checking decoders). Fix:
+✅ The written Xing frame claimed a CRC (protection bit 0) it didn't have (CRC mismatch in checking decoders). Fix:
   set the protection bit, meaning no CRC.
-- Layer I/II output got a Xing frame, which decoders played as an extra audio frame. Fix: Mp3Muxer writes no
+✅ Layer I/II output got a Xing frame, which decoders played as an extra audio frame. Fix: Mp3Muxer writes no
   Xing frame for Layers I and II, since Xing only exists for Layer III.
-- Trailing ID3v1 and APEv2 tags counted toward the CBR duration estimate. Fix: subtract them (the APE tag with its
+✅ Trailing ID3v1 and APEv2 tags counted toward the CBR duration estimate. Fix: subtract them (the APE tag with its
   header, if flagged) from the audio end before estimating.
 
 ### ADTS / AAC
