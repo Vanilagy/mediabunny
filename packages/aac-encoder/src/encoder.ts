@@ -173,8 +173,10 @@ class AacEncoder extends CustomAudioEncoder {
 
 		let frameOffset = 0;
 		while (this.pendingFrames >= this.encoderFrameSize) {
-			await this.encodeOneFrame(frameOffset);
-			frameOffset += this.encoderFrameSize;
+			// Bound batches so large input samples still deliver packets incrementally.
+			const batchSize = Math.min(Math.floor(this.pendingFrames / this.encoderFrameSize), 16);
+			await this.encodeBatch(frameOffset, batchSize);
+			frameOffset += batchSize * this.encoderFrameSize;
 		}
 
 		if (this.pendingFrames > 0 && frameOffset > 0) {
@@ -193,7 +195,7 @@ class AacEncoder extends CustomAudioEncoder {
 			this.pendingBuffer.fill(0, usedSamples, frameSamples);
 			this.pendingFrames = frameSize;
 
-			await this.encodeOneFrame();
+			await this.encodeBatch(0, 1);
 		}
 
 		const result = await this.sendCommand({ type: 'flush', data: { ctx: this.ctx } });
@@ -206,29 +208,30 @@ class AacEncoder extends CustomAudioEncoder {
 		this.worker?.terminate();
 	}
 
-	private async encodeOneFrame(frameOffset = 0) {
+	private async encodeBatch(frameOffset: number, batchSize: number) {
 		assert(this.nextSampleTimestampInSamples !== null);
 
 		const channels = this.numberOfChannels;
-		const frameSize = this.encoderFrameSize;
-		const frameSamples = frameSize * channels;
+		const frames = batchSize * this.encoderFrameSize;
+		const batchSamples = frames * channels;
 
 		const start = frameOffset * channels;
-		const frameData = this.pendingBuffer.slice(start, start + frameSamples);
+		const batchData = this.pendingBuffer.slice(start, start + batchSamples);
 
-		this.pendingFrames -= frameSize;
+		this.pendingFrames -= frames;
 
-		const audioData = frameData.buffer;
+		const audioData = batchData.buffer;
 		const result = await this.sendCommand({
 			type: 'encode',
 			data: {
 				ctx: this.ctx,
 				audioData,
+				batchSize,
 				timestamp: this.nextSampleTimestampInSamples,
 			},
 		}, [audioData]);
 
-		this.nextSampleTimestampInSamples += frameSize;
+		this.nextSampleTimestampInSamples += frames;
 
 		this.emitPackets(result.packets);
 	}

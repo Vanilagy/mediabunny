@@ -74,9 +74,7 @@ const initEncoder = async (
 	return { ctx, frameSize, extradata };
 };
 
-const drainPackets = (ctx: number) => {
-	const packets: PacketInfo[] = [];
-
+const drainPackets = (ctx: number, packets: PacketInfo[] = []) => {
 	let size: number;
 	while ((size = receivePacketFn(ctx)) > 0) {
 		const ptr = getEncodedData(ctx);
@@ -89,21 +87,27 @@ const drainPackets = (ctx: number) => {
 	return packets;
 };
 
-const encode = (ctx: number, audioData: ArrayBuffer, timestamp: number) => {
+const encode = (ctx: number, audioData: ArrayBuffer, timestamp: number, batchSize: number) => {
 	const audioBytes = new Uint8Array(audioData);
+	const frameBytes = audioBytes.length / batchSize;
+	const frameSize = getEncoderFrameSize(ctx);
 
-	const inputPtr = getEncodeInputPtr(ctx, audioBytes.length);
+	const inputPtr = getEncodeInputPtr(ctx, frameBytes);
 	if (inputPtr === 0) {
 		throw new Error('Failed to allocate encoder input buffer.');
 	}
-	module.HEAPU8.set(audioBytes, inputPtr);
+	const packets: PacketInfo[] = [];
+	for (let i = 0; i < batchSize; i++) {
+		module.HEAPU8.set(audioBytes.subarray(i * frameBytes, (i + 1) * frameBytes), inputPtr);
 
-	const ret = sendFrameFn(ctx, BigInt(timestamp));
-	if (ret < 0) {
-		throw new Error(`Encode failed with error code ${ret}.`);
+		const ret = sendFrameFn(ctx, BigInt(timestamp + i * frameSize));
+		if (ret < 0) {
+			throw new Error(`Encode failed with error code ${ret}.`);
+		}
+		drainPackets(ctx, packets);
 	}
 
-	return drainPackets(ctx);
+	return packets;
 };
 
 const onMessage = (data: { id: number; command: WorkerCommand }) => {
@@ -130,6 +134,7 @@ const onMessage = (data: { id: number; command: WorkerCommand }) => {
 						command.data.ctx,
 						command.data.audioData,
 						command.data.timestamp,
+						command.data.batchSize,
 					);
 					for (const p of packets) {
 						transferables.push(p.encodedData);

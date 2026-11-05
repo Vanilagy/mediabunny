@@ -18,6 +18,7 @@ export type WorkerCommand = {
 	data: {
 		ctx: number;
 		audioData: ArrayBuffer;
+		batchSize: number;
 		timestamp: number;
 	};
 } | {
