@@ -211,6 +211,7 @@ type InternalTrack = {
 	clusterPositionCache: {
 		elementStartPos: number;
 		startTimestamp: number;
+		hasKeyFrame: boolean;
 	}[];
 	cuePoints: CuePoint[];
 
@@ -816,6 +817,7 @@ export class MatroskaDemuxer extends Demuxer {
 				track.clusterPositionCache.splice(insertionIndex + 1, 0, {
 					elementStartPos: cluster.elementStartPos,
 					startTimestamp: trackData.startTimestamp,
+					hasKeyFrame: trackData.firstKeyFrameTimestamp !== null,
 				});
 			}
 		}
@@ -2422,6 +2424,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 			timestampInTimescale,
 			timestampInTimescale,
 			options,
+			true,
 		);
 	}
 
@@ -2552,14 +2555,11 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		// The timestamp for which we know the correct block will not come after it
 		latestTimestamp: number,
 		options: PacketRetrievalOptions,
-		// The position for which we know the correct block will not come after it
-		stopPos = Infinity,
-		// How many times we've retried due to a faulty lookup entry
-		lookupRetryCount = 0,
+		// Whether the match must be a key frame, so that position cache entries without one can be skipped
+		requireKeyFrame = false,
 	): Promise<EncodedPacket | null> {
-		const { demuxer, segment } = this.internalTrack;
+		const { demuxer, segment, cuePoints, clusterPositionCache } = this.internalTrack;
 
-		let currentCluster: Cluster | null = null;
 		let bestCluster: Cluster | null = null;
 		let bestBlockIndex = -1;
 
@@ -2578,169 +2578,161 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 
 		// Search for a cue point; this way, we won't need to start searching from the start of the file
 		// but can jump right into the correct cluster (or at least nearby).
-		const cuePointIndex = binarySearchLessOrEqual(
-			this.internalTrack.cuePoints,
-			searchTimestamp,
-			x => x.time,
-		);
-		const cuePoint = cuePointIndex !== -1
-			? this.internalTrack.cuePoints[cuePointIndex]!
-			: null;
+		let cuePointIndex = binarySearchLessOrEqual(cuePoints, searchTimestamp, x => x.time);
+		// Also check the position cache. Clusters read during the lookup land after this index, so it stays valid.
+		let positionCacheIndex = binarySearchLessOrEqual(clusterPositionCache, searchTimestamp, x => x.startTimestamp);
 
-		// Also check the position cache
-		const positionCacheIndex = binarySearchLessOrEqual(
-			this.internalTrack.clusterPositionCache,
-			searchTimestamp,
-			x => x.startTimestamp,
-		);
-		const positionCacheEntry = positionCacheIndex !== -1
-			? this.internalTrack.clusterPositionCache[positionCacheIndex]!
-			: null;
+		// The position for which we know the correct block will not come after it
+		let stopPos = Infinity;
 
-		const lookupEntryPosition = Math.max(
-			cuePoint?.clusterPosition ?? 0,
-			positionCacheEntry?.elementStartPos ?? 0,
-		) || null;
-		const cuePointWins = !!cuePoint && cuePoint.clusterPosition >= (positionCacheEntry?.elementStartPos ?? 0);
-
-		let currentPos: number;
-
-		if (!startCluster) {
-			currentPos = lookupEntryPosition ?? segment.clusterSeekStartPos;
-		} else {
-			if (lookupEntryPosition === null || startCluster.elementStartPos >= lookupEntryPosition) {
-				currentPos = startCluster.elementEndPos;
-				currentCluster = startCluster;
-			} else {
-				// Use the lookup entry
-				currentPos = lookupEntryPosition;
+		while (true) {
+			// Skip lookup entries pointing into clusters we've already scanned
+			while (cuePointIndex !== -1 && cuePoints[cuePointIndex]!.clusterPosition >= stopPos) {
+				cuePointIndex--;
 			}
-		}
+			while (
+				positionCacheIndex !== -1
+				&& (
+					clusterPositionCache[positionCacheIndex]!.elementStartPos >= stopPos
+					|| (requireKeyFrame && !clusterPositionCache[positionCacheIndex]!.hasKeyFrame)
+				)
+			) {
+				positionCacheIndex--;
+			}
 
-		const scanStartPos = currentCluster ? currentCluster.elementStartPos : currentPos;
+			const lookupEntryPosition = Math.max(
+				cuePoints[cuePointIndex]?.clusterPosition ?? 0,
+				clusterPositionCache[positionCacheIndex]?.elementStartPos ?? 0,
+			) || null;
 
-		while (
-			(segment.elementEndPos === null || currentPos <= segment.elementEndPos - MIN_HEADER_SIZE)
-			&& currentPos < stopPos
-		) {
-			if (currentCluster) {
-				const trackData = currentCluster.trackData.get(this.internalTrack.id);
-				if (trackData && trackData.startTimestamp > latestTimestamp) {
-					// We're already past the upper bound, no need to keep searching
+			let currentPos: number;
+			let currentCluster: Cluster | null = null;
+
+			if (!startCluster) {
+				currentPos = lookupEntryPosition ?? segment.clusterSeekStartPos;
+			} else {
+				if (lookupEntryPosition === null || startCluster.elementStartPos >= lookupEntryPosition) {
+					currentPos = startCluster.elementEndPos;
+					currentCluster = startCluster;
+				} else {
+					// Use the lookup entry
+					currentPos = lookupEntryPosition;
+				}
+			}
+
+			const scanStartPos = currentCluster ? currentCluster.elementStartPos : currentPos;
+
+			while (
+				(segment.elementEndPos === null || currentPos <= segment.elementEndPos - MIN_HEADER_SIZE)
+				&& currentPos < stopPos
+			) {
+				if (currentCluster) {
+					const trackData = currentCluster.trackData.get(this.internalTrack.id);
+					if (trackData && trackData.startTimestamp > latestTimestamp) {
+						// We're already past the upper bound, no need to keep searching
+						break;
+					}
+
+					currentCluster = null; // So we don't process it again next iteration
+				}
+
+				const summary = segment.clusterSummaries.get(currentPos);
+				if (summary && !summary.trackIds.has(this.internalTrack.id)) {
+					// We've read this cluster before and know it has nothing for this track, so let's not read it again
+					currentPos = summary.elementEndPos;
+					continue;
+				}
+
+				// Load the header
+				let slice = demuxer.reader.requestSliceRange(currentPos, MIN_HEADER_SIZE, MAX_HEADER_SIZE);
+				if (isThenable(slice)) slice = await slice;
+				if (!slice) break;
+
+				const elementStartPos = currentPos;
+				const elementHeader = readElementHeader(slice);
+
+				if (segment.elementEndPos === null && elementHeader && LEVEL_0_EBML_IDS.includes(elementHeader.id)) {
+					// A new file or segment begins here, so we now know where this segment ends. The new segment is
+					// just ignored, since we're likely in a livestreamed file and thus only care about the first
+					// segment.
+					segment.elementEndPos = elementStartPos;
 					break;
 				}
 
-				currentCluster = null; // So we don't process it again next iteration
+				if (
+					!elementHeader
+					|| (!LEVEL_1_EBML_IDS.includes(elementHeader.id) && elementHeader.id !== EBMLId.Void)
+				) {
+					// There's an element here that shouldn't be here. Might be garbage. In this case, let's
+					// try and resync to the next valid element.
+					const nextPos = await resync(
+						demuxer.reader,
+						elementStartPos + 1,
+						LEVEL_1_EBML_IDS,
+						Math.min(segment.elementEndPos ?? Infinity, elementStartPos + MAX_RESYNC_LENGTH),
+					);
+
+					if (nextPos) {
+						currentPos = nextPos;
+						continue;
+					} else {
+						break; // Resync failed
+					}
+				}
+
+				const id = elementHeader.id;
+				let size = elementHeader.size;
+				const dataStartPos = slice.filePos;
+
+				if (id === EBMLId.Cluster) {
+					currentCluster = await demuxer.readCluster(elementStartPos, segment);
+					// readCluster computes the proper size even if it's undefined in the header, so let's use that
+					// instead
+					size = currentCluster.elementEndPos - dataStartPos;
+
+					const { blockIndex, correctBlockFound } = getMatchInCluster(currentCluster);
+					if (correctBlockFound) {
+						return this.fetchPacketInCluster(currentCluster, blockIndex, options);
+					}
+
+					if (blockIndex !== -1) {
+						bestCluster = currentCluster;
+						bestBlockIndex = blockIndex;
+					}
+				}
+
+				if (size === undefined) {
+					// Undefined element size (can happen in livestreamed files). In this case, we need to do some
+					// searching to determine the actual size of the element.
+
+					assert(id !== EBMLId.Cluster); // Undefined cluster sizes are fixed further up
+
+					// Search for the next element at level 0 or 1
+					const nextElementPos = await searchForNextElementId(
+						demuxer.reader,
+						dataStartPos,
+						LEVEL_0_AND_1_EBML_IDS,
+						segment.elementEndPos,
+					);
+
+					size = nextElementPos.pos - dataStartPos;
+				}
+
+				currentPos = dataStartPos + size;
 			}
 
-			const summary = segment.clusterSummaries.get(currentPos);
-			if (summary && !summary.trackIds.has(this.internalTrack.id)) {
-				// We've read this cluster before and know it has nothing for this track, so let's not read it again
-				currentPos = summary.elementEndPos;
-				continue;
-			}
-
-			// Load the header
-			let slice = demuxer.reader.requestSliceRange(currentPos, MIN_HEADER_SIZE, MAX_HEADER_SIZE);
-			if (isThenable(slice)) slice = await slice;
-			if (!slice) break;
-
-			const elementStartPos = currentPos;
-			const elementHeader = readElementHeader(slice);
-
-			if (segment.elementEndPos === null && elementHeader && LEVEL_0_EBML_IDS.includes(elementHeader.id)) {
-				// A new file or segment begins here, so we now know where this segment ends. The new segment is just
-				// ignored, since we're likely in a livestreamed file and thus only care about the first segment.
-				segment.elementEndPos = elementStartPos;
+			if (lookupEntryPosition === null || (bestCluster && bestCluster.elementStartPos >= lookupEntryPosition)) {
 				break;
 			}
 
-			if (
-				!elementHeader
-				|| (!LEVEL_1_EBML_IDS.includes(elementHeader.id) && elementHeader.id !== EBMLId.Void)
-			) {
-				// There's an element here that shouldn't be here. Might be garbage. In this case, let's
-				// try and resync to the next valid element.
-				const nextPos = await resync(
-					demuxer.reader,
-					elementStartPos + 1,
-					LEVEL_1_EBML_IDS,
-					Math.min(segment.elementEndPos ?? Infinity, elementStartPos + MAX_RESYNC_LENGTH),
-				);
-
-				if (nextPos) {
-					currentPos = nextPos;
-					continue;
-				} else {
-					break; // Resync failed
-				}
-			}
-
-			const id = elementHeader.id;
-			let size = elementHeader.size;
-			const dataStartPos = slice.filePos;
-
-			if (id === EBMLId.Cluster) {
-				currentCluster = await demuxer.readCluster(elementStartPos, segment);
-				// readCluster computes the proper size even if it's undefined in the header, so let's use that instead
-				size = currentCluster.elementEndPos - dataStartPos;
-
-				const { blockIndex, correctBlockFound } = getMatchInCluster(currentCluster);
-				if (correctBlockFound) {
-					return this.fetchPacketInCluster(currentCluster, blockIndex, options);
-				}
-
-				if (blockIndex !== -1) {
-					bestCluster = currentCluster;
-					bestBlockIndex = blockIndex;
-				}
-			}
-
-			if (size === undefined) {
-				// Undefined element size (can happen in livestreamed files). In this case, we need to do some
-				// searching to determine the actual size of the element.
-
-				assert(id !== EBMLId.Cluster); // Undefined cluster sizes are fixed further up
-
-				// Search for the next element at level 0 or 1
-				const nextElementPos = await searchForNextElementId(
-					demuxer.reader,
-					dataStartPos,
-					LEVEL_0_AND_1_EBML_IDS,
-					segment.elementEndPos,
-				);
-
-				size = nextElementPos.pos - dataStartPos;
-			}
-
-			currentPos = dataStartPos + size;
-		}
-
-		// Handle unsatisfactoy cue points or position cache entries
-		if (lookupEntryPosition !== null && (!bestCluster || bestCluster.elementStartPos < lookupEntryPosition)) {
 			// We found a lookup entry but no cluster from there on that satisfied the match. In this case, let's search
-			// again but using a previous entry of the kind we started from. Each time this happens, we double the
-			// backwards step to perform better (and have more sequential reads) if it takes us a long time to find
-			// the media.
+			// again from the lookup entry preceding the clusters we just scanned.
 			//
 			// Note that this doesn't only kick for faulty cue points but also for multi-track files where only one
 			// track has cue points. Since we distribute the cue points to the track with none, they might not
 			// accurately reflect where media can be found.
-			const step = 1 << lookupRetryCount;
-			const previousEntryTimestamp = cuePointWins
-				? this.internalTrack.cuePoints[cuePointIndex - step]?.time
-				: this.internalTrack.clusterPositionCache[positionCacheIndex - step]?.startTimestamp;
-			const newSearchTimestamp = previousEntryTimestamp ?? -Infinity;
-
-			return this.performClusterLookup(
-				null,
-				getMatchInCluster,
-				newSearchTimestamp,
-				latestTimestamp,
-				options,
-				scanStartPos, // So we don't read the same clusters again
-				lookupRetryCount + 1,
-			);
+			stopPos = scanStartPos; // So we don't read the same clusters again
+			startCluster = null;
 		}
 
 		if (bestCluster) {

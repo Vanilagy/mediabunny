@@ -1,7 +1,7 @@
 {
   "name": "@mediabunny/truehd",
   "author": "Vanilagy",
-  "version": "1.65.1",
+  "version": "1.65.2",
   "description": "Dolby TrueHD decoder and encoder extension for Mediabunny, based on libavcodec.",
   "main": "./dist/bundles/mediabunny-truehd.mjs",
   "module": "./dist/bundles/mediabunny-truehd.mjs",
