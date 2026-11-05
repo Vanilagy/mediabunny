@@ -40,6 +40,8 @@ class MjpegDecoder extends CustomVideoDecoder {
 		const bitmap = await createImageBitmap(blob);
 		try {
 			const frame = new VideoFrame(bitmap, {
+				displayWidth: this.config.displayAspectWidth,
+				displayHeight: this.config.displayAspectHeight,
 				timestamp: packet.microsecondTimestamp,
 				duration: packet.microsecondDuration,
 			});
@@ -81,6 +83,7 @@ class MjpegEncoder extends CustomVideoEncoder {
 
 	init() {
 		assert(this.config.width && this.config.height);
+		assert(this.config.displayWidth && this.config.displayHeight);
 		this.framerate = this.config.framerate;
 		if (this.config.bitrate !== undefined && this.framerate !== undefined) {
 			this.targetSize = this.config.bitrate / (8 * this.framerate);
@@ -90,6 +93,8 @@ class MjpegEncoder extends CustomVideoEncoder {
 				codec: 'jpeg',
 				codedWidth: this.config.width,
 				codedHeight: this.config.height,
+				displayAspectWidth: this.config.displayWidth,
+				displayAspectHeight: this.config.displayHeight,
 			},
 		};
 		this.canvas = new OffscreenCanvas(this.config.width, this.config.height);
