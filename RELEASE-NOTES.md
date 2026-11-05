@@ -68,9 +68,9 @@
 - Fixed MPEG-TS packets without a successor ignoring the codec's frame duration (a lone AAC packet had a duration of 0)
 - Fixed the last key packet of intra-only AVC in MPEG-TS having a duration of 0
 - Fixed negative MPEG-TS timestamps following a positive first timestamp being read as about 95443 seconds
-- Ogg muxer now writes streams that begin before the codec's usual start instead of shifting them forward: Opus gets a larger pre-skip (up to 65535 samples), and Vorbis signals start trimming through the first page's granule position. Packets too far before the start to be represented are dropped with a warning.
+- Ogg muxer now writes streams that begin before the codec's usual start instead of shifting them forward. Packets too far before the start to be represented are dropped with a warning.
 - `OggOutputFormat.negativeTimestampSupport` is now `'prefer-non-negative'`, allowing forced copy conversions with trims into Ogg
-- Added support for reading Ogg start trimming signaled through the first page's granule position, as written by `ffmpeg -ss -c copy`
+- Added support for reading Ogg start trimming, as written by `ffmpeg -ss -c copy`
 - Removed end trimming from Ogg reading and writing, as packet durations can't properly signal it
 - Ogg demuxer now throws for empty packets in the middle of a stream, which no supported codec allows (the empty final packet VLC writes is still supported)
 - Fixed the Vorbis comment header in Ogg output lacking its framing bit, making libvorbis reject the files
@@ -84,7 +84,7 @@
 - Fixed the Ogg MIME type reading `codecs=""` for streams without known codecs
 - FLAC muxer now supports total sample counts of 2^32 and above
 - FLAC muxer now throws for PICTURE and Vorbis comment blocks larger than 16 MiB instead of writing broken block lengths
-- Fixed FLAC frames that code their sample rate in kHz being misread, which left files at 12 or 64 kHz without any packets
+- Fixed FLAC files at 12 or 64 kHz having no packets
 - Fixed FLAC total sample counts of 2^32 and above being misread
 - Fixed FLAC frame sample numbers of 2^31 and above being misread
 - Fixed concurrent `getFirstPacket()` calls on FLAC files corrupting the packet index
@@ -93,18 +93,24 @@
 - Fixed single-frame FLAC output having a minimum block size of 0, which FFmpeg rejects
 - Fixed the FLAC muxer hanging on `finalize()` after `start()` threw
 - Added validation for `FlacOutputFormatOptions.onFrame`
-- Added `WavOutputFormatOptions.appendOnly` for writing WAVE files in an append-only fashion, also for RF64
-- Fixed reading WAVE files whose header overstates the data size from unsized sources (such as FFmpeg's pipe output), which dropped the end of the audio, made `computeDuration()` throw, and gave a wrong duration once the file size became known
+- Added `WavOutputFormatOptions.appendOnly` for writing WAVE files in an append-only fashion
+- Fixed reading WAVE files whose header overstates the data size from unsized sources, such as FFmpeg's pipe output
 - Fixed chunks following the data chunk in RF64 files, such as metadata, not being read
 - Fixed WAVE `getPacket()` returning the previous packet when given a packet's exact timestamp
 - Fixed RIFF INFO years being read in local time instead of UTC
 - Fixed the WAVE muxer not padding odd-sized data chunks
 - Fixed the WAVE muxer hanging on `finalize()` after `start()` threw
-- Added support for VBRI headers in MP3 files, which are now used for the frame count instead of being read as audio
+- Added support for VBRI headers in MP3 files
 - Fixed the Xing/Info frame count of MP3 output including the Xing frame itself, making every file one frame too long
 - Fixed the Xing frame of MP3 output claiming a CRC it didn't have
 - MP3 muxer no longer writes a Xing frame for Layer I and II audio, where decoders would play it as audio
 - Fixed MP3 frame headers with a reserved MPEG version or sample rate index being accepted, causing false syncs
 - Fixed trailing ID3v1 and APEv2 tags counting toward the estimated duration of CBR MP3 files
 - Fixed the MP3 muxer hanging on `finalize()` after `start()` threw
+- Added support for AAC with a program config element (channel configuration 0) in ADTS and MPEG-TS
+- ADTS muxer now throws for AAC configurations that ADTS can't represent instead of writing corrupt headers
+- Fixed ADTS reading stopping at ID3v2 tags between frames
+- ADTS and MP3 streams now end with a warning where the sample rate changes, since a track can only have one sample rate
+- Added detection of ADTS and MP3 files holding just a single frame
+- Fixed the ADTS muxer hanging on `finalize()` after `start()` threw
 - `InputTrack.id` is now the track's 1-based index in `getTracks()` for every format, making it unique in multi-segment Matroska files. Previously, it was the container's own track ID (such as the MPEG-TS PID or the Ogg serial number).

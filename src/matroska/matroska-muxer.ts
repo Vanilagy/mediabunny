@@ -54,7 +54,11 @@ import {
 	parseSubtitleTimestamp,
 } from '../subtitles';
 import {
-	buildAacAudioSpecificConfigFromAdts,
+	aacChannelMap,
+	aacFrequencyTable,
+	AacProgramConfigElement,
+	buildAacAudioSpecificConfig,
+	getAacProgramConfigElementChannelCount,
 	parseAacAudioSpecificConfig,
 	readAdtsProgramConfigElement,
 } from '../../shared/aac-misc';
@@ -948,21 +952,32 @@ export class MatroskaMuxer extends Muxer {
 				);
 			}
 
-			let programConfigElement: Uint8Array | null = null;
+			let numberOfChannels: number;
+			let programConfigElement: AacProgramConfigElement | null = null;
 			if (adtsFrame.channelConfiguration === 0) {
 				// The channel layout is described by a PCE in the frame, which has to move into CodecPrivate
 				const headerSize = adtsFrame.crcCheck === null
 					? MIN_ADTS_FRAME_HEADER_SIZE
 					: MAX_ADTS_FRAME_HEADER_SIZE;
-				programConfigElement = readAdtsProgramConfigElement(packet.data.subarray(headerSize))?.data ?? null;
-				if (!programConfigElement) {
+				const result = readAdtsProgramConfigElement(packet.data.subarray(headerSize));
+				if (!result) {
 					throw new Error(
 						'ADTS frames with channel configuration 0 must begin with a program config element.',
 					);
 				}
+
+				programConfigElement = result.programConfigElement;
+				numberOfChannels = getAacProgramConfigElementChannelCount(programConfigElement);
+			} else {
+				numberOfChannels = aacChannelMap[adtsFrame.channelConfiguration]!;
 			}
 
-			decoderConfig.description = buildAacAudioSpecificConfigFromAdts(adtsFrame, programConfigElement);
+			decoderConfig.description = buildAacAudioSpecificConfig({
+				objectType: adtsFrame.objectType,
+				outputSampleRate: aacFrequencyTable[adtsFrame.samplingFrequencyIndex]!,
+				outputNumberOfChannels: numberOfChannels,
+				programConfigElement,
+			});
 			requiresAdtsStripping = true;
 		}
 

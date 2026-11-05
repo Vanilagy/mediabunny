@@ -32,6 +32,7 @@ import {
 	getMp3ChannelCount,
 	MP3_DECODER_DELAY,
 	MP3_FRAME_HEADER_SIZE,
+	readMp3FrameHeader,
 	VBRI,
 } from '../../shared/mp3-misc';
 import {
@@ -42,6 +43,7 @@ import {
 	readId3V2Header,
 } from '../id3';
 import { readNextMp3FrameHeader } from './mp3-reader';
+import { Logging } from '../logging';
 import { readAscii, readBytes, Reader, readU16Be, readU32Be, readU32Le } from '../reader';
 
 const APE_TAG_FOOTER_SIZE = 32;
@@ -132,6 +134,30 @@ export class Mp3Demuxer extends Demuxer {
 			this.reader.fileSize,
 			this.firstFrameHeader,
 		);
+
+		if (this.firstFrameHeader && (!result || result.startPos > this.lastLoadedPos + 1)) {
+			// No matching frame follows where the previous one ended. If that's because the frame there has a different
+			// sample rate, the stream ends here, since a track can only have one sample rate.
+			let slice = this.reader.requestSlice(this.lastLoadedPos, MP3_FRAME_HEADER_SIZE + 1);
+			if (isThenable(slice)) slice = await slice;
+
+			if (slice) {
+				for (let i = 0; i < 2; i++) {
+					slice.filePos = this.lastLoadedPos + i;
+					const { header } = readMp3FrameHeader(readU32Be(slice), null);
+
+					if (header && header.sampleRate !== this.firstFrameHeader.sampleRate) {
+						Logging._warn(
+							`The sample rate changes mid-stream (from ${this.firstFrameHeader.sampleRate} Hz to`
+							+ ` ${header.sampleRate} Hz), which isn't properly supported or handled by Mediabunny.`,
+						);
+						this.lastSampleLoaded = true;
+						return;
+					}
+				}
+			}
+		}
+
 		if (!result) {
 			this.lastSampleLoaded = true;
 			return;

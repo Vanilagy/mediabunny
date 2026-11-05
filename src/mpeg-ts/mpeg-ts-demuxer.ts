@@ -9,7 +9,12 @@
 import { TrackType } from '../output';
 import { SAMPLES_PER_AAC_FRAME } from '../adts/adts-demuxer';
 import { MAX_ADTS_FRAME_HEADER_SIZE, MIN_ADTS_FRAME_HEADER_SIZE, readAdtsFrameHeader } from '../adts/adts-reader';
-import { aacChannelMap, aacFrequencyTable, readAdtsProgramConfigElement } from '../../shared/aac-misc';
+import {
+	aacChannelMap,
+	aacFrequencyTable,
+	getAacProgramConfigElementChannelCount,
+	readAdtsProgramConfigElement,
+} from '../../shared/aac-misc';
 import {
 	AacCodecInfo,
 	AudioCodec,
@@ -742,17 +747,18 @@ export class MpegTsDemuxer extends Demuxer {
 									const headerSize = header.crcCheck === null
 										? MIN_ADTS_FRAME_HEADER_SIZE
 										: MAX_ADTS_FRAME_HEADER_SIZE;
-									const programConfigElement = readAdtsProgramConfigElement(
+									const result = readAdtsProgramConfigElement(
 										context.suppliedPacket.data.subarray(headerSize, header.frameLength),
 									);
-									if (!programConfigElement) {
+									if (!result) {
 										throw new Error(
 											'Invalid AAC audio stream; ADTS frames with channel configuration 0 must'
 											+ ' begin with a program config element.',
 										);
 									}
 
-									elementaryStream.info.numberOfChannels = programConfigElement.numberOfChannels;
+									elementaryStream.info.numberOfChannels
+										= getAacProgramConfigElementChannelCount(result.programConfigElement);
 								} else {
 									elementaryStream.info.numberOfChannels
 										= aacChannelMap[header.channelConfiguration]!;

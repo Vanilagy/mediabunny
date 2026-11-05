@@ -6,7 +6,12 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { aacChannelMap, aacFrequencyTable, readAdtsProgramConfigElement } from '../../shared/aac-misc';
+import {
+	aacChannelMap,
+	aacFrequencyTable,
+	getAacProgramConfigElementChannelCount,
+	readAdtsProgramConfigElement,
+} from '../../shared/aac-misc';
 import { AudioCodec } from '../codec';
 import { Demuxer } from '../demuxer';
 import {
@@ -28,6 +33,7 @@ import {
 } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readBytes, Reader } from '../reader';
+import { Logging } from '../logging';
 import {
 	AdtsFrameHeader,
 	MIN_ADTS_FRAME_HEADER_SIZE,
@@ -59,8 +65,6 @@ export class AdtsDemuxer extends Demuxer {
 	lastSampleLoaded = false;
 	lastLoadedPos = 0;
 	nextTimestampInSamples = 0;
-	nextTimestampSampleRate: number | null = null;
-	nextTimestampOffset = 0;
 
 	constructor(input: Input) {
 		super(input);
@@ -88,16 +92,15 @@ export class AdtsDemuxer extends Demuxer {
 					throw new Error('Invalid ADTS file: the first frame is cut off.');
 				}
 
-				const programConfigElement = readAdtsProgramConfigElement(
-					readBytes(slice, header.frameLength - headerSize),
-				);
-				if (!programConfigElement) {
+				const result = readAdtsProgramConfigElement(readBytes(slice, header.frameLength - headerSize));
+				if (!result) {
 					throw new Error(
-						'Invalid ADTS file: frames with channel configuration 0 must begin with a program config element.',
+						'Invalid ADTS file: frames with channel configuration 0 must begin with a program config'
+						+ ' element.',
 					);
 				}
 
-				this.numberOfChannels = programConfigElement.numberOfChannels;
+				this.numberOfChannels = getAacProgramConfigElementChannelCount(result.programConfigElement);
 			} else {
 				this.numberOfChannels = aacChannelMap[header.channelConfiguration]!;
 			}
@@ -151,24 +154,23 @@ export class AdtsDemuxer extends Demuxer {
 				this.firstFrameHeader = header;
 			}
 
-			const sampleRate = aacFrequencyTable[header.samplingFrequencyIndex];
+			const sampleRate = aacFrequencyTable[this.firstFrameHeader.samplingFrequencyIndex];
 			assert(sampleRate !== undefined);
-			const sampleDuration = SAMPLES_PER_AAC_FRAME / sampleRate;
 
-			if (sampleRate !== this.nextTimestampSampleRate) {
-				// The sample rate changed (like in concatenated files), so let's continue counting samples in the new
-				// one from where the old one left off
-				if (this.nextTimestampSampleRate !== null) {
-					this.nextTimestampOffset += this.nextTimestampInSamples / this.nextTimestampSampleRate;
-				}
-
-				this.nextTimestampInSamples = 0;
-				this.nextTimestampSampleRate = sampleRate;
+			if (header.samplingFrequencyIndex !== this.firstFrameHeader.samplingFrequencyIndex) {
+				// Since a track can only have one sample rate, the stream ends here
+				Logging._warn(
+					`The sample rate changes mid-stream (from ${sampleRate} Hz to`
+					+ ` ${aacFrequencyTable[header.samplingFrequencyIndex]} Hz), which isn't properly supported or`
+					+ ` handled by Mediabunny.`,
+				);
+				this.lastSampleLoaded = true;
+				return;
 			}
 
 			const sample: Sample = {
-				timestamp: this.nextTimestampOffset + this.nextTimestampInSamples / sampleRate,
-				duration: sampleDuration,
+				timestamp: this.nextTimestampInSamples / sampleRate,
+				duration: SAMPLES_PER_AAC_FRAME / sampleRate,
 				dataStart: header.startPos,
 				dataSize: header.frameLength,
 			};

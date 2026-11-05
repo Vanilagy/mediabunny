@@ -23,7 +23,7 @@ import {
 import { MatroskaDemuxer } from './matroska/matroska-demuxer';
 import { Mp3Demuxer } from './mp3/mp3-demuxer';
 import { MP3_FRAME_HEADER_SIZE, getXingOffset, INFO, XING } from '../shared/mp3-misc';
-import { ID3_V2_HEADER_SIZE, readId3V2Header } from './id3';
+import { ID3_V1_TAG_SIZE, ID3_V2_HEADER_SIZE, readId3V2Header } from './id3';
 import { readNextMp3FrameHeader } from './mp3/mp3-reader';
 import { OggDemuxer } from './ogg/ogg-demuxer';
 import { WaveDemuxer } from './wave/wave-demuxer';
@@ -396,6 +396,18 @@ export class Mp3InputFormat extends InputFormat {
 		}
 
 		currentPos = firstResult.startPos + firstResult.header.totalSize;
+		if (currentPos === input._reader.fileSize) {
+			// The file holds exactly this one frame, so surely this is MP3
+			return true;
+		}
+		if (currentPos + ID3_V1_TAG_SIZE === input._reader.fileSize) {
+			// Check if the frame is followed exactly by an ID3v1 tag
+			let tagSlice = input._reader.requestSlice(currentPos, 3);
+			if (isThenable(tagSlice)) tagSlice = await tagSlice;
+			if (tagSlice && readAscii(tagSlice, 3) === 'TAG') {
+				return true;
+			}
+		}
 
 		// Fine, we found one frame header, but we're still not entirely sure this is MP3. Let's check if we can find
 		// another header right after it:
@@ -609,7 +621,7 @@ export class AdtsInputFormat extends InputFormat {
 
 		currentPos += firstHeader.frameLength;
 		if (currentPos === input._reader.fileSize) {
-			// The file holds just this one frame, so there's no second one to confirm it with
+			// The file holds exactly this one frame, so surely this is ADTS
 			return true;
 		}
 

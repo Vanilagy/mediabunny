@@ -1,9 +1,9 @@
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Input } from '../../src/input.js';
 import { BufferSource, FilePathSource } from '../../src/source.js';
-import { ALL_FORMATS } from '../../src/input-format.js';
+import { ALL_FORMATS, MP3 } from '../../src/input-format.js';
 import { Output } from '../../src/output.js';
 import { Mp3OutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
@@ -272,6 +272,57 @@ test('CBR duration with trailing tags', async () => {
 
 	expect(await track.getDurationFromMetadata()).toBe(10 * 576 / 22050);
 });
+
+test('Sample rate change between frames', async () => {
+	const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+	const frames = Array.from({ length: 15 }, (_, i) => {
+		const is48kHz = i >= 5 && i < 10;
+		const frame = new Uint8Array(is48kHz ? 384 : FRAME_SIZE);
+		frame.set(is48kHz ? [0xff, 0xfb, 0x94, 0x64] : FRAME_HEADER);
+		return frame;
+	});
+
+	using input = new Input({
+		source: new BufferSource(concat(...frames)),
+		formats: ALL_FORMATS,
+	});
+	const track = (await input.getPrimaryAudioTrack())!;
+
+	const timestamps: number[] = [];
+	for await (const packet of new EncodedPacketSink(track).packets()) {
+		timestamps.push(packet.timestamp);
+	}
+
+	expect(timestamps).toEqual(Array.from({ length: 5 }, (_, i) => 1152 * i / 44100));
+	expect(warnSpy).toHaveBeenCalledTimes(1);
+});
+
+test('Single frame', async () => {
+	await testSingleFrame(new Uint8Array(0));
+});
+
+test('Single frame with an ID3v1 tag', async () => {
+	const id3V1Tag = new Uint8Array(128);
+	id3V1Tag.set(textEncoder.encode('TAG'));
+
+	await testSingleFrame(id3V1Tag);
+});
+
+const testSingleFrame = async (trailingData: Uint8Array) => {
+	const frame = new Uint8Array(FRAME_SIZE);
+	frame.set(FRAME_HEADER);
+
+	using input = new Input({
+		source: new BufferSource(concat(frame, trailingData)),
+		formats: ALL_FORMATS,
+	});
+
+	expect(await input.getFormat()).toBe(MP3);
+
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+	expect(await track.computePacketStats()).toMatchObject({ packetCount: 1 });
+};
 
 const createApeTagHeaderOrFooter = (isHeader: boolean, itemsSize: number) => {
 	const bytes = new Uint8Array(32);

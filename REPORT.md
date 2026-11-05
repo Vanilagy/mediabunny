@@ -292,33 +292,36 @@ Behavior changes worth a look are marked **[behavior change]**.
 ✅ Trailing ID3v1 and APEv2 tags counted toward the CBR duration estimate. Fix: subtract them (the APE tag with its
   header, if flagged) from the audio end before estimating.
 
-### ADTS / AAC
+### ADTS / AAC ✅
 
-- Output with channel configuration 0 (a PCE, e.g. FFmpeg's default 5.1(side)) was undecodable; the PCE is now
-  carried in the ADTS headers. Fix: `parseAacAudioSpecificConfig` extracts the PCE from the AudioSpecificConfig
-  and re-encodes it as a raw data block element (`readProgramConfigElement`, comment field dropped);
-  `buildAdtsHeaderTemplate` appends it to every frame's header so decoding can start anywhere.
-- ADTS with channel configuration 0 couldn't be read at all, not even our own output from the fix above (ADTS
+✅ Output with channel configuration 0 (a PCE, e.g. FFmpeg's default 5.1(side)) was undecodable; the PCE is now
+  carried in the ADTS headers. Fix: the PCE is modeled as a parsed `AacProgramConfigElement` with a reader and a
+  writer (`readAacProgramConfigElement`/`writeAacProgramConfigElement`); `parseAacAudioSpecificConfig` parses it,
+  and `buildAdtsHeaderTemplate` writes it after an `ID_PCE` into every frame's header so decoding can start
+  anywhere.
+✅ ADTS with channel configuration 0 couldn't be read at all, not even our own output from the fix above (ADTS
   and MPEG-TS demuxers threw, and remuxing to MP4/MKV was impossible). Fix: `readAdtsFrameHeader` accepts
-  configuration 0; new `readAdtsProgramConfigElement` reads the PCE leading the raw data block, giving the
-  demuxers the channel count. The MP4/MKV muxers' ADTS-to-raw conversion moves the PCE into the description
-  (new `buildAacAudioSpecificConfigFromAdts`, like FFmpeg's aac_adtstoasc) and strips it from the packets.
-- Channel configurations > 7 silently produced corrupt headers. **[behavior change]** They now throw. Fix: throw in
+  configuration 0; `readAdtsProgramConfigElement` parses the PCE leading the raw data block, giving the demuxers
+  the channel count. The MP4/MKV muxers' ADTS-to-raw conversion passes the parsed PCE to
+  `buildAacAudioSpecificConfig`, like FFmpeg's aac_adtstoasc, and strips it from the packets.
+✅ Channel configurations > 7 silently produced corrupt headers. **[behavior change]** They now throw. Fix: throw in
   `buildAdtsHeaderTemplate`.
-- Object types outside 1-4 silently produced corrupt headers. **[behavior change]** They now throw. Fix: throw in
+✅ Object types outside 1-4 silently produced corrupt headers. **[behavior change]** They now throw. Fix: throw in
   `buildAdtsHeaderTemplate`.
-- Sampling frequency index 15 (explicit rate, written by our own config builder for non-table rates) and the
+✅ Sampling frequency index 15 (explicit rate, written by our own config builder for non-table rates) and the
   reserved indices 13/14 were written into ADTS headers. **[behavior change]** They now throw. Fix: throw in
   `buildAdtsHeaderTemplate`, as FFmpeg's adtsenc does.
-- 960-sample AAC frames were written as ordinary 1024-sample ADTS. **[behavior change]** They now throw. Fix: same
+✅ 960-sample AAC frames were written as ordinary 1024-sample ADTS. **[behavior change]** They now throw. Fix: same
   place, same FFmpeg rule.
-- A rejected first packet left the muxer half-initialized (and finalize wrote an empty file). Fix: set
+✅ A rejected first packet left the muxer half-initialized (and finalize wrote an empty file). Fix: set
   `inputIsAdts` only after the header template was built successfully.
-- The demuxer stopped at ID3v2 tags between frames. Fix: `advanceReader` loops; whenever no ADTS header is found,
+✅ The demuxer stopped at ID3v2 tags between frames. Fix: `advanceReader` loops; whenever no ADTS header is found,
   it tries to skip an ID3v2 tag at that position (not just at file start) and only ends the stream if there's none.
-- A mid-file sample-rate change (concatenated files) made the demuxer's timestamps jump back. Fix: when the rate
-  changes, the time so far is kept as an offset and sample counting restarts in the new rate.
-- Single-frame ADTS files weren't detected, since detection wants a second frame to confirm. Fix: a first frame
+✅ A mid-file sample-rate change (concatenated files) made the demuxer's timestamps jump back. **[behavior
+  change]** Fix: like MP3, the stream now ends where the sample rate changes, with a warning, since a track can
+  only have one sample rate. MP3 got the same warning, and now also ends there instead of skipping to later
+  frames that match the first rate again.
+✅ Single-frame ADTS files weren't detected, since detection wants a second frame to confirm. Fix: a first frame
   ending exactly at the end of the file is accepted.
 
 ### ID3 and metadata
@@ -930,7 +933,6 @@ The current behavior is arguably intended, or fixing it means picking between va
 - Ogg: chained links reusing a serial number cross into the next link. Reproduced with `cat b.opus a.opus` (a 1 s
   link, then a 3 s link, both serial 0): `computeDuration` gives 3 instead of 1, and `getPacket(0)` returns a packet
   of the second link. Sequential reading is fine. RFC 3533 forbids such files; support them or not?
-- ADTS: the PCE copied into the ADTS headers drops its comment field (harmless for decoding; keep it or not).
 - The MPEG-TS muxer writes no PCR and writes PAT/PMT only once (strict analyzers flag it).
 - The MPEG-TS muxer assigns PIDs by first-packet order, so in HLS the audio PID can change between segments.
 - Matroska Language is ISO 639-2/B, but `languageCode` is documented as /T and the muxer writes /T.
