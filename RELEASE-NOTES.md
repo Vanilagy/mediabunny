@@ -113,4 +113,22 @@
 - ADTS and MP3 streams now end with a warning where the sample rate changes, since a track can only have one sample rate
 - Added detection of ADTS and MP3 files holding just a single frame
 - Fixed the ADTS muxer hanging on `finalize()` after `start()` threw
+- ID3v2 `COMM` frames with a description (like iTunNORM) are no longer read as the comment
+- Added support for ID3v2.2 `TXX` frames
+- Fixed ID3v2.2 and ID3v2.3 tags with whole-tag unsynchronisation being misread
+- Fixed ID3v2.4 tags with non-synchsafe frame sizes (as written by iTunes) being misread
+- Fixed ID3v2 frames with a grouping identity or data length indicator being misread, which could lose all tags
+- Fixed ID3v2.3 tags with the footer flag set being misread
+- Fixed ID3v2.4 extended header sizes being misread
+- Fixed compressed ID3v2.2 tags being misread; they're now skipped with a warning
+- Fixed empty UTF-16 strings in ID3v2 being misread
+- Fixed ID3v2 cover art MIME types being decoded with the wrong text encoding
+- Fixed ID3v2.3 dates being misread, as the year (`TYER`) and day and month (`TDAT`) weren't combined
+- Fixed ID3v2.4 dates with a time being read in local time instead of UTC
+- Fixed ID3 years below 100 being misread or giving invalid dates
+- Fixed invalid ID3 years giving invalid dates
+- Fixed an ID3 BPM of 0 making conversions fail
+- Fixed ID3v2 lyrics and cover art with non-Latin-1 text being written with the wrong frame size
+- Fixed cover art being duplicated when converting MP3 to MP3
+- Added validation for `AttachedImage.name` and `AttachedImage.description`
 - `InputTrack.id` is now the track's 1-based index in `getTracks()` for every format, making it unique in multi-segment Matroska files. Previously, it was the container's own track ID (such as the MPEG-TS PID or the Ogg serial number).

@@ -306,14 +306,6 @@ export const metadataTagsAreEmpty = (tags: MetadataTags) => {
 		&& (tags.raw === undefined || Object.keys(tags.raw).length === 0);
 };
 
-export const createUtcDate = (year: number, monthIndex = 0, day = 1) => {
-	// Unlike Date.UTC or parsing a string, this takes years below 100 literally
-	const date = new Date(0);
-	date.setUTCFullYear(year, monthIndex, day);
-
-	return date;
-};
-
 /**
  * Specifies a track's disposition, i.e. information about its intended usage.
  * @public

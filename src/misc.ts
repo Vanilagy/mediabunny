@@ -1763,3 +1763,10 @@ export const isRecordStringString = (value: unknown): value is Record<string, st
 		&& Object.getPrototypeOf(value) === Object.prototype
 		&& Object.values(value).every(x => typeof x === 'string');
 };
+
+export const createUtcDate = (year: number, monthIndex = 0, day = 1) => {
+	const date = new Date(0);
+	date.setUTCFullYear(year, monthIndex, day);
+
+	return date;
+};

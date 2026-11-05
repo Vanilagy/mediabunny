@@ -324,52 +324,52 @@ Behavior changes worth a look are marked **[behavior change]**.
 ✅ Single-frame ADTS files weren't detected, since detection wants a second frame to confirm. Fix: a first frame
   ending exactly at the end of the file is accepted.
 
-### ID3 and metadata
+### ID3 and metadata ✅
 
-- ID3v2.3 whole-tag unsynchronisation did nothing. Fix: `ununsynchronizeAll` compared the 0xFF byte with itself
+✅ ID3v2.3 whole-tag unsynchronisation did nothing. Fix: `ununsynchronizeAll` compared the 0xFF byte with itself
   (`bytes[i]`) instead of the byte after it (`bytes[i + 1]`).
-- ID3v2.2 whole-tag unsynchronisation was ignored. Fix: apply it for `majorVersion <= 3` instead of only 3.
-- The iTunes non-synchsafe v2.4 frame size workaround was broken. Fix: `isSizeValid` measures the candidate size
+✅ ID3v2.2 whole-tag unsynchronisation was ignored. Fix: apply it for `majorVersion <= 3` instead of only 3.
+✅ The iTunes non-synchsafe v2.4 frame size workaround was broken. Fix: `isSizeValid` measures the candidate size
   from the frame header's end (`headerEndPos`) instead of the moving `this.pos`.
-- The v2.4 data length indicator wasn't skipped. Fix: skip its 4 bytes when the frame flag is set, before
+✅ The v2.4 data length indicator wasn't skipped. Fix: skip its 4 bytes when the frame flag is set, before
   ununsynchronizing and reading the frame.
-- Empty UTF-16 strings without BOM consumed 1 byte. Fix: a UTF-16 string starting with the 0x0000 terminator is
+✅ Empty UTF-16 strings without BOM consumed 1 byte. Fix: a UTF-16 string starting with the 0x0000 terminator is
   read as empty, consuming both bytes.
-- APIC MIME types were decoded with the frame encoding instead of ISO-8859-1. Fix: always read them as
+✅ APIC MIME types were decoded with the frame encoding instead of ISO-8859-1. Fix: always read them as
   ISO-8859-1.
-- **[behavior change]** COMM frames with a description (iTunNORM etc.) became `tags.comment`; now only
+✅ **[behavior change]** COMM frames with a description (iTunNORM etc.) became `tags.comment`; now only
   description-less COMM frames do. Fix: only set `tags.comment` when the description is empty.
-- TDAT was parsed as a full date (year 2304); TYER+TDAT are now combined. Fix: TYER/TYE and TDAT/TDA are collected
+✅ TDAT was parsed as a full date (year 2304); TYER+TDAT are now combined. Fix: TYER/TYE and TDAT/TDA are collected
   during frame parsing; after the loop, the year is combined with a valid DDMM from TDAT via `createUtcDate`.
-- Invalid TYER values stored an Invalid Date (a repo fixture failed conversion). Fix: the combined date is only
+✅ Invalid TYER values stored an Invalid Date (a repo fixture failed conversion). Fix: the combined date is only
   stored if it's valid.
-- ID3v1 years below 100 gave an Invalid Date. Fix: new `createUtcDate` helper (`setUTCFullYear` on a fresh Date),
+✅ ID3v1 years below 100 gave an Invalid Date. Fix: new `createUtcDate` helper (`setUTCFullYear` on a fresh Date),
   which takes years literally, instead of `new Date(String(year))`.
-- TYER years below 100 were mapped to 19xx/20xx. Fix: same `createUtcDate`.
-- TBPM "0" failed validation on conversion. Fix: only accept BPM values > 0.
-- Writer: USLT frame size used string length instead of UTF-8 bytes. Fix: use the UTF-8 byte length unless the
+✅ TYER years below 100 were mapped to 19xx/20xx. Fix: same `createUtcDate`.
+✅ TBPM "0" failed validation on conversion. Fix: only accept BPM values > 0.
+✅ Writer: USLT frame size used string length instead of UTF-8 bytes. Fix: use the UTF-8 byte length unless the
   text is ISO-8859-1-compatible.
-- Writer: cover art was duplicated on MP3 -> MP3 conversion. Fix: mark `APIC` as written after writing `images`,
+✅ Writer: cover art was duplicated on MP3 -> MP3 conversion. Fix: mark `APIC` as written after writing `images`,
   so the raw APIC frames aren't written again.
-- `validateMetadataTags` didn't type-check image name/description. Fix: add the string checks.
-- The v2.2 compression flag was treated as the extended header flag. Fix: a compressed v2.2 tag is skipped with
+✅ `validateMetadataTags` didn't type-check image name/description. Fix: add the string checks.
+✅ The v2.2 compression flag was treated as the extended header flag. Fix: a compressed v2.2 tag is skipped with
   a warning, since no compression scheme was ever defined for it.
-- The footer flag was honored in v2.3 (0x10 is undefined there), skipping 10 bytes into the audio. Fix: only
+✅ The footer flag was honored in v2.3 (0x10 is undefined there), skipping 10 bytes into the audio. Fix: only
   honor it for v2.4.
-- The grouping identity byte wasn't skipped, so the frame was misread ("Unsupported text encoding", which lost
+✅ The grouping identity byte wasn't skipped, so the frame was misread ("Unsupported text encoding", which lost
   all tags). Fix: skip it (v2.3 and v2.4) before the data length indicator.
-- v2.2 `TXX` wasn't parsed like `TXXX`. Fix: parse both the same way, each under its own raw key.
-- TDRC with a time was parsed as local time, and loose strings like "12" went through `new Date(string)`. Fix:
+✅ v2.2 `TXX` wasn't parsed like `TXXX`. Fix: parse both the same way, each under its own raw key.
+✅ TDRC with a time was parsed as local time, and loose strings like "12" went through `new Date(string)`. Fix:
   TDRC is matched against the ISO 8601 subset ID3v2.4 allows (yyyy up to yyyy-MM-ddTHH:mm:ss) and read as UTC;
   out-of-range fields are rejected. (The other formats' date fields are still open, see "Not fixed", 1.)
-- The synchsafe size workaround also ran on sizes with a byte >= 0x80, which can't be synchsafe (APIC was cut).
+✅ The synchsafe size workaround also ran on sizes with a byte >= 0x80, which can't be synchsafe (APIC was cut).
   Fix: such sizes are taken as plain integers.
-- A v2.4 extended header size was read as a plain u32. Fix: decode it as synchsafe.
-- A TDAT day past the end of its month (like 3102) rolled over into the next month. Fix: such a TDAT is ignored
+✅ A v2.4 extended header size was read as a plain u32. Fix: decode it as synchsafe.
+✅ A TDAT day past the end of its month (like 3102) rolled over into the next month. Fix: such a TDAT is ignored
   and only the year is used.
-- Writer: the APIC frame size used the MIME type's string length instead of its UTF-8 byte length. Fix: use the
+✅ Writer: the APIC frame size used the MIME type's string length instead of its UTF-8 byte length. Fix: use the
   byte length when the frame isn't ISO-8859-1.
-- Test fix: the metadata round-trip tests compared `readTags.date` with itself; they now check the written date.
+✅ Test fix: the metadata round-trip tests compared `readTags.date` with itself; they now check the written date.
 
 ### HLS reading
 

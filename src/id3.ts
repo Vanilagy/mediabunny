@@ -8,9 +8,10 @@
 
 import { decodeSynchsafe, encodeSynchsafe } from '../shared/mp3-misc';
 import { Logging } from './logging';
-import { createUtcDate, MetadataTags } from './metadata';
+import { MetadataTags } from './metadata';
 import {
 	coalesceIndex,
+	createUtcDate,
 	TextDecoder,
 	textDecoder,
 	textEncoder,
@@ -247,7 +248,6 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 			continue;
 		}
 
-		// These come in the order of their flags, and both precede the frame data
 		if (frameHasGroupingIdentity) {
 			reader.pos += 1;
 		}
@@ -389,7 +389,7 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 				const isoString = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
 				const date = new Date(`${isoString}Z`);
 
-				// Out-of-range fields, like a February 31, would otherwise roll over
+				// Out-of-range fields like a February 31 would otherwise roll over
 				if (!Number.isNaN(date.getTime()) && date.toISOString().startsWith(isoString)) {
 					tags.date ??= date;
 				}
@@ -436,9 +436,10 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 				reader.pos += 3; // Skip language
 				const description = reader.readId3V2Text(encoding, frameEndPos);
 
-				// Described comments are named entries (like iTunes' iTunNORM) rather than the actual comment
 				if (description === '') {
 					tags.comment ??= reader.readId3V2Text(encoding, frameEndPos);
+				} else {
+					// Described comments are named entries (like iTunes' iTunNORM) rather than the actual comment
 				}
 			}; break;
 
@@ -499,7 +500,7 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 			const day = Number(dayAndMonthMatch[1]);
 			const fullDate = createUtcDate(year, Number(dayAndMonthMatch[2]) - 1, day);
 
-			// Days past the end of the month (like 3102) would otherwise roll over into the next one
+			// Out-of-range fields like a February 31 would otherwise roll over
 			if (fullDate.getUTCDate() === day) {
 				date = fullDate;
 			}
@@ -526,11 +527,13 @@ export class Id3V2Reader {
 	}
 
 	ununsynchronizeAll() {
-		const newBytes: number[] = [];
+		// Removing bytes can only make it shorter
+		const newBytes = new Uint8Array(this.bytes.length);
+		let newLength = 0;
 
 		for (let i = 0; i < this.bytes.length; i++) {
 			const value1 = this.bytes[i]!;
-			newBytes.push(value1);
+			newBytes[newLength++] = value1;
 
 			if (value1 === 0xff && i !== this.bytes.length - 1) {
 				const value2 = this.bytes[i + 1]!;
@@ -540,8 +543,8 @@ export class Id3V2Reader {
 			}
 		}
 
-		this.bytes = new Uint8Array(newBytes);
-		this.view = new DataView(this.bytes.buffer);
+		this.bytes = newBytes.subarray(0, newLength);
+		this.view = toDataView(this.bytes);
 	}
 
 	ununsynchronizeRegion(start: number, end: number) {
@@ -628,7 +631,7 @@ export class Id3V2Reader {
 			}
 
 			const sizeRaw = this.readU32();
-			// A size with any high bit set can't be synchsafe, leaving only the plain interpretation
+			// A size with any high bit set isn't synchsafe, leaving only the plain interpretation
 			const canBeSynchsafe = (sizeRaw & 0x80808080) === 0;
 			let size = this.header.majorVersion === 4 && canBeSynchsafe
 				? decodeSynchsafe(sizeRaw)
@@ -1023,7 +1026,9 @@ export class Id3V2Writer {
 
 	writeId3V2LyricsFrame(lyrics: string) {
 		const useIso88591 = isIso88591Compatible(lyrics);
-		const textDataLength = useIso88591 ? lyrics.length : textEncoder.encode(lyrics).byteLength;
+		const textDataLength = useIso88591
+			? lyrics.length
+			: textEncoder.encode(lyrics).byteLength;
 		const shortDescription = '';
 		const frameSize = 1 + 3 + shortDescription.length + 1 + textDataLength + 1;
 

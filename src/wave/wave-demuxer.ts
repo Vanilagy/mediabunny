@@ -11,8 +11,15 @@ import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
-import { createUtcDate, DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
-import { assert, floorToMultiple, isThenable, roundIfAlmostInteger, UNDETERMINED_LANGUAGE } from '../misc';
+import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
+import {
+	assert,
+	createUtcDate,
+	floorToMultiple,
+	isThenable,
+	roundIfAlmostInteger,
+	UNDETERMINED_LANGUAGE,
+} from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import { readAscii, readBytes, Reader, readU16, readU32, readU64 } from '../reader';
 import { ID3_V2_HEADER_SIZE, parseId3V2Tag, readId3V2Header } from '../id3';
