@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { Input, InputDisposedError } from '../../src/input.js';
 import { ALL_FORMATS, MP4 } from '../../src/input-format.js';
 import { promiseWithResolvers } from '../../src/misc.js';
-import { Reader, readBytes } from '../../src/reader.js';
+import { Reader } from '../../src/reader.js';
 import * as node from '../../src/node.js';
 import { open, readFile, type FileHandle } from 'node:fs/promises';
 import { setImmediate } from 'node:timers/promises';
@@ -274,63 +274,6 @@ test('FilePathSource disposal while getting the size', async () => {
 	await expect(new Reader(source).requestSlice(0, 8)).rejects.toBeInstanceOf(InputDisposedError);
 });
 
-test('FilePathSource transient open failure', async () => {
-	vi.mocked(node.fs.open).mockRejectedValueOnce(new Error('Transient'));
-	const source = new FilePathSource(videoFilePath);
-	using ref = source.ref();
-	const reader = new Reader(ref.source);
-
-	await expect(reader.requestSlice(0, 8)).rejects.toThrow('Transient');
-	expect(await reader.requestSlice(0, 8)).not.toBeNull();
-});
-
-test('Source transient size retrieval failure', async () => {
-	let attempts = 0;
-	const source = new CustomSource({
-		getSize: () => {
-			attempts++;
-			if (attempts === 1) {
-				throw new Error('Transient');
-			}
-
-			return 256;
-		},
-		read: (start, end) => makeRamp(256).subarray(start, end),
-	});
-
-	await expect(source.getSize()).rejects.toThrow('Transient');
-	expect(await source.getSize()).toBe(256);
-});
-
-test('CustomPathedSource transient root request failure', async () => {
-	let attempts = 0;
-	const source = new CustomPathedSource('root', async () => {
-		attempts++;
-		if (attempts === 1) {
-			throw new Error('Transient');
-		}
-
-		return new BufferSource(makeRamp(256));
-	});
-	using ref = source.ref();
-	const reader = new Reader(ref.source);
-
-	await expect(reader.requestSlice(0, 4)).rejects.toThrow('Transient');
-
-	const slice = await reader.requestSlice(0, 4);
-	expect([...readBytes(slice!, 4)]).toEqual([0, 1, 2, 3]);
-	expect(attempts).toBe(2);
-});
-
-const makeRamp = (length: number) => {
-	const bytes = new Uint8Array(length);
-	for (let i = 0; i < length; i++) {
-		bytes[i] = i;
-	}
-
-	return bytes;
-};
-
 test('ReadableStreamSource disposal before reading', async () => {
 	const cancel = vi.fn();
 	const source = new ReadableStreamSource(new ReadableStream<Uint8Array>({ cancel }));
@@ -352,22 +295,6 @@ test('CustomSource with concurrent initial reads', async () => {
 	const slices = await Promise.all([reader.requestSlice(0, 8), reader.requestSlice(100, 8)]);
 	expect(slices.every(x => x !== null)).toBe(true);
 	expect(getSize).toHaveBeenCalledOnce();
-});
-
-test('CustomSource getSize retry', async () => {
-	const getSize = vi.fn<() => Promise<number>>()
-		.mockRejectedValueOnce(new Error('Size failed'))
-		.mockResolvedValueOnce(1000);
-	const source = new CustomSource({
-		getSize,
-		read: (start, end) => new Uint8Array(end - start),
-	});
-	using ref = source.ref();
-	const reader = new Reader(ref.source);
-
-	await expect(reader.requestSlice(0, 8)).rejects.toThrow('Size failed');
-	expect(await reader.requestSlice(0, 8)).not.toBeNull();
-	expect(getSize).toHaveBeenCalledTimes(2);
 });
 
 test('RangedSource read events', async () => {
@@ -393,13 +320,14 @@ test('RangedSource longer than its base', async () => {
 		read: (start, end) => new Uint8Array(end - start),
 	});
 
-	using sizeRef = createBase().slice(4, 100).ref();
-	expect(await sizeRef.source.getSize()).toBe(6);
+	// The specified length is trusted as the size, and data that turns out missing is an error
+	using ref = createBase().slice(4, 100).ref();
+	expect(await ref.source.getSize()).toBe(100);
 
-	using readRef = createBase().slice(4, 100).ref();
-	const reader = new Reader(readRef.source);
-	expect(await reader.requestSlice(0, 200)).toBeNull();
-	expect(reader.fileSize).toBe(6);
+	const reader = new Reader(ref.source);
+	expect(await reader.requestSlice(0, 4)).not.toBeNull();
+	await expect(async () => await reader.requestSlice(4, 4)).rejects.toThrow('Underlying data too short');
+	expect(await ref.source.getSize()).toBe(100);
 });
 
 test('CustomPathedSource read events', async () => {

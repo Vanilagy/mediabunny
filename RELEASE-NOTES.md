@@ -170,4 +170,18 @@
 - Fixed a disposed `Input` throwing an internal error instead of `InputDisposedError`
 - Fixed failed source reads being cached, so that later reads never retried
 - Fixed faulty LRU source cache eviction logic
+- `RangedSource` now always reports its specified length as its size, and throws when the underlying data is too short for it
+- Fixed several cases of reading near the end of a file hanging or failing
+- Fixed `FilePathSource`, `RangedSource` and `CustomPathedSource` not emitting `read` events
+- Fixed `UrlSource` with a `Range` header emitting `read` events at the wrong positions
+- Fixed `FilePathSource` leaking file handles in several cases
+- Fixed `FilePathSource` throwing an internal error instead of `InputDisposedError` when disposed while opening
+- Fixed `CustomSource` calling `getSize` once for every concurrent first read
+- Fixed `CustomSource` not cancelling streams returned by `read` that hold more data than requested
+- Fixed `ReadableStreamSource` not cancelling its stream when disposed before reading
+- Fixed `UrlSource` ignoring the headers of a `Request` passed as its URL
+- Fixed `UrlSource` with a relative URL throwing outside of a window when the server doesn't support range requests
+- Fixed `UrlSource` failing to read empty resources
+- Fixed `UrlSource` keeping requests running after errors
+- Fixed `UrlSource` error messages sometimes showing `[object Request]` instead of the URL
 - `InputTrack.id` is now the track's 1-based index in `getTracks()` for every format, making it unique in multi-segment Matroska files. Previously, it was the container's own track ID (such as the MPEG-TS PID or the Ogg serial number).

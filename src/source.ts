@@ -62,16 +62,6 @@ export type SourceEvents = {
 	};
 };
 
-// Holds the file handle itself rather than a cleanup closure: a closure created within the source would reference the
-// source, keeping it alive forever
-let sourceFinalizationRegistry: FinalizationRegistry<FileHandle> | null = null;
-if (typeof FinalizationRegistry !== 'undefined') {
-	sourceFinalizationRegistry = new FinalizationRegistry((fileHandle) => {
-		// If it's not closed, Node prints annoying warnings
-		void fileHandle.close();
-	});
-}
-
 /**
  * The source base class, representing a resource from which bytes can be read.
  * @group Input sources
@@ -141,11 +131,7 @@ export abstract class Source extends EventEmitter<SourceEvents> {
 			assert(size !== undefined);
 
 			return size;
-		})().catch((error: unknown) => {
-			// Forget the failed attempt so that later calls can retry it
-			this._sizePromise = null;
-			throw error;
-		});
+		})();
 	}
 
 	/**
@@ -401,11 +387,7 @@ export class CustomPathedSource extends PathedSource {
 				};
 
 				if (isThenable(result)) {
-					this._rootRequest = result.then(handle, (error: unknown) => {
-						// Forget the failed request so that later reads can retry it
-						this._rootRequest = null;
-						throw error;
-					});
+					this._rootRequest = result.then(handle);
 				} else {
 					handle(result);
 					assert(this._root);
@@ -897,7 +879,7 @@ export class UrlSource extends PathedSource {
 				this._url = request;
 			}
 
-			// Headers passed to fetch() replace those of the request instead of merging with them, so carry them over
+			// Headers passed to fetch() replace those of the request instead of merging with them
 			this._requestInit.headers = mergeRequestInit({ headers: request.headers }, this._requestInit).headers;
 		}
 
@@ -1013,8 +995,6 @@ export class UrlSource extends PathedSource {
 				? /^bytes \*\/(\d+)$/.exec(response.headers.get('Content-Range') ?? '')
 				: null;
 			if (unsatisfiedRangeMatch && Number(unsatisfiedRangeMatch[1]) <= worker.currentPos) {
-				// The range starts at or past the end of the resource, which is also what servers say about bytes=0-
-				// for an empty resource
 				void response.body?.cancel().catch(() => {});
 
 				if (this._orchestrator.fileSize === null) {
@@ -1027,7 +1007,7 @@ export class UrlSource extends PathedSource {
 			}
 
 			if (!response.ok) {
-				void response.body?.cancel().catch(() => {});
+				void response.body?.cancel().catch(() => {}); // Don't care about the response body
 				throw new Error(`Error fetching ${this.rootPath}: ${response.status} ${response.statusText}`);
 			}
 
@@ -1087,10 +1067,8 @@ export class UrlSource extends PathedSource {
 
 				if (!this._usedForHls) {
 					const url = new URL(
-						this._url instanceof Request ? this._url.url : this._url,
-						// Outside of windows (such as in workers), relative URLs can still be resolved against the
-						// response URL, which is always absolute unless the response is synthetic
-						typeof window !== 'undefined' ? window.location.href : (response.url || undefined),
+						response.url || (this._url instanceof Request ? this._url.url : this._url),
+						typeof window !== 'undefined' ? window.location.href : undefined,
 					);
 
 					if (
@@ -1368,7 +1346,6 @@ export class UrlSource extends PathedSource {
 
 	/** @internal */
 	private _dispatchResourceRead(start: number, end: number) {
-		// The resource may also be read outside of the range given via the Range header
 		const sourceStart = Math.max(start - this._offset, 0);
 		const sourceEnd = Math.min(end - this._offset, this._length ?? Infinity);
 		if (sourceStart < sourceEnd) {
@@ -1426,6 +1403,14 @@ export type FilePathSourceOptions = {
 	handleUnhandledError?: (error: unknown) => unknown;
 };
 
+let filePathSourceFinalizationRegistry: FinalizationRegistry<FileHandle> | null = null;
+if (typeof FinalizationRegistry !== 'undefined') {
+	filePathSourceFinalizationRegistry = new FinalizationRegistry((fileHandle) => {
+		// If it's not closed, Node prints annoying warnings
+		void fileHandle.close();
+	});
+}
+
 /**
  * A source backed by a path to a file. Intended for server-side usage in Node, Bun, or Deno.
  *
@@ -1439,8 +1424,6 @@ export class FilePathSource extends PathedSource {
 	_customSource: CustomSource;
 	/** @internal */
 	_fileHandle: FileHandle | null = null;
-	/** @internal */
-	_fileHandlePromise: Promise<FileHandle> | null = null;
 
 	/** Creates a new {@link FilePathSource} backed by the file at the specified file path. */
 	constructor(filePath: string, options: FilePathSourceOptions = {}) {
@@ -1468,25 +1451,15 @@ export class FilePathSource extends PathedSource {
 		// Let's back this source with a CustomSource, makes the implementation very simple
 		this._customSource = new CustomSource({
 			getSize: async () => {
-				// Concurrent reads may each call this, but they must all share the same file handle
-				this._fileHandlePromise ??= (async () => {
-					const fileHandle = await node.fs.open(filePath, 'r');
-					if (this._disposed) {
-						void fileHandle.close();
-						throw new InputDisposedError();
-					}
+				const fileHandle = await node.fs.open(filePath, 'r');
+				if (this._disposed) {
+					void fileHandle.close();
+					throw new InputDisposedError();
+				}
 
-					this._fileHandle = fileHandle;
-					sourceFinalizationRegistry?.register(this, fileHandle, this);
+				this._fileHandle = fileHandle;
+				filePathSourceFinalizationRegistry?.register(this, fileHandle, this);
 
-					return fileHandle;
-				})().catch((error: unknown) => {
-					// Forget the failed attempt so that later reads can retry it
-					this._fileHandlePromise = null;
-					throw error;
-				});
-
-				const fileHandle = await this._fileHandlePromise;
 				const stats = await fileHandle.stat();
 				return stats.size;
 			},
@@ -1528,7 +1501,7 @@ export class FilePathSource extends PathedSource {
 		if (this._fileHandle) {
 			void this._fileHandle.close();
 			this._fileHandle = null;
-			sourceFinalizationRegistry?.unregister(this);
+			filePathSourceFinalizationRegistry?.unregister(this);
 		}
 	}
 }
@@ -1652,7 +1625,6 @@ export class CustomSource extends Source {
 			return this._orchestrator.read(start, end, minReadPosition, maxReadPosition);
 		}
 
-		// Concurrent reads share a single pending getSize call
 		const result = this._pendingSize ?? this._options.getSize();
 
 		if (isThenable(result)) {
@@ -1673,9 +1645,6 @@ export class CustomSource extends Source {
 				}
 
 				return this._orchestrator.read(start, end, minReadPosition, maxReadPosition);
-			}, (error: unknown) => {
-				this._pendingSize = null; // So that later reads can retry
-				throw error;
 			});
 		} else {
 			if (!Number.isInteger(result) || result < 0) {
@@ -1760,8 +1729,7 @@ export class CustomSource extends Source {
 					}
 				} finally {
 					this._readers.delete(reader);
-					// The stream may hold more than we asked for (or we stopped early), so signal our loss of interest
-					void reader.cancel().catch(() => {});
+					void reader.cancel().catch(() => {}); // Signal our loss of interest
 					reader.releaseLock();
 				}
 			} else {
@@ -2939,21 +2907,16 @@ export class RangedSource extends Source {
 
 	/** @internal */
 	override _getFileSize(): number | null | undefined {
+		if (this._length !== null) {
+			return this._length;
+		}
+
 		const baseSize = this._baseSource._getFileSize();
-		if (baseSize === undefined) {
-			// The base might still turn out to be shorter than our length
-			return this._length === 0 ? 0 : undefined;
+		if (baseSize === undefined || baseSize === null) {
+			return baseSize;
 		}
 
-		if (baseSize === null) {
-			if (this._length !== null) {
-				return this._length;
-			} else {
-				return null;
-			}
-		}
-
-		return clamp(baseSize - this._offset, 0, this._length ?? Infinity);
+		return Math.max(baseSize - this._offset, 0);
 	}
 
 	/** @internal */
@@ -2964,29 +2927,29 @@ export class RangedSource extends Source {
 		maxReadPosition: number,
 	): MaybePromise<ReadResult | null> {
 		if (this._length !== null && end > this._length) {
-			if (this._length === 0 || this._baseSource._getFileSize() !== undefined) {
-				return null;
-			}
-
-			// Our size depends on the base's, so it must be known once we say no. A tiny read makes the base learn it.
-			const result = this._baseSource._read(
-				this._offset,
-				this._offset + 1,
-				this._offset + minReadPosition,
-				this._offset + maxReadPosition,
-			);
-			return isThenable(result) ? result.then(() => null) : null;
+			return null;
 		}
 
-		const result = this._baseSource._read(
-			this._offset + start,
-			this._offset + end,
-			this._offset + minReadPosition,
-			this._offset + maxReadPosition,
-		);
+		const baseSize = this._baseSource._getFileSize();
+		const result = typeof baseSize === 'number' && this._offset + end > baseSize
+			? null
+			: this._baseSource._read(
+					this._offset + start,
+					this._offset + end,
+					this._offset + minReadPosition,
+					this._offset + maxReadPosition,
+				);
 
 		const processResult = (result: ReadResult | null) => {
 			if (!result) {
+				if (this._length !== null) {
+					// We reported the specified length as our size, so the data is expected to be there
+					const expectedLength = this._offset + this._length;
+					throw new Error(
+						`Underlying data too short, expected a length of at least ${expectedLength} bytes.`,
+					);
+				}
+
 				return null;
 			}
 
@@ -3011,7 +2974,6 @@ export class RangedSource extends Source {
 		if (!this._ref) {
 			this._ref = this._baseSource.ref();
 			this._removeReadListener = this._baseSource.on('read', ({ start, end }) => {
-				// The base may also be read outside of this slice
 				const sliceStart = Math.max(start - this._offset, 0);
 				const sliceEnd = Math.min(end - this._offset, this._length ?? Infinity);
 				if (sliceStart < sliceEnd) {

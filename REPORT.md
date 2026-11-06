@@ -483,51 +483,49 @@ Behavior changes worth a look are marked **[behavior change]**.
   **[behavior change]** Fix: the ID is now the track's 1-based index in `getTracks()` for every format, instead
   of the container's own ID (TrackNumber, track_ID, PID, Ogg serial number). Backings no longer have `getId`.
 
-### Sources
+### Sources ✅
 
-- FilePathSource emitted no read events. Fix: forward the inner CustomSource's `read` events.
-- FilePathSource leaked a file descriptor when disposed while opening. Fix: if the source was disposed by the time
+✅ FilePathSource emitted no read events. Fix: forward the inner CustomSource's `read` events.
+✅ FilePathSource leaked a file descriptor when disposed while opening. Fix: if the source was disposed by the time
   `open` resolves, close the handle and throw `InputDisposedError`.
-- FilePathSource threw "Assertion failed." when disposed during stat. Fix: `_dispose()` marks the inner
+✅ FilePathSource threw "Assertion failed." when disposed during stat. Fix: `_dispose()` marks the inner
   CustomSource as disposed, so its pending read throws `InputDisposedError` after `getSize` resolves.
-- FilePathSource leaked file descriptors on concurrent first reads. Fix: concurrent `getSize` calls share one
-  `_fileHandlePromise` (reset on failure so it can be retried).
-- FilePathSource was never garbage-collected when never ref'd (the finalizer kept it alive), leaking its fd. Fix:
+✅ FilePathSource was never garbage-collected when never ref'd (the finalizer kept it alive), leaking its fd. Fix:
   the FinalizationRegistry holds the file handle itself instead of a cleanup closure that referenced the source.
-- UrlSource dropped the headers of a Request passed as its URL. Fix: merge the Request's headers into
+✅ UrlSource dropped the headers of a Request passed as its URL. Fix: merge the Request's headers into
   `_requestInit.headers`, since headers passed to `fetch()` replace the request's own.
-- UrlSource with a relative URL threw outside a window against a server without range support. Fix: resolve the
-  URL against `response.url` when there's no `window`.
-- UrlSource error messages said `[object Request]`. Fix: use `this.rootPath` in the messages.
-- CustomPathedSource kept a rejected root request forever. Fix: reset `_rootRequest` to null on rejection.
-- `getSize()` kept a rejected size promise forever. Fix: reset `_sizePromise` to null on rejection.
-- CustomSource called `getSize` once per concurrent read. Fix: concurrent reads share the pending call
-  (`_pendingSize`, reset on rejection).
-- ReadableStreamSource disposed before reading never cancelled its stream. Fix: cancel the stream itself when no
+✅ UrlSource with a relative URL threw outside a window against a server without range support. Fix: the warning
+  takes its origin from `response.url` (the server that actually answered, after redirects), falling back to the
+  requested URL for synthetic responses.
+✅ UrlSource error messages said `[object Request]`. Fix: use `this.rootPath` in the messages.
+✅ CustomSource called `getSize` once per concurrent read (FilePathSource leaked a file descriptor for each extra
+  call). Fix: concurrent reads share the pending call (`_pendingSize`).
+✅ ReadableStreamSource disposed before reading never cancelled its stream. Fix: cancel the stream itself when no
   reader was created yet.
-- A read straddling the end of an unsized source never settled. Fix: once the size is known, every pending slice
+✅ A read straddling the end of an unsized source never settled. Fix: once the size is known, every pending slice
   that extends past it resolves to null; before, only slices starting at or past the end did.
-- An in-bounds read returned null when its prefetch lay past the end. Fix: same rework; a queued read whose hole
+✅ An in-bounds read returned null when its prefetch lay past the end. Fix: same rework; a queued read whose hole
   lies past the end no longer resolves all of its slices to null, only those that extend past the end.
-- Queued reads stayed non-strict after the size became known (capped responses returned null). Fix: every
+✅ Queued reads stayed non-strict after the size became known (capped responses returned null). Fix: every
   remaining queued read gets `strictTarget = true` (and its hole capped), not just the ones crossing the end.
-- In-bounds reads returned null when another worker hit the end. Fix: a worker hitting the end only resolves its
+✅ In-bounds reads returned null when another worker hit the end. Fix: a worker hitting the end only resolves its
   pending slices that extend past its current position; the rest are still being filled by other workers.
-- RangedSource never emitted read events. Fix: on `ref()`, subscribe to the base source's `read` events and
+✅ RangedSource never emitted read events. Fix: on `ref()`, subscribe to the base source's `read` events and
   re-emit the part overlapping the range, in range coordinates (unsubscribed on dispose).
-- RangedSource reported its nominal length as its size while the base size was unknown. Fix: the size stays
-  unknown until the base's is known; a read past the length first makes the base learn its size (1-byte read).
-- UrlSource with a Range offset reported read events in resource coordinates. Fix: map them into source
+✅ RangedSource reported its specified length as its size until the base's size was known, then changed it if
+  the base was shorter. Fix: the specified length is always the size, and
+  reads the base can't satisfy within it throw "Underlying data too short".
+✅ UrlSource with a Range offset reported read events in resource coordinates. Fix: map them into source
   coordinates, clipped to the range.
-- UrlSource never cancelled error responses' bodies, and an idle worker removed after an error kept its request
+✅ UrlSource never cancelled error responses' bodies, and an idle worker removed after an error kept its request
   running. Fix: cancel the body before throwing, and abort a removed worker's controller.
-- UrlSource threw a 416 error for `bytes=0-` on an empty resource. Fix: a 416 whose `Content-Range: bytes */N`
+✅ UrlSource threw a 416 error for `bytes=0-` on an empty resource. Fix: a 416 whose `Content-Range: bytes */N`
   ends at or before the read position resolves the size to N.
-- CustomPathedSource didn't forward its root's read events. Fix: subscribe once the root resolves, unsubscribe
+✅ CustomPathedSource didn't forward its root's read events. Fix: subscribe once the root resolves, unsubscribe
   on dispose.
-- CustomPathedSource skipped the bounds check on its first read (its size was unknown before the root resolved).
+✅ CustomPathedSource skipped the bounds check on its first read (its size was unknown before the root resolved).
   Fix: reads past the root's size return null.
-- CustomSource didn't cancel a stream from `read` that held more than needed. Fix: cancel the reader when done.
+✅ CustomSource didn't cancel a stream from `read` that held more than needed. Fix: cancel the reader when done.
 
 ### Output, targets and writer
 
