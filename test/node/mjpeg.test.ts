@@ -1,4 +1,4 @@
-import { expect, test } from 'vitest';
+import { beforeAll, expect, test } from 'vitest';
 import { Input } from '../../src/input.js';
 import { BufferSource, FilePathSource } from '../../src/source.js';
 import { ALL_FORMATS, MATROSKA } from '../../src/input-format.js';
@@ -8,6 +8,7 @@ import { EncodedPacketSink } from '../../src/media-sink.js';
 import { BufferTarget } from '../../src/target.js';
 import { Conversion } from '../../src/conversion.js';
 import path from 'path';
+import { registerMediabunnyServer } from '@mediabunny/server';
 
 // From test/public: ffmpeg -i demo.mp4 -map 0:v:0 -c:v mjpeg -q:v 3 -pix_fmt yuvj420p mjpeg.mov
 const movFilePath = path.join(__dirname, '..', 'public/mjpeg.mov');
@@ -15,6 +16,10 @@ const movFilePath = path.join(__dirname, '..', 'public/mjpeg.mov');
 const mp4FilePath = path.join(__dirname, '..', 'public/mjpeg.mp4');
 // From test/public: ffmpeg -i demo.mp4 -map 0:v:0 -c:v mjpeg -q:v 3 -pix_fmt yuvj420p mjpeg.mkv
 const mkvFilePath = path.join(__dirname, '../public/mjpeg.mkv');
+
+beforeAll(() => {
+	registerMediabunnyServer();
+});
 
 test.concurrent('reading FFmpeg MJPEG in an mp4v sample entry', async () => {
 	using input = new Input({
@@ -86,6 +91,7 @@ test.concurrent('transcoding to mjpeg', { timeout: 20_000 }, async () => {
 		output,
 		video: {
 			codec: 'mjpeg',
+			forceTranscode: true,
 		},
 	});
 	await conversion.execute();
