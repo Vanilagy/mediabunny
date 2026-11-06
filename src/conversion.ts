@@ -1990,14 +1990,16 @@ export class Conversion {
 
 		let maximumPacketCount = trackOptions.maximumPacketCount;
 		if (this.output.format.requiresMaximumPacketCount && maximumPacketCount === undefined) {
-			// Frames map 1:1 to packets, so the input's packet rate is a good stand-in unless the frame rate is changed
-			const packetRate = trackOptions.frameRate
-				?? (await track.computePacketStats(PACKET_STATS_PACKET_COUNT)).averagePacketRate;
 			const startTimestamp = needsTranscode
 				? this._startTimestamp
 				: copyStartPacket?.timestamp ?? this._startTimestamp;
 
-			maximumPacketCount = await this._estimateMaximumPacketCount(track, startTimestamp, packetRate);
+			// Frames map 1:1 to packets, so the input's packet rate is a good stand-in unless the frame rate is changed
+			maximumPacketCount = await this._estimateMaximumPacketCount(
+				track,
+				startTimestamp,
+				trackOptions.frameRate ?? null,
+			);
 		}
 
 		this.output.addVideoTrack(videoSource, {
@@ -2450,12 +2452,10 @@ export class Conversion {
 
 		let maximumPacketCount = trackOptions.maximumPacketCount;
 		if (this.output.format.requiresMaximumPacketCount && maximumPacketCount === undefined) {
-			let packetRate: number;
+			let packetRate: number | null = null;
 			if (needsTranscode) {
 				assert(outputCodec);
 				packetRate = sampleRate / getMinimumAudioPacketSize(outputCodec, sampleRate);
-			} else {
-				packetRate = (await track.computePacketStats(PACKET_STATS_PACKET_COUNT)).averagePacketRate;
 			}
 
 			const startTimestamp = needsTranscode
@@ -2484,7 +2484,17 @@ export class Conversion {
 	}
 
 	/** @internal */
-	async _estimateMaximumPacketCount(track: InputTrack, startTimestamp: number, packetRate: number) {
+	async _estimateMaximumPacketCount(track: InputTrack, startTimestamp: number, packetRate: number | null) {
+		if (packetRate === null) {
+			const stats = await track.computePacketStats(PACKET_STATS_PACKET_COUNT);
+			if (stats.averagePacketRate === Infinity) {
+				// All packets sit at a single instant, so the stats went through and counted every last one of them
+				return stats.packetCount;
+			}
+
+			packetRate = stats.averagePacketRate;
+		}
+
 		const endTimestamp = Math.min(await this._getTrackDuration(track), this._endTimestamp);
 		const duration = Math.max(endTimestamp - startTimestamp, 0);
 

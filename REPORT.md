@@ -453,31 +453,33 @@ Behavior changes worth a look are marked **[behavior change]**.
   Fix: `try`/`finally` release in each.
 ✅ MKV `onSegmentHeader` validation named the wrong option. Fix: the message now says `options.onSegmentHeader`.
 
-### Input and InputTrack
+### Input and InputTrack ✅
 
-- A disposed Input threw an internal error instead of InputDisposedError. Fix: the `_rootSource` getter throws
+✅ A disposed Input threw an internal error instead of InputDisposedError. Fix: the `_rootSource` getter throws
   `InputDisposedError` once disposed; disposal also clears `_sourceCache`.
-- Failed source requests were cached forever. Fix: remove the pending entry from `_sourceCachePromises` in a
+✅ Failed source requests were cached forever. Fix: remove the pending entry from `_sourceCachePromises` in a
   `finally`, so it's also dropped on failure and later requests retry.
-- ISOBMFF files without an ftyp box were rejected by detection. Fix: a leading `moov` or `mdat` box is accepted
+✅ ISOBMFF files without an ftyp box were rejected by detection. Fix: a leading `moov` or `mdat` box is accepted
   (`skip` and `wide` boxes are walked over like `free`).
-- Frame-rate detection missed CFR video with one tick of timestamp jitter (three repo fixtures now detect 60/60/24).
+✅ Frame-rate detection missed CFR video with one tick of timestamp jitter (three repo fixtures now detect 60/60/24).
   Fix: `findUnderlyingFrameRate`'s outlier test allows an extra `multiple * periodUncertainty`, starting at one
   tick and shrinking to `1 / min(totalFrames, MAX_EFFECTIVE_FRAME_SPAN)` as the period is refined, since the
   period's error adds up for each frame a gap spans.
-- `computePacketStats` returned Infinity/NaN for a zero time span (reserve-mode MP4 conversion threw). Fix: rates
-  are only computed for a positive time span, 0 otherwise.
-- Source cache eviction was FIFO-ish instead of LRU. Fix: a cache hit gives the entry a fresh age from a counter
+✅ Reserve-mode MP4 conversion threw for tracks whose packets all sit at a single instant, as the infinite packet
+  rate made an invalid `maximumPacketCount`. Fix: Conversion uses the packet count for those, which the stats have
+  fully counted. `computePacketStats` keeps going past `targetPacketCount` until the time span is positive, and
+  rates without any packets or bytes are 0 instead of NaN.
+✅ Source cache eviction was FIFO-ish instead of LRU. Fix: a cache hit gives the entry a fresh age from a counter
   instead of incrementing its age.
-- `Input.computeDuration()` counted tracks without packets as ending at 0, so media lying entirely before zero
+✅ `Input.computeDuration()` counted tracks without packets as ending at 0, so media lying entirely before zero
   next to an empty track reported a duration of 0. Fix: new `InputTrack.computeDurationOrNull()`; like
   `getFirstTimestamp()`, `Input.computeDuration()` now only counts tracks that have packets.
-- A 64-bit ftyp size made detection read the brand from the size field (MOV detected as MP4). Fix: with size 1,
+✅ A 64-bit ftyp size made detection read the brand from the size field (MOV detected as MP4). Fix: with size 1,
   the brand is read after the 64-bit size.
-- `_getSourceUncached` didn't check disposal. Fix: already covered by the `_rootSource` disposal fix above; a test
+✅ `_getSourceUncached` didn't check disposal. Fix: already covered by the `_rootSource` disposal fix above; a test
   was added. Leftovers: the rejection can arrive up to one refresh interval late, and the HLS wait isn't
   interruptible.
-- `InputTrack.id` wasn't unique in multi-segment Matroska files, since TrackNumber is only unique per segment.
+✅ `InputTrack.id` wasn't unique in multi-segment Matroska files, since TrackNumber is only unique per segment.
   **[behavior change]** Fix: the ID is now the track's 1-based index in `getTracks()` for every format, instead
   of the container's own ID (TrackNumber, track_ID, PID, Ogg serial number). Backings no longer have `getId`.
 

@@ -96,7 +96,7 @@ export abstract class IsobmffInputFormat extends InputFormat {
 		}
 
 		if (size === 1) {
-			// The box has a 64-bit size, so the brand only comes after it
+			// 64-bit size
 			let brandSlice = input._reader.requestSlice(16, 4);
 			if (isThenable(brandSlice)) brandSlice = await brandSlice;
 			if (!brandSlice) {
@@ -160,11 +160,13 @@ export class Mp4InputFormat extends IsobmffInputFormat {
 			}
 
 			const fourCc = readAscii(slice, 4);
-			if (fourCc === 'moof' || fourCc === 'sidx') { // Seen in HLS for example
-				return true;
-			} else if (fourCc === 'moov' || fourCc === 'mdat') {
-				// A file without ftyp box, which ISO/IEC 14496-12 still allows for compatibility (it's then to be read
-				// as 'mp41'). Old QuickTime files look like this, for example.
+			if (
+				// Seen in HLS for example, or in normal files without an ftyp box
+				fourCc === 'moof'
+				|| fourCc === 'sidx'
+				|| fourCc === 'moov'
+				|| fourCc === 'mdat'
+			) {
 				return true;
 			} else if (
 				fourCc === 'emsg'

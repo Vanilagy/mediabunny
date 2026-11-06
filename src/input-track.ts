@@ -44,9 +44,12 @@ import { DurationMetadataRequestOptions } from './demuxer';
 export type PacketStats = {
 	/** The total number of packets. */
 	packetCount: number;
-	/** The average number of packets per second. For video tracks, this will equal the average frame rate (FPS). */
+	/**
+	 * The average number of packets per second. For video tracks, this will equal the average frame rate (FPS).
+	 * Infinite if all packets sit at a single instant.
+	 */
 	averagePacketRate: number;
-	/** The average number of bits per second. */
+	/** The average number of bits per second. Infinite if all packets sit at a single instant. */
 	averageBitrate: number;
 };
 
@@ -436,6 +439,8 @@ export abstract class InputTrack {
 				packetCount >= targetPacketCount
 				// This additional condition is needed to produce correct results with out-of-presentation-order packets
 				&& packet.timestamp >= endTimestamp
+				// Rates over a zero time span would be infinite, so let's keep going until there's a span
+				&& endTimestamp > startTimestamp
 			) {
 				break;
 			}
@@ -447,16 +452,15 @@ export abstract class InputTrack {
 			totalPacketBytes += packet.byteLength;
 		}
 
-		// Without packets, or with a lone packet of unknown (zero) duration, there's no time span to compute rates over
 		const timeSpan = endTimestamp - startTimestamp;
 
 		return {
 			packetCount,
-			averagePacketRate: timeSpan > 0
-				? Number((packetCount / timeSpan).toPrecision(16))
+			averagePacketRate: packetCount > 0
+				? Number((packetCount / timeSpan).toPrecision(16)) // Intentionally Infinity if the span is 0
 				: 0,
-			averageBitrate: timeSpan > 0
-				? Number((8 * totalPacketBytes / timeSpan).toPrecision(16))
+			averageBitrate: totalPacketBytes > 0
+				? Number((8 * totalPacketBytes / timeSpan).toPrecision(16)) // Intentionally Infinity if the span is 0
 				: 0,
 		};
 	}

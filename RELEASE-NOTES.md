@@ -3,6 +3,7 @@
 - Added support for setting `HlsOutputFormatOptions.targetDuration` to `Infinity` outside of live mode, giving each playlist only a single segment
 - Added support for hybrid fragmented MP4 files, which hold samples both in the `moov` box and in subsequent fragments (such as FFmpeg's `-movflags frag_keyframe` output). Previously, all fragments were ignored.
 - Added read support for 64-bit float PCM in ISOBMFF
+- Added support for ISOBMFF files without an `ftyp` box
 - Added support for the ISOBMFF `srat` box, fixing high sample rates being misreported for `ipcm`/`fpcm` tracks
 - Added support for reading the Matroska segment title (`Info\Title`) as metadata
 - Added support for E-AC-3 dependent substreams in MPEG-TS, fixing 7.1 E-AC-3 being read as 6 channels with doubled timing
@@ -162,4 +163,11 @@
 - HLS output format no longer lists WebVTT as supported, as it can't write subtitles yet
 - Fixed HLS errors for unsupported audio codecs with delta packets (such as TrueHD) suggesting different segment formats, which can't help
 - Fixed `Input.computeDuration()` counting tracks without packets as ending at 0
+- `InputTrack.computePacketStats()` now reports infinite rates for packets that all sit at a single instant, and reads past `targetPacketCount` until the packets span some time
+- Fixed conversions to MP4 with `fastStart: 'reserve'` throwing for tracks whose packets all sit at a single instant
+- Fixed frame rate detection missing constant frame rates when the container's timescale can't represent the frame times exactly (such as 60 FPS in Matroska)
+- Fixed MOV files with a 64-bit `ftyp` box size being detected as MP4
+- Fixed a disposed `Input` throwing an internal error instead of `InputDisposedError`
+- Fixed failed source reads being cached, so that later reads never retried
+- Fixed faulty LRU source cache eviction logic
 - `InputTrack.id` is now the track's 1-based index in `getTracks()` for every format, making it unique in multi-segment Matroska files. Previously, it was the container's own track ID (such as the MPEG-TS PID or the Ogg serial number).

@@ -724,8 +724,45 @@ test('Packet stats of a lone zero-duration packet', async () => {
 	expect(await videoTrack.computeDuration()).toBe(await videoTrack.getFirstTimestamp());
 	expect(await videoTrack.computePacketStats()).toEqual({
 		packetCount: 1,
-		averagePacketRate: 0,
-		averageBitrate: 0,
+		averagePacketRate: Infinity,
+		averageBitrate: Infinity,
+	});
+});
+
+test('Packet stats beginning with a zero-duration packet', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const videoSource = new EncodedVideoPacketSource('vp8');
+	output.addVideoTrack(videoSource);
+	await output.start();
+
+	const meta = {
+		decoderConfig: {
+			codec: 'vp8',
+			codedWidth: 16,
+			codedHeight: 16,
+		},
+	};
+	await videoSource.add(new EncodedPacket(new Uint8Array(8), 'key', 0, 0), meta);
+	await videoSource.add(new EncodedPacket(new Uint8Array(8), 'key', 0, 0.5), meta);
+	await videoSource.add(new EncodedPacket(new Uint8Array(8), 'key', 0.5, 0.5), meta);
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	// The first packet alone spans no time, so the stats must look further than asked to get a finite rate
+	expect(await videoTrack.computePacketStats(1)).toEqual({
+		packetCount: 2,
+		averagePacketRate: 4,
+		averageBitrate: 256,
 	});
 });
 
