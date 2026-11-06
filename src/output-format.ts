@@ -1305,6 +1305,8 @@ export type HlsOutputFormatOptions = {
 	 * are provided with a longer period than the target duration. Therefore, make sure to encode a key frame at least
 	 * every `targetDuration` seconds to guarantee segment length, controllable via
 	 * {@link VideoEncodingConfig.keyFrameInterval}.
+	 *
+	 * Outside of live mode, this can be set to `Infinity` to give each playlist only a single segment.
 	 */
 	targetDuration?: number;
 	/**
@@ -1423,20 +1425,21 @@ export class HlsOutputFormat extends OutputFormat {
 				'options.segmentFormat must be an OutputFormat or a non-empty array of OutputFormat instances.',
 			);
 		}
-		if (toArray(options.segmentFormat).some(format => format instanceof HlsOutputFormat)) {
-			throw new TypeError('options.segmentFormat cannot be an HlsOutputFormat.');
-		}
 		if (
 			options.targetDuration !== undefined
-			&& (!Number.isFinite(options.targetDuration) || options.targetDuration <= 0)
+			&& (!isNumber(options.targetDuration) || options.targetDuration <= 0)
 		) {
-			throw new TypeError('options.targetDuration, when provided, must be a positive finite number.');
+			throw new TypeError('options.targetDuration, when provided, must be a positive number.');
 		}
 		if (options.singleFilePerPlaylist !== undefined && typeof options.singleFilePerPlaylist !== 'boolean') {
 			throw new TypeError('options.singleFilePerPlaylist, when provided, must be a boolean.');
 		}
 		if (options.live !== undefined && typeof options.live !== 'boolean') {
 			throw new TypeError('options.live, when provided, must be a boolean.');
+		}
+		if (options.live && options.targetDuration === Infinity) {
+			// Live playlists state the target duration before any segment exists
+			throw new TypeError('options.targetDuration must be finite in live mode.');
 		}
 		if (
 			options.maxLiveSegmentCount !== undefined
@@ -1551,10 +1554,6 @@ export class HlsOutputFormat extends OutputFormat {
 		}
 
 		return null;
-	}
-
-	override get requiresMaximumPacketCount() {
-		return toArray(this._options.segmentFormat).some(format => format.requiresMaximumPacketCount);
 	}
 
 	/** @internal */

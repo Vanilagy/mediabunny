@@ -170,7 +170,7 @@ export class HlsMuxer extends Muxer {
 		this.isLive = format._options.live ?? false;
 		this.maxLiveSegmentCount = format._options.maxLiveSegmentCount ?? Infinity;
 		this.mediaTimestampBase = format._options.mediaTimestampBase ?? 10;
-		this.globalTargetDuration = this.targetSegmentDuration;
+		this.globalTargetDuration = 0;
 
 		this.getPlaylistPath = format._options.getPlaylistPath
 			?? (({ n }) => `playlist-${n}.m3u8`);
@@ -377,9 +377,8 @@ export class HlsMuxer extends Muxer {
 								if (otherGroup.tracks.length === 1) {
 									assert(otherGroup.tracks[0] === track);
 
-									// The pair can only share a playlist if a segment format can hold both of them,
-									// otherwise the other track is linked as a rendition of its own
-									if (deduceSegmentFormat([track, group.tracks[0]!])) {
+									const canSharePlaylist = !!deduceSegmentFormat([track, group.tracks[0]!]);
+									if (canSharePlaylist) {
 										variantStreams.push({
 											tracks: [track, group.tracks[0]!],
 											linkedGroup: null,
@@ -610,7 +609,8 @@ export class HlsMuxer extends Muxer {
 		const release = await playlist.mutex.acquire();
 
 		try {
-			// Another track of the playlist may have closed alongside this one and already finished the playlist
+			// Another track of the playlist may have closed alongside this one and already finished the playlist,
+			// hence this check
 			if (!playlist.done) {
 				await this.advancePlaylist(playlist);
 			}
@@ -1153,6 +1153,7 @@ export class HlsMuxer extends Muxer {
 							...videoTrack.track.metadata,
 							decoderConfig: videoTrack.info.decoderConfig,
 							primingPacket: videoTrack.info.primingPacket ?? undefined,
+							maximumPacketCount: videoEndIndex,
 						});
 					}
 
@@ -1165,6 +1166,7 @@ export class HlsMuxer extends Muxer {
 							...audioTrack.track.metadata,
 							decoderConfig: audioTrack.info.decoderConfig,
 							primingPacket: audioTrack.info.primingPacket ?? undefined,
+							maximumPacketCount: audioEndIndex,
 						});
 
 						if (!playlist.segmentFormat.supportsTimestampedMediaData && audioEndIndex > 0) {
@@ -1425,9 +1427,10 @@ export class HlsMuxer extends Muxer {
 		const pathedTarget = this.output._target;
 
 		// In live mode, target duration is not allowed to change, so we use the nominal value. It must be a
-		// "decimal-integer", and it's rounded like the EXTINF values first so that float noise can't bump it up.
-		const targetDuration = Math.ceil(
-			+(this.isLive ? this.targetSegmentDuration : this.globalTargetDuration).toFixed(12),
+		// "decimal-integer", and it's rounded like the EXTINF values first so that float noise doesn't mess it up
+		const targetDuration = Math.max(
+			Math.ceil(+(this.isLive ? this.targetSegmentDuration : this.globalTargetDuration).toFixed(12)),
+			1, // A target duration of 0 is kinda weird
 		);
 
 		this.updatePlaylistBitrates(playlist, targetDuration);
@@ -1508,8 +1511,8 @@ export class HlsMuxer extends Muxer {
 
 		let lastGroupId: string | null = null;
 		let groupIdTrackCount = 0;
-		const namesInGroup = new Set<string>();
 		let hasHadDefaultTrackInGroup = false;
+		const namesInGroup = new Set<string>();
 
 		for (const decl of this.playlistDeclarations) {
 			if (decl.groupId === null) {
@@ -1631,9 +1634,9 @@ export class HlsMuxer extends Muxer {
 
 				if (lastGroupId === null || decl.groupId !== lastGroupId) {
 					groupIdTrackCount = 0;
-					namesInGroup.clear();
 					masterPlaylistText += '\n';
 					hasHadDefaultTrackInGroup = false;
+					namesInGroup.clear();
 				}
 				lastGroupId = decl.groupId;
 				groupIdTrackCount++;
@@ -1678,8 +1681,7 @@ export class HlsMuxer extends Muxer {
 					masterPlaylistText += ',AUTOSELECT=YES';
 				}
 
-				// The spec reserves FORCED for subtitle renditions
-				if (dispositionForced && type === 'subtitle') {
+				if (dispositionForced && type === 'subtitle') { // The spec reserves FORCED for subtitle renditions
 					masterPlaylistText += ',FORCED=YES';
 				}
 
@@ -1760,7 +1762,6 @@ export class HlsMuxer extends Muxer {
 		)));
 
 		if (!this.isLive) {
-			// Only now is the target duration final, which the spec requires to be the same across all media playlists
 			await Promise.all(this.playlists.map(playlist => this.writePlaylist(playlist)));
 			await this.writeMasterPlaylist();
 		}

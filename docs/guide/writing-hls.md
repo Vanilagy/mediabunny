@@ -621,6 +621,8 @@ Mediabunny will then try to maximize the length of each segment while making sur
 
 Since Mediabunny will only create new segments on key frame boundaries, make sure to provide a key frame at least every `targetDuration` seconds. If you don't, it has no choice but to create longer segments. You can use [`VideoEncodingConfig.keyFrameInterval`](../api/VideoEncodingConfig#keyframeinterval) to control key frame rate.
 
+Outside of live mode, you can set `targetDuration` to `Infinity` to give each playlist only a single segment.
+
 ### Single-file segments
 
 Since HLS supports byte subrange requests, you may want to package all media data into one giant monolithic segment file:

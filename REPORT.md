@@ -413,47 +413,45 @@ Behavior changes worth a look are marked **[behavior change]**.
 ✅ Empty ended playlists waited one target duration per query. Fix: no reload once the stream has ended, and
   `getSegmentAt` honors `skipLiveWait`.
 
-### HLS writing
+### HLS writing ✅
 
-- Closing both tracks of a playlist at once threw an unhandled assertion. Fix: `onTrackClose` skips
+✅ Closing both tracks of a playlist at once threw an unhandled assertion. Fix: `onTrackClose` skips
   `advancePlaylist` if the other track's close already finished the playlist (`playlist.done`).
-- VOD playlists had different TARGETDURATIONs. Fix: in VOD mode, media playlists are no longer written as each one
+✅ VOD playlists had different TARGETDURATIONs. Fix: in VOD mode, media playlists are no longer written as each one
   ends but all together in `finalize()`, once the shared target duration is final.
-- FORCED=YES was written on audio/video renditions. Fix: only write it for subtitle renditions.
-- BANDWIDTH was double-counted when the variant's own playlist was a URI-less rendition. Fix: detect when the
+✅ FORCED=YES was written on audio/video renditions. Fix: only write it for subtitle renditions.
+✅ BANDWIDTH was double-counted when the variant's own playlist was a URI-less rendition. Fix: detect when the
   variant's playlist is among its referenced renditions (`ownPlaylistIsReferenced`) and then don't add its own
   bitrates on top of the renditions'.
-- CODECS was duplicated in the same case. Fix: same detection; the referenced group's codec isn't added again.
-- I-frame tracks were grouped as VIDEO renditions. Fix: key-packets-only tracks are kept out of the unpaired video
+✅ CODECS was duplicated in the same case. Fix: same detection; the referenced group's codec isn't added again.
+✅ I-frame tracks were grouped as VIDEO renditions. Fix: key-packets-only tracks are kept out of the unpaired video
   group and get their own variant streams.
-- CODECS used WebCodecs strings (`flac` -> `fLaC`, `mp3` -> `mp4a.40.34`). Fix: `toHlsCodecString` maps both.
-- MP3 decoder configs given as `mp4a.69`/`mp4a.6B` were written to CODECS unmapped. Fix: map them to `mp4a.40.34`.
-- No single segment format holding paired tracks caused an assertion (now split into renditions). Fix: a 1:1 pair
+✅ CODECS used WebCodecs strings (`flac` -> `fLaC`, `mp3` -> `mp4a.40.34`). Fix: `toHlsCodecString` maps both.
+✅ MP3 decoder configs given as `mp4a.69`/`mp4a.6B` were written to CODECS unmapped. Fix: map them to `mp4a.40.34`.
+✅ No single segment format holding paired tracks caused an assertion (now split into renditions). Fix: a 1:1 pair
   only shares a playlist if `deduceSegmentFormat` finds a format for both (it now returns null instead of
   asserting); otherwise the other track is linked as a rendition group.
-- `start()` leaked the mutex when it threw. Fix: `try`/`finally` release.
-- Float noise could push TARGETDURATION one too high. Fix: round to 12 decimals before `Math.ceil`.
-- Duplicate NAMEs within a group weren't made unique. Fix: append " (2)", " (3)", ... to repeated names.
+✅ `start()` leaked the mutex when it threw. Fix: `try`/`finally` release.
+✅ Float noise could push TARGETDURATION one too high. Fix: round to 12 decimals before `Math.ceil`.
+✅ Duplicate NAMEs within a group weren't made unique. Fix: append " (2)", " (3)", ... to repeated names.
   **[behavior change]** A second rendition named "Audio" is now written as "Audio (2)".
-- The peak bitrate window was sized by the unrounded global target duration instead of the written integer one
+✅ The peak bitrate window was sized by the unrounded global target duration instead of the written integer one
   (BANDWIDTH 5266149 vs 1958671). Fix: `updatePlaylistBitrates` takes the target duration as written.
-- Output format: NaN/Infinity target duration was accepted. Fix: check with `Number.isFinite`.
-- Output format: a NaN live segment count was accepted. Fix: check with `isNumber` (which rejects NaN) instead of
+✅ Output format: NaN/Infinity target duration was accepted. Fix: check with `Number.isFinite`.
+✅ Output format: a NaN live segment count was accepted. Fix: check with `isNumber` (which rejects NaN) instead of
   `typeof`.
-- Output format: HLS was accepted as its own segment format. Fix: throw if any segment format is an
-  `HlsOutputFormat`.
-- Output format: `requiresMaximumPacketCount` ignored the segment formats (reserve-mode MP4 segments failed). Fix:
-  override it to return true if any segment format requires it.
-- Output format: WebVTT was listed as supported. Fix: remove subtitle codecs from `getSupportedCodecs()` (subtitles
+✅ Reserve-mode MP4 segments failed, since their tracks lacked `maximumPacketCount`. Fix: the HLS muxer sets it to
+  the segment's exact packet count when creating the segment's tracks, so `requiresMaximumPacketCount` stays false.
+✅ Output format: WebVTT was listed as supported. Fix: remove subtitle codecs from `getSupportedCodecs()` (subtitles
   are currently disabled).
-- Output format: the TrueHD unsupported-codec hint was wrong. Fix: no "use different segment formats" hint for
+✅ Output format: the TrueHD unsupported-codec hint was wrong. Fix: no "use different segment formats" hint for
   audio codecs with delta packets, since no segment format helps there.
 
-### Other muxers
+### Other muxers ✅
 
-- ADTS, FLAC, MP3, Ogg and WAVE `start()` leaked the muxer mutex when they threw, so `finalize()` hung forever.
+✅ ADTS, FLAC, MP3, Ogg and WAVE `start()` leaked the muxer mutex when they threw, so `finalize()` hung forever.
   Fix: `try`/`finally` release in each.
-- MKV `onSegmentHeader` validation named the wrong option. Fix: the message now says `options.onSegmentHeader`.
+✅ MKV `onSegmentHeader` validation named the wrong option. Fix: the message now says `options.onSegmentHeader`.
 
 ### Input and InputTrack
 

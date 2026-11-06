@@ -1,5 +1,6 @@
 - Added `InputTrack.getFirstTimestampOrNull()` and `InputTrack.computeDurationOrNull()`, which return `null` instead of 0 for tracks without packets
 - Added `WavOutputFormatOptions.appendOnly` for writing WAVE files in an append-only fashion
+- Added support for setting `HlsOutputFormatOptions.targetDuration` to `Infinity` outside of live mode, giving each playlist only a single segment
 - Added support for hybrid fragmented MP4 files, which hold samples both in the `moov` box and in subsequent fragments (such as FFmpeg's `-movflags frag_keyframe` output). Previously, all fragments were ignored.
 - Added read support for 64-bit float PCM in ISOBMFF
 - Added support for the ISOBMFF `srat` box, fixing high sample rates being misreported for `ipcm`/`fpcm` tracks
@@ -56,6 +57,7 @@
 - Fixed Matroska muxer writing `BlockDuration` on the last block in decode order instead of presentation order, giving the last frame a duration of 0 with B-frames
 - Matroska muxer now writes `MaxBlockAdditionID` for tracks with block additions (video with alpha, WebVTT)
 - Fixed the Matroska muxer hanging on `finalize()` after `start()`, a track close or `finalize()` threw
+- Fixed the validation error for `MkvOutputFormatOptions.onSegmentHeader` naming the wrong option
 - Matroska muxer no longer patches the color space into VP9 key frames, which zeroed the color space for BT.2020, corrupted RGB streams and modified the caller's packet data
 - Fixed MPEG-TS muxer writing a DTS greater than the PTS for B-frames, which made FFmpeg reject the files
 - Fixed malformed HEVC access unit delimiters in MPEG-TS output, which broke FFmpeg's bitstream filters
@@ -144,5 +146,20 @@
 - Fixed new segments of live HLS playlists losing their init data after a playlist reload
 - Fixed wrong timing after a discontinuity in live HLS segments that slid out of the window between playlist reloads
 - Fixed ended HLS playlists without segments waiting a target duration on every query
+- VOD HLS media playlists now all state the longest segment duration as their target duration. Previously, it differed between playlists and never went below `targetDuration`.
+- Renditions with the same name in an HLS group now get unique names, like "Audio (2)"
+- Fixed HLS output with `fastStart: 'reserve'` MP4 segments failing
+- Fixed HLS output failing for paired tracks that no single segment format can hold together; they're now split into separate renditions
+- Fixed HLS I-frame tracks being grouped as video renditions
+- Fixed doubled `BANDWIDTH` values and duplicated `CODECS` entries for HLS variants whose own playlist is one of their renditions
+- Fixed HLS `BANDWIDTH` values being computed over the wrong window for non-integer target durations
+- Fixed HLS master playlists using WebCodecs codec strings for FLAC and MP3 instead of `fLaC` and `mp4a.40.34`
+- Fixed `FORCED=YES` being written for HLS audio and video renditions
+- Fixed floating point error sometimes making the HLS target duration one too high
+- Fixed the HLS muxer throwing when all tracks of a playlist are closed at once
+- Fixed the HLS muxer hanging on `finalize()` after `start()` threw
+- Fixed `HlsOutputFormatOptions` accepting NaN for `targetDuration` and `maxLiveSegmentCount`
+- HLS output format no longer lists WebVTT as supported, as it can't write subtitles yet
+- Fixed HLS errors for unsupported audio codecs with delta packets (such as TrueHD) suggesting different segment formats, which can't help
 - Fixed `Input.computeDuration()` counting tracks without packets as ending at 0
 - `InputTrack.id` is now the track's 1-based index in `getTracks()` for every format, making it unique in multi-segment Matroska files. Previously, it was the container's own track ID (such as the MPEG-TS PID or the Ogg serial number).

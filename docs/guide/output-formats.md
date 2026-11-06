@@ -420,6 +420,8 @@ export type HlsOutputFormatOptions = {
 	Specifies the target (max) duration in seconds for each media segment, defaulting to 2 seconds.
 
 	Mediabunny will try not to emit media segments longer than the target duration, but it is forced to if key frames are provided with a longer period than the target duration. Therefore, make sure to encode a key frame at least every `targetDuration` seconds to guarantee segment length, controllable via [`VideoEncodingConfig.keyFrameInterval`](../api/VideoEncodingConfig#keyframeinterval).
+
+	Outside of live mode, this can be set to `Infinity` to give each playlist only a single segment.
 - `singleFilePerPlaylist`\
 	Whether to bundle all media segments for a playlist into a single file. Individual segments are then extracted via range requests.
 - `live`\
