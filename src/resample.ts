@@ -10,35 +10,73 @@ import { assert } from './misc';
 import { AudioSample } from './sample';
 
 /**
- * Utility class to handle audio resampling, handling both sample rate resampling as well as channel up/downmixing.
- * The advantage over doing this manually rather than using OfflineAudioContext to do it for us is the artifact-free
- * handling of putting multiple resampled audio samples back to back, which produces flaky results using
- * OfflineAudioContext.
+ * Options for streaming audio resampling and channel remixing.
+ * @group Samples
+ * @public
+ */
+export type AudioResamplerOptions = {
+	/** The output sample rate in hertz. Must be a positive integer. */
+	targetSampleRate: number;
+	/** The output channel count. Must be a positive integer. */
+	targetNumberOfChannels: number;
+	/**
+	 * Receives resampled f32 audio. The callback owns each sample and must close it when finished.
+	 * Its promise is awaited before producing more output, providing backpressure.
+	 */
+	onSample: (sample: AudioSample) => Promise<void>;
+};
+
+/**
+ * Incrementally resamples audio and remixes channels without an encoder or output container.
+ * Uses the same linear interpolation and channel mapping as AudioSampleSource transformations.
+ * Output is buffered in chunks of up to five seconds; call finalize to emit the remaining audio.
+ *
+ * Call add sequentially with samples from one stream, with constant sample rate and channel count.
+ * Output timestamps use the first input timestamp as their time origin.
+ * To abandon processing, stop calling add and discard the resampler without calling finalize. No input samples are
+ * retained, and buffered PCM is garbage collected with the resampler. After an operation rejects, discard the instance.
+ * @group Samples
+ * @public
  */
 export class AudioResampler {
-	sourceSampleRate: number | null = null;
-	targetSampleRate: number;
-	sourceNumberOfChannels: number | null = null;
-	targetNumberOfChannels: number;
-	startTime: number | null = null;
-	onSample: (sample: AudioSample) => Promise<void>;
+	/** @internal */
+	private sourceSampleRate: number | null = null;
+	/** @internal */
+	private targetSampleRate: number;
+	/** @internal */
+	private sourceNumberOfChannels: number | null = null;
+	/** @internal */
+	private targetNumberOfChannels: number;
+	/** @internal */
+	private startTime: number | null = null;
+	/** @internal */
+	private onSample: (sample: AudioSample) => Promise<void>;
 
-	bufferSizeInFrames: number;
-	bufferSizeInSamples: number;
-	bufferCapacityInFrames!: number;
-	outputBuffer!: Float32Array;
-	/** Start frame of current buffer */
-	bufferStartFrame = 0;
-	/** The highest index written to in the current buffer */
-	maxWrittenFrame: number | null = null;
-	channelMixer!: (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => number;
-	tempSourceBuffer!: Float32Array;
+	/** @internal */
+	private bufferSizeInFrames: number;
+	/** @internal */
+	private bufferSizeInSamples: number;
+	/** @internal */
+	private bufferCapacityInFrames!: number;
+	/** @internal */
+	private outputBuffer!: Float32Array;
+	/** Start frame of current buffer. @internal */
+	private bufferStartFrame = 0;
+	/** The highest index written to in the current buffer. @internal */
+	private maxWrittenFrame: number | null = null;
+	/** @internal */
+	private channelMixer!: (sourceData: Float32Array, sourceFrameIndex: number, targetChannelIndex: number) => number;
+	/** @internal */
+	private tempSourceBuffer!: Float32Array;
 
-	constructor(options: {
-		targetSampleRate: number;
-		targetNumberOfChannels: number;
-		onSample: (sample: AudioSample) => Promise<void>;
-	}) {
+	/** Creates a resampler for one audio stream. */
+	constructor(options: AudioResamplerOptions) {
+		if (!Number.isInteger(options.targetSampleRate) || options.targetSampleRate <= 0) {
+			throw new TypeError('options.targetSampleRate must be a positive integer.');
+		}
+		if (!Number.isInteger(options.targetNumberOfChannels) || options.targetNumberOfChannels <= 0) {
+			throw new TypeError('options.targetNumberOfChannels must be a positive integer.');
+		}
 		this.targetSampleRate = options.targetSampleRate;
 		this.targetNumberOfChannels = options.targetNumberOfChannels;
 		this.onSample = options.onSample;
@@ -49,8 +87,9 @@ export class AudioResampler {
 
 	/**
 	 * Sets up the channel mixer to handle up/downmixing in the case where input and output channel counts don't match.
+	 * @internal
 	 */
-	doChannelMixerSetup(): void {
+	private doChannelMixerSetup(): void {
 		assert(this.sourceNumberOfChannels !== null);
 
 		const sourceNum = this.sourceNumberOfChannels;
@@ -159,7 +198,8 @@ export class AudioResampler {
 		}
 	}
 
-	ensureTempBufferSize(requiredSamples: number): void {
+	/** @internal */
+	private ensureTempBufferSize(requiredSamples: number): void {
 		let length = this.tempSourceBuffer.length;
 
 		while (length < requiredSamples) {
@@ -173,6 +213,10 @@ export class AudioResampler {
 		}
 	}
 
+	/**
+	 * Copies input PCM into the resampler, awaiting any output callbacks. The caller retains ownership of the input
+	 * sample and may close it when this promise settles. Do not call concurrently with add or finalize.
+	 */
 	async add(audioSample: AudioSample) {
 		if (this.sourceSampleRate === null) {
 			// This is the first sample, so let's init the missing data. Initing the sample rate from the decoded
@@ -267,7 +311,8 @@ export class AudioResampler {
 		}
 	}
 
-	async finalizeCurrentBuffer() {
+	/** @internal */
+	private async finalizeCurrentBuffer() {
 		if (this.maxWrittenFrame === null) {
 			return; // Nothing to finalize
 		}
@@ -297,6 +342,7 @@ export class AudioResampler {
 			: null;
 	}
 
+	/** Emits all remaining buffered audio, awaiting output callbacks. Do not add more input afterward. */
 	async finalize() {
 		while (this.maxWrittenFrame !== null) {
 			await this.finalizeCurrentBuffer();

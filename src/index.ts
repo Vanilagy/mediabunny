@@ -321,4 +321,6 @@ export {
 	type TrackDisposition,
 } from './metadata';
 
+export { AudioResampler, type AudioResamplerOptions } from './resample';
+
 // 🐡🦔

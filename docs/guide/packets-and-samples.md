@@ -641,3 +641,36 @@ audioSample.close();
 Try to close an `AudioSample` as soon as you don't need it anymore. Unclosed audio samples can lead to high memory usage and decoder stalls.
 
 After an `AudioSample` has been closed, its data becomes unavailable and most of its methods will throw an error.
+
+### Streaming audio resampling
+
+Use `AudioResampler` to normalize decoded audio before mixing or analysis, without creating an encoder or output container:
+
+```ts
+import { AudioResampler } from 'mediabunny';
+
+const resampler = new AudioResampler({
+    targetSampleRate: 48000,
+    targetNumberOfChannels: 2,
+    onSample: async (sample) => {
+        try {
+            await consumePcm(sample);
+        } finally {
+            sample.close();
+        }
+    },
+});
+
+for await (const sample of sink.samples()) {
+    try {
+        await resampler.add(sample);
+    } finally {
+        sample.close();
+    }
+}
+await resampler.finalize();
+```
+
+Use one resampler per stream, keeping the input sample rate and channel count constant. Await each `add` before the next call. Output uses interleaved float32 PCM and retains the first input timestamp as its time origin. Output is buffered in chunks of up to five seconds, and `finalize()` flushes the remainder. The callback's promise provides backpressure; the callback owns each emitted sample and must close it.
+
+This uses the existing linear interpolation resampler, including its limitations when downsampling. To cancel, stop adding samples and discard the resampler without finalizing it. It retains copied PCM, not input sample resources. Discard the instance after an error, and do not add input after finalizing.
