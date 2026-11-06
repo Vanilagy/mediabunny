@@ -417,3 +417,52 @@ const captureLogs = () => {
 		},
 	};
 };
+
+test.each([[null, true], [16_384, true], [null, false]] as const)(
+	'UrlSource keeps sliced prefetch and HTTP ranges within the slice (cap %s, Content-Range %s)',
+	async (responseCap, includeContentRange) => {
+		// Single-file HLS uses slices of a shared URL. Prefetch must not download later segments.
+		const content = Buffer.from(Array.from({ length: 4 * 1024 * 1024 }, (_, index) => index % 251));
+		const requests: { start: number; end: number | null }[] = [];
+		const server = http.createServer((req, res) => {
+			const match = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range ?? '');
+			assert(match);
+			const start = Number(match[1]);
+			const requestedEnd = match[2] ? Number(match[2]) : null;
+			requests.push({ start, end: requestedEnd });
+			const end = Math.min(requestedEnd ?? content.length - 1, content.length - 1,
+				responseCap === null ? Infinity : start + responseCap - 1);
+			res.writeHead(206, {
+				...(includeContentRange ? { 'Content-Range': `bytes ${start}-${end}/${content.length}` } : {}),
+				'Content-Length': end - start + 1,
+			});
+			res.end(content.subarray(start, end + 1));
+		});
+		await new Promise<void>(resolve => server.listen(0, resolve));
+		try {
+			const address = server.address();
+			assert(address && typeof address !== 'string');
+			const source = new UrlSource(`http://localhost:${address.port}/segments.mp4`, { parallelism: 2 });
+			using rootRef = source.ref();
+			const length = 100_000;
+			const offsets = [0, 1, 2, 3].map(index => index * 1024 * 1024 + 100);
+			await Promise.all(offsets.map(async (offset) => {
+				using ref = rootRef.source.slice(offset - 100, length + 200).slice(100, length).ref();
+				const reader = new Reader(ref.source);
+				const slice = await reader.requestEntireFile();
+				expect(slice).not.toBeNull();
+				expect(Buffer.from(readBytes(slice!, slice!.length))).toEqual(
+					content.subarray(offset, offset + length),
+				);
+			}));
+			expect(requests.length).toBeGreaterThanOrEqual(offsets.length);
+			for (const request of requests) {
+				const offset = offsets.find(offset => offset <= request.start && request.start < offset + length);
+				expect(offset).toBeDefined();
+				expect(request.end).toBe(offset! + length - 1);
+			}
+		} finally {
+			server.closeAllConnections();
+			server.close();
+		}
+	});
