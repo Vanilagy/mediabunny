@@ -960,13 +960,15 @@ export class UrlSource extends PathedSource {
 			const abortController = new AbortController();
 			this._abortControllers.set(worker, abortController);
 
+			const rangeEnd = Number.isFinite(worker.maxReadPosition) ? worker.maxReadPosition - 1 : '';
+
 			const response = await retriedFetch(
 				this._options.fetchFn ?? fetch,
 				this._url,
 				mergeRequestInit(this._requestInit, {
 					headers: {
 						// Always sending a range request is a good way to probe if the server supports them
-						Range: `bytes=${worker.currentPos}-`,
+						Range: `bytes=${worker.currentPos}-${rangeEnd}`,
 					},
 					signal: abortController.signal,
 				}),
@@ -1006,7 +1008,8 @@ export class UrlSource extends PathedSource {
 				}
 
 				const contentLength = response.headers.get('Content-Length');
-				if (contentLength) {
+				if (contentLength && (response.status !== 206 || rangeEnd === '')) {
+					// A bounded response's length is not the resource's length.
 					// Note: For range requests, this is _technically_ not correct, as the range response could contain
 					// less data than was requested. In practice, it seems most servers don't do this though, and the
 					// Content-Length header actually contains the length until the end of the file.
@@ -2102,6 +2105,7 @@ type ReadWorker = {
 	startPos: number;
 	currentPos: number;
 	targetPos: number;
+	maxReadPosition: number;
 	/** The target is considered _strict_ when it is an error for the worker to terminate before reaching the target. */
 	strictTarget: boolean;
 	running: boolean;
@@ -2127,6 +2131,7 @@ class ReadOrchestrator {
 	disposed = false;
 	queuedReads: {
 		hole: Hole;
+		maxReadPosition: number;
 		strictTarget: boolean;
 		pendingSlices: PendingSlice[];
 		age: number;
@@ -2273,6 +2278,7 @@ class ReadOrchestrator {
 					worker,
 					outerHole,
 					pendingSlice ? [pendingSlice] : [],
+					maxReadPosition,
 				);
 
 				if (addedToWorker) {
@@ -2283,7 +2289,7 @@ class ReadOrchestrator {
 
 			// We need to spawn a new worker
 			const strictTarget = outerHole.end < outerEnd || this.fileSize !== null;
-			const newWorker = this.createWorker(outerHole.start, outerHole.end, strictTarget);
+			const newWorker = this.createWorker(outerHole.start, outerHole.end, strictTarget, maxReadPosition);
 
 			if (newWorker) {
 				if (pendingSlice) {
@@ -2302,6 +2308,7 @@ class ReadOrchestrator {
 				if (entry && outerHole.start <= entry.hole.end) {
 					entry.hole.end = Math.max(entry.hole.end, outerHole.end);
 					entry.strictTarget &&= strictTarget;
+					entry.maxReadPosition = Math.max(entry.maxReadPosition, maxReadPosition);
 
 					if (pendingSlice) {
 						entry.pendingSlices.push(pendingSlice);
@@ -2315,6 +2322,7 @@ class ReadOrchestrator {
 							end: outerHole.end,
 						},
 						strictTarget,
+						maxReadPosition,
 						pendingSlices: pendingSlice ? [pendingSlice] : [],
 						age: this.nextAge++,
 					};
@@ -2331,6 +2339,7 @@ class ReadOrchestrator {
 					entry.hole.end = Math.max(entry.hole.end, nextEntry.hole.end);
 					entry.pendingSlices.push(...nextEntry.pendingSlices);
 					entry.strictTarget &&= nextEntry.strictTarget;
+					entry.maxReadPosition = Math.max(entry.maxReadPosition, nextEntry.maxReadPosition);
 					entry.age = Math.min(entry.age, nextEntry.age);
 					this.queuedReads.splice(index + 1, 1);
 				}
@@ -2364,7 +2373,7 @@ class ReadOrchestrator {
 		return result;
 	}
 
-	checkHoleAgainstWorker(worker: ReadWorker, hole: Hole, pendingSlices: PendingSlice[]) {
+	checkHoleAgainstWorker(worker: ReadWorker, hole: Hole, pendingSlices: PendingSlice[], maxReadPosition: number) {
 		// A small tolerance in the case that the requested region is *just* after the target position of an
 		// existing worker. In that case, it's probably more efficient to repurpose that worker than to spawn
 		// another one so close to it
@@ -2376,6 +2385,7 @@ class ReadOrchestrator {
 			worker.currentPos, worker.targetPos,
 		)) {
 			worker.targetPos = Math.max(worker.targetPos, hole.end); // Update the worker's target position
+			worker.maxReadPosition = Math.max(worker.maxReadPosition, maxReadPosition);
 
 			for (let i = 0; i < pendingSlices.length; i++) {
 				const pendingSlice = pendingSlices[i]!;
@@ -2400,7 +2410,9 @@ class ReadOrchestrator {
 
 		for (let i = 0; i < this.queuedReads.length; i++) {
 			const queuedRead = this.queuedReads[i]!;
-			const result = this.checkHoleAgainstWorker(worker, queuedRead.hole, queuedRead.pendingSlices);
+			const result = this.checkHoleAgainstWorker(
+				worker, queuedRead.hole, queuedRead.pendingSlices, queuedRead.maxReadPosition,
+			);
 
 			if (result) {
 				this.queuedReads.splice(i, 1);
@@ -2413,7 +2425,7 @@ class ReadOrchestrator {
 		}
 	}
 
-	createWorker(startPos: number, targetPos: number, strictTarget: boolean) {
+	createWorker(startPos: number, targetPos: number, strictTarget: boolean, maxReadPosition: number) {
 		if (this.workers.length >= this.options.maxWorkerCount) {
 			let oldestWorker: ReadWorker | null = null;
 			let oldestIndex: number | null = null;
@@ -2446,7 +2458,8 @@ class ReadOrchestrator {
 			startPos,
 			currentPos: startPos,
 			targetPos,
-			strictTarget,
+			maxReadPosition,
+			strictTarget: strictTarget || this.fileSize !== null,
 			running: false,
 			// Due to async shenanigans, it can happen that workers are started after disposal. In this case, instead of
 			// simply not creating the worker, we allow it to run but immediately label it as aborted, so it can then
@@ -2503,6 +2516,7 @@ class ReadOrchestrator {
 						queuedRead.hole.start,
 						queuedRead.hole.end,
 						queuedRead.strictTarget,
+						queuedRead.maxReadPosition,
 					);
 					if (!newWorker) {
 						// In high-contention cases, it could be that we've already reached max worker count, so in this
@@ -2880,7 +2894,7 @@ export class RangedSource extends Source {
 			this._offset + start,
 			this._offset + end,
 			this._offset + minReadPosition,
-			this._offset + maxReadPosition,
+			this._offset + Math.min(maxReadPosition, this._length ?? Infinity),
 		);
 
 		const processResult = (result: ReadResult | null) => {
