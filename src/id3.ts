@@ -178,7 +178,8 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 	const bytes = readBytes(slice, dataSize);
 	const reader = new Id3V2Reader(header, bytes);
 
-	if ((header.flags & Id3V2HeaderFlags.Unsynchronisation) && header.majorVersion === 3) {
+	// ID3v2.2 and ID3v2.3 unsynchronise the whole tag; ID3v2.4 does it per frame (see below)
+	if ((header.flags & Id3V2HeaderFlags.Unsynchronisation) && header.majorVersion <= 3) {
 		reader.ununsynchronizeAll();
 	}
 
@@ -470,7 +471,7 @@ export class Id3V2Reader {
 			newBytes.push(value1);
 
 			if (value1 === 0xff && i !== this.bytes.length - 1) {
-				const value2 = this.bytes[i]!;
+				const value2 = this.bytes[i + 1]!;
 				if (value2 === 0x00) {
 					i++;
 				}

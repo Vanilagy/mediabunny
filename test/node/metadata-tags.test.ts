@@ -434,6 +434,51 @@ test('Read and write metadata, MP3', async () => {
 	});
 });
 
+test('Read unsynchronised ID3v2.3 tag, MP3', async () => {
+	const output = new Output({
+		format: new Mp3OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const dummyTrack = createDummyAudioTrack('mp3', output);
+
+	await output.start();
+	await dummyTrack.addPacket();
+	await output.finalize();
+
+	// Unsynchronisation puts a zero after every 0xff followed by 0b111xxxxx or by zero, which a UTF-16 BOM and a
+	// JPEG are full of. In ID3v2.3, it's applied to the whole tag.
+	const ascii = (text: string) => [...text].map(char => char.charCodeAt(0));
+	const utf16 = (text: string) => [1, 0xff, 0xfe, ...ascii(text).flatMap(code => [code, 0])];
+	const frame = (id: string, data: number[]) => [...ascii(id), 0, 0, data.length >> 8, data.length & 0xff, 0, 0, ...data];
+	const jpeg = [0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0xff, 0xd9];
+	const frames = [
+		...frame('APIC', [0, ...ascii('image/jpeg'), 0, 3, 0, ...jpeg]),
+		...frame('TIT2', utf16(songMetadata.title!)),
+		...frame('TPE1', utf16(songMetadata.artist!)),
+	];
+	const unsynchronised = frames.flatMap((byte, i) => {
+		const next = frames[i + 1];
+		return byte === 0xff && (next === undefined || next >= 0xe0 || next === 0) ? [byte, 0] : [byte];
+	});
+	const size = unsynchronised.length;
+	const tag = [
+		...ascii('ID3'), 3, 0, 0x80,
+		(size >> 21) & 0x7f, (size >> 14) & 0x7f, (size >> 7) & 0x7f, size & 0x7f,
+		...unsynchronised,
+	];
+
+	using input = new Input({
+		source: new BufferSource(new Uint8Array([...tag, ...new Uint8Array(output.target.buffer!)])),
+		formats: ALL_FORMATS,
+	});
+
+	const readTags = await input.getMetadataTags();
+	expect(readTags.title).toBe(songMetadata.title);
+	expect(readTags.artist).toBe(songMetadata.artist);
+	expect(readTags.images![0]!.data).toEqual(new Uint8Array(jpeg));
+});
+
 test('Read and write metadata, Ogg', async () => {
 	const output = new Output({
 		format: new OggOutputFormat(),
