@@ -1089,6 +1089,47 @@ test('ADTS frames spanning PES packets with sync words in their payload', async 
 	}
 });
 
+test('Audio frames read before the rest of their PES packet', async () => {
+	// The demuxer used to read packet data in whole PES packets, and this test now tests that this doesn't happen
+	// anymore.
+
+	const frame = adtsFrame(400);
+	const pesPackets = Array.from({ length: 3 }, (_, i) => packetize(
+		STREAM_PID,
+		pes(0xc0, 8 * 1920 * i, concat(...Array.from({ length: 8 }, () => frame))),
+	));
+	const tables = concat(...packetize(0, psi(pat())), ...packetize(PMT_PID, psi(pmt(0x0f))));
+	const data = concat(tables, ...pesPackets.flat());
+	const secondPesStart = tables.length + 188 * pesPackets[0]!.length;
+	const thirdPesStart = secondPesStart + 188 * pesPackets[1]!.length;
+
+	let readEnd = 0;
+	using input = new Input({
+		source: new CustomSource({
+			getSize: () => data.length,
+			read: (start, end) => {
+				readEnd = Math.max(readEnd, end);
+				return data.subarray(start, end);
+			},
+		}),
+		formats: [MPEG_TS],
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+	const sink = new EncodedPacketSink(track);
+
+	let packet = await sink.getFirstPacket();
+	assert(packet);
+	expect(readEnd).toBeLessThan(secondPesStart);
+
+	for (let i = 0; i < 7; i++) {
+		packet = await sink.getNextPacket(packet);
+		assert(packet);
+	}
+	expect(packet.timestamp).toBe(7 * 1920 / 90000);
+	expect(readEnd).toBeLessThan(thirdPesStart);
+});
+
 // 48 kHz stereo AAC-LC, so that a frame lasts exactly 1920 ticks
 const adtsFrame = (payloadSize: number) => {
 	const frameLength = 7 + payloadSize;

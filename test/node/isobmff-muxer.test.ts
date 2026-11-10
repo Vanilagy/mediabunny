@@ -1325,6 +1325,49 @@ test('AAC sample entry above 65535 Hz, MOV', async () => {
 	expect(findBox(bytes, [...STSD_PATH, 'mp4a', 'esds'])).not.toBeNull();
 });
 
+test('24-bit FLAC sample entry above 65535 Hz, MP4', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const source = new EncodedAudioPacketSource('flac');
+	output.addAudioTrack(source);
+	await output.start();
+
+	const decoderConfig = {
+		codec: 'flac',
+		numberOfChannels: 2,
+		sampleRate: 96000,
+		// 'fLaC', then a lone STREAMINFO block: 4096-sample blocks, 96 kHz, stereo, 24 bits per sample
+		description: new Uint8Array([
+			0x66, 0x4c, 0x61, 0x43, 0x80, 0x00, 0x00, 0x22,
+			0x10, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+			0x17, 0x70, 0x03, 0x70, 0x00, 0x00, 0x00, 0x00,
+			...new Uint8Array(16),
+		]),
+	};
+	await source.add(new EncodedPacket(new Uint8Array(100), 'key', 0, 4096 / 96000), { decoderConfig });
+	await output.finalize();
+
+	const bytes = new Uint8Array(output.target.buffer!);
+	const sampleEntry = findBox(bytes, [...STSD_PATH, 'fLaC']);
+	assert(sampleEntry);
+
+	const view = toDataView(bytes);
+	expect(view.getUint16(sampleEntry.contentStart + 18)).toBe(24);
+	expect(view.getUint16(sampleEntry.contentStart + 24)).toBe(48000); // Halved until it fits
+
+	using input = new Input({
+		source: new BufferSource(bytes),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+	expect(await track.getSampleRate()).toBe(96000);
+});
+
 test('AC-3 in MOV', async () => {
 	await testAc3InMov('ac3', 'ac-3', 'dac3');
 });

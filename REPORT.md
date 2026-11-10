@@ -92,6 +92,10 @@ Behavior changes worth a look are marked **[behavior change]**.
 ✅ VP8's `vpcC` had bit depth 0 (the `vp8` codec string has no bit depth field). Fix: default to 8 bits.
 ✅ MOV `hdlr` component names were written as C strings instead of QuickTime's counted strings. Fix: in MOV, write
   a length byte followed by the name.
+✅ (#630) 24-bit FLAC in MP4 was rejected by Chromium's MSE, since the `fLaC` sample entry always declared 16 bits,
+  and sample rates of 65536 Hz and above were written as 0. Fix: FLAC's sample entry takes the bit depth from
+  STREAMINFO, and in MP4 a FLAC rate that doesn't fit is halved until it does (96 and 192 kHz become 48000), as the
+  FLAC mapping prescribes. Other codecs still write 0. MOV keeps its QuickTime layout.
 
 ### Matroska / WebM ✅
 
@@ -195,6 +199,11 @@ Behavior changes worth a look are marked **[behavior change]**.
 ✅ The AAC resync scan called the throwing ADTS header parser on false syncs, ending the stream. Fix:
   `readAdtsFrameHeader` returns null for frames with several raw data blocks instead of throwing, like it does for
   every other header it can't use (channel configuration 0 is supported now, see ADTS).
+✅ (#635) No audio frame of a PES packet came out before the next PES packet had started, since packet reading took
+  in whole PES packets, ending each at the next payload unit start. With a live stream, all frames of a PES packet
+  arrived late. Fix: `PacketReadingContext` takes in one TS packet at a time, copying its data into a scratch buffer
+  that's cleared up to each supplied packet (which gets sliced out of it). Metadata reading and packet lookups now only read PES headers instead of whole
+  sections. Reading speed is unchanged (all packets of a 5.3 MB file: 21.3 vs 20.6-21.9 ms).
 
 ### Ogg ✅
 

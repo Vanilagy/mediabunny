@@ -913,6 +913,7 @@ export const soundSampleDescription = (
 	let version: 0 | 1 | 2 = 0;
 	let contents: NestedNumberArray;
 	let sampleSizeInBits = 16;
+	let sampleEntrySampleRate = trackData.info.sampleRate;
 	let configurationBox = audioCodecToConfigurationBox(
 		trackData.track.source._codec,
 		trackData.muxer.isQuickTime,
@@ -923,6 +924,18 @@ export const soundSampleDescription = (
 		const codec = trackData.track.source._codec as PcmAudioCodec;
 		const { sampleSize } = parsePcmCodec(codec);
 		sampleSizeInBits = 8 * sampleSize;
+	} else if (trackData.track.source._codec === 'flac') {
+		const description = trackData.info.decoderConfig?.description;
+		assert(description);
+
+		const bitstream = new Bitstream(toUint8Array(description));
+		bitstream.skipBits(167); // 'fLaC', block header, block and frame sizes, sample rate and channel count
+		sampleSizeInBits = bitstream.readBits(5) + 1; // The sample entry must state STREAMINFO's bit depth
+
+		// The FLAC mapping asks us to halve the rate until it fits (weird but sure)
+		while (sampleEntrySampleRate >= 2 ** 16) {
+			sampleEntrySampleRate = Math.floor(sampleEntrySampleRate / 2);
+		}
 	}
 
 	// TrueHD's sample entry is defined on top of version 0, with its own sample rate layout
@@ -945,7 +958,7 @@ export const soundSampleDescription = (
 			trackData.track.source._codec === 'truehd'
 				? u32(trackData.info.sampleRate) // TrueHD stores the sample rate as a plain integer
 				: [
-						u16(trackData.info.sampleRate < 2 ** 16 ? trackData.info.sampleRate : 0), // Sample rate (upper)
+						u16(sampleEntrySampleRate < 2 ** 16 ? sampleEntrySampleRate : 0), // Sample rate (upper)
 						u16(0), // Sample rate (lower)
 					],
 		];
