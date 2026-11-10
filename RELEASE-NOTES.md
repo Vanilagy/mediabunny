@@ -38,7 +38,7 @@
 - Fixed the ISOBMFF muxer hanging on `finalize()` after `start()` or a track close threw
 - Fixed VP8's `vpcC` box being written with a bit depth of 0
 - Fixed MOV `hdlr` component names being written as C strings instead of counted strings
-- Fixed the sample entry of FLAC in MP4 always stating 16 bits per sample (making browsers reject 24-bit FLAC) and a sample rate of 0 above 65535 Hz
+- Fixed the sample entry of FLAC in MP4 always stating 16 bits per sample (making browsers reject 24-bit FLAC) and a sample rate of 0 above 65535 Hz (#630)
 - Fixed HE-AAC in Matroska reporting half its sample rate, as `OutputSamplingFrequency` was ignored
 - Matroska muxer now writes AAC's core sample rate as `SamplingFrequency` and adds `OutputSamplingFrequency` when SBR doubles it
 - Matroska AV1 codec info is now read from the `av1C` in `CodecPrivate`, falling back to the first packet only when it holds no sequence header
@@ -69,7 +69,7 @@
 - Fixed MPEG-TS captures joined mid-broadcast truncating a PES packet that straddles the PAT and PMT
 - Fixed MPEG-TS packet lookups near the start of a track reading data from before the PMT
 - Fixed MPEG-TS init inputs not being read before use, which made segments without parameter sets throw
-- Fixed a race in MPEG-TS `getNextPacket` that could skip a packet when called concurrently for the same packet
+- Fixed a race in MPEG-TS `getNextPacket` that could skip a packet when called concurrently for the same packet (#640)
 - Fixed wrong MPEG-TS packet durations with B-frames when retrieving the next packet of the same packet a second time
 - Fixed `getPacket` returning null in MPEG-TS for open-GOP leading frames, which are presented before the first packet in decode order
 - Fixed a multi-packet non-PES section on a track's PID ending the MPEG-TS stream early
@@ -80,7 +80,7 @@
 - Fixed MPEG-TS packets without a successor ignoring the codec's frame duration (a lone AAC packet had a duration of 0)
 - Fixed the last key packet of intra-only AVC in MPEG-TS having a duration of 0
 - Fixed negative MPEG-TS timestamps following a positive first timestamp being read as about 95443 seconds
-- Fixed MPEG-TS audio frames only becoming available once the next PES packet began, delaying live streams
+- Fixed MPEG-TS audio frames only becoming available once the next PES packet began, delaying live streams (#635)
 - Ogg muxer now writes streams that begin before the codec's usual start instead of shifting them forward. Packets too far before the start to be represented are dropped with a warning.
 - `OggOutputFormat.negativeTimestampSupport` is now `'prefer-non-negative'`, allowing forced copy conversions with trims into Ogg
 - Removed end trimming from Ogg reading and writing, as packet durations can't properly signal it
@@ -122,14 +122,14 @@
 - ADTS and MP3 streams now end with a warning where the sample rate changes, since a track can only have one sample rate
 - Fixed the ADTS muxer hanging on `finalize()` after `start()` threw
 - ID3v2 `COMM` frames with a description (like iTunNORM) are no longer read as the comment
-- Fixed ID3v2.2 and ID3v2.3 tags with whole-tag unsynchronisation being misread
+- Fixed ID3v2.2 and ID3v2.3 tags with whole-tag unsynchronisation being misread (#631)
 - Fixed ID3v2.4 tags with non-synchsafe frame sizes (as written by iTunes) being misread
-- Fixed ID3v2 frames with a grouping identity or data length indicator being misread, which could lose all tags
+- Fixed ID3v2 frames with a grouping identity or data length indicator being misread, which could lose all tags (#631)
 - Fixed ID3v2.3 tags with the footer flag set being misread
 - Fixed ID3v2.4 extended header sizes being misread
 - Fixed compressed ID3v2.2 tags being misread; they're now skipped with a warning
 - Fixed empty UTF-16 strings in ID3v2 being misread
-- Fixed ID3v2 cover art MIME types being decoded with the wrong text encoding
+- Fixed ID3v2 cover art MIME types being decoded with the wrong text encoding (#631)
 - Fixed ID3v2.3 dates being misread, as the year (`TYER`) and day and month (`TDAT`) weren't combined
 - Fixed ID3v2.4 dates with a time being read in local time instead of UTC
 - Fixed ID3 years below 100 being misread or giving invalid dates
@@ -159,7 +159,7 @@
 - Fixed HLS master playlists using WebCodecs codec strings for FLAC and MP3 instead of `fLaC` and `mp4a.40.34`
 - Fixed `FORCED=YES` being written for HLS audio and video renditions
 - Fixed floating point error sometimes making the HLS target duration one too high
-- Fixed the HLS muxer throwing when all tracks of a playlist are closed at once
+- Fixed the HLS muxer throwing when all tracks of a playlist are closed at once (#633)
 - Fixed the HLS muxer hanging on `finalize()` after `start()` threw
 - Fixed `HlsOutputFormatOptions` accepting NaN for `targetDuration` and `maxLiveSegmentCount`
 - HLS output format no longer lists WebVTT as supported, as it can't write subtitles yet
@@ -213,4 +213,15 @@
 - Fixed a `MediaStreamVideoTrackSource` paused before its first frame throwing repeatedly
 - Fixed `MediaStreamVideoTrackSource` accepting non-finite frame rates, which could hang
 - Fixed the audio context fallback of `MediaStreamAudioTrackSource` never being closed
+- Fixed VP8 and VP9 video with hidden frames stored as separate packets getting increasingly wrong timestamps (#642)
+- Fixed video frame timestamps sometimes being shifted after seeking
+- Fixed the first GOP of AVC and HEVC video with alpha decoding without alpha in Chromium
+- Fixed alpha merging ignoring backpressure
+- Fixed video with alpha losing its color space and display size
+- Fixed decoders sometimes not being closed after errors
+- Fixed sample iterators sometimes leaving their decoder open after `return()` or `throw()`, or when the mapping in `canvases()` or `buffers()` threw
+- Fixed samples queued behind a failed alpha merge never being closed
+- Fixed PCM sample timestamps drifting, which could duplicate samples
+- Fixed PCM decoding sometimes returning no samples after a seek
+- Fixed tiny PCM packets producing empty samples
 - `InputTrack.id` is now the track's 1-based index in `getTracks()` for every format, making it unique in multi-segment Matroska files. Previously, it was the container's own track ID (such as the MPEG-TS PID or the Ogg serial number).

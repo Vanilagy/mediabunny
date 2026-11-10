@@ -627,3 +627,21 @@ const replacePacket = async (
 
 	return output.target.buffer!;
 };
+
+test('VP9 hidden frames stored as separate packets', async () => {
+	using input = new Input({
+		source: new UrlSource('/vp9-hidden-frames.mkv'),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryVideoTrack();
+	assert(track);
+
+	const timestamps: number[] = [];
+	for await (using sample of new VideoSampleSink(track).samples()) {
+		timestamps.push(sample.timestamp);
+	}
+
+	// Hidden-frame packets don't mess with the timestamps:
+	expect(timestamps).toHaveLength(60);
+	expect(timestamps.at(-1)).toBeCloseTo(1.969, 3);
+});

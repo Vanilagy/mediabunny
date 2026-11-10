@@ -2693,6 +2693,68 @@ export const determineVideoPacketType = (
 	}
 };
 
+// Comput how many frames a packet produces when decoded. Hidden frames (like VP8/VP9 alt-ref frames) don't produce any.
+export const countShownVideoFrames = (codec: VideoCodec, packetData: Uint8Array) => {
+	if (codec === 'vp8') {
+		// The frame tag's show_frame flag
+		return (packetData[0]! >> 4) & 1;
+	} else if (codec === 'vp9') {
+		// http://downloads.webmproject.org/docs/vp9/vp9-bitstream_superframe-and-uncompressed-header_v1.0.pdf
+		const isShown = (frameData: Uint8Array) => {
+			const bitstream = new Bitstream(frameData);
+			bitstream.skipBits(2); // frame_marker
+			const profileLowBit = bitstream.readBits(1);
+			const profileHighBit = bitstream.readBits(1);
+			if (profileLowBit === 1 && profileHighBit === 1) {
+				bitstream.skipBits(1); // Reserved bit of profile 3
+			}
+
+			const showExistingFrame = bitstream.readBits(1);
+			if (showExistingFrame === 1) {
+				return true;
+			}
+
+			bitstream.skipBits(1); // frame_type
+			const showFrame = bitstream.readBits(1);
+			return showFrame === 1;
+		};
+
+		const lastByte = packetData[packetData.length - 1]!;
+		if ((lastByte & 0xe0) === 0xc0) {
+			const frameCount = (lastByte & 0x07) + 1;
+			const frameSizeLength = ((lastByte >> 3) & 0x03) + 1;
+			const indexStart = packetData.length - (2 + frameCount * frameSizeLength);
+
+			if (packetData[indexStart] === lastByte) {
+				// A superframe, which concatenates several frames and lists their sizes in its index
+				let shownFrameCount = 0;
+				let frameStart = 0;
+
+				for (let i = 0; i < frameCount; i++) {
+					let frameSize = 0;
+					for (let j = 0; j < frameSizeLength; j++) {
+						// Little-endian
+						frameSize += packetData[indexStart + 1 + i * frameSizeLength + j]! * 2 ** (8 * j);
+					}
+
+					if (isShown(packetData.subarray(frameStart, frameStart + frameSize))) {
+						shownFrameCount++;
+					}
+					frameStart += frameSize;
+				}
+
+				return shownFrameCount;
+			}
+		}
+
+		return isShown(packetData) ? 1 : 0;
+	}
+
+	// Not yet handled: AV1 temporal units with no or several shown frames, HEVC pictures with pic_output_flag = 0, and
+	// interlaced AVC field pairs (two packets, one frame). Can handle them when this actually comes up.
+	return 1;
+};
+
 export const determineAudioPacketType = (codec: AudioCodec, packetData: Uint8Array): PacketType => {
 	if (codec === 'truehd') {
 		// Only access units carrying a major sync are restart points

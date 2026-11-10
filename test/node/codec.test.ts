@@ -11,6 +11,7 @@ import {
 	parseAvcSps,
 	parseHevcSps,
 	serializeAvcDecoderConfigurationRecord,
+	countShownVideoFrames,
 } from '../../src/codec-data.js';
 import { CustomAudioDecoder, registerDecoder } from '../../src/custom-coder.js';
 import { canDecode, canDecodeAudio } from '../../src/decode.js';
@@ -214,4 +215,22 @@ test('AV1 level for a wide picture', () => {
 		av1CodecInfo: null,
 		proresFormat: null,
 	})).toBe('av01.0.01M.08');
+});
+
+test('Video packets with hidden frames', () => {
+	// VP8 inter frame tags, with show_frame as the fifth bit
+	expect(countShownVideoFrames('vp8', new Uint8Array([0x11, 0x00, 0x00]))).toBe(1);
+	expect(countShownVideoFrames('vp8', new Uint8Array([0x01, 0x00, 0x00]))).toBe(0);
+
+	// Starts of VP9 inter frames from Lavf56, which stored hidden frames as packets of their own
+	expect(countShownVideoFrames('vp9', hexStringToBytes('86004092'))).toBe(1);
+	expect(countShownVideoFrames('vp9', hexStringToBytes('84008049'))).toBe(0);
+
+	// VP9 superframes of two two-byte frames (hidden 84, shown 86), whose indexes hold one-byte frame sizes
+	expect(countShownVideoFrames('vp9', hexStringToBytes('84008600c10202c1'))).toBe(1);
+	expect(countShownVideoFrames('vp9', hexStringToBytes('86008600c10202c1'))).toBe(2);
+	expect(countShownVideoFrames('vp9', hexStringToBytes('84008400c10202c1'))).toBe(0);
+
+	// The same with two-byte frame sizes, which are little-endian
+	expect(countShownVideoFrames('vp9', hexStringToBytes('84008600c902000200c9'))).toBe(1);
 });

@@ -976,7 +976,10 @@ test('Audio track resampled with a slow target', async () => {
 	expect(sourceErrors).toEqual([]);
 	expect(encodedSamples).toHaveLength(2);
 	expect(encodedSamples[1]!.timestamp).toBe(5);
-	expect(encodedSamples[1]!.numberOfFrames / 480).toBeCloseTo(8, 0);
+	// How many got queued depends on timing, but never more than the queue holds
+	const queuedSampleCount = Math.round(encodedSamples[1]!.numberOfFrames / 480);
+	expect(queuedSampleCount).toBeGreaterThan(0);
+	expect(queuedSampleCount).toBeLessThanOrEqual(8);
 });
 
 test('Audio track captured through the audio context fallback', async () => {

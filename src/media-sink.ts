@@ -11,6 +11,7 @@ import {
 	addAvcBitstreamRestriction,
 	AvcNalUnitType,
 	concatAvcNalUnits,
+	countShownVideoFrames,
 	deserializeAvcDecoderConfigurationRecord,
 	determineVideoPacketType,
 	extractNalUnitTypeForAvc,
@@ -47,6 +48,7 @@ import {
 	promiseWithResolvers,
 	removeItem,
 	Rotation,
+	roundToDivisor,
 	toAsyncIterator,
 	toDataView,
 	toUint8Array,
@@ -668,8 +670,7 @@ export abstract class BaseMediaSampleSink<
 				return { value: undefined, done: true };
 			},
 			async throw(error) {
-				// Like a generator function, a throw() ends the iteration
-				await this.return();
+				await this.return(); // Like a generator function, a throw() ends the iteration
 				throw error;
 			},
 			[Symbol.asyncIterator]() {
@@ -816,8 +817,7 @@ export abstract class BaseMediaSampleSink<
 
 			try {
 				while (true) {
-					// The timestamps may take arbitrarily long to come in, so stop waiting on them once terminated.
-					// Else, the decoder would stay open until the next one arrives.
+					// The timestamps may take arbitrarily long to come in, so stop waiting on them once terminated
 					const nextTimestamp = timestampIterator.next();
 					nextTimestamp.catch(() => {}); // It may lose the race and reject later on
 					const result = await Promise.race([nextTimestamp, terminatedPromise]);
@@ -883,7 +883,6 @@ export abstract class BaseMediaSampleSink<
 					await decodePackets();
 				}
 			} finally {
-				// Not awaited, since it queues up behind a timestamp we may still be waiting on
 				timestampIterator.return().catch(() => {});
 			}
 
@@ -1121,7 +1120,6 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 		} else {
 			assert(this.decoder);
 
-			// Decoded samples still being merged with their alpha count too, they take up memory all the same
 			return Math.max(
 				this.decoder.decodeQueueSize,
 				this.alphaDecoder?.decodeQueueSize ?? 0,
@@ -1151,68 +1149,22 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			assert(this.decoder);
 
 			if (!isWebKit()) {
-				insertSorted(this.inputTimestamps, packet.timestamp, x => x);
-			}
-
-			// The workarounds below only rewrite the color data, the alpha side data stays as is
-			let colorPacket = packet;
-			if (isChromium() && this.currentPacketIndex === 0) {
-				if (this.codec === 'avc') {
-					// Workaround for https://issues.chromium.org/issues/470109459
-					const filteredNalUnits: Uint8Array[] = [];
-					let hasFrameData = false;
-
-					for (const loc of iterateAvcNalUnits(packet.data, this.decoderConfig)) {
-						const type = extractNalUnitTypeForAvc(packet.data[loc.offset]!);
-						hasFrameData ||= type >= 1 && type <= 5;
-
-						if (type === AvcNalUnitType.AUD) {
-							if (hasFrameData) {
-								// Already has actual frame data, so treat an AUD as simply the end of the packet
-								break;
-							} else {
-								// If packets contain an AUD and have NALUs before it, this trips up Chromium's key
-								// frame detector. Clear the NALUs if an AUD is encountered.
-								// https://github.com/Vanilagy/mediabunny/issues/396
-								filteredNalUnits.length = 0;
-							}
-						}
-
-						// These trip up Chromium's key frame detection, so let's strip them
-						if (!(type >= 20 && type <= 31)) {
-							filteredNalUnits.push(packet.data.subarray(loc.offset, loc.offset + loc.length));
-						}
-					}
-
-					if (!this.decoderConfig.description) {
-						// Do SPS fixups if necessary
-						for (let i = 0; i < filteredNalUnits.length; i++) {
-							const nalUnit = filteredNalUnits[i]!;
-							if (extractNalUnitTypeForAvc(nalUnit[0]!) !== AvcNalUnitType.SPS) {
-								continue;
-							}
-
-							const sps = parseAvcSps(nalUnit);
-							if (sps && sps.maxDecFrameBuffering !== 0 && sps.bitstreamRestrictionFlag !== 1) {
-								filteredNalUnits[i] = addAvcBitstreamRestriction(sps);
-							}
-
-							break;
-						}
-					}
-
-					const newData = concatAvcNalUnits(filteredNalUnits, this.decoderConfig);
-					colorPacket = new EncodedPacket(newData, packet.type, packet.timestamp, packet.duration);
-				} else if (this.codec === 'hevc') {
-					// Workaround for https://issues.chromium.org/issues/507611247
-					const sanitizedData = sanitizeHevcPacketForChromium(packet.data, this.decoderConfig);
-					if (sanitizedData) {
-						colorPacket = new EncodedPacket(sanitizedData, packet.type, packet.timestamp, packet.duration);
-					}
+				// It is important that we don't add timestamps for packets that won't produce a frame. If we did, it
+				// would offset everything. See https://github.com/Vanilagy/mediabunny/issues/642.
+				const shownFrameCount = countShownVideoFrames(this.codec, packet.data);
+				for (let i = 0; i < shownFrameCount; i++) {
+					insertSorted(this.inputTimestamps, packet.timestamp, x => x);
 				}
 			}
 
-			this.decoder.decode(colorPacket.toEncodedVideoChunk());
+			if (isChromium() && this.currentPacketIndex === 0) {
+				const fixedData = this.fixFirstPacketDataForChromium(packet.data);
+				if (fixedData) {
+					packet = packet.clone({ data: fixedData });
+				}
+			}
+
+			this.decoder.decode(packet.toEncodedVideoChunk());
 			this.decodeAlphaData(packet);
 		}
 
@@ -1315,11 +1267,78 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 				this.alphaRaslSkipped = true;
 			}
 
+			// The alpha decoder is a decoder of its own, so its first packet needs the same treatment
+			if (isChromium() && this.currentAlphaPacketIndex === 0) {
+				const fixedData = this.fixFirstPacketDataForChromium(packet.sideData.alpha);
+				if (fixedData) {
+					packet = packet.clone({
+						sideData: {
+							...packet.sideData,
+							alpha: fixedData,
+						},
+					});
+				}
+			}
+
 			this.currentAlphaPacketIndex++;
 			this.alphaDecoder.decode(packet.alphaToEncodedVideoChunk(type ?? packet.type));
 			this.alphaDecoderQueueSize++;
 		} else {
 			this.pushNullAlphaFrame();
+		}
+	}
+
+	fixFirstPacketDataForChromium(data: Uint8Array) {
+		if (this.codec === 'avc') {
+			// Workaround for https://issues.chromium.org/issues/470109459
+			const filteredNalUnits: Uint8Array[] = [];
+			let hasFrameData = false;
+
+			for (const loc of iterateAvcNalUnits(data, this.decoderConfig)) {
+				const type = extractNalUnitTypeForAvc(data[loc.offset]!);
+				hasFrameData ||= type >= 1 && type <= 5;
+
+				if (type === AvcNalUnitType.AUD) {
+					if (hasFrameData) {
+						// Already has actual frame data, so treat an AUD as simply the end of the packet
+						break;
+					} else {
+						// If packets contain an AUD and have NALUs before it, this trips up Chromium's key frame
+						// detector. Clear the NALUs if an AUD is encountered.
+						// https://github.com/Vanilagy/mediabunny/issues/396
+						filteredNalUnits.length = 0;
+					}
+				}
+
+				// These trip up Chromium's key frame detection, so let's strip them
+				if (!(type >= 20 && type <= 31)) {
+					filteredNalUnits.push(data.subarray(loc.offset, loc.offset + loc.length));
+				}
+			}
+
+			if (!this.decoderConfig.description) {
+				// Do SPS fixups if necessary
+				for (let i = 0; i < filteredNalUnits.length; i++) {
+					const nalUnit = filteredNalUnits[i]!;
+					if (extractNalUnitTypeForAvc(nalUnit[0]!) !== AvcNalUnitType.SPS) {
+						continue;
+					}
+
+					const sps = parseAvcSps(nalUnit);
+					if (sps && sps.maxDecFrameBuffering !== 0 && sps.bitstreamRestrictionFlag !== 1) {
+						filteredNalUnits[i] = addAvcBitstreamRestriction(sps);
+					}
+
+					break;
+				}
+			}
+
+			return concatAvcNalUnits(filteredNalUnits, this.decoderConfig);
+		} else if (this.codec === 'hevc') {
+			// Workaround for https://issues.chromium.org/issues/507611247
+			return sanitizeHevcPacketForChromium(data, this.decoderConfig);
+		} else {
+			return null;
 		}
 	}
 
@@ -1505,8 +1524,6 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			this.flushing = false;
 			await Promise.all(this.mergeAlphaPromises);
 
-			// Packets that never produced a frame (like invisible VP8 frames) leave their timestamps behind, which
-			// would shift the timestamps of all frames to come
 			this.inputTimestamps.length = 0;
 
 			this.colorQueue.forEach(x => x.close());
@@ -2699,8 +2716,7 @@ class PcmAudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 			numberOfChannels: this.decoderConfig.numberOfChannels,
 			sampleRate,
 			numberOfFrames,
-			// Summing up durations accumulates floating-point error, so snap the timestamp back onto the sample grid
-			timestamp: Math.round(preciseTimestamp * sampleRate) / sampleRate,
+			timestamp: roundToDivisor(preciseTimestamp, sampleRate),
 		});
 
 		this.onSample(audioSample);

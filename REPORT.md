@@ -618,33 +618,40 @@ Behavior changes worth a look are marked **[behavior change]**.
 ✅ Empty AudioSamples were turned into AudioData for the WebCodecs encoder, which forbids 0 frames (threw). Fix:
   `encodeSample` skips samples with 0 frames.
 
-### Media sinks (decoding)
+### Media sinks (decoding) ✅
 
-- Decoders were never closed when `next()` threw while the pump waited on backpressure. Fix: the termination
+✅ Decoders were never closed when `next()` threw while the pump waited on backpressure. Fix: the termination
   paths (disposal, out-of-band error) call `onQueueDequeue()`, waking the waiting pump so it can wind down.
-- Custom decoders were never closed after a failure (plus an unhandled rejection). Fix: the CallSerializer fix
+✅ Custom decoders were never closed after a failure (plus an unhandled rejection). Fix: the CallSerializer fix
   (see "Small core pieces") keeps the queued `close()` from being skipped; close errors go to `onError`.
-- AVC alpha side data was dropped on Chromium (first GOP opaque). Fix: the Chromium first-packet workarounds
-  rewrite a separate `colorPacket`, so alpha decoding still gets the original packet with its side data.
-- Alpha merging ignored backpressure (~1 GB in flight). Fix: the reported decode queue size includes the samples
+✅ In Chromium, the first AVC/HEVC packet lost its alpha side data (first GOP opaque): the Chromium-only
+  first-packet workarounds rebuilt the packet without its side data. Fix: the workarounds (now
+  `fixFirstPacketDataForChromium`) produce a `clone()` of the packet, which keeps its side data, and the alpha
+  decoder's first packet gets the same workarounds applied to its alpha data.
+✅ Alpha merging ignored backpressure (~1 GB in flight). Fix: the reported decode queue size includes the samples
   still waiting in `finalSamples`.
-- Merged samples behind a failed merge were never closed. Fix: on a failed merge, close the already-merged samples
+✅ Merged samples behind a failed merge were never closed. Fix: on a failed merge, close the already-merged samples
   queued behind it.
-- Alpha-merged frames lost their color space and display size. Fix: the merger worker passes `displayWidth`,
+✅ Alpha-merged frames lost their color space and display size. Fix: the merger worker passes `displayWidth`,
   `displayHeight` and `colorSpace` of the color frame into the new VideoFrame.
-- PCM sample timestamps drifted (samples duplicated at range boundaries). Fix: snap each timestamp to the sample
-  grid (`Math.round(t * sampleRate) / sampleRate`).
-- PCM flush didn't reset its timestamp (`samplesAtTimestamps` returned null). Fix: `flush()` resets
+✅ PCM sample timestamps drifted (samples duplicated at range boundaries). Fix: snap each timestamp to the sample
+  grid (`roundToDivisor(t, sampleRate)`).
+✅ PCM flush didn't reset its timestamp (`samplesAtTimestamps` returned null). Fix: `flush()` resets
   `currentTimestamp` to null.
-- `flush()` kept stale input timestamps (shifted timestamps after a frameless chunk and a seek). Fix: clear
+✅ `flush()` kept stale input timestamps (shifted timestamps after a frameless chunk and a seek). Fix: clear
   `inputTimestamps` on flush.
-- The sample iterators' `throw()` didn't clean up (decoder left open). Fix: `throw()` calls `return()` first,
+✅ (#642) Hidden VP8/VP9 frames stored as packets of their own (VP8 alt-ref frames, VP9 from old FFmpeg) each took
+  a timestamp meant for a shown frame, so frames got earlier and earlier timestamps (a Lavf56 VP9 file ended
+  14 s early). Fix: a packet queues as many timestamps in `inputTimestamps` as it shows frames
+  (`countShownVideoFrames`: VP8's `show_frame`, VP9's `show_frame`/`show_existing_frame`, counted per frame of a
+  superframe).
+✅ The sample iterators' `throw()` didn't clean up (decoder left open). Fix: `throw()` calls `return()` first,
   like a generator function.
-- After `return()`, the decoder was only closed once the user's timestamp source yielded again. Fix: waiting for
+✅ After `return()`, the decoder was only closed once the user's timestamp source yielded again. Fix: waiting for
   the next timestamp races against a termination promise.
-- `canvases()`/`buffers()` leaked the decoder when the mapping threw. Fix: `mapAsyncGenerator` returns the source
+✅ `canvases()`/`buffers()` leaked the decoder when the mapping threw. Fix: `mapAsyncGenerator` returns the source
   generator itself when `map` throws, since consumers don't call `return()` after a rejected `next()`.
-- Tiny PCM packets produced zero-frame samples. Fix: the PCM decoder skips packets with 0 frames, like the
+✅ Tiny PCM packets produced zero-frame samples. Fix: the PCM decoder skips packets with 0 frames, like the
   regular decoder.
 
 ### Samples
@@ -1003,8 +1010,9 @@ The current behavior is arguably intended, or fixing it means picking between va
   sizing the ignored track's truns.
 - MP3 detection only tries the first sync candidate (~25% of mid-frame cuts undetected, measured before the
   reserved-header fix). Detection and demuxer both need a shared validated-first-frame search.
-- Frameless decoder chunks (an invisible VP8 frame, separate fields) shift every later timestamp in that decode
-  session (crafted VP8 file). Needs codec-aware skipping.
+- Frameless decoder chunks other than hidden VP8/VP9 frames still shift every later timestamp in that decode
+  session: AV1 temporal units without a shown frame, HEVC pictures with `pic_output_flag = 0`, and interlaced
+  AVC field pairs stored as two packets.
 - Matroska clusters without BlockDuration/DefaultDuration give the last block per track duration 0 (FFmpeg FLAC
   MKA: 2.926 s vs 3.0). FFmpeg uses codec parsers for this.
 - Server: multi-frame packets give later frames garbage timestamps (concatenated packets); rare in the wild.
