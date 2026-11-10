@@ -536,35 +536,37 @@ Behavior changes worth a look are marked **[behavior change]**.
   Fix: reads past the root's size return null.
 ✅ CustomSource didn't cancel a stream from `read` that held more than needed. Fix: cancel the reader when done.
 
-### Output, targets and writer
+### Output, targets and writer ✅
 
-- `cancel()` rejected and skipped closing targets after a failed source close. Fix: errors from the sources'
+✅ `cancel()` rejected and skipped closing targets after a failed source close. Fix: errors from the sources'
   forced close are swallowed in `cancel()`.
-- `cancel()` rejected when a target stream had already errored. Fix: target close errors are swallowed in
+✅ `cancel()` rejected when a target stream had already errored. Fix: target close errors are swallowed in
   `cancel()` (see also the StreamTarget fix below).
-- Targets obtained while cancel waited for start were never closed. Fix: a new `_targetsClosed` flag, set only
+✅ Targets obtained while cancel waited for start were never closed. Fix: a new `_targetsClosed` flag, set only
   right before the unfinalized targets are closed, replaces the `state === 'canceled'` check. Targets arriving
   while cancel waits are now remembered and closed along with the others, instead of being "closed" right away
   (a no-op for a never-started StreamTarget) and then used by the muxer.
-- The `initTarget` result was unchecked. Fix: throw a TypeError if it isn't a `Target`.
-- A target arriving after cancel cleanup was closed but still returned, so a late HLS segment was written into a
-  closed target. Fix: `_getTarget` throws "Output has been canceled." after closing it.
-- The `target` getter left the rejected promise of an async root PathedTarget unhandled. Fix: attach a no-op
+✅ The `initTarget` result was unchecked. Fix: throw a TypeError if it isn't a `Target`.
+✅ A target arriving after cancel cleanup was closed but still returned, so a late HLS segment was written into a
+  closed target. Fix: `_getTarget` throws after closing it ("Output has been canceled.", or "Output has already
+  been finalized." if a target somehow arrives after a successful finalization).
+✅ The `target` getter left the rejected promise of an async root PathedTarget unhandled. Fix: attach a no-op
   handler before throwing the TypeError; the muxer still surfaces the rejection when it awaits the target.
-- `getMimeType()` never settled after cancel. Fix: race the muxer's MIME type against a `_canceled` promise that
+✅ `getMimeType()` never settled after cancel. Fix: race the muxer's MIME type against a `_canceled` promise that
   rejects once the output is canceled.
-- A discarded target close could become an unhandled rejection. Fix: `.catch(() => {})` on it.
-- The track limit error said "trackss". Fix: drop the extra "s".
-- AppendOnlyStreamTarget never emitted `finalized` (HLS `onInit` never fired for it). Fix: emit it after its
+✅ A discarded target close could become an unhandled rejection. Fix: `.catch(() => {})` on it.
+✅ The track limit error said "trackss". Fix: drop the extra "s".
+✅ AppendOnlyStreamTarget never emitted `finalized` (HLS `onInit` never fired for it). Fix: emit it after its
   inner StreamTarget finalized.
-- **[behavior change]** Closing a StreamTarget that was never started did nothing (leaking FilePathTarget handles);
-  it now closes the user's stream. Fix: `_close()` acquires a writer itself if there's none; starting a closed
-  target throws.
-- StreamTarget close rejected on an already-errored stream. Fix: `_close()` returns early when the writer's
-  `desiredSize` is null (errored).
-- FilePathTarget kept its file handle open after a write failure. Fix: close the file handle in a `finally` in
+✅ **[behavior change]** Closing a StreamTarget that was never started did nothing (leaking FilePathTarget handles);
+  it now closes the user's stream. Fix: `_close()` acquires a writer itself if there's none. Every target now
+  tracks being closed (`Target._close()` sets `_closed` and calls the target's `_release()`), and creating a
+  Writer for a closed target throws.
+✅ StreamTarget close rejected on an already-errored stream. Fix: `_close()` only closes the writer when its
+  `desiredSize` isn't null (errored).
+✅ FilePathTarget kept its file handle open after a write failure. Fix: close the file handle in a `finally` in
   `_close()`, since an errored stream never closes it.
-- Writer tracking used position 0 instead of the tracked start. Fix: `pos = this.trackedStart` when clipping a
+✅ Writer tracking used position 0 instead of the tracked start. Fix: `pos = this.trackedStart` when clipping a
   write that begins before the tracked region.
 
 ### Media sources (encoding)

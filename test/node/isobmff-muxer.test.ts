@@ -976,7 +976,7 @@ class HeaderRecordingTarget extends Target {
 
 	async _finalize() {}
 
-	async _close() {}
+	async _release() {}
 
 	read(pos: number, length: number) {
 		const result = new Uint8Array(length);

@@ -39,6 +39,8 @@ export type TargetEvents = {
 export abstract class Target extends EventEmitter<TargetEvents> {
 	/** @internal */
 	_writerAcquired = false;
+	/** @internal */
+	_closed = false;
 
 	/** @internal */
 	_monotonicity: boolean | null = null; // null = unknown
@@ -52,7 +54,7 @@ export abstract class Target extends EventEmitter<TargetEvents> {
 	/** @internal */
 	abstract _finalize(): Promise<void>;
 	/** @internal */
-	abstract _close(): Promise<void>;
+	abstract _release(): Promise<void>;
 
 	/**
 	 * Called each time data is written to the target. Will be called with the byte range into which data was written.
@@ -63,6 +65,12 @@ export abstract class Target extends EventEmitter<TargetEvents> {
 	 * @deprecated Use `target.on('write', ({ start, end }) => ...)` instead.
 	 */
 	onwrite: ((start: number, end: number) => unknown) | null = null;
+
+	/** @internal */
+	_close() {
+		this._closed = true;
+		return this._release();
+	}
 
 	/** @internal */
 	_setMonotonicity(monotonicity: boolean) {
@@ -236,7 +244,7 @@ export class BufferTarget extends Target {
 	}
 
 	/** @internal */
-	async _close() {}
+	async _release() {}
 
 	/** @internal */
 	_getSlice(start: number, end: number) {
@@ -319,8 +327,6 @@ export class StreamTarget extends Target {
 	_streamWriter: WritableStreamDefaultWriter<StreamTargetChunk> | null = null;
 	/** @internal */
 	_writeError: unknown = null;
-	/** @internal */
-	_closed = false;
 
 	// These variables regard chunked mode:
 	/** @internal */
@@ -363,10 +369,6 @@ export class StreamTarget extends Target {
 
 	/** @internal */
 	_start() {
-		if (this._closed) {
-			throw new Error('Cannot start a target that has already been closed.');
-		}
-
 		this._streamWriter = this._writable.getWriter();
 	}
 
@@ -607,15 +609,13 @@ export class StreamTarget extends Target {
 	}
 
 	/** @internal */
-	async _close() {
-		this._closed = true;
-
+	async _release() {
 		const writer = this._streamWriter ?? this._writable.getWriter();
-		if (writer.desiredSize === null) {
-			return; // The stream has errored, so there's nothing left to close
+		if (writer.desiredSize !== null) {
+			await writer.close();
+		} else {
+			// Already closed/errored
 		}
-
-		await writer.close();
 	}
 }
 
@@ -691,7 +691,7 @@ export class AppendOnlyStreamTarget extends Target {
 	}
 
 	/** @internal */
-	_close(): Promise<void> {
+	_release(): Promise<void> {
 		return this._streamTarget._close();
 	}
 
@@ -786,11 +786,10 @@ export class FilePathTarget extends Target {
 	}
 
 	/** @internal */
-	async _close() {
+	async _release() {
 		try {
 			await this._streamTarget._close();
 		} finally {
-			// An errored stream never gets to close the file handle itself
 			await this._fileHandle?.close();
 			this._fileHandle = null;
 		}
@@ -828,7 +827,7 @@ export class NullTarget extends Target {
 	}
 
 	/** @internal */
-	async _close() {}
+	async _release() {}
 }
 
 /**
@@ -871,7 +870,7 @@ export class RangedTarget extends Target {
 	}
 
 	/** @internal */
-	async _close() {}
+	async _release() {}
 
 	/** @internal */
 	override _setMonotonicity(monotonicity: boolean): void {

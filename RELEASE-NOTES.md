@@ -13,8 +13,6 @@
 - Added detection of ADTS and MP3 files holding just a single frame
 - Added support for ID3v2.2 `TXX` frames
 - Added support for `fLaC` in HLS `CODECS` attributes
-- Added validation for `FlacOutputFormatOptions.onFrame`
-- Added validation for `AttachedImage.name` and `AttachedImage.description`
 - MOV muxer now writes a QuickTime version 2 sound description for sample rates of 65536 Hz and above, which were previously written as 0
 - Fixed reading sample rates of 65536 Hz and above from ISOBMFF files
 - Fixed ISOBMFF PCM tracks losing most of their data when their samples span more than one PCM frame
@@ -40,6 +38,7 @@
 - Fixed the ISOBMFF muxer hanging on `finalize()` after `start()` or a track close threw
 - Fixed VP8's `vpcC` box being written with a bit depth of 0
 - Fixed MOV `hdlr` component names being written as C strings instead of counted strings
+- Fixed the sample entry of FLAC in MP4 always stating 16 bits per sample (making browsers reject 24-bit FLAC) and a sample rate of 0 above 65535 Hz
 - Fixed HE-AAC in Matroska reporting half its sample rate, as `OutputSamplingFrequency` was ignored
 - Matroska muxer now writes AAC's core sample rate as `SamplingFrequency` and adds `OutputSamplingFrequency` when SBR doubles it
 - Matroska AV1 codec info is now read from the `av1C` in `CodecPrivate`, falling back to the first packet only when it holds no sequence header
@@ -81,6 +80,7 @@
 - Fixed MPEG-TS packets without a successor ignoring the codec's frame duration (a lone AAC packet had a duration of 0)
 - Fixed the last key packet of intra-only AVC in MPEG-TS having a duration of 0
 - Fixed negative MPEG-TS timestamps following a positive first timestamp being read as about 95443 seconds
+- Fixed MPEG-TS audio frames only becoming available once the next PES packet began, delaying live streams
 - Ogg muxer now writes streams that begin before the codec's usual start instead of shifting them forward. Packets too far before the start to be represented are dropped with a warning.
 - `OggOutputFormat.negativeTimestampSupport` is now `'prefer-non-negative'`, allowing forced copy conversions with trims into Ogg
 - Removed end trimming from Ogg reading and writing, as packet durations can't properly signal it
@@ -104,6 +104,7 @@
 - Fixed broken FLAC PICTURE blocks for MIME types or descriptions with non-ASCII characters
 - Fixed single-frame FLAC output having a minimum block size of 0, which FFmpeg rejects
 - Fixed the FLAC muxer hanging on `finalize()` after `start()` threw
+- Fixed missing validation for `FlacOutputFormatOptions.onFrame`
 - Fixed reading WAVE files whose header overstates the data size from unsized sources, such as FFmpeg's pipe output
 - Fixed chunks following the data chunk in RF64 files, such as metadata, not being read
 - Fixed WAVE `getPacket()` returning the previous packet when given a packet's exact timestamp
@@ -136,6 +137,7 @@
 - Fixed an ID3 BPM of 0 making conversions fail
 - Fixed ID3v2 lyrics and cover art with non-Latin-1 text being written with the wrong frame size
 - Fixed cover art being duplicated when converting MP3 to MP3
+- Fixed missing validation for `AttachedImage.name` and `AttachedImage.description`
 - Fixed HLS variant streams referencing undefined media groups losing their tracks
 - Fixed the HLS `CHANNELS` attribute of object-based audio (such as Dolby Atmos) being read as the channel count
 - Fixed HLS master playlists with only I-frame variants failing to load
@@ -184,4 +186,14 @@
 - Fixed `UrlSource` failing to read empty resources
 - Fixed `UrlSource` keeping requests running after errors
 - Fixed `UrlSource` error messages sometimes showing `[object Request]` instead of the URL
+- Canceling an output now also closes the streams of `StreamTarget`s that were never started, which leaked file handles for `FilePathTarget`
+- Fixed `Output.cancel()` failing and leaving targets open when a source or target stream had errored
+- Fixed targets requested during cancellation being written to after being closed, or never being closed
+- Fixed `Output.getMimeType()` never settling after the output was canceled
+- Fixed unhandled promise rejections from `Output.target` with a failing async `PathedTarget` callback and from closing discarded targets
+- Fixed `FilePathTarget` leaking its file handle after a write failure
+- Fixed `AppendOnlyStreamTarget` never emitting `finalized`
+- Fixed format callbacks such as `onMoof` sometimes receiving wrong data
+- Fixed missing validation for the result of `OutputOptions.initTarget`
+- Fixed a typo in the error for too many tracks
 - `InputTrack.id` is now the track's 1-based index in `getTracks()` for every format, making it unique in multi-segment Matroska files. Previously, it was the container's own track ID (such as the MPEG-TS PID or the Ogg serial number).

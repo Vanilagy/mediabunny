@@ -502,8 +502,7 @@ export class Output<
 
 		const rootTargetResult = this._getRootTarget();
 		if (isThenable(rootTargetResult)) {
-			// Nobody might await the promise for a while, but a rejection will still surface once the muxer does
-			void rootTargetResult.then(null, () => {});
+			rootTargetResult.catch(() => {});
 			throw new TypeError(errorMessage);
 		}
 
@@ -584,8 +583,9 @@ export class Output<
 
 		if (this._targetsClosed) {
 			await target._close();
-			// Don't let the muxer write into the target after all
-			throw new Error('Output has been canceled.');
+			throw new Error(
+				this.state === 'canceled' ? 'Output has been canceled.' : 'Output has already been finalized.',
+			);
 		}
 
 		this._rememberTarget(target);
@@ -972,7 +972,6 @@ export class Output<
 	getMimeType() {
 		return Promise.race([
 			this._muxer.getMimeType(),
-			// Codec strings still unknown once the output is canceled will never be known
 			this._canceled.promise.then(() => {
 				throw new Error('Output has been canceled.');
 			}),

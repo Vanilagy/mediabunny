@@ -10,6 +10,7 @@ import { Output } from '../../src/output.js';
 import { AppendOnlyStreamTarget, BufferTarget, FilePathTarget, StreamTarget, Target } from '../../src/target.js';
 import { AdtsOutputFormat, Mp4OutputFormat } from '../../src/output-format.js';
 import { Conversion } from '../../src/conversion.js';
+import { Writer } from '../../src/writer.js';
 import { EncodedAudioPacketSource } from '../../src/media-source.js';
 import { EncodedPacket } from '../../src/packet.js';
 import { Writer } from '../../src/writer.js';
@@ -109,7 +110,7 @@ test('StreamTarget canceled before start', async () => {
 
 	await output.cancel();
 	expect(closed).toBe(true);
-	expect(() => target._start()).toThrow('Cannot start a target that has already been closed.');
+	expect(() => new Writer(target, true)).toThrow('Can\'t create a Writer for a Target that has already been closed.');
 });
 
 test('FilePathTarget canceled before start', async () => {
