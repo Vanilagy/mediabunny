@@ -441,8 +441,8 @@ test.each([206, 200])('UrlSource counts consecutive failed body reads for status
 			});
 		},
 	});
-	using _ref = source.ref();
-	const reader = new Reader(source);
+	using ref = source.ref();
+	const reader = new Reader(ref.source);
 	await expect(reader.requestSlice(0, 16)).rejects.toBe(failure);
 	expect(attempts).toEqual([1, 2, 3]);
 	expect(requests).toBe(3);
@@ -480,8 +480,8 @@ test.each([206, 200])('UrlSource resets body retries only after new bytes with s
 			});
 		},
 	});
-	using _ref = source.ref();
-	const reader = new Reader(source);
+	using ref = source.ref();
+	const reader = new Reader(ref.source);
 	await expect(reader.requestSlice(0, 16)).rejects.toBe(failure);
 	expect(attempts).toEqual([1, 2, 1, 2, 3]);
 	expect(requests).toBe(5);
