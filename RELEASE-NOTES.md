@@ -224,4 +224,14 @@
 - Fixed PCM sample timestamps drifting, which could duplicate samples
 - Fixed PCM decoding sometimes returning no samples after a seek
 - Fixed tiny PCM packets producing empty samples
+- Fixed `VideoSample` losing the last chroma column of odd-width subsampled formats when copied
+- Fixed `VideoSample`s created from raw data ignoring the offset of their visible rect
+- Fixed `VideoSample.copyTo()` with an RGB/BGR conversion corrupting pixels for layouts whose offset or stride isn't a multiple of 4, and overwriting the bytes before the layout's offset
+- Fixed `VideoSample.drawWithFit()` not clamping the crop, and leaving the context transformed when throwing
+- Fixed `VideoSample.transform()` dropping encode options
+- Fixed resource leaks when constructing a `VideoSample` or `AudioSample` failed, and when converting a `VideoSample` from YUV to RGB failed
+- Fixed `VideoSample` throwing internal errors instead of a `TypeError` for wrong layout plane counts, empty visible rects and closed `VideoFrame`s
+- Fixed `AudioSample` rejecting `SharedArrayBuffer` data
+- Fixed missing validation for negative `AudioSample` channel counts
+- Fixed empty `AudioSample`s not being copyable
 - `InputTrack.id` is now the track's 1-based index in `getTracks()` for every format, making it unique in multi-segment Matroska files. Previously, it was the container's own track ID (such as the MPEG-TS PID or the Ogg serial number).

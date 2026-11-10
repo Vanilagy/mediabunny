@@ -498,8 +498,7 @@ export class VideoSample implements Disposable {
 			this._layout = layout;
 			this.colorSpace = new VideoSampleColorSpace(colorSpaceInit);
 		} else if (typeof VideoFrame !== 'undefined' && data instanceof VideoFrame) {
-			// Closed frames have their size zeroed out
-			if (data.codedWidth === 0) {
+			if (data.codedWidth === 0) { // Closed frames have their size zeroed out
 				throw new TypeError('data must not be a closed VideoFrame.');
 			}
 			if (init?.rotation !== undefined && ![0, 90, 180, 270].includes(init.rotation)) {
@@ -697,7 +696,6 @@ export class VideoSample implements Disposable {
 			this.duration = init.duration ?? 0;
 			this.colorSpace = data.getColorSpace();
 
-			// Only take a reference once nothing can throw anymore, or the resource would never get closed
 			this._data = data;
 			data._referenceCount++;
 		} else {
@@ -1034,10 +1032,9 @@ export class VideoSample implements Disposable {
 			const needsAlphaConversion = this.format.includes('X') && options.format.includes('A');
 
 			if (needsRgbConversion || needsAlphaConversion) {
-				// RGB formats have a single plane. Only touch the pixels we just wrote, leaving the bytes around them
-				// (layout offset, row padding) alone.
 				const computedLayout = combinedLayout.computedLayouts[0]!;
 
+				// Loop over the destination bytes
 				for (let row = 0; row < computedLayout.sourceHeight; row++) {
 					const rowStart = computedLayout.destinationOffset + row * computedLayout.destinationStride;
 					const rowEnd = rowStart + computedLayout.sourceWidthBytes;
@@ -1112,7 +1109,7 @@ export class VideoSample implements Disposable {
 				codedWidth: this.codedWidth,
 				codedHeight: this.codedHeight,
 				timestamp: this.microsecondTimestamp,
-				duration: this.microsecondDuration || undefined,
+				duration: this.microsecondDuration || undefined, // Drag 0 duration to undefined, glitches some codecs
 				colorSpace: this.colorSpace,
 				visibleRect: this.visibleRect,
 				displayWidth: this.squarePixelWidth, // Not display* since we're not passing rotation
@@ -1136,7 +1133,6 @@ export class VideoSample implements Disposable {
 				timestamp: this.microsecondTimestamp,
 				duration: this.microsecondDuration || undefined,
 				colorSpace: this.colorSpace,
-				// WebCodecs wants DOMRectInit
 				visibleRect: {
 					x: this.visibleRect.left,
 					y: this.visibleRect.top,
@@ -1415,7 +1411,6 @@ export class VideoSample implements Disposable {
 			dy = (canvasHeight - newHeight) / 2;
 		}
 
-		// Grab this before touching the context state, so that if it throws, the context isn't left transformed
 		const source = this.toCanvasImageSource();
 
 		context.save();
@@ -2666,7 +2661,6 @@ export class AudioSample implements Disposable {
 
 			this.duration = this.numberOfFrames / this.sampleRate;
 
-			// Only take a reference once nothing can throw anymore, or the resource would never get closed
 			this._data = init;
 			init._referenceCount++;
 		} else {
@@ -2809,6 +2803,7 @@ export class AudioSample implements Disposable {
 
 		const numFrames = this.numberOfFrames;
 		const numChannels = this.numberOfChannels;
+
 		// Offset 0 is always in range, so that an empty sample can be copied too
 		const frameOffset = optFrameOffset ?? 0;
 		if (frameOffset > 0 && frameOffset >= numFrames) {

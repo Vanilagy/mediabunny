@@ -654,33 +654,33 @@ Behavior changes worth a look are marked **[behavior change]**.
 ✅ Tiny PCM packets produced zero-frame samples. Fix: the PCM decoder skips packets with 0 frames, like the
   regular decoder.
 
-### Samples
+### Samples ✅
 
-- VideoSample: odd-width subsampled formats lost the last chroma column. Fix: `Math.ceil` instead of `Math.floor`
+✅ VideoSample: odd-width subsampled formats lost the last chroma column. Fix: `Math.ceil` instead of `Math.floor`
   for `sourceWidthBytes` in `ComputeLayoutAndAllocationSize`.
-- VideoSample: raw-buffer samples ignored the visible rect offset. Fix: `copyTo`'s default rect and
+✅ VideoSample: raw-buffer samples ignored the visible rect offset. Fix: `copyTo`'s default rect and
   `toVideoFrame()` now use the visible rect (as a `DOMRectInit`) instead of the full coded size, with the coded
   size taken as the smallest one containing the visible rect; plane heights are computed from the visible rect's
   bottom.
-- VideoSample: RGB<->BGR conversion wrote outside the destination layout. Fix: the swap loop walks the computed
+✅ VideoSample: RGB<->BGR conversion wrote outside the destination layout. Fix: the swap loop walks the computed
   layout row by row (offset, stride, row width) instead of the whole allocation.
-- VideoSample: `drawWithFit` never clamped the crop. Fix: use the already-clamped `finalCrop` instead of
+✅ VideoSample: `drawWithFit` never clamped the crop. Fix: use the already-clamped `finalCrop` instead of
   `options.crop`.
-- VideoSample: `drawWithFit` left the context transformed when it threw (poisoning later transforms). Fix: call
+✅ VideoSample: `drawWithFit` left the context transformed when it threw (poisoning later transforms). Fix: call
   `toCanvasImageSource()` before `context.save()`.
-- VideoSample: the YUV->RGB copy leaked a temporary VideoFrame on failure. Fix: close it in a `finally`.
-- VideoSample: `transform()` dropped encodeOptions (lost key frame requests). Fix: pass `encodeOptions` to the new
+✅ VideoSample: the YUV->RGB copy leaked a temporary VideoFrame on failure. Fix: close it in a `finally`.
+✅ VideoSample: `transform()` dropped encodeOptions (lost key frame requests). Fix: pass `encodeOptions` to the new
   sample.
-- VideoSample: resource refcounts leaked on failed construction. Fix: take the resource reference only after all
+✅ VideoSample: resource refcounts leaked on failed construction. Fix: take the resource reference only after all
   validation that can throw.
-- VideoSample: a wrong layout plane count, an empty visible rect or a closed VideoFrame hit `assert()` (or failed
+✅ VideoSample: a wrong layout plane count, an empty visible rect or a closed VideoFrame hit `assert()` (or failed
   later) instead of a TypeError. Fix: validate them in the constructor; `copyTo` rects without a size throw too.
-- VideoSample: the resource branch of `toVideoFrame()` passed duration 0 instead of undefined like the other
+✅ VideoSample: the resource branch of `toVideoFrame()` passed duration 0 instead of undefined like the other
   branches (consistency; no glitch observed). Fix: `microsecondDuration || undefined`.
-- AudioSample: a bare SharedArrayBuffer was rejected. Fix: accept `SharedArrayBuffer` like `ArrayBuffer`.
-- AudioSample: negative channel counts were accepted. Fix: check `numberOfChannels <= 0` instead of `=== 0`.
-- AudioSample: resource refcounts leaked on failed construction. Fix: same as for VideoSample.
-- AudioSample: empty samples couldn't be copied (encoders threw). Fix: `frameOffset` 0 is always in range, in both
+✅ AudioSample: a bare SharedArrayBuffer was rejected. Fix: accept `SharedArrayBuffer` like `ArrayBuffer`.
+✅ AudioSample: negative channel counts were accepted. Fix: check `numberOfChannels <= 0` instead of `=== 0`.
+✅ AudioSample: resource refcounts leaked on failed construction. Fix: same as for VideoSample.
+✅ AudioSample: empty samples couldn't be copied (encoders threw). Fix: `frameOffset` 0 is always in range, in both
   `allocationSize` and `copyTo`.
 
 ### Codecs, codec data, encode/decode
