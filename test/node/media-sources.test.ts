@@ -14,7 +14,11 @@ import { CustomAudioEncoder, CustomVideoEncoder, registerEncoder } from '../../s
 import { AudioCodec, VideoCodec } from '../../src/codec.js';
 import { AudioSample, VideoSample } from '../../src/sample.js';
 import { Quality } from '../../src/encode.js';
-import { wait } from '../../src/misc.js';
+import { assert, toDataView, wait } from '../../src/misc.js';
+import { Input } from '../../src/input.js';
+import { BufferSource } from '../../src/source.js';
+import { ALL_FORMATS } from '../../src/input-format.js';
+import { EncodedPacketSink } from '../../src/media-sink.js';
 
 const AAC_META = {
 	decoderConfig: {
@@ -437,5 +441,52 @@ test('Non-finite MediaStreamVideoTrackSource frame rate', () => {
 		expect(() => createSource(NaN)).toThrow('options.frameRate');
 	} finally {
 		vi.unstubAllGlobals();
+	}
+});
+
+test('Audio with overlapping adds', async () => {
+	const output = new Output({
+		format: new WavOutputFormat(),
+		target: new BufferTarget(),
+	});
+	const source = new AudioSampleSource({ codec: 'pcm-s16' });
+	output.addAudioTrack(source);
+	await output.start();
+
+	const frameCount = 3000;
+	const samples = Array.from({ length: 10 }, (_, i) => new AudioSample({
+		data: new Float32Array(frameCount).fill((i + 1) / 16),
+		format: 'f32',
+		numberOfChannels: 1,
+		sampleRate: 48000,
+		timestamp: i * frameCount / 48000,
+	}));
+
+	// Not waiting for an add to finish before starting the next one is perfectly valid
+	await Promise.all(samples.map(sample => source.add(sample)));
+	await output.finalize();
+	samples.forEach(sample => sample.close());
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	const values: number[] = [];
+	for await (const packet of new EncodedPacketSink(track).packets()) {
+		const view = toDataView(packet.data);
+		for (let i = 0; i < packet.data.byteLength; i += 2) {
+			values.push(view.getInt16(i, true));
+		}
+	}
+
+	// Each sample's frames must come out whole and in order, without mixing with other samples' frames
+	expect(values).toHaveLength(10 * frameCount);
+	for (let i = 0; i < 10; i++) {
+		const sampleValues = new Set(values.slice(i * frameCount, (i + 1) * frameCount));
+		expect(sampleValues.size).toBe(1);
+		expect([...sampleValues][0]).toBeGreaterThan(values[i * frameCount - 1] ?? -Infinity);
 	}
 });

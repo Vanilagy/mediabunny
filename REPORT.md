@@ -569,57 +569,61 @@ Behavior changes worth a look are marked **[behavior change]**.
 ✅ Writer tracking used position 0 instead of the tracked start. Fix: `pos = this.trackedStart` when clipping a
   write that begins before the tracked region.
 
-### Media sources (encoding)
+### Media sources (encoding) ✅
 
-- `MediaSource.close()` didn't await `onTrackClose()` (unhandled rejection, finalize hang). Fix: await it (the
+✅ `MediaSource.close()` didn't await `onTrackClose()` (unhandled rejection, finalize hang). Fix: await it (the
   base `Muxer.onTrackClose` is now async) and attach a no-op catch to `_closingPromise`, whose error surfaces at
   finalize/cancel.
-- Custom video encoders were never closed after a failed call. Fix: `close()` is chained onto the serializer's
-  `currentPromise` after catching its error, instead of being queued as a serializer call (which a failed call
-  skipped); flush errors are routed to `setError`.
-- Custom audio encoders were never closed after a failed call. Fix: same change in the audio wrapper.
-- Video encoders created while cancel/close ran were never closed. Fix: `flushAndClose` first awaits a pending
+✅ Custom video encoders were never closed after a failed call. Fix: the CallSerializer fix (see "Small core
+  pieces") keeps the queued `close()` from being skipped; flush errors are routed to `setError`.
+✅ Custom audio encoders were never closed after a failed call. Fix: same as for video.
+✅ Video encoders created while cancel/close ran were never closed. Fix: `flushAndClose` first awaits a pending
   `ensureEncoderPromise`.
-- Audio encoders created while cancel/close ran were never closed. Fix: same change in the audio wrapper.
-- Muxer errors for video packets emitted during the final flush were lost. Fix: await `lastMuxerPromise` before
+✅ Audio encoders created while cancel/close ran were never closed. Fix: same change in the audio wrapper.
+✅ Muxer errors for video packets emitted during the final flush were lost. Fix: await `lastMuxerPromise` before
   the final `checkForEncoderError()`.
-- Muxer errors for audio packets emitted during the final flush were lost. Fix: same change in the audio wrapper.
-- Errors inside the WebCodecs VideoEncoder output callback were swallowed. Fix: wrap the color and alpha output
+✅ Muxer errors for audio packets emitted during the final flush were lost. Fix: same change in the audio wrapper.
+✅ Errors inside the WebCodecs VideoEncoder output callback were swallowed. Fix: wrap the color and alpha output
   callbacks in `try`/`catch` and route errors to `setError`.
-- Errors inside the WebCodecs AudioEncoder output callback were swallowed. Fix: same `try`/`catch` -> `setError`.
-- The key frame interval sentinel collided with negative timestamps. Fix: `lastMultipleOfKeyFrameInterval` uses
+✅ Errors inside the WebCodecs AudioEncoder output callback were swallowed. Fix: same `try`/`catch` -> `setError`.
+✅ The key frame interval sentinel collided with negative timestamps. Fix: `lastMultipleOfKeyFrameInterval` uses
   `null` instead of -1 as "none yet".
-- MediaStreamVideoTrackSource paused before its first frame asserted 250 times per second. Fix: the frame-rate
+✅ MediaStreamVideoTrackSource paused before its first frame asserted 250 times per second. Fix: the frame-rate
   timer bases timestamps on a new `firstReceivedFrameTimestamp`, which is also set when the first frame is dropped
   due to pausing.
-- MediaStreamVideoTrackSource accepted NaN/Infinity frame rates (Infinity looped forever). Fix: validate with
+✅ MediaStreamVideoTrackSource accepted NaN/Infinity frame rates (Infinity looped forever). Fix: validate with
   `Number.isFinite`.
-- A `process` function returning its input sample closed the caller's sample. Fix: a processed sample that is the
+✅ A `process` function returning its input sample closed the caller's sample. Fix: a processed sample that is the
   input sample itself is neither encoded with close-after nor closed afterwards.
-- Encoding into an encoder that errored mid-add threw a misleading error and leaked the AudioData. Fix: call
+✅ Encoding into an encoder that errored mid-add threw a misleading error and leaked the AudioData. Fix: call
   `checkForEncoderError()` before encoding, and close the AudioData in a `finally`.
-- MediaStreamAudioTrackSource adds overlapped (duplicated audio). Fix: adds are chained through `_lastAddPromise`.
-  Whether a sample is dropped is decided when it's captured (source closing or errored, output not started); a
-  queued add only drops its sample on error or cancel and skips add validation, and a graceful close awaits all
-  queued adds before flushing, so samples queued behind a slow add aren't lost (up to ~1 s at the end before).
-- The MediaStreamAudioTrackSource AudioContext fallback was never closed. Fix: `close()` it instead of
+✅ Adds that weren't awaited overlapped and corrupted the audio (MediaStreamAudioTrackSource duplicated audio, and
+  unawaited `AudioSampleSource`/`AudioBufferSource` adds lost or interleaved samples): resampling, gap padding
+  and PCM packetization all await partway through. Fix: `AudioEncoderWrapper.add` runs under an `addMutex`, while
+  the add validation moved out of the wrappers into the sources' `add` methods (like the packet sources), so an
+  add is judged by the moment it's made. `AudioBufferSource` has its own mutex around adding a buffer's chunks, so
+  overlapping buffers don't interleave their chunks. A graceful close waits for the
+  queued adds; one canceled while waiting drops its sample. Whether a MediaStream sample is dropped is still decided when it's captured.
+  **[behavior change]** `getQueueSize()` counts the waiting adds, so MediaStreamAudioTrackSource drops samples
+  under backpressure like the video source does.
+✅ The MediaStreamAudioTrackSource AudioContext fallback was never closed. Fix: `close()` it instead of
   `suspend()`ing it on teardown (the error path only suspends a context that isn't closed).
-- `sizeChangeBehavior` fill/contain/cover wasn't used as the default fit for frames of the original size. Fix:
+✅ `sizeChangeBehavior` fill/contain/cover wasn't used as the default fit for frames of the original size. Fix:
   for those behaviors, `appliedFit` is set from `sizeChangeBehavior` for every frame, not just resized ones.
-- Un-awaited adds with `transform.frameRate` could pad the same frame slots twice. Fix: frame rate normalization
-  runs under a `frameRateMutex`, and the final padding at close waits for it. **[behavior change]**
-  `getQueueSize()` counts the adds waiting on the mutex, so MediaStreamVideoTrackSource in frame rate mode drops
-  frames sooner under backpressure.
-- Empty AudioSamples were turned into AudioData for the WebCodecs encoder, which forbids 0 frames (threw). Fix:
+✅ Un-awaited video adds overlapped, e.g. padding the same frame slots twice with `transform.frameRate`. Fix: like
+  audio, `VideoEncoderWrapper.add` runs under an `addMutex` (with validation in the sources' `add` methods), and
+  the final frame rate padding at close waits for it. MediaStreamVideoTrackSource now drops frames arriving while
+  shutting down, like the audio source, instead of failing the add. **[behavior change]** `getQueueSize()` counts the adds waiting on the mutex,
+  so MediaStreamVideoTrackSource drops frames sooner under backpressure.
+✅ Empty AudioSamples were turned into AudioData for the WebCodecs encoder, which forbids 0 frames (threw). Fix:
   `encodeSample` skips samples with 0 frames.
 
 ### Media sinks (decoding)
 
 - Decoders were never closed when `next()` threw while the pump waited on backpressure. Fix: the termination
   paths (disposal, out-of-band error) call `onQueueDequeue()`, waking the waiting pump so it can wind down.
-- Custom decoders were never closed after a failure (plus an unhandled rejection). Fix: `close()` is chained onto
-  the serializer's `currentPromise` with its error caught, instead of being queued as a call a failure would skip;
-  close errors go to `onError`.
+- Custom decoders were never closed after a failure (plus an unhandled rejection). Fix: the CallSerializer fix
+  (see "Small core pieces") keeps the queued `close()` from being skipped; close errors go to `onError`.
 - AVC alpha side data was dropped on Chromium (first GOP opaque). Fix: the Chromium first-packet workarounds
   rewrite a separate `colorPacket`, so alpha decoding still gets the original packet with its side data.
 - Alpha merging ignored backpressure (~1 GB in flight). Fix: the reported decode queue size includes the samples
@@ -919,9 +923,6 @@ The current behavior is arguably intended, or fixing it means picking between va
 - `cancel()` during finalizing is a no-op; the code comment says intended, the doc says cancel releases resources.
 - Conversion is 'done' before finalize finishes, so a second `execute()` resolves early (keeps cancel a no-op).
 - `MediaSource.add()` after `close()` started isn't rejected; rejecting would break MediaStream sources' late adds.
-- Overlapping user `add()` calls corrupt the audio encoder output (reproduced; documented misuse). A plain mutex
-  breaks the synchronous validity check; it would need validate-synchronously-then-serialize plus chunk-level
-  serialization in AudioBufferSource.
 - Input: disposing an Input whose Source is shared doesn't cancel the Input's in-flight operations (reproduced).
   Should disposal abort reads on a source others still use?
 - `hasHighDynamicRange()` returns true for wide-gamut metadata with an SDR transfer. Possibly intended.

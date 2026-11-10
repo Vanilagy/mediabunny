@@ -196,4 +196,21 @@
 - Fixed format callbacks such as `onMoof` sometimes receiving wrong data
 - Fixed missing validation for the result of `OutputOptions.initTarget`
 - Fixed a typo in the error for too many tracks
+- `MediaStreamAudioTrackSource` and `MediaStreamVideoTrackSource` now count queued samples toward the encoder's load, so they drop samples sooner under backpressure instead of queuing them up without limit
+- Invalid adds to `VideoSampleSource`, `CanvasSource`, `AudioSampleSource` and `AudioBufferSource` now throw synchronously, like for the packet sources
+- Fixed some media source race conditions
+- Fixed `MediaStreamVideoTrackSource` failing for frames arriving while it shuts down; they're now dropped, like for audio
+- Fixed `MediaSource.close()` failures becoming unhandled rejections and making `finalize()` hang
+- Fixed custom encoders never being closed after a failed call
+- Fixed encoders being created while canceling or closing and never being closed
+- Fixed muxer errors for packets emitted during the final encoder flush being lost
+- Fixed errors thrown while handling encoder output being swallowed
+- Fixed adding audio to an encoder that had failed throwing a misleading error
+- Fixed the first video frame sometimes not being encoded as a key frame when its timestamp is negative
+- Fixed `sizeChangeBehavior` set to `'fill'`, `'contain'` or `'cover'` not applying to frames of the original size
+- Fixed an audio `process` function returning its input sample closing the caller's sample
+- Fixed empty audio samples making the encoder throw
+- Fixed a `MediaStreamVideoTrackSource` paused before its first frame throwing repeatedly
+- Fixed `MediaStreamVideoTrackSource` accepting non-finite frame rates, which could hang
+- Fixed the audio context fallback of `MediaStreamAudioTrackSource` never being closed
 - `InputTrack.id` is now the track's 1-based index in `getTracks()` for every format, making it unique in multi-segment Matroska files. Previously, it was the container's own track ID (such as the MPEG-TS PID or the Ogg serial number).

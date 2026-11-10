@@ -3,6 +3,7 @@ import { Output } from '../../src/output.js';
 import { Mp4OutputFormat, WavOutputFormat, WebMOutputFormat } from '../../src/output-format.js';
 import { BufferTarget, StreamTarget } from '../../src/target.js';
 import {
+	AudioBufferSource,
 	AudioSampleSource,
 	MediaStreamAudioTrackSource,
 	MediaStreamVideoTrackSource,
@@ -14,7 +15,7 @@ import { Input } from '../../src/input.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { BufferSource } from '../../src/source.js';
 import { EncodedPacketSink, VideoSampleSink } from '../../src/media-sink.js';
-import { assert, promiseWithResolvers, Rotation, wait } from '../../src/misc.js';
+import { assert, promiseWithResolvers, Rotation, toDataView, wait } from '../../src/misc.js';
 import { InputAudioTrack, InputVideoTrack } from '../../src/input-track.js';
 
 test('VideoSampleSource, normal usage', async () => {
@@ -948,7 +949,7 @@ test('Audio track resampled with a slow target', async () => {
 	writesBlocked = true;
 
 	// 6 seconds of audio. The resampler hands over its first 5 seconds at once, and encoding them is stuck on the
-	// target until we finalize, so all further samples queue up behind it.
+	// target until we finalize, so further samples queue up behind it until the queue is full.
 	for (let i = 0; i < 600; i++) {
 		await writer.write(new AudioData({
 			format: 'f32-planar',
@@ -965,7 +966,8 @@ test('Audio track resampled with a slow target', async () => {
 	// The resampler's last second only gets handed over when finalizing
 	expect(encodedSamples).toEqual([{ timestamp: 0, numberOfFrames: 5 * 48000 }]);
 
-	// The queued samples were captured before finalizing, so they must still make it into the file
+	// The queued samples were captured before finalizing, so they must still make it into the file, while the ones
+	// arriving once the queue was full got dropped
 	const finalizePromise = output.finalize();
 	writesUnblocked.resolve();
 	await finalizePromise;
@@ -974,7 +976,7 @@ test('Audio track resampled with a slow target', async () => {
 	expect(sourceErrors).toEqual([]);
 	expect(encodedSamples).toHaveLength(2);
 	expect(encodedSamples[1]!.timestamp).toBe(5);
-	expect(encodedSamples[1]!.numberOfFrames / 48000).toBeCloseTo(1, 1);
+	expect(encodedSamples[1]!.numberOfFrames / 480).toBeCloseTo(8, 0);
 });
 
 test('Audio track captured through the audio context fallback', async () => {
@@ -1156,4 +1158,52 @@ test('Empty audio sample', async () => {
 	}
 
 	await output.finalize();
+});
+
+test('AudioBufferSource with overlapping adds', async () => {
+	const output = new Output({
+		format: new WavOutputFormat(),
+		target: new BufferTarget(),
+	});
+	const source = new AudioBufferSource({ codec: 'pcm-s16' });
+	output.addAudioTrack(source);
+	await output.start();
+
+	// Each buffer gets split into two samples, and is a constant value higher than the one before
+	const frameCount = 6 * 48000;
+	const buffers = [1, 2].map((value) => {
+		const buffer = new AudioBuffer({
+			length: frameCount,
+			numberOfChannels: 1,
+			sampleRate: 48000,
+		});
+		buffer.getChannelData(0).fill(value / 16);
+		return buffer;
+	});
+
+	await Promise.all(buffers.map(buffer => source.add(buffer)));
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	const values: number[] = [];
+	for await (const packet of new EncodedPacketSink(track).packets()) {
+		const view = toDataView(packet.data);
+		for (let i = 0; i < packet.data.byteLength; i += 2) {
+			values.push(view.getInt16(i, true));
+		}
+	}
+
+	// The buffers' samples must not interleave
+	expect(values).toHaveLength(2 * frameCount);
+	const firstValues = new Set(values.slice(0, frameCount));
+	const secondValues = new Set(values.slice(frameCount));
+	expect(firstValues.size).toBe(1);
+	expect(secondValues.size).toBe(1);
+	expect([...secondValues][0]).toBeGreaterThan([...firstValues][0]!);
 });
