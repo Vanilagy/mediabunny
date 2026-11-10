@@ -417,3 +417,72 @@ const captureLogs = () => {
 		},
 	};
 };
+
+test.each([206, 200])('UrlSource counts consecutive failed body reads for status %i', async (status) => {
+	const failure = new TypeError('network error');
+	const attempts: number[] = [];
+	let requests = 0;
+	const source = new UrlSource('https://example.com/persistent-read-failure', {
+		parallelism: 1,
+		getRetryDelay: (attempt) => {
+			attempts.push(attempt);
+			// Bound the harness even if a regression keeps reporting attempt 1.
+			return attempt < 3 && attempts.length < 6 ? 0 : null;
+		},
+		fetchFn: async () => {
+			requests++;
+			return new Response(new ReadableStream({
+				start(controller) {
+					controller.error(failure);
+				},
+			}), {
+				status,
+				headers: status === 206 ? { 'Content-Range': 'bytes 0-1023/1024' } : { 'Content-Length': '1024' },
+			});
+		},
+	});
+	using _ref = source.ref();
+	const reader = new Reader(source);
+	await expect(reader.requestSlice(0, 16)).rejects.toBe(failure);
+	expect(attempts).toEqual([1, 2, 3]);
+	expect(requests).toBe(3);
+});
+
+test.each([206, 200])('UrlSource resets body retries only after new bytes with status %i', async (status) => {
+	const attempts: number[] = [];
+	let requests = 0;
+	const failure = new TypeError('network error');
+	const source = new UrlSource('https://example.com/progress-then-failure', {
+		parallelism: 1,
+		getRetryDelay: (attempt) => {
+			attempts.push(attempt);
+			// Bound the harness even if a regression keeps reporting attempt 1.
+			return attempt < 3 && attempts.length < 6 ? 0 : null;
+		},
+		fetchFn: async () => {
+			const request = ++requests;
+			let sent = false;
+			return new Response(new ReadableStream({ pull(controller) {
+				// Request 3 makes new progress. Sequential responses must first replay
+				// the old prefix, which must not reset the retry budget on its own.
+				if (!sent && (request === 1 || request === 3 || status === 200)) {
+					const length = status === 200 && request >= 3 ? 8 : 4;
+					controller.enqueue(new Uint8Array(length));
+					sent = true;
+				} else {
+					controller.error(failure);
+				}
+			} }), {
+				status,
+				headers: status === 206
+					? { 'Content-Range': `bytes ${request >= 4 ? 8 : request >= 2 ? 4 : 0}-1023/1024` }
+					: { 'Content-Length': '1024' },
+			});
+		},
+	});
+	using _ref = source.ref();
+	const reader = new Reader(source);
+	await expect(reader.requestSlice(0, 16)).rejects.toBe(failure);
+	expect(attempts).toEqual([1, 2, 1, 2, 3]);
+	expect(requests).toBe(5);
+});

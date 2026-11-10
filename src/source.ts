@@ -947,7 +947,7 @@ export class UrlSource extends PathedSource {
 
 	/** @internal */
 	private async _runWorker(worker: ReadWorker) {
-		let consecutiveEmptyResponses = 0;
+		let consecutiveReadFailures = 0;
 
 		// The outer loop is for resuming a request if it dies mid-response
 		while (true) {
@@ -1084,7 +1084,7 @@ export class UrlSource extends PathedSource {
 						throw error;
 					}
 
-					const retryDelayInSeconds = this._getRetryDelay(1, error, this._url);
+					const retryDelayInSeconds = this._getRetryDelay(++consecutiveReadFailures, error, this._url);
 					if (retryDelayInSeconds !== null) {
 						Logging._error('Error while reading response stream. Attempting to resume.', error);
 						await wait(1000 * retryDelayInSeconds);
@@ -1115,14 +1115,14 @@ export class UrlSource extends PathedSource {
 
 						if (worker.currentPos > responseStartPos) {
 							// Response still moved us forward; keep going immediately
-							consecutiveEmptyResponses = 0;
+							consecutiveReadFailures = 0;
 							break;
 						}
 
 						// The response didn't get us any further, so back off instead of hammering the server
-						consecutiveEmptyResponses++;
+						consecutiveReadFailures++;
 						const error = new Error('Range response ended without delivering any data.');
-						const retryDelayInSeconds = this._getRetryDelay(consecutiveEmptyResponses, error, this._url);
+						const retryDelayInSeconds = this._getRetryDelay(consecutiveReadFailures, error, this._url);
 						if (retryDelayInSeconds === null) {
 							throw error;
 						}
@@ -1136,6 +1136,10 @@ export class UrlSource extends PathedSource {
 						this._orchestrator.onWorkerFinished(worker);
 						return;
 					}
+				}
+
+				if (value.length > 0) {
+					consecutiveReadFailures = 0;
 				}
 
 				this._dispatchRead(worker.currentPos, worker.currentPos + value.length);
@@ -1160,6 +1164,7 @@ export class UrlSource extends PathedSource {
 		let currentReader = body.getReader();
 		let streamPosition = 0;
 		let skipRemaining = 0;
+		let consecutiveReadFailures = 0;
 
 		const wrappedStream = new ReadableStream<Uint8Array>({
 			pull: async (controller) => {
@@ -1173,7 +1178,7 @@ export class UrlSource extends PathedSource {
 							throw error;
 						}
 
-						const retryDelayInSeconds = this._getRetryDelay(1, error, this._url);
+						const retryDelayInSeconds = this._getRetryDelay(++consecutiveReadFailures, error, this._url);
 						if (retryDelayInSeconds === null) {
 							throw error;
 						}
@@ -1240,6 +1245,7 @@ export class UrlSource extends PathedSource {
 						continue;
 					}
 
+					consecutiveReadFailures = 0;
 					streamPosition += chunk.length;
 					controller.enqueue(chunk);
 
