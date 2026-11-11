@@ -61,8 +61,8 @@ class AacEncoder extends CustomAudioEncoder {
 			&& config.numberOfChannels <= 8
 			&& AAC_SAMPLE_RATES.includes(config.sampleRate)
 			&& config.bitrate !== undefined
-			// These are encoded with channel configurations 11 and 12, which don't fit into an ADTS header
-			&& !(aacConfig?.format === 'adts' && config.numberOfChannels >= 7);
+			// These are encoded with a PCE or channel configurations 11 and 12, none of which fit into an ADTS header
+			&& !(aacConfig?.format === 'adts' && (config.numberOfChannels === 4 || config.numberOfChannels >= 7));
 	}
 
 	init() {

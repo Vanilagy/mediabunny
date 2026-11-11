@@ -27,7 +27,8 @@ typedef struct {
 
 // Layouts AAC has a channel configuration for, as anything else needs a PCE, which not every player supports (and
 // av_channel_layout_default's 2.1 for 3 channels even turns the third one into LFE). 7.1 gets configuration 12: 7 is
-// 7.1(wide) by the spec, but decoders like FFmpeg's take it for a mislabeled 7.1 and swap channels around.
+// 7.1(wide) by the spec, but decoders like FFmpeg's take it for a mislabeled 7.1 and swap channels around. Quad is the
+// exception: it has no channel configuration, but 4.0 would move its rear channels to the center, so it gets a PCE.
 static int set_aac_channel_layout(AVChannelLayout *layout, int channels) {
 	switch (channels) {
 		case 1: {
@@ -43,8 +44,8 @@ static int set_aac_channel_layout(AVChannelLayout *layout, int channels) {
 			return av_channel_layout_copy(layout, &surround);
 		}
 		case 4: {
-			AVChannelLayout four_zero = AV_CHANNEL_LAYOUT_4POINT0;
-			return av_channel_layout_copy(layout, &four_zero);
+			AVChannelLayout quad = AV_CHANNEL_LAYOUT_QUAD;
+			return av_channel_layout_copy(layout, &quad);
 		}
 		case 5: {
 			AVChannelLayout five_zero = AV_CHANNEL_LAYOUT_5POINT0_BACK;

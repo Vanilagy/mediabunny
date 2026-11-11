@@ -1921,6 +1921,48 @@ test.concurrent('Live playlist reload adding date-times', { timeout: 10_000 }, a
 	expect(await videoTrack.getUnixTimeForTimestamp(2.5)).toBe(Date.UTC(2026, 0, 1) / 1000 + 0.5);
 });
 
+test.concurrent('Unix time past the live edge', { timeout: 10_000 }, async () => {
+	const files = await writeHls({
+		segmentFormat: new MpegTsOutputFormat(),
+		targetDuration: 1,
+	}, async (addVideo) => {
+		for (let i = 0; i < 4; i++) {
+			await addVideo(0.5 * i, i % 2 === 0);
+		}
+	});
+
+	let playlistRequestCount = 0;
+	using input = new Input({
+		source: new CustomPathedSource('live.m3u8', ({ path }) => {
+			if (path !== 'live.m3u8') {
+				const bytes = files.get(path);
+				assert(bytes);
+
+				return new BufferSource(bytes);
+			}
+
+			playlistRequestCount++;
+			return new BufferSource(new TextEncoder().encode(
+				'#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXT-X-PROGRAM-DATE-TIME:2026-01-01T00:00:00.000Z\n'
+				+ '#EXTINF:1,\nsegment-1-1.ts\n#EXTINF:1,\nsegment-1-2.ts\n',
+			));
+		}),
+		formats: ALL_FORMATS,
+		formatOptions: { hls: { offsetTimestampsByDateTime: false } },
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+	expect(await videoTrack.getFirstTimestamp()).toBe(0);
+	const requestCountBefore = playlistRequestCount;
+
+	// The mapping extends past the known segments without waiting for the playlist to grow
+	const start = performance.now();
+	expect(await videoTrack.getUnixTimeForTimestamp(5)).toBe(Date.UTC(2026, 0, 1) / 1000 + 5);
+	expect(performance.now() - start).toBeLessThan(500);
+	expect(playlistRequestCount).toBe(requestCountBefore);
+});
+
 const writeHls = async (
 	hlsOptions: HlsOutputFormatOptions,
 	addPackets: (

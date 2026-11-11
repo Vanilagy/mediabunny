@@ -164,6 +164,7 @@
 - Fixed wrong timing after a discontinuity in live HLS segments that slid out of the window between playlist reloads
 - Fixed live HLS playlists jumping to Unix timestamps when date-times first appear after a playlist reload
 - Fixed ended HLS playlists without segments waiting a target duration on every query
+- Fixed `getUnixTimeForTimestamp()` waiting for live HLS playlists to reach the given timestamp
 - VOD HLS media playlists now all state the longest segment duration as their target duration. Previously, it differed between playlists and never went below `targetDuration`.
 - Renditions with the same name in an HLS group now get unique names, like "Audio (2)"
 - Fixed HLS output with `fastStart: 'reserve'` MP4 segments failing
@@ -315,6 +316,7 @@
 - `@mediabunny/truehd`: Fixed float audio being truncated instead of rounded to 24 bits when encoding
 - `@mediabunny/aac-encoder`: 7- and 8-channel audio is now encoded with channel configurations 11 and 12 instead of a program config element, which QuickTime silently dropped. As ADTS can't hold these, it's no longer supported for 7 and 8 channels.
 - `@mediabunny/aac-encoder`: Fixed 3 channels being encoded as 2.1, losing the third channel
+- `@mediabunny/aac-encoder`: Fixed 4 channels being encoded as 4.0 instead of quad
 - `@mediabunny/aac-encoder`: Fixed closing the encoder during initialization leaking its worker or hanging
 - `@mediabunny/aac-encoder`: Fixed the encoder not being reusable after a flush
 - `@mediabunny/aac-encoder`: Fixed slow encoding of very large samples

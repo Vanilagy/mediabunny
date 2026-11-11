@@ -107,7 +107,8 @@ export abstract class SegmentedInput {
 	}
 
 	async getUnixTimeForTimestamp(timestamp: number): Promise<number | null> {
-		let segment = await this.getSegmentAt(timestamp, {});
+		// Past the live edge, the last known segment's mapping extrapolates just as precisely, so no need to wait
+		let segment = await this.getSegmentAt(timestamp, { skipLiveWait: true });
 		segment ??= await this.getFirstSegment({});
 
 		if (!segment || segment.unixEpochTimestamp === null) {

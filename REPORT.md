@@ -1027,8 +1027,10 @@ The current behavior is arguably intended, or fixing it means picking between va
 ✅ `getQueryParameter` doesn't decode `+` as a space and treats `?` after `#` as a query (HLS spec ambiguous). Fix:
   only the part before the fragment is searched for a query (like `joinPaths`), which is then read with
   `URLSearchParams`, decoding `+` as a space and malformed escapes leniently.
-- `getUnixTimeForTimestamp` waits for a timestamp past the live edge (no `skipLiveWait`).
-- The AAC encoder's 4-channel layout is 4.0 (L R C BC), not Mediabunny's quad convention; AAC has no PCE-free quad.
+✅ `getUnixTimeForTimestamp` waits for a timestamp past the live edge (no `skipLiveWait`). Fix: it always skips the
+  live wait, since extrapolating from the last known segment is just as precise.
+✅ The AAC encoder's 4-channel layout is 4.0 (L R C BC), not Mediabunny's quad convention; AAC has no PCE-free quad.
+  Fix: 4 channels are encoded as quad with a PCE, and ADTS is no longer supported for them.
 - Server: VP8 alpha decodes opaque (docs only promise VP9/ProRes transparency).
 - Server: the Vorbis bitrate doesn't scale with channel count (6 ch at 48 kHz needs >= 96k).
 - Server: a mid-stream x264 switch to lossless (qp 0) changes the SPS profile without a new decoder config

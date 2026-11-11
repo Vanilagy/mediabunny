@@ -19,7 +19,7 @@ import {
 } from '../../src/custom-coder.js';
 import { registerAacEncoder } from '@mediabunny/aac-encoder';
 import { NodeAvAudioDecoder } from '../../packages/server/src/audio-decoder.js';
-import { assert, promiseWithResolvers } from '../../src/misc.js';
+import { assert, promiseWithResolvers, toUint8Array } from '../../src/misc.js';
 
 const createSineWave = (sampleRate: number, channels: number, durationSeconds: number) => {
 	const totalFrames = sampleRate * durationSeconds;
@@ -198,6 +198,10 @@ test('AAC with three channels', async () => {
 	await testChannelPositions(3);
 });
 
+test('AAC with four channels', async () => {
+	await testChannelPositions(4);
+});
+
 test('AAC with seven channels', async () => {
 	await testChannelPositions(7);
 });
@@ -252,6 +256,14 @@ const testChannelPositions = async (numberOfChannels: number) => {
 	const track = (await input.getPrimaryAudioTrack())!;
 	expect(await track.getNumberOfChannels()).toBe(numberOfChannels);
 
+	// Quad has no channel configuration of its own, so it's declared in a PCE (configuration 0)
+	const channelConfigurations = [1, 2, 3, 0, 5, 6, 11, 12];
+	const decoderConfig = await track.getDecoderConfig();
+	assert(decoderConfig);
+	const description = toUint8Array(decoderConfig.description!);
+	const channelConfiguration = (description[1]! >> 3) & 0xf;
+	expect(channelConfiguration).toBe(channelConfigurations[numberOfChannels - 1]);
+
 	// Lay the decoded audio out on the timeline to line it up with the input
 	const decoded = Array.from({ length: numberOfChannels }, () => new Float32Array(sampleRate));
 	for await (using decodedSample of new AudioSampleSink(track).samples()) {
@@ -288,7 +300,7 @@ const getToneAmplitude = (signal: Float32Array, frequency: number, sampleRate: n
 	return 2 * Math.hypot(sinSum, cosSum) / signal.length;
 };
 
-test('AAC ADTS with seven or eight channels', () => {
+test('AAC ADTS with four, seven or eight channels', () => {
 	registerAacEncoder();
 
 	const supportsAdts = (numberOfChannels: number) => customAudioEncoders.some(x => x.supports('aac', {
@@ -300,7 +312,8 @@ test('AAC ADTS with seven or eight channels', () => {
 		aac: { format: 'adts' },
 	}));
 
-	// ADTS headers can't carry the channel configurations these are encoded with (11 and 12)
+	// ADTS headers can't carry the PCE or the channel configurations (11 and 12) these are encoded with
+	expect(supportsAdts(4)).toBe(false);
 	expect(supportsAdts(6)).toBe(true);
 	expect(supportsAdts(7)).toBe(false);
 	expect(supportsAdts(8)).toBe(false);
