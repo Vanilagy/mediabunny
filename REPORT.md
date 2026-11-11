@@ -941,19 +941,30 @@ The current behavior is arguably intended, or fixing it means picking between va
 ✅ `MediaSource.add()` after `close()` started isn't rejected; rejecting would break MediaStream sources' late adds.
   Fix: the MediaStream sources drop their late frames themselves by now, so `_ensureValidAdd` checks
   `_closingPromise` instead of `_closed`, rejecting adds as soon as `close()` was called.
-- Input: disposing an Input whose Source is shared doesn't cancel the Input's in-flight operations (reproduced).
+✅ Input: disposing an Input whose Source is shared doesn't cancel the Input's in-flight operations (reproduced).
   Should disposal abort reads on a source others still use?
-- `hasHighDynamicRange()` returns true for wide-gamut metadata with an SDR transfer. Possibly intended.
-- `computeFrameRateMetrics` with fewer than 2 timestamps reports constant with no underlying rate. Deliberate.
-- WAVE `getDurationFromMetadata` on unsized sources returns the header's claim until packets are read.
-- WAVE INFO strings are read as Latin-1, but FFmpeg writes UTF-8 (verified mojibake). The writer deliberately
-  doesn't support Unicode.
-- WAVE output has no `fact` chunk for non-PCM formats. Files play; changing it changes the `onHeader` data.
-- WAVE output has no WAVE_FORMAT_EXTENSIBLE for > 2 channels or > 16 bits.
-- WAVE files with zero-size placeholders (unfinalized, including Mediabunny's own) can't be read; the RIFF-size
-  bound is original design.
-- ID3: COMM/USLT with a text encoding > 3 silently give undefined, while text frames with one throw and lose the
-  whole tag (reproduced). Throw, or skip just the frame?
+✅ `hasHighDynamicRange()` returns true for wide-gamut metadata with an SDR transfer. Possibly intended. Fix: only
+  a PQ or HLG transfer counts as HDR.
+✅ `computeFrameRateMetrics` with fewer than 2 timestamps reports constant with no underlying rate. Deliberate.
+✅ WAVE `getDurationFromMetadata` on unsized sources returns the header's claim until packets are read. Fix: an
+  all-ones data size (0xFFFFFFFF, or an RF64 size past what a JS number holds) is a placeholder, so the metadata
+  duration is null until the actual data size is known.
+✅ WAVE INFO strings are read as Latin-1, but FFmpeg writes UTF-8 (verified mojibake). The writer deliberately
+  doesn't support Unicode. Fix: INFO strings are decoded as UTF-8 when they're valid UTF-8, and as Latin-1 (the
+  spec's default without a CSET chunk) otherwise.
+✅ WAVE output has no `fact` chunk for non-PCM formats. Files play; changing it changes the `onHeader` data. Fix:
+  float, A-law and mu-law get a `fact` chunk whose sample count is filled in at finalization (capped at 32 bits, as
+  RF64 keeps the full count in ds64). Append-only output leaves it out, since it could never be filled in.
+✅ WAVE output has no WAVE_FORMAT_EXTENSIBLE for > 2 channels or > 16 bits. Fix: more than two channels, or integer
+  PCM above 16 bits, now use WAVE_FORMAT_EXTENSIBLE with the usual channel mask for the channel count (up to 7.1,
+  otherwise none). Float only uses it for its channels, since its format tag already implies the bit depth.
+✅ WAVE files with zero-size placeholders (unfinalized, including Mediabunny's own) can't be read; the RIFF-size
+  bound is original design. Fix: a RIFF size of 0 (or a ds64 RIFF size of 0 in RF64) marks the file as unfinalized,
+  so the file size bounds the chunks instead, and a data size of 0 then means the data goes until the end of the
+  file. A data size of 0 in a finalized file still means empty.
+✅ ID3: COMM/USLT with a text encoding > 3 silently give undefined, while text frames with one throw and lose the
+  whole tag (reproduced). Throw, or skip just the frame? Fix: COMM/USLT read their encoding with
+  `readId3V2TextEncoding()` too, so they throw like the text frames.
 - Full-date fields other than TDRC (Vorbis DATE, MP4 date, MKV DATE, RIFF ICRD/IDIT) still go through
   `new Date(string)`, so short strings hit V8's legacy parsing (TDRC is fixed). These fields are free-form in the
   wild, so a strict parser would drop real dates; which formats to accept is a choice.

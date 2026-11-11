@@ -865,9 +865,8 @@ export class InputVideoTrack extends InputTrack {
 	async hasHighDynamicRange() {
 		const colorSpace = await this._backing.getColorSpace();
 
-		return (colorSpace.primaries as string) === 'bt2020' || (colorSpace.primaries as string) === 'smpte432'
-			|| (colorSpace.transfer as string) === 'pq' || (colorSpace.transfer as string) === 'hlg'
-			|| (colorSpace.matrix as string) === 'bt2020-ncl';
+		// Only the transfer function makes it HDR
+		return (colorSpace.transfer as string) === 'pq' || (colorSpace.transfer as string) === 'hlg';
 	}
 
 	/** Checks if this track may contain transparent samples with alpha data. */

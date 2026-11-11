@@ -32,6 +32,7 @@ export class WaveMuxer extends Muxer {
 
 	private riffSizePos: number | null = null;
 	private dataSizePos: number | null = null;
+	private factSampleCountPos: number | null = null;
 	private ds64RiffSizePos: number | null = null;
 	private ds64DataSizePos: number | null = null;
 	private ds64SampleCountPos: number | null = null;
@@ -140,7 +141,12 @@ export class WaveMuxer extends Muxer {
 
 		const channels = config.numberOfChannels;
 		const sampleRate = config.sampleRate;
+		const bitsPerSample = 8 * pcmInfo.sampleSize;
 		const blockSize = pcmInfo.sampleSize * channels;
+
+		// The extensible format is what's expected beyond 16-bit stereo. Float's format tag already tells its bit
+		// depth, so it only needs it for its channels.
+		const isExtensible = channels > 2 || (format === WaveFormat.PCM && bitsPerSample > 16);
 
 		// With append-only, the sizes never get filled in, so they're set to the largest values they can be. In ds64,
 		// that's the largest signed value, since FFmpeg reads the sizes as signed (lost btw)
@@ -185,13 +191,45 @@ export class WaveMuxer extends Muxer {
 
 		// fmt chunk
 		this.riffWriter.writeAscii('fmt ');
-		this.riffWriter.writeU32(16); // Chunk size
-		this.riffWriter.writeU16(format);
+		this.riffWriter.writeU32(isExtensible ? 40 : 16); // Chunk size
+		this.riffWriter.writeU16(isExtensible ? WaveFormat.EXTENSIBLE : format);
 		this.riffWriter.writeU16(channels);
 		this.riffWriter.writeU32(sampleRate);
 		this.riffWriter.writeU32(sampleRate * blockSize); // Bytes per second
 		this.riffWriter.writeU16(blockSize);
-		this.riffWriter.writeU16(8 * pcmInfo.sampleSize);
+		this.riffWriter.writeU16(bitsPerSample);
+
+		if (isExtensible) {
+			// The usual speaker layouts for each channel count
+			const DEFAULT_CHANNEL_MASKS: Record<number, number> = {
+				1: 0x4, // Mono
+				2: 0x3, // Stereo
+				3: 0x7, // 3.0
+				4: 0x33, // Quad
+				5: 0x37, // 5.0(back)
+				6: 0x3f, // 5.1(back)
+				7: 0x70f, // 6.1
+				8: 0x63f, // 7.1
+			};
+			const SUBFORMAT_GUID_SUFFIX = new Uint8Array([
+				0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71,
+			]);
+
+			this.riffWriter.writeU16(22); // Extension size
+			this.riffWriter.writeU16(bitsPerSample); // Valid bits per sample
+			this.riffWriter.writeU32(DEFAULT_CHANNEL_MASKS[channels] ?? 0);
+			// The subformat GUID is the format tag followed by a fixed suffix
+			this.riffWriter.writeU32(format);
+			this.writer.write(SUBFORMAT_GUID_SUFFIX);
+		}
+
+		// Formats other than integer PCM want their sample count stated
+		if (format !== WaveFormat.PCM && !this.appendOnly) {
+			this.riffWriter.writeAscii('fact');
+			this.riffWriter.writeU32(4); // Chunk size
+			this.factSampleCountPos = this.writer.getPos();
+			this.riffWriter.writeU32(0); // Sample count placeholder
+		}
 
 		// Metadata tags
 		if (!metadataTagsAreEmpty(this.output._metadataTags)) {
@@ -383,6 +421,12 @@ export class WaveMuxer extends Muxer {
 		}
 
 		const endPos = this.writer.getPos();
+
+		if (this.factSampleCountPos !== null) {
+			// RF64 keeps counts that don't fit here in ds64
+			this.writer.seek(this.factSampleCountPos);
+			this.riffWriter.writeU32(Math.min(this.sampleCount, 0xffffffff));
+		}
 
 		if (this.appendOnly) {
 			// We can't go back to fill in the sizes

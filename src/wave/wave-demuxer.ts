@@ -18,6 +18,7 @@ import {
 	floorToMultiple,
 	isThenable,
 	roundIfAlmostInteger,
+	strictTextDecoder,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
@@ -39,6 +40,7 @@ export class WaveDemuxer extends Demuxer {
 	dataStart = -1;
 	dataSize = -1;
 	dataSizeCapped = false;
+	dataSizeIsPlaceholder = false;
 	audioInfo: {
 		format: number;
 		numberOfChannels: number;
@@ -69,7 +71,10 @@ export class WaveDemuxer extends Demuxer {
 
 			const outerChunkSize = readU32(slice, littleEndian);
 
-			let totalFileSize = isRf64
+			// A RIFF size of 0 means the file was probably never finalized
+			let sizesUnfinalized = !isRf64 && outerChunkSize === 0;
+
+			let totalFileSize = isRf64 || sizesUnfinalized
 				? this.reader.fileSize
 				: Math.min(outerChunkSize + 8, this.reader.fileSize ?? Infinity);
 			const format = readAscii(slice, 4);
@@ -99,6 +104,14 @@ export class WaveDemuxer extends Demuxer {
 					await this.parseFmtChunk(startPos, chunkSize, littleEndian);
 				} else if (chunkId === 'data') {
 					dataChunkSize ??= chunkSize;
+					if (sizesUnfinalized && dataChunkSize === 0) {
+						// The data goes until the end of the file
+						dataChunkSize = Number.MAX_SAFE_INTEGER;
+						chunkSize = dataChunkSize;
+					}
+
+					this.dataSizeIsPlaceholder = dataChunkSize === Number.MAX_SAFE_INTEGER
+						|| (!isRf64 && dataChunkSize === 0xffffffff);
 					if (isRf64) {
 						// The chunk's own size field is only a placeholder, so make sure to skip over the actual data
 						chunkSize = dataChunkSize;
@@ -126,7 +139,10 @@ export class WaveDemuxer extends Demuxer {
 					const riffChunkSize = Math.min(readU64(ds64Slice, littleEndian), Number.MAX_SAFE_INTEGER);
 					dataChunkSize = Math.min(readU64(ds64Slice, littleEndian), Number.MAX_SAFE_INTEGER);
 
-					totalFileSize = Math.min(riffChunkSize + 8, this.reader.fileSize ?? Infinity);
+					sizesUnfinalized = riffChunkSize === 0;
+					totalFileSize = sizesUnfinalized
+						? this.reader.fileSize
+						: Math.min(riffChunkSize + 8, this.reader.fileSize ?? Infinity);
 				} else if (chunkId === 'LIST') {
 					await this.parseListChunk(startPos, chunkSize, littleEndian);
 				} else if (chunkId === 'ID3 ' || chunkId === 'id3 ') {
@@ -253,10 +269,19 @@ export class WaveDemuxer extends Demuxer {
 			}
 
 			const bytes = readBytes(slice, chunkSize);
+			const nullIndex = bytes.indexOf(0);
+			const stringBytes = bytes.subarray(0, nullIndex === -1 ? bytes.length : nullIndex);
 
-			let value = '';
-			for (let i = 0; i < bytes.length && bytes[i] !== 0; i++) {
-				value += String.fromCharCode(bytes[i]!);
+			// The spec says Latin-1, but many writers (like FFmpeg) put UTF-8 in here. Latin-1 text with non-ASCII
+			// characters is virtually never valid UTF-8, so try that first.
+			let value: string;
+			try {
+				value = strictTextDecoder.decode(stringBytes);
+			} catch {
+				value = '';
+				for (const byte of stringBytes) {
+					value += String.fromCharCode(byte);
+				}
 			}
 
 			this.metadataTags.raw ??= {};
@@ -490,6 +515,11 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 
 	async getDurationFromMetadata() {
 		assert(this.demuxer.dataSize !== -1);
+
+		this.demuxer.maybeCapDataSize();
+		if (this.demuxer.dataSizeIsPlaceholder && !this.demuxer.dataSizeCapped) {
+			return null;
+		}
 
 		return this.demuxer.dataSize / this.demuxer.audioInfo!.blockSizeInBytes / this.demuxer.audioInfo!.sampleRate;
 	}

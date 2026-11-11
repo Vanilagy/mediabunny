@@ -423,7 +423,7 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 			case 'USLT':
 			case 'ULT': {
 				ensureFrameHasBytes(4);
-				const encoding = reader.readU8();
+				const encoding = reader.readId3V2TextEncoding();
 				reader.pos += 3; // Skip language
 				reader.readId3V2Text(encoding, frameEndPos); // Short content description
 				tags.lyrics ??= reader.readId3V2Text(encoding, frameEndPos);
@@ -432,7 +432,7 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 			case 'COMM':
 			case 'COM': {
 				ensureFrameHasBytes(4);
-				const encoding = reader.readU8();
+				const encoding = reader.readId3V2TextEncoding();
 				reader.pos += 3; // Skip language
 				const description = reader.readId3V2Text(encoding, frameEndPos);
 

@@ -385,6 +385,7 @@ export const TextDecoder = typeof globalThis.TextDecoder !== 'undefined'
 	};
 
 export const textDecoder = /* #__PURE__ */ new TextDecoder();
+export const strictTextDecoder = /* #__PURE__ */ new TextDecoder('utf-8', { fatal: true });
 export const textEncoder = /* #__PURE__ */ new TextEncoder();
 
 export const isIso88591Compatible = (text: string) => {

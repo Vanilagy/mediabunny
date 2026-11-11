@@ -1486,3 +1486,28 @@ const testWaveFileDate = async (format: WavOutputFormat, rawTags: MetadataTags['
 	});
 	expect((await input.getMetadataTags()).date).toEqual(expectedDate);
 };
+
+test('RIFF INFO strings in UTF-8 and Latin-1', async () => {
+	const output = new Output({
+		format: new WavOutputFormat(),
+		target: new BufferTarget(),
+	});
+	output.setMetadataTags({
+		title: String.fromCharCode(...new TextEncoder().encode('Café ☕')),
+		artist: 'Motörhead',
+	});
+
+	const dummyTrack = createDummyAudioTrack('pcm-s16', output);
+
+	await output.start();
+	await dummyTrack.addPacket();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const tags = await input.getMetadataTags();
+	expect(tags.title).toBe('Café ☕');
+	expect(tags.artist).toBe('Motörhead');
+});

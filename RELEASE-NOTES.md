@@ -106,10 +106,15 @@
 - Fixed the FLAC muxer hanging on `finalize()` after `start()` threw
 - Fixed missing validation for `FlacOutputFormatOptions.onFrame`
 - Fixed reading WAVE files whose header overstates the data size from unsized sources, such as FFmpeg's pipe output
+- Fixed WAVE files with a placeholder data size reporting a huge duration from metadata
+- Fixed unfinalized WAVE files, whose sizes are still 0, failing to load
 - Fixed chunks following the data chunk in RF64 files, such as metadata, not being read
 - Fixed WAVE `getPacket()` returning the previous packet when given a packet's exact timestamp
 - Fixed RIFF INFO years being read in local time instead of UTC
+- Fixed UTF-8 RIFF INFO strings, such as the ones FFmpeg writes, being misread
 - Fixed the WAVE muxer not padding odd-sized data chunks
+- WAVE muxer now writes `WAVE_FORMAT_EXTENSIBLE` with a channel mask for more than two channels and for integer PCM above 16 bits
+- WAVE muxer now writes a `fact` chunk for float, A-law and mu-law audio, except in append-only mode
 - Fixed the WAVE muxer hanging on `finalize()` after `start()` threw
 - Fixed the Xing/Info frame count of MP3 output including the Xing frame itself, making every file one frame too long
 - Fixed the Xing frame of MP3 output claiming a CRC it didn't have
@@ -129,6 +134,7 @@
 - Fixed ID3v2.4 extended header sizes being misread
 - Fixed compressed ID3v2.2 tags being misread; they're now skipped with a warning
 - Fixed empty UTF-16 strings in ID3v2 being misread
+- ID3v2 comment and lyrics frames with an invalid text encoding now throw like other text frames, instead of silently reading as nothing
 - Fixed ID3v2 cover art MIME types being decoded with the wrong text encoding (#631)
 - Fixed ID3v2.3 dates being misread, as the year (`TYER`) and day and month (`TDAT`) weren't combined
 - Fixed ID3v2.4 dates with a time being read in local time instead of UTC
@@ -170,6 +176,7 @@
 - HLS output format no longer lists WebVTT as supported, as it can't write subtitles yet
 - Fixed HLS errors for unsupported audio codecs with delta packets (such as TrueHD) suggesting different segment formats, which can't help
 - Fixed `Input.computeDuration()` counting tracks without packets as ending at 0
+- Fixed `InputVideoTrack.hasHighDynamicRange()` reporting wide-gamut SDR video as HDR
 - `InputTrack.computePacketStats()` now reports infinite rates for packets that all sit at a single instant, and reads past `targetPacketCount` until the packets span some time
 - Fixed conversions to MP4 with `fastStart: 'reserve'` throwing for tracks whose packets all sit at a single instant
 - Fixed frame rate detection missing constant frame rates when the container's timescale can't represent the frame times exactly (such as 60 FPS in Matroska)
