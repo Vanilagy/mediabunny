@@ -965,9 +965,11 @@ The current behavior is arguably intended, or fixing it means picking between va
 ✅ ID3: COMM/USLT with a text encoding > 3 silently give undefined, while text frames with one throw and lose the
   whole tag (reproduced). Throw, or skip just the frame? Fix: COMM/USLT read their encoding with
   `readId3V2TextEncoding()` too, so they throw like the text frames.
-- Full-date fields other than TDRC (Vorbis DATE, MP4 date, MKV DATE, RIFF ICRD/IDIT) still go through
+✅ Full-date fields other than TDRC (Vorbis DATE, MP4 date, MKV DATE, RIFF ICRD/IDIT) still go through
   `new Date(string)`, so short strings hit V8's legacy parsing (TDRC is fixed). These fields are free-form in the
-  wild, so a strict parser would drop real dates; which formats to accept is a choice.
+  wild, so a strict parser would drop real dates; which formats to accept is a choice. Fix: a shared
+  `parseIsoSuffix` (any prefix of yyyy-MM-ddTHH:mm:ss.sss plus an optional time zone, UTC without one) parses all of
+  them, TDRC included. Anything else gives no date, with the string still in `raw`. IDIT is no longer read.
 - MP3: the Xing/Info frame bitrate differs from the stream bitrate in CBR files (reproduced). No Layer III player
   misbehaves (Layer II, where mpg123 played 20.18 s instead of 5 s, no longer gets a Xing frame), and the code
   comment calls the choice deliberate.

@@ -17,6 +17,7 @@ import {
 	createUtcDate,
 	floorToMultiple,
 	isThenable,
+	parseIsoSuffix,
 	roundIfAlmostInteger,
 	strictTextDecoder,
 	UNDETERMINED_LANGUAGE,
@@ -320,10 +321,9 @@ export class WaveDemuxer extends Demuxer {
 					}
 				}; break;
 
-				case 'ICRD':
-				case 'IDIT': {
-					const date = new Date(value);
-					if (!Number.isNaN(date.getTime())) {
+				case 'ICRD': {
+					const date = parseIsoSuffix(value);
+					if (date) {
 						this.metadataTags.date ??= date;
 					}
 				}; break;

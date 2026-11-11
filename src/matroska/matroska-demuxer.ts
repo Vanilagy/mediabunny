@@ -62,6 +62,7 @@ import {
 	toDataView,
 	TRANSFER_CHARACTERISTICS_MAP_INVERSE,
 	UNDETERMINED_LANGUAGE,
+	parseIsoSuffix,
 } from '../misc';
 import { EncodedPacket, EncodedPacketSideData, PLACEHOLDER_DATA } from '../packet';
 import {
@@ -2169,8 +2170,8 @@ export class MatroskaDemuxer extends Demuxer {
 				}; break;
 
 				case 'date': {
-					const date = new Date(value);
-					if (!Number.isNaN(date.getTime())) {
+					const date = parseIsoSuffix(value);
+					if (date) {
 						metadataTags.date ??= date;
 					}
 				}; break;

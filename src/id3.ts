@@ -20,6 +20,7 @@ import {
 	keyValueIterator,
 	toDataView,
 	isRecordStringString,
+	parseIsoSuffix,
 } from './misc';
 import { FileSlice, readAscii, readBytes, readU32Be, readU8 } from './reader';
 import { Writer } from './writer';
@@ -377,20 +378,8 @@ export const parseId3V2Tag = (slice: FileSlice, header: Id3V2Header, tags: Metad
 			}; break;
 
 			case 'TDRC': {
-				// A subset of ISO 8601, from yyyy up to yyyy-MM-ddTHH:mm:ss, and always UTC
-				const dateText = reader.readId3V2EncodingAndText(frameEndPos);
-				const match = /^(\d{4})(?:-(\d{2})(?:-(\d{2})(?:[T ](\d{2})(?::(\d{2})(?::(\d{2}))?)?)?)?)?Z?$/
-					.exec(dateText);
-				if (!match) {
-					break;
-				}
-
-				const [, year, month = '01', day = '01', hours = '00', minutes = '00', seconds = '00'] = match;
-				const isoString = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
-				const date = new Date(`${isoString}Z`);
-
-				// Out-of-range fields like a February 31 would otherwise roll over
-				if (!Number.isNaN(date.getTime()) && date.toISOString().startsWith(isoString)) {
+				const date = parseIsoSuffix(reader.readId3V2EncodingAndText(frameEndPos));
+				if (date) {
 					tags.date ??= date;
 				}
 			}; break;

@@ -84,6 +84,7 @@ import {
 	HEX_STRING_REGEX,
 	EMPTY_COLOR_SPACE,
 	colorSpaceIsComplete,
+	parseIsoSuffix,
 } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import {
@@ -2911,8 +2912,8 @@ export class IsobmffDemuxer extends Demuxer {
 
 						case '©day': {
 							if (!this.currentTrack) {
-								const date = new Date(readMetadataStringShort(slice));
-								if (!Number.isNaN(date.getTime())) {
+								const date = parseIsoSuffix(readMetadataStringShort(slice));
+								if (date) {
 									this.metadataTags.date ??= date;
 								}
 							}
@@ -3075,8 +3076,8 @@ export class IsobmffDemuxer extends Demuxer {
 						case 'com.apple.quicktime.creationdate':
 						case 'date': {
 							if (typeof data === 'string') {
-								const date = new Date(data);
-								if (!Number.isNaN(date.getTime())) {
+								const date = parseIsoSuffix(data);
+								if (date) {
 									this.metadataTags.date ??= date;
 								}
 							}

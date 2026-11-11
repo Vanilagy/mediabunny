@@ -139,6 +139,8 @@
 - Fixed ID3v2.3 dates being misread, as the year (`TYER`) and day and month (`TDAT`) weren't combined
 - Fixed ID3v2.4 dates with a time being read in local time instead of UTC
 - Fixed ID3 years below 100 being misread or giving invalid dates
+- Date tags in Vorbis comments, MP4, Matroska and RIFF INFO are now consistently parsed as ISO 8601
+- RIFF `IDIT` tags are no longer read as the date
 - Fixed invalid ID3 years giving invalid dates
 - Fixed an ID3 BPM of 0 making conversions fail
 - Fixed ID3v2 lyrics and cover art with non-Latin-1 text being written with the wrong frame size

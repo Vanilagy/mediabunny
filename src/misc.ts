@@ -1770,3 +1770,45 @@ export const createUtcDate = (year: number, monthIndex = 0, day = 1) => {
 
 	return date;
 };
+
+// Anything from yyyy up to yyyy-MM-ddTHH:mm:ss.sss with a time zone
+// eslint-disable-next-line @stylistic/max-len
+const ISO_SUFFIX_REGEX = /^(\d{4})(?:-(\d{2})(?:-(\d{2})(?:[T ](\d{2})(?::(\d{2})(?::(\d{2})(?:\.(\d+))?)?)?)?)?)?(?:Z|([+-])(\d{2})(?::?(\d{2}))?)?$/;
+
+export const parseIsoSuffix = (text: string) => {
+	const match = ISO_SUFFIX_REGEX.exec(text);
+	if (!match) {
+		return null;
+	}
+
+	const [
+		,
+		year,
+		month = '01',
+		day = '01',
+		hours = '00',
+		minutes = '00',
+		seconds = '00',
+		fraction = '',
+		offsetSign = '+',
+		offsetHours = '00',
+		offsetMinutes = '00',
+	] = match;
+	const isoString = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
+	const date = new Date(`${isoString}.${fraction.padEnd(3, '0').slice(0, 3)}Z`);
+
+	// Out-of-range fields like a February 31 would otherwise roll over
+	if (
+		Number.isNaN(date.getTime())
+		|| !date.toISOString().startsWith(isoString)
+		|| Number(offsetHours) > 23
+		|| Number(offsetMinutes) > 59
+	) {
+		return null;
+	}
+
+	const offsetInMinutes = (offsetSign === '-' ? -1 : 1) * (60 * Number(offsetHours) + Number(offsetMinutes));
+	date.setTime(date.getTime() - 60_000 * offsetInMinutes);
+
+	return date;
+};

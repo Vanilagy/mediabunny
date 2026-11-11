@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { CallSerializer, EventEmitter, setInt64 } from '../../src/misc.js';
+import { CallSerializer, EventEmitter, parseIsoSuffix, setInt64 } from '../../src/misc.js';
 import { Bitstream } from '../../shared/bitstream.js';
 import { EncodedPacket } from '../../src/packet.js';
 
@@ -97,4 +97,23 @@ test('Packet clone with different-size data', () => {
 	const clone = packet.clone({ data: new Uint8Array(5) });
 
 	expect(clone.byteLength).toBe(5);
+});
+
+test('ISO date parsing', () => {
+	// Every suffix of the full format, which is UTC unless it states a time zone
+	expect(parseIsoSuffix('2013')?.toISOString()).toBe('2013-01-01T00:00:00.000Z');
+	expect(parseIsoSuffix('2013-05')?.toISOString()).toBe('2013-05-01T00:00:00.000Z');
+	expect(parseIsoSuffix('2013-05-03')?.toISOString()).toBe('2013-05-03T00:00:00.000Z');
+	expect(parseIsoSuffix('2013-05-03T07')?.toISOString()).toBe('2013-05-03T07:00:00.000Z');
+	expect(parseIsoSuffix('2013-05-03 07:08')?.toISOString()).toBe('2013-05-03T07:08:00.000Z');
+	expect(parseIsoSuffix('2013-05-03T07:08:09Z')?.toISOString()).toBe('2013-05-03T07:08:09.000Z');
+	expect(parseIsoSuffix('2013-05-03T07:08:09.5+02:00')?.toISOString()).toBe('2013-05-03T05:08:09.500Z');
+	expect(parseIsoSuffix('2013-05-03T07:08:09-0530')?.toISOString()).toBe('2013-05-03T12:38:09.000Z');
+	expect(parseIsoSuffix('0012')?.toISOString()).toBe('0012-01-01T00:00:00.000Z');
+
+	// Things the engine's legacy parsing would otherwise make something of
+	expect(parseIsoSuffix('2013-02-31')).toBe(null);
+	expect(parseIsoSuffix('12')).toBe(null);
+	expect(parseIsoSuffix('2013/05/03')).toBe(null);
+	expect(parseIsoSuffix('May 3 2013')).toBe(null);
 });

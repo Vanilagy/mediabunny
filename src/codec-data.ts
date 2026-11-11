@@ -26,6 +26,7 @@ import {
 	popcount,
 	setUint24,
 	writeExpGolomb,
+	parseIsoSuffix,
 } from './misc';
 import { Logging } from './logging';
 import { PacketType } from './packet';
@@ -2903,8 +2904,8 @@ export const readVorbisComments = (bytes: Uint8Array, metadataTags: MetadataTags
 			}; break;
 
 			case 'DATE': {
-				const date = new Date(value);
-				if (!Number.isNaN(date.getTime())) {
+				const date = parseIsoSuffix(value);
+				if (date) {
 					metadataTags.date ??= date;
 				}
 			}; break;
