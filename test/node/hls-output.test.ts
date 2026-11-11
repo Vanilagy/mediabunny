@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest';
-import { Output, OutputTrackGroup } from '../../src/output.js';
+import { Output, OutputTrackGroup, OutputVideoTrack } from '../../src/output.js';
 import {
 	AdtsOutputFormat,
 	CmafOutputFormat,
@@ -236,7 +236,7 @@ test('Playlist assignment, multiple video with different metadata and an I-frame
 	expect(decl[2]!.playlist).toBe(decl[0]!.playlist);
 
 	expect(decl[3]!.playlist.tracks).toHaveLength(1);
-	expect(decl[3]!.playlist.tracks[0]!.metadata.hasOnlyKeyPackets).toBe(true);
+	expect((decl[3]!.playlist.tracks[0] as OutputVideoTrack).metadata.hasOnlyKeyPackets).toBe(true);
 	expect(decl[3]!.groupId).toBeNull();
 	expect(decl[3]!.references).toHaveLength(0);
 });
