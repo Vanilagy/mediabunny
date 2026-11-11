@@ -101,6 +101,31 @@ test('Cancel after the target stream errored', async () => {
 	await output.cancel();
 });
 
+test('Cancel while finalizing', async () => {
+	const finalizeAllowed = promiseWithResolvers();
+	const output = new Output({
+		format: new MkvOutputFormat(),
+		target: new BufferTarget(),
+		onFinalize: () => finalizeAllowed.promise,
+	});
+
+	output.addVideoTrack(new EncodedVideoPacketSource('avc'));
+	await output.start();
+
+	const finalizePromise = output.finalize();
+	let cancelSettled = false;
+	const cancelPromise = output.cancel().then(() => cancelSettled = true);
+
+	// Finalizing releases the resources, so canceling resolves once that's done
+	await new Promise(resolve => setTimeout(resolve));
+	expect(cancelSettled).toBe(false);
+
+	finalizeAllowed.resolve();
+	await finalizePromise;
+	await cancelPromise;
+	expect(output.state).toBe('finalized');
+});
+
 test('initTarget callback not returning a Target', async () => {
 	const output = new Output({
 		format: new CmafOutputFormat(),

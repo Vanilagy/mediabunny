@@ -931,12 +931,16 @@ The current behavior is arguably intended, or fixing it means picking between va
   `getPacket` returns the wrong packet, `isRelativeToUnixEpoch` flips). Keep the old timeline or switch to PDT?
   Fix: a reload keeps a timeline that isn't date-time-based; date-times then only add the Unix time mapping. The
   backward extrapolation also measures from the running time, so it accounts for segments that dropped out unseen.
-- HLS live TARGETDURATION can be smaller than segments cut at key frames (an existing test writes EXTINF:3 under
+✅ HLS live TARGETDURATION can be smaller than segments cut at key frames (an existing test writes EXTINF:3 under
   TARGETDURATION:2, against RFC 8216). Options: grow it like FFmpeg, force cuts, or require GOPs to fit.
-- `mediaSamplesAtTimestamps` deadlocks a consumer that yields one timestamp and waits for its sample (reproduced
+✅ `mediaSamplesAtTimestamps` deadlocks a consumer that yields one timestamp and waits for its sample (reproduced
   with WAV). The held-sample logic (9946bf65) would need an early-emit rule.
-- `cancel()` during finalizing is a no-op; the code comment says intended, the doc says cancel releases resources.
-- `MediaSource.add()` after `close()` started isn't rejected; rejecting would break MediaStream sources' late adds.
+✅ `cancel()` during finalizing is a no-op; the code comment says intended, the doc says cancel releases resources.
+  Fix: finalizing releases the resources too, so `cancel()` during it now resolves once finalization has settled,
+  as its doc promises.
+✅ `MediaSource.add()` after `close()` started isn't rejected; rejecting would break MediaStream sources' late adds.
+  Fix: the MediaStream sources drop their late frames themselves by now, so `_ensureValidAdd` checks
+  `_closingPromise` instead of `_closed`, rejecting adds as soon as `close()` was called.
 - Input: disposing an Input whose Source is shared doesn't cancel the Input's in-flight operations (reproduced).
   Should disposal abort reads on a source others still use?
 - `hasHighDynamicRange()` returns true for wide-gamut metadata with an SDR transfer. Possibly intended.

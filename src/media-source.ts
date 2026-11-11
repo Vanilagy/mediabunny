@@ -129,7 +129,7 @@ export abstract class MediaSource {
 			throw new Error('Output has not started.');
 		}
 
-		if (this._closed) {
+		if (this._closingPromise) {
 			throw new Error('Source is closed.');
 		}
 	}

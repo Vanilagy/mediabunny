@@ -987,13 +987,13 @@ export class Output<
 	async cancel() {
 		if (this.state === 'canceled') {
 			return this._cancelPromise ?? undefined;
-		} else if (this.state === 'finalizing' || this.state === 'finalized') {
-			// Don't wanna warn when finalizing since that shows a warning when finalization fails and then cancel
-			// is called
-			if (this.state === 'finalized') {
-				Logging._warn('Output has already been finalized.');
-			}
-
+		} else if (this.state === 'finalizing') {
+			// Don't wanna warn here since that shows a warning when finalization fails and then cancel is called.
+			// Finalizing releases all resources too, so wait for that.
+			assert(this._finalizePromise);
+			return this._finalizePromise.catch(() => {});
+		} else if (this.state === 'finalized') {
+			Logging._warn('Output has already been finalized.');
 			return;
 		}
 

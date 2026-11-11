@@ -490,3 +490,21 @@ test('Audio with overlapping adds', async () => {
 		expect([...sampleValues][0]).toBeGreaterThan(values[i * frameCount - 1] ?? -Infinity);
 	}
 });
+
+test('Add while the source is closing', async () => {
+	const output = new Output({
+		format: new MkvOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const source = new EncodedAudioPacketSource('aac');
+	output.addAudioTrack(source);
+	await output.start();
+
+	// The source is still flushing, but no more data must come in
+	source.close();
+	expect(() => source.add(new EncodedPacket(new Uint8Array(16), 'key', 0, 0.1), AAC_META))
+		.toThrow('Source is closed.');
+
+	await output.finalize();
+});

@@ -193,6 +193,7 @@
 - Fixed `UrlSource` error messages sometimes showing `[object Request]` instead of the URL
 - Canceling an output now also closes the streams of `StreamTarget`s that were never started, which leaked file handles for `FilePathTarget`
 - Fixed `Output.cancel()` failing and leaving targets open when a source or target stream had errored
+- Fixed `Output.cancel()` during finalization resolving before the resources were released
 - Fixed targets requested during cancellation being written to after being closed, or never being closed
 - Fixed `Output.getMimeType()` never settling after the output was canceled
 - Fixed unhandled promise rejections from `Output.target` with a failing async `PathedTarget` callback and from closing discarded targets
@@ -203,6 +204,7 @@
 - Fixed a typo in the error for too many tracks
 - `MediaStreamAudioTrackSource` and `MediaStreamVideoTrackSource` now count queued samples toward the encoder's load, so they drop samples sooner under backpressure instead of queuing them up without limit
 - Invalid adds to `VideoSampleSource`, `CanvasSource`, `AudioSampleSource` and `AudioBufferSource` now throw synchronously, like for the packet sources
+- Fixed media sources accepting data added while they were still closing
 - Fixed some media source race conditions
 - Fixed `MediaStreamVideoTrackSource` failing for frames arriving while it shuts down; they're now dropped, like for audio
 - Fixed `MediaSource.close()` failures becoming unhandled rejections and making `finalize()` hang
