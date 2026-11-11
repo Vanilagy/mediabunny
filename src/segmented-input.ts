@@ -72,6 +72,7 @@ export abstract class SegmentedInput {
 
 	trackBackingsPromise: Promise<InputTrackBacking[]> | null = null;
 	firstSegment: Segment | null = null;
+	hasOnlyKeyPackets = false;
 
 	// Roughly maps local segment timestamps onto actual packet timestamps
 	learnedSegmentTimestampOffset: number | null = null;
@@ -310,7 +311,10 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 	}
 
 	getHasOnlyKeyPackets() {
-		return this.delegate(() => this.firstInputTrack!._backing.getHasOnlyKeyPackets?.() ?? null);
+		return this.delegate(() => {
+			return this.segmentedInput.hasOnlyKeyPackets
+				|| (this.firstInputTrack!._backing.getHasOnlyKeyPackets?.() ?? null);
+		});
 	}
 
 	getPairingMask() {

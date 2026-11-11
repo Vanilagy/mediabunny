@@ -42,6 +42,7 @@ import {
 	TAG_DISCONTINUITY_SEQUENCE,
 	TAG_ENDLIST,
 	TAG_EXTINF,
+	TAG_I_FRAMES_ONLY,
 	TAG_KEY,
 	TAG_MAP,
 	TAG_MEDIA_SEQUENCE,
@@ -562,6 +563,8 @@ export class HlsSegmentedInput extends SegmentedInput {
 				}
 
 				this.refreshInterval = clamp(duration, 0.5, 3600); // Clamped for safety
+			} else if (line === TAG_I_FRAMES_ONLY) {
+				this.hasOnlyKeyPackets = true;
 			} else if (line === TAG_ENDLIST) {
 				this.streamHasEnded = true;
 				break; // No need to keep reading after this

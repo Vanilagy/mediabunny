@@ -156,6 +156,7 @@
 - Fixed HLS variant streams referencing undefined media groups losing their tracks
 - Fixed the HLS `CHANNELS` attribute of object-based audio (such as Dolby Atmos) being read as the channel count
 - Fixed HLS master playlists with only I-frame variants failing to load
+- Fixed directly loaded HLS I-frame playlists not reporting their tracks as having only key packets
 - Fixed several cases of relative URLs in HLS playlists being resolved incorrectly, such as protocol-relative URLs, `data:` URIs and URLs with query strings
 - Improved HLS query parameter parsing
 - Fixed sparse fMP4 HLS segments with large timestamps being shifted by a timestamp wrap

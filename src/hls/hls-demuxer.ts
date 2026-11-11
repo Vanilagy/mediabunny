@@ -28,7 +28,6 @@ import {
 	TAG_DEFINE,
 	TAG_EXTINF,
 	TAG_I_FRAME_STREAM_INF,
-	TAG_I_FRAMES_ONLY,
 	TAG_MEDIA,
 	TAG_STREAM_INF,
 } from './hls-misc';
@@ -188,8 +187,6 @@ export class HlsDemuxer extends Demuxer {
 					}
 
 					mediaTags.push({ fullPath, attributes, lineNumber: i });
-				} else if (line === TAG_I_FRAMES_ONLY) {
-					// iFramesOnlyTagFound = true;
 				} else if (line.startsWith(TAG_EXTINF)) {
 					// This is a media playlist, not a master playlist
 					const segmentedInput = new HlsSegmentedInput(this, rootPath, null, lines);

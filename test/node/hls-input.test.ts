@@ -1517,7 +1517,7 @@ eac3.ts
 });
 
 test.concurrent('Master playlist with only I-frame variants', async () => {
-	using input = createHlsInput({
+	const playlists = {
 		'master.m3u8': `#EXTM3U
 #EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=100000,CODECS="hvc1.1.6.L93.B0",URI="media.m3u8"
 `,
@@ -1528,13 +1528,20 @@ test.concurrent('Master playlist with only I-frame variants', async () => {
 entry24-segment3.ts
 #EXT-X-ENDLIST
 `,
-	});
+	};
+
+	using input = createHlsInput(playlists);
 	const track = (await input.getPrimaryVideoTrack())!;
 	expect(await track.hasOnlyKeyPackets()).toBe(true);
 
 	// There's no regular variant to align the timestamps with, so the I-frame variant has to do
 	const packet = await new EncodedPacketSink(track).getFirstPacket();
 	expect(packet!.timestamp).toBe(0);
+
+	// Loaded directly, the media playlist's own tag marks it as I-frames only
+	using mediaInput = createHlsInput(playlists, 'media.m3u8');
+	const mediaTrack = (await mediaInput.getPrimaryVideoTrack())!;
+	expect(await mediaTrack.hasOnlyKeyPackets()).toBe(true);
 });
 
 test.concurrent('Playlists without segments', { timeout: 10_000 }, async () => {
@@ -1632,8 +1639,8 @@ hevc.ts
 	expect(await Promise.all(videoTracks.map(x => x.getCodec()))).toEqual(['hevc']);
 });
 
-const createHlsInput = (playlists: Record<string, string>) => new Input({
-	source: new CustomPathedSource('master.m3u8', ({ path }) => {
+const createHlsInput = (playlists: Record<string, string>, rootPath = 'master.m3u8') => new Input({
+	source: new CustomPathedSource(rootPath, ({ path }) => {
 		const playlist = playlists[path];
 		if (playlist !== undefined) {
 			return new BufferSource(new TextEncoder().encode(playlist));
