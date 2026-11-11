@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { CallSerializer, EventEmitter, parseIsoSuffix, setInt64 } from '../../src/misc.js';
+import { CallSerializer, EventEmitter, getQueryParameter, parseIsoSuffix, setInt64 } from '../../src/misc.js';
 import { Bitstream } from '../../shared/bitstream.js';
 import { EncodedPacket } from '../../src/packet.js';
 
@@ -116,4 +116,17 @@ test('ISO date parsing', () => {
 	expect(parseIsoSuffix('12')).toBe(null);
 	expect(parseIsoSuffix('2013/05/03')).toBe(null);
 	expect(parseIsoSuffix('May 3 2013')).toBe(null);
+});
+
+test('Query parameters', () => {
+	expect(getQueryParameter('/media.m3u8?token=abc%20123', 'token')).toBe('abc 123');
+	expect(getQueryParameter('/media.m3u8?a=1&token=x', 'token')).toBe('x');
+	expect(getQueryParameter('/media.m3u8?a=1', 'token')).toBe(null);
+
+	// Decoded like URLSearchParams does it, where + is a space
+	expect(getQueryParameter('/media.m3u8?token=abc+123', 'token')).toBe('abc 123');
+
+	// A ? in the fragment doesn't start a query
+	expect(getQueryParameter('/media.m3u8#x?token=1', 'token')).toBe(null);
+	expect(getQueryParameter('/media.m3u8?token=1#x', 'token')).toBe('1');
 });

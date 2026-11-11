@@ -1295,29 +1295,16 @@ export const joinPaths = (basePath: FilePath, relativePath: FilePath) => {
 
 // eg. path `/media.m3u8?token=abc%20123` and name `token` resolve to `abc 123`
 export const getQueryParameter = (path: string, name: string) => {
-	const queryIndex = path.indexOf('?');
+	// Everything after a # is the fragment, even a ?
+	const fragmentIndex = path.indexOf('#');
+	const pathWithoutFragment = fragmentIndex === -1 ? path : path.slice(0, fragmentIndex);
+
+	const queryIndex = pathWithoutFragment.indexOf('?');
 	if (queryIndex === -1) {
 		return null;
 	}
 
-	const fragmentIndex = path.indexOf('#', queryIndex);
-	const query = path.slice(queryIndex + 1, fragmentIndex === -1 ? undefined : fragmentIndex);
-
-	for (const parameter of query.split('&')) {
-		const equalsIndex = parameter.indexOf('=');
-		const encodedName = equalsIndex === -1 ? parameter : parameter.slice(0, equalsIndex);
-		const encodedValue = equalsIndex === -1 ? '' : parameter.slice(equalsIndex + 1);
-
-		try {
-			if (decodeURIComponent(encodedName) === name) {
-				return decodeURIComponent(encodedValue);
-			}
-		} catch {
-			// Malformed percent-encoding, so let's not treat this as the parameter we're looking for
-		}
-	}
-
-	return null;
+	return new URLSearchParams(pathWithoutFragment.slice(queryIndex + 1)).get(name);
 };
 
 export const arrayCount = <T>(array: T[], predicate: (item: T) => boolean) => {

@@ -2001,8 +2001,8 @@ test('HLS: QUERYPARAM with malformed percent-encoding', async () => {
 
 	const sink = new EncodedPacketSink((await input.getAudioTracks())[0]!);
 
-	// Used to be a URIError
-	await expect(sink.getFirstPacket()).rejects.toThrow(/query parameter/);
+	// Used to be a URIError. Like with URLSearchParams, the malformed parts are decoded leniently.
+	await expect(sink.getFirstPacket()).rejects.toThrow('No such file: seg�%A.ts');
 });
 
 test('HLS: Variant stream pointing at a huge file that is no playlist', async () => {

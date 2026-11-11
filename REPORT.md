@@ -1024,7 +1024,9 @@ The current behavior is arguably intended, or fixing it means picking between va
 ✅ UrlSource child requests (HLS) inherit the root's Range header but not a Request's headers. Fix: a Request's
   RequestInit fields (headers, credentials, mode, cache and so on) are merged into the source's requestInit, and
   children get that requestInit, with the Range header already stripped.
-- `getQueryParameter` doesn't decode `+` as a space and treats `?` after `#` as a query (HLS spec ambiguous).
+✅ `getQueryParameter` doesn't decode `+` as a space and treats `?` after `#` as a query (HLS spec ambiguous). Fix:
+  only the part before the fragment is searched for a query (like `joinPaths`), which is then read with
+  `URLSearchParams`, decoding `+` as a space and malformed escapes leniently.
 - `getUnixTimeForTimestamp` waits for a timestamp past the live edge (no `skipLiveWait`).
 - The AAC encoder's 4-channel layout is 4.0 (L R C BC), not Mediabunny's quad convention; AAC has no PCE-free quad.
 - Server: VP8 alpha decodes opaque (docs only promise VP9/ProRes transparency).
