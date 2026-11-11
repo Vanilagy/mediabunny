@@ -215,6 +215,7 @@
 - Fixed `AppendOnlyStreamTarget` never emitting `finalized`
 - Fixed format callbacks such as `onMoof` sometimes receiving wrong data
 - Fixed missing validation for the result of `OutputOptions.initTarget`
+- Fixed `Quality` accepting names of inherited object properties, like `'toString'`, as quality levels
 - Fixed a typo in the error for too many tracks
 - `MediaStreamAudioTrackSource` and `MediaStreamVideoTrackSource` now count queued samples toward the encoder's load, so they drop samples sooner under backpressure instead of queuing them up without limit
 - Invalid adds to `VideoSampleSource`, `CanvasSource`, `AudioSampleSource` and `AudioBufferSource` now throw synchronously, like for the packet sources
@@ -302,6 +303,7 @@
 - `@mediabunny/dts`: Fixed wrong decoded timestamps when the stream's sample rate differs from the track's
 - `@mediabunny/dts`: Fixed decoding of streams with more than 8 channels, such as DTS:X
 - `@mediabunny/dts`: Fixed slow encoding of very large samples
+- `@mediabunny/dts`: Fixed low quality settings being unsupported for multichannel audio; such bitrates now encode at the lowest bitrate DTS allows
 - `@mediabunny/truehd`: Fixed encoded streams shorter than 16 access units being unmuxable; they're now padded with silence
 - `@mediabunny/truehd`: Fixed wrong decoded timestamps when the stream's sample rate differs from the track's
 - `@mediabunny/truehd`: Fixed wrong decoded timestamps for packets holding several access units
@@ -332,5 +334,6 @@
 - `@mediabunny/server`: Fixed 3- and 5-channel AAC, AC-3 and E-AC-3 encoding failing
 - `@mediabunny/server`: Fixed 3- and 4-channel TrueHD being remixed instead of encoded losslessly
 - `@mediabunny/server`: Fixed encoded DTS being 512 samples late
+- `@mediabunny/server`: Fixed low quality settings being unsupported for DTS; such bitrates now encode at the lowest bitrate DTS allows
 - `@mediabunny/server`: Fixed AC-3, E-AC-3 and DTS encoding losing the end of the audio
 - `InputTrack.id` is now the track's 1-based index in `getTracks()` for every format, making it unique in multi-segment Matroska files. Previously, it was the container's own track ID (such as the MPEG-TS PID or the Ogg serial number).

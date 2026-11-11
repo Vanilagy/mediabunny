@@ -1004,11 +1004,14 @@ The current behavior is arguably intended, or fixing it means picking between va
   uses v1. AVFoundation still accepted a 6-channel E-AC-3 v1 MOV, so no failure was observed. Fix: MOV now uses
   version 2 for more than 2 channels too (multichannel linear PCM then becomes `lpcm`); E-AC-3 left as is.
 ✅ Mp3Muxer writes no LAME delay when the first packet timestamp is positive (Conversion pads to 0; may be intended).
-- MP3 remux doesn't carry over the encoder padding, so players play it (1.0 s -> 1.0198 s).
-- `Quality` accepts inherited keys (`'toString'`) and +-Infinity.
-- `canEncodeAudio` with a quantizer-only Quality throws instead of returning false (may be intended).
+✅ MP3 remux doesn't carry over the encoder padding, so players play it (1.0 s -> 1.0198 s).
+✅ `Quality` accepts inherited keys (`'toString'`) and +-Infinity. Fix: quality levels are checked as own keys of
+  `QUALITY_LEVELS`; +-Infinity stays allowed, as intended.
+✅ `canEncodeAudio` with a quantizer-only Quality throws instead of returning false (may be intended).
 - DTS: Quality `'very-low'`/`'low'` aren't encodable at stereo/5.1, since their bitrates fall below what
-  `supports()` allows (reproduced). Clamp the Quality's bitrate, or report it as unsupported?
+  `supports()` allows (reproduced). Clamp the Quality's bitrate, or report it as unsupported? Fix: the DTS extension
+  and the server extension no longer reject such bitrates in `supports()`, but clamp them to the range the DTS
+  encoder accepts (`clampDtsBitrate` in shared/dts-misc.ts), so they encode at the lowest bitrate possible.
 - FLAC encoder extension: float input is floored to 24 bits instead of rounded. FFmpeg does the same, so changing
   it is a choice.
 - `VideoTransformOptions.alpha` is never read (the code uses `config.alpha`) and isn't validated.

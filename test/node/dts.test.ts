@@ -546,3 +546,36 @@ test('Codec delay when encoding', async () => {
 
 	expect(errorEnergy / signalEnergy).toBeLessThan(0.01);
 });
+
+test('Quality with a very low bitrate', async () => {
+	registerDtsEncoder();
+
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+	// Very low quality comes out at fewer bits than a 5.1 DTS frame needs, so the encoder goes as low as it can instead
+	const source = new AudioSampleSource({ codec: 'dts', quality: new Quality('very-low') });
+	output.addAudioTrack(source);
+	await output.start();
+
+	const sample = new AudioSample({
+		data: new Float32Array(6 * 4800),
+		format: 'f32',
+		numberOfChannels: 6,
+		sampleRate: 48000,
+		timestamp: 0,
+	});
+	await source.add(sample);
+	sample.close();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+	expect(await track.getCodec()).toBe('dts');
+	expect(await track.getNumberOfChannels()).toBe(6);
+});

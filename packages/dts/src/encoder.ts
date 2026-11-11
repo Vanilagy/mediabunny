@@ -15,7 +15,7 @@ import {
 } from 'mediabunny';
 import { sendCommand, refWorker, unrefWorker } from './worker-client';
 import { assert } from './shared';
-import { DTS_CHANNEL_COUNTS, DTS_SAMPLE_RATES, dtsBitrateFits } from '../../../shared/dts-misc';
+import { clampDtsBitrate, DTS_CHANNEL_COUNTS, DTS_SAMPLE_RATES } from '../../../shared/dts-misc';
 
 // FFmpeg's DTS encoder doesn't report it, but the decoded audio comes out this many samples late
 const CODEC_DELAY = 512;
@@ -37,8 +37,7 @@ class DtsEncoder extends CustomAudioEncoder {
 		return codec === 'dts'
 			&& DTS_CHANNEL_COUNTS.includes(config.numberOfChannels)
 			&& DTS_SAMPLE_RATES.includes(config.sampleRate)
-			&& config.bitrate !== undefined
-			&& dtsBitrateFits(config.bitrate, config.sampleRate, config.numberOfChannels);
+			&& config.bitrate !== undefined;
 	}
 
 	async init() {
@@ -53,7 +52,7 @@ class DtsEncoder extends CustomAudioEncoder {
 			data: {
 				numberOfChannels: this.config.numberOfChannels,
 				sampleRate: this.config.sampleRate,
-				bitrate: this.config.bitrate,
+				bitrate: clampDtsBitrate(this.config.bitrate, this.config.sampleRate, this.config.numberOfChannels),
 			},
 		});
 

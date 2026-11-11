@@ -24,7 +24,7 @@ import {
 	buildAdtsHeaderTemplate,
 	parseAacAudioSpecificConfig,
 } from '../../../shared/aac-misc';
-import { DTS_CHANNEL_COUNTS, DTS_SAMPLE_RATES, dtsBitrateFits } from '../../../shared/dts-misc';
+import { clampDtsBitrate, DTS_CHANNEL_COUNTS, DTS_SAMPLE_RATES } from '../../../shared/dts-misc';
 import { TRUEHD_CHANNEL_COUNTS, TRUEHD_SAMPLE_RATES } from '../../../shared/truehd-misc';
 
 const AAC_SAMPLE_RATES
@@ -92,7 +92,6 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 		) || (
 			codec === 'dts' && DTS_CHANNEL_COUNTS.includes(numberOfChannels)
 			&& DTS_SAMPLE_RATES.includes(sampleRate)
-			&& dtsBitrateFits(resolveBitrate(config, codec), sampleRate, numberOfChannels)
 		) || (
 			codec === 'truehd' && TRUEHD_CHANNEL_COUNTS.includes(numberOfChannels)
 			&& TRUEHD_SAMPLE_RATES.includes(sampleRate)
@@ -449,5 +448,8 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 }
 
 const resolveBitrate = (config: AudioEncoderConfig, codec: AudioCodec) => {
-	return config.bitrate ?? new Quality('medium')._toAudioBitrate(codec) ?? 0;
+	const bitrate = config.bitrate ?? new Quality('medium')._toAudioBitrate(codec) ?? 0;
+	return codec === 'dts'
+		? clampDtsBitrate(bitrate, config.sampleRate, config.numberOfChannels)
+		: bitrate;
 };

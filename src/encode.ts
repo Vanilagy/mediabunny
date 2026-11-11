@@ -721,8 +721,8 @@ export class Quality {
 		if ('quality' in options) {
 			if (
 				typeof options.quality === 'string'
-					? !(options.quality in QUALITY_LEVELS)
-					: (typeof options.quality !== 'number' || Number.isNaN(options.quality))
+					? !Object.prototype.hasOwnProperty.call(QUALITY_LEVELS, options.quality)
+					: (typeof options.quality !== 'number' || Number.isNaN(options.quality)) // Infinities allowed
 			) {
 				throw new TypeError(
 					'options.quality must be a number, or one of \'very-low\', \'low\', \'medium\', \'high\''

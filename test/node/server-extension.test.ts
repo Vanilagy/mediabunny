@@ -2590,6 +2590,15 @@ describe('Audio', async () => {
 		});
 	});
 
+	test('DTS encode & decode at a very low bitrate', async () => {
+		// Too few bits for a stereo frame, so the encoder goes as low as it can instead
+		await encodeDecodeTest('dts', { bitrate: 64000 }, async (packet) => {
+			expect(packet.type).toBe('key');
+		}, async (sample) => {
+			expect(sample.numberOfChannels).toBe(2);
+		});
+	});
+
 	test('TrueHD encode & decode', async () => {
 		await encodeDecodeTest('truehd', {}, async (packet, meta, i) => {
 			// libav's encoder writes a major sync every 16 access units
