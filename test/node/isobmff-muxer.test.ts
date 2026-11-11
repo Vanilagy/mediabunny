@@ -10,10 +10,18 @@ import { AppendOnlyStreamTarget, BufferTarget, NullTarget, StreamTarget, Target 
 import { CmafOutputFormat, IsobmffOutputFormat, MovOutputFormat, Mp4OutputFormat } from '../../src/output-format.js';
 import { Conversion } from '../../src/conversion.js';
 import { assert, toDataView } from '../../src/misc.js';
-import { EncodedAudioPacketSource, EncodedVideoPacketSource, TextSubtitleSource } from '../../src/media-source.js';
+import {
+	AudioSampleSource,
+	EncodedAudioPacketSource,
+	EncodedVideoPacketSource,
+	TextSubtitleSource,
+} from '../../src/media-source.js';
 import { EncodedPacket } from '../../src/packet.js';
 import { InputTrack } from '../../src/input-track.js';
 import { IsobmffMuxer } from '../../src/isobmff/isobmff-muxer.js';
+import { Quality } from '../../src/encode.js';
+import { AudioSample } from '../../src/sample.js';
+import { registerMp3Encoder } from '@mediabunny/mp3-encoder';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
@@ -1578,4 +1586,55 @@ test('Multichannel PCM, MOV', async () => {
 	assert(track);
 	expect(await track.getCodec()).toBe('pcm-s16');
 	expect(await track.getNumberOfChannels()).toBe(6);
+});
+
+test('MP3 in MOV', async () => {
+	registerMp3Encoder();
+
+	const output = new Output({
+		format: new MovOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const packets: EncodedPacket[] = [];
+	const source = new AudioSampleSource({
+		codec: 'mp3',
+		quality: new Quality({ bitrate: 128_000 }),
+		onEncodedPacket: packet => packets.push(packet),
+	});
+	output.addAudioTrack(source);
+	await output.start();
+
+	const data = new Float32Array(2 * 44100).map((_, i) => 0.5 * Math.sin(2 * Math.PI * 440 * (i >> 1) / 44100));
+	using sample = new AudioSample({
+		data,
+		format: 'f32',
+		numberOfChannels: 2,
+		sampleRate: 44100,
+		timestamp: 0,
+	});
+	await source.add(sample);
+	await output.finalize();
+
+	const bytes = new Uint8Array(output.target.buffer!);
+	expect(findBox(bytes, [...STSD_PATH, 'mp4a'])).toBeNull();
+	expect(findBox(bytes, [...STSD_PATH, '.mp3'])).not.toBeNull();
+
+	using input = new Input({
+		source: new BufferSource(bytes),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+	expect(await track.getCodec()).toBe('mp3');
+	expect(await track.getSampleRate()).toBe(44100);
+	expect(await track.getNumberOfChannels()).toBe(2);
+
+	const readPackets: EncodedPacket[] = [];
+	for await (const packet of new EncodedPacketSink(track).packets()) {
+		readPackets.push(packet);
+	}
+
+	expect(packets.length).toBeGreaterThan(0);
+	expect(readPackets.map(x => x.data)).toEqual(packets.map(x => x.data));
 });

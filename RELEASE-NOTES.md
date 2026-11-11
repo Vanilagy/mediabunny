@@ -3,6 +3,7 @@
 - Added support for setting `HlsOutputFormatOptions.targetDuration` to `Infinity` outside of live mode, giving each playlist only a single segment
 - Added support for hybrid fragmented MP4 files, which hold samples both in the `moov` box and in subsequent fragments (such as FFmpeg's `-movflags frag_keyframe` output). Previously, all fragments were ignored.
 - Added read support for 64-bit float PCM in ISOBMFF
+- Added read support for MP3 in MOV files with a `.mp3` sample entry
 - Added support for ISOBMFF files without an `ftyp` box
 - Added support for the ISOBMFF `srat` box, fixing high sample rates being misreported for `ipcm`/`fpcm` tracks
 - Added support for reading the Matroska segment title (`Info\Title`) as metadata
@@ -35,6 +36,7 @@
 - Fixed disc number being written under the `disc` key instead of `disk`
 - Fixed PCM with more than 16 bits per sample in MP4 being written with a QuickTime-only sound description, making it unplayable in AVFoundation
 - AC-3 and E-AC-3 in MOV are now wrapped in a `wave` box, fixing E-AC-3 playback in AVFoundation
+- MP3 in MOV is now written with a `.mp3` sample entry, fixing playback in AVFoundation
 - Fixed the ISOBMFF muxer hanging on `finalize()` after `start()` or a track close threw
 - Fixed VP8's `vpcC` box being written with a bit depth of 0
 - Fixed MOV `hdlr` component names being written as C strings instead of counted strings

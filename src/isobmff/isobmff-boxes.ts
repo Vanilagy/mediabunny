@@ -2119,7 +2119,7 @@ const VIDEO_CODEC_TO_CONFIGURATION_BOX: Record<
 const audioCodecToBoxName = (codec: AudioCodec, fullCodecString: string, isQuickTime: boolean): string => {
 	switch (codec) {
 		case 'aac': return 'mp4a';
-		case 'mp3': return 'mp4a';
+		case 'mp3': return isQuickTime ? '.mp3' : 'mp4a';
 		case 'opus': return 'Opus';
 		case 'vorbis': return 'mp4a';
 		case 'flac': return 'fLaC';
@@ -2166,7 +2166,7 @@ const audioCodecToBoxName = (codec: AudioCodec, fullCodecString: string, isQuick
 const audioCodecToConfigurationBox = (codec: AudioCodec, isQuickTime: boolean) => {
 	switch (codec) {
 		case 'aac': return esds;
-		case 'mp3': return esds;
+		case 'mp3': return isQuickTime ? null : esds;
 		case 'opus': return dOps;
 		case 'vorbis': return esds;
 		case 'flac': return dfLa;

@@ -1038,12 +1038,13 @@ The current behavior is arguably intended, or fixing it means picking between va
 ✅ Server: a mid-stream x264 switch to lossless (qp 0) changes the SPS profile without a new decoder config
   (reproduced: decoding in avc mode fails at packet 5). Emit a new decoder config, or force a fixed profile?
   Fix: x264 gets qp 1 for a quantizer of 0, so it never goes lossless.
-- Missing feature: BW64 WAVE.
-- Missing feature: 12/20-bit WAVE PCM.
-- Missing feature: reading ADTS frames with multiple raw data blocks.
-- Missing feature: ADTS resync over junk.
-- Missing feature: MP3 in MOV via the `.mp3` sample entry (currently written as mp4a, which AVFoundation decodes
+✅ Missing feature: BW64 WAVE.
+✅ Missing feature: 12/20-bit WAVE PCM.
+✅ Missing feature: reading ADTS frames with multiple raw data blocks.
+✅ Missing feature: ADTS resync over junk.
+✅ Missing feature: MP3 in MOV via the `.mp3` sample entry (currently written as mp4a, which AVFoundation decodes
   as AAC and fails).
+  Fix: MOV output writes MP3 with a `.mp3` sample entry and no esds, like FFmpeg, and the demuxer reads `.mp3`.
 - Missing feature: EXT-X-I-FRAMES-ONLY in directly loaded media playlists.
 - Matroska ProjectionPoseYaw/Pitch of 90 deg scale an axis by cos(90 deg) = 0, giving a degenerate matrix.
   Reproduced, but this is how degenerate matrices round-trip through MKV (the existing test "Matroska, degenerate
