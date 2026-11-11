@@ -1302,6 +1302,25 @@ export class Conversion {
 						'\nThe @mediabunny/flac-encoder extension package provides support for encoding FLAC.',
 					);
 				}
+
+				if (uniqueCodecs.includes('dts')) {
+					elements.push(
+						'\nThe @mediabunny/dts extension package provides support for encoding and decoding DTS.',
+					);
+				}
+
+				if (uniqueCodecs.includes('truehd')) {
+					elements.push(
+						'\nThe @mediabunny/truehd extension package provides support for encoding and decoding TrueHD.',
+					);
+				}
+
+				if (uniqueCodecs.length > 0 && typeof VideoEncoder === 'undefined') {
+					elements.push(
+						'\nIn server-side environments, the @mediabunny/server extension package provides support for'
+						+ ' encoding and decoding all common codecs.',
+					);
+				}
 			} else {
 				elements.push('\nCheck the discardedTracks field for more info.');
 			}
@@ -1425,7 +1444,6 @@ export class Conversion {
 
 			await Promise.all(this._trackPumps.map(x => x.resolvers.promise));
 		} catch (error) {
-			// Errors after a cancellation are just fallout of it, so those surface as a ConversionCanceledError below
 			if ((this._state as Conversion['_state']) !== 'canceled') {
 				// Make sure to cancel to stop other encoding processes and clean up resources
 				void this.cancel().catch(() => {});
@@ -1440,23 +1458,31 @@ export class Conversion {
 		}
 
 		const isDone = this._trackPumps.every(x => x.done);
-		this._state = isDone ? 'done' : 'idle';
+		if (!isDone) {
+			this._state = 'idle';
+			return;
+		}
 
-		if (isDone) {
-			if (!this._composable) {
-				try {
-					await this.output.finalize();
-				} catch (error) {
-					this._state = 'canceled';
-					throw error;
-				}
+		if (!this._composable) {
+			try {
+				await this.output.finalize();
+			} catch (error) {
+				this._state = 'canceled';
+				throw error;
 			}
 
-			if (this._computeProgress) {
-				// By this point, all tracks have closed and removed themselves from _maxTimestamps, so we use the last
-				// processed time we saw while they were still open
-				this.onProgress?.(1, this._lastProcessedTime);
+			if ((this._state as Conversion['_state']) === 'canceled') {
+				// Canceled while finalizing, which the output doesn't stop anymore
+				throw new ConversionCanceledError();
 			}
+		}
+
+		this._state = 'done';
+
+		if (this._computeProgress) {
+			// By this point, all tracks have closed and removed themselves from _maxTimestamps, so we use the last
+			// processed time we saw while they were still open
+			this.onProgress?.(1, this._lastProcessedTime);
 		}
 	}
 
@@ -1944,7 +1970,6 @@ export class Conversion {
 
 					if (
 						clampedStartTimestamp > clampedEndTimestamp
-						// Zero-duration samples are still part of the trim region when they lie within it
 						|| (clampedStartTimestamp === clampedEndTimestamp && sample.duration > 0)
 					) {
 						// Wholly out of the trim region
@@ -2091,7 +2116,7 @@ export class Conversion {
 					)
 					|| (
 						this._copyBoundaryPolicy === 'expand'
-						// Check if packet is wholly before the start
+						// Check if the packet is wholly before the start
 						&& startPacket.timestamp + startPacket.duration <= this._startTimestamp
 						// With delta packets, the rest of the key packet's group may still reach past the start
 						&& await track.hasOnlyKeyPackets()

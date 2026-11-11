@@ -248,4 +248,16 @@
 - Fixed `canEncodeVideo()` leaking its probe encoder in Firefox
 - Fixed `canDecode()` not returning a promise for subtitle codecs
 - Fixed cover art stored in Vorbis comments being duplicated in FLAC to FLAC conversions
+- Conversion errors for tracks that can't be encoded now point to the DTS and TrueHD extension packages, and to `@mediabunny/server` in server-side environments
+- Fixed a conversion staying stuck in the executing state when starting it failed
+- Fixed canceling a conversion early throwing a generic error instead of `ConversionCanceledError`
+- Fixed unhandled promise rejections when writing a conversion's output failed
+- Fixed conversions reaching the `'done'` state before their output had finalized, or even when finalizing failed
+- Fixed the index passed to conversion track option callbacks not matching the track number when only primary tracks are converted
+- Fixed zero-duration video frames inside the trim range being dropped when transcoding
+- Fixed trimmed copies of audio with delta packets (such as TrueHD) losing audio at the start
+- Fixed conversions discarding audio tracks instead of falling back to PCM when no compressed codec can be encoded
+- Fixed conversion progress being reported as NaN when there's nothing to convert
+- Fixed a broken error message for requested codecs the output format can't contain
+- Fixed conversions of implicitly signaled HE-AAC failing for formats like WAVE when the audio starts late
 - `InputTrack.id` is now the track's 1-based index in `getTracks()` for every format, making it unique in multi-segment Matroska files. Previously, it was the container's own track ID (such as the MPEG-TS PID or the Ogg serial number).

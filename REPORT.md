@@ -723,28 +723,31 @@ Behavior changes worth a look are marked **[behavior change]**.
 ✅ A raw `METADATA_BLOCK_PICTURE` tag duplicated the image in FLAC -> FLAC output. Fix: the raw tag is skipped
   when the images are written separately anyway.
 
-### Conversion
+### Conversion ✅
 
-- `execute()` stayed 'executing' after a startup failure (output never canceled). Fix: the startup part (duration
+✅ `execute()` stayed 'executing' after a startup failure (output never canceled). Fix: the startup part (duration
   computation, `output.start()`, starting the pumps) moved into the `try` whose `catch` cancels the conversion.
-- Early cancel gave a generic error instead of ConversionCanceledError. Fix: errors caught after the conversion
+✅ Early cancel gave a generic error instead of ConversionCanceledError. Fix: errors caught after the conversion
   was canceled are no longer rethrown, so execution reaches the ConversionCanceledError path.
-- Write failures caused unhandled rejections. Fix: `void this.cancel().catch(() => {})` in the error path.
-- A failed finalize left the state 'done'. Fix: set the state to 'canceled' when `output.finalize()` throws.
-- The options callback's `n` didn't match `track.number` in 'primary' mode. Fix: pass `track.number` instead of
+✅ Write failures caused unhandled rejections. Fix: `void this.cancel().catch(() => {})` in the error path.
+✅ A failed finalize left the state 'done'. Fix: set the state to 'canceled' when `output.finalize()` throws.
+✅ The state was 'done' before the output had finalized, so a second `execute()` resolved early. Fix: the state stays
+  'executing' during finalization and only becomes 'done' afterwards; a cancel during finalization makes `execute()`
+  throw ConversionCanceledError.
+✅ The options callback's `n` didn't match `track.number` in 'primary' mode. Fix: pass `track.number` instead of
   separate per-type counters.
-- Zero-duration frames inside the trim range were dropped when transcoding. Fix: a sample whose clamped start
+✅ Zero-duration frames inside the trim range were dropped when transcoding. Fix: a sample whose clamped start
   equals its clamped end is only skipped if its duration is positive.
-- Trimmed TrueHD copies lost up to one GOP at the start. Fix: the 'expand' boundary policy only skips a start
+✅ Trimmed TrueHD copies lost up to one GOP at the start. Fix: the 'expand' boundary policy only skips a start
   packet wholly before the trim start if the track has only key packets, since a delta-packet group may still
   reach past the start.
-- Tracks were discarded instead of falling back to PCM. Fix: when the retry with fallback channel count/sample rate
+✅ Tracks were discarded instead of falling back to PCM. Fix: when the retry with fallback channel count/sample rate
   finds no non-PCM codec either, `outputCodec` now falls back to the first encodable codec (PCM) instead of staying
   null.
-- Progress was reported as NaN when the total duration was 0. Fix: report 0 progress in that case.
-- A requested codec the output format can't hold gave the message "any of the codecs  with" (empty list). Fix:
+✅ Progress was reported as NaN when the total duration was 0. Fix: report 0 progress in that case.
+✅ A requested codec the output format can't hold gave the message "any of the codecs  with" (empty list). Fix:
   such codecs get their own message ("the output format cannot contain the requested codecs ...").
-- Silence padding used the metadata channel count and sample rate (implicitly signaled HE-AAC starting late threw
+✅ Silence padding used the metadata channel count and sample rate (implicitly signaled HE-AAC starting late threw
   when converted to WAV). Fix: take them from the decoded sample.
 
 ### Small core pieces
@@ -928,7 +931,6 @@ The current behavior is arguably intended, or fixing it means picking between va
 - `mediaSamplesAtTimestamps` deadlocks a consumer that yields one timestamp and waits for its sample (reproduced
   with WAV). The held-sample logic (9946bf65) would need an early-emit rule.
 - `cancel()` during finalizing is a no-op; the code comment says intended, the doc says cancel releases resources.
-- Conversion is 'done' before finalize finishes, so a second `execute()` resolves early (keeps cancel a no-op).
 - `MediaSource.add()` after `close()` started isn't rejected; rejecting would break MediaStream sources' late adds.
 - Input: disposing an Input whose Source is shared doesn't cancel the Input's in-flight operations (reproduced).
   Should disposal abort reads on a source others still use?
