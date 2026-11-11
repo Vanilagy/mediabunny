@@ -448,7 +448,7 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 }
 
 const resolveBitrate = (config: AudioEncoderConfig, codec: AudioCodec) => {
-	const bitrate = config.bitrate ?? new Quality('medium')._toAudioBitrate(codec) ?? 0;
+	const bitrate = config.bitrate ?? new Quality('medium')._toAudioBitrate(codec, config.numberOfChannels) ?? 0;
 	return codec === 'dts'
 		? clampDtsBitrate(bitrate, config.sampleRate, config.numberOfChannels)
 		: bitrate;

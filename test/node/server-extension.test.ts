@@ -612,8 +612,8 @@ describe('Video', async () => {
 
 	for (const { codec, name, low, high } of QUANTIZER_TEST_CODECS) {
 		test(`${name} quantizer encode`, { timeout: 20_000 }, async () => {
-			const lowQuantizerPackets = await quantizerEncodeTest(codec, () => low);
-			const highQuantizerPackets = await quantizerEncodeTest(codec, () => high);
+			const { packets: lowQuantizerPackets } = await quantizerEncodeTest(codec, () => low);
+			const { packets: highQuantizerPackets } = await quantizerEncodeTest(codec, () => high);
 
 			// A lower quantizer means higher quality, which shows in the encoded size
 			expect(lowQuantizerPackets.reduce((sum, packet) => sum + packet.data.byteLength, 0))
@@ -621,7 +621,7 @@ describe('Video', async () => {
 		});
 
 		test(`${name} mid-stream quantizer change`, { timeout: 20_000 }, async () => {
-			const packets = await quantizerEncodeTest(codec, i => i < 5 ? low : high);
+			const { packets } = await quantizerEncodeTest(codec, i => i < 5 ? low : high);
 
 			// Changing the quantizer forces a fresh encoder stream, which begins with a new key frame
 			expect(packets[5]!.type).toBe('key');
@@ -630,6 +630,14 @@ describe('Video', async () => {
 				.toBeGreaterThan(packets.slice(5).reduce((sum, packet) => sum + packet.data.byteLength, 0));
 		});
 	}
+
+	test('AVC quantizer of 0', { timeout: 20_000 }, async () => {
+		const { decoderConfigs } = await quantizerEncodeTest('avc', () => 0);
+
+		// Still High profile, not x264's lossless High 4:4:4 Predictive
+		expect(decoderConfigs).toHaveLength(1);
+		expect(decoderConfigs[0]!.codec).toMatch(/^avc1\.64/);
+	});
 
 	test('ProRes encode', async () => {
 		// ProRes can't be decoded by node-av's wrapper here, so this is encode-only.
@@ -954,10 +962,14 @@ describe('Video', async () => {
 		} satisfies VideoEncoderConfig;
 
 		const packets: EncodedPacket[] = [];
+		const decoderConfigs: VideoDecoderConfig[] = [];
 
 		// @ts-expect-error Readonly
-		encoder.onPacket = (packet: EncodedPacket) => {
+		encoder.onPacket = (packet: EncodedPacket, meta?: EncodedVideoChunkMetadata) => {
 			packets.push(packet);
+			if (meta?.decoderConfig) {
+				decoderConfigs.push(meta.decoderConfig);
+			}
 		};
 
 		await encoder.init();
@@ -988,7 +1000,10 @@ describe('Video', async () => {
 		expect(packets).toHaveLength(10);
 		expect(packets[0]!.type).toBe('key');
 
-		return packets;
+		return {
+			packets,
+			decoderConfigs,
+		};
 	};
 
 	test('libx265 forced key frames close together', { timeout: 30_000 }, async () => {
@@ -3095,8 +3110,6 @@ describe('Audio', async () => {
 						codec: buildAudioCodecString(codec, Math.min(numberOfChannels, 2), sampleRate),
 						numberOfChannels,
 						sampleRate,
-						// Vorbis' supported bitrates scale with the channel count
-						bitrate: codec === 'vorbis' ? 64000 * numberOfChannels : undefined,
 					} satisfies AudioEncoderConfig;
 
 					if (NodeAvAudioEncoder.supports(codec, config)) {

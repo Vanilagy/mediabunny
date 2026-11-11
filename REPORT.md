@@ -1031,10 +1031,13 @@ The current behavior is arguably intended, or fixing it means picking between va
   live wait, since extrapolating from the last known segment is just as precise.
 ✅ The AAC encoder's 4-channel layout is 4.0 (L R C BC), not Mediabunny's quad convention; AAC has no PCE-free quad.
   Fix: 4 channels are encoded as quad with a PCE, and ADTS is no longer supported for them.
-- Server: VP8 alpha decodes opaque (docs only promise VP9/ProRes transparency).
-- Server: the Vorbis bitrate doesn't scale with channel count (6 ch at 48 kHz needs >= 96k).
-- Server: a mid-stream x264 switch to lossless (qp 0) changes the SPS profile without a new decoder config
+✅ Server: VP8 alpha decodes opaque (docs only promise VP9/ProRes transparency).
+✅ Server: the Vorbis bitrate doesn't scale with channel count (6 ch at 48 kHz needs >= 96k).
+  Fix: `Quality` now scales Opus and Vorbis bitrates by `numberOfChannels / 2`. AAC stays unscaled, as Chrome on
+  Windows only accepts 96k, 128k, 160k and 192k.
+✅ Server: a mid-stream x264 switch to lossless (qp 0) changes the SPS profile without a new decoder config
   (reproduced: decoding in avc mode fails at packet 5). Emit a new decoder config, or force a fixed profile?
+  Fix: x264 gets qp 1 for a quantizer of 0, so it never goes lossless.
 - Missing feature: BW64 WAVE.
 - Missing feature: 12/20-bit WAVE PCM.
 - Missing feature: reading ADTS frames with multiple raw data blocks.

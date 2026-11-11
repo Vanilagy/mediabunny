@@ -1419,7 +1419,11 @@ export class HlsMuxer extends Muxer {
 							decoderConfig?.codedHeight ?? 1080,
 						);
 					} else if (track.isAudioTrack()) {
-						trackPeakBitrate = mediumQuality._toAudioBitrate(track.source._codec) ?? 0;
+						const decoderConfig = trackData?.info.decoderConfig as AudioDecoderConfig | undefined;
+						trackPeakBitrate = mediumQuality._toAudioBitrate(
+							track.source._codec,
+							decoderConfig?.numberOfChannels ?? 2,
+						) ?? 0;
 					}
 				}
 

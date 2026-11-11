@@ -249,6 +249,11 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			) {
 				// Mediabunny uses the quantizer index (0-255), while these encoders expect the 0-63 quantizer scale
 				mapped = Math.round(this.quantizer / 4);
+			} else if (this.avCodec.name === 'libx264') {
+				// x264 makes qp 0 lossless, which switches to the High 4:4:4 Predictive profile. That's not what a
+				// quantizer of 0 means elsewhere, and a mid-stream quantizer change would swap profiles under the
+				// decoder.
+				mapped = Math.max(this.quantizer, 1);
 			} else {
 				// Everything else lines up with Mediabunny directly
 				mapped = this.quantizer;

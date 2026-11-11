@@ -621,7 +621,7 @@ export const buildAudioEncoderConfig = (options: {
 		),
 		numberOfChannels: options.numberOfChannels,
 		sampleRate: options.sampleRate,
-		bitrate: options.quality?._toAudioBitrate(options.codec),
+		bitrate: options.quality?._toAudioBitrate(options.codec, options.numberOfChannels),
 		bitrateMode: options.quality?._bitrateMode ?? fallbackBitrateMode,
 		...getAudioEncoderConfigExtension(options.codec),
 	};
@@ -849,7 +849,7 @@ export class Quality {
 	}
 
 	/** @internal */
-	_toAudioBitrate(codec: AudioCodec) {
+	_toAudioBitrate(codec: AudioCodec, numberOfChannels: number) {
 		if ((PCM_AUDIO_CODECS as readonly string[]).includes(codec) || codec === 'flac' || codec === 'truehd') {
 			return undefined;
 		}
@@ -883,6 +883,11 @@ export class Quality {
 		}
 
 		let finalBitrate = baseBitrate * factor;
+
+		if (codec === 'opus' || codec === 'vorbis') {
+			// The base rates are for stereo
+			finalBitrate *= numberOfChannels / 2;
+		}
 
 		if (codec === 'aac') {
 			// AAC only works with specific bitrates, let's find the closest

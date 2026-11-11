@@ -219,6 +219,7 @@
 - Fixed format callbacks such as `onMoof` sometimes receiving wrong data
 - Fixed missing validation for the result of `OutputOptions.initTarget`
 - Fixed `Quality` accepting names of inherited object properties, like `'toString'`, as quality levels
+- `Quality` now scales Opus and Vorbis bitrates with the channel count, fixing multichannel Vorbis failing to encode
 - Fixed a typo in the error for too many tracks
 - `MediaStreamAudioTrackSource` and `MediaStreamVideoTrackSource` now count queued samples toward the encoder's load, so they drop samples sooner under backpressure instead of queuing them up without limit
 - Invalid adds to `VideoSampleSource`, `CanvasSource`, `AudioSampleSource` and `AudioBufferSource` now throw synchronously, like for the packet sources
@@ -338,6 +339,7 @@
 - `@mediabunny/server`: Fixed HEVC key frames forced close together being dropped
 - `@mediabunny/server`: Fixed VP8 encoding with alpha failing
 - `@mediabunny/server`: Fixed ProRes 4444 being encoded with 4:2:2 chroma subsampling
+- `@mediabunny/server`: Fixed an AVC quantizer of 0 switching to lossless encoding, which could break decoding
 - `@mediabunny/server`: Fixed precise video timestamps being lost or wrong after flushing
 - `@mediabunny/server`: Fixed some AV1 streams that browsers can decode failing to decode
 - `@mediabunny/server`: Fixed support being claimed for AAC, Opus, E-AC-3 and Vorbis channel counts and sample rates the encoders reject, and for 8-channel AAC in ADTS
