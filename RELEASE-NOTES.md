@@ -61,6 +61,7 @@
 - Matroska muxer no longer patches the color space into VP9 key frames, which zeroed the color space for BT.2020, corrupted RGB streams and modified the caller's packet data
 - Fixed MPEG-TS muxer writing a DTS greater than the PTS for B-frames, which made FFmpeg reject the files
 - Fixed malformed HEVC access unit delimiters in MPEG-TS output, which broke FFmpeg's bitstream filters
+- Fixed MPEG-TS PIDs depending on which track's data came first, which made them change between HLS segments
 - Fixed a rejected first AAC packet leaving the MPEG-TS track half set up, making every following packet fail
 - Fixed the MPEG-TS muxer hanging on `finalize()` after `start()` or a track close threw
 - Fixed PAT and PMT sections with a pointer field losing the program or its last stream

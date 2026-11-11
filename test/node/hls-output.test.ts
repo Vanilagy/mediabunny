@@ -4195,6 +4195,57 @@ test('RESOLUTION', async () => {
 	expect(masterText).toContain(',RESOLUTION=1920x1080');
 });
 
+test('MPEG-TS PIDs consistent across segments', async () => {
+	const segments = new Map<string, BufferTarget>();
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new MpegTsOutputFormat(),
+			targetDuration: 1,
+		}),
+		target: new PathedTarget('master.m3u8', (request) => {
+			const target = new BufferTarget();
+			segments.set(request.path, target);
+			return target;
+		}),
+	});
+
+	const video = videoSource();
+	const audio = audioSource();
+	output.addVideoTrack(video);
+	output.addAudioTrack(audio);
+	await output.start();
+
+	// The video ends after the first segment, so the later segments hold only audio
+	await video.add(new EncodedPacket(avcPacketData, 'key', 0, 0.5), avcMetadata);
+	await video.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0.5));
+	video.close();
+	for (let i = 0; i < 6; i++) {
+		await audio.add(new EncodedPacket(aacPacketData, 'key', 0.5 * i, 0.5), aacMetadata);
+	}
+	await output.finalize();
+
+	const audioPids = new Set<number>();
+	for (const [path, target] of segments) {
+		if (!path.endsWith('.ts')) {
+			continue;
+		}
+
+		const bytes = new Uint8Array(target.buffer!);
+		for (let pos = 0; pos < bytes.length; pos += 188) {
+			const pid = ((bytes[pos + 1]! & 0x1f) << 8) | bytes[pos + 2]!;
+			const payloadUnitStart = (bytes[pos + 1]! & 0x40) !== 0;
+			const payloadStart = pos + 4 + ((bytes[pos + 3]! & 0x20) ? 1 + bytes[pos + 4]! : 0);
+
+			// The start of an audio PES packet
+			if (payloadUnitStart && bytes[payloadStart + 3] === 0xc0) {
+				audioPids.add(pid);
+			}
+		}
+	}
+
+	expect([...audioPids]).toEqual([0x101]);
+});
+
 test('RESOLUTION, anamorphic video', async () => {
 	let masterText = '';
 

@@ -88,9 +88,6 @@ export class MpegTsMuxer extends Muxer {
 	private packetView = toDataView(this.packetBuffer);
 	private allTracksKnown = promiseWithResolvers();
 
-	private videoTrackIndex = 0;
-	private audioTrackIndex = 0;
-
 	private adaptationFieldBuffer = new Uint8Array(184);
 	private payloadBuffer = new Uint8Array(184);
 
@@ -131,8 +128,10 @@ export class MpegTsMuxer extends Muxer {
 		const streamType = codec === 'avc'
 			? MpegTsStreamType.AVC
 			: MpegTsStreamType.HEVC;
-		const pid = FIRST_TRACK_PID + this.trackDatas.length;
-		const streamId = VIDEO_STREAM_ID_BASE + this.videoTrackIndex++;
+
+		// IDs depend only on track order
+		const pid = FIRST_TRACK_PID + this.output.tracks.indexOf(track);
+		const streamId = VIDEO_STREAM_ID_BASE + this.output.tracks.filter(x => x.type === 'video').indexOf(track);
 
 		const newTrackData: MpegTsTrackData = {
 			track,
@@ -174,18 +173,22 @@ export class MpegTsMuxer extends Muxer {
 		const codec = track.source._codec;
 		assert(codec === 'aac' || codec === 'mp3' || codec === 'ac3' || codec === 'eac3' || codec === 'dts');
 
+		// IDs depend only on track order
+		const pid = FIRST_TRACK_PID + this.output.tracks.indexOf(track);
+		const audioTrackIndex = this.output.tracks.filter(x => x.type === 'audio').indexOf(track);
+
 		let streamType: MpegTsStreamType;
 		let streamId: number;
 
 		switch (codec) {
 			case 'aac': {
 				streamType = MpegTsStreamType.AAC;
-				streamId = AUDIO_STREAM_ID_BASE + this.audioTrackIndex++;
+				streamId = AUDIO_STREAM_ID_BASE + audioTrackIndex;
 			}; break;
 
 			case 'mp3': {
 				streamType = MpegTsStreamType.MP3_MPEG1;
-				streamId = AUDIO_STREAM_ID_BASE + this.audioTrackIndex++;
+				streamId = AUDIO_STREAM_ID_BASE + audioTrackIndex;
 			}; break;
 
 			case 'ac3': {
@@ -203,8 +206,6 @@ export class MpegTsMuxer extends Muxer {
 				streamId = 0xbd;
 			}; break;
 		}
-
-		const pid = FIRST_TRACK_PID + this.trackDatas.length;
 
 		const newTrackData: MpegTsTrackData = {
 			track,
@@ -841,7 +842,7 @@ const buildPmt = (trackDatas: MpegTsTrackData[]) => {
 	view.setUint16(10, 0xF000, false); // reserved=1111, program_info_length=0
 
 	let offset = 12;
-	for (const trackData of trackDatas) {
+	for (const trackData of [...trackDatas].sort((a, b) => a.pid - b.pid)) { // In PID order
 		section[offset++] = trackData.streamType; // stream_type
 		view.setUint16(offset, 0xE000 | (trackData.pid & 0x1FFF), false); // reserved=111, elementary_PID
 		offset += 2;

@@ -977,11 +977,12 @@ The current behavior is arguably intended, or fixing it means picking between va
 ✅ MP3: Layer I/II streams are labelled `'mp3'` (reproduced); distinguishing them needs new codec identifiers.
 ✅ MP3: a mid-stream Layer III frame that looks like a VBRI header is dropped as a header frame (reproduced). The
   Xing/VBRI check deliberately runs on every frame.
-- Ogg: chained links reusing a serial number cross into the next link. Reproduced with `cat b.opus a.opus` (a 1 s
+✅ Ogg: chained links reusing a serial number cross into the next link. Reproduced with `cat b.opus a.opus` (a 1 s
   link, then a 3 s link, both serial 0): `computeDuration` gives 3 instead of 1, and `getPacket(0)` returns a packet
   of the second link. Sequential reading is fine. RFC 3533 forbids such files; support them or not?
-- The MPEG-TS muxer writes no PCR and writes PAT/PMT only once (strict analyzers flag it).
-- The MPEG-TS muxer assigns PIDs by first-packet order, so in HLS the audio PID can change between segments.
+✅ The MPEG-TS muxer writes no PCR and writes PAT/PMT only once (strict analyzers flag it).
+✅ The MPEG-TS muxer assigns PIDs by first-packet order, so in HLS the audio PID can change between segments. Fix:
+  PIDs, PES stream IDs and the PMT order follow the track order, which the HLS muxer keeps the same for every segment.
 - Matroska Language is ISO 639-2/B, but `languageCode` is documented as /T and the muxer writes /T.
 - Matroska multi-segment files give duplicate track IDs; needs an ID scheme.
 - WebVTT in WebM is written as `S_TEXT/WEBVTT`; WebM and FFmpeg expect `D_WEBVTT/*`.
