@@ -224,8 +224,7 @@ export const canDecodeAudio = async (
 
 const getDecoderConfigMemoKey = (config: VideoDecoderConfig | AudioDecoderConfig) => JSON.stringify({
 	...config,
-	// An ArrayBuffer or DataView would stringify to {}, so let's serialize the actual bytes
-	description: config.description && [...toUint8Array(config.description)],
+	description: config.description && [...toUint8Array(config.description)], // So it gets serialized properly
 });
 
 /**

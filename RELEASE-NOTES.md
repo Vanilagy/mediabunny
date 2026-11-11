@@ -234,4 +234,18 @@
 - Fixed `AudioSample` rejecting `SharedArrayBuffer` data
 - Fixed missing validation for negative `AudioSample` channel counts
 - Fixed empty `AudioSample`s not being copyable
+- Fixed interlaced AVC being reported at half its height (#634)
+- Fixed HEVC SPS with inter-predicted short-term or long-term reference pictures being misparsed, giving wrong aspect ratios and colors
+- Fixed several AVC SPS parsing issues
+- Fixed VP9 RGB key frames (profiles 1 and 3) being misparsed, giving wrong codec strings
+- Fixed some AV1 codec strings having a wrong level, which browsers could reject
+- Fixed avcC records of some AVC profiles (like 4:4:4 from x264) losing their extension fields
+- Fixed hvcC records putting prefix and suffix SEI into one array
+- Fixed missing color info for ProRes frames with a minimal frame header
+- Fixed 7.1 E-AC-3 being reported as 7 channels
+- Fixed 7.1 E-AC-3 muxed into MP4 being declared as 5.1
+- Fixed `canDecodeVideo()` and `canDecodeAudio()` returning cached results for configs that only differ in their description
+- Fixed `canEncodeVideo()` leaking its probe encoder in Firefox
+- Fixed `canDecode()` not returning a promise for subtitle codecs
+- Fixed cover art stored in Vorbis comments being duplicated in FLAC to FLAC conversions
 - `InputTrack.id` is now the track's 1-based index in `getTracks()` for every format, making it unique in multi-segment Matroska files. Previously, it was the container's own track ID (such as the MPEG-TS PID or the Ogg serial number).

@@ -2726,7 +2726,7 @@ export const countShownVideoFrames = (codec: VideoCodec, packetData: Uint8Array)
 			const indexStart = packetData.length - (2 + frameCount * frameSizeLength);
 
 			if (packetData[indexStart] === lastByte) {
-				// A superframe, which concatenates several frames and lists their sizes in its index
+				// A superframe!
 				let shownFrameCount = 0;
 				let frameStart = 0;
 
@@ -3110,8 +3110,8 @@ export const createVorbisComments = (headerBytes: Uint8Array, tags: MetadataTags
 			if (key === 'vendor' || value == null || writtenTags.includes(key)) {
 				continue;
 			}
-			if (key === 'METADATA_BLOCK_PICTURE' && !writeImages && tags.images?.length) {
-				// The images get written elsewhere already, and they include the ones read from this tag
+			if (key === 'METADATA_BLOCK_PICTURE' && !writeImages && (tags.images?.length ?? 0) > 0) {
+				// The images get written elsewhere already
 				continue;
 			}
 

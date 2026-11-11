@@ -683,44 +683,44 @@ Behavior changes worth a look are marked **[behavior change]**.
 ✅ AudioSample: empty samples couldn't be copied (encoders threw). Fix: `frameOffset` 0 is always in range, in both
   `allocationSize` and `copyTo`.
 
-### Codecs, codec data, encode/decode
+### Codecs, codec data, encode/decode ✅
 
-- Interlaced AVC SPS reported half the height (1080i opened as 1920x536). Fix: coded height is `16 * (2 -
+✅ Interlaced AVC SPS reported half the height (1080i opened as 1920x536). Fix: coded height is `16 * (2 -
   frame_mbs_only_flag) * (pic_height_in_map_units_minus1 + 1)`.
-- HEVC SPS with inter-predicted short-term RPS was misparsed (wrong SAR/color). Fix: `use_delta_flag` is inferred
+✅ HEVC SPS with inter-predicted short-term RPS was misparsed (wrong SAR/color). Fix: `use_delta_flag` is inferred
   as 1 when absent, and the set's `NumDeltaPocs` counts only the kept entries instead of copying the reference
   set's count.
-- HEVC SPS with long-term reference pictures was misparsed (`lt_ref_pic_poc_lsb_sps` read as ue(v)). Fix: read it
+✅ HEVC SPS with long-term reference pictures was misparsed (`lt_ref_pic_poc_lsb_sps` read as ue(v)). Fix: read it
   as `log2_max_pic_order_cnt_lsb_minus4 + 4` fixed bits.
-- VP9 RGB key frames (profile 1/3) were parsed one bit off (wrong level). Fix: skip the reserved bit after the RGB
+✅ VP9 RGB key frames (profile 1/3) were parsed one bit off (wrong level). Fix: skip the reserved bit after the RGB
   color space in profiles 1 and 3.
-- E-AC-3 `chan_loc` bits were read in reverse (7.1 reported as 7 channels). Fix: `getEac3ChannelCount` tests
+✅ E-AC-3 `chan_loc` bits were read in reverse (7.1 reported as 7 channels). Fix: `getEac3ChannelCount` tests
   `1 << bit` instead of `1 << (8 - bit)`.
-- E-AC-3 dependent substreams were ignored when building dec3 (7.1 muxed to MP4 claimed 5.1). Fix:
+✅ E-AC-3 dependent substreams were ignored when building dec3 (7.1 muxed to MP4 claimed 5.1). Fix:
   `parseEac3SyncFrame` walks the dependent substream frames following the independent one, counting them into
   `numDepSub` and converting each one's `chanmap` into `chan_loc` bits.
-- ProRes frames with the minimal 20-byte header had no color info. Fix: accept frame headers of 20 bytes instead
+✅ ProRes frames with the minimal 20-byte header had no color info. Fix: accept frame headers of 20 bytes instead
   of requiring 28.
-- AV1 fallback codec strings used the VP9 level table (Chrome rejected them). Fix: use `AV1_LEVEL_TABLE`.
-- AV1 level 5.3 had the wrong max picture size. Fix: 8912896 (same as 5.x) instead of 35651584.
-- `canDecodeVideo`/`canDecodeAudio` cached results across different binary descriptions. Fix: the memo key
+✅ AV1 fallback codec strings used the VP9 level table (Chrome rejected them). Fix: use `AV1_LEVEL_TABLE`.
+✅ AV1 level 5.3 had the wrong max picture size. Fix: 8912896 (same as 5.x) instead of 35651584.
+✅ `canDecodeVideo`/`canDecodeAudio` cached results across different binary descriptions. Fix: the memo key
   serializes the description's bytes (ArrayBuffers/DataViews stringified to `{}`).
-- `canEncodeVideo` leaked its probe encoder on Firefox. Fix: close the encoder in a `finally` unless it's already
+✅ `canEncodeVideo` leaked its probe encoder on Firefox. Fix: close the encoder in a `finally` unless it's already
   closed.
-- `canDecode` returned a non-Promise for subtitle codecs. Fix: make it `async`.
-- avcC extension fields were only handled for profiles 100/110/122/144 (an x264 yuv444p avcC lost its bytes).
+✅ `canDecode` returned a non-Promise for subtitle codecs. Fix: make it `async`.
+✅ avcC extension fields were only handled for profiles 100/110/122/144 (an x264 yuv444p avcC lost its bytes).
   Fix: every profile except 66/77/88 has them, as in the current ISO/IEC 14496-15 and FFmpeg.
-- hvcC put prefix and suffix SEI into one array marked complete. Fix: separate arrays per NAL unit type, with
+✅ hvcC put prefix and suffix SEI into one array marked complete. Fix: separate arrays per NAL unit type, with
   array_completeness 0 as the spec requires for non-parameter-set arrays.
-- The inferred `max_dec_frame_buffering` ignored `max_num_ref_frames`. Fix: `min(max(MaxDpbFrames,
+✅ The inferred `max_dec_frame_buffering` ignored `max_num_ref_frames`. Fix: `min(max(MaxDpbFrames,
   max_num_ref_frames), 16)`. Caveat: an SPS with MaxDpbFrames 0 but reference frames now gets VUI injected.
-- AVC profile 144 (and 134/135/138/139) was missing from the chroma_format list, misparsing the SPS. Fix: add
+✅ AVC profile 144 (and 134/135/138/139) was missing from the chroma_format list, misparsing the SPS. Fix: add
   them.
-- AVC level 1b used level 1.1 limits. Fix: level_idc 11 with constraint_set3_flag in Baseline/Main/Extended
+✅ AVC level 1b used level 1.1 limits. Fix: level_idc 11 with constraint_set3_flag in Baseline/Main/Extended
   uses level 1 limits.
-- AV1 level selection ignored the maximum frame width and height (2100x64 got a level that can't hold 2100 px).
+✅ AV1 level selection ignored the maximum frame width and height (2100x64 got a level that can't hold 2100 px).
   Fix: `AV1_LEVEL_TABLE` gained `maxHSize`/`maxVSize`, checked in both codec string paths.
-- A raw `METADATA_BLOCK_PICTURE` tag duplicated the image in FLAC -> FLAC output. Fix: the raw tag is skipped
+✅ A raw `METADATA_BLOCK_PICTURE` tag duplicated the image in FLAC -> FLAC output. Fix: the raw tag is skipped
   when the images are written separately anyway.
 
 ### Conversion

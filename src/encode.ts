@@ -1195,7 +1195,6 @@ export const canEncodeVideo = async (
 				} catch {
 					resolve(false);
 				} finally {
-					// An encoder error already closes it
 					if (encoder.state !== 'closed') {
 						encoder.close();
 					}
