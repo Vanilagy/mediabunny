@@ -44,7 +44,7 @@ class FlacEncoder extends CustomAudioEncoder {
 	}
 
 	init() {
-		this.initPromise = (async () => {
+		return this.initPromise = (async () => {
 			// eslint-disable-next-line @typescript-eslint/no-unsafe-call
 			this.worker = (await createWorker()) as Worker;
 
@@ -84,8 +84,6 @@ class FlacEncoder extends CustomAudioEncoder {
 				nodeWorker.on('error', onError);
 			}
 		})();
-
-		return this.initPromise;
 	}
 
 	private resetInternalState() {

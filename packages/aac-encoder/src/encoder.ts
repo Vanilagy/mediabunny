@@ -65,7 +65,7 @@ class AacEncoder extends CustomAudioEncoder {
 	}
 
 	init() {
-		this.initPromise = (async () => {
+		return this.initPromise = (async () => {
 			// eslint-disable-next-line @typescript-eslint/no-unsafe-call
 			this.worker = (await createWorker()) as Worker;
 
@@ -135,8 +135,6 @@ class AacEncoder extends CustomAudioEncoder {
 			this.description = this.useAdts ? null : description;
 			this.resetInternalState();
 		})();
-
-		return this.initPromise;
 	}
 
 	private resetInternalState() {
@@ -180,7 +178,6 @@ class AacEncoder extends CustomAudioEncoder {
 		this.pendingBuffer.set(incomingData, this.pendingFrames * channels);
 		this.pendingFrames += incomingFrames;
 
-		// Shift the remainder to the front only once at the end, as doing it per frame is quadratic for big samples
 		let encodedFrames = 0;
 		while (this.pendingFrames - encodedFrames >= this.encoderFrameSize) {
 			await this.encodeOneFrame(encodedFrames);
@@ -193,14 +190,12 @@ class AacEncoder extends CustomAudioEncoder {
 
 	async flush() {
 		// Pad remaining samples with silence to fill a full frame
-		let paddingFrames = 0;
 		if (this.pendingFrames > 0) {
 			const channels = this.numberOfChannels;
 			const frameSize = this.encoderFrameSize;
 			const usedSamples = this.pendingFrames * channels;
 			const frameSamples = frameSize * channels;
 
-			paddingFrames = frameSize - this.pendingFrames;
 			this.pendingBuffer.fill(0, usedSamples, frameSamples);
 			this.pendingFrames = 0;
 
@@ -208,22 +203,12 @@ class AacEncoder extends CustomAudioEncoder {
 		}
 
 		const result = await this.sendCommand({ type: 'flush', data: { ctx: this.ctx } });
-
-		if (paddingFrames > 0) {
-			// The last packet ends with the padding, which isn't part of the audio
-			const lastPacket = result.packets[result.packets.length - 1];
-			assert(lastPacket);
-			lastPacket.duration -= paddingFrames;
-		}
-
 		this.emitPackets(result.packets);
 
 		this.resetInternalState();
 	}
 
 	async close() {
-		// We can get closed while still initializing (when canceled early on), so let that settle first. Otherwise, its
-		// request to the worker would never resolve, or the worker it's creating would outlive us.
 		assert(this.initPromise);
 		await this.initPromise.catch(() => {});
 

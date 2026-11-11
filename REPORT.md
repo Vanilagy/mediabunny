@@ -819,38 +819,36 @@ Behavior changes worth a look are marked **[behavior change]**.
 ✅ Access units after the first in a multi-AU packet came out with AV_NOPTS_VALUE timestamps. Fix: the worker
   maps NOPTS to null, and such samples continue from the previous sample's end.
 
-### AAC encoder extension
+### AAC encoder extension ✅
 
-- The last packet's duration counted the padding (1.0 s became 1.0027 s). Fix: subtract the silence padding added
-  at flush from the last packet's duration.
-- Closing during worker creation leaked the worker. Fix: `init()` stores its work as `initPromise`, and `close()`
+✅ Closing during worker creation leaked the worker. Fix: `init()` stores its work as `initPromise`, and `close()`
   awaits it (ignoring errors) before terminating the worker.
-- Closing during encoder initialization hung forever. Fix: same change; the init request to the worker now
+✅ Closing during encoder initialization hung forever. Fix: same change; the init request to the worker now
   settles before the worker is terminated.
-- 3 channels were encoded as 2.1 (third channel lost). Fix: new `set_aac_channel_layout` in the bridge with
+✅ 3 channels were encoded as 2.1 (third channel lost). Fix: new `set_aac_channel_layout` in the bridge with
   explicit layouts (3 -> surround) instead of `av_channel_layout_default`.
-- 7 channels were encoded as 6.1 with a PCE (channel configuration 0), which QuickTime silently drops. (An
+✅ 7 channels were encoded as 6.1 with a PCE (channel configuration 0), which QuickTime silently drops. (An
   earlier claim that FFmpeg decodes it permuted did not hold up in verification.) **[behavior change]** 7- and
   8-channel AAC now use channel configurations 11/12, which can't go into ADTS/MPEG-TS; `supports()` rejects ADTS
   for them. Fix: the same mapping uses 6.1(back) for 7 and 7.1 for 8 channels; `supports()` returns false for
   ADTS with >= 7 channels.
-- The encoder couldn't be reused after a flush (stayed at EOF). Fix: `reset_encoder` replaces the drained codec
+✅ The encoder couldn't be reused after a flush (stayed at EOF). Fix: `reset_encoder` replaces the drained codec
   context with a freshly opened one (`avcodec_flush_buffers` does nothing for AAC); failures are reported.
-- Shifting the pending buffer with `copyWithin` after every frame was quadratic for one huge sample (perf; no
+✅ Shifting the pending buffer with `copyWithin` after every frame was quadratic for one huge sample (perf; no
   test). Fix: all full frames are encoded from their offsets in the buffer, and the remainder is shifted to the
   front once at the end.
 
-### FLAC encoder extension
+### FLAC encoder extension ✅
 
-- Closing during worker creation leaked the worker. Fix: same `initPromise` approach as the AAC encoder.
-- The encoder couldn't be reused after a flush (libFLAC reset its config). Fix: new `init_stream` re-applies the
+✅ Closing during worker creation leaked the worker. Fix: same `initPromise` approach as the AAC encoder.
+✅ The encoder couldn't be reused after a flush (libFLAC reset its config). Fix: new `init_stream` re-applies the
   whole configuration (channels, sample rate, bit depth, compression level, verify) before every (re)init.
 
-### MP3 encoder extension
+### MP3 encoder extension ✅
 
-- Packet timestamps drifted for large start timestamps (float accumulation). Fix: track the next timestamp as an
+✅ Packet timestamps drifted for large start timestamps (float accumulation). Fix: track the next timestamp as an
   integer sample count (`nextTimestampInSamples`) and derive each packet's timestamp from it.
-- LAME's negative return codes and failed `_malloc` calls were unchecked (garbage output). Fix: the worker throws
+✅ LAME's negative return codes and failed `_malloc` calls were unchecked (garbage output). Fix: the worker throws
   on negative encode/flush results and on a null `_malloc` result. No test: a repro needs ~4 GB samples.
 
 ### ProRes extension

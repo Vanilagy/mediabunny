@@ -281,4 +281,13 @@
 - `@mediabunny/truehd`: Fixed encoded streams shorter than 16 access units being unmuxable; they're now padded with silence
 - `@mediabunny/truehd`: Fixed wrong decoded timestamps when the stream's sample rate differs from the track's
 - `@mediabunny/truehd`: Fixed wrong decoded timestamps for packets holding several access units
+- `@mediabunny/aac-encoder`: 7- and 8-channel audio is now encoded with channel configurations 11 and 12 instead of a program config element, which QuickTime silently dropped. As ADTS can't hold these, it's no longer supported for 7 and 8 channels.
+- `@mediabunny/aac-encoder`: Fixed 3 channels being encoded as 2.1, losing the third channel
+- `@mediabunny/aac-encoder`: Fixed closing the encoder during initialization leaking its worker or hanging
+- `@mediabunny/aac-encoder`: Fixed the encoder not being reusable after a flush
+- `@mediabunny/aac-encoder`: Fixed slow encoding of very large samples
+- `@mediabunny/flac-encoder`: Fixed closing the encoder during initialization leaking its worker
+- `@mediabunny/flac-encoder`: Fixed the encoder not being reusable after a flush
+- `@mediabunny/mp3-encoder`: Fixed packet timestamps drifting for large start timestamps
+- `@mediabunny/mp3-encoder`: Fixed encoder errors producing garbage output instead of throwing
 - `InputTrack.id` is now the track's 1-based index in `getTracks()` for every format, making it unique in multi-segment Matroska files. Previously, it was the container's own track ID (such as the MPEG-TS PID or the Ogg serial number).
