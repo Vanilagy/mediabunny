@@ -851,15 +851,15 @@ Behavior changes worth a look are marked **[behavior change]**.
 ✅ LAME's negative return codes and failed `_malloc` calls were unchecked (garbage output). Fix: the worker throws
   on negative encode/flush results and on a null `_malloc` result. No test: a repro needs ~4 GB samples.
 
-### ProRes extension
+### ProRes extension ✅
 
-- Pixel aspect ratio set only in the container was ignored (Apple writes PAR only in `pasp`). Fix: if the decoder
+✅ Pixel aspect ratio set only in the container was ignored (Apple writes PAR only in `pasp`). Fix: if the decoder
   config has `displayAspectWidth`/`Height`, derive the pixel aspect ratio from it, overriding the bitstream's.
-- Color space set only in the container was ignored. Fix: the decoder config's color space fields take precedence
+✅ Color space set only in the container was ignored. Fix: the decoder config's color space fields take precedence
   over the in-band values, like with WebCodecs.
-- WebKit height trimming corrupted the alpha plane. Fix: the alpha plane is moved to its trimmed position as
+✅ WebKit height trimming corrupted the alpha plane. Fix: the alpha plane is moved to its trimmed position as
   well, like the Y/U/V planes.
-- `flush()` resolved before the last samples were emitted. Fix: await the last `runDecode` promise instead of the
+✅ `flush()` resolved before the last samples were emitted. Fix: await the last `runDecode` promise instead of the
   decoder's queue draining.
 
 ### Server extension (`@mediabunny/server`)

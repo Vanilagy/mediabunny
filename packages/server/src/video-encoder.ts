@@ -132,6 +132,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 
 		const codecContext = new NodeAv.CodecContext();
 		codecContext.allocContext3(this.avCodec);
+		codecContext.threadCount = 0; // Auto
 
 		let pixelFormat = NodeAv.AV_PIX_FMT_YUV420P;
 

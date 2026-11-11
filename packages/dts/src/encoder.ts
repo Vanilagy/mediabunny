@@ -31,6 +31,7 @@ class DtsEncoder extends CustomAudioEncoder {
 	private pendingBuffer = new Float32Array(2 ** 16);
 	private pendingFrames = 0;
 	private nextSampleTimestampInSamples: number | null = null;
+	private inFlightEncode: Promise<void> | null = null;
 
 	static override supports(codec: AudioCodec, config: AudioEncoderConfig): boolean {
 		return codec === 'dts'
@@ -127,6 +128,9 @@ class DtsEncoder extends CustomAudioEncoder {
 			}
 		}
 
+		await this.inFlightEncode;
+		this.inFlightEncode = null;
+
 		await sendCommand({ type: 'flush-encoder', data: { ctx: this.ctx } });
 
 		this.resetInternalState();
@@ -146,7 +150,7 @@ class DtsEncoder extends CustomAudioEncoder {
 		const frameData = this.pendingBuffer.slice(startFrame * channels, (startFrame + frameSize) * channels);
 
 		const audioData = frameData.buffer;
-		const result = await sendCommand({
+		const encode = sendCommand({
 			type: 'encode',
 			data: {
 				ctx: this.ctx,
@@ -154,24 +158,30 @@ class DtsEncoder extends CustomAudioEncoder {
 				// Shifted back by the codec delay so that the decoded audio lines up with the input
 				timestamp: this.nextSampleTimestampInSamples - CODEC_DELAY,
 			},
-		}, [audioData]);
+		}, [audioData]).then((result) => {
+			// We always get exactly one packet because we encode the correct frame size
+			const packet = new EncodedPacket(
+				new Uint8Array(result.encodedData),
+				'key',
+				result.pts / this.sampleRate,
+				result.duration / this.sampleRate,
+			);
+
+			this.onPacket(
+				packet,
+				this.chunkMetadata,
+			);
+
+			this.chunkMetadata = {};
+		});
+		encode.catch(() => {}); // Surfaces through whoever awaits it next
 
 		this.nextSampleTimestampInSamples += frameSize;
 
-		// We always get exactly one packet because we encode the correct frame size
-		const packet = new EncodedPacket(
-			new Uint8Array(result.encodedData),
-			'key',
-			result.pts / this.sampleRate,
-			result.duration / this.sampleRate,
-		);
-
-		this.onPacket(
-			packet,
-			this.chunkMetadata,
-		);
-
-		this.chunkMetadata = {};
+		// Keep one frame in flight, so the worker already has the next frame by the time it's done with the current one
+		const previousEncode = this.inFlightEncode;
+		this.inFlightEncode = encode;
+		await previousEncode;
 	}
 }
 

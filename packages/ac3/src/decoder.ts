@@ -19,6 +19,7 @@ import { assert, type DecodedChunk } from './shared';
 class Ac3Decoder extends CustomAudioDecoder {
 	private ctx = 0;
 	private nextTimestamp: number | null = null;
+	private inFlightDecode: Promise<void> | null = null;
 
 	static override supports(codec: AudioCodec): boolean {
 		return codec === 'ac3' || codec === 'eac3';
@@ -38,15 +39,22 @@ class Ac3Decoder extends CustomAudioDecoder {
 		const encodedData = packet.data.slice().buffer;
 		const timestamp = Math.round(packet.timestamp * this.config.sampleRate);
 
-		const result = await sendCommand({
+		const decode = sendCommand({
 			type: 'decode',
 			data: { ctx: this.ctx, encodedData, timestamp },
-		}, [encodedData]);
+		}, [encodedData]).then(result => this.emitSamples(result.chunks));
+		decode.catch(() => {}); // Surfaces through whoever awaits it next
 
-		this.emitSamples(result.chunks);
+		// Keep one packet in flight, so the worker already has the next one by the time it's done with the current one
+		const previousDecode = this.inFlightDecode;
+		this.inFlightDecode = decode;
+		await previousDecode;
 	}
 
 	async flush() {
+		await this.inFlightDecode;
+		this.inFlightDecode = null;
+
 		const result = await sendCommand({ type: 'flush-decoder', data: { ctx: this.ctx } });
 		this.emitSamples(result.chunks);
 	}

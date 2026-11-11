@@ -251,7 +251,6 @@ test('Flush with decodes in flight', async () => {
 	}
 	await decoder.flush();
 
-	// Mediabunny considers the decoder drained once flush resolves, so every sample must be out by then
 	expect(samples).toHaveLength(2);
 
 	for (const sample of samples) {

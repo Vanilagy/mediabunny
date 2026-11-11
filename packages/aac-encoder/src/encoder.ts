@@ -51,6 +51,7 @@ class AacEncoder extends CustomAudioEncoder {
 	private pendingBuffer = new Float32Array(2 ** 16);
 	private pendingFrames = 0;
 	private nextSampleTimestampInSamples: number | null = null;
+	private inFlightEncode: Promise<void> | null = null;
 
 	static override supports(codec: AudioCodec, config: AudioEncoderConfig): boolean {
 		const aacConfig = (config as { aac?: { format?: 'aac' | 'adts' } }).aac;
@@ -202,6 +203,9 @@ class AacEncoder extends CustomAudioEncoder {
 			await this.encodeOneFrame(0);
 		}
 
+		await this.inFlightEncode;
+		this.inFlightEncode = null;
+
 		const result = await this.sendCommand({ type: 'flush', data: { ctx: this.ctx } });
 		this.emitPackets(result.packets);
 
@@ -225,18 +229,22 @@ class AacEncoder extends CustomAudioEncoder {
 		);
 
 		const audioData = frameData.buffer;
-		const result = await this.sendCommand({
+		const encode = this.sendCommand({
 			type: 'encode',
 			data: {
 				ctx: this.ctx,
 				audioData,
 				timestamp: this.nextSampleTimestampInSamples,
 			},
-		}, [audioData]);
+		}, [audioData]).then(result => this.emitPackets(result.packets));
+		encode.catch(() => {}); // Surfaces through whoever awaits it next
 
 		this.nextSampleTimestampInSamples += this.encoderFrameSize;
 
-		this.emitPackets(result.packets);
+		// Keep one frame in flight, so the worker already has the next frame by the time it's done with the current one
+		const previousEncode = this.inFlightEncode;
+		this.inFlightEncode = encode;
+		await previousEncode;
 	}
 
 	private emitPackets(packets: PacketInfo[]) {

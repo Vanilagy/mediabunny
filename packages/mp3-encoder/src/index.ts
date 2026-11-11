@@ -36,6 +36,7 @@ class Mp3Encoder extends CustomAudioEncoder {
 	private currentBufferOffset = 0;
 	private nextTimestampInSamples: number | null = null;
 	private chunkMetadata: EncodedAudioChunkMetadata = {};
+	private inFlightEncode: Promise<void> | null = null;
 
 	static override supports(codec: AudioCodec, config: AudioDecoderConfig): boolean {
 		return codec === 'mp3'
@@ -134,18 +135,25 @@ class Mp3Encoder extends CustomAudioEncoder {
 			});
 		}
 
-		const result = await this.sendCommand({
+		const encode = this.sendCommand({
 			type: 'encode',
 			data: {
 				audioData,
 				numberOfFrames: audioSample.numberOfFrames,
 			},
-		}, [audioData]);
+		}, [audioData]).then(result => this.digestOutput(new Uint8Array(result.encodedData)));
+		encode.catch(() => {}); // Surfaces through whoever awaits it next
 
-		this.digestOutput(new Uint8Array(result.encodedData));
+		// Keep one sample in flight, so the worker already has the next one by the time it's done with the current one
+		const previousEncode = this.inFlightEncode;
+		this.inFlightEncode = encode;
+		await previousEncode;
 	}
 
 	async flush() {
+		await this.inFlightEncode;
+		this.inFlightEncode = null;
+
 		const result = await this.sendCommand({ type: 'flush' });
 
 		this.digestOutput(new Uint8Array(result.flushedData));

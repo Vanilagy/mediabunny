@@ -29,6 +29,7 @@ class Ac3Encoder extends CustomAudioEncoder {
 	private pendingFrames = 0;
 	private nextSampleTimestampInSamples: number | null = null;
 	private encodedEndTimestampInSamples = 0;
+	private inFlightEncode: Promise<void> | null = null;
 
 	static override supports(codec: AudioCodec, config: AudioEncoderConfig): boolean {
 		// FFmpeg's encoders top out at 5.1 and can't do E-AC-3's reduced sample rates
@@ -123,6 +124,8 @@ class Ac3Encoder extends CustomAudioEncoder {
 	}
 
 	async flush() {
+		await this.inFlightEncode;
+
 		if (this.nextSampleTimestampInSamples !== null) {
 			const channels = this.numberOfChannels;
 			const frameSize = this.encoderFrameSize;
@@ -134,8 +137,11 @@ class Ac3Encoder extends CustomAudioEncoder {
 				this.pendingFrames = 0;
 
 				await this.encodeOneFrame(0);
+				await this.inFlightEncode;
 			}
 		}
+
+		this.inFlightEncode = null;
 
 		await sendCommand({ type: 'flush-encoder', data: { ctx: this.ctx } });
 
@@ -158,32 +164,39 @@ class Ac3Encoder extends CustomAudioEncoder {
 		);
 
 		const audioData = frameData.buffer;
-		const result = await sendCommand({
+		const encode = sendCommand({
 			type: 'encode',
 			data: {
 				ctx: this.ctx,
 				audioData,
 				timestamp: this.nextSampleTimestampInSamples,
 			},
-		}, [audioData]);
+		}, [audioData]).then((result) => {
+			this.encodedEndTimestampInSamples = result.pts + result.duration;
+
+			// We always get exactly one packet because we encode the correct frame size
+			const packet = new EncodedPacket(
+				new Uint8Array(result.encodedData),
+				'key',
+				result.pts / this.sampleRate,
+				result.duration / this.sampleRate,
+			);
+
+			this.onPacket(
+				packet,
+				this.chunkMetadata,
+			);
+
+			this.chunkMetadata = {};
+		});
+		encode.catch(() => {}); // Surfaces through whoever awaits it next
 
 		this.nextSampleTimestampInSamples += this.encoderFrameSize;
-		this.encodedEndTimestampInSamples = result.pts + result.duration;
 
-		// We always get exactly one packet because we encode the correct frame size
-		const packet = new EncodedPacket(
-			new Uint8Array(result.encodedData),
-			'key',
-			result.pts / this.sampleRate,
-			result.duration / this.sampleRate,
-		);
-
-		this.onPacket(
-			packet,
-			this.chunkMetadata,
-		);
-
-		this.chunkMetadata = {};
+		// Keep one frame in flight, so the worker already has the next frame by the time it's done with the current one
+		const previousEncode = this.inFlightEncode;
+		this.inFlightEncode = encode;
+		await previousEncode;
 	}
 }
 

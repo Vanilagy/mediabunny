@@ -67,6 +67,7 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 
 		const codecContext = new NodeAv.CodecContext();
 		codecContext.allocContext3(codec);
+		codecContext.threadCount = 0; // Auto
 
 		this.pixelAspectRatio = simplifyRational({
 			num: (this.config.displayAspectWidth ?? this.config.codedWidth ?? 0) * (this.config.codedHeight ?? 0),

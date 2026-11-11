@@ -115,7 +115,6 @@ class ProresDecoder extends CustomVideoDecoder {
 			this.trimCodedHeightToVisibleHeight(result);
 		}
 
-		// Like with WebCodecs, the decoder config (which carries container-level metadata) overrides in-band values
 		const configColorSpace = this.config.colorSpace;
 		const colorSpaceInit = {
 			primaries: configColorSpace?.primaries ?? result.colorPrimariesString as VideoColorPrimaries | undefined,
@@ -234,8 +233,6 @@ class ProresDecoder extends CustomVideoDecoder {
 	}
 
 	async flush() {
-		// The decoder's own queue drains before the samples get emitted, so wait for the emission instead. Decodes
-		// finish in order, so the last one finishing means all of them have.
 		await this.lastDecodePromise;
 	}
 

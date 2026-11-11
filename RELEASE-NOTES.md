@@ -266,6 +266,8 @@
 - Fixed a WebVTT cue without a payload at the end of the text taking the whole text as its payload
 - Fixed WebVTT cues with hours above 99 being dropped
 - Fixed WebVTT text starting with a byte order mark failing to parse
+- `@mediabunny/server`: Decoding and encoding now use multiple threads where the codec supports it, making them faster
+- `@mediabunny/aac-encoder`, `@mediabunny/flac-encoder`, `@mediabunny/mp3-encoder`, `@mediabunny/ac3`, `@mediabunny/dts`, `@mediabunny/truehd`: Slightly faster encoding and decoding
 - `@mediabunny/ac3`: Fixed E-AC-3 with several syncframes per packet failing to decode
 - `@mediabunny/ac3`: Fixed the last decoded audio being dropped when flushing
 - `@mediabunny/ac3`: Fixed wrong decoded timestamps when the stream's sample rate differs from the track's
@@ -290,4 +292,7 @@
 - `@mediabunny/flac-encoder`: Fixed the encoder not being reusable after a flush
 - `@mediabunny/mp3-encoder`: Fixed packet timestamps drifting for large start timestamps
 - `@mediabunny/mp3-encoder`: Fixed encoder errors producing garbage output instead of throwing
+- `@mediabunny/prores`: Fixed the pixel aspect ratio and color space set by the container being ignored
+- `@mediabunny/prores`: Fixed corrupted alpha in Safari for frames whose coded height exceeds their visible height
+- `@mediabunny/prores`: Fixed flushing resolving before the last frames were emitted
 - `InputTrack.id` is now the track's 1-based index in `getTracks()` for every format, making it unique in multi-segment Matroska files. Previously, it was the container's own track ID (such as the MPEG-TS PID or the Ogg serial number).

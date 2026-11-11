@@ -127,6 +127,7 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 
 		const codecContext = new NodeAv.CodecContext();
 		codecContext.allocContext3(this.avCodec);
+		codecContext.threadCount = 0; // Auto
 
 		let sampleFormat = NodeAv.AV_SAMPLE_FMT_FLTP;
 		if (this.codec === 'truehd') {

@@ -31,6 +31,7 @@ class TrueHdEncoder extends CustomAudioEncoder {
 	private pendingFrames = 0;
 	private receivedFrames = 0;
 	private nextSampleTimestampInSamples: number | null = null;
+	private inFlightEncode: Promise<void> | null = null;
 
 	static override supports(codec: AudioCodec, config: AudioEncoderConfig): boolean {
 		return codec === 'truehd'
@@ -121,6 +122,9 @@ class TrueHdEncoder extends CustomAudioEncoder {
 			await this.encodePendingFrames(this.pendingFrames);
 		}
 
+		await this.inFlightEncode;
+		this.inFlightEncode = null;
+
 		const result = await sendCommand({ type: 'flush-encoder', data: { ctx: this.ctx } });
 		this.emitPackets(result.packets);
 
@@ -147,7 +151,7 @@ class TrueHdEncoder extends CustomAudioEncoder {
 			this.pendingBuffer.copyWithin(0, sampleCount, sampleCount + this.pendingFrames * channels);
 		}
 
-		const result = await sendCommand({
+		const encode = sendCommand({
 			type: 'encode',
 			data: {
 				ctx: this.ctx,
@@ -155,11 +159,15 @@ class TrueHdEncoder extends CustomAudioEncoder {
 				sampleCount: frameCount,
 				timestamp: this.nextSampleTimestampInSamples,
 			},
-		}, [audioData]);
+		}, [audioData]).then(result => this.emitPackets(result.packets));
+		encode.catch(() => {}); // Surfaces through whoever awaits it next
 
 		this.nextSampleTimestampInSamples += frameCount;
 
-		this.emitPackets(result.packets);
+		// Keep one batch in flight, so the worker already has the next one by the time it's done with the current one
+		const previousEncode = this.inFlightEncode;
+		this.inFlightEncode = encode;
+		await previousEncode;
 	}
 
 	private emitPackets(packets: EncodedChunk[]) {

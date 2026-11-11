@@ -35,6 +35,7 @@ class FlacEncoder extends CustomAudioEncoder {
 	private chunkMetadata: EncodedAudioChunkMetadata = {};
 	private description: Uint8Array | null = null;
 	private nextTimestampInSamples: number | null = null;
+	private inFlightEncode: Promise<void> | null = null;
 
 	static override supports(codec: AudioCodec, config: AudioEncoderConfig): boolean {
 		return codec === 'flac'
@@ -144,22 +145,29 @@ class FlacEncoder extends CustomAudioEncoder {
 		const audioData = new ArrayBuffer(totalBytes);
 		audioSample.copyTo(audioData, { format: 's32', planeIndex: 0 });
 
-		const result = await this.sendCommand({
+		const encode = this.sendCommand({
 			type: 'encode',
 			data: {
 				ctx: this.ctx,
 				audioData,
 				numSamples: audioSample.numberOfFrames,
 			},
-		}, [audioData]);
+		}, [audioData]).then(result => this.emitPackets(result.packets));
+		encode.catch(() => {}); // Surfaces through whoever awaits it next
 
-		this.emitPackets(result.packets);
+		// Keep one sample in flight, so the worker already has the next one by the time it's done with the current one
+		const previousEncode = this.inFlightEncode;
+		this.inFlightEncode = encode;
+		await previousEncode;
 	}
 
 	async flush() {
 		if (this.ctx === null) {
 			return;
 		}
+
+		await this.inFlightEncode;
+		this.inFlightEncode = null;
 
 		const result = await this.sendCommand({ type: 'flush', data: { ctx: this.ctx } });
 		this.emitPackets(result.packets);
