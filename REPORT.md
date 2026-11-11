@@ -1047,7 +1047,7 @@ The current behavior is arguably intended, or fixing it means picking between va
   Fix: MOV output writes MP3 with a `.mp3` sample entry and no esds, like FFmpeg, and the demuxer reads `.mp3`.
 ✅ Missing feature: EXT-X-I-FRAMES-ONLY in directly loaded media playlists.
   Fix: the media playlist parser reads the tag, and the playlist's tracks then report `hasOnlyKeyPackets()` as true.
-- Matroska ProjectionPoseYaw/Pitch of 90 deg scale an axis by cos(90 deg) = 0, giving a degenerate matrix.
+✅ Matroska ProjectionPoseYaw/Pitch of 90 deg scale an axis by cos(90 deg) = 0, giving a degenerate matrix.
   Reproduced, but this is how degenerate matrices round-trip through MKV (the existing test "Matroska, degenerate
   matrix" relies on it), so a repro agent's change that ignored quarter turns was reverted. RFC 9559 limits pitch to
   -90..90 and FFmpeg ignores nonzero pitch, so whether to keep this encoding is your call.
