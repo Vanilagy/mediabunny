@@ -360,6 +360,7 @@ class VideoEncoderWrapper {
 				|| config.transform?.rotate !== undefined
 				|| config.transform?.flip !== undefined
 				|| config.transform?.crop !== undefined
+				|| config.transform?.alpha === 'discard'
 				|| config.transform?.force === true;
 			const needsTransform = hasTransformConfig || (isSizeChange && sizeChangeBehavior !== 'passThrough');
 
@@ -389,7 +390,7 @@ class VideoEncoderWrapper {
 					rotate: config.transform?.rotate,
 					flip: config.transform?.flip,
 					fit: appliedFit,
-					alpha: config.alpha,
+					alpha: config.transform?.alpha,
 				});
 
 				// Save the output dimensions of the first frame

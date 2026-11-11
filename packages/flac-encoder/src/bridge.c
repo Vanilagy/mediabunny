@@ -178,8 +178,11 @@ int send_samples(int ctx_ptr, int num_samples) {
 
 	int total = num_samples * ctx->channels;
 	int shift = 32 - ctx->bits_per_sample;
+	int64_t max_value = ((int64_t)1 << (ctx->bits_per_sample - 1)) - 1;
 	for (int i = 0; i < total; i++) {
-		ctx->input_buffer[i] >>= shift;
+		// Round like Mediabunny's own sample conversions do, which may overshoot the largest value
+		int64_t rounded = ((int64_t)ctx->input_buffer[i] + ((int64_t)1 << (shift - 1))) >> shift;
+		ctx->input_buffer[i] = (FLAC__int32)(rounded > max_value ? max_value : rounded);
 	}
 
 	reset_output(ctx);

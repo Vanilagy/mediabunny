@@ -1008,15 +1008,22 @@ The current behavior is arguably intended, or fixing it means picking between va
 ✅ `Quality` accepts inherited keys (`'toString'`) and +-Infinity. Fix: quality levels are checked as own keys of
   `QUALITY_LEVELS`; +-Infinity stays allowed, as intended.
 ✅ `canEncodeAudio` with a quantizer-only Quality throws instead of returning false (may be intended).
-- DTS: Quality `'very-low'`/`'low'` aren't encodable at stereo/5.1, since their bitrates fall below what
+✅ DTS: Quality `'very-low'`/`'low'` aren't encodable at stereo/5.1, since their bitrates fall below what
   `supports()` allows (reproduced). Clamp the Quality's bitrate, or report it as unsupported? Fix: the DTS extension
   and the server extension no longer reject such bitrates in `supports()`, but clamp them to the range the DTS
-  encoder accepts (`clampDtsBitrate` in shared/dts-misc.ts), so they encode at the lowest bitrate possible.
-- FLAC encoder extension: float input is floored to 24 bits instead of rounded. FFmpeg does the same, so changing
-  it is a choice.
-- `VideoTransformOptions.alpha` is never read (the code uses `config.alpha`) and isn't validated.
-- `transform({ alpha: 'discard' })` keeps an alpha pixel format with opaque pixels.
-- UrlSource child requests (HLS) inherit the root's Range header but not a Request's headers.
+  encoder accepts^ (`clampDtsBitrate` in shared/dts-misc.ts), so they encode at the lowest bitrate possible.
+✅ FLAC encoder extension: float input is floored to 24 bits instead of rounded. FFmpeg does the same, so changing
+  it is a choice. Fix: rounded, like Mediabunny's own sample conversions. The DTS and TrueHD bridges truncated their
+  float-to-s32 conversion too (and computed it in float, overflowing at full scale); DTS now rounds to 32 bits, and
+  TrueHD to the 24 bits FFmpeg's encoder keeps. All three WASM builds were redone and their README hashes updated.
+✅ `VideoTransformOptions.alpha` is never read (the code uses `config.alpha`) and isn't validated. Fix: the transform
+  now uses `config.transform.alpha` (validated, `'discard'` alone also triggers the transform), separately from the
+  encoder's `config.alpha`. The server's `transformVideoSample` ignored the alpha option too; it now premultiplies
+  and drops the alpha plane, painting onto black like the browser path.
+✅ `transform({ alpha: 'discard' })` keeps an alpha pixel format with opaque pixels.
+✅ UrlSource child requests (HLS) inherit the root's Range header but not a Request's headers. Fix: a Request's
+  RequestInit fields (headers, credentials, mode, cache and so on) are merged into the source's requestInit, and
+  children get that requestInit, with the Range header already stripped.
 - `getQueryParameter` doesn't decode `+` as a space and treats `?` after `#` as a query (HLS spec ambiguous).
 - `getUnixTimeForTimestamp` waits for a timestamp past the live edge (no `skipLiveWait`).
 - The AAC encoder's 4-channel layout is 4.0 (L R C BC), not Mediabunny's quad convention; AAC has no PCE-free quad.

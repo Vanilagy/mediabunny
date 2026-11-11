@@ -2195,6 +2195,28 @@ describe('Video', async () => {
 			expect(sample.codedWidth).toBe(1920);
 		});
 
+		test('Transform discarding alpha', async () => {
+			// Half-transparent red on the left, fully transparent red on the right
+			const data = new Uint8Array(4 * 64 * 64);
+			for (let i = 0; i < 64 * 64; i++) {
+				data.set([255, 0, 0, i % 64 < 32 ? 128 : 0], 4 * i);
+			}
+			using sample = new VideoSample(data, {
+				format: 'RGBA',
+				codedWidth: 64,
+				codedHeight: 64,
+				timestamp: 0,
+			});
+
+			// Like in the browser, the frame gets painted onto black
+			using result = await sample.transform({ alpha: 'discard' });
+			expect(result.format).toBe('RGBX');
+
+			const rgba = await readRgba(result);
+			expectColor(getColorAt(rgba, 64, 16, 32), [128, 0, 0]);
+			expectColor(getColorAt(rgba, 64, 48, 32), [0, 0, 0]);
+		});
+
 		test('Transform keeps the color space', async () => {
 			const colorSpace: VideoColorSpaceInit = {
 				primaries: 'bt2020' as VideoColorPrimaries,

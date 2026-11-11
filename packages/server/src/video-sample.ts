@@ -311,6 +311,26 @@ export const transformVideoSample = async (
 			await copyVideoSampleToAvFrame(sample, srcFrame, null);
 		}
 
+		if (description.alpha === 'discard') {
+			// Premultiplying the color by the alpha paints the frame onto black, after which the alpha plane can go
+			const formatName = NodeAv.avGetPixFmtName(srcFrame.format as NodeAv.AVPixelFormat);
+			assert(formatName);
+
+			const opaqueFormatName = formatName
+				.replace(/^yuva/, 'yuv')
+				.replace(/^gbrap/, 'gbrp')
+				.replace(/^ya8$/, 'gray')
+				.replace(/^ya16/, 'gray16')
+				.replace(/^(rgb|bgr)a64/, '$148')
+				.replace(/^(rgb|bgr)a/, '$10')
+				.replace(/^a(rgb|bgr)/, '0$1');
+
+			if (opaqueFormatName !== formatName) {
+				assert(NodeAv.avGetPixFmtFromName(opaqueFormatName) !== NodeAv.AV_PIX_FMT_NONE);
+				chain.splice(-1, 0, 'premultiply=inplace=1', `format=${opaqueFormatName}`);
+			}
+		}
+
 		const srcArgs = `video_size=${srcFrame.width}x${srcFrame.height}`
 			+ `:pix_fmt=${srcFrame.format}`
 			+ `:time_base=1/1000000`

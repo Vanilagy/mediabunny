@@ -843,19 +843,23 @@ export class UrlSource extends PathedSource {
 
 		super(
 			urlString,
-			request => new UrlSource(request.path, this._options),
+			request => new UrlSource(request.path, {
+				...this._options,
+				// Gets rid of any Range headers in the original options (since we remove them from the init). The
+				// range only made sense for the root!
+				requestInit: this._requestInit,
+			}),
 		);
 
 		this._url = url;
 		this._options = options;
 		this._getRetryDelay = options.getRetryDelay ?? DEFAULT_RETRY_DELAY;
 
-		// A user-supplied Range header is interpreted as a byte offset (and optional length) into the resource. We
-		// pull it out of the request and remember it for subsequent requests.
 		this._requestInit = { ...options.requestInit };
 
+		// A user-supplied Range header is interpreted as a byte offset (and optional length) into the resource. We
+		// pull it out of the request and remember it for subsequent requests.
 		let rangeHeaderValue: string | null = null;
-
 		if (options.requestInit?.headers) {
 			const headers = { ...normalizeHeaders(options.requestInit.headers) };
 			const rangeKey = Object.keys(headers).find(key => key.toLowerCase() === 'range');
@@ -878,6 +882,19 @@ export class UrlSource extends PathedSource {
 				request.headers.delete('Range');
 				this._url = request;
 			}
+
+			// Carried over so that the child requests made for other paths (like HLS segments) are made the same way
+			this._requestInit = {
+				cache: request.cache,
+				credentials: request.credentials,
+				integrity: request.integrity,
+				keepalive: request.keepalive,
+				mode: request.mode === 'navigate' ? undefined : request.mode, // navigate makes no sense here
+				redirect: request.redirect,
+				referrer: request.referrer,
+				referrerPolicy: request.referrerPolicy,
+				...this._requestInit,
+			};
 
 			// Headers passed to fetch() replace those of the request instead of merging with them
 			this._requestInit.headers = mergeRequestInit({ headers: request.headers }, this._requestInit).headers;

@@ -237,6 +237,9 @@ export const validateVideoEncodingConfig = (config: VideoEncodingConfig) => {
 		if (config.transform.crop !== undefined) {
 			validateCropRectangle(config.transform.crop, 'config.transform.');
 		}
+		if (config.transform.alpha !== undefined && !['keep', 'discard'].includes(config.transform.alpha)) {
+			throw new TypeError('config.transform.alpha, when provided, must be \'keep\' or \'discard\'.');
+		}
 		if (config.transform.process !== undefined && typeof config.transform.process !== 'function') {
 			throw new TypeError('config.transform.process, when provided, must be a function.');
 		}

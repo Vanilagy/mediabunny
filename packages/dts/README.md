@@ -113,6 +113,6 @@ The build artifacts included in this repo, which are also the ones bundled into 
 - Emscripten 4.0.21 (`d6f42310010ddec0753a69bab01a4b33aae255b7`)
 - `src/bridge.c` of this package
 
-SHA-256 of the WASM binary inlined in `build/dts.js`: `4d53603b1e82b0ac0e93fdceb4512a3aa80c8c935af951e95e682d53ff9ae676`
+SHA-256 of the WASM binary inlined in `build/dts.js`: `a9ed80975c3ac8112b0eef2252b1f89cc3c7d7baf22cbe1d589e08eebab8755e`
 
 FFmpeg is licensed under the LGPL v2.1 or later; this build enables no GPL, version 3 or nonfree components. Its license files are in [`licenses/ffmpeg`](./licenses/ffmpeg). To use a modified FFmpeg, rebuild using the steps above.

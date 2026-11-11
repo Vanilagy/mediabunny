@@ -201,6 +201,7 @@
 - Fixed `CustomSource` not cancelling streams returned by `read` that hold more data than requested
 - Fixed `ReadableStreamSource` not cancelling its stream when disposed before reading
 - Fixed `UrlSource` ignoring the headers of a `Request` passed as its URL
+- Fixed `UrlSource` requests for other files (like HLS segments) incorrectly inheriting the settings of the root request
 - Fixed `UrlSource` with a relative URL throwing outside of a window when the server doesn't support range requests
 - Fixed `UrlSource` failing to read empty resources
 - Fixed `UrlSource` keeping requests running after errors
@@ -230,6 +231,8 @@
 - Fixed adding audio to an encoder that had failed throwing a misleading error
 - Fixed the first video frame sometimes not being encoded as a key frame when its timestamp is negative
 - Fixed `sizeChangeBehavior` set to `'fill'`, `'contain'` or `'cover'` not applying to frames of the original size
+- Fixed `VideoTransformOptions.alpha` being ignored
+- Fixed missing validation for `VideoTransformOptions.alpha`
 - Fixed an audio `process` function returning its input sample closing the caller's sample
 - Fixed empty audio samples making the encoder throw
 - Fixed a `MediaStreamVideoTrackSource` paused before its first frame throwing repeatedly
@@ -303,10 +306,12 @@
 - `@mediabunny/dts`: Fixed wrong decoded timestamps when the stream's sample rate differs from the track's
 - `@mediabunny/dts`: Fixed decoding of streams with more than 8 channels, such as DTS:X
 - `@mediabunny/dts`: Fixed slow encoding of very large samples
+- `@mediabunny/dts`: Fixed float audio being truncated instead of rounded when encoding, which also overflowed at full scale
 - `@mediabunny/dts`: Fixed low quality settings being unsupported for multichannel audio; such bitrates now encode at the lowest bitrate DTS allows
 - `@mediabunny/truehd`: Fixed encoded streams shorter than 16 access units being unmuxable; they're now padded with silence
 - `@mediabunny/truehd`: Fixed wrong decoded timestamps when the stream's sample rate differs from the track's
 - `@mediabunny/truehd`: Fixed wrong decoded timestamps for packets holding several access units
+- `@mediabunny/truehd`: Fixed float audio being truncated instead of rounded to 24 bits when encoding
 - `@mediabunny/aac-encoder`: 7- and 8-channel audio is now encoded with channel configurations 11 and 12 instead of a program config element, which QuickTime silently dropped. As ADTS can't hold these, it's no longer supported for 7 and 8 channels.
 - `@mediabunny/aac-encoder`: Fixed 3 channels being encoded as 2.1, losing the third channel
 - `@mediabunny/aac-encoder`: Fixed closing the encoder during initialization leaking its worker or hanging
@@ -314,6 +319,7 @@
 - `@mediabunny/aac-encoder`: Fixed slow encoding of very large samples
 - `@mediabunny/flac-encoder`: Fixed closing the encoder during initialization leaking its worker
 - `@mediabunny/flac-encoder`: Fixed the encoder not being reusable after a flush
+- `@mediabunny/flac-encoder`: Fixed float audio being truncated instead of rounded to 24 bits
 - `@mediabunny/mp3-encoder`: Fixed packet timestamps drifting for large start timestamps
 - `@mediabunny/mp3-encoder`: Fixed encoder errors producing garbage output instead of throwing
 - `@mediabunny/prores`: Fixed the pixel aspect ratio and color space set by the container being ignored
@@ -323,6 +329,7 @@
 - `@mediabunny/server`: Fixed wrong decoded audio timestamps for some time bases
 - `@mediabunny/server`: Fixed a crash for planar audio with more than 8 channels
 - `@mediabunny/server`: Fixed `VideoSample.transform()` emptying the source frame, dropping encode options and the color matrix and range, and leaking memory when copying failed
+- `@mediabunny/server`: Fixed `VideoSample.transform()` ignoring `alpha: 'discard'`
 - `@mediabunny/server`: Fixed video with an unknown pixel aspect ratio throwing
 - `@mediabunny/server`: Fixed I420AP12 video samples failing to convert
 - `@mediabunny/server`: Fixed HEVC key frames forced close together being dropped

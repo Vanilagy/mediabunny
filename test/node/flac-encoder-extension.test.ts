@@ -7,12 +7,18 @@ import { Output } from '../../src/output.js';
 import { BufferTarget } from '../../src/target.js';
 import { canEncode, Quality } from '../../src/encode.js';
 import { AudioSampleSource } from '../../src/media-source.js';
-import { EncodedPacketSink } from '../../src/media-sink.js';
+import { AudioSampleSink, EncodedPacketSink } from '../../src/media-sink.js';
 import { FlacOutputFormat, Mp4OutputFormat } from '../../src/output-format.js';
 import { AudioSample } from '../../src/sample.js';
 import { EncodedPacket } from '../../src/packet.js';
-import { CustomAudioEncoder, customAudioEncoders } from '../../src/custom-coder.js';
+import {
+	CustomAudioEncoder,
+	customAudioDecoders,
+	customAudioEncoders,
+	registerDecoder,
+} from '../../src/custom-coder.js';
 import { registerFlacEncoder } from '@mediabunny/flac-encoder';
+import { NodeAvAudioDecoder } from '../../packages/server/src/audio-decoder.js';
 import { assert } from '../../src/misc.js';
 
 const createSineWave = (sampleRate: number, channels: number, durationSeconds: number) => {
@@ -212,4 +218,49 @@ test('FLAC encoding after a flush', async () => {
 	const secondRun = packets.filter(x => x.timestamp >= 0.5);
 	expect(firstRun.length).toBeGreaterThan(0);
 	expect(secondRun.map(x => x.data)).toEqual(firstRun.map(x => x.data));
+});
+
+test('Float input rounded to 24 bits', async () => {
+	registerFlacEncoder();
+
+	// The extension only encodes, so FFmpeg does the decoding
+	if (!customAudioDecoders.includes(NodeAvAudioDecoder)) {
+		registerDecoder(NodeAvAudioDecoder);
+	}
+
+	const output = new Output({
+		format: new FlacOutputFormat(),
+		target: new BufferTarget(),
+	});
+	const source = new AudioSampleSource({ codec: 'flac', quality: new Quality('high') });
+	output.addAudioTrack(source);
+	await output.start();
+
+	// Three quarters of the way from one 24-bit value to the next
+	const sample = new AudioSample({
+		data: new Float32Array(4096).fill(1000.75 / 2 ** 23),
+		format: 'f32',
+		numberOfChannels: 1,
+		sampleRate: 48000,
+		timestamp: 0,
+	});
+	await source.add(sample);
+	sample.close();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	for await (using decoded of new AudioSampleSink(track).samples()) {
+		const values = new Int32Array(decoded.numberOfFrames);
+		decoded.copyTo(values, {
+			format: 's32',
+			planeIndex: 0,
+		});
+		expect(new Set(values)).toEqual(new Set([256 * 1001]));
+	}
 });

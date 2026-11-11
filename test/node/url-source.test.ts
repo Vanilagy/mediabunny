@@ -558,6 +558,41 @@ test('UrlSource Request with custom headers', async () => {
 	}
 });
 
+test('UrlSource child requests made like the root one', async () => {
+	const bytes = makeRamp(256);
+	const server = await startServer((req, res) => {
+		if (req.headers['x-token'] !== 'secret') {
+			res.writeHead(403);
+			res.end();
+			return;
+		}
+
+		const start = Number(/^bytes=(\d+)-$/.exec(req.headers.range!)![1]);
+		res.writeHead(206, {
+			'Content-Range': `bytes ${start}-${bytes.length - 1}/${bytes.length}`,
+			'Content-Length': bytes.length - start,
+		});
+		res.end(bytes.subarray(start));
+	});
+
+	try {
+		const source = new UrlSource(
+			new Request(server.url, { headers: { 'X-Token': 'secret' } }),
+			{ requestInit: { headers: { Range: 'bytes=100-' } } },
+		);
+
+		// The child gets the request's headers, but the Range header only applies to the root
+		using childRef = await source._resolveRequest({
+			path: server.url.replace('video.mp4', 'segment.ts'),
+			isRoot: false,
+		});
+		const slice = await new Reader(childRef.source).requestSlice(10, 4);
+		expect([...readBytes(slice!, 4)]).toEqual([10, 11, 12, 13]);
+	} finally {
+		server.close();
+	}
+});
+
 const startServer = async (handler: http.RequestListener) => {
 	const server = http.createServer(handler);
 	await new Promise<void>(resolve => server.listen(0, resolve));

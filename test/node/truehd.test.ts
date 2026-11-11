@@ -619,3 +619,48 @@ test('Decode packets holding several access units', async () => {
 	}
 	expect(nextTimestamp).toBeGreaterThan(0.5);
 });
+
+test('Float input rounded to 24 bits', async () => {
+	registerTrueHdEncoder();
+	registerTrueHdDecoder();
+
+	const output = new Output({
+		format: new MkvOutputFormat(),
+		target: new BufferTarget(),
+	});
+	const source = new AudioSampleSource({ codec: 'truehd' });
+	output.addAudioTrack(source);
+	await output.start();
+
+	// Three quarters of the way from one 24-bit value to the next
+	const sample = new AudioSample({
+		data: new Float32Array(2 * 48000).fill(1000.75 / 2 ** 23),
+		format: 'f32',
+		numberOfChannels: 2,
+		sampleRate: 48000,
+		timestamp: 0,
+	});
+	await source.add(sample);
+	sample.close();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	const values = new Set<number>();
+	for await (using decoded of new AudioSampleSink(track).samples()) {
+		const plane = new Int32Array(decoded.numberOfFrames);
+		decoded.copyTo(plane, {
+			format: 's32-planar',
+			planeIndex: 0,
+		});
+		for (const value of plane) {
+			values.add(value);
+		}
+	}
+	expect(values).toEqual(new Set([256 * 1001]));
+});
