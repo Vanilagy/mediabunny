@@ -1567,6 +1567,71 @@ live.m3u8
 	expect(performance.now() - start).toBeLessThan(1000);
 });
 
+test.concurrent('Renditions with different codecs in one group', async () => {
+	using input = createHlsInput({
+		'master.m3u8': `#EXTM3U
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="MP3",URI="mp3.m3u8"
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="AC-3",URI="ac3.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=1000000,CODECS="ac-3,mp4a.40.34",AUDIO="audio"
+mp3.m3u8
+`,
+		'mp3.m3u8': `#EXTM3U
+#EXT-X-TARGETDURATION:2
+#EXTINF:2,
+mp3.ts
+#EXT-X-ENDLIST
+`,
+		'ac3.m3u8': `#EXTM3U
+#EXT-X-TARGETDURATION:2
+#EXTINF:2,
+ac3.ts
+#EXT-X-ENDLIST
+`,
+	});
+
+	const audioTracks = await input.getAudioTracks();
+	expect(await Promise.all(audioTracks.map(x => x.getName()))).toEqual(['MP3', 'AC-3']);
+	expect(await Promise.all(audioTracks.map(x => x.getCodec()))).toEqual(['mp3', 'ac3']);
+});
+
+test.concurrent('Renditions with different codec strings of the same codec in one group', async () => {
+	using input = new Input({
+		source: new CustomPathedSource('master.m3u8', ({ path }) => {
+			// Only the master playlist may be read, since the codec is clear without looking at any media
+			assert(path === 'master.m3u8');
+
+			return new BufferSource(new TextEncoder().encode(`#EXTM3U
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",LANGUAGE="en",NAME="English",URI="en.m3u8"
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",LANGUAGE="es",NAME="Spanish",URI="es.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=1000000,CODECS="avc1.64001f,mp4a.40.2,mp4a.40.5",AUDIO="audio"
+video.m3u8
+`));
+		}),
+		formats: HLS_FORMATS,
+	});
+
+	const audioTracks = await input.getAudioTracks();
+	expect(await Promise.all(audioTracks.map(x => x.getCodec()))).toEqual(['aac', 'aac']);
+});
+
+test.concurrent('Variant listing several video codecs without renditions', async () => {
+	using input = createHlsInput({
+		'master.m3u8': `#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=1000000,CODECS="avc1.64001f,hvc1.1.6.L93.B0"
+media.m3u8
+`,
+		'media.m3u8': `#EXTM3U
+#EXT-X-TARGETDURATION:2
+#EXTINF:2,
+hevc.ts
+#EXT-X-ENDLIST
+`,
+	});
+
+	const videoTracks = await input.getVideoTracks();
+	expect(await Promise.all(videoTracks.map(x => x.getCodec()))).toEqual(['hevc']);
+});
+
 const createHlsInput = (playlists: Record<string, string>) => new Input({
 	source: new CustomPathedSource('master.m3u8', ({ path }) => {
 		const playlist = playlists[path];
@@ -1812,6 +1877,48 @@ test.concurrent('Live playlist reload past a discontinuity that dropped out', { 
 	// The last packet of each segment has no successor to derive its duration from, so it comes from the sample rate
 	expect(playlistRequestCount).toBe(2);
 	expect(durations).toEqual([0.5, 1024 / 48000, 0.5, 1024 / 48000, 0.5, 1024 / 24000, 0.5, 1024 / 24000]);
+});
+
+test.concurrent('Live playlist reload adding date-times', { timeout: 10_000 }, async () => {
+	const files = await writeHls({
+		segmentFormat: new MpegTsOutputFormat(),
+		targetDuration: 1,
+	}, async (addVideo) => {
+		for (let i = 0; i < 8; i++) {
+			await addVideo(0.5 * i, i % 2 === 0);
+		}
+	});
+
+	// The first playlist has no date-times, and the reload adds one for the new segments
+	let playlistRequestCount = 0;
+	using input = new Input({
+		source: new CustomPathedSource('live.m3u8', ({ path }) => {
+			if (path !== 'live.m3u8') {
+				const bytes = files.get(path);
+				assert(bytes);
+
+				return new BufferSource(bytes);
+			}
+
+			let playlist = '#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\nsegment-1-1.ts\n#EXTINF:1,\nsegment-1-2.ts\n';
+			if (playlistRequestCount++ > 0) {
+				playlist += '#EXT-X-PROGRAM-DATE-TIME:2026-01-01T00:00:00.000Z\n'
+					+ '#EXTINF:1,\nsegment-1-3.ts\n#EXTINF:1,\nsegment-1-4.ts\n#EXT-X-ENDLIST\n';
+			}
+
+			return new BufferSource(new TextEncoder().encode(playlist));
+		}),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	// The segments already in use keep their timeline, which the date-time only maps to Unix time
+	expect(await collectTimestamps(new EncodedPacketSink(videoTrack))).toEqual([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5]);
+	expect(playlistRequestCount).toBe(2);
+	expect(await videoTrack.isRelativeToUnixEpoch()).toBe(false);
+	expect(await videoTrack.getUnixTimeForTimestamp(2.5)).toBe(Date.UTC(2026, 0, 1) / 1000 + 0.5);
 });
 
 const writeHls = async (

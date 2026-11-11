@@ -906,20 +906,31 @@ Everything the agents flagged but didn't fix, sorted by why it wasn't fixed. Eac
 
 The current behavior is arguably intended, or fixing it means picking between valid options.
 
-- Date tags (all formats) are written from the UTC date, so a local-midnight `Date` becomes the previous day east
+✅ Date tags (all formats) are written from the UTC date, so a local-midnight `Date` becomes the previous day east
   of UTC. UTC vs local calendar date is a convention choice.
-- Matrix coefficient 0 is reported as `'rgb'` (H.273: identity/GBR), but ProRes (RDD 36) defines 0 as "unknown",
-  so ProRes files tagged unknown are treated as GBR (verified). Needs a per-codec mapping.
-- AAC codec string validation follows the WebCodecs registration, so AAC-LD/ELD files (e.g. from AudioToolbox)
+✅ Matrix coefficient 0 is reported as `'rgb'` (H.273: identity/GBR), but ProRes (RDD 36) defines 0 as "unknown",
+  so ProRes files tagged unknown are treated as GBR (verified). Fix: the ProRes branch of `extractColorSpace` maps
+  a matrix of 0 to undefined.
+✅ AAC codec string validation follows the WebCodecs registration, so AAC-LD/ELD files (e.g. from AudioToolbox)
   fail conversion (verified). Accepting any `mp4a.40.x` would also need ADTS/MPEG-TS guards.
-- HLS RESOLUTION treats `displayAspectWidth/Height` as pixel sizes (1920x1080 with 16:9 gives `16x9`, reproduced).
-  WebCodecs defines them as a ratio, but Chrome's encoder and Mediabunny's demuxers put pixel sizes there.
-- HLS I-frame playlists put several I-frames per segment (RFC 8216: one each); the alternative is many tiny files.
-- HLS CODECS lists only the first rendition's codec, but should list the union of all codecs in a group (RFC 8216
+✅ HLS RESOLUTION treats `displayAspectWidth/Height` as pixel sizes (1920x1080 with 16:9 gives `16x9`, reproduced).
+  WebCodecs defines them as a ratio, but Chrome's encoder and Mediabunny's demuxers put pixel sizes there. Fix:
+  RESOLUTION stretches one side of the coded size by the display aspect ratio, like the demuxers derive square pixel
+  sizes.
+✅ HLS I-frame playlists put several I-frames per segment (RFC 8216: one each); the alternative is many tiny files.
+  Fix: I-frame playlists cut a segment at every key frame. The docs point to single-file segments to avoid the
+  many files.
+✅ HLS CODECS lists only the first rendition's codec, but should list the union of all codecs in a group (RFC 8216
   4.3.4.1.1). Writing the union would make Mediabunny's own HLS reader throw (hls-demuxer.ts rejects several
-  codecs per type), so writer and reader must change together.
-- HLS: PDT first appearing in a live reload rewrites segments in use (reproduced: the timeline jumps to ~1.7e9,
+  codecs per type), so writer and reader must change together. Fix: the writer lists the codecs of every rendition
+  in the referenced group, deduplicated. The reader no longer rejects several codecs per type: if they all infer to
+  the same codec, every track gets it without reading media (the full codec string then comes from the media on
+  request); only if they're different codecs does it read each rendition's media for its codec, which must then
+  hold exactly one track of the type. The same goes for a variant without renditions.
+✅ HLS: PDT first appearing in a live reload rewrites segments in use (reproduced: the timeline jumps to ~1.7e9,
   `getPacket` returns the wrong packet, `isRelativeToUnixEpoch` flips). Keep the old timeline or switch to PDT?
+  Fix: a reload keeps a timeline that isn't date-time-based; date-times then only add the Unix time mapping. The
+  backward extrapolation also measures from the running time, so it accounts for segments that dropped out unseen.
 - HLS live TARGETDURATION can be smaller than segments cut at key frames (an existing test writes EXTINF:3 under
   TARGETDURATION:2, against RFC 8216). Options: grow it like FFmpeg, force cuts, or require GOPs to fit.
 - `mediaSamplesAtTimestamps` deadlocks a consumer that yields one timestamp and waits for its sample (reproduced

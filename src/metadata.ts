@@ -50,7 +50,7 @@ export type MetadataTags = {
 	beatsPerMinute?: number;
 	/** Genre or category describing the media's style or content (e.g. Metal, Horror, etc.) */
 	genre?: string;
-	/** Release, recording or creation date of the media. */
+	/** Release, recording or creation date of the media. Typically in UTC. */
 	date?: Date;
 	/** Full text lyrics or transcript associated with the media. */
 	lyrics?: string;

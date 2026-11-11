@@ -753,9 +753,10 @@ export const extractColorSpace = (info: {
 					transfer:
 						TRANSFER_CHARACTERISTICS_MAP_INVERSE[info.proresCodecInfo.transferCharacteristics] as
 						VideoTransferCharacteristics | undefined,
-					matrix:
-						MATRIX_COEFFICIENTS_MAP_INVERSE[info.proresCodecInfo.matrixCoefficients] as
-						VideoMatrixCoefficients | undefined,
+					matrix: info.proresCodecInfo.matrixCoefficients === 0
+						? undefined // ProRes maps 0 to unknown instead of identity
+						: MATRIX_COEFFICIENTS_MAP_INVERSE[info.proresCodecInfo.matrixCoefficients] as
+							VideoMatrixCoefficients | undefined,
 					fullRange: info.proresCodecInfo.fullRange,
 				};
 			}

@@ -179,7 +179,9 @@ export class HlsSegmentedInput extends SegmentedInput {
 			}
 		}
 
-		const offsetTimestampsByDateTime = this.input._formatOptions.hls?.offsetTimestampsByDateTime !== false;
+		// Only do this if we know no segments yet or if we already had datetime-offset segments
+		const offsetTimestampsByDateTime = this.input._formatOptions.hls?.offsetTimestampsByDateTime !== false
+			&& (this.segments.length === 0 || this.segments[0]!.unixEpochTimestamp === this.segments[0]!.timestamp);
 		const variables = new HlsPlaylistVariables(
 			this.rootPath,
 			this.demuxer.hasMasterPlaylist ? this.demuxer.masterPlaylistVariables : null,
@@ -519,9 +521,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 					// one or more Media Segment URIs, the client SHOULD extrapolate
 					// backward from that tag (using EXTINF durations and/or media
 					// timestamps) to associate dates with those segments."
-					const lastSegment = last(this.segments)!;
-					const lastSegmentEnd = lastSegment.timestamp + lastSegment.duration;
-					const offset = dateTimeSeconds - lastSegmentEnd;
+					const offset = dateTimeSeconds - accumulatedTime;
 
 					for (const segment of this.segments) {
 						segment.unixEpochTimestamp = segment.timestamp + offset;

@@ -319,6 +319,8 @@ output.addVideoTrack(videoSource, { hasOnlyKeyPackets: true });
 
 Note that it is an error to add non-key packets to a track like this.
 
+As the HLS spec requires, every I-frame goes into a segment of its own. To avoid writing a file per I-frame, use [single-file segments](#single-file-segments).
+
 ### DATE-TIME tags
 
 In order to emit `#EXT-X-PROGRAM-DATE-TIME` tags in the media playlist, which map each media time to a definitive point in time, set `isRelativeToUnixEpoch` in the track metadata:

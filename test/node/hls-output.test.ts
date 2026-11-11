@@ -2442,6 +2442,7 @@ test('I-frame stream', async () => {
 
 	expect(playlistText).toContain('#EXT-X-I-FRAMES-ONLY');
 	expect(playlistText).toContain('#EXT-X-VERSION:4');
+	expect(playlistText.match(/#EXTINF:/g)).toHaveLength(3); // One segment per I-frame
 
 	expect(masterText).toContain('#EXT-X-I-FRAME-STREAM-INF:');
 	expect(masterText).toMatch(/#EXT-X-I-FRAME-STREAM-INF:[^\n]*URI="/);
@@ -2731,6 +2732,36 @@ test('FLAC and MP3 codec strings in master playlist', async () => {
 		'CODECS="mp4a.40.34"',
 		'CODECS="mp4a.40.34"',
 	]);
+});
+
+test('Codec strings of every rendition in a group', async () => {
+	let masterText = '';
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new MpegTsOutputFormat(),
+			onMaster: (text) => { masterText = text; },
+		}),
+		target: new PathedTarget('master.m3u8', () => new BufferTarget()),
+	});
+
+	output.addVideoTrack(videoSource(), { decoderConfig: avcMetadata.decoderConfig });
+	output.addAudioTrack(audioSource(), {
+		languageCode: 'eng',
+		decoderConfig: aacMetadata.decoderConfig,
+	});
+	output.addAudioTrack(audioSource(), {
+		languageCode: 'spa',
+		decoderConfig: {
+			...aacMetadata.decoderConfig!,
+			codec: 'mp4a.40.5',
+		},
+	});
+
+	await output.start();
+	await output.finalize();
+
+	expect(masterText).toContain('CODECS="avc1.4d401e,mp4a.40.2,mp4a.40.5"');
 });
 
 test('Empty playlist bandwidth, from track metadata', async () => {
@@ -4137,4 +4168,56 @@ test('Peak bitrate window based on the written target duration', async () => {
 
 	assert(master);
 	expect(master).toContain(`BANDWIDTH=${Math.ceil(peakBitrate)},`);
+});
+
+test('RESOLUTION', async () => {
+	let masterText = '';
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new MpegTsOutputFormat(),
+			onMaster: (text) => { masterText = text; },
+		}),
+		target: new PathedTarget('master.m3u8', () => new BufferTarget()),
+	});
+
+	output.addVideoTrack(videoSource(), {
+		decoderConfig: {
+			codec: 'avc1.4d401e',
+			codedWidth: 1920,
+			codedHeight: 1080,
+		},
+	});
+
+	await output.start();
+	await output.finalize();
+
+	expect(masterText).toContain(',RESOLUTION=1920x1080');
+});
+
+test('RESOLUTION, anamorphic video', async () => {
+	let masterText = '';
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new MpegTsOutputFormat(),
+			onMaster: (text) => { masterText = text; },
+		}),
+		target: new PathedTarget('master.m3u8', () => new BufferTarget()),
+	});
+
+	output.addVideoTrack(videoSource(), {
+		decoderConfig: {
+			codec: 'avc1.4d401e',
+			codedWidth: 1440,
+			codedHeight: 1080,
+			displayAspectWidth: 16,
+			displayAspectHeight: 9,
+		},
+	});
+
+	await output.start();
+	await output.finalize();
+
+	expect(masterText).toContain(',RESOLUTION=1920x1080');
 });

@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from 'vitest';
-import { AudioCodec, buildVideoCodecString, extractVideoCodecString } from '../../src/codec.js';
+import { AudioCodec, buildVideoCodecString, extractColorSpace, extractVideoCodecString } from '../../src/codec.js';
 import {
 	addAvcBitstreamRestriction,
 	concatNalUnitsInAnnexB,
@@ -131,6 +131,27 @@ test('ProRes codec info with minimal frame header', () => {
 		transferCharacteristics: 16,
 		matrixCoefficients: 9,
 	});
+});
+
+test('ProRes color space with an unknown matrix', () => {
+	// The same frame as above, but with a matrix of 0, which means "unknown" in ProRes rather than H.273's identity
+	const packet = new Uint8Array([
+		0x00, 0x00, 0x0b, 0x07, 0x69, 0x63, 0x70, 0x66, 0x00, 0x14, 0x00, 0x00, 0x4c, 0x61, 0x76, 0x63,
+		0x00, 0x40, 0x00, 0x40, 0x80, 0x00, 0x09, 0x10, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x0a,
+		0xeb, 0x00, 0x04, 0x30, 0x03, 0x12, 0x02, 0xcd,
+	]);
+
+	const colorSpace = extractColorSpace({
+		codec: 'prores',
+		codecDescription: null,
+		avcCodecInfo: null,
+		hevcCodecInfo: null,
+		vp9CodecInfo: null,
+		av1CodecInfo: null,
+		proresCodecInfo: extractProresCodecInfoFromPacket(packet),
+	});
+	expect(colorSpace.matrix).toBeUndefined();
+	expect(colorSpace.primaries).toBe('bt2020');
 });
 
 test('canDecodeAudio with differing ArrayBuffer descriptions', async () => {

@@ -148,14 +148,19 @@
 - Fixed live HLS playlists getting a wrong timeline when the window slid past all known segments between playlist reloads
 - Fixed new segments of live HLS playlists losing their init data after a playlist reload
 - Fixed wrong timing after a discontinuity in live HLS segments that slid out of the window between playlist reloads
+- Fixed live HLS playlists jumping to Unix timestamps when date-times first appear after a playlist reload
 - Fixed ended HLS playlists without segments waiting a target duration on every query
 - VOD HLS media playlists now all state the longest segment duration as their target duration. Previously, it differed between playlists and never went below `targetDuration`.
 - Renditions with the same name in an HLS group now get unique names, like "Audio (2)"
 - Fixed HLS output with `fastStart: 'reserve'` MP4 segments failing
 - Fixed HLS output failing for paired tracks that no single segment format can hold together; they're now split into separate renditions
 - Fixed HLS I-frame tracks being grouped as video renditions
+- HLS I-frame playlists now hold one I-frame per segment, as the spec requires
+- HLS variants now list the codecs of every rendition in their groups in `CODECS`, as the spec requires
+- Fixed HLS playlists failing to load when a variant lists several codecs of the same type, such as for a group of renditions with different codecs
 - Fixed doubled `BANDWIDTH` values and duplicated `CODECS` entries for HLS variants whose own playlist is one of their renditions
 - Fixed HLS `BANDWIDTH` values being computed over the wrong window for non-integer target durations
+- Fixed the HLS `RESOLUTION` attribute using the display aspect ratio as the size (giving `16x9`)
 - Fixed HLS master playlists using WebCodecs codec strings for FLAC and MP3 instead of `fLaC` and `mp4a.40.34`
 - Fixed `FORCED=YES` being written for HLS audio and video renditions
 - Fixed floating point error sometimes making the HLS target duration one too high
@@ -242,6 +247,7 @@
 - Fixed avcC records of some AVC profiles (like 4:4:4 from x264) losing their extension fields
 - Fixed hvcC records putting prefix and suffix SEI into one array
 - Fixed missing color info for ProRes frames with a minimal frame header
+- Fixed ProRes video with an unknown color matrix being treated as RGB
 - Fixed 7.1 E-AC-3 being reported as 7 channels
 - Fixed 7.1 E-AC-3 muxed into MP4 being declared as 5.1
 - Fixed `canDecodeVideo()` and `canDecodeAudio()` returning cached results for configs that only differ in their description

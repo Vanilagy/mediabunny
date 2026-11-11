@@ -772,6 +772,11 @@ export class HlsMuxer extends Muxer {
 		const videoTrack = trackDatas.find(x => x.info.type === 'video') as HlsVideoTrackData | undefined;
 		const audioTrack = trackDatas.find(x => x.info.type === 'audio') as HlsAudioTrackData | undefined;
 
+		// RFC 8216: "The EXT-X-I-FRAMES-ONLY tag indicates that each Media Segment in the Playlist describes a
+		// single I-frame"
+		const isKeyPacketsOnly = playlist.tracks[0]!.isVideoTrack()
+			&& playlist.tracks[0].metadata.hasOnlyKeyPackets;
+
 		// Loop in case we can finalize multiple segments
 		while (true) {
 			// This here is the core segmentation logic. The segmentation logic figures out which packets are to be
@@ -798,7 +803,7 @@ export class HlsMuxer extends Muxer {
 				let bestKeyPacket: EncodedPacket | null = null;
 				let bestKeyPacketIndex: number | null = null;
 
-				if (allBelow) {
+				if (allBelow && !isKeyPacketsOnly) {
 					if (!videoTrack.closed) {
 						// Not enough data yet
 						return;
@@ -815,6 +820,10 @@ export class HlsMuxer extends Muxer {
 						if (i > 0 && packet.type === 'key') {
 							bestKeyPacket = packet;
 							bestKeyPacketIndex = i;
+
+							if (isKeyPacketsOnly) {
+								break;
+							}
 						}
 					}
 				}
@@ -1533,20 +1542,17 @@ export class HlsMuxer extends Muxer {
 				// the group's renditions take the place of the variant's own media instead of adding to it
 				const ownPlaylistIsReferenced = decl.references.some(x => x.playlist === decl.playlist);
 
-				if (decl.references.length > 0) {
-					if (!ownPlaylistIsReferenced) {
-						const firstRef = decl.references[0]!;
-						const firstTrack = firstRef.playlist.tracks[0]!;
-						const trackData = this.trackDatas.find(x => x.track === firstTrack);
-						const codecString = trackData?.info.decoderConfig.codec ?? firstTrack.source._codec;
+				for (const ref of decl.references) {
+					// The spec wants every codec of any rendition in the group listed
+					for (const track of ref.playlist.tracks) {
+						const trackData = this.trackDatas.find(x => x.track === track);
+						const codecString = trackData?.info.decoderConfig.codec ?? track.source._codec;
 						codecs.push(toHlsCodecString(codecString));
 					}
 
-					for (const ref of decl.references) {
-						assert(ref.playlist.peakBitrate !== null);
-						peakDeclBitrate = Math.max(peakDeclBitrate, ref.playlist.peakBitrate);
-						maxRefAverageBitrate = Math.max(maxRefAverageBitrate, ref.playlist.averageBitrate ?? 0);
-					}
+					assert(ref.playlist.peakBitrate !== null);
+					peakDeclBitrate = Math.max(peakDeclBitrate, ref.playlist.peakBitrate);
+					maxRefAverageBitrate = Math.max(maxRefAverageBitrate, ref.playlist.averageBitrate ?? 0);
 				}
 
 				assert(decl.playlist.peakBitrate !== null);
@@ -1572,7 +1578,7 @@ export class HlsMuxer extends Muxer {
 					masterPlaylistText += `,AVERAGE-BANDWIDTH=${Math.ceil(totalAverageBitrate)}`;
 				}
 
-				masterPlaylistText += `,CODECS="${codecs.join(',')}"`;
+				masterPlaylistText += `,CODECS="${[...new Set(codecs)].join(',')}"`;
 
 				const videoTrack = decl.playlist.tracks.find(x => x.isVideoTrack());
 				if (videoTrack?.isVideoTrack()) {
@@ -1580,19 +1586,34 @@ export class HlsMuxer extends Muxer {
 						HlsVideoTrackData | undefined;
 					const decoderConfig = trackData?.info.decoderConfig;
 					if (decoderConfig) {
-						let width = decoderConfig.displayAspectWidth ?? decoderConfig.codedWidth;
-						let height = decoderConfig.displayAspectHeight ?? decoderConfig.codedHeight;
+						assert(decoderConfig.codedWidth !== undefined);
+						assert(decoderConfig.codedHeight !== undefined);
 
-						if (width !== undefined && height !== undefined) {
-							if (
-								videoTrack.metadata.rotation !== undefined
-								&& videoTrack.metadata.rotation % 180 === 90
-							) {
-								[width, height] = [height, width];
+						let width = decoderConfig.codedWidth;
+						let height = decoderConfig.codedHeight;
+
+						if (
+							decoderConfig.displayAspectWidth !== undefined
+							&& decoderConfig.displayAspectHeight !== undefined
+						) {
+							const num = decoderConfig.displayAspectWidth * decoderConfig.codedHeight;
+							const den = decoderConfig.displayAspectHeight * decoderConfig.codedWidth;
+
+							if (num > den) {
+								width = Math.round(width * num / den);
+							} else {
+								height = Math.round(height * den / num);
 							}
-
-							masterPlaylistText += `,RESOLUTION=${width}x${height}`;
 						}
+
+						if (
+							videoTrack.metadata.rotation !== undefined
+							&& videoTrack.metadata.rotation % 180 === 90
+						) {
+							[width, height] = [height, width];
+						}
+
+						masterPlaylistText += `,RESOLUTION=${width}x${height}`;
 					}
 
 					// FRAME-RATE is not defined for EXT-X-I-FRAME-STREAM-INF
