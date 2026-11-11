@@ -33,15 +33,13 @@ const OPUS_SAMPLE_RATES = [8000, 12000, 16000, 24000, 48000];
 const MP3_SAMPLE_RATES = [8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000];
 const AC3_SAMPLE_RATES = [32000, 44100, 48000];
 
-// The ones for which we hand libav's encoder a layout it accepts
-const AAC_CHANNEL_COUNTS = [1, 2, 3, 4, 5, 6, 8];
+const SUPPORTED_AAC_CHANNEL_COUNTS = [1, 2, 3, 4, 5, 6, 8];
 
 const FRAME_SIZE_FALLBACK = 1024; // Just 'cause
 
-// libav's DTS encoder delays the audio by this much (its analysis and synthesis filter banks) without signaling it
 const DTS_ENCODER_DELAY = 512; // In samples
 
-// How much audio these encoders hold back without ever flushing it on their own, in samples
+// How much audio samples are held back by these encoders without ever flushing it on their own
 const UNFLUSHED_ENCODER_DELAYS: Partial<Record<AudioCodec, number>> = {
 	ac3: 256,
 	eac3: 256,
@@ -68,7 +66,7 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 		const isAdts = (config as any).aac?.format === 'adts';
 
 		return (
-			codec === 'aac' && AAC_CHANNEL_COUNTS.includes(numberOfChannels)
+			codec === 'aac' && SUPPORTED_AAC_CHANNEL_COUNTS.includes(numberOfChannels)
 			&& AAC_SAMPLE_RATES.includes(sampleRate)
 			// FFmpeg's encoder signals 7.1 with channel configuration 12, too large for the ADTS header's 3 bits
 			&& !(isAdts && numberOfChannels === 8)
@@ -80,8 +78,6 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 			codec === 'mp3' && numberOfChannels >= 1 && numberOfChannels <= 2
 			&& MP3_SAMPLE_RATES.includes(sampleRate)
 		) || (
-			// libvorbis can't set up bitrate-managed encoding past 50 kHz, and NodeAV's resampler only passes on up to
-			// 8 planes, silencing any channel past that
 			codec === 'vorbis' && numberOfChannels >= 1 && numberOfChannels <= 8
 			&& sampleRate <= 50000
 		) || (
@@ -138,7 +134,6 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 			sampleFormat = this.avCodec.sampleFormats[0]!;
 		}
 
-		// These reject the unspecified-order layouts that getChannelLayout hands out for 3 and 5 channels
 		const isAacOrAc3 = this.codec === 'aac' || this.codec === 'ac3' || this.codec === 'eac3';
 
 		codecContext.sampleRate = this.config.sampleRate;

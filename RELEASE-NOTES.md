@@ -295,4 +295,20 @@
 - `@mediabunny/prores`: Fixed the pixel aspect ratio and color space set by the container being ignored
 - `@mediabunny/prores`: Fixed corrupted alpha in Safari for frames whose coded height exceeds their visible height
 - `@mediabunny/prores`: Fixed flushing resolving before the last frames were emitted
+- `@mediabunny/server`: 4-channel AAC can now be encoded as ADTS
+- `@mediabunny/server`: Fixed wrong decoded audio timestamps for some time bases
+- `@mediabunny/server`: Fixed a crash for planar audio with more than 8 channels
+- `@mediabunny/server`: Fixed `VideoSample.transform()` emptying the source frame, dropping encode options and the color matrix and range, and leaking memory when copying failed
+- `@mediabunny/server`: Fixed video with an unknown pixel aspect ratio throwing
+- `@mediabunny/server`: Fixed I420AP12 video samples failing to convert
+- `@mediabunny/server`: Fixed HEVC key frames forced close together being dropped
+- `@mediabunny/server`: Fixed VP8 encoding with alpha failing
+- `@mediabunny/server`: Fixed ProRes 4444 being encoded with 4:2:2 chroma subsampling
+- `@mediabunny/server`: Fixed precise video timestamps being lost or wrong after flushing
+- `@mediabunny/server`: Fixed some AV1 streams that browsers can decode failing to decode
+- `@mediabunny/server`: Fixed support being claimed for AAC, Opus, E-AC-3 and Vorbis channel counts and sample rates the encoders reject, and for 8-channel AAC in ADTS
+- `@mediabunny/server`: Fixed 3- and 5-channel AAC, AC-3 and E-AC-3 encoding failing
+- `@mediabunny/server`: Fixed 3- and 4-channel TrueHD being remixed instead of encoded losslessly
+- `@mediabunny/server`: Fixed encoded DTS being 512 samples late
+- `@mediabunny/server`: Fixed AC-3, E-AC-3 and DTS encoding losing the end of the audio
 - `InputTrack.id` is now the track's 1-based index in `getTracks()` for every format, making it unique in multi-segment Matroska files. Previously, it was the container's own track ID (such as the MPEG-TS PID or the Ogg serial number).

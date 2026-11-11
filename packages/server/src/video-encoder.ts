@@ -195,9 +195,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 				codecContext.setOption('preset', 'ultrafast');
 			}
 		} else if (this.avCodec.name === 'libx265') {
-			// Closed GOPs, so that every key frame is an IDR frame that later frames can't reference past
-			codecContext.setOption('x265-params', 'log-level=error:open-gop=0');
-			// Forced key frames would otherwise be plain I frames, which x265 only makes key frames past keyint_min
+			codecContext.setOption('x265-params', 'log-level=error');
 			codecContext.setOption('forced-idr', '1');
 
 			if (isRealtime) {

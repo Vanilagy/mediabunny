@@ -9,6 +9,7 @@
 import { VideoSamplePixelFormat, MediaCodec } from 'mediabunny';
 import * as NodeAv from 'node-av';
 import { _serverOptions } from './index';
+import { assertNever } from '../../../src/misc';
 
 export const CODEC_TO_CODEC_ID: Partial<Record<MediaCodec, NodeAv.AVCodecID>> = {
 	avc: NodeAv.AV_CODEC_ID_H264,
@@ -209,6 +210,7 @@ export const fromPixelFormat = (pixelFormat: VideoSamplePixelFormat) => {
 		case 'I420P12': return NodeAv.AV_PIX_FMT_YUV420P12LE;
 		case 'I420A': return NodeAv.AV_PIX_FMT_YUVA420P;
 		case 'I420AP10': return NodeAv.AV_PIX_FMT_YUVA420P10LE;
+		case 'I420AP12': return NodeAv.AV_PIX_FMT_NONE; // FFmpeg has no 12-bit 4:2:0 format with alpha :(
 
 		case 'I422': return NodeAv.AV_PIX_FMT_YUV422P;
 		case 'I422P10': return NodeAv.AV_PIX_FMT_YUV422P10LE;
@@ -231,7 +233,7 @@ export const fromPixelFormat = (pixelFormat: VideoSamplePixelFormat) => {
 		case 'BGRA': return NodeAv.AV_PIX_FMT_BGRA;
 		case 'BGRX': return NodeAv.AV_PIX_FMT_BGR0;
 
-		default: return NodeAv.AV_PIX_FMT_NONE;
+		default: return assertNever(pixelFormat);
 	}
 };
 

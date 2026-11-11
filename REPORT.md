@@ -862,44 +862,40 @@ Behavior changes worth a look are marked **[behavior change]**.
 ✅ `flush()` resolved before the last samples were emitted. Fix: await the last `runDecode` promise instead of the
   decoder's queue draining.
 
-### Server extension (`@mediabunny/server`)
+### Server extension (`@mediabunny/server`) ✅
 
-- Audio frames ignored the time base numerator. Fix: timestamp is `pts * timeBase.num / timeBase.den`.
-- Planar audio with more than 8 channels segfaulted. Fix: read and write planes through `frame.extendedData`
+✅ Audio frames ignored the time base numerator. Fix: timestamp is `pts * timeBase.num / timeBase.den`.
+✅ Planar audio with more than 8 channels segfaulted. Fix: read and write planes through `frame.extendedData`
   instead of `frame.data`, which only holds 8.
-- `transform` dropped encodeOptions. Fix: pass `encodeOptions` to the transformed sample.
-- `transform` emptied the source AVFrame. Fix: add the frame to the filter graph with
+✅ `transform` dropped encodeOptions. Fix: pass `encodeOptions` to the transformed sample.
+✅ `transform` emptied the source AVFrame. Fix: add the frame to the filter graph with
   `AV_BUFFERSRC_FLAG_KEEP_REF`.
-- `transform` dropped the color matrix and range. Fix: pass `colorspace` and `range` in the buffer source args.
-- `transform` leaked a source frame when copying failed. Fix: the copy into the owned source frame moved inside the
+✅ `transform` dropped the color matrix and range. Fix: pass `colorspace` and `range` in the buffer source args.
+✅ `transform` leaked a source frame when copying failed. Fix: the copy into the owned source frame moved inside the
   `try` whose `finally` frees it.
-- An unknown SAR (0/1) threw. Fix: treat a SAR numerator of 0 as square pixels.
-- Copied frames could read garbage-collected memory. Fix: call `frame.makeWritable()` after `fromBuffer`, giving
-  the frame its own copy of the data.
-- I420AP12 samples failed to convert. Fix: widen them to `YUVA420P16LE`, scaling the 12-bit values to 16 bits.
-- libx265 key frames were CRA with RASL leading pictures (not true sync points). Fix: set `open-gop=0` in the
-  x265 params.
-- libx265 dropped forced key frames requested within x265's minimum key frame interval (keys at 0/2/4/40/43 gave
+✅ An unknown SAR (0/1) threw. Fix: treat a SAR numerator of 0 as square pixels.
+✅ I420AP12 samples failed to convert. Fix: widen them to `YUVA420P16LE`, scaling the 12-bit values to 16 bits.
+✅ libx265 dropped forced key frames requested within x265's minimum key frame interval (keys at 0/2/4/40/43 gave
   only 0 and 40). Fix: set the `forced-idr` codec option, as the nvenc paths already do.
-- VP8 with alpha failed to open. Fix: set `auto-alt-ref=0` when alpha is kept.
-- ProRes 4444 was encoded 4:2:2. Fix: use `YUV444P10LE` for `ap4h`/`ap4x` when the encoder supports it.
-- Precise timestamps were lost after a flush. Fix: clear the stale `preciseTimings` at the end of `flush()`.
-- The video decoder kept its precise timings across a flush, so after seeking back the old entries evicted the
+✅ VP8 with alpha failed to open. Fix: set `auto-alt-ref=0` when alpha is kept.
+✅ ProRes 4444 was encoded 4:2:2. Fix: use `YUV444P10LE` for `ap4h`/`ap4x` when the encoder supports it.
+✅ Precise timestamps were lost after a flush. Fix: clear the stale `preciseTimings` at the end of `flush()`.
+✅ The video decoder kept its precise timings across a flush, so after seeking back the old entries evicted the
   new ones. Fix: clear `preciseTimings` in the decoder's `flush()` too.
-- Strict compliance was set for all video decoders (libdav1d rejected an AV1 stream with a trailing byte that
+✅ Strict compliance was set for all video decoders (libdav1d rejected an AV1 stream with a trailing byte that
   browsers decode). Fix: only set it for AVC, where it's needed for the inferred reorder buffering.
-- `supports()` claimed AAC/Opus/E-AC-3/Vorbis channel and rate combinations that fail at open. Fix: AAC is limited
+✅ `supports()` claimed AAC/Opus/E-AC-3/Vorbis channel and rate combinations that fail at open. Fix: AAC is limited
   to 1-6 and 8 channels, Opus to <= 8, E-AC-3 to <= 6, Vorbis to <= 8 channels and <= 50 kHz.
-- `supports()` claimed AAC ADTS with 4/8 channels, which writes bad headers. Fix: ADTS with 8 channels (channel
+✅ `supports()` claimed AAC ADTS with 4/8 channels, which writes bad headers. Fix: ADTS with 8 channels (channel
   configuration 12) is rejected; 4 channels now work since the ADTS headers carry the PCE (see ADTS / AAC).
-- 3/5-channel AAC/AC-3 used unspecified channel layouts. Fix: open AAC/AC-3/E-AC-3 with explicit surround (3) and
+✅ 3/5-channel AAC/AC-3 used unspecified channel layouts. Fix: open AAC/AC-3/E-AC-3 with explicit surround (3) and
   5.0(back) (5) layouts.
-- Vorbis channels 9+ were silent. Fix: `supports()` caps Vorbis at 8 channels, since NodeAV's resampler only
+✅ Vorbis channels 9+ were silent. Fix: `supports()` caps Vorbis at 8 channels, since NodeAV's resampler only
   passes on 8 planes.
-- TrueHD 3/4 channels were remixed (not lossless). Fix: input with the encoder's channel count takes on the
+✅ TrueHD 3/4 channels were remixed (not lossless). Fix: input with the encoder's channel count takes on the
   encoder's layout in the resampler instead of being remixed from `getChannelLayout`'s.
-- DTS had an unsignaled 512-sample delay. Fix: shift DTS packet timestamps back by `DTS_ENCODER_DELAY` (512).
-- AC-3/E-AC-3/DTS lost their tail at flush. Fix: at flush, inject the encoder's held-back amount of silence (256
+✅ DTS had an unsignaled 512-sample delay. Fix: shift DTS packet timestamps back by `DTS_ENCODER_DELAY` (512).
+✅ AC-3/E-AC-3/DTS lost their tail at flush. Fix: at flush, inject the encoder's held-back amount of silence (256
   or 512 samples) into the resampler to push the remaining audio out.
 
 ## Not fixed (for you to look over)

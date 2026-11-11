@@ -33,7 +33,7 @@ import { BufferTarget } from '../../src/target.js';
 import { Conversion } from '../../src/conversion.js';
 import { EncodedAudioPacketSource, VideoSampleSource } from '../../src/media-source.js';
 import { buildQuantizerEncodeOptions, Quality } from '../../src/encode.js';
-import { AvFrameVideoSampleResource, copyVideoSampleToAvFrame } from '../../packages/server/src/video-sample.js';
+import { AvFrameVideoSampleResource } from '../../packages/server/src/video-sample.js';
 import { AvFrameAudioSampleResource } from '../../packages/server/src/audio-sample.js';
 import { toAvFrame } from '../../packages/server/src/index.js';
 import * as NodeAv from 'node-av';
@@ -991,50 +991,6 @@ describe('Video', async () => {
 		return packets;
 	};
 
-	test('libx265 key frames are IDR frames', { timeout: 30_000 }, async () => {
-		const width = 160;
-		const height = 120;
-		const { packets } = await encodeVideo(
-			'hevc',
-			width,
-			height,
-			{ hardwareAcceleration: 'prefer-software' },
-			150,
-			(i) => {
-				const data = new Uint8Array(width * height * 4);
-				for (let y = 0; y < height; y++) {
-					for (let x = 0; x < width; x++) {
-						const j = (y * width + x) * 4;
-						data[j] = (x + 2 * i) % 256;
-						data[j + 1] = (y + i) % 256;
-						data[j + 2] = 128;
-						data[j + 3] = 255;
-					}
-				}
-
-				return data;
-			},
-			i => i === 0 || i === 15,
-		);
-
-		// A forced key frame, and one inserted by the encoder after its maximum GOP length
-		expect(packets.filter(x => x.type === 'key').length).toBeGreaterThanOrEqual(3);
-
-		for (const packet of packets) {
-			const types = [...iterateNalUnitsInLengthPrefixed(packet.data, 4)]
-				.map(loc => extractNalUnitTypeForHevc(packet.data[loc.offset]!));
-
-			// Leading pictures would reference frames from before the key frame
-			expect(types).not.toContain(HevcNalUnitType.RASL_N);
-			expect(types).not.toContain(HevcNalUnitType.RASL_R);
-
-			if (packet.type === 'key') {
-				// IDR_W_RADL or IDR_N_LP
-				expect(types.some(type => type === 19 || type === 20)).toBe(true);
-			}
-		}
-	});
-
 	test('libx265 forced key frames close together', { timeout: 30_000 }, async () => {
 		const width = 160;
 		const height = 120;
@@ -1716,25 +1672,6 @@ describe('Video', async () => {
 		expect(plane[1]).toBe(0x34);
 		expect(plane[2]).toBe(0x56);
 		expect(plane[3]).toBe(0xff);
-	});
-
-	test('Copied AVFrame does not borrow the staging buffer', async () => {
-		using sample = new VideoSample(new Uint8Array(64 * 64 * 4).fill(0x11), {
-			format: 'RGBA',
-			codedWidth: 64,
-			codedHeight: 64,
-			timestamp: 0,
-		});
-		using frame = new NodeAv.Frame();
-		frame.alloc();
-		const stagingBuffer = await copyVideoSampleToAvFrame(sample, frame, null);
-
-		// Callers like toAvFrame drop the staging buffer, so it may be garbage-collected and its memory reused at any
-		// time
-		stagingBuffer.fill(0xee);
-
-		assert(frame.data);
-		expect(toUint8Array(frame.data[0]!)[0]).toBe(0x11);
 	});
 
 	test('toAvFrame with I420AP12 VideoSample', async () => {

@@ -107,8 +107,7 @@ export class AvFrameVideoSampleResource extends VideoSampleResource {
 	getSquarePixelHeight(): number {
 		if (
 			this.frame.sampleAspectRatio.num > this.frame.sampleAspectRatio.den
-			// FFmpeg uses 0/1 for an unknown aspect ratio, meaning square pixels
-			|| this.frame.sampleAspectRatio.num === 0
+			|| this.frame.sampleAspectRatio.num === 0 // FFmpeg uses 0:1 for an unknown aspect ratio
 		) {
 			return this.frame.height;
 		} else {
@@ -208,10 +207,11 @@ export const copyVideoSampleToAvFrame = async (sample: VideoSample, frame: NodeA
 
 	frame.unref();
 
-	// FFmpeg has no 12-bit 4:2:0 format with alpha, so these samples get widened to the 16-bit one
-	const widenTo16Bit = sample.format === 'I420AP12';
+	const widenFrom12To16Bit = sample.format === 'I420AP12'; // Need to widen this because of the missing pixel format
 
-	frame.format = widenTo16Bit ? NodeAv.AV_PIX_FMT_YUVA420P16LE : fromPixelFormat(sample.format);
+	frame.format = widenFrom12To16Bit
+		? NodeAv.AV_PIX_FMT_YUVA420P16LE
+		: fromPixelFormat(sample.format);
 	frame.width = sample.codedWidth;
 	frame.height = sample.codedHeight;
 	frame.sampleAspectRatio = new NodeAv.Rational(
@@ -237,7 +237,7 @@ export const copyVideoSampleToAvFrame = async (sample: VideoSample, frame: NodeA
 
 	await sample.copyTo(lastBuffer);
 
-	if (widenTo16Bit) {
+	if (widenFrom12To16Bit) {
 		const values = new Uint16Array(lastBuffer.buffer, lastBuffer.byteOffset, lastBuffer.byteLength / 2);
 		for (let i = 0; i < values.length; i++) {
 			values[i] = (values[i]! << 4) | (values[i]! >> 8);
@@ -245,11 +245,6 @@ export const copyVideoSampleToAvFrame = async (sample: VideoSample, frame: NodeA
 	}
 
 	frame.fromBuffer(lastBuffer);
-
-	// fromBuffer only points the frame at the buffer's memory without keeping the buffer alive, so give the frame its
-	// own copy. Otherwise, the data gets freed under the frame as soon as the buffer is garbage-collected.
-	const ret = frame.makeWritable();
-	NodeAv.FFmpegError.throwIfError(ret, 'makeWritable');
 
 	return lastBuffer;
 };
@@ -316,7 +311,6 @@ export const transformVideoSample = async (
 			await copyVideoSampleToAvFrame(sample, srcFrame, null);
 		}
 
-		// The matrix and range describe the filter links, so leaving them out would get them dropped from the output
 		const srcArgs = `video_size=${srcFrame.width}x${srcFrame.height}`
 			+ `:pix_fmt=${srcFrame.format}`
 			+ `:time_base=1/1000000`
