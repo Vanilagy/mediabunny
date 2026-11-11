@@ -360,6 +360,9 @@ export class MatroskaMuxer extends Muxer {
 				} else if (trackData.info.decoderConfig.codec === 'dtsl') {
 					codecId = 'A_DTS/LOSSLESS';
 				}
+			} else if (trackData.type === 'subtitle' && this.format instanceof WebMOutputFormat) {
+				// WebM has its own Codec ID for WebVTT, instead of Matroska's. So weird
+				codecId = 'D_WEBVTT/SUBTITLES';
 			}
 
 			let seekPreRollNs = 0; // In "Matroska ticks" (nanoseconds)
@@ -394,7 +397,8 @@ export class MatroskaMuxer extends Muxer {
 					? { id: EBMLId.FlagCommentary, data: 1 }
 					: null,
 				{ id: EBMLId.FlagLacing, data: 0 },
-				(trackData.type === 'video' && trackData.info.alphaMode) || trackData.type === 'subtitle'
+				(trackData.type === 'video' && trackData.info.alphaMode)
+				|| (trackData.type === 'subtitle' && !(this.format instanceof WebMOutputFormat))
 					? { id: EBMLId.MaxBlockAdditionID, data: 1 } // Must be declared if it's used
 					: null,
 				{ id: EBMLId.Language, data: trackData.track.metadata.languageCode ?? UNDETERMINED_LANGUAGE },
@@ -1149,16 +1153,23 @@ export class MatroskaMuxer extends Muxer {
 				return `<${formatSubtitleTimestamp(offsetTime)}>`;
 			});
 
-			const body = textEncoder.encode(bodyText);
-			const additions = `${cue.settings ?? ''}\n${cue.identifier ?? ''}\n${cue.notes ?? ''}`;
+			let subtitleChunk: InternalMediaChunk;
+			if (this.format instanceof WebMOutputFormat) {
+				// WebM puts the identifier and settings in front of the cue text, and has no place for notes
+				const body = textEncoder.encode(`${cue.identifier ?? ''}\n${cue.settings ?? ''}\n${bodyText}`);
+				subtitleChunk = this.createInternalChunk(body, cue.timestamp, cue.duration, 'key');
+			} else {
+				const body = textEncoder.encode(bodyText);
+				const additions = `${cue.settings ?? ''}\n${cue.identifier ?? ''}\n${cue.notes ?? ''}`;
 
-			const subtitleChunk = this.createInternalChunk(
-				body,
-				cue.timestamp,
-				cue.duration,
-				'key',
-				additions.trim() ? textEncoder.encode(additions) : null,
-			);
+				subtitleChunk = this.createInternalChunk(
+					body,
+					cue.timestamp,
+					cue.duration,
+					'key',
+					additions.trim() ? textEncoder.encode(additions) : null,
+				);
+			}
 
 			trackData.chunkQueue.push(subtitleChunk);
 			await this.interleaveChunks();

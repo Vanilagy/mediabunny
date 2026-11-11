@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import { Output } from '../../src/output.js';
-import { MkvOutputFormat, Mp4OutputFormat } from '../../src/output-format.js';
+import { MkvOutputFormat, Mp4OutputFormat, WebMOutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
 import { TextSubtitleSource } from '../../src/media-source.js';
 import { inlineTimestampRegex, parseSubtitleTimestamp, SubtitleCue, SubtitleParser } from '../../src/subtitles.js';
@@ -55,6 +55,61 @@ Tell me, is the lord of the universe in?
 `);
 
 	await output.finalize();
+});
+
+test('WebM muxing', async () => {
+	const output = new Output({
+		format: new WebMOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const source = new TextSubtitleSource('webvtt');
+	output.addSubtitleTrack(source);
+
+	await output.start();
+
+	await source.add(`WEBVTT
+
+1
+00:00.000 --> 00:00.900 align:start
+Hildy!
+`);
+
+	await output.finalize();
+
+	// WebM has its own Codec ID, and puts the identifier and settings in front of the cue text
+	const text = new TextDecoder('latin1').decode(output.target.buffer!);
+	expect(text).toContain('D_WEBVTT/SUBTITLES');
+	expect(text).not.toContain('S_TEXT/WEBVTT');
+	expect(text).toContain('1\nalign:start\nHildy!');
+});
+
+test('MKV muxing', async () => {
+	const output = new Output({
+		format: new MkvOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const source = new TextSubtitleSource('webvtt');
+	output.addSubtitleTrack(source);
+
+	await output.start();
+
+	await source.add(`WEBVTT
+
+1
+00:00.000 --> 00:00.900 align:start
+Hildy!
+`);
+
+	await output.finalize();
+
+	// Matroska's Codec ID, with the settings and identifier in the block's BlockAdditions instead of the cue text
+	const text = new TextDecoder('latin1').decode(output.target.buffer!);
+	expect(text).toContain('S_TEXT/WEBVTT');
+	expect(text).not.toContain('D_WEBVTT');
+	expect(text).toContain('align:start\n1\n');
+	expect(text).not.toContain('1\nalign:start\nHildy!');
 });
 
 test('Cue without payload at end of text', () => {

@@ -983,9 +983,12 @@ The current behavior is arguably intended, or fixing it means picking between va
 ✅ The MPEG-TS muxer writes no PCR and writes PAT/PMT only once (strict analyzers flag it).
 ✅ The MPEG-TS muxer assigns PIDs by first-packet order, so in HLS the audio PID can change between segments. Fix:
   PIDs, PES stream IDs and the PMT order follow the track order, which the HLS muxer keeps the same for every segment.
-- Matroska Language is ISO 639-2/B, but `languageCode` is documented as /T and the muxer writes /T.
-- Matroska multi-segment files give duplicate track IDs; needs an ID scheme.
-- WebVTT in WebM is written as `S_TEXT/WEBVTT`; WebM and FFmpeg expect `D_WEBVTT/*`.
+✅ Matroska Language is ISO 639-2/B, but `languageCode` is documented as /T and the muxer writes /T.
+✅ Matroska multi-segment files give duplicate track IDs; needs an ID scheme. Already fixed: `InputTrack.id` is now
+  the track's 1-based index in `getTracks()` for every format.
+✅ WebVTT in WebM is written as `S_TEXT/WEBVTT`; WebM and FFmpeg expect `D_WEBVTT/*`. Fix: WebM output writes
+  `D_WEBVTT/SUBTITLES` with the identifier and settings in front of the cue text (no BlockAdditions, so notes are
+  dropped); Matroska output keeps `S_TEXT/WEBVTT`.
 - Matroska StereoMode side-by-side is ignored for the aspect ratio (reproduced). FFmpeg halves the width on write
   and doubles it on read; follow that convention or not?
 - Matroska Segment Duration is negative when all timestamps are negative (reproduced). Write the span, a Void, or

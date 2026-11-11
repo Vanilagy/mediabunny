@@ -56,6 +56,7 @@
 - Fixed EBML unknown sizes of 2 to 7 bytes not being recognized
 - Fixed Matroska muxer writing `BlockDuration` on the last block in decode order instead of presentation order, giving the last frame a duration of 0 with B-frames
 - Matroska muxer now writes `MaxBlockAdditionID` for tracks with block additions (video with alpha, WebVTT)
+- WebVTT in WebM output is now written the way the WebM spec defines it (`D_WEBVTT/SUBTITLES`)
 - Fixed the Matroska muxer hanging on `finalize()` after `start()`, a track close or `finalize()` threw
 - Fixed the validation error for `MkvOutputFormatOptions.onSegmentHeader` naming the wrong option
 - Matroska muxer no longer patches the color space into VP9 key frames, which zeroed the color space for BT.2020, corrupted RGB streams and modified the caller's packet data
