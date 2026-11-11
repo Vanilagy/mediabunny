@@ -59,8 +59,6 @@ class Ac3Decoder extends CustomAudioDecoder {
 
 	private emitSamples(chunks: DecodedChunk[]) {
 		for (const chunk of chunks) {
-			// The frames following the first one of a packet come without a timestamp, but they simply pick up where
-			// the previous frame left off
 			let timestamp: number;
 			if (chunk.pts !== null) {
 				timestamp = chunk.pts / this.config.sampleRate;

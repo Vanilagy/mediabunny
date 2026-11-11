@@ -112,7 +112,6 @@ class Ac3Encoder extends CustomAudioEncoder {
 		this.pendingBuffer.set(incomingData, this.pendingFrames * channels);
 		this.pendingFrames += incomingFrames;
 
-		// Shift the remainder to the front only once at the end, as doing it per frame is quadratic for big samples
 		let encodedFrames = 0;
 		while (this.pendingFrames - encodedFrames >= this.encoderFrameSize) {
 			await this.encodeOneFrame(encodedFrames);
@@ -129,8 +128,7 @@ class Ac3Encoder extends CustomAudioEncoder {
 			const frameSize = this.encoderFrameSize;
 			const endTimestampInSamples = this.nextSampleTimestampInSamples + this.pendingFrames;
 
-			// Pad with silence until every sample has made it out. The encoder's output lags behind its input, so this
-			// can take an extra frame (the bridge drops whatever flushing the encoder would yield).
+			// Pad with silence until every sample has made it out
 			while (this.encodedEndTimestampInSamples < endTimestampInSamples) {
 				this.pendingBuffer.fill(0, this.pendingFrames * channels, frameSize * channels);
 				this.pendingFrames = 0;

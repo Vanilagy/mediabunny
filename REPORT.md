@@ -750,73 +750,73 @@ Behavior changes worth a look are marked **[behavior change]**.
 ✅ Silence padding used the metadata channel count and sample rate (implicitly signaled HE-AAC starting late threw
   when converted to WAV). Fix: take them from the decoded sample.
 
-### Small core pieces
+### Small core pieces ✅
 
-- Bitstream reads of 32+ bits overflowed. Fix: accumulate with `2 * result + bit` instead of shifts.
-- Bitstream writes of 32+ bits (and bit 31 at unaligned offsets) were wrong. Fix: extract each bit as
+✅ Bitstream reads of 32+ bits overflowed. Fix: accumulate with `2 * result + bit` instead of shifts.
+✅ Bitstream writes of 32+ bits (and bit 31 at unaligned offsets) were wrong. Fix: extract each bit as
   `Math.floor(value / 2 ** k) & 1` instead of with 32-bit masks.
-- `setInt64` big-endian wrote little-endian halves. Fix: pass `false` (big-endian) to both 32-bit writes.
-- EventEmitter: a `once` listener re-registered during an emit looped forever. Fix: `emit` iterates over a
+✅ `setInt64` big-endian wrote little-endian halves. Fix: pass `false` (big-endian) to both 32-bit writes.
+✅ EventEmitter: a `once` listener re-registered during an emit looped forever. Fix: `emit` iterates over a
   snapshot of the listeners (skipping ones removed meanwhile).
-- EventEmitter: re-entrant emits called `once` listeners twice. Fix: remove a `once` listener before calling it.
-- CallSerializer stayed rejected after one failure, skipping every later call (including `close()`). Fix: the
+✅ EventEmitter: re-entrant emits called `once` listeners twice. Fix: remove a `once` listener before calling it.
+✅ CallSerializer stayed rejected after one failure, skipping every later call (including `close()`). Fix: the
   chain continues from `result.catch(() => {})`; the caller still gets the rejected `result`.
-- The AES-128 decrypt stream leaked the HLS ciphertext reference on error. Fix: `pull` closes in a `catch` too
+✅ The AES-128 decrypt stream leaked the HLS ciphertext reference on error. Fix: `pull` closes in a `catch` too
   (errored streams never call `cancel`), with a `closeOnce` guard making closing idempotent.
-- `EncodedPacket.clone({ data })` kept the old byteLength. Fix: use `options.data.byteLength` when data is given.
-- WebVTT: a payload-less cue at the end of the text took the whole text as its payload. Fix: if there's no newline
+✅ `EncodedPacket.clone({ data })` kept the old byteLength. Fix: use `options.data.byteLength` when data is given.
+✅ WebVTT: a payload-less cue at the end of the text took the whole text as its payload. Fix: if there's no newline
   after the timing line, the body starts at the end of the text (`indexOf` returned -1 -> 0 before).
-- WebVTT: hours above 99 dropped the cue. Fix: the timestamp regexes accept `\d{2,}` hours.
-- WebVTT: a leading BOM threw. Fix: strip a leading U+FEFF before checking the preamble.
+✅ WebVTT: hours above 99 dropped the cue. Fix: the timestamp regexes accept `\d{2,}` hours.
+✅ WebVTT: a leading BOM threw. Fix: strip a leading U+FEFF before checking the preamble.
 
-### AC-3 / E-AC-3 extension
+### AC-3 / E-AC-3 extension ✅
 
-- The decoder read only one frame per packet, so E-AC-3 MP4s with several syncframes per sample failed. Fix: the
+✅ The decoder read only one frame per packet, so E-AC-3 MP4s with several syncframes per sample failed. Fix: the
   bridge's `decode_packet` was split into `send_decode_packet` and `receive_decoded_frame`; the worker receives
   frames in a loop until none are left and returns them all as chunks. Frames after the first come without PTS
   and continue from the previous frame's end.
-- Decoder flush dropped the remaining frames. Fix: flushing sends a NULL packet (`send_decode_flush`), receives
+✅ Decoder flush dropped the remaining frames. Fix: flushing sends a NULL packet (`send_decode_flush`), receives
   and returns the remaining frames as samples, and only then resets the decoder.
-- Decoder timestamps were scaled by the decoded rate instead of the track rate. Fix: divide the PTS by
+✅ Decoder timestamps were scaled by the decoded rate instead of the track rate. Fix: divide the PTS by
   `this.config.sampleRate`.
-- The encoder lost the last 256 samples at flush. Fix: flush keeps encoding silence-padded frames until the
+✅ The encoder lost the last 256 samples at flush. Fix: flush keeps encoding silence-padded frames until the
   encoder's output (`encodedEndTimestampInSamples`, tracked from the packets' pts + duration) covers all input,
   since the output lags behind the input.
-- The encoder encoded 3 channels as 2.1 (the third channel was coded as band-limited LFE and lost). Fix: new
+✅ The encoder encoded 3 channels as 2.1 (the third channel was coded as band-limited LFE and lost). Fix: new
   `set_ac3_channel_layout` in the bridge with explicit layouts (3 -> surround) instead of
   `av_channel_layout_default`.
-- The encoder encoded 4 channels as 4.0 instead of quad. Fix: same mapping (4 -> quad).
-- `supports()` claimed 7/8 channels, which fail at init. Fix: cap at 6 channels.
-- `supports()` claimed reduced E-AC-3 sample rates, which fail at init. Fix: only `AC3_SAMPLE_RATES` for both
+✅ The encoder encoded 4 channels as 4.0 instead of quad. Fix: same mapping (4 -> quad).
+✅ `supports()` claimed 7/8 channels, which fail at init. Fix: cap at 6 channels.
+✅ `supports()` claimed reduced E-AC-3 sample rates, which fail at init. Fix: only `AC3_SAMPLE_RATES` for both
   codecs.
-- `supports()` claimed E-AC-3 bitrates FFmpeg rejects at init. Fix: limit E-AC-3 bitrates to what six-block and
+✅ `supports()` claimed E-AC-3 bitrates FFmpeg rejects at init. Fix: limit E-AC-3 bitrates to what six-block and
   single-block syncframes can hold (AC-3 bitrates are snapped by FFmpeg, so they stay unchecked).
-- The encoder's per-frame `copyWithin` was quadratic for one huge sample (perf; no test). Fix: same as in the AAC
+✅ The encoder's per-frame `copyWithin` was quadratic for one huge sample (perf; no test). Fix: same as in the AAC
   encoder below.
-- The decoder used `frame->data` instead of `extended_data` above 8 channels (no test: no sample available). Fix:
+✅ The decoder used `frame->data` instead of `extended_data` above 8 channels (no test: no sample available). Fix:
   use `frame->extended_data`.
 
-### DTS extension
+### DTS extension ✅
 
-- Decoder timestamps were scaled by the decoded rate instead of the track rate. Fix: divide the PTS by
+✅ Decoder timestamps were scaled by the decoded rate instead of the track rate. Fix: divide the PTS by
   `this.config.sampleRate`.
-- The encoder ignored its 512-sample codec delay (late audio, lost tail). **[behavior change]** The first DTS
+✅ The encoder ignored its 512-sample codec delay (late audio, lost tail). **[behavior change]** The first DTS
   packet now starts 512 samples before the input, like AAC/AC-3. Fix: input timestamps are shifted back by
   `CODEC_DELAY` (512), and flush pads with enough silence to push the remaining samples through the delay, encoding
   frames until nothing is pending.
-- The decoder used `frame->data` instead of `extended_data` above 8 channels; DTS:X decodes to 12 (no test: no
+✅ The decoder used `frame->data` instead of `extended_data` above 8 channels; DTS:X decodes to 12 (no test: no
   sample available). Fix: use `frame->extended_data`.
-- The encoder's per-frame `copyWithin` was quadratic for one huge sample (perf; no test). Fix: same as in the AAC
+✅ The encoder's per-frame `copyWithin` was quadratic for one huge sample (perf; no test). Fix: same as in the AAC
   and AC-3 encoders: frames are encoded from an offset, and the remainder is shifted once per `encode()`.
 
-### TrueHD extension
+### TrueHD extension ✅
 
-- Streams shorter than 16 access units produced unmuxable output (now padded to 16 AUs with silence). Fix: the
+✅ Streams shorter than 16 access units produced unmuxable output (now padded to 16 AUs with silence). Fix: the
   encoder counts received frames and, on flush, pads with silence up to `MAJOR_SYNC_INTERVAL` (16) access units,
   since FFmpeg's encoder writes no major sync at all for shorter streams.
-- Decoder timestamps were scaled by the decoded rate instead of the track rate. Fix: divide the PTS by
+✅ Decoder timestamps were scaled by the decoded rate instead of the track rate. Fix: divide the PTS by
   `this.config.sampleRate`.
-- Access units after the first in a multi-AU packet came out with AV_NOPTS_VALUE timestamps. Fix: the worker
+✅ Access units after the first in a multi-AU packet came out with AV_NOPTS_VALUE timestamps. Fix: the worker
   maps NOPTS to null, and such samples continue from the previous sample's end.
 
 ### AAC encoder extension

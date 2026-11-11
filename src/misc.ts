@@ -974,7 +974,6 @@ export class CallSerializer {
 
 	call(fn: () => Promise<void> | void) {
 		const result = this.currentPromise.then(fn);
-		// A failed call must not keep later ones (like close()) from running; its caller sees the error via result
 		this.currentPromise = result.catch(() => {});
 
 		return result;
@@ -1676,7 +1675,7 @@ export class EventEmitter<TEvents extends Record<string, unknown>> {
 				continue;
 			}
 
-			// Remove before calling, so that a re-entrant emit can't call it a second time
+			// Remove before calling
 			if (entry.once) {
 				listeners.delete(entry);
 			}

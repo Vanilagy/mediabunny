@@ -260,4 +260,25 @@
 - Fixed conversion progress being reported as NaN when there's nothing to convert
 - Fixed a broken error message for requested codecs the output format can't contain
 - Fixed conversions of implicitly signaled HE-AAC failing for formats like WAVE when the audio starts late
+- Fixed `once` event listeners being called twice during nested emits, and looping forever when re-registered while being emitted
+- Fixed `EncodedPacket.clone()` keeping the original `byteLength` when given new data
+- Fixed AES-128 encrypted HLS segments being kept in memory after a failed read
+- Fixed a WebVTT cue without a payload at the end of the text taking the whole text as its payload
+- Fixed WebVTT cues with hours above 99 being dropped
+- Fixed WebVTT text starting with a byte order mark failing to parse
+- `@mediabunny/ac3`: Fixed E-AC-3 with several syncframes per packet failing to decode
+- `@mediabunny/ac3`: Fixed the last decoded audio being dropped when flushing
+- `@mediabunny/ac3`: Fixed wrong decoded timestamps when the stream's sample rate differs from the track's
+- `@mediabunny/ac3`: Fixed decoding of streams with more than 8 channels
+- `@mediabunny/ac3`: Fixed the last 256 samples being lost when encoding
+- `@mediabunny/ac3`: Fixed 3 channels being encoded as 2.1, losing the third channel, and 4 channels as 4.0 instead of quad
+- `@mediabunny/ac3`: Fixed support being claimed for channel counts, sample rates and bitrates the encoder rejects
+- `@mediabunny/ac3`: Fixed slow encoding of very large samples
+- `@mediabunny/dts`: Fixed encoded audio being 512 samples late and losing its end; the first packet now starts 512 samples before the input to account for the encoder delay
+- `@mediabunny/dts`: Fixed wrong decoded timestamps when the stream's sample rate differs from the track's
+- `@mediabunny/dts`: Fixed decoding of streams with more than 8 channels, such as DTS:X
+- `@mediabunny/dts`: Fixed slow encoding of very large samples
+- `@mediabunny/truehd`: Fixed encoded streams shorter than 16 access units being unmuxable; they're now padded with silence
+- `@mediabunny/truehd`: Fixed wrong decoded timestamps when the stream's sample rate differs from the track's
+- `@mediabunny/truehd`: Fixed wrong decoded timestamps for packets holding several access units
 - `InputTrack.id` is now the track's 1-based index in `getTracks()` for every format, making it unique in multi-segment Matroska files. Previously, it was the container's own track ID (such as the MPEG-TS PID or the Ogg serial number).
