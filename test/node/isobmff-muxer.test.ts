@@ -1545,3 +1545,37 @@ const testPcmAbove65535Hz = async (format: IsobmffOutputFormat) => {
 
 	return new Uint8Array(output.target.buffer!);
 };
+
+test('Multichannel PCM, MOV', async () => {
+	const output = new Output({
+		format: new MovOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const source = new EncodedAudioPacketSource('pcm-s16');
+	output.addAudioTrack(source);
+	await output.start();
+
+	const decoderConfig = {
+		codec: 'pcm-s16',
+		numberOfChannels: 6,
+		sampleRate: 48000,
+	};
+	await source.add(new EncodedPacket(new Uint8Array(12 * 480), 'key', 0, 480 / 48000), { decoderConfig });
+	await output.finalize();
+
+	// The version 1 sound description is only specified for mono and stereo, so this needs version 2, with lpcm
+	const bytes = new Uint8Array(output.target.buffer!);
+	const lpcm = findBox(bytes, [...STSD_PATH, 'lpcm']);
+	assert(lpcm);
+	expect(toDataView(bytes).getUint16(lpcm.contentStart + 8)).toBe(2);
+
+	using input = new Input({
+		source: new BufferSource(bytes),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+	expect(await track.getCodec()).toBe('pcm-s16');
+	expect(await track.getNumberOfChannels()).toBe(6);
+});

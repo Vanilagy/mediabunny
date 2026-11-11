@@ -989,17 +989,21 @@ The current behavior is arguably intended, or fixing it means picking between va
 ✅ WebVTT in WebM is written as `S_TEXT/WEBVTT`; WebM and FFmpeg expect `D_WEBVTT/*`. Fix: WebM output writes
   `D_WEBVTT/SUBTITLES` with the identifier and settings in front of the cue text (no BlockAdditions, so notes are
   dropped); Matroska output keeps `S_TEXT/WEBVTT`.
-- Matroska StereoMode side-by-side is ignored for the aspect ratio (reproduced). FFmpeg halves the width on write
-  and doubles it on read; follow that convention or not?
-- Matroska Segment Duration is negative when all timestamps are negative (reproduced). Write the span, a Void, or
-  0?
-- Matroska AV1: the av1C CodecPrivate now feeds the codec info, but the decoder still gets no sequence header
+✅ Matroska StereoMode side-by-side is ignored for the aspect ratio (reproduced). FFmpeg halves the width on write
+  and doubles it on read; follow that convention or not? Fix: on read, a given DisplayWidth is doubled for side by
+  side and column interleaved (StereoMode 1, 8, 9, 11), and a given DisplayHeight for top-bottom and row
+  interleaved (2, 3, 6, 7). Without a display size, nothing changes.
+✅ Matroska Segment Duration is negative when all timestamps are negative (reproduced). Write the span, a Void, or
+  0? Fix: the end timestamp clamped to 0, as FFmpeg writes it.
+✅ Matroska AV1: the av1C CodecPrivate now feeds the codec info, but the decoder still gets no sequence header
   (reproduced). Pass av1C as the decoder description?
-- ISOBMFF: PCM silence padding counts toward `maximumPacketCount` in reserve mode (reproduced). Reserve more
-  space, or document it?
-- FFmpeg uses the QuickTime v2 sound description for MOV with more than 2 channels and for E-AC-3; Mediabunny
-  uses v1. AVFoundation still accepted a 6-channel E-AC-3 v1 MOV, so no failure was observed.
-- Mp3Muxer writes no LAME delay when the first packet timestamp is positive (Conversion pads to 0; may be intended).
+✅ ISOBMFF: PCM silence padding counts toward `maximumPacketCount` in reserve mode (reproduced). Reserve more
+  space, or document it? Documented instead: the `maximumPacketCount` doc says gaps in audio may add a packet each,
+  depending on the format, since packets there mean the muxer's own packetization.
+✅ FFmpeg uses the QuickTime v2 sound description for MOV with more than 2 channels and for E-AC-3; Mediabunny
+  uses v1. AVFoundation still accepted a 6-channel E-AC-3 v1 MOV, so no failure was observed. Fix: MOV now uses
+  version 2 for more than 2 channels too (multichannel linear PCM then becomes `lpcm`); E-AC-3 left as is.
+✅ Mp3Muxer writes no LAME delay when the first packet timestamp is positive (Conversion pads to 0; may be intended).
 - MP3 remux doesn't carry over the encoder padding, so players play it (1.0 s -> 1.0198 s).
 - `Quality` accepts inherited keys (`'toString'`) and +-Infinity.
 - `canEncodeAudio` with a quantizer-only Quality throws instead of returning false (may be intended).

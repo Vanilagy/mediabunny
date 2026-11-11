@@ -238,6 +238,7 @@ type InternalTrack = {
 			displayWidth: number | null;
 			displayHeight: number | null;
 			displayUnit: number;
+			stereoMode: number;
 			squarePixelWidth: number;
 			squarePixelHeight: number;
 			horizontalScale: number;
@@ -1221,6 +1222,17 @@ export class MatroskaDemuxer extends Demuxer {
 
 						let displayWidth = this.currentTrack.info.displayWidth;
 						let displayHeight = this.currentTrack.info.displayHeight;
+
+						// With two views packed into one frame, the display size is that of a single view instead.
+						// See https://www.matroska.org/technical/notes.html#multi-planar-and-3d-videos
+						const stereoMode = this.currentTrack.info.stereoMode;
+						if (displayWidth !== null && [1, 8, 9, 11].includes(stereoMode)) {
+							displayWidth *= 2; // Side by side or column interleaved
+						}
+						if (displayHeight !== null && [2, 3, 6, 7].includes(stereoMode)) {
+							displayHeight *= 2; // Top-bottom or row interleaved
+						}
+
 						if (this.currentTrack.info.displayUnit === 0) {
 							displayWidth ??= this.currentTrack.info.width;
 							displayHeight ??= this.currentTrack.info.height;
@@ -1373,6 +1385,7 @@ export class MatroskaDemuxer extends Demuxer {
 						displayWidth: null,
 						displayHeight: null,
 						displayUnit: 0, // Pixels
+						stereoMode: 0, // Mono
 						squarePixelWidth: -1,
 						squarePixelHeight: -1,
 						horizontalScale: 1,
@@ -1539,6 +1552,12 @@ export class MatroskaDemuxer extends Demuxer {
 				if (this.currentTrack?.info?.type !== 'video') break;
 
 				this.currentTrack.info.displayUnit = readUnsignedInt(slice, size);
+			}; break;
+
+			case EBMLId.StereoMode: {
+				if (this.currentTrack?.info?.type !== 'video') break;
+
+				this.currentTrack.info.stereoMode = readUnsignedInt(slice, size);
 			}; break;
 
 			case EBMLId.AlphaMode: {
@@ -2820,7 +2839,8 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 		return this.decoderConfigPromise ??= (async (): Promise<VideoDecoderConfig> => {
 			const codecPrivate = this.internalTrack.codecPrivate;
 
-			// CodecPrivate is an av1C box whose optional config OBUs follow its 4-byte header
+			// CodecPrivate holds 4 bytes like those of the AV1CodecConfigurationRecord, optionally followed by OBUs
+			// starting with the sequence header. Only that one has all the codec info, including the color.
 			let av1CodecInfo = this.internalTrack.info.codec === 'av1' && codecPrivate
 				? extractAv1CodecInfoFromPacket(codecPrivate.subarray(4))
 				: null;

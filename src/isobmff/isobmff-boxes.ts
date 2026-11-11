@@ -940,8 +940,8 @@ export const soundSampleDescription = (
 
 	// TrueHD's sample entry is defined on top of version 0, with its own sample rate layout
 	if (trackData.muxer.isQuickTime && trackData.track.source._codec !== 'truehd') {
-		// Version 1 can't represent sample rates of 2^16 and up
-		version = trackData.info.sampleRate < 2 ** 16 ? 1 : 2;
+		// Version 1 is only specified for mono and stereo, and can't represent sample rates of 2^16 and up
+		version = trackData.info.sampleRate < 2 ** 16 && trackData.info.numberOfChannels <= 2 ? 1 : 2;
 	}
 
 	if (version === 0) {

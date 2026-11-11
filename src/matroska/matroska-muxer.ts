@@ -175,7 +175,6 @@ export class MatroskaMuxer extends Muxer {
 	private currentClusterStartMsTimestamp: number | null = null;
 	private currentClusterMaxMsTimestamp: number | null = null;
 
-	private startTimestamp = Infinity;
 	private endTimestamp = -Infinity;
 	private warnedAboutTooNegativeTimestamp = false;
 
@@ -1303,7 +1302,6 @@ export class MatroskaMuxer extends Muxer {
 			previousMsTimestamp: trackData.lastWrittenMsTimestamp,
 		});
 
-		this.startTimestamp = Math.min(this.startTimestamp, msTimestamp);
 		this.endTimestamp = Math.max(this.endTimestamp, msTimestamp + Math.round(1000 * chunk.duration));
 		trackData.lastWrittenMsTimestamp = msTimestamp;
 
@@ -1506,7 +1504,7 @@ export class MatroskaMuxer extends Muxer {
 				this.ebmlWriter.writeVarInt(segmentSize, SEGMENT_SIZE_BYTES);
 
 				// Write the duration of the media to the Segment
-				const duration = this.startTimestamp === Infinity ? 0 : this.endTimestamp;
+				const duration = Math.max(this.endTimestamp, 0);
 				this.segmentDuration!.data = new EBMLFloat64(duration);
 				this.writer.seek(this.ebmlWriter.offsets.get(this.segmentDuration!)!);
 				this.ebmlWriter.writeEBML(this.segmentDuration);

@@ -110,6 +110,7 @@ export enum EBMLId {
 	DisplayWidth = 0x54b0,
 	DisplayHeight = 0x54ba,
 	DisplayUnit = 0x54b2,
+	StereoMode = 0x53b8,
 	AlphaMode = 0x53c0,
 	Audio = 0xe1,
 	SamplingFrequency = 0xb5,

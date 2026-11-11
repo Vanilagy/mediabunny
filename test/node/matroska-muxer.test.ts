@@ -112,6 +112,12 @@ const testNegativeTimestampRoundTrip = async (timestamps: number[], duration: nu
 	assert(track);
 	const sink = new EncodedPacketSink(track);
 
+	// The Segment Duration (in milliseconds) is the end timestamp, but never negative
+	const bytes = new Uint8Array(output.target.buffer!);
+	const durationPos = bytes.findIndex((_, i) => bytes[i] === 0x44 && bytes[i + 1] === 0x89 && bytes[i + 2] === 0x88);
+	const segmentDuration = new DataView(bytes.buffer).getFloat64(durationPos + 3);
+	expect(segmentDuration).toBeCloseTo(1000 * Math.max(timestamps.at(-1)! + duration, 0));
+
 	const outputPackets: EncodedPacket[] = [];
 	for await (const packet of sink.packets()) {
 		outputPackets.push(packet);

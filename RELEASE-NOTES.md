@@ -13,7 +13,7 @@
 - Added detection of ADTS and MP3 files holding just a single frame
 - Added support for ID3v2.2 `TXX` frames
 - Added support for `fLaC` in HLS `CODECS` attributes
-- MOV muxer now writes a QuickTime version 2 sound description for sample rates of 65536 Hz and above, which were previously written as 0
+- Fixed MOV output writing sample rates of 65536 Hz and above as 0
 - Fixed reading sample rates of 65536 Hz and above from ISOBMFF files
 - Fixed ISOBMFF PCM tracks losing most of their data when their samples span more than one PCM frame
 - Fixed ISOBMFF fragments without `tfdt` drifting by the composition delay with every fragment
@@ -43,6 +43,7 @@
 - Matroska muxer now writes AAC's core sample rate as `SamplingFrequency` and adds `OutputSamplingFrequency` when SBR doubles it
 - Matroska AV1 codec info is now read from the `av1C` in `CodecPrivate`, falling back to the first packet only when it holds no sequence header
 - Matroska demuxer now respects `DisplayUnit`, and a lone `DisplayWidth` or `DisplayHeight` is no longer dropped
+- Fixed wrong display dimensions for stereoscopic Matroska video
 - Fixed a Matroska cluster cut off by the end of the file being dropped entirely
 - Fixed wrong track numbers in multi-segment Matroska files
 - Fixed an unknown-size Matroska segment followed by another file (such as concatenated live recordings) reading that file's clusters
@@ -54,6 +55,7 @@
 - Fixed an empty Matroska `FileUID` throwing
 - Fixed EBML lacing with a single frame throwing
 - Fixed EBML unknown sizes of 2 to 7 bytes not being recognized
+- Fixed Matroska muxer writing a negative segment duration when all timestamps are negative
 - Fixed Matroska muxer writing `BlockDuration` on the last block in decode order instead of presentation order, giving the last frame a duration of 0 with B-frames
 - Matroska muxer now writes `MaxBlockAdditionID` for tracks with block additions (video with alpha, WebVTT)
 - WebVTT in WebM output is now written the way the WebM spec defines it (`D_WEBVTT/SUBTITLES`)

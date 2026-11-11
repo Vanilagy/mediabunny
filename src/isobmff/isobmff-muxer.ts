@@ -1232,7 +1232,7 @@ export class IsobmffMuxer extends Muxer {
 				if (trackData.samples.length > maximumPacketCount) {
 					throw new Error(
 						`Track #${trackData.track.id} has already reached the maximum packet count`
-						+ ` (${maximumPacketCount}). Either add less packets or increase the maximum packet count.`,
+						+ ` (${maximumPacketCount}). Either add fewer packets or increase the maximum packet count.`,
 					);
 				}
 			}

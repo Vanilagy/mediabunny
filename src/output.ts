@@ -232,6 +232,7 @@ export type BaseTrackMetadata = {
 	 * - For audio codecs, there is one packet for each "audio chunk", the duration of which depends on the codec. For
 	 * simplicity, you can assume each packet is roughly 10 ms or 512 samples long, whichever is shorter.
 	 * - For subtitles, assume each cue and each gap in the subtitles adds a packet.
+	 * - Depending on the format, gaps in audio may also add a packet each, as they are filled with silence.
 	 *
 	 * If you're not fully sure, make sure to add a buffer of around 33% to make sure you stay below the maximum.
 	 */

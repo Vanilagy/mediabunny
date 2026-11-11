@@ -141,6 +141,26 @@ test('Display size', async () => {
 	// A missing display dimension defaults to the pixel dimension
 	expect(await getSquarePixelSize(uintElement(EBMLId.DisplayWidth, 640))).toEqual([640, 240]);
 	expect(await getSquarePixelSize(uintElement(EBMLId.DisplayHeight, 480))).toEqual([320, 480]);
+
+	// With two views packed into the frame, the display size is that of a single view
+	expect(await getSquarePixelSize(
+		uintElement(EBMLId.DisplayWidth, 160),
+		uintElement(EBMLId.DisplayHeight, 240),
+		uintElement(EBMLId.StereoMode, 1), // Side by side
+	)).toEqual([320, 240]);
+	expect(await getSquarePixelSize(
+		uintElement(EBMLId.DisplayWidth, 320),
+		uintElement(EBMLId.DisplayHeight, 120),
+		uintElement(EBMLId.StereoMode, 3), // Top-bottom
+	)).toEqual([320, 240]);
+	expect(await getSquarePixelSize(
+		uintElement(EBMLId.DisplayWidth, 160),
+		uintElement(EBMLId.DisplayHeight, 240),
+		uintElement(EBMLId.StereoMode, 4), // Checkerboard
+	)).toEqual([320, 480]);
+
+	// Without a display size, the pixel size already covers the whole frame
+	expect(await getSquarePixelSize(uintElement(EBMLId.StereoMode, 1))).toEqual([320, 240]);
 });
 
 const getSquarePixelSize = async (...videoChildren: Bytes[]) => {
