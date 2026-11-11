@@ -77,6 +77,10 @@ test('Xing frame', async () => {
 	expect(view.getUint32(44)).toBe(10);
 	expect(view.getUint8(1) & 1).toBe(1); // Protection bit, meaning no CRC follows
 
+	// The same bitrate as the audio frames, so that the file is constant bitrate throughout
+	expect(view.getUint8(2) >> 4).toBe(FRAME_HEADER[2]! >> 4);
+	expect(buffer.byteLength).toBe(11 * FRAME_SIZE);
+
 	using input = new Input({
 		source: new BufferSource(buffer),
 		formats: ALL_FORMATS,

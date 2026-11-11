@@ -167,6 +167,8 @@ export class Mp3Demuxer extends Demuxer {
 
 		this.lastLoadedPos = result.startPos + header.totalSize - 1; // -1 in case the frame is 1 byte too short
 
+		// Header frames are checked for on every frame, not just the first, since concatenated MP3 files can have them
+		// mid-stream too
 		const xingOffset = getXingOffset(header.mpegVersionId, header.channel);
 
 		let slice = this.reader.requestSlice(result.startPos + xingOffset, 4);

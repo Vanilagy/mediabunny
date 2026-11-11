@@ -27,6 +27,7 @@ export type XingFrameData = {
 	copyright: number;
 	original: number;
 	emphasis: number;
+	targetBitrate: number | null;
 
 	isCbr: boolean;
 	frameCount: number | null;
@@ -82,9 +83,14 @@ export class Mp3Writer {
 		let bitrateIndex = -1;
 		const bitrateOffset = lowSamplingFrequency * 16 * 4 + data.layer * 16;
 
-		// Let's find the lowest bitrate for which the frame size is sufficiently large to fit all the data
+		// Find the lowest bitrate that's at least the target bitrate and whose frame is large enough to fit all the
+		// data. That way, a CBR file states the same bitrate throughout.
 		for (let i = 0; i < 16; i++) {
 			const kbr = KILOBIT_RATES[bitrateOffset + i]!;
+			if (1000 * kbr < (data.targetBitrate ?? 0)) {
+				continue;
+			}
+
 			const size = computeMp3FrameSize(lowSamplingFrequency, data.layer, 1000 * kbr, data.sampleRate, padding);
 
 			if (size >= neededBytes) {

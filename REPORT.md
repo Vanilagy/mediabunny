@@ -970,11 +970,12 @@ The current behavior is arguably intended, or fixing it means picking between va
   wild, so a strict parser would drop real dates; which formats to accept is a choice. Fix: a shared
   `parseIsoSuffix` (any prefix of yyyy-MM-ddTHH:mm:ss.sss plus an optional time zone, UTC without one) parses all of
   them, TDRC included. Anything else gives no date, with the string still in `raw`. IDIT is no longer read.
-- MP3: the Xing/Info frame bitrate differs from the stream bitrate in CBR files (reproduced). No Layer III player
+✅ MP3: the Xing/Info frame bitrate differs from the stream bitrate in CBR files (reproduced). No Layer III player
   misbehaves (Layer II, where mpg123 played 20.18 s instead of 5 s, no longer gets a Xing frame), and the code
-  comment calls the choice deliberate.
-- MP3: Layer I/II streams are labelled `'mp3'` (reproduced); distinguishing them needs new codec identifiers.
-- MP3: a mid-stream Layer III frame that looks like a VBRI header is dropped as a header frame (reproduced). The
+  comment calls the choice deliberate. Fix: the Xing/Info frame takes the first audio frame's bitrate, going higher
+  only if its data doesn't fit, so CBR files state one bitrate throughout.
+✅ MP3: Layer I/II streams are labelled `'mp3'` (reproduced); distinguishing them needs new codec identifiers.
+✅ MP3: a mid-stream Layer III frame that looks like a VBRI header is dropped as a header frame (reproduced). The
   Xing/VBRI check deliberately runs on every frame.
 - Ogg: chained links reusing a serial number cross into the next link. Reproduced with `cat b.opus a.opus` (a 1 s
   link, then a 3 s link, both serial 0): `computeDuration` gives 3 instead of 1, and `getPacket(0)` returns a packet

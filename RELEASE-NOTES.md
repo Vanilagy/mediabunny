@@ -118,6 +118,7 @@
 - Fixed the WAVE muxer hanging on `finalize()` after `start()` threw
 - Fixed the Xing/Info frame count of MP3 output including the Xing frame itself, making every file one frame too long
 - Fixed the Xing frame of MP3 output claiming a CRC it didn't have
+- The Xing frame of MP3 output now has the same bitrate as the first audio frame where possible, so that CBR files are constant bitrate throughout
 - MP3 muxer no longer writes a Xing frame for Layer I and II audio, where decoders would play it as audio
 - Fixed MP3 frame headers with a reserved MPEG version or sample rate index being accepted, causing false syncs
 - Fixed trailing ID3v1 and APEv2 tags counting toward the estimated duration of CBR MP3 files

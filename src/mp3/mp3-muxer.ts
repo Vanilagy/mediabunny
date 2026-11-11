@@ -119,6 +119,7 @@ export class Mp3Muxer extends Muxer {
 						copyright: header.copyright,
 						original: header.original,
 						emphasis: header.emphasis,
+						targetBitrate: header.bitrate,
 
 						isCbr: false,
 						frameCount: null,
@@ -203,6 +204,7 @@ export class Mp3Muxer extends Muxer {
 					copyright: header.copyright,
 					original: header.original,
 					emphasis: header.emphasis,
+					targetBitrate: header.bitrate,
 
 					isCbr: false,
 					frameCount: null,
@@ -241,6 +243,7 @@ export class Mp3Muxer extends Muxer {
 					copyright: 0,
 					original: 0,
 					emphasis: 0,
+					targetBitrate: null,
 
 					isCbr: false,
 					frameCount: null,
