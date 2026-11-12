@@ -918,10 +918,7 @@ export class MpegTsDemuxer extends Demuxer {
 			}
 
 			if (!firstPacket) {
-				if (packet.payloadUnitStartIndicator === 0) {
-					break;
-				}
-
+				assert(packet.payloadUnitStartIndicator === 1); // Callers only start sections at such packets
 				firstPacket = packet;
 			} else {
 				if (packet.pid !== firstPacket.pid) {
@@ -1881,6 +1878,8 @@ const maybeInsertReferencePacket = (
 		pesPacketHeader.sectionStartPos,
 		x => x.sectionStartPos,
 	);
+	const minByteDistance = elementaryStream.demuxer.minReferencePointByteDistance;
+
 	if (index >= 0) {
 		// Since pts and file position don't necessarily have a monotonic relationship (since pts can go crazy),
 		// let's see if inserting at the given index would violate the pts order. If so, return.
@@ -1889,24 +1888,22 @@ const maybeInsertReferencePacket = (
 			return false;
 		}
 
-		const minByteDistance = elementaryStream.demuxer.minReferencePointByteDistance;
-
 		if (pesPacketHeader.sectionStartPos - entry.sectionStartPos < minByteDistance) {
 			// Too close
 			return false;
 		}
+	}
 
-		if (index < referencePesPackets.length - 1) {
-			const nextEntry = referencePesPackets[index + 1]!;
-			if (nextEntry.pts < pesPacketHeader.pts) {
-				// Out of order
-				return false;
-			}
+	if (index < referencePesPackets.length - 1) {
+		const nextEntry = referencePesPackets[index + 1]!;
+		if (nextEntry.pts < pesPacketHeader.pts) {
+			// Out of order
+			return false;
+		}
 
-			if (nextEntry.sectionStartPos - pesPacketHeader.sectionStartPos < minByteDistance) {
-				// Too close
-				return false;
-			}
+		if (nextEntry.sectionStartPos - pesPacketHeader.sectionStartPos < minByteDistance) {
+			// Too close
+			return false;
 		}
 	}
 

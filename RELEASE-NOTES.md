@@ -321,6 +321,7 @@
 - `@mediabunny/dts`: Fixed wrong decoded timestamps when the stream's sample rate differs from the track's
 - `@mediabunny/dts`: Fixed decoding of streams with more than 8 channels, such as DTS:X
 - `@mediabunny/dts`: Fixed slow encoding of very large samples
+- `@mediabunny/dts`: Fixed the encoder not being reusable after a flush
 - `@mediabunny/dts`: Fixed float audio being truncated instead of rounded when encoding, which also overflowed at full scale
 - `@mediabunny/dts`: Fixed low quality settings being unsupported for multichannel audio; such bitrates now encode at the lowest bitrate DTS allows
 - `@mediabunny/truehd`: Fixed encoded streams shorter than 16 access units being unmuxable; they're now padded with silence

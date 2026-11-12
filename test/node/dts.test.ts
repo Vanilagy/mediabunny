@@ -15,6 +15,7 @@ import { AudioSampleSink } from '../../src/media-sink.js';
 import { AudioSampleSource, EncodedAudioPacketSource } from '../../src/media-source.js';
 import { AudioSample } from '../../src/sample.js';
 import { canEncode, Quality } from '../../src/encode.js';
+import { CustomAudioEncoder, customAudioEncoders } from '../../src/custom-coder.js';
 import { registerDtsDecoder, registerDtsEncoder } from '@mediabunny/dts';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -578,4 +579,62 @@ test('Quality with a very low bitrate', async () => {
 	assert(track);
 	expect(await track.getCodec()).toBe('dts');
 	expect(await track.getNumberOfChannels()).toBe(6);
+});
+
+test('Encoding after a flush', async () => {
+	registerDtsEncoder();
+
+	const config: AudioEncoderConfig = {
+		codec: 'dtsc',
+		numberOfChannels: 2,
+		sampleRate: 48000,
+		bitrate: 768000,
+	};
+
+	const MatchingEncoder = customAudioEncoders.find(x => x.supports('dts', config));
+	assert(MatchingEncoder);
+	// @ts-expect-error Can't create an instance of an abstract class
+	const encoder = new MatchingEncoder() as CustomAudioEncoder;
+	// @ts-expect-error Readonly
+	encoder.codec = 'dts';
+	// @ts-expect-error Readonly
+	encoder.config = config;
+
+	const packets: EncodedPacket[] = [];
+	// @ts-expect-error Readonly
+	encoder.onPacket = (packet: EncodedPacket) => {
+		packets.push(packet);
+	};
+
+	await encoder.init();
+
+	let firstRunPacketCount = 0;
+	for (let run = 0; run < 2; run++) {
+		const data = new Float32Array(2 * 4800);
+		for (let i = 0; i < data.length; i++) {
+			data[i] = 0.5 * Math.sin(2 * Math.PI * 440 * (i >> 1) / 48000);
+		}
+
+		using sample = new AudioSample({
+			data,
+			format: 'f32',
+			numberOfChannels: 2,
+			sampleRate: 48000,
+			timestamp: 0,
+		});
+		await encoder.encode(sample);
+		await encoder.flush();
+
+		firstRunPacketCount ||= packets.length;
+	}
+
+	await encoder.close();
+
+	// The second run should play out exactly like the first one did
+	const firstRun = packets.slice(0, firstRunPacketCount);
+	const secondRun = packets.slice(firstRunPacketCount);
+	expect(firstRun.length).toBeGreaterThan(0);
+	expect(secondRun.map(x => x.timestamp)).toEqual(firstRun.map(x => x.timestamp));
+	expect(secondRun.map(x => x.duration)).toEqual(firstRun.map(x => x.duration));
+	expect(secondRun.every((x, i) => uint8ArraysAreEqual(x.data, firstRun[i]!.data))).toBe(true);
 });

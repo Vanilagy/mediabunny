@@ -1102,14 +1102,20 @@ The code is wrong, but no current caller or realistic input hits it.
   Fix: `writeAdtsFrameLength` throws for frames that don't fit, covering both muxers and the AAC encoder extension.
 ✅ MPEG-TS muxer: AUD TemporalId is always 0 (only matters with temporal scalability).
   Fix: the HEVC AUD takes its TemporalId from the access unit's first VCL NAL unit.
-- MPEG-TS muxer: `inputIsAnnexB` is set before parsing a (malformed) description.
-- MPEG-TS muxer: `finalize()` after a failed start throws a TypeError (cosmetic).
-- MPEG-TS demuxer: `maybeInsertReferencePacket` with index -1 (100 randomized initInput sessions stayed sorted).
-- MPEG-TS demuxer: a PUSI=0 first packet records a section end (unreachable after other fixes).
-- `setInt64` with negative fractions: no caller passes them.
-- `ilog` with negative input: no caller passes it.
-- `colorSpaceIsComplete` with `fullRange: null`: no producer emits it.
-- DTS encoder `flush()` leaves the encoder unusable: Mediabunny never encodes after a flush.
+✅ MPEG-TS muxer: `inputIsAnnexB` is set before parsing a (malformed) description.
+  Fix: it's set after the description is parsed, like `inputIsAdts`.
+✅ MPEG-TS muxer: `finalize()` after a failed start throws a TypeError (cosmetic).
+✅ MPEG-TS demuxer: `maybeInsertReferencePacket` with index -1 (100 randomized initInput sessions stayed sorted).
+  Fix: the next-entry order and distance checks also run when inserting at the front.
+✅ MPEG-TS demuxer: a PUSI=0 first packet records a section end (unreachable after other fixes).
+  Fix: replaced with an assertion, since every caller checks for PUSI=1 at that position first.
+✅ `setInt64` with negative fractions: no caller passes them.
+  Fix: the value is truncated first, so both halves round the same way.
+✅ `ilog` with negative input: no caller passes it.
+✅ `colorSpaceIsComplete` with `fullRange: null`: no producer emits it.
+✅ DTS encoder `flush()` leaves the encoder unusable: Mediabunny never encodes after a flush.
+  Fix: FFmpeg's DTS encoder has no delay, so the bridge's `flush_encoder` (which signaled end of stream and discarded
+  whatever came out) is removed; the silence padding in `flush()` stays. WASM rebuilt, README hash updated.
 - Output: `Promise.all` in start/finalize lets other sources keep running after one fails (every case was harmless).
 - Output: `start()` still starts sources if cancel arrives during `muxer.start()`.
 - Conversion: pumps call `source.close()` while canceled (the force-close always won).

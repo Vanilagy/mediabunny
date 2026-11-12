@@ -316,16 +316,17 @@ export class MpegTsMuxer extends Muxer {
 		if (trackData.inputIsAnnexB === null) {
 			// This is the first packet
 			const description = meta?.decoderConfig?.description;
-			trackData.inputIsAnnexB = !description;
 
-			if (!trackData.inputIsAnnexB) {
-				const bytes = toUint8Array(description!);
+			if (description) {
+				const bytes = toUint8Array(description);
 				if (codec === 'avc') {
 					trackData.avcDecoderConfig = deserializeAvcDecoderConfigurationRecord(bytes);
 				} else {
 					trackData.hevcDecoderConfig = deserializeHevcDecoderConfigurationRecord(bytes);
 				}
 			}
+
+			trackData.inputIsAnnexB = !description;
 		}
 
 		if (trackData.inputIsAnnexB) {

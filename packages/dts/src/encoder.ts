@@ -127,10 +127,9 @@ class DtsEncoder extends CustomAudioEncoder {
 			}
 		}
 
+		// FFmpeg's DTS encoder has no delay of its own, so there's nothing to flush out of it
 		await this.inFlightEncode;
 		this.inFlightEncode = null;
-
-		await sendCommand({ type: 'flush-encoder', data: { ctx: this.ctx } });
 
 		this.resetInternalState();
 	}

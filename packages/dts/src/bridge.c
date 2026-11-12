@@ -290,14 +290,6 @@ int encode_frame(EncoderContext *ctx, int64_t pts) {
 }
 
 EMSCRIPTEN_KEEPALIVE
-void flush_encoder(EncoderContext *ctx) {
-	avcodec_send_frame(ctx->codec_ctx, NULL);
-	while (avcodec_receive_packet(ctx->codec_ctx, ctx->packet) == 0) {
-		av_packet_unref(ctx->packet);
-	}
-}
-
-EMSCRIPTEN_KEEPALIVE
 uint8_t *get_encoded_data(EncoderContext *ctx) {
 	return ctx->packet->data;
 }

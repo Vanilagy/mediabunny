@@ -19,7 +19,7 @@ import {
 } from '../../src/custom-coder.js';
 import { registerFlacEncoder } from '@mediabunny/flac-encoder';
 import { NodeAvAudioDecoder } from '../../packages/server/src/audio-decoder.js';
-import { assert } from '../../src/misc.js';
+import { assert, uint8ArraysAreEqual } from '../../src/misc.js';
 
 const createSineWave = (sampleRate: number, channels: number, durationSeconds: number) => {
 	const totalFrames = sampleRate * durationSeconds;
@@ -181,7 +181,6 @@ test('FLAC encoding after a flush', async () => {
 		sampleRate: 48000,
 	};
 
-	// Mediabunny itself never encodes after a flush, so we drive the encoder directly
 	const MatchingEncoder = customAudioEncoders.find(x => x.supports('flac', config));
 	assert(MatchingEncoder);
 	// @ts-expect-error Can't create an instance of an abstract class
@@ -199,25 +198,29 @@ test('FLAC encoding after a flush', async () => {
 
 	await encoder.init();
 
-	for (const timestamp of [0, 1]) {
+	let firstRunPacketCount = 0;
+	for (let run = 0; run < 2; run++) {
 		using sample = new AudioSample({
 			data: createSineWave(48000, 1, 0.25),
 			format: 'f32',
 			numberOfChannels: 1,
 			sampleRate: 48000,
-			timestamp,
+			timestamp: 0,
 		});
 		await encoder.encode(sample);
 		await encoder.flush();
+
+		firstRunPacketCount ||= packets.length;
 	}
 
 	await encoder.close();
 
 	// The second run should come out exactly like the first one, rather than with libFLAC's default configuration
-	const firstRun = packets.filter(x => x.timestamp < 0.5);
-	const secondRun = packets.filter(x => x.timestamp >= 0.5);
+	const firstRun = packets.slice(0, firstRunPacketCount);
+	const secondRun = packets.slice(firstRunPacketCount);
 	expect(firstRun.length).toBeGreaterThan(0);
-	expect(secondRun.map(x => x.data)).toEqual(firstRun.map(x => x.data));
+	expect(secondRun.map(x => x.timestamp)).toEqual(firstRun.map(x => x.timestamp));
+	expect(secondRun.every((x, i) => uint8ArraysAreEqual(x.data, firstRun[i]!.data))).toBe(true);
 });
 
 test('Float input rounded to 24 bits', async () => {

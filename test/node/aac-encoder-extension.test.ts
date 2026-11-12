@@ -19,7 +19,7 @@ import {
 } from '../../src/custom-coder.js';
 import { registerAacEncoder } from '@mediabunny/aac-encoder';
 import { NodeAvAudioDecoder } from '../../packages/server/src/audio-decoder.js';
-import { assert, promiseWithResolvers, toUint8Array } from '../../src/misc.js';
+import { assert, promiseWithResolvers, toUint8Array, uint8ArraysAreEqual } from '../../src/misc.js';
 
 const createSineWave = (sampleRate: number, channels: number, durationSeconds: number) => {
 	const totalFrames = sampleRate * durationSeconds;
@@ -329,7 +329,6 @@ test('AAC encoding after a flush', async () => {
 		bitrate: 128000,
 	};
 
-	// Mediabunny itself never encodes after a flush, so we drive the encoder directly
 	const MatchingEncoder = customAudioEncoders.find(x => x.supports('aac', config));
 	assert(MatchingEncoder);
 	// @ts-expect-error Can't create an instance of an abstract class
@@ -347,7 +346,8 @@ test('AAC encoding after a flush', async () => {
 
 	await encoder.init();
 
-	for (const timestamp of [0, 1]) {
+	let firstRunPacketCount = 0;
+	for (let run = 0; run < 2; run++) {
 		const data = new Float32Array(4800);
 		for (let i = 0; i < data.length; i++) {
 			data[i] = 0.5 * Math.sin(2 * Math.PI * 440 * i / 48000);
@@ -358,21 +358,21 @@ test('AAC encoding after a flush', async () => {
 			format: 'f32',
 			numberOfChannels: 1,
 			sampleRate: 48000,
-			timestamp,
+			timestamp: 0,
 		});
 		await encoder.encode(sample);
 		await encoder.flush();
+
+		firstRunPacketCount ||= packets.length;
 	}
 
 	await encoder.close();
 
-	// The second run should play out exactly like the first one did, just a second later
-	const firstRun = packets.filter(x => x.timestamp < 0.5);
-	const secondRun = packets.filter(x => x.timestamp >= 0.5);
+	// The second run should play out exactly like the first one did
+	const firstRun = packets.slice(0, firstRunPacketCount);
+	const secondRun = packets.slice(firstRunPacketCount);
 	expect(firstRun.length).toBeGreaterThan(0);
-	expect(secondRun.map(x => Math.round(48000 * (x.timestamp - 1)))).toEqual(
-		firstRun.map(x => Math.round(48000 * x.timestamp)),
-	);
+	expect(secondRun.map(x => x.timestamp)).toEqual(firstRun.map(x => x.timestamp));
 	expect(secondRun.map(x => x.duration)).toEqual(firstRun.map(x => x.duration));
-	expect(secondRun.map(x => x.data)).toEqual(firstRun.map(x => x.data));
+	expect(secondRun.every((x, i) => uint8ArraysAreEqual(x.data, firstRun[i]!.data))).toBe(true);
 });

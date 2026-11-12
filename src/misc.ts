@@ -449,7 +449,7 @@ export const colorSpaceIsComplete = (
 		&& !!colorSpace.primaries
 		&& !!colorSpace.transfer
 		&& !!colorSpace.matrix
-		&& colorSpace.fullRange !== undefined
+		&& colorSpace.fullRange != null
 	);
 };
 
@@ -699,6 +699,8 @@ export const setInt24 = (view: DataView, byteOffset: number, value: number, litt
 };
 
 export const setInt64 = (view: DataView, byteOffset: number, value: number, littleEndian: boolean) => {
+	value = Math.trunc(value);
+
 	if (littleEndian) {
 		view.setUint32(byteOffset + 0, value, true);
 		view.setInt32(byteOffset + 4, Math.floor(value / 2 ** 32), true);
