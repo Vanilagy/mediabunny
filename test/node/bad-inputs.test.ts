@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { expect, test } from 'vitest';
 import {
+	ADTS,
 	ALL_FORMATS,
 	AudioSampleSink,
 	BufferSource,
@@ -1779,6 +1780,32 @@ test('ADTS: Frame with reserved sampling frequency index', async () => {
 test('ADTS: Bare frame header at the end of the file', async () => {
 	await expectGracefulRead(concat(...Array.from({ length: 5 }, () => adtsFrame(10)), adtsHeader(7)));
 	await expectGracefulRead(concat(adtsHeader(7), [0]));
+});
+
+test('ADTS: Junk before and between frames', async () => {
+	// Each junk holds a false sync that matches the stream, but no frame follows it
+	const frames = Array.from({ length: 10 }, (_, i) => adtsFrame(10 + i));
+	using input = new Input({
+		source: new BufferSource(concat(
+			zeros(3),
+			adtsHeader(50),
+			zeros(10),
+			...frames.slice(0, 5),
+			zeros(3),
+			adtsHeader(40),
+			zeros(5),
+			...frames.slice(5),
+		)),
+		formats: ALL_FORMATS,
+	});
+	expect(await input.getFormat()).toBe(ADTS);
+	const track = (await input.getPrimaryAudioTrack())!;
+
+	const sizes: number[] = [];
+	for await (const packet of new EncodedPacketSink(track).packets()) {
+		sizes.push(packet.byteLength);
+	}
+	expect(sizes).toEqual(frames.map(x => x.length));
 });
 
 test('WAV: With zero block alignment', async () => {

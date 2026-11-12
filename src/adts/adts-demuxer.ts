@@ -18,6 +18,7 @@ import {
 	ID3_V2_HEADER_SIZE,
 	parseId3V2Tag,
 	readId3V2Header,
+	skipId3V2Tags,
 } from '../id3';
 import { Input } from '../input';
 import { InputAudioTrackBacking } from '../input-track';
@@ -39,6 +40,7 @@ import {
 	MIN_ADTS_FRAME_HEADER_SIZE,
 	MAX_ADTS_FRAME_HEADER_SIZE,
 	readAdtsFrameHeader,
+	readConfirmedAdtsFrameHeader,
 } from './adts-reader';
 
 export const SAMPLES_PER_AAC_FRAME = 1024;
@@ -111,76 +113,68 @@ export class AdtsDemuxer extends Demuxer {
 	}
 
 	async advanceReader() {
-		while (true) {
+		let header: AdtsFrameHeader | null;
+
+		if (this.lastLoadedPos === 0) {
+			// Start at the first confirmed frame, not at a false sync word in junk before it
+			const startPos = await skipId3V2Tags(this.reader, 0);
+			header = await readConfirmedAdtsFrameHeader(this.reader, startPos, 4096, null);
+		} else {
+			// The next frame starts where the previous one ended
 			let slice = this.reader.requestSliceRange(
 				this.lastLoadedPos,
 				MIN_ADTS_FRAME_HEADER_SIZE,
 				MAX_ADTS_FRAME_HEADER_SIZE,
 			);
 			if (isThenable(slice)) slice = await slice;
-			if (!slice) {
-				this.lastSampleLoaded = true;
-				return;
-			}
+			header = slice && readAdtsFrameHeader(slice);
 
-			const header = readAdtsFrameHeader(slice);
 			if (!header) {
-				// ID3v2 tags sit not only at the start of the file but can also come in between frames (like timed
-				// metadata in HLS packed audio), so let's skip them
-				let id3Slice = this.reader.requestSlice(this.lastLoadedPos, ID3_V2_HEADER_SIZE);
-				if (isThenable(id3Slice)) id3Slice = await id3Slice;
-				if (!id3Slice) {
-					this.lastSampleLoaded = true;
-					return;
-				}
-
-				const id3V2Header = readId3V2Header(id3Slice);
-				if (!id3V2Header) {
-					this.lastSampleLoaded = true;
-					return;
-				}
-
-				this.lastLoadedPos = id3Slice.filePos + id3V2Header.size;
-				continue;
+				// Something else follows, like ID3v2 tags (timed metadata in HLS packed audio) or junk, so let's resync
+				// on the next confirmed frame of the stream
+				assert(this.firstFrameHeader);
+				const startPos = await skipId3V2Tags(this.reader, this.lastLoadedPos);
+				header = await readConfirmedAdtsFrameHeader(this.reader, startPos, 2 ** 16, this.firstFrameHeader);
 			}
+		}
 
-			if (this.reader.fileSize !== null && header.startPos + header.frameLength > this.reader.fileSize) {
-				// Frame doesn't fit in the rest of the file
-				this.lastSampleLoaded = true;
-				return;
-			}
-
-			if (!this.firstFrameHeader) {
-				this.firstFrameHeader = header;
-			}
-
-			const sampleRate = aacFrequencyTable[this.firstFrameHeader.samplingFrequencyIndex];
-			assert(sampleRate !== undefined);
-
-			if (header.samplingFrequencyIndex !== this.firstFrameHeader.samplingFrequencyIndex) {
-				// Since a track can only have one sample rate, the stream ends here
-				Logging._warn(
-					`The sample rate changes mid-stream (from ${sampleRate} Hz to`
-					+ ` ${aacFrequencyTable[header.samplingFrequencyIndex]} Hz), which isn't properly supported or`
-					+ ` handled by Mediabunny.`,
-				);
-				this.lastSampleLoaded = true;
-				return;
-			}
-
-			const sample: Sample = {
-				timestamp: this.nextTimestampInSamples / sampleRate,
-				duration: SAMPLES_PER_AAC_FRAME / sampleRate,
-				dataStart: header.startPos,
-				dataSize: header.frameLength,
-			};
-
-			this.loadedSamples.push(sample);
-			this.nextTimestampInSamples += SAMPLES_PER_AAC_FRAME;
-			this.lastLoadedPos = header.startPos + header.frameLength;
-
+		if (!header) {
+			this.lastSampleLoaded = true;
 			return;
 		}
+
+		if (this.reader.fileSize !== null && header.startPos + header.frameLength > this.reader.fileSize) {
+			// Frame doesn't fit in the rest of the file
+			this.lastSampleLoaded = true;
+			return;
+		}
+
+		this.firstFrameHeader ??= header;
+
+		const sampleRate = aacFrequencyTable[this.firstFrameHeader.samplingFrequencyIndex];
+		assert(sampleRate !== undefined);
+
+		if (header.samplingFrequencyIndex !== this.firstFrameHeader.samplingFrequencyIndex) {
+			// Since a track can only have one sample rate, the stream ends here
+			Logging._warn(
+				`The sample rate changes mid-stream (from ${sampleRate} Hz to`
+				+ ` ${aacFrequencyTable[header.samplingFrequencyIndex]} Hz), which isn't properly supported or`
+				+ ` handled by Mediabunny.`,
+			);
+			this.lastSampleLoaded = true;
+			return;
+		}
+
+		const sample: Sample = {
+			timestamp: this.nextTimestampInSamples / sampleRate,
+			duration: SAMPLES_PER_AAC_FRAME / sampleRate,
+			dataStart: header.startPos,
+			dataSize: header.frameLength,
+		};
+
+		this.loadedSamples.push(sample);
+		this.nextTimestampInSamples += SAMPLES_PER_AAC_FRAME;
+		this.lastLoadedPos = header.startPos + header.frameLength;
 	}
 
 	async getMimeType() {

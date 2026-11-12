@@ -8,7 +8,8 @@
 
 import { Bitstream } from '../../shared/bitstream';
 import { aacFrequencyTable } from '../../shared/aac-misc';
-import { FileSlice, readBytes, readU16Be } from '../reader';
+import { isThenable } from '../misc';
+import { FileSlice, readBytes, Reader, readU16Be, readU8 } from '../reader';
 
 export const MIN_ADTS_FRAME_HEADER_SIZE = 7;
 export const MAX_ADTS_FRAME_HEADER_SIZE = 9;
@@ -21,6 +22,57 @@ export type AdtsFrameHeader = {
 	numberOfAacFrames: number;
 	crcCheck: number | null;
 	startPos: number;
+};
+
+export const readConfirmedAdtsFrameHeader = async (
+	reader: Reader,
+	startPos: number,
+	searchLength: number,
+	ref: AdtsFrameHeader | null,
+) => {
+	const headersMatch = (a: AdtsFrameHeader, b: AdtsFrameHeader) => a.objectType === b.objectType
+		&& a.samplingFrequencyIndex === b.samplingFrequencyIndex
+		&& a.channelConfiguration === b.channelConfiguration;
+
+	let slice = reader.requestSliceRange(
+		startPos,
+		MIN_ADTS_FRAME_HEADER_SIZE,
+		searchLength + MAX_ADTS_FRAME_HEADER_SIZE,
+	);
+	if (isThenable(slice)) slice = await slice;
+	if (!slice) {
+		return null;
+	}
+
+	// A header is only confirmed by what follows it, since sync words show up in junk all the time
+	for (let pos = startPos; pos < Math.min(startPos + searchLength, slice.end); pos++) {
+		slice.filePos = pos;
+		if (readU8(slice) !== 0xff) {
+			continue;
+		}
+
+		slice.filePos = pos;
+		const header = readAdtsFrameHeader(slice);
+		if (!header || (ref && !headersMatch(header, ref))) {
+			continue;
+		}
+
+		const frameEndPos = pos + header.frameLength;
+		if (frameEndPos === reader.fileSize) {
+			// The frame ends the file
+			return header;
+		}
+
+		let nextSlice = reader.requestSliceRange(frameEndPos, MIN_ADTS_FRAME_HEADER_SIZE, MAX_ADTS_FRAME_HEADER_SIZE);
+		if (isThenable(nextSlice)) nextSlice = await nextSlice;
+
+		const nextHeader = nextSlice && readAdtsFrameHeader(nextSlice);
+		if (nextHeader && headersMatch(header, nextHeader)) {
+			return header;
+		}
+	}
+
+	return null;
 };
 
 export const readAdtsFrameHeader = (slice: FileSlice): AdtsFrameHeader | null => {

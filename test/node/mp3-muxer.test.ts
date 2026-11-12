@@ -133,6 +133,11 @@ test('False sync on a reserved sampling frequency', async () => {
 	await testFalseSync([0xff, 0xfb, 0x9c, 0x00]);
 });
 
+test('False sync on a valid header', async () => {
+	// Only the missing frame after it gives this one away
+	await testFalseSync([0xff, 0xfb, 0x94, 0x64]);
+});
+
 const testFalseSync = async (falseHeader: number[]) => {
 	const frameCount = 10;
 	using input = new Input({
@@ -153,6 +158,33 @@ const testFalseSync = async (falseHeader: number[]) => {
 	}
 	expect(packetCount).toBe(frameCount);
 };
+
+test('Junk between frames', async () => {
+	const frames = Array.from({ length: 10 }, (_, i) => {
+		const frame = createMp3Frame();
+		frame[4] = i;
+		return frame;
+	});
+
+	// The false sync matches the stream, but no frame follows it
+	using input = new Input({
+		source: new BufferSource(concat(
+			...frames.slice(0, 5),
+			new Uint8Array(3),
+			FRAME_HEADER,
+			new Uint8Array(100),
+			...frames.slice(5),
+		)),
+		formats: ALL_FORMATS,
+	});
+	const track = (await input.getPrimaryAudioTrack())!;
+
+	const frameIndices: number[] = [];
+	for await (const packet of new EncodedPacketSink(track).packets()) {
+		frameIndices.push(packet.data[4]!);
+	}
+	expect(frameIndices).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+});
 
 const createMp3Frame = () => {
 	const frame = new Uint8Array(FRAME_SIZE);

@@ -41,8 +41,9 @@ import {
 	parseId3V1Tag,
 	parseId3V2Tag,
 	readId3V2Header,
+	skipId3V2Tags,
 } from '../id3';
-import { readNextMp3FrameHeader } from './mp3-reader';
+import { readConfirmedMp3FrameHeader, readNextMp3FrameHeader } from './mp3-reader';
 import { Logging } from '../logging';
 import { readAscii, readBytes, Reader, readU16Be, readU32Be, readU32Le } from '../reader';
 
@@ -108,53 +109,49 @@ export class Mp3Demuxer extends Demuxer {
 	}
 
 	async advanceReader() {
+		let result: { header: Mp3FrameHeader; startPos: number } | null;
+
 		if (this.lastLoadedPos === 0) {
-			// Let's skip all ID3v2 tags at the start of the file
-			while (true) {
-				let slice = this.reader.requestSlice(this.lastLoadedPos, ID3_V2_HEADER_SIZE);
-				if (isThenable(slice)) slice = await slice;
+			// Start at the first confirmed frame, not at a false sync word in junk before it
+			const startPos = await skipId3V2Tags(this.reader, 0);
+			result = await readConfirmedMp3FrameHeader(this.reader, startPos, 4096, null);
+		} else {
+			// The next frame starts where the previous one ended (or a byte earlier, in case it was a byte too short)
+			result = await readNextMp3FrameHeader(
+				this.reader,
+				this.lastLoadedPos,
+				this.lastLoadedPos + 2,
+				this.firstFrameHeader,
+			);
 
-				if (!slice) {
-					this.lastSampleLoaded = true;
-					return;
-				}
+			if (!result) {
+				if (this.firstFrameHeader) {
+					// If that's because the frame there has a different sample rate, the stream ends here, since a
+					// track can only have one sample rate
+					let slice = this.reader.requestSlice(this.lastLoadedPos, MP3_FRAME_HEADER_SIZE + 1);
+					if (isThenable(slice)) slice = await slice;
 
-				const id3V2Header = readId3V2Header(slice);
-				if (!id3V2Header) {
-					break;
-				}
+					if (slice) {
+						for (let i = 0; i < 2; i++) {
+							slice.filePos = this.lastLoadedPos + i;
+							const { header } = readMp3FrameHeader(readU32Be(slice), null);
 
-				this.lastLoadedPos = slice.filePos + id3V2Header.size;
-			}
-		}
-
-		const result = await readNextMp3FrameHeader(
-			this.reader,
-			this.lastLoadedPos,
-			this.reader.fileSize,
-			this.firstFrameHeader,
-		);
-
-		if (this.firstFrameHeader && (!result || result.startPos > this.lastLoadedPos + 1)) {
-			// No matching frame follows where the previous one ended. If that's because the frame there has a different
-			// sample rate, the stream ends here, since a track can only have one sample rate.
-			let slice = this.reader.requestSlice(this.lastLoadedPos, MP3_FRAME_HEADER_SIZE + 1);
-			if (isThenable(slice)) slice = await slice;
-
-			if (slice) {
-				for (let i = 0; i < 2; i++) {
-					slice.filePos = this.lastLoadedPos + i;
-					const { header } = readMp3FrameHeader(readU32Be(slice), null);
-
-					if (header && header.sampleRate !== this.firstFrameHeader.sampleRate) {
-						Logging._warn(
-							`The sample rate changes mid-stream (from ${this.firstFrameHeader.sampleRate} Hz to`
-							+ ` ${header.sampleRate} Hz), which isn't properly supported or handled by Mediabunny.`,
-						);
-						this.lastSampleLoaded = true;
-						return;
+							if (header && header.sampleRate !== this.firstFrameHeader.sampleRate) {
+								Logging._warn(
+									`The sample rate changes mid-stream (from ${this.firstFrameHeader.sampleRate} Hz to`
+									+ ` ${header.sampleRate} Hz), which isn't properly supported or handled by`
+									+ ` Mediabunny.`,
+								);
+								this.lastSampleLoaded = true;
+								return;
+							}
+						}
 					}
 				}
+
+				// Something else follows, so let's resync on the next confirmed frame of the stream
+				const startPos = await skipId3V2Tags(this.reader, this.lastLoadedPos + 1);
+				result = await readConfirmedMp3FrameHeader(this.reader, startPos, 2 ** 16, this.firstFrameHeader);
 			}
 		}
 

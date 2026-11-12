@@ -21,8 +21,9 @@ import {
 	toDataView,
 	isRecordStringString,
 	parseIsoSuffix,
+	isThenable,
 } from './misc';
-import { FileSlice, readAscii, readBytes, readU32Be, readU8 } from './reader';
+import { FileSlice, readAscii, readBytes, Reader, readU32Be, readU8 } from './reader';
 import { Writer } from './writer';
 
 export type Id3V2Header = {
@@ -140,6 +141,25 @@ export const readId3V1String = (slice: FileSlice, length: number) => {
 	}
 
 	return str.trimEnd(); // String also may be padded with spaces
+};
+
+export const skipId3V2Tags = async (reader: Reader, startPos: number) => {
+	let currentPos = startPos;
+
+	while (true) {
+		let slice = reader.requestSlice(currentPos, ID3_V2_HEADER_SIZE);
+		if (isThenable(slice)) slice = await slice;
+		if (!slice) {
+			return currentPos;
+		}
+
+		const id3V2Header = readId3V2Header(slice);
+		if (!id3V2Header) {
+			return currentPos;
+		}
+
+		currentPos = slice.filePos + id3V2Header.size;
+	}
 };
 
 export const readId3V2Header = (slice: FileSlice): Id3V2Header | null => {

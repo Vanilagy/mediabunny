@@ -12,6 +12,8 @@
 - Added support for VBRI headers in MP3 files
 - Added support for AAC with a program config element (channel configuration 0) in ADTS and MPEG-TS
 - Added detection of ADTS and MP3 files holding just a single frame
+- Added support for ADTS files with junk before or between frames
+- Improved input format detection
 - Added support for ID3v2.2 `TXX` frames
 - Added support for `fLaC` in HLS `CODECS` attributes
 - Fixed MOV output writing sample rates of 65536 Hz and above as 0
@@ -128,6 +130,8 @@
 - The Xing frame of MP3 output now has the same bitrate as the first audio frame where possible, so that CBR files are constant bitrate throughout
 - MP3 muxer no longer writes a Xing frame for Layer I and II audio, where decoders would play it as audio
 - Fixed MP3 frame headers with a reserved MPEG version or sample rate index being accepted, causing false syncs
+- Fixed MP3 files starting with junk that resembles a frame header not being detected
+- Fixed junk between MP3 frames being read as frames
 - Fixed trailing ID3v1 and APEv2 tags counting toward the estimated duration of CBR MP3 files
 - Fixed the MP3 muxer hanging on `finalize()` after `start()` threw
 - ADTS muxer now throws for AAC configurations that ADTS can't represent instead of writing corrupt headers

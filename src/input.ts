@@ -289,17 +289,30 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 			this._reader = new Reader(this._rootSource);
 			this._emit('source', { source: this._rootSource, request: null, isRoot: true });
 
+			// The format whose data starts earliest wins, so that a format tolerating leading junk (like MP3) can't
+			// claim a file another format explains from its first byte. Ties go to the earlier format in the list.
+			let bestFormat: InputFormat | null = null;
+			let bestMatchPosition = Infinity;
 			for (const format of this._formats) {
-				const canRead = await format._canReadInput(this);
-				if (canRead) {
-					this._format = format;
-					this._onFormatDetermined?.(format);
+				const matchPosition = await format._getMatchPosition(this);
+				if (matchPosition !== null && matchPosition < bestMatchPosition) {
+					bestFormat = format;
+					bestMatchPosition = matchPosition;
 
-					return format._createDemuxer(this);
+					if (matchPosition === 0) {
+						break; // Nothing can beat this
+					}
 				}
 			}
 
-			throw new UnsupportedInputFormatError();
+			if (!bestFormat) {
+				throw new UnsupportedInputFormatError();
+			}
+
+			this._format = bestFormat;
+			this._onFormatDetermined?.(bestFormat);
+
+			return bestFormat._createDemuxer(this);
 		})();
 	}
 

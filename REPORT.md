@@ -1062,8 +1062,14 @@ The current behavior is arguably intended, or fixing it means picking between va
   sizing the ignored track's truns.
   Fix: the per-traf state moved from the track onto the demuxer, so every traf gets one and every trun is read,
   advancing the implicit base data offset; only tracks we care about store samples.
-- MP3 detection only tries the first sync candidate (~25% of mid-frame cuts undetected, measured before the
+✅ MP3 detection only tries the first sync candidate (~25% of mid-frame cuts undetected, measured before the
   reserved-header fix). Detection and demuxer both need a shared validated-first-frame search.
+  Fix: `readConfirmedMp3FrameHeader` / `readConfirmedAdtsFrameHeader` take the first frame in a window that's
+  followed by a matching frame or ends the stream. Detection and each demuxer's first frame search 4096 bytes past
+  any ID3v2 tags; when the next frame doesn't follow the previous one, the demuxers resync the same way over 65536
+  bytes, matching the stream's parameters. Since this made MP3 claim MPEG-TS files with small MP3 frames,
+  `_canReadInput` became `_getMatchPosition`, returning where the format's data starts; the earliest match wins,
+  ties go to list order.
 - Frameless decoder chunks other than hidden VP8/VP9 frames still shift every later timestamp in that decode
   session: AV1 temporal units without a shown frame, HEVC pictures with `pic_output_flag = 0`, and interlaced
   AVC field pairs stored as two packets.
