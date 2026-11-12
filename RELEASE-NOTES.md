@@ -45,6 +45,9 @@
 - Fixed MOV `hdlr` component names being written as C strings instead of counted strings
 - Fixed the sample entry of FLAC in MP4 always stating 16 bits per sample (making browsers reject 24-bit FLAC) and a sample rate of 0 above 65535 Hz (#630)
 - Fixed HE-AAC in Matroska reporting half its sample rate, as `OutputSamplingFrequency` was ignored
+- Fixed reading AAC from old Matroska files with legacy codec IDs like `A_AAC/MPEG4/LC/SBR` and no `CodecPrivate`
+- Fixed TrueHD in Matroska taking the container's key flags at face value, which could make seeking start without a restart point
+- Fixed Matroska audio in blocks with references being read as delta packets
 - Matroska muxer now writes AAC's core sample rate as `SamplingFrequency` and adds `OutputSamplingFrequency` when SBR doubles it
 - Matroska AV1 codec info is now read from the `av1C` in `CodecPrivate`, falling back to the first packet only when it holds no sequence header
 - Matroska demuxer now respects `DisplayUnit`, and a lone `DisplayWidth` or `DisplayHeight` is no longer dropped
@@ -277,6 +280,7 @@
 - Fixed several AVC SPS parsing issues
 - Fixed VP9 RGB key frames (profiles 1 and 3) being misparsed, giving wrong codec strings
 - Fixed some AV1 codec strings having a wrong level, which browsers could reject
+- Fixed VP9 codec strings with level 0 when the file doesn't state a level, which browsers reject
 - Fixed AV1 hidden key frames being determined as key packets
 - Fixed avcC records of some AVC profiles (like 4:4:4 from x264) losing their extension fields
 - Fixed hvcC records putting prefix and suffix SEI into one array
@@ -285,6 +289,7 @@
 - Fixed 7.1 E-AC-3 being reported as 7 channels
 - Fixed 7.1 E-AC-3 muxed into MP4 being declared as 5.1
 - Fixed the way E-AC-3 is read from and written to ISOBMFF
+- Fixed ambisonic Opus with a demixing matrix (channel mapping family 3) losing the matrix in ISOBMFF
 - Fixed DTS-ES and DTS 96/24 being declared as plain DTS when written to ISOBMFF
 - Fixed `canDecodeVideo()` and `canDecodeAudio()` returning cached results for configs that only differ in their description
 - Fixed `canDecodeVideo()` ignoring the given size when choosing the codec string's level

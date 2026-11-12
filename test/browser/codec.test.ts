@@ -275,6 +275,32 @@ test('AV1 level for a wide picture', () => {
 	})).toBe('av01.0.01M.08');
 });
 
+test('VP9 codec info with level 0', () => {
+	// FFmpeg writes this into vpcC when it can't work out the level
+	expect(extractVideoCodecString({
+		width: 1280,
+		height: 720,
+		codec: 'vp9',
+		codecDescription: null,
+		colorSpace: null,
+		avcType: null,
+		avcCodecInfo: null,
+		hevcCodecInfo: null,
+		vp9CodecInfo: {
+			profile: 0,
+			level: 0,
+			bitDepth: 8,
+			chromaSubsampling: 1,
+			videoFullRangeFlag: 0,
+			colourPrimaries: 1,
+			transferCharacteristics: 1,
+			matrixCoefficients: 1,
+		},
+		av1CodecInfo: null,
+		proresFormat: null,
+	})).toBe('vp09.00.31.08');
+});
+
 test('Video packets with hidden frames', () => {
 	// VP8 inter frame tags, with show_frame as the fifth bit
 	expect(countShownVideoFrames('vp8', new Uint8Array([0x11, 0x00, 0x00]))).toBe(1);

@@ -117,6 +117,41 @@ test('Output sampling frequency', async () => {
 	expect((await track.getDecoderConfig())!.sampleRate).toBe(48000);
 });
 
+test('Legacy AAC codec IDs without CodecPrivate', async () => {
+	using input = new Input({
+		source: new BufferSource(matroska(
+			info(),
+			tracks(
+				audioTrack(1, 'A_AAC/MPEG2/LC', element(
+					EBMLId.Audio,
+					uintElement(EBMLId.Channels, 2),
+					floatElement(EBMLId.SamplingFrequency, 44100),
+				)),
+				audioTrack(2, 'A_AAC/MPEG4/LC/SBR', element(
+					EBMLId.Audio,
+					uintElement(EBMLId.Channels, 2),
+					floatElement(EBMLId.SamplingFrequency, 24000),
+					floatElement(EBMLId.OutputSamplingFrequency, 48000),
+				)),
+			),
+			cluster(0, simpleBlock(1, 0, 0x80), simpleBlock(2, 0, 0x80)),
+		)),
+		formats: ALL_FORMATS,
+	});
+	const [lcTrack, sbrTrack] = await input.getAudioTracks();
+	assert(lcTrack && sbrTrack);
+
+	const lcConfig = await lcTrack.getDecoderConfig();
+	expect(lcConfig!.codec).toBe('mp4a.67');
+	expect([...new Uint8Array(lcConfig!.description as ArrayBuffer)]).toEqual([0x12, 0x10]);
+
+	// Explicitly signaled SBR at 48 kHz on top of an AAC-LC core at 24 kHz
+	const sbrConfig = await sbrTrack.getDecoderConfig();
+	expect(sbrConfig!.codec).toBe('mp4a.40.5');
+	expect(sbrConfig!.sampleRate).toBe(48000);
+	expect([...new Uint8Array(sbrConfig!.description as ArrayBuffer)]).toEqual([0x2b, 0x11, 0x88, 0x00]);
+});
+
 test('Segment title', async () => {
 	using input = new Input({
 		source: new BufferSource(matroska(

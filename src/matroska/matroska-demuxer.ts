@@ -8,6 +8,7 @@
 
 import { TrackType } from '../output';
 import {
+	determineAudioPacketType,
 	extractAv1CodecInfoFromPacket,
 	extractDtsFourCcFromPacket,
 	extractAvcDecoderConfigurationRecord,
@@ -87,6 +88,7 @@ import {
 	EBML_DATE_EPOCH,
 } from './ebml';
 import { buildMatroskaMimeType } from './matroska-misc';
+import { buildAacAudioSpecificConfig } from '../../shared/aac-misc';
 import { FileSlice, readBytes, Reader, readI16Be, readU8 } from '../reader';
 
 type Segment = {
@@ -765,10 +767,6 @@ export class MatroskaDemuxer extends Demuxer {
 				const currentEntry = trackData.presentationTimestamps[i]!;
 				const currentBlock = trackData.blocks[currentEntry.blockIndex]!;
 
-				if (trackData.firstKeyFrameTimestamp === null && currentBlock.isKeyFrame) {
-					trackData.firstKeyFrameTimestamp = currentBlock.timestamp;
-				}
-
 				if (i < trackData.presentationTimestamps.length - 1) {
 					// Update block durations based on presentation order
 					const nextEntry = trackData.presentationTimestamps[i + 1]!;
@@ -794,6 +792,25 @@ export class MatroskaDemuxer extends Demuxer {
 				trackData.presentationTimestamps = trackData.blocks
 					.map((block, i) => ({ timestamp: block.timestamp, blockIndex: i }))
 					.sort((a, b) => a.timestamp - b.timestamp);
+			}
+
+			if (track.info?.type === 'audio' && track.info.codec) {
+				// The container's key flags can't be trusted for audio: some files don't mark their packets as key
+				// packets (I'm looking at you, Firefox, https://github.com/Vanilagy/mediabunny/issues/192), and laced
+				// frames all inherit their block's flag. So the frames decide themselves (unless they still need to
+				// be decoded).
+				const hasDeltaPackets = AUDIO_CODECS_WITH_DELTA_PACKETS.includes(track.info.codec);
+				for (const block of trackData.blocks) {
+					if (block.decoded || !hasDeltaPackets) {
+						block.isKeyFrame = determineAudioPacketType(track.info.codec, block.data) === 'key';
+					}
+				}
+			}
+
+			const firstKeyEntry = trackData.presentationTimestamps
+				.find(x => trackData.blocks[x.blockIndex]!.isKeyFrame);
+			if (firstKeyEntry) {
+				trackData.firstKeyFrameTimestamp = firstKeyEntry.timestamp;
 			}
 
 			const firstBlock = trackData.blocks[trackData.presentationTimestamps[0]!.blockIndex]!;
@@ -1301,6 +1318,30 @@ export class MatroskaDemuxer extends Demuxer {
 								objectType: null,
 							};
 							this.currentTrack.info.codecDescription = this.currentTrack.codecPrivate;
+
+							if (
+								!this.currentTrack.codecPrivate
+								&& this.currentTrack.codecId !== CODEC_STRING_MAP.aac
+							) {
+								// Legacy codec IDs like A_AAC/MPEG4/LC/SBR name the profile instead of a CodecPrivate
+								const profile = this.currentTrack.codecId.split('/')[2] ?? '';
+								const objectType = ['MAIN', 'LC', 'SSR', 'LTP'].indexOf(profile) + 1;
+								if (objectType === 0) {
+									throw new Error(`Unknown Matroska AAC codec ID '${this.currentTrack.codecId}'.`);
+								}
+
+								const usesSbr = this.currentTrack.codecId.endsWith('/SBR');
+								if (usesSbr && this.currentTrack.info.outputSampleRate === null) {
+									this.currentTrack.info.sampleRate *= 2;
+								}
+
+								this.currentTrack.info.codecDescription = buildAacAudioSpecificConfig({
+									objectType: usesSbr ? 5 : objectType,
+									outputSampleRate: this.currentTrack.info.sampleRate,
+									outputNumberOfChannels: this.currentTrack.info.numberOfChannels,
+									programConfigElement: null,
+								});
+							}
 						} else if (this.currentTrack.codecId === CODEC_STRING_MAP.mp3) {
 							this.currentTrack.info.codec = 'mp3';
 						} else if (codecIdWithoutSuffix === CODEC_STRING_MAP.opus) {
@@ -1772,19 +1813,7 @@ export class MatroskaDemuxer extends Demuxer {
 				const flags = readU8(blockSlice);
 				const lacing = (flags >> 1) & 0x3 as BlockLacing; // If the block is laced, we'll expand it later
 
-				let isKeyFrame = !!(flags & 0x80);
-				if (
-					trackData.track.info?.type === 'audio'
-					&& trackData.track.info.codec
-					&& !AUDIO_CODECS_WITH_DELTA_PACKETS.includes(trackData.track.info.codec)
-				) {
-					// Some files don't mark their audio packets as key packets (I'm looking at you, Firefox). But, we
-					// can fix this in most cases: if we recognize the codec of the track and it has no delta packets,
-					// then we know every packet is necessarily a key packet, no matter what the container says.
-					// https://github.com/Vanilagy/mediabunny/issues/192
-					isKeyFrame = true;
-				}
-
+				const isKeyFrame = !!(flags & 0x80);
 				const blockData = readBytes(blockSlice, blockSlice.remainingLength);
 				const hasDecodingInstructions = trackData.track.decodingInstructions.length > 0;
 

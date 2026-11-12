@@ -53,6 +53,38 @@ test('Matroska muxing and demuxing', async () => {
 	expectPacketsToMatch(newPackets, packets, 1 / 1000);
 });
 
+test('Matroska blocks all flagged as key', async () => {
+	using originalInput = new Input({
+		source: new FilePathSource(TRUEHD_FILE),
+		formats: ALL_FORMATS,
+	});
+	const originalTrack = await originalInput.getPrimaryAudioTrack();
+	assert(originalTrack);
+	const decoderConfig = await originalTrack.getDecoderConfig();
+	assert(decoderConfig);
+
+	const output = new Output({
+		format: new MkvOutputFormat(),
+		target: new BufferTarget(),
+	});
+	const source = new EncodedAudioPacketSource('truehd');
+	output.addAudioTrack(source);
+	await output.start();
+
+	for await (const packet of new EncodedPacketSink(originalTrack).packets()) {
+		await source.add(packet.clone({ type: 'key' }), { decoderConfig });
+	}
+	await output.finalize();
+	assert(output.target.buffer);
+
+	// The key packets should still be just the access units with a major sync
+	using input = new Input({
+		source: new BufferSource(output.target.buffer),
+		formats: ALL_FORMATS,
+	});
+	await expectTrueHdTrack(input);
+});
+
 test('Trimmed copy includes the media at the start', async () => {
 	using input = new Input({
 		source: new FilePathSource(TRUEHD_FILE),

@@ -539,23 +539,24 @@ export const extractVideoCodecString = (trackInfo: {
 	} else if (codec === 'vp8') {
 		return 'vp8'; // Easy, this one
 	} else if (codec === 'vp9') {
-		if (!vp9CodecInfo) {
-			// Calculate level based on dimensions
-			const pictureSize = trackInfo.width * trackInfo.height;
-			let level = last(VP9_LEVEL_TABLE)!.level; // Default to highest level
-			for (const entry of VP9_LEVEL_TABLE) {
-				if (pictureSize <= entry.maxPictureSize) {
-					level = entry.level;
-					break;
-				}
+		// Calculate level based on dimensions
+		const pictureSize = trackInfo.width * trackInfo.height;
+		let levelFromSize = last(VP9_LEVEL_TABLE)!.level; // Default to highest level
+		for (const entry of VP9_LEVEL_TABLE) {
+			if (pictureSize <= entry.maxPictureSize) {
+				levelFromSize = entry.level;
+				break;
 			}
+		}
 
+		if (!vp9CodecInfo) {
 			// We don't really know better, so let's return a general-purpose, common codec string and hope for the best
-			return `vp09.00.${level.toString().padStart(2, '0')}.08`;
+			return `vp09.00.${levelFromSize.toString().padStart(2, '0')}.08`;
 		}
 
 		const profile = vp9CodecInfo.profile.toString().padStart(2, '0');
-		const level = vp9CodecInfo.level.toString().padStart(2, '0');
+		// Some writers write 0 for unknown
+		const level = (vp9CodecInfo.level === 0 ? levelFromSize : vp9CodecInfo.level).toString().padStart(2, '0');
 		const bitDepth = vp9CodecInfo.bitDepth.toString().padStart(2, '0');
 		const chromaSubsampling = vp9CodecInfo.chromaSubsampling.toString().padStart(2, '0');
 		const colourPrimaries = vp9CodecInfo.colourPrimaries.toString().padStart(2, '0');

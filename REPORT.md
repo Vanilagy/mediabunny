@@ -1192,12 +1192,20 @@ Specific real-world files we couldn't produce:
   Fix: `determineVideoPacketType` also requires `show_frame = 1`, as AV1-ISOBMFF requires for sync samples.
 ✅ DTS-ES / 96/24 get a wrong `ddts` StreamConstruction (FFmpeg can't encode such streams).
   Fix: the core header's EXT_AUDIO_ID and EXT_AUDIO are parsed, and XCh, XXCh and X96 map to 2, 3 and 4.
-- Blu-ray "AC-3 core + E-AC-3 dependent" 7.1 returns null from the E-AC-3 parser.
-- PAFF (field-coded) H.264 gives the second field its own packet (x264 only does MBAFF).
-- Legacy Matroska `A_AAC/*` codec IDs without CodecPrivate throw (pre-2008 mkvmerge).
-- Matroska laced TrueHD: laced frames all inherit the keyframe flag.
-- Opus channel mapping family 3 (projection) truncates the demixing matrix.
-- vpcC level 0 is copied into the codec string, which Chrome rejects (FFmpeg only writes it in degenerate cases).
+✅ Blu-ray "AC-3 core + E-AC-3 dependent" 7.1 returns null from the E-AC-3 parser.
+  Not fixed: too niche (also affects MPEG-TS framing and splitEac3AudioFrames; no encoder produces it).
+✅ PAFF (field-coded) H.264 gives the second field its own packet (x264 only does MBAFF).
+✅ Legacy Matroska `A_AAC/*` codec IDs without CodecPrivate throw (pre-2008 mkvmerge).
+  Fix: like FFmpeg, the AudioSpecificConfig is built from the profile in the codec ID and the Audio element
+  (explicit SBR signaling for `/SBR`, doubling the sample rate if `OutputSamplingFrequency` is missing).
+✅ Matroska laced TrueHD: laced frames all inherit the keyframe flag.
+  Fix: like FFmpeg, audio key flags come from the frames themselves via `determineAudioPacketType`, laced or not,
+  replacing the SimpleBlock-only Firefox override (so BlockGroup audio is covered too). TrueHD frames that are still
+  content-encoded keep the container's flag. The first key frame timestamp is now computed after that.
+✅ Opus channel mapping family 3 (projection) truncates the demixing matrix.
+  Fix: `dOps` reading and writing copy everything after the mapping family instead of `2 + channels` bytes.
+✅ vpcC level 0 is copied into the codec string, which Chrome rejects (FFmpeg only writes it in degenerate cases).
+  Fix: `extractVideoCodecString` replaces level 0 with the level derived from the dimensions.
 
 Huge files or allocations:
 

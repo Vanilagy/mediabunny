@@ -1638,3 +1638,38 @@ test('MP3 in MOV', async () => {
 	expect(packets.length).toBeGreaterThan(0);
 	expect(readPackets.map(x => x.data)).toEqual(packets.map(x => x.data));
 });
+
+test('Opus with a demixing matrix', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+	const source = new EncodedAudioPacketSource('opus');
+	output.addAudioTrack(source);
+	await output.start();
+
+	const description = new Uint8Array([
+		...[0x4f, 0x70, 0x75, 0x73, 0x48, 0x65, 0x61, 0x64], // 'OpusHead'
+		1, 4, 0x38, 0x01, 0x80, 0xbb, 0x00, 0x00, 0x00, 0x00, 3, 2, 2,
+		...Array.from({ length: 32 }, (_, i) => i + 1),
+	]);
+	await source.add(new EncodedPacket(new Uint8Array([0xfc, 0xff, 0xfe]), 'key', 0, 0.02), {
+		decoderConfig: {
+			codec: 'opus',
+			numberOfChannels: 4,
+			sampleRate: 48000,
+			description,
+		},
+	});
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+	const decoderConfig = await track.getDecoderConfig();
+	assert(decoderConfig);
+	expect([...new Uint8Array(decoderConfig.description as ArrayBuffer)]).toEqual([...description]);
+});

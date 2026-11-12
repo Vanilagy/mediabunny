@@ -1900,12 +1900,10 @@ export class IsobmffDemuxer extends Demuxer {
 				const outputGain = readI16Be(slice);
 				const channelMappingFamily = readU8(slice);
 
-				let channelMappingTable: Uint8Array;
-				if (channelMappingFamily !== 0) {
-					channelMappingTable = readBytes(slice, 2 + outputChannelCount);
-				} else {
-					channelMappingTable = new Uint8Array(0);
-				}
+				// Taking all of the rest also keeps the demixing matrix of family 3, which replaces the channel mapping
+				const channelMappingTable = channelMappingFamily !== 0
+					? readBytes(slice, boxInfo.contentSize - 11)
+					: new Uint8Array(0);
 
 				// https://datatracker.ietf.org/doc/html/draft-ietf-codec-oggopus-06
 				const description = new Uint8Array(8 + 1 + 1 + 2 + 4 + 2 + 1 + channelMappingTable.byteLength);

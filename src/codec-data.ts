@@ -2387,7 +2387,7 @@ export const parseOpusIdentificationHeader = (bytes: Uint8Array) => {
 
 	let channelMappingTable: Uint8Array | null = null;
 	if (channelMappingFamily) {
-		channelMappingTable = bytes.subarray(19, 19 + 2 + outputChannelCount);
+		channelMappingTable = bytes.subarray(19); // Family 3 has a demixing matrix in place of the channel mapping
 	}
 
 	return {
