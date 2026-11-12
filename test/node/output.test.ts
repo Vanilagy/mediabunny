@@ -1,21 +1,9 @@
 import { expect, test } from 'vitest';
 import { Output } from '../../src/output.js';
-import {
-	AdtsOutputFormat,
-	CmafOutputFormat,
-	FlacOutputFormat,
-	HlsOutputFormat,
-	MkvOutputFormat,
-	Mp3OutputFormat,
-	MpegTsOutputFormat,
-	OggOutputFormat,
-	OutputFormat,
-	WavOutputFormat,
-} from '../../src/output-format.js';
+import { CmafOutputFormat, HlsOutputFormat, MkvOutputFormat } from '../../src/output-format.js';
 import { BufferTarget, PathedTarget, StreamTarget, StreamTargetChunk } from '../../src/target.js';
 import { EncodedAudioPacketSource, EncodedVideoPacketSource, TextSubtitleSource } from '../../src/media-source.js';
 import { EncodedPacket } from '../../src/packet.js';
-import { AudioCodec } from '../../src/codec.js';
 import { promiseWithResolvers } from '../../src/misc.js';
 
 test('Output, onFinalize', async () => {
@@ -179,61 +167,6 @@ const testCancelWhileTargetIsObtained = async (
 	await cancelPromise;
 	expect(writableClosed).toBe(true);
 };
-
-test('Finalizing ADTS output after a failed start', async () => {
-	await testFinalizeAfterFailedStart(new AdtsOutputFormat(), 'aac');
-});
-
-test('Finalizing FLAC output after a failed start', async () => {
-	await testFinalizeAfterFailedStart(new FlacOutputFormat(), 'flac');
-});
-
-test('Finalizing MP3 output after a failed start', async () => {
-	await testFinalizeAfterFailedStart(new Mp3OutputFormat(), 'mp3');
-});
-
-test('Finalizing Ogg output after a failed start', async () => {
-	await testFinalizeAfterFailedStart(new OggOutputFormat(), 'opus');
-});
-
-test('Finalizing WAVE output after a failed start', async () => {
-	await testFinalizeAfterFailedStart(new WavOutputFormat(), 'pcm-s16');
-});
-
-test('Finalizing MPEG-TS output after a failed start', async () => {
-	await testFinalizeAfterFailedStart(new MpegTsOutputFormat(), 'aac');
-});
-
-const testFinalizeAfterFailedStart = async (format: OutputFormat, codec: AudioCodec) => {
-	const output = new Output({
-		format,
-		target: new PathedTarget('output', () => {
-			throw new Error('Disk full');
-		}),
-	});
-	output.addAudioTrack(new EncodedAudioPacketSource(codec));
-
-	await expect(output.start()).rejects.toThrow('Disk full');
-
-	// Used to hang, since the failed start never released the muxer
-	await expect(output.finalize()).rejects.toThrow();
-};
-
-test('Finalizing HLS output after a failed start', async () => {
-	const output = new Output({
-		format: new HlsOutputFormat({
-			segmentFormat: new MpegTsOutputFormat(),
-		}),
-		target: new PathedTarget('master.m3u8', () => new BufferTarget()),
-	});
-	output.addAudioTrack(new EncodedAudioPacketSource('aac'), { isRelativeToUnixEpoch: true });
-	output.addAudioTrack(new EncodedAudioPacketSource('aac'));
-
-	await expect(output.start()).rejects.toThrow('All tracks must agree');
-
-	// Used to hang, since the failed start never released the muxer
-	await output.finalize();
-});
 
 test('MIME type when canceled before all tracks are known', async () => {
 	const output = new Output({

@@ -114,7 +114,6 @@
 - Fixed FLAC `getPacket()` sometimes returning the previous packet due to floating point error
 - Fixed broken FLAC PICTURE blocks for MIME types or descriptions with non-ASCII characters
 - Fixed single-frame FLAC output having a minimum block size of 0, which FFmpeg rejects
-- Fixed the FLAC muxer hanging on `finalize()` after `start()` threw
 - Fixed missing validation for `FlacOutputFormatOptions.onFrame`
 - Fixed reading WAVE files whose header overstates the data size from unsized sources, such as FFmpeg's pipe output
 - Fixed WAVE files with a placeholder data size reporting a huge duration from metadata
@@ -126,7 +125,6 @@
 - Fixed the WAVE muxer not padding odd-sized data chunks
 - WAVE muxer now writes `WAVE_FORMAT_EXTENSIBLE` with a channel mask for more than two channels and for integer PCM above 16 bits
 - WAVE muxer now writes a `fact` chunk for float, A-law and mu-law audio, except in append-only mode
-- Fixed the WAVE muxer hanging on `finalize()` after `start()` threw
 - Fixed the Xing/Info frame count of MP3 output including the Xing frame itself, making every file one frame too long
 - Fixed the Xing frame of MP3 output claiming a CRC it didn't have
 - The Xing frame of MP3 output now has the same bitrate as the first audio frame where possible, so that CBR files are constant bitrate throughout
@@ -135,11 +133,9 @@
 - Fixed MP3 files starting with junk that resembles a frame header not being detected
 - Fixed junk between MP3 frames being read as frames
 - Fixed trailing ID3v1 and APEv2 tags counting toward the estimated duration of CBR MP3 files
-- Fixed the MP3 muxer hanging on `finalize()` after `start()` threw
 - ADTS muxer now throws for AAC configurations and frames that ADTS can't represent instead of writing corrupt headers
 - Fixed ADTS reading stopping at ID3v2 tags between frames
 - ADTS and MP3 streams now end with a warning where the sample rate changes, since a track can only have one sample rate
-- Fixed the ADTS muxer hanging on `finalize()` after `start()` threw
 - ID3v2 `COMM` frames with a description (like iTunNORM) are no longer read as the comment
 - Fixed ID3v2.2 and ID3v2.3 tags with whole-tag unsynchronisation being misread (#631)
 - Fixed ID3v2.4 tags with non-synchsafe frame sizes (as written by iTunes) being misread
@@ -190,7 +186,6 @@
 - Fixed `FORCED=YES` being written for HLS audio and video renditions
 - Fixed floating point error sometimes making the HLS target duration one too high
 - Fixed the HLS muxer throwing when all tracks of a playlist are closed at once (#633)
-- Fixed the HLS muxer hanging on `finalize()` after `start()` threw
 - Fixed `HlsOutputFormatOptions` accepting NaN for `targetDuration` and `maxLiveSegmentCount`
 - HLS output format no longer lists WebVTT as supported, as it can't write subtitles yet
 - Fixed HLS errors for unsupported audio codecs with delta packets (such as TrueHD) suggesting different segment formats, which can't help
@@ -223,6 +218,7 @@
 - Canceling an output now also closes the streams of `StreamTarget`s that were never started, which leaked file handles for `FilePathTarget`
 - Fixed `Output.cancel()` failing and leaving targets open when a source or target stream had errored
 - Fixed `Output.cancel()` during finalization resolving before the resources were released
+- A failed `Output.start()` now cancels the output and releases its resources, like a failed `finalize()` does
 - Fixed targets requested during cancellation being written to after being closed, or never being closed
 - Fixed `Output.getMimeType()` never settling after the output was canceled
 - Fixed unhandled promise rejections from `Output.target` with a failing async `PathedTarget` callback and from closing discarded targets

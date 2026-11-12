@@ -954,12 +954,17 @@ export class Output<
 			const releasePromise = this._mutex.acquire();
 
 			try {
-				await this._muxer.start();
+				try {
+					await this._muxer.start();
 
-				const promises = this.tracks.map(track => track.source._start());
-				await Promise.all(promises);
-			} finally {
-				(await releasePromise)();
+					const promises = this.tracks.map(track => track.source._start());
+					await Promise.all(promises);
+				} finally {
+					(await releasePromise)();
+				}
+			} catch (error) {
+				await this.cancel();
+				throw error;
 			}
 		})();
 	}
