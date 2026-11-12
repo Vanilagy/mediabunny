@@ -389,8 +389,9 @@ test('PCM audio, silence padding', async () => {
 
 	const meta = { decoderConfig: { codec: 'pcm-s16', numberOfChannels: 2, sampleRate: 48000 } };
 
+	// A gap of several seconds, which gets padded a second at a time
 	await source.add(new EncodedPacket(new Uint8Array(1024), 'key', 0, 1024 / 2 / 2 / 48000), meta);
-	await source.add(new EncodedPacket(new Uint8Array(1024), 'key', 1, 1024 / 2 / 2 / 48000), meta);
+	await source.add(new EncodedPacket(new Uint8Array(1024), 'key', 2.5, 1024 / 2 / 2 / 48000), meta);
 
 	await output.finalize();
 
@@ -404,7 +405,7 @@ test('PCM audio, silence padding', async () => {
 	expect(await audioTrack.getCodec()).toBe('pcm-s16');
 	const numChannels = await audioTrack.getNumberOfChannels();
 
-	const expectedFrameCount = 48000 + 256;
+	const expectedFrameCount = 2.5 * 48000 + 256;
 	const sink = new EncodedPacketSink(audioTrack);
 	let frameCount = 0;
 

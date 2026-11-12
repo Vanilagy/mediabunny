@@ -2294,23 +2294,30 @@ class AudioEncoderWrapper {
 					const sampleDiff = startSampleIndex - this.lastEndSampleIndex;
 
 					if (sampleDiff >= 64) {
-						// The gap is big enough, let's add a correction sample
-						const bytesPerSample = getBytesPerSample(audioSample.format);
-						const data = new Uint8Array(bytesPerSample * sampleDiff * audioSample.numberOfChannels);
+						// The gap is big enough, let's add correction samples, at most a second each so long gaps
+						// don't need huge allocations
+						const bytesPerFrame = getBytesPerSample(audioSample.format) * audioSample.numberOfChannels;
+						const silence = new Uint8Array(bytesPerFrame * Math.min(sampleDiff, audioSample.sampleRate));
 						if (audioSample.format === 'u8' || audioSample.format === 'u8-planar') {
-							data.fill(2 ** 7); // Fill it with the silent value
+							silence.fill(2 ** 7); // Fill it with the silent value
 						}
 
-						const fillSample = new AudioSample({
-							data,
-							format: audioSample.format,
-							sampleRate: audioSample.sampleRate,
-							numberOfChannels: audioSample.numberOfChannels,
-							numberOfFrames: sampleDiff,
-							timestamp: this.lastEndSampleIndex / audioSample.sampleRate,
-						});
+						let remainingFrames = sampleDiff;
+						while (remainingFrames > 0) {
+							const frameCount = Math.min(remainingFrames, audioSample.sampleRate);
+							const fillSample = new AudioSample({
+								data: silence.subarray(0, bytesPerFrame * frameCount),
+								_doNotCopy: true,
+								format: audioSample.format,
+								sampleRate: audioSample.sampleRate,
+								numberOfChannels: audioSample.numberOfChannels,
+								numberOfFrames: frameCount,
+								timestamp: this.lastEndSampleIndex / audioSample.sampleRate,
+							});
 
-						await this.encodeSample(fillSample, true); // Recursive call
+							await this.encodeSample(fillSample, true); // Recursive call, advances lastEndSampleIndex
+							remainingFrames -= frameCount;
+						}
 					}
 
 					this.lastEndSampleIndex += audioSample.numberOfFrames;

@@ -2725,6 +2725,7 @@ class PcmAudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 			sampleRate,
 			numberOfFrames,
 			timestamp: roundToDivisor(preciseTimestamp, sampleRate),
+			_doNotCopy: true,
 		});
 
 		this.onSample(audioSample);

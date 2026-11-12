@@ -2424,28 +2424,33 @@ export class Conversion {
 					}
 
 					if (paddingLengthInSamples > 0) {
-						// Add one padding sample at the beginning. Its parameters come from the decoded sample rather
-						// than the track metadata, since these can differ (think implicitly signaled HE-AAC).
-						const bytesPerSample = getBytesPerSample(sample.format);
-						const data = new Uint8Array(
-							bytesPerSample * paddingLengthInSamples * finalSample.numberOfChannels,
+						// Add padding samples at the beginning, at most a second each so long paddings don't need huge
+						// allocations. Their parameters come from the decoded sample rather than the track metadata,
+						// since these can differ (think implicitly signaled HE-AAC).
+						const bytesPerFrame = getBytesPerSample(sample.format) * finalSample.numberOfChannels;
+						const silence = new Uint8Array(
+							bytesPerFrame * Math.min(paddingLengthInSamples, finalSample.sampleRate),
 						);
 						if (sample.format === 'u8' || sample.format === 'u8-planar') {
-							data.fill(2 ** 7); // Fill it with the silent value
+							silence.fill(2 ** 7); // Fill it with the silent value
 						}
 
-						using silentSample = new AudioSample({
-							data,
-							// Use the same format the decoder is spitting out. This avoids feeding changing sample
-							// formats to the audio encoder.
-							format: sample.format,
-							numberOfChannels: finalSample.numberOfChannels,
-							sampleRate: finalSample.sampleRate,
-							timestamp: 0,
-						});
-						await this._registerAudioSample(
-							pump, silentSample, source, outputTrackId, () => lastSampleTimestamp,
-						);
+						for (let offset = 0; offset < paddingLengthInSamples; offset += finalSample.sampleRate) {
+							const frameCount = Math.min(paddingLengthInSamples - offset, finalSample.sampleRate);
+							using silentSample = new AudioSample({
+								data: silence.subarray(0, bytesPerFrame * frameCount),
+								_doNotCopy: true,
+								// Use the same format the decoder is spitting out. This avoids feeding changing sample
+								// formats to the audio encoder.
+								format: sample.format,
+								numberOfChannels: finalSample.numberOfChannels,
+								sampleRate: finalSample.sampleRate,
+								timestamp: offset / finalSample.sampleRate,
+							});
+							await this._registerAudioSample(
+								pump, silentSample, source, outputTrackId, () => lastSampleTimestamp,
+							);
+						}
 
 						paddingLengthInSamples = 0;
 					}

@@ -31,6 +31,12 @@ test('AudioSample creation from bytes', async () => {
 		timestamp: 0,
 	});
 
+	// The data is copied, so later changes to the bytes don't affect the sample
+	bytes.fill(1);
+	const out = new Uint8Array(1024);
+	sample.copyTo(out, { planeIndex: 0 });
+	expect(out.every(x => x === 0)).toBe(true);
+
 	sample.close();
 });
 

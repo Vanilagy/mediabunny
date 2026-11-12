@@ -2544,6 +2544,9 @@ export type AudioSampleInit = {
 	sampleRate: number;
 	/** The presentation timestamp of the sample in seconds. */
 	timestamp: number;
+
+	/** @internal */
+	_doNotCopy?: boolean;
 };
 
 /**
@@ -2712,7 +2715,9 @@ export class AudioSample implements Disposable {
 				throw new TypeError('Invalid AudioDataInit: insufficient data size.');
 			}
 
-			this._data = dataBuffer;
+			this._data = init._doNotCopy
+				? dataBuffer
+				: dataBuffer.slice(); // Copy it
 		}
 
 		finalizationRegistry?.register(this, { type: 'audio', data: this._data }, this);
@@ -3002,6 +3007,9 @@ export class AudioSample implements Disposable {
 				numberOfChannels: this.numberOfChannels,
 				timestamp: this.timestamp,
 				data: this._data,
+
+				// It's already been copied, if we copy it again we make the clone unnecessarily expensive
+				_doNotCopy: true,
 			});
 		}
 	}
@@ -3071,6 +3079,7 @@ export class AudioSample implements Disposable {
 			sampleRate: this.sampleRate,
 			numberOfChannels: this.numberOfChannels,
 			timestamp: this.timestamp + startFrame / this.sampleRate,
+			_doNotCopy: true,
 		});
 	}
 
@@ -3239,6 +3248,7 @@ export class AudioSample implements Disposable {
 				numberOfChannels,
 				timestamp: timestamp + currentRelativeFrame / sampleRate,
 				data: chunkData,
+				_doNotCopy: true,
 			});
 
 			currentRelativeFrame += framesToCopy;
@@ -3287,6 +3297,7 @@ export class AudioSample implements Disposable {
 				numberOfChannels,
 				timestamp: timestamp + currentRelativeFrame / sampleRate,
 				data: chunkData,
+				_doNotCopy: true,
 			});
 
 			result.push(audioSample);
@@ -3507,5 +3518,6 @@ export const audioSampleToInterleavedFormat = (sample: AudioSample, format: 'u8'
 		sampleRate: sample.sampleRate,
 		timestamp: sample.timestamp,
 		duration: sample.duration,
+		_doNotCopy: true,
 	});
 };

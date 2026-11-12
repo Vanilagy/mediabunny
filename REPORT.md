@@ -1216,7 +1216,10 @@ Huge files or allocations:
   (only Segment and Cluster still reserve one, Cluster now 6 bytes). `writeVarInt` throws instead of overflowing.
 ✅ sidx subsegment durations wrap after ~20.7 h at 57600 Hz.
   Fix: `sidx` throws for such CMAF segments, like the existing 2 GiB size check.
-- A 1 h gap with `timestampBase: 'unix'` allocates ~1.4 GB of silence at once.
+✅ A 1 h gap with `timestampBase: 'unix'` allocates ~1.4 GB of silence at once.
+  Fix: the encoder's gap padding, the conversion's start padding and the ISOBMFF PCM gap padding all pad at most a
+  second per sample, reusing one silence buffer. Also, `AudioSample` now copies the raw data it's created from, like
+  `VideoSample` (internal callers with fresh or immutable buffers pass `_doNotCopy`).
 
 Other platforms, hardware or filesystems:
 

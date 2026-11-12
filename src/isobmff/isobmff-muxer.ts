@@ -913,27 +913,29 @@ export class IsobmffMuxer extends Muxer {
 
 	private async padWithSilence(trackData: IsobmffAudioTrackData, timestamp: number, duration: number) {
 		const deltaInTimescale = intoTimescale(duration, trackData.timescale);
-		duration = deltaInTimescale / trackData.timescale;
+		const { sampleSize, silentValue } = parsePcmCodec(
+			trackData.info.decoderConfig.codec as PcmAudioCodec,
+		);
 
-		if (deltaInTimescale > 0) {
-			const { sampleSize, silentValue } = parsePcmCodec(
-				trackData.info.decoderConfig.codec as PcmAudioCodec,
-			);
-			const samplesNeeded = deltaInTimescale * trackData.info.numberOfChannels;
-			const data = new Uint8Array(sampleSize * samplesNeeded).fill(silentValue);
+		// Pad at most a second at a time so long gaps don't need huge allocations
+		const bytesPerFrame = sampleSize * trackData.info.numberOfChannels;
+		const silence = new Uint8Array(bytesPerFrame * Math.min(deltaInTimescale, trackData.timescale))
+			.fill(silentValue);
 
+		for (let offset = 0; offset < deltaInTimescale; offset += trackData.timescale) {
+			const frameCount = Math.min(deltaInTimescale - offset, trackData.timescale);
 			const paddingSample = this.createSampleForTrack(
 				trackData,
-				new Uint8Array(data.buffer),
-				timestamp,
-				duration,
+				silence.subarray(0, bytesPerFrame * frameCount),
+				timestamp + offset / trackData.timescale,
+				frameCount / trackData.timescale,
 				'key',
 				0,
 			);
 			await this.registerSample(trackData, paddingSample);
 		}
 
-		return duration;
+		return deltaInTimescale / trackData.timescale;
 	}
 
 	async addSubtitleCue(track: OutputSubtitleTrack, cue: SubtitleCue, meta?: SubtitleMetadata) {

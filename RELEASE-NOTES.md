@@ -267,6 +267,7 @@
 - Fixed PCM sample timestamps drifting, which could duplicate samples
 - Fixed PCM decoding sometimes returning no samples after a seek
 - Fixed tiny PCM packets producing empty samples
+- Fixed `AudioSample`s created from raw data referencing that data instead of copying it
 - Fixed `VideoSample` losing the last chroma column of odd-width subsampled formats when copied
 - Fixed `VideoSample`s created from raw data ignoring the offset of their visible rect
 - Fixed `VideoSample.copyTo()` with an RGB/BGR conversion corrupting pixels for layouts whose offset or stride isn't a multiple of 4, and overwriting the bytes before the layout's offset
@@ -309,6 +310,7 @@
 - Fixed trimmed copies of audio with delta packets (such as TrueHD) losing audio at the start
 - Fixed conversions discarding audio tracks instead of falling back to PCM when no compressed codec can be encoded
 - Fixed conversion progress being reported as NaN when there's nothing to convert
+- Fixed long gaps in audio allocating all of their silence padding at once, which could take gigabytes of memory
 - Fixed a broken error message for requested codecs the output format can't contain
 - Fixed conversions of implicitly signaled HE-AAC failing for formats like WAVE when the audio starts late
 - Fixed `once` event listeners being called twice during nested emits, and looping forever when re-registered while being emitted
