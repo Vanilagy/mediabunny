@@ -356,6 +356,10 @@ const writeAacProgramConfigElement = (bitstream: Bitstream, pce: AacProgramConfi
 };
 
 export const writeAdtsFrameLength = (bitstream: Bitstream, frameLength: number) => {
+	if (frameLength >= 2 ** 13) {
+		throw new Error(`AAC frame too large for ADTS (${frameLength} bytes, at most ${2 ** 13 - 1} allowed).`);
+	}
+
 	bitstream.pos = 30;
 	bitstream.writeBits(13, frameLength);
 };

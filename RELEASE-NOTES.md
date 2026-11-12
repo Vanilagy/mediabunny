@@ -68,7 +68,9 @@
 - Fixed the validation error for `MkvOutputFormatOptions.onSegmentHeader` naming the wrong option
 - Matroska muxer no longer patches the color space into VP9 key frames, which zeroed the color space for BT.2020, corrupted RGB streams and modified the caller's packet data
 - Fixed MPEG-TS muxer writing a DTS greater than the PTS for B-frames, which made FFmpeg reject the files
+- Fixed MPEG-TS muxer writing non-increasing DTS when B-frames first appear later in a video
 - Fixed malformed HEVC access unit delimiters in MPEG-TS output, which broke FFmpeg's bitstream filters
+- Fixed HEVC access unit delimiters in MPEG-TS output having the wrong temporal layer for temporally scalable video
 - Fixed MPEG-TS PIDs depending on which track's data came first, which made them change between HLS segments
 - Fixed a rejected first AAC packet leaving the MPEG-TS track half set up, making every following packet fail
 - Fixed the MPEG-TS muxer hanging on `finalize()` after `start()` or a track close threw
@@ -134,7 +136,7 @@
 - Fixed junk between MP3 frames being read as frames
 - Fixed trailing ID3v1 and APEv2 tags counting toward the estimated duration of CBR MP3 files
 - Fixed the MP3 muxer hanging on `finalize()` after `start()` threw
-- ADTS muxer now throws for AAC configurations that ADTS can't represent instead of writing corrupt headers
+- ADTS muxer now throws for AAC configurations and frames that ADTS can't represent instead of writing corrupt headers
 - Fixed ADTS reading stopping at ID3v2 tags between frames
 - ADTS and MP3 streams now end with a warning where the sample rate changes, since a track can only have one sample rate
 - Fixed the ADTS muxer hanging on `finalize()` after `start()` threw

@@ -1091,12 +1091,17 @@ The current behavior is arguably intended, or fixing it means picking between va
 
 The code is wrong, but no current caller or realistic input hits it.
 
-- MPEG-TS muxer: the audio PES length clamp (needs a > 65527-byte audio frame).
-- MPEG-TS muxer: if reordering first appears (or grows) in a later GOP, `reorderDelay` grows there and DTS can
+✅ MPEG-TS muxer: the audio PES length clamp (needs a > 65527-byte audio frame).
+  Fix: audio PES packets too large for the length field are written as unbounded instead.
+✅ MPEG-TS muxer: if reordering first appears (or grows) in a later GOP, `reorderDelay` grows there and DTS can
   repeat at that boundary.
-- MPEG-TS and ADTS muxers: neither checks the 8191-byte maximum ADTS frame length (AAC frames hold at most 6144
+  Fix: each DTS is clamped to at least the previous one + 1 tick (and the PTS raised along with it should it ever
+  fall behind, which takes absurdly dense timestamps).
+✅ MPEG-TS and ADTS muxers: neither checks the 8191-byte maximum ADTS frame length (AAC frames hold at most 6144
   bits per channel, so only streams with more than ~10 channels could exceed it).
-- MPEG-TS muxer: AUD TemporalId is always 0 (only matters with temporal scalability).
+  Fix: `writeAdtsFrameLength` throws for frames that don't fit, covering both muxers and the AAC encoder extension.
+✅ MPEG-TS muxer: AUD TemporalId is always 0 (only matters with temporal scalability).
+  Fix: the HEVC AUD takes its TemporalId from the access unit's first VCL NAL unit.
 - MPEG-TS muxer: `inputIsAnnexB` is set before parsing a (malformed) description.
 - MPEG-TS muxer: `finalize()` after a failed start throws a TypeError (cosmetic).
 - MPEG-TS demuxer: `maybeInsertReferencePacket` with index -1 (100 randomized initInput sessions stayed sorted).

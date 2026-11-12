@@ -32,6 +32,7 @@ import { EncodedPacket } from '../packet';
 import { Writer } from '../writer';
 import {
 	buildMpegTsMimeType,
+	MPEG_TS_TIMESCALE,
 	MpegTsStreamType,
 	secondsToMpegTsTimestamp,
 	TS_PACKET_SIZE,
@@ -47,9 +48,6 @@ const FIRST_TRACK_PID = 0x0100;
 const VIDEO_STREAM_ID_BASE = 0xE0;
 const AUDIO_STREAM_ID_BASE = 0xC0;
 
-const AVC_AUD_NAL = new Uint8Array([0x09, 0xF0]);
-const HEVC_AUD_NAL = new Uint8Array([0x46, 0x01, 0x50]);
-
 type MpegTsTrackData = {
 	track: OutputVideoTrack | OutputAudioTrack;
 	pid: number;
@@ -58,6 +56,7 @@ type MpegTsTrackData = {
 	codecString: string;
 	timestampProcessingQueue: QueuedPacket[];
 	reorderDelay: number;
+	lastDecodeTimestamp: number;
 	packetQueue: QueuedPacket[];
 	inputIsAnnexB: boolean | null;
 	inputIsAdts: boolean | null;
@@ -141,6 +140,7 @@ export class MpegTsMuxer extends Muxer {
 			codecString: meta.decoderConfig.codec,
 			timestampProcessingQueue: [],
 			reorderDelay: 0,
+			lastDecodeTimestamp: -Infinity,
 			packetQueue: [],
 			inputIsAnnexB: null,
 			inputIsAdts: null,
@@ -215,6 +215,7 @@ export class MpegTsMuxer extends Muxer {
 			codecString: meta.decoderConfig.codec,
 			timestampProcessingQueue: [],
 			reorderDelay: 0,
+			lastDecodeTimestamp: -Infinity,
 			packetQueue: [],
 			inputIsAnnexB: null,
 			inputIsAdts: null,
@@ -348,11 +349,8 @@ export class MpegTsMuxer extends Muxer {
 			}
 		}
 
-		// Pretend the AUD
-		const aud = codec === 'avc'
-			? AVC_AUD_NAL
-			: HEVC_AUD_NAL;
-		nalUnits.unshift(aud);
+		// Prepend the AUD
+		nalUnits.unshift(this.createAud(nalUnits, codec));
 
 		return concatNalUnitsInAnnexB(nalUnits);
 	}
@@ -417,12 +415,21 @@ export class MpegTsMuxer extends Muxer {
 		}
 
 		// Prepend the AUD
-		const aud = codec === 'avc'
-			? AVC_AUD_NAL
-			: HEVC_AUD_NAL;
-		nalUnits.unshift(aud);
+		nalUnits.unshift(this.createAud(nalUnits, codec));
 
 		return concatNalUnitsInAnnexB(nalUnits);
+	}
+
+	private createAud(nalUnits: Uint8Array[], codec: 'avc' | 'hevc') {
+		if (codec === 'avc') {
+			return new Uint8Array([0x09, 0xF0]); // AUD, primary_pic_type 7 plus stop bit
+		}
+
+		// The AUD's TemporalId must match the access unit's, which is that of its pictures' (VCL) NAL units
+		const vclNalUnit = nalUnits.find(x => extractNalUnitTypeForHevc(x[0]!) < 32);
+		const temporalIdPlusOne = vclNalUnit ? vclNalUnit[1]! & 0b111 : 1;
+
+		return new Uint8Array([0x46, temporalIdPlusOne, 0x50]); // AUD_NUT, layer 0, pic_type 2 plus stop bit
 	}
 
 	private prepareAudioPacket(
@@ -500,7 +507,20 @@ export class MpegTsMuxer extends Muxer {
 
 		for (let i = 0; i < trackData.timestampProcessingQueue.length; i++) {
 			const queuedPacket = trackData.timestampProcessingQueue[i]!;
-			queuedPacket.decodeTimestamp = sortedTimestamps[i]! - trackData.reorderDelay;
+
+			// When the reorder delay grows in a later GOP, the decode timestamps may become non-monotonic. To prevent
+			// this, we do a little clampin'.
+			const decodeTimestamp = Math.max(
+				sortedTimestamps[i]! - trackData.reorderDelay,
+				trackData.lastDecodeTimestamp + 1 / MPEG_TS_TIMESCALE,
+			);
+			queuedPacket.decodeTimestamp = decodeTimestamp;
+
+			// Also ensure DTS <= PTS always. This clamp only ever kicks in the nichest of cases, so it distorts PTS
+			// only in contrived cases.
+			queuedPacket.presentationTimestamp = Math.max(queuedPacket.presentationTimestamp, decodeTimestamp);
+
+			trackData.lastDecodeTimestamp = decodeTimestamp;
 			trackData.packetQueue.push(queuedPacket);
 		}
 
@@ -602,9 +622,10 @@ export class MpegTsMuxer extends Muxer {
 		setUint24(pesView, 0, 0x000001, false); // packet_start_code_prefix
 		pesHeaderBuffer[3] = trackData.streamId; // stream_id
 
-		const pesPacketLength = trackData.track.type === 'video'
+		// Some players require the length for audio for whatever reason
+		const pesPacketLength = trackData.track.type === 'video' || 8 + queuedPacket.data.length > 0xFFFF
 			? 0 // Unbounded
-			: Math.min(8 + queuedPacket.data.length, 0xFFFF); // Required for audio for some reason
+			: 8 + queuedPacket.data.length;
 		pesView.setUint16(4, pesPacketLength, false);
 
 		// '10' marker, PES_scrambling_control=0, PES_priority=0,
