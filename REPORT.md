@@ -1244,20 +1244,22 @@ Other platforms, hardware or filesystems:
 
 ### 6. Docs
 
-- `docs/guide/writing-hls.md` says `disposition.forced` maps to FORCED=YES (no longer true).
+✅ `docs/guide/writing-hls.md` says `disposition.forced` maps to FORCED=YES (no longer true).
   Fix: says subtitle tracks only.
-- `docs/guide/writing-hls.md` examples use 2-letter `languageCode`s, which throw.
+✅ `docs/guide/writing-hls.md` examples use 2-letter `languageCode`s, which throw.
   Fix: three-letter codes, and the disposition example no longer adds the German source as Spanish.
-- `docs/guide/supported-formats-and-codecs.md` is missing the .wav checkmark for pcm-f64.
+✅ `docs/guide/supported-formats-and-codecs.md` is missing the .wav checkmark for pcm-f64.
   Fix: added.
-- `docs/guide/reading-media-files.md` says UrlSource's `maxCacheSize` defaults to 8 MiB (code: 64 MiB).
+✅ `docs/guide/reading-media-files.md` says UrlSource's `maxCacheSize` defaults to 8 MiB (code: 64 MiB).
   Fix: 64 MiB, and ReadableStreamSource's 16 MiB corrected to 32 MiB too.
-- The `CustomSourceOptions.read` TSDoc says `end < fileSize`; it should be `end <= fileSize`.
+✅ The `CustomSourceOptions.read` TSDoc says `end < fileSize`; it should be `end <= fileSize`.
   Fix: corrected in the TSDoc and the guide.
 
 ## Notes
 
-- `scripts/esbuild/inlined-workers.ts` caches worker bundles in a shared `node_modules/.cache` with a per-process
+✅ `scripts/esbuild/inlined-workers.ts` caches worker bundles in a shared `node_modules/.cache` with a per-process
   counter, so parallel bundle runs can swap workers between packages. Not a library bug, but it bit the agents.
-- `@mediabunny/dts` and `@mediabunny/truehd` have no alias in `vitest.config.ts`; they resolve through
+  Fix: worker bundles are built in memory (`write: false`), so there's no cache; `find-cache-dir` is removed.
+✅ `@mediabunny/dts` and `@mediabunny/truehd` have no alias in `vitest.config.ts`; they resolve through
   `node_modules` to `packages/*/dist`.
+  Fix: aliased to their `dist/bundles` `.mjs`, like `@mediabunny/ac3`.
