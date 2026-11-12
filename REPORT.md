@@ -1147,8 +1147,11 @@ The code is wrong, but no current caller or realistic input hits it.
   retries, and `unrefWorker` treats a failed worker promise as no worker.
 ✅ Extension worker clients: `close()` after a failed init sends ctx 0 (reads zeros, no effect).
   Fix: the AC-3, DTS and TrueHD coders only send the close command when they have a context.
-- Server: the keyframe flag is wiped by node-av's `Packet.data` setter (no software decoder reads it).
-- E-AC-3 at high bitrates uses 3-block frames, muxed as 768-sample MP4 samples (FFmpeg decodes them fine).
+✅ Server: the keyframe flag is wiped by node-av's `Packet.data` setter (no software decoder reads it).
+✅ E-AC-3 at high bitrates uses 3-block frames, muxed as 768-sample MP4 samples (FFmpeg decodes them fine).
+  Fix: like FFmpeg, the ISOBMFF muxer merges E-AC-3 frames until a sample holds six blocks (ETSI TS 102 366 Annex
+  F), and the demuxer splits samples back into frames (an independent sync frame plus its dependents), which the
+  codec registry now spells out.
 - The Chromium Annex B SPS fixup patches only the first SPS (3 B-frame TS files tested, no frames lost).
 
 ### 4. Not reproduced: needs a setup we didn't have

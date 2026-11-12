@@ -3449,6 +3449,52 @@ export const parseEac3SyncFrame = (data: Uint8Array): Eac3FrameInfo | null => {
 };
 
 /**
+ * Splits E-AC-3 data into its audio frames, each an independent syncframe followed by its dependent syncframes. Returns
+ * null if the data isn't cleanly made up of E-AC-3 syncframes.
+ */
+export const splitEac3AudioFrames = (data: Uint8Array) => {
+	const frames: { offset: number; size: number; blockCount: number }[] = [];
+	let offset = 0;
+
+	while (offset < data.length) {
+		if (offset + 6 > data.length || data[offset] !== 0x0b || data[offset + 1] !== 0x77) {
+			return null;
+		}
+
+		const strmtyp = data[offset + 2]! >> 6;
+		const frmsiz = ((data[offset + 2]! & 0b111) << 8) | data[offset + 3]!;
+		const fscod = data[offset + 4]! >> 6;
+		const numblkscod = fscod === 3 ? 3 : (data[offset + 4]! >> 4) & 0b11;
+		const bsid = data[offset + 5]! >> 3;
+		const size = 2 * (frmsiz + 1);
+
+		if (bsid <= 10 || offset + size > data.length) {
+			return null;
+		}
+
+		if (strmtyp === 1) {
+			// Dependent syncframes belong to the audio frame of the independent one before them
+			const lastFrame = last(frames);
+			if (!lastFrame) {
+				return null;
+			}
+
+			lastFrame.size += size;
+		} else {
+			frames.push({
+				offset,
+				size,
+				blockCount: EAC3_NUMBLKS_TABLE[numblkscod]!,
+			});
+		}
+
+		offset += size;
+	}
+
+	return frames;
+};
+
+/**
  * Parse a dec3 box to extract E-AC-3 parameters.
  * Section F.6
  */

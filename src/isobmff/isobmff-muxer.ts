@@ -58,6 +58,7 @@ import {
 	parseOpusTocByte,
 	serializeAvcDecoderConfigurationRecord,
 	serializeHevcDecoderConfigurationRecord,
+	splitEac3AudioFrames,
 } from '../codec-data';
 import { buildIsobmffMimeType, TIMESTAMP_OFFSET } from './isobmff-misc';
 import { MAX_BOX_HEADER_SIZE, MIN_BOX_HEADER_SIZE } from './isobmff-reader';
@@ -146,6 +147,10 @@ export type IsobmffTrackData = {
 		 */
 		requiresAdtsStripping: boolean;
 		primingPacket: EncodedPacket | null;
+		pendingEac3Packets: {
+			packet: EncodedPacket;
+			blockCount: number;
+		}[];
 		preroll: {
 			packetCount: number;
 			accumulatedAudioSamples: number;
@@ -645,6 +650,7 @@ export class IsobmffMuxer extends Muxer {
 				expectedNextPcmPacketTimestamp: null,
 				requiresAdtsStripping,
 				primingPacket: packet,
+				pendingEac3Packets: [],
 				preroll: {
 					packetCount: 0,
 					accumulatedAudioSamples: 0,
@@ -801,6 +807,31 @@ export class IsobmffMuxer extends Muxer {
 				packet.timestamp,
 				packet.type === 'key',
 			);
+
+			if (track.source._codec === 'eac3') {
+				// An MP4 sample holds six blocks' worth of E-AC-3 frames (ETSI TS 102 366, Annex F), so shorter frames
+				// get merged
+				const frames = splitEac3AudioFrames(packetData);
+				const blockCount = frames
+					? frames.reduce((sum, frame) => sum + frame.blockCount, 0)
+					: 6; // Unparsable data counts as a whole sample
+
+				const pending = trackData.info.pendingEac3Packets;
+				const totalBlockCount = pending.reduce((sum, x) => sum + x.blockCount, 0) + blockCount;
+				if (totalBlockCount > 6) {
+					throw new Error('E-AC-3 frames must add up to exactly six blocks to be muxed into MP4 samples.');
+				}
+
+				pending.push({
+					packet,
+					blockCount,
+				});
+				if (totalBlockCount === 6) {
+					await this.writePendingEac3Packets(trackData);
+				}
+
+				return;
+			}
 
 			let timestamp = packet.timestamp;
 			let duration = packet.duration;
@@ -1622,6 +1653,9 @@ export class IsobmffMuxer extends Muxer {
 				if (trackData.type === 'subtitle' && track.source._codec === 'webvtt') {
 					await this.processWebVTTCues(trackData, Infinity);
 				}
+				if (trackData.type === 'audio' && trackData.info.pendingEac3Packets.length > 0) {
+					await this.writePendingEac3Packets(trackData);
+				}
 
 				this.processTimestamps(trackData);
 			}
@@ -1681,6 +1715,26 @@ export class IsobmffMuxer extends Muxer {
 		}
 	}
 
+	private async writePendingEac3Packets(trackData: IsobmffAudioTrackData) {
+		const packets = trackData.info.pendingEac3Packets.map(x => x.packet);
+		trackData.info.pendingEac3Packets.length = 0;
+
+		let data = packets[0]!.data;
+		if (packets.length > 1) {
+			data = new Uint8Array(packets.reduce((sum, packet) => sum + packet.data.byteLength, 0));
+
+			let offset = 0;
+			for (const packet of packets) {
+				data.set(packet.data, offset);
+				offset += packet.data.byteLength;
+			}
+		}
+
+		const duration = packets.reduce((sum, packet) => sum + packet.duration, 0);
+		const sample = this.createSampleForTrack(trackData, data, packets[0]!.timestamp, duration, 'key', 0);
+		await this.registerSample(trackData, sample);
+	}
+
 	/** Finalizes the file, making it ready for use. Must be called after all video and audio chunks have been added. */
 	async finalize() {
 		const release = await this.mutex.acquire();
@@ -1693,6 +1747,9 @@ export class IsobmffMuxer extends Muxer {
 
 			if (trackData.type === 'subtitle' && trackData.track.source._codec === 'webvtt') {
 				await this.processWebVTTCues(trackData, Infinity);
+			}
+			if (trackData.type === 'audio' && trackData.info.pendingEac3Packets.length > 0) {
+				await this.writePendingEac3Packets(trackData);
 			}
 
 			this.processTimestamps(trackData);

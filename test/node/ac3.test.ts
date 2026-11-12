@@ -22,7 +22,7 @@ import { Mp4OutputFormat } from '../../src/output-format.js';
 import { AudioSample } from '../../src/sample.js';
 import { EncodedPacket } from '../../src/packet.js';
 import { registerAc3Decoder, registerAc3Encoder } from '@mediabunny/ac3';
-import { assert } from '../../src/misc.js';
+import { assert, toDataView } from '../../src/misc.js';
 import { Bitstream } from '../../shared/bitstream.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -762,17 +762,16 @@ test('AC-3 track sample rate differing from the decoded sample rate', async () =
 	}
 });
 
-test('E-AC-3 packets holding several syncframes', async () => {
+test('E-AC-3 syncframes shorter than six blocks in MP4', async () => {
 	registerAc3Decoder();
 	registerAc3Encoder();
 
-	// At this bitrate, a syncframe only fits three of the usual six blocks. FFmpeg's MP4 muxer then puts two syncframes
-	// into each sample, which we recreate here.
+	// At this bitrate, a syncframe only fits three of the usual six blocks, so two of them make up an MP4 sample
 	const sampleRate = 32000;
 	const syncframeDuration = 768 / sampleRate;
 	const data = createSineWave(sampleRate, 1, 1);
 
-	const encodedOutput = new Output({
+	const output = new Output({
 		format: new Mp4OutputFormat(),
 		target: new BufferTarget(),
 	});
@@ -780,8 +779,8 @@ test('E-AC-3 packets holding several syncframes', async () => {
 		codec: 'eac3',
 		quality: new Quality({ bitrate: 740000 }),
 	});
-	encodedOutput.addAudioTrack(audioSource);
-	await encodedOutput.start();
+	output.addAudioTrack(audioSource);
+	await output.start();
 
 	const sample = new AudioSample({
 		data,
@@ -793,62 +792,40 @@ test('E-AC-3 packets holding several syncframes', async () => {
 	await audioSource.add(sample);
 	sample.close();
 	audioSource.close();
-	await encodedOutput.finalize();
-
-	using encodedInput = new Input({
-		source: new BufferSource(encodedOutput.target.buffer!),
-		formats: ALL_FORMATS,
-	});
-	const encodedTrack = (await encodedInput.getPrimaryAudioTrack())!;
-	const decoderConfig = (await encodedTrack.getDecoderConfig())!;
-
-	const syncframes: EncodedPacket[] = [];
-	for await (const packet of new EncodedPacketSink(encodedTrack).packets()) {
-		expect(packet.duration).toBe(syncframeDuration);
-		syncframes.push(packet);
-	}
-
-	const output = new Output({
-		format: new Mp4OutputFormat(),
-		target: new BufferTarget(),
-	});
-	const source = new EncodedAudioPacketSource('eac3');
-	output.addAudioTrack(source);
-	await output.start();
-
-	const pairCount = Math.floor(syncframes.length / 2);
-	for (let i = 0; i < pairCount; i++) {
-		const first = syncframes[2 * i]!;
-		const second = syncframes[2 * i + 1]!;
-
-		const pairData = new Uint8Array(first.byteLength + second.byteLength);
-		pairData.set(first.data);
-		pairData.set(second.data, first.byteLength);
-
-		const packet = new EncodedPacket(pairData, 'key', first.timestamp, first.duration + second.duration);
-		await source.add(packet, { decoderConfig });
-	}
-
-	source.close();
 	await output.finalize();
 
+	const bytes = new Uint8Array(output.target.buffer!);
+	const stszPos = Buffer.from(bytes).indexOf('stsz');
+	const mp4SampleCount = toDataView(bytes).getUint32(stszPos + 12);
+
 	using input = new Input({
-		source: new BufferSource(output.target.buffer!),
+		source: new BufferSource(bytes),
 		formats: ALL_FORMATS,
 	});
 	const track = (await input.getPrimaryAudioTrack())!;
 
-	// Every syncframe should come back out as a sample of its own, right where it was
+	const syncframes: EncodedPacket[] = [];
+	for await (const packet of new EncodedPacketSink(track).packets()) {
+		expect(packet.duration).toBe(syncframeDuration);
+		syncframes.push(packet);
+	}
+	expect(syncframes.length).toBe(2 * mp4SampleCount);
+
+	// Every syncframe should decode to a sample of its own, right where it was
 	const sampleTimestamps: number[] = [];
 	for await (using decoded of new AudioSampleSink(track).samples()) {
 		expect(decoded.duration).toBe(syncframeDuration);
 		sampleTimestamps.push(decoded.timestamp);
 	}
 
-	expect(sampleTimestamps.length).toBe(2 * pairCount);
+	expect(sampleTimestamps.length).toBe(syncframes.length);
 	for (let i = 0; i < sampleTimestamps.length; i++) {
 		expect(sampleTimestamps[i]).toBeCloseTo(syncframes[i]!.timestamp, 6);
 	}
+
+	// Seeking lands on the right syncframe within an MP4 sample
+	const secondSyncframe = (await new EncodedPacketSink(track).getPacket(1.5 * syncframeDuration))!;
+	expect(secondSyncframe.timestamp).toBeCloseTo(syncframes[1]!.timestamp, 6);
 });
 
 test('AC-3 encoding with three channels', async () => {

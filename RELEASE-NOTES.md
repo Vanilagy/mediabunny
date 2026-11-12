@@ -282,6 +282,7 @@
 - Fixed ProRes video with an unknown color matrix being treated as RGB
 - Fixed 7.1 E-AC-3 being reported as 7 channels
 - Fixed 7.1 E-AC-3 muxed into MP4 being declared as 5.1
+- Fixed the way E-AC-3 is read from and written to ISOBMFF
 - Fixed `canDecodeVideo()` and `canDecodeAudio()` returning cached results for configs that only differ in their description
 - Fixed `canEncodeVideo()` leaking its probe encoder in Firefox
 - Fixed `canDecode()` not returning a promise for subtitle codecs

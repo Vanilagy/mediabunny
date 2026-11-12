@@ -38,6 +38,7 @@ import {
 	Vp9CodecInfo,
 	vp9CodecInfoHasColorInfo,
 	parseEac3Config,
+	splitEac3AudioFrames,
 	getEac3SampleRate,
 	getEac3ChannelCount,
 	extractDtsFourCcFromPacket,
@@ -3188,6 +3189,8 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		sampleIndex: number;
 	}>();
 
+	nextEac3Frames = new WeakMap<EncodedPacket, EncodedPacket>();
+
 	constructor(public internalTrack: InternalTrack) {}
 
 	abstract getType(): TrackType;
@@ -3300,7 +3303,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 
 		const sampleTable = this.internalTrack.demuxer.getSampleTableForTrack(this.internalTrack);
 		const sampleIndex = getSampleIndexForTimestamp(sampleTable, timestampInTimescale);
-		const regularPacket = await this.fetchPacketForSampleIndex(sampleIndex, options);
+		const regularPacket = await this.fetchPacketForSampleIndex(sampleIndex, options, timestampInTimescale);
 
 		if (!this.internalTrack.demuxer.isFragmented) {
 			return regularPacket;
@@ -3339,6 +3342,11 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 	}
 
 	async getNextPacket(packet: EncodedPacket, options: PacketRetrievalOptions) {
+		const nextEac3Frame = this.nextEac3Frames.get(packet);
+		if (nextEac3Frame) {
+			return nextEac3Frame;
+		}
+
 		const regularSampleIndex = this.packetToSampleIndex.get(packet);
 
 		if (regularSampleIndex !== undefined) {
@@ -3395,7 +3403,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 
 		const sampleTable = this.internalTrack.demuxer.getSampleTableForTrack(this.internalTrack);
 		const sampleIndex = getKeyframeSampleIndexForTimestamp(sampleTable, timestampInTimescale);
-		const regularPacket = await this.fetchPacketForSampleIndex(sampleIndex, options);
+		const regularPacket = await this.fetchPacketForSampleIndex(sampleIndex, options, timestampInTimescale);
 
 		if (!this.internalTrack.demuxer.isFragmented) {
 			return regularPacket;
@@ -3434,6 +3442,11 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 	}
 
 	async getNextKeyPacket(packet: EncodedPacket, options: PacketRetrievalOptions) {
+		const nextEac3Frame = this.nextEac3Frames.get(packet); // E-AC-3 frames are all key packets
+		if (nextEac3Frame) {
+			return nextEac3Frame;
+		}
+
 		const regularSampleIndex = this.packetToSampleIndex.get(packet);
 		if (regularSampleIndex !== undefined) {
 			// Prefer the non-fragmented packet
@@ -3510,7 +3523,11 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		);
 	}
 
-	private async fetchPacketForSampleIndex(sampleIndex: number, options: PacketRetrievalOptions) {
+	private async fetchPacketForSampleIndex(
+		sampleIndex: number,
+		options: PacketRetrievalOptions,
+		searchTimestamp = -Infinity,
+	) {
 		if (sampleIndex === -1) {
 			return null;
 		}
@@ -3522,7 +3539,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		}
 
 		let data: Uint8Array;
-		if (options.metadataOnly) {
+		if (options.metadataOnly && this.internalTrack.info?.codec !== 'eac3') { // E-AC-3 is split by its data
 			data = PLACEHOLDER_DATA;
 		} else {
 			let slice = this.internalTrack.demuxer.reader.requestSlice(
@@ -3570,12 +3587,21 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			sampleInfo.sampleSize,
 		);
 
+		if (this.internalTrack.info?.codec === 'eac3') {
+			return this.splitEac3Sample(packet, options, searchTimestamp, this.packetToSampleIndex, sampleIndex);
+		}
+
 		this.packetToSampleIndex.set(packet, sampleIndex);
 
 		return packet;
 	}
 
-	private async fetchPacketInFragment(fragment: Fragment, sampleIndex: number, options: PacketRetrievalOptions) {
+	private async fetchPacketInFragment(
+		fragment: Fragment,
+		sampleIndex: number,
+		options: PacketRetrievalOptions,
+		searchTimestamp: number,
+	) {
 		if (sampleIndex === -1) {
 			return null;
 		}
@@ -3585,7 +3611,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		assert(fragmentSample);
 
 		let data: Uint8Array;
-		if (options.metadataOnly) {
+		if (options.metadataOnly && this.internalTrack.info?.codec !== 'eac3') { // E-AC-3 is split by its data
 			data = PLACEHOLDER_DATA;
 		} else {
 			let slice = this.internalTrack.demuxer.reader.requestSlice(
@@ -3620,6 +3646,13 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			fragmentSample.byteSize,
 		);
 
+		if (this.internalTrack.info?.codec === 'eac3') {
+			return this.splitEac3Sample(packet, options, searchTimestamp, this.packetToFragmentLocation, {
+				fragment,
+				sampleIndex,
+			});
+		}
+
 		this.packetToFragmentLocation.set(packet, { fragment, sampleIndex });
 
 		return packet;
@@ -3648,7 +3681,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			const { sampleIndex, correctSampleFound } = getMatchInFragment(startFragment);
 
 			if (correctSampleFound) {
-				return this.fetchPacketInFragment(startFragment, sampleIndex, options);
+				return this.fetchPacketInFragment(startFragment, sampleIndex, options, searchTimestamp);
 			}
 
 			if (sampleIndex !== -1) {
@@ -3741,7 +3774,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 
 					const { sampleIndex, correctSampleFound } = getMatchInFragment(currentFragment);
 					if (correctSampleFound) {
-						return this.fetchPacketInFragment(currentFragment, sampleIndex, options);
+						return this.fetchPacketInFragment(currentFragment, sampleIndex, options, searchTimestamp);
 					}
 					if (sampleIndex !== -1) {
 						bestFragment = currentFragment;
@@ -3764,10 +3797,65 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 
 		if (bestFragment) {
 			// If we finished looping but didn't find a perfect match, still return the best match we found
-			return this.fetchPacketInFragment(bestFragment, bestSampleIndex, options);
+			return this.fetchPacketInFragment(bestFragment, bestSampleIndex, options, searchTimestamp);
 		}
 
 		return null;
+	}
+
+	private splitEac3Sample<T>(
+		samplePacket: EncodedPacket,
+		options: PacketRetrievalOptions,
+		searchTimestamp: number,
+		locations: WeakMap<EncodedPacket, T>,
+		location: T,
+	) {
+		// An MP4 sample holds six blocks' worth of E-AC-3 frames (ETSI TS 102 366, Annex F), but a packet is one frame
+		const info = this.internalTrack.info;
+		assert(info?.type === 'audio');
+
+		const frames = splitEac3AudioFrames(samplePacket.data) ?? [{
+			offset: 0,
+			size: samplePacket.data.byteLength,
+			blockCount: 6,
+		}];
+		const searchTimestampInSeconds = (searchTimestamp - this.internalTrack.editListOffset)
+			/ this.internalTrack.timescale;
+
+		let match: EncodedPacket | null = null;
+		let previousPacket: EncodedPacket | null = null;
+		let blocksBefore = 0;
+
+		for (let i = 0; i < frames.length; i++) {
+			const frame = frames[i]!;
+			const timestamp = samplePacket.timestamp + 256 * blocksBefore / info.sampleRate;
+			const duration = frames.length === 1 ? samplePacket.duration : 256 * frame.blockCount / info.sampleRate;
+
+			const packet = new EncodedPacket(
+				options.metadataOnly
+					? PLACEHOLDER_DATA
+					: samplePacket.data.subarray(frame.offset, frame.offset + frame.size),
+				'key',
+				timestamp,
+				duration,
+				8 * samplePacket.sequenceNumber + i,
+				frame.size,
+			);
+
+			locations.set(packet, location);
+			if (previousPacket) {
+				this.nextEac3Frames.set(previousPacket, packet);
+			}
+			if (i === 0 || timestamp <= searchTimestampInSeconds) {
+				match = packet;
+			}
+
+			previousPacket = packet;
+			blocksBefore += frame.blockCount;
+		}
+
+		assert(match);
+		return match;
 	}
 }
 
