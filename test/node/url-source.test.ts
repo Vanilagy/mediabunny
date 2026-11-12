@@ -706,6 +706,28 @@ test('UrlSource read spanning a worker that hits the end', async () => {
 	expectBytes(await slice, data.subarray(600_000, 1_500_000));
 });
 
+test('UrlSource read with capped responses and unknown size', async () => {
+	const data = createTestData(4 * 2 ** 20);
+	const source = new UrlSource('https://example.com/file.bin', {
+		fetchFn: createRangeFetchFn(data, {
+			exposeSize: () => false,
+			maxResponseLength: 2 ** 15,
+			bare416PastEnd: true,
+		}),
+	});
+	using ref = source.ref();
+	const reader = new Reader(ref.source);
+
+	// The worker's target is a speculative prefetch end, but the read itself is well within the file, so a capped
+	// response cut off inside it should not be taken for the end of the file
+	expectBytes(await reader.requestSlice(0, 100_000), data.subarray(0, 100_000));
+	expect(source._orchestrator.fileSize).toBe(null);
+
+	// Reading on past the end gets a 416 without a size, which still pins the end down
+	expectBytes(await reader.requestSlice(data.length - 100_000, 100_000), data.subarray(data.length - 100_000));
+	await vi.waitFor(() => expect(source._orchestrator.fileSize).toBe(data.length));
+});
+
 const createTestData = (length: number) => {
 	const data = new Uint8Array(length);
 	for (let i = 0; i < length; i++) {
@@ -719,6 +741,7 @@ const createRangeFetchFn = (data: Uint8Array, options: {
 	exposeSize: (start: number) => boolean;
 	beforeResponse?: (start: number) => Promise<void> | null;
 	maxResponseLength?: number;
+	bare416PastEnd?: boolean;
 }) => {
 	return async (url: string | URL | Request, init?: RequestInit) => {
 		const range = new Headers(init?.headers).get('Range');
@@ -726,6 +749,10 @@ const createRangeFetchFn = (data: Uint8Array, options: {
 		const end = Math.min(data.length, start + (options.maxResponseLength ?? Infinity));
 
 		await options.beforeResponse?.(start);
+
+		if (options.bare416PastEnd && start >= data.length) {
+			return new Response(null, { status: 416 });
+		}
 
 		let pos = start;
 		const body = new ReadableStream<Uint8Array>({

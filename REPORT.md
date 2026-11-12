@@ -1070,18 +1070,22 @@ The current behavior is arguably intended, or fixing it means picking between va
   bytes, matching the stream's parameters. Since this made MP3 claim MPEG-TS files with small MP3 frames,
   `_canReadInput` became `_getMatchPosition`, returning where the format's data starts; the earliest match wins,
   ties go to list order.
-- Frameless decoder chunks other than hidden VP8/VP9 frames still shift every later timestamp in that decode
+✅ Frameless decoder chunks other than hidden VP8/VP9 frames still shift every later timestamp in that decode
   session: AV1 temporal units without a shown frame, HEVC pictures with `pic_output_flag = 0`, and interlaced
   AVC field pairs stored as two packets.
-- Matroska clusters without BlockDuration/DefaultDuration give the last block per track duration 0 (FFmpeg FLAC
+✅ Matroska clusters without BlockDuration/DefaultDuration give the last block per track duration 0 (FFmpeg FLAC
   MKA: 2.926 s vs 3.0). FFmpeg uses codec parsers for this.
-- Server: multi-frame packets give later frames garbage timestamps (concatenated packets); rare in the wild.
-- TextDecoder polyfill: one UTF-16 malformed-input case differs from native (found by fuzzing; only where no
+✅ Server: multi-frame packets give later frames garbage timestamps (concatenated packets); rare in the wild.
+✅ TextDecoder polyfill: one UTF-16 malformed-input case differs from native (found by fuzzing; only where no
   native TextDecoder exists).
-- Ogg: in a truncated file, a Vorbis packet rewound to still has no previous blocksize for its duration (the VLC
+  Fix: an unpaired lead surrogate followed by a dangling odd byte now gives one U+FFFD, like native, not two.
+✅ Ogg: in a truncated file, a Vorbis packet rewound to still has no previous blocksize for its duration (the VLC
   empty-packet variant is fixed). Needs reading the pages before `lowerPage`.
-- Read orchestrator: a non-strict worker never becomes strict, so a capped response resolves an in-bounds read to
+✅ Read orchestrator: a non-strict worker never becomes strict, so a capped response resolves an in-bounds read to
   null (reproduced). Needs a per-worker "must reach" position.
+  Fix: a response ending early no longer tells `UrlSource` anything about the resource's end; it's followed up with
+  a new request, and only an empty response at a speculative position (or an encoded one, which can't be continued)
+  ends the resource. A 416 without a stated size ends it too when the worker read its way up to that position.
 
 ### 3. Not reproduced: tried, but not reachable with the current code
 

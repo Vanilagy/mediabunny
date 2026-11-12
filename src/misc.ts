@@ -362,6 +362,10 @@ export const TextDecoder = typeof globalThis.TextDecoder !== 'undefined'
 							i += 2;
 						} else {
 							units.push(0xfffd);
+
+							if (i + 1 === bytes.length) {
+								i++; // Native decoders count a dangling odd byte after this as part of the same error
+							}
 						}
 					} else if (unit >= 0xdc00 && unit <= 0xdfff) {
 						units.push(0xfffd);

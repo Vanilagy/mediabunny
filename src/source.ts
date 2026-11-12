@@ -981,7 +981,7 @@ export class UrlSource extends PathedSource {
 
 	/** @internal */
 	private async _runWorker(worker: ReadWorker) {
-		let consecutiveEmptyResponses = 0;
+		let consecutiveReadFailures = 0;
 
 		// The outer loop is for resuming a request if it dies mid-response
 		while (true) {
@@ -1008,14 +1008,23 @@ export class UrlSource extends PathedSource {
 				() => abortController.signal.aborted,
 			);
 
+			// Our ranges are always open-ended, so a 416 means the start lies past the end of the resource. If the
+			// response doesn't state the size, the end is right here when this worker has read its way up to it.
 			const unsatisfiedRangeMatch = response.status === 416
 				? /^bytes \*\/(\d+)$/.exec(response.headers.get('Content-Range') ?? '')
 				: null;
-			if (unsatisfiedRangeMatch && Number(unsatisfiedRangeMatch[1]) <= worker.currentPos) {
+			let unsatisfiedRangeSize: number | null = null;
+			if (unsatisfiedRangeMatch) {
+				unsatisfiedRangeSize = Number(unsatisfiedRangeMatch[1]);
+			} else if (response.status === 416 && worker.currentPos > worker.startPos) {
+				unsatisfiedRangeSize = worker.currentPos;
+			}
+
+			if (unsatisfiedRangeSize !== null && unsatisfiedRangeSize <= worker.currentPos) {
 				void response.body?.cancel().catch(() => {});
 
 				if (this._orchestrator.fileSize === null) {
-					this._orchestrator.supplyFileSize(Number(unsatisfiedRangeMatch[1]));
+					this._orchestrator.supplyFileSize(unsatisfiedRangeSize);
 				}
 				this._fileSizeDetermined = true;
 				this._orchestrator.onWorkerFinished(worker);
@@ -1133,7 +1142,7 @@ export class UrlSource extends PathedSource {
 						throw error;
 					}
 
-					const retryDelayInSeconds = this._getRetryDelay(1, error, this._url);
+					const retryDelayInSeconds = this._getRetryDelay(++consecutiveReadFailures, error, this._url);
 					if (retryDelayInSeconds !== null) {
 						Logging._error('Error while reading response stream. Attempting to resume.', error);
 						await wait(1000 * retryDelayInSeconds);
@@ -1157,36 +1166,39 @@ export class UrlSource extends PathedSource {
 						return;
 					}
 
-					if (worker.strictTarget) {
-						// The response stopped early, before the target. This can happen if server decides to cap range
-						// requests arbitrarily, even if the request had an uncapped end. In this case, let's fetch the
-						// rest of the data using a new request.
-
-						if (worker.currentPos > responseStartPos) {
-							// Response still moved us forward; keep going immediately
-							consecutiveEmptyResponses = 0;
-							break;
-						}
-
-						// The response didn't get us any further, so back off instead of hammering the server
-						consecutiveEmptyResponses++;
-						const error = new Error('Range response ended without delivering any data.');
-						const retryDelayInSeconds = this._getRetryDelay(consecutiveEmptyResponses, error, this._url);
-						if (retryDelayInSeconds === null) {
-							throw error;
-						}
-
-						Logging._error('Retrying range request that ended without delivering any data.');
-						await wait(1000 * retryDelayInSeconds);
-
-						break;
-					} else {
-						// Assume we have simply reached the end of the resource
+					if (
+						!worker.strictTarget
+						&& (worker.currentPos === responseStartPos || response.headers.has('Content-Encoding'))
+					) {
+						// The target was only speculative, and either nothing was left at all, or the response was
+						// encoded, meaning its byte positions don't line up with ours and it can't be continued anyway
 						this._orchestrator.onWorkerFinished(worker);
 						return;
 					}
+
+					// The response stopped early, before the target. This can happen if server decides to cap range
+					// requests arbitrarily, even if the request had an uncapped end, so it says nothing about where the
+					// resource ends. Let's fetch the rest of the data using a new request.
+					if (worker.currentPos > responseStartPos) {
+						// Response still moved us forward; keep going immediately
+						break;
+					}
+
+					// The response didn't get us any further, so back off instead of hammering the server
+					consecutiveReadFailures++;
+					const error = new Error('Range response ended without delivering any data.');
+					const retryDelayInSeconds = this._getRetryDelay(consecutiveReadFailures, error, this._url);
+					if (retryDelayInSeconds === null) {
+						throw error;
+					}
+
+					Logging._error('Retrying range request that ended without delivering any data.');
+					await wait(1000 * retryDelayInSeconds);
+
+					break;
 				}
 
+				consecutiveReadFailures = 0;
 				this._dispatchResourceRead(worker.currentPos, worker.currentPos + value.length);
 				this._orchestrator.supplyWorkerData(worker, value);
 			}
@@ -1209,6 +1221,7 @@ export class UrlSource extends PathedSource {
 		let currentReader = body.getReader();
 		let streamPosition = 0;
 		let skipRemaining = 0;
+		let consecutiveReadFailures = 0;
 
 		const wrappedStream = new ReadableStream<Uint8Array>({
 			pull: async (controller) => {
@@ -1222,7 +1235,7 @@ export class UrlSource extends PathedSource {
 							throw error;
 						}
 
-						const retryDelayInSeconds = this._getRetryDelay(1, error, this._url);
+						const retryDelayInSeconds = this._getRetryDelay(++consecutiveReadFailures, error, this._url);
 						if (retryDelayInSeconds === null) {
 							throw error;
 						}
@@ -1282,7 +1295,13 @@ export class UrlSource extends PathedSource {
 						const skippedAmount = Math.min(skipRemaining, chunk.length);
 						skipRemaining -= skippedAmount;
 						chunk = chunk.subarray(skippedAmount);
+
+						if (chunk.length === 0) {
+							continue; // Replaying what was already delivered doesn't count as a successful read
+						}
 					}
+
+					consecutiveReadFailures = 0;
 
 					if (chunk.length === 0) {
 						continue;

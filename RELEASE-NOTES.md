@@ -214,6 +214,8 @@
 - Fixed `UrlSource` requests for other files (like HLS segments) incorrectly inheriting the settings of the root request
 - Fixed `UrlSource` with a relative URL throwing outside of a window when the server doesn't support range requests
 - Fixed `UrlSource` failing to read empty resources
+- Fixed `UrlSource` taking capped range responses for the end of resources of unknown size
+- Fixed `UrlSource` retrying failed response reads forever (#638)
 - Fixed `UrlSource` keeping requests running after errors
 - Fixed `UrlSource` error messages sometimes showing `[object Request]` instead of the URL
 - Canceling an output now also closes the streams of `StreamTarget`s that were never started, which leaked file handles for `FilePathTarget`
