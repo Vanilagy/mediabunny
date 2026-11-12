@@ -2,7 +2,7 @@ import { expect, test } from 'vitest';
 import { Input } from '../../src/input.js';
 import { BufferSource, UrlSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
-import { AudioBufferSink, EncodedPacketSink } from '../../src/media-sink.js';
+import { AudioBufferSink, AudioSampleSink, EncodedPacketSink } from '../../src/media-sink.js';
 import { assert, findLast, roundToDivisor, toDataView } from '../../src/misc.js';
 import { computeOggPageCrc } from '../../src/ogg/ogg-misc.js';
 import { Output } from '../../src/output.js';
@@ -394,6 +394,45 @@ test('Vorbis seeking to a short block ahead of an empty final packet', async () 
 	expect(seekedPacket?.sequenceNumber).toBe(lastPacket.sequenceNumber);
 	expect(seekedPacket?.timestamp).toBe(lastPacket.timestamp);
 	expect(seekedPacket?.duration).toBe(lastPacket.duration);
+});
+
+// A Vorbis decoder outputs nothing for the first packet it receives, which used to shift all timestamps by that packet
+test('decoded Vorbis sample timestamps do not depend on where decoding starts', async () => {
+	using input = new Input({
+		source: new UrlSource('/vorbis-eos.ogg'),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	const sink = new AudioSampleSink(track);
+
+	const decode = async (startTimestamp: number, endTimestamp: number) => {
+		const samples: { timestamp: number; data: Float32Array }[] = [];
+		for await (using sample of sink.samples(startTimestamp, endTimestamp)) {
+			const data = new Float32Array(sample.numberOfFrames);
+			sample.copyTo(data, { planeIndex: 0, format: 'f32-planar' });
+			samples.push({ timestamp: sample.timestamp, data });
+		}
+
+		return samples;
+	};
+
+	// The first packet only primes the decoder, so the audio starts where it ends
+	const firstPacket = await new EncodedPacketSink(track).getFirstPacket();
+	assert(firstPacket);
+	const fromStart = await decode(-Infinity, Infinity);
+	expect(fromStart[0]!.timestamp).toBeCloseTo(firstPacket.timestamp + firstPacket.duration, 10);
+
+	// Decoding straight from a later point must give the same audio at the same timestamps
+	const fromStartByTimestamp = new Map(fromStart.map(x => [x.timestamp, x.data]));
+	const afterSeek = await decode(3, 4);
+	expect(afterSeek.length).toBeGreaterThan(0);
+
+	for (const { timestamp, data } of afterSeek) {
+		expect(fromStartByTimestamp.get(timestamp)).toEqual(data);
+	}
 });
 
 const readVorbisFixture = async () => {
