@@ -1503,7 +1503,25 @@ export class FilePathSource extends PathedSource {
 				assert(this._fileHandle);
 
 				const buffer = new Uint8Array(end - start);
-				await this._fileHandle.read(buffer, 0, end - start, start);
+
+				// Reads may return fewer bytes than requested, so we gotta loop
+				let bytesRead = 0;
+				while (bytesRead < buffer.length) {
+					const result = await this._fileHandle.read(
+						buffer,
+						bytesRead,
+						buffer.length - bytesRead,
+						start + bytesRead,
+					);
+					if (result.bytesRead === 0) {
+						throw new Error(
+							`File ended at byte ${start + bytesRead}, before byte ${end} was read; it was likely`
+							+ ` truncated while being read.`,
+						);
+					}
+
+					bytesRead += result.bytesRead;
+				}
 
 				return buffer;
 			},
@@ -1558,7 +1576,7 @@ export type CustomSourceOptions = {
 	 * Called when data is requested. Must return or resolve to the bytes from the specified byte range, or a stream
 	 * that yields these bytes.
 	 *
-	 * You are guaranteed that `0 <= start < end < fileSize`.
+	 * You are guaranteed that `0 <= start < end <= fileSize`.
 	 */
 	read: (start: number, end: number) => MaybePromise<Uint8Array | ReadableStream<Uint8Array>>;
 

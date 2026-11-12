@@ -13,8 +13,8 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import { Input, InputDisposedError } from '../../src/input.js';
 import { ALL_FORMATS, MP4 } from '../../src/input-format.js';
-import { promiseWithResolvers } from '../../src/misc.js';
-import { Reader } from '../../src/reader.js';
+import { assert, promiseWithResolvers } from '../../src/misc.js';
+import { Reader, readBytes } from '../../src/reader.js';
 import * as node from '../../src/node.js';
 import { open, readFile, type FileHandle } from 'node:fs/promises';
 import { setImmediate } from 'node:timers/promises';
@@ -273,6 +273,55 @@ test('FilePathSource disposal while getting the size', async () => {
 
 	await expect(new Reader(source).requestSlice(0, 8)).rejects.toBeInstanceOf(InputDisposedError);
 });
+
+test('FilePathSource short reads', async () => {
+	const fileBytes = await readFile(videoFilePath);
+
+	// Reads that hand out at most 1000 bytes at a time, like some network filesystems do
+	mockFileHandleRead((read, buffer, offset, length, position) => {
+		return read(buffer, offset, Math.min(length, 1000), position);
+	});
+	const source = new FilePathSource(videoFilePath);
+	const ref = source.ref();
+
+	const slice = await new Reader(source).requestSlice(0, 4096);
+	assert(slice);
+	expect(readBytes(slice, 4096)).toEqual(new Uint8Array(fileBytes.subarray(0, 4096)));
+	ref.free();
+
+	// A file that got truncated to 8 bytes after its size was read
+	mockFileHandleRead(async (read, buffer, offset, length, position) => {
+		return position >= 8
+			? { bytesRead: 0, buffer }
+			: read(buffer, offset, Math.min(length, 8 - position), position);
+	});
+	const truncatedSource = new FilePathSource(videoFilePath);
+	const truncatedRef = truncatedSource.ref();
+
+	await expect(new Reader(truncatedSource).requestSlice(0, 16)).rejects.toThrow('File ended at byte 8');
+	truncatedRef.free();
+});
+
+const mockFileHandleRead = (
+	mockedRead: (
+		read: FileHandle['read'],
+		buffer: Uint8Array,
+		offset: number,
+		length: number,
+		position: number,
+	) => Promise<{ bytesRead: number; buffer: Uint8Array }>,
+) => {
+	vi.mocked(node.fs.open).mockImplementationOnce(async (...args) => {
+		const handle = await open(...args);
+		const read = handle.read.bind(handle);
+
+		return Object.assign(handle, {
+			read: (buffer: Uint8Array, offset: number, length: number, position: number) => {
+				return mockedRead(read, buffer, offset, length, position);
+			},
+		}) as FileHandle;
+	});
+};
 
 test('ReadableStreamSource disposal before reading', async () => {
 	const cancel = vi.fn();
