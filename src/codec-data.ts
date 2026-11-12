@@ -2676,7 +2676,8 @@ export const determineVideoPacketType = (
 					}
 
 					const frameType = bitstream.readBits(2);
-					return frameType === 0 ? 'key' : 'delta';
+					const showFrame = bitstream.readBits(1);
+					return frameType === 0 && showFrame === 1 ? 'key' : 'delta';
 				}
 			}
 
@@ -3693,6 +3694,8 @@ export type DtsCoreFrameInfo = {
 	bitRate: number;
 	/** Source PCM resolution in bits */
 	pcmResolution: number;
+	/** EXT_AUDIO_ID of the extension inside the core frame, or null if there is none */
+	extAudioId: number | null;
 };
 
 export type DtsExssAssetInfo = {
@@ -3850,7 +3853,9 @@ export const parseDtsCoreFrameHeader = (data: Uint8Array): DtsCoreFrameInfo | nu
 	}
 
 	bitstream.skipBits(1 + 1 + 1 + 1); // DYNF, TIMEF, AUXF, HDCD
-	bitstream.skipBits(3 + 1 + 1); // EXT_AUDIO_ID, EXT_AUDIO, ASPF
+	const extAudioId = bitstream.readBits(3);
+	const extAudio = bitstream.readBits(1);
+	bitstream.skipBits(1); // ASPF
 
 	const lff = bitstream.readBits(2);
 	if (lff === 3) {
@@ -3881,6 +3886,7 @@ export const parseDtsCoreFrameHeader = (data: Uint8Array): DtsCoreFrameInfo | nu
 		lfePresent,
 		bitRate,
 		pcmResolution,
+		extAudioId: extAudio ? extAudioId : null,
 	};
 };
 
@@ -4048,6 +4054,13 @@ export const parseDtsSpecificBox = (data: Uint8Array): DtsSpecificBoxInfo | null
 	};
 };
 
+// Keyed by EXT_AUDIO_ID: XCh, X96 and XXCh inside the core frame. Table E-2
+const DTS_CORE_EXTENSION_STREAM_CONSTRUCTIONS: Record<number, number> = {
+	0: 2,
+	2: 4,
+	6: 3,
+};
+
 /** Build the payload of a DTSSpecificBox (ddts) from a frame of the stream it describes. */
 export const buildDtsSpecificBox = (frameInfo: DtsFrameInfo) => {
 	const bytes = new Uint8Array(DTS_SPECIFIC_BOX_SIZE);
@@ -4060,7 +4073,11 @@ export const buildDtsSpecificBox = (frameInfo: DtsFrameInfo) => {
 
 	// The spec only defines codes for streams built out of a known set of substreams. Anything else is required
 	// to be signaled as 0, meaning the construction is left unspecified.
-	const streamConstruction = frameInfo.core && !frameInfo.hasExtensions ? 1 : 0;
+	let streamConstruction = 0;
+	if (frameInfo.core && !frameInfo.hasExtensions) {
+		const { extAudioId } = frameInfo.core;
+		streamConstruction = extAudioId === null ? 1 : (DTS_CORE_EXTENSION_STREAM_CONSTRUCTIONS[extAudioId] ?? 0);
+	}
 
 	const bitstream = new Bitstream(bytes);
 	bitstream.seekToByte(13);

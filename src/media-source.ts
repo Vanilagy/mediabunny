@@ -1766,6 +1766,11 @@ export class MediaStreamVideoTrackSource extends VideoSource {
 		}
 
 		const onVideoFrame = (videoFrame: VideoFrame) => {
+			if (this._closingPromise) {
+				videoFrame.close();
+				return;
+			}
+
 			if (frameRate === null) {
 				addVideoFrame(videoFrame);
 			} else {
@@ -1881,11 +1886,13 @@ export class MediaStreamVideoTrackSource extends VideoSource {
 			if (supportedInWorker) {
 				this._workerTrackId = nextMediaStreamTrackProcessorWorkerId++;
 
+				// Tracks can't be copied, only transferred, but transferring naively would kill the user's own track
+				const track = this._track.clone();
 				sendMessageToMediaStreamTrackProcessorWorker({
 					type: 'videoTrack',
 					trackId: this._workerTrackId,
-					track: this._track,
-				});
+					track,
+				}, [track as unknown as Transferable]);
 
 				this._workerListener = (event: MessageEvent) => {
 					const message = event.data as MediaStreamTrackProcessorWorkerMessage;
@@ -2579,6 +2586,9 @@ class AudioEncoderWrapper {
 						}
 					},
 					error: (error) => {
+						// Unlike video, there's no reclaim handling here: Chromium never reclaims AudioEncoders
+						// in practice
+
 						error.stack = stack; // Provide a more useful stack trace
 						this.setError(error);
 					},

@@ -136,11 +136,13 @@ export const canDecodeVideo = async (
 
 	validateVideoDecodingConfig(codec, options);
 
+	const codedWidth = options.codedWidth ?? 1280;
+	const codedHeight = options.codedHeight ?? 720;
 	const resolvedOptions: VideoDecoderConfig = {
 		...options,
-		codedWidth: options.codedWidth ?? 1280,
-		codedHeight: options.codedHeight ?? 720,
-		codec: options.codec ?? buildVideoCodecString(codec, 1280, 720, 1e6, false),
+		codedWidth,
+		codedHeight,
+		codec: options.codec ?? buildVideoCodecString(codec, codedWidth, codedHeight, 1e6, false),
 	};
 	resolvedOptions.description ??= guessDescriptionForVideo(resolvedOptions);
 
@@ -185,7 +187,7 @@ export const canDecodeAudio = async (
 		...options,
 		numberOfChannels: options.numberOfChannels ?? 2,
 		sampleRate: options.sampleRate ?? 48000,
-		codec: options.codec ?? buildAudioCodecString(codec, 2, 48000),
+		codec: options.codec ?? buildAudioCodecString(codec),
 	};
 
 	if (resolvedOptions.description === undefined) {

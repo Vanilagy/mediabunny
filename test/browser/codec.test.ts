@@ -12,6 +12,7 @@ import {
 	parseHevcSps,
 	serializeAvcDecoderConfigurationRecord,
 	countShownVideoFrames,
+	determineVideoPacketType,
 } from '../../src/codec-data.js';
 import { CustomAudioDecoder, registerDecoder } from '../../src/custom-coder.js';
 import { canDecode, canDecodeAudio, canDecodeVideo } from '../../src/decode.js';
@@ -41,6 +42,16 @@ test('canDecodeVideo with differing ArrayBuffer descriptions', async () => {
 
 	expect(await canDecodeVideo('avc', { codec: decoderConfig.codec, description: invalidDescription })).toBe(false);
 	expect(await canDecodeVideo('avc', { codec: decoderConfig.codec, description: validDescription })).toBe(true);
+});
+
+test('canDecodeVideo codec string for the given size', async () => {
+	const isConfigSupported = vi.spyOn(VideoDecoder, 'isConfigSupported');
+
+	await canDecodeVideo('avc', {
+		codedWidth: 3840,
+		codedHeight: 2160,
+	});
+	expect(isConfigSupported.mock.calls[0]![0].codec).toBe(buildVideoCodecString('avc', 3840, 2160, 1e6, false));
 });
 
 test('AV1 level for 8K at a Main tier bitrate', () => {
@@ -280,6 +291,13 @@ test('Video packets with hidden frames', () => {
 
 	// The same with two-byte frame sizes, which are little-endian
 	expect(countShownVideoFrames('vp9', hexStringToBytes('84008600c902000200c9'))).toBe(1);
+});
+
+test('AV1 hidden key frame', () => {
+	// Frame header OBUs of key frames, the second one with show_frame set to 0
+	const decoderConfig = { codec: 'av01.0.04M.08' };
+	expect(determineVideoPacketType('av1', decoderConfig, hexStringToBytes('1a0110'))).toBe('key');
+	expect(determineVideoPacketType('av1', decoderConfig, hexStringToBytes('1a0100'))).toBe('delta');
 });
 
 // Keep this test last, and keep anything that calls isFirefox() out of this file: isFirefox() caches its first

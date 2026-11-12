@@ -771,19 +771,8 @@ export const extractColorSpace = (info: {
 	};
 };
 
-export const buildAudioCodecString = (codec: AudioCodec, numberOfChannels: number, sampleRate: number) => {
+export const buildAudioCodecString = (codec: AudioCodec) => {
 	if (codec === 'aac') {
-		// If stereo or higher channels and lower sample rate, likely using HE-AAC v2 with PS
-		if (numberOfChannels >= 2 && sampleRate <= 24000) {
-			return 'mp4a.40.29'; // HE-AAC v2 (AAC LC + SBR + PS)
-		}
-
-		// If sample rate is low, likely using HE-AAC v1 with SBR
-		if (sampleRate <= 24000) {
-			return 'mp4a.40.5'; // HE-AAC v1 (AAC LC + SBR)
-		}
-
-		// Default to standard AAC-LC for higher sample rates
 		return 'mp4a.40.2'; // AAC-LC
 	} else if (codec === 'mp3') {
 		return 'mp3';

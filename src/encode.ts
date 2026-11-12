@@ -614,11 +614,7 @@ export const buildAudioEncoderConfig = (options: {
 	const fallbackBitrateMode = options.bitrateMode;
 
 	return {
-		codec: options.fullCodecString ?? buildAudioCodecString(
-			options.codec,
-			options.numberOfChannels,
-			options.sampleRate,
-		),
+		codec: options.fullCodecString ?? buildAudioCodecString(options.codec),
 		numberOfChannels: options.numberOfChannels,
 		sampleRate: options.sampleRate,
 		bitrate: options.quality?._toAudioBitrate(options.codec, options.numberOfChannels),

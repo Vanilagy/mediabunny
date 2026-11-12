@@ -249,6 +249,7 @@
 - Fixed empty audio samples making the encoder throw
 - Fixed a `MediaStreamVideoTrackSource` paused before its first frame throwing repeatedly
 - Fixed `MediaStreamVideoTrackSource` accepting non-finite frame rates, which could hang
+- Fixed `MediaStreamVideoTrackSource` failing to start in Safari
 - Fixed the audio context fallback of `MediaStreamAudioTrackSource` never being closed
 - Fixed VP8 and VP9 video with hidden frames stored as separate packets getting increasingly wrong timestamps (#642)
 - Fixed video frame timestamps sometimes being shifted after seeking
@@ -276,6 +277,7 @@
 - Fixed several AVC SPS parsing issues
 - Fixed VP9 RGB key frames (profiles 1 and 3) being misparsed, giving wrong codec strings
 - Fixed some AV1 codec strings having a wrong level, which browsers could reject
+- Fixed AV1 hidden key frames being determined as key packets
 - Fixed avcC records of some AVC profiles (like 4:4:4 from x264) losing their extension fields
 - Fixed hvcC records putting prefix and suffix SEI into one array
 - Fixed missing color info for ProRes frames with a minimal frame header
@@ -283,8 +285,11 @@
 - Fixed 7.1 E-AC-3 being reported as 7 channels
 - Fixed 7.1 E-AC-3 muxed into MP4 being declared as 5.1
 - Fixed the way E-AC-3 is read from and written to ISOBMFF
+- Fixed DTS-ES and DTS 96/24 being declared as plain DTS when written to ISOBMFF
 - Fixed `canDecodeVideo()` and `canDecodeAudio()` returning cached results for configs that only differ in their description
+- Fixed `canDecodeVideo()` ignoring the given size when choosing the codec string's level
 - Fixed `canEncodeVideo()` leaking its probe encoder in Firefox
+- AAC encoding now defaults to AAC-LC at all sample rates instead of requesting HE-AAC at 24 kHz and below
 - Fixed `canDecode()` not returning a promise for subtitle codecs
 - Fixed cover art stored in Vorbis comments being duplicated in FLAC to FLAC conversions
 - Conversion errors for tracks that can't be encoded now point to the DTS and TrueHD extension packages, and to `@mediabunny/server` in server-side environments
@@ -307,6 +312,7 @@
 - Fixed WebVTT text starting with a byte order mark failing to parse
 - `@mediabunny/server`: Decoding and encoding now use multiple threads where the codec supports it, making them faster
 - `@mediabunny/aac-encoder`, `@mediabunny/flac-encoder`, `@mediabunny/mp3-encoder`, `@mediabunny/ac3`, `@mediabunny/dts`, `@mediabunny/truehd`: Slightly faster encoding and decoding
+- `@mediabunny/aac-encoder`, `@mediabunny/flac-encoder`, `@mediabunny/mp3-encoder`, `@mediabunny/ac3`, `@mediabunny/dts`, `@mediabunny/truehd`: Fixed a memory leak in browsers and Deno with every worker created
 - `@mediabunny/ac3`, `@mediabunny/dts`, `@mediabunny/truehd`: Fixed a failure to create the codec worker breaking the extension for good instead of being retriable
 - `@mediabunny/ac3`: Fixed E-AC-3 with several syncframes per packet failing to decode
 - `@mediabunny/ac3`: Fixed the last decoded audio being dropped when flushing

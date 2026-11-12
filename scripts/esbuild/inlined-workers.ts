@@ -16,8 +16,9 @@ export function inlineWorkerPlugin(extraConfig: esbuild.BuildOptions): esbuild.P
 					const workerCode = await buildWorker(workerPath, extraConfig);
 					return {
 						contents: `import inlineWorker from '__inline-worker'
+const cache = {};
 export default function Worker() {
-  return inlineWorker(${JSON.stringify(workerCode)});
+  return inlineWorker(${JSON.stringify(workerCode)}, cache);
 }
 `,
 						loader: 'js',
@@ -26,13 +27,18 @@ export default function Worker() {
 			);
 
 			const inlineWorkerFunctionCode = `
-export default async function inlineWorker(scriptText) {
+export default async function inlineWorker(scriptText, cache) {
 	if (typeof Worker !== 'undefined' && typeof Bun === 'undefined') {
 		// Browser, Deno (Deno can't do dynamic import of worker_threads)
 
-		const blob = new Blob([scriptText], { type: "text/javascript" });
-		const url = URL.createObjectURL(blob);
-		const worker = new Worker(url, { type: typeof Deno !== 'undefined' ? 'module' : undefined }); // module for Deno
+		// Reused instead of revoked, since Deno fails when the URL is revoked right after creating the worker
+		if (!cache.url) {
+			const blob = new Blob([scriptText], { type: "text/javascript" });
+			cache.url = URL.createObjectURL(blob);
+		}
+		const worker = new Worker(cache.url, {
+			type: typeof Deno !== 'undefined' ? 'module' : undefined, // module for Deno
+		});
 		return worker;
 	} else {
 		// Node, Bun (Bun's Worker is flaky, worker_threads works much better)

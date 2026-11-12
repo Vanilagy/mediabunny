@@ -17,6 +17,7 @@ import { AudioSample } from '../../src/sample.js';
 import { canEncode, Quality } from '../../src/encode.js';
 import { CustomAudioEncoder, customAudioEncoders } from '../../src/custom-coder.js';
 import { registerDtsDecoder, registerDtsEncoder } from '@mediabunny/dts';
+import { buildDtsSpecificBox, parseDtsFrame } from '../../src/codec-data.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
@@ -637,4 +638,30 @@ test('Encoding after a flush', async () => {
 	expect(secondRun.map(x => x.timestamp)).toEqual(firstRun.map(x => x.timestamp));
 	expect(secondRun.map(x => x.duration)).toEqual(firstRun.map(x => x.duration));
 	expect(secondRun.every((x, i) => uint8ArraysAreEqual(x.data, firstRun[i]!.data))).toBe(true);
+});
+
+test('ddts stream construction for extensions inside the core', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '..', 'public', DTSC_FILE)),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+	const packet = await new EncodedPacketSink(track).getFirstPacket();
+	assert(packet);
+
+	const getStreamConstruction = (extAudioId: number | null) => {
+		// EXT_AUDIO_ID and EXT_AUDIO are the top four bits of the core header's 11th byte
+		const data = packet.data.slice();
+		data[10] = (data[10]! & 0x0f) | (extAudioId === null ? 0 : (extAudioId << 5) | 0x10);
+
+		const frameInfo = parseDtsFrame(data);
+		assert(frameInfo);
+		return (buildDtsSpecificBox(frameInfo)[13]! >> 1) & 0x1f;
+	};
+
+	expect(getStreamConstruction(null)).toBe(1); // Core
+	expect(getStreamConstruction(0)).toBe(2); // Core + XCh
+	expect(getStreamConstruction(6)).toBe(3); // Core + XXCh
+	expect(getStreamConstruction(2)).toBe(4); // Core + X96
 });

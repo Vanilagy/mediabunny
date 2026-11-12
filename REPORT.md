@@ -1159,22 +1159,39 @@ The code is wrong, but no current caller or realistic input hits it.
 
 Other browsers (only Chrome on macOS was available):
 
-- `canDecodeVideo` builds the codec string for 1280x720 regardless of size (Chrome ignores levels).
-- The AVC level ignores frame rate (Chrome ignores levels).
-- HE-AACv2 is chosen for > 2 channels at <= 24 kHz (Chrome on Mac rejects all AAC at <= 24 kHz).
-- Codec checks ignore `hardwareAcceleration` (Chrome reports HEVC 'prefer-software' as supported).
-- MediaStreamVideoTrackSource worker path (Safari only): late frames after 'stopTrack' reject `errorPromise`.
-- MediaStreamVideoTrackSource worker path (Safari only): a late frame can hit a closed VideoFrame.
-- MediaStreamVideoTrackSource worker path (Safari only): the track is posted without a transfer list.
-- BlobSource keeps a dead stream reader after the rare browser blob-stream error.
-- AudioEncoder reclamation (QuotaExceededError) isn't handled; unknown whether Chrome reclaims AudioEncoders.
-- Inline worker blob URLs are never revoked (~0.7 MB per encoder instance in browsers).
-- Inside Web Workers, the extensions' codec worker is re-created every time the last coder closes.
+✅ `canDecodeVideo` builds the codec string for 1280x720 regardless of size (Chrome ignores levels).
+  Fix: the default codec string now uses the given `codedWidth` and `codedHeight`.
+✅ The AVC level ignores frame rate (Chrome ignores levels).
+✅ HE-AACv2 is chosen for > 2 channels at <= 24 kHz (Chrome on Mac rejects all AAC at <= 24 kHz).
+  Fix: the default AAC codec string is now always AAC-LC (`mp4a.40.2`), which is what encoders produce anyway.
+✅ Codec checks ignore `hardwareAcceleration` (Chrome reports HEVC 'prefer-software' as supported).
+  Not a bug: both checks pass the option through. Chrome rejects software HEVC decoding, and accepts software
+  HEVC encoding because it really works (a frame encodes fine on macOS).
+✅ MediaStreamVideoTrackSource worker path (Safari only): late frames after 'stopTrack' reject `errorPromise`.
+  Already fixed: `addVideoFrame` drops frames once the source is closing (see the un-awaited video adds item).
+✅ MediaStreamVideoTrackSource worker path (Safari only): a late frame can hit a closed VideoFrame.
+  Fix: `onVideoFrame` drops frames once the source is closing, before `tick()` can touch `_lastVideoFrame`.
+✅ MediaStreamVideoTrackSource worker path (Safari only): the track is posted without a transfer list.
+  Fix: a clone of the track is transferred (posting it plainly throws `DataCloneError` in Safari, and transferring
+  the original would detach the user's track). Verified in Safari.
+✅ BlobSource keeps a dead stream reader after the rare browser blob-stream error.
+  Not fixed: no known trigger; the one concrete case (a file changed on disk) fails with a fresh reader too.
+✅ AudioEncoder reclamation (QuotaExceededError) isn't handled; unknown whether Chrome reclaims AudioEncoders.
+  Not a bug: only hardware VideoEncoders and platform decoders apply codec pressure, so AudioEncoders are never
+  reclaimed; a comment in the wrapper says so. Decoder reclamation isn't handled either (postponed: buffering the
+  packets since the last key packet needs a cap, past which callers would still see the error).
+✅ Inline worker blob URLs are never revoked (~0.7 MB per encoder instance in browsers).
+  Fix: the extensions' inline worker plugin creates the blob URL once per worker script and reuses it (core's
+  workers already did). Not revoked, since Deno fails when the URL is revoked right after creating the worker.
+✅ Inside Web Workers, the extensions' codec worker is re-created every time the last coder closes.
+  Not fixed: only costs startup latency now that the blob URL is reused.
 
 Specific real-world files we couldn't produce:
 
-- AV1 hidden key frames (`show_frame = 0`) are flagged as key (needs libaom; SVT-AV1 uses INTRA_ONLY).
-- DTS-ES / 96/24 get a wrong `ddts` StreamConstruction (FFmpeg can't encode such streams).
+✅ AV1 hidden key frames (`show_frame = 0`) are flagged as key (needs libaom; SVT-AV1 uses INTRA_ONLY).
+  Fix: `determineVideoPacketType` also requires `show_frame = 1`, as AV1-ISOBMFF requires for sync samples.
+✅ DTS-ES / 96/24 get a wrong `ddts` StreamConstruction (FFmpeg can't encode such streams).
+  Fix: the core header's EXT_AUDIO_ID and EXT_AUDIO are parsed, and XCh, XXCh and X96 map to 2, 3 and 4.
 - Blu-ray "AC-3 core + E-AC-3 dependent" 7.1 returns null from the E-AC-3 parser.
 - PAFF (field-coded) H.264 gives the second field its own packet (x264 only does MBAFF).
 - Legacy Matroska `A_AAC/*` codec IDs without CodecPrivate throw (pre-2008 mkvmerge).
