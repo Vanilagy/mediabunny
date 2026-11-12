@@ -1152,7 +1152,8 @@ The code is wrong, but no current caller or realistic input hits it.
   Fix: like FFmpeg, the ISOBMFF muxer merges E-AC-3 frames until a sample holds six blocks (ETSI TS 102 366 Annex
   F), and the demuxer splits samples back into frames (an independent sync frame plus its dependents), which the
   codec registry now spells out.
-- The Chromium Annex B SPS fixup patches only the first SPS (3 B-frame TS files tested, no frames lost).
+✅ The Chromium Annex B SPS fixup patches only the first SPS (3 B-frame TS files tested, no frames lost).
+  Fix: both the Annex B and the avcC path now patch every SPS (the interlace check still looks at the first one).
 
 ### 4. Not reproduced: needs a setup we didn't have
 

@@ -1048,27 +1048,33 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 						toUint8Array(this.decoderConfig.description),
 					);
 					if (record && record.sequenceParameterSets.length > 0) {
-						const sps = parseAvcSps(record.sequenceParameterSets[0]!);
-						if (sps) {
-							if (sps.frameMbsOnlyFlag === 0) {
-								// Chromium has/had a bug with playing interlaced AVC
-								// (https://issues.chromium.org/issues/456919096) which can be worked around by
-								// requesting that software decoding be used. So, here we peek into the AVC description,
-								// if present, and switch to software decoding if we find interlaced content.
-								this.decoderConfig = {
-									...this.decoderConfig,
-									hardwareAcceleration: 'prefer-software',
-								};
-							}
+						const firstSps = parseAvcSps(record.sequenceParameterSets[0]!);
+						if (firstSps && firstSps.frameMbsOnlyFlag === 0) {
+							// Chromium has/had a bug with playing interlaced AVC
+							// (https://issues.chromium.org/issues/456919096) which can be worked around by
+							// requesting that software decoding be used. So, here we peek into the AVC description,
+							// if present, and switch to software decoding if we find interlaced content.
+							this.decoderConfig = {
+								...this.decoderConfig,
+								hardwareAcceleration: 'prefer-software',
+							};
+						}
 
-							if (sps.maxDecFrameBuffering !== 0 && sps.bitstreamRestrictionFlag !== 1) {
-								// Modify the SPS to fix potential loss of B frames
-								record.sequenceParameterSets[0] = addAvcBitstreamRestriction(sps);
-								this.decoderConfig = {
-									...this.decoderConfig,
-									description: serializeAvcDecoderConfigurationRecord(record),
-								};
+						// Modify the SPSs to fix potential loss of B frames
+						let recordModified = false;
+						for (let i = 0; i < record.sequenceParameterSets.length; i++) {
+							const sps = parseAvcSps(record.sequenceParameterSets[i]!);
+							if (sps && sps.maxDecFrameBuffering !== 0 && sps.bitstreamRestrictionFlag !== 1) {
+								record.sequenceParameterSets[i] = addAvcBitstreamRestriction(sps);
+								recordModified = true;
 							}
+						}
+
+						if (recordModified) {
+							this.decoderConfig = {
+								...this.decoderConfig,
+								description: serializeAvcDecoderConfigurationRecord(record),
+							};
 						}
 					}
 				}
@@ -1328,8 +1334,6 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 					if (sps && sps.maxDecFrameBuffering !== 0 && sps.bitstreamRestrictionFlag !== 1) {
 						filteredNalUnits[i] = addAvcBitstreamRestriction(sps);
 					}
-
-					break;
 				}
 			}
 
