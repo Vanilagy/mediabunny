@@ -55,7 +55,7 @@ const createDummyAudioTrack = (codec: AudioCodec, output: Output) => {
 				new EncodedPacket(data, 'key', 0, 1),
 				{
 					decoderConfig: {
-						codec: buildAudioCodecString(codec, 2, 44100),
+						codec: buildAudioCodecString(codec),
 						numberOfChannels: 2,
 						sampleRate: 44100,
 						description,

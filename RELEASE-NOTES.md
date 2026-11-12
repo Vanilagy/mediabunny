@@ -1,3 +1,4 @@
+- `InputTrack.id` is now the track's 1-based index in `getTracks()` for every format, making it unique in multi-segment Matroska files. Previously, it was the container's own track ID (such as the MPEG-TS PID or the Ogg serial number).
 - Added `InputTrack.getFirstTimestampOrNull()` and `InputTrack.computeDurationOrNull()`, which return `null` instead of 0 for tracks without packets
 - Added `WavOutputFormatOptions.appendOnly` for writing WAVE files in an append-only fashion
 - Added support for setting `HlsOutputFormatOptions.targetDuration` to `Infinity` outside of live mode, giving each playlist only a single segment
@@ -378,4 +379,3 @@
 - `@mediabunny/server`: Fixed encoded DTS being 512 samples late
 - `@mediabunny/server`: Fixed low quality settings being unsupported for DTS; such bitrates now encode at the lowest bitrate DTS allows
 - `@mediabunny/server`: Fixed AC-3, E-AC-3 and DTS encoding losing the end of the audio
-- `InputTrack.id` is now the track's 1-based index in `getTracks()` for every format, making it unique in multi-segment Matroska files. Previously, it was the container's own track ID (such as the MPEG-TS PID or the Ogg serial number).

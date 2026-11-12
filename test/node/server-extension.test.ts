@@ -2358,7 +2358,7 @@ describe('Audio', async () => {
 		encoder.codec = 'aac';
 		// @ts-expect-error Readonly
 		encoder.config = {
-			codec: buildAudioCodecString('aac', 2, 48000),
+			codec: buildAudioCodecString('aac'),
 			numberOfChannels: 2,
 			sampleRate: 48000,
 			bitrate: 128000,
@@ -2717,7 +2717,7 @@ describe('Audio', async () => {
 		encoder.codec = codec;
 		// @ts-expect-error Readonly
 		encoder.config = {
-			codec: buildAudioCodecString(codec, numberOfChannels, sampleRate),
+			codec: buildAudioCodecString(codec),
 			numberOfChannels,
 			sampleRate,
 			bitrate: 128000,
@@ -3061,7 +3061,7 @@ describe('Audio', async () => {
 		extraConfig: Partial<AudioEncoderConfig> = {},
 	) => {
 		const { packets, decoderConfig } = await encodeAudio(codec, {
-			codec: buildAudioCodecString(codec, numberOfChannels, 48000),
+			codec: buildAudioCodecString(codec),
 			numberOfChannels,
 			sampleRate: 48000,
 			...extraConfig,
@@ -3107,7 +3107,7 @@ describe('Audio', async () => {
 			for (const sampleRate of [48000, 96000]) {
 				for (let numberOfChannels = 1; numberOfChannels <= 10; numberOfChannels++) {
 					const config = {
-						codec: buildAudioCodecString(codec, Math.min(numberOfChannels, 2), sampleRate),
+						codec: buildAudioCodecString(codec),
 						numberOfChannels,
 						sampleRate,
 					} satisfies AudioEncoderConfig;

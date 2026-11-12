@@ -1015,7 +1015,9 @@ test('Audio track captured through the audio context fallback', async () => {
 		window.MediaStreamTrackProcessor = OriginalProcessor;
 	}
 
-	for (let i = 0; i < 50; i++) {
+	// Under load, the audio context can take a while to start rendering, so feed the track until it has rendered some
+	assert(contexts.length === 1);
+	for (let i = 0; contexts[0]!.currentTime < 0.5; i++) {
 		await writer.write(new AudioData({
 			format: 'f32-planar',
 			sampleRate: 48000,
