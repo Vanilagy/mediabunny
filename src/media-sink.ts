@@ -946,6 +946,8 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	customDecoderQueueSize = 0;
 
 	inputTimestamps: number[] = []; // Timestamps input into the decoder, sorted.
+	lastInputTimestamp = -Infinity;
+	hasReorderedPresentationTimestamps = false;
 	sampleQueue: VideoSample[] = []; // Safari-specific thing, check usage.
 	currentPacketIndex = 0;
 	raslSkipped = false; // For HEVC stuff
@@ -1123,8 +1125,16 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 		} else {
 			assert(this.decoder);
 
-			if (!isWebKit()) {
-				insertSorted(this.inputTimestamps, packet.timestamp, x => x);
+			if (!isWebKit() && !this.hasReorderedPresentationTimestamps) {
+				if (packet.timestamp < this.lastInputTimestamp) {
+					// Reordered packet timestamps already describe presentation order.
+					// A dropped decoded frame must not shift later pictures to an earlier alias.
+					this.hasReorderedPresentationTimestamps = true;
+					this.inputTimestamps.length = 0;
+				} else {
+					insertSorted(this.inputTimestamps, packet.timestamp, x => x);
+				}
+				this.lastInputTimestamp = packet.timestamp;
 			}
 
 			if (isChromium() && this.currentPacketIndex === 0) {
@@ -1346,13 +1356,13 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			// originating EncodedVideoChunk. For files with B-frames but no out-of-order timestamps (like a
 			// missing ctts box, for example), this causes a mismatch. We therefore fix the timestamps and
 			// ensure they are sorted by doing this.
-			const timestamp = this.inputTimestamps.shift();
-
-			// There's no way we'd have more decoded frames than encoded packets we passed in. Actually, the
-			// correspondence should be 1:1.
-			assert(timestamp !== undefined);
-
-			sample.setTimestamp(timestamp);
+			if (!this.hasReorderedPresentationTimestamps) {
+				const timestamp = this.inputTimestamps.shift();
+				// There's no way we'd have more decoded frames than encoded packets we passed in. Actually, the
+				// correspondence should be 1:1.
+				assert(timestamp !== undefined);
+				sample.setTimestamp(timestamp);
+			}
 			this.finalizeAndEmitSample(sample);
 		}
 	}
@@ -1469,6 +1479,9 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			]);
 			this.flushing = false;
 			await Promise.all(this.mergeAlphaPromises);
+			// Decoder flush is a boundary even when a submitted packet produced no frame.
+			this.inputTimestamps.length = 0;
+			this.lastInputTimestamp = -Infinity;
 
 			this.colorQueue.forEach(x => x.close());
 			this.colorQueue.length = 0;
