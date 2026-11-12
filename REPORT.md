@@ -1223,24 +1223,37 @@ Huge files or allocations:
 
 Other platforms, hardware or filesystems:
 
-- Electron: node-av returns buffer copies, so writes into `frame.data` would be lost.
-- VAAPI/QSV encoders need `hw_frames_ctx`, so they likely fail to open.
-- Hardware decoding is never actually used (software only).
-- FilePathSource ignores short reads (file truncated after stat, FUSE/network filesystems).
+✅ Electron: node-av returns buffer copies, so writes into `frame.data` would be lost.
+  Not fixed (niche): the resampler output (`dstFrame.data`) and `copyAudioSampleToAvFrame` (`extendedData`) write
+  into such buffers, so all audio encoding would be silent in Electron. Fix would be `convertFrame` and `fromBuffer`,
+  but node-av's audio `fromBuffer` overflows `data[]` for planar audio with more than 8 channels.
+✅ VAAPI/QSV encoders need `hw_frames_ctx`, so they likely fail to open.
+  Mostly VAAPI: it only accepts hardware frames, and we open encoders with software frames and no frames context.
+✅ Hardware decoding is never actually used (software only).
+  Not fixed: `getDecoderCodec` returns the regular decoder, which only decodes in hardware with `hwDeviceCtx` set.
+  Doing it properly needs hardware frames kept as they are (lazily downloaded when their data is needed) and passed
+  straight to hardware encoders, which also covers VAAPI encoding.
+✅ FilePathSource ignores short reads (file truncated after stat, FUSE/network filesystems).
+  Fix: reads loop until the range is filled, throwing if the file ends early.
 
 ### 5. Not reproduced: attempts inconclusive
 
-- Samples: `'contain'` mipmapping may under-sample (quality only). In Chrome, the plain draw already averages
+✅ Samples: `'contain'` mipmapping may under-sample (quality only). In Chrome, the plain draw already averages
   correctly, so there was nothing to see; other browsers couldn't be tested (only Chrome on macOS was available),
   and a naive fix would need huge intermediate canvases.
 
 ### 6. Docs
 
 - `docs/guide/writing-hls.md` says `disposition.forced` maps to FORCED=YES (no longer true).
+  Fix: says subtitle tracks only.
 - `docs/guide/writing-hls.md` examples use 2-letter `languageCode`s, which throw.
+  Fix: three-letter codes, and the disposition example no longer adds the German source as Spanish.
 - `docs/guide/supported-formats-and-codecs.md` is missing the .wav checkmark for pcm-f64.
+  Fix: added.
 - `docs/guide/reading-media-files.md` says UrlSource's `maxCacheSize` defaults to 8 MiB (code: 64 MiB).
+  Fix: 64 MiB, and ReadableStreamSource's 16 MiB corrected to 32 MiB too.
 - The `CustomSourceOptions.read` TSDoc says `end < fileSize`; it should be `end <= fileSize`.
+  Fix: corrected in the TSDoc and the guide.
 
 ## Notes
 

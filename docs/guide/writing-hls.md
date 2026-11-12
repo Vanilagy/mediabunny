@@ -282,9 +282,9 @@ const conversion = await Conversion.init({
 Often you'll want to provide additional [track metadata](../api/BaseTrackMetadata) when dealing with multiple tracks. For example:
 ```ts
 output.addVideoTrack(videoSource);
-output.addAudioTrack(audioSourceEn, { languageCode: 'en', name: 'English' });
-output.addAudioTrack(audioSourceDe, { languageCode: 'de', name: 'German' });
-output.addAudioTrack(audioSourceEs, { languageCode: 'es', name: 'Spanish' });
+output.addAudioTrack(audioSourceEn, { languageCode: 'eng', name: 'English' });
+output.addAudioTrack(audioSourceDe, { languageCode: 'deu', name: 'German' });
+output.addAudioTrack(audioSourceEs, { languageCode: 'spa', name: 'Spanish' });
 ```
 
 ### Track disposition
@@ -292,17 +292,17 @@ output.addAudioTrack(audioSourceEs, { languageCode: 'es', name: 'Spanish' });
 You can control how a track is selected by players using the `disposition` option. The following fields map to HLS attributes on `#EXT-X-MEDIA`:
 - `disposition.primary` → `DEFAULT=YES` (only one per media rendition group is allowed; subsequent `primary` tracks in the same group are ignored)
 - `disposition.default` → `AUTOSELECT=YES` (also implied when `primary` is `true`)
-- `disposition.forced` → `FORCED=YES`
+- `disposition.forced` → `FORCED=YES` (subtitle tracks only, as the HLS spec reserves this attribute for them)
 
 For example:
 ```ts
 output.addAudioTrack(audioSourceEn, {
-	languageCode: 'en',
+	languageCode: 'eng',
 	name: 'English',
 	disposition: { primary: true },
 });
-output.addAudioTrack(audioSourceDe, {
-	languageCode: 'es',
+output.addAudioTrack(audioSourceEs, {
+	languageCode: 'spa',
 	name: 'Spanish',
 	disposition: { default: false },
 });

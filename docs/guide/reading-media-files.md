@@ -654,7 +654,7 @@ type UrlSourceOptions = {
 	getRetryDelay?: (previousAttempts: number, error: unknown, url: string | URL | Request) => number | null;
 
 	// The maximum number of bytes the cache is allowed to hold
-	// in memory. Defaults to 8 MiB.
+	// in memory. Defaults to 64 MiB.
 	maxCacheSize?: number;
 
 	// The maximum number of parallel requests to use for fetching. Defaults to 2.
@@ -780,7 +780,7 @@ type MaybePromise<T> = T | Promise<T>;
 - `getSize`\
 	Called when the size of the entire file is requested. Must return or resolve to the size in bytes. This function is guaranteed to be called before `read`.
 - `read`\
-	Called when data is requested. Must return or resolve to the bytes from the specified byte range, or a stream that yields these bytes. You are guaranteed that `0 <= start < end < fileSize`.
+	Called when data is requested. Must return or resolve to the bytes from the specified byte range, or a stream that yields these bytes. You are guaranteed that `0 <= start < end <= fileSize`.
 - `dispose`\
 	Called when the `Input` driven by this source is disposed.
 - `maxCacheSize`\
@@ -819,7 +819,7 @@ This source is *unsized*, meaning calls to `.getSize()` will throw and readers a
 ```ts
 type ReadableStreamSourceOptions = {
 	// The maximum number of bytes the cache is allowed to hold
-	// in memory. Defaults to 16 MiB.
+	// in memory. Defaults to 32 MiB.
 	maxCacheSize?: number;
 
 	// Handles errors that occur while no read is pending

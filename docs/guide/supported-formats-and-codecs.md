@@ -103,7 +103,7 @@ Not all codecs can be used with all containers. The following table specifies th
 | `'pcm-s32be'`  |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |       |
 | `'pcm-f32'`    |    ✓     |   ✓   |   ✓   |           |       |       |   ✓   |       |       |       |
 | `'pcm-f32be'`  |    ✓     |   ✓   |       |           |       |       |       |       |       |       |
-| `'pcm-f64'`    |    ✓     |   ✓   |   ✓   |           |       |       |       |       |       |       |
+| `'pcm-f64'`    |    ✓     |   ✓   |   ✓   |           |       |       |   ✓   |       |       |       |
 | `'pcm-f64be'`  |    ✓     |   ✓   |       |           |       |       |       |       |       |       |
 | `'ulaw'`       |          |   ✓   |       |           |       |       |   ✓   |       |       |       |
 | `'alaw'`       |          |   ✓   |       |           |       |       |   ✓   |       |       |       |

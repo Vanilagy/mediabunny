@@ -208,6 +208,7 @@
 - Fixed `FilePathSource`, `RangedSource` and `CustomPathedSource` not emitting `read` events
 - Fixed `UrlSource` with a `Range` header emitting `read` events at the wrong positions
 - Fixed `FilePathSource` leaking file handles in several cases
+- Fixed `FilePathSource` not working properly with short reads
 - Fixed `FilePathSource` throwing an internal error instead of `InputDisposedError` when disposed while opening
 - Fixed `CustomSource` calling `getSize` once for every concurrent first read
 - Fixed `CustomSource` not cancelling streams returned by `read` that hold more data than requested
